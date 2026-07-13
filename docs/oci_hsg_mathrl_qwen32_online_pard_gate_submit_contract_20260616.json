@@ -1,0 +1,388 @@
+{
+  "checks": [
+    {
+      "detail": "5",
+      "name": "manifest has five qwen32 gate rows",
+      "status": "pass"
+    },
+    {
+      "detail": "online_pard2_step5_r11_completed, static_pard_step20_reference, static_pard2_14b_step20_reference, online_pard_step5_k5_tp4_r1, online_pard2_step5_r12_replay",
+      "name": "manifest gate coverage",
+      "status": "pass"
+    },
+    {
+      "detail": "stdout_path",
+      "name": "submit status includes stdout_path",
+      "status": "pass"
+    },
+    {
+      "detail": "stderr_path",
+      "name": "submit status includes stderr_path",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_mathrl_qwen32_online_pard_gate_command_outputs_20260616",
+      "name": "submit helper exposes command output directory",
+      "status": "pass"
+    },
+    {
+      "detail": "True",
+      "name": "submit helper flushes status after each row",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed helper validation",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: WANDB_API_KEY",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed command does not serialize WANDB key",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: HUGGINGFACE_TOKEN",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed command does not serialize HF token",
+      "status": "pass"
+    },
+    {
+      "detail": "squeue -j 3345352",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed polls squeue",
+      "status": "pass"
+    },
+    {
+      "detail": "sacct -X -j 3345352",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed polls sacct",
+      "status": "pass"
+    },
+    {
+      "detail": "tail -n 80",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed tails bounded log chunk",
+      "status": "pass"
+    },
+    {
+      "detail": "[tail-chunk] lines",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed emits reusable tail chunk markers",
+      "status": "pass"
+    },
+    {
+      "detail": "tail -n 3",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed limits recent log files",
+      "status": "pass"
+    },
+    {
+      "detail": "timeout 20s",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed bounds remote log probes",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "name": "static_reference:pard:static_pard_step20_reference helper validation",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "static_reference:pard:static_pard_step20_reference command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: WANDB_API_KEY",
+      "name": "static_reference:pard:static_pard_step20_reference command does not serialize WANDB key",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: HUGGINGFACE_TOKEN",
+      "name": "static_reference:pard:static_pard_step20_reference command does not serialize HF token",
+      "status": "pass"
+    },
+    {
+      "detail": "squeue -j 3333531",
+      "name": "static_reference:pard:static_pard_step20_reference polls squeue",
+      "status": "pass"
+    },
+    {
+      "detail": "sacct -X -j 3333531",
+      "name": "static_reference:pard:static_pard_step20_reference polls sacct",
+      "status": "pass"
+    },
+    {
+      "detail": "tail -n 80",
+      "name": "static_reference:pard:static_pard_step20_reference tails bounded log chunk",
+      "status": "pass"
+    },
+    {
+      "detail": "[tail-chunk] lines",
+      "name": "static_reference:pard:static_pard_step20_reference emits reusable tail chunk markers",
+      "status": "pass"
+    },
+    {
+      "detail": "tail -n 3",
+      "name": "static_reference:pard:static_pard_step20_reference limits recent log files",
+      "status": "pass"
+    },
+    {
+      "detail": "timeout 20s",
+      "name": "static_reference:pard:static_pard_step20_reference bounds remote log probes",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference helper validation",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: WANDB_API_KEY",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference command does not serialize WANDB key",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: HUGGINGFACE_TOKEN",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference command does not serialize HF token",
+      "status": "pass"
+    },
+    {
+      "detail": "squeue -j 3334113",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference polls squeue",
+      "status": "pass"
+    },
+    {
+      "detail": "sacct -X -j 3334113",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference polls sacct",
+      "status": "pass"
+    },
+    {
+      "detail": "tail -n 80",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference tails bounded log chunk",
+      "status": "pass"
+    },
+    {
+      "detail": "[tail-chunk] lines",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference emits reusable tail chunk markers",
+      "status": "pass"
+    },
+    {
+      "detail": "tail -n 3",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference limits recent log files",
+      "status": "pass"
+    },
+    {
+      "detail": "timeout 20s",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference bounds remote log probes",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 helper validation",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: WANDB_API_KEY",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 command does not serialize WANDB key",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: HUGGINGFACE_TOKEN",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 command does not serialize HF token",
+      "status": "pass"
+    },
+    {
+      "detail": "submit_nemorl_online_draft_specdec.sh",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 uses generic online launcher",
+      "status": "pass"
+    },
+    {
+      "detail": "ACCOUNT=",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 carries account env",
+      "status": "pass"
+    },
+    {
+      "detail": "nemotron_n3_post",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 uses requested account",
+      "status": "pass"
+    },
+    {
+      "detail": "MAX_STEPS=",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 carries max steps",
+      "status": "pass"
+    },
+    {
+      "detail": "NRL_VLLM_GENERATION_MIN_TOKENS=",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 carries min generation",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay helper validation",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: WANDB_API_KEY",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay command does not serialize WANDB key",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: HUGGINGFACE_TOKEN",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay command does not serialize HF token",
+      "status": "pass"
+    },
+    {
+      "detail": "submit_nemorl_online_draft_specdec.sh",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay uses generic online launcher",
+      "status": "pass"
+    },
+    {
+      "detail": "ACCOUNT=",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay carries account env",
+      "status": "pass"
+    },
+    {
+      "detail": "nemotron_n3_post",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay uses requested account",
+      "status": "pass"
+    },
+    {
+      "detail": "MAX_STEPS=",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay carries max steps",
+      "status": "pass"
+    },
+    {
+      "detail": "NRL_VLLM_GENERATION_MIN_TOKENS=",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay carries min generation",
+      "status": "pass"
+    },
+    {
+      "detail": "DRAFT_FORMAT='\"'\"'pard",
+      "name": "online PARD launch exports PARD draft format",
+      "status": "pass"
+    },
+    {
+      "detail": "SPECDEC_METHOD='\"'\"'draft_model",
+      "name": "online PARD launch uses draft_model specdec",
+      "status": "pass"
+    },
+    {
+      "detail": "POLICY_DRAFT_LOSS='\"'\"'hard_ce",
+      "name": "online PARD launch uses hard CE",
+      "status": "pass"
+    },
+    {
+      "detail": "NUM_SPECULATIVE_TOKENS='\"'\"'5",
+      "name": "online PARD launch uses K5",
+      "status": "pass"
+    },
+    {
+      "detail": "DRAFT_TP='\"'\"'4",
+      "name": "online PARD launch uses draft TP4",
+      "status": "pass"
+    },
+    {
+      "detail": "PARD_ONLINE_TRAINING='\"'\"'true",
+      "name": "online PARD launch enables online training",
+      "status": "pass"
+    },
+    {
+      "detail": "DRAFT_FORMAT='\"'\"'pard2",
+      "name": "online PARD-2 replay exports PARD-2 draft format",
+      "status": "pass"
+    },
+    {
+      "detail": "SPECDEC_METHOD='\"'\"'pard2",
+      "name": "online PARD-2 replay uses PARD-2 specdec",
+      "status": "pass"
+    },
+    {
+      "detail": "SOURCE_VLLM_SITE=",
+      "name": "online PARD-2 replay carries source vLLM site",
+      "status": "pass"
+    },
+    {
+      "detail": "NUM_SPECULATIVE_TOKENS='\"'\"'3",
+      "name": "online PARD-2 replay uses K3",
+      "status": "pass"
+    },
+    {
+      "detail": "POLICY_DRAFT_ALLOW_GENERIC_PARD2_FALLBACK='\"'\"'false",
+      "name": "online PARD-2 replay disables fallback",
+      "status": "pass"
+    },
+    {
+      "detail": "5",
+      "name": "submit status has five rows",
+      "status": "pass"
+    },
+    {
+      "detail": "online_pard2_step5_r11_completed, static_pard_step20_reference, static_pard2_14b_step20_reference, online_pard_step5_k5_tp4_r1, online_pard2_step5_r12_replay",
+      "name": "submit status follows manifest gate order",
+      "status": "pass"
+    },
+    {
+      "detail": "stdout_path",
+      "name": "submit status CSV includes stdout_path",
+      "status": "pass"
+    },
+    {
+      "detail": "stderr_path",
+      "name": "submit status CSV includes stderr_path",
+      "status": "pass"
+    },
+    {
+      "detail": "operation_state",
+      "name": "submit status CSV includes operation_state",
+      "status": "pass"
+    },
+    {
+      "detail": "remote_command",
+      "name": "submit status CSV includes remote_command",
+      "status": "pass"
+    },
+    {
+      "detail": "{'not_selected': 4, 'dry_run_ready': 1}",
+      "name": "submit status operation summary",
+      "status": "pass"
+    },
+    {
+      "detail": "--execute requires --action, --gate-name, or --method unless --allow-all-execute is set",
+      "name": "execute mode requires an explicit row filter",
+      "status": "pass"
+    },
+    {
+      "detail": ".tmp_online_gate/mathrl_qwen32_submit_contract_outputs/2026-06-16T000000-0700_P2_launch_online_online_pard_online_pard_step5_k5_tp4_r1.stdout.log",
+      "name": "timeout stdout is written to a reusable file",
+      "status": "pass"
+    },
+    {
+      "detail": ".tmp_online_gate/mathrl_qwen32_submit_contract_outputs/2026-06-16T000000-0700_P2_launch_online_online_pard_online_pard_step5_k5_tp4_r1.stderr.log",
+      "name": "timeout stderr is written to a reusable file",
+      "status": "pass"
+    },
+    {
+      "detail": "blocked_remote_unreachable",
+      "name": "failed preflight does not submit on execute",
+      "status": "pass"
+    }
+  ],
+  "manifest": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_mathrl_qwen32_online_pard_gate_manifest_20260616.csv",
+  "overall_status": "pass",
+  "status_csv": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_mathrl_qwen32_online_pard_gate_submit_status_20260616.csv",
+  "submit_helper": "/Users/sna/Nemo-RL_Qwen3_Roadmap/scripts/submit_mathrl_qwen32_online_pard_gate_from_manifest.py"
+}

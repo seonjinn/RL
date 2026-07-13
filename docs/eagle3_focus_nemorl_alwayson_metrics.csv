@@ -1,0 +1,7 @@
+model,k,mode,job,result_scope,max_total_sequence_length,responses_per_step,generation_throughput_speedup,generation_step_time_speedup,e2e_throughput_speedup,e2e_step_time_speedup,acceptance_rate_pct
+Qwen3-8B,1,always,3125397/3127152,early matched long-rollout Step 1-4; not a completed 20-step aggregate,8192,2048,1.4135,,1.1793,,60.4625
+Qwen3-8B,3,always,3125396/3127158,early matched long-rollout Step 1-4; not a completed 20-step aggregate,8192,2048,1.4828,,1.2252,,35.7200
+Qwen3-32B,1,always,3128147,completed 20-step NeMo-RL fixed/offline drafter,4096,2048,1.3459,1.3476,1.1538,1.1540,69.4500
+Qwen3-32B,3,always,3128428,completed 20-step NeMo-RL fixed/offline drafter,4096,2048,1.3557,1.3566,1.1808,1.1808,45.2800
+Qwen3-30B-A3B,1,always,3058167,completed 20-step NeMo-RL historical 500K fixed/offline drafter,2048,2048,1.3442,1.3428,1.0994,1.0981,57.5100
+Qwen3-30B-A3B,3,always,3058169,completed 20-step NeMo-RL historical 500K fixed/offline drafter,2048,2048,1.1773,1.1761,1.0680,1.0676,31.8500

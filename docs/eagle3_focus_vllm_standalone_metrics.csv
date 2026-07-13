@@ -1,0 +1,32 @@
+model,benchmark,target_model,drafter,drafter_scope,batch_size,k,isl,osl,baseline_output_tok_s_gpu,specdec_output_tok_s_gpu,speedup,acceptance_rate_pct,note
+Qwen3-8B,synthetic_static,Qwen/Qwen3-8B,RedHatAI/Qwen3-8B-speculator.eagle3,public_hf,1,1,1000,512,245.6800,241.2000,0.9818,,acceptance not emitted by this original K=1 static sweep
+Qwen3-8B,synthetic_static,Qwen/Qwen3-8B,RedHatAI/Qwen3-8B-speculator.eagle3,public_hf,2,1,1000,512,482.6200,326.1700,0.6758,,acceptance not emitted by this original K=1 static sweep
+Qwen3-8B,synthetic_static,Qwen/Qwen3-8B,RedHatAI/Qwen3-8B-speculator.eagle3,public_hf,4,1,1000,512,855.5000,959.6400,1.1217,,acceptance not emitted by this original K=1 static sweep
+Qwen3-8B,synthetic_static,Qwen/Qwen3-8B,RedHatAI/Qwen3-8B-speculator.eagle3,public_hf,8,1,1000,512,1792.2700,1903.8300,1.0622,,acceptance not emitted by this original K=1 static sweep
+Qwen3-8B,synthetic_static,Qwen/Qwen3-8B,RedHatAI/Qwen3-8B-speculator.eagle3,public_hf,16,1,1000,512,3219.5200,3764.5300,1.1693,,acceptance not emitted by this original K=1 static sweep
+Qwen3-8B,synthetic_static,Qwen/Qwen3-8B,RedHatAI/Qwen3-8B-speculator.eagle3,public_hf,32,1,1000,512,5349.5400,7121.3400,1.3312,,acceptance not emitted by this original K=1 static sweep
+Qwen3-8B,synthetic_static,Qwen/Qwen3-8B,RedHatAI/Qwen3-8B-speculator.eagle3,public_hf,1,3,1000,512,245.6800,434.4500,1.7684,,acceptance not emitted by this original K=3 static sweep
+Qwen3-8B,synthetic_static,Qwen/Qwen3-8B,RedHatAI/Qwen3-8B-speculator.eagle3,public_hf,2,3,1000,512,482.6200,437.3500,0.9062,,acceptance not emitted by this original K=3 static sweep
+Qwen3-8B,synthetic_static,Qwen/Qwen3-8B,RedHatAI/Qwen3-8B-speculator.eagle3,public_hf,4,3,1000,512,855.5000,1716.5600,2.0065,,acceptance not emitted by this original K=3 static sweep
+Qwen3-8B,synthetic_static,Qwen/Qwen3-8B,RedHatAI/Qwen3-8B-speculator.eagle3,public_hf,8,3,1000,512,1792.2700,3372.1700,1.8815,,acceptance not emitted by this original K=3 static sweep
+Qwen3-8B,synthetic_static,Qwen/Qwen3-8B,RedHatAI/Qwen3-8B-speculator.eagle3,public_hf,16,3,1000,512,3219.5200,6388.4700,1.9843,,acceptance not emitted by this original K=3 static sweep
+Qwen3-8B,synthetic_static,Qwen/Qwen3-8B,RedHatAI/Qwen3-8B-speculator.eagle3,public_hf,32,3,1000,512,5349.5400,11475.6000,2.1452,,acceptance not emitted by this original K=3 static sweep
+Qwen3-8B,dapo_math_real_prompt_bs32,Qwen/Qwen3-8B,RedHatAI/Qwen3-8B-speculator.eagle3,public_hf,32,1,1000,512,,,0.6650,61.1100,real DAPOMath prompt isolation; bs32 only
+Qwen3-8B,dapo_math_real_prompt_bs32,Qwen/Qwen3-8B,RedHatAI/Qwen3-8B-speculator.eagle3,public_hf,32,3,1000,512,,,0.8530,36.6200,real DAPOMath prompt isolation; bs32 only
+Qwen3-32B,synthetic_static,Qwen/Qwen3-32B,RedHatAI/Qwen3-32B-speculator.eagle3,public_hf,1,1,1000,512,76.2000,116.1900,1.5248,94.7000,acceptance emitted
+Qwen3-32B,synthetic_static,Qwen/Qwen3-32B,RedHatAI/Qwen3-32B-speculator.eagle3,public_hf,2,1,1000,512,150.0400,178.2700,1.1881,87.0000,acceptance emitted
+Qwen3-32B,synthetic_static,Qwen/Qwen3-32B,RedHatAI/Qwen3-32B-speculator.eagle3,public_hf,4,1,1000,512,294.7300,428.5500,1.4540,83.9000,acceptance emitted
+Qwen3-32B,synthetic_static,Qwen/Qwen3-32B,RedHatAI/Qwen3-32B-speculator.eagle3,public_hf,8,1,1000,512,569.0700,917.1700,1.6117,95.2000,acceptance emitted
+Qwen3-32B,synthetic_static,Qwen/Qwen3-32B,RedHatAI/Qwen3-32B-speculator.eagle3,public_hf,16,1,1000,512,1062.8800,1643.9800,1.5467,79.3000,acceptance emitted
+Qwen3-32B,synthetic_static,Qwen/Qwen3-32B,RedHatAI/Qwen3-32B-speculator.eagle3,public_hf,32,1,1000,512,1905.6700,3097.1500,1.6252,79.9000,acceptance emitted
+Qwen3-32B,synthetic_static,Qwen/Qwen3-32B,RedHatAI/Qwen3-32B-speculator.eagle3,public_hf,1,3,1000,512,76.2000,209.0600,2.7436,89.2000,acceptance emitted
+Qwen3-32B,synthetic_static,Qwen/Qwen3-32B,RedHatAI/Qwen3-32B-speculator.eagle3,public_hf,2,3,1000,512,150.0400,332.6100,2.2168,64.8000,acceptance emitted
+Qwen3-32B,synthetic_static,Qwen/Qwen3-32B,RedHatAI/Qwen3-32B-speculator.eagle3,public_hf,4,3,1000,512,294.7300,661.5400,2.2446,64.6000,acceptance emitted
+Qwen3-32B,synthetic_static,Qwen/Qwen3-32B,RedHatAI/Qwen3-32B-speculator.eagle3,public_hf,8,3,1000,512,569.0700,1233.1500,2.1670,63.0000,acceptance emitted
+Qwen3-32B,synthetic_static,Qwen/Qwen3-32B,RedHatAI/Qwen3-32B-speculator.eagle3,public_hf,16,3,1000,512,1062.8800,2427.2200,2.2836,64.4000,acceptance emitted
+Qwen3-32B,synthetic_static,Qwen/Qwen3-32B,RedHatAI/Qwen3-32B-speculator.eagle3,public_hf,32,3,1000,512,1905.6700,4359.7800,2.2878,67.1000,acceptance emitted
+Qwen3-30B-A3B,synthetic_static,Qwen/Qwen3-30B-A3B,qwen3_30ba3b_mixed_math_nonopenmath_500k_local_checkpoint,local_500k_not_public_hf,1,1,1000,1000,230.4893,147.6494,0.6406,26.4700,"K=1 only; local/in-house 500K drafter, not public HF"
+Qwen3-30B-A3B,synthetic_static,Qwen/Qwen3-30B-A3B,qwen3_30ba3b_mixed_math_nonopenmath_500k_local_checkpoint,local_500k_not_public_hf,2,1,1000,1000,418.3754,246.1515,0.5884,26.6500,"K=1 only; local/in-house 500K drafter, not public HF"
+Qwen3-30B-A3B,synthetic_static,Qwen/Qwen3-30B-A3B,qwen3_30ba3b_mixed_math_nonopenmath_500k_local_checkpoint,local_500k_not_public_hf,4,1,1000,1000,696.0546,452.4774,0.6501,30.6100,"K=1 only; local/in-house 500K drafter, not public HF"
+Qwen3-30B-A3B,synthetic_static,Qwen/Qwen3-30B-A3B,qwen3_30ba3b_mixed_math_nonopenmath_500k_local_checkpoint,local_500k_not_public_hf,8,1,1000,1000,1197.2179,782.6752,0.6537,27.8000,"K=1 only; local/in-house 500K drafter, not public HF"
+Qwen3-30B-A3B,synthetic_static,Qwen/Qwen3-30B-A3B,qwen3_30ba3b_mixed_math_nonopenmath_500k_local_checkpoint,local_500k_not_public_hf,16,1,1000,1000,1971.8680,368.2889,0.1868,24.3900,"K=1 only; local/in-house 500K drafter, not public HF"

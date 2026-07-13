@@ -1,0 +1,16 @@
+label=math500_osl32k_qwen30_baseline bs=1 out_tok_s_gpu=20.113413812196672 speedup=1.0000 acc_pct= mean_len=
+label=math500_osl32k_qwen30_pard_k3 bs=1 out_tok_s_gpu=37.19917646013568 speedup=1.8495 acc_pct=70.6723 mean_len=3.1202
+label=math500_osl32k_qwen30_pard_k5 bs=1 out_tok_s_gpu=42.333389286590425 speedup=2.1047 acc_pct=52.1544 mean_len=3.6077
+label=math500_osl32k_qwen30_suffix_k32 bs=1 out_tok_s_gpu=146.74090361737424 speedup=7.2957 acc_pct=88.4350 mean_len=7.8454
+label=math500_osl32k_qwen8_baseline bs=1 out_tok_s_gpu=36.792504897728755 speedup=1.0000 acc_pct= mean_len=
+label=math500_osl32k_qwen8_eagle3_k3 bs=1 out_tok_s_gpu=74.37520408358706 speedup=2.0215 acc_pct=62.9391 mean_len=2.8882
+label=math500_osl32k_qwen8_official_pard2_k3 bs=1 out_tok_s_gpu=15.994343175598349 speedup=0.4347 acc_pct=0.0716 mean_len=1.0021
+label=math500_osl32k_qwen8_official_pard2_k5 bs=1 out_tok_s_gpu=16.103276017934512 speedup=0.4377 acc_pct=0.0430 mean_len=1.0021
+label=math500_osl32k_qwen8_suffix_k32 bs=1 out_tok_s_gpu=216.0161002501511 speedup=5.8712 acc_pct=84.5137 mean_len=6.8757
+label=math500_osl32k_qwen30_baseline bs=2 out_tok_s_gpu=40.122374908964915 speedup=1.0000 acc_pct= mean_len=
+label=math500_osl32k_qwen30_pard_k3 bs=2 out_tok_s_gpu=68.86752922951163 speedup=1.7164 acc_pct=71.9478 mean_len=3.1584
+label=math500_osl32k_qwen30_pard_k5 bs=2 out_tok_s_gpu=61.56877960925148 speedup=1.5345 acc_pct=43.4501 mean_len=3.1725
+label=math500_osl32k_qwen30_suffix_k32 bs=2 out_tok_s_gpu=303.80628653369337 speedup=7.5720 acc_pct=92.5191 mean_len=9.8070
+label=math500_osl32k_qwen8_baseline bs=2 out_tok_s_gpu=73.79091781954455 speedup=1.0000 acc_pct= mean_len=
+label=math500_osl32k_qwen8_eagle3_k3 bs=2 out_tok_s_gpu=118.52748084249941 speedup=1.6063 acc_pct=63.6163 mean_len=2.9085
+label=math500_osl32k_qwen8_suffix_k32 bs=2 out_tok_s_gpu=469.82900160515635 speedup=6.3670 acc_pct=91.2423 mean_len=9.4848

@@ -1,0 +1,46 @@
+# Qwen3-235B vLLM Runtime Version Matrix
+
+Date: 2026-06-06 PDT
+
+This matrix separates the runtime used by vLLM standalone benchmarks from
+the runtime used by NeMo-RL validation. The two are not automatically
+apples-to-apples because the standalone PARD path used a newer vLLM engine
+than the main NeMo-RL PARD/PARD-2-style path.
+
+| Path | vLLM version | Runtime | Evidence | Implication |
+|---|---|---|---|---|
+| Qwen3-235B vLLM standalone PARD / OpenMath / high-batch gates | v0.20.2 | vllm-hsg-ultra-rl-v0.20.2-nemo-speed-pr24.sqsh | docs/qwen3_235b_pard_vllm_standalone_summary_2026_06_04.md; docs/qwen3_235b_pard_action_report_2026_06_05.md reports engine v0.20.2. | Standalone numbers are from a newer vLLM engine than most NeMo-RL runs; do not treat them as version-identical. |
+| Qwen3-235B NeMo-RL PARD/PARD-2-style sync generation and sampling-step4 Full-GRPO | 0.17.0 extracted site | /lustre/fsw/portfolios/coreai/users/sna/qwen3_235b_eagle3/python_site/vllm_0_17_0_extract_py312 | latest_qwen235b_pard2_dpace_nemorl_fullgrpo_sampling_step4_jobs.txt and related NeMo-RL job manifests set source_vllm_site to vllm_0_17_0_extract_py312. | This is the main NeMo-RL Qwen3-235B PARD-style runtime for matched K3/K5 validation. |
+| Qwen3-235B NeMo-RL latest-main/nightly PARD OpenMath generation control | 0.20.0 worker venv | /opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker inside nemo_rl_nightly_20260606.sqsh | docs/qwen3_235b_main_nightly_vllm020_generation_20260606.csv; jobs 3197507/3197508/3197509 completed with public PARD K3 1.498x and K5 1.591x generation-only throughput speedup. | Version-skew control is positive for NeMo-RL generation path using vLLM 0.20.0 and led to the positive non-colocated TP4 Full-GRPO branch. |
+| Qwen3-235B NeMo-RL latest-main/nightly public PARD Full-GRPO non-colocated TP4 | 0.20.0 worker venv | same nightly worker-vLLM path as generation control; driver /opt/nemo_rl_venv | docs/qwen3_pard_nemorl_fullgrpo_final_summary_20260607.csv; baseline 3209047 vs public PARD K3 3209048 completed 5 timing metrics. | Positive no-stop Full-GRPO fixed-256 result: Step 2-5 E2E throughput 1.420x and total step-time 1.421x under non-colocated TP4. |
+| Qwen3-235B NeMo-RL local CAT/TPP-mask K5 provider-MoE freshvenv job 3195285 | not proven from local artifact | source_vllm_site is blank in latest_qwen235b_pard_local_tpp_mask_k5_fullgrpo20_provider_moe_freshvenv_jobs.txt | The launcher accepts SOURCE_VLLM_SITE but the 3195285 manifest records source_vllm_site= with no value. | Do not claim a specific vLLM import version for 3195285 until remote logs or an import probe are available. |
+| Qwen3-235B DFlash stock-container config probe | 0.17.0 | vllm-hsg-nightly-nsys.sqsh current container probe | latest_qwen235b_dflash_vllm_config_probe_jobs.txt reports vllm_version=0.17.0 and supported_speculators_types=eagle3. | Stock 0.17.0 did not support DFlash conversion; DFlash needs a separate runtime track. |
+| Qwen3-235B DFlash source-build support track | 0.19.1rc1.dev315+g0b790a250.d20260606 | vllm_dflash_pr38300_0b790a2_cu129_torch28nv_source_py312 | docs/qwen3_235b_pard_action_report_2026_06_05.md reports the DFlash-capable source build version and supported dflash/eagle3 types. | Separate DFlash runtime proof only; not the PARD/PARD-2-style baseline for current Qwen3-235B reports. |
+| Older Qwen3-235B NeMo-RL source-build compatibility path | 0.10.2 source build | vllm_0_10_2_cu129_torch28nv_source_py312 | experiments/eagle3_qwen3_235b/VLLM_VERSION_STRATEGY.md documents this as an older recovery path. | Historical SWE/rollout compatibility path; not the current Qwen3-235B PARD performance runtime. |
+
+## Current Answer
+
+- Standalone Qwen3-235B PARD benchmark: vLLM `v0.20.2`.
+- NeMo-RL Qwen3-235B PARD/PARD-2-style matched validation: mostly
+  `vllm_0_17_0_extract_py312`, i.e. vLLM `0.17.0` extracted site.
+- NeMo-RL latest-main/nightly generation-control validation now uses
+  VllmGenerationWorker vLLM `0.20.0` and shows public PARD K3/K5
+  positive generation-only speedup on OpenMath bs32/o256.
+- NeMo-RL latest-main/nightly Full-GRPO non-colocated TP4 now has
+  a positive fixed-256 result: baseline `3209047` vs public PARD K3
+  `3209048`, Step 2-5 E2E throughput `1.420x` and total step-time
+  `1.421x`.
+- Current 32-node job `3195285` has no explicit source-site override in
+  the local manifest, so its exact import version must be checked from
+  remote logs after DNS/VPN recovers.
+- DFlash used a separate source-build track at
+  `0.19.1rc1.dev315+g0b790a250.d20260606` and should not be mixed with
+  the PARD/PARD-2 performance comparison.
+
+## Practical Consequence
+
+If NeMo-RL Full-GRPO E2E loses while standalone vLLM is positive, version
+skew is one credible systems variable alongside RL tail, MoE verification,
+and orchestration overhead. The clean follow-up is either a vLLM `0.17.0`
+standalone control or a NeMo-RL runtime probe with a newer vLLM site once
+ABI/API compatibility is proven.

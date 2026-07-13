@@ -1,0 +1,16 @@
+2172081|online-qwen235b-perfcfg-sync-suffix-step3-osl8192-temp1.0-N32xG4|FAILED|1:0|00:34:11|2026-06-21T13:02:01|2026-06-21T13:36:12
+2172082|online-qwen235b-perfcfg-sync-eagle3-step3-osl8192-temp1.0-N32xG4|FAILED|1:0|00:38:46|2026-06-21T13:02:02|2026-06-21T13:40:48
+2172083|online-qwen235b-perfcfg-sync-pard-step3-osl8192-temp1.0-N32xG4|COMPLETED|0:0|01:01:01|2026-06-21T13:36:26|2026-06-21T14:37:27
+2172084|online-qwen235b-perfcfg-sync-pard2-step3-osl8192-temp1.0-N32xG4|FAILED|2:0|00:02:25|2026-06-21T13:41:01|2026-06-21T13:43:26
+2172134|online-qwen235b-perfcfg-sync-pard-step3-osl8192-temp1.0-N32xG4|FAILED|1:0|00:04:19|2026-06-21T14:49:41|2026-06-21T14:54:00
+2172135|online-qwen235b-perfcfg-sync-pard2-step3-osl8192-temp1.0-N32xG4|FAILED|2:0|00:02:44|2026-06-21T14:27:32|2026-06-21T14:30:16
+2172136|online-qwen235b-perfcfg-sync-eagle3-step3-osl8192-temp1.0-N32xG4|COMPLETED|0:0|01:13:18|2026-06-21T14:30:42|2026-06-21T15:44:00
+2172137|online-qwen235b-perfcfg-sync-eagle3-step3-osl8192-temp1.0-N32xG4|COMPLETED|0:0|01:10:44|2026-06-21T14:59:43|2026-06-21T16:10:27
+2172802|online-qwen235b-perfcfg-sync-eagle3-step20-osl8192-temp1.0-N32xG4|COMPLETED|0:0|04:37:09|2026-06-21T15:57:36|2026-06-21T20:34:45
+2172803|online-qwen235b-perfcfg-sync-baseline-step20-osl8192-temp1.0-N32xG4|TIMEOUT|0:0|05:00:24|2026-06-21T16:10:35|2026-06-21T21:10:59
+2172804|online-qwen235b-perfcfg-sync-pard-step20-osl8192-temp1.0-N32xG4|RUNNING|0:0|04:20:11|2026-06-21T16:52:32|Unknown
+2172805|online-qwen235b-perfcfg-sync-suffix-step20-osl8192-temp1.0-N32xG4|RUNNING|0:0|02:17:33|2026-06-21T18:55:10|Unknown
+2172806|online-qwen235b-perfcfg-sync-eagle3-step20-osl8192-temp1.0-N32xG4|PENDING|0:0|00:00:00|Unknown|Unknown
+2173548|online-qwen235b-perfcfg-sync-pard2-step20-osl8192-temp1.0-N32xG4|FAILED|2:0|00:02:46|2026-06-21T19:52:45|2026-06-21T19:55:31
+2173556|online-qwen235b-perfcfg-sync-pardk16-step20-osl8192-temp1.0-N32xG4|RUNNING|0:0|01:16:46|2026-06-21T19:55:57|Unknown
+2173557|online-qwen235b-perfcfg-sync-pard2k16-step20-osl8192-temp1.0-N32xG4|RUNNING|0:0|00:00:43|2026-06-21T21:12:00|Unknown

@@ -1,0 +1,321 @@
+{
+  "checks": [
+    {
+      "candidates": [
+        {
+          "missing_markers": [],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/models/megatron/setup.py",
+          "status": "pass"
+        },
+        {
+          "missing_markers": [
+            "draft_enabled",
+            "_create_draft_pre_wrap_hook",
+            "build_draft_model",
+            "draft_refit_model"
+          ],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/remote_patches/SpecDec-RL/nemo_rl/models/megatron/setup.py",
+          "status": "fail"
+        }
+      ],
+      "missing_markers": [],
+      "name": "draft model attach/refit setup",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/models/megatron/setup.py",
+      "relpath": "nemo_rl/models/megatron/setup.py",
+      "status": "pass"
+    },
+    {
+      "candidates": [
+        {
+          "missing_markers": [],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/models/megatron/draft/utils.py",
+          "status": "pass"
+        },
+        {
+          "missing_markers": [],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/remote_patch_pard2_official/nemo_rl/models/megatron/draft/utils.py",
+          "status": "pass"
+        }
+      ],
+      "missing_markers": [],
+      "name": "PARD draft builder/export",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/models/megatron/draft/utils.py",
+      "relpath": "nemo_rl/models/megatron/draft/utils.py",
+      "status": "pass"
+    },
+    {
+      "candidates": [
+        {
+          "missing_markers": [
+            "_attach_pard2_target_projection",
+            "target_proj.weight",
+            "Official PARD-2 draft is missing `target_proj` during export."
+          ],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/models/megatron/draft/utils.py",
+          "status": "fail"
+        },
+        {
+          "missing_markers": [],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/remote_patch_pard2_official/nemo_rl/models/megatron/draft/utils.py",
+          "status": "pass"
+        }
+      ],
+      "missing_markers": [],
+      "name": "official PARD-2 target projection",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/remote_patch_pard2_official/nemo_rl/models/megatron/draft/utils.py",
+      "relpath": "nemo_rl/models/megatron/draft/utils.py",
+      "status": "pass"
+    },
+    {
+      "candidates": [
+        {
+          "missing_markers": [
+            "build_pard2_target_features",
+            "pard2_target_feature_context",
+            "target_feat",
+            "target_proj"
+          ],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/models/megatron/draft/pard.py",
+          "status": "fail"
+        },
+        {
+          "missing_markers": [],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/remote_patch_pard2_official/nemo_rl/models/megatron/draft/pard.py",
+          "status": "pass"
+        }
+      ],
+      "missing_markers": [],
+      "name": "PARD-2 target feature training path",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/remote_patch_pard2_official/nemo_rl/models/megatron/draft/pard.py",
+      "relpath": "nemo_rl/models/megatron/draft/pard.py",
+      "status": "pass"
+    },
+    {
+      "candidates": [
+        {
+          "missing_markers": [
+            "gather_from_sequence_parallel_region",
+            "get_tensor_model_parallel_rank",
+            "get_tensor_model_parallel_world_size",
+            "global_sequence_length = local_sequence_length * tp_size",
+            "seq_first.narrow",
+            "Projected PARD-2 target features do not align with draft embeddings"
+          ],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/models/megatron/draft/pard.py",
+          "status": "fail"
+        },
+        {
+          "missing_markers": [],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/remote_patch_pard2_official/nemo_rl/models/megatron/draft/pard.py",
+          "status": "pass"
+        }
+      ],
+      "missing_markers": [],
+      "name": "PARD-2 sequence-parallel target alignment",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/remote_patch_pard2_official/nemo_rl/models/megatron/draft/pard.py",
+      "relpath": "nemo_rl/models/megatron/draft/pard.py",
+      "status": "pass"
+    },
+    {
+      "candidates": [
+        {
+          "missing_markers": [],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/models/megatron/draft/hidden_capture.py",
+          "status": "pass"
+        },
+        {
+          "missing_markers": [],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/remote_patch_pard2_official/nemo_rl/models/megatron/draft/hidden_capture.py",
+          "status": "pass"
+        }
+      ],
+      "missing_markers": [],
+      "name": "hidden-state capture",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/models/megatron/draft/hidden_capture.py",
+      "relpath": "nemo_rl/models/megatron/draft/hidden_capture.py",
+      "status": "pass"
+    },
+    {
+      "candidates": [
+        {
+          "missing_markers": [
+            "build_pard2_target_features",
+            "pard2_target_feature_context",
+            "enable_pard2_hidden_capture"
+          ],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/models/megatron/train.py",
+          "status": "fail"
+        },
+        {
+          "missing_markers": [],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/remote_patch_pard2_official/nemo_rl/models/megatron/train.py",
+          "status": "pass"
+        }
+      ],
+      "missing_markers": [],
+      "name": "PARD-2 train integration",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/remote_patch_pard2_official/nemo_rl/models/megatron/train.py",
+      "relpath": "nemo_rl/models/megatron/train.py",
+      "status": "pass"
+    },
+    {
+      "candidates": [
+        {
+          "missing_markers": [],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/algorithms/loss/utils.py",
+          "status": "pass"
+        },
+        {
+          "missing_markers": [],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/remote_patch_pard2_official/nemo_rl/algorithms/loss/utils.py",
+          "status": "pass"
+        }
+      ],
+      "missing_markers": [],
+      "name": "draft loss packing",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/algorithms/loss/utils.py",
+      "relpath": "nemo_rl/algorithms/loss/utils.py",
+      "status": "pass"
+    },
+    {
+      "candidates": [
+        {
+          "missing_markers": [],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/algorithms/loss/loss_functions.py",
+          "status": "pass"
+        },
+        {
+          "missing_markers": [],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/remote_patch_pard2_official/nemo_rl/algorithms/loss/loss_functions.py",
+          "status": "pass"
+        }
+      ],
+      "missing_markers": [],
+      "name": "hard-label draft CE loss",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/algorithms/loss/loss_functions.py",
+      "relpath": "nemo_rl/algorithms/loss/loss_functions.py",
+      "status": "pass"
+    },
+    {
+      "candidates": [
+        {
+          "missing_markers": [],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/algorithms/grpo.py",
+          "status": "pass"
+        },
+        {
+          "missing_markers": [
+            "_online_draft_enabled",
+            "draft_loss",
+            "Draft Training Enabled"
+          ],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/remote_patches/SpecDec-RL/nemo_rl/algorithms/grpo.py",
+          "status": "fail"
+        }
+      ],
+      "missing_markers": [],
+      "name": "GRPO online-draft metrics",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/algorithms/grpo.py",
+      "relpath": "nemo_rl/algorithms/grpo.py",
+      "status": "pass"
+    },
+    {
+      "candidates": [
+        {
+          "missing_markers": [],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/remote_patches/SpecDec-RL/nemo_rl/models/generation/vllm/vllm_backend.py",
+          "status": "pass"
+        }
+      ],
+      "missing_markers": [],
+      "name": "vLLM target_proj refit guard",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/remote_patches/SpecDec-RL/nemo_rl/models/generation/vllm/vllm_backend.py",
+      "relpath": "nemo_rl/models/generation/vllm/vllm_backend.py",
+      "status": "pass"
+    },
+    {
+      "candidates": [
+        {
+          "missing_markers": [
+            "export_eagle_weights_to_hf"
+          ],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/models/policy/workers/megatron_policy_worker.py",
+          "status": "fail"
+        },
+        {
+          "missing_markers": [],
+          "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/remote_patches/SpecDec-RL/nemo_rl/models/policy/workers/megatron_policy_worker.py",
+          "status": "pass"
+        }
+      ],
+      "missing_markers": [],
+      "name": "policy worker draft refit export",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/remote_patches/SpecDec-RL/nemo_rl/models/policy/workers/megatron_policy_worker.py",
+      "relpath": "nemo_rl/models/policy/workers/megatron_policy_worker.py",
+      "status": "pass"
+    }
+  ],
+  "compile_results": [
+    {
+      "error": "",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/algorithms/grpo.py",
+      "status": "pass"
+    },
+    {
+      "error": "",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/algorithms/loss/loss_functions.py",
+      "status": "pass"
+    },
+    {
+      "error": "",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/algorithms/loss/utils.py",
+      "status": "pass"
+    },
+    {
+      "error": "",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/models/megatron/draft/hidden_capture.py",
+      "status": "pass"
+    },
+    {
+      "error": "",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/models/megatron/draft/utils.py",
+      "status": "pass"
+    },
+    {
+      "error": "",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/models/megatron/setup.py",
+      "status": "pass"
+    },
+    {
+      "error": "",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/remote_patches/SpecDec-RL/nemo_rl/models/generation/vllm/vllm_backend.py",
+      "status": "pass"
+    },
+    {
+      "error": "",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/remote_patches/SpecDec-RL/nemo_rl/models/policy/workers/megatron_policy_worker.py",
+      "status": "pass"
+    },
+    {
+      "error": "",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/remote_patch_pard2_official/nemo_rl/models/megatron/draft/pard.py",
+      "status": "pass"
+    },
+    {
+      "error": "",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/remote_patch_pard2_official/nemo_rl/models/megatron/draft/utils.py",
+      "status": "pass"
+    },
+    {
+      "error": "",
+      "path": "/Users/sna/Nemo-RL_Qwen3_Roadmap/remote_patch_pard2_official/nemo_rl/models/megatron/train.py",
+      "status": "pass"
+    }
+  ],
+  "overall_status": "pass",
+  "roots": [
+    "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci",
+    "/Users/sna/Nemo-RL_Qwen3_Roadmap/remote_patch_pard2_official",
+    "/Users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/remote_patches/SpecDec-RL"
+  ]
+}

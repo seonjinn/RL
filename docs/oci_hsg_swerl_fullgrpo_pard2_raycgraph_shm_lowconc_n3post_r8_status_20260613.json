@@ -1,0 +1,20 @@
+[
+  {
+    "checked_at_utc": "2026-06-14T23:05:29+00:00",
+    "draft_model": "amd/PARD2-Qwen3-8B",
+    "elapsed": "00:25:54",
+    "exit_code": "0:0",
+    "exp_suffix": "specdec-pard2-steps10-20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_raycgraph_shm_lowconc_n3post_r8",
+    "job_id": "3300390",
+    "max_steps": "10",
+    "method": "pard2",
+    "nodes": "nvl72040-T[01-16]",
+    "num_speculative_tokens": "1",
+    "reason": "None",
+    "run_id": "20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_raycgraph_shm_lowconc_n3post_r8",
+    "specdec_method": "pard2",
+    "start_time": "2026-06-14T03:09:08",
+    "state": "CANCELLED by 150081",
+    "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507"
+  }
+]

@@ -1,0 +1,20 @@
+[
+  {
+    "checked_at_utc": "2026-06-15T03:10:30+00:00",
+    "draft_model": "amd/PARD2-Qwen3-8B",
+    "elapsed": "01:39:41",
+    "exit_code": "1:0",
+    "exp_suffix": "specdec-pard2-steps1-20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r22_pard2_wandb_venvsync_trainbs32",
+    "job_id": "2123212",
+    "max_steps": "1",
+    "method": "pard2",
+    "nodes": "lyris[0092-0103,0105-0108]",
+    "num_speculative_tokens": "1",
+    "reason": "None",
+    "run_id": "20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r22_pard2_wandb_venvsync_trainbs32",
+    "specdec_method": "pard2",
+    "start_time": "2026-06-14T18:22:25",
+    "state": "FAILED",
+    "target_model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/model_snapshots/Qwen3-235B-A22B-Thinking-2507"
+  }
+]

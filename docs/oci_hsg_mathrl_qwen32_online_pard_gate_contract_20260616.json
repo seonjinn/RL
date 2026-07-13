@@ -1,0 +1,606 @@
+{
+  "checks": [
+    {
+      "detail": "5",
+      "name": "manifest has five qwen32 gate rows",
+      "status": "pass"
+    },
+    {
+      "detail": "online_pard2_step5_r11_completed, static_pard_step20_reference, static_pard2_14b_step20_reference, online_pard_step5_k5_tp4_r1, online_pard2_step5_r12_replay",
+      "name": "manifest gate coverage",
+      "status": "pass"
+    },
+    {
+      "detail": "priority",
+      "name": "manifest includes priority",
+      "status": "pass"
+    },
+    {
+      "detail": "action",
+      "name": "manifest includes action",
+      "status": "pass"
+    },
+    {
+      "detail": "gate_name",
+      "name": "manifest includes gate_name",
+      "status": "pass"
+    },
+    {
+      "detail": "method",
+      "name": "manifest includes method",
+      "status": "pass"
+    },
+    {
+      "detail": "k",
+      "name": "manifest includes k",
+      "status": "pass"
+    },
+    {
+      "detail": "online_training",
+      "name": "manifest includes online_training",
+      "status": "pass"
+    },
+    {
+      "detail": "proof_state",
+      "name": "manifest includes proof_state",
+      "status": "pass"
+    },
+    {
+      "detail": "env_overrides",
+      "name": "manifest includes env_overrides",
+      "status": "pass"
+    },
+    {
+      "detail": "hydra_overrides",
+      "name": "manifest includes hydra_overrides",
+      "status": "pass"
+    },
+    {
+      "detail": "remote_command",
+      "name": "manifest includes remote_command",
+      "status": "pass"
+    },
+    {
+      "detail": "3345352",
+      "name": "completed online PARD-2 reference is r11 job 3345352",
+      "status": "pass"
+    },
+    {
+      "detail": "3333531",
+      "name": "static PARD reference is completed qwen32 job",
+      "status": "pass"
+    },
+    {
+      "detail": "3334113",
+      "name": "static PARD-2 14B reference is tracked",
+      "status": "pass"
+    },
+    {
+      "detail": "Qwen3-32B",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed uses MathRL Qwen3-32B",
+      "status": "pass"
+    },
+    {
+      "detail": "oci-hsg-cs-001-vscode-02",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed remote_host=oci-hsg-cs-001-vscode-02",
+      "status": "pass"
+    },
+    {
+      "detail": "nemotron_n3_post",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed account=nemotron_n3_post",
+      "status": "pass"
+    },
+    {
+      "detail": "batch",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed partition=batch",
+      "status": "pass"
+    },
+    {
+      "detail": "1024",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed max_new_tokens=1024",
+      "status": "pass"
+    },
+    {
+      "detail": "1024",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed min_tokens=1024",
+      "status": "pass"
+    },
+    {
+      "detail": "1.0",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed temperature=1.0",
+      "status": "pass"
+    },
+    {
+      "detail": "1.0",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed top_p=1.0",
+      "status": "pass"
+    },
+    {
+      "detail": "-1",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed top_k=-1",
+      "status": "pass"
+    },
+    {
+      "detail": "4096",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed max_model_len=4096",
+      "status": "pass"
+    },
+    {
+      "detail": "4",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed num_nodes=4",
+      "status": "pass"
+    },
+    {
+      "detail": "4",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed gpus_per_node=4",
+      "status": "pass"
+    },
+    {
+      "detail": "512",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed train_global_batch_size=512",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: WANDB_API_KEY",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed does not serialize WANDB key",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: WANDB_API_KEY",
+      "name": "completed_reference:online_pard2:online_pard2_step5_r11_completed command does not serialize WANDB key",
+      "status": "pass"
+    },
+    {
+      "detail": "Qwen3-32B",
+      "name": "static_reference:pard:static_pard_step20_reference uses MathRL Qwen3-32B",
+      "status": "pass"
+    },
+    {
+      "detail": "oci-hsg-cs-001-vscode-02",
+      "name": "static_reference:pard:static_pard_step20_reference remote_host=oci-hsg-cs-001-vscode-02",
+      "status": "pass"
+    },
+    {
+      "detail": "nemotron_n3_post",
+      "name": "static_reference:pard:static_pard_step20_reference account=nemotron_n3_post",
+      "status": "pass"
+    },
+    {
+      "detail": "batch",
+      "name": "static_reference:pard:static_pard_step20_reference partition=batch",
+      "status": "pass"
+    },
+    {
+      "detail": "1024",
+      "name": "static_reference:pard:static_pard_step20_reference max_new_tokens=1024",
+      "status": "pass"
+    },
+    {
+      "detail": "1024",
+      "name": "static_reference:pard:static_pard_step20_reference min_tokens=1024",
+      "status": "pass"
+    },
+    {
+      "detail": "1.0",
+      "name": "static_reference:pard:static_pard_step20_reference temperature=1.0",
+      "status": "pass"
+    },
+    {
+      "detail": "1.0",
+      "name": "static_reference:pard:static_pard_step20_reference top_p=1.0",
+      "status": "pass"
+    },
+    {
+      "detail": "-1",
+      "name": "static_reference:pard:static_pard_step20_reference top_k=-1",
+      "status": "pass"
+    },
+    {
+      "detail": "4096",
+      "name": "static_reference:pard:static_pard_step20_reference max_model_len=4096",
+      "status": "pass"
+    },
+    {
+      "detail": "4",
+      "name": "static_reference:pard:static_pard_step20_reference num_nodes=4",
+      "status": "pass"
+    },
+    {
+      "detail": "4",
+      "name": "static_reference:pard:static_pard_step20_reference gpus_per_node=4",
+      "status": "pass"
+    },
+    {
+      "detail": "512",
+      "name": "static_reference:pard:static_pard_step20_reference train_global_batch_size=512",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: WANDB_API_KEY",
+      "name": "static_reference:pard:static_pard_step20_reference does not serialize WANDB key",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: WANDB_API_KEY",
+      "name": "static_reference:pard:static_pard_step20_reference command does not serialize WANDB key",
+      "status": "pass"
+    },
+    {
+      "detail": "Qwen3-32B",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference uses MathRL Qwen3-32B",
+      "status": "pass"
+    },
+    {
+      "detail": "oci-hsg-cs-001-vscode-02",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference remote_host=oci-hsg-cs-001-vscode-02",
+      "status": "pass"
+    },
+    {
+      "detail": "nemotron_n3_post",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference account=nemotron_n3_post",
+      "status": "pass"
+    },
+    {
+      "detail": "batch",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference partition=batch",
+      "status": "pass"
+    },
+    {
+      "detail": "1024",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference max_new_tokens=1024",
+      "status": "pass"
+    },
+    {
+      "detail": "1024",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference min_tokens=1024",
+      "status": "pass"
+    },
+    {
+      "detail": "1.0",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference temperature=1.0",
+      "status": "pass"
+    },
+    {
+      "detail": "1.0",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference top_p=1.0",
+      "status": "pass"
+    },
+    {
+      "detail": "-1",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference top_k=-1",
+      "status": "pass"
+    },
+    {
+      "detail": "4096",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference max_model_len=4096",
+      "status": "pass"
+    },
+    {
+      "detail": "4",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference num_nodes=4",
+      "status": "pass"
+    },
+    {
+      "detail": "4",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference gpus_per_node=4",
+      "status": "pass"
+    },
+    {
+      "detail": "512",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference train_global_batch_size=512",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: WANDB_API_KEY",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference does not serialize WANDB key",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: WANDB_API_KEY",
+      "name": "static_reference:pard2:static_pard2_14b_step20_reference command does not serialize WANDB key",
+      "status": "pass"
+    },
+    {
+      "detail": "Qwen3-32B",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 uses MathRL Qwen3-32B",
+      "status": "pass"
+    },
+    {
+      "detail": "oci-hsg-cs-001-vscode-02",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 remote_host=oci-hsg-cs-001-vscode-02",
+      "status": "pass"
+    },
+    {
+      "detail": "nemotron_n3_post",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 account=nemotron_n3_post",
+      "status": "pass"
+    },
+    {
+      "detail": "batch",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 partition=batch",
+      "status": "pass"
+    },
+    {
+      "detail": "1024",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 max_new_tokens=1024",
+      "status": "pass"
+    },
+    {
+      "detail": "1024",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 min_tokens=1024",
+      "status": "pass"
+    },
+    {
+      "detail": "1.0",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 temperature=1.0",
+      "status": "pass"
+    },
+    {
+      "detail": "1.0",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 top_p=1.0",
+      "status": "pass"
+    },
+    {
+      "detail": "-1",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 top_k=-1",
+      "status": "pass"
+    },
+    {
+      "detail": "4096",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 max_model_len=4096",
+      "status": "pass"
+    },
+    {
+      "detail": "4",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 num_nodes=4",
+      "status": "pass"
+    },
+    {
+      "detail": "4",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 gpus_per_node=4",
+      "status": "pass"
+    },
+    {
+      "detail": "512",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 train_global_batch_size=512",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: WANDB_API_KEY",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 does not serialize WANDB key",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: WANDB_API_KEY",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 command does not serialize WANDB key",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 remote command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "submit_nemorl_online_draft_specdec.sh",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 uses generic online launcher",
+      "status": "pass"
+    },
+    {
+      "detail": "nemotron_n3_post",
+      "name": "launch_online:online_pard:online_pard_step5_k5_tp4_r1 uses requested account",
+      "status": "pass"
+    },
+    {
+      "detail": "Qwen3-32B",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay uses MathRL Qwen3-32B",
+      "status": "pass"
+    },
+    {
+      "detail": "oci-hsg-cs-001-vscode-02",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay remote_host=oci-hsg-cs-001-vscode-02",
+      "status": "pass"
+    },
+    {
+      "detail": "nemotron_n3_post",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay account=nemotron_n3_post",
+      "status": "pass"
+    },
+    {
+      "detail": "batch",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay partition=batch",
+      "status": "pass"
+    },
+    {
+      "detail": "1024",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay max_new_tokens=1024",
+      "status": "pass"
+    },
+    {
+      "detail": "1024",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay min_tokens=1024",
+      "status": "pass"
+    },
+    {
+      "detail": "1.0",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay temperature=1.0",
+      "status": "pass"
+    },
+    {
+      "detail": "1.0",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay top_p=1.0",
+      "status": "pass"
+    },
+    {
+      "detail": "-1",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay top_k=-1",
+      "status": "pass"
+    },
+    {
+      "detail": "4096",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay max_model_len=4096",
+      "status": "pass"
+    },
+    {
+      "detail": "4",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay num_nodes=4",
+      "status": "pass"
+    },
+    {
+      "detail": "4",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay gpus_per_node=4",
+      "status": "pass"
+    },
+    {
+      "detail": "512",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay train_global_batch_size=512",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: WANDB_API_KEY",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay does not serialize WANDB key",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: WANDB_API_KEY",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay command does not serialize WANDB key",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay remote command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "submit_nemorl_online_draft_specdec.sh",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay uses generic online launcher",
+      "status": "pass"
+    },
+    {
+      "detail": "nemotron_n3_post",
+      "name": "launch_online:online_pard2:online_pard2_step5_r12_replay uses requested account",
+      "status": "pass"
+    },
+    {
+      "detail": "DRAFT_FORMAT=pard",
+      "name": "online PARD uses PARD draft format",
+      "status": "pass"
+    },
+    {
+      "detail": "SPECDEC_METHOD=draft_model",
+      "name": "online PARD uses draft_model specdec",
+      "status": "pass"
+    },
+    {
+      "detail": "NUM_SPECULATIVE_TOKENS=5",
+      "name": "online PARD uses K5",
+      "status": "pass"
+    },
+    {
+      "detail": "DRAFT_TP=4",
+      "name": "online PARD uses draft TP4",
+      "status": "pass"
+    },
+    {
+      "detail": "PARD_ONLINE_TRAINING=true",
+      "name": "online PARD enables online training",
+      "status": "pass"
+    },
+    {
+      "detail": "POLICY_DRAFT_TYPE=pard",
+      "name": "online PARD draft type is PARD",
+      "status": "pass"
+    },
+    {
+      "detail": "POLICY_DRAFT_LOSS=hard_ce",
+      "name": "online PARD loss is hard CE",
+      "status": "pass"
+    },
+    {
+      "detail": "POLICY_DRAFT_MAX_TRAINING_SEQUENCE_LENGTH=256",
+      "name": "online PARD caps k-slot sequence",
+      "status": "pass"
+    },
+    {
+      "detail": "policy.generation.vllm_cfg.tensor_parallel_size=4",
+      "name": "online PARD uses generation TP4",
+      "status": "pass"
+    },
+    {
+      "detail": "policy.megatron_cfg.tensor_model_parallel_size=4",
+      "name": "online PARD uses training TP4",
+      "status": "pass"
+    },
+    {
+      "detail": "policy.megatron_cfg.context_parallel_size=1",
+      "name": "online PARD disables context parallelism",
+      "status": "pass"
+    },
+    {
+      "detail": "policy.sequence_packing.enabled=false",
+      "name": "online PARD disables sequence packing",
+      "status": "pass"
+    },
+    {
+      "detail": "loss_fn.force_on_policy_ratio=true",
+      "name": "online PARD keeps force-on-policy ratio",
+      "status": "pass"
+    },
+    {
+      "detail": "when_ssh_dns_recovers",
+      "name": "online PARD row is the missing submit-ready proof",
+      "status": "pass"
+    },
+    {
+      "detail": "DRAFT_FORMAT=pard2",
+      "name": "online PARD-2 replay uses PARD-2 draft format",
+      "status": "pass"
+    },
+    {
+      "detail": "SPECDEC_METHOD=pard2",
+      "name": "online PARD-2 replay uses PARD-2 specdec",
+      "status": "pass"
+    },
+    {
+      "detail": "NUM_SPECULATIVE_TOKENS=3",
+      "name": "online PARD-2 replay uses K3",
+      "status": "pass"
+    },
+    {
+      "detail": "DRAFT_TP=4",
+      "name": "online PARD-2 replay uses draft TP4",
+      "status": "pass"
+    },
+    {
+      "detail": "SOURCE_VLLM_SITE=",
+      "name": "online PARD-2 replay carries source vLLM site",
+      "status": "pass"
+    },
+    {
+      "detail": "POLICY_DRAFT_TYPE=pard2",
+      "name": "online PARD-2 replay draft type is PARD-2",
+      "status": "pass"
+    },
+    {
+      "detail": "POLICY_DRAFT_ALLOW_GENERIC_PARD2_FALLBACK=false",
+      "name": "online PARD-2 replay disables generic fallback",
+      "status": "pass"
+    },
+    {
+      "detail": "NRL_FORCE_LOCAL_TRANSFORMER_SPEC=true",
+      "name": "online PARD-2 replay uses local transformer spec",
+      "status": "pass"
+    },
+    {
+      "detail": "NRL_ACTOR_UV_LOCK_MODE=unlocked",
+      "name": "online PARD-2 replay reuses unlocked actor venv",
+      "status": "pass"
+    },
+    {
+      "detail": "NRL_SERIALIZE_ACTOR_VENV_CREATION=true",
+      "name": "online PARD-2 replay serializes actor venv",
+      "status": "pass"
+    }
+  ],
+  "manifest": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_mathrl_qwen32_online_pard_gate_manifest_20260616.csv",
+  "overall_status": "pass"
+}

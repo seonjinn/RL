@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OCI-HSG Math RL SpecDec Step20 Status</title>
+<style>
+:root { color-scheme: light; --ink:#1b1f23; --muted:#5b6470; --line:#d8dee4; --bg:#f6f8fa; --ok:#116329; --warn:#8a4600; --bad:#b42318; --info:#0969da; }
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--ink); background: #fff; }
+header { padding: 28px 36px 20px; border-bottom: 1px solid var(--line); background: var(--bg); }
+h1 { margin: 0 0 8px; font-size: 24px; letter-spacing: 0; }
+.meta { color: var(--muted); }
+main { padding: 24px 36px 40px; }
+.cards { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; margin-bottom: 22px; }
+.card { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; background: #fff; }
+.card h2 { margin: 0 0 6px; font-size: 15px; }
+.card p { margin: 0; color: var(--muted); }
+table { width: 100%; border-collapse: collapse; border: 1px solid var(--line); }
+th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+th { background: var(--bg); font-size: 12px; text-transform: uppercase; color: var(--muted); }
+tr:last-child td { border-bottom: 0; }
+.state-RUNNING { color: var(--ok); font-weight: 650; }
+.state-PENDING, .state-COMPLETING { color: var(--warn); font-weight: 650; }
+.state-FAILED { color: var(--bad); font-weight: 650; }
+.note { color: var(--muted); max-width: 360px; }
+.err { color: var(--bad); max-width: 300px; }
+.paths { margin-top: 22px; color: var(--muted); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+@media (max-width: 900px) { main, header { padding-left: 18px; padding-right: 18px; } .cards { grid-template-columns: 1fr; } table { font-size: 12px; } th, td { padding: 7px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>OCI-HSG Math RL SpecDec Step20 Status</h1>
+  <div class="meta">Generated 2026-06-15 23:00:35 local time. Sampling: temperature=1.0, top_p=1.0, top_k=-1, max_new_tokens=1024, min_tokens=1024, max_steps=20.</div>
+</header>
+<main>
+  <div class="cards"><section class="card"><h2>Healthy progress</h2><p>30B/32B PARD and Eagle-3 are producing completed Math RL steps; suffix py313 retries are now generating instead of failing at import.</p></section><section class="card"><h2>PARD-2 finding</h2><p>PARD2 checkpoints are target-dim specific. 8B has pard2_target_dim=16384, 14B has pard2_target_dim=20480. Qwen30 needs 8192 and no compatible checkpoint is currently present.</p></section><section class="card"><h2>Replacement submitted</h2><p>qwen32 PARD2 was resubmitted as job 3334113 using a patched local 14B-with-warp model directory.</p></section></div>
+  <table>
+    <thead><tr><th>Model</th><th>Method</th><th>Job</th><th>State</th><th>Elapsed</th><th>Progress</th><th>Gen mean s</th><th>Accept</th><th>Error</th><th>Note</th></tr></thead>
+    <tbody><tr><td>Qwen3-30B-A3B</td><td>PARD K5</td><td><code>3333526</code></td><td class="state-RUNNING">RUNNING</td><td>31:40</td><td>7/20</td><td>98.13</td><td>51.05%</td><td class="err"></td><td class="note">running original</td></tr><tr><td>Qwen3-30B-A3B</td><td>PARD-2 K3</td><td><code>3333527</code></td><td class="state-FAILED">FAILED</td><td>00:21:07</td><td>0/20</td><td>n/a</td><td>n/a%</td><td class="err">4 errors: Traceback (most recent call last):</td><td class="note">failed: no target_dim=8192 PARD2 checkpoint in cache</td></tr><tr><td>Qwen3-30B-A3B</td><td>Eagle-3 K3</td><td><code>3333528</code></td><td class="state-RUNNING">RUNNING</td><td>31:40</td><td>8/20</td><td>89.83</td><td>65.06%</td><td class="err"></td><td class="note">running original</td></tr><tr><td>Qwen3-30B-A3B</td><td>Suffix K32</td><td><code>3333715</code></td><td class="state-RUNNING">RUNNING</td><td>22:13</td><td>4/20</td><td>105.28</td><td>43.41%</td><td class="err"></td><td class="note">running py313 retry</td></tr><tr><td>Qwen3-32B</td><td>PARD K5</td><td><code>3333531</code></td><td class="state-RUNNING">RUNNING</td><td>31:40</td><td>4/20</td><td>238.79</td><td>45.15%</td><td class="err"></td><td class="note">running original</td></tr><tr><td>Qwen3-32B</td><td>PARD-2 K3</td><td><code>3334113</code></td><td class="state-RUNNING">RUNNING</td><td>1:07</td><td>0/20</td><td>n/a</td><td>n/a%</td><td class="err"></td><td class="note">retry: 14B PARD2 target_dim=20480 with downloaded warp_model.bin</td></tr><tr><td>Qwen3-32B</td><td>PARD-2 K3 old</td><td><code>3333532</code></td><td class="state-FAILED">FAILED</td><td>00:19:49</td><td>0/20</td><td>n/a</td><td>n/a%</td><td class="err">5 errors: Traceback (most recent call last):</td><td class="note">failed: 8B PARD2 target_dim=16384 mismatch</td></tr><tr><td>Qwen3-32B</td><td>Eagle-3 K3</td><td><code>3333533</code></td><td class="state-RUNNING">RUNNING</td><td>31:40</td><td>4/20</td><td>251.46</td><td>47.22%</td><td class="err"></td><td class="note">running original</td></tr><tr><td>Qwen3-32B</td><td>Suffix K32</td><td><code>3333716</code></td><td class="state-RUNNING">RUNNING</td><td>23:03</td><td>2/20</td><td>271.74</td><td>32.87%</td><td class="err"></td><td class="note">running py313 retry</td></tr><tr><td>Qwen3-235B-A22B</td><td>PARD K5</td><td><code>3333535</code></td><td class="state-PENDING">PENDING</td><td>0:00</td><td>0/20</td><td>n/a</td><td>n/a%</td><td class="err"></td><td class="note">pending original</td></tr><tr><td>Qwen3-235B-A22B</td><td>PARD-2 K3</td><td><code>3333536</code></td><td class="state-RUNNING">RUNNING</td><td>21:26</td><td>0/20</td><td>n/a</td><td>n/a%</td><td class="err"></td><td class="note">running original; target_dim=16384 compatible</td></tr><tr><td>Qwen3-235B-A22B</td><td>Eagle-3 K3</td><td><code>3333537</code></td><td class="state-PENDING">PENDING</td><td>0:00</td><td>0/20</td><td>n/a</td><td>n/a%</td><td class="err"></td><td class="note">pending original</td></tr><tr><td>Qwen3-235B-A22B</td><td>Suffix K32</td><td><code>3333717</code></td><td class="state-PENDING">PENDING</td><td>0:00</td><td>0/20</td><td>n/a</td><td>n/a%</td><td class="err"></td><td class="note">pending py313 retry</td></tr></tbody>
+  </table>
+  <div class="paths">
+    <p>Source CSVs: <code>docs/oci_hsg_mathrl_multimodel_specdec_step20_live_summary_20260616.csv</code>, <code>docs/oci_hsg_mathrl_multimodel_specdec_step20_live_steps_20260616.csv</code></p>
+    <p>Replacement tracker: <code>latest_oci_hsg_mathrl_qwen32_pard2_14b_step20_20260616_jobs.csv</code></p>
+  </div>
+</main>
+</body>
+</html>

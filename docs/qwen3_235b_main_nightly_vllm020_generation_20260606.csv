@@ -1,0 +1,4 @@
+case,job_id,status,runtime,shape,prompt_count,batch_size,max_new_tokens,num_speculative_tokens,throughput_tok_s,speedup_vs_baseline,acceptance_rate,mean_acceptance_length
+baseline,3197507,pass,NeMo-RL latest main nightly VllmGeneration worker vLLM 0.20.0,1n4g_tp4_drafttp4_openmath_bs32_o256,64,32,256,0,266.381940512785,1.0,0.0,1.0
+public_pard_k3,3197508,pass,NeMo-RL latest main nightly VllmGeneration worker vLLM 0.20.0,1n4g_tp4_drafttp4_openmath_bs32_o256,64,32,256,3,398.93753125939116,1.4976147800839532,0.54818401937046,2.64455205811138
+public_pard_k5,3197509,pass,NeMo-RL latest main nightly VllmGeneration worker vLLM 0.20.0,1n4g_tp4_drafttp4_openmath_bs32_o256,64,32,256,5,423.7777874404344,1.5908653065018694,0.4216913158892681,3.1084565794463406

@@ -1,0 +1,12 @@
+__SQUEUE__
+2113226|coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_math500_osl32k_lyris_tp4_fp8kv|PENDING|1|(Priority)|0:00
+2113228|coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_math500_osl32k_lyris_tp4_fp8kv|PENDING|1|(Priority)|0:00
+2113230|coreai_dlalgo_llm-specdec.eagle3-qwen235b_a22b_math500_osl32k_lyris_tp4_fp8kv|PENDING|1|(Priority)|0:00
+2113223|coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_math500_osl32k_lyris_tp4_fp8kv|PENDING|1|(Priority)|0:00
+2113224|coreai_dlalgo_llm-specdec.suffix-qwen235b_a22b_math500_osl32k_lyris_tp4_fp8kv|PENDING|1|(Priority)|0:00
+__SACCT__
+2113223|coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_math500_osl32k_lyris_tp4_fp8kv|PENDING|0:0|00:00:00|None assigned
+2113224|coreai_dlalgo_llm-specdec.suffix-qwen235b_a22b_math500_osl32k_lyris_tp4_fp8kv|PENDING|0:0|00:00:00|None assigned
+2113226|coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_math500_osl32k_lyris_tp4_fp8kv|PENDING|0:0|00:00:00|None assigned
+2113228|coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_math500_osl32k_lyris_tp4_fp8kv|PENDING|0:0|00:00:00|None assigned
+2113230|coreai_dlalgo_llm-specdec.eagle3-qwen235b_a22b_math500_osl32k_lyris_tp4_fp8kv|PENDING|0:0|00:00:00|None assigned

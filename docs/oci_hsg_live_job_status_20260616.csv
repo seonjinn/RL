@@ -1,0 +1,4 @@
+checked_at,job_id,area,run,state,elapsed,time_left,nodelist,note
+2026-06-16T21:26:46-07:00,3333717,MathRL qwen235B step20,qwen235b_suffix_k32_temp1_genbound1024,FAILED,01:24:00,,"nvl72029-T[01-16],nvl72035-T[01-11,13-17]",NCCL watchdog timeout during policy training after 14 completed steps; partial metrics saved.
+2026-06-16T21:26:46-07:00,3334220,MathRL qwen235B step20,qwen235b_baseline_temp1_genbound1024,FAILED,01:14:56,,"nvl72027-T[01-07,09-16,18],nvl72042-T[01-16]",NCCL watchdog timeout during policy training after 8 completed steps; partial metrics saved.
+2026-06-16T21:26:46-07:00,3351394,SWE-RL qwen30BA3B suffix smoke,qwen30ba3b_suffix_k32_ctx40k_arcticpy313_r16,RUNNING (last confirmed),00:09:04,03:50:56,"nvl72012-T[01-04,06-09,11-18]",Last confirmed running before local DNS failure; Ray actors reached 64/64 and all workers connected; no arctic ImportError observed in copied log.

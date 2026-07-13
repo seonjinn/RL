@@ -1,0 +1,521 @@
+{
+  "checks": [
+    {
+      "detail": "METHODS=\"${METHODS:-baseline suffix pard pard2 eagle3}\"",
+      "name": "covers baseline/suffix/PARD/PARD-2/Eagle3",
+      "status": "pass"
+    },
+    {
+      "detail": "MAX_STEPS_SWEEP=\"${MAX_STEPS_SWEEP:-10 20}\"",
+      "name": "covers max_steps 10 and 20",
+      "status": "pass"
+    },
+    {
+      "detail": "NUM_TRAIN_REPLICAS=\"${NUM_TRAIN_REPLICAS:-1}\"",
+      "name": "uses user-requested train replica default",
+      "status": "pass"
+    },
+    {
+      "detail": "GEN_TRAIN_RATIO=\"${GEN_TRAIN_RATIO:-1}\"",
+      "name": "uses user-requested gen/train ratio default",
+      "status": "pass"
+    },
+    {
+      "detail": "VLLM_TP=\"${VLLM_TP:-4}\"",
+      "name": "uses user-requested vLLM TP default",
+      "status": "pass"
+    },
+    {
+      "detail": "HYBRIDEP=\"${HYBRIDEP:-0}\"",
+      "name": "uses user-requested HYBRIDEP default",
+      "status": "pass"
+    },
+    {
+      "detail": "SKIP_TRAINING=0 \\",
+      "name": "does not use generation-only skip-training mode",
+      "status": "pass"
+    },
+    {
+      "detail": "NRL_STOP_AFTER_GENERATION=false \\",
+      "name": "does not stop after generation",
+      "status": "pass"
+    },
+    {
+      "detail": "SPECDEC_GRPO_MODE=strict_request_logprobs \\",
+      "name": "uses full-GRPO-compatible SpecDec logprob mode",
+      "status": "pass"
+    },
+    {
+      "detail": "NRL_VLLM_OMIT_GENERATION_LOGPROBS=false \\",
+      "name": "keeps generation logprobs for training",
+      "status": "pass"
+    },
+    {
+      "detail": "EXTRA_ARGS='${hydra_extra}' \\",
+      "name": "passes speculative/reconvert Hydra overrides through EXTRA_ARGS",
+      "status": "pass"
+    },
+    {
+      "detail": "EXTRA_HYDRA_OVERRIDES='${hydra_extra}' \\",
+      "name": "passes speculative/reconvert Hydra overrides through EXTRA_HYDRA_OVERRIDES",
+      "status": "pass"
+    },
+    {
+      "detail": "WANDB_API_KEY=***
+      "name": "accepts W&B key from caller environment",
+      "status": "pass"
+    },
+    {
+      "detail": "WANDB_API_KEY=*** \\",
+      "name": "passes W&B key into launcher environment",
+      "status": "pass"
+    },
+    {
+      "detail": "redact_secrets()",
+      "name": "redacts secrets from launcher diagnostics",
+      "status": "pass"
+    },
+    {
+      "detail": "s/(WANDB_API_KEY=***
+      "name": "redacts W&B key values in dry-run/error output",
+      "status": "pass"
+    },
+    {
+      "detail": "s/(HUGGINGFACE_TOKEN=)[^[:space:]",
+      "name": "redacts Hugging Face token values in dry-run/error output",
+      "status": "pass"
+    },
+    {
+      "detail": "s/(HF_TOKEN=)[^[:space:]",
+      "name": "redacts HF_TOKEN values in dry-run/error output",
+      "status": "pass"
+    },
+    {
+      "detail": "s/(GITHUB_TOKEN=***
+      "name": "redacts GitHub token values in dry-run/error output",
+      "status": "pass"
+    },
+    {
+      "detail": "s/(GITLAB_TOKEN=***
+      "name": "redacts GitLab token values in dry-run/error output",
+      "status": "pass"
+    },
+    {
+      "detail": "run_grpo_qwen3_235b_swe_scale_gen.sh",
+      "name": "targets Rui Qwen235B SWE scale-gen launcher",
+      "status": "pass"
+    },
+    {
+      "detail": "CLUSTER_PROFILE=\"${CLUSTER_PROFILE:-lyris}\"",
+      "name": "has explicit cluster profile selector",
+      "status": "pass"
+    },
+    {
+      "detail": "coreai_dlalgo_llm",
+      "name": "defaults Lyris profile to requested SLURM account",
+      "status": "pass"
+    },
+    {
+      "detail": "oci-hsg-cs-001-vscode-02",
+      "name": "defaults OCI-HSG profile to known SSH host",
+      "status": "pass"
+    },
+    {
+      "detail": "nemotron_n3_post",
+      "name": "defaults OCI-HSG SWE-RL profile to user-approved account",
+      "status": "pass"
+    },
+    {
+      "detail": "DEFAULT_PARTITION=\"batch\"",
+      "name": "defaults OCI-HSG profile to batch partition",
+      "status": "pass"
+    },
+    {
+      "detail": "DEFAULT_SBATCH_TIME=\"04:00:00\"",
+      "name": "keeps OCI-HSG jobs within batch partition limit",
+      "status": "pass"
+    },
+    {
+      "detail": "DEFAULT_SBATCH_GPU_FLAG=\"\"",
+      "name": "keeps Lyris profile free of invalid GRES requests",
+      "status": "pass"
+    },
+    {
+      "detail": "DEFAULT_SBATCH_GPU_FLAG='--gres=gpu:${NUM_GPU}'",
+      "name": "keeps OCI-HSG profile on explicit GPU GRES",
+      "status": "pass"
+    },
+    {
+      "detail": "FORCE_RECONVERT_FROM_HF=\"${FORCE_RECONVERT_FROM_HF:-false}\"",
+      "name": "supports explicit Megatron reconvert prewarm",
+      "status": "pass"
+    },
+    {
+      "detail": "REQUIRE_MEGATRON_RUN_CONFIG=\"${REQUIRE_MEGATRON_RUN_CONFIG:-false}\"",
+      "name": "can gate launch on converted Megatron cache",
+      "status": "pass"
+    },
+    {
+      "detail": "SBATCH_DEPENDENCY=\"${SBATCH_DEPENDENCY:-}\"",
+      "name": "supports Slurm dependency injection for after-prewarm matrix",
+      "status": "pass"
+    },
+    {
+      "detail": "ruit-swe_bench-6dc8fabea-aarch64-060426-mcore-apptainer.squashfs",
+      "name": "defaults OCI-HSG profile to visible Rui SWE container",
+      "status": "pass"
+    },
+    {
+      "detail": "latest_oci_hsg_swerl_qwen235b_fullgrpo_specdec_20260613_jobs.csv",
+      "name": "writes separate OCI-HSG tracker",
+      "status": "pass"
+    },
+    {
+      "detail": "vllm-benchmark/.container_cache/arctic-inference-0.1.1",
+      "name": "defaults OCI-HSG profile to verified py312 arctic suffix site",
+      "status": "pass"
+    },
+    {
+      "detail": "find '${ARCTIC_SITE}/arctic_inference/suffix_decoding' -maxdepth 1 -name '_C*.so' | grep -q .",
+      "name": "preflights arctic native suffix extension",
+      "status": "pass"
+    },
+    {
+      "detail": "SpecDec-RL-pard2-official-smoke-20260612/.container_cache/vllm_pard2_official_target_feat",
+      "name": "defaults OCI-HSG profile to verified official PARD-2 vLLM site",
+      "status": "pass"
+    },
+    {
+      "detail": "REMOTE_LAUNCHER_DIR=\"${REMOTE_LAUNCHER_DIR:-${HF_HOME%/}/../swerl_fullgrpo_launchers/${RUN_ID}}\"",
+      "name": "stages patched remote launcher in writable user area",
+      "status": "pass"
+    },
+    {
+      "detail": "REMOTE_OUTPUT_ROOT=\"${REMOTE_OUTPUT_ROOT:-${HF_HOME%/}/..}\"",
+      "name": "keeps checkpoints/logs in writable user area",
+      "status": "pass"
+    },
+    {
+      "detail": "test -s '${REMOTE_REPO}/ray.sub'",
+      "name": "preflights repo ray.sub",
+      "status": "pass"
+    },
+    {
+      "detail": "test -s '${REMOTE_REPO}/test_assets/qwen-235B/grpo_qwen3_235b_async_swe.yaml'",
+      "name": "preflights SWE config file",
+      "status": "pass"
+    },
+    {
+      "detail": "run_config='${HF_HOME}/nemo_rl/'\\\"\\${model_subdir}\\\"'/iter_0000000/run_config.yaml'",
+      "name": "checks converted Megatron run_config when requested",
+      "status": "pass"
+    },
+    {
+      "detail": "container_file=\\\"\\${container_image}\\\"",
+      "name": "preflights pyxis container image path",
+      "status": "pass"
+    },
+    {
+      "detail": "mkdir -p '${HF_HOME}'",
+      "name": "preflights writable HF cache",
+      "status": "pass"
+    },
+    {
+      "detail": "mkdir -p '${REMOTE_LAUNCHER_DIR}'",
+      "name": "preflights writable remote launcher directory",
+      "status": "pass"
+    },
+    {
+      "detail": "awk -v account='${ACCOUNT}' -v partition='${PARTITION}' -v gpu_flag='${SBATCH_GPU_FLAG}' -v dependency='${SBATCH_DEPENDENCY}'",
+      "name": "passes account/partition/GRES/dependency into remote launcher patch",
+      "status": "pass"
+    },
+    {
+      "detail": "/^SBATCH_ACCOUNT=/ {print \"SBATCH_ACCOUNT=\\\"\" account \"\\\"\"",
+      "name": "patches hardcoded Rui account line",
+      "status": "pass"
+    },
+    {
+      "detail": "/^SBATCH_PARTITION=/ {print \"SBATCH_PARTITION=\\\"\" partition \"\\\"\"",
+      "name": "patches hardcoded Rui partition line",
+      "status": "pass"
+    },
+    {
+      "detail": "index(\\$0, \"[DRY_RUN]\") && index(\\$0, \"--gres=gpu:\")",
+      "name": "does not turn dry-run GRES display into a command",
+      "status": "pass"
+    },
+    {
+      "detail": "index(\\$0, \"--gres=gpu:\") && index(\\$0, \"NUM_GPU\")",
+      "name": "patches or removes Rui GRES line per cluster profile",
+      "status": "pass"
+    },
+    {
+      "detail": "index(\\$0, \"--dependency=singleton\")",
+      "name": "patches Rui dependency line for after-prewarm jobs",
+      "status": "pass"
+    },
+    {
+      "detail": "print \"  export PYTHONPATH=\\\"\\${SOURCE_VLLM_SITE}:\\${PYTHONPATH:-}\\\"\"",
+      "name": "propagates source vLLM/arctic site into PYTHONPATH",
+      "status": "pass"
+    },
+    {
+      "detail": "index(\\$0, \"ray.sub | tee /dev/stderr | grep -o\")",
+      "name": "matches Rui job id pipeline line",
+      "status": "pass"
+    },
+    {
+      "detail": "gsub(\"> latest_235b_scale_gen_job_id.txt\", \"> \\\"\\${BASE_LOG_DIR}/latest_235b_scale_gen_job_id.txt\\\"\")",
+      "name": "redirects Rui job id file into writable log dir",
+      "status": "pass"
+    },
+    {
+      "detail": "print \"JOB_ID=\\\"\\$(cat \\\"\\${BASE_LOG_DIR}/latest_235b_scale_gen_job_id.txt\\\")\\\"\"",
+      "name": "reads Rui job id file from writable log dir",
+      "status": "pass"
+    },
+    {
+      "detail": "bash -n \"\\${patched_launcher}\"",
+      "name": "syntax checks patched remote launcher",
+      "status": "pass"
+    },
+    {
+      "detail": "REPO_ROOT='${REMOTE_REPO}' \\",
+      "name": "runs patched launcher against Rui repo assets",
+      "status": "pass"
+    },
+    {
+      "detail": "CHECKPOINT_ROOT='${REMOTE_OUTPUT_ROOT}/results' \\",
+      "name": "passes writable checkpoint root",
+      "status": "pass"
+    },
+    {
+      "detail": "BASE_LOG_DIR='${REMOTE_LOG_ROOT}/${method}_steps${max_steps}' \\",
+      "name": "passes writable log root",
+      "status": "pass"
+    },
+    {
+      "detail": "HF_DATASETS_CACHE='${HF_HOME}/cache' \\",
+      "name": "passes HF datasets cache",
+      "status": "pass"
+    },
+    {
+      "detail": "HUGGINGFACE_HUB_CACHE='${HF_HOME}/hub' \\",
+      "name": "passes HF hub cache",
+      "status": "pass"
+    },
+    {
+      "detail": "PERSISTENT_CACHE='${PERSISTENT_CACHE}' \\",
+      "name": "passes writable persistent cache override",
+      "status": "pass"
+    },
+    {
+      "detail": "SBATCH_TIME='${SBATCH_TIME}' \\",
+      "name": "passes partition-appropriate walltime",
+      "status": "pass"
+    },
+    {
+      "detail": "NRL_ALLOW_SPECDEC_REQUEST_LOGPROBS='${request_logprobs}' \\",
+      "name": "allows SpecDec request logprobs only for SpecDec methods",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "baseline method case exists",
+      "status": "pass"
+    },
+    {
+      "detail": "specdec_method=\"\"",
+      "name": "baseline sets specdec_method=\"\"",
+      "status": "pass"
+    },
+    {
+      "detail": "draft_model=\"\"",
+      "name": "baseline sets draft_model=\"\"",
+      "status": "pass"
+    },
+    {
+      "detail": "spec_tokens=\"0\"",
+      "name": "baseline sets spec_tokens=\"0\"",
+      "status": "pass"
+    },
+    {
+      "detail": "enable_specdec=\"false\"",
+      "name": "baseline sets enable_specdec=\"false\"",
+      "status": "pass"
+    },
+    {
+      "detail": "request_logprobs=\"false\"",
+      "name": "baseline sets request_logprobs=\"false\"",
+      "status": "pass"
+    },
+    {
+      "detail": "extra_args=\"\"",
+      "name": "baseline sets extra_args=\"\"",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "suffix method case exists",
+      "status": "pass"
+    },
+    {
+      "detail": "specdec_method=\"suffix\"",
+      "name": "suffix sets specdec_method=\"suffix\"",
+      "status": "pass"
+    },
+    {
+      "detail": "spec_tokens=\"${SUFFIX_SPEC_TOKENS}\"",
+      "name": "suffix sets spec_tokens=\"${SUFFIX_SPEC_TOKENS}\"",
+      "status": "pass"
+    },
+    {
+      "detail": "source_vllm_site=\"${ARCTIC_SITE}\"",
+      "name": "suffix sets source_vllm_site=\"${ARCTIC_SITE}\"",
+      "status": "pass"
+    },
+    {
+      "detail": "enable_specdec=\"true\"",
+      "name": "suffix sets enable_specdec=\"true\"",
+      "status": "pass"
+    },
+    {
+      "detail": "request_logprobs=\"true\"",
+      "name": "suffix sets request_logprobs=\"true\"",
+      "status": "pass"
+    },
+    {
+      "detail": "speculative_config.method=suffix",
+      "name": "suffix sets speculative_config.method=suffix",
+      "status": "pass"
+    },
+    {
+      "detail": "suffix_decoding_max_tree_depth",
+      "name": "suffix sets suffix_decoding_max_tree_depth",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "pard method case exists",
+      "status": "pass"
+    },
+    {
+      "detail": "specdec_method=\"draft_model\"",
+      "name": "pard sets specdec_method=\"draft_model\"",
+      "status": "pass"
+    },
+    {
+      "detail": "draft_model=\"${PARD_DRAFT_MODEL}\"",
+      "name": "pard sets draft_model=\"${PARD_DRAFT_MODEL}\"",
+      "status": "pass"
+    },
+    {
+      "detail": "spec_tokens=\"${PARD_SPEC_TOKENS}\"",
+      "name": "pard sets spec_tokens=\"${PARD_SPEC_TOKENS}\"",
+      "status": "pass"
+    },
+    {
+      "detail": "draft_tp=\"${PARD_DRAFT_TP}\"",
+      "name": "pard sets draft_tp=\"${PARD_DRAFT_TP}\"",
+      "status": "pass"
+    },
+    {
+      "detail": "parallel_drafting=\"true\"",
+      "name": "pard sets parallel_drafting=\"true\"",
+      "status": "pass"
+    },
+    {
+      "detail": "speculative_config.method=draft_model",
+      "name": "pard sets speculative_config.method=draft_model",
+      "status": "pass"
+    },
+    {
+      "detail": "speculative_config.parallel_drafting=true",
+      "name": "pard sets speculative_config.parallel_drafting=true",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "pard2 method case exists",
+      "status": "pass"
+    },
+    {
+      "detail": "specdec_method=\"pard2\"",
+      "name": "pard2 sets specdec_method=\"pard2\"",
+      "status": "pass"
+    },
+    {
+      "detail": "draft_model=\"${PARD2_DRAFT_MODEL}\"",
+      "name": "pard2 sets draft_model=\"${PARD2_DRAFT_MODEL}\"",
+      "status": "pass"
+    },
+    {
+      "detail": "spec_tokens=\"${PARD2_SPEC_TOKENS}\"",
+      "name": "pard2 sets spec_tokens=\"${PARD2_SPEC_TOKENS}\"",
+      "status": "pass"
+    },
+    {
+      "detail": "draft_tp=\"${PARD2_DRAFT_TP}\"",
+      "name": "pard2 sets draft_tp=\"${PARD2_DRAFT_TP}\"",
+      "status": "pass"
+    },
+    {
+      "detail": "source_vllm_site=\"${PARD2_SOURCE_VLLM_SITE}\"",
+      "name": "pard2 sets source_vllm_site=\"${PARD2_SOURCE_VLLM_SITE}\"",
+      "status": "pass"
+    },
+    {
+      "detail": "speculative_config.method=pard2",
+      "name": "pard2 sets speculative_config.method=pard2",
+      "status": "pass"
+    },
+    {
+      "detail": "speculative_config.parallel_drafting=true",
+      "name": "pard2 sets speculative_config.parallel_drafting=true",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "eagle3 method case exists",
+      "status": "pass"
+    },
+    {
+      "detail": "specdec_method=\"eagle3\"",
+      "name": "eagle3 sets specdec_method=\"eagle3\"",
+      "status": "pass"
+    },
+    {
+      "detail": "draft_model=\"${EAGLE3_DRAFT_MODEL}\"",
+      "name": "eagle3 sets draft_model=\"${EAGLE3_DRAFT_MODEL}\"",
+      "status": "pass"
+    },
+    {
+      "detail": "spec_tokens=\"${EAGLE3_SPEC_TOKENS}\"",
+      "name": "eagle3 sets spec_tokens=\"${EAGLE3_SPEC_TOKENS}\"",
+      "status": "pass"
+    },
+    {
+      "detail": "draft_tp=\"${EAGLE3_DRAFT_TP}\"",
+      "name": "eagle3 sets draft_tp=\"${EAGLE3_DRAFT_TP}\"",
+      "status": "pass"
+    },
+    {
+      "detail": "speculative_config.method=eagle3",
+      "name": "eagle3 sets speculative_config.method=eagle3",
+      "status": "pass"
+    },
+    {
+      "detail": "17 columns",
+      "name": "tracker header has expected width",
+      "status": "pass"
+    },
+    {
+      "detail": "exp_suffix",
+      "name": "tracker row includes exp_suffix",
+      "status": "pass"
+    }
+  ],
+  "launcher": "/Users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_online/submit_lyris_swerl_qwen235b_fullgrpo_specdec_matrix_20260613.sh",
+  "overall_status": "pass"
+}

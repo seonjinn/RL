@@ -1,0 +1,21 @@
+dataset,batch_size,method,job_id,state,live_tok_s_total,live_tok_s_per_gpu,baseline_live_tok_s_total,baseline_live_tok_s_per_gpu,live_speedup_vs_live_baseline,live_acceptance_pct,live_mean_acceptance_length,completed_batch_rows,basis
+full,2,pard2_k1,2109552,RUNNING,20.3,5.075,16.5,4.125,1.2303030303030305,48.6,1.49,0,live telemetry only: no final breakdown.json yet
+full,2,pard_k5,2109551,RUNNING,6.7,1.675,16.5,4.125,0.40606060606060607,5.8,1.29,0,live telemetry only: no final breakdown.json yet
+full,4,pard2_k1,2109557,RUNNING,33.3,8.325,32.6,8.15,1.0214723926380367,25.4,1.25,0,live telemetry only: no final breakdown.json yet
+full,4,pard_k5,2109556,RUNNING,34.3,8.575,32.6,8.15,1.0521472392638036,14.1,1.71,0,live telemetry only: no final breakdown.json yet
+full,8,pard2_k1,2109564,RUNNING,87.3,21.825,65.6,16.4,1.3307926829268293,63.2,1.63,0,live telemetry only: no final breakdown.json yet
+full,8,pard_k5,2109563,RUNNING,73.3,18.325,65.6,16.4,1.1173780487804879,21.6,2.08,0,live telemetry only: no final breakdown.json yet
+full,16,pard2_k1,2109574,RUNNING,168.8,42.2,128.8,32.2,1.31055900621118,59.9,1.6,0,live telemetry only: no final breakdown.json yet
+full,16,pard_k5,2109572,RUNNING,81.1,20.275,128.8,32.2,0.6296583850931676,8.2,1.41,0,live telemetry only: no final breakdown.json yet
+full,32,pard2_k1,2109579,RUNNING,62.2,15.55,258.1,64.525,0.2409918636187524,4.8,1.05,0,live telemetry only: no final breakdown.json yet
+full,32,pard_k5,2109578,RUNNING,472.6,118.15,258.1,64.525,1.831073227431228,26.2,2.31,0,live telemetry only: no final breakdown.json yet
+verified,2,pard2_k1,2109521,RUNNING,14.4,3.6,16.7,4.175,0.8622754491017964,5.8,1.06,0,live telemetry only: no final breakdown.json yet
+verified,2,pard_k5,2109519,RUNNING,16.7,4.175,16.7,4.175,1.0,10.2,1.51,0,live telemetry only: no final breakdown.json yet
+verified,4,pard2_k1,2109530,RUNNING,32.1,8.025,33.0,8.25,0.9727272727272728,17.8,1.18,0,live telemetry only: no final breakdown.json yet
+verified,4,pard_k5,2109528,RUNNING,27.0,6.75,33.0,8.25,0.8181818181818182,10.6,1.53,0,live telemetry only: no final breakdown.json yet
+verified,8,pard2_k1,2109536,RUNNING,70.6,17.65,65.7,16.425,1.0745814307458141,33.4,1.33,0,live telemetry only: no final breakdown.json yet
+verified,8,pard_k5,2109535,RUNNING,39.8,9.95,65.7,16.425,0.6057838660578386,13.0,1.65,0,live telemetry only: no final breakdown.json yet
+verified,16,pard2_k1,2109541,RUNNING,149.7,37.425,132.9,33.225,1.1264108352144468,39.5,1.4,0,live telemetry only: no final breakdown.json yet
+verified,16,pard_k5,2109540,RUNNING,155.8,38.95,132.9,33.225,1.1723100075244546,17.6,1.88,0,live telemetry only: no final breakdown.json yet
+verified,32,pard2_k1,2109546,RUNNING,364.8,91.2,257.5,64.375,1.4166990291262136,75.5,1.76,0,live telemetry only: no final breakdown.json yet
+verified,32,pard_k5,2109545,RUNNING,365.7,91.425,257.5,64.375,1.4201941747572815,22.6,2.13,0,live telemetry only: no final breakdown.json yet

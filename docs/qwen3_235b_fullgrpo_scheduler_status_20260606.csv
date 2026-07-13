@@ -1,0 +1,8 @@
+group,label,job_id,state,reason,start_time,end_time,elapsed,num_nodes,priority,dependency,stdout,ray_driver_log_exists
+fixed256,baseline,3186342,,,,,,,,,,1
+fixed256,local_cat_tpp_k5,3186343,,,,,,,,,,1
+fixed256,public_pard_k5,3186344,,,,,,,,,,0
+sampling_step4,baseline,3186510,,,,,,,,,,0
+sampling_step4,local_cat_tpp_k5,3186511,,,,,,,,,,0
+sampling_step4,dynamic_dpace_k5,3192180,,,,,,,,,,0
+sampling_step4,dynamic_dpace_k3,3192438,,,,,,,,,,0

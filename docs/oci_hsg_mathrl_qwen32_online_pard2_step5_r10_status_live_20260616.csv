@@ -1,0 +1,2 @@
+job_id,job_name,queue_state,acct_state,exit_code,queue_elapsed,acct_elapsed,reason,node,status_note,last_poll_pdt
+3344974,online-qwen32-mathrl-online_pard2-step5-out1024-min1024-temp1.0-N4xG4,,FAILED,1:0,,00:44:15,"nvl72044-T[01,03,07-08]","nvl72044-T[01,03,07-08]","Reached SETUP COMPLETE, Step 1/5 generation 128/128 prompts, rewards, logprobs, and Training policy; failed in MegatronPolicyWorker.train with NameError in nemo_rl/models/megatron/draft/pard.py because get_tensor_model_parallel_rank was used by PARD2 target-feature alignment but not imported",2026-06-16 15:25 PDT

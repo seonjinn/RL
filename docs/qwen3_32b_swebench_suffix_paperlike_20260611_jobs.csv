@@ -1,0 +1,3 @@
+job_id,mode,prompt_offset,prompt_count,isl,osl,dependency,run_dir
+3263997,baseline,0,64,4096,1024,,/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen3_32b_swebench_verified_baseline_offset0_n64_isl4096_osl1024_bs8_16_k32_20260611
+3263998,suffix,0,64,4096,1024,3263988,/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen3_32b_swebench_verified_suffix_offset0_n64_isl4096_osl1024_bs8_16_k32_20260611

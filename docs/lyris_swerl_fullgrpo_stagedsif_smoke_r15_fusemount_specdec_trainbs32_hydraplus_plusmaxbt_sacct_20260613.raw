@@ -1,0 +1,2 @@
+2121346|specdec-pard-steps1-20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r15_fusemount_specdec_trainbs32_hydraplus_plusmaxbt|RUNNING|0:0|01:12:54|2026-06-14T15:23:34|Unknown|lyris[0145-0160]|None
+2121347|specdec-pard2-steps1-20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r15_fusemount_specdec_trainbs32_hydraplus_plusmaxbt|FAILED|1:0|01:01:38|2026-06-14T15:24:13|2026-06-14T16:25:51|lyris[0055-0070]|None

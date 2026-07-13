@@ -1,0 +1,124 @@
+# SWE-RL Full-GRPO log fetch
+Sun Jun 14 00:27:46 PDT 2026
+remote_host=oci-hsg-cs-001-vscode-02
+remote_output_root=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna
+local_log_root=tmp/oci_hsg_swerl_fullgrpo_logs
+manifest=docs/oci_hsg_swerl_fullgrpo_log_fetch_manifest_20260613.csv
+rows=23
+dry_run=false
+
+[3286445] Transfer starting: 20 files
+[3286445] 
+[3286445] sent 209 bytes  received 450 bytes  6590000 bytes/sec
+[3286445] total size is 576087  speedup is 874.18
+job 3286445 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec/baseline_steps10_3286445
+[3286458] Transfer starting: 2 files
+[3286458] 
+[3286458] sent 209 bytes  received 122 bytes  3310000 bytes/sec
+[3286458] total size is 8  speedup is 0.02
+job 3286458 local_log_files=0 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec/suffix_steps10_3286458
+[3286519] Transfer starting: 21 files
+[3286519] 
+[3286519] sent 209 bytes  received 492 bytes  7010000 bytes/sec
+[3286519] total size is 582159  speedup is 830.47
+job 3286519 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec/pard_steps10_3286519
+[3286521] Transfer starting: 21 files
+[3286521] 
+[3286521] sent 209 bytes  received 492 bytes  7010000 bytes/sec
+[3286521] total size is 592727  speedup is 845.54
+job 3286521 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec/pard2_steps10_3286521
+[3286522] Transfer starting: 21 files
+[3286522] 
+[3286522] sent 209 bytes  received 492 bytes  7010000 bytes/sec
+[3286522] total size is 583634  speedup is 832.57
+job 3286522 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec/eagle3_steps10_3286522
+[3286523] Transfer starting: 21 files
+[3286523] 
+[3286523] sent 209 bytes  received 483 bytes  6920000 bytes/sec
+[3286523] total size is 569403  speedup is 822.84
+job 3286523 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec/baseline_steps20_3286523
+[3286524] Transfer starting: 2 files
+[3286524] 
+[3286524] sent 209 bytes  received 122 bytes  3310000 bytes/sec
+[3286524] total size is 8  speedup is 0.02
+job 3286524 local_log_files=0 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec/suffix_steps20_3286524
+[3286525] Transfer starting: 21 files
+[3286525] 
+[3286525] sent 209 bytes  received 492 bytes  7010000 bytes/sec
+[3286525] total size is 584420  speedup is 833.69
+job 3286525 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec/pard_steps20_3286525
+[3286526] Transfer starting: 21 files
+[3286526] 
+[3286526] sent 209 bytes  received 492 bytes  7010000 bytes/sec
+[3286526] total size is 592344  speedup is 845.00
+job 3286526 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec/pard2_steps20_3286526
+[3286527] Transfer starting: 21 files
+[3286527] 
+[3286527] sent 209 bytes  received 492 bytes  7010000 bytes/sec
+[3286527] total size is 582624  speedup is 831.13
+job 3286527 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec/eagle3_steps20_3286527
+[3288611] Transfer starting: 21 files
+[3288611] 
+[3288611] sent 209 bytes  received 480 bytes  6890000 bytes/sec
+[3288611] total size is 609766  speedup is 885.00
+job 3288611 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec_suffix_py312_retry1/suffix_steps10_3288611
+[3288612] Transfer starting: 21 files
+[3288612] 
+[3288612] sent 209 bytes  received 469 bytes  6780000 bytes/sec
+[3288612] total size is 611737  speedup is 902.27
+job 3288612 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec_suffix_py312_retry1/suffix_steps20_3288612
+[3291005] Transfer starting: 21 files
+[3291005] 
+[3291005] sent 209 bytes  received 489 bytes  6980000 bytes/sec
+[3291005] total size is 766921  speedup is 1098.74
+job 3291005 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec_writable_r1/baseline_steps10_3291005
+[3291006] Transfer starting: 2 files
+[3291006] 
+[3291006] sent 209 bytes  received 126 bytes  3350000 bytes/sec
+[3291006] total size is 8  speedup is 0.02
+job 3291006 local_log_files=0 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec_writable_r1/suffix_steps10_3291006
+[3291007] Transfer starting: 2 files
+[3291007] 
+[3291007] sent 209 bytes  received 122 bytes  3310000 bytes/sec
+[3291007] total size is 8  speedup is 0.02
+job 3291007 local_log_files=0 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec_writable_r1/pard_steps10_3291007
+[3291008] Transfer starting: 2 files
+[3291008] 
+[3291008] sent 209 bytes  received 126 bytes  3350000 bytes/sec
+[3291008] total size is 8  speedup is 0.02
+job 3291008 local_log_files=0 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec_writable_r1/pard2_steps10_3291008
+[3291010] Transfer starting: 2 files
+[3291010] 
+[3291010] sent 209 bytes  received 126 bytes  3350000 bytes/sec
+[3291010] total size is 8  speedup is 0.02
+job 3291010 local_log_files=0 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec_writable_r1/eagle3_steps10_3291010
+[3291097] Transfer starting: 21 files
+[3291097] 
+[3291097] sent 209 bytes  received 480 bytes  6890000 bytes/sec
+[3291097] total size is 1815162  speedup is 2634.48
+job 3291097 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260613_oci_hsg_swerl_qwen235b_megatron_reconvert_r1/baseline_steps1_3291097
+[3299465] Transfer starting: 21 files
+[3299465] 
+[3299465] sent 209 bytes  received 486 bytes  6950000 bytes/sec
+[3299465] total size is 628406  speedup is 904.18
+job 3299465 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_specdec_after_prewarm_n3post_r1/baseline_steps10_3299465
+[3299466] Transfer starting: 21 files
+[3299466] 
+[3299466] sent 209 bytes  received 489 bytes  6980000 bytes/sec
+[3299466] total size is 661848  speedup is 948.20
+job 3299466 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_specdec_after_prewarm_n3post_r1/suffix_steps10_3299466
+[3299467] Transfer starting: 21 files
+[3299467] 
+[3299467] sent 209 bytes  received 486 bytes  6950000 bytes/sec
+[3299467] total size is 644867  speedup is 927.86
+job 3299467 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_specdec_after_prewarm_n3post_r1/pard_steps10_3299467
+[3299468] Transfer starting: 21 files
+[3299468] 
+[3299468] sent 209 bytes  received 486 bytes  6950000 bytes/sec
+[3299468] total size is 658435  speedup is 947.39
+job 3299468 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_specdec_after_prewarm_n3post_r1/pard2_steps10_3299468
+[3299469] Transfer starting: 21 files
+[3299469] 
+[3299469] sent 209 bytes  received 497 bytes  7060000 bytes/sec
+[3299469] total size is 649836  speedup is 920.45
+job 3299469 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_specdec_after_prewarm_n3post_r1/eagle3_steps10_3299469

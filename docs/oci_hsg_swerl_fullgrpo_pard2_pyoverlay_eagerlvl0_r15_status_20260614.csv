@@ -1,0 +1,2 @@
+checked_at_utc,job_id,state,reason,elapsed,start_time,nodes,exit_code,method,max_steps,target_model,draft_model,num_speculative_tokens,specdec_method,run_id,exp_suffix
+2026-06-15T00:15:50+00:00,3304067,FAILED,None,00:54:11,2026-06-14T16:19:21,"nvl72066-T[01,03-17]",1:0,pard2,1,Qwen/Qwen3-235B-A22B-Thinking-2507,amd/PARD2-Qwen3-8B,1,pard2,20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eagerlvl0_r15,specdec-pard2-steps1-20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eagerlvl0_r15

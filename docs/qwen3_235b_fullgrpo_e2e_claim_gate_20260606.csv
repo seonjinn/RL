@@ -1,0 +1,7 @@
+group,label,job_id,baseline_status,candidate_status,verdict,reason,generation_worker_throughput_speedup,e2e_throughput_speedup,e2e_step_time_speedup,acceptance_rate_pct
+noncolocated_tp4_fixed256,public_pard_k3,3209048,parsed,parsed,claim_allowed_positive_e2e,matched no-stop Full-GRPO E2E speedup is positive on step2-5 against baseline 3209047,1.888000,1.420000,1.421000,57.5800
+sampling_step4,local_pard2_cat_tpp_k5,3186511,missing_log,missing_log,pending_metrics,baseline/specdec ray-driver metrics are not both parsed,,,,
+sampling_step4,dynamic_dpace_k5,3192180,missing_log,missing_log,pending_metrics,baseline/specdec ray-driver metrics are not both parsed,,,,
+sampling_step4,dynamic_dpace_k3,3192438,missing_log,missing_log,pending_metrics,baseline/specdec ray-driver metrics are not both parsed,,,,
+fixed256_step20,local_pard2_cat_tpp_k5,3186343,missing_log,missing_log,pending_metrics,baseline/specdec ray-driver metrics are not both parsed,,,,
+fixed256_step20,public_pard_k5,3186344,missing_log,missing_log,pending_metrics,baseline/specdec ray-driver metrics are not both parsed,,,,

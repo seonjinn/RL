@@ -1,0 +1,38 @@
+[
+  {
+    "checked_at_utc": "2026-06-14T23:04:36+00:00",
+    "draft_model": "",
+    "elapsed": "01:20:02",
+    "exit_code": "0:0",
+    "exp_suffix": "specdec-baseline-steps1-20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r11_fusemount_trainbs32_hydraplus",
+    "job_id": "2121275",
+    "max_steps": "1",
+    "method": "baseline",
+    "nodes": "lyris[0272-0287]",
+    "num_speculative_tokens": "0",
+    "reason": "None",
+    "run_id": "20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r11_fusemount_trainbs32_hydraplus",
+    "specdec_method": "",
+    "start_time": "2026-06-14T14:04:59",
+    "state": "CANCELLED by 2001147693",
+    "target_model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/model_snapshots/Qwen3-235B-A22B-Thinking-2507"
+  },
+  {
+    "checked_at_utc": "2026-06-14T23:04:36+00:00",
+    "draft_model": "amd/PARD2-Qwen3-8B",
+    "elapsed": "00:01:04",
+    "exit_code": "1:0",
+    "exp_suffix": "specdec-pard2-steps1-20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r11_fusemount_trainbs32_hydraplus",
+    "job_id": "2121276",
+    "max_steps": "1",
+    "method": "pard2",
+    "nodes": "lyris[0255-0270]",
+    "num_speculative_tokens": "1",
+    "reason": "None",
+    "run_id": "20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r11_fusemount_trainbs32_hydraplus",
+    "specdec_method": "pard2",
+    "start_time": "2026-06-14T14:08:13",
+    "state": "FAILED",
+    "target_model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/model_snapshots/Qwen3-235B-A22B-Thinking-2507"
+  }
+]

@@ -1,0 +1,10 @@
+label=unknown_osl32k_qwen235b_eagle3_k3 bs=1 out_tok_s_gpu=15.930813579168936 speedup= acc_pct=49.2577 mean_len=2.4777
+label=unknown_osl32k_qwen235b_suffix_k32 bs=1 out_tok_s_gpu=15.181752811094322 speedup= acc_pct=88.4931 mean_len=7.5748
+label=unknown_osl32k_qwen235b_suffix_k32 bs=1 out_tok_s_gpu=53.76158181694465 speedup= acc_pct=82.9429 mean_len=7.6800
+label=unknown_osl32k_qwen235b_suffix_k32 bs=1 out_tok_s_gpu=176.71788332291476 speedup= acc_pct=93.9248 mean_len=10.0105
+label=unknown_osl32k_qwen235b_suffix_k32 bs=1 out_tok_s_gpu=16.160134643093816 speedup= acc_pct=42.1235 mean_len=2.3677
+label=unknown_osl32k_qwen235b_suffix_k32 bs=1 out_tok_s_gpu=168.52857801824283 speedup= acc_pct=91.1512 mean_len=9.4570
+label=unknown_osl32k_qwen235b_suffix_k32 bs=2 out_tok_s_gpu=22.2817494661365 speedup= acc_pct=79.0814 mean_len=6.5547
+label=unknown_osl32k_qwen235b_suffix_k32 bs=2 out_tok_s_gpu=106.69867716108003 speedup= acc_pct=86.7730 mean_len=8.4396
+label=unknown_osl32k_qwen235b_suffix_k32 bs=2 out_tok_s_gpu=309.8629730526047 speedup= acc_pct=90.6163 mean_len=9.8792
+label=unknown_osl32k_qwen235b_suffix_k32 bs=2 out_tok_s_gpu=306.9117083096725 speedup= acc_pct=90.4159 mean_len=9.2901

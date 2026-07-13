@@ -1,0 +1,272 @@
+{
+  "checks": [
+    {
+      "detail": "PARD2_CONFIG_METHOD=\"${PARD2_CONFIG_METHOD:-pard2}\"",
+      "name": "SWE batch sweep defaults PARD-2 method to pard2",
+      "status": "pass"
+    },
+    {
+      "detail": "METHODS=\"${METHODS-baseline suffix pard pard2 eagle3}\"",
+      "name": "SWE batch sweep includes baseline/suffix/PARD/PARD-2/Eagle3",
+      "status": "pass"
+    },
+    {
+      "detail": "K_SWEEP=\"${K_SWEEP:-8 16}\"",
+      "name": "Suffix next pass defaults to K8/K16",
+      "status": "pass"
+    },
+    {
+      "detail": "METHODS=\"${METHODS:-pard pard2 eagle3}\"",
+      "name": "Drafter next pass defaults to PARD/PARD-2/Eagle3",
+      "status": "pass"
+    },
+    {
+      "detail": "PARD_K_SWEEP=\"${PARD_K_SWEEP:-9 11}\"",
+      "name": "PARD next pass defaults to K9/K11",
+      "status": "pass"
+    },
+    {
+      "detail": "PARD2_K_SWEEP=\"${PARD2_K_SWEEP:-9 11}\"",
+      "name": "PARD-2 next pass defaults to K9/K11",
+      "status": "pass"
+    },
+    {
+      "detail": "EAGLE3_K_SWEEP=\"${EAGLE3_K_SWEEP:-9 11}\"",
+      "name": "Eagle3 next pass defaults to K9/K11",
+      "status": "pass"
+    },
+    {
+      "detail": "MODEL=\"${MODEL:-Qwen/Qwen3-235B-A22B}\"",
+      "name": "Math500 targets Qwen3-235B-A22B",
+      "status": "pass"
+    },
+    {
+      "detail": "PROMPT_JSONL=\"${PROMPT_JSONL:-${REMOTE_REPO}/data/math_500_data_prompts_20260612.jsonl}\"",
+      "name": "Math500 uses Math500 prompt JSONL",
+      "status": "pass"
+    },
+    {
+      "detail": "METHODS=\"${METHODS:-baseline suffix pard pard2 eagle3}\"",
+      "name": "Math500 includes baseline/suffix/PARD/PARD-2/Eagle3",
+      "status": "pass"
+    },
+    {
+      "detail": "PARD2_CONFIG_METHOD=\"${PARD2_CONFIG_METHOD:-pard2}\"",
+      "name": "Math500 defaults PARD-2 method to pard2",
+      "status": "pass"
+    },
+    {
+      "detail": "exit 0",
+      "name": "base submit helper executes with fake SSH",
+      "status": "pass"
+    },
+    {
+      "detail": "/var/folders/fd/n6gx1vhj1gx3c675gj01f7k80000gp/T/qwen235b_launcher_contract_d7qah22x/base_submit_jobs.txt",
+      "name": "base submit tracker output exists",
+      "status": "pass"
+    },
+    {
+      "detail": "5 rows",
+      "name": "base submit tracker row count",
+      "status": "pass"
+    },
+    {
+      "detail": "9 columns",
+      "name": "base submit tracker row width",
+      "status": "pass"
+    },
+    {
+      "detail": "job_id,method,model,prompt_offset,prompt_count,isl,osl,batch_sizes,logs_dir",
+      "name": "base submit tracker header width",
+      "status": "pass"
+    },
+    {
+      "detail": "baseline,eagle3,pard,pard2,suffix",
+      "name": "base submit tracker expected methods present",
+      "status": "pass"
+    },
+    {
+      "detail": "account,batch_sizes,container_image,csv_header,cuda_launch_blocking,dtype,enable_pard2_method_alias,gpu_memory_utilization,isl,kv_cache_dtype,max_model_len,max_num_batched_tokens,max_num_seqs,methods,model,osl,partition,pp,prompt_count,prompt_jsonl,prompt_offset,remote_host,remote_repo,submitted_at,torch_show_cpp_stacktraces,tp,vllm_allow_long_max_model_len",
+      "name": "base submit tracker metadata parsed",
+      "status": "pass"
+    },
+    {
+      "detail": "exit 0",
+      "name": "SWE batch sweep executes with fake SSH",
+      "status": "pass"
+    },
+    {
+      "detail": "/var/folders/fd/n6gx1vhj1gx3c675gj01f7k80000gp/T/qwen235b_launcher_contract_d7qah22x/batch_sweep.csv",
+      "name": "SWE batch sweep tracker output exists",
+      "status": "pass"
+    },
+    {
+      "detail": "20 rows",
+      "name": "SWE batch sweep tracker row count",
+      "status": "pass"
+    },
+    {
+      "detail": "12 columns",
+      "name": "SWE batch sweep tracker row width",
+      "status": "pass"
+    },
+    {
+      "detail": "job_id,dataset,model_group,batch_size,method,model,prompt_offset,prompt_count,isl,osl,batch_sizes,logs_dir",
+      "name": "SWE batch sweep tracker header width",
+      "status": "pass"
+    },
+    {
+      "detail": "baseline,eagle3,pard,pard2,suffix",
+      "name": "SWE batch sweep tracker expected methods present",
+      "status": "pass"
+    },
+    {
+      "detail": "exit 0",
+      "name": "Suffix K sweep executes with fake SSH",
+      "status": "pass"
+    },
+    {
+      "detail": "/var/folders/fd/n6gx1vhj1gx3c675gj01f7k80000gp/T/qwen235b_launcher_contract_d7qah22x/suffix_k_sweep.csv",
+      "name": "Suffix K sweep tracker output exists",
+      "status": "pass"
+    },
+    {
+      "detail": "8 rows",
+      "name": "Suffix K sweep tracker row count",
+      "status": "pass"
+    },
+    {
+      "detail": "14 columns",
+      "name": "Suffix K sweep tracker row width",
+      "status": "pass"
+    },
+    {
+      "detail": "job_id,dataset,model_group,batch_size,method,num_speculative_tokens,model,prompt_offset,prompt_count,isl,osl,batch_sizes,logs_dir,source_tracker",
+      "name": "Suffix K sweep tracker header width",
+      "status": "pass"
+    },
+    {
+      "detail": "suffix_k16,suffix_k8",
+      "name": "Suffix K sweep tracker expected methods present",
+      "status": "pass"
+    },
+    {
+      "detail": "suffix_k8/suffix_k16",
+      "name": "Suffix K sweep method/K columns match",
+      "status": "pass"
+    },
+    {
+      "detail": "exit 0",
+      "name": "Drafter K sweep executes with fake SSH",
+      "status": "pass"
+    },
+    {
+      "detail": "/var/folders/fd/n6gx1vhj1gx3c675gj01f7k80000gp/T/qwen235b_launcher_contract_d7qah22x/drafter_k_sweep.csv",
+      "name": "Drafter K sweep tracker output exists",
+      "status": "pass"
+    },
+    {
+      "detail": "12 rows",
+      "name": "Drafter K sweep tracker row count",
+      "status": "pass"
+    },
+    {
+      "detail": "14 columns",
+      "name": "Drafter K sweep tracker row width",
+      "status": "pass"
+    },
+    {
+      "detail": "job_id,dataset,model_group,batch_size,method,num_speculative_tokens,model,prompt_offset,prompt_count,isl,osl,batch_sizes,logs_dir,source_tracker",
+      "name": "Drafter K sweep tracker header width",
+      "status": "pass"
+    },
+    {
+      "detail": "eagle3_k11,eagle3_k9,pard2_k11,pard2_k9,pard_k11,pard_k9",
+      "name": "Drafter K sweep tracker expected methods present",
+      "status": "pass"
+    },
+    {
+      "detail": "pard/pard2/eagle3 K9/K11",
+      "name": "Drafter K sweep method/K columns match",
+      "status": "pass"
+    },
+    {
+      "detail": "exit 0",
+      "name": "Math500 launcher executes with fake SSH",
+      "status": "pass"
+    },
+    {
+      "detail": "/var/folders/fd/n6gx1vhj1gx3c675gj01f7k80000gp/T/qwen235b_launcher_contract_d7qah22x/math500_jobs.txt",
+      "name": "Math500 tracker output exists",
+      "status": "pass"
+    },
+    {
+      "detail": "5 rows",
+      "name": "Math500 tracker row count",
+      "status": "pass"
+    },
+    {
+      "detail": "9 columns",
+      "name": "Math500 tracker row width",
+      "status": "pass"
+    },
+    {
+      "detail": "job_id,method,model,prompt_offset,prompt_count,isl,osl,batch_sizes,logs_dir",
+      "name": "Math500 tracker header width",
+      "status": "pass"
+    },
+    {
+      "detail": "baseline,eagle3,pard,pard2,suffix",
+      "name": "Math500 tracker expected methods present",
+      "status": "pass"
+    },
+    {
+      "detail": "account,batch_sizes,container_image,csv_header,cuda_launch_blocking,dtype,enable_pard2_method_alias,gpu_memory_utilization,isl,kv_cache_dtype,max_model_len,max_num_batched_tokens,max_num_seqs,methods,model,osl,partition,pp,prompt_count,prompt_jsonl,prompt_offset,remote_host,remote_repo,submitted_at,torch_show_cpp_stacktraces,tp,vllm_allow_long_max_model_len",
+      "name": "Math500 tracker metadata parsed",
+      "status": "pass"
+    },
+    {
+      "detail": "/tmp/fake-vllm-benchmark/data/math_500_data_prompts_20260612.jsonl",
+      "name": "Math500 tracker metadata uses Math500 prompts",
+      "status": "pass"
+    },
+    {
+      "detail": "Qwen/Qwen3-235B-A22B",
+      "name": "Math500 tracker metadata uses Qwen235B",
+      "status": "pass"
+    }
+  ],
+  "overall_status": "pass",
+  "runs": [
+    {
+      "exit_code": 0,
+      "script": "/Users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/submit_lyris_swebench32k_standalone_specdec.sh",
+      "stderr_excerpt": "",
+      "stdout_excerpt": "# Lyris SWE-Bench Verified standalone SpecDec jobs\nsubmitted_at=2026-06-13 09:41:56 CEST\nremote_host=fake-lyris\nremote_repo=/tmp/fake-vllm-benchmark\naccount=coreai_dlalgo_llm\npartition=gb200\ncontainer_image=/tmp/fake-vllm.sqsh\nmodel=Qwen/Qwen3-235B-A22B\nprompt_jsonl=/tmp/prompts.jsonl\nprompt_offset=0\nprompt_count=2\nisl=4096\nosl=32768\nbatch_sizes=2\ntp=1\npp=1\ndtype=auto\nkv_cache_dtype=auto\ngpu_memory_utilization=0.86\nvllm_allow_long_max_model_len=0\ncuda_launch_blocking=\ntorch_show_cpp_stacktraces=\nmax_model_len=40960\nmax_num_seqs=2\nmax_num_batched_tokens=65536\nenable_pard2_method_alias=auto\nmethods=baseline suffix pard pard2 eagle3\ncsv_header=job_id,method,model,prompt_offset,prompt_count,isl,osl,batch_sizes,logs_dir\n9000001,baseline,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/contract_base_baseline_offset0_n2_isl4096_osl32768_bs2_20260613_contract\n9000002,suffix,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/contract_base_suffix_offset0_n2_isl4096_osl32768_bs2_k32_arctic_20260613_contract\n9000003,pard,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/contract_base_pard_offset0_n2_isl4096_osl32768_bs2_k5_20260613_contract\n9000004,pard2,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/contract_base_pard2_offset0_n2_isl4096_osl32768_bs2_k5_20260613_contract\n9000005,eagle3,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/contract_base_eagle3_offset0_n2_isl4096_osl32768_bs2_k3_20260613_contract"
+    },
+    {
+      "exit_code": 0,
+      "script": "/Users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/submit_lyris_qwen235b_swebench_osl32k_batch_sweep_20260612.sh",
+      "stderr_excerpt": "",
+      "stdout_excerpt": "job_id,dataset,model_group,batch_size,method,model,prompt_offset,prompt_count,isl,osl,batch_sizes,logs_dir\n9000006,verified,qwen235b,2,baseline,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2_baseline_offset0_n2_isl4096_osl32768_bs2_20260613_contract\n9000007,verified,qwen235b,2,suffix,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2_suffix_offset0_n2_isl4096_osl32768_bs2_k32_arctic_20260613_contract\n9000008,verified,qwen235b,2,pard,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2_pard_offset0_n2_isl4096_osl32768_bs2_k5_20260613_contract\n9000009,verified,qwen235b,2,pard2,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2_pard2_offset0_n2_isl4096_osl32768_bs2_k1_20260613_contract\n9000010,verified,qwen235b,2,eagle3,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2_eagle3_offset0_n2_isl4096_osl32768_bs2_k3_20260613_contract\n9000011,verified,qwen235b,4,baseline,Qwen/Qwen3-235B-A22B,0,4,4096,32768,4,/tmp/fake-vllm-runs/qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs4_baseline_offset0_n4_isl4096_osl32768_bs4_20260613_contract\n9000012,verified,qwen235b,4,suffix,Qwen/Qwen3-235B-A22B,0,4,4096,32768,4,/tmp/fake-vllm-runs/qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs4_suffix_offset0_n4_isl4096_osl32768_bs4_k32_arctic_20260613_contract\n9000013,verified,qwen235b,4,pard,Qwen/Qwen3-235B-A22B,0,4,4096,32768,4,/tmp/fake-vllm-runs/qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs4_pard_offset0_n4_isl4096_osl32768_bs4_k5_20260613_contract\n9000014,verified,qwen235b,4,pard2,Qwen/Qwen3-235B-A22B,0,4,4096,32768,4,/tmp/fake-vllm-runs/qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs4_pard2_offset0_n4_isl4096_osl32768_bs4_k1_20260613_contract\n9000015,verified,qwen235b,4,eagle3,Qwen/Qwen3-235B-A22B,0,4,4096,32768,4,/tmp/fake-vllm-runs/qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs4_eagle3_offset0_n4_isl4096_osl32768_bs4_k3_20260613_contract\n9000016,full,qwen235b,2,baseline,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2_baseline_offset0_n2_isl4096_osl32768_bs2_20260613_contract\n9000017,full,qwen235b,2,suffix,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2_suffix_offset0_n2_isl4096_osl32768_bs2_k32_arctic_20260613_contract\n9000018,full,qwen235b,2,pard,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2_pard_offset0_n2_isl4096_osl32768_bs2_k5_20260613_contract\n9000019,full,qwen235b,2,pard2,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2_pard2_offset0_n2_isl4096_osl32768_bs2_k1_20260613_contract\n9000020,full,qwen235b,2,eagle3,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2_eagle3_offset0_n2_isl4096_osl32768_bs2_k3_20260613_contract\n9000021,full,qwen235b,4,baseline,Qwen/Qwen3-235B-A22B,0,4,4096,32768,4,/tmp/fake-vllm-runs/qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs4_baseline_offset0_n4_isl4096_osl32768_bs4_20260613_contract\n9000022,full,qwen235b,4,suffix,Qwen/Qwen3-235B-A22B,0,4,4096,32768,4,/tmp/fake-vllm-runs/qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs4_suffix_offset0_n4_isl4096_osl32768_bs4_k32_arctic_20260613_contract\n9000023,full,qwen235b,4,pard,Qwen/Qwen3-235B-A22B,0,4,4096,32768,4,/tmp/fake-vllm-runs/qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs4_pard_offset0_n4_isl4096_osl32768_bs4_k5_20260613_contract\n9000024,full,qwen235b,4,pard2,Qwen/Qwen3-235B-A22B,0,4,4096,32768,4,/tmp/fake-vllm-runs/qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs4_pard2_offset0_n4_isl4096_osl32768_bs4_k1_20260613_contract\n9000025,full,qwen235b,4,eagle3,Qwen/Qwen3-235B-A22B,0,4,4096,32768,4,/tmp/fake-vllm-runs/qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs4_eagle3_offset0_n4_isl4096_osl32768_bs4_k3_20260613_contract"
+    },
+    {
+      "exit_code": 0,
+      "script": "/Users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/submit_lyris_qwen235b_swebench_osl32k_suffix_k_sweep_20260613.sh",
+      "stderr_excerpt": "",
+      "stdout_excerpt": "job_id,dataset,model_group,batch_size,method,num_speculative_tokens,model,prompt_offset,prompt_count,isl,osl,batch_sizes,logs_dir,source_tracker\n9000026,verified,qwen235b,2,suffix_k8,8,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2_suffix_offset0_n2_isl4096_osl32768_bs2_k8_arctic_20260613_contract,/Users/sna/Nemo-RL_Qwen3_Roadmap/latest_lyris_qwen235b_swebench_osl32k_suffix_k8_20260613_contract_jobs.csv\n9000027,verified,qwen235b,4,suffix_k8,8,Qwen/Qwen3-235B-A22B,0,4,4096,32768,4,/tmp/fake-vllm-runs/qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs4_suffix_offset0_n4_isl4096_osl32768_bs4_k8_arctic_20260613_contract,/Users/sna/Nemo-RL_Qwen3_Roadmap/latest_lyris_qwen235b_swebench_osl32k_suffix_k8_20260613_contract_jobs.csv\n9000028,full,qwen235b,2,suffix_k8,8,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2_suffix_offset0_n2_isl4096_osl32768_bs2_k8_arctic_20260613_contract,/Users/sna/Nemo-RL_Qwen3_Roadmap/latest_lyris_qwen235b_swebench_osl32k_suffix_k8_20260613_contract_jobs.csv\n9000029,full,qwen235b,4,suffix_k8,8,Qwen/Qwen3-235B-A22B,0,4,4096,32768,4,/tmp/fake-vllm-runs/qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs4_suffix_offset0_n4_isl4096_osl32768_bs4_k8_arctic_20260613_contract,/Users/sna/Nemo-RL_Qwen3_Roadmap/latest_lyris_qwen235b_swebench_osl32k_suffix_k8_20260613_contract_jobs.csv\n9000030,verified,qwen235b,2,suffix_k16,16,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2_suffix_offset0_n2_isl4096_osl32768_bs2_k16_arctic_20260613_contract,/Users/sna/Nemo-RL_Qwen3_Roadmap/latest_lyris_qwen235b_swebench_osl32k_suffix_k16_20260613_contract_jobs.csv\n9000031,verified,qwen235b,4,suffix_k16,16,Qwen/Qwen3-235B-A22B,0,4,4096,32768,4,/tmp/fake-vllm-runs/qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs4_suffix_offset0_n4_isl4096_osl32768_bs4_k16_arctic_20260613_contract,/Users/sna/Nemo-RL_Qwen3_Roadmap/latest_lyris_qwen235b_swebench_osl32k_suffix_k16_20260613_contract_jobs.csv\n9000032,full,qwen235b,2,suffix_k16,16,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2_suffix_offset0_n2_isl4096_osl32768_bs2_k16_arctic_20260613_contract,/Users/sna/Nemo-RL_Qwen3_Roadmap/latest_lyris_qwen235b_swebench_osl32k_suffix_k16_20260613_contract_jobs.csv\n9000033,full,qwen235b,4,suffix_k16,16,Qwen/Qwen3-235B-A22B,0,4,4096,32768,4,/tmp/fake-vllm-runs/qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs4_suffix_offset0_n4_isl4096_osl32768_bs4_k16_arctic_20260613_contract,/Users/sna/Nemo-RL_Qwen3_Roadmap/latest_lyris_qwen235b_swebench_osl32k_suffix_k16_20260613_contract_jobs.csv"
+    },
+    {
+      "exit_code": 0,
+      "script": "/Users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/submit_lyris_qwen235b_swebench_osl32k_drafter_k_sweep_20260613.sh",
+      "stderr_excerpt": "",
+      "stdout_excerpt": "job_id,dataset,model_group,batch_size,method,num_speculative_tokens,model,prompt_offset,prompt_count,isl,osl,batch_sizes,logs_dir,source_tracker\n9000034,verified,qwen235b,2,pard_k9,9,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2_pard_offset0_n2_isl4096_osl32768_bs2_k9_20260613_contract,/Users/sna/Nemo-RL_Qwen3_Roadmap/latest_lyris_qwen235b_swebench_osl32k_pard_k9_20260613_contract_jobs.csv\n9000035,full,qwen235b,2,pard_k9,9,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2_pard_offset0_n2_isl4096_osl32768_bs2_k9_20260613_contract,/Users/sna/Nemo-RL_Qwen3_Roadmap/latest_lyris_qwen235b_swebench_osl32k_pard_k9_20260613_contract_jobs.csv\n9000036,verified,qwen235b,2,pard_k11,11,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2_pard_offset0_n2_isl4096_osl32768_bs2_k11_20260613_contract,/Users/sna/Nemo-RL_Qwen3_Roadmap/latest_lyris_qwen235b_swebench_osl32k_pard_k11_20260613_contract_jobs.csv\n9000037,full,qwen235b,2,pard_k11,11,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2_pard_offset0_n2_isl4096_osl32768_bs2_k11_20260613_contract,/Users/sna/Nemo-RL_Qwen3_Roadmap/latest_lyris_qwen235b_swebench_osl32k_pard_k11_20260613_contract_jobs.csv\n9000038,verified,qwen235b,2,pard2_k9,9,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2_pard2_offset0_n2_isl4096_osl32768_bs2_k9_20260613_contract,/Users/sna/Nemo-RL_Qwen3_Roadmap/latest_lyris_qwen235b_swebench_osl32k_pard2_k9_20260613_contract_jobs.csv\n9000039,full,qwen235b,2,pard2_k9,9,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2_pard2_offset0_n2_isl4096_osl32768_bs2_k9_20260613_contract,/Users/sna/Nemo-RL_Qwen3_Roadmap/latest_lyris_qwen235b_swebench_osl32k_pard2_k9_20260613_contract_jobs.csv\n9000040,verified,qwen235b,2,pard2_k11,11,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2_pard2_offset0_n2_isl4096_osl32768_bs2_k11_20260613_contract,/Users/sna/Nemo-RL_Qwen3_Roadmap/latest_lyris_qwen235b_swebench_osl32k_pard2_k11_20260613_contract_jobs.csv\n9000041,full,qwen235b,2,pard2_k11,11,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2_pard2_offset0_n2_isl4096_osl32768_bs2_k11_20260613_contract,/Users/sna/Nemo-RL_Qwen3_Roadmap/latest_lyris_qwen235b_swebench_osl32k_pard2_k11_20260613_contract_jobs.csv\n9000042,verified,qwen235b,2,eagle3_k9,9,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2_eagle3_offset0_n2_isl4096_osl32768_bs2_k9_20260613_contract,/Users/sna/Nemo-RL_Qwen3_Roadmap/latest_lyris_qwen235b_swebench_osl32k_eagle3_k9_20260613_contract_jobs.csv\n9000043,full,qwen235b,2,eagle3_k9,9,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2_eagle3_offset0_n2_isl4096_osl32768_bs2_k9_20260613_contract,/Users/sna/Nemo-RL_Qwen3_Roadmap/latest_lyris_qwen235b_swebench_osl32k_eagle3_k9_20260613_contract_jobs.csv\n9000044,verified,qwen235b,2,eagle3_k11,11,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2_eagle3_offset0_n2_isl4096_osl32768_bs2_k11_20260613_contract,/Users/sna/Nemo-RL_Qwen3_Roadmap/latest_lyris_qwen235b_swebench_osl32k_eagle3_k11_20260613_contract_jobs.csv\n9000045,full,qwen235b,2,eagle3_k11,11,Qwen/Qwen3-235B-A22B,0,2,4096,32768,2,/tmp/fake-vllm-runs/qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2_eagle3_offset0_n2_isl4096_osl32768_bs2_k11_20260613_contract,/Users/sna/Nemo-RL_Qwen3_Roadmap/latest_lyris_qwen235b_swebench_osl32k_eagle3_k11_20260613_contract_jobs.csv"
+    },
+    {
+      "exit_code": 0,
+      "script": "/Users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/submit_lyris_qwen235b_math500_osl32k_specdec_20260613.sh",
+      "stderr_excerpt": "",
+      "stdout_excerpt": "# Lyris SWE-Bench Verified standalone SpecDec jobs\nsubmitted_at=2026-06-13 09:42:02 CEST\nremote_host=fake-lyris\nremote_repo=/tmp/fake-vllm-benchmark\naccount=coreai_dlalgo_llm\npartition=gb200\ncontainer_image=/tmp/fake-vllm.sqsh\nmodel=Qwen/Qwen3-235B-A22B\nprompt_jsonl=/tmp/fake-vllm-benchmark/data/math_500_data_prompts_20260612.jsonl\nprompt_offset=0\nprompt_count=4\nisl=4096\nosl=32768\nbatch_sizes=1 2\ntp=4\npp=1\ndtype=auto\nkv_cache_dtype=fp8\ngpu_memory_utilization=0.94\nvllm_allow_long_max_model_len=0\ncuda_launch_blocking=\ntorch_show_cpp_stacktraces=\nmax_model_len=40960\nmax_num_seqs=2\nmax_num_batched_tokens=81920\nenable_pard2_method_alias=auto\nmethods=baseline suffix pard pard2 eagle3\ncsv_header=job_id,method,model,prompt_offset,prompt_count,isl,osl,batch_sizes,logs_dir\n9000046,baseline,Qwen/Qwen3-235B-A22B,0,4,4096,32768,1 2,/tmp/fake-vllm-runs/qwen235b_a22b_math500_osl32k_lyris_tp4_fp8kv_baseline_offset0_n4_isl4096_osl32768_bs1_2_20260613_contract\n9000047,suffix,Qwen/Qwen3-235B-A22B,0,4,4096,32768,1 2,/tmp/fake-vllm-runs/qwen235b_a22b_math500_osl32k_lyris_tp4_fp8kv_suffix_offset0_n4_isl4096_osl32768_bs1_2_k32_arctic_20260613_contract\n9000048,pard,Qwen/Qwen3-235B-A22B,0,4,4096,32768,1 2,/tmp/fake-vllm-runs/qwen235b_a22b_math500_osl32k_lyris_tp4_fp8kv_pard_offset0_n4_isl4096_osl32768_bs1_2_k5_20260613_contract\n9000049,pard2,Qwen/Qwen3-235B-A22B,0,4,4096,32768,1 2,/tmp/fake-vllm-runs/qwen235b_a22b_math500_osl32k_lyris_tp4_fp8kv_pard2_offset0_n4_isl4096_osl32768_bs1_2_k1_20260613_contract\n9000050,eagle3,Qwen/Qwen3-235B-A22B,0,4,4096,32768,1 2,/tmp/fake-vllm-runs/qwen235b_a22b_math500_osl32k_lyris_tp4_fp8kv_eagle3_offset0_n4_isl4096_osl32768_bs1_2_k3_20260613_contract"
+    }
+  ]
+}

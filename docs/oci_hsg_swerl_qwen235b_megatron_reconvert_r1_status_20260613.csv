@@ -1,0 +1,2 @@
+checked_at_utc,job_id,state,reason,elapsed,start_time,nodes,exit_code,method,max_steps,target_model,draft_model,num_speculative_tokens,specdec_method,run_id,exp_suffix
+2026-06-14T23:04:41+00:00,3291097,COMPLETED,None,01:10:20,2026-06-13T02:59:08,nvl72097-T[01-16],0:0,baseline,1,Qwen/Qwen3-235B-A22B-Thinking-2507,,0,,20260613_oci_hsg_swerl_qwen235b_megatron_reconvert_r1,specdec-baseline-steps1-20260613_oci_hsg_swerl_qwen235b_megatron_reconvert_r1

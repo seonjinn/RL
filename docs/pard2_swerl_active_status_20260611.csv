@@ -1,0 +1,12 @@
+job_id,name,queue_state,acct_state,exit_code,nodes,tres_per_node,reason,start_time,queue_time,elapsed,acct_start,acct_end
+3274971,online-qwen30ba3b-baseline-nospec-out4096-min2048-mlen8192-seq8-step20-N4xG4,,TIMEOUT,0:0,,,,,,04:00:04,2026-06-11T21:33:33,2026-06-12T01:33:37
+3277195,online-qwen30ba3b-baseline-nospec-out4096-min2048-mlen8192-seq8-step20-N4xG4,,COMPLETED,0:0,,,,,,05:03:43,2026-06-12T02:02:23,2026-06-12T07:06:06
+3265386,online-qwen30ba3b-pard2-STATIC-out4096-min2048-mlen8192-seq8-k5-win2048-tail-start1-step20-N4xG4,,COMPLETED,0:0,,,,,,02:54:05,2026-06-11T18:40:57,2026-06-11T21:35:02
+3265387,online-qwen30ba3b-pard2-ONLINE_INT10-out4096-min2048-mlen8192-seq8-k5-win2048-tail-start1-step20-N4xG4,,COMPLETED,0:0,,,,,,02:53:41,2026-06-11T18:40:57,2026-06-11T21:34:38
+3265388,online-qwen30ba3b-pard2-ONLINE_INT10-out4096-min2048-mlen8192-seq8-k5-win2048-tail-start10-step20-N4xG4,,COMPLETED,0:0,,,,,,02:55:17,2026-06-11T18:42:32,2026-06-11T21:37:49
+3274811,online-qwen30ba3b-pard2-ONLINE_INT5-out4096-min2048-mlen8192-seq8-k5-win2048-tail-start5-step20-N4xG4,,COMPLETED,0:0,,,,,,02:55:28,2026-06-11T21:07:22,2026-06-12T00:02:50
+3266304,online-qwen8-pard2-STATIC-canary-out128-min64-mlen1024-seq4-k5-win256-step2-N1xG4,,COMPLETED,0:0,,,,,,00:06:49,2026-06-11T09:03:13,2026-06-11T09:10:02
+3266305,online-qwen8-pard2-ONLINE-canary-out128-min64-mlen1024-seq4-k5-win256-step2-N1xG4,,COMPLETED,0:0,,,,,,00:07:05,2026-06-11T09:03:13,2026-06-11T09:10:18
+3266737,suffix_swerl_arm64_total32_n24g8_g4_pps8_gpp1_gbs8_genonly_20260611,PENDING,PENDING,0:0,32,gres/gpu:4,(Priority),N/A,0:00,00:00:00,Unknown,Unknown
+3266990,online-qwen30ba3b-suffix-fullgrpo-smoke-out1024-min512-mlen4096-seq8-k32-tree24-step20-N4xG4,,COMPLETED,0:0,,,,,,00:32:08,2026-06-11T18:49:07,2026-06-11T19:21:15
+3274972,online-qwen30ba3b-suffix-fullgrpo-smoke-out4096-min2048-mlen8192-seq8-k32-tree24-step20-N4xG4,,COMPLETED,0:0,,,,,,03:01:06,2026-06-11T21:33:33,2026-06-12T00:34:39

@@ -1,0 +1,38 @@
+[
+  {
+    "checked_at_utc": "2026-06-14T23:04:52+00:00",
+    "draft_model": "",
+    "elapsed": "00:03:05",
+    "exit_code": "1:0",
+    "exp_suffix": "specdec-suffix-steps10-20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec_suffix_py312_retry1",
+    "job_id": "3288611",
+    "max_steps": "10",
+    "method": "suffix",
+    "nodes": "nvl72048-T[01-16]",
+    "num_speculative_tokens": "32",
+    "reason": "None",
+    "run_id": "20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec_suffix_py312_retry1",
+    "specdec_method": "suffix",
+    "start_time": "2026-06-13T01:53:06",
+    "state": "FAILED",
+    "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507"
+  },
+  {
+    "checked_at_utc": "2026-06-14T23:04:52+00:00",
+    "draft_model": "",
+    "elapsed": "00:03:07",
+    "exit_code": "1:0",
+    "exp_suffix": "specdec-suffix-steps20-20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec_suffix_py312_retry1",
+    "job_id": "3288612",
+    "max_steps": "20",
+    "method": "suffix",
+    "nodes": "nvl72092-T[01-16]",
+    "num_speculative_tokens": "32",
+    "reason": "None",
+    "run_id": "20260613_oci_hsg_swerl_qwen235b_fullgrpo_specdec_suffix_py312_retry1",
+    "specdec_method": "suffix",
+    "start_time": "2026-06-13T01:53:06",
+    "state": "FAILED",
+    "target_model": "Qwen/Qwen3-235B-A22B-Thinking-2507"
+  }
+]

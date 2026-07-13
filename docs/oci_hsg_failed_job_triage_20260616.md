@@ -1,0 +1,14 @@
+# OCI-HSG Failed Job Triage - 2026-06-16
+
+Small, per-job log probes were used so timeout or truncated SSH output does not discard already-parsed evidence.
+
+| job | area | run | status | root cause |
+| ---: | --- | --- | --- | --- |
+| `3333535` | MathRL qwen235B step20 | `qwen235b_pard_k5_temp1_genbound1024` | `FAILED 1:0`, `00:22:00` | vLLM wake_up CUDA OOM during PARD K5 policy preparation Evidence: ray-driver.log lines 2929-3007 show RayTaskError(RuntimeError) from RayWorkerWrapper.execute_method wake_up; vLLM gpu_worker allocator.wake_up raised CUDA Error: out of memory at /workspace/csrc/cumem_allocator.cpp:139; later torch.OutOfMemoryError showed only 13.56 MiB free on GPU 1 |
+| `3342358` | MathRL qwen235B main fixed256 | `qwen235b_pard_k3_fixed256_step1` | `FAILED 1:0`, `00:33:17` | vLLM actor died during prepare_refit_info collective RPC after worker OOM Evidence: ray-driver.log reached refit-info merge with workers=128 keys=36945 draft_keys=0, then VllmGenerationWorker.prepare_refit_info failed with RayTaskError(ActorDiedError); Ray reported worker exit type SYSTEM_ERROR connection error code 2/end-of-file. sacct now shows child steps 3342358.5 and 3342358.8 as OUT_OF_MEMORY with exit code 0:125. |
+| `3333537` | MathRL qwen235B step20 | `qwen235b_eagle3_k3_temp1_genbound1024` | `FAILED 1:0`, `01:21:59` | NCCL watchdog timeout during Megatron policy training after 14 completed steps Partial metrics saved: 14 completed steps, Step 15 incomplete; mean E2E 20.83 tok/s/GPU, generation worker 34.16 tok/s/GPU, weighted acceptance 47.42%, mean accept len 2.42. |
+| `3344863` | SWE-RL qwen30BA3B suffix smoke | `qwen30ba3b_suffix_k32_ctx40k_step1` | `FAILED 1:0`, `00:11:11` | missing arctic-inference dependency for suffix decoding Evidence: vLLM SpeculativeConfig validation failed in _validate_suffix_decoding with ImportError: Arctic Inference is required for suffix decoding. Install via `pip install arctic-inference==0.1.1` |
+| `3334220` | MathRL qwen235B step20 | `qwen235b_baseline_temp1_genbound1024` | `FAILED 1:0`, `01:14:56` | NCCL watchdog timeout during Megatron policy training after 8 completed steps Partial metrics saved: mean E2E 12.45 tok/s/GPU, generation worker 17.67 tok/s/GPU, mean generation time 127.53s, Max OSL 1024. |
+| `3333717` | MathRL qwen235B step20 | `qwen235b_suffix_k32_temp1_genbound1024` | `FAILED 1:0`, `01:24:00` | NCCL watchdog timeout during Megatron policy training after 14 completed steps Partial metrics saved: mean E2E 16.69 tok/s/GPU, generation worker 24.19 tok/s/GPU, weighted acceptance 26.35%, mean accept len 1.74, Max OSL 1024. |
+
+Latest OCI live-status snapshot is in `docs/oci_hsg_live_job_status_20260616.csv`. qwen235B MathRL step20 baseline `3334220` and suffix `3333717` are now failed but have reusable partial metrics; SWE-RL qwen30BA3B suffix retry `3351394` was last confirmed running before local DNS resolution failed for the OCI host.

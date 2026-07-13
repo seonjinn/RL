@@ -1,0 +1,579 @@
+{
+  "algorithm_utils": "/Users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/remote_patches/SpecDec-RL/nemo_rl/algorithms/utils.py",
+  "checks": [
+    {
+      "detail": "local draft_format=\"auto\"",
+      "name": "default draft_format=\"auto\"",
+      "status": "pass"
+    },
+    {
+      "detail": "local draft_model=\"\"",
+      "name": "default draft_model=\"\"",
+      "status": "pass"
+    },
+    {
+      "detail": "local policy_draft_enabled=\"false\"",
+      "name": "default policy_draft_enabled=\"false\"",
+      "status": "pass"
+    },
+    {
+      "detail": "local pard_online_training=\"false\"",
+      "name": "default pard_online_training=\"false\"",
+      "status": "pass"
+    },
+    {
+      "detail": "local enable_vllm_specdec=\"false\"",
+      "name": "default enable_vllm_specdec=\"false\"",
+      "status": "pass"
+    },
+    {
+      "detail": "local specdec_method=\"eagle3\"",
+      "name": "default specdec_method=\"eagle3\"",
+      "status": "pass"
+    },
+    {
+      "detail": "local source_vllm_site=\"\"",
+      "name": "default source_vllm_site=\"\"",
+      "status": "pass"
+    },
+    {
+      "detail": "local pard2_patch_dir=\"\"",
+      "name": "default pard2_patch_dir=\"\"",
+      "status": "pass"
+    },
+    {
+      "detail": "local num_spec_tokens=\"0\"",
+      "name": "default num_spec_tokens=\"0\"",
+      "status": "pass"
+    },
+    {
+      "detail": "local include_draft_tp=\"false\"",
+      "name": "default include_draft_tp=\"false\"",
+      "status": "pass"
+    },
+    {
+      "detail": "local parallel_drafting=\"false\"",
+      "name": "default parallel_drafting=\"false\"",
+      "status": "pass"
+    },
+    {
+      "detail": "local debug_draft_refit=\"false\"",
+      "name": "default debug_draft_refit=\"false\"",
+      "status": "pass"
+    },
+    {
+      "detail": "local force_local_transformer_spec=\"false\"",
+      "name": "default force_local_transformer_spec=\"false\"",
+      "status": "pass"
+    },
+    {
+      "detail": "local actor_uv_lock_mode=\"--locked\"",
+      "name": "default actor_uv_lock_mode=\"--locked\"",
+      "status": "pass"
+    },
+    {
+      "detail": "local force_rebuild_actor_venvs=\"false\"",
+      "name": "default force_rebuild_actor_venvs=\"false\"",
+      "status": "pass"
+    },
+    {
+      "detail": "local policy_draft_loss=\"hard_ce\"",
+      "name": "default policy_draft_loss=\"hard_ce\"",
+      "status": "pass"
+    },
+    {
+      "detail": "local policy_draft_cat_weighting=\"false\"",
+      "name": "default policy_draft_cat_weighting=\"false\"",
+      "status": "pass"
+    },
+    {
+      "detail": "VARIANTS=\"${VARIANTS:-baseline static_pard2 online_pard2}\"",
+      "name": "default variants include baseline/static/online PARD-2",
+      "status": "pass"
+    },
+    {
+      "detail": "CLUSTER_PROFILE=\"${CLUSTER_PROFILE:-lyris}\"",
+      "name": "has explicit Lyris/OCI profile selector",
+      "status": "pass"
+    },
+    {
+      "detail": "DEFAULT_REMOTE_HOST=\"oci-hsg-cs-001-vscode-02\"",
+      "name": "OCI profile uses OCI-HSG host",
+      "status": "pass"
+    },
+    {
+      "detail": "DEFAULT_PARTITION=\"batch\"",
+      "name": "OCI profile uses batch partition",
+      "status": "pass"
+    },
+    {
+      "detail": "DEFAULT_WALLTIME=\"04:00:00\"",
+      "name": "OCI profile stays within batch walltime limit",
+      "status": "pass"
+    },
+    {
+      "detail": "DEFAULT_UV_PYTHON=\"3.13.13\"",
+      "name": "OCI profile uses existing Qwen8 smoke Python setting",
+      "status": "pass"
+    },
+    {
+      "detail": "DEFAULT_RAY_VERSION=\"2.55.1\"",
+      "name": "OCI profile uses existing Qwen8 smoke Ray setting",
+      "status": "pass"
+    },
+    {
+      "detail": "DEFAULT_SOURCE_VLLM_SITE=\"/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/SpecDec-RL-pard2-official-smoke-20260612/.container_cache/vllm_pard2_official_target_feat\"",
+      "name": "OCI profile uses verified PARD-2 vLLM site",
+      "status": "pass"
+    },
+    {
+      "detail": "WALLTIME=\"${WALLTIME:-${DEFAULT_WALLTIME}}\"",
+      "name": "walltime default is profile-specific",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "baseline case leaves no-spec defaults untouched",
+      "status": "pass"
+    },
+    {
+      "detail": "draft_format=\"pard2\"",
+      "name": "static_pard2 sets draft_format=\"pard2\"",
+      "status": "pass"
+    },
+    {
+      "detail": "draft_model=\"${DRAFTER}\"",
+      "name": "static_pard2 sets draft_model=\"${DRAFTER}\"",
+      "status": "pass"
+    },
+    {
+      "detail": "enable_vllm_specdec=\"true\"",
+      "name": "static_pard2 sets enable_vllm_specdec=\"true\"",
+      "status": "pass"
+    },
+    {
+      "detail": "specdec_method=\"pard2\"",
+      "name": "static_pard2 sets specdec_method=\"pard2\"",
+      "status": "pass"
+    },
+    {
+      "detail": "source_vllm_site=\"${SOURCE_VLLM_SITE}\"",
+      "name": "static_pard2 sets source_vllm_site=\"${SOURCE_VLLM_SITE}\"",
+      "status": "pass"
+    },
+    {
+      "detail": "pard2_patch_dir=\"${STAGE_REPO}/experiments/eagle3_qwen3_235b/patches\"",
+      "name": "static_pard2 sets pard2_patch_dir=\"${STAGE_REPO}/experiments/eagle3_qwen3_235b/patches\"",
+      "status": "pass"
+    },
+    {
+      "detail": "num_spec_tokens=\"${SPEC_NUM_TOKENS}\"",
+      "name": "static_pard2 sets num_spec_tokens=\"${SPEC_NUM_TOKENS}\"",
+      "status": "pass"
+    },
+    {
+      "detail": "include_draft_tp=\"true\"",
+      "name": "static_pard2 sets include_draft_tp=\"true\"",
+      "status": "pass"
+    },
+    {
+      "detail": "parallel_drafting=\"true\"",
+      "name": "static_pard2 sets parallel_drafting=\"true\"",
+      "status": "pass"
+    },
+    {
+      "detail": "force_local_transformer_spec=\"true\"",
+      "name": "static_pard2 sets force_local_transformer_spec=\"true\"",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "static_pard2 does not set policy_draft_enabled=\"true\"",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "static_pard2 does not set pard_online_training=\"true\"",
+      "status": "pass"
+    },
+    {
+      "detail": "draft_format=\"pard2\"",
+      "name": "online_pard2 sets draft_format=\"pard2\"",
+      "status": "pass"
+    },
+    {
+      "detail": "draft_model=\"${DRAFTER}\"",
+      "name": "online_pard2 sets draft_model=\"${DRAFTER}\"",
+      "status": "pass"
+    },
+    {
+      "detail": "enable_vllm_specdec=\"true\"",
+      "name": "online_pard2 sets enable_vllm_specdec=\"true\"",
+      "status": "pass"
+    },
+    {
+      "detail": "specdec_method=\"pard2\"",
+      "name": "online_pard2 sets specdec_method=\"pard2\"",
+      "status": "pass"
+    },
+    {
+      "detail": "source_vllm_site=\"${SOURCE_VLLM_SITE}\"",
+      "name": "online_pard2 sets source_vllm_site=\"${SOURCE_VLLM_SITE}\"",
+      "status": "pass"
+    },
+    {
+      "detail": "pard2_patch_dir=\"${STAGE_REPO}/experiments/eagle3_qwen3_235b/patches\"",
+      "name": "online_pard2 sets pard2_patch_dir=\"${STAGE_REPO}/experiments/eagle3_qwen3_235b/patches\"",
+      "status": "pass"
+    },
+    {
+      "detail": "num_spec_tokens=\"${SPEC_NUM_TOKENS}\"",
+      "name": "online_pard2 sets num_spec_tokens=\"${SPEC_NUM_TOKENS}\"",
+      "status": "pass"
+    },
+    {
+      "detail": "include_draft_tp=\"true\"",
+      "name": "online_pard2 sets include_draft_tp=\"true\"",
+      "status": "pass"
+    },
+    {
+      "detail": "parallel_drafting=\"true\"",
+      "name": "online_pard2 sets parallel_drafting=\"true\"",
+      "status": "pass"
+    },
+    {
+      "detail": "force_local_transformer_spec=\"true\"",
+      "name": "online_pard2 sets force_local_transformer_spec=\"true\"",
+      "status": "pass"
+    },
+    {
+      "detail": "policy_draft_enabled=\"true\"",
+      "name": "online_pard2 sets policy_draft_enabled=\"true\"",
+      "status": "pass"
+    },
+    {
+      "detail": "pard_online_training=\"true\"",
+      "name": "online_pard2 sets pard_online_training=\"true\"",
+      "status": "pass"
+    },
+    {
+      "detail": "debug_draft_refit=\"true\"",
+      "name": "online_pard2 sets debug_draft_refit=\"true\"",
+      "status": "pass"
+    },
+    {
+      "detail": "actor_uv_lock_mode=\"unlocked\"",
+      "name": "online_pard2 sets actor_uv_lock_mode=\"unlocked\"",
+      "status": "pass"
+    },
+    {
+      "detail": "force_rebuild_actor_venvs=\"${NRL_FORCE_REBUILD_ACTOR_VENVS}\"",
+      "name": "online_pard2 sets force_rebuild_actor_venvs=\"${NRL_FORCE_REBUILD_ACTOR_VENVS}\"",
+      "status": "pass"
+    },
+    {
+      "detail": "policy_draft_loss=\"pard2\"",
+      "name": "online_pard2 sets policy_draft_loss=\"pard2\"",
+      "status": "pass"
+    },
+    {
+      "detail": "policy_draft_cat_weighting=\"true\"",
+      "name": "online_pard2 sets policy_draft_cat_weighting=\"true\"",
+      "status": "pass"
+    },
+    {
+      "detail": "NRL_VLLM_OMIT_GENERATION_LOGPROBS=false",
+      "name": "remote command exports NRL_VLLM_OMIT_GENERATION_LOGPROBS=false",
+      "status": "pass"
+    },
+    {
+      "detail": "NRL_VLLM_DISABLE_LOG_STATS=false",
+      "name": "remote command exports NRL_VLLM_DISABLE_LOG_STATS=false",
+      "status": "pass"
+    },
+    {
+      "detail": "NRL_DEBUG_DRAFT_REFIT='${debug_draft_refit}'",
+      "name": "remote command exports NRL_DEBUG_DRAFT_REFIT='${debug_draft_refit}'",
+      "status": "pass"
+    },
+    {
+      "detail": "DRAFT_FORMAT='${draft_format}'",
+      "name": "remote command exports DRAFT_FORMAT='${draft_format}'",
+      "status": "pass"
+    },
+    {
+      "detail": "PARD_ONLINE_TRAINING='${pard_online_training}'",
+      "name": "remote command exports PARD_ONLINE_TRAINING='${pard_online_training}'",
+      "status": "pass"
+    },
+    {
+      "detail": "POLICY_DRAFT_ENABLED='${policy_draft_enabled}'",
+      "name": "remote command exports POLICY_DRAFT_ENABLED='${policy_draft_enabled}'",
+      "status": "pass"
+    },
+    {
+      "detail": "POLICY_DRAFT_TYPE=pard2",
+      "name": "remote command exports POLICY_DRAFT_TYPE=pard2",
+      "status": "pass"
+    },
+    {
+      "detail": "POLICY_DRAFT_LOSS='${policy_draft_loss}'",
+      "name": "remote command exports POLICY_DRAFT_LOSS='${policy_draft_loss}'",
+      "status": "pass"
+    },
+    {
+      "detail": "POLICY_DRAFT_CAT_WEIGHTING='${policy_draft_cat_weighting}'",
+      "name": "remote command exports POLICY_DRAFT_CAT_WEIGHTING='${policy_draft_cat_weighting}'",
+      "status": "pass"
+    },
+    {
+      "detail": "POLICY_DRAFT_MAX_TRAINING_SEQUENCE_LENGTH='${PARD_MAX_TRAINING_SEQUENCE_LENGTH}'",
+      "name": "remote command exports POLICY_DRAFT_MAX_TRAINING_SEQUENCE_LENGTH='${PARD_MAX_TRAINING_SEQUENCE_LENGTH}'",
+      "status": "pass"
+    },
+    {
+      "detail": "PARD_TRAINING_MODE=k_slot",
+      "name": "remote command exports PARD_TRAINING_MODE=k_slot",
+      "status": "pass"
+    },
+    {
+      "detail": "POLICY_DRAFT_ALLOW_GENERIC_PARD2_FALLBACK=false",
+      "name": "remote command exports POLICY_DRAFT_ALLOW_GENERIC_PARD2_FALLBACK=false",
+      "status": "pass"
+    },
+    {
+      "detail": "ENABLE_VLLM_SPECDEC='${enable_vllm_specdec}'",
+      "name": "remote command exports ENABLE_VLLM_SPECDEC='${enable_vllm_specdec}'",
+      "status": "pass"
+    },
+    {
+      "detail": "SPECDEC_METHOD='${specdec_method}'",
+      "name": "remote command exports SPECDEC_METHOD='${specdec_method}'",
+      "status": "pass"
+    },
+    {
+      "detail": "SOURCE_VLLM_SITE='${source_vllm_site}'",
+      "name": "remote command exports SOURCE_VLLM_SITE='${source_vllm_site}'",
+      "status": "pass"
+    },
+    {
+      "detail": "PARD2_OFFICIAL_VLLM_PATCH_DIR='${pard2_patch_dir}'",
+      "name": "remote command exports PARD2_OFFICIAL_VLLM_PATCH_DIR='${pard2_patch_dir}'",
+      "status": "pass"
+    },
+    {
+      "detail": "SBATCH_EXTRA_ARGS='${SBATCH_EXTRA_ARGS}'",
+      "name": "remote command exports SBATCH_EXTRA_ARGS='${SBATCH_EXTRA_ARGS}'",
+      "status": "pass"
+    },
+    {
+      "detail": "NUM_SPECULATIVE_TOKENS='${num_spec_tokens}'",
+      "name": "remote command exports NUM_SPECULATIVE_TOKENS='${num_spec_tokens}'",
+      "status": "pass"
+    },
+    {
+      "detail": "DRAFT_TP=1",
+      "name": "remote command exports DRAFT_TP=1",
+      "status": "pass"
+    },
+    {
+      "detail": "INCLUDE_DRAFT_TP='${include_draft_tp}'",
+      "name": "remote command exports INCLUDE_DRAFT_TP='${include_draft_tp}'",
+      "status": "pass"
+    },
+    {
+      "detail": "SPECDEC_PARALLEL_DRAFTING='${parallel_drafting}'",
+      "name": "remote command exports SPECDEC_PARALLEL_DRAFTING='${parallel_drafting}'",
+      "status": "pass"
+    },
+    {
+      "detail": "NRL_FORCE_LOCAL_TRANSFORMER_SPEC='${force_local_transformer_spec}'",
+      "name": "remote command exports NRL_FORCE_LOCAL_TRANSFORMER_SPEC='${force_local_transformer_spec}'",
+      "status": "pass"
+    },
+    {
+      "detail": "NRL_ACTOR_UV_LOCK_MODE='${actor_uv_lock_mode}'",
+      "name": "remote command exports NRL_ACTOR_UV_LOCK_MODE='${actor_uv_lock_mode}'",
+      "status": "pass"
+    },
+    {
+      "detail": "NRL_FORCE_REBUILD_ACTOR_VENVS='${force_rebuild_actor_venvs}'",
+      "name": "remote command exports NRL_FORCE_REBUILD_ACTOR_VENVS='${force_rebuild_actor_venvs}'",
+      "status": "pass"
+    },
+    {
+      "detail": "\"${ROOT_DIR}/remote_patch_pard2_official/\"",
+      "name": "staging/preflight includes \"${ROOT_DIR}/remote_patch_pard2_official/\"",
+      "status": "pass"
+    },
+    {
+      "detail": "\"${REMOTE_HOST}:${STAGE_REPO}/experiments/eagle3_qwen3_235b/remote_patches/SpecDec-RL/\"",
+      "name": "staging/preflight includes \"${REMOTE_HOST}:${STAGE_REPO}/experiments/eagle3_qwen3_235b/remote_patches/SpecDec-RL/\"",
+      "status": "pass"
+    },
+    {
+      "detail": "\"${ROOT_DIR}/experiments/eagle3_online/prepare_pard2_official_vllm_site.sh\"",
+      "name": "staging/preflight includes \"${ROOT_DIR}/experiments/eagle3_online/prepare_pard2_official_vllm_site.sh\"",
+      "status": "pass"
+    },
+    {
+      "detail": "\"${ROOT_DIR}/scripts/test_pard2_target_feature_alignment.py\"",
+      "name": "staging/preflight includes \"${ROOT_DIR}/scripts/test_pard2_target_feature_alignment.py\"",
+      "status": "pass"
+    },
+    {
+      "detail": "\"${ROOT_DIR}/scripts/test_vllm_draft_refit_target_proj.py\"",
+      "name": "staging/preflight includes \"${ROOT_DIR}/scripts/test_vllm_draft_refit_target_proj.py\"",
+      "status": "pass"
+    },
+    {
+      "detail": "nemo_rl/models/megatron/setup.py",
+      "name": "staging/preflight includes nemo_rl/models/megatron/setup.py",
+      "status": "pass"
+    },
+    {
+      "detail": "nemo_rl/models/megatron/community_import.py",
+      "name": "staging/preflight includes nemo_rl/models/megatron/community_import.py",
+      "status": "pass"
+    },
+    {
+      "detail": "PYTHONPATH='${SOURCE_VLLM_SITE}':\\${PYTHONPATH:-} python3 experiments/eagle3_qwen3_235b/patches/check_pard2_official_patch.py",
+      "name": "staging/preflight includes PYTHONPATH='${SOURCE_VLLM_SITE}':\\${PYTHONPATH:-} python3 experiments/eagle3_qwen3_235b/patches/check_pard2_official_patch.py",
+      "status": "pass"
+    },
+    {
+      "detail": "test -d '${SOURCE_VLLM_SITE}/vllm'",
+      "name": "staging/preflight includes test -d '${SOURCE_VLLM_SITE}/vllm'",
+      "status": "pass"
+    },
+    {
+      "detail": "nemo_rl/algorithms/utils.py",
+      "name": "staging/preflight includes nemo_rl/algorithms/utils.py",
+      "status": "pass"
+    },
+    {
+      "detail": "job_id,method,model,run_id,target_model,draft_model,num_speculative_tokens,max_steps,max_new_tokens,min_tokens,num_prompts,num_generations,train_global_batch_size,base_log_dir",
+      "name": "tracker CSV header exists",
+      "status": "pass"
+    },
+    {
+      "detail": "%s,%s,qwen8,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\\n",
+      "name": "tracker CSV row printf exists",
+      "status": "pass"
+    },
+    {
+      "detail": "14 columns",
+      "name": "tracker CSV header/row column count match",
+      "status": "pass"
+    },
+    {
+      "detail": "13 args",
+      "name": "tracker CSV printf placeholder/argument count match",
+      "status": "pass"
+    },
+    {
+      "detail": "base_log_dir",
+      "name": "tracker CSV keeps base_log_dir column",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/models/megatron/setup.py",
+      "name": "OCI overlay setup.py exists",
+      "status": "pass"
+    },
+    {
+      "detail": "def _set_gradient_accumulation_fusion(model_cfg: Any, enabled: bool) -> None:",
+      "name": "OCI overlay defines gradient-accumulation fusion helper",
+      "status": "pass"
+    },
+    {
+      "detail": "obj.gradient_accumulation_fusion = enabled",
+      "name": "OCI overlay sets provider or nested TransformerConfig fusion flag",
+      "status": "pass"
+    },
+    {
+      "detail": "for attr in (\"transformer\", \"transformer_config\", \"_model_config\"):",
+      "name": "OCI overlay descends into provider transformer holders",
+      "status": "pass"
+    },
+    {
+      "detail": "policy_cfg[\"megatron_cfg\"][\"gradient_accumulation_fusion\"]",
+      "name": "OCI overlay reapplies fusion flag before policy get_model",
+      "status": "pass"
+    },
+    {
+      "detail": "config[\"megatron_cfg\"][\"gradient_accumulation_fusion\"]",
+      "name": "OCI overlay reapplies fusion flag before reference get_model",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/remote_patches/SpecDec-RL/nemo_rl/models/megatron/community_import.py",
+      "name": "community_import.py source exists",
+      "status": "pass"
+    },
+    {
+      "detail": "def _set_gradient_accumulation_fusion(model_provider: Any, enabled: bool) -> None:",
+      "name": "community import defines gradient-accumulation fusion helper",
+      "status": "pass"
+    },
+    {
+      "detail": "for attr in (\"transformer\", \"transformer_config\", \"_model_config\"):",
+      "name": "community import descends into provider transformer holders",
+      "status": "pass"
+    },
+    {
+      "detail": "model_provider, megatron_config[\"gradient_accumulation_fusion\"]",
+      "name": "community import applies megatron_cfg fusion flag to provider",
+      "status": "pass"
+    },
+    {
+      "detail": "model_provider.finalize()",
+      "name": "community import finalizes provider",
+      "status": "pass"
+    },
+    {
+      "detail": "model_provider\\.finalize\\(\\).*?_set_gradient_accumulation_fusion\\(",
+      "name": "community import reapplies fusion flag after provider finalize",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/remote_patches/SpecDec-RL/nemo_rl/algorithms/utils.py",
+      "name": "algorithm utils.py source exists",
+      "status": "pass"
+    },
+    {
+      "detail": "std_rewards: torch.Tensor | None = None,",
+      "name": "advantage helper accepts std_rewards keyword",
+      "status": "pass"
+    },
+    {
+      "detail": "std_source_rewards = rewards if std_rewards is None else std_rewards",
+      "name": "advantage helper preserves default std source",
+      "status": "pass"
+    },
+    {
+      "detail": "prompt_std_mean =",
+      "name": "advantage helper computes separate std mean",
+      "status": "pass"
+    },
+    {
+      "detail": "prompt_baseline_square - prompt_std_mean.square()",
+      "name": "advantage helper std uses std_rewards mean",
+      "status": "pass"
+    },
+    {
+      "detail": "if hasattr(master_config, \"model_dump\"):",
+      "name": "performance metrics accepts pydantic MasterConfig",
+      "status": "pass"
+    },
+    {
+      "detail": "master_config = master_config.model_dump()",
+      "name": "performance metrics normalizes MasterConfig to dict",
+      "status": "pass"
+    }
+  ],
+  "community_import": "/Users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_qwen3_235b/remote_patches/SpecDec-RL/nemo_rl/models/megatron/community_import.py",
+  "launcher": "/Users/sna/Nemo-RL_Qwen3_Roadmap/experiments/eagle3_online/submit_lyris_qwen8_pard2_official_comparison_20260613.sh",
+  "oci_overlay_setup": "/Users/sna/Nemo-RL_Qwen3_Roadmap/.tmp_remote_current_oci/nemo_rl/models/megatron/setup.py",
+  "overall_status": "pass"
+}

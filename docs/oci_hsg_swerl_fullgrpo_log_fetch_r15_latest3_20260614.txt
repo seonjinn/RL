@@ -1,0 +1,35 @@
+# SWE-RL Full-GRPO log fetch
+Sun Jun 14 16:36:42 PDT 2026
+remote_host=oci-hsg-cs-001-vscode-02
+remote_output_root=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna
+local_log_root=tmp/oci_hsg_swerl_fullgrpo_logs_r15_latest3
+manifest=docs/oci_hsg_swerl_fullgrpo_log_fetch_manifest_r15_latest3_20260614.csv
+rows=1
+dry_run=false
+
+[3304067] Transfer starting: 21 files
+[3304067] ./
+[3304067] latest_235b_scale_gen_job_id.txt
+[3304067] slurm-3304067.out
+[3304067] 3304067-logs/
+[3304067] 3304067-logs/ray-driver.log
+[3304067] 3304067-logs/ray-head.log
+[3304067] 3304067-logs/ray-worker-1.log
+[3304067] 3304067-logs/ray-worker-10.log
+[3304067] 3304067-logs/ray-worker-11.log
+[3304067] 3304067-logs/ray-worker-12.log
+[3304067] 3304067-logs/ray-worker-13.log
+[3304067] 3304067-logs/ray-worker-14.log
+[3304067] 3304067-logs/ray-worker-15.log
+[3304067] 3304067-logs/ray-worker-2.log
+[3304067] 3304067-logs/ray-worker-3.log
+[3304067] 3304067-logs/ray-worker-4.log
+[3304067] 3304067-logs/ray-worker-5.log
+[3304067] 3304067-logs/ray-worker-6.log
+[3304067] 3304067-logs/ray-worker-7.log
+[3304067] 3304067-logs/ray-worker-8.log
+[3304067] 3304067-logs/ray-worker-9.log
+[3304067] 
+[3304067] sent 639 bytes  received 133063 bytes  1337020000 bytes/sec
+[3304067] total size is 437030  speedup is 3.27
+job 3304067 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_logs_r15_latest3/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eagerlvl0_r15/pard2_steps1_3304067

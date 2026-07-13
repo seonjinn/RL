@@ -1,0 +1,2 @@
+2121604|specdec-baseline-steps1-20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r18_openhandspath_trainbs32|FAILED|1:0|00:48:35|2026-06-14T16:43:25|2026-06-14T17:32:00|lyris[0145-0160]|None
+2121605|specdec-pard-steps1-20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r18_openhandspath_trainbs32|RUNNING|0:0|00:59:40|2026-06-14T16:43:55|Unknown|lyris[0272-0287]|None

@@ -1,0 +1,5 @@
+3299487|specdec-baseline-steps10-20260614_oci_hsg_swerl_qwen235b_fullgrpo_specdec_after_prewarm_n3post_wandb_r1|COMPLETED|0:0|03:39:53|2026-06-14T00:29:58|2026-06-14T04:09:51|nvl72077-T[01-16]|None
+3299488|specdec-suffix-steps10-20260614_oci_hsg_swerl_qwen235b_fullgrpo_specdec_after_prewarm_n3post_wandb_r1|FAILED|1:0|00:04:59|2026-06-14T00:29:58|2026-06-14T00:34:57|nvl72084-T[01-04,06-16,18]|None
+3299489|specdec-pard-steps10-20260614_oci_hsg_swerl_qwen235b_fullgrpo_specdec_after_prewarm_n3post_wandb_r1|COMPLETED|0:0|03:41:47|2026-06-14T00:29:58|2026-06-14T04:11:45|nvl72017-T[01-16]|None
+3299490|specdec-pard2-steps10-20260614_oci_hsg_swerl_qwen235b_fullgrpo_specdec_after_prewarm_n3post_wandb_r1|FAILED|1:0|00:04:35|2026-06-14T00:30:15|2026-06-14T00:34:50|nvl72169-T[01-03,05-13,15-18]|None
+3299491|specdec-eagle3-steps10-20260614_oci_hsg_swerl_qwen235b_fullgrpo_specdec_after_prewarm_n3post_wandb_r1|COMPLETED|0:0|03:49:50|2026-06-14T00:30:15|2026-06-14T04:20:05|nvl72035-T[01-16]|None

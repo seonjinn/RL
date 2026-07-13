@@ -1,0 +1,61 @@
+model_group,model,method,method_label,temperature,batch_size,state,job_id,tok_s_gpu,acceptance_pct,mean_accept_len,source,note,speedup
+qwen235b,Qwen3-235B-A22B,pard,PARD K16,0.0,1,COMPLETED,3460281,7.6069,23.6906,3.7905,final breakdown,,3.9770829216324266
+qwen235b,Qwen3-235B-A22B,pard,PARD K16,0.0,2,COMPLETED,3460282,10.7068,16.9907,2.7185,final breakdown,,2.761479662634797
+qwen235b,Qwen3-235B-A22B,pard,PARD K16,0.0,4,COMPLETED,3460283,19.7447,18.3441,2.9351,final breakdown,,2.5129261666514178
+qwen235b,Qwen3-235B-A22B,pard,PARD K16,0.0,8,COMPLETED,3460284,38.9195,16.8974,2.7036,final breakdown,,2.5076787141842978
+qwen235b,Qwen3-235B-A22B,pard,PARD K16,0.0,16,COMPLETED,3460287,60.6383,17.5098,2.8016,final breakdown,,2.5778311882696636
+qwen235b,Qwen3-235B-A22B,pard,PARD K16,0.0,32,COMPLETED,3460289,99.1811,17.4459,2.7913,final breakdown,,1.6301287425402884
+qwen235b,Qwen3-235B-A22B,pard,PARD K16,1.0,1,COMPLETED,3460295,8.6454,26.5863,4.2538,final breakdown,,4.473584941752851
+qwen235b,Qwen3-235B-A22B,pard,PARD K16,1.0,2,COMPLETED,3460300,8.3723,13.7458,2.1993,final breakdown,,2.1304306767493824
+qwen235b,Qwen3-235B-A22B,pard,PARD K16,1.0,4,COMPLETED,3460301,7.813,5.9579,0.9533,final breakdown,,1.0111681476076209
+qwen235b,Qwen3-235B-A22B,pard,PARD K16,1.0,8,COMPLETED,3460302,21.5785,11.4605,1.8337,final breakdown,,1.4660293737413173
+qwen235b,Qwen3-235B-A22B,pard,PARD K16,1.0,16,COMPLETED,3460303,35.4438,8.8623,1.418,final breakdown,,1.1936852109334937
+qwen235b,Qwen3-235B-A22B,pard,PARD K16,1.0,32,COMPLETED,3460305,64.293,11.8869,1.9019,final breakdown,,1.074599470011737
+qwen235b,Qwen3-235B-A22B,pard2,PARD-2 K16,0.0,1,COMPLETED,3460387,1.6249,0.2657,0.0425,final breakdown,,0.8495395022099055
+qwen235b,Qwen3-235B-A22B,pard2,PARD-2 K16,0.0,2,COMPLETED,3460388,3.31,0.2454,0.0393,final breakdown,,0.853709575533416
+qwen235b,Qwen3-235B-A22B,pard2,PARD-2 K16,0.0,4,COMPLETED,3460389,6.3086,0.1728,0.0276,final breakdown,,0.8029013363047873
+qwen235b,Qwen3-235B-A22B,pard2,PARD-2 K16,0.0,8,COMPLETED,3460391,12.7353,0.3047,0.0487,final breakdown,,0.8205665727656133
+qwen235b,Qwen3-235B-A22B,pard2,PARD-2 K16,0.0,16,COMPLETED,3460392,24.5741,0.3459,0.0553,final breakdown,,1.0446843233345515
+qwen235b,Qwen3-235B-A22B,pard2,PARD-2 K16,0.0,32,COMPLETED,3460393,43.6521,0.2819,0.0451,final breakdown,,0.7174607146144065
+qwen235b,Qwen3-235B-A22B,pard2,PARD-2 K16,1.0,1,COMPLETED,3460394,1.6218,0.0843,0.0135,final breakdown,,0.839204670522448
+qwen235b,Qwen3-235B-A22B,pard2,PARD-2 K16,1.0,2,COMPLETED,3460395,3.1589,0.1292,0.0207,final breakdown,,0.803819436090874
+qwen235b,Qwen3-235B-A22B,pard2,PARD-2 K16,1.0,4,COMPLETED,3460397,5.1509,0.0474,0.0076,final breakdown,,0.6666358647782024
+qwen235b,Qwen3-235B-A22B,pard2,PARD-2 K16,1.0,8,COMPLETED,3460398,12.3553,0.2097,0.0336,final breakdown,,0.8394111139044
+qwen235b,Qwen3-235B-A22B,pard2,PARD-2 K16,1.0,16,COMPLETED,3460399,22.8324,0.2472,0.0395,final breakdown,,0.7689553098177367
+qwen235b,Qwen3-235B-A22B,pard2,PARD-2 K16,1.0,32,COMPLETED,3460400,43.4963,0.1144,0.0183,final breakdown,,0.7270013987132581
+qwen30ba3b,Qwen3-30B-A3B,pard,PARD K16,0.0,1,COMPLETED,3460307,39.7921,15.6333,2.5013,final breakdown,,
+qwen30ba3b,Qwen3-30B-A3B,pard,PARD K16,0.0,2,COMPLETED,3460308,69.4206,17.4609,2.7937,final breakdown,,
+qwen30ba3b,Qwen3-30B-A3B,pard,PARD K16,0.0,4,COMPLETED,3460309,102.418,16.38,2.6208,final breakdown,,1.452332501016365
+qwen30ba3b,Qwen3-30B-A3B,pard,PARD K16,0.0,8,COMPLETED,3460310,238.5302,15.2983,2.4477,final breakdown,,1.93020422202839
+qwen30ba3b,Qwen3-30B-A3B,pard,PARD K16,0.0,16,COMPLETED,3460312,385.4529,16.6705,2.6673,final breakdown,,1.3926179370658904
+qwen30ba3b,Qwen3-30B-A3B,pard,PARD K16,0.0,32,COMPLETED,3460313,367.2712,15.1939,2.431,final breakdown,,0.7243050476939977
+qwen30ba3b,Qwen3-30B-A3B,pard,PARD K16,1.0,1,COMPLETED,3460314,60.2711,26.9321,4.3091,final breakdown,,
+qwen30ba3b,Qwen3-30B-A3B,pard,PARD K16,1.0,2,COMPLETED,3460315,43.1762,9.9733,1.5957,final breakdown,,
+qwen30ba3b,Qwen3-30B-A3B,pard,PARD K16,1.0,4,COMPLETED,3460316,137.3196,20.9384,3.3501,final breakdown,,1.8961608652759152
+qwen30ba3b,Qwen3-30B-A3B,pard,PARD K16,1.0,8,COMPLETED,3460317,223.4431,18.3412,2.9346,final breakdown,,1.7091064426794431
+qwen30ba3b,Qwen3-30B-A3B,pard,PARD K16,1.0,16,COMPLETED,3460318,365.8623,16.3445,2.6151,final breakdown,,1.474432906409716
+qwen30ba3b,Qwen3-30B-A3B,pard,PARD K16,1.0,32,COMPLETED,3460319,383.9973,15.8549,2.5368,final breakdown,,0.8117471288933701
+qwen32,Qwen3-32B,pard,PARD K16,0.0,1,COMPLETED,3460320,21.6483,22.1157,3.5385,final breakdown,,3.3080870093342956
+qwen32,Qwen3-32B,pard,PARD K16,0.0,2,COMPLETED,3460321,64.4241,51.3757,8.2201,final breakdown,,4.210380861502217
+qwen32,Qwen3-32B,pard,PARD K16,0.0,4,COMPLETED,3460322,43.6794,15.1259,2.4201,final breakdown,,1.356418863804333
+qwen32,Qwen3-32B,pard,PARD K16,0.0,8,COMPLETED,3460325,101.5217,34.1102,5.4576,final breakdown,,1.627127471080325
+qwen32,Qwen3-32B,pard,PARD K16,0.0,16,COMPLETED,3460327,130.2311,20.9066,3.3451,final breakdown,,1.053573271211632
+qwen32,Qwen3-32B,pard,PARD K16,0.0,32,COMPLETED,3460344,198.2569,22.6118,3.6179,final breakdown,,1.3880301884785131
+qwen32,Qwen3-32B,pard,PARD K16,1.0,1,COMPLETED,3460346,14.2184,12.6529,2.0245,final breakdown,,1.940601548668735
+qwen32,Qwen3-32B,pard,PARD K16,1.0,2,RUNNING,3463077,25.35,8.4,2.34,live log; tok/s/GPU adjusted to TP=2 for qwen32,live,1.639290937575154
+qwen32,Qwen3-32B,pard,PARD K16,1.0,4,RUNNING,3463079,76.3,17.9,3.86,live log; tok/s/GPU adjusted to TP=2 for qwen32,live,2.4474325562243955
+qwen32,Qwen3-32B,pard,PARD K16,1.0,8,RUNNING,3463085,122.7,12.6,3.01,live log; tok/s/GPU adjusted to TP=2 for qwen32,live,1.9682675549668363
+qwen32,Qwen3-32B,pard,PARD K16,1.0,16,RUNNING,3463087,200.55,14.9,3.38,live log; tok/s/GPU adjusted to TP=2 for qwen32,live,1.6050507326486418
+qwen32,Qwen3-32B,pard,PARD K16,1.0,32,RUNNING,3463089,316.3,13.4,3.14,live log; tok/s/GPU adjusted to TP=2 for qwen32,live,1.5205988014179816
+qwen32,Qwen3-32B,pard2,PARD-2 K16,0.0,1,FAILED,3463104,,,,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,
+qwen32,Qwen3-32B,pard2,PARD-2 K16,0.0,2,FAILED,3463105,,,,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,
+qwen32,Qwen3-32B,pard2,PARD-2 K16,0.0,4,FAILED,3463106,,,,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,
+qwen32,Qwen3-32B,pard2,PARD-2 K16,0.0,8,FAILED,3463108,,,,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,
+qwen32,Qwen3-32B,pard2,PARD-2 K16,0.0,16,FAILED,3463110,,,,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,
+qwen32,Qwen3-32B,pard2,PARD-2 K16,0.0,32,FAILED,3463111,,,,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,
+qwen32,Qwen3-32B,pard2,PARD-2 K16,1.0,1,FAILED,3463112,,,,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,
+qwen32,Qwen3-32B,pard2,PARD-2 K16,1.0,2,FAILED,3463113,,,,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,
+qwen32,Qwen3-32B,pard2,PARD-2 K16,1.0,4,FAILED,3463115,,,,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,
+qwen32,Qwen3-32B,pard2,PARD-2 K16,1.0,8,FAILED,3463117,,,,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,
+qwen32,Qwen3-32B,pard2,PARD-2 K16,1.0,16,FAILED,3463118,,,,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,
+qwen32,Qwen3-32B,pard2,PARD-2 K16,1.0,32,FAILED,3463120,,,,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,failed: HF_HUB_OFFLINE cache miss for amd/PARD2-Qwen3-14B/warp_model.bin during PARD-2 warp resolve,

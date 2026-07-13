@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lyris NeMo-RL SpecDec Status 2026-06-19</title>
+<style>
+:root { --ink:#172033; --muted:#637083; --line:#d8dee8; --bg:#f6f8fb; --panel:#fff; --blue:#2d6cdf; --green:#157f47; --red:#b42318; --amber:#946200; }
+body { margin:0; font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--ink); background:var(--bg); }
+header { padding:28px 32px 18px; background:#fff; border-bottom:1px solid var(--line); }
+h1 { margin:0 0 8px; font-size:28px; letter-spacing:0; }
+.subtitle { color:var(--muted); font-size:15px; }
+main { max-width:1480px; margin:0 auto; padding:22px 28px 42px; }
+section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:18px; margin:0 0 18px; }
+h2 { margin:0 0 12px; font-size:20px; }
+.kpis { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-top:12px; }
+.kpi { border:1px solid var(--line); border-radius:8px; padding:12px; background:#fbfcfe; }
+.kpi b { display:block; font-size:24px; margin-bottom:2px; }
+.kpi span { color:var(--muted); }
+ul { margin:8px 0 0 20px; padding:0; }
+li { margin:5px 0; }
+table { width:100%; border-collapse:collapse; margin-top:10px; font-size:14px; }
+th,td { border-bottom:1px solid var(--line); padding:8px 9px; text-align:left; vertical-align:middle; }
+th { font-size:13px; color:#304057; background:#f1f4f8; position:sticky; top:0; }
+.ok { color:var(--green); font-weight:700; } .warn { color:var(--amber); font-weight:700; } .bad { color:var(--red); font-weight:700; } .muted { color:var(--muted); }
+.bar { min-width:96px; height:24px; position:relative; background:#eef3fb; border-radius:5px; overflow:hidden; }
+.bar span { position:absolute; inset:0 auto 0 0; background:#8ab4f8; }
+.bar b { position:relative; display:block; padding:2px 7px; font-size:13px; color:#111827; }
+.sources code { font-size:13px; }
+@media (max-width:900px) { main { padding:14px; } .kpis { grid-template-columns:1fr 1fr; } table { font-size:13px; } th,td { padding:7px; } }
+</style>
+</head>
+<body>
+<header>
+<h1>Lyris NeMo-RL Performance Config SpecDec Status</h1>
+<div class="subtitle">Updated 2026-06-19 13:55 PDT. Current queue check: no active matching Lyris NeMo-RL jobs.</div>
+</header>
+<main>
+<section>
+<h2>Key Findings</h2>
+<ul>
+<li>Qwen3-30B-A3B and Qwen3-32B performance-config OSL=4096 Step20 runs have usable metrics; Eagle-3 is the only consistently positive SpecDec method in this NeMo-RL matrix.</li>
+<li>Qwen3-235B-A22B is still not stable for recipe-default OSL=8192 Step20: no matched baseline completed a usable step.</li>
+<li>Qwen235B OSL=1024 step1 canaries now complete; the step3 fallback completes step1 but times out in step2 with NCCL ALLGATHER_BASE watchdog / EngineDeadError.</li>
+</ul>
+<div class="kpis">
+<div class="kpi"><b>22</b><span>usable Qwen30/32 rows</span></div>
+<div class="kpi"><b>2</b><span>Qwen235B OSL1024 completed step1 canaries</span></div>
+<div class="kpi"><b>20</b><span>Qwen235B OSL8192 step20 jobs cancelled no-allocation</span></div>
+<div class="kpi"><b>88</b><span>top-level jobs in latest sacct refresh</span></div>
+</div>
+</section>
+<section>
+<h2>Methodology</h2>
+<ul>
+<li>NeMo-RL GRPO performance recipes from latest-main merged worktree with SpecDec added.</li>
+<li>Sampling uses temperature=1.0 and top_p=1.0.</li>
+<li>Lyris GB200 with 4 GPUs/node, segment-aware submission, no <code>--gres=gpu:4</code>.</li>
+<li>Qwen30/Qwen32 recipe-default Max OSL=4096; Qwen235B recipe-default Max OSL=8192; Qwen235B debug canaries use Max OSL=1024.</li>
+<li>Speedups are matched only within the same model, RL mode, and Max OSL baseline.</li>
+</ul>
+</section>
+<section>
+<h2>Qwen30/Qwen32 Recipe OSL=4096 Step20</h2>
+<table><thead><tr><th>Model</th><th>Mode</th><th>Method</th><th>Job</th><th>Steps</th><th>State</th><th>E2E step</th><th>E2E throughput</th><th>Gen time</th><th>Gen tok/s/GPU</th><th>Gen speed</th><th>Accept</th><th>Mean len</th></tr></thead><tbody>
+<tr><td class="">Qwen3-30B-A3B</td><td class="">sync</td><td class="">baseline</td><td class="">2152132</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">421.7s</td><td><div class="bar"><span style="width:45.5%"></span><b>1.00x</b></div></td><td class="">278.5s</td><td class="">1500.1</td><td><div class="bar"><span style="width:35.7%"></span><b>1.00x</b></div></td><td class="">n/a</td><td class="">n/a</td></tr>
+<tr><td class="">Qwen3-30B-A3B</td><td class="">sync</td><td class="">Eagle-3</td><td class="">2152193</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">299.4s</td><td><div class="bar"><span style="width:63.2%"></span><b>1.39x</b></div></td><td class="">127.8s</td><td class="">3226.3</td><td><div class="bar"><span style="width:76.8%"></span><b>2.15x</b></div></td><td class="">63.9%</td><td class="">2.87</td></tr>
+<tr><td class="">Qwen3-30B-A3B</td><td class="">sync</td><td class="">Suffix</td><td class="">2152134</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">415.2s</td><td><div class="bar"><span style="width:46.1%"></span><b>1.01x</b></div></td><td class="">240.0s</td><td class="">1731.1</td><td><div class="bar"><span style="width:41.2%"></span><b>1.15x</b></div></td><td class="">11.3%</td><td class="">1.84</td></tr>
+<tr><td class="">Qwen3-30B-A3B</td><td class="">sync</td><td class="">PARD K=5</td><td class="">2152135</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">427.5s</td><td><div class="bar"><span style="width:44.7%"></span><b>0.98x</b></div></td><td class="">280.9s</td><td class="">1478.0</td><td><div class="bar"><span style="width:35.2%"></span><b>0.99x</b></div></td><td class="">36.6%</td><td class="">2.29</td></tr>
+<tr><td class="">Qwen3-30B-A3B</td><td class="">sync</td><td class="">baseline fuse_loss=false</td><td class="">2152320</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">449.7s</td><td><div class="bar"><span style="width:42.6%"></span><b>0.94x</b></div></td><td class="">299.3s</td><td class="">1395.1</td><td><div class="bar"><span style="width:33.2%"></span><b>0.93x</b></div></td><td class="">n/a</td><td class="">n/a</td></tr>
+<tr><td class="">Qwen3-30B-A3B</td><td class="">async-1off</td><td class="">baseline</td><td class="">2152136</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">425.6s</td><td><div class="bar"><span style="width:45.5%"></span><b>1.00x</b></div></td><td class="">n/a</td><td class="">1998.4</td><td><div class="bar"><span style="width:35.7%"></span><b>1.00x</b></div></td><td class="">n/a</td><td class="">n/a</td></tr>
+<tr><td class="">Qwen3-30B-A3B</td><td class="">async-1off</td><td class="">Eagle-3</td><td class="">2152194</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">338.2s</td><td><div class="bar"><span style="width:56.7%"></span><b>1.25x</b></div></td><td class="">n/a</td><td class="">2510.4</td><td><div class="bar"><span style="width:44.9%"></span><b>1.26x</b></div></td><td class="">n/a</td><td class="">n/a</td></tr>
+<tr><td class="">Qwen3-30B-A3B</td><td class="">async-1off</td><td class="">Suffix</td><td class="">2152138</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">477.2s</td><td><div class="bar"><span style="width:40.8%"></span><b>0.90x</b></div></td><td class="">n/a</td><td class="">1794.7</td><td><div class="bar"><span style="width:32.1%"></span><b>0.90x</b></div></td><td class="">n/a</td><td class="">n/a</td></tr>
+<tr><td class="">Qwen3-30B-A3B</td><td class="">async-1off</td><td class="">PARD K=5</td><td class="">2152139</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">450.6s</td><td><div class="bar"><span style="width:43.2%"></span><b>0.95x</b></div></td><td class="">n/a</td><td class="">1894.6</td><td><div class="bar"><span style="width:33.9%"></span><b>0.95x</b></div></td><td class="">n/a</td><td class="">n/a</td></tr>
+<tr><td class="">Qwen3-30B-A3B</td><td class="">async-1off</td><td class="">baseline fuse_loss=false</td><td class="">2152321</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">416.6s</td><td><div class="bar"><span style="width:46.7%"></span><b>1.03x</b></div></td><td class="">n/a</td><td class="">2052.3</td><td><div class="bar"><span style="width:36.7%"></span><b>1.03x</b></div></td><td class="">n/a</td><td class="">n/a</td></tr>
+<tr><td class="">Qwen3-32B</td><td class="">sync</td><td class="">baseline</td><td class="">2152140</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">536.1s</td><td><div class="bar"><span style="width:45.5%"></span><b>1.00x</b></div></td><td class="">331.8s</td><td class="">1269.6</td><td><div class="bar"><span style="width:35.7%"></span><b>1.00x</b></div></td><td class="">n/a</td><td class="">n/a</td></tr>
+<tr><td class="">Qwen3-32B</td><td class="">sync</td><td class="">Eagle-3</td><td class="">2152195</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">395.2s</td><td><div class="bar"><span style="width:60.6%"></span><b>1.33x</b></div></td><td class="">192.6s</td><td class="">2150.3</td><td><div class="bar"><span style="width:60.5%"></span><b>1.69x</b></div></td><td class="">45.2%</td><td class="">2.33</td></tr>
+<tr><td class="">Qwen3-32B</td><td class="">sync</td><td class="">Suffix</td><td class="">2152499</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">592.5s</td><td><div class="bar"><span style="width:40.3%"></span><b>0.89x</b></div></td><td class="">386.1s</td><td class="">1070.8</td><td><div class="bar"><span style="width:30.1%"></span><b>0.84x</b></div></td><td class="">16.9%</td><td class="">1.94</td></tr>
+<tr><td class="">Qwen3-32B</td><td class="">sync</td><td class="">PARD K=5</td><td class="">2152143</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">562.2s</td><td><div class="bar"><span style="width:43.4%"></span><b>0.95x</b></div></td><td class="">370.6s</td><td class="">1138.2</td><td><div class="bar"><span style="width:32.0%"></span><b>0.90x</b></div></td><td class="">31.8%</td><td class="">2.00</td></tr>
+<tr><td class="">Qwen3-32B</td><td class="">sync</td><td class="">PARD-2</td><td class="">2152532</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">873.4s</td><td><div class="bar"><span style="width:27.8%"></span><b>0.61x</b></div></td><td class="">677.2s</td><td class="">623.9</td><td><div class="bar"><span style="width:17.6%"></span><b>0.49x</b></div></td><td class="">1.0%</td><td class="">1.05</td></tr>
+<tr><td class="">Qwen3-32B</td><td class="">sync</td><td class="">baseline fuse_loss=false</td><td class="">2152343</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">544.1s</td><td><div class="bar"><span style="width:44.8%"></span><b>0.99x</b></div></td><td class="">331.2s</td><td class="">1272.9</td><td><div class="bar"><span style="width:35.8%"></span><b>1.00x</b></div></td><td class="">n/a</td><td class="">n/a</td></tr>
+<tr><td class="">Qwen3-32B</td><td class="">async-1off</td><td class="">baseline</td><td class="">2152144</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">227.5s</td><td><div class="bar"><span style="width:45.5%"></span><b>1.00x</b></div></td><td class="">n/a</td><td class="">1910.5</td><td><div class="bar"><span style="width:35.7%"></span><b>1.00x</b></div></td><td class="">n/a</td><td class="">n/a</td></tr>
+<tr><td class="">Qwen3-32B</td><td class="">async-1off</td><td class="">Eagle-3</td><td class="">2152196</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">189.0s</td><td><div class="bar"><span style="width:54.0%"></span><b>1.19x</b></div></td><td class="">n/a</td><td class="">2281.9</td><td><div class="bar"><span style="width:42.7%"></span><b>1.19x</b></div></td><td class="">n/a</td><td class="">n/a</td></tr>
+<tr><td class="">Qwen3-32B</td><td class="">async-1off</td><td class="">Suffix</td><td class="">2152146</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">494.9s</td><td><div class="bar"><span style="width:20.9%"></span><b>0.46x</b></div></td><td class="">n/a</td><td class="">873.3</td><td><div class="bar"><span style="width:16.3%"></span><b>0.46x</b></div></td><td class="">n/a</td><td class="">n/a</td></tr>
+<tr><td class="">Qwen3-32B</td><td class="">async-1off</td><td class="">PARD K=5</td><td class="">2152147</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">244.6s</td><td><div class="bar"><span style="width:42.7%"></span><b>0.94x</b></div></td><td class="">n/a</td><td class="">1794.2</td><td><div class="bar"><span style="width:33.5%"></span><b>0.94x</b></div></td><td class="">n/a</td><td class="">n/a</td></tr>
+<tr><td class="">Qwen3-32B</td><td class="">async-1off</td><td class="">PARD-2</td><td class="">2152218</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">339.3s</td><td><div class="bar"><span style="width:32.0%"></span><b>0.70x</b></div></td><td class="">n/a</td><td class="">1344.2</td><td><div class="bar"><span style="width:25.1%"></span><b>0.70x</b></div></td><td class="">n/a</td><td class="">n/a</td></tr>
+<tr><td class="">Qwen3-32B</td><td class="">async-1off</td><td class="">baseline fuse_loss=false</td><td class="">2152344</td><td class="">19/20 last 20</td><td class="ok">COMPLETED</td><td class="">238.6s</td><td><div class="bar"><span style="width:44.2%"></span><b>0.97x</b></div></td><td class="">n/a</td><td class="">1864.5</td><td><div class="bar"><span style="width:34.9%"></span><b>0.98x</b></div></td><td class="">n/a</td><td class="">n/a</td></tr>
+</tbody></table>
+</section>
+<section>
+<h2>Qwen235B OSL=1024 Canary Metrics</h2>
+<table><thead><tr><th>Job</th><th>Max OSL</th><th>Steps</th><th>State</th><th>E2E step</th><th>Generation time</th><th>E2E tok/s/GPU</th><th>Gen tok/s/GPU</th><th>Note</th></tr></thead><tbody>
+<tr><td class="">2153816</td><td class="">1024</td><td class="">1/1 last 1</td><td class="ok">COMPLETED</td><td class="">268.6s</td><td class="">151.6s</td><td class="">16.7</td><td class="">29.6</td><td class="">OSL1024 step1 canary; completed one step, shutdown warnings only.</td></tr>
+<tr><td class="">2153824</td><td class="">1024</td><td class="">1/1 last 1</td><td class="ok">COMPLETED</td><td class="">260.0s</td><td class="">143.3s</td><td class="">17.2</td><td class="">31.3</td><td class="">OSL1024 backfill step1 canary; clean completed one step.</td></tr>
+<tr><td class="">2154865</td><td class="">1024</td><td class="">1/3 last 2</td><td class="warn">TIMEOUT</td><td class="">257.2s</td><td class="">141.6s</td><td class="">17.5</td><td class="">31.7</td><td class="">OSL1024 step3 fallback; completed step1, timed out in step2 with NCCL ALLGATHER_BASE watchdog / EngineDeadError.</td></tr>
+</tbody></table>
+</section>
+<section>
+<h2>Qwen235B Terminal Status Highlights</h2>
+<p class="muted">OSL=8192 remains blocked before a usable completed baseline step. The OSL=1024 canary path proves one step can finish, but repeated steps hit NCCL/vLLM EngineDead.</p>
+<table><thead><tr><th>Job</th><th>OSL</th><th>Max steps</th><th>State</th><th>Elapsed</th><th>Nodes</th><th>Note</th></tr></thead><tbody>
+<tr><td class="">2152615</td><td class="">8192</td><td class="">3</td><td class="bad">FAILED</td><td class="">01:38:01</td><td class="">32</td><td class="">OSL8192 no-SHARP alltoall flex-none baseline; failed before first parsed completed step.</td></tr>
+<tr><td class="">2152682</td><td class="">8192</td><td class="">3</td><td class="warn">CANCELLED by 2001147693</td><td class="">01:20:19</td><td class="">32</td><td class="">OSL8192 baseline cancelled after about 1h20 in Step 1 policy training; no Total step time.</td></tr>
+<tr><td class="">2153775</td><td class="">1024</td><td class="">3</td><td class="bad">TIMEOUT</td><td class="">01:15:04</td><td class="">32</td><td class="">OSL1024 step3 attempt timed out; superseded by corrected step1 canaries.</td></tr>
+<tr><td class="">2153816</td><td class="">1024</td><td class="">1</td><td class="ok">COMPLETED</td><td class="">00:20:25</td><td class="">32</td><td class="">OSL1024 step1 completed; shutdown warning after completion.</td></tr>
+<tr><td class="">2153824</td><td class="">1024</td><td class="">1</td><td class="ok">COMPLETED</td><td class="">00:19:58</td><td class="">32</td><td class="">OSL1024 step1 completed cleanly.</td></tr>
+<tr><td class="">2154865</td><td class="">1024</td><td class="">3</td><td class="bad">TIMEOUT</td><td class="">01:15:21</td><td class="">32</td><td class="">OSL1024 step3 completed step1 then timed out in step2 on NCCL ALLGATHER_BASE.</td></tr>
+</tbody></table>
+</section>
+<section class="sources">
+<h2>Sources</h2>
+<ul>
+<li><code>docs/lyris_nemorl_perfcfg_latest_summary_20260619.csv</code></li>
+<li><code>docs/lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv</code></li>
+<li><code>docs/lyris_nemorl_qwen235b_osl1024_canary_summary_20260619.csv</code></li>
+<li><code>docs/lyris_nemorl_perfcfg_sacct_20260619.raw</code></li>
+<li><code>docs/lyris_nemorl_squeue_20260619.raw</code></li>
+</ul>
+</section>
+</main>
+</body></html>

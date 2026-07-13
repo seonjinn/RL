@@ -1,0 +1,23 @@
+# NeMo-RL integrated log fetch
+Sat Jun 13 23:50:47 PDT 2026
+remote_host=oci-hsg-cs-001-vscode-02
+local_log_root=tmp/oci_hsg_nemorl_integrated_logs
+manifest=docs/oci_hsg_nemorl_integrated_log_fetch_manifest_20260613.csv
+rows=3
+dry_run=false
+
+[3288181] Transfer starting: 5 files
+[3288181] 
+[3288181] sent 138 bytes  received 185 bytes  3230000 bytes/sec
+[3288181] total size is 357761  speedup is 1107.62
+job 3288181 local_log_files=3 dir=tmp/oci_hsg_nemorl_integrated_logs/20260613_oci_hsg_qwen8_pard2_official_comparison_masterconfigfix_shortqos/qwen8_baseline
+[3288183] Transfer starting: 5 files
+[3288183] 
+[3288183] sent 138 bytes  received 185 bytes  3230000 bytes/sec
+[3288183] total size is 415395  speedup is 1286.05
+job 3288183 local_log_files=3 dir=tmp/oci_hsg_nemorl_integrated_logs/20260613_oci_hsg_qwen8_pard2_official_comparison_masterconfigfix_shortqos/qwen8_online_pard2
+[3288182] Transfer starting: 5 files
+[3288182] 
+[3288182] sent 138 bytes  received 185 bytes  3230000 bytes/sec
+[3288182] total size is 388720  speedup is 1203.46
+job 3288182 local_log_files=3 dir=tmp/oci_hsg_nemorl_integrated_logs/20260613_oci_hsg_qwen8_pard2_official_comparison_masterconfigfix_shortqos/qwen8_static_pard2

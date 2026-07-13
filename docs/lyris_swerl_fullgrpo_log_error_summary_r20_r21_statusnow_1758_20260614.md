@@ -1,0 +1,9 @@
+# SWE-RL Full-GRPO Log Error Summary
+
+Manifest: `docs/lyris_swerl_fullgrpo_log_fetch_manifest_r20_r21_statusnow_1758_20260614.csv`
+
+| job_id | method | steps | state | local logs | first error excerpt |
+| --- | --- | ---: | --- | ---: | --- |
+| 2122398 | baseline | 1 | RUNNING | 18 | Building transformer-engine @ git+https://github.com/NVIDIA/TransformerEngine.git@366798ef8a0a00d8f2c1650d11e7e623d7c33e26 |
+| 2122399 | pard2 | 1 | RUNNING | 18 | Building transformer-engine @ git+https://github.com/NVIDIA/TransformerEngine.git@366798ef8a0a00d8f2c1650d11e7e623d7c33e26 |
+| 2122466 | pard | 1 | PENDING | 0 | no local log/error excerpt available |

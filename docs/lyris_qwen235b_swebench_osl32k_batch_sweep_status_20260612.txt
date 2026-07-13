@@ -1,0 +1,232 @@
+Fri Jun 12 16:14:21 PDT 2026
+JOBID NAME STATE NODES TRES_PER_NODE NODELIST(REASON) START_TIME TIME
+2109519 coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2 RUNNING 1 N/A lyris0206 2026-06-12T14:42:49 1:31:32
+2109521 coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2 RUNNING 1 N/A lyris0026 2026-06-12T14:42:49 1:31:32
+2109535 coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs8 RUNNING 1 N/A lyris0233 2026-06-12T14:44:54 1:29:27
+2109536 coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs8 RUNNING 1 N/A lyris0209 2026-06-12T14:44:54 1:29:27
+2109538 coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs16 RUNNING 1 N/A lyris0047 2026-06-12T14:44:54 1:29:27
+2109530 coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs4 RUNNING 1 N/A lyris0276 2026-06-12T14:44:23 1:29:58
+2109533 coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs8 RUNNING 1 N/A lyris0211 2026-06-12T14:44:23 1:29:58
+2109528 coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs4 RUNNING 1 N/A lyris0031 2026-06-12T14:43:51 1:30:30
+2109523 coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs4 RUNNING 1 N/A lyris0062 2026-06-12T14:43:20 1:31:01
+2109572 coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs16 RUNNING 1 N/A lyris0218 2026-06-12T14:47:00 1:27:21
+2109574 coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs16 RUNNING 1 N/A lyris0202 2026-06-12T14:47:00 1:27:21
+2109567 coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs16 RUNNING 1 N/A lyris0256 2026-06-12T14:46:28 1:27:53
+2109564 coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs8 RUNNING 1 N/A lyris0270 2026-06-12T14:45:57 1:28:24
+2109554 coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs4 RUNNING 1 N/A lyris0127 2026-06-12T14:45:26 1:28:55
+2109556 coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs4 RUNNING 1 N/A lyris0144 2026-06-12T14:45:26 1:28:55
+2109557 coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs4 RUNNING 1 N/A lyris0091 2026-06-12T14:45:26 1:28:55
+2109560 coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs8 RUNNING 1 N/A lyris0095 2026-06-12T14:45:26 1:28:55
+2109563 coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs8 RUNNING 1 N/A lyris0100 2026-06-12T14:45:26 1:28:55
+2109540 coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs16 RUNNING 1 N/A lyris0272 2026-06-12T14:44:54 1:29:27
+2109541 coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs16 RUNNING 1 N/A lyris0280 2026-06-12T14:44:54 1:29:27
+2109543 coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs32 RUNNING 1 N/A lyris0269 2026-06-12T14:44:54 1:29:27
+2109545 coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs32 RUNNING 1 N/A lyris0174 2026-06-12T14:44:54 1:29:27
+2109546 coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs32 RUNNING 1 N/A lyris0139 2026-06-12T14:44:54 1:29:27
+2109548 coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2 RUNNING 1 N/A lyris0099 2026-06-12T14:44:54 1:29:27
+2109551 coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2 RUNNING 1 N/A lyris0022 2026-06-12T14:44:54 1:29:27
+2109552 coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2 RUNNING 1 N/A lyris0035 2026-06-12T14:44:54 1:29:27
+2109517 coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2 RUNNING 1 N/A lyris0175 2026-06-12T14:42:17 1:32:04
+2109579 coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs32 RUNNING 1 N/A lyris0052 2026-06-12T14:52:46 1:21:35
+2109576 coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs32 RUNNING 1 N/A lyris0050 2026-06-12T14:48:03 1:26:18
+2109578 coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs32 RUNNING 1 N/A lyris0265 2026-06-12T14:50:09 1:24:12
+2109517                               coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2    RUNNING      0:0   01:32:04 2026-06-12T14:42:17             Unknown 
+2109517.bat+                                                                                                                    batch    RUNNING      0:0   01:32:04 2026-06-12T14:42:17             Unknown 
+2109517.ext+                                                                                                                   extern    RUNNING      0:0   01:32:04 2026-06-12T14:42:17             Unknown 
+2109517.0                                                                                                                        bash    RUNNING      0:0   01:31:44 2026-06-12T14:42:37             Unknown 
+2109518                                 coreai_dlalgo_llm-specdec.suffix-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2  COMPLETED      0:0   00:28:43 2026-06-12T14:42:49 2026-06-12T15:11:32 
+2109518.bat+                                                                                                                    batch  COMPLETED      0:0   00:28:43 2026-06-12T14:42:49 2026-06-12T15:11:32 
+2109518.ext+                                                                                                                   extern  COMPLETED      0:0   00:28:43 2026-06-12T14:42:49 2026-06-12T15:11:32 
+2109518.0                                                                                                                        bash  COMPLETED      0:0   00:28:25 2026-06-12T14:43:07 2026-06-12T15:11:32 
+2109519                                   coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2    RUNNING      0:0   01:31:32 2026-06-12T14:42:49             Unknown 
+2109519.bat+                                                                                                                    batch    RUNNING      0:0   01:31:32 2026-06-12T14:42:49             Unknown 
+2109519.ext+                                                                                                                   extern    RUNNING      0:0   01:31:32 2026-06-12T14:42:49             Unknown 
+2109519.0                                                                                                                        bash    RUNNING      0:0   01:31:14 2026-06-12T14:43:07             Unknown 
+2109521                                  coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2    RUNNING      0:0   01:31:32 2026-06-12T14:42:49             Unknown 
+2109521.bat+                                                                                                                    batch    RUNNING      0:0   01:31:32 2026-06-12T14:42:49             Unknown 
+2109521.ext+                                                                                                                   extern    RUNNING      0:0   01:31:32 2026-06-12T14:42:49             Unknown 
+2109521.0                                                                                                                        bash    RUNNING      0:0   01:31:14 2026-06-12T14:43:07             Unknown 
+2109522                                 coreai_dlalgo_llm-specdec.eagle3-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs2  COMPLETED      0:0   01:06:14 2026-06-12T14:43:20 2026-06-12T15:49:34 
+2109522.bat+                                                                                                                    batch  COMPLETED      0:0   01:06:14 2026-06-12T14:43:20 2026-06-12T15:49:34 
+2109522.ext+                                                                                                                   extern  COMPLETED      0:0   01:06:14 2026-06-12T14:43:20 2026-06-12T15:49:34 
+2109522.0                                                                                                                        bash  COMPLETED      0:0   01:05:57 2026-06-12T14:43:37 2026-06-12T15:49:34 
+2109523                               coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs4    RUNNING      0:0   01:31:01 2026-06-12T14:43:20             Unknown 
+2109523.bat+                                                                                                                    batch    RUNNING      0:0   01:31:01 2026-06-12T14:43:20             Unknown 
+2109523.ext+                                                                                                                   extern    RUNNING      0:0   01:31:01 2026-06-12T14:43:20             Unknown 
+2109523.0                                                                                                                        bash    RUNNING      0:0   01:30:41 2026-06-12T14:43:40             Unknown 
+2109525                                 coreai_dlalgo_llm-specdec.suffix-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs4  COMPLETED      0:0   00:26:27 2026-06-12T14:43:51 2026-06-12T15:10:18 
+2109525.bat+                                                                                                                    batch  COMPLETED      0:0   00:26:27 2026-06-12T14:43:51 2026-06-12T15:10:18 
+2109525.ext+                                                                                                                   extern  COMPLETED      0:0   00:26:27 2026-06-12T14:43:51 2026-06-12T15:10:18 
+2109525.0                                                                                                                        bash  COMPLETED      0:0   00:26:09 2026-06-12T14:44:09 2026-06-12T15:10:18 
+2109528                                   coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs4    RUNNING      0:0   01:30:30 2026-06-12T14:43:51             Unknown 
+2109528.bat+                                                                                                                    batch    RUNNING      0:0   01:30:30 2026-06-12T14:43:51             Unknown 
+2109528.ext+                                                                                                                   extern    RUNNING      0:0   01:30:30 2026-06-12T14:43:51             Unknown 
+2109528.0                                                                                                                        bash    RUNNING      0:0   01:30:12 2026-06-12T14:44:09             Unknown 
+2109530                                  coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs4    RUNNING      0:0   01:29:58 2026-06-12T14:44:23             Unknown 
+2109530.bat+                                                                                                                    batch    RUNNING      0:0   01:29:58 2026-06-12T14:44:23             Unknown 
+2109530.ext+                                                                                                                   extern    RUNNING      0:0   01:29:58 2026-06-12T14:44:23             Unknown 
+2109530.0                                                                                                                        bash    RUNNING      0:0   01:29:40 2026-06-12T14:44:41             Unknown 
+2109532                                 coreai_dlalgo_llm-specdec.eagle3-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs4  COMPLETED      0:0   01:00:05 2026-06-12T14:44:23 2026-06-12T15:44:28 
+2109532.bat+                                                                                                                    batch  COMPLETED      0:0   01:00:05 2026-06-12T14:44:23 2026-06-12T15:44:28 
+2109532.ext+                                                                                                                   extern  COMPLETED      0:0   01:00:05 2026-06-12T14:44:23 2026-06-12T15:44:28 
+2109532.0                                                                                                                        bash  COMPLETED      0:0   00:59:47 2026-06-12T14:44:41 2026-06-12T15:44:28 
+2109533                               coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs8    RUNNING      0:0   01:29:58 2026-06-12T14:44:23             Unknown 
+2109533.bat+                                                                                                                    batch    RUNNING      0:0   01:29:58 2026-06-12T14:44:23             Unknown 
+2109533.ext+                                                                                                                   extern    RUNNING      0:0   01:29:58 2026-06-12T14:44:23             Unknown 
+2109533.0                                                                                                                        bash    RUNNING      0:0   01:29:40 2026-06-12T14:44:41             Unknown 
+2109534                                 coreai_dlalgo_llm-specdec.suffix-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs8  COMPLETED      0:0   00:38:04 2026-06-12T14:44:23 2026-06-12T15:22:27 
+2109534.bat+                                                                                                                    batch  COMPLETED      0:0   00:38:04 2026-06-12T14:44:23 2026-06-12T15:22:27 
+2109534.ext+                                                                                                                   extern  COMPLETED      0:0   00:38:04 2026-06-12T14:44:23 2026-06-12T15:22:27 
+2109534.0                                                                                                                        bash  COMPLETED      0:0   00:37:47 2026-06-12T14:44:40 2026-06-12T15:22:27 
+2109535                                   coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs8    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109535.bat+                                                                                                                    batch    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109535.ext+                                                                                                                   extern    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109535.0                                                                                                                        bash    RUNNING      0:0   01:29:09 2026-06-12T14:45:12             Unknown 
+2109536                                  coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs8    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109536.bat+                                                                                                                    batch    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109536.ext+                                                                                                                   extern    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109536.0                                                                                                                        bash    RUNNING      0:0   01:29:09 2026-06-12T14:45:12             Unknown 
+2109537                                 coreai_dlalgo_llm-specdec.eagle3-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs8  COMPLETED      0:0   01:07:31 2026-06-12T14:44:54 2026-06-12T15:52:25 
+2109537.bat+                                                                                                                    batch  COMPLETED      0:0   01:07:31 2026-06-12T14:44:54 2026-06-12T15:52:25 
+2109537.ext+                                                                                                                   extern  COMPLETED      0:0   01:07:31 2026-06-12T14:44:54 2026-06-12T15:52:25 
+2109537.0                                                                                                                        bash  COMPLETED      0:0   01:07:13 2026-06-12T14:45:12 2026-06-12T15:52:25 
+2109538                              coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs16    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109538.bat+                                                                                                                    batch    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109538.ext+                                                                                                                   extern    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109538.0                                                                                                                        bash    RUNNING      0:0   01:29:09 2026-06-12T14:45:12             Unknown 
+2109539                                coreai_dlalgo_llm-specdec.suffix-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs16  COMPLETED      0:0   00:36:20 2026-06-12T14:44:54 2026-06-12T15:21:14 
+2109539.bat+                                                                                                                    batch  COMPLETED      0:0   00:36:20 2026-06-12T14:44:54 2026-06-12T15:21:14 
+2109539.ext+                                                                                                                   extern  COMPLETED      0:0   00:36:20 2026-06-12T14:44:54 2026-06-12T15:21:14 
+2109539.0                                                                                                                        bash  COMPLETED      0:0   00:36:02 2026-06-12T14:45:12 2026-06-12T15:21:14 
+2109540                                  coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs16    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109540.bat+                                                                                                                    batch    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109540.ext+                                                                                                                   extern    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109540.0                                                                                                                        bash    RUNNING      0:0   01:29:09 2026-06-12T14:45:12             Unknown 
+2109541                                 coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs16    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109541.bat+                                                                                                                    batch    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109541.ext+                                                                                                                   extern    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109541.0                                                                                                                        bash    RUNNING      0:0   01:29:09 2026-06-12T14:45:12             Unknown 
+2109542                                coreai_dlalgo_llm-specdec.eagle3-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs16  COMPLETED      0:0   01:15:01 2026-06-12T14:44:54 2026-06-12T15:59:55 
+2109542.bat+                                                                                                                    batch  COMPLETED      0:0   01:15:01 2026-06-12T14:44:54 2026-06-12T15:59:55 
+2109542.ext+                                                                                                                   extern  COMPLETED      0:0   01:15:01 2026-06-12T14:44:54 2026-06-12T15:59:55 
+2109542.0                                                                                                                        bash  COMPLETED      0:0   01:14:43 2026-06-12T14:45:12 2026-06-12T15:59:55 
+2109543                              coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs32    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109543.bat+                                                                                                                    batch    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109543.ext+                                                                                                                   extern    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109543.0                                                                                                                        bash    RUNNING      0:0   01:29:09 2026-06-12T14:45:12             Unknown 
+2109544                                coreai_dlalgo_llm-specdec.suffix-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs32  COMPLETED      0:0   00:42:21 2026-06-12T14:44:54 2026-06-12T15:27:15 
+2109544.bat+                                                                                                                    batch  COMPLETED      0:0   00:42:21 2026-06-12T14:44:54 2026-06-12T15:27:15 
+2109544.ext+                                                                                                                   extern  COMPLETED      0:0   00:42:21 2026-06-12T14:44:54 2026-06-12T15:27:15 
+2109544.0                                                                                                                        bash  COMPLETED      0:0   00:42:03 2026-06-12T14:45:12 2026-06-12T15:27:15 
+2109545                                  coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs32    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109545.bat+                                                                                                                    batch    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109545.ext+                                                                                                                   extern    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109545.0                                                                                                                        bash    RUNNING      0:0   01:29:09 2026-06-12T14:45:12             Unknown 
+2109546                                 coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs32    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109546.bat+                                                                                                                    batch    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109546.ext+                                                                                                                   extern    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109546.0                                                                                                                        bash    RUNNING      0:0   01:29:09 2026-06-12T14:45:12             Unknown 
+2109547                                coreai_dlalgo_llm-specdec.eagle3-qwen235b_a22b_swe_verified_osl32k_bsweep_lyris_tp4_fp8kv_bs32  COMPLETED      0:0   01:14:39 2026-06-12T14:44:54 2026-06-12T15:59:33 
+2109547.bat+                                                                                                                    batch  COMPLETED      0:0   01:14:39 2026-06-12T14:44:54 2026-06-12T15:59:33 
+2109547.ext+                                                                                                                   extern  COMPLETED      0:0   01:14:39 2026-06-12T14:44:54 2026-06-12T15:59:33 
+2109547.0                                                                                                                        bash  COMPLETED      0:0   01:14:21 2026-06-12T14:45:12 2026-06-12T15:59:33 
+2109548                                   coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109548.bat+                                                                                                                    batch    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109548.ext+                                                                                                                   extern    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109548.0                                                                                                                        bash    RUNNING      0:0   01:29:09 2026-06-12T14:45:12             Unknown 
+2109550                                     coreai_dlalgo_llm-specdec.suffix-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2  COMPLETED      0:0   00:23:34 2026-06-12T14:44:54 2026-06-12T15:08:28 
+2109550.bat+                                                                                                                    batch  COMPLETED      0:0   00:23:34 2026-06-12T14:44:54 2026-06-12T15:08:28 
+2109550.ext+                                                                                                                   extern  COMPLETED      0:0   00:23:34 2026-06-12T14:44:54 2026-06-12T15:08:28 
+2109550.0                                                                                                                        bash  COMPLETED      0:0   00:23:16 2026-06-12T14:45:12 2026-06-12T15:08:28 
+2109551                                       coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109551.bat+                                                                                                                    batch    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109551.ext+                                                                                                                   extern    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109551.0                                                                                                                        bash    RUNNING      0:0   01:29:09 2026-06-12T14:45:12             Unknown 
+2109552                                      coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109552.bat+                                                                                                                    batch    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109552.ext+                                                                                                                   extern    RUNNING      0:0   01:29:27 2026-06-12T14:44:54             Unknown 
+2109552.0                                                                                                                        bash    RUNNING      0:0   01:29:09 2026-06-12T14:45:12             Unknown 
+2109553                                     coreai_dlalgo_llm-specdec.eagle3-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs2  COMPLETED      0:0   00:56:09 2026-06-12T14:45:26 2026-06-12T15:41:35 
+2109553.bat+                                                                                                                    batch  COMPLETED      0:0   00:56:09 2026-06-12T14:45:26 2026-06-12T15:41:35 
+2109553.ext+                                                                                                                   extern  COMPLETED      0:0   00:56:09 2026-06-12T14:45:26 2026-06-12T15:41:35 
+2109553.0                                                                                                                        bash  COMPLETED      0:0   00:55:52 2026-06-12T14:45:43 2026-06-12T15:41:35 
+2109554                                   coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs4    RUNNING      0:0   01:28:55 2026-06-12T14:45:26             Unknown 
+2109554.bat+                                                                                                                    batch    RUNNING      0:0   01:28:55 2026-06-12T14:45:26             Unknown 
+2109554.ext+                                                                                                                   extern    RUNNING      0:0   01:28:55 2026-06-12T14:45:26             Unknown 
+2109554.0                                                                                                                        bash    RUNNING      0:0   01:28:38 2026-06-12T14:45:43             Unknown 
+2109555                                     coreai_dlalgo_llm-specdec.suffix-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs4  COMPLETED      0:0   00:35:21 2026-06-12T14:45:26 2026-06-12T15:20:47 
+2109555.bat+                                                                                                                    batch  COMPLETED      0:0   00:35:21 2026-06-12T14:45:26 2026-06-12T15:20:47 
+2109555.ext+                                                                                                                   extern  COMPLETED      0:0   00:35:21 2026-06-12T14:45:26 2026-06-12T15:20:47 
+2109555.0                                                                                                                        bash  COMPLETED      0:0   00:35:04 2026-06-12T14:45:43 2026-06-12T15:20:47 
+2109556                                       coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs4    RUNNING      0:0   01:28:55 2026-06-12T14:45:26             Unknown 
+2109556.bat+                                                                                                                    batch    RUNNING      0:0   01:28:55 2026-06-12T14:45:26             Unknown 
+2109556.ext+                                                                                                                   extern    RUNNING      0:0   01:28:55 2026-06-12T14:45:26             Unknown 
+2109556.0                                                                                                                        bash    RUNNING      0:0   01:28:38 2026-06-12T14:45:43             Unknown 
+2109557                                      coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs4    RUNNING      0:0   01:28:55 2026-06-12T14:45:26             Unknown 
+2109557.bat+                                                                                                                    batch    RUNNING      0:0   01:28:55 2026-06-12T14:45:26             Unknown 
+2109557.ext+                                                                                                                   extern    RUNNING      0:0   01:28:55 2026-06-12T14:45:26             Unknown 
+2109557.0                                                                                                                        bash    RUNNING      0:0   01:28:38 2026-06-12T14:45:43             Unknown 
+2109558                                     coreai_dlalgo_llm-specdec.eagle3-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs4  COMPLETED      0:0   01:10:33 2026-06-12T14:45:26 2026-06-12T15:55:59 
+2109558.bat+                                                                                                                    batch  COMPLETED      0:0   01:10:33 2026-06-12T14:45:26 2026-06-12T15:55:59 
+2109558.ext+                                                                                                                   extern  COMPLETED      0:0   01:10:33 2026-06-12T14:45:26 2026-06-12T15:55:59 
+2109558.0                                                                                                                        bash  COMPLETED      0:0   01:10:16 2026-06-12T14:45:43 2026-06-12T15:55:59 
+2109560                                   coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs8    RUNNING      0:0   01:28:55 2026-06-12T14:45:26             Unknown 
+2109560.bat+                                                                                                                    batch    RUNNING      0:0   01:28:55 2026-06-12T14:45:26             Unknown 
+2109560.ext+                                                                                                                   extern    RUNNING      0:0   01:28:55 2026-06-12T14:45:26             Unknown 
+2109560.0                                                                                                                        bash    RUNNING      0:0   01:28:38 2026-06-12T14:45:43             Unknown 
+2109561                                     coreai_dlalgo_llm-specdec.suffix-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs8  COMPLETED      0:0   00:39:59 2026-06-12T14:45:26 2026-06-12T15:25:25 
+2109561.bat+                                                                                                                    batch  COMPLETED      0:0   00:39:59 2026-06-12T14:45:26 2026-06-12T15:25:25 
+2109561.ext+                                                                                                                   extern  COMPLETED      0:0   00:39:59 2026-06-12T14:45:26 2026-06-12T15:25:25 
+2109561.0                                                                                                                        bash  COMPLETED      0:0   00:39:42 2026-06-12T14:45:43 2026-06-12T15:25:25 
+2109563                                       coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs8    RUNNING      0:0   01:28:55 2026-06-12T14:45:26             Unknown 
+2109563.bat+                                                                                                                    batch    RUNNING      0:0   01:28:55 2026-06-12T14:45:26             Unknown 
+2109563.ext+                                                                                                                   extern    RUNNING      0:0   01:28:55 2026-06-12T14:45:26             Unknown 
+2109563.0                                                                                                                        bash    RUNNING      0:0   01:28:38 2026-06-12T14:45:43             Unknown 
+2109564                                      coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs8    RUNNING      0:0   01:28:24 2026-06-12T14:45:57             Unknown 
+2109564.bat+                                                                                                                    batch    RUNNING      0:0   01:28:24 2026-06-12T14:45:57             Unknown 
+2109564.ext+                                                                                                                   extern    RUNNING      0:0   01:28:24 2026-06-12T14:45:57             Unknown 
+2109564.0                                                                                                                        bash    RUNNING      0:0   01:28:06 2026-06-12T14:46:15             Unknown 
+2109565                                     coreai_dlalgo_llm-specdec.eagle3-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs8  COMPLETED      0:0   01:12:15 2026-06-12T14:45:57 2026-06-12T15:58:12 
+2109565.bat+                                                                                                                    batch  COMPLETED      0:0   01:12:15 2026-06-12T14:45:57 2026-06-12T15:58:12 
+2109565.ext+                                                                                                                   extern  COMPLETED      0:0   01:12:15 2026-06-12T14:45:57 2026-06-12T15:58:12 
+2109565.0                                                                                                                        bash  COMPLETED      0:0   01:11:55 2026-06-12T14:46:17 2026-06-12T15:58:12 
+2109567                                  coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs16    RUNNING      0:0   01:27:53 2026-06-12T14:46:28             Unknown 
+2109567.bat+                                                                                                                    batch    RUNNING      0:0   01:27:53 2026-06-12T14:46:28             Unknown 
+2109567.ext+                                                                                                                   extern    RUNNING      0:0   01:27:53 2026-06-12T14:46:28             Unknown 
+2109567.0                                                                                                                        bash    RUNNING      0:0   01:27:34 2026-06-12T14:46:47             Unknown 
+2109570                                    coreai_dlalgo_llm-specdec.suffix-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs16  COMPLETED      0:0   00:44:13 2026-06-12T14:46:28 2026-06-12T15:30:41 
+2109570.bat+                                                                                                                    batch  COMPLETED      0:0   00:44:13 2026-06-12T14:46:28 2026-06-12T15:30:41 
+2109570.ext+                                                                                                                   extern  COMPLETED      0:0   00:44:13 2026-06-12T14:46:28 2026-06-12T15:30:41 
+2109570.0                                                                                                                        bash  COMPLETED      0:0   00:43:53 2026-06-12T14:46:48 2026-06-12T15:30:41 
+2109572                                      coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs16    RUNNING      0:0   01:27:21 2026-06-12T14:47:00             Unknown 
+2109572.bat+                                                                                                                    batch    RUNNING      0:0   01:27:21 2026-06-12T14:47:00             Unknown 
+2109572.ext+                                                                                                                   extern    RUNNING      0:0   01:27:21 2026-06-12T14:47:00             Unknown 
+2109572.0                                                                                                                        bash    RUNNING      0:0   01:27:03 2026-06-12T14:47:18             Unknown 
+2109574                                     coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs16    RUNNING      0:0   01:27:21 2026-06-12T14:47:00             Unknown 
+2109574.bat+                                                                                                                    batch    RUNNING      0:0   01:27:21 2026-06-12T14:47:00             Unknown 
+2109574.ext+                                                                                                                   extern    RUNNING      0:0   01:27:21 2026-06-12T14:47:00             Unknown 
+2109574.0                                                                                                                        bash    RUNNING      0:0   01:27:03 2026-06-12T14:47:18             Unknown 
+2109575                                    coreai_dlalgo_llm-specdec.eagle3-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs16  COMPLETED      0:0   01:15:43 2026-06-12T14:47:00 2026-06-12T16:02:43 
+2109575.bat+                                                                                                                    batch  COMPLETED      0:0   01:15:43 2026-06-12T14:47:00 2026-06-12T16:02:43 
+2109575.ext+                                                                                                                   extern  COMPLETED      0:0   01:15:43 2026-06-12T14:47:00 2026-06-12T16:02:43 
+2109575.0                                                                                                                        bash  COMPLETED      0:0   01:15:25 2026-06-12T14:47:18 2026-06-12T16:02:43 
+2109576                                  coreai_dlalgo_llm-specdec.baseline-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs32    RUNNING      0:0   01:26:18 2026-06-12T14:48:03             Unknown 
+2109576.bat+                                                                                                                    batch    RUNNING      0:0   01:26:18 2026-06-12T14:48:03             Unknown 
+2109576.ext+                                                                                                                   extern    RUNNING      0:0   01:26:18 2026-06-12T14:48:03             Unknown 
+2109576.0                                                                                                                        bash    RUNNING      0:0   01:26:00 2026-06-12T14:48:21             Unknown 
+2109577                                    coreai_dlalgo_llm-specdec.suffix-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs32  COMPLETED      0:0   00:42:10 2026-06-12T14:48:35 2026-06-12T15:30:45 
+2109577.bat+                                                                                                                    batch  COMPLETED      0:0   00:42:10 2026-06-12T14:48:35 2026-06-12T15:30:45 
+2109577.ext+                                                                                                                   extern  COMPLETED      0:0   00:42:10 2026-06-12T14:48:35 2026-06-12T15:30:45 
+2109577.0                                                                                                                        bash  COMPLETED      0:0   00:41:52 2026-06-12T14:48:53 2026-06-12T15:30:45 
+2109578                                      coreai_dlalgo_llm-specdec.pard-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs32    RUNNING      0:0   01:24:12 2026-06-12T14:50:09             Unknown 
+2109578.bat+                                                                                                                    batch    RUNNING      0:0   01:24:12 2026-06-12T14:50:09             Unknown 
+2109578.ext+                                                                                                                   extern    RUNNING      0:0   01:24:12 2026-06-12T14:50:09             Unknown 
+2109578.0                                                                                                                        bash    RUNNING      0:0   01:23:53 2026-06-12T14:50:28             Unknown 
+2109579                                     coreai_dlalgo_llm-specdec.pard2-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs32    RUNNING      0:0   01:21:35 2026-06-12T14:52:46             Unknown 
+2109579.bat+                                                                                                                    batch    RUNNING      0:0   01:21:35 2026-06-12T14:52:46             Unknown 
+2109579.ext+                                                                                                                   extern    RUNNING      0:0   01:21:35 2026-06-12T14:52:46             Unknown 
+2109579.0                                                                                                                        bash    RUNNING      0:0   01:21:18 2026-06-12T14:53:03             Unknown 
+2109580                                    coreai_dlalgo_llm-specdec.eagle3-qwen235b_a22b_swe_full_osl32k_bsweep_lyris_tp4_fp8kv_bs32  COMPLETED      0:0   01:19:36 2026-06-12T14:52:46 2026-06-12T16:12:22 
+2109580.bat+                                                                                                                    batch  COMPLETED      0:0   01:19:36 2026-06-12T14:52:46 2026-06-12T16:12:22 
+2109580.ext+                                                                                                                   extern  COMPLETED      0:0   01:19:36 2026-06-12T14:52:46 2026-06-12T16:12:22 
+2109580.0                                                                                                                        bash  COMPLETED      0:0   01:19:19 2026-06-12T14:53:03 2026-06-12T16:12:22 

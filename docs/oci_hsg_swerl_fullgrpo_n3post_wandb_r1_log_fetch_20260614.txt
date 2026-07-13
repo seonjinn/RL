@@ -1,0 +1,139 @@
+# SWE-RL Full-GRPO log fetch
+Sun Jun 14 00:56:14 PDT 2026
+remote_host=oci-hsg-cs-001-vscode-02
+remote_output_root=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna
+local_log_root=tmp/oci_hsg_swerl_fullgrpo_n3post_wandb_r1_logs
+manifest=docs/oci_hsg_swerl_fullgrpo_n3post_wandb_r1_log_fetch_manifest_20260614.csv
+rows=5
+dry_run=false
+
+[3299487] Transfer starting: 21 files
+[3299487] ./
+[3299487] latest_235b_scale_gen_job_id.txt
+[3299487] slurm-3299487.out
+[3299487] 3299487-logs/
+[3299487] 3299487-logs/ray-driver.log
+[3299487] 3299487-logs/ray-head.log
+[3299487] 3299487-logs/ray-worker-1.log
+[3299487] 3299487-logs/ray-worker-10.log
+[3299487] 3299487-logs/ray-worker-11.log
+[3299487] 3299487-logs/ray-worker-12.log
+[3299487] 3299487-logs/ray-worker-13.log
+[3299487] 3299487-logs/ray-worker-14.log
+[3299487] 3299487-logs/ray-worker-15.log
+[3299487] 3299487-logs/ray-worker-2.log
+[3299487] 3299487-logs/ray-worker-3.log
+[3299487] 3299487-logs/ray-worker-4.log
+[3299487] 3299487-logs/ray-worker-5.log
+[3299487] 3299487-logs/ray-worker-6.log
+[3299487] 3299487-logs/ray-worker-7.log
+[3299487] 3299487-logs/ray-worker-8.log
+[3299487] 3299487-logs/ray-worker-9.log
+[3299487] 
+[3299487] sent 639 bytes  received 164805 bytes  1654440000 bytes/sec
+[3299487] total size is 883297  speedup is 5.34
+job 3299487 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_n3post_wandb_r1_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_specdec_after_prewarm_n3post_wandb_r1/baseline_steps10_3299487
+[3299488] Transfer starting: 21 files
+[3299488] ./
+[3299488] latest_235b_scale_gen_job_id.txt
+[3299488] slurm-3299488.out
+[3299488] 3299488-logs/
+[3299488] 3299488-logs/ray-driver.log
+[3299488] 3299488-logs/ray-head.log
+[3299488] 3299488-logs/ray-worker-1.log
+[3299488] 3299488-logs/ray-worker-10.log
+[3299488] 3299488-logs/ray-worker-11.log
+[3299488] 3299488-logs/ray-worker-12.log
+[3299488] 3299488-logs/ray-worker-13.log
+[3299488] 3299488-logs/ray-worker-14.log
+[3299488] 3299488-logs/ray-worker-15.log
+[3299488] 3299488-logs/ray-worker-2.log
+[3299488] 3299488-logs/ray-worker-3.log
+[3299488] 3299488-logs/ray-worker-4.log
+[3299488] 3299488-logs/ray-worker-5.log
+[3299488] 3299488-logs/ray-worker-6.log
+[3299488] 3299488-logs/ray-worker-7.log
+[3299488] 3299488-logs/ray-worker-8.log
+[3299488] 3299488-logs/ray-worker-9.log
+[3299488] 
+[3299488] sent 639 bytes  received 164006 bytes  1646450000 bytes/sec
+[3299488] total size is 863128  speedup is 5.24
+job 3299488 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_n3post_wandb_r1_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_specdec_after_prewarm_n3post_wandb_r1/suffix_steps10_3299488
+[3299489] Transfer starting: 21 files
+[3299489] ./
+[3299489] latest_235b_scale_gen_job_id.txt
+[3299489] slurm-3299489.out
+[3299489] 3299489-logs/
+[3299489] 3299489-logs/ray-driver.log
+[3299489] 3299489-logs/ray-head.log
+[3299489] 3299489-logs/ray-worker-1.log
+[3299489] 3299489-logs/ray-worker-10.log
+[3299489] 3299489-logs/ray-worker-11.log
+[3299489] 3299489-logs/ray-worker-12.log
+[3299489] 3299489-logs/ray-worker-13.log
+[3299489] 3299489-logs/ray-worker-14.log
+[3299489] 3299489-logs/ray-worker-15.log
+[3299489] 3299489-logs/ray-worker-2.log
+[3299489] 3299489-logs/ray-worker-3.log
+[3299489] 3299489-logs/ray-worker-4.log
+[3299489] 3299489-logs/ray-worker-5.log
+[3299489] 3299489-logs/ray-worker-6.log
+[3299489] 3299489-logs/ray-worker-7.log
+[3299489] 3299489-logs/ray-worker-8.log
+[3299489] 3299489-logs/ray-worker-9.log
+[3299489] 
+[3299489] sent 639 bytes  received 166697 bytes  1673360000 bytes/sec
+[3299489] total size is 920941  speedup is 5.50
+job 3299489 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_n3post_wandb_r1_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_specdec_after_prewarm_n3post_wandb_r1/pard_steps10_3299489
+[3299490] Transfer starting: 21 files
+[3299490] ./
+[3299490] latest_235b_scale_gen_job_id.txt
+[3299490] slurm-3299490.out
+[3299490] 3299490-logs/
+[3299490] 3299490-logs/ray-driver.log
+[3299490] 3299490-logs/ray-head.log
+[3299490] 3299490-logs/ray-worker-1.log
+[3299490] 3299490-logs/ray-worker-10.log
+[3299490] 3299490-logs/ray-worker-11.log
+[3299490] 3299490-logs/ray-worker-12.log
+[3299490] 3299490-logs/ray-worker-13.log
+[3299490] 3299490-logs/ray-worker-14.log
+[3299490] 3299490-logs/ray-worker-15.log
+[3299490] 3299490-logs/ray-worker-2.log
+[3299490] 3299490-logs/ray-worker-3.log
+[3299490] 3299490-logs/ray-worker-4.log
+[3299490] 3299490-logs/ray-worker-5.log
+[3299490] 3299490-logs/ray-worker-6.log
+[3299490] 3299490-logs/ray-worker-7.log
+[3299490] 3299490-logs/ray-worker-8.log
+[3299490] 3299490-logs/ray-worker-9.log
+[3299490] 
+[3299490] sent 639 bytes  received 149079 bytes  1497180000 bytes/sec
+[3299490] total size is 703857  speedup is 4.70
+job 3299490 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_n3post_wandb_r1_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_specdec_after_prewarm_n3post_wandb_r1/pard2_steps10_3299490
+[3299491] Transfer starting: 21 files
+[3299491] ./
+[3299491] latest_235b_scale_gen_job_id.txt
+[3299491] slurm-3299491.out
+[3299491] 3299491-logs/
+[3299491] 3299491-logs/ray-driver.log
+[3299491] 3299491-logs/ray-head.log
+[3299491] 3299491-logs/ray-worker-1.log
+[3299491] 3299491-logs/ray-worker-10.log
+[3299491] 3299491-logs/ray-worker-11.log
+[3299491] 3299491-logs/ray-worker-12.log
+[3299491] 3299491-logs/ray-worker-13.log
+[3299491] 3299491-logs/ray-worker-14.log
+[3299491] 3299491-logs/ray-worker-15.log
+[3299491] 3299491-logs/ray-worker-2.log
+[3299491] 3299491-logs/ray-worker-3.log
+[3299491] 3299491-logs/ray-worker-4.log
+[3299491] 3299491-logs/ray-worker-5.log
+[3299491] 3299491-logs/ray-worker-6.log
+[3299491] 3299491-logs/ray-worker-7.log
+[3299491] 3299491-logs/ray-worker-8.log
+[3299491] 3299491-logs/ray-worker-9.log
+[3299491] 
+[3299491] sent 639 bytes  received 171060 bytes  1716990000 bytes/sec
+[3299491] total size is 917029  speedup is 5.34
+job 3299491 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_n3post_wandb_r1_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_specdec_after_prewarm_n3post_wandb_r1/eagle3_steps10_3299491

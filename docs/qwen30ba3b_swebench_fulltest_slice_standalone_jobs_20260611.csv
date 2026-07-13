@@ -1,0 +1,3 @@
+job_id,mode,prompt_offset,prompt_count,run_dir
+3263880,baseline,0,256,/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_swebench_fulltest_baseline_offset0_n256_isl4096_osl1024_bs8_16_k5_20260611
+3263881,pard,0,256,/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_swebench_fulltest_pard_offset0_n256_isl4096_osl1024_bs8_16_k5_20260611

@@ -1,0 +1,7 @@
+scope,cluster,job_id,method,model,state,exit_code,steps_proven,setup_complete,draft_training_enabled,draft_refit,target_proj_loaded,error_markers,current_status
+Qwen8 official PARD-2 online smoke,OCI-HSG,3279229,pard2,Qwen3-8B,COMPLETED,0:0,2/2,1,2,2,8,0,Verified online/refit correctness smoke
+Qwen8 official PARD-2 online 20-step,OCI-HSG,3279589,pard2,Qwen3-8B,COMPLETED,0:0,20/20,1,20,20,80,0,Verified online/refit 20-step correctness
+Qwen235B SWE-RL r26,Lyris,2124030,baseline,Qwen3-235B,RUNNING,0:0,0/1,0,0,0,0,0,Pre-setup transformer-engine build
+Qwen235B SWE-RL r26,Lyris,2124031,pard,Qwen3-235B,RUNNING,0:0,0/1,0,0,0,0,0,Pre-setup transformer-engine build
+Qwen235B SWE-RL r26,Lyris,2124032,pard2,Qwen3-235B,RUNNING,0:0,0/1,0,0,0,0,0,Pre-setup transformer-engine build
+Qwen235B SWE-RL r16,OCI-HSG,3308774,pard2,Qwen3-235B,PENDING,0:0,0/1,0,0,0,0,0,Queued Priority

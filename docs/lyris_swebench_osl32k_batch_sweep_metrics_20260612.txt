@@ -1,0 +1,6 @@
+label=full_osl32k_qwen30_suffix_k32 bs=4 out_tok_s_gpu=595.6453779891758 speedup= acc_pct=89.9426 mean_len=9.5021
+label=full_osl32k_qwen8_suffix_k32 bs=4 out_tok_s_gpu=1089.837150849014 speedup= acc_pct=94.0350 mean_len=10.6282
+label=full_osl32k_qwen30_suffix_k32 bs=8 out_tok_s_gpu=1010.101698148133 speedup= acc_pct=89.9706 mean_len=9.5954
+label=verified_osl32k_qwen8_suffix_k32 bs=4 out_tok_s_gpu=846.2243585255483 speedup= acc_pct=92.4559 mean_len=10.3878
+label=verified_osl32k_qwen8_suffix_k32 bs=8 out_tok_s_gpu=1397.7930843461127 speedup= acc_pct=91.8546 mean_len=10.2434
+label=verified_osl32k_qwen8_suffix_k32 bs=16 out_tok_s_gpu=2597.428519433311 speedup= acc_pct=92.1333 mean_len=10.2925

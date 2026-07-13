@@ -1,0 +1,5 @@
+run,completed,e2e_tok_s_gpu,e2e_throughput_speedup,e2e_step_time_s,e2e_step_time_speedup,generation_worker_tok_s_gpu,generation_throughput_speedup,acceptance_rate_pct,mean_accept_len
+qwen30_async_baseline,9/20 last 10,783.95,1.00x,187.90,1.00x,1640.64,1.00x,,
+qwen30_async_eagle3,11/20 last 13,929.67,1.19x,153.60,1.22x,1961.07,1.20x,,
+qwen30_async_pard,4/20 last 6,896.12,1.14x,159.38,1.18x,1894.22,1.15x,,
+qwen30_async_suffix,7/20 last 9,1098.51,1.40x,129.72,1.45x,2319.14,1.41x,,

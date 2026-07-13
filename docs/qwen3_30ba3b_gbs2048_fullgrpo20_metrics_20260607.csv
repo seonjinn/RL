@@ -1,0 +1,5 @@
+job_id,label,step,max_steps,status,total_step_time_s,generation_time_s,policy_training_time_s,policy_and_reference_logprobs_time_s,prepare_for_generation_total_s,e2e_tokens_per_sec_per_gpu,generation_worker_tokens_per_sec_per_gpu,policy_training_tokens_per_sec_per_gpu,policy_logprobs_tokens_per_sec_per_gpu,mean_generation_length,vllm_acceptance_rate_pct_mean_visible,vllm_acceptance_rate_pct_latest_visible,vllm_acceptance_length_mean_visible,vllm_acceptance_length_latest_visible,vllm_specdec_metric_visible_count,error_count,latest_error,log_path
+3207093,baseline_gbs2048,1,20,completed_step,318.63,58.92,165.64,86.85,5.9,144.04,778.93,277.08,528.44,256.0,,,,,0,0,,tmp/nemorl_logs/3207093-logs-ray-driver.log
+3207093,baseline_gbs2048,2,20,incomplete_step,,,,,,,,,,,,,,,0,0,,tmp/nemorl_logs/3207093-logs-ray-driver.log
+3207094,pard_k3_gbs2048,1,20,completed_step,292.09,37.86,161.57,85.1,6.22,157.12,1212.15,284.05,539.29,256.0,71.96666666666667,73.9,3.16,3.22,3,0,,tmp/nemorl_logs/3207094-logs-ray-driver.log
+3207094,pard_k3_gbs2048,2,20,incomplete_step,,,,,,,,,,,70.625,71.5,3.12,3.15,4,0,,tmp/nemorl_logs/3207094-logs-ray-driver.log

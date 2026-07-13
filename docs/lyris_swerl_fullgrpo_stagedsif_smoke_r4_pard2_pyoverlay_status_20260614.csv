@@ -1,0 +1,2 @@
+checked_at_utc,job_id,state,reason,elapsed,start_time,nodes,exit_code,method,max_steps,target_model,draft_model,num_speculative_tokens,specdec_method,run_id,exp_suffix
+2026-06-14T23:04:31+00:00,2120970,CANCELLED by 2001147693,None,00:33:07,2026-06-14T10:40:54,lyris[0092-0107],0:0,pard2,1,/lustre/fsw/coreai_dlalgo_llm/users/sna/model_snapshots/Qwen3-235B-A22B-Thinking-2507,amd/PARD2-Qwen3-8B,1,pard2,20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r4_pard2_pyoverlay,specdec-pard2-steps1-20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r4_pard2_pyoverlay

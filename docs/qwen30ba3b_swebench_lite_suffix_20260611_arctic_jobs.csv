@@ -1,0 +1,2 @@
+job_id,mode,prompt_offset,prompt_count,isl,osl,batch_sizes,run_dir
+3264086,suffix,0,64,4096,1024,"8 16",/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_swebench_lite_suffix_offset0_n64_isl4096_osl1024_bs8_16_k32_20260611_arctic

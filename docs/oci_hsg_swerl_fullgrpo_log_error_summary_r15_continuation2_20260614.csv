@@ -1,0 +1,2 @@
+job_id,run_id,method,max_steps,state,local_log_files,error_file,error_excerpt,local_log_dir
+3304067,20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eagerlvl0_r15,pard2,1,RUNNING,18,tmp/oci_hsg_swerl_fullgrpo_logs_r15_continuation2/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eagerlvl0_r15/pard2_steps1_3304067/3304067-logs/ray-driver.log,"[36m(_env_builder pid=2495286, ip=10.109.16.158)[0m  Downloaded xgrammar",tmp/oci_hsg_swerl_fullgrpo_logs_r15_continuation2/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eagerlvl0_r15/pard2_steps1_3304067

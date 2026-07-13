@@ -1,0 +1,2 @@
+2121275|specdec-baseline-steps1-20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r11_fusemount_trainbs32_hydraplus|CANCELLED by 2001147693|0:0|01:20:02|2026-06-14T14:04:59|2026-06-14T15:25:01|lyris[0272-0287]|None
+2121276|specdec-pard2-steps1-20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r11_fusemount_trainbs32_hydraplus|FAILED|1:0|00:01:04|2026-06-14T14:08:13|2026-06-14T14:09:17|lyris[0255-0270]|None

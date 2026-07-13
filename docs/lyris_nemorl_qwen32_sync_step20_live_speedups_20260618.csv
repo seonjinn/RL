@@ -1,0 +1,5 @@
+run,completed,e2e_tok_s_gpu,e2e_throughput_speedup,e2e_step_time_s,e2e_step_time_speedup,generation_worker_tok_s_gpu,generation_throughput_speedup
+qwen32_sync_baseline,1/20 last 2,830.56,1.00x,172.19,1.00x,1857.09,1.00x
+qwen32_sync_eagle3,1/20 last 2,950.30,1.14x,150.63,1.14x,2612.39,1.41x
+qwen32_sync_pard,1/20 last 2,928.10,1.12x,154.37,1.12x,2635.29,1.42x
+qwen32_sync_suffix,1/20 last 2,845.58,1.02x,169.27,1.02x,1913.39,1.03x

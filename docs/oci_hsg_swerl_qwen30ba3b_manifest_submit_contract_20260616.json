@@ -1,0 +1,557 @@
+{
+  "checks": [
+    {
+      "detail": "6",
+      "name": "manifest has six qwen30 rows",
+      "status": "pass"
+    },
+    {
+      "detail": "stdout_path",
+      "name": "submit status includes stdout_path",
+      "status": "pass"
+    },
+    {
+      "detail": "stderr_path",
+      "name": "submit status includes stderr_path",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_swerl_qwen30ba3b_specdec_manifest_command_outputs_20260616",
+      "name": "submit helper exposes command output directory",
+      "status": "pass"
+    },
+    {
+      "detail": "True",
+      "name": "submit helper flushes status after each row",
+      "status": "pass"
+    },
+    {
+      "detail": "[('poll_existing', 'suffix', 'false'), ('launch_static', 'eagle3', 'false'), ('launch_static', 'pard', 'false'), ('launch_static', 'pard2', 'false'), ('launch_online', 'pard', 'true'), ('launch_online', 'pard2', 'true')]",
+      "name": "manifest method/action coverage",
+      "status": "pass"
+    },
+    {
+      "detail": "ok",
+      "name": "poll_existing:suffix:false helper validation",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "poll_existing:suffix:false dry-run command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "poll_existing:suffix:false execute command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "3351394",
+      "name": "poll_existing:suffix:false polls suffix r16 job",
+      "status": "pass"
+    },
+    {
+      "detail": "squeue -j 3351394",
+      "name": "poll_existing:suffix:false checks squeue",
+      "status": "pass"
+    },
+    {
+      "detail": "sacct -X -j 3351394",
+      "name": "poll_existing:suffix:false checks sacct",
+      "status": "pass"
+    },
+    {
+      "detail": "tail -n 80",
+      "name": "poll_existing:suffix:false tails bounded log chunk",
+      "status": "pass"
+    },
+    {
+      "detail": "[tail-chunk] lines",
+      "name": "poll_existing:suffix:false emits reusable tail chunk markers",
+      "status": "pass"
+    },
+    {
+      "detail": "tail -n 3",
+      "name": "poll_existing:suffix:false limits recent log files",
+      "status": "pass"
+    },
+    {
+      "detail": "timeout 20s",
+      "name": "poll_existing:suffix:false bounds remote log probes",
+      "status": "pass"
+    },
+    {
+      "detail": "ok; stages patched non-suffix launcher",
+      "name": "launch_static:eagle3:false helper validation",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "launch_static:eagle3:false dry-run command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "launch_static:eagle3:false execute command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "DRY_RUN=true",
+      "name": "launch_static:eagle3:false dry-run is non-submitting",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: DRY_RUN=1",
+      "name": "launch_static:eagle3:false dry-run avoids ambiguous truthy flag",
+      "status": "pass"
+    },
+    {
+      "detail": "DRY_RUN=false",
+      "name": "launch_static:eagle3:false execute enables submission",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: DRY_RUN=true",
+      "name": "launch_static:eagle3:false execute does not stay dry-run",
+      "status": "pass"
+    },
+    {
+      "detail": "MAX_STEPS=1",
+      "name": "launch_static:eagle3:false keeps step1 smoke",
+      "status": "pass"
+    },
+    {
+      "detail": "MAX_TOTAL_SEQUENCE_LENGTH=40960",
+      "name": "launch_static:eagle3:false keeps ctx40k",
+      "status": "pass"
+    },
+    {
+      "detail": "GENERATION_TEMPERATURE=1.0",
+      "name": "launch_static:eagle3:false uses RL temperature",
+      "status": "pass"
+    },
+    {
+      "detail": "GENERATION_TOP_P=1.0",
+      "name": "launch_static:eagle3:false uses RL top_p",
+      "status": "pass"
+    },
+    {
+      "detail": "SBATCH_ACCOUNT=nemotron_n3_post",
+      "name": "launch_static:eagle3:false uses requested account",
+      "status": "pass"
+    },
+    {
+      "detail": "PY_PATCH_SWERL_SPECDEC_LAUNCHER",
+      "name": "launch_static:eagle3:false stages patched non-suffix launcher",
+      "status": "pass"
+    },
+    {
+      "detail": "ngram|draft_model|pard2|eagle3",
+      "name": "launch_static:eagle3:false patched gate admits non-suffix methods",
+      "status": "pass"
+    },
+    {
+      "detail": "missing token: unsupported launcher gate shape; refusing unsafe non-suffix launch",
+      "name": "launch_static:eagle3:false refuses unknown launcher shape",
+      "status": "fail"
+    },
+    {
+      "detail": "policy.draft.enabled=false",
+      "name": "launch_static:eagle3:false disables online policy draft",
+      "status": "pass"
+    },
+    {
+      "detail": "speculative_config.method=eagle3",
+      "name": "launch_static:eagle3:false uses eagle3 specdec",
+      "status": "pass"
+    },
+    {
+      "detail": "ok; stages patched non-suffix launcher",
+      "name": "launch_static:pard:false helper validation",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "launch_static:pard:false dry-run command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "launch_static:pard:false execute command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "DRY_RUN=true",
+      "name": "launch_static:pard:false dry-run is non-submitting",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: DRY_RUN=1",
+      "name": "launch_static:pard:false dry-run avoids ambiguous truthy flag",
+      "status": "pass"
+    },
+    {
+      "detail": "DRY_RUN=false",
+      "name": "launch_static:pard:false execute enables submission",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: DRY_RUN=true",
+      "name": "launch_static:pard:false execute does not stay dry-run",
+      "status": "pass"
+    },
+    {
+      "detail": "MAX_STEPS=1",
+      "name": "launch_static:pard:false keeps step1 smoke",
+      "status": "pass"
+    },
+    {
+      "detail": "MAX_TOTAL_SEQUENCE_LENGTH=40960",
+      "name": "launch_static:pard:false keeps ctx40k",
+      "status": "pass"
+    },
+    {
+      "detail": "GENERATION_TEMPERATURE=1.0",
+      "name": "launch_static:pard:false uses RL temperature",
+      "status": "pass"
+    },
+    {
+      "detail": "GENERATION_TOP_P=1.0",
+      "name": "launch_static:pard:false uses RL top_p",
+      "status": "pass"
+    },
+    {
+      "detail": "SBATCH_ACCOUNT=nemotron_n3_post",
+      "name": "launch_static:pard:false uses requested account",
+      "status": "pass"
+    },
+    {
+      "detail": "PY_PATCH_SWERL_SPECDEC_LAUNCHER",
+      "name": "launch_static:pard:false stages patched non-suffix launcher",
+      "status": "pass"
+    },
+    {
+      "detail": "ngram|draft_model|pard2|eagle3",
+      "name": "launch_static:pard:false patched gate admits non-suffix methods",
+      "status": "pass"
+    },
+    {
+      "detail": "missing token: unsupported launcher gate shape; refusing unsafe non-suffix launch",
+      "name": "launch_static:pard:false refuses unknown launcher shape",
+      "status": "fail"
+    },
+    {
+      "detail": "policy.draft.enabled=false",
+      "name": "launch_static:pard:false disables online policy draft",
+      "status": "pass"
+    },
+    {
+      "detail": "speculative_config.method=draft_model",
+      "name": "launch_static:pard:false uses PARD draft_model specdec",
+      "status": "pass"
+    },
+    {
+      "detail": "parallel_drafting=true",
+      "name": "launch_static:pard:false enables PARD parallel drafting",
+      "status": "pass"
+    },
+    {
+      "detail": "ok; stages patched non-suffix launcher",
+      "name": "launch_static:pard2:false helper validation",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "launch_static:pard2:false dry-run command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "launch_static:pard2:false execute command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "DRY_RUN=true",
+      "name": "launch_static:pard2:false dry-run is non-submitting",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: DRY_RUN=1",
+      "name": "launch_static:pard2:false dry-run avoids ambiguous truthy flag",
+      "status": "pass"
+    },
+    {
+      "detail": "DRY_RUN=false",
+      "name": "launch_static:pard2:false execute enables submission",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: DRY_RUN=true",
+      "name": "launch_static:pard2:false execute does not stay dry-run",
+      "status": "pass"
+    },
+    {
+      "detail": "MAX_STEPS=1",
+      "name": "launch_static:pard2:false keeps step1 smoke",
+      "status": "pass"
+    },
+    {
+      "detail": "MAX_TOTAL_SEQUENCE_LENGTH=40960",
+      "name": "launch_static:pard2:false keeps ctx40k",
+      "status": "pass"
+    },
+    {
+      "detail": "GENERATION_TEMPERATURE=1.0",
+      "name": "launch_static:pard2:false uses RL temperature",
+      "status": "pass"
+    },
+    {
+      "detail": "GENERATION_TOP_P=1.0",
+      "name": "launch_static:pard2:false uses RL top_p",
+      "status": "pass"
+    },
+    {
+      "detail": "SBATCH_ACCOUNT=nemotron_n3_post",
+      "name": "launch_static:pard2:false uses requested account",
+      "status": "pass"
+    },
+    {
+      "detail": "PY_PATCH_SWERL_SPECDEC_LAUNCHER",
+      "name": "launch_static:pard2:false stages patched non-suffix launcher",
+      "status": "pass"
+    },
+    {
+      "detail": "ngram|draft_model|pard2|eagle3",
+      "name": "launch_static:pard2:false patched gate admits non-suffix methods",
+      "status": "pass"
+    },
+    {
+      "detail": "missing token: unsupported launcher gate shape; refusing unsafe non-suffix launch",
+      "name": "launch_static:pard2:false refuses unknown launcher shape",
+      "status": "fail"
+    },
+    {
+      "detail": "policy.draft.enabled=false",
+      "name": "launch_static:pard2:false disables online policy draft",
+      "status": "pass"
+    },
+    {
+      "detail": "speculative_config.method=pard2",
+      "name": "launch_static:pard2:false uses PARD-2 specdec",
+      "status": "pass"
+    },
+    {
+      "detail": "SOURCE_VLLM_SITE=",
+      "name": "launch_static:pard2:false exports PARD-2 vLLM site",
+      "status": "pass"
+    },
+    {
+      "detail": "ok; stages patched non-suffix launcher",
+      "name": "launch_online:pard:true helper validation",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "launch_online:pard:true dry-run command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "launch_online:pard:true execute command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "DRY_RUN=true",
+      "name": "launch_online:pard:true dry-run is non-submitting",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: DRY_RUN=1",
+      "name": "launch_online:pard:true dry-run avoids ambiguous truthy flag",
+      "status": "pass"
+    },
+    {
+      "detail": "DRY_RUN=false",
+      "name": "launch_online:pard:true execute enables submission",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: DRY_RUN=true",
+      "name": "launch_online:pard:true execute does not stay dry-run",
+      "status": "pass"
+    },
+    {
+      "detail": "MAX_STEPS=1",
+      "name": "launch_online:pard:true keeps step1 smoke",
+      "status": "pass"
+    },
+    {
+      "detail": "MAX_TOTAL_SEQUENCE_LENGTH=40960",
+      "name": "launch_online:pard:true keeps ctx40k",
+      "status": "pass"
+    },
+    {
+      "detail": "GENERATION_TEMPERATURE=1.0",
+      "name": "launch_online:pard:true uses RL temperature",
+      "status": "pass"
+    },
+    {
+      "detail": "GENERATION_TOP_P=1.0",
+      "name": "launch_online:pard:true uses RL top_p",
+      "status": "pass"
+    },
+    {
+      "detail": "SBATCH_ACCOUNT=nemotron_n3_post",
+      "name": "launch_online:pard:true uses requested account",
+      "status": "pass"
+    },
+    {
+      "detail": "PY_PATCH_SWERL_SPECDEC_LAUNCHER",
+      "name": "launch_online:pard:true stages patched non-suffix launcher",
+      "status": "pass"
+    },
+    {
+      "detail": "ngram|draft_model|pard2|eagle3",
+      "name": "launch_online:pard:true patched gate admits non-suffix methods",
+      "status": "pass"
+    },
+    {
+      "detail": "missing token: unsupported launcher gate shape; refusing unsafe non-suffix launch",
+      "name": "launch_online:pard:true refuses unknown launcher shape",
+      "status": "fail"
+    },
+    {
+      "detail": "policy.draft.enabled=true",
+      "name": "launch_online:pard:true enables online policy draft",
+      "status": "pass"
+    },
+    {
+      "detail": "PARD_ONLINE_TRAINING=true",
+      "name": "launch_online:pard:true exports online PARD flag",
+      "status": "pass"
+    },
+    {
+      "detail": "speculative_config.method=draft_model",
+      "name": "launch_online:pard:true uses PARD draft_model specdec",
+      "status": "pass"
+    },
+    {
+      "detail": "parallel_drafting=true",
+      "name": "launch_online:pard:true enables PARD parallel drafting",
+      "status": "pass"
+    },
+    {
+      "detail": "ok; stages patched non-suffix launcher",
+      "name": "launch_online:pard2:true helper validation",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "launch_online:pard2:true dry-run command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "launch_online:pard2:true execute command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "DRY_RUN=true",
+      "name": "launch_online:pard2:true dry-run is non-submitting",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: DRY_RUN=1",
+      "name": "launch_online:pard2:true dry-run avoids ambiguous truthy flag",
+      "status": "pass"
+    },
+    {
+      "detail": "DRY_RUN=false",
+      "name": "launch_online:pard2:true execute enables submission",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: DRY_RUN=true",
+      "name": "launch_online:pard2:true execute does not stay dry-run",
+      "status": "pass"
+    },
+    {
+      "detail": "MAX_STEPS=1",
+      "name": "launch_online:pard2:true keeps step1 smoke",
+      "status": "pass"
+    },
+    {
+      "detail": "MAX_TOTAL_SEQUENCE_LENGTH=40960",
+      "name": "launch_online:pard2:true keeps ctx40k",
+      "status": "pass"
+    },
+    {
+      "detail": "GENERATION_TEMPERATURE=1.0",
+      "name": "launch_online:pard2:true uses RL temperature",
+      "status": "pass"
+    },
+    {
+      "detail": "GENERATION_TOP_P=1.0",
+      "name": "launch_online:pard2:true uses RL top_p",
+      "status": "pass"
+    },
+    {
+      "detail": "SBATCH_ACCOUNT=nemotron_n3_post",
+      "name": "launch_online:pard2:true uses requested account",
+      "status": "pass"
+    },
+    {
+      "detail": "PY_PATCH_SWERL_SPECDEC_LAUNCHER",
+      "name": "launch_online:pard2:true stages patched non-suffix launcher",
+      "status": "pass"
+    },
+    {
+      "detail": "ngram|draft_model|pard2|eagle3",
+      "name": "launch_online:pard2:true patched gate admits non-suffix methods",
+      "status": "pass"
+    },
+    {
+      "detail": "missing token: unsupported launcher gate shape; refusing unsafe non-suffix launch",
+      "name": "launch_online:pard2:true refuses unknown launcher shape",
+      "status": "fail"
+    },
+    {
+      "detail": "policy.draft.enabled=true",
+      "name": "launch_online:pard2:true enables online policy draft",
+      "status": "pass"
+    },
+    {
+      "detail": "PARD_ONLINE_TRAINING=true",
+      "name": "launch_online:pard2:true exports online PARD flag",
+      "status": "pass"
+    },
+    {
+      "detail": "speculative_config.method=pard2",
+      "name": "launch_online:pard2:true uses PARD-2 specdec",
+      "status": "pass"
+    },
+    {
+      "detail": "SOURCE_VLLM_SITE=",
+      "name": "launch_online:pard2:true exports PARD-2 vLLM site",
+      "status": "pass"
+    },
+    {
+      "detail": ".tmp_online_gate/swerl_qwen30_submit_contract_outputs/2026-06-16T000000-0700_P3_launch_online_pard_pard_online_step1_smoke_ctx40k_vllm40k_specdec_k5_ray254_py313_r20.stdout.log",
+      "name": "timeout stdout is written to a reusable file",
+      "status": "pass"
+    },
+    {
+      "detail": ".tmp_online_gate/swerl_qwen30_submit_contract_outputs/2026-06-16T000000-0700_P3_launch_online_pard_pard_online_step1_smoke_ctx40k_vllm40k_specdec_k5_ray254_py313_r20.stderr.log",
+      "name": "timeout stderr is written to a reusable file",
+      "status": "pass"
+    },
+    {
+      "detail": "blocked_remote_unreachable",
+      "name": "failed preflight does not submit on execute",
+      "status": "pass"
+    }
+  ],
+  "manifest": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_swerl_qwen30ba3b_specdec_launch_manifest_20260616.csv",
+  "overall_status": "fail",
+  "submit_helper": "/Users/sna/Nemo-RL_Qwen3_Roadmap/scripts/submit_swerl_qwen30_specdec_from_manifest.py"
+}

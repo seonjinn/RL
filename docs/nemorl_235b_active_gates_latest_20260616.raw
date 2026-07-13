@@ -1,0 +1,437 @@
+# NeMo-RL 235B Active Gates Refresh
+LOCAL_TIME=2026-06-16 08:57:27 PDT
+
+## Lyris SWE-RL Raymatch/PARD Proof Gates
+HOST=login-lyris02.lyris.clusters.nvidia.com
+USER=sna
+REMOTE_TIME=2026-06-16 08:57:27 PDT
+QUEUE
+JOBID|NAME|STATE|REASON|START_TIME|TIME|NODES|ACCOUNT|PRIORITY
+STARTS
+JOBID|NAME|START_TIME|NODES|NODELIST(REASON)
+SACCT
+2129203|specdec-baseline-steps1-20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30|FAILED|1:0|01:10:37|2026-06-15T07:57:46|2026-06-15T09:08:23|coreai_dlalgo_llm
+2129203.batch|batch|FAILED|1:0|01:10:37|2026-06-15T07:57:46|2026-06-15T09:08:23|coreai_dlalgo_llm
+2129203.extern|extern|COMPLETED|0:0|01:10:40|2026-06-15T07:57:46|2026-06-15T09:08:26|coreai_dlalgo_llm
+2129203.0|bash|COMPLETED|0:0|00:00:01|2026-06-15T07:58:05|2026-06-15T07:58:06|coreai_dlalgo_llm
+2129203.1|bash|CANCELLED|0:15|01:10:20|2026-06-15T07:58:06|2026-06-15T09:08:26|coreai_dlalgo_llm
+2129203.2|bash|CANCELLED|0:15|01:10:20|2026-06-15T07:58:06|2026-06-15T09:08:26|coreai_dlalgo_llm
+2129203.3|bash|CANCELLED|0:15|01:10:17|2026-06-15T07:58:09|2026-06-15T09:08:26|coreai_dlalgo_llm
+2129203.4|bash|CANCELLED|0:15|01:10:14|2026-06-15T07:58:12|2026-06-15T09:08:26|coreai_dlalgo_llm
+2129203.5|bash|CANCELLED|0:15|01:10:11|2026-06-15T07:58:15|2026-06-15T09:08:26|coreai_dlalgo_llm
+2129203.6|bash|CANCELLED|0:15|01:10:08|2026-06-15T07:58:18|2026-06-15T09:08:26|coreai_dlalgo_llm
+2129203.7|bash|CANCELLED|0:15|01:10:05|2026-06-15T07:58:21|2026-06-15T09:08:26|coreai_dlalgo_llm
+2129203.8|bash|CANCELLED|0:15|01:10:02|2026-06-15T07:58:24|2026-06-15T09:08:26|coreai_dlalgo_llm
+2129203.9|bash|CANCELLED|0:15|01:09:59|2026-06-15T07:58:27|2026-06-15T09:08:26|coreai_dlalgo_llm
+2129203.10|bash|CANCELLED|0:15|01:09:56|2026-06-15T07:58:30|2026-06-15T09:08:26|coreai_dlalgo_llm
+2129203.11|bash|CANCELLED|0:15|01:09:53|2026-06-15T07:58:33|2026-06-15T09:08:26|coreai_dlalgo_llm
+2129203.12|bash|CANCELLED|0:15|01:09:50|2026-06-15T07:58:36|2026-06-15T09:08:26|coreai_dlalgo_llm
+2129203.13|bash|CANCELLED|0:15|01:09:47|2026-06-15T07:58:39|2026-06-15T09:08:26|coreai_dlalgo_llm
+2129203.14|bash|CANCELLED|0:15|01:09:44|2026-06-15T07:58:42|2026-06-15T09:08:26|coreai_dlalgo_llm
+2129203.15|bash|CANCELLED|0:15|01:09:41|2026-06-15T07:58:45|2026-06-15T09:08:26|coreai_dlalgo_llm
+2129203.16|bash|CANCELLED|0:15|01:09:38|2026-06-15T07:58:48|2026-06-15T09:08:26|coreai_dlalgo_llm
+2129203.17|test|COMPLETED|0:0|00:00:00|2026-06-15T07:58:51|2026-06-15T07:58:51|coreai_dlalgo_llm
+2129203.18|bash|COMPLETED|0:0|00:00:00|2026-06-15T07:58:51|2026-06-15T07:58:51|coreai_dlalgo_llm
+2129203.19|enroot|COMPLETED|0:0|00:00:01|2026-06-15T07:58:51|2026-06-15T07:58:52|coreai_dlalgo_llm
+2129203.20|bash|COMPLETED|0:0|00:00:00|2026-06-15T07:58:54|2026-06-15T07:58:54|coreai_dlalgo_llm
+2129203.21|enroot|COMPLETED|0:0|00:00:01|2026-06-15T07:58:54|2026-06-15T07:58:55|coreai_dlalgo_llm
+2129203.22|bash|COMPLETED|0:0|00:00:00|2026-06-15T07:58:57|2026-06-15T07:58:57|coreai_dlalgo_llm
+2129203.23|enroot|COMPLETED|0:0|00:00:01|2026-06-15T07:58:57|2026-06-15T07:58:58|coreai_dlalgo_llm
+2129203.24|bash|COMPLETED|0:0|00:00:00|2026-06-15T07:59:00|2026-06-15T07:59:00|coreai_dlalgo_llm
+2129203.25|enroot|COMPLETED|0:0|00:00:00|2026-06-15T07:59:00|2026-06-15T07:59:00|coreai_dlalgo_llm
+2129203.26|bash|COMPLETED|0:0|00:00:00|2026-06-15T07:59:03|2026-06-15T07:59:03|coreai_dlalgo_llm
+2129203.27|enroot|COMPLETED|0:0|00:00:01|2026-06-15T07:59:03|2026-06-15T07:59:04|coreai_dlalgo_llm
+2129203.28|bash|COMPLETED|0:0|00:00:00|2026-06-15T07:59:06|2026-06-15T07:59:06|coreai_dlalgo_llm
+2129203.29|enroot|COMPLETED|0:0|00:00:01|2026-06-15T07:59:06|2026-06-15T07:59:07|coreai_dlalgo_llm
+2129203.30|bash|COMPLETED|0:0|00:00:00|2026-06-15T07:59:09|2026-06-15T07:59:09|coreai_dlalgo_llm
+2129203.31|enroot|COMPLETED|0:0|00:00:00|2026-06-15T07:59:09|2026-06-15T07:59:09|coreai_dlalgo_llm
+2129203.32|bash|COMPLETED|0:0|00:00:01|2026-06-15T07:59:11|2026-06-15T07:59:12|coreai_dlalgo_llm
+2129203.33|enroot|COMPLETED|0:0|00:00:00|2026-06-15T07:59:12|2026-06-15T07:59:12|coreai_dlalgo_llm
+2129203.34|bash|COMPLETED|0:0|00:00:00|2026-06-15T07:59:14|2026-06-15T07:59:14|coreai_dlalgo_llm
+2129203.35|enroot|COMPLETED|0:0|00:00:01|2026-06-15T07:59:14|2026-06-15T07:59:15|coreai_dlalgo_llm
+2129203.36|bash|COMPLETED|0:0|00:00:00|2026-06-15T07:59:17|2026-06-15T07:59:17|coreai_dlalgo_llm
+2129203.37|enroot|COMPLETED|0:0|00:00:01|2026-06-15T07:59:17|2026-06-15T07:59:18|coreai_dlalgo_llm
+2129203.38|bash|COMPLETED|0:0|00:00:00|2026-06-15T07:59:20|2026-06-15T07:59:20|coreai_dlalgo_llm
+2129203.39|enroot|COMPLETED|0:0|00:00:01|2026-06-15T07:59:20|2026-06-15T07:59:21|coreai_dlalgo_llm
+2129203.40|bash|COMPLETED|0:0|00:00:00|2026-06-15T07:59:21|2026-06-15T07:59:21|coreai_dlalgo_llm
+2129203.41|enroot|FAILED|1:0|01:09:01|2026-06-15T07:59:21|2026-06-15T09:08:22|coreai_dlalgo_llm
+2129203.42|bash|COMPLETED|0:0|00:00:01|2026-06-15T08:01:01|2026-06-15T08:01:02|coreai_dlalgo_llm
+2129203.43|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:03:56|2026-06-15T08:03:56|coreai_dlalgo_llm
+2129203.44|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:05:21|2026-06-15T08:05:21|coreai_dlalgo_llm
+2129203.45|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:05:22|2026-06-15T08:05:22|coreai_dlalgo_llm
+2129203.46|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:05:34|2026-06-15T08:05:34|coreai_dlalgo_llm
+2129203.47|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:09:56|2026-06-15T08:09:56|coreai_dlalgo_llm
+2129203.48|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:13:38|2026-06-15T08:13:38|coreai_dlalgo_llm
+2129203.49|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:15:58|2026-06-15T08:15:58|coreai_dlalgo_llm
+2129203.50|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:20:02|2026-06-15T08:20:02|coreai_dlalgo_llm
+2129203.51|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:25:10|2026-06-15T08:25:10|coreai_dlalgo_llm
+2129203.52|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:25:30|2026-06-15T08:25:30|coreai_dlalgo_llm
+2129203.53|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:27:59|2026-06-15T08:27:59|coreai_dlalgo_llm
+2129203.54|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:30:18|2026-06-15T08:30:18|coreai_dlalgo_llm
+2129203.55|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:32:36|2026-06-15T08:32:36|coreai_dlalgo_llm
+2129203.56|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:38:48|2026-06-15T08:38:48|coreai_dlalgo_llm
+2129203.57|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:41:56|2026-06-15T08:41:56|coreai_dlalgo_llm
+2129203.58|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:41:56|2026-06-15T08:41:56|coreai_dlalgo_llm
+2129203.59|bash|COMPLETED|0:0|00:00:13|2026-06-15T08:42:06|2026-06-15T08:42:19|coreai_dlalgo_llm
+2129203.60|bash|COMPLETED|0:0|00:00:01|2026-06-15T08:42:32|2026-06-15T08:42:33|coreai_dlalgo_llm
+2129203.61|bash|COMPLETED|0:0|00:00:01|2026-06-15T08:42:32|2026-06-15T08:42:33|coreai_dlalgo_llm
+2129203.62|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:43:02|2026-06-15T08:43:02|coreai_dlalgo_llm
+2129203.63|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:43:10|2026-06-15T08:43:10|coreai_dlalgo_llm
+2129203.64|bash|FAILED|126:0|00:00:01|2026-06-15T08:43:18|2026-06-15T08:43:19|coreai_dlalgo_llm
+2129203.65|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:43:30|2026-06-15T08:43:30|coreai_dlalgo_llm
+2129203.66|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:43:30|2026-06-15T08:43:30|coreai_dlalgo_llm
+2129203.67|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:43:30|2026-06-15T08:43:30|coreai_dlalgo_llm
+2129203.68|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:43:40|2026-06-15T08:43:40|coreai_dlalgo_llm
+2129203.69|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:43:40|2026-06-15T08:43:40|coreai_dlalgo_llm
+2129203.70|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:43:40|2026-06-15T08:43:40|coreai_dlalgo_llm
+2129203.71|bash|COMPLETED|0:0|00:00:01|2026-06-15T08:43:58|2026-06-15T08:43:59|coreai_dlalgo_llm
+2129203.72|bash|COMPLETED|0:0|00:00:02|2026-06-15T08:43:58|2026-06-15T08:44:00|coreai_dlalgo_llm
+2129203.73|bash|COMPLETED|0:0|00:00:02|2026-06-15T08:43:58|2026-06-15T08:44:00|coreai_dlalgo_llm
+2129203.74|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:44:13|2026-06-15T08:44:13|coreai_dlalgo_llm
+2129203.75|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:44:21|2026-06-15T08:44:21|coreai_dlalgo_llm
+2129203.76|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:44:31|2026-06-15T08:44:31|coreai_dlalgo_llm
+2129203.77|bash|COMPLETED|0:0|00:00:00|2026-06-15T08:46:45|2026-06-15T08:46:45|coreai_dlalgo_llm
+2129203.78|bash|COMPLETED|0:0|00:00:01|2026-06-15T08:55:57|2026-06-15T08:55:58|coreai_dlalgo_llm
+2129203.79|bash|COMPLETED|0:0|00:00:01|2026-06-15T08:55:57|2026-06-15T08:55:58|coreai_dlalgo_llm
+2129271|specdec-pard-steps1-20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30_afterok|CANCELLED|0:0|00:00:00|None|2026-06-15T09:08:50|coreai_dlalgo_llm
+2129272|specdec-pard2-steps1-20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30_afterok|CANCELLED|0:0|00:00:00|None|2026-06-15T09:08:50|coreai_dlalgo_llm
+SCONTROL
+SCONTROL_JOB=2129203
+SCONTROL_JOB=2129271
+SCONTROL_JOB=2129272
+LOGS
+DIR=/lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1
+2026-06-15 07:57 8 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1/latest_235b_scale_gen_job_id.txt
+2026-06-15 07:58 0 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1/2129203-logs/STARTED_RAY_HEAD
+2026-06-15 07:58 34676 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1/2129203-logs/ray-worker-9.log
+2026-06-15 07:58 34677 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1/2129203-logs/ray-worker-1.log
+2026-06-15 07:58 34678 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1/2129203-logs/ray-worker-2.log
+2026-06-15 07:58 34678 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1/2129203-logs/ray-worker-3.log
+2026-06-15 07:58 34678 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1/2129203-logs/ray-worker-4.log
+2026-06-15 07:58 34678 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1/2129203-logs/ray-worker-5.log
+2026-06-15 07:58 34678 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1/2129203-logs/ray-worker-6.log
+2026-06-15 07:58 34678 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1/2129203-logs/ray-worker-7.log
+2026-06-15 07:58 34678 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1/2129203-logs/ray-worker-8.log
+2026-06-15 07:58 36580 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1/2129203-logs/ray-head.log
+2026-06-15 07:59 34677 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1/2129203-logs/ray-worker-10.log
+2026-06-15 07:59 34683 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1/2129203-logs/ray-worker-11.log
+2026-06-15 07:59 34683 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1/2129203-logs/ray-worker-12.log
+2026-06-15 07:59 34683 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1/2129203-logs/ray-worker-13.log
+2026-06-15 07:59 34683 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1/2129203-logs/ray-worker-14.log
+2026-06-15 07:59 34683 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1/2129203-logs/ray-worker-15.log
+2026-06-15 09:08 223308 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1/2129203-logs/ray-driver.log
+2026-06-15 09:08 3439 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30/baseline_steps1/slurm-2129203.out
+DIR=/lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30_afterok/pard_steps1
+2026-06-15 08:08 8 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30_afterok/pard_steps1/latest_235b_scale_gen_job_id.txt
+DIR=/lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30_afterok/pard2_steps1
+2026-06-15 08:08 8 /lustre/fsw/coreai_dlalgo_llm/users/sna/swerl_fullgrpo_logs/20260615_lyris_swerl_qwen235b_fullgrpo_raymatch_tmpcache_r30_afterok/pard2_steps1/latest_235b_scale_gen_job_id.txt
+
+## OCI-HSG SWE-RL PARD-2 And MathRL Proof Gates
+HOST=oci-hsg-cs-001-vscode-02
+USER=sna
+REMOTE_TIME=2026-06-16 08:57:28 PDT
+QUEUE
+JOBID|NAME|STATE|REASON|START_TIME|TIME|NODES|ACCOUNT|PRIORITY
+STARTS
+JOBID|NAME|START_TIME|NODES|NODELIST(REASON)
+SACCT
+3308774|specdec-pard2-steps1-20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16|CANCELLED by 150081|0:0|02:48:14|2026-06-15T08:46:16|2026-06-15T11:34:30|nemotron_n3_post
+3308774.batch|batch|CANCELLED|0:15|02:48:16|2026-06-15T08:46:16|2026-06-15T11:34:32|nemotron_n3_post
+3308774.extern|extern|COMPLETED|0:0|02:48:22|2026-06-15T08:46:16|2026-06-15T11:34:38|nemotron_n3_post
+3308774.0|bash|CANCELLED|0:15|02:47:59|2026-06-15T08:46:38|2026-06-15T11:34:37|nemotron_n3_post
+3308774.1|bash|CANCELLED|0:15|02:47:56|2026-06-15T08:46:39|2026-06-15T11:34:35|nemotron_n3_post
+3308774.2|bash|CANCELLED|0:15|02:47:55|2026-06-15T08:46:41|2026-06-15T11:34:36|nemotron_n3_post
+3308774.3|bash|CANCELLED|0:15|02:47:50|2026-06-15T08:46:44|2026-06-15T11:34:34|nemotron_n3_post
+3308774.4|bash|CANCELLED|0:15|02:47:47|2026-06-15T08:46:47|2026-06-15T11:34:34|nemotron_n3_post
+3308774.5|bash|CANCELLED|0:15|02:47:45|2026-06-15T08:46:50|2026-06-15T11:34:35|nemotron_n3_post
+3308774.6|bash|CANCELLED|0:15|02:47:42|2026-06-15T08:46:53|2026-06-15T11:34:35|nemotron_n3_post
+3308774.7|bash|CANCELLED|0:15|02:47:38|2026-06-15T08:46:56|2026-06-15T11:34:34|nemotron_n3_post
+3308774.8|bash|CANCELLED|0:15|02:47:37|2026-06-15T08:46:59|2026-06-15T11:34:36|nemotron_n3_post
+3308774.9|bash|CANCELLED|0:15|02:47:33|2026-06-15T08:47:02|2026-06-15T11:34:35|nemotron_n3_post
+3308774.10|bash|CANCELLED|0:15|02:47:29|2026-06-15T08:47:05|2026-06-15T11:34:34|nemotron_n3_post
+3308774.11|bash|CANCELLED|0:15|02:47:28|2026-06-15T08:47:08|2026-06-15T11:34:36|nemotron_n3_post
+3308774.12|bash|CANCELLED|0:15|02:47:23|2026-06-15T08:47:11|2026-06-15T11:34:34|nemotron_n3_post
+3308774.13|bash|CANCELLED|0:15|02:47:21|2026-06-15T08:47:14|2026-06-15T11:34:35|nemotron_n3_post
+3308774.14|bash|CANCELLED|0:15|02:47:17|2026-06-15T08:47:17|2026-06-15T11:34:34|nemotron_n3_post
+3308774.15|bash|CANCELLED|0:15|02:47:14|2026-06-15T08:47:20|2026-06-15T11:34:34|nemotron_n3_post
+3308774.16|test|FAILED|1:0|00:00:02|2026-06-15T08:47:23|2026-06-15T08:47:25|nemotron_n3_post
+3308774.17|test|FAILED|1:0|00:00:02|2026-06-15T08:47:27|2026-06-15T08:47:29|nemotron_n3_post
+3308774.18|test|FAILED|1:0|00:00:02|2026-06-15T08:47:31|2026-06-15T08:47:33|nemotron_n3_post
+3308774.19|test|FAILED|1:0|00:00:02|2026-06-15T08:47:35|2026-06-15T08:47:37|nemotron_n3_post
+3308774.20|test|FAILED|1:0|00:00:02|2026-06-15T08:47:39|2026-06-15T08:47:41|nemotron_n3_post
+3308774.21|test|FAILED|1:0|00:00:02|2026-06-15T08:47:43|2026-06-15T08:47:45|nemotron_n3_post
+3308774.22|test|FAILED|1:0|00:00:02|2026-06-15T08:47:47|2026-06-15T08:47:49|nemotron_n3_post
+3308774.23|test|FAILED|1:0|00:00:03|2026-06-15T08:47:51|2026-06-15T08:47:54|nemotron_n3_post
+3308774.24|test|FAILED|1:0|00:00:01|2026-06-15T08:47:56|2026-06-15T08:47:57|nemotron_n3_post
+3308774.25|test|FAILED|1:0|00:00:01|2026-06-15T08:48:00|2026-06-15T08:48:01|nemotron_n3_post
+3308774.26|test|FAILED|1:0|00:00:02|2026-06-15T08:48:04|2026-06-15T08:48:06|nemotron_n3_post
+3308774.27|test|FAILED|1:0|00:00:02|2026-06-15T08:48:08|2026-06-15T08:48:10|nemotron_n3_post
+3308774.28|test|COMPLETED|0:0|00:00:01|2026-06-15T08:48:12|2026-06-15T08:48:13|nemotron_n3_post
+3308774.29|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:48:13|2026-06-15T08:48:17|nemotron_n3_post
+3308774.30|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:48:19|2026-06-15T08:48:23|nemotron_n3_post
+3308774.31|ray|COMPLETED|0:0|00:00:05|2026-06-15T08:48:25|2026-06-15T08:48:30|nemotron_n3_post
+3308774.32|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:48:32|2026-06-15T08:48:36|nemotron_n3_post
+3308774.33|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:48:38|2026-06-15T08:48:42|nemotron_n3_post
+3308774.34|ray|COMPLETED|0:0|00:00:05|2026-06-15T08:48:44|2026-06-15T08:48:49|nemotron_n3_post
+3308774.35|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:48:51|2026-06-15T08:48:55|nemotron_n3_post
+3308774.36|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:48:57|2026-06-15T08:49:01|nemotron_n3_post
+3308774.37|bash|FAILED|134:0|02:45:36|2026-06-15T08:49:01|2026-06-15T11:34:37|nemotron_n3_post
+3315380|online-qwen235b-mathrl-main-baseline-fixed256-step10-N32xG4|FAILED|1:0|00:19:00|2026-06-15T08:46:16|2026-06-15T09:05:16|nemotron_n3_post
+3315380.batch|batch|FAILED|1:0|00:19:00|2026-06-15T08:46:16|2026-06-15T09:05:16|nemotron_n3_post
+3315380.extern|extern|COMPLETED|0:0|00:19:07|2026-06-15T08:46:16|2026-06-15T09:05:23|nemotron_n3_post
+3315380.0|bash|CANCELLED|0:15|00:18:41|2026-06-15T08:46:39|2026-06-15T09:05:20|nemotron_n3_post
+3315380.1|bash|CANCELLED|0:15|00:18:42|2026-06-15T08:46:40|2026-06-15T09:05:22|nemotron_n3_post
+3315380.2|bash|CANCELLED|0:15|00:18:37|2026-06-15T08:46:42|2026-06-15T09:05:19|nemotron_n3_post
+3315380.3|bash|CANCELLED|0:15|00:18:34|2026-06-15T08:46:45|2026-06-15T09:05:19|nemotron_n3_post
+3315380.4|bash|CANCELLED|0:15|00:18:32|2026-06-15T08:46:48|2026-06-15T09:05:20|nemotron_n3_post
+3315380.5|bash|CANCELLED|0:15|00:18:28|2026-06-15T08:46:51|2026-06-15T09:05:19|nemotron_n3_post
+3315380.6|bash|CANCELLED|0:15|00:18:26|2026-06-15T08:46:54|2026-06-15T09:05:20|nemotron_n3_post
+3315380.7|bash|CANCELLED|0:15|00:18:22|2026-06-15T08:46:57|2026-06-15T09:05:19|nemotron_n3_post
+3315380.8|bash|CANCELLED|0:15|00:18:20|2026-06-15T08:47:00|2026-06-15T09:05:20|nemotron_n3_post
+3315380.9|bash|CANCELLED|0:15|00:18:16|2026-06-15T08:47:03|2026-06-15T09:05:19|nemotron_n3_post
+3315380.10|bash|CANCELLED|0:15|00:18:13|2026-06-15T08:47:06|2026-06-15T09:05:19|nemotron_n3_post
+3315380.11|bash|CANCELLED|0:15|00:18:11|2026-06-15T08:47:09|2026-06-15T09:05:20|nemotron_n3_post
+3315380.12|bash|CANCELLED|0:15|00:18:09|2026-06-15T08:47:12|2026-06-15T09:05:21|nemotron_n3_post
+3315380.13|bash|CANCELLED|0:15|00:18:06|2026-06-15T08:47:15|2026-06-15T09:05:21|nemotron_n3_post
+3315380.14|bash|CANCELLED|0:15|00:18:03|2026-06-15T08:47:18|2026-06-15T09:05:21|nemotron_n3_post
+3315380.15|bash|CANCELLED|0:15|00:17:59|2026-06-15T08:47:21|2026-06-15T09:05:20|nemotron_n3_post
+3315380.16|bash|CANCELLED|0:15|00:17:55|2026-06-15T08:47:24|2026-06-15T09:05:19|nemotron_n3_post
+3315380.17|bash|CANCELLED|0:15|00:17:52|2026-06-15T08:47:27|2026-06-15T09:05:19|nemotron_n3_post
+3315380.18|bash|CANCELLED|0:15|00:17:49|2026-06-15T08:47:30|2026-06-15T09:05:19|nemotron_n3_post
+3315380.19|bash|CANCELLED|0:15|00:17:46|2026-06-15T08:47:33|2026-06-15T09:05:19|nemotron_n3_post
+3315380.20|bash|CANCELLED|0:15|00:17:45|2026-06-15T08:47:36|2026-06-15T09:05:21|nemotron_n3_post
+3315380.21|bash|CANCELLED|0:15|00:17:41|2026-06-15T08:47:39|2026-06-15T09:05:20|nemotron_n3_post
+3315380.22|bash|CANCELLED|0:15|00:17:39|2026-06-15T08:47:42|2026-06-15T09:05:21|nemotron_n3_post
+3315380.23|bash|CANCELLED|0:15|00:17:34|2026-06-15T08:47:45|2026-06-15T09:05:19|nemotron_n3_post
+3315380.24|bash|CANCELLED|0:15|00:17:31|2026-06-15T08:47:48|2026-06-15T09:05:19|nemotron_n3_post
+3315380.25|bash|CANCELLED|0:15|00:17:30|2026-06-15T08:47:51|2026-06-15T09:05:21|nemotron_n3_post
+3315380.26|bash|CANCELLED|0:15|00:17:26|2026-06-15T08:47:54|2026-06-15T09:05:20|nemotron_n3_post
+3315380.27|bash|CANCELLED|0:15|00:17:23|2026-06-15T08:47:57|2026-06-15T09:05:20|nemotron_n3_post
+3315380.28|bash|CANCELLED|0:15|00:17:20|2026-06-15T08:48:00|2026-06-15T09:05:20|nemotron_n3_post
+3315380.29|bash|CANCELLED|0:15|00:17:17|2026-06-15T08:48:03|2026-06-15T09:05:20|nemotron_n3_post
+3315380.30|bash|CANCELLED|0:15|00:17:13|2026-06-15T08:48:06|2026-06-15T09:05:19|nemotron_n3_post
+3315380.31|bash|CANCELLED|0:15|00:17:11|2026-06-15T08:48:09|2026-06-15T09:05:20|nemotron_n3_post
+3315380.32|test|COMPLETED|0:0|00:00:01|2026-06-15T08:48:12|2026-06-15T08:48:13|nemotron_n3_post
+3315380.33|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:48:13|2026-06-15T08:48:17|nemotron_n3_post
+3315380.34|ray|COMPLETED|0:0|00:00:05|2026-06-15T08:48:19|2026-06-15T08:48:24|nemotron_n3_post
+3315380.35|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:48:26|2026-06-15T08:48:30|nemotron_n3_post
+3315380.36|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:48:32|2026-06-15T08:48:36|nemotron_n3_post
+3315380.37|ray|COMPLETED|0:0|00:00:05|2026-06-15T08:48:38|2026-06-15T08:48:43|nemotron_n3_post
+3315380.38|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:48:45|2026-06-15T08:48:49|nemotron_n3_post
+3315380.39|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:48:51|2026-06-15T08:48:55|nemotron_n3_post
+3315380.40|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:48:57|2026-06-15T08:49:01|nemotron_n3_post
+3315380.41|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:03|2026-06-15T08:49:07|nemotron_n3_post
+3315380.42|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:09|2026-06-15T08:49:13|nemotron_n3_post
+3315380.43|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:15|2026-06-15T08:49:19|nemotron_n3_post
+3315380.44|ray|COMPLETED|0:0|00:00:05|2026-06-15T08:49:21|2026-06-15T08:49:26|nemotron_n3_post
+3315380.45|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:28|2026-06-15T08:49:32|nemotron_n3_post
+3315380.46|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:34|2026-06-15T08:49:38|nemotron_n3_post
+3315380.47|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:40|2026-06-15T08:49:44|nemotron_n3_post
+3315380.48|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:46|2026-06-15T08:49:50|nemotron_n3_post
+3315380.49|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:52|2026-06-15T08:49:56|nemotron_n3_post
+3315380.50|ray|COMPLETED|0:0|00:00:05|2026-06-15T08:49:58|2026-06-15T08:50:03|nemotron_n3_post
+3315380.51|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:50:05|2026-06-15T08:50:09|nemotron_n3_post
+3315380.52|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:50:11|2026-06-15T08:50:15|nemotron_n3_post
+3315380.53|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:50:17|2026-06-15T08:50:21|nemotron_n3_post
+3315380.54|bash|FAILED|1:0|00:14:51|2026-06-15T08:50:21|2026-06-15T09:05:12|nemotron_n3_post
+3315381|online-qwen235b-mathrl-main-pard_k3-fixed256-step10-N32xG4|FAILED|1:0|00:19:39|2026-06-15T08:47:05|2026-06-15T09:06:44|nemotron_n3_post
+3315381.batch|batch|FAILED|1:0|00:19:39|2026-06-15T08:47:05|2026-06-15T09:06:44|nemotron_n3_post
+3315381.extern|extern|COMPLETED|0:0|00:19:48|2026-06-15T08:47:05|2026-06-15T09:06:53|nemotron_n3_post
+3315381.0|bash|CANCELLED|0:15|00:19:25|2026-06-15T08:47:27|2026-06-15T09:06:52|nemotron_n3_post
+3315381.1|bash|CANCELLED|0:15|00:19:19|2026-06-15T08:47:28|2026-06-15T09:06:47|nemotron_n3_post
+3315381.2|bash|CANCELLED|0:15|00:19:17|2026-06-15T08:47:30|2026-06-15T09:06:47|nemotron_n3_post
+3315381.3|bash|CANCELLED|0:15|00:19:15|2026-06-15T08:47:33|2026-06-15T09:06:48|nemotron_n3_post
+3315381.4|bash|CANCELLED|0:15|00:19:12|2026-06-15T08:47:36|2026-06-15T09:06:48|nemotron_n3_post
+3315381.5|bash|CANCELLED|0:15|00:19:10|2026-06-15T08:47:39|2026-06-15T09:06:49|nemotron_n3_post
+3315381.6|bash|CANCELLED|0:15|00:19:05|2026-06-15T08:47:42|2026-06-15T09:06:47|nemotron_n3_post
+3315381.7|bash|CANCELLED|0:15|00:19:02|2026-06-15T08:47:45|2026-06-15T09:06:47|nemotron_n3_post
+3315381.8|bash|CANCELLED|0:15|00:18:59|2026-06-15T08:47:48|2026-06-15T09:06:47|nemotron_n3_post
+3315381.9|bash|CANCELLED|0:15|00:18:57|2026-06-15T08:47:51|2026-06-15T09:06:48|nemotron_n3_post
+3315381.10|bash|CANCELLED|0:15|00:18:54|2026-06-15T08:47:54|2026-06-15T09:06:48|nemotron_n3_post
+3315381.11|bash|CANCELLED|0:15|00:18:51|2026-06-15T08:47:57|2026-06-15T09:06:48|nemotron_n3_post
+3315381.12|bash|CANCELLED|0:15|00:18:49|2026-06-15T08:48:00|2026-06-15T09:06:49|nemotron_n3_post
+3315381.13|bash|CANCELLED|0:15|00:18:46|2026-06-15T08:48:03|2026-06-15T09:06:49|nemotron_n3_post
+3315381.14|bash|CANCELLED|0:15|00:18:42|2026-06-15T08:48:06|2026-06-15T09:06:48|nemotron_n3_post
+3315381.15|bash|CANCELLED|0:15|00:18:39|2026-06-15T08:48:09|2026-06-15T09:06:48|nemotron_n3_post
+3315381.16|bash|CANCELLED|0:15|00:18:36|2026-06-15T08:48:12|2026-06-15T09:06:48|nemotron_n3_post
+3315381.17|bash|CANCELLED|0:15|00:18:33|2026-06-15T08:48:15|2026-06-15T09:06:48|nemotron_n3_post
+3315381.18|bash|CANCELLED|0:15|00:18:31|2026-06-15T08:48:18|2026-06-15T09:06:49|nemotron_n3_post
+3315381.19|bash|CANCELLED|0:15|00:18:26|2026-06-15T08:48:21|2026-06-15T09:06:47|nemotron_n3_post
+3315381.20|bash|CANCELLED|0:15|00:18:24|2026-06-15T08:48:24|2026-06-15T09:06:48|nemotron_n3_post
+3315381.21|bash|CANCELLED|0:15|00:18:22|2026-06-15T08:48:27|2026-06-15T09:06:49|nemotron_n3_post
+3315381.22|bash|CANCELLED|0:15|00:18:17|2026-06-15T08:48:30|2026-06-15T09:06:47|nemotron_n3_post
+3315381.23|bash|CANCELLED|0:15|00:18:16|2026-06-15T08:48:33|2026-06-15T09:06:49|nemotron_n3_post
+3315381.24|bash|CANCELLED|0:15|00:18:11|2026-06-15T08:48:36|2026-06-15T09:06:47|nemotron_n3_post
+3315381.25|bash|CANCELLED|0:15|00:18:09|2026-06-15T08:48:39|2026-06-15T09:06:48|nemotron_n3_post
+3315381.26|bash|CANCELLED|0:15|00:18:07|2026-06-15T08:48:42|2026-06-15T09:06:49|nemotron_n3_post
+3315381.27|bash|CANCELLED|0:15|00:18:02|2026-06-15T08:48:45|2026-06-15T09:06:47|nemotron_n3_post
+3315381.28|bash|CANCELLED|0:15|00:18:00|2026-06-15T08:48:48|2026-06-15T09:06:48|nemotron_n3_post
+3315381.29|bash|CANCELLED|0:15|00:17:56|2026-06-15T08:48:51|2026-06-15T09:06:47|nemotron_n3_post
+3315381.30|bash|CANCELLED|0:15|00:17:53|2026-06-15T08:48:54|2026-06-15T09:06:47|nemotron_n3_post
+3315381.31|bash|CANCELLED|0:15|00:17:51|2026-06-15T08:48:57|2026-06-15T09:06:48|nemotron_n3_post
+3315381.32|test|FAILED|1:0|00:00:05|2026-06-15T08:49:00|2026-06-15T08:49:05|nemotron_n3_post
+3315381.33|test|COMPLETED|0:0|00:00:01|2026-06-15T08:49:07|2026-06-15T08:49:08|nemotron_n3_post
+3315381.34|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:08|2026-06-15T08:49:12|nemotron_n3_post
+3315381.35|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:14|2026-06-15T08:49:18|nemotron_n3_post
+3315381.36|ray|COMPLETED|0:0|00:00:05|2026-06-15T08:49:20|2026-06-15T08:49:25|nemotron_n3_post
+3315381.37|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:27|2026-06-15T08:49:31|nemotron_n3_post
+3315381.38|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:33|2026-06-15T08:49:37|nemotron_n3_post
+3315381.39|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:39|2026-06-15T08:49:43|nemotron_n3_post
+3315381.40|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:45|2026-06-15T08:49:49|nemotron_n3_post
+3315381.41|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:51|2026-06-15T08:49:55|nemotron_n3_post
+3315381.42|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:57|2026-06-15T08:50:01|nemotron_n3_post
+3315381.43|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:50:03|2026-06-15T08:50:07|nemotron_n3_post
+3315381.44|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:50:09|2026-06-15T08:50:13|nemotron_n3_post
+3315381.45|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:50:15|2026-06-15T08:50:19|nemotron_n3_post
+3315381.46|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:50:21|2026-06-15T08:50:25|nemotron_n3_post
+3315381.47|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:50:27|2026-06-15T08:50:31|nemotron_n3_post
+3315381.48|ray|COMPLETED|0:0|00:00:05|2026-06-15T08:50:33|2026-06-15T08:50:38|nemotron_n3_post
+3315381.49|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:50:40|2026-06-15T08:50:44|nemotron_n3_post
+3315381.50|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:50:46|2026-06-15T08:50:50|nemotron_n3_post
+3315381.51|bash|FAILED|1:0|00:15:50|2026-06-15T08:50:50|2026-06-15T09:06:40|nemotron_n3_post
+3315382|online-qwen235b-mathrl-main-pard_k5-fixed256-step10-N32xG4|FAILED|1:0|00:21:04|2026-06-15T08:47:05|2026-06-15T09:08:09|nemotron_n3_post
+3315382.batch|batch|FAILED|1:0|00:21:04|2026-06-15T08:47:05|2026-06-15T09:08:09|nemotron_n3_post
+3315382.extern|extern|COMPLETED|0:0|00:21:12|2026-06-15T08:47:05|2026-06-15T09:08:17|nemotron_n3_post
+3315382.0|bash|CANCELLED|0:15|00:20:46|2026-06-15T08:47:27|2026-06-15T09:08:13|nemotron_n3_post
+3315382.1|bash|CANCELLED|0:15|00:20:47|2026-06-15T08:47:29|2026-06-15T09:08:16|nemotron_n3_post
+3315382.2|bash|CANCELLED|0:15|00:20:43|2026-06-15T08:47:30|2026-06-15T09:08:13|nemotron_n3_post
+3315382.3|bash|CANCELLED|0:15|00:20:39|2026-06-15T08:47:33|2026-06-15T09:08:12|nemotron_n3_post
+3315382.4|bash|CANCELLED|0:15|00:20:36|2026-06-15T08:47:36|2026-06-15T09:08:12|nemotron_n3_post
+3315382.5|bash|CANCELLED|0:15|00:20:35|2026-06-15T08:47:39|2026-06-15T09:08:14|nemotron_n3_post
+3315382.6|bash|CANCELLED|0:15|00:20:32|2026-06-15T08:47:42|2026-06-15T09:08:14|nemotron_n3_post
+3315382.7|bash|CANCELLED|0:15|00:20:26|2026-06-15T08:47:46|2026-06-15T09:08:12|nemotron_n3_post
+3315382.8|bash|CANCELLED|0:15|00:20:23|2026-06-15T08:47:49|2026-06-15T09:08:12|nemotron_n3_post
+3315382.9|bash|CANCELLED|0:15|00:20:21|2026-06-15T08:47:52|2026-06-15T09:08:13|nemotron_n3_post
+3315382.10|bash|CANCELLED|0:15|00:20:17|2026-06-15T08:47:55|2026-06-15T09:08:12|nemotron_n3_post
+3315382.11|bash|CANCELLED|0:15|00:20:14|2026-06-15T08:47:58|2026-06-15T09:08:12|nemotron_n3_post
+3315382.12|bash|CANCELLED|0:15|00:20:12|2026-06-15T08:48:01|2026-06-15T09:08:13|nemotron_n3_post
+3315382.13|bash|CANCELLED|0:15|00:20:09|2026-06-15T08:48:04|2026-06-15T09:08:13|nemotron_n3_post
+3315382.14|bash|CANCELLED|0:15|00:20:07|2026-06-15T08:48:07|2026-06-15T09:08:14|nemotron_n3_post
+3315382.15|bash|CANCELLED|0:15|00:20:03|2026-06-15T08:48:10|2026-06-15T09:08:13|nemotron_n3_post
+3315382.16|bash|CANCELLED|0:15|00:20:03|2026-06-15T08:48:13|2026-06-15T09:08:16|nemotron_n3_post
+3315382.17|bash|CANCELLED|0:15|00:19:56|2026-06-15T08:48:16|2026-06-15T09:08:12|nemotron_n3_post
+3315382.18|bash|CANCELLED|0:15|00:19:54|2026-06-15T08:48:19|2026-06-15T09:08:13|nemotron_n3_post
+3315382.19|bash|CANCELLED|0:15|00:19:51|2026-06-15T08:48:22|2026-06-15T09:08:13|nemotron_n3_post
+3315382.20|bash|CANCELLED|0:15|00:19:47|2026-06-15T08:48:25|2026-06-15T09:08:12|nemotron_n3_post
+3315382.21|bash|CANCELLED|0:15|00:19:44|2026-06-15T08:48:28|2026-06-15T09:08:12|nemotron_n3_post
+3315382.22|bash|CANCELLED|0:15|00:19:42|2026-06-15T08:48:31|2026-06-15T09:08:13|nemotron_n3_post
+3315382.23|bash|CANCELLED|0:15|00:19:38|2026-06-15T08:48:34|2026-06-15T09:08:12|nemotron_n3_post
+3315382.24|bash|CANCELLED|0:15|00:19:37|2026-06-15T08:48:37|2026-06-15T09:08:14|nemotron_n3_post
+3315382.25|bash|CANCELLED|0:15|00:19:33|2026-06-15T08:48:40|2026-06-15T09:08:13|nemotron_n3_post
+3315382.26|bash|CANCELLED|0:15|00:19:31|2026-06-15T08:48:43|2026-06-15T09:08:14|nemotron_n3_post
+3315382.27|bash|CANCELLED|0:15|00:19:27|2026-06-15T08:48:46|2026-06-15T09:08:13|nemotron_n3_post
+3315382.28|bash|CANCELLED|0:15|00:19:25|2026-06-15T08:48:49|2026-06-15T09:08:14|nemotron_n3_post
+3315382.29|bash|CANCELLED|0:15|00:19:20|2026-06-15T08:48:52|2026-06-15T09:08:12|nemotron_n3_post
+3315382.30|bash|CANCELLED|0:15|00:19:17|2026-06-15T08:48:55|2026-06-15T09:08:12|nemotron_n3_post
+3315382.31|bash|CANCELLED|0:15|00:19:16|2026-06-15T08:48:58|2026-06-15T09:08:14|nemotron_n3_post
+3315382.32|test|FAILED|1:0|00:00:01|2026-06-15T08:49:01|2026-06-15T08:49:02|nemotron_n3_post
+3315382.33|test|COMPLETED|0:0|00:00:01|2026-06-15T08:49:04|2026-06-15T08:49:05|nemotron_n3_post
+3315382.34|ray|FAILED|1:0|00:00:05|2026-06-15T08:49:05|2026-06-15T08:49:10|nemotron_n3_post
+3315382.35|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:12|2026-06-15T08:49:16|nemotron_n3_post
+3315382.36|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:18|2026-06-15T08:49:22|nemotron_n3_post
+3315382.37|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:24|2026-06-15T08:49:28|nemotron_n3_post
+3315382.38|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:30|2026-06-15T08:49:34|nemotron_n3_post
+3315382.39|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:36|2026-06-15T08:49:40|nemotron_n3_post
+3315382.40|ray|COMPLETED|0:0|00:00:05|2026-06-15T08:49:42|2026-06-15T08:49:47|nemotron_n3_post
+3315382.41|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:49|2026-06-15T08:49:53|nemotron_n3_post
+3315382.42|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:49:55|2026-06-15T08:49:59|nemotron_n3_post
+3315382.43|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:50:01|2026-06-15T08:50:05|nemotron_n3_post
+3315382.44|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:50:07|2026-06-15T08:50:11|nemotron_n3_post
+3315382.45|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:50:13|2026-06-15T08:50:17|nemotron_n3_post
+3315382.46|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:50:19|2026-06-15T08:50:23|nemotron_n3_post
+3315382.47|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:50:25|2026-06-15T08:50:29|nemotron_n3_post
+3315382.48|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:50:31|2026-06-15T08:50:35|nemotron_n3_post
+3315382.49|ray|COMPLETED|0:0|00:00:05|2026-06-15T08:50:37|2026-06-15T08:50:42|nemotron_n3_post
+3315382.50|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:50:44|2026-06-15T08:50:48|nemotron_n3_post
+3315382.51|ray|COMPLETED|0:0|00:00:04|2026-06-15T08:50:50|2026-06-15T08:50:54|nemotron_n3_post
+3315382.52|bash|FAILED|1:0|00:17:11|2026-06-15T08:50:54|2026-06-15T09:08:05|nemotron_n3_post
+SCONTROL
+SCONTROL_JOB=3308774
+SCONTROL_JOB=3315380
+SCONTROL_JOB=3315381
+SCONTROL_JOB=3315382
+LOGS
+DIR=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1
+2026-06-14 17:15 8 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1/latest_235b_scale_gen_job_id.txt
+2026-06-15 08:48 0 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1/3308774-logs/STARTED_RAY_HEAD
+2026-06-15 11:34 25882 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1/3308774-logs/ray-worker-3.log
+2026-06-15 11:34 25886 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1/3308774-logs/ray-worker-5.log
+2026-06-15 11:34 25886 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1/3308774-logs/ray-worker-6.log
+2026-06-15 11:34 25886 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1/3308774-logs/ray-worker-9.log
+2026-06-15 11:34 25887 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1/3308774-logs/ray-worker-8.log
+2026-06-15 11:34 25890 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1/3308774-logs/ray-worker-14.log
+2026-06-15 11:34 25893 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1/3308774-logs/ray-worker-13.log
+2026-06-15 11:34 25894 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1/3308774-logs/ray-worker-11.log
+2026-06-15 11:34 25895 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1/3308774-logs/ray-worker-2.log
+2026-06-15 11:34 25895 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1/3308774-logs/ray-worker-4.log
+2026-06-15 11:34 25895 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1/3308774-logs/ray-worker-7.log
+2026-06-15 11:34 25901 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1/3308774-logs/ray-worker-10.log
+2026-06-15 11:34 25902 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1/3308774-logs/ray-worker-12.log
+2026-06-15 11:34 25902 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1/3308774-logs/ray-worker-15.log
+2026-06-15 11:34 26015 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1/3308774-logs/ray-worker-1.log
+2026-06-15 11:34 27813 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1/3308774-logs/ray-head.log
+2026-06-15 11:34 583002 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1/3308774-logs/ray-driver.log
+2026-06-15 11:34 7058 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/swerl_fullgrpo_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_eager_nolevel_r16/pard2_steps1/slurm-3308774.out
+DIR=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline
+2026-06-15 08:48 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline/3315380-logs/ray-worker-6.log
+2026-06-15 08:48 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline/3315380-logs/ray-worker-8.log
+2026-06-15 08:48 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline/3315380-logs/ray-worker-9.log
+2026-06-15 08:48 5251 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline/3315380-logs/ray-head.log
+2026-06-15 08:49 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline/3315380-logs/ray-worker-23.log
+2026-06-15 08:49 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline/3315380-logs/ray-worker-28.log
+2026-06-15 08:49 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline/3315380-logs/ray-worker-18.log
+2026-06-15 08:49 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline/3315380-logs/ray-worker-19.log
+2026-06-15 08:49 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline/3315380-logs/ray-worker-20.log
+2026-06-15 08:49 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline/3315380-logs/ray-worker-21.log
+2026-06-15 08:49 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline/3315380-logs/ray-worker-22.log
+2026-06-15 08:49 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline/3315380-logs/ray-worker-24.log
+2026-06-15 08:49 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline/3315380-logs/ray-worker-27.log
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline/3315380-logs/ray-worker-26.log
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline/3315380-logs/ray-worker-29.log
+2026-06-15 08:50 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline/3315380-logs/ray-worker-25.log
+2026-06-15 08:50 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline/3315380-logs/ray-worker-30.log
+2026-06-15 08:50 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline/3315380-logs/ray-worker-31.log
+2026-06-15 09:05 232433 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline/3315380-logs/ray-driver.log
+2026-06-15 09:05 485510 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/baseline/slurm-3315380.out
+DIR=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3/3315381-logs/ray-worker-21.log
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3/3315381-logs/ray-worker-22.log
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3/3315381-logs/ray-worker-23.log
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3/3315381-logs/ray-worker-24.log
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3/3315381-logs/ray-worker-27.log
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3/3315381-logs/ray-worker-31.log
+2026-06-15 08:50 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3/3315381-logs/ray-worker-10.log
+2026-06-15 08:50 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3/3315381-logs/ray-worker-16.log
+2026-06-15 08:50 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3/3315381-logs/ray-worker-17.log
+2026-06-15 08:50 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3/3315381-logs/ray-worker-18.log
+2026-06-15 08:50 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3/3315381-logs/ray-worker-19.log
+2026-06-15 08:50 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3/3315381-logs/ray-worker-20.log
+2026-06-15 08:50 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3/3315381-logs/ray-worker-25.log
+2026-06-15 08:50 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3/3315381-logs/ray-worker-26.log
+2026-06-15 08:50 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3/3315381-logs/ray-worker-28.log
+2026-06-15 08:50 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3/3315381-logs/ray-worker-29.log
+2026-06-15 08:50 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3/3315381-logs/ray-worker-30.log
+2026-06-15 08:50 3352 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3/3315381-logs/ray-worker-8.log
+2026-06-15 09:06 404511 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3/3315381-logs/ray-driver.log
+2026-06-15 09:06 435870 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k3/slurm-3315381.out
+DIR=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5
+2026-06-15 08:50 3350 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5/3315382-logs/ray-worker-25.log
+2026-06-15 08:50 3350 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5/3315382-logs/ray-worker-26.log
+2026-06-15 08:50 3350 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5/3315382-logs/ray-worker-27.log
+2026-06-15 08:50 3350 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5/3315382-logs/ray-worker-30.log
+2026-06-15 08:50 3350 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5/3315382-logs/ray-worker-31.log
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5/3315382-logs/ray-worker-10.log
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5/3315382-logs/ray-worker-14.log
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5/3315382-logs/ray-worker-15.log
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5/3315382-logs/ray-worker-16.log
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5/3315382-logs/ray-worker-17.log
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5/3315382-logs/ray-worker-18.log
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5/3315382-logs/ray-worker-20.log
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5/3315382-logs/ray-worker-22.log
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5/3315382-logs/ray-worker-23.log
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5/3315382-logs/ray-worker-28.log
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5/3315382-logs/ray-worker-29.log
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5/3315382-logs/ray-worker-8.log
+2026-06-15 08:50 3351 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5/3315382-logs/ray-worker-9.log
+2026-06-15 09:08 440073 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5/3315382-logs/ray-driver.log
+2026-06-15 09:08 444857 /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/mathrl_latest_main_logs/20260615_qwen235b_mathrl_latest_main_guards_n3post_systempy/pard_k5/slurm-3315382.out

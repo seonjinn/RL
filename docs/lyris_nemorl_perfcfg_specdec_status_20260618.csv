@@ -1,0 +1,165 @@
+job_id,label,model,mode,method,state,exit_code,elapsed,nodes,nodelist,job_name,max_steps,max_osl
+2150856,,,,,FAILED,1:0,00:01:38,16,lyris[0145-0160],online-qwen235b-latestmain-forcevenv-r9-N16xG4,20,unknown
+2150859,,,,,COMPLETED,0:0,00:01:06,1,lyris0234,bash,20,unknown
+2150860,,,,,COMPLETED,0:0,00:00:59,1,lyris0234,bash,20,unknown
+2150863,,,,,CANCELLED by 2001147693,0:0,00:01:25,1,lyris0126,coreai_dlalgo_llm-nrl-interactive-debug,20,unknown
+2150866,,,,,CANCELLED by 2001147693,0:0,00:06:13,1,lyris[0179-0180],coreai_dlalgo_llm-nrl-interactive-debug2n,20,unknown
+2150867,,,,,CANCELLED by 2001147693,0:0,00:05:42,1,lyris0234,bash,20,unknown
+2150877,,,,,CANCELLED by 2001147693,0:0,00:05:07,4,lyris[0134-0137],online-qwen30ba3b-perfcfg-sync-baseline-step1-osl128-temp1.0-N4xG4,1,128
+2150881,,,,,FAILED,1:0,00:00:48,1,lyris0179,coreai_dlalgo_llm-nrl.rawopt.import,20,unknown
+2150883,,,,,COMPLETED,0:0,00:01:11,1,lyris0179,coreai_dlalgo_llm-nrl.rawopt.import2,20,unknown
+2150885,,,,,FAILED,1:0,00:18:32,4,lyris[0134-0137],online-qwen30ba3b-perfcfg-sync-baseline-step1-osl128-temp1.0-N4xG4,1,128
+2150887,,,,,CANCELLED by 2001147693,0:0,01:53:09,1,lyris[0138-0141],coreai_dlalgo_llm-nrl.reference.interactive,20,unknown
+2150900,,,,,CANCELLED by 2001147693,0:0,00:01:12,4,lyris[0152-0155],online-qwen30ba3b-perfcfg-sync-baseline-step20-osl1024-temp1.0-N4xG4,20,1024
+2150901,,,,,CANCELLED by 2001147693,0:0,00:01:12,4,lyris[0156-0159],online-qwen30ba3b-perfcfg-sync-pard-step20-osl1024-temp1.0-N4xG4,20,1024
+2150902,,,,,FAILED,2:0,00:01:05,4,lyris[0217-0220],online-qwen30ba3b-perfcfg-sync-pard2-step20-osl1024-temp1.0-N4xG4,20,1024
+2150903,,,,,CANCELLED by 2001147693,0:0,00:01:12,4,lyris[0221-0224],online-qwen30ba3b-perfcfg-sync-eagle3-step20-osl1024-temp1.0-N4xG4,20,1024
+2150904,,,,,CANCELLED by 2001147693,0:0,00:01:12,4,lyris[0225-0228],online-qwen30ba3b-perfcfg-sync-suffix-step20-osl1024-temp1.0-N4xG4,20,1024
+2150911,,,,,CANCELLED by 2001147693,0:0,00:00:01,4,lyris[0134-0137],online-qwen30ba3b-perfcfg-sync-baseline-step1-osl64-temp1.0-N4xG4,1,64
+2151117,,,,,COMPLETED,0:0,01:08:03,4,"lyris[0221-0223,0225]",online-qwen30ba3b-perfcfg-async1off-baseline-step20-osl1024-temp1.0-N4xG4,20,1024
+2151118,,,,,COMPLETED,0:0,00:58:30,4,"lyris[0219,0224,0226-0227]",online-qwen30ba3b-perfcfg-async1off-eagle3-step20-osl1024-temp1.0-N4xG4,20,1024
+2151251,,,,,COMPLETED,0:0,00:51:17,4,lyris[0212-0215],online-qwen30ba3b-perfcfg-async1off-suffix-step20-osl1024-temp1.0-N4xG4,20,1024
+2151272,,,,,COMPLETED,0:0,01:00:07,4,"lyris[0117-0118,0121,0126]",online-qwen30ba3b-perfcfg-async1off-pard-step20-osl1024-temp1.0-N4xG4,20,1024
+2151318,,,,,CANCELLED by 2001147693,0:0,00:07:12,1,"lyris[0130-0131,0134-0135]",coreai_dlalgo_llm-nrl.reference.interactive,20,unknown
+2151356,,,,,COMPLETED,0:0,00:58:51,4,"lyris[0130-0131,0134-0135]",online-qwen32-perfcfg-sync-baseline-step20-osl1024-temp1.0-N4xG4,20,1024
+2151357,,,,,COMPLETED,0:0,00:51:35,4,lyris[0235-0238],online-qwen32-perfcfg-sync-eagle3-step20-osl1024-temp1.0-N4xG4,20,1024
+2151358,,,,,COMPLETED,0:0,00:59:49,4,lyris[0273-0276],online-qwen32-perfcfg-sync-suffix-step20-osl1024-temp1.0-N4xG4,20,1024
+2151359,,,,,COMPLETED,0:0,00:52:42,4,"lyris[0253-0254,0256-0257]",online-qwen32-perfcfg-sync-pard-step20-osl1024-temp1.0-N4xG4,20,1024
+2151364,,,,,COMPLETED,0:0,00:36:59,8,"lyris[0136-0142,0144]",online-qwen32-perfcfg-async1off-baseline-step20-osl1024-temp1.0-N8xG4,20,1024
+2151365,,,,,COMPLETED,0:0,00:30:54,8,lyris[0039-0046],online-qwen32-perfcfg-async1off-eagle3-step20-osl1024-temp1.0-N8xG4,20,1024
+2151366,,,,,COMPLETED,0:0,00:34:34,8,lyris[0146-0153],online-qwen32-perfcfg-async1off-suffix-step20-osl1024-temp1.0-N8xG4,20,1024
+2151367,,,,,COMPLETED,0:0,00:31:09,8,"lyris[0091,0093-0099]",online-qwen32-perfcfg-async1off-pard-step20-osl1024-temp1.0-N8xG4,20,1024
+2151391,,,,,COMPLETED,0:0,00:53:16,4,lyris[0074-0077],online-qwen30ba3b-perfcfg-sync-baseline-step20-osl1024-temp1.0-N4xG4,20,1024
+2151392,,,,,COMPLETED,0:0,00:45:41,4,"lyris[0112-0114,0120]",online-qwen30ba3b-perfcfg-sync-eagle3-step20-osl1024-temp1.0-N4xG4,20,1024
+2151393,,,,,COMPLETED,0:0,00:50:07,4,lyris[0047-0050],online-qwen30ba3b-perfcfg-sync-suffix-step20-osl1024-temp1.0-N4xG4,20,1024
+2151394,,,,,COMPLETED,0:0,00:46:14,4,lyris[0051-0054],online-qwen30ba3b-perfcfg-sync-pard-step20-osl1024-temp1.0-N4xG4,20,1024
+2151395,,,,,FAILED,1:0,00:21:01,32,"lyris[0020-0033,0035-0036,0163-0178]",online-qwen235b-perfcfg-sync-baseline-step20-osl1024-temp1.0-N32xG4,20,1024
+2151396,,,,,CANCELLED by 2001147693,0:0,00:05:14,32,"lyris[0055-0070,0145-0160]",online-qwen235b-perfcfg-sync-eagle3-step20-osl1024-temp1.0-N32xG4,20,1024
+2151397,,,,,CANCELLED by 2001147693,0:0,00:03:14,32,"lyris[0235-0239,0241,0243-0268]",online-qwen235b-perfcfg-sync-suffix-step20-osl1024-temp1.0-N32xG4,20,1024
+2151398,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-sync-pard-step20-osl1024-temp1.0-N32xG4,20,1024
+2151399,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-sync-pard2-step20-osl1024-temp1.0-N32xG4,20,1024
+2151400,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-async1off-baseline-step20-osl1024-temp1.0-N32xG4,20,1024
+2151401,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-async1off-eagle3-step20-osl1024-temp1.0-N32xG4,20,1024
+2151402,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-async1off-suffix-step20-osl1024-temp1.0-N32xG4,20,1024
+2151403,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-async1off-pard-step20-osl1024-temp1.0-N32xG4,20,1024
+2151404,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-async1off-pard2-step20-osl1024-temp1.0-N32xG4,20,1024
+2151544,,,,,FAILED,1:0,00:21:21,32,"lyris[0235-0239,0241,0243-0268]",online-qwen235b-perfcfg-sync-baseline-step3-osl1024-temp1.0-N32xG4,3,1024
+2151568,,,,,FAILED,1:0,00:21:49,32,"lyris[0235-0239,0241,0243-0268]",online-qwen235b-perfcfg-sync-baseline-step3-osl1024-temp1.0-N32xG4,3,1024
+2151596,,,,,FAILED,1:0,00:03:00,32,"lyris[0019-0033,0035,0235-0239,0241,0243-0252]",online-qwen235b-perfcfg-sync-baseline-step3-osl1024-temp1.0-N32xG4,3,1024
+2151619,,,,,FAILED,1:0,00:19:35,32,"lyris[0019-0033,0035,0271-0286]",online-qwen235b-perfcfg-sync-baseline-step3-osl1024-temp1.0-N32xG4,3,1024
+2151639,,,,,FAILED,1:0,00:38:51,32,"lyris[0235-0239,0241,0243-0252,0271-0286]",online-qwen235b-perfcfg-sync-baseline-step3-osl1024-temp1.0-N32xG4,3,1024
+2151659,,,,,FAILED,1:0,00:36:34,32,"lyris[0235-0239,0241,0243-0252,0271-0286]",online-qwen235b-perfcfg-sync-baseline-step3-osl1024-temp1.0-N32xG4,3,1024
+2152047,,,,,FAILED,1:0,00:10:46,32,"lyris[0145-0148,0150,0152-0162,0217-0225,0227-0233]",online-qwen235b-perfcfg-sync-baseline-step3-osl1024-temp1.0-N32xG4,3,1024
+2152060,,,,,CANCELLED by 2001147693,0:0,00:40:16,32,"lyris[0235-0239,0241,0243-0252,0271-0286]",online-qwen235b-perfcfg-sync-baseline-step3-osl1024-temp1.0-N32xG4,3,1024
+2152097,,,,,CANCELLED by 2001147693,0:0,00:13:25,32,"lyris[0020-0033,0035-0036,0200-0209,0211-0216]",online-qwen235b-perfcfg-sync-baseline-step20-osl1024-temp1.0-N32xG4,20,1024
+2152098,,,,,CANCELLED by 2001147693,0:0,00:13:24,32,"lyris[0091-0096,0098-0107,0217-0225,0227-0233]",online-qwen235b-perfcfg-sync-eagle3-step20-osl1024-temp1.0-N32xG4,20,1024
+2152099,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-sync-suffix-step20-osl1024-temp1.0-N32xG4,20,1024
+2152100,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-sync-pard-step20-osl1024-temp1.0-N32xG4,20,1024
+2152101,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-sync-pard2-step20-osl1024-temp1.0-N32xG4,20,1024
+2152102,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-async1off-baseline-step20-osl1024-temp1.0-N32xG4,20,1024
+2152103,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-async1off-eagle3-step20-osl1024-temp1.0-N32xG4,20,1024
+2152104,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-async1off-suffix-step20-osl1024-temp1.0-N32xG4,20,1024
+2152105,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-async1off-pard-step20-osl1024-temp1.0-N32xG4,20,1024
+2152106,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-async1off-pard2-step20-osl1024-temp1.0-N32xG4,20,1024
+2152110,,,,,CANCELLED by 2001147693,0:0,00:11:23,4,lyris[0074-0077],online-qwen30ba3b-perfcfg-sync-pard-step20-osl1024-temp1.0-N4xG4,20,1024
+2152111,,,,,CANCELLED by 2001147693,0:0,00:02:49,4,lyris[0082-0085],online-qwen30ba3b-perfcfg-async1off-pard-step20-osl1024-temp1.0-N4xG4,20,1024
+2152112,,,,,CANCELLED by 2001147693,0:0,00:00:00,4,None assigned,online-qwen32-perfcfg-sync-pard-step20-osl1024-temp1.0-N4xG4,20,1024
+2152113,,,,,CANCELLED by 2001147693,0:0,00:11:23,8,"lyris[0110-0111,0113-0114,0117-0118,0120-0121]",online-qwen32-perfcfg-async1off-pard-step20-osl1024-temp1.0-N8xG4,20,1024
+2152121,,,,,FAILED,1:0,00:03:38,32,"lyris[0056-0071,0253-0268]",online-qwen235b-perfcfg-sync-baseline-step20-osl8192-temp1.0-N32xG4,20,8192
+2152122,,,,,FAILED,1:0,00:02:42,32,"lyris[0200-0209,0211-0216,0271-0286]",online-qwen235b-perfcfg-sync-eagle3-step20-osl8192-temp1.0-N32xG4,20,8192
+2152123,,,,,FAILED,1:0,00:03:34,32,"lyris[0145-0160,0163-0178]",online-qwen235b-perfcfg-sync-suffix-step20-osl8192-temp1.0-N32xG4,20,8192
+2152124,,,,,CANCELLED by 2001147693,0:0,00:01:37,32,"lyris[0056-0071,0253-0268]",online-qwen235b-perfcfg-sync-pard-step20-osl8192-temp1.0-N32xG4,20,8192
+2152125,,,,,CANCELLED by 2001147693,0:0,00:00:47,32,"lyris[0200-0209,0211-0216,0271-0286]",online-qwen235b-perfcfg-sync-pard2-step20-osl8192-temp1.0-N32xG4,20,8192
+2152127,,,,,FAILED,1:0,00:03:27,32,"lyris[0037-0052,0127-0142]",online-qwen235b-perfcfg-async1off-baseline-step20-osl8192-temp1.0-N32xG4,20,8192
+2152128,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-async1off-eagle3-step20-osl8192-temp1.0-N32xG4,20,8192
+2152129,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-async1off-suffix-step20-osl8192-temp1.0-N32xG4,20,8192
+2152130,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-async1off-pard-step20-osl8192-temp1.0-N32xG4,20,8192
+2152131,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-async1off-pard2-step20-osl8192-temp1.0-N32xG4,20,8192
+2152132,qwen30_sync_baseline,Qwen3-30B-A3B,sync,baseline,COMPLETED,0:0,02:28:26,4,"lyris[0096,0098,0100,0102]",online-qwen30ba3b-perfcfg-sync-baseline-step20-osl4096-temp1.0-N4xG4,20,4096
+2152133,,,,,FAILED,1:0,00:08:06,4,"lyris[0217,0219,0221,0224]",online-qwen30ba3b-perfcfg-sync-eagle3-step20-osl4096-temp1.0-N4xG4,20,4096
+2152134,qwen30_sync_suffix,Qwen3-30B-A3B,sync,Suffix,COMPLETED,0:0,02:27:35,4,"lyris[0111,0113-0114,0117]",online-qwen30ba3b-perfcfg-sync-suffix-step20-osl4096-temp1.0-N4xG4,20,4096
+2152135,qwen30_sync_pard_k5,Qwen3-30B-A3B,sync,PARD K=5,COMPLETED,0:0,02:31:32,4,lyris[0236-0239],online-qwen30ba3b-perfcfg-sync-pard-step20-osl4096-temp1.0-N4xG4,20,4096
+2152136,qwen30_async_baseline,Qwen3-30B-A3B,async-1off,baseline,COMPLETED,0:0,02:37:04,4,lyris[0075-0078],online-qwen30ba3b-perfcfg-async1off-baseline-step20-osl4096-temp1.0-N4xG4,20,4096
+2152137,,,,,CANCELLED by 2001147693,0:0,00:13:00,4,lyris[0249-0252],online-qwen30ba3b-perfcfg-async1off-eagle3-step20-osl4096-temp1.0-N4xG4,20,4096
+2152138,qwen30_async_suffix,Qwen3-30B-A3B,async-1off,Suffix,COMPLETED,0:0,02:53:16,4,lyris[0230-0233],online-qwen30ba3b-perfcfg-async1off-suffix-step20-osl4096-temp1.0-N4xG4,20,4096
+2152139,qwen30_async_pard_k5,Qwen3-30B-A3B,async-1off,PARD K=5,COMPLETED,0:0,02:42:06,4,lyris[0086-0089],online-qwen30ba3b-perfcfg-async1off-pard-step20-osl4096-temp1.0-N4xG4,20,4096
+2152140,qwen32_sync_baseline,Qwen3-32B,sync,baseline,COMPLETED,0:0,03:06:57,4,lyris[0091-0094],online-qwen32-perfcfg-sync-baseline-step20-osl4096-temp1.0-N4xG4,20,4096
+2152141,,,,,CANCELLED by 2001147693,0:0,00:13:00,4,"lyris[0095,0097,0099,0101]",online-qwen32-perfcfg-sync-eagle3-step20-osl4096-temp1.0-N4xG4,20,4096
+2152142,qwen32_sync_suffix,Qwen3-32B,sync,Suffix,TIMEOUT,0:0,04:00:28,4,lyris[0103-0106],online-qwen32-perfcfg-sync-suffix-step20-osl4096-temp1.0-N4xG4,20,4096
+2152143,qwen32_sync_pard_k5,Qwen3-32B,sync,PARD K=5,COMPLETED,0:0,03:15:52,4,lyris[0127-0130],online-qwen32-perfcfg-sync-pard-step20-osl4096-temp1.0-N4xG4,20,4096
+2152144,qwen32_async_baseline,Qwen3-32B,async-1off,baseline,COMPLETED,0:0,01:26:38,8,"lyris[0110,0112,0118,0120-0121,0123-0125]",online-qwen32-perfcfg-async1off-baseline-step20-osl4096-temp1.0-N8xG4,20,4096
+2152145,,,,,CANCELLED by 2001147693,0:0,00:13:00,8,"lyris[0235,0241,0243-0248]",online-qwen32-perfcfg-async1off-eagle3-step20-osl4096-temp1.0-N8xG4,20,4096
+2152146,qwen32_async_suffix,Qwen3-32B,async-1off,Suffix,COMPLETED,0:0,02:57:39,8,"lyris[0218,0220,0222-0223,0225,0227-0229]",online-qwen32-perfcfg-async1off-suffix-step20-osl4096-temp1.0-N8xG4,20,4096
+2152147,qwen32_async_pard_k5,Qwen3-32B,async-1off,PARD K=5,COMPLETED,0:0,01:33:32,8,"lyris[0074,0079-0085]",online-qwen32-perfcfg-async1off-pard-step20-osl4096-temp1.0-N8xG4,20,4096
+2152151,qwen235b_sync_baseline,Qwen3-235B-A22B,sync,baseline,FAILED,1:0,01:47:15,32,"lyris[0001-0016,0020-0033,0035-0036]",online-qwen235b-perfcfg-sync-baseline-step20-osl8192-temp1.0-N32xG4,20,8192
+2152152,qwen235b_sync_eagle3,Qwen3-235B-A22B,sync,Eagle-3,CANCELLED by 2001147693,0:0,00:32:26,32,"lyris[0056-0071,0145-0158,0160-0161]",online-qwen235b-perfcfg-sync-eagle3-step20-osl8192-temp1.0-N32xG4,20,8192
+2152153,qwen235b_sync_suffix,Qwen3-235B-A22B,sync,Suffix,CANCELLED by 2001147693,0:0,00:07:52,32,"lyris[0164-0179,0253-0268]",online-qwen235b-perfcfg-sync-suffix-step20-osl8192-temp1.0-N32xG4,20,8192
+2152154,qwen235b_sync_pard,Qwen3-235B-A22B,sync,PARD,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-sync-pard-step20-osl8192-temp1.0-N32xG4,20,8192
+2152155,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-sync-pard2-step20-osl8192-temp1.0-N32xG4,20,8192
+2152156,qwen235b_async_baseline,Qwen3-235B-A22B,async-1off,baseline,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-async1off-baseline-step20-osl8192-temp1.0-N32xG4,20,8192
+2152157,qwen235b_async_eagle3,Qwen3-235B-A22B,async-1off,Eagle-3,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-async1off-eagle3-step20-osl8192-temp1.0-N32xG4,20,8192
+2152158,qwen235b_async_suffix,Qwen3-235B-A22B,async-1off,Suffix,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-async1off-suffix-step20-osl8192-temp1.0-N32xG4,20,8192
+2152159,qwen235b_async_pard,Qwen3-235B-A22B,async-1off,PARD,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-async1off-pard-step20-osl8192-temp1.0-N32xG4,20,8192
+2152160,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-async1off-pard2-step20-osl8192-temp1.0-N32xG4,20,8192
+2152193,qwen30_sync_eagle3,Qwen3-30B-A3B,sync,Eagle-3,COMPLETED,0:0,01:49:12,4,lyris[0260-0263],online-qwen30ba3b-perfcfg-sync-eagle3-step20-osl4096-temp1.0-N4xG4,20,4096
+2152194,qwen30_async_eagle3,Qwen3-30B-A3B,async-1off,Eagle-3,COMPLETED,0:0,02:04:39,4,lyris[0169-0172],online-qwen30ba3b-perfcfg-async1off-eagle3-step20-osl4096-temp1.0-N4xG4,20,4096
+2152195,qwen32_sync_eagle3,Qwen3-32B,sync,Eagle-3,COMPLETED,0:0,02:20:20,4,lyris[0043-0046],online-qwen32-perfcfg-sync-eagle3-step20-osl4096-temp1.0-N4xG4,20,4096
+2152196,qwen32_async_eagle3,Qwen3-32B,async-1off,Eagle-3,COMPLETED,0:0,01:13:21,8,lyris[0151-0158],online-qwen32-perfcfg-async1off-eagle3-step20-osl4096-temp1.0-N8xG4,20,4096
+2152207,,,,,FAILED,2:0,00:01:08,4,lyris[0203-0206],online-qwen30ba3b-perfcfg-sync-pard2-step20-osl4096-temp1.0-N4xG4,20,4096
+2152208,,,,,FAILED,2:0,00:01:00,4,lyris[0271-0274],online-qwen30ba3b-perfcfg-async1off-pard2-step20-osl4096-temp1.0-N4xG4,20,4096
+2152209,,,,,FAILED,2:0,00:01:00,4,lyris[0275-0278],online-qwen32-perfcfg-sync-pard2-step20-osl4096-temp1.0-N4xG4,20,4096
+2152210,,,,,FAILED,2:0,00:01:25,8,"lyris[0259,0264-0270]",online-qwen32-perfcfg-async1off-pard2-step20-osl4096-temp1.0-N8xG4,20,4096
+2152215,,,,,FAILED,2:0,00:01:09,4,lyris[0203-0206],online-qwen30ba3b-perfcfg-sync-pard2-step20-osl4096-temp1.0-N4xG4,20,4096
+2152216,,,,,FAILED,2:0,00:01:12,4,lyris[0271-0274],online-qwen30ba3b-perfcfg-async1off-pard2-step20-osl4096-temp1.0-N4xG4,20,4096
+2152217,,,,,FAILED,2:0,00:01:25,4,lyris[0058-0061],online-qwen32-perfcfg-sync-pard2-step20-osl4096-temp1.0-N4xG4,20,4096
+2152218,qwen32_async_pard2,Qwen3-32B,async-1off,PARD-2,COMPLETED,0:0,02:07:06,8,"lyris[0207-0209,0211-0215]",online-qwen32-perfcfg-async1off-pard2-step20-osl4096-temp1.0-N8xG4,20,4096
+2152220,qwen235b_sync_pard2,Qwen3-235B-A22B,sync,PARD-2,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-sync-pard2-step20-osl8192-temp1.0-N32xG4,20,8192
+2152221,qwen235b_async_pard2,Qwen3-235B-A22B,async-1off,PARD-2,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-async1off-pard2-step20-osl8192-temp1.0-N32xG4,20,8192
+2152222,qwen30_sync_pard2,Qwen3-30B-A3B,sync,PARD-2,FAILED,1:0,00:07:00,4,lyris[0203-0206],online-qwen30ba3b-perfcfg-sync-pard2-step20-osl4096-temp1.0-N4xG4,20,4096
+2152223,qwen30_async_pard2,Qwen3-30B-A3B,async-1off,PARD-2,CANCELLED by 2001147693,0:0,00:04:03,4,"lyris[0097,0099,0101,0107]",online-qwen30ba3b-perfcfg-async1off-pard2-step20-osl4096-temp1.0-N4xG4,20,4096
+2152224,qwen32_sync_pard2,Qwen3-32B,sync,PARD-2,TIMEOUT,0:0,04:00:05,4,lyris[0271-0274],online-qwen32-perfcfg-sync-pard2-step20-osl4096-temp1.0-N4xG4,20,4096
+2152295,qwen235b_sync_baseline_deepep_smoke,Qwen3-235B-A22B,sync,baseline deepep smoke,FAILED,1:0,00:10:44,32,"lyris[0057-0072,0145-0158,0160-0161]",online-qwen235b-perfcfg-sync-baseline-step3-osl8192-temp1.0-N32xG4,3,8192
+2152313,qwen235b_sync_baseline_deepep_smoke,Qwen3-235B-A22B,sync,baseline deepep smoke,CANCELLED by 2001147693,0:0,00:27:11,32,"lyris[0057-0072,0145-0158,0160-0161]",online-qwen235b-perfcfg-sync-baseline-step3-osl8192-temp1.0-N32xG4,3,8192
+2152320,qwen30_sync_baseline_fuselossfalse,Qwen3-30B-A3B,sync,baseline fuse_loss=false,COMPLETED,0:0,02:38:42,4,lyris[0109-0112],online-qwen30ba3b-perfcfg-sync-baseline-step20-osl4096-temp1.0-N4xG4,20,4096
+2152321,qwen30_async_baseline_fuselossfalse,Qwen3-30B-A3B,async-1off,baseline fuse_loss=false,COMPLETED,0:0,02:32:09,4,lyris[0235-0238],online-qwen30ba3b-perfcfg-async1off-baseline-step20-osl4096-temp1.0-N4xG4,20,4096
+2152323,qwen32_async_baseline_fuselossfalse,Qwen3-32B,async-1off,baseline fuse_loss=false,FAILED,1:0,00:01:32,8,lyris[0020-0027],online-qwen32-perfcfg-async1off-baseline-step20-osl4096-temp1.0-N8xG4,20,4096
+2152337,qwen235b_sync_baseline_alltoall_smoke,Qwen3-235B-A22B,sync,baseline alltoall smoke,CANCELLED by 2001147693,0:0,00:35:56,32,"lyris[0020-0033,0035-0036,0074-0089]",online-qwen235b-perfcfg-sync-baseline-step3-osl8192-temp1.0-N32xG4,3,8192
+2152343,qwen32_sync_baseline_fuselossfalse,Qwen3-32B,sync,baseline fuse_loss=false,COMPLETED,0:0,03:09:52,4,"lyris[0098-0100,0102]",online-qwen32-perfcfg-sync-baseline-step20-osl4096-temp1.0-N4xG4,20,4096
+2152344,qwen32_async_baseline_fuselossfalse,Qwen3-32B,async-1off,baseline fuse_loss=false,COMPLETED,0:0,01:30:52,8,lyris[0001-0008],online-qwen32-perfcfg-async1off-baseline-step20-osl4096-temp1.0-N8xG4,20,4096
+2152407,,,,,CANCELLED by 2001147693,0:0,00:00:00,32,None assigned,online-qwen235b-perfcfg-sync-baseline-step3-osl8192-temp1.0-N32xG4,3,8192
+2152408,qwen235b_sync_baseline_alltoall_flexnull_smoke,Qwen3-235B-A22B,sync,baseline alltoall flex-null smoke,FAILED,1:0,00:02:44,32,"lyris[0020-0033,0035-0036,0254-0268,0270]",online-qwen235b-perfcfg-sync-baseline-step3-osl8192-temp1.0-N32xG4,3,8192
+2152435,qwen235b_sync_baseline_alltoall_flexnone_smoke,Qwen3-235B-A22B,sync,baseline alltoall flex-none smoke,FAILED,1:0,01:37:49,32,"lyris[0020-0033,0035-0036,0254-0269]",online-qwen235b-perfcfg-sync-baseline-step3-osl8192-temp1.0-N32xG4,3,8192
+2152474,qwen32_sync_pard2,Qwen3-32B,sync,PARD-2,FAILED,2:0,00:01:02,4,lyris[0218-0221],online-qwen32-perfcfg-sync-pard2-step20-osl4096-temp1.0-N4xG4,20,4096
+2152499,qwen32_sync_suffix,Qwen3-32B,sync,Suffix,COMPLETED,0:0,03:27:02,4,lyris[0001-0004],online-qwen32-perfcfg-sync-suffix-step20-osl4096-temp1.0-N4xG4,20,4096
+2152508,qwen235b_sync_baseline_alltoall_flexnone_smoke_retry5h,Qwen3-235B-A22B,sync,baseline alltoall flex-none smoke retry5h,CANCELLED by 2001147693,0:0,00:00:33,32,"lyris[0020-0033,0035-0036,0127-0137,0139-0143]",online-qwen235b-perfcfg-sync-baseline-step3-osl8192-temp1.0-N32xG4,3,8192
+2152532,qwen32_sync_pard2,Qwen3-32B,sync,PARD-2,COMPLETED,0:0,04:58:57,4,lyris[0218-0221],online-qwen32-perfcfg-sync-pard2-step20-osl4096-temp1.0-N4xG4,20,4096
+2152567,qwen235b_sync_baseline,Qwen3-235B-A22B,sync,baseline,FAILED,1:0,00:01:53,32,"lyris[0145-0160,0253-0268]",online-qwen235b-perfcfg-sync-baseline-step3-osl8192-temp1.0-N32xG4,3,8192
+2152568,qwen235b_sync_baseline,Qwen3-235B-A22B,sync,baseline,FAILED,1:0,00:09:43,32,"lyris[0020-0033,0035-0036,0253-0268]",online-qwen235b-perfcfg-sync-baseline-step3-osl8192-temp1.0-N32xG4,3,8192
+2152603,qwen235b_sync_baseline,Qwen3-235B-A22B,sync,baseline,FAILED,1:0,00:02:41,32,"lyris[0020-0033,0035-0036,0253-0268]",online-qwen235b-perfcfg-sync-baseline-step3-osl8192-temp1.0-N32xG4,3,8192
+2152615,qwen235b_sync_baseline,Qwen3-235B-A22B,sync,baseline,FAILED,1:0,01:38:01,32,"lyris[0020-0033,0035-0036,0253-0268]",online-qwen235b-perfcfg-sync-baseline-step3-osl8192-temp1.0-N32xG4,3,8192
+2152682,qwen235b_sync_baseline,Qwen3-235B-A22B,sync,baseline,CANCELLED by 2001147693,0:0,01:20:19,32,"lyris[0253-0268,0272-0287]",online-qwen235b-perfcfg-sync-baseline-step3-osl8192-temp1.0-N32xG4,3,8192
+2153069,qwen235b_sync_baseline_osl1024_repro,Qwen3-235B-A22B,sync,baseline_osl1024_repro,FAILED,1:0,00:09:17,32,"lyris[0253-0268,0271-0286]",online-qwen235b-perfcfg-sync-baseline-step3-osl1024-repro-after2152682-N32xG4,3,1024
+2153775,qwen235b_sync_baseline_osl1024_repro,Qwen3-235B-A22B,sync,baseline_osl1024_repro,PENDING,0:0,0:00,32,(Resources),online-qwen235b-perfcfg-sync-baseline-step3-osl1024-temp1.0-N32xG4,3,1024
+2153816,qwen235b_sync_baseline_osl1024_repro,Qwen3-235B-A22B,sync,baseline_osl1024_repro,PENDING,0:0,0:00,32,(Priority),online-qwen235b-perfcfg-sync-baseline-step1-osl1024-temp1.0-N32xG4,1,1024
+2153824,qwen235b_sync_baseline_osl1024_repro,Qwen3-235B-A22B,sync,baseline_osl1024_repro,PENDING,0:0,0:00,32,"(Nodes required for job are DOWN, DRAINED or reserved for jobs in higher priority partitions)",online-qwen235b-perfcfg-sync-baseline-step1-osl1024-backfill-N32xG4,1,1024
+2154472,qwen235b_sync_baseline,Qwen3-235B-A22B,sync,baseline,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-sync-baseline-step20-osl8192-temp1.0-N32xG4,20,8192
+2154473,qwen235b_sync_pard,Qwen3-235B-A22B,sync,PARD,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-sync-pard-step20-osl8192-temp1.0-N32xG4,20,8192
+2154474,qwen235b_sync_pard2,Qwen3-235B-A22B,sync,PARD-2,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-sync-pard2-step20-osl8192-temp1.0-N32xG4,20,8192
+2154475,qwen235b_sync_eagle3,Qwen3-235B-A22B,sync,Eagle-3,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-sync-eagle3-step20-osl8192-temp1.0-N32xG4,20,8192
+2154476,qwen235b_sync_suffix,Qwen3-235B-A22B,sync,Suffix,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-sync-suffix-step20-osl8192-temp1.0-N32xG4,20,8192
+2154477,qwen235b_async_baseline,Qwen3-235B-A22B,async-1off,baseline,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-async1off-baseline-step20-osl8192-temp1.0-N32xG4,20,8192
+2154478,qwen235b_async_pard,Qwen3-235B-A22B,async-1off,PARD,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-async1off-pard-step20-osl8192-temp1.0-N32xG4,20,8192
+2154479,qwen235b_async_pard2,Qwen3-235B-A22B,async-1off,PARD-2,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-async1off-pard2-step20-osl8192-temp1.0-N32xG4,20,8192
+2154480,qwen235b_async_eagle3,Qwen3-235B-A22B,async-1off,Eagle-3,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-async1off-eagle3-step20-osl8192-temp1.0-N32xG4,20,8192
+2154481,qwen235b_async_suffix,Qwen3-235B-A22B,async-1off,Suffix,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-async1off-suffix-step20-osl8192-temp1.0-N32xG4,20,8192
+2154865,qwen235b_sync_baseline_osl1024_fallback,Qwen3-235B-A22B,sync,baseline OSL1024 fallback,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-sync-baseline-step3-osl1024-temp1.0-N32xG4,3,1024
+2154866,qwen235b_sync_baseline,Qwen3-235B-A22B,sync,baseline,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-sync-baseline-step20-osl8192-temp1.0-N32xG4,20,8192
+2154867,qwen235b_sync_pard,Qwen3-235B-A22B,sync,PARD,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-sync-pard-step20-osl8192-temp1.0-N32xG4,20,8192
+2154868,qwen235b_sync_pard2,Qwen3-235B-A22B,sync,PARD-2,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-sync-pard2-step20-osl8192-temp1.0-N32xG4,20,8192
+2154869,qwen235b_sync_eagle3,Qwen3-235B-A22B,sync,Eagle-3,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-sync-eagle3-step20-osl8192-temp1.0-N32xG4,20,8192
+2154870,qwen235b_sync_suffix,Qwen3-235B-A22B,sync,Suffix,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-sync-suffix-step20-osl8192-temp1.0-N32xG4,20,8192
+2154871,qwen235b_async_baseline,Qwen3-235B-A22B,async-1off,baseline,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-async1off-baseline-step20-osl8192-temp1.0-N32xG4,20,8192
+2154872,qwen235b_async_pard,Qwen3-235B-A22B,async-1off,PARD,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-async1off-pard-step20-osl8192-temp1.0-N32xG4,20,8192
+2154873,qwen235b_async_pard2,Qwen3-235B-A22B,async-1off,PARD-2,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-async1off-pard2-step20-osl8192-temp1.0-N32xG4,20,8192
+2154874,qwen235b_async_eagle3,Qwen3-235B-A22B,async-1off,Eagle-3,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-async1off-eagle3-step20-osl8192-temp1.0-N32xG4,20,8192
+2154875,qwen235b_async_suffix,Qwen3-235B-A22B,async-1off,Suffix,PENDING,,0:00,32,(Dependency),online-qwen235b-perfcfg-async1off-suffix-step20-osl8192-temp1.0-N32xG4,20,8192

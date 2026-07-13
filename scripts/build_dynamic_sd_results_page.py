@@ -35,6 +35,8 @@ th, td { border: 1px solid #8a93a6; padding: 5px 10px; text-align: right; }
 th { background: #eef1f6; } td:first-child, th:first-child { text-align: left; }
 .chart-card { display: inline-block; vertical-align: top; margin: 6px 14px 6px 0; }
 .chart-card img { max-width: 540px; width: 100%; border: 1px solid #d4d9e2; }
+.chart-wide { display: block; margin: 8px 0; }
+.chart-wide img { max-width: 1100px; width: 100%; border: 1px solid #d4d9e2; }
 code { background: #eef1f6; padding: 1px 5px; }
 .tag { display: inline-block; background: #eef1f6; border: 1px solid #8a93a6;
        padding: 1px 8px; margin-right: 6px; font-size: 12px; }
@@ -55,11 +57,12 @@ def fmt(value: str, digits: int = 1) -> str:
         return value or "-"
 
 
-def img_cards(names: list[str]) -> str:
+def img_cards(names: list[str], wide: bool = False) -> str:
+    cls = "chart-wide" if wide else "chart-card"
     cards = []
     for name in names:
         cards.append(
-            f'<div class="chart-card"><img src="dynamic_sd_plots/{name}" '
+            f'<div class="{cls}"><img src="dynamic_sd_plots/{name}" '
             f'alt="{html.escape(name)}"></div>'
         )
     return "\n".join(cards)
@@ -210,10 +213,10 @@ is expected to pull ahead.</p>
 raises acceptance length to 4.11 (vs 3.73 at K=5) but per-position acceptance
 decay means tokens/s never beats K=5, and at BS=1 plain K=3 is fastest
 (607 vs 590/556 tok/s). The derived schedules therefore never select K&gt;5.</p>
-{img_cards(rollout_imgs)}
+{img_cards(rollout_imgs, wide=True)}
 
 <h2>Acceptance length by model (temperature 1.0)</h2>
-{img_cards(accept_imgs)}
+{img_cards(accept_imgs, wide=True)}
 
 <h2>Derived DynamicSD schedules</h2>
 {tables_section()}

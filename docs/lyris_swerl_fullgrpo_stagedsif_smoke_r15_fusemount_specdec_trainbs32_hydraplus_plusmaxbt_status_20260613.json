@@ -1,0 +1,38 @@
+[
+  {
+    "checked_at_utc": "2026-06-14T23:36:27+00:00",
+    "draft_model": "amd/PARD-Qwen3-0.6B",
+    "elapsed": "1:12:53",
+    "exit_code": "0:0",
+    "exp_suffix": "specdec-pard-steps1-20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r15_fusemount_specdec_trainbs32_hydraplus_plusmaxbt",
+    "job_id": "2121346",
+    "max_steps": "1",
+    "method": "pard",
+    "nodes": "lyris[0145-0160]",
+    "num_speculative_tokens": "5",
+    "reason": "lyris[0145-0160]",
+    "run_id": "20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r15_fusemount_specdec_trainbs32_hydraplus_plusmaxbt",
+    "specdec_method": "draft_model",
+    "start_time": "2026-06-14T15:23:34",
+    "state": "RUNNING",
+    "target_model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/model_snapshots/Qwen3-235B-A22B-Thinking-2507"
+  },
+  {
+    "checked_at_utc": "2026-06-14T23:36:27+00:00",
+    "draft_model": "amd/PARD2-Qwen3-8B",
+    "elapsed": "01:01:38",
+    "exit_code": "1:0",
+    "exp_suffix": "specdec-pard2-steps1-20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r15_fusemount_specdec_trainbs32_hydraplus_plusmaxbt",
+    "job_id": "2121347",
+    "max_steps": "1",
+    "method": "pard2",
+    "nodes": "lyris[0055-0070]",
+    "num_speculative_tokens": "1",
+    "reason": "None",
+    "run_id": "20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r15_fusemount_specdec_trainbs32_hydraplus_plusmaxbt",
+    "specdec_method": "pard2",
+    "start_time": "2026-06-14T15:24:13",
+    "state": "FAILED",
+    "target_model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/model_snapshots/Qwen3-235B-A22B-Thinking-2507"
+  }
+]

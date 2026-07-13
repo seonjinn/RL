@@ -1,0 +1,84 @@
+# SWE-RL Full-GRPO log fetch
+Sun Jun 14 13:21:24 PDT 2026
+remote_host=login-lyris
+remote_output_root=/lustre/fsw/coreai_dlalgo_llm/users/sna
+local_log_root=tmp/lyris_swerl_fullgrpo_logs_r7_r8_fusemount
+manifest=docs/lyris_swerl_fullgrpo_log_fetch_manifest_r7_r8_fusemount_20260614.csv
+rows=3
+dry_run=false
+
+[2121104] Transfer starting: 21 files
+[2121104] ./
+[2121104] slurm-2121104.out
+[2121104] 2121104-logs/
+[2121104] 2121104-logs/ray-driver.log
+[2121104] 2121104-logs/ray-head.log
+[2121104] 2121104-logs/ray-worker-1.log
+[2121104] 2121104-logs/ray-worker-10.log
+[2121104] 2121104-logs/ray-worker-11.log
+[2121104] 2121104-logs/ray-worker-12.log
+[2121104] 2121104-logs/ray-worker-13.log
+[2121104] 2121104-logs/ray-worker-14.log
+[2121104] 2121104-logs/ray-worker-15.log
+[2121104] 2121104-logs/ray-worker-2.log
+[2121104] 2121104-logs/ray-worker-3.log
+[2121104] 2121104-logs/ray-worker-4.log
+[2121104] 2121104-logs/ray-worker-5.log
+[2121104] 2121104-logs/ray-worker-6.log
+[2121104] 2121104-logs/ray-worker-7.log
+[2121104] 2121104-logs/ray-worker-8.log
+[2121104] 2121104-logs/ray-worker-9.log
+[2121104] 
+[2121104] sent 9713 bytes  received 24056 bytes  337690000 bytes/sec
+[2121104] total size is 2457017  speedup is 72.76
+job 2121104 local_log_files=18 dir=tmp/lyris_swerl_fullgrpo_logs_r7_r8_fusemount/20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r7_fusemount/baseline_steps1_2121104
+[2121199] Transfer starting: 21 files
+[2121199] ./
+[2121199] slurm-2121199.out
+[2121199] 2121199-logs/
+[2121199] 2121199-logs/ray-driver.log
+[2121199] 2121199-logs/ray-head.log
+[2121199] 2121199-logs/ray-worker-1.log
+[2121199] 2121199-logs/ray-worker-10.log
+[2121199] 2121199-logs/ray-worker-11.log
+[2121199] 2121199-logs/ray-worker-12.log
+[2121199] 2121199-logs/ray-worker-13.log
+[2121199] 2121199-logs/ray-worker-14.log
+[2121199] 2121199-logs/ray-worker-15.log
+[2121199] 2121199-logs/ray-worker-2.log
+[2121199] 2121199-logs/ray-worker-3.log
+[2121199] 2121199-logs/ray-worker-4.log
+[2121199] 2121199-logs/ray-worker-5.log
+[2121199] 2121199-logs/ray-worker-6.log
+[2121199] 2121199-logs/ray-worker-7.log
+[2121199] 2121199-logs/ray-worker-8.log
+[2121199] 2121199-logs/ray-worker-9.log
+[2121199] 
+[2121199] sent 4037 bytes  received 14122 bytes  181590000 bytes/sec
+[2121199] total size is 393143  speedup is 21.65
+job 2121199 local_log_files=18 dir=tmp/lyris_swerl_fullgrpo_logs_r7_r8_fusemount/20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r8_fusemount_specdec/pard_steps1_2121199
+[2121201] Transfer starting: 21 files
+[2121201] ./
+[2121201] slurm-2121201.out
+[2121201] 2121201-logs/
+[2121201] 2121201-logs/ray-driver.log
+[2121201] 2121201-logs/ray-head.log
+[2121201] 2121201-logs/ray-worker-1.log
+[2121201] 2121201-logs/ray-worker-10.log
+[2121201] 2121201-logs/ray-worker-11.log
+[2121201] 2121201-logs/ray-worker-12.log
+[2121201] 2121201-logs/ray-worker-13.log
+[2121201] 2121201-logs/ray-worker-14.log
+[2121201] 2121201-logs/ray-worker-15.log
+[2121201] 2121201-logs/ray-worker-2.log
+[2121201] 2121201-logs/ray-worker-3.log
+[2121201] 2121201-logs/ray-worker-4.log
+[2121201] 2121201-logs/ray-worker-5.log
+[2121201] 2121201-logs/ray-worker-6.log
+[2121201] 2121201-logs/ray-worker-7.log
+[2121201] 2121201-logs/ray-worker-8.log
+[2121201] 2121201-logs/ray-worker-9.log
+[2121201] 
+[2121201] sent 4037 bytes  received 13241 bytes  172780000 bytes/sec
+[2121201] total size is 398140  speedup is 23.04
+job 2121201 local_log_files=18 dir=tmp/lyris_swerl_fullgrpo_logs_r7_r8_fusemount/20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r8_fusemount_specdec/pard2_steps1_2121201

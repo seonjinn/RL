@@ -1,0 +1,61 @@
+# SWE-RL Full-GRPO log fetch
+Sun Jun 14 02:13:19 PDT 2026
+remote_host=oci-hsg-cs-001-vscode-02
+remote_output_root=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna
+local_log_root=tmp/oci_hsg_swerl_fullgrpo_pard2_openairender_n3post_r6_logs
+manifest=docs/oci_hsg_swerl_fullgrpo_pard2_openairender_n3post_r6_log_fetch_manifest_20260614.csv
+rows=2
+dry_run=false
+
+[3299946] Transfer starting: 21 files
+[3299946] ./
+[3299946] latest_235b_scale_gen_job_id.txt
+[3299946] slurm-3299946.out
+[3299946] 3299946-logs/
+[3299946] 3299946-logs/ray-driver.log
+[3299946] 3299946-logs/ray-head.log
+[3299946] 3299946-logs/ray-worker-1.log
+[3299946] 3299946-logs/ray-worker-10.log
+[3299946] 3299946-logs/ray-worker-11.log
+[3299946] 3299946-logs/ray-worker-12.log
+[3299946] 3299946-logs/ray-worker-13.log
+[3299946] 3299946-logs/ray-worker-14.log
+[3299946] 3299946-logs/ray-worker-15.log
+[3299946] 3299946-logs/ray-worker-2.log
+[3299946] 3299946-logs/ray-worker-3.log
+[3299946] 3299946-logs/ray-worker-4.log
+[3299946] 3299946-logs/ray-worker-5.log
+[3299946] 3299946-logs/ray-worker-6.log
+[3299946] 3299946-logs/ray-worker-7.log
+[3299946] 3299946-logs/ray-worker-8.log
+[3299946] 3299946-logs/ray-worker-9.log
+[3299946] 
+[3299946] sent 639 bytes  received 170081 bytes  1707200000 bytes/sec
+[3299946] total size is 933024  speedup is 5.47
+job 3299946 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_pard2_openairender_n3post_r6_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_nofp4fusion_n3post_r5/pard2_steps10_3299946
+[3300101] Transfer starting: 21 files
+[3300101] ./
+[3300101] latest_235b_scale_gen_job_id.txt
+[3300101] slurm-3300101.out
+[3300101] 3300101-logs/
+[3300101] 3300101-logs/ray-driver.log
+[3300101] 3300101-logs/ray-head.log
+[3300101] 3300101-logs/ray-worker-1.log
+[3300101] 3300101-logs/ray-worker-10.log
+[3300101] 3300101-logs/ray-worker-11.log
+[3300101] 3300101-logs/ray-worker-12.log
+[3300101] 3300101-logs/ray-worker-13.log
+[3300101] 3300101-logs/ray-worker-14.log
+[3300101] 3300101-logs/ray-worker-15.log
+[3300101] 3300101-logs/ray-worker-2.log
+[3300101] 3300101-logs/ray-worker-3.log
+[3300101] 3300101-logs/ray-worker-4.log
+[3300101] 3300101-logs/ray-worker-5.log
+[3300101] 3300101-logs/ray-worker-6.log
+[3300101] 3300101-logs/ray-worker-7.log
+[3300101] 3300101-logs/ray-worker-8.log
+[3300101] 3300101-logs/ray-worker-9.log
+[3300101] 
+[3300101] sent 639 bytes  received 138582 bytes  1392210000 bytes/sec
+[3300101] total size is 618966  speedup is 4.45
+job 3300101 local_log_files=18 dir=tmp/oci_hsg_swerl_fullgrpo_pard2_openairender_n3post_r6_logs/20260614_oci_hsg_swerl_qwen235b_fullgrpo_pard2_pyoverlay_openairender_n3post_r6/pard2_steps10_3300101

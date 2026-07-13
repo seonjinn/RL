@@ -1,0 +1,11 @@
+metric,baseline_3149928,k1_always_3149929,speedup_or_ratio,notes
+steps_logged,20,20,,Both jobs completed 20/20 steps.
+generation_worker_tokens_per_sec_per_gpu_mean,10393.4925,12515.4965,1.2041665975128186,NeMo performance metric: metrics[total_num_tokens] / timing[generation] / generation_num_gpus.
+e2e_tokens_per_sec_per_gpu_mean,454.93149999999997,456.909,1.0043468082557485,Full GRPO step throughput.
+generation_time_s_mean,2.0975,1.818,1.1537403740374037,timing/train/generation after finish_generation split.
+generation_finish_s_mean,1.4505,1.525,0.9511475409836065,"vLLM finish/sleep time, not accelerated by SpecDec."
+total_step_time_s_mean,47.916,47.739,1.0037076604034436,E2E step-time speedup.
+policy_training_s_mean,19.6955,19.821,0.9936683315675293,Non-generation component.
+policy_and_reference_logprobs_s_mean,16.4755,16.6605,0.9888958914798476,Non-generation component.
+visible_vllm_worker_acceptance_rate_pct_mean,,61.21621621621622,,"Mean over visible vLLM SpecDecoding metrics log lines; compressed repeated lines make this a supporting metric, not exact W&B scalar."
+visible_vllm_worker_acceptance_length_mean,,1.6124324324324324,,Mean over visible vLLM SpecDecoding metrics log lines.

@@ -1,0 +1,5 @@
+job_id,dataset,mode,prompt_offset,prompt_count,isl,osl,batch_sizes,dependency,run_dir
+3264022,swebench_verified_smoke,suffix,0,1,4096,128,1,,/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_swebench_verified_smoke_suffix_offset0_n1_isl4096_osl128_bs1_k32_20260611_arctic
+3264023,swebench_verified,suffix,0,500,4096,1024,8 16,3264022,/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_swebench_verified_suffix_offset0_n500_isl4096_osl1024_bs8_16_k32_20260611_arctic
+3264024,swebench_fulltest,suffix,0,256,4096,1024,8 16,3264022,/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_swebench_fulltest_suffix_offset0_n256_isl4096_osl1024_bs8_16_k32_20260611_arctic
+3264025,swebench_verified_longosl,suffix,0,8,4096,16384,1 2,3264022,/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/vllm-benchmark/vllm-runs/qwen30ba3b_swebench_verified_longosl_suffix_offset0_n8_isl4096_osl16384_bs1_2_k32_20260611_arctic

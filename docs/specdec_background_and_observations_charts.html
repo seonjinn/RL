@@ -429,6 +429,21 @@
     </div>
 
     <div class="card full">
+      <h2>Qwen3-235B PublicHF Decode-Heavy OSL=10000</h2>
+      <p class="muted">vLLM standalone generation-only sweep. Same public HF target/drafter as the short-decode boundary run, but ISL=1000 and OSL=10000.</p>
+      <div class="meta-grid">
+        <div class="meta"><strong>Target / drafter</strong>Qwen/Qwen3-235B-A22B + nvidia/Qwen3-235B-A22B-Eagle3</div>
+        <div class="meta"><strong>vLLM / container</strong>vLLM v0.17.0, standalone LLM.generate</div>
+        <div class="meta"><strong>Shape</strong>ISL=1000, OSL=10000, batch sizes 1/2/4/8/16/32</div>
+        <div class="meta"><strong>Parallelism</strong>TP=4, PP=1, 4 GPUs, 1 node</div>
+        <div class="meta"><strong>Jobs</strong>baseline 3140545/3140571, K=1 3140546/3140574</div>
+        <div class="meta"><strong>Runtime knobs</strong>CUDA Graph on, enforce_eager=false, profiler off, custom all-reduce disabled</div>
+      </div>
+      <p class="muted">Result: K=1 is slower at every tested batch size despite high acceptance. This is direct evidence that acceptance alone is not enough when EAGLE overhead dominates the saved verifier work.</p>
+      <img src="qwen3_235b_vllm_decodeheavy10k_speedup_acceptance.png" alt="Qwen3-235B decode-heavy K=1 speedup and acceptance" style="width:100%; max-width:960px; display:block; margin:16px auto 0;" />
+    </div>
+
+    <div class="card full">
       <h2>Qwen3-235B Thinking-2507 In-House 500K K=1</h2>
       <p class="muted">vLLM standalone short-decode sweep. This is the in-house 500K Eagle3 drafter, not PublicHF. It is generation-only, not NeMo-RL E2E.</p>
       <div class="meta-grid">
@@ -515,7 +530,7 @@
 
     <div class="card full">
       <h2>235B In-House 500K Decode-Heavy Sweeps</h2>
-      <p class="muted">The first decode-heavy sweep completed with synthetic dummy token IDs. Treat that as overhead evidence only, not as a math-domain drafter result. OpenMath-prompt decode-heavy jobs are now submitted.</p>
+      <p class="muted">Short-decode standalone generation is positive for the in-house 500K drafter. Decode-heavy standalone generation is negative, including the real OpenMath-prompt pair.</p>
       <table>
         <thead>
           <tr><th>Run</th><th>Job</th><th>Target / drafter</th><th>Shape</th><th>vLLM / parallelism</th><th>Server</th><th>Status</th></tr>
@@ -523,10 +538,10 @@
         <tbody>
           <tr><td>Synthetic decode-heavy baseline</td><td>3119864</td><td>Qwen/Qwen3-235B-A22B-Thinking-2507</td><td>ISL=1024, OSL=10000, bs=1-8</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs, max_num_batched_tokens=16384</td><td>nvl72150-T13</td><td>Completed. Dummy prompts only.</td></tr>
           <tr><td>Synthetic decode-heavy in-house 500K K=1</td><td>3119827</td><td>Thinking-2507 + in-house 500K Eagle3 checkpoint</td><td>ISL=1024, OSL=10000, bs=1-8</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs</td><td>nvl72082-T17</td><td>Completed. Negative, 0.656x-0.690x; dummy prompts only.</td></tr>
-          <tr><td>Synthetic decode-heavy 20k baseline</td><td>3120128</td><td>Qwen/Qwen3-235B-A22B-Thinking-2507</td><td>ISL=1024, OSL=20000, bs=1-4</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs, max_num_batched_tokens=32768</td><td>nvl72004-T01</td><td>Running.</td></tr>
-          <tr><td>Synthetic decode-heavy 20k in-house 500K K=1</td><td>3120648</td><td>Thinking-2507 + in-house 500K Eagle3 checkpoint</td><td>ISL=1024, OSL=20000, bs=1-4</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs</td><td>nvl72155-T08</td><td>Running.</td></tr>
-          <tr><td>OpenMath decode-heavy baseline</td><td>3120705</td><td>Qwen/Qwen3-235B-A22B-Thinking-2507</td><td>ISL=1024, OSL=10000, bs=1-4</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs, max_num_batched_tokens=16384</td><td>Pending</td><td>Submitted with real OpenMath prompts.</td></tr>
-          <tr><td>OpenMath decode-heavy in-house 500K K=1</td><td>3120704</td><td>Thinking-2507 + in-house 500K Eagle3 checkpoint</td><td>ISL=1024, OSL=10000, bs=1-4</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs</td><td>Pending</td><td>Submitted with real OpenMath prompts.</td></tr>
+          <tr><td>Synthetic decode-heavy 20k baseline</td><td>3120128</td><td>Qwen/Qwen3-235B-A22B-Thinking-2507</td><td>ISL=1024, OSL=20000, bs=1-4</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs, max_num_batched_tokens=32768</td><td>nvl72004-T01</td><td>Completed. 18.77/37.03/73.37 tok/s/GPU.</td></tr>
+          <tr><td>Synthetic decode-heavy 20k in-house 500K K=1</td><td>3120648</td><td>Thinking-2507 + in-house 500K Eagle3 checkpoint</td><td>ISL=1024, OSL=20000, bs=1-4</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs</td><td>nvl72155-T08</td><td>Completed. Negative, 0.488x/0.497x/0.502x; dummy prompts only.</td></tr>
+          <tr><td>OpenMath decode-heavy baseline</td><td>3120705</td><td>Qwen/Qwen3-235B-A22B-Thinking-2507</td><td>ISL=1024, OSL=10000, bs=1-4</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs, max_num_batched_tokens=16384</td><td>nvl72127-T15</td><td>Completed. 23.05/42.41/75.35 tok/s/GPU.</td></tr>
+          <tr><td>OpenMath decode-heavy in-house 500K K=1</td><td>3120704</td><td>Thinking-2507 + in-house 500K Eagle3 checkpoint</td><td>ISL=1024, OSL=10000, bs=1-4</td><td>vLLM v0.17.0, TP=4, PP=1, 4 GPUs</td><td>nvl72078-T02</td><td>Completed. Negative, 0.486x/0.578x/0.606x.</td></tr>
         </tbody>
       </table>
     </div>

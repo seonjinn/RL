@@ -1,0 +1,21 @@
+dataset,batch_size,method,tok_s_per_gpu,baseline_live_tok_s_per_gpu,provisional_speedup_vs_live_baseline,acceptance_rate_pct,mean_acceptance_length,basis
+full,2,eagle3_k3,10.318086704345731,4.125,2.501354352568662,57.78380257212375,2.7335140771637123,provisional: final spec breakdown / live baseline telemetry
+full,2,suffix_k32,25.17399444152723,4.125,6.102786531279329,87.55372798510358,7.432284541723666,provisional: final spec breakdown / live baseline telemetry
+full,4,eagle3_k3,15.624454287999786,8.15,1.9171109555827957,46.47365056169514,2.3942095168508537,provisional: final spec breakdown / live baseline telemetry
+full,4,suffix_k32,27.970944623387158,8.15,3.432017745200878,76.24354619809132,5.417373939091363,provisional: final spec breakdown / live baseline telemetry
+full,8,eagle3_k3,29.849107586033213,16.4,1.8200675357337326,54.28720406710319,2.6286161220130957,provisional: final spec breakdown / live baseline telemetry
+full,8,suffix_k32,63.64152749887743,16.4,3.8805809450535023,81.19485775849517,6.835766232407262,provisional: final spec breakdown / live baseline telemetry
+full,16,eagle3_k3,63.41951850729513,32.2,1.969550264201712,57.29432975345327,2.7188298926035976,provisional: final spec breakdown / live baseline telemetry
+full,16,suffix_k32,110.07211626064351,32.2,3.4183887037466927,81.08209516593588,6.866966580976864,provisional: final spec breakdown / live baseline telemetry
+full,32,eagle3_k3,126.83143557619856,64.525,1.9656169790964517,56.89055240061951,2.7067165720185855,provisional: final spec breakdown / live baseline telemetry
+full,32,suffix_k32,223.1537434699867,64.525,3.4584074927545396,78.92476127742981,6.456228240441199,provisional: final spec breakdown / live baseline telemetry
+verified,2,eagle3_k3,7.694697282528511,4.175,1.8430412652762902,46.326076650986394,2.3897822995295916,provisional: final spec breakdown / live baseline telemetry
+verified,2,suffix_k32,25.80173477418671,4.175,6.180056233338134,84.52071077140666,7.225756400310318,provisional: final spec breakdown / live baseline telemetry
+verified,4,eagle3_k3,18.653783441530067,8.25,2.261064659579402,55.276358129850465,2.658290743895514,provisional: final spec breakdown / live baseline telemetry
+verified,4,suffix_k32,48.65576378814184,8.25,5.897668337956587,86.20053731615135,7.620985135529001,provisional: final spec breakdown / live baseline telemetry
+verified,8,eagle3_k3,36.45700617192063,16.425,2.219604637559856,62.34210363038471,2.8702631089115416,provisional: final spec breakdown / live baseline telemetry
+verified,8,suffix_k32,67.05400838149801,16.425,4.082435822313425,80.05159133846824,6.347912621359224,provisional: final spec breakdown / live baseline telemetry
+verified,16,eagle3_k3,60.35924688588145,33.225,1.8166816218474475,51.453845656252014,2.5436153696875605,provisional: final spec breakdown / live baseline telemetry
+verified,16,suffix_k32,124.49863867784283,33.225,3.7471373567447053,79.92425881843756,6.519390271239632,provisional: final spec breakdown / live baseline telemetry
+verified,32,eagle3_k3,122.58412498282196,64.375,1.9042194172088849,54.291535259029736,2.6287460577708917,provisional: final spec breakdown / live baseline telemetry
+verified,32,suffix_k32,223.2523510073745,64.375,3.4679976855514485,82.9313421121639,7.3144027980424875,provisional: final spec breakdown / live baseline telemetry

@@ -79,7 +79,7 @@ def plot_profile_grids(profile_csv: Path, out_dir: Path) -> None:
             group["K"].unique(), key=lambda s: int(s.split("=")[1].split()[0])
         )
         order = sorted(group["batch_size"].unique())
-        fig, ax = plt.subplots(figsize=(max(4.6, 0.52 * len(order)), 2.0))
+        fig, ax = plt.subplots(figsize=(max(5.5, 0.6 * len(order)), 2.0))
         sns.barplot(
             data=group,
             x="batch_size",
@@ -113,7 +113,7 @@ def plot_profile_speedup(profile_csv: Path, out_dir: Path) -> None:
     for (model, bench), group in merged.groupby(["model", "bench"]):
         hue_order = sorted(group["K"].unique(), key=lambda s: int(s.split("=")[1]))
         order = sorted(group["batch_size"].unique())
-        fig, ax = plt.subplots(figsize=(max(4.6, 0.52 * len(order)), 2.0))
+        fig, ax = plt.subplots(figsize=(max(5.5, 0.6 * len(order)), 2.0))
         sns.barplot(
             data=group,
             x="batch_size",
@@ -139,7 +139,7 @@ def plot_rollout_tok_s_per_gpu(summary_csv: Path, out_dir: Path) -> None:
     df["setting"] = df["model"] + "\n" + df["bench"]
     hue_order = [v for v in VARIANT_ORDER if v in set(df["variant"])]
     order = sorted(df["setting"].unique())
-    fig, ax = plt.subplots(figsize=(max(3.8, 0.95 * len(order)), 2.0))
+    fig, ax = plt.subplots(figsize=(max(9.0, 1.9 * len(order)), 2.2))
     sns.barplot(
         data=df,
         x="setting",
@@ -172,7 +172,7 @@ def plot_acceptance(profile_csv: Path, out_dir: Path) -> None:
     hue_order = sorted(agg["K"].unique(), key=lambda s: int(s.split("=")[1]))
     greedy = agg[agg["sample_method"] == "greedy"]
     order = sorted(greedy["setting"].unique())
-    fig, ax = plt.subplots(figsize=(max(3.8, 0.9 * len(order)), 2.0))
+    fig, ax = plt.subplots(figsize=(max(9.0, 1.7 * len(order)), 2.2))
     sns.barplot(
         data=greedy,
         x="setting",
@@ -201,7 +201,7 @@ def plot_rollout_speedup(summary_csv: Path, out_dir: Path) -> None:
     merged["setting"] = merged["model"] + "\n" + merged["bench"]
     hue_order = [v for v in VARIANT_ORDER if v in set(merged["variant"])]
     order = sorted(merged["setting"].unique())
-    fig, ax = plt.subplots(figsize=(max(3.8, 0.95 * len(order)), 2.0))
+    fig, ax = plt.subplots(figsize=(max(9.0, 1.9 * len(order)), 2.2))
     sns.barplot(
         data=merged,
         x="setting",

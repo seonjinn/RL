@@ -1,0 +1,68 @@
+# SWE-RL Full-GRPO log fetch
+Sun Jun 14 17:58:26 PDT 2026
+remote_host=login-lyris
+remote_output_root=/lustre/fsw/coreai_dlalgo_llm/users/sna
+local_log_root=tmp/lyris_swerl_fullgrpo_logs_r20_r21_statusnow_1758
+manifest=docs/lyris_swerl_fullgrpo_log_fetch_manifest_r20_r21_statusnow_1758_20260614.csv
+rows=3
+dry_run=false
+
+[2122398] Transfer starting: 21 files
+[2122398] ./
+[2122398] latest_235b_scale_gen_job_id.txt
+[2122398] slurm-2122398.out
+[2122398] 2122398-logs/
+[2122398] 2122398-logs/ray-driver.log
+[2122398] 2122398-logs/ray-head.log
+[2122398] 2122398-logs/ray-worker-1.log
+[2122398] 2122398-logs/ray-worker-10.log
+[2122398] 2122398-logs/ray-worker-11.log
+[2122398] 2122398-logs/ray-worker-12.log
+[2122398] 2122398-logs/ray-worker-13.log
+[2122398] 2122398-logs/ray-worker-14.log
+[2122398] 2122398-logs/ray-worker-15.log
+[2122398] 2122398-logs/ray-worker-2.log
+[2122398] 2122398-logs/ray-worker-3.log
+[2122398] 2122398-logs/ray-worker-4.log
+[2122398] 2122398-logs/ray-worker-5.log
+[2122398] 2122398-logs/ray-worker-6.log
+[2122398] 2122398-logs/ray-worker-7.log
+[2122398] 2122398-logs/ray-worker-8.log
+[2122398] 2122398-logs/ray-worker-9.log
+[2122398] 
+[2122398] sent 639 bytes  received 124268 bytes  1249070000 bytes/sec
+[2122398] total size is 400219  speedup is 3.20
+job 2122398 local_log_files=18 dir=tmp/lyris_swerl_fullgrpo_logs_r20_r21_statusnow_1758/20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r20_baseline_runtimeenvrewrite_trainbs32/baseline_steps1_2122398
+[2122399] Transfer starting: 21 files
+[2122399] ./
+[2122399] latest_235b_scale_gen_job_id.txt
+[2122399] slurm-2122399.out
+[2122399] 2122399-logs/
+[2122399] 2122399-logs/ray-driver.log
+[2122399] 2122399-logs/ray-head.log
+[2122399] 2122399-logs/ray-worker-1.log
+[2122399] 2122399-logs/ray-worker-10.log
+[2122399] 2122399-logs/ray-worker-11.log
+[2122399] 2122399-logs/ray-worker-12.log
+[2122399] 2122399-logs/ray-worker-13.log
+[2122399] 2122399-logs/ray-worker-14.log
+[2122399] 2122399-logs/ray-worker-15.log
+[2122399] 2122399-logs/ray-worker-2.log
+[2122399] 2122399-logs/ray-worker-3.log
+[2122399] 2122399-logs/ray-worker-4.log
+[2122399] 2122399-logs/ray-worker-5.log
+[2122399] 2122399-logs/ray-worker-6.log
+[2122399] 2122399-logs/ray-worker-7.log
+[2122399] 2122399-logs/ray-worker-8.log
+[2122399] 2122399-logs/ray-worker-9.log
+[2122399] 
+[2122399] sent 639 bytes  received 126520 bytes  1271590000 bytes/sec
+[2122399] total size is 422171  speedup is 3.32
+job 2122399 local_log_files=18 dir=tmp/lyris_swerl_fullgrpo_logs_r20_r21_statusnow_1758/20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r20_pard2_runtimeenvrewrite_trainbs32/pard2_steps1_2122399
+[2122466] Transfer starting: 2 files
+[2122466] ./
+[2122466] latest_235b_scale_gen_job_id.txt
+[2122466] 
+[2122466] sent 237 bytes  received 197 bytes  4340000 bytes/sec
+[2122466] total size is 8  speedup is 0.02
+job 2122466 local_log_files=0 dir=tmp/lyris_swerl_fullgrpo_logs_r20_r21_statusnow_1758/20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r21_pard_venvsync_trainbs32/pard_steps1_2122466

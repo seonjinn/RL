@@ -1,0 +1,20 @@
+[
+  {
+    "checked_at_utc": "2026-06-15T01:22:59+00:00",
+    "draft_model": "",
+    "elapsed": "00:34:49",
+    "exit_code": "1:0",
+    "exp_suffix": "specdec-baseline-steps1-20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r20_baseline_runtimeenvrewrite_trainbs32",
+    "job_id": "2122398",
+    "max_steps": "1",
+    "method": "baseline",
+    "nodes": "lyris[0254-0263,0265-0270]",
+    "num_speculative_tokens": "0",
+    "reason": "None",
+    "run_id": "20260614_lyris_swerl_qwen235b_fullgrpo_stagedsif_smoke_r20_baseline_runtimeenvrewrite_trainbs32",
+    "specdec_method": "",
+    "start_time": "2026-06-14T17:44:48",
+    "state": "FAILED",
+    "target_model": "/lustre/fsw/coreai_dlalgo_llm/users/sna/model_snapshots/Qwen3-235B-A22B-Thinking-2507"
+  }
+]

@@ -260,7 +260,7 @@ Use these charts when converting this Markdown into a Google Doc or slide. The s
 
 4. Qwen3-235B in-house 500K decode-heavy standalone sweeps
 
-   The short-decode in-house 500K sweep is complete. The first decode-heavy `ISL=1024`, `OSL=10000` sweep also completed, but it used synthetic dummy token IDs rather than real math prompts. That result is useful as overhead evidence only; it should not be treated as a math-domain drafter result. The benchmark script now supports `PROMPT_JSONL`, and matched OpenMath-prompt decode-heavy baseline/SpecDec jobs have been submitted.
+   The short-decode in-house 500K sweep is complete. It is positive. The decode-heavy sweeps are now also complete, and they are negative. The synthetic runs remain overhead evidence only because they used dummy token IDs. The OpenMath-prompt decode-heavy pair is the meaningful math-prompt standalone comparison, and K=1 is slower than baseline at all tested batch sizes.
 
    | Run | Job | Shape | Status |
    |---|---:|---|---|
@@ -268,10 +268,10 @@ Use these charts when converting this Markdown into a Google Doc or slide. The s
    | Thinking-2507 in-house 500K K=1 | 3119760 | ISL=1000, OSL=512, bs=1-32 | Completed |
    | Thinking-2507 synthetic decode-heavy baseline | 3119864 | ISL=1024, OSL=10000, bs=1-8 | Completed; dummy prompts |
    | Thinking-2507 synthetic decode-heavy in-house 500K K=1 | 3119827 | ISL=1024, OSL=10000, bs=1-8 | Completed; dummy prompts, 0.656x-0.690x |
-   | Thinking-2507 synthetic decode-heavy 20k baseline | 3120128 | ISL=1024, OSL=20000, bs=1-4 | Running |
-   | Thinking-2507 synthetic decode-heavy 20k in-house 500K K=1 | 3120648 | ISL=1024, OSL=20000, bs=1-4 | Running |
-   | Thinking-2507 OpenMath decode-heavy baseline | 3120705 | ISL=1024, OSL=10000, bs=1-4 | Pending |
-   | Thinking-2507 OpenMath decode-heavy in-house 500K K=1 | 3120704 | ISL=1024, OSL=10000, bs=1-4 | Pending |
+   | Thinking-2507 synthetic decode-heavy 20k baseline | 3120128 | ISL=1024, OSL=20000, bs=1-4 | Completed; 18.77/37.03/73.37 tok/s/GPU |
+   | Thinking-2507 synthetic decode-heavy 20k in-house 500K K=1 | 3120648 | ISL=1024, OSL=20000, bs=1-4 | Completed; 0.488x/0.497x/0.502x vs baseline |
+   | Thinking-2507 OpenMath decode-heavy baseline | 3120705 | ISL=1024, OSL=10000, bs=1-4 | Completed; 23.05/42.41/75.35 tok/s/GPU |
+   | Thinking-2507 OpenMath decode-heavy in-house 500K K=1 | 3120704 | ISL=1024, OSL=10000, bs=1-4 | Completed; 0.486x/0.578x/0.606x vs baseline |
 
 5. vLLM standalone Qwen3-235B Thinking-2507 in-house 500K short-decode speedup
 
@@ -324,6 +324,27 @@ Scope: standalone vLLM LLM.generate wall-clock sweep, CUDA Graph on, custom all-
 
 Observation: standalone 235B K=1 does show generation-only benefit across tested batch sizes. This is useful boundary evidence, but it does not prove NeMo-RL GRPO speedup.
 
+### vLLM Standalone: Qwen3-235B Public Eagle3 Decode-Heavy OSL=10000
+
+Target: Qwen/Qwen3-235B-A22B  
+Drafter: nvidia/Qwen3-235B-A22B-Eagle3  
+Scope: standalone vLLM LLM.generate wall-clock sweep, synthetic dummy prompt IDs, ISL=1000, OSL=10000, TP=4, PP=1, one node/four GPUs, CUDA Graph on, custom all-reduce disabled, not NeMo-RL end-to-end. Jobs: baseline 3140545/3140571, K=1 3140546/3140574.
+
+Artifacts:
+- CSV: `docs/qwen3_235b_vllm_decodeheavy10k_metrics.csv`
+- PNG: `docs/qwen3_235b_vllm_decodeheavy10k_speedup_acceptance.png`
+
+| Batch size | Baseline output tok/s | K=1 output tok/s | K=1 speedup | K=1 acceptance |
+|---:|---:|---:|---:|---:|
+| 1 | 89.562 | 56.306 | 0.629x | 92.10% |
+| 2 | 175.407 | 106.678 | 0.608x | 85.17% |
+| 4 | 342.782 | 226.672 | 0.661x | 95.94% |
+| 8 | 670.094 | 453.075 | 0.676x | 94.34% |
+| 16 | 1226.418 | 898.359 | 0.732x | 98.39% |
+| 32 | 2049.813 | 1687.473 | 0.823x | 93.59% |
+
+Observation: high acceptance is not sufficient. Even with 93%-98% acceptance at larger batch sizes, K=1 is slower than baseline. This decode-heavy run indicates that Qwen3-235B PublicHF EAGLE3 overhead can dominate the saved verifier work in this TP=4 standalone regime. It also explains why NeMo-RL does not automatically inherit short-decode standalone speedup: the effective workload and system overhead matter as much as the drafter acceptance rate.
+
 ### vLLM Standalone: Qwen3-235B Thinking-2507 In-House 500K Eagle3
 
 Target: Qwen/Qwen3-235B-A22B-Thinking-2507
@@ -340,7 +361,15 @@ Scope: standalone vLLM LLM.generate wall-clock sweep, CUDA Graph on, custom all-
 | 16 | 378.33 | 455.70 | 1.204x |
 | 32 | 609.62 | 860.76 | 1.412x |
 
-Observation: the in-house 500K Thinking-2507 drafter shows clear short-decode standalone benefit, especially at batch size 32. The synthetic decode-heavy sweep was negative, but it used dummy token IDs, so the next meaningful check is the submitted OpenMath-prompt decode-heavy run.
+Decode-heavy OpenMath prompts:
+
+| Batch size | Baseline tok/s/GPU | K=1 tok/s/GPU | K=1 speedup |
+|---:|---:|---:|---:|
+| 1 | 23.05 | 11.21 | 0.486x |
+| 2 | 42.41 | 24.51 | 0.578x |
+| 4 | 75.35 | 45.63 | 0.606x |
+
+Observation: the in-house 500K Thinking-2507 drafter shows clear short-decode standalone benefit, especially at batch size 32. The same drafter is negative in decode-heavy OpenMath standalone generation. No acceptance counters were emitted in these standalone JSON files, so this result should be treated as wall-clock throughput evidence only, not an acceptance diagnosis.
 
 ### NeMo-RL: Qwen3-30B-A3B In-House 500K Eagle3
 

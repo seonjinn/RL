@@ -1,0 +1,442 @@
+{
+  "checks": [
+    {
+      "detail": "math_qwen32_reference_poll, math_qwen32_online_pard_submit, swerl_qwen30_suffix_poll, swerl_qwen30_static_submit, swerl_qwen30_online_submit, dashboard_rebuild",
+      "name": "default workflow step coverage",
+      "status": "pass"
+    },
+    {
+      "detail": "--gate-name online_pard_step5_k5_tp4_r1",
+      "name": "default workflow includes missing MathRL online PARD gate",
+      "status": "pass"
+    },
+    {
+      "detail": "--command-timeout 120",
+      "name": "default workflow forwards per-command timeout",
+      "status": "pass"
+    },
+    {
+      "detail": "--log-chunk-lines 20",
+      "name": "default workflow forwards finer log chunk size",
+      "status": "pass"
+    },
+    {
+      "detail": "--max-log-files 3",
+      "name": "default workflow limits recent log files per poll",
+      "status": "pass"
+    },
+    {
+      "detail": "not present: online_pard2_step5_r12_replay",
+      "name": "default workflow excludes optional PARD-2 replay",
+      "status": "pass"
+    },
+    {
+      "detail": "--action launch_online",
+      "name": "default workflow includes SWE-RL online launch phase",
+      "status": "pass"
+    },
+    {
+      "detail": "--action launch_static",
+      "name": "default workflow includes SWE-RL static launch phase",
+      "status": "pass"
+    },
+    {
+      "detail": "--gate-name online_pard2_step5_r12_replay",
+      "name": "PARD-2 replay is included only with explicit flag",
+      "status": "pass"
+    },
+    {
+      "detail": "['math_qwen32_online_pard_submit']",
+      "name": "math online-pard execute selects one step",
+      "status": "pass"
+    },
+    {
+      "detail": "--execute",
+      "name": "execute mode forwards --execute",
+      "status": "pass"
+    },
+    {
+      "detail": "--gate-name online_pard_step5_k5_tp4_r1",
+      "name": "execute math online-pard targets missing gate only",
+      "status": "pass"
+    },
+    {
+      "detail": "--remote-host-override new-oci-host",
+      "name": "common remote host override is forwarded to child helpers",
+      "status": "pass"
+    },
+    {
+      "detail": "--remote-host-override new-math-host",
+      "name": "Math-specific remote host override is forwarded",
+      "status": "pass"
+    },
+    {
+      "detail": "--remote-host-override new-swerl-host",
+      "name": "SWE-RL-specific remote host override is forwarded",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "math_qwen32_reference_poll command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_mathrl_qwen32_online_pard_gate_submit_status_20260616.csv",
+      "name": "math_qwen32_reference_poll has child status path",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "math_qwen32_online_pard_submit command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_mathrl_qwen32_online_pard_gate_submit_status_20260616.csv",
+      "name": "math_qwen32_online_pard_submit has child status path",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "swerl_qwen30_suffix_poll command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_swerl_qwen30ba3b_specdec_manifest_submit_status_20260616.csv",
+      "name": "swerl_qwen30_suffix_poll has child status path",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "swerl_qwen30_static_submit command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_swerl_qwen30ba3b_specdec_manifest_submit_status_20260616.csv",
+      "name": "swerl_qwen30_static_submit has child status path",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "swerl_qwen30_online_submit command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_swerl_qwen30ba3b_specdec_manifest_submit_status_20260616.csv",
+      "name": "swerl_qwen30_online_submit has child status path",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "dashboard_rebuild command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "math_qwen32_reference_poll command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_mathrl_qwen32_online_pard_gate_submit_status_20260616.csv",
+      "name": "math_qwen32_reference_poll has child status path",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "math_qwen32_online_pard_submit command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_mathrl_qwen32_online_pard_gate_submit_status_20260616.csv",
+      "name": "math_qwen32_online_pard_submit has child status path",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "math_qwen32_online_pard2_replay_submit command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_mathrl_qwen32_online_pard_gate_submit_status_20260616.csv",
+      "name": "math_qwen32_online_pard2_replay_submit has child status path",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "math_qwen32_online_pard_submit command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_mathrl_qwen32_online_pard_gate_submit_status_20260616.csv",
+      "name": "math_qwen32_online_pard_submit has child status path",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "math_qwen32_reference_poll command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_mathrl_qwen32_online_pard_gate_submit_status_20260616.csv",
+      "name": "math_qwen32_reference_poll has child status path",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "math_qwen32_online_pard_submit command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_mathrl_qwen32_online_pard_gate_submit_status_20260616.csv",
+      "name": "math_qwen32_online_pard_submit has child status path",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "swerl_qwen30_suffix_poll command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_swerl_qwen30ba3b_specdec_manifest_submit_status_20260616.csv",
+      "name": "swerl_qwen30_suffix_poll has child status path",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "swerl_qwen30_static_submit command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_swerl_qwen30ba3b_specdec_manifest_submit_status_20260616.csv",
+      "name": "swerl_qwen30_static_submit has child status path",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "swerl_qwen30_online_submit command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_swerl_qwen30ba3b_specdec_manifest_submit_status_20260616.csv",
+      "name": "swerl_qwen30_online_submit has child status path",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "math_qwen32_reference_poll command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_mathrl_qwen32_online_pard_gate_submit_status_20260616.csv",
+      "name": "math_qwen32_reference_poll has child status path",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "math_qwen32_online_pard_submit command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_mathrl_qwen32_online_pard_gate_submit_status_20260616.csv",
+      "name": "math_qwen32_online_pard_submit has child status path",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "swerl_qwen30_suffix_poll command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_swerl_qwen30ba3b_specdec_manifest_submit_status_20260616.csv",
+      "name": "swerl_qwen30_suffix_poll has child status path",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "swerl_qwen30_static_submit command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_swerl_qwen30ba3b_specdec_manifest_submit_status_20260616.csv",
+      "name": "swerl_qwen30_static_submit has child status path",
+      "status": "pass"
+    },
+    {
+      "detail": "",
+      "name": "swerl_qwen30_online_submit command bash -n",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/oci_hsg_swerl_qwen30ba3b_specdec_manifest_submit_status_20260616.csv",
+      "name": "swerl_qwen30_online_submit has child status path",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/scripts/refresh_specdec_timeout_command_outputs.py",
+      "name": "timeout command-output refresh script exists",
+      "status": "pass"
+    },
+    {
+      "detail": "refresh_timeout_outputs",
+      "name": "driver exposes timeout refresh helper",
+      "status": "pass"
+    },
+    {
+      "detail": "/Users/sna/Nemo-RL_Qwen3_Roadmap/scripts/refresh_specdec_timeout_command_outputs.py",
+      "name": "driver timeout refresh target",
+      "status": "pass"
+    },
+    {
+      "detail": "timeout_refresh_state",
+      "name": "driver status includes timeout_refresh_state",
+      "status": "pass"
+    },
+    {
+      "detail": "timeout_refresh_returncode",
+      "name": "driver status includes timeout_refresh_returncode",
+      "status": "pass"
+    },
+    {
+      "detail": "timeout_refresh_stdout_tail",
+      "name": "driver status includes timeout_refresh_stdout_tail",
+      "status": "pass"
+    },
+    {
+      "detail": "timeout_refresh_stderr_tail",
+      "name": "driver status includes timeout_refresh_stderr_tail",
+      "status": "pass"
+    },
+    {
+      "detail": "child_selected_rows",
+      "name": "driver status includes child_selected_rows",
+      "status": "pass"
+    },
+    {
+      "detail": "child_operation_summary",
+      "name": "driver status includes child_operation_summary",
+      "status": "pass"
+    },
+    {
+      "detail": "child_preflight_summary",
+      "name": "driver status includes child_preflight_summary",
+      "status": "pass"
+    },
+    {
+      "detail": "child_status_csv",
+      "name": "driver status includes child_status_csv",
+      "status": "pass"
+    },
+    {
+      "detail": "6",
+      "name": "driver status has six rows",
+      "status": "pass"
+    },
+    {
+      "detail": "math_qwen32_reference_poll, math_qwen32_online_pard_submit, swerl_qwen30_suffix_poll, swerl_qwen30_static_submit, swerl_qwen30_online_submit, dashboard_rebuild",
+      "name": "driver status follows workflow order",
+      "status": "pass"
+    },
+    {
+      "detail": "3",
+      "name": "math_qwen32_reference_poll child row count",
+      "status": "pass"
+    },
+    {
+      "detail": "failed_dns=",
+      "name": "math_qwen32_reference_poll records DNS-blocked child preflight",
+      "status": "pass"
+    },
+    {
+      "detail": "dry_run_blocked_remote_unreachable=",
+      "name": "math_qwen32_reference_poll records child remote-unreachable operation",
+      "status": "pass"
+    },
+    {
+      "detail": "driver_child_remote_unreachable",
+      "name": "math_qwen32_reference_poll top-level operation reflects child state",
+      "status": "pass"
+    },
+    {
+      "detail": "1",
+      "name": "math_qwen32_online_pard_submit child row count",
+      "status": "pass"
+    },
+    {
+      "detail": "failed_dns=",
+      "name": "math_qwen32_online_pard_submit records DNS-blocked child preflight",
+      "status": "pass"
+    },
+    {
+      "detail": "dry_run_blocked_remote_unreachable=",
+      "name": "math_qwen32_online_pard_submit records child remote-unreachable operation",
+      "status": "pass"
+    },
+    {
+      "detail": "driver_child_remote_unreachable",
+      "name": "math_qwen32_online_pard_submit top-level operation reflects child state",
+      "status": "pass"
+    },
+    {
+      "detail": "1",
+      "name": "swerl_qwen30_suffix_poll child row count",
+      "status": "pass"
+    },
+    {
+      "detail": "failed_dns=",
+      "name": "swerl_qwen30_suffix_poll records DNS-blocked child preflight",
+      "status": "pass"
+    },
+    {
+      "detail": "dry_run_blocked_remote_unreachable=",
+      "name": "swerl_qwen30_suffix_poll records child remote-unreachable operation",
+      "status": "pass"
+    },
+    {
+      "detail": "driver_child_remote_unreachable",
+      "name": "swerl_qwen30_suffix_poll top-level operation reflects child state",
+      "status": "pass"
+    },
+    {
+      "detail": "3",
+      "name": "swerl_qwen30_static_submit child row count",
+      "status": "pass"
+    },
+    {
+      "detail": "failed_dns=",
+      "name": "swerl_qwen30_static_submit records DNS-blocked child preflight",
+      "status": "pass"
+    },
+    {
+      "detail": "dry_run_blocked_remote_unreachable=",
+      "name": "swerl_qwen30_static_submit records child remote-unreachable operation",
+      "status": "pass"
+    },
+    {
+      "detail": "driver_child_remote_unreachable",
+      "name": "swerl_qwen30_static_submit top-level operation reflects child state",
+      "status": "pass"
+    },
+    {
+      "detail": "2",
+      "name": "swerl_qwen30_online_submit child row count",
+      "status": "pass"
+    },
+    {
+      "detail": "failed_dns=",
+      "name": "swerl_qwen30_online_submit records DNS-blocked child preflight",
+      "status": "pass"
+    },
+    {
+      "detail": "dry_run_blocked_remote_unreachable=",
+      "name": "swerl_qwen30_online_submit records child remote-unreachable operation",
+      "status": "pass"
+    },
+    {
+      "detail": "driver_child_remote_unreachable",
+      "name": "swerl_qwen30_online_submit top-level operation reflects child state",
+      "status": "pass"
+    }
+  ],
+  "driver": "/Users/sna/Nemo-RL_Qwen3_Roadmap/scripts/run_specdec_goal_next_access_window.py",
+  "overall_status": "pass",
+  "status_csv": "/Users/sna/Nemo-RL_Qwen3_Roadmap/docs/specdec_goal_next_access_window_status_20260616.csv"
+}
