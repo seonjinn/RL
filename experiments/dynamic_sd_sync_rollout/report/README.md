@@ -68,11 +68,26 @@ EAGLE3 heads.
 Qwen3-235B-A22B (TP4): despite healthy acceptance (AL 3.05 at temp 1.0),
 fixed-K3 runs at **0.44x** - verifying K+1 tokens multiplies MoE expert
 dispatch, which is already compute-bound at BS 64. The profiled schedule
-correctly zeroes K at BS >= 64, yet the dynamic rollout still landed at 0.51x,
-and the 40K long-tail dynamic (0.63x) also trails fixed (1.19x). Both
-regressions are unexplained by acceptance or preemption counts and are the
-top open diagnosis item - the current suspicion is drafter-side cost at deep
-context plus K-switching interaction with full-cudagraph decode.
+correctly zeroes K at BS >= 64, yet the dynamic rollout still landed at 0.51x;
+the residual gap is under diagnosis.
+
+## Long-tail exposes the wrong index variable
+
+The 40K preset was expected to be DynamicSD's showcase; it is its clearest
+failure, and the logs say why. **EAGLE3 acceptance collapses with generation
+depth**: shallow-phase AL is 2.3-2.5, but by the time median depth reaches
+~10K tokens the cumulative draft acceptance rate is 2.9-3.7% (per-position
+0.08 / 0.003 / 0.000). Fixed-K3 wins the shallow phase (step 0: 77s vs
+baseline 106s) and evaporates in the deep phase (step 1: 186s vs 206s),
+netting 1.19x. The dynamic schedule does worse (0.63x) because during the
+drain the batch falls into its K=5 bands, paying 5-token drafting overhead at
+~0% acceptance exactly where it was tuned to be aggressive - the schedule was
+profiled at shallow depth (OSL 2048) and is indexed by batch size only.
+**At long generation lengths the binding variable is sequence depth, not
+batch size, and `num_speculative_tokens_per_batch_size` cannot express a
+depth-aware schedule.** Raising max OSL further (64K) would widen, not close,
+this gap; the fix is a depth-conditioned K (or drafters trained for deep
+thinking contexts).
 
 ---
 
