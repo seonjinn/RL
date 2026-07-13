@@ -13,6 +13,9 @@ REMOTE_REPO="${REMOTE_REPO:-/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchma
 ACCOUNT="${ACCOUNT:-coreai_dlalgo_llm}"
 PARTITION="${PARTITION:-gb200}"
 PYTHON_BIN="${PYTHON_BIN:-/lustre/fsw/coreai_dlalgo_llm/users/sna/venvs/vllm024/bin/python}"
+# vLLM 0.25: per-K full-cudagraph DynamicSD needs the V2 model runner;
+# Qwen3MoE is not auto-enabled, so set explicitly (1) for 0.25 runs.
+VLLM_USE_V2_MODEL_RUNNER="${VLLM_USE_V2_MODEL_RUNNER:-}"
 HF_HOME_REMOTE="${HF_HOME_REMOTE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home}"
 LOG_ROOT="${LOG_ROOT:-${REMOTE_REPO}/dynamic_sd_runs}"
 RUN_TAG_DATE="${RUN_TAG_DATE:-$(date +%Y%m%d)}"
@@ -133,6 +136,7 @@ set -euo pipefail
 export HF_HOME=${HF_HOME_REMOTE}
 export HUGGINGFACE_HUB_CACHE=\$HF_HOME/hub
 export VLLM_DISABLE_COMPILE_CACHE=1
+if [[ -n '${VLLM_USE_V2_MODEL_RUNNER}' ]]; then export VLLM_USE_V2_MODEL_RUNNER=${VLLM_USE_V2_MODEL_RUNNER}; fi
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 srun --nodes=1 --ntasks=1 bash -lc "set -euo pipefail; \\
