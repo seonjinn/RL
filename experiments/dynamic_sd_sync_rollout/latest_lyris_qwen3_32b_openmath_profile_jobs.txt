@@ -5,8 +5,8 @@ draft=RedHatAI/Qwen3-32B-Thinking-speculator.eagle3
 bench=openmath prompts=/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/data/openmath2_prompts_2048.jsonl
 temperature=1.0 tp=2 max_num_seqs=256
 csv_header=job_id,tag,model,bench,logs_dir
-2356220,qwen3_32b_openmath_profile_k0_20260712,Qwen/Qwen3-32B,openmath,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_32b_openmath_profile_k0_20260712
-2356221,qwen3_32b_openmath_profile_k1_20260712,Qwen/Qwen3-32B,openmath,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_32b_openmath_profile_k1_20260712
-2356222,qwen3_32b_openmath_profile_k2_20260712,Qwen/Qwen3-32B,openmath,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_32b_openmath_profile_k2_20260712
-2356223,qwen3_32b_openmath_profile_k3_20260712,Qwen/Qwen3-32B,openmath,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_32b_openmath_profile_k3_20260712
-2356224,qwen3_32b_openmath_profile_k5_20260712,Qwen/Qwen3-32B,openmath,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_32b_openmath_profile_k5_20260712
+2356461,qwen3_32b_openmath_profile_k0_20260712,Qwen/Qwen3-32B,openmath,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_32b_openmath_profile_k0_20260712
+2356463,qwen3_32b_openmath_profile_k1_20260712,Qwen/Qwen3-32B,openmath,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_32b_openmath_profile_k1_20260712
+2356464,qwen3_32b_openmath_profile_k2_20260712,Qwen/Qwen3-32B,openmath,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_32b_openmath_profile_k2_20260712
+2356465,qwen3_32b_openmath_profile_k3_20260712,Qwen/Qwen3-32B,openmath,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_32b_openmath_profile_k3_20260712
+2356468,qwen3_32b_openmath_profile_k5_20260712,Qwen/Qwen3-32B,openmath,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_32b_openmath_profile_k5_20260712

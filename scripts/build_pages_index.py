@@ -25,16 +25,13 @@ DATA = PUBLIC / "data"
 ARCHIVE = PUBLIC / "archive"
 FIGURES = PUBLIC / "figures"
 DFLARE_COMPLETED = (
-    ROOT
-    / "experiments/vllm_024_dynamicsd/report/dflare_completed_latest.csv"
+    ROOT / "experiments/vllm_024_dynamicsd/report/dflare_completed_latest.csv"
 )
 DFLARE_STATUS = (
-    ROOT
-    / "experiments/vllm_024_dynamicsd/report/dflare_job_status_latest.csv"
+    ROOT / "experiments/vllm_024_dynamicsd/report/dflare_job_status_latest.csv"
 )
 VLLM024_PROFILES = (
-    ROOT
-    / "experiments/vllm_024_dynamicsd/report/vllm024_profiles_latest.csv"
+    ROOT / "experiments/vllm_024_dynamicsd/report/vllm024_profiles_latest.csv"
 )
 DFLARE_PROFILES = {"Native 32K", "YaRN 64K", "YaRN total-128K"}
 
@@ -63,20 +60,75 @@ PAIRED = [
 
 REPORT_GROUPS = [
     {
+        "title": "DynamicSD (vLLM 0.24)",
+        "summary": "Dynamic speculative decoding under synchronous RL rollout: BSxK profiling grids, derived K schedules, and baseline/fixed-K/DynamicSD rollout comparisons.",
+        "items": [
+            (
+                "DynamicSD sync-rollout results",
+                "dynamic_sd_sync_rollout_results_latest.html",
+                "Qwen3-30B-A3B/32B/235B with EAGLE3 Thinking drafters on GB200; NeMo-RL SyncRL recipe shapes.",
+            ),
+        ],
+    },
+    {
         "title": "vLLM Standalone",
         "summary": "Standalone vLLM benchmark views for Math/SWE, temperature 0/1, batch sweeps, and Qwen235B focused diagnostics.",
         "items": [
-            ("Canonical latest matched matrix", "vllm_standalone_results_latest.html", "Current ISL4096/OSL32768 matched-baseline view; use this as the canonical standalone page."),
-            ("Latest dated mirror", "vllm_standalone_results_20260621.html", "Dated mirror of the canonical latest page."),
-            ("6/20 historical page", "vllm_standalone_results_20260620.html", "Superseded historical added-result matrix; retained for traceability."),
-            ("6/19 batch matrix", "vllm_standalone_results_20260619.html", "All-batch standalone report before later refreshes."),
-            ("Clean result split", "vllm_standalone_clean_results_20260617.html", "Curated primary and supplemental standalone results."),
-            ("Temp0 vs Temp1 trends", "vllm_standalone_temp0_temp1_trends_20260616.html", "Historical aggregate temperature analysis; later standalone additions are in the canonical latest page."),
-            ("Qwen235B SWE batch sweep", "lyris_qwen235b_swebench_osl32k_batch_sweep_speedups_20260612.html", "Dedicated SWE OSL32K batch-sweep speedups."),
-            ("Qwen235B diagnostics", "lyris_qwen235b_standalone_live_diagnostics_20260613.html", "Older live diagnostics for Qwen235B standalone jobs."),
-            ("Qwen235B PARD snapshot", "lyris_qwen235b_swebench_osl32k_pard_live_snapshot_20260613.html", "PARD-focused live snapshot."),
-            ("Expected performance", "lyris_specdec_expected_performance_20260612.html", "Early expected-performance summary."),
-            ("Qwen235B SWE/Math status", "qwen235b_specdec_swe_math_status_20260613.html", "Combined historical SWE and Math status page."),
+            (
+                "Canonical latest matched matrix",
+                "vllm_standalone_results_latest.html",
+                "Current ISL4096/OSL32768 matched-baseline view; use this as the canonical standalone page.",
+            ),
+            (
+                "Latest dated mirror",
+                "vllm_standalone_results_20260621.html",
+                "Dated mirror of the canonical latest page.",
+            ),
+            (
+                "6/20 historical page",
+                "vllm_standalone_results_20260620.html",
+                "Superseded historical added-result matrix; retained for traceability.",
+            ),
+            (
+                "6/19 batch matrix",
+                "vllm_standalone_results_20260619.html",
+                "All-batch standalone report before later refreshes.",
+            ),
+            (
+                "Clean result split",
+                "vllm_standalone_clean_results_20260617.html",
+                "Curated primary and supplemental standalone results.",
+            ),
+            (
+                "Temp0 vs Temp1 trends",
+                "vllm_standalone_temp0_temp1_trends_20260616.html",
+                "Historical aggregate temperature analysis; later standalone additions are in the canonical latest page.",
+            ),
+            (
+                "Qwen235B SWE batch sweep",
+                "lyris_qwen235b_swebench_osl32k_batch_sweep_speedups_20260612.html",
+                "Dedicated SWE OSL32K batch-sweep speedups.",
+            ),
+            (
+                "Qwen235B diagnostics",
+                "lyris_qwen235b_standalone_live_diagnostics_20260613.html",
+                "Older live diagnostics for Qwen235B standalone jobs.",
+            ),
+            (
+                "Qwen235B PARD snapshot",
+                "lyris_qwen235b_swebench_osl32k_pard_live_snapshot_20260613.html",
+                "PARD-focused live snapshot.",
+            ),
+            (
+                "Expected performance",
+                "lyris_specdec_expected_performance_20260612.html",
+                "Early expected-performance summary.",
+            ),
+            (
+                "Qwen235B SWE/Math status",
+                "qwen235b_specdec_swe_math_status_20260613.html",
+                "Combined historical SWE and Math status page.",
+            ),
         ],
     },
     {
@@ -88,24 +140,72 @@ REPORT_GROUPS = [
                 "specdec_rl_framework_lessons_and_nemorl_gaps_20260709.html",
                 "Primary upstream lessons matrix covering veRL, slime, Miles, SGLang/vLLM, and current NeMo-RL gaps.",
             ),
-            ("Latest NeMo-RL status", "lyris_nemorl_perfcfg_specdec_live_status_latest.html", "Current performance-config SpecDec status."),
-            ("6/22 NeMo-RL status", "lyris_nemorl_perfcfg_specdec_live_status_20260622.html", "Dated latest NeMo-RL page."),
-            ("6/21 NeMo-RL status", "lyris_nemorl_perfcfg_specdec_live_status_20260621.html", "Previous Lyris status snapshot."),
-            ("6/19 NeMo-RL status", "lyris_nemorl_perfcfg_specdec_live_status_20260619.html", "Older performance-config status."),
-            ("6/18 OSL step20 matrix", "lyris_nemorl_perfcfg_specdec_live_status_20260618.html", "Current recipe OSL step20 matrix snapshot."),
-            ("PARD/PARD-2 status", "nemorl_pard_pard2_status_20260615.html", "Focused PARD and PARD-2 integration status."),
-            ("OCI-HSG Math RL", "oci_hsg_mathrl_multimodel_specdec_step20_status_20260616.html", "OCI-HSG Math RL multimodel step20 page."),
+            (
+                "Latest NeMo-RL status",
+                "lyris_nemorl_perfcfg_specdec_live_status_latest.html",
+                "Current performance-config SpecDec status.",
+            ),
+            (
+                "6/22 NeMo-RL status",
+                "lyris_nemorl_perfcfg_specdec_live_status_20260622.html",
+                "Dated latest NeMo-RL page.",
+            ),
+            (
+                "6/21 NeMo-RL status",
+                "lyris_nemorl_perfcfg_specdec_live_status_20260621.html",
+                "Previous Lyris status snapshot.",
+            ),
+            (
+                "6/19 NeMo-RL status",
+                "lyris_nemorl_perfcfg_specdec_live_status_20260619.html",
+                "Older performance-config status.",
+            ),
+            (
+                "6/18 OSL step20 matrix",
+                "lyris_nemorl_perfcfg_specdec_live_status_20260618.html",
+                "Current recipe OSL step20 matrix snapshot.",
+            ),
+            (
+                "PARD/PARD-2 status",
+                "nemorl_pard_pard2_status_20260615.html",
+                "Focused PARD and PARD-2 integration status.",
+            ),
+            (
+                "OCI-HSG Math RL",
+                "oci_hsg_mathrl_multimodel_specdec_step20_status_20260616.html",
+                "OCI-HSG Math RL multimodel step20 page.",
+            ),
         ],
     },
     {
         "title": "Broad Dashboards And Background",
         "summary": "Cross-cutting dashboards, clean summaries, and older background reports that preserve context outside the latest matched matrix.",
         "items": [
-            ("Broad metrics dashboard", "specdec_benchmark_metrics_dashboard_20260616.html", "Wide dashboard with vLLM, Math, SWE, and status fragments."),
-            ("Clean benchmark results", "specdec_clean_benchmark_results_20260617.html", "Clean combined benchmark report."),
-            ("Background observations", "specdec_background_and_observations_charts.html", "Early charts and observations."),
-            ("Completed eval bars", "specdec_completed_eval_bar_graphs.html", "Older completed evaluation bar charts."),
-            ("Qwen235B team report", "qwen3_235b_team_report_20260606.html", "Historical team-facing Qwen235B report."),
+            (
+                "Broad metrics dashboard",
+                "specdec_benchmark_metrics_dashboard_20260616.html",
+                "Wide dashboard with vLLM, Math, SWE, and status fragments.",
+            ),
+            (
+                "Clean benchmark results",
+                "specdec_clean_benchmark_results_20260617.html",
+                "Clean combined benchmark report.",
+            ),
+            (
+                "Background observations",
+                "specdec_background_and_observations_charts.html",
+                "Early charts and observations.",
+            ),
+            (
+                "Completed eval bars",
+                "specdec_completed_eval_bar_graphs.html",
+                "Older completed evaluation bar charts.",
+            ),
+            (
+                "Qwen235B team report",
+                "qwen3_235b_team_report_20260606.html",
+                "Historical team-facing Qwen235B report.",
+            ),
         ],
     },
 ]
@@ -213,7 +313,17 @@ def copy_if_exists(src: Path, dst_dir: Path) -> Path | None:
 
 
 def normalize_text_file(path: Path) -> None:
-    if path.suffix in {".csv", ".html", ".json", ".txt", ".md", ".py", ".sh", ".yaml", ".yml"}:
+    if path.suffix in {
+        ".csv",
+        ".html",
+        ".json",
+        ".txt",
+        ".md",
+        ".py",
+        ".sh",
+        ".yaml",
+        ".yml",
+    }:
         raw = path.read_bytes()
         path.write_bytes(raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
 
@@ -314,7 +424,9 @@ def vllm_best_rows() -> pd.DataFrame:
     rows = rows.dropna(subset=["speedup"])
     if rows.empty:
         return rows
-    idx = rows.groupby(["model", "domain", "temperature"], dropna=False)["speedup"].idxmax()
+    idx = rows.groupby(["model", "domain", "temperature"], dropna=False)[
+        "speedup"
+    ].idxmax()
     keep = [
         "domain",
         "model",
@@ -344,7 +456,9 @@ def load_nemorl_rows() -> pd.DataFrame:
         if perf.empty:
             continue
         perf = perf[perf["model"].isin(["Qwen3-30B-A3B", "Qwen3-32B"])]
-        perf = perf[~perf["method"].astype(str).str.contains("baseline", case=False, na=False)]
+        perf = perf[
+            ~perf["method"].astype(str).str.contains("baseline", case=False, na=False)
+        ]
         for column in [
             "generation_throughput_speedup",
             "generation_time_speedup",
@@ -380,7 +494,9 @@ def load_nemorl_rows() -> pd.DataFrame:
     q235 = load_csv(DOCS / "lyris_qwen235b_pr2879_live_enriched_20260621.csv")
     if not q235.empty:
         q235 = q235[q235["model_name"].eq("Qwen3-235B-A22B")]
-        q235 = q235[~q235["method_k"].astype(str).str.contains("baseline", case=False, na=False)]
+        q235 = q235[
+            ~q235["method_k"].astype(str).str.contains("baseline", case=False, na=False)
+        ]
         for column in [
             "gen_tps_speedup",
             "generation_time_speedup",
@@ -407,7 +523,9 @@ def load_nemorl_rows() -> pd.DataFrame:
                     "e2e_tps_speedup": row["e2e_tps_speedup"],
                     "e2e_step_speedup": row["e2e_step_time_speedup"],
                     "acceptance_pct": row.get("vllm_token_acceptance_pct", math.nan),
-                    "mean_accept_len": row.get("vllm_acceptance_length_mean_weighted_mean", math.nan),
+                    "mean_accept_len": row.get(
+                        "vllm_acceptance_length_mean_weighted_mean", math.nan
+                    ),
                 }
             )
 
@@ -442,7 +560,9 @@ def load_nemorl_rows() -> pd.DataFrame:
                     "e2e_tps_speedup": row["e2e_tps_speedup"],
                     "e2e_step_speedup": row["e2e_step_time_speedup"],
                     "acceptance_pct": row.get("vllm_token_acceptance_pct", math.nan),
-                    "mean_accept_len": row.get("vllm_acceptance_length_mean_weighted_mean", math.nan),
+                    "mean_accept_len": row.get(
+                        "vllm_acceptance_length_mean_weighted_mean", math.nan
+                    ),
                 }
             )
 
@@ -504,7 +624,9 @@ def nemorl_chart_rows(nemorl: pd.DataFrame) -> pd.DataFrame:
         return rows
     rows["model_short"] = rows["model"].map(short_model)
     rows["method_display"] = rows["method"].map(display_method)
-    idx = rows.groupby(["model", "method_display"], dropna=False)["gen_tps_speedup"].idxmax()
+    idx = rows.groupby(["model", "method_display"], dropna=False)[
+        "gen_tps_speedup"
+    ].idxmax()
     return rows.loc[idx].sort_values(["model", "method_display"])
 
 
@@ -547,7 +669,11 @@ def plot_grouped_bar(
         for x in x_order:
             sub = rows[(rows[x_col] == x) & (rows[hue_col] == hue)]
             values.append(as_float(sub[y_col].iloc[0]) if not sub.empty else math.nan)
-        xs = [pos + offset for pos, value in zip(group_positions, values) if not math.isnan(value)]
+        xs = [
+            pos + offset
+            for pos, value in zip(group_positions, values)
+            if not math.isnan(value)
+        ]
         ys = [value for value in values if not math.isnan(value)]
         if ys:
             max_y = max(max_y, max(ys))
@@ -666,17 +792,19 @@ def report_hub_html() -> str:
                 "</details>"
             )
         groups.append(
-            "<section class=\"report-panel\">"
+            '<section class="report-panel">'
             f"<h3>{esc(group['title'])}</h3>"
             f"<p>{esc(group['summary'])}</p>"
-            f"<div class=\"report-buttons primary\">{''.join(primary)}</div>"
+            f'<div class="report-buttons primary">{"".join(primary)}</div>'
             f"{archive_html}"
             "</section>"
         )
     return "".join(groups)
 
 
-def build_chart_gallery(vllm: pd.DataFrame, nemorl_all: pd.DataFrame) -> tuple[str, str]:
+def build_chart_gallery(
+    vllm: pd.DataFrame, nemorl_all: pd.DataFrame
+) -> tuple[str, str]:
     FIGURES.mkdir(parents=True, exist_ok=True)
     for old in FIGURES.glob("*.png"):
         old.unlink()
@@ -715,8 +843,14 @@ def build_chart_gallery(vllm: pd.DataFrame, nemorl_all: pd.DataFrame) -> tuple[s
         )
         vllm_html = "".join(
             [
-                figure_html(speed, "Best matched-baseline throughput speedup. Method, batch size, ISL, and OSL are listed in the table below."),
-                figure_html(acc, "Acceptance rate for the same best rows; temperature 1 generally lowers acceptance and accepted length."),
+                figure_html(
+                    speed,
+                    "Best matched-baseline throughput speedup. Method, batch size, ISL, and OSL are listed in the table below.",
+                ),
+                figure_html(
+                    acc,
+                    "Acceptance rate for the same best rows; temperature 1 generally lowers acceptance and accepted length.",
+                ),
             ]
         )
 
@@ -785,12 +919,12 @@ def rows_to_table(headers: list[str], rows: list[list[str]]) -> str:
     body = []
     for row in rows:
         body.append("<tr>" + "".join(f"<td>{cell}</td>" for cell in row) + "</tr>")
-    return f"<div class=\"table-scroll\"><table><thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table></div>"
+    return f'<div class="table-scroll"><table><thead><tr>{head}</tr></thead><tbody>{"".join(body)}</tbody></table></div>'
 
 
 def vllm_table(df: pd.DataFrame) -> str:
     if df.empty:
-        return "<p class=\"muted\">No vLLM rows are available in the local CSV artifacts.</p>"
+        return '<p class="muted">No vLLM rows are available in the local CSV artifacts.</p>'
     rows = []
     for _, row in df.iterrows():
         rows.append(
@@ -828,7 +962,7 @@ def vllm_table(df: pd.DataFrame) -> str:
 
 def nemorl_table(df: pd.DataFrame) -> str:
     if df.empty:
-        return "<p class=\"muted\">No NeMo-RL speedup rows are available in the local CSV artifacts.</p>"
+        return '<p class="muted">No NeMo-RL speedup rows are available in the local CSV artifacts.</p>'
     rows = []
     for _, row in df.iterrows():
         rows.append(
@@ -899,7 +1033,8 @@ def build() -> None:
         DOCS / "lyris_nemorl_qwen30_qwen32_pr2879_step20_speedups_20260622.csv",
         DOCS / "lyris_nemorl_qwen30_qwen32_pr2879_status_20260622.csv",
         DOCS / "lyris_nemorl_perfcfg_step20_live_speedups_20260618.csv",
-        DOCS / "latest_lyris_nemorl_cudagraphoff_wandb_best_qwen32_async_20260623_jobs.csv",
+        DOCS
+        / "latest_lyris_nemorl_cudagraphoff_wandb_best_qwen32_async_20260623_jobs.csv",
         DOCS / "nemorl_clean_results_20260617.csv",
         DOCS / "nemorl_integrated_specdec_results_clean_20260617.csv",
         VLLM024_PROFILES,
@@ -928,7 +1063,9 @@ def build() -> None:
     nemorl = nemorl_best_rows()
     vllm_charts, nemorl_charts = build_chart_gallery(vllm, nemorl_all)
     report_hub = report_hub_html()
-    job = read_job_file(ROOT / "latest_lyris_angelslim_checkpoint_prewarm_20260622_jobs.txt")
+    job = read_job_file(
+        ROOT / "latest_lyris_angelslim_checkpoint_prewarm_20260622_jobs.txt"
+    )
     generated_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
 
     job_id = job.get("job_id", "pending")
@@ -1130,8 +1267,12 @@ def build() -> None:
 
     local_html_text = html_text
     local_html_text = local_html_text.replace('href="reports/', 'href="')
-    local_html_text = local_html_text.replace('href="archive/', 'href="../public/archive/')
-    local_html_text = local_html_text.replace('src="figures/', 'src="../public/figures/')
+    local_html_text = local_html_text.replace(
+        'href="archive/', 'href="../public/archive/'
+    )
+    local_html_text = local_html_text.replace(
+        'src="figures/', 'src="../public/figures/'
+    )
     local_html_text = local_html_text.replace(
         'href="data/latest_lyris_angelslim_checkpoint_prewarm_20260622_jobs.txt"',
         'href="../latest_lyris_angelslim_checkpoint_prewarm_20260622_jobs.txt"',

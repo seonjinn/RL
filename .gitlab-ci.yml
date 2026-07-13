@@ -20,6 +20,7 @@ pages:
     - test -f public/figures/vllm_best_speedup.png
     - test -f public/figures/nemorl_generation_throughput_speedup.png
     - test -f public/reports/vllm_standalone_results_latest.html
+    - test -f public/reports/dynamic_sd_sync_rollout_results_latest.html
     - test -f public/reports/vllm_standalone_results_20260619.html
     - test -f public/reports/vllm_standalone_temp0_temp1_trends_20260616.html
     - test -f public/reports/lyris_nemorl_perfcfg_specdec_live_status_latest.html
