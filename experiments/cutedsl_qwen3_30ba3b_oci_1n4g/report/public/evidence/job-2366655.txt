@@ -1,0 +1,28 @@
+Pre-Tyche functional gate job 2366655
+Run ID: 2366655
+Timestamp (UTC): 2026-07-13T00:35:43Z
+Source: 52c402a621e6fc43be2cc2728a0b674328b9a645
+Fix commit: a93fb6aca200a35e9ff9923106b724c2a557083a
+Original remote log: results/2366655/slurm.out and events.jsonl on Pre-Tyche Lustre.
+
+Purpose
+- Test VLLM_USE_STANDALONE_COMPILE=0 after job 2366566's missing cubin.
+- Qwen3-30B-A3B, MXFP8, EP8, 2 nodes x 4 GB200, CuTeDSL ON.
+- This functional gate was explicitly not performance eligible.
+
+Observed boundary
+- Image/source preflight and locked runtime bootstrap passed.
+- Effective config recorded VLLM_USE_STANDALONE_COMPILE='0'.
+- Eight vLLM actors started, then model profiling entered the non-standalone path.
+- vLLM's AlwaysHitShapeEnv reached Torch 2.11 compiled_fx_graph_hash.
+- Torch accessed missing attribute var_to_hint_override and initialization failed.
+- Job FAILED, exit 1:0, elapsed 00:33:18; no OOM was reported.
+
+Conclusion and next one-variable test
+- Disabling standalone compile is incompatible with this vLLM 0.20/Torch 2.11 image.
+- The attempted workaround is rejected; standalone compile must remain enabled.
+- Preserve standalone compile and change only its artifact format from binary to unpacked.
+- Set VLLM_COMPILE_CACHE_SAVE_FORMAT=unpacked identically for ON and OFF.
+- The replacement recipe regression was RED before the change and GREEN after it.
+- Related harness/collector/report tests: 105 passed; Ruff 0.9.9 and diff checks passed.
+- A real two-node rerun is pending; this job supports no speedup or throughput claim.

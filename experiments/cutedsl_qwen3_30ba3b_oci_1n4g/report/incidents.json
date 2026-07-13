@@ -283,5 +283,20 @@
     "timestamp_utc": "2026-07-12T23:56:41Z",
     "verification_evidence": "The resolved recipe regression was RED before the change and GREEN afterward. The related harness, collector, and report suites pass 105 tests; Bash syntax, Ruff 0.9.9, and diff checks pass. Remote verification is pending, so this failed functional run supports no performance claim.",
     "verification_job": "pending Pre-Tyche functional rerun"
+  },
+  {
+    "cluster": "pre_tyche",
+    "evidence": "Job 2366655 passed immutable preflight and runtime bootstrap with VLLM_USE_STANDALONE_COMPILE=0 in the effective config. During vLLM model profiling, its AlwaysHitShapeEnv reached Torch 2.11 compiled_fx_graph_hash, which accessed absent attribute var_to_hint_override and failed before policy initialization.",
+    "fix_commit": "a93fb6aca200a35e9ff9923106b724c2a557083a",
+    "hypothesis": "Standalone compile is required by this vLLM/Torch combination, but using vLLM's supported unpacked cache format will retain the cubin files that were absent from job 2366566's binary standalone artifact.",
+    "report_path": "evidence/job-2366655.txt",
+    "reproduction": "At source 52c402a62, resolve VLLM_USE_STANDALONE_COMPILE=0 and start the two-node gate. During vLLM profile_run, observe torch._inductor.codecache.compiled_fx_graph_hash access AlwaysHitShapeEnv.var_to_hint_override and raise AttributeError.",
+    "root_cause": "The first workaround selected vLLM's non-standalone compiler path, whose AlwaysHitShapeEnv shim is incompatible with the Torch 2.11 hash API in this image. The workaround is rejected; this failure occurred before CuTeDSL policy execution.",
+    "run_id": "2366655",
+    "symptom": "The vLLM cubin workaround failed earlier during generation-worker initialization with an AttributeError instead of reaching rollout generation.",
+    "tested_change": "Remove VLLM_USE_STANDALONE_COMPILE=0, retain the default standalone compiler, and set only VLLM_COMPILE_CACHE_SAVE_FORMAT=unpacked in the matched ON/OFF recipe; assert both conditions in the resolved-config regression.",
+    "timestamp_utc": "2026-07-13T00:35:43Z",
+    "verification_evidence": "The replacement recipe contract was RED before the change and GREEN afterward. The related harness, collector, and report suites pass 105 tests; Ruff 0.9.9 and diff checks pass. A remote rerun is required and this job supports no performance claim.",
+    "verification_job": "pending Pre-Tyche functional rerun"
   }
 ]
