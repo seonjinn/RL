@@ -134,8 +134,8 @@ single in-checkpoint MTP module; vLLM reuses it chained for K>1
 
 | Setting | baseline | fixed K3 (MTP) | dynamic |
 |---|---|---|---|
-| Super 120B openmath | 37.2s | **1.50x** | pending (Mamba per-K fix rerun) |
-| Super 120B swe_verified | 48.3s | **1.47x** | pending |
+| Super 120B openmath | 37.2s | 1.50x | **1.53x** |
+| Super 120B swe_verified | 48.3s | **1.47x** | 1.43x |
 | Ultra 550B openmath | 67.8s | **1.75x** | 1.75x (schedule is K3-everywhere) |
 | Ultra 550B swe_verified | 70.7s | **1.56x** | 1.55x |
 
@@ -147,7 +147,9 @@ quantization, eliminating the dispatch-heavy separate-drafter overhead.
 DynamicSD adds nothing for Ultra because its profiled optimum is K=3 at every
 batch size (the schedule degenerates to fixed-K); Super's schedule has a
 K1/K2 range at BS 128, whose dynamic run needed one more vLLM patch (Mamba
-per-K capture assert, ledger #7).
+per-K capture assert, ledger #7). With that fix, Super openmath is the first
+math setting where dynamic edges out fixed-K (1.53x vs 1.50x) - the K1 range
+at BS 128 pays for itself.
 
 ## Key takeaway
 
