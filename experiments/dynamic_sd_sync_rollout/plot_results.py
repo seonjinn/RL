@@ -79,7 +79,7 @@ def plot_profile_grids(profile_csv: Path, out_dir: Path) -> None:
             group["K"].unique(), key=lambda s: int(s.split("=")[1].split()[0])
         )
         order = sorted(group["batch_size"].unique())
-        fig, ax = plt.subplots(figsize=(max(5.5, 0.6 * len(order)), 2.0))
+        fig, ax = plt.subplots(figsize=(max(5.0, 0.55 * len(order)), 1.8))
         sns.barplot(
             data=group,
             x="batch_size",
@@ -113,7 +113,7 @@ def plot_profile_speedup(profile_csv: Path, out_dir: Path) -> None:
     for (model, bench), group in merged.groupby(["model", "bench"]):
         hue_order = sorted(group["K"].unique(), key=lambda s: int(s.split("=")[1]))
         order = sorted(group["batch_size"].unique())
-        fig, ax = plt.subplots(figsize=(max(5.5, 0.6 * len(order)), 2.0))
+        fig, ax = plt.subplots(figsize=(max(5.0, 0.55 * len(order)), 1.8))
         sns.barplot(
             data=group,
             x="batch_size",
@@ -143,7 +143,7 @@ def plot_rollout_tok_s_per_gpu(summary_csv: Path, out_dir: Path) -> None:
     for model, group in df.groupby("model"):
         hue_order = [v for v in hue_order_all if v in set(group["variant"])]
         order = sorted(group["bench"].unique())
-        fig, ax = plt.subplots(figsize=(max(3.6, 1.2 * len(order)), 2.0))
+        fig, ax = plt.subplots(figsize=(max(3.6, 1.2 * len(order)), 1.8))
         sns.barplot(
             data=group,
             x="bench",
@@ -179,7 +179,7 @@ def plot_acceptance(profile_csv: Path, out_dir: Path) -> None:
     for model, group in agg.groupby("model"):
         hue_order = sorted(group["K"].unique(), key=lambda s: int(s.split("=")[1]))
         order = sorted(group["bench"].unique())
-        fig, ax = plt.subplots(figsize=(max(3.6, 1.1 * len(order)), 2.0))
+        fig, ax = plt.subplots(figsize=(max(3.6, 1.1 * len(order)), 1.8))
         sns.barplot(
             data=group,
             x="bench",
@@ -212,7 +212,7 @@ def plot_rollout_speedup(summary_csv: Path, out_dir: Path) -> None:
     for model, group in merged.groupby("model"):
         hue_order = [v for v in hue_order_all if v in set(group["variant"])]
         order = sorted(group["bench"].unique())
-        fig, ax = plt.subplots(figsize=(max(3.6, 1.2 * len(order)), 2.0))
+        fig, ax = plt.subplots(figsize=(max(3.6, 1.2 * len(order)), 1.8))
         sns.barplot(
             data=group,
             x="bench",
@@ -241,7 +241,7 @@ def plot_drain_curves(drain_csv: Path, out_dir: Path) -> None:
     for (model, bench), group in df.groupby(["model", "bench"]):
         variants = [v for v in VARIANT_ORDER if v in set(group["variant"])]
         palette = sns.color_palette("Paired", n_colors=len(variants))
-        fig, ax = plt.subplots(figsize=(4.4, 2.0))
+        fig, ax = plt.subplots(figsize=(4.4, 1.8))
         for color, variant in zip(palette, variants):
             sub = group[group["variant"] == variant]
             steps = sub["step"].nunique() or 1
