@@ -1,4 +1,44 @@
 model,bench,variant,k,sample_method,tp,tag,step,num_sequences,wall_s,output_tok_s,len_p50,len_p90,len_max,total_tokens,mean_acceptance_length
+Nemotron3-Super-120B (FP8),openmath,baseline,0,-,4,nemotron3_super_openmath_rollout_baseline_20260713,0,128,40.62733029900119,7636.657336739342,2298,4096,4096,310257,
+Nemotron3-Super-120B (FP8),openmath,baseline,0,-,4,nemotron3_super_openmath_rollout_baseline_20260713,1,128,42.78775412699906,9754.239466769412,4096,4096,4096,417362,
+Nemotron3-Super-120B (FP8),openmath,baseline,0,-,4,nemotron3_super_openmath_rollout_baseline_20260713,2,128,27.257812129006197,4431.940444385346,673,1907,3686,120805,
+Nemotron3-Super-120B (FP8),openmath,baseline,0,-,4,nemotron3_super_openmath_rollout_baseline_20260713,3,128,38.21340397300082,6460.743465157795,1030,4096,4096,246887,
+Nemotron3-Super-120B (FP8),openmath,fixed_k3,3,greedy,4,nemotron3_super_openmath_rollout_fixed_k3_20260713,0,128,27.13877169099578,11378.186290665899,2305,4096,4096,308790,2.6651967172087643
+Nemotron3-Super-120B (FP8),openmath,fixed_k3,3,greedy,4,nemotron3_super_openmath_rollout_fixed_k3_20260713,1,128,31.60188044000097,13257.185780302483,4096,4096,4096,418952,2.66073526516667
+Nemotron3-Super-120B (FP8),openmath,fixed_k3,3,greedy,4,nemotron3_super_openmath_rollout_fixed_k3_20260713,2,128,16.631137047996162,6944.985160465419,674,1881,4053,115503,2.7660898494531008
+Nemotron3-Super-120B (FP8),openmath,fixed_k3,3,greedy,4,nemotron3_super_openmath_rollout_fixed_k3_20260713,3,128,24.03818692799541,10578.460046163118,1623,4096,4096,254287,2.7163866668090697
+Nemotron3-Super-120B (FP8),swe_verified,baseline,0,-,4,nemotron3_super_swe_verified_rollout_baseline_20260713,0,128,47.844117998,10552.582451642334,4096,4096,4096,504879,
+Nemotron3-Super-120B (FP8),swe_verified,baseline,0,-,4,nemotron3_super_swe_verified_rollout_baseline_20260713,1,128,49.13481465500081,10402.908886275345,4096,4096,4096,511145,
+Nemotron3-Super-120B (FP8),swe_verified,baseline,0,-,4,nemotron3_super_swe_verified_rollout_baseline_20260713,2,128,47.943535117003194,10408.47319210349,4096,4096,4096,499019,
+Nemotron3-Super-120B (FP8),swe_verified,baseline,0,-,4,nemotron3_super_swe_verified_rollout_baseline_20260713,3,128,48.284700545002124,10741.332019168623,4096,4096,4096,518642,
+Nemotron3-Super-120B (FP8),swe_verified,fixed_k3,3,greedy,4,nemotron3_super_swe_verified_rollout_fixed_k3_20260713,0,128,33.38311833000262,15057.970170156977,4096,4096,4096,502682,2.885601125046638
+Nemotron3-Super-120B (FP8),swe_verified,fixed_k3,3,greedy,4,nemotron3_super_swe_verified_rollout_fixed_k3_20260713,1,128,33.694354747000034,14952.682839099554,4096,4096,4096,503821,2.8553925318916225
+Nemotron3-Super-120B (FP8),swe_verified,fixed_k3,3,greedy,4,nemotron3_super_swe_verified_rollout_fixed_k3_20260713,2,128,32.02450620500167,15551.808880731936,4096,4096,4096,498039,2.904605282341072
+Nemotron3-Super-120B (FP8),swe_verified,fixed_k3,3,greedy,4,nemotron3_super_swe_verified_rollout_fixed_k3_20260713,3,128,32.65325701799884,15915.931440270468,4096,4096,4096,519707,2.872732398103008
+Nemotron3-Ultra-550B (NVFP4),openmath,baseline,0,-,4,nemotron3_ultra_openmath_rollout_baseline_20260713,0,64,60.263433770996926,2503.640940430668,4096,4096,4096,150878,
+Nemotron3-Ultra-550B (NVFP4),openmath,baseline,0,-,4,nemotron3_ultra_openmath_rollout_baseline_20260713,1,64,69.45676639200246,3390.612783078202,4096,4096,4096,235501,
+Nemotron3-Ultra-550B (NVFP4),openmath,baseline,0,-,4,nemotron3_ultra_openmath_rollout_baseline_20260713,2,64,71.1858975110008,3625.9850479529496,4096,4096,4096,258119,
+Nemotron3-Ultra-550B (NVFP4),openmath,baseline,0,-,4,nemotron3_ultra_openmath_rollout_baseline_20260713,3,64,70.24167518399918,3732.029444248157,4096,4096,4096,262144,
+Nemotron3-Ultra-550B (NVFP4),openmath,dynamic,3,greedy,4,nemotron3_ultra_openmath_rollout_dynamic_20260713,0,64,34.509733145998325,4414.232916711624,4096,4096,4096,152334,2.895570041239856
+Nemotron3-Ultra-550B (NVFP4),openmath,dynamic,3,greedy,4,nemotron3_ultra_openmath_rollout_dynamic_20260713,1,64,38.7843419560013,6341.476678372337,4096,4096,4096,245950,2.997781867375169
+Nemotron3-Ultra-550B (NVFP4),openmath,dynamic,3,greedy,4,nemotron3_ultra_openmath_rollout_dynamic_20260713,2,64,39.860925619002956,6538.658998820292,4096,4096,4096,260637,3.0275264521074576
+Nemotron3-Ultra-550B (NVFP4),openmath,dynamic,3,greedy,4,nemotron3_ultra_openmath_rollout_dynamic_20260713,3,64,42.13017907700123,6222.237971523454,4096,4096,4096,262144,2.833452226545612
+Nemotron3-Ultra-550B (NVFP4),openmath,fixed_k3,3,greedy,4,nemotron3_ultra_openmath_rollout_fixed_k3_20260713,0,64,34.52736389200072,4363.698325515851,3424,4096,4096,150667,2.892693976273659
+Nemotron3-Ultra-550B (NVFP4),openmath,fixed_k3,3,greedy,4,nemotron3_ultra_openmath_rollout_fixed_k3_20260713,1,64,38.69633228100065,6163.40066205966,4096,4096,4096,238501,2.9854562749540032
+Nemotron3-Ultra-550B (NVFP4),openmath,fixed_k3,3,greedy,4,nemotron3_ultra_openmath_rollout_fixed_k3_20260713,2,64,39.83157859700077,6547.970459288773,4096,4096,4096,260816,3.0132974421774996
+Nemotron3-Ultra-550B (NVFP4),openmath,fixed_k3,3,greedy,4,nemotron3_ultra_openmath_rollout_fixed_k3_20260713,3,64,42.20653366099941,6210.981505980244,4096,4096,4096,262144,2.836032410562641
+Nemotron3-Ultra-550B (NVFP4),swe_verified,baseline,0,-,4,nemotron3_ultra_swe_verified_rollout_baseline_20260713,0,64,70.98738738300017,3493.0148740673426,4096,4096,4096,247960,
+Nemotron3-Ultra-550B (NVFP4),swe_verified,baseline,0,-,4,nemotron3_ultra_swe_verified_rollout_baseline_20260713,1,64,69.13481130999935,3196.8554742845376,4096,4096,4096,221014,
+Nemotron3-Ultra-550B (NVFP4),swe_verified,baseline,0,-,4,nemotron3_ultra_swe_verified_rollout_baseline_20260713,2,64,74.45943723799792,3411.884502806254,4096,4096,4096,254047,
+Nemotron3-Ultra-550B (NVFP4),swe_verified,baseline,0,-,4,nemotron3_ultra_swe_verified_rollout_baseline_20260713,3,64,68.18375927200032,3301.050021341788,4096,4096,4096,225078,
+Nemotron3-Ultra-550B (NVFP4),swe_verified,dynamic,3,greedy,4,nemotron3_ultra_swe_verified_rollout_dynamic_20260713,0,64,38.63981792300183,6607.148111016939,4096,4096,4096,255299,3.2201677492590024
+Nemotron3-Ultra-550B (NVFP4),swe_verified,dynamic,3,greedy,4,nemotron3_ultra_swe_verified_rollout_dynamic_20260713,1,64,36.63645623600314,5860.255659471027,4096,4096,4096,214699,3.2391540457370422
+Nemotron3-Ultra-550B (NVFP4),swe_verified,dynamic,3,greedy,4,nemotron3_ultra_swe_verified_rollout_dynamic_20260713,2,64,71.25686477300042,3448.3133770025624,4096,4096,4096,245716,2.6860578236869435
+Nemotron3-Ultra-550B (NVFP4),swe_verified,dynamic,3,greedy,4,nemotron3_ultra_swe_verified_rollout_dynamic_20260713,3,64,35.7388984829995,6361.499924463219,4096,4096,4096,227353,3.2175900375008846
+Nemotron3-Ultra-550B (NVFP4),swe_verified,fixed_k3,3,greedy,4,nemotron3_ultra_swe_verified_rollout_fixed_k3_20260713,0,64,38.14651752899954,6490.474518723216,4096,4096,4096,247589,3.234081736609067
+Nemotron3-Ultra-550B (NVFP4),swe_verified,fixed_k3,3,greedy,4,nemotron3_ultra_swe_verified_rollout_fixed_k3_20260713,1,64,37.3009230930038,6264.724318413161,4096,4096,4096,233680,3.2603582489327865
+Nemotron3-Ultra-550B (NVFP4),swe_verified,fixed_k3,3,greedy,4,nemotron3_ultra_swe_verified_rollout_fixed_k3_20260713,2,64,70.24022381800023,3411.8911782081364,4096,4096,4096,239652,2.671448635634029
+Nemotron3-Ultra-550B (NVFP4),swe_verified,fixed_k3,3,greedy,4,nemotron3_ultra_swe_verified_rollout_fixed_k3_20260713,3,64,35.38411249899946,6430.654435841344,4096,4096,4096,227543,3.2121404578428883
 Qwen3-235B-A22B,dapo,baseline,0,-,4,qwen3_235b_dapo_rollout_baseline_20260712,0,64,155.1718139788136,3378.7579493759335,8192,8192,8192,524288,
 Qwen3-235B-A22B,dapo,baseline,0,-,4,qwen3_235b_dapo_rollout_baseline_20260712,1,64,159.51506192306988,3153.9654872380324,8192,8192,8192,503105,
 Qwen3-235B-A22B,dapo,baseline,0,-,4,qwen3_235b_dapo_rollout_baseline_20260712,2,64,158.08033721800894,2792.6306824053745,8192,8192,8192,441460,

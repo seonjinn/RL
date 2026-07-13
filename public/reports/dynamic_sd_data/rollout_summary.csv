@@ -1,4 +1,14 @@
 model,bench,variant,k,sample_method,tp,tag,num_steps,mean_step_wall_s,mean_output_tok_s,mean_output_tok_s_per_gpu,partial
+Nemotron3-Super-120B (FP8),openmath,baseline,0,-,4,nemotron3_super_openmath_rollout_baseline_20260713,4,37.22157513200182,7070.895178262974,1767.7237945657434,False
+Nemotron3-Super-120B (FP8),openmath,fixed_k3,3,greedy,4,nemotron3_super_openmath_rollout_fixed_k3_20260713,4,24.85249402674708,10539.70431939923,2634.9260798498076,False
+Nemotron3-Super-120B (FP8),swe_verified,baseline,0,-,4,nemotron3_super_swe_verified_rollout_baseline_20260713,4,48.30179207875153,10526.324137297448,2631.581034324362,False
+Nemotron3-Super-120B (FP8),swe_verified,fixed_k3,3,greedy,4,nemotron3_super_swe_verified_rollout_fixed_k3_20260713,4,32.93880907500079,15369.598332564734,3842.3995831411835,False
+Nemotron3-Ultra-550B (NVFP4),openmath,baseline,0,-,4,nemotron3_ultra_openmath_rollout_baseline_20260713,4,67.78694321449984,3313.0670539274943,828.2667634818736,False
+Nemotron3-Ultra-550B (NVFP4),openmath,dynamic,3,greedy,4,nemotron3_ultra_openmath_rollout_dynamic_20260713,4,38.82129494950095,5879.151641356927,1469.7879103392318,False
+Nemotron3-Ultra-550B (NVFP4),openmath,fixed_k3,3,greedy,4,nemotron3_ultra_openmath_rollout_fixed_k3_20260713,4,38.81545210775039,5821.512738211132,1455.378184552783,False
+Nemotron3-Ultra-550B (NVFP4),swe_verified,baseline,0,-,4,nemotron3_ultra_swe_verified_rollout_baseline_20260713,4,70.69134880074944,3350.7012181249806,837.6753045312452,False
+Nemotron3-Ultra-550B (NVFP4),swe_verified,dynamic,3,greedy,4,nemotron3_ultra_swe_verified_rollout_dynamic_20260713,4,45.56800935375122,5569.304267988437,1392.3260669971091,False
+Nemotron3-Ultra-550B (NVFP4),swe_verified,fixed_k3,3,greedy,4,nemotron3_ultra_swe_verified_rollout_fixed_k3_20260713,4,45.26794423475076,5649.436112796464,1412.359028199116,False
 Qwen3-235B-A22B,dapo,baseline,0,-,4,qwen3_235b_dapo_rollout_baseline_20260712,4,157.91807906300528,3079.0520874572935,769.7630218643234,False
 Qwen3-235B-A22B,dapo,dynamic,5,greedy,4,qwen3_235b_dapo_rollout_dynamic_20260712,4,296.8393443945679,1870.9573187494552,467.7393296873638,False
 Qwen3-235B-A22B,dapo,fixed_k3,3,greedy,4,qwen3_235b_dapo_rollout_fixed_k3_20260712,4,432.97454638723866,1143.0006411515494,285.75016028788735,False

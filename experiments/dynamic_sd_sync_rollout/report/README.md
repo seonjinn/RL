@@ -121,6 +121,34 @@ fixed-K3 **1.33x**, dynamic 0.68x, depth-capped dynamic 0.35-0.42x.
 
 ---
 
+## Nemotron3 MTP: built-in drafting flips the big-MoE verdict
+
+Nemotron3 Super 120B-A12B (FP8, TP4) and Ultra 550B-A55B (NVFP4, TP4) ship a
+single in-checkpoint MTP module; vLLM reuses it chained for K>1
+(`{"method": "mtp", "num_speculative_tokens": K}`). Two surprises:
+
+1. **Chained reuse does not decay the way an external head does**: K=3 mean
+   acceptance length is 2.96 (Super) / 3.00 (Ultra) at temperature 1.0 -
+   equal to the separately-trained EAGLE3 drafters on Qwen3.
+2. **The big-MoE sign flips.** Same-shape sync rollouts (temp 1.0):
+
+| Setting | baseline | fixed K3 (MTP) | dynamic |
+|---|---|---|---|
+| Super 120B openmath | 37.2s | **1.50x** | pending (Mamba per-K fix rerun) |
+| Super 120B swe_verified | 48.3s | **1.47x** | pending |
+| Ultra 550B openmath | 67.8s | **1.75x** | 1.75x (schedule is K3-everywhere) |
+| Ultra 550B swe_verified | 70.7s | **1.56x** | 1.55x |
+
+Qwen3-235B-A22B with an external EAGLE3 drafter was a net loss (0.31-0.44x);
+Nemotron3-Ultra at 2.4x the parameter count gains 1.56-1.75x. **"SpecDec
+does not pay at MoE scale" was a statement about external drafters, not about
+speculation** - the in-checkpoint MTP head shares the target's backbone and
+quantization, eliminating the dispatch-heavy separate-drafter overhead.
+DynamicSD adds nothing for Ultra because its profiled optimum is K=3 at every
+batch size (the schedule degenerates to fixed-K); Super's schedule has a
+K1/K2 range at BS 128, whose dynamic run needed one more vLLM patch (Mamba
+per-K capture assert, ledger #7).
+
 ## Key takeaway
 
 **On these RL-rollout shapes, EAGLE3 with a well-chosen fixed K is the
