@@ -40,6 +40,7 @@ def test_global_overrides_are_compatible_with_vllm_025() -> None:
 
     assert "llguidance>=1.7.0,<1.8.0" in overrides
     assert "xgrammar>=0.2.1,<1.0.0" in overrides
+    assert "openai==2.44.0" in overrides
     assert not any(item.startswith("llguidance>=1.3.0,<1.4.0") for item in overrides)
     assert not any(item.startswith("xgrammar==0.1.33") for item in overrides)
 
@@ -57,3 +58,4 @@ def test_lockfile_resolves_vllm_025_and_flashinfer_0613() -> None:
     assert versions["flashinfer-python"] == "0.6.13"
     assert versions["flashinfer-cubin"] == "0.6.13"
     assert versions["flashinfer-jit-cache"] == "0.6.13+cu130"
+    assert versions["openai"] == "2.44.0"

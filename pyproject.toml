@@ -352,6 +352,9 @@ override-dependencies = [
   "torchaudio==2.11.0",
   # sglang has conflicting llguidance versions than vllm, so enforcing vllm's version since it's newer
   "llguidance>=1.7.0,<1.8.0",
+  # vLLM 0.25 imports NamespaceTool, which is absent from NeMo-Gym's OpenAI <=2.7.2 range.
+  # Match the OpenAI SDK version used by vLLM 0.25's CUDA test lock.
+  "openai==2.44.0",
   # Override setuptools range in other dependencies to address CVE GHSA-58pv-8j8x-9vj2
   "setuptools>=80.10.2",
   "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@29d31c095796f3c8ece47ee9cdcc167051bbeed9 ; platform_machine == 'x86_64'",
