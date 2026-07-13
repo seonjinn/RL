@@ -35,5 +35,9 @@ requests exceeds `VLLM_DYNAMIC_SD_DEPTH_THRESHOLD_TOKENS`, the scheduler caps
 K to `VLLM_DYNAMIC_SD_DEPTH_K` (default 0). Motivation: EAGLE3 acceptance
 collapses with generation depth on 32K rollouts, and the stock
 batch-size-indexed schedule cannot express depth. Enable via the two env vars
-(threshold 0 = disabled). Requires the K=0 capture fix above to stay on FULL
-cudagraphs while capped.
+(threshold 0 = disabled). **Status: prototype, not performance-positive.**
+A runtime K=0 needs the query_len-1 decode shape captured, and adding that
+shape to the per-K capture set made the V2 dispatcher mis-match speculative
+batches (40K step-0 wall 191s vs 116s without it), so the capture extension
+was reverted from the venv; the crash-fix patch above is the only one
+applied. Depth-aware K needs a dispatch-aware upstream implementation.

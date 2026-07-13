@@ -109,6 +109,16 @@ depth-aware schedule.** Raising max OSL further (64K) would widen, not close,
 this gap; the fix is a depth-conditioned K (or drafters trained for deep
 thinking contexts).
 
+We prototyped that fix as a ~15-line scheduler patch on vLLM 0.25 (cap K to 0
+once mean generated depth exceeds a threshold; `patches/`). The concept is
+not enough on its own: the first run fell into a *third* capture-coverage
+trap (a runtime K=0 has query_len 1, which the per-K capture list does not
+include), and after adding the K=0 shape the V2 dispatcher mis-matched
+speculative batches and slowed even the shallow phase (191s vs 116s step 0).
+Depth-aware K therefore needs a dispatch-aware upstream implementation, not a
+scheduler-only monkey-patch. On the same 0.25 stack the 40K standings are:
+fixed-K3 **1.33x**, dynamic 0.68x, depth-capped dynamic 0.35-0.42x.
+
 ---
 
 ## Key takeaway

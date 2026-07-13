@@ -1,6 +1,6 @@
 --- vllm/v1/worker/gpu/cudagraph_utils.py.orig	2026-07-12 20:52:19.000000000 -0700
-+++ vllm/v1/worker/gpu/cudagraph_utils.py	2026-07-12 22:30:49.000000000 -0700
-@@ -218,9 +218,22 @@
++++ vllm/v1/worker/gpu/cudagraph_utils.py	2026-07-12 22:54:21.000000000 -0700
+@@ -218,9 +218,16 @@
                  self.decode_query_len - self.vllm_config.num_speculative_tokens
              )
              # Each entry is (range_start, range_end, num_speculative_tokens).
@@ -11,16 +11,10 @@
 +            # (num_new <= 0); its per-step query len does not vary with K,
 +            # so keep the single capture length instead of dividing by zero.
 +            if num_new_sampled_tokens_per_step > 0:
-+                # Also capture the plain non-spec decode shape (K=0) so a
-+                # runtime K=0 selection (schedule range or depth cap) stays
-+                # on FULL graphs instead of falling back to piecewise.
-+                decode_query_lens = sorted(
-+                    {
-+                        max(1, x[2] + num_new_sampled_tokens_per_step)
-+                        for x in num_spec_per_batch_size
-+                    }
-+                    | {num_new_sampled_tokens_per_step}
-+                )
++                decode_query_lens = [
++                    max(1, x[2] + num_new_sampled_tokens_per_step)
++                    for x in num_spec_per_batch_size
++                ]
 +            else:
 +                decode_query_lens = [self.decode_query_len]
          else:
