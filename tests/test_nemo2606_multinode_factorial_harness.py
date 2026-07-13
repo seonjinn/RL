@@ -621,7 +621,7 @@ def test_ray_sub_worker_failure_sidecar_is_one_shot_and_non_destructive() -> Non
     assert "failure-diagnostic-sidecar()" in worker_block
     assert '[[ -f "$LOG_DIR/DRIVER_FAILED" ]]' in worker_block
     assert r"FAILURE_DIAGNOSTIC_NODE_INDEX=\$((SLURM_PROCID + 1))" in worker_block
-    assert 'bash "$FAILURE_COMMAND_FILE" || true' in worker_block
+    assert 'if bash "$FAILURE_COMMAND_FILE"; then' in worker_block
     assert r"FAILURE_DIAGNOSTIC_DONE_\${FAILURE_DIAGNOSTIC_NODE_INDEX}" in worker_block
     sidecar_start = worker_block.index("failure-diagnostic-sidecar &")
     assert sidecar_start < worker_block.index('ray start --address "$ip_head"')
@@ -662,9 +662,11 @@ def test_generated_head_failure_hook_is_opt_in_and_ordered(
                     f"LOG_DIR={shlex.quote(str(log_dir))}",
                     "FAILURE_COMMAND_FILE="
                     + (shlex.quote(str(failure_command)) if hook_enabled else "''"),
+                    "FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS=2",
                     "SLURM_JOB_NUM_NODES=2",
                     f"exit_code={exit_code}",
                     hook,
+                    'exit "$exit_code"',
                 )
             ),
         ],
@@ -672,7 +674,7 @@ def test_generated_head_failure_hook_is_opt_in_and_ordered(
         text=True,
     )
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == exit_code, result.stderr
     if exit_code == 0 or not hook_enabled:
         assert not invocations.exists()
         assert not (log_dir / "DRIVER_FAILED").exists()
@@ -681,12 +683,12 @@ def test_generated_head_failure_hook_is_opt_in_and_ordered(
     else:
         assert invocations.read_text().splitlines() == ["0:0", "0:1"]
         assert (log_dir / "DRIVER_FAILED").is_file()
-        assert (log_dir / "FAILURE_DIAGNOSTIC_DONE_0").is_file()
+        assert not (log_dir / "FAILURE_DIAGNOSTIC_DONE_0").exists()
         assert (log_dir / "FAILURE_DIAGNOSTIC_DONE_1").is_file()
         assert (log_dir / "ENDED").is_file()
 
 
-def test_generated_worker_failure_sidecar_touches_done_after_command_failure(
+def test_generated_worker_failure_sidecar_does_not_mark_failed_command_done(
     tmp_path: Path,
 ) -> None:
     sidecar = _ray_template_block(
@@ -724,7 +726,7 @@ def test_generated_worker_failure_sidecar_touches_done_after_command_failure(
 
     assert result.returncode == 0, result.stderr
     assert invocation.read_text() == "3\n"
-    assert (log_dir / "FAILURE_DIAGNOSTIC_DONE_3").is_file()
+    assert not (log_dir / "FAILURE_DIAGNOSTIC_DONE_3").exists()
     assert not (log_dir / "ENDED").exists()
 
 
@@ -770,6 +772,7 @@ def test_generated_head_failure_hook_bounds_slow_collection_and_merge(
     assert result.returncode == 17, result.stderr
     assert elapsed < 4
     assert invocations.read_text().splitlines() == ["0", "1"]
+    assert not (log_dir / "FAILURE_DIAGNOSTIC_DONE_0").exists()
     assert (log_dir / "ENDED").is_file()
 
 

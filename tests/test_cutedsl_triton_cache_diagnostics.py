@@ -326,6 +326,39 @@ def test_direct_cli_writes_its_node_summary_atomically(
     assert list(output_dir.iterdir()) == [output]
 
 
+def test_direct_cli_writes_an_empty_summary_when_cache_does_not_exist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_diagnostic_module()
+    monkeypatch.setattr(module.importlib.metadata, "version", lambda _: "3.6.0")
+    monkeypatch.setenv("FAILURE_DIAGNOSTIC_NODE_INDEX", "3")
+    monkeypatch.setenv("SLURM_JOB_ID", "2372855")
+    monkeypatch.setenv("SLURM_RESTART_COUNT", "0")
+    monkeypatch.setenv("SLURM_PROCID", "2")
+    monkeypatch.setenv("NEMO2606_TRITON_CACHE_SCOPE", "job_node_local")
+    cache = tmp_path / "missing-cache"
+    output_dir = tmp_path / "diagnostics"
+
+    exit_code = module.main(
+        ["--cache-root", str(cache), "--output-dir", str(output_dir)]
+    )
+
+    assert exit_code == 0
+    value = json.loads((output_dir / "node-3.json").read_text())
+    assert value["node_index"] == 3
+    assert value["job_id"] == "2372855"
+    assert value["restart_count"] == 0
+    assert value["slurm_procid"] == 2
+    assert value["cache_scope"] == "job_node_local"
+    assert value["candidate_count"] == 0
+    assert value["scanned_count"] == 0
+    assert value["rejected_symlink_count"] == 0
+    assert value["total_bytes_read"] == 0
+    assert value["truncated"] is False
+    assert value["files"] == []
+    assert str(tmp_path) not in json.dumps(value)
+
+
 @pytest.mark.parametrize(
     ("restart_count", "run_id"),
     ((None, "12345"), ("2", "12345-r2")),

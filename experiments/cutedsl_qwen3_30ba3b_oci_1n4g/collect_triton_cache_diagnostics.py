@@ -108,20 +108,23 @@ def collect_cache_diagnostics(
 ) -> dict[str, Any]:
     """Collect bounded cache metadata and hashed content prefixes."""
     _validate_limits(node_index, limits)
-    root = root.resolve(strict=True)
-    if not root.is_dir():
-        raise NotADirectoryError(f"cache root is not a directory: {root}")
-
     candidates: list[Path] = []
     rejected_symlink_count = 0
-    for path in sorted(root.rglob("*"), key=lambda value: value.as_posix()):
-        if not _is_candidate(path):
-            continue
-        if path.is_symlink():
-            rejected_symlink_count += 1
-            continue
-        if path.is_file() and path.resolve().is_relative_to(root):
-            candidates.append(path)
+    try:
+        root = root.resolve(strict=True)
+    except FileNotFoundError:
+        pass
+    else:
+        if not root.is_dir():
+            raise NotADirectoryError(f"cache root is not a directory: {root}")
+        for path in sorted(root.rglob("*"), key=lambda value: value.as_posix()):
+            if not _is_candidate(path):
+                continue
+            if path.is_symlink():
+                rejected_symlink_count += 1
+                continue
+            if path.is_file() and path.resolve().is_relative_to(root):
+                candidates.append(path)
 
     files: list[dict[str, int | str | bool]] = []
     total_bytes_read = 0

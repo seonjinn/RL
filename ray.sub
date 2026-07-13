@@ -734,8 +734,9 @@ if [[ -n "$DRIVER_COMMAND_FILE" ]]; then
 
       touch "$LOG_DIR/DRIVER_FAILED" 2>/dev/null || true
       export FAILURE_DIAGNOSTIC_NODE_INDEX=0
-      run-failure-command-until "\$FAILURE_DIAGNOSTIC_COLLECTION_DEADLINE" || true
-      touch "$LOG_DIR/FAILURE_DIAGNOSTIC_DONE_0" 2>/dev/null || true
+      if run-failure-command-until "\$FAILURE_DIAGNOSTIC_COLLECTION_DEADLINE"; then
+        touch "$LOG_DIR/FAILURE_DIAGNOSTIC_DONE_0" 2>/dev/null || true
+      fi
       while (( SECONDS < FAILURE_DIAGNOSTIC_COLLECTION_DEADLINE )); do
         done_count=\$(find "$LOG_DIR" -maxdepth 1 -name 'FAILURE_DIAGNOSTIC_DONE_*' -type f | wc -l) || done_count=0
         [[ "\$done_count" -ge "$SLURM_JOB_NUM_NODES" ]] && break
@@ -839,8 +840,9 @@ if [[ -n "$FAILURE_COMMAND_FILE" ]]; then
       fi
       sleep 1
     done
-    bash "$FAILURE_COMMAND_FILE" || true
-    touch "$LOG_DIR/FAILURE_DIAGNOSTIC_DONE_\${FAILURE_DIAGNOSTIC_NODE_INDEX}"
+    if bash "$FAILURE_COMMAND_FILE"; then
+      touch "$LOG_DIR/FAILURE_DIAGNOSTIC_DONE_\${FAILURE_DIAGNOSTIC_NODE_INDEX}"
+    fi
   }
   failure-diagnostic-sidecar &
 fi
