@@ -5,6 +5,10 @@ checkpointing:
   checkpoint_dir: results/grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-factorial
 policy:
   train_global_batch_size: 16
+  generation:
+    vllm_cfg:
+      env_vars:
+        VLLM_USE_STANDALONE_COMPILE: "0"
   megatron_cfg:
     expert_model_parallel_size: 8
     cuda_graph_impl: none
