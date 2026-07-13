@@ -49,14 +49,6 @@ raises acceptance length to 4.11 (vs 3.73 at K=5) but per-position acceptance
 decay means tokens/s never beats K=5, and at BS=1 plain K=3 is fastest
 (607 vs 590/556 tok/s). The derived schedules therefore never select K&gt;5.</p>
 
-<h2>Acceptance length by model (temperature 1.0)</h2>
-<div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length_nemotron3-super-120b_fp8.png" alt="profile_acceptance_length_nemotron3-super-120b_fp8.png"></div>
-<div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length_nemotron3-ultra-550b_nvfp4.png" alt="profile_acceptance_length_nemotron3-ultra-550b_nvfp4.png"></div>
-<div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length_qwen3-235b-a22b.png" alt="profile_acceptance_length_qwen3-235b-a22b.png"></div>
-<div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length_qwen3-30b-a3b.png" alt="profile_acceptance_length_qwen3-30b-a3b.png"></div>
-<div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length_qwen3-30b-a3b_40k.png" alt="profile_acceptance_length_qwen3-30b-a3b_40k.png"></div>
-<div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length_qwen3-32b.png" alt="profile_acceptance_length_qwen3-32b.png"></div>
-
 <h2>Derived DynamicSD schedules</h2>
 <table><tr><th>Setting</th><th>Derived batch-size &rarr; K schedule (argmax measured tok/s)</th></tr><tr><td>nemotron3_super_openmath</td><td style='text-align:left'>BS 1-127 &rarr; K=3, BS 128-128 &rarr; K=1</td></tr><tr><td>nemotron3_super_swe_verified</td><td style='text-align:left'>BS 1-127 &rarr; K=3, BS 128-128 &rarr; K=2</td></tr><tr><td>nemotron3_ultra_openmath</td><td style='text-align:left'>BS 1-64 &rarr; K=3</td></tr><tr><td>nemotron3_ultra_swe_verified</td><td style='text-align:left'>BS 1-64 &rarr; K=3</td></tr><tr><td>qwen3_235b_openmath</td><td style='text-align:left'>BS 1-1 &rarr; K=5, BS 2-31 &rarr; K=3, BS 32-63 &rarr; K=1, BS 64-64 &rarr; K=0</td></tr><tr><td>qwen3_235b_swe_verified</td><td style='text-align:left'>BS 1-3 &rarr; K=2, BS 4-7 &rarr; K=1, BS 8-31 &rarr; K=3, BS 32-63 &rarr; K=1, BS 64-64 &rarr; K=0</td></tr><tr><td>qwen3_30ba3b_40k_openmath</td><td style='text-align:left'>BS 1-3 &rarr; K=3, BS 4-7 &rarr; K=5, BS 8-15 &rarr; K=3, BS 16-31 &rarr; K=5, BS 32-127 &rarr; K=3, BS 128-128 &rarr; K=2</td></tr><tr><td>qwen3_30ba3b_openmath</td><td style='text-align:left'>BS 1-1 &rarr; K=3, BS 2-85 &rarr; K=5, BS 86-102 &rarr; K=4, BS 103-128 &rarr; K=3</td></tr><tr><td>qwen3_30ba3b_swe_verified</td><td style='text-align:left'>BS 1-15 &rarr; K=3, BS 16-63 &rarr; K=5, BS 64-128 &rarr; K=3</td></tr><tr><td>qwen3_32b_openmath</td><td style='text-align:left'>BS 1-31 &rarr; K=5, BS 32-127 &rarr; K=3, BS 128-256 &rarr; K=1</td></tr><tr><td>qwen3_32b_swe_verified</td><td style='text-align:left'>BS 1-7 &rarr; K=5, BS 8-31 &rarr; K=3, BS 32-63 &rarr; K=2, BS 64-255 &rarr; K=1, BS 256-256 &rarr; K=0</td></tr></table>
 
@@ -71,15 +63,16 @@ logits-caching overhead, so the main matrix uses greedy drafting.</p>
 <p class='note'>Running log of every change we made to make vLLM DynamicSD work well, with the measured performance impact of each. Purpose: each entry should be directly convertible into an upstream vLLM issue/PR with its evidence attached. Update this file whenever a new change lands or new measurements arrive.</p>
 <p class='note'>Baseline workload for all numbers unless stated: Qwen3-30B-A3B + EAGLE3 Thinking drafter, openmath sync-rollout (4x32 gens, temp 1.0, GB200 TP1), mean step-wall speedup vs no-SD baseline.</p>
 <table>
-<tr><th>#</th><th>Change</th><th>Layer</th><th>Perf impact (measured)</th><th>Upstream status</th></tr>
-<tr><td>1</td><td>Capture-aware K-table derivation: cap K so bs x (K+1) &lt;= max_cudagraph_capture_size when building `num_speculative_tokens_per_batch_size`</td><td>our tooling (`derive_dynamic_k_table.py --max-capture-tokens`)</td><td>dynamic **1.36x -&gt; 1.90x** (+40%) on vLLM 0.24</td><td>PR-able as: validation warning / auto-cap in `SpeculativeConfig`, + docs. Not sent yet</td></tr>
-<tr><td>2</td><td>vLLM 0.25.0 crash fix: drafter cudagraph manager ZeroDivisionError under DynamicSD</td><td>vLLM patch (`vllm/v1/worker/gpu/cudagraph_utils.py`, `patches/vllm0250_dynamic_sd_drafter_cudagraph_zerodiv.patch`)</td><td>blocker -&gt; runs at all; unlocked #3</td><td>**Bug present in upstream main (checked 2026-07-13). Strong PR candidate, 1-line + test**</td></tr>
-<tr><td>3</td><td>vLLM 0.25 + V2 model runner (per-K FULL cudagraph, PR #45953) with `VLLM_USE_V2_MODEL_RUNNER=1`</td><td>config discovery (no code)</td><td>dynamic **1.90x -&gt; 2.01x** (step wall 26.8 -&gt; 23.4s, -13%); fixed-K3 also 2.00x -&gt; 2.19x</td><td>PR-able as: docs fix + auto-enable Qwen3MoeForCausalLM in `DEFAULT_V2_MODEL_RUNNER_ARCHITECTURES` (currently silent PIECEWISE downgrade)</td></tr>
-<tr><td>4</td><td>K=0 capture extension: add plain decode shape to per-K capture set</td><td>vLLM patch, **REVERTED**</td><td>negative: V2 dispatcher mis-matched spec batches; 40K step-0 wall 116s -&gt; 191s; overall 0.35x -&gt; 0.42x only</td><td>Do not send as-is. Evidence for #6 design discussion</td></tr>
-<tr><td>5</td><td>Depth-aware K cap: scheduler caps K when mean generated depth &gt; threshold (`VLLM_DYNAMIC_SD_DEPTH_THRESHOLD_TOKENS`)</td><td>vLLM patch, prototype (`patches/vllm0250_depth_aware_dynamic_sd.patch`), disabled</td><td>negative in current form: 40K dynamic 0.68x -&gt; 0.35-0.42x (runtime K=0 shape uncaptured / dispatch mismatch)</td><td>Feature request material: depth-conditioned K needs dispatch-aware upstream design. Attach 40K depth-collapse data (acceptance 2.9-3.7% at depth 10K+)</td></tr>
-<tr><td>6</td><td>(open) Dispatch-correct runtime K=0 / off-schedule K support</td><td>upstream design gap</td><td>blocks #5; also affects any schedule with K=0 ranges under V2</td><td>Issue candidate with #4/#5 measurements</td></tr>
-<tr><td>7</td><td>Mamba-hybrid per-K capture fix: relax `mamba_attn.py:183` strict `max_query_len == 1+max_K` assert to `&lt;=`</td><td>vLLM patch (NemotronH + DynamicSD crashed when schedule contains K &lt; max)</td><td>blocker -&gt; runs; **validated**: Super dynamic 1.53x beats fixed 1.50x on openmath</td><td>Upstream bug: Mamba backend not updated for per-K capture (PR #45953 follow-up). PR candidate</td></tr>
+<tr><th>#</th><th>Change</th><th>Result</th><th>Upstream</th></tr>
+<tr><td>1</td><td>Capture-aware K-table (bs x (K+1) &lt;= 512 cap)</td><td>dynamic 1.36x -&gt; 1.90x</td><td>PR-able (validation/docs)</td></tr>
+<tr><td>2</td><td>0.25 drafter ZeroDivision crash fix</td><td>crash -&gt; runs</td><td>**PR-ready** (bug in main)</td></tr>
+<tr><td>3</td><td>V2 runner flag for per-K FULL graphs</td><td>dynamic 1.90x -&gt; 2.01x</td><td>PR-able (auto-enable+docs)</td></tr>
+<tr><td>4</td><td>K=0 capture extension</td><td>negative, reverted</td><td>evidence for #6</td></tr>
+<tr><td>5</td><td>Depth-aware K cap prototype</td><td>negative (needs #6)</td><td>feature request</td></tr>
+<tr><td>6</td><td>(open) dispatch-correct runtime-K support</td><td>blocks #5</td><td>issue candidate</td></tr>
+<tr><td>7</td><td>Mamba per-K capture assert fix</td><td>crash -&gt; runs; Super dyn 1.53x</td><td>**PR-ready**</td></tr>
 </table>
+<details><summary><b>Per-change details, 0.24 vs 0.25 comparison, cumulative effect (click to expand)</b></summary>
 <h3>Detail per change</h3>
 <h4>1. Capture-aware table (tooling)</h4>
 <p class='note'>The profiled BS grid {1,2,...,64,128} cannot see that bs x (K+1) crosses the 512-token cudagraph capture budget between grid points (K=5 fine at BS 64, eager fallback from BS 86). The naive argmax table carried K=5 into BS 86-127 and dynamic ran slower than fixed (37.4s vs 25.4s per step). Enforcing `K &lt;= 512/bs - 1` analytically in the derivation recovered it. Upstream angle: vLLM accepts such schedules silently; a validation warning or auto-cap at `SpeculativeConfig` level would prevent the whole failure class.</p>
@@ -127,6 +120,7 @@ else:                                            # drafter manager: query len
 <tr><td>reference: best fixed-K3 on same stack</td><td>2.19x</td><td>21.5s</td></tr>
 </table>
 <p class='note'>Net: **+48% dynamic throughput from our changes**; remaining 8% gap to fixed-K3 is workload-structural (K=3 already optimal at the dominant batch sizes), not an implementation deficit we have identified.</p>
+</details>
 
 <h1>Per-model results</h1>
 <p class="note">Profiling grids use fixed-length generation (ignore_eos); each
@@ -144,6 +138,8 @@ is where DynamicSD raises K beyond the fixed-K compromise.</p>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_tok_s_qwen3-30b-a3b_40k_openmath.png" alt="profile_tok_s_qwen3-30b-a3b_40k_openmath.png"></div>
 <h3>Tokens/s/GPU speedup vs no-SD (dashed = break-even)</h3>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_qwen3-30b-a3b_40k_openmath.png" alt="profile_speedup_per_gpu_qwen3-30b-a3b_40k_openmath.png"></div>
+<h3>Acceptance length (temperature 1.0)</h3>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length_qwen3-30b-a3b_40k.png" alt="profile_acceptance_length_qwen3-30b-a3b_40k.png"></div>
 <h3>Rollout drain curves (sequences in flight over time)</h3>
 <div class="chart-card"><img src="dynamic_sd_plots/drain_qwen3-30b-a3b_40k_openmath.png" alt="drain_qwen3-30b-a3b_40k_openmath.png"></div>
 <h2>Qwen3-30B-A3B (TP1)</h2>
@@ -157,6 +153,8 @@ is where DynamicSD raises K beyond the fixed-K compromise.</p>
 <h3>Tokens/s/GPU speedup vs no-SD (dashed = break-even)</h3>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_qwen3-30b-a3b_openmath.png" alt="profile_speedup_per_gpu_qwen3-30b-a3b_openmath.png"></div>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_qwen3-30b-a3b_swe_verified.png" alt="profile_speedup_per_gpu_qwen3-30b-a3b_swe_verified.png"></div>
+<h3>Acceptance length (temperature 1.0)</h3>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length_qwen3-30b-a3b.png" alt="profile_acceptance_length_qwen3-30b-a3b.png"></div>
 <h3>Rollout drain curves (sequences in flight over time)</h3>
 <div class="chart-card"><img src="dynamic_sd_plots/drain_qwen3-30b-a3b_dapo.png" alt="drain_qwen3-30b-a3b_dapo.png"></div>
 <div class="chart-card"><img src="dynamic_sd_plots/drain_qwen3-30b-a3b_math500.png" alt="drain_qwen3-30b-a3b_math500.png"></div>
@@ -173,6 +171,8 @@ is where DynamicSD raises K beyond the fixed-K compromise.</p>
 <h3>Tokens/s/GPU speedup vs no-SD (dashed = break-even)</h3>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_qwen3-32b_openmath.png" alt="profile_speedup_per_gpu_qwen3-32b_openmath.png"></div>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_qwen3-32b_swe_verified.png" alt="profile_speedup_per_gpu_qwen3-32b_swe_verified.png"></div>
+<h3>Acceptance length (temperature 1.0)</h3>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length_qwen3-32b.png" alt="profile_acceptance_length_qwen3-32b.png"></div>
 <h3>Rollout drain curves (sequences in flight over time)</h3>
 <div class="chart-card"><img src="dynamic_sd_plots/drain_qwen3-32b_dapo.png" alt="drain_qwen3-32b_dapo.png"></div>
 <div class="chart-card"><img src="dynamic_sd_plots/drain_qwen3-32b_math500.png" alt="drain_qwen3-32b_math500.png"></div>
@@ -189,6 +189,8 @@ is where DynamicSD raises K beyond the fixed-K compromise.</p>
 <h3>Tokens/s/GPU speedup vs no-SD (dashed = break-even)</h3>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_qwen3-235b-a22b_openmath.png" alt="profile_speedup_per_gpu_qwen3-235b-a22b_openmath.png"></div>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_qwen3-235b-a22b_swe_verified.png" alt="profile_speedup_per_gpu_qwen3-235b-a22b_swe_verified.png"></div>
+<h3>Acceptance length (temperature 1.0)</h3>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length_qwen3-235b-a22b.png" alt="profile_acceptance_length_qwen3-235b-a22b.png"></div>
 <h3>Rollout drain curves (sequences in flight over time)</h3>
 <div class="chart-card"><img src="dynamic_sd_plots/drain_qwen3-235b-a22b_dapo.png" alt="drain_qwen3-235b-a22b_dapo.png"></div>
 <div class="chart-card"><img src="dynamic_sd_plots/drain_qwen3-235b-a22b_math500.png" alt="drain_qwen3-235b-a22b_math500.png"></div>
@@ -205,6 +207,8 @@ is where DynamicSD raises K beyond the fixed-K compromise.</p>
 <h3>Tokens/s/GPU speedup vs no-SD (dashed = break-even)</h3>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_nemotron3-super-120b_fp8_openmath.png" alt="profile_speedup_per_gpu_nemotron3-super-120b_fp8_openmath.png"></div>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_nemotron3-super-120b_fp8_swe_verified.png" alt="profile_speedup_per_gpu_nemotron3-super-120b_fp8_swe_verified.png"></div>
+<h3>Acceptance length (temperature 1.0)</h3>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length_nemotron3-super-120b_fp8.png" alt="profile_acceptance_length_nemotron3-super-120b_fp8.png"></div>
 <h3>Rollout drain curves (sequences in flight over time)</h3>
 <div class="chart-card"><img src="dynamic_sd_plots/drain_nemotron3-super-120b_fp8_openmath.png" alt="drain_nemotron3-super-120b_fp8_openmath.png"></div>
 <div class="chart-card"><img src="dynamic_sd_plots/drain_nemotron3-super-120b_fp8_swe_verified.png" alt="drain_nemotron3-super-120b_fp8_swe_verified.png"></div>
@@ -219,6 +223,8 @@ is where DynamicSD raises K beyond the fixed-K compromise.</p>
 <h3>Tokens/s/GPU speedup vs no-SD (dashed = break-even)</h3>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_nemotron3-ultra-550b_nvfp4_openmath.png" alt="profile_speedup_per_gpu_nemotron3-ultra-550b_nvfp4_openmath.png"></div>
 <div class="chart-card"><img src="dynamic_sd_plots/profile_speedup_per_gpu_nemotron3-ultra-550b_nvfp4_swe_verified.png" alt="profile_speedup_per_gpu_nemotron3-ultra-550b_nvfp4_swe_verified.png"></div>
+<h3>Acceptance length (temperature 1.0)</h3>
+<div class="chart-card"><img src="dynamic_sd_plots/profile_acceptance_length_nemotron3-ultra-550b_nvfp4.png" alt="profile_acceptance_length_nemotron3-ultra-550b_nvfp4.png"></div>
 <h3>Rollout drain curves (sequences in flight over time)</h3>
 <div class="chart-card"><img src="dynamic_sd_plots/drain_nemotron3-ultra-550b_nvfp4_openmath.png" alt="drain_nemotron3-ultra-550b_nvfp4_openmath.png"></div>
 <div class="chart-card"><img src="dynamic_sd_plots/drain_nemotron3-ultra-550b_nvfp4_swe_verified.png" alt="drain_nemotron3-ultra-550b_nvfp4_swe_verified.png"></div>

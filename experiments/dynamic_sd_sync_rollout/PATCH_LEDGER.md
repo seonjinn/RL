@@ -9,15 +9,15 @@ Baseline workload for all numbers unless stated: Qwen3-30B-A3B + EAGLE3
 Thinking drafter, openmath sync-rollout (4x32 gens, temp 1.0, GB200 TP1),
 mean step-wall speedup vs no-SD baseline.
 
-| # | Change | Layer | Perf impact (measured) | Upstream status |
-|---|--------|-------|------------------------|-----------------|
-| 1 | Capture-aware K-table derivation: cap K so bs x (K+1) <= max_cudagraph_capture_size when building `num_speculative_tokens_per_batch_size` | our tooling (`derive_dynamic_k_table.py --max-capture-tokens`) | dynamic **1.36x -> 1.90x** (+40%) on vLLM 0.24 | PR-able as: validation warning / auto-cap in `SpeculativeConfig`, + docs. Not sent yet |
-| 2 | vLLM 0.25.0 crash fix: drafter cudagraph manager ZeroDivisionError under DynamicSD | vLLM patch (`vllm/v1/worker/gpu/cudagraph_utils.py`, `patches/vllm0250_dynamic_sd_drafter_cudagraph_zerodiv.patch`) | blocker -> runs at all; unlocked #3 | **Bug present in upstream main (checked 2026-07-13). Strong PR candidate, 1-line + test** |
-| 3 | vLLM 0.25 + V2 model runner (per-K FULL cudagraph, PR #45953) with `VLLM_USE_V2_MODEL_RUNNER=1` | config discovery (no code) | dynamic **1.90x -> 2.01x** (step wall 26.8 -> 23.4s, -13%); fixed-K3 also 2.00x -> 2.19x | PR-able as: docs fix + auto-enable Qwen3MoeForCausalLM in `DEFAULT_V2_MODEL_RUNNER_ARCHITECTURES` (currently silent PIECEWISE downgrade) |
-| 4 | K=0 capture extension: add plain decode shape to per-K capture set | vLLM patch, **REVERTED** | negative: V2 dispatcher mis-matched spec batches; 40K step-0 wall 116s -> 191s; overall 0.35x -> 0.42x only | Do not send as-is. Evidence for #6 design discussion |
-| 5 | Depth-aware K cap: scheduler caps K when mean generated depth > threshold (`VLLM_DYNAMIC_SD_DEPTH_THRESHOLD_TOKENS`) | vLLM patch, prototype (`patches/vllm0250_depth_aware_dynamic_sd.patch`), disabled | negative in current form: 40K dynamic 0.68x -> 0.35-0.42x (runtime K=0 shape uncaptured / dispatch mismatch) | Feature request material: depth-conditioned K needs dispatch-aware upstream design. Attach 40K depth-collapse data (acceptance 2.9-3.7% at depth 10K+) |
-| 6 | (open) Dispatch-correct runtime K=0 / off-schedule K support | upstream design gap | blocks #5; also affects any schedule with K=0 ranges under V2 | Issue candidate with #4/#5 measurements |
-| 7 | Mamba-hybrid per-K capture fix: relax `mamba_attn.py:183` strict `max_query_len == 1+max_K` assert to `<=` | vLLM patch (NemotronH + DynamicSD crashed when schedule contains K < max) | blocker -> runs; **validated**: Super dynamic 1.53x beats fixed 1.50x on openmath | Upstream bug: Mamba backend not updated for per-K capture (PR #45953 follow-up). PR candidate |
+| # | Change | Result | Upstream |
+|---|--------|--------|----------|
+| 1 | Capture-aware K-table (bs x (K+1) <= 512 cap) | dynamic 1.36x -> 1.90x | PR-able (validation/docs) |
+| 2 | 0.25 drafter ZeroDivision crash fix | crash -> runs | **PR-ready** (bug in main) |
+| 3 | V2 runner flag for per-K FULL graphs | dynamic 1.90x -> 2.01x | PR-able (auto-enable+docs) |
+| 4 | K=0 capture extension | negative, reverted | evidence for #6 |
+| 5 | Depth-aware K cap prototype | negative (needs #6) | feature request |
+| 6 | (open) dispatch-correct runtime-K support | blocks #5 | issue candidate |
+| 7 | Mamba per-K capture assert fix | crash -> runs; Super dyn 1.53x | **PR-ready** |
 
 ---
 

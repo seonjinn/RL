@@ -142,6 +142,30 @@ def render_markdown_lite(md_path: Path) -> str:
     return "\n".join(out)
 
 
+def _split_ledger(md_path: Path) -> tuple[str, str]:
+    text = md_path.read_text(encoding="utf-8") if md_path.exists() else ""
+    if "\n---\n" in text:
+        head, rest = text.split("\n---\n", 1)
+        return head, rest
+    return text, ""
+
+
+def render_markdown_lite_summary(md_path: Path) -> str:
+    import tempfile
+    head, _ = _split_ledger(md_path)
+    tmp = Path(tempfile.mktemp(suffix=".md")); tmp.write_text(head, encoding="utf-8")
+    out = render_markdown_lite(tmp); tmp.unlink()
+    return out
+
+
+def render_markdown_lite_details(md_path: Path) -> str:
+    import tempfile
+    _, rest = _split_ledger(md_path)
+    tmp = Path(tempfile.mktemp(suffix=".md")); tmp.write_text(rest, encoding="utf-8")
+    out = render_markdown_lite(tmp); tmp.unlink()
+    return out
+
+
 def tables_section() -> str:
     rows = []
     for spec_path in sorted(TABLES_DIR.glob("*_dynamic_spec.json")):
@@ -279,7 +303,11 @@ def build() -> None:
             n for n in plot_names
             if n.startswith("rollout_") and model_of(n) == slug_key
         ]
-        claimed.update(grids + speedups + drains + rollouts)
+        accepts = [
+            n for n in plot_names
+            if n.startswith("profile_acceptance") and model_of(n) == slug_key
+        ]
+        claimed.update(grids + speedups + drains + rollouts + accepts)
         if not (grids or speedups or drains or rollouts):
             continue
         parts = [f"<h2>{title}</h2>"]
@@ -298,6 +326,9 @@ def build() -> None:
         if speedups:
             parts.append("<h3>Tokens/s/GPU speedup vs no-SD (dashed = break-even)</h3>")
             parts.append(img_cards(speedups))
+        if accepts:
+            parts.append("<h3>Acceptance length (temperature 1.0)</h3>")
+            parts.append(img_cards(accepts))
         if drains:
             parts.append(
                 "<h3>Rollout drain curves (sequences in flight over time)</h3>"
@@ -346,9 +377,6 @@ raises acceptance length to 4.11 (vs 3.73 at K=5) but per-position acceptance
 decay means tokens/s never beats K=5, and at BS=1 plain K=3 is fastest
 (607 vs 590/556 tok/s). The derived schedules therefore never select K&gt;5.</p>
 
-<h2>Acceptance length by model (temperature 1.0)</h2>
-{img_cards(accept_imgs)}
-
 <h2>Derived DynamicSD schedules</h2>
 {tables_section()}
 
@@ -360,7 +388,10 @@ Qwen3-30B-A3B/openmath (AL 2.99 vs 3.01 at K=3) and 3-10% lower tok/s from the
 logits-caching overhead, so the main matrix uses greedy drafting.</p>
 
 <h2>vLLM patch &amp; change tracking (0.24 vs 0.25, per-change perf impact)</h2>
-{render_markdown_lite(EXP / "PATCH_LEDGER.md")}
+{render_markdown_lite_summary(EXP / "PATCH_LEDGER.md")}
+<details><summary><b>Per-change details, 0.24 vs 0.25 comparison, cumulative effect (click to expand)</b></summary>
+{render_markdown_lite_details(EXP / "PATCH_LEDGER.md")}
+</details>
 
 <h1>Per-model results</h1>
 <p class="note">Profiling grids use fixed-length generation (ignore_eos); each
