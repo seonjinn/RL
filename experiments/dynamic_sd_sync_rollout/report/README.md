@@ -29,13 +29,21 @@ consistently *mitigates* the damage vs fixed-K3 (0.47-0.53x vs 0.31-0.44x on
 math benches) but cannot cross 1.0x - the right call there is no speculation
 at all, which only an operator (or a K=0-everywhere schedule) can make.
 
-**vLLM 0.24 caveat discovered after these runs:** the runtime has a single
+**vLLM 0.24 caveat, resolved by a 0.25 pilot rerun:** 0.24 has a single
 `uniform_decode_query_len = 1 + max K`, so any step where DynamicSD selects
 K &lt; max falls off the FULL cudagraph path onto piecewise graphs, while a
-fixed-K engine always runs FULL. Every dynamic number above therefore carries
-a version handicap that PR #45953 (v0.25, per-K graph capture) removes; a
-0.25 rerun is the required follow-up before concluding dynamic cannot match
-fixed-K on the 30B/32B math settings.
+fixed-K engine always runs FULL. PR #45953 (v0.25 + V2 model runner,
+`VLLM_USE_V2_MODEL_RUNNER=1` required for Qwen3-MoE) captures a graph per K.
+Rerunning the pilot points on 0.25 with per-K FULL capture verified:
+30B openmath fixed 2.19x / dynamic 2.01x, 32B swe fixed 0.92x / dynamic
+0.96x, 40K dynamic 0.67x. Dynamic gained ~13% wall time everywhere, but
+fixed gained the same, so **the rankings are version-independent**: fixed-K3
+still leads on 30B math, dynamic still leads fixed on 32B SWE (though both
+dip below baseline on 0.25), and the 40K depth-collapse persists. Bonus
+finding: vLLM 0.25.0 crashes at engine init (ZeroDivisionError in the
+drafter's per-K cudagraph manager, `gpu/cudagraph_utils.py`) for any
+DynamicSD schedule - we run with a local one-line guard patch; upstream
+report pending.
 
 At 4K generations the step spends most wall time at high concurrency, and the
 per-BS optimum there is exactly K=3, so a fixed K=3 already sits on the
