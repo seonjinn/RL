@@ -7,6 +7,7 @@ NUM_NODES="${NUM_NODES:-16}"
 SEGMENT="${SEGMENT:-16}"
 TIME_LIMIT="${TIME_LIMIT:-04:00:00}"
 CONTAINER="${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260704.sqsh}"
+MOUNTS="${MOUNTS:-/lustre:/lustre}"
 REPO_DIR="${REPO_DIR:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-vllm024-fresh-main-ad23-20260712}"
 RUN_TAG="${RUN_TAG:-q235-v024-ref-init-diag-ptyche-$(date +%Y%m%d-%H%M%S)}"
 RUN_DIR="${RUN_DIR:-${REPO_DIR}/experiments/vllm_024_fresh_main_oom/runs/${RUN_TAG}}"
@@ -47,7 +48,7 @@ logger.wandb_enabled=false \
 logger.tensorboard_enabled=false \
 logger.log_dir=${RUN_DIR}/nemo_logs"
 
-export COMMAND CONTAINER
+export COMMAND CONTAINER MOUNTS
 
 job_id="$({
   cd "${REPO_DIR}"
