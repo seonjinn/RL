@@ -7,3 +7,12 @@ tests/test_suites/llm/grpo-qwen3.5-35ba3b-2n8g-automodel-ep16.sh
 
 # Disable this due to know vLLM bug with Qwen3.5: https://github.com/vllm-project/vllm/issues/37856
 tests/test_suites/llm/grpo-qwen3.5-397ba17b-32n8g-megatron.v2.sh
+
+# Full-CG policy recipe: disabled until GB200 capture/replay and storage-stability validation passes.
+tests/test_suites/llm/performance/grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-full-cg-noncolocated.sh
+
+# NeMo 26.06 feature recipes: disabled until their GB200 qualification gates pass.
+tests/test_suites/llm/performance/grpo-qwen3-30ba3b-1n4g-megatron-mxfp8-cutedsl.sh
+tests/test_suites/llm/performance/grpo-qwen3-30ba3b-1n4g-megatron-mxfp8-a2a-overlap.sh
+tests/test_suites/llm/performance/grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-factorial.sh
+tests/test_suites/llm/performance/grpo-qwen3-30ba3b-4n4g-megatron-mxfp8-cutedsl.sh

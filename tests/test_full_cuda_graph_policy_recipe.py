@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import subprocess
 from pathlib import Path
 from typing import Any, cast
 
@@ -26,6 +28,23 @@ PERFORMANCE_RECIPES = CONFIGS / "recipes/llm/performance"
 PARENT_NAME = "grpo-qwen3-30ba3b-1n4g-megatron-mxfp8-cutedsl"
 RECIPE_NAME = "grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-full-cg-noncolocated"
 RECIPE = PERFORMANCE_RECIPES / f"{RECIPE_NAME}.yaml"
+DISABLED_SUITE = PROJECT_ROOT / "tests/test_suites/disabled.txt"
+LAUNCH = PROJECT_ROOT / "tools/launch"
+FEATURE_LAUNCHERS = {
+    "grpo-qwen3-30ba3b-1n4g-megatron-mxfp8-cutedsl": (1, 4, 3, None),
+    "grpo-qwen3-30ba3b-1n4g-megatron-mxfp8-a2a-overlap": (1, 4, 3, None),
+    "grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-factorial": (2, 4, 3, 2),
+    "grpo-qwen3-30ba3b-4n4g-megatron-mxfp8-cutedsl": (4, 4, 3, 4),
+    RECIPE_NAME: (2, 4, 6, None),
+}
+DEFAULT_SUITES = (
+    PROJECT_ROOT / "tests/test_suites/nightly.txt",
+    PROJECT_ROOT / "tests/test_suites/release.txt",
+    PROJECT_ROOT / "tests/test_suites/nightly_gb200.txt",
+    PROJECT_ROOT / "tests/test_suites/release_gb200.txt",
+    PROJECT_ROOT / "tests/test_suites/performance.txt",
+    PROJECT_ROOT / "tests/test_suites/performance_gb200.txt",
+)
 EXEMPLARS = (
     CONFIGS / "grpo_math_1B.yaml",
     CONFIGS / "grpo_math_1B_megatron.yaml",
@@ -174,3 +193,73 @@ def test_full_cuda_graph_recipe_skips_dynamic_policy_work() -> None:
         grpo["num_prompts_per_step"] * grpo["num_generations_per_prompt"]
     )
     assert config["policy"]["megatron_cfg"]["overlap_moe_expert_parallel_comm"] is False
+
+
+def test_nemo_2606_feature_launchers_are_disabled_pending_gpu_validation() -> None:
+    disabled_entries = DISABLED_SUITE.read_text(encoding="utf-8").splitlines()
+
+    for name, (nodes, gpus_per_node, steps, segment_size) in FEATURE_LAUNCHERS.items():
+        suite_entry = f"tests/test_suites/llm/performance/{name}.sh"
+        suite_script = PROJECT_ROOT / suite_entry
+        recipe = _load_resolved(PERFORMANCE_RECIPES / f"{name}.yaml")
+
+        assert suite_script.is_file()
+        assert os.access(suite_script, os.X_OK)
+        assert recipe["cluster"]["num_nodes"] == nodes
+        assert recipe["cluster"]["gpus_per_node"] == gpus_per_node
+        assert recipe["cluster"]["segment_size"] == segment_size
+        assert disabled_entries.count(suite_entry) == 1
+        for default_suite in DEFAULT_SUITES:
+            assert (
+                suite_entry
+                not in default_suite.read_text(encoding="utf-8").splitlines()
+            )
+
+        script = suite_script.read_text(encoding="utf-8")
+        assert f"NUM_NODES={nodes}" in script.splitlines()
+        assert f"GPUS_PER_NODE={gpus_per_node}" in script.splitlines()
+        assert f"STEPS_PER_RUN={steps}" in script.splitlines()
+        assert f"MAX_STEPS={steps}" in script.splitlines()
+        if segment_size is None:
+            assert not any(
+                line.startswith("SEGMENT_SIZE=") for line in script.splitlines()
+            )
+        else:
+            assert f"SEGMENT_SIZE={segment_size}" in script.splitlines()
+
+        syntax = subprocess.run(
+            ["bash", "-n", str(suite_script)],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert syntax.returncode == 0, syntax.stderr
+
+        dry_run = subprocess.run(
+            ["bash", str(suite_script)],
+            cwd=PROJECT_ROOT,
+            env={**os.environ, "TEST_DRYRUN": "1"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert dry_run.returncode == 0, dry_run.stderr
+
+        launch = subprocess.run(
+            [str(LAUNCH), str(suite_script)],
+            cwd=PROJECT_ROOT,
+            env={
+                **os.environ,
+                "DRYRUN": "1",
+                "HF_HOME": "...",
+                "HF_DATASETS_CACHE": "...",
+                "CONTAINER": "",
+                "ACCOUNT": "",
+                "PARTITION": "",
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert launch.returncode == 0, launch.stderr
