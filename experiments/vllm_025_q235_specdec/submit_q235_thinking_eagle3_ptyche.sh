@@ -187,9 +187,15 @@ case "${MODE}" in
 
     export COMMAND="${command}" CONTAINER MOUNTS BASE_LOG_DIR
     if [[ "${MODE}" == "test-only" ]]; then
-      sbatch --test-only "${sbatch_args[@]}" "${REPO_DIR}/ray.sub"
+      (
+        cd "${REPO_DIR}"
+        sbatch --test-only "${sbatch_args[@]}" ray.sub
+      )
     else
-      job_id="$(sbatch --parsable "${sbatch_args[@]}" "${REPO_DIR}/ray.sub")"
+      job_id="$(
+        cd "${REPO_DIR}"
+        sbatch --parsable "${sbatch_args[@]}" ray.sub
+      )"
       printf '%s\n' "job_id=${job_id}" "run_dir=${RUN_DIR}"
     fi
     ;;

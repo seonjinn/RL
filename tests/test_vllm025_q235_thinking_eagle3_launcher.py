@@ -91,3 +91,43 @@ def test_invalid_variant_fails_before_submission() -> None:
 
     assert result.returncode == 2
     assert "VARIANT must be" in result.stderr
+
+
+def test_submission_runs_sbatch_from_repo_directory(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_sbatch = fake_bin / "sbatch"
+    fake_sbatch.write_text("#!/usr/bin/env bash\npwd\n")
+    fake_sbatch.chmod(0o755)
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ \"$*\" == *\"branch -r --contains\"* ]]; then\n"
+        "  echo origin/test\n"
+        "elif [[ \"$*\" == *\"rev-parse\"* ]]; then\n"
+        "  echo deadbeef\n"
+        "fi\n"
+    )
+    fake_git.chmod(0o755)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "MODE": "test-only",
+            "VARIANT": "baseline",
+            "REPO_DIR": str(REPO_ROOT),
+            "RUN_DIR": str(tmp_path / "run"),
+            "RUN_TAG": "contract-test-cwd",
+            "PATH": f"{fake_bin}:{env['PATH']}",
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(LAUNCHER)],
+        check=True,
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.stdout.strip() == str(REPO_ROOT)
