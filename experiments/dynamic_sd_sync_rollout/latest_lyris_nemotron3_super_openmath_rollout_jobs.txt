@@ -1,8 +1,10 @@
-# DynamicSD rollout jobs (20260713c)
+# DynamicSD rollout jobs (20260714s45)
 remote_host=login-lyris
 model=nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8
 draft=RedHatAI/Qwen3-30B-A3B-Thinking-2507-speculator.eagle3
 bench=openmath prompts=/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/data/openmath2_prompts_2048.jsonl
 temperature=1.0 tp=4 max_num_seqs=128
 csv_header=job_id,tag,model,bench,logs_dir
-2365275,nemotron3_super_openmath_rollout_dynamic_20260713c,nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8,openmath,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/nemotron3_super_openmath_rollout_dynamic_20260713c
+2370584,nemotron3_super_openmath_rollout_baseline_20260714s45,nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8,openmath,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/nemotron3_super_openmath_rollout_baseline_20260714s45
+2370585,nemotron3_super_openmath_rollout_fixed_k3_20260714s45,nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8,openmath,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/nemotron3_super_openmath_rollout_fixed_k3_20260714s45
+2370586,nemotron3_super_openmath_rollout_dynamic_20260714s45,nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8,openmath,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/nemotron3_super_openmath_rollout_dynamic_20260714s45

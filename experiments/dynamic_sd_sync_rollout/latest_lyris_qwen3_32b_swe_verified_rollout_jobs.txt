@@ -1,8 +1,10 @@
-# DynamicSD rollout jobs (20260712v25b)
+# DynamicSD rollout jobs (20260714s45)
 remote_host=login-lyris
 model=Qwen/Qwen3-32B
 draft=RedHatAI/Qwen3-32B-Thinking-speculator.eagle3
 bench=swe_verified prompts=/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/data/swebench_verified_prompts_all.jsonl
 temperature=1.0 tp=2 max_num_seqs=256
 csv_header=job_id,tag,model,bench,logs_dir
-2358907,qwen3_32b_swe_verified_rollout_dynamic_20260712v25b,Qwen/Qwen3-32B,swe_verified,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_32b_swe_verified_rollout_dynamic_20260712v25b
+2370581,qwen3_32b_swe_verified_rollout_baseline_20260714s45,Qwen/Qwen3-32B,swe_verified,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_32b_swe_verified_rollout_baseline_20260714s45
+2370582,qwen3_32b_swe_verified_rollout_fixed_k3_20260714s45,Qwen/Qwen3-32B,swe_verified,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_32b_swe_verified_rollout_fixed_k3_20260714s45
+2370583,qwen3_32b_swe_verified_rollout_dynamic_20260714s45,Qwen/Qwen3-32B,swe_verified,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_32b_swe_verified_rollout_dynamic_20260714s45

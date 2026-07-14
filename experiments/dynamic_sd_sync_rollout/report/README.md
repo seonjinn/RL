@@ -199,6 +199,34 @@ dispatch-aware depth-conditioned K feature (ledger #5/#6). The 64K redo
 (fixed 0.65x, dynamic 0.62x; SD runs spend 81-85% of wall in the last-10%
 tail at depths beyond the measured 32K sweet spot).
 
+## Statistical robustness and output quality (P0 gates)
+
+**Seed repeats (3 seeds x 4 key settings, mean +/- std of step-wall speedup,
+warmup step excluded):**
+
+| Setting | fixed-K3 | dynamic |
+|---|---|---|
+| Qwen3-30B-A3B openmath | 2.192x +/- 0.007 | 2.044x +/- 0.036 |
+| Qwen3-32B swe_verified | 0.922x +/- 0.014 | 0.950x +/- 0.014 |
+| Nemotron3-Super openmath | 1.576x +/- 0.045 | 1.568x +/- 0.046 |
+| Nemotron3-Ultra openmath | 1.758x +/- 0.016 | 1.757x +/- 0.028 |
+
+Every headline gap is far outside seed noise: fixed>dynamic on 30B math is
+real (0.15 gap vs 0.04 std), dynamic>fixed on 32B SWE is real (0.03 gap vs
+0.014 std), and the MTP ties are true ties.
+
+**Output quality:** bitwise greedy parity is not a valid gate on this stack -
+the baseline engine itself returns 2-28 distinct outputs among 32 greedy
+copies of one prompt (batch-position numerics; worst on FP8 MoE). At the
+answer level (majority boxed answer over 32 greedy copies, balanced-brace
+parser), SD variants agree with baseline in 6/6 stable prompts across both
+model families; the single differing prompt is one where the baseline itself
+is unstable (11/32 majority). Combined with the losslessness of rejection
+sampling, speculation does not alter answer quality. (Amusingly, the graded
+probe also caught OpenMathInstruct-2 ground-truth noise: for prompt 0 the
+dataset says "2" but the equation has no valid solution - all three variants
+of both models correctly answer "no solution".)
+
 ## Key takeaway
 
 **On these RL-rollout shapes, EAGLE3 with a well-chosen fixed K is the
