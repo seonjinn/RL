@@ -1467,6 +1467,128 @@ def test_aggregate_redacts_known_incident_credentials(tmp_path: Path) -> None:
     assert "SENTINEL_INCIDENT_COOKIE_103" not in html
 
 
+def test_aggregate_renders_bounded_current_feature_status(tmp_path: Path) -> None:
+    """Aggregate report distinguishes provisional, local-only, and unmeasured work."""
+    report_dir = tmp_path / "report"
+    report_dir.mkdir()
+    write_json(report_dir / "incidents.json", [])
+    (report_dir / "run_index.tsv").write_text(
+        "run_id\treport_path\tstatus\tcluster\tfeature_cell\n"
+    )
+    write_json(
+        report_dir / "current_status.json",
+        {
+            "updated_at_utc": "2026-07-14T03:00:00Z",
+            "entries": [
+                {
+                    "feature": "CuTeDSL fused Grouped GEMM",
+                    "state": "provisional",
+                    "jobs": ["2373273"],
+                    "evidence": "PolicyTraining throughput +6.79%; E2E +2.05% (steps 6-20).",
+                    "limitation": "Single ON-first sequential job; opposite-order replicas pending.",
+                    "next_gate": "Rerun the fixed-source six-job cohort.",
+                },
+                {
+                    "feature": "Full-iteration CUDA Graph",
+                    "state": "implemented_unmeasured",
+                    "jobs": [],
+                    "evidence": "NeMo-RL integration and evidence propagation implemented locally.",
+                    "limitation": "No accepted GB200 performance run.",
+                    "next_gate": "Run capture/replay functional gate, then matched timing.",
+                },
+            ],
+        },
+    )
+
+    renderer = load_renderer()
+    output = renderer.render_aggregate(report_dir)
+    html = output.read_text()
+
+    assert "Current feature measurement status" in html
+    assert "CuTeDSL fused Grouped GEMM" in html
+    assert "PROVISIONAL" in html
+    assert "PolicyTraining throughput +6.79%; E2E +2.05%" in html
+    assert "Full-iteration CUDA Graph" in html
+    assert "IMPLEMENTED UNMEASURED" in html
+    assert "No accepted GB200 performance run" in html
+    assert (report_dir / "public/current_status.json").is_file()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"state": "measured"},
+        {"state": []},
+        {"jobs": ["not-a-job"]},
+        {"jobs": [["2373273"]]},
+        {"unexpected": "field"},
+        {"evidence": "x" * 2_049},
+    ],
+)
+def test_current_feature_status_schema_rejects_unbounded_or_ambiguous_records(
+    tmp_path: Path,
+    mutation: dict[str, Any],
+) -> None:
+    """Current-status records fail closed on ambiguous claims and unbounded text."""
+    record = {
+        "feature": "CuTeDSL fused Grouped GEMM",
+        "state": "provisional",
+        "jobs": ["2373273"],
+        "evidence": "Interim result.",
+        "limitation": "Not claim ready.",
+        "next_gate": "Run replicas.",
+    }
+    record.update(mutation)
+    path = tmp_path / "current_status.json"
+    write_json(
+        path,
+        {
+            "updated_at_utc": "2026-07-14T03:00:00Z",
+            "entries": [record],
+        },
+    )
+
+    renderer = load_renderer()
+    with pytest.raises(ValueError, match="current feature status"):
+        renderer.read_current_status(path)
+
+
+def test_committed_current_status_keeps_unmeasured_features_out_of_claims() -> None:
+    """Tracked report data records the current cohort boundary without raw logs."""
+    value = json.loads((EXPERIMENT_DIR / "report/current_status.json").read_text())
+    entries = {entry["feature"]: entry for entry in value["entries"]}
+
+    cutedsl = entries["CuTeDSL fused Grouped GEMM"]
+    assert cutedsl["state"] == "provisional"
+    assert cutedsl["jobs"] == ["2373273"]
+    assert "20 measured-step" in cutedsl["evidence"]
+    assert "5270.9812" in cutedsl["evidence"]
+    assert "4902.8530" in cutedsl["evidence"]
+    assert "+7.5084%" in cutedsl["evidence"]
+    assert "+2.49%" in cutedsl["evidence"]
+    assert "+2.90%" in cutedsl["evidence"]
+    assert "+6.79%" not in cutedsl["evidence"]
+    assert "opposite-order" in cutedsl["limitation"]
+    assert "Logprob" in cutedsl["limitation"]
+    assert "Refit" in cutedsl["limitation"]
+
+    helper = entries["MCore helper-build isolation"]
+    assert helper["state"] == "local_fix_pending_remote"
+    assert helper["jobs"] == ["2373274"]
+    assert "python3-config" in helper["evidence"]
+
+    for feature in ("Full-iteration CUDA Graph", "Expert-parallel A2A overlap"):
+        assert entries[feature]["state"] == "implemented_unmeasured"
+        assert entries[feature]["jobs"] == []
+        assert "No accepted GB200" in entries[feature]["limitation"]
+
+    assert (
+        "legacy colocated-rejection guard"
+        in entries["Full-iteration CUDA Graph"]["limitation"]
+    )
+    assert "topology" in entries["Expert-parallel A2A overlap"]["next_gate"]
+
+
 def test_event_writer_json_escapes_backslashes_exactly(tmp_path: Path) -> None:
     """All Bash controls and literal backslashes round-trip through JSON."""
     result_dir = tmp_path / "run"

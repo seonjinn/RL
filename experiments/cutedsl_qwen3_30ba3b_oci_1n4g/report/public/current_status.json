@@ -1,0 +1,41 @@
+{
+  "entries": [
+    {
+      "evidence": "The preserved authoritative 20 measured-step summary from sequential ON-first job 2373273 reports PolicyTraining throughput 5270.9812 versus 4902.8530 tokens/s/GPU (+7.5084%), E2E throughput +2.49%, and median step-time speedup +2.90% for CuTeDSL ON versus OFF.",
+      "feature": "CuTeDSL fused Grouped GEMM",
+      "jobs": [
+        "2373273"
+      ],
+      "limitation": "This is an interim single-job result from the pre-isolation source cohort. Simultaneous Logprob and Refit movement indicates a temporal confound, and no opposite-order fixed-source replicas have been accepted; it is not claim-ready.",
+      "next_gate": "Preserve the completed artifacts, then rerun all fixed-source ON/OFF cells with alternating order and report matched post-warmup component timings.",
+      "state": "provisional"
+    },
+    {
+      "evidence": "Job 2373274 failed immutable preflight after concurrent node-local-rank-zero Bridge initialization found no locked python3-config, built a suffixless helpers_cpp in shared editable MCore, and dirtied the checkout. The local fix through 4cb3ea20c uses a tracked-only run overlay, matching ABI tool, serialized helper build, UV_NO_EDITABLE, Pyxis-safe environment prefixes, and command-hash refresh.",
+      "feature": "MCore helper-build isolation",
+      "jobs": [
+        "2373274"
+      ],
+      "limitation": "Local harness and wrapper checks pass, but no accepted Linux/Pyxis aarch64 functional or concurrent-job validation has completed. The old held cohort must not be released or mixed with the fixed source.",
+      "next_gate": "Complete isolated helper functional and two-job concurrency gates, quarantine only the bounded old artifacts, and submit a new immutable-source cohort.",
+      "state": "local_fix_pending_remote"
+    },
+    {
+      "evidence": "NeMo-RL policy-training configuration, lifecycle, static storage guards, all-rank evidence consensus, reducer propagation, cumulative counters, per-step deltas, and TensorBoard/MLflow routing are implemented locally through 40d51e52f.",
+      "feature": "Full-iteration CUDA Graph",
+      "jobs": [],
+      "limitation": "No accepted GB200 functional or performance run has measured this feature. A local audit identified a legacy colocated-rejection guard plus recipe-topology and policy-rank-accounting mismatches between the factorial submit path and the two-node non-colocated full-CG recipe; the integration correction is not yet part of an accepted remote run. No speedup is reported.",
+      "next_gate": "Verify the final submit path preserves the selected recipe topology and policy-rank count, then require capture_calls == 1, replay_calls >= 2, monotonic counters, and a stable cohort digest before matched baseline/full-CG timing.",
+      "state": "implemented_unmeasured"
+    },
+    {
+      "evidence": "The NeMo-RL policy-training path composes the existing expert-parallel A2A-overlap schedule with the full-iteration CUDA Graph integration locally.",
+      "feature": "Expert-parallel A2A overlap",
+      "jobs": [],
+      "limitation": "No accepted GB200 run has isolated A2A overlap or measured its combined effect with full-CG. The current full-CG submit guard and recipe topology mismatch also blocks the combined g1a1 cell. No speedup is reported.",
+      "next_gate": "After reconciling the full-CG submit path and topology and passing its functional gate, run matched A2A OFF/ON and combined factorial cells with identical topology and alternating order.",
+      "state": "implemented_unmeasured"
+    }
+  ],
+  "updated_at_utc": "2026-07-14T03:51:14Z"
+}

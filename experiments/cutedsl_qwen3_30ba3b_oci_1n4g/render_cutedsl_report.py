@@ -79,6 +79,20 @@ PID_ASSIGNMENT_PATTERN = re.compile(r"\bpid=\d+\b", re.IGNORECASE)
 INCIDENT_RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 INCIDENT_JOB_ID_PATTERN = re.compile(r"[0-9]{1,32}\Z")
 VALID_TRITON_CACHE_SCOPES = {"job_node_local", "run_local_container"}
+CURRENT_STATUS_STATES = {
+    "provisional",
+    "local_fix_pending_remote",
+    "implemented_unmeasured",
+}
+CURRENT_STATUS_RECORD_KEYS = {
+    "feature",
+    "state",
+    "jobs",
+    "evidence",
+    "limitation",
+    "next_gate",
+}
+CURRENT_STATUS_TIMESTAMP_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 COMPACT_MATCHER_INCIDENT_KEYS = {
     "job_id",
     "classification",
@@ -126,6 +140,7 @@ pre { white-space:pre-wrap; overflow-wrap:anywhere; background:#111827; color:#e
 a { color:var(--accent); } .timeline { border-left:3px solid var(--line); margin-left:8px; padding-left:20px; }
 .event { margin:0 0 18px; } .event time { color:var(--muted); font-family:ui-monospace,monospace; }
 .event.fail-event { border-left:4px solid var(--fail); padding-left:10px; }
+.pending { color:#7a4d00; background:#fff3cd; }
 .functional-only { margin:18px 0; padding:16px; border:2px solid var(--accent); border-radius:8px;
   background:#eef6ff; } .functional-only h2 { margin:0 0 8px; border:0; padding:0; }
 """
@@ -760,6 +775,82 @@ def read_run_index(path: Path) -> list[dict[str, str]]:
             return list(csv.DictReader(stream, delimiter="\t"))
     except FileNotFoundError:
         return []
+
+
+def read_current_status(path: Path) -> dict[str, Any]:
+    """Read and validate bounded aggregate feature-status records."""
+    value = read_json(path)
+    if not value:
+        return {}
+    if set(value) != {"updated_at_utc", "entries"}:
+        raise ValueError("current feature status has invalid top-level fields")
+    timestamp = value["updated_at_utc"]
+    entries = value["entries"]
+    if (
+        not isinstance(timestamp, str)
+        or CURRENT_STATUS_TIMESTAMP_PATTERN.fullmatch(timestamp) is None
+        or not isinstance(entries, list)
+        or not 1 <= len(entries) <= 32
+    ):
+        raise ValueError("current feature status has invalid metadata")
+
+    features: set[str] = set()
+    for record in entries:
+        if not isinstance(record, dict) or set(record) != CURRENT_STATUS_RECORD_KEYS:
+            raise ValueError("current feature status has invalid record fields")
+        feature = record["feature"]
+        state = record["state"]
+        jobs = record["jobs"]
+        valid_jobs = (
+            isinstance(jobs, list)
+            and len(jobs) <= 32
+            and all(
+                isinstance(job, str)
+                and INCIDENT_JOB_ID_PATTERN.fullmatch(job) is not None
+                for job in jobs
+            )
+        )
+        if (
+            not isinstance(feature, str)
+            or not 1 <= len(feature) <= 128
+            or feature in features
+            or not isinstance(state, str)
+            or state not in CURRENT_STATUS_STATES
+            or not valid_jobs
+            or len(jobs) != len(set(jobs))
+        ):
+            raise ValueError("current feature status has invalid identity fields")
+        features.add(feature)
+        for field in ("evidence", "limitation", "next_gate"):
+            text = record[field]
+            if not isinstance(text, str) or not 1 <= len(text) <= 2_048:
+                raise ValueError("current feature status has invalid bounded text")
+    return value
+
+
+def current_status_section(status: dict[str, Any]) -> str:
+    """Render the explicit current claim boundary before historical runs."""
+    if not status:
+        return ""
+    rows = "".join(
+        "<tr>"
+        f"<td>{escape(record['feature'])}</td>"
+        f'<td><span class="badge pending">{escape(record["state"].replace("_", " ").upper())}</span></td>'
+        f"<td>{escape(', '.join(record['jobs']) if record['jobs'] else 'none')}</td>"
+        f"<td>{escape(record['evidence'])}</td>"
+        f"<td>{escape(record['limitation'])}</td>"
+        f"<td>{escape(record['next_gate'])}</td></tr>"
+        for record in status["entries"]
+    )
+    return (
+        "<h2>Current feature measurement status</h2>"
+        f"<p>Updated {escape(status['updated_at_utc'])}. Provisional and unmeasured "
+        "entries are not performance claims. "
+        f"{artifact_link('current_status.json', 'status data')}</p>"
+        "<table><thead><tr><th>Feature</th><th>State</th><th>Jobs</th>"
+        "<th>Evidence</th><th>Limitation</th><th>Next gate</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
+    )
 
 
 def is_manual_incident(incident: dict[str, Any]) -> bool:
@@ -1488,6 +1579,7 @@ def render_aggregate(report_dir: Path) -> Path:
     compact_incidents = [item for item in incidents if is_compact_incident(item)]
     legacy_incidents = [item for item in incidents if not is_compact_incident(item)]
     runs = read_run_index(report_dir / "run_index.tsv")
+    current_status = read_current_status(report_dir / "current_status.json")
     run_rows = (
         "".join(
             "<tr>"
@@ -1525,6 +1617,7 @@ def render_aggregate(report_dir: Path) -> Path:
     body = (
         "<h1>CuTeDSL experiment report</h1>"
         '<p class="lede">Portable Qwen3 30B-A3B functional and factorial evidence.</p>'
+        f"{current_status_section(current_status)}"
         "<h2>Runs and reproducibility</h2><table><thead><tr><th>Run</th><th>Status</th>"
         f"<th>Cluster</th><th>Feature cell</th><th>Reproducibility</th></tr></thead><tbody>{run_rows}</tbody></table>"
         "<h2>Bounded incident classifications</h2><table><thead><tr><th>Job</th>"
@@ -1541,6 +1634,10 @@ def render_aggregate(report_dir: Path) -> Path:
     )
     output = report_dir / "public/index.html"
     output.parent.mkdir(parents=True, exist_ok=True)
+    if current_status:
+        (output.parent / "current_status.json").write_text(
+            json.dumps(redact_value(current_status), indent=2, sort_keys=True) + "\n"
+        )
     output.write_text(
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
