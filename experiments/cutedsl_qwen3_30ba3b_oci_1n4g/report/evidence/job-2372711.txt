@@ -1,0 +1,32 @@
+Job: 2372711
+Cluster: lyris
+Source: e5dd9246fc7c3f62f074416aa9dcdf47115cc62a
+State: FAILED 1:0
+Elapsed: 00:28:16
+Started: 2026-07-14T09:38:43Z
+Ended: 2026-07-14T10:06:59Z
+
+Original remote log: bounded diagnosis transcribed from Slurm and Ray driver logs.
+
+Bounded evidence:
+
+- The locked runtime completed with uv 0.11.6 and Python 3.13.13.
+- The fixed Qwen3-30B-A3B model and OpenMathInstruct-2 revisions were resolved from the offline cache.
+- The pinned Megatron-Core helper overlay built successfully.
+- Hydra emitted the resolved effective configuration before the fixed-config evidence validator ran.
+- The validator then stopped in value_at(config, dotted_path) with KeyError: recompute_method.
+- The selected performance recipe omitted recompute_method while the model profile fixed its semantic value to null.
+- The failure occurred before functional GRPO, PolicyTraining, CUDA Graph capture/replay, A2A kernels, or timing.
+
+Root cause:
+
+The fixed-config evidence validator treated a semantically optional null field as a required dictionary key. This was a harness validation defect, not evidence of a Full-CG, A2A, or model failure.
+
+Fix and verification:
+
+- Commit c867d17f90c436389c765b029582d5fac8a0b3f2 maps only the optional recompute_method and recompute_modules paths to null when absent.
+- Required missing paths, including moe_grouped_gemm, still raise KeyError.
+- The model-profile and factorial-harness suites pass 129 tests; Bash syntax, Ruff, and diff checks also pass.
+- Replacement functional jobs 2373152 and 2376677 were submitted on different clusters to avoid the independent shared Bridge build race.
+
+Performance conclusion: none. Job 2372711 did not execute a training update.
