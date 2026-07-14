@@ -1,4 +1,10 @@
 model,bench,variant,k,sample_method,tp,tag,num_steps,mean_step_wall_s,mean_output_tok_s,mean_output_tok_s_per_gpu,partial
+Nemotron3-Super-120B (FP8) (40K),openmath,baseline,0,-,4,nemotron3_super_32k_openmath_rollout_baseline_20260713,2,240.2301396465009,4265.294914574039,1066.3237286435096,False
+Nemotron3-Super-120B (FP8) (40K),openmath,dynamic,3,greedy,4,nemotron3_super_32k_openmath_rollout_dynamic_20260713,2,240.56747828350126,4583.352269316869,1145.8380673292172,False
+Nemotron3-Super-120B (FP8) (40K),openmath,fixed_k3,3,greedy,4,nemotron3_super_32k_openmath_rollout_fixed_k3_20260713,2,237.7465935409964,4577.870930952325,1144.4677327380812,False
+Nemotron3-Super-120B (FP8) (40K),openmath,baseline,0,-,4,nemotron3_super_64k_openmath_rollout_baseline_20260713,2,117.40506948650363,2971.541809150008,742.885452287502,False
+Nemotron3-Super-120B (FP8) (40K),openmath,dynamic,3,greedy,4,nemotron3_super_64k_openmath_rollout_dynamic_20260713,2,408.5061602405003,1156.8450740395328,289.2112685098832,False
+Nemotron3-Super-120B (FP8) (40K),openmath,fixed_k3,3,greedy,4,nemotron3_super_64k_openmath_rollout_fixed_k3_20260713,2,210.65711469249982,3452.316555913766,863.0791389784415,False
 Nemotron3-Super-120B (FP8),openmath,baseline,0,-,4,nemotron3_super_openmath_rollout_baseline_20260713,4,37.22157513200182,7070.895178262974,1767.7237945657434,False
 Nemotron3-Super-120B (FP8),openmath,dynamic,3,greedy,4,nemotron3_super_openmath_rollout_dynamic_20260713c,4,24.260619194001265,10859.50299118197,2714.8757477954923,False
 Nemotron3-Super-120B (FP8),openmath,fixed_k3,3,greedy,4,nemotron3_super_openmath_rollout_fixed_k3_20260713,4,24.85249402674708,10539.70431939923,2634.9260798498076,False

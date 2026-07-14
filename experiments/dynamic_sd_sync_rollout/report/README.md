@@ -151,6 +151,22 @@ per-K capture assert, ledger #7). With that fix, Super openmath is the first
 math setting where dynamic edges out fixed-K (1.53x vs 1.50x) - the K1 range
 at BS 128 pays for itself.
 
+## MTP survives depth; long-context gains die elsewhere
+
+Super 120B long-tail runs (32K / 64K max_tokens, openmath): **MTP acceptance
+holds at depth** - AL stays 2.0-2.6 at median generated depth 4-7K, where
+EAGLE3 had already collapsed to per-position 0.08. The in-checkpoint head
+tracks the target distribution independent of depth. Yet the 32K rollout
+shows **no net speedup (fixed 1.01x, dynamic 1.00x vs 1.50x at 4K)**: with
+acceptance intact, the remaining suspect is verification cost - the Mamba
+hybrid must roll back / recompute state for speculative verification, and
+that overhead appears to grow with context until it cancels the acceptance
+gains. This is a different failure mode from EAGLE3's acceptance collapse and
+needs a per-phase breakdown to confirm. The 64K numbers (fixed 0.56x, dynamic
+0.29x) are not interpretable: with only 2 steps x 64 seqs at temperature 1.0,
+sampled length distributions diverge across variants (p50 3.9K vs 5.9K) and
+dominate wall time; a matched-length control or more steps is required.
+
 ## Key takeaway
 
 **On these RL-rollout shapes, EAGLE3 with a well-chosen fixed K is the
