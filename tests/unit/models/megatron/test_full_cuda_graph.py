@@ -69,6 +69,66 @@ def _processed_microbatch(seq_length: int = 4) -> _ProcessedMicrobatch:
     )
 
 
+def test_aux_loss_scale_buffer_keeps_tensor_and_storage_stable_across_updates() -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        FullCudaGraphAuxLossScaleBuffer,
+    )
+
+    buffer = FullCudaGraphAuxLossScaleBuffer()
+    assert buffer._value is None
+
+    first = buffer.update(torch.tensor(10))
+    first_value = first.item()
+    first_storage_pointer = first.untyped_storage().data_ptr()
+    second = buffer.update(torch.tensor(5))
+
+    assert first_value == pytest.approx(0.1)
+    assert first.item() == pytest.approx(0.2)
+    assert second is first
+    assert second.untyped_storage().data_ptr() == first_storage_pointer
+    assert second.dtype == torch.float32
+
+
+@pytest.mark.parametrize("valid_token_count", [0, -4])
+def test_aux_loss_scale_buffer_clamps_nonpositive_counts_without_reallocation(
+    valid_token_count: int,
+) -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        FullCudaGraphAuxLossScaleBuffer,
+    )
+
+    buffer = FullCudaGraphAuxLossScaleBuffer()
+    first = buffer.update(torch.tensor(10))
+    first_storage_pointer = first.untyped_storage().data_ptr()
+
+    clamped = buffer.update(torch.tensor(valid_token_count))
+
+    assert clamped is first
+    assert clamped.untyped_storage().data_ptr() == first_storage_pointer
+    assert clamped.item() == pytest.approx(1.0)
+
+
+def test_aux_loss_scale_buffer_rejects_non_scalar_counts() -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        FullCudaGraphAuxLossScaleBuffer,
+    )
+
+    with pytest.raises(ValueError, match="scalar global_valid_toks"):
+        FullCudaGraphAuxLossScaleBuffer().update(torch.ones(2))
+
+
+def test_aux_loss_scale_buffer_rejects_device_signature_drift() -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        FullCudaGraphAuxLossScaleBuffer,
+    )
+
+    buffer = FullCudaGraphAuxLossScaleBuffer()
+    buffer.update(torch.tensor(10))
+
+    with pytest.raises(ValueError, match="auxiliary loss scale signature changed"):
+        buffer.update(torch.tensor(5, device="meta"))
+
+
 def test_full_cuda_graph_policy_config_accepts_fixed_shape_noncolocated_training():
     from nemo_rl.models.megatron.full_cuda_graph import (
         validate_full_cuda_graph_policy_config,

@@ -617,6 +617,9 @@ def test_full_cuda_graph_train_injects_schedule_and_materializes_metrics(
     worker = object.__new__(MegatronPolicyWorkerImpl)
     worker._full_cuda_graph_enabled = True
     worker._full_cuda_graph_schedule = object()
+    worker._full_cuda_graph_aux_loss_scale = (
+        megatron_policy_worker.FullCudaGraphAuxLossScaleBuffer()
+    )
     worker.timer = SimpleNamespace(start=lambda _name: None, stop=lambda _name: None)
     worker.model = _FakeTrainableModel()
     worker.model.modules = lambda: ()
@@ -822,6 +825,57 @@ def test_full_cuda_graph_invalid_config_fails_before_cuda_setup(
             init_optimizer=True,
             worker_sharding_annotations=object(),
         )
+
+
+def test_full_cuda_graph_aux_loss_scale_callbacks_share_persistent_storage() -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        FullCudaGraphAuxLossScaleBuffer,
+    )
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    model_config = SimpleNamespace()
+    worker.model = SimpleNamespace(config=model_config)
+    worker._full_cuda_graph_enabled = True
+    worker._full_cuda_graph_aux_loss_scale = FullCudaGraphAuxLossScaleBuffer()
+
+    MegatronPolicyWorkerImpl._set_aux_loss_grad_scale_funcs(worker, torch.tensor(10))
+    first_moe = model_config.moe_grad_scale_func()
+    first_mtp = model_config.mtp_grad_scale_func()
+    first_storage_pointer = first_moe.untyped_storage().data_ptr()
+
+    MegatronPolicyWorkerImpl._set_moe_grad_scale_func(worker, None)
+    MegatronPolicyWorkerImpl._set_mtp_grad_scale_func(worker, None)
+    MegatronPolicyWorkerImpl._set_aux_loss_grad_scale_funcs(worker, torch.tensor(5))
+    second_moe = model_config.moe_grad_scale_func()
+    second_mtp = model_config.mtp_grad_scale_func()
+
+    assert first_moe is first_mtp
+    assert second_moe is first_moe
+    assert second_mtp is first_moe
+    assert second_moe.untyped_storage().data_ptr() == first_storage_pointer
+    assert second_moe.item() == pytest.approx(0.2)
+
+
+def test_eager_aux_loss_scale_callbacks_keep_independent_tensors() -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    model_config = SimpleNamespace()
+    worker.model = SimpleNamespace(config=model_config)
+    worker._full_cuda_graph_enabled = False
+
+    MegatronPolicyWorkerImpl._set_aux_loss_grad_scale_funcs(worker, torch.tensor(0))
+    moe_scale = model_config.moe_grad_scale_func()
+    mtp_scale = model_config.mtp_grad_scale_func()
+
+    assert moe_scale is not mtp_scale
+    assert moe_scale.item() == pytest.approx(1.0)
+    assert mtp_scale.item() == pytest.approx(1.0)
 
 
 def test_set_moe_grad_scale_func_sets_and_clears_on_model_config():

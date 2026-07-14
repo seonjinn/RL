@@ -66,6 +66,7 @@ from nemo_rl.models.megatron.data import (
     process_global_batch,
 )
 from nemo_rl.models.megatron.full_cuda_graph import (
+    FullCudaGraphAuxLossScaleBuffer,
     build_full_cuda_graph_schedule,
     materialize_full_cuda_graph_metrics,
     require_supported_full_cuda_graph_operation,
@@ -397,6 +398,7 @@ class MegatronPolicyWorkerImpl(
         )
         self._full_cuda_graph_schedule: Optional[Callable[..., Any]] = None
         self._full_cuda_graph_wrapper: Any = None
+        self._full_cuda_graph_aux_loss_scale = FullCudaGraphAuxLossScaleBuffer()
 
         # NVML-based and guarded on torch.cuda.is_initialized(), so this does
         # not initialize a CUDA context ahead of the set_device below.
@@ -832,12 +834,7 @@ class MegatronPolicyWorkerImpl(
                     # normalizes the aux gradient consistently with the main per-token
                     # SFT loss:
                     #   (1/G) * N_local * tp_cp_size * aux_grad -> DDP SUM -> aux_grad / G
-                    self._set_moe_grad_scale_func(  # pragma: no cover
-                        self._compute_moe_grad_scale(global_valid_toks)
-                    )
-                    # Set mtp_grad_scale_func for MTP loss scaling (scales by valid tokens)
-                    mtp_scale = 1.0 / global_valid_toks.clamp(min=1).float()
-                    self._set_mtp_grad_scale_func(lambda: mtp_scale)
+                    self._set_aux_loss_grad_scale_funcs(global_valid_toks)
 
                     # Forward pass.
                     draft_enabled = "draft" in self.cfg and self.cfg["draft"]["enabled"]
@@ -1058,6 +1055,24 @@ class MegatronPolicyWorkerImpl(
         """
         moe_scale = 1.0 / global_valid_toks.clamp(min=1).float()
         return lambda: moe_scale
+
+    def _set_aux_loss_grad_scale_funcs(self, global_valid_toks: torch.Tensor) -> None:
+        """Set MoE/MTP scales, preserving their address across graph replays."""
+        if self._full_cuda_graph_enabled:
+            scale = self._full_cuda_graph_aux_loss_scale.update(global_valid_toks)
+
+            def scale_func() -> torch.Tensor:
+                return scale
+
+            self._set_moe_grad_scale_func(scale_func)  # pragma: no cover
+            self._set_mtp_grad_scale_func(scale_func)
+            return
+
+        self._set_moe_grad_scale_func(  # pragma: no cover
+            self._compute_moe_grad_scale(global_valid_toks)
+        )
+        mtp_scale = 1.0 / global_valid_toks.clamp(min=1).float()
+        self._set_mtp_grad_scale_func(lambda: mtp_scale)
 
     def _set_moe_grad_scale_func(self, func):
         """Set moe_grad_scale_func on the model config for MOE aux loss scaling."""
