@@ -30,6 +30,18 @@ CONTEXT_FACTORS = {
     "g0a1": 0.9,
     "g1a1": 0.6,
 }
+WARMUP_UPDATES = 5
+MEASURED_UPDATES = 20
+TOTAL_UPDATES = WARMUP_UPDATES + MEASURED_UPDATES
+MEASURED_STEPS = tuple(range(WARMUP_UPDATES + 1, TOTAL_UPDATES + 1))
+DIRECT_PATH_LIMITATION = (
+    "a2a_only_without_cutedsl lacks OFF-arm temporal overlap proof; "
+    "direct timing effect is associative only"
+)
+HARNESS_REPRESENTATIVE_LIMITATION = (
+    "deterministic representative report; only one representative process/rank "
+    "analyzed; no all-rank aggregation"
+)
 CANONICAL_METRICS = {
     "timing/train/total_step_time": "timing/train/total_step_time",
     "timing/train/generation": "timing/train/generation",
@@ -96,7 +108,7 @@ def _raw_timing(
     replicate_factor = 1.0 + replicate_index * 0.01
     duration_factor = context_factor * cutedsl_factor * replicate_factor
     workload = []
-    for offset, step in enumerate((3, 4, 5)):
+    for offset, step in enumerate(MEASURED_STEPS):
         tokens = 1000.0 + offset * 100.0
         total_step = (10.0 + offset) * duration_factor
         generation = (4.0 + offset) * duration_factor
@@ -125,8 +137,8 @@ def _raw_timing(
         "run_id": job_id,
         "arm": arm,
         "order_index": order_index,
-        "warmup_updates": 2,
-        "measured_updates": 3,
+        "warmup_updates": WARMUP_UPDATES,
+        "measured_updates": MEASURED_UPDATES,
         "training_gpu_count": 4,
         "resolved_metric_names": CANONICAL_METRICS,
         "policy_training_seconds": [row["policy_training_seconds"] for row in workload],
@@ -184,6 +196,9 @@ def _write_temporal_analyzer(
     job_id: str,
     *,
     temporal_overlap_verified: bool = True,
+    overlap_duration_ns: int = 5000,
+    a2a_overlap_ratio: float = 0.5,
+    gemm_overlap_ratio: float = 0.25,
 ) -> None:
     profile_path = job_dir / "profiles/on.nsys-rep"
     profile_path.parent.mkdir(parents=True, exist_ok=True)
@@ -197,9 +212,9 @@ def _write_temporal_analyzer(
             ).hexdigest(),
             "a2a_interval_count": 7,
             "expert_gemm_interval_count": 11,
-            "overlap_duration_ns": 5000,
-            "a2a_overlap_ratio": 0.5,
-            "gemm_overlap_ratio": 0.25,
+            "overlap_duration_ns": overlap_duration_ns,
+            "a2a_overlap_ratio": a2a_overlap_ratio,
+            "gemm_overlap_ratio": gemm_overlap_ratio,
             "temporal_overlap_verified": temporal_overlap_verified,
             "limitations": []
             if temporal_overlap_verified
@@ -244,21 +259,20 @@ def _create_job(
             for canonical_name, source_name in CANONICAL_METRICS.items()
         }
         if full_cg_enabled:
+            all_steps = range(1, TOTAL_UPDATES + 1)
             metrics.update(
                 {
+                    "train/full_cuda_graph_warmup_calls": {
+                        str(step): min(step, 3) for step in all_steps
+                    },
                     "train/full_cuda_graph_capture_calls": {
-                        "1": 0,
-                        "2": 0,
-                        "3": 1,
-                        "4": 1,
-                        "5": 1,
+                        str(step): int(step >= 3) for step in all_steps
                     },
                     "train/full_cuda_graph_replay_calls": {
-                        "1": 0,
-                        "2": 0,
-                        "3": 1,
-                        "4": 2,
-                        "5": 3,
+                        str(step): max(0, step - 2) for step in all_steps
+                    },
+                    "train/full_cuda_graph_reset_calls": {
+                        str(step): 0 for step in all_steps
                     },
                 }
             )
@@ -268,6 +282,7 @@ def _create_job(
 
     fixed_config = {
         "policy.megatron_cfg.moe_grouped_gemm": True,
+        "policy.megatron_cfg.env_vars.CUDA_DEVICE_MAX_CONNECTIONS": "32",
         "policy.megatron_cfg.overlap_moe_expert_parallel_comm": a2a_enabled,
         "policy.megatron_cfg.high_priority_a2a_comm_stream": a2a_enabled,
         "policy.megatron_cfg.delay_wgrad_compute": a2a_enabled,
@@ -291,9 +306,9 @@ def _create_job(
             "replicate_index": replicate_index,
             "submission_group": "factorial-group",
             "timing_order": order,
-            "warmup_updates": 2,
-            "measured_updates": 3,
-            "total_updates": 5,
+            "warmup_updates": WARMUP_UPDATES,
+            "measured_updates": MEASURED_UPDATES,
+            "total_updates": TOTAL_UPDATES,
             "profile_enabled": profile_enabled,
             "feature_context": context,
             "full_cg_enabled": full_cg_enabled,
@@ -386,7 +401,7 @@ def _create_job(
                 "counts": {
                     arm: {
                         "cuda_graph_launch_api": 3 if full_cg_enabled else 0,
-                        "nccl_a2a_kernel": 7 if a2a_enabled else 0,
+                        "nccl_a2a_kernel": 7,
                     }
                     for arm in order
                 },
@@ -419,11 +434,16 @@ def _create_job(
                     },
                 },
             )
-    if a2a_enabled and profile_enabled:
+    if profile_enabled:
         _write_temporal_analyzer(
             job_dir,
             job_id,
-            temporal_overlap_verified=temporal_overlap_verified,
+            temporal_overlap_verified=(
+                temporal_overlap_verified if a2a_enabled else False
+            ),
+            overlap_duration_ns=5000 if a2a_enabled else 0,
+            a2a_overlap_ratio=0.5 if a2a_enabled else 0.0,
+            gemm_overlap_ratio=0.25 if a2a_enabled else 0.0,
         )
 
 
@@ -513,7 +533,44 @@ def _job_id(submission: Path, context: str, replicate_index: int) -> str:
     )
 
 
-def test_collector_writes_claim_ready_dependency_constrained_factorial(
+def _add_logprob_series(result_root: Path, value: float) -> None:
+    logprob_metrics = {
+        "timing/train/get_logprobs": "timing/train/policy_and_reference_logprobs",
+        "performance/policy_and_reference_logprobs_tokens_per_sec_per_gpu": (
+            "performance/policy_and_reference_logprobs_tokens_per_sec_per_gpu"
+        ),
+    }
+    for job_dir in result_root.iterdir():
+        manifest_path = job_dir / "benchmark_manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        for mapping in manifest["resolved_metric_names"].values():
+            mapping.update(logprob_metrics)
+        _write_json(manifest_path, manifest)
+        for arm_dir in (job_dir / "timing").iterdir():
+            raw_path = arm_dir / "raw_timing.json"
+            raw = json.loads(raw_path.read_text())
+            raw["resolved_metric_names"].update(logprob_metrics)
+            raw["measured_component_series"].update(
+                {
+                    name: [
+                        {"step": row["step"], "value": value}
+                        for row in raw["measured_step_workload"]
+                    ]
+                    for name in logprob_metrics
+                }
+            )
+            for row in raw["measured_step_workload"]:
+                row["logprob_seconds"] = value
+                row["policy_and_reference_logprobs_tokens_per_sec_per_gpu"] = value
+            _write_json(raw_path, raw)
+            metrics_path = arm_dir / "metrics.json"
+            metrics = json.loads(metrics_path.read_text())
+            for source_name in logprob_metrics.values():
+                metrics[source_name] = {str(step): value for step in MEASURED_STEPS}
+            _write_json(metrics_path, metrics)
+
+
+def test_collector_writes_dependency_constrained_factorial(
     tmp_path: Path,
 ) -> None:
     submission, result_root = _create_valid_inputs(tmp_path)
@@ -524,9 +581,9 @@ def test_collector_writes_claim_ready_dependency_constrained_factorial(
     assert result.returncode == 0, result.stderr
     aggregate = json.loads(output.read_text())
     assert aggregate["schema_version"] == 1
-    assert aggregate["claim_status"] == "claim_ready"
-    assert aggregate["claim_ready"] is True
-    assert aggregate["provisional_reasons"] == []
+    assert aggregate["claim_status"] == "provisional"
+    assert aggregate["claim_ready"] is False
+    assert aggregate["provisional_reasons"] == [DIRECT_PATH_LIMITATION]
     assert aggregate["paired_replicate_indices"] == [0, 1, 2]
     assert aggregate["context_replicate_counts"] == {context: 3 for context in CONTEXTS}
     assert len(aggregate["cohort_evidence_digest"]) == 64
@@ -578,8 +635,84 @@ def test_collector_writes_claim_ready_dependency_constrained_factorial(
         "duration": "baseline / feature - 1",
         "throughput": "feature / baseline - 1",
         "main_effect": "geometric mean of the two dependency-valid conditional factors",
-        "interaction": "A2A factor with full-CG / A2A factor without full-CG - 1",
+        "interaction": (
+            "A2A optimization bundle factor with full-CG / factor without full-CG - 1"
+        ),
     }
+    assert aggregate["direct_path_effect_definitions"] == {
+        "baseline": "g0a0 OFF (CuTeDSL OFF, full-CG OFF, A2A OFF)",
+        "cutedsl_only": "g0a0 OFF -> g0a0 ON",
+        "a2a_only_without_cutedsl": ("g0a0 OFF -> g0a1 OFF (A2A optimization bundle)"),
+        "cutedsl_a2a": "g0a0 OFF -> g0a1 ON (A2A optimization bundle)",
+        "cutedsl_full_cg": "g0a0 OFF -> g1a0 ON",
+        "all_three_combined": "g0a0 OFF -> g1a1 ON",
+    }
+    expected_direct_percent = {
+        "cutedsl_only": (1.0 / 0.95 - 1.0) * 100.0,
+        "a2a_only_without_cutedsl": (1.0 / 0.9 - 1.0) * 100.0,
+        "cutedsl_a2a": (1.0 / (0.95 * 0.9) - 1.0) * 100.0,
+        "cutedsl_full_cg": (1.0 / (0.95 * 0.8) - 1.0) * 100.0,
+        "all_three_combined": (1.0 / (0.95 * 0.6) - 1.0) * 100.0,
+    }
+    for component in ("e2e", "generation", "policy_training", "refit"):
+        for measurement in ("duration", "throughput"):
+            effects = aggregate["direct_path_effects"][component][measurement]
+            assert set(effects) == set(expected_direct_percent)
+            for effect, expected_percent in expected_direct_percent.items():
+                assert effects[effect]["replicate_count"] == 3
+                assert effects[effect]["claim_status"] == "provisional"
+                assert effects[effect]["median_percent"] == pytest.approx(
+                    expected_percent
+                )
+    assert aggregate["direct_path_effects"]["full_cg_without_cutedsl"] == {
+        "status": "unsupported_dependency",
+        "reason": "full-iteration CUDA Graph requires device-initiated CuTeDSL kernels",
+    }
+    assert aggregate["direct_path_effects"]["logprob"] == {
+        "status": "not_applicable",
+        "reason": "disabled_by_supported_full_cg_slice",
+    }
+    assert aggregate["dependency_notes"] == {
+        "a2a_optimization_bundle": (
+            "expert-parallel overlap + high-priority A2A stream + delayed wgrad compute"
+        ),
+        "common_baseline": "all three features disabled in g0a0 OFF",
+        "a2a_only_without_cutedsl": (
+            "timing effect is computed, but OFF-arm temporal overlap is not "
+            "profiled; mechanistic attribution is provisional"
+        ),
+        "full_cg_without_cutedsl": (
+            "unsupported because full-iteration CUDA Graph requires "
+            "device-initiated CuTeDSL kernels"
+        ),
+        "incremental_effects": (
+            "factorial_effects and cutedsl_g0_effects remain available"
+        ),
+        "profile_overlap_contrasts": (
+            "representative-process exploratory evidence; not all-rank causal proof"
+        ),
+    }
+    for level, full_cg_enabled in (("g0", False), ("g1", True)):
+        contrast = aggregate["a2a_overlap_ratio_contrasts"][level]
+        assert contrast["full_cg_enabled"] is full_cg_enabled
+        assert contrast["baseline_context"] == f"{level}a0"
+        assert contrast["overlap_context"] == f"{level}a1"
+        assert contrast["evidence_scope"] == "representative_process_exploratory"
+        assert contrast["all_pairs_increased"] is True
+        assert contrast["median_baseline_ratio"] == pytest.approx(0.0)
+        assert contrast["median_overlap_ratio"] == pytest.approx(0.5)
+        assert contrast["median_absolute_increase"] == pytest.approx(0.5)
+        assert contrast["claim_status"] == "claim_ready"
+        assert contrast["paired_profile_replicates"] == [
+            {
+                "replicate_index": 0,
+                "baseline_ratio": pytest.approx(0.0),
+                "overlap_ratio": pytest.approx(0.5),
+                "absolute_increase": pytest.approx(0.5),
+                "relative_factor": None,
+                "increased": True,
+            }
+        ]
     assert set(aggregate["cutedsl_g0_effects"]) == {"g0a0", "g0a1"}
     assert aggregate["cutedsl_g0_effects"]["g0a0"]["logprob"] == {
         "status": "not_applicable",
@@ -595,7 +728,7 @@ def test_collector_writes_claim_ready_dependency_constrained_factorial(
     assert output.read_bytes() == first
 
 
-def test_collector_keeps_unverified_a2a_temporal_overlap_provisional(
+def test_collector_rejects_unverified_positive_a2a_temporal_overlap(
     tmp_path: Path,
 ) -> None:
     submission, result_root = _create_valid_inputs(
@@ -605,31 +738,20 @@ def test_collector_keeps_unverified_a2a_temporal_overlap_provisional(
 
     result = _run_collector(submission, result_root, output)
 
-    assert result.returncode == 0, result.stderr
-    aggregate = json.loads(output.read_text())
-    assert aggregate["claim_status"] == "provisional"
-    assert aggregate["claim_ready"] is False
-    assert len(aggregate["provisional_reasons"]) == 2
-    assert all(
-        "A2A temporal overlap is not verified" in reason
-        for reason in aggregate["provisional_reasons"]
-    )
+    assert result.returncode != 0
     assert (
-        aggregate["factorial_effects"]["policy_training"]["duration"]["interaction"][
-            "claim_status"
-        ]
-        == "provisional"
+        "temporal_overlap_verified is inconsistent with overlap evidence"
+        in result.stderr
     )
-    assert aggregate["factorial_effects"]["policy_training"]["duration"]["interaction"][
-        "median_percent"
-    ] == pytest.approx(20.0)
 
 
-def test_collector_keeps_missing_a2a_temporal_analyzer_provisional(
+@pytest.mark.parametrize("context", ("g0a0", "g1a1"))
+def test_collector_keeps_missing_profile_temporal_analyzer_provisional(
     tmp_path: Path,
+    context: str,
 ) -> None:
     submission, result_root = _create_valid_inputs(tmp_path)
-    job_id = _job_id(submission, "g1a1", 0)
+    job_id = _job_id(submission, context, 0)
     (result_root / job_id / "a2a_temporal_overlap.json").unlink()
     output = tmp_path / "aggregate.json"
 
@@ -640,7 +762,8 @@ def test_collector_keeps_missing_a2a_temporal_analyzer_provisional(
     assert aggregate["claim_status"] == "provisional"
     assert aggregate["claim_ready"] is False
     assert aggregate["provisional_reasons"] == [
-        f"g1a1 job {job_id} lacks A2A temporal-overlap analysis"
+        DIRECT_PATH_LIMITATION,
+        f"{context} job {job_id} lacks A2A temporal-overlap analysis",
     ]
 
 
@@ -800,7 +923,8 @@ def test_collector_allows_multiple_profile_replicas_per_a1_context(
 
     assert result.returncode == 0, result.stderr
     aggregate = json.loads((tmp_path / "aggregate.json").read_text())
-    assert aggregate["claim_status"] == "claim_ready"
+    assert aggregate["claim_status"] == "provisional"
+    assert aggregate["provisional_reasons"] == [DIRECT_PATH_LIMITATION]
     assert aggregate["context_replicate_counts"]["g1a1"] == 3
 
 
@@ -874,6 +998,70 @@ def test_collector_rejects_mismatched_factorial_contract(
     assert expected_error in result.stderr
 
 
+@pytest.mark.parametrize(
+    ("warmup_updates", "measured_updates", "expected_error"),
+    [
+        (4, MEASURED_UPDATES, "warmup_updates must be at least 5"),
+        (WARMUP_UPDATES, 19, "measured_updates must be at least 20"),
+    ],
+)
+def test_collector_rejects_short_performance_update_window(
+    tmp_path: Path,
+    warmup_updates: int,
+    measured_updates: int,
+    expected_error: str,
+) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    job_id = _job_id(submission, "g0a0", 1)
+    manifest_path = result_root / job_id / "benchmark_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["warmup_updates"] = warmup_updates
+    manifest["measured_updates"] = measured_updates
+    manifest["total_updates"] = warmup_updates + measured_updates
+    _write_json(manifest_path, manifest)
+    for raw_path in (result_root / job_id / "timing").glob("*/raw_timing.json"):
+        raw = json.loads(raw_path.read_text())
+        raw["warmup_updates"] = warmup_updates
+        raw["measured_updates"] = measured_updates
+        _write_json(raw_path, raw)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+
+
+def test_collector_requires_cuda_device_max_connections_32_string(
+    tmp_path: Path,
+) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    for job_dir in result_root.iterdir():
+        manifest_path = job_dir / "benchmark_manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        for arm_config in manifest["fixed_config_evidence"].values():
+            arm_config["policy.megatron_cfg.env_vars.CUDA_DEVICE_MAX_CONNECTIONS"] = 32
+        _write_json(manifest_path, manifest)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode != 0
+    assert "CUDA_DEVICE_MAX_CONNECTIONS must equal string '32'" in result.stderr
+
+
+def test_collector_rejects_raw_manifest_update_window_mismatch(tmp_path: Path) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    job_id = _job_id(submission, "g0a1", 2)
+    raw_path = next((result_root / job_id / "timing").glob("*-on/raw_timing.json"))
+    raw = json.loads(raw_path.read_text())
+    raw["warmup_updates"] += 1
+    _write_json(raw_path, raw)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode != 0
+    assert "raw update window differs" in result.stderr
+
+
 def test_collector_rejects_non_four_policy_gpu_timing(tmp_path: Path) -> None:
     submission, result_root = _create_valid_inputs(tmp_path)
     job_id = _job_id(submission, "g0a1", 2)
@@ -911,13 +1099,39 @@ def test_collector_rejects_missing_or_tampered_metric_steps(tmp_path: Path) -> N
     arm_dir = next((result_root / job_id / "timing").glob("*-on"))
     metrics_path = arm_dir / "metrics.json"
     metrics = json.loads(metrics_path.read_text())
-    metrics["timing/train/total_step_time"]["3"] += 0.5
+    metrics["timing/train/total_step_time"][str(MEASURED_STEPS[0])] += 0.5
     _write_json(metrics_path, metrics)
 
     result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
 
     assert result.returncode != 0
     assert "metrics.json differs from raw measured series" in result.stderr
+
+
+def test_collector_rejects_canonical_metrics_aliased_to_same_source(
+    tmp_path: Path,
+) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    job_id = _job_id(submission, "g0a0", 0)
+    job_dir = result_root / job_id
+    manifest_path = job_dir / "benchmark_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    duplicate_source = manifest["resolved_metric_names"]["on"][
+        "timing/train/total_step_time"
+    ]
+    manifest["resolved_metric_names"]["on"]["timing/train/generation"] = (
+        duplicate_source
+    )
+    _write_json(manifest_path, manifest)
+    raw_path = next((job_dir / "timing").glob("*-on/raw_timing.json"))
+    raw = json.loads(raw_path.read_text())
+    raw["resolved_metric_names"]["timing/train/generation"] = duplicate_source
+    _write_json(raw_path, raw)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode != 0
+    assert "source names must be one-to-one" in result.stderr
 
 
 def test_collector_rejects_cross_context_workload_drift(tmp_path: Path) -> None:
@@ -931,7 +1145,7 @@ def test_collector_rejects_cross_context_workload_drift(tmp_path: Path) -> None:
     _write_json(raw_path, raw)
     metrics_path = arm_dir / "metrics.json"
     metrics = json.loads(metrics_path.read_text())
-    metrics["train/mean_prompt_length"]["3"] += 1
+    metrics["train/mean_prompt_length"][str(MEASURED_STEPS[0])] += 1
     _write_json(metrics_path, metrics)
 
     result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
@@ -940,11 +1154,60 @@ def test_collector_rejects_cross_context_workload_drift(tmp_path: Path) -> None:
     assert "g0a0/g1a1 workload equivalence failed" in result.stderr
 
 
+def test_collector_rejects_g0_off_cross_context_workload_drift(
+    tmp_path: Path,
+) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    for context, scale in (("g0a0", 0.994), ("g0a1", 1.006)):
+        job_id = _job_id(submission, context, 1)
+        arm_dir = next((result_root / job_id / "timing").glob("*-off"))
+        raw_path = arm_dir / "raw_timing.json"
+        raw = json.loads(raw_path.read_text())
+        for row in raw["measured_step_workload"]:
+            row["total_num_tokens"] *= scale
+            row["global_valid_toks"] *= scale
+            row["e2e_tokens_per_sec_per_gpu"] = (
+                row["total_num_tokens"] / row["total_step_seconds"] / 4.0
+            )
+            row["generation_tokens_per_sec_per_gpu"] = (
+                row["total_num_tokens"] / row["generation_seconds"] / 4.0
+            )
+            row["policy_training_tokens_per_sec_per_gpu"] = (
+                row["total_num_tokens"] / row["policy_training_seconds"] / 4.0
+            )
+            row["refit_effective_tokens_per_sec_per_gpu"] = (
+                row["total_num_tokens"] / row["refit_transfer_update_seconds"] / 4.0
+            )
+        raw["measured_component_series"] = {
+            canonical_name: [
+                {"step": row["step"], "value": row[field]}
+                for row in raw["measured_step_workload"]
+            ]
+            for canonical_name, field in RAW_FIELD_BY_CANONICAL_METRIC.items()
+        }
+        _write_json(raw_path, raw)
+        metrics_path = arm_dir / "metrics.json"
+        metrics = json.loads(metrics_path.read_text())
+        for canonical_name, source_name in CANONICAL_METRICS.items():
+            metrics[source_name] = {
+                str(point["step"]): point["value"]
+                for point in raw["measured_component_series"][canonical_name]
+            }
+        _write_json(metrics_path, metrics)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode != 0
+    assert "g0a0/g0a1 OFF workload equivalence failed" in result.stderr
+
+
 @pytest.mark.parametrize(
     ("metric", "final_value", "expected_error"),
     [
+        ("train/full_cuda_graph_warmup_calls", 2, "warmup_calls must equal 3"),
         ("train/full_cuda_graph_capture_calls", 2, "capture_calls must equal 1"),
         ("train/full_cuda_graph_replay_calls", 1, "replay_calls must be at least 2"),
+        ("train/full_cuda_graph_reset_calls", 1, "reset_calls must equal 0"),
     ],
 )
 def test_collector_rejects_invalid_full_cg_execution_evidence(
@@ -957,9 +1220,16 @@ def test_collector_rejects_invalid_full_cg_execution_evidence(
     job_id = _job_id(submission, "g1a0", 2)
     path = next((result_root / job_id / "timing").glob("*-on/metrics.json"))
     metrics = json.loads(path.read_text())
-    if metric == "train/full_cuda_graph_replay_calls":
-        metrics[metric]["4"] = final_value
-    metrics[metric]["5"] = final_value
+    if metric == "train/full_cuda_graph_warmup_calls":
+        metrics[metric] = {
+            step: min(int(step), final_value) for step in metrics[metric]
+        }
+    elif metric == "train/full_cuda_graph_replay_calls":
+        metrics[metric] = {
+            step: min(value, final_value) for step, value in metrics[metric].items()
+        }
+    else:
+        metrics[metric] = {step: final_value for step in metrics[metric]}
     _write_json(path, metrics)
 
     result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
@@ -996,6 +1266,20 @@ def test_collector_rejects_missing_a2a_enabled_evidence(
     assert expected_error in result.stderr
 
 
+def test_collector_requires_a2a_kernel_presence_in_a0_profile(tmp_path: Path) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    job_id = _job_id(submission, "g0a0", 0)
+    path = result_root / job_id / "feature_attribution.json"
+    attribution = json.loads(path.read_text())
+    attribution["counts"]["on"]["nccl_a2a_kernel"] = 0
+    _write_json(path, attribution)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode != 0
+    assert "lacks NCCL A2A kernel presence" in result.stderr
+
+
 def test_collector_requires_cutedsl_profile_attribution_for_g0_effect(
     tmp_path: Path,
 ) -> None:
@@ -1013,40 +1297,7 @@ def test_collector_accepts_explicit_zero_logprob_series_as_not_applicable(
     tmp_path: Path,
 ) -> None:
     submission, result_root = _create_valid_inputs(tmp_path)
-    logprob_metrics = {
-        "timing/train/get_logprobs": "timing/train/policy_and_reference_logprobs",
-        "performance/policy_and_reference_logprobs_tokens_per_sec_per_gpu": (
-            "performance/policy_and_reference_logprobs_tokens_per_sec_per_gpu"
-        ),
-    }
-    for job_dir in result_root.iterdir():
-        manifest_path = job_dir / "benchmark_manifest.json"
-        manifest = json.loads(manifest_path.read_text())
-        for mapping in manifest["resolved_metric_names"].values():
-            mapping.update(logprob_metrics)
-        _write_json(manifest_path, manifest)
-        for arm_dir in (job_dir / "timing").iterdir():
-            raw_path = arm_dir / "raw_timing.json"
-            raw = json.loads(raw_path.read_text())
-            raw["resolved_metric_names"].update(logprob_metrics)
-            raw["measured_component_series"].update(
-                {
-                    name: [
-                        {"step": row["step"], "value": 0.0}
-                        for row in raw["measured_step_workload"]
-                    ]
-                    for name in logprob_metrics
-                }
-            )
-            for row in raw["measured_step_workload"]:
-                row["logprob_seconds"] = 0.0
-                row["policy_and_reference_logprobs_tokens_per_sec_per_gpu"] = 0.0
-            _write_json(raw_path, raw)
-            metrics_path = arm_dir / "metrics.json"
-            metrics = json.loads(metrics_path.read_text())
-            for source_name in logprob_metrics.values():
-                metrics[source_name] = {str(step): 0.0 for step in (3, 4, 5)}
-            _write_json(metrics_path, metrics)
+    _add_logprob_series(result_root, 0.0)
 
     result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
 
@@ -1056,6 +1307,112 @@ def test_collector_accepts_explicit_zero_logprob_series_as_not_applicable(
         "status": "not_applicable",
         "reason": "disabled_by_supported_full_cg_slice",
     }
+
+
+def test_collector_rejects_positive_logprob_series_in_supported_full_cg_slice(
+    tmp_path: Path,
+) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    _add_logprob_series(result_root, 0.01)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode != 0
+    assert "optional Logprob metrics must be exactly zero" in result.stderr
+
+
+def test_collector_allows_unverified_a0_temporal_baseline(tmp_path: Path) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    for context in ("g0a0", "g1a0"):
+        job_id = _job_id(submission, context, 0)
+        analyzer_path = result_root / job_id / "a2a_temporal_overlap.json"
+        analyzer = json.loads(analyzer_path.read_text())
+        analyzer["temporal_overlap_verified"] = False
+        analyzer["limitations"] = ["baseline overlap is observation-only"]
+        _write_json(analyzer_path, analyzer)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode == 0, result.stderr
+    aggregate = json.loads((tmp_path / "aggregate.json").read_text())
+    assert aggregate["claim_status"] == "provisional"
+    assert aggregate["provisional_reasons"] == [DIRECT_PATH_LIMITATION]
+
+
+def test_collector_rejects_verified_zero_overlap_baseline(tmp_path: Path) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    job_id = _job_id(submission, "g0a0", 0)
+    analyzer_path = result_root / job_id / "a2a_temporal_overlap.json"
+    analyzer = json.loads(analyzer_path.read_text())
+    analyzer["temporal_overlap_verified"] = True
+    analyzer["limitations"] = []
+    _write_json(analyzer_path, analyzer)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode != 0
+    assert (
+        "temporal_overlap_verified is inconsistent with overlap evidence"
+        in result.stderr
+    )
+
+
+def test_collector_marks_representative_only_temporal_analysis_provisional(
+    tmp_path: Path,
+) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    job_id = _job_id(submission, "g1a1", 0)
+    analyzer_path = result_root / job_id / "a2a_temporal_overlap.json"
+    analyzer = json.loads(analyzer_path.read_text())
+    analyzer["limitations"] = [HARNESS_REPRESENTATIVE_LIMITATION]
+    _write_json(analyzer_path, analyzer)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode == 0, result.stderr
+    aggregate = json.loads((tmp_path / "aggregate.json").read_text())
+    assert aggregate["claim_status"] == "provisional"
+    assert aggregate["provisional_reasons"] == [
+        DIRECT_PATH_LIMITATION,
+        f"g1a1 job {job_id} A2A analysis is representative-only; "
+        "no all-rank aggregation",
+    ]
+    assert aggregate["a2a_overlap_ratio_contrasts"]["g1"]["claim_status"] == (
+        "provisional"
+    )
+
+
+def test_collector_marks_nonincreasing_a2a_overlap_ratio_provisional(
+    tmp_path: Path,
+) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    for context in ("g0a0", "g0a1"):
+        job_id = _job_id(submission, context, 0)
+        analyzer_path = result_root / job_id / "a2a_temporal_overlap.json"
+        analyzer = json.loads(analyzer_path.read_text())
+        analyzer["overlap_duration_ns"] = 5000
+        analyzer["a2a_overlap_ratio"] = 0.2
+        analyzer["gemm_overlap_ratio"] = 0.1
+        analyzer["temporal_overlap_verified"] = True
+        analyzer["limitations"] = []
+        _write_json(analyzer_path, analyzer)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode == 0, result.stderr
+    aggregate = json.loads((tmp_path / "aggregate.json").read_text())
+    assert aggregate["claim_status"] == "provisional"
+    assert aggregate["provisional_reasons"] == [
+        DIRECT_PATH_LIMITATION,
+        "g0 profile replica 0 A2A overlap ratio did not increase",
+    ]
+    contrast = aggregate["a2a_overlap_ratio_contrasts"]["g0"]
+    assert contrast["claim_status"] == "provisional"
+    assert contrast["all_pairs_increased"] is False
+    assert contrast["median_absolute_increase"] == pytest.approx(0.0)
+    assert aggregate["a2a_overlap_ratio_contrasts"]["g1"]["claim_status"] == (
+        "claim_ready"
+    )
 
 
 def test_collector_canonical_digest_changes_with_validated_evidence(
