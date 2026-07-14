@@ -890,6 +890,89 @@ class TestMegatronForwardBackward:
         call_kwargs = mock_fb_func.call_args[1]
         assert call_kwargs["forward_only"] is True
 
+    @patch("nemo_rl.models.megatron.train.get_forward_backward_func")
+    def test_full_cuda_graph_schedule_receives_static_signature_and_normalizers(
+        self, mock_get_fb
+    ):
+        from nemo_rl.algorithms.loss import NLLLossFn
+        from nemo_rl.models.megatron.data import ProcessedMicrobatch
+        from nemo_rl.models.megatron.full_cuda_graph import (
+            FULL_CUDA_GRAPH_GLOBAL_VALID_SEQS,
+            FULL_CUDA_GRAPH_GLOBAL_VALID_TOKS,
+            FullCudaGraphCallSignature,
+        )
+        from nemo_rl.models.megatron.train import (
+            LossPostProcessor,
+            megatron_forward_backward,
+        )
+
+        input_ids = torch.tensor([[1, 2, 3]])
+        microbatch = ProcessedMicrobatch(
+            data_dict={
+                "input_ids": input_ids,
+                "token_mask": torch.ones_like(input_ids),
+                "sample_mask": torch.ones(1),
+            },
+            input_ids=input_ids,
+            input_ids_cp_sharded=input_ids,
+            attention_mask=torch.ones(1, 3),
+            position_ids=torch.tensor([[0, 1, 2]]),
+            packed_seq_params=None,
+            cu_seqlens_padded=None,
+        )
+        graph_schedule = MagicMock(return_value=[])
+        cfg = {"sequence_packing": {"enabled": False}}
+        post_processor = LossPostProcessor(
+            loss_fn=NLLLossFn(), cfg=cfg, full_cuda_graph=True
+        )
+
+        megatron_forward_backward(
+            model=MagicMock(),
+            data_iterator=iter([microbatch]),
+            num_microbatches=1,
+            seq_length=3,
+            mbs=1,
+            post_processing_fn=post_processor,
+            global_valid_seqs=torch.tensor(1.0),
+            global_valid_toks=torch.tensor(2.0),
+            forward_backward_func=graph_schedule,
+        )
+
+        mock_get_fb.assert_not_called()
+        call_kwargs = graph_schedule.call_args.kwargs
+        assert isinstance(call_kwargs["nemo_rl_signature"], FullCudaGraphCallSignature)
+        static_microbatch = next(call_kwargs["data_iterator"])
+        assert torch.equal(
+            static_microbatch.data_dict[FULL_CUDA_GRAPH_GLOBAL_VALID_SEQS],
+            torch.tensor(1.0),
+        )
+        assert torch.equal(
+            static_microbatch.data_dict[FULL_CUDA_GRAPH_GLOBAL_VALID_TOKS],
+            torch.tensor(2.0),
+        )
+
+    def test_full_cuda_graph_schedule_rejects_forward_only(self):
+        from nemo_rl.algorithms.loss import NLLLossFn
+        from nemo_rl.models.megatron.train import (
+            LossPostProcessor,
+            megatron_forward_backward,
+        )
+
+        with pytest.raises(RuntimeError, match="PolicyTraining only"):
+            megatron_forward_backward(
+                model=MagicMock(),
+                data_iterator=iter([]),
+                num_microbatches=1,
+                seq_length=3,
+                mbs=1,
+                post_processing_fn=LossPostProcessor(
+                    loss_fn=NLLLossFn(),
+                    cfg={"sequence_packing": {"enabled": False}},
+                ),
+                forward_only=True,
+                forward_backward_func=MagicMock(),
+            )
+
 
 class TestLossPostProcessor:
     """Tests for LossPostProcessor class."""
