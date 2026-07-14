@@ -4,10 +4,11 @@
       "evidence": "The preserved authoritative 20 measured-step summary (steps 6-25) from sequential ON-first job 2373273 reports PolicyTraining throughput 5270.9812 versus 4902.8530 tokens/s/GPU (+7.5084%), E2E throughput +2.49%, and median step-time speedup +2.90% for CuTeDSL ON versus OFF. Logprob throughput moved +3.15% and Generation throughput +0.14%, while the Refit weight-transfer proxy was 30.36% slower with CuTeDSL ON.",
       "feature": "CuTeDSL fused Grouped GEMM",
       "jobs": [
-        "2373273"
+        "2373273",
+        "2376852"
       ],
-      "limitation": "This is an interim single-job result from the pre-isolation source cohort. It ran ON then OFF sequentially, processed-token totals differed by 0.083%, and simultaneous Logprob and Refit movement indicates a temporal confound. No opposite-order fixed-source replicas have been accepted, so it is not claim-ready. The old Qwen3-235B job 2375783 was cancelled before allocation because it was not a matched VPP baseline.",
-      "next_gate": "Preserve the completed artifacts, then rerun all fixed-source ON/OFF cells with alternating order and report matched post-warmup component timings.",
+      "limitation": "This is an interim single-job result from the pre-isolation source cohort. It ran ON then OFF sequentially, processed-token totals differed by 0.083%, and simultaneous Logprob and Refit movement indicates a temporal confound. No opposite-order fixed-source replicas have been accepted, so it is not claim-ready. Qwen3-235B functional job 2376852 failed before its first update because the inherited Lustre TMPDIR made vLLM's IPC path exceed the 107-character Unix-socket limit; it produced no correctness or performance evidence.",
+      "next_gate": "Retry the Qwen3-235B three-update functional gate from the node-local TMPDIR fix, then run fixed-source MXFP8 OFF/ON cells with alternating order and report matched post-warmup component timings.",
       "state": "provisional"
     },
     {
@@ -85,5 +86,5 @@
       "state": "implemented_unmeasured"
     }
   ],
-  "updated_at_utc": "2026-07-14T10:52:16Z"
+  "updated_at_utc": "2026-07-14T22:11:18Z"
 }

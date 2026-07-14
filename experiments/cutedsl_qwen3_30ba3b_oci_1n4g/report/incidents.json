@@ -602,5 +602,20 @@
     "timestamp_utc": "2026-07-14T10:52:16Z",
     "verification_evidence": "The two jobs reproduce the same explicit guard on different GB200 clusters and feature cells. Their successful vLLM generation graph capture is separate inference evidence and does not verify policy Full-CG. No performance conclusion is supported.",
     "verification_job": "pending after validation-stage Logprob implementation"
+  },
+  {
+    "cluster": "lyris",
+    "evidence": "Qwen3-235B job 2376852 passed immutable source/image preflight, locked runtime bootstrap, and exact TP2/PP4/CP2/EP16 config validation. VllmAsyncGenerationWorker then raised ZMQError because ipc://<TMPDIR>/<uuid> exceeded sockaddr_un.sun_path's 107-character limit.",
+    "fix_commit": "7e34aaa62ab9db54b8d5a5e314cabdfc96cded26",
+    "hypothesis": "A job-scoped node-local worker TMPDIR created on every Ray node will keep vLLM IPC paths below the Unix-domain socket limit without moving shared results or checkpoints off Lustre.",
+    "report_path": "evidence/job-2376852.txt",
+    "reproduction": "Run the Qwen3-235B g0a0 functional cell on 16 Lyris nodes from source 2d6938b75. The existing-Ray driver exports the long shared runtime TMPDIR, Ray propagates it to VllmAsyncGenerationWorker, and vLLM appends a UUID before binding its IPC socket.",
+    "root_cause": "The harness reused the long shared Lustre runtime directory as worker TMPDIR. vLLM 0.20 derives its RPC IPC base from tempfile.gettempdir(), so the inherited path deterministically exceeded the Linux sockaddr_un length limit before model execution.",
+    "run_id": "2376852",
+    "symptom": "The first Qwen3-235B CuTeDSL functional gate failed before the first GRPO update, policy execution, or metrics export and therefore produced no correctness or performance evidence.",
+    "tested_change": "Route timing and profile workers to /tmp/${USER}/nemo2606-factorial/${RUN_ID}/tmp and extend Ray's all-node setup command to create and validate the same directory before Ray starts.",
+    "timestamp_utc": "2026-07-14T22:11:18Z",
+    "verification_evidence": "The regression changed from red to green. The factorial harness reports 108 passed; Ruff check, Bash syntax, and diff checks pass. The projected Q235 vLLM IPC path is 83 characters. Remote functional verification is pending.",
+    "verification_job": "pending exact-source Qwen3-235B retry"
   }
 ]

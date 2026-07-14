@@ -2747,7 +2747,9 @@ def test_existing_ray_workers_use_job_scoped_node_local_tmpdir() -> None:
     select_tmpdir = 'export TMPDIR="${NODE_LOCAL_WORKER_TMPDIR}"'
     launch_grpo = '"${UV_BIN}" run --active --no-sync examples/run_grpo.py'
     for function_name in ("run_timing_arm()", "run_profile_arm()"):
-        worker_arm = source.split(function_name, 1)[1]
+        worker_arm = source.split(f"{function_name} {{", 1)[1].split(
+            '\nfor order_index in "${!timing_arms[@]}"; do', 1
+        )[0]
         assert create_tmpdir in worker_arm
         assert select_tmpdir in worker_arm
         assert launch_grpo in worker_arm
