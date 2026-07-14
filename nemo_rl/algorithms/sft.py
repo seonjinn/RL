@@ -240,6 +240,7 @@ class SFTConfig(BaseModel, extra="allow"):
     # Consume validation from the configured dataloader or a verified event artifact.
     validation_input_mode: Literal["dataloader", "precomputed_event"] = "dataloader"
     validation_precomputed_manifest: str | None = None
+    validation_precomputed_manifest_sha256: str | None = None
     validation_precomputed_dataset_sha256: str | None = None
     validation_precomputed_tokenizer_sha256: str | None = None
     validation_precomputed_container_sha256: str | None = None
@@ -470,6 +471,7 @@ def _validate_event_execution_config(
                 "Precomputed validation does not support the runtime CPU cache"
             )
         for digest, label in (
+            (sft_config.validation_precomputed_manifest_sha256, "manifest SHA-256"),
             (sft_config.validation_precomputed_dataset_sha256, "dataset SHA-256"),
             (
                 sft_config.validation_precomputed_tokenizer_sha256,
@@ -522,9 +524,6 @@ def _validate_event_execution_config(
             f"val_micro_batch_size=1; got {sft_config.val_micro_batch_size} "
             f"and {val_mbs}"
         )
-
-    if precomputed_event:
-        return None
 
     max_payload_bytes = sft_config.validation_event_max_payload_bytes
     if max_payload_bytes is None or max_payload_bytes <= 0:
@@ -1344,6 +1343,23 @@ def _validate_with_loss_availability_impl(
         if precomputed_validation_event is not None:
             event_num_valid_tokens = list(precomputed_validation_event.num_valid_tokens)
             event_payload_bytes = precomputed_validation_event.retained_bytes
+            event_deep_payload_bytes = _recursive_deep_payload_bytes(
+                precomputed_validation_event.data
+            )
+            if event_memory_config is None:
+                raise RuntimeError(
+                    "Precomputed validation memory configuration was not validated"
+                )
+            max_payload_bytes, ray_available_bytes, safety_multiplier = (
+                event_memory_config
+            )
+            _validate_event_memory_capacity(
+                max(event_payload_bytes, event_deep_payload_bytes),
+                max_payload_bytes=max_payload_bytes,
+                host_available_bytes=int(psutil.virtual_memory().available),
+                verified_ray_object_store_available_bytes=ray_available_bytes,
+                safety_multiplier=safety_multiplier,
+            )
             submitted_val_data = clone_validation_event_data(
                 precomputed_validation_event.data
             )

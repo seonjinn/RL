@@ -18,11 +18,13 @@ import pprint
 from functools import partial
 from pathlib import Path
 
+import psutil
 from omegaconf import OmegaConf
 from transformers import AutoTokenizer
 
 from nemo_rl.algorithms.sft import (
     MasterConfig,
+    _validate_event_memory_capacity,
     _validate_event_execution_config,
     setup,
     sft_train,
@@ -186,7 +188,7 @@ def _load_precomputed_validation_event(
 ) -> PrecomputedValidationEvent | None:
     if config.sft.validation_input_mode != "precomputed_event":
         return None
-    _validate_event_execution_config(
+    memory_config = _validate_event_execution_config(
         config.sft,
         val_batches=config.sft.val_batches,
         val_batch_size=config.sft.val_global_batch_size,
@@ -195,11 +197,13 @@ def _load_precomputed_validation_event(
     validate_validation_source_config(config)
 
     manifest = config.sft.validation_precomputed_manifest
+    manifest_sha256 = config.sft.validation_precomputed_manifest_sha256
     dataset_sha256 = config.sft.validation_precomputed_dataset_sha256
     tokenizer_sha256 = config.sft.validation_precomputed_tokenizer_sha256
     container_sha256 = config.sft.validation_precomputed_container_sha256
     if (
         manifest is None
+        or manifest_sha256 is None
         or dataset_sha256 is None
         or tokenizer_sha256 is None
         or container_sha256 is None
@@ -213,7 +217,22 @@ def _load_precomputed_validation_event(
         container_sha256=container_sha256,
         repository_root=Path(__file__).resolve().parents[1],
     )
-    return load_validation_event(Path(manifest), expected_fingerprint)
+    event = load_validation_event(
+        Path(manifest),
+        expected_fingerprint,
+        expected_manifest_sha256=manifest_sha256,
+    )
+    if memory_config is None:
+        raise RuntimeError("Precomputed validation memory config was not validated")
+    max_payload_bytes, ray_available_bytes, safety_multiplier = memory_config
+    _validate_event_memory_capacity(
+        event.retained_bytes,
+        max_payload_bytes=max_payload_bytes,
+        host_available_bytes=int(psutil.virtual_memory().available),
+        verified_ray_object_store_available_bytes=ray_available_bytes,
+        safety_multiplier=safety_multiplier,
+    )
+    return event
 
 
 def main(is_vlm: bool = False):

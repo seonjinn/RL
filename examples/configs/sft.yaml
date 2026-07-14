@@ -12,6 +12,7 @@ sft:
   val_at_start: true
   validation_input_mode: dataloader
   validation_precomputed_manifest: null
+  validation_precomputed_manifest_sha256: null
   validation_precomputed_dataset_sha256: null
   validation_precomputed_tokenizer_sha256: null
   validation_precomputed_container_sha256: null

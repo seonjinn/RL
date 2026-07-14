@@ -32,6 +32,48 @@ if TYPE_CHECKING:
 _PACKED_DATASET_NAME = "megatron_sft_packed"
 
 
+def content_sha256(path: Path) -> str:
+    """Hash one file or a directory tree using stable relative-path ordering."""
+    if path.is_symlink():
+        raise ValueError(f"Validation provenance rejects symbolic links: {path}")
+    if path.is_file():
+        digest = hashlib.sha256()
+        with path.open("rb") as file_handle:
+            for chunk in iter(lambda: file_handle.read(8 * 1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    if not path.is_dir():
+        raise ValueError(f"Validation provenance path does not exist: {path}")
+
+    digest = hashlib.sha256(b"validation-directory-sha256-v1\x00")
+    files = sorted(candidate for candidate in path.rglob("*") if candidate.is_file())
+    if not files:
+        raise ValueError(f"Validation provenance directory is empty: {path}")
+    for candidate in files:
+        if candidate.is_symlink():
+            raise ValueError(
+                f"Validation provenance rejects symbolic links: {candidate}"
+            )
+        relative_path = candidate.relative_to(path).as_posix().encode("utf-8")
+        digest.update(len(relative_path).to_bytes(8, byteorder="big"))
+        digest.update(relative_path)
+        digest.update(bytes.fromhex(content_sha256(candidate)))
+    return digest.hexdigest()
+
+
+def verify_content_sha256(path: Path, expected_sha256: str, *, label: str) -> str:
+    """Hash an actual provenance input and reject a mismatched claimed digest."""
+    if not isinstance(expected_sha256, str) or len(expected_sha256) != 64:
+        raise ValueError(f"Expected {label} SHA-256 must have 64 characters")
+    actual_sha256 = content_sha256(path)
+    if actual_sha256 != expected_sha256:
+        raise ValueError(
+            f"Actual {label} SHA-256 does not match the expected value: "
+            f"expected {expected_sha256}, got {actual_sha256}"
+        )
+    return actual_sha256
+
+
 def derive_preprocessing_sha256(
     config: MasterConfig,
     *,

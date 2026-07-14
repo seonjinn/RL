@@ -62,6 +62,7 @@ from nemo_rl.algorithms.sft_correctness_audit import (
 )
 from nemo_rl.algorithms.sft_validation_artifact import (
     PrecomputedValidationEvent,
+    ValidationArtifactSource,
     validation_event_payload_sha256,
 )
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
@@ -283,6 +284,7 @@ def _precomputed_validation_config(**overrides: object) -> MasterConfig:
     precomputed_config: dict[str, object] = {
         "validation_input_mode": "precomputed_event",
         "validation_precomputed_manifest": "/tmp/validation.manifest.json",
+        "validation_precomputed_manifest_sha256": "f" * 64,
         "validation_precomputed_dataset_sha256": "a" * 64,
         "validation_precomputed_tokenizer_sha256": "b" * 64,
         "validation_precomputed_container_sha256": "c" * 64,
@@ -301,6 +303,9 @@ def _precomputed_event_fixture(
         processed_token_counts=torch.full((256,), 2, dtype=torch.int64),
         sample_mask=torch.ones(256, dtype=torch.float32),
         token_mask=torch.ones((256, 2), dtype=torch.float32),
+        packed_cu_seqlens=torch.tensor([[0, 2]], dtype=torch.int32).repeat(256, 1),
+        packed_cu_seqlens_lengths=torch.full((256,), 2, dtype=torch.int64),
+        packed_max_seqlens=torch.full((256,), 2, dtype=torch.int64),
         idx=list(range(256)),
         task_name=["megatron_sft_packed"] * 256,
     )
@@ -310,6 +315,11 @@ def _precomputed_event_fixture(
         payload_digest=validation_event_payload_sha256(data),
         retained_bytes=sum(
             value.nbytes for value in data.values() if torch.is_tensor(value)
+        ),
+        source=ValidationArtifactSource(
+            dataset_path="/mnt/data/validation.jsonl.packed",
+            row_start=0,
+            row_count=256,
         ),
     )
 
@@ -385,6 +395,7 @@ def test_sft_validation_execution_mode_defaults_to_per_batch() -> None:
     assert SFTConfig().validation_event_cache_dataset_sha256 is None
     assert SFTConfig().validation_input_mode == "dataloader"
     assert SFTConfig().validation_precomputed_manifest is None
+    assert SFTConfig().validation_precomputed_manifest_sha256 is None
     assert SFTConfig().correctness_audit == CorrectnessAuditConfig(enabled=False)
     assert SFTConfig().correctness_audit.enforce_unchanged is True
 
@@ -1075,6 +1086,7 @@ def test_precomputed_mode_requires_event_batch_and_manifest(
 @pytest.mark.parametrize(
     ("field_name", "message"),
     [
+        ("validation_precomputed_manifest_sha256", "manifest SHA-256"),
         ("validation_precomputed_dataset_sha256", "dataset SHA-256"),
         ("validation_precomputed_tokenizer_sha256", "tokenizer SHA-256"),
         ("validation_precomputed_container_sha256", "container SHA-256"),

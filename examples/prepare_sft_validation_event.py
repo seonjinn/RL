@@ -41,6 +41,7 @@ from nemo_rl.algorithms.sft import (
 from nemo_rl.algorithms.sft_validation_artifact import (
     PrecomputedValidationEvent,
     ValidationArtifactEligibility,
+    ValidationArtifactSource,
     save_validation_event,
     validation_event_payload_sha256,
 )
@@ -48,6 +49,7 @@ from nemo_rl.algorithms.sft_validation_provenance import (
     _validation_dataset_configs,
     build_validation_artifact_fingerprint,
     derive_preprocessing_sha256,
+    verify_content_sha256,
     validate_validation_source_config,
 )
 from nemo_rl.algorithms.utils import get_tokenizer
@@ -97,6 +99,11 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         help="Optional expected digest of the resolved preprocessing config",
     )
     parser.add_argument("--container-sha256", required=True)
+    parser.add_argument(
+        "--container-path",
+        required=True,
+        help="Mounted path to the exact container image used by producer and consumer",
+    )
     return parser.parse_known_args()
 
 
@@ -221,6 +228,7 @@ def build_precomputed_validation_event(
         retained_bytes=sum(
             value.nbytes for value in event_data.values() if torch.is_tensor(value)
         ),
+        source=_validation_artifact_source(config, event_data),
     )
 
 
@@ -273,6 +281,39 @@ def _validate_event_batch_config(config: MasterConfig) -> None:
 
 def _valid_token_count(batch: BatchedDataDict[Any]) -> int:
     return int((batch["sample_mask"].unsqueeze(-1) * batch["token_mask"]).sum().item())
+
+
+def _validation_artifact_source(
+    config: MasterConfig, event_data: Mapping[str, object]
+) -> ValidationArtifactSource:
+    validation_configs = _validation_dataset_configs(config.data)
+    if len(validation_configs) != 1:
+        raise ValueError(
+            "Validation artifact production requires exactly one validation dataset"
+        )
+    dataset_path = validation_configs[0].get("data_path")
+    if not isinstance(dataset_path, str) or not dataset_path:
+        raise ValueError("Validation artifact production requires validation data_path")
+    indices = event_data.get("idx")
+    if not isinstance(indices, list) or indices != list(range(256)):
+        raise ValueError(
+            "Validation artifact production requires the first contiguous 256 source rows"
+        )
+    return ValidationArtifactSource(
+        dataset_path=dataset_path,
+        row_start=0,
+        row_count=256,
+    )
+
+
+def _tokenizer_path(config: MasterConfig) -> Path:
+    tokenizer_config = config.policy.get("tokenizer")
+    if not isinstance(tokenizer_config, Mapping):
+        raise ValueError("Validation artifact production requires tokenizer config")
+    tokenizer_path = tokenizer_config.get("name")
+    if not isinstance(tokenizer_path, str) or not tokenizer_path:
+        raise ValueError("Validation artifact production requires tokenizer.name")
+    return Path(tokenizer_path)
 
 
 def _event_tensor_data(
@@ -334,6 +375,24 @@ def main() -> None:
         expected_sha256=args.preprocessing_sha256,
     )
 
+    validation_configs = _validation_dataset_configs(config.data)
+    if len(validation_configs) != 1:
+        raise ValueError(
+            "Validation artifact production requires exactly one validation dataset"
+        )
+    dataset_path = validation_configs[0].get("data_path")
+    if not isinstance(dataset_path, str) or not dataset_path:
+        raise ValueError("Validation artifact production requires validation data_path")
+    dataset_sha256 = verify_content_sha256(
+        Path(dataset_path), args.dataset_sha256, label="dataset"
+    )
+    tokenizer_sha256 = verify_content_sha256(
+        _tokenizer_path(config), args.tokenizer_sha256, label="tokenizer"
+    )
+    container_sha256 = verify_content_sha256(
+        Path(args.container_path), args.container_sha256, label="container"
+    )
+
     tokenizer = get_tokenizer(config.policy["tokenizer"])
     _, val_dataset = setup_data(tokenizer, config.data)
     if val_dataset is None:
@@ -342,10 +401,10 @@ def main() -> None:
     event = build_precomputed_validation_event(config, tokenizer, val_dataset)
     repository_root = Path(__file__).resolve().parents[1]
     fingerprint = build_validation_artifact_fingerprint(
-        dataset_sha256=args.dataset_sha256,
-        tokenizer_sha256=args.tokenizer_sha256,
+        dataset_sha256=dataset_sha256,
+        tokenizer_sha256=tokenizer_sha256,
         preprocessing_sha256=preprocessing_sha256,
-        container_sha256=args.container_sha256,
+        container_sha256=container_sha256,
         repository_root=repository_root,
     )
     manifest = save_validation_event(

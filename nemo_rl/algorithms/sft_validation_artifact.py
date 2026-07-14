@@ -43,6 +43,9 @@ _TENSOR_FILE_PATTERN = re.compile(r"validation-([0-9a-f]{64})\.safetensors")
 _LOWERCASE_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 _COMMIT_ID_PATTERN = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _MAX_SAFETENSORS_HEADER_BYTES = 1024 * 1024
+_VALIDATION_BATCH_COUNT = 4
+_VALIDATION_GLOBAL_BATCH_SIZE = 64
+_EXPECTED_EVENT_BATCH_SIZE = _VALIDATION_BATCH_COUNT * _VALIDATION_GLOBAL_BATCH_SIZE
 _MANIFEST_KEYS = frozenset(
     {
         "artifact_version",
@@ -52,11 +55,13 @@ _MANIFEST_KEYS = frozenset(
         "num_valid_tokens",
         "payload_digest",
         "retained_bytes",
+        "source",
         "tensor_file",
         "tensor_file_sha256",
         "tensors",
     }
 )
+_SOURCE_KEYS = frozenset({"dataset_path", "row_count", "row_start"})
 _ELIGIBILITY_KEYS = frozenset(
     {
         "dynamic_batching",
@@ -186,11 +191,19 @@ class ValidationArtifactFingerprint:
 
 
 @dataclass(frozen=True)
+class ValidationArtifactSource:
+    dataset_path: str
+    row_start: int
+    row_count: int
+
+
+@dataclass(frozen=True)
 class PrecomputedValidationEvent:
     data: BatchedDataDict[Any]
     num_valid_tokens: tuple[int, int, int, int]
     payload_digest: str
     retained_bytes: int
+    source: ValidationArtifactSource
 
 
 @dataclass(frozen=True)
@@ -265,6 +278,7 @@ def save_validation_event(
             "num_valid_tokens": list(event.num_valid_tokens),
             "payload_digest": payload_digest,
             "retained_bytes": retained_bytes,
+            "source": _source_as_manifest(event.source),
             "tensor_file": tensor_file,
             "tensor_file_sha256": tensor_file_sha256,
             "tensors": {key: _tensor_record(tensor) for key, tensor in tensors.items()},
@@ -278,8 +292,17 @@ def load_validation_event(
     manifest_path: Path,
     fingerprint: ValidationArtifactFingerprint,
     memory_budget: MemoryBudget | None = None,
+    *,
+    expected_manifest_sha256: str | None = None,
 ) -> PrecomputedValidationEvent:
     """Load a verified validation event with owning CPU tensor copies."""
+    if expected_manifest_sha256 is not None:
+        _require_sha256(expected_manifest_sha256, "expected manifest SHA-256")
+        if _file_sha256(manifest_path) != expected_manifest_sha256:
+            raise ValueError(
+                "Validation artifact manifest SHA-256 does not match the trusted "
+                "runtime configuration"
+            )
     manifest = _load_manifest(manifest_path)
     _validate_fingerprint(manifest["fingerprint"], fingerprint)
 
@@ -346,11 +369,19 @@ def load_validation_event(
         raise ValueError(
             "Validation artifact payload digest does not match loaded data"
         )
+    source = _source_from_manifest(manifest["source"])
+    _validate_source_against_data(source, data)
+    recomputed_num_valid_tokens = _event_num_valid_tokens(data)
+    if tuple(num_valid_tokens) != recomputed_num_valid_tokens:
+        raise ValueError(
+            "Validation artifact num_valid_tokens does not match sample_mask * token_mask"
+        )
     return PrecomputedValidationEvent(
         data=data,
-        num_valid_tokens=tuple(num_valid_tokens),
+        num_valid_tokens=recomputed_num_valid_tokens,
         payload_digest=payload_digest,
         retained_bytes=loaded_retained_bytes,
+        source=source,
     )
 
 
@@ -489,6 +520,9 @@ def _validate_event_metadata(
         raise ValueError("retained_bytes must be a non-negative integer")
     if event.retained_bytes != retained_bytes:
         raise ValueError("retained_bytes does not match tensor payload bytes")
+    _validate_source_against_data(event.source, event.data)
+    if event.num_valid_tokens != _event_num_valid_tokens(event.data):
+        raise ValueError("num_valid_tokens does not match sample_mask * token_mask")
 
 
 def _require_named_cpu_tensor(key: object, value: object) -> None:
@@ -530,6 +564,11 @@ def _validate_sft_tensor_shapes(shapes: Mapping[str, tuple[int, ...]]) -> None:
     if len(input_ids_shape) != 2 or input_ids_shape[0] == 0:
         raise ValueError("Validation artifact input_ids must be a nonempty 2D tensor")
     batch_size, sequence_length = input_ids_shape
+    if batch_size != _EXPECTED_EVENT_BATCH_SIZE:
+        raise ValueError(
+            "Validation artifact must contain exactly 256 rows "
+            "(4 validation batches x global batch size 64)"
+        )
     expected_shapes = {
         "input_lengths": (batch_size,),
         "processed_token_counts": (batch_size,),
@@ -601,10 +640,84 @@ def _validate_sft_tensor_keys(keys: set[str]) -> None:
             f"Validation artifact is missing required SFT tensor keys: {missing_keys}"
         )
     packed_keys = keys & _PACKED_SFT_TENSOR_KEYS
-    if packed_keys and packed_keys != _PACKED_SFT_TENSOR_KEYS:
+    if packed_keys != _PACKED_SFT_TENSOR_KEYS:
         raise ValueError(
-            "Validation artifact packed metadata must include exactly "
+            "Validation artifact packed metadata is required and must include exactly "
             f"{sorted(_PACKED_SFT_TENSOR_KEYS)}"
+        )
+
+
+def _event_num_valid_tokens(data: Mapping[str, object]) -> tuple[int, int, int, int]:
+    sample_mask = data.get("sample_mask")
+    token_mask = data.get("token_mask")
+    if not torch.is_tensor(sample_mask) or not torch.is_tensor(token_mask):
+        raise ValueError(
+            "Validation artifact requires tensor sample_mask and token_mask"
+        )
+    if sample_mask.shape != (_EXPECTED_EVENT_BATCH_SIZE,) or token_mask.ndim != 2:
+        raise ValueError("Validation artifact masks do not match the 256-row contract")
+    counts = tuple(
+        int(
+            (
+                sample_mask[start : start + _VALIDATION_GLOBAL_BATCH_SIZE].unsqueeze(-1)
+                * token_mask[start : start + _VALIDATION_GLOBAL_BATCH_SIZE]
+            )
+            .sum()
+            .item()
+        )
+        for start in range(0, _EXPECTED_EVENT_BATCH_SIZE, _VALIDATION_GLOBAL_BATCH_SIZE)
+    )
+    return counts[0], counts[1], counts[2], counts[3]
+
+
+def _source_as_manifest(source: ValidationArtifactSource) -> dict[str, object]:
+    _validate_source(source)
+    return {
+        "dataset_path": source.dataset_path,
+        "row_count": source.row_count,
+        "row_start": source.row_start,
+    }
+
+
+def _source_from_manifest(value: object) -> ValidationArtifactSource:
+    if not isinstance(value, Mapping):
+        raise ValueError("Validation artifact source must be an object")
+    _require_exact_keys(value, _SOURCE_KEYS, "source")
+    row_start = value["row_start"]
+    row_count = value["row_count"]
+    if not _is_nonnegative_int(row_start) or not _is_nonnegative_int(row_count):
+        raise ValueError(
+            "Validation artifact source row_start and row_count must be non-negative integers"
+        )
+    source = ValidationArtifactSource(
+        dataset_path=_require_string(value["dataset_path"], "source.dataset_path"),
+        row_start=row_start,
+        row_count=row_count,
+    )
+    _validate_source(source)
+    return source
+
+
+def _validate_source(source: object) -> None:
+    if not isinstance(source, ValidationArtifactSource):
+        raise ValueError("Validation artifact source is invalid")
+    if not source.dataset_path or "\x00" in source.dataset_path:
+        raise ValueError("Validation artifact source dataset_path must be nonempty")
+    if not _is_nonnegative_int(source.row_start):
+        raise ValueError("Validation artifact source row_start must be non-negative")
+    if source.row_count != _EXPECTED_EVENT_BATCH_SIZE:
+        raise ValueError("Validation artifact source row_count must be exactly 256")
+
+
+def _validate_source_against_data(
+    source: ValidationArtifactSource, data: Mapping[str, object]
+) -> None:
+    _validate_source(source)
+    indices = data.get("idx")
+    expected = list(range(source.row_start, source.row_start + source.row_count))
+    if indices != expected:
+        raise ValueError(
+            "Validation artifact idx metadata does not match the declared source rows"
         )
 
 
@@ -943,6 +1056,7 @@ def _require_exact_keys(
 def _validate_manifest_metadata(manifest: Mapping[str, object]) -> None:
     _fingerprint_from_manifest(manifest["fingerprint"])
     _eligibility_from_manifest(manifest["eligibility"])
+    _source_from_manifest(manifest["source"])
     token_counts = manifest["num_valid_tokens"]
     if not isinstance(token_counts, list) or len(token_counts) != 4:
         raise ValueError(

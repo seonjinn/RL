@@ -32,6 +32,10 @@ from examples.prepare_sft_validation_event import (
     main as producer_main,
     validate_validation_source_config,
 )
+from nemo_rl.algorithms.sft_validation_provenance import (
+    content_sha256,
+    verify_content_sha256,
+)
 import nemo_rl.algorithms.sft as run_sft_sft
 import nemo_rl.algorithms.sft_validation_artifact as artifact_module
 from nemo_rl.algorithms.sft_validation_artifact import (
@@ -39,6 +43,7 @@ from nemo_rl.algorithms.sft_validation_artifact import (
     PrecomputedValidationEvent,
     ValidationArtifactEligibility,
     ValidationArtifactFingerprint,
+    ValidationArtifactSource,
     clone_validation_event_data,
     load_validation_event,
     save_validation_event,
@@ -95,6 +100,33 @@ def test_preprocessing_digest_rejects_mismatched_expected_value() -> None:
         derive_preprocessing_sha256(config, expected_sha256="0" * 64)
 
 
+def test_content_sha256_hashes_file_bytes(tmp_path: Path) -> None:
+    source = tmp_path / "validation.jsonl.packed"
+    source.write_bytes(b"row-0\nrow-1\n")
+
+    assert content_sha256(source) == hashlib.sha256(source.read_bytes()).hexdigest()
+
+
+def test_content_sha256_hashes_directory_paths_and_bytes(tmp_path: Path) -> None:
+    tokenizer = tmp_path / "tokenizer"
+    tokenizer.mkdir()
+    (tokenizer / "tokenizer.json").write_text("{}", encoding="utf-8")
+    (tokenizer / "config.json").write_text('{"v":1}', encoding="utf-8")
+
+    first = content_sha256(tokenizer)
+    (tokenizer / "config.json").write_text('{"v":2}', encoding="utf-8")
+
+    assert content_sha256(tokenizer) != first
+
+
+def test_verify_content_sha256_rejects_opaque_wrong_digest(tmp_path: Path) -> None:
+    source = tmp_path / "container.sqsh"
+    source.write_bytes(b"actual-container")
+
+    with pytest.raises(ValueError, match="container SHA-256"):
+        verify_content_sha256(source, "0" * 64, label="container")
+
+
 def test_cli_rejects_preprocessing_mismatch_before_data_or_publication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -114,6 +146,8 @@ def test_cli_rejects_preprocessing_mismatch_before_data_or_publication(
             "b" * 64,
             "--container-sha256",
             "f" * 64,
+            "--container-path",
+            "/tmp/container.sqsh",
             "--preprocessing-sha256",
             "0" * 64,
         ],
@@ -149,6 +183,8 @@ def test_cli_rejects_train_derived_validation_before_data_or_publication(
             "b" * 64,
             "--container-sha256",
             "f" * 64,
+            "--container-path",
+            "/tmp/container.sqsh",
             "++data.train.split_validation_size=0.1",
         ],
     )
@@ -405,9 +441,14 @@ def _runtime_main_config(*, precomputed: bool) -> run_sft_sft.MasterConfig:
         config.sft.validation_execution_mode = "event_batch"
         config.sft.validation_event_cache_mode = "off"
         config.sft.validation_precomputed_manifest = "/tmp/validation.manifest.json"
+        config.sft.validation_precomputed_manifest_sha256 = "f" * 64
         config.sft.validation_precomputed_dataset_sha256 = "a" * 64
         config.sft.validation_precomputed_tokenizer_sha256 = "b" * 64
         config.sft.validation_precomputed_container_sha256 = "c" * 64
+        config.sft.validation_event_max_payload_bytes = 10_000_000
+        config.sft.validation_event_verified_ray_object_store_available_bytes = (
+            10_000_000
+        )
     return config
 
 
@@ -470,6 +511,7 @@ def test_run_sft_main_artifact_failure_precedes_all_runtime_side_effects() -> No
     artifact_loader.assert_called_once_with(
         Path(config.sft.validation_precomputed_manifest),
         expected_fingerprint,
+        expected_manifest_sha256=config.sft.validation_precomputed_manifest_sha256,
     )
     ray_initializer.assert_not_called()
     tokenizer_loader.assert_not_called()
@@ -558,6 +600,7 @@ def test_run_sft_main_precomputed_event_loads_once_and_is_forwarded() -> None:
     artifact_loader.assert_called_once_with(
         Path(config.sft.validation_precomputed_manifest),
         expected_fingerprint,
+        expected_manifest_sha256=config.sft.validation_precomputed_manifest_sha256,
     )
     called_config = setup_runtime.call_args.args[0]
     data_loader.assert_called_once_with(
@@ -751,8 +794,14 @@ def _real_validation_dataset(
 def _producer_config_fixture() -> run_sft_sft.MasterConfig:
     return run_sft_sft.MasterConfig.model_construct(
         data={
-            "train": {"dataset_name": "megatron_sft_packed"},
-            "validation": {"dataset_name": "megatron_sft_packed"},
+            "train": {
+                "dataset_name": "megatron_sft_packed",
+                "data_path": "/mnt/data/validation.jsonl.packed",
+            },
+            "validation": {
+                "dataset_name": "megatron_sft_packed",
+                "data_path": "/mnt/data/validation.jsonl.packed",
+            },
             "shuffle": False,
             "num_workers": 0,
         },
@@ -920,6 +969,11 @@ def test_producer_cli_wires_resolved_config_into_real_data_path(
         capture_fingerprint,
     )
     monkeypatch.setattr(
+        producer_module,
+        "verify_content_sha256",
+        lambda _path, expected, *, label: expected,
+    )
+    monkeypatch.setattr(
         sys,
         "argv",
         [
@@ -934,6 +988,8 @@ def test_producer_cli_wires_resolved_config_into_real_data_path(
             "b" * 64,
             "--container-sha256",
             "f" * 64,
+            "--container-path",
+            "/mnt/provenance/nemo-rl.sqsh",
             "--preprocessing-sha256",
             expected_preprocessing_sha256,
             *overrides,
@@ -1012,25 +1068,38 @@ def _fingerprint() -> ValidationArtifactFingerprint:
 
 
 def _event_fixture(*, offset: int = 0) -> PrecomputedValidationEvent:
+    batch_size = 256
     data = BatchedDataDict(
         {
-            "input_ids": torch.arange(offset, offset + 6, dtype=torch.int64).reshape(
-                2, 3
+            "input_ids": torch.arange(
+                offset, offset + batch_size * 3, dtype=torch.int64
+            ).reshape(batch_size, 3),
+            "input_lengths": torch.full((batch_size,), 2, dtype=torch.int64),
+            "token_mask": torch.tensor([[True, True, False]]).repeat(batch_size, 1),
+            "sample_mask": torch.ones(batch_size, dtype=torch.float32),
+            "processed_token_counts": torch.full((batch_size,), 2, dtype=torch.int64),
+            "packed_cu_seqlens": torch.tensor([[0, 2]], dtype=torch.int32).repeat(
+                batch_size, 1
             ),
-            "input_lengths": torch.tensor([3, 2], dtype=torch.int64),
-            "token_mask": torch.tensor([[True, True, False], [True, False, False]]),
-            "sample_mask": torch.ones(2, dtype=torch.float32),
-            "processed_token_counts": torch.tensor([2, 1], dtype=torch.int64),
-            "idx": [17, 23],
-            "task_name": ["megatron_sft_packed", "validation_aux"],
+            "packed_cu_seqlens_lengths": torch.full(
+                (batch_size,), 2, dtype=torch.int64
+            ),
+            "packed_max_seqlens": torch.full((batch_size,), 2, dtype=torch.int64),
+            "idx": list(range(batch_size)),
+            "task_name": ["megatron_sft_packed"] * batch_size,
         }
     )
     return PrecomputedValidationEvent(
         data=data,
-        num_valid_tokens=(2, 1, 0, 3),
+        num_valid_tokens=(128, 128, 128, 128),
         payload_digest=digest_validation_event_data(data),
         retained_bytes=sum(
             value.nbytes for value in data.values() if torch.is_tensor(value)
+        ),
+        source=ValidationArtifactSource(
+            dataset_path="/mnt/data/validation.jsonl.packed",
+            row_start=0,
+            row_count=batch_size,
         ),
     )
 
@@ -1079,16 +1148,6 @@ def test_validation_artifact_round_trip_preserves_tensor_contract(tmp_path) -> N
 
 def test_validation_artifact_round_trip_preserves_runtime_metadata(tmp_path) -> None:
     event = _event_fixture()
-    event.data["processed_token_counts"] = torch.tensor([2, 1], dtype=torch.int64)
-    event.data["idx"] = [17, 23]
-    event.data["task_name"] = ["megatron_sft_packed", "megatron_sft_packed"]
-    event = dataclasses.replace(
-        event,
-        payload_digest=digest_validation_event_data(event.data),
-        retained_bytes=sum(
-            value.nbytes for value in event.data.values() if torch.is_tensor(value)
-        ),
-    )
 
     manifest = save_validation_event(
         tmp_path, event, _fingerprint(), _supported_eligibility()
@@ -1102,8 +1161,8 @@ def test_validation_artifact_round_trip_preserves_runtime_metadata(tmp_path) -> 
     assert loaded.data["idx"] == event.data["idx"]
     assert loaded.data["task_name"] == event.data["task_name"]
     assert _manifest_content(manifest)["metadata"] == {
-        "idx": [17, 23],
-        "task_name": ["megatron_sft_packed", "megatron_sft_packed"],
+        "idx": list(range(256)),
+        "task_name": ["megatron_sft_packed"] * 256,
     }
 
 
@@ -1145,7 +1204,7 @@ def test_validation_event_digest_includes_ordered_list_metadata() -> None:
     event = _event_fixture()
     baseline = digest_validation_event_data(event.data)
     changed = clone_validation_event_data(event.data)
-    changed["task_name"] = list(reversed(changed["task_name"]))
+    changed["task_name"][0] = "changed"
 
     assert digest_validation_event_data(changed) != baseline
 
@@ -1246,19 +1305,14 @@ def test_load_enforces_three_copy_memory_headroom(tmp_path) -> None:
 
 def test_submission_clone_cannot_mutate_canonical_event() -> None:
     canonical = _event_fixture()
-    canonical.data["idx"] = [17, 23]
-    canonical.data["task_name"] = ["megatron_sft_packed", "megatron_sft_packed"]
     submitted = clone_validation_event_data(canonical.data)
     submitted["input_ids"][0, 0] = -1
     submitted["idx"][0] = -1
     submitted["task_name"][0] = "mutated"
 
     assert canonical.data["input_ids"][0, 0].item() == 0
-    assert canonical.data["idx"] == [17, 23]
-    assert canonical.data["task_name"] == [
-        "megatron_sft_packed",
-        "megatron_sft_packed",
-    ]
+    assert canonical.data["idx"] == list(range(256))
+    assert canonical.data["task_name"] == ["megatron_sft_packed"] * 256
 
 
 def test_submission_clone_rejects_unknown_sft_tensor_key() -> None:
@@ -1478,6 +1532,84 @@ def test_load_rejects_nonexact_memory_budget(tmp_path, budget: MemoryBudget) -> 
 
     with pytest.raises(ValueError, match="MemoryBudget"):
         load_validation_event(manifest, _fingerprint(), budget)
+
+
+def test_save_rejects_short_precomputed_event(tmp_path: Path) -> None:
+    event = _event_fixture()
+    shortened_data = BatchedDataDict(
+        {
+            key: value[:255] if torch.is_tensor(value) else value[:255]
+            for key, value in event.data.items()
+        }
+    )
+    shortened = dataclasses.replace(
+        event,
+        data=shortened_data,
+        payload_digest=digest_validation_event_data(shortened_data),
+        retained_bytes=sum(
+            value.nbytes for value in shortened_data.values() if torch.is_tensor(value)
+        ),
+        source=dataclasses.replace(event.source, row_count=255),
+    )
+
+    with pytest.raises(ValueError, match="exactly 256 rows"):
+        save_validation_event(
+            tmp_path, shortened, _fingerprint(), _supported_eligibility()
+        )
+
+
+def test_save_requires_complete_packed_metadata(tmp_path: Path) -> None:
+    event = _event_fixture()
+    del event.data["packed_max_seqlens"]
+    event = dataclasses.replace(
+        event,
+        payload_digest=digest_validation_event_data(event.data),
+        retained_bytes=sum(
+            value.nbytes for value in event.data.values() if torch.is_tensor(value)
+        ),
+    )
+
+    with pytest.raises(ValueError, match="packed metadata"):
+        save_validation_event(tmp_path, event, _fingerprint(), _supported_eligibility())
+
+
+def test_load_recomputes_num_valid_tokens_from_masks(tmp_path: Path) -> None:
+    manifest = save_validation_event(
+        tmp_path, _event_fixture(), _fingerprint(), _supported_eligibility()
+    )
+    content = _manifest_content(manifest)
+    content["num_valid_tokens"] = [1, 2, 3, 4]
+    _write_manifest(manifest, content)
+
+    with pytest.raises(ValueError, match="num_valid_tokens does not match"):
+        load_validation_event(manifest, _fingerprint(), _memory_budget())
+
+
+def test_load_rejects_untrusted_manifest_digest(tmp_path: Path) -> None:
+    manifest = save_validation_event(
+        tmp_path, _event_fixture(), _fingerprint(), _supported_eligibility()
+    )
+
+    with pytest.raises(ValueError, match="manifest SHA-256"):
+        load_validation_event(
+            manifest,
+            _fingerprint(),
+            _memory_budget(),
+            expected_manifest_sha256="0" * 64,
+        )
+
+
+def test_manifest_records_exact_source_rows(tmp_path: Path) -> None:
+    event = _event_fixture()
+    manifest = save_validation_event(
+        tmp_path, event, _fingerprint(), _supported_eligibility()
+    )
+
+    assert _manifest_content(manifest)["source"] == {
+        "dataset_path": "/mnt/data/validation.jsonl.packed",
+        "row_count": 256,
+        "row_start": 0,
+    }
 
 
 @pytest.mark.parametrize(

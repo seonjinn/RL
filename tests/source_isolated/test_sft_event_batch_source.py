@@ -506,26 +506,24 @@ def test_precomputed_event_contract_fails_closed_without_runtime_dependencies() 
         "validation_event_cache_mode": "off",
         "validation_event_cache_dataset_sha256": None,
         "validation_precomputed_manifest": "/tmp/validation.manifest.json",
+        "validation_precomputed_manifest_sha256": "f" * 64,
         "validation_precomputed_dataset_sha256": "a" * 64,
         "validation_precomputed_tokenizer_sha256": "b" * 64,
         "validation_precomputed_container_sha256": "c" * 64,
         "val_batches": 4,
         "val_global_batch_size": 64,
         "val_micro_batch_size": 1,
-        "validation_event_max_payload_bytes": None,
-        "validation_event_verified_ray_object_store_available_bytes": None,
+        "validation_event_max_payload_bytes": 1_000_000,
+        "validation_event_verified_ray_object_store_available_bytes": 10_000_000,
         "validation_event_memory_safety_multiplier": 2.0,
     }
 
-    assert (
-        functions["_validate_event_execution_config"](
-            SimpleNamespace(**base),
-            val_batches=4,
-            val_batch_size=64,
-            val_mbs=1,
-        )
-        is None
-    )
+    assert functions["_validate_event_execution_config"](
+        SimpleNamespace(**base),
+        val_batches=4,
+        val_batch_size=64,
+        val_mbs=1,
+    ) == (1_000_000, 10_000_000, 2.0)
 
     for field_name, message in (
         ("validation_precomputed_manifest", "event_batch and a manifest"),
