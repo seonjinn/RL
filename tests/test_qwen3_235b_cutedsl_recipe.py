@@ -181,11 +181,15 @@ def test_qwen3_235b_cutedsl_overlay_preserves_bf16_rollout_and_base() -> None:
 
     assert base_before == base_after
     assert overlay["policy"]["generation"] == base_before["policy"]["generation"]
+    assert (
+        base_before["policy"]["megatron_cfg"]["cuda_graph_impl"]
+        == overlay["policy"]["megatron_cfg"]["cuda_graph_impl"]
+        == "none"
+    )
     assert _difference_paths(base_before, overlay) == {
         "checkpointing.checkpoint_dir",
         "logger.log_dir",
         "logger.wandb.name",
-        "policy.megatron_cfg.cuda_graph_impl",
         "policy.megatron_cfg.env_vars",
         "policy.megatron_cfg.fp8_cfg.enabled",
         "policy.megatron_cfg.fp8_cfg.fp8_recipe",

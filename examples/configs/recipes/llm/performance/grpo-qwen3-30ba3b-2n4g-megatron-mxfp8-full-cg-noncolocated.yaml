@@ -1,0 +1,64 @@
+defaults: ./grpo-qwen3-30ba3b-1n4g-megatron-mxfp8-cutedsl.yaml
+grpo:
+  num_prompts_per_step: 2
+  num_generations_per_prompt: 2
+  max_num_steps: 6
+  val_period: 0
+  val_at_start: false
+  val_at_end: false
+  seq_logprob_error_threshold: null
+  skip_reference_policy_logprobs_calculation: true
+  async_grpo:
+    enabled: false
+loss_fn:
+  reference_policy_kl_penalty: 0.0
+  force_on_policy_ratio: true
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-full-cg-noncolocated
+policy:
+  train_global_batch_size: 4
+  train_micro_batch_size: 1
+  logprob_batch_size: 1
+  max_total_sequence_length: 1024
+  dynamic_batching:
+    enabled: false
+  sequence_packing:
+    enabled: false
+  make_sequence_length_divisible_by: 1024
+  megatron_cfg:
+    tensor_model_parallel_size: 1
+    pipeline_model_parallel_size: 1
+    context_parallel_size: 1
+    expert_tensor_parallel_size: 1
+    expert_model_parallel_size: 4
+    cuda_graph_impl: full_iteration
+    cuda_graph_warmup_steps: 3
+    cuda_graph_use_single_mempool: true
+    moe_expert_rank_capacity_factor: null
+    moe_paged_stash: false
+    moe_paged_stash_page_size: 64
+    moe_paged_stash_buffer_size_factor_cuda: 1.10
+    moe_paged_stash_buffer_size_factor_cpu: 0.0
+    overlap_moe_expert_parallel_comm: false
+    high_priority_a2a_comm_stream: false
+    delay_wgrad_compute: false
+  generation:
+    vllm_cfg:
+      async_engine: false
+    colocated:
+      enabled: false
+      resources:
+        num_nodes: 1
+        gpus_per_node: 4
+data:
+  train:
+    split_validation_size: 0.0
+  validation: null
+logger:
+  log_dir: logs/grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-full-cg-noncolocated
+  wandb:
+    name: grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-full-cg-noncolocated
+cluster:
+  num_nodes: 2
+  gpus_per_node: 4
+  segment_size: null
