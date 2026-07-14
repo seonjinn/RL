@@ -160,6 +160,25 @@ def _assert_sanitized_traversal_failure(
     assert error.value.__suppress_context__ is True
 
 
+def _assert_sanitized_tensor_class_metadata_failure(
+    error: pytest.ExceptionInfo[TypeError],
+    *,
+    pointer: int,
+) -> None:
+    message = str(error.value)
+    assert re.fullmatch(
+        "full-iteration CUDA graph tensor attribute unavailable "
+        r"tensor_id_sha256=[0-9a-f]{64} field=class_metadata "
+        "reason=unsupported_tensor_attribute",
+        message,
+    )
+    assert str(pointer) not in message
+    assert hex(pointer) not in message
+    assert "private pointer" not in message
+    assert error.value.__cause__ is None
+    assert error.value.__suppress_context__ is True
+
+
 def test_full_cuda_graph_storage_guard_rejects_custom_fsdp_config_before_setup() -> (
     None
 ):
@@ -579,6 +598,161 @@ def test_full_cuda_graph_storage_guard_sanitizes_tensor_attribute_failures(
     assert str(unsupported.data_ptr()) not in message
     assert hex(unsupported.data_ptr()) not in message
     assert re.search(r"tensor_id_sha256=[0-9a-f]{64}", message)
+
+
+@pytest.mark.parametrize("class_field", ["__name__", "__module__"])
+def test_full_cuda_graph_storage_guard_sanitizes_model_class_metadata_failures(
+    class_field: str,
+) -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import FullCudaGraphStorageSignature
+
+    model = _StorageModel()
+    pointer = model.weight.data_ptr()
+    blocked_field: Optional[str] = None
+
+    class MetadataFailureMeta(type):
+        def __getattribute__(cls, name: str) -> Any:
+            if name == blocked_field:
+                raise RuntimeError(f"private pointer {pointer} / {hex(pointer)}")
+            return super().__getattribute__(name)
+
+    class MetadataFailureModel(metaclass=MetadataFailureMeta):
+        def named_parameters(self) -> Any:
+            return iter((("weight", model.weight),))
+
+    blocked_field = class_field
+
+    with pytest.raises(TypeError) as error:
+        FullCudaGraphStorageSignature.capture(
+            MetadataFailureModel(),
+            SimpleNamespace(param_groups=[], state={}),
+        )
+
+    _assert_sanitized_traversal_failure(
+        error,
+        pointer=pointer,
+        field="class_metadata",
+    )
+
+
+@pytest.mark.parametrize("class_field", ["__name__", "__module__"])
+def test_full_cuda_graph_storage_guard_sanitizes_tensor_class_metadata_failures(
+    class_field: str,
+) -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import FullCudaGraphStorageSignature
+
+    blocked_field: Optional[str] = None
+    pointer = 0
+
+    class MetadataFailureTensorMeta(type(torch.Tensor)):
+        def __getattribute__(cls, name: str) -> Any:
+            if name == blocked_field:
+                raise RuntimeError(f"private pointer {pointer} / {hex(pointer)}")
+            return super().__getattribute__(name)
+
+    class MetadataFailureTensor(torch.Tensor, metaclass=MetadataFailureTensorMeta):
+        pass
+
+    tensor = torch.Tensor._make_subclass(
+        MetadataFailureTensor,
+        torch.ones(2),
+        require_grad=False,
+    )
+    pointer = tensor.data_ptr()
+    blocked_field = class_field
+
+    class TensorModel:
+        def named_parameters(self) -> Any:
+            return iter((("weight", tensor),))
+
+    with pytest.raises(TypeError) as error:
+        FullCudaGraphStorageSignature.capture(
+            TensorModel(),
+            SimpleNamespace(param_groups=[], state={}),
+        )
+
+    _assert_sanitized_tensor_class_metadata_failure(error, pointer=pointer)
+
+
+def test_full_cuda_graph_storage_guard_rejects_chained_optimizer_cycle() -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import FullCudaGraphStorageSignature
+
+    model = _StorageModel()
+
+    class CyclicChainedOptimizer:
+        def __init__(self) -> None:
+            self.chained_optimizers = [self]
+
+    with pytest.raises(TypeError) as error:
+        FullCudaGraphStorageSignature.capture(model, CyclicChainedOptimizer())
+
+    _assert_sanitized_traversal_failure(
+        error,
+        pointer=model.weight.data_ptr(),
+        field="chained_optimizers",
+    )
+
+
+def test_full_cuda_graph_storage_guard_rejects_optimizer_mapping_cycle() -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import FullCudaGraphStorageSignature
+
+    model = _StorageModel()
+    optimizer = _LeafOptimizer(model.weight)
+    cyclic_state: dict[str, Any] = {}
+    cyclic_state["self"] = cyclic_state
+    optimizer.state = cyclic_state
+
+    with pytest.raises(TypeError) as error:
+        FullCudaGraphStorageSignature.capture(model, optimizer)
+
+    _assert_sanitized_traversal_failure(
+        error,
+        pointer=model.weight.data_ptr(),
+        field="optimizer_container",
+    )
+
+
+@pytest.mark.parametrize("container_kind", ["list", "tuple"])
+def test_full_cuda_graph_storage_guard_rejects_optimizer_sequence_cycle(
+    container_kind: str,
+) -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import FullCudaGraphStorageSignature
+
+    model = _StorageModel()
+    optimizer = _LeafOptimizer(model.weight)
+    cyclic_list: list[Any] = []
+    if container_kind == "list":
+        cyclic_value: Any = cyclic_list
+    else:
+        cyclic_value = (cyclic_list,)
+    cyclic_list.append(cyclic_value)
+    optimizer.state = {"cycle": cyclic_value}
+
+    with pytest.raises(TypeError) as error:
+        FullCudaGraphStorageSignature.capture(model, optimizer)
+
+    _assert_sanitized_traversal_failure(
+        error,
+        pointer=model.weight.data_ptr(),
+        field="optimizer_container",
+    )
+
+
+def test_full_cuda_graph_storage_guard_allows_shared_acyclic_optimizer_paths() -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import FullCudaGraphStorageSignature
+
+    model = _StorageModel()
+    leaf = _LeafOptimizer(model.weight)
+    shared_tensor = torch.ones_like(model.weight)
+    shared_sequence = [shared_tensor]
+    leaf.state = {"first": shared_sequence, "second": shared_sequence}
+    optimizer = _ChainedOptimizer(leaf, leaf)
+
+    signature = FullCudaGraphStorageSignature.capture(model, optimizer)
+    state_entries = [entry for entry in signature._entries if ".state." in entry.name]
+
+    assert len(state_entries) == 1
+    signature.require_match(model, optimizer)
 
 
 @pytest.mark.parametrize("phase", ["access", "iter", "next"])

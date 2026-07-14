@@ -19,7 +19,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field as dataclass_field
 from enum import Enum
 from functools import lru_cache
-from typing import Any, Literal, Optional
+from typing import Any, Literal, NoReturn, Optional
 
 import torch
 
@@ -110,23 +110,53 @@ def _safe_storage_name(value: Any, *, kind: str) -> str:
     return value
 
 
-def _is_custom_fsdp_model(value: Any) -> bool:
-    value_type = type(value)
-    return value_type.__name__ == "FullyShardedDataParallel" or (
-        value_type.__module__.startswith("megatron.core.distributed.fsdp")
-    )
-
-
 def _storage_identifier(name: str) -> str:
     return hashlib.sha256(name.encode("utf-8")).hexdigest()
 
 
-def _raise_traversal_unavailable(*, component: str, field: str) -> None:
+def _raise_traversal_unavailable(*, component: str, field: str) -> NoReturn:
     raise TypeError(
         "full-iteration CUDA graph traversal unavailable "
         f"component_id_sha256={_storage_identifier(component)} field={field} "
         "reason=unsupported_traversal"
     ) from None
+
+
+def _raise_tensor_attribute_unavailable(*, name: str, field: str) -> NoReturn:
+    raise TypeError(
+        "full-iteration CUDA graph tensor attribute unavailable "
+        f"tensor_id_sha256={_storage_identifier(name)} field={field} "
+        "reason=unsupported_tensor_attribute"
+    ) from None
+
+
+def _read_class_metadata(
+    value: Any,
+    *,
+    component: str,
+    tensor_name: Optional[str] = None,
+) -> tuple[str, str]:
+    try:
+        value_type = type(value)
+        class_name = value_type.__name__
+        module_name = value_type.__module__
+        if type(class_name) is not str or type(module_name) is not str:
+            raise TypeError
+    except Exception:
+        if tensor_name is not None:
+            _raise_tensor_attribute_unavailable(
+                name=tensor_name,
+                field="class_metadata",
+            )
+        _raise_traversal_unavailable(component=component, field="class_metadata")
+    return class_name, module_name
+
+
+def _is_custom_fsdp_model(value: Any, *, component: str) -> bool:
+    class_name, module_name = _read_class_metadata(value, component=component)
+    return class_name == "FullyShardedDataParallel" or module_name.startswith(
+        "megatron.core.distributed.fsdp"
+    )
 
 
 _MISSING_TRAVERSAL_ATTRIBUTE = object()
@@ -202,18 +232,16 @@ def _read_tensor_attribute(tensor: torch.Tensor, *, name: str, attribute: str) -
     try:
         return getattr(tensor, attribute, None)
     except Exception:
-        raise TypeError(
-            "full-iteration CUDA graph tensor attribute unavailable "
-            f"tensor_id_sha256={_storage_identifier(name)} field={attribute} "
-            "reason=unsupported_tensor_attribute"
-        ) from None
+        _raise_tensor_attribute_unavailable(name=name, field=attribute)
 
 
 def _is_unsupported_distributed_tensor(value: torch.Tensor, *, name: str) -> bool:
-    value_type = type(value)
-    if value_type.__name__ == "DTensor" or value_type.__module__.startswith(
-        "torch.distributed.tensor"
-    ):
+    class_name, module_name = _read_class_metadata(
+        value,
+        component=name,
+        tensor_name=name,
+    )
+    if class_name == "DTensor" or module_name.startswith("torch.distributed.tensor"):
         return True
     fsdp_parameter = _read_tensor_attribute(
         value, name=name, attribute="__fsdp_param__"
@@ -221,11 +249,7 @@ def _is_unsupported_distributed_tensor(value: torch.Tensor, *, name: str) -> boo
     try:
         return bool(fsdp_parameter)
     except Exception:
-        raise TypeError(
-            "full-iteration CUDA graph tensor attribute unavailable "
-            f"tensor_id_sha256={_storage_identifier(name)} field=__fsdp_param__ "
-            "reason=unsupported_tensor_attribute"
-        ) from None
+        _raise_tensor_attribute_unavailable(name=name, field="__fsdp_param__")
 
 
 def _read_storage_metadata(
@@ -285,7 +309,20 @@ class _FullCudaGraphStorageCapture:
         self.seen_tensor_ids.add(tensor_id)
 
 
-def _optimizer_leaves(optimizer: Any, *, component: str = "optimizer") -> list[Any]:
+def _optimizer_leaves(
+    optimizer: Any,
+    *,
+    component: str = "optimizer",
+    active_optimizer_ids: Optional[set[int]] = None,
+) -> list[Any]:
+    if active_optimizer_ids is None:
+        active_optimizer_ids = set()
+    optimizer_id = id(optimizer)
+    if optimizer_id in active_optimizer_ids:
+        _raise_traversal_unavailable(
+            component=component,
+            field="chained_optimizers",
+        )
     children = _read_traversal_attribute(
         optimizer,
         component=component,
@@ -300,19 +337,24 @@ def _optimizer_leaves(optimizer: Any, *, component: str = "optimizer") -> list[A
             "ChainedOptimizer children"
         ) from None
     leaves: list[Any] = []
-    for child_index, child in enumerate(
-        _iterate_traversal(
-            children,
-            component=component,
-            field="chained_optimizers",
-        )
-    ):
-        leaves.extend(
-            _optimizer_leaves(
-                child,
-                component=f"{component}.child[{child_index}]",
+    active_optimizer_ids.add(optimizer_id)
+    try:
+        for child_index, child in enumerate(
+            _iterate_traversal(
+                children,
+                component=component,
+                field="chained_optimizers",
             )
-        )
+        ):
+            leaves.extend(
+                _optimizer_leaves(
+                    child,
+                    component=f"{component}.child[{child_index}]",
+                    active_optimizer_ids=active_optimizer_ids,
+                )
+            )
+    finally:
+        active_optimizer_ids.remove(optimizer_id)
     return leaves
 
 
@@ -352,44 +394,69 @@ def _capture_optimizer_value(
     *,
     path: str,
     parameter_names: Mapping[int, str],
+    active_container_ids: Optional[set[int]] = None,
 ) -> None:
+    if active_container_ids is None:
+        active_container_ids = set()
     if isinstance(value, torch.Tensor):
         capture.add_tensor(value, name=path)
         return
     if isinstance(value, Mapping):
-        named_items = [
-            (_mapping_key_name(key, parameter_names), item)
-            for key, item in _mapping_items(value, component=path)
-        ]
-        key_names = [key_name for key_name, _ in named_items]
-        if len(set(key_names)) != len(key_names):
-            raise TypeError(
-                "full-iteration CUDA graph storage signature encountered "
-                "nondeterministic optimizer mapping keys"
-            ) from None
-        named_items.sort(key=lambda item: item[0])
-        for key_name, item in named_items:
-            _capture_optimizer_value(
-                capture,
-                item,
-                path=f"{path}.{key_name}",
-                parameter_names=parameter_names,
+        container_id = id(value)
+        if container_id in active_container_ids:
+            _raise_traversal_unavailable(
+                component=path,
+                field="optimizer_container",
             )
+        active_container_ids.add(container_id)
+        try:
+            named_items = [
+                (_mapping_key_name(key, parameter_names), item)
+                for key, item in _mapping_items(value, component=path)
+            ]
+            key_names = [key_name for key_name, _ in named_items]
+            if len(set(key_names)) != len(key_names):
+                raise TypeError(
+                    "full-iteration CUDA graph storage signature encountered "
+                    "nondeterministic optimizer mapping keys"
+                ) from None
+            named_items.sort(key=lambda item: item[0])
+            for key_name, item in named_items:
+                _capture_optimizer_value(
+                    capture,
+                    item,
+                    path=f"{path}.{key_name}",
+                    parameter_names=parameter_names,
+                    active_container_ids=active_container_ids,
+                )
+        finally:
+            active_container_ids.remove(container_id)
         return
     if isinstance(value, (list, tuple)):
-        for index, item in enumerate(
-            _iterate_traversal(
-                value,
+        container_id = id(value)
+        if container_id in active_container_ids:
+            _raise_traversal_unavailable(
                 component=path,
-                field="optimizer_sequence",
+                field="optimizer_container",
             )
-        ):
-            _capture_optimizer_value(
-                capture,
-                item,
-                path=f"{path}[{index}]",
-                parameter_names=parameter_names,
-            )
+        active_container_ids.add(container_id)
+        try:
+            for index, item in enumerate(
+                _iterate_traversal(
+                    value,
+                    component=path,
+                    field="optimizer_sequence",
+                )
+            ):
+                _capture_optimizer_value(
+                    capture,
+                    item,
+                    path=f"{path}[{index}]",
+                    parameter_names=parameter_names,
+                    active_container_ids=active_container_ids,
+                )
+        finally:
+            active_container_ids.remove(container_id)
         return
     if isinstance(value, (set, frozenset)):
         raise TypeError(
@@ -440,7 +507,7 @@ class FullCudaGraphStorageSignature:
         ):
             saw_model_chunk = True
             chunk_component = f"model_chunk[{chunk_index}]"
-            if _is_custom_fsdp_model(model_chunk):
+            if _is_custom_fsdp_model(model_chunk, component=chunk_component):
                 raise TypeError(
                     "full-iteration CUDA graph storage signature rejects custom FSDP"
                 ) from None
