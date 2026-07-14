@@ -21,21 +21,35 @@
       "state": "local_fix_pending_remote"
     },
     {
-      "evidence": "NeMo-RL policy-training configuration, lifecycle, static storage guards, all-rank evidence consensus, reducer propagation, cumulative counters, per-step deltas, and TensorBoard/MLflow routing are implemented locally through 40d51e52f.",
+      "evidence": "Jobs 2369539 and 2369580 completed three eager warmups, then both failed at update 4's first capture because the variable-size alltoall dispatcher called d2h_event.synchronize inside capture. The corrected local recipe now follows the flex/HybridEP static-budget and PagedStash dependency bundle.",
       "feature": "Full-iteration CUDA Graph",
-      "jobs": [],
-      "limitation": "No accepted GB200 functional or performance run has measured this feature. A local audit identified a legacy colocated-rejection guard plus recipe-topology and policy-rank-accounting mismatches between the factorial submit path and the two-node non-colocated full-CG recipe; the integration correction is not yet part of an accepted remote run. No speedup is reported.",
-      "next_gate": "Verify the final submit path preserves the selected recipe topology and policy-rank count, then require capture_calls == 1, replay_calls >= 2, monotonic counters, and a stable cohort digest before matched baseline/full-CG timing.",
+      "jobs": [
+        "2369539",
+        "2369580"
+      ],
+      "limitation": "Both jobs used the invalid alltoall, capacity-null, PagedStash-disabled bundle and therefore produced no valid Full-CG timing. The HybridEP correction is locally implemented but has not passed a GB200 functional gate. No speedup is reported.",
+      "next_gate": "Run the corrected noncolocated HybridEP functional cell and require capture_calls == 1, replay_calls >= 2, monotonic counters, stable storage digest, and no overflow-retry correctness failure before matched timing.",
       "state": "implemented_unmeasured"
     },
     {
-      "evidence": "The NeMo-RL policy-training path composes the existing expert-parallel A2A-overlap schedule with the full-iteration CUDA Graph integration locally.",
+      "evidence": "Job 2369580 enabled overlap_moe_expert_parallel_comm, the high-priority A2A stream, and delayed WGRAD. It still failed at the same first-capture D2H synchronization as A2A-OFF job 2369539, proving A2A does not remove the variable-size dispatcher host sync.",
       "feature": "Expert-parallel A2A overlap",
+      "jobs": [
+        "2369539",
+        "2369580"
+      ],
+      "limitation": "The comparison stopped at capture failure and has no accepted timing window. A2A performance remains unmeasured; no speedup is reported.",
+      "next_gate": "After the HybridEP Full-CG gate passes, run A2A OFF/ON inside both eager-dynamic and Full-CG-static strata, then verify NCCL A2A presence and temporal overlap before reporting an effect.",
+      "state": "implemented_unmeasured"
+    },
+    {
+      "evidence": "The teammate implementation in NeMo-RL PR #1126 was manually ported onto current main: setup preserves all virtual model chunks, the interleaved schedule receives one iterator per chunk, reference/refit/checkpoint state is chunk-qualified, and Qwen3-235B now has a strict PP4/VPP2 A2A profile with a 22/24/24/24 layer split.",
+      "feature": "Virtual pipeline parallelism (PR #1126 port)",
       "jobs": [],
-      "limitation": "No accepted GB200 run has isolated A2A overlap or measured its combined effect with full-CG. The current full-CG submit guard and recipe topology mismatch also blocks the combined g1a1 cell. No speedup is reported.",
-      "next_gate": "After reconciling the full-CG submit path and topology and passing its functional gate, run matched A2A OFF/ON and combined factorial cells with identical topology and alternating order.",
+      "limitation": "Dependency-free contract probes and local lint pass, but the macOS host cannot collect the Ray/MCore unit suite. No Linux-container or GB200 VPP functional run has passed yet, and VPP remains fail-closed with full-iteration CUDA Graph, split-step training, ModelOpt, native Megatron generation, value workers, and FP8 KV-cache calibration.",
+      "next_gate": "Run the focused VPP, setup, community-import, train, BatchedDataDict, refit, and checkpoint tests in the pinned Linux nightly container; then run Qwen3-235B g0a0/g0a1 functional gates before performance replicas.",
       "state": "implemented_unmeasured"
     }
   ],
-  "updated_at_utc": "2026-07-14T03:51:14Z"
+  "updated_at_utc": "2026-07-14T06:18:30Z"
 }

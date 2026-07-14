@@ -194,12 +194,94 @@ def test_full_cuda_graph_storage_guard_rejects_custom_fsdp_config_before_setup()
         "megatron_cfg": {
             "cuda_graph_impl": "full_iteration",
             "context_parallel_size": 1,
+            "expert_model_parallel_size": 1,
             "distributed_data_parallel_config": {"use_custom_fsdp": True},
         },
     }
 
     with pytest.raises(ValueError, match="custom FSDP/DTensor"):
         validate_full_cuda_graph_policy_config(config, init_optimizer=True)
+
+
+def _full_cuda_graph_moe_policy_config() -> dict[str, Any]:
+    return {
+        "dynamic_batching": {"enabled": False},
+        "sequence_packing": {"enabled": False},
+        "generation": {"backend": "vllm", "colocated": {"enabled": False}},
+        "megatron_cfg": {
+            "cuda_graph_impl": "full_iteration",
+            "cuda_graph_modules": [],
+            "context_parallel_size": 1,
+            "expert_tensor_parallel_size": 1,
+            "expert_model_parallel_size": 4,
+            "distributed_data_parallel_config": {"use_custom_fsdp": False},
+            "moe_token_dispatcher_type": "flex",
+            "moe_flex_dispatcher_backend": "hybridep",
+            "moe_grouped_gemm": True,
+            "moe_expert_rank_capacity_factor": 1.5,
+            "moe_paged_stash": True,
+            "use_transformer_engine_op_fuser": True,
+            "moe_mlp_glu_interleave_size": 32,
+            "moe_hybridep_num_sms_preprocessing": 32,
+            "offload_modules": [],
+            "env_vars": {"NVTE_CUTEDSL_FUSED_GROUPED_MLP": "1"},
+            "fp8_cfg": {"enabled": True, "fp8_recipe": "mxfp8"},
+        },
+    }
+
+
+def test_full_cuda_graph_moe_rejects_host_synchronized_alltoall_dispatcher() -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        validate_full_cuda_graph_policy_config,
+    )
+
+    config = _full_cuda_graph_moe_policy_config()
+    config["megatron_cfg"]["moe_token_dispatcher_type"] = "alltoall"
+    config["megatron_cfg"]["moe_flex_dispatcher_backend"] = None
+
+    with pytest.raises(ValueError, match="flex/HybridEP"):
+        validate_full_cuda_graph_policy_config(config, init_optimizer=True)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("moe_expert_rank_capacity_factor", None, "static routed-token budget"),
+        ("moe_grouped_gemm", False, "grouped GEMM"),
+        ("expert_tensor_parallel_size", 2, "expert tensor parallel size 1"),
+        ("cuda_graph_modules", ["moe"], "cuda_graph_modules must be empty"),
+        ("moe_paged_stash", False, "paged stash"),
+        ("use_transformer_engine_op_fuser", False, "TE operation fuser"),
+        ("moe_mlp_glu_interleave_size", None, "GLU interleave size 32"),
+        ("moe_hybridep_num_sms_preprocessing", None, "preprocessing SM count"),
+        ("offload_modules", None, "offload_modules must be a list"),
+        ("offload_modules", ["expert_fc1"], "expert_fc1/moe_act offloading"),
+        ("env_vars", {}, "NVTE_CUTEDSL_FUSED_GROUPED_MLP=1"),
+        ("fp8_cfg", {"enabled": False}, "MXFP8"),
+    ],
+)
+def test_full_cuda_graph_moe_rejects_incomplete_host_free_bundle(
+    field: str, value: Any, message: str
+) -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        validate_full_cuda_graph_policy_config,
+    )
+
+    config = _full_cuda_graph_moe_policy_config()
+    config["megatron_cfg"][field] = value
+
+    with pytest.raises(ValueError, match=message):
+        validate_full_cuda_graph_policy_config(config, init_optimizer=True)
+
+
+def test_full_cuda_graph_moe_accepts_host_free_hybridep_bundle() -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        validate_full_cuda_graph_policy_config,
+    )
+
+    validate_full_cuda_graph_policy_config(
+        _full_cuda_graph_moe_policy_config(), init_optimizer=True
+    )
 
 
 def test_full_cuda_graph_execution_stats_count_capture_as_replay() -> None:

@@ -29,7 +29,9 @@ if [[ "${UV_NO_EDITABLE-}" != "1" ]]; then
     exit 1
 fi
 
-RECIPE="${CUTEDSL_BENCHMARK_RECIPE:-examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-1n4g-megatron-mxfp8-cutedsl.yaml}"
+RECIPE="${CUTEDSL_BENCHMARK_RECIPE:?CUTEDSL_BENCHMARK_RECIPE is required}"
+MODEL_PROFILE_PATH="${CUTEDSL_MODEL_PROFILE_PATH:?CUTEDSL_MODEL_PROFILE_PATH is required}"
+MODEL_PROFILE_SHA256="${CUTEDSL_MODEL_PROFILE_SHA256:?CUTEDSL_MODEL_PROFILE_SHA256 is required}"
 EXISTING_RAY="${CUTEDSL_BENCHMARK_EXISTING_RAY:-0}"
 BENCHMARK_NUM_NODES="${CUTEDSL_BENCHMARK_NUM_NODES:-1}"
 BENCHMARK_GPUS_PER_NODE="${CUTEDSL_BENCHMARK_GPUS_PER_NODE:-4}"
@@ -37,11 +39,13 @@ NEMO2606_FULL_CG_ENABLED="${NEMO2606_FULL_CG_ENABLED:-0}"
 NEMO2606_A2A_ENABLED="${NEMO2606_A2A_ENABLED:-0}"
 FEATURE_CONTEXT="${NEMO2606_FACTORIAL_CONTEXT:-g0a0}"
 readonly RECIPE EXISTING_RAY BENCHMARK_NUM_NODES BENCHMARK_GPUS_PER_NODE
+readonly MODEL_PROFILE_PATH MODEL_PROFILE_SHA256
 readonly NEMO2606_FULL_CG_ENABLED NEMO2606_A2A_ENABLED FEATURE_CONTEXT
 readonly CUTEDSL_SELECTOR_PATH="policy.megatron_cfg.env_vars.NVTE_CUTEDSL_FUSED_GROUPED_MLP"
 readonly EXPECTED_ON_SELECTOR="1"
 readonly OFF_OVERRIDE="${CUTEDSL_SELECTOR_PATH}=\"0\""
 export RECIPE CUTEDSL_SELECTOR_PATH EXPECTED_ON_SELECTOR OFF_OVERRIDE
+export MODEL_PROFILE_PATH MODEL_PROFILE_SHA256
 
 readonly SLURM_SUBMIT_DIR="${SLURM_SUBMIT_DIR:?submit this benchmark with sbatch from the repository checkout}"
 REPO_ROOT=$(git -C "${SLURM_SUBMIT_DIR}" rev-parse --show-toplevel)
@@ -136,6 +140,16 @@ case "${FEATURE_CONTEXT}:${NEMO2606_FULL_CG_ENABLED}:${NEMO2606_A2A_ENABLED}" in
         exit 1
         ;;
 esac
+if [[ "${NEMO2606_FULL_CG_ENABLED}" == "1" && \
+    "${CUTEDSL_PROFILE_ALLOW_FULL_CG-}" != "true" ]]; then
+    echo "[ERROR] Selected model profile does not allow full-iteration CUDA Graph." >&2
+    exit 1
+fi
+if [[ "${NEMO2606_A2A_ENABLED}" == "1" && \
+    "${CUTEDSL_PROFILE_ALLOW_A2A-}" != "true" ]]; then
+    echo "[ERROR] Selected model profile does not allow A2A." >&2
+    exit 1
+fi
 if [[ ! "${BENCHMARK_NUM_NODES}" =~ ^[0-9]+$ ]] || \
     [[ ! "${BENCHMARK_GPUS_PER_NODE}" =~ ^[0-9]+$ ]] || \
     [[ ! "${BENCHMARK_SEGMENT_SIZE}" =~ ^[0-9]+$ ]]; then
@@ -438,6 +452,13 @@ if [[ "${NEMO2606_A2A_ENABLED}" == "1" ]]; then
 fi
 readonly A2A_OVERLAP_OVERRIDE A2A_HIGH_PRIORITY_OVERRIDE
 readonly A2A_DELAY_WGRAD_OVERRIDE
+FULL_CG_CAPACITY_OVERRIDE="policy.megatron_cfg.moe_expert_rank_capacity_factor=null"
+FULL_CG_PAGED_STASH_OVERRIDE="policy.megatron_cfg.moe_paged_stash=false"
+if [[ "${NEMO2606_FULL_CG_ENABLED}" == "1" ]]; then
+    FULL_CG_CAPACITY_OVERRIDE="policy.megatron_cfg.moe_expert_rank_capacity_factor=1.5"
+    FULL_CG_PAGED_STASH_OVERRIDE="policy.megatron_cfg.moe_paged_stash=true"
+fi
+readonly FULL_CG_CAPACITY_OVERRIDE FULL_CG_PAGED_STASH_OVERRIDE
 
 COMMON_OVERRIDES=(
     "grpo.max_num_steps=${TOTAL_UPDATES}"
@@ -446,7 +467,13 @@ COMMON_OVERRIDES=(
     "policy.train_global_batch_size=${TRAIN_GLOBAL_BATCH_SIZE}"
     "policy.train_micro_batch_size=1"
     "policy.megatron_cfg.expert_model_parallel_size=${EXPERT_MODEL_PARALLEL_SIZE}"
+    "policy.megatron_cfg.moe_token_dispatcher_type=flex"
+    "policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep"
+    "policy.megatron_cfg.moe_hybridep_num_sms_preprocessing=32"
+    "policy.megatron_cfg.offload_modules=[]"
     "+policy.megatron_cfg.env_vars.CUDA_DEVICE_MAX_CONNECTIONS=\"32\""
+    "${FULL_CG_CAPACITY_OVERRIDE}"
+    "${FULL_CG_PAGED_STASH_OVERRIDE}"
     "${A2A_OVERLAP_OVERRIDE}"
     "${A2A_HIGH_PRIORITY_OVERRIDE}"
     "${A2A_DELAY_WGRAD_OVERRIDE}"
@@ -477,6 +504,7 @@ if [[ "${NEMO2606_FULL_CG_ENABLED}" == "1" ]]; then
         "policy.megatron_cfg.cuda_graph_impl=full_iteration"
         "policy.megatron_cfg.cuda_graph_warmup_steps=${CUDA_GRAPH_WARMUP_STEPS}"
         "policy.megatron_cfg.cuda_graph_use_single_mempool=true"
+        "policy.megatron_cfg.cuda_graph_modules=[]"
     )
 else
     COMMON_OVERRIDES+=("policy.megatron_cfg.cuda_graph_impl=none")
@@ -501,7 +529,17 @@ fi
 readonly NODE_LOCAL_RUNTIME_ROOT NODE_LOCAL_WORKER_VENV_ROOT
 export NEMO_RL_VENV_DIR="${NODE_LOCAL_WORKER_VENV_ROOT}"
 export TRITON_CACHE_DIR NEMO2606_TRITON_CACHE_SCOPE
+if [[ "${NEMO2606_TRITON_CACHE_SCOPE}" != "${CUTEDSL_EXPECTED_TRITON_CACHE_SCOPE}" ]]; then
+    echo "[ERROR] Triton cache scope does not match the selected model profile." >&2
+    exit 1
+fi
 mkdir -p "${TRITON_CACHE_DIR}"
+if [[ "${CUTEDSL_MEGATRON_CHECKPOINT_SCOPE}" != "job_shared" || \
+    "${CUTEDSL_MEGATRON_CHECKPOINT_ROOT_NAME}" != "megatron_checkpoints" || \
+    "${CUTEDSL_MEGATRON_CHECKPOINT_MARKER}" != "iter_0000000/run_config.yaml" ]]; then
+    echo "[ERROR] Megatron checkpoint provenance does not match the supported profile contract." >&2
+    exit 1
+fi
 MEGATRON_CHECKPOINT_ROOT="${CONTAINER_RUNTIME_DIR}/megatron_checkpoints"
 readonly MEGATRON_CHECKPOINT_ROOT
 mkdir -p "${MEGATRON_CHECKPOINT_ROOT}"
@@ -527,12 +565,12 @@ if [[ "${CUTEDSL_SHARED_HF_HOME-}" != /* ]]; then
     exit 1
 fi
 SHARED_HF_HOME="${CUTEDSL_SHARED_HF_HOME}"
-SHARED_HF_MANIFEST="${SHARED_HF_HOME}/nemo2606_qwen3_30ba3b_manifest.json"
 if [[ ! -d "${SHARED_HF_HOME}" || ! -r "${SHARED_HF_HOME}" || \
     ! -x "${SHARED_HF_HOME}" ]]; then
     echo "[ERROR] shared Hugging Face cache root must already exist and be readable." >&2
     exit 1
 fi
+SHARED_HF_MANIFEST="${SHARED_HF_HOME}/nemo2606_${CUTEDSL_MODEL_PROFILE_ID}_${MODEL_PROFILE_SHA256:0:12}.json"
 readonly SHARED_HF_HOME SHARED_HF_MANIFEST
 export HF_HOME="${SHARED_HF_HOME}"
 export SHARED_HF_MANIFEST
@@ -607,6 +645,7 @@ if ! python3 -c 'import datasets, huggingface_hub'; then
 fi
 python3 \
     "${CONTAINER_REPO_ROOT}/experiments/cutedsl_qwen3_30ba3b_oci_1n4g/prepare_hf_cache.py" \
+    --model-profile "${MODEL_PROFILE_PATH}" \
     --hf-home "${HF_HOME}" \
     --shared-manifest "${SHARED_HF_MANIFEST}" \
     --job-manifest "${CONTAINER_RESULT_DIR}/hf_cache_manifest.json"
@@ -634,6 +673,7 @@ runtime_prefix=$("${UV_BIN}" run --active --no-sync python -c 'import sys; print
 "${UV_BIN}" lock --check 2>&1 | tee "${CONTAINER_RESULT_DIR}/uv_lock_check.log"
 "${UV_BIN}" run --active --no-sync python \
     "${CONTAINER_REPO_ROOT}/experiments/cutedsl_qwen3_30ba3b_oci_1n4g/prepare_hf_cache.py" \
+    --model-profile "${MODEL_PROFILE_PATH}" \
     --hf-home "${HF_HOME}" \
     --shared-manifest "${SHARED_HF_MANIFEST}" \
     --job-manifest "${CONTAINER_RESULT_DIR}/hf_cache_manifest.json"
@@ -832,6 +872,9 @@ NORMALIZED_FEATURE_PATHS = (
     "policy.megatron_cfg.cuda_graph_impl",
     "policy.megatron_cfg.cuda_graph_warmup_steps",
     "policy.megatron_cfg.cuda_graph_use_single_mempool",
+    "policy.megatron_cfg.cuda_graph_modules",
+    "policy.megatron_cfg.moe_expert_rank_capacity_factor",
+    "policy.megatron_cfg.moe_paged_stash",
     "policy.megatron_cfg.overlap_moe_expert_parallel_comm",
     "policy.megatron_cfg.high_priority_a2a_comm_stream",
     "policy.megatron_cfg.delay_wgrad_compute",
@@ -865,6 +908,10 @@ def canonical_base_config_sha256(config: dict[str, Any]) -> str:
 
 
 result_dir = Path(os.environ["CONTAINER_RESULT_DIR"])
+profile = json.loads(Path(os.environ["MODEL_PROFILE_PATH"]).read_text())
+profile_payload = json.dumps(profile, sort_keys=True, separators=(",", ":")).encode()
+profile_sha256 = hashlib.sha256(profile_payload).hexdigest()
+assert profile_sha256 == os.environ["MODEL_PROFILE_SHA256"]
 MCORE_RUNTIME_FIELDS = {
     "source_sha",
     "overlay_mode",
@@ -963,34 +1010,76 @@ topology = {
     "segment_size": cluster_config["segment_size"],
     "tensor_model_parallel_size": megatron_config["tensor_model_parallel_size"],
     "pipeline_model_parallel_size": megatron_config["pipeline_model_parallel_size"],
+    "virtual_pipeline_model_parallel_size": megatron_config.get(
+        "virtual_pipeline_model_parallel_size"
+    ),
+    "num_layers_in_first_pipeline_stage": megatron_config.get(
+        "num_layers_in_first_pipeline_stage"
+    ),
+    "num_layers_in_last_pipeline_stage": megatron_config.get(
+        "num_layers_in_last_pipeline_stage"
+    ),
     "context_parallel_size": megatron_config["context_parallel_size"],
     "expert_tensor_parallel_size": megatron_config["expert_tensor_parallel_size"],
     "expert_model_parallel_size": megatron_config["expert_model_parallel_size"],
+}
+profile_topology = {
+    "num_nodes": topology["num_nodes"],
+    "gpus_per_node": topology["gpus_per_node"],
+    "segment_size": topology["segment_size"],
+    "tp": topology["tensor_model_parallel_size"],
+    "pp": topology["pipeline_model_parallel_size"],
+    "vpp": topology["virtual_pipeline_model_parallel_size"],
+    "num_layers_in_first_pipeline_stage": topology[
+        "num_layers_in_first_pipeline_stage"
+    ],
+    "num_layers_in_last_pipeline_stage": topology[
+        "num_layers_in_last_pipeline_stage"
+    ],
+    "cp": topology["context_parallel_size"],
+    "ep": topology["expert_model_parallel_size"],
+    "etp": topology["expert_tensor_parallel_size"],
 }
 expected_config_segment_size = os.environ["CONFIG_SEGMENT_SIZE"]
 expected_config_segment = (
     None if expected_config_segment_size == "null" else int(expected_config_segment_size)
 )
-assert topology == {
-    "num_nodes": int(os.environ["BENCHMARK_NUM_NODES"]),
-    "gpus_per_node": int(os.environ["BENCHMARK_GPUS_PER_NODE"]),
-    "segment_size": expected_config_segment,
-    "tensor_model_parallel_size": 1,
-    "pipeline_model_parallel_size": 1,
-    "context_parallel_size": 1,
-    "expert_tensor_parallel_size": 1,
-    "expert_model_parallel_size": int(os.environ["EXPERT_MODEL_PARALLEL_SIZE"]),
-}, topology
+assert profile_topology == profile["topology"]
+assert topology["num_nodes"] == int(os.environ["BENCHMARK_NUM_NODES"])
+assert topology["gpus_per_node"] == int(os.environ["BENCHMARK_GPUS_PER_NODE"])
+assert topology["segment_size"] == expected_config_segment
+assert topology["expert_model_parallel_size"] == int(
+    os.environ["EXPERT_MODEL_PARALLEL_SIZE"]
+)
+profile_workload = {
+    "train_global_batch_size": on_config["policy"]["train_global_batch_size"],
+    "train_micro_batch_size": on_config["policy"]["train_micro_batch_size"],
+    "logprob_batch_size": on_config["policy"]["logprob_batch_size"],
+    "max_total_sequence_length": on_config["policy"]["max_total_sequence_length"],
+    "sequence_packing_enabled": on_config["policy"]["sequence_packing"]["enabled"],
+    "num_prompts_per_step": on_config["grpo"]["num_prompts_per_step"],
+    "num_generations_per_prompt": on_config["grpo"]["num_generations_per_prompt"],
+}
+assert profile_workload == profile["workload"]
+assert on_config["policy"]["model_name"] == profile["artifacts"]["model_repo_id"]
 fixed_config_paths = (
     "policy.megatron_cfg.moe_grouped_gemm",
     "policy.megatron_cfg.moe_router_dtype",
     "policy.megatron_cfg.use_transformer_engine_op_fuser",
     "policy.megatron_cfg.env_vars.CUDA_DEVICE_MAX_CONNECTIONS",
     "policy.megatron_cfg.moe_mlp_glu_interleave_size",
+    "policy.megatron_cfg.moe_token_dispatcher_type",
+    "policy.megatron_cfg.moe_flex_dispatcher_backend",
+    "policy.megatron_cfg.moe_hybridep_num_sms_preprocessing",
+    "policy.megatron_cfg.offload_modules",
     "policy.megatron_cfg.expert_tensor_parallel_size",
     "policy.megatron_cfg.fp8_cfg.enabled",
     "policy.megatron_cfg.fp8_cfg.fp8_recipe",
     "policy.megatron_cfg.fp8_cfg.fp8_param",
+    "policy.megatron_cfg.activation_checkpointing",
+    "policy.megatron_cfg.recompute_granularity",
+    "policy.megatron_cfg.recompute_method",
+    "policy.megatron_cfg.recompute_modules",
     "policy.megatron_cfg.overlap_moe_expert_parallel_comm",
     "policy.megatron_cfg.high_priority_a2a_comm_stream",
     "policy.megatron_cfg.delay_wgrad_compute",
@@ -1051,6 +1140,10 @@ for arm in timing_order:
         ]
         == 32
     )
+    assert fixed_config_evidence[arm]["policy.megatron_cfg.moe_token_dispatcher_type"] == "flex"
+    assert fixed_config_evidence[arm]["policy.megatron_cfg.moe_flex_dispatcher_backend"] == "hybridep"
+    assert fixed_config_evidence[arm]["policy.megatron_cfg.moe_hybridep_num_sms_preprocessing"] == 32
+    assert fixed_config_evidence[arm]["policy.megatron_cfg.offload_modules"] == []
     assert (
         fixed_config_evidence[arm][
             "policy.megatron_cfg.expert_tensor_parallel_size"
@@ -1066,6 +1159,15 @@ for arm in timing_order:
         fixed_config_evidence[arm]["policy.megatron_cfg.fp8_cfg.fp8_param"]
         is False
     )
+    for config_key, profile_key in (
+        ("activation_checkpointing", "activation_checkpointing"),
+        ("recompute_granularity", "recompute_granularity"),
+        ("recompute_method", "recompute_method"),
+        ("recompute_modules", "recompute_modules"),
+    ):
+        assert fixed_config_evidence[arm][f"policy.megatron_cfg.{config_key}"] == (
+            profile["runtime"][profile_key]
+        )
     assert fixed_config_evidence[arm]["policy.train_global_batch_size"] == int(
         os.environ["TRAIN_GLOBAL_BATCH_SIZE"]
     )
@@ -1095,7 +1197,18 @@ full_cg_config_evidence = {
         "cuda_graph_use_single_mempool": configs_by_arm[arm]["policy"][
             "megatron_cfg"
         ].get("cuda_graph_use_single_mempool"),
+        "cuda_graph_modules": configs_by_arm[arm]["policy"]["megatron_cfg"].get(
+            "cuda_graph_modules"
+        ),
     }
+    for arm in timing_order
+}
+full_cg_dependency_paths = (
+    "policy.megatron_cfg.moe_expert_rank_capacity_factor",
+    "policy.megatron_cfg.moe_paged_stash",
+)
+full_cg_dependency_evidence = {
+    arm: {path: value_at(configs_by_arm[arm], path) for path in full_cg_dependency_paths}
     for arm in timing_order
 }
 for arm in timing_order:
@@ -1110,6 +1223,13 @@ for arm in timing_order:
         assert (
             full_cg_config_evidence[arm]["cuda_graph_use_single_mempool"] is True
         )
+        assert full_cg_config_evidence[arm]["cuda_graph_modules"] == []
+    assert full_cg_dependency_evidence[arm] == {
+        "policy.megatron_cfg.moe_expert_rank_capacity_factor": (
+            1.5 if expected_full_cg else None
+        ),
+        "policy.megatron_cfg.moe_paged_stash": expected_full_cg,
+    }
     for path in (
         "policy.megatron_cfg.overlap_moe_expert_parallel_comm",
         "policy.megatron_cfg.high_priority_a2a_comm_stream",
@@ -1120,9 +1240,14 @@ assert selector_path == NORMALIZED_FEATURE_PATHS[0], selector_path
 base_config_sha256 = canonical_base_config_sha256(on_config)
 hf_cache_manifest = json.loads((result_dir / "hf_cache_manifest.json").read_text())
 expected_artifacts = {
-    "model": ("Qwen/Qwen3-30B-A3B", None),
-    "dataset": ("nvidia/OpenMathInstruct-2", "dataset"),
+    "model": (profile["artifacts"]["model_repo_id"], None),
+    "dataset": (
+        profile["artifacts"]["dataset_repo_id"],
+        profile["artifacts"]["dataset_repo_type"],
+    ),
 }
+assert hf_cache_manifest["profile_id"] == profile["profile_id"]
+assert hf_cache_manifest["profile_sha256"] == profile_sha256
 artifact_revisions = {}
 for label, (expected_repo_id, expected_repo_type) in expected_artifacts.items():
     repository = hf_cache_manifest["repositories"][label]
@@ -1137,9 +1262,9 @@ for label, (expected_repo_id, expected_repo_type) in expected_artifacts.items():
         "revision": revision,
     }
     if label == "dataset":
-        assert repository["split"] == "train_1M"
+        assert repository["split"] == profile["artifacts"]["dataset_split"]
         assert isinstance(repository["num_rows"], int)
-        assert repository["num_rows"] == 1_000_000
+        assert repository["num_rows"] == profile["artifacts"]["dataset_num_rows"]
         artifact_revisions[label].update(
             {"split": repository["split"], "num_rows": repository["num_rows"]}
         )
@@ -1159,6 +1284,12 @@ manifest = {
     "full_cg_enabled": os.environ["NEMO2606_FULL_CG_ENABLED"] == "1",
     "a2a_enabled": os.environ["NEMO2606_A2A_ENABLED"] == "1",
     "triton_cache_scope": os.environ["NEMO2606_TRITON_CACHE_SCOPE"],
+    "model_profile": profile,
+    "model_profile_sha256": profile_sha256,
+    "megatron_checkpoint_scope": "job_shared",
+    "megatron_checkpoint_marker": profile["provenance"][
+        "megatron_checkpoint_marker"
+    ],
     "base_config_sha256": base_config_sha256,
     "artifact_revisions": artifact_revisions,
     "hf_cache_manifest": "hf_cache_manifest.json",
@@ -1173,6 +1304,8 @@ manifest = {
         "context_single_arm" if expected_full_cg else "context_local_cutedsl_pair"
     ),
     "full_cg_config_evidence": full_cg_config_evidence,
+    "full_cg_dependency_evidence": full_cg_dependency_evidence,
+    "full_cg_effect_scope": "dependency_bundle",
     "cross_context_factorial_aggregate_available": False,
     "build_environment": {
         "NVTE_CUDA_ARCHS": os.environ["NVTE_CUDA_ARCHS"],
@@ -1300,6 +1433,7 @@ export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 "${UV_BIN}" run --active --no-sync python \
     "${CONTAINER_REPO_ROOT}/experiments/cutedsl_qwen3_30ba3b_oci_1n4g/prepare_hf_cache.py" \
+    --model-profile "${MODEL_PROFILE_PATH}" \
     --hf-home "${HF_HOME}" \
     --shared-manifest "${SHARED_HF_MANIFEST}" \
     --job-manifest "${CONTAINER_RESULT_DIR}/hf_cache_manifest.json"
@@ -1346,6 +1480,15 @@ run_timing_arm() {
     if [[ ${grpo_exit_code} -ne 0 ]]; then
         find "${RAY_TMPDIR}" -type f -print > "${arm_dir}/ray_artifacts.txt" 2>/dev/null || true
         return "${grpo_exit_code}"
+    fi
+
+    mapfile -t checkpoint_markers < <(
+        find "${MEGATRON_CHECKPOINT_ROOT}" -path \
+            "*/${CUTEDSL_MEGATRON_CHECKPOINT_MARKER}" -type f -print
+    )
+    if ((${#checkpoint_markers[@]} != 1)); then
+        echo "[ERROR] Expected exactly one completed shared Megatron checkpoint; found ${#checkpoint_markers[@]}." >&2
+        return 1
     fi
 
     "${UV_BIN}" run --active --no-sync tests/json_dump_tb_logs.py \

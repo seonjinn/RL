@@ -597,7 +597,7 @@ def _run_functional_summarizer(
     )
 
 
-def test_multinode_recipe_has_ep8_and_two_local_microbatches() -> None:
+def test_multinode_recipe_has_noncolocated_ep4_and_two_local_microbatches() -> None:
     config = OmegaConf.to_container(load_config(RECIPE), resolve=True)
     assert isinstance(config, dict)
     policy = config["policy"]
@@ -608,7 +608,12 @@ def test_multinode_recipe_has_ep8_and_two_local_microbatches() -> None:
         * megatron["pipeline_model_parallel_size"]
         * megatron["context_parallel_size"]
     )
-    data_parallel_size = world_size // model_parallel_size
+    generation = policy["generation"]["colocated"]
+    generation_gpu_count = (
+        generation["resources"]["num_nodes"] * generation["resources"]["gpus_per_node"]
+    )
+    policy_gpu_count = world_size - generation_gpu_count
+    data_parallel_size = policy_gpu_count // model_parallel_size
     local_microbatches = policy["train_global_batch_size"] // (
         policy["train_micro_batch_size"] * data_parallel_size
     )
@@ -619,16 +624,18 @@ def test_multinode_recipe_has_ep8_and_two_local_microbatches() -> None:
         "num_nodes": 2,
         "gpus_per_node": 4,
     }
-    assert config["cluster"]["segment_size"] == 2
-    assert megatron["expert_model_parallel_size"] == 8
+    assert config["cluster"]["segment_size"] is None
+    assert generation["enabled"] is False
+    assert policy_gpu_count == 4
+    assert megatron["expert_model_parallel_size"] == 4
     assert megatron["expert_tensor_parallel_size"] == 1
-    assert policy["train_global_batch_size"] == 16
+    assert policy["train_global_batch_size"] == 8
     assert policy["train_micro_batch_size"] == 1
     assert local_microbatches == 2
     assert policy["dynamic_batching"]["enabled"] is False
     assert policy["sequence_packing"]["enabled"] is False
     assert policy["max_total_sequence_length"] == 1024
-    assert config["grpo"]["num_prompts_per_step"] == 8
+    assert config["grpo"]["num_prompts_per_step"] == 4
     assert config["grpo"]["num_generations_per_prompt"] == 2
     assert (
         config["grpo"]["num_prompts_per_step"]
@@ -893,7 +900,7 @@ def test_submitter_forces_noneditable_local_packages_before_ray_start(
     factorial_exports = _capture_submitter_exports(tmp_path, functional_gate=False)
 
     assert len(functional_exports) == 1
-    assert len(factorial_exports) == 6
+    assert len(factorial_exports) == 12
     assert {
         export["uv_no_editable"] for export in functional_exports + factorial_exports
     } == {"1"}
@@ -1410,7 +1417,9 @@ printf '%s@%s\n' "$CUTEDSL_SUBMISSION_GIT_BRANCH" "$CUTEDSL_SUBMISSION_GIT_SHA"
 
 def test_submitter_marks_full_cg_cutedsl_off_as_not_applicable() -> None:
     source = SUBMITTER.read_text()
-    assert 'CONTEXTS="${NEMO2606_FACTORIAL_CONTEXTS:-g0a0,g0a1}"' in source
+    assert (
+        'CONTEXTS="${NEMO2606_FACTORIAL_CONTEXTS:-${CUTEDSL_PROFILE_DEFAULT_CONTEXTS}}"'
+    ) in source
     assert 'REPLICATES="${NEMO2606_FACTORIAL_REPLICATES:-3}"' in source
     assert 'WARMUP_UPDATES="${NEMO2606_FACTORIAL_WARMUP_UPDATES:-5}"' in source
     assert 'MEASURED_UPDATES="${NEMO2606_FACTORIAL_MEASURED_UPDATES:-20}"' in source
@@ -1431,6 +1440,7 @@ def _run_non_test_factorial_submitter(
     tmp_path: Path,
     *,
     fail_at_submission: int | None = None,
+    include_feature_capabilities: bool = True,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     repo = tmp_path / "repo"
     experiment = repo / EXPERIMENT_DIR.relative_to(PROJECT_ROOT)
@@ -1438,6 +1448,29 @@ def _run_non_test_factorial_submitter(
     (experiment / "cluster_profiles").mkdir()
     shutil.copy2(SUBMITTER, experiment / SUBMITTER.name)
     shutil.copy2(PROFILE_LOADER, experiment / "lib/cluster_profile.sh")
+    feature_capability_exports = ""
+    if include_feature_capabilities:
+        feature_capability_exports = """
+    print("export CUTEDSL_PROFILE_ALLOW_FULL_CG=true")
+    print("export CUTEDSL_PROFILE_ALLOW_A2A=true")"""
+    (experiment / "lib/model_profile.py").write_text(
+        f"""#!/usr/bin/env python3
+import sys
+
+if sys.argv[1] == "shell":
+    print("export CUTEDSL_PROFILE_DEFAULT_CONTEXTS=g0a0,g0a1")
+    print("export CUTEDSL_PROFILE_RECIPE=synthetic.yaml")
+    print("export CUTEDSL_PROFILE_NUM_NODES=2")
+    print("export CUTEDSL_PROFILE_GPUS_PER_NODE=4")
+    print("export CUTEDSL_PROFILE_SEGMENT_SIZE=2")
+    print("export CUTEDSL_PROFILE_TRAIN_GLOBAL_BATCH_SIZE=8")
+    print("export CUTEDSL_PROFILE_EP=4")
+    print("export CUTEDSL_PROFILE_NUM_PROMPTS_PER_STEP=8")
+{feature_capability_exports}
+elif sys.argv[1] != "validate":
+    raise SystemExit(2)
+"""
+    )
     shutil.copy2(
         EXPERIMENT_DIR / "cluster_profiles/pre_tyche.sh",
         experiment / "cluster_profiles/pre_tyche.sh",
@@ -1558,6 +1591,17 @@ def test_submitter_does_not_finalize_partial_cohort(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert not _cohort_submission_files(submission_dir)
+
+
+def test_submitter_cleanup_preserves_profile_contract_failure(tmp_path: Path) -> None:
+    result, submission_dir = _run_non_test_factorial_submitter(
+        tmp_path,
+        include_feature_capabilities=False,
+    )
+
+    assert result.returncode != 0
+    assert "selected profile does not allow full-iteration CUDA Graph" in result.stderr
+    assert not _cohort_submission_files(submission_dir)
     assert not list(submission_dir.glob("*.tmp.*"))
 
 
@@ -1633,22 +1677,29 @@ print(f"mock-{record['context']}-{record['replicate']}")
     )
     assert result.returncode == 0, result.stderr
     calls = [json.loads(line) for line in calls_path.read_text().splitlines()]
-    assert len(calls) == 6
+    assert len(calls) == 12
     assert [call["context"] for call in calls] == [
         "g0a0",
+        "g1a0",
         "g0a1",
+        "g1a1",
+        "g1a0",
         "g0a1",
+        "g1a1",
         "g0a0",
-        "g0a0",
         "g0a1",
+        "g1a1",
+        "g0a0",
+        "g1a0",
     ]
-    for context in ("g0a0", "g0a1"):
+    for context in ("g0a0", "g1a0", "g0a1", "g1a1"):
         context_calls = [call for call in calls if call["context"] == context]
-        assert [call["order"] for call in context_calls] == [
-            "on,off",
-            "off,on",
-            "on,off",
-        ]
+        expected_orders = (
+            ["on", "on", "on"]
+            if context.startswith("g1")
+            else ["on,off", "off,on", "on,off"]
+        )
+        assert [call["order"] for call in context_calls] == expected_orders
         assert [call["replicate"] for call in context_calls] == ["0", "1", "2"]
     for call in calls:
         assert call["existing_ray"] == "1"
@@ -1671,6 +1722,11 @@ print(f"mock-{record['context']}-{record['replicate']}")
         assert "--from-slurm-env" in call["failure_command"]
         assert ".venv" not in call["failure_command"]
         assert call["failure_diagnostic_timeout_seconds"] == "60"
+        assert call["train_global_batch_size"] == "8"
+        assert call["expert_model_parallel_size"] == "4"
+        assert call["num_prompts_per_step"] == "4"
+        assert call["training_gpu_count"] == "4"
+        assert call["config_segment_size"] == "null"
         syntax = subprocess.run(
             ["bash", "-n", "-c", call["failure_command"]],
             capture_output=True,
@@ -1698,26 +1754,9 @@ print(f"mock-{record['context']}-{record['replicate']}")
         capture_output=True,
         text=True,
     )
-    assert all_contexts.returncode == 0, all_contexts.stderr
-    all_calls = [json.loads(line) for line in calls_path.read_text().splitlines()]
-    assert len(all_calls) == 12
-    for context in ("g0a0", "g1a0", "g0a1", "g1a1"):
-        context_calls = [call for call in all_calls if call["context"] == context]
-        expected_orders = (
-            ["on", "on", "on"]
-            if context.startswith("g1")
-            else ["on,off", "off,on", "on,off"]
-        )
-        assert [call["order"] for call in context_calls] == expected_orders
-        assert [call["replicate"] for call in context_calls] == ["0", "1", "2"]
-        assert {call["recipe"] for call in context_calls} == {
-            str(FULL_CG_RECIPE.relative_to(PROJECT_ROOT))
-        }
-        assert {call["train_global_batch_size"] for call in context_calls} == {"8"}
-        assert {call["expert_model_parallel_size"] for call in context_calls} == {"4"}
-        assert {call["num_prompts_per_step"] for call in context_calls} == {"4"}
-        assert {call["training_gpu_count"] for call in context_calls} == {"4"}
-        assert {call["config_segment_size"] for call in context_calls} == {"null"}
+    assert all_contexts.returncode != 0
+    assert "does not match selected profile value" in all_contexts.stderr
+    assert not calls_path.exists()
 
 
 def test_official_submitter_exports_matched_4n4g_performance_jobs(
@@ -1824,7 +1863,7 @@ print(f"mock-{record['context']}-{record['replicate']}")
         "expected_expert_model_parallel_size",
     ),
     (
-        (SUBMITTER, "2", "2", "16", "8"),
+        (SUBMITTER, "2", "2", "8", "4"),
         (OFFICIAL_SUBMITTER, "4", "4", "2048", "16"),
     ),
 )
@@ -1922,8 +1961,8 @@ print("mock-functional")
     ("context", "expected_full_cg", "expected_a2a", "expected_updates"),
     (
         ("g0a0", "0", "0", "3"),
-        ("g0a1", "0", "1", "3"),
         ("g1a0", "1", "0", "6"),
+        ("g0a1", "0", "1", "3"),
         ("g1a1", "1", "1", "6"),
     ),
 )
@@ -1975,19 +2014,6 @@ print("mock-functional")
             "NEMO2606_FUNCTIONAL_CONTEXT": context,
         }
     )
-    if context.startswith("g1"):
-        env.update(
-            {
-                "NEMO2606_FACTORIAL_RECIPE": str(
-                    FULL_CG_RECIPE.relative_to(PROJECT_ROOT)
-                ),
-                "NEMO2606_FACTORIAL_TRAIN_GLOBAL_BATCH_SIZE": "4",
-                "NEMO2606_FACTORIAL_EXPERT_MODEL_PARALLEL_SIZE": "4",
-                "NEMO2606_FACTORIAL_TRAINING_GPU_COUNT": "4",
-                "NEMO2606_FACTORIAL_CONFIG_SEGMENT_SIZE": "null",
-            }
-        )
-
     result = subprocess.run(
         ["bash", str(SUBMITTER), "--test-only"],
         cwd=PROJECT_ROOT,
@@ -2004,26 +2030,47 @@ print("mock-functional")
             "context": context,
             "full_cg": expected_full_cg,
             "a2a": expected_a2a,
-            "training_gpu_count": "4" if context.startswith("g1") else "8",
-            "config_segment_size": "null" if context.startswith("g1") else "2",
+            "training_gpu_count": "4",
+            "config_segment_size": "null",
         }
     ]
 
 
-def test_submitter_requires_explicit_noncolocated_topology_for_full_cg(
+def test_submitter_uses_profile_noncolocated_topology_for_full_cg(
     tmp_path: Path,
 ) -> None:
     mock_bin = tmp_path / "bin"
     mock_bin.mkdir()
+    calls_path = tmp_path / "calls.txt"
     mock_sbatch = mock_bin / "sbatch"
-    mock_sbatch.write_text("#!/bin/bash\nexit 0\n")
+    mock_sbatch.write_text(
+        """#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+
+payload_arg = next(arg for arg in sys.argv[1:] if arg.startswith("--export-file="))
+payload = {}
+for entry in Path(payload_arg.split("=", 1)[1]).read_bytes().split(b"\\0"):
+    if entry:
+        key, value = entry.decode().split("=", 1)
+        payload[key] = value
+with Path(os.environ["MOCK_SBATCH_CALLS"]).open("a") as output:
+    output.write(
+        f"{payload['CUTEDSL_BENCHMARK_TRAINING_GPU_COUNT']}:"
+        f"{payload['CUTEDSL_BENCHMARK_CONFIG_SEGMENT_SIZE']}\\n"
+    )
+"""
+    )
     mock_sbatch.chmod(0o755)
     env = os.environ.copy()
     env.update(
         {
             "PATH": f"{mock_bin}:{env['PATH']}",
+            "MOCK_SBATCH_CALLS": str(calls_path),
             "CUTEDSL_CLUSTER_PROFILE": "pre_tyche",
             "NEMO2606_FACTORIAL_CONTEXTS": "g1a0",
+            "NEMO2606_FACTORIAL_REPLICATES": "3",
         }
     )
 
@@ -2035,8 +2082,8 @@ def test_submitter_requires_explicit_noncolocated_topology_for_full_cg(
         text=True,
     )
 
-    assert result.returncode != 0
-    assert "requires explicit NEMO2606_FACTORIAL_TRAINING_GPU_COUNT" in result.stderr
+    assert result.returncode == 0, result.stderr
+    assert calls_path.read_text().splitlines() == ["4:null"] * 3
 
 
 def test_functional_job_names_are_unique_across_submissions(tmp_path: Path) -> None:
@@ -2083,7 +2130,7 @@ print("mock-functional")
     assert all("-n2606.functional.g0a0." in job_name for job_name in job_names)
 
 
-def test_submitter_does_not_require_project_python_environment(tmp_path: Path) -> None:
+def test_submitter_requires_profile_validator_before_submission(tmp_path: Path) -> None:
     mock_bin = tmp_path / "bin"
     mock_bin.mkdir()
     uv_marker = tmp_path / "uv-called"
@@ -2110,8 +2157,8 @@ def test_submitter_does_not_require_project_python_environment(tmp_path: Path) -
         text=True,
     )
 
-    assert result.returncode == 0, result.stderr
-    assert not uv_marker.exists()
+    assert result.returncode != 0
+    assert uv_marker.exists()
 
 
 def test_full_cg_preflight_checks_resolved_recipe_allocation_not_source_text() -> None:
@@ -2130,7 +2177,8 @@ def test_full_cg_preflight_checks_resolved_recipe_allocation_not_source_text() -
     assert '"resource_allocation": {' in payload_source
     assert '"policy_training_gpu_count": expected_policy_gpu_count' in payload_source
     assert "selected_recipe_allocation" not in submitter_source
-    assert "uv run --no-sync python" not in submitter_source
+    assert "PROFILE_PYTHON=(uv run --no-sync python)" in submitter_source
+    assert 'lib/model_profile.py" validate' in submitter_source
     assert (
         'grep -q "colocated generation/refit is not supported"' not in submitter_source
     )
@@ -2754,10 +2802,58 @@ def test_performance_payload_accepts_only_cutedsl_on_for_full_cg() -> None:
         '"full_cg_config_evidence": full_cg_config_evidence',
         '"cuda_graph_warmup_steps"',
         '"cuda_graph_use_single_mempool"',
+        '"cuda_graph_modules"',
         'os.environ["CUDA_GRAPH_WARMUP_STEPS"]',
     )
     for fragment in required:
         assert fragment in source, fragment
+
+
+def test_matrix_records_hybridep_static_and_full_cg_dependency_contracts() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+
+    static_fields = {
+        "policy.megatron_cfg.moe_token_dispatcher_type": '"flex"',
+        "policy.megatron_cfg.moe_flex_dispatcher_backend": '"hybridep"',
+        "policy.megatron_cfg.moe_hybridep_num_sms_preprocessing": "32",
+        "policy.megatron_cfg.offload_modules": "[]",
+    }
+    for path, expected in static_fields.items():
+        assert f'"{path}",' in source
+        assert f'fixed_config_evidence[arm]["{path}"] == {expected}' in source
+
+    assert (
+        'FULL_CG_CAPACITY_OVERRIDE="policy.megatron_cfg.moe_expert_rank_capacity_factor=null"'
+        in source
+    )
+    assert (
+        'FULL_CG_PAGED_STASH_OVERRIDE="policy.megatron_cfg.moe_paged_stash=false"'
+        in source
+    )
+    assert (
+        'FULL_CG_CAPACITY_OVERRIDE="policy.megatron_cfg.moe_expert_rank_capacity_factor=1.5"'
+        in source
+    )
+    assert (
+        'FULL_CG_PAGED_STASH_OVERRIDE="policy.megatron_cfg.moe_paged_stash=true"'
+        in source
+    )
+    assert '"full_cg_dependency_evidence": full_cg_dependency_evidence' in source
+    assert '"full_cg_effect_scope": "dependency_bundle"' in source
+    assert '"policy.megatron_cfg.cuda_graph_modules=[]"' in source
+    assert '"policy.megatron_cfg.cuda_graph_modules",' in source
+    assert 'full_cg_config_evidence[arm]["cuda_graph_modules"] == []' in source
+    for recompute_field in (
+        "activation_checkpointing",
+        "recompute_granularity",
+        "recompute_method",
+        "recompute_modules",
+    ):
+        assert f'"policy.megatron_cfg.{recompute_field}",' in source
+        assert f'("{recompute_field}", "{recompute_field}")' in source
+    assert 'profile["runtime"][profile_key]' in source
+    assert '"policy.megatron_cfg.moe_expert_rank_capacity_factor",' in source
+    assert '"policy.megatron_cfg.moe_paged_stash",' in source
 
 
 def test_a2a_performance_requires_two_local_microbatches() -> None:

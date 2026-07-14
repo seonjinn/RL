@@ -19,6 +19,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 readonly SCRIPT_DIR
 
 export NEMO2606_FACTORIAL_CONTEXTS="${NEMO2606_FACTORIAL_CONTEXTS:-g0a0}"
+export NEMO2606_MODEL_PROFILE="${SCRIPT_DIR}/model_profiles/qwen3_30ba3b_4n4g.json"
 export NEMO2606_FACTORIAL_RECIPE="examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-megatron-mxfp8-cutedsl.yaml"
 export NEMO2606_FACTORIAL_NUM_NODES=4
 export NEMO2606_FACTORIAL_GPUS_PER_NODE=4

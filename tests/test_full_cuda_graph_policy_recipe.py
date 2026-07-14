@@ -28,12 +28,15 @@ PERFORMANCE_RECIPES = CONFIGS / "recipes/llm/performance"
 PARENT_NAME = "grpo-qwen3-30ba3b-1n4g-megatron-mxfp8-cutedsl"
 RECIPE_NAME = "grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-full-cg-noncolocated"
 RECIPE = PERFORMANCE_RECIPES / f"{RECIPE_NAME}.yaml"
+FACTORIAL_RECIPE = (
+    PERFORMANCE_RECIPES / "grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-factorial.yaml"
+)
 DISABLED_SUITE = PROJECT_ROOT / "tests/test_suites/disabled.txt"
 LAUNCH = PROJECT_ROOT / "tools/launch"
 FEATURE_LAUNCHERS = {
     "grpo-qwen3-30ba3b-1n4g-megatron-mxfp8-cutedsl": (1, 4, 3, None),
     "grpo-qwen3-30ba3b-1n4g-megatron-mxfp8-a2a-overlap": (1, 4, 3, None),
-    "grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-factorial": (2, 4, 3, 2),
+    "grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-factorial": (2, 4, 3, None),
     "grpo-qwen3-30ba3b-4n4g-megatron-mxfp8-cutedsl": (4, 4, 3, 4),
     RECIPE_NAME: (2, 4, 6, None),
 }
@@ -93,6 +96,27 @@ def test_full_cuda_graph_recipe_has_the_non_factorial_parent() -> None:
     assert raw["policy"]["megatron_cfg"]["expert_model_parallel_size"] != 8
 
 
+def test_factorial_recipe_has_controlled_noncolocated_eager_baseline() -> None:
+    config = _load_resolved(FACTORIAL_RECIPE)
+    policy = config["policy"]
+    megatron = policy["megatron_cfg"]
+
+    assert config["cluster"]["segment_size"] is None
+    assert policy["generation"]["colocated"] == {
+        "enabled": False,
+        "resources": {"num_nodes": 1, "gpus_per_node": 4},
+    }
+    assert policy["train_global_batch_size"] == 8
+    assert config["grpo"]["num_prompts_per_step"] == 4
+    assert config["grpo"]["num_generations_per_prompt"] == 2
+    assert megatron["expert_model_parallel_size"] == 4
+    assert megatron["cuda_graph_impl"] == "none"
+    assert megatron["moe_token_dispatcher_type"] == "flex"
+    assert megatron["moe_flex_dispatcher_backend"] == "hybridep"
+    assert megatron["moe_expert_rank_capacity_factor"] is None
+    assert megatron["moe_paged_stash"] is False
+
+
 def test_full_cuda_graph_recipe_has_fixed_policy_shape_and_topology() -> None:
     config = _load_resolved(RECIPE)
     policy = config["policy"]
@@ -136,8 +160,15 @@ def test_full_cuda_graph_recipe_has_capture_and_cutedsl_prerequisites() -> None:
     megatron = config["policy"]["megatron_cfg"]
 
     assert megatron["cuda_graph_impl"] == "full_iteration"
+    assert megatron["cuda_graph_modules"] == []
     assert megatron["cuda_graph_warmup_steps"] == 3
     assert megatron["cuda_graph_use_single_mempool"] is True
+    assert megatron["moe_token_dispatcher_type"] == "flex"
+    assert megatron["moe_flex_dispatcher_backend"] == "hybridep"
+    assert megatron["moe_hybridep_num_sms"] == 16
+    assert megatron["moe_hybridep_num_sms_preprocessing"] == 32
+    assert megatron["moe_pad_experts_for_cuda_graph_inference"] is True
+    assert megatron["offload_modules"] == []
     assert {
         key: megatron[key]
         for key in (
@@ -148,14 +179,11 @@ def test_full_cuda_graph_recipe_has_capture_and_cutedsl_prerequisites() -> None:
             "moe_paged_stash_buffer_size_factor_cpu",
         )
     } == {
-        key: MCORE_DISABLED_DEFAULTS[key]
-        for key in (
-            "moe_expert_rank_capacity_factor",
-            "moe_paged_stash",
-            "moe_paged_stash_page_size",
-            "moe_paged_stash_buffer_size_factor_cuda",
-            "moe_paged_stash_buffer_size_factor_cpu",
-        )
+        "moe_expert_rank_capacity_factor": 1.5,
+        "moe_paged_stash": True,
+        "moe_paged_stash_page_size": 64,
+        "moe_paged_stash_buffer_size_factor_cuda": 1.2,
+        "moe_paged_stash_buffer_size_factor_cpu": 1.0,
     }
     assert megatron["moe_grouped_gemm"] is True
     assert megatron["use_transformer_engine_op_fuser"] is True

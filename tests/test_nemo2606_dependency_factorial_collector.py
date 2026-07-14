@@ -283,6 +283,12 @@ def _create_job(
 
     fixed_config = {
         "policy.megatron_cfg.moe_grouped_gemm": True,
+        "policy.megatron_cfg.use_transformer_engine_op_fuser": True,
+        "policy.megatron_cfg.moe_mlp_glu_interleave_size": 32,
+        "policy.megatron_cfg.moe_token_dispatcher_type": "flex",
+        "policy.megatron_cfg.moe_flex_dispatcher_backend": "hybridep",
+        "policy.megatron_cfg.moe_hybridep_num_sms_preprocessing": 32,
+        "policy.megatron_cfg.offload_modules": [],
         "policy.megatron_cfg.env_vars.CUDA_DEVICE_MAX_CONNECTIONS": "32",
         "policy.megatron_cfg.overlap_moe_expert_parallel_comm": a2a_enabled,
         "policy.megatron_cfg.high_priority_a2a_comm_stream": a2a_enabled,
@@ -352,6 +358,9 @@ def _create_job(
                 "segment_size": None,
                 "tensor_model_parallel_size": 1,
                 "pipeline_model_parallel_size": 1,
+                "virtual_pipeline_model_parallel_size": None,
+                "num_layers_in_first_pipeline_stage": None,
+                "num_layers_in_last_pipeline_stage": None,
                 "context_parallel_size": 1,
                 "expert_tensor_parallel_size": 1,
                 "expert_model_parallel_size": 4,
@@ -373,9 +382,20 @@ def _create_job(
                     "cuda_graph_use_single_mempool": (
                         True if full_cg_enabled else None
                     ),
+                    "cuda_graph_modules": [] if full_cg_enabled else None,
                 }
                 for arm in order
             },
+            "full_cg_dependency_evidence": {
+                arm: {
+                    "policy.megatron_cfg.moe_expert_rank_capacity_factor": (
+                        1.5 if full_cg_enabled else None
+                    ),
+                    "policy.megatron_cfg.moe_paged_stash": full_cg_enabled,
+                }
+                for arm in order
+            },
+            "full_cg_effect_scope": "dependency_bundle",
             "resolved_metric_names": {arm: CANONICAL_METRICS for arm in order},
         },
     )
@@ -843,6 +863,52 @@ def test_collector_rejects_full_cg_warmup_config_mismatch(tmp_path: Path) -> Non
 
     assert result.returncode != 0
     assert "full-CG warmup steps must equal 3" in result.stderr
+
+
+def test_collector_rejects_full_cg_module_scope_mismatch(tmp_path: Path) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    job_id = _job_id(submission, "g1a0", 0)
+    manifest_path = result_root / job_id / "benchmark_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["full_cg_config_evidence"]["on"]["cuda_graph_modules"] = ["decoder"]
+    _write_json(manifest_path, manifest)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode != 0
+    assert "full-CG module scope must be empty" in result.stderr
+
+
+def test_collector_rejects_hybridep_static_config_drift(tmp_path: Path) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    job_id = _job_id(submission, "g0a0", 0)
+    manifest_path = result_root / job_id / "benchmark_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["fixed_config_evidence"]["on"][
+        "policy.megatron_cfg.moe_flex_dispatcher_backend"
+    ] = "deepep"
+    _write_json(manifest_path, manifest)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode != 0
+    assert "HybridEP static config" in result.stderr
+
+
+def test_collector_rejects_full_cg_dependency_mismatch(tmp_path: Path) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    job_id = _job_id(submission, "g1a0", 0)
+    manifest_path = result_root / job_id / "benchmark_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["full_cg_dependency_evidence"]["on"][
+        "policy.megatron_cfg.moe_expert_rank_capacity_factor"
+    ] = None
+    _write_json(manifest_path, manifest)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode != 0
+    assert "full-CG dependency evidence" in result.stderr
 
 
 def test_collector_rejects_nonexclusive_matched_config_diff(tmp_path: Path) -> None:

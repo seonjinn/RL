@@ -30,6 +30,11 @@ from pathlib import Path
 from typing import Any
 
 
+DEFAULT_MODEL_PROFILE = (
+    Path(__file__).resolve().parent / "model_profiles" / "qwen3_30ba3b_2n4g.json"
+)
+
+
 class CollectorError(ValueError):
     """Raised when factorial evidence is incomplete or inconsistent."""
 
@@ -82,6 +87,18 @@ A2A_CONFIG_FIELDS = (
     "policy.megatron_cfg.overlap_moe_expert_parallel_comm",
     "policy.megatron_cfg.high_priority_a2a_comm_stream",
     "policy.megatron_cfg.delay_wgrad_compute",
+)
+HYBRIDEP_STATIC_CONFIG = {
+    "policy.megatron_cfg.use_transformer_engine_op_fuser": True,
+    "policy.megatron_cfg.moe_mlp_glu_interleave_size": 32,
+    "policy.megatron_cfg.moe_token_dispatcher_type": "flex",
+    "policy.megatron_cfg.moe_flex_dispatcher_backend": "hybridep",
+    "policy.megatron_cfg.moe_hybridep_num_sms_preprocessing": 32,
+    "policy.megatron_cfg.offload_modules": [],
+}
+FULL_CG_DEPENDENCY_FIELDS = (
+    "policy.megatron_cfg.moe_expert_rank_capacity_factor",
+    "policy.megatron_cfg.moe_paged_stash",
 )
 CUTEDSL_SELECTOR_PATH = "policy.megatron_cfg.env_vars.NVTE_CUTEDSL_FUSED_GROUPED_MLP"
 REQUIRED_CANONICAL_METRICS = frozenset(
@@ -432,9 +449,23 @@ def _validate_identity(manifest: dict[str, Any], job_id: str) -> None:
     revisions = manifest.get("artifact_revisions")
     if not isinstance(revisions, dict) or set(revisions) != {"model", "dataset"}:
         raise CollectorError(f"job {job_id} artifact revisions are incomplete")
+    model_profile = manifest.get("model_profile")
+    if model_profile is None:
+        model_profile = json.loads(DEFAULT_MODEL_PROFILE.read_text(encoding="utf-8"))
+    if not isinstance(model_profile, dict):
+        raise CollectorError(f"job {job_id} model profile is invalid")
+    if "model_profile" in manifest:
+        profile_digest = hashlib.sha256(
+            _canonical_json(model_profile).encode("utf-8")
+        ).hexdigest()
+        if manifest.get("model_profile_sha256") != profile_digest:
+            raise CollectorError(f"job {job_id} model profile digest differs")
+    artifacts = model_profile.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise CollectorError(f"job {job_id} model profile artifacts are invalid")
     expected = {
-        "model": ("Qwen/Qwen3-30B-A3B", None),
-        "dataset": ("nvidia/OpenMathInstruct-2", "dataset"),
+        "model": (artifacts.get("model_repo_id"), None),
+        "dataset": (artifacts.get("dataset_repo_id"), "dataset"),
     }
     for label, (repo_id, repo_type) in expected.items():
         record = revisions[label]
@@ -446,7 +477,9 @@ def _validate_identity(manifest: dict[str, Any], job_id: str) -> None:
             raise CollectorError(f"job {job_id} {label} repository identity differs")
         _require_sha(record.get("revision"), 40, f"job {job_id} {label} revision")
     dataset = revisions["dataset"]
-    if dataset.get("split") != "train_1M" or dataset.get("num_rows") != 1_000_000:
+    if dataset.get("split") != artifacts.get("dataset_split") or dataset.get(
+        "num_rows"
+    ) != artifacts.get("dataset_num_rows"):
         raise CollectorError(f"job {job_id} dataset identity differs")
 
 
@@ -465,6 +498,9 @@ def _validate_contract(manifest: dict[str, Any], context: str, job_id: str) -> N
         "segment_size": None,
         "tensor_model_parallel_size": 1,
         "pipeline_model_parallel_size": 1,
+        "virtual_pipeline_model_parallel_size": None,
+        "num_layers_in_first_pipeline_stage": None,
+        "num_layers_in_last_pipeline_stage": None,
         "context_parallel_size": 1,
         "expert_tensor_parallel_size": 1,
         "expert_model_parallel_size": 4,
@@ -518,6 +554,11 @@ def _validate_contract(manifest: dict[str, Any], context: str, job_id: str) -> N
             raise CollectorError(f"job {job_id} fixed-config GBS must equal 8")
         if arm_config.get("policy.train_micro_batch_size") != 1:
             raise CollectorError(f"job {job_id} fixed-config MBS must equal 1")
+        if any(
+            arm_config.get(field) != expected
+            for field, expected in HYBRIDEP_STATIC_CONFIG.items()
+        ):
+            raise CollectorError(f"job {job_id} HybridEP static config differs")
         logprob_contract = {
             "loss_fn.force_on_policy_ratio": True,
             "grpo.seq_logprob_error_threshold": None,
@@ -543,8 +584,15 @@ def _validate_contract(manifest: dict[str, Any], context: str, job_id: str) -> N
     for arm in expected_arms:
         record = graph_config[arm]
         expected_impl = "full_iteration" if expected_full_cg else "none"
+        expected_graph_record_keys = {
+            "cuda_graph_impl",
+            "cuda_graph_warmup_steps",
+            "cuda_graph_use_single_mempool",
+            "cuda_graph_modules",
+        }
         if (
             not isinstance(record, dict)
+            or set(record) != expected_graph_record_keys
             or record.get("cuda_graph_impl") != expected_impl
         ):
             raise CollectorError(f"job {job_id} cuda_graph_impl differs from context")
@@ -552,6 +600,33 @@ def _validate_contract(manifest: dict[str, Any], context: str, job_id: str) -> N
             raise CollectorError(f"job {job_id} full-CG single mempool is not enabled")
         if expected_full_cg and record.get("cuda_graph_warmup_steps") != 3:
             raise CollectorError(f"job {job_id} full-CG warmup steps must equal 3")
+        expected_modules = [] if expected_full_cg else None
+        if record.get("cuda_graph_modules") != expected_modules:
+            raise CollectorError(
+                f"job {job_id} full-CG module scope must be empty for full-CG "
+                "and absent for eager execution"
+            )
+    dependency_config = manifest.get("full_cg_dependency_evidence")
+    if (
+        not isinstance(dependency_config, dict)
+        or set(dependency_config) != set(expected_arms)
+        or manifest.get("full_cg_effect_scope") != "dependency_bundle"
+    ):
+        raise CollectorError(f"job {job_id} full-CG dependency evidence differs")
+    expected_dependency_config = {
+        "policy.megatron_cfg.moe_expert_rank_capacity_factor": (
+            1.5 if expected_full_cg else None
+        ),
+        "policy.megatron_cfg.moe_paged_stash": expected_full_cg,
+    }
+    for arm in expected_arms:
+        record = dependency_config[arm]
+        if (
+            not isinstance(record, dict)
+            or set(record) != set(FULL_CG_DEPENDENCY_FIELDS)
+            or record != expected_dependency_config
+        ):
+            raise CollectorError(f"job {job_id} full-CG dependency evidence differs")
 
 
 def _validate_metric_mapping(mapping: Any, *, job_id: str, arm: str) -> dict[str, str]:
@@ -1189,6 +1264,8 @@ def _load_run(
                 for key in (
                     "recipe",
                     "base_config_sha256",
+                    "model_profile",
+                    "model_profile_sha256",
                     "artifact_revisions",
                     "warmup_updates",
                     "measured_updates",

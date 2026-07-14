@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import importlib.util
 import json
 import os
 import re
@@ -26,21 +27,28 @@ import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-MODEL_REPO_ID = "Qwen/Qwen3-30B-A3B"
-DATASET_REPO_ID = "nvidia/OpenMathInstruct-2"
-DATASET_SPLIT = "train_1M"
-EXPECTED_DATASET_ROWS = 1_000_000
+if TYPE_CHECKING:
+    from lib.model_profile import ModelProfile
+
 REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
-REPOSITORIES = (
-    ("model", MODEL_REPO_ID, None),
-    ("dataset", DATASET_REPO_ID, "dataset"),
-)
+MODEL_PROFILE_MODULE = Path(__file__).resolve().parent / "lib/model_profile.py"
 
 SnapshotDownload = Callable[..., str]
 DatasetLoad = Callable[..., Any]
 Sleep = Callable[[float], None]
+
+
+def _load_model_profile(path: Path) -> "ModelProfile":
+    spec = importlib.util.spec_from_file_location(
+        "cutedsl_model_profile", MODEL_PROFILE_MODULE
+    )
+    if spec is None or spec.loader is None:
+        raise ValueError(f"Cannot load model profile module: {MODEL_PROFILE_MODULE}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.load_model_profile(path)
 
 
 def _rate_limit_response(error: BaseException) -> Any | None:
@@ -100,11 +108,11 @@ def _snapshot_download_with_retry(
     )
 
 
-def _snapshot_file_count(snapshot: Path) -> int:
-    count = sum(1 for path in snapshot.rglob("*") if path.is_file())
-    if count == 0:
+def _snapshot_size(snapshot: Path) -> tuple[int, int]:
+    files = [path for path in snapshot.rglob("*") if path.is_file()]
+    if not files:
         raise ValueError(f"Hugging Face snapshot contains no files: {snapshot}")
-    return count
+    return len(files), sum(path.stat().st_size for path in files)
 
 
 def _validate_revision(snapshot: Path) -> str:
@@ -125,7 +133,7 @@ def _download_repository(
     *,
     revision: str,
     local_files_only: bool,
-) -> tuple[Path, str, int]:
+) -> tuple[Path, str, int, int]:
     snapshot = Path(
         _snapshot_download_with_retry(
             snapshot_download,
@@ -147,14 +155,15 @@ def _download_repository(
         raise ValueError(
             f"Cached revision for {repo_id} changed: {resolved_revision} != {revision}"
         )
-    return snapshot, resolved_revision, _snapshot_file_count(snapshot)
+    file_count, total_bytes = _snapshot_size(snapshot)
+    return snapshot, resolved_revision, file_count, total_bytes
 
 
 def _read_completed_manifest(path: Path) -> dict[str, Any] | None:
     if not path.is_file():
         return None
     value = json.loads(path.read_text())
-    if not isinstance(value, dict) or value.get("schema_version") != 1:
+    if not isinstance(value, dict) or value.get("schema_version") != 2:
         raise ValueError(f"Invalid shared Hugging Face cache manifest: {path}")
     repositories = value.get("repositories")
     if not isinstance(repositories, dict):
@@ -170,14 +179,15 @@ def _offline_mode_enabled() -> bool:
 
 
 def _load_required_dataset(
+    profile: "ModelProfile",
     hf_home: Path,
     load_dataset: DatasetLoad,
     *,
     revision: str | None,
 ) -> int:
     kwargs: dict[str, Any] = {
-        "path": DATASET_REPO_ID,
-        "split": DATASET_SPLIT,
+        "path": profile.artifacts.dataset_repo_id,
+        "split": profile.artifacts.dataset_split,
         "cache_dir": str(hf_home / "datasets"),
     }
     if revision is not None:
@@ -185,17 +195,20 @@ def _load_required_dataset(
     dataset = _call_with_rate_limit_retry(
         load_dataset,
         kwargs,
-        label=f"{DATASET_REPO_ID}:{DATASET_SPLIT}",
+        label=(
+            f"{profile.artifacts.dataset_repo_id}:{profile.artifacts.dataset_split}"
+        ),
     )
     num_rows = len(dataset)
     if (
         not isinstance(num_rows, int)
         or isinstance(num_rows, bool)
-        or num_rows != EXPECTED_DATASET_ROWS
+        or num_rows != profile.artifacts.dataset_num_rows
     ):
         raise ValueError(
-            f"Materialized dataset {DATASET_REPO_ID}:{DATASET_SPLIT} must contain "
-            f"exactly {EXPECTED_DATASET_ROWS} rows, found {num_rows!r}"
+            f"Materialized dataset {profile.artifacts.dataset_repo_id}:"
+            f"{profile.artifacts.dataset_split} must contain exactly "
+            f"{profile.artifacts.dataset_num_rows} rows, found {num_rows!r}"
         )
     return num_rows
 
@@ -225,6 +238,7 @@ def _write_manifest_atomically(path: Path, manifest: dict[str, Any]) -> None:
 
 
 def prepare_cache(
+    profile: "ModelProfile",
     hf_home: Path,
     shared_manifest: Path,
     snapshot_download: SnapshotDownload,
@@ -238,8 +252,24 @@ def prepare_cache(
     else:
         hf_home.mkdir(parents=True, exist_ok=True)
     completed = _read_completed_manifest(shared_manifest)
+    expected_profile_identity = {
+        "profile_id": profile.profile_id,
+        "profile_sha256": profile.sha256(),
+    }
+    if completed is not None and any(
+        completed.get(key) != value for key, value in expected_profile_identity.items()
+    ):
+        raise ValueError("Shared Hugging Face cache profile identity changed")
     repositories: dict[str, dict[str, Any]] = {}
-    for label, repo_id, repo_type in REPOSITORIES:
+    profile_repositories = (
+        ("model", profile.artifacts.model_repo_id, None),
+        (
+            "dataset",
+            profile.artifacts.dataset_repo_id,
+            profile.artifacts.dataset_repo_type,
+        ),
+    )
+    for label, repo_id, repo_type in profile_repositories:
         existing = completed.get("repositories", {}).get(label) if completed else None
         if completed:
             if not isinstance(existing, dict):
@@ -255,7 +285,7 @@ def prepare_cache(
                 or REVISION_PATTERN.fullmatch(revision) is None
             ):
                 raise ValueError(f"Invalid cached revision for {label}")
-            _, resolved_revision, file_count = _download_repository(
+            _, resolved_revision, file_count, total_bytes = _download_repository(
                 hf_home,
                 repo_id,
                 repo_type,
@@ -265,8 +295,10 @@ def prepare_cache(
             )
             if file_count != existing.get("file_count"):
                 raise ValueError(f"Cached file count changed for {label}")
+            if total_bytes != existing.get("total_bytes"):
+                raise ValueError(f"Cached byte count changed for {label}")
         else:
-            _, resolved_revision, file_count = _download_repository(
+            _, resolved_revision, file_count, total_bytes = _download_repository(
                 hf_home,
                 repo_id,
                 repo_type,
@@ -279,20 +311,23 @@ def prepare_cache(
             "repo_type": repo_type,
             "revision": resolved_revision,
             "file_count": file_count,
+            "total_bytes": total_bytes,
         }
         if label == "dataset":
             if completed:
-                if existing.get("split") != DATASET_SPLIT:
+                assert existing is not None
+                if existing.get("split") != profile.artifacts.dataset_split:
                     raise ValueError("Cached dataset split changed")
                 expected_num_rows = existing.get("num_rows")
                 if (
                     not isinstance(expected_num_rows, int)
                     or isinstance(expected_num_rows, bool)
-                    or expected_num_rows != EXPECTED_DATASET_ROWS
+                    or expected_num_rows != profile.artifacts.dataset_num_rows
                 ):
                     raise ValueError("Invalid cached dataset row count")
                 if offline:
                     num_rows = _load_required_dataset(
+                        profile,
                         hf_home,
                         load_dataset,
                         revision=None,
@@ -303,14 +338,21 @@ def prepare_cache(
                     num_rows = expected_num_rows
             else:
                 num_rows = _load_required_dataset(
+                    profile,
                     hf_home,
                     load_dataset,
                     revision=None if offline else resolved_revision,
                 )
-            repository.update({"split": DATASET_SPLIT, "num_rows": num_rows})
+            repository.update(
+                {"split": profile.artifacts.dataset_split, "num_rows": num_rows}
+            )
         repositories[label] = repository
 
-    manifest = {"schema_version": 1, "repositories": repositories}
+    manifest = {
+        "schema_version": 2,
+        **expected_profile_identity,
+        "repositories": repositories,
+    }
     if completed is not None and manifest != completed:
         raise ValueError(
             "Shared Hugging Face cache manifest changed during verification"
@@ -325,6 +367,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--hf-home", type=Path, required=True)
     parser.add_argument("--shared-manifest", type=Path, required=True)
     parser.add_argument("--job-manifest", type=Path, required=True)
+    parser.add_argument("--model-profile", type=Path, required=True)
     return parser.parse_args()
 
 
@@ -333,9 +376,12 @@ def main() -> int:
     from datasets import load_dataset
     from huggingface_hub import snapshot_download
 
+    profile = _load_model_profile(args.model_profile)
+
     offline = _offline_mode_enabled()
     if offline and args.shared_manifest.is_file():
         manifest = prepare_cache(
+            profile,
             args.hf_home,
             args.shared_manifest,
             snapshot_download,
@@ -351,6 +397,7 @@ def main() -> int:
         with lock_path.open("w") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             manifest = prepare_cache(
+                profile,
                 args.hf_home,
                 args.shared_manifest,
                 snapshot_download,

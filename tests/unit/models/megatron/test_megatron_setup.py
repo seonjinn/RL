@@ -925,6 +925,21 @@ class TestApplyMoeConfig:
         assert "NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN" not in os.environ
         assert "USE_MNNVL" not in os.environ
 
+    def test_hybridep_full_cuda_graph_runtime_fields_are_applied(self) -> None:
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        model_cfg = MagicMock()
+        config = self._base_moe_cfg(
+            moe_flex_dispatcher_backend="hybridep",
+            moe_hybridep_num_sms_preprocessing=32,
+            offload_modules=[],
+        )
+
+        _apply_moe_config(model_cfg, config)
+
+        assert model_cfg.moe_hybridep_num_sms_preprocessing == 32
+        assert model_cfg.offload_modules == []
+
 
 @pytest.mark.mcore
 class TestApplyMtpConfig:
@@ -1145,6 +1160,7 @@ class TestApplyPerformanceConfig:
                 "gradient_accumulation_fusion": False,
                 "use_fused_weighted_squared_relu": False,
                 "cuda_graph_impl": "full_iteration",
+                "cuda_graph_modules": [],
                 "cuda_graph_warmup_steps": 5,
                 "cuda_graph_use_single_mempool": False,
             }
@@ -1153,6 +1169,7 @@ class TestApplyPerformanceConfig:
         _apply_performance_config(model_cfg, config)
 
         assert model_cfg.cuda_graph_impl == "full_iteration"
+        assert model_cfg.cuda_graph_modules == []
         assert model_cfg.cuda_graph_warmup_steps == 5
         assert model_cfg.cuda_graph_use_single_mempool is False
 
@@ -1274,6 +1291,7 @@ class TestApplyPerformanceConfig:
 
         assert model_cfg.recompute_granularity == "selective"
         assert model_cfg.recompute_modules == modules
+        assert model_cfg.recompute_method is None
 
     def test_recompute_granularity_selective_without_modules_uses_mcore_default(self):
         """granularity='selective' without recompute_modules leaves attr untouched (MCore default applies)."""
@@ -1296,7 +1314,7 @@ class TestApplyPerformanceConfig:
 
         assert model_cfg.recompute_granularity == "selective"
         assert not hasattr(model_cfg, "recompute_modules")
-        assert not hasattr(model_cfg, "recompute_method")
+        assert model_cfg.recompute_method is None
         assert not hasattr(model_cfg, "recompute_num_layers")
 
     def test_recompute_granularity_invalid_raises(self):
@@ -2536,9 +2554,10 @@ class TestSetupModelAndOptimizer:
         mock_megatron_cfg.checkpoint.load = None
         mock_megatron_cfg.checkpoint.pretrained_checkpoint = None
 
-        mock_model_chunk = MagicMock()
-        mock_model_chunk.start_param_sync = MagicMock()
-        mock_model = [mock_model_chunk]
+        mock_model_chunks = [MagicMock(), MagicMock()]
+        for model_chunk in mock_model_chunks:
+            model_chunk.start_param_sync = MagicMock()
+        mock_model = mock_model_chunks
         mock_get_model.return_value = mock_model
 
         mock_optimizer = MagicMock()
@@ -2569,7 +2588,10 @@ class TestSetupModelAndOptimizer:
         # Check that pre_wrap_hook is not empty when freeze_moe_router is True
         assert len(call_kwargs.get("pre_wrap_hook", [])) > 0
 
-        assert result.param_sync_func == mock_model_chunk.start_param_sync
+        assert result.model is mock_model
+        assert result.param_sync_func == [
+            model_chunk.start_param_sync for model_chunk in mock_model_chunks
+        ]
 
 
 @pytest.mark.mcore
@@ -2606,12 +2628,17 @@ class TestSetupReferenceModelState:
         mock_megatron_cfg.dist.use_torch_fsdp2 = False
 
         # Create mock model with state dict
-        mock_model = MagicMock()
-        mock_model.state_dict.return_value = {
+        mock_model_0 = MagicMock()
+        mock_model_0.state_dict.return_value = {
             "layer1.weight": torch.tensor([1.0, 2.0]),
             "layer1.bias": torch.tensor([0.1]),
         }
-        mock_get_model.return_value = [mock_model]
+        mock_model_1 = MagicMock()
+        mock_model_1.state_dict.return_value = {
+            "layer1.weight": torch.tensor([3.0, 4.0]),
+            "layer1.bias": torch.tensor([0.2]),
+        }
+        mock_get_model.return_value = [mock_model_0, mock_model_1]
 
         mock_checkpoint_exists.return_value = True
 
@@ -2631,15 +2658,26 @@ class TestSetupReferenceModelState:
         mock_load_checkpoint.assert_called_once()
 
         # Verify model was set to eval mode
-        mock_model.eval.assert_called_once()
+        mock_model_0.eval.assert_called_once()
+        mock_model_1.eval.assert_called_once()
 
         # Verify state dict is returned
         assert isinstance(result, dict)
-        assert "layer1.weight" in result
-        assert "layer1.bias" in result
+        assert set(result) == {
+            "model_chunk_0/layer1.weight",
+            "model_chunk_0/layer1.bias",
+            "model_chunk_1/layer1.weight",
+            "model_chunk_1/layer1.bias",
+        }
+        assert torch.equal(
+            result["model_chunk_0/layer1.weight"], torch.tensor([1.0, 2.0])
+        )
+        assert torch.equal(
+            result["model_chunk_1/layer1.weight"], torch.tensor([3.0, 4.0])
+        )
 
         # Verify tensors are on CPU
-        assert result["layer1.weight"].device.type == "cpu"
+        assert result["model_chunk_0/layer1.weight"].device.type == "cpu"
 
         captured = capsys.readouterr()
         assert "Reference model loaded" in captured.out
@@ -2703,7 +2741,7 @@ class TestFinalizeMegatronSetup:
         mock_megatron_cfg = MagicMock()
         mock_megatron_cfg.model.make_vocab_size_divisible_by = 128
 
-        mock_model = MagicMock()
+        mock_model = [MagicMock(), MagicMock()]
         mock_optimizer = MagicMock()
 
         mock_worker_sharding = MagicMock()
@@ -2745,6 +2783,7 @@ class TestFinalizeMegatronSetup:
 
         # Verify function calls
         mock_update_model_config.assert_called_once()
+        assert mock_update_model_config.call_args.args[0] is mock_model
         mock_build_tokenizer.assert_called_once()
         mock_auto_bridge.from_hf_pretrained.assert_called_once_with(
             "test-model", trust_remote_code=True

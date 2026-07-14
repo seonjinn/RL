@@ -32,13 +32,20 @@ policy:
     expert_tensor_parallel_size: 1
     expert_model_parallel_size: 4
     cuda_graph_impl: full_iteration
+    cuda_graph_modules: []
     cuda_graph_warmup_steps: 3
     cuda_graph_use_single_mempool: true
-    moe_expert_rank_capacity_factor: null
-    moe_paged_stash: false
+    moe_token_dispatcher_type: flex
+    moe_flex_dispatcher_backend: hybridep
+    moe_hybridep_num_sms: 16
+    moe_hybridep_num_sms_preprocessing: 32
+    moe_pad_experts_for_cuda_graph_inference: true
+    moe_expert_rank_capacity_factor: 1.5
+    moe_paged_stash: true
     moe_paged_stash_page_size: 64
-    moe_paged_stash_buffer_size_factor_cuda: 1.10
-    moe_paged_stash_buffer_size_factor_cpu: 0.0
+    moe_paged_stash_buffer_size_factor_cuda: 1.2
+    moe_paged_stash_buffer_size_factor_cpu: 1.0
+    offload_modules: []
     overlap_moe_expert_parallel_comm: false
     high_priority_a2a_comm_stream: false
     delay_wgrad_compute: false

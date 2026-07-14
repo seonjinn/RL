@@ -48,6 +48,7 @@ def _full_cuda_graph_config() -> dict:
         "megatron_cfg": {
             "cuda_graph_impl": "full_iteration",
             "context_parallel_size": 1,
+            "expert_model_parallel_size": 1,
         },
     }
 

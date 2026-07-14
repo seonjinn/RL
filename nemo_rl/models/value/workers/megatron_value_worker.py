@@ -75,6 +75,7 @@ from nemo_rl.models.megatron.train import (
     LossPostProcessor,
     megatron_forward_backward,
 )
+from nemo_rl.models.policy import validate_virtual_pipeline_config
 from nemo_rl.models.policy.utils import get_runtime_env_for_policy_worker
 from nemo_rl.models.policy.workers.base_policy_worker import AbstractPolicyWorker
 from nemo_rl.models.policy.workers.patches import apply_transformer_engine_patch
@@ -282,6 +283,8 @@ class MegatronValueWorkerImpl(AbstractPolicyWorker):
             init_optimizer: Whether to initialize the optimizer.
             worker_sharding_annotations: Sharding topology for distributed training.
         """
+        validate_virtual_pipeline_config(config, component="value worker")
+
         # Must be the first CUDA-touching call in this process.
         # With `RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1` (set by `configure_worker()`),
         gpu_ids = ray.get_gpu_ids()
@@ -380,7 +383,7 @@ class MegatronValueWorkerImpl(AbstractPolicyWorker):
         )
 
         self.mcore_state = model_and_optimizer_state.state
-        self.model = model_and_optimizer_state.model
+        self.model = model_and_optimizer_state.model[0]
         self.optimizer = model_and_optimizer_state.optimizer
         self.scheduler = model_and_optimizer_state.scheduler
         self.checkpointing_context = model_and_optimizer_state.checkpointing_context

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Mapping
 from typing import Any, Literal, NotRequired, TypedDict, Union
 
 from nemo_rl.models.generation.interfaces import GenerationConfig
@@ -333,6 +334,9 @@ class MegatronConfig(TypedDict):
     # only specific modules (see recompute_modules). "selective" typically saves ~10-18GB
     # for MoE models while retaining higher throughput than "full".
     recompute_granularity: NotRequired[Literal["full", "selective"]]
+    # Full recompute uses "uniform". Selective recompute requires null so MCore
+    # does not select the full-recompute scheduling path.
+    recompute_method: NotRequired[Literal["uniform"] | None]
     # Modules to selectively recompute when recompute_granularity="selective".
     # MCore valid options: ["core_attn", "moe_act", "layernorm", "mla_up_proj", "mlp", "moe", "shared_experts"].
     # Defaults to ["core_attn"] when None. Full list and per-module constraints:
@@ -341,6 +345,9 @@ class MegatronConfig(TypedDict):
     recompute_modules: NotRequired[list[str] | None]
     tensor_model_parallel_size: int
     pipeline_model_parallel_size: int
+    # Number of virtual pipeline model chunks per physical pipeline stage.
+    # None disables virtual pipeline parallelism.
+    virtual_pipeline_model_parallel_size: NotRequired[int | None]
     num_layers_in_first_pipeline_stage: int | None
     num_layers_in_last_pipeline_stage: int | None
     context_parallel_size: int
@@ -397,6 +404,9 @@ class MegatronConfig(TypedDict):
     # CUDA-graph implementation.
     # Options: 'none', 'local', 'transformer_engine', 'full_iteration'.
     cuda_graph_impl: NotRequired[str]
+    # Training modules captured by per-layer CUDA graphs. Full-iteration capture
+    # requires an empty list because the outer iteration wrapper owns capture.
+    cuda_graph_modules: NotRequired[list[str]]
     # Number of eager iterations before full-iteration graph capture.
     cuda_graph_warmup_steps: NotRequired[int]
     # Reuse one graph memory pool across full-iteration and optimizer captures.
@@ -431,6 +441,11 @@ class MegatronConfig(TypedDict):
     # See: https://github.com/deepseek-ai/DeepEP/tree/hybrid-ep
     moe_flex_dispatcher_backend: NotRequired[str]
     moe_hybridep_num_sms: NotRequired[int]
+    # SMs assigned to HybridEP's metadata preprocessing kernel.
+    moe_hybridep_num_sms_preprocessing: NotRequired[int]
+    # Fine-grained activation offload targets. Use [] with PagedStash so
+    # expert_fc1 and moe_act remain owned by the fixed-address stash.
+    offload_modules: NotRequired[list[str] | None]
     # Number of HybridEP ranks per NVLink domain (default: min(expert_model_parallel_size, 64))
     hybridep_num_ranks_per_nvlink_domain: NotRequired[int]
     # Enable multi-node NVLink support (default: expert_model_parallel_size > 4)
@@ -585,3 +600,64 @@ class PolicyConfig(TypedDict):
     # If true, use standard Megatron layer specs while keeping ModelOpt
     # quantization enabled. Useful for faster QARL runs and logged in configs.
     disable_modelopt_layer_spec: NotRequired[bool]
+
+
+def validate_virtual_pipeline_config(
+    config: Mapping[str, Any],
+    *,
+    component: str = "policy",
+) -> None:
+    """Reject VPP combinations that NeMo-RL does not handle safely yet."""
+    megatron_cfg = config.get("megatron_cfg") or {}
+    if not megatron_cfg.get("enabled", False):
+        return
+
+    vpp_size = megatron_cfg.get("virtual_pipeline_model_parallel_size")
+    pp_size = megatron_cfg["pipeline_model_parallel_size"]
+    a2a_overlap = megatron_cfg.get("overlap_moe_expert_parallel_comm") is True
+    vpp_enabled = vpp_size is not None
+    valid_vpp_size = type(vpp_size) is int and vpp_size > 1
+    if type(pp_size) is int and pp_size > 1 and a2a_overlap and not valid_vpp_size:
+        raise ValueError(
+            "PP>1 with EP A2A overlap requires "
+            "policy.megatron_cfg.virtual_pipeline_model_parallel_size (VPP) "
+            "to be an integer greater than 1."
+        )
+    if vpp_enabled and (type(vpp_size) is not int or vpp_size <= 1):
+        raise ValueError(
+            "VPP virtual_pipeline_model_parallel_size must be an integer greater "
+            "than 1, or null to disable VPP."
+        )
+    if vpp_enabled and (type(pp_size) is not int or pp_size <= 1):
+        raise ValueError(
+            "VPP requires pipeline_model_parallel_size to be an integer greater than 1."
+        )
+
+    if not vpp_enabled:
+        return
+
+    if component == "value worker":
+        raise ValueError("VPP is not supported by the Megatron value worker yet.")
+
+    unsupported: list[str] = []
+    if megatron_cfg.get("cuda_graph_impl") == "full_iteration":
+        unsupported.append("full-iteration CUDA Graph")
+    if (config.get("draft") or {}).get("enabled", False):
+        unsupported.append("draft training")
+    if (config.get("router_replay") or {}).get("enabled", False):
+        unsupported.append("router replay")
+    generation = config.get("generation") or {}
+    if generation.get("backend") == "megatron":
+        unsupported.append("native Megatron generation")
+    kv_cache_dtype = (generation.get("vllm_cfg") or {}).get("kv_cache_dtype")
+    if (
+        generation.get("backend") == "vllm"
+        and isinstance(kv_cache_dtype, str)
+        and kv_cache_dtype.startswith("fp8")
+    ):
+        unsupported.append("FP8 KV-cache calibration")
+    if config.get("quant_cfg") is not None:
+        unsupported.append("ModelOpt")
+
+    if unsupported:
+        raise ValueError("VPP is not supported with: " + ", ".join(unsupported) + ".")

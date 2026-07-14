@@ -1,0 +1,19 @@
+defaults: ./grpo-qwen3-235b-16n4g-megatron-mxfp8-cutedsl.yaml
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-235b-16n4g-megatron-mxfp8-cutedsl-a2a-vpp2
+policy:
+  megatron_cfg:
+    virtual_pipeline_model_parallel_size: 2
+    num_layers_in_first_pipeline_stage: 22
+    num_layers_in_last_pipeline_stage: 24
+    activation_checkpointing: true
+    recompute_granularity: selective
+    recompute_method: null
+    recompute_modules: null
+    overlap_moe_expert_parallel_comm: false
+    high_priority_a2a_comm_stream: false
+    delay_wgrad_compute: false
+logger:
+  log_dir: logs/grpo-qwen3-235b-16n4g-megatron-mxfp8-cutedsl-a2a-vpp2
+  wandb:
+    name: grpo-qwen3-235b-16n4g-megatron-mxfp8-cutedsl-a2a-vpp2

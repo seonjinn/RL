@@ -18,6 +18,7 @@ from typing import (
     Generic,
     Iterator,
     Mapping,
+    NotRequired,
     Optional,
     Sequence,
     Type,
@@ -54,6 +55,8 @@ class SequencePackingArgs(TypedDict):
     sequence_length_pad_multiple: (
         int  # pad each sequence to a multiple of this value (for CP/TP alignment)
     )
+    min_bin_count: NotRequired[int]
+    bin_count_multiple: NotRequired[int]
 
 
 class DynamicBatchingArgs(TypedDict):
@@ -451,8 +454,10 @@ class BatchedDataDict(UserDict, Generic[DictT]):
                 algorithm=sequence_packing_args["algorithm"],
                 bin_capacity=sequence_packing_args["max_tokens_per_microbatch"],
                 collect_metrics=False,  # TODO(ahmadki): make configurable
-                min_bin_count=shards,
-                bin_count_multiple=shards,
+                min_bin_count=sequence_packing_args.get("min_bin_count", shards),
+                bin_count_multiple=sequence_packing_args.get(
+                    "bin_count_multiple", shards
+                ),
             )
 
             input_lengths_key = sequence_packing_args["input_lengths_key"]

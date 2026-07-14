@@ -1187,6 +1187,52 @@ def validate_full_cuda_graph_policy_config(
         errors.append("colocated generation/refit is not supported")
     if generation is not None and generation.get("backend") == "megatron":
         errors.append("Megatron generation refit/offload is not supported")
+    if megatron_cfg.get("cuda_graph_modules", []) != []:
+        errors.append("cuda_graph_modules must be empty")
+
+    expert_parallel_size = megatron_cfg["expert_model_parallel_size"]
+    if expert_parallel_size > 1:
+        if (
+            megatron_cfg.get("moe_token_dispatcher_type") != "flex"
+            or megatron_cfg.get("moe_flex_dispatcher_backend") != "hybridep"
+        ):
+            errors.append(
+                "MoE expert parallelism must use the host-free flex/HybridEP dispatcher"
+            )
+        if megatron_cfg.get("moe_grouped_gemm") is not True:
+            errors.append("MoE requires CuTeDSL grouped GEMM")
+        if megatron_cfg.get("expert_tensor_parallel_size") != 1:
+            errors.append("MoE requires expert tensor parallel size 1")
+        env_vars = megatron_cfg.get("env_vars")
+        if (
+            not isinstance(env_vars, Mapping)
+            or env_vars.get("NVTE_CUTEDSL_FUSED_GROUPED_MLP") != "1"
+        ):
+            errors.append("MoE requires NVTE_CUTEDSL_FUSED_GROUPED_MLP=1")
+        fp8_cfg = megatron_cfg.get("fp8_cfg")
+        if (
+            not isinstance(fp8_cfg, Mapping)
+            or fp8_cfg.get("enabled") is not True
+            or fp8_cfg.get("fp8_recipe") != "mxfp8"
+        ):
+            errors.append("MoE requires MXFP8")
+        capacity_factor = megatron_cfg.get("moe_expert_rank_capacity_factor")
+        if type(capacity_factor) not in (int, float) or capacity_factor <= 0:
+            errors.append("MoE requires a positive static routed-token budget")
+        if megatron_cfg.get("moe_paged_stash") is not True:
+            errors.append("MoE requires paged stash for fixed-address activations")
+        if megatron_cfg.get("use_transformer_engine_op_fuser") is not True:
+            errors.append("MoE requires the TE operation fuser")
+        if megatron_cfg.get("moe_mlp_glu_interleave_size") != 32:
+            errors.append("MoE requires GLU interleave size 32")
+        preprocessing_sms = megatron_cfg.get("moe_hybridep_num_sms_preprocessing")
+        if type(preprocessing_sms) is not int or preprocessing_sms <= 0:
+            errors.append("MoE requires a positive HybridEP preprocessing SM count")
+        offload_modules = megatron_cfg.get("offload_modules")
+        if not isinstance(offload_modules, list):
+            errors.append("MoE offload_modules must be a list")
+        elif {"expert_fc1", "moe_act"} & set(offload_modules):
+            errors.append("MoE paged stash forbids expert_fc1/moe_act offloading")
 
     if errors:
         raise ValueError(

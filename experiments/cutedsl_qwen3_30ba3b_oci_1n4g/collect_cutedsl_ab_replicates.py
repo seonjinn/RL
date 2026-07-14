@@ -32,6 +32,11 @@ from pathlib import Path
 from typing import Any
 
 
+DEFAULT_MODEL_PROFILE = (
+    Path(__file__).resolve().parent / "model_profiles/qwen3_30ba3b_2n4g.json"
+)
+
+
 @dataclass(frozen=True)
 class MetricSpec:
     """A measured raw-timing field included in the paired aggregate."""
@@ -262,17 +267,106 @@ def _require_sha(value: Any, *, length: int, label: str) -> str:
     return value
 
 
+def _selected_profile_artifacts(
+    manifest: dict[str, Any], job_id: str
+) -> dict[str, tuple[str, str | None, str | None, int | None]]:
+    profile = manifest.get("model_profile")
+    if profile is None:
+        profile = json.loads(DEFAULT_MODEL_PROFILE.read_text())
+        artifacts = profile["artifacts"]
+        return {
+            "model": (artifacts["model_repo_id"], None, None, None),
+            "dataset": (
+                artifacts["dataset_repo_id"],
+                artifacts["dataset_repo_type"],
+                artifacts["dataset_split"],
+                artifacts["dataset_num_rows"],
+            ),
+        }
+    if not isinstance(profile, dict) or profile.get("schema_version") != 1:
+        raise CollectorError(f"job {job_id} model_profile must use schema version 1")
+    profile_sha256 = manifest.get("model_profile_sha256")
+    expected_sha256 = hashlib.sha256(_canonical_json(profile).encode()).hexdigest()
+    if profile_sha256 != expected_sha256:
+        raise CollectorError(f"job {job_id} model profile SHA differs")
+    artifacts = profile.get("artifacts")
+    topology = profile.get("topology")
+    workload = profile.get("workload")
+    provenance = profile.get("provenance")
+    if not all(
+        isinstance(value, dict) for value in (artifacts, topology, workload, provenance)
+    ):
+        raise CollectorError(f"job {job_id} model profile contract is incomplete")
+    assert isinstance(artifacts, dict)
+    assert isinstance(topology, dict)
+    assert isinstance(workload, dict)
+    assert isinstance(provenance, dict)
+    manifest_topology = manifest.get("topology")
+    expected_topology = {
+        "num_nodes": topology.get("num_nodes"),
+        "gpus_per_node": topology.get("gpus_per_node"),
+        "segment_size": topology.get("segment_size"),
+        "tensor_model_parallel_size": topology.get("tp"),
+        "pipeline_model_parallel_size": topology.get("pp"),
+        "virtual_pipeline_model_parallel_size": topology.get("vpp"),
+        "num_layers_in_first_pipeline_stage": topology.get(
+            "num_layers_in_first_pipeline_stage"
+        ),
+        "num_layers_in_last_pipeline_stage": topology.get(
+            "num_layers_in_last_pipeline_stage"
+        ),
+        "context_parallel_size": topology.get("cp"),
+        "expert_model_parallel_size": topology.get("ep"),
+        "expert_tensor_parallel_size": topology.get("etp"),
+    }
+    if manifest_topology != expected_topology:
+        raise CollectorError(f"job {job_id} topology differs from selected profile")
+    manifest_workload = manifest.get("workload")
+    if not isinstance(manifest_workload, dict) or any(
+        manifest_workload.get(key) != value for key, value in workload.items()
+    ):
+        raise CollectorError(f"job {job_id} workload differs from selected profile")
+    provenance_contract = {
+        "triton_cache_scope": provenance.get("triton_cache_scope"),
+        "megatron_checkpoint_scope": provenance.get("megatron_checkpoint_scope"),
+        "megatron_checkpoint_marker": provenance.get("megatron_checkpoint_marker"),
+    }
+    if any(manifest.get(key) != value for key, value in provenance_contract.items()):
+        raise CollectorError(f"job {job_id} cache or checkpoint provenance differs")
+    model_repo_id = artifacts.get("model_repo_id")
+    dataset_repo_id = artifacts.get("dataset_repo_id")
+    dataset_repo_type = artifacts.get("dataset_repo_type")
+    dataset_split = artifacts.get("dataset_split")
+    dataset_num_rows = artifacts.get("dataset_num_rows")
+    if (
+        not isinstance(model_repo_id, str)
+        or not isinstance(dataset_repo_id, str)
+        or dataset_repo_type != "dataset"
+        or not isinstance(dataset_split, str)
+        or isinstance(dataset_num_rows, bool)
+        or not isinstance(dataset_num_rows, int)
+        or dataset_num_rows < 1
+    ):
+        raise CollectorError(f"job {job_id} model profile artifacts are invalid")
+    return {
+        "model": (model_repo_id, None, None, None),
+        "dataset": (
+            dataset_repo_id,
+            dataset_repo_type,
+            dataset_split,
+            dataset_num_rows,
+        ),
+    }
+
+
 def _validate_artifact_revisions(manifest: dict[str, Any], job_id: str) -> None:
     revisions = manifest.get("artifact_revisions")
-    expected = {
-        "model": ("Qwen/Qwen3-30B-A3B", None),
-        "dataset": ("nvidia/OpenMathInstruct-2", "dataset"),
-    }
+    expected = _selected_profile_artifacts(manifest, job_id)
     if not isinstance(revisions, dict) or set(revisions) != set(expected):
         raise CollectorError(
             f"job {job_id} artifact_revisions must contain model and dataset"
         )
-    for label, (repo_id, repo_type) in expected.items():
+    for label, (repo_id, repo_type, expected_split, expected_rows) in expected.items():
         repository = revisions[label]
         if not isinstance(repository, dict):
             raise CollectorError(f"job {job_id} {label} revision must be an object")
@@ -287,17 +381,17 @@ def _validate_artifact_revisions(manifest: dict[str, Any], job_id: str) -> None:
             label=f"job {job_id} {label} revision",
         )
         if label == "dataset":
-            if repository.get("split") != "train_1M":
+            if repository.get("split") != expected_split:
                 raise CollectorError(f"job {job_id} dataset split differs")
             if (
                 _require_nonnegative_integer(
                     repository.get("num_rows"),
                     f"job {job_id} dataset num_rows",
                 )
-                != 1_000_000
+                != expected_rows
             ):
                 raise CollectorError(
-                    f"job {job_id} dataset num_rows must equal 1000000"
+                    f"job {job_id} dataset num_rows must equal {expected_rows}"
                 )
 
 
@@ -1054,6 +1148,12 @@ def _load_replicate(root: Path, record: dict[str, Any]) -> Replicate:
                 "measured_updates",
                 "total_updates",
                 "topology",
+                "workload",
+                "model_profile",
+                "model_profile_sha256",
+                "triton_cache_scope",
+                "megatron_checkpoint_scope",
+                "megatron_checkpoint_marker",
                 "fixed_config_evidence",
             )
         }

@@ -1,23 +1,55 @@
 defaults: ./grpo-qwen3-30ba3b-1n4g-megatron-mxfp8-cutedsl.yaml
 grpo:
-  num_prompts_per_step: 8
+  num_prompts_per_step: 4
+  num_generations_per_prompt: 2
+  val_period: 0
+  val_at_start: false
+  val_at_end: false
+  seq_logprob_error_threshold: null
+  skip_reference_policy_logprobs_calculation: true
+  async_grpo:
+    enabled: false
+loss_fn:
+  reference_policy_kl_penalty: 0.0
+  force_on_policy_ratio: true
 checkpointing:
   checkpoint_dir: results/grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-factorial
 policy:
-  train_global_batch_size: 16
+  train_global_batch_size: 8
   generation:
     vllm_cfg:
+      async_engine: false
       env_vars:
         VLLM_COMPILE_CACHE_SAVE_FORMAT: unpacked
+    colocated:
+      enabled: false
+      resources:
+        num_nodes: 1
+        gpus_per_node: 4
   megatron_cfg:
-    expert_model_parallel_size: 8
+    expert_model_parallel_size: 4
     cuda_graph_impl: none
     cuda_graph_warmup_steps: 3
     cuda_graph_use_single_mempool: true
+    moe_token_dispatcher_type: flex
+    moe_flex_dispatcher_backend: hybridep
+    moe_hybridep_num_sms: 16
+    moe_hybridep_num_sms_preprocessing: 32
+    moe_pad_experts_for_cuda_graph_inference: true
+    moe_expert_rank_capacity_factor: null
+    moe_paged_stash: false
+    moe_paged_stash_page_size: 64
+    moe_paged_stash_buffer_size_factor_cuda: 1.2
+    moe_paged_stash_buffer_size_factor_cpu: 1.0
+    offload_modules: []
+data:
+  train:
+    split_validation_size: 0.0
+  validation: null
 logger:
   log_dir: logs/grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-factorial
   wandb:
     name: grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-factorial
 cluster:
   num_nodes: 2
-  segment_size: 2
+  segment_size: null

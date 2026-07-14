@@ -327,6 +327,33 @@ def test_sequence_packing_basic():
         assert len(problem_ids_seen) == batch_size
 
 
+def test_sequence_packing_honors_explicit_bin_constraints() -> None:
+    batch_size = 8
+    batch_data = BatchedDataDict(
+        {
+            "input_ids": torch.ones((batch_size, 4), dtype=torch.long),
+            "sequence_lengths": torch.ones(batch_size, dtype=torch.long),
+            "problem_ids": torch.arange(batch_size),
+        }
+    )
+    sequence_packing_args = SequencePackingArgs(
+        max_tokens_per_microbatch=16,
+        input_key="input_ids",
+        input_lengths_key="sequence_lengths",
+        algorithm="modified_first_fit_decreasing",
+        sequence_length_pad_multiple=1,
+        min_bin_count=4,
+        bin_count_multiple=4,
+    )
+
+    sharded_batches, _ = batch_data.shard_by_batch_size(
+        shards=2,
+        sequence_packing_args=sequence_packing_args,
+    )
+
+    assert [len(shard.micro_batch_indices[0]) for shard in sharded_batches] == [2, 2]
+
+
 def test_sequence_packing_uniform_lengths():
     """Test sequence packing when all sequences have the same length."""
     batch_size = 16

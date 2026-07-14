@@ -30,6 +30,7 @@ from nemo_rl.distributed.named_sharding import NamedSharding
 from nemo_rl.distributed.virtual_cluster import RayVirtualCluster
 from nemo_rl.distributed.worker_groups import RayWorkerBuilder, RayWorkerGroup
 from nemo_rl.models.generation.interfaces import GenerationDatumSpec
+from nemo_rl.models.policy import validate_virtual_pipeline_config
 from nemo_rl.models.value.config import ValueConfig
 from nemo_rl.models.value.interfaces import ValueInterface, ValueOutputSpec
 from nemo_rl.utils.checkpoint import CheckpointingConfig
@@ -64,6 +65,7 @@ class Value(ValueInterface):
             weights_path: Path to load model weights from
             optimizer_path: Path to load optimizer state from
         """
+        validate_virtual_pipeline_config(config, component="value worker")
         if weights_path:
             weights_path = os.path.abspath(weights_path)
         if optimizer_path:

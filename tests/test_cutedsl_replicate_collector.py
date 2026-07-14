@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import csv
+import hashlib
 import json
 import shutil
 import subprocess
@@ -82,6 +83,68 @@ RAW_FIELD_BY_CANONICAL_METRIC = {
 def _write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+
+
+def _profile_sha256(profile: dict[str, Any]) -> str:
+    payload = json.dumps(profile, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _fixture_model_profile(model_repo_id: str) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "profile_id": (
+            "qwen3_235b_fixture"
+            if model_repo_id == "Qwen/Qwen3-235B-A22B"
+            else "qwen3_30ba3b_fixture"
+        ),
+        "display_name": model_repo_id.rsplit("/", maxsplit=1)[-1],
+        "recipe": "examples/configs/recipes/llm/performance/fixture.yaml",
+        "default_contexts": "g0a0",
+        "artifacts": {
+            "model_repo_id": model_repo_id,
+            "dataset_repo_id": "nvidia/OpenMathInstruct-2",
+            "dataset_repo_type": "dataset",
+            "dataset_split": "train_1M",
+            "dataset_num_rows": 1_000_000,
+        },
+        "topology": {
+            "num_nodes": 1,
+            "gpus_per_node": 4,
+            "segment_size": 1,
+            "tp": 1,
+            "pp": 1,
+            "vpp": None,
+            "num_layers_in_first_pipeline_stage": None,
+            "num_layers_in_last_pipeline_stage": None,
+            "cp": 1,
+            "ep": 4,
+            "etp": 1,
+        },
+        "workload": {
+            "train_global_batch_size": 4,
+            "train_micro_batch_size": 1,
+            "logprob_batch_size": 1,
+            "max_total_sequence_length": 1024,
+            "sequence_packing_enabled": False,
+            "num_prompts_per_step": 2,
+            "num_generations_per_prompt": 2,
+        },
+        "runtime": {
+            "policy_precision": "bfloat16",
+            "rollout_precision": "fp8",
+            "generation_tensor_parallel_size": 1,
+            "generation_gpu_memory_utilization": 0.6,
+            "allow_full_cg": False,
+            "allow_a2a": False,
+        },
+        "provenance": {
+            "triton_cache_scope": "job_node_local",
+            "megatron_checkpoint_scope": "job_shared",
+            "megatron_checkpoint_root_name": "megatron_checkpoints",
+            "megatron_checkpoint_marker": "iter_0000000/run_config.yaml",
+        },
+    }
 
 
 def _raw_timing(
@@ -825,6 +888,64 @@ def test_collector_rejects_mixed_model_revisions(tmp_path: Path) -> None:
     result = _run_collector(submission, result_root, tmp_path / "output")
     assert result.returncode != 0
     assert "workload identity differs across replicates" in result.stderr
+
+
+def test_collector_uses_selected_qwen235_profile_identity(tmp_path: Path) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    profile = json.loads(
+        (EXPERIMENT_DIR / "model_profiles/qwen3_235b_16n4g_a2a_vpp2.json").read_text()
+    )
+    topology = profile["topology"]
+    for manifest_path in result_root.glob("*/benchmark_manifest.json"):
+        manifest = json.loads(manifest_path.read_text())
+        manifest["model_profile"] = profile
+        manifest["model_profile_sha256"] = _profile_sha256(profile)
+        manifest["artifact_revisions"]["model"]["repo_id"] = "Qwen/Qwen3-235B-A22B"
+        manifest["topology"] = {
+            "num_nodes": topology["num_nodes"],
+            "gpus_per_node": topology["gpus_per_node"],
+            "segment_size": topology["segment_size"],
+            "tensor_model_parallel_size": topology["tp"],
+            "pipeline_model_parallel_size": topology["pp"],
+            "virtual_pipeline_model_parallel_size": topology["vpp"],
+            "num_layers_in_first_pipeline_stage": topology[
+                "num_layers_in_first_pipeline_stage"
+            ],
+            "num_layers_in_last_pipeline_stage": topology[
+                "num_layers_in_last_pipeline_stage"
+            ],
+            "context_parallel_size": topology["cp"],
+            "expert_model_parallel_size": topology["ep"],
+            "expert_tensor_parallel_size": topology["etp"],
+        }
+        manifest["workload"] = profile["workload"]
+        manifest["triton_cache_scope"] = "job_node_local"
+        manifest["megatron_checkpoint_scope"] = "job_shared"
+        manifest["megatron_checkpoint_marker"] = "iter_0000000/run_config.yaml"
+        _write_json(manifest_path, manifest)
+        job_dir = manifest_path.parent
+        scale = 64 / 4
+        for raw_path in job_dir.glob("timing/*/raw_timing.json"):
+            raw = json.loads(raw_path.read_text())
+            raw["training_gpu_count"] = 64
+            for row in raw["measured_step_workload"]:
+                for key in tuple(row):
+                    if key.endswith("tokens_per_sec_per_gpu"):
+                        row[key] /= scale
+            for metric_name, series in raw["measured_component_series"].items():
+                if metric_name.endswith("tokens_per_sec_per_gpu"):
+                    for point in series:
+                        point["value"] /= scale
+            _write_json(raw_path, raw)
+        summary_path = job_dir / "timing_summary.json"
+        summary = json.loads(summary_path.read_text())
+        for arm in summary["median_normalized_throughput"]:
+            summary["median_normalized_throughput"][arm] /= scale
+        _write_json(summary_path, summary)
+
+    result = _run_collector(submission, result_root, tmp_path / "output")
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_collector_rejects_noncanonical_dataset_row_count(tmp_path: Path) -> None:

@@ -206,6 +206,7 @@ def test_import_model_from_hf_name_calls_bridge_save(monkeypatch):
             self.expert_tensor_parallel_size = 1
             self.num_layers_in_first_pipeline_stage = None
             self.num_layers_in_last_pipeline_stage = None
+            self.virtual_pipeline_model_parallel_size = None
             self.pipeline_dtype = "fp32"
 
         def finalize(self):
@@ -215,6 +216,9 @@ def test_import_model_from_hf_name_calls_bridge_save(monkeypatch):
             self.seed = seed
 
         def provide_distributed_model(self, wrap_with_ddp, post_wrap_hook):
+            self.provided_virtual_pipeline_size = (
+                self.virtual_pipeline_model_parallel_size
+            )
             config = SimpleNamespace()
             return [SimpleNamespace(config=config)]
 
@@ -243,7 +247,27 @@ def test_import_model_from_hf_name_calls_bridge_save(monkeypatch):
 
     monkeypatch.setattr(module, "AutoBridge", FakeAutoBridge)
 
-    module.import_model_from_hf_name("fake/hf-model", "/tmp/out")
+    module.import_model_from_hf_name(
+        "fake/hf-model",
+        "/tmp/out",
+        megatron_config={
+            "tensor_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 2,
+            "virtual_pipeline_model_parallel_size": 4,
+            "context_parallel_size": 1,
+            "expert_model_parallel_size": 1,
+            "expert_tensor_parallel_size": 1,
+            "num_layers_in_first_pipeline_stage": None,
+            "num_layers_in_last_pipeline_stage": None,
+            "pipeline_dtype": "fp32",
+            "sequence_parallel": False,
+            "gradient_accumulation_fusion": False,
+        },
+    )
 
     assert fake_bridge.saved_model is not None
     assert fake_bridge.saved_path == "/tmp/out"
+    assert fake_bridge.provider.provided_virtual_pipeline_size == 4
+    assert (
+        fake_bridge.saved_model[0].config.virtual_pipeline_model_parallel_size is None
+    )

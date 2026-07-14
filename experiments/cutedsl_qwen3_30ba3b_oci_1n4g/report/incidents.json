@@ -1,5 +1,24 @@
 [
   {
+    "classification": "kernel_matcher_false_negative",
+    "job_id": "2369786",
+    "off_fused_instances": 0,
+    "off_kernel_stat_rows": 4765,
+    "on_fused_dglu_instances": 161280,
+    "on_fused_glu_instances": 241152,
+    "on_fused_quant_instances": 402432,
+    "on_kernel_stat_rows": 4664,
+    "performance_claim_impact": "recollect_after_matcher_fix"
+  },
+  {
+    "cache_scope": "shared_job_lustre",
+    "cause_boundary": "One reader observed invalid Triton group metadata in a cache shared across the job's nodes; the writer mechanism is unproven.",
+    "classification": "triton_group_metadata_json_decode_error",
+    "failure_boundary": "Step 1 generation completed before the first reference-logprob MoE forward failed while reading group metadata JSON.",
+    "job_id": "2369788",
+    "performance_claim_impact": "excluded_initialization_failure"
+  },
+  {
     "cluster": "aws_dfw",
     "evidence": "Job 1910599 on nvl72d022-T13 reached the runtime-bootstrap announcement, then task 0 exited 1 before any curl or uv output; elapsed time was 00:02:23.",
     "fix_commit": "post-login TMPDIR namespace-split commit",
@@ -405,22 +424,18 @@
     "verification_job": "pending clean three-replica rerun"
   },
   {
-    "classification": "kernel_matcher_false_negative",
-    "job_id": "2369786",
-    "off_fused_instances": 0,
-    "off_kernel_stat_rows": 4765,
-    "on_fused_dglu_instances": 161280,
-    "on_fused_glu_instances": 241152,
-    "on_fused_quant_instances": 402432,
-    "on_kernel_stat_rows": 4664,
-    "performance_claim_impact": "recollect_after_matcher_fix"
-  },
-  {
-    "cache_scope": "shared_job_lustre",
-    "cause_boundary": "One reader observed invalid Triton group metadata in a cache shared across the job's nodes; the writer mechanism is unproven.",
-    "classification": "triton_group_metadata_json_decode_error",
-    "failure_boundary": "Step 1 generation completed before the first reference-logprob MoE forward failed while reading group metadata JSON.",
-    "job_id": "2369788",
-    "performance_claim_impact": "excluded_initialization_failure"
+    "cluster": "lyris",
+    "evidence": "Jobs 2369539 and 2369580 completed three eager warmup updates, then both failed in update 4 at the first full-iteration CUDA Graph capture. The A2A-OFF and A2A-ON cells reached the same token_dispatcher before_ep_alltoall D2H event synchronization and cudaErrorCapturedEvent.",
+    "fix_commit": "pending HybridEP static-budget dependency-bundle commit",
+    "hypothesis": "Replacing variable-size dropless AllToAll with flex/HybridEP, a static expert-rank token budget, PagedStash overflow retry, TE op fuser, and fixed-address activation storage will remove the host synchronization from capture; A2A overlap can then benefit from graph replay.",
+    "report_path": "evidence/job-2369539-2369580.txt",
+    "reproduction": "Run the Qwen3-30B-A3B 2n4g noncolocated functional recipe at source 85f01a228 with cuda_graph_impl=full_iteration, EP4, alltoall, moe_expert_rank_capacity_factor=null, and moe_paged_stash=false. After three warmups, update 4 enters capture and d2h_event.synchronize raises cudaErrorCapturedEvent.",
+    "root_cause": "The dropless variable-size MCore AllToAll dispatcher requires CPU-side split-metadata synchronization before EP AllToAll. That host event synchronization is illegal inside full-iteration CUDA Graph capture. The A2A overlap bundle does not remove it.",
+    "run_id": "2369539-2369580",
+    "symptom": "Full-CG A2A-OFF and A2A-ON functional jobs both failed at the first capture, so neither feature produced a valid performance result.",
+    "tested_change": "Under implementation: use flex/HybridEP in all factorial cells; enable capacity factor 1.5 and PagedStash only in Full-CG cells; propagate HybridEP preprocessing SMs and offload_modules; reject invalid host-synchronized Full-CG MoE configs before GPU initialization.",
+    "timestamp_utc": "2026-07-14T05:50:44Z",
+    "verification_evidence": "The two independent jobs reproduce the identical capture boundary with and without A2A overlap. Recipe-level contract tests pass locally; corrected GB200 functional verification is pending. No Full-CG or A2A speedup is claimed.",
+    "verification_job": "pending corrected Lyris/preTyche functional gate"
   }
 ]

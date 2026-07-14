@@ -15,6 +15,7 @@
 from collections import defaultdict
 from contextlib import nullcontext
 from functools import partial
+from itertools import tee
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 import torch
@@ -403,7 +404,7 @@ def forward_with_post_processing_fn(
 
 
 def megatron_forward_backward(
-    model: GPTModel,
+    model: GPTModel | list[MegatronModule],
     data_iterator: Iterator[ProcessedMicrobatch],
     num_microbatches: int,
     seq_length: int,
@@ -497,12 +498,19 @@ def megatron_forward_backward(
         if forward_backward_func is not None
         else get_forward_backward_func()
     )
+    num_model_chunks = len(model) if isinstance(model, list) else 1
+    schedule_data_iterator: Any = data_iterator
+    if num_model_chunks > 1:
+        # MCore's interleaved schedule advances one iterator per virtual model
+        # chunk. Compose this after full-CG normalizer wrapping so every clone
+        # observes the same final ProcessedMicrobatch stream.
+        schedule_data_iterator = list(tee(data_iterator, num_model_chunks))
     if use_router_replay:
         clear_router_replay(model)
     try:
         schedule_kwargs = {
             "forward_step_func": forward_step,
-            "data_iterator": data_iterator,
+            "data_iterator": schedule_data_iterator,
             "model": model,
             "num_microbatches": num_microbatches,
             "seq_length": seq_length,

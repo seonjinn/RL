@@ -1,0 +1,68 @@
+Full-iteration CUDA Graph / EP A2A functional comparison
+================================================================
+
+Source commit: 85f01a22814a4e2b81ff898b072b8c54375ea62e
+Cluster: Lyris GB200
+Model: Qwen/Qwen3-30B-A3B
+Allocation: 2 nodes x 4 GPUs; PolicyTraining 4 GPUs, noncolocated vLLM generation 4 GPUs
+Policy topology: TP1 / PP1 / CP1 / ETP1 / EP4
+Precision: MXFP8 with NVTE_CUTEDSL_FUSED_GROUPED_MLP=1
+
+Jobs
+----
+
+- 2369539: Full-CG ON, A2A overlap OFF; FAILED 1:0 after 00:36:22.
+- 2369580: Full-CG ON, A2A overlap ON; FAILED 1:0 after 00:37:05.
+
+Both jobs completed three eager warmup updates. Both failed in update 4, the
+first full-iteration CUDA Graph capture, on the same operation:
+
+token_dispatcher.py:[REDACTED]
+_maybe_dtoh_and_synchronize("before_ep_alltoall", tokens_per_expert)
+d2h_event.synchronize()
+cudaErrorCapturedEvent: operation not permitted on an event last recorded in a capturing stream
+
+The subsequent cudaErrorStreamCaptureInvalidated is cleanup fallout, not the
+primary failure.
+
+Effective invalid dependency bundle
+-----------------------------------
+
+moe_token_dispatcher_type: [REDACTED]
+moe_enable_deepep: false
+expert_model_parallel_size: 4
+moe_expert_rank_capacity_factor: null
+moe_paged_stash: false
+cuda_graph_impl: full_iteration
+cuda_graph_warmup_steps: 3
+moe_grouped_gemm: true
+
+Job 2369580 additionally set:
+
+overlap_moe_expert_parallel_comm: true
+high_priority_a2a_comm_stream: true
+delay_wgrad_compute: true
+CUDA_DEVICE_MAX_CONNECTIONS: 32
+
+Root cause
+----------
+
+The dropless variable-size MCore AllToAll dispatcher copies split metadata to
+the host and synchronizes a CUDA event before EP AllToAll. Host synchronization
+is illegal inside CUDA Graph capture. Enabling A2A overlap does not remove this
+dispatcher synchronization.
+
+Corrective hypothesis
+---------------------
+
+Use the NeMo 26.06 GB200 performance dependency bundle: flex/HybridEP,
+a positive static expert-rank token budget, PagedStash overflow retry,
+Transformer Engine op fuser, GLU interleave 32, HybridEP preprocessing SMs,
+and no expert activation offload. The corrected functional gate must prove one
+capture and at least two replays before any performance cohort is accepted.
+
+Performance claim boundary
+--------------------------
+
+Neither job produced a valid Full-CG or A2A-overlap performance result. The
+12-cell timing cohort was test-only and was not submitted.

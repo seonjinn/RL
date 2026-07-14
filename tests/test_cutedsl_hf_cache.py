@@ -28,6 +28,8 @@ EXPERIMENT_DIR = PROJECT_ROOT / "experiments/cutedsl_qwen3_30ba3b_oci_1n4g"
 PREPARER = EXPERIMENT_DIR / "prepare_hf_cache.py"
 MATRIX_PAYLOAD = EXPERIMENT_DIR / "run_cutedsl_matrix.sbatch"
 PROFILE_LOADER = EXPERIMENT_DIR / "lib/cluster_profile.sh"
+MODEL_PROFILE_LOADER = EXPERIMENT_DIR / "lib/model_profile.py"
+MODEL_PROFILE_DIR = EXPERIMENT_DIR / "model_profiles"
 
 
 def _shared_hf_preflight_source() -> str:
@@ -45,9 +47,24 @@ def _load_preparer() -> ModuleType:
     return module
 
 
+def _load_model_profile_module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("model_profile", MODEL_PROFILE_LOADER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_model_profile(profile_name: str = "qwen3_30ba3b_2n4g.json") -> Any:
+    return _load_model_profile_module().load_model_profile(
+        MODEL_PROFILE_DIR / profile_name
+    )
+
+
 def _fake_snapshot_download(cache_dir: Path, calls: list[dict[str, Any]]):
     revisions = {
         ("Qwen/Qwen3-30B-A3B", None): "a" * 40,
+        ("Qwen/Qwen3-235B-A22B", None): "c" * 40,
         ("nvidia/OpenMathInstruct-2", "dataset"): "b" * 40,
     }
 
@@ -70,9 +87,7 @@ def _fake_snapshot_download(cache_dir: Path, calls: list[dict[str, Any]]):
     return download
 
 
-def _fake_load_dataset(
-    calls: list[dict[str, Any]], *, num_rows: int = 1_000_000
-):
+def _fake_load_dataset(calls: list[dict[str, Any]], *, num_rows: int = 1_000_000):
     class Dataset:
         def __len__(self) -> int:
             return num_rows
@@ -82,6 +97,55 @@ def _fake_load_dataset(
         return Dataset()
 
     return load_dataset
+
+
+@pytest.mark.parametrize(
+    ("profile_name", "expected_model", "expected_revision"),
+    (
+        ("qwen3_30ba3b_2n4g.json", "Qwen/Qwen3-30B-A3B", "a" * 40),
+        ("qwen3_235b_16n4g.json", "Qwen/Qwen3-235B-A22B", "c" * 40),
+    ),
+)
+def test_prepare_cache_uses_selected_profile_identity(
+    tmp_path: Path,
+    profile_name: str,
+    expected_model: str,
+    expected_revision: str,
+) -> None:
+    module = _load_preparer()
+    profile_module = _load_model_profile_module()
+    profile = profile_module.load_model_profile(MODEL_PROFILE_DIR / profile_name)
+    cache_dir = tmp_path / "hf_home"
+    manifest_path = tmp_path / f"{profile.profile_id}.json"
+    snapshot_calls: list[dict[str, Any]] = []
+
+    manifest = module.prepare_cache(
+        profile,
+        cache_dir,
+        manifest_path,
+        _fake_snapshot_download(cache_dir, snapshot_calls),
+        _fake_load_dataset([]),
+    )
+
+    assert manifest["schema_version"] == 2
+    assert manifest["profile_id"] == profile.profile_id
+    assert manifest["profile_sha256"] == profile_module.profile_sha256(profile)
+    assert manifest["repositories"]["model"] == {
+        "repo_id": expected_model,
+        "repo_type": None,
+        "revision": expected_revision,
+        "file_count": 1,
+        "total_bytes": 3,
+    }
+    assert manifest["repositories"]["dataset"] == {
+        "repo_id": "nvidia/OpenMathInstruct-2",
+        "repo_type": "dataset",
+        "revision": "b" * 40,
+        "file_count": 1,
+        "total_bytes": 3,
+        "split": "train_1M",
+        "num_rows": 1_000_000,
+    }
 
 
 def test_prepare_cache_pins_revisions_and_reuses_completed_manifest(
@@ -96,25 +160,31 @@ def test_prepare_cache_pins_revisions_and_reuses_completed_manifest(
     load_dataset = _fake_load_dataset(dataset_calls)
 
     first = module.prepare_cache(
+        _load_model_profile(),
         cache_dir,
         shared_manifest,
         download,
         load_dataset,
     )
     assert [call.get("local_files_only", False) for call in calls] == [False, False]
-    assert first["schema_version"] == 1
+    profile = _load_model_profile()
+    assert first["schema_version"] == 2
+    assert first["profile_id"] == profile.profile_id
+    assert first["profile_sha256"] == profile.sha256()
     assert first["repositories"] == {
         "model": {
             "repo_id": "Qwen/Qwen3-30B-A3B",
             "repo_type": None,
             "revision": "a" * 40,
             "file_count": 1,
+            "total_bytes": 3,
         },
         "dataset": {
             "repo_id": "nvidia/OpenMathInstruct-2",
             "repo_type": "dataset",
             "revision": "b" * 40,
             "file_count": 1,
+            "total_bytes": 3,
             "split": "train_1M",
             "num_rows": 1_000_000,
         },
@@ -132,6 +202,7 @@ def test_prepare_cache_pins_revisions_and_reuses_completed_manifest(
     calls.clear()
     dataset_calls.clear()
     second = module.prepare_cache(
+        _load_model_profile(),
         cache_dir,
         shared_manifest,
         download,
@@ -154,6 +225,7 @@ def test_prepare_cache_offline_verifies_processed_dataset(
     dataset_calls: list[dict[str, Any]] = []
     load_dataset = _fake_load_dataset(dataset_calls)
     module.prepare_cache(
+        _load_model_profile(),
         cache_dir,
         shared_manifest,
         download,
@@ -164,6 +236,7 @@ def test_prepare_cache_offline_verifies_processed_dataset(
     dataset_calls.clear()
     monkeypatch.setenv("HF_DATASETS_OFFLINE", "1")
     manifest = module.prepare_cache(
+        _load_model_profile(),
         cache_dir,
         shared_manifest,
         download,
@@ -199,6 +272,7 @@ def test_offline_main_does_not_require_writing_shared_cache(
             hf_home=hf_home,
             shared_manifest=shared_manifest,
             job_manifest=job_manifest,
+            model_profile=MODEL_PROFILE_DIR / "qwen3_30ba3b_2n4g.json",
         ),
     )
     monkeypatch.setattr(module, "prepare_cache", lambda *_: manifest)
@@ -247,6 +321,7 @@ def test_offline_missing_manifest_bootstraps_from_local_cache_atomically(
     monkeypatch.setattr(module.os, "replace", observe_atomic_replace)
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
     manifest = module.prepare_cache(
+        _load_model_profile(),
         hf_home,
         shared_manifest,
         _fake_snapshot_download(hf_home, snapshot_calls),
@@ -267,7 +342,9 @@ def test_offline_missing_manifest_bootstraps_from_local_cache_atomically(
     assert not replacements[0][0].exists()
 
 
-@pytest.mark.parametrize("failure_stage", ("dump", "write", "flush", "fsync", "replace"))
+@pytest.mark.parametrize(
+    "failure_stage", ("dump", "write", "flush", "fsync", "replace")
+)
 def test_atomic_manifest_failure_removes_temporary_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -372,6 +449,7 @@ def test_offline_bootstrap_rejects_incomplete_local_cache_without_manifest(
 
     with pytest.raises((FileNotFoundError, ValueError)):
         module.prepare_cache(
+            _load_model_profile(),
             hf_home,
             shared_manifest,
             download,
@@ -397,20 +475,25 @@ def test_offline_missing_manifest_rechecks_after_lock_race(
     dataset_calls: list[dict[str, Any]] = []
     download = _fake_snapshot_download(hf_home, snapshot_calls)
     load_dataset = _fake_load_dataset(dataset_calls)
+    profile = _load_model_profile()
     completed = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "profile_id": profile.profile_id,
+        "profile_sha256": profile.sha256(),
         "repositories": {
             "model": {
                 "repo_id": "Qwen/Qwen3-30B-A3B",
                 "repo_type": None,
                 "revision": "a" * 40,
                 "file_count": 1,
+                "total_bytes": 3,
             },
             "dataset": {
                 "repo_id": "nvidia/OpenMathInstruct-2",
                 "repo_type": "dataset",
                 "revision": "b" * 40,
                 "file_count": 1,
+                "total_bytes": 3,
                 "split": "train_1M",
                 "num_rows": 1_000_000,
             },
@@ -424,6 +507,7 @@ def test_offline_missing_manifest_rechecks_after_lock_race(
             hf_home=hf_home,
             shared_manifest=shared_manifest,
             job_manifest=job_manifest,
+            model_profile=MODEL_PROFILE_DIR / "qwen3_30ba3b_2n4g.json",
         ),
     )
     fake_datasets = ModuleType("datasets")
@@ -460,6 +544,7 @@ def test_prepare_cache_rejects_unpinned_snapshot_directory(tmp_path: Path) -> No
 
     with pytest.raises(ValueError, match="40-character hexadecimal revision"):
         module.prepare_cache(
+            _load_model_profile(),
             tmp_path / "hf_home",
             tmp_path / "manifest.json",
             invalid_download,
@@ -555,6 +640,8 @@ def test_matrix_shared_hf_preflight_fails_closed(
 
     env = os.environ.copy()
     env["CUTEDSL_SHARED_HF_HOME"] = configured_home
+    env["CUTEDSL_MODEL_PROFILE_ID"] = "qwen3_30ba3b_2n4g"
+    env["MODEL_PROFILE_SHA256"] = "a" * 64
     result = subprocess.run(
         ["bash", "-c", "set -euo pipefail\n" + _shared_hf_preflight_source()],
         capture_output=True,
@@ -579,6 +666,8 @@ def test_matrix_shared_hf_preflight_accepts_existing_cache_root(
         manifest.write_text('{"schema_version": 1, "repositories": {}}\n')
     env = os.environ.copy()
     env["CUTEDSL_SHARED_HF_HOME"] = str(hf_home)
+    env["CUTEDSL_MODEL_PROFILE_ID"] = "qwen3_30ba3b_2n4g"
+    env["MODEL_PROFILE_SHA256"] = "a" * 64
 
     result = subprocess.run(
         [
@@ -594,7 +683,8 @@ def test_matrix_shared_hf_preflight_accepts_existing_cache_root(
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines() == [str(hf_home), str(manifest)]
+    expected_manifest = hf_home / "nemo2606_qwen3_30ba3b_2n4g_aaaaaaaaaaaa.json"
+    assert result.stdout.splitlines() == [str(hf_home), str(expected_manifest)]
 
 
 def test_matrix_verifies_profile_cache_offline_before_grpo() -> None:
@@ -611,16 +701,20 @@ def test_matrix_verifies_profile_cache_offline_before_grpo() -> None:
     )
     for fragment in required:
         assert fragment in source, fragment
-    assert 'assert repository["num_rows"] == 1_000_000' in source
+    assert (
+        'assert repository["num_rows"] == profile["artifacts"]["dataset_num_rows"]'
+    ) in source
 
     assert "results/hf_home" not in source
     verify = source.index("prepare_hf_cache.py")
     offline = source.index("export HF_HUB_OFFLINE=1")
-    image_python = source.index('command -v python3 >/dev/null')
+    image_python = source.index("command -v python3 >/dev/null")
     image_bootstrap = source.index(
         'python3 \\\n    "${CONTAINER_REPO_ROOT}/experiments/cutedsl_qwen3_30ba3b_oci_1n4g/prepare_hf_cache.py"'
     )
-    uv_install = source.index('curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh"')
+    uv_install = source.index(
+        'curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh"'
+    )
     uv_sync = source.index('"${UV_BIN}" sync --locked')
     grpo = source.index("examples/run_grpo.py", verify)
     assert offline < image_python < image_bootstrap < uv_install < uv_sync < grpo

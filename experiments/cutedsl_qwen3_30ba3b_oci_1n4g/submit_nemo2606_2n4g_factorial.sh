@@ -15,27 +15,67 @@
 
 set -euo pipefail
 
-if [[ $# -gt 1 || ( $# -eq 1 && "$1" != "--test-only" ) ]]; then
-    echo "Usage: $0 [--test-only]" >&2
-    exit 2
-fi
+REPO_ROOT=$(git rev-parse --show-toplevel)
+readonly REPO_ROOT
+readonly EXPERIMENT_DIR="${REPO_ROOT}/experiments/cutedsl_qwen3_30ba3b_oci_1n4g"
+MODEL_PROFILE_PATH="${NEMO2606_MODEL_PROFILE:-${EXPERIMENT_DIR}/model_profiles/qwen3_30ba3b_2n4g.json}"
+TEST_ONLY=0
+while (($# > 0)); do
+    case "$1" in
+        --model-profile)
+            if (($# < 2)); then
+                echo "[ERROR] --model-profile requires a path." >&2
+                exit 2
+            fi
+            MODEL_PROFILE_PATH=$2
+            shift 2
+            ;;
+        --test-only)
+            TEST_ONLY=1
+            shift
+            ;;
+        *)
+            echo "Usage: $0 [--model-profile PATH] [--test-only]" >&2
+            exit 2
+            ;;
+    esac
+done
+readonly MODEL_PROFILE_PATH TEST_ONLY
+PROFILE_PYTHON=(uv run --no-sync python)
+profile_exports=$(
+    "${PROFILE_PYTHON[@]}" "${EXPERIMENT_DIR}/lib/model_profile.py" shell \
+        --profile "${MODEL_PROFILE_PATH}"
+)
+eval "${profile_exports}"
+"${PROFILE_PYTHON[@]}" "${EXPERIMENT_DIR}/lib/model_profile.py" validate \
+    --profile "${MODEL_PROFILE_PATH}" --repo-root "${REPO_ROOT}" >/dev/null
 
-CONTEXTS="${NEMO2606_FACTORIAL_CONTEXTS:-g0a0,g0a1}"
+require_profile_value() {
+    local label=$1
+    local actual=$2
+    local expected=$3
+    if [[ "${actual}" != "${expected}" ]]; then
+        echo "[ERROR] ${label}=${actual} does not match selected profile value ${expected}." >&2
+        exit 1
+    fi
+}
+
+CONTEXTS="${NEMO2606_FACTORIAL_CONTEXTS:-${CUTEDSL_PROFILE_DEFAULT_CONTEXTS}}"
 REPLICATES="${NEMO2606_FACTORIAL_REPLICATES:-3}"
 WARMUP_UPDATES="${NEMO2606_FACTORIAL_WARMUP_UPDATES:-5}"
 MEASURED_UPDATES="${NEMO2606_FACTORIAL_MEASURED_UPDATES:-20}"
 PROFILE_REPLICATE="${NEMO2606_FACTORIAL_PROFILE_REPLICATE:-0}"
 FUNCTIONAL_GATE="${NEMO2606_FUNCTIONAL_GATE:-0}"
 FUNCTIONAL_CONTEXT="${NEMO2606_FUNCTIONAL_CONTEXT:-g0a0}"
-BENCHMARK_RECIPE="${NEMO2606_FACTORIAL_RECIPE:-examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-factorial.yaml}"
-BENCHMARK_NUM_NODES="${NEMO2606_FACTORIAL_NUM_NODES:-2}"
-BENCHMARK_GPUS_PER_NODE="${NEMO2606_FACTORIAL_GPUS_PER_NODE:-4}"
-BENCHMARK_SEGMENT_SIZE="${NEMO2606_FACTORIAL_SEGMENT_SIZE:-2}"
-TRAIN_GLOBAL_BATCH_SIZE="${NEMO2606_FACTORIAL_TRAIN_GLOBAL_BATCH_SIZE:-16}"
-EXPERT_MODEL_PARALLEL_SIZE="${NEMO2606_FACTORIAL_EXPERT_MODEL_PARALLEL_SIZE:-8}"
-NUM_PROMPTS_PER_STEP="${NEMO2606_FACTORIAL_NUM_PROMPTS_PER_STEP:-}"
-REQUESTED_POLICY_TRAINING_GPU_COUNT="${NEMO2606_FACTORIAL_TRAINING_GPU_COUNT:-}"
-REQUESTED_CONFIG_SEGMENT_SIZE="${NEMO2606_FACTORIAL_CONFIG_SEGMENT_SIZE:-}"
+BENCHMARK_RECIPE="${NEMO2606_FACTORIAL_RECIPE:-${CUTEDSL_PROFILE_RECIPE}}"
+BENCHMARK_NUM_NODES="${NEMO2606_FACTORIAL_NUM_NODES:-${CUTEDSL_PROFILE_NUM_NODES}}"
+BENCHMARK_GPUS_PER_NODE="${NEMO2606_FACTORIAL_GPUS_PER_NODE:-${CUTEDSL_PROFILE_GPUS_PER_NODE}}"
+BENCHMARK_SEGMENT_SIZE="${NEMO2606_FACTORIAL_SEGMENT_SIZE:-${CUTEDSL_PROFILE_SEGMENT_SIZE}}"
+TRAIN_GLOBAL_BATCH_SIZE="${NEMO2606_FACTORIAL_TRAIN_GLOBAL_BATCH_SIZE:-${CUTEDSL_PROFILE_TRAIN_GLOBAL_BATCH_SIZE}}"
+EXPERT_MODEL_PARALLEL_SIZE="${NEMO2606_FACTORIAL_EXPERT_MODEL_PARALLEL_SIZE:-${CUTEDSL_PROFILE_EP}}"
+NUM_PROMPTS_PER_STEP="${NEMO2606_FACTORIAL_NUM_PROMPTS_PER_STEP:-${CUTEDSL_PROFILE_NUM_PROMPTS_PER_STEP}}"
+REQUESTED_POLICY_TRAINING_GPU_COUNT="${NEMO2606_FACTORIAL_TRAINING_GPU_COUNT:-${CUTEDSL_PROFILE_POLICY_TRAINING_GPU_COUNT}}"
+REQUESTED_CONFIG_SEGMENT_SIZE="${NEMO2606_FACTORIAL_CONFIG_SEGMENT_SIZE:-${CUTEDSL_PROFILE_CONFIG_SEGMENT_SIZE}}"
 FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS=60
 readonly CONTEXTS REPLICATES WARMUP_UPDATES MEASURED_UPDATES PROFILE_REPLICATE
 readonly FUNCTIONAL_GATE FUNCTIONAL_CONTEXT
@@ -45,10 +85,24 @@ readonly EXPERT_MODEL_PARALLEL_SIZE FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS
 readonly NUM_PROMPTS_PER_STEP
 readonly REQUESTED_POLICY_TRAINING_GPU_COUNT REQUESTED_CONFIG_SEGMENT_SIZE
 
+require_profile_value NEMO2606_FACTORIAL_RECIPE \
+    "${BENCHMARK_RECIPE}" "${CUTEDSL_PROFILE_RECIPE}"
+require_profile_value NEMO2606_FACTORIAL_NUM_NODES \
+    "${BENCHMARK_NUM_NODES}" "${CUTEDSL_PROFILE_NUM_NODES}"
+require_profile_value NEMO2606_FACTORIAL_GPUS_PER_NODE \
+    "${BENCHMARK_GPUS_PER_NODE}" "${CUTEDSL_PROFILE_GPUS_PER_NODE}"
+require_profile_value NEMO2606_FACTORIAL_SEGMENT_SIZE \
+    "${BENCHMARK_SEGMENT_SIZE}" "${CUTEDSL_PROFILE_SEGMENT_SIZE}"
+require_profile_value NEMO2606_FACTORIAL_TRAIN_GLOBAL_BATCH_SIZE \
+    "${TRAIN_GLOBAL_BATCH_SIZE}" "${CUTEDSL_PROFILE_TRAIN_GLOBAL_BATCH_SIZE}"
+require_profile_value NEMO2606_FACTORIAL_EXPERT_MODEL_PARALLEL_SIZE \
+    "${EXPERT_MODEL_PARALLEL_SIZE}" "${CUTEDSL_PROFILE_EP}"
+require_profile_value NEMO2606_FACTORIAL_NUM_PROMPTS_PER_STEP \
+    "${NUM_PROMPTS_PER_STEP}" "${CUTEDSL_PROFILE_NUM_PROMPTS_PER_STEP}"
+
 for positive_integer in \
     "${BENCHMARK_NUM_NODES}" \
     "${BENCHMARK_GPUS_PER_NODE}" \
-    "${BENCHMARK_SEGMENT_SIZE}" \
     "${TRAIN_GLOBAL_BATCH_SIZE}" \
     "${EXPERT_MODEL_PARALLEL_SIZE}"; do
     if [[ ! "${positive_integer}" =~ ^[0-9]+$ ]] || ((positive_integer < 1)); then
@@ -56,6 +110,11 @@ for positive_integer in \
         exit 1
     fi
 done
+if [[ ! "${BENCHMARK_SEGMENT_SIZE}" =~ ^[0-9]+$ ]] || \
+    ((BENCHMARK_SEGMENT_SIZE < 1)); then
+    echo "[ERROR] Scheduler segment size must be a positive integer; null is only valid for the NeMo config segment size." >&2
+    exit 1
+fi
 if [[ -n "${NUM_PROMPTS_PER_STEP}" ]] && \
     { [[ ! "${NUM_PROMPTS_PER_STEP}" =~ ^[0-9]+$ ]] || \
         ((NUM_PROMPTS_PER_STEP < 1)); }; then
@@ -88,9 +147,6 @@ if [[ "${FUNCTIONAL_GATE}" != "1" ]]; then
     fi
 fi
 
-REPO_ROOT=$(git rev-parse --show-toplevel)
-readonly REPO_ROOT
-readonly EXPERIMENT_DIR="${REPO_ROOT}/experiments/cutedsl_qwen3_30ba3b_oci_1n4g"
 readonly MATRIX_PAYLOAD="${EXPERIMENT_DIR}/run_cutedsl_matrix.sbatch"
 readonly RAY_SUB="${REPO_ROOT}/ray.sub"
 readonly RECIPE="${BENCHMARK_RECIPE}"
@@ -123,12 +179,9 @@ sbatch_args+=(
     "--exclusive"
     "--time=${CUTEDSL_BENCHMARK_TIME}"
 )
-TEST_ONLY=0
-if [[ ${1-} == "--test-only" ]]; then
+if [[ "${TEST_ONLY}" == "1" ]]; then
     sbatch_args+=("--test-only")
-    TEST_ONLY=1
 fi
-readonly TEST_ONLY
 
 SUBMISSION_GROUP="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 readonly SUBMISSION_GROUP
@@ -155,7 +208,13 @@ readonly RUNTIME_CANARY="${RUNTIME_ROOT}/.shared_fs_canary"
 readonly RAY_SETUP_COMMAND="test -r ${RUNTIME_CANARY} && grep -Fx ${CUTEDSL_SUBMISSION_GIT_SHA} ${RUNTIME_CANARY} && test \"\$(git -C ${REPO_ROOT} rev-parse HEAD)\" = ${CUTEDSL_SUBMISSION_GIT_SHA}"
 EXPORT_PAYLOAD=$(mktemp "${TMPDIR:-/tmp}/nemo2606-factorial-export.XXXXXX")
 readonly EXPORT_PAYLOAD
-trap 'rm -f "${EXPORT_PAYLOAD}" "${COHORT_SUBMISSION_TEMP}"' EXIT
+cleanup_submission_files() {
+    local status=$?
+    trap - EXIT
+    rm -f "${EXPORT_PAYLOAD}" "${COHORT_SUBMISSION_TEMP}"
+    exit "${status}"
+}
+trap cleanup_submission_files EXIT
 chmod 600 "${EXPORT_PAYLOAD}"
 if [[ "${TEST_ONLY}" == "0" ]]; then
     mkdir -p "${SUBMISSION_DIR}" "${RUNTIME_ROOT}" "${RAY_LOG_ROOT}"
@@ -182,6 +241,19 @@ resolve_context() {
             exit 1
             ;;
     esac
+}
+
+require_profile_feature_support() {
+    if [[ "${full_cg_enabled}" == "1" && \
+        "${CUTEDSL_PROFILE_ALLOW_FULL_CG-}" != "true" ]]; then
+        echo "[ERROR] selected profile does not allow full-iteration CUDA Graph." >&2
+        exit 1
+    fi
+    if [[ "${a2a_enabled}" == "1" && \
+        "${CUTEDSL_PROFILE_ALLOW_A2A-}" != "true" ]]; then
+        echo "[ERROR] selected profile does not allow A2A." >&2
+        exit 1
+    fi
 }
 
 resolve_submit_topology() {
@@ -225,6 +297,7 @@ resolve_submit_topology() {
 
 if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
     resolve_context "${FUNCTIONAL_CONTEXT}"
+    require_profile_feature_support
     if [[ "${full_cg_enabled}" == "1" ]]; then
         functional_updates=6
         resolve_submit_topology 1
@@ -325,6 +398,7 @@ needs_full_cg="0"
 needs_a2a="0"
 for context in "${contexts[@]}"; do
     resolve_context "${context}"
+    require_profile_feature_support
     if [[ "${full_cg_enabled}" == "1" ]]; then
         needs_full_cg="1"
     fi

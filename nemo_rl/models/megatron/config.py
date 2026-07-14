@@ -51,9 +51,9 @@ class ModelAndOptimizerState(NamedTuple):
     """
 
     state: GlobalState
-    model: MegatronModule
+    model: list[MegatronModule]
     optimizer: MegatronOptimizer
     scheduler: OptimizerParamScheduler
     checkpointing_context: dict[str, Any]
-    param_sync_func: Optional[Callable]
+    param_sync_func: Optional[Callable | list[Callable]]
     draft_model: Optional[MegatronModule] = None

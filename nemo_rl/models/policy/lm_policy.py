@@ -41,7 +41,7 @@ from nemo_rl.models.generation.interfaces import (
 from nemo_rl.models.megatron.full_cuda_graph import (
     aggregate_full_cuda_graph_evidence,
 )
-from nemo_rl.models.policy import PolicyConfig
+from nemo_rl.models.policy import PolicyConfig, validate_virtual_pipeline_config
 from nemo_rl.models.policy.interfaces import (
     ColocatablePolicyInterface,
     LogprobOutputSpec,
@@ -101,6 +101,7 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         processor: Optional[AutoProcessor] = None,
         worker_extension_cls_fqn: Optional[str] = None,
     ):
+        validate_virtual_pipeline_config(config)
         if weights_path:
             weights_path = os.path.abspath(weights_path)
         if optimizer_path:
@@ -341,6 +342,7 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                 "input_lengths_key": "input_lengths",
                 "sequence_length_pad_multiple": sequence_length_pad_multiple,
             }
+            self._configure_vpp_sequence_packing_constraints(config)
             assert not config["dynamic_batching"]["enabled"], (
                 "Sequence Packing is exclusive of Dynamic Batching. Please disable Dynamic Batching"
             )
@@ -348,6 +350,21 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             self.use_sequence_packing = False
 
         self.cfg = config
+
+    def _configure_vpp_sequence_packing_constraints(self, config: PolicyConfig) -> None:
+        """Make packed microbatch counts valid for MCore's interleaved schedule."""
+        megatron_cfg = config.get("megatron_cfg") or {}
+        if not megatron_cfg.get("enabled", False):
+            return
+        vpp_size = megatron_cfg.get("virtual_pipeline_model_parallel_size")
+        if type(vpp_size) is not int or vpp_size <= 1:
+            return
+
+        bin_count_multiple = (
+            self.data_parallel_size * megatron_cfg["pipeline_model_parallel_size"]
+        )
+        self.sequence_packing_args["min_bin_count"] = bin_count_multiple
+        self.sequence_packing_args["bin_count_multiple"] = bin_count_multiple
 
     @property
     def data_parallel_size(self) -> int:
