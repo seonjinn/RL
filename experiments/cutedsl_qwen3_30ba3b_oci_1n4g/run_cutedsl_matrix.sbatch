@@ -509,7 +509,7 @@ if [[ "${NEMO2606_FULL_CG_ENABLED}" == "1" ]]; then
         "policy.megatron_cfg.cuda_graph_impl=full_iteration"
         "policy.megatron_cfg.cuda_graph_warmup_steps=${CUDA_GRAPH_WARMUP_STEPS}"
         "policy.megatron_cfg.cuda_graph_use_single_mempool=true"
-        "policy.megatron_cfg.cuda_graph_modules=[]"
+        "++policy.megatron_cfg.cuda_graph_modules=[]"
     )
 else
     COMMON_OVERRIDES+=("policy.megatron_cfg.cuda_graph_impl=none")

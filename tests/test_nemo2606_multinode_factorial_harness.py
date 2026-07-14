@@ -786,12 +786,15 @@ def test_matrix_disables_validation_only_for_performance_arms() -> None:
 
 
 def test_official_performance_recipe_accepts_full_iteration_overrides() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    assert '"++policy.megatron_cfg.cuda_graph_modules=[]"' in source
     config = parse_hydra_overrides(
         load_config(OFFICIAL_RECIPE),
         [
             "policy.megatron_cfg.cuda_graph_impl=full_iteration",
             "policy.megatron_cfg.cuda_graph_warmup_steps=3",
             "policy.megatron_cfg.cuda_graph_use_single_mempool=true",
+            "++policy.megatron_cfg.cuda_graph_modules=[]",
         ],
     )
     resolved = OmegaConf.to_container(config, resolve=True)
@@ -800,6 +803,7 @@ def test_official_performance_recipe_accepts_full_iteration_overrides() -> None:
     assert megatron["cuda_graph_impl"] == "full_iteration"
     assert megatron["cuda_graph_warmup_steps"] == 3
     assert megatron["cuda_graph_use_single_mempool"] is True
+    assert megatron["cuda_graph_modules"] == []
 
 
 def test_multinode_recipe_uses_unpacked_vllm_compile_cache() -> None:
@@ -2846,7 +2850,7 @@ def test_matrix_records_hybridep_static_and_full_cg_dependency_contracts() -> No
     )
     assert '"full_cg_dependency_evidence": full_cg_dependency_evidence' in source
     assert '"full_cg_effect_scope": "dependency_bundle"' in source
-    assert '"policy.megatron_cfg.cuda_graph_modules=[]"' in source
+    assert '"++policy.megatron_cfg.cuda_graph_modules=[]"' in source
     assert '"policy.megatron_cfg.cuda_graph_modules",' in source
     assert 'full_cg_config_evidence[arm]["cuda_graph_modules"] == []' in source
     for recompute_field in (
