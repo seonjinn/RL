@@ -399,19 +399,29 @@ def run_rollout(args: argparse.Namespace, llm: Any) -> None:
 
     for step in range(args.num_steps):
         base = step * args.num_prompts_per_step
+        # Submit G explicit copies per prompt (instead of SamplingParams(n=G))
+        # so vLLM reports per-generation finish times: with n=G the parent
+        # request finishes only when all G children do, which hides the drain
+        # tail at parent granularity. Distribution is identical; each copy
+        # gets its own seed.
         prompts = [
             TokensPrompt(prompt_token_ids=pool[base + i])
             for i in range(args.num_prompts_per_step)
+            for _ in range(args.num_generations_per_prompt)
         ]
-        sampling = SamplingParams(
-            n=args.num_generations_per_prompt,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            top_k=args.top_k,
-            max_tokens=args.max_tokens,
-            seed=args.seed + step if args.per_request_seed else None,
-            detokenize=False,
-        )
+        sampling = [
+            SamplingParams(
+                temperature=args.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                max_tokens=args.max_tokens,
+                seed=(args.seed + step * len(prompts) + idx)
+                if args.per_request_seed
+                else None,
+                detokenize=False,
+            )
+            for idx in range(len(prompts))
+        ]
         before = read_spec_decode_metrics(llm)
         t_start = time.perf_counter()
         monotonic_anchor = time.monotonic()
