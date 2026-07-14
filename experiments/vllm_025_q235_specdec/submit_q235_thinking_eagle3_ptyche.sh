@@ -15,6 +15,7 @@ REPO_DIR="${REPO_DIR:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-vllm025-thinkin
 CONTAINER="${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh}"
 MOUNTS="${MOUNTS:-/lustre:/lustre}"
 HF_HOME="${HF_HOME:-/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home}"
+TARGET_SNAPSHOT="${TARGET_SNAPSHOT:-${HF_HOME}/hub/models--Qwen--Qwen3-235B-A22B/snapshots/8efa61729e24bd65b1d152b5ab5409052aa80e65}"
 DRAFT_SNAPSHOT="${DRAFT_SNAPSHOT:-${HF_HOME}/hub/models--RedHatAI--Qwen3-235B-A22B-Thinking-2507-speculator.eagle3/snapshots/3c0c5cbad8e1fa7ce9e6fb6a1b0a35458b124e87}"
 RUN_TAG="${RUN_TAG:-q235-v025-thinking-${VARIANT}-$(date +%Y%m%d-%H%M%S)}"
 EXPERIMENT_ROOT="${EXPERIMENT_ROOT:-${REPO_DIR}/experiments/vllm_025_q235_specdec/runs}"
@@ -50,6 +51,8 @@ if [[ "${NUM_NODES}" != "16" || "${SEGMENT}" != "16" ]]; then
 fi
 
 overrides=(
+  "policy.model_name=${TARGET_SNAPSHOT}"
+  "policy.tokenizer.name=${TARGET_SNAPSHOT}"
   "grpo.max_num_steps=${MAX_STEPS}"
   "checkpointing.enabled=false"
   "checkpointing.checkpoint_dir=${RUN_DIR}/checkpoints"
@@ -145,6 +148,10 @@ case "${MODE}" in
     printf ' %s\n' "${REPO_DIR}/ray.sub"
     ;;
   test-only|submit)
+    if [[ ! -f "${TARGET_SNAPSHOT}/model.safetensors.index.json" ]]; then
+      printf 'Target snapshot is missing its safetensors index: %s\n' "${TARGET_SNAPSHOT}" >&2
+      exit 2
+    fi
     if [[ ! -d "${DRAFT_SNAPSHOT}" && "${SPECULATIVE_TOKENS}" -gt 0 ]]; then
       printf 'Thinking drafter snapshot is missing: %s\n' "${DRAFT_SNAPSHOT}" >&2
       exit 2
@@ -174,6 +181,7 @@ case "${MODE}" in
       printf 'megatron_lm_head=%s\n' "$(git -C "${REPO_DIR}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM" rev-parse HEAD)"
       printf 'container=%s\n' "${CONTAINER}"
       printf 'target_model=Qwen/Qwen3-235B-A22B\n'
+      printf 'target_snapshot=%s\n' "${TARGET_SNAPSHOT}"
       printf 'draft_snapshot=%s\n' "${DRAFT_SNAPSHOT}"
       printf 'num_speculative_tokens=%s\n' "${SPECULATIVE_TOKENS}"
       printf 'max_steps=%s\n' "${MAX_STEPS}"

@@ -37,6 +37,18 @@ def test_baseline_preserves_verified_q235_performance_contract() -> None:
     output = _dry_run("baseline")
 
     assert "grpo-qwen3-235b-16n4g.yaml" in output
+    assert (
+        "policy.model_name=/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+        "models--Qwen--Qwen3-235B-A22B/snapshots/"
+        "8efa61729e24bd65b1d152b5ab5409052aa80e65"
+        in output
+    )
+    assert (
+        "policy.tokenizer.name=/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+        "models--Qwen--Qwen3-235B-A22B/snapshots/"
+        "8efa61729e24bd65b1d152b5ab5409052aa80e65"
+        in output
+    )
     assert "grpo.max_num_steps=1" in output
     assert "checkpointing.enabled=false" in output
     assert "policy.generation.vllm_cfg.enforce_eager=false" in output
@@ -94,6 +106,7 @@ def test_invalid_variant_fails_before_submission() -> None:
 
 
 def test_submission_runs_sbatch_from_repo_directory(tmp_path: Path) -> None:
+    (tmp_path / "model.safetensors.index.json").write_text("{}")
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_sbatch = fake_bin / "sbatch"
@@ -118,6 +131,7 @@ def test_submission_runs_sbatch_from_repo_directory(tmp_path: Path) -> None:
             "REPO_DIR": str(REPO_ROOT),
             "RUN_DIR": str(tmp_path / "run"),
             "RUN_TAG": "contract-test-cwd",
+            "TARGET_SNAPSHOT": str(tmp_path),
             "PATH": f"{fake_bin}:{env['PATH']}",
         }
     )
