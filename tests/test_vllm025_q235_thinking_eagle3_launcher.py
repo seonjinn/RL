@@ -53,6 +53,7 @@ def test_baseline_preserves_verified_q235_performance_contract() -> None:
     assert "logger.wandb_enabled=false" in output
     assert "--nodes=16" in output
     assert "--segment=16" in output
+    assert "--time=05:00:00" in output
     assert "--gres" not in output
     assert "speculative_config" not in output
 
