@@ -169,9 +169,9 @@ if [[ "${NEMO2606_FULL_CG_ENABLED}" == "1" ]]; then
 fi
 if [[ "${NEMO2606_A2A_ENABLED}" == "1" ]]; then
     require_source_feature "${REPO_ROOT}/nemo_rl/models/megatron/train.py" \
-        "return_schedule_plan" "EP A2A overlap"
+        "return_schedule_plan" "EP A2A optimization bundle"
     require_source_feature "${REPO_ROOT}/nemo_rl/models/megatron/setup.py" \
-        "overlap_moe_expert_parallel_comm" "EP A2A overlap"
+        "overlap_moe_expert_parallel_comm" "EP A2A optimization bundle"
 fi
 
 if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
@@ -446,6 +446,7 @@ COMMON_OVERRIDES=(
     "policy.train_global_batch_size=${TRAIN_GLOBAL_BATCH_SIZE}"
     "policy.train_micro_batch_size=1"
     "policy.megatron_cfg.expert_model_parallel_size=${EXPERT_MODEL_PARALLEL_SIZE}"
+    "+policy.megatron_cfg.env_vars.CUDA_DEVICE_MAX_CONNECTIONS=\"32\""
     "${A2A_OVERLAP_OVERRIDE}"
     "${A2A_HIGH_PRIORITY_OVERRIDE}"
     "${A2A_DELAY_WGRAD_OVERRIDE}"
@@ -984,6 +985,7 @@ fixed_config_paths = (
     "policy.megatron_cfg.moe_grouped_gemm",
     "policy.megatron_cfg.moe_router_dtype",
     "policy.megatron_cfg.use_transformer_engine_op_fuser",
+    "policy.megatron_cfg.env_vars.CUDA_DEVICE_MAX_CONNECTIONS",
     "policy.megatron_cfg.moe_mlp_glu_interleave_size",
     "policy.megatron_cfg.expert_tensor_parallel_size",
     "policy.megatron_cfg.fp8_cfg.enabled",
@@ -1030,6 +1032,12 @@ for arm in timing_order:
             "policy.megatron_cfg.use_transformer_engine_op_fuser"
         ]
         is True
+    )
+    assert (
+        fixed_config_evidence[arm][
+            "policy.megatron_cfg.env_vars.CUDA_DEVICE_MAX_CONNECTIONS"
+        ]
+        == "32"
     )
     assert (
         fixed_config_evidence[arm][
@@ -2136,6 +2144,7 @@ if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
     [[ ! -e "${CONTAINER_RESULT_DIR}/profiles" ]]
     [[ ! -e "${CONTAINER_RESULT_DIR}/kernel_attribution.json" ]]
     [[ ! -e "${CONTAINER_RESULT_DIR}/feature_attribution.json" ]]
+    [[ ! -e "${CONTAINER_RESULT_DIR}/a2a_temporal_overlap.json" ]]
     cutedsl_write_event functional_grpo pass 0 \
         "Three-update functional arm and runtime evidence passed" \
         functional_gate_summary.json
@@ -2185,7 +2194,7 @@ profile_max_steps=2
 profile_step_range="1:2"
 if [[ "${NEMO2606_FULL_CG_ENABLED}" == "1" ]]; then
     profile_max_steps=$((CUDA_GRAPH_WARMUP_STEPS + 2))
-    profile_step_range="$((CUDA_GRAPH_WARMUP_STEPS + 1)):$((CUDA_GRAPH_WARMUP_STEPS + 2))"
+    profile_step_range="$((CUDA_GRAPH_WARMUP_STEPS + 1)):$((CUDA_GRAPH_WARMUP_STEPS + 3))"
 fi
 profile_overrides+=("grpo.max_num_steps=${profile_max_steps}")
 IFS=',' read -r -a timing_arms <<< "${TIMING_ORDER}"
@@ -2226,26 +2235,51 @@ run_profile_arm() {
     fi
     mapfile -d '' -t nsight_reports < <(
         find "${profile_search_root}" -type f -path '*/logs/nsight/*.nsys-rep' \
-            -newer "${profile_marker}" -print0 2>/dev/null | sort -z
+            -newer "${profile_marker}" -print0 2>/dev/null | LC_ALL=C sort -z
     )
     if ((${#nsight_reports[@]} > 16)); then
         echo "[ERROR] Profiling arm ${arm} produced ${#nsight_reports[@]} reports; bounded limit is 16." >&2
         return 1
     fi
     : > "${arm_dir}/kernel_evidence.txt"
+# NEMO2606_PROFILE_REPORT_STAGING_START
+    local staged_report_count=0
+    local report_basename staged_report_name staged_report
     for report in "${nsight_reports[@]}"; do
-        cp -a "${report}" "${arm_dir}/nsight/"
-        printf '\n===== %s =====\n' "${report}" >> "${arm_dir}/kernel_evidence.txt"
-        nsys stats --report cuda_gpu_kern_sum --format csv "${report}" \
+        report_basename=${report##*/}
+        printf -v staged_report_name '%04d-%s' \
+            "${staged_report_count}" "${report_basename}"
+        staged_report="${arm_dir}/nsight/${staged_report_name}"
+        if [[ -e "${staged_report}" || -L "${staged_report}" ]]; then
+            echo "[ERROR] Refusing to overwrite staged Nsight report: ${staged_report}" >&2
+            return 1
+        fi
+        if ! cp -a -- "${report}" "${staged_report}"; then
+            echo "[ERROR] Failed to stage Nsight report: ${report}" >&2
+            return 1
+        fi
+        if [[ ! -f "${staged_report}" || -L "${staged_report}" ]]; then
+            echo "[ERROR] Staged Nsight report is not a regular file: ${staged_report}" >&2
+            return 1
+        fi
+        staged_report_count=$((staged_report_count + 1))
+        printf '\n===== %s =====\n' "${staged_report}" >> "${arm_dir}/kernel_evidence.txt"
+        nsys stats --report cuda_gpu_kern_sum --format csv "${staged_report}" \
             >> "${arm_dir}/kernel_evidence.txt" 2>&1 || true
-        nsys stats --report cuda_api_sum --format csv "${report}" \
+        nsys stats --report cuda_api_sum --format csv "${staged_report}" \
             >> "${arm_dir}/kernel_evidence.txt" 2>&1 || true
     done
+    local report_count
+    report_count=$(find "${arm_dir}/nsight" -type f -name "*.nsys-rep" | wc -l | tr -d " ")
+    if ((staged_report_count != ${#nsight_reports[@]} || \
+        report_count != ${#nsight_reports[@]})); then
+        echo "[ERROR] Profiling arm ${arm} staged ${report_count}/${#nsight_reports[@]} Nsight reports." >&2
+        return 1
+    fi
+# NEMO2606_PROFILE_REPORT_STAGING_END
     find "${profile_search_root}" -type f -print | head -n 200 \
         > "${arm_dir}/ray_artifacts.txt" 2>/dev/null || true
-    local report_count
     local profile_artifact_exit_code=0
-    report_count=$(find "${arm_dir}/nsight" -type f -name "*.nsys-rep" | wc -l | tr -d " ")
     if ((report_count < 1)); then
         echo "[ERROR] Profiling arm ${arm} produced no .nsys-rep artifact." >&2
         profile_artifact_exit_code=1
@@ -2267,6 +2301,110 @@ run_profile_arm() {
 for order_index in "${!timing_arms[@]}"; do
     run_profile_arm "${timing_arms[order_index]}" "${order_index}"
 done
+
+# NEMO2606_A2A_TEMPORAL_ANALYSIS_START
+a2a_temporal_artifact="${CONTAINER_RESULT_DIR}/a2a_temporal_overlap.json"
+profiles_root="${CONTAINER_RESULT_DIR}/profiles"
+selected_report=''
+on_report_count=0
+while IFS= read -r -d '' report; do
+    on_report_count=$((on_report_count + 1))
+    if [[ -z "${selected_report}" ]]; then
+        selected_report="${report}"
+    fi
+done < <(
+    find "${profiles_root}" -mindepth 3 -maxdepth 3 -type f \
+        -path "${profiles_root}/*-on/nsight/*.nsys-rep" -print0 | \
+        LC_ALL=C sort -z
+)
+if [[ -z "${selected_report}" ]]; then
+    echo "[ERROR] A2A temporal analysis requires at least one ON-arm Nsight report." >&2
+    exit 1
+fi
+
+selected_report_sha256=$(sha256sum -- "${selected_report}" | awk '{print $1}')
+selected_digest_matches=0
+while IFS= read -r -d '' report; do
+    report_sha256=$(sha256sum -- "${report}" | awk '{print $1}')
+    if [[ "${report_sha256}" == "${selected_report_sha256}" ]]; then
+        selected_digest_matches=$((selected_digest_matches + 1))
+    fi
+done < <(
+    find "${profiles_root}" -type f -name '*.nsys-rep' -print0 | \
+        LC_ALL=C sort -z
+)
+if ((selected_digest_matches != 1)); then
+    echo "[ERROR] selected ON report SHA256 must match exactly one profile artifact; found ${selected_digest_matches}." >&2
+    exit 1
+fi
+
+"${RUNTIME_PYTHON}" \
+    "${CONTAINER_REPO_ROOT}/experiments/cutedsl_qwen3_30ba3b_oci_1n4g/analyze_a2a_temporal_overlap.py" \
+    "${selected_report}" --output "${a2a_temporal_artifact}"
+"${RUNTIME_PYTHON}" - \
+    "${a2a_temporal_artifact}" \
+    "${selected_report_sha256}" \
+    "${on_report_count}" \
+    "${FEATURE_CONTEXT}" \
+    "${NEMO2606_A2A_ENABLED}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+artifact_path = Path(sys.argv[1])
+selected_report_sha256 = sys.argv[2]
+on_report_count = int(sys.argv[3])
+feature_context = sys.argv[4]
+a2a_overlap_schedule_enabled = sys.argv[5] == "1"
+analysis = json.loads(artifact_path.read_text())
+expected_fields = {
+    "schema_version",
+    "source_profile_sha256",
+    "a2a_interval_count",
+    "expert_gemm_interval_count",
+    "overlap_duration_ns",
+    "a2a_overlap_ratio",
+    "gemm_overlap_ratio",
+    "temporal_overlap_verified",
+    "limitations",
+}
+if set(analysis) != expected_fields or analysis.get("schema_version") != 1:
+    raise ValueError("A2A temporal analyzer schema differs")
+if analysis["source_profile_sha256"] != selected_report_sha256:
+    raise ValueError("A2A analyzer source SHA differs from the selected ON report")
+if not isinstance(analysis["temporal_overlap_verified"], bool):
+    raise ValueError("A2A temporal_overlap_verified must be boolean")
+limitations = analysis["limitations"]
+if not isinstance(limitations, list) or any(
+    not isinstance(item, str) or not item for item in limitations
+):
+    raise ValueError("A2A analyzer limitations must be non-empty strings")
+if a2a_overlap_schedule_enabled:
+    context_limitation = (
+        f"feature context {feature_context}: A2A optimization bundle enabled "
+        "(overlap, high-priority stream, delay-wgrad)"
+    )
+else:
+    context_limitation = (
+        f"feature context {feature_context}: A2A optimization bundle disabled "
+        "(overlap, high-priority stream, delay-wgrad); MoE token "
+        "dispatch/combine NCCL A2A/SendRecv communication may still be present"
+    )
+limitations.extend(
+    [
+        context_limitation,
+        "deterministic C-locale first ON report selected; "
+        f"{on_report_count} total ON reports; only one representative "
+        "process/rank analyzed; no all-rank aggregation",
+        "selected report SHA256 must occur exactly once across "
+        "profiles/**/*.nsys-rep",
+    ]
+)
+temporary_path = artifact_path.with_name(f".{artifact_path.name}.harness.tmp")
+temporary_path.write_text(json.dumps(analysis, indent=2, sort_keys=True) + "\n")
+temporary_path.replace(artifact_path)
+PY
+# NEMO2606_A2A_TEMPORAL_ANALYSIS_END
 
 "${UV_BIN}" run --active --no-sync python - "${CONTAINER_RESULT_DIR}" <<'PY'
 # CUTEDSL_KERNEL_ATTRIBUTION_START
@@ -2321,6 +2459,31 @@ def total_matches(counts: dict[str, int]) -> int:
 result_dir = Path(sys.argv[1])
 manifest_path = result_dir / "benchmark_manifest.json"
 manifest = json.loads(manifest_path.read_text())
+a2a_temporal_path = result_dir / "a2a_temporal_overlap.json"
+a2a_temporal_analysis = json.loads(a2a_temporal_path.read_text())
+expected_temporal_fields = {
+    "schema_version",
+    "source_profile_sha256",
+    "a2a_interval_count",
+    "expert_gemm_interval_count",
+    "overlap_duration_ns",
+    "a2a_overlap_ratio",
+    "gemm_overlap_ratio",
+    "temporal_overlap_verified",
+    "limitations",
+}
+if (
+    set(a2a_temporal_analysis) != expected_temporal_fields
+    or a2a_temporal_analysis.get("schema_version") != 1
+):
+    raise ValueError("A2A temporal analyzer schema differs")
+if not isinstance(a2a_temporal_analysis["temporal_overlap_verified"], bool):
+    raise ValueError("A2A temporal_overlap_verified must be boolean")
+analyzer_limitations = a2a_temporal_analysis["limitations"]
+if not isinstance(analyzer_limitations, list) or any(
+    not isinstance(item, str) or not item for item in analyzer_limitations
+):
+    raise ValueError("A2A analyzer limitations must be non-empty strings")
 config_evidence = manifest.get("fixed_config_evidence", {})
 expected_arms = manifest["available_arms"]
 failures: list[str] = []
@@ -2445,10 +2608,7 @@ if manifest["full_cg_enabled"]:
     feature_limitations.append(
         "cudaGraphLaunch presence does not prove full-iteration replay"
     )
-if manifest["a2a_enabled"]:
-    feature_limitations.append(
-        "NCCL A2A kernel presence does not prove temporal overlap with GEMM"
-    )
+feature_limitations.extend(a2a_temporal_analysis["limitations"])
 manifest["feature_attribution"] = {
     "feature_context": manifest["feature_context"],
     "full_cg_enabled": manifest["full_cg_enabled"],
@@ -2458,7 +2618,9 @@ manifest["feature_attribution"] = {
     "full_iteration_replay_verified": (
         False if manifest["full_cg_enabled"] else None
     ),
-    "a2a_temporal_overlap_verified": False if manifest["a2a_enabled"] else None,
+    "a2a_temporal_overlap_verified": (
+        a2a_temporal_analysis["temporal_overlap_verified"]
+    ),
     "performance_claim_eligible": False,
     "limitations": feature_limitations,
 }

@@ -136,6 +136,8 @@ readonly RESULT_ROOT="${EXPERIMENT_DIR}/results"
 readonly RUNTIME_ROOT="${RESULT_ROOT}/multinode_runtime/${SUBMISSION_GROUP}"
 readonly RAY_LOG_ROOT="${RESULT_ROOT}/ray_logs/${SUBMISSION_GROUP}"
 readonly SUBMISSION_DIR="${RESULT_ROOT}/factorial/submissions"
+readonly COHORT_SUBMISSION="${SUBMISSION_DIR}/${SUBMISSION_GROUP}.jsonl"
+readonly COHORT_SUBMISSION_TEMP="${COHORT_SUBMISSION}.tmp.$$"
 readonly CACHE_DIAGNOSTIC="${EXPERIMENT_DIR}/collect_triton_cache_diagnostics.py"
 printf -v FAILURE_COMMAND 'export TRITON_CACHE_DIR="/tmp/${USER}/nemo2606-factorial/${SLURM_JOB_ID}${SLURM_RESTART_COUNT:+-r${SLURM_RESTART_COUNT}}/triton_cache"; exec python3 %q --from-slurm-env' "${CACHE_DIAGNOSTIC}"
 readonly FAILURE_COMMAND
@@ -153,11 +155,20 @@ readonly RUNTIME_CANARY="${RUNTIME_ROOT}/.shared_fs_canary"
 readonly RAY_SETUP_COMMAND="test -r ${RUNTIME_CANARY} && grep -Fx ${CUTEDSL_SUBMISSION_GIT_SHA} ${RUNTIME_CANARY} && test \"\$(git -C ${REPO_ROOT} rev-parse HEAD)\" = ${CUTEDSL_SUBMISSION_GIT_SHA}"
 EXPORT_PAYLOAD=$(mktemp "${TMPDIR:-/tmp}/nemo2606-factorial-export.XXXXXX")
 readonly EXPORT_PAYLOAD
-trap 'rm -f "${EXPORT_PAYLOAD}"' EXIT
+trap 'rm -f "${EXPORT_PAYLOAD}" "${COHORT_SUBMISSION_TEMP}"' EXIT
 chmod 600 "${EXPORT_PAYLOAD}"
 if [[ "${TEST_ONLY}" == "0" ]]; then
     mkdir -p "${SUBMISSION_DIR}" "${RUNTIME_ROOT}" "${RAY_LOG_ROOT}"
     printf '%s\n' "${CUTEDSL_SUBMISSION_GIT_SHA}" > "${RUNTIME_CANARY}"
+    if [[ "${FUNCTIONAL_GATE}" != "1" ]]; then
+        if [[ -e "${COHORT_SUBMISSION}" || -L "${COHORT_SUBMISSION}" || \
+            -e "${COHORT_SUBMISSION_TEMP}" || -L "${COHORT_SUBMISSION_TEMP}" ]]; then
+            echo "[ERROR] Refusing to overwrite factorial cohort submission record." >&2
+            exit 1
+        fi
+        : > "${COHORT_SUBMISSION_TEMP}"
+        chmod 600 "${COHORT_SUBMISSION_TEMP}"
+    fi
 fi
 
 resolve_context() {
@@ -437,6 +448,7 @@ for ((replicate_index = 0; replicate_index < REPLICATES; replicate_index++)); do
         printf '%s\n' "${record}"
         if [[ "${TEST_ONLY}" == "0" ]]; then
             printf '%s\n' "${record}" >> "${submission_record}"
+            printf '%s\n' "${record}" >> "${COHORT_SUBMISSION_TEMP}"
         fi
     done
 done
@@ -444,6 +456,19 @@ done
 if [[ "${TEST_ONLY}" == "1" ]]; then
     echo "[INFO] Scheduler/export preflighted ${#contexts[@]} contexts x ${REPLICATES} replicas; feature-source checks were skipped and no jobs were submitted."
 else
+    expected_cohort_records=$((${#contexts[@]} * REPLICATES))
+    actual_cohort_records=$(wc -l < "${COHORT_SUBMISSION_TEMP}" | tr -d " ")
+    if ((actual_cohort_records != expected_cohort_records)); then
+        echo "[ERROR] Factorial cohort has ${actual_cohort_records}/${expected_cohort_records} records." >&2
+        exit 1
+    fi
+    if [[ ! -f "${COHORT_SUBMISSION_TEMP}" || -L "${COHORT_SUBMISSION_TEMP}" || \
+        -e "${COHORT_SUBMISSION}" || -L "${COHORT_SUBMISSION}" ]]; then
+        echo "[ERROR] Factorial cohort finalization preconditions failed." >&2
+        exit 1
+    fi
+    mv -- "${COHORT_SUBMISSION_TEMP}" "${COHORT_SUBMISSION}"
     echo "[INFO] Submitted ${#contexts[@]} contexts x ${REPLICATES} replicas."
+    echo "[INFO] Collector cohort JSONL: ${COHORT_SUBMISSION}"
     echo "[INFO] Collect paired g0 contexts with collect_cutedsl_ab_replicates.py; ON-only g1 contexts require the dependency-constrained collector."
 fi

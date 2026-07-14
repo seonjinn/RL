@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import os
 import re
@@ -24,6 +25,7 @@ SUBMITTER = EXPERIMENT_DIR / "submit_nemo2606_2n4g_factorial.sh"
 OFFICIAL_SUBMITTER = EXPERIMENT_DIR / "submit_nemo2606_4n4g_performance.sh"
 DIRECT_AB_SUBMITTER = EXPERIMENT_DIR / "submit_cutedsl_ab_replicates.sh"
 MATRIX_PAYLOAD = EXPERIMENT_DIR / "run_cutedsl_matrix.sbatch"
+TEMPORAL_ANALYZER = EXPERIMENT_DIR / "analyze_a2a_temporal_overlap.py"
 PROFILE_LOADER = EXPERIMENT_DIR / "lib/cluster_profile.sh"
 RAY_SUB = PROJECT_ROOT / "ray.sub"
 RECIPE = (
@@ -48,6 +50,113 @@ OFFICIAL_BASE_RECIPE = (
 )
 
 register_omegaconf_resolvers()
+
+
+def _run_a2a_temporal_stage(
+    tmp_path: Path,
+    *,
+    enabled: bool,
+    duplicate_selected_digest: bool = False,
+) -> tuple[subprocess.CompletedProcess[str], Path, dict[str, Path]]:
+    source = MATRIX_PAYLOAD.read_text()
+    start_marker = "# NEMO2606_A2A_TEMPORAL_ANALYSIS_START\n"
+    end_marker = "# NEMO2606_A2A_TEMPORAL_ANALYSIS_END"
+    assert start_marker in source
+    assert end_marker in source
+    stage = source.split(start_marker, 1)[1].split(end_marker, 1)[0]
+    result_dir = tmp_path / "results"
+    reports = {
+        "first_on": result_dir / "profiles/0-on/nsight/a-report.nsys-rep",
+        "second_on": result_dir / "profiles/0-on/nsight/z-report.nsys-rep",
+        "off": result_dir / "profiles/1-off/nsight/off-report.nsys-rep",
+    }
+    for label, path in reports.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        contents_label = (
+            "first_on" if duplicate_selected_digest and label == "off" else label
+        )
+        path.write_bytes(f"{contents_label}-profile\n".encode())
+
+    repo_root = tmp_path / "repo"
+    analyzer = repo_root / TEMPORAL_ANALYZER.relative_to(PROJECT_ROOT)
+    analyzer.parent.mkdir(parents=True)
+    analyzer.write_text(
+        """\
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("profile", type=Path)
+parser.add_argument("--output", required=True, type=Path)
+args = parser.parse_args()
+args.output.write_text(json.dumps({
+    "schema_version": 1,
+    "source_profile_sha256": hashlib.sha256(args.profile.read_bytes()).hexdigest(),
+    "a2a_interval_count": 2,
+    "expert_gemm_interval_count": 3,
+    "overlap_duration_ns": 4,
+    "a2a_overlap_ratio": 0.5,
+    "gemm_overlap_ratio": 0.25,
+    "temporal_overlap_verified": True,
+    "limitations": ["analyzer limitation"],
+}))
+"""
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "NEMO2606_A2A_ENABLED": "1" if enabled else "0",
+            "FEATURE_CONTEXT": "g0a1" if enabled else "g0a0",
+            "CONTAINER_RESULT_DIR": str(result_dir),
+            "CONTAINER_REPO_ROOT": str(repo_root),
+            "RUNTIME_PYTHON": sys.executable,
+        }
+    )
+    result = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + stage],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    return result, result_dir, reports
+
+
+def _run_profile_report_staging(
+    tmp_path: Path,
+    *,
+    preexisting_destination: bool = False,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    source = MATRIX_PAYLOAD.read_text()
+    start_marker = "# NEMO2606_PROFILE_REPORT_STAGING_START\n"
+    end_marker = "# NEMO2606_PROFILE_REPORT_STAGING_END"
+    assert start_marker in source
+    assert end_marker in source
+    stage = source.split(start_marker, 1)[1].split(end_marker, 1)[0]
+    source_reports = []
+    for node, contents in (("node-a", b"first\n"), ("node-b", b"second\n")):
+        report = tmp_path / node / "logs/nsight/worker-123.nsys-rep"
+        report.parent.mkdir(parents=True)
+        report.write_bytes(contents)
+        source_reports.append(report)
+    arm_dir = tmp_path / "arm"
+    (arm_dir / "nsight").mkdir(parents=True)
+    if preexisting_destination:
+        (arm_dir / "nsight/0000-worker-123.nsys-rep").write_bytes(b"existing\n")
+    report_args = " ".join(shlex.quote(str(path)) for path in source_reports)
+    script = f"""\
+set -euo pipefail
+arm=on
+arm_dir={shlex.quote(str(arm_dir))}
+nsight_reports=({report_args})
+stage_reports() {{
+{stage}
+}}
+stage_reports
+"""
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    return result, arm_dir
 
 
 def _run_timing_summarizer(
@@ -113,6 +222,9 @@ def _run_kernel_attribution_fixture(
     off: str,
     off_moe_grouped_gemm: bool = True,
     off_op_fuser: bool = True,
+    a2a_enabled: bool = False,
+    temporal_overlap_verified: bool = True,
+    temporal_limitations: list[str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, object]]:
     """Execute the embedded kernel-attribution program on bounded fixtures."""
     source = MATRIX_PAYLOAD.read_text()
@@ -137,11 +249,26 @@ def _run_kernel_attribution_fixture(
     manifest = {
         "available_arms": ["on", "off"],
         "fixed_config_evidence": config_evidence,
-        "feature_context": "g0a0",
+        "feature_context": "g0a1" if a2a_enabled else "g0a0",
         "full_cg_enabled": False,
-        "a2a_enabled": False,
+        "a2a_enabled": a2a_enabled,
     }
     (result_dir / "benchmark_manifest.json").write_text(json.dumps(manifest))
+    (result_dir / "a2a_temporal_overlap.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source_profile_sha256": "a" * 64,
+                "a2a_interval_count": 2,
+                "expert_gemm_interval_count": 3,
+                "overlap_duration_ns": 4,
+                "a2a_overlap_ratio": 0.5,
+                "gemm_overlap_ratio": 0.25,
+                "temporal_overlap_verified": temporal_overlap_verified,
+                "limitations": temporal_limitations or [],
+            }
+        )
+    )
 
     result = subprocess.run(
         [sys.executable, "-c", attribution, str(result_dir)],
@@ -167,6 +294,117 @@ def _actual_cudnn_fused_kernel_evidence() -> str:
             "BlockScaledMoEGroupedGemmDgluDbiasKernel_object_at_0x3",
         )
     )
+
+
+def test_a2a_temporal_stage_selects_first_on_report_and_records_limitations(
+    tmp_path: Path,
+) -> None:
+    result, result_dir, reports = _run_a2a_temporal_stage(tmp_path, enabled=True)
+
+    assert result.returncode == 0, result.stderr
+    artifact = json.loads((result_dir / "a2a_temporal_overlap.json").read_text())
+    assert (
+        artifact["source_profile_sha256"]
+        == hashlib.sha256(reports["first_on"].read_bytes()).hexdigest()
+    )
+    assert artifact["temporal_overlap_verified"] is True
+    assert artifact["limitations"] == [
+        "analyzer limitation",
+        "feature context g0a1: A2A optimization bundle enabled "
+        "(overlap, high-priority stream, delay-wgrad)",
+        "deterministic C-locale first ON report selected; 2 total ON reports; "
+        "only one representative process/rank analyzed; no all-rank aggregation",
+        "selected report SHA256 must occur exactly once across profiles/**/*.nsys-rep",
+    ]
+
+
+def test_a2a_temporal_stage_analyzes_schedule_disabled_context(
+    tmp_path: Path,
+) -> None:
+    result, result_dir, _ = _run_a2a_temporal_stage(tmp_path, enabled=False)
+
+    assert result.returncode == 0, result.stderr
+    artifact = json.loads((result_dir / "a2a_temporal_overlap.json").read_text())
+    assert artifact["temporal_overlap_verified"] is True
+    assert (
+        "feature context g0a0: A2A optimization bundle disabled "
+        "(overlap, high-priority stream, delay-wgrad); MoE token dispatch/combine "
+        "NCCL A2A/SendRecv communication may still be present"
+        in artifact["limitations"]
+    )
+
+
+def test_a2a_temporal_stage_rejects_selected_digest_duplicated_across_profiles(
+    tmp_path: Path,
+) -> None:
+    result, result_dir, _ = _run_a2a_temporal_stage(
+        tmp_path,
+        enabled=True,
+        duplicate_selected_digest=True,
+    )
+
+    assert result.returncode != 0
+    assert "selected ON report SHA256 must match exactly one profile artifact" in (
+        result.stderr
+    )
+    assert not (result_dir / "a2a_temporal_overlap.json").exists()
+
+
+def test_profile_report_staging_preserves_colliding_basenames(tmp_path: Path) -> None:
+    result, arm_dir = _run_profile_report_staging(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    staged_reports = sorted((arm_dir / "nsight").glob("*.nsys-rep"))
+    assert [path.name for path in staged_reports] == [
+        "0000-worker-123.nsys-rep",
+        "0001-worker-123.nsys-rep",
+    ]
+    assert [path.read_bytes() for path in staged_reports] == [b"first\n", b"second\n"]
+
+
+def test_profile_report_staging_rejects_existing_destination(tmp_path: Path) -> None:
+    result, _ = _run_profile_report_staging(
+        tmp_path,
+        preexisting_destination=True,
+    )
+
+    assert result.returncode != 0
+    assert "Refusing to overwrite staged Nsight report" in result.stderr
+
+
+@pytest.mark.parametrize("a2a_enabled", [False, True])
+def test_kernel_attribution_propagates_a2a_temporal_result_to_manifest(
+    tmp_path: Path,
+    a2a_enabled: bool,
+) -> None:
+    analyzer_limitations = [
+        "deterministic C-locale first ON report selected; 12 total ON reports; "
+        "only one representative process/rank analyzed; no all-rank aggregation",
+        "selected report SHA256 must occur exactly once across profiles/**/*.nsys-rep",
+    ]
+    a2a_kernel = "ncclKernel_SendRecv"
+    result, _ = _run_kernel_attribution_fixture(
+        tmp_path,
+        on=f"{_actual_cudnn_fused_kernel_evidence()}\n{a2a_kernel}",
+        off=f"nvjet_sm100_128x128\n{a2a_kernel}",
+        a2a_enabled=a2a_enabled,
+        temporal_overlap_verified=True,
+        temporal_limitations=analyzer_limitations,
+    )
+
+    assert result.returncode == 0, result.stderr
+    result_dir = tmp_path / "results"
+    feature_attribution = json.loads(
+        (result_dir / "feature_attribution.json").read_text()
+    )
+    manifest = json.loads((result_dir / "benchmark_manifest.json").read_text())
+    assert feature_attribution["a2a_temporal_overlap_verified"] is True
+    assert feature_attribution["limitations"] == [
+        "a single profile job cannot establish the required replicated "
+        "performance aggregate",
+        *analyzer_limitations,
+    ]
+    assert manifest["feature_attribution"] == feature_attribution
 
 
 def test_kernel_matchers_accept_cudnn_object_suffix_and_reject_off_arm(
@@ -1187,6 +1425,140 @@ def test_submitter_marks_full_cg_cutedsl_off_as_not_applicable() -> None:
     assert 'if [[ "${TEST_ONLY}" == "0" && "${needs_a2a}" == "1" ]]' in source
     assert 'if [[ "${TEST_ONLY}" == "0" && "${needs_full_cg}" == "1" ]]' in source
     assert source.index('needs_full_cg="0"') < source.index("job_id=$(sbatch")
+
+
+def _run_non_test_factorial_submitter(
+    tmp_path: Path,
+    *,
+    fail_at_submission: int | None = None,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    repo = tmp_path / "repo"
+    experiment = repo / EXPERIMENT_DIR.relative_to(PROJECT_ROOT)
+    (experiment / "lib").mkdir(parents=True)
+    (experiment / "cluster_profiles").mkdir()
+    shutil.copy2(SUBMITTER, experiment / SUBMITTER.name)
+    shutil.copy2(PROFILE_LOADER, experiment / "lib/cluster_profile.sh")
+    shutil.copy2(
+        EXPERIMENT_DIR / "cluster_profiles/pre_tyche.sh",
+        experiment / "cluster_profiles/pre_tyche.sh",
+    )
+    matrix_payload = experiment / MATRIX_PAYLOAD.name
+    matrix_payload.write_text("#!/bin/bash\nexit 0\n")
+    matrix_payload.chmod(0o755)
+    (repo / "ray.sub").write_text("#!/bin/bash\n")
+    source_signatures = {
+        "nemo_rl/models/megatron/train.py": "return_schedule_plan\n",
+        "nemo_rl/models/megatron/setup.py": "overlap_moe_expert_parallel_comm\n",
+        "nemo_rl/models/megatron/full_cuda_graph.py": (
+            "build_full_cuda_graph_schedule\n"
+        ),
+    }
+    for relative_path, contents in source_signatures.items():
+        path = repo / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(contents)
+    subprocess.run(["git", "init", "-q", "-b", "test"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        cwd=repo,
+        check=True,
+    )
+
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+    call_count = tmp_path / "sbatch-count"
+    mock_sbatch = mock_bin / "sbatch"
+    mock_sbatch.write_text(
+        """#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+
+count_path = Path(os.environ["MOCK_SBATCH_COUNT"])
+count = int(count_path.read_text()) + 1 if count_path.exists() else 1
+count_path.write_text(str(count))
+fail_at = int(os.environ.get("MOCK_SBATCH_FAIL_AT", "0"))
+if count == fail_at:
+    print(f"synthetic sbatch failure {count}", file=sys.stderr)
+    raise SystemExit(9)
+print(f"job-{count}")
+"""
+    )
+    mock_sbatch.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{mock_bin}:{env['PATH']}",
+            "MOCK_SBATCH_COUNT": str(call_count),
+            "CUTEDSL_CLUSTER_PROFILE": "pre_tyche",
+            "NEMO2606_FACTORIAL_CONTEXTS": "g0a0,g1a0,g0a1,g1a1",
+            "NEMO2606_FACTORIAL_REPLICATES": "3",
+            "NEMO2606_FACTORIAL_RECIPE": "synthetic.yaml",
+            "NEMO2606_FACTORIAL_TRAIN_GLOBAL_BATCH_SIZE": "8",
+            "NEMO2606_FACTORIAL_EXPERT_MODEL_PARALLEL_SIZE": "4",
+            "NEMO2606_FACTORIAL_TRAINING_GPU_COUNT": "4",
+            "NEMO2606_FACTORIAL_CONFIG_SEGMENT_SIZE": "null",
+        }
+    )
+    if fail_at_submission is not None:
+        env["MOCK_SBATCH_FAIL_AT"] = str(fail_at_submission)
+    result = subprocess.run(
+        ["bash", str(experiment / SUBMITTER.name)],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    return result, experiment / "results/factorial/submissions"
+
+
+def _cohort_submission_files(submission_dir: Path) -> list[Path]:
+    return [
+        path
+        for path in submission_dir.glob("*.jsonl")
+        if not re.search(r"-g[01]a[01]\.jsonl$", path.name)
+    ]
+
+
+def test_submitter_atomically_finalizes_four_context_cohort(tmp_path: Path) -> None:
+    result, submission_dir = _run_non_test_factorial_submitter(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    cohort_files = _cohort_submission_files(submission_dir)
+    assert len(cohort_files) == 1
+    records = [json.loads(line) for line in cohort_files[0].read_text().splitlines()]
+    assert len(records) == 12
+    assert {record["factorial_context"] for record in records} == {
+        "g0a0",
+        "g1a0",
+        "g0a1",
+        "g1a1",
+    }
+    assert str(cohort_files[0]) in result.stdout
+    assert not list(submission_dir.glob("*.tmp.*"))
+
+
+def test_submitter_does_not_finalize_partial_cohort(tmp_path: Path) -> None:
+    result, submission_dir = _run_non_test_factorial_submitter(
+        tmp_path,
+        fail_at_submission=5,
+    )
+
+    assert result.returncode != 0
+    assert not _cohort_submission_files(submission_dir)
+    assert not list(submission_dir.glob("*.tmp.*"))
 
 
 def test_submitter_test_only_exports_runnable_default_contexts(tmp_path: Path) -> None:
@@ -2398,6 +2770,26 @@ def test_a2a_performance_requires_two_local_microbatches() -> None:
     assert "MIN_A2A_PERFORMANCE_GLOBAL_BATCH=$((TRAINING_GPU_COUNT * 2))" in source
     assert "A2A performance requires at least two local microbatches" in source
     assert '"grpo.num_prompts_per_step=${NUM_PROMPTS_PER_STEP}"' in source
+    assert (
+        '"+policy.megatron_cfg.env_vars.CUDA_DEVICE_MAX_CONNECTIONS=\\"32\\""' in source
+    )
+    assert '"policy.megatron_cfg.env_vars.CUDA_DEVICE_MAX_CONNECTIONS",' in source
+    assert (
+        "fixed_config_evidence[arm][\n"
+        '            "policy.megatron_cfg.env_vars.CUDA_DEVICE_MAX_CONNECTIONS"\n'
+        "        ]\n"
+        '        == "32"' in source
+    )
+    config = parse_hydra_overrides(
+        load_config(RECIPE),
+        ['+policy.megatron_cfg.env_vars.CUDA_DEVICE_MAX_CONNECTIONS="32"'],
+    )
+    resolved = OmegaConf.to_container(config, resolve=True)
+    assert isinstance(resolved, dict)
+    assert (
+        resolved["policy"]["megatron_cfg"]["env_vars"]["CUDA_DEVICE_MAX_CONNECTIONS"]
+        == "32"
+    )
 
 
 def test_base_config_identity_ignores_run_paths_and_optional_feature_keys() -> None:
@@ -2929,6 +3321,7 @@ def test_functional_payload_does_not_emit_timing_or_profile_artifacts() -> None:
         '[[ ! -e "${CONTAINER_RESULT_DIR}/profiles" ]]',
         '[[ ! -e "${CONTAINER_RESULT_DIR}/kernel_attribution.json" ]]',
         '[[ ! -e "${CONTAINER_RESULT_DIR}/feature_attribution.json" ]]',
+        '[[ ! -e "${CONTAINER_RESULT_DIR}/a2a_temporal_overlap.json" ]]',
     )
     for fragment in required:
         assert fragment in source, fragment
@@ -2960,7 +3353,7 @@ def test_matrix_payload_fails_closed_on_missing_feature_implementations() -> Non
     assert "CUDA_GRAPH_WARMUP_STEPS=3" in source
     assert "profile_max_steps=$((CUDA_GRAPH_WARMUP_STEPS + 2))" in source
     assert (
-        'profile_step_range="$((CUDA_GRAPH_WARMUP_STEPS + 1)):$((CUDA_GRAPH_WARMUP_STEPS + 2))"'
+        'profile_step_range="$((CUDA_GRAPH_WARMUP_STEPS + 1)):$((CUDA_GRAPH_WARMUP_STEPS + 3))"'
         in source
     )
     assert 'export NRL_NSYS_PROFILE_STEP_RANGE="${profile_step_range}"' in source
