@@ -868,6 +868,7 @@ for entry in Path(payload_arg.split("=", 1)[1]).read_bytes().split(b"\\0"):
         payload[key] = value
 record = {
     "functional_gate": payload.get("NEMO2606_FUNCTIONAL_GATE", "0"),
+    "setup_command": payload.get("SETUP_COMMAND", "<missing>"),
     "uv_no_editable": payload.get("UV_NO_EDITABLE", "<missing>"),
 }
 with Path(os.environ["MOCK_SBATCH_CALLS"]).open("a") as output:
@@ -908,6 +909,20 @@ def test_submitter_forces_noneditable_local_packages_before_ray_start(
     assert {
         export["uv_no_editable"] for export in functional_exports + factorial_exports
     } == {"1"}
+
+
+def test_submitter_creates_worker_tmpdir_on_every_ray_node(tmp_path: Path) -> None:
+    functional_exports = _capture_submitter_exports(tmp_path, functional_gate=True)
+
+    assert len(functional_exports) == 1
+    setup_command = functional_exports[0]["setup_command"]
+    worker_tmpdir = (
+        f"/tmp/{os.environ['USER']}/nemo2606-factorial/"
+        "${SLURM_JOB_ID}${SLURM_RESTART_COUNT:+-r${SLURM_RESTART_COUNT}}/tmp"
+    )
+    assert f"mkdir -p {worker_tmpdir}" in setup_command
+    assert f"test -d {worker_tmpdir}" in setup_command
+    assert f"test -w {worker_tmpdir}" in setup_command
 
 
 def test_direct_ab_submitter_forces_noneditable_local_packages(
@@ -2721,6 +2736,23 @@ def test_existing_ray_uses_job_scoped_node_local_triton_cache() -> None:
     assert 'TRITON_CACHE_DIR="${NODE_LOCAL_RUNTIME_ROOT}/triton_cache"' in source
     assert 'NEMO2606_TRITON_CACHE_SCOPE="job_node_local"' in source
     assert '"triton_cache_scope": os.environ["NEMO2606_TRITON_CACHE_SCOPE"]' in source
+
+
+def test_existing_ray_workers_use_job_scoped_node_local_tmpdir() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    assert 'NODE_LOCAL_WORKER_TMPDIR="${NODE_LOCAL_RUNTIME_ROOT}/tmp"' in source
+    assert "export NODE_LOCAL_WORKER_TMPDIR" in source
+
+    create_tmpdir = 'mkdir -p "${NODE_LOCAL_WORKER_TMPDIR}"'
+    select_tmpdir = 'export TMPDIR="${NODE_LOCAL_WORKER_TMPDIR}"'
+    launch_grpo = '"${UV_BIN}" run --active --no-sync examples/run_grpo.py'
+    for function_name in ("run_timing_arm()", "run_profile_arm()"):
+        worker_arm = source.split(function_name, 1)[1]
+        assert create_tmpdir in worker_arm
+        assert select_tmpdir in worker_arm
+        assert launch_grpo in worker_arm
+        assert worker_arm.index(create_tmpdir) < worker_arm.index(select_tmpdir)
+        assert worker_arm.index(select_tmpdir) < worker_arm.index(launch_grpo)
 
 
 def test_non_existing_ray_retains_run_local_container_cache() -> None:

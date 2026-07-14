@@ -208,7 +208,9 @@ RAY_MOUNTS+=",${CUTEDSL_SHARED_HF_HOME}:${CUTEDSL_SHARED_HF_HOME}"
 RAY_MOUNTS+=",${CUTEDSL_IMAGE}:${CUTEDSL_IMAGE}"
 readonly RAY_MOUNTS
 readonly RUNTIME_CANARY="${RUNTIME_ROOT}/.shared_fs_canary"
-readonly RAY_SETUP_COMMAND="test -r ${RUNTIME_CANARY} && grep -Fx ${CUTEDSL_SUBMISSION_GIT_SHA} ${RUNTIME_CANARY} && test \"\$(git -C ${REPO_ROOT} rev-parse HEAD)\" = ${CUTEDSL_SUBMISSION_GIT_SHA}"
+readonly RAY_NODE_LOCAL_RUNTIME_ROOT="/tmp/${USER}/nemo2606-factorial/\${SLURM_JOB_ID}\${SLURM_RESTART_COUNT:+-r\${SLURM_RESTART_COUNT}}"
+readonly RAY_WORKER_TMPDIR="${RAY_NODE_LOCAL_RUNTIME_ROOT}/tmp"
+readonly RAY_SETUP_COMMAND="test -r ${RUNTIME_CANARY} && grep -Fx ${CUTEDSL_SUBMISSION_GIT_SHA} ${RUNTIME_CANARY} && test \"\$(git -C ${REPO_ROOT} rev-parse HEAD)\" = ${CUTEDSL_SUBMISSION_GIT_SHA} && mkdir -p ${RAY_WORKER_TMPDIR} && test -d ${RAY_WORKER_TMPDIR} && test -w ${RAY_WORKER_TMPDIR}"
 EXPORT_PAYLOAD=$(mktemp "${TMPDIR:-/tmp}/nemo2606-factorial-export.XXXXXX")
 readonly EXPORT_PAYLOAD
 cleanup_submission_files() {

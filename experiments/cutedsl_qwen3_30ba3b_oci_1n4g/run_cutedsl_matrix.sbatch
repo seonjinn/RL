@@ -523,16 +523,20 @@ export NVTE_CUDA_ARCHS="100"
 if [[ "${EXISTING_RAY}" == "1" ]]; then
     NODE_LOCAL_RUNTIME_ROOT="/tmp/${USER}/nemo2606-factorial/${RUN_ID}"
     NODE_LOCAL_WORKER_VENV_ROOT="${NODE_LOCAL_RUNTIME_ROOT}/worker_venvs"
+    NODE_LOCAL_WORKER_TMPDIR="${NODE_LOCAL_RUNTIME_ROOT}/tmp"
     TRITON_CACHE_DIR="${NODE_LOCAL_RUNTIME_ROOT}/triton_cache"
     NEMO2606_TRITON_CACHE_SCOPE="job_node_local"
 else
     NODE_LOCAL_RUNTIME_ROOT="${CONTAINER_RUNTIME_DIR}"
     NODE_LOCAL_WORKER_VENV_ROOT="${CONTAINER_RUNTIME_DIR}/worker_venvs"
+    NODE_LOCAL_WORKER_TMPDIR="${CONTAINER_RUNTIME_DIR}/tmp"
     TRITON_CACHE_DIR="${CONTAINER_RUNTIME_DIR}/triton_cache"
     NEMO2606_TRITON_CACHE_SCOPE="run_local_container"
 fi
 readonly NODE_LOCAL_RUNTIME_ROOT NODE_LOCAL_WORKER_VENV_ROOT
+readonly NODE_LOCAL_WORKER_TMPDIR
 export NEMO_RL_VENV_DIR="${NODE_LOCAL_WORKER_VENV_ROOT}"
+export NODE_LOCAL_WORKER_TMPDIR
 export TRITON_CACHE_DIR NEMO2606_TRITON_CACHE_SCOPE
 if [[ "${NEMO2606_TRITON_CACHE_SCOPE}" != "${CUTEDSL_EXPECTED_TRITON_CACHE_SCOPE}" ]]; then
     echo "[ERROR] Triton cache scope does not match the selected model profile." >&2
@@ -1560,13 +1564,14 @@ run_timing_arm() {
         "${CONTAINER_RUNTIME_DIR}/ray_timing"
     mkdir -p "${arm_dir}" "${CONTAINER_RUNTIME_DIR}/ray_timing" \
         "${CONTAINER_RUNTIME_DIR}/tmp"
+    mkdir -p "${NODE_LOCAL_WORKER_TMPDIR}"
     printf '%s\n' "${COMMON_OVERRIDES[@]}" "${arm_overrides[@]}" \
         > "${arm_dir}/overrides.txt"
 
     export BENCHMARK_ARM="${arm}"
     export BENCHMARK_ORDER_INDEX="${order_index}"
     export RAY_TMPDIR="${CONTAINER_RUNTIME_DIR}/ray_timing"
-    export TMPDIR="${CONTAINER_RUNTIME_DIR}/tmp"
+    export TMPDIR="${NODE_LOCAL_WORKER_TMPDIR}"
     unset NRL_NSYS_WORKER_PATTERNS
     unset NRL_NSYS_PROFILE_STEP_RANGE
     unset NRL_NSYS_EXTRA_OPTIONS
@@ -2464,10 +2469,11 @@ run_profile_arm() {
         "${CONTAINER_RUNTIME_DIR}/ray_profile"
     mkdir -p "${arm_dir}/nsight" "${CONTAINER_RUNTIME_DIR}/ray_profile" \
         "${CONTAINER_RUNTIME_DIR}/tmp"
+    mkdir -p "${NODE_LOCAL_WORKER_TMPDIR}"
     local profile_marker="${arm_dir}/profile_start.marker"
     touch "${profile_marker}"
     export RAY_TMPDIR="${CONTAINER_RUNTIME_DIR}/ray_profile"
-    export TMPDIR="${CONTAINER_RUNTIME_DIR}/tmp"
+    export TMPDIR="${NODE_LOCAL_WORKER_TMPDIR}"
     export NRL_NSYS_WORKER_PATTERNS="megatron_policy_worker"
     export NRL_NSYS_PROFILE_STEP_RANGE="${profile_step_range}"
     export NRL_NSYS_EXTRA_OPTIONS='{"cuda-memory-usage":"true","cpuctxsw":"none"}'
