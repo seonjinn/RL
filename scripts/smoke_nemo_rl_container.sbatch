@@ -15,7 +15,6 @@
 
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
 #SBATCH --time=00:10:00
 #SBATCH --job-name=smoke_nemo_rl_container
@@ -48,15 +47,18 @@ printf '%s  %s\n' "${actual_image_sha256}" "${CONTAINER_IMAGE}" \
     > "${CONTAINER_SMOKE_DIR}/image.sha256"
 mkdir -p "${CONTAINER_SMOKE_DIR}/runtime"
 
-readonly -a container_run=(
+container_run=(
     srun
     --nodes=1
     --ntasks=1
-    --gres=gpu:4
     --container-image="${CONTAINER_IMAGE}"
     --container-mounts="${repo_root}:/workspace/nemo-rl,${CONTAINER_SMOKE_DIR}:/results,${CONTAINER_SMOKE_DIR}/runtime:/runtime"
     --container-workdir=/workspace/nemo-rl
 )
+if [[ -n "${CONTAINER_SMOKE_GRES:-}" ]]; then
+    container_run+=("--gres=${CONTAINER_SMOKE_GRES}")
+fi
+readonly -a container_run
 
 "${container_run[@]}" bash -s 2>&1 <<'BASH' | tee "${CONTAINER_SMOKE_DIR}/smoke.log"
 set -euo pipefail

@@ -45,3 +45,11 @@ def test_smoke_records_source_and_image_identity() -> None:
     assert "CONTAINER_IMAGE_SHA256" in source
     assert 'git -C "${repo_root}" rev-parse HEAD' in source
     assert "sha256sum" in source
+
+
+def test_smoke_keeps_gres_cluster_specific() -> None:
+    source = SMOKE_JOB.read_text()
+
+    assert "#SBATCH --gres=" not in source
+    assert 'if [[ -n "${CONTAINER_SMOKE_GRES:-}" ]]; then' in source
+    assert 'container_run+=("--gres=${CONTAINER_SMOKE_GRES}")' in source
