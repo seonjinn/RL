@@ -247,6 +247,13 @@ diluted by the generation fraction; training and logprob phases are
 untouched.** The generation-phase 1.66x sits below the standalone 2.19x
 because the E2E engine is the NeMo-RL container's older vLLM and the
 generation timer includes engine wake/sleep overheads around each rollout.
+CUDA graphs were active (FULL decode + PIECEWISE mixed captures confirmed,
+vLLM 0.20.0); fixed-K always hits the FULL path on 0.20, so the comparison is
+fair. DynamicSD cannot yet be enabled inside NeMo-RL - the schedule key needs
+vLLM >= 0.24 (plus the ledger #2 crash fix) - and on this 4K-cap recipe our
+standalone data predicts no additional gain over fixed-K anyway (no drain
+tail forms); it becomes relevant for SD-breakeven workloads (32B-SWE-like)
+and 32K+ generation recipes once NeMo-RL's vLLM catches up.
 
 ## Key takeaway
 
