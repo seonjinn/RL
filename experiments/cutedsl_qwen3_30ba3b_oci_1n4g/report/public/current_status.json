@@ -1,12 +1,12 @@
 {
   "entries": [
     {
-      "evidence": "The preserved authoritative 20 measured-step summary from sequential ON-first job 2373273 reports PolicyTraining throughput 5270.9812 versus 4902.8530 tokens/s/GPU (+7.5084%), E2E throughput +2.49%, and median step-time speedup +2.90% for CuTeDSL ON versus OFF.",
+      "evidence": "The preserved authoritative 20 measured-step summary (steps 6-25) from sequential ON-first job 2373273 reports PolicyTraining throughput 5270.9812 versus 4902.8530 tokens/s/GPU (+7.5084%), E2E throughput +2.49%, and median step-time speedup +2.90% for CuTeDSL ON versus OFF. Logprob throughput moved +3.15% and Generation throughput +0.14%, while the Refit weight-transfer proxy was 30.36% slower with CuTeDSL ON.",
       "feature": "CuTeDSL fused Grouped GEMM",
       "jobs": [
         "2373273"
       ],
-      "limitation": "This is an interim single-job result from the pre-isolation source cohort. Simultaneous Logprob and Refit movement indicates a temporal confound, and no opposite-order fixed-source replicas have been accepted; it is not claim-ready. The old Qwen3-235B job 2375783 was cancelled before allocation because it was not a matched VPP baseline.",
+      "limitation": "This is an interim single-job result from the pre-isolation source cohort. It ran ON then OFF sequentially, processed-token totals differed by 0.083%, and simultaneous Logprob and Refit movement indicates a temporal confound. No opposite-order fixed-source replicas have been accepted, so it is not claim-ready. The old Qwen3-235B job 2375783 was cancelled before allocation because it was not a matched VPP baseline.",
       "next_gate": "Preserve the completed artifacts, then rerun all fixed-source ON/OFF cells with alternating order and report matched post-warmup component timings.",
       "state": "provisional"
     },
@@ -82,5 +82,5 @@
       "state": "implemented_unmeasured"
     }
   ],
-  "updated_at_utc": "2026-07-14T09:38:25Z"
+  "updated_at_utc": "2026-07-14T09:51:02Z"
 }
