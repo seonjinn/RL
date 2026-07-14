@@ -26,6 +26,13 @@ environment. The corrected direct launcher now forwards only
 the runtime-tool and MCore-overlay prefixes from the container's own paths at
 all four SRUN boundaries.
 
+The acceptance review found a fresh-bootstrap gap after that correction. The
+offline cache check resolves the image `python3` before `uv sync` creates the
+locked venv, so Bash retained the image interpreter in its command hash. The
+bootstrap now clears that hash immediately after the locked sync, requires
+`python3` to resolve to the new venv, and retains the resolved absolute command
+for the later realpath comparison.
+
 ## TDD evidence
 
 The six required regressions were added before implementation and run with the
@@ -145,6 +152,24 @@ overlay exists and the later three payloads resolve the run-local
 every payload with the prefixes already present and requires byte-for-byte
 identical evidence, covering the existing-Ray path without duplication.
 
+The acceptance correction added an executable same-shell regression before
+changing the bootstrap. It first ran the image `python3`, created a different
+interpreter in the already-leading venv path, and failed because the runtime
+refresh block did not exist:
+
+```text
+1 failed in 0.48s
+assert source.count(refresh_start) == 1
+```
+
+After adding the post-sync hash reset and exact command-resolution assertion,
+the regression proved both `command -v python3` and an actual `python3`
+invocation selected the new venv interpreter:
+
+```text
+1 passed in 0.96s
+```
+
 ## Implementation
 
 ### Submission contract
@@ -198,6 +223,17 @@ identical evidence, covering the existing-Ray path without duplication.
 - Image-only trailing path components remain available for tools such as
   Nsight Systems.
 
+### Fresh-bootstrap interpreter resolution
+
+- The bootstrap runs `hash -r` immediately after the locked `uv sync` creates
+  the venv.
+- `command -v python3` must then equal
+  `${UV_PROJECT_ENVIRONMENT}/bin/python3`; any image or ambient interpreter is
+  rejected before helper compilation.
+- The resolved absolute command is used for the later realpath comparison with
+  the locked runtime, while `python3-config` and extension-suffix checks remain
+  unchanged.
+
 ### Bounded evidence
 
 `mcore_runtime.json` and `benchmark_manifest.json.mcore_runtime` contain exactly:
@@ -232,6 +268,15 @@ relevant suite passed:
 ```text
 53 passed in 1.91s
 286 passed in 26.76s
+```
+
+After the acceptance correction, the updated focused and complete relevant
+suites passed:
+
+```text
+76 passed in 13.65s
+53 passed in 1.88s
+287 passed in 29.11s
 ```
 
 Static checks passed:

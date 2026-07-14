@@ -1680,6 +1680,63 @@ def test_every_direct_srun_reprefixes_container_runtime_paths(
         assert existing_ray_result.stdout.splitlines() == lines
 
 
+def test_bootstrap_refreshes_cached_python_after_locked_sync(tmp_path: Path) -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    refresh_start = "# CUTEDSL_RUNTIME_PYTHON_REFRESH_START"
+    refresh_end = "# CUTEDSL_RUNTIME_PYTHON_REFRESH_END"
+
+    assert source.count(refresh_start) == 1
+    assert source.count(refresh_end) == 1
+    refresh = source.split(f"{refresh_start}\n", 1)[1].split(f"{refresh_end}\n", 1)[0]
+    locked_sync = (
+        '"${UV_BIN}" sync --locked --extra mcore --group test --group dev '
+        '--python "${UV_PYTHON_VERSION}"'
+    )
+    assert source.index(f"{locked_sync}\n{refresh_start}") >= 0
+    assert refresh.splitlines()[0] == "hash -r"
+    assert 'resolved_runtime_python="$(command -v python3)"' in refresh
+    assert '"${UV_PROJECT_ENVIRONMENT}/bin/python3"' in refresh
+
+    image_bin = tmp_path / "image-bin"
+    venv_bin = tmp_path / "venv" / "bin"
+    image_bin.mkdir()
+    image_python = image_bin / "python3"
+    image_python.write_text("#!/bin/sh\nprintf 'image-python\\n'\n")
+    image_python.chmod(0o755)
+
+    script = f"""\
+set -euo pipefail
+python3 > "${{UV_PROJECT_ENVIRONMENT}}.first-python"
+first_python=$(cat "${{UV_PROJECT_ENVIRONMENT}}.first-python")
+[[ "${{first_python}}" == "image-python" ]]
+mkdir -p "${{UV_PROJECT_ENVIRONMENT}}/bin"
+cat > "${{UV_PROJECT_ENVIRONMENT}}/bin/python3" <<'PYTHON'
+#!/bin/sh
+printf 'runtime-python\\n'
+PYTHON
+chmod +x "${{UV_PROJECT_ENVIRONMENT}}/bin/python3"
+{refresh}
+printf '%s\\n' "$(command -v python3)"
+python3
+"""
+    result = subprocess.run(
+        ["/bin/bash", "-c", script],
+        env={
+            **os.environ,
+            "PATH": f"{venv_bin}:{image_bin}:{os.environ['PATH']}",
+            "UV_PROJECT_ENVIRONMENT": str(venv_bin.parent),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        str(venv_bin / "python3"),
+        "runtime-python",
+    ]
+
+
 def test_matrix_builds_tracked_mcore_overlay_before_config_resolution() -> None:
     source = MATRIX_PAYLOAD.read_text()
     source_preflight = 'SOURCE_STATUS=$(git -C "${REPO_ROOT}" status'
