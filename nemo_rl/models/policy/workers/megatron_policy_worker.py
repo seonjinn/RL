@@ -21,7 +21,8 @@ import warnings
 from collections import defaultdict
 from collections.abc import Mapping
 from contextlib import AbstractContextManager, contextmanager, nullcontext
-from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar, cast
+from functools import wraps
+from typing import Any, Callable, Iterable, Iterator, Literal, Optional, TypeVar, cast
 
 log = logging.getLogger(__name__)
 
@@ -110,6 +111,45 @@ from nemo_rl.utils.r3_trace import maybe_r3_trace_stage
 from nemo_rl.utils.timer import Timer
 
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
+_FullCudaGraphOperation = Literal[
+    "policy_training",
+    "logprob",
+    "eval",
+    "split_policy_training",
+    "colocated_refit",
+]
+_FullCudaGraphOperationResolver = Callable[
+    [tuple[Any, ...], dict[str, Any]], _FullCudaGraphOperation
+]
+
+
+def _select_full_cuda_graph_train_operation(
+    args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> _FullCudaGraphOperation:
+    eval_mode = kwargs.get("eval_mode", args[2] if len(args) > 2 else False)
+    return "eval" if eval_mode else "policy_training"
+
+
+def _guard_full_cuda_graph_operation_before_nvtx(
+    operation: _FullCudaGraphOperation | _FullCudaGraphOperationResolver,
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Reject unsupported graph-mode operations before an NVTX wrapper runs."""
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        @wraps(func)
+        def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+            selected_operation = (
+                operation(args, kwargs) if callable(operation) else operation
+            )
+            require_supported_full_cuda_graph_operation(
+                enabled=getattr(self, "_full_cuda_graph_enabled", False),
+                operation=selected_operation,
+            )
+            return func(self, *args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 def _get_optimizer_cuda_tensor_bytes(optimizer: object) -> Optional[int]:
@@ -647,6 +687,9 @@ class MegatronPolicyWorkerImpl(
             return
         self.model.load_state_dict(extra_state, strict=False)
 
+    @_guard_full_cuda_graph_operation_before_nvtx(
+        _select_full_cuda_graph_train_operation
+    )
     @wrap_with_nvtx_name("megatron_policy_worker/train")
     def train(
         self,
@@ -665,10 +708,6 @@ class MegatronPolicyWorkerImpl(
         must be None.
         """
         full_cuda_graph_enabled = getattr(self, "_full_cuda_graph_enabled", False)
-        require_supported_full_cuda_graph_operation(
-            enabled=full_cuda_graph_enabled,
-            operation="eval" if eval_mode else "policy_training",
-        )
         assert check_dim_skip_keys is None, (
             "check_dim_skip_keys is only supported by the v2 DTensor worker; "
             "Megatron does not run cross-tokenizer distillation."
@@ -1026,6 +1065,7 @@ class MegatronPolicyWorkerImpl(
         if config is not None:
             config.moe_grad_scale_func = func
 
+    @_guard_full_cuda_graph_operation_before_nvtx("logprob")
     @wrap_with_nvtx_name("megatron_policy_worker/get_reference_policy_logprobs")
     def get_reference_policy_logprobs(
         self,
@@ -1033,10 +1073,6 @@ class MegatronPolicyWorkerImpl(
         data: BatchedDataDict[Any],
         micro_batch_size: Optional[int] = None,
     ) -> BatchedDataDict[ReferenceLogprobOutputSpec]:
-        require_supported_full_cuda_graph_operation(
-            enabled=getattr(self, "_full_cuda_graph_enabled", False),
-            operation="logprob",
-        )
         with self.use_reference_model():
             reference_logprobs = self.get_logprobs(
                 data=data,
@@ -1134,6 +1170,7 @@ class MegatronPolicyWorkerImpl(
             model_config.grad_sync_func = state.get("saved_grad_sync_func")
             model_config.no_sync_func = state.get("saved_no_sync_func")
 
+    @_guard_full_cuda_graph_operation_before_nvtx("split_policy_training")
     @wrap_with_nvtx_name("megatron_policy_worker/begin_train_step")
     def begin_train_step(
         self,
@@ -1141,10 +1178,6 @@ class MegatronPolicyWorkerImpl(
         gbs: Optional[int] = None,
         mbs: Optional[int] = None,
     ) -> None:
-        require_supported_full_cuda_graph_operation(
-            enabled=getattr(self, "_full_cuda_graph_enabled", False),
-            operation="split_policy_training",
-        )
         existing = getattr(self, "_train_step_state", None)
         if existing is not None:
             raise RuntimeError(
@@ -1541,6 +1574,7 @@ class MegatronPolicyWorkerImpl(
         self.optimizer.zero_grad()
         self._train_step_state = None
 
+    @_guard_full_cuda_graph_operation_before_nvtx("logprob")
     @wrap_with_nvtx_name("megatron_policy_worker/get_logprobs")
     def get_logprobs(
         self,
@@ -1562,10 +1596,6 @@ class MegatronPolicyWorkerImpl(
           We use the convention that the logprob of the first token is 0 so that the sequence length is maintained.
           The logprob of input token i is specified at position i in the output logprobs tensor.
         """
-        require_supported_full_cuda_graph_operation(
-            enabled=getattr(self, "_full_cuda_graph_enabled", False),
-            operation="logprob",
-        )
         self.timer.start("get_logprobs")
         no_grad = torch.no_grad()
         no_grad.__enter__()
@@ -1766,6 +1796,7 @@ class MegatronPolicyWorkerImpl(
             if self.should_disable_forward_pre_hook:
                 self.enable_forward_pre_hook()
 
+    @_guard_full_cuda_graph_operation_before_nvtx("eval")
     @wrap_with_nvtx_name("megatron_policy_worker/get_topk_logits")
     def get_topk_logits(
         self,
@@ -1783,10 +1814,6 @@ class MegatronPolicyWorkerImpl(
                 - topk_logits: Tensor of top-k logits for each position in the sequence
                 - topk_indices: Tensor of top-k indices for each position in the sequence
         """
-        require_supported_full_cuda_graph_operation(
-            enabled=getattr(self, "_full_cuda_graph_enabled", False),
-            operation="eval",
-        )
         no_grad = torch.no_grad()
         no_grad.__enter__()
 
@@ -2159,13 +2186,10 @@ class MegatronPolicyWorkerImpl(
             f"[_clear_fp8_caches] Cleared {workspace_count} workspace modules on rank {self.rank}"
         )
 
+    @_guard_full_cuda_graph_operation_before_nvtx("colocated_refit")
     @wrap_with_nvtx_name("megatron_policy_worker/offload_before_refit")
     def offload_before_refit(self):
         """Offload the optimizer and buffers to the CPU."""
-        require_supported_full_cuda_graph_operation(
-            enabled=getattr(self, "_full_cuda_graph_enabled", False),
-            operation="colocated_refit",
-        )
         self._nemo2606_offload_sequence = (
             getattr(self, "_nemo2606_offload_sequence", 0) + 1
         )
@@ -2295,13 +2319,10 @@ class MegatronPolicyWorkerImpl(
         )
         no_grad.__exit__(None, None, None)
 
+    @_guard_full_cuda_graph_operation_before_nvtx("colocated_refit")
     @wrap_with_nvtx_name("megatron_policy_worker/offload_after_refit")
     def offload_after_refit(self):
         """Offload as much as possible on the CPU."""
-        require_supported_full_cuda_graph_operation(
-            enabled=getattr(self, "_full_cuda_graph_enabled", False),
-            operation="colocated_refit",
-        )
         no_grad = torch.no_grad()
         no_grad.__enter__()
         self.model = self.move_model(self.model, "cpu")

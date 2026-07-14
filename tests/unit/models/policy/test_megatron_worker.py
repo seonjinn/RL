@@ -509,6 +509,7 @@ def test_full_cuda_graph_worker_rejects_unsupported_runtime_operations(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
     match: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
         MegatronPolicyWorkerImpl,
@@ -516,18 +517,44 @@ def test_full_cuda_graph_worker_rejects_unsupported_runtime_operations(
 
     worker = object.__new__(MegatronPolicyWorkerImpl)
     worker._full_cuda_graph_enabled = True
+    nvtx_calls: list[tuple[str, Optional[str]]] = []
+    monkeypatch.setattr(
+        torch.cuda.nvtx,
+        "range_push",
+        lambda name: nvtx_calls.append(("push", name)),
+    )
+    monkeypatch.setattr(
+        torch.cuda.nvtx,
+        "range_pop",
+        lambda: nvtx_calls.append(("pop", None)),
+    )
 
     with pytest.raises(RuntimeError, match=match):
         getattr(MegatronPolicyWorkerImpl, method_name)(worker, *args, **kwargs)
 
+    assert nvtx_calls == [], nvtx_calls
 
-def test_full_cuda_graph_worker_rejects_eval_train_before_launching_schedule() -> None:
+
+def test_full_cuda_graph_worker_rejects_eval_train_before_launching_schedule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
         MegatronPolicyWorkerImpl,
     )
 
     worker = object.__new__(MegatronPolicyWorkerImpl)
     worker._full_cuda_graph_enabled = True
+    nvtx_calls: list[tuple[str, Optional[str]]] = []
+    monkeypatch.setattr(
+        torch.cuda.nvtx,
+        "range_push",
+        lambda name: nvtx_calls.append(("push", name)),
+    )
+    monkeypatch.setattr(
+        torch.cuda.nvtx,
+        "range_pop",
+        lambda: nvtx_calls.append(("pop", None)),
+    )
 
     with pytest.raises(RuntimeError, match="evaluation"):
         MegatronPolicyWorkerImpl.train(
@@ -536,6 +563,8 @@ def test_full_cuda_graph_worker_rejects_eval_train_before_launching_schedule() -
             loss_fn=object(),
             eval_mode=True,
         )
+
+    assert nvtx_calls == [], nvtx_calls
 
 
 def test_full_cuda_graph_prepare_for_training_preserves_resident_storage() -> None:
@@ -671,6 +700,8 @@ def test_full_cuda_graph_train_injects_schedule_and_materializes_metrics(
     monkeypatch.setattr(torch.distributed, "get_rank", lambda: 0)
     monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
     monkeypatch.setattr(torch.cuda, "get_device_name", lambda: "test-gpu")
+    monkeypatch.setattr(torch.cuda.nvtx, "range_push", lambda _name: None)
+    monkeypatch.setattr(torch.cuda.nvtx, "range_pop", lambda: None)
     monkeypatch.setattr(megatron_policy_worker.warnings, "warn", lambda *_args: None)
     monkeypatch.setattr(
         megatron_policy_worker.parallel_state,
