@@ -527,5 +527,20 @@
     "timestamp_utc": "2026-07-14T08:30:55Z",
     "verification_evidence": "The new TDD contract changed from red to green; model-profile, multinode-harness, and VPP validation suites report 132 passed. Lyris retry 2370695 and Ptyche retry 2376371 both completed with exit code zero. Each cluster's exact JUnit totals are tests=3, failures=0, errors=0, skipped=0: PolicyTraining, Logprob, and checkpoint save/kill/restore all passed.",
     "verification_job": "2370695 and 2376371 completed"
+  },
+  {
+    "cluster": "lyris",
+    "evidence": "Job 2370818 completed the locked TE 2.15 runtime and pinned-MCore helper overlay, then failed during Hydra config composition before PolicyTraining. Job 2370808 used the same source and config path and was cancelled during bootstrap after the deterministic collision was confirmed.",
+    "fix_commit": "4dd949d5ddf70c0021550b76c19a663a8c55b6fb",
+    "hypothesis": "Hydra's add-or-override syntax for optional HybridEP fields will work with both recipes that already define the keys and recipes where the keys are absent.",
+    "report_path": "evidence/job-2370808-2370818.txt",
+    "reproduction": "Compose the current Qwen3-30B-A3B Full-CG performance recipe with +policy.megatron_cfg.moe_hybridep_num_sms_preprocessing=32 and +policy.megatron_cfg.offload_modules=[].",
+    "root_cause": "The latest performance YAML already defined moe_hybridep_num_sms_preprocessing and offload_modules. A single '+' asks Hydra to append a missing key, so config composition rejected the first duplicate before training and would reject the second next.",
+    "run_id": "2370808-2370818",
+    "symptom": "Both Full-CG functional cells produced no graph capture, A2A, PolicyTraining, or performance evidence despite completing the expensive locked-runtime bootstrap.",
+    "tested_change": "Change only the two optional HybridEP overrides from '+' to '++', then compose both the Qwen3-30B-A3B and Qwen3-235B performance profiles in the regression test.",
+    "timestamp_utc": "2026-07-14T09:06:18Z",
+    "verification_evidence": "The new regression test failed before the change and passes afterward for both model profiles. The model-profile, multinode-harness, and VPP validation suites report 133 passed; Bash syntax, Ruff, and diff checks pass. Lyris replacements 2370933 and 2370934 are running; Ptyche backups 2376496 and 2376497 are pending.",
+    "verification_job": "2370933 and 2370934 running; 2376496 and 2376497 pending"
   }
 ]

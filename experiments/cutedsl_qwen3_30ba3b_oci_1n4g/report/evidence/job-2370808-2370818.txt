@@ -1,0 +1,8 @@
+Incident 2370808-2370818 covers the first Lyris Qwen3-30B-A3B Full-CG functional replacements from source b36ebdff2.
+Original remote log: retained in submission groups 20260714T083445Z-2559593 and 20260714T083448Z-2565532
+
+Both jobs passed immutable image and source preflight and spent about 28 minutes building the locked TE 2.15 runtime. Job 2370818 then failed before training while resolving the real performance config. The YAML already contained moe_hybridep_num_sms_preprocessing and offload_modules, but the harness supplied both with Hydra's single-plus append syntax. Hydra rejected the first duplicate and would reject the second next. Job 2370808 shared the same deterministic config path and was cancelled during bootstrap to avoid wasting its remaining allocation.
+
+No Full-CG capture or replay counter, A2A overlap evidence, component timing, or throughput was produced. This incident is not performance evidence.
+
+Commit 4dd949d5 changes the two optional fields to add-or-override syntax. A regression test composes both the Qwen3-30B-A3B and Qwen3-235B profiles and verifies the resolved values. The focused suite reports 133 passed. Lyris replacements 2370933 and 2370934 and Ptyche backups 2376496 and 2376497 use the corrected source.

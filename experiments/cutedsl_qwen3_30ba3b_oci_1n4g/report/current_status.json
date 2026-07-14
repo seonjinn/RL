@@ -31,9 +31,13 @@
         "2376309",
         "2376310",
         "2370808",
-        "2370818"
+        "2370818",
+        "2370933",
+        "2370934",
+        "2376496",
+        "2376497"
       ],
-      "limitation": "Jobs 2369539 and 2369580 used the invalid alltoall, capacity-null, PagedStash-disabled bundle. Corrected jobs 2375779 and 2375780 then failed before runtime because a separate unit-test job temporarily wrote untracked unit_results into their shared source worktree. Dedicated-worktree replacements 2376309 and 2376310 are pending on Ptyche. Lyris backups 2370808 and 2370818 are running from source b36ebdff2 and passed the five-minute early-failure watch, but are still building the locked runtime. None has produced valid Full-CG timing; no speedup is reported.",
+      "limitation": "Jobs 2369539 and 2369580 used the invalid alltoall, capacity-null, PagedStash-disabled bundle. Corrected jobs 2375779 and 2375780 then failed dirty-source preflight. Jobs 2370808 and 2370818 reached locked-runtime config composition but latest main already defined two HybridEP keys that the harness incorrectly tried to append with Hydra '+'. Commit 4dd949d5 changes those optional keys to add-or-override '++'; 133 focused tests pass. Lyris replacements 2370933 and 2370934 are running, while Ptyche backups 2376496 and 2376497 are pending. None has produced valid Full-CG timing; no speedup is reported.",
       "next_gate": "Run the corrected noncolocated HybridEP functional cell and require capture_calls == 1, replay_calls >= 2, monotonic counters, stable storage digest, and no overflow-retry correctness failure before matched timing.",
       "state": "implemented_unmeasured"
     },
@@ -46,9 +50,11 @@
         "2375780",
         "2375785",
         "2376310",
-        "2370818"
+        "2370818",
+        "2370934",
+        "2376497"
       ],
-      "limitation": "The earlier comparison stopped at capture failure and has no accepted timing window. Corrected Q30 job 2375780 failed dirty-source preflight. Qwen3-235B VPP+A2A job 2375785 was cancelled while pending after PR #1126 review found that its inherited defer_fp32_logits=true is rejected by the combined A2A schedule. Dedicated-worktree Q30 replacement 2376310 is pending on Ptyche. Lyris backup 2370818 is running from source b36ebdff2 and passed the five-minute early-failure watch, but is still building the locked runtime. A2A performance remains unmeasured; no speedup is reported.",
+      "limitation": "The earlier comparison stopped at capture failure and has no accepted timing window. Corrected Q30 job 2375780 failed dirty-source preflight. Qwen3-235B VPP+A2A job 2375785 was cancelled after PR #1126 review found an invalid inherited defer_fp32_logits=true. Lyris job 2370818 then failed before training because the harness used Hydra append syntax for HybridEP keys already present in latest main. Commit 4dd949d5 fixes both collisions; Lyris replacement 2370934 is running and Ptyche backup 2376497 is pending. A2A performance remains unmeasured; no speedup is reported.",
       "next_gate": "Use source eff1d64af with defer_fp32_logits=false in both A2A OFF/ON cells, then verify NCCL A2A presence and temporal overlap before reporting an effect.",
       "state": "implemented_unmeasured"
     },
@@ -70,5 +76,5 @@
       "state": "implemented_unmeasured"
     }
   ],
-  "updated_at_utc": "2026-07-14T08:53:00Z"
+  "updated_at_utc": "2026-07-14T09:06:18Z"
 }
