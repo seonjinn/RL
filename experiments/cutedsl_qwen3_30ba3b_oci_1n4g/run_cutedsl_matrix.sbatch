@@ -445,6 +445,7 @@ cutedsl_write_event preflight pass 0 \
 A2A_OVERLAP_OVERRIDE="policy.megatron_cfg.overlap_moe_expert_parallel_comm=false"
 A2A_HIGH_PRIORITY_OVERRIDE="policy.megatron_cfg.high_priority_a2a_comm_stream=false"
 A2A_DELAY_WGRAD_OVERRIDE="policy.megatron_cfg.delay_wgrad_compute=false"
+DEFER_FP32_LOGITS_OVERRIDE="policy.megatron_cfg.defer_fp32_logits=false"
 if [[ "${NEMO2606_A2A_ENABLED}" == "1" ]]; then
     A2A_OVERLAP_OVERRIDE="policy.megatron_cfg.overlap_moe_expert_parallel_comm=true"
     A2A_HIGH_PRIORITY_OVERRIDE="policy.megatron_cfg.high_priority_a2a_comm_stream=true"
@@ -452,6 +453,7 @@ if [[ "${NEMO2606_A2A_ENABLED}" == "1" ]]; then
 fi
 readonly A2A_OVERLAP_OVERRIDE A2A_HIGH_PRIORITY_OVERRIDE
 readonly A2A_DELAY_WGRAD_OVERRIDE
+readonly DEFER_FP32_LOGITS_OVERRIDE
 FULL_CG_CAPACITY_OVERRIDE="policy.megatron_cfg.moe_expert_rank_capacity_factor=null"
 FULL_CG_PAGED_STASH_OVERRIDE="policy.megatron_cfg.moe_paged_stash=false"
 if [[ "${NEMO2606_FULL_CG_ENABLED}" == "1" ]]; then
@@ -477,6 +479,7 @@ COMMON_OVERRIDES=(
     "${A2A_OVERLAP_OVERRIDE}"
     "${A2A_HIGH_PRIORITY_OVERRIDE}"
     "${A2A_DELAY_WGRAD_OVERRIDE}"
+    "${DEFER_FP32_LOGITS_OVERRIDE}"
     "logger.log_dir=${CONTAINER_RUNTIME_DIR}/benchmark_logs"
     "logger.wandb_enabled=false"
     "logger.tensorboard_enabled=true"
@@ -1080,6 +1083,7 @@ fixed_config_paths = (
     "policy.megatron_cfg.recompute_granularity",
     "policy.megatron_cfg.recompute_method",
     "policy.megatron_cfg.recompute_modules",
+    "policy.megatron_cfg.defer_fp32_logits",
     "policy.megatron_cfg.overlap_moe_expert_parallel_comm",
     "policy.megatron_cfg.high_priority_a2a_comm_stream",
     "policy.megatron_cfg.delay_wgrad_compute",
@@ -1144,6 +1148,7 @@ for arm in timing_order:
     assert fixed_config_evidence[arm]["policy.megatron_cfg.moe_flex_dispatcher_backend"] == "hybridep"
     assert fixed_config_evidence[arm]["policy.megatron_cfg.moe_hybridep_num_sms_preprocessing"] == 32
     assert fixed_config_evidence[arm]["policy.megatron_cfg.offload_modules"] == []
+    assert fixed_config_evidence[arm]["policy.megatron_cfg.defer_fp32_logits"] is False
     assert (
         fixed_config_evidence[arm][
             "policy.megatron_cfg.expert_tensor_parallel_size"

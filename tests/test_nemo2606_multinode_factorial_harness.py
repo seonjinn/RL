@@ -1072,7 +1072,7 @@ def test_generated_head_failure_hook_is_opt_in_and_ordered(
                     f"LOG_DIR={shlex.quote(str(log_dir))}",
                     "FAILURE_COMMAND_FILE="
                     + (shlex.quote(str(failure_command)) if hook_enabled else "''"),
-                    "FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS=2",
+                    "FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS=10",
                     "SLURM_JOB_NUM_NODES=2",
                     f"exit_code={exit_code}",
                     hook,
@@ -1453,7 +1453,7 @@ def _run_non_test_factorial_submitter(
         feature_capability_exports = """
     print("export CUTEDSL_PROFILE_ALLOW_FULL_CG=true")
     print("export CUTEDSL_PROFILE_ALLOW_A2A=true")"""
-    (experiment / "lib/model_profile.py").write_text(
+    (experiment / "lib/model_profile_bootstrap.py").write_text(
         f"""#!/usr/bin/env python3
 import sys
 
@@ -2955,6 +2955,21 @@ def test_payload_rejects_feature_context_boolean_mismatch() -> None:
     )
     assert "g0a0:0:0|g1a0:1:0|g0a1:0:1|g1a1:1:1)" in source
     assert "Feature context does not match full-CG/A2A selectors" in source
+
+
+def test_payload_disables_deferred_fp32_logits_in_all_a2a_comparison_cells() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+
+    assert (
+        'DEFER_FP32_LOGITS_OVERRIDE="policy.megatron_cfg.defer_fp32_logits=false"'
+        in source
+    )
+    assert '"${DEFER_FP32_LOGITS_OVERRIDE}"' in source
+    assert '"policy.megatron_cfg.defer_fp32_logits",' in source
+    assert (
+        'fixed_config_evidence[arm]["policy.megatron_cfg.defer_fp32_logits"] is False'
+        in source
+    )
 
 
 def test_functional_payload_uses_effective_segment_and_one_arm_manifest() -> None:

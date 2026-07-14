@@ -206,6 +206,34 @@ def test_dependency_free_profile_bootstrap_rejects_unknown_fields(
             },
             {"precision": "bfloat16", "tensor_parallel_size": 8},
         ),
+        (
+            "qwen3_235b_16n4g_vpp_matched.json",
+            "qwen3_235b_16n4g_vpp_matched",
+            "Qwen/Qwen3-235B-A22B",
+            {
+                "num_nodes": 16,
+                "gpus_per_node": 4,
+                "segment_size": 16,
+                "tp": 2,
+                "pp": 4,
+                "vpp": None,
+                "num_layers_in_first_pipeline_stage": 22,
+                "num_layers_in_last_pipeline_stage": 24,
+                "cp": 2,
+                "ep": 16,
+                "etp": 1,
+            },
+            {
+                "train_global_batch_size": 512,
+                "train_micro_batch_size": 1,
+                "logprob_batch_size": 1,
+                "max_total_sequence_length": 8192,
+                "sequence_packing_enabled": True,
+                "num_prompts_per_step": 16,
+                "num_generations_per_prompt": 32,
+            },
+            {"precision": "bfloat16", "tensor_parallel_size": 8},
+        ),
     ),
 )
 def test_model_profiles_are_exact_and_validate_resolved_recipes(
@@ -239,14 +267,21 @@ def test_model_profiles_are_exact_and_validate_resolved_recipes(
     assert profile.runtime.generation_colocated is (
         profile_name != "qwen3_30ba3b_2n4g.json"
     )
-    if profile_name == "qwen3_235b_16n4g_a2a_vpp2.json":
-        assert profile.default_contexts == "g0a0,g0a1"
+    if profile_name in {
+        "qwen3_235b_16n4g_a2a_vpp2.json",
+        "qwen3_235b_16n4g_vpp_matched.json",
+    }:
         assert profile.runtime.allow_full_cg is False
-        assert profile.runtime.allow_a2a is True
         assert profile.runtime.activation_checkpointing is True
         assert profile.runtime.recompute_granularity == "selective"
         assert profile.runtime.recompute_method is None
         assert profile.runtime.recompute_modules is None
+    if profile_name == "qwen3_235b_16n4g_a2a_vpp2.json":
+        assert profile.default_contexts == "g0a0,g0a1"
+        assert profile.runtime.allow_a2a is True
+    if profile_name == "qwen3_235b_16n4g_vpp_matched.json":
+        assert profile.default_contexts == "g0a0"
+        assert profile.runtime.allow_a2a is False
     assert profile.provenance.triton_cache_scope == "job_node_local"
     assert profile.provenance.megatron_checkpoint_scope == "job_shared"
     assert profile.provenance.megatron_checkpoint_marker == (
@@ -441,7 +476,7 @@ def test_qwen235_test_only_validates_and_exports_resolved_profile(
         assert "--test-only" in call["argv"]
 
 
-def test_test_only_rejects_profile_recipe_mismatch_before_sbatch(
+def test_test_only_defers_profile_recipe_match_to_locked_container(
     tmp_path: Path,
 ) -> None:
     payload = json.loads((PROFILE_DIR / "qwen3_235b_16n4g.json").read_text())
@@ -475,9 +510,11 @@ def test_test_only_rejects_profile_recipe_mismatch_before_sbatch(
         text=True,
     )
 
-    assert result.returncode != 0
-    assert "resolved topology does not match profile" in result.stderr
-    assert not calls_path.exists()
+    assert result.returncode == 0, result.stderr
+    assert len(calls_path.read_text().splitlines()) == 3
+    payload_source = MATRIX_PAYLOAD.read_text()
+    assert 'assert profile_topology == profile["topology"]' in payload_source
+    assert 'assert profile_workload == profile["workload"]' in payload_source
 
 
 def test_qwen235_rejects_unsupported_feature_context_before_sbatch(
@@ -581,6 +618,7 @@ def test_qwen235_a2a_vpp_effective_config_keeps_selective_recompute() -> None:
             "policy.megatron_cfg.overlap_moe_expert_parallel_comm=true",
             "policy.megatron_cfg.high_priority_a2a_comm_stream=true",
             "policy.megatron_cfg.delay_wgrad_compute=true",
+            "policy.megatron_cfg.defer_fp32_logits=false",
         ],
     )
     resolved = OmegaConf.to_container(config, resolve=True)
@@ -596,6 +634,38 @@ def test_qwen235_a2a_vpp_effective_config_keeps_selective_recompute() -> None:
     assert megatron["recompute_method"] is None
     assert megatron["recompute_modules"] is None
     assert megatron["overlap_moe_expert_parallel_comm"] is True
+    assert megatron["defer_fp32_logits"] is False
+
+
+def test_qwen235_vpp_baseline_differs_only_by_vpp_and_output_paths() -> None:
+    from nemo_rl.utils.config import load_config, register_omegaconf_resolvers
+    from omegaconf import OmegaConf
+
+    register_omegaconf_resolvers()
+    baseline = OmegaConf.to_container(
+        load_config(
+            PROJECT_ROOT / "examples/configs/recipes/llm/performance/"
+            "grpo-qwen3-235b-16n4g-megatron-mxfp8-cutedsl-vpp-matched-baseline.yaml"
+        ),
+        resolve=True,
+    )
+    vpp = OmegaConf.to_container(
+        load_config(
+            PROJECT_ROOT / "examples/configs/recipes/llm/performance/"
+            "grpo-qwen3-235b-16n4g-megatron-mxfp8-cutedsl-a2a-vpp2.yaml"
+        ),
+        resolve=True,
+    )
+    assert isinstance(baseline, dict)
+    assert isinstance(vpp, dict)
+
+    baseline["policy"]["megatron_cfg"]["virtual_pipeline_model_parallel_size"] = 2
+    for config in (baseline, vpp):
+        config["checkpointing"]["checkpoint_dir"] = "<normalized>"
+        config["logger"]["log_dir"] = "<normalized>"
+        config["logger"]["wandb"]["name"] = "<normalized>"
+
+    assert baseline == vpp
 
 
 def test_qwen235_a2a_vpp_profile_rejects_full_cg_before_sbatch(

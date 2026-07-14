@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "profile_id": "qwen3_235b_16n4g_vpp_matched",
+  "display_name": "Qwen3-235B-A22B 16n4g VPP-matched baseline",
+  "recipe": "examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g-megatron-mxfp8-cutedsl-vpp-matched-baseline.yaml",
+  "default_contexts": "g0a0",
+  "artifacts": {
+    "model_repo_id": "Qwen/Qwen3-235B-A22B",
+    "dataset_repo_id": "nvidia/OpenMathInstruct-2",
+    "dataset_repo_type": "dataset",
+    "dataset_split": "train_1M",
+    "dataset_num_rows": 1000000
+  },
+  "topology": {
+    "num_nodes": 16,
+    "gpus_per_node": 4,
+    "segment_size": 16,
+    "tp": 2,
+    "pp": 4,
+    "vpp": null,
+    "num_layers_in_first_pipeline_stage": 22,
+    "num_layers_in_last_pipeline_stage": 24,
+    "cp": 2,
+    "ep": 16,
+    "etp": 1
+  },
+  "workload": {
+    "train_global_batch_size": 512,
+    "train_micro_batch_size": 1,
+    "logprob_batch_size": 1,
+    "max_total_sequence_length": 8192,
+    "sequence_packing_enabled": true,
+    "num_prompts_per_step": 16,
+    "num_generations_per_prompt": 32
+  },
+  "runtime": {
+    "policy_precision": "bfloat16",
+    "rollout_precision": "bfloat16",
+    "generation_tensor_parallel_size": 8,
+    "generation_gpu_memory_utilization": 0.4,
+    "generation_colocated": true,
+    "generation_num_nodes": null,
+    "generation_gpus_per_node": null,
+    "policy_training_gpu_count": 64,
+    "activation_checkpointing": true,
+    "recompute_granularity": "selective",
+    "recompute_method": null,
+    "recompute_modules": null,
+    "allow_full_cg": false,
+    "allow_a2a": false
+  },
+  "provenance": {
+    "triton_cache_scope": "job_node_local",
+    "megatron_checkpoint_scope": "job_shared",
+    "megatron_checkpoint_root_name": "megatron_checkpoints",
+    "megatron_checkpoint_marker": "iter_0000000/run_config.yaml"
+  }
+}

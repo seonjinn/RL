@@ -47,12 +47,24 @@ def main() -> None:
             "modelopt.torch",
         )
     }
+    transformer_engine = modules["transformer_engine.pytorch"]
+    device = torch.device("cuda:0")
+    layer = transformer_engine.Linear(64, 64).to(device)
+    inputs = torch.randn(8, 64, device=device, requires_grad=True)
+    outputs = layer(inputs)
+    outputs.sum().backward()
+    torch.cuda.synchronize(device)
+    if not torch.isfinite(outputs).all():
+        raise RuntimeError("Transformer Engine produced non-finite output")
+    if inputs.grad is None or not torch.isfinite(inputs.grad).all():
+        raise RuntimeError("Transformer Engine produced an invalid input gradient")
     evidence = {
         "architecture": platform.machine(),
         "cuda_available": True,
         "cuda_device_count": torch.cuda.device_count(),
         "cuda_device_name": torch.cuda.get_device_name(0),
         "cuda_version": torch.version.cuda,
+        "transformer_engine_linear_backward": "pass",
         "module_paths": {
             name: str(Path(module.__file__).resolve())
             if getattr(module, "__file__", None)

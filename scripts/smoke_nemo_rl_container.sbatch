@@ -24,6 +24,7 @@
 set -euo pipefail
 
 : "${CONTAINER_IMAGE:?Set CONTAINER_IMAGE to an immutable squashfs path}"
+: "${CONTAINER_IMAGE_SHA256:?Set CONTAINER_IMAGE_SHA256 to the expected image digest}"
 : "${CONTAINER_SMOKE_DIR:?Set CONTAINER_SMOKE_DIR to an absolute host result directory}"
 : "${SLURM_SUBMIT_DIR:?Submit this job from the NeMo-RL checkout root}"
 if [[ "${CONTAINER_SMOKE_DIR}" != /* ]]; then
@@ -34,6 +35,18 @@ mkdir -p "${CONTAINER_SMOKE_DIR}"
 
 repo_root=$(git -C "${SLURM_SUBMIT_DIR}" rev-parse --show-toplevel)
 readonly repo_root
+source_sha=$(git -C "${repo_root}" rev-parse HEAD)
+readonly source_sha
+actual_image_sha256=$(sha256sum "${CONTAINER_IMAGE}" | awk '{print $1}')
+readonly actual_image_sha256
+if [[ "${actual_image_sha256}" != "${CONTAINER_IMAGE_SHA256}" ]]; then
+    echo "[ERROR] image SHA256 mismatch: ${actual_image_sha256}" >&2
+    exit 1
+fi
+printf '%s\n' "${source_sha}" > "${CONTAINER_SMOKE_DIR}/source.sha"
+printf '%s  %s\n' "${actual_image_sha256}" "${CONTAINER_IMAGE}" \
+    > "${CONTAINER_SMOKE_DIR}/image.sha256"
+mkdir -p "${CONTAINER_SMOKE_DIR}/runtime"
 
 readonly -a container_run=(
     srun
@@ -41,53 +54,25 @@ readonly -a container_run=(
     --ntasks=1
     --gres=gpu:4
     --container-image="${CONTAINER_IMAGE}"
-    --container-mounts="${repo_root}:/workspace/nemo-rl,${CONTAINER_SMOKE_DIR}:/results"
+    --container-mounts="${repo_root}:/workspace/nemo-rl,${CONTAINER_SMOKE_DIR}:/results,${CONTAINER_SMOKE_DIR}/runtime:/runtime"
     --container-workdir=/workspace/nemo-rl
 )
 
 "${container_run[@]}" bash -s 2>&1 <<'BASH' | tee "${CONTAINER_SMOKE_DIR}/smoke.log"
 set -euo pipefail
 
-readonly python_bin="/opt/nemo_rl_venv/bin/python"
-[[ "$("${python_bin}" --version)" == "Python 3.13.13" ]]
+export UV_PROJECT_ENVIRONMENT="/runtime/venv"
+export VIRTUAL_ENV="${UV_PROJECT_ENVIRONMENT}"
+export UV_NO_EDITABLE=1
+export CUDA_HOME="/usr/local/cuda"
+export NVTE_CUDA_ARCHS="100"
+readonly UV_BIN="/root/.local/bin/uv"
+[[ -x "${UV_BIN}" ]]
+cd /workspace/nemo-rl
+"${UV_BIN}" sync --locked --extra mcore --python 3.13.13
+[[ "$("${UV_PROJECT_ENVIRONMENT}/bin/python" --version)" == "Python 3.13.13" ]]
+"${UV_BIN}" lock --check
 
-"${python_bin}" - <<'PY'
-import cutlass
-import torch
-import transformer_engine.pytorch as te
-from cutlass import cute
-
-import nemo_rl
-
-assert torch.cuda.is_available()
-actual_devices = torch.cuda.device_count()
-assert actual_devices == 4, f"expected 4 visible CUDA devices, found {actual_devices}"
-device_names = [torch.cuda.get_device_name(index) for index in range(actual_devices)]
-assert all("GB200" in device_name for device_name in device_names), device_names
-
-print("IMPORT_PASS", cutlass.__file__, cute.__file__, nemo_rl.__file__, te.__file__)
-for device_index in range(actual_devices):
-    with torch.cuda.device(device_index):
-        model = te.Linear(64, 64).cuda(device_index)
-        inputs = torch.randn(
-            8, 64, device=f"cuda:{device_index}", requires_grad=True
-        )
-        outputs = model(inputs)
-        outputs.sum().backward()
-        torch.cuda.synchronize()
-
-        assert torch.isfinite(outputs).all()
-        assert inputs.grad is not None and torch.isfinite(inputs.grad).all()
-        for name, parameter in model.named_parameters():
-            assert parameter.grad is not None and torch.isfinite(parameter.grad).all(), (
-                f"missing or non-finite TE gradient {name} on CUDA device {device_index}"
-            )
-        print(
-            "GPU_SMOKE_PASS",
-            device_index,
-            torch.__version__,
-            torch.version.cuda,
-            device_names[device_index],
-        )
-PY
+"${UV_BIN}" run --active --no-sync python scripts/smoke_nemo_rl_image.py \
+    | tee /results/runtime.json
 BASH
