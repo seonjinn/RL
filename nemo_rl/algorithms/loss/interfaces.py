@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import enum
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Protocol
@@ -27,7 +28,7 @@ _FULL_CUDA_GRAPH_METRICS: ContextVar[bool] = ContextVar(
 
 
 @contextmanager
-def full_cuda_graph_metrics():
+def full_cuda_graph_metrics() -> Iterator[None]:
     """Keep scalar metrics as device tensors while CUDA graph capture is active."""
     token = _FULL_CUDA_GRAPH_METRICS.set(True)
     try:

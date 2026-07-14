@@ -337,6 +337,15 @@ def test_full_cuda_graph_metric_context_keeps_scalar_tensors_on_device():
         assert scalar_metric(value) is value
 
 
+def test_full_cuda_graph_metric_context_has_typed_iterator_return():
+    from collections.abc import Iterator
+    from typing import get_type_hints
+
+    from nemo_rl.algorithms.loss.interfaces import full_cuda_graph_metrics
+
+    assert get_type_hints(full_cuda_graph_metrics)["return"] == Iterator[None]
+
+
 def test_clipped_pg_loss_emits_tensor_metrics_in_full_cuda_graph_context():
     from nemo_rl.algorithms.loss import ClippedPGLossConfig, ClippedPGLossFn
     from nemo_rl.algorithms.loss.interfaces import full_cuda_graph_metrics
