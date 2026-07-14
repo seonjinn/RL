@@ -3,6 +3,7 @@ checkpointing:
   checkpoint_dir: results/grpo-qwen3-235b-16n4g-megatron-mxfp8-cutedsl-a2a-vpp2
 policy:
   megatron_cfg:
+    defer_fp32_logits: false
     virtual_pipeline_model_parallel_size: 2
     num_layers_in_first_pipeline_stage: 22
     num_layers_in_last_pipeline_stage: 24

@@ -699,6 +699,8 @@ def test_qwen235_vpp_baseline_differs_only_by_vpp_and_output_paths() -> None:
     )
     assert isinstance(baseline, dict)
     assert isinstance(vpp, dict)
+    assert baseline["policy"]["megatron_cfg"]["defer_fp32_logits"] is False
+    assert vpp["policy"]["megatron_cfg"]["defer_fp32_logits"] is False
 
     baseline["policy"]["megatron_cfg"]["virtual_pipeline_model_parallel_size"] = 2
     for config in (baseline, vpp):
