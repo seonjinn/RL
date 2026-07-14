@@ -65,10 +65,10 @@
         "2376371",
         "2370695"
       ],
-      "limitation": "Dependency-free contract probes and 132 focused local tests pass. Fresh-image locked-mcore smokes 2376166 on Ptyche and 2370500 on Lyris both passed on four GB200 GPUs with TE 2.15, MCore, Bridge, ModelOpt, and a real TE Linear backward. Initial VPP jobs 2376208 and 2370644 stopped at a gated tokenizer. Public-tokenizer retries 2376272 and 2370672 exposed a missing dataset-helper Makefile in the isolated MCore wheel. Commit b36ebdff2 added a run-local pinned-MCore helper overlay. Lyris retry 2370695 then completed all three PR #1126 GPU/Ray tests with JUnit tests=3, failures=0, errors=0: PolicyTraining, Logprob, and checkpoint save/kill/restore. Ptyche retry 2376371 remains pending, no Qwen3-235B performance timing exists yet, and the port deliberately rejects VPP with Full-CG until upstream supports the combination.",
-      "next_gate": "Require the same three-test pass on Ptyche, then run matched Qwen3-235B non-VPP, VPP2, and VPP2+A2A performance-profile pilots.",
+      "limitation": "Dependency-free contract probes and 132 focused local tests pass. Fresh-image locked-mcore smokes 2376166 on Ptyche and 2370500 on Lyris both passed on four GB200 GPUs with TE 2.15, MCore, Bridge, ModelOpt, and a real TE Linear backward. Initial VPP jobs 2376208 and 2370644 stopped at a gated tokenizer. Public-tokenizer retries 2376272 and 2370672 exposed a missing dataset-helper Makefile in the isolated MCore wheel. Commit b36ebdff2 added a run-local pinned-MCore helper overlay. Lyris retry 2370695 completed all three PR #1126 GPU/Ray tests with JUnit tests=3, failures=0, errors=0. Ptyche retry 2376371 independently completed the same PolicyTraining, Logprob, and checkpoint save/kill/restore tests with JUnit tests=3, failures=0, errors=0. No Qwen3-235B performance timing exists yet, and the port deliberately rejects VPP with Full-CG until upstream supports the combination.",
+      "next_gate": "Run matched Qwen3-235B non-VPP, VPP2, and VPP2+A2A performance-profile pilots, keeping Full-CG out of the VPP cells.",
       "state": "implemented_unmeasured"
     }
   ],
-  "updated_at_utc": "2026-07-14T08:40:49Z"
+  "updated_at_utc": "2026-07-14T08:53:00Z"
 }

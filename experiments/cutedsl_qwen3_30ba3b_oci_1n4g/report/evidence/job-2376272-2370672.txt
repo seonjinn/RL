@@ -7,4 +7,4 @@ Both jobs were cancelled after the identical non-progressing state was confirmed
 
 The tested correction in b36ebdff2 copies the pinned Megatron-Core source into a run-local overlay, builds the ABI-matched dataset helper there, verifies its import origin, and exports that overlay to isolated Ray workers. Canonical source remains clean.
 
-Lyris retry 2370695 completed with exit code zero using that correction. Its JUnit artifact reports tests=3, failures=0, errors=0, skipped=0. PolicyTraining PP2/VPP2, Logprob PP2/VPP2, and checkpoint save/kill/restore PP2/VPP2 all passed. Ptyche retry 2376371 remains pending, so this incident is resolved on Lyris but still awaits independent cluster reproduction.
+Lyris retry 2370695 and Ptyche retry 2376371 both completed with exit code zero using that correction. Each JUnit artifact reports tests=3, failures=0, errors=0, skipped=0. PolicyTraining PP2/VPP2, Logprob PP2/VPP2, and checkpoint save/kill/restore PP2/VPP2 all passed independently on both GB200 clusters.

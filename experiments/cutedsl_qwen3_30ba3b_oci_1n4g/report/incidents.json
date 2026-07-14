@@ -525,7 +525,7 @@
     "symptom": "Both public-tokenizer VPP retries stalled during the first PolicyTraining test and produced no JUnit result.",
     "tested_change": "Copy the pinned Megatron-Core source to a run-local overlay, build helpers_cpp with the locked Python ABI, verify the imported module origin, and propagate the overlay through PYTHONPATH to Ray isolated workers.",
     "timestamp_utc": "2026-07-14T08:30:55Z",
-    "verification_evidence": "The new TDD contract changed from red to green; model-profile, multinode-harness, and VPP validation suites report 132 passed. Lyris retry 2370695 completed with exit code zero. Its exact JUnit totals are tests=3, failures=0, errors=0, skipped=0: PolicyTraining, Logprob, and checkpoint save/kill/restore all passed. Ptyche retry 2376371 remains pending.",
-    "verification_job": "2370695 completed; 2376371 pending"
+    "verification_evidence": "The new TDD contract changed from red to green; model-profile, multinode-harness, and VPP validation suites report 132 passed. Lyris retry 2370695 and Ptyche retry 2376371 both completed with exit code zero. Each cluster's exact JUnit totals are tests=3, failures=0, errors=0, skipped=0: PolicyTraining, Logprob, and checkpoint save/kill/restore all passed.",
+    "verification_job": "2370695 and 2376371 completed"
   }
 ]

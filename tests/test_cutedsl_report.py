@@ -1616,8 +1616,10 @@ def test_committed_current_status_keeps_unmeasured_features_out_of_claims() -> N
     vpp = entries["Virtual pipeline parallelism (PR #1126 port)"]
     assert vpp["state"] == "implemented_unmeasured"
     assert "dataset-helper Makefile" in vpp["limitation"]
-    assert "JUnit tests=3, failures=0, errors=0" in vpp["limitation"]
-    assert "no Qwen3-235B performance timing exists yet" in vpp["limitation"]
+    assert "Lyris retry 2370695" in vpp["limitation"]
+    assert "Ptyche retry 2376371" in vpp["limitation"]
+    assert vpp["limitation"].count("tests=3, failures=0, errors=0") == 2
+    assert "No Qwen3-235B performance timing exists yet" in vpp["limitation"]
 
 
 def test_event_writer_json_escapes_backslashes_exactly(tmp_path: Path) -> None:
