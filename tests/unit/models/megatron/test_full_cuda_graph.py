@@ -230,7 +230,23 @@ def test_static_loader_clones_first_microbatch_into_stable_storage():
     )
 
 
-def test_full_cuda_graph_wrapper_rejects_forward_only_and_call_signature_drift():
+def test_static_loader_keeps_training_and_validation_storage_independent():
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        ProcessedMicrobatchStaticBufferLoader,
+    )
+
+    loader = ProcessedMicrobatchStaticBufferLoader()
+
+    training = loader(_processed_microbatch(4), "training", 0)
+    validation = loader(_processed_microbatch(8), "validation", 0)
+
+    assert training.input_ids.shape == (1, 4)
+    assert validation.input_ids.shape == (1, 8)
+    assert training.input_ids.data_ptr() != validation.input_ids.data_ptr()
+    assert set(loader._signatures) == {("training", 0), ("validation", 0)}
+
+
+def test_full_cuda_graph_wrapper_tracks_training_and_validation_independently():
     from nemo_rl.models.megatron.full_cuda_graph import (
         FullCudaGraphCallSignature,
         NemoRLFullCudaGraphWrapper,
@@ -239,43 +255,60 @@ def test_full_cuda_graph_wrapper_rejects_forward_only_and_call_signature_drift()
     raw_schedule = MagicMock()
     wrapper = NemoRLFullCudaGraphWrapper(
         raw_schedule,
-        cuda_graph_warmup_steps=3,
+        cuda_graph_warmup_steps=1,
         use_single_mempool=True,
         upstream_wrapper_cls=_FakeUpstreamFullCudaGraphWrapper,
     )
-    signature = FullCudaGraphCallSignature(
+    training_signature = FullCudaGraphCallSignature(
         num_microbatches=1,
         seq_length=4,
         micro_batch_size=1,
         loss_signature="ClippedPGLossFn:v1",
     )
-
-    with pytest.raises(RuntimeError, match="PolicyTraining only"):
-        wrapper(
-            model=MagicMock(),
-            data_iterator=iter([_processed_microbatch()]),
-            num_microbatches=1,
-            seq_length=4,
-            micro_batch_size=1,
-            forward_only=True,
-            nemo_rl_signature=signature,
-        )
-
-    wrapper._expected_call_signature = signature
-    changed = FullCudaGraphCallSignature(
+    validation_signature = FullCudaGraphCallSignature(
         num_microbatches=1,
         seq_length=8,
         micro_batch_size=1,
-        loss_signature="ClippedPGLossFn:v1",
+        loss_signature="LogprobsPostProcessor:v1",
+    )
+
+    for forward_only, signature, seq_length in (
+        (False, training_signature, 4),
+        (True, validation_signature, 8),
+        (False, training_signature, 4),
+        (True, validation_signature, 8),
+    ):
+        wrapper(
+            model=MagicMock(),
+            data_iterator=iter([_processed_microbatch(seq_length)]),
+            num_microbatches=1,
+            seq_length=seq_length,
+            micro_batch_size=1,
+            forward_only=forward_only,
+            nemo_rl_signature=signature,
+        )
+
+    assert wrapper.execution_stats(stage="training").warmup_calls == 1
+    assert wrapper.execution_stats(stage="training").capture_calls == 1
+    assert wrapper.execution_stats(stage="training").replay_calls == 1
+    assert wrapper.execution_stats(stage="validation").warmup_calls == 1
+    assert wrapper.execution_stats(stage="validation").capture_calls == 1
+    assert wrapper.execution_stats(stage="validation").replay_calls == 1
+
+    changed = FullCudaGraphCallSignature(
+        num_microbatches=1,
+        seq_length=16,
+        micro_batch_size=1,
+        loss_signature="LogprobsPostProcessor:v1",
     )
     with pytest.raises(ValueError, match="call signature changed"):
         wrapper(
             model=MagicMock(),
-            data_iterator=iter([_processed_microbatch(8)]),
+            data_iterator=iter([_processed_microbatch(16)]),
             num_microbatches=1,
-            seq_length=8,
+            seq_length=16,
             micro_batch_size=1,
-            forward_only=False,
+            forward_only=True,
             nemo_rl_signature=changed,
         )
 
@@ -324,21 +357,29 @@ def test_full_cuda_graph_wrapper_reset_clears_call_and_input_signatures(monkeypa
         use_single_mempool=True,
         upstream_wrapper_cls=_FakeUpstreamFullCudaGraphWrapper,
     )
-    wrapper._expected_call_signature = FullCudaGraphCallSignature(
+    wrapper._expected_call_signatures["training"] = FullCudaGraphCallSignature(
         num_microbatches=1,
         seq_length=4,
         micro_batch_size=1,
         loss_signature="ClippedPGLossFn:v1",
     )
+    wrapper._expected_call_signatures["validation"] = FullCudaGraphCallSignature(
+        num_microbatches=1,
+        seq_length=8,
+        micro_batch_size=1,
+        loss_signature="LogprobsPostProcessor:v1",
+    )
     wrapper.static_loader._signatures[("training", 0)] = MagicMock()
+    wrapper.static_loader._signatures[("validation", 0)] = MagicMock()
     reset = MagicMock()
     monkeypatch.setattr(_FakeUpstreamFullCudaGraphWrapper, "reset_cuda_graph", reset)
 
-    wrapper.reset_cuda_graph(stage="training")
+    wrapper.reset_cuda_graph(stage="validation")
 
-    reset.assert_called_once_with(stage="training")
-    assert wrapper._expected_call_signature is None
-    assert wrapper.static_loader._signatures == {}
+    reset.assert_called_once_with(stage="validation")
+    assert wrapper._expected_call_signatures["training"] is not None
+    assert wrapper._expected_call_signatures["validation"] is None
+    assert set(wrapper.static_loader._signatures) == {("training", 0)}
 
 
 def test_build_full_cuda_graph_schedule_composes_paged_stash_outside_graph():
@@ -350,7 +391,15 @@ def test_build_full_cuda_graph_schedule_composes_paged_stash_outside_graph():
         cuda_graph_use_single_mempool=True,
         moe_expert_rank_capacity_factor=1.2,
     )
-    paged_stash_cls = MagicMock()
+    stash_manager = SimpleNamespace(enabled=True)
+
+    def run_paged_stash(**kwargs):
+        assert stash_manager.enabled is (not kwargs["forward_only"])
+        return "ok"
+
+    paged_stash_runner = MagicMock(side_effect=run_paged_stash)
+    paged_stash_runner.stash_manager = stash_manager
+    paged_stash_cls = MagicMock(return_value=paged_stash_runner)
 
     schedule, graph = build_full_cuda_graph_schedule(
         raw_schedule=raw_schedule,
@@ -369,7 +418,91 @@ def test_build_full_cuda_graph_schedule_composes_paged_stash_outside_graph():
         ANY,
         graph,
     )
-    assert schedule is paged_stash_cls.return_value
+    assert schedule(forward_only=True) == "ok"
+    assert stash_manager.enabled is True
+    paged_stash_runner.assert_called_once_with(forward_only=True)
+    assert schedule(forward_only=False) == "ok"
+    assert stash_manager.enabled is True
+
+    paged_stash_runner.side_effect = RuntimeError("validation failed")
+    with pytest.raises(RuntimeError, match="validation failed"):
+        schedule(forward_only=True)
+    assert stash_manager.enabled is True
+
+
+def test_paged_stash_adapter_resets_untracked_graph_after_runner_failure():
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        FullCudaGraphExecutionStats,
+        _PagedStashValidationStateAdapter,
+    )
+
+    class TrackingGraph:
+        def __init__(self) -> None:
+            self.capture_calls = 0
+            self.reset_calls = 0
+            self.captured = False
+
+        def execution_stats(self, *, stage: str) -> FullCudaGraphExecutionStats:
+            assert stage == "training"
+            return FullCudaGraphExecutionStats(
+                warmup_calls=1,
+                capture_calls=self.capture_calls,
+                replay_calls=self.capture_calls,
+                reset_calls=self.reset_calls,
+            )
+
+        def has_cuda_graph(self, *, stage: str) -> bool:
+            assert stage == "training"
+            return self.captured
+
+        def reset_cuda_graph(self, *, stage: str) -> None:
+            assert stage == "training"
+            self.captured = False
+            self.reset_calls += 1
+
+    graph = TrackingGraph()
+    stash_manager = SimpleNamespace(enabled=True)
+
+    def fail_after_capture(**_kwargs):
+        graph.capture_calls = 1
+        graph.captured = True
+        raise RuntimeError("outer paged-stash failure")
+
+    runner = MagicMock(side_effect=fail_after_capture)
+    runner.stash_manager = stash_manager
+    runner.forward_backward_func = graph
+    adapter = _PagedStashValidationStateAdapter(runner)
+
+    with pytest.raises(RuntimeError, match="outer paged-stash failure"):
+        adapter(forward_only=False)
+
+    assert not graph.captured
+    assert graph.reset_calls == 1
+    assert adapter._training_storage_signature is None
+    assert adapter._training_capture_calls == 1
+    assert adapter._training_reset_calls == 1
+
+
+def test_paged_stash_storage_signature_rejects_captured_buffer_reallocation():
+    from nemo_rl.models.megatron.full_cuda_graph import _PagedStashStorageSignature
+
+    buffer = SimpleNamespace(
+        cuda_buffer=torch.zeros(4),
+        host_buffer=None,
+        free_list_head=torch.zeros(2, dtype=torch.int64),
+    )
+    stash_manager = SimpleNamespace(
+        stash_buffers={torch.float32: {4: buffer}},
+        overflow=torch.zeros(1),
+        host_spill=torch.zeros(1),
+    )
+    signature = _PagedStashStorageSignature.capture(stash_manager)
+
+    signature.require_match(stash_manager)
+    buffer.cuda_buffer = torch.zeros(4)
+
+    with pytest.raises(RuntimeError, match="PagedStash storage signature changed"):
+        signature.require_match(stash_manager)
 
 
 def test_full_cuda_graph_runtime_guards_fail_closed():
@@ -384,6 +517,29 @@ def test_full_cuda_graph_runtime_guards_fail_closed():
             )
 
     require_supported_full_cuda_graph_operation(enabled=False, operation="logprob")
+    require_supported_full_cuda_graph_operation(
+        enabled=True, operation="policy_logprob"
+    )
+
+
+def test_full_cuda_graph_stage_evidence_reports_validation_counters():
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        build_full_cuda_graph_stage_evidence_envelope_consensus,
+    )
+
+    envelopes = [
+        (True, (0, (3, 1, 4, 0), "a" * 64), (0, (3, 1, 5, 0), "a" * 64)),
+        (True, (1, (3, 1, 4, 0), "b" * 64), (1, (3, 1, 5, 0), "b" * 64)),
+    ]
+
+    evidence = build_full_cuda_graph_stage_evidence_envelope_consensus(
+        envelopes, expected_world_size=2
+    )
+
+    assert evidence["full_cuda_graph_capture_calls"] == 1
+    assert evidence["full_cuda_graph_replay_calls"] == 4
+    assert evidence["full_cuda_graph_validation_capture_calls"] == 1
+    assert evidence["full_cuda_graph_validation_replay_calls"] == 5
 
 
 def test_full_cuda_graph_metric_context_keeps_scalar_tensors_on_device():

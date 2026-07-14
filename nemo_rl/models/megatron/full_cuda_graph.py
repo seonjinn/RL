@@ -28,6 +28,7 @@ FULL_CUDA_GRAPH_GLOBAL_VALID_TOKS = "__nemo_rl_full_cuda_graph_global_valid_toks
 
 _SUPPORTED_OPERATIONS = Literal[
     "policy_training",
+    "policy_logprob",
     "logprob",
     "eval",
     "split_policy_training",
@@ -72,6 +73,12 @@ FULL_CUDA_GRAPH_EVIDENCE_FIELDS = (
     "full_cuda_graph_storage_signature_sha256",
 )
 _FULL_CUDA_GRAPH_COUNTER_FIELDS = FULL_CUDA_GRAPH_EVIDENCE_FIELDS[:4]
+FULL_CUDA_GRAPH_VALIDATION_EVIDENCE_FIELDS = (
+    "full_cuda_graph_validation_warmup_calls",
+    "full_cuda_graph_validation_capture_calls",
+    "full_cuda_graph_validation_replay_calls",
+    "full_cuda_graph_validation_reset_calls",
+)
 _SHA256_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -182,6 +189,69 @@ def build_full_cuda_graph_evidence_envelope_consensus(
     )
 
 
+def build_full_cuda_graph_stage_evidence_envelope_consensus(
+    rank_envelopes: list[Any], *, expected_world_size: int
+) -> dict[str, int | str]:
+    """Derive training and validation counters from one all-rank exchange."""
+    if type(expected_world_size) is not int or expected_world_size < 1:
+        raise ValueError(
+            "full-iteration CUDA graph invalid policy world size"
+        ) from None
+    if type(rank_envelopes) is not list or len(rank_envelopes) != expected_world_size:
+        raise ValueError(
+            "full-iteration CUDA graph malformed stage evidence envelope"
+        ) from None
+
+    enabled_states: list[bool] = []
+    training_evidence: list[Any] = []
+    validation_evidence: list[Any] = []
+    for envelope in rank_envelopes:
+        if type(envelope) is not tuple or len(envelope) != 3:
+            raise ValueError(
+                "full-iteration CUDA graph malformed stage evidence envelope"
+            ) from None
+        enabled, training, validation = envelope
+        if type(enabled) is not bool or (
+            not enabled and (training is not None or validation is not None)
+        ):
+            raise ValueError(
+                "full-iteration CUDA graph malformed stage evidence envelope"
+            ) from None
+        enabled_states.append(enabled)
+        training_evidence.append(training)
+        validation_evidence.append(validation)
+
+    if not any(enabled_states):
+        return {}
+    if not all(enabled_states):
+        raise ValueError(
+            "full-iteration CUDA graph enabled state mismatch across policy ranks"
+        ) from None
+
+    training_consensus = build_full_cuda_graph_evidence_consensus(
+        training_evidence,
+        expected_world_size=expected_world_size,
+    )
+    validation_consensus = build_full_cuda_graph_evidence_consensus(
+        validation_evidence,
+        expected_world_size=expected_world_size,
+    )
+    if (
+        training_consensus["full_cuda_graph_storage_signature_sha256"]
+        != validation_consensus["full_cuda_graph_storage_signature_sha256"]
+    ):
+        raise ValueError(
+            "full-iteration CUDA graph stage storage digest mismatch"
+        ) from None
+    validation_counters = tuple(
+        validation_consensus[field] for field in _FULL_CUDA_GRAPH_COUNTER_FIELDS
+    )
+    return {
+        **training_consensus,
+        **dict(zip(FULL_CUDA_GRAPH_VALIDATION_EVIDENCE_FIELDS, validation_counters)),
+    }
+
+
 def aggregate_full_cuda_graph_evidence(
     results: Sequence[Mapping[str, Any]],
 ) -> dict[str, int | str]:
@@ -216,7 +286,40 @@ def aggregate_full_cuda_graph_evidence(
             raise ValueError(
                 "full-iteration CUDA graph evidence mismatch across results"
             ) from None
-    return dict(zip(FULL_CUDA_GRAPH_EVIDENCE_FIELDS, expected))
+    aggregated: dict[str, int | str] = dict(
+        zip(FULL_CUDA_GRAPH_EVIDENCE_FIELDS, expected)
+    )
+    validation_presence = [
+        tuple(field in result for field in FULL_CUDA_GRAPH_VALIDATION_EVIDENCE_FIELDS)
+        for result in results
+    ]
+    if all(not any(presence) for presence in validation_presence):
+        return aggregated
+    if any(not all(presence) for presence in validation_presence):
+        raise ValueError(
+            "full-iteration CUDA graph requires complete validation evidence from "
+            "every result"
+        ) from None
+    validation_counters = _validate_full_cuda_graph_counters(
+        tuple(first[field] for field in FULL_CUDA_GRAPH_VALIDATION_EVIDENCE_FIELDS)
+    )
+    for result in results[1:]:
+        if (
+            _validate_full_cuda_graph_counters(
+                tuple(
+                    result[field]
+                    for field in FULL_CUDA_GRAPH_VALIDATION_EVIDENCE_FIELDS
+                )
+            )
+            != validation_counters
+        ):
+            raise ValueError(
+                "full-iteration CUDA graph validation evidence mismatch across results"
+            ) from None
+    aggregated.update(
+        dict(zip(FULL_CUDA_GRAPH_VALIDATION_EVIDENCE_FIELDS, validation_counters))
+    )
+    return aggregated
 
 
 @dataclass(frozen=True, repr=False)
@@ -1009,10 +1112,8 @@ class ProcessedMicrobatchStaticBufferLoader:
         )
 
     def __call__(self, inputs: Any, stage: str, microbatch: int) -> Any:
-        if stage != "training":
-            raise RuntimeError(
-                "NeMo-RL full-iteration CUDA graph supports PolicyTraining only"
-            )
+        if stage not in {"training", "validation"}:
+            raise ValueError(f"unknown full-iteration CUDA graph stage: {stage!r}")
         signature = StaticMicrobatchSignature.from_microbatch(inputs)
         key = (stage, microbatch)
         expected = self._signatures.get(key)
@@ -1055,62 +1156,73 @@ class _NemoRLFullCudaGraphWrapperMixin:
     """
 
     static_loader: ProcessedMicrobatchStaticBufferLoader
-    _expected_call_signature: Optional[FullCudaGraphCallSignature]
+    _expected_call_signatures: dict[str, Optional[FullCudaGraphCallSignature]]
     _nemo_rl_bootstrap_reset: bool
-    _nemo_rl_capture_calls: int
-    _nemo_rl_phase_calls: int
-    _nemo_rl_replay_calls: int
-    _nemo_rl_reset_calls: int
-    _nemo_rl_warmup_calls: int
+    _nemo_rl_capture_calls: dict[str, int]
+    _nemo_rl_phase_calls: dict[str, int]
+    _nemo_rl_replay_calls: dict[str, int]
+    _nemo_rl_reset_calls: dict[str, int]
+    _nemo_rl_warmup_calls: dict[str, int]
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        if kwargs.get("forward_only"):
-            raise RuntimeError(
-                "NeMo-RL full-iteration CUDA graph supports PolicyTraining only; "
-                "Logprob/eval forward-only calls are not supported"
-            )
+        stage = "validation" if kwargs.get("forward_only") else "training"
         signature = kwargs.pop("nemo_rl_signature", None)
         if not isinstance(signature, FullCudaGraphCallSignature):
             raise TypeError(
                 "nemo_rl_signature is required for full-iteration CUDA graph"
             )
-        if self._expected_call_signature is None:
-            self._expected_call_signature = signature
+        expected_signature = self._expected_call_signatures[stage]
+        if expected_signature is None:
+            self._expected_call_signatures[stage] = signature
         else:
-            self._expected_call_signature.require_match(signature)
-        phase_call = self._nemo_rl_phase_calls
+            expected_signature.require_match(signature)
+        phase_call = self._nemo_rl_phase_calls[stage]
         result = super().__call__(*args, **kwargs)  # type: ignore[misc]
         if phase_call < self.cuda_graph_warmup_steps:
-            self._nemo_rl_warmup_calls += 1
+            self._nemo_rl_warmup_calls[stage] += 1
         elif phase_call == self.cuda_graph_warmup_steps:
-            self._nemo_rl_capture_calls += 1
-            self._nemo_rl_replay_calls += 1
+            self._nemo_rl_capture_calls[stage] += 1
+            self._nemo_rl_replay_calls[stage] += 1
         else:
-            self._nemo_rl_replay_calls += 1
-        self._nemo_rl_phase_calls += 1
+            self._nemo_rl_replay_calls[stage] += 1
+        self._nemo_rl_phase_calls[stage] += 1
         return result
 
-    def execution_stats(self) -> FullCudaGraphExecutionStats:
-        """Return an immutable snapshot of cumulative successful calls."""
+    def execution_stats(self, stage: str = "training") -> FullCudaGraphExecutionStats:
+        """Return cumulative successful calls for one independent graph stage."""
+        if stage not in {"training", "validation"}:
+            raise ValueError(f"unknown full-iteration CUDA graph stage: {stage!r}")
         return FullCudaGraphExecutionStats(
-            warmup_calls=self._nemo_rl_warmup_calls,
-            capture_calls=self._nemo_rl_capture_calls,
-            replay_calls=self._nemo_rl_replay_calls,
-            reset_calls=self._nemo_rl_reset_calls,
+            warmup_calls=self._nemo_rl_warmup_calls[stage],
+            capture_calls=self._nemo_rl_capture_calls[stage],
+            replay_calls=self._nemo_rl_replay_calls[stage],
+            reset_calls=self._nemo_rl_reset_calls[stage],
         )
 
-    def will_capture_next_call(self) -> bool:
-        """Whether the next successful training call is the capture call."""
-        return self._nemo_rl_phase_calls == self.cuda_graph_warmup_steps
+    def will_capture_next_call(self, stage: str = "training") -> bool:
+        """Whether the next successful call for a stage is its capture call."""
+        if stage not in {"training", "validation"}:
+            raise ValueError(f"unknown full-iteration CUDA graph stage: {stage!r}")
+        return self._nemo_rl_phase_calls[stage] == self.cuda_graph_warmup_steps
+
+    def has_cuda_graph(self, stage: str = "training") -> bool:
+        """Whether MCore currently holds a captured graph for one stage."""
+        if stage not in {"training", "validation"}:
+            raise ValueError(f"unknown full-iteration CUDA graph stage: {stage!r}")
+        graphs = getattr(self, "cuda_graph", None)
+        return isinstance(graphs, Mapping) and graphs.get(stage) is not None
 
     def reset_cuda_graph(self, stage: Optional[str] = None) -> None:
+        if stage not in {None, "training", "validation"}:
+            raise ValueError(f"unknown full-iteration CUDA graph stage: {stage!r}")
         super().reset_cuda_graph(stage=stage)  # type: ignore[misc]
         self.static_loader.reset(stage=stage)
-        if stage is None or stage == "training":
-            self._expected_call_signature = None
-            self._nemo_rl_phase_calls = 0
-        if not self._nemo_rl_bootstrap_reset:
-            self._nemo_rl_reset_calls += 1
+        reset_stages = ("training", "validation") if stage is None else (stage,)
+        for reset_stage in reset_stages:
+            self._expected_call_signatures[reset_stage] = None
+            self._nemo_rl_phase_calls[reset_stage] = 0
+            if not self._nemo_rl_bootstrap_reset:
+                self._nemo_rl_reset_calls[reset_stage] += 1
 
 
 @lru_cache(maxsize=None)
@@ -1149,13 +1261,13 @@ class NemoRLFullCudaGraphWrapper:
             use_single_mempool=use_single_mempool,
         )
         instance.static_loader = ProcessedMicrobatchStaticBufferLoader()
-        instance._expected_call_signature = None
+        instance._expected_call_signatures = {"training": None, "validation": None}
         instance._nemo_rl_bootstrap_reset = True
-        instance._nemo_rl_capture_calls = 0
-        instance._nemo_rl_phase_calls = 0
-        instance._nemo_rl_replay_calls = 0
-        instance._nemo_rl_reset_calls = 0
-        instance._nemo_rl_warmup_calls = 0
+        instance._nemo_rl_capture_calls = {"training": 0, "validation": 0}
+        instance._nemo_rl_phase_calls = {"training": 0, "validation": 0}
+        instance._nemo_rl_replay_calls = {"training": 0, "validation": 0}
+        instance._nemo_rl_reset_calls = {"training": 0, "validation": 0}
+        instance._nemo_rl_warmup_calls = {"training": 0, "validation": 0}
         instance.reset_cuda_graph()
         instance._nemo_rl_bootstrap_reset = False
         return instance
@@ -1245,7 +1357,7 @@ def require_supported_full_cuda_graph_operation(
     *, enabled: bool, operation: _SUPPORTED_OPERATIONS
 ) -> None:
     """Reject operations that would replay a graph against invalid state."""
-    if not enabled or operation == "policy_training":
+    if not enabled or operation in {"policy_training", "policy_logprob"}:
         return
     labels = {
         "logprob": "Logprob",
@@ -1292,6 +1404,36 @@ def full_cuda_graph_loss_signature(loss_fn: Any) -> str:
     return (
         f"{type(loss_fn).__module__}.{type(loss_fn).__qualname__}:"
         + _stable_signature(attributes)
+    )
+
+
+def full_cuda_graph_logprob_signature(
+    post_processing_fn: Any, *, defer_fp32_logits: Optional[bool]
+) -> str:
+    """Return a stable signature for the current-policy validation graph."""
+    if type(post_processing_fn).__name__ != "LogprobsPostProcessor":
+        raise TypeError(
+            "full-iteration CUDA graph validation supports only current-policy "
+            "LogprobsPostProcessor"
+        )
+    sampling_params = post_processing_fn.sampling_params
+    sampling_signature = None
+    if sampling_params is not None:
+        sampling_signature = {
+            "top_k": sampling_params.top_k,
+            "top_p": sampling_params.top_p,
+            "temperature": sampling_params.temperature,
+        }
+    attributes = {
+        "defer_fp32_logits": bool(defer_fp32_logits),
+        "logprob_chunk_size": post_processing_fn.cfg.get("logprob_chunk_size"),
+        "sequence_packing": post_processing_fn.cfg["sequence_packing"]["enabled"],
+        "sampling_params": sampling_signature,
+        "use_fused_linear_logprobs": post_processing_fn.use_fused_linear_logprobs,
+    }
+    return (
+        f"{type(post_processing_fn).__module__}."
+        f"{type(post_processing_fn).__qualname__}:" + _stable_signature(attributes)
     )
 
 
@@ -1350,6 +1492,161 @@ def materialize_full_cuda_graph_metrics(
     return materialized
 
 
+@dataclass(frozen=True)
+class _PagedStashStorageSignature:
+    entries: tuple[tuple[Any, ...], ...]
+
+    @classmethod
+    def capture(cls, stash_manager: Any) -> "_PagedStashStorageSignature":
+        stash_buffers = getattr(stash_manager, "stash_buffers", None)
+        if stash_buffers is None:
+            raise RuntimeError(
+                "full-iteration CUDA graph captured without PagedStash buffers"
+            )
+        tensors: list[tuple[str, torch.Tensor]] = []
+        for name in ("overflow", "host_spill"):
+            tensor = getattr(stash_manager, name, None)
+            if isinstance(tensor, torch.Tensor):
+                tensors.append((f"manager.{name}", tensor))
+        for dtype, buffers_by_hidden_size in sorted(
+            stash_buffers.items(), key=lambda item: repr(item[0])
+        ):
+            for hidden_size, buffer in sorted(
+                buffers_by_hidden_size.items(), key=lambda item: repr(item[0])
+            ):
+                prefix = f"stash[{dtype!r}][{hidden_size!r}]"
+                for name, value in sorted(vars(buffer).items()):
+                    if isinstance(value, torch.Tensor):
+                        tensors.append((f"{prefix}.{name}", value))
+        entries = tuple(
+            (
+                name,
+                tuple(tensor.shape),
+                tuple(tensor.stride()),
+                tensor.dtype,
+                tensor.device.type,
+                tensor.device.index,
+                tensor.untyped_storage().data_ptr(),
+                tensor.storage_offset(),
+            )
+            for name, tensor in tensors
+        )
+        return cls(entries=entries)
+
+    def require_match(self, stash_manager: Any) -> None:
+        actual = type(self).capture(stash_manager)
+        if actual != self:
+            raise RuntimeError(
+                "full-iteration CUDA graph PagedStash storage signature changed"
+            )
+
+
+class _PagedStashValidationStateAdapter:
+    """Restore graph-external PagedStash state after validation graph calls."""
+
+    def __init__(self, runner: Any) -> None:
+        self.runner = runner
+        self._training_storage_signature: Optional[_PagedStashStorageSignature] = None
+        self._training_capture_calls = 0
+        self._training_reset_calls = 0
+
+    def _training_stats(self) -> Optional[FullCudaGraphExecutionStats]:
+        graph = getattr(self.runner, "forward_backward_func", None)
+        execution_stats = getattr(graph, "execution_stats", None)
+        if not callable(execution_stats):
+            return None
+        stats = execution_stats(stage="training")
+        return stats if isinstance(stats, FullCudaGraphExecutionStats) else None
+
+    def _prepare_storage_check(self) -> Optional[FullCudaGraphExecutionStats]:
+        stats = self._training_stats()
+        if stats is None:
+            return None
+        if stats.reset_calls != self._training_reset_calls:
+            self._training_storage_signature = None
+            self._training_reset_calls = stats.reset_calls
+            self._training_capture_calls = stats.capture_calls
+        graph = getattr(self.runner, "forward_backward_func", None)
+        has_cuda_graph = getattr(graph, "has_cuda_graph", None)
+        if (
+            self._training_storage_signature is None
+            and callable(has_cuda_graph)
+            and has_cuda_graph(stage="training")
+        ):
+            graph.reset_cuda_graph(stage="training")
+            stats = self._training_stats()
+            if stats is not None:
+                self._training_reset_calls = stats.reset_calls
+                self._training_capture_calls = stats.capture_calls
+        if self._training_storage_signature is not None:
+            self._training_storage_signature.require_match(self.runner.stash_manager)
+        return stats
+
+    def _reset_graph_after_failed_call(self, *, stage: str) -> None:
+        graph = getattr(self.runner, "forward_backward_func", None)
+        has_cuda_graph = getattr(graph, "has_cuda_graph", None)
+        if not callable(has_cuda_graph) or not has_cuda_graph(stage=stage):
+            return
+        graph.reset_cuda_graph(stage=stage)
+        if stage == "training":
+            self._training_storage_signature = None
+            stats = self._training_stats()
+            if stats is not None:
+                self._training_reset_calls = stats.reset_calls
+                self._training_capture_calls = stats.capture_calls
+
+    def _finish_storage_check(
+        self, before: Optional[FullCudaGraphExecutionStats]
+    ) -> None:
+        after = self._training_stats()
+        if after is None:
+            return
+        reset_during_call = (
+            before is not None and after.reset_calls != before.reset_calls
+        )
+        if after.reset_calls != self._training_reset_calls:
+            self._training_storage_signature = None
+            self._training_reset_calls = after.reset_calls
+        captured_during_call = after.capture_calls > self._training_capture_calls
+        self._training_capture_calls = after.capture_calls
+        if captured_during_call and not reset_during_call:
+            self._training_storage_signature = _PagedStashStorageSignature.capture(
+                self.runner.stash_manager
+            )
+        elif self._training_storage_signature is not None:
+            self._training_storage_signature.require_match(self.runner.stash_manager)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        stash_manager = self.runner.stash_manager
+        before = self._prepare_storage_check()
+        if not kwargs.get("forward_only"):
+            # A captured training graph replays GPU work without rerunning the
+            # Python paged_stash_reset(enabled=True) assignment.
+            stash_manager.enabled = True
+            try:
+                result = self.runner(*args, **kwargs)
+                self._finish_storage_check(before)
+                return result
+            except Exception:
+                self._reset_graph_after_failed_call(stage="training")
+                raise
+        enabled = stash_manager.enabled
+        # Validation graph replay likewise skips paged_stash_reset(False).
+        stash_manager.enabled = False
+        try:
+            result = self.runner(*args, **kwargs)
+            self._finish_storage_check(before)
+            return result
+        except Exception:
+            self._reset_graph_after_failed_call(stage="validation")
+            raise
+        finally:
+            # Validation calls paged_stash_reset(enabled=False) inside the raw
+            # schedule. A later training graph replay does not rerun that Python
+            # assignment, so restore it outside the graph on every exit path.
+            stash_manager.enabled = enabled
+
+
 def build_full_cuda_graph_schedule(
     *,
     raw_schedule: Callable[..., Any],
@@ -1373,12 +1670,14 @@ def build_full_cuda_graph_schedule(
             from megatron.core.transformer.moe.paged_stash import PagedStashRunner
 
             paged_stash_cls = PagedStashRunner
+        assert paged_stash_cls is not None
         model_chunks = model if isinstance(model, list) else [model]
-        schedule = paged_stash_cls(
+        paged_stash_runner = paged_stash_cls(
             model_config,
             copy_main_params,
             model_chunks,
             optimizer,
             graph,
         )
+        schedule = _PagedStashValidationStateAdapter(paged_stash_runner)
     return schedule, graph

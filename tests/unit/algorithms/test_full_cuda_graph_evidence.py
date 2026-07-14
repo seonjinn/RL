@@ -25,6 +25,12 @@ _COUNTER_FIELDS = (
     "full_cuda_graph_replay_calls",
     "full_cuda_graph_reset_calls",
 )
+_VALIDATION_COUNTER_FIELDS = (
+    "full_cuda_graph_validation_warmup_calls",
+    "full_cuda_graph_validation_capture_calls",
+    "full_cuda_graph_validation_replay_calls",
+    "full_cuda_graph_validation_reset_calls",
+)
 _DIGEST_FIELD = "full_cuda_graph_storage_signature_sha256"
 
 
@@ -84,6 +90,38 @@ def test_full_cuda_graph_evidence_tracker_preserves_exact_values_and_deltas() ->
         "full_cuda_graph_replay_calls_delta": 3,
         "full_cuda_graph_reset_calls_delta": 0,
     }
+
+
+def test_full_cuda_graph_evidence_tracker_preserves_validation_stage_deltas() -> None:
+    from nemo_rl.algorithms.utils import FullCudaGraphEvidenceTracker
+
+    tracker = FullCudaGraphEvidenceTracker()
+    first = {
+        **_evidence(),
+        **dict(zip(_VALIDATION_COUNTER_FIELDS, (1, 0, 0, 0))),
+    }
+    first_metrics: dict[str, Any] = {}
+    tracker.preserve(first, first_metrics)
+
+    second = {
+        **_evidence(replay=3),
+        **dict(zip(_VALIDATION_COUNTER_FIELDS, (2, 1, 1, 0))),
+    }
+    second_metrics: dict[str, Any] = {}
+    tracker.preserve(second, second_metrics)
+
+    assert {
+        field: second_metrics[field] for field in _VALIDATION_COUNTER_FIELDS
+    } == dict(zip(_VALIDATION_COUNTER_FIELDS, (2, 1, 1, 0)))
+    assert {
+        f"{field}_delta": second_metrics[f"{field}_delta"]
+        for field in _VALIDATION_COUNTER_FIELDS
+    } == dict(
+        zip(
+            (f"{field}_delta" for field in _VALIDATION_COUNTER_FIELDS),
+            (1, 1, 1, 0),
+        )
+    )
 
 
 def test_full_cuda_graph_evidence_tracker_leaves_disabled_payload_unchanged() -> None:

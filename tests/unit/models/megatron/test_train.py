@@ -951,27 +951,54 @@ class TestMegatronForwardBackward:
             torch.tensor(2.0),
         )
 
-    def test_full_cuda_graph_schedule_rejects_forward_only(self):
-        from nemo_rl.algorithms.loss import NLLLossFn
+    def test_full_cuda_graph_schedule_supports_logprob_validation_stage(self):
+        from nemo_rl.models.megatron.data import ProcessedMicrobatch
+        from nemo_rl.models.megatron.full_cuda_graph import (
+            FULL_CUDA_GRAPH_GLOBAL_VALID_SEQS,
+            FULL_CUDA_GRAPH_GLOBAL_VALID_TOKS,
+            FullCudaGraphCallSignature,
+        )
         from nemo_rl.models.megatron.train import (
-            LossPostProcessor,
+            LogprobsPostProcessor,
             megatron_forward_backward,
         )
 
-        with pytest.raises(RuntimeError, match="PolicyTraining only"):
-            megatron_forward_backward(
-                model=MagicMock(),
-                data_iterator=iter([]),
-                num_microbatches=1,
-                seq_length=3,
-                mbs=1,
-                post_processing_fn=LossPostProcessor(
-                    loss_fn=NLLLossFn(),
-                    cfg={"sequence_packing": {"enabled": False}},
-                ),
-                forward_only=True,
-                forward_backward_func=MagicMock(),
-            )
+        input_ids = torch.tensor([[1, 2, 3]])
+        microbatch = ProcessedMicrobatch(
+            data_dict={
+                "input_ids": input_ids,
+                "token_mask": torch.ones_like(input_ids),
+                "sample_mask": torch.ones(1),
+            },
+            input_ids=input_ids,
+            input_ids_cp_sharded=input_ids,
+            attention_mask=torch.ones(1, 3),
+            position_ids=torch.tensor([[0, 1, 2]]),
+            packed_seq_params=None,
+            cu_seqlens_padded=None,
+        )
+        graph_schedule = MagicMock(return_value=[])
+
+        megatron_forward_backward(
+            model=MagicMock(),
+            data_iterator=iter([microbatch]),
+            num_microbatches=1,
+            seq_length=3,
+            mbs=1,
+            post_processing_fn=LogprobsPostProcessor(
+                cfg={"sequence_packing": {"enabled": False}}
+            ),
+            forward_only=True,
+            forward_backward_func=graph_schedule,
+        )
+
+        call_kwargs = graph_schedule.call_args.kwargs
+        signature = call_kwargs["nemo_rl_signature"]
+        assert isinstance(signature, FullCudaGraphCallSignature)
+        assert "LogprobsPostProcessor" in signature.loss_signature
+        static_microbatch = next(call_kwargs["data_iterator"])
+        assert FULL_CUDA_GRAPH_GLOBAL_VALID_SEQS not in static_microbatch.data_dict
+        assert FULL_CUDA_GRAPH_GLOBAL_VALID_TOKS not in static_microbatch.data_dict
 
 
 class TestLossPostProcessor:

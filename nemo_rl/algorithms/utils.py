@@ -30,6 +30,7 @@ from transformers import (
 from nemo_rl.data.chat_templates import COMMON_CHAT_TEMPLATES
 from nemo_rl.models.megatron.full_cuda_graph import (
     FULL_CUDA_GRAPH_EVIDENCE_FIELDS,
+    FULL_CUDA_GRAPH_VALIDATION_EVIDENCE_FIELDS,
     aggregate_full_cuda_graph_evidence,
 )
 from nemo_rl.models.policy import TokenizerConfig
@@ -56,6 +57,10 @@ class FullCudaGraphEvidenceTracker:
             return
 
         counter_fields = FULL_CUDA_GRAPH_EVIDENCE_FIELDS[:4]
+        if all(
+            field in evidence for field in FULL_CUDA_GRAPH_VALIDATION_EVIDENCE_FIELDS
+        ):
+            counter_fields += FULL_CUDA_GRAPH_VALIDATION_EVIDENCE_FIELDS
         digest_field = FULL_CUDA_GRAPH_EVIDENCE_FIELDS[4]
         previous = self._previous
         if previous is None:

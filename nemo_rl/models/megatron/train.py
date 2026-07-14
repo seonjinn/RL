@@ -61,6 +61,7 @@ from nemo_rl.models.megatron.full_cuda_graph import (
     FULL_CUDA_GRAPH_GLOBAL_VALID_TOKS,
     FullCudaGraphCallSignature,
     attach_full_cuda_graph_normalizers,
+    full_cuda_graph_logprob_signature,
     full_cuda_graph_loss_signature,
 )
 from nemo_rl.models.megatron.router_replay import (
@@ -452,31 +453,35 @@ def megatron_forward_backward(
     """
     full_cuda_graph = forward_backward_func is not None
     if full_cuda_graph:
-        if forward_only:
-            raise RuntimeError(
-                "NeMo-RL full-iteration CUDA graph supports PolicyTraining only"
-            )
-        if global_valid_seqs is None or global_valid_toks is None:
+        if not forward_only and (
+            global_valid_seqs is None or global_valid_toks is None
+        ):
             raise ValueError(
                 "full-iteration CUDA graph PolicyTraining requires global valid counts"
             )
+        if forward_only and not isinstance(post_processing_fn, LogprobsPostProcessor):
+            raise RuntimeError(
+                "full-iteration CUDA graph validation supports only current-policy "
+                "Logprob"
+            )
         if use_router_replay:
             raise RuntimeError(
-                "full-iteration CUDA graph PolicyTraining does not support router replay"
+                "full-iteration CUDA graph does not support router replay"
             )
         if draft_model is not None or enable_hidden_capture:
             raise RuntimeError(
-                "full-iteration CUDA graph PolicyTraining does not support draft hidden capture"
+                "full-iteration CUDA graph does not support draft hidden capture"
             )
         if need_top_k_or_top_p_filtering(sampling_params):
             raise RuntimeError(
-                "full-iteration CUDA graph PolicyTraining does not support top-k/top-p filtering"
+                "full-iteration CUDA graph does not support top-k/top-p filtering"
             )
-        data_iterator = attach_full_cuda_graph_normalizers(
-            data_iterator,
-            global_valid_seqs=global_valid_seqs,
-            global_valid_toks=global_valid_toks,
-        )
+        if not forward_only:
+            data_iterator = attach_full_cuda_graph_normalizers(
+                data_iterator,
+                global_valid_seqs=global_valid_seqs,
+                global_valid_toks=global_valid_toks,
+            )
 
     forward_step = partial(
         forward_with_post_processing_fn,
@@ -491,7 +496,7 @@ def megatron_forward_backward(
         use_fused_linear_logprobs=use_fused_linear_logprobs,
         use_router_replay=use_router_replay,
         router_replay_train=router_replay_train,
-        full_cuda_graph=full_cuda_graph,
+        full_cuda_graph=full_cuda_graph and not forward_only,
     )
     schedule_func = (
         forward_backward_func
@@ -519,13 +524,25 @@ def megatron_forward_backward(
             "forward_only": forward_only,
         }
         if full_cuda_graph:
+            if forward_only:
+                post_processing_signature = full_cuda_graph_logprob_signature(
+                    post_processing_fn,
+                    defer_fp32_logits=defer_fp32_logits,
+                )
+            else:
+                if not isinstance(post_processing_fn, LossPostProcessor):
+                    raise RuntimeError(
+                        "Full-iteration CUDA graph training supports only "
+                        "LossPostProcessor"
+                    )
+                post_processing_signature = full_cuda_graph_loss_signature(
+                    post_processing_fn.loss_fn
+                )
             schedule_kwargs["nemo_rl_signature"] = FullCudaGraphCallSignature(
                 num_microbatches=num_microbatches,
                 seq_length=seq_length,
                 micro_batch_size=mbs,
-                loss_signature=full_cuda_graph_loss_signature(
-                    post_processing_fn.loss_fn
-                ),
+                loss_signature=post_processing_signature,
             )
         return schedule_func(
             **schedule_kwargs,

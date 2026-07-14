@@ -1392,7 +1392,11 @@ def test_full_cuda_graph_worker_stats_emit_cohort_digest_without_pointer_values(
         gathered_payloads.append(local_payload)
         gathered[:] = [
             local_payload,
-            (True, _full_cuda_graph_rank_evidence(1, "b" * 64)),
+            (
+                True,
+                _full_cuda_graph_rank_evidence(1, "b" * 64),
+                _full_cuda_graph_rank_evidence(1, "b" * 64, counters=(0, 0, 0, 0)),
+            ),
         ]
 
     monkeypatch.setattr(torch.distributed, "get_rank", lambda: 0)
@@ -1406,6 +1410,10 @@ def test_full_cuda_graph_worker_stats_emit_cohort_digest_without_pointer_values(
     assert metrics["full_cuda_graph_capture_calls"] == 1
     assert metrics["full_cuda_graph_replay_calls"] == 2
     assert metrics["full_cuda_graph_reset_calls"] == 0
+    assert metrics["full_cuda_graph_validation_warmup_calls"] == 0
+    assert metrics["full_cuda_graph_validation_capture_calls"] == 0
+    assert metrics["full_cuda_graph_validation_replay_calls"] == 0
+    assert metrics["full_cuda_graph_validation_reset_calls"] == 0
     assert re.fullmatch(
         r"[0-9a-f]{64}", metrics["full_cuda_graph_storage_signature_sha256"]
     )
@@ -1428,7 +1436,8 @@ def test_full_cuda_graph_worker_gathers_before_rejecting_malformed_local_evidenc
     )
 
     class BrokenWrapper:
-        def execution_stats(self) -> Any:
+        def execution_stats(self, stage: str = "training") -> Any:
+            del stage
             raise RuntimeError("rank-local failure")
 
     worker = object.__new__(MegatronPolicyWorkerImpl)
@@ -1448,7 +1457,7 @@ def test_full_cuda_graph_worker_gathers_before_rejecting_malformed_local_evidenc
     with pytest.raises(ValueError, match="malformed rank evidence"):
         worker._add_full_cuda_graph_execution_metrics({})
 
-    assert collective_calls == [(True, None)]
+    assert collective_calls == [(True, None, None)]
 
 
 def test_full_cuda_graph_worker_mixed_rank_state_rejects_after_collective(
@@ -1461,7 +1470,7 @@ def test_full_cuda_graph_worker_mixed_rank_state_rejects_after_collective(
     enabled_worker = object.__new__(MegatronPolicyWorkerImpl)
     enabled_worker._full_cuda_graph_enabled = True
     enabled_worker._full_cuda_graph_wrapper = SimpleNamespace(
-        execution_stats=lambda: SimpleNamespace(
+        execution_stats=lambda stage="training": SimpleNamespace(
             warmup_calls=1,
             capture_calls=1,
             replay_calls=2,
@@ -1479,8 +1488,12 @@ def test_full_cuda_graph_worker_mixed_rank_state_rejects_after_collective(
     def all_gather_object(gathered: list[Any], local_payload: Any) -> None:
         collective_payloads.append(local_payload)
         gathered[:] = [
-            (True, _full_cuda_graph_rank_evidence(0, "a" * 64)),
-            (False, None),
+            (
+                True,
+                _full_cuda_graph_rank_evidence(0, "a" * 64),
+                _full_cuda_graph_rank_evidence(0, "a" * 64),
+            ),
+            (False, None, None),
         ]
 
     monkeypatch.setattr(torch.distributed, "get_rank", lambda: 0)
@@ -1492,8 +1505,12 @@ def test_full_cuda_graph_worker_mixed_rank_state_rejects_after_collective(
             worker._add_full_cuda_graph_execution_metrics({})
 
     assert collective_payloads == [
-        (True, _full_cuda_graph_rank_evidence(0, "a" * 64)),
-        (False, None),
+        (
+            True,
+            _full_cuda_graph_rank_evidence(0, "a" * 64),
+            _full_cuda_graph_rank_evidence(0, "a" * 64),
+        ),
+        (False, None, None),
     ]
 
 
@@ -1510,7 +1527,7 @@ def test_full_cuda_graph_worker_all_disabled_preserves_metrics_after_collective(
 
     def all_gather_object(gathered: list[Any], local_payload: Any) -> None:
         collective_payloads.append(local_payload)
-        gathered[:] = [(False, None), (False, None)]
+        gathered[:] = [(False, None, None), (False, None, None)]
 
     monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 2)
     monkeypatch.setattr(torch.distributed, "all_gather_object", all_gather_object)
@@ -1520,7 +1537,7 @@ def test_full_cuda_graph_worker_all_disabled_preserves_metrics_after_collective(
     worker._add_full_cuda_graph_execution_metrics(metrics)
 
     assert pickle.dumps(metrics) == before
-    assert collective_payloads == [(False, None)]
+    assert collective_payloads == [(False, None, None)]
 
 
 def test_full_graph_forward_step_preserves_a2a_schedule_plan() -> None:
