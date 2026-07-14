@@ -227,6 +227,27 @@ probe also caught OpenMathInstruct-2 ground-truth noise: for prompt 0 the
 dataset says "2" but the equation has no valid solution - all three variants
 of both models correctly answer "no solution".)
 
+## E2E validation: standalone predictions transfer, Amdahl-exactly
+
+Real NeMo-RL GRPO (unmodified `grpo-qwen3-30ba3b-4n4g.yaml`, 4 nodes x 4
+GB200, 10 steps, baseline vs EAGLE3-K3 via
+`vllm_kwargs.speculative_config`):
+
+| Phase (steady mean) | baseline | eagle3-K3 | speedup |
+|---|---|---|---|
+| generation | 68.5s | 41.2s | **1.66x** |
+| policy_training | 94.6s | 92.1s | 1.0x |
+| logprobs | 43.1s | 45.9s | 1.0x |
+| core step | 206.2s | 179.1s | **1.15x** |
+
+With generation at 33% of the step, Amdahl predicts
+1/(0.67 + 0.33/1.66) = 1.151x - the measured E2E speedup to three decimals.
+**Speculation's end-to-end effect is exactly its generation-phase gain
+diluted by the generation fraction; training and logprob phases are
+untouched.** The generation-phase 1.66x sits below the standalone 2.19x
+because the E2E engine is the NeMo-RL container's older vLLM and the
+generation timer includes engine wake/sleep overheads around each rollout.
+
 ## Key takeaway
 
 **On these RL-rollout shapes, EAGLE3 with a well-chosen fixed K is the
