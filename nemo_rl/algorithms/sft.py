@@ -354,6 +354,7 @@ def setup(
         load_dataloader_state(train_dataloader, last_checkpoint_path, data_config)
 
     if val_dataset is not None:
+        validation_generator = torch.Generator().manual_seed(sft_config.seed)
         val_dataloader = StatefulDataLoader(
             val_dataset,
             batch_size=sft_config.val_global_batch_size,
@@ -361,6 +362,7 @@ def setup(
             collate_fn=sft_collate_fn,
             drop_last=False,
             num_workers=data_config["num_workers"],
+            generator=validation_generator,
         )
     else:
         val_dataloader = None
