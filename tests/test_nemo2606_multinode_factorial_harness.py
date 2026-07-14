@@ -3,6 +3,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -1554,7 +1555,8 @@ def test_matrix_builds_tracked_mcore_overlay_before_config_resolution() -> None:
     config_resolution = "from nemo_rl.algorithms.grpo import MasterConfig"
     first_grpo = '"${UV_BIN}" run --active --no-sync examples/run_grpo.py'
     required = (
-        'git -C "${MCORE_SOURCE_ROOT}" archive --format=tar "${MCORE_SOURCE_SHA}"',
+        'git -C "${HOST_MCORE_SOURCE_ROOT}" archive --format=tar',
+        'tar -xf "${CONTAINER_MCORE_ARCHIVE}" -C "${MCORE_OVERLAY_ROOT}"',
         'ln -s "${runtime_python_config}" "${RUNTIME_TOOL_BIN}/python3-config"',
         'make -C "${MCORE_OVERLAY_DATASETS}"',
         'sysconfig.get_config_var("EXT_SUFFIX")',
@@ -1569,6 +1571,153 @@ def test_matrix_builds_tracked_mcore_overlay_before_config_resolution() -> None:
     assert source.index(source_preflight) < source.index(overlay_start)
     assert source.index(overlay_start) < source.index(config_resolution)
     assert source.index(overlay_start) < source.index(first_grpo)
+
+
+def test_direct_pyxis_bootstrap_extracts_host_archive_without_git_metadata(
+    tmp_path: Path,
+) -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    host_start = "# CUTEDSL_MCORE_HOST_ARCHIVE_START"
+    host_end = "# CUTEDSL_MCORE_HOST_ARCHIVE_END"
+    extract_start = "# CUTEDSL_MCORE_OVERLAY_EXTRACT_START"
+    extract_end = "# CUTEDSL_MCORE_OVERLAY_EXTRACT_END"
+
+    assert host_start in source
+    assert host_end in source
+    assert extract_start in source
+    assert extract_end in source
+    host_archive = source.split(f"{host_start}\n", 1)[1].split(f"{host_end}\n", 1)[0]
+    container_extract = source.split(f"{extract_start}\n", 1)[1].split(
+        f"{extract_end}\n", 1
+    )[0]
+    assert 'git -C "${HOST_MCORE_SOURCE_ROOT}" archive' in host_archive
+    assert 'tar -xf "${CONTAINER_MCORE_ARCHIVE}"' in container_extract
+    assert "git " not in container_extract
+
+    repository = tmp_path / "git-common" / "source"
+    repository.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repository)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repository), "config", "user.name", "Test User"],
+        check=True,
+    )
+    tracked_file = repository / "megatron" / "core" / "datasets" / "Makefile"
+    tracked_file.parent.mkdir(parents=True)
+    tracked_file.write_text("default:\n\t@true\n")
+    subprocess.run(["git", "-C", str(repository), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "commit", "-qm", "tracked source"],
+        check=True,
+    )
+    source_sha = subprocess.run(
+        ["git", "-C", str(repository), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    host_source = tmp_path / "host" / "deep" / "Megatron-LM"
+    host_source.parent.mkdir(parents=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "worktree",
+            "add",
+            "--detach",
+            "-q",
+            str(host_source),
+            source_sha,
+        ],
+        check=True,
+    )
+    gitdir = Path((host_source / ".git").read_text().strip().split("gitdir: ", 1)[1])
+    (host_source / ".git").write_text(
+        f"gitdir: {os.path.relpath(gitdir, host_source)}\n"
+    )
+    subprocess.run(
+        ["git", "-C", str(host_source), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    host_runtime = tmp_path / "host-runtime"
+    host_runtime.mkdir()
+    archive_result = subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{host_archive}"],
+        env={
+            **os.environ,
+            "HOST_MCORE_SOURCE_ROOT": str(host_source),
+            "HOST_RUNTIME_DIR": str(host_runtime),
+            "CONTAINER_RUNTIME_DIR": "/runtime",
+            "MCORE_SOURCE_SHA": source_sha,
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert archive_result.returncode == 0, archive_result.stderr
+    archive = host_runtime / "mcore-source.tar"
+    assert archive.is_file()
+
+    remapped_source = tmp_path / "container" / "Megatron-LM"
+    remapped_source.parent.mkdir(parents=True)
+    shutil.copytree(host_source, remapped_source)
+    inaccessible_git = subprocess.run(
+        ["git", "-C", str(remapped_source), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    assert inaccessible_git.returncode != 0
+
+    overlay = tmp_path / "container-runtime" / "mcore-overlay"
+    extract_result = subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{container_extract}"],
+        env={
+            **os.environ,
+            "CONTAINER_MCORE_ARCHIVE": str(archive),
+            "MCORE_OVERLAY_ROOT": str(overlay),
+            "RUNTIME_TOOL_BIN": str(tmp_path / "container-runtime" / "runtime-bin"),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert extract_result.returncode == 0, extract_result.stderr
+    assert (overlay / "megatron" / "core" / "datasets" / "Makefile").read_text() == (
+        "default:\n\t@true\n"
+    )
+
+
+def test_canonical_source_is_rechecked_by_outer_shell_after_bootstrap() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    bootstrap_call = "\"${SRUN[@]}\" bash -s <<'BASH'"
+    bootstrap_start = source.index(bootstrap_call)
+    bootstrap_end = source.index("\nBASH\n", bootstrap_start) + len("\nBASH\n")
+    post_start = "# CUTEDSL_MCORE_CANONICAL_POST_BOOTSTRAP_START"
+    post_end = "# CUTEDSL_MCORE_CANONICAL_POST_BOOTSTRAP_END"
+
+    assert post_start in source
+    assert post_end in source
+    post_check_start = source.index(post_start)
+    post_check_end = source.index(post_end)
+    post_check = source[post_check_start:post_check_end]
+    assert bootstrap_end <= post_check_start
+    assert 'reject_canonical_mcore_helpers "${HOST_MCORE_SOURCE_DATASETS}"' in (
+        post_check
+    )
+    assert 'git -C "${canonical_root}" status --porcelain' in post_check
+    assert '"${REPO_ROOT}"' in post_check
+    assert '"${HOST_MCORE_BRIDGE_ROOT}"' in post_check
+    assert '"${HOST_MCORE_SOURCE_ROOT}"' in post_check
+    assert post_check_end < source.index(
+        "from nemo_rl.algorithms.grpo import MasterConfig"
+    )
+    assert post_check_end < source.index("cutedsl_write_event runtime_bootstrap pass")
 
 
 def test_matrix_never_builds_mcore_helpers_in_canonical_checkout(

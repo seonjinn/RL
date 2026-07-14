@@ -13,6 +13,12 @@ runtime evidence.
 
 No NeMo-RL production file, Megatron-Bridge file, or Megatron-LM file changed.
 
+The post-implementation review found one direct-Pyxis topology gap: creating
+the archive after the repository was remapped required nested worktree Git
+metadata that is only valid at the host path. The corrected harness creates
+the pinned archive in the outer shell and makes the container bootstrap
+extract-only.
+
 ## TDD evidence
 
 The six required regressions were added before implementation and run with the
@@ -54,6 +60,42 @@ After adding the same scrub-and-force contract to that launcher:
 1 passed, 70 deselected in 0.73s
 ```
 
+The review correction added two regressions before changing the harness. The
+direct-Pyxis contract failed because the host-archive marker was absent:
+
+```text
+1 failed, 71 deselected in 0.48s
+assert '# CUTEDSL_MCORE_HOST_ARCHIVE_START' in source
+```
+
+The outer canonical recheck contract failed independently because its marker
+was absent:
+
+```text
+1 failed in 0.05s
+assert '# CUTEDSL_MCORE_CANONICAL_POST_BOOTSTRAP_START' in source
+```
+
+The GREEN regression constructs a real linked Git worktree, rewrites its
+`.git` file to use a relative gitdir, and proves all three relevant states:
+
+- archiving from the original host topology succeeds at the exact commit;
+- Git access fails after copying that worktree to a differently nested
+  direct-container-style path;
+- extracting the already-created run archive succeeds without Git metadata.
+
+Together with the static ordering regression, the corrected focused result
+was:
+
+```text
+3 passed, 70 deselected in 0.63s
+```
+
+The additional config-validation SRUN initially exposed two existing
+per-SRUN invariants: every container entry must revalidate the locked runtime
+interpreter and `NVTE_CUDA_ARCHS=100`. After applying those same checks to the
+new SRUN, the wrapper suite passed `53 passed in 2.41s`.
+
 The expanded wrapper suite then found one harness-compatibility regression:
 placing the new shell function before the established six-line container TMPDIR
 preamble made the preamble extractor execute `local` outside a function. The
@@ -80,15 +122,22 @@ regression executes the payload with both missing and false ambient values.
   against the canonical nested checkout HEAD.
 - `find -name 'helpers_cpp*'` rejects every canonical artifact type, including
   ignored ABI shared objects and symlinks, before runtime work.
-- The check runs again inside the locked bootstrap before uv work and after the
-  overlay build/import proof.
-- Parent, Bridge, and MCore porcelain status is rechecked with all untracked
-  files and recursive submodule state enabled.
+- The mounted canonical source is checked again inside the locked bootstrap
+  before uv work and after the overlay build/import proof.
+- Immediately after the bootstrap SRUN returns, the outer shell rechecks the
+  host canonical helper directory and parent, Bridge, and MCore porcelain
+  status with all untracked files and recursive submodule state enabled.
+- Config resolution runs only after that outer recheck, in a separate SRUN
+  with the same runtime-interpreter and SM100 assertions.
 
 ### Run-scoped overlay
 
-- `git archive` copies only content tracked by the pinned MCore commit into
-  `${CONTAINER_RUNTIME_DIR}/mcore-overlay`.
+- Before Pyxis can remap the repository, outer-shell `git archive` writes only
+  content tracked by the pinned MCore commit to
+  `${HOST_RUNTIME_DIR}/mcore-source.tar`.
+- The mounted bootstrap reads `${CONTAINER_RUNTIME_DIR}/mcore-source.tar` and
+  only extracts it into `${CONTAINER_RUNTIME_DIR}/mcore-overlay`; it performs
+  no Git operation and therefore needs no canonical `.git` metadata.
 - A matching uv-base `python3-config` is exposed through the run-scoped
   `runtime-bin`; the build `python3`, runtime interpreter, and extension suffix
   must agree.
@@ -113,17 +162,17 @@ that object.
 
 ## Verification
 
-Final focused harness:
+Final focused harness after the review correction:
 
 ```text
-71 passed in 10.80s
+73 passed in 12.08s
 ```
 
 Final harness plus relevant HF-cache, recipe, collector, report, diagnostics,
 wrapper, and Qwen3-235B suites:
 
 ```text
-282 passed in 26.42s
+284 passed in 26.42s
 ```
 
 Static checks passed:
