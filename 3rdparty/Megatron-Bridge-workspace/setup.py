@@ -21,9 +21,10 @@ import setuptools
 final_packages = []
 final_package_dir = {}
 
-# If the submodule is present, expose `megatron.bridge` package from the checkout
-bridge_src_dir = "Megatron-Bridge/src/megatron/bridge"
-bridge_package_name = "megatron.bridge"
+# If the submodule is present, expose `megatron.bridge` packages from the checkout
+bridge_src_root = "Megatron-Bridge/src"
+bridge_package_dir = os.path.join(bridge_src_root, "megatron", "bridge")
+bridge_package_include = ["megatron.bridge", "megatron.bridge.*"]
 
 # Default dependencies from pyproject.toml
 CACHED_DEPENDENCIES = [
@@ -59,7 +60,7 @@ CACHED_DEPENDENCIES = [
 ]
 
 # If the bridge source exists, compare cached dependencies with the submodule's pyproject
-if os.path.exists(bridge_src_dir):
+if os.path.exists(bridge_package_dir):
     pyproject_path = os.path.join("Megatron-Bridge", "pyproject.toml")
     if not os.path.exists(pyproject_path):
         raise FileNotFoundError(
@@ -105,9 +106,14 @@ if os.path.exists(bridge_src_dir):
             file=sys.stderr,
         )
 
-if os.path.exists(bridge_src_dir):
-    final_packages.append(bridge_package_name)
-    final_package_dir[bridge_package_name] = bridge_src_dir
+if os.path.exists(bridge_package_dir):
+    final_packages.extend(
+        setuptools.find_namespace_packages(
+            where=bridge_src_root,
+            include=bridge_package_include,
+        )
+    )
+    final_package_dir[""] = bridge_src_root
 
 setuptools.setup(
     name="megatron-bridge",
