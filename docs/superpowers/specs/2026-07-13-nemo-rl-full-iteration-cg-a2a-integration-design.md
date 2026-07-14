@@ -128,14 +128,16 @@ The existing colocated factorial launcher continues to reject full-CG contexts. 
 
 ## Failure Handling
 
-Configuration fails before GPU allocation when any of these conditions hold:
+Configuration fails before GPU allocation when any of these topology or lifecycle conditions hold:
 
 - dynamic batching or sequence packing is enabled;
 - context parallel size is not one;
-- an unsupported loss or operation is requested;
+- an unsupported operation is declared by configuration;
 - graph input or storage signatures change;
 - colocated generation/refit is requested by a Stage 1-3 launcher; or
 - A2A and graph schedule-plan composition is unavailable.
+
+The current public API supplies the concrete loss object to `train()` after worker construction. Therefore an unsupported loss fails before graph warm-up or capture, not before GPU allocation. Moving that failure earlier requires a future public configuration field that declares the loss type.
 
 Remote jobs retain bounded diagnostics and immutable source, image, cache, and resolved-config evidence. A configuration flag or `cudaGraphLaunch` alone is not accepted as proof of replay.
 
@@ -156,7 +158,7 @@ The TDD suite must cover:
 
 ### GB200 validation
 
-Each GPU gate records exact source and dependency revisions, resolved configuration, graph counters, representative pointer signatures, Nsight evidence, and component timings.
+Each GPU gate records exact source and dependency revisions, resolved configuration, graph counters, a SHA-256 digest of the representative pointer signature, Nsight evidence, and component timings. Private pointer values remain in bounded run-local evidence and are not published in the report.
 
 Acceptance requires:
 
