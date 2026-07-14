@@ -430,6 +430,11 @@ def run_rollout(args: argparse.Namespace, llm: Any) -> None:
         after = read_spec_decode_metrics(llm)
 
         lengths = [len(o.token_ids) for output in outputs for o in output.outputs]
+        token_ids = None
+        if args.save_token_ids:
+            token_ids = [
+                list(o.token_ids) for output in outputs for o in output.outputs
+            ]
         total_tokens = sum(lengths)
         row: dict[str, Any] = {
             "mode": "rollout",
@@ -443,6 +448,8 @@ def run_rollout(args: argparse.Namespace, llm: Any) -> None:
             "spec_decode": diff_spec_decode_metrics(after, before),
             "request_timing": extract_request_timing(outputs, monotonic_anchor),
         }
+        if token_ids is not None:
+            row["token_ids"] = token_ids
         results.append(row)
         flush(partial=True)
         spec = row["spec_decode"]
@@ -493,6 +500,11 @@ def main() -> None:
     parser.add_argument("--num-steps", type=int, default=4)
     parser.add_argument("--max-tokens", type=int, default=8192)
     parser.add_argument("--per-request-seed", action="store_true")
+    parser.add_argument(
+        "--save-token-ids",
+        action="store_true",
+        help="store generated token ids per output (parity checks; small runs only)",
+    )
 
     parser.add_argument("--output", required=True)
     parser.add_argument("--tag", default="")

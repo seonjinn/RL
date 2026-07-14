@@ -66,6 +66,7 @@ NUM_GENERATIONS_PER_PROMPT="${NUM_GENERATIONS_PER_PROMPT:-32}"
 NUM_STEPS="${NUM_STEPS:-4}"
 MAX_TOKENS="${MAX_TOKENS:-4096}"
 DYNAMIC_SPEC_JSON="${DYNAMIC_SPEC_JSON:-}"
+SAVE_TOKEN_IDS="${SAVE_TOKEN_IDS:-}"
 
 # vLLM 0.24: how the drafter samples ("greedy" argmax vs "probabilistic"
 # stochastic sampling with cached draft logits for exact rejection sampling).
@@ -206,6 +207,7 @@ sync_harness
     done
   elif [[ "${MODE}" == "rollout" ]]; then
     mode_args="--mode rollout --num-prompts-per-step ${NUM_PROMPTS_PER_STEP} --num-generations-per-prompt ${NUM_GENERATIONS_PER_PROMPT} --num-steps ${NUM_STEPS} --max-tokens ${MAX_TOKENS} --per-request-seed"
+    if [[ -n "${SAVE_TOKEN_IDS}" ]]; then mode_args="${mode_args} --save-token-ids"; fi
     for variant in ${ROLLOUT_VARIANTS}; do
       case "${variant}" in
         baseline)
