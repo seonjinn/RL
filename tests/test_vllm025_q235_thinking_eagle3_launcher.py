@@ -14,6 +14,7 @@ LAUNCHER = (
 
 def _dry_run(variant: str, **env_overrides: str) -> str:
     env = os.environ.copy()
+    env.pop("CUDAGRAPH_METRICS", None)
     env.update(
         {
             "MODE": "dry-run",
