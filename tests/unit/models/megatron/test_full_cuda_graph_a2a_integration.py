@@ -224,7 +224,8 @@ def test_full_cuda_graph_storage_guard_rejects_parameter_reallocation() -> None:
     model.weight = torch.nn.Parameter(model.weight.detach().clone())
 
     with pytest.raises(
-        RuntimeError, match=r"tensor=model_chunk\[0\]\.parameter\.weight"
+        RuntimeError,
+        match=r"tensor_id_sha256=[0-9a-f]{64} field=storage_data_ptr",
     ):
         signature.require_match(model, optimizer)
 
@@ -241,7 +242,10 @@ def test_full_cuda_graph_storage_guard_rejects_gradient_reallocation(
     signature = FullCudaGraphStorageSignature.capture(model, optimizer)
     setattr(model.weight, gradient_name, torch.zeros_like(model.weight))
 
-    with pytest.raises(RuntimeError, match=rf"tensor=.*\.{gradient_name}"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"tensor_id_sha256=[0-9a-f]{64} field=storage_data_ptr",
+    ):
         signature.require_match(model, optimizer)
 
 
@@ -255,8 +259,45 @@ def test_full_cuda_graph_storage_guard_rejects_optimizer_state_reallocation() ->
         model.weight
     )
 
-    with pytest.raises(RuntimeError, match=r"optimizer_leaf\[0\].*exp_avg"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"tensor_id_sha256=[0-9a-f]{64} field=storage_data_ptr",
+    ):
         signature.require_match(model, optimizer)
+
+
+def test_full_cuda_graph_storage_guard_detects_flat_and_nested_mapping_drift() -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import FullCudaGraphStorageSignature
+
+    model = _StorageModel()
+    optimizer = _LeafOptimizer(model.weight)
+    nested_state = torch.ones_like(model.weight)
+    flat_state = torch.full_like(model.weight, 2.0)
+    optimizer.state = {"a": {"b": nested_state}, "a.b": flat_state}
+    signature = FullCudaGraphStorageSignature.capture(model, optimizer)
+    optimizer.state["a"]["b"] = torch.zeros_like(nested_state)
+
+    with pytest.raises(RuntimeError, match="storage signature mismatch"):
+        signature.require_match(model, optimizer)
+
+
+def test_full_cuda_graph_storage_guard_rejects_duplicate_logical_tensor_names() -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import FullCudaGraphStorageSignature
+
+    class DuplicateNameModel:
+        def named_parameters(self) -> Any:
+            duplicated_parameter = torch.ones(1)
+            return iter(
+                (
+                    ("weight", duplicated_parameter),
+                    ("weight", duplicated_parameter),
+                )
+            )
+
+    with pytest.raises(TypeError, match="duplicate logical tensor name"):
+        FullCudaGraphStorageSignature.capture(
+            DuplicateNameModel(), SimpleNamespace(param_groups=[], state={})
+        )
 
 
 def test_full_cuda_graph_storage_guard_traverses_chained_optimizer_nested_state() -> (
@@ -273,13 +314,17 @@ def test_full_cuda_graph_storage_guard_traverses_chained_optimizer_nested_state(
     signature = FullCudaGraphStorageSignature.capture(model, optimizer)
     names = tuple(entry.name for entry in signature._entries)
 
-    assert any("optimizer_leaf[0]" in name and "exp_avg" in name for name in names)
-    assert any("optimizer_leaf[1]" in name and "exp_avg" in name for name in names)
+    assert any(name.startswith("optimizer_leaf[0]") for name in names)
+    assert any(name.startswith("optimizer_leaf[1]") for name in names)
+    assert all("key_sha256=" in name for name in names if ".state." in name)
     assert first.state_dict  # prove the forbidden method exists without calling it
     second.state[second_parameter]["nested"]["exp_avg"][0] = torch.zeros_like(
         second_parameter
     )
-    with pytest.raises(RuntimeError, match=r"optimizer_leaf\[1\].*exp_avg"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"tensor_id_sha256=[0-9a-f]{64} field=storage_data_ptr",
+    ):
         signature.require_match(model, optimizer)
 
 
@@ -300,7 +345,10 @@ def test_full_cuda_graph_storage_guard_handles_single_list_and_tuple_model_chunk
     assert listed.digest() == tupled.digest()
     assert any(entry.name.startswith("model_chunk[1]") for entry in listed._entries)
     second.weight = torch.nn.Parameter(second.weight.detach().clone())
-    with pytest.raises(RuntimeError, match=r"model_chunk\[1\]"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"tensor_id_sha256=[0-9a-f]{64} field=storage_data_ptr",
+    ):
         listed.require_match([first, second], optimizer)
 
 
@@ -363,7 +411,37 @@ def test_full_cuda_graph_storage_guard_sanitizes_pointer_values() -> None:
     assert str(changed_pointer) not in message
     assert hex(original_pointer) not in message
     assert hex(changed_pointer) not in message
-    assert len(re.findall(r"[0-9a-f]{64}", message)) == 2
+    assert "tensor=" not in message
+    assert len(re.findall(r"[0-9a-f]{64}", message)) == 3
+
+
+@pytest.mark.parametrize("key_kind", ["integer", "string", "tuple"])
+def test_full_cuda_graph_storage_guard_sanitizes_pointer_like_mapping_keys(
+    key_kind: str,
+) -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import FullCudaGraphStorageSignature
+
+    model = _StorageModel()
+    optimizer = _LeafOptimizer(model.weight)
+    pointer = model.weight.data_ptr()
+    pointer_keys = {
+        "integer": pointer,
+        "string": f"{pointer}:{hex(pointer)}",
+        "tuple": (pointer, hex(pointer)),
+    }
+    pointer_key = pointer_keys[key_kind]
+    optimizer.state = {pointer_key: torch.ones_like(model.weight)}
+    signature = FullCudaGraphStorageSignature.capture(model, optimizer)
+    optimizer.state[pointer_key] = torch.zeros_like(model.weight)
+
+    with pytest.raises(RuntimeError) as error:
+        signature.require_match(model, optimizer)
+
+    message = str(error.value)
+    assert str(pointer) not in message
+    assert hex(pointer) not in message
+    assert "tensor=" not in message
+    assert re.search(r"tensor_id_sha256=[0-9a-f]{64}", message)
 
 
 def test_full_cuda_graph_storage_guard_rejects_dtensor_and_custom_fsdp() -> None:
@@ -416,6 +494,42 @@ def test_full_cuda_graph_storage_guard_rejects_unsupported_tensor_storage() -> N
         )
 
     assert str(unsupported.data_ptr()) not in str(error.value)
+    assert hex(unsupported.data_ptr()) not in str(error.value)
+
+
+@pytest.mark.parametrize("attribute", ["__fsdp_param__", "grad", "main_grad"])
+def test_full_cuda_graph_storage_guard_sanitizes_tensor_attribute_failures(
+    attribute: str,
+) -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import FullCudaGraphStorageSignature
+
+    class AttributeFailureTensor(torch.Tensor):
+        def __getattribute__(self, name: str) -> Any:
+            if name == attribute:
+                pointer = super().__getattribute__("data_ptr")()
+                raise RuntimeError(f"private pointer {pointer} / {hex(pointer)}")
+            return super().__getattribute__(name)
+
+    unsupported = torch.Tensor._make_subclass(
+        AttributeFailureTensor, torch.ones(2), require_grad=False
+    )
+
+    class TensorModel:
+        def named_parameters(self) -> Any:
+            return iter((("weight", unsupported),))
+
+    with pytest.raises(
+        TypeError,
+        match=rf"field={re.escape(attribute)} reason=unsupported_tensor_attribute",
+    ) as error:
+        FullCudaGraphStorageSignature.capture(
+            TensorModel(), SimpleNamespace(param_groups=[], state={})
+        )
+
+    message = str(error.value)
+    assert str(unsupported.data_ptr()) not in message
+    assert hex(unsupported.data_ptr()) not in message
+    assert re.search(r"tensor_id_sha256=[0-9a-f]{64}", message)
 
 
 def test_full_cuda_graph_storage_guard_rejects_nondeterministic_state_container() -> (
@@ -431,18 +545,29 @@ def test_full_cuda_graph_storage_guard_rejects_nondeterministic_state_container(
         FullCudaGraphStorageSignature.capture(model, optimizer)
 
 
-def test_full_cuda_graph_storage_guard_rejects_ambiguous_mapping_keys() -> None:
+def test_full_cuda_graph_storage_guard_distinguishes_structured_mapping_keys() -> None:
     from nemo_rl.models.megatron.full_cuda_graph import FullCudaGraphStorageSignature
 
     model = _StorageModel()
     optimizer = _LeafOptimizer(model.weight)
+    first_key = "tuple=a"
+    second_key = ("a",)
     optimizer.state = {
-        "tuple=a": torch.tensor(1.0),
-        ("a",): torch.tensor(2.0),
+        first_key: torch.tensor(1.0),
+        second_key: torch.tensor(2.0),
     }
+    signature = FullCudaGraphStorageSignature.capture(model, optimizer)
+    state_names = [
+        entry.name for entry in signature._entries if ".state." in entry.name
+    ]
 
-    with pytest.raises(TypeError, match="nondeterministic optimizer mapping keys"):
-        FullCudaGraphStorageSignature.capture(model, optimizer)
+    assert len(state_names) == 2
+    assert len(set(state_names)) == 2
+    assert all("key_sha256=" in name for name in state_names)
+    optimizer.state[second_key] = torch.tensor(3.0)
+
+    with pytest.raises(RuntimeError, match="storage signature mismatch"):
+        signature.require_match(model, optimizer)
 
 
 def test_full_cuda_graph_storage_guard_failed_warmup_cannot_enter_capture() -> None:

@@ -117,22 +117,47 @@ def _is_custom_fsdp_model(value: Any) -> bool:
     )
 
 
-def _is_unsupported_distributed_tensor(value: torch.Tensor) -> bool:
+def _storage_identifier(name: str) -> str:
+    return hashlib.sha256(name.encode("utf-8")).hexdigest()
+
+
+def _read_tensor_attribute(tensor: torch.Tensor, *, name: str, attribute: str) -> Any:
+    try:
+        return getattr(tensor, attribute, None)
+    except Exception:
+        raise TypeError(
+            "full-iteration CUDA graph tensor attribute unavailable "
+            f"tensor_id_sha256={_storage_identifier(name)} field={attribute} "
+            "reason=unsupported_tensor_attribute"
+        ) from None
+
+
+def _is_unsupported_distributed_tensor(value: torch.Tensor, *, name: str) -> bool:
     value_type = type(value)
-    return (
-        value_type.__name__ == "DTensor"
-        or value_type.__module__.startswith("torch.distributed.tensor")
-        or bool(getattr(value, "__fsdp_param__", False))
+    if value_type.__name__ == "DTensor" or value_type.__module__.startswith(
+        "torch.distributed.tensor"
+    ):
+        return True
+    fsdp_parameter = _read_tensor_attribute(
+        value, name=name, attribute="__fsdp_param__"
     )
+    try:
+        return bool(fsdp_parameter)
+    except Exception:
+        raise TypeError(
+            "full-iteration CUDA graph tensor attribute unavailable "
+            f"tensor_id_sha256={_storage_identifier(name)} field=__fsdp_param__ "
+            "reason=unsupported_tensor_attribute"
+        ) from None
 
 
 def _read_storage_metadata(
     tensor: torch.Tensor, *, name: str
 ) -> _FullCudaGraphStorageEntry:
-    if _is_unsupported_distributed_tensor(tensor):
+    if _is_unsupported_distributed_tensor(tensor, name=name):
         raise TypeError(
             "full-iteration CUDA graph storage signature rejects DTensor/custom-FSDP "
-            f"tensor={name}"
+            f"tensor_id_sha256={_storage_identifier(name)}"
         ) from None
 
     fields: dict[str, Any] = {}
@@ -151,7 +176,8 @@ def _read_storage_metadata(
         except Exception:
             raise TypeError(
                 "full-iteration CUDA graph storage metadata unavailable "
-                f"tensor={name} field={field} reason=unsupported_tensor_metadata"
+                f"tensor_id_sha256={_storage_identifier(name)} field={field} "
+                "reason=unsupported_tensor_metadata"
             ) from None
     return _FullCudaGraphStorageEntry(name=name, **fields)
 
@@ -159,13 +185,21 @@ def _read_storage_metadata(
 class _FullCudaGraphStorageCapture:
     def __init__(self) -> None:
         self.entries: list[_FullCudaGraphStorageEntry] = []
+        self.logical_names: set[str] = set()
         self.seen_tensor_ids: set[int] = set()
 
     def add_tensor(self, tensor: Any, *, name: str) -> None:
+        if name in self.logical_names:
+            raise TypeError(
+                "full-iteration CUDA graph storage signature encountered a "
+                "duplicate logical tensor name "
+                f"tensor_id_sha256={_storage_identifier(name)}"
+            ) from None
+        self.logical_names.add(name)
         if not isinstance(tensor, torch.Tensor):
             raise TypeError(
                 "full-iteration CUDA graph storage signature expected a live tensor "
-                f"tensor={name}"
+                f"tensor_id_sha256={_storage_identifier(name)}"
             ) from None
         tensor_id = id(tensor)
         if tensor_id in self.seen_tensor_ids:
@@ -189,21 +223,34 @@ def _optimizer_leaves(optimizer: Any) -> list[Any]:
     return leaves
 
 
-def _mapping_key_name(key: Any, parameter_names: Mapping[int, str]) -> str:
+def _mapping_key_canonical_value(
+    key: Any, parameter_names: Mapping[int, str]
+) -> tuple[Any, ...]:
     parameter_name = parameter_names.get(id(key))
     if parameter_name is not None:
-        return f"parameter={parameter_name}"
-    if isinstance(key, str):
-        return _safe_storage_name(key, kind="optimizer mapping key")
+        return ("parameter", parameter_name)
+    if type(key) is str:
+        return ("str", _safe_storage_name(key, kind="optimizer mapping key"))
     if key is None or type(key) in (bool, int, float):
-        return f"{type(key).__name__}={key!r}"
-    if isinstance(key, tuple):
-        parts = [_mapping_key_name(part, parameter_names) for part in key]
-        return "tuple=" + ":".join(parts)
+        return (type(key).__name__, repr(key))
+    if type(key) is tuple:
+        return (
+            "tuple",
+            tuple(_mapping_key_canonical_value(part, parameter_names) for part in key),
+        )
     raise TypeError(
         "full-iteration CUDA graph storage signature encountered a "
         "nondeterministic optimizer mapping key"
     ) from None
+
+
+def _mapping_key_name(key: Any, parameter_names: Mapping[int, str]) -> str:
+    canonical = json.dumps(
+        _mapping_key_canonical_value(key, parameter_names),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"key_sha256={hashlib.sha256(canonical).hexdigest()}"
 
 
 def _capture_optimizer_value(
@@ -265,6 +312,12 @@ class FullCudaGraphStorageSignature:
     _digest: str = dataclass_field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        names = [entry.name for entry in self._entries]
+        if len(names) != len(set(names)):
+            raise TypeError(
+                "full-iteration CUDA graph storage signature encountered a "
+                "duplicate logical tensor name"
+            ) from None
         canonical = json.dumps(
             [entry.canonical_value() for entry in self._entries],
             sort_keys=True,
@@ -302,7 +355,9 @@ class FullCudaGraphStorageSignature:
                 )
                 capture.add_tensor(parameter, name=logical_name)
                 for gradient_name in ("main_grad", "grad"):
-                    gradient = getattr(parameter, gradient_name, None)
+                    gradient = _read_tensor_attribute(
+                        parameter, name=logical_name, attribute=gradient_name
+                    )
                     if gradient is not None:
                         capture.add_tensor(
                             gradient, name=f"{logical_name}.{gradient_name}"
@@ -397,7 +452,8 @@ class FullCudaGraphStorageSignature:
         raise RuntimeError(
             "full-iteration CUDA graph storage signature mismatch "
             f"expected_sha256={self.digest()} actual_sha256={actual.digest()} "
-            f"tensor={name} field={field} reason=graph_storage_changed"
+            f"tensor_id_sha256={_storage_identifier(name)} field={field} "
+            "reason=graph_storage_changed"
         ) from None
 
     def __repr__(self) -> str:
