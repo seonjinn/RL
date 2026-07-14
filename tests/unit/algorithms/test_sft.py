@@ -113,6 +113,65 @@ def test_setup_isolates_validation_dataloader_rng_from_training_rng() -> None:
     assert validation_generator.initial_seed() == seed
 
 
+def test_validation_dataloader_repeated_iteration_preserves_global_torch_rng() -> None:
+    seed = 20260714
+    master_config = MasterConfig.model_construct(
+        policy={
+            "train_global_batch_size": 1,
+            "megatron_cfg": {
+                "enabled": False,
+                "use_fused_linear_logprobs": False,
+            },
+        },
+        data={"shuffle": False, "num_workers": 1},
+        sft=SFTConfig.model_construct(seed=seed, val_global_batch_size=1),
+        logger={},
+        checkpointing={},
+        cluster={"num_nodes": 1, "gpus_per_node": 1},
+    )
+    train_dataset: Any = [0, 1]
+    val_dataset: Any = [0, 1, 2, 3]
+
+    with (
+        patch("nemo_rl.algorithms.sft.Logger"),
+        patch("nemo_rl.algorithms.sft.CheckpointManager") as checkpointer_cls,
+        patch("nemo_rl.algorithms.sft._build_sft_collate_fn", return_value=list),
+        patch(
+            "nemo_rl.algorithms.sft.prepare_segment_topology",
+            return_value=({}, None, None),
+        ),
+        patch("nemo_rl.algorithms.sft.RayVirtualCluster"),
+        patch("nemo_rl.algorithms.sft.Policy"),
+    ):
+        checkpointer = checkpointer_cls.return_value
+        checkpointer.get_latest_checkpoint_path.return_value = None
+        checkpointer.load_training_info.return_value = None
+        checkpointer.get_resume_paths.return_value = (None, None)
+
+        setup_result = sft_setup(
+            master_config,
+            MagicMock(),
+            train_dataset,
+            val_dataset,
+        )
+
+    val_dataloader = setup_result[3]
+    assert val_dataloader is not None
+    validation_generator = val_dataloader.generator
+    assert isinstance(validation_generator, torch.Generator)
+
+    for _ in range(2):
+        global_rng_before = torch.get_rng_state().clone()
+        validation_rng_before = validation_generator.get_state().clone()
+
+        assert list(val_dataloader) == [[0], [1], [2], [3]]
+
+        assert torch.equal(torch.get_rng_state(), global_rng_before)
+        assert not torch.equal(
+            validation_generator.get_state(), validation_rng_before
+        )
+
+
 @pytest.mark.parametrize(
     ("train_data", "expected_processed_tokens"),
     [
