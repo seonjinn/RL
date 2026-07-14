@@ -1343,12 +1343,12 @@ def test_load_rejects_unknown_manifest_key(tmp_path) -> None:
         load_validation_event(manifest, _fingerprint(), _memory_budget())
 
 
-def test_load_rejects_v2_before_applying_v3_schema(tmp_path) -> None:
+def test_load_rejects_v3_before_applying_v4_schema(tmp_path) -> None:
     manifest = save_validation_event(
         tmp_path, _event_fixture(), _fingerprint(), _supported_eligibility()
     )
     content = _manifest_content(manifest)
-    content["artifact_version"] = 2
+    content["artifact_version"] = 3
     del content["metadata"]
     _write_manifest(manifest, content)
 
@@ -1545,7 +1545,6 @@ def test_save_rejects_short_precomputed_event(tmp_path: Path) -> None:
     shortened = dataclasses.replace(
         event,
         data=shortened_data,
-        payload_digest=digest_validation_event_data(shortened_data),
         retained_bytes=sum(
             value.nbytes for value in shortened_data.values() if torch.is_tensor(value)
         ),
@@ -1563,7 +1562,6 @@ def test_save_requires_complete_packed_metadata(tmp_path: Path) -> None:
     del event.data["packed_max_seqlens"]
     event = dataclasses.replace(
         event,
-        payload_digest=digest_validation_event_data(event.data),
         retained_bytes=sum(
             value.nbytes for value in event.data.values() if torch.is_tensor(value)
         ),

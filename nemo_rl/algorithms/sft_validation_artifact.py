@@ -36,7 +36,7 @@ from safetensors.torch import save_file as save_safetensors_file
 
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
-_ARTIFACT_VERSION = 3
+_ARTIFACT_VERSION = 4
 _MANIFEST_FILE_NAME = "validation.manifest.json"
 _WRITER_LOCK_FILE_NAME = ".validation-artifact.lock"
 _TENSOR_FILE_PATTERN = re.compile(r"validation-([0-9a-f]{64})\.safetensors")
