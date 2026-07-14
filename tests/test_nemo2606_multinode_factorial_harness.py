@@ -1548,6 +1548,138 @@ def test_matrix_fails_closed_without_noneditable_submission_contract() -> None:
         )
 
 
+def test_direct_pyxis_preserves_noneditable_contract_without_host_paths() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    match = re.search(r"^\s*--container-env=([^\s]+)$", source, re.MULTILINE)
+
+    assert match is not None
+    forwarded_names = match.group(1).split(",")
+    assert forwarded_names == [
+        "VIRTUAL_ENV",
+        "UV_PROJECT_ENVIRONMENT",
+        "NVTE_CUDA_ARCHS",
+        "UV_NO_EDITABLE",
+    ]
+    assert "PATH" not in forwarded_names
+    assert "PYTHONPATH" not in forwarded_names
+
+    image_env = {
+        "UV_NO_EDITABLE": "0",
+        "PATH": "/image/bin",
+        "PYTHONPATH": "/image/python",
+    }
+    host_env = {"UV_NO_EDITABLE": "1"}
+    resolved = image_env.copy()
+    for name in forwarded_names:
+        if name in host_env:
+            resolved[name] = host_env[name]
+
+    assert resolved == {
+        "UV_NO_EDITABLE": "1",
+        "PATH": "/image/bin",
+        "PYTHONPATH": "/image/python",
+    }
+
+
+def test_every_direct_srun_reprefixes_container_runtime_paths(
+    tmp_path: Path,
+) -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    payloads = re.findall(
+        r'^\s*"\$\{SRUN\[@\]\}" bash -s <<\'BASH\'\n(.*?)^BASH$',
+        source,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert len(payloads) == 4
+
+    image_bin = tmp_path / "image-bin"
+    image_python = tmp_path / "image-python"
+    image_bin.mkdir()
+    image_python.mkdir()
+    (image_bin / "nsys").write_text("#!/bin/sh\nexit 0\n")
+    (image_bin / "nsys").chmod(0o755)
+    (image_bin / "python3").symlink_to(sys.executable)
+
+    for index, payload in enumerate(payloads):
+        preamble = payload.split("printf '[INFO] Container temporary directory:", 1)[0]
+        case_root = tmp_path / f"srun-{index}"
+        runtime_root = case_root / "runtime"
+        runtime_bin = runtime_root / "runtime-bin"
+        overlay = runtime_root / "mcore-overlay"
+        venv = runtime_root / "venv"
+        repository = case_root / "repo"
+        repository.mkdir(parents=True)
+
+        probe = [
+            'printf "PATH=%s\\nPYTHONPATH=%s\\nUV_NO_EDITABLE=%s\\n" "${PATH}" "${PYTHONPATH}" "${UV_NO_EDITABLE}"',
+            "command -v nsys",
+        ]
+        if index == 0:
+            probe.append('[[ ! -e "${MCORE_OVERLAY_ROOT}" ]]')
+        else:
+            runtime_bin.mkdir(parents=True)
+            (runtime_bin / "python3-config").write_text("#!/bin/sh\nexit 0\n")
+            (runtime_bin / "python3-config").chmod(0o755)
+            overlay.mkdir(parents=True)
+            (overlay / "mcore_overlay_sentinel.py").write_text(
+                'ORIGIN = "run-scoped-overlay"\n'
+            )
+            probe.extend(
+                [
+                    "command -v python3-config",
+                    "python3 -c 'import mcore_overlay_sentinel; print(mcore_overlay_sentinel.ORIGIN)'",
+                ]
+            )
+
+        env = os.environ.copy()
+        env.update(
+            {
+                "CONTAINER_REPO_ROOT": str(repository),
+                "CONTAINER_RUNTIME_DIR": str(runtime_root),
+                "MCORE_OVERLAY_ROOT": str(overlay),
+                "PATH": str(image_bin),
+                "PYTHONPATH": str(image_python),
+                "RUNTIME_TOOL_BIN": str(runtime_bin),
+                "UV_NO_EDITABLE": "1",
+                "UV_PROJECT_ENVIRONMENT": str(venv),
+            }
+        )
+        result = subprocess.run(
+            ["/bin/bash", "-c", preamble + "\n" + "\n".join(probe)],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, (index, result.stderr)
+        lines = result.stdout.splitlines()
+        assert lines[:4] == [
+            f"PATH={runtime_bin}:{venv / 'bin'}:{image_bin}",
+            f"PYTHONPATH={overlay}:{repository}:{image_python}",
+            "UV_NO_EDITABLE=1",
+            str(image_bin / "nsys"),
+        ]
+        if index > 0:
+            assert lines[4:] == [
+                str(runtime_bin / "python3-config"),
+                "run-scoped-overlay",
+            ]
+
+        already_prefixed_env = env.copy()
+        already_prefixed_env["PATH"] = f"{runtime_bin}:{venv / 'bin'}:{image_bin}"
+        already_prefixed_env["PYTHONPATH"] = f"{overlay}:{repository}:{image_python}"
+        existing_ray_result = subprocess.run(
+            ["/bin/bash", "-c", preamble + "\n" + "\n".join(probe)],
+            env=already_prefixed_env,
+            capture_output=True,
+            text=True,
+        )
+        assert existing_ray_result.returncode == 0, (
+            index,
+            existing_ray_result.stderr,
+        )
+        assert existing_ray_result.stdout.splitlines() == lines
+
+
 def test_matrix_builds_tracked_mcore_overlay_before_config_resolution() -> None:
     source = MATRIX_PAYLOAD.read_text()
     source_preflight = 'SOURCE_STATUS=$(git -C "${REPO_ROOT}" status'
