@@ -1467,6 +1467,7 @@ def _run_kernel_attribution(
     op_fuser: bool = True,
     full_cg_enabled: bool = False,
     a2a_enabled: bool = False,
+    temporal_overlap_verified: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     result_dir = tmp_path / "result"
     available_arms = ["on"] if full_cg_enabled else ["on", "off"]
@@ -1486,10 +1487,31 @@ def _run_kernel_attribution(
         json.dumps(
             {
                 "fixed_config_evidence": config_evidence,
-                "feature_context": "g0a0",
+                "feature_context": f"g{int(full_cg_enabled)}a{int(a2a_enabled)}",
                 "full_cg_enabled": full_cg_enabled,
                 "a2a_enabled": a2a_enabled,
                 "available_arms": available_arms,
+            }
+        )
+    )
+    bundle_state = "enabled" if a2a_enabled else "disabled"
+    (result_dir / "a2a_temporal_overlap.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source_profile_sha256": "a" * 64,
+                "a2a_interval_count": 7,
+                "expert_gemm_interval_count": 11,
+                "overlap_duration_ns": 5000,
+                "a2a_overlap_ratio": 0.5,
+                "gemm_overlap_ratio": 0.25,
+                "temporal_overlap_verified": temporal_overlap_verified,
+                "limitations": [
+                    f"A2A optimization bundle {bundle_state}",
+                    "deterministic C-locale first ON report selected; 12 total "
+                    "ON reports; only one representative process/rank analyzed; "
+                    "no all-rank aggregation",
+                ],
             }
         )
     )
@@ -1500,7 +1522,7 @@ def _run_kernel_attribution(
     )
 
 
-def test_benchmark_feature_presence_does_not_claim_graph_replay_or_a2a_overlap(
+def test_benchmark_representative_temporal_observation_does_not_claim_performance(
     tmp_path: Path,
 ) -> None:
     result = _run_kernel_attribution(
@@ -1519,14 +1541,22 @@ def test_benchmark_feature_presence_does_not_claim_graph_replay_or_a2a_overlap(
         ),
         full_cg_enabled=True,
         a2a_enabled=True,
+        temporal_overlap_verified=True,
     )
     assert result.returncode == 0, result.stderr
     attribution = json.loads((tmp_path / "result/feature_attribution.json").read_text())
     assert attribution["kernel_presence_passed"] is True
     assert attribution["full_iteration_replay_verified"] is False
-    assert attribution["a2a_temporal_overlap_verified"] is False
+    assert attribution["a2a_temporal_overlap_verified"] is True
     assert attribution["performance_claim_eligible"] is False
-    assert len(attribution["limitations"]) == 3
+    limitations = attribution["limitations"]
+    assert (
+        "cudaGraphLaunch presence does not prove full-iteration replay" in limitations
+    )
+    assert any(
+        "representative process/rank analyzed; no all-rank aggregation" in limitation
+        for limitation in limitations
+    )
     assert set(attribution["counts"]) == {"on"}
     assert attribution["counts"]["on"]["cuda_graph_launch_api"] == 1
     assert attribution["counts"]["on"]["nccl_a2a_kernel"] == 1
