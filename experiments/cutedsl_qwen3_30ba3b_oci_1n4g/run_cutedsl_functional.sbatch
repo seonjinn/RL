@@ -481,6 +481,18 @@ preserve_nemo_unit_results() {
         --mcore-only \
         -k "${mcore_lifecycle_test_filter}" \
         -q
+    "${UV_BIN}" run --active --no-sync pytest \
+        tests/unit/algorithms/test_full_cuda_graph_evidence.py \
+        tests/unit/models/megatron/test_full_cuda_graph.py \
+        tests/unit/models/megatron/test_full_cuda_graph_a2a_integration.py \
+        tests/unit/models/megatron/test_train.py \
+        --mcore-only \
+        -q
+    "${UV_BIN}" run --active --no-sync pytest \
+        tests/unit/models/policy/test_megatron_worker.py \
+        --mcore-only \
+        -k full_cuda_graph \
+        -q
 ) 2>&1 | tee -a "${CONTAINER_RESULT_DIR}/focused_tests.log"
 
 "${UV_BIN}" run --active --no-sync pyrefly check 2>&1 | tee "${CONTAINER_RESULT_DIR}/pyrefly.log"
