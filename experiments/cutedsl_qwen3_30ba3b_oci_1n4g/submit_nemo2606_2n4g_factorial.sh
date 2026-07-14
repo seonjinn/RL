@@ -41,13 +41,16 @@ while (($# > 0)); do
     esac
 done
 readonly MODEL_PROFILE_PATH TEST_ONLY
-PROFILE_PYTHON=(uv run --no-sync python)
+PROFILE_BOOTSTRAP_PYTHON="${NEMO2606_PROFILE_BOOTSTRAP_PYTHON:-python3}"
+readonly PROFILE_BOOTSTRAP_PYTHON
 profile_exports=$(
-    "${PROFILE_PYTHON[@]}" "${EXPERIMENT_DIR}/lib/model_profile.py" shell \
+    "${PROFILE_BOOTSTRAP_PYTHON}" \
+        "${EXPERIMENT_DIR}/lib/model_profile_bootstrap.py" shell \
         --profile "${MODEL_PROFILE_PATH}"
 )
 eval "${profile_exports}"
-"${PROFILE_PYTHON[@]}" "${EXPERIMENT_DIR}/lib/model_profile.py" validate \
+"${PROFILE_BOOTSTRAP_PYTHON}" \
+    "${EXPERIMENT_DIR}/lib/model_profile_bootstrap.py" validate \
     --profile "${MODEL_PROFILE_PATH}" --repo-root "${REPO_ROOT}" >/dev/null
 
 require_profile_value() {

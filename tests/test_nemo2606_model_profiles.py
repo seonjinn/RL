@@ -12,6 +12,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENT_DIR = PROJECT_ROOT / "experiments/cutedsl_qwen3_30ba3b_oci_1n4g"
 PROFILE_MODULE = EXPERIMENT_DIR / "lib/model_profile.py"
+PROFILE_BOOTSTRAP = EXPERIMENT_DIR / "lib/model_profile_bootstrap.py"
 PROFILE_DIR = EXPERIMENT_DIR / "model_profiles"
 SUBMITTER = EXPERIMENT_DIR / "submit_nemo2606_2n4g_factorial.sh"
 MATRIX_PAYLOAD = EXPERIMENT_DIR / "run_cutedsl_matrix.sbatch"
@@ -23,6 +24,64 @@ def _load_profile_module() -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize("profile_path", sorted(PROFILE_DIR.glob("*.json")))
+def test_dependency_free_profile_bootstrap_matches_pydantic_exports(
+    profile_path: Path,
+) -> None:
+    module = _load_profile_module()
+    profile = module.load_model_profile(profile_path)
+    expected = module.shell_exports(profile, profile_path)
+
+    result = subprocess.run(
+        [
+            os.sys.executable,
+            "-S",
+            str(PROFILE_BOOTSTRAP),
+            "shell",
+            "--profile",
+            str(profile_path),
+        ],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    actual = {}
+    for line in result.stdout.splitlines():
+        match = re.fullmatch(r"export ([A-Z0-9_]+)=(.*)", line)
+        assert match is not None
+        actual[match.group(1)] = match.group(2).strip("'")
+    assert actual == expected
+
+
+def test_dependency_free_profile_bootstrap_rejects_unknown_fields(
+    tmp_path: Path,
+) -> None:
+    profile = json.loads((PROFILE_DIR / "qwen3_30ba3b_2n4g.json").read_text())
+    profile["unexpected"] = True
+    malformed = tmp_path / "profile.json"
+    malformed.write_text(json.dumps(profile))
+
+    result = subprocess.run(
+        [
+            os.sys.executable,
+            "-S",
+            str(PROFILE_BOOTSTRAP),
+            "validate",
+            "--profile",
+            str(malformed),
+            "--repo-root",
+            str(PROJECT_ROOT),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "unexpected profile fields" in result.stderr
 
 
 @pytest.mark.parametrize(

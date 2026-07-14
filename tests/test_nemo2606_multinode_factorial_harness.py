@@ -2133,10 +2133,12 @@ print("mock-functional")
 def test_submitter_requires_profile_validator_before_submission(tmp_path: Path) -> None:
     mock_bin = tmp_path / "bin"
     mock_bin.mkdir()
-    uv_marker = tmp_path / "uv-called"
-    mock_uv = mock_bin / "uv"
-    mock_uv.write_text(f"#!/bin/bash\ntouch {shlex.quote(str(uv_marker))}\nexit 99\n")
-    mock_uv.chmod(0o755)
+    validator_marker = tmp_path / "validator-called"
+    mock_validator = mock_bin / "profile-python"
+    mock_validator.write_text(
+        f"#!/bin/bash\ntouch {shlex.quote(str(validator_marker))}\nexit 99\n"
+    )
+    mock_validator.chmod(0o755)
     mock_sbatch = mock_bin / "sbatch"
     mock_sbatch.write_text("#!/bin/bash\necho mock-functional\n")
     mock_sbatch.chmod(0o755)
@@ -2146,6 +2148,7 @@ def test_submitter_requires_profile_validator_before_submission(tmp_path: Path) 
             "PATH": f"{mock_bin}:{env['PATH']}",
             "CUTEDSL_CLUSTER_PROFILE": "pre_tyche",
             "NEMO2606_FUNCTIONAL_GATE": "1",
+            "NEMO2606_PROFILE_BOOTSTRAP_PYTHON": str(mock_validator),
         }
     )
 
@@ -2158,7 +2161,7 @@ def test_submitter_requires_profile_validator_before_submission(tmp_path: Path) 
     )
 
     assert result.returncode != 0
-    assert uv_marker.exists()
+    assert validator_marker.exists()
 
 
 def test_full_cg_preflight_checks_resolved_recipe_allocation_not_source_text() -> None:
@@ -2177,8 +2180,11 @@ def test_full_cg_preflight_checks_resolved_recipe_allocation_not_source_text() -
     assert '"resource_allocation": {' in payload_source
     assert '"policy_training_gpu_count": expected_policy_gpu_count' in payload_source
     assert "selected_recipe_allocation" not in submitter_source
-    assert "PROFILE_PYTHON=(uv run --no-sync python)" in submitter_source
-    assert 'lib/model_profile.py" validate' in submitter_source
+    assert (
+        'PROFILE_BOOTSTRAP_PYTHON="${NEMO2606_PROFILE_BOOTSTRAP_PYTHON:-python3}"'
+        in submitter_source
+    )
+    assert 'lib/model_profile_bootstrap.py" validate' in submitter_source
     assert (
         'grep -q "colocated generation/refit is not supported"' not in submitter_source
     )
