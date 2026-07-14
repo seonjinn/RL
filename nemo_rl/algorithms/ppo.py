@@ -1489,11 +1489,10 @@ def ppo_train(
                     elif isinstance(v, (np.ndarray, list)):
                         metrics[k] = np.sum(v).item()
 
-                if train_results is not None:
-                    full_cuda_graph_evidence.preserve(train_results, metrics)
-
                 metrics.update(rollout_metrics)
                 metrics["generation_logger_metrics"] = generation_logger_metrics
+                if train_results is not None:
+                    full_cuda_graph_evidence.preserve(train_results, metrics)
                 if "global_valid_toks" in metrics:
                     total_valid_tokens += metrics["global_valid_toks"]
 

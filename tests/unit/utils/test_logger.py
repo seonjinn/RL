@@ -674,6 +674,75 @@ class TestMLflowLogger:
         )
 
     @patch("nemo_rl.utils.logger.mlflow")
+    def test_log_full_cuda_graph_counters_as_metrics_and_digest_as_stable_tags(
+        self, mock_mlflow, temp_dir
+    ):
+        logger = MLflowLogger(
+            {
+                "experiment_name": "test-experiment",
+                "run_name": "test-run",
+                "tracking_uri": None,
+            },
+            log_dir=temp_dir,
+        )
+        digest = "a" * 64
+        metrics = {
+            "full_cuda_graph_warmup_calls": 1,
+            "full_cuda_graph_capture_calls": 1,
+            "full_cuda_graph_replay_calls": 3,
+            "full_cuda_graph_reset_calls": 0,
+            "full_cuda_graph_warmup_calls_delta": 0,
+            "full_cuda_graph_capture_calls_delta": 0,
+            "full_cuda_graph_replay_calls_delta": 1,
+            "full_cuda_graph_reset_calls_delta": 0,
+            "full_cuda_graph_storage_signature_sha256": digest,
+        }
+
+        logger.log_metrics(metrics, step=7, prefix="train")
+
+        mock_mlflow.log_metrics.assert_called_once()
+        logged = mock_mlflow.log_metrics.call_args.args[0]
+        assert mock_mlflow.log_metrics.call_args.kwargs == {
+            "step": 7,
+            "run_id": logger.run_id,
+        }
+        assert logged == {
+            f"train/{name}": value
+            for name, value in metrics.items()
+            if name != "full_cuda_graph_storage_signature_sha256"
+        }
+        assert digest not in logged.values()
+        mock_mlflow.set_tag.assert_has_calls(
+            [
+                call("train/full_cuda_graph_storage_signature_sha256", digest),
+                call("train/full_cuda_graph_storage_signature_sha256.step", "7"),
+            ]
+        )
+
+    @patch("nemo_rl.utils.logger.mlflow")
+    def test_log_full_cuda_graph_rejects_malformed_digest_for_mlflow(
+        self, mock_mlflow, temp_dir
+    ):
+        logger = MLflowLogger(
+            {
+                "experiment_name": "test-experiment",
+                "run_name": "test-run",
+                "tracking_uri": None,
+            },
+            log_dir=temp_dir,
+        )
+
+        with pytest.raises(ValueError, match="full-iteration CUDA graph"):
+            logger.log_metrics(
+                {"full_cuda_graph_storage_signature_sha256": "A" * 64},
+                step=7,
+                prefix="train",
+            )
+
+        mock_mlflow.log_metrics.assert_not_called()
+        mock_mlflow.set_tag.assert_not_called()
+
+    @patch("nemo_rl.utils.logger.mlflow")
     def test_log_metrics_summarizes_lists(self, mock_mlflow, temp_dir):
         """List-valued metrics are reduced to bounded per-step summary stats.
 

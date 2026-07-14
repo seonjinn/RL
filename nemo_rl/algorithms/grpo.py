@@ -3022,14 +3022,14 @@ def grpo_train(
                     else:
                         print(f"Skipping aggregation for {k} ({type(v)})")
 
-                full_cuda_graph_evidence.preserve(train_results, metrics)
-
                 metrics.update(rollout_metrics)
                 metrics["generation_logger_metrics"] = generation_logger_metrics
-                total_valid_tokens += metrics["global_valid_toks"]
 
                 # Always log sequence-level error metrics (useful for deciding threshold)
                 metrics.update(seq_logprob_error_metrics)
+
+                full_cuda_graph_evidence.preserve(train_results, metrics)
+                total_valid_tokens += metrics["global_valid_toks"]
 
                 ## Checkpointing
                 consumed_samples += master_config.grpo["num_prompts_per_step"]
@@ -4381,14 +4381,15 @@ def async_grpo_train(
                         metrics[k] = np.mean(v).item()
                     else:
                         metrics[k] = np.sum(v).item()
-                full_cuda_graph_evidence.preserve(train_results, metrics)
                 metrics.update(rollout_metrics)
                 if generation_logger_metrics is not None:
                     metrics["generation_logger_metrics"] = generation_logger_metrics
-                total_valid_tokens += metrics["global_valid_toks"]
 
                 # Always log sequence-level error metrics (useful for deciding threshold)
                 metrics.update(seq_logprob_error_metrics)
+
+                full_cuda_graph_evidence.preserve(train_results, metrics)
+                total_valid_tokens += metrics["global_valid_toks"]
 
                 # Checkpointing (same as sync version)
                 consumed_samples += master_config.grpo["num_prompts_per_step"]

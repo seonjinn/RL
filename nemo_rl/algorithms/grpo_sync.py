@@ -1064,13 +1064,13 @@ def grpo_train_sync(
                     else:
                         print(f"Skipping aggregation for {k} ({type(v)})")
 
-                full_cuda_graph_evidence.preserve(train_results, metrics)
-
                 metrics.update(rollout_metrics)
                 metrics["generation_logger_metrics"] = generation_logger_metrics
-                total_valid_tokens += metrics["global_valid_toks"]
 
                 metrics.update(seq_logprob_error_metrics)
+
+                full_cuda_graph_evidence.preserve(train_results, metrics)
+                total_valid_tokens += metrics["global_valid_toks"]
 
                 consumed_samples += master_config.grpo["num_prompts_per_step"]
                 timeout.mark_iteration()

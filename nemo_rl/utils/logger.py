@@ -902,6 +902,20 @@ class MLflowLogger(LoggerInterface):
         # per-worker generation-logger lists, then summarize each list into a few
         # bounded stats logged at the real training step. Keys use "/" so the
         # MLflow UI nests them into collapsible groups instead of a flat wall.
+        digest_name = "full_cuda_graph_storage_signature_sha256"
+        if digest_name in metrics:
+            digest = metrics[digest_name]
+            if type(digest) is not str or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                raise ValueError(
+                    "full-iteration CUDA graph malformed storage digest"
+                ) from None
+            tag_name = f"{prefix}/{digest_name}" if prefix else digest_name
+            mlflow.set_tag(tag_name, digest)
+            mlflow.set_tag(f"{tag_name}.step", str(step))
+            metrics = {
+                name: value for name, value in metrics.items() if name != digest_name
+            }
+
         metrics = _merge_generation_logger_workers(metrics)
         metrics_to_log = {}
         for name, value in flatten_dict(metrics, sep="/", expand_lists=False).items():

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import ast
 from pathlib import Path
 from typing import Any
 
@@ -99,6 +100,37 @@ def test_full_cuda_graph_evidence_tracker_leaves_disabled_payload_unchanged() ->
 
 
 @pytest.mark.parametrize(
+    "trainer_path",
+    ["GRPO", "async GRPO", "TQ/sync GRPO", "PPO"],
+)
+def test_policy_train_reducers_restore_evidence_after_ordinary_metric_collisions(
+    trainer_path: str,
+) -> None:
+    from nemo_rl.algorithms.utils import FullCudaGraphEvidenceTracker
+
+    expected = _evidence(replay=4)
+    malicious = {
+        **{field: 999 for field in _COUNTER_FIELDS},
+        **{f"{field}_delta": 999 for field in _COUNTER_FIELDS},
+        _DIGEST_FIELD: "b" * 64,
+    }
+    metrics: dict[str, Any] = {"trainer_path": trainer_path}
+
+    metrics.update(malicious)
+    FullCudaGraphEvidenceTracker().preserve(expected, metrics)
+
+    assert {field: metrics[field] for field in expected} == expected
+    assert {
+        f"{field}_delta": metrics[f"{field}_delta"] for field in _COUNTER_FIELDS
+    } == {
+        "full_cuda_graph_warmup_calls_delta": 1,
+        "full_cuda_graph_capture_calls_delta": 1,
+        "full_cuda_graph_replay_calls_delta": 4,
+        "full_cuda_graph_reset_calls_delta": 0,
+    }
+
+
+@pytest.mark.parametrize(
     "train_results",
     [
         {"full_cuda_graph_warmup_calls": 1},
@@ -138,36 +170,92 @@ def test_full_cuda_graph_evidence_tracker_rejects_unstable_run_evidence(
 
 def test_policy_train_reducers_wire_evidence_after_ordinary_metric_reduction() -> None:
     repo_root = Path(__file__).resolve().parents[3]
-    expected_calls = {
-        "grpo.py": 2,
-        "grpo_sync.py": 1,
-        "sft.py": 1,
-        "ppo.py": 1,
+    expected_functions = {
+        "grpo.py": {
+            "grpo_train": {"rollout_metrics", "seq_logprob_error_metrics"},
+            "async_grpo_train": {"rollout_metrics", "seq_logprob_error_metrics"},
+        },
+        "grpo_sync.py": {
+            "grpo_train_sync": {"rollout_metrics", "seq_logprob_error_metrics"}
+        },
+        "sft.py": {"sft_train": set()},
+        "ppo.py": {"ppo_train": {"rollout_metrics"}},
     }
 
-    for filename, call_count in expected_calls.items():
+    for filename, functions in expected_functions.items():
         source = (repo_root / "nemo_rl" / "algorithms" / filename).read_text()
-        assert source.count("FullCudaGraphEvidenceTracker()") == call_count
-        assert source.count(
-            "full_cuda_graph_evidence.preserve(train_results, metrics)"
-        ) == (call_count)
+        tree = ast.parse(source)
+        function_nodes = {
+            node.name: node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        assert source.count("FullCudaGraphEvidenceTracker()") == len(functions)
 
-        search_from = 0
-        for _ in range(call_count):
-            preserve_at = source.index(
-                "full_cuda_graph_evidence.preserve(train_results, metrics)",
-                search_from,
-            )
-            reduction_at = source.rfind(
-                'metrics.update(train_results["all_mb_metrics"])',
-                search_from,
-                preserve_at,
-            )
-            assert reduction_at != -1
-            search_from = preserve_at + 1
+        for function_name, collision_sources in functions.items():
+            function = function_nodes[function_name]
+            preserve_calls = [
+                node
+                for node in ast.walk(function)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "preserve"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "full_cuda_graph_evidence"
+            ]
+            assert len(preserve_calls) == 1
+            preserve_at = preserve_calls[0].lineno
+
+            ordinary_merges = [
+                node
+                for node in ast.walk(function)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "update"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "metrics"
+                and (
+                    (
+                        len(node.args) == 1
+                        and isinstance(node.args[0], ast.Name)
+                        and node.args[0].id in collision_sources
+                    )
+                    or (
+                        len(node.args) == 1
+                        and isinstance(node.args[0], ast.Subscript)
+                        and isinstance(node.args[0].value, ast.Name)
+                        and node.args[0].value.id == "train_results"
+                    )
+                )
+            ]
+            assert len(ordinary_merges) == len(collision_sources) + 1
+            ordinary_boundary = max(node.lineno for node in ordinary_merges)
+            assert ordinary_boundary < preserve_at
+
+            state_mutations = [
+                node.lineno
+                for node in ast.walk(function)
+                if (
+                    (
+                        isinstance(node, ast.AugAssign)
+                        and isinstance(node.target, ast.Name)
+                        and node.target.id in {"total_valid_tokens", "consumed_samples"}
+                    )
+                    or (
+                        isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "mark_iteration"
+                        and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id == "timeout"
+                    )
+                )
+                and node.lineno > ordinary_boundary
+            ]
+            assert state_mutations
+            assert preserve_at < min(state_mutations)
 
     combined_source = "".join(
         (repo_root / "nemo_rl" / "algorithms" / filename).read_text()
-        for filename in expected_calls
+        for filename in expected_functions
     )
     assert "full_cuda_graph_logprob" not in combined_source
