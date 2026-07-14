@@ -43,6 +43,7 @@ def test_baseline_preserves_verified_q235_performance_contract() -> None:
     assert "policy.generation.temperature=1.0" in output
     assert "policy.generation.top_p=1.0" in output
     assert "NRL_DISABLE_NUMA_MEMBIND=1" in output
+    assert "BASE_LOG_DIR=" in output
     assert "logger.wandb_enabled=false" in output
     assert "--nodes=16" in output
     assert "--segment=16" in output

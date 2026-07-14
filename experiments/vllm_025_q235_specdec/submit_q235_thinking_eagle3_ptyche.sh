@@ -19,6 +19,7 @@ DRAFT_SNAPSHOT="${DRAFT_SNAPSHOT:-${HF_HOME}/hub/models--RedHatAI--Qwen3-235B-A2
 RUN_TAG="${RUN_TAG:-q235-v025-thinking-${VARIANT}-$(date +%Y%m%d-%H%M%S)}"
 EXPERIMENT_ROOT="${EXPERIMENT_ROOT:-${REPO_DIR}/experiments/vllm_025_q235_specdec/runs}"
 RUN_DIR="${RUN_DIR:-${EXPERIMENT_ROOT}/${RUN_TAG}}"
+BASE_LOG_DIR="${BASE_LOG_DIR:-${RUN_DIR}}"
 BASELINE_JOB_ID="${BASELINE_JOB_ID:-2375433}"
 
 case "${VARIANT}" in
@@ -138,6 +139,7 @@ sbatch_args=(
 case "${MODE}" in
   dry-run)
     printf '[DRY-RUN] command %s\n' "${command}"
+    printf '[DRY-RUN] environment BASE_LOG_DIR=%s\n' "${BASE_LOG_DIR}"
     printf '[DRY-RUN] sbatch'
     printf ' %s' "${sbatch_args[@]}"
     printf ' %s\n' "${REPO_DIR}/ray.sub"
@@ -183,7 +185,7 @@ case "${MODE}" in
       printf 'command=%s\n' "${command}"
     } > "${RUN_DIR}/provenance.txt"
 
-    export COMMAND="${command}" CONTAINER MOUNTS
+    export COMMAND="${command}" CONTAINER MOUNTS BASE_LOG_DIR
     if [[ "${MODE}" == "test-only" ]]; then
       sbatch --test-only "${sbatch_args[@]}" "${REPO_DIR}/ray.sub"
     else
