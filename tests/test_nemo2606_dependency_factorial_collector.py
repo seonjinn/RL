@@ -702,6 +702,53 @@ def test_collector_validates_optional_nonprofile_a2a_analyzer(tmp_path: Path) ->
     assert "gemm_overlap_ratio must be in (0, 1]" in result.stderr
 
 
+@pytest.mark.parametrize(
+    "artifact",
+    ("job_directory", "manifest", "temporal_analyzer", "source_profile"),
+)
+def test_collector_rejects_internal_artifact_symlinks(
+    tmp_path: Path,
+    artifact: str,
+) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    job_id = _job_id(submission, "g1a1", 0)
+    job_dir = result_root / job_id
+    if artifact == "job_directory":
+        target = result_root / f"storage-{job_id}"
+        job_dir.rename(target)
+        job_dir.symlink_to(target, target_is_directory=True)
+    elif artifact == "manifest":
+        source = job_dir / "benchmark_manifest.json"
+        target = result_root / _job_id(submission, "g1a1", 1) / "copied-manifest.json"
+        target.write_bytes(source.read_bytes())
+        source.unlink()
+        source.symlink_to(target)
+    elif artifact == "temporal_analyzer":
+        source = job_dir / "a2a_temporal_overlap.json"
+        target = (
+            result_root
+            / _job_id(submission, "g1a1", 1)
+            / "copied-temporal-analyzer.json"
+        )
+        target.write_bytes(source.read_bytes())
+        source.unlink()
+        source.symlink_to(target)
+    else:
+        source = job_dir / "profiles/on.nsys-rep"
+        target = (
+            result_root / _job_id(submission, "g1a1", 1) / "profiles/copied.nsys-rep"
+        )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes())
+        source.unlink()
+        source.symlink_to(target)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode != 0
+    assert "must not contain symlinks" in result.stderr
+
+
 def test_collector_requires_at_least_one_profile_replica_per_context(
     tmp_path: Path,
 ) -> None:

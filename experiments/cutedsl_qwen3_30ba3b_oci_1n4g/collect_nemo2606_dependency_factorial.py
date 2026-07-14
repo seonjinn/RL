@@ -187,6 +187,14 @@ def _read_json(path: Path, label: str) -> dict[str, Any]:
 
 def _safe_file(root: Path, path: Path, label: str) -> Path:
     root = root.resolve()
+    lexical = Path(os.path.abspath(path))
+    if lexical == root or root not in lexical.parents:
+        raise CollectorError(f"{label} escapes benchmark result root")
+    current = root
+    for part in lexical.relative_to(root).parts:
+        current /= part
+        if current.is_symlink():
+            raise CollectorError(f"{label} must not contain symlinks")
     resolved = path.resolve()
     if resolved == root or root not in resolved.parents:
         raise CollectorError(f"{label} escapes benchmark result root")
