@@ -829,10 +829,14 @@ def _validate_a2a_temporal_evidence(
     job_dir: Path,
     context: str,
     job_id: str,
+    *,
+    required: bool,
 ) -> tuple[list[str], dict[str, Any]]:
     analyzer_path = job_dir / "a2a_temporal_overlap.json"
-    if not analyzer_path.is_file():
-        return [f"{context} job {job_id} lacks A2A temporal-overlap analysis"], {}
+    if not analyzer_path.exists() and not analyzer_path.is_symlink():
+        if required:
+            return [f"{context} job {job_id} lacks A2A temporal-overlap analysis"], {}
+        return [], {}
     analyzer_path = _safe_file(
         root, analyzer_path, f"job {job_id} A2A temporal-overlap analysis"
     )
@@ -997,7 +1001,11 @@ def _load_run(
         )
     if CONTEXT_FLAGS[context][1]:
         temporal_reasons, temporal_evidence = _validate_a2a_temporal_evidence(
-            root, job_dir, context, job_id
+            root,
+            job_dir,
+            context,
+            job_id,
+            required=bool(record["profile_enabled"]),
         )
         provisional_reasons.extend(temporal_reasons)
         profile_evidence.update(temporal_evidence)
@@ -1092,7 +1100,11 @@ def _validate_runs(runs: list[FactorialRun]) -> list[int]:
         for context, context_runs in by_context.items()
     }
     for context, context_profiles in profiles.items():
-        if len(context_profiles) != 1:
+        if CONTEXT_FLAGS[context][1] and not context_profiles:
+            raise CollectorError(
+                f"context {context} requires at least one profile replicate"
+            )
+        if not CONTEXT_FLAGS[context][1] and len(context_profiles) != 1:
             raise CollectorError(
                 f"context {context} requires exactly one profile replicate"
             )

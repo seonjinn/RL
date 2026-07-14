@@ -179,6 +179,35 @@ def _workload_equivalence(raw_by_arm: dict[str, dict[str, Any]]) -> dict[str, An
     }
 
 
+def _write_temporal_analyzer(
+    job_dir: Path,
+    job_id: str,
+    *,
+    temporal_overlap_verified: bool = True,
+) -> None:
+    profile_path = job_dir / "profiles/on.nsys-rep"
+    profile_path.parent.mkdir(parents=True, exist_ok=True)
+    profile_path.write_bytes(f"synthetic-profile-{job_id}\n".encode())
+    _write_json(
+        job_dir / "a2a_temporal_overlap.json",
+        {
+            "schema_version": 1,
+            "source_profile_sha256": hashlib.sha256(
+                profile_path.read_bytes()
+            ).hexdigest(),
+            "a2a_interval_count": 7,
+            "expert_gemm_interval_count": 11,
+            "overlap_duration_ns": 5000,
+            "a2a_overlap_ratio": 0.5,
+            "gemm_overlap_ratio": 0.25,
+            "temporal_overlap_verified": temporal_overlap_verified,
+            "limitations": []
+            if temporal_overlap_verified
+            else ["synthetic analyzer did not prove temporal overlap"],
+        },
+    )
+
+
 def _create_job(
     root: Path,
     *,
@@ -390,27 +419,11 @@ def _create_job(
                     },
                 },
             )
-    if a2a_enabled:
-        profile_path = job_dir / "profiles/on.nsys-rep"
-        profile_path.parent.mkdir(parents=True, exist_ok=True)
-        profile_path.write_bytes(f"synthetic-profile-{job_id}\n".encode())
-        _write_json(
-            job_dir / "a2a_temporal_overlap.json",
-            {
-                "schema_version": 1,
-                "source_profile_sha256": hashlib.sha256(
-                    profile_path.read_bytes()
-                ).hexdigest(),
-                "a2a_interval_count": 7,
-                "expert_gemm_interval_count": 11,
-                "overlap_duration_ns": 5000,
-                "a2a_overlap_ratio": 0.5,
-                "gemm_overlap_ratio": 0.25,
-                "temporal_overlap_verified": temporal_overlap_verified,
-                "limitations": []
-                if temporal_overlap_verified
-                else ["synthetic analyzer did not prove temporal overlap"],
-            },
+    if a2a_enabled and profile_enabled:
+        _write_temporal_analyzer(
+            job_dir,
+            job_id,
+            temporal_overlap_verified=temporal_overlap_verified,
         )
 
 
@@ -596,7 +609,7 @@ def test_collector_keeps_unverified_a2a_temporal_overlap_provisional(
     aggregate = json.loads(output.read_text())
     assert aggregate["claim_status"] == "provisional"
     assert aggregate["claim_ready"] is False
-    assert len(aggregate["provisional_reasons"]) == 6
+    assert len(aggregate["provisional_reasons"]) == 2
     assert all(
         "A2A temporal overlap is not verified" in reason
         for reason in aggregate["provisional_reasons"]
@@ -616,7 +629,7 @@ def test_collector_keeps_missing_a2a_temporal_analyzer_provisional(
     tmp_path: Path,
 ) -> None:
     submission, result_root = _create_valid_inputs(tmp_path)
-    job_id = _job_id(submission, "g1a1", 1)
+    job_id = _job_id(submission, "g1a1", 0)
     (result_root / job_id / "a2a_temporal_overlap.json").unlink()
     output = tmp_path / "aggregate.json"
 
@@ -635,7 +648,7 @@ def test_collector_rejects_a2a_analyzer_source_profile_digest_mismatch(
     tmp_path: Path,
 ) -> None:
     submission, result_root = _create_valid_inputs(tmp_path)
-    job_id = _job_id(submission, "g0a1", 2)
+    job_id = _job_id(submission, "g0a1", 0)
     analyzer_path = result_root / job_id / "a2a_temporal_overlap.json"
     analyzer = json.loads(analyzer_path.read_text())
     analyzer["source_profile_sha256"] = "0" * 64
@@ -671,6 +684,77 @@ def test_collector_rejects_malformed_a2a_temporal_analyzer(
 
     assert result.returncode != 0
     assert expected_error in result.stderr
+
+
+def test_collector_validates_optional_nonprofile_a2a_analyzer(tmp_path: Path) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    job_id = _job_id(submission, "g0a1", 2)
+    job_dir = result_root / job_id
+    _write_temporal_analyzer(job_dir, job_id)
+    analyzer_path = job_dir / "a2a_temporal_overlap.json"
+    analyzer = json.loads(analyzer_path.read_text())
+    analyzer["gemm_overlap_ratio"] = 0.0
+    _write_json(analyzer_path, analyzer)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode != 0
+    assert "gemm_overlap_ratio must be in (0, 1]" in result.stderr
+
+
+def test_collector_requires_at_least_one_profile_replica_per_context(
+    tmp_path: Path,
+) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    records = _submission_records(submission)
+    profiled = next(
+        record
+        for record in records
+        if record["factorial_context"] == "g1a1" and record["profile_enabled"]
+    )
+    profiled["profile_enabled"] = False
+    _write_submission(submission, records)
+    manifest_path = result_root / profiled["job_id"] / "benchmark_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["profile_enabled"] = False
+    _write_json(manifest_path, manifest)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode != 0
+    assert "context g1a1 requires at least one profile replicate" in result.stderr
+
+
+def test_collector_allows_multiple_profile_replicas_per_a1_context(
+    tmp_path: Path,
+) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    records = _submission_records(submission)
+    extra = next(
+        record
+        for record in records
+        if record["factorial_context"] == "g1a1" and record["replicate_index"] == 1
+    )
+    extra["profile_enabled"] = True
+    _write_submission(submission, records)
+    extra_job_dir = result_root / extra["job_id"]
+    manifest_path = extra_job_dir / "benchmark_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["profile_enabled"] = True
+    _write_json(manifest_path, manifest)
+    source_job_id = _job_id(submission, "g1a1", 0)
+    source_attribution = json.loads(
+        (result_root / source_job_id / "feature_attribution.json").read_text()
+    )
+    _write_json(extra_job_dir / "feature_attribution.json", source_attribution)
+    _write_temporal_analyzer(extra_job_dir, extra["job_id"])
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode == 0, result.stderr
+    aggregate = json.loads((tmp_path / "aggregate.json").read_text())
+    assert aggregate["claim_status"] == "claim_ready"
+    assert aggregate["context_replicate_counts"]["g1a1"] == 3
 
 
 @pytest.mark.parametrize(
