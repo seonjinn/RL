@@ -29,4 +29,3 @@ Tested change:
 Interpretation boundary:
 - This job reached no GPU work, training update, timing, throughput, or kernel profile.
 - It supports no performance or speedup conclusion; remote verification remains pending.
-
