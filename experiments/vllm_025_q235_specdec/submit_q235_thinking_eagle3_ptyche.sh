@@ -28,6 +28,9 @@ case "${VARIANT}" in
   baseline)
     SPECULATIVE_TOKENS=0
     ;;
+  eagle3_k1)
+    SPECULATIVE_TOKENS=1
+    ;;
   eagle3_k3)
     SPECULATIVE_TOKENS=3
     ;;
@@ -41,7 +44,7 @@ case "${VARIANT}" in
     SPECULATIVE_TOKENS=9
     ;;
   *)
-    printf 'VARIANT must be baseline, eagle3_k3, eagle3_k5, eagle3_k7, or eagle3_k9; got %s\n' "${VARIANT}" >&2
+    printf 'VARIANT must be baseline, eagle3_k1, eagle3_k3, eagle3_k5, eagle3_k7, or eagle3_k9; got %s\n' "${VARIANT}" >&2
     exit 2
     ;;
 esac

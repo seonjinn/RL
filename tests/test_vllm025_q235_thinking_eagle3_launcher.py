@@ -82,7 +82,7 @@ def test_cudagraph_metrics_are_opt_in() -> None:
 
 
 def test_supported_variants_render_expected_speculative_token_count() -> None:
-    for k in (3, 5, 7, 9):
+    for k in (1, 3, 5, 7, 9):
         output = _dry_run(f"eagle3_k{k}")
         assert f"speculative_config.num_speculative_tokens={k}" in output
 
