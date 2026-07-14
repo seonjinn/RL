@@ -378,6 +378,22 @@ reject_canonical_mcore_helpers() {
 }
 reject_canonical_mcore_helpers "${HOST_MCORE_SOURCE_DATASETS}"
 
+# CUTEDSL_MCORE_HOST_ARCHIVE_START
+HOST_MCORE_ARCHIVE="${HOST_RUNTIME_DIR}/mcore-source.tar"
+CONTAINER_MCORE_ARCHIVE="${CONTAINER_RUNTIME_DIR}/mcore-source.tar"
+readonly HOST_MCORE_ARCHIVE CONTAINER_MCORE_ARCHIVE
+if [[ -e "${HOST_MCORE_ARCHIVE}" ]]; then
+    echo "[ERROR] Run-scoped MCore source archive already exists." >&2
+    exit 1
+fi
+git -C "${HOST_MCORE_SOURCE_ROOT}" archive --format=tar --output="${HOST_MCORE_ARCHIVE}" "${MCORE_SOURCE_SHA}"
+if [[ ! -f "${HOST_MCORE_ARCHIVE}" || -L "${HOST_MCORE_ARCHIVE}" || \
+    ! -s "${HOST_MCORE_ARCHIVE}" ]]; then
+    echo "[ERROR] Host MCore archive is not a nonempty regular file." >&2
+    exit 1
+fi
+# CUTEDSL_MCORE_HOST_ARCHIVE_END
+
 MCORE_SOURCE_ROOT="${CONTAINER_REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
 MCORE_SOURCE_DATASETS="${MCORE_SOURCE_ROOT}/megatron/core/datasets"
 MCORE_OVERLAY_ROOT="${CONTAINER_RUNTIME_DIR}/mcore-overlay"
@@ -387,6 +403,7 @@ readonly MCORE_SOURCE_ROOT MCORE_SOURCE_DATASETS MCORE_OVERLAY_ROOT
 readonly MCORE_OVERLAY_DATASETS RUNTIME_TOOL_BIN
 export MCORE_SOURCE_ROOT MCORE_SOURCE_DATASETS MCORE_SOURCE_SHA
 export MCORE_OVERLAY_ROOT MCORE_OVERLAY_DATASETS RUNTIME_TOOL_BIN
+export CONTAINER_MCORE_ARCHIVE
 
 printf '%s\n' "${SUBMODULE_STATUS}" > "${RESULT_DIR}/submodule_status.txt"
 printf '%s  %s\n' "${IMAGE_SHA256}" "${IMAGE}" > "${RESULT_DIR}/image.sha256"
@@ -580,13 +597,19 @@ runtime_prefix=$("${UV_BIN}" run --active --no-sync python -c 'import sys; print
     --job-manifest "${CONTAINER_RESULT_DIR}/hf_cache_manifest.json"
 
 # CUTEDSL_MCORE_OVERLAY_BOOTSTRAP_START
+# CUTEDSL_MCORE_OVERLAY_EXTRACT_START
 if [[ -e "${MCORE_OVERLAY_ROOT}" || -e "${RUNTIME_TOOL_BIN}" ]]; then
     echo "[ERROR] MCore overlay or runtime tool directory already exists." >&2
     exit 1
 fi
 mkdir -p "${MCORE_OVERLAY_ROOT}" "${RUNTIME_TOOL_BIN}"
-git -C "${MCORE_SOURCE_ROOT}" archive --format=tar "${MCORE_SOURCE_SHA}" \
-    | tar -xf - -C "${MCORE_OVERLAY_ROOT}"
+if [[ ! -f "${CONTAINER_MCORE_ARCHIVE}" || -L "${CONTAINER_MCORE_ARCHIVE}" || \
+    ! -s "${CONTAINER_MCORE_ARCHIVE}" ]]; then
+    echo "[ERROR] Mounted MCore archive is not a nonempty regular file." >&2
+    exit 1
+fi
+tar -xf "${CONTAINER_MCORE_ARCHIVE}" -C "${MCORE_OVERLAY_ROOT}"
+# CUTEDSL_MCORE_OVERLAY_EXTRACT_END
 
 runtime_python_real=$(
     "${RUNTIME_PYTHON}" -c 'import os, sys; print(os.path.realpath(sys.executable))'
@@ -646,17 +669,6 @@ getattr(helper_module, "build_mapping")
 PY
 
 reject_canonical_mcore_helpers "${MCORE_SOURCE_DATASETS}"
-for canonical_root in \
-    "${CONTAINER_REPO_ROOT}" \
-    "$(dirname "$(dirname "${MCORE_SOURCE_ROOT}")")" \
-    "${MCORE_SOURCE_ROOT}"; do
-    canonical_status=$(git -C "${canonical_root}" status --porcelain \
-        --untracked-files=all --ignore-submodules=none)
-    if [[ -n "${canonical_status}" ]]; then
-        echo "[ERROR] Canonical source changed during isolated MCore bootstrap." >&2
-        exit 1
-    fi
-done
 
 helper_sha256=$(sha256sum "${helper_path}" | awk '{print $1}')
 export MCORE_PYTHON_EXTENSION_SUFFIX="${python_extension_suffix}"
@@ -686,7 +698,39 @@ result_dir = Path(os.environ["CONTAINER_RESULT_DIR"])
 )
 PY
 # CUTEDSL_MCORE_OVERLAY_BOOTSTRAP_END
+BASH
+# CUTEDSL_MCORE_CANONICAL_POST_BOOTSTRAP_START
+reject_canonical_mcore_helpers "${HOST_MCORE_SOURCE_DATASETS}"
+for canonical_root in \
+    "${REPO_ROOT}" \
+    "${HOST_MCORE_BRIDGE_ROOT}" \
+    "${HOST_MCORE_SOURCE_ROOT}"; do
+    canonical_status=$(git -C "${canonical_root}" status --porcelain \
+        --untracked-files=all --ignore-submodules=none)
+    if [[ -n "${canonical_status}" ]]; then
+        echo "[ERROR] Canonical source changed during isolated MCore bootstrap." >&2
+        exit 1
+    fi
+done
+# CUTEDSL_MCORE_CANONICAL_POST_BOOTSTRAP_END
 
+"${SRUN[@]}" bash -s <<'BASH'
+export TMPDIR="${CONTAINER_RUNTIME_DIR}/tmp"
+set -euo pipefail
+printf '[INFO] Container temporary directory: TMPDIR=%s uid=%s gid=%s\n' \
+    "${TMPDIR}" "$(id -u)" "$(id -g)"
+[[ "${TMPDIR}" == "${CONTAINER_RUNTIME_DIR}/tmp" ]]
+[[ -d "${TMPDIR}" && -w "${TMPDIR}" ]]
+cd "${CONTAINER_REPO_ROOT}"
+source "${CONTAINER_RUNTIME_DIR}/log_runtime_environment.sh"
+[[ "${NVTE_CUDA_ARCHS}" == "100" ]]
+[[ "${VIRTUAL_ENV}" == "${UV_PROJECT_ENVIRONMENT}" ]]
+[[ "$("${RUNTIME_PYTHON}" --version)" == "Python ${UV_PYTHON_VERSION}" ]]
+expected_runtime_python=$("${RUNTIME_PYTHON}" -c 'import os, sys; print(os.path.realpath(sys.executable))')
+runtime_python=$("${UV_BIN}" run --active --no-sync python -c 'import os, sys; print(os.path.realpath(sys.executable))')
+runtime_prefix=$("${UV_BIN}" run --active --no-sync python -c 'import sys; print(sys.prefix)')
+[[ "${runtime_python}" == "${expected_runtime_python}" ]]
+[[ "${runtime_prefix}" == "${VIRTUAL_ENV}" ]]
 "${UV_BIN}" run --active --no-sync python - <<'PY'
 import hashlib
 import json
