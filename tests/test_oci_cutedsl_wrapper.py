@@ -582,11 +582,13 @@ def test_pyxis_explicitly_overrides_image_runtime_environment() -> None:
         "UV_PROJECT_ENVIRONMENT": "/opt/nemo_rl_venv",
         "NVTE_CUDA_ARCHS": "75;80;89;90;100;103;120",
         "TMPDIR": "/lustre/fsw/portfolios/stale-login/tmp",
+        "UV_NO_EDITABLE": "0",
     }
     host_env = {
         "VIRTUAL_ENV": "/runtime/venv",
         "UV_PROJECT_ENVIRONMENT": "/runtime/venv",
         "NVTE_CUDA_ARCHS": "100",
+        "UV_NO_EDITABLE": "1",
     }
 
     def pyxis_container_env(script: str) -> dict[str, str]:
@@ -597,11 +599,22 @@ def test_pyxis_explicitly_overrides_image_runtime_environment() -> None:
                 resolved[name] = host_env[name]
         return resolved
 
-    for script in (SCRIPT, BENCHMARK_SCRIPT):
-        expected_option = (
-            "--container-env=VIRTUAL_ENV,UV_PROJECT_ENVIRONMENT,NVTE_CUDA_ARCHS"
-        )
-        assert script.count(expected_option) == 1
+    cases = (
+        (
+            SCRIPT,
+            "--container-env=VIRTUAL_ENV,UV_PROJECT_ENVIRONMENT,NVTE_CUDA_ARCHS",
+            "0",
+        ),
+        (
+            BENCHMARK_SCRIPT,
+            "--container-env=VIRTUAL_ENV,UV_PROJECT_ENVIRONMENT,NVTE_CUDA_ARCHS,UV_NO_EDITABLE",
+            "1",
+        ),
+    )
+    for script, expected_option, expected_uv_no_editable in cases:
+        match = re.search(r"^\s*(--container-env=[^\s]+)$", script, re.MULTILINE)
+        assert match is not None
+        assert match.group(1) == expected_option
         assert not re.search(r"^\s*--container-env=.*TMPDIR", script, re.MULTILINE)
         assert not re.search(
             r"^\s*--container-env=VIRTUAL_ENV\s*$", script, re.MULTILINE
@@ -611,6 +624,7 @@ def test_pyxis_explicitly_overrides_image_runtime_environment() -> None:
         assert resolved["UV_PROJECT_ENVIRONMENT"] == "/runtime/venv"
         assert resolved["NVTE_CUDA_ARCHS"] == "100"
         assert resolved["TMPDIR"] == image_env["TMPDIR"]
+        assert resolved["UV_NO_EDITABLE"] == expected_uv_no_editable
 
 
 def _runtime_tmpdir_init_source(script: str) -> str:
@@ -623,11 +637,24 @@ def _runtime_tmpdir_init_source(script: str) -> str:
 
 def _container_tmpdir_preambles(script: str) -> list[list[str]]:
     lines = script.splitlines()
-    return [
-        lines[index + 1 : index + 7]
-        for index, line in enumerate(lines)
-        if '"${SRUN[@]}" bash' in line
-    ]
+    preambles = []
+    diagnostic = "printf '[INFO] Container temporary directory:"
+    writable_assertion = '[[ -d "${TMPDIR}" && -w "${TMPDIR}" ]]'
+    for invocation_index, line in enumerate(lines):
+        if '"${SRUN[@]}" bash' not in line:
+            continue
+        diagnostic_index = next(
+            index
+            for index in range(invocation_index + 1, len(lines))
+            if diagnostic in lines[index]
+            or "printf '\"'\"'[INFO] Container temporary directory:" in lines[index]
+        )
+        assertion_index = lines.index(writable_assertion, invocation_index + 1)
+        preambles.append(
+            lines[invocation_index + 1 : diagnostic_index]
+            + lines[assertion_index - 1 : assertion_index + 1]
+        )
+    return preambles
 
 
 def test_payloads_override_stale_tmpdir_for_every_profile(tmp_path: Path) -> None:
@@ -675,16 +702,19 @@ def test_payloads_override_stale_tmpdir_for_every_profile(tmp_path: Path) -> Non
             env = os.environ.copy()
             env.update(
                 {
+                    "CONTAINER_REPO_ROOT": str(container_runtime_dir.parent / "repo"),
                     "CONTAINER_RUNTIME_DIR": str(container_runtime_dir),
+                    "MCORE_OVERLAY_ROOT": str(container_runtime_dir / "mcore-overlay"),
+                    "RUNTIME_TOOL_BIN": str(container_runtime_dir / "runtime-bin"),
                     "TMPDIR": stale_tmpdir,
+                    "UV_PROJECT_ENVIRONMENT": str(container_runtime_dir / "venv"),
                 }
             )
             result = subprocess.run(
                 [
                     "bash",
                     "-c",
-                    "\n".join((preamble[0], preamble[1], preamble[4], preamble[5]))
-                    + '\nprintf "%s\\n" "${TMPDIR}"\n',
+                    "\n".join(preamble) + '\nprintf "%s\\n" "${TMPDIR}"\n',
                 ],
                 env=env,
                 capture_output=True,
@@ -697,10 +727,11 @@ def test_payloads_override_stale_tmpdir_for_every_profile(tmp_path: Path) -> Non
         assert script.count(tmpdir_assertion) == srun_count
         assert script.count(writable_assertion) == srun_count
         assert script.count(container_diagnostic) == srun_count
-        assert (
-            "--container-env=VIRTUAL_ENV,UV_PROJECT_ENVIRONMENT,NVTE_CUDA_ARCHS\n"
-            in script
+        expected_container_env = (
+            "--container-env=VIRTUAL_ENV,UV_PROJECT_ENVIRONMENT,NVTE_CUDA_ARCHS"
+            + (",UV_NO_EDITABLE" if payload_name == "matrix" else "")
         )
+        assert f"{expected_container_env}\n" in script
         bootstrap_start = script.index("cutedsl_write_event runtime_bootstrap start")
         assert script.index(tmpdir_assertion, bootstrap_start) < script.index(
             'curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh"',

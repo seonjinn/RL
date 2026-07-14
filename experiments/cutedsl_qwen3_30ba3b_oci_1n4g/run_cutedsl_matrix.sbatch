@@ -525,7 +525,7 @@ if [[ "${EXISTING_RAY}" == "0" ]]; then
         --cpus-per-task=72
         --mpi=pmix
         --container-image="${IMAGE}"
-        --container-env=VIRTUAL_ENV,UV_PROJECT_ENVIRONMENT,NVTE_CUDA_ARCHS
+        --container-env=VIRTUAL_ENV,UV_PROJECT_ENVIRONMENT,NVTE_CUDA_ARCHS,UV_NO_EDITABLE
         --container-mounts="${REPO_ROOT}:${CONTAINER_REPO_ROOT},${RESULT_DIR}:${CONTAINER_RESULT_DIR},${HOST_RUNTIME_DIR}:${CONTAINER_RUNTIME_DIR},${SHARED_HF_HOME}:${SHARED_HF_HOME}"
         --container-workdir="${CONTAINER_REPO_ROOT}"
     )
@@ -546,6 +546,15 @@ cutedsl_write_event runtime_bootstrap start '' \
 "${SRUN[@]}" bash -s <<'BASH'
 export TMPDIR="${CONTAINER_RUNTIME_DIR}/tmp"
 set -euo pipefail
+runtime_path_prefix="${RUNTIME_TOOL_BIN}:${UV_PROJECT_ENVIRONMENT}/bin"
+if [[ "${PATH}" != "${runtime_path_prefix}" && "${PATH}" != "${runtime_path_prefix}:"* ]]; then
+    export PATH="${runtime_path_prefix}:${PATH}"
+fi
+runtime_pythonpath_prefix="${MCORE_OVERLAY_ROOT}:${CONTAINER_REPO_ROOT}"
+if [[ "${PYTHONPATH-}" != "${runtime_pythonpath_prefix}" && \
+    "${PYTHONPATH-}" != "${runtime_pythonpath_prefix}:"* ]]; then
+    export PYTHONPATH="${runtime_pythonpath_prefix}${PYTHONPATH:+:${PYTHONPATH}}"
+fi
 printf '[INFO] Container temporary directory: TMPDIR=%s uid=%s gid=%s\n' \
     "${TMPDIR}" "$(id -u)" "$(id -g)"
 [[ "${TMPDIR}" == "${CONTAINER_RUNTIME_DIR}/tmp" ]]
@@ -717,6 +726,15 @@ done
 "${SRUN[@]}" bash -s <<'BASH'
 export TMPDIR="${CONTAINER_RUNTIME_DIR}/tmp"
 set -euo pipefail
+runtime_path_prefix="${RUNTIME_TOOL_BIN}:${UV_PROJECT_ENVIRONMENT}/bin"
+if [[ "${PATH}" != "${runtime_path_prefix}" && "${PATH}" != "${runtime_path_prefix}:"* ]]; then
+    export PATH="${runtime_path_prefix}:${PATH}"
+fi
+runtime_pythonpath_prefix="${MCORE_OVERLAY_ROOT}:${CONTAINER_REPO_ROOT}"
+if [[ "${PYTHONPATH-}" != "${runtime_pythonpath_prefix}" && \
+    "${PYTHONPATH-}" != "${runtime_pythonpath_prefix}:"* ]]; then
+    export PYTHONPATH="${runtime_pythonpath_prefix}${PYTHONPATH:+:${PYTHONPATH}}"
+fi
 printf '[INFO] Container temporary directory: TMPDIR=%s uid=%s gid=%s\n' \
     "${TMPDIR}" "$(id -u)" "$(id -g)"
 [[ "${TMPDIR}" == "${CONTAINER_RUNTIME_DIR}/tmp" ]]
@@ -1168,6 +1186,15 @@ fi
 "${SRUN[@]}" bash -s <<'BASH'
 export TMPDIR="${CONTAINER_RUNTIME_DIR}/tmp"
 set -euo pipefail
+runtime_path_prefix="${RUNTIME_TOOL_BIN}:${UV_PROJECT_ENVIRONMENT}/bin"
+if [[ "${PATH}" != "${runtime_path_prefix}" && "${PATH}" != "${runtime_path_prefix}:"* ]]; then
+    export PATH="${runtime_path_prefix}:${PATH}"
+fi
+runtime_pythonpath_prefix="${MCORE_OVERLAY_ROOT}:${CONTAINER_REPO_ROOT}"
+if [[ "${PYTHONPATH-}" != "${runtime_pythonpath_prefix}" && \
+    "${PYTHONPATH-}" != "${runtime_pythonpath_prefix}:"* ]]; then
+    export PYTHONPATH="${runtime_pythonpath_prefix}${PYTHONPATH:+:${PYTHONPATH}}"
+fi
 printf '[INFO] Container temporary directory: TMPDIR=%s uid=%s gid=%s\n' \
     "${TMPDIR}" "$(id -u)" "$(id -g)"
 [[ "${TMPDIR}" == "${CONTAINER_RUNTIME_DIR}/tmp" ]]
@@ -1957,6 +1984,15 @@ if [[ "${FUNCTIONAL_GATE}" == "0" && "${PROFILE_ENABLED}" == "1" ]]; then
     "${SRUN[@]}" bash -s <<'BASH'
 export TMPDIR="${CONTAINER_RUNTIME_DIR}/tmp"
 set -euo pipefail
+runtime_path_prefix="${RUNTIME_TOOL_BIN}:${UV_PROJECT_ENVIRONMENT}/bin"
+if [[ "${PATH}" != "${runtime_path_prefix}" && "${PATH}" != "${runtime_path_prefix}:"* ]]; then
+    export PATH="${runtime_path_prefix}:${PATH}"
+fi
+runtime_pythonpath_prefix="${MCORE_OVERLAY_ROOT}:${CONTAINER_REPO_ROOT}"
+if [[ "${PYTHONPATH-}" != "${runtime_pythonpath_prefix}" && \
+    "${PYTHONPATH-}" != "${runtime_pythonpath_prefix}:"* ]]; then
+    export PYTHONPATH="${runtime_pythonpath_prefix}${PYTHONPATH:+:${PYTHONPATH}}"
+fi
 printf '[INFO] Container temporary directory: TMPDIR=%s uid=%s gid=%s\n' \
     "${TMPDIR}" "$(id -u)" "$(id -g)"
 [[ "${TMPDIR}" == "${CONTAINER_RUNTIME_DIR}/tmp" ]]

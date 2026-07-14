@@ -19,6 +19,13 @@ metadata that is only valid at the host path. The corrected harness creates
 the pinned archive in the outer shell and makes the container bootstrap
 extract-only.
 
+The final review found a second direct-Pyxis gap: image-defined `PATH`,
+`PYTHONPATH`, and `UV_NO_EDITABLE` values could take precedence over the host
+environment. The corrected direct launcher now forwards only
+`UV_NO_EDITABLE` in addition to the existing bounded variables, then rebuilds
+the runtime-tool and MCore-overlay prefixes from the container's own paths at
+all four SRUN boundaries.
+
 ## TDD evidence
 
 The six required regressions were added before implementation and run with the
@@ -107,6 +114,37 @@ The canonical artifact regression also executes the payload's rejection
 function against an ABI-suffixed `helpers_cpp*.so`, and the non-editable matrix
 regression executes the payload with both missing and false ambient values.
 
+The final-review correction added two more regressions before changing the
+payload. The exact Pyxis forwarding contract failed because
+`UV_NO_EDITABLE` was absent:
+
+```text
+1 failed, 73 deselected in 0.14s
+Right contains one more item: 'UV_NO_EDITABLE'
+```
+
+The executable four-heredoc regression set image-only `PATH` and
+`PYTHONPATH` values. It failed because the first SRUN retained only the image
+path instead of the run-scoped prefixes:
+
+```text
+1 failed, 74 deselected in 0.08s
+PATH=.../image-bin != PATH=.../runtime-bin:.../venv/bin:.../image-bin
+```
+
+After the correction, the same two regressions passed:
+
+```text
+2 passed, 73 deselected in 0.12s
+```
+
+The executable regression proves all four direct SRUN payloads preserve the
+image-only `nsys` tool. It also proves the first bootstrap is valid before the
+overlay exists and the later three payloads resolve the run-local
+`python3-config` and import a module from the MCore overlay. It re-executes
+every payload with the prefixes already present and requires byte-for-byte
+identical evidence, covering the existing-Ray path without duplication.
+
 ## Implementation
 
 ### Submission contract
@@ -147,6 +185,19 @@ regression executes the payload with both missing and false ambient values.
 - Overlay and tool directories are children of the existing runtime cleanup
   root, so the existing exit trap removes them on success, failure, or signal.
 
+### Direct-Pyxis runtime environment
+
+- The direct `--container-env` list forwards `UV_NO_EDITABLE` but does not
+  forward host `PATH` or `PYTHONPATH` wholesale.
+- At each of the four SRUN entries, the payload prepends
+  `${RUNTIME_TOOL_BIN}:${UV_PROJECT_ENVIRONMENT}/bin` to the container's own
+  `PATH` and `${MCORE_OVERLAY_ROOT}:${CONTAINER_REPO_ROOT}` to the container's
+  own `PYTHONPATH`.
+- The prepend is idempotent when the exact pair is already leading the path,
+  preserving existing-Ray behavior without duplicating prefixes.
+- Image-only trailing path components remain available for tools such as
+  Nsight Systems.
+
 ### Bounded evidence
 
 `mcore_runtime.json` and `benchmark_manifest.json.mcore_runtime` contain exactly:
@@ -173,6 +224,14 @@ wrapper, and Qwen3-235B suites:
 
 ```text
 284 passed in 26.42s
+```
+
+After the final-review correction, the expanded wrapper suite and the complete
+relevant suite passed:
+
+```text
+53 passed in 1.91s
+286 passed in 26.76s
 ```
 
 Static checks passed:
