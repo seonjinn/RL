@@ -2913,7 +2913,10 @@ def test_base_config_identity_ignores_run_paths_and_optional_feature_keys() -> N
             "val_at_start": False,
             "val_at_end": False,
         },
-        "logger": {"log_dir": "/runtime/job-a/logs"},
+        "logger": {
+            "log_dir": "/runtime/job-a/logs",
+            "wandb": {"name": "nemo2606-matched-benchmark"},
+        },
         "checkpointing": {"checkpoint_dir": "/runtime/job-a/checkpoints"},
         "policy": {
             "train_global_batch_size": 2048,
@@ -2922,6 +2925,7 @@ def test_base_config_identity_ignores_run_paths_and_optional_feature_keys() -> N
                 "overlap_moe_expert_parallel_comm": False,
                 "high_priority_a2a_comm_stream": False,
                 "delay_wgrad_compute": False,
+                "virtual_pipeline_model_parallel_size": None,
             },
         },
     }
@@ -2936,6 +2940,7 @@ def test_base_config_identity_ignores_run_paths_and_optional_feature_keys() -> N
             "overlap_moe_expert_parallel_comm": True,
             "high_priority_a2a_comm_stream": True,
             "delay_wgrad_compute": True,
+            "virtual_pipeline_model_parallel_size": 2,
         }
     )
     assert digest(baseline) == digest(full_cg)
@@ -2945,6 +2950,20 @@ def test_base_config_identity_ignores_run_paths_and_optional_feature_keys() -> N
     changed_validation = copy.deepcopy(full_cg)
     changed_validation["grpo"]["val_period"] = 10
     assert digest(baseline) != digest(changed_validation)
+    changed_wandb_name = copy.deepcopy(full_cg)
+    changed_wandb_name["logger"]["wandb"]["name"] = "different-benchmark"
+    assert digest(baseline) != digest(changed_wandb_name)
+
+
+def test_matrix_forces_matched_wandb_name_and_policy_logprob_execution() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+
+    assert '"logger.wandb.name=nemo2606-matched-benchmark"' in source
+    assert '"loss_fn.force_on_policy_ratio=false"' in source
+    assert '"loss_fn.force_on_policy_ratio",' in source
+    assert (
+        'fixed_config_evidence[arm]["loss_fn.force_on_policy_ratio"] is False' in source
+    )
 
 
 def test_payload_rejects_feature_context_boolean_mismatch() -> None:

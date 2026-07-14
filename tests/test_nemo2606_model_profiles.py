@@ -637,6 +637,38 @@ def test_qwen235_a2a_vpp_effective_config_keeps_selective_recompute() -> None:
     assert megatron["defer_fp32_logits"] is False
 
 
+def test_qwen235_matrix_adds_optional_hybridep_fields() -> None:
+    from nemo_rl.utils.config import (
+        load_config,
+        parse_hydra_overrides,
+        register_omegaconf_resolvers,
+    )
+    from omegaconf import OmegaConf
+
+    register_omegaconf_resolvers()
+    profile = _load_profile_module().load_model_profile(
+        PROFILE_DIR / "qwen3_235b_16n4g_a2a_vpp2.json"
+    )
+    optional_overrides = [
+        "+policy.megatron_cfg.moe_hybridep_num_sms_preprocessing=32",
+        "+policy.megatron_cfg.offload_modules=[]",
+    ]
+
+    source = MATRIX_PAYLOAD.read_text()
+    for override in optional_overrides:
+        assert f'"{override}"' in source
+
+    config = parse_hydra_overrides(
+        load_config(PROJECT_ROOT / profile.recipe),
+        optional_overrides,
+    )
+    resolved = OmegaConf.to_container(config, resolve=True)
+    assert isinstance(resolved, dict)
+    megatron = resolved["policy"]["megatron_cfg"]
+    assert megatron["moe_hybridep_num_sms_preprocessing"] == 32
+    assert megatron["offload_modules"] == []
+
+
 def test_qwen235_vpp_baseline_differs_only_by_vpp_and_output_paths() -> None:
     from nemo_rl.utils.config import load_config, register_omegaconf_resolvers
     from omegaconf import OmegaConf

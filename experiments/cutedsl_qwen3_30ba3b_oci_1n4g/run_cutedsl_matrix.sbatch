@@ -471,9 +471,10 @@ COMMON_OVERRIDES=(
     "policy.megatron_cfg.expert_model_parallel_size=${EXPERT_MODEL_PARALLEL_SIZE}"
     "policy.megatron_cfg.moe_token_dispatcher_type=flex"
     "policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep"
-    "policy.megatron_cfg.moe_hybridep_num_sms_preprocessing=32"
-    "policy.megatron_cfg.offload_modules=[]"
+    "+policy.megatron_cfg.moe_hybridep_num_sms_preprocessing=32"
+    "+policy.megatron_cfg.offload_modules=[]"
     "+policy.megatron_cfg.env_vars.CUDA_DEVICE_MAX_CONNECTIONS=\"32\""
+    "loss_fn.force_on_policy_ratio=false"
     "${FULL_CG_CAPACITY_OVERRIDE}"
     "${FULL_CG_PAGED_STASH_OVERRIDE}"
     "${A2A_OVERLAP_OVERRIDE}"
@@ -482,6 +483,7 @@ COMMON_OVERRIDES=(
     "${DEFER_FP32_LOGITS_OVERRIDE}"
     "logger.log_dir=${CONTAINER_RUNTIME_DIR}/benchmark_logs"
     "logger.wandb_enabled=false"
+    "logger.wandb.name=nemo2606-matched-benchmark"
     "logger.tensorboard_enabled=true"
     "logger.monitor_gpus=true"
     "checkpointing.enabled=false"
@@ -881,6 +883,7 @@ NORMALIZED_FEATURE_PATHS = (
     "policy.megatron_cfg.overlap_moe_expert_parallel_comm",
     "policy.megatron_cfg.high_priority_a2a_comm_stream",
     "policy.megatron_cfg.delay_wgrad_compute",
+    "policy.megatron_cfg.virtual_pipeline_model_parallel_size",
 )
 NORMALIZED_OPERATIONAL_PATHS = (
     "logger.log_dir",
@@ -1087,6 +1090,8 @@ fixed_config_paths = (
     "policy.megatron_cfg.overlap_moe_expert_parallel_comm",
     "policy.megatron_cfg.high_priority_a2a_comm_stream",
     "policy.megatron_cfg.delay_wgrad_compute",
+    "loss_fn.force_on_policy_ratio",
+    "logger.wandb.name",
     "policy.train_global_batch_size",
     "policy.train_micro_batch_size",
     "policy.logprob_batch_size",
@@ -1149,6 +1154,11 @@ for arm in timing_order:
     assert fixed_config_evidence[arm]["policy.megatron_cfg.moe_hybridep_num_sms_preprocessing"] == 32
     assert fixed_config_evidence[arm]["policy.megatron_cfg.offload_modules"] == []
     assert fixed_config_evidence[arm]["policy.megatron_cfg.defer_fp32_logits"] is False
+    assert fixed_config_evidence[arm]["loss_fn.force_on_policy_ratio"] is False
+    assert (
+        fixed_config_evidence[arm]["logger.wandb.name"]
+        == "nemo2606-matched-benchmark"
+    )
     assert (
         fixed_config_evidence[arm][
             "policy.megatron_cfg.expert_tensor_parallel_size"
