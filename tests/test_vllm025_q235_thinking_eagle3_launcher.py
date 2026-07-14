@@ -12,7 +12,7 @@ LAUNCHER = (
 )
 
 
-def _dry_run(variant: str) -> str:
+def _dry_run(variant: str, **env_overrides: str) -> str:
     env = os.environ.copy()
     env.update(
         {
@@ -22,6 +22,7 @@ def _dry_run(variant: str) -> str:
             "RUN_TAG": "contract-test",
         }
     )
+    env.update(env_overrides)
     result = subprocess.run(
         ["bash", str(LAUNCHER)],
         check=True,
@@ -66,6 +67,17 @@ def test_eagle3_uses_static_thinking_drafter_without_online_training() -> None:
         in output
     )
     assert "policy.draft.enabled=true" not in output
+
+
+def test_cudagraph_metrics_are_opt_in() -> None:
+    default_output = _dry_run("eagle3_k5")
+    diagnostic_output = _dry_run("eagle3_k5", CUDAGRAPH_METRICS="true")
+
+    assert "vllm_kwargs.cudagraph_metrics" not in default_output
+    assert (
+        "++policy.generation.vllm_kwargs.cudagraph_metrics=true"
+        in diagnostic_output
+    )
 
 
 def test_supported_variants_render_expected_speculative_token_count() -> None:

@@ -10,6 +10,7 @@ SEGMENT="${SEGMENT:-16}"
 TIME_LIMIT="${TIME_LIMIT:-02:00:00}"
 MAX_STEPS="${MAX_STEPS:-1}"
 WANDB_ENABLED="${WANDB_ENABLED:-false}"
+CUDAGRAPH_METRICS="${CUDAGRAPH_METRICS:-false}"
 WANDB_PROJECT="${WANDB_PROJECT:-nemo-rl-vllm025-q235-specdec}"
 REPO_DIR="${REPO_DIR:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-vllm025-thinking-eagle3-20260714}"
 CONTAINER="${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh}"
@@ -50,6 +51,11 @@ if [[ "${NUM_NODES}" != "16" || "${SEGMENT}" != "16" ]]; then
   exit 2
 fi
 
+if [[ "${CUDAGRAPH_METRICS}" != "true" && "${CUDAGRAPH_METRICS}" != "false" ]]; then
+  printf 'CUDAGRAPH_METRICS must be true or false; got %s\n' "${CUDAGRAPH_METRICS}" >&2
+  exit 2
+fi
+
 overrides=(
   "grpo.max_num_steps=${MAX_STEPS}"
   "checkpointing.enabled=false"
@@ -68,6 +74,10 @@ if [[ "${WANDB_ENABLED}" == "true" ]]; then
     "logger.wandb.project=${WANDB_PROJECT}"
     "logger.wandb.name=${RUN_TAG}"
   )
+fi
+
+if [[ "${CUDAGRAPH_METRICS}" == "true" ]]; then
+  overrides+=("++policy.generation.vllm_kwargs.cudagraph_metrics=true")
 fi
 
 if [[ "${SPECULATIVE_TOKENS}" -gt 0 ]]; then
@@ -187,6 +197,7 @@ case "${MODE}" in
       printf 'max_steps=%s\n' "${MAX_STEPS}"
       printf 'num_nodes=16\nsegment=16\n'
       printf 'cuda_graph_enabled=true\n'
+      printf 'cudagraph_metrics=%s\n' "${CUDAGRAPH_METRICS}"
       printf 'numa_cpu_affinity=true\nnuma_membind=false\n'
       printf 'temperature=1.0\ntop_p=1.0\n'
       printf 'wandb_enabled=%s\n' "${WANDB_ENABLED}"
