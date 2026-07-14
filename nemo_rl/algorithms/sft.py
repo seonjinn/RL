@@ -23,7 +23,11 @@ from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from nemo_rl.algorithms.loss.loss_functions import NLLLossFn
-from nemo_rl.algorithms.utils import maybe_pad_last_batch, set_seed
+from nemo_rl.algorithms.utils import (
+    FullCudaGraphEvidenceTracker,
+    maybe_pad_last_batch,
+    set_seed,
+)
 from nemo_rl.data import DataConfig
 from nemo_rl.data.collate_fn import rl_collate_fn
 from nemo_rl.data.datasets import AllTaskProcessedDataset
@@ -394,6 +398,7 @@ def sft_train(
     current_step = sft_save_state.step
     total_steps = sft_save_state.total_steps
     total_valid_tokens = sft_save_state.total_valid_tokens
+    full_cuda_graph_evidence = FullCudaGraphEvidenceTracker()
 
     sft_config = master_config.sft
     # Validation configuration
@@ -513,6 +518,7 @@ def sft_train(
                         metrics[k] = np.mean(v).item()
                     else:
                         metrics[k] = np.sum(v).item()
+                full_cuda_graph_evidence.preserve(train_results, metrics)
                 total_valid_tokens += metrics.get("global_valid_toks", 0)
 
                 ## Checkpointing

@@ -169,6 +169,54 @@ class TestTensorboardLogger:
         mock_writer.add_scalar.assert_any_call("train/accuracy", 0.8, 10)
 
     @patch("nemo_rl.utils.logger.SummaryWriter")
+    def test_log_full_cuda_graph_counters_as_scalars_and_digest_as_text(
+        self, mock_summary_writer, temp_dir
+    ):
+        logger = TensorboardLogger({"log_dir": temp_dir}, log_dir=temp_dir)
+        digest = "a" * 64
+        metrics = {
+            "full_cuda_graph_warmup_calls": 1,
+            "full_cuda_graph_capture_calls": 1,
+            "full_cuda_graph_replay_calls": 3,
+            "full_cuda_graph_reset_calls": 0,
+            "full_cuda_graph_warmup_calls_delta": 0,
+            "full_cuda_graph_capture_calls_delta": 0,
+            "full_cuda_graph_replay_calls_delta": 1,
+            "full_cuda_graph_reset_calls_delta": 0,
+            "full_cuda_graph_storage_signature_sha256": digest,
+        }
+
+        logger.log_metrics(metrics, step=7, prefix="train")
+
+        writer = mock_summary_writer.return_value
+        assert writer.add_scalar.call_count == 8
+        writer.add_scalar.assert_any_call("train/full_cuda_graph_replay_calls", 3, 7)
+        writer.add_scalar.assert_any_call(
+            "train/full_cuda_graph_replay_calls_delta", 1, 7
+        )
+        writer.add_text.assert_called_once_with(
+            "train/full_cuda_graph_storage_signature_sha256", digest, 7
+        )
+        assert all(digest not in args for args, _ in writer.add_scalar.call_args_list)
+
+    @patch("nemo_rl.utils.logger.SummaryWriter")
+    def test_log_full_cuda_graph_rejects_malformed_digest(
+        self, mock_summary_writer, temp_dir
+    ):
+        logger = TensorboardLogger({"log_dir": temp_dir}, log_dir=temp_dir)
+
+        with pytest.raises(ValueError, match="full-iteration CUDA graph"):
+            logger.log_metrics(
+                {"full_cuda_graph_storage_signature_sha256": "A" * 64},
+                step=7,
+                prefix="train",
+            )
+
+        writer = mock_summary_writer.return_value
+        writer.add_text.assert_not_called()
+        writer.add_scalar.assert_not_called()
+
+    @patch("nemo_rl.utils.logger.SummaryWriter")
     def test_log_hyperparams(self, mock_summary_writer, temp_dir):
         """Test logging hyperparameters to TensorboardLogger."""
         cfg = {"log_dir": temp_dir}

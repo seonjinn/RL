@@ -52,6 +52,7 @@ from nemo_rl.algorithms.reward_functions import (
     apply_reward_shaping,
 )
 from nemo_rl.algorithms.utils import (
+    FullCudaGraphEvidenceTracker,
     calculate_baseline_and_std_per_prompt,
     get_gdpo_reward_component_keys,
     log_generation_metrics_to_wandb,
@@ -2330,6 +2331,7 @@ def grpo_train(
     total_valid_tokens = grpo_save_state.get(
         "total_valid_tokens", 0
     )  # total valid tokens processed across all epochs; default to 0 for backward compatibility with older checkpoints
+    full_cuda_graph_evidence = FullCudaGraphEvidenceTracker()
     val_at_start = master_config.grpo["val_at_start"]
     val_at_end = master_config.grpo["val_at_end"]
     val_period = master_config.grpo["val_period"]
@@ -3020,6 +3022,8 @@ def grpo_train(
                     else:
                         print(f"Skipping aggregation for {k} ({type(v)})")
 
+                full_cuda_graph_evidence.preserve(train_results, metrics)
+
                 metrics.update(rollout_metrics)
                 metrics["generation_logger_metrics"] = generation_logger_metrics
                 total_valid_tokens += metrics["global_valid_toks"]
@@ -3610,6 +3614,7 @@ def async_grpo_train(
     total_valid_tokens = grpo_save_state.get(
         "total_valid_tokens", 0
     )  # Default to 0 for backward compatibility with older checkpoints
+    full_cuda_graph_evidence = FullCudaGraphEvidenceTracker()
     val_period = master_config.grpo["val_period"]
     val_at_start = master_config.grpo["val_at_start"]
     val_at_end = master_config.grpo["val_at_end"]
@@ -4376,6 +4381,7 @@ def async_grpo_train(
                         metrics[k] = np.mean(v).item()
                     else:
                         metrics[k] = np.sum(v).item()
+                full_cuda_graph_evidence.preserve(train_results, metrics)
                 metrics.update(rollout_metrics)
                 if generation_logger_metrics is not None:
                     metrics["generation_logger_metrics"] = generation_logger_metrics

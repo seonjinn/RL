@@ -49,7 +49,11 @@ from nemo_rl.algorithms.reward_functions import (
     RewardShapingConfig,
     apply_reward_shaping,
 )
-from nemo_rl.algorithms.utils import print_performance_metrics, set_seed
+from nemo_rl.algorithms.utils import (
+    FullCudaGraphEvidenceTracker,
+    print_performance_metrics,
+    set_seed,
+)
 from nemo_rl.data import DataConfig
 from nemo_rl.data.collate_fn import rl_collate_fn
 from nemo_rl.data.datasets import AllTaskProcessedDataset
@@ -941,6 +945,7 @@ def ppo_train(
     policy_training_start_step = master_config.ppo["policy_training_start_step"]
     consumed_samples = ppo_save_state["consumed_samples"]
     total_valid_tokens = ppo_save_state.get("total_valid_tokens", 0)
+    full_cuda_graph_evidence = FullCudaGraphEvidenceTracker()
     val_at_start = master_config.ppo["val_at_start"]
     val_at_end = master_config.ppo["val_at_end"]
     val_period = master_config.ppo["val_period"]
@@ -1483,6 +1488,9 @@ def ppo_train(
                         metrics[k] = np.mean(v).item()
                     elif isinstance(v, (np.ndarray, list)):
                         metrics[k] = np.sum(v).item()
+
+                if train_results is not None:
+                    full_cuda_graph_evidence.preserve(train_results, metrics)
 
                 metrics.update(rollout_metrics)
                 metrics["generation_logger_metrics"] = generation_logger_metrics

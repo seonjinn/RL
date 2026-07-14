@@ -162,6 +162,19 @@ class TensorboardLogger(LoggerInterface):
             step_metric: Optional step metric name (ignored in TensorBoard)
         """
         for name, value in metrics.items():
+            if name == "full_cuda_graph_storage_signature_sha256":
+                if (
+                    type(value) is not str
+                    or re.fullmatch(r"[0-9a-f]{64}", value) is None
+                ):
+                    raise ValueError(
+                        "full-iteration CUDA graph malformed storage digest"
+                    ) from None
+                if prefix:
+                    name = f"{prefix}/{name}"
+                self.writer.add_text(name, value, step)
+                continue
+
             if prefix:
                 name = f"{prefix}/{name}"
 

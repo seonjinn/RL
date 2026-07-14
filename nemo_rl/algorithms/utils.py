@@ -15,8 +15,9 @@
 import math
 import random
 import warnings
+from collections.abc import Mapping
 from functools import partial, wraps
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import numpy as np
 import torch
@@ -27,8 +28,55 @@ from transformers import (
 )
 
 from nemo_rl.data.chat_templates import COMMON_CHAT_TEMPLATES
+from nemo_rl.models.megatron.full_cuda_graph import (
+    FULL_CUDA_GRAPH_EVIDENCE_FIELDS,
+    aggregate_full_cuda_graph_evidence,
+)
 from nemo_rl.models.policy import TokenizerConfig
 from nemo_rl.utils.logger import Logger
+
+
+class FullCudaGraphEvidenceTracker:
+    """Validate and preserve cumulative full-CG evidence and per-step deltas."""
+
+    def __init__(self) -> None:
+        self._previous: dict[str, int | str] | None = None
+
+    def preserve(
+        self,
+        train_results: Mapping[str, Any],
+        metrics: dict[str, Any],
+    ) -> None:
+        evidence = aggregate_full_cuda_graph_evidence([train_results])
+        if not evidence:
+            if self._previous is not None:
+                raise ValueError(
+                    "full-iteration CUDA graph evidence disappeared during the run"
+                ) from None
+            return
+
+        counter_fields = FULL_CUDA_GRAPH_EVIDENCE_FIELDS[:4]
+        digest_field = FULL_CUDA_GRAPH_EVIDENCE_FIELDS[4]
+        previous = self._previous
+        if previous is None:
+            deltas = {field: cast(int, evidence[field]) for field in counter_fields}
+        else:
+            if evidence[digest_field] != previous[digest_field]:
+                raise ValueError(
+                    "full-iteration CUDA graph storage digest changed during the run"
+                ) from None
+            deltas = {
+                field: cast(int, evidence[field]) - cast(int, previous[field])
+                for field in counter_fields
+            }
+            if any(delta < 0 for delta in deltas.values()):
+                raise ValueError(
+                    "full-iteration CUDA graph counters regressed during the run"
+                ) from None
+
+        metrics.update(evidence)
+        metrics.update({f"{field}_delta": delta for field, delta in deltas.items()})
+        self._previous = evidence.copy()
 
 
 def get_gdpo_reward_component_keys(batch) -> list[str]:

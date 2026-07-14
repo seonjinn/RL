@@ -63,6 +63,7 @@ from nemo_rl.algorithms.loss import (
 from nemo_rl.algorithms.loss.interfaces import LossFunction
 from nemo_rl.algorithms.reward_functions import apply_reward_shaping
 from nemo_rl.algorithms.utils import (
+    FullCudaGraphEvidenceTracker,
     calculate_baseline_and_std_per_prompt,
     get_gdpo_reward_component_keys,
     log_generation_metrics_to_wandb,
@@ -431,6 +432,7 @@ def grpo_train_sync(
     max_num_epochs = master_config.grpo["max_num_epochs"]
     consumed_samples = grpo_save_state["consumed_samples"]
     total_valid_tokens = grpo_save_state.get("total_valid_tokens", 0)
+    full_cuda_graph_evidence = FullCudaGraphEvidenceTracker()
     val_at_start = master_config.grpo["val_at_start"]
     val_at_end = master_config.grpo["val_at_end"]
     val_period = master_config.grpo["val_period"]
@@ -1061,6 +1063,8 @@ def grpo_train_sync(
                         metrics[k] = np.sum(v).item()
                     else:
                         print(f"Skipping aggregation for {k} ({type(v)})")
+
+                full_cuda_graph_evidence.preserve(train_results, metrics)
 
                 metrics.update(rollout_metrics)
                 metrics["generation_logger_metrics"] = generation_logger_metrics
