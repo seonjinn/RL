@@ -176,11 +176,28 @@ shows **no net speedup (fixed 1.01x, dynamic 1.00x vs 1.50x at 4K)**: with
 acceptance intact, the remaining suspect is verification cost - the Mamba
 hybrid must roll back / recompute state for speculative verification, and
 that overhead appears to grow with context until it cancels the acceptance
-gains. This is a different failure mode from EAGLE3's acceptance collapse and
-needs a per-phase breakdown to confirm. The 64K numbers (fixed 0.56x, dynamic
-0.29x) are not interpretable: with only 2 steps x 64 seqs at temperature 1.0,
-sampled length distributions diverge across variants (p50 3.9K vs 5.9K) and
-dominate wall time; a matched-length control or more steps is required.
+gains. This is a different failure mode from EAGLE3's acceptance collapse.
+
+A depth-controlled sweep (forced OSL, K3/K0 tokens-per-second ratio) resolves
+the mechanism - it is a **depth x batch-size interaction**:
+
+| forced OSL | BS 1 | BS 8 | BS 32 |
+|---|---|---|---|
+| 2K | 2.08x | 1.66x | 1.61x |
+| 8K | 2.73x | 1.77x | 1.43x |
+| 16K | 3.03x | 2.02x | 1.12x |
+| 32K | **3.19x** | **2.10x** | **1.07x** |
+
+Deeper context makes speculation MORE valuable at low concurrency (decode is
+more memory-bound) and worthless at BS >= 32 (long-context verify compute).
+The 32K rollout nets 1.0x because most wall time sits in the deep/high-BS
+cell. Neither a fixed K nor a batch-size-only schedule can express this
+diagonal - **a correct depth x BS schedule would speculate hardest exactly in
+the drain tail (3.19x at BS1/32K)**, which is the quantitative case for the
+dispatch-aware depth-conditioned K feature (ledger #5/#6). The 64K redo
+(4 steps, per-generation timing) shows SpecDec net-negative at that scale
+(fixed 0.65x, dynamic 0.62x; SD runs spend 81-85% of wall in the last-10%
+tail at depths beyond the measured 32K sweet spot).
 
 ## Key takeaway
 
