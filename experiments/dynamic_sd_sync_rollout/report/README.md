@@ -151,6 +151,21 @@ per-K capture assert, ledger #7). With that fix, Super openmath is the first
 math setting where dynamic edges out fixed-K (1.53x vs 1.50x) - the K1 range
 at BS 128 pays for itself.
 
+## How much long tail actually forms
+
+Per-request drain data answers when DynamicSD can matter at all. At the
+recipe-standard 4K cap on math prompts there is **no tail**: thinking-style
+outputs exceed the cap, so p50 = p90 = max = 4096 - every sequence is
+truncated at the same length, the batch stays full to the end (last-10% tail
+= 0-3% of step wall), and the batch-size axis never moves. **Fixed-K wins
+structurally in the standard recipes because there is nothing dynamic to
+adapt to.** A real tail only appears at 32K caps: p50 10K vs max 24K, the
+last 10% of sequences consume ~20% of the wall, and half the wall runs at
+under half occupancy. Measurement caveat: with `SamplingParams(n=G)` vLLM
+reports finish times per parent prompt (all G copies together), which hides
+the tail; the harness now submits G explicit copies per prompt to expose
+per-generation drain.
+
 ## MTP survives depth; long-context gains die elsewhere
 
 Super 120B long-tail runs (32K / 64K max_tokens, openmath): **MTP acceptance
