@@ -323,3 +323,77 @@ def test_full_cuda_graph_runtime_guards_fail_closed():
             )
 
     require_supported_full_cuda_graph_operation(enabled=False, operation="logprob")
+
+
+def test_full_cuda_graph_metric_context_keeps_scalar_tensors_on_device():
+    from nemo_rl.algorithms.loss.interfaces import (
+        full_cuda_graph_metrics,
+        scalar_metric,
+    )
+
+    value = torch.tensor(3.0)
+    assert scalar_metric(value) == 3.0
+    with full_cuda_graph_metrics():
+        assert scalar_metric(value) is value
+
+
+def test_clipped_pg_loss_emits_tensor_metrics_in_full_cuda_graph_context():
+    from nemo_rl.algorithms.loss import ClippedPGLossConfig, ClippedPGLossFn
+    from nemo_rl.algorithms.loss.interfaces import full_cuda_graph_metrics
+
+    loss_fn = ClippedPGLossFn(ClippedPGLossConfig(reference_policy_kl_penalty=0.0))
+    data = {
+        "token_mask": torch.ones(1, 3),
+        "sample_mask": torch.ones(1),
+        "advantages": torch.ones(1, 3),
+        "prev_logprobs": torch.zeros(1, 3),
+        "generation_logprobs": torch.zeros(1, 3),
+    }
+
+    with full_cuda_graph_metrics():
+        loss, metrics = loss_fn(
+            next_token_logprobs=torch.zeros(1, 2, requires_grad=True),
+            data=data,
+            global_valid_seqs=torch.tensor(1.0),
+            global_valid_toks=torch.tensor(2.0),
+        )
+
+    assert loss.requires_grad
+    assert metrics
+    assert all(isinstance(value, torch.Tensor) for value in metrics.values())
+
+
+def test_nll_loss_emits_tensor_metrics_in_full_cuda_graph_context():
+    from nemo_rl.algorithms.loss import NLLLossFn
+    from nemo_rl.algorithms.loss.interfaces import full_cuda_graph_metrics
+
+    with full_cuda_graph_metrics():
+        _, metrics = NLLLossFn()(
+            next_token_logprobs=torch.zeros(1, 2, requires_grad=True),
+            data={
+                "token_mask": torch.ones(1, 3),
+                "sample_mask": torch.ones(1),
+            },
+            global_valid_seqs=torch.tensor(1.0),
+            global_valid_toks=torch.tensor(2.0),
+        )
+
+    assert all(isinstance(value, torch.Tensor) for value in metrics.values())
+
+
+def test_materialize_full_cuda_graph_metrics_restores_python_scalars():
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        materialize_full_cuda_graph_metrics,
+    )
+
+    materialized = materialize_full_cuda_graph_metrics(
+        [
+            {"loss": torch.tensor(1.25), "name": "first"},
+            {"loss": torch.tensor(2.5), "count": torch.tensor(3)},
+        ]
+    )
+
+    assert materialized == [
+        {"loss": 1.25, "name": "first"},
+        {"loss": 2.5, "count": 3},
+    ]
