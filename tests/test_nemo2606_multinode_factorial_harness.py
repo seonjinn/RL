@@ -265,6 +265,9 @@ def _run_functional_summarizer(
     feature_context: str = "g0a0",
     full_cg_enabled: bool = False,
     a2a_enabled: bool = False,
+    generation_backend: str = "vllm",
+    generation_colocated: bool = True,
+    include_offload_telemetry: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     source = MATRIX_PAYLOAD.read_text()
     summarizer = source.split("# CUTEDSL_FUNCTIONAL_SUMMARIZER_START\n", 1)[1].split(
@@ -316,19 +319,26 @@ def _run_functional_summarizer(
         )
     (arm_dir / "metrics.json").write_text(json.dumps(metrics))
     evidence_lines = ["kernel=GroupedGemmGluSm100"]
-    evidence_lines.extend(
-        "event=megatron_policy_offload_memory phase=after_completion "
-        f"global_rank={rank} offload_sequence={offload_sequence} "
-        f"cgroup_memory_peak_gib={cgroup_memory_peak_gib} "
-        f"cgroup_memory_max_gib={cgroup_memory_max_gib}{evidence_suffix}"
-        for rank in range(training_gpu_count)
-    )
+    if include_offload_telemetry:
+        evidence_lines.extend(
+            "event=megatron_policy_offload_memory phase=after_completion "
+            f"global_rank={rank} offload_sequence={offload_sequence} "
+            f"cgroup_memory_peak_gib={cgroup_memory_peak_gib} "
+            f"cgroup_memory_max_gib={cgroup_memory_max_gib}{evidence_suffix}"
+            for rank in range(training_gpu_count)
+        )
     (arm_dir / "grpo.log").write_text("\n".join(evidence_lines) + "\n")
     for relative_path, contents in (ray_logs or {}).items():
         ray_path = ray_log_dir / relative_path
         ray_path.parent.mkdir(parents=True, exist_ok=True)
         ray_path.write_text(contents)
-    (result_dir / "benchmark_manifest.json").write_text("{}\n")
+    manifest = {
+        "resource_allocation": {
+            "generation_backend": generation_backend,
+            "generation_colocated": generation_colocated,
+        }
+    }
+    (result_dir / "benchmark_manifest.json").write_text(json.dumps(manifest) + "\n")
     env = os.environ.copy()
     env.update(
         {
@@ -2499,6 +2509,11 @@ def test_functional_payload_records_context_aware_component_and_runtime_evidence
         "cgroup_memory_peak_gib",
         "cgroup_memory_max_gib",
         "MEMORY_LIMIT_FRACTION = 0.95",
+        '"generation_backend": on_config["policy"]["generation"]["backend"]',
+        'generation_backend = resource_allocation["generation_backend"]',
+        'generation_colocated = resource_allocation["generation_colocated"]',
+        'generation_backend == "vllm" and not generation_colocated',
+        '"expected": offload_telemetry_expected',
         "RAY_CLUSTER_LOG_DIR",
         "GroupedGemmGluSm100",
         "MAX_FUNCTIONAL_EVIDENCE_MATCHES",
@@ -2624,6 +2639,105 @@ def test_functional_summarizer_records_six_update_full_cg_context(
     assert summary["offload_memory_evidence"]["completed_global_ranks"] == list(
         range(4)
     )
+
+
+def test_functional_summarizer_accepts_full_cg_noncolocated_vllm_without_offload(
+    tmp_path: Path,
+) -> None:
+    result = _run_functional_summarizer(
+        tmp_path,
+        offload_sequence=6,
+        training_gpu_count=4,
+        functional_updates=6,
+        feature_context="g1a1",
+        full_cg_enabled=True,
+        a2a_enabled=True,
+        generation_backend="vllm",
+        generation_colocated=False,
+        include_offload_telemetry=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(
+        (tmp_path / "results" / "functional_gate_summary.json").read_text()
+    )
+    assert summary["full_cuda_graph_execution_evidence"]["final_counters"] == {
+        "warmup_calls": 3,
+        "capture_calls": 1,
+        "replay_calls": 3,
+        "reset_calls": 0,
+    }
+    offload = summary["offload_memory_evidence"]
+    assert offload["expected"] is False
+    assert offload["status"] == "not_applicable"
+    assert offload["not_applicable_reason"] == (
+        "noncolocated vLLM generation does not invoke policy offload/refit hooks"
+    )
+    assert offload["completed_global_ranks"] == []
+    assert offload["matches"] == []
+    assert offload["cgroup_memory"]["required"] is False
+    assert offload["cgroup_memory"]["status"] == "not_applicable"
+    assert summary["cutedsl_activation_evidence"]["matches"]
+
+
+def test_functional_summarizer_accepts_eager_noncolocated_vllm_without_offload(
+    tmp_path: Path,
+) -> None:
+    result = _run_functional_summarizer(
+        tmp_path,
+        offload_sequence=3,
+        training_gpu_count=4,
+        functional_updates=3,
+        feature_context="g0a0",
+        full_cg_enabled=False,
+        generation_backend="vllm",
+        generation_colocated=False,
+        include_offload_telemetry=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(
+        (tmp_path / "results" / "functional_gate_summary.json").read_text()
+    )
+    assert summary["full_cuda_graph_execution_evidence"] is None
+    offload = summary["offload_memory_evidence"]
+    assert offload["expected"] is False
+    assert offload["status"] == "not_applicable"
+    assert offload["completed_global_ranks"] == []
+    assert offload["matches"] == []
+    assert offload["cgroup_memory"]["status"] == "not_applicable"
+    assert summary["cutedsl_activation_evidence"]["matches"]
+
+
+@pytest.mark.parametrize(
+    ("full_cg_enabled", "generation_backend", "generation_colocated"),
+    [
+        (True, "vllm", True),
+        (True, "megatron", False),
+        (False, "vllm", True),
+    ],
+)
+def test_functional_summarizer_rejects_missing_expected_offload_telemetry(
+    tmp_path: Path,
+    full_cg_enabled: bool,
+    generation_backend: str,
+    generation_colocated: bool,
+) -> None:
+    functional_updates = 6 if full_cg_enabled else 3
+    result = _run_functional_summarizer(
+        tmp_path,
+        offload_sequence=functional_updates,
+        training_gpu_count=4,
+        functional_updates=functional_updates,
+        full_cg_enabled=full_cg_enabled,
+        generation_backend=generation_backend,
+        generation_colocated=generation_colocated,
+        include_offload_telemetry=False,
+    )
+
+    assert result.returncode != 0
+    assert "functional offload telemetry requires" in result.stderr
+    assert not (tmp_path / "results" / "functional_gate_summary.json").exists()
 
 
 def test_functional_summarizer_accepts_finite_cgroup_fraction_below_limit(

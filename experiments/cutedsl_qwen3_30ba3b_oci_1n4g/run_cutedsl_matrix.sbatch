@@ -1181,6 +1181,7 @@ manifest = {
         "allocation_gpu_count": allocation_gpu_count,
         "generation_gpu_count": generation_gpu_count,
         "policy_training_gpu_count": expected_policy_gpu_count,
+        "generation_backend": on_config["policy"]["generation"]["backend"],
         "generation_colocated": generation_allocation["enabled"],
     },
     "workload": {
@@ -1607,6 +1608,30 @@ from pathlib import Path
 result_dir = Path(os.environ["CONTAINER_RESULT_DIR"])
 arm_dir = result_dir / "functional" / "0-on"
 metrics = json.loads((arm_dir / "metrics.json").read_text())
+manifest_path = result_dir / "benchmark_manifest.json"
+manifest = json.loads(manifest_path.read_text())
+resource_allocation = manifest["resource_allocation"]
+generation_backend = resource_allocation["generation_backend"]
+generation_colocated = resource_allocation["generation_colocated"]
+if not isinstance(generation_backend, str) or not generation_backend:
+    raise ValueError(
+        "functional manifest resource_allocation.generation_backend must be a "
+        f"non-empty string; observed {generation_backend!r}"
+    )
+if not isinstance(generation_colocated, bool):
+    raise ValueError(
+        "functional manifest resource_allocation.generation_colocated must be "
+        f"boolean; observed {generation_colocated!r}"
+    )
+full_cg_enabled = os.environ["NEMO2606_FULL_CG_ENABLED"] == "1"
+offload_telemetry_expected = not (
+    generation_backend == "vllm" and not generation_colocated
+)
+offload_not_applicable_reason = None
+if not offload_telemetry_expected:
+    offload_not_applicable_reason = (
+        "noncolocated vLLM generation does not invoke policy offload/refit hooks"
+    )
 TOTAL_STEP_METRIC = "timing/train/total_step_time"
 GENERATION_METRIC = "timing/train/generation"
 LOGPROB_METRIC = "timing/train/get_logprobs"
@@ -1671,7 +1696,7 @@ for component, candidates in COMPONENT_METRICS.items():
     component_series[component] = {"metric": source_name, "steps": steps}
 
 full_cuda_graph_execution_evidence = None
-if os.environ["NEMO2606_FULL_CG_ENABLED"] == "1":
+if full_cg_enabled:
     counter_metrics = {
         "warmup_calls": "train/full_cuda_graph_warmup_calls",
         "capture_calls": "train/full_cuda_graph_capture_calls",
@@ -1885,17 +1910,18 @@ for evidence in telemetry_matches:
             }
         )
 expected_ranks = set(range(int(os.environ["TRAINING_GPU_COUNT"])))
-if len(completed_ranks) != int(os.environ["TRAINING_GPU_COUNT"]):
-    raise ValueError(
-        "functional offload telemetry requires phase=after_completion "
-        f"offload_sequence={required_offload_sequence} for {sorted(expected_ranks)!r}; observed "
-        f"{sorted(completed_ranks)!r}"
-    )
-if completed_ranks != expected_ranks:
-    raise ValueError(
-        f"functional offload telemetry ranks must be {sorted(expected_ranks)!r}; "
-        f"observed {sorted(completed_ranks)!r}"
-    )
+if offload_telemetry_expected:
+    if len(completed_ranks) != int(os.environ["TRAINING_GPU_COUNT"]):
+        raise ValueError(
+            "functional offload telemetry requires phase=after_completion "
+            f"offload_sequence={required_offload_sequence} for "
+            f"{sorted(expected_ranks)!r}; observed {sorted(completed_ranks)!r}"
+        )
+    if completed_ranks != expected_ranks:
+        raise ValueError(
+            f"functional offload telemetry ranks must be {sorted(expected_ranks)!r}; "
+            f"observed {sorted(completed_ranks)!r}"
+        )
 if not cutedsl_matches:
     raise ValueError(
         f"functional CuTeDSL activation signature {CUTEDSL_ACTIVATION_SIGNATURE!r} "
@@ -1905,7 +1931,7 @@ if not cutedsl_matches:
 summary = {
     "functional_gate": True,
     "feature_context": os.environ["FEATURE_CONTEXT"],
-    "full_cg_enabled": os.environ["NEMO2606_FULL_CG_ENABLED"] == "1",
+    "full_cg_enabled": full_cg_enabled,
     "a2a_enabled": os.environ["NEMO2606_A2A_ENABLED"] == "1",
     "completed_updates": completed_updates,
     "performance_eligible": False,
@@ -1913,10 +1939,20 @@ summary = {
     "component_series": component_series,
     "full_cuda_graph_execution_evidence": full_cuda_graph_execution_evidence,
     "offload_memory_evidence": {
-        "required_phase": "after_completion",
-        "required_offload_sequence": required_offload_sequence,
+        "expected": offload_telemetry_expected,
+        "status": "verified" if offload_telemetry_expected else "not_applicable",
+        "not_applicable_reason": offload_not_applicable_reason,
+        "generation_backend": generation_backend,
+        "generation_colocated": generation_colocated,
+        "required_phase": "after_completion" if offload_telemetry_expected else None,
+        "required_offload_sequence": (
+            required_offload_sequence if offload_telemetry_expected else None
+        ),
         "completed_global_ranks": sorted(completed_ranks),
         "cgroup_memory": {
+            "required": offload_telemetry_expected,
+            "status": "verified" if offload_telemetry_expected else "not_applicable",
+            "not_applicable_reason": offload_not_applicable_reason,
             "limit_fraction_exclusive": MEMORY_LIMIT_FRACTION,
             "finite_limit_global_ranks": sorted(finite_limit_ranks),
             "unavailable_limit_global_ranks": sorted(unavailable_limit_ranks),
@@ -1943,8 +1979,6 @@ summary = {
 (result_dir / "functional_gate_summary.json").write_text(
     json.dumps(summary, indent=2, sort_keys=True) + "\n"
 )
-manifest_path = result_dir / "benchmark_manifest.json"
-manifest = json.loads(manifest_path.read_text())
 manifest["functional_gate_summary"] = "functional_gate_summary.json"
 manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
 # CUTEDSL_FUNCTIONAL_SUMMARIZER_END
