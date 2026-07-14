@@ -467,5 +467,50 @@
     "timestamp_utc": "2026-07-14T06:35:46Z",
     "verification_evidence": "Corrected scheduler test-only request 2375808 was accepted; real retry 2375809 exposed that the July 11 nightly image lacks the latest Bridge modelopt dependency. A fresh nightly is being staged as job 2375815.",
     "verification_job": "2375808 test-only; 2375809 dependency mismatch; 2375815 staging"
+  },
+  {
+    "cluster": "lyris,pre_tyche",
+    "evidence": "Lyris jobs 2370319 and 2370325 and pre_tyche job 2376099 failed dependency import before feature execution with ModuleNotFoundError: transformer_engine.",
+    "fix_commit": "eff1d64af03b05bdfe5ea5e09ecf040183a0c59d",
+    "hypothesis": "Creating the same locked mcore-extra environment used by the benchmark will expose Transformer Engine, Megatron-Core, Megatron-Bridge, and ModelOpt and permit a real TE GPU forward/backward smoke.",
+    "report_path": "evidence/job-2370319-2370325-2376099.txt",
+    "reproduction": "Invoke plain python3 or /opt/nemo_rl_venv/bin/python in the staged nightly image and import transformer_engine.pytorch.",
+    "root_cause": "The nightly image warms backend-extra artifacts in /root/.cache/uv but ends its build with the default environment. The optional mcore dependencies are intentionally absent from /opt/nemo_rl_venv, and the first smoke wrappers skipped the required run-local uv sync.",
+    "run_id": "2370319-2370325-2376099",
+    "symptom": "Fresh-image smoke failed even though image staging and SHA validation completed successfully.",
+    "tested_change": "Use /root/.local/bin/uv sync --locked --extra mcore into a run-local environment, validate the lock, import all policy dependencies, and execute a Transformer Engine CUDA forward/backward operation.",
+    "timestamp_utc": "2026-07-14T07:20:00Z",
+    "verification_evidence": "Four local smoke-contract tests, shell parsing, Ruff, and the 132-test focused suite pass. Ptyche job 2376166 and Lyris job 2370500 each completed 0:0 in 00:03:30 on four GB200 GPUs with CUDA 13.0, Torch 2.11.0, TE 2.15, MCore, Bridge, ModelOpt, and a successful TE Linear backward.",
+    "verification_job": "2376166 and 2370500 completed"
+  },
+  {
+    "cluster": "pre_tyche",
+    "evidence": "Jobs 2375779 and 2375780 both failed immutable-source preflight before runtime bootstrap because tests/unit/unit_results.json and tests/unit/unit_results/ were untracked in their shared checkout.",
+    "fix_commit": "operational source isolation; production feature code unchanged",
+    "hypothesis": "A cohort-dedicated immutable source worktree, with unit-test outputs written elsewhere, prevents unrelated validation jobs from invalidating queued performance jobs.",
+    "report_path": "evidence/job-2375779-2375780.txt",
+    "reproduction": "Queue Full-CG jobs from a shared checkout, then run a unit-test wrapper that writes the default unit_results artifacts into that checkout before the queued jobs reach immutable-source preflight.",
+    "root_cause": "The performance jobs and a later Linux unit-test job shared one mutable checkout. The unit wrapper temporarily created untracked result artifacts, and the benchmark's fail-closed source guard correctly rejected both jobs.",
+    "run_id": "2375779-2375780",
+    "symptom": "The corrected Full-CG A2A-OFF and A2A-ON jobs failed before config resolution, GPU initialization, or training.",
+    "tested_change": "Create a fresh worktree dedicated to source eff1d64af and do not run unit tests in that worktree while jobs are queued or running.",
+    "timestamp_utc": "2026-07-14T07:20:00Z",
+    "verification_evidence": "The failure logs contain only the dirty-source boundary and no runtime or GPU markers. The new dedicated worktree is clean; remote feature verification remains pending.",
+    "verification_job": "Ptyche locked-runtime smoke 2376166 completed; feature rerun pending"
+  },
+  {
+    "cluster": "pre_tyche",
+    "evidence": "Job 2375785 was cancelled while pending after PR #1126 comparison identified an inherited configuration rejected by the A2A combined schedule and an invalid VPP attribution baseline.",
+    "fix_commit": "3db959ad402db3bb7e460add9f3117bb7ae38299",
+    "hypothesis": "Disabling deferred FP32 logits in both A2A comparison cells and matching recompute plus layer partition between non-VPP and VPP profiles isolates the requested feature effects.",
+    "report_path": "evidence/job-2375785.txt",
+    "reproduction": "Resolve the old Qwen3-235B VPP+A2A profile: it inherits defer_fp32_logits=true, then enters a combined A2A schedule that rejects it. Compare old jobs 2375783 and 2375784 and observe different recompute and layer-partition settings.",
+    "root_cause": "The first Q235 A2A profile inherited defer_fp32_logits=true from the performance base recipe, while the combined schedule requires false. Separately, the proposed non-VPP versus VPP pair changed recompute policy and pipeline layer partition, confounding VPP attribution.",
+    "run_id": "2375785",
+    "symptom": "The pending job was guaranteed to fail during policy schedule planning and could not support an A2A or VPP-only performance claim.",
+    "tested_change": "Set defer_fp32_logits=false in all matched matrix cells, record it in fixed-config evidence, and add a non-VPP 22/24 selective-recompute performance recipe/profile matched to VPP2.",
+    "timestamp_utc": "2026-07-14T07:40:43Z",
+    "verification_evidence": "Focused resolved-config and profile tests pass; normalized non-VPP and VPP configs differ only by virtual_pipeline_model_parallel_size and output paths. Remote functional validation is pending.",
+    "verification_job": "2375785 cancelled before allocation; replacement jobs pending smoke gate"
   }
 ]

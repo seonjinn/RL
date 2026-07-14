@@ -1,0 +1,8 @@
+Jobs: Lyris 2370319, 2370325; pre_tyche 2376099
+Run ID: 2370319-2370325-2376099
+Original remote log: retained in the Lyris and pre_tyche smoke directories
+State: FAILED before feature execution
+Observed boundary: ModuleNotFoundError: transformer_engine from plain python3 or /opt/nemo_rl_venv/bin/python
+Root cause: the nightly Dockerfile installs backend extras to warm /root/.cache/uv, then its final sync restores the default environment. The base venv intentionally lacks Transformer Engine, Megatron-Core, Megatron-Bridge, and ModelOpt.
+Resolution: source eff1d64af creates a run-local locked environment with /root/.local/bin/uv sync --locked --extra mcore, then runs the dependency and TE GPU forward/backward smoke through that environment.
+Verification: Ptyche job 2376166 and Lyris job 2370500 each completed 0:0 in 00:03:30 on four GB200 GPUs. Both imported TE 2.15, MCore, Bridge, ModelOpt, and completed Transformer Engine Linear backward. This is runtime evidence, not feature performance.

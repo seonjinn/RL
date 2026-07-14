@@ -915,7 +915,13 @@ def test_committed_incident_evidence_is_bounded_redacted_and_linked() -> None:
         "2368477",
         "2368704-2368706",
         "2369616-2369618",
+        "2369539-2369580",
+        "2370319-2370325-2376099",
+        "2375779-2375780",
+        "2375785",
+        "2375795",
         "local-refresh-20260712",
+        "login-preflight-uv-20260714",
         "preflight-segment-20260712",
     }
     assert {incident["job_id"] for incident in compact_incidents} == {
@@ -955,7 +961,7 @@ def test_job_2362916_reports_host_oom_without_perf_claim() -> None:
     """The latest incident separates functional evidence from benchmark evidence."""
     report_dir = EXPERIMENT_DIR / "report"
     incidents = json.loads((report_dir / "incidents.json").read_text())
-    incident = next(item for item in incidents if item["run_id"] == "2362916")
+    incident = next(item for item in incidents if item.get("run_id") == "2362916")
     evidence = (report_dir / incident["report_path"]).read_text()
     public_evidence = (report_dir / "public" / incident["report_path"]).read_text()
     index = (report_dir / "public/index.html").read_text()
@@ -989,7 +995,7 @@ def test_job_2362916_reports_host_oom_without_perf_claim() -> None:
 def test_job_2363067_disproves_profile_overlap_as_sufficient_cause() -> None:
     report_dir = EXPERIMENT_DIR / "report"
     incidents = json.loads((report_dir / "incidents.json").read_text())
-    incident = next(item for item in incidents if item["run_id"] == "2363067")
+    incident = next(item for item in incidents if item.get("run_id") == "2363067")
     evidence = (report_dir / incident["report_path"]).read_text()
     public_evidence = (report_dir / "public" / incident["report_path"]).read_text()
     index = (report_dir / "public/index.html").read_text()
@@ -1025,7 +1031,7 @@ def test_official_validation_oom_incidents_do_not_claim_cutedsl_effect() -> None
         ("2368475", "744.500/890.430 GiB"),
         ("2368477", "720.242/890.430 GiB"),
     ):
-        incident = next(item for item in incidents if item["run_id"] == job_id)
+        incident = next(item for item in incidents if item.get("run_id") == job_id)
         evidence = (report_dir / incident["report_path"]).read_text()
         public_evidence = (report_dir / "public" / incident["report_path"]).read_text()
         for fragment in (
@@ -1048,7 +1054,9 @@ def test_official_validation_oom_incidents_do_not_claim_cutedsl_effect() -> None
 def test_official_token_equality_false_negative_is_not_performance_evidence() -> None:
     report_dir = EXPERIMENT_DIR / "report"
     incidents = json.loads((report_dir / "incidents.json").read_text())
-    incident = next(item for item in incidents if item["run_id"] == "2368704-2368706")
+    incident = next(
+        item for item in incidents if item.get("run_id") == "2368704-2368706"
+    )
     evidence = (report_dir / incident["report_path"]).read_text()
     public_evidence = (report_dir / "public" / incident["report_path"]).read_text()
     index = (report_dir / "public/index.html").read_text()
@@ -1560,7 +1568,7 @@ def test_committed_current_status_keeps_unmeasured_features_out_of_claims() -> N
 
     cutedsl = entries["CuTeDSL fused Grouped GEMM"]
     assert cutedsl["state"] == "provisional"
-    assert cutedsl["jobs"] == ["2373273"]
+    assert cutedsl["jobs"] == ["2373273", "2375783"]
     assert "20 measured-step" in cutedsl["evidence"]
     assert "5270.9812" in cutedsl["evidence"]
     assert "4902.8530" in cutedsl["evidence"]
@@ -1577,16 +1585,20 @@ def test_committed_current_status_keeps_unmeasured_features_out_of_claims() -> N
     assert helper["jobs"] == ["2373274"]
     assert "python3-config" in helper["evidence"]
 
-    for feature in ("Full-iteration CUDA Graph", "Expert-parallel A2A overlap"):
-        assert entries[feature]["state"] == "implemented_unmeasured"
-        assert entries[feature]["jobs"] == []
-        assert "No accepted GB200" in entries[feature]["limitation"]
+    full_cg = entries["Full-iteration CUDA Graph"]
+    assert full_cg["state"] == "implemented_unmeasured"
+    assert full_cg["jobs"] == ["2369539", "2369580", "2375779", "2375780"]
+    assert "no speedup" in full_cg["limitation"].lower()
 
-    assert (
-        "legacy colocated-rejection guard"
-        in entries["Full-iteration CUDA Graph"]["limitation"]
-    )
-    assert "topology" in entries["Expert-parallel A2A overlap"]["next_gate"]
+    a2a = entries["Expert-parallel A2A overlap"]
+    assert a2a["state"] == "implemented_unmeasured"
+    assert a2a["jobs"] == ["2369539", "2369580", "2375780", "2375785"]
+    assert "defer_fp32_logits=true" in a2a["limitation"]
+    assert "no speedup" in a2a["limitation"].lower()
+
+    vpp = entries["Virtual pipeline parallelism (PR #1126 port)"]
+    assert vpp["state"] == "implemented_unmeasured"
+    assert "not a valid VPP-only comparison" in vpp["limitation"]
 
 
 def test_event_writer_json_escapes_backslashes_exactly(tmp_path: Path) -> None:
@@ -2039,8 +2051,8 @@ def test_matrix_report_renders_scheduler_and_complete_parallel_topology(
         "CUTEDSL_PARTITION",
         "CUTEDSL_GRES",
         "CUTEDSL_SEGMENT",
-        '"tensor_model_parallel_size": 1',
-        '"expert_model_parallel_size": int(os.environ["EXPERT_MODEL_PARALLEL_SIZE"])',
+        '"tensor_model_parallel_size": megatron_config["tensor_model_parallel_size"]',
+        '"expert_model_parallel_size": megatron_config["expert_model_parallel_size"]',
     ):
         assert key in matrix
 

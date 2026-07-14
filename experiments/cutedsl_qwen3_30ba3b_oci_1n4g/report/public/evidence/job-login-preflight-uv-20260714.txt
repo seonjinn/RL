@@ -1,4 +1,5 @@
 Incident: login-preflight-uv-20260714
+Original remote log: submit-control-plane stderr is reproduced below; no Slurm job existed
 Cluster/scope: pre_tyche login-node submit control plane
 Observed stderr: submit_nemo2606_2n4g_factorial.sh: line 48: uv: command not found
 Failure boundary: before sbatch; no GPU allocation or workload started

@@ -1,0 +1,9 @@
+Jobs: 2375779, 2375780
+Run ID: 2375779-2375780
+Original remote log: retained in the pre_tyche job result directories
+Cluster: pre_tyche
+State: FAILED 1:0 before runtime bootstrap or GPU work
+Observed boundary: immutable-source preflight found untracked tests/unit/unit_results.json and tests/unit/unit_results/
+Root cause: a separate Linux unit-test job used the same source worktree and temporarily wrote its default result artifacts there
+Feature result: no Full-CG capture, A2A execution, training step, timing, or throughput evidence exists
+Resolution: use a dedicated immutable source worktree per submitted cohort and keep unit-test outputs outside it

@@ -32,11 +32,11 @@ EXPECTED_PROFILES = {
         "comment": "metrics",
         "image": (
             "/lustre/fsw/coreai_dlalgo_llm/users/sna/"
-            "nemo-2606-cutedsl-pre-tyche-20260711/containers/"
-            "nemo_rl_nightly_20260711_2361407.sqsh"
+            "nemo-rl-nightly-stage-20260714/containers/"
+            "nemo_rl_nightly_20260713_2375815.sqsh"
         ),
         "image_sha256": (
-            "dd32f77a0a6fb09710e31f87402f0433413b9c71120fe893297e2f46e32ce8be"
+            "9fe8a6dcc0a9e3c069555cae22b15c24a7353ae396817e9c603535604bbfd368"
         ),
         "shared_hf_home": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home",
         "functional_time": "02:00:00",
@@ -69,11 +69,12 @@ EXPECTED_PROFILES = {
         "segment": "1",
         "comment": "metrics",
         "image": (
-            "/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/"
-            "nemo_rl_nightly_20260711_2346595.sqsh"
+            "/lustre/fsw/coreai_dlalgo_llm/users/sna/"
+            "nemo-rl-nightly-stage-lyris-20260714/containers/"
+            "nemo_rl_nightly_20260713_2370069.sqsh"
         ),
         "image_sha256": (
-            "bb5beff9ade16a1eeb6badde7601731bb003a95b4cccf85b3bd9b11c84803a2a"
+            "f01387b5a9426ccd4c51822e1c48bd967329b61cd9948fa1faf3eb9c8d3e0c8c"
         ),
         "shared_hf_home": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home",
         "functional_time": "02:00:00",

@@ -1,0 +1,8 @@
+Job: 2375785
+Original remote log: none; the job was cancelled while pending before allocation
+Cluster: pre_tyche
+State: CANCELLED while pending; no allocation or GPU work
+Review boundary: PR #1126 comparison found that the Qwen3-235B base performance recipe inherited defer_fp32_logits=true, while the combined A2A schedule explicitly rejects that setting.
+Attribution boundary: the old non-VPP and VPP profiles also differed in recompute policy and pipeline layer partition, so 2375783 versus 2375784 cannot measure VPP alone.
+Resolution: source 3db959ad4 fixes defer_fp32_logits=false in every matched A2A comparison cell and adds a non-VPP 22/24 selective-recompute matched baseline profile.
+Feature result: no A2A or VPP speedup exists from this job.
