@@ -40,6 +40,7 @@ from nemo_rl.models.generation.interfaces import (
     GenerationOutputSpec,
     verify_right_padding,
 )
+from nemo_rl.models.generation.vllm.stat_logging import flush_cudagraph_metrics
 from nemo_rl.models.generation.vllm.utils import (
     attach_routed_experts_to_chat_response_choices,
     format_prompt_for_vllm_generation,
@@ -401,6 +402,12 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
     def get_vllm_logger_metrics(self) -> dict[str, Any]:
         if not self.cfg["vllm_cfg"].get("enable_vllm_metrics_logger", False):
             return {}
+
+        if flush_cudagraph_metrics(self.llm, self.cfg.get("vllm_kwargs", {})):
+            print(
+                "📋[vLLM CUDAGraph Metrics] Flushed accumulated CUDA graph stats",
+                flush=True,
+            )
 
         with self._vllm_metrics_lock:
             metric = {
