@@ -437,5 +437,35 @@
     "timestamp_utc": "2026-07-14T05:50:44Z",
     "verification_evidence": "The two independent jobs reproduce the identical capture boundary with and without A2A overlap. Recipe-level contract tests pass locally; corrected GB200 functional verification is pending. No Full-CG or A2A speedup is claimed.",
     "verification_job": "pending corrected Lyris/preTyche functional gate"
+  },
+  {
+    "cluster": "pre_tyche",
+    "evidence": "The submit-time preflight stopped before sbatch with `submit_nemo2606_2n4g_factorial.sh: line 48: uv: command not found`. No GPU allocation or performance workload started.",
+    "fix_commit": "17719bb00916afcc6a882c0c683a9fc43328f776",
+    "hypothesis": "A stdlib-only login-shell bootstrap can preserve strict profile validation without requiring the NeMo-RL Python environment.",
+    "report_path": "evidence/job-login-preflight-uv-20260714.txt",
+    "reproduction": "On login-ptyche before 17719bb00, run the factorial submitter with --test-only; model-profile loading executes `uv run --no-sync python` before sbatch.",
+    "root_cause": "The submitter hard-coded uv for login-side model-profile validation. The login node has neither uv nor the project virtual environment, while system Python lacks pydantic and OmegaConf. This was a submit-control-plane dependency; the nightly-container runtime validation path was unaffected.",
+    "run_id": "login-preflight-uv-20260714",
+    "symptom": "Pre-Tyche test-only submission failed locally before reaching Slurm.",
+    "tested_change": "Use the stdlib-only strict model_profile_bootstrap.py for login-shell loading and validation, while retaining deep MasterConfig, OmegaConf, and profile-equality validation inside the nightly container.",
+    "timestamp_utc": "2026-07-14T06:31:06Z",
+    "verification_evidence": "Seven focused tests passed. Real Pre-Tyche test-only validation then accepted Qwen3-30B-A3B g1a0/g1a1 and Qwen3-235B baseline/VPP g0a0/g0a1 requests. The resulting jobs are scheduler and functional-gate evidence only; they provide no performance result yet.",
+    "verification_job": "2375779, 2375780, 2375783, 2375784, 2375785 submitted after the fixed preflight"
+  },
+  {
+    "cluster": "pre_tyche",
+    "evidence": "Linux unit job 2375795 failed 1:0 while importing nemo_rl.models.megatron.setup with `ModuleNotFoundError: No module named 'megatron.bridge'`; one preceding VPP test passed.",
+    "fix_commit": "operational test-wrapper correction; production training harness unchanged",
+    "hypothesis": "Adding Megatron-Bridge/src rather than the repository root to the unit wrapper PYTHONPATH will expose the megatron.bridge package.",
+    "report_path": "evidence/job-2375795.txt",
+    "reproduction": "Run the focused VPP unit wrapper with the Megatron-Bridge repository root, rather than Megatron-Bridge/src, on PYTHONPATH.",
+    "root_cause": "The ad hoc Linux unit wrapper used the wrong Bridge import root. The production training harness uses its locked runtime overlay and is unaffected.",
+    "run_id": "2375795",
+    "symptom": "The first Linux-container VPP unit job stopped during test-module import before exercising the VPP setup assertion.",
+    "tested_change": "Change only the unit-wrapper PYTHONPATH entry to Megatron-Bridge/src and resubmit the focused suite.",
+    "timestamp_utc": "2026-07-14T06:35:46Z",
+    "verification_evidence": "Corrected scheduler test-only request 2375808 was accepted; real retry 2375809 exposed that the July 11 nightly image lacks the latest Bridge modelopt dependency. A fresh nightly is being staged as job 2375815.",
+    "verification_job": "2375808 test-only; 2375809 dependency mismatch; 2375815 staging"
   }
 ]

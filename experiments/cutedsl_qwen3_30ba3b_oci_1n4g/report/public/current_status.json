@@ -4,9 +4,10 @@
       "evidence": "The preserved authoritative 20 measured-step summary from sequential ON-first job 2373273 reports PolicyTraining throughput 5270.9812 versus 4902.8530 tokens/s/GPU (+7.5084%), E2E throughput +2.49%, and median step-time speedup +2.90% for CuTeDSL ON versus OFF.",
       "feature": "CuTeDSL fused Grouped GEMM",
       "jobs": [
-        "2373273"
+        "2373273",
+        "2375783"
       ],
-      "limitation": "This is an interim single-job result from the pre-isolation source cohort. Simultaneous Logprob and Refit movement indicates a temporal confound, and no opposite-order fixed-source replicas have been accepted; it is not claim-ready.",
+      "limitation": "This is an interim single-job result from the pre-isolation source cohort. Simultaneous Logprob and Refit movement indicates a temporal confound, and no opposite-order fixed-source replicas have been accepted; it is not claim-ready. Qwen3-235B functional job 2375783 is pending and has no runtime evidence yet.",
       "next_gate": "Preserve the completed artifacts, then rerun all fixed-source ON/OFF cells with alternating order and report matched post-warmup component timings.",
       "state": "provisional"
     },
@@ -25,9 +26,11 @@
       "feature": "Full-iteration CUDA Graph",
       "jobs": [
         "2369539",
-        "2369580"
+        "2369580",
+        "2375779",
+        "2375780"
       ],
-      "limitation": "Both jobs used the invalid alltoall, capacity-null, PagedStash-disabled bundle and therefore produced no valid Full-CG timing. The HybridEP correction is locally implemented but has not passed a GB200 functional gate. No speedup is reported.",
+      "limitation": "Jobs 2369539 and 2369580 used the invalid alltoall, capacity-null, PagedStash-disabled bundle and therefore produced no valid Full-CG timing. Corrected Ptyche jobs 2375779 and 2375780 are pending without allocations or logs. No speedup is reported.",
       "next_gate": "Run the corrected noncolocated HybridEP functional cell and require capture_calls == 1, replay_calls >= 2, monotonic counters, stable storage digest, and no overflow-retry correctness failure before matched timing.",
       "state": "implemented_unmeasured"
     },
@@ -36,20 +39,27 @@
       "feature": "Expert-parallel A2A overlap",
       "jobs": [
         "2369539",
-        "2369580"
+        "2369580",
+        "2375780",
+        "2375785"
       ],
-      "limitation": "The comparison stopped at capture failure and has no accepted timing window. A2A performance remains unmeasured; no speedup is reported.",
+      "limitation": "The earlier comparison stopped at capture failure and has no accepted timing window. Corrected Q30 job 2375780 and Qwen3-235B VPP job 2375785 are pending without allocations or logs. A2A performance remains unmeasured; no speedup is reported.",
       "next_gate": "After the HybridEP Full-CG gate passes, run A2A OFF/ON inside both eager-dynamic and Full-CG-static strata, then verify NCCL A2A presence and temporal overlap before reporting an effect.",
       "state": "implemented_unmeasured"
     },
     {
       "evidence": "The teammate implementation in NeMo-RL PR #1126 was manually ported onto current main: setup preserves all virtual model chunks, the interleaved schedule receives one iterator per chunk, reference/refit/checkpoint state is chunk-qualified, and Qwen3-235B now has a strict PP4/VPP2 A2A profile with a 22/24/24/24 layer split.",
       "feature": "Virtual pipeline parallelism (PR #1126 port)",
-      "jobs": [],
-      "limitation": "Dependency-free contract probes and local lint pass, but the macOS host cannot collect the Ray/MCore unit suite. No Linux-container or GB200 VPP functional run has passed yet, and VPP remains fail-closed with full-iteration CUDA Graph, split-step training, ModelOpt, native Megatron generation, value workers, and FP8 KV-cache calibration.",
+      "jobs": [
+        "2375784",
+        "2375785",
+        "2375795",
+        "2375809"
+      ],
+      "limitation": "Dependency-free contract probes and local lint pass. Linux unit wrapper 2375795 failed before VPP assertions because its PYTHONPATH omitted Megatron-Bridge/src; retry 2375809 then exposed that the July 11 base image lacks the latest Bridge modelopt dependency. Qwen3-235B functional jobs 2375784 and 2375785 are pending. No Linux-container or GB200 VPP functional run has passed yet.",
       "next_gate": "Run the focused VPP, setup, community-import, train, BatchedDataDict, refit, and checkpoint tests in the pinned Linux nightly container; then run Qwen3-235B g0a0/g0a1 functional gates before performance replicas.",
       "state": "implemented_unmeasured"
     }
   ],
-  "updated_at_utc": "2026-07-14T06:18:30Z"
+  "updated_at_utc": "2026-07-14T06:39:52Z"
 }

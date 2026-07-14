@@ -1,0 +1,9 @@
+Incident: login-preflight-uv-20260714
+Cluster/scope: pre_tyche login-node submit control plane
+Observed stderr: submit_nemo2606_2n4g_factorial.sh: line 48: uv: command not found
+Failure boundary: before sbatch; no GPU allocation or workload started
+Root cause: login-side profile validation required uv and project dependencies unavailable on the login node
+Fix: 17719bb00916afcc6a882c0c683a9fc43328f776; stdlib-only model_profile_bootstrap.py
+Verification: 7 focused tests passed; real test-only validation accepted all requested Q30/Q235 contexts
+Submitted jobs: 2375779, 2375780, 2375783, 2375784, 2375785
+Performance impact: none measured; submission-tooling incident only
