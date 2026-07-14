@@ -67,6 +67,7 @@ from nemo_rl.models.megatron.data import (
 )
 from nemo_rl.models.megatron.full_cuda_graph import (
     FullCudaGraphAuxLossScaleBuffer,
+    FullCudaGraphStorageSignature,
     build_full_cuda_graph_schedule,
     materialize_full_cuda_graph_metrics,
     require_supported_full_cuda_graph_operation,
@@ -398,6 +399,9 @@ class MegatronPolicyWorkerImpl(
         )
         self._full_cuda_graph_schedule: Optional[Callable[..., Any]] = None
         self._full_cuda_graph_wrapper: Any = None
+        self._full_cuda_graph_storage_signature: Optional[
+            FullCudaGraphStorageSignature
+        ] = None
         self._full_cuda_graph_aux_loss_scale = FullCudaGraphAuxLossScaleBuffer()
 
         # NVML-based and guarded on torch.cuda.is_initialized(), so this does
@@ -665,6 +669,59 @@ class MegatronPolicyWorkerImpl(
             if hasattr(optim_instance, "_copy_main_params_to_param_buffer"):
                 optim_instance._copy_main_params_to_param_buffer()
 
+    def _validate_full_cuda_graph_storage_before_schedule(self) -> None:
+        """Fail before graph entry when live policy storage is not reusable."""
+        if not getattr(self, "_full_cuda_graph_enabled", False):
+            return
+        wrapper = getattr(self, "_full_cuda_graph_wrapper", None)
+        if wrapper is None:
+            return
+        signature = getattr(self, "_full_cuda_graph_storage_signature", None)
+        if signature is None:
+            if wrapper.will_capture_next_call():
+                raise RuntimeError(
+                    "full-iteration CUDA graph capture requires a globally successful "
+                    "optimizer step to establish its storage signature"
+                )
+            return
+        signature.require_match(self.model, self.optimizer)
+
+    def _capture_full_cuda_graph_storage_after_update(
+        self, *, update_successful: bool
+    ) -> None:
+        """Capture lazy optimizer storage once, after global update consensus."""
+        if (
+            not getattr(self, "_full_cuda_graph_enabled", False)
+            or getattr(self, "_full_cuda_graph_wrapper", None) is None
+            or not update_successful
+            or getattr(self, "_full_cuda_graph_storage_signature", None) is not None
+        ):
+            return
+        self._full_cuda_graph_storage_signature = FullCudaGraphStorageSignature.capture(
+            self.model, self.optimizer
+        )
+
+    def _add_full_cuda_graph_execution_metrics(self, metrics: dict[str, Any]) -> None:
+        """Publish replay evidence without exposing graph-resident addresses."""
+        if not getattr(self, "_full_cuda_graph_enabled", False):
+            return
+        wrapper = getattr(self, "_full_cuda_graph_wrapper", None)
+        if wrapper is None:
+            return
+        stats = wrapper.execution_stats()
+        signature = getattr(self, "_full_cuda_graph_storage_signature", None)
+        metrics.update(
+            {
+                "full_cuda_graph_warmup_calls": stats.warmup_calls,
+                "full_cuda_graph_capture_calls": stats.capture_calls,
+                "full_cuda_graph_replay_calls": stats.replay_calls,
+                "full_cuda_graph_reset_calls": stats.reset_calls,
+                "full_cuda_graph_storage_signature_sha256": (
+                    signature.digest() if signature is not None else None
+                ),
+            }
+        )
+
     def _uses_mxfp8_overlap_shared_param_buffer(self) -> bool:
         return getattr(
             self.megatron_cfg.optimizer, "reuse_grad_buf_for_mxfp8_param_ag", False
@@ -836,6 +893,9 @@ class MegatronPolicyWorkerImpl(
                     #   (1/G) * N_local * tp_cp_size * aux_grad -> DDP SUM -> aux_grad / G
                     self._set_aux_loss_grad_scale_funcs(global_valid_toks)
 
+                    if full_cuda_graph_enabled:
+                        self._validate_full_cuda_graph_storage_before_schedule()
+
                     # Forward pass.
                     draft_enabled = "draft" in self.cfg and self.cfg["draft"]["enabled"]
                     use_router_replay = _should_use_router_replay(
@@ -899,6 +959,9 @@ class MegatronPolicyWorkerImpl(
                 # so we must gather across mp ranks
                 update_successful = logical_and_across_model_parallel_group(
                     update_successful, mp_group=pg_collection.mp
+                )
+                self._capture_full_cuda_graph_storage_after_update(
+                    update_successful=bool(update_successful)
                 )
                 all_updates_successful = all_updates_successful and bool(
                     update_successful
@@ -1000,6 +1063,7 @@ class MegatronPolicyWorkerImpl(
         }
         if not eval_mode:
             metrics["update_successful"] = all_updates_successful
+        self._add_full_cuda_graph_execution_metrics(metrics)
         # Read "config" via getattr-by-string so the token stays out of
         # train.__code__.co_names; with torch 2.11 cloudpickle otherwise
         # matches torch.distributed.config (a non-pickleable ConfigModuleInstance).

@@ -12,8 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hashlib
+import json
+import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from enum import Enum
 from functools import lru_cache
 from typing import Any, Literal, Optional
@@ -49,6 +52,356 @@ class TensorSignature:
             device_type=tensor.device.type,
             device_index=tensor.device.index,
         )
+
+
+@dataclass(frozen=True)
+class FullCudaGraphExecutionStats:
+    """Cumulative successful calls made by one NeMo-RL graph wrapper."""
+
+    warmup_calls: int
+    capture_calls: int
+    replay_calls: int
+    reset_calls: int
+
+
+@dataclass(frozen=True, repr=False)
+class _FullCudaGraphStorageEntry:
+    name: str
+    shape: tuple[int, ...]
+    dtype: str
+    device: str
+    storage_data_ptr: int
+    effective_data_ptr: int
+    storage_offset: int
+    stride: tuple[int, ...]
+
+    def canonical_value(self) -> dict[str, Any]:
+        return {
+            "device": self.device,
+            "dtype": self.dtype,
+            "effective_data_ptr": self.effective_data_ptr,
+            "name": self.name,
+            "shape": self.shape,
+            "storage_data_ptr": self.storage_data_ptr,
+            "storage_offset": self.storage_offset,
+            "stride": self.stride,
+        }
+
+
+_SAFE_STORAGE_NAME = re.compile(r"^[A-Za-z0-9_.\[\]=:-]+$")
+_STABLE_SCALAR_TYPES = (
+    type(None),
+    bool,
+    int,
+    float,
+    str,
+    bytes,
+    torch.dtype,
+    torch.device,
+)
+
+
+def _safe_storage_name(value: Any, *, kind: str) -> str:
+    if not isinstance(value, str) or _SAFE_STORAGE_NAME.fullmatch(value) is None:
+        raise TypeError(
+            "full-iteration CUDA graph storage signature encountered an "
+            f"unsupported {kind}"
+        ) from None
+    return value
+
+
+def _is_custom_fsdp_model(value: Any) -> bool:
+    value_type = type(value)
+    return value_type.__name__ == "FullyShardedDataParallel" or (
+        value_type.__module__.startswith("megatron.core.distributed.fsdp")
+    )
+
+
+def _is_unsupported_distributed_tensor(value: torch.Tensor) -> bool:
+    value_type = type(value)
+    return (
+        value_type.__name__ == "DTensor"
+        or value_type.__module__.startswith("torch.distributed.tensor")
+        or bool(getattr(value, "__fsdp_param__", False))
+    )
+
+
+def _read_storage_metadata(
+    tensor: torch.Tensor, *, name: str
+) -> _FullCudaGraphStorageEntry:
+    if _is_unsupported_distributed_tensor(tensor):
+        raise TypeError(
+            "full-iteration CUDA graph storage signature rejects DTensor/custom-FSDP "
+            f"tensor={name}"
+        ) from None
+
+    fields: dict[str, Any] = {}
+    readers: tuple[tuple[str, Callable[[], Any]], ...] = (
+        ("shape", lambda: tuple(int(value) for value in tensor.shape)),
+        ("dtype", lambda: str(tensor.dtype)),
+        ("device", lambda: str(tensor.device)),
+        ("storage_data_ptr", lambda: int(tensor.untyped_storage().data_ptr())),
+        ("effective_data_ptr", lambda: int(tensor.data_ptr())),
+        ("storage_offset", lambda: int(tensor.storage_offset())),
+        ("stride", lambda: tuple(int(value) for value in tensor.stride())),
+    )
+    for field, reader in readers:
+        try:
+            fields[field] = reader()
+        except Exception:
+            raise TypeError(
+                "full-iteration CUDA graph storage metadata unavailable "
+                f"tensor={name} field={field} reason=unsupported_tensor_metadata"
+            ) from None
+    return _FullCudaGraphStorageEntry(name=name, **fields)
+
+
+class _FullCudaGraphStorageCapture:
+    def __init__(self) -> None:
+        self.entries: list[_FullCudaGraphStorageEntry] = []
+        self.seen_tensor_ids: set[int] = set()
+
+    def add_tensor(self, tensor: Any, *, name: str) -> None:
+        if not isinstance(tensor, torch.Tensor):
+            raise TypeError(
+                "full-iteration CUDA graph storage signature expected a live tensor "
+                f"tensor={name}"
+            ) from None
+        tensor_id = id(tensor)
+        if tensor_id in self.seen_tensor_ids:
+            return
+        self.entries.append(_read_storage_metadata(tensor, name=name))
+        self.seen_tensor_ids.add(tensor_id)
+
+
+def _optimizer_leaves(optimizer: Any) -> list[Any]:
+    children = getattr(optimizer, "chained_optimizers", None)
+    if children is None:
+        return [optimizer]
+    if not isinstance(children, (list, tuple)):
+        raise TypeError(
+            "full-iteration CUDA graph storage signature requires deterministic "
+            "ChainedOptimizer children"
+        ) from None
+    leaves: list[Any] = []
+    for child in children:
+        leaves.extend(_optimizer_leaves(child))
+    return leaves
+
+
+def _mapping_key_name(key: Any, parameter_names: Mapping[int, str]) -> str:
+    parameter_name = parameter_names.get(id(key))
+    if parameter_name is not None:
+        return f"parameter={parameter_name}"
+    if isinstance(key, str):
+        return _safe_storage_name(key, kind="optimizer mapping key")
+    if key is None or type(key) in (bool, int, float):
+        return f"{type(key).__name__}={key!r}"
+    if isinstance(key, tuple):
+        parts = [_mapping_key_name(part, parameter_names) for part in key]
+        return "tuple=" + ":".join(parts)
+    raise TypeError(
+        "full-iteration CUDA graph storage signature encountered a "
+        "nondeterministic optimizer mapping key"
+    ) from None
+
+
+def _capture_optimizer_value(
+    capture: _FullCudaGraphStorageCapture,
+    value: Any,
+    *,
+    path: str,
+    parameter_names: Mapping[int, str],
+) -> None:
+    if isinstance(value, torch.Tensor):
+        capture.add_tensor(value, name=path)
+        return
+    if isinstance(value, Mapping):
+        named_items = [
+            (_mapping_key_name(key, parameter_names), item)
+            for key, item in value.items()
+        ]
+        key_names = [key_name for key_name, _ in named_items]
+        if len(set(key_names)) != len(key_names):
+            raise TypeError(
+                "full-iteration CUDA graph storage signature encountered "
+                "nondeterministic optimizer mapping keys"
+            ) from None
+        named_items.sort(key=lambda item: item[0])
+        for key_name, item in named_items:
+            _capture_optimizer_value(
+                capture,
+                item,
+                path=f"{path}.{key_name}",
+                parameter_names=parameter_names,
+            )
+        return
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _capture_optimizer_value(
+                capture,
+                item,
+                path=f"{path}[{index}]",
+                parameter_names=parameter_names,
+            )
+        return
+    if isinstance(value, (set, frozenset)):
+        raise TypeError(
+            "full-iteration CUDA graph storage signature encountered a "
+            f"nondeterministic optimizer container path={path}"
+        ) from None
+    if not isinstance(value, _STABLE_SCALAR_TYPES):
+        raise TypeError(
+            "full-iteration CUDA graph storage signature encountered an "
+            f"unsupported optimizer value path={path}"
+        ) from None
+
+
+@dataclass(frozen=True, repr=False, slots=True)
+class FullCudaGraphStorageSignature:
+    """Digestible live-storage snapshot for graph-resident policy state."""
+
+    _entries: tuple[_FullCudaGraphStorageEntry, ...]
+    _digest: str = dataclass_field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        canonical = json.dumps(
+            [entry.canonical_value() for entry in self._entries],
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        object.__setattr__(self, "_digest", hashlib.sha256(canonical).hexdigest())
+
+    @classmethod
+    def capture(cls, model: Any, optimizer: Any) -> "FullCudaGraphStorageSignature":
+        """Capture live model, gradient, and optimizer tensors without state_dict."""
+        model_chunks = model if isinstance(model, (list, tuple)) else (model,)
+        if not model_chunks:
+            raise TypeError(
+                "full-iteration CUDA graph storage signature requires model chunks"
+            ) from None
+
+        capture = _FullCudaGraphStorageCapture()
+        for chunk_index, model_chunk in enumerate(model_chunks):
+            if _is_custom_fsdp_model(model_chunk):
+                raise TypeError(
+                    "full-iteration CUDA graph storage signature rejects custom FSDP"
+                ) from None
+            named_parameters = getattr(model_chunk, "named_parameters", None)
+            if not callable(named_parameters):
+                raise TypeError(
+                    "full-iteration CUDA graph storage signature requires "
+                    f"model_chunk[{chunk_index}].named_parameters"
+                ) from None
+            for parameter_name, parameter in named_parameters():
+                safe_parameter_name = _safe_storage_name(
+                    parameter_name, kind="model parameter name"
+                )
+                logical_name = (
+                    f"model_chunk[{chunk_index}].parameter.{safe_parameter_name}"
+                )
+                capture.add_tensor(parameter, name=logical_name)
+                for gradient_name in ("main_grad", "grad"):
+                    gradient = getattr(parameter, gradient_name, None)
+                    if gradient is not None:
+                        capture.add_tensor(
+                            gradient, name=f"{logical_name}.{gradient_name}"
+                        )
+
+        leaves = _optimizer_leaves(optimizer)
+        for leaf_index, leaf in enumerate(leaves):
+            leaf_path = f"optimizer_leaf[{leaf_index}]"
+            try:
+                param_groups = leaf.param_groups
+                state = leaf.state
+            except Exception:
+                raise TypeError(
+                    "full-iteration CUDA graph live optimizer state unavailable "
+                    f"path={leaf_path}"
+                ) from None
+            if not isinstance(param_groups, (list, tuple)):
+                raise TypeError(
+                    "full-iteration CUDA graph optimizer param_groups must be a "
+                    f"deterministic sequence path={leaf_path}"
+                ) from None
+
+            parameter_names: dict[int, str] = {}
+            for group_index, param_group in enumerate(param_groups):
+                if not isinstance(param_group, Mapping):
+                    raise TypeError(
+                        "full-iteration CUDA graph optimizer parameter group must be "
+                        f"a mapping path={leaf_path}.param_group[{group_index}]"
+                    ) from None
+                parameters = param_group.get("params")
+                if not isinstance(parameters, (list, tuple)):
+                    raise TypeError(
+                        "full-iteration CUDA graph optimizer params must be a "
+                        "deterministic sequence "
+                        f"path={leaf_path}.param_group[{group_index}]"
+                    ) from None
+                for parameter_index, parameter in enumerate(parameters):
+                    parameter_name = (
+                        f"param_group[{group_index}].param[{parameter_index}]"
+                    )
+                    parameter_names[id(parameter)] = parameter_name
+
+            _capture_optimizer_value(
+                capture,
+                param_groups,
+                path=f"{leaf_path}.param_groups",
+                parameter_names=parameter_names,
+            )
+            _capture_optimizer_value(
+                capture,
+                state,
+                path=f"{leaf_path}.state",
+                parameter_names=parameter_names,
+            )
+
+        return cls(tuple(sorted(capture.entries, key=lambda entry: entry.name)))
+
+    def digest(self) -> str:
+        return self._digest
+
+    def require_match(self, model: Any, optimizer: Any) -> None:
+        actual = type(self).capture(model, optimizer)
+        expected_by_name = {entry.name: entry for entry in self._entries}
+        actual_by_name = {entry.name: entry for entry in actual._entries}
+        names = sorted(expected_by_name.keys() | actual_by_name.keys())
+        fields = (
+            "shape",
+            "dtype",
+            "device",
+            "storage_data_ptr",
+            "effective_data_ptr",
+            "storage_offset",
+            "stride",
+        )
+        for name in names:
+            expected = expected_by_name.get(name)
+            observed = actual_by_name.get(name)
+            if expected is None or observed is None:
+                self._raise_mismatch(actual, name=name, field="presence")
+            assert expected is not None and observed is not None
+            for field in fields:
+                if getattr(expected, field) != getattr(observed, field):
+                    self._raise_mismatch(actual, name=name, field=field)
+
+    def _raise_mismatch(
+        self,
+        actual: "FullCudaGraphStorageSignature",
+        *,
+        name: str,
+        field: str,
+    ) -> None:
+        raise RuntimeError(
+            "full-iteration CUDA graph storage signature mismatch "
+            f"expected_sha256={self.digest()} actual_sha256={actual.digest()} "
+            f"tensor={name} field={field} reason=graph_storage_changed"
+        ) from None
+
+    def __repr__(self) -> str:
+        return f"FullCudaGraphStorageSignature(sha256={self.digest()})"
 
 
 @dataclass(frozen=True)
@@ -257,10 +610,20 @@ class ProcessedMicrobatchStaticBufferLoader:
 
 
 class _NemoRLFullCudaGraphWrapperMixin:
-    """Validation and lifecycle layer mixed into MCore's wrapper at runtime."""
+    """Validation and lifecycle layer mixed into MCore's wrapper at runtime.
+
+    MCore's full-iteration graph state is class-global. NeMo-RL therefore keeps
+    the existing invariant of one wrapper per Ray worker process.
+    """
 
     static_loader: ProcessedMicrobatchStaticBufferLoader
     _expected_call_signature: Optional[FullCudaGraphCallSignature]
+    _nemo_rl_bootstrap_reset: bool
+    _nemo_rl_capture_calls: int
+    _nemo_rl_phase_calls: int
+    _nemo_rl_replay_calls: int
+    _nemo_rl_reset_calls: int
+    _nemo_rl_warmup_calls: int
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         if kwargs.get("forward_only"):
@@ -277,13 +640,39 @@ class _NemoRLFullCudaGraphWrapperMixin:
             self._expected_call_signature = signature
         else:
             self._expected_call_signature.require_match(signature)
-        return super().__call__(*args, **kwargs)  # type: ignore[misc]
+        phase_call = self._nemo_rl_phase_calls
+        result = super().__call__(*args, **kwargs)  # type: ignore[misc]
+        if phase_call < self.cuda_graph_warmup_steps:
+            self._nemo_rl_warmup_calls += 1
+        elif phase_call == self.cuda_graph_warmup_steps:
+            self._nemo_rl_capture_calls += 1
+            self._nemo_rl_replay_calls += 1
+        else:
+            self._nemo_rl_replay_calls += 1
+        self._nemo_rl_phase_calls += 1
+        return result
+
+    def execution_stats(self) -> FullCudaGraphExecutionStats:
+        """Return an immutable snapshot of cumulative successful calls."""
+        return FullCudaGraphExecutionStats(
+            warmup_calls=self._nemo_rl_warmup_calls,
+            capture_calls=self._nemo_rl_capture_calls,
+            replay_calls=self._nemo_rl_replay_calls,
+            reset_calls=self._nemo_rl_reset_calls,
+        )
+
+    def will_capture_next_call(self) -> bool:
+        """Whether the next successful training call is the capture call."""
+        return self._nemo_rl_phase_calls == self.cuda_graph_warmup_steps
 
     def reset_cuda_graph(self, stage: Optional[str] = None) -> None:
         super().reset_cuda_graph(stage=stage)  # type: ignore[misc]
         self.static_loader.reset(stage=stage)
         if stage is None or stage == "training":
             self._expected_call_signature = None
+            self._nemo_rl_phase_calls = 0
+        if not self._nemo_rl_bootstrap_reset:
+            self._nemo_rl_reset_calls += 1
 
 
 @lru_cache(maxsize=None)
@@ -307,6 +696,10 @@ class NemoRLFullCudaGraphWrapper:
         upstream_wrapper_cls: Optional[type] = None,
     ) -> Any:
         del cls
+        if cuda_graph_warmup_steps < 1:
+            raise ValueError(
+                "full-iteration CUDA graph warmup steps must be at least 1"
+            )
         if upstream_wrapper_cls is None:
             from megatron.core.full_cuda_graph import FullCudaGraphWrapper
 
@@ -319,7 +712,14 @@ class NemoRLFullCudaGraphWrapper:
         )
         instance.static_loader = ProcessedMicrobatchStaticBufferLoader()
         instance._expected_call_signature = None
+        instance._nemo_rl_bootstrap_reset = True
+        instance._nemo_rl_capture_calls = 0
+        instance._nemo_rl_phase_calls = 0
+        instance._nemo_rl_replay_calls = 0
+        instance._nemo_rl_reset_calls = 0
+        instance._nemo_rl_warmup_calls = 0
         instance.reset_cuda_graph()
+        instance._nemo_rl_bootstrap_reset = False
         return instance
 
 
@@ -341,6 +741,9 @@ def validate_full_cuda_graph_policy_config(
         errors.append("sequence packing is not supported")
     if megatron_cfg["context_parallel_size"] != 1:
         errors.append("context parallelism must be 1")
+    ddp_config = megatron_cfg.get("distributed_data_parallel_config")
+    if isinstance(ddp_config, Mapping) and ddp_config.get("use_custom_fsdp"):
+        errors.append("custom FSDP/DTensor is not supported")
     generation = config.get("generation")
     if generation is not None and generation["colocated"]["enabled"]:
         errors.append("colocated generation/refit is not supported")
