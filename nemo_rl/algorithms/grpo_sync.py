@@ -81,6 +81,7 @@ from nemo_rl.models.policy.interfaces import ColocatablePolicyInterface
 from nemo_rl.utils.checkpoint import CheckpointManager
 from nemo_rl.utils.logger import Logger, print_message_log_samples
 from nemo_rl.utils.memory_tracker import MemoryTracker
+from nemo_rl.utils.metric_printing import format_spec_decode_metrics
 from nemo_rl.utils.nsys import maybe_gpu_profile_step
 from nemo_rl.utils.timer import TimeoutChecker, Timer
 from nemo_rl.utils.venvs import make_actor_runtime_env
@@ -1061,6 +1062,12 @@ def grpo_train_sync(
                         metrics[k] = np.sum(v).item()
                     else:
                         print(f"Skipping aggregation for {k} ({type(v)})")
+
+                spec_decode_metrics_line = format_spec_decode_metrics(
+                    metrics, total_steps + 1
+                )
+                if spec_decode_metrics_line is not None:
+                    print(spec_decode_metrics_line, flush=True)
 
                 metrics.update(rollout_metrics)
                 metrics["generation_logger_metrics"] = generation_logger_metrics
