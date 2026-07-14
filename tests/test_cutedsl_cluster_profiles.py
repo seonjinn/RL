@@ -38,6 +38,7 @@ EXPECTED_PROFILES = {
         "image_sha256": (
             "dd32f77a0a6fb09710e31f87402f0433413b9c71120fe893297e2f46e32ce8be"
         ),
+        "shared_hf_home": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home",
         "functional_time": "02:00:00",
         "benchmark_time": "05:00:00",
     },
@@ -53,6 +54,10 @@ EXPECTED_PROFILES = {
         ),
         "image_sha256": (
             "a393e1b8f12e5edafa49a84c0b78b172aa163ad29be04fca6e42855a5f16304a"
+        ),
+        "shared_hf_home": (
+            "/lustre/fsw/portfolios/nemotron/projects/nemotron_sw_post/users/sna/"
+            "hf_home"
         ),
         "functional_time": "02:00:00",
         "benchmark_time": "08:00:00",
@@ -70,6 +75,7 @@ EXPECTED_PROFILES = {
         "image_sha256": (
             "bb5beff9ade16a1eeb6badde7601731bb003a95b4cccf85b3bd9b11c84803a2a"
         ),
+        "shared_hf_home": "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home",
         "functional_time": "02:00:00",
         "benchmark_time": "05:00:00",
     },
@@ -83,6 +89,7 @@ PROFILE_EXPORT_KEYS = {
     "CUTEDSL_COMMENT",
     "CUTEDSL_IMAGE",
     "CUTEDSL_IMAGE_SHA256",
+    "CUTEDSL_SHARED_HF_HOME",
     "CUTEDSL_FUNCTIONAL_TIME",
     "CUTEDSL_BENCHMARK_TIME",
 }
@@ -110,6 +117,7 @@ keys = (
     "CUTEDSL_COMMENT",
     "CUTEDSL_IMAGE",
     "CUTEDSL_IMAGE_SHA256",
+    "CUTEDSL_SHARED_HF_HOME",
     "CUTEDSL_FUNCTIONAL_TIME",
     "CUTEDSL_BENCHMARK_TIME",
 )
@@ -144,7 +152,7 @@ def test_profile_scripts_export_exactly_required_keys(profile_name: str) -> None
     exported_keys = re.findall(
         r"^export (CUTEDSL_[A-Z0-9_]+)(?:=|$)", profile_text, re.MULTILINE
     )
-    assert len(exported_keys) == 10
+    assert len(exported_keys) == len(PROFILE_EXPORT_KEYS)
     assert set(exported_keys) == PROFILE_EXPORT_KEYS
 
 
