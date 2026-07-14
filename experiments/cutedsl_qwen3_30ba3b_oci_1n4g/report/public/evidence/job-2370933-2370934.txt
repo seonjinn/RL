@@ -1,0 +1,22 @@
+Incident: 2370933-2370934
+Jobs: 2370933, 2370934, 2376496, 2376497
+Clusters: Lyris and pre_tyche
+Source: 4dd949d5ddf70c0021550b76c19a663a8c55b6fb
+Outcome: no functional or performance evidence
+
+Original remote log: bounded diagnosis transcribed from Slurm output and status artifacts.
+
+Lyris 2370933 (g1a0) failed after 29:03 during Hydra composition. The recipe
+did not define policy.megatron_cfg.cuda_graph_modules, while the harness used
+plain override syntax. Hydra stopped before config validation or PolicyTraining.
+
+Lyris 2370934 (g1a1) used the identical configuration path and was cancelled
+after the deterministic failure was confirmed. Its payload exit was nonzero;
+no Full-CG, A2A, PolicyTraining, or timing artifacts were produced.
+
+Ptyche 2376496 was cancelled during locked-runtime bootstrap after 1:49, and
+2376497 was cancelled while pending. Neither entered the benchmark payload.
+
+Fix: e5dd9246fc7c3f62f074416aa9dcdf47115cc62a changes only the optional field
+to ++policy.megatron_cfg.cuda_graph_modules=[]. Complete g1a0 and g1a1 override
+composition passes locally; replacement functional jobs remain unmeasured.

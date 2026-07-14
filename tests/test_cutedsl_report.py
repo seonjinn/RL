@@ -922,6 +922,7 @@ def test_committed_incident_evidence_is_bounded_redacted_and_linked() -> None:
         "2375795",
         "2376272-2370672",
         "2370808-2370818",
+        "2370933-2370934",
         "local-refresh-20260712",
         "login-preflight-uv-20260714",
         "preflight-segment-20260712",
@@ -1602,6 +1603,10 @@ def test_committed_current_status_keeps_unmeasured_features_out_of_claims() -> N
         "2370934",
         "2376496",
         "2376497",
+        "2376637",
+        "2376638",
+        "2372711",
+        "2372712",
     ]
     assert "no speedup" in full_cg["limitation"].lower()
 
@@ -1616,6 +1621,8 @@ def test_committed_current_status_keeps_unmeasured_features_out_of_claims() -> N
         "2370818",
         "2370934",
         "2376497",
+        "2376638",
+        "2372712",
     ]
     assert "defer_fp32_logits=true" in a2a["limitation"]
     assert "no speedup" in a2a["limitation"].lower()

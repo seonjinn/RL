@@ -35,9 +35,13 @@
         "2370933",
         "2370934",
         "2376496",
-        "2376497"
+        "2376497",
+        "2376637",
+        "2376638",
+        "2372711",
+        "2372712"
       ],
-      "limitation": "Jobs 2369539 and 2369580 used the invalid alltoall, capacity-null, PagedStash-disabled bundle. Corrected jobs 2375779 and 2375780 then failed dirty-source preflight. Jobs 2370808 and 2370818 reached locked-runtime config composition but latest main already defined two HybridEP keys that the harness incorrectly tried to append with Hydra '+'. Commit 4dd949d5 changes those optional keys to add-or-override '++'; 133 focused tests pass. Lyris replacements 2370933 and 2370934 are running, while Ptyche backups 2376496 and 2376497 are pending. None has produced valid Full-CG timing; no speedup is reported.",
+      "limitation": "Jobs 2369539 and 2369580 used the invalid alltoall, capacity-null, PagedStash-disabled bundle. Corrected jobs 2375779 and 2375780 then failed dirty-source preflight. Jobs 2370808 and 2370818 exposed Hydra collisions in two HybridEP fields. Source 4dd949d5 fixed those fields, but Lyris jobs 2370933 and 2370934 exposed the same structured-config issue for optional cuda_graph_modules; Ptyche jobs 2376496 and 2376497 were cancelled without entering training. Source e5dd9246 fixes the remaining optional override, and exact g1a0/g1a1 composition plus scheduler preflight pass. New functional jobs 2376637, 2376638, 2372711, and 2372712 are pending. None has produced valid Full-CG timing; no speedup is reported.",
       "next_gate": "Run the corrected noncolocated HybridEP functional cell and require capture_calls == 1, replay_calls >= 2, monotonic counters, stable storage digest, and no overflow-retry correctness failure before matched timing.",
       "state": "implemented_unmeasured"
     },
@@ -52,9 +56,11 @@
         "2376310",
         "2370818",
         "2370934",
-        "2376497"
+        "2376497",
+        "2376638",
+        "2372712"
       ],
-      "limitation": "The earlier comparison stopped at capture failure and has no accepted timing window. Corrected Q30 job 2375780 failed dirty-source preflight. Qwen3-235B VPP+A2A job 2375785 was cancelled after PR #1126 review found an invalid inherited defer_fp32_logits=true. Lyris job 2370818 then failed before training because the harness used Hydra append syntax for HybridEP keys already present in latest main. Commit 4dd949d5 fixes both collisions; Lyris replacement 2370934 is running and Ptyche backup 2376497 is pending. A2A performance remains unmeasured; no speedup is reported.",
+      "limitation": "The earlier comparison stopped at capture failure and has no accepted timing window. Corrected Q30 job 2375780 failed dirty-source preflight. Qwen3-235B VPP+A2A job 2375785 was cancelled after PR #1126 review found an invalid inherited defer_fp32_logits=true. Later Q30 cohorts stopped during Hydra composition: 2370818 on existing HybridEP fields and 2370934 on absent cuda_graph_modules; 2376497 was cancelled while pending. Source e5dd9246 composes the exact A2A-ON bundle, and new functional jobs 2376638 and 2372712 are pending. A2A performance remains unmeasured; no speedup is reported.",
       "next_gate": "Use source eff1d64af with defer_fp32_logits=false in both A2A OFF/ON cells, then verify NCCL A2A presence and temporal overlap before reporting an effect.",
       "state": "implemented_unmeasured"
     },
@@ -76,5 +82,5 @@
       "state": "implemented_unmeasured"
     }
   ],
-  "updated_at_utc": "2026-07-14T09:06:18Z"
+  "updated_at_utc": "2026-07-14T09:38:25Z"
 }

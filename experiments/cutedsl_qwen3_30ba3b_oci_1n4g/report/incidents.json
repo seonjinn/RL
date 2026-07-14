@@ -540,7 +540,22 @@
     "symptom": "Both Full-CG functional cells produced no graph capture, A2A, PolicyTraining, or performance evidence despite completing the expensive locked-runtime bootstrap.",
     "tested_change": "Change only the two optional HybridEP overrides from '+' to '++', then compose both the Qwen3-30B-A3B and Qwen3-235B performance profiles in the regression test.",
     "timestamp_utc": "2026-07-14T09:06:18Z",
-    "verification_evidence": "The new regression test failed before the change and passes afterward for both model profiles. The model-profile, multinode-harness, and VPP validation suites report 133 passed; Bash syntax, Ruff, and diff checks pass. Lyris replacements 2370933 and 2370934 are running; Ptyche backups 2376496 and 2376497 are pending.",
-    "verification_job": "2370933 and 2370934 running; 2376496 and 2376497 pending"
+    "verification_evidence": "The new regression test failed before the change and passes afterward for both model profiles. The model-profile, multinode-harness, and VPP validation suites report 133 passed; Bash syntax, Ruff, and diff checks pass. Replacement jobs later reached a distinct cuda_graph_modules composition failure recorded in incident 2370933-2370934.",
+    "verification_job": "2370933 and 2370934 failed before training; superseded by source e5dd9246 jobs"
+  },
+  {
+    "cluster": "lyris,pre_tyche",
+    "evidence": "Lyris jobs 2370933 and 2370934 completed the locked runtime, then the g1a0 payload failed Hydra composition and g1a1 was cancelled after the deterministic failure was confirmed. Ptyche job 2376496 was cancelled during bootstrap and 2376497 while pending; none entered PolicyTraining.",
+    "fix_commit": "e5dd9246fc7c3f62f074416aa9dcdf47115cc62a",
+    "hypothesis": "Using Hydra add-or-override syntax for cuda_graph_modules will support both recipes that define the optional field and recipes that omit it.",
+    "report_path": "evidence/job-2370933-2370934.txt",
+    "reproduction": "Compose the Qwen3-30B-A3B performance recipe from source 4dd949d5 with policy.megatron_cfg.cuda_graph_modules=[]; the recipe defines other CUDA Graph controls but omits cuda_graph_modules.",
+    "root_cause": "The Full-CG harness assigned cuda_graph_modules with plain override syntax. Hydra rejects assignment to an absent structured-config field, so both feature cells were guaranteed to stop before config validation and training.",
+    "run_id": "2370933-2370934",
+    "symptom": "The second replacement cohort still produced no Full-CG capture, A2A overlap, PolicyTraining, or performance evidence after about 29 minutes per Lyris job.",
+    "tested_change": "Change only cuda_graph_modules=[] to ++cuda_graph_modules=[], then compose the complete g1a0 and g1a1 override bundles against the real performance recipe.",
+    "timestamp_utc": "2026-07-14T09:38:25Z",
+    "verification_evidence": "The regression changed from red to green; the complete real-recipe g1a0 and g1a1 override bundles both compose locally. Scheduler preflight then passed on Lyris and Ptyche at exact source e5dd9246. Functional jobs 2376637, 2376638, 2372711, and 2372712 are pending and are not performance evidence.",
+    "verification_job": "2376637 and 2376638 pending on Ptyche; 2372711 and 2372712 pending on Lyris"
   }
 ]
