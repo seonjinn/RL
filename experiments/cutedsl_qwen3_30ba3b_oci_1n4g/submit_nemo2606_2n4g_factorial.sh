@@ -26,18 +26,24 @@ WARMUP_UPDATES="${NEMO2606_FACTORIAL_WARMUP_UPDATES:-5}"
 MEASURED_UPDATES="${NEMO2606_FACTORIAL_MEASURED_UPDATES:-20}"
 PROFILE_REPLICATE="${NEMO2606_FACTORIAL_PROFILE_REPLICATE:-0}"
 FUNCTIONAL_GATE="${NEMO2606_FUNCTIONAL_GATE:-0}"
+FUNCTIONAL_CONTEXT="${NEMO2606_FUNCTIONAL_CONTEXT:-g0a0}"
 BENCHMARK_RECIPE="${NEMO2606_FACTORIAL_RECIPE:-examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-factorial.yaml}"
 BENCHMARK_NUM_NODES="${NEMO2606_FACTORIAL_NUM_NODES:-2}"
 BENCHMARK_GPUS_PER_NODE="${NEMO2606_FACTORIAL_GPUS_PER_NODE:-4}"
 BENCHMARK_SEGMENT_SIZE="${NEMO2606_FACTORIAL_SEGMENT_SIZE:-2}"
 TRAIN_GLOBAL_BATCH_SIZE="${NEMO2606_FACTORIAL_TRAIN_GLOBAL_BATCH_SIZE:-16}"
 EXPERT_MODEL_PARALLEL_SIZE="${NEMO2606_FACTORIAL_EXPERT_MODEL_PARALLEL_SIZE:-8}"
+NUM_PROMPTS_PER_STEP="${NEMO2606_FACTORIAL_NUM_PROMPTS_PER_STEP:-}"
+REQUESTED_POLICY_TRAINING_GPU_COUNT="${NEMO2606_FACTORIAL_TRAINING_GPU_COUNT:-}"
+REQUESTED_CONFIG_SEGMENT_SIZE="${NEMO2606_FACTORIAL_CONFIG_SEGMENT_SIZE:-}"
 FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS=60
 readonly CONTEXTS REPLICATES WARMUP_UPDATES MEASURED_UPDATES PROFILE_REPLICATE
-readonly FUNCTIONAL_GATE
+readonly FUNCTIONAL_GATE FUNCTIONAL_CONTEXT
 readonly BENCHMARK_RECIPE BENCHMARK_NUM_NODES BENCHMARK_GPUS_PER_NODE
 readonly BENCHMARK_SEGMENT_SIZE TRAIN_GLOBAL_BATCH_SIZE
 readonly EXPERT_MODEL_PARALLEL_SIZE FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS
+readonly NUM_PROMPTS_PER_STEP
+readonly REQUESTED_POLICY_TRAINING_GPU_COUNT REQUESTED_CONFIG_SEGMENT_SIZE
 
 for positive_integer in \
     "${BENCHMARK_NUM_NODES}" \
@@ -50,6 +56,12 @@ for positive_integer in \
         exit 1
     fi
 done
+if [[ -n "${NUM_PROMPTS_PER_STEP}" ]] && \
+    { [[ ! "${NUM_PROMPTS_PER_STEP}" =~ ^[0-9]+$ ]] || \
+        ((NUM_PROMPTS_PER_STEP < 1)); }; then
+    echo "[ERROR] NEMO2606_FACTORIAL_NUM_PROMPTS_PER_STEP must be empty or a positive integer." >&2
+    exit 1
+fi
 readonly WORLD_SIZE=$((BENCHMARK_NUM_NODES * BENCHMARK_GPUS_PER_NODE))
 if ((WORLD_SIZE % EXPERT_MODEL_PARALLEL_SIZE != 0)); then
     echo "[ERROR] Expert model parallel size must divide the benchmark world size." >&2
@@ -148,7 +160,67 @@ if [[ "${TEST_ONLY}" == "0" ]]; then
     printf '%s\n' "${CUTEDSL_SUBMISSION_GIT_SHA}" > "${RUNTIME_CANARY}"
 fi
 
+resolve_context() {
+    case "$1" in
+        g0a0) full_cg_enabled=0; a2a_enabled=0 ;;
+        g1a0) full_cg_enabled=1; a2a_enabled=0 ;;
+        g0a1) full_cg_enabled=0; a2a_enabled=1 ;;
+        g1a1) full_cg_enabled=1; a2a_enabled=1 ;;
+        *)
+            echo "[ERROR] Unknown factorial context: $1" >&2
+            exit 1
+            ;;
+    esac
+}
+
+resolve_submit_topology() {
+    local require_explicit=$1
+    if [[ -z "${REQUESTED_POLICY_TRAINING_GPU_COUNT}" ]]; then
+        if [[ "${require_explicit}" == "1" ]]; then
+            echo "[ERROR] Full-CG/noncolocated submission requires explicit NEMO2606_FACTORIAL_TRAINING_GPU_COUNT." >&2
+            exit 1
+        fi
+        POLICY_TRAINING_GPU_COUNT=${WORLD_SIZE}
+    else
+        POLICY_TRAINING_GPU_COUNT=${REQUESTED_POLICY_TRAINING_GPU_COUNT}
+    fi
+    if [[ ! "${POLICY_TRAINING_GPU_COUNT}" =~ ^[0-9]+$ ]] || \
+        ((POLICY_TRAINING_GPU_COUNT < 1 || POLICY_TRAINING_GPU_COUNT > WORLD_SIZE)); then
+        echo "[ERROR] Policy-training GPU count must be in [1, ${WORLD_SIZE}]." >&2
+        exit 1
+    fi
+    if ((POLICY_TRAINING_GPU_COUNT % EXPERT_MODEL_PARALLEL_SIZE != 0)); then
+        echo "[ERROR] Expert model parallel size must divide the policy-training GPU count." >&2
+        exit 1
+    fi
+
+    if [[ -z "${REQUESTED_CONFIG_SEGMENT_SIZE}" ]]; then
+        if [[ "${require_explicit}" == "1" ]]; then
+            echo "[ERROR] Full-CG/noncolocated submission requires explicit NEMO2606_FACTORIAL_CONFIG_SEGMENT_SIZE (use null to preserve the recipe)." >&2
+            exit 1
+        fi
+        CONFIG_SEGMENT_SIZE=${BENCHMARK_SEGMENT_SIZE}
+    else
+        CONFIG_SEGMENT_SIZE=${REQUESTED_CONFIG_SEGMENT_SIZE}
+    fi
+    if [[ "${CONFIG_SEGMENT_SIZE}" != "null" ]] && \
+        { [[ ! "${CONFIG_SEGMENT_SIZE}" =~ ^[0-9]+$ ]] || \
+            ((CONFIG_SEGMENT_SIZE < 1)); }; then
+        echo "[ERROR] NeMo config segment size must be null or a positive integer." >&2
+        exit 1
+    fi
+    readonly POLICY_TRAINING_GPU_COUNT CONFIG_SEGMENT_SIZE
+}
+
 if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
+    resolve_context "${FUNCTIONAL_CONTEXT}"
+    if [[ "${full_cg_enabled}" == "1" ]]; then
+        functional_updates=6
+        resolve_submit_topology 1
+    else
+        functional_updates=3
+        resolve_submit_topology 0
+    fi
     env -0 \
         -u COMMAND \
         -u CONTAINER \
@@ -164,6 +236,9 @@ if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
         -u CUTEDSL_BENCHMARK_SEGMENT_SIZE \
         -u CUTEDSL_BENCHMARK_TRAIN_GLOBAL_BATCH_SIZE \
         -u CUTEDSL_BENCHMARK_EXPERT_MODEL_PARALLEL_SIZE \
+        -u CUTEDSL_BENCHMARK_TRAINING_GPU_COUNT \
+        -u CUTEDSL_BENCHMARK_CONFIG_SEGMENT_SIZE \
+        -u CUTEDSL_BENCHMARK_NUM_PROMPTS_PER_STEP \
         -u CUTEDSL_BENCHMARK_ORDER \
         -u CUTEDSL_BENCHMARK_PROFILE \
         -u CUTEDSL_BENCHMARK_RESULT_ROOT \
@@ -191,6 +266,9 @@ if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
         "CUTEDSL_BENCHMARK_SEGMENT_SIZE=${BENCHMARK_SEGMENT_SIZE}" \
         "CUTEDSL_BENCHMARK_TRAIN_GLOBAL_BATCH_SIZE=${TRAIN_GLOBAL_BATCH_SIZE}" \
         "CUTEDSL_BENCHMARK_EXPERT_MODEL_PARALLEL_SIZE=${EXPERT_MODEL_PARALLEL_SIZE}" \
+        "CUTEDSL_BENCHMARK_TRAINING_GPU_COUNT=${POLICY_TRAINING_GPU_COUNT}" \
+        "CUTEDSL_BENCHMARK_CONFIG_SEGMENT_SIZE=${CONFIG_SEGMENT_SIZE}" \
+        "CUTEDSL_BENCHMARK_NUM_PROMPTS_PER_STEP=${NUM_PROMPTS_PER_STEP}" \
         "CUTEDSL_BENCHMARK_RUNTIME_ROOT=${RUNTIME_ROOT}" \
         "CUTEDSL_BENCHMARK_ORDER=on" \
         "CUTEDSL_BENCHMARK_PROFILE=0" \
@@ -198,28 +276,30 @@ if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
         "CUTEDSL_SHARED_HF_HOME=${CUTEDSL_SHARED_HF_HOME}" \
         "CUTEDSL_BENCHMARK_SUBMISSION_GROUP=${SUBMISSION_GROUP}" \
         "NEMO2606_FUNCTIONAL_GATE=1" \
-        "NEMO2606_FUNCTIONAL_UPDATES=3" \
-        "NEMO2606_FACTORIAL_CONTEXT=g0a0" \
-        "NEMO2606_FULL_CG_ENABLED=0" \
-        "NEMO2606_A2A_ENABLED=0" \
+        "NEMO2606_FUNCTIONAL_UPDATES=${functional_updates}" \
+        "NEMO2606_FACTORIAL_CONTEXT=${FUNCTIONAL_CONTEXT}" \
+        "NEMO2606_FULL_CG_ENABLED=${full_cg_enabled}" \
+        "NEMO2606_A2A_ENABLED=${a2a_enabled}" \
         "UV_NO_EDITABLE=1" \
         "SLURM_EXPORT_ENV=ALL" \
         > "${EXPORT_PAYLOAD}"
 
     functional_submission_id=$(sbatch --parsable "${sbatch_args[@]}" \
-        "--job-name=${CUTEDSL_ACCOUNT}-n2606.functional" \
+        "--job-name=${CUTEDSL_ACCOUNT}-n2606.functional.${FUNCTIONAL_CONTEXT}.${SUBMISSION_GROUP}" \
         "--export-file=${EXPORT_PAYLOAD}" \
         "${RAY_SUB}")
     functional_record=$(printf \
-        '{"functional_gate":true,"functional_updates":3,"factorial_context":"g0a0","full_cg_enabled":0,"a2a_enabled":0,"timing_order":"on","profile_enabled":false,"job_id":"%s","submission_group":"%s"}' \
+        '{"functional_gate":true,"functional_updates":%d,"factorial_context":"%s","full_cg_enabled":%s,"a2a_enabled":%s,"timing_order":"on","profile_enabled":false,"job_id":"%s","submission_group":"%s"}' \
+        "${functional_updates}" "${FUNCTIONAL_CONTEXT}" \
+        "${full_cg_enabled}" "${a2a_enabled}" \
         "${functional_submission_id}" "${SUBMISSION_GROUP}")
     printf '%s\n' "${functional_record}"
     if [[ "${TEST_ONLY}" == "0" ]]; then
         printf '%s\n' "${functional_record}" \
             >> "${SUBMISSION_DIR}/${SUBMISSION_GROUP}-functional.jsonl"
-        echo "[INFO] Submitted EP${EXPERT_MODEL_PARALLEL_SIZE} functional gate."
+        echo "[INFO] Submitted EP${EXPERT_MODEL_PARALLEL_SIZE} ${FUNCTIONAL_CONTEXT} functional gate."
     else
-        echo "[INFO] Validated EP${EXPERT_MODEL_PARALLEL_SIZE} functional gate; no job submitted."
+        echo "[INFO] Validated EP${EXPERT_MODEL_PARALLEL_SIZE} ${FUNCTIONAL_CONTEXT} functional gate; no job submitted."
     fi
     exit 0
 fi
@@ -229,19 +309,6 @@ if [[ ${#contexts[@]} -eq 0 ]]; then
     echo "[ERROR] NEMO2606_FACTORIAL_CONTEXTS must not be empty." >&2
     exit 1
 fi
-
-resolve_context() {
-    case "$1" in
-        g0a0) full_cg_enabled=0; a2a_enabled=0 ;;
-        g1a0) full_cg_enabled=1; a2a_enabled=0 ;;
-        g0a1) full_cg_enabled=0; a2a_enabled=1 ;;
-        g1a1) full_cg_enabled=1; a2a_enabled=1 ;;
-        *)
-            echo "[ERROR] Unknown factorial context: $1" >&2
-            exit 1
-            ;;
-    esac
-}
 
 needs_full_cg="0"
 needs_a2a="0"
@@ -269,10 +336,11 @@ if [[ "${TEST_ONLY}" == "0" && "${needs_full_cg}" == "1" ]]; then
         echo "[ERROR] Requested full-CG contexts require the NeMo-RL full-iteration implementation." >&2
         exit 1
     fi
-    if grep -q "colocated generation/refit is not supported" "${full_cg_source}"; then
-        echo "[ERROR] Requested full-CG contexts cannot use this colocated E2E allocation until colocated generation/refit is supported or generation GPUs are added." >&2
-        exit 1
-    fi
+fi
+if [[ "${needs_full_cg}" == "1" ]]; then
+    resolve_submit_topology 1
+else
+    resolve_submit_topology 0
 fi
 
 for ((replicate_index = 0; replicate_index < REPLICATES; replicate_index++)); do
@@ -306,6 +374,9 @@ for ((replicate_index = 0; replicate_index < REPLICATES; replicate_index++)); do
             -u CUTEDSL_BENCHMARK_SEGMENT_SIZE \
             -u CUTEDSL_BENCHMARK_TRAIN_GLOBAL_BATCH_SIZE \
             -u CUTEDSL_BENCHMARK_EXPERT_MODEL_PARALLEL_SIZE \
+            -u CUTEDSL_BENCHMARK_TRAINING_GPU_COUNT \
+            -u CUTEDSL_BENCHMARK_CONFIG_SEGMENT_SIZE \
+            -u CUTEDSL_BENCHMARK_NUM_PROMPTS_PER_STEP \
             -u CUTEDSL_BENCHMARK_ORDER \
             -u CUTEDSL_BENCHMARK_REPLICATE \
             -u CUTEDSL_BENCHMARK_PROFILE \
@@ -335,6 +406,9 @@ for ((replicate_index = 0; replicate_index < REPLICATES; replicate_index++)); do
             "CUTEDSL_BENCHMARK_SEGMENT_SIZE=${BENCHMARK_SEGMENT_SIZE}" \
             "CUTEDSL_BENCHMARK_TRAIN_GLOBAL_BATCH_SIZE=${TRAIN_GLOBAL_BATCH_SIZE}" \
             "CUTEDSL_BENCHMARK_EXPERT_MODEL_PARALLEL_SIZE=${EXPERT_MODEL_PARALLEL_SIZE}" \
+            "CUTEDSL_BENCHMARK_TRAINING_GPU_COUNT=${POLICY_TRAINING_GPU_COUNT}" \
+            "CUTEDSL_BENCHMARK_CONFIG_SEGMENT_SIZE=${CONFIG_SEGMENT_SIZE}" \
+            "CUTEDSL_BENCHMARK_NUM_PROMPTS_PER_STEP=${NUM_PROMPTS_PER_STEP}" \
             "CUTEDSL_BENCHMARK_RUNTIME_ROOT=${RUNTIME_ROOT}" \
             "CUTEDSL_BENCHMARK_ORDER=${timing_order}" \
             "CUTEDSL_BENCHMARK_REPLICATE=${replicate_index}" \

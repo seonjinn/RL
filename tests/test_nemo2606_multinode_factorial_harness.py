@@ -31,6 +31,11 @@ RECIPE = (
     / "examples/configs/recipes/llm/performance"
     / "grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-factorial.yaml"
 )
+FULL_CG_RECIPE = (
+    PROJECT_ROOT
+    / "examples/configs/recipes/llm/performance"
+    / "grpo-qwen3-30ba3b-2n4g-megatron-mxfp8-full-cg-noncolocated.yaml"
+)
 OFFICIAL_RECIPE = (
     PROJECT_ROOT
     / "examples/configs/recipes/llm/performance"
@@ -256,6 +261,10 @@ def _run_functional_summarizer(
     constant_overrides: dict[str, int] | None = None,
     evidence_suffix: str = "",
     training_gpu_count: int = 8,
+    functional_updates: int = 3,
+    feature_context: str = "g0a0",
+    full_cg_enabled: bool = False,
+    a2a_enabled: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     source = MATRIX_PAYLOAD.read_text()
     summarizer = source.split("# CUTEDSL_FUNCTIONAL_SUMMARIZER_START\n", 1)[1].split(
@@ -274,7 +283,7 @@ def _run_functional_summarizer(
     ray_log_dir = tmp_path / "ray-logs"
     arm_dir.mkdir(parents=True)
     ray_log_dir.mkdir()
-    metric_steps = {str(step): float(step + 1) for step in range(3)}
+    metric_steps = {str(step): float(step + 1) for step in range(functional_updates)}
     metrics = {
         metric: metric_steps
         for metric in (
@@ -285,6 +294,26 @@ def _run_functional_summarizer(
             "timing/train/prepare_for_generation/transfer_and_update_weights",
         )
     }
+    if full_cg_enabled:
+        metrics.update(
+            {
+                "train/full_cuda_graph_warmup_calls": {
+                    str(step): float(min(step + 1, 3))
+                    for step in range(functional_updates)
+                },
+                "train/full_cuda_graph_capture_calls": {
+                    str(step): float(1 if step >= 3 else 0)
+                    for step in range(functional_updates)
+                },
+                "train/full_cuda_graph_replay_calls": {
+                    str(step): float(max(0, step - 2))
+                    for step in range(functional_updates)
+                },
+                "train/full_cuda_graph_reset_calls": {
+                    str(step): 0.0 for step in range(functional_updates)
+                },
+            }
+        )
     (arm_dir / "metrics.json").write_text(json.dumps(metrics))
     evidence_lines = ["kernel=GroupedGemmGluSm100"]
     evidence_lines.extend(
@@ -304,7 +333,10 @@ def _run_functional_summarizer(
     env.update(
         {
             "CONTAINER_RESULT_DIR": str(result_dir),
-            "FUNCTIONAL_UPDATES": "3",
+            "FUNCTIONAL_UPDATES": str(functional_updates),
+            "FEATURE_CONTEXT": feature_context,
+            "NEMO2606_FULL_CG_ENABLED": "1" if full_cg_enabled else "0",
+            "NEMO2606_A2A_ENABLED": "1" if a2a_enabled else "0",
             "RAY_CLUSTER_LOG_DIR": str(ray_log_dir),
             "TRAINING_GPU_COUNT": str(training_gpu_count),
         }
@@ -1187,6 +1219,12 @@ record = {
     "failure_diagnostic_timeout_seconds": payload["FAILURE_DIAGNOSTIC_TIMEOUT_SECONDS"],
     "result_root": payload["CUTEDSL_BENCHMARK_RESULT_ROOT"],
     "shared_hf_home": payload["CUTEDSL_SHARED_HF_HOME"],
+    "recipe": payload["CUTEDSL_BENCHMARK_RECIPE"],
+    "train_global_batch_size": payload["CUTEDSL_BENCHMARK_TRAIN_GLOBAL_BATCH_SIZE"],
+    "expert_model_parallel_size": payload["CUTEDSL_BENCHMARK_EXPERT_MODEL_PARALLEL_SIZE"],
+    "num_prompts_per_step": payload.get("CUTEDSL_BENCHMARK_NUM_PROMPTS_PER_STEP", ""),
+    "training_gpu_count": payload["CUTEDSL_BENCHMARK_TRAINING_GPU_COUNT"],
+    "config_segment_size": payload["CUTEDSL_BENCHMARK_CONFIG_SEGMENT_SIZE"],
 }
 with Path(os.environ["MOCK_SBATCH_CALLS"]).open("a") as output:
     output.write(json.dumps(record) + "\\n")
@@ -1265,6 +1303,12 @@ print(f"mock-{record['context']}-{record['replicate']}")
 
     calls_path.unlink()
     env["NEMO2606_FACTORIAL_CONTEXTS"] = "g0a0,g1a0,g0a1,g1a1"
+    env["NEMO2606_FACTORIAL_RECIPE"] = str(FULL_CG_RECIPE.relative_to(PROJECT_ROOT))
+    env["NEMO2606_FACTORIAL_TRAIN_GLOBAL_BATCH_SIZE"] = "8"
+    env["NEMO2606_FACTORIAL_EXPERT_MODEL_PARALLEL_SIZE"] = "4"
+    env["NEMO2606_FACTORIAL_NUM_PROMPTS_PER_STEP"] = "4"
+    env["NEMO2606_FACTORIAL_TRAINING_GPU_COUNT"] = "4"
+    env["NEMO2606_FACTORIAL_CONFIG_SEGMENT_SIZE"] = "null"
     all_contexts = subprocess.run(
         ["bash", str(SUBMITTER), "--test-only"],
         cwd=PROJECT_ROOT,
@@ -1284,6 +1328,14 @@ print(f"mock-{record['context']}-{record['replicate']}")
         )
         assert [call["order"] for call in context_calls] == expected_orders
         assert [call["replicate"] for call in context_calls] == ["0", "1", "2"]
+        assert {call["recipe"] for call in context_calls} == {
+            str(FULL_CG_RECIPE.relative_to(PROJECT_ROOT))
+        }
+        assert {call["train_global_batch_size"] for call in context_calls} == {"8"}
+        assert {call["expert_model_parallel_size"] for call in context_calls} == {"4"}
+        assert {call["num_prompts_per_step"] for call in context_calls} == {"4"}
+        assert {call["training_gpu_count"] for call in context_calls} == {"4"}
+        assert {call["config_segment_size"] for call in context_calls} == {"null"}
 
 
 def test_official_submitter_exports_matched_4n4g_performance_jobs(
@@ -1484,6 +1536,225 @@ print("mock-functional")
     assert "--test-only" in call["argv"]
 
 
+@pytest.mark.parametrize(
+    ("context", "expected_full_cg", "expected_a2a", "expected_updates"),
+    (
+        ("g0a0", "0", "0", "3"),
+        ("g0a1", "0", "1", "3"),
+        ("g1a0", "1", "0", "6"),
+        ("g1a1", "1", "1", "6"),
+    ),
+)
+def test_functional_submitter_exports_requested_feature_context(
+    tmp_path: Path,
+    context: str,
+    expected_full_cg: str,
+    expected_a2a: str,
+    expected_updates: str,
+) -> None:
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+    calls_path = tmp_path / "calls.jsonl"
+    mock_sbatch = mock_bin / "sbatch"
+    mock_sbatch.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+payload_arg = next(arg for arg in sys.argv[1:] if arg.startswith("--export-file="))
+payload = {}
+for entry in Path(payload_arg.split("=", 1)[1]).read_bytes().split(b"\\0"):
+    if entry:
+        key, value = entry.decode().split("=", 1)
+        payload[key] = value
+record = {
+    "functional_updates": payload["NEMO2606_FUNCTIONAL_UPDATES"],
+    "context": payload["NEMO2606_FACTORIAL_CONTEXT"],
+    "full_cg": payload["NEMO2606_FULL_CG_ENABLED"],
+    "a2a": payload["NEMO2606_A2A_ENABLED"],
+    "training_gpu_count": payload["CUTEDSL_BENCHMARK_TRAINING_GPU_COUNT"],
+    "config_segment_size": payload["CUTEDSL_BENCHMARK_CONFIG_SEGMENT_SIZE"],
+}
+with Path(os.environ["MOCK_SBATCH_CALLS"]).open("a") as output:
+    output.write(json.dumps(record) + "\\n")
+print("mock-functional")
+"""
+    )
+    mock_sbatch.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{mock_bin}:{env['PATH']}",
+            "MOCK_SBATCH_CALLS": str(calls_path),
+            "CUTEDSL_CLUSTER_PROFILE": "pre_tyche",
+            "NEMO2606_FUNCTIONAL_GATE": "1",
+            "NEMO2606_FUNCTIONAL_CONTEXT": context,
+        }
+    )
+    if context.startswith("g1"):
+        env.update(
+            {
+                "NEMO2606_FACTORIAL_RECIPE": str(
+                    FULL_CG_RECIPE.relative_to(PROJECT_ROOT)
+                ),
+                "NEMO2606_FACTORIAL_TRAIN_GLOBAL_BATCH_SIZE": "4",
+                "NEMO2606_FACTORIAL_EXPERT_MODEL_PARALLEL_SIZE": "4",
+                "NEMO2606_FACTORIAL_TRAINING_GPU_COUNT": "4",
+                "NEMO2606_FACTORIAL_CONFIG_SEGMENT_SIZE": "null",
+            }
+        )
+
+    result = subprocess.run(
+        ["bash", str(SUBMITTER), "--test-only"],
+        cwd=PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = [json.loads(line) for line in calls_path.read_text().splitlines()]
+    assert calls == [
+        {
+            "functional_updates": expected_updates,
+            "context": context,
+            "full_cg": expected_full_cg,
+            "a2a": expected_a2a,
+            "training_gpu_count": "4" if context.startswith("g1") else "8",
+            "config_segment_size": "null" if context.startswith("g1") else "2",
+        }
+    ]
+
+
+def test_submitter_requires_explicit_noncolocated_topology_for_full_cg(
+    tmp_path: Path,
+) -> None:
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+    mock_sbatch = mock_bin / "sbatch"
+    mock_sbatch.write_text("#!/bin/bash\nexit 0\n")
+    mock_sbatch.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{mock_bin}:{env['PATH']}",
+            "CUTEDSL_CLUSTER_PROFILE": "pre_tyche",
+            "NEMO2606_FACTORIAL_CONTEXTS": "g1a0",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(SUBMITTER), "--test-only"],
+        cwd=PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "requires explicit NEMO2606_FACTORIAL_TRAINING_GPU_COUNT" in result.stderr
+
+
+def test_functional_job_names_are_unique_across_submissions(tmp_path: Path) -> None:
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+    calls_path = tmp_path / "calls.txt"
+    mock_sbatch = mock_bin / "sbatch"
+    mock_sbatch.write_text(
+        """#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+
+job_name = next(arg for arg in sys.argv[1:] if arg.startswith("--job-name="))
+with Path(os.environ["MOCK_SBATCH_CALLS"]).open("a") as output:
+    output.write(job_name + "\\n")
+print("mock-functional")
+"""
+    )
+    mock_sbatch.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{mock_bin}:{env['PATH']}",
+            "MOCK_SBATCH_CALLS": str(calls_path),
+            "CUTEDSL_CLUSTER_PROFILE": "pre_tyche",
+            "NEMO2606_FUNCTIONAL_GATE": "1",
+        }
+    )
+
+    for _ in range(2):
+        result = subprocess.run(
+            ["bash", str(SUBMITTER), "--test-only"],
+            cwd=PROJECT_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+
+    job_names = calls_path.read_text().splitlines()
+    assert len(job_names) == 2
+    assert len(set(job_names)) == 2
+    assert all("-n2606.functional.g0a0." in job_name for job_name in job_names)
+
+
+def test_submitter_does_not_require_project_python_environment(tmp_path: Path) -> None:
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+    uv_marker = tmp_path / "uv-called"
+    mock_uv = mock_bin / "uv"
+    mock_uv.write_text(f"#!/bin/bash\ntouch {shlex.quote(str(uv_marker))}\nexit 99\n")
+    mock_uv.chmod(0o755)
+    mock_sbatch = mock_bin / "sbatch"
+    mock_sbatch.write_text("#!/bin/bash\necho mock-functional\n")
+    mock_sbatch.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{mock_bin}:{env['PATH']}",
+            "CUTEDSL_CLUSTER_PROFILE": "pre_tyche",
+            "NEMO2606_FUNCTIONAL_GATE": "1",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(SUBMITTER), "--test-only"],
+        cwd=PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not uv_marker.exists()
+
+
+def test_full_cg_preflight_checks_resolved_recipe_allocation_not_source_text() -> None:
+    submitter_source = SUBMITTER.read_text()
+    payload_source = MATRIX_PAYLOAD.read_text()
+
+    assert (
+        'generation_allocation = on_config["policy"]["generation"]["colocated"]'
+        in payload_source
+    )
+    assert "expected_policy_gpu_count" in payload_source
+    assert 'int(os.environ["TRAINING_GPU_COUNT"])' in payload_source
+    assert (
+        "policy-training GPU count does not match resolved allocation" in payload_source
+    )
+    assert '"resource_allocation": {' in payload_source
+    assert '"policy_training_gpu_count": expected_policy_gpu_count' in payload_source
+    assert "selected_recipe_allocation" not in submitter_source
+    assert "uv run --no-sync python" not in submitter_source
+    assert (
+        'grep -q "colocated generation/refit is not supported"' not in submitter_source
+    )
+    assert 'grep -q "colocated generation/refit is not supported"' not in payload_source
+
+
 def test_matrix_payload_reuses_collectors_in_existing_ray_mode() -> None:
     source = MATRIX_PAYLOAD.read_text()
     assert 'EXISTING_RAY="${CUTEDSL_BENCHMARK_EXISTING_RAY:-0}"' in source
@@ -1509,6 +1780,12 @@ def test_matrix_payload_reuses_collectors_in_existing_ray_mode() -> None:
         in source
     )
     assert 'TRAINING_GPU_COUNT = int(os.environ["TRAINING_GPU_COUNT"])' in source
+    assert '[[ "${worker_units}" != "${ALLOCATION_GPU_COUNT}" ]]' in source
+    assert (
+        'CONFIG_SEGMENT_SIZE="${CUTEDSL_BENCHMARK_CONFIG_SEGMENT_SIZE:-${BENCHMARK_SEGMENT_SIZE}}"'
+        in source
+    )
+    assert 'if [[ "${CONFIG_SEGMENT_SIZE}" != "null" ]]; then' in source
     for metric in (
         "timing/train/total_step_time",
         "timing/train/generation",
@@ -2048,12 +2325,10 @@ def test_functional_payload_fails_closed_before_selecting_one_arm() -> None:
         'FUNCTIONAL_GATE="${NEMO2606_FUNCTIONAL_GATE:-0}"',
         'FUNCTIONAL_UPDATES="${NEMO2606_FUNCTIONAL_UPDATES:-3}"',
         '[[ "${FUNCTIONAL_GATE}" == "0" || "${FUNCTIONAL_GATE}" == "1" ]]',
+        "((FUNCTIONAL_UPDATES < 6))",
         '[[ "${FUNCTIONAL_UPDATES}" == "3" ]]',
         '[[ "${TIMING_ORDER}" == "on" ]]',
         '[[ "${PROFILE_ENABLED}" == "0" ]]',
-        '[[ "${FEATURE_CONTEXT}" == "g0a0" ]]',
-        '[[ "${NEMO2606_FULL_CG_ENABLED}" == "0" ]]',
-        '[[ "${NEMO2606_A2A_ENABLED}" == "0" ]]',
         "timing_arms=(on)",
         "WARMUP_UPDATES=0",
         "MEASURED_UPDATES=0",
@@ -2071,6 +2346,7 @@ def test_functional_payload_fails_closed_before_selecting_one_arm() -> None:
     assert functional_branch < timing_branch < timing_order_validation
     assert source.index("WARMUP_UPDATES < 5") > timing_branch
     assert source.index("MEASURED_UPDATES < 10") > timing_branch
+    assert "expected_val_period = 0 if expected_full_cg else 10" in source
 
 
 def test_performance_payload_accepts_only_cutedsl_on_for_full_cg() -> None:
@@ -2100,6 +2376,18 @@ def test_performance_payload_accepts_only_cutedsl_on_for_full_cg() -> None:
     )
     for fragment in required:
         assert fragment in source, fragment
+
+
+def test_a2a_performance_requires_two_local_microbatches() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+
+    assert (
+        'if [[ "${FUNCTIONAL_GATE}" == "0" && "${NEMO2606_A2A_ENABLED}" == "1" ]]'
+        in source
+    )
+    assert "MIN_A2A_PERFORMANCE_GLOBAL_BATCH=$((TRAINING_GPU_COUNT * 2))" in source
+    assert "A2A performance requires at least two local microbatches" in source
+    assert '"grpo.num_prompts_per_step=${NUM_PROMPTS_PER_STEP}"' in source
 
 
 def test_base_config_identity_ignores_run_paths_and_optional_feature_keys() -> None:
@@ -2169,7 +2457,8 @@ def test_functional_payload_uses_effective_segment_and_one_arm_manifest() -> Non
     source = MATRIX_PAYLOAD.read_text()
     required = (
         'BENCHMARK_SEGMENT_SIZE="${CUTEDSL_BENCHMARK_SEGMENT_SIZE:-${CUTEDSL_SEGMENT:-1}}"',
-        '"cluster.segment_size=${BENCHMARK_SEGMENT_SIZE}"',
+        'CONFIG_SEGMENT_SIZE="${CUTEDSL_BENCHMARK_CONFIG_SEGMENT_SIZE:-${BENCHMARK_SEGMENT_SIZE}}"',
+        'COMMON_OVERRIDES+=("cluster.segment_size=${CONFIG_SEGMENT_SIZE}")',
         '"functional_gate": os.environ["FUNCTIONAL_GATE"] == "1"',
         '"performance_eligible": os.environ["FUNCTIONAL_GATE"] != "1"',
         '"segment_size": cluster_config["segment_size"]',
@@ -2187,7 +2476,7 @@ def test_functional_payload_uses_effective_segment_and_one_arm_manifest() -> Non
     assert 'os.environ["CUTEDSL_SEGMENT"]' not in manifest_block
 
 
-def test_functional_payload_records_three_update_component_and_runtime_evidence() -> (
+def test_functional_payload_records_context_aware_component_and_runtime_evidence() -> (
     None
 ):
     source = MATRIX_PAYLOAD.read_text()
@@ -2205,7 +2494,7 @@ def test_functional_payload_records_three_update_component_and_runtime_evidence(
         'if completed_updates != int(os.environ["FUNCTIONAL_UPDATES"]):',
         'get("event") == "megatron_policy_offload_memory"',
         "phase=after_completion",
-        "offload_sequence=3",
+        'fields.get("offload_sequence") == str(required_offload_sequence)',
         "global_rank",
         "cgroup_memory_peak_gib",
         "cgroup_memory_max_gib",
@@ -2213,7 +2502,7 @@ def test_functional_payload_records_three_update_component_and_runtime_evidence(
         "RAY_CLUSTER_LOG_DIR",
         "GroupedGemmGluSm100",
         "MAX_FUNCTIONAL_EVIDENCE_MATCHES",
-        '"Run three-update EP${EXPERT_MODEL_PARALLEL_SIZE} CuTeDSL ON functional arm"',
+        '"Run ${FUNCTIONAL_UPDATES}-update ${FEATURE_CONTEXT} EP${EXPERT_MODEL_PARALLEL_SIZE} CuTeDSL ON functional arm"',
         'len(completed_ranks) != int(os.environ["TRAINING_GPU_COUNT"])',
     )
     for fragment in required:
@@ -2302,6 +2591,39 @@ def test_functional_summarizer_accepts_first_post_update_offload_sequence(
         range(8)
     )
     assert summary["offload_memory_evidence"]["required_offload_sequence"] == 3
+
+
+def test_functional_summarizer_records_six_update_full_cg_context(
+    tmp_path: Path,
+) -> None:
+    result = _run_functional_summarizer(
+        tmp_path,
+        offload_sequence=6,
+        training_gpu_count=4,
+        functional_updates=6,
+        feature_context="g1a1",
+        full_cg_enabled=True,
+        a2a_enabled=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    summary = json.loads(
+        (tmp_path / "results" / "functional_gate_summary.json").read_text()
+    )
+    assert summary["completed_updates"] == 6
+    assert summary["feature_context"] == "g1a1"
+    assert summary["full_cg_enabled"] is True
+    assert summary["a2a_enabled"] is True
+    assert summary["full_cuda_graph_execution_evidence"]["final_counters"] == {
+        "warmup_calls": 3,
+        "capture_calls": 1,
+        "replay_calls": 3,
+        "reset_calls": 0,
+    }
+    assert summary["offload_memory_evidence"]["required_offload_sequence"] == 6
+    assert summary["offload_memory_evidence"]["completed_global_ranks"] == list(
+        range(4)
+    )
 
 
 def test_functional_summarizer_accepts_finite_cgroup_fraction_below_limit(
