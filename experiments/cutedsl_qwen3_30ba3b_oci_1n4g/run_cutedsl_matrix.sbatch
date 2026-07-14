@@ -24,6 +24,11 @@
 
 set -euo pipefail
 
+if [[ "${UV_NO_EDITABLE-}" != "1" ]]; then
+    echo "[ERROR] UV_NO_EDITABLE=1 is required for isolated local-package builds." >&2
+    exit 1
+fi
+
 RECIPE="${CUTEDSL_BENCHMARK_RECIPE:-examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-1n4g-megatron-mxfp8-cutedsl.yaml}"
 EXISTING_RAY="${CUTEDSL_BENCHMARK_EXISTING_RAY:-0}"
 BENCHMARK_NUM_NODES="${CUTEDSL_BENCHMARK_NUM_NODES:-1}"
@@ -348,6 +353,41 @@ if [[ "${GIT_SHA}" != "${UPSTREAM_SHA}" ]]; then
 fi
 export GIT_SHA GIT_BRANCH UPSTREAM_REF UPSTREAM_SHA IMAGE IMAGE_SHA256
 
+HOST_MCORE_BRIDGE_ROOT="${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge"
+HOST_MCORE_SOURCE_ROOT="${HOST_MCORE_BRIDGE_ROOT}/3rdparty/Megatron-LM"
+HOST_MCORE_SOURCE_DATASETS="${HOST_MCORE_SOURCE_ROOT}/megatron/core/datasets"
+MCORE_SOURCE_SHA=$(git -C "${HOST_MCORE_BRIDGE_ROOT}" \
+    rev-parse HEAD:3rdparty/Megatron-LM)
+if [[ ! "${MCORE_SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]] || \
+    [[ "$(git -C "${HOST_MCORE_SOURCE_ROOT}" rev-parse HEAD)" != "${MCORE_SOURCE_SHA}" ]]; then
+    echo "[ERROR] Canonical MCore checkout does not match the pinned Bridge gitlink." >&2
+    exit 1
+fi
+readonly HOST_MCORE_BRIDGE_ROOT HOST_MCORE_SOURCE_ROOT
+readonly HOST_MCORE_SOURCE_DATASETS MCORE_SOURCE_SHA
+
+reject_canonical_mcore_helpers() {
+    local datasets_root="$1"
+    local artifact
+    artifact=$(find "${datasets_root}" -mindepth 1 -maxdepth 1 \
+        -name 'helpers_cpp*' -print -quit)
+    if [[ -n "${artifact}" ]]; then
+        echo "[ERROR] Refusing to use a canonical MCore checkout with a generated helpers_cpp artifact." >&2
+        exit 1
+    fi
+}
+reject_canonical_mcore_helpers "${HOST_MCORE_SOURCE_DATASETS}"
+
+MCORE_SOURCE_ROOT="${CONTAINER_REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
+MCORE_SOURCE_DATASETS="${MCORE_SOURCE_ROOT}/megatron/core/datasets"
+MCORE_OVERLAY_ROOT="${CONTAINER_RUNTIME_DIR}/mcore-overlay"
+MCORE_OVERLAY_DATASETS="${MCORE_OVERLAY_ROOT}/megatron/core/datasets"
+RUNTIME_TOOL_BIN="${CONTAINER_RUNTIME_DIR}/runtime-bin"
+readonly MCORE_SOURCE_ROOT MCORE_SOURCE_DATASETS MCORE_OVERLAY_ROOT
+readonly MCORE_OVERLAY_DATASETS RUNTIME_TOOL_BIN
+export MCORE_SOURCE_ROOT MCORE_SOURCE_DATASETS MCORE_SOURCE_SHA
+export MCORE_OVERLAY_ROOT MCORE_OVERLAY_DATASETS RUNTIME_TOOL_BIN
+
 printf '%s\n' "${SUBMODULE_STATUS}" > "${RESULT_DIR}/submodule_status.txt"
 printf '%s  %s\n' "${IMAGE_SHA256}" "${IMAGE}" > "${RESULT_DIR}/image.sha256"
 cutedsl_write_event preflight pass 0 \
@@ -426,7 +466,6 @@ mkdir -p "${MEGATRON_CHECKPOINT_ROOT}"
 export NRL_MEGATRON_CHECKPOINT_DIR="${MEGATRON_CHECKPOINT_ROOT}"
 export NRL_FORCE_REBUILD_VENVS="true"
 export NRL_IGNORE_VERSION_MISMATCH="1"
-export PYTHONPATH="${CONTAINER_REPO_ROOT}:${PYTHONPATH:-}"
 export TORCH_EXTENSIONS_DIR="${CONTAINER_RUNTIME_DIR}/torch_extensions"
 export UV_PROJECT_ENVIRONMENT="${CONTAINER_RUNTIME_DIR}/venv"
 export VIRTUAL_ENV="${UV_PROJECT_ENVIRONMENT}"
@@ -438,6 +477,8 @@ export UV_NO_MODIFY_PATH=1
 export UV_INSTALL_DIR="${CONTAINER_RUNTIME_DIR}/uv-bin"
 export UV_PYTHON_INSTALL_DIR="${CONTAINER_RUNTIME_DIR}/uv-python"
 export UV_BIN="${UV_INSTALL_DIR}/uv"
+export PATH="${RUNTIME_TOOL_BIN}:${UV_PROJECT_ENVIRONMENT}/bin:${PATH}"
+export PYTHONPATH="${MCORE_OVERLAY_ROOT}:${CONTAINER_REPO_ROOT}:${PYTHONPATH:-}"
 # CUTEDSL_SHARED_HF_PREFLIGHT_START
 if [[ "${CUTEDSL_SHARED_HF_HOME-}" != /* ]]; then
     echo "[ERROR] shared Hugging Face cache root must be an absolute path." >&2
@@ -492,6 +533,17 @@ printf '[INFO] Container temporary directory: TMPDIR=%s uid=%s gid=%s\n' \
     "${TMPDIR}" "$(id -u)" "$(id -g)"
 [[ "${TMPDIR}" == "${CONTAINER_RUNTIME_DIR}/tmp" ]]
 [[ -d "${TMPDIR}" && -w "${TMPDIR}" ]]
+reject_canonical_mcore_helpers() {
+    local datasets_root="$1"
+    local artifact
+    artifact=$(find "${datasets_root}" -mindepth 1 -maxdepth 1 \
+        -name 'helpers_cpp*' -print -quit)
+    if [[ -n "${artifact}" ]]; then
+        echo "[ERROR] Canonical MCore contains a generated helpers_cpp artifact." >&2
+        exit 1
+    fi
+}
+reject_canonical_mcore_helpers "${MCORE_SOURCE_DATASETS}"
 cd "${CONTAINER_REPO_ROOT}"
 [[ "${NVTE_CUDA_ARCHS}" == "100" ]]
 if ! command -v python3 >/dev/null; then
@@ -527,10 +579,119 @@ runtime_prefix=$("${UV_BIN}" run --active --no-sync python -c 'import sys; print
     --shared-manifest "${SHARED_HF_MANIFEST}" \
     --job-manifest "${CONTAINER_RESULT_DIR}/hf_cache_manifest.json"
 
+# CUTEDSL_MCORE_OVERLAY_BOOTSTRAP_START
+if [[ -e "${MCORE_OVERLAY_ROOT}" || -e "${RUNTIME_TOOL_BIN}" ]]; then
+    echo "[ERROR] MCore overlay or runtime tool directory already exists." >&2
+    exit 1
+fi
+mkdir -p "${MCORE_OVERLAY_ROOT}" "${RUNTIME_TOOL_BIN}"
+git -C "${MCORE_SOURCE_ROOT}" archive --format=tar "${MCORE_SOURCE_SHA}" \
+    | tar -xf - -C "${MCORE_OVERLAY_ROOT}"
+
+runtime_python_real=$(
+    "${RUNTIME_PYTHON}" -c 'import os, sys; print(os.path.realpath(sys.executable))'
+)
+runtime_python_config="$(dirname "${runtime_python_real}")/python3-config"
+if [[ ! -x "${runtime_python_config}" ]]; then
+    echo "[ERROR] Matching uv-base python3-config is unavailable." >&2
+    exit 1
+fi
+ln -s "${runtime_python_config}" "${RUNTIME_TOOL_BIN}/python3-config"
+if [[ "$(command -v python3-config)" != "${RUNTIME_TOOL_BIN}/python3-config" ]]; then
+    echo "[ERROR] Runtime python3-config does not resolve through the isolated tool directory." >&2
+    exit 1
+fi
+if [[ "$(python3 -c 'import os, sys; print(os.path.realpath(sys.executable))')" != \
+    "${runtime_python_real}" ]]; then
+    echo "[ERROR] Helper build python3 does not match the locked runtime interpreter." >&2
+    exit 1
+fi
+python_extension_suffix=$(
+    "${RUNTIME_PYTHON}" -c 'import sysconfig; print(sysconfig.get_config_var("EXT_SUFFIX"))'
+)
+if [[ -z "${python_extension_suffix}" || \
+    "$(python3-config --extension-suffix)" != "${python_extension_suffix}" ]]; then
+    echo "[ERROR] Runtime Python and python3-config extension suffixes do not match." >&2
+    exit 1
+fi
+
+make -C "${MCORE_OVERLAY_DATASETS}" -j1
+helper_relative_path="megatron/core/datasets/helpers_cpp${python_extension_suffix}"
+helper_path="${MCORE_OVERLAY_ROOT}/${helper_relative_path}"
+if [[ ! -f "${helper_path}" || -L "${helper_path}" ]]; then
+    echo "[ERROR] MCore helper is not the exact regular ABI-suffixed overlay artifact." >&2
+    exit 1
+fi
+if [[ -e "${MCORE_OVERLAY_DATASETS}/helpers_cpp" ]]; then
+    echo "[ERROR] MCore overlay produced a suffixless helper artifact." >&2
+    exit 1
+fi
+if ! make -q -C "${MCORE_OVERLAY_DATASETS}"; then
+    echo "[ERROR] MCore helper target is not up to date after the serial build." >&2
+    exit 1
+fi
+
+MCORE_EXPECTED_HELPER="${helper_path}" PYTHONPATH="${MCORE_OVERLAY_ROOT}" \
+    "${RUNTIME_PYTHON}" - <<'PY'
+import os
+from pathlib import Path
+
+import megatron.core.datasets.helpers_cpp as helper_module
+
+module_origin = Path(helper_module.__file__).resolve()
+expected_origin = Path(os.environ["MCORE_EXPECTED_HELPER"]).resolve()
+if module_origin != expected_origin:
+    raise RuntimeError("MCore helper import did not resolve inside the job overlay")
+getattr(helper_module, "build_mapping")
+PY
+
+reject_canonical_mcore_helpers "${MCORE_SOURCE_DATASETS}"
+for canonical_root in \
+    "${CONTAINER_REPO_ROOT}" \
+    "$(dirname "$(dirname "${MCORE_SOURCE_ROOT}")")" \
+    "${MCORE_SOURCE_ROOT}"; do
+    canonical_status=$(git -C "${canonical_root}" status --porcelain \
+        --untracked-files=all --ignore-submodules=none)
+    if [[ -n "${canonical_status}" ]]; then
+        echo "[ERROR] Canonical source changed during isolated MCore bootstrap." >&2
+        exit 1
+    fi
+done
+
+helper_sha256=$(sha256sum "${helper_path}" | awk '{print $1}')
+export MCORE_PYTHON_EXTENSION_SUFFIX="${python_extension_suffix}"
+export MCORE_HELPER_RELATIVE_PATH="${helper_relative_path}"
+export MCORE_HELPER_SHA256="${helper_sha256}"
+"${RUNTIME_PYTHON}" - <<'PY'
+import json
+import os
+from pathlib import Path
+
+mcore_runtime = {
+    "source_sha": os.environ["MCORE_SOURCE_SHA"],
+    "overlay_mode": "tracked_git_archive",
+    "uv_no_editable": os.environ["UV_NO_EDITABLE"] == "1",
+    "python_extension_suffix": os.environ["MCORE_PYTHON_EXTENSION_SUFFIX"],
+    "helper_relative_path": os.environ["MCORE_HELPER_RELATIVE_PATH"],
+    "helper_sha256": os.environ["MCORE_HELPER_SHA256"],
+    "helper_origin_scope": "job_mcore_overlay",
+    "python3_config_source": "matching_uv_base_python",
+    "make_query_up_to_date": True,
+    "canonical_helper_artifact_count_before": 0,
+    "canonical_helper_artifact_count_after": 0,
+}
+result_dir = Path(os.environ["CONTAINER_RESULT_DIR"])
+(result_dir / "mcore_runtime.json").write_text(
+    json.dumps(mcore_runtime, indent=2, sort_keys=True) + "\n"
+)
+PY
+# CUTEDSL_MCORE_OVERLAY_BOOTSTRAP_END
+
 "${UV_BIN}" run --active --no-sync python - <<'PY'
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -609,6 +770,38 @@ def canonical_base_config_sha256(config: dict[str, Any]) -> str:
 
 
 result_dir = Path(os.environ["CONTAINER_RESULT_DIR"])
+MCORE_RUNTIME_FIELDS = {
+    "source_sha",
+    "overlay_mode",
+    "uv_no_editable",
+    "python_extension_suffix",
+    "helper_relative_path",
+    "helper_sha256",
+    "helper_origin_scope",
+    "python3_config_source",
+    "make_query_up_to_date",
+    "canonical_helper_artifact_count_before",
+    "canonical_helper_artifact_count_after",
+}
+mcore_runtime = json.loads((result_dir / "mcore_runtime.json").read_text())
+assert set(mcore_runtime) == MCORE_RUNTIME_FIELDS
+assert re.fullmatch(r"[0-9a-f]{40}", mcore_runtime["source_sha"])
+assert re.fullmatch(r"[0-9a-f]{64}", mcore_runtime["helper_sha256"])
+assert mcore_runtime["source_sha"] == os.environ["MCORE_SOURCE_SHA"]
+assert mcore_runtime["overlay_mode"] == "tracked_git_archive"
+assert mcore_runtime["uv_no_editable"] is True
+assert mcore_runtime["helper_origin_scope"] == "job_mcore_overlay"
+assert mcore_runtime["python3_config_source"] == "matching_uv_base_python"
+assert mcore_runtime["make_query_up_to_date"] is True
+assert mcore_runtime["canonical_helper_artifact_count_before"] == 0
+assert mcore_runtime["canonical_helper_artifact_count_after"] == 0
+assert mcore_runtime["python_extension_suffix"]
+helper_relative_path = Path(mcore_runtime["helper_relative_path"])
+assert not helper_relative_path.is_absolute()
+assert helper_relative_path.parent.as_posix() == "megatron/core/datasets"
+assert helper_relative_path.name == (
+    "helpers_cpp" + mcore_runtime["python_extension_suffix"]
+)
 recipe = os.environ["RECIPE"]
 common_overrides = (result_dir / "common_overrides.txt").read_text().splitlines()
 selector_path = os.environ["CUTEDSL_SELECTOR_PATH"]
@@ -829,6 +1022,7 @@ manifest = {
     "base_config_sha256": base_config_sha256,
     "artifact_revisions": artifact_revisions,
     "hf_cache_manifest": "hf_cache_manifest.json",
+    "mcore_runtime": mcore_runtime,
     "available_arms": expected_arms,
     "not_applicable_arms": {
         "off": "full-iteration CUDA Graph requires device-initiated CuTeDSL"

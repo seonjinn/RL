@@ -21,6 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENT_DIR = PROJECT_ROOT / "experiments/cutedsl_qwen3_30ba3b_oci_1n4g"
 SUBMITTER = EXPERIMENT_DIR / "submit_nemo2606_2n4g_factorial.sh"
 OFFICIAL_SUBMITTER = EXPERIMENT_DIR / "submit_nemo2606_4n4g_performance.sh"
+DIRECT_AB_SUBMITTER = EXPERIMENT_DIR / "submit_cutedsl_ab_replicates.sh"
 MATRIX_PAYLOAD = EXPERIMENT_DIR / "run_cutedsl_matrix.sbatch"
 PROFILE_LOADER = EXPERIMENT_DIR / "lib/cluster_profile.sh"
 RAY_SUB = PROJECT_ROOT / "ray.sub"
@@ -546,6 +547,124 @@ def test_submitter_launches_real_two_node_ray_sub_cluster() -> None:
     )
 
 
+def _capture_submitter_exports(
+    tmp_path: Path,
+    *,
+    functional_gate: bool,
+) -> list[dict[str, str]]:
+    mock_bin = tmp_path / ("functional-bin" if functional_gate else "factorial-bin")
+    mock_bin.mkdir()
+    calls_path = tmp_path / (
+        "functional-exports.jsonl" if functional_gate else "factorial-exports.jsonl"
+    )
+    mock_sbatch = mock_bin / "sbatch"
+    mock_sbatch.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+payload_arg = next(arg for arg in sys.argv[1:] if arg.startswith("--export-file="))
+payload = {}
+for entry in Path(payload_arg.split("=", 1)[1]).read_bytes().split(b"\\0"):
+    if entry:
+        key, value = entry.decode().split("=", 1)
+        payload[key] = value
+record = {
+    "functional_gate": payload.get("NEMO2606_FUNCTIONAL_GATE", "0"),
+    "uv_no_editable": payload.get("UV_NO_EDITABLE", "<missing>"),
+}
+with Path(os.environ["MOCK_SBATCH_CALLS"]).open("a") as output:
+    output.write(json.dumps(record) + "\\n")
+print("mock-job")
+"""
+    )
+    mock_sbatch.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{mock_bin}:{env['PATH']}",
+            "MOCK_SBATCH_CALLS": str(calls_path),
+            "CUTEDSL_CLUSTER_PROFILE": "pre_tyche",
+            "NEMO2606_FUNCTIONAL_GATE": "1" if functional_gate else "0",
+            "UV_NO_EDITABLE": "0",
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(SUBMITTER), "--test-only"],
+        cwd=PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return [json.loads(line) for line in calls_path.read_text().splitlines()]
+
+
+def test_submitter_forces_noneditable_local_packages_before_ray_start(
+    tmp_path: Path,
+) -> None:
+    functional_exports = _capture_submitter_exports(tmp_path, functional_gate=True)
+    factorial_exports = _capture_submitter_exports(tmp_path, functional_gate=False)
+
+    assert len(functional_exports) == 1
+    assert len(factorial_exports) == 6
+    assert {
+        export["uv_no_editable"] for export in functional_exports + factorial_exports
+    } == {"1"}
+
+
+def test_direct_ab_submitter_forces_noneditable_local_packages(
+    tmp_path: Path,
+) -> None:
+    mock_bin = tmp_path / "direct-bin"
+    mock_bin.mkdir()
+    calls_path = tmp_path / "direct-exports.jsonl"
+    mock_sbatch = mock_bin / "sbatch"
+    mock_sbatch.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+payload_arg = next(arg for arg in sys.argv[1:] if arg.startswith("--export-file="))
+payload = {}
+for entry in Path(payload_arg.split("=", 1)[1]).read_bytes().split(b"\\0"):
+    if entry:
+        key, value = entry.decode().split("=", 1)
+        payload[key] = value
+with Path(os.environ["MOCK_SBATCH_CALLS"]).open("a") as output:
+    output.write(json.dumps({"uv_no_editable": payload.get("UV_NO_EDITABLE")}) + "\\n")
+print("mock-direct")
+"""
+    )
+    mock_sbatch.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{mock_bin}:{env['PATH']}",
+            "MOCK_SBATCH_CALLS": str(calls_path),
+            "CUTEDSL_CLUSTER_PROFILE": "pre_tyche",
+            "UV_NO_EDITABLE": "0",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(DIRECT_AB_SUBMITTER), "--test-only"],
+        cwd=PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = [json.loads(line) for line in calls_path.read_text().splitlines()]
+    assert len(calls) == 3
+    assert {call["uv_no_editable"] for call in calls} == {"1"}
+
+
 def test_ray_sub_gates_driver_on_all_workers_and_shared_setup() -> None:
     source = RAY_SUB.read_text()
     assert "NUM_ACTORS=$((GPUS_PER_NODE * SLURM_JOB_NUM_NODES))" in source
@@ -965,12 +1084,9 @@ def test_submitter_wires_sanitized_triton_failure_command() -> None:
     )
     assert source.count('"CUTEDSL_BENCHMARK_RESULT_ROOT=${RESULT_ROOT}"') == 2
     assert source.count("-u CUTEDSL_SHARED_HF_HOME") == 2
+    assert source.count('"CUTEDSL_SHARED_HF_HOME=${CUTEDSL_SHARED_HF_HOME}"') == 2
     assert (
-        source.count('"CUTEDSL_SHARED_HF_HOME=${CUTEDSL_SHARED_HF_HOME}"') == 2
-    )
-    assert (
-        'RAY_MOUNTS+=",${CUTEDSL_SHARED_HF_HOME}:${CUTEDSL_SHARED_HF_HOME}"'
-        in source
+        'RAY_MOUNTS+=",${CUTEDSL_SHARED_HF_HOME}:${CUTEDSL_SHARED_HF_HOME}"' in source
     )
 
 
@@ -1358,9 +1474,7 @@ print("mock-functional")
     assert call["full_cg"] == "0"
     assert call["a2a"] == "0"
     assert call["failure_diagnostic_timeout_seconds"] == "60"
-    assert call["shared_hf_home"] == (
-        "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home"
-    )
+    assert call["shared_hf_home"] == ("/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home")
     assert f"--nodes={expected_nodes}" in call["argv"]
     assert f"--segment={expected_segment_size}" in call["argv"]
     assert "--test-only" in call["argv"]
@@ -1403,6 +1517,138 @@ def test_matrix_payload_reuses_collectors_in_existing_ray_mode() -> None:
         "performance/policy_training_tokens_per_sec_per_gpu",
     ):
         assert metric in source
+
+
+def test_matrix_fails_closed_without_noneditable_submission_contract() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    contract = 'if [[ "${UV_NO_EDITABLE-}" != "1" ]]; then'
+    runtime_bootstrap = "cutedsl_write_event runtime_bootstrap start"
+
+    assert contract in source
+    assert "UV_NO_EDITABLE=1 is required for isolated local-package builds." in source
+    assert source.index(contract) < source.index(runtime_bootstrap)
+    for value in (None, "0"):
+        env = os.environ.copy()
+        if value is None:
+            env.pop("UV_NO_EDITABLE", None)
+        else:
+            env["UV_NO_EDITABLE"] = value
+        result = subprocess.run(
+            ["bash", str(MATRIX_PAYLOAD)],
+            cwd=PROJECT_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1
+        assert (
+            result.stderr
+            == "[ERROR] UV_NO_EDITABLE=1 is required for isolated local-package builds.\n"
+        )
+
+
+def test_matrix_builds_tracked_mcore_overlay_before_config_resolution() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    source_preflight = 'SOURCE_STATUS=$(git -C "${REPO_ROOT}" status'
+    overlay_start = "# CUTEDSL_MCORE_OVERLAY_BOOTSTRAP_START"
+    config_resolution = "from nemo_rl.algorithms.grpo import MasterConfig"
+    first_grpo = '"${UV_BIN}" run --active --no-sync examples/run_grpo.py'
+    required = (
+        'git -C "${MCORE_SOURCE_ROOT}" archive --format=tar "${MCORE_SOURCE_SHA}"',
+        'ln -s "${runtime_python_config}" "${RUNTIME_TOOL_BIN}/python3-config"',
+        'make -C "${MCORE_OVERLAY_DATASETS}"',
+        'sysconfig.get_config_var("EXT_SUFFIX")',
+        'make -q -C "${MCORE_OVERLAY_DATASETS}"',
+        "import megatron.core.datasets.helpers_cpp as helper_module",
+        "Path(helper_module.__file__).resolve()",
+    )
+
+    for fragment in required:
+        assert fragment in source, fragment
+    assert source.count('make -C "${MCORE_OVERLAY_DATASETS}"') == 1
+    assert source.index(source_preflight) < source.index(overlay_start)
+    assert source.index(overlay_start) < source.index(config_resolution)
+    assert source.index(overlay_start) < source.index(first_grpo)
+
+
+def test_matrix_never_builds_mcore_helpers_in_canonical_checkout(
+    tmp_path: Path,
+) -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    canonical_rejection = 'reject_canonical_mcore_helpers "${MCORE_SOURCE_DATASETS}"'
+    overlay_build = 'make -C "${MCORE_OVERLAY_DATASETS}"'
+
+    assert source.count(canonical_rejection) == 2
+    assert "-name 'helpers_cpp*'" in source
+    assert overlay_build in source
+    assert 'make -C "${MCORE_SOURCE_DATASETS}"' not in source
+    assert source.index(canonical_rejection) < source.index(overlay_build)
+    assert source.rindex(canonical_rejection) > source.index(overlay_build)
+
+    function_source = (
+        "reject_canonical_mcore_helpers() {"
+        + source.split("reject_canonical_mcore_helpers() {", 1)[1].split("\n}\n", 1)[0]
+        + "\n}"
+    )
+    canonical_datasets = tmp_path / "canonical-mcore-datasets"
+    canonical_datasets.mkdir()
+    artifact = canonical_datasets / "helpers_cpp.cpython-313-aarch64-linux-gnu.so"
+    artifact.write_bytes(b"ignored ABI artifact")
+    env = os.environ.copy()
+    env["CANONICAL_DATASETS"] = str(canonical_datasets)
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            function_source
+            + '\nreject_canonical_mcore_helpers "${CANONICAL_DATASETS}"',
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert "generated helpers_cpp artifact" in result.stderr
+
+
+def test_manifest_records_mcore_runtime_isolation() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    expected_fields = {
+        "source_sha",
+        "overlay_mode",
+        "uv_no_editable",
+        "python_extension_suffix",
+        "helper_relative_path",
+        "helper_sha256",
+        "helper_origin_scope",
+        "python3_config_source",
+        "make_query_up_to_date",
+        "canonical_helper_artifact_count_before",
+        "canonical_helper_artifact_count_after",
+    }
+    manifest_fields = re.search(
+        r"MCORE_RUNTIME_FIELDS = \{(?P<fields>.*?)\n\}", source, re.DOTALL
+    )
+
+    assert manifest_fields is not None
+    assert set(re.findall(r'"([a-z0-9_]+)"', manifest_fields.group("fields"))) == (
+        expected_fields
+    )
+    assert 're.fullmatch(r"[0-9a-f]{40}", mcore_runtime["source_sha"])' in source
+    assert 're.fullmatch(r"[0-9a-f]{64}", mcore_runtime["helper_sha256"])' in source
+    assert '"mcore_runtime": mcore_runtime' in source
+
+
+def test_mcore_overlay_is_under_existing_exit_cleanup_root() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    overlay_assignment = 'MCORE_OVERLAY_ROOT="${CONTAINER_RUNTIME_DIR}/mcore-overlay"'
+
+    assert overlay_assignment in source
+    assert 'RUNTIME_TOOL_BIN="${CONTAINER_RUNTIME_DIR}/runtime-bin"' in source
+    assert 'rm -rf --one-file-system -- "${HOST_RUNTIME_DIR}"' in source
+    assert source.index(overlay_assignment) < source.index(
+        "# CUTEDSL_MCORE_OVERLAY_BOOTSTRAP_START"
+    )
 
 
 def test_existing_ray_uses_job_scoped_node_local_triton_cache() -> None:
@@ -1944,7 +2190,12 @@ def test_matrix_payload_fails_closed_on_missing_feature_implementations() -> Non
 
 
 def test_shell_entrypoints_are_parseable() -> None:
-    for path in (SUBMITTER, OFFICIAL_SUBMITTER, MATRIX_PAYLOAD):
+    for path in (
+        SUBMITTER,
+        OFFICIAL_SUBMITTER,
+        DIRECT_AB_SUBMITTER,
+        MATRIX_PAYLOAD,
+    ):
         result = subprocess.run(
             ["bash", "-n", str(path)],
             capture_output=True,
