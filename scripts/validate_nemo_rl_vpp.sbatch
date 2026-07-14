@@ -126,6 +126,30 @@ mkdir -p \
     "${TORCH_EXTENSIONS_DIR}" \
     "${TRITON_CACHE_DIR}"
 cd /workspace/nemo-rl
+
+preserve_nemo_unit_results() {
+    local exit_code=$?
+    local copy_status=0
+    trap - EXIT
+    set +e
+    if [[ -f tests/unit/unit_results.json ]]; then
+        cp tests/unit/unit_results.json /results/nemo_unit_results.json \
+            || copy_status=$?
+    fi
+    if [[ -d tests/unit/unit_results ]]; then
+        mkdir -p /results/nemo_unit_results
+        cp -a tests/unit/unit_results/. /results/nemo_unit_results/ \
+            || copy_status=$?
+    fi
+    rm -f tests/unit/unit_results.json
+    rm -rf tests/unit/unit_results
+    if [[ "${exit_code}" == "0" && "${copy_status}" != "0" ]]; then
+        exit "${copy_status}"
+    fi
+    exit "${exit_code}"
+}
+trap preserve_nemo_unit_results EXIT
+
 "${UV_BIN}" sync --locked --extra mcore --group test --python 3.13.13
 "${UV_BIN}" lock --check
 "${UV_BIN}" run --active --no-sync pytest -vv -s \

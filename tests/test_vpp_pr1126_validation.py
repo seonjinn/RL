@@ -68,6 +68,10 @@ def test_vpp_validation_is_one_node_and_preserves_cluster_specific_gpu_request()
     assert "RAY_USAGE_STATS_ENABLED=0" in source
     assert "TORCH_CUDA_ARCH_LIST=10.0" in source
     assert "NRL_IGNORE_VERSION_MISMATCH" not in source
+    assert "preserve_nemo_unit_results" in source
+    assert "trap preserve_nemo_unit_results EXIT" in source
+    assert "tests/unit/unit_results.json" in source
+    assert "tests/unit/unit_results" in source
 
 
 def test_vpp_fixture_does_not_require_a_gated_tokenizer() -> None:
