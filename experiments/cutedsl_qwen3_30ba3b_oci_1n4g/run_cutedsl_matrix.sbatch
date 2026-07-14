@@ -590,6 +590,14 @@ curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
 "${UV_BIN}" python install "${UV_PYTHON_VERSION}"
 "${UV_BIN}" python find "${UV_PYTHON_VERSION}"
 "${UV_BIN}" sync --locked --extra mcore --group test --group dev --python "${UV_PYTHON_VERSION}"
+# CUTEDSL_RUNTIME_PYTHON_REFRESH_START
+hash -r
+resolved_runtime_python="$(command -v python3)"
+if [[ "${resolved_runtime_python}" != "${UV_PROJECT_ENVIRONMENT}/bin/python3" ]]; then
+    echo "[ERROR] python3 does not resolve to the locked runtime after uv sync." >&2
+    exit 1
+fi
+# CUTEDSL_RUNTIME_PYTHON_REFRESH_END
 source "${CONTAINER_RUNTIME_DIR}/log_runtime_environment.sh"
 [[ "${VIRTUAL_ENV}" == "${UV_PROJECT_ENVIRONMENT}" ]]
 [[ "$("${RUNTIME_PYTHON}" --version)" == "Python ${UV_PYTHON_VERSION}" ]]
@@ -633,7 +641,7 @@ if [[ "$(command -v python3-config)" != "${RUNTIME_TOOL_BIN}/python3-config" ]];
     echo "[ERROR] Runtime python3-config does not resolve through the isolated tool directory." >&2
     exit 1
 fi
-if [[ "$(python3 -c 'import os, sys; print(os.path.realpath(sys.executable))')" != \
+if [[ "$("${resolved_runtime_python}" -c 'import os, sys; print(os.path.realpath(sys.executable))')" != \
     "${runtime_python_real}" ]]; then
     echo "[ERROR] Helper build python3 does not match the locked runtime interpreter." >&2
     exit 1
