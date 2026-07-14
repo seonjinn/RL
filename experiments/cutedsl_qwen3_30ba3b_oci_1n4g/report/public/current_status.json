@@ -41,7 +41,7 @@
         "2372711",
         "2372712"
       ],
-      "limitation": "Jobs 2369539 and 2369580 used the invalid alltoall, capacity-null, PagedStash-disabled bundle. Corrected jobs 2375779 and 2375780 then failed dirty-source preflight. Jobs 2370808 and 2370818 exposed Hydra collisions in two HybridEP fields. Source 4dd949d5 fixed those fields, but Lyris jobs 2370933 and 2370934 exposed the same structured-config issue for optional cuda_graph_modules; Ptyche jobs 2376496 and 2376497 were cancelled without entering training. Source e5dd9246 fixes the remaining optional override, and exact g1a0/g1a1 composition plus scheduler preflight pass. New functional jobs 2376637, 2376638, 2372711, and 2372712 are pending. None has produced valid Full-CG timing; no speedup is reported.",
+      "limitation": "Jobs 2369539 and 2369580 used the invalid alltoall, capacity-null, PagedStash-disabled bundle. Later cohorts exposed dirty-source and Hydra composition defects, all fixed through source e5dd9246. Exact g1a0/g1a1 composition and scheduler preflight pass. Ptyche job 2376637 then failed before config resolution in a shared build-directory race between concurrent local Megatron-Bridge wheel builds; 2376638 and Lyris jobs 2372711/2372712 continued. None has produced valid Full-CG timing; no speedup is reported.",
       "next_gate": "Run the corrected noncolocated HybridEP functional cell and require capture_calls == 1, replay_calls >= 2, monotonic counters, stable storage digest, and no overflow-retry correctness failure before matched timing.",
       "state": "implemented_unmeasured"
     },
@@ -82,5 +82,5 @@
       "state": "implemented_unmeasured"
     }
   ],
-  "updated_at_utc": "2026-07-14T09:51:02Z"
+  "updated_at_utc": "2026-07-14T09:57:09Z"
 }

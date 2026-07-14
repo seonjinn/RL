@@ -1,0 +1,22 @@
+Incident: 2376637
+Cluster: pre_tyche
+Source: e5dd9246fc7c3f62f074416aa9dcdf47115cc62a
+Outcome: excluded bootstrap failure; no feature or performance evidence
+
+Original remote log: bounded diagnosis transcribed from Slurm and Ray driver logs.
+
+Jobs 2376637 and 2376638 started concurrently from one clean worktree with
+separate run-local venv and uv-cache paths. Both built the same local
+Megatron-Bridge path dependency with UV_NO_EDITABLE=1.
+
+Job 2376637 failed after 3:17 while assembling the wheel because setuptools
+could not find this intermediate file:
+build/bdist.linux-aarch64/wheel/megatron/bridge/models/deepseek/deepseek_v4_bridge.py
+
+The tracked source file existed and predated both jobs. The canonical build
+and egg-info directories changed during the overlap. Concurrent job 2376638
+then logged a successful build of the same Megatron-Bridge and MCore sources.
+
+This is a shared build-directory race before Hydra, PolicyTraining, Full-CG,
+A2A, or timing. The proposed fix is a clean per-run git-archive source overlay;
+remote verification is pending.

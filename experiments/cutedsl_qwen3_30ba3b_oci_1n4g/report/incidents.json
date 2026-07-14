@@ -556,6 +556,21 @@
     "tested_change": "Change only cuda_graph_modules=[] to ++cuda_graph_modules=[], then compose the complete g1a0 and g1a1 override bundles against the real performance recipe.",
     "timestamp_utc": "2026-07-14T09:38:25Z",
     "verification_evidence": "The regression changed from red to green; the complete real-recipe g1a0 and g1a1 override bundles both compose locally. Scheduler preflight then passed on Lyris and Ptyche at exact source e5dd9246. Functional jobs 2376637, 2376638, 2372711, and 2372712 are pending and are not performance evidence.",
-    "verification_job": "2376637 and 2376638 pending on Ptyche; 2372711 and 2372712 pending on Lyris"
+    "verification_job": "2376637 failed during bootstrap; the other three functional jobs continued"
+  },
+  {
+    "cluster": "pre_tyche",
+    "evidence": "Concurrent jobs 2376637 and 2376638 built the same Megatron-Bridge path dependency from one canonical worktree. Job 2376637 lost build/bdist.linux-aarch64/wheel/megatron/bridge/models/deepseek/deepseek_v4_bridge.py during wheel assembly, while 2376638 successfully finished the same build.",
+    "fix_commit": "pending run-local source-overlay implementation",
+    "hypothesis": "Building every local path dependency from a clean per-run git-archive overlay will prevent setuptools build and egg-info directories from being shared across jobs without serializing expensive GPU allocations.",
+    "report_path": "evidence/job-2376637.txt",
+    "reproduction": "Launch two clean Qwen3-30B-A3B functional jobs simultaneously from one worktree with UV_NO_EDITABLE=1 and separate venv/cache directories; both PEP 517 builds still write the canonical Megatron-Bridge build and egg-info directories.",
+    "root_cause": "Per-job venv and uv cache isolation did not isolate local path-dependency source builds. Setuptools used shared canonical build/ and egg-info directories, so concurrent wheel builds deleted or replaced one another's intermediate files.",
+    "run_id": "2376637",
+    "symptom": "The Ptyche Full-CG A2A-OFF functional job failed after 3:17 during runtime bootstrap, before Hydra composition, PolicyTraining, graph capture, or performance timing.",
+    "tested_change": "Pending approval: archive the clean superproject and recursive local path dependencies at their pinned SHAs, extract them under the run-local runtime root, and execute uv sync against that isolated project overlay.",
+    "timestamp_utc": "2026-07-14T09:57:09Z",
+    "verification_evidence": "The tracked deepseek_v4_bridge.py source existed and the canonical checkout remained git-clean. Shared build and egg-info directory mtimes overlapped both jobs; 2376638 logged a successful build of the same package immediately after 2376637's missing-intermediate failure. No feature or performance conclusion is supported.",
+    "verification_job": "2376638 continued; Lyris 2372711 and 2372712 continued"
   }
 ]
