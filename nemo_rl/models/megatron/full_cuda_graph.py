@@ -102,7 +102,7 @@ _STABLE_SCALAR_TYPES = (
 
 
 def _safe_storage_name(value: Any, *, kind: str) -> str:
-    if not isinstance(value, str) or _SAFE_STORAGE_NAME.fullmatch(value) is None:
+    if type(value) is not str or _SAFE_STORAGE_NAME.fullmatch(value) is None:
         raise TypeError(
             "full-iteration CUDA graph storage signature encountered an "
             f"unsupported {kind}"
@@ -119,6 +119,83 @@ def _is_custom_fsdp_model(value: Any) -> bool:
 
 def _storage_identifier(name: str) -> str:
     return hashlib.sha256(name.encode("utf-8")).hexdigest()
+
+
+def _raise_traversal_unavailable(*, component: str, field: str) -> None:
+    raise TypeError(
+        "full-iteration CUDA graph traversal unavailable "
+        f"component_id_sha256={_storage_identifier(component)} field={field} "
+        "reason=unsupported_traversal"
+    ) from None
+
+
+_MISSING_TRAVERSAL_ATTRIBUTE = object()
+
+
+def _read_traversal_attribute(
+    value: Any,
+    *,
+    component: str,
+    field: str,
+    attribute: Optional[str] = None,
+    default: Any = _MISSING_TRAVERSAL_ATTRIBUTE,
+) -> Any:
+    attribute = attribute or field
+    try:
+        if default is _MISSING_TRAVERSAL_ATTRIBUTE:
+            return getattr(value, attribute)
+        return getattr(value, attribute, default)
+    except Exception:
+        _raise_traversal_unavailable(component=component, field=field)
+
+
+def _iterate_traversal(value: Any, *, component: str, field: str) -> Any:
+    try:
+        iterator = iter(value)
+    except Exception:
+        _raise_traversal_unavailable(component=component, field=field)
+    while True:
+        try:
+            yield next(iterator)
+        except StopIteration:
+            return
+        except Exception:
+            _raise_traversal_unavailable(component=component, field=field)
+
+
+def _call_traversal(
+    callable_value: Any,
+    *args: Any,
+    component: str,
+    field: str,
+) -> Any:
+    try:
+        return callable_value(*args)
+    except Exception:
+        _raise_traversal_unavailable(component=component, field=field)
+
+
+def _mapping_items(value: Mapping[Any, Any], *, component: str) -> Any:
+    field = "mapping_items"
+    items = _read_traversal_attribute(
+        value,
+        component=component,
+        field=field,
+        attribute="items",
+    )
+    iterable = _call_traversal(
+        items,
+        component=component,
+        field=field,
+    )
+    for item in _iterate_traversal(
+        iterable,
+        component=component,
+        field=field,
+    ):
+        if type(item) not in (list, tuple) or len(item) != 2:
+            _raise_traversal_unavailable(component=component, field=field)
+        yield item[0], item[1]
 
 
 def _read_tensor_attribute(tensor: torch.Tensor, *, name: str, attribute: str) -> Any:
@@ -208,8 +285,13 @@ class _FullCudaGraphStorageCapture:
         self.seen_tensor_ids.add(tensor_id)
 
 
-def _optimizer_leaves(optimizer: Any) -> list[Any]:
-    children = getattr(optimizer, "chained_optimizers", None)
+def _optimizer_leaves(optimizer: Any, *, component: str = "optimizer") -> list[Any]:
+    children = _read_traversal_attribute(
+        optimizer,
+        component=component,
+        field="chained_optimizers",
+        default=None,
+    )
     if children is None:
         return [optimizer]
     if not isinstance(children, (list, tuple)):
@@ -218,8 +300,19 @@ def _optimizer_leaves(optimizer: Any) -> list[Any]:
             "ChainedOptimizer children"
         ) from None
     leaves: list[Any] = []
-    for child in children:
-        leaves.extend(_optimizer_leaves(child))
+    for child_index, child in enumerate(
+        _iterate_traversal(
+            children,
+            component=component,
+            field="chained_optimizers",
+        )
+    ):
+        leaves.extend(
+            _optimizer_leaves(
+                child,
+                component=f"{component}.child[{child_index}]",
+            )
+        )
     return leaves
 
 
@@ -266,7 +359,7 @@ def _capture_optimizer_value(
     if isinstance(value, Mapping):
         named_items = [
             (_mapping_key_name(key, parameter_names), item)
-            for key, item in value.items()
+            for key, item in _mapping_items(value, component=path)
         ]
         key_names = [key_name for key_name, _ in named_items]
         if len(set(key_names)) != len(key_names):
@@ -284,7 +377,13 @@ def _capture_optimizer_value(
             )
         return
     if isinstance(value, (list, tuple)):
-        for index, item in enumerate(value):
+        for index, item in enumerate(
+            _iterate_traversal(
+                value,
+                component=path,
+                field="optimizer_sequence",
+            )
+        ):
             _capture_optimizer_value(
                 capture,
                 item,
@@ -329,30 +428,61 @@ class FullCudaGraphStorageSignature:
     def capture(cls, model: Any, optimizer: Any) -> "FullCudaGraphStorageSignature":
         """Capture live model, gradient, and optimizer tensors without state_dict."""
         model_chunks = model if isinstance(model, (list, tuple)) else (model,)
-        if not model_chunks:
-            raise TypeError(
-                "full-iteration CUDA graph storage signature requires model chunks"
-            ) from None
 
         capture = _FullCudaGraphStorageCapture()
-        for chunk_index, model_chunk in enumerate(model_chunks):
+        saw_model_chunk = False
+        for chunk_index, model_chunk in enumerate(
+            _iterate_traversal(
+                model_chunks,
+                component="model",
+                field="model_chunks",
+            )
+        ):
+            saw_model_chunk = True
+            chunk_component = f"model_chunk[{chunk_index}]"
             if _is_custom_fsdp_model(model_chunk):
                 raise TypeError(
                     "full-iteration CUDA graph storage signature rejects custom FSDP"
                 ) from None
-            named_parameters = getattr(model_chunk, "named_parameters", None)
+            named_parameters = _read_traversal_attribute(
+                model_chunk,
+                component=chunk_component,
+                field="named_parameters",
+                default=None,
+            )
             if not callable(named_parameters):
                 raise TypeError(
                     "full-iteration CUDA graph storage signature requires "
                     f"model_chunk[{chunk_index}].named_parameters"
                 ) from None
-            for parameter_name, parameter in named_parameters():
-                safe_parameter_name = _safe_storage_name(
-                    parameter_name, kind="model parameter name"
-                )
-                logical_name = (
-                    f"model_chunk[{chunk_index}].parameter.{safe_parameter_name}"
-                )
+            named_parameter_items = _call_traversal(
+                named_parameters,
+                component=chunk_component,
+                field="named_parameters",
+            )
+            for named_parameter_item in _iterate_traversal(
+                named_parameter_items,
+                component=chunk_component,
+                field="named_parameters",
+            ):
+                if (
+                    type(named_parameter_item) not in (list, tuple)
+                    or len(named_parameter_item) != 2
+                ):
+                    _raise_traversal_unavailable(
+                        component=chunk_component,
+                        field="named_parameters",
+                    )
+                parameter_name, parameter = named_parameter_item
+                if (
+                    type(parameter_name) is not str
+                    or _SAFE_STORAGE_NAME.fullmatch(parameter_name) is None
+                ):
+                    _raise_traversal_unavailable(
+                        component=chunk_component,
+                        field="parameter_name",
+                    )
+                logical_name = f"model_chunk[{chunk_index}].parameter.{parameter_name}"
                 capture.add_tensor(parameter, name=logical_name)
                 for gradient_name in ("main_grad", "grad"):
                     gradient = _read_tensor_attribute(
@@ -362,18 +492,24 @@ class FullCudaGraphStorageSignature:
                         capture.add_tensor(
                             gradient, name=f"{logical_name}.{gradient_name}"
                         )
+        if not saw_model_chunk:
+            raise TypeError(
+                "full-iteration CUDA graph storage signature requires model chunks"
+            ) from None
 
         leaves = _optimizer_leaves(optimizer)
         for leaf_index, leaf in enumerate(leaves):
             leaf_path = f"optimizer_leaf[{leaf_index}]"
-            try:
-                param_groups = leaf.param_groups
-                state = leaf.state
-            except Exception:
-                raise TypeError(
-                    "full-iteration CUDA graph live optimizer state unavailable "
-                    f"path={leaf_path}"
-                ) from None
+            param_groups = _read_traversal_attribute(
+                leaf,
+                component=leaf_path,
+                field="param_groups",
+            )
+            state = _read_traversal_attribute(
+                leaf,
+                component=leaf_path,
+                field="state",
+            )
             if not isinstance(param_groups, (list, tuple)):
                 raise TypeError(
                     "full-iteration CUDA graph optimizer param_groups must be a "
@@ -381,20 +517,44 @@ class FullCudaGraphStorageSignature:
                 ) from None
 
             parameter_names: dict[int, str] = {}
-            for group_index, param_group in enumerate(param_groups):
+            for group_index, param_group in enumerate(
+                _iterate_traversal(
+                    param_groups,
+                    component=leaf_path,
+                    field="param_groups",
+                )
+            ):
+                group_component = f"{leaf_path}.param_group[{group_index}]"
                 if not isinstance(param_group, Mapping):
                     raise TypeError(
                         "full-iteration CUDA graph optimizer parameter group must be "
                         f"a mapping path={leaf_path}.param_group[{group_index}]"
                     ) from None
-                parameters = param_group.get("params")
+                parameter_getter = _read_traversal_attribute(
+                    param_group,
+                    component=group_component,
+                    field="params",
+                    attribute="get",
+                )
+                parameters = _call_traversal(
+                    parameter_getter,
+                    "params",
+                    component=group_component,
+                    field="params",
+                )
                 if not isinstance(parameters, (list, tuple)):
                     raise TypeError(
                         "full-iteration CUDA graph optimizer params must be a "
                         "deterministic sequence "
                         f"path={leaf_path}.param_group[{group_index}]"
                     ) from None
-                for parameter_index, parameter in enumerate(parameters):
+                for parameter_index, parameter in enumerate(
+                    _iterate_traversal(
+                        parameters,
+                        component=group_component,
+                        field="params",
+                    )
+                ):
                     parameter_name = (
                         f"param_group[{group_index}].param[{parameter_index}]"
                     )

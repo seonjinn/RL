@@ -111,6 +111,55 @@ class _ChainedOptimizer:
         raise AssertionError("multi-child ChainedOptimizer.optimizer is invalid")
 
 
+class _TraversalFailureIterator:
+    def __init__(self, pointer: int, *, fail_on_iter: bool) -> None:
+        self.pointer = pointer
+        self.fail_on_iter = fail_on_iter
+
+    def __iter__(self) -> "_TraversalFailureIterator":
+        if self.fail_on_iter:
+            raise RuntimeError(f"private pointer {self.pointer} / {hex(self.pointer)}")
+        return self
+
+    def __next__(self) -> Any:
+        raise RuntimeError(f"private pointer {self.pointer} / {hex(self.pointer)}")
+
+
+class _TraversalFailureList(list[Any]):
+    def __init__(self, values: list[Any], pointer: int, *, fail_on_iter: bool) -> None:
+        super().__init__(values)
+        self.pointer = pointer
+        self.fail_on_iter = fail_on_iter
+
+    def __iter__(self) -> Any:
+        return iter(
+            _TraversalFailureIterator(
+                self.pointer,
+                fail_on_iter=self.fail_on_iter,
+            )
+        )
+
+
+def _assert_sanitized_traversal_failure(
+    error: pytest.ExceptionInfo[TypeError],
+    *,
+    pointer: int,
+    field: str,
+) -> None:
+    message = str(error.value)
+    assert re.fullmatch(
+        "full-iteration CUDA graph traversal unavailable "
+        rf"component_id_sha256=[0-9a-f]{{64}} field={re.escape(field)} "
+        "reason=unsupported_traversal",
+        message,
+    )
+    assert str(pointer) not in message
+    assert hex(pointer) not in message
+    assert "private pointer" not in message
+    assert error.value.__cause__ is None
+    assert error.value.__suppress_context__ is True
+
+
 def test_full_cuda_graph_storage_guard_rejects_custom_fsdp_config_before_setup() -> (
     None
 ):
@@ -530,6 +579,213 @@ def test_full_cuda_graph_storage_guard_sanitizes_tensor_attribute_failures(
     assert str(unsupported.data_ptr()) not in message
     assert hex(unsupported.data_ptr()) not in message
     assert re.search(r"tensor_id_sha256=[0-9a-f]{64}", message)
+
+
+@pytest.mark.parametrize("phase", ["access", "iter", "next"])
+def test_full_cuda_graph_storage_guard_sanitizes_chained_optimizer_traversal(
+    phase: str,
+) -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import FullCudaGraphStorageSignature
+
+    model = _StorageModel()
+    pointer = model.weight.data_ptr()
+
+    class FailingChainedOptimizer:
+        def __getattribute__(self, name: str) -> Any:
+            if name == "chained_optimizers" and phase == "access":
+                raise RuntimeError(f"private pointer {pointer} / {hex(pointer)}")
+            return super().__getattribute__(name)
+
+        @property
+        def chained_optimizers(self) -> Any:
+            return _TraversalFailureList(
+                [_LeafOptimizer(model.weight)],
+                pointer,
+                fail_on_iter=phase == "iter",
+            )
+
+    with pytest.raises(TypeError) as error:
+        FullCudaGraphStorageSignature.capture(model, FailingChainedOptimizer())
+
+    _assert_sanitized_traversal_failure(
+        error,
+        pointer=pointer,
+        field="chained_optimizers",
+    )
+
+
+@pytest.mark.parametrize("phase", ["access", "call", "iter", "next"])
+def test_full_cuda_graph_storage_guard_sanitizes_named_parameter_traversal(
+    phase: str,
+) -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import FullCudaGraphStorageSignature
+
+    model = _StorageModel()
+    pointer = model.weight.data_ptr()
+
+    class FailingNamedParametersModel:
+        def __getattribute__(self, name: str) -> Any:
+            if name == "named_parameters" and phase == "access":
+                raise RuntimeError(f"private pointer {pointer} / {hex(pointer)}")
+            return super().__getattribute__(name)
+
+        def named_parameters(self) -> Any:
+            if phase == "call":
+                raise RuntimeError(f"private pointer {pointer} / {hex(pointer)}")
+            return _TraversalFailureIterator(pointer, fail_on_iter=phase == "iter")
+
+    with pytest.raises(TypeError) as error:
+        FullCudaGraphStorageSignature.capture(
+            FailingNamedParametersModel(),
+            SimpleNamespace(param_groups=[], state={}),
+        )
+
+    _assert_sanitized_traversal_failure(
+        error,
+        pointer=pointer,
+        field="named_parameters",
+    )
+
+
+@pytest.mark.parametrize("phase", ["access", "call", "iter", "next"])
+def test_full_cuda_graph_storage_guard_sanitizes_mapping_items_traversal(
+    phase: str,
+) -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import FullCudaGraphStorageSignature
+
+    model = _StorageModel()
+    optimizer = _LeafOptimizer(model.weight)
+    pointer = model.weight.data_ptr()
+
+    class FailingItemsMapping(dict[Any, Any]):
+        def __getattribute__(self, name: str) -> Any:
+            if name == "items" and phase == "access":
+                raise RuntimeError(f"private pointer {pointer} / {hex(pointer)}")
+            return super().__getattribute__(name)
+
+        def items(self) -> Any:
+            if phase == "call":
+                raise RuntimeError(f"private pointer {pointer} / {hex(pointer)}")
+            return _TraversalFailureIterator(pointer, fail_on_iter=phase == "iter")
+
+    optimizer.state = FailingItemsMapping()
+
+    with pytest.raises(TypeError) as error:
+        FullCudaGraphStorageSignature.capture(model, optimizer)
+
+    _assert_sanitized_traversal_failure(
+        error,
+        pointer=pointer,
+        field="mapping_items",
+    )
+
+
+@pytest.mark.parametrize("phase", ["access", "call"])
+def test_full_cuda_graph_storage_guard_sanitizes_parameter_group_get(
+    phase: str,
+) -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import FullCudaGraphStorageSignature
+
+    model = _StorageModel()
+    optimizer = _LeafOptimizer(model.weight)
+    pointer = model.weight.data_ptr()
+
+    class FailingGetMapping(dict[Any, Any]):
+        def __getattribute__(self, name: str) -> Any:
+            if name == "get" and phase == "access":
+                raise RuntimeError(f"private pointer {pointer} / {hex(pointer)}")
+            return super().__getattribute__(name)
+
+        def get(self, key: Any, default: Any = None) -> Any:
+            del key, default
+            raise RuntimeError(f"private pointer {pointer} / {hex(pointer)}")
+
+    optimizer.param_groups = [FailingGetMapping()]
+
+    with pytest.raises(TypeError) as error:
+        FullCudaGraphStorageSignature.capture(model, optimizer)
+
+    _assert_sanitized_traversal_failure(
+        error,
+        pointer=pointer,
+        field="params",
+    )
+
+
+def test_full_cuda_graph_storage_guard_rejects_parameter_name_str_subclass() -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import FullCudaGraphStorageSignature
+
+    model = _StorageModel()
+    pointer = model.weight.data_ptr()
+
+    class FailingParameterName(str):
+        def __format__(self, format_spec: str) -> str:
+            del format_spec
+            raise RuntimeError(f"private pointer {pointer} / {hex(pointer)}")
+
+    class FailingParameterNameModel:
+        def named_parameters(self) -> Any:
+            return iter(((FailingParameterName("weight"), model.weight),))
+
+    with pytest.raises(TypeError) as error:
+        FullCudaGraphStorageSignature.capture(
+            FailingParameterNameModel(),
+            SimpleNamespace(param_groups=[], state={}),
+        )
+
+    _assert_sanitized_traversal_failure(
+        error,
+        pointer=pointer,
+        field="parameter_name",
+    )
+
+
+@pytest.mark.parametrize(
+    ("surface", "field"),
+    [
+        ("model_chunks", "model_chunks"),
+        ("param_groups", "param_groups"),
+        ("params", "params"),
+        ("optimizer_sequence", "optimizer_sequence"),
+    ],
+)
+def test_full_cuda_graph_storage_guard_sanitizes_sequence_traversal(
+    surface: str,
+    field: str,
+) -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import FullCudaGraphStorageSignature
+
+    model = _StorageModel()
+    optimizer = _LeafOptimizer(model.weight)
+    pointer = model.weight.data_ptr()
+
+    if surface == "model_chunks":
+        captured_model: Any = _TraversalFailureList([model], pointer, fail_on_iter=True)
+    else:
+        captured_model = model
+        if surface == "param_groups":
+            optimizer.param_groups = _TraversalFailureList(
+                optimizer.param_groups, pointer, fail_on_iter=True
+            )
+        elif surface == "params":
+            optimizer.param_groups[0]["params"] = _TraversalFailureList(
+                [model.weight], pointer, fail_on_iter=True
+            )
+        else:
+            optimizer.state = {
+                "nested": _TraversalFailureList(
+                    [torch.ones_like(model.weight)], pointer, fail_on_iter=True
+                )
+            }
+
+    with pytest.raises(TypeError) as error:
+        FullCudaGraphStorageSignature.capture(captured_model, optimizer)
+
+    _assert_sanitized_traversal_failure(
+        error,
+        pointer=pointer,
+        field=field,
+    )
 
 
 def test_full_cuda_graph_storage_guard_rejects_nondeterministic_state_container() -> (
