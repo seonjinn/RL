@@ -1,4 +1,5 @@
 import json
+import math
 from collections.abc import Mapping
 from numbers import Real
 from typing import Any
@@ -15,7 +16,9 @@ def format_spec_decode_metrics(
             and isinstance(value, Real)
             and not isinstance(value, bool)
         ):
-            payload[name] = float(value)
+            scalar = float(value)
+            if math.isfinite(scalar):
+                payload[name] = scalar
 
     if len(payload) == 1:
         return None

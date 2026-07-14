@@ -34,6 +34,22 @@ class TestFormatSpecDecodeMetrics(unittest.TestCase):
 
         self.assertIsNone(line)
 
+    def test_skips_non_finite_spec_metrics(self) -> None:
+        line = format_spec_decode_metrics(
+            {
+                "vllm/spec_acceptance_rate": float("nan"),
+                "vllm/spec_acceptance_length": float("inf"),
+                "vllm/spec_num_drafts": 12,
+            },
+            step=4,
+        )
+
+        self.assertEqual(
+            line,
+            'VLLM_SPEC_DECODE_METRICS {"step": 4, '
+            '"vllm/spec_num_drafts": 12.0}',
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
