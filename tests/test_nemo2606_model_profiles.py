@@ -637,7 +637,16 @@ def test_qwen235_a2a_vpp_effective_config_keeps_selective_recompute() -> None:
     assert megatron["defer_fp32_logits"] is False
 
 
-def test_qwen235_matrix_adds_optional_hybridep_fields() -> None:
+@pytest.mark.parametrize(
+    "profile_name",
+    [
+        "qwen3_30ba3b_2n4g.json",
+        "qwen3_235b_16n4g_a2a_vpp2.json",
+    ],
+)
+def test_matrix_adds_or_overrides_optional_hybridep_fields(
+    profile_name: str,
+) -> None:
     from nemo_rl.utils.config import (
         load_config,
         parse_hydra_overrides,
@@ -647,11 +656,11 @@ def test_qwen235_matrix_adds_optional_hybridep_fields() -> None:
 
     register_omegaconf_resolvers()
     profile = _load_profile_module().load_model_profile(
-        PROFILE_DIR / "qwen3_235b_16n4g_a2a_vpp2.json"
+        PROFILE_DIR / profile_name
     )
     optional_overrides = [
-        "+policy.megatron_cfg.moe_hybridep_num_sms_preprocessing=32",
-        "+policy.megatron_cfg.offload_modules=[]",
+        "++policy.megatron_cfg.moe_hybridep_num_sms_preprocessing=32",
+        "++policy.megatron_cfg.offload_modules=[]",
     ]
 
     source = MATRIX_PAYLOAD.read_text()
