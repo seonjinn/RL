@@ -2789,6 +2789,19 @@ def test_functional_payload_fails_closed_before_selecting_one_arm() -> None:
     assert "expected_val_period = 0 if expected_full_cg else 10" in source
 
 
+def test_full_cg_functional_payload_runs_focused_linux_unit_gate() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+
+    assert "# NEMO2606_FULL_CG_FOCUSED_TESTS_START" in source
+    assert "tests/unit/models/megatron/test_full_cuda_graph.py" in source
+    assert "tests/unit/models/megatron/test_full_cuda_graph_a2a_integration.py" in source
+    assert "tests/unit/models/policy/test_megatron_worker.py" in source
+    assert "-k full_cuda_graph" in source
+    assert "full_cuda_graph_focused_tests.log" in source
+    assert "full_cuda_graph_unit_results.json" in source
+    assert "full_cuda_graph_unit_results" in source
+
+
 def test_performance_payload_accepts_only_cutedsl_on_for_full_cg() -> None:
     source = MATRIX_PAYLOAD.read_text()
     required = (

@@ -801,6 +801,11 @@ for canonical_root in \
 done
 # CUTEDSL_MCORE_CANONICAL_POST_BOOTSTRAP_END
 
+if [[ "${FUNCTIONAL_GATE}" == "1" && "${NEMO2606_FULL_CG_ENABLED}" == "1" ]]; then
+    cutedsl_write_event focused_tests start '' \
+        "Run Full-CG lifecycle tests in the locked Linux runtime" \
+        full_cuda_graph_focused_tests.log
+fi
 "${SRUN[@]}" bash -s <<'BASH'
 export TMPDIR="${CONTAINER_RUNTIME_DIR}/tmp"
 set -euo pipefail
@@ -827,6 +832,62 @@ runtime_python=$("${UV_BIN}" run --active --no-sync python -c 'import os, sys; p
 runtime_prefix=$("${UV_BIN}" run --active --no-sync python -c 'import sys; print(sys.prefix)')
 [[ "${runtime_python}" == "${expected_runtime_python}" ]]
 [[ "${runtime_prefix}" == "${VIRTUAL_ENV}" ]]
+# NEMO2606_FULL_CG_FOCUSED_TESTS_START
+if [[ "${FUNCTIONAL_GATE}" == "1" && "${NEMO2606_FULL_CG_ENABLED}" == "1" ]]; then
+    preserve_full_cuda_graph_unit_results() {
+        local pytest_exit=$?
+        local cleanup_exit=0
+        local move_exit
+        local source_path
+        local destination_path
+        local index
+        local -a source_paths=(
+            "${CONTAINER_REPO_ROOT}/tests/unit/unit_results.json"
+            "${CONTAINER_REPO_ROOT}/tests/unit/unit_results"
+        )
+        local -a destination_paths=(
+            "${CONTAINER_RESULT_DIR}/full_cuda_graph_unit_results.json"
+            "${CONTAINER_RESULT_DIR}/full_cuda_graph_unit_results"
+        )
+
+        trap - EXIT
+        for index in "${!source_paths[@]}"; do
+            source_path=${source_paths[${index}]}
+            destination_path=${destination_paths[${index}]}
+            if [[ ! -e "${source_path}" && ! -L "${source_path}" ]]; then
+                continue
+            fi
+            if mv -- "${source_path}" "${destination_path}"; then
+                :
+            else
+                move_exit=$?
+                if [[ ${cleanup_exit} -eq 0 ]]; then
+                    cleanup_exit=${move_exit}
+                fi
+            fi
+        done
+        if [[ ${pytest_exit} -ne 0 ]]; then
+            exit "${pytest_exit}"
+        fi
+        exit "${cleanup_exit}"
+    }
+    (
+        trap preserve_full_cuda_graph_unit_results EXIT
+        "${UV_BIN}" run --active --no-sync pytest \
+            tests/unit/algorithms/test_full_cuda_graph_evidence.py \
+            tests/unit/models/megatron/test_full_cuda_graph.py \
+            tests/unit/models/megatron/test_full_cuda_graph_a2a_integration.py \
+            tests/unit/models/megatron/test_train.py \
+            --mcore-only \
+            -q
+        "${UV_BIN}" run --active --no-sync pytest \
+            tests/unit/models/policy/test_megatron_worker.py \
+            --mcore-only \
+            -k full_cuda_graph \
+            -q
+    ) 2>&1 | tee "${CONTAINER_RESULT_DIR}/full_cuda_graph_focused_tests.log"
+fi
+# NEMO2606_FULL_CG_FOCUSED_TESTS_END
 "${UV_BIN}" run --active --no-sync python - <<'PY'
 import hashlib
 import json
@@ -1418,8 +1479,14 @@ else
     cutedsl_write_event config_validation pass 0 \
         "Matched config and benchmark manifest recorded" benchmark_manifest.json
 fi
-cutedsl_write_event focused_tests skip 0 \
-    "Focused tests are enforced by run_cutedsl_functional.sbatch" ''
+if [[ "${FUNCTIONAL_GATE}" == "1" && "${NEMO2606_FULL_CG_ENABLED}" == "1" ]]; then
+    cutedsl_write_event focused_tests pass 0 \
+        "Full-CG lifecycle tests passed in the locked Linux runtime" \
+        full_cuda_graph_focused_tests.log
+else
+    cutedsl_write_event focused_tests skip 0 \
+        "Focused Full-CG tests apply only to the Full-CG functional gate" ''
+fi
 cutedsl_write_event gpu_smoke skip 0 \
     "GPU smoke is enforced by run_cutedsl_functional.sbatch" ''
 if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
