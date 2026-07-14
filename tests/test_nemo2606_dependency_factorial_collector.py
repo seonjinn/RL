@@ -42,6 +42,7 @@ HARNESS_REPRESENTATIVE_LIMITATION = (
     "deterministic representative report; only one representative process/rank "
     "analyzed; no all-rank aggregation"
 )
+CUTEDSL_SELECTOR_PATH = "policy.megatron_cfg.env_vars.NVTE_CUTEDSL_FUSED_GROUPED_MLP"
 CANONICAL_METRICS = {
     "timing/train/total_step_time": "timing/train/total_step_time",
     "timing/train/generation": "timing/train/generation",
@@ -127,7 +128,7 @@ def _raw_timing(
                 "mean_prompt_length": 128.0 + offset,
                 "num_valid_samples": 8.0,
                 "total_turns": 8.0,
-                "e2e_tokens_per_sec_per_gpu": tokens / total_step / 4.0,
+                "e2e_tokens_per_sec_per_gpu": tokens / total_step / 8.0,
                 "generation_tokens_per_sec_per_gpu": tokens / generation / 4.0,
                 "policy_training_tokens_per_sec_per_gpu": tokens / policy / 4.0,
                 "refit_effective_tokens_per_sec_per_gpu": tokens / refit / 4.0,
@@ -200,7 +201,7 @@ def _write_temporal_analyzer(
     a2a_overlap_ratio: float = 0.5,
     gemm_overlap_ratio: float = 0.25,
 ) -> None:
-    profile_path = job_dir / "profiles/on.nsys-rep"
+    profile_path = job_dir / "profiles/0-on/nsight/on.nsys-rep"
     profile_path.parent.mkdir(parents=True, exist_ok=True)
     profile_path.write_bytes(f"synthetic-profile-{job_id}\n".encode())
     _write_json(
@@ -266,10 +267,10 @@ def _create_job(
                         str(step): min(step, 3) for step in all_steps
                     },
                     "train/full_cuda_graph_capture_calls": {
-                        str(step): int(step >= 3) for step in all_steps
+                        str(step): int(step >= 4) for step in all_steps
                     },
                     "train/full_cuda_graph_replay_calls": {
-                        str(step): max(0, step - 2) for step in all_steps
+                        str(step): max(0, step - 3) for step in all_steps
                     },
                     "train/full_cuda_graph_reset_calls": {
                         str(step): 0 for step in all_steps
@@ -362,10 +363,13 @@ def _create_job(
                 "num_generations_per_prompt": 2,
             },
             "fixed_config_evidence": {arm: fixed_config for arm in order},
+            "cutedsl_selector_evidence": {
+                arm: "1" if arm == "on" else "0" for arm in order
+            },
             "full_cg_config_evidence": {
                 arm: {
                     "cuda_graph_impl": "full_iteration" if full_cg_enabled else "none",
-                    "cuda_graph_warmup_steps": 2 if full_cg_enabled else None,
+                    "cuda_graph_warmup_steps": 3 if full_cg_enabled else None,
                     "cuda_graph_use_single_mempool": (
                         True if full_cg_enabled else None
                     ),
@@ -375,6 +379,11 @@ def _create_job(
             "resolved_metric_names": {arm: CANONICAL_METRICS for arm in order},
         },
     )
+    if not full_cg_enabled:
+        _write_json(
+            job_dir / "matched_config_diff.json",
+            {CUTEDSL_SELECTOR_PATH: {"on": "1", "off": "0"}},
+        )
     equivalence = _workload_equivalence(raw_by_arm)
     _write_json(
         job_dir / "timing_summary.json",
@@ -702,7 +711,7 @@ def test_collector_writes_dependency_constrained_factorial(
         assert contrast["median_baseline_ratio"] == pytest.approx(0.0)
         assert contrast["median_overlap_ratio"] == pytest.approx(0.5)
         assert contrast["median_absolute_increase"] == pytest.approx(0.5)
-        assert contrast["claim_status"] == "claim_ready"
+        assert contrast["claim_status"] == "provisional"
         assert contrast["paired_profile_replicates"] == [
             {
                 "replicate_index": 0,
@@ -780,7 +789,74 @@ def test_collector_rejects_a2a_analyzer_source_profile_digest_mismatch(
     result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
 
     assert result.returncode != 0
-    assert "A2A source profile digest must match exactly one artifact" in result.stderr
+    assert (
+        "A2A source profile digest must match exactly one ON-arm artifact"
+        in result.stderr
+    )
+
+
+def test_collector_rejects_a2a_analyzer_bound_to_off_arm_profile(
+    tmp_path: Path,
+) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    job_id = _job_id(submission, "g0a1", 0)
+    job_dir = result_root / job_id
+    off_profile = job_dir / "profiles/1-off/nsight/off.nsys-rep"
+    off_profile.parent.mkdir(parents=True, exist_ok=True)
+    off_profile.write_bytes(b"off-arm-profile\n")
+    analyzer_path = job_dir / "a2a_temporal_overlap.json"
+    analyzer = json.loads(analyzer_path.read_text())
+    analyzer["source_profile_sha256"] = hashlib.sha256(
+        off_profile.read_bytes()
+    ).hexdigest()
+    _write_json(analyzer_path, analyzer)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode != 0
+    assert "ON-arm artifact" in result.stderr
+
+
+def test_collector_rejects_cutedsl_selector_evidence_mismatch(tmp_path: Path) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    job_id = _job_id(submission, "g1a0", 0)
+    manifest_path = result_root / job_id / "benchmark_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["cutedsl_selector_evidence"]["on"] = "0"
+    _write_json(manifest_path, manifest)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode != 0
+    assert "CuTeDSL selector evidence differs" in result.stderr
+
+
+def test_collector_rejects_full_cg_warmup_config_mismatch(tmp_path: Path) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    job_id = _job_id(submission, "g1a0", 0)
+    manifest_path = result_root / job_id / "benchmark_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["full_cg_config_evidence"]["on"]["cuda_graph_warmup_steps"] = 2
+    _write_json(manifest_path, manifest)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode != 0
+    assert "full-CG warmup steps must equal 3" in result.stderr
+
+
+def test_collector_rejects_nonexclusive_matched_config_diff(tmp_path: Path) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    job_id = _job_id(submission, "g0a0", 0)
+    diff_path = result_root / job_id / "matched_config_diff.json"
+    diff = json.loads(diff_path.read_text())
+    diff["policy.train_micro_batch_size"] = {"on": 1, "off": 2}
+    _write_json(diff_path, diff)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode != 0
+    assert "matched CuTeDSL config diff differs" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -857,7 +933,7 @@ def test_collector_rejects_internal_artifact_symlinks(
         source.unlink()
         source.symlink_to(target)
     else:
-        source = job_dir / "profiles/on.nsys-rep"
+        source = job_dir / "profiles/0-on/nsight/on.nsys-rep"
         target = (
             result_root / _job_id(submission, "g1a1", 1) / "profiles/copied.nsys-rep"
         )
@@ -1167,7 +1243,7 @@ def test_collector_rejects_g0_off_cross_context_workload_drift(
             row["total_num_tokens"] *= scale
             row["global_valid_toks"] *= scale
             row["e2e_tokens_per_sec_per_gpu"] = (
-                row["total_num_tokens"] / row["total_step_seconds"] / 4.0
+                row["total_num_tokens"] / row["total_step_seconds"] / 8.0
             )
             row["generation_tokens_per_sec_per_gpu"] = (
                 row["total_num_tokens"] / row["generation_seconds"] / 4.0
@@ -1236,6 +1312,29 @@ def test_collector_rejects_invalid_full_cg_execution_evidence(
 
     assert result.returncode != 0
     assert expected_error in result.stderr
+
+
+def test_collector_rejects_full_cg_counters_before_their_lifecycle_phase(
+    tmp_path: Path,
+) -> None:
+    submission, result_root = _create_valid_inputs(tmp_path)
+    job_id = _job_id(submission, "g1a0", 0)
+    metrics_path = next((result_root / job_id / "timing").glob("*-on/metrics.json"))
+    metrics = json.loads(metrics_path.read_text())
+    impossible_values = {
+        "train/full_cuda_graph_warmup_calls": 3,
+        "train/full_cuda_graph_capture_calls": 1,
+        "train/full_cuda_graph_replay_calls": 2,
+        "train/full_cuda_graph_reset_calls": 0,
+    }
+    for metric, value in impossible_values.items():
+        metrics[metric] = {str(step): value for step in range(1, TOTAL_UPDATES + 1)}
+    _write_json(metrics_path, metrics)
+
+    result = _run_collector(submission, result_root, tmp_path / "aggregate.json")
+
+    assert result.returncode != 0
+    assert "full-CG lifecycle" in result.stderr
 
 
 @pytest.mark.parametrize("failure", ("config", "kernel"))
@@ -1411,7 +1510,7 @@ def test_collector_marks_nonincreasing_a2a_overlap_ratio_provisional(
     assert contrast["all_pairs_increased"] is False
     assert contrast["median_absolute_increase"] == pytest.approx(0.0)
     assert aggregate["a2a_overlap_ratio_contrasts"]["g1"]["claim_status"] == (
-        "claim_ready"
+        "provisional"
     )
 
 

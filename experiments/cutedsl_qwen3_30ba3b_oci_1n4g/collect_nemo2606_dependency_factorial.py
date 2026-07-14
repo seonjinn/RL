@@ -83,6 +83,7 @@ A2A_CONFIG_FIELDS = (
     "policy.megatron_cfg.high_priority_a2a_comm_stream",
     "policy.megatron_cfg.delay_wgrad_compute",
 )
+CUTEDSL_SELECTOR_PATH = "policy.megatron_cfg.env_vars.NVTE_CUTEDSL_FUSED_GROUPED_MLP"
 REQUIRED_CANONICAL_METRICS = frozenset(
     {
         "timing/train/total_step_time",
@@ -132,6 +133,12 @@ THROUGHPUT_DURATION_FIELDS = {
     "generation_tokens_per_sec_per_gpu": "generation_seconds",
     "policy_training_tokens_per_sec_per_gpu": "policy_training_seconds",
     "refit_effective_tokens_per_sec_per_gpu": "refit_transfer_update_seconds",
+}
+THROUGHPUT_GPU_COUNTS = {
+    "e2e_tokens_per_sec_per_gpu": 8.0,
+    "generation_tokens_per_sec_per_gpu": 4.0,
+    "policy_training_tokens_per_sec_per_gpu": 4.0,
+    "refit_effective_tokens_per_sec_per_gpu": 4.0,
 }
 WORKLOAD_EXACT_FIELDS = ("mean_prompt_length", "num_valid_samples", "total_turns")
 WORKLOAD_TOKEN_FIELDS = ("total_num_tokens", "global_valid_toks")
@@ -485,6 +492,12 @@ def _validate_contract(manifest: dict[str, Any], context: str, job_id: str) -> N
     elif set(expected_arms) != {"on", "off"}:
         raise CollectorError(f"job {job_id} g0 context must contain ON/OFF arms")
 
+    expected_selector_evidence = {
+        arm: "1" if arm == "on" else "0" for arm in expected_arms
+    }
+    if manifest.get("cutedsl_selector_evidence") != expected_selector_evidence:
+        raise CollectorError(f"job {job_id} CuTeDSL selector evidence differs")
+
     fixed_config = manifest.get("fixed_config_evidence")
     if not isinstance(fixed_config, dict) or set(fixed_config) != set(expected_arms):
         raise CollectorError(f"job {job_id} fixed config arms differ")
@@ -537,6 +550,8 @@ def _validate_contract(manifest: dict[str, Any], context: str, job_id: str) -> N
             raise CollectorError(f"job {job_id} cuda_graph_impl differs from context")
         if expected_full_cg and record.get("cuda_graph_use_single_mempool") is not True:
             raise CollectorError(f"job {job_id} full-CG single mempool is not enabled")
+        if expected_full_cg and record.get("cuda_graph_warmup_steps") != 3:
+            raise CollectorError(f"job {job_id} full-CG warmup steps must equal 3")
 
 
 def _validate_metric_mapping(mapping: Any, *, job_id: str, arm: str) -> dict[str, str]:
@@ -688,7 +703,7 @@ def _load_arm(
             observed = _require_number(
                 row.get(throughput_field), f"job {job_id} {arm} {throughput_field}"
             )
-            expected = total_tokens / duration / 4.0
+            expected = total_tokens / duration / THROUGHPUT_GPU_COUNTS[throughput_field]
             if not math.isclose(observed, expected, rel_tol=1e-6, abs_tol=1e-6):
                 raise CollectorError(
                     f"job {job_id} {arm} {throughput_field} is not actual-token normalized"
@@ -901,7 +916,7 @@ def _validate_a2a_temporal_evidence(
         64,
         f"job {job_id} A2A source profile SHA",
     )
-    profile_paths = sorted(job_dir.glob("profiles/**/*.nsys-rep"))
+    profile_paths = sorted(job_dir.glob("profiles/*-on/nsight/*.nsys-rep"))
     matching_profiles = []
     for profile_path in profile_paths:
         profile_path = _safe_file(
@@ -911,7 +926,8 @@ def _validate_a2a_temporal_evidence(
             matching_profiles.append(profile_path)
     if len(matching_profiles) != 1:
         raise CollectorError(
-            f"job {job_id} A2A source profile digest must match exactly one artifact"
+            f"job {job_id} A2A source profile digest must match exactly one "
+            "ON-arm artifact"
         )
     for field in ("a2a_interval_count", "expert_gemm_interval_count"):
         if _require_int(analyzer.get(field), f"job {job_id} {field}") == 0:
@@ -994,6 +1010,26 @@ def _load_run(
             )
     _validate_identity(manifest, job_id)
     _validate_contract(manifest, context, job_id)
+
+    matched_config_diff_path = job_dir / "matched_config_diff.json"
+    matched_config_diff: dict[str, Any] | None = None
+    if CONTEXT_FLAGS[context][0]:
+        if matched_config_diff_path.exists() or matched_config_diff_path.is_symlink():
+            raise CollectorError(
+                f"job {job_id} full-CG context has unexpected matched config diff"
+            )
+    else:
+        matched_config_diff = _read_json(
+            _safe_file(
+                root,
+                matched_config_diff_path,
+                f"job {job_id} matched CuTeDSL config diff",
+            ),
+            f"job {job_id} matched CuTeDSL config diff",
+        )
+        expected_matched_config_diff = {CUTEDSL_SELECTOR_PATH: {"on": "1", "off": "0"}}
+        if matched_config_diff != expected_matched_config_diff:
+            raise CollectorError(f"job {job_id} matched CuTeDSL config diff differs")
 
     summaries = sorted(job_dir.rglob("timing_summary.json"))
     if len(summaries) != 1:
@@ -1096,6 +1132,16 @@ def _load_run(
             raise CollectorError(f"job {job_id} replay_calls must be at least 2")
         if counters["reset"][-1] != 0:
             raise CollectorError(f"job {job_id} reset_calls must equal 0")
+        expected_counters = {
+            "warmup": [min(step, 3) for step in all_steps],
+            "capture": [int(step >= 4) for step in all_steps],
+            "replay": [max(0, step - 3) for step in all_steps],
+            "reset": [0 for _ in all_steps],
+        }
+        if counters != expected_counters:
+            raise CollectorError(
+                f"job {job_id} full-CG lifecycle counter sequence differs"
+            )
 
     fixed_on = manifest["fixed_config_evidence"]["on"]
     invariant_config = {
@@ -1107,6 +1153,7 @@ def _load_run(
         "timing_summary": summary,
         "arms": digest_arms,
         "profile": profile_evidence,
+        "matched_config_diff": matched_config_diff,
     }
     evidence_digest = hashlib.sha256(
         _canonical_json(digest_payload).encode()
@@ -1453,7 +1500,6 @@ def _a2a_overlap_ratio_contrasts(
         pairs = []
         pair_increases = []
         available_pairs = []
-        representative_only = False
         for replicate_index in paired_indices:
             baseline_run = baseline[replicate_index]
             overlap_run = overlap[replicate_index]
@@ -1475,10 +1521,6 @@ def _a2a_overlap_ratio_contrasts(
                     "A2A overlap ratio did not increase"
                 )
             pair_increases.append(increased)
-            representative_only = representative_only or (
-                baseline_run.temporal_representative_only
-                or overlap_run.temporal_representative_only
-            )
             pair = {
                 "replicate_index": replicate_index,
                 "baseline_ratio": _clean(baseline_ratio),
@@ -1501,6 +1543,9 @@ def _a2a_overlap_ratio_contrasts(
             "baseline_context": baseline_context,
             "overlap_context": overlap_context,
             "evidence_scope": "representative_process_exploratory",
+            "limitation": (
+                "v1 analyzer binds one source profile; no all-rank aggregation"
+            ),
             "paired_profile_replicates": pairs,
             "all_pairs_increased": all_pairs_increased,
             "median_baseline_ratio": (
@@ -1528,11 +1573,7 @@ def _a2a_overlap_ratio_contrasts(
                 if available_pairs
                 else None
             ),
-            "claim_status": (
-                "provisional"
-                if representative_only or not all_pairs_increased
-                else "claim_ready"
-            ),
+            "claim_status": "provisional",
         }
     return output, reasons
 

@@ -962,6 +962,8 @@ def test_benchmark_verifies_exact_matched_config_diff() -> None:
         'on_selector == "1"',
         'off_selector == "0"',
         'differences == {selector_path: {"on": "1", "off": "0"}}',
+        "cutedsl_selector_evidence = {",
+        '"cutedsl_selector_evidence": cutedsl_selector_evidence',
         '"matched_config_diff.json"',
         '"effective_config_on.yaml"',
         '"effective_config_off.yaml"',

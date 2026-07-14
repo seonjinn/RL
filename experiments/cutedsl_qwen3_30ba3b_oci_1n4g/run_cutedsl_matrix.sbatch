@@ -1017,6 +1017,12 @@ fixed_config_evidence = {
     }
     for arm in expected_arms
 }
+cutedsl_selector_evidence = {
+    arm: value_at(configs_by_arm[arm], selector_path) for arm in expected_arms
+}
+assert cutedsl_selector_evidence == {
+    arm: "1" if arm == "on" else "0" for arm in expected_arms
+}
 expected_full_cg = os.environ["NEMO2606_FULL_CG_ENABLED"] == "1"
 expected_a2a = os.environ["NEMO2606_A2A_ENABLED"] == "1"
 for arm in timing_order:
@@ -1216,6 +1222,7 @@ manifest = {
         },
     },
     "fixed_config_evidence": fixed_config_evidence,
+    "cutedsl_selector_evidence": cutedsl_selector_evidence,
     "arms": [
         {"arm": arm, "order_index": order_index}
         for order_index, arm in enumerate(timing_order)
