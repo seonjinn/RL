@@ -48,6 +48,9 @@ from nemo_rl.data_plane.schema import (
     fields_with_optional_routed_experts,
 )
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+from nemo_rl.models.megatron.full_cuda_graph import (
+    aggregate_full_cuda_graph_evidence,
+)
 from nemo_rl.models.policy.lm_policy import Policy
 from nemo_rl.utils.flops_tracker import get_theoretical_tflops
 from nemo_rl.utils.timer import Timer
@@ -71,6 +74,7 @@ def _aggregate_train_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         )
     if "moe_metrics" in results[0]:
         out["moe_metrics"] = results[0]["moe_metrics"]
+    out.update(aggregate_full_cuda_graph_evidence(results))
     all_mb_metrics: dict[str, list[Any]] = defaultdict(list)
     for r in results:
         for k, v in r["all_mb_metrics"].items():

@@ -38,6 +38,9 @@ from nemo_rl.models.generation.interfaces import (
     GenerationInterface,
     GenerationOutputSpec,
 )
+from nemo_rl.models.megatron.full_cuda_graph import (
+    aggregate_full_cuda_graph_evidence,
+)
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.interfaces import (
     ColocatablePolicyInterface,
@@ -795,6 +798,7 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             aggregated_results["moe_metrics"] = results[0]["moe_metrics"]
         if "mtp_metrics" in results[0]:
             aggregated_results["mtp_metrics"] = results[0]["mtp_metrics"]
+        aggregated_results.update(aggregate_full_cuda_graph_evidence(results))
 
         if self.flops_tracker is not None:
             aggregated_results["total_flops"] = self.flops_tracker.total_flops

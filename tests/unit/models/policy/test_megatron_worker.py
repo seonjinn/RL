@@ -620,6 +620,18 @@ def test_full_cuda_graph_train_injects_schedule_and_materializes_metrics(
     worker._full_cuda_graph_aux_loss_scale = (
         megatron_policy_worker.FullCudaGraphAuxLossScaleBuffer()
     )
+    worker._full_cuda_graph_wrapper = SimpleNamespace(
+        execution_stats=lambda: SimpleNamespace(
+            warmup_calls=1,
+            capture_calls=1,
+            replay_calls=2,
+            reset_calls=0,
+        )
+    )
+    worker._full_cuda_graph_storage_signature = SimpleNamespace(
+        digest=lambda: "a" * 64,
+        require_match=lambda *_args: None,
+    )
     worker.timer = SimpleNamespace(start=lambda _name: None, stop=lambda _name: None)
     worker.model = _FakeTrainableModel()
     worker.model.modules = lambda: ()
@@ -701,6 +713,12 @@ def test_full_cuda_graph_train_injects_schedule_and_materializes_metrics(
     monkeypatch.setattr(torch.distributed, "all_reduce", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(torch.distributed, "barrier", lambda: None)
     monkeypatch.setattr(torch.distributed, "get_rank", lambda: 0)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 1)
+    monkeypatch.setattr(
+        torch.distributed,
+        "all_gather_object",
+        lambda gathered, local: gathered.__setitem__(0, local),
+    )
     monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
     monkeypatch.setattr(torch.cuda, "get_device_name", lambda: "test-gpu")
     monkeypatch.setattr(torch.cuda.nvtx, "range_push", lambda _name: None)
@@ -781,7 +799,7 @@ def test_full_cuda_graph_train_injects_schedule_and_materializes_metrics(
     )
 
     data = BatchedDataDict({"input_ids": torch.ones(1, 1)})
-    MegatronPolicyWorkerImpl.train(worker, data, loss_fn=object())
+    result = MegatronPolicyWorkerImpl.train(worker, data, loss_fn=object())
 
     assert observed["loss_post_processor_kwargs"]["full_cuda_graph"] is True
     assert (
@@ -789,6 +807,11 @@ def test_full_cuda_graph_train_injects_schedule_and_materializes_metrics(
         is worker._full_cuda_graph_schedule
     )
     assert observed["materialized"] is raw_metrics
+    assert result["full_cuda_graph_warmup_calls"] == 1
+    assert result["full_cuda_graph_capture_calls"] == 1
+    assert result["full_cuda_graph_replay_calls"] == 2
+    assert result["full_cuda_graph_reset_calls"] == 0
+    assert result["full_cuda_graph_storage_signature_sha256"] != "a" * 64
 
 
 def test_full_cuda_graph_invalid_config_fails_before_cuda_setup(

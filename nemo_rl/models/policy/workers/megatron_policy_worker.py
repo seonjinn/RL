@@ -68,6 +68,7 @@ from nemo_rl.models.megatron.data import (
 from nemo_rl.models.megatron.full_cuda_graph import (
     FullCudaGraphAuxLossScaleBuffer,
     FullCudaGraphStorageSignature,
+    build_full_cuda_graph_evidence_consensus,
     build_full_cuda_graph_schedule,
     materialize_full_cuda_graph_metrics,
     require_supported_full_cuda_graph_operation,
@@ -702,24 +703,36 @@ class MegatronPolicyWorkerImpl(
         )
 
     def _add_full_cuda_graph_execution_metrics(self, metrics: dict[str, Any]) -> None:
-        """Publish replay evidence without exposing graph-resident addresses."""
+        """Publish all-rank replay consensus without graph-resident addresses."""
         if not getattr(self, "_full_cuda_graph_enabled", False):
             return
         wrapper = getattr(self, "_full_cuda_graph_wrapper", None)
-        if wrapper is None:
-            return
-        stats = wrapper.execution_stats()
-        signature = getattr(self, "_full_cuda_graph_storage_signature", None)
+        local_evidence: Any = None
+        try:
+            if wrapper is not None:
+                stats = wrapper.execution_stats()
+                signature = getattr(self, "_full_cuda_graph_storage_signature", None)
+                local_evidence = (
+                    torch.distributed.get_rank(),
+                    (
+                        stats.warmup_calls,
+                        stats.capture_calls,
+                        stats.replay_calls,
+                        stats.reset_calls,
+                    ),
+                    signature.digest() if signature is not None else None,
+                )
+        except Exception:
+            local_evidence = None
+
+        world_size = torch.distributed.get_world_size()
+        gathered_evidence: list[Any] = [None] * world_size
+        torch.distributed.all_gather_object(gathered_evidence, local_evidence)
         metrics.update(
-            {
-                "full_cuda_graph_warmup_calls": stats.warmup_calls,
-                "full_cuda_graph_capture_calls": stats.capture_calls,
-                "full_cuda_graph_replay_calls": stats.replay_calls,
-                "full_cuda_graph_reset_calls": stats.reset_calls,
-                "full_cuda_graph_storage_signature_sha256": (
-                    signature.digest() if signature is not None else None
-                ),
-            }
+            build_full_cuda_graph_evidence_consensus(
+                gathered_evidence,
+                expected_world_size=world_size,
+            )
         )
 
     def _uses_mxfp8_overlap_shared_param_buffer(self) -> bool:

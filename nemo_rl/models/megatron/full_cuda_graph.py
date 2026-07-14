@@ -15,7 +15,7 @@
 import hashlib
 import json
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field as dataclass_field
 from enum import Enum
 from functools import lru_cache
@@ -62,6 +62,121 @@ class FullCudaGraphExecutionStats:
     capture_calls: int
     replay_calls: int
     reset_calls: int
+
+
+FULL_CUDA_GRAPH_EVIDENCE_FIELDS = (
+    "full_cuda_graph_warmup_calls",
+    "full_cuda_graph_capture_calls",
+    "full_cuda_graph_replay_calls",
+    "full_cuda_graph_reset_calls",
+    "full_cuda_graph_storage_signature_sha256",
+)
+_FULL_CUDA_GRAPH_COUNTER_FIELDS = FULL_CUDA_GRAPH_EVIDENCE_FIELDS[:4]
+_SHA256_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _validate_full_cuda_graph_counters(value: Any) -> tuple[int, int, int, int]:
+    if (
+        type(value) is not tuple
+        or len(value) != 4
+        or any(type(counter) is not int or counter < 0 for counter in value)
+    ):
+        raise ValueError("full-iteration CUDA graph malformed counters") from None
+    return value
+
+
+def _validate_full_cuda_graph_digest(value: Any) -> str:
+    if type(value) is not str or _SHA256_DIGEST.fullmatch(value) is None:
+        raise ValueError("full-iteration CUDA graph malformed storage digest") from None
+    return value
+
+
+def build_full_cuda_graph_evidence_consensus(
+    rank_evidence: list[Any], *, expected_world_size: int
+) -> dict[str, int | str]:
+    """Validate all policy-rank evidence and derive one cohort digest."""
+    if type(expected_world_size) is not int or expected_world_size < 1:
+        raise ValueError(
+            "full-iteration CUDA graph invalid policy world size"
+        ) from None
+    if type(rank_evidence) is not list:
+        raise ValueError("full-iteration CUDA graph malformed rank evidence") from None
+    if len(rank_evidence) != expected_world_size:
+        raise ValueError("full-iteration CUDA graph missing rank") from None
+
+    evidence_by_rank: dict[int, tuple[tuple[int, int, int, int], str]] = {}
+    for evidence in rank_evidence:
+        if type(evidence) is not tuple:
+            raise ValueError(
+                "full-iteration CUDA graph malformed rank evidence"
+            ) from None
+        if len(evidence) != 3:
+            raise ValueError(
+                "full-iteration CUDA graph partial rank evidence"
+            ) from None
+        rank, counters_value, digest_value = evidence
+        if type(rank) is not int or rank < 0 or rank >= expected_world_size:
+            raise ValueError("full-iteration CUDA graph invalid rank") from None
+        if rank in evidence_by_rank:
+            raise ValueError("full-iteration CUDA graph duplicate rank") from None
+        counters = _validate_full_cuda_graph_counters(counters_value)
+        digest = _validate_full_cuda_graph_digest(digest_value)
+        evidence_by_rank[rank] = (counters, digest)
+
+    expected_ranks = set(range(expected_world_size))
+    if set(evidence_by_rank) != expected_ranks:
+        raise ValueError("full-iteration CUDA graph missing rank") from None
+
+    ordered_evidence = sorted(evidence_by_rank.items())
+    expected_counters = ordered_evidence[0][1][0]
+    if any(counters != expected_counters for _, (counters, _) in ordered_evidence):
+        raise ValueError("full-iteration CUDA graph counter mismatch") from None
+
+    rank_digests = [(rank, digest) for rank, (_, digest) in ordered_evidence]
+    cohort_digest = hashlib.sha256(
+        json.dumps(rank_digests, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {
+        **dict(zip(_FULL_CUDA_GRAPH_COUNTER_FIELDS, expected_counters)),
+        "full_cuda_graph_storage_signature_sha256": cohort_digest,
+    }
+
+
+def aggregate_full_cuda_graph_evidence(
+    results: Sequence[Mapping[str, Any]],
+) -> dict[str, int | str]:
+    """Copy exact worker consensus evidence without reducing rank replicas."""
+    field_presence = [
+        tuple(field in result for field in FULL_CUDA_GRAPH_EVIDENCE_FIELDS)
+        for result in results
+    ]
+    if all(not any(presence) for presence in field_presence):
+        return {}
+    if any(not all(presence) for presence in field_presence):
+        raise ValueError(
+            "full-iteration CUDA graph requires complete evidence from every result"
+        ) from None
+
+    first = results[0]
+    first_counters = _validate_full_cuda_graph_counters(
+        tuple(first[field] for field in _FULL_CUDA_GRAPH_COUNTER_FIELDS)
+    )
+    first_digest = _validate_full_cuda_graph_digest(
+        first["full_cuda_graph_storage_signature_sha256"]
+    )
+    expected = (*first_counters, first_digest)
+    for result in results[1:]:
+        counters = _validate_full_cuda_graph_counters(
+            tuple(result[field] for field in _FULL_CUDA_GRAPH_COUNTER_FIELDS)
+        )
+        digest = _validate_full_cuda_graph_digest(
+            result["full_cuda_graph_storage_signature_sha256"]
+        )
+        if (*counters, digest) != expected:
+            raise ValueError(
+                "full-iteration CUDA graph evidence mismatch across results"
+            ) from None
+    return dict(zip(FULL_CUDA_GRAPH_EVIDENCE_FIELDS, expected))
 
 
 @dataclass(frozen=True, repr=False)

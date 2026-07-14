@@ -1046,7 +1046,179 @@ def test_full_cuda_graph_storage_guard_reset_does_not_authorize_recapture() -> N
         worker._validate_full_cuda_graph_storage_before_schedule()
 
 
-def test_full_cuda_graph_worker_stats_emit_digest_without_pointer_values() -> None:
+def _full_cuda_graph_rank_evidence(
+    rank: int,
+    digest: str,
+    *,
+    counters: tuple[int, int, int, int] = (1, 1, 2, 0),
+) -> tuple[int, tuple[int, int, int, int], str]:
+    return rank, counters, digest
+
+
+def test_full_cuda_graph_rank_consensus_is_order_independent() -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        build_full_cuda_graph_evidence_consensus,
+    )
+
+    rank_zero_digest = "a" * 64
+    rank_one_digest = "b" * 64
+    ascending = [
+        _full_cuda_graph_rank_evidence(0, rank_zero_digest),
+        _full_cuda_graph_rank_evidence(1, rank_one_digest),
+    ]
+    descending = list(reversed(ascending))
+
+    first = build_full_cuda_graph_evidence_consensus(ascending, expected_world_size=2)
+    second = build_full_cuda_graph_evidence_consensus(descending, expected_world_size=2)
+
+    assert first == second
+    assert first == {
+        "full_cuda_graph_warmup_calls": 1,
+        "full_cuda_graph_capture_calls": 1,
+        "full_cuda_graph_replay_calls": 2,
+        "full_cuda_graph_reset_calls": 0,
+        "full_cuda_graph_storage_signature_sha256": first[
+            "full_cuda_graph_storage_signature_sha256"
+        ],
+    }
+    cohort_digest = first["full_cuda_graph_storage_signature_sha256"]
+    assert re.fullmatch(r"[0-9a-f]{64}", cohort_digest)
+    assert cohort_digest not in {rank_zero_digest, rank_one_digest}
+
+
+@pytest.mark.parametrize(
+    ("rank_evidence", "expected_world_size", "match"),
+    [
+        (
+            [
+                _full_cuda_graph_rank_evidence(0, "a" * 64),
+                _full_cuda_graph_rank_evidence(1, "b" * 64, counters=(1, 1, 3, 0)),
+            ],
+            2,
+            "counter mismatch",
+        ),
+        (
+            [(0, (1, 1, 2, 0))],
+            1,
+            "partial rank evidence",
+        ),
+        (
+            [_full_cuda_graph_rank_evidence(0, "a" * 64)],
+            2,
+            "missing rank",
+        ),
+        (
+            [
+                _full_cuda_graph_rank_evidence(0, "a" * 64),
+                _full_cuda_graph_rank_evidence(0, "b" * 64),
+            ],
+            2,
+            "duplicate rank",
+        ),
+        (
+            [
+                _full_cuda_graph_rank_evidence(0, "a" * 64),
+                _full_cuda_graph_rank_evidence(2, "b" * 64),
+            ],
+            2,
+            "invalid rank",
+        ),
+        (
+            [
+                _full_cuda_graph_rank_evidence(0, "A" * 64),
+                _full_cuda_graph_rank_evidence(1, "b" * 64),
+            ],
+            2,
+            "malformed storage digest",
+        ),
+        (
+            [
+                _full_cuda_graph_rank_evidence(0, "a" * 64, counters=(-1, 1, 2, 0)),
+                _full_cuda_graph_rank_evidence(1, "b" * 64),
+            ],
+            2,
+            "malformed counters",
+        ),
+    ],
+)
+def test_full_cuda_graph_rank_consensus_rejects_invalid_evidence(
+    rank_evidence: list[Any], expected_world_size: int, match: str
+) -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        build_full_cuda_graph_evidence_consensus,
+    )
+
+    with pytest.raises(ValueError, match=match):
+        build_full_cuda_graph_evidence_consensus(
+            rank_evidence, expected_world_size=expected_world_size
+        )
+
+
+def test_full_cuda_graph_result_aggregation_copies_consensus_exactly() -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        aggregate_full_cuda_graph_evidence,
+    )
+
+    expected = {
+        "full_cuda_graph_warmup_calls": 3,
+        "full_cuda_graph_capture_calls": 1,
+        "full_cuda_graph_replay_calls": 4,
+        "full_cuda_graph_reset_calls": 0,
+        "full_cuda_graph_storage_signature_sha256": "c" * 64,
+    }
+
+    assert aggregate_full_cuda_graph_evidence([expected.copy(), expected.copy()]) == (
+        expected
+    )
+
+
+@pytest.mark.parametrize("failure", ["partial", "mismatch", "malformed"])
+def test_full_cuda_graph_result_aggregation_fails_closed(failure: str) -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        aggregate_full_cuda_graph_evidence,
+    )
+
+    first = {
+        "full_cuda_graph_warmup_calls": 3,
+        "full_cuda_graph_capture_calls": 1,
+        "full_cuda_graph_replay_calls": 4,
+        "full_cuda_graph_reset_calls": 0,
+        "full_cuda_graph_storage_signature_sha256": "c" * 64,
+    }
+    second = first.copy()
+    if failure == "partial":
+        del second["full_cuda_graph_replay_calls"]
+    elif failure == "mismatch":
+        second["full_cuda_graph_capture_calls"] = 2
+    else:
+        second["full_cuda_graph_storage_signature_sha256"] = "C" * 64
+
+    with pytest.raises(ValueError):
+        aggregate_full_cuda_graph_evidence([first, second])
+
+
+def test_full_cuda_graph_result_aggregation_is_empty_when_disabled() -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        aggregate_full_cuda_graph_evidence,
+    )
+
+    assert aggregate_full_cuda_graph_evidence([{"loss": 1.0}, {"loss": 2.0}]) == {}
+
+
+def test_policy_aggregators_share_full_cuda_graph_consensus_helper() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[4]
+    legacy_source = (root / "nemo_rl/models/policy/lm_policy.py").read_text()
+    tq_source = (root / "nemo_rl/models/policy/tq_policy.py").read_text()
+
+    assert legacy_source.count("aggregate_full_cuda_graph_evidence(results)") == 1
+    assert tq_source.count("aggregate_full_cuda_graph_evidence(results)") == 1
+
+
+def test_full_cuda_graph_worker_stats_emit_cohort_digest_without_pointer_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
         MegatronPolicyWorkerImpl,
     )
@@ -1063,6 +1235,19 @@ def test_full_cuda_graph_worker_stats_emit_digest_without_pointer_values() -> No
     for _ in range(3):
         _call_wrapper(wrapper)
 
+    gathered_payloads: list[Any] = []
+
+    def all_gather_object(gathered: list[Any], local_payload: Any) -> None:
+        gathered_payloads.append(local_payload)
+        gathered[:] = [
+            local_payload,
+            _full_cuda_graph_rank_evidence(1, "b" * 64),
+        ]
+
+    monkeypatch.setattr(torch.distributed, "get_rank", lambda: 0)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 2)
+    monkeypatch.setattr(torch.distributed, "all_gather_object", all_gather_object)
+
     metrics: dict[str, Any] = {}
     worker._add_full_cuda_graph_execution_metrics(metrics)
 
@@ -1073,9 +1258,45 @@ def test_full_cuda_graph_worker_stats_emit_digest_without_pointer_values() -> No
     assert re.fullmatch(
         r"[0-9a-f]{64}", metrics["full_cuda_graph_storage_signature_sha256"]
     )
+    assert len(gathered_payloads) == 1
+    local_digest = gathered_payloads[0][2]
+    assert metrics["full_cuda_graph_storage_signature_sha256"] != local_digest
     rendered = repr(metrics)
     assert str(model.weight.data_ptr()) not in rendered
     assert hex(model.weight.data_ptr()) not in rendered
+    assert local_digest not in rendered
+    assert "entries" not in rendered
+
+
+def test_full_cuda_graph_worker_gathers_before_rejecting_malformed_local_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    class BrokenWrapper:
+        def execution_stats(self) -> Any:
+            raise RuntimeError("rank-local failure")
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._full_cuda_graph_enabled = True
+    worker._full_cuda_graph_wrapper = BrokenWrapper()
+    worker._full_cuda_graph_storage_signature = None
+    collective_calls: list[Any] = []
+
+    def all_gather_object(gathered: list[Any], local_payload: Any) -> None:
+        collective_calls.append(local_payload)
+        gathered[:] = [local_payload]
+
+    monkeypatch.setattr(torch.distributed, "get_rank", lambda: 0)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 1)
+    monkeypatch.setattr(torch.distributed, "all_gather_object", all_gather_object)
+
+    with pytest.raises(ValueError, match="malformed rank evidence"):
+        worker._add_full_cuda_graph_execution_metrics({})
+
+    assert collective_calls == [None]
 
 
 def test_full_graph_forward_step_preserves_a2a_schedule_plan() -> None:

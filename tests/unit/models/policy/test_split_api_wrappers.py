@@ -29,8 +29,11 @@ contracts cheaply:
 
 from __future__ import annotations
 
+import pickle
 from typing import Any
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from nemo_rl.data_plane import KVBatchMeta
 from nemo_rl.data_plane.worker_mixin import TQWorkerMixin
@@ -210,6 +213,28 @@ def _train_result(update_successful: bool | None) -> dict[str, Any]:
     return result
 
 
+_FULL_CUDA_GRAPH_EVIDENCE = {
+    "full_cuda_graph_warmup_calls": 3,
+    "full_cuda_graph_capture_calls": 1,
+    "full_cuda_graph_replay_calls": 4,
+    "full_cuda_graph_reset_calls": 0,
+    "full_cuda_graph_storage_signature_sha256": "c" * 64,
+}
+
+
+def _policy_with_train_results(results: list[dict[str, Any]]) -> Policy:
+    policy = object.__new__(Policy)
+    policy.cfg = {"train_global_batch_size": 2, "train_micro_batch_size": 1}
+    policy.flops_tracker = None
+    policy._shard_for_train = MagicMock(
+        return_value=[f"shard-{index}" for index in range(len(results))]
+    )
+    policy.worker_group = MagicMock()
+    policy.worker_group.run_all_workers_sharded_data.return_value = object()
+    policy.worker_group.get_all_worker_results.return_value = results
+    return policy
+
+
 def test_policy_train_aggregates_failed_optimizer_update() -> None:
     policy = object.__new__(Policy)
     policy.cfg = {"train_global_batch_size": 2, "train_micro_batch_size": 1}
@@ -247,3 +272,69 @@ def test_policy_train_omits_optimizer_update_for_legacy_worker_results() -> None
     result = policy.train(data=MagicMock(), loss_fn=MagicMock())
 
     assert "update_successful" not in result
+
+
+def test_policy_train_preserves_full_cuda_graph_consensus_without_reduction() -> None:
+    results = [_train_result(True), _train_result(True)]
+    for worker_result in results:
+        worker_result.update(_FULL_CUDA_GRAPH_EVIDENCE)
+    policy = _policy_with_train_results(results)
+
+    result = policy.train(data=MagicMock(), loss_fn=MagicMock())
+
+    for field, expected in _FULL_CUDA_GRAPH_EVIDENCE.items():
+        assert result[field] == expected
+
+
+def test_tq_train_aggregation_preserves_full_cuda_graph_consensus_without_reduction() -> (
+    None
+):
+    results = [_train_result(True), _train_result(True)]
+    for worker_result in results:
+        worker_result.update(_FULL_CUDA_GRAPH_EVIDENCE)
+
+    result = _aggregate_train_results(results)
+
+    for field, expected in _FULL_CUDA_GRAPH_EVIDENCE.items():
+        assert result[field] == expected
+
+
+def test_policy_train_rejects_partial_full_cuda_graph_evidence() -> None:
+    first = _train_result(True)
+    first.update(_FULL_CUDA_GRAPH_EVIDENCE)
+    second = _train_result(True)
+    second.update(_FULL_CUDA_GRAPH_EVIDENCE)
+    del second["full_cuda_graph_replay_calls"]
+    policy = _policy_with_train_results([first, second])
+
+    with pytest.raises(ValueError, match="complete evidence"):
+        policy.train(data=MagicMock(), loss_fn=MagicMock())
+
+
+def test_tq_train_aggregation_rejects_mismatched_full_cuda_graph_evidence() -> None:
+    first = _train_result(True)
+    first.update(_FULL_CUDA_GRAPH_EVIDENCE)
+    second = _train_result(True)
+    second.update(_FULL_CUDA_GRAPH_EVIDENCE)
+    second["full_cuda_graph_capture_calls"] = 2
+
+    with pytest.raises(ValueError, match="evidence mismatch"):
+        _aggregate_train_results([first, second])
+
+
+def test_graph_disabled_legacy_and_tq_results_are_byte_equivalent() -> None:
+    results = [_train_result(True), _train_result(False)]
+    expected = {
+        "loss": 1.0,
+        "grad_norm": 0.5,
+        "update_successful": False,
+        "all_mb_metrics": {"loss": [0.1, 0.1]},
+    }
+
+    legacy_result = _policy_with_train_results(results).train(
+        data=MagicMock(), loss_fn=MagicMock()
+    )
+    tq_result = _aggregate_train_results(results)
+
+    assert pickle.dumps(legacy_result) == pickle.dumps(expected)
+    assert pickle.dumps(tq_result) == pickle.dumps(expected)
