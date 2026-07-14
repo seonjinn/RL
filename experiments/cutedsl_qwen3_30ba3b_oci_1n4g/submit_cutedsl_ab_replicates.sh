@@ -97,6 +97,7 @@ for ((replicate_index = 0; replicate_index < REPLICATES; replicate_index++)); do
         -u CUTEDSL_BENCHMARK_TRAIN_GLOBAL_BATCH_SIZE \
         -u CUTEDSL_BENCHMARK_EXPERT_MODEL_PARALLEL_SIZE \
         -u CUTEDSL_SHARED_HF_HOME \
+        -u UV_NO_EDITABLE \
         -u SLURM_EXPORT_ENV \
         "CUTEDSL_BENCHMARK_REPLICATE=${replicate_index}" \
         "CUTEDSL_BENCHMARK_ORDER=${timing_order}" \
@@ -107,6 +108,7 @@ for ((replicate_index = 0; replicate_index < REPLICATES; replicate_index++)); do
         "CUTEDSL_BENCHMARK_TRAIN_GLOBAL_BATCH_SIZE=4" \
         "CUTEDSL_BENCHMARK_EXPERT_MODEL_PARALLEL_SIZE=4" \
         "CUTEDSL_SHARED_HF_HOME=${CUTEDSL_SHARED_HF_HOME}" \
+        "UV_NO_EDITABLE=1" \
         "SLURM_EXPORT_ENV=ALL" \
         > "${EXPORT_PAYLOAD}"
 

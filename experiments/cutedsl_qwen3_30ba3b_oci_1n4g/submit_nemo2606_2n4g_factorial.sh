@@ -173,6 +173,7 @@ if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
         -u NEMO2606_FACTORIAL_CONTEXT \
         -u NEMO2606_FULL_CG_ENABLED \
         -u NEMO2606_A2A_ENABLED \
+        -u UV_NO_EDITABLE \
         -u SLURM_EXPORT_ENV \
         "CONTAINER=${CUTEDSL_IMAGE}" \
         "MOUNTS=${RAY_MOUNTS}" \
@@ -201,6 +202,7 @@ if [[ "${FUNCTIONAL_GATE}" == "1" ]]; then
         "NEMO2606_FACTORIAL_CONTEXT=g0a0" \
         "NEMO2606_FULL_CG_ENABLED=0" \
         "NEMO2606_A2A_ENABLED=0" \
+        "UV_NO_EDITABLE=1" \
         "SLURM_EXPORT_ENV=ALL" \
         > "${EXPORT_PAYLOAD}"
 
@@ -315,6 +317,7 @@ for ((replicate_index = 0; replicate_index < REPLICATES; replicate_index++)); do
             -u NEMO2606_FACTORIAL_CONTEXT \
             -u NEMO2606_FULL_CG_ENABLED \
             -u NEMO2606_A2A_ENABLED \
+            -u UV_NO_EDITABLE \
             -u SLURM_EXPORT_ENV \
             "CONTAINER=${CUTEDSL_IMAGE}" \
             "MOUNTS=${RAY_MOUNTS}" \
@@ -344,6 +347,7 @@ for ((replicate_index = 0; replicate_index < REPLICATES; replicate_index++)); do
             "NEMO2606_FACTORIAL_CONTEXT=${context}" \
             "NEMO2606_FULL_CG_ENABLED=${full_cg_enabled}" \
             "NEMO2606_A2A_ENABLED=${a2a_enabled}" \
+            "UV_NO_EDITABLE=1" \
             "SLURM_EXPORT_ENV=ALL" \
             > "${EXPORT_PAYLOAD}"
 
