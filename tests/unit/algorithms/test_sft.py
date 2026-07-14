@@ -46,6 +46,7 @@ from nemo_rl.algorithms.sft import (
     _recursive_tensor_payload_bytes,
     _validate_event_execution_config,
     _validate_with_loss_availability,
+    setup as sft_setup,
     sft_train,
     validate,
 )
@@ -67,6 +68,49 @@ from nemo_rl.algorithms.sft_validation_artifact import (
 )
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.utils.timer import Timer
+
+
+def test_setup_isolates_validation_dataloader_rng_from_training_rng() -> None:
+    seed = 20260714
+    master_config = MasterConfig.model_construct(
+        policy={
+            "train_global_batch_size": 1,
+            "megatron_cfg": {
+                "enabled": False,
+                "use_fused_linear_logprobs": False,
+            },
+        },
+        data={"shuffle": False, "num_workers": 0},
+        sft=SFTConfig.model_construct(seed=seed, val_global_batch_size=1),
+        logger={},
+        checkpointing={},
+        cluster={"num_nodes": 1, "gpus_per_node": 1},
+    )
+    train_dataset = MagicMock()
+    val_dataset = MagicMock()
+
+    with (
+        patch("nemo_rl.algorithms.sft.Logger"),
+        patch("nemo_rl.algorithms.sft.CheckpointManager") as checkpointer_cls,
+        patch("nemo_rl.algorithms.sft.StatefulDataLoader") as dataloader_cls,
+        patch(
+            "nemo_rl.algorithms.sft.prepare_segment_topology",
+            return_value=({}, None, None),
+        ),
+        patch("nemo_rl.algorithms.sft.RayVirtualCluster"),
+        patch("nemo_rl.algorithms.sft.Policy"),
+    ):
+        checkpointer = checkpointer_cls.return_value
+        checkpointer.get_latest_checkpoint_path.return_value = None
+        checkpointer.load_training_info.return_value = None
+        checkpointer.get_resume_paths.return_value = (None, None)
+
+        sft_setup(master_config, MagicMock(), train_dataset, val_dataset)
+
+    assert "generator" not in dataloader_cls.call_args_list[0].kwargs
+    validation_generator = dataloader_cls.call_args_list[1].kwargs["generator"]
+    assert isinstance(validation_generator, torch.Generator)
+    assert validation_generator.initial_seed() == seed
 
 
 @pytest.mark.parametrize(
