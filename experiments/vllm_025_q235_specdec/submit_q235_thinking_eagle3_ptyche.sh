@@ -51,8 +51,6 @@ if [[ "${NUM_NODES}" != "16" || "${SEGMENT}" != "16" ]]; then
 fi
 
 overrides=(
-  "policy.model_name=${TARGET_SNAPSHOT}"
-  "policy.tokenizer.name=${TARGET_SNAPSHOT}"
   "grpo.max_num_steps=${MAX_STEPS}"
   "checkpointing.enabled=false"
   "checkpointing.checkpoint_dir=${RUN_DIR}/checkpoints"
@@ -103,6 +101,8 @@ command_env=(
   "TORCH_INCLUDE_STACK_TRACE=1"
   "TORCH_INCLUDE_ONLY_ACTIVE=0"
   "HF_HOME=${HF_HOME}"
+  "HF_HUB_OFFLINE=1"
+  "TRANSFORMERS_OFFLINE=1"
   "NRL_MEGATRON_CHECKPOINT_DIR=${HF_HOME}/nemo_rl"
   "PYTHONPATH=${REPO_DIR}"
   "NEMO_RL_VENV_DIR=/tmp/nemorl-v025-q235-thinking-${RUN_TAG}"

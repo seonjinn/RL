@@ -37,18 +37,10 @@ def test_baseline_preserves_verified_q235_performance_contract() -> None:
     output = _dry_run("baseline")
 
     assert "grpo-qwen3-235b-16n4g.yaml" in output
-    assert (
-        "policy.model_name=/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
-        "models--Qwen--Qwen3-235B-A22B/snapshots/"
-        "8efa61729e24bd65b1d152b5ab5409052aa80e65"
-        in output
-    )
-    assert (
-        "policy.tokenizer.name=/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
-        "models--Qwen--Qwen3-235B-A22B/snapshots/"
-        "8efa61729e24bd65b1d152b5ab5409052aa80e65"
-        in output
-    )
+    assert "policy.model_name=" not in output
+    assert "policy.tokenizer.name=" not in output
+    assert "HF_HUB_OFFLINE=1" in output
+    assert "TRANSFORMERS_OFFLINE=1" in output
     assert "grpo.max_num_steps=1" in output
     assert "checkpointing.enabled=false" in output
     assert "policy.generation.vllm_cfg.enforce_eager=false" in output
