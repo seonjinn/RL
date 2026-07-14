@@ -84,11 +84,19 @@ if [[ "${CUDAGRAPH_METRICS}" == "true" ]]; then
 fi
 
 if [[ "${SPECULATIVE_TOKENS}" -gt 0 ]]; then
+  capture_sizes=()
+  for num_requests in 1 2 4 8 16 32 64; do
+    capture_sizes+=("$((num_requests * (SPECULATIVE_TOKENS + 1)))")
+  done
+  printf -v capture_sizes_csv '%s,' "${capture_sizes[@]}"
+  capture_sizes_csv="[${capture_sizes_csv%,}]"
+
   overrides+=(
     "++policy.generation.vllm_kwargs.speculative_config.method=eagle3"
     "++policy.generation.vllm_kwargs.speculative_config.model=${DRAFT_SNAPSHOT}"
     "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${SPECULATIVE_TOKENS}"
     "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=1"
+    "policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${capture_sizes_csv}"
   )
 fi
 
