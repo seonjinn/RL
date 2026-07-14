@@ -47,11 +47,15 @@ pytestmark = pytest.mark.mcore
 
 
 class _FakeTrainableModel:
-    def __init__(self):
+    def __init__(self, parameters: tuple[Any, ...] = ()):
         self.train_called = False
+        self._parameters = parameters
 
     def train(self):
         self.train_called = True
+
+    def parameters(self):
+        return iter(self._parameters)
 
 
 class _FakeTelemetryTensor:
@@ -464,6 +468,329 @@ def test_megatron_prepare_for_training_restores_optimizer():
 
     assert model.train_called
     assert restored_devices == ["cuda"]
+
+
+@pytest.mark.parametrize(
+    ("method_name", "args", "kwargs", "match"),
+    [
+        ("begin_train_step", (), {"loss_fn": object()}, "split/async PolicyTraining"),
+        (
+            "get_logprobs",
+            (),
+            {"data": BatchedDataDict()},
+            "Logprob",
+        ),
+        (
+            "get_reference_policy_logprobs",
+            (),
+            {"data": BatchedDataDict()},
+            "Logprob",
+        ),
+        ("prepare_for_lp_inference", (), {}, "Logprob"),
+        ("offload_before_refit", (), {}, "colocated refit/offload"),
+        ("offload_after_refit", (), {}, "colocated refit/offload"),
+        ("finish_inference", (), {}, "colocated refit/offload"),
+        (
+            "get_topk_logits",
+            (),
+            {"data": BatchedDataDict(), "k": 4},
+            "evaluation",
+        ),
+        (
+            "calibrate_qkv_fp8_scales",
+            (),
+            {"data": BatchedDataDict()},
+            "evaluation",
+        ),
+    ],
+)
+def test_full_cuda_graph_worker_rejects_unsupported_runtime_operations(
+    method_name: str,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    match: str,
+) -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._full_cuda_graph_enabled = True
+
+    with pytest.raises(RuntimeError, match=match):
+        getattr(MegatronPolicyWorkerImpl, method_name)(worker, *args, **kwargs)
+
+
+def test_full_cuda_graph_worker_rejects_eval_train_before_launching_schedule() -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._full_cuda_graph_enabled = True
+
+    with pytest.raises(RuntimeError, match="evaluation"):
+        MegatronPolicyWorkerImpl.train(
+            worker,
+            BatchedDataDict(),
+            loss_fn=object(),
+            eval_mode=True,
+        )
+
+
+def test_full_cuda_graph_prepare_for_training_preserves_resident_storage() -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    parameter = SimpleNamespace(is_cuda=True)
+    model = _FakeTrainableModel(parameters=(parameter,))
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._full_cuda_graph_enabled = True
+    worker.model = model
+    worker.optimizer = object()
+    worker.move_model = lambda *_args, **_kwargs: pytest.fail(
+        "graph mode must not move model storage"
+    )
+    worker.move_optimizer = lambda *_args, **_kwargs: pytest.fail(
+        "graph mode must not move optimizer storage"
+    )
+
+    MegatronPolicyWorkerImpl.prepare_for_training(worker)
+
+    assert worker.model is model
+    assert tuple(worker.model.parameters()) == (parameter,)
+    assert model.train_called
+
+
+def test_full_cuda_graph_prepare_for_training_rejects_offloaded_parameters() -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    model = _FakeTrainableModel(parameters=(SimpleNamespace(is_cuda=False),))
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._full_cuda_graph_enabled = True
+    worker.model = model
+
+    with pytest.raises(RuntimeError, match="storage was offloaded"):
+        MegatronPolicyWorkerImpl.prepare_for_training(worker)
+
+    assert not model.train_called
+
+
+def test_full_cuda_graph_train_injects_schedule_and_materializes_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nemo_rl.models.policy.workers import megatron_policy_worker
+
+    MegatronPolicyWorkerImpl = megatron_policy_worker.MegatronPolicyWorkerImpl
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._full_cuda_graph_enabled = True
+    worker._full_cuda_graph_schedule = object()
+    worker.timer = SimpleNamespace(start=lambda _name: None, stop=lambda _name: None)
+    worker.model = _FakeTrainableModel()
+    worker.model.modules = lambda: ()
+    worker.model.zero_grad_buffer = lambda: None
+    worker.model.config = SimpleNamespace(num_moe_experts=None)
+    worker.optimizer = SimpleNamespace(
+        zero_grad=lambda: None,
+        step=lambda: (True, 1.0, 0.0),
+        param_groups=[{}],
+    )
+    worker.scheduler = SimpleNamespace(
+        get_lr=lambda _group: 0.1,
+        get_wd=lambda: 0.01,
+        step=lambda *, increment: None,
+    )
+    worker.cfg = {
+        "train_global_batch_size": 1,
+        "train_micro_batch_size": 1,
+        "megatron_cfg": {
+            "empty_unused_memory_level": 0,
+            "use_fused_linear_logprobs": False,
+            "moe_per_layer_logging": False,
+        },
+        "sequence_packing": {"enabled": False},
+    }
+    worker.dp_size = 1
+    worker.sampling_params = None
+    worker.draft_model = None
+    worker.defer_fp32_logits = False
+    worker.dtype = torch.float32
+    worker.mcore_state = SimpleNamespace(straggler_timer=None)
+    worker.delegate_pack_to_model = False
+    worker._router_replay_enabled = False
+    worker.should_disable_forward_pre_hook = False
+    worker._first_train_step_forward_pre_hook_disabled = False
+    worker._first_train_step_param_sync_func = None
+    worker._copy_main_params_to_param_buffer = lambda: None
+    worker._set_moe_grad_scale_func = lambda _func: None
+    worker._compute_moe_grad_scale = lambda _valid_toks: lambda: 1.0
+    worker._set_mtp_grad_scale_func = lambda _func: None
+    worker._uses_mxfp8_overlap_shared_param_buffer = lambda: False
+    worker._collect_mtp_metrics = lambda _metrics: None
+
+    class OnePassRerunStateMachine:
+        def __init__(self) -> None:
+            self._called = False
+
+        def should_run_forward_backward(self, _data_iterator: Any) -> bool:
+            if self._called:
+                return False
+            self._called = True
+            return True
+
+    observed: dict[str, Any] = {}
+    raw_metrics = [{"loss": torch.tensor(2.0)}]
+
+    class RecordingLossPostProcessor:
+        def __init__(self, **kwargs: Any) -> None:
+            observed["loss_post_processor_kwargs"] = kwargs
+
+    def fake_forward_backward(**kwargs: Any) -> list[dict[str, torch.Tensor]]:
+        observed["forward_backward_kwargs"] = kwargs
+        return raw_metrics
+
+    def fake_materialize(
+        metrics: list[dict[str, torch.Tensor]],
+    ) -> list[dict[str, torch.Tensor]]:
+        observed["materialized"] = metrics
+        return [{"loss": torch.tensor(2.0)}]
+
+    original_tensor = torch.tensor
+    monkeypatch.setattr(
+        megatron_policy_worker.torch,
+        "tensor",
+        lambda data, *args, **kwargs: original_tensor(
+            data, *args, **{k: v for k, v in kwargs.items() if k != "device"}
+        ),
+    )
+    monkeypatch.setattr(torch.distributed, "all_reduce", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(torch.distributed, "barrier", lambda: None)
+    monkeypatch.setattr(torch.distributed, "get_rank", lambda: 0)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
+    monkeypatch.setattr(torch.cuda, "get_device_name", lambda: "test-gpu")
+    monkeypatch.setattr(megatron_policy_worker.warnings, "warn", lambda *_args: None)
+    monkeypatch.setattr(
+        megatron_policy_worker.parallel_state,
+        "get_data_parallel_group",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker.parallel_state,
+        "is_pipeline_last_stage",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "process_global_batch",
+        lambda *_args, **_kwargs: {
+            "batch": BatchedDataDict({"input_ids": torch.ones(1, 1)}),
+            "global_valid_seqs": torch.tensor(1.0),
+            "global_valid_toks": torch.tensor(1.0),
+        },
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "get_microbatch_iterator",
+        lambda *_args, **_kwargs: (iter([object()]), 1, 1, 1, 1),
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "get_rerun_state_machine",
+        OnePassRerunStateMachine,
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "LossPostProcessor",
+        RecordingLossPostProcessor,
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "megatron_forward_backward",
+        fake_forward_backward,
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "materialize_full_cuda_graph_metrics",
+        fake_materialize,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "get_pg_collection",
+        lambda _model: SimpleNamespace(mp=None),
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "logical_and_across_model_parallel_group",
+        lambda value, **_kwargs: value,
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "reduce_max_stat_across_model_parallel_group",
+        lambda value, **_kwargs: value,
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker, "warn_if_inf_grad_norm", lambda _x: None
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "broadcast_loss_metrics_from_last_stage",
+        lambda metrics: metrics,
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "aggregate_training_statistics",
+        lambda **_kwargs: ({"loss": 2.0}, torch.tensor(2.0)),
+    )
+
+    data = BatchedDataDict({"input_ids": torch.ones(1, 1)})
+    MegatronPolicyWorkerImpl.train(worker, data, loss_fn=object())
+
+    assert observed["loss_post_processor_kwargs"]["full_cuda_graph"] is True
+    assert (
+        observed["forward_backward_kwargs"]["forward_backward_func"]
+        is worker._full_cuda_graph_schedule
+    )
+    assert observed["materialized"] is raw_metrics
+
+
+def test_full_cuda_graph_invalid_config_fails_before_cuda_setup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nemo_rl.models.policy.workers import megatron_policy_worker
+
+    def reject_config(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("invalid full CUDA graph policy configuration")
+
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "validate_full_cuda_graph_policy_config",
+        reject_config,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "log_gpu_memory_diagnostics",
+        lambda **_kwargs: pytest.fail("validation must precede NVML diagnostics"),
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker.torch.cuda,
+        "set_device",
+        lambda _device: pytest.fail("validation must precede CUDA setup"),
+    )
+    worker = object.__new__(megatron_policy_worker.MegatronPolicyWorkerImpl)
+
+    with pytest.raises(RuntimeError, match="invalid full CUDA graph"):
+        megatron_policy_worker.MegatronPolicyWorkerImpl.__init__(
+            worker,
+            {"megatron_cfg": {}},
+            tokenizer=object(),
+            init_optimizer=True,
+            worker_sharding_annotations=object(),
+        )
 
 
 def test_set_moe_grad_scale_func_sets_and_clears_on_model_config():

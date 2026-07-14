@@ -21,7 +21,7 @@ import warnings
 from collections import defaultdict
 from collections.abc import Mapping
 from contextlib import AbstractContextManager, contextmanager, nullcontext
-from typing import Any, Iterable, Iterator, Optional, TypeVar, cast
+from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar, cast
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +43,7 @@ from megatron.core.distributed.fsdp.mcore_fsdp_adapter import (
     FullyShardedDataParallel as custom_FSDP,
 )
 from megatron.core.optimizer import ChainedOptimizer
+from megatron.core.pipeline_parallel import get_forward_backward_func
 from megatron.core.rerun_state_machine import get_rerun_state_machine
 from megatron.core.utils import get_model_config
 from transformers import PreTrainedTokenizerBase
@@ -62,6 +63,12 @@ from nemo_rl.models.megatron.common import get_moe_metrics
 from nemo_rl.models.megatron.data import (
     get_microbatch_iterator,
     process_global_batch,
+)
+from nemo_rl.models.megatron.full_cuda_graph import (
+    build_full_cuda_graph_schedule,
+    materialize_full_cuda_graph_metrics,
+    require_supported_full_cuda_graph_operation,
+    validate_full_cuda_graph_policy_config,
 )
 from nemo_rl.models.megatron.pipeline_parallel import (
     broadcast_loss_metrics_from_last_stage,
@@ -341,6 +348,16 @@ class MegatronPolicyWorkerImpl(
         **kwargs: Any,
     ):
         """Initialize the MegatronPolicyWorker."""
+        validate_full_cuda_graph_policy_config(
+            config,
+            init_optimizer=init_optimizer,
+        )
+        self._full_cuda_graph_enabled = (
+            config["megatron_cfg"].get("cuda_graph_impl") == "full_iteration"
+        )
+        self._full_cuda_graph_schedule: Optional[Callable[..., Any]] = None
+        self._full_cuda_graph_wrapper: Any = None
+
         # NVML-based and guarded on torch.cuda.is_initialized(), so this does
         # not initialize a CUDA context ahead of the set_device below.
         log_gpu_memory_diagnostics(
@@ -521,6 +538,23 @@ class MegatronPolicyWorkerImpl(
         # unpacked [B, S] batch rather than pre-packing + CP-sharding itself.
         self.delegate_pack_to_model = _model_self_packs_for_cp(self.model)
 
+        if self._full_cuda_graph_enabled:
+            model_config = get_model_config(self.model)
+            copy_main_params = bool(
+                self.megatron_cfg.optimizer.reuse_grad_buf_for_mxfp8_param_ag
+                and self.megatron_cfg.ddp.overlap_param_gather
+            )
+            (
+                self._full_cuda_graph_schedule,
+                self._full_cuda_graph_wrapper,
+            ) = build_full_cuda_graph_schedule(
+                raw_schedule=get_forward_backward_func(),
+                model_config=model_config,
+                model=self.model,
+                optimizer=self.optimizer,
+                copy_main_params=copy_main_params,
+            )
+
         # vars used for refit
         ## will be initialized in prepare_refit_info
         # refit_param_info_mcore combines the conversion tasks with the param memory
@@ -630,6 +664,11 @@ class MegatronPolicyWorkerImpl(
         student sequence axis). Megatron doesn't run cross-tokenizer, so it
         must be None.
         """
+        full_cuda_graph_enabled = getattr(self, "_full_cuda_graph_enabled", False)
+        require_supported_full_cuda_graph_operation(
+            enabled=full_cuda_graph_enabled,
+            operation="eval" if eval_mode else "policy_training",
+        )
         assert check_dim_skip_keys is None, (
             "check_dim_skip_keys is only supported by the v2 DTensor worker; "
             "Megatron does not run cross-tokenizer distillation."
@@ -731,6 +770,7 @@ class MegatronPolicyWorkerImpl(
                     num_microbatches=num_microbatches,
                     sampling_params=self.sampling_params,
                     draft_model=self.draft_model,
+                    full_cuda_graph=full_cuda_graph_enabled,
                 )
 
                 rerun_state_machine = get_rerun_state_machine()
@@ -789,7 +829,14 @@ class MegatronPolicyWorkerImpl(
                             ),
                             use_router_replay=use_router_replay,
                             router_replay_train=not eval_mode,
+                            forward_backward_func=getattr(
+                                self, "_full_cuda_graph_schedule", None
+                            ),
                         )
+                        if full_cuda_graph_enabled:
+                            losses_reduced = materialize_full_cuda_graph_metrics(
+                                losses_reduced
+                            )
 
                 # Clear mtp_grad_scale_func after the forward-backward pass so
                 # it doesn't get serialized in the run_config.yaml when saving
@@ -986,6 +1033,10 @@ class MegatronPolicyWorkerImpl(
         data: BatchedDataDict[Any],
         micro_batch_size: Optional[int] = None,
     ) -> BatchedDataDict[ReferenceLogprobOutputSpec]:
+        require_supported_full_cuda_graph_operation(
+            enabled=getattr(self, "_full_cuda_graph_enabled", False),
+            operation="logprob",
+        )
         with self.use_reference_model():
             reference_logprobs = self.get_logprobs(
                 data=data,
@@ -1090,6 +1141,10 @@ class MegatronPolicyWorkerImpl(
         gbs: Optional[int] = None,
         mbs: Optional[int] = None,
     ) -> None:
+        require_supported_full_cuda_graph_operation(
+            enabled=getattr(self, "_full_cuda_graph_enabled", False),
+            operation="split_policy_training",
+        )
         existing = getattr(self, "_train_step_state", None)
         if existing is not None:
             raise RuntimeError(
@@ -1507,6 +1562,10 @@ class MegatronPolicyWorkerImpl(
           We use the convention that the logprob of the first token is 0 so that the sequence length is maintained.
           The logprob of input token i is specified at position i in the output logprobs tensor.
         """
+        require_supported_full_cuda_graph_operation(
+            enabled=getattr(self, "_full_cuda_graph_enabled", False),
+            operation="logprob",
+        )
         self.timer.start("get_logprobs")
         no_grad = torch.no_grad()
         no_grad.__enter__()
@@ -1724,6 +1783,10 @@ class MegatronPolicyWorkerImpl(
                 - topk_logits: Tensor of top-k logits for each position in the sequence
                 - topk_indices: Tensor of top-k indices for each position in the sequence
         """
+        require_supported_full_cuda_graph_operation(
+            enabled=getattr(self, "_full_cuda_graph_enabled", False),
+            operation="eval",
+        )
         no_grad = torch.no_grad()
         no_grad.__enter__()
 
@@ -2005,6 +2068,10 @@ class MegatronPolicyWorkerImpl(
         return False
 
     def prepare_for_lp_inference(self):
+        require_supported_full_cuda_graph_operation(
+            enabled=getattr(self, "_full_cuda_graph_enabled", False),
+            operation="logprob",
+        )
         self.model = self.move_model(self.model, "cuda", move_grads=False)
         self.model.eval()
 
@@ -2027,6 +2094,15 @@ class MegatronPolicyWorkerImpl(
         torch.cuda.empty_cache()
 
     def prepare_for_training(self, *args, **kwargs):
+        if getattr(self, "_full_cuda_graph_enabled", False):
+            if any(not parameter.is_cuda for parameter in self.model.parameters()):
+                raise RuntimeError(
+                    "full-iteration CUDA graph model storage was offloaded; "
+                    "captured parameter pointers cannot be restored safely"
+                )
+            self.model.train()
+            return
+
         # onload models and optimizer state to cuda
         self.model = self.move_model(
             self.model, "cuda", move_grads=True, move_params=True
@@ -2047,6 +2123,10 @@ class MegatronPolicyWorkerImpl(
 
     def finish_inference(self) -> None:
         """Offload model params to CPU after inference. Only used in PPO."""
+        require_supported_full_cuda_graph_operation(
+            enabled=getattr(self, "_full_cuda_graph_enabled", False),
+            operation="colocated_refit",
+        )
         self.model = self.move_model(
             self.model, "cpu", move_params=True, move_grads=False
         )
@@ -2082,6 +2162,10 @@ class MegatronPolicyWorkerImpl(
     @wrap_with_nvtx_name("megatron_policy_worker/offload_before_refit")
     def offload_before_refit(self):
         """Offload the optimizer and buffers to the CPU."""
+        require_supported_full_cuda_graph_operation(
+            enabled=getattr(self, "_full_cuda_graph_enabled", False),
+            operation="colocated_refit",
+        )
         self._nemo2606_offload_sequence = (
             getattr(self, "_nemo2606_offload_sequence", 0) + 1
         )
@@ -2214,6 +2298,10 @@ class MegatronPolicyWorkerImpl(
     @wrap_with_nvtx_name("megatron_policy_worker/offload_after_refit")
     def offload_after_refit(self):
         """Offload as much as possible on the CPU."""
+        require_supported_full_cuda_graph_operation(
+            enabled=getattr(self, "_full_cuda_graph_enabled", False),
+            operation="colocated_refit",
+        )
         no_grad = torch.no_grad()
         no_grad.__enter__()
         self.model = self.move_model(self.model, "cpu")
@@ -2484,6 +2572,10 @@ class MegatronPolicyWorkerImpl(
             { "format": "fp8", "percentile": float, "margin": float,
               "layers": { layer_name: {"k_scale": float, "v_scale": float[, "q_scale": float] } } }
         """
+        require_supported_full_cuda_graph_operation(
+            enabled=getattr(self, "_full_cuda_graph_enabled", False),
+            operation="eval",
+        )
         from nemo_rl.models.generation.vllm.quantization.fp8_train_utils import (
             convert_calibration_to_vllm_format,
         )
