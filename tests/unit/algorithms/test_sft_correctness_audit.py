@@ -27,6 +27,7 @@ from nemo_rl.algorithms.sft_correctness_audit import (
     compare_next_train_batch_to_control,
     evaluate_correctness_gate,
     snapshot_digest,
+    _state_digest,
 )
 from nemo_rl.models.policy.lm_policy import Policy
 from nemo_rl.models.policy.workers.megatron_policy_worker import (
@@ -39,7 +40,13 @@ def _worker_state(rank: int) -> dict[str, Any]:
         "rank": rank,
         "torch_cuda_rng": {"sha256": f"cuda-{rank}"},
         "mcore_cuda_rng": {"model-parallel-rng": {"sha256": f"mcore-{rank}"}},
-        "model": {"parameters": {"weight": {"sum": float(rank)}}},
+        "model": {
+            "parameter_source": "model_named_parameters",
+            "materialized_model_parameters_included": True,
+            "frozen_model_parameters_included": True,
+            "parameters": {"weight": {"sum": float(rank)}},
+            "frozen_parameters": {},
+        },
         "optimizer": {"step_counters": [rank]},
         "training_mode_flags": {"": True},
     }
@@ -303,6 +310,38 @@ def test_auditor_handles_repeated_validation_boundaries() -> None:
     assert all(record.status == "finalized" for record in records)
 
 
+def test_auditor_captures_before_snapshot_without_worker_state_transition() -> None:
+    events: list[str] = []
+    policy = MagicMock()
+    auditor = SFTCorrectnessAuditor(
+        policy=policy,
+        train_loader=_LoaderFixture(),
+        explicit_generator=None,
+    )
+    snapshot = dataclasses.replace(_snapshot_fixture(), next_train_batch_digest=None)
+
+    def capture_snapshot(**kwargs: object) -> CorrectnessSnapshot:
+        del kwargs
+        events.append("capture")
+        return snapshot
+
+    def validate() -> None:
+        events.append("validate")
+
+    with patch(
+        "nemo_rl.algorithms.sft_correctness_audit.capture_correctness_snapshot",
+        side_effect=capture_snapshot,
+    ):
+        auditor.audit_validation(
+            step=20,
+            validation=validate,
+            validation_evidence=_validation_evidence_pair,
+        )
+
+    assert events == ["capture", "validate", "capture"]
+    policy.prepare_correctness_audit_snapshot.assert_not_called()
+
+
 def test_auditor_records_next_batch_only_when_caller_supplies_natural_batch() -> None:
     records: list[CorrectnessAuditRecord] = []
     loader = _LoaderFixture()
@@ -479,6 +518,20 @@ def test_default_record_sink_emits_compact_summary(
     after_categories = payload["after"]["worker_states"]["0"]["category_digests"]
     assert before_categories["model"] != after_categories["model"]
     assert before_categories["optimizer"] == after_categories["optimizer"]
+    assert (
+        payload["before"]["worker_states"]["0"]["model_parameter_source"]
+        == "model_named_parameters"
+    )
+    assert (
+        payload["before"]["worker_states"]["0"][
+            "materialized_model_parameters_included"
+        ]
+        is True
+    )
+    assert (
+        payload["before"]["worker_states"]["0"]["frozen_model_parameters_included"]
+        is True
+    )
 
 
 def test_auditor_gates_failed_validation_before_reraising() -> None:
@@ -544,6 +597,8 @@ def _worker_fixture() -> MegatronPolicyWorkerImpl:
         "tensor_parallel": 2,
         "context_parallel": 0,
     }
+    worker.should_disable_forward_pre_hook = False
+    worker._first_train_step_forward_pre_hook_disabled = False
     model = torch.nn.Sequential(torch.nn.Linear(3, 2), torch.nn.Dropout(0.5))
     model.register_buffer("audit_buffer", torch.tensor([4.0, 5.0]))
     model.train()
@@ -600,6 +655,10 @@ def test_megatron_worker_fingerprint_is_read_only_and_returns_python_records() -
     assert fingerprint["torch_cuda_rng"]["sha256"]
     assert fingerprint["mcore_cuda_rng"]["model-parallel-rng"]["sha256"]
     assert fingerprint["training_mode_flags"][""] is True
+    assert fingerprint["model"]["parameter_source"] == "model_named_parameters"
+    assert fingerprint["model"]["materialized_model_parameters_included"] is True
+    assert fingerprint["model"]["frozen_model_parameters_included"] is True
+    assert fingerprint["model"]["frozen_parameters"] == {}
     assert fingerprint["model"]["parameters"]
     assert fingerprint["model"]["buffers"]
     assert fingerprint["optimizer"]["parameters"][0]["owner"] == (0, 0, 0)
@@ -615,6 +674,88 @@ def test_megatron_worker_fingerprint_is_read_only_and_returns_python_records() -
     for key, value in next(iter(worker.optimizer.state.values())).items():
         if torch.is_tensor(value):
             assert torch.equal(value, optimizer_state[key])
+
+
+def test_megatron_worker_uses_optimizer_main_shards_for_overlap_model_view() -> None:
+    worker = _worker_fixture()
+    worker.should_disable_forward_pre_hook = True
+    model_parameter = next(worker.model.parameters())
+    main_shard = torch.nn.Parameter(model_parameter.detach().clone() + 100)
+    worker.optimizer.param_groups[0]["params"] = [main_shard]
+    worker.optimizer.state = {main_shard: {"step": torch.tensor(9)}}
+
+    with (
+        patch.object(worker, "_forward_pre_hook_enabled", return_value=True),
+        patch.object(
+            worker, "_uses_mxfp8_overlap_shared_param_buffer", return_value=False
+        ) as uses_mxfp8_shared_buffer,
+    ):
+        fingerprint = _capture_worker_fingerprint(worker)
+
+    uses_mxfp8_shared_buffer.assert_not_called()
+    assert fingerprint["model"]["parameter_source"] == "optimizer_main_shards"
+    assert fingerprint["model"]["materialized_model_parameters_included"] is False
+    assert fingerprint["model"]["frozen_model_parameters_included"] is True
+    assert fingerprint["model"]["parameters"] == fingerprint["optimizer"]["parameters"]
+
+
+def test_megatron_worker_overlap_model_digest_detects_frozen_parameter_change() -> None:
+    worker = _worker_fixture()
+    worker.should_disable_forward_pre_hook = True
+    frozen_parameter = torch.nn.Parameter(
+        torch.tensor([10.0, 20.0]), requires_grad=False
+    )
+    worker.model.register_parameter("audit_frozen_parameter", frozen_parameter)
+
+    with patch.object(worker, "_forward_pre_hook_enabled", return_value=True):
+        before = _capture_worker_fingerprint(worker)
+        with torch.no_grad():
+            frozen_parameter.add_(1)
+        after = _capture_worker_fingerprint(worker)
+
+    assert before["model"]["parameters"] == after["model"]["parameters"]
+    assert before["optimizer"] == after["optimizer"]
+    assert before["model"]["frozen_parameters"] != after["model"]["frozen_parameters"]
+    assert _state_digest(before["model"]) != _state_digest(after["model"])
+
+    snapshot = _snapshot_fixture(worker_order=())
+    before_snapshot = dataclasses.replace(snapshot, worker_states={worker.rank: before})
+    after_snapshot = dataclasses.replace(snapshot, worker_states={worker.rank: after})
+    differences = compare_correctness_snapshots(before_snapshot, after_snapshot)
+
+    assert snapshot_digest(before_snapshot) != snapshot_digest(after_snapshot)
+    assert any(
+        difference.startswith(
+            "worker_states.7.model.frozen_parameters.audit_frozen_parameter"
+        )
+        for difference in differences
+    )
+
+
+def test_megatron_worker_keeps_overlap_model_view_after_eval_transition() -> None:
+    worker = _worker_fixture()
+    worker.should_disable_forward_pre_hook = True
+    worker._first_train_step_forward_pre_hook_disabled = True
+
+    with patch.object(worker, "_forward_pre_hook_enabled", return_value=False):
+        fingerprint = _capture_worker_fingerprint(worker)
+
+    assert fingerprint["model"]["parameter_source"] == "optimizer_main_shards"
+    assert fingerprint["model"]["materialized_model_parameters_included"] is False
+    assert fingerprint["model"]["parameters"] == fingerprint["optimizer"]["parameters"]
+
+
+def test_megatron_worker_uses_materialized_model_view_when_overlap_is_inactive() -> (
+    None
+):
+    worker = _worker_fixture()
+    worker.should_disable_forward_pre_hook = True
+
+    with patch.object(worker, "_forward_pre_hook_enabled", return_value=False):
+        fingerprint = _capture_worker_fingerprint(worker)
+
+    assert fingerprint["model"]["parameter_source"] == "model_named_parameters"
+    assert fingerprint["model"]["materialized_model_parameters_included"] is True
 
 
 def _contains_only_python_records(value: object) -> bool:
@@ -669,6 +810,9 @@ def test_megatron_worker_fingerprint_avoids_forbidden_state_paths() -> None:
     assert "get_all_rng_states" in direct_calls
     assert call_names.isdisjoint(
         {
+            "_copy_main_params_to_param_buffer",
+            "_disable_forward_pre_hook_until_next_train_step",
+            "disable_forward_pre_hook",
             "state_dict",
             "load_state_dict",
             "eval",

@@ -658,6 +658,22 @@ def _default_record_sink(record: _AuditRecord) -> None:
     def summarize_snapshot(snapshot: CorrectnessSnapshot) -> dict[str, object]:
         worker_states: dict[str, object] = {}
         for rank, state in snapshot.worker_states.items():
+            model_state = state.get("model")
+            model_parameter_source = (
+                model_state.get("parameter_source")
+                if isinstance(model_state, Mapping)
+                else None
+            )
+            materialized_model_parameters_included = (
+                model_state.get("materialized_model_parameters_included")
+                if isinstance(model_state, Mapping)
+                else None
+            )
+            frozen_model_parameters_included = (
+                model_state.get("frozen_model_parameters_included")
+                if isinstance(model_state, Mapping)
+                else None
+            )
             category_digests = {
                 key: _state_digest(value)
                 for key, value in sorted(state.items())
@@ -666,6 +682,11 @@ def _default_record_sink(record: _AuditRecord) -> None:
             worker_states[str(rank)] = {
                 "state_digest": _state_digest(state),
                 "category_digests": category_digests,
+                "model_parameter_source": model_parameter_source,
+                "materialized_model_parameters_included": (
+                    materialized_model_parameters_included
+                ),
+                "frozen_model_parameters_included": frozen_model_parameters_included,
             }
         return {
             "python_rng_digest": snapshot.python_rng_digest,

@@ -327,14 +327,38 @@ class MegatronPolicyWorkerImpl(
             for name, state in sorted(tracker_states.items())
         }
 
-        parameters = {
+        # Overlap gather materializes updated optimizer shards lazily at the next
+        # forward, so the model buffer is not a canonical snapshot boundary.
+        use_optimizer_main_parameter_view = self.should_disable_forward_pre_hook and (
+            self._forward_pre_hook_enabled()
+            or self._first_train_step_forward_pre_hook_disabled
+        )
+        named_parameters = sorted(self.model.named_parameters())
+        frozen_parameters = {
             name: _local_tensor_fingerprint(
                 parameter,
                 content_sample_count=content_sample_count,
                 reduction_chunk_numel=reduction_chunk_numel,
             )
-            for name, parameter in sorted(self.model.named_parameters())
+            for name, parameter in named_parameters
+            if not parameter.requires_grad
         }
+        materialized_parameters = (
+            None
+            if use_optimizer_main_parameter_view
+            else {
+                name: (
+                    frozen_parameters[name]
+                    if not parameter.requires_grad
+                    else _local_tensor_fingerprint(
+                        parameter,
+                        content_sample_count=content_sample_count,
+                        reduction_chunk_numel=reduction_chunk_numel,
+                    )
+                )
+                for name, parameter in named_parameters
+            }
+        )
         buffers = {
             name: _local_tensor_fingerprint(
                 buffer,
@@ -436,6 +460,12 @@ class MegatronPolicyWorkerImpl(
             key=lambda record: (record["owner"], record["state_key"])
         )
         optimizer_parameter_records.sort(key=lambda record: record["owner"])
+        parameters = (
+            optimizer_parameter_records
+            if use_optimizer_main_parameter_view
+            else materialized_parameters
+        )
+        assert parameters is not None
         return {
             "rank": int(self.rank),
             "device": int(device),
@@ -443,7 +473,17 @@ class MegatronPolicyWorkerImpl(
             "torch_cuda_rng": torch_cuda_rng,
             "mcore_cuda_rng": mcore_cuda_rng,
             "model": {
+                "parameter_source": (
+                    "optimizer_main_shards"
+                    if use_optimizer_main_parameter_view
+                    else "model_named_parameters"
+                ),
+                "materialized_model_parameters_included": (
+                    not use_optimizer_main_parameter_view
+                ),
+                "frozen_model_parameters_included": True,
                 "parameters": parameters,
+                "frozen_parameters": frozen_parameters,
                 "buffers": buffers,
             },
             "optimizer": {

@@ -1363,6 +1363,42 @@ def test_correctness_evidence_survives_validation_exceptions() -> None:
     assert "validation_evidence()" in audit_source
 
 
+def test_correctness_audit_uses_read_only_canonical_overlap_parameter_view() -> None:
+    audit_path = REPO_ROOT / "nemo_rl/algorithms/sft_correctness_audit.py"
+    audit_method = _function_node(
+        audit_path,
+        "audit_validation",
+        class_name="SFTCorrectnessAuditor",
+    )
+    calls = [
+        ast.unparse(node.func)
+        for node in ast.walk(audit_method)
+        if isinstance(node, ast.Call)
+    ]
+
+    assert "self._policy.prepare_correctness_audit_snapshot" not in calls
+
+    worker_path = REPO_ROOT / "nemo_rl/models/policy/workers/megatron_policy_worker.py"
+    fingerprint_method = _function_node(
+        worker_path,
+        "get_correctness_state_fingerprint",
+        class_name="MegatronPolicyWorkerImpl",
+    )
+    fingerprint_source = ast.unparse(fingerprint_method)
+    assert "optimizer_main_shards" in fingerprint_source
+    assert "frozen_parameters" in fingerprint_source
+    assert "not parameter.requires_grad" in fingerprint_source
+    assert "materialized_model_parameters_included" in fingerprint_source
+    assert "self.should_disable_forward_pre_hook" in fingerprint_source
+    assert "self._forward_pre_hook_enabled()" in fingerprint_source
+    call_attributes = {
+        node.func.attr
+        for node in ast.walk(fingerprint_method)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    assert "disable_forward_pre_hook" not in call_attributes
+
+
 def test_task_owned_finally_blocks_return_explicitly_after_cleanup() -> None:
     audit_path = REPO_ROOT / "nemo_rl/algorithms/sft_correctness_audit.py"
     audit_method = _function_node(
