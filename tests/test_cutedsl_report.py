@@ -925,6 +925,7 @@ def test_committed_incident_evidence_is_bounded_redacted_and_linked() -> None:
         "2370933-2370934",
         "2376637",
         "2372711",
+        "2373152-2376677",
         "local-refresh-20260712",
         "login-preflight-uv-20260714",
         "preflight-segment-20260712",
@@ -1614,9 +1615,12 @@ def test_committed_current_status_keeps_unmeasured_features_out_of_claims() -> N
         "2376638",
         "2372711",
         "2372712",
+        "2373152",
+        "2376677",
     ]
     assert "no speedup" in full_cg["limitation"].lower()
-    assert "shared build-directory race" in full_cg["limitation"]
+    assert "explicit full-CG Logprob guard" in full_cg["limitation"]
+    assert "vLLM generation graph" in full_cg["limitation"]
 
     a2a = entries["Expert-parallel A2A overlap"]
     assert a2a["state"] == "implemented_unmeasured"
@@ -1631,8 +1635,10 @@ def test_committed_current_status_keeps_unmeasured_features_out_of_claims() -> N
         "2376497",
         "2376638",
         "2372712",
+        "2376677",
     ]
-    assert "defer_fp32_logits=true" in a2a["limitation"]
+    assert "high-priority A2A stream" in a2a["limitation"]
+    assert "explicit Full-CG Logprob guard" in a2a["limitation"]
     assert "no speedup" in a2a["limitation"].lower()
 
     vpp = entries["Virtual pipeline parallelism (PR #1126 port)"]

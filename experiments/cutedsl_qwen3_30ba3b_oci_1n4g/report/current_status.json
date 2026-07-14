@@ -39,10 +39,12 @@
         "2376637",
         "2376638",
         "2372711",
-        "2372712"
+        "2372712",
+        "2373152",
+        "2376677"
       ],
-      "limitation": "Jobs 2369539 and 2369580 used the invalid alltoall, capacity-null, PagedStash-disabled bundle. Later cohorts exposed dirty-source and Hydra composition defects, all fixed through source e5dd9246. Exact g1a0/g1a1 composition and scheduler preflight pass. Ptyche job 2376637 then failed before config resolution in a shared build-directory race between concurrent local Megatron-Bridge wheel builds; 2376638 and Lyris jobs 2372711/2372712 continued. None has produced valid Full-CG timing; no speedup is reported.",
-      "next_gate": "Run the corrected noncolocated HybridEP functional cell and require capture_calls == 1, replay_calls >= 2, monotonic counters, stable storage digest, and no overflow-retry correctness failure before matched timing.",
+      "limitation": "Jobs 2373152 and 2376677 independently passed immutable source/image checks, locked runtime bootstrap, exact performance-recipe composition, policy/vLLM initialization, generation, reward, and advantage computation. Both then stopped at NeMo-RL's explicit full-CG Logprob guard before policy Logprob or PolicyTraining. The vLLM generation graph is an independent inference graph and is not policy Full-CG evidence. No policy capture/replay counter or valid Full-CG timing exists, so no speedup is reported.",
+      "next_gate": "Implement a separate validation-stage graph for current-policy Logprob without moving model, gradient, or optimizer storage, then require validation and training capture/replay counters, stable storage digests, and six completed updates before matched timing.",
       "state": "implemented_unmeasured"
     },
     {
@@ -58,10 +60,11 @@
         "2370934",
         "2376497",
         "2376638",
-        "2372712"
+        "2372712",
+        "2376677"
       ],
-      "limitation": "The earlier comparison stopped at capture failure and has no accepted timing window. Corrected Q30 job 2375780 failed dirty-source preflight. Qwen3-235B VPP+A2A job 2375785 was cancelled after PR #1126 review found an invalid inherited defer_fp32_logits=true. Later Q30 cohorts stopped during Hydra composition: 2370818 on existing HybridEP fields and 2370934 on absent cuda_graph_modules; 2376497 was cancelled while pending. Source e5dd9246 composes the exact A2A-ON bundle, and new functional jobs 2376638 and 2372712 are pending. A2A performance remains unmeasured; no speedup is reported.",
-      "next_gate": "Use source eff1d64af with defer_fp32_logits=false in both A2A OFF/ON cells, then verify NCCL A2A presence and temporal overlap before reporting an effect.",
+      "limitation": "Ptyche job 2376677 resolved the exact A2A-ON bundle, including HybridEP, overlap_moe_expert_parallel_comm, the high-priority A2A stream, and delayed WGRAD. It completed generation but hit the same explicit Full-CG Logprob guard as A2A-OFF job 2373152 before PolicyTraining. Therefore no training NCCL A2A trace, temporal-overlap measurement, or accepted timing window exists; no speedup is reported.",
+      "next_gate": "After validation-stage current-policy Logprob support passes the lifecycle gate, run fixed-source A2A-OFF and A2A-ON cells and verify NCCL A2A presence plus temporal overlap before reporting an effect.",
       "state": "implemented_unmeasured"
     },
     {
@@ -82,5 +85,5 @@
       "state": "implemented_unmeasured"
     }
   ],
-  "updated_at_utc": "2026-07-14T09:57:09Z"
+  "updated_at_utc": "2026-07-14T10:52:16Z"
 }

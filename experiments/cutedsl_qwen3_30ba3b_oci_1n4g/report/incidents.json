@@ -587,5 +587,20 @@
     "timestamp_utc": "2026-07-14T10:06:59Z",
     "verification_evidence": "The regression covers both the real resolved recipe and a required missing moe_grouped_gemm field. The model-profile and factorial-harness suites report 129 passed; Bash syntax, Ruff, and diff checks pass. Replacement jobs 2373152 and 2376677 are functional gates, not performance evidence.",
     "verification_job": "2373152 and 2376677 submitted"
+  },
+  {
+    "cluster": "lyris,pre_tyche",
+    "evidence": "Jobs 2373152 and 2376677 independently passed immutable preflight, locked runtime bootstrap, exact config validation, policy/vLLM setup, generation, reward, and advantage computation. Both stopped at the same explicit NeMo-RL Full-CG Logprob guard.",
+    "fix_commit": "pending validation-stage Logprob implementation",
+    "hypothesis": "A separate MCore validation-stage graph for current-policy Logprob, with model, gradient, and optimizer storage kept in place, can preserve the captured training graph and unblock the full RL lifecycle.",
+    "report_path": "evidence/job-2373152-2376677.txt",
+    "reproduction": "Run the Qwen3-30B-A3B g1a0 cell on Lyris or g1a1 cell on Ptyche with Full-CG enabled. Step 1 reaches prepare_for_lp_inference, where require_supported_full_cuda_graph_operation rejects operation=logprob.",
+    "root_cause": "NeMo-RL currently implements only the training stage of the MCore full-iteration CUDA Graph wrapper and deliberately rejects Logprob. The normal Logprob transition also offloads gradient and optimizer storage and calls empty_cache, which is incompatible with replaying a graph captured against stable storage addresses.",
+    "run_id": "2373152-2376677",
+    "symptom": "Both feature cells completed generation but executed no policy Logprob, PolicyTraining, policy graph capture/replay, A2A training overlap, or performance timing.",
+    "tested_change": "Pending approval: add a validation-stage current-policy Logprob graph, stage-scoped buffers and counters, storage-pointer invariance checks, and fail-closed guards for reference Logprob, refit, offload, and unsupported eval paths.",
+    "timestamp_utc": "2026-07-14T10:52:16Z",
+    "verification_evidence": "The two jobs reproduce the same explicit guard on different GB200 clusters and feature cells. Their successful vLLM generation graph capture is separate inference evidence and does not verify policy Full-CG. No performance conclusion is supported.",
+    "verification_job": "pending after validation-stage Logprob implementation"
   }
 ]

@@ -1,0 +1,30 @@
+Incident: 2373152-2376677
+Timestamp UTC: 2026-07-14T10:52:16Z
+Clusters: Lyris and Pre-Tyche GB200
+Feature cells: Full-CG+A2A-OFF and Full-CG+A2A-ON
+
+Both jobs passed immutable source/image checks, locked runtime bootstrap,
+performance-recipe composition, fixed-config validation, Ray 8/8 setup,
+policy/vLLM initialization, generation, reward, and advantage computation.
+
+Both failed at the first current-policy Logprob transition:
+prepare_for_lp_inference
+  -> require_supported_full_cuda_graph_operation(operation=logprob)
+  -> RuntimeError: NeMo-RL full-iteration CUDA graph does not support Logprob yet
+
+Root cause: NeMo-RL exposes only the training stage of MCore full-iteration
+CUDA Graph and deliberately guards Logprob. The ordinary Logprob lifecycle also
+offloads gradient/optimizer storage and empties the CUDA cache, so deleting the
+guard would violate captured graph storage-address invariants.
+
+The vLLM generation CUDA Graph completed independently. It is an inference-local
+graph and is not evidence of policy Full-CG capture or replay.
+
+No policy Logprob, PolicyTraining, policy Full-CG capture/replay, training A2A
+overlap, or timing result was produced. No speedup conclusion is supported.
+
+Proposed next gate: MCore validation-stage graph for current-policy Logprob,
+stage-scoped buffers/counters, storage-pointer invariance, then six RL updates.
+
+Original remote log:
+Preserved in the cluster result directories for jobs 2373152 and 2376677.
