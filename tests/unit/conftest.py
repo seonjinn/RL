@@ -582,25 +582,23 @@ def tiny_llama_model_path():
 
 @pytest.fixture(scope="session")
 def tiny_llama_4layer_model_path():
-    """Return a tiny four-layer Llama checkpoint for PP2/VPP2 tests."""
+    """Return a tiny four-layer Llama checkpoint with a public tokenizer."""
     import shutil
 
     from transformers import AutoTokenizer, LlamaConfig, LlamaForCausalLM
 
-    model_path = os.path.join(
-        TEST_ASSETS_DIR, "tiny_4layer_llama_with_llama3.2_tokenizer"
-    )
+    model_path = os.path.join(TEST_ASSETS_DIR, "tiny_4layer_llama_with_qwen2_tokenizer")
     config = LlamaConfig(
         num_hidden_layers=4,
         hidden_size=64,
         intermediate_size=32,
         num_attention_heads=2,
-        vocab_size=128256,
+        vocab_size=151936,
         tie_word_embeddings=False,
         num_key_value_heads=None,
     )
     model = LlamaForCausalLM(config=config)
-    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-1.5B")
     shutil.rmtree(model_path, ignore_errors=True)
     model.save_pretrained(model_path)
     tokenizer.save_pretrained(model_path)

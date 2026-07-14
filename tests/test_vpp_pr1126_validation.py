@@ -68,3 +68,13 @@ def test_vpp_validation_is_one_node_and_preserves_cluster_specific_gpu_request()
     assert "RAY_USAGE_STATS_ENABLED=0" in source
     assert "TORCH_CUDA_ARCH_LIST=10.0" in source
     assert "NRL_IGNORE_VERSION_MISMATCH" not in source
+
+
+def test_vpp_fixture_does_not_require_a_gated_tokenizer() -> None:
+    source = (PROJECT_ROOT / "tests/unit/conftest.py").read_text()
+    fixture = source.split("def tiny_llama_4layer_model_path", 1)[1].split(
+        "@pytest.fixture", 1
+    )[0]
+
+    assert 'AutoTokenizer.from_pretrained("Qwen/Qwen2-1.5B")' in fixture
+    assert "meta-llama" not in fixture
