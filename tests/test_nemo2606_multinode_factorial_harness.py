@@ -420,6 +420,12 @@ def test_official_performance_overlay_has_only_reviewed_deviations() -> None:
             config["grpo"]["val_at_start"],
             config["grpo"]["val_at_end"],
         ) == (10, False, False)
+        megatron = config["policy"]["megatron_cfg"]
+        assert (
+            megatron["cuda_graph_impl"],
+            megatron["cuda_graph_warmup_steps"],
+            megatron["cuda_graph_use_single_mempool"],
+        ) == ("none", 3, True)
 
     def difference_paths(left: object, right: object, path: str = "") -> set[str]:
         if isinstance(left, dict) and isinstance(right, dict):
@@ -440,9 +446,6 @@ def test_official_performance_overlay_has_only_reviewed_deviations() -> None:
         "logger.log_dir",
         "logger.wandb.name",
         "policy.generation.vllm_cfg.env_vars",
-        "policy.megatron_cfg.cuda_graph_impl",
-        "policy.megatron_cfg.cuda_graph_use_single_mempool",
-        "policy.megatron_cfg.cuda_graph_warmup_steps",
         "policy.megatron_cfg.env_vars.NVTE_CUTEDSL_FUSED_GROUPED_MLP",
         "policy.megatron_cfg.fp8_cfg.enabled",
         "policy.megatron_cfg.fp8_cfg.fp8_recipe",
