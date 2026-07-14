@@ -1,0 +1,10 @@
+Incident 2376272-2370672 covers jobs 2376272 (Ptyche) and 2370672 (Lyris), which used source 83e0dd73b and the cluster-specific immutable July 13 nightly images.
+Original remote log: retained in the cluster-specific VPP validation result directories
+
+Both jobs collected the exact three PR #1126 VPP cases. The first PP2/VPP2 PolicyTraining case initialized two workers, then the local-rank-zero worker called Megatron-Core compile_helpers(). The isolated worker wheel's megatron/core/datasets directory did not contain a Makefile, so make exited without a target. The rank-zero process terminated while its peer remained at a distributed barrier.
+
+Both jobs were cancelled after the identical non-progressing state was confirmed. Neither produced JUnit output and neither reached a VPP PolicyTraining, Logprob, or checkpoint assertion. They are runtime-packaging failures and provide no VPP correctness or performance evidence.
+
+The tested correction in b36ebdff2 copies the pinned Megatron-Core source into a run-local overlay, builds the ABI-matched dataset helper there, verifies its import origin, and exports that overlay to isolated Ray workers. Canonical source remains clean.
+
+Lyris retry 2370695 completed with exit code zero using that correction. Its JUnit artifact reports tests=3, failures=0, errors=0, skipped=0. PolicyTraining PP2/VPP2, Logprob PP2/VPP2, and checkpoint save/kill/restore PP2/VPP2 all passed. Ptyche retry 2376371 remains pending, so this incident is resolved on Lyris but still awaits independent cluster reproduction.

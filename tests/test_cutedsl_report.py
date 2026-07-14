@@ -920,6 +920,7 @@ def test_committed_incident_evidence_is_bounded_redacted_and_linked() -> None:
         "2375779-2375780",
         "2375785",
         "2375795",
+        "2376272-2370672",
         "local-refresh-20260712",
         "login-preflight-uv-20260714",
         "preflight-segment-20260712",
@@ -1568,7 +1569,7 @@ def test_committed_current_status_keeps_unmeasured_features_out_of_claims() -> N
 
     cutedsl = entries["CuTeDSL fused Grouped GEMM"]
     assert cutedsl["state"] == "provisional"
-    assert cutedsl["jobs"] == ["2373273", "2375783"]
+    assert cutedsl["jobs"] == ["2373273"]
     assert "20 measured-step" in cutedsl["evidence"]
     assert "5270.9812" in cutedsl["evidence"]
     assert "4902.8530" in cutedsl["evidence"]
@@ -1587,18 +1588,36 @@ def test_committed_current_status_keeps_unmeasured_features_out_of_claims() -> N
 
     full_cg = entries["Full-iteration CUDA Graph"]
     assert full_cg["state"] == "implemented_unmeasured"
-    assert full_cg["jobs"] == ["2369539", "2369580", "2375779", "2375780"]
+    assert full_cg["jobs"] == [
+        "2369539",
+        "2369580",
+        "2375779",
+        "2375780",
+        "2376309",
+        "2376310",
+        "2370808",
+        "2370818",
+    ]
     assert "no speedup" in full_cg["limitation"].lower()
 
     a2a = entries["Expert-parallel A2A overlap"]
     assert a2a["state"] == "implemented_unmeasured"
-    assert a2a["jobs"] == ["2369539", "2369580", "2375780", "2375785"]
+    assert a2a["jobs"] == [
+        "2369539",
+        "2369580",
+        "2375780",
+        "2375785",
+        "2376310",
+        "2370818",
+    ]
     assert "defer_fp32_logits=true" in a2a["limitation"]
     assert "no speedup" in a2a["limitation"].lower()
 
     vpp = entries["Virtual pipeline parallelism (PR #1126 port)"]
     assert vpp["state"] == "implemented_unmeasured"
-    assert "not a valid VPP-only comparison" in vpp["limitation"]
+    assert "dataset-helper Makefile" in vpp["limitation"]
+    assert "JUnit tests=3, failures=0, errors=0" in vpp["limitation"]
+    assert "no Qwen3-235B performance timing exists yet" in vpp["limitation"]
 
 
 def test_event_writer_json_escapes_backslashes_exactly(tmp_path: Path) -> None:

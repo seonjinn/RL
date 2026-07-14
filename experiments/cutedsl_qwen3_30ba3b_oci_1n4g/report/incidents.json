@@ -512,5 +512,20 @@
     "timestamp_utc": "2026-07-14T07:40:43Z",
     "verification_evidence": "Focused resolved-config and profile tests pass; normalized non-VPP and VPP configs differ only by virtual_pipeline_model_parallel_size and output paths. Remote functional validation is pending.",
     "verification_job": "2375785 cancelled before allocation; replacement jobs pending smoke gate"
+  },
+  {
+    "cluster": "lyris,pre_tyche",
+    "evidence": "Jobs 2376272 and 2370672 each collected the exact three PR #1126 VPP tests and initialized the two PP2/VPP2 workers, then local rank zero exited from Megatron-Core compile_helpers() while its peer waited at a distributed barrier.",
+    "fix_commit": "b36ebdff2508a32f4439b310f2cf3b2ce72eaa17",
+    "hypothesis": "A run-local overlay built from the pinned Megatron-Core submodule, exported ahead of the isolated-worker wheel on PYTHONPATH, will provide an ABI-matched helper without mutating canonical source.",
+    "report_path": "evidence/job-2376272-2370672.txt",
+    "reproduction": "Create a Ray isolated Megatron policy-worker environment from the locked mcore wheel and initialize PP2/VPP2. Bridge calls compile_helpers() in the installed megatron/core/datasets directory, where the wheel lacks its Makefile.",
+    "root_cause": "The locked Megatron-Core wheel omitted the dataset helper Makefile from the isolated worker environment. compile_helpers() unconditionally invoked make in that directory, rank zero terminated, and the peer remained in the following distributed barrier. The failure occurred before any VPP assertion.",
+    "run_id": "2376272-2370672",
+    "symptom": "Both public-tokenizer VPP retries stalled during the first PolicyTraining test and produced no JUnit result.",
+    "tested_change": "Copy the pinned Megatron-Core source to a run-local overlay, build helpers_cpp with the locked Python ABI, verify the imported module origin, and propagate the overlay through PYTHONPATH to Ray isolated workers.",
+    "timestamp_utc": "2026-07-14T08:30:55Z",
+    "verification_evidence": "The new TDD contract changed from red to green; model-profile, multinode-harness, and VPP validation suites report 132 passed. Lyris retry 2370695 completed with exit code zero. Its exact JUnit totals are tests=3, failures=0, errors=0, skipped=0: PolicyTraining, Logprob, and checkpoint save/kill/restore all passed. Ptyche retry 2376371 remains pending.",
+    "verification_job": "2370695 completed; 2376371 pending"
   }
 ]
