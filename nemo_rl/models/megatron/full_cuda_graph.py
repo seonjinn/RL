@@ -142,6 +142,46 @@ def build_full_cuda_graph_evidence_consensus(
     }
 
 
+def build_full_cuda_graph_evidence_envelope_consensus(
+    rank_envelopes: list[Any], *, expected_world_size: int
+) -> dict[str, int | str]:
+    """Validate graph-enabled state before deriving all-rank evidence consensus."""
+    if type(expected_world_size) is not int or expected_world_size < 1:
+        raise ValueError(
+            "full-iteration CUDA graph invalid policy world size"
+        ) from None
+    if type(rank_envelopes) is not list or len(rank_envelopes) != expected_world_size:
+        raise ValueError(
+            "full-iteration CUDA graph malformed evidence envelope"
+        ) from None
+
+    enabled_states: list[bool] = []
+    rank_evidence: list[Any] = []
+    for envelope in rank_envelopes:
+        if type(envelope) is not tuple or len(envelope) != 2:
+            raise ValueError(
+                "full-iteration CUDA graph malformed evidence envelope"
+            ) from None
+        enabled, evidence = envelope
+        if type(enabled) is not bool or (not enabled and evidence is not None):
+            raise ValueError(
+                "full-iteration CUDA graph malformed evidence envelope"
+            ) from None
+        enabled_states.append(enabled)
+        rank_evidence.append(evidence)
+
+    if not any(enabled_states):
+        return {}
+    if not all(enabled_states):
+        raise ValueError(
+            "full-iteration CUDA graph enabled state mismatch across policy ranks"
+        ) from None
+    return build_full_cuda_graph_evidence_consensus(
+        rank_evidence,
+        expected_world_size=expected_world_size,
+    )
+
+
 def aggregate_full_cuda_graph_evidence(
     results: Sequence[Mapping[str, Any]],
 ) -> dict[str, int | str]:

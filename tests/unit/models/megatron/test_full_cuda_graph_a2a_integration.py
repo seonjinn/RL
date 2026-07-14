@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pickle
 import re
 from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
@@ -1086,6 +1087,74 @@ def test_full_cuda_graph_rank_consensus_is_order_independent() -> None:
     assert cohort_digest not in {rank_zero_digest, rank_one_digest}
 
 
+def test_full_cuda_graph_evidence_envelopes_preserve_all_disabled_baseline() -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        build_full_cuda_graph_evidence_envelope_consensus,
+    )
+
+    assert (
+        build_full_cuda_graph_evidence_envelope_consensus(
+            [(False, None), (False, None)],
+            expected_world_size=2,
+        )
+        == {}
+    )
+
+
+def test_full_cuda_graph_evidence_envelopes_reject_mixed_rank_state() -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        build_full_cuda_graph_evidence_envelope_consensus,
+    )
+
+    with pytest.raises(ValueError, match="enabled state mismatch"):
+        build_full_cuda_graph_evidence_envelope_consensus(
+            [
+                (True, _full_cuda_graph_rank_evidence(0, "a" * 64)),
+                (False, None),
+            ],
+            expected_world_size=2,
+        )
+
+
+@pytest.mark.parametrize(
+    "envelopes",
+    [
+        [None],
+        [(False,)],
+        [(0, None)],
+        [(False, _full_cuda_graph_rank_evidence(0, "a" * 64))],
+    ],
+)
+def test_full_cuda_graph_evidence_envelopes_reject_malformed_shapes(
+    envelopes: list[Any],
+) -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        build_full_cuda_graph_evidence_envelope_consensus,
+    )
+
+    with pytest.raises(ValueError, match="malformed evidence envelope"):
+        build_full_cuda_graph_evidence_envelope_consensus(
+            envelopes,
+            expected_world_size=1,
+        )
+
+
+@pytest.mark.parametrize("expected_world_size", [0, True])
+def test_full_cuda_graph_evidence_envelopes_reject_invalid_world_size(
+    expected_world_size: Any,
+) -> None:
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        build_full_cuda_graph_evidence_envelope_consensus,
+    )
+
+    envelopes = [] if expected_world_size == 0 else [(False, None)]
+    with pytest.raises(ValueError, match="invalid policy world size"):
+        build_full_cuda_graph_evidence_envelope_consensus(
+            envelopes,
+            expected_world_size=expected_world_size,
+        )
+
+
 @pytest.mark.parametrize(
     ("rank_evidence", "expected_world_size", "match"),
     [
@@ -1241,7 +1310,7 @@ def test_full_cuda_graph_worker_stats_emit_cohort_digest_without_pointer_values(
         gathered_payloads.append(local_payload)
         gathered[:] = [
             local_payload,
-            _full_cuda_graph_rank_evidence(1, "b" * 64),
+            (True, _full_cuda_graph_rank_evidence(1, "b" * 64)),
         ]
 
     monkeypatch.setattr(torch.distributed, "get_rank", lambda: 0)
@@ -1259,7 +1328,8 @@ def test_full_cuda_graph_worker_stats_emit_cohort_digest_without_pointer_values(
         r"[0-9a-f]{64}", metrics["full_cuda_graph_storage_signature_sha256"]
     )
     assert len(gathered_payloads) == 1
-    local_digest = gathered_payloads[0][2]
+    assert gathered_payloads[0][0] is True
+    local_digest = gathered_payloads[0][1][2]
     assert metrics["full_cuda_graph_storage_signature_sha256"] != local_digest
     rendered = repr(metrics)
     assert str(model.weight.data_ptr()) not in rendered
@@ -1296,7 +1366,79 @@ def test_full_cuda_graph_worker_gathers_before_rejecting_malformed_local_evidenc
     with pytest.raises(ValueError, match="malformed rank evidence"):
         worker._add_full_cuda_graph_execution_metrics({})
 
-    assert collective_calls == [None]
+    assert collective_calls == [(True, None)]
+
+
+def test_full_cuda_graph_worker_mixed_rank_state_rejects_after_collective(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    enabled_worker = object.__new__(MegatronPolicyWorkerImpl)
+    enabled_worker._full_cuda_graph_enabled = True
+    enabled_worker._full_cuda_graph_wrapper = SimpleNamespace(
+        execution_stats=lambda: SimpleNamespace(
+            warmup_calls=1,
+            capture_calls=1,
+            replay_calls=2,
+            reset_calls=0,
+        )
+    )
+    enabled_worker._full_cuda_graph_storage_signature = SimpleNamespace(
+        digest=lambda: "a" * 64
+    )
+
+    disabled_worker = object.__new__(MegatronPolicyWorkerImpl)
+    disabled_worker._full_cuda_graph_enabled = False
+    collective_payloads: list[Any] = []
+
+    def all_gather_object(gathered: list[Any], local_payload: Any) -> None:
+        collective_payloads.append(local_payload)
+        gathered[:] = [
+            (True, _full_cuda_graph_rank_evidence(0, "a" * 64)),
+            (False, None),
+        ]
+
+    monkeypatch.setattr(torch.distributed, "get_rank", lambda: 0)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 2)
+    monkeypatch.setattr(torch.distributed, "all_gather_object", all_gather_object)
+
+    for worker in (enabled_worker, disabled_worker):
+        with pytest.raises(ValueError, match="enabled state mismatch"):
+            worker._add_full_cuda_graph_execution_metrics({})
+
+    assert collective_payloads == [
+        (True, _full_cuda_graph_rank_evidence(0, "a" * 64)),
+        (False, None),
+    ]
+
+
+def test_full_cuda_graph_worker_all_disabled_preserves_metrics_after_collective(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._full_cuda_graph_enabled = False
+    collective_payloads: list[Any] = []
+
+    def all_gather_object(gathered: list[Any], local_payload: Any) -> None:
+        collective_payloads.append(local_payload)
+        gathered[:] = [(False, None), (False, None)]
+
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 2)
+    monkeypatch.setattr(torch.distributed, "all_gather_object", all_gather_object)
+
+    metrics: dict[str, Any] = {"loss": 1.25, "all_mb_metrics": {"loss": [1.25]}}
+    before = pickle.dumps(metrics)
+    worker._add_full_cuda_graph_execution_metrics(metrics)
+
+    assert pickle.dumps(metrics) == before
+    assert collective_payloads == [(False, None)]
 
 
 def test_full_graph_forward_step_preserves_a2a_schedule_plan() -> None:
