@@ -376,6 +376,10 @@ class MegatronConfig(TypedDict):
     # CUDA-graph implementation.
     # Options: 'none', 'local', 'transformer_engine', 'full_iteration'.
     cuda_graph_impl: NotRequired[str]
+    # Number of eager iterations before full-iteration graph capture.
+    cuda_graph_warmup_steps: NotRequired[int]
+    # Reuse one graph memory pool across full-iteration and optimizer captures.
+    cuda_graph_use_single_mempool: NotRequired[bool]
     # When True, each expert sees a fixed number of tokens for cuda-graph capture.
     # Required when cuda_graph_impl= 'local' with transformer_impl != 'inference_optimized'.
     moe_pad_experts_for_cuda_graph_inference: NotRequired[bool]
@@ -394,6 +398,14 @@ class MegatronConfig(TypedDict):
     # Interleave size for gated MoE MLP FC1 weights. CuTeDSL requires 32; None
     # preserves the legacy non-interleaved layout.
     moe_mlp_glu_interleave_size: NotRequired[int | None]
+    # Static routed-token budget used by HybridEP. Overflow is retried dropless
+    # by MCore's PagedStashRunner when full-iteration CUDA graph is enabled.
+    moe_expert_rank_capacity_factor: NotRequired[float | None]
+    # Stash routed-expert activations in fixed-address page buffers for graph capture.
+    moe_paged_stash: NotRequired[bool]
+    moe_paged_stash_page_size: NotRequired[int]
+    moe_paged_stash_buffer_size_factor_cuda: NotRequired[float]
+    moe_paged_stash_buffer_size_factor_cpu: NotRequired[float]
     # HybridEP settings for MoE expert parallelism (requires moe_token_dispatcher_type='flex')
     # See: https://github.com/deepseek-ai/DeepEP/tree/hybrid-ep
     moe_flex_dispatcher_backend: NotRequired[str]

@@ -764,6 +764,15 @@ def _apply_moe_config(model_cfg: Any, config: PolicyConfig) -> None:
         model_cfg.moe_mlp_glu_interleave_size = config["megatron_cfg"][
             "moe_mlp_glu_interleave_size"
         ]
+    for field_name in (
+        "moe_expert_rank_capacity_factor",
+        "moe_paged_stash",
+        "moe_paged_stash_page_size",
+        "moe_paged_stash_buffer_size_factor_cuda",
+        "moe_paged_stash_buffer_size_factor_cpu",
+    ):
+        if field_name in config["megatron_cfg"]:
+            setattr(model_cfg, field_name, config["megatron_cfg"][field_name])
     model_cfg.moe_enable_routing_replay = router_replay_enabled(config)
 
 
@@ -917,6 +926,14 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
             model_cfg.inference_cuda_graph_scope = InferenceCudaGraphScope[
                 config["megatron_cfg"]["inference_cuda_graph_scope"]
             ]
+    if "cuda_graph_warmup_steps" in config["megatron_cfg"]:
+        model_cfg.cuda_graph_warmup_steps = config["megatron_cfg"][
+            "cuda_graph_warmup_steps"
+        ]
+    if "cuda_graph_use_single_mempool" in config["megatron_cfg"]:
+        model_cfg.cuda_graph_use_single_mempool = config["megatron_cfg"][
+            "cuda_graph_use_single_mempool"
+        ]
 
     # Use the graph-safe TE RNG tracker for either training graphs or inference graphs.
     if "generation" in config and config["generation"] is not None:

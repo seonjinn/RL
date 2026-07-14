@@ -650,6 +650,26 @@ class TestApplyMoeConfig:
         cfg.update(overrides)
         return {"megatron_cfg": cfg}
 
+    def test_full_cuda_graph_paged_stash_fields_are_applied(self):
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        model_cfg = MagicMock()
+        config = self._base_moe_cfg(
+            moe_expert_rank_capacity_factor=1.2,
+            moe_paged_stash=True,
+            moe_paged_stash_page_size=128,
+            moe_paged_stash_buffer_size_factor_cuda=1.25,
+            moe_paged_stash_buffer_size_factor_cpu=0.5,
+        )
+
+        _apply_moe_config(model_cfg, config)
+
+        assert model_cfg.moe_expert_rank_capacity_factor == 1.2
+        assert model_cfg.moe_paged_stash is True
+        assert model_cfg.moe_paged_stash_page_size == 128
+        assert model_cfg.moe_paged_stash_buffer_size_factor_cuda == 1.25
+        assert model_cfg.moe_paged_stash_buffer_size_factor_cpu == 0.5
+
     @pytest.mark.parametrize("moe_grouped_gemm", [True, False])
     def test_moe_grouped_gemm_explicit(self, moe_grouped_gemm):
         """moe_grouped_gemm is applied when present in config."""
@@ -1111,6 +1131,30 @@ class TestApplyPerformanceConfig:
         assert model_cfg.parallel_output is True
         assert model_cfg.apply_rope_fusion is True
         assert model_cfg.bias_activation_fusion is True
+
+    def test_full_iteration_cuda_graph_fields_are_applied(self):
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg = MagicMock()
+        model_cfg.gated_linear_unit = True
+        config = {
+            "megatron_cfg": {
+                "activation_checkpointing": False,
+                "apply_rope_fusion": True,
+                "bias_activation_fusion": True,
+                "gradient_accumulation_fusion": False,
+                "use_fused_weighted_squared_relu": False,
+                "cuda_graph_impl": "full_iteration",
+                "cuda_graph_warmup_steps": 5,
+                "cuda_graph_use_single_mempool": False,
+            }
+        }
+
+        _apply_performance_config(model_cfg, config)
+
+        assert model_cfg.cuda_graph_impl == "full_iteration"
+        assert model_cfg.cuda_graph_warmup_steps == 5
+        assert model_cfg.cuda_graph_use_single_mempool is False
 
     def test_activation_checkpointing_enabled(self):
         """Test activation checkpointing configuration."""
