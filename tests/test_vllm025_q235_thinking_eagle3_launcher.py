@@ -75,6 +75,20 @@ def test_cudagraph_metrics_are_opt_in() -> None:
     assert "++policy.generation.vllm_kwargs.cudagraph_metrics=true" in diagnostic_output
 
 
+def test_dynamic_sd_schedule_is_opt_in() -> None:
+    schedule = "[[1,4,5],[5,8,3],[9,16,1],[17,64,0]]"
+    default_output = _dry_run("eagle3_k5")
+    dynamic_output = _dry_run("eagle3_k5", DYNAMIC_SD_SCHEDULE=schedule).replace(
+        "\\", ""
+    )
+
+    assert "num_speculative_tokens_per_batch_size" not in default_output
+    assert (
+        "speculative_config.num_speculative_tokens_per_batch_size="
+        f"{schedule}" in dynamic_output
+    )
+
+
 def test_supported_variants_render_expected_speculative_token_count() -> None:
     expected_capture_sizes = {
         1: "[2,4,8,16,32,64,128]",

@@ -11,6 +11,7 @@ TIME_LIMIT="${TIME_LIMIT:-02:00:00}"
 MAX_STEPS="${MAX_STEPS:-1}"
 WANDB_ENABLED="${WANDB_ENABLED:-false}"
 CUDAGRAPH_METRICS="${CUDAGRAPH_METRICS:-false}"
+DYNAMIC_SD_SCHEDULE="${DYNAMIC_SD_SCHEDULE:-}"
 WANDB_PROJECT="${WANDB_PROJECT:-nemo-rl-vllm025-q235-specdec}"
 REPO_DIR="${REPO_DIR:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-vllm025-thinking-eagle3-20260714}"
 CONTAINER="${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh}"
@@ -59,6 +60,11 @@ if [[ "${CUDAGRAPH_METRICS}" != "true" && "${CUDAGRAPH_METRICS}" != "false" ]]; 
   exit 2
 fi
 
+if [[ -n "${DYNAMIC_SD_SCHEDULE}" && "${SPECULATIVE_TOKENS}" -eq 0 ]]; then
+  printf 'DYNAMIC_SD_SCHEDULE requires an Eagle3 variant\n' >&2
+  exit 2
+fi
+
 overrides=(
   "grpo.max_num_steps=${MAX_STEPS}"
   "checkpointing.enabled=false"
@@ -98,6 +104,11 @@ if [[ "${SPECULATIVE_TOKENS}" -gt 0 ]]; then
     "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=1"
     "policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${capture_sizes_csv}"
   )
+  if [[ -n "${DYNAMIC_SD_SCHEDULE}" ]]; then
+    overrides+=(
+      "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens_per_batch_size=${DYNAMIC_SD_SCHEDULE}"
+    )
+  fi
 fi
 
 command_env=(
@@ -209,6 +220,7 @@ case "${MODE}" in
       printf 'num_nodes=16\nsegment=16\n'
       printf 'cuda_graph_enabled=true\n'
       printf 'cudagraph_metrics=%s\n' "${CUDAGRAPH_METRICS}"
+      printf 'dynamic_sd_schedule=%s\n' "${DYNAMIC_SD_SCHEDULE:-disabled}"
       printf 'numa_cpu_affinity=true\nnuma_membind=false\n'
       printf 'temperature=1.0\ntop_p=1.0\n'
       printf 'wandb_enabled=%s\n' "${WANDB_ENABLED}"
