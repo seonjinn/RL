@@ -1674,11 +1674,11 @@ def test_save_requires_complete_sft_tensor_schema(tmp_path) -> None:
         save_validation_event(tmp_path, event, _fingerprint(), _supported_eligibility())
 
 
-def test_save_requires_complete_packed_metadata_group(tmp_path) -> None:
+def test_save_rejects_misaligned_packed_metadata(tmp_path) -> None:
     event = _event_fixture()
     event.data["packed_cu_seqlens"] = torch.tensor([[0, 3], [0, 2]], dtype=torch.int32)
 
-    with pytest.raises(ValueError, match="packed metadata must include"):
+    with pytest.raises(ValueError, match="batch-aligned 2D tensor"):
         save_validation_event(tmp_path, event, _fingerprint(), _supported_eligibility())
 
 
