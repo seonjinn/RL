@@ -2959,6 +2959,55 @@ def test_base_config_identity_ignores_run_paths_and_optional_feature_keys() -> N
     assert digest(baseline) != digest(changed_wandb_name)
 
 
+def test_fixed_config_evidence_normalizes_only_optional_null_recompute_fields() -> None:
+    source = MATRIX_PAYLOAD.read_text()
+    start_marker = "# NEMO2606_FIXED_CONFIG_VALUE_START"
+    end_marker = "# NEMO2606_FIXED_CONFIG_VALUE_END"
+    assert start_marker in source
+    assert end_marker in source
+    code = source.split(start_marker, 1)[1].split(end_marker, 1)[0]
+    namespace: dict[str, object] = {}
+    exec(
+        "from typing import Any\n"
+        "def value_at(config: dict[str, Any], dotted_path: str) -> Any:\n"
+        "    value: Any = config\n"
+        "    for key in dotted_path.split('.'):\n"
+        "        value = value[key]\n"
+        "    return value\n"
+        + code,
+        namespace,
+    )
+    fixed_config_value_at = namespace["fixed_config_value_at"]
+
+    config = {"policy": {"megatron_cfg": {"activation_checkpointing": False}}}
+    assert fixed_config_value_at(
+        config, "policy.megatron_cfg.recompute_method"
+    ) is None
+    assert fixed_config_value_at(
+        config, "policy.megatron_cfg.recompute_modules"
+    ) is None
+    assert (
+        fixed_config_value_at(
+            config, "policy.megatron_cfg.activation_checkpointing"
+        )
+        is False
+    )
+    with pytest.raises(KeyError):
+        fixed_config_value_at(config, "policy.megatron_cfg.moe_grouped_gemm")
+
+    resolved = OmegaConf.to_container(load_config(RECIPE), resolve=True)
+    assert isinstance(resolved, dict)
+    megatron = resolved["policy"]["megatron_cfg"]
+    assert "recompute_method" not in megatron
+    assert megatron["recompute_modules"] is None
+    assert fixed_config_value_at(
+        resolved, "policy.megatron_cfg.recompute_method"
+    ) is None
+    assert fixed_config_value_at(
+        resolved, "policy.megatron_cfg.recompute_modules"
+    ) is None
+
+
 def test_matrix_forces_matched_wandb_name_and_policy_logprob_execution() -> None:
     source = MATRIX_PAYLOAD.read_text()
 

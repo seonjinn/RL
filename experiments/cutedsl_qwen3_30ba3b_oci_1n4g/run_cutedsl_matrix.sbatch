@@ -871,6 +871,25 @@ def value_at(config: dict[str, Any], dotted_path: str) -> Any:
     return value
 
 
+# NEMO2606_FIXED_CONFIG_VALUE_START
+OPTIONAL_NULL_FIXED_CONFIG_PATHS = frozenset(
+    {
+        "policy.megatron_cfg.recompute_method",
+        "policy.megatron_cfg.recompute_modules",
+    }
+)
+
+
+def fixed_config_value_at(config: dict[str, Any], dotted_path: str) -> Any:
+    try:
+        return value_at(config, dotted_path)
+    except KeyError:
+        if dotted_path in OPTIONAL_NULL_FIXED_CONFIG_PATHS:
+            return None
+        raise
+# NEMO2606_FIXED_CONFIG_VALUE_END
+
+
 # NEMO2606_BASE_CONFIG_IDENTITY_START
 NORMALIZED_FEATURE_PATHS = (
     "policy.megatron_cfg.env_vars.NVTE_CUTEDSL_FUSED_GROUPED_MLP",
@@ -1105,7 +1124,7 @@ fixed_config_paths = (
     "grpo.val_at_end",
 )
 fixed_config_by_arm = {
-    arm: {path: value_at(config, path) for path in fixed_config_paths}
+    arm: {path: fixed_config_value_at(config, path) for path in fixed_config_paths}
     for arm, config in configs_by_arm.items()
 }
 fixed_config_evidence = {
