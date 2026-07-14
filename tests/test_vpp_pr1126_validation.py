@@ -32,6 +32,17 @@ def test_vpp_validation_uses_locked_mcore_runtime_and_exact_source() -> None:
     assert '"${actual_image_sha256}" != "${VPP_VALIDATION_IMAGE_SHA256}"' in source
 
 
+def test_vpp_validation_builds_dataset_helpers_in_an_isolated_mcore_overlay() -> None:
+    source = VALIDATION_JOB.read_text()
+
+    assert 'MCORE_OVERLAY_ROOT=/runtime/mcore-overlay' in source
+    assert 'cp -a "${MCORE_SOURCE_ROOT}/megatron" "${MCORE_OVERLAY_ROOT}/"' in source
+    assert 'make -C "${MCORE_OVERLAY_DATASETS}" -j1' in source
+    assert 'export PYTHONPATH="${MCORE_OVERLAY_ROOT}:/workspace/nemo-rl' in source
+    assert "import megatron.core.datasets.helpers_cpp as helper_module" in source
+    assert 'git -C "${repo_root}" status --porcelain' in source
+
+
 def test_vpp_validation_runs_only_pr1126_gpu_cases_without_soft_skips() -> None:
     source = VALIDATION_JOB.read_text()
     expected_node_ids = (

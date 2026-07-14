@@ -106,6 +106,9 @@ set -euo pipefail
 
 export CUDA_HOME=/usr/local/cuda
 export HF_HOME=/hf_home
+export MCORE_SOURCE_ROOT=/workspace/nemo-rl/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM
+export MCORE_OVERLAY_ROOT=/runtime/mcore-overlay
+export MCORE_OVERLAY_DATASETS="${MCORE_OVERLAY_ROOT}/megatron/core/datasets"
 export NEMO_RL_VENV_DIR=/runtime/worker_venvs
 export NRL_FORCE_REBUILD_VENVS=true
 export NVTE_CUDA_ARCHS=100
@@ -119,6 +122,7 @@ export UV_NO_EDITABLE=1
 export UV_PROJECT_ENVIRONMENT=/runtime/venv
 export VIRTUAL_ENV="${UV_PROJECT_ENVIRONMENT}"
 readonly UV_BIN=/root/.local/bin/uv
+readonly RUNTIME_TOOL_BIN=/runtime/runtime-bin
 
 mkdir -p \
     "${NEMO_RL_VENV_DIR}" \
@@ -152,6 +156,42 @@ trap preserve_nemo_unit_results EXIT
 
 "${UV_BIN}" sync --locked --extra mcore --group test --python 3.13.13
 "${UV_BIN}" lock --check
+
+if find "${MCORE_SOURCE_ROOT}/megatron/core/datasets" -maxdepth 1 \
+    -name 'helpers_cpp*' -print -quit | grep -q .; then
+    echo "[ERROR] canonical MCore source contains a generated dataset helper" >&2
+    exit 1
+fi
+mkdir -p "${MCORE_OVERLAY_ROOT}" "${RUNTIME_TOOL_BIN}"
+cp -a "${MCORE_SOURCE_ROOT}/megatron" "${MCORE_OVERLAY_ROOT}/"
+runtime_python_real=$(realpath "${UV_PROJECT_ENVIRONMENT}/bin/python")
+runtime_python_config="$(dirname "${runtime_python_real}")/python3-config"
+if [[ ! -x "${runtime_python_config}" ]]; then
+    echo "[ERROR] matching uv Python does not provide python3-config" >&2
+    exit 1
+fi
+ln -s "${runtime_python_config}" "${RUNTIME_TOOL_BIN}/python3-config"
+export PATH="${RUNTIME_TOOL_BIN}:${UV_PROJECT_ENVIRONMENT}/bin:${PATH}"
+export PYTHONPATH="${MCORE_OVERLAY_ROOT}:/workspace/nemo-rl${PYTHONPATH:+:${PYTHONPATH}}"
+make -C "${MCORE_OVERLAY_DATASETS}" -j1
+helper_extension=$("${UV_PROJECT_ENVIRONMENT}/bin/python" -c \
+    'import sysconfig; print(sysconfig.get_config_var("EXT_SUFFIX"))')
+helper_path="${MCORE_OVERLAY_DATASETS}/helpers_cpp${helper_extension}"
+MCORE_EXPECTED_HELPER="${helper_path}" \
+    "${UV_PROJECT_ENVIRONMENT}/bin/python" - <<'PY'
+import os
+from pathlib import Path
+
+import megatron.core.datasets.helpers_cpp as helper_module
+
+
+actual = Path(helper_module.__file__).resolve()
+expected = Path(os.environ["MCORE_EXPECTED_HELPER"]).resolve()
+if actual != expected:
+    raise SystemExit(f"dataset helper resolved from {actual}, expected {expected}")
+getattr(helper_module, "build_mapping")
+PY
+
 "${UV_BIN}" run --active --no-sync pytest -vv -s \
     --mcore-only \
     --hf-gated \
