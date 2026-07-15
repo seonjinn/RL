@@ -184,7 +184,6 @@ mcore = [
   "flash-attn==2.8.1 ; sys_platform != 'linux' or (platform_machine != 'aarch64' and platform_machine != 'x86_64')",
   "mamba-ssm",
   "causal-conv1d",
-  "fast-hadamard-transform",
   "emerging-optimizers==0.2.0",
   "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@29d31c095796f3c8ece47ee9cdcc167051bbeed9 ; platform_machine == 'x86_64'",
   "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@a48493600c4886c1b297aaa78db0e1ebc2d8dd6c ; platform_machine == 'aarch64'",
