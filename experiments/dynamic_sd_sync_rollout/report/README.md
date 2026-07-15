@@ -274,10 +274,18 @@ NeMo-RL therefore needs a rebuilt worker venv. A third landmine closed the
 last shortcut: even with `use_system_env=false` and the prepared
 `RL-dynsd-vllm025` uv lock, generation workers resolve the container-baked
 `/opt/ray_venvs` (vLLM 0.20) while only the training venv rebuilds from the
-lock (a full TransformerEngine source build, ~1h, for nothing). The correct
-path is forcing worker-venv rebuild (`NRL_FORCE_REBUILD_VENVS`) or baking a
-new container - deferred, since the standalone 0.25 data already bounds the
-answer on this recipe (dynamic within a few percent below fixed-K3). The
+lock (a full TransformerEngine source build, ~1h, for nothing). We then pursued the
+forced-rebuild path to its end: lock-hash staleness (uv caches path-dep
+hashes; `uv lock --refresh-package` needed after re-patching a wheel),
+force-rebuild's rmtree failing on lustre leftovers, a deep-ep source-build
+flake (node-dependent CUDA_HOME), and finally a shared-venv write race that
+poisoned the worker env (`No module named 'ray'` crash loops). Seven
+documented landmines in total; the track was closed there. The definitive
+clean path is baking a new NeMo-RL container with vLLM >= 0.24 + the ledger
+patches - at which point DynamicSD is a config line. The measured E2E numbers
+remain the 0.20-stack fixed-K3 results (1.66x generation, 1.15x step,
+replicated to 0.7%), and standalone 0.25 data bounds DynamicSD within a few
+percent below fixed-K3 on this recipe. The
 30B E2E numbers above (vLLM 0.20 stack, 1.66x generation / 1.15x step for
 fixed-K3) remain the reference; standalone 0.25 data predicts dynamic would
 land within a few percent of fixed there. Separately, 235B E2E was abandoned
