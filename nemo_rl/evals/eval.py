@@ -21,6 +21,7 @@ from typing import NotRequired, TypedDict
 
 import ray
 import torch
+from pydantic import BaseModel
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
@@ -56,7 +57,7 @@ class _PassThroughEnvConfig(TypedDict):
     mmau: NotRequired[VLMEnvConfig]
 
 
-class MasterConfig(TypedDict):
+class MasterConfig(BaseModel, extra="allow"):
     eval: EvalConfig
     generation: GenerationConfig  # Fixed: was 'generate'
     tokenizer: TokenizerConfig  # Added missing tokenizer key
@@ -91,9 +92,9 @@ def setup(
         VLLM model, data loader, and config.
     """
     # Extract individual configs for easier access
-    eval_config = master_config["eval"]
-    generation_config = master_config["generation"]
-    cluster_config = master_config["cluster"]
+    eval_config = master_config.eval
+    generation_config = master_config.generation
+    cluster_config = master_config.cluster
 
     # Set seed for reproducibility
     set_seed(eval_config["seed"])
@@ -287,19 +288,21 @@ def run_env_eval(vllm_generation, dataloader, env, master_config):
         env: Environment that scores responses.
         master_config: Configuration settings.
     """
-    # Check if async engine is enabled and run appropriate version
-    if master_config["generation"]["vllm_cfg"]["async_engine"]:
-        asyncio.run(
-            _run_env_eval_impl(
-                vllm_generation, dataloader, env, master_config, use_async=True
-            )
+    generation_config = master_config.generation
+    backend = generation_config.get("backend", "")
+    if backend == "sglang":
+        use_async = bool(generation_config.get("use_async_rollouts", False))
+    elif backend == "vllm":
+        use_async = bool(
+            generation_config.get("vllm_cfg", {}).get("async_engine", False)
         )
     else:
-        asyncio.run(
-            _run_env_eval_impl(
-                vllm_generation, dataloader, env, master_config, use_async=False
-            )
+        use_async = False
+    asyncio.run(
+        _run_env_eval_impl(
+            vllm_generation, dataloader, env, master_config, use_async=use_async
         )
+    )
 
 
 async def _run_env_eval_impl(
@@ -307,8 +310,8 @@ async def _run_env_eval_impl(
 ):
     """Unified implementation for both sync and async evaluation."""
     # Extract for easier access
-    generation_config = master_config["generation"]
-    eval_config = master_config["eval"]
+    generation_config = master_config.generation
+    eval_config = master_config.eval
     metric = eval_config["metric"]
     num_tests_per_prompt = eval_config["num_tests_per_prompt"]
     k_value = eval_config["k_value"]
@@ -341,6 +344,11 @@ async def _run_env_eval_impl(
                 if images is not None and len(images[i]) > 0:
                     multi_modal_data["image"] = (
                         images[i][0] if len(images[i]) == 1 else images[i]
+                    )
+                videos = batch.get("vllm_videos", None)
+                if videos is not None and len(videos[i]) > 0:
+                    multi_modal_data["video"] = (
+                        videos[i][0] if len(videos[i]) == 1 else videos[i]
                     )
                 if multi_modal_data:
                     prompt_dict["multi_modal_data"] = multi_modal_data
@@ -435,11 +443,16 @@ async def _run_env_eval_impl(
 async def _generate_texts(vllm_generation, inputs, use_async):
     """Generate texts using either sync or async method."""
     if use_async:
-        # Use async generation - collect all results
-        results = []
-        async for idx, result in vllm_generation.generate_text_async(inputs):
-            results.append((idx, result["texts"][0]))
+        # generate_text_async accepts one sample per call; fan out and gather.
+        async def _generate_single_sample(i):
+            single = inputs.slice(i, i + 1)
+            async for _, result in vllm_generation.generate_text_async(single):
+                return (i, result["texts"][0])
+            raise RuntimeError(f"No output produced for sample {i}")
 
+        results = await asyncio.gather(
+            *(_generate_single_sample(i) for i in range(inputs.size))
+        )
         # Sort by index to maintain order
         results.sort(key=lambda x: x[0])
         return [text for _, text in results]
@@ -459,14 +472,14 @@ def _save_evaluation_data_to_json(evaluation_data, master_config, save_path):
     """
     # Extract configuration information
     config_data = {
-        "model_name": master_config["generation"]["model_name"],
-        "dataset_name": master_config["data"]["dataset_name"],
-        "metric": master_config["eval"]["metric"],
-        "k_value": master_config["eval"]["k_value"],
-        "num_tests_per_prompt": master_config["eval"]["num_tests_per_prompt"],
-        "temperature": master_config["generation"]["temperature"],
-        "top_p": master_config["generation"]["top_p"],
-        "top_k": master_config["generation"]["top_k"],
+        "model_name": master_config.generation["model_name"],
+        "dataset_name": master_config.data["dataset_name"],
+        "metric": master_config.eval["metric"],
+        "k_value": master_config.eval["k_value"],
+        "num_tests_per_prompt": master_config.eval["num_tests_per_prompt"],
+        "temperature": master_config.generation["temperature"],
+        "top_p": master_config.generation["top_p"],
+        "top_k": master_config.generation["top_k"],
     }
 
     # Create directory if it doesn't exist
@@ -517,10 +530,10 @@ def _print_results(
     num_tests_per_prompt,
 ):
     """Print evaluation results."""
-    dataset_name = os.path.basename(master_config["data"]["dataset_name"])
+    dataset_name = os.path.basename(master_config.data["dataset_name"])
     model_name = os.path.basename(generation_config["model_name"])
     max_new_tokens = generation_config["vllm_cfg"]["max_model_len"]
-    seed = master_config["eval"]["seed"]
+    seed = master_config.eval["seed"]
     temperature = generation_config["temperature"]
     top_p = generation_config["top_p"]
     top_k = generation_config["top_k"]
