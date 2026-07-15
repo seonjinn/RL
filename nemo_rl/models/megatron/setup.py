@@ -91,23 +91,21 @@ from nemo_rl.models.policy.utils import (
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
 
 
-def _is_qwen_family_model(model_name: str) -> bool:
-    """Return True for Qwen-family model IDs and local checkpoint paths."""
-    return "qwen" in model_name.lower()
-
-
 def _cuda_graph_scope_includes_attention(scope) -> bool:
-    """True when the CUDA-graph scope covers the attention submodule."""
+    """True when the CUDA-graph scope covers the attention submodule.
+
+    Accepts the raw config value: None/empty/"full" (whole layer), a single
+    scope string, a comma-separated string ("attn,mlp" — Megatron's own
+    __post_init__ splits on commas), or a list of scope strings.
+    """
     if scope in (None, "", [], "full"):
         # Empty/full scope captures the whole layer, including attention.
         return True
-    scopes = scope if isinstance(scope, list) else [scope]
-    return any(str(s) in ("attn", "full", "full_iteration") for s in scopes)
+    scopes = scope if isinstance(scope, list) else str(scope).split(",")
+    return any(str(s).strip() in ("attn", "full", "full_iteration") for s in scopes)
 
 
-def _enforce_packed_seq_cuda_graph_consistency(
-    config: PolicyConfig, hf_model_name: str
-) -> None:
+def _enforce_packed_seq_cuda_graph_consistency(config: PolicyConfig) -> None:
     """Keep sequence packing and CUDA-graph capture semantically consistent.
 
     A graph whose scope includes attention and that is captured WITHOUT the
@@ -236,7 +234,7 @@ def validate_and_set_config(
     weights_path,
     optimizer_path,
 ):
-    _enforce_packed_seq_cuda_graph_consistency(config, hf_model_name)
+    _enforce_packed_seq_cuda_graph_consistency(config)
 
     # Handle generation configuration
     is_generation_colocated = None
