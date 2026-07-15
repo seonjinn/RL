@@ -9,6 +9,7 @@ shift 4
 
 SUBMODULE_MEGATRON="${PROJECT_ROOT}/3rdparty/Megatron-LM-workspace/Megatron-LM"
 export PYTHONPATH="${SUBMODULE_MEGATRON}:${PROJECT_ROOT}:${PYTHONPATH:-}"
+export UV_LINK_MODE=copy
 export CUDA_HOME=/usr/local/cuda
 export NRL_IGNORE_VERSION_MISMATCH=1
 export NEMO_RL_VENV_DIR="${JOB_VENV_DIR}"
