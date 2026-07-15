@@ -170,7 +170,7 @@ mcore = [
   # It is specified here since we don't directly use Megatron-Bridge/pyproject.toml, but a proxy setup.py+pyproject.toml combo
   # outside to allow "optionally" installing the megatron path. It's simpler to deal with transformer-engine here in the NeMo RL pyproject.toml
   "transformer-engine[pytorch,core_cu13] @ git+https://github.com/NVIDIA/TransformerEngine.git@release_v2.15",
-  "megatron-core",
+  "megatron-core[dev,mlm]",
   "megatron-bridge",
   # Must match Megatron-Bridge main's transformers requirement (still includes GLM 5.1 support).
   "transformers>=5.8.1,<5.9.0",
