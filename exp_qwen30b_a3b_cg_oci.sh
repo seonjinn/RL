@@ -59,7 +59,7 @@ submit_one() {
     fi
 
     local command
-    command="cd ${PROJECT_ROOT} && export PYTHONPATH=${PROJECT_ROOT}/3rdparty/Megatron-LM-workspace/Megatron-LM:${PROJECT_ROOT}:\${PYTHONPATH:-} && uv run --no-sync ./examples/run_grpo.py \
+    command="cd ${PROJECT_ROOT} && export PYTHONPATH=${PROJECT_ROOT}/3rdparty/Megatron-LM-workspace/Megatron-LM:${PROJECT_ROOT}:\${PYTHONPATH:-} UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv && uv run --no-sync ./examples/run_grpo.py \
 --config ${config_file} \
 cluster.num_nodes=${NUM_NODES} \
 cluster.gpus_per_node=${GPUS_PER_NODE} \

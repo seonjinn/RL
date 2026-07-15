@@ -16,6 +16,8 @@ export NEMO_RL_VENV_DIR="${JOB_VENV_DIR}"
 # resolve on py313 containers (nvidia-resiliency-ext has no cp313 wheel), so
 # fresh resolution fails. PYTHONPATH above overrides nemo_rl and Megatron code.
 export NRL_FORCE_REBUILD_VENVS="${NRL_FORCE_REBUILD_VENVS:-false}"
+# Use the container venv, NOT the stale .venv checked out on Lustre.
+export UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-/opt/nemo_rl_venv}"
 
 if [[ -n "${UV_CACHE_DIR_OVERRIDE:-}" ]]; then
     export UV_CACHE_DIR="${UV_CACHE_DIR_OVERRIDE}"
