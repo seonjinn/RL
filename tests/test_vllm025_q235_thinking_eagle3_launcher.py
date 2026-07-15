@@ -16,6 +16,8 @@ def _dry_run(variant: str, **env_overrides: str) -> str:
     env = os.environ.copy()
     env.pop("CUDAGRAPH_METRICS", None)
     env.pop("DYNAMIC_SD_SCHEDULE", None)
+    env.pop("MAX_NEW_TOKENS", None)
+    env.pop("MAX_TOTAL_SEQUENCE_LENGTH", None)
     env.update(
         {
             "MODE": "dry-run",
@@ -124,6 +126,18 @@ def test_supported_variants_render_expected_speculative_token_count() -> None:
             "vllm_kwargs.compilation_config.cudagraph_capture_sizes="
             f"{capture_sizes}" in output
         )
+
+
+def test_long_output_profile_sets_output_and_context_limits_together() -> None:
+    output = _dry_run(
+        "eagle3_k3",
+        MAX_NEW_TOKENS="32768",
+        MAX_TOTAL_SEQUENCE_LENGTH="36864",
+    )
+
+    assert "policy.max_total_sequence_length=36864" in output
+    assert "policy.generation.max_new_tokens=32768" in output
+    assert "policy.generation.vllm_cfg.max_model_len=36864" in output
 
 
 def test_invalid_variant_fails_before_submission() -> None:

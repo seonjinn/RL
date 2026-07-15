@@ -9,6 +9,8 @@ NUM_NODES="${NUM_NODES:-16}"
 SEGMENT="${SEGMENT:-16}"
 TIME_LIMIT="${TIME_LIMIT:-05:00:00}"
 MAX_STEPS="${MAX_STEPS:-1}"
+MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-}"
+MAX_TOTAL_SEQUENCE_LENGTH="${MAX_TOTAL_SEQUENCE_LENGTH:-}"
 WANDB_ENABLED="${WANDB_ENABLED:-false}"
 CUDAGRAPH_METRICS="${CUDAGRAPH_METRICS:-false}"
 DYNAMIC_SD_SCHEDULE="${DYNAMIC_SD_SCHEDULE:-}"
@@ -78,6 +80,18 @@ if [[ "${COALESCED_OPTIMIZER_OFFLOAD}" == "true" && "${PINNED_OPTIMIZER_OFFLOAD}
   exit 2
 fi
 
+if [[ -n "${MAX_NEW_TOKENS}" || -n "${MAX_TOTAL_SEQUENCE_LENGTH}" ]]; then
+  if [[ ! "${MAX_NEW_TOKENS}" =~ ^[1-9][0-9]*$ || \
+        ! "${MAX_TOTAL_SEQUENCE_LENGTH}" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'MAX_NEW_TOKENS and MAX_TOTAL_SEQUENCE_LENGTH must both be positive integers\n' >&2
+    exit 2
+  fi
+  if (( MAX_TOTAL_SEQUENCE_LENGTH <= MAX_NEW_TOKENS )); then
+    printf 'MAX_TOTAL_SEQUENCE_LENGTH must exceed MAX_NEW_TOKENS to leave prompt capacity\n' >&2
+    exit 2
+  fi
+fi
+
 if [[ -n "${DYNAMIC_SD_SCHEDULE}" && "${SPECULATIVE_TOKENS}" -eq 0 ]]; then
   printf 'DYNAMIC_SD_SCHEDULE requires an Eagle3 variant\n' >&2
   exit 2
@@ -97,6 +111,14 @@ overrides=(
   "logger.tensorboard_enabled=false"
   "logger.log_dir=${RUN_DIR}/nemo_logs"
 )
+
+if [[ -n "${MAX_NEW_TOKENS}" ]]; then
+  overrides+=(
+    "policy.max_total_sequence_length=${MAX_TOTAL_SEQUENCE_LENGTH}"
+    "policy.generation.max_new_tokens=${MAX_NEW_TOKENS}"
+    "policy.generation.vllm_cfg.max_model_len=${MAX_TOTAL_SEQUENCE_LENGTH}"
+  )
+fi
 
 if [[ "${WANDB_ENABLED}" == "true" ]]; then
   overrides+=(
@@ -255,6 +277,8 @@ case "${MODE}" in
       printf 'draft_snapshot=%s\n' "${DRAFT_SNAPSHOT}"
       printf 'num_speculative_tokens=%s\n' "${SPECULATIVE_TOKENS}"
       printf 'max_steps=%s\n' "${MAX_STEPS}"
+      printf 'max_new_tokens=%s\n' "${MAX_NEW_TOKENS:-recipe-default}"
+      printf 'max_total_sequence_length=%s\n' "${MAX_TOTAL_SEQUENCE_LENGTH:-recipe-default}"
       printf 'num_nodes=16\nsegment=16\n'
       printf 'cuda_graph_enabled=true\n'
       printf 'vllm_use_v2_model_runner=1\n'
