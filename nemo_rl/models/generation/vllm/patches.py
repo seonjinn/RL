@@ -124,6 +124,41 @@ def _patch_vllm_init_workers_ray(
             write_back(content)
 
 
+def _patch_vllm_torchcodec_optional_import(logger) -> None:
+    """Allow text-only vLLM startup when optional TorchCodec cannot load.
+
+    TorchCodec raises ``RuntimeError`` rather than ``ImportError`` when the
+    package is installed but system FFmpeg libraries are unavailable. This is
+    the vLLM upstream fix from PR #47888, applied at runtime for vLLM 0.25.
+    """
+    file_to_patch = _get_vllm_file("multimodal/video.py")
+    old_snippet = (
+        "try:\n"
+        "    from torchcodec.decoders import VideoDecoder\n"
+        "except ImportError:\n"
+    )
+    new_snippet = (
+        "try:\n"
+        "    from torchcodec.decoders import VideoDecoder\n"
+        "except (ImportError, RuntimeError):\n"
+    )
+
+    with _locked_file_patch(file_to_patch) as (content, write_back):
+        if new_snippet in content:
+            logger.info("vLLM TorchCodec optional-import patch already applied.")
+            return
+        if old_snippet not in content:
+            logger.warning(
+                "Could not apply vLLM TorchCodec optional-import patch: "
+                "expected code snippet not found in %s.",
+                file_to_patch,
+            )
+            return
+        write_back(content.replace(old_snippet, new_snippet, 1))
+
+    logger.info("Successfully patched vLLM TorchCodec optional import.")
+
+
 def _patch_vllm_llama_eagle3_own_lm_head(logger) -> None:
     """Patch LlamaEagle3 to keep truncated draft lm_head ownership."""
     try:
@@ -301,5 +336,6 @@ def _apply_vllm_patches(
     _patch_vllm_init_workers_ray(py_executable, extra_env_vars)
     patch_logger.info("Successfully patched vllm _init_workers_ray.")
 
+    _patch_vllm_torchcodec_optional_import(patch_logger)
     _patch_vllm_llama_eagle3_own_lm_head(patch_logger)
     _patch_vllm_hermes_tool_parser_thread_safety(patch_logger)

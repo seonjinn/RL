@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import logging
 from pathlib import Path
 
 
@@ -115,3 +116,34 @@ def test_ray_patch_uses_vllm_025_extra_env_contract(
         "NCCL_NVLS_ENABLE",
         "RAY_ENABLE_UV_RUN_RUNTIME_ENV",
     }
+
+
+def test_torchcodec_patch_keeps_text_only_vllm_usable_without_ffmpeg(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    patches = load_patches_module()
+    video_module = tmp_path / "video.py"
+    video_module.write_text(
+        "try:\n"
+        "    from torchcodec.decoders import VideoDecoder\n"
+        "except ImportError:\n"
+        "    VideoDecoder = None\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _path: str(video_module))
+
+    patches._patch_vllm_torchcodec_optional_import(logging.getLogger(__name__))
+    patches._patch_vllm_torchcodec_optional_import(logging.getLogger(__name__))
+
+    patched = video_module.read_text(encoding="utf-8")
+    assert "except (ImportError, RuntimeError):" in patched
+    assert patched.count("except (ImportError, RuntimeError):") == 1
+
+
+def test_vllm_runtime_patch_applies_torchcodec_guard() -> None:
+    patch_source = (
+        ROOT / "nemo_rl/models/generation/vllm/patches.py"
+    ).read_text(encoding="utf-8")
+
+    assert "_patch_vllm_torchcodec_optional_import(patch_logger)" in patch_source
