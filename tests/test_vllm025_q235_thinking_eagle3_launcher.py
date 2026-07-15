@@ -90,6 +90,17 @@ def test_dynamic_sd_schedule_is_opt_in() -> None:
     )
 
 
+def test_all_variants_force_v2_model_runner_for_full_cuda_graphs() -> None:
+    baseline_output = _dry_run("baseline")
+    dynamic_output = _dry_run(
+        "eagle3_k5",
+        DYNAMIC_SD_SCHEDULE="[[1,4,5],[5,8,3],[9,16,1],[17,64,0]]",
+    )
+
+    assert "VLLM_USE_V2_MODEL_RUNNER=1" in baseline_output
+    assert "VLLM_USE_V2_MODEL_RUNNER=1" in dynamic_output
+
+
 def test_supported_variants_render_expected_speculative_token_count() -> None:
     expected_capture_sizes = {
         1: "[2,4,8,16,32,64,128]",

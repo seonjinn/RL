@@ -112,6 +112,7 @@ if [[ "${SPECULATIVE_TOKENS}" -gt 0 ]]; then
 fi
 
 command_env=(
+  "VLLM_USE_V2_MODEL_RUNNER=1"
   "WANDB_RUN_GROUP=${RUN_TAG}"
   "WANDB_RESUME=never"
   "NRL_DISABLE_VLLM_PORT_OVERRIDE=1"
@@ -219,6 +220,7 @@ case "${MODE}" in
       printf 'max_steps=%s\n' "${MAX_STEPS}"
       printf 'num_nodes=16\nsegment=16\n'
       printf 'cuda_graph_enabled=true\n'
+      printf 'vllm_use_v2_model_runner=1\n'
       printf 'cudagraph_metrics=%s\n' "${CUDAGRAPH_METRICS}"
       printf 'dynamic_sd_schedule=%s\n' "${DYNAMIC_SD_SCHEDULE:-disabled}"
       printf 'numa_cpu_affinity=true\nnuma_membind=false\n'
