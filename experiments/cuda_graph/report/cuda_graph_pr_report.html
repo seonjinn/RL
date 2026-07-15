@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Partial CUDA Graph + Sequence Packing in NeMo-RL — Audit, Fixes, and Performance</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page:          #f9f9f7;
+    --surface-1:     #fcfcfb;
+    --text-primary:  #0b0b0b;
+    --text-secondary:#52514e;
+    --muted:         #898781;
+    --grid:          #e1e0d9;
+    --baseline:      #c3c2b7;
+    --border:        rgba(11,11,11,0.10);
+    --series-1:      #2a78d6;
+    --good:          #0ca30c;
+    --good-text:     #006300;
+    --warning:       #fab219;
+    --serious:       #ec835a;
+    --critical:      #d03b3b;
+    --flag-bg:       #fdf3f3;
+    --fixed-bg:      #f0f8f0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page:          #0d0d0d;
+      --surface-1:     #1a1a19;
+      --text-primary:  #ffffff;
+      --text-secondary:#c3c2b7;
+      --muted:         #898781;
+      --grid:          #2c2c2a;
+      --baseline:      #383835;
+      --border:        rgba(255,255,255,0.10);
+      --series-1:      #3987e5;
+      --good-text:     #0ca30c;
+      --flag-bg:       #2a1c1c;
+      --fixed-bg:      #1c2a1c;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page:          #0d0d0d;
+    --surface-1:     #1a1a19;
+    --text-primary:  #ffffff;
+    --text-secondary:#c3c2b7;
+    --muted:         #898781;
+    --grid:          #2c2c2a;
+    --baseline:      #383835;
+    --border:        rgba(255,255,255,0.10);
+    --series-1:      #3987e5;
+    --good-text:     #0ca30c;
+    --flag-bg:       #2a1c1c;
+    --fixed-bg:      #1c2a1c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    background: var(--page); color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 15px; line-height: 1.55;
+  }
+  main { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 26px; line-height: 1.25; margin: 0 0 4px; }
+  h2 { font-size: 20px; margin: 40px 0 8px; padding-top: 16px; border-top: 1px solid var(--grid); }
+  h3 { font-size: 16px; margin: 24px 0 6px; }
+  p, li { color: var(--text-secondary); }
+  strong { color: var(--text-primary); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px;
+         background: var(--surface-1); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+  .subtitle { color: var(--muted); margin-bottom: 20px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 20px 0; }
+  .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .tile .v { font-size: 26px; font-weight: 650; color: var(--text-primary); }
+  .tile .v.good { color: var(--good-text); }
+  .tile .v.bad  { color: var(--critical); }
+  .tile .k { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0 4px; background: var(--surface-1);
+          border: 1px solid var(--border); border-radius: 8px; font-size: 13.5px; }
+  th { text-align: left; color: var(--muted); font-weight: 600; font-size: 12px;
+       border-bottom: 1px solid var(--grid); padding: 8px 10px; white-space: nowrap; }
+  td { padding: 7px 10px; border-bottom: 1px solid var(--grid); color: var(--text-secondary);
+       font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: none; }
+  td.name { color: var(--text-primary); font-variant-numeric: normal; white-space: nowrap; }
+  td.num, th.num { text-align: right; }
+  .up   { color: var(--good-text); font-weight: 600; }
+  .down { color: var(--critical); font-weight: 600; }
+  tr.baseline td { background: color-mix(in srgb, var(--baseline) 12%, transparent); }
+  tr.invalid td { background: var(--flag-bg); }
+  tr.invalid td.name::after { content: " ⚠ invalid semantics"; color: var(--critical); font-size: 11px; font-weight: 600; }
+  .chip { display: inline-block; font-size: 11px; font-weight: 700; border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+  .chip.critical { background: var(--critical); color: #fff; }
+  .chip.high     { background: var(--serious);  color: #1a1a19; }
+  .chip.medium   { background: var(--warning);  color: #1a1a19; }
+  .chip.low      { background: var(--baseline); color: var(--text-primary); }
+  .chip.fixed    { background: var(--good);     color: #fff; }
+  .chip.deferred { background: transparent; border: 1px solid var(--muted); color: var(--muted); }
+  .chip.guarded  { background: var(--series-1); color: #fff; }
+  .callout { border-left: 3px solid var(--critical); background: var(--flag-bg);
+             padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 14px 0; }
+  .callout.ok { border-left-color: var(--good); background: var(--fixed-bg); }
+  .callout p { margin: 4px 0; }
+  /* --- bar chart --- */
+  .chart { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+           padding: 16px 18px 12px; margin: 14px 0; }
+  .chart .title { font-size: 14px; font-weight: 650; color: var(--text-primary); }
+  .chart .sub { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+  .row { display: grid; grid-template-columns: 190px 1fr 84px; align-items: center; gap: 10px; margin: 7px 0; }
+  .row .lbl { font-size: 12.5px; color: var(--text-secondary); text-align: right; white-space: nowrap;
+              overflow: hidden; text-overflow: ellipsis; }
+  .row .lbl b { color: var(--text-primary); }
+  .track { position: relative; height: 18px; background: transparent; border-left: 2px solid var(--baseline); }
+  .bar { position: relative; height: 14px; margin-top: 2px; background: var(--series-1);
+         border-radius: 0 4px 4px 0; min-width: 2px; }
+  .bar.base { background: var(--baseline); }
+  .bar.flag { background: var(--critical); opacity: .55; }
+  .row .val { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .row:hover .bar { filter: brightness(1.12); }
+  .row .bar::after { content: attr(data-tip); position: absolute; left: 8px; top: -34px; z-index: 3;
+        background: var(--text-primary); color: var(--page); font-size: 11.5px; padding: 3px 8px;
+        border-radius: 6px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .12s; }
+  .row:hover .bar::after { opacity: 1; }
+  .legendnote { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
+  .theme-toggle { float: right; font-size: 12px; color: var(--muted); background: var(--surface-1);
+        border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  footer { margin: 48px 0 8px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--grid); padding-top: 12px; }
+  details summary { cursor: pointer; color: var(--text-primary); font-weight: 600; margin: 8px 0; }
+</style>
+</head>
+<body>
+<main>
+  <button class="theme-toggle" onclick="const r=document.documentElement;r.dataset.theme=(r.dataset.theme==='dark')?'light':'dark'">light / dark</button>
+  <h1>Partial CUDA Graph + Sequence Packing in NeMo-RL</h1>
+  <div class="subtitle">Re-audit of the <code>feature/cuda-graph-training</code> patchset · correctness findings and fixes · measured performance vs no-CG baseline · OCI-HSG 4×GB200 · report generated 2026-07-15</div>
+
+  <div class="tiles">
+    <div class="tile"><div class="v good">2.07×</div><div class="k">Qwen3-8B policy-training throughput, CG attn+mlp w6 (no packing) vs baseline — valid semantics</div></div>
+    <div class="tile"><div class="v good">+38%</div><div class="k">Llama-3.1-8B E2E step speedup, CG mlp w3 (packed) — 102.3 s → 74.0 s</div></div>
+    <div class="tile"><div class="v bad">1 critical</div><div class="k">packed batches replayed through non-packed attention graphs (fixed: forced THD capture)</div></div>
+    <div class="tile"><div class="v">13 + 12</div><div class="k">audit findings (Megatron + NeMo-RL); 9 fixed, 4 hard-guarded, rest documented</div></div>
+  </div>
+
+  <h2>1. What this work adds</h2>
+  <p><strong>Goal:</strong> enable partial CUDA graphs (TE <code>make_graphed_callables</code> via Megatron's <code>TECudaGraphHelper</code>) for GRPO policy training in NeMo-RL while sequence packing (THD format) is active, measure the speedup on policy training and logprob phases, and verify there is no accuracy impact.</p>
+  <ul>
+    <li><strong>Megatron-LM</strong> (fork branch <code>sj/cudagraph-on-ultra</code>): static GPU buffers for <code>PackedSeqParams</code>; capture with a dummy PSP; replay-time <code>copy_()</code> of real cu_seqlens into shared per-layer buffers; new configs <code>cuda_graph_packed_seq</code> / <code>cuda_graph_max_packed_seqs</code>; eager fallback when a batch exceeds the bucket; scope selection <code>attn / mlp / moe / moe_router / mamba</code>.</li>
+    <li><strong>NeMo-RL</strong>: config plumbing (<code>cuda_graph_*</code> in <code>MegatronConfig</code>), bucket padding in <code>data.py</code> (<code>cuda_graph_buckets</code>, min-fill fallback), lazy capture in <code>megatron_policy_worker.py</code> (warmup → capture at gb0 → replay), <code>.item()</code>-storm elimination, offload copy-stream work, 31 CG/noCG recipes.</li>
+  </ul>
+
+  <h2>2. What was wrong — the critical finding</h2>
+  <div class="callout">
+    <p><strong>Packed batches were replayed through attention graphs captured without packed-seq support.</strong>
+    The former "Qwen safeguard" (<code>sequence_packing=true</code> + <code>cuda_graph_packed_seq=false</code> while the CG scope includes <code>attn</code>) captured the sbhd attention path, then silently dropped <code>PackedSeqParams</code> at replay (dataclass filtered from graph kwargs). Attention ran causally over the whole packed 4096-token stream — <strong>documents were not isolated from each other</strong>, so training numerics differ from the no-CG baseline by construction.</p>
+    <p><strong>Impact on previous results:</strong> the Apr-30 Qwen3-8B <em>packed</em> attn / attn+mlp CG numbers (up to “+105% policy training”) were measured in this mode and are <strong>invalid as evidence for the packed path</strong>. Unpacked (nopack) numbers and mlp-only-scope numbers are unaffected (attention runs eagerly with the real PSP in mlp scope). Rewards stayed in-noise over 20 steps because rollouts/logprob run eagerly, which is why this went unnoticed.</p>
+    <p><strong>Fix:</strong> <code>setup.py</code> now enforces <code>cuda_graph_packed_seq=true</code> whenever packing is on and the scope includes attention, and Megatron raises instead of silently dropping a PSP into a non-packed graph.</p>
+  </div>
+
+  <h3>Findings register</h3>
+  <table>
+    <tr><th>ID</th><th>Area</th><th>Severity</th><th>Defect</th><th>Status</th></tr>
+    <tr><td>RL-1</td><td class="name">setup.py safeguard</td><td><span class="chip critical">critical</span></td><td>packed replay through sbhd attention graphs → no document isolation (details above)</td><td><span class="chip fixed">fixed</span></td></tr>
+    <tr><td>MG-1</td><td class="name">shared PSP buffers</td><td><span class="chip critical">critical</span></td><td>one buffer set updated at forward replay; any pipelined schedule (PP&gt;1/VPP) would run backward with the next micro-batch's cu_seqlens</td><td><span class="chip guarded">guarded (PP=1 assert)</span></td></tr>
+    <tr><td>MG-2</td><td class="name">eager fallbacks</td><td><span class="chip high">high</span></td><td>fallback paths called <code>forward()</code> after PSP was popped → THD data treated as one sbhd sequence, silently</td><td><span class="chip fixed">fixed</span></td></tr>
+    <tr><td>MG-3</td><td class="name">replay preflight</td><td><span class="chip high">high</span></td><td>compared full <code>seq_length</code> against the CP/TP-SP-sharded activation → permanent eager fallback under SP/CP</td><td><span class="chip fixed">fixed</span></td></tr>
+    <tr><td>MG-4/5</td><td class="name">cuda_graph_te_overlap_replay</td><td><span class="chip critical">critical</span></td><td>event wrapper strips <code>nn.Module</code> identity (params excluded from static input surface → zero wgrads) and replay event is not external (main stream doesn't wait on side-stream replay)</td><td><span class="chip guarded">hard error</span></td></tr>
+    <tr><td>MG-7</td><td class="name">cu_seqlens_padded</td><td><span class="chip medium">medium</span></td><td>graphs bake in the unpadded path; padded≠unpadded batches (CP / FP8 padding) computed wrong offsets silently</td><td><span class="chip fixed">fixed (eager fallback)</span></td></tr>
+    <tr><td>RL-2</td><td class="name">worker bucket guard</td><td><span class="chip high">high</span></td><td>guard keyed on <code>cuda_graph_packed_seq</code> while data.py pads by <code>cuda_graph_pad_packed_seq</code> → <code>KeyError</code> in <code>_activate_bucket</code> on low-fill fallback steps in pad-only mode</td><td><span class="chip fixed">fixed</span></td></tr>
+    <tr><td>MG-F4</td><td class="name">multi-bucket PSP</td><td><span class="chip high">high</span></td><td>per-bucket capture overwrote a single buffer pointer; all layers kept only the last bucket's cu_seqlens buffers</td><td><span class="chip fixed">fixed (per-bucket registry)</span></td></tr>
+    <tr><td>MG-11</td><td class="name">pad_cu_seqlens</td><td><span class="chip medium">medium</span></td><td>silently truncated cu_seqlens on overflow (would drop trailing sequences from attention)</td><td><span class="chip fixed">fixed (raises)</span></td></tr>
+    <tr><td>MG-F7</td><td class="name">fallback hooks</td><td><span class="chip medium">medium</span></td><td>eager fallbacks skipped <code>cuda_graph_manual_hooks</code> → stale params with <code>overlap_param_gather</code></td><td><span class="chip fixed">fixed</span></td></tr>
+    <tr><td>RL-6</td><td class="name">offload vs capture</td><td><span class="chip medium">medium</span></td><td>captured graphs bake in param/grad device pointers; per-step CPU offload uses <code>storage().resize_()</code> whose address stability is allocator-dependent</td><td><span class="chip deferred">documented risk</span></td></tr>
+    <tr><td>MG-13</td><td class="name">attention_mask copies</td><td><span class="chip low">perf</span></td><td>S² bool mask captured + zero-mask alloc/copy per layer per micro-batch although THD kernels ignore it (tens of MB at 4–16k tokens)</td><td><span class="chip deferred">deferred</span></td></tr>
+    <tr><td>MG-8/10, RL-10/11/12</td><td class="name">minor</td><td><span class="chip low">low</span></td><td>dead tensor-max_seqlen plumbing; PSP identity-gate hardening; runtime cfg mutation; PP+buckets silently eager; benign env-actor race</td><td><span class="chip deferred">documented</span></td></tr>
+  </table>
+  <p class="legendnote">Full audit details live in the session memory and commit messages. “guarded” = configuration now fails fast instead of silently corrupting.</p>
+
+  <h3>Fixes landed (2026-07-15)</h3>
+  <table>
+    <tr><th>Repo / branch</th><th>Commit</th><th>Summary</th></tr>
+    <tr><td class="name">Megatron-LM · sj/cudagraph-on-ultra</td><td><code>8044aeba8</code></td><td>packed-seq CG replay correctness fixes (orig-kwargs fallbacks + manual hooks, per-bucket PSP registry, sharded-length preflight, PSP-drop raise, padded-mismatch fallback, overflow raise, PP=1 assert, overlap-replay hard error, replay-counter fix)</td></tr>
+    <tr><td class="name">Megatron-LM · sj/cudagraph-on-ultra</td><td><code>6eaef7bd..feaa2f59</code></td><td>Megatron-Bridge compat shims folded into the submodule branch (were uncommitted on-cluster edits)</td></tr>
+    <tr><td class="name">NeMo-RL · feature/cuda-graph-training</td><td><code>f6ff6cf5</code></td><td>enforce packed-seq capture consistency (replaces Qwen-only safeguard); fix worker bucket-guard flag</td></tr>
+    <tr><td class="name">NeMo-RL · feature/cuda-graph-training</td><td><code>ece9c3cd</code> / <code>c74c1948</code> / <code>7d28f030</code></td><td>submodule bump; recipes: <code>cuda_graph_packed_seq=true</code> where attn in scope, wandb unification, removed broken <code>pack-cgpackoff</code> diagnostic; submission scripts committed</td></tr>
+    <tr><td class="name">NeMo-RL · r0.6.0-cg-matrix</td><td><code>f1de3a66</code></td><td>generator + 68 recipes regenerated with unified wandb + correct packed flags</td></tr>
+  </table>
+
+  <h2>3. Performance — baseline vs partial CUDA graph</h2>
+  <p>All numbers: OCI-HSG, 1 node × 4 GB200 (Qwen3-30B uses 4 nodes — see §4), GRPO math recipes, 20 steps, <strong>steady-state mean over steps 11–20</strong> (capture happens at warmup+1). Throughput = training input tokens / phase seconds / #GPU. Generation runs in vLLM and is expected to be CG-insensitive; it is included to verify no interference.</p>
+
+  <h3>3.1 Llama-3.1-8B-Instruct · sequence packing ON (bucket 4096, packed THD capture — valid semantics)</h3>
+  <table>
+    <tr><th>Config</th><th class="num">E2E step (s)</th><th class="num">Policy training (s)</th><th class="num">Logprob (s)</th><th class="num">Generation (s)</th><th class="num">Train tok/s/GPU</th><th class="num">Logprob tok/s/GPU</th><th class="num">Reward</th><th class="num">E2E Δ</th><th class="num">Train tok/s Δ</th></tr>
+    <tr class="baseline"><td class="name">no-CG (baseline)</td><td class="num">102.28</td><td class="num">56.40</td><td class="num">9.48</td><td class="num">25.56</td><td class="num">3,890</td><td class="num">23,059</td><td class="num">0.447</td><td class="num">—</td><td class="num">—</td></tr>
+    <tr><td class="name">CG mlp w3</td><td class="num">74.04</td><td class="num">29.68</td><td class="num">9.20</td><td class="num">24.48</td><td class="num">7,088</td><td class="num">22,873</td><td class="num">0.441</td><td class="num up">+38.1%</td><td class="num up">+82.2%</td></tr>
+    <tr><td class="name">CG mlp w6</td><td class="num">74.42</td><td class="num">28.90</td><td class="num">10.08</td><td class="num">24.61</td><td class="num">7,325</td><td class="num">21,088</td><td class="num">0.439</td><td class="num up">+37.4%</td><td class="num up">+88.3%</td></tr>
+    <tr><td class="name">CG attn+mlp w3</td><td class="num">94.04</td><td class="num">49.94</td><td class="num">9.18</td><td class="num">23.64</td><td class="num">4,012</td><td class="num">21,930</td><td class="num">0.450</td><td class="num up">+8.8%</td><td class="num up">+3.1%</td></tr>
+    <tr><td class="name">CG attn+mlp w6</td><td class="num">98.84</td><td class="num">53.42</td><td class="num">9.26</td><td class="num">25.38</td><td class="num">4,100</td><td class="num">23,658</td><td class="num">0.438</td><td class="num up">+3.5%</td><td class="num up">+5.4%</td></tr>
+    <tr><td class="name">CG attn w3</td><td class="num">119.13</td><td class="num">68.74</td><td class="num">11.26</td><td class="num">26.89</td><td class="num">3,424</td><td class="num">20,983</td><td class="num">0.443</td><td class="num down">−14.1%</td><td class="num down">−12.0%</td></tr>
+    <tr><td class="name">CG attn w6</td><td class="num">111.55</td><td class="num">63.40</td><td class="num">10.44</td><td class="num">25.80</td><td class="num">3,388</td><td class="num">20,572</td><td class="num">0.441</td><td class="num down">−8.3%</td><td class="num down">−12.9%</td></tr>
+  </table>
+
+  <div class="chart">
+    <div class="title">Llama-3.1-8B (packed) — policy-training throughput by CG scope</div>
+    <div class="sub">tok/s/GPU, steps 11–20 · higher is better · hover a bar for the phase breakdown</div>
+    <!-- max = 7325 -->
+    <div class="row"><div class="lbl"><b>no-CG baseline</b></div><div class="track"><div class="bar base" style="width:53.1%" data-tip="E2E 102.3s · train 56.4s · logprob 9.5s · gen 25.6s"></div></div><div class="val">3,890</div></div>
+    <div class="row"><div class="lbl">CG mlp w6</div><div class="track"><div class="bar" style="width:100%" data-tip="E2E 74.4s · train 28.9s · logprob 10.1s · gen 24.6s"></div></div><div class="val">7,325</div></div>
+    <div class="row"><div class="lbl">CG mlp w3</div><div class="track"><div class="bar" style="width:96.8%" data-tip="E2E 74.0s · train 29.7s · logprob 9.2s · gen 24.5s"></div></div><div class="val">7,088</div></div>
+    <div class="row"><div class="lbl">CG attn+mlp w6</div><div class="track"><div class="bar" style="width:56.0%" data-tip="E2E 98.8s · train 53.4s · logprob 9.3s · gen 25.4s"></div></div><div class="val">4,100</div></div>
+    <div class="row"><div class="lbl">CG attn+mlp w3</div><div class="track"><div class="bar" style="width:54.8%" data-tip="E2E 94.0s · train 49.9s · logprob 9.2s · gen 23.6s"></div></div><div class="val">4,012</div></div>
+    <div class="row"><div class="lbl">CG attn w3</div><div class="track"><div class="bar" style="width:46.7%" data-tip="E2E 119.1s · train 68.7s · logprob 11.3s · gen 26.9s"></div></div><div class="val">3,424</div></div>
+    <div class="legendnote">Gray bar = no-CG baseline. Same measurement protocol for every row.</div>
+  </div>
+
+  <p><strong>Reading:</strong> for Llama the win comes from graphing the <strong>MLP</strong> region (+82–88% policy-training throughput, +38% E2E). Putting <em>attention</em> inside the graph is counterproductive on GB200 (the CG-compatible TE attention path is slower than eager FlashAttention, and per-layer graph re-entry costs dominate); attn+mlp lands in between. Logprob and generation phases are flat across configs, as expected.</p>
+
+  <h3>3.2 Qwen3-8B · no packing (valid semantics)</h3>
+  <table>
+    <tr><th>Config</th><th class="num">E2E step (s)</th><th class="num">Policy training (s)</th><th class="num">Logprob (s)</th><th class="num">Generation (s)</th><th class="num">Train tok/s/GPU</th><th class="num">Logprob tok/s/GPU</th><th class="num">Reward</th><th class="num">E2E Δ</th><th class="num">Train tok/s Δ</th></tr>
+    <tr class="baseline"><td class="name">no-CG (baseline)</td><td class="num">239.15</td><td class="num">109.58</td><td class="num">36.89</td><td class="num">78.37</td><td class="num">7,651</td><td class="num">22,719</td><td class="num">0.533</td><td class="num">—</td><td class="num">—</td></tr>
+    <tr><td class="name">CG attn+mlp w6</td><td class="num">177.42</td><td class="num">53.04</td><td class="num">35.81</td><td class="num">75.95</td><td class="num">15,830</td><td class="num">23,447</td><td class="num">0.530</td><td class="num up">+34.8%</td><td class="num up">+106.9%</td></tr>
+    <tr><td class="name">CG attn+mlp w3</td><td class="num">179.64</td><td class="num">53.34</td><td class="num">35.91</td><td class="num">76.58</td><td class="num">15,779</td><td class="num">23,438</td><td class="num">0.529</td><td class="num up">+33.1%</td><td class="num up">+106.2%</td></tr>
+    <tr><td class="name">CG attn w6</td><td class="num">196.99</td><td class="num">71.45</td><td class="num">35.92</td><td class="num">76.66</td><td class="num">11,765</td><td class="num">23,395</td><td class="num">0.527</td><td class="num up">+21.4%</td><td class="num up">+53.8%</td></tr>
+    <tr><td class="name">CG attn w3</td><td class="num">200.06</td><td class="num">72.06</td><td class="num">37.41</td><td class="num">77.91</td><td class="num">11,627</td><td class="num">22,394</td><td class="num">0.531</td><td class="num up">+19.5%</td><td class="num up">+52.0%</td></tr>
+    <tr><td class="name">CG mlp w6</td><td class="num">201.12</td><td class="num">75.99</td><td class="num">36.10</td><td class="num">76.26</td><td class="num">11,071</td><td class="num">23,303</td><td class="num">0.529</td><td class="num up">+18.9%</td><td class="num up">+44.7%</td></tr>
+    <tr><td class="name">CG mlp w3</td><td class="num">199.69</td><td class="num">75.97</td><td class="num">36.28</td><td class="num">74.96</td><td class="num">11,050</td><td class="num">23,138</td><td class="num">0.529</td><td class="num up">+19.6%</td><td class="num up">+44.4%</td></tr>
+  </table>
+
+  <div class="chart">
+    <div class="title">Qwen3-8B (no packing) — policy-training throughput by CG scope</div>
+    <div class="sub">tok/s/GPU, steps 11–20 · higher is better</div>
+    <!-- max = 15830 -->
+    <div class="row"><div class="lbl"><b>no-CG baseline</b></div><div class="track"><div class="bar base" style="width:48.3%" data-tip="E2E 239.2s · train 109.6s · logprob 36.9s · gen 78.4s"></div></div><div class="val">7,651</div></div>
+    <div class="row"><div class="lbl">CG attn+mlp w6</div><div class="track"><div class="bar" style="width:100%" data-tip="E2E 177.4s · train 53.0s · logprob 35.8s · gen 76.0s"></div></div><div class="val">15,830</div></div>
+    <div class="row"><div class="lbl">CG attn w6</div><div class="track"><div class="bar" style="width:74.3%" data-tip="E2E 197.0s · train 71.5s · logprob 35.9s · gen 76.7s"></div></div><div class="val">11,765</div></div>
+    <div class="row"><div class="lbl">CG mlp w6</div><div class="track"><div class="bar" style="width:69.9%" data-tip="E2E 201.1s · train 76.0s · logprob 36.1s · gen 76.3s"></div></div><div class="val">11,071</div></div>
+    <div class="legendnote">Gray bar = no-CG baseline.</div>
+  </div>
+
+  <p><strong>Reading:</strong> Qwen3-8B is the opposite of Llama: every scope helps, attention graphs help a lot, and <strong>attn+mlp doubles policy-training throughput</strong> (109.6 s → 53.0 s) for a 35% E2E win. Qwen's eager path suffers far more from kernel-launch/framework overhead, which CUDA graphs eliminate.</p>
+
+  <h3>3.3 Qwen3-8B · sequence packing ON</h3>
+  <div class="callout">
+    <p>Rows flagged below ran in the pre-fix mode (<code>cuda_graph_packed_seq=false</code> with attention in scope): the graphs computed <strong>cross-document attention</strong>, so their speedups are not valid evidence for the packed path. They are retained for the record. The <strong>mlp-scope rows are valid</strong> (attention runs eagerly with the real PSP). Packed attn-scope CG must be re-measured with the fixed THD capture (<code>packed_seq=true</code>); the earlier THD-capture attempt measured ~2× <em>slower</em> policy training (185–203 s vs 94–98 s no-CG), which is the original Qwen packed-CG regression that motivated the (broken) decoupled mode.</p>
+  </div>
+  <table>
+    <tr><th>Config</th><th class="num">E2E step (s)</th><th class="num">Policy training (s)</th><th class="num">Logprob (s)</th><th class="num">Generation (s)</th><th class="num">Train tok/s/GPU</th><th class="num">Reward</th><th class="num">E2E Δ</th></tr>
+    <tr class="baseline"><td class="name">no-CG (baseline)</td><td class="num">222.34</td><td class="num">96.93</td><td class="num">37.76</td><td class="num">75.07</td><td class="num">8,682</td><td class="num">0.530</td><td class="num">—</td></tr>
+    <tr><td class="name">CG mlp w6 (valid)</td><td class="num">204.74</td><td class="num">76.27</td><td class="num">38.41</td><td class="num">77.36</td><td class="num">11,026</td><td class="num">0.528</td><td class="num up">+8.6%</td></tr>
+    <tr><td class="name">CG mlp w3 (valid)</td><td class="num">202.00</td><td class="num">75.50</td><td class="num">37.56</td><td class="num">76.08</td><td class="num">11,098</td><td class="num">0.531</td><td class="num up">+10.1%</td></tr>
+    <tr class="invalid"><td class="name">CG attn+mlp w6</td><td class="num">172.09</td><td class="num">47.40</td><td class="num">38.47</td><td class="num">75.78</td><td class="num">17,793</td><td class="num">0.530</td><td class="num">(+29.2%)</td></tr>
+    <tr class="invalid"><td class="name">CG attn+mlp w3</td><td class="num">180.50</td><td class="num">49.43</td><td class="num">38.02</td><td class="num">79.33</td><td class="num">16,993</td><td class="num">0.532</td><td class="num">(+23.2%)</td></tr>
+    <tr class="invalid"><td class="name">CG attn w6</td><td class="num">179.77</td><td class="num">57.54</td><td class="num">36.57</td><td class="num">76.15</td><td class="num">14,686</td><td class="num">0.528</td><td class="num">(+23.7%)</td></tr>
+    <tr class="invalid"><td class="name">CG attn w3</td><td class="num">197.06</td><td class="num">68.99</td><td class="num">36.78</td><td class="num">78.24</td><td class="num">12,231</td><td class="num">0.531</td><td class="num">(+12.8%)</td></tr>
+  </table>
+  <p><strong>Current recommendation for Qwen packed GRPO:</strong> <code>sequence_packing=true</code> + <code>cuda_graph_scope: [mlp]</code> (+10% E2E, +27% train throughput, fully correct). The flagged rows show the <em>upper bound</em> that a fast packed-attention CG path could unlock (~+29% E2E) — closing that gap correctly is exactly what upstream Megatron's new THD CG work targets (§5).</p>
+
+  <h3>3.4 Llama-3.1-8B · no packing (reference)</h3>
+  <table>
+    <tr><th>Config</th><th class="num">E2E step (s)</th><th class="num">Policy training (s)</th><th class="num">Logprob (s)</th><th class="num">Generation (s)</th><th class="num">Train tok/s/GPU</th><th class="num">Reward</th><th class="num">E2E Δ</th></tr>
+    <tr class="baseline"><td class="name">no-CG (baseline)</td><td class="num">157.41</td><td class="num">87.03</td><td class="num">32.78</td><td class="num">25.21</td><td class="num">2,461</td><td class="num">0.440</td><td class="num">—</td></tr>
+    <tr><td class="name">CG mlp w6</td><td class="num">126.82</td><td class="num">58.59</td><td class="num">32.44</td><td class="num">25.07</td><td class="num">3,565</td><td class="num">0.439</td><td class="num up">+24.1%</td></tr>
+    <tr><td class="name">CG mlp w3</td><td class="num">130.80</td><td class="num">59.85</td><td class="num">33.26</td><td class="num">25.64</td><td class="num">3,407</td><td class="num">0.448</td><td class="num up">+20.3%</td></tr>
+    <tr><td class="name">CG attn+mlp w6</td><td class="num">263.17</td><td class="num">196.08</td><td class="num">29.99</td><td class="num">26.05</td><td class="num">1,063</td><td class="num">0.449</td><td class="num down">−40.2%</td></tr>
+    <tr><td class="name">CG attn w6</td><td class="num">278.32</td><td class="num">208.89</td><td class="num">32.70</td><td class="num">26.18</td><td class="num">1,103</td><td class="num">0.445</td><td class="num down">−43.4%</td></tr>
+  </table>
+  <p><strong>Reading:</strong> unpacked Llama runs at 4096 max sequence length make the attention-graph penalty extreme (2.4× slower training). The mlp-scope rule holds here too. Note packing itself is a huge win for Llama (no-CG: 157 s unpacked → 102 s packed).</p>
+
+  <h3>3.5 Accuracy</h3>
+  <p>Across all 28 runs, per-run mean reward stays within noise of its baseline (Llama 0.438–0.450; Qwen 0.527–0.533), and logprob/generation phase timings are flat. <strong>Caveat:</strong> 20-step reward is a weak accuracy signal (rollout and logprob run eagerly); the flagged Qwen rows prove it cannot catch wrong training-path numerics alone. For release-grade validation, run the fixed configs 40+ steps with fixed seed and compare reward / val-accuracy / mean-logprob trajectories (tolerance &lt; 1e-4 at step 40, per the experiment guide).</p>
+
+  <h2>4. MoE (Qwen3-30B-A3B) — status</h2>
+  <div class="callout">
+    <p><strong>No valid MoE CG numbers exist yet.</strong> All 16 Qwen3-30B-A3B multi-node runs (May 1, r3–r7 + rerun; nocg / attn / moe_router / attn+moe_router) died before training: the <code>ray.sub</code> launcher failed with “Unable to locate Ray CLI module” — a container/venv mismatch (the 2026-04-09 container predates the venv layout the launcher expects), plus an earlier 1-task-srun launcher that only saw the head node's 4 GPUs.</p>
+    <p><strong>Rerun plan (prepared this session):</strong> local uncommitted <code>ray.sub</code> fixes (GRES parsing for <code>gpu:4(S:0-1)</code> suffixes, Ray-CLI interpreter fallback, <code>RAY_ADDRESS</code> passthrough) + a newer container (<code>nemo_rl_nightly_20260624.sqsh</code>). Matrix: nocg / cg-attn / cg-moe-router / cg-attn-moe-router (w6, packed, <code>packed_seq=true</code> after the fix), all logging to wandb project <code>nemo-rl-cudagraph</code>. MoE scope legality: <code>moe</code> requires drop-padding MoE; <code>moe_router(+preprocess)</code> is the safe partial scope for A3B.</p>
+  </div>
+
+  <h2>5. Upstream landscape (checked 2026-07-15)</h2>
+  <table>
+    <tr><th>Where</th><th>What</th><th>State</th><th>Overlap with this work</th></tr>
+    <tr><td class="name">Megatron-LM PR #4359 (HaochenYuan)</td><td>Layer-wise partial CG for THD via the <em>local</em> graph path: pad tokens/cu_seqlens to upper bounds, PSP decomposition across the graph boundary, graph-safe RoPE, <code>thd_cuda_graph_max_num_seqs</code></td><td><strong>merged into <code>dev</code></strong> 2026-06-16; main port PR #5783 (draft)</td><td>Same problem, same padding idea, different impl path (local vs TE); no Mamba support</td></tr>
+    <tr><td class="name">Megatron-LM PR #5258</td><td>Chunk-wise (whole-block) THD CG incl. MoE dispatch</td><td>open, active</td><td>Next-gen of #4359; addresses per-layer re-entry overhead we diagnosed</td></tr>
+    <tr><td class="name">Megatron-LM PR #5672 (community)</td><td>PackedSeqParams support in the <strong>TE</strong> CG path (PSP flattening into graph kwargs)</td><td>open, maintainer pushback</td><td>Highest design overlap with our TE-path static-buffer approach; no Mamba</td></tr>
+    <tr><td class="name">Our Megatron PR #3869</td><td>This patchset (TE path, static PSP buffers, mamba scope)</td><td>stale draft, 0 reviews since Mar 15</td><td>—</td></tr>
+    <tr><td class="name">NeMo-RL PR #1736 (sahgerlad)</td><td>CG config plumbing into <code>megatron_cfg</code></td><td>open; approved, review requested from us Mar 31</td><td>Strict subset of our branch; textual conflicts in <code>setup.py</code>/<code>__init__.py</code></td></tr>
+    <tr><td class="name">NeMo-RL issue #1246 (guyueh1)</td><td>Umbrella: CG support in training and logprob</td><td>open</td><td>The issue our NeMo-RL PR should link</td></tr>
+  </table>
+  <p><strong>Strategy implication:</strong> upstream Megatron <code>main</code> still has <em>no</em> packed-THD support in the TE CG path (it hard-asserts <code>packed_seq_params is None</code> at TE replay), but the <code>dev</code>-branch local-path solution is merged and moving to main, and the CG config API was renamed (<code>cuda_graph_scope</code> → deprecated alias of <code>cuda_graph_modules</code>; new <code>full_iteration</code> impl). Recommendation: (a) upstream the <strong>NeMo-RL side now</strong> (open field — review #1736 first, rebase our config plumbing on it, link #1246); (b) narrow the Megatron PR to the differentiators (Mamba/hybrid scope + TE-path packed support), coordinating with #5672/#5619 instead of maintaining a parallel design; (c) when #5783 lands on main, target its <code>thd_cuda_graph_max_num_seqs</code> padding contract from NeMo-RL rather than fork-only flags.</p>
+
+  <h2>6. wandb unification</h2>
+  <p>Every CG/noCG recipe (RL: 30 recipes; RL-r060: 76 generated recipes) and every submission script now logs to a single project: <strong><code>nemo-rl-cudagraph</code></strong>, run name = config filename stem (e.g. <code>grpo-qwen3-8b-1n4g-cg-attn-mlp-w6</code>). Baseline vs CG comparison in one workspace; filter by model prefix, group by scope suffix. <code>WANDB_API_KEY</code> is present on the cluster login environment and <code>api.wandb.ai</code> is reachable; first submission should confirm worker-side logging (fallback: <code>WANDB_MODE=offline</code> + <code>wandb sync</code>).</p>
+
+  <h2>7. Residual risks &amp; next steps</h2>
+  <ul>
+    <li><strong>Re-measure Qwen packed attn-scope CG</strong> with the fixed THD capture to replace the invalidated rows (expected slower than the invalid numbers; mlp scope remains the recommended packed config).</li>
+    <li><strong>Run the MoE matrix</strong> (§4) — the goal's attention/MoE-scope comparison still needs real numbers.</li>
+    <li><strong>40-step seeded accuracy runs</strong> (CG-best vs no-CG) for reward/val-acc/logprob trajectory equivalence.</li>
+    <li><strong>Perf headroom (deferred, safe):</strong> drop the S² attention-mask static input in packed mode (MG-13); remove dead tensor-max_seqlen copies (MG-8); pointer-stability hardening for offload+capture interplay (RL-6).</li>
+    <li><strong>Upstreaming:</strong> review NeMo-RL PR #1736, then open the NeMo-RL packed-CG PR referencing issue #1246; refit the Megatron patch onto the new <code>cuda_graph_modules</code> API.</li>
+  </ul>
+
+  <details>
+    <summary>Appendix: measurement provenance</summary>
+    <ul>
+      <li>Logs: <code>nemo-rl-cg-test/experiments/cuda_graph/cg_{ll8,qw8}_{sp0,sp1}_*_m20-*.out</code> (Apr 30, jobs 2487671–2487698), parsed with <code>parse_cg_throughput.py</code> (tok/s, reward from <code>train_data_step*.jsonl</code>) and a phase parser (E2E / policy_training / policy_and_reference_logprobs / generation), window steps 11–20.</li>
+      <li>Earlier replay-window summary (packed, different run set): <code>experiments/cuda_graph/outputs/oci_hsg_perf_summary.csv</code>.</li>
+      <li>Qwen packed THD-capture regression numbers (185–203 s): Apr-28 diagnostic runs 2471931–2471933, recorded in <code>CG_EVAL_MEMORY_2026-04-28.md</code>.</li>
+      <li>Audits: 5 independent agent passes (NeMo-RL diff, Megatron impl, config inventory, upstream evolution, PR landscape), 2026-07-15.</li>
+    </ul>
+  </details>
+
+  <footer>CUDA Graph PR project · fixes in seonjinn/Megatron-LM@sj/cudagraph-on-ultra (8044aeba8) and seonjinn/RL@feature/cuda-graph-training (7d28f030) · wandb: nemo-rl-cudagraph</footer>
+</main>
+</body>
+</html>
