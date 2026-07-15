@@ -36,10 +36,29 @@ def fit_group(g: pd.DataFrame) -> dict | None:
     g["t_step"] = g["batch_size"] * g["al"] / g["output_tok_s"]
 
     B, K = g["batch_size"].to_numpy(float), g["k"].to_numpy(float)
-    X = np.column_stack([np.ones_like(B), B * (K + 1), K, K * B])
     y = g["t_step"].to_numpy(float)
-    coef, *_ = np.linalg.lstsq(X, y, rcond=None)
-    coef = np.maximum(coef, 0)  # physical costs are non-negative
+    tokens = B * (K + 1)
+    # v2: MoE expert-activation saturates with processed tokens; model the
+    # per-token cost as steeper below a knee tau (activating new experts)
+    # and flatter above it: cost = beta1*min(tokens,tau) + beta2*max(tokens-tau,0)
+    best = None
+    for tau in [0] + [2 ** i for i in range(3, 11)]:
+        if tau == 0:
+            X = np.column_stack([np.ones_like(B), tokens, K, K * B])
+        else:
+            X = np.column_stack([
+                np.ones_like(B),
+                np.minimum(tokens, tau),
+                np.maximum(tokens - tau, 0),
+                K,
+                K * B,
+            ])
+        coef, *_ = np.linalg.lstsq(X, y, rcond=None)
+        coef = np.maximum(coef, 0)
+        resid = float(np.sum((X @ coef - y) ** 2))
+        if best is None or resid < best[0]:
+            best = (resid, tau, coef, X)
+    _, tau, coef, X = best
     pred_t = X @ coef
     g["pred_tok_s"] = g["batch_size"] * g["al"] / np.maximum(pred_t, 1e-9)
     rel_err = np.abs(g["pred_tok_s"] - g["output_tok_s"]) / g["output_tok_s"]
@@ -57,10 +76,7 @@ def fit_group(g: pd.DataFrame) -> dict | None:
         at_pred = sub.loc[sub["k"] == pred_k, "output_tok_s"].max()
         regrets.append(at_pred / best)
     return {
-        "alpha": coef[0],
-        "beta": coef[1],
-        "gamma": coef[2],
-        "delta": coef[3],
+        "tau": tau,
         "n_points": len(g),
         "median_rel_err_pct": 100 * float(np.median(rel_err)),
         "p90_rel_err_pct": 100 * float(np.quantile(rel_err, 0.9)),
