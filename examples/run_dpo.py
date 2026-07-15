@@ -53,27 +53,28 @@ def main():
         print(f"Overrides: {overrides}")
         config = parse_hydra_overrides(config, overrides)
 
-    config: MasterConfig = OmegaConf.to_container(config, resolve=True)
+    config = OmegaConf.to_container(config, resolve=True)
+    config = MasterConfig(**config)
     print("Applied CLI overrides")
 
     # Print config
     print("Final config:")
     pprint.pprint(config)
 
-    config["logger"]["log_dir"] = get_next_experiment_dir(config["logger"]["log_dir"])
-    print(f"📊 Using log directory: {config['logger']['log_dir']}")
-    if config["checkpointing"]["enabled"]:
+    config.logger["log_dir"] = get_next_experiment_dir(config.logger["log_dir"])
+    print(f"📊 Using log directory: {config.logger['log_dir']}")
+    if config.checkpointing["enabled"]:
         print(
-            f"📊 Using checkpoint directory: {config['checkpointing']['checkpoint_dir']}"
+            f"📊 Using checkpoint directory: {config.checkpointing['checkpoint_dir']}"
         )
 
     init_ray()
 
     # setup tokenizer
-    tokenizer = get_tokenizer(config["policy"]["tokenizer"])
+    tokenizer = get_tokenizer(config.policy["tokenizer"])
 
     # setup data
-    dataset, val_dataset = setup_preference_data(tokenizer, config["data"])
+    dataset, val_dataset = setup_preference_data(tokenizer, config.data)
 
     (
         policy,
@@ -87,17 +88,20 @@ def main():
         master_config,
     ) = setup(config, tokenizer, dataset, val_dataset)
 
-    dpo_train(
-        policy,
-        train_dataloader,
-        val_dataloader,
-        tokenizer,
-        loss_fn,
-        master_config,
-        logger,
-        checkpointer,
-        dpo_save_state,
-    )
+    # The checkpointer owns background async-checkpoint finalization threads;
+    # the context manager guarantees they are flushed (rename + delete) on exit.
+    with checkpointer:
+        dpo_train(
+            policy,
+            train_dataloader,
+            val_dataloader,
+            tokenizer,
+            loss_fn,
+            master_config,
+            logger,
+            checkpointer,
+            dpo_save_state,
+        )
 
 
 if __name__ == "__main__":
