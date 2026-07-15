@@ -12,6 +12,8 @@ MAX_STEPS="${MAX_STEPS:-1}"
 WANDB_ENABLED="${WANDB_ENABLED:-false}"
 CUDAGRAPH_METRICS="${CUDAGRAPH_METRICS:-false}"
 DYNAMIC_SD_SCHEDULE="${DYNAMIC_SD_SCHEDULE:-}"
+PINNED_OPTIMIZER_OFFLOAD="${PINNED_OPTIMIZER_OFFLOAD:-false}"
+COALESCED_OPTIMIZER_OFFLOAD="${COALESCED_OPTIMIZER_OFFLOAD:-false}"
 VLLM_DYNAMIC_SD_CG_FIX="disabled"
 WANDB_PROJECT="${WANDB_PROJECT:-nemo-rl-vllm025-q235-specdec}"
 REPO_DIR="${REPO_DIR:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-vllm025-thinking-eagle3-20260714}"
@@ -61,6 +63,21 @@ if [[ "${CUDAGRAPH_METRICS}" != "true" && "${CUDAGRAPH_METRICS}" != "false" ]]; 
   exit 2
 fi
 
+if [[ "${PINNED_OPTIMIZER_OFFLOAD}" != "true" && "${PINNED_OPTIMIZER_OFFLOAD}" != "false" ]]; then
+  printf 'PINNED_OPTIMIZER_OFFLOAD must be true or false; got %s\n' "${PINNED_OPTIMIZER_OFFLOAD}" >&2
+  exit 2
+fi
+
+if [[ "${COALESCED_OPTIMIZER_OFFLOAD}" != "true" && "${COALESCED_OPTIMIZER_OFFLOAD}" != "false" ]]; then
+  printf 'COALESCED_OPTIMIZER_OFFLOAD must be true or false; got %s\n' "${COALESCED_OPTIMIZER_OFFLOAD}" >&2
+  exit 2
+fi
+
+if [[ "${COALESCED_OPTIMIZER_OFFLOAD}" == "true" && "${PINNED_OPTIMIZER_OFFLOAD}" != "true" ]]; then
+  printf 'COALESCED_OPTIMIZER_OFFLOAD=true requires PINNED_OPTIMIZER_OFFLOAD=true\n' >&2
+  exit 2
+fi
+
 if [[ -n "${DYNAMIC_SD_SCHEDULE}" && "${SPECULATIVE_TOKENS}" -eq 0 ]]; then
   printf 'DYNAMIC_SD_SCHEDULE requires an Eagle3 variant\n' >&2
   exit 2
@@ -73,6 +90,8 @@ overrides=(
   "policy.generation.vllm_cfg.enforce_eager=false"
   "policy.generation.temperature=1.0"
   "policy.generation.top_p=1.0"
+  "++policy.use_pinned_optimizer_offload=${PINNED_OPTIMIZER_OFFLOAD}"
+  "++policy.use_coalesced_optimizer_offload=${COALESCED_OPTIMIZER_OFFLOAD}"
   "cluster.segment_size=16"
   "logger.wandb_enabled=${WANDB_ENABLED}"
   "logger.tensorboard_enabled=false"
@@ -242,6 +261,8 @@ case "${MODE}" in
       printf 'cudagraph_metrics=%s\n' "${CUDAGRAPH_METRICS}"
       printf 'dynamic_sd_schedule=%s\n' "${DYNAMIC_SD_SCHEDULE:-disabled}"
       printf 'vllm_dynamic_sd_cg_fix=%s\n' "${VLLM_DYNAMIC_SD_CG_FIX}"
+      printf 'pinned_optimizer_offload=%s\n' "${PINNED_OPTIMIZER_OFFLOAD}"
+      printf 'coalesced_optimizer_offload=%s\n' "${COALESCED_OPTIMIZER_OFFLOAD}"
       if [[ "${VLLM_DYNAMIC_SD_CG_FIX}" == "enabled" ]]; then
         printf 'vllm_dynamic_sd_cg_fix_blob=%s\n' "$(git -C "${REPO_DIR}" hash-object experiments/vllm_025_q235_specdec/apply_vllm025_dynamic_sd_cg_fix.py)"
       fi
