@@ -12,7 +12,10 @@ export PYTHONPATH="${SUBMODULE_MEGATRON}:${PROJECT_ROOT}:${PYTHONPATH:-}"
 export CUDA_HOME=/usr/local/cuda
 export NRL_IGNORE_VERSION_MISMATCH=1
 export NEMO_RL_VENV_DIR="${JOB_VENV_DIR}"
-export NRL_FORCE_REBUILD_VENVS="${NRL_FORCE_REBUILD_VENVS:-true}"
+# Default to the container's prebuilt venvs: the branch's uv.lock does not
+# resolve on py313 containers (nvidia-resiliency-ext has no cp313 wheel), so
+# fresh resolution fails. PYTHONPATH above overrides nemo_rl and Megatron code.
+export NRL_FORCE_REBUILD_VENVS="${NRL_FORCE_REBUILD_VENVS:-false}"
 
 if [[ -n "${UV_CACHE_DIR_OVERRIDE:-}" ]]; then
     export UV_CACHE_DIR="${UV_CACHE_DIR_OVERRIDE}"
@@ -20,7 +23,7 @@ fi
 
 cd "${PROJECT_ROOT}"
 
-uv run ./examples/run_grpo.py \
+uv run --no-sync ./examples/run_grpo.py \
     --config "${CONFIG_FILE}" \
     cluster.num_nodes=1 \
     cluster.gpus_per_node=4 \

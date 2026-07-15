@@ -21,7 +21,9 @@ LOG_ROOT="${LOG_ROOT_OVERRIDE:-${PROJECT_ROOT}}"
 LOG_BASE="${LOG_ROOT}/experiments/qwen30_oci_script_$(date +%Y%m%d)"
 JOB_FILTER="${JOB_FILTER:-}"
 MAX_STEPS="${MAX_STEPS:-20}"
-REBUILD_VENVS="${NRL_FORCE_REBUILD_VENVS:-true}"
+# Prebuilt container venvs by default: branch uv.lock does not resolve on
+# py313 containers (nvidia-resiliency-ext lacks cp313 wheels).
+REBUILD_VENVS="${NRL_FORCE_REBUILD_VENVS:-false}"
 
 source "${REFERENCE_DIR}/cluster_config.sh"
 setup_cluster_config "batch"
@@ -57,7 +59,7 @@ submit_one() {
     fi
 
     local command
-    command="cd ${PROJECT_ROOT} && uv run ./examples/run_grpo.py \
+    command="cd ${PROJECT_ROOT} && export PYTHONPATH=${PROJECT_ROOT}/3rdparty/Megatron-LM-workspace/Megatron-LM:${PROJECT_ROOT}:\${PYTHONPATH:-} && uv run --no-sync ./examples/run_grpo.py \
 --config ${config_file} \
 cluster.num_nodes=${NUM_NODES} \
 cluster.gpus_per_node=${GPUS_PER_NODE} \
