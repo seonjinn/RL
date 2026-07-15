@@ -15,6 +15,7 @@ REPO_DIR="${REPO_DIR:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-vllm025-dflash-
 CONTAINER="${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260715.sqsh}"
 MOUNTS="${MOUNTS:-/lustre:/lustre}"
 HF_HOME="${HF_HOME:-/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home}"
+MEGATRON_CHECKPOINT_DIR="${MEGATRON_CHECKPOINT_DIR:-${HF_HOME}/nemo_rl-v025-dflash-perfcfg-20260715}"
 EXPERIMENT_ROOT="${EXPERIMENT_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs}"
 
 case "${MODEL_PROFILE}" in
@@ -74,7 +75,7 @@ overrides=(
   "policy.generation.vllm_cfg.enforce_eager=false"
   "policy.generation.temperature=1.0"
   "policy.generation.top_p=1.0"
-  "cluster.segment_size=2"
+  "cluster.segment_size=${SEGMENT_SIZE}"
   "logger.wandb_enabled=${WANDB_ENABLED}"
   "logger.tensorboard_enabled=false"
   "logger.log_dir=${RUN_DIR}/nemo_logs"
@@ -101,6 +102,7 @@ if [[ "${SPECULATIVE_TOKENS}" -gt 0 ]]; then
     "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${SPECULATIVE_TOKENS}"
     "++policy.generation.vllm_kwargs.speculative_config.max_model_len=4096"
     "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=1"
+    "++policy.generation.vllm_kwargs.speculative_config.attention_backend=FLASH_ATTN"
     "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=FULL"
     "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${capture_sizes_csv}"
   )
@@ -116,7 +118,7 @@ command_parts=(
   "HF_HOME=${HF_HOME}"
   "HF_HUB_OFFLINE=1"
   "TRANSFORMERS_OFFLINE=1"
-  "NRL_MEGATRON_CHECKPOINT_DIR=${HF_HOME}/nemo_rl"
+  "NRL_MEGATRON_CHECKPOINT_DIR=${MEGATRON_CHECKPOINT_DIR}"
   "PYTHONPATH=${REPO_DIR}"
   "NEMO_RL_VENV_DIR=/tmp/nemorl-v025-dflash-${RUN_TAG}"
   "NRL_FORCE_REBUILD_VENVS=true"
@@ -218,6 +220,7 @@ case "${MODE}" in
       printf 'container=%s\n' "${CONTAINER}"
       printf 'recipe=%s\n' "${RECIPE}"
       printf 'target_snapshot=%s\ndraft_snapshot=%s\n' "${TARGET_SNAPSHOT}" "${DRAFT_SNAPSHOT}"
+      printf 'megatron_checkpoint_dir=%s\n' "${MEGATRON_CHECKPOINT_DIR}"
       printf 'num_speculative_tokens=%s\n' "${SPECULATIVE_TOKENS}"
       printf 'max_steps=%s\nnum_nodes=%s\nsegment=%s\n' "${MAX_STEPS}" "${NUM_NODES}" "${SEGMENT_SIZE}"
       printf 'cuda_graph_enabled=true\ncudagraph_mode=%s\n' "$([[ "${SPECULATIVE_TOKENS}" -gt 0 ]] && printf FULL || printf recipe-default)"

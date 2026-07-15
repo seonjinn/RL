@@ -67,6 +67,8 @@ def test_baseline_uses_qwen8_performance_recipe_without_specdec() -> None:
     assert "policy.generation.temperature=1.0" in output
     assert "policy.generation.top_p=1.0" in output
     assert "logger.wandb_enabled=true" in output
+    assert "NRL_MEGATRON_CHECKPOINT_DIR=" in output
+    assert "nemo_rl-v025-dflash-perfcfg-20260715" in output
     assert ".secrets/wandb_api_key" in output
     assert 'export WANDB_API_KEY="$(< "${WANDB_API_KEY_FILE}")"' in output
     assert "--nodes=2" in output
@@ -93,6 +95,7 @@ def test_dflash_uses_matched_public_drafter_and_full_cuda_graphs() -> None:
     assert "speculative_config.num_speculative_tokens=16" in output
     assert "speculative_config.draft_tensor_parallel_size=1" in output
     assert "speculative_config.max_model_len=4096" in output
+    assert "speculative_config.attention_backend=FLASH_ATTN" in output
     assert "models--z-lab--Qwen3-8B-DFlash-b16" in output
     assert "compilation_config.cudagraph_mode=FULL" in output
     assert (
@@ -110,7 +113,9 @@ def test_qwen30_profile_uses_unmodified_performance_recipe_and_matched_k7() -> N
     assert "models--Qwen--Qwen3-30B-A3B/snapshots/ad44e777" in launcher
     assert "models--inference-optimization--Qwen3-30B-A3B-speculator.dflash" in output
     assert "speculative_config.num_speculative_tokens=7" in output
+    assert "speculative_config.attention_backend=FLASH_ATTN" in output
     assert "compilation_config.cudagraph_capture_sizes=[8,16,32,64,128,256,512]" in output
+    assert "cluster.segment_size=4" in output
     assert "--nodes=4" in output
     assert "--segment=4" in output
 
