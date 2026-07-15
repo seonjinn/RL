@@ -240,7 +240,9 @@ GB200, 10 steps, baseline vs EAGLE3-K3 via
 | logprobs | 43.1s | 45.9s | 1.0x |
 | core step | 206.2s | 179.1s | **1.15x** |
 
-With generation at 33% of the step, Amdahl predicts
+An independent same-config rerun reproduced these numbers to within 0.7%
+(baseline 68.7s, eagle3 40.9s), so the E2E generation timings are stable
+across runs. With generation at 33% of the step, Amdahl predicts
 1/(0.67 + 0.33/1.66) = 1.151x - the measured E2E speedup to three decimals.
 **Speculation's end-to-end effect is exactly its generation-phase gain
 diluted by the generation fraction; training and logprob phases are
