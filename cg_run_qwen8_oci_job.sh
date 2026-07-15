@@ -25,6 +25,8 @@ fi
 
 cd "${PROJECT_ROOT}"
 
+uv sync --locked --reinstall-package transformers 2>&1 | tail -1 || true
+
 uv run ./examples/run_grpo.py \
     --config "${CONFIG_FILE}" \
     cluster.num_nodes=1 \
