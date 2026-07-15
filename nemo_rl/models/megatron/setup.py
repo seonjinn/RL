@@ -96,47 +96,73 @@ def _is_qwen_family_model(model_name: str) -> bool:
     return "qwen" in model_name.lower()
 
 
-def _maybe_disable_qwen_packed_seq_cuda_graph(
+def _cuda_graph_scope_includes_attention(scope) -> bool:
+    """True when the CUDA-graph scope covers the attention submodule."""
+    if scope in (None, "", [], "full"):
+        # Empty/full scope captures the whole layer, including attention.
+        return True
+    scopes = scope if isinstance(scope, list) else [scope]
+    return any(str(s) in ("attn", "full", "full_iteration") for s in scopes)
+
+
+def _enforce_packed_seq_cuda_graph_consistency(
     config: PolicyConfig, hf_model_name: str
 ) -> None:
-    """Disable the packed-sequence CUDA-graph replay path for Qwen by default.
+    """Keep sequence packing and CUDA-graph capture semantically consistent.
 
-    Current Qwen packed-sequence GRPO runs show a large regression when both
-    `sequence_packing=true` and `cuda_graph_packed_seq=true` are enabled. The
-    broader CUDA-graph path remains useful, so we only disable the packed replay
-    sub-path here and keep the configured CUDA-graph scope intact.
+    A graph whose scope includes attention and that is captured WITHOUT the
+    packed-seq machinery (`cuda_graph_packed_seq=false`) bakes in the sbhd
+    attention path. Replaying packed (THD) batches through it silently drops
+    `PackedSeqParams`, so attention loses per-document isolation. This was the
+    former Qwen "safeguard" mode, and it produces wrong training numerics.
 
-    Users can explicitly opt back in for debugging with:
-    `policy.megatron_cfg.allow_qwen_cuda_graph_packed_seq=true`
+    Rules enforced here:
+    - packing on + attention in CG scope -> force `cuda_graph_packed_seq=true`
+      (correct THD capture; note this path is slower for some models, e.g.
+      Qwen3-8B; consider `cuda_graph_scope: [mlp]` which keeps attention eager
+      with the real PackedSeqParams and is both correct and fast).
+    - packing off -> force `cuda_graph_packed_seq=false`.
+    - mlp/moe-only scopes with packing need no packed capture: attention runs
+      eagerly with the real PackedSeqParams before the graphed region.
     """
     megatron_cfg = config.get("megatron_cfg", {})
-    if not config.get("sequence_packing", {}).get("enabled", False):
-        return
     if megatron_cfg.get("cuda_graph_impl") in (None, "none"):
         return
-    if not _is_qwen_family_model(hf_model_name):
+    if megatron_cfg.get("allow_qwen_cuda_graph_packed_seq", False):
+        warnings.warn(
+            "policy.megatron_cfg.allow_qwen_cuda_graph_packed_seq is obsolete "
+            "and ignored: packed capture is now enforced whenever the CUDA "
+            "graph scope includes attention.",
+            stacklevel=2,
+        )
+
+    packing_enabled = config.get("sequence_packing", {}).get("enabled", False)
+    if not packing_enabled:
+        if megatron_cfg.get("cuda_graph_packed_seq", False):
+            warnings.warn(
+                "Disabling cuda_graph_packed_seq because sequence packing is disabled.",
+                stacklevel=2,
+            )
+            megatron_cfg["cuda_graph_packed_seq"] = False
         return
 
-    # Keep the CG bucketing / low-fill fallback path enabled for Qwen packed
-    # runs even when we disable the packed replay sub-path below.
+    # Packed batches must replay with static shapes: keep bucket padding on.
     megatron_cfg.setdefault("cuda_graph_pad_packed_seq", True)
 
-    if not megatron_cfg.get("cuda_graph_packed_seq", False):
-        return
-    if megatron_cfg.get("allow_qwen_cuda_graph_packed_seq", False):
-        return
-
-    warnings.warn(
-        "Disabling policy.megatron_cfg.cuda_graph_packed_seq for Qwen because "
-        "the packed-sequence CUDA-graph replay path regressed GRPO throughput "
-        "in internal validation. CUDA graphs remain enabled for the requested "
-        "scope; only the packed-sequence replay sub-path is disabled, while "
-        "CG bucketing / eager fallback remains on for static replay shapes. "
-        "Set policy.megatron_cfg.allow_qwen_cuda_graph_packed_seq=true to "
-        "override this safeguard for debugging.",
-        stacklevel=2,
-    )
-    megatron_cfg["cuda_graph_packed_seq"] = False
+    scope = megatron_cfg.get("cuda_graph_scope")
+    if _cuda_graph_scope_includes_attention(scope) and not megatron_cfg.get(
+        "cuda_graph_packed_seq", False
+    ):
+        warnings.warn(
+            "Forcing cuda_graph_packed_seq=true: sequence packing is enabled "
+            "and the CUDA-graph scope includes attention. Capturing without "
+            "packed-seq support would silently drop PackedSeqParams at replay "
+            "and break per-document attention isolation. If the packed attn "
+            "CG path is too slow for this model (observed on Qwen3-8B), use "
+            "cuda_graph_scope: [mlp] instead of disabling packed capture.",
+            stacklevel=2,
+        )
+        megatron_cfg["cuda_graph_packed_seq"] = True
 
 
 def destroy_parallel_state():
@@ -210,7 +236,7 @@ def validate_and_set_config(
     weights_path,
     optimizer_path,
 ):
-    _maybe_disable_qwen_packed_seq_cuda_graph(config, hf_model_name)
+    _enforce_packed_seq_cuda_graph_consistency(config, hf_model_name)
 
     # Handle generation configuration
     is_generation_colocated = None

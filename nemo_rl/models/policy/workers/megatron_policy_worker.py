@@ -381,19 +381,27 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
         cuda_graph_packed_seq = self.cfg["megatron_cfg"].get(
             "cuda_graph_packed_seq", False
         )
+        # data.py keys its bucket padding on cuda_graph_pad_packed_seq (defaults
+        # to cuda_graph_packed_seq). The fallback guard below must follow the
+        # SAME flag; gating it on cuda_graph_packed_seq alone lets low-fill
+        # fallback steps (padded to a non-bucket length) reach
+        # _activate_bucket() and KeyError in pad-only mode.
+        cuda_graph_pad_packed_seq = self.cfg["megatron_cfg"].get(
+            "cuda_graph_pad_packed_seq", cuda_graph_packed_seq
+        )
         warmup_steps = getattr(model_cfg, "cuda_graph_warmup_steps", 3)
         _rank0 = (
             not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
         )
 
         # --- Bucket guard: filter fallback steps ---
-        # When cuda_graph_packed_seq=True, data.py pads to an exact bucket
-        # value for CG steps and to the raw packed length for fallback steps
-        # (fill ratio too low or actual > max bucket). If seq_length is not a
+        # When bucket padding is active, data.py pads to an exact bucket value
+        # for CG steps and to the raw packed length for fallback steps (fill
+        # ratio too low or actual > max bucket). If seq_length is not a
         # recognised bucket value, treat this as a fallback step.
-        # For cuda_graph_packed_seq=False seq_length is always seq_dim_size
+        # Without bucket padding seq_length is always seq_dim_size
         # (max_total_sequence_length) — no fallback steps, guard must not fire.
-        if cuda_graph_buckets and cuda_graph_packed_seq:
+        if cuda_graph_buckets and cuda_graph_pad_packed_seq:
             if seq_length not in set(cuda_graph_buckets):
                 # Disable CG hooks so TE runs eagerly on this step.
                 if _rank0:
@@ -608,7 +616,8 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
                             != "none"
                         ):
                             assert (
-                                padded_seq_length == self._cuda_graph_captured_seq_length
+                                padded_seq_length
+                                == self._cuda_graph_captured_seq_length
                                 or self._cuda_graph_captured_seq_length is None
                             ), (
                                 f"CUDA graphs do not support num_global_batches > 1 when different "
@@ -690,8 +699,10 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
                     grad_norm: float = reduce_max_stat_across_model_parallel_group(
                         grad_norm, mp_group=pg_collection.mp
                     )
-                    num_zeros_in_grad: float = reduce_max_stat_across_model_parallel_group(
-                        num_zeros_in_grad, mp_group=pg_collection.mp
+                    num_zeros_in_grad: float = (
+                        reduce_max_stat_across_model_parallel_group(
+                            num_zeros_in_grad, mp_group=pg_collection.mp
+                        )
                     )
 
                 # Empty unused memory.
@@ -937,7 +948,10 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
                     for name, item in self.model.state_dict().items():
                         if isinstance(item, torch.Tensor) and item.is_cuda:
                             cpu_buf = torch.empty(
-                                item.shape, dtype=item.dtype, device="cpu", pin_memory=True
+                                item.shape,
+                                dtype=item.dtype,
+                                device="cpu",
+                                pin_memory=True,
                             )
                             cpu_buf.copy_(item.detach(), non_blocking=True)
                             item = cpu_buf
@@ -1510,7 +1524,9 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
             and not self.optimizer_cpu_offload
             and (self.offload_optimizer_for_logprob or self.is_generation_colocated)
         ):
-            with nvtx_range("megatron_policy_worker/prepare_for_training/move_optimizer"):
+            with nvtx_range(
+                "megatron_policy_worker/prepare_for_training/move_optimizer"
+            ):
                 self.move_optimizer("cuda")
 
         if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
@@ -1599,7 +1615,9 @@ class MegatronPolicyWorkerImpl(AbstractPolicyWorker, ColocatablePolicyInterface)
                                 )
                 elif isinstance(model, custom_FSDP):
                     if device == "cpu":
-                        model.param_and_grad_buffer.offload_to_cpu(move_params, move_grads)
+                        model.param_and_grad_buffer.offload_to_cpu(
+                            move_params, move_grads
+                        )
                     elif device == "cuda":
                         model.param_and_grad_buffer.reload_from_cpu(
                             move_params=move_params, move_grads=move_grads
