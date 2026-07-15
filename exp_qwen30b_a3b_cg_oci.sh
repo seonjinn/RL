@@ -8,12 +8,13 @@ REFERENCE_DIR="${SCRIPT_DIR}"
 if [[ ! -f "${REFERENCE_DIR}/cluster_config.sh" ]]; then
     REFERENCE_DIR="/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl"
 fi
-RAY_SUB_DEFAULT="/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/ray.sub"
+# Use this repo's ray.sub (carries the GRES-suffix and Ray-CLI fixes).
+RAY_SUB_DEFAULT="${SCRIPT_DIR}/ray.sub"
 RAY_SUB="${RAY_SUB_OVERRIDE:-${RAY_SUB_DEFAULT}}"
 if [[ ! -f "${RAY_SUB}" ]]; then
     RAY_SUB="${REFERENCE_DIR}/ray.sub"
 fi
-CONTAINER_DEFAULT="/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/HybridEP_test/nemo_rl_nightly_20260409.sqsh"
+CONTAINER_DEFAULT="/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly_20260624.sqsh"
 UV_CACHE_DIR_OVERRIDE_DEFAULT="/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/.cache/uv"
 PROJECT_ROOT="${PROJECT_ROOT_OVERRIDE:-${SCRIPT_DIR}}"
 LOG_ROOT="${LOG_ROOT_OVERRIDE:-${PROJECT_ROOT}}"
