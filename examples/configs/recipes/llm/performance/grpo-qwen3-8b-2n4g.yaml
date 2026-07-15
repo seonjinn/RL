@@ -1,0 +1,13 @@
+defaults: ./grpo-llama3.1-8b-instruct-2n4g.yaml
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-8b-2n4g
+policy:
+  model_name: Qwen/Qwen3-8B
+  tokenizer:
+    name: Qwen/Qwen3-8B
+  generation:
+    stop_token_ids: null
+logger:
+  log_dir: logs/grpo-qwen3-8b-2n4g
+  wandb:
+    name: grpo-qwen3-8b-2n4g
