@@ -4,7 +4,7 @@ set -euo pipefail
 MODE="${MODE:-dry-run}"
 VARIANT="${VARIANT:-dflash_k16}"
 ACCOUNT="${ACCOUNT:-coreai_dlalgo_llm}"
-PARTITION="${PARTITION:-batch}"
+PARTITION="${PARTITION:-gb200}"
 TIME_LIMIT="${TIME_LIMIT:-05:00:00}"
 MAX_STEPS="${MAX_STEPS:-20}"
 WANDB_ENABLED="${WANDB_ENABLED:-true}"

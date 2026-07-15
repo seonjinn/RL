@@ -67,6 +67,7 @@ def test_baseline_uses_qwen8_performance_recipe_without_specdec() -> None:
     assert "policy.generation.top_p=1.0" in output
     assert "logger.wandb_enabled=true" in output
     assert "--nodes=2" in output
+    assert "--partition=gb200" in output
     assert "--segment=2" in output
     assert "--time=05:00:00" in output
     assert "--gres" not in output
