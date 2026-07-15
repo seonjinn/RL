@@ -15,6 +15,7 @@ LAUNCHER = (
 def _dry_run(variant: str, **env_overrides: str) -> str:
     env = os.environ.copy()
     env.pop("CUDAGRAPH_METRICS", None)
+    env.pop("DYNAMIC_SD_SCHEDULE", None)
     env.update(
         {
             "MODE": "dry-run",
@@ -87,6 +88,12 @@ def test_dynamic_sd_schedule_is_opt_in() -> None:
     assert (
         "speculative_config.num_speculative_tokens_per_batch_size="
         f"{schedule}" in dynamic_output
+    )
+    assert "NRL_VENV_POST_SYNC_SCRIPT=" not in default_output
+    assert "apply_vllm025_dynamic_sd_cg_fix.py" in dynamic_output
+    assert (
+        "NRL_VENV_POST_SYNC_TARGET=nemo_rl.models.generation.vllm."
+        "vllm_worker_async.VllmAsyncGenerationWorker" in dynamic_output
     )
 
 

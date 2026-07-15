@@ -12,6 +12,7 @@ MAX_STEPS="${MAX_STEPS:-1}"
 WANDB_ENABLED="${WANDB_ENABLED:-false}"
 CUDAGRAPH_METRICS="${CUDAGRAPH_METRICS:-false}"
 DYNAMIC_SD_SCHEDULE="${DYNAMIC_SD_SCHEDULE:-}"
+VLLM_DYNAMIC_SD_CG_FIX="disabled"
 WANDB_PROJECT="${WANDB_PROJECT:-nemo-rl-vllm025-q235-specdec}"
 REPO_DIR="${REPO_DIR:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-vllm025-thinking-eagle3-20260714}"
 CONTAINER="${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh}"
@@ -145,6 +146,13 @@ command_env=(
   "TRITON_CACHE_DIR=/tmp/nemorl-v025-q235-thinking-triton-${RUN_TAG}"
   "TORCHINDUCTOR_CACHE_DIR=/tmp/nemorl-v025-q235-thinking-inductor-${RUN_TAG}"
 )
+if [[ -n "${DYNAMIC_SD_SCHEDULE}" ]]; then
+  VLLM_DYNAMIC_SD_CG_FIX="enabled"
+  command_env+=(
+    "NRL_VENV_POST_SYNC_SCRIPT=${REPO_DIR}/experiments/vllm_025_q235_specdec/apply_vllm025_dynamic_sd_cg_fix.py"
+    "NRL_VENV_POST_SYNC_TARGET=nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker"
+  )
+fi
 
 command_parts=(
   env
@@ -194,11 +202,21 @@ case "${MODE}" in
       printf 'Submission requires a clean tracked checkout\n' >&2
       exit 2
     fi
-    if ! git -C "${REPO_DIR}" ls-files --error-unmatch \
-      experiments/vllm_025_q235_specdec/submit_q235_thinking_eagle3_ptyche.sh >/dev/null 2>&1; then
-      printf 'Launcher must be committed before submission\n' >&2
-      exit 2
+    required_tracked_files=(
+      experiments/vllm_025_q235_specdec/submit_q235_thinking_eagle3_ptyche.sh
+    )
+    if [[ "${VLLM_DYNAMIC_SD_CG_FIX}" == "enabled" ]]; then
+      required_tracked_files+=(
+        experiments/vllm_025_q235_specdec/apply_vllm025_dynamic_sd_cg_fix.py
+        nemo_rl/utils/venvs.py
+      )
     fi
+    for tracked_file in "${required_tracked_files[@]}"; do
+      if ! git -C "${REPO_DIR}" ls-files --error-unmatch "${tracked_file}" >/dev/null 2>&1; then
+        printf 'Submission dependency must be committed: %s\n' "${tracked_file}" >&2
+        exit 2
+      fi
+    done
     if ! git -C "${REPO_DIR}" branch -r --contains HEAD | grep -q .; then
       printf 'HEAD must be pushed before submission\n' >&2
       exit 2
@@ -223,6 +241,10 @@ case "${MODE}" in
       printf 'vllm_use_v2_model_runner=1\n'
       printf 'cudagraph_metrics=%s\n' "${CUDAGRAPH_METRICS}"
       printf 'dynamic_sd_schedule=%s\n' "${DYNAMIC_SD_SCHEDULE:-disabled}"
+      printf 'vllm_dynamic_sd_cg_fix=%s\n' "${VLLM_DYNAMIC_SD_CG_FIX}"
+      if [[ "${VLLM_DYNAMIC_SD_CG_FIX}" == "enabled" ]]; then
+        printf 'vllm_dynamic_sd_cg_fix_blob=%s\n' "$(git -C "${REPO_DIR}" hash-object experiments/vllm_025_q235_specdec/apply_vllm025_dynamic_sd_cg_fix.py)"
+      fi
       printf 'numa_cpu_affinity=true\nnuma_membind=false\n'
       printf 'temperature=1.0\ntop_p=1.0\n'
       printf 'wandb_enabled=%s\n' "${WANDB_ENABLED}"

@@ -13,10 +13,11 @@
 # limitations under the License.
 import os
 import subprocess
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from nemo_rl.utils.venvs import create_local_venv
+from nemo_rl.utils.venvs import _run_venv_post_sync_script, create_local_venv
 from tests.unit.conftest import TEST_ASSETS_DIR
 
 
@@ -48,3 +49,44 @@ def test_create_local_venv():
             # Verify the command executed successfully (return code 0)
             assert result.returncode == 0, f"Failed to import sphinx: {result.stderr}"
             assert "Sphinx package is installed" in result.stdout
+
+
+def test_run_venv_post_sync_script_uses_venv_python(tmp_path: Path) -> None:
+    venv_path = tmp_path / "venv"
+    python_path = venv_path / "bin" / "python"
+    python_path.parent.mkdir(parents=True)
+    python_path.touch()
+    script_path = tmp_path / "patch.py"
+    script_path.touch()
+    env = {
+        "NRL_VENV_POST_SYNC_SCRIPT": str(script_path),
+        "NRL_VENV_POST_SYNC_TARGET": "vllm-worker",
+    }
+
+    with patch("nemo_rl.utils.venvs.subprocess.run") as run:
+        _run_venv_post_sync_script(venv_path, "vllm-worker", env)
+
+    run.assert_called_once_with(
+        [str(python_path), str(script_path)], env=env, check=True
+    )
+
+
+def test_run_venv_post_sync_script_is_disabled_by_default(tmp_path: Path) -> None:
+    with patch("nemo_rl.utils.venvs.subprocess.run") as run:
+        _run_venv_post_sync_script(tmp_path / "venv", "vllm-worker", {})
+
+    run.assert_not_called()
+
+
+def test_run_venv_post_sync_script_skips_other_venvs(tmp_path: Path) -> None:
+    script_path = tmp_path / "patch.py"
+    script_path.touch()
+    env = {
+        "NRL_VENV_POST_SYNC_SCRIPT": str(script_path),
+        "NRL_VENV_POST_SYNC_TARGET": "vllm-worker",
+    }
+
+    with patch("nemo_rl.utils.venvs.subprocess.run") as run:
+        _run_venv_post_sync_script(tmp_path / "venv", "mcore-worker", env)
+
+    run.assert_not_called()
