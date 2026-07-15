@@ -103,6 +103,7 @@ if [[ "${SPECULATIVE_TOKENS}" -gt 0 ]]; then
     "++policy.generation.vllm_kwargs.speculative_config.max_model_len=4096"
     "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=1"
     "++policy.generation.vllm_kwargs.speculative_config.attention_backend=FLASH_ATTN"
+    "++policy.generation.vllm_kwargs.kernel_config.enable_flashinfer_autotune=false"
     "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=FULL"
     "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${capture_sizes_csv}"
   )
@@ -222,6 +223,7 @@ case "${MODE}" in
       printf 'target_snapshot=%s\ndraft_snapshot=%s\n' "${TARGET_SNAPSHOT}" "${DRAFT_SNAPSHOT}"
       printf 'megatron_checkpoint_dir=%s\n' "${MEGATRON_CHECKPOINT_DIR}"
       printf 'num_speculative_tokens=%s\n' "${SPECULATIVE_TOKENS}"
+      printf 'flashinfer_autotune=%s\n' "$([[ "${SPECULATIVE_TOKENS}" -gt 0 ]] && printf false || printf recipe-default)"
       printf 'max_steps=%s\nnum_nodes=%s\nsegment=%s\n' "${MAX_STEPS}" "${NUM_NODES}" "${SEGMENT_SIZE}"
       printf 'cuda_graph_enabled=true\ncudagraph_mode=%s\n' "$([[ "${SPECULATIVE_TOKENS}" -gt 0 ]] && printf FULL || printf recipe-default)"
       printf 'temperature=1.0\ntop_p=1.0\nwandb_project=%s\n' "${WANDB_PROJECT}"

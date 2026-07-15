@@ -96,6 +96,7 @@ def test_dflash_uses_matched_public_drafter_and_full_cuda_graphs() -> None:
     assert "speculative_config.draft_tensor_parallel_size=1" in output
     assert "speculative_config.max_model_len=4096" in output
     assert "speculative_config.attention_backend=FLASH_ATTN" in output
+    assert "kernel_config.enable_flashinfer_autotune=false" in output
     assert "models--z-lab--Qwen3-8B-DFlash-b16" in output
     assert "compilation_config.cudagraph_mode=FULL" in output
     assert (
@@ -114,6 +115,7 @@ def test_qwen30_profile_uses_unmodified_performance_recipe_and_matched_k7() -> N
     assert "models--inference-optimization--Qwen3-30B-A3B-speculator.dflash" in output
     assert "speculative_config.num_speculative_tokens=7" in output
     assert "speculative_config.attention_backend=FLASH_ATTN" in output
+    assert "kernel_config.enable_flashinfer_autotune=false" in output
     assert "compilation_config.cudagraph_capture_sizes=[8,16,32,64,128,256,512]" in output
     assert "cluster.segment_size=4" in output
     assert "--nodes=4" in output
