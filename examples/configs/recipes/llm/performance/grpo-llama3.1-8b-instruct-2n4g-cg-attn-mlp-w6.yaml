@@ -1,11 +1,11 @@
-defaults: ./grpo-llama3.1-8b-instruct-1n4g-cg.yaml
+defaults: ./grpo-llama3.1-8b-instruct-2n4g.yaml
 grpo:
   max_num_steps: 20
 loss_fn:
   use_importance_sampling_correction: true
 checkpointing:
   enabled: false
-  checkpoint_dir: results/grpo-llama3.1-8b-instruct-1n4g-cg-attn-mlp-w6
+  checkpoint_dir: results/grpo-llama3.1-8b-instruct-2n4g-cg-attn-mlp-w6
 policy:
   sequence_packing:
     enabled: true
@@ -23,9 +23,9 @@ policy:
     cuda_graph_buckets:
     - 4096
 logger:
-  log_dir: logs/grpo-llama3.1-8b-instruct-1n4g-cg-attn-mlp-w6
+  log_dir: logs/grpo-llama3.1-8b-instruct-2n4g-cg-attn-mlp-w6
   wandb_enabled: true
   tensorboard_enabled: false
   wandb:
     project: nemo-rl-cudagraph
-    name: grpo-llama3.1-8b-instruct-1n4g-cg-attn-mlp-w6
+    name: grpo-llama3.1-8b-instruct-2n4g-cg-attn-mlp-w6

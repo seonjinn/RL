@@ -1,0 +1,13 @@
+defaults: ./grpo-qwen3-8b-1n4g-cg-attn-mlp-w6.yaml
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-8b-1n4g-cg-attn-mlp-w3
+policy:
+  megatron_cfg:
+    cuda_graph_warmup_steps: 3
+logger:
+  log_dir: logs/grpo-qwen3-8b-1n4g-cg-attn-mlp-w3
+  wandb_enabled: true
+  tensorboard_enabled: false
+  wandb:
+    project: nemo-rl-cudagraph
+    name: grpo-qwen3-8b-1n4g-cg-attn-mlp-w3

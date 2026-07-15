@@ -7,11 +7,11 @@ loss_fn:
   use_importance_sampling_correction: true
 checkpointing:
   enabled: false
-  checkpoint_dir: results/grpo-llama3.1-8b-instruct-1n4g-nocg
+  checkpoint_dir: results/grpo-qwen3-8b-1n4g-nocg
 policy:
-  model_name: meta-llama/Llama-3.1-8B-Instruct
+  model_name: Qwen/Qwen3-8B
   tokenizer:
-    name: meta-llama/Llama-3.1-8B-Instruct
+    name: Qwen/Qwen3-8B
   train_global_batch_size: 64
   train_micro_batch_size: 1
   logprob_batch_size: 2
@@ -40,20 +40,18 @@ policy:
     apply_rope_fusion: true
     bias_activation_fusion: false
     optimizer:
-      lr: 5.0e-07
-      min_lr: 5.0e-08
+      lr: 3.0e-07
+      min_lr: 3.0e-08
       weight_decay: 0.0
       use_precision_aware_optimizer: true
       use_distributed_optimizer: true
     scheduler:
       lr_warmup_iters: 2
-      lr_warmup_init: 5.0e-08
+      lr_warmup_init: 3.0e-08
     fp8_cfg:
       enabled: false
   generation:
     max_new_tokens: 4096
-    stop_token_ids:
-    - 128009
     vllm_cfg:
       max_model_len: 4096
       tensor_parallel_size: 1
@@ -61,12 +59,12 @@ policy:
 data:
   max_input_seq_length: 2048
 logger:
-  log_dir: logs/grpo-llama3.1-8b-instruct-1n4g-nocg
+  log_dir: logs/grpo-qwen3-8b-1n4g-nocg
   wandb_enabled: true
   tensorboard_enabled: false
   wandb:
     project: nemo-rl-cudagraph
-    name: grpo-llama3.1-8b-instruct-1n4g-nocg
+    name: grpo-qwen3-8b-1n4g-nocg
 cluster:
   gpus_per_node: 4
   num_nodes: 1

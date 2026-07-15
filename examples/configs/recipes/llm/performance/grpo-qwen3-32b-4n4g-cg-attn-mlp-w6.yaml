@@ -1,16 +1,11 @@
-defaults: ./grpo-llama3.1-8b-instruct-1n4g-cg.yaml
-grpo:
-  max_num_steps: 20
-loss_fn:
-  use_importance_sampling_correction: true
+defaults: ./grpo-qwen3-32b-4n4g-nocg.yaml
 checkpointing:
-  enabled: false
-  checkpoint_dir: results/grpo-llama3.1-8b-instruct-1n4g-cg-attn-mlp-w6
+  checkpoint_dir: results/grpo-qwen3-32b-4n4g-cg-attn-mlp-w6
 policy:
   sequence_packing:
     enabled: true
     train_mb_tokens: 4096
-    logprob_mb_tokens: 4096
+    logprob_mb_tokens: 16384
     algorithm: modified_first_fit_decreasing
     sequence_length_round: 64
   megatron_cfg:
@@ -23,9 +18,9 @@ policy:
     cuda_graph_buckets:
     - 4096
 logger:
-  log_dir: logs/grpo-llama3.1-8b-instruct-1n4g-cg-attn-mlp-w6
+  log_dir: logs/grpo-qwen3-32b-4n4g-cg-attn-mlp-w6
   wandb_enabled: true
   tensorboard_enabled: false
   wandb:
     project: nemo-rl-cudagraph
-    name: grpo-llama3.1-8b-instruct-1n4g-cg-attn-mlp-w6
+    name: grpo-qwen3-32b-4n4g-cg-attn-mlp-w6

@@ -1,0 +1,15 @@
+defaults: ./grpo-qwen3-8b-1n4g-cg-attn-w6.yaml
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-8b-1n4g-cg-attn-w6-nopack
+policy:
+  sequence_packing:
+    enabled: false
+  megatron_cfg:
+    cuda_graph_packed_seq: false
+logger:
+  log_dir: logs/grpo-qwen3-8b-1n4g-cg-attn-w6-nopack
+  wandb_enabled: true
+  tensorboard_enabled: false
+  wandb:
+    project: nemo-rl-cudagraph
+    name: grpo-qwen3-8b-1n4g-cg-attn-w6-nopack

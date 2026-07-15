@@ -69,8 +69,11 @@ data:
   max_input_seq_length: 2048
 logger:
   log_dir: logs/grpo-llama3.1-8b-instruct-1n4g-cg
-  wandb_enabled: false
+  wandb_enabled: true
   tensorboard_enabled: false
+  wandb:
+    project: nemo-rl-cudagraph
+    name: grpo-llama3.1-8b-instruct-1n4g-cg
 cluster:
   gpus_per_node: 4
   num_nodes: 1

@@ -1,0 +1,15 @@
+defaults: ./grpo-qwen3-30ba3b-4n4g-cg-attn-moe-router.yaml
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-30ba3b-4n4g-cg-attn-moe-router-nopack
+policy:
+  sequence_packing:
+    enabled: false
+  megatron_cfg:
+    cuda_graph_packed_seq: false
+logger:
+  log_dir: logs/grpo-qwen3-30ba3b-4n4g-cg-attn-moe-router-nopack
+  wandb_enabled: true
+  tensorboard_enabled: false
+  wandb:
+    project: nemo-rl-cudagraph
+    name: grpo-qwen3-30ba3b-4n4g-cg-attn-moe-router-nopack

@@ -48,7 +48,7 @@ policy:
     - attn
     - mlp
     cuda_graph_warmup_steps: 6
-    cuda_graph_packed_seq: false
+    cuda_graph_packed_seq: true
     cuda_graph_buckets:
     - 4096
     optimizer:
@@ -72,8 +72,11 @@ data:
   max_input_seq_length: 2048
 logger:
   log_dir: logs/grpo-qwen3-8b-1n4g-cg
-  wandb_enabled: false
+  wandb_enabled: true
   tensorboard_enabled: false
+  wandb:
+    project: nemo-rl-cudagraph
+    name: grpo-qwen3-8b-1n4g-cg
 cluster:
   gpus_per_node: 4
   num_nodes: 1

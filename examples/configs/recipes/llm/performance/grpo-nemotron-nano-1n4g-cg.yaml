@@ -38,8 +38,11 @@ policy:
       gpu_memory_utilization: 0.5
 logger:
   log_dir: logs/grpo-nemotron-nano-1n4g-cg
-  wandb_enabled: false
+  wandb_enabled: true
   tensorboard_enabled: false
+  wandb:
+    project: nemo-rl-cudagraph
+    name: grpo-nemotron-nano-1n4g-cg
 cluster:
   gpus_per_node: 4
   num_nodes: 1

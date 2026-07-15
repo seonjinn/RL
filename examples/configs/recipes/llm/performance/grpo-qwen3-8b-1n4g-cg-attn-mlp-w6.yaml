@@ -1,0 +1,22 @@
+defaults: ./grpo-qwen3-8b-1n4g-nocg.yaml
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-8b-1n4g-cg-attn-mlp-w6
+policy:
+  megatron_cfg:
+    cuda_graph_impl: transformer_engine
+    cuda_graph_scope:
+    - attn
+    - mlp
+    cuda_graph_warmup_steps: 6
+    # Qwen packed-seq replay regressed badly in GRPO; keep CG on attn+mlp but
+    # disable the packed-sequence replay sub-path.
+    cuda_graph_packed_seq: true
+    cuda_graph_buckets:
+    - 4096
+logger:
+  log_dir: logs/grpo-qwen3-8b-1n4g-cg-attn-mlp-w6
+  wandb_enabled: true
+  tensorboard_enabled: false
+  wandb:
+    project: nemo-rl-cudagraph
+    name: grpo-qwen3-8b-1n4g-cg-attn-mlp-w6
