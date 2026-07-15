@@ -268,8 +268,14 @@ tensorboard hparams logger rejects nested-list config values (disable it or
 flatten), and a global PYTHONPATH overlay leaks into the Megatron training
 worker (transformer_engine cublasLt symbol clash from overlay nvidia libs;
 transformers double-registration) - full 10-step A/B/C timing on 0.25 inside
-NeMo-RL therefore needs the clean per-worker-venv path (`use_system_env=false`
-with the prepared `RL-dynsd-vllm025` uv lock) rather than the overlay. The
+NeMo-RL therefore needs a rebuilt worker venv. A third landmine closed the
+last shortcut: even with `use_system_env=false` and the prepared
+`RL-dynsd-vllm025` uv lock, generation workers resolve the container-baked
+`/opt/ray_venvs` (vLLM 0.20) while only the training venv rebuilds from the
+lock (a full TransformerEngine source build, ~1h, for nothing). The correct
+path is forcing worker-venv rebuild (`NRL_FORCE_REBUILD_VENVS`) or baking a
+new container - deferred, since the standalone 0.25 data already bounds the
+answer on this recipe (dynamic within a few percent below fixed-K3). The
 30B E2E numbers above (vLLM 0.20 stack, 1.66x generation / 1.15x step for
 fixed-K3) remain the reference; standalone 0.25 data predicts dynamic would
 land within a few percent of fixed there. Separately, 235B E2E was abandoned
