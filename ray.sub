@@ -281,7 +281,7 @@ log-sync-sidecar &
 sed -i 's/context\.py_executable = " "\.join(self\.nsight_cmd) + " python"/context.py_executable = " ".join(self.nsight_cmd) + f" {context.py_executable}"/g' /opt/nemo_rl_venv/lib64/python*/site-packages/ray/_private/runtime_env/nsight.py
 
 echo "[INFO] Syncing Ray package from uv.lock..."
-cd $SLURM_SUBMIT_DIR && uv sync --locked --refresh-package ray 2>&1 || echo "[WARNING] uv sync failed, continuing with existing venv"
+cd $SLURM_SUBMIT_DIR && uv sync --locked 2>&1 || echo "[WARNING] uv sync failed, continuing with existing venv"
 echo "[INFO] Ray version after sync:"
 /opt/nemo_rl_venv/bin/python - <<'PY'
 try:
@@ -434,7 +434,7 @@ log-sync-sidecar &
 sed -i 's/context\.py_executable = " "\.join(self\.nsight_cmd) + " python"/context.py_executable = " ".join(self.nsight_cmd) + f" {context.py_executable}"/g' /opt/nemo_rl_venv/lib64/python*/site-packages/ray/_private/runtime_env/nsight.py
 
 echo "[INFO] Syncing Ray package from uv.lock..."
-cd $SLURM_SUBMIT_DIR && uv sync --locked --refresh-package ray 2>&1 || echo "[WARNING] uv sync failed, continuing with existing venv"
+cd $SLURM_SUBMIT_DIR && uv sync --locked 2>&1 || echo "[WARNING] uv sync failed, continuing with existing venv"
 echo "[INFO] Ray version after sync:"
 /opt/nemo_rl_venv/bin/python - <<'PY'
 try:
