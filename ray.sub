@@ -34,9 +34,10 @@ maybe_gres_arg() {
     # Parse the maximum GPU count cleanly even when sinfo returns values like gpu:4(S:0-1)
     detected_gpus=$(
       sinfo -p $SLURM_JOB_PARTITION -h -o "%G" \
+        | sed -E 's/\([^)]*\)//g' \
         | tr ',' '\n' \
         | grep -oE 'gpu(:[^ ,]+)*:[0-9]+' \
-        | grep -oE '[0-9]+$' \
+        | sed -E 's/.*:([0-9]+)$/\1/' \
         | sort -nu \
         | tail -1
     )
@@ -279,8 +280,57 @@ log-sync-sidecar &
 # Patch nsight.py before starting Ray head
 sed -i 's/context\.py_executable = " "\.join(self\.nsight_cmd) + " python"/context.py_executable = " ".join(self.nsight_cmd) + f" {context.py_executable}"/g' /opt/nemo_rl_venv/lib64/python*/site-packages/ray/_private/runtime_env/nsight.py
 
+echo "[INFO] Syncing Ray package from uv.lock..."
+cd $SLURM_SUBMIT_DIR && uv sync --locked --refresh-package ray 2>&1 || echo "[WARNING] uv sync failed, continuing with existing venv"
+echo "[INFO] Ray version after sync:"
+/opt/nemo_rl_venv/bin/python - <<'PY'
+try:
+    import ray
+    print(getattr(ray, "__version__", "<unknown>"), getattr(ray, "__file__", "<unknown>"))
+except Exception as e:
+    print("RAY_IMPORT_FAILED", repr(e))
+PY
+
+run-ray-cli() {
+  local pybin
+  pybin=\$(command -v python || command -v python3 || true)
+  if [[ -z "\$pybin" && -x /opt/nemo_rl_venv/bin/python ]]; then
+    pybin=/opt/nemo_rl_venv/bin/python
+  fi
+  if [[ -z "\$pybin" ]]; then
+    echo "Unable to find Python interpreter for Ray CLI" >&2
+    return 127
+  fi
+
+  "\$pybin" - "\$@" <<'PY'
+import importlib
+import sys
+
+candidates = (
+    "ray.scripts.scripts",
+    "ray.scripts",
+    "ray._private.scripts.scripts",
+)
+
+for name in candidates:
+    try:
+        mod = importlib.import_module(name)
+    except Exception:
+        continue
+
+    main = getattr(mod, "main", None)
+    if callable(main):
+        sys.argv = ["ray"] + sys.argv[1:]
+        raise SystemExit(main())
+
+print("Unable to locate Ray CLI module", file=sys.stderr)
+raise SystemExit(127)
+PY
+}
+export -f run-ray-cli
+
 cat <<EOFINNER | tee /launch-head.sh
-ray start --head \
+run-ray-cli start --head \
     --disable-usage-stats \
     --resources="{\"worker_units\": $GPUS_PER_NODE, \"slurm_managed_ray_cluster\": 1}" \
     --node-ip-address="$head_node_ip" \
@@ -383,8 +433,57 @@ log-sync-sidecar &
 # Patch nsight.py before starting Ray worker
 sed -i 's/context\.py_executable = " "\.join(self\.nsight_cmd) + " python"/context.py_executable = " ".join(self.nsight_cmd) + f" {context.py_executable}"/g' /opt/nemo_rl_venv/lib64/python*/site-packages/ray/_private/runtime_env/nsight.py
 
+echo "[INFO] Syncing Ray package from uv.lock..."
+cd $SLURM_SUBMIT_DIR && uv sync --locked --refresh-package ray 2>&1 || echo "[WARNING] uv sync failed, continuing with existing venv"
+echo "[INFO] Ray version after sync:"
+/opt/nemo_rl_venv/bin/python - <<'PY'
+try:
+    import ray
+    print(getattr(ray, "__version__", "<unknown>"), getattr(ray, "__file__", "<unknown>"))
+except Exception as e:
+    print("RAY_IMPORT_FAILED", repr(e))
+PY
+
+run-ray-cli() {
+  local pybin
+  pybin=\$(command -v python || command -v python3 || true)
+  if [[ -z "\$pybin" && -x /opt/nemo_rl_venv/bin/python ]]; then
+    pybin=/opt/nemo_rl_venv/bin/python
+  fi
+  if [[ -z "\$pybin" ]]; then
+    echo "Unable to find Python interpreter for Ray CLI" >&2
+    return 127
+  fi
+
+  "\$pybin" - "\$@" <<'PY'
+import importlib
+import sys
+
+candidates = (
+    "ray.scripts.scripts",
+    "ray.scripts",
+    "ray._private.scripts.scripts",
+)
+
+for name in candidates:
+    try:
+        mod = importlib.import_module(name)
+    except Exception:
+        continue
+
+    main = getattr(mod, "main", None)
+    if callable(main):
+        sys.argv = ["ray"] + sys.argv[1:]
+        raise SystemExit(main())
+
+print("Unable to locate Ray CLI module", file=sys.stderr)
+raise SystemExit(127)
+PY
+}
+export -f run-ray-cli
+
 cat <<EOFINNER | tee /launch-worker.sh
-ray start --address "$ip_head" \
+run-ray-cli start --address "$ip_head" \
           --disable-usage-stats \
           --resources="{\"worker_units\": $GPUS_PER_NODE, \"slurm_managed_ray_cluster\": 1}" \
           --min-worker-port=${MIN_WORKER_PORT} \
@@ -427,16 +526,31 @@ done
 # Before we launch a job on this cluster we need to make sure that the bringup is complete
 # We do so by querying the number of worker_units in the ray cluster and asserting = NUM_ACTORS
 extract_worker_units() {
-  status_output=$(
-    srun --overlap --container-name=ray-head --nodes=1 --ntasks=1 -w "$head_node" \
-      env RAY_ADDRESS="$ip_head" ray status --address "$ip_head"
-  )
-  if echo "$status_output" | grep -q "worker_units"; then
-    worker_units=$(echo "$status_output" | grep "worker_units" | awk -F'[/. ]' '{print $4}')
-    echo $worker_units
-  else
-    echo 0
-  fi
+  srun --overlap --container-name=ray-head --nodes=1 --ntasks=1 -w "$head_node" \
+    env RAY_ADDRESS="$ip_head" bash -lc '
+PYTHON_BIN=$(command -v python || command -v python3 || true)
+if [[ -z "$PYTHON_BIN" && -x /opt/nemo_rl_venv/bin/python ]]; then
+  PYTHON_BIN=/opt/nemo_rl_venv/bin/python
+fi
+if [[ -z "$PYTHON_BIN" ]]; then
+  echo 0
+  exit 0
+fi
+"$PYTHON_BIN" - <<'"'"'PY'"'"'
+import os
+
+try:
+    import ray
+
+    address = os.environ["RAY_ADDRESS"]
+    ray.init(address=address, logging_level="ERROR", log_to_driver=False, ignore_reinit_error=True)
+    resources = ray.cluster_resources()
+    value = resources.get("worker_units", 0)
+    print(int(value))
+except Exception:
+    print(0)
+PY
+'
 }
 
 # Poll to make sure that all Ray worker nodes have connected to the head.
@@ -460,7 +574,7 @@ echo "All workers connected!"
 # This driver process is responsible for launching a job on the Ray cluster
 CONTAINER_CWD=$(scontrol show job $SLURM_JOB_ID | grep -oP 'WorkDir=\K[^ ]+' | head -1)
 if [[ -n "$COMMAND" ]]; then
-  srun --no-container-mount-home --overlap --container-name=ray-head --container-workdir=$CONTAINER_CWD --nodes=1 --ntasks=1 -w "$head_node" -o $LOG_DIR/ray-driver.log bash -c "$COMMAND"
+  srun --no-container-mount-home --overlap --container-name=ray-head --container-workdir=$CONTAINER_CWD --nodes=1 --ntasks=1 -w "$head_node" -o $LOG_DIR/ray-driver.log env RAY_ADDRESS="$ip_head" bash -c "$COMMAND"
 else
   echo "[INFO]: Ray Cluster is idled, run this on the slurm head node to get a shell to the head node:"
   cat <<EOF >$SLURM_SUBMIT_DIR/${SLURM_JOB_ID}-attach.sh
@@ -471,7 +585,7 @@ WORKER_NUM=\${1:-}
 if [[ -z "\$WORKER_NUM" ]]; then
   # Empty means we are on the head node
   if [[ -n "\${COMMAND:-}" ]]; then
-    srun --no-container-mount-home $GRES_ARG -A $SLURM_JOB_ACCOUNT -p $SLURM_JOB_PARTITION --overlap --container-name=ray-head --container-workdir=$CONTAINER_CWD --nodes=1 --ntasks=1 -w "$head_node" --jobid $SLURM_JOB_ID bash -c "\$COMMAND"
+    srun --no-container-mount-home $GRES_ARG -A $SLURM_JOB_ACCOUNT -p $SLURM_JOB_PARTITION --overlap --container-name=ray-head --container-workdir=$CONTAINER_CWD --nodes=1 --ntasks=1 -w "$head_node" --jobid $SLURM_JOB_ID env RAY_ADDRESS="$ip_head" bash -c "\$COMMAND"
   else
     srun --no-container-mount-home $GRES_ARG -A $SLURM_JOB_ACCOUNT -p $SLURM_JOB_PARTITION --overlap --container-name=ray-head --container-workdir=$CONTAINER_CWD --nodes=1 --ntasks=1 -w "$head_node" --jobid $SLURM_JOB_ID --pty bash
   fi

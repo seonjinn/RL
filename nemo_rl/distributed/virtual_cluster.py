@@ -114,7 +114,7 @@ def init_ray(log_dir: Optional[str] = None) -> None:
     # Try to attach to an existing cluster
     try:
         ray.init(
-            address="auto",
+            address=os.environ.get("RAY_ADDRESS", "auto"),
             log_to_driver=True,
             include_dashboard=False,
             runtime_env=runtime_env,
