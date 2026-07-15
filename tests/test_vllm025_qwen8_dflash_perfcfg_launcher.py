@@ -74,6 +74,15 @@ def test_baseline_uses_qwen8_performance_recipe_without_specdec() -> None:
     assert "speculative_config" not in output
 
 
+def test_launcher_defaults_to_staged_lyris_nightly_container() -> None:
+    launcher = LAUNCHER.read_text()
+
+    assert (
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/"
+        "nemo_rl_nightly_20260715.sqsh"
+    ) in launcher
+
+
 def test_dflash_uses_matched_public_drafter_and_full_cuda_graphs() -> None:
     output = _dry_run("dflash_k16")
 
@@ -120,6 +129,8 @@ def test_submission_accepts_single_file_dflash_checkpoint(tmp_path: Path) -> Non
     draft = tmp_path / "draft"
     draft.mkdir()
     (draft / "model.safetensors").write_text("")
+    container = tmp_path / "nemo_rl_nightly.sqsh"
+    container.write_text("")
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -147,6 +158,7 @@ def test_submission_accepts_single_file_dflash_checkpoint(tmp_path: Path) -> Non
             "VARIANT": "dflash_k16",
             "TARGET_SNAPSHOT": str(target),
             "DRAFT_SNAPSHOT": str(draft),
+            "CONTAINER": str(container),
             "PATH": f"{fake_bin}:{env['PATH']}",
         }
     )
@@ -160,3 +172,33 @@ def test_submission_accepts_single_file_dflash_checkpoint(tmp_path: Path) -> Non
     )
 
     assert "test-only-ok" in result.stdout
+
+
+def test_submission_rejects_missing_container_before_sbatch(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "model.safetensors.index.json").write_text("{}")
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "MODE": "test-only",
+            "REPO_DIR": str(REPO_ROOT),
+            "RUN_TAG": "contract-test-missing-container",
+            "RUN_DIR": str(tmp_path / "run"),
+            "VARIANT": "baseline",
+            "TARGET_SNAPSHOT": str(target),
+            "CONTAINER": str(tmp_path / "missing.sqsh"),
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(LAUNCHER)],
+        check=False,
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 2
+    assert "Container does not exist" in result.stderr

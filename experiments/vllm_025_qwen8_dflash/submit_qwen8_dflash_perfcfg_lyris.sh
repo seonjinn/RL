@@ -10,7 +10,7 @@ MAX_STEPS="${MAX_STEPS:-20}"
 WANDB_ENABLED="${WANDB_ENABLED:-true}"
 WANDB_PROJECT="${WANDB_PROJECT:-nemo-rl-vllm025-qwen8-dflash}"
 REPO_DIR="${REPO_DIR:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-vllm025-dflash-perfcfg-20260715}"
-CONTAINER="${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh}"
+CONTAINER="${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260715.sqsh}"
 MOUNTS="${MOUNTS:-/lustre:/lustre}"
 HF_HOME="${HF_HOME:-/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home}"
 TARGET_SNAPSHOT="${TARGET_SNAPSHOT:-${HF_HOME}/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218}"
@@ -131,6 +131,10 @@ case "${MODE}" in
     printf ' %s\n' "${REPO_DIR}/ray.sub"
     ;;
   test-only|submit)
+    if [[ ! -f "${CONTAINER}" ]]; then
+      printf 'Container does not exist: %s\n' "${CONTAINER}" >&2
+      exit 2
+    fi
     if ! has_safetensors_checkpoint "${TARGET_SNAPSHOT}"; then
       printf 'Target snapshot is incomplete: %s\n' "${TARGET_SNAPSHOT}" >&2
       exit 2
