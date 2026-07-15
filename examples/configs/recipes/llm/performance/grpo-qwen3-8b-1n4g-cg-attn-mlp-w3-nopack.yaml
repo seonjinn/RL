@@ -14,7 +14,8 @@ policy:
     - 4096
 logger:
   log_dir: logs/grpo-qwen3-8b-1n4g-cg-attn-mlp-w3-nopack
-  wandb_enabled: false
+  wandb_enabled: true
   tensorboard_enabled: false
   wandb:
+    project: nemo-rl-cudagraph
     name: grpo-qwen3-8b-1n4g-cg-attn-mlp-w3-nopack

@@ -100,9 +100,10 @@ def ll8_base(name: str, seqpack: bool) -> str:
         "  max_input_seq_length: 2048\n"
         "logger:\n"
         f"  log_dir: logs/{name}\n"
-        "  wandb_enabled: false\n"
+        "  wandb_enabled: true\n"
         "  tensorboard_enabled: false\n"
         "  wandb:\n"
+        "    project: nemo-rl-cudagraph\n"
         f"    name: {name}\n"
         "cluster:\n"
         "  gpus_per_node: 4\n"
@@ -169,9 +170,10 @@ def qw8_base(name: str, seqpack: bool) -> str:
         "  max_input_seq_length: 2048\n"
         "logger:\n"
         f"  log_dir: logs/{name}\n"
-        "  wandb_enabled: false\n"
+        "  wandb_enabled: true\n"
         "  tensorboard_enabled: false\n"
         "  wandb:\n"
+        "    project: nemo-rl-cudagraph\n"
         f"    name: {name}\n"
         "cluster:\n"
         "  gpus_per_node: 4\n"
@@ -193,11 +195,18 @@ def q30_nocg(name: str, seqpack: bool) -> str:
         f"{maybe_seqpack_block(seqpack, indent=2)}"
         "logger:\n"
         f"  log_dir: logs/{name}\n"
-        "  wandb_enabled: false\n"
+        "  wandb_enabled: true\n"
         "  tensorboard_enabled: false\n"
         "  wandb:\n"
+        "    project: nemo-rl-cudagraph\n"
         f"    name: {name}\n"
     )
+
+
+
+def _scope_has_attn(scope) -> bool:
+    scopes = scope if isinstance(scope, list) else [scope]
+    return "attn" in scopes
 
 
 def cg_variant_body(defaults: str, name: str, scope: str | list[str], warmup: int, cg_packed_seq: bool) -> str:
@@ -221,9 +230,10 @@ def cg_variant_body(defaults: str, name: str, scope: str | list[str], warmup: in
         f"    - 4096\n"
         f"logger:\n"
         f"  log_dir: logs/{name}\n"
-        f"  wandb_enabled: false\n"
+        f"  wandb_enabled: true\n"
         f"  tensorboard_enabled: false\n"
         f"  wandb:\n"
+        f"    project: nemo-rl-cudagraph\n"
         f"    name: {name}\n"
     )
 
@@ -236,9 +246,56 @@ def alias_overlay(defaults: str, name: str) -> str:
         f"  checkpoint_dir: results/{name}\n"
         f"logger:\n"
         f"  log_dir: logs/{name}\n"
-        f"  wandb_enabled: false\n"
+        f"  wandb_enabled: true\n"
         f"  tensorboard_enabled: false\n"
         f"  wandb:\n"
+        f"    project: nemo-rl-cudagraph\n"
+        f"    name: {name}\n"
+    )
+
+
+def reduced_work_overlay(
+    defaults: str,
+    name: str,
+    *,
+    max_total_sequence_length: int = 2048,
+    max_input_seq_length: int = 1024,
+    pack_tokens: int = 2048,
+    cg_bucket: int | None = None,
+) -> str:
+    cg_block = ""
+    if cg_bucket is not None:
+        cg_block = (
+            "  megatron_cfg:\n"
+            "    cuda_graph_buckets:\n"
+            f"    - {cg_bucket}\n"
+        )
+    return (
+        f"defaults: {defaults}\n"
+        "checkpointing:\n"
+        "  enabled: false\n"
+        f"  checkpoint_dir: results/{name}\n"
+        "policy:\n"
+        f"  max_total_sequence_length: {max_total_sequence_length}\n"
+        "  generation:\n"
+        f"    max_new_tokens: {max_total_sequence_length}\n"
+        "    vllm_cfg:\n"
+        f"      max_model_len: {max_total_sequence_length}\n"
+        "  sequence_packing:\n"
+        "    enabled: true\n"
+        f"    train_mb_tokens: {pack_tokens}\n"
+        f"    logprob_mb_tokens: {pack_tokens}\n"
+        "    algorithm: modified_first_fit_decreasing\n"
+        "    sequence_length_round: 64\n"
+        f"{cg_block}"
+        "data:\n"
+        f"  max_input_seq_length: {max_input_seq_length}\n"
+        "logger:\n"
+        f"  log_dir: logs/{name}\n"
+        "  wandb_enabled: true\n"
+        "  tensorboard_enabled: false\n"
+        "  wandb:\n"
+        "    project: nemo-rl-cudagraph\n"
         f"    name: {name}\n"
     )
 
@@ -259,7 +316,7 @@ def main() -> None:
     )
     write(
         OUT_DIR / "grpo-qwen3-8b-1n4g-cg.yaml",
-        cg_variant_body("./grpo-qwen3-8b-1n4g-nocg.yaml", "grpo-qwen3-8b-1n4g-cg", ["attn", "mlp"], 6, False),
+        cg_variant_body("./grpo-qwen3-8b-1n4g-nocg.yaml", "grpo-qwen3-8b-1n4g-cg", ["attn", "mlp"], 6, True),
     )
 
     # Llama 8B variants
@@ -286,7 +343,12 @@ def main() -> None:
             }
             for filename, scope in combos.items():
                 stem = filename[:-5]
-                write(OUT_DIR / filename, cg_variant_body(defaults, stem, scope, warmup, False))
+                write(
+                    OUT_DIR / filename,
+                    cg_variant_body(
+                        defaults, stem, scope, warmup, seqpack and _scope_has_attn(scope)
+                    ),
+                )
 
     # Preserve a few historically used Qwen8 files for convenience
     write(
@@ -306,9 +368,10 @@ def main() -> None:
                 sequence_length_round: 64
             logger:
               log_dir: logs/grpo-qwen3-8b-1n4g-nocg-pack8192
-              wandb_enabled: false
+              wandb_enabled: true
               tensorboard_enabled: false
               wandb:
+                project: nemo-rl-cudagraph
                 name: grpo-qwen3-8b-1n4g-nocg-pack8192
             """
         ),
@@ -330,9 +393,10 @@ def main() -> None:
                 sequence_length_round: 64
             logger:
               log_dir: logs/grpo-qwen3-8b-1n4g-cg-attn-mlp-w6-pack8192
-              wandb_enabled: false
+              wandb_enabled: true
               tensorboard_enabled: false
               wandb:
+                project: nemo-rl-cudagraph
                 name: grpo-qwen3-8b-1n4g-cg-attn-mlp-w6-pack8192
             """
         ),
@@ -350,9 +414,10 @@ def main() -> None:
                 cuda_graph_packed_seq: false
             logger:
               log_dir: logs/grpo-qwen3-8b-1n4g-cg-attn-mlp-w6-pack-cgpackoff
-              wandb_enabled: false
+              wandb_enabled: true
               tensorboard_enabled: false
               wandb:
+                project: nemo-rl-cudagraph
                 name: grpo-qwen3-8b-1n4g-cg-attn-mlp-w6-pack-cgpackoff
             """
         ),
@@ -374,7 +439,12 @@ def main() -> None:
             for tag, scope in q30_scopes.items():
                 filename = f"grpo-qwen3-30ba3b-4n4g-cg-{tag}-w{warmup}{suffix}.yaml"
                 stem = filename[:-5]
-                write(OUT_DIR / filename, cg_variant_body(defaults, stem, scope, warmup, False))
+                write(
+                    OUT_DIR / filename,
+                    cg_variant_body(
+                        defaults, stem, scope, warmup, seqpack and _scope_has_attn(scope)
+                    ),
+                )
 
     # Historical aliases without warmup in name
     write(
@@ -406,13 +476,47 @@ def main() -> None:
               checkpoint_dir: results/grpo-qwen3-30ba3b-4n4g-cg-attn-moe
             logger:
               log_dir: logs/grpo-qwen3-30ba3b-4n4g-cg-attn-moe
-              wandb_enabled: false
+              wandb_enabled: true
               tensorboard_enabled: false
               wandb:
+                project: nemo-rl-cudagraph
                 name: grpo-qwen3-30ba3b-4n4g-cg-attn-moe
             """
         ),
     )
+
+    # Reduced-work dense 8B stress variants to magnify launch overhead.
+    dense_reduced = {
+        "grpo-llama3.1-8b-instruct-1n4g": [
+            "nocg",
+            "cg-attn-w3",
+            "cg-mlp-w3",
+            "cg-attn-mlp-w3",
+        ],
+        "grpo-qwen3-8b-1n4g": [
+            "nocg",
+            "cg-attn-w3",
+            "cg-mlp-w3",
+            "cg-attn-mlp-w3",
+        ],
+    }
+    for prefix, variants in dense_reduced.items():
+        for variant in variants:
+            base = f"{prefix}-{variant}"
+            name = f"{base}-short2048"
+            defaults = f"./{base}.yaml"
+            cg_bucket = 2048 if variant != "nocg" else None
+            write(
+                OUT_DIR / f"{name}.yaml",
+                reduced_work_overlay(
+                    defaults,
+                    name,
+                    max_total_sequence_length=2048,
+                    max_input_seq_length=1024,
+                    pack_tokens=2048,
+                    cg_bucket=cg_bucket,
+                ),
+            )
 
 
 if __name__ == "__main__":

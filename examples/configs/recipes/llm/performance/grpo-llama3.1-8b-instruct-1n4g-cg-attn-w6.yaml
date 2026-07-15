@@ -12,7 +12,8 @@ policy:
     - 4096
 logger:
   log_dir: logs/grpo-llama3.1-8b-instruct-1n4g-cg-attn-w6
-  wandb_enabled: false
+  wandb_enabled: true
   tensorboard_enabled: false
   wandb:
+    project: nemo-rl-cudagraph
     name: grpo-llama3.1-8b-instruct-1n4g-cg-attn-w6

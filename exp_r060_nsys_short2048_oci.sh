@@ -1,0 +1,72 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${SCRIPT_DIR}"
+
+RAY_SUB="${SCRIPT_DIR}/ray.sub"
+CONFIG_ROOT="examples/configs/recipes/llm/performance"
+CONTAINER="/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl/nemo_rl_nightly_20260502.sqsh"
+ACCOUNT="coreai_dlalgo_nemorl"
+PARTITION="batch"
+HF_HOME="/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home"
+HF_DATASETS_CACHE="${HF_HOME}/cache"
+MOUNTS="/lustre:/lustre"
+LOG_BASE="${SCRIPT_DIR}/experiments/r060_nsys_short2048_oci_$(date +%Y%m%d_%H%M%S)"
+LD_PATH="/usr/local/cuda/targets/x86_64-linux/lib:/usr/local/cuda/lib64:/usr/local/cuda/lib:/usr/local/nvidia/lib64:/usr/local/nvidia/lib:/usr/lib/x86_64-linux-gnu"
+
+mkdir -p "${LOG_BASE}"
+
+YAMLS=(
+    grpo-llama3.1-8b-instruct-1n4g-nocg-short2048.yaml
+    grpo-llama3.1-8b-instruct-1n4g-cg-attn-w3-short2048.yaml
+    grpo-qwen3-8b-1n4g-nocg-short2048.yaml
+    grpo-qwen3-8b-1n4g-cg-attn-w3-short2048.yaml
+)
+
+submit_one() {
+    local yaml_name="$1"
+    local config_file="${CONFIG_ROOT}/${yaml_name}"
+    local base="${yaml_name%.yaml}"
+    local nodes="1"
+    local gpus_per_node="4"
+
+    local command
+    command="LD_LIBRARY_PATH=${LD_PATH} NRL_FORCE_REBUILD_VENVS=true CG_COUNT_LOG=1 \
+NRL_NSYS_WORKER_PATTERNS=megatron_policy_worker \
+NRL_NSYS_PROFILE_STEP_RANGE=4:6 \
+uv run ./examples/run_grpo.py \
+--config ${config_file} \
+cluster.num_nodes=${nodes} \
+cluster.gpus_per_node=${gpus_per_node} \
+grpo.max_num_steps=8 \
+grpo.async_grpo.enabled=false \
+grpo.val_period=1000 \
+checkpointing.enabled=false \
+logger.wandb_enabled=true \
+logger.wandb.project=nemo-rl-cudagraph \
+logger.tensorboard_enabled=false"
+
+    echo "[SUBMIT] ${base}"
+    COMMAND="${command}" \
+    CONTAINER="${CONTAINER}" \
+    HF_HOME="${HF_HOME}" \
+    HF_DATASETS_CACHE="${HF_DATASETS_CACHE}" \
+    MOUNTS="${MOUNTS}" \
+    BASE_LOG_DIR="${LOG_BASE}" \
+    GPUS_PER_NODE="${gpus_per_node}" \
+    RAY_LOG_SYNC_FREQUENCY="30" \
+    sbatch \
+        --nodes="${nodes}" \
+        --account="${ACCOUNT}" \
+        --job-name="${base}-nsys" \
+        --partition="${PARTITION}" \
+        --time=02:00:00 \
+        --gres="gpu:${gpus_per_node}" \
+        --segment "${nodes}" \
+        "${RAY_SUB}"
+}
+
+for yaml_name in "${YAMLS[@]}"; do
+    submit_one "${yaml_name}"
+done

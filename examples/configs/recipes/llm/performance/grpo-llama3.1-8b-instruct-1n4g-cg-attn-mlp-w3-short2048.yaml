@@ -1,0 +1,28 @@
+defaults: ./grpo-llama3.1-8b-instruct-1n4g-cg-attn-mlp-w3.yaml
+checkpointing:
+  enabled: false
+  checkpoint_dir: results/grpo-llama3.1-8b-instruct-1n4g-cg-attn-mlp-w3-short2048
+policy:
+  max_total_sequence_length: 2048
+  generation:
+    max_new_tokens: 2048
+    vllm_cfg:
+      max_model_len: 2048
+  sequence_packing:
+    enabled: true
+    train_mb_tokens: 2048
+    logprob_mb_tokens: 2048
+    algorithm: modified_first_fit_decreasing
+    sequence_length_round: 64
+  megatron_cfg:
+    cuda_graph_buckets:
+    - 2048
+data:
+  max_input_seq_length: 1024
+logger:
+  log_dir: logs/grpo-llama3.1-8b-instruct-1n4g-cg-attn-mlp-w3-short2048
+  wandb_enabled: true
+  tensorboard_enabled: false
+  wandb:
+    project: nemo-rl-cudagraph
+    name: grpo-llama3.1-8b-instruct-1n4g-cg-attn-mlp-w3-short2048

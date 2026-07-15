@@ -7,7 +7,8 @@ policy:
     cuda_graph_packed_seq: false
 logger:
   log_dir: logs/grpo-qwen3-8b-1n4g-cg-attn-mlp-w6-pack-cgpackoff
-  wandb_enabled: false
+  wandb_enabled: true
   tensorboard_enabled: false
   wandb:
+    project: nemo-rl-cudagraph
     name: grpo-qwen3-8b-1n4g-cg-attn-mlp-w6-pack-cgpackoff

@@ -104,7 +104,8 @@ grpo.max_num_steps=20 \
 grpo.async_grpo.enabled=false \
 grpo.val_period=1000 \
 checkpointing.enabled=false \
-logger.wandb_enabled=false \
+logger.wandb_enabled=true \
+logger.wandb.project=nemo-rl-cudagraph \
 logger.tensorboard_enabled=false"
 
     echo "[SUBMIT] ${job_name}"

@@ -7,12 +7,13 @@ policy:
     cuda_graph_impl: transformer_engine
     cuda_graph_scope: attn
     cuda_graph_warmup_steps: 6
-    cuda_graph_packed_seq: false
+    cuda_graph_packed_seq: true
     cuda_graph_buckets:
     - 4096
 logger:
   log_dir: logs/grpo-qwen3-30ba3b-4n4g-cg-attn-w6
-  wandb_enabled: false
+  wandb_enabled: true
   tensorboard_enabled: false
   wandb:
+    project: nemo-rl-cudagraph
     name: grpo-qwen3-30ba3b-4n4g-cg-attn-w6
