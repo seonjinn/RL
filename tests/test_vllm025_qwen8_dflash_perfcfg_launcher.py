@@ -66,6 +66,8 @@ def test_baseline_uses_qwen8_performance_recipe_without_specdec() -> None:
     assert "policy.generation.temperature=1.0" in output
     assert "policy.generation.top_p=1.0" in output
     assert "logger.wandb_enabled=true" in output
+    assert ".secrets/wandb_api_key" in output
+    assert 'export WANDB_API_KEY="$(< "${WANDB_API_KEY_FILE}")"' in output
     assert "--nodes=2" in output
     assert "--partition=gb200" in output
     assert "--segment=2" in output
@@ -131,6 +133,8 @@ def test_submission_accepts_single_file_dflash_checkpoint(tmp_path: Path) -> Non
     (draft / "model.safetensors").write_text("")
     container = tmp_path / "nemo_rl_nightly.sqsh"
     container.write_text("")
+    wandb_api_key_file = tmp_path / "wandb_api_key"
+    wandb_api_key_file.write_text("test-key")
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -159,6 +163,7 @@ def test_submission_accepts_single_file_dflash_checkpoint(tmp_path: Path) -> Non
             "TARGET_SNAPSHOT": str(target),
             "DRAFT_SNAPSHOT": str(draft),
             "CONTAINER": str(container),
+            "WANDB_API_KEY_FILE": str(wandb_api_key_file),
             "PATH": f"{fake_bin}:{env['PATH']}",
         }
     )
@@ -172,6 +177,41 @@ def test_submission_accepts_single_file_dflash_checkpoint(tmp_path: Path) -> Non
     )
 
     assert "test-only-ok" in result.stdout
+
+
+def test_submission_rejects_missing_wandb_key_before_sbatch(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "model.safetensors.index.json").write_text("{}")
+    container = tmp_path / "nemo_rl_nightly.sqsh"
+    container.write_text("")
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "MODE": "test-only",
+            "REPO_DIR": str(REPO_ROOT),
+            "RUN_TAG": "contract-test-missing-wandb-key",
+            "RUN_DIR": str(tmp_path / "run"),
+            "VARIANT": "baseline",
+            "TARGET_SNAPSHOT": str(target),
+            "CONTAINER": str(container),
+            "WANDB_API_KEY_FILE": str(tmp_path / "missing-key"),
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(LAUNCHER)],
+        check=False,
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 2
+    assert "W&B API key file is unavailable" in result.stderr
 
 
 def test_submission_rejects_missing_container_before_sbatch(tmp_path: Path) -> None:

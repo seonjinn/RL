@@ -9,6 +9,7 @@ TIME_LIMIT="${TIME_LIMIT:-05:00:00}"
 MAX_STEPS="${MAX_STEPS:-20}"
 WANDB_ENABLED="${WANDB_ENABLED:-true}"
 WANDB_PROJECT="${WANDB_PROJECT:-nemo-rl-vllm025-qwen8-dflash}"
+WANDB_API_KEY_FILE="${WANDB_API_KEY_FILE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/.secrets/wandb_api_key}"
 REPO_DIR="${REPO_DIR:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-vllm025-dflash-perfcfg-20260715}"
 CONTAINER="${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260715.sqsh}"
 MOUNTS="${MOUNTS:-/lustre:/lustre}"
@@ -99,6 +100,19 @@ command_parts=(
   "PYTHONFAULTHANDLER=1"
   "RAY_DEDUP_LOGS=0"
   "RAY_LOG_SYNC_FREQUENCY=30"
+)
+
+if [[ "${WANDB_ENABLED}" == "true" ]]; then
+  command_parts+=(
+    "WANDB_API_KEY_FILE=${WANDB_API_KEY_FILE}"
+    bash
+    -c
+    'set +x; export WANDB_API_KEY="$(< "${WANDB_API_KEY_FILE}")"; exec "$@"'
+    nemo-rl-with-wandb-key
+  )
+fi
+
+command_parts+=(
   /opt/nemo_rl_venv/bin/python
   examples/run_grpo.py
   --config
@@ -133,6 +147,10 @@ case "${MODE}" in
   test-only|submit)
     if [[ ! -f "${CONTAINER}" ]]; then
       printf 'Container does not exist: %s\n' "${CONTAINER}" >&2
+      exit 2
+    fi
+    if [[ "${WANDB_ENABLED}" == "true" && ! -r "${WANDB_API_KEY_FILE}" ]]; then
+      printf 'W&B API key file is unavailable: %s\n' "${WANDB_API_KEY_FILE}" >&2
       exit 2
     fi
     if ! has_safetensors_checkpoint "${TARGET_SNAPSHOT}"; then
