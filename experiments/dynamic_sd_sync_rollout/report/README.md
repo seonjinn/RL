@@ -255,6 +255,28 @@ standalone data predicts no additional gain over fixed-K anyway (no drain
 tail forms); it becomes relevant for SD-breakeven workloads (32B-SWE-like)
 and 32K+ generation recipes once NeMo-RL's vLLM catches up.
 
+## DynamicSD inside NeMo-RL: engine-level first light
+
+Can `num_speculative_tokens_per_batch_size` run inside NeMo-RL at all? Yes -
+**we booted it** (run C4): a triple-patched vLLM 0.25.0 wheel (ZeroDivision
+guard, Qwen3MoE added to the V2-runner auto-enable list, torchcodec
+exception guard) injected via the job's `SYSTEM_PYDEPS_SITE` overlay, with
+the K-schedule passed as a Hydra override. The engine initialized cleanly:
+`v0.25.0`, `Using V2 Model Runner`, schedule accepted, zero errors. Two
+integration landmines are documented for whoever does this next: NeMo-RL's
+tensorboard hparams logger rejects nested-list config values (disable it or
+flatten), and a global PYTHONPATH overlay leaks into the Megatron training
+worker (transformer_engine cublasLt symbol clash from overlay nvidia libs;
+transformers double-registration) - full 10-step A/B/C timing on 0.25 inside
+NeMo-RL therefore needs the clean per-worker-venv path (`use_system_env=false`
+with the prepared `RL-dynsd-vllm025` uv lock) rather than the overlay. The
+30B E2E numbers above (vLLM 0.20 stack, 1.66x generation / 1.15x step for
+fixed-K3) remain the reference; standalone 0.25 data predicts dynamic would
+land within a few percent of fixed there. Separately, 235B E2E was abandoned
+after 5 attempts - cross-node TP8 engine init on this fabric failed under
+both SHARP-reservation and SHARP-off NCCL paths; the standalone 235B verdict
+(external-drafter SpecDec is a net loss) stands on 3-seed evidence.
+
 ## Key takeaway
 
 **On these RL-rollout shapes, EAGLE3 with a well-chosen fixed K is the
