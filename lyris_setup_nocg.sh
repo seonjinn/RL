@@ -21,7 +21,8 @@ uv run examples/run_grpo.py \
   --config "${BASE}/examples/configs/recipes/llm/performance/grpo-llama3.1-8b-instruct-1n4g-nocg.yaml" \
   grpo.max_num_steps=20 \
   logger.log_dir="${BASE}/experiments/lyris_llama_nocg/logs" \
-  logger.wandb_enabled=false \
+  logger.wandb_enabled=true \
+logger.wandb.project=nemo-rl-cudagraph \
   logger.tensorboard_enabled=false \
   checkpointing.enabled=false \
   cluster.num_nodes=1 \
