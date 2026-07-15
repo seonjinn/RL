@@ -23,7 +23,7 @@ LAUNCHER = (
 )
 
 
-def _dry_run(variant: str) -> str:
+def _dry_run(variant: str, model_profile: str = "qwen8") -> str:
     env = os.environ.copy()
     env.update(
         {
@@ -31,6 +31,7 @@ def _dry_run(variant: str) -> str:
             "REPO_DIR": str(REPO_ROOT),
             "RUN_TAG": "contract-test",
             "VARIANT": variant,
+            "MODEL_PROFILE": model_profile,
         }
     )
     return subprocess.run(
@@ -99,6 +100,19 @@ def test_dflash_uses_matched_public_drafter_and_full_cuda_graphs() -> None:
         in output
     )
     assert "policy.draft.enabled=true" not in output
+
+
+def test_qwen30_profile_uses_unmodified_performance_recipe_and_matched_k7() -> None:
+    output = _dry_run("dflash_k7", model_profile="qwen30ba3b")
+    launcher = LAUNCHER.read_text()
+
+    assert "grpo-qwen3-30ba3b-4n4g.yaml" in output
+    assert "models--Qwen--Qwen3-30B-A3B/snapshots/ad44e777" in launcher
+    assert "models--inference-optimization--Qwen3-30B-A3B-speculator.dflash" in output
+    assert "speculative_config.num_speculative_tokens=7" in output
+    assert "compilation_config.cudagraph_capture_sizes=[8,16,32,64,128,256,512]" in output
+    assert "--nodes=4" in output
+    assert "--segment=4" in output
 
 
 def test_invalid_variant_fails_before_submission() -> None:

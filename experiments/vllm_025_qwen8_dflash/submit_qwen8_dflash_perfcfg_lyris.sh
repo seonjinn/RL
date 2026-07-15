@@ -2,6 +2,7 @@
 set -euo pipefail
 
 MODE="${MODE:-dry-run}"
+MODEL_PROFILE="${MODEL_PROFILE:-qwen8}"
 VARIANT="${VARIANT:-dflash_k16}"
 ACCOUNT="${ACCOUNT:-coreai_dlalgo_llm}"
 PARTITION="${PARTITION:-gb200}"
@@ -14,10 +15,36 @@ REPO_DIR="${REPO_DIR:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-vllm025-dflash-
 CONTAINER="${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260715.sqsh}"
 MOUNTS="${MOUNTS:-/lustre:/lustre}"
 HF_HOME="${HF_HOME:-/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home}"
-TARGET_SNAPSHOT="${TARGET_SNAPSHOT:-${HF_HOME}/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218}"
-DRAFT_SNAPSHOT="${DRAFT_SNAPSHOT:-${HF_HOME}/hub/models--z-lab--Qwen3-8B-DFlash-b16/snapshots/9b41424b7109f9c5413454f481b09a82b85333f4}"
-RUN_TAG="${RUN_TAG:-qwen8-v025-perfcfg-${VARIANT}-$(date +%Y%m%d-%H%M%S)}"
 EXPERIMENT_ROOT="${EXPERIMENT_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs}"
+
+case "${MODEL_PROFILE}" in
+  qwen8)
+    MODEL_TAG=qwen8
+    RECIPE=examples/configs/recipes/llm/performance/grpo-qwen3-8b-2n4g.yaml
+    NUM_NODES=2
+    SEGMENT_SIZE=2
+    DFLASH_VARIANT=dflash_k16
+    DFLASH_TOKENS=16
+    TARGET_SNAPSHOT="${TARGET_SNAPSHOT:-${HF_HOME}/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218}"
+    DRAFT_SNAPSHOT="${DRAFT_SNAPSHOT:-${HF_HOME}/hub/models--z-lab--Qwen3-8B-DFlash-b16/snapshots/9b41424b7109f9c5413454f481b09a82b85333f4}"
+    ;;
+  qwen30ba3b)
+    MODEL_TAG=qwen30ba3b
+    RECIPE=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
+    NUM_NODES=4
+    SEGMENT_SIZE=4
+    DFLASH_VARIANT=dflash_k7
+    DFLASH_TOKENS=7
+    TARGET_SNAPSHOT="${TARGET_SNAPSHOT:-${HF_HOME}/hub/models--Qwen--Qwen3-30B-A3B/snapshots/ad44e777bcd18fa416d9da3bd8f70d33ebb85d39}"
+    DRAFT_SNAPSHOT="${DRAFT_SNAPSHOT:-${HF_HOME}/hub/models--inference-optimization--Qwen3-30B-A3B-speculator.dflash/snapshots/2247bb71fb6ac89b75f44ec2c049c811bfd54ca5}"
+    ;;
+  *)
+    printf 'MODEL_PROFILE must be qwen8 or qwen30ba3b; got %s\n' "${MODEL_PROFILE}" >&2
+    exit 2
+    ;;
+esac
+
+RUN_TAG="${RUN_TAG:-${MODEL_TAG}-v025-perfcfg-${VARIANT}-$(date +%Y%m%d-%H%M%S)}"
 RUN_DIR="${RUN_DIR:-${EXPERIMENT_ROOT}/${RUN_TAG}}"
 BASE_LOG_DIR="${BASE_LOG_DIR:-${RUN_DIR}}"
 
@@ -25,11 +52,11 @@ case "${VARIANT}" in
   baseline)
     SPECULATIVE_TOKENS=0
     ;;
-  dflash_k16)
-    SPECULATIVE_TOKENS=16
+  "${DFLASH_VARIANT}")
+    SPECULATIVE_TOKENS="${DFLASH_TOKENS}"
     ;;
   *)
-    printf 'VARIANT must be baseline or dflash_k16; got %s\n' "${VARIANT}" >&2
+    printf 'VARIANT must be baseline or %s; got %s\n' "${DFLASH_VARIANT}" "${VARIANT}" >&2
     exit 2
     ;;
 esac
@@ -91,7 +118,7 @@ command_parts=(
   "TRANSFORMERS_OFFLINE=1"
   "NRL_MEGATRON_CHECKPOINT_DIR=${HF_HOME}/nemo_rl"
   "PYTHONPATH=${REPO_DIR}"
-  "NEMO_RL_VENV_DIR=/tmp/nemorl-v025-qwen8-dflash-${RUN_TAG}"
+  "NEMO_RL_VENV_DIR=/tmp/nemorl-v025-dflash-${RUN_TAG}"
   "NRL_FORCE_REBUILD_VENVS=true"
   "UV_CACHE_DIR=/lustre/fsw/coreai_dlalgo_llm/users/sna/uv_cache"
   "UV_LOCK_TIMEOUT=900"
@@ -116,7 +143,7 @@ command_parts+=(
   /opt/nemo_rl_venv/bin/python
   examples/run_grpo.py
   --config
-  examples/configs/recipes/llm/performance/grpo-qwen3-8b-2n4g.yaml
+  "${RECIPE}"
   "${overrides[@]}"
 )
 printf -v command '%q ' "${command_parts[@]}"
@@ -125,13 +152,13 @@ command="${command% }"
 sbatch_args=(
   --account="${ACCOUNT}"
   --partition="${PARTITION}"
-  --nodes=2
+  --nodes="${NUM_NODES}"
   --ntasks-per-node=1
   --exclusive
   --time="${TIME_LIMIT}"
-  --segment=2
+  --segment="${SEGMENT_SIZE}"
   --dependency=
-  --job-name="${ACCOUNT}-nemorl.qwen8-${VARIANT}"
+  --job-name="${ACCOUNT}-nemorl.${MODEL_TAG}-${VARIANT}"
   --output="${RUN_DIR}/slurm-%j.out"
   --comment=metrics
 )
@@ -168,7 +195,7 @@ case "${MODE}" in
       exit 2
     fi
     required_tracked_files=(
-      examples/configs/recipes/llm/performance/grpo-qwen3-8b-2n4g.yaml
+      "${RECIPE}"
       experiments/vllm_025_qwen8_dflash/submit_qwen8_dflash_perfcfg_lyris.sh
     )
     for tracked_file in "${required_tracked_files[@]}"; do
@@ -184,15 +211,15 @@ case "${MODE}" in
 
     mkdir -p "${RUN_DIR}"
     {
-      printf 'run_tag=%s\nvariant=%s\n' "${RUN_TAG}" "${VARIANT}"
+      printf 'run_tag=%s\nmodel_profile=%s\nvariant=%s\n' "${RUN_TAG}" "${MODEL_PROFILE}" "${VARIANT}"
       printf 'repo_head=%s\n' "$(git -C "${REPO_DIR}" rev-parse HEAD)"
       printf 'bridge_head=%s\n' "$(git -C "${REPO_DIR}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge" rev-parse HEAD)"
       printf 'megatron_lm_head=%s\n' "$(git -C "${REPO_DIR}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM" rev-parse HEAD)"
       printf 'container=%s\n' "${CONTAINER}"
-      printf 'recipe=examples/configs/recipes/llm/performance/grpo-qwen3-8b-2n4g.yaml\n'
+      printf 'recipe=%s\n' "${RECIPE}"
       printf 'target_snapshot=%s\ndraft_snapshot=%s\n' "${TARGET_SNAPSHOT}" "${DRAFT_SNAPSHOT}"
       printf 'num_speculative_tokens=%s\n' "${SPECULATIVE_TOKENS}"
-      printf 'max_steps=%s\nnum_nodes=2\nsegment=2\n' "${MAX_STEPS}"
+      printf 'max_steps=%s\nnum_nodes=%s\nsegment=%s\n' "${MAX_STEPS}" "${NUM_NODES}" "${SEGMENT_SIZE}"
       printf 'cuda_graph_enabled=true\ncudagraph_mode=%s\n' "$([[ "${SPECULATIVE_TOKENS}" -gt 0 ]] && printf FULL || printf recipe-default)"
       printf 'temperature=1.0\ntop_p=1.0\nwandb_project=%s\n' "${WANDB_PROJECT}"
       printf 'command=%s\n' "${command}"
