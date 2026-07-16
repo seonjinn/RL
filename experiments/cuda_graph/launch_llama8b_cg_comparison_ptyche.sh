@@ -71,5 +71,6 @@ srun --nodes=1 --ntasks=1 --no-container-mount-home \
     uv run --locked --directory "${WORKTREE}" python "${WORKTREE}/examples/run_grpo.py" \
     --config "${CONFIG}" \
     "grpo.max_num_steps=${STEPS}" \
+    "logger.wandb_enabled=false" \
     "logger.log_dir=${LOG_DIR}" \
     "logger.wandb.name=${RUN_TAG}"
