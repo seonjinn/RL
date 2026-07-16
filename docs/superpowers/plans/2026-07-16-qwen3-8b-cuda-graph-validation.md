@@ -24,28 +24,29 @@ For agentic workers: execute the tasks inline in this session because the user e
 - Create: `examples/configs/recipes/llm/performance/grpo-qwen3-8b-1n4g-cg-pr5672-attn-mlp.yaml`
 - Modify: `experiments/cuda_graph/launch_llama8b_cg_comparison_ptyche.sh`
 
-- [ ] Select `MODEL=qwen3` recipes for no-CG, current ATTN, current ATTN+MLP, PR #5672 ATTN, and PR #5672 ATTN+MLP.
-- [ ] Set the PR #5672 recipes to `cuda_graph_packed_seq: true`, `cuda_graph_pr5672_thd: true`, `cuda_graph_max_packed_seqs: 64`, bucket 4096, and warmup 3.
-- [ ] Validate all modified YAML with `ruby -ryaml -e 'ARGV.each { |f| YAML.load_file(f) }'` and validate shell syntax with `bash -n`.
+- [x] Select `MODEL=qwen3` recipes for no-CG, current ATTN, current ATTN+MLP, PR #5672 ATTN, and PR #5672 ATTN+MLP.
+- [x] Set the PR #5672 recipes to `cuda_graph_packed_seq: true`, `cuda_graph_pr5672_thd: true`, `cuda_graph_max_packed_seqs: 64`, bucket 4096, and warmup 3.
+- [x] Validate all modified YAML with `ruby -ryaml -e 'ARGV.each { |f| YAML.load_file(f) }'` and validate shell syntax with `bash -n`.
 
 ### Task 2: Publish and synchronize source
 
 **Files:**
 - Modify: files from Task 1
 
-- [ ] Commit only the Qwen recipes, launcher, and this plan with `git commit -s`.
-- [ ] Push `experiment/pr5672-vs-pr5783-ptyche-runtime-20260716` to the `seonjinn` fork.
-- [ ] Fast-forward the remote PR #5672 worktree from `origin/experiment/pr5672-vs-pr5783-ptyche-runtime-20260716` and verify its commit SHA.
+- [x] Commit only the Qwen recipes, launcher, and this plan with `git commit -s`.
+- [x] Push `experiment/pr5672-vs-pr5783-ptyche-runtime-20260716` to the `seonjinn` fork.
+- [x] Fast-forward the remote PR #5672 worktree from `origin/experiment/pr5672-vs-pr5783-ptyche-runtime-20260716` and verify its commit SHA.
 
 ### Task 3: Stage Qwen3-8B and submit runs
 
 **Files:**
 - Modify: `experiments/cuda_graph/prefetch_llama31_8b_ptyche.sh`
 
-- [ ] Submit one Qwen3-8B cache prefetch job and verify the expected cache snapshot exists.
-- [ ] Use `sbatch --test-only` before all GPU jobs.
-- [ ] Submit independent Qwen3-8B 20-step jobs for no-CG, current ATTN, current ATTN+MLP, PR #5672 ATTN, and PR #5672 ATTN+MLP.
-- [ ] Submit independent Llama 3.1 8B 40-step jobs for no-CG and current ATTN.
+- [x] Submit one Qwen3-8B cache prefetch job and verify the expected cache snapshot exists.
+- [x] Use `sbatch --test-only` before all GPU jobs.
+- [x] Submit independent Qwen3-8B 20-step jobs for no-CG, current ATTN, current ATTN+MLP, PR #5672 ATTN, and PR #5672 ATTN+MLP.
+- [x] Submit independent Llama 3.1 8B 40-step jobs for no-CG and current ATTN.
+- [x] Submit independent Qwen3-8B 40-step jobs for no-CG and current ATTN.
 
 ### Task 4: Monitor and analyze
 
