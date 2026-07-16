@@ -477,6 +477,29 @@ def test_runtime_command_binds_the_validated_target_snapshot(tmp_path: Path) -> 
 
 
 @pytest.mark.parametrize(
+    ("model_key", "disables_nemorl_port_override"),
+    [("qwen30", False), ("qwen32", False), ("qwen235", True)],
+)
+def test_runtime_command_delegates_qwen235_rendezvous_ports_to_vllm(
+    tmp_path: Path,
+    model_key: str,
+    disables_nemorl_port_override: bool,
+) -> None:
+    run = resolve_run(model_key, "baseline", "smoke2", "lyris")
+
+    command = build_runtime_command(
+        run,
+        tmp_path / "repo",
+        tmp_path / "runs" / "unit",
+        "unit",
+    )
+
+    assert (
+        "NRL_DISABLE_VLLM_PORT_OVERRIDE=1" in command
+    ) is disables_nemorl_port_override
+
+
+@pytest.mark.parametrize(
     ("mode", "required_flag"),
     [("test-only", "--test-only"), ("submit", "--parsable")],
 )

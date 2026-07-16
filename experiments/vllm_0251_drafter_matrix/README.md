@@ -17,6 +17,10 @@ parallelism, MoE backend, and sampling. The matrix changes only step count,
 output/log paths, checkpoint saving, CUDA Graph mode, and SpecDec settings.
 Every run uses `enforce_eager=false`, `FULL_AND_PIECEWISE`, native recipe/vLLM
 capture sizing, Triton MoE from the recipes, and `checkpointing.enabled=false`.
+Qwen3-235B additionally sets `NRL_DISABLE_VLLM_PORT_OVERRIDE=1` so its TP=8
+multi-node engines use vLLM 0.25.1 rendezvous allocation instead of colliding
+on NeMo-RL's deterministic `7000 + n*100` override. The smaller recipes retain
+the default NeMo-RL port path that passed their smoke gates.
 
 ## Matrix
 

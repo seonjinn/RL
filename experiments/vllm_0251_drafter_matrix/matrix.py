@@ -620,6 +620,7 @@ def build_runtime_command(
         "NRL_FORCE_REBUILD_VENVS=true",
         f"TRITON_CACHE_DIR=/tmp/nemorl-v0251-triton-{safe_tag}",
         f"TORCHINDUCTOR_CACHE_DIR=/tmp/nemorl-v0251-inductor-{safe_tag}",
+        *(("NRL_DISABLE_VLLM_PORT_OVERRIDE=1",) if run.recipe.key == "qwen235" else ()),
         "PYTHONFAULTHANDLER=1",
         "RAY_DEDUP_LOGS=0",
     )

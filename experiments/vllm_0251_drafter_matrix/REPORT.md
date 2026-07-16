@@ -38,7 +38,7 @@ the remainder were in maintenance/down/drain states. FairShare for user `sna`
 under `coreai_dlalgo_llm` was 0.793651. Scheduler preflight may run, but smoke
 jobs can remain pending until nodes return.
 
-## Current Smoke Wave
+## Completed Smoke Wave
 
 All jobs below passed an exact-topology scheduler preflight before submission.
 They are two-step configuration/runtime gates, not reportable performance
@@ -51,9 +51,61 @@ results. Promotion to steps 2-20 waits for matched baseline and candidate gates.
 | Qwen3-32B | baseline | `2402487` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/5x7gpll3) |
 | Qwen3-32B | EAGLE3 K1 / K3 / K5 | `2402489` / `2402491` / `2402493` | [K1](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/zaf7lrpt) / [K3](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/h01cbwzk) / [K5](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/mlhdehtm) |
 | Qwen3-32B | Thinking EAGLE3 K1 / K3 / K5 | `2402620` / `2402622` / `2402624` | [K1](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/bo48pxvo) / [K3](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/tqex9iq5) / [K5](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/khslxp6o) |
-| Qwen3-235B-A22B | baseline | `2402495` | pending initialization |
-| Qwen3-235B-A22B | EAGLE3 K1 / K3 / K5 | `2402497` / `2402500` / `2402502` | pending initialization |
-| Qwen3-235B-A22B | Thinking EAGLE3 K1 / K3 / K5 | `2402626` / `2402630` / `2402632` | pending initialization |
+| Qwen3-235B-A22B | baseline | `2402495` | failed: vLLM rendezvous `EADDRINUSE` |
+| Qwen3-235B-A22B | EAGLE3 K1 / K3 / K5 | `2402497` / `2402500` / `2402502` | K1 reproduced the port failure; K3/K5 cancelled |
+| Qwen3-235B-A22B | Thinking EAGLE3 K1 / K3 / K5 | `2402626` / `2402630` / `2402632` | cancelled before allocation pending the baseline fix |
+
+### Preliminary Step-2 Gate
+
+These values are one post-initialization step only. They select final20
+candidates but are not final performance claims. Time speedups are matched
+baseline time divided by candidate time.
+
+| Model | Drafter | K | E2E time | E2E speedup | Gen time | Gen speedup | Acceptance | Mean accepted | Gate |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| Qwen3-30B-A3B | none | - | 179.5s | 1.00x | 73.2s | 1.00x | n/a | n/a | baseline |
+| Qwen3-30B-A3B | base / Thinking-equivalent | 1 | 156.8s | 1.15x | 50.4s | 1.45x | 81.5% | 1.82 | pass |
+| Qwen3-30B-A3B | base / Thinking-equivalent | 3 | 148.5s | 1.21x | 43.8s | 1.67x | 64.4% | 2.93 | promote |
+| Qwen3-30B-A3B | base / Thinking-equivalent | 5 | 203.4s | 0.88x | 94.2s | 0.78x | 51.1% | 3.56 | reject |
+| Qwen3-32B | none | - | 247.9s | 1.00x | 100.0s | 1.00x | n/a | n/a | baseline |
+| Qwen3-32B | base | 1 | 256.1s | 0.97x | 109.9s | 0.91x | 69.2% | 1.69 | reject |
+| Qwen3-32B | base | 3 | 264.6s | 0.94x | 118.3s | 0.85x | 45.1% | 2.35 | reject |
+| Qwen3-32B | base | 5 | 287.9s | 0.86x | 139.6s | 0.72x | 31.3% | 2.57 | reject |
+| Qwen3-32B | Thinking | 1 | 235.4s | 1.05x | 89.6s | 1.12x | 79.8% | 1.80 | promote |
+| Qwen3-32B | Thinking | 3 | 243.6s | 1.02x | 96.0s | 1.04x | 62.6% | 2.88 | pass |
+| Qwen3-32B | Thinking | 5 | 249.2s | 0.99x | 102.7s | 0.97x | 49.7% | 3.48 | reject |
+
+Qwen3-30B does not demonstrate an independent Thinking-checkpoint effect:
+the selected base repository and the Thinking alias resolve to identical model
+weights. Qwen3-32B does: at matched K1, the Thinking head changed generation
+time from 109.9s to 89.6s and acceptance from 69.2% to 79.8% in this smoke.
+
+## Final20 Promotion Wave
+
+All promoted jobs use the same performance recipes and CUDA Graph controls as
+their smoke gates. Final comparisons will average steps 2-20.
+
+| Model | Variant | Job | W&B | State at submission |
+|---|---|---:|---|---|
+| Qwen3-30B-A3B | baseline | `2404968` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/m6jqtwb0) | running |
+| Qwen3-30B-A3B | EAGLE3 K3 | `2405075` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/lzg06xnm) | running |
+| Qwen3-32B | baseline | `2405077` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/zy22udd0) | running |
+| Qwen3-32B | base EAGLE3 K1 | `2405076` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/on935s9p) | running |
+| Qwen3-32B | Thinking EAGLE3 K1 | `2405078` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/0rgf8mxc) | running |
+
+## Qwen3-235B Port Failure
+
+Baseline job `2402495` and base EAGLE3 K1 job `2402497` failed at the same
+vLLM TP=8 engine initialization boundary. Multiple engine processes attempted
+to bind deterministic NeMo-RL override ports `7000` and `7100`, producing
+`torch.distributed.DistNetworkError: EADDRINUSE`. This reproduces without a
+drafter, so it is not evidence against either Qwen3-235B checkpoint.
+
+The isolated retry delegates rendezvous allocation to vLLM 0.25.1 by setting
+`NRL_DISABLE_VLLM_PORT_OVERRIDE=1` only for Qwen3-235B. Qwen3-30B and Qwen3-32B
+retain their already validated runtime environment. The remaining old 235B
+smokes were cancelled before allocation and will be resubmitted only after the
+fixed baseline passes.
 
 ## Applicability And Run Ledger
 
