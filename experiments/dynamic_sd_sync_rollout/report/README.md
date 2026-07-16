@@ -293,6 +293,46 @@ after 5 attempts - cross-node TP8 engine init on this fabric failed under
 both SHARP-reservation and SHARP-off NCCL paths; the standalone 235B verdict
 (external-drafter SpecDec is a net loss) stands on 3-seed evidence.
 
+## Drafter choice for SWE workloads: single-turn vs agentic multi-turn
+
+Literature says suffix decoding dominates SWE-agent workloads (Snowflake:
+2.5x on SWE-Bench, 1.7x over ngram). We tested the shortlist on
+Qwen3-30B-A3B at temperature 1.0 in two regimes.
+
+**Single-turn SWE prompts, sync-rollout concurrency (128 seqs):**
+
+| drafter | speedup | AL |
+|---|---|---|
+| EAGLE3 K=3 | **1.94x** | 2.48 |
+| suffix | 0.52x | 2.22 |
+| ngram (K8, lookup 5-8) | 0.42x | 3.43 |
+
+Model-free drafting is a heavy net loss at RL batch sizes even with high
+acceptance (ngram's AL 3.43 beats EAGLE3's!) - the fixed-size draft verify
+cost at 128-way concurrency, plus the capture-budget overflow at
+bs x (K+1) > 512, swamps the copy-span gains. Published suffix wins come
+from low-concurrency agent serving, not batch synchronous rollout.
+
+**Agentic multi-turn (teacher-forced replay of real OpenHands SWE
+trajectories, 8 copies, matched turns):**
+
+| drafter | speedup | AL |
+|---|---|---|
+| EAGLE3 K=3 | 0.88x | 1.79 (out-of-distribution on tool-call turns) |
+| suffix | 0.50x | **3.10, rising 2.81 -> 3.74 with turn depth** |
+| ngram | 0.54x | 1.19 |
+
+The suffix copy-density thesis is confirmed at the acceptance level - and it
+still loses, because agentic turns are the wrong shape for speculation:
+median assistant turns are tens of tokens (tool calls) while the recorded
+prefix grows 3K -> 27K, so turn time is prefill- and overhead-dominated and
+the decode segment a drafter can accelerate is tiny. **In agentic SWE
+pipelines the binding constraint is not acceptance but the short generation
+segments** - consistent with our earlier finding that agentic E2E masks
+SpecDec value behind tool execution. Speculation pays in agent loops only
+where turns produce long generations (reasoning-heavy steps), which is also
+where EAGLE3 (in-distribution) rather than suffix carries the win.
+
 ## Key takeaway
 
 **On these RL-rollout shapes, EAGLE3 with a well-chosen fixed K is the
