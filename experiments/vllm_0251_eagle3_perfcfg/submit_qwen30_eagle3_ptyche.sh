@@ -120,7 +120,7 @@ command_env=(
 if [[ -n "${DYNAMIC_SD_SCHEDULE}" ]]; then
   command_env+=(
     "NRL_VENV_POST_SYNC_SCRIPT=${REPO_DIR}/experiments/vllm_0251_eagle3_perfcfg/apply_vllm0251_dynamic_sd_cg_fix.py"
-    "NRL_VENV_POST_SYNC_TARGET=nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker"
+    "NRL_VENV_POST_SYNC_TARGET=nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker"
   )
 fi
 

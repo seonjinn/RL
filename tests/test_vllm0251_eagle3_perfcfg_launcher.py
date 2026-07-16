@@ -119,7 +119,11 @@ def test_dynamic_sd_patch_and_graph_metrics_are_opt_in() -> None:
     assert "vllm_kwargs.cudagraph_metrics" not in default_output
     assert f"num_speculative_tokens_per_batch_size={schedule}" in dynamic_output
     assert "apply_vllm0251_dynamic_sd_cg_fix.py" in dynamic_output
-    assert "NRL_VENV_POST_SYNC_TARGET=" in dynamic_output
+    assert (
+        "NRL_VENV_POST_SYNC_TARGET="
+        "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker"
+        in dynamic_output
+    )
     assert "++policy.generation.vllm_kwargs.cudagraph_metrics=true" in dynamic_output
     assert "policy.generation.vllm_cfg.enable_vllm_metrics_logger=true" in dynamic_output
 
