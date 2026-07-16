@@ -12,10 +12,10 @@ mean step-wall speedup vs no-SD baseline.
 | # | Change | Result | Upstream |
 |---|--------|--------|----------|
 | 1 | Capture-aware K-table (bs x (K+1) <= 512 cap) | dynamic 1.36x -> 1.90x | PR-able (validation/docs) |
-| 2 | 0.25 drafter ZeroDivision crash fix | crash -> runs | **PR-ready** (bug in main) |
+| 2 | 0.25 drafter ZeroDivision crash fix | crash -> runs | **Superseded by upstream PR #48329 (7/11, same root cause) - post validation comment w/ EAGLE3 repro + 2.01x** |
 | 3 | V2 runner flag for per-K FULL graphs | dynamic 1.90x -> 2.01x | PR-able (auto-enable+docs) |
 | 4 | K=0 capture extension | negative, reverted | evidence for #6 |
-| 5 | Depth-aware K cap prototype | negative (needs #6) | feature request |
+| 5 | Depth-aware K cap prototype | negative (needs #6) | **Upstream RFC #48627 (7/14) proposes batch x ctx-len table - contribute our depth x BS grid + dispatch-trap findings** |
 | 6 | (open) dispatch-correct runtime-K support | blocks #5 | issue candidate |
 | 7 | Mamba per-K capture assert fix | crash -> runs; Super dyn 1.53x | **PR-ready** |
 
