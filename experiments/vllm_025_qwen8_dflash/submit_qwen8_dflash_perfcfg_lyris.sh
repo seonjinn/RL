@@ -53,11 +53,18 @@ case "${VARIANT}" in
   baseline)
     SPECULATIVE_TOKENS=0
     ;;
+  dflash_k3)
+    SPECULATIVE_TOKENS=3
+    ;;
+  dflash_k5)
+    SPECULATIVE_TOKENS=5
+    ;;
   "${DFLASH_VARIANT}")
     SPECULATIVE_TOKENS="${DFLASH_TOKENS}"
     ;;
   *)
-    printf 'VARIANT must be baseline or %s; got %s\n' "${DFLASH_VARIANT}" "${VARIANT}" >&2
+    printf 'VARIANT must be baseline, dflash_k3, dflash_k5, or %s; got %s\n' \
+      "${DFLASH_VARIANT}" "${VARIANT}" >&2
     exit 2
     ;;
 esac
@@ -90,7 +97,11 @@ fi
 
 if [[ "${SPECULATIVE_TOKENS}" -gt 0 ]]; then
   capture_sizes=()
-  for num_requests in 1 2 4 8 16 32 64; do
+  capture_request_counts=(1 2 4 8 16 32 64)
+  if [[ "${SPECULATIVE_TOKENS}" -le 5 ]]; then
+    capture_request_counts+=(128)
+  fi
+  for num_requests in "${capture_request_counts[@]}"; do
     capture_sizes+=("$((num_requests * (SPECULATIVE_TOKENS + 1)))")
   done
   printf -v capture_sizes_csv '%s,' "${capture_sizes[@]}"

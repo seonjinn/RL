@@ -122,6 +122,41 @@ def test_qwen30_profile_uses_unmodified_performance_recipe_and_matched_k7() -> N
     assert "--segment=4" in output
 
 
+def test_qwen8_k3_captures_dflash_graphs_through_128_requests() -> None:
+    output = _dry_run("dflash_k3")
+
+    assert "speculative_config.num_speculative_tokens=3" in output
+    assert (
+        "compilation_config.cudagraph_capture_sizes="
+        "[4,8,16,32,64,128,256,512]" in output
+    )
+
+
+def test_qwen8_k5_captures_dflash_graphs_through_128_requests() -> None:
+    output = _dry_run("dflash_k5")
+
+    assert "speculative_config.num_speculative_tokens=5" in output
+    assert (
+        "compilation_config.cudagraph_capture_sizes="
+        "[6,12,24,48,96,192,384,768]" in output
+    )
+
+
+def test_qwen30_k3_and_k5_use_the_matched_dflash_checkpoint() -> None:
+    k3_output = _dry_run("dflash_k3", model_profile="qwen30ba3b")
+    k5_output = _dry_run("dflash_k5", model_profile="qwen30ba3b")
+
+    for output in (k3_output, k5_output):
+        assert (
+            "models--inference-optimization--Qwen3-30B-A3B-speculator.dflash"
+            in output
+        )
+        assert "--nodes=4" in output
+        assert "--segment=4" in output
+    assert "speculative_config.num_speculative_tokens=3" in k3_output
+    assert "speculative_config.num_speculative_tokens=5" in k5_output
+
+
 def test_invalid_variant_fails_before_submission() -> None:
     env = os.environ.copy()
     env.update(
@@ -142,7 +177,10 @@ def test_invalid_variant_fails_before_submission() -> None:
     )
 
     assert result.returncode == 2
-    assert "VARIANT must be baseline or dflash_k16" in result.stderr
+    assert (
+        "VARIANT must be baseline, dflash_k3, dflash_k5, or dflash_k16"
+        in result.stderr
+    )
 
 
 def test_submission_accepts_single_file_dflash_checkpoint(tmp_path: Path) -> None:
