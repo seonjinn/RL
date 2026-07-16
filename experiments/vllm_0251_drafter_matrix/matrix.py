@@ -558,7 +558,12 @@ G_DEFAULT_EXPERIMENT_ROOT = Path(
     "vllm0251_drafter_matrix"
 )
 G_WANDB_PROJECT = "nemo-rl-vllm0251-drafter-matrix"
-G_FORK_URL = "git@github-seonjinn:seonjinn/RL.git"
+G_FORK_URLS = frozenset(
+    {
+        "git@github-seonjinn:seonjinn/RL.git",
+        "git@github.com:seonjinn/RL.git",
+    }
+)
 G_LUSTRE_ROOT = Path("/lustre")
 G_ALLOWED_ENVIRONMENT = frozenset(
     {
@@ -685,7 +690,7 @@ def _git(repo_dir: Path, *args: str) -> str:
 
 
 def validate_checkout(
-    repo_dir: Path, expected_fork_url: str = G_FORK_URL
+    repo_dir: Path, expected_fork_url: str | None = None
 ) -> CheckoutState:
     """Require a clean branch whose exact HEAD exists on the user fork."""
     status = _git(repo_dir, "status", "--porcelain=v1", "--untracked-files=normal")
@@ -694,9 +699,15 @@ def validate_checkout(
     branch = _git(repo_dir, "symbolic-ref", "--quiet", "--short", "HEAD")
     head = _git(repo_dir, "rev-parse", "HEAD")
     push_url = _git(repo_dir, "remote", "get-url", "--push", "fork")
-    if push_url != expected_fork_url:
+    allowed_fork_urls = (
+        frozenset({expected_fork_url})
+        if expected_fork_url is not None
+        else G_FORK_URLS
+    )
+    if push_url not in allowed_fork_urls:
         raise RuntimeError(
-            f"fork push URL must be {expected_fork_url!r}; found {push_url!r}"
+            "fork push URL must identify the approved seonjinn/RL fork; "
+            f"found {push_url!r}"
         )
     fork_ref = f"refs/remotes/fork/{branch}"
     remote_ref = f"refs/heads/{branch}"

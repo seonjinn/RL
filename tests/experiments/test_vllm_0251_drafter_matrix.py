@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from experiments.vllm_0251_drafter_matrix.matrix import (
+    G_FORK_URLS,
     build_runtime_command,
     build_scheduler_command,
     build_scheduler_sequence,
@@ -27,6 +28,13 @@ def test_matrix_module_has_nvidia_apache_header() -> None:
         "#\n"
         "# Licensed under the Apache License, Version 2.0 (the \"License\");\n"
     )
+
+
+def test_approved_fork_urls_cover_local_alias_and_cluster_canonical_host() -> None:
+    assert G_FORK_URLS == {
+        "git@github-seonjinn:seonjinn/RL.git",
+        "git@github.com:seonjinn/RL.git",
+    }
 
 
 @pytest.mark.parametrize(
