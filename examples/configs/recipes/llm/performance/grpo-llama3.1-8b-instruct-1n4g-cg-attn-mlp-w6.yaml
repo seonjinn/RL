@@ -20,6 +20,7 @@ policy:
     - mlp
     cuda_graph_warmup_steps: 6
     cuda_graph_packed_seq: true
+    cuda_graph_max_packed_seqs: 16
     cuda_graph_buckets:
     - 4096
 logger:
