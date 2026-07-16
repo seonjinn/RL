@@ -9,6 +9,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+source "${SCRIPT_DIR}/cuda_graph_launcher_lib.sh"
+
 MODEL=${MODEL:-llama31}
 CONDITION=${CONDITION:?Set CONDITION to nocg, current-attn, current-attn-mlp, pr5672-attn, or pr5672-attn-mlp.}
 STEPS=${STEPS:-20}
@@ -85,6 +88,11 @@ git -C "${WORKTREE}/3rdparty/Megatron-LM-workspace/Megatron-LM" rev-parse HEAD
 
 export NRL_IGNORE_VERSION_MISMATCH=1
 export PYTHONPATH="${WORKTREE}:${WORKTREE}/3rdparty/Megatron-LM-workspace/Megatron-LM:${WORKTREE}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge:${PYTHONPATH:-}"
+
+if CHECKPOINT_DIR=$(pr5672_qwen_checkpoint_dir "${MODEL}" "${CONDITION}"); then
+    export NRL_MEGATRON_CHECKPOINT_DIR="${CHECKPOINT_DIR}"
+    echo "Using isolated PR#5672 Qwen conversion directory: ${NRL_MEGATRON_CHECKPOINT_DIR}"
+fi
 
 srun --nodes=1 --ntasks=1 --no-container-mount-home \
     --container-image="${CONTAINER}" \
