@@ -10,11 +10,15 @@ from experiments.vllm_0251_drafter_matrix.stage_drafters import (
     DEFAULT_CONTAINER,
     DEFAULT_MOUNTS,
     MANIFEST_NAME,
+    PASSTHROUGH_ENVIRONMENT,
     build_sbatch_command,
     collect_checkpoint_specs,
+    mark_manifest_failed,
     prepare_worker_snapshot,
+    reconcile_manifest,
     run_stage,
     stage_targets,
+    validate_container_paths,
     write_manifest,
 )
 
@@ -175,7 +179,10 @@ def test_sbatch_command_is_single_node_lyris_staging_without_gpu_request(
     assert "--nodes=1" in command
     assert "--segment=1" in command
     assert "--exclusive" not in command
-    assert f"--export=HF_HOME={G_CLUSTERS[0].hf_home}" in command
+    assert (
+        f"--export=HF_HOME={G_CLUSTERS[0].hf_home},"
+        f"{','.join(PASSTHROUGH_ENVIRONMENT)}"
+    ) in command
     assert not any(part.startswith("--export=ALL") for part in command)
     assert ("--hold" in command) is (mode == "submit")
     assert f"--container-image={DEFAULT_CONTAINER}" in command
@@ -227,6 +234,89 @@ def test_prepare_worker_snapshot_is_content_addressed_and_complete(
     assert snapshot.with_name("matrix.py").read_text(encoding="utf-8") == "matrix\n"
     assert snapshot.is_relative_to(tmp_path / "output")
     assert oct(snapshot.stat().st_mode & 0o777) == "0o444"
+
+
+def test_container_paths_must_be_visible_through_mounts(tmp_path: Path) -> None:
+    validate_container_paths(
+        Path("/lustre/unit/output"),
+        Path("/lustre/unit/hf"),
+        "/lustre:/lustre",
+    )
+
+    with pytest.raises(ValueError, match="not visible"):
+        validate_container_paths(
+            tmp_path / "output",
+            Path("/lustre/unit/hf"),
+            "/lustre:/lustre",
+        )
+    with pytest.raises(ValueError, match="must be absolute"):
+        validate_container_paths(
+            Path("relative/output"),
+            Path("/lustre/unit/hf"),
+            "/lustre:/lustre",
+        )
+
+
+def test_mark_manifest_failed_preserves_checkpoint_identity(tmp_path: Path) -> None:
+    target = CheckpointSpec(
+        model_key="unit", repo_id="org/model", revision="f" * 40
+    )
+    entries = stage_targets(
+        (target,),
+        tmp_path / "hf-home",
+        lambda **_: (
+            _write_complete_snapshot(target.snapshot_path(tmp_path / "hf-home"))
+            or str(target.snapshot_path(tmp_path / "hf-home"))
+        ),
+        "789",
+    )
+    write_manifest(tmp_path, entries, status="queued")
+
+    manifest_path = mark_manifest_failed(tmp_path, "wrapper failed")
+
+    payload = json.loads(manifest_path.read_text())
+    assert payload["status"] == "failed"
+    assert payload["error"] == "wrapper failed"
+    assert payload["checkpoints"] == [
+        {
+            "job_id": "789",
+            "path": str(target.snapshot_path(tmp_path / "hf-home")),
+            "repo_id": "org/model",
+            "revision": "f" * 40,
+            "status": "failed",
+        }
+    ]
+
+
+def test_reconcile_marks_terminal_job_without_worker_manifest_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = CheckpointSpec(
+        model_key="unit", repo_id="org/model", revision="9" * 40
+    )
+    entries = stage_targets(
+        (target,),
+        tmp_path / "hf-home",
+        lambda **_: (
+            _write_complete_snapshot(target.snapshot_path(tmp_path / "hf-home"))
+            or str(target.snapshot_path(tmp_path / "hf-home"))
+        ),
+        "987",
+    )
+    write_manifest(tmp_path, entries, status="queued")
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args[0], returncode=0, stdout="FAILED\n", stderr=""
+        ),
+    )
+
+    payload = json.loads(reconcile_manifest(tmp_path).read_text())
+    assert payload["status"] == "failed"
+    assert "ended in FAILED" in payload["error"]
+    assert payload["checkpoints"][0]["job_id"] == "987"
 
 
 def test_run_stage_records_terminal_failure_when_worker_initialization_fails(

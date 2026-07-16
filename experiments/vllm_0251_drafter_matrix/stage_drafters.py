@@ -22,7 +22,6 @@ import importlib
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -50,6 +49,19 @@ DEFAULT_MOUNTS = "/lustre:/lustre"
 MANIFEST_NAME = "drafter-staging-manifest.json"
 CONTAINER_PYTHON = "/opt/nemo_rl_venv/bin/python"
 _SHA_REVISION = re.compile(r"[0-9a-f]{40}")
+PASSTHROUGH_ENVIRONMENT = (
+    "HF_TOKEN",
+    "HUGGING_FACE_HUB_TOKEN",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+)
+ACTIVE_JOB_STATES = frozenset(
+    {"CONFIGURING", "PENDING", "RUNNING", "COMPLETING", "SUSPENDED"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,24 +215,50 @@ def prepare_worker_snapshot(output_dir: Path, worker_path: Path) -> Path:
     for source in sources:
         if not source.is_file():
             raise FileNotFoundError(f"Missing staging source: {source}")
+    source_contents = {source.name: source.read_bytes() for source in sources}
     digest = hashlib.sha256()
     for source in sources:
         digest.update(source.name.encode())
-        digest.update(source.read_bytes())
+        digest.update(source_contents[source.name])
     source_root = output_dir.resolve() / f"worker-source-{digest.hexdigest()[:16]}"
     package_dir = source_root / "experiments/vllm_0251_drafter_matrix"
     package_dir.mkdir(parents=True, exist_ok=True)
     for source in sources:
         destination = package_dir / source.name
         if destination.exists():
-            if destination.read_bytes() != source.read_bytes():
+            if destination.read_bytes() != source_contents[source.name]:
                 raise RuntimeError(f"Immutable worker snapshot changed: {destination}")
             continue
         temporary = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
-        shutil.copy2(source, temporary)
+        temporary.write_bytes(source_contents[source.name])
         os.chmod(temporary, 0o444)
         os.replace(temporary, destination)
     return package_dir / worker_path.name
+
+
+def validate_container_paths(output_dir: Path, hf_home: Path, mounts: str) -> None:
+    """Require host paths to be absolute and visible through a pyxis mount."""
+    mount_roots: list[Path] = []
+    for mount in mounts.split(","):
+        host_path = mount.split(":", maxsplit=1)[0]
+        if not host_path:
+            continue
+        root = Path(host_path)
+        if not root.is_absolute():
+            raise ValueError(f"Container mount host path must be absolute: {mount}")
+        mount_roots.append(root.resolve())
+    if not mount_roots:
+        raise ValueError("At least one absolute container mount is required")
+    for label, path in (("output directory", output_dir), ("HF home", hf_home)):
+        if not path.is_absolute():
+            raise ValueError(f"{label} must be absolute: {path}")
+        resolved = path.resolve()
+        if not any(
+            resolved == root or resolved.is_relative_to(root) for root in mount_roots
+        ):
+            raise ValueError(
+                f"{label} is not visible through container mounts {mounts!r}: {resolved}"
+            )
 
 
 def build_sbatch_command(
@@ -252,7 +290,7 @@ def build_sbatch_command(
         "--segment=1",
         "--job-name=nemorl-drafter-stage",
         f"--output={output_dir / 'slurm-%j.out'}",
-        f"--export=HF_HOME={hf_home}",
+        f"--export=HF_HOME={hf_home},{','.join(PASSTHROUGH_ENVIRONMENT)}",
         f"--container-image={container}",
         f"--container-mounts={mounts}",
         *(('--hold',) if mode == "submit" else ()),
@@ -281,7 +319,7 @@ def _add_location_arguments(parser: argparse.ArgumentParser) -> None:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for command in ("show", "test-only", "submit"):
+    for command in ("show", "test-only", "submit", "reconcile"):
         subparser = subparsers.add_parser(command)
         _add_location_arguments(subparser)
         if command in {"test-only", "submit"}:
@@ -359,9 +397,73 @@ def _worker_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _manifest_entries(payload: object) -> tuple[ManifestEntry, ...]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("checkpoints"), list):
+        raise RuntimeError("Staging manifest has no checkpoint entries")
+    try:
+        return tuple(ManifestEntry(**entry) for entry in payload["checkpoints"])
+    except (TypeError, ValueError) as error:
+        raise RuntimeError("Staging manifest has invalid checkpoint entries") from error
+
+
+def mark_manifest_failed(output_dir: Path, error: str) -> Path:
+    """Preserve queued checkpoint identities while recording terminal failure."""
+    manifest_path = output_dir / MANIFEST_NAME
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entries = tuple(
+        ManifestEntry(
+            repo_id=entry.repo_id,
+            revision=entry.revision,
+            status="failed",
+            path=entry.path,
+            job_id=entry.job_id,
+        )
+        for entry in _manifest_entries(payload)
+    )
+    return write_manifest(output_dir, entries, status="failed", error=error)
+
+
+def reconcile_manifest(output_dir: Path) -> Path:
+    """Resolve a queued manifest after scheduler-side pre-wrapper termination."""
+    manifest_path = output_dir / MANIFEST_NAME
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("status") != "queued":
+        return manifest_path
+    entries = _manifest_entries(payload)
+    job_ids = {entry.job_id for entry in entries if entry.job_id is not None}
+    if len(job_ids) != 1:
+        raise RuntimeError("Queued staging manifest must contain exactly one job ID")
+    job_id = next(iter(job_ids))
+    result = subprocess.run(
+        ("sacct", "-X", "-n", "-j", job_id, "--format=State", "--noheader"),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    states = tuple(
+        line.strip().split(maxsplit=1)[0].split("+", maxsplit=1)[0]
+        for line in result.stdout.splitlines()
+        if line.strip()
+    )
+    if not states or any(state in ACTIVE_JOB_STATES for state in states):
+        return manifest_path
+    state = states[0]
+    return mark_manifest_failed(
+        output_dir,
+        f"staging job {job_id} ended in {state} without a terminal worker manifest",
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the staging CLI."""
     arguments = tuple(sys.argv[1:] if argv is None else argv)
+    if arguments[:1] == ("--mark-failed",):
+        parser = argparse.ArgumentParser(add_help=False)
+        parser.add_argument("--output-dir", type=Path, required=True)
+        parser.add_argument("--error", required=True)
+        args = parser.parse_args(arguments[1:])
+        _emit_manifest(mark_manifest_failed(args.output_dir, args.error))
+        return 0
     if arguments[:1] == ("--worker",):
         args = _worker_parser().parse_args(arguments[1:])
         run_stage(args.output_dir, args.hf_home)
@@ -369,12 +471,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     args = _build_parser().parse_args(arguments)
     checkpoints = collect_checkpoint_specs()
+    if args.command == "reconcile":
+        _emit_manifest(reconcile_manifest(args.output_dir))
+        return 0
     if args.command == "show":
         manifest_path = write_manifest(
             args.output_dir, _entries_for(checkpoints, args.hf_home, "planned", None)
         )
         _emit_manifest(manifest_path)
         return 0
+    args.output_dir = args.output_dir.resolve()
+    args.hf_home = args.hf_home.resolve()
+    validate_container_paths(args.output_dir, args.hf_home, args.mounts)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     container = args.container.resolve()
     wrapper_path = args.wrapper_path.resolve()
@@ -408,7 +516,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     manifest_status = "queued" if submitted_job_id is not None else "test-only"
     manifest_path = write_manifest(args.output_dir, entries, status=manifest_status)
     if submitted_job_id is not None:
-        subprocess.run(("scontrol", "release", submitted_job_id), check=True)
+        try:
+            subprocess.run(("scontrol", "release", submitted_job_id), check=True)
+        except subprocess.CalledProcessError as error:
+            subprocess.run(("scancel", submitted_job_id), check=False)
+            manifest_path = mark_manifest_failed(
+                args.output_dir,
+                f"failed to release held staging job {submitted_job_id}",
+            )
+            _emit_manifest(manifest_path)
+            raise RuntimeError(
+                f"Failed to release held staging job {submitted_job_id}"
+            ) from error
     _emit_manifest(manifest_path)
     return 0
 

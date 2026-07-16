@@ -678,6 +678,31 @@ def test_snapshot_validation_requires_every_indexed_shard(tmp_path: Path) -> Non
     validate_snapshot(snapshot, revision, "unit")
 
 
+@pytest.mark.parametrize(
+    "weight_map",
+    (
+        {},
+        {"layer.0": "config.json"},
+        {"layer.0": "../outside.safetensors"},
+        {"layer.0": "/absolute/model.safetensors"},
+    ),
+)
+def test_snapshot_validation_rejects_empty_or_unsafe_weight_indices(
+    tmp_path: Path, weight_map: dict[str, str]
+) -> None:
+    revision = "e" * 40
+    snapshot = tmp_path / "snapshots" / revision
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text("{}\n", encoding="utf-8")
+    (snapshot / "model.safetensors").write_bytes(b"weights")
+    (snapshot / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": weight_map}), encoding="utf-8"
+    )
+
+    with pytest.raises(RuntimeError, match="weight index"):
+        validate_snapshot(snapshot, revision, "unit")
+
+
 def test_target_snapshot_rejects_a_moved_main_ref(tmp_path: Path) -> None:
     expected_revision = "c" * 40
     recipe = RecipeSpec(

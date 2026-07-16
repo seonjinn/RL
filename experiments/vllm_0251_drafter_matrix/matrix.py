@@ -27,7 +27,7 @@ import tempfile
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
 
@@ -718,12 +718,19 @@ def validate_checkout(
         )
     fork_ref = f"refs/remotes/fork/{branch}"
     remote_ref = f"refs/heads/{branch}"
-    try:
-        remote_line = _git(
-            repo_dir, "ls-remote", "--exit-code", "fork", remote_ref
-        )
-    except subprocess.CalledProcessError as error:
-        raise RuntimeError(f"Branch has no pushed fork ref: {remote_ref}") from error
+    remote_result = subprocess.run(
+        ("git", "ls-remote", "--exit-code", "fork", remote_ref),
+        cwd=repo_dir,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if remote_result.returncode == 2:
+        raise RuntimeError(f"Branch has no pushed fork ref: {remote_ref}")
+    if remote_result.returncode != 0:
+        detail = remote_result.stderr.rstrip() or "no git diagnostic"
+        raise RuntimeError(f"Could not query fork ref {remote_ref}: {detail}")
+    remote_line = remote_result.stdout.rstrip()
     remote_parts = remote_line.split()
     if len(remote_parts) != 2 or remote_parts[1] != remote_ref:
         raise RuntimeError(f"Branch has no pushed fork ref: {remote_ref}")
@@ -767,9 +774,23 @@ def validate_snapshot(snapshot: Path, revision: str, label: str) -> None:
         try:
             index = json.loads(index_path.read_text(encoding="utf-8"))
             weight_map = index["weight_map"]
-            shards = {snapshot / str(name) for name in weight_map.values()}
         except (json.JSONDecodeError, KeyError, TypeError, AttributeError) as error:
             raise RuntimeError(f"{label} has an invalid weight index: {index_path}") from error
+        if not isinstance(weight_map, dict) or not weight_map:
+            raise RuntimeError(f"{label} has an invalid weight index: {index_path}")
+        shard_values = tuple(weight_map.values())
+        if not all(isinstance(name, str) for name in shard_values):
+            raise RuntimeError(f"{label} has an invalid weight index: {index_path}")
+        shard_names = set(shard_values)
+        relative_shards = {PurePosixPath(name) for name in shard_names}
+        if any(
+            path.is_absolute()
+            or ".." in path.parts
+            or path.suffix != ".safetensors"
+            for path in relative_shards
+        ):
+            raise RuntimeError(f"{label} has an unsafe weight index: {index_path}")
+        shards = {snapshot.joinpath(*path.parts) for path in relative_shards}
         missing_shards = tuple(sorted(str(path) for path in shards if not path.is_file()))
         if missing_shards:
             raise FileNotFoundError(

@@ -36,12 +36,9 @@ if [[ "${1:-}" == "--worker-script" ]]; then
   if ((status != 0)) && [[ -n "${output_dir}" ]]; then
     manifest="${output_dir}/drafter-staging-manifest.json"
     if ! grep -Eq '"status": "(failed|staged)"' "${manifest}" 2>/dev/null; then
-      mkdir -p "${output_dir}"
-      temporary="${manifest}.$$.$RANDOM.tmp"
-      printf '%s\n' \
-        '{"checkpoints": [], "error": "worker failed before terminal manifest", "status": "failed"}' \
-        > "${temporary}"
-      mv -f "${temporary}" "${manifest}"
+      "${python_bin}" "${worker_script}" --mark-failed \
+        --output-dir "${output_dir}" \
+        --error "worker failed before terminal manifest"
     fi
   fi
   exit "${status}"

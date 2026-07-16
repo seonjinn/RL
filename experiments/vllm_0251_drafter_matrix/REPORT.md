@@ -91,7 +91,8 @@ after real submission.
 
 ## Validation
 
-Run before pushing and again from the clean cluster checkout:
+Run from a supported Linux checkout (the lock intentionally excludes macOS),
+before pushing and again from the clean cluster checkout or nightly container:
 
 ```bash
 uv run --locked pytest -q \
