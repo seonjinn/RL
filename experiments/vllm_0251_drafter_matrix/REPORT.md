@@ -106,6 +106,28 @@ Thinking K1.
 | Qwen3-32B | base EAGLE3 K1 | `2405076` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/on935s9p) | running |
 | Qwen3-32B | Thinking EAGLE3 K1 | `2405078` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/0rgf8mxc) | running |
 
+## Qwen3-32B K2 And DynamicSD Smoke Wave
+
+The isolated matrix now includes fixed Thinking EAGLE3 K2 and a validated
+DynamicSD K0-K3 path. Fixed K2 and K3 use native vLLM 0.25.1 without a runtime
+patch. DynamicSD alone applies the source-guarded autoregressive-drafter CUDA
+Graph fix in its run-specific venv and preserves `FULL_AND_PIECEWISE` with
+native capture sizing.
+
+The checked-in schedule uses K3 for scheduler batch sizes 1-127 and K1 for
+128-256. It is a smoke seed derived from a historical vLLM 0.24 standalone
+profile, not a reportable calibration. The launcher rejects this seed for
+`final20`; promotion requires a matched vLLM 0.25.1 NeMo-RL profile marked
+`calibrated`. vLLM 0.25.1 exposes total draft/accepted counters but no native
+selected-K histogram, so K-specific fractions require separate scheduler-side
+instrumentation and are not inferred from accepted-token position counters.
+
+| Model | Variant | Phase | Job/W&B | State |
+|---|---|---|---|---|
+| Qwen3-32B | Thinking EAGLE3 K2 | smoke2 | pending | awaiting submission |
+| Qwen3-32B | Thinking EAGLE3 K3 | smoke2 | pending | awaiting matched rerun |
+| Qwen3-32B | Thinking DynamicSD K0-K3 seed | smoke2 | pending | awaiting submission |
+
 ## Qwen3-235B Port Failure
 
 Baseline job `2402495` and base EAGLE3 K1 job `2402497` failed at the same
@@ -138,7 +160,8 @@ after real submission.
 | Qwen3-30B-A3B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
 | Qwen3-32B | baseline | MRv2, MRv1 | mixed | final20 running | `2405077` | MRv2 control promoted; MRv1 remains planned |
 | Qwen3-32B | EAGLE3 | K1, K3, K5 | MRv2 | control final20 running | `2405076` | K1 retained for same-K checkpoint comparison |
-| Qwen3-32B | EAGLE3 Thinking | K1, K3, K5 | MRv2 | final20 running | `2405078` | K1 promoted; all Thinking smokes complete |
+| Qwen3-32B | EAGLE3 Thinking | K1, K2, K3, K5 | MRv2 | K1 final20 running; K2/K3 smoke pending | `2405078` | K2 fills the fixed-policy gap; K3 gets a matched rerun |
+| Qwen3-32B | EAGLE3 Thinking DynamicSD | K0-K3 | MRv2 | seed smoke pending | pending | final20 requires matched vLLM 0.25.1 calibration |
 | Qwen3-32B | DFlash | K3, K5 | MRv2 | planned | pending | exact head; draft FlashAttention |
 | Qwen3-32B | draft/PARD | draft K1/K5; PARD K5/K16 | MRv1 | planned | pending | shared AMD 0.6B drafter; sequential/parallel split |
 | Qwen3-32B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
@@ -183,6 +206,7 @@ before pushing and again from the clean cluster checkout or nightly container:
 ```bash
 uv run --locked pytest -q \
   tests/experiments/test_vllm_0251_drafter_matrix.py \
+  tests/experiments/test_vllm_0251_dynamic_schedule.py \
   tests/experiments/test_vllm_0251_drafter_results.py \
   tests/experiments/test_vllm_0251_drafter_staging.py \
   tests/experiments/test_vllm_0251_suffix_dependency.py

@@ -30,6 +30,7 @@ the default NeMo-RL port path that passed their smoke gates.
 | `baseline_mrv1` | MRv1 | yes | yes | yes | matched control for MRv1 methods |
 | `eagle3_k1/k3/k5` | MRv2 | yes | yes | yes | exact target-specific EAGLE3 head |
 | `eagle3_thinking_k1/k2/k3/k5` | MRv2 | alias | yes | yes | reasoning-distribution EAGLE3 head |
+| `eagle3_thinking_dynamic_k123` | MRv2 | no | yes | no | validated K0-K3 DynamicSD schedule artifact |
 | `dflash_k3/k5` | MRv2 | yes | yes | no | exact DFlash head, draft `FLASH_ATTN` |
 | `draft_k1/k5` | MRv1 | yes | yes | yes | sequential `amd/PARD-Qwen3-0.6B` |
 | `pard_k5/k16` | MRv1 | yes | yes | yes | parallel `amd/PARD-Qwen3-0.6B` |
@@ -116,6 +117,24 @@ its exact baseline and candidate complete without config fallback, missing
 metrics, or early exit.
 Lyris jobs use account `coreai_dlalgo_llm`, partition `gb200`, four GPUs per
 node, `--segment=<nodes>`, no `--gres`, and no dependency/singleton constraint.
+
+DynamicSD requires an explicit versioned schedule artifact. The checked-in
+`calibration/qwen32_thinking_k123_seed.json` uses the historical vLLM 0.24
+profile only as a smoke seed: K3 for scheduler batch sizes 1-127 and K1 for
+128-256. It may run only `smoke2` or `smoke5`; `final20` rejects it until a
+matched vLLM 0.25.1 calibration replaces the seed status. Dynamic runs apply
+the source-guarded EAGLE3 CUDA Graph fix through a run-scoped post-sync hook;
+fixed-K runs do not load that patch. Final20 additionally requires the exact
+reviewed schedule artifact SHA-256 in the empty-by-default final allowlist, so
+editing metadata cannot promote this seed.
+
+```bash
+bash "$SCRIPT" submit \
+  --model qwen32 --variant eagle3_thinking_dynamic_k123 \
+  --phase smoke2 --cluster lyris \
+  --dynamic-schedule \
+  experiments/vllm_0251_drafter_matrix/calibration/qwen32_thinking_k123_seed.json
+```
 
 Submission requires a clean checkout whose exact HEAD is present on the same
 branch under remote `fork`, plus recursively initialized submodules. The CLI

@@ -88,7 +88,7 @@ steps 2-20 required for a final claim:
 - policy-training and policy/reference-logprob time
 - generation-time ratio of E2E time
 - SpecDec acceptance rate and mean accepted length
-- selected-K counts and fraction for K0, K1, K2, and K3 in DynamicSD
+- aggregate draft count and mean scheduled K from native counters in DynamicSD
 - resolved CUDA Graph mode, coverage, and eager-fallback count
 - reward, generation length, KL error, and loss as correctness diagnostics
 
@@ -104,14 +104,18 @@ reconstructed from averaged token counts and times.
    Lyris, and recursively initializes all submodules.
 4. `show` and scheduler `test-only` validate the exact four-node topology.
 5. Smoke2 reaches two completed steps and emits timing, throughput,
-   acceptance, selected-K, and CUDA Graph telemetry.
-6. Smoke5 confirms at least one expected DynamicSD K transition when the
-   observed active batch sizes cross schedule ranges.
+   acceptance, aggregate draft, and CUDA Graph telemetry.
+6. Exact selected-K counts are not native vLLM 0.25.1 telemetry. Smoke5 may
+   check aggregate mean scheduled K, but a transition claim requires separate
+   scheduler-side instrumentation and is not inferred from acceptance position
+   counters.
 7. Final20 completes every step from 2 through 20 without runtime fallback,
    missing required metrics, or a changed controlled setting.
 
 The final comparison remains preliminary until the baseline and every
-reported candidate have the complete matched window.
+reported candidate have the complete matched window. DynamicSD final20 is
+also blocked until a matched vLLM 0.25.1 schedule artifact hash is explicitly
+allowlisted after calibration review.
 
 ## Deliverables
 

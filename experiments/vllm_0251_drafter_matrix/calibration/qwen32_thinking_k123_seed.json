@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "calibration_status": "seed",
+  "model_key": "qwen32",
+  "target_revision": "9216db5781bf21249d130ec9da846c4624c16137",
+  "drafter_revision": "a1403e07b73a66fc9ef561463631c31864616933",
+  "source_runtime_vllm": "0.24.0",
+  "target_runtime_vllm": "0.25.1",
+  "target_cuda_graph_mode": "FULL_AND_PIECEWISE",
+  "profile_sha256": "efcd9ad3f74ecb260ab7a580a062e56266b67196fd16d90b792c4176a25e5f69",
+  "ranges": [
+    [1, 127, 3],
+    [128, 256, 1]
+  ]
+}

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -94,6 +95,36 @@ class CheckpointSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class DynamicRange:
+    """One inclusive scheduler batch-size range and its speculative K."""
+
+    start_batch: int
+    end_batch: int
+    k: int
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicSchedule:
+    """Validated DynamicSD schedule with immutable calibration provenance."""
+
+    source_path: Path
+    source_sha256: str
+    calibration_status: str
+    model_key: str
+    target_revision: str
+    drafter_revision: str
+    source_runtime_vllm: str
+    target_runtime_vllm: str
+    target_cuda_graph_mode: str
+    profile_sha256: str
+    ranges: tuple[DynamicRange, ...]
+
+    def vllm_ranges(self) -> tuple[tuple[int, int, int], ...]:
+        """Return the exact range representation consumed by vLLM."""
+        return tuple((item.start_batch, item.end_batch, item.k) for item in self.ranges)
+
+
+@dataclass(frozen=True, slots=True)
 class VariantSpec:
     """An official vLLM speculative-decoding configuration."""
 
@@ -108,6 +139,7 @@ class VariantSpec:
     parallel_drafting: bool = False
     suffix_tree_depth: int | None = None
     ngram_size: int | None = None
+    dynamic_schedule_required: bool = False
 
     def checkpoint_for(self, model_key: str) -> CheckpointSpec | None:
         """Return the exact drafter checkpoint for a compatible model."""
@@ -127,6 +159,7 @@ class ResolvedRun:
     variant: VariantSpec
     draft_checkpoint: CheckpointSpec | None
     hydra_overrides: tuple[str, ...]
+    dynamic_schedule: DynamicSchedule | None = None
 
     def command_parts(self) -> tuple[str, ...]:
         """Return the deterministic training command as an argument tuple."""
@@ -171,6 +204,7 @@ class CheckoutState:
 
 
 G_MODEL_KEYS = frozenset(("qwen30", "qwen32", "qwen235"))
+G_APPROVED_DYNAMIC_FINAL_SCHEDULE_SHA256: frozenset[str] = frozenset()
 
 G_RECIPES = (
     RecipeSpec(
@@ -359,6 +393,16 @@ G_VARIANTS = (
         uses_draft_model=True,
     ),
     VariantSpec(
+        key="eagle3_thinking_dynamic_k123",
+        method="eagle3",
+        runner="mrv2",
+        num_speculative_tokens=3,
+        compatible_models=frozenset(("qwen32",)),
+        checkpoints=G_EAGLE3_THINKING_CHECKPOINTS,
+        uses_draft_model=True,
+        dynamic_schedule_required=True,
+    ),
+    VariantSpec(
         key="dflash_k3",
         method="dflash",
         runner="mrv2",
@@ -443,6 +487,100 @@ G_VARIANTS = (
 )
 
 
+def load_dynamic_schedule(path: Path) -> DynamicSchedule:
+    """Load and validate a versioned DynamicSD calibration artifact."""
+    source_path = path.resolve()
+    content = source_path.read_bytes()
+    payload = json.loads(content)
+    if not isinstance(payload, dict):
+        raise ValueError("DynamicSD schedule must be a JSON object")
+
+    required_keys = {
+        "schema_version",
+        "calibration_status",
+        "model_key",
+        "target_revision",
+        "drafter_revision",
+        "source_runtime_vllm",
+        "target_runtime_vllm",
+        "target_cuda_graph_mode",
+        "profile_sha256",
+        "ranges",
+    }
+    if set(payload) != required_keys:
+        missing = sorted(required_keys - set(payload))
+        unknown = sorted(set(payload) - required_keys)
+        raise ValueError(
+            f"DynamicSD schedule schema mismatch: missing={missing}, unknown={unknown}"
+        )
+    if (
+        not isinstance(payload["schema_version"], int)
+        or isinstance(payload["schema_version"], bool)
+        or payload["schema_version"] != 1
+    ):
+        raise ValueError("DynamicSD schedule schema_version must be 1")
+
+    string_keys = required_keys - {"schema_version", "ranges"}
+    for key in string_keys:
+        if not isinstance(payload[key], str) or not payload[key]:
+            raise ValueError(f"DynamicSD schedule {key} must be a non-empty string")
+    if payload["calibration_status"] not in {"seed", "calibrated"}:
+        raise ValueError("DynamicSD schedule calibration_status is unsupported")
+    for key in ("target_revision", "drafter_revision"):
+        value = payload[key]
+        if (
+            not isinstance(value, str)
+            or re.fullmatch(r"[0-9a-f]{40}", value) is None
+        ):
+            raise ValueError(f"DynamicSD schedule {key} must be a full hex digest")
+    profile_sha256 = payload["profile_sha256"]
+    if (
+        not isinstance(profile_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", profile_sha256) is None
+    ):
+        raise ValueError(
+            "DynamicSD schedule profile_sha256 must be a full SHA-256 digest"
+        )
+
+    raw_ranges = payload["ranges"]
+    if not isinstance(raw_ranges, list) or not raw_ranges:
+        raise ValueError("DynamicSD schedule ranges must be a non-empty list")
+    ranges: list[DynamicRange] = []
+    for raw_range in raw_ranges:
+        if not isinstance(raw_range, list) or len(raw_range) != 3:
+            raise ValueError("Each DynamicSD range must be [start_batch, end_batch, K]")
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) for value in raw_range
+        ):
+            raise ValueError("DynamicSD range values must be integers")
+        start_batch, end_batch, k = raw_range
+        if start_batch < 1 or end_batch < start_batch:
+            raise ValueError("DynamicSD batch ranges must be positive and ordered")
+        if not 0 <= k <= 3:
+            raise ValueError("DynamicSD K must be between 0 and 3")
+        if ranges and start_batch != ranges[-1].end_batch + 1:
+            raise ValueError("DynamicSD ranges must be contiguous and non-overlapping")
+        ranges.append(DynamicRange(start_batch, end_batch, k))
+    if ranges[0].start_batch != 1:
+        raise ValueError("DynamicSD ranges must start at batch size 1")
+    if max(item.k for item in ranges) != 3:
+        raise ValueError("DynamicSD schedule maximum K must equal 3")
+
+    return DynamicSchedule(
+        source_path=source_path,
+        source_sha256=hashlib.sha256(content).hexdigest(),
+        calibration_status=str(payload["calibration_status"]),
+        model_key=str(payload["model_key"]),
+        target_revision=str(payload["target_revision"]),
+        drafter_revision=str(payload["drafter_revision"]),
+        source_runtime_vllm=str(payload["source_runtime_vllm"]),
+        target_runtime_vllm=str(payload["target_runtime_vllm"]),
+        target_cuda_graph_mode=str(payload["target_cuda_graph_mode"]),
+        profile_sha256=str(payload["profile_sha256"]),
+        ranges=tuple(ranges),
+    )
+
+
 def _find_recipe(key: str) -> RecipeSpec:
     """Return a controlled recipe by key."""
     for recipe in G_RECIPES:
@@ -479,6 +617,7 @@ def _speculative_overrides(
     variant: VariantSpec,
     draft_checkpoint: CheckpointSpec | None,
     hf_home: Path,
+    dynamic_schedule: DynamicSchedule | None,
 ) -> tuple[str, ...]:
     """Return official vLLM speculative settings for a validated variant."""
     if variant.method is None:
@@ -489,6 +628,13 @@ def _speculative_overrides(
     if variant.num_speculative_tokens is not None:
         overrides.append(
             f"{prefix}.num_speculative_tokens={variant.num_speculative_tokens}"
+        )
+    if dynamic_schedule is not None:
+        serialized_ranges = json.dumps(
+            dynamic_schedule.vllm_ranges(), separators=(",", ":")
+        )
+        overrides.append(
+            f"{prefix}.num_speculative_tokens_per_batch_size={serialized_ranges}"
         )
     if variant.uses_draft_model:
         if draft_checkpoint is None:
@@ -520,7 +666,12 @@ def _speculative_overrides(
 
 
 def resolve_run(
-    model_key: str, variant_key: str, phase: str, cluster: str
+    model_key: str,
+    variant_key: str,
+    phase: str,
+    cluster: str,
+    *,
+    dynamic_schedule: DynamicSchedule | None = None,
 ) -> ResolvedRun:
     """Resolve an allowed model, variant, phase, and cluster into a run record."""
     recipe = _find_recipe(model_key)
@@ -537,6 +688,52 @@ def resolve_run(
             f"Variant '{variant_key}' has no exact checkpoint for model "
             f"'{model_key}'"
         )
+    if variant.dynamic_schedule_required and dynamic_schedule is None:
+        raise ValueError(f"Variant '{variant_key}' requires a DynamicSD schedule")
+    if not variant.dynamic_schedule_required and dynamic_schedule is not None:
+        raise ValueError(
+            f"Variant '{variant_key}' does not accept a DynamicSD schedule"
+        )
+    if dynamic_schedule is not None:
+        if dynamic_schedule.model_key != model_key:
+            raise ValueError("DynamicSD schedule model does not match the run")
+        if dynamic_schedule.target_revision != recipe.target_revision:
+            raise ValueError(
+                "DynamicSD schedule target revision does not match the run"
+            )
+        if (
+            draft_checkpoint is None
+            or dynamic_schedule.drafter_revision != draft_checkpoint.revision
+        ):
+            raise ValueError(
+                "DynamicSD schedule drafter revision does not match the run"
+            )
+        if dynamic_schedule.target_runtime_vllm != "0.25.1":
+            raise ValueError("DynamicSD schedule target vLLM must be 0.25.1")
+        if dynamic_schedule.target_cuda_graph_mode != "FULL_AND_PIECEWISE":
+            raise ValueError(
+                "DynamicSD schedule target CUDA Graph mode must be FULL_AND_PIECEWISE"
+            )
+        if (
+            phase_spec.key == "final20"
+            and dynamic_schedule.calibration_status != "calibrated"
+        ):
+            raise ValueError("DynamicSD final20 requires a calibrated schedule")
+        if (
+            phase_spec.key == "final20"
+            and dynamic_schedule.source_runtime_vllm != "0.25.1"
+        ):
+            raise ValueError(
+                "DynamicSD final20 source profile must use vLLM 0.25.1"
+            )
+        if (
+            phase_spec.key == "final20"
+            and dynamic_schedule.source_sha256
+            not in G_APPROVED_DYNAMIC_FINAL_SCHEDULE_SHA256
+        ):
+            raise ValueError(
+                "DynamicSD final20 requires an approved calibration artifact"
+            )
 
     base_overrides = (
         f"grpo.max_num_steps={phase_spec.max_steps}",
@@ -553,11 +750,13 @@ def resolve_run(
         phase=phase_spec,
         variant=variant,
         draft_checkpoint=draft_checkpoint,
+        dynamic_schedule=dynamic_schedule,
         hydra_overrides=base_overrides
         + _speculative_overrides(
             variant,
             draft_checkpoint,
             cluster_spec.hf_home,
+            dynamic_schedule,
         ),
     )
 
@@ -629,6 +828,17 @@ def build_runtime_command(
         "NRL_FORCE_REBUILD_VENVS=true",
         f"TRITON_CACHE_DIR=/tmp/nemorl-v0251-triton-{safe_tag}",
         f"TORCHINDUCTOR_CACHE_DIR=/tmp/nemorl-v0251-inductor-{safe_tag}",
+        *(
+            (
+                "NRL_VENV_POST_SYNC_SCRIPT="
+                f"{repo_dir / 'experiments/vllm_0251_eagle3_perfcfg/' / 'apply_vllm0251_dynamic_sd_cg_fix.py'}",
+                "NRL_VENV_POST_SYNC_TARGET="
+                "nemo_rl.models.generation.vllm.vllm_worker."
+                "VllmGenerationWorker",
+            )
+            if run.dynamic_schedule is not None
+            else ()
+        ),
         *(("NRL_DISABLE_VLLM_PORT_OVERRIDE=1",) if run.recipe.key == "qwen235" else ()),
         "PYTHONFAULTHANDLER=1",
         "RAY_DEDUP_LOGS=0",
@@ -953,6 +1163,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--container", type=Path, default=G_DEFAULT_CONTAINER)
     parser.add_argument("--mounts", default="/lustre:/lustre")
     parser.add_argument("--run-tag")
+    parser.add_argument("--dynamic-schedule", type=Path)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -973,6 +1184,7 @@ def _show_record(
     mounts: str,
 ) -> dict[str, Any]:
     scheduler = build_scheduler_command(run, repo_dir, run_dir, "test-only")
+    dynamic_schedule = run.dynamic_schedule
     return {
         "run_tag": run_tag,
         "model": run.recipe.key,
@@ -987,6 +1199,20 @@ def _show_record(
         "draft_revision": (
             run.draft_checkpoint.revision if run.draft_checkpoint is not None else None
         ),
+        "dynamic_schedule": (
+            {
+                "source_path": str(dynamic_schedule.source_path),
+                "source_sha256": dynamic_schedule.source_sha256,
+                "calibration_status": dynamic_schedule.calibration_status,
+                "source_runtime_vllm": dynamic_schedule.source_runtime_vllm,
+                "target_runtime_vllm": dynamic_schedule.target_runtime_vllm,
+                "target_cuda_graph_mode": dynamic_schedule.target_cuda_graph_mode,
+                "profile_sha256": dynamic_schedule.profile_sha256,
+                "ranges": dynamic_schedule.vllm_ranges(),
+            }
+            if dynamic_schedule is not None
+            else None
+        ),
         "container": str(container),
         "mounts": mounts,
         "run_dir": str(run_dir),
@@ -998,7 +1224,18 @@ def _show_record(
 def main(argv: Sequence[str] | None = None) -> None:
     """Resolve, preflight, or submit one matrix entry."""
     args = build_parser().parse_args(argv)
-    run = resolve_run(args.model, args.variant, args.phase, args.cluster)
+    dynamic_schedule = (
+        load_dynamic_schedule(args.dynamic_schedule)
+        if args.dynamic_schedule is not None
+        else None
+    )
+    run = resolve_run(
+        args.model,
+        args.variant,
+        args.phase,
+        args.cluster,
+        dynamic_schedule=dynamic_schedule,
+    )
     run_tag = args.run_tag or _run_tag(args.model, args.variant, args.phase)
     repo_dir = args.repo_dir.resolve()
     run_dir = validate_run_destination(
