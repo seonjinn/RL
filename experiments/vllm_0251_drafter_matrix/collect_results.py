@@ -21,54 +21,82 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
+
+
+RunStatus = Literal["completed", "failed", "unsupported"]
+
+
+@dataclass(frozen=True)
+class RunMetadata:
+    """Provenance and controlled settings shared by every row of a run."""
+
+    model: str
+    recipe: str
+    variant: str
+    vllm_version: str
+    container: str
+    cluster: str
+    temperature: float
+    top_p: float
+    max_osl: int
+    requested_cuda_graph_mode: str
+    resolved_cuda_graph_mode: str
+    cuda_graph_coverage: float | None
+    job_id: str
+    log_path: str
+    wandb_url: str
+    runner: str
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, object], location: str) -> RunMetadata:
+        """Parse run provenance from one JSON record."""
+        return cls(
+            model=_required_string(data, "model", location),
+            recipe=_required_string(data, "recipe", location),
+            variant=_required_string(data, "variant", location),
+            vllm_version=_required_string(data, "vllm_version", location),
+            container=_required_string(data, "container", location),
+            cluster=_required_string(data, "cluster", location),
+            temperature=_required_nonnegative_float(data, "temperature", location),
+            top_p=_required_nonnegative_float(data, "top_p", location),
+            max_osl=_required_positive_int(data, "max_osl", location),
+            requested_cuda_graph_mode=_required_string(
+                data, "requested_cuda_graph_mode", location
+            ),
+            resolved_cuda_graph_mode=_required_string(
+                data, "resolved_cuda_graph_mode", location
+            ),
+            cuda_graph_coverage=_optional_ratio(data, "cuda_graph_coverage", location),
+            job_id=_required_string(data, "job_id", location),
+            log_path=_required_string(data, "log_path", location),
+            wandb_url=_required_string(data, "wandb_url", location),
+            runner=_required_string(data, "runner", location),
+        )
 
 
 @dataclass(frozen=True)
 class StepRow:
+    """Validated metrics for one completed training step."""
+
     step: int
     e2e_time_s: float
     generation_time_s: float
     policy_time_s: float
     logprob_time_s: float
-    throughput_tps: float
+    e2e_throughput_tps_per_gpu: float
+    generation_throughput_tps_per_gpu: float
     generation_ratio: float
-    acceptance_rate: float
-    mean_accepted_length: float
-    model: str
-    recipe: str
-    variant: str
-    vllm_version: str
-    container: str
-    cluster: str
-    temperature: float
-    top_p: float
-    max_osl: int
-    cuda_graph_mode: str
-    job_id: str
-    log_path: str
-    wandb_url: str
-    runner: str
-    graph_mode: str
+    acceptance_rate: float | None
+    mean_accepted_length: float | None
+    metadata: RunMetadata
 
 
 @dataclass(frozen=True)
 class RunSummary:
-    model: str
-    recipe: str
-    variant: str
-    vllm_version: str
-    container: str
-    cluster: str
-    temperature: float
-    top_p: float
-    max_osl: int
-    cuda_graph_mode: str
-    job_id: str
-    log_path: str
-    wandb_url: str
-    runner: str
-    graph_mode: str
+    """Validated averages for a completed run over a requested step window."""
+
+    metadata: RunMetadata
     step_start: int
     step_end: int
     step_count: int
@@ -77,13 +105,47 @@ class RunSummary:
     generation_time_s: float
     policy_time_s: float
     logprob_time_s: float
-    throughput_tps: float
+    e2e_throughput_tps_per_gpu: float
+    generation_throughput_tps_per_gpu: float
     generation_ratio: float
-    acceptance_rate: float
-    mean_accepted_length: float
+    acceptance_rate: float | None
+    mean_accepted_length: float | None
     e2e_time_speedup: float | None = None
     generation_time_speedup: float | None = None
-    throughput_speedup: float | None = None
+    e2e_throughput_speedup: float | None = None
+    generation_throughput_speedup: float | None = None
+
+
+@dataclass(frozen=True)
+class ReportRow:
+    """A completed summary or an explicit failed or unsupported run outcome."""
+
+    metadata: RunMetadata
+    status: RunStatus
+    reason: str | None = None
+    summary: RunSummary | None = None
+
+    def __post_init__(self) -> None:
+        """Require metrics only for completed rows and reasons otherwise."""
+        if self.status == "completed":
+            if self.summary is None:
+                raise ValueError("Completed report rows require a run summary")
+            if self.reason is not None:
+                raise ValueError("Completed report rows cannot have a reason")
+            if self.summary.metadata != self.metadata:
+                raise ValueError("Completed report row metadata must match its summary")
+            return
+        if self.summary is not None:
+            raise ValueError(
+                "Failed and unsupported report rows cannot have a run summary"
+            )
+        if not self.reason:
+            raise ValueError("Failed and unsupported report rows require a reason")
+
+    @classmethod
+    def completed(cls, summary: RunSummary) -> ReportRow:
+        """Create a completed report row from a validated summary."""
+        return cls(metadata=summary.metadata, status="completed", summary=summary)
 
 
 class IncompleteWindowError(ValueError):
@@ -94,7 +156,7 @@ class NoMatchingBaselineError(ValueError):
     """Raised when no baseline has the candidate's exact controlled identity."""
 
 
-_IDENTITY_FIELDS = (
+_IDENTITY_FIELD_NAMES = (
     "model",
     "recipe",
     "vllm_version",
@@ -103,25 +165,8 @@ _IDENTITY_FIELDS = (
     "temperature",
     "top_p",
     "max_osl",
-    "cuda_graph_mode",
-)
-
-_RUN_METADATA_FIELDS = (
-    "model",
-    "recipe",
-    "variant",
-    "vllm_version",
-    "container",
-    "cluster",
-    "temperature",
-    "top_p",
-    "max_osl",
-    "cuda_graph_mode",
-    "job_id",
-    "log_path",
-    "wandb_url",
-    "runner",
-    "graph_mode",
+    "requested_cuda_graph_mode",
+    "resolved_cuda_graph_mode",
 )
 
 _CSV_FIELDS = (
@@ -134,12 +179,15 @@ _CSV_FIELDS = (
     "temperature",
     "top_p",
     "max_osl",
-    "cuda_graph_mode",
+    "requested_cuda_graph_mode",
+    "resolved_cuda_graph_mode",
+    "cuda_graph_coverage",
     "job_id",
     "log_path",
     "wandb_url",
     "runner",
-    "graph_mode",
+    "status",
+    "reason",
     "step_start",
     "step_end",
     "step_count",
@@ -148,69 +196,97 @@ _CSV_FIELDS = (
     "generation_time_s",
     "policy_time_s",
     "logprob_time_s",
-    "throughput_tps",
+    "e2e_throughput_tps_per_gpu",
+    "generation_throughput_tps_per_gpu",
     "generation_ratio",
     "acceptance_rate",
     "mean_accepted_length",
     "e2e_time_speedup",
     "generation_time_speedup",
-    "throughput_speedup",
+    "e2e_throughput_speedup",
+    "generation_throughput_speedup",
 )
 
 
 def load_steps(path: Path) -> tuple[StepRow, ...]:
-    rows: list[StepRow] = []
-    with path.open(encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            try:
-                decoded = json.loads(line)
-            except json.JSONDecodeError as error:
-                raise ValueError(f"{path}:{line_number}: invalid JSON") from error
-            if not isinstance(decoded, dict):
-                raise ValueError(f"{path}:{line_number}: expected a JSON object")
-            rows.append(
-                parse_step(cast(Mapping[str, object], decoded), path, line_number)
+    """Load completed step records from a JSONL file."""
+    return tuple(
+        parse_step(data, path, line_number)
+        for line_number, data in _load_json_records(path)
+    )
+
+
+def load_report_row(path: Path, allow_partial: bool = False) -> ReportRow:
+    """Load a completed, failed, or unsupported run record from JSONL."""
+    records = _load_json_records(path)
+    if not records:
+        raise ValueError(f"{path}: no JSON records found")
+    first_line_number, first_data = records[0]
+    location = _location(path, first_line_number)
+    status = _status(first_data, location)
+    if status == "completed":
+        if any(
+            _status(data, _location(path, line_number)) != "completed"
+            for line_number, data in records
+        ):
+            raise ValueError(f"{path}: completed step files cannot mix run statuses")
+        return ReportRow.completed(
+            summarize_steps(
+                (parse_step(data, path, line_number) for line_number, data in records),
+                allow_partial=allow_partial,
             )
-    return tuple(rows)
+        )
+    if len(records) != 1:
+        raise ValueError(
+            f"{path}: {status} records must contain exactly one JSON object"
+        )
+    return ReportRow(
+        metadata=RunMetadata.from_mapping(first_data, location),
+        status=status,
+        reason=_required_string(first_data, "reason", location),
+    )
 
 
 def parse_step(
     data: Mapping[str, object], path: Path | None = None, line_number: int | None = None
 ) -> StepRow:
+    """Parse and validate one completed JSONL step record."""
     location = _location(path, line_number)
+    if _status(data, location) != "completed":
+        raise ValueError(f"{location}: only completed records contain step metrics")
+    metadata = RunMetadata.from_mapping(data, location)
+    mean_accepted_length = _optional_nonnegative_float(
+        data, "mean_accepted_length", location
+    )
+    if mean_accepted_length == 0.0 and metadata.variant != "baseline":
+        raise ValueError(
+            f"{location}: mean_accepted_length must be positive for non-baseline runs"
+        )
     return StepRow(
-        step=_required_int(data, "step", location),
-        e2e_time_s=_required_float(data, "e2e_time_s", location),
-        generation_time_s=_required_float(data, "generation_time_s", location),
-        policy_time_s=_required_float(data, "policy_time_s", location),
-        logprob_time_s=_required_float(data, "logprob_time_s", location),
-        throughput_tps=_required_float(data, "throughput_tps", location),
-        generation_ratio=_required_float(data, "generation_ratio", location),
-        acceptance_rate=_required_float(data, "acceptance_rate", location),
-        mean_accepted_length=_required_float(data, "mean_accepted_length", location),
-        model=_required_string(data, "model", location),
-        recipe=_required_string(data, "recipe", location),
-        variant=_required_string(data, "variant", location),
-        vllm_version=_required_string(data, "vllm_version", location),
-        container=_required_string(data, "container", location),
-        cluster=_required_string(data, "cluster", location),
-        temperature=_required_float(data, "temperature", location),
-        top_p=_required_float(data, "top_p", location),
-        max_osl=_required_int(data, "max_osl", location),
-        cuda_graph_mode=_required_string(data, "cuda_graph_mode", location),
-        job_id=_required_string(data, "job_id", location),
-        log_path=_required_string(data, "log_path", location),
-        wandb_url=_required_string(data, "wandb_url", location),
-        runner=_required_string(data, "runner", location),
-        graph_mode=_required_string(data, "graph_mode", location),
+        step=_required_positive_int(data, "step", location),
+        e2e_time_s=_required_nonnegative_float(data, "e2e_time_s", location),
+        generation_time_s=_required_nonnegative_float(
+            data, "generation_time_s", location
+        ),
+        policy_time_s=_required_nonnegative_float(data, "policy_time_s", location),
+        logprob_time_s=_required_nonnegative_float(data, "logprob_time_s", location),
+        e2e_throughput_tps_per_gpu=_required_nonnegative_float(
+            data, "e2e_throughput_tps_per_gpu", location
+        ),
+        generation_throughput_tps_per_gpu=_required_nonnegative_float(
+            data, "generation_throughput_tps_per_gpu", location
+        ),
+        generation_ratio=_required_ratio(data, "generation_ratio", location),
+        acceptance_rate=_optional_ratio(data, "acceptance_rate", location),
+        mean_accepted_length=mean_accepted_length,
+        metadata=metadata,
     )
 
 
 def summarize_steps(
     rows: Iterable[StepRow], start: int = 2, end: int = 20, allow_partial: bool = False
 ) -> RunSummary:
+    """Average validated step metrics over the requested inclusive step window."""
     if start > end:
         raise ValueError(f"Invalid step window: {start} > {end}")
 
@@ -232,43 +308,36 @@ def summarize_steps(
         raise IncompleteWindowError(f"No steps found in requested window {start}-{end}")
 
     ordered_rows = tuple(selected[step] for step in sorted(selected))
-    _validate_constant_run_fields(ordered_rows)
+    _validate_constant_run_metadata(ordered_rows)
     reference = ordered_rows[0]
-    count = len(ordered_rows)
     return RunSummary(
-        model=reference.model,
-        recipe=reference.recipe,
-        variant=reference.variant,
-        vllm_version=reference.vllm_version,
-        container=reference.container,
-        cluster=reference.cluster,
-        temperature=reference.temperature,
-        top_p=reference.top_p,
-        max_osl=reference.max_osl,
-        cuda_graph_mode=reference.cuda_graph_mode,
-        job_id=reference.job_id,
-        log_path=reference.log_path,
-        wandb_url=reference.wandb_url,
-        runner=reference.runner,
-        graph_mode=reference.graph_mode,
+        metadata=reference.metadata,
         step_start=start,
         step_end=end,
-        step_count=count,
+        step_count=len(ordered_rows),
         is_partial=bool(missing_steps),
         e2e_time_s=_mean(row.e2e_time_s for row in ordered_rows),
         generation_time_s=_mean(row.generation_time_s for row in ordered_rows),
         policy_time_s=_mean(row.policy_time_s for row in ordered_rows),
         logprob_time_s=_mean(row.logprob_time_s for row in ordered_rows),
-        throughput_tps=_mean(row.throughput_tps for row in ordered_rows),
+        e2e_throughput_tps_per_gpu=_mean(
+            row.e2e_throughput_tps_per_gpu for row in ordered_rows
+        ),
+        generation_throughput_tps_per_gpu=_mean(
+            row.generation_throughput_tps_per_gpu for row in ordered_rows
+        ),
         generation_ratio=_mean(row.generation_ratio for row in ordered_rows),
-        acceptance_rate=_mean(row.acceptance_rate for row in ordered_rows),
-        mean_accepted_length=_mean(row.mean_accepted_length for row in ordered_rows),
+        acceptance_rate=_optional_mean(row.acceptance_rate for row in ordered_rows),
+        mean_accepted_length=_optional_mean(
+            row.mean_accepted_length for row in ordered_rows
+        ),
     )
 
 
 def match_baseline(
     candidate: RunSummary, baselines: Sequence[RunSummary]
 ) -> RunSummary:
+    """Attach speedups after finding one exact controlled baseline."""
     exact_matches = [
         baseline for baseline in baselines if _same_identity(candidate, baseline)
     ]
@@ -292,30 +361,47 @@ def match_baseline(
         generation_time_speedup=_speedup(
             baseline.generation_time_s, candidate.generation_time_s, "generation_time_s"
         ),
-        throughput_speedup=_speedup(
-            candidate.throughput_tps, baseline.throughput_tps, "throughput_tps"
+        e2e_throughput_speedup=_speedup(
+            candidate.e2e_throughput_tps_per_gpu,
+            baseline.e2e_throughput_tps_per_gpu,
+            "e2e_throughput_tps_per_gpu",
+        ),
+        generation_throughput_speedup=_speedup(
+            candidate.generation_throughput_tps_per_gpu,
+            baseline.generation_throughput_tps_per_gpu,
+            "generation_throughput_tps_per_gpu",
         ),
     )
 
 
 def render_reports(
-    summaries: Sequence[RunSummary], csv_path: Path, markdown_path: Path
+    rows: Sequence[ReportRow | RunSummary], csv_path: Path, markdown_path: Path
 ) -> None:
-    ordered = tuple(sorted(summaries, key=_sort_key))
+    """Write deterministic CSV and Markdown reports for every run outcome."""
+    report_rows = tuple(
+        row if isinstance(row, ReportRow) else ReportRow.completed(row) for row in rows
+    )
+    ordered = tuple(sorted(report_rows, key=_sort_key))
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     markdown_path.parent.mkdir(parents=True, exist_ok=True)
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=_CSV_FIELDS, lineterminator="\n")
         writer.writeheader()
-        for summary in ordered:
+        for row in ordered:
             writer.writerow(
-                {field: _format_value(getattr(summary, field)) for field in _CSV_FIELDS}
+                dict(
+                    zip(
+                        _CSV_FIELDS,
+                        (_format_value(value) for value in _report_values(row)),
+                    )
+                )
             )
 
     markdown_path.write_text(_render_markdown(ordered), encoding="utf-8")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Collect drafter-matrix JSONL step files into CSV and Markdown reports."""
     parser = argparse.ArgumentParser(
         description="Collect vLLM drafter-matrix step metrics."
     )
@@ -335,17 +421,42 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    summaries = [
-        summarize_steps(load_steps(path), allow_partial=args.allow_partial)
-        for path in args.inputs
+    report_rows = [
+        load_report_row(path, allow_partial=args.allow_partial) for path in args.inputs
     ]
-    baselines = [summary for summary in summaries if summary.variant == "baseline"]
-    matched_summaries = [
-        summary if summary.variant == "baseline" else match_baseline(summary, baselines)
-        for summary in summaries
+    baselines = [
+        row.summary
+        for row in report_rows
+        if row.status == "completed"
+        and row.summary is not None
+        and row.metadata.variant == "baseline"
     ]
-    render_reports(matched_summaries, args.csv, args.markdown)
+    matched_rows = [
+        ReportRow.completed(match_baseline(row.summary, baselines))
+        if row.status == "completed"
+        and row.summary is not None
+        and row.metadata.variant != "baseline"
+        else row
+        for row in report_rows
+    ]
+    render_reports(matched_rows, args.csv, args.markdown)
     return 0
+
+
+def _load_json_records(path: Path) -> tuple[tuple[int, Mapping[str, object]], ...]:
+    records: list[tuple[int, Mapping[str, object]]] = []
+    with path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                decoded = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError(f"{path}:{line_number}: invalid JSON") from error
+            if not isinstance(decoded, dict):
+                raise ValueError(f"{path}:{line_number}: expected a JSON object")
+            records.append((line_number, cast(Mapping[str, object], decoded)))
+    return tuple(records)
 
 
 def _location(path: Path | None, line_number: int | None) -> str:
@@ -356,6 +467,15 @@ def _location(path: Path | None, line_number: int | None) -> str:
     return f"{path}:{line_number}"
 
 
+def _status(data: Mapping[str, object], location: str) -> RunStatus:
+    value = data.get("status", "completed")
+    if value not in ("completed", "failed", "unsupported"):
+        raise ValueError(
+            f"{location}: status must be completed, failed, or unsupported"
+        )
+    return cast(RunStatus, value)
+
+
 def _required_string(data: Mapping[str, object], field: str, location: str) -> str:
     value = data.get(field)
     if not isinstance(value, str) or not value:
@@ -363,39 +483,84 @@ def _required_string(data: Mapping[str, object], field: str, location: str) -> s
     return value
 
 
-def _required_float(data: Mapping[str, object], field: str, location: str) -> float:
-    value = data.get(field)
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ValueError(f"{location}: {field} must be a number")
-    return float(value)
-
-
-def _required_int(data: Mapping[str, object], field: str, location: str) -> int:
-    value = data.get(field)
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{location}: {field} must be an integer")
+def _required_nonnegative_float(
+    data: Mapping[str, object], field: str, location: str
+) -> float:
+    value = _number(data, field, location)
+    if value < 0.0:
+        raise ValueError(f"{location}: {field} must be nonnegative")
     return value
 
 
-def _validate_constant_run_fields(rows: Sequence[StepRow]) -> None:
-    reference = rows[0]
+def _required_ratio(data: Mapping[str, object], field: str, location: str) -> float:
+    value = _number(data, field, location)
+    if not 0.0 <= value <= 1.0:
+        raise ValueError(f"{location}: {field} must be in [0, 1]")
+    return value
+
+
+def _optional_ratio(
+    data: Mapping[str, object], field: str, location: str
+) -> float | None:
+    if data.get(field) is None:
+        return None
+    return _required_ratio(data, field, location)
+
+
+def _optional_nonnegative_float(
+    data: Mapping[str, object], field: str, location: str
+) -> float | None:
+    if data.get(field) is None:
+        return None
+    value = _number(data, field, location)
+    if value < 0.0:
+        raise ValueError(f"{location}: {field} must be nonnegative")
+    return value
+
+
+def _number(data: Mapping[str, object], field: str, location: str) -> float:
+    value = data.get(field)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(f"{location}: {field} must be a finite number")
+    converted = float(value)
+    if not math.isfinite(converted):
+        raise ValueError(f"{location}: {field} must be a finite number")
+    return converted
+
+
+def _required_positive_int(
+    data: Mapping[str, object], field: str, location: str
+) -> int:
+    value = data.get(field)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{location}: {field} must be a positive integer")
+    return value
+
+
+def _validate_constant_run_metadata(rows: Sequence[StepRow]) -> None:
+    reference = rows[0].metadata
     for row in rows[1:]:
-        changed_fields = [
-            field
-            for field in _RUN_METADATA_FIELDS
-            if getattr(row, field) != getattr(reference, field)
-        ]
-        if changed_fields:
-            raise ValueError(
-                f"Run metadata changed across steps: {', '.join(changed_fields)}"
-            )
+        if row.metadata != reference:
+            raise ValueError("Run metadata changed across steps")
+
+
+def _identity_values(metadata: RunMetadata) -> tuple[object, ...]:
+    return (
+        metadata.model,
+        metadata.recipe,
+        metadata.vllm_version,
+        metadata.container,
+        metadata.cluster,
+        metadata.temperature,
+        metadata.top_p,
+        metadata.max_osl,
+        metadata.requested_cuda_graph_mode,
+        metadata.resolved_cuda_graph_mode,
+    )
 
 
 def _same_identity(candidate: RunSummary, baseline: RunSummary) -> bool:
-    return all(
-        getattr(candidate, field) == getattr(baseline, field)
-        for field in _IDENTITY_FIELDS
-    )
+    return _identity_values(candidate.metadata) == _identity_values(baseline.metadata)
 
 
 def _baseline_mismatch_fields(
@@ -403,14 +568,15 @@ def _baseline_mismatch_fields(
 ) -> list[str]:
     if not baselines:
         return []
-    mismatches: list[str] = []
-    for field in _IDENTITY_FIELDS:
-        if all(
-            getattr(candidate, field) != getattr(baseline, field)
-            for baseline in baselines
-        ):
-            mismatches.append(field)
-    return mismatches
+    candidate_values = _identity_values(candidate.metadata)
+    baseline_values = tuple(
+        _identity_values(baseline.metadata) for baseline in baselines
+    )
+    return [
+        field
+        for index, field in enumerate(_IDENTITY_FIELD_NAMES)
+        if all(candidate_values[index] != values[index] for values in baseline_values)
+    ]
 
 
 def _speedup(numerator: float, denominator: float, metric: str) -> float:
@@ -426,14 +592,55 @@ def _mean(values: Iterable[float]) -> float:
     return math.fsum(collected) / len(collected)
 
 
-def _sort_key(summary: RunSummary) -> tuple[str, ...]:
+def _optional_mean(values: Iterable[float | None]) -> float | None:
+    collected = tuple(value for value in values if value is not None)
+    return _mean(collected) if collected else None
+
+
+def _report_values(row: ReportRow) -> tuple[object, ...]:
+    metadata = row.metadata
+    summary = row.summary
     return (
-        summary.model,
-        summary.recipe,
-        summary.cluster,
-        summary.variant,
-        summary.job_id,
+        metadata.model,
+        metadata.recipe,
+        metadata.variant,
+        metadata.vllm_version,
+        metadata.container,
+        metadata.cluster,
+        metadata.temperature,
+        metadata.top_p,
+        metadata.max_osl,
+        metadata.requested_cuda_graph_mode,
+        metadata.resolved_cuda_graph_mode,
+        metadata.cuda_graph_coverage,
+        metadata.job_id,
+        metadata.log_path,
+        metadata.wandb_url,
+        metadata.runner,
+        row.status,
+        row.reason,
+        summary.step_start if summary else None,
+        summary.step_end if summary else None,
+        summary.step_count if summary else None,
+        summary.is_partial if summary else None,
+        summary.e2e_time_s if summary else None,
+        summary.generation_time_s if summary else None,
+        summary.policy_time_s if summary else None,
+        summary.logprob_time_s if summary else None,
+        summary.e2e_throughput_tps_per_gpu if summary else None,
+        summary.generation_throughput_tps_per_gpu if summary else None,
+        summary.generation_ratio if summary else None,
+        summary.acceptance_rate if summary else None,
+        summary.mean_accepted_length if summary else None,
+        summary.e2e_time_speedup if summary else None,
+        summary.generation_time_speedup if summary else None,
+        summary.e2e_throughput_speedup if summary else None,
+        summary.generation_throughput_speedup if summary else None,
     )
+
+
+def _sort_key(row: ReportRow) -> tuple[str, ...]:
+    return tuple(_format_value(value) for value in _report_values(row))
 
 
 def _format_value(value: object) -> str:
@@ -446,38 +653,20 @@ def _format_value(value: object) -> str:
     return str(value)
 
 
-def _render_markdown(summaries: Sequence[RunSummary]) -> str:
-    header = (
-        "| model | recipe | variant | cluster | job_id | runner | graph_mode | "
-        "e2e_time_s | generation_time_s | throughput_tps | e2e_time_speedup | "
-        "generation_time_speedup | throughput_speedup | partial | log_path | wandb_url |\n"
-    )
-    separator = (
-        "| --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | "
-        "---: | ---: | --- | --- | --- |\n"
-    )
-    rows = [header, separator]
-    for summary in summaries:
+def _render_markdown(rows: Sequence[ReportRow]) -> str:
+    header = f"| {' | '.join(_CSV_FIELDS)} |\n"
+    separator = f"| {' | '.join('---' for _ in _CSV_FIELDS)} |\n"
+    rendered_rows = [header, separator]
+    for row in rows:
         values = (
-            summary.model,
-            summary.recipe,
-            summary.variant,
-            summary.cluster,
-            summary.job_id,
-            summary.runner,
-            summary.graph_mode,
-            _format_value(summary.e2e_time_s),
-            _format_value(summary.generation_time_s),
-            _format_value(summary.throughput_tps),
-            _format_value(summary.e2e_time_speedup),
-            _format_value(summary.generation_time_speedup),
-            _format_value(summary.throughput_speedup),
-            _format_value(summary.is_partial),
-            summary.log_path,
-            summary.wandb_url,
+            _escape_markdown(_format_value(value)) for value in _report_values(row)
         )
-        rows.append(f"| {' | '.join(values)} |\n")
-    return "".join(rows)
+        rendered_rows.append(f"| {' | '.join(values)} |\n")
+    return "".join(rendered_rows)
+
+
+def _escape_markdown(value: str) -> str:
+    return value.replace("|", "\\|").replace("\n", "<br>")
 
 
 if __name__ == "__main__":
