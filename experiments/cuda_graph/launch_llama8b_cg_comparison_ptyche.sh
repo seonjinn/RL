@@ -9,6 +9,7 @@
 
 set -euo pipefail
 
+MODEL=${MODEL:-llama31}
 CONDITION=${CONDITION:?Set CONDITION to nocg, current-attn, current-attn-mlp, pr5672-attn, or pr5672-attn-mlp.}
 STEPS=${STEPS:-20}
 RUN_TAG=${RUN_TAG:-${CONDITION}-steps${STEPS}}
@@ -25,26 +26,47 @@ if [[ ! -s "${HF_HOME}/token" ]]; then
   exit 2
 fi
 
+case "${MODEL}" in
+  llama31)
+    NOCG_RECIPE=grpo-llama3.1-8b-instruct-1n4g-nocg.yaml
+    CURRENT_ATTN_RECIPE=grpo-llama3.1-8b-instruct-1n4g-cg.yaml
+    CURRENT_ATTN_MLP_RECIPE=grpo-llama3.1-8b-instruct-1n4g-cg-attn-mlp-w3.yaml
+    PR5672_ATTN_RECIPE=grpo-llama3.1-8b-instruct-1n4g-cg-pr5672-attn.yaml
+    PR5672_ATTN_MLP_RECIPE=grpo-llama3.1-8b-instruct-1n4g-cg-pr5672-attn-mlp.yaml
+    ;;
+  qwen3)
+    NOCG_RECIPE=grpo-qwen3-8b-1n4g-nocg.yaml
+    CURRENT_ATTN_RECIPE=grpo-qwen3-8b-1n4g-cg-attn-w3.yaml
+    CURRENT_ATTN_MLP_RECIPE=grpo-qwen3-8b-1n4g-cg-attn-mlp-w3.yaml
+    PR5672_ATTN_RECIPE=grpo-qwen3-8b-1n4g-cg-pr5672-attn.yaml
+    PR5672_ATTN_MLP_RECIPE=grpo-qwen3-8b-1n4g-cg-pr5672-attn-mlp.yaml
+    ;;
+  *)
+    echo "Unknown MODEL: ${MODEL}; expected llama31 or qwen3" >&2
+    exit 2
+    ;;
+esac
+
 case "${CONDITION}" in
   nocg)
     WORKTREE=${BASELINE_WORKTREE}
-    RECIPE=grpo-llama3.1-8b-instruct-1n4g-nocg.yaml
+    RECIPE=${NOCG_RECIPE}
     ;;
   current-attn)
     WORKTREE=${BASELINE_WORKTREE}
-    RECIPE=grpo-llama3.1-8b-instruct-1n4g-cg.yaml
+    RECIPE=${CURRENT_ATTN_RECIPE}
     ;;
   current-attn-mlp)
     WORKTREE=${BASELINE_WORKTREE}
-    RECIPE=grpo-llama3.1-8b-instruct-1n4g-cg-attn-mlp-w3.yaml
+    RECIPE=${CURRENT_ATTN_MLP_RECIPE}
     ;;
   pr5672-attn)
     WORKTREE=${PR5672_WORKTREE}
-    RECIPE=grpo-llama3.1-8b-instruct-1n4g-cg-pr5672-attn.yaml
+    RECIPE=${PR5672_ATTN_RECIPE}
     ;;
   pr5672-attn-mlp)
     WORKTREE=${PR5672_WORKTREE}
-    RECIPE=grpo-llama3.1-8b-instruct-1n4g-cg-pr5672-attn-mlp.yaml
+    RECIPE=${PR5672_ATTN_MLP_RECIPE}
     ;;
   *)
     echo "Unknown CONDITION: ${CONDITION}" >&2
@@ -53,11 +75,11 @@ case "${CONDITION}" in
 esac
 
 CONFIG=${WORKTREE}/examples/configs/recipes/llm/performance/${RECIPE}
-LOG_DIR=logs/llama8b-pr5672-vs-pr5783/${RUN_TAG}
+LOG_DIR=logs/${MODEL}8b-pr5672-vs-pr5783/${RUN_TAG}
 
 mkdir -p "${PR5672_WORKTREE}/experiments/cuda_graph/logs"
 
-echo "condition=${CONDITION} steps=${STEPS} worktree=${WORKTREE} recipe=${RECIPE}"
+echo "model=${MODEL} condition=${CONDITION} steps=${STEPS} worktree=${WORKTREE} recipe=${RECIPE}"
 git -C "${WORKTREE}" rev-parse HEAD
 git -C "${WORKTREE}/3rdparty/Megatron-LM-workspace/Megatron-LM" rev-parse HEAD
 
