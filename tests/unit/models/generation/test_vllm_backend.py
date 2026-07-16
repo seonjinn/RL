@@ -18,6 +18,8 @@
 
 import contextlib
 import json
+import sys
+import types
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -189,6 +191,71 @@ def test_read_mtp_layer_weights_from_checkpoint_filters_and_reads(tmp_path):
     }
     assert torch.equal(by_name["model.layers.2.mlp.up_proj.weight"], mtp_block)
     assert torch.equal(by_name["model.layers.2.shared_head.head.weight"], mtp_head)
+
+
+@pytest.mark.vllm
+def test_read_mtp_layer_weights_supports_nemotron_explicit_namespace(
+    tmp_path, monkeypatch
+):
+    """Nemotron-H stores its physical MTP pattern under ``mtp.layers.*``."""
+    monkeypatch.setitem(sys.modules, "vllm", types.ModuleType("vllm"))
+    from nemo_rl.models.generation.vllm.vllm_backend import (
+        _read_mtp_layer_weights_from_checkpoint,
+    )
+
+    model_dir = tmp_path / "ckpt"
+    mtp_attention = torch.randn(4, 4)
+    mtp_expert = torch.randn(4, 4)
+    target_layer = torch.randn(4, 4)
+    _write_sharded_checkpoint(
+        model_dir,
+        {
+            "model-00001-of-00002.safetensors": {
+                "mtp.layers.0.mixer.q_proj.weight": mtp_attention,
+                "backbone.layers.0.mixer.q_proj.weight": target_layer,
+            },
+            "model-00002-of-00002.safetensors": {
+                "mtp.layers.1.mixer.experts.0.up_proj.weight": mtp_expert,
+            },
+        },
+    )
+
+    weights = _read_mtp_layer_weights_from_checkpoint(str(model_dir), {88})
+
+    by_name = dict(weights)
+    assert set(by_name) == {
+        "mtp.layers.0.mixer.q_proj.weight",
+        "mtp.layers.1.mixer.experts.0.up_proj.weight",
+    }
+    assert torch.equal(by_name["mtp.layers.0.mixer.q_proj.weight"], mtp_attention)
+    assert torch.equal(
+        by_name["mtp.layers.1.mixer.experts.0.up_proj.weight"], mtp_expert
+    )
+
+
+@pytest.mark.vllm
+def test_resolve_local_checkpoint_path_accepts_huggingface_repo_id(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setitem(sys.modules, "vllm", types.ModuleType("vllm"))
+    from nemo_rl.models.generation.vllm.vllm_backend import (
+        _resolve_local_checkpoint_path,
+    )
+
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    snapshot_download = MagicMock(return_value=str(snapshot))
+    monkeypatch.setattr(
+        "nemo_rl.models.generation.vllm.vllm_backend.snapshot_download",
+        snapshot_download,
+    )
+
+    resolved = _resolve_local_checkpoint_path("nvidia/example-model")
+
+    assert resolved == str(snapshot)
+    snapshot_download.assert_called_once_with(
+        repo_id="nvidia/example-model", local_files_only=True
+    )
 
 
 @pytest.mark.vllm

@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import gc
+import os
 import re
 import traceback
 from typing import Any
 
 import torch
 import zmq
+from huggingface_hub import snapshot_download
 
 from nemo_rl.models.policy.utils import (
     IPCProtocol,
@@ -48,14 +50,23 @@ def fix_gemma3_vision_weight_name(key: str) -> str:
     )
 
 
+def _resolve_local_checkpoint_path(model_path: str) -> str:
+    """Resolve a local checkpoint directory or a cached Hugging Face repo ID."""
+    if os.path.isdir(model_path):
+        return model_path
+
+    return snapshot_download(repo_id=model_path, local_files_only=True)
+
+
 def _read_mtp_layer_weights_from_checkpoint(
     model_path: str, mtp_layer_indices: set[int]
 ) -> list[tuple[str, torch.Tensor]]:
     """Read only the MTP draft layer weights from a sharded HF safetensors checkpoint.
 
-    Uses the checkpoint's ``model.safetensors.index.json`` to open only the
-    shards that contain the requested transformer layer indices, so the
-    multi-terabyte base-model weights are never read from disk.
+    Uses the checkpoint's ``model.safetensors.index.json`` to open only shards
+    containing either appended transformer MTP layers or the explicit
+    ``mtp.*`` namespace used by Nemotron-H checkpoints. Base-model-only shards
+    are never read from disk.
 
     Args:
         model_path: Path to the HF checkpoint directory.
@@ -66,8 +77,6 @@ def _read_mtp_layer_weights_from_checkpoint(
         tensors on CPU.
     """
     import json
-    import os
-
     from safetensors import safe_open
 
     index_path = os.path.join(model_path, "model.safetensors.index.json")
@@ -78,7 +87,11 @@ def _read_mtp_layer_weights_from_checkpoint(
     shard_to_names: dict[str, list[str]] = {}
     for name, shard in weight_map.items():
         match = layer_re.search(name)
-        if match is not None and int(match.group(1)) in mtp_layer_indices:
+        is_appended_mtp_layer = (
+            match is not None and int(match.group(1)) in mtp_layer_indices
+        )
+        is_explicit_mtp_weight = name.startswith("mtp.")
+        if is_appended_mtp_layer or is_explicit_mtp_weight:
             shard_to_names.setdefault(shard, []).append(name)
 
     weights: list[tuple[str, torch.Tensor]] = []
@@ -279,8 +292,8 @@ class VllmInternalWorkerExtension:
         ``load_format="dummy"``: the main model receives real weights via refit,
         but the MTP draft layer is not covered by refit (the trainer runs with
         ``mtp_num_layers=0``), so its weights must come from the checkpoint. Only
-        the MTP layer(s) are read, avoiding a full base-model load (~1.3 TB for
-        DeepSeek-V3) on every inference replica.
+        the MTP layer(s) are read, avoiding a full base-model load on every
+        inference replica.
 
         Args:
             model_path: Path to the HF checkpoint directory.
@@ -294,6 +307,7 @@ class VllmInternalWorkerExtension:
             print("[mtp] Drafter unavailable; cannot load MTP weights from disk.")
             return False
 
+        local_model_path = _resolve_local_checkpoint_path(model_path)
         predictor = draft_model.model
         mtp_layer_indices = set(
             range(
@@ -301,12 +315,14 @@ class VllmInternalWorkerExtension:
                 predictor.mtp_start_layer_idx + predictor.num_mtp_layers,
             )
         )
-        weights = _read_mtp_layer_weights_from_checkpoint(model_path, mtp_layer_indices)
+        weights = _read_mtp_layer_weights_from_checkpoint(
+            local_model_path, mtp_layer_indices
+        )
         if not weights:
             raise ValueError(
                 f"No MTP layer weights for layers {sorted(mtp_layer_indices)} "
-                f"found in checkpoint at {model_path}. The checkpoint must "
-                f"include MTP layer weights to run deepseek_mtp speculative decoding."
+                f"found in checkpoint at {local_model_path}. The checkpoint must "
+                "include MTP layer weights to run native MTP speculative decoding."
             )
 
         self._load_draft_weights(weights)
@@ -325,7 +341,7 @@ class VllmInternalWorkerExtension:
             process_weights_after_loading(draft_model, draft_model_config, self.device)
         print(
             f"[mtp] Loaded MTP draft weights for layers "
-            f"{sorted(mtp_layer_indices)} from {model_path}"
+            f"{sorted(mtp_layer_indices)} from {local_model_path}"
         )
         return True
 
