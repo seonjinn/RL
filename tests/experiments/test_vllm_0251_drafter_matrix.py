@@ -67,6 +67,19 @@ def test_baseline_uses_full_cuda_graphs_and_preserves_recipe_controls(
     assert not any("tensor_parallel_size" in item for item in run.hydra_overrides)
 
 
+def test_baselines_select_fair_runner_environments() -> None:
+    baseline_mrv2 = resolve_run("qwen30", "baseline", "smoke2", "lyris")
+    baseline_mrv1 = resolve_run("qwen30", "baseline_mrv1", "smoke2", "lyris")
+
+    assert baseline_mrv2.variant.runner == "mrv2"
+    assert "VLLM_USE_V2_MODEL_RUNNER=1" in baseline_mrv2.command_parts()
+    assert baseline_mrv1.variant.runner == "mrv1"
+    assert "VLLM_USE_V2_MODEL_RUNNER=0" in baseline_mrv1.command_parts()
+    assert not any(
+        "speculative_config" in item for item in baseline_mrv1.hydra_overrides
+    )
+
+
 def test_pard_selects_mrv1_and_parallel_drafting() -> None:
     run = resolve_run("qwen32", "pard_k5", "smoke2", "lyris")
 
@@ -156,7 +169,7 @@ def test_suffix_and_ngram_variants_use_their_native_controls() -> None:
     [
         (
             "qwen30",
-            "inference-optimization/Qwen3-30B-A3B-speculator.dflash",
+            "RedHatAI/Qwen3-30B-A3B-speculator.dflash",
             "edcff83783141eb9383e2bd6c33610d9a3104288",
         ),
         (
@@ -191,6 +204,34 @@ def test_dflash_uses_exact_checkpoint_and_draft_flash_attention(
         and "speculative_config" not in item
         for item in run.hydra_overrides
     )
+
+
+@pytest.mark.parametrize(
+    ("model_key", "variant_key"),
+    [
+        ("qwen30", "eagle3_k5"),
+        ("qwen32", "dflash_k5"),
+        ("qwen235", "draft_k5"),
+    ],
+)
+def test_draft_model_override_uses_cluster_immutable_snapshot(
+    model_key: str, variant_key: str
+) -> None:
+    run = resolve_run(model_key, variant_key, "smoke2", "lyris")
+
+    assert run.draft_checkpoint is not None
+    assert run.cluster.hf_home == Path(
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home"
+    )
+    snapshot = run.draft_checkpoint.snapshot_path(run.cluster.hf_home)
+    assert (
+        "++policy.generation.vllm_kwargs.speculative_config.model="
+        f"{snapshot}"
+    ) in run.hydra_overrides
+    assert (
+        "++policy.generation.vllm_kwargs.speculative_config.model="
+        f"{run.draft_checkpoint.repo_id}"
+    ) not in run.hydra_overrides
 
 
 @pytest.mark.parametrize("variant_key", ["dflash_k3", "dflash_k5"])
@@ -277,6 +318,12 @@ def test_command_exposes_cluster_gpu_count_to_ray_sub() -> None:
     run = resolve_run("qwen30", "baseline", "smoke2", "lyris")
 
     assert "GPUS_PER_NODE=4" in run.command_parts()
+
+
+def test_sbatch_exports_cluster_gpu_count_to_ray_sub() -> None:
+    run = resolve_run("qwen30", "baseline", "smoke2", "lyris")
+
+    assert "--export=ALL,GPUS_PER_NODE=4" in run.sbatch_parts()
 
 
 @pytest.mark.parametrize(

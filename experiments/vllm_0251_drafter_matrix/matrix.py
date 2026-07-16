@@ -39,6 +39,7 @@ class ClusterSpec:
     account: str
     partition: str
     gpus_per_node: int
+    hf_home: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +124,7 @@ class ResolvedRun:
         return (
             "sbatch",
             "--dependency=",
+            f"--export=ALL,GPUS_PER_NODE={self.cluster.gpus_per_node}",
             f"--account={self.cluster.account}",
             f"--partition={self.cluster.partition}",
             f"--nodes={self.recipe.nodes}",
@@ -167,6 +169,7 @@ G_CLUSTERS = (
         account="coreai_dlalgo_llm",
         partition="gb200",
         gpus_per_node=4,
+        hf_home=Path("/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home"),
     ),
 )
 
@@ -215,7 +218,7 @@ G_PARD_CHECKPOINTS = (
 G_DFLASH_CHECKPOINTS = (
     CheckpointSpec(
         model_key="qwen30",
-        repo_id="inference-optimization/Qwen3-30B-A3B-speculator.dflash",
+        repo_id="RedHatAI/Qwen3-30B-A3B-speculator.dflash",
         revision="edcff83783141eb9383e2bd6c33610d9a3104288",
     ),
     CheckpointSpec(
@@ -230,6 +233,13 @@ G_VARIANTS = (
         key="baseline",
         method=None,
         runner="mrv2",
+        num_speculative_tokens=None,
+        compatible_models=G_MODEL_KEYS,
+    ),
+    VariantSpec(
+        key="baseline_mrv1",
+        method=None,
+        runner="mrv1",
         num_speculative_tokens=None,
         compatible_models=G_MODEL_KEYS,
     ),
@@ -378,7 +388,9 @@ def _find_variant(key: str) -> VariantSpec:
 
 
 def _speculative_overrides(
-    variant: VariantSpec, draft_checkpoint: CheckpointSpec | None
+    variant: VariantSpec,
+    draft_checkpoint: CheckpointSpec | None,
+    hf_home: Path,
 ) -> tuple[str, ...]:
     """Return official vLLM speculative settings for a validated variant."""
     if variant.method is None:
@@ -395,7 +407,7 @@ def _speculative_overrides(
             raise ValueError(f"Variant '{variant.key}' requires a draft checkpoint")
         overrides.extend(
             (
-                f"{prefix}.model={draft_checkpoint.repo_id}",
+                f"{prefix}.model={draft_checkpoint.snapshot_path(hf_home)}",
                 f"{prefix}.draft_tensor_parallel_size=1",
             )
         )
@@ -454,5 +466,9 @@ def resolve_run(
         variant=variant,
         draft_checkpoint=draft_checkpoint,
         hydra_overrides=base_overrides
-        + _speculative_overrides(variant, draft_checkpoint),
+        + _speculative_overrides(
+            variant,
+            draft_checkpoint,
+            cluster_spec.hf_home,
+        ),
     )
