@@ -124,9 +124,9 @@ instrumentation and are not inferred from accepted-token position counters.
 
 | Model | Variant | Phase | Job/W&B | State |
 |---|---|---|---|---|
-| Qwen3-32B | Thinking EAGLE3 K2 | smoke2 | `2406250` / [W&B](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/e9pterbv) | running after 5-minute gate |
-| Qwen3-32B | Thinking EAGLE3 K3 | smoke2 | `2406253` / [W&B](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/7hwdrdoe) | running after 5-minute gate |
-| Qwen3-32B | Thinking DynamicSD K0-K3 seed | smoke2 | `2406255` / [W&B](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/krwc1su5) | running after 5-minute gate |
+| Qwen3-32B | Thinking EAGLE3 K2 | smoke2 | `2406250` / [W&B](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/e9pterbv) | completed (`0:0`) |
+| Qwen3-32B | Thinking EAGLE3 K3 | smoke2 | `2406253` / [W&B](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/7hwdrdoe) | completed (`0:0`) |
+| Qwen3-32B | Thinking DynamicSD K0-K3 seed | smoke2 | `2406255` / [W&B](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/krwc1su5) | completed (`0:0`) |
 
 All three submissions passed their exact `sbatch --test-only` shape before
 submission and started on separate four-node segments. At 5 minutes 11 seconds,
@@ -135,7 +135,30 @@ and EAGLE3 CUDA Graph capture reached. DynamicSD logged successful application
 of the vLLM 0.25.1 patch on all four nodes and resolved the exact seed ranges.
 No traceback, OOM, NCCL watchdog, or CUDA Graph downgrade was observed. The
 repeated `git diff main` message is W&B source-diff metadata noise and did not
-stop initialization. Step metrics were not yet available at this checkpoint.
+stop initialization. All three jobs completed both steps in about 15 minutes.
+The allocator emitted `CUDA Error: invalid argument` during process teardown,
+after metrics and the early-stop message; SLURM still recorded successful
+`0:0` exits.
+
+### K2 And DynamicSD Preliminary Step-2 Gate
+
+The exact runner-matched baseline is job `2402487`. These are single step-2
+observations, so they validate direction only and are not final20 claims.
+Throughput values are logged per-GPU values; time speedup is baseline time
+divided by candidate time, and throughput speedup is candidate throughput
+divided by baseline throughput.
+
+| Variant | E2E time | E2E speedup | Gen time | Gen speedup | E2E tok/s/GPU | E2E throughput | Gen tok/s/GPU | Gen throughput | Acceptance | Mean accepted |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| baseline | 247.93s | 1.000x | 100.05s | 1.000x | 1692.53 | 1.000x | 4194.35 | 1.000x | n/a | n/a |
+| Thinking EAGLE3 K2 | 248.78s | 0.997x | 101.74s | 0.983x | 1683.02 | 0.994x | 4115.47 | 0.981x | 70.7% | 2.41 |
+| Thinking EAGLE3 K3 | 243.64s | 1.018x | 97.60s | 1.025x | 1720.37 | 1.016x | 4294.77 | 1.024x | 62.6% | 2.88 |
+| Thinking DynamicSD K0-K3 seed | 237.29s | 1.045x | 90.50s | 1.105x | 1767.04 | 1.044x | 4633.11 | 1.105x | 78.6% | 1.82 |
+
+The DynamicSD row is promising but provisional: its aggregate acceptance
+mixes K3 and K1 intervals, and vLLM does not expose a selected-K histogram.
+The current seed remains ineligible for final20 until a matched vLLM 0.25.1
+NeMo-RL calibration is produced and allowlisted.
 
 ## Qwen3-235B Port Failure
 
