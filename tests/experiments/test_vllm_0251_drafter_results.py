@@ -118,6 +118,52 @@ def test_match_baseline_computes_directional_time_and_throughput_speedups() -> N
     assert matched.generation_throughput_speedup == 1.5
 
 
+@pytest.mark.parametrize("partial_side", ("candidate", "baseline"))
+def test_match_baseline_rejects_partial_step_windows(partial_side: str) -> None:
+    baseline = summarize_steps(load_steps(FIXTURE_PATH))
+    candidate = replace(
+        baseline,
+        metadata=replace(baseline.metadata, variant="eagle3_k3", runner="mrv2"),
+    )
+    partial = replace(
+        candidate if partial_side == "candidate" else baseline,
+        is_partial=True,
+        step_count=18,
+    )
+
+    with pytest.raises(IncompleteWindowError, match="steps 2-20"):
+        match_baseline(
+            partial if partial_side == "candidate" else candidate,
+            [partial if partial_side == "baseline" else baseline],
+        )
+
+
+@pytest.mark.parametrize(
+    ("summary_side", "field"),
+    (
+        ("candidate", "e2e_time_s"),
+        ("candidate", "generation_time_s"),
+        ("baseline", "e2e_throughput_tps_per_gpu"),
+        ("baseline", "generation_throughput_tps_per_gpu"),
+    ),
+)
+def test_match_baseline_rejects_nonpositive_direct_summary_metrics(
+    summary_side: str, field: str
+) -> None:
+    baseline = summarize_steps(load_steps(FIXTURE_PATH))
+    candidate = replace(
+        baseline,
+        metadata=replace(baseline.metadata, variant="eagle3_k3", runner="mrv2"),
+    )
+    if summary_side == "candidate":
+        candidate = replace(candidate, **{field: -1.0})
+    else:
+        baseline = replace(baseline, **{field: -1.0})
+
+    with pytest.raises(ValueError, match=field):
+        match_baseline(candidate, [baseline])
+
+
 @pytest.mark.parametrize("variant", ("baseline", "baseline_mrv1"))
 @pytest.mark.parametrize(
     ("acceptance_rate", "mean_accepted_length"), ((None, None), (0.0, 0.0))

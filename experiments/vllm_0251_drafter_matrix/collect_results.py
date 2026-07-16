@@ -341,6 +341,7 @@ def match_baseline(
     candidate: RunSummary, baselines: Sequence[RunSummary]
 ) -> RunSummary:
     """Attach speedups after finding one exact controlled baseline."""
+    _require_final_window(candidate)
     exact_matches = [
         baseline for baseline in baselines if _same_identity(candidate, baseline)
     ]
@@ -356,6 +357,7 @@ def match_baseline(
         raise NoMatchingBaselineError("Multiple exact baseline matches for candidate")
 
     baseline = exact_matches[0]
+    _require_final_window(baseline)
     return replace(
         candidate,
         e2e_time_speedup=_speedup(
@@ -432,12 +434,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         for row in report_rows
         if row.status == "completed"
         and row.summary is not None
+        and not row.summary.is_partial
         and row.metadata.variant in _BASELINE_VARIANTS
     ]
     matched_rows = [
         ReportRow.completed(match_baseline(row.summary, baselines))
         if row.status == "completed"
         and row.summary is not None
+        and not row.summary.is_partial
         and row.metadata.variant not in _BASELINE_VARIANTS
         else row
         for row in report_rows
@@ -593,9 +597,27 @@ def _baseline_mismatch_fields(
 
 
 def _speedup(numerator: float, denominator: float, metric: str) -> float:
-    if denominator == 0.0:
-        raise ValueError(f"Cannot compute speedup for {metric}: denominator is zero")
+    if not math.isfinite(numerator) or numerator <= 0.0:
+        raise ValueError(
+            f"Cannot compute speedup for {metric}: numerator must be positive and finite"
+        )
+    if not math.isfinite(denominator) or denominator <= 0.0:
+        raise ValueError(
+            f"Cannot compute speedup for {metric}: denominator must be positive and finite"
+        )
     return numerator / denominator
+
+
+def _require_final_window(summary: RunSummary) -> None:
+    if (
+        summary.is_partial
+        or summary.step_start != 2
+        or summary.step_end != 20
+        or summary.step_count != 19
+    ):
+        raise IncompleteWindowError(
+            "Baseline speedups require the complete steps 2-20 window"
+        )
 
 
 def _mean(values: Iterable[float]) -> float:
