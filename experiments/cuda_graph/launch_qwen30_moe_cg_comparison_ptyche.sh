@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+
+# Submit one independently schedulable Qwen3-30B-A3B CUDA Graph condition.
+# Example:
+#   CONDITION=current-attn STEPS=20 \
+#     ./experiments/cuda_graph/launch_qwen30_moe_cg_comparison_ptyche.sh
+
+set -euo pipefail
+
+CONDITION=${CONDITION:?Set CONDITION to <implementation>-<nocg|attn|moe-router|attn-moe-router>.}
+STEPS=${STEPS:-20}
+RUN_TAG=${RUN_TAG:-${CONDITION}-steps${STEPS}}
+CURRENT_WORKTREE=${CURRENT_WORKTREE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr5783-ptyche-runtime-20260716}
+PR5672_WORKTREE=${PR5672_WORKTREE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr5672-vs-pr5783-ptyche-20260716}
+PR4359_WORKTREE=${PR4359_WORKTREE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr4359-vs-pr5783-ptyche-20260716}
+CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/nemo_rl_nightly_20260715.sqsh}
+HF_HOME=${HF_HOME:-/lustre/fsw/coreai_dlalgo_llm/users/sna/hf}
+ACCOUNT=${ACCOUNT:-coreai_dlalgo_llm}
+PARTITION=${PARTITION:-batch}
+
+case "${CONDITION}" in
+  current-* )
+    IMPLEMENTATION=current
+    WORKTREE=${CURRENT_WORKTREE}
+    ;;
+  pr5672-* )
+    IMPLEMENTATION=pr5672
+    WORKTREE=${PR5672_WORKTREE}
+    ;;
+  pr4359-* )
+    IMPLEMENTATION=pr4359
+    WORKTREE=${PR4359_WORKTREE}
+    ;;
+  *)
+    echo "Unknown CONDITION: ${CONDITION}" >&2
+    exit 2
+    ;;
+esac
+
+case "${CONDITION#*-}" in
+  nocg)
+    RECIPE=grpo-qwen3-30ba3b-4n4g-nocg-w3.yaml
+    ;;
+  attn)
+    RECIPE=grpo-qwen3-30ba3b-4n4g-cg-attn-w3.yaml
+    ;;
+  moe-router)
+    RECIPE=grpo-qwen3-30ba3b-4n4g-cg-moe-router-w3.yaml
+    ;;
+  attn-moe-router)
+    RECIPE=grpo-qwen3-30ba3b-4n4g-cg-attn-moe-router-w3.yaml
+    ;;
+  *)
+    echo "Unknown CUDA Graph scope in CONDITION: ${CONDITION}" >&2
+    exit 2
+    ;;
+esac
+
+if [[ ! -s "${HF_HOME}/token" ]]; then
+  echo "Missing Hugging Face token at ${HF_HOME}/token" >&2
+  exit 2
+fi
+
+if [[ ! -f "${WORKTREE}/ray.sub" ]]; then
+  echo "Missing worktree or ray.sub: ${WORKTREE}" >&2
+  exit 2
+fi
+
+LOG_BASE="${WORKTREE}/experiments/cuda_graph/logs"
+CONFIG="${WORKTREE}/examples/configs/recipes/llm/performance/${RECIPE}"
+CHECKPOINT_DIR="/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/checkpoints/qwen3-30b-a3b-${IMPLEMENTATION}-20260716"
+
+mkdir -p "${LOG_BASE}" "${CHECKPOINT_DIR}"
+
+echo "condition=${CONDITION} implementation=${IMPLEMENTATION} steps=${STEPS}"
+echo "worktree=${WORKTREE} recipe=${RECIPE}"
+git -C "${WORKTREE}" rev-parse HEAD
+git -C "${WORKTREE}/3rdparty/Megatron-LM-workspace/Megatron-LM" rev-parse HEAD
+
+read -r -d '' COMMAND <<EOF || true
+cd ${WORKTREE}
+export NRL_IGNORE_VERSION_MISMATCH=1
+export NRL_MEGATRON_CHECKPOINT_DIR=${CHECKPOINT_DIR}
+export PYTHONPATH=${WORKTREE}:${WORKTREE}/3rdparty/Megatron-LM-workspace/Megatron-LM:${WORKTREE}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge:\${PYTHONPATH:-}
+uv run --locked --directory ${WORKTREE} python ${WORKTREE}/examples/run_grpo.py \\
+  --config ${CONFIG} \\
+  grpo.max_num_steps=${STEPS} \\
+  grpo.val_period=10 \\
+  logger.wandb_enabled=false \\
+  logger.tensorboard_enabled=false \\
+  logger.log_dir=logs/qwen30b-a3b-moe-cg/${RUN_TAG} \\
+  logger.wandb.name=${RUN_TAG}
+EOF
+
+COMMAND="${COMMAND}" \
+CONTAINER="${CONTAINER}" \
+HF_HOME="${HF_HOME}" \
+HF_HUB_CACHE="${HF_HOME}/hub" \
+HF_DATASETS_CACHE="${HF_HOME}/datasets" \
+MOUNTS="/lustre:/lustre" \
+GPUS_PER_NODE=4 \
+BASE_LOG_DIR="${LOG_BASE}" \
+sbatch --test-only \
+  --nodes=4 \
+  --exclusive \
+  --account="${ACCOUNT}" \
+  --partition="${PARTITION}" \
+  --time=04:00:00 \
+  --job-name="q30-${CONDITION}" \
+  "${WORKTREE}/ray.sub"
+
+echo "Submission validated. Set SUBMIT=1 to submit this condition."
+if [[ "${SUBMIT:-0}" == "1" ]]; then
+  COMMAND="${COMMAND}" \
+  CONTAINER="${CONTAINER}" \
+  HF_HOME="${HF_HOME}" \
+  HF_HUB_CACHE="${HF_HOME}/hub" \
+  HF_DATASETS_CACHE="${HF_HOME}/datasets" \
+  MOUNTS="/lustre:/lustre" \
+  GPUS_PER_NODE=4 \
+  BASE_LOG_DIR="${LOG_BASE}" \
+  sbatch \
+    --nodes=4 \
+    --exclusive \
+    --account="${ACCOUNT}" \
+    --partition="${PARTITION}" \
+    --time=04:00:00 \
+    --job-name="q30-${CONDITION}" \
+    "${WORKTREE}/ray.sub"
+fi
