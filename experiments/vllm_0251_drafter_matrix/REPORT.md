@@ -68,7 +68,7 @@ baseline time divided by candidate time.
 | Qwen3-30B-A3B | base / Thinking-equivalent | 3 | 148.5s | 1.21x | 43.8s | 1.67x | 64.4% | 2.93 | promote |
 | Qwen3-30B-A3B | base / Thinking-equivalent | 5 | 203.4s | 0.88x | 94.2s | 0.78x | 51.1% | 3.56 | reject |
 | Qwen3-32B | none | - | 247.9s | 1.00x | 100.0s | 1.00x | n/a | n/a | baseline |
-| Qwen3-32B | base | 1 | 256.1s | 0.97x | 109.9s | 0.91x | 69.2% | 1.69 | reject |
+| Qwen3-32B | base | 1 | 256.1s | 0.97x | 109.9s | 0.91x | 69.2% | 1.69 | same-K control |
 | Qwen3-32B | base | 3 | 264.6s | 0.94x | 118.3s | 0.85x | 45.1% | 2.35 | reject |
 | Qwen3-32B | base | 5 | 287.9s | 0.86x | 139.6s | 0.72x | 31.3% | 2.57 | reject |
 | Qwen3-32B | Thinking | 1 | 235.4s | 1.05x | 89.6s | 1.12x | 79.8% | 1.80 | promote |
@@ -94,7 +94,9 @@ All promoted jobs use the same performance recipes and CUDA Graph controls as
 their smoke gates. Final comparisons will average steps 2-20. To avoid a
 duplicate allocation, the first five steps of each final20 run serve as the
 in-place smoke5 gate; the jobs were also monitored for more than five minutes
-without an early runtime error.
+without an early runtime error. Qwen3-32B base K1 is not a performance
+promotion; it is retained solely as the same-K public-checkpoint control for
+Thinking K1.
 
 | Model | Variant | Job | W&B | State at submission |
 |---|---|---:|---|---|
@@ -107,10 +109,12 @@ without an early runtime error.
 ## Qwen3-235B Port Failure
 
 Baseline job `2402495` and base EAGLE3 K1 job `2402497` failed at the same
-vLLM TP=8 engine initialization boundary. Multiple engine processes attempted
-to bind deterministic NeMo-RL override ports `7000` and `7100`, producing
-`torch.distributed.DistNetworkError: EADDRINUSE`. This reproduces without a
-drafter, so it is not evidence against either Qwen3-235B checkpoint.
+vLLM TP=8 engine initialization boundary. In each cross-node RayExecutorV2
+engine, vLLM probed the fixed NeMo-RL `VLLM_PORT` for both its TCPStore and
+remote MessageQueue; the MessageQueue bound it before TCPStore initialization,
+producing `torch.distributed.DistNetworkError: EADDRINUSE` on ports such as
+`7000` and `7100`. This reproduces without a drafter, so it is not evidence
+against either Qwen3-235B checkpoint.
 
 The isolated retry delegates rendezvous allocation to vLLM 0.25.1 by setting
 `NRL_DISABLE_VLLM_PORT_OVERRIDE=1` only for Qwen3-235B. Qwen3-30B and Qwen3-32B
@@ -127,20 +131,20 @@ after real submission.
 
 | Model | Variant family | Candidates | Runner | State | Job/W&B | Reason or gate |
 |---|---|---|---|---|---|---|
-| Qwen3-30B-A3B | baseline | MRv2, MRv1 | mixed | planned | pending | exact controls for both runner families |
-| Qwen3-30B-A3B | EAGLE3 | K1, K3, K5 | MRv2 | planned | pending | exact base-model head |
+| Qwen3-30B-A3B | baseline | MRv2, MRv1 | mixed | final20 running | `2404968` | MRv2 control promoted; MRv1 remains planned |
+| Qwen3-30B-A3B | EAGLE3 | K1, K3, K5 | MRv2 | final20 running | `2405075` | K3 promoted; K1/K3/K5 smoke complete |
 | Qwen3-30B-A3B | DFlash | K3, K5 | MRv2 | planned | pending | exact head; draft FlashAttention |
 | Qwen3-30B-A3B | draft/PARD | draft K1/K5; PARD K5/K16 | MRv1 | planned | pending | shared AMD 0.6B drafter; sequential/parallel split |
 | Qwen3-30B-A3B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
-| Qwen3-32B | baseline | MRv2, MRv1 | mixed | planned | pending | exact controls for both runner families |
-| Qwen3-32B | EAGLE3 | K1, K3, K5 | MRv2 | planned | pending | exact base-model head |
-| Qwen3-32B | EAGLE3 Thinking | K1, K3, K5 | MRv2 | smoke submitted | `2402620/22/24` | exact reasoning-distribution head |
+| Qwen3-32B | baseline | MRv2, MRv1 | mixed | final20 running | `2405077` | MRv2 control promoted; MRv1 remains planned |
+| Qwen3-32B | EAGLE3 | K1, K3, K5 | MRv2 | control final20 running | `2405076` | K1 retained for same-K checkpoint comparison |
+| Qwen3-32B | EAGLE3 Thinking | K1, K3, K5 | MRv2 | final20 running | `2405078` | K1 promoted; all Thinking smokes complete |
 | Qwen3-32B | DFlash | K3, K5 | MRv2 | planned | pending | exact head; draft FlashAttention |
 | Qwen3-32B | draft/PARD | draft K1/K5; PARD K5/K16 | MRv1 | planned | pending | shared AMD 0.6B drafter; sequential/parallel split |
 | Qwen3-32B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
-| Qwen3-235B-A22B | baseline | MRv2, MRv1 | mixed | planned | pending | exact controls for both runner families |
-| Qwen3-235B-A22B | EAGLE3 | K1, K3, K5 | MRv2 | planned | pending | exact NVIDIA head |
-| Qwen3-235B-A22B | EAGLE3 Thinking | K1, K3, K5 | MRv2 | smoke submitted | `2402626/30/32` | exact RedHatAI reasoning-distribution head |
+| Qwen3-235B-A22B | baseline | MRv2, MRv1 | mixed | fixed smoke pending | `2405130` | MRv2 retry delegates rendezvous ports to vLLM |
+| Qwen3-235B-A22B | EAGLE3 | K1, K3, K5 | MRv2 | blocked by baseline gate | `2402497/500/502` | K1 port failure reproduced; K3/K5 cancelled |
+| Qwen3-235B-A22B | EAGLE3 Thinking | K1, K3, K5 | MRv2 | blocked by baseline gate | `2402626/30/32` | cancelled before allocation pending fixed baseline |
 | Qwen3-235B-A22B | DFlash | K3, K5 | MRv2 | unsupported | n/a | no exact public Qwen3-235B DFlash checkpoint |
 | Qwen3-235B-A22B | draft/PARD | draft K1/K5; PARD K5/K16 | MRv1 | planned | pending | shared AMD 0.6B drafter; sequential/parallel split |
 | Qwen3-235B-A22B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
