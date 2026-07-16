@@ -68,6 +68,12 @@ MAX_TOKENS="${MAX_TOKENS:-4096}"
 DYNAMIC_SPEC_JSON="${DYNAMIC_SPEC_JSON:-}"
 SAVE_TOKEN_IDS="${SAVE_TOKEN_IDS:-}"
 
+# replay mode (teacher-forced multi-turn)
+REPLAY_JSONL="${REPLAY_JSONL:-${REMOTE_REPO}/data/openhands_swe_trajectories_16.jsonl}"
+REPLAY_TRAJECTORIES="${REPLAY_TRAJECTORIES:-8}"
+REPLAY_MAX_TURNS="${REPLAY_MAX_TURNS:-20}"
+REPLAY_COPIES="${REPLAY_COPIES:-8}"
+
 # vLLM 0.24: how the drafter samples ("greedy" argmax vs "probabilistic"
 # stochastic sampling with cached draft logits for exact rejection sampling).
 DRAFT_SAMPLE_METHOD="${DRAFT_SAMPLE_METHOD:-greedy}"
@@ -204,6 +210,21 @@ sync_harness
       fi
       mode_args="--mode profile --batch-sizes ${BATCH_SIZES} --osl ${OSL} --repeats ${REPEATS}"
       submit_job "${tag}" "${spec_json}" "${mode_args}"
+    done
+  elif [[ "${MODE}" == "replay" ]]; then
+    mode_args="--mode replay --replay-jsonl ${REPLAY_JSONL} --replay-trajectories ${REPLAY_TRAJECTORIES} --replay-max-turns ${REPLAY_MAX_TURNS} --replay-copies ${REPLAY_COPIES} --per-request-seed"
+    for variant in ${ROLLOUT_VARIANTS}; do
+      case "${variant}" in
+        baseline)
+          submit_job "${MODEL_LABEL}_${BENCH}_replay_baseline_${RUN_TAG_DATE}" "" "${mode_args}" ;;
+        fixed)
+          submit_job "${MODEL_LABEL}_${BENCH}_replay_fixed_k${FIXED_K}${TAG_SUFFIX}_${RUN_TAG_DATE}" "$(spec_json_fixed "${FIXED_K}")" "${mode_args}" ;;
+        suffix)
+          submit_job "${MODEL_LABEL}_${BENCH}_replay_suffix_${RUN_TAG_DATE}" '{"method": "suffix"}' "${mode_args}" ;;
+        ngram)
+          submit_job "${MODEL_LABEL}_${BENCH}_replay_ngram_${RUN_TAG_DATE}" '{"method": "ngram", "num_speculative_tokens": 8, "prompt_lookup_max": 8, "prompt_lookup_min": 5}' "${mode_args}" ;;
+        *) echo "ERROR: unknown replay variant ${variant}" >&2; exit 2 ;;
+      esac
     done
   elif [[ "${MODE}" == "rollout" ]]; then
     mode_args="--mode rollout --num-prompts-per-step ${NUM_PROMPTS_PER_STEP} --num-generations-per-prompt ${NUM_GENERATIONS_PER_PROMPT} --num-steps ${NUM_STEPS} --max-tokens ${MAX_TOKENS} --per-request-seed"
