@@ -879,6 +879,49 @@ class TestLossPostProcessor:
         # Verify SequencePackingLossWrapper was called
         mock_wrapper.assert_called_once()
 
+    @patch(
+        "nemo_rl.models.megatron.train.get_tensor_model_parallel_rank", return_value=0
+    )
+    @patch("nemo_rl.models.megatron.train.get_tensor_model_parallel_group")
+    @patch("nemo_rl.models.megatron.train.get_context_parallel_group")
+    @patch(
+        "nemo_rl.models.megatron.train.get_context_parallel_world_size", return_value=1
+    )
+    @patch("nemo_rl.models.megatron.train.SequencePackingLossWrapper")
+    def test_loss_post_processor_uses_unpadded_loss_metadata_for_static_graph_inputs(
+        self, mock_wrapper, mock_cp_size, mock_cp_grp, mock_tp_grp, mock_tp_rank
+    ):
+        """Loss must not interpret static CUDA-graph cu_seqlens entries as samples."""
+        from nemo_rl.models.megatron.train import LossPostProcessor
+
+        mock_tp_grp.return_value = MagicMock()
+        mock_cp_grp.return_value = MagicMock()
+        graph_cu_seqlens = torch.tensor([0, 8, 16, 16, 16], dtype=torch.int32)
+        loss_cu_seqlens = torch.tensor([0, 5, 10], dtype=torch.int32)
+        loss_cu_seqlens_padded = torch.tensor([0, 8, 16], dtype=torch.int32)
+        packed_seq_params = MagicMock(
+            cu_seqlens_q=graph_cu_seqlens,
+            cu_seqlens_q_padded=graph_cu_seqlens,
+        )
+        processor = LossPostProcessor(
+            loss_fn=MagicMock(),
+            cfg={"sequence_packing": {"enabled": True}},
+            cp_normalize=False,
+        )
+
+        processor(
+            data_dict=MagicMock(),
+            packed_seq_params=packed_seq_params,
+            loss_cu_seqlens=loss_cu_seqlens,
+            loss_cu_seqlens_padded=loss_cu_seqlens_padded,
+        )
+
+        wrapper_kwargs = mock_wrapper.call_args.kwargs
+        assert torch.equal(wrapper_kwargs["cu_seqlens_q"], loss_cu_seqlens)
+        assert torch.equal(
+            wrapper_kwargs["cu_seqlens_q_padded"], loss_cu_seqlens_padded
+        )
+
 
 class TestLogprobsPostProcessor:
     """Tests for LogprobsPostProcessor class."""
