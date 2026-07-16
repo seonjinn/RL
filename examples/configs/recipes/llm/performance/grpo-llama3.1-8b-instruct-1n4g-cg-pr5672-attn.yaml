@@ -7,7 +7,7 @@ policy:
   megatron_cfg:
     cuda_graph_impl: transformer_engine
     cuda_graph_scope: attn
-    cuda_graph_warmup_steps: 6
+    cuda_graph_warmup_steps: 3
     cuda_graph_packed_seq: true
     cuda_graph_pr5672_thd: true
     cuda_graph_max_packed_seqs: 16

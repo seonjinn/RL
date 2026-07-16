@@ -36,7 +36,7 @@ case "${CONDITION}" in
     ;;
   current-attn-mlp)
     WORKTREE=${BASELINE_WORKTREE}
-    RECIPE=grpo-llama3.1-8b-instruct-1n4g-cg-attn-mlp-w6.yaml
+    RECIPE=grpo-llama3.1-8b-instruct-1n4g-cg-attn-mlp-w3.yaml
     ;;
   pr5672-attn)
     WORKTREE=${PR5672_WORKTREE}
