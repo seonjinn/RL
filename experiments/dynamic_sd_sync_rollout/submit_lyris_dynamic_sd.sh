@@ -218,9 +218,13 @@ sync_harness
             "$(spec_json_fixed "${FIXED_K}")" "${mode_args}"
           ;;
         suffix)
-          # exploratory: vLLM 0.24 native suffix decoding (needs arctic-inference in the venv)
+          # vLLM native suffix decoding (needs arctic-inference in the venv)
           submit_job "${MODEL_LABEL}_${BENCH}_rollout_suffix_${RUN_TAG_DATE}" \
             '{"method": "suffix"}' "${mode_args}"
+          ;;
+        ngram)
+          submit_job "${MODEL_LABEL}_${BENCH}_rollout_ngram_${RUN_TAG_DATE}" \
+            '{"method": "ngram", "num_speculative_tokens": 5, "prompt_lookup_max": 4, "prompt_lookup_min": 2}' "${mode_args}"
           ;;
         dynamic)
           if [[ -z "${DYNAMIC_SPEC_JSON}" || ! -f "${DYNAMIC_SPEC_JSON}" ]]; then
