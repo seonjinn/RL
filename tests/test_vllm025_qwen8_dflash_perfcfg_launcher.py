@@ -142,6 +142,29 @@ def test_qwen8_k5_captures_dflash_graphs_through_128_requests() -> None:
     )
 
 
+def test_qwen8_eagle3_k3_uses_matched_public_drafter_and_cuda_graphs() -> None:
+    output = _dry_run("eagle3_k3")
+
+    assert "grpo-qwen3-8b-2n4g.yaml" in output
+    assert "speculative_config.method=eagle3" in output
+    assert "speculative_config.num_speculative_tokens=3" in output
+    assert "speculative_config.draft_tensor_parallel_size=1" in output
+    assert "models--RedHatAI--Qwen3-8B-speculator.eagle3" in output
+    assert "speculative_config.attention_backend=FLASH_ATTN" not in output
+    assert "kernel_config.enable_flashinfer_autotune=false" not in output
+    assert "compilation_config.cudagraph_mode=FULL" in output
+    assert (
+        "compilation_config.cudagraph_capture_sizes="
+        "[4,8,16,32,64,128,256,512]" in output
+    )
+    assert "policy.generation.vllm_cfg.enforce_eager=false" in output
+    assert "policy.generation.temperature=1.0" in output
+    assert "policy.generation.top_p=1.0" in output
+    assert "grpo.max_num_steps=20" in output
+    assert "--nodes=2" in output
+    assert "--segment=2" in output
+
+
 def test_qwen30_k3_and_k5_use_the_matched_dflash_checkpoint() -> None:
     k3_output = _dry_run("dflash_k3", model_profile="qwen30ba3b")
     k5_output = _dry_run("dflash_k5", model_profile="qwen30ba3b")
@@ -178,7 +201,8 @@ def test_invalid_variant_fails_before_submission() -> None:
 
     assert result.returncode == 2
     assert (
-        "VARIANT must be baseline, dflash_k3, dflash_k5, or dflash_k16"
+        "VARIANT must be baseline, eagle3_k3, dflash_k3, dflash_k5, "
+        "or dflash_k16"
         in result.stderr
     )
 

@@ -27,7 +27,8 @@ case "${MODEL_PROFILE}" in
     DFLASH_VARIANT=dflash_k16
     DFLASH_TOKENS=16
     TARGET_SNAPSHOT="${TARGET_SNAPSHOT:-${HF_HOME}/hub/models--Qwen--Qwen3-8B/snapshots/b968826d9c46dd6066d109eabc6255188de91218}"
-    DRAFT_SNAPSHOT="${DRAFT_SNAPSHOT:-${HF_HOME}/hub/models--z-lab--Qwen3-8B-DFlash-b16/snapshots/9b41424b7109f9c5413454f481b09a82b85333f4}"
+    DFLASH_DRAFT_SNAPSHOT="${DRAFT_SNAPSHOT:-${HF_HOME}/hub/models--z-lab--Qwen3-8B-DFlash-b16/snapshots/9b41424b7109f9c5413454f481b09a82b85333f4}"
+    EAGLE3_DRAFT_SNAPSHOT="${EAGLE3_DRAFT_SNAPSHOT:-${HF_HOME}/hub/models--RedHatAI--Qwen3-8B-speculator.eagle3/snapshots/08610ffa01dd9f16731fe8f627b85905b6aa51c4}"
     ;;
   qwen30ba3b)
     MODEL_TAG=qwen30ba3b
@@ -37,7 +38,7 @@ case "${MODEL_PROFILE}" in
     DFLASH_VARIANT=dflash_k7
     DFLASH_TOKENS=7
     TARGET_SNAPSHOT="${TARGET_SNAPSHOT:-${HF_HOME}/hub/models--Qwen--Qwen3-30B-A3B/snapshots/ad44e777bcd18fa416d9da3bd8f70d33ebb85d39}"
-    DRAFT_SNAPSHOT="${DRAFT_SNAPSHOT:-${HF_HOME}/hub/models--inference-optimization--Qwen3-30B-A3B-speculator.dflash/snapshots/2247bb71fb6ac89b75f44ec2c049c811bfd54ca5}"
+    DFLASH_DRAFT_SNAPSHOT="${DRAFT_SNAPSHOT:-${HF_HOME}/hub/models--inference-optimization--Qwen3-30B-A3B-speculator.dflash/snapshots/2247bb71fb6ac89b75f44ec2c049c811bfd54ca5}"
     ;;
   *)
     printf 'MODEL_PROFILE must be qwen8 or qwen30ba3b; got %s\n' "${MODEL_PROFILE}" >&2
@@ -51,19 +52,36 @@ BASE_LOG_DIR="${BASE_LOG_DIR:-${RUN_DIR}}"
 
 case "${VARIANT}" in
   baseline)
+    SPECDEC_METHOD=""
     SPECULATIVE_TOKENS=0
+    ACTIVE_DRAFT_SNAPSHOT=""
+    ;;
+  eagle3_k3)
+    if [[ "${MODEL_PROFILE}" != "qwen8" ]]; then
+      printf 'eagle3_k3 currently supports only MODEL_PROFILE=qwen8\n' >&2
+      exit 2
+    fi
+    SPECDEC_METHOD=eagle3
+    SPECULATIVE_TOKENS=3
+    ACTIVE_DRAFT_SNAPSHOT="${EAGLE3_DRAFT_SNAPSHOT}"
     ;;
   dflash_k3)
+    SPECDEC_METHOD=dflash
     SPECULATIVE_TOKENS=3
+    ACTIVE_DRAFT_SNAPSHOT="${DFLASH_DRAFT_SNAPSHOT}"
     ;;
   dflash_k5)
+    SPECDEC_METHOD=dflash
     SPECULATIVE_TOKENS=5
+    ACTIVE_DRAFT_SNAPSHOT="${DFLASH_DRAFT_SNAPSHOT}"
     ;;
   "${DFLASH_VARIANT}")
+    SPECDEC_METHOD=dflash
     SPECULATIVE_TOKENS="${DFLASH_TOKENS}"
+    ACTIVE_DRAFT_SNAPSHOT="${DFLASH_DRAFT_SNAPSHOT}"
     ;;
   *)
-    printf 'VARIANT must be baseline, dflash_k3, dflash_k5, or %s; got %s\n' \
+    printf 'VARIANT must be baseline, eagle3_k3, dflash_k3, dflash_k5, or %s; got %s\n' \
       "${DFLASH_VARIANT}" "${VARIANT}" >&2
     exit 2
     ;;
@@ -108,16 +126,20 @@ if [[ "${SPECULATIVE_TOKENS}" -gt 0 ]]; then
   capture_sizes_csv="[${capture_sizes_csv%,}]"
 
   overrides+=(
-    "++policy.generation.vllm_kwargs.speculative_config.method=dflash"
-    "++policy.generation.vllm_kwargs.speculative_config.model=${DRAFT_SNAPSHOT}"
+    "++policy.generation.vllm_kwargs.speculative_config.method=${SPECDEC_METHOD}"
+    "++policy.generation.vllm_kwargs.speculative_config.model=${ACTIVE_DRAFT_SNAPSHOT}"
     "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=${SPECULATIVE_TOKENS}"
-    "++policy.generation.vllm_kwargs.speculative_config.max_model_len=4096"
     "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=1"
-    "++policy.generation.vllm_kwargs.speculative_config.attention_backend=FLASH_ATTN"
-    "++policy.generation.vllm_kwargs.kernel_config.enable_flashinfer_autotune=false"
     "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=FULL"
     "++policy.generation.vllm_kwargs.compilation_config.cudagraph_capture_sizes=${capture_sizes_csv}"
   )
+  if [[ "${SPECDEC_METHOD}" == "dflash" ]]; then
+    overrides+=(
+      "++policy.generation.vllm_kwargs.speculative_config.max_model_len=4096"
+      "++policy.generation.vllm_kwargs.speculative_config.attention_backend=FLASH_ATTN"
+      "++policy.generation.vllm_kwargs.kernel_config.enable_flashinfer_autotune=false"
+    )
+  fi
 fi
 
 command_parts=(
@@ -199,8 +221,8 @@ case "${MODE}" in
       exit 2
     fi
     if [[ "${SPECULATIVE_TOKENS}" -gt 0 ]] && \
-       ! has_safetensors_checkpoint "${DRAFT_SNAPSHOT}"; then
-      printf 'DFlash snapshot is incomplete: %s\n' "${DRAFT_SNAPSHOT}" >&2
+       ! has_safetensors_checkpoint "${ACTIVE_DRAFT_SNAPSHOT}"; then
+      printf 'SpecDec snapshot is incomplete: %s\n' "${ACTIVE_DRAFT_SNAPSHOT}" >&2
       exit 2
     fi
     if ! git -C "${REPO_DIR}" diff --quiet --ignore-submodules=dirty || \
@@ -231,10 +253,11 @@ case "${MODE}" in
       printf 'megatron_lm_head=%s\n' "$(git -C "${REPO_DIR}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM" rev-parse HEAD)"
       printf 'container=%s\n' "${CONTAINER}"
       printf 'recipe=%s\n' "${RECIPE}"
-      printf 'target_snapshot=%s\ndraft_snapshot=%s\n' "${TARGET_SNAPSHOT}" "${DRAFT_SNAPSHOT}"
+      printf 'target_snapshot=%s\ndraft_snapshot=%s\n' "${TARGET_SNAPSHOT}" "${ACTIVE_DRAFT_SNAPSHOT}"
       printf 'megatron_checkpoint_dir=%s\n' "${MEGATRON_CHECKPOINT_DIR}"
+      printf 'specdec_method=%s\n' "${SPECDEC_METHOD}"
       printf 'num_speculative_tokens=%s\n' "${SPECULATIVE_TOKENS}"
-      printf 'flashinfer_autotune=%s\n' "$([[ "${SPECULATIVE_TOKENS}" -gt 0 ]] && printf false || printf recipe-default)"
+      printf 'flashinfer_autotune=%s\n' "$([[ "${SPECDEC_METHOD}" == "dflash" ]] && printf false || printf recipe-default)"
       printf 'max_steps=%s\nnum_nodes=%s\nsegment=%s\n' "${MAX_STEPS}" "${NUM_NODES}" "${SEGMENT_SIZE}"
       printf 'cuda_graph_enabled=true\ncudagraph_mode=%s\n' "$([[ "${SPECULATIVE_TOKENS}" -gt 0 ]] && printf FULL || printf recipe-default)"
       printf 'temperature=1.0\ntop_p=1.0\nwandb_project=%s\n' "${WANDB_PROJECT}"
