@@ -11,6 +11,8 @@ set -euo pipefail
 
 WORKTREE=/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr5672-vs-pr5783-ptyche-20260716
 CONTAINER=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/nemo_rl_nightly_20260715.sqsh
+HF_HOME=${HF_HOME:-/lustre/fsw/coreai_dlalgo_llm/users/sna/hf}
+export HF_HOME
 
 mkdir -p "${WORKTREE}/experiments/cuda_graph/logs"
 
@@ -40,6 +42,12 @@ PY
                 find "${cache_dir}" -maxdepth 1 -type d -iname "*qwen*" -printf "%f\\n"
             fi
         done
+        python - <<"PY"
+from huggingface_hub import hf_hub_download
+
+hf_hub_download(repo_id="meta-llama/Llama-3.1-8B-Instruct", filename="config.json")
+print("LLAMA_HF_ACCESS_OK")
+PY
         echo "== CUDA =="
         nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
     '

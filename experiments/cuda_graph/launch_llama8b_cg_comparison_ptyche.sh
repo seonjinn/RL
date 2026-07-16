@@ -15,6 +15,15 @@ RUN_TAG=${RUN_TAG:-${CONDITION}-steps${STEPS}}
 BASELINE_WORKTREE=/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr5783-baseline-ptyche-20260716
 PR5672_WORKTREE=/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr5672-vs-pr5783-ptyche-20260716
 CONTAINER=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/nemo_rl_nightly_20260715.sqsh
+HF_HOME=${HF_HOME:-/lustre/fsw/coreai_dlalgo_llm/users/sna/hf}
+export HF_HOME
+export HF_HUB_CACHE=${HF_HUB_CACHE:-${HF_HOME}/hub}
+export HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-${HF_HOME}/datasets}
+
+if [[ ! -s "${HF_HOME}/token" ]]; then
+  echo "Missing Hugging Face token at ${HF_HOME}/token" >&2
+  exit 2
+fi
 
 case "${CONDITION}" in
   nocg)
