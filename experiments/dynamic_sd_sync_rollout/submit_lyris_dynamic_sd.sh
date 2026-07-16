@@ -224,7 +224,7 @@ sync_harness
           ;;
         ngram)
           submit_job "${MODEL_LABEL}_${BENCH}_rollout_ngram_${RUN_TAG_DATE}" \
-            '{"method": "ngram", "num_speculative_tokens": 5, "prompt_lookup_max": 4, "prompt_lookup_min": 2}' "${mode_args}"
+            '{"method": "ngram", "num_speculative_tokens": 8, "prompt_lookup_max": 8, "prompt_lookup_min": 5}' "${mode_args}"
           ;;
         dynamic)
           if [[ -z "${DYNAMIC_SPEC_JSON}" || ! -f "${DYNAMIC_SPEC_JSON}" ]]; then
