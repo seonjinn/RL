@@ -91,20 +91,40 @@ confused with an explicit `enable_thinking=true` experiment override.
 ## Final20 Promotion Wave
 
 All promoted jobs use the same performance recipes and CUDA Graph controls as
-their smoke gates. Final comparisons will average steps 2-20. To avoid a
+their smoke gates. Final comparisons average steps 2-20. To avoid a
 duplicate allocation, the first five steps of each final20 run serve as the
 in-place smoke5 gate; the jobs were also monitored for more than five minutes
 without an early runtime error. Qwen3-32B base K1 is not a performance
 promotion; it is retained solely as the same-K public-checkpoint control for
 Thinking K1.
 
-| Model | Variant | Job | W&B | State at submission |
+| Model | Variant | Job | W&B | State |
 |---|---|---:|---|---|
-| Qwen3-30B-A3B | baseline | `2404968` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/m6jqtwb0) | running |
-| Qwen3-30B-A3B | EAGLE3 K3 | `2405075` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/lzg06xnm) | running |
-| Qwen3-32B | baseline | `2405077` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/zy22udd0) | running |
-| Qwen3-32B | base EAGLE3 K1 | `2405076` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/on935s9p) | running |
-| Qwen3-32B | Thinking EAGLE3 K1 | `2405078` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/0rgf8mxc) | running |
+| Qwen3-30B-A3B | baseline | `2404968` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/m6jqtwb0) | completed (`0:0`) |
+| Qwen3-30B-A3B | EAGLE3 K3 | `2405075` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/lzg06xnm) | completed (`0:0`) |
+| Qwen3-32B | baseline | `2405077` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/zy22udd0) | completed (`0:0`) |
+| Qwen3-32B | base EAGLE3 K1 | `2405076` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/on935s9p) | completed (`0:0`) |
+| Qwen3-32B | Thinking EAGLE3 K1 | `2405078` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/0rgf8mxc) | completed (`0:0`) |
+
+### Final20 Results
+
+Every row below averages the complete step 2-20 window (19 points). Baselines
+are matched by model and immutable runner configuration. Logged throughput is
+averaged directly rather than reconstructed from averaged time.
+
+| Model | Variant | E2E time | E2E time speedup | Gen time | Gen time speedup | Gen ratio | E2E tok/s/GPU | E2E throughput | Gen tok/s/GPU | Gen throughput | Acceptance | Mean accepted | Reward |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Qwen3-30B-A3B | baseline | 180.92s | 1.000x | 69.74s | 1.000x | 38.5% | 2303.35 | 1.000x | 5958.07 | 1.000x | n/a | n/a | 0.5271 |
+| Qwen3-30B-A3B | EAGLE3 K3 | 154.48s | 1.171x | 43.88s | 1.589x | 28.4% | 2692.91 | 1.169x | 9489.28 | 1.593x | 64.8% | 2.94 | 0.5251 |
+| Qwen3-32B | baseline | 262.36s | 1.000x | 109.61s | 1.000x | 41.8% | 1610.78 | 1.000x | 3850.38 | 1.000x | n/a | n/a | 0.5242 |
+| Qwen3-32B | base EAGLE3 K1 | 255.69s | 1.026x | 103.44s | 1.060x | 40.5% | 1653.10 | 1.026x | 4099.08 | 1.065x | 69.4% | 1.69 | 0.5248 |
+| Qwen3-32B | Thinking EAGLE3 K1 | 245.08s | 1.071x | 94.22s | 1.163x | 38.4% | 1722.97 | 1.070x | 4484.79 | 1.165x | 80.0% | 1.80 | 0.5268 |
+
+The Qwen3-32B Thinking head is the stronger K1 checkpoint in this matched
+window. Its reward remains aligned with the baseline while generation and E2E
+throughput improve by 16.5% and 7.0%, respectively. Qwen3-30B-A3B K3 delivers
+the largest final20 gain in this wave: 59.3% generation-throughput and 16.9%
+E2E-throughput improvement.
 
 ## Qwen3-32B K2 And DynamicSD Smoke Wave
 
@@ -185,15 +205,15 @@ after real submission.
 
 | Model | Variant family | Candidates | Runner | State | Job/W&B | Reason or gate |
 |---|---|---|---|---|---|---|
-| Qwen3-30B-A3B | baseline | MRv2, MRv1 | mixed | final20 running | `2404968` | MRv2 control promoted; MRv1 remains planned |
-| Qwen3-30B-A3B | EAGLE3 | K1, K3, K5 | MRv2 | final20 running | `2405075` | K3 promoted; K1/K3/K5 smoke complete |
+| Qwen3-30B-A3B | baseline | MRv2, MRv1 | mixed | final20 complete | `2404968` | MRv2 control complete; MRv1 remains planned |
+| Qwen3-30B-A3B | EAGLE3 | K1, K3, K5 | MRv2 | K3 final20 complete | `2405075` | K1/K3/K5 smoke complete |
 | Qwen3-30B-A3B | DFlash | K3, K5 | MRv2 | planned | pending | exact head; draft FlashAttention |
 | Qwen3-30B-A3B | draft/PARD | draft K1/K5; PARD K5/K16 | MRv1 | planned | pending | shared AMD 0.6B drafter; sequential/parallel split |
 | Qwen3-30B-A3B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
-| Qwen3-32B | baseline | MRv2, MRv1 | mixed | final20 running | `2405077` | MRv2 control promoted; MRv1 remains planned |
-| Qwen3-32B | EAGLE3 | K1, K3, K5 | MRv2 | control final20 running | `2405076` | K1 retained for same-K checkpoint comparison |
-| Qwen3-32B | EAGLE3 Thinking | K1, K2, K3, K5 | MRv2 | K1 final20 running; K2/K3 smoke running | `2405078`, `2406250`, `2406253` | K2 fills the fixed-policy gap; K3 gets a matched rerun |
-| Qwen3-32B | EAGLE3 Thinking DynamicSD | K0-K3 | MRv2 | seed smoke running | `2406255` | final20 requires matched vLLM 0.25.1 calibration |
+| Qwen3-32B | baseline | MRv2, MRv1 | mixed | final20 complete | `2405077` | MRv2 control complete; MRv1 remains planned |
+| Qwen3-32B | EAGLE3 | K1, K3, K5 | MRv2 | K1 control final20 complete | `2405076` | K1 retained for same-K checkpoint comparison |
+| Qwen3-32B | EAGLE3 Thinking | K1, K2, K3, K5 | MRv2 | K1 final20 complete; K2/K3 smoke complete | `2405078`, `2406250`, `2406253` | K2 fills the fixed-policy gap; K3 has a matched smoke rerun |
+| Qwen3-32B | EAGLE3 Thinking DynamicSD | K0-K3 | MRv2 | seed smoke complete | `2406255` | final20 requires matched vLLM 0.25.1 calibration |
 | Qwen3-32B | DFlash | K3, K5 | MRv2 | planned | pending | exact head; draft FlashAttention |
 | Qwen3-32B | draft/PARD | draft K1/K5; PARD K5/K16 | MRv1 | planned | pending | shared AMD 0.6B drafter; sequential/parallel split |
 | Qwen3-32B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
