@@ -41,6 +41,25 @@ class ChatTokenizer(Protocol):
     ) -> str: ...
 
 
+def validate_batch_sizes(batch_sizes: Sequence[int]) -> tuple[int, ...]:
+    """Require a nonempty canonical batch-size subset supported by vLLM."""
+    values = tuple(batch_sizes)
+    if (
+        not values
+        or any(
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value < 1
+            or value > 256
+            for value in values
+        )
+        or tuple(sorted(values)) != values
+        or len(set(values)) != len(values)
+    ):
+        raise ValueError("batch sizes must be sorted unique integers in 1..256")
+    return values
+
+
 def _atomic_write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -144,8 +163,7 @@ def build_benchmark_command(
     port: int,
 ) -> tuple[str, ...]:
     """Build an upstream-style twenty-batch serving benchmark."""
-    if batch_size not in G_BATCH_SIZES:
-        raise ValueError(f"batch_size must be one of {G_BATCH_SIZES}")
+    validate_batch_sizes((batch_size,))
     return (
         G_VLLM_BIN,
         "bench",
@@ -324,8 +342,11 @@ def run_fixed_k(
     drafter_snapshot: Path,
     prompt_template_path: Path,
     port: int,
+    *,
+    batch_sizes: tuple[int, ...] = G_BATCH_SIZES,
 ) -> None:
-    """Run all batch-size points for one K and preserve each completed cell."""
+    """Run selected batch-size points for one K and preserve completed cells."""
+    batch_sizes = validate_batch_sizes(batch_sizes)
     prompt_file = _ensure_prompt_file(
         root,
         target_snapshot,
@@ -337,7 +358,12 @@ def run_fixed_k(
     version = _runtime_vllm_version()
     if version != "0.25.1":
         raise RuntimeError(f"profile requires vLLM 0.25.1, found {version}")
-    server_log = (output_dir / "server.log").open("w", encoding="utf-8")
+    server_log_name = (
+        "server.log"
+        if batch_sizes == G_BATCH_SIZES
+        else f"server-bs-{'-'.join(str(size) for size in batch_sizes)}.log"
+    )
+    server_log = (output_dir / server_log_name).open("w", encoding="utf-8")
     process = subprocess.Popen(
         build_server_command(
             k,
@@ -352,7 +378,7 @@ def run_fixed_k(
     )
     try:
         _wait_for_server(port, process)
-        for batch_size in G_BATCH_SIZES:
+        for batch_size in batch_sizes:
             result_dir = output_dir / f"bs-{batch_size}"
             result_dir.mkdir(parents=True, exist_ok=True)
             subprocess.run(
@@ -375,7 +401,7 @@ def run_fixed_k(
         _terminate_process_group(process)
         server_log.close()
 
-    if k == 5:
+    if k == 5 and batch_sizes == G_BATCH_SIZES:
         subprocess.run(
             (
                 G_PYTHON_BIN,
@@ -565,6 +591,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--drafter-snapshot", type=Path, required=True)
     run.add_argument("--prompt-template", type=Path, required=True)
     run.add_argument("--port", type=int, default=8100)
+    run.add_argument("--batch-sizes", nargs="+", type=int, default=G_BATCH_SIZES)
 
     acceptance = subparsers.add_parser("acceptance")
     acceptance.add_argument("--root", type=Path, required=True)
@@ -580,8 +607,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     if args.command == "run-k":
+        try:
+            batch_sizes = validate_batch_sizes(args.batch_sizes)
+        except ValueError as error:
+            parser.error(str(error))
         run_fixed_k(
             args.root,
             args.k,
@@ -589,6 +621,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             args.drafter_snapshot,
             args.prompt_template,
             args.port,
+            batch_sizes=batch_sizes,
         )
         return
     if args.command == "acceptance":

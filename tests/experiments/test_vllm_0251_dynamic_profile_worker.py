@@ -1,15 +1,20 @@
 import json
+import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from experiments.vllm_0251_drafter_matrix import dynamic_profile_worker
 from experiments.vllm_0251_drafter_matrix.dynamic_profile_worker import (
+    G_BATCH_SIZES,
     G_DATASET_REVISION,
     G_PYTHON_BIN,
     G_VLLM_BIN,
     assemble_profile,
     build_benchmark_command,
     build_server_command,
+    main,
     render_math_prompt,
 )
 
@@ -82,6 +87,208 @@ def test_benchmark_command_uses_twenty_batches_and_math_sampling(
     assert "--dataset-name custom" in joined
     assert f"--tokenizer {G_TARGET}" in joined
     assert "--skip-chat-template" in command
+
+
+@pytest.mark.parametrize(
+    "batch_sizes",
+    ((), (35, 34), (34, 34), (0,), (257,)),
+)
+def test_validate_batch_sizes_rejects_noncanonical_subsets(
+    batch_sizes: tuple[int, ...],
+) -> None:
+    with pytest.raises(ValueError, match="sorted unique integers in 1..256"):
+        dynamic_profile_worker.validate_batch_sizes(batch_sizes)
+
+
+def test_run_k_forwards_an_explicit_batch_size_subset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def fake_run_fixed_k(*args: Any, **kwargs: Any) -> None:
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(dynamic_profile_worker, "run_fixed_k", fake_run_fixed_k)
+
+    main(
+        (
+            "run-k",
+            "--root",
+            "/profile",
+            "--k",
+            "3",
+            "--target-snapshot",
+            "/hf/target",
+            "--drafter-snapshot",
+            "/hf/drafter",
+            "--prompt-template",
+            "/repo/cot.txt",
+            "--batch-sizes",
+            "34",
+            "35",
+        )
+    )
+
+    assert calls[0][1]["batch_sizes"] == (34, 35)
+
+
+def test_run_k_preserves_the_default_batch_size_grid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def fake_run_fixed_k(*args: Any, **kwargs: Any) -> None:
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(dynamic_profile_worker, "run_fixed_k", fake_run_fixed_k)
+
+    main(
+        (
+            "run-k",
+            "--root",
+            "/profile",
+            "--k",
+            "5",
+            "--target-snapshot",
+            "/hf/target",
+            "--drafter-snapshot",
+            "/hf/drafter",
+            "--prompt-template",
+            "/repo/cot.txt",
+        )
+    )
+
+    assert calls[0][1]["batch_sizes"] == G_BATCH_SIZES
+
+
+def test_explicit_k5_subset_runs_only_the_requested_benchmark(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    benchmark_calls: list[tuple[str, ...]] = []
+
+    class _Process:
+        pass
+
+    def fake_run(
+        command: tuple[str, ...], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        benchmark_calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        dynamic_profile_worker,
+        "_ensure_prompt_file",
+        lambda *args, **kwargs: tmp_path / "prompts.jsonl",
+    )
+    monkeypatch.setattr(
+        dynamic_profile_worker, "_runtime_vllm_version", lambda: "0.25.1"
+    )
+    monkeypatch.setattr(
+        dynamic_profile_worker.subprocess,
+        "Popen",
+        lambda *args, **kwargs: _Process(),
+    )
+    monkeypatch.setattr(dynamic_profile_worker, "_wait_for_server", lambda *args: None)
+    monkeypatch.setattr(
+        dynamic_profile_worker, "_validate_benchmark_result", lambda *args: None
+    )
+    monkeypatch.setattr(
+        dynamic_profile_worker, "_terminate_process_group", lambda *args: None
+    )
+    monkeypatch.setattr(dynamic_profile_worker.subprocess, "run", fake_run)
+
+    dynamic_profile_worker.run_fixed_k(
+        tmp_path,
+        5,
+        G_TARGET,
+        G_DRAFTER,
+        tmp_path / "cot.txt",
+        8100,
+        batch_sizes=(34,),
+    )
+
+    assert len(benchmark_calls) == 1
+    assert "bench" in benchmark_calls[0]
+    assert benchmark_calls[0][benchmark_calls[0].index("--max-concurrency") + 1] == "34"
+    assert benchmark_calls[0][benchmark_calls[0].index("--result-dir") + 1] == str(
+        tmp_path / "k-5" / "bs-34"
+    )
+    assert (tmp_path / "k-5" / "server-bs-34.log").is_file()
+    assert not (tmp_path / "k-5" / "server.log").exists()
+
+
+def test_benchmark_validation_preserves_full_result_arrays(tmp_path: Path) -> None:
+    result_path = tmp_path / "result.json"
+    payload = {
+        "completed": 680,
+        "failed": 0,
+        "median_itl_ms": 4.5,
+        "itl": [1.0, 2.0, 3.0],
+        "request_latencies": [10.0, 11.0],
+        "input_lens": [128, 256],
+        "output_lens": [256, 256],
+    }
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    dynamic_profile_worker._validate_benchmark_result(
+        result_path, batch_size=34, version="0.25.1"
+    )
+
+    validated = json.loads(result_path.read_text(encoding="utf-8"))
+    assert validated == {**payload, "vllm_version": "0.25.1"}
+
+
+def test_default_k5_grid_still_collects_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    subprocess_calls: list[tuple[str, ...]] = []
+
+    class _Process:
+        pass
+
+    def fake_run(
+        command: tuple[str, ...], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        subprocess_calls.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        dynamic_profile_worker,
+        "_ensure_prompt_file",
+        lambda *args, **kwargs: tmp_path / "prompts.jsonl",
+    )
+    monkeypatch.setattr(
+        dynamic_profile_worker, "_runtime_vllm_version", lambda: "0.25.1"
+    )
+    monkeypatch.setattr(
+        dynamic_profile_worker.subprocess,
+        "Popen",
+        lambda *args, **kwargs: _Process(),
+    )
+    monkeypatch.setattr(dynamic_profile_worker, "_wait_for_server", lambda *args: None)
+    monkeypatch.setattr(
+        dynamic_profile_worker, "_validate_benchmark_result", lambda *args: None
+    )
+    monkeypatch.setattr(
+        dynamic_profile_worker, "_terminate_process_group", lambda *args: None
+    )
+    monkeypatch.setattr(dynamic_profile_worker.subprocess, "run", fake_run)
+
+    dynamic_profile_worker.run_fixed_k(
+        tmp_path,
+        5,
+        G_TARGET,
+        G_DRAFTER,
+        tmp_path / "cot.txt",
+        8100,
+    )
+
+    assert len(subprocess_calls) == len(G_BATCH_SIZES) + 1
+    assert all("bench" in command for command in subprocess_calls[:-1])
+    assert "acceptance" in subprocess_calls[-1]
+    assert (tmp_path / "k-5" / "server.log").is_file()
 
 
 def _write_result(root: Path, k: int, batch_size: int) -> None:

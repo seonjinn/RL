@@ -259,14 +259,34 @@ scheduler batch size, selected K, requested width, and returned width without
 changing the inference path. Final20 remains blocked until this runtime gate
 passes.
 
+Telemetry smoke job `2407523` completed both NeMo-RL steps with exit code
+`0:0` ([W&B](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/3e4mav6e)).
+The scheduler selected every intended range during the draining rollout:
+K5 at BS1-34, K3 at BS35-75, K2 at BS76-85, and K1 at BS86-256. The
+autoregressive speculator nevertheless returned width 5 for every observed
+range. Unique scheduler batch-size observations contained 34 K5-to-width-5,
+41 K3-to-width-5, 10 K2-to-width-5, and 171 K1-to-width-5 cases. This confirms
+that the vLLM 0.25.1 MRv2 scheduler changes target verification width but does
+not reduce EAGLE3 drafting work. The final20 gate therefore failed for a
+specific implementation reason rather than a profiling or configuration
+error.
+
+The boundary launcher is ready for twelve isolated fresh-server cells:
+BS34/35 with K3/K5, BS75/76 with K2/K3, and BS85/86 with K1/K2. Each cell
+retains full benchmark arrays and a cell-specific server log. These jobs remain
+unsubmitted until the MRv2 variable-width patch passes GPU unit and runtime
+telemetry tests; otherwise they would refine a schedule that the drafter does
+not execute.
+
 | Stage | State | Required evidence |
 |---|---|---|
 | Pure derivation and schema | complete | focused tests, Ruff, Pyright |
 | K0-K5 Lyris profile | complete | 48/48 cells and K5 position acceptance |
 | Derived schedule review | complete | immutable profile and schedule hashes |
-| Boundary spot check | pending | exact checks near BS35, BS76, and BS86 |
-| DynamicSD runtime smoke | pending | selected K and requested/actual draft width |
-| DynamicSD final20 | blocked by design | reviewed telemetry and allowlisted schedule hash |
+| Boundary spot check | launcher ready | exact checks near BS35, BS76, and BS86 |
+| DynamicSD runtime smoke | failed gate | selected K changed; actual draft width stayed at K5 |
+| MRv2 variable-width patch | in progress | K0-K5 GPU tests and runtime width parity |
+| DynamicSD final20 | blocked by design | corrected runtime and confidence-qualified schedule |
 
 ## Qwen3-235B Port Failure
 
