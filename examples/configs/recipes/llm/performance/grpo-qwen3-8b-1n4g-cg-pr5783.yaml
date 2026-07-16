@@ -1,0 +1,18 @@
+defaults: ./grpo-qwen3-8b-1n4g-nocg.yaml
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-8b-1n4g-cg-pr5783
+policy:
+  megatron_cfg:
+    # Megatron-LM PR #5783: local-impl CUDA graphs over THD packed sequences.
+    # No cuda_graph_scope -> whole-layer capture (empty cuda_graph_modules).
+    # Requires the PR #5783 Megatron-LM tree on PYTHONPATH (TE >= 2.9.0).
+    cuda_graph_impl: local
+    cuda_graph_pr5783_thd: true
+    cuda_graph_max_packed_seqs: 64
+    cuda_graph_warmup_steps: 6
+logger:
+  log_dir: logs/grpo-qwen3-8b-1n4g-cg-pr5783
+  wandb_enabled: true
+  wandb:
+    project: nemo-rl-cudagraph
+    name: grpo-qwen3-8b-1n4g-cg-pr5783
