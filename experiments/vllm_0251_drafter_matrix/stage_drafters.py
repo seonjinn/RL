@@ -40,7 +40,7 @@ from experiments.vllm_0251_drafter_matrix.matrix import (
 
 DEFAULT_CONTAINER = (
     "/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/"
-    "nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh"
+    "nemo_rl_nightly_20260715.sqsh"
 )
 DEFAULT_MOUNTS = "/lustre:/lustre"
 MANIFEST_NAME = "drafter-staging-manifest.json"

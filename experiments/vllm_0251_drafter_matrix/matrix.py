@@ -508,7 +508,7 @@ def resolve_run(
 
 G_DEFAULT_CONTAINER = Path(
     "/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/"
-    "nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh"
+    "nemo_rl_nightly_20260715.sqsh"
 )
 G_DEFAULT_EXPERIMENT_ROOT = Path(
     "/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/"
