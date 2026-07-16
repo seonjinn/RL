@@ -9,15 +9,13 @@
 
 set -euo pipefail
 
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-source "${SCRIPT_DIR}/cuda_graph_launcher_lib.sh"
-
 MODEL=${MODEL:-llama31}
 CONDITION=${CONDITION:?Set CONDITION to nocg, current-attn, current-attn-mlp, pr5672-attn, or pr5672-attn-mlp.}
 STEPS=${STEPS:-20}
 RUN_TAG=${RUN_TAG:-${CONDITION}-steps${STEPS}}
 BASELINE_WORKTREE=${BASELINE_WORKTREE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr5783-ptyche-runtime-20260716}
 PR5672_WORKTREE=${PR5672_WORKTREE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr5672-vs-pr5783-ptyche-20260716}
+source "${PR5672_WORKTREE}/experiments/cuda_graph/cuda_graph_launcher_lib.sh"
 CONTAINER=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/nemo_rl_nightly_20260715.sqsh
 HF_HOME=${HF_HOME:-/lustre/fsw/coreai_dlalgo_llm/users/sna/hf}
 export HF_HOME
