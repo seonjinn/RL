@@ -33,5 +33,5 @@ srun --nodes=1 --ntasks=1 --no-container-mount-home \
             "import torch, transformer_engine; print(\"MCORE_RUNTIME_OK\", torch.__version__, transformer_engine.__version__)"
         cd "${WORKTREE}/3rdparty/Megatron-LM-workspace/Megatron-LM"
         uv run --locked --extra mcore --directory "${WORKTREE}" python -m pytest -q \
-            tests/unit_tests/transformer/test_packed_seq_params_cuda_graph.py
+            "${WORKTREE}/3rdparty/Megatron-LM-workspace/Megatron-LM/tests/unit_tests/transformer/test_packed_seq_params_cuda_graph.py"
     '
