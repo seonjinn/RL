@@ -23,9 +23,11 @@ srun --nodes=1 --ntasks=1 --no-container-mount-home \
     --container-mounts=/lustre:/lustre \
     --container-workdir="${WORKTREE}" \
     bash -lc '
+        set -euo pipefail
         python --version
         python -m pytest -q \
-            tests/unit/test_ray_sub_submission.py \
+            tests/unit/test_ray_sub_submission.py
+        uv run --locked --extra mcore --directory "${WORKTREE}" python -m pytest -q \
             tests/unit/models/policy/test_pr5672_cuda_graph_adapter.py
         uv run --locked --extra mcore --directory "${WORKTREE}" python -c \
             "import torch, transformer_engine; print(\"MCORE_RUNTIME_OK\", torch.__version__, transformer_engine.__version__)"
