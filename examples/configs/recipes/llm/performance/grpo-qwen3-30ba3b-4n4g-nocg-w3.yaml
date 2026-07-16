@@ -1,0 +1,9 @@
+defaults: ./grpo-qwen3-30ba3b-4n4g-nocg.yaml
+grpo:
+  max_num_steps: 40
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-30ba3b-4n4g-nocg-w3
+logger:
+  log_dir: logs/grpo-qwen3-30ba3b-4n4g-nocg-w3
+  wandb:
+    name: grpo-qwen3-30ba3b-4n4g-nocg-w3
