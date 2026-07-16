@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -211,12 +212,47 @@ def test_submit_wrapper_separates_host_and_container_python() -> None:
     text = wrapper.read_text()
     assert "Copyright (c) 2026, NVIDIA CORPORATION" in text
     assert "set -euo pipefail" in text
-    assert 'if [[ "${1:-}" == "--worker-script" ]]' in text
+    assert 'if [[ "${1:-}" == "--mark-manifest-failed" ]]' in text
+    assert 'elif [[ "${1:-}" == "--worker-script" ]]' in text
     assert 'python_bin="/opt/nemo_rl_venv/bin/python"' in text
     assert 'python_bin="${PYTHON_BIN:-python3}"' in text
     assert '"${python_bin}" "${worker_script}" --worker "${worker_args[@]}"' in text
     assert "worker failed before terminal manifest" in text
     assert 'exec "${python_bin}"' in text
+
+
+def test_submit_wrapper_failure_fallback_preserves_valid_manifest(
+    tmp_path: Path,
+) -> None:
+    wrapper = (
+        Path(__file__).parents[2]
+        / "experiments/vllm_0251_drafter_matrix/submit_stage_drafters.sh"
+    )
+    target = CheckpointSpec(
+        model_key="unit", repo_id="org/model", revision="7" * 40
+    )
+    entries = stage_targets(
+        (target,),
+        tmp_path / "hf-home",
+        lambda **_: (
+            _write_complete_snapshot(target.snapshot_path(tmp_path / "hf-home"))
+            or str(target.snapshot_path(tmp_path / "hf-home"))
+        ),
+        "654",
+    )
+    queued_entries = tuple(replace(entry, status="queued") for entry in entries)
+    manifest = write_manifest(tmp_path, queued_entries, status="queued")
+
+    subprocess.run(
+        (str(wrapper), "--mark-manifest-failed", str(manifest)),
+        check=True,
+    )
+
+    payload = json.loads(manifest.read_text())
+    assert payload["status"] == "failed"
+    assert payload["error"] == "worker failed before terminal manifest"
+    assert payload["checkpoints"][0]["status"] == "failed"
+    assert payload["checkpoints"][0]["job_id"] == "654"
 
 
 def test_prepare_worker_snapshot_is_content_addressed_and_complete(
@@ -254,6 +290,24 @@ def test_container_paths_must_be_visible_through_mounts(tmp_path: Path) -> None:
             Path("relative/output"),
             Path("/lustre/unit/hf"),
             "/lustre:/lustre",
+        )
+    with pytest.raises(ValueError, match="identity"):
+        validate_container_paths(
+            Path("/lustre/unit/output"),
+            Path("/lustre/unit/hf"),
+            "/lustre:/container/lustre",
+        )
+    with pytest.raises(ValueError, match="writable"):
+        validate_container_paths(
+            Path("/lustre/unit/output"),
+            Path("/lustre/unit/hf"),
+            "/lustre:/lustre:ro",
+        )
+    with pytest.raises(ValueError, match="writable"):
+        validate_container_paths(
+            Path("/lustre/unit/output"),
+            Path("/lustre/unit/hf"),
+            "/lustre:/lustre:ro+rprivate",
         )
 
 

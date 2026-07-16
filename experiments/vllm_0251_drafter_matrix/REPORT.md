@@ -21,9 +21,10 @@ baseline and candidate both complete steps 2-20.
 
 Read-only inspection on 2026-07-16 found all three target snapshots, all three
 base EAGLE3 snapshots, and the shared PARD snapshot complete at their pinned
-revisions. Both exact DFlash snapshots and the distinct Qwen32/Qwen235
-Thinking EAGLE3 snapshots are absent and must pass the staging job before
-their smoke submissions. Qwen30 has no separate Thinking row because its
+revisions. Staging job `2402456` then completed in 1 minute 58 seconds with
+exit code 0 and validated all eight immutable matrix drafter snapshots,
+including exact DFlash and distinct Qwen32/Qwen235 Thinking EAGLE3 snapshots.
+Qwen30 has no separate Thinking row because its
 previously inspected Thinking alias at revision
 `a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf` has the same config blob
 `4e11c4dbb9b0bd911748a6f567d41f57c3dcdbe3` and model LFS SHA-256
@@ -36,6 +37,23 @@ At that snapshot, partition `gb200` had no idle nodes: 244 were allocated and
 the remainder were in maintenance/down/drain states. FairShare for user `sna`
 under `coreai_dlalgo_llm` was 0.793651. Scheduler preflight may run, but smoke
 jobs can remain pending until nodes return.
+
+## Current Smoke Wave
+
+All jobs below passed an exact-topology scheduler preflight before submission.
+They are two-step configuration/runtime gates, not reportable performance
+results. Promotion to steps 2-20 waits for matched baseline and candidate gates.
+
+| Model | Variant | Job | W&B |
+|---|---|---:|---|
+| Qwen3-30B-A3B | baseline | `2402479` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/97yhgm50) |
+| Qwen3-30B-A3B | EAGLE3 K1 / K3 / K5 | `2402481` / `2402483` / `2402485` | [K1](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/49w01pin) / [K3](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/c7vd4qvt) / [K5](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/3gskmira) |
+| Qwen3-32B | baseline | `2402487` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/5x7gpll3) |
+| Qwen3-32B | EAGLE3 K1 / K3 / K5 | `2402489` / `2402491` / `2402493` | [K1](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/zaf7lrpt) / [K3](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/h01cbwzk) / [K5](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/mlhdehtm) |
+| Qwen3-32B | Thinking EAGLE3 K1 / K3 / K5 | `2402620` / `2402622` / `2402624` | [K1](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/bo48pxvo) / [K3](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/tqex9iq5) / [K5](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/khslxp6o) |
+| Qwen3-235B-A22B | baseline | `2402495` | pending initialization |
+| Qwen3-235B-A22B | EAGLE3 K1 / K3 / K5 | `2402497` / `2402500` / `2402502` | pending initialization |
+| Qwen3-235B-A22B | Thinking EAGLE3 K1 / K3 / K5 | `2402626` / `2402630` / `2402632` | pending initialization |
 
 ## Applicability And Run Ledger
 
@@ -52,13 +70,13 @@ after real submission.
 | Qwen3-30B-A3B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
 | Qwen3-32B | baseline | MRv2, MRv1 | mixed | planned | pending | exact controls for both runner families |
 | Qwen3-32B | EAGLE3 | K1, K3, K5 | MRv2 | planned | pending | exact base-model head |
-| Qwen3-32B | EAGLE3 Thinking | K1, K3, K5 | MRv2 | planned | staging required | exact reasoning-distribution head |
+| Qwen3-32B | EAGLE3 Thinking | K1, K3, K5 | MRv2 | smoke submitted | `2402620/22/24` | exact reasoning-distribution head |
 | Qwen3-32B | DFlash | K3, K5 | MRv2 | planned | pending | exact head; draft FlashAttention |
 | Qwen3-32B | draft/PARD | draft K1/K5; PARD K5/K16 | MRv1 | planned | pending | shared AMD 0.6B drafter; sequential/parallel split |
 | Qwen3-32B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
 | Qwen3-235B-A22B | baseline | MRv2, MRv1 | mixed | planned | pending | exact controls for both runner families |
 | Qwen3-235B-A22B | EAGLE3 | K1, K3, K5 | MRv2 | planned | pending | exact NVIDIA head |
-| Qwen3-235B-A22B | EAGLE3 Thinking | K1, K3, K5 | MRv2 | planned | staging required | exact RedHatAI reasoning-distribution head |
+| Qwen3-235B-A22B | EAGLE3 Thinking | K1, K3, K5 | MRv2 | smoke submitted | `2402626/30/32` | exact RedHatAI reasoning-distribution head |
 | Qwen3-235B-A22B | DFlash | K3, K5 | MRv2 | unsupported | n/a | no exact public Qwen3-235B DFlash checkpoint |
 | Qwen3-235B-A22B | draft/PARD | draft K1/K5; PARD K5/K16 | MRv1 | planned | pending | shared AMD 0.6B drafter; sequential/parallel split |
 | Qwen3-235B-A22B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |

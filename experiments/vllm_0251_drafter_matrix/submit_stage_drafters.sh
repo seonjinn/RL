@@ -16,7 +16,23 @@
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-if [[ "${1:-}" == "--worker-script" ]]; then
+if [[ "${1:-}" == "--mark-manifest-failed" ]]; then
+  manifest="${2:?missing manifest path}"
+  temporary="${manifest}.$$.$RANDOM.tmp"
+  trap 'rm -f "${temporary}"' EXIT
+  awk '
+    {
+      gsub(/"status": "queued"/, "\"status\": \"failed\"")
+      if ($0 == "  \"status\": \"failed\"") {
+        print "  \"error\": \"worker failed before terminal manifest\","
+      }
+      print
+    }
+  ' "${manifest}" > "${temporary}"
+  mv -f "${temporary}" "${manifest}"
+  trap - EXIT
+  exit 0
+elif [[ "${1:-}" == "--worker-script" ]]; then
   shift
   worker_script="${1:?missing absolute worker script path}"
   shift
@@ -36,9 +52,7 @@ if [[ "${1:-}" == "--worker-script" ]]; then
   if ((status != 0)) && [[ -n "${output_dir}" ]]; then
     manifest="${output_dir}/drafter-staging-manifest.json"
     if ! grep -Eq '"status": "(failed|staged)"' "${manifest}" 2>/dev/null; then
-      "${python_bin}" "${worker_script}" --mark-failed \
-        --output-dir "${output_dir}" \
-        --error "worker failed before terminal manifest"
+      "${BASH_SOURCE[0]}" --mark-manifest-failed "${manifest}"
     fi
   fi
   exit "${status}"

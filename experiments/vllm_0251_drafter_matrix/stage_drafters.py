@@ -237,15 +237,27 @@ def prepare_worker_snapshot(output_dir: Path, worker_path: Path) -> Path:
 
 
 def validate_container_paths(output_dir: Path, hf_home: Path, mounts: str) -> None:
-    """Require host paths to be absolute and visible through a pyxis mount."""
+    """Require paths to use writable identity mounts inside the container."""
     mount_roots: list[Path] = []
     for mount in mounts.split(","):
-        host_path = mount.split(":", maxsplit=1)[0]
-        if not host_path:
+        parts = mount.split(":")
+        if not parts[0]:
             continue
-        root = Path(host_path)
+        root = Path(parts[0])
         if not root.is_absolute():
             raise ValueError(f"Container mount host path must be absolute: {mount}")
+        destination = Path(parts[1]) if len(parts) >= 2 and parts[1] else root
+        flags = frozenset(
+            flag
+            for field in parts[2:]
+            for flag in field.split("+")
+            if flag
+        )
+        if destination != root or "ro" in flags:
+            raise ValueError(
+                "Staging paths require a writable identity container mount: "
+                f"{mount}"
+            )
         mount_roots.append(root.resolve())
     if not mount_roots:
         raise ValueError("At least one absolute container mount is required")
@@ -518,16 +530,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     if submitted_job_id is not None:
         try:
             subprocess.run(("scontrol", "release", submitted_job_id), check=True)
-        except subprocess.CalledProcessError as error:
-            subprocess.run(("scancel", submitted_job_id), check=False)
+        except (subprocess.CalledProcessError, OSError) as error:
+            cleanup_error: str | None = None
+            try:
+                cancellation = subprocess.run(
+                    ("scancel", submitted_job_id),
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                if cancellation.returncode != 0:
+                    cleanup_error = cancellation.stderr.rstrip() or (
+                        f"scancel exited {cancellation.returncode}"
+                    )
+            except OSError as cancellation_error:
+                cleanup_error = str(cancellation_error)
+            failure = f"failed to release held staging job {submitted_job_id}"
+            if cleanup_error is not None:
+                failure += f"; cancellation also failed: {cleanup_error}"
             manifest_path = mark_manifest_failed(
                 args.output_dir,
-                f"failed to release held staging job {submitted_job_id}",
+                failure,
             )
             _emit_manifest(manifest_path)
-            raise RuntimeError(
-                f"Failed to release held staging job {submitted_job_id}"
-            ) from error
+            raise RuntimeError(failure) from error
     _emit_manifest(manifest_path)
     return 0
 

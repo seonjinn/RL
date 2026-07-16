@@ -86,8 +86,10 @@ The staging manifest deduplicates the shared PARD checkpoint and records exact
 repository, revision, cache path, state, and job ID. The submitter snapshots
 the worker source into a content-addressed Lustre directory, submits it held,
 writes `queued`, then releases it. The CPU-only staging job is non-exclusive
-and forwards only `HF_HOME`; all listed repositories are public. Existing
-snapshots are verified through the same immutable path.
+and forwards `HF_HOME` plus an explicit authentication/proxy allowlist. It
+never inherits the ambient environment. Existing snapshots are verified
+through the same immutable path. The `reconcile` command converts a stale
+queued manifest to a terminal failure after pre-wrapper scheduler failures.
 
 ```bash
 SCRIPT=experiments/vllm_0251_drafter_matrix/submit_matrix.sh

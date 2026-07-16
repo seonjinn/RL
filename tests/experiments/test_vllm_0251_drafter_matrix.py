@@ -572,6 +572,27 @@ def test_checkout_validation_rejects_unpushed_commit(tmp_path: Path) -> None:
         validate_checkout(repo, expected_fork_url=str(tmp_path / "fork.git"))
 
 
+def test_checkout_validation_reports_a_missing_remote_branch(tmp_path: Path) -> None:
+    repo = _make_pushed_checkout(tmp_path)
+    _git(repo, "switch", "-c", "local-only")
+
+    with pytest.raises(RuntimeError, match="has no pushed fork ref"):
+        validate_checkout(repo, expected_fork_url=str(tmp_path / "fork.git"))
+
+
+def test_checkout_validation_preserves_remote_transport_diagnostic(
+    tmp_path: Path,
+) -> None:
+    repo = _make_pushed_checkout(tmp_path)
+    missing_remote = tmp_path / "missing.git"
+    _git(repo, "remote", "set-url", "fork", str(missing_remote))
+
+    with pytest.raises(RuntimeError, match="Could not query fork ref") as error:
+        validate_checkout(repo, expected_fork_url=str(missing_remote))
+
+    assert "fatal:" in str(error.value)
+
+
 def test_checkout_validation_rejects_an_unapproved_fork_url(tmp_path: Path) -> None:
     repo = _make_pushed_checkout(tmp_path)
 
