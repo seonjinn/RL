@@ -14,6 +14,7 @@ from experiments.vllm_0251_drafter_matrix.collect_results import (
     RunMetadata,
     load_report_row,
     load_steps,
+    main,
     match_baseline,
     parse_step,
     render_reports,
@@ -75,6 +76,7 @@ def test_summarize_steps_marks_explicit_partial_window() -> None:
         "max_osl",
         "requested_cuda_graph_mode",
         "resolved_cuda_graph_mode",
+        "runner",
     ),
 )
 def test_match_baseline_requires_every_exact_identity_field(field: str) -> None:
@@ -116,21 +118,47 @@ def test_match_baseline_computes_directional_time_and_throughput_speedups() -> N
     assert matched.generation_throughput_speedup == 1.5
 
 
-def test_baseline_allows_zero_specdec_acceptance_and_accepted_length() -> None:
+@pytest.mark.parametrize("variant", ("baseline", "baseline_mrv1"))
+@pytest.mark.parametrize(
+    ("acceptance_rate", "mean_accepted_length"), ((None, None), (0.0, 0.0))
+)
+def test_baselines_allow_missing_or_zero_specdec_metrics(
+    variant: str,
+    acceptance_rate: float | None,
+    mean_accepted_length: float | None,
+) -> None:
     data = _fixture_step_data()
-    data["acceptance_rate"] = 0.0
-    data["mean_accepted_length"] = 0.0
+    data["variant"] = variant
+    data["acceptance_rate"] = acceptance_rate
+    data["mean_accepted_length"] = mean_accepted_length
 
     step = parse_step(data)
 
-    assert step.acceptance_rate == 0.0
-    assert step.mean_accepted_length == 0.0
+    assert step.acceptance_rate == acceptance_rate
+    assert step.mean_accepted_length == mean_accepted_length
+
+
+@pytest.mark.parametrize("field", ("acceptance_rate", "mean_accepted_length"))
+def test_non_baseline_completed_step_requires_every_specdec_metric(
+    field: str,
+) -> None:
+    data = _fixture_step_data()
+    data["variant"] = "eagle3_k3"
+    data.pop(field)
+
+    with pytest.raises(ValueError, match=field):
+        parse_step(data)
 
 
 @pytest.mark.parametrize(
     ("field", "value", "match"),
     (
+        ("top_p", 1.1, "top_p"),
+        ("e2e_time_s", 0.0, "e2e_time_s"),
         ("e2e_time_s", float("nan"), "e2e_time_s"),
+        ("generation_time_s", 0.0, "generation_time_s"),
+        ("e2e_throughput_tps_per_gpu", 0.0, "e2e_throughput"),
+        ("generation_throughput_tps_per_gpu", 0.0, "generation_throughput"),
         ("generation_throughput_tps_per_gpu", float("inf"), "generation_throughput"),
         ("policy_time_s", -1.0, "policy_time_s"),
         ("generation_ratio", 1.1, "generation_ratio"),
@@ -147,6 +175,40 @@ def test_parse_step_rejects_invalid_completed_metrics(
 
     with pytest.raises(ValueError, match=match):
         parse_step(data)
+
+
+@pytest.mark.parametrize(
+    ("baseline_variant", "runner"),
+    (("baseline", "mrv2"), ("baseline_mrv1", "mrv1")),
+)
+def test_cli_matches_candidates_to_both_baseline_variants(
+    tmp_path: Path, baseline_variant: str, runner: str
+) -> None:
+    baseline_path = tmp_path / f"{baseline_variant}.jsonl"
+    candidate_path = tmp_path / "candidate.jsonl"
+    csv_path = tmp_path / "summary.csv"
+    markdown_path = tmp_path / "summary.md"
+    _write_run(baseline_path, variant=baseline_variant, runner=runner)
+    _write_run(candidate_path, variant="eagle3_k3", runner=runner)
+
+    exit_code = main(
+        [
+            str(baseline_path),
+            str(candidate_path),
+            "--csv",
+            str(csv_path),
+            "--markdown",
+            str(markdown_path),
+        ]
+    )
+
+    assert exit_code == 0
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        report_rows = list(csv.DictReader(handle))
+    assert {row["variant"] for row in report_rows} == {
+        baseline_variant,
+        "eagle3_k3",
+    }
 
 
 def test_load_report_row_preserves_failed_and_unsupported_records(
@@ -316,6 +378,16 @@ def test_render_reports_uses_a_total_sort_key(tmp_path: Path) -> None:
 
 def _fixture_step_data() -> dict[str, object]:
     return json.loads(FIXTURE_PATH.read_text(encoding="utf-8").splitlines()[1])
+
+
+def _write_run(path: Path, *, variant: str, runner: str) -> None:
+    records: list[str] = []
+    for line in FIXTURE_PATH.read_text(encoding="utf-8").splitlines():
+        record = json.loads(line)
+        record["variant"] = variant
+        record["runner"] = runner
+        records.append(json.dumps(record, sort_keys=True))
+    path.write_text("\n".join(records) + "\n", encoding="utf-8")
 
 
 def _different_value(metadata: RunMetadata, field: str) -> object:

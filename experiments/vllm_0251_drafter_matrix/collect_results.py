@@ -25,6 +25,7 @@ from typing import Literal, cast
 
 
 RunStatus = Literal["completed", "failed", "unsupported"]
+_BASELINE_VARIANTS = frozenset(("baseline", "baseline_mrv1"))
 
 
 @dataclass(frozen=True)
@@ -59,7 +60,7 @@ class RunMetadata:
             container=_required_string(data, "container", location),
             cluster=_required_string(data, "cluster", location),
             temperature=_required_nonnegative_float(data, "temperature", location),
-            top_p=_required_nonnegative_float(data, "top_p", location),
+            top_p=_required_ratio(data, "top_p", location),
             max_osl=_required_positive_int(data, "max_osl", location),
             requested_cuda_graph_mode=_required_string(
                 data, "requested_cuda_graph_mode", location
@@ -167,6 +168,7 @@ _IDENTITY_FIELD_NAMES = (
     "max_osl",
     "requested_cuda_graph_mode",
     "resolved_cuda_graph_mode",
+    "runner",
 )
 
 _CSV_FIELDS = (
@@ -255,29 +257,30 @@ def parse_step(
     if _status(data, location) != "completed":
         raise ValueError(f"{location}: only completed records contain step metrics")
     metadata = RunMetadata.from_mapping(data, location)
-    mean_accepted_length = _optional_nonnegative_float(
-        data, "mean_accepted_length", location
-    )
-    if mean_accepted_length == 0.0 and metadata.variant != "baseline":
-        raise ValueError(
-            f"{location}: mean_accepted_length must be positive for non-baseline runs"
+    if metadata.variant in _BASELINE_VARIANTS:
+        acceptance_rate = _optional_ratio(data, "acceptance_rate", location)
+        mean_accepted_length = _optional_nonnegative_float(
+            data, "mean_accepted_length", location
+        )
+    else:
+        acceptance_rate = _required_ratio(data, "acceptance_rate", location)
+        mean_accepted_length = _required_positive_float(
+            data, "mean_accepted_length", location
         )
     return StepRow(
         step=_required_positive_int(data, "step", location),
-        e2e_time_s=_required_nonnegative_float(data, "e2e_time_s", location),
-        generation_time_s=_required_nonnegative_float(
-            data, "generation_time_s", location
-        ),
+        e2e_time_s=_required_positive_float(data, "e2e_time_s", location),
+        generation_time_s=_required_positive_float(data, "generation_time_s", location),
         policy_time_s=_required_nonnegative_float(data, "policy_time_s", location),
         logprob_time_s=_required_nonnegative_float(data, "logprob_time_s", location),
-        e2e_throughput_tps_per_gpu=_required_nonnegative_float(
+        e2e_throughput_tps_per_gpu=_required_positive_float(
             data, "e2e_throughput_tps_per_gpu", location
         ),
-        generation_throughput_tps_per_gpu=_required_nonnegative_float(
+        generation_throughput_tps_per_gpu=_required_positive_float(
             data, "generation_throughput_tps_per_gpu", location
         ),
         generation_ratio=_required_ratio(data, "generation_ratio", location),
-        acceptance_rate=_optional_ratio(data, "acceptance_rate", location),
+        acceptance_rate=acceptance_rate,
         mean_accepted_length=mean_accepted_length,
         metadata=metadata,
     )
@@ -429,13 +432,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         for row in report_rows
         if row.status == "completed"
         and row.summary is not None
-        and row.metadata.variant == "baseline"
+        and row.metadata.variant in _BASELINE_VARIANTS
     ]
     matched_rows = [
         ReportRow.completed(match_baseline(row.summary, baselines))
         if row.status == "completed"
         and row.summary is not None
-        and row.metadata.variant != "baseline"
+        and row.metadata.variant not in _BASELINE_VARIANTS
         else row
         for row in report_rows
     ]
@@ -489,6 +492,15 @@ def _required_nonnegative_float(
     value = _number(data, field, location)
     if value < 0.0:
         raise ValueError(f"{location}: {field} must be nonnegative")
+    return value
+
+
+def _required_positive_float(
+    data: Mapping[str, object], field: str, location: str
+) -> float:
+    value = _number(data, field, location)
+    if value <= 0.0:
+        raise ValueError(f"{location}: {field} must be positive")
     return value
 
 
@@ -556,6 +568,7 @@ def _identity_values(metadata: RunMetadata) -> tuple[object, ...]:
         metadata.max_osl,
         metadata.requested_cuda_graph_mode,
         metadata.resolved_cuda_graph_mode,
+        metadata.runner,
     )
 
 
