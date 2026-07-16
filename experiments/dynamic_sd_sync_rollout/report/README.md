@@ -342,6 +342,23 @@ SpecDec value behind tool execution. Speculation pays in agent loops only
 where turns produce long generations (reasoning-heavy steps), which is also
 where EAGLE3 (in-distribution) rather than suffix carries the win.
 
+## Do our numbers match the upstream DynamicSD PRs?
+
+Yes, when compared apples-to-apples. PR #32374 reports +7.5% over no-SD at
+BS 128 and +23% over fixed-K SD at BS 128/256 (MT-Bench serving, Llama-8B
+class); PR #45953 motivates per-K full graphs. We measure: +8% over no-SD in
+the saturation regime (32B SWE dynamic 1.08x), +4-50% over fixed-K where
+fixed-K is miscalibrated for the batch size (32B SWE, 235B), and -13%
+dynamic step wall from per-K FULL graphs. The apparent disagreement in our
+headline math rows comes from the reference: the PRs compare against a fixed
+K that hurts at high batch sizes (compare our fixed-K5, which a naive tuner
+might pick from small-batch profiling: dynamic beats it ~3x), while we
+compare against the profile-optimal fixed K. **DynamicSD's benefit
+presupposes that the optimal K actually moves with runtime batch size** -
+true for fluctuating serving traffic and for workloads whose K-optimum
+crosses zero, not for cap-truncated sync rollouts that pin the batch at one
+size.
+
 ## Key takeaway
 
 **On these RL-rollout shapes, EAGLE3 with a well-chosen fixed K is the
