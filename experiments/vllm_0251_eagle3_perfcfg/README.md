@@ -11,6 +11,8 @@ vLLM derives separate graph descriptors for each runtime K.
 
 The launcher defaults to a two-step smoke test. Promote a passing matched pair
 to `MAX_STEPS=20`; report step 2 through 20 to exclude initialization.
+It clears `ray.sub`'s singleton dependency so matched variants can run
+concurrently.
 
 ```bash
 MODE=submit VARIANT=baseline MAX_STEPS=20 \

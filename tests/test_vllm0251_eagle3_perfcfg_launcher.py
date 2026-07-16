@@ -50,7 +50,8 @@ def test_baseline_preserves_qwen30_performance_recipe() -> None:
     assert "--nodes=4" in output
     assert "--segment=4" in output
     assert "--gres" not in output
-    assert "--dependency" not in output
+    assert "--dependency=" in output
+    assert "--dependency=singleton" not in output
     assert "speculative_config" not in output
 
 

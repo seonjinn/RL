@@ -140,6 +140,7 @@ printf -v command '%q ' "${command_parts[@]}"
 command="${command% }"
 
 sbatch_args=(
+  --dependency=
   --account="${ACCOUNT}"
   --partition="${PARTITION}"
   --nodes=4
