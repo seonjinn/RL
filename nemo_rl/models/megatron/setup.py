@@ -188,12 +188,10 @@ def _enforce_packed_seq_cuda_graph_consistency(config: PolicyConfig) -> None:
     megatron_cfg = config.get("megatron_cfg", {})
     if megatron_cfg.get("cuda_graph_impl") in (None, "none"):
         return
-    if megatron_cfg.get("cuda_graph_impl") == "local" and megatron_cfg.get(
-        "cuda_graph_pr5783_thd", False
-    ):
-        # Megatron-LM PR #5783 THD path: graphs consume the real PackedSeqParams
-        # (cu_seqlens are static graph inputs), so the TE packed-capture
-        # consistency rules do not apply.
+    if megatron_cfg.get("cuda_graph_pr5783_thd", False):
+        # Static-THD MCore paths (PR #5783 local and PR #4359 TE) consume the
+        # real PackedSeqParams as graph inputs, so their own capture contract
+        # replaces the current TE packed-replay mode.
         return
     if megatron_cfg.get("allow_qwen_cuda_graph_packed_seq", False):
         warnings.warn(
@@ -986,8 +984,8 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
         model_cfg.cuda_graph_max_packed_seqs = config["megatron_cfg"][
             "cuda_graph_max_packed_seqs"
         ]
-    if cg_impl == "local" and cg_pr5783_thd:
-        # Megatron-LM PR #5783: local-impl CUDA graphs over THD packed sequences.
+    if cg_impl in ("local", "transformer_engine") and cg_pr5783_thd:
+        # Static-THD CUDA graph paths (PR #5783 local and PR #4359 TE).
         # sequence_packing_scheduler gates MegatronModule._is_thd_cuda_graph, and
         # cu_seqlens buffers are statically sized to thd_max_packed_sequences + 1.
         model_cfg.sequence_packing_scheduler = "dp_balanced"

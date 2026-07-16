@@ -454,8 +454,8 @@ class MegatronConfig(TypedDict):
     # replay. Steps below the threshold fall back to regular execution. 0.0 disables the
     # threshold (always use CG). Requires cuda_graph_buckets to be set.
     cuda_graph_min_fill_ratio: NotRequired[float]
-    # Enable the Megatron-LM PR #5783 THD CUDA-graph path. Requires
-    # cuda_graph_impl='local' and a Megatron-LM tree containing PR #5783.
+    # Enable a static-THD CUDA-graph path in a compatible Megatron-LM tree
+    # (PR #5783 with local graphs or PR #4359 with Transformer Engine graphs).
     # Maps to sequence_packing_scheduler='dp_balanced', pad_packed_seq_alignment='max',
     # thd_max_packed_sequences=cuda_graph_max_packed_seqs, and
     # max_seqlen_per_dp_cp_rank=max_total_sequence_length // context_parallel_size.

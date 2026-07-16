@@ -13,8 +13,10 @@ policy:
     cuda_graph_scope:
     - moe_router
     - moe_preprocess
+    cuda_graph_pr5783_thd: true
     cuda_graph_warmup_steps: 3
     cuda_graph_packed_seq: false
+    cuda_graph_max_packed_seqs: 64
     cuda_graph_buckets:
     - 4096
 logger:

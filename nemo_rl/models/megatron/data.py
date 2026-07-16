@@ -116,10 +116,10 @@ def make_processed_microbatch_iterator(
     cu_seqlens_pad_to_entries = None
     if (
         pack_sequences
-        and megatron_cfg.get("cuda_graph_impl") == "local"
+        and megatron_cfg.get("cuda_graph_impl") in ("local", "transformer_engine")
         and megatron_cfg.get("cuda_graph_pr5783_thd", False)
     ):
-        # PR #5783 THD CUDA graphs: cu_seqlens tensors are graph inputs, so
+        # Static-THD CUDA graphs: cu_seqlens tensors are graph inputs, so
         # PackedSeqParams must carry a static [thd_max_packed_sequences + 1]
         # shape (thd_max_packed_sequences = cuda_graph_max_packed_seqs).
         cu_seqlens_pad_to_entries = (
@@ -853,8 +853,8 @@ def _pack_sequences_for_megatron(
             - The three parameters above can be calculated using _get_pack_sequence_parameters_for_megatron, we do not recommend users to set these parameters manually.
         cp_size: Context parallelism size
         cu_seqlens_pad_to_entries: Pad the cu_seqlens tensors inside PackedSeqParams
-            to this fixed entry count by repeating the endpoint (PR #5783 THD
-            CUDA-graph static-input requirement). Returned cu_seqlens /
+            to this fixed entry count by repeating the endpoint (static-THD
+            CUDA-graph input requirement). Returned cu_seqlens /
             cu_seqlens_padded stay unpadded.
 
     Returns:
@@ -1018,7 +1018,7 @@ def _pack_sequences_for_megatron(
 
     psp_cu_seqlens = cu_seqlens_padded
     if cu_seqlens_pad_to_entries is not None:
-        # PR #5783 THD CUDA graphs: cu_seqlens are graph inputs and must keep a
+        # Static-THD CUDA graphs: cu_seqlens are graph inputs and must keep a
         # static [thd_max_packed_sequences + 1] shape. Pad by repeating the
         # endpoint (zero-length trailing sequences), mirroring Megatron-LM's
         # _pad_cu_seqlens. Only the PackedSeqParams copies are padded.
@@ -1314,9 +1314,10 @@ def _get_pack_sequence_parameters_for_megatron(
         cuda_graph_buckets = sorted(cuda_graph_buckets)
     min_fill_ratio = megatron_cfg.get("cuda_graph_min_fill_ratio", 0.0)
 
-    pr5783_thd = megatron_cfg.get("cuda_graph_impl") == "local" and megatron_cfg.get(
-        "cuda_graph_pr5783_thd", False
-    )
+    pr5783_thd = megatron_cfg.get("cuda_graph_impl") in (
+        "local",
+        "transformer_engine",
+    ) and megatron_cfg.get("cuda_graph_pr5783_thd", False)
 
     is_cg_step = False
     if pr5783_thd:

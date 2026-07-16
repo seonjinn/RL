@@ -32,6 +32,25 @@ import pytest
 import torch
 
 
+def test_static_thd_cuda_graph_preserves_transformer_engine_packing_mode():
+    """A static-THD MCore implementation owns packed replay for TE graphs."""
+    from nemo_rl.models.megatron.setup import _enforce_packed_seq_cuda_graph_consistency
+
+    config = {
+        "sequence_packing": {"enabled": True},
+        "megatron_cfg": {
+            "cuda_graph_impl": "transformer_engine",
+            "cuda_graph_pr5783_thd": True,
+            "cuda_graph_scope": "attn",
+            "cuda_graph_packed_seq": False,
+        },
+    }
+
+    _enforce_packed_seq_cuda_graph_consistency(config)
+
+    assert config["megatron_cfg"]["cuda_graph_packed_seq"] is False
+
+
 @pytest.mark.mcore
 class TestValidateModelPaths:
     """Tests for validate_model_paths function."""
