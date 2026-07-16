@@ -59,7 +59,7 @@ srun --nodes=1 --ntasks=1 --no-container-mount-home \
     --container-image="${CONTAINER}" \
     --container-mounts=/lustre:/lustre \
     --container-workdir="${WORKTREE}" \
-    python "${WORKTREE}/examples/run_grpo.py" \
+    uv run --locked --directory "${WORKTREE}" python "${WORKTREE}/examples/run_grpo.py" \
     --config "${CONFIG}" \
     "grpo.max_num_steps=${STEPS}" \
     "logger.log_dir=${LOG_DIR}" \

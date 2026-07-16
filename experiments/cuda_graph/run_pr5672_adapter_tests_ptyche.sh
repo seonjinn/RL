@@ -11,6 +11,7 @@ set -euo pipefail
 
 WORKTREE=/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr5672-vs-pr5783-ptyche-20260716
 CONTAINER=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/nemo_rl_nightly_20260715.sqsh
+export WORKTREE
 
 mkdir -p "${WORKTREE}/experiments/cuda_graph/logs"
 
@@ -23,9 +24,12 @@ srun --nodes=1 --ntasks=1 --no-container-mount-home \
     --container-workdir="${WORKTREE}" \
     bash -lc '
         python --version
-        python -c "import ray, torch, transformer_engine; print(\"RUNTIME_OK\", torch.__version__, transformer_engine.__version__)"
         python -m pytest -q \
             tests/unit/test_ray_sub_submission.py \
-            tests/unit/models/policy/test_pr5672_cuda_graph_adapter.py \
-            3rdparty/Megatron-LM-workspace/Megatron-LM/tests/unit_tests/transformer/test_packed_seq_params_cuda_graph.py
+            tests/unit/models/policy/test_pr5672_cuda_graph_adapter.py
+        uv run --locked --extra mcore --directory "${WORKTREE}" python -c \
+            "import torch, transformer_engine; print(\"MCORE_RUNTIME_OK\", torch.__version__, transformer_engine.__version__)"
+        cd "${WORKTREE}/3rdparty/Megatron-LM-workspace/Megatron-LM"
+        uv run --locked --extra mcore --directory "${WORKTREE}" python -m pytest -q \
+            tests/unit_tests/transformer/test_packed_seq_params_cuda_graph.py
     '
