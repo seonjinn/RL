@@ -24,8 +24,11 @@ base EAGLE3 snapshots, and the shared PARD snapshot complete at their pinned
 revisions. Both exact DFlash snapshots and the distinct Qwen32/Qwen235
 Thinking EAGLE3 snapshots are absent and must pass the staging job before
 their smoke submissions. Qwen30 has no separate Thinking row because its
-previously inspected Thinking alias has identical model/config blobs to the
-selected reasoning-enabled base checkpoint. The available image is
+previously inspected Thinking alias at revision
+`a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf` has the same config blob
+`4e11c4dbb9b0bd911748a6f567d41f57c3dcdbe3` and model LFS SHA-256
+`d2d6e2e63e09dc755053ae5c98cdececae3611ae5e202d4fa5411126dd3b1dfa`
+as the selected reasoning-enabled base checkpoint. The available image is
 `nemo_rl_nightly_20260715.sqsh`; the older derived image referenced by the
 previous experiment has been removed.
 
@@ -91,19 +94,19 @@ after real submission.
 Run before pushing and again from the clean cluster checkout:
 
 ```bash
-pytest -q \
+uv run --locked pytest -q \
   tests/experiments/test_vllm_0251_drafter_matrix.py \
   tests/experiments/test_vllm_0251_drafter_results.py \
   tests/experiments/test_vllm_0251_drafter_staging.py \
   tests/experiments/test_vllm_0251_suffix_dependency.py
 bash -n experiments/vllm_0251_drafter_matrix/submit_matrix.sh
 bash -n experiments/vllm_0251_drafter_matrix/submit_stage_drafters.sh
-ruff check \
+uv run --locked ruff check \
   experiments/vllm_0251_drafter_matrix \
   tests/experiments/test_vllm_0251_drafter_matrix.py \
   tests/experiments/test_vllm_0251_drafter_results.py \
   tests/experiments/test_vllm_0251_drafter_staging.py
-pyright \
+uv run --locked pyright \
   experiments/vllm_0251_drafter_matrix/matrix.py \
   experiments/vllm_0251_drafter_matrix/stage_drafters.py \
   experiments/vllm_0251_drafter_matrix/collect_results.py

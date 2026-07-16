@@ -21,7 +21,30 @@ if [[ "${1:-}" == "--worker-script" ]]; then
   worker_script="${1:?missing absolute worker script path}"
   shift
   python_bin="/opt/nemo_rl_venv/bin/python"
-  exec "${python_bin}" "${worker_script}" --worker "$@"
+  worker_args=("$@")
+  output_dir=""
+  for ((index = 0; index < ${#worker_args[@]}; index++)); do
+    if [[ "${worker_args[index]}" == "--output-dir" ]]; then
+      output_dir="${worker_args[index + 1]:-}"
+      break
+    fi
+  done
+  set +e
+  "${python_bin}" "${worker_script}" --worker "${worker_args[@]}"
+  status=$?
+  set -e
+  if ((status != 0)) && [[ -n "${output_dir}" ]]; then
+    manifest="${output_dir}/drafter-staging-manifest.json"
+    if ! grep -Eq '"status": "(failed|staged)"' "${manifest}" 2>/dev/null; then
+      mkdir -p "${output_dir}"
+      temporary="${manifest}.$$.$RANDOM.tmp"
+      printf '%s\n' \
+        '{"checkpoints": [], "error": "worker failed before terminal manifest", "status": "failed"}' \
+        > "${temporary}"
+      mv -f "${temporary}" "${manifest}"
+    fi
+  fi
+  exit "${status}"
 else
   python_bin="${PYTHON_BIN:-python3}"
 fi

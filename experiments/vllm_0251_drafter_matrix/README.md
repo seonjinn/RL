@@ -6,11 +6,11 @@ comparisons average steps 2 through 20; step 1 is initialization warmup.
 
 ## Controlled Recipes
 
-| Model | Recipe | Topology | Max OSL | Sampling |
-|---|---|---:|---:|---|
-| Qwen3-30B-A3B | `grpo-qwen3-30ba3b-4n4g.yaml` | 4 nodes x 4 GPUs | 4096 | temperature 1.0, top-p 1.0 |
-| Qwen3-32B | `grpo-qwen3-32b-4n4g.yaml` | 4 nodes x 4 GPUs | 4096 | temperature 1.0, top-p 1.0 |
-| Qwen3-235B-A22B | `grpo-qwen3-235b-16n4g.yaml` | 16 nodes x 4 GPUs | 8192 | temperature 1.0, top-p 1.0 |
+| Model | Target revision | Recipe | Topology | Max OSL | Sampling |
+|---|---|---|---:|---:|---|
+| Qwen3-30B-A3B | `ad44e777bcd18fa416d9da3bd8f70d33ebb85d39` | `grpo-qwen3-30ba3b-4n4g.yaml` | 4 nodes x 4 GPUs | 4096 | temperature 1.0, top-p 1.0 |
+| Qwen3-32B | `9216db5781bf21249d130ec9da846c4624c16137` | `grpo-qwen3-32b-4n4g.yaml` | 4 nodes x 4 GPUs | 4096 | temperature 1.0, top-p 1.0 |
+| Qwen3-235B-A22B | `8efa61729e24bd65b1d152b5ab5409052aa80e65` | `grpo-qwen3-235b-16n4g.yaml` | 16 nodes x 4 GPUs | 8192 | temperature 1.0, top-p 1.0 |
 
 The recipe remains authoritative for model, dataset, batching, placement,
 parallelism, MoE backend, and sampling. The matrix changes only step count,
@@ -46,11 +46,14 @@ Exact model-based drafter identities:
 | Qwen32 | DFlash | `AICP-Labs/qwen3-32b-dflash-en-zh` | `68ccc7fd27b104271321b179a2959c759dce5eef` |
 | all | draft/PARD | `amd/PARD-Qwen3-0.6B` | `f9f650fbab180c26498817718f0db5cae8f25136` |
 
-Qwen30 does not get a duplicate Thinking row. The previously inspected
-`Qwen3-30B-A3B-Thinking-2507-speculator.eagle3` revision and the selected
-`Qwen3-30B-A3B-speculator.eagle3` revision resolve to identical model/config
-blobs, and the selected checkpoint was trained with reasoning enabled. Qwen32
-and Qwen235 have distinct Thinking checkpoints, so their K1/K3/K5 rows are
+Qwen30 does not get a duplicate Thinking row. The selected base repository at
+revision `6afc5aa2477b923467fb9a8d906782b984a9a6ba` and
+`RedHatAI/Qwen3-30B-A3B-Thinking-2507-speculator.eagle3` at revision
+`a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf` resolve to the same config blob
+`4e11c4dbb9b0bd911748a6f567d41f57c3dcdbe3` and model LFS SHA-256
+`d2d6e2e63e09dc755053ae5c98cdececae3611ae5e202d4fa5411126dd3b1dfa`.
+The selected checkpoint was trained with reasoning enabled. Qwen32 and
+Qwen235 have distinct Thinking checkpoints, so their K1/K3/K5 rows are
 controlled A/B comparisons against the base EAGLE3 rows.
 
 Qwen235 DFlash has no exact public checkpoint and is rejected before
@@ -80,8 +83,11 @@ bash "$STAGE" submit --output-dir "$STAGE_OUT"
 ```
 
 The staging manifest deduplicates the shared PARD checkpoint and records exact
-repository, revision, cache path, state, and job ID. Existing snapshots are
-verified through the same immutable path; credentials remain environment-only.
+repository, revision, cache path, state, and job ID. The submitter snapshots
+the worker source into a content-addressed Lustre directory, submits it held,
+writes `queued`, then releases it. The CPU-only staging job is non-exclusive
+and forwards only `HF_HOME`; all listed repositories are public. Existing
+snapshots are verified through the same immutable path.
 
 ```bash
 SCRIPT=experiments/vllm_0251_drafter_matrix/submit_matrix.sh

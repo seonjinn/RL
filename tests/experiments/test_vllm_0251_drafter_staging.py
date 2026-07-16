@@ -12,6 +12,7 @@ from experiments.vllm_0251_drafter_matrix.stage_drafters import (
     MANIFEST_NAME,
     build_sbatch_command,
     collect_checkpoint_specs,
+    prepare_worker_snapshot,
     run_stage,
     stage_targets,
     write_manifest,
@@ -173,6 +174,10 @@ def test_sbatch_command_is_single_node_lyris_staging_without_gpu_request(
     assert "--partition=gb200" in command
     assert "--nodes=1" in command
     assert "--segment=1" in command
+    assert "--exclusive" not in command
+    assert f"--export=HF_HOME={G_CLUSTERS[0].hf_home}" in command
+    assert not any(part.startswith("--export=ALL") for part in command)
+    assert ("--hold" in command) is (mode == "submit")
     assert f"--container-image={DEFAULT_CONTAINER}" in command
     assert f"--container-mounts={DEFAULT_MOUNTS}" in command
     assert not any(part.startswith("--gres") for part in command)
@@ -202,8 +207,26 @@ def test_submit_wrapper_separates_host_and_container_python() -> None:
     assert 'if [[ "${1:-}" == "--worker-script" ]]' in text
     assert 'python_bin="/opt/nemo_rl_venv/bin/python"' in text
     assert 'python_bin="${PYTHON_BIN:-python3}"' in text
-    assert 'exec "${python_bin}" "${worker_script}" --worker "$@"' in text
+    assert '"${python_bin}" "${worker_script}" --worker "${worker_args[@]}"' in text
+    assert "worker failed before terminal manifest" in text
     assert 'exec "${python_bin}"' in text
+
+
+def test_prepare_worker_snapshot_is_content_addressed_and_complete(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "checkout/experiments/vllm_0251_drafter_matrix"
+    source.mkdir(parents=True)
+    worker = source / "stage_drafters.py"
+    worker.write_text("worker\n", encoding="utf-8")
+    (source / "matrix.py").write_text("matrix\n", encoding="utf-8")
+
+    snapshot = prepare_worker_snapshot(tmp_path / "output", worker)
+
+    assert snapshot.read_text(encoding="utf-8") == "worker\n"
+    assert snapshot.with_name("matrix.py").read_text(encoding="utf-8") == "matrix\n"
+    assert snapshot.is_relative_to(tmp_path / "output")
+    assert oct(snapshot.stat().st_mode & 0o777) == "0o444"
 
 
 def test_run_stage_records_terminal_failure_when_worker_initialization_fails(

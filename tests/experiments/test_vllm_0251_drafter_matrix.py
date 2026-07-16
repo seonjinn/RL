@@ -8,11 +8,13 @@ import pytest
 
 from experiments.vllm_0251_drafter_matrix.matrix import (
     G_FORK_URLS,
+    RecipeSpec,
     build_runtime_command,
     build_scheduler_command,
     build_scheduler_sequence,
     build_submission_environment,
     resolve_run,
+    resolve_target_snapshot,
     validate_run_destination,
     validate_snapshot,
     validate_checkout,
@@ -55,6 +57,17 @@ def test_recipe_topology_is_authoritative(
         segment,
         osl,
     )
+
+
+def test_recipe_targets_use_expected_immutable_revisions() -> None:
+    assert {
+        model: resolve_run(model, "baseline", "smoke2", "lyris").recipe.target_revision
+        for model in ("qwen30", "qwen32", "qwen235")
+    } == {
+        "qwen30": "ad44e777bcd18fa416d9da3bd8f70d33ebb85d39",
+        "qwen32": "9216db5781bf21249d130ec9da846c4624c16137",
+        "qwen235": "8efa61729e24bd65b1d152b5ab5409052aa80e65",
+    }
 
 
 @pytest.mark.parametrize(
@@ -457,6 +470,7 @@ def test_runtime_command_binds_the_validated_target_snapshot(tmp_path: Path) -> 
     )
 
     assert f"policy.model_name={target_snapshot}" in command
+    assert f"policy.tokenizer.name={target_snapshot}" in command
     assert "NEMO_RL_VENV_DIR=/tmp/nemorl-v0251-runtime-123" in command
     assert "TRITON_CACHE_DIR=/tmp/nemorl-v0251-triton-runtime-123" in command
     assert "TORCHINDUCTOR_CACHE_DIR=/tmp/nemorl-v0251-inductor-runtime-123" in command
@@ -565,6 +579,43 @@ def test_checkout_validation_rejects_an_unapproved_fork_url(tmp_path: Path) -> N
         validate_checkout(repo, expected_fork_url="git@example.invalid:user/RL.git")
 
 
+def test_checkout_validation_preserves_initialized_submodule_status(
+    tmp_path: Path,
+) -> None:
+    submodule = tmp_path / "submodule"
+    submodule.mkdir()
+    _git(submodule, "init", "-b", "main")
+    _git(submodule, "config", "user.email", "test@example.com")
+    _git(submodule, "config", "user.name", "Test User")
+    (submodule / "tracked.txt").write_text("submodule\n", encoding="utf-8")
+    _git(submodule, "add", "tracked.txt")
+    _git(submodule, "commit", "-m", "initial")
+    repo = _make_pushed_checkout(tmp_path)
+    subprocess.run(
+        (
+            "git",
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            str(submodule),
+            "vendor/submodule",
+        ),
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    _git(repo, "commit", "-am", "add submodule")
+    _git(repo, "push", "fork", "matrix")
+
+    state = validate_checkout(
+        repo, expected_fork_url=str(tmp_path / "fork.git")
+    )
+
+    assert state.submodules[0].startswith(" ")
+
+
 @pytest.mark.parametrize("run_tag", ("../escape", "/absolute", "nested/name", "."))
 def test_run_destination_rejects_escaping_tags(tmp_path: Path, run_tag: str) -> None:
     with pytest.raises(ValueError, match="run tag"):
@@ -601,6 +652,49 @@ def test_snapshot_validation_requires_full_sha_and_weights(tmp_path: Path) -> No
     validate_snapshot(snapshot, "a" * 40, "unit")
     with pytest.raises(RuntimeError, match="40-character"):
         validate_snapshot(snapshot, "a", "unit")
+
+
+def test_snapshot_validation_requires_every_indexed_shard(tmp_path: Path) -> None:
+    revision = "b" * 40
+    snapshot = tmp_path / "snapshots" / revision
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text("{}\n", encoding="utf-8")
+    (snapshot / "model-00001-of-00002.safetensors").write_bytes(b"weights")
+    (snapshot / "model.safetensors.index.json").write_text(
+        json.dumps(
+            {
+                "weight_map": {
+                    "layer.0": "model-00001-of-00002.safetensors",
+                    "layer.1": "model-00002-of-00002.safetensors",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FileNotFoundError, match="indexed weight shards"):
+        validate_snapshot(snapshot, revision, "unit")
+    (snapshot / "model-00002-of-00002.safetensors").write_bytes(b"weights")
+    validate_snapshot(snapshot, revision, "unit")
+
+
+def test_target_snapshot_rejects_a_moved_main_ref(tmp_path: Path) -> None:
+    expected_revision = "c" * 40
+    recipe = RecipeSpec(
+        key="unit",
+        path="recipe.yaml",
+        target_repo_id="org/model",
+        target_revision=expected_revision,
+        nodes=1,
+        segment=1,
+        max_osl=128,
+    )
+    ref = recipe.target_ref_path(tmp_path)
+    ref.parent.mkdir(parents=True)
+    ref.write_text("d" * 40, encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="ref moved"):
+        resolve_target_snapshot(recipe, tmp_path)
 
 
 def test_submission_environment_drops_ambient_execution_controls() -> None:

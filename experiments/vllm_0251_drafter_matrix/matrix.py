@@ -38,6 +38,7 @@ class RecipeSpec:
     key: str
     path: str
     target_repo_id: str
+    target_revision: str
     nodes: int
     segment: int
     max_osl: int
@@ -176,6 +177,7 @@ G_RECIPES = (
         key="qwen30",
         path="examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
         target_repo_id="Qwen/Qwen3-30B-A3B",
+        target_revision="ad44e777bcd18fa416d9da3bd8f70d33ebb85d39",
         nodes=4,
         segment=4,
         max_osl=4096,
@@ -184,6 +186,7 @@ G_RECIPES = (
         key="qwen32",
         path="examples/configs/recipes/llm/performance/grpo-qwen3-32b-4n4g.yaml",
         target_repo_id="Qwen/Qwen3-32B",
+        target_revision="9216db5781bf21249d130ec9da846c4624c16137",
         nodes=4,
         segment=4,
         max_osl=4096,
@@ -192,6 +195,7 @@ G_RECIPES = (
         key="qwen235",
         path="examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g.yaml",
         target_repo_id="Qwen/Qwen3-235B-A22B",
+        target_revision="8efa61729e24bd65b1d152b5ab5409052aa80e65",
         nodes=16,
         segment=16,
         max_osl=8192,
@@ -625,8 +629,11 @@ def build_runtime_command(
         f"logger.wandb.project={G_WANDB_PROJECT}",
         f"logger.wandb.name={run_tag}",
     )
-    target_override = (
-        (f"policy.model_name={target_snapshot}",)
+    target_overrides = (
+        (
+            f"policy.model_name={target_snapshot}",
+            f"policy.tokenizer.name={target_snapshot}",
+        )
         if target_snapshot is not None
         else ()
     )
@@ -638,7 +645,7 @@ def build_runtime_command(
         "--config",
         run.recipe.path,
         *run.hydra_overrides,
-        *target_override,
+        *target_overrides,
         *output_overrides,
     )
 
@@ -686,7 +693,7 @@ def _git(repo_dir: Path, *args: str) -> str:
         capture_output=True,
         text=True,
     )
-    return result.stdout.strip()
+    return result.stdout.rstrip()
 
 
 def validate_checkout(
@@ -711,7 +718,12 @@ def validate_checkout(
         )
     fork_ref = f"refs/remotes/fork/{branch}"
     remote_ref = f"refs/heads/{branch}"
-    remote_line = _git(repo_dir, "ls-remote", "--exit-code", "fork", remote_ref)
+    try:
+        remote_line = _git(
+            repo_dir, "ls-remote", "--exit-code", "fork", remote_ref
+        )
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(f"Branch has no pushed fork ref: {remote_ref}") from error
     remote_parts = remote_line.split()
     if len(remote_parts) != 2 or remote_parts[1] != remote_ref:
         raise RuntimeError(f"Branch has no pushed fork ref: {remote_ref}")
@@ -746,10 +758,24 @@ def validate_snapshot(snapshot: Path, revision: str, label: str) -> None:
         )
     if not snapshot.is_dir() or not (snapshot / "config.json").is_file():
         raise FileNotFoundError(f"{label} snapshot is incomplete: {snapshot}")
-    has_index = (snapshot / "model.safetensors.index.json").is_file()
+    index_path = snapshot / "model.safetensors.index.json"
+    has_index = index_path.is_file()
     has_weights = any(path.is_file() for path in snapshot.glob("*.safetensors"))
     if not has_index and not has_weights:
         raise FileNotFoundError(f"{label} snapshot has no model weights: {snapshot}")
+    if has_index:
+        try:
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+            weight_map = index["weight_map"]
+            shards = {snapshot / str(name) for name in weight_map.values()}
+        except (json.JSONDecodeError, KeyError, TypeError, AttributeError) as error:
+            raise RuntimeError(f"{label} has an invalid weight index: {index_path}") from error
+        missing_shards = tuple(sorted(str(path) for path in shards if not path.is_file()))
+        if missing_shards:
+            raise FileNotFoundError(
+                f"{label} snapshot is missing indexed weight shards: "
+                + ", ".join(missing_shards)
+            )
 
 
 def resolve_target_snapshot(recipe: RecipeSpec, hf_home: Path) -> Path:
@@ -761,6 +787,11 @@ def resolve_target_snapshot(recipe: RecipeSpec, hf_home: Path) -> Path:
     if _FULL_SHA.fullmatch(revision) is None:
         raise RuntimeError(
             f"Target model ref is not a full immutable revision: {ref_path}"
+        )
+    if revision != recipe.target_revision:
+        raise RuntimeError(
+            f"Target model ref moved: expected {recipe.target_revision}, got "
+            f"{revision} in {ref_path}"
         )
     snapshot = ref_path.parent.parent / "snapshots" / revision
     validate_snapshot(snapshot, revision, "Target model")

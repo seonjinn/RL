@@ -17,10 +17,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -193,6 +195,34 @@ def write_manifest(
     return destination
 
 
+def prepare_worker_snapshot(output_dir: Path, worker_path: Path) -> Path:
+    """Copy the worker and matrix module into a content-addressed Lustre tree."""
+    worker_path = worker_path.resolve()
+    matrix_path = worker_path.with_name("matrix.py")
+    sources = (worker_path, matrix_path)
+    for source in sources:
+        if not source.is_file():
+            raise FileNotFoundError(f"Missing staging source: {source}")
+    digest = hashlib.sha256()
+    for source in sources:
+        digest.update(source.name.encode())
+        digest.update(source.read_bytes())
+    source_root = output_dir.resolve() / f"worker-source-{digest.hexdigest()[:16]}"
+    package_dir = source_root / "experiments/vllm_0251_drafter_matrix"
+    package_dir.mkdir(parents=True, exist_ok=True)
+    for source in sources:
+        destination = package_dir / source.name
+        if destination.exists():
+            if destination.read_bytes() != source.read_bytes():
+                raise RuntimeError(f"Immutable worker snapshot changed: {destination}")
+            continue
+        temporary = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
+        shutil.copy2(source, temporary)
+        os.chmod(temporary, 0o444)
+        os.replace(temporary, destination)
+    return package_dir / worker_path.name
+
+
 def build_sbatch_command(
     *,
     mode: Literal["test-only", "submit"],
@@ -218,14 +248,14 @@ def build_sbatch_command(
         "--partition=gb200",
         "--nodes=1",
         "--ntasks-per-node=1",
-        "--exclusive",
         "--time=02:00:00",
         "--segment=1",
         "--job-name=nemorl-drafter-stage",
         f"--output={output_dir / 'slurm-%j.out'}",
-        f"--export=ALL,HF_HOME={hf_home}",
+        f"--export=HF_HOME={hf_home}",
         f"--container-image={container}",
         f"--container-mounts={mounts}",
+        *(('--hold',) if mode == "submit" else ()),
         str(wrapper_path),
         "--worker-script",
         str(worker_path),
@@ -356,6 +386,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ):
         if not path.is_file():
             raise FileNotFoundError(f"Missing {label}: {path}")
+    immutable_worker_path = prepare_worker_snapshot(args.output_dir, worker_path)
     command = build_sbatch_command(
         mode=args.command,
         output_dir=args.output_dir,
@@ -363,15 +394,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         container=container,
         mounts=args.mounts,
         wrapper_path=wrapper_path,
-        worker_path=worker_path,
+        worker_path=immutable_worker_path,
     )
     result = subprocess.run(command, check=True, capture_output=True, text=True)
+    submitted_job_id: str | None = None
     if args.command == "test-only":
         entries = _entries_for(checkpoints, args.hf_home, "test-only", None)
     else:
-        job_id = _parse_job_id(result.stdout)
-        entries = _entries_for(checkpoints, args.hf_home, "queued", job_id)
-    manifest_path = write_manifest(args.output_dir, entries, status=args.command)
+        submitted_job_id = _parse_job_id(result.stdout)
+        entries = _entries_for(
+            checkpoints, args.hf_home, "queued", submitted_job_id
+        )
+    manifest_status = "queued" if submitted_job_id is not None else "test-only"
+    manifest_path = write_manifest(args.output_dir, entries, status=manifest_status)
+    if submitted_job_id is not None:
+        subprocess.run(("scontrol", "release", submitted_job_id), check=True)
     _emit_manifest(manifest_path)
     return 0
 
