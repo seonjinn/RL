@@ -12,19 +12,19 @@ def load_pyproject() -> dict[str, object]:
         return tomllib.load(stream)
 
 
-def test_vllm_extra_uses_official_025_wheels_and_runtime_dependencies() -> None:
+def test_vllm_extra_uses_official_0251_wheels_and_runtime_dependencies() -> None:
     project = load_pyproject()
     dependencies = project["project"]["optional-dependencies"]["vllm"]
 
     assert any(
-        "v0.25.0/vllm-0.25.0-cp38-abi3-manylinux_2_28_aarch64.whl" in item
+        "v0.25.1/vllm-0.25.1-cp38-abi3-manylinux_2_28_aarch64.whl" in item
         for item in dependencies
     )
     assert any(
-        "v0.25.0/vllm-0.25.0-cp38-abi3-manylinux_2_28_x86_64.whl" in item
+        "v0.25.1/vllm-0.25.1-cp38-abi3-manylinux_2_28_x86_64.whl" in item
         for item in dependencies
     )
-    assert any(item.startswith("vllm==0.25.0") for item in dependencies)
+    assert any(item.startswith("vllm==0.25.1") for item in dependencies)
     for package in (
         "flashinfer-python==0.6.13",
         "flashinfer-cubin==0.6.13",
@@ -45,7 +45,7 @@ def test_global_overrides_are_compatible_with_vllm_025() -> None:
     assert not any(item.startswith("xgrammar==0.1.33") for item in overrides)
 
 
-def test_lockfile_resolves_vllm_025_and_flashinfer_0613() -> None:
+def test_lockfile_resolves_vllm_0251_and_flashinfer_0613() -> None:
     with (ROOT / "uv.lock").open("rb") as stream:
         lockfile = tomllib.load(stream)
     versions = {
@@ -54,7 +54,7 @@ def test_lockfile_resolves_vllm_025_and_flashinfer_0613() -> None:
         if "version" in package
     }
 
-    assert versions["vllm"] == "0.25.0"
+    assert versions["vllm"] == "0.25.1"
     assert versions["flashinfer-python"] == "0.6.13"
     assert versions["flashinfer-cubin"] == "0.6.13"
     assert versions["flashinfer-jit-cache"] == "0.6.13+cu130"
