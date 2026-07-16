@@ -52,6 +52,7 @@ def test_baseline_preserves_qwen30_performance_recipe() -> None:
     assert "--gres" not in output
     assert "--dependency=" in output
     assert "--dependency=singleton" not in output
+    assert "GPUS_PER_NODE=4" in output
     assert "speculative_config" not in output
 
 
@@ -107,13 +108,12 @@ def test_invalid_capture_profile_fails_before_submission() -> None:
     assert "CAPTURE_PROFILE must be native or compact" in result.stderr
 
 
-def test_dynamic_sd_patch_and_graph_metrics_are_opt_in() -> None:
+def test_dynamic_sd_patch_is_opt_in() -> None:
     schedule = "[[1,4,5],[5,8,3],[9,16,1],[17,64,0]]"
     default_output = _dry_run("eagle3_k5")
     dynamic_output = _dry_run(
         "eagle3_k5",
         DYNAMIC_SD_SCHEDULE=schedule,
-        CUDAGRAPH_METRICS="true",
     ).replace("\\", "")
 
     assert "NRL_VENV_POST_SYNC_SCRIPT=" not in default_output
@@ -126,7 +126,30 @@ def test_dynamic_sd_patch_and_graph_metrics_are_opt_in() -> None:
         in dynamic_output
     )
     assert "vllm_kwargs.cudagraph_metrics" not in dynamic_output
-    assert "policy.generation.vllm_cfg.enable_vllm_metrics_logger=true" in dynamic_output
+
+
+def test_sync_recipe_rejects_async_only_vllm_metrics_logger() -> None:
+    env = os.environ.copy()
+    env.update(
+        {
+            "CUDAGRAPH_METRICS": "true",
+            "MODE": "dry-run",
+            "REPO_DIR": str(REPO_ROOT),
+            "RUN_TAG": "contract-test",
+            "VARIANT": "eagle3_k3",
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(LAUNCHER)],
+        check=False,
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 2
+    assert "only supported by async vLLM recipes" in result.stderr
 
 
 def test_dynamic_sd_rejects_compact_capture_profile() -> None:

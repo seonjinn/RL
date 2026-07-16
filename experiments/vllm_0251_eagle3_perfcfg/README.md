@@ -18,7 +18,7 @@ concurrently.
 MODE=submit VARIANT=baseline MAX_STEPS=20 \
   bash experiments/vllm_0251_eagle3_perfcfg/submit_qwen30_eagle3_ptyche.sh
 
-MODE=submit VARIANT=eagle3_k3 MAX_STEPS=20 CUDAGRAPH_METRICS=true \
+MODE=submit VARIANT=eagle3_k3 MAX_STEPS=20 \
   bash experiments/vllm_0251_eagle3_perfcfg/submit_qwen30_eagle3_ptyche.sh
 
 MODE=submit VARIANT=eagle3_k3 MAX_STEPS=20 CAPTURE_PROFILE=compact \
@@ -28,5 +28,5 @@ MODE=submit VARIANT=eagle3_k3 MAX_STEPS=20 CAPTURE_PROFILE=compact \
 DynamicSD is opt-in through `DYNAMIC_SD_SCHEDULE`. Its vLLM 0.25.1 source
 patch only prevents target DynamicSD shapes from being incorrectly applied to
 the autoregressive draft model's one-token CUDA Graph manager.
-`CUDAGRAPH_METRICS=true` enables NeMo-RL's vLLM metrics logger; it does not
-inject a nonstandard vLLM engine argument.
+The synchronous performance recipe logs standard acceptance metrics, but it
+does not support NeMo-RL's async-only vLLM engine metrics logger.

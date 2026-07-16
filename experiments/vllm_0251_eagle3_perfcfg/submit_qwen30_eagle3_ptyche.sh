@@ -7,6 +7,7 @@ ACCOUNT="${ACCOUNT:-coreai_dlalgo_llm}"
 PARTITION="${PARTITION:-batch}"
 NUM_NODES="${NUM_NODES:-4}"
 SEGMENT="${SEGMENT:-4}"
+GPUS_PER_NODE="${GPUS_PER_NODE:-4}"
 TIME_LIMIT="${TIME_LIMIT:-05:00:00}"
 MAX_STEPS="${MAX_STEPS:-2}"
 WANDB_ENABLED="${WANDB_ENABLED:-true}"
@@ -42,8 +43,16 @@ if [[ "${NUM_NODES}" != "4" || "${SEGMENT}" != "4" ]]; then
   printf 'Qwen3-30B-A3B 4n4g runs require NUM_NODES=4 and SEGMENT=4\n' >&2
   exit 2
 fi
+if [[ "${GPUS_PER_NODE}" != "4" ]]; then
+  printf 'Qwen3-30B-A3B 4n4g runs require GPUS_PER_NODE=4\n' >&2
+  exit 2
+fi
 if [[ "${CUDAGRAPH_METRICS}" != "true" && "${CUDAGRAPH_METRICS}" != "false" ]]; then
   printf 'CUDAGRAPH_METRICS must be true or false; got %s\n' "${CUDAGRAPH_METRICS}" >&2
+  exit 2
+fi
+if [[ "${CUDAGRAPH_METRICS}" == "true" ]]; then
+  printf 'CUDAGRAPH_METRICS is only supported by async vLLM recipes\n' >&2
   exit 2
 fi
 if [[ "${CAPTURE_PROFILE}" != "native" && "${CAPTURE_PROFILE}" != "compact" ]]; then
@@ -73,11 +82,6 @@ if [[ "${WANDB_ENABLED}" == "true" ]]; then
   overrides+=(
     "logger.wandb.project=${WANDB_PROJECT}"
     "logger.wandb.name=${RUN_TAG}"
-  )
-fi
-if [[ "${CUDAGRAPH_METRICS}" == "true" ]]; then
-  overrides+=(
-    "policy.generation.vllm_cfg.enable_vllm_metrics_logger=true"
   )
 fi
 if [[ "${SPECULATIVE_TOKENS}" -gt 0 ]]; then
@@ -156,7 +160,8 @@ sbatch_args=(
 case "${MODE}" in
   dry-run)
     printf '[DRY-RUN] command %s\n' "${command}"
-    printf '[DRY-RUN] environment BASE_LOG_DIR=%s\n' "${BASE_LOG_DIR}"
+    printf '[DRY-RUN] environment BASE_LOG_DIR=%s GPUS_PER_NODE=%s\n' \
+      "${BASE_LOG_DIR}" "${GPUS_PER_NODE}"
     printf '[DRY-RUN] sbatch'
     printf ' %s' "${sbatch_args[@]}"
     printf ' %s\n' "${REPO_DIR}/ray.sub"
@@ -193,9 +198,10 @@ case "${MODE}" in
       printf 'cudagraph_mode=FULL_AND_PIECEWISE\n'
       printf 'capture_profile=%s\n' "${CAPTURE_PROFILE}"
       printf 'vllm_use_v2_model_runner=1\n'
+      printf 'gpus_per_node=%s\n' "${GPUS_PER_NODE}"
       printf 'command=%s\n' "${command}"
     } > "${RUN_DIR}/provenance.txt"
-    export COMMAND="${command}" CONTAINER MOUNTS BASE_LOG_DIR
+    export COMMAND="${command}" CONTAINER MOUNTS BASE_LOG_DIR GPUS_PER_NODE
     if [[ "${MODE}" == "test-only" ]]; then
       (cd "${REPO_DIR}" && sbatch --test-only "${sbatch_args[@]}" ray.sub)
     else
