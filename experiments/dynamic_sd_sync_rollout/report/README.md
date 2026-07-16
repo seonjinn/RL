@@ -308,10 +308,19 @@ Qwen3-30B-A3B at temperature 1.0 in two regimes.
 | ngram (K8, lookup 5-8) | 0.42x | 3.43 |
 
 Model-free drafting is a heavy net loss at RL batch sizes even with high
-acceptance (ngram's AL 3.43 beats EAGLE3's!) - the fixed-size draft verify
-cost at 128-way concurrency, plus the capture-budget overflow at
-bs x (K+1) > 512, swamps the copy-span gains. Published suffix wins come
-from low-concurrency agent serving, not batch synchronous rollout.
+acceptance (ngram's AL 3.43 beats EAGLE3's!). Seed repeats confirm the
+ranking far outside noise (fixed-K3 1.85x +/- 0.08, suffix 0.50x +/- 0.02,
+ngram 0.41x +/- 0.01, n=3). We then falsified the two obvious excuses for
+suffix: at low concurrency (8 seqs, the serving regime of the published
+numbers) it still loses (0.51x), and under greedy decoding it gets *worse*
+(0.34x, AL unchanged at 2.26). The failure is structural on this
+model/prompt mix: suffix drafts deep (default tree depth 24) but accepts
+only ~1.3 extra tokens per draft, so verify waste dominates at any
+temperature or batch size. The published SWE-Bench wins presuppose much
+higher copy density (strong cross-request response-cache hits) than
+single-turn issue-to-patch generation provides; tighter
+`max_spec_factor`/`min_token_prob`/`num_speculative_tokens` tuning might
+close some of the gap but was out of scope.
 
 **Agentic multi-turn (teacher-forced replay of real OpenHands SWE
 trajectories, 8 copies, matched turns):**
