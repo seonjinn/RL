@@ -464,9 +464,89 @@ def run_rollout(args: argparse.Namespace, llm: Any) -> None:
     flush(partial=False)
 
 
+def load_trajectories(path: str, max_trajs: int, max_turns: int) -> list[list[dict]]:
+    trajs = []
+    with Path(path).open("r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            msgs = json.loads(line).get("messages", [])
+            if sum(1 for m in msgs if m.get("role") == "assistant") >= 2:
+                trajs.append(msgs[: 2 * max_turns + 1])
+            if len(trajs) >= max_trajs:
+                break
+    if not trajs:
+        raise ValueError(f"no multi-turn trajectories in {path}")
+    return trajs
+
+
+def run_replay(args: argparse.Namespace, llm: Any) -> None:
+    """Teacher-forced multi-turn replay: for each recorded assistant turn,
+    generate with the recorded prior conversation as prompt; the recorded
+    (not generated) turn feeds the next prefix. All variants see identical
+    prefix sequences; growing shared prefixes exercise prefix caching and
+    copy-span density like an agentic rollout."""
+    from vllm import SamplingParams, TokensPrompt
+
+    tokenizer = llm.get_tokenizer()
+    trajs = load_trajectories(args.replay_jsonl, args.replay_trajectories, args.replay_max_turns)
+    results: list[dict[str, Any]] = []
+    flush = make_flusher(args, results)
+
+    for ti, msgs in enumerate(trajs):
+        turn_idx = 0
+        for i, m in enumerate(msgs):
+            if m.get("role") != "assistant":
+                continue
+            prefix = msgs[:i]
+            try:
+                ids = tokenizer.apply_chat_template(
+                    prefix, tokenize=True, add_generation_prompt=True
+                )
+            except Exception:
+                continue
+            ids = normalize_token_ids(ids)
+            if len(ids) > args.max_model_len - args.replay_turn_max_tokens:
+                break
+            ref_len = len(tokenizer.encode(m.get("content") or "", add_special_tokens=False))
+            sampling = SamplingParams(
+                temperature=args.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                max_tokens=min(max(ref_len, 16), args.replay_turn_max_tokens),
+                seed=args.seed + ti * 1000 + turn_idx if args.per_request_seed else None,
+                detokenize=False,
+            )
+            before = read_spec_decode_metrics(llm)
+            t0 = time.perf_counter()
+            outs = llm.generate(
+                [TokensPrompt(prompt_token_ids=ids)] * args.replay_copies,
+                sampling,
+                use_tqdm=False,
+            )
+            wall = time.perf_counter() - t0
+            after = read_spec_decode_metrics(llm)
+            gen_tokens = sum(len(o.token_ids) for out in outs for o in out.outputs)
+            results.append({
+                "mode": "replay",
+                "trajectory": ti,
+                "turn": turn_idx,
+                "prefix_tokens": len(ids),
+                "ref_turn_tokens": ref_len,
+                "wall_s": wall,
+                "gen_tokens": gen_tokens,
+                "output_tok_s": gen_tokens / wall if wall > 0 else 0.0,
+                "spec_decode": diff_spec_decode_metrics(after, before),
+            })
+            turn_idx += 1
+        flush(partial=True)
+        print(f"[replay] traj={ti} turns={turn_idx}", flush=True)
+    flush(partial=False)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("profile", "rollout"), required=True)
+    parser.add_argument("--mode", choices=("profile", "rollout", "replay"), required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--speculative-config")
     parser.add_argument("--tp", type=int, default=1)
@@ -500,6 +580,11 @@ def main() -> None:
     parser.add_argument("--num-steps", type=int, default=4)
     parser.add_argument("--max-tokens", type=int, default=8192)
     parser.add_argument("--per-request-seed", action="store_true")
+    parser.add_argument("--replay-jsonl")
+    parser.add_argument("--replay-trajectories", type=int, default=8)
+    parser.add_argument("--replay-max-turns", type=int, default=20)
+    parser.add_argument("--replay-copies", type=int, default=8)
+    parser.add_argument("--replay-turn-max-tokens", type=int, default=1024)
     parser.add_argument(
         "--save-token-ids",
         action="store_true",
@@ -513,6 +598,8 @@ def main() -> None:
     llm = build_llm(args)
     if args.mode == "profile":
         run_profile(args, llm)
+    elif args.mode == "replay":
+        run_replay(args, llm)
     else:
         run_rollout(args, llm)
 
