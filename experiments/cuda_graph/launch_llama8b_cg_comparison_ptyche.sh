@@ -12,8 +12,9 @@ set -euo pipefail
 CONDITION=${CONDITION:?Set CONDITION to nocg, current-attn, current-attn-mlp, pr5672-attn, or pr5672-attn-mlp.}
 STEPS=${STEPS:-20}
 RUN_TAG=${RUN_TAG:-${CONDITION}-steps${STEPS}}
-BASELINE_WORKTREE=/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr5783-baseline-ptyche-20260716
-PR5672_WORKTREE=/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr5672-vs-pr5783-ptyche-20260716
+BASELINE_WORKTREE=${BASELINE_WORKTREE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr5783-ptyche-runtime-20260716}
+PR5672_WORKTREE=${PR5672_WORKTREE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr5672-vs-pr5783-ptyche-20260716}
+CG_MAX_PACKED_SEQS=${CG_MAX_PACKED_SEQS:-16}
 CONTAINER=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/nemo_rl_nightly_20260715.sqsh
 HF_HOME=${HF_HOME:-/lustre/fsw/coreai_dlalgo_llm/users/sna/hf}
 export HF_HOME
@@ -71,6 +72,7 @@ srun --nodes=1 --ntasks=1 --no-container-mount-home \
     uv run --locked --directory "${WORKTREE}" python "${WORKTREE}/examples/run_grpo.py" \
     --config "${CONFIG}" \
     "grpo.max_num_steps=${STEPS}" \
+    "policy.megatron_cfg.cuda_graph_max_packed_seqs=${CG_MAX_PACKED_SEQS}" \
     "logger.wandb_enabled=false" \
     "logger.log_dir=${LOG_DIR}" \
     "logger.wandb.name=${RUN_TAG}"
