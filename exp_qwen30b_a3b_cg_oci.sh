@@ -52,14 +52,18 @@ mkdir -p "${LOG_BASE}"
 submit_one() {
     local name="$1"
     local config_file="$2"
-    local job_venv_dir="${PROJECT_ROOT}/job_venvs/${name}"
+    local job_venv_dir="${NEMO_RL_VENV_DIR_OVERRIDE:-${PROJECT_ROOT}/job_venvs/${name}}"
 
     if [[ -n "${JOB_FILTER}" && "${name}" != *"${JOB_FILTER}"* ]]; then
         return
     fi
 
+    # NEMO_RL_VENV_DIR must be exported INSIDE the command: enroot drops
+    # submit-time env vars in favor of the image's baked ENV (/opt/ray_venvs,
+    # whose prebaked venvs are broken symlink farms in the 20260711 nightly).
+    # A lustre venv dir makes prefetch build complete venvs from our uv.lock.
     local command
-    command="cd ${PROJECT_ROOT} && export PYTHONPATH=${PROJECT_ROOT}/3rdparty/Megatron-LM-workspace/Megatron-LM:${PROJECT_ROOT}:\${PYTHONPATH:-} UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv && uv run --no-sync ./examples/run_grpo.py \
+    command="cd ${PROJECT_ROOT} && export PYTHONPATH=${PROJECT_ROOT}/3rdparty/Megatron-LM-workspace/Megatron-LM:${PROJECT_ROOT}:\${PYTHONPATH:-} UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv NEMO_RL_VENV_DIR=${job_venv_dir} && uv pip install --reinstall --no-deps transformers==5.5.0 >/dev/null 2>&1 && uv run --no-sync python -m nemo_rl.utils.prefetch_venvs vllm_worker megatron_policy_worker && uv run --no-sync ./examples/run_grpo.py \
 --config ${config_file} \
 cluster.num_nodes=${NUM_NODES} \
 cluster.gpus_per_node=${GPUS_PER_NODE} \
@@ -77,7 +81,7 @@ checkpointing.enabled=false \
 logger.wandb_enabled=true \
 logger.wandb.project=nemo-rl-cudagraph \
 logger.tensorboard_enabled=false \
-grpo.num_prompts_per_step=${NUM_PROMPTS} \
+grpo.num_prompts_per_step=${NUM_PROMPTS_OVERRIDE:-${NUM_PROMPTS}} \
 grpo.num_generations_per_prompt=${NUM_GENERATIONS} \
 policy.sequence_packing.enabled=True \
 policy.train_global_batch_size=${TRAIN_GBS} \
@@ -91,6 +95,7 @@ grpo.max_num_steps=${MAX_STEPS}"
     MOUNTS="${MOUNTS}" \
     BASE_LOG_DIR="${LOG_BASE}" \
     NEMO_RL_VENV_DIR="${job_venv_dir}" \
+    NRL_REPAIR_TRANSFORMERS="${NRL_REPAIR_TRANSFORMERS:-5.5.0}" \
     NRL_FORCE_REBUILD_VENVS="${REBUILD_VENVS}" \
     UV_LINK_MODE=copy \
     NRL_SKIP_VENV_SYNC="${NRL_SKIP_VENV_SYNC:-1}" \

@@ -612,6 +612,13 @@ ray-status-sidecar &
 # Patch nsight.py before starting Ray head
 sed -i 's/context\.py_executable = " "\.join(self\.nsight_cmd) + " python"/context.py_executable = " ".join(self.nsight_cmd) + f" {context.py_executable}"/g' /opt/nemo_rl_venv/lib64/python*/site-packages/ray/_private/runtime_env/nsight.py
 
+# Repair the baked base env on THIS node: the 20260711 nightly ships a broken
+# transformers install, and PY_EXECUTABLES.SYSTEM actors (e.g. MathEnvironment)
+# run in the base env on any node. Repairing only on the head is not enough.
+if [[ -n "${NRL_REPAIR_TRANSFORMERS:-}" ]]; then
+  UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv pip install --reinstall --no-deps "transformers==${NRL_REPAIR_TRANSFORMERS:-}"
+fi
+
 source $LOG_DIR/topology_probe.sh
 
 # Start the head without --block. 'ray start --head' then returns as soon as the
@@ -805,6 +812,12 @@ log-sync-sidecar &
 
 # Patch nsight.py before starting Ray worker
 sed -i 's/context\.py_executable = " "\.join(self\.nsight_cmd) + " python"/context.py_executable = " ".join(self.nsight_cmd) + f" {context.py_executable}"/g' /opt/nemo_rl_venv/lib64/python*/site-packages/ray/_private/runtime_env/nsight.py
+
+# Repair the baked base env on THIS node (see head-block comment): SYSTEM-tier
+# actors can land on any worker node and import the broken baked transformers.
+if [[ -n "${NRL_REPAIR_TRANSFORMERS:-}" ]]; then
+  UV_PROJECT_ENVIRONMENT=/opt/nemo_rl_venv uv pip install --reinstall --no-deps "transformers==${NRL_REPAIR_TRANSFORMERS:-}"
+fi
 
 source $LOG_DIR/topology_probe.sh
 
