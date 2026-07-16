@@ -17,6 +17,20 @@ baseline and candidate both complete steps 2-20.
 | W&B project | `nemo-rl-vllm0251-drafter-matrix` |
 | Final window | steps 2-20 inclusive |
 
+## Lyris Preflight Inventory
+
+Read-only inspection on 2026-07-16 found all three target snapshots, all three
+EAGLE3 snapshots, and the shared PARD snapshot complete at their pinned
+revisions. Both exact DFlash snapshots are absent and must pass the staging
+job before DFlash smoke submission. The available image is
+`nemo_rl_nightly_20260715.sqsh`; the older derived image referenced by the
+previous experiment has been removed.
+
+At that snapshot, partition `gb200` had no idle nodes: 244 were allocated and
+the remainder were in maintenance/down/drain states. FairShare for user `sna`
+under `coreai_dlalgo_llm` was 0.793651. Scheduler preflight may run, but smoke
+jobs can remain pending until nodes return.
+
 ## Applicability And Run Ledger
 
 `planned` means the exact checkpoint/config is defined but has not yet passed
@@ -75,8 +89,10 @@ Run before pushing and again from the clean cluster checkout:
 pytest -q \
   tests/experiments/test_vllm_0251_drafter_matrix.py \
   tests/experiments/test_vllm_0251_drafter_results.py \
+  tests/experiments/test_vllm_0251_drafter_staging.py \
   tests/experiments/test_vllm_0251_suffix_dependency.py
 bash -n experiments/vllm_0251_drafter_matrix/submit_matrix.sh
+bash -n experiments/vllm_0251_drafter_matrix/submit_stage_drafters.sh
 ruff check \
   experiments/vllm_0251_drafter_matrix \
   tests/experiments/test_vllm_0251_drafter_matrix.py \

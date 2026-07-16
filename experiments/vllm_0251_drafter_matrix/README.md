@@ -56,6 +56,23 @@ Run these commands from the clean, pushed cluster checkout. Results default to
 `/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/vllm0251_drafter_matrix`,
 outside the Git worktree.
 
+Stage missing immutable drafters through a bounded compute job. The control
+plane uses login-node `python3`; the worker switches to the container's
+`/opt/nemo_rl_venv/bin/python`.
+
+```bash
+STAGE=experiments/vllm_0251_drafter_matrix/submit_stage_drafters.sh
+STAGE_OUT=/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/vllm0251_drafter_matrix/staging
+
+bash "$STAGE" show --output-dir "$STAGE_OUT"
+bash "$STAGE" test-only --output-dir "$STAGE_OUT"
+bash "$STAGE" submit --output-dir "$STAGE_OUT"
+```
+
+The staging manifest deduplicates the shared PARD checkpoint and records exact
+repository, revision, cache path, state, and job ID. Existing snapshots are
+verified through the same immutable path; credentials remain environment-only.
+
 ```bash
 SCRIPT=experiments/vllm_0251_drafter_matrix/submit_matrix.sh
 
@@ -99,4 +116,3 @@ timeout diagnosis.
 The report keeps E2E/generation time and throughput, policy and logprob time,
 generation ratio, acceptance rate, mean accepted length, runner, CUDA Graph
 resolution/coverage, job/log/W&B links, and explicit failed/unsupported states.
-
