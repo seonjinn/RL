@@ -109,8 +109,11 @@ bash "$SCRIPT" submit \
 ```
 
 Promotion is `smoke2` (load/config) to `smoke5` (short performance) to
-`final20` (reportable). A run advances only after its exact baseline and
-candidate complete without config fallback, missing metrics, or early exit.
+`final20` (reportable). The smoke5 gate may be satisfied in place when a
+final20 allocation reaches step 5 with the identical immutable config; this
+avoids duplicating a scarce multi-node allocation. A run advances only after
+its exact baseline and candidate complete without config fallback, missing
+metrics, or early exit.
 Lyris jobs use account `coreai_dlalgo_llm`, partition `gb200`, four GPUs per
 node, `--segment=<nodes>`, no `--gres`, and no dependency/singleton constraint.
 

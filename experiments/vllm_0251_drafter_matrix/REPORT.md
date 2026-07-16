@@ -77,13 +77,24 @@ baseline time divided by candidate time.
 
 Qwen3-30B does not demonstrate an independent Thinking-checkpoint effect:
 the selected base repository and the Thinking alias resolve to identical model
-weights. Qwen3-32B does: at matched K1, the Thinking head changed generation
-time from 109.9s to 89.6s and acceptance from 69.2% to 79.8% in this smoke.
+weights. Qwen3-32B shows a public-checkpoint effect: at matched K1, the
+Thinking head changed generation time from 109.9s to 89.6s and acceptance from
+69.2% to 79.8% in this smoke. This is not an isolated effect of Thinking
+training because the public heads also differ in implementation and size.
+
+The performance recipes leave `chat_template_kwargs` unset. For all three
+pinned target tokenizer snapshots, the chat template suppresses reasoning only
+when `enable_thinking` is explicitly false, so the effective default remains
+thinking-enabled. This preserves the original recipe behavior but should not be
+confused with an explicit `enable_thinking=true` experiment override.
 
 ## Final20 Promotion Wave
 
 All promoted jobs use the same performance recipes and CUDA Graph controls as
-their smoke gates. Final comparisons will average steps 2-20.
+their smoke gates. Final comparisons will average steps 2-20. To avoid a
+duplicate allocation, the first five steps of each final20 run serve as the
+in-place smoke5 gate; the jobs were also monitored for more than five minutes
+without an early runtime error.
 
 | Model | Variant | Job | W&B | State at submission |
 |---|---|---:|---|---|
@@ -105,7 +116,8 @@ The isolated retry delegates rendezvous allocation to vLLM 0.25.1 by setting
 `NRL_DISABLE_VLLM_PORT_OVERRIDE=1` only for Qwen3-235B. Qwen3-30B and Qwen3-32B
 retain their already validated runtime environment. The remaining old 235B
 smokes were cancelled before allocation and will be resubmitted only after the
-fixed baseline passes.
+fixed baseline passes. Fixed baseline smoke job `2405130` passed scheduler
+preflight and is pending Lyris capacity.
 
 ## Applicability And Run Ledger
 
