@@ -210,6 +210,58 @@ class TestApplyTemperatureScaling:
 class TestForwardWithPostProcessingFn:
     """Tests for forward_with_post_processing_fn function."""
 
+    @patch("nemo_rl.models.megatron.train.model_forward")
+    def test_forward_passes_unpadded_loss_metadata_for_static_graph_inputs(
+        self, mock_model_forward
+    ):
+        """The model gets static graph metadata while loss gets real batch metadata."""
+        from nemo_rl.models.megatron.data import ProcessedMicrobatch
+        from nemo_rl.models.megatron.train import (
+            LossPostProcessor,
+            forward_with_post_processing_fn,
+        )
+
+        class CapturingLossPostProcessor(LossPostProcessor):
+            def __call__(self, **kwargs):
+                self.call_kwargs = kwargs
+                return MagicMock()
+
+        graph_cu_seqlens = torch.tensor([0, 8, 16, 16, 16], dtype=torch.int32)
+        loss_cu_seqlens = torch.tensor([0, 5, 10], dtype=torch.int32)
+        loss_cu_seqlens_padded = torch.tensor([0, 8, 16], dtype=torch.int32)
+        processed_mb = ProcessedMicrobatch(
+            data_dict=MagicMock(),
+            input_ids=torch.tensor([[1, 2, 3]]),
+            input_ids_cp_sharded=torch.tensor([[1, 2, 3]]),
+            attention_mask=None,
+            position_ids=None,
+            packed_seq_params=MagicMock(
+                cu_seqlens_q=graph_cu_seqlens,
+                cu_seqlens_q_padded=graph_cu_seqlens,
+            ),
+            cu_seqlens=loss_cu_seqlens,
+            cu_seqlens_padded=loss_cu_seqlens_padded,
+        )
+        post_processor = CapturingLossPostProcessor(
+            loss_fn=MagicMock(),
+            cfg={"sequence_packing": {"enabled": True}},
+        )
+        mock_model_forward.return_value = torch.randn(1, 16, 32)
+
+        forward_with_post_processing_fn(
+            data_iterator=iter([processed_mb]),
+            model=MagicMock(),
+            post_processing_fn=post_processor,
+        )
+
+        assert torch.equal(
+            post_processor.call_kwargs["loss_cu_seqlens"], loss_cu_seqlens
+        )
+        assert torch.equal(
+            post_processor.call_kwargs["loss_cu_seqlens_padded"],
+            loss_cu_seqlens_padded,
+        )
+
     @patch(
         "nemo_rl.models.megatron.train.get_tensor_model_parallel_rank", return_value=0
     )
