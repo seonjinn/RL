@@ -140,6 +140,7 @@ def test_eagle_selects_mrv2_without_compact_capture_sizes() -> None:
         ("eagle3_k3", "eagle3", "mrv2", 3),
         ("eagle3_k5", "eagle3", "mrv2", 5),
         ("eagle3_thinking_k1", "eagle3", "mrv2", 1),
+        ("eagle3_thinking_k2", "eagle3", "mrv2", 2),
         ("eagle3_thinking_k3", "eagle3", "mrv2", 3),
         ("eagle3_thinking_k5", "eagle3", "mrv2", 5),
         ("draft_k1", "draft_model", "mrv1", 1),
@@ -333,6 +334,7 @@ def test_eagle3_exposes_exact_base_checkpoint_identity(
     ("variant_key", "tokens"),
     [
         ("eagle3_thinking_k1", 1),
+        ("eagle3_thinking_k2", 2),
         ("eagle3_thinking_k3", 3),
         ("eagle3_thinking_k5", 5),
     ],
@@ -355,7 +357,12 @@ def test_eagle3_thinking_exposes_exact_reasoning_checkpoint_identity(
 
 @pytest.mark.parametrize(
     "variant_key",
-    ("eagle3_thinking_k1", "eagle3_thinking_k3", "eagle3_thinking_k5"),
+    (
+        "eagle3_thinking_k1",
+        "eagle3_thinking_k2",
+        "eagle3_thinking_k3",
+        "eagle3_thinking_k5",
+    ),
 )
 def test_qwen30_rejects_duplicate_thinking_alias(variant_key: str) -> None:
     with pytest.raises(ValueError, match="not available"):
@@ -370,6 +377,7 @@ def test_qwen30_rejects_duplicate_thinking_alias(variant_key: str) -> None:
         "eagle3_k3",
         "eagle3_k5",
         "eagle3_thinking_k1",
+        "eagle3_thinking_k2",
         "eagle3_thinking_k3",
         "eagle3_thinking_k5",
         "draft_k1",

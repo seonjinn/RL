@@ -29,7 +29,7 @@ the default NeMo-RL port path that passed their smoke gates.
 | `baseline` | MRv2 | yes | yes | yes | no speculative config |
 | `baseline_mrv1` | MRv1 | yes | yes | yes | matched control for MRv1 methods |
 | `eagle3_k1/k3/k5` | MRv2 | yes | yes | yes | exact target-specific EAGLE3 head |
-| `eagle3_thinking_k1/k3/k5` | MRv2 | alias | yes | yes | reasoning-distribution EAGLE3 head |
+| `eagle3_thinking_k1/k2/k3/k5` | MRv2 | alias | yes | yes | reasoning-distribution EAGLE3 head |
 | `dflash_k3/k5` | MRv2 | yes | yes | no | exact DFlash head, draft `FLASH_ATTN` |
 | `draft_k1/k5` | MRv1 | yes | yes | yes | sequential `amd/PARD-Qwen3-0.6B` |
 | `pard_k5/k16` | MRv1 | yes | yes | yes | parallel `amd/PARD-Qwen3-0.6B` |
@@ -57,7 +57,7 @@ revision `6afc5aa2477b923467fb9a8d906782b984a9a6ba` and
 `4e11c4dbb9b0bd911748a6f567d41f57c3dcdbe3` and model LFS SHA-256
 `d2d6e2e63e09dc755053ae5c98cdececae3611ae5e202d4fa5411126dd3b1dfa`.
 The selected checkpoint was trained with reasoning enabled. Qwen32 and
-Qwen235 have distinct Thinking checkpoints, so their K1/K3/K5 rows are
+Qwen235 have distinct Thinking checkpoints, so their K1/K2/K3/K5 rows are
 controlled A/B comparisons against the base EAGLE3 rows.
 
 Qwen235 DFlash has no exact public checkpoint and is rejected before

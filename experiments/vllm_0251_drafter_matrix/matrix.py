@@ -332,6 +332,15 @@ G_VARIANTS = (
         uses_draft_model=True,
     ),
     VariantSpec(
+        key="eagle3_thinking_k2",
+        method="eagle3",
+        runner="mrv2",
+        num_speculative_tokens=2,
+        compatible_models=frozenset(("qwen32", "qwen235")),
+        checkpoints=G_EAGLE3_THINKING_CHECKPOINTS,
+        uses_draft_model=True,
+    ),
+    VariantSpec(
         key="eagle3_thinking_k3",
         method="eagle3",
         runner="mrv2",
