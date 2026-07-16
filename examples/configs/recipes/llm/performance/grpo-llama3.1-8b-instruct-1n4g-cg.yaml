@@ -42,7 +42,7 @@ policy:
     # CUDA graph configuration (requires Megatron-LM with packed-seq CG support)
     cuda_graph_impl: transformer_engine
     cuda_graph_scope: attn
-    cuda_graph_warmup_steps: 6
+    cuda_graph_warmup_steps: 3
     cuda_graph_packed_seq: true
     cuda_graph_max_packed_seqs: 16
     cuda_graph_buckets:
