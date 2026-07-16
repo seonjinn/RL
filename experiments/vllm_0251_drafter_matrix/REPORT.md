@@ -124,9 +124,18 @@ instrumentation and are not inferred from accepted-token position counters.
 
 | Model | Variant | Phase | Job/W&B | State |
 |---|---|---|---|---|
-| Qwen3-32B | Thinking EAGLE3 K2 | smoke2 | pending | awaiting submission |
-| Qwen3-32B | Thinking EAGLE3 K3 | smoke2 | pending | awaiting matched rerun |
-| Qwen3-32B | Thinking DynamicSD K0-K3 seed | smoke2 | pending | awaiting submission |
+| Qwen3-32B | Thinking EAGLE3 K2 | smoke2 | `2406250` / [W&B](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/e9pterbv) | running after 5-minute gate |
+| Qwen3-32B | Thinking EAGLE3 K3 | smoke2 | `2406253` / [W&B](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/7hwdrdoe) | running after 5-minute gate |
+| Qwen3-32B | Thinking DynamicSD K0-K3 seed | smoke2 | `2406255` / [W&B](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/krwc1su5) | running after 5-minute gate |
+
+All three submissions passed their exact `sbatch --test-only` shape before
+submission and started on separate four-node segments. At 5 minutes 11 seconds,
+all remained running with W&B connected, all 16 generation workers initialized,
+and EAGLE3 CUDA Graph capture reached. DynamicSD logged successful application
+of the vLLM 0.25.1 patch on all four nodes and resolved the exact seed ranges.
+No traceback, OOM, NCCL watchdog, or CUDA Graph downgrade was observed. The
+repeated `git diff main` message is W&B source-diff metadata noise and did not
+stop initialization. Step metrics were not yet available at this checkpoint.
 
 ## Qwen3-235B Port Failure
 
@@ -160,8 +169,8 @@ after real submission.
 | Qwen3-30B-A3B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
 | Qwen3-32B | baseline | MRv2, MRv1 | mixed | final20 running | `2405077` | MRv2 control promoted; MRv1 remains planned |
 | Qwen3-32B | EAGLE3 | K1, K3, K5 | MRv2 | control final20 running | `2405076` | K1 retained for same-K checkpoint comparison |
-| Qwen3-32B | EAGLE3 Thinking | K1, K2, K3, K5 | MRv2 | K1 final20 running; K2/K3 smoke pending | `2405078` | K2 fills the fixed-policy gap; K3 gets a matched rerun |
-| Qwen3-32B | EAGLE3 Thinking DynamicSD | K0-K3 | MRv2 | seed smoke pending | pending | final20 requires matched vLLM 0.25.1 calibration |
+| Qwen3-32B | EAGLE3 Thinking | K1, K2, K3, K5 | MRv2 | K1 final20 running; K2/K3 smoke running | `2405078`, `2406250`, `2406253` | K2 fills the fixed-policy gap; K3 gets a matched rerun |
+| Qwen3-32B | EAGLE3 Thinking DynamicSD | K0-K3 | MRv2 | seed smoke running | `2406255` | final20 requires matched vLLM 0.25.1 calibration |
 | Qwen3-32B | DFlash | K3, K5 | MRv2 | planned | pending | exact head; draft FlashAttention |
 | Qwen3-32B | draft/PARD | draft K1/K5; PARD K5/K16 | MRv1 | planned | pending | shared AMD 0.6B drafter; sequential/parallel split |
 | Qwen3-32B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
