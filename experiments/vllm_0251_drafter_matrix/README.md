@@ -192,6 +192,14 @@ CALIBRATOR=experiments/vllm_0251_drafter_matrix/calibrate_dynamic_sd.py
   --output "$PROFILE_ROOT/schedule.json"
 ```
 
+The completed Qwen3-32B Thinking calibration is checked in as
+`calibration/qwen32_thinking_k5_vllm0251_profile.json` and
+`calibration/qwen32_thinking_k5_vllm0251_schedule.json`. Its zero-margin
+schedule is `[[1,34,5],[35,75,3],[76,85,2],[86,256,1]]`. This schedule is
+derived from all 48 fixed-K profile cells; final promotion still requires a
+runtime smoke proving that the scheduler-selected K changes both target
+verification length and actual drafter width.
+
 Schema-v2 schedules declare global K5 even when profiling selects only lower
 Ks. This prevents vLLM from silently clamping a selected K4/K5 to a K3 global
 maximum. Final20 rejects schema-v1 schedules, non-vLLM-0.25.1 profiles, and

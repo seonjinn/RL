@@ -167,7 +167,9 @@ def test_dynamic_runtime_applies_only_the_run_scoped_cuda_graph_patch(
         "NRL_VENV_POST_SYNC_TARGET="
         "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker"
     ) in dynamic_command
+    assert "NRL_VLLM_DYNAMIC_SD_SMOKE_TELEMETRY=1" in dynamic_command
     assert not any(item.startswith("NRL_VENV_POST_SYNC_") for item in fixed_command)
+    assert "NRL_VLLM_DYNAMIC_SD_SMOKE_TELEMETRY=1" not in fixed_command
     assert not any("cudagraph_capture_sizes" in item for item in dynamic_command)
 
 

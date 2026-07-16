@@ -182,11 +182,11 @@ NeMo-RL calibration is produced and allowlisted.
 
 ### K0-K5 Offline Calibration
 
-The reportable DynamicSD path now declares global K5 and profiles fixed
-K0-K5 before final20. This avoids the vLLM behavior that silently clamps a
-schedule entry above the configured global K. The grid uses Qwen3-32B TP2,
-Thinking EAGLE3 draft TP1, temperature/top-p 1.0/1.0, max model length 4096,
-256 generated profiling tokens, max batched tokens 16384, and native
+The reportable DynamicSD path declares global K5 and profiles fixed K0-K5
+before final20. This avoids the vLLM behavior that silently clamps a schedule
+entry above the configured global K. The grid uses Qwen3-32B TP2, Thinking
+EAGLE3 draft TP1, temperature/top-p 1.0/1.0, max model length 4096, 256
+generated profiling tokens, max batched tokens 16384, and native
 `FULL_AND_PIECEWISE` CUDA Graph sizing.
 
 The batch-size points are `1,4,16,32,64,128,192,256`; every K/BS point runs
@@ -202,18 +202,71 @@ The OpenMathInstruct-2 source is pinned to revision
 per-job locked vLLM 0.25.1 environment under `/tmp` and leave the container's
 base `/opt/nemo_rl_venv` unchanged.
 
+All six Lyris jobs passed exact scheduler preflight and completed with exit
+code `0:0`. Each K produced all eight batch-size cells, for 48/48 complete
+cells. The shutdown-only `EngineDeadError` messages occurred after result
+files were written and did not invalidate the jobs.
+
+| K | Job | Cells | State |
+|---:|---:|---:|---|
+| 0 | `2407016` | 8/8 | completed |
+| 1 | `2407017` | 8/8 | completed |
+| 2 | `2407018` | 8/8 | completed |
+| 3 | `2407019` | 8/8 | completed |
+| 4 | `2407020` | 8/8 | completed |
+| 5 | `2407021` | 8/8 | completed |
+
+The K5 acceptance pass observed 70,214 draft events and 351,070 draft
+tokens. Positional acceptance was 80.75%, 65.07%, 52.59%, 42.22%, and
+33.79%, giving expected accepted lengths of 1.000, 1.807, 2.458, 2.984,
+3.406, and 3.744 for K0 through K5. Goodput is expected accepted length
+divided by measured median ITL.
+
+| Scheduler BS | K0 ITL | Selected K | Selected ITL | Expected accepted | Goodput vs K0 |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 7.505 ms | 5 | 9.102 ms | 3.744 | 3.087x |
+| 4 | 7.739 ms | 5 | 9.656 ms | 3.744 | 3.001x |
+| 16 | 7.717 ms | 5 | 10.485 ms | 3.744 | 2.756x |
+| 32 | 7.965 ms | 5 | 12.802 ms | 3.744 | 2.329x |
+| 64 | 8.601 ms | 3 | 12.976 ms | 2.984 | 1.978x |
+| 128 | 9.636 ms | 1 | 12.456 ms | 1.807 | 1.398x |
+| 192 | 11.917 ms | 1 | 17.812 ms | 1.807 | 1.209x |
+| 256 | 13.029 ms | 1 | 20.872 ms | 1.807 | 1.128x |
+
+The zero-margin calibrated schedule is `BS 1-34 -> K5`, `35-75 -> K3`,
+`76-85 -> K2`, and `86-256 -> K1`. Its raw-profile SHA-256 is
+`6d888c2198dd2f592bcc146329cbeafa53f5eb44ee63cb59cb250a87272d479d`;
+the schedule SHA-256 is
+`8cdfed304302f45e04e72cd219cb0be26c23c30b509c010fe9081d0c6da5fc14`.
+The checked-in artifacts are
+`calibration/qwen32_thinking_k5_vllm0251_profile.json` and
+`calibration/qwen32_thinking_k5_vllm0251_schedule.json`.
+
 The runtime lookup key is the number of requests assigned tokens in the
 current scheduler step, not total rollout size. The serving profile therefore
-approximates this key with fixed concurrency. Before promotion, a NeMo-RL
-smoke must record selected K and actual verified draft length so a parsed
-schedule alone is not treated as proof that transitions occurred.
+approximates this key with fixed concurrency. K2 at BS4 and K4 at BS32 show
+isolated latency discontinuities; neither changes the selected K at those
+measured points, but the narrow interpolated K2 range must be boundary-checked.
+Before promotion, a NeMo-RL smoke must record scheduler-selected K and actual
+drafter width so a parsed schedule alone is not treated as proof that the
+drafting work changed.
+
+Source inspection found a specific MRv2 risk in vLLM 0.25.1: the scheduler
+records `num_spec_tokens_to_schedule`, while the EAGLE3 autoregressive
+speculator loops over the global `num_speculative_steps` and returns that
+global-width tensor. A smoke-only, run-scoped telemetry patch now records the
+scheduler batch size, selected K, requested width, and returned width without
+changing the inference path. Final20 remains blocked until this runtime gate
+passes.
 
 | Stage | State | Required evidence |
 |---|---|---|
 | Pure derivation and schema | complete | focused tests, Ruff, Pyright |
-| K0-K5 Lyris profile | ready to submit | 48 complete cells plus K5 position acceptance |
-| Derived schedule review | waiting profile | raw-profile SHA-256 and explicit K ranges |
-| DynamicSD final20 | blocked by design | reviewed schedule hash and transition telemetry |
+| K0-K5 Lyris profile | complete | 48/48 cells and K5 position acceptance |
+| Derived schedule review | complete | immutable profile and schedule hashes |
+| Boundary spot check | pending | exact checks near BS35, BS76, and BS86 |
+| DynamicSD runtime smoke | pending | selected K and requested/actual draft width |
+| DynamicSD final20 | blocked by design | reviewed telemetry and allowlisted schedule hash |
 
 ## Qwen3-235B Port Failure
 

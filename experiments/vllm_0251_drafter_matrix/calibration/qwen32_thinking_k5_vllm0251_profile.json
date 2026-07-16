@@ -1,0 +1,335 @@
+{
+  "acceptance_rate_per_pos": [
+    0.8074742928760646,
+    0.6507249266528042,
+    0.5259492408921298,
+    0.4221665194975361,
+    0.3378528498590025
+  ],
+  "batch_sizes": [
+    1,
+    4,
+    16,
+    32,
+    64,
+    128,
+    192,
+    256
+  ],
+  "calibration_status": "complete",
+  "cuda_graph_mode": "FULL_AND_PIECEWISE",
+  "dataset_name": "OpenMathInstruct-2",
+  "dataset_revision": "469216e3f46f4dacf476b382e192485ea51a143e",
+  "draft_tensor_parallel_size": 1,
+  "drafter_revision": "a1403e07b73a66fc9ef561463631c31864616933",
+  "k_values": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "max_model_len": 4096,
+  "max_num_batched_tokens": 16384,
+  "max_num_seqs": 256,
+  "model_key": "qwen32",
+  "num_batches_per_point": 20,
+  "prompt_template_sha256": "a3575cc34f8bbd8ed5107a0d58003acf4277baf18d29409c7e61e0946e25b031",
+  "rows": [
+    {
+      "batch_size": 1,
+      "completed_batches": 20,
+      "k": 0,
+      "median_itl_ms": 7.504690998757724
+    },
+    {
+      "batch_size": 4,
+      "completed_batches": 20,
+      "k": 0,
+      "median_itl_ms": 7.739157499599969
+    },
+    {
+      "batch_size": 16,
+      "completed_batches": 20,
+      "k": 0,
+      "median_itl_ms": 7.717335000052117
+    },
+    {
+      "batch_size": 32,
+      "completed_batches": 20,
+      "k": 0,
+      "median_itl_ms": 7.9647300008218735
+    },
+    {
+      "batch_size": 64,
+      "completed_batches": 20,
+      "k": 0,
+      "median_itl_ms": 8.60108499909984
+    },
+    {
+      "batch_size": 128,
+      "completed_batches": 20,
+      "k": 0,
+      "median_itl_ms": 9.636160501031554
+    },
+    {
+      "batch_size": 192,
+      "completed_batches": 20,
+      "k": 0,
+      "median_itl_ms": 11.917133000679314
+    },
+    {
+      "batch_size": 256,
+      "completed_batches": 20,
+      "k": 0,
+      "median_itl_ms": 13.029175001065596
+    },
+    {
+      "batch_size": 1,
+      "completed_batches": 20,
+      "k": 1,
+      "median_itl_ms": 7.913421999546699
+    },
+    {
+      "batch_size": 4,
+      "completed_batches": 20,
+      "k": 1,
+      "median_itl_ms": 8.321792000060668
+    },
+    {
+      "batch_size": 16,
+      "completed_batches": 20,
+      "k": 1,
+      "median_itl_ms": 8.438834000116913
+    },
+    {
+      "batch_size": 32,
+      "completed_batches": 20,
+      "k": 1,
+      "median_itl_ms": 8.934902998589678
+    },
+    {
+      "batch_size": 64,
+      "completed_batches": 20,
+      "k": 1,
+      "median_itl_ms": 10.023902999819256
+    },
+    {
+      "batch_size": 128,
+      "completed_batches": 20,
+      "k": 1,
+      "median_itl_ms": 12.45592250052141
+    },
+    {
+      "batch_size": 192,
+      "completed_batches": 20,
+      "k": 1,
+      "median_itl_ms": 17.81241400021827
+    },
+    {
+      "batch_size": 256,
+      "completed_batches": 20,
+      "k": 1,
+      "median_itl_ms": 20.872319997579325
+    },
+    {
+      "batch_size": 1,
+      "completed_batches": 20,
+      "k": 2,
+      "median_itl_ms": 8.270068499768968
+    },
+    {
+      "batch_size": 4,
+      "completed_batches": 20,
+      "k": 2,
+      "median_itl_ms": 14.953877000152715
+    },
+    {
+      "batch_size": 16,
+      "completed_batches": 20,
+      "k": 2,
+      "median_itl_ms": 9.352942000987241
+    },
+    {
+      "batch_size": 32,
+      "completed_batches": 20,
+      "k": 2,
+      "median_itl_ms": 9.757267998793395
+    },
+    {
+      "batch_size": 64,
+      "completed_batches": 20,
+      "k": 2,
+      "median_itl_ms": 12.637817000722862
+    },
+    {
+      "batch_size": 128,
+      "completed_batches": 20,
+      "k": 2,
+      "median_itl_ms": 18.89864699842292
+    },
+    {
+      "batch_size": 192,
+      "completed_batches": 20,
+      "k": 2,
+      "median_itl_ms": 52.870523499223054
+    },
+    {
+      "batch_size": 256,
+      "completed_batches": 20,
+      "k": 2,
+      "median_itl_ms": 57.47654999868246
+    },
+    {
+      "batch_size": 1,
+      "completed_batches": 20,
+      "k": 3,
+      "median_itl_ms": 8.6055129977467
+    },
+    {
+      "batch_size": 4,
+      "completed_batches": 20,
+      "k": 3,
+      "median_itl_ms": 8.914540998375742
+    },
+    {
+      "batch_size": 16,
+      "completed_batches": 20,
+      "k": 3,
+      "median_itl_ms": 9.562354000081541
+    },
+    {
+      "batch_size": 32,
+      "completed_batches": 20,
+      "k": 3,
+      "median_itl_ms": 10.362392000388354
+    },
+    {
+      "batch_size": 64,
+      "completed_batches": 20,
+      "k": 3,
+      "median_itl_ms": 12.975626999832457
+    },
+    {
+      "batch_size": 128,
+      "completed_batches": 20,
+      "k": 3,
+      "median_itl_ms": 34.14321449963609
+    },
+    {
+      "batch_size": 192,
+      "completed_batches": 20,
+      "k": 3,
+      "median_itl_ms": 47.65431299892953
+    },
+    {
+      "batch_size": 256,
+      "completed_batches": 20,
+      "k": 3,
+      "median_itl_ms": 47.371572500196635
+    },
+    {
+      "batch_size": 1,
+      "completed_batches": 20,
+      "k": 4,
+      "median_itl_ms": 8.869495999533683
+    },
+    {
+      "batch_size": 4,
+      "completed_batches": 20,
+      "k": 4,
+      "median_itl_ms": 9.402122002938995
+    },
+    {
+      "batch_size": 16,
+      "completed_batches": 20,
+      "k": 4,
+      "median_itl_ms": 9.932413000569795
+    },
+    {
+      "batch_size": 32,
+      "completed_batches": 20,
+      "k": 4,
+      "median_itl_ms": 14.35998200031463
+    },
+    {
+      "batch_size": 64,
+      "completed_batches": 20,
+      "k": 4,
+      "median_itl_ms": 19.6182499967108
+    },
+    {
+      "batch_size": 128,
+      "completed_batches": 20,
+      "k": 4,
+      "median_itl_ms": 88.65232300013304
+    },
+    {
+      "batch_size": 192,
+      "completed_batches": 20,
+      "k": 4,
+      "median_itl_ms": 89.42299599948456
+    },
+    {
+      "batch_size": 256,
+      "completed_batches": 20,
+      "k": 4,
+      "median_itl_ms": 89.10691199707799
+    },
+    {
+      "batch_size": 1,
+      "completed_batches": 20,
+      "k": 5,
+      "median_itl_ms": 9.10216199918068
+    },
+    {
+      "batch_size": 4,
+      "completed_batches": 20,
+      "k": 5,
+      "median_itl_ms": 9.655633999500424
+    },
+    {
+      "batch_size": 16,
+      "completed_batches": 20,
+      "k": 5,
+      "median_itl_ms": 10.484851001820061
+    },
+    {
+      "batch_size": 32,
+      "completed_batches": 20,
+      "k": 5,
+      "median_itl_ms": 12.802213997929357
+    },
+    {
+      "batch_size": 64,
+      "completed_batches": 20,
+      "k": 5,
+      "median_itl_ms": 19.02136599892401
+    },
+    {
+      "batch_size": 128,
+      "completed_batches": 20,
+      "k": 5,
+      "median_itl_ms": 47.871144000964705
+    },
+    {
+      "batch_size": 192,
+      "completed_batches": 20,
+      "k": 5,
+      "median_itl_ms": 49.02710499663954
+    },
+    {
+      "batch_size": 256,
+      "completed_batches": 20,
+      "k": 5,
+      "median_itl_ms": 65.16651250058203
+    }
+  ],
+  "runtime_vllm": "0.25.1",
+  "schema_version": 1,
+  "target_revision": "9216db5781bf21249d130ec9da846c4624c16137",
+  "target_tensor_parallel_size": 2,
+  "temperature": 1.0,
+  "top_p": 1.0
+}
