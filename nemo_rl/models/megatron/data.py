@@ -114,14 +114,16 @@ def make_processed_microbatch_iterator(
 
     megatron_cfg = cfg.get("megatron_cfg") or {}
     cu_seqlens_pad_to_entries = None
-    if (
-        pack_sequences
-        and megatron_cfg.get("cuda_graph_impl") == "local"
+    uses_static_packed_seq_graph_inputs = (
+        megatron_cfg.get("cuda_graph_impl") == "local"
         and megatron_cfg.get("cuda_graph_pr5783_thd", False)
-    ):
-        # PR #5783 THD CUDA graphs: cu_seqlens tensors are graph inputs, so
-        # PackedSeqParams must carry a static [thd_max_packed_sequences + 1]
-        # shape (thd_max_packed_sequences = cuda_graph_max_packed_seqs).
+    ) or (
+        megatron_cfg.get("cuda_graph_impl") == "transformer_engine"
+        and megatron_cfg.get("cuda_graph_pr5672_thd", False)
+    )
+    if pack_sequences and uses_static_packed_seq_graph_inputs:
+        # PR #5783 and #5672 make THD cu_seqlens CUDA-graph inputs. Keep the
+        # PackedSeqParams copies at a fixed [max_packed_sequences + 1] shape.
         cu_seqlens_pad_to_entries = (
             megatron_cfg.get("cuda_graph_max_packed_seqs") or 64
         ) + 1
@@ -1317,15 +1319,18 @@ def _get_pack_sequence_parameters_for_megatron(
     pr5783_thd = megatron_cfg.get("cuda_graph_impl") == "local" and megatron_cfg.get(
         "cuda_graph_pr5783_thd", False
     )
+    pr5672_thd = megatron_cfg.get(
+        "cuda_graph_impl"
+    ) == "transformer_engine" and megatron_cfg.get("cuda_graph_pr5672_thd", False)
 
     is_cg_step = False
-    if pr5783_thd:
-        # Megatron-LM PR #5783 THD CUDA graphs replay a single static shape:
+    if pr5783_thd or pr5672_thd:
+        # Megatron-LM PR #5783/#5672 THD CUDA graphs replay a single static shape:
         # always pad the packed batch to max_total_sequence_length so the
         # per-rank length matches max_seqlen_per_dp_cp_rank used at capture.
         # cuda_graph_buckets are ignored in this mode.
         assert max_total_sequence_length is not None, (
-            "max_total_sequence_length is required when cuda_graph_pr5783_thd is set."
+            "max_total_sequence_length is required when a THD CUDA graph adapter is set."
         )
         pad_packed_seq_to = max_total_sequence_length
         is_cg_step = True

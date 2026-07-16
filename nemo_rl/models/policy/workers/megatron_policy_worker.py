@@ -20,6 +20,7 @@ import time
 import warnings
 from collections import defaultdict
 from contextlib import AbstractContextManager, contextmanager, nullcontext
+from itertools import tee
 from typing import Any, Iterable, Iterator, Optional, TypeVar, cast
 
 log = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ from megatron.core.distributed.fsdp.mcore_fsdp_adapter import (
     FullyShardedDataParallel as custom_FSDP,
 )
 from megatron.core.optimizer import ChainedOptimizer
+from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.rerun_state_machine import get_rerun_state_machine
 from megatron.core.utils import get_model_config
 from transformers import PreTrainedTokenizerBase
@@ -547,7 +549,36 @@ class MegatronPolicyWorkerImpl(
             m.cuda_graphs = list(graphs)
         self._cuda_graph_saved_graphs = {}
 
-    def _capture_all_buckets(self, buckets: list[int], micro_batch_size: int) -> None:
+    @staticmethod
+    def _make_cuda_graph_sample_packed_seq_params(
+        packed_seq_params: PackedSeqParams, seq_length: int
+    ) -> PackedSeqParams:
+        """Construct static PackedSeqParams metadata for a TE CUDA-graph bucket."""
+        cu_seqlens = packed_seq_params.cu_seqlens_q
+        if cu_seqlens is None:
+            raise ValueError(
+                "PR #5672 CUDA graphs require PackedSeqParams.cu_seqlens_q."
+            )
+        sample_cu_seqlens = torch.full_like(cu_seqlens, seq_length)
+        sample_cu_seqlens[0] = 0
+        return PackedSeqParams(
+            qkv_format=packed_seq_params.qkv_format,
+            cu_seqlens_q=sample_cu_seqlens,
+            cu_seqlens_kv=sample_cu_seqlens,
+            cu_seqlens_q_padded=sample_cu_seqlens,
+            cu_seqlens_kv_padded=sample_cu_seqlens,
+            max_seqlen_q=seq_length,
+            max_seqlen_kv=seq_length,
+            local_cp_size=packed_seq_params.local_cp_size,
+            cp_group=packed_seq_params.cp_group,
+        )
+
+    def _capture_all_buckets(
+        self,
+        buckets: list[int],
+        micro_batch_size: int,
+        packed_seq_params: PackedSeqParams | None = None,
+    ) -> None:
         """Capture a CUDA graph set for each bucket in sequence.
 
         Each bucket uses a fresh TECudaGraphHelper. After capture the
@@ -567,6 +598,13 @@ class MegatronPolicyWorkerImpl(
                 seq_length=bucket,
                 micro_batch_size=micro_batch_size,
                 optimizers=[self.optimizer],
+                sample_packed_seq_params=(
+                    self._make_cuda_graph_sample_packed_seq_params(
+                        packed_seq_params, bucket
+                    )
+                    if packed_seq_params is not None
+                    else None
+                ),
             )
             if self.should_disable_forward_pre_hook:
                 self.disable_forward_pre_hook(param_sync=False)
@@ -580,7 +618,10 @@ class MegatronPolicyWorkerImpl(
     # ------------------------------------------------------------------
 
     def _maybe_capture_cuda_graphs(
-        self, seq_length: int, micro_batch_size: int
+        self,
+        seq_length: int,
+        micro_batch_size: int,
+        packed_seq_params: PackedSeqParams | None = None,
     ) -> None:
         """Manage CUDA graph capture and dynamic fallback.
 
@@ -719,7 +760,9 @@ class MegatronPolicyWorkerImpl(
                     sorted(cuda_graph_buckets),
                     seq_length,
                 )
-            self._capture_all_buckets(sorted(cuda_graph_buckets), micro_batch_size)
+            self._capture_all_buckets(
+                sorted(cuda_graph_buckets), micro_batch_size, packed_seq_params
+            )
             self._activate_bucket(seq_length)
         else:
             # Single-bucket mode: capture at this step's seq_length.
@@ -735,6 +778,13 @@ class MegatronPolicyWorkerImpl(
                 seq_length=seq_length,
                 micro_batch_size=micro_batch_size,
                 optimizers=[self.optimizer],
+                sample_packed_seq_params=(
+                    self._make_cuda_graph_sample_packed_seq_params(
+                        packed_seq_params, seq_length
+                    )
+                    if packed_seq_params is not None
+                    else None
+                ),
             )
             if self.should_disable_forward_pre_hook:
                 self.disable_forward_pre_hook(param_sync=False)
@@ -940,13 +990,30 @@ class MegatronPolicyWorkerImpl(
                 total_num_microbatches += int(num_microbatches)
 
                 # CUDA graph: init helper and capture after warmup (once per train() call)
+                cuda_graph_sample_packed_seq_params = None
+                if (
+                    not eval_mode
+                    and gb_idx == 0
+                    and self.cfg["megatron_cfg"].get("cuda_graph_pr5672_thd", False)
+                ):
+                    data_iterator, sample_iterator = tee(data_iterator)
+                    cuda_graph_sample_packed_seq_params = next(
+                        sample_iterator
+                    ).packed_seq_params
+                    if cuda_graph_sample_packed_seq_params is None:
+                        raise ValueError(
+                            "PR #5672 CUDA graphs require sequence packing to produce "
+                            "PackedSeqParams."
+                        )
                 if not eval_mode:
                     with nvtx_range(
                         f"megatron_policy_worker/train/global_batch_{gb_idx}/cuda_graph_gate"
                     ):
                         if gb_idx == 0:
                             self._maybe_capture_cuda_graphs(
-                                padded_seq_length, micro_batch_size
+                                padded_seq_length,
+                                micro_batch_size,
+                                cuda_graph_sample_packed_seq_params,
                             )
                         elif (
                             getattr(self.megatron_cfg.model, "cuda_graph_impl", "none")

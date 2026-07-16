@@ -463,6 +463,11 @@ class MegatronConfig(TypedDict):
     # [thd_max_packed_sequences + 1] shape and packed batches always pad to
     # max_total_sequence_length (cuda_graph_buckets are ignored).
     cuda_graph_pr5783_thd: NotRequired[bool]
+    # Enable the Megatron-LM PR #5672 TE CUDA-graph adapter for THD packed
+    # sequences. NeMo-RL supplies the capture sample and statically pads the
+    # graph-facing cu_seqlens tensors to cuda_graph_max_packed_seqs + 1.
+    # Requires cuda_graph_impl='transformer_engine' and sequence packing.
+    cuda_graph_pr5672_thd: NotRequired[bool]
     # If False, skip Inf/NaN gradient detection during DDP grad sync (default True).
     # Set to False only when debugging numerical stability issues.
     check_for_nan_in_grad: NotRequired[bool]

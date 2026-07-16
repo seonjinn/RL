@@ -1,0 +1,19 @@
+defaults: ./grpo-llama3.1-8b-instruct-1n4g-cg.yaml
+grpo:
+  max_num_steps: 20
+checkpointing:
+  checkpoint_dir: results/grpo-llama3.1-8b-instruct-1n4g-cg-pr5672-attn
+policy:
+  megatron_cfg:
+    cuda_graph_impl: transformer_engine
+    cuda_graph_scope: attn
+    cuda_graph_warmup_steps: 3
+    cuda_graph_packed_seq: true
+    cuda_graph_pr5672_thd: true
+    cuda_graph_max_packed_seqs: 16
+    cuda_graph_buckets:
+    - 4096
+logger:
+  log_dir: logs/grpo-llama3.1-8b-instruct-1n4g-cg-pr5672-attn
+  wandb:
+    name: grpo-llama3.1-8b-instruct-1n4g-cg-pr5672-attn
