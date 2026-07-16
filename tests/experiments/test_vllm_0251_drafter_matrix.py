@@ -1,8 +1,19 @@
 from dataclasses import FrozenInstanceError
+from pathlib import Path
 
 import pytest
 
 from experiments.vllm_0251_drafter_matrix.matrix import resolve_run
+
+
+def test_matrix_module_has_nvidia_apache_header() -> None:
+    matrix_path = Path(__file__).parents[2] / "experiments/vllm_0251_drafter_matrix/matrix.py"
+
+    assert matrix_path.read_text().startswith(
+        "# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.\n"
+        "#\n"
+        "# Licensed under the Apache License, Version 2.0 (the \"License\");\n"
+    )
 
 
 @pytest.mark.parametrize(
@@ -86,8 +97,8 @@ def test_eagle_selects_mrv2_without_compact_capture_sizes() -> None:
         ("pard_k5", "draft_model", "mrv1", 5),
         ("pard_k16", "draft_model", "mrv1", 16),
         ("suffix_k32", "suffix", "mrv1", 32),
-        ("ngram_k5", "ngram", "mrv1", None),
-        ("ngram_gpu_k5", "ngram_gpu", "mrv1", None),
+        ("ngram_k5", "ngram", "mrv1", 5),
+        ("ngram_gpu_k5", "ngram_gpu", "mrv1", 5),
     ],
 )
 def test_supported_variants_emit_official_vllm_overrides(
@@ -140,13 +151,113 @@ def test_suffix_and_ngram_variants_use_their_native_controls() -> None:
         )
 
 
-@pytest.mark.parametrize("model_key", ["qwen30", "qwen32", "qwen235"])
+@pytest.mark.parametrize(
+    ("model_key", "repo_id", "revision"),
+    [
+        (
+            "qwen30",
+            "inference-optimization/Qwen3-30B-A3B-speculator.dflash",
+            "edcff83783141eb9383e2bd6c33610d9a3104288",
+        ),
+        (
+            "qwen32",
+            "AICP-Labs/qwen3-32b-dflash-en-zh",
+            "68ccc7fd27b104271321b179a2959c759dce5eef",
+        ),
+    ],
+)
 @pytest.mark.parametrize("variant_key", ["dflash_k3", "dflash_k5"])
-def test_dflash_rejects_models_without_an_exact_checkpoint(
-    model_key: str, variant_key: str
+def test_dflash_uses_exact_checkpoint_and_draft_flash_attention(
+    model_key: str, repo_id: str, revision: str, variant_key: str
 ) -> None:
+    run = resolve_run(model_key, variant_key, "smoke2", "lyris")
+
+    assert run.draft_checkpoint is not None
+    assert run.draft_checkpoint.repo_id == repo_id
+    assert run.draft_checkpoint.revision == revision
+    assert run.draft_checkpoint.snapshot_path(Path("/hf")) == (
+        Path("/hf")
+        / "hub"
+        / f"models--{repo_id.replace('/', '--')}"
+        / "snapshots"
+        / revision
+    )
+    assert (
+        "++policy.generation.vllm_kwargs.speculative_config."
+        "attention_backend=FLASH_ATTN"
+    ) in run.hydra_overrides
+    assert not any(
+        item.endswith("attention_backend=FLASH_ATTN")
+        and "speculative_config" not in item
+        for item in run.hydra_overrides
+    )
+
+
+@pytest.mark.parametrize("variant_key", ["dflash_k3", "dflash_k5"])
+def test_dflash_rejects_qwen235_without_an_exact_checkpoint(variant_key: str) -> None:
     with pytest.raises(ValueError, match="not available"):
-        resolve_run(model_key, variant_key, "smoke2", "lyris")
+        resolve_run("qwen235", variant_key, "smoke2", "lyris")
+
+
+@pytest.mark.parametrize(
+    ("model_key", "repo_id", "revision"),
+    [
+        (
+            "qwen30",
+            "RedHatAI/Qwen3-30B-A3B-speculator.eagle3",
+            "6afc5aa2477b923467fb9a8d906782b984a9a6ba",
+        ),
+        (
+            "qwen32",
+            "RedHatAI/Qwen3-32B-speculator.eagle3",
+            "dc84fe7ff1db31efa824776f49c141fc8195eb47",
+        ),
+        (
+            "qwen235",
+            "nvidia/Qwen3-235B-A22B-Eagle3",
+            "33f3c01ce807376d1171301b9a148b1b28f239ba",
+        ),
+    ],
+)
+def test_eagle3_exposes_exact_base_checkpoint_identity(
+    model_key: str, repo_id: str, revision: str
+) -> None:
+    run = resolve_run(model_key, "eagle3_k5", "smoke2", "lyris")
+
+    assert run.draft_checkpoint is not None
+    assert run.draft_checkpoint.repo_id == repo_id
+    assert run.draft_checkpoint.revision == revision
+    assert run.draft_checkpoint.snapshot_path(Path("/hf")) == (
+        Path("/hf")
+        / "hub"
+        / f"models--{repo_id.replace('/', '--')}"
+        / "snapshots"
+        / revision
+    )
+
+
+@pytest.mark.parametrize(
+    "variant_key",
+    [
+        "baseline",
+        "eagle3_k1",
+        "eagle3_k3",
+        "eagle3_k5",
+        "draft_k1",
+        "draft_k5",
+        "pard_k5",
+        "pard_k16",
+        "suffix_k32",
+        "ngram_k5",
+        "ngram_gpu_k5",
+    ],
+)
+def test_qwen235_keeps_official_capture_sizes_without_matrix_override(
+    variant_key: str,
+) -> None:
+    run = resolve_run("qwen235", variant_key, "smoke2", "lyris")
+
+    assert not any("cudagraph_capture_sizes" in item for item in run.hydra_overrides)
 
 
 def test_lyris_scheduler_uses_recipe_topology_without_gres() -> None:
@@ -155,8 +266,17 @@ def test_lyris_scheduler_uses_recipe_topology_without_gres() -> None:
 
     assert "--nodes=16" in sbatch_parts
     assert "--segment=16" in sbatch_parts
+    assert "--dependency=" in sbatch_parts
+    assert "--partition=gb200" in sbatch_parts
+    assert run.cluster.partition == "gb200"
     assert run.cluster.gpus_per_node == 4
     assert not any(part.startswith("--gres") for part in sbatch_parts)
+
+
+def test_command_exposes_cluster_gpu_count_to_ray_sub() -> None:
+    run = resolve_run("qwen30", "baseline", "smoke2", "lyris")
+
+    assert "GPUS_PER_NODE=4" in run.command_parts()
 
 
 @pytest.mark.parametrize(

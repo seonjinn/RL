@@ -1,8 +1,23 @@
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Typed resolution for the vLLM 0.25.1 Qwen drafter matrix."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +51,25 @@ class PhaseSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class CheckpointSpec:
+    """Immutable Hugging Face identity for one target-specific draft model."""
+
+    model_key: str
+    repo_id: str
+    revision: str
+
+    def snapshot_path(self, hf_home: Path) -> Path:
+        """Return the immutable local snapshot path under ``HF_HOME``."""
+        return (
+            hf_home
+            / "hub"
+            / f"models--{self.repo_id.replace('/', '--')}"
+            / "snapshots"
+            / self.revision
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class VariantSpec:
     """An official vLLM speculative-decoding configuration."""
 
@@ -44,16 +78,17 @@ class VariantSpec:
     runner: str
     num_speculative_tokens: int | None
     compatible_models: frozenset[str]
-    checkpoints: tuple[tuple[str, str], ...] = ()
+    checkpoints: tuple[CheckpointSpec, ...] = ()
     uses_draft_model: bool = False
+    draft_attention_backend: str | None = None
     parallel_drafting: bool = False
     suffix_tree_depth: int | None = None
     ngram_size: int | None = None
 
-    def checkpoint_for(self, model_key: str) -> str | None:
+    def checkpoint_for(self, model_key: str) -> CheckpointSpec | None:
         """Return the exact drafter checkpoint for a compatible model."""
-        for checkpoint_model_key, checkpoint in self.checkpoints:
-            if checkpoint_model_key == model_key:
+        for checkpoint in self.checkpoints:
+            if checkpoint.model_key == model_key:
                 return checkpoint
         return None
 
@@ -66,6 +101,7 @@ class ResolvedRun:
     cluster: ClusterSpec
     phase: PhaseSpec
     variant: VariantSpec
+    draft_checkpoint: CheckpointSpec | None
     hydra_overrides: tuple[str, ...]
 
     def command_parts(self) -> tuple[str, ...]:
@@ -74,6 +110,7 @@ class ResolvedRun:
         return (
             "env",
             f"VLLM_USE_V2_MODEL_RUNNER={model_runner_v2}",
+            f"GPUS_PER_NODE={self.cluster.gpus_per_node}",
             "python3",
             "examples/run_grpo.py",
             "--config",
@@ -85,6 +122,7 @@ class ResolvedRun:
         """Return Lyris scheduler arguments without GPU-resource flags."""
         return (
             "sbatch",
+            "--dependency=",
             f"--account={self.cluster.account}",
             f"--partition={self.cluster.partition}",
             f"--nodes={self.recipe.nodes}",
@@ -127,7 +165,7 @@ G_CLUSTERS = (
     ClusterSpec(
         key="lyris",
         account="coreai_dlalgo_llm",
-        partition="batch",
+        partition="gb200",
         gpus_per_node=4,
     ),
 )
@@ -139,18 +177,52 @@ G_PHASES = (
 )
 
 G_EAGLE3_CHECKPOINTS = (
-    (
-        "qwen30",
-        "RedHatAI/Qwen3-30B-A3B-Thinking-2507-speculator.eagle3",
+    CheckpointSpec(
+        model_key="qwen30",
+        repo_id="RedHatAI/Qwen3-30B-A3B-speculator.eagle3",
+        revision="6afc5aa2477b923467fb9a8d906782b984a9a6ba",
     ),
-    ("qwen32", "RedHatAI/Qwen3-32B-speculator.eagle3"),
-    ("qwen235", "nvidia/Qwen3-235B-A22B-Eagle3"),
+    CheckpointSpec(
+        model_key="qwen32",
+        repo_id="RedHatAI/Qwen3-32B-speculator.eagle3",
+        revision="dc84fe7ff1db31efa824776f49c141fc8195eb47",
+    ),
+    CheckpointSpec(
+        model_key="qwen235",
+        repo_id="nvidia/Qwen3-235B-A22B-Eagle3",
+        revision="33f3c01ce807376d1171301b9a148b1b28f239ba",
+    ),
 )
 
 G_PARD_CHECKPOINTS = (
-    ("qwen30", "amd/PARD-Qwen3-0.6B"),
-    ("qwen32", "amd/PARD-Qwen3-0.6B"),
-    ("qwen235", "amd/PARD-Qwen3-0.6B"),
+    CheckpointSpec(
+        model_key="qwen30",
+        repo_id="amd/PARD-Qwen3-0.6B",
+        revision="f9f650fbab180c26498817718f0db5cae8f25136",
+    ),
+    CheckpointSpec(
+        model_key="qwen32",
+        repo_id="amd/PARD-Qwen3-0.6B",
+        revision="f9f650fbab180c26498817718f0db5cae8f25136",
+    ),
+    CheckpointSpec(
+        model_key="qwen235",
+        repo_id="amd/PARD-Qwen3-0.6B",
+        revision="f9f650fbab180c26498817718f0db5cae8f25136",
+    ),
+)
+
+G_DFLASH_CHECKPOINTS = (
+    CheckpointSpec(
+        model_key="qwen30",
+        repo_id="inference-optimization/Qwen3-30B-A3B-speculator.dflash",
+        revision="edcff83783141eb9383e2bd6c33610d9a3104288",
+    ),
+    CheckpointSpec(
+        model_key="qwen32",
+        repo_id="AICP-Labs/qwen3-32b-dflash-en-zh",
+        revision="68ccc7fd27b104271321b179a2959c759dce5eef",
+    ),
 )
 
 G_VARIANTS = (
@@ -193,16 +265,20 @@ G_VARIANTS = (
         method="dflash",
         runner="mrv2",
         num_speculative_tokens=3,
-        compatible_models=frozenset(),
+        compatible_models=frozenset(("qwen30", "qwen32")),
+        checkpoints=G_DFLASH_CHECKPOINTS,
         uses_draft_model=True,
+        draft_attention_backend="FLASH_ATTN",
     ),
     VariantSpec(
         key="dflash_k5",
         method="dflash",
         runner="mrv2",
         num_speculative_tokens=5,
-        compatible_models=frozenset(),
+        compatible_models=frozenset(("qwen30", "qwen32")),
+        checkpoints=G_DFLASH_CHECKPOINTS,
         uses_draft_model=True,
+        draft_attention_backend="FLASH_ATTN",
     ),
     VariantSpec(
         key="draft_k1",
@@ -254,7 +330,7 @@ G_VARIANTS = (
         key="ngram_k5",
         method="ngram",
         runner="mrv1",
-        num_speculative_tokens=None,
+        num_speculative_tokens=5,
         compatible_models=G_MODEL_KEYS,
         ngram_size=5,
     ),
@@ -262,7 +338,7 @@ G_VARIANTS = (
         key="ngram_gpu_k5",
         method="ngram_gpu",
         runner="mrv1",
-        num_speculative_tokens=None,
+        num_speculative_tokens=5,
         compatible_models=G_MODEL_KEYS,
         ngram_size=5,
     ),
@@ -301,7 +377,9 @@ def _find_variant(key: str) -> VariantSpec:
     raise ValueError(f"Unknown variant key: {key}")
 
 
-def _speculative_overrides(variant: VariantSpec, model_key: str) -> tuple[str, ...]:
+def _speculative_overrides(
+    variant: VariantSpec, draft_checkpoint: CheckpointSpec | None
+) -> tuple[str, ...]:
     """Return official vLLM speculative settings for a validated variant."""
     if variant.method is None:
         return ()
@@ -313,17 +391,17 @@ def _speculative_overrides(variant: VariantSpec, model_key: str) -> tuple[str, .
             f"{prefix}.num_speculative_tokens={variant.num_speculative_tokens}"
         )
     if variant.uses_draft_model:
-        checkpoint = variant.checkpoint_for(model_key)
-        if checkpoint is None:
-            raise ValueError(
-                f"Variant '{variant.key}' has no exact checkpoint for model "
-                f"'{model_key}'"
-            )
+        if draft_checkpoint is None:
+            raise ValueError(f"Variant '{variant.key}' requires a draft checkpoint")
         overrides.extend(
             (
-                f"{prefix}.model={checkpoint}",
+                f"{prefix}.model={draft_checkpoint.repo_id}",
                 f"{prefix}.draft_tensor_parallel_size=1",
             )
+        )
+    if variant.draft_attention_backend is not None:
+        overrides.append(
+            f"{prefix}.attention_backend={variant.draft_attention_backend}"
         )
     if variant.parallel_drafting:
         overrides.append(f"{prefix}.parallel_drafting=true")
@@ -353,6 +431,12 @@ def resolve_run(
         raise ValueError(
             f"Variant '{variant_key}' is not available for model '{model_key}'"
         )
+    draft_checkpoint = variant.checkpoint_for(model_key)
+    if variant.uses_draft_model and draft_checkpoint is None:
+        raise ValueError(
+            f"Variant '{variant_key}' has no exact checkpoint for model "
+            f"'{model_key}'"
+        )
 
     base_overrides = (
         f"grpo.max_num_steps={phase_spec.max_steps}",
@@ -368,5 +452,7 @@ def resolve_run(
         cluster=cluster_spec,
         phase=phase_spec,
         variant=variant,
-        hydra_overrides=base_overrides + _speculative_overrides(variant, model_key),
+        draft_checkpoint=draft_checkpoint,
+        hydra_overrides=base_overrides
+        + _speculative_overrides(variant, draft_checkpoint),
     )
