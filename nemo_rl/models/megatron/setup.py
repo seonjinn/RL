@@ -188,6 +188,13 @@ def _enforce_packed_seq_cuda_graph_consistency(config: PolicyConfig) -> None:
     megatron_cfg = config.get("megatron_cfg", {})
     if megatron_cfg.get("cuda_graph_impl") in (None, "none"):
         return
+    if megatron_cfg.get("cuda_graph_impl") == "local" and megatron_cfg.get(
+        "cuda_graph_pr5783_thd", False
+    ):
+        # Megatron-LM PR #5783 THD path: graphs consume the real PackedSeqParams
+        # (cu_seqlens are static graph inputs), so the TE packed-capture
+        # consistency rules do not apply.
+        return
     if megatron_cfg.get("allow_qwen_cuda_graph_packed_seq", False):
         warnings.warn(
             "policy.megatron_cfg.allow_qwen_cuda_graph_packed_seq is obsolete "
@@ -955,14 +962,18 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
     # CUDA graph for training (requires Megatron-LM with packed-sequence CG support).
     cg_impl = config["megatron_cfg"].get("cuda_graph_impl")
     cg_scope = config["megatron_cfg"].get("cuda_graph_scope")
+    cg_pr5783_thd = config["megatron_cfg"].get("cuda_graph_pr5783_thd", False)
     if cg_impl and cg_impl != "none":
-        if not cg_scope:
+        # PR #5783 mode uses whole-layer capture when cuda_graph_scope is unset
+        # (empty cuda_graph_modules means "graph every layer" in Megatron-LM).
+        if not cg_scope and not (cg_impl == "local" and cg_pr5783_thd):
             raise ValueError(
                 f"cuda_graph_scope must be set when cuda_graph_impl is '{cg_impl}'. "
                 f"Set megatron_cfg.cuda_graph_scope (e.g. 'full_model')."
             )
         model_cfg.cuda_graph_impl = cg_impl
-        model_cfg.cuda_graph_scope = cg_scope
+        if cg_scope:
+            model_cfg.cuda_graph_scope = cg_scope
     elif cg_scope:
         model_cfg.cuda_graph_scope = cg_scope
     if "cuda_graph_warmup_steps" in config["megatron_cfg"]:
@@ -975,6 +986,19 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
         model_cfg.cuda_graph_max_packed_seqs = config["megatron_cfg"][
             "cuda_graph_max_packed_seqs"
         ]
+    if cg_impl == "local" and cg_pr5783_thd:
+        # Megatron-LM PR #5783: local-impl CUDA graphs over THD packed sequences.
+        # sequence_packing_scheduler gates MegatronModule._is_thd_cuda_graph, and
+        # cu_seqlens buffers are statically sized to thd_max_packed_sequences + 1.
+        model_cfg.sequence_packing_scheduler = "dp_balanced"
+        model_cfg.thd_max_packed_sequences = (
+            config["megatron_cfg"].get("cuda_graph_max_packed_seqs") or 64
+        )
+        model_cfg.pad_packed_seq_alignment = "max"
+        model_cfg.max_seqlen_per_dp_cp_rank = (
+            config["max_total_sequence_length"]
+            // config["megatron_cfg"]["context_parallel_size"]
+        )
     if cg_impl == "transformer_engine":
         # TE-based CUDA graphs require TE's RNG tracker to be active.
         model_cfg.use_te_rng_tracker = True
