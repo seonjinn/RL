@@ -19,7 +19,13 @@ import torch
 from torchdata.stateful_dataloader import StatefulDataLoader
 
 from nemo_rl.algorithms.loss_functions import NLLLoss
-from nemo_rl.algorithms.sft import _default_sft_save_state, sft_train
+from nemo_rl.algorithms.sft import (
+    _build_sft_collate_fn,
+    _default_sft_save_state,
+    sft_train,
+    validate,
+)
+from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
 
 @pytest.fixture
@@ -247,3 +253,99 @@ def test_training_with_negative_val_period(mock_components):
     )
 
     assert mock_components["policy"].train.call_count == 3
+
+
+def _direct_packed_batch(batch_size: int = 1) -> BatchedDataDict:
+    return BatchedDataDict(
+        {
+            "input_ids": torch.arange(batch_size * 4).reshape(batch_size, 4),
+            "target_ids": torch.arange(batch_size * 4).reshape(batch_size, 4),
+            "token_mask": torch.ones(batch_size, 4),
+            "position_ids": torch.arange(4).repeat(batch_size, 1),
+            "input_lengths": torch.full((batch_size,), 4),
+            "sample_mask": torch.ones(batch_size),
+            "packed_cu_seqlens": torch.tensor([[0, 4]]).repeat(batch_size, 1),
+            "packed_cu_seqlens_lengths": torch.full((batch_size,), 2),
+            "packed_max_seqlen": torch.full((batch_size,), 4),
+        }
+    )
+
+
+def test_sft_collate_fn_binds_megatron_context_and_data_parallel_sizes():
+    collate_fn = _build_sft_collate_fn(
+        {
+            "megatron_cfg": {
+                "enabled": True,
+                "tensor_model_parallel_size": 8,
+                "pipeline_model_parallel_size": 1,
+                "context_parallel_size": 16,
+            }
+        },
+        {"num_nodes": 64, "gpus_per_node": 8},
+    )
+
+    assert collate_fn.keywords == {
+        "megatron_sft_dp_stride_size": 4,
+        "megatron_sft_context_parallel_size": 16,
+    }
+
+
+def test_sft_train_bypasses_message_repacking_for_direct_packed_rows(
+    mock_components,
+):
+    direct_batch = _direct_packed_batch()
+    train_dataloader = mock_components["train_dataloader"]
+    train_dataloader.__iter__ = lambda self: iter([direct_batch])
+    train_dataloader.__len__ = MagicMock(return_value=1)
+    mock_components["master_config"]["sft"]["max_num_steps"] = 1
+    mock_components["master_config"]["sft"]["max_num_epochs"] = 1
+
+    with (
+        patch("nemo_rl.algorithms.sft.add_loss_mask_to_message_log") as add_mask,
+        patch("nemo_rl.algorithms.sft.batched_message_log_to_flat_message") as flatten,
+    ):
+        sft_train(
+            mock_components["policy"],
+            train_dataloader,
+            None,
+            mock_components["tokenizer"],
+            mock_components["loss_fn"],
+            mock_components["master_config"],
+            mock_components["logger"],
+            mock_components["checkpointer"],
+            _default_sft_save_state(),
+        )
+
+    add_mask.assert_not_called()
+    flatten.assert_not_called()
+    assert mock_components["policy"].train.call_args.args[0] is direct_batch
+
+
+def test_validate_bypasses_message_repacking_for_direct_packed_rows(
+    mock_components,
+):
+    direct_batch = _direct_packed_batch()
+    val_dataloader = mock_components["val_dataloader"]
+    val_dataloader.__iter__ = lambda self: iter([direct_batch])
+    val_dataloader.__len__ = MagicMock(return_value=1)
+    mock_components["policy"].sharding_annotations.get_axis_size.return_value = 1
+
+    with (
+        patch("nemo_rl.algorithms.sft.add_loss_mask_to_message_log") as add_mask,
+        patch("nemo_rl.algorithms.sft.batched_message_log_to_flat_message") as flatten,
+    ):
+        validate(
+            mock_components["policy"],
+            val_dataloader,
+            mock_components["tokenizer"],
+            mock_components["loss_fn"],
+            step=0,
+            master_config=mock_components["master_config"],
+            val_batches=1,
+            val_batch_size=1,
+            val_mbs=1,
+        )
+
+    add_mask.assert_not_called()
+    flatten.assert_not_called()
+    assert mock_components["policy"].train.call_args.args[0] is direct_batch

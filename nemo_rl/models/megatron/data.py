@@ -22,8 +22,7 @@ from megatron.core.parallel_state import (
     get_context_parallel_rank,
     get_context_parallel_world_size,
 )
-from megatron.core.utils import StragglerDetector
-from megatron.training.utils import get_ltor_masks_and_position_ids
+from megatron.core.utils import StragglerDetector, get_thd_batch_on_this_cp_rank
 
 from nemo_rl.algorithms.interfaces import LossFunction, LossType
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
@@ -42,6 +41,8 @@ class ProcessedInputs:
     packed_seq_params: Optional[PackedSeqParams]
     cu_seqlens_padded: Optional[torch.Tensor]
     mtp_loss_mask: Optional[torch.Tensor] = None
+    labels_cp_sharded: Optional[torch.Tensor] = None
+    loss_mask_cp_sharded: Optional[torch.Tensor] = None
 
 
 @dataclass
@@ -69,6 +70,8 @@ class ProcessedMicrobatch:
     packed_seq_params: Optional[PackedSeqParams]
     cu_seqlens_padded: Optional[torch.Tensor]
     mtp_loss_mask: Optional[torch.Tensor] = None
+    labels_cp_sharded: Optional[torch.Tensor] = None
+    loss_mask_cp_sharded: Optional[torch.Tensor] = None
 
 
 def make_processed_microbatch_iterator(
@@ -122,6 +125,8 @@ def make_processed_microbatch_iterator(
             position_ids=processed_inputs.position_ids,
             packed_seq_params=processed_inputs.packed_seq_params,
             cu_seqlens_padded=processed_inputs.cu_seqlens_padded,
+            labels_cp_sharded=processed_inputs.labels_cp_sharded,
+            loss_mask_cp_sharded=processed_inputs.loss_mask_cp_sharded,
             mtp_loss_mask=processed_inputs.mtp_loss_mask,
         )
 
@@ -158,13 +163,21 @@ def get_microbatch_iterator(
     pad_full_seq_to = None
     pad_packed_seq_to_multiple_of = 1
 
-    _, seq_dim_size = get_and_validate_seqlen(data)
+    direct_packed_rows = "packed_cu_seqlens" in data
+    if direct_packed_rows:
+        seq_dim_size = data["input_ids"].shape[1]
+    else:
+        _, seq_dim_size = get_and_validate_seqlen(data)
 
     # Auto-detect seq_length_key if not provided
     if seq_length_key is None and cfg["sequence_packing"]["enabled"]:
         seq_length_key = "input_lengths"
 
-    if cfg["dynamic_batching"]["enabled"]:
+    if direct_packed_rows:
+        raw_iterator = data.make_microbatch_iterator(1)
+        data_iterator_len = data.size
+        micro_batch_size = 1
+    elif cfg["dynamic_batching"]["enabled"]:
         raw_iterator = data.make_microbatch_iterator_with_dynamic_shapes()
         data_iterator_len = data.get_microbatch_iterator_dynamic_shapes_len()
     elif cfg["sequence_packing"]["enabled"]:
@@ -216,14 +229,7 @@ def process_microbatch(
     pad_full_seq_to: Optional[int] = None,
     pack_sequences: bool = False,
     straggler_timer: Optional[StragglerDetector] = None,
-) -> tuple[
-    torch.Tensor,
-    torch.Tensor,
-    Optional[torch.Tensor],
-    Optional[torch.Tensor],
-    Optional[PackedSeqParams],
-    Optional[torch.Tensor],
-]:
+) -> ProcessedInputs:
     """Process a microbatch for Megatron model forward pass."""
     ctx = straggler_timer(bdata=True) if straggler_timer is not None else nullcontext()
     with ctx:
@@ -237,9 +243,91 @@ def process_microbatch(
         seq_lengths = None  # Will be set if using packed sequences
         cu_seqlens = None
         cu_seqlens_padded = None
+        labels_cp_sharded = None
+        loss_mask_cp_sharded = None
         mtp_loss_mask = None
 
-        if pack_sequences:
+        if "packed_cu_seqlens" in data_dict:
+            required_keys = {
+                "target_ids",
+                "token_mask",
+                "sample_mask",
+                "position_ids",
+                "packed_cu_seqlens_lengths",
+                "packed_max_seqlen",
+            }
+            missing_keys = sorted(required_keys.difference(data_dict.keys()))
+            if missing_keys:
+                raise ValueError(
+                    "Megatron direct packed rows are missing required fields: "
+                    + ", ".join(missing_keys)
+                )
+            if input_ids.shape[0] != 1:
+                raise ValueError(
+                    "Megatron direct packed microbatches must contain exactly one row"
+                )
+
+            aligned_keys = ("target_ids", "token_mask", "position_ids")
+            for key in aligned_keys:
+                if data_dict[key].shape != input_ids.shape:
+                    raise ValueError(
+                        f"{key} must have shape {tuple(input_ids.shape)} for a "
+                        "Megatron direct packed row"
+                    )
+            if data_dict["sample_mask"].shape != (1,):
+                raise ValueError(
+                    "sample_mask must have shape (1,) for a direct packed row"
+                )
+
+            cu_lengths = data_dict["packed_cu_seqlens_lengths"]
+            packed_max_seqlen = data_dict["packed_max_seqlen"]
+            if cu_lengths.shape != (1,) or packed_max_seqlen.shape != (1,):
+                raise ValueError(
+                    "packed_cu_seqlens_lengths and packed_max_seqlen must have "
+                    "shape (1,) for a direct packed microbatch"
+                )
+            cu_len = int(cu_lengths[0].item())
+            packed_cu_seqlens = data_dict["packed_cu_seqlens"]
+            if (
+                packed_cu_seqlens.ndim != 2
+                or not 2 <= cu_len <= packed_cu_seqlens.shape[1]
+            ):
+                raise ValueError(
+                    "packed_cu_seqlens_lengths is invalid for the packed row"
+                )
+            cu_seqlens = packed_cu_seqlens[0, :cu_len].to(torch.int32)
+            if (
+                int(cu_seqlens[0].item()) != 0
+                or int(cu_seqlens[-1].item()) != input_ids.shape[1]
+                or bool(((cu_seqlens[1:] - cu_seqlens[:-1]) <= 0).any().item())
+            ):
+                raise ValueError(
+                    "packed_cu_seqlens must contain increasing boundaries from 0 "
+                    "through the packed row length"
+                )
+
+            target_aligned_loss_mask = data_dict["token_mask"] * data_dict[
+                "sample_mask"
+            ].unsqueeze(-1)
+            cp_batch, packed_seq_params = get_thd_batch_on_this_cp_rank(
+                {
+                    "tokens": input_ids,
+                    "labels": data_dict["target_ids"],
+                    "loss_mask": target_aligned_loss_mask,
+                    "position_ids": data_dict["position_ids"],
+                },
+                cu_seqlens,
+                cu_seqlens,
+                packed_max_seqlen,
+                cp_size=get_context_parallel_world_size(),
+                cp_rank=get_context_parallel_rank(),
+            )
+            input_ids_cp_sharded = cp_batch["tokens"]
+            labels_cp_sharded = cp_batch["labels"]
+            loss_mask_cp_sharded = cp_batch["loss_mask"]
+            position_ids = cp_batch["position_ids"]
+            cu_seqlens_padded = cu_seqlens
+        elif pack_sequences:
             # For packed sequences with padded input, we need sequence lengths
             assert seq_length_key is not None, (
                 "seq_length_key must be provided for packed sequences"
@@ -310,6 +398,8 @@ def process_microbatch(
         position_ids=position_ids,
         packed_seq_params=packed_seq_params,
         cu_seqlens_padded=cu_seqlens_padded,
+        labels_cp_sharded=labels_cp_sharded,
+        loss_mask_cp_sharded=loss_mask_cp_sharded,
         mtp_loss_mask=mtp_loss_mask,
     )
 
@@ -346,6 +436,10 @@ def process_global_batch(
 
     if "token_mask" not in batch:
         local_valid_toks = local_valid_seqs * batch["input_ids"].shape[1]
+    elif "target_ids" in batch:
+        local_valid_toks = torch.sum(
+            batch["token_mask"] * batch["sample_mask"].unsqueeze(-1)
+        )
     else:
         local_valid_toks = torch.sum(
             batch["token_mask"][:, 1:] * batch["sample_mask"].unsqueeze(-1)
@@ -367,6 +461,13 @@ def process_global_batch(
     }
 
 
+def get_ltor_masks_and_position_ids(*args: Any, **kwargs: Any) -> Any:
+    """Import Megatron training utilities only for the ordinary padded path."""
+    from megatron.training.utils import get_ltor_masks_and_position_ids as _impl
+
+    return _impl(*args, **kwargs)
+
+
 def _pack_sequences_for_megatron(
     input_ids: torch.Tensor,
     seq_lengths: torch.Tensor,
@@ -375,7 +476,13 @@ def _pack_sequences_for_megatron(
     pad_packed_seq_to: Optional[int] = None,
     cp_rank: int = 0,
     cp_size: int = 1,
-) -> tuple[torch.Tensor, PackedSeqParams, torch.Tensor, Optional[torch.Tensor]]:
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    PackedSeqParams,
+    torch.Tensor,
+    torch.Tensor,
+]:
     """Pack sequences for Megatron model processing with optional context parallelism.
 
     Args:
@@ -532,6 +639,7 @@ def _pack_sequences_for_megatron(
 
     if cu_seqlens_padded is None:
         cu_seqlens_padded = cu_seqlens.clone()
+    assert isinstance(cu_seqlens_padded, torch.Tensor)
 
     packed_seq_params = PackedSeqParams(
         cu_seqlens_q=cu_seqlens_padded,

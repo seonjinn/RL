@@ -220,6 +220,55 @@ def test_maybe_pad_last_batch():
     assert "reference_policy_logprobs" not in result
 
 
+def test_maybe_pad_last_direct_packed_batch_preserves_every_row_field():
+    batch = BatchedDataDict(
+        {
+            "input_ids": torch.tensor([[1, 2, 3, 4]]),
+            "target_ids": torch.tensor([[2, 3, 4, -100]]),
+            "token_mask": torch.tensor([[1.0, 1.0, 1.0, 0.0]]),
+            "position_ids": torch.tensor([[0, 1, 2, 3]]),
+            "input_lengths": torch.tensor([4]),
+            "sample_mask": torch.tensor([1.0]),
+            "packed_cu_seqlens": torch.tensor([[0, 2, 4]]),
+            "packed_cu_seqlens_lengths": torch.tensor([3]),
+            "packed_max_seqlen": torch.tensor([2]),
+            "idx": ["row-0"],
+            "task_name": ["sft"],
+        }
+    )
+
+    result = maybe_pad_last_batch(batch, dp_size=2, mbs=1)
+
+    assert result.size == 2
+    for key, value in result.items():
+        assert len(value) == 2, key
+    assert torch.equal(result["target_ids"][1], result["target_ids"][0])
+    assert torch.equal(result["packed_cu_seqlens"][1], result["packed_cu_seqlens"][0])
+    assert result["idx"] == ["row-0", "row-0"]
+    assert result["task_name"] == ["sft", "sft"]
+    assert torch.equal(result["sample_mask"], torch.tensor([1.0, 0.0]))
+
+
+def test_maybe_pad_last_direct_packed_batch_fails_on_unaligned_field():
+    batch = BatchedDataDict(
+        {
+            "input_ids": torch.tensor([[1, 2, 3, 4]]),
+            "target_ids": torch.tensor([[2, 3, 4, -100]]),
+            "token_mask": torch.ones(1, 4),
+            "position_ids": torch.arange(4).unsqueeze(0),
+            "input_lengths": torch.tensor([4]),
+            "sample_mask": torch.tensor([1.0]),
+            "packed_cu_seqlens": torch.tensor([[0, 4]]),
+            "packed_cu_seqlens_lengths": torch.tensor([2]),
+            "packed_max_seqlen": torch.tensor([4]),
+            "metadata": object(),
+        }
+    )
+
+    with pytest.raises(ValueError, match="row-aligned field metadata"):
+        maybe_pad_last_batch(batch, dp_size=2, mbs=1)
+
+
 # Performance Metrics Tests
 
 

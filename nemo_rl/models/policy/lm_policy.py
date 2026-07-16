@@ -56,6 +56,17 @@ from nemo_rl.utils.timer import Timer
 
 PathLike = Union[str, "os.PathLike[Any]"]
 
+_DIRECT_PACKED_SFT_REQUIRED_KEYS = {
+    "input_ids",
+    "target_ids",
+    "token_mask",
+    "position_ids",
+    "sample_mask",
+    "packed_cu_seqlens",
+    "packed_cu_seqlens_lengths",
+    "packed_max_seqlen",
+}
+
 
 class Policy(ColocatablePolicyInterface, GenerationInterface):
     def __init__(
@@ -528,7 +539,40 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         # Shard and replicate the batch
         dp_size = self.sharding_annotations.get_axis_size("data_parallel")
         with timer.time("policy_training/sharding_data") if timer else nullcontext():
-            if self.use_dynamic_batches:
+            if "packed_cu_seqlens" in data:
+                missing = _DIRECT_PACKED_SFT_REQUIRED_KEYS.difference(data)
+                if missing:
+                    raise ValueError(
+                        "Direct packed SFT batch is missing required fields: "
+                        f"{sorted(missing)}"
+                    )
+                if not self.cfg.get("megatron_cfg", {}).get("enabled", False):
+                    raise ValueError(
+                        "Direct packed SFT rows require the Megatron backend"
+                    )
+                if micro_batch_size != 1:
+                    raise ValueError(
+                        "Direct packed SFT rows require micro batch size 1"
+                    )
+                if self.cfg["dynamic_batching"]["enabled"]:
+                    raise ValueError(
+                        "Direct packed SFT rows require dynamic batching to be disabled"
+                    )
+                if batch_size != data.size:
+                    raise ValueError(
+                        "Direct packed SFT global batch size must equal the packed row "
+                        f"count: gbs={batch_size}, rows={data.size}"
+                    )
+                if batch_size % dp_size != 0:
+                    raise ValueError(
+                        "Direct packed SFT global batch size must be divisible by data "
+                        f"parallel size: gbs={batch_size}, dp={dp_size}"
+                    )
+                sharded_data = data.shard_by_batch_size(
+                    dp_size,
+                    batch_size=batch_size,
+                )
+            elif self.use_dynamic_batches:
                 self.dynamic_batching_args["max_tokens_per_microbatch"] = self.cfg[
                     "dynamic_batching"
                 ]["train_mb_tokens"]
