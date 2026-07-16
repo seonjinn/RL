@@ -112,6 +112,20 @@ def make_processed_microbatch_iterator(
     """
     pack_sequences = cfg["sequence_packing"]["enabled"]
 
+    megatron_cfg = cfg.get("megatron_cfg") or {}
+    cu_seqlens_pad_to_entries = None
+    if (
+        pack_sequences
+        and megatron_cfg.get("cuda_graph_impl") == "local"
+        and megatron_cfg.get("cuda_graph_pr5783_thd", False)
+    ):
+        # PR #5783 THD CUDA graphs: cu_seqlens tensors are graph inputs, so
+        # PackedSeqParams must carry a static [thd_max_packed_sequences + 1]
+        # shape (thd_max_packed_sequences = cuda_graph_max_packed_seqs).
+        cu_seqlens_pad_to_entries = (
+            megatron_cfg.get("cuda_graph_max_packed_seqs") or 64
+        ) + 1
+
     for data_dict in raw_iterator:
         # Move to GPU
         data_dict = data_dict.to("cuda")
@@ -126,6 +140,7 @@ def make_processed_microbatch_iterator(
             pack_sequences=pack_sequences,
             delegate_pack_to_model=delegate_pack_to_model,
             straggler_timer=straggler_timer,
+            cu_seqlens_pad_to_entries=cu_seqlens_pad_to_entries,
         )
 
         yield ProcessedMicrobatch(
@@ -198,6 +213,7 @@ def get_microbatch_iterator(
             cfg["megatron_cfg"],
             cfg["make_sequence_length_divisible_by"],
             pack_seq_dim_size,
+            max_total_sequence_length=cfg["max_total_sequence_length"],
         )
         micro_batch_size = 1
     else:
@@ -262,6 +278,7 @@ def process_microbatch(
     pack_sequences: bool = False,
     delegate_pack_to_model: bool = False,
     straggler_timer: Optional[StragglerDetector] = None,
+    cu_seqlens_pad_to_entries: Optional[int] = None,
 ) -> ProcessedInputs:
     """Process a microbatch for Megatron model forward pass."""
     ctx = straggler_timer(bdata=True) if straggler_timer is not None else nullcontext()
@@ -358,6 +375,7 @@ def process_microbatch(
                     pad_full_seq_to,
                     cp_rank=get_context_parallel_rank(),
                     cp_size=get_context_parallel_world_size(),
+                    cu_seqlens_pad_to_entries=cu_seqlens_pad_to_entries,
                 )
                 # routed_experts and the R3 trace token identity ride the SAME
                 # per-seq zigzag CP sharding as input_ids, re-derived from
@@ -822,6 +840,7 @@ def _pack_sequences_for_megatron(
     pad_packed_seq_to: Optional[int] = None,
     cp_rank: int = 0,
     cp_size: int = 1,
+    cu_seqlens_pad_to_entries: Optional[int] = None,
 ) -> tuple[torch.Tensor, PackedSeqParams, torch.Tensor, Optional[torch.Tensor]]:
     """Pack sequences for Megatron model processing with optional context parallelism.
 
@@ -833,6 +852,10 @@ def _pack_sequences_for_megatron(
         pad_packed_seq_to: Pad packed sequences to this value (before CP)
             - The three parameters above can be calculated using _get_pack_sequence_parameters_for_megatron, we do not recommend users to set these parameters manually.
         cp_size: Context parallelism size
+        cu_seqlens_pad_to_entries: Pad the cu_seqlens tensors inside PackedSeqParams
+            to this fixed entry count by repeating the endpoint (PR #5783 THD
+            CUDA-graph static-input requirement). Returned cu_seqlens /
+            cu_seqlens_padded stay unpadded.
 
     Returns:
         Tuple of:
@@ -993,18 +1016,41 @@ def _pack_sequences_for_megatron(
     if cu_seqlens_padded is None:
         cu_seqlens_padded = cu_seqlens.clone()
 
+    psp_cu_seqlens = cu_seqlens_padded
+    if cu_seqlens_pad_to_entries is not None:
+        # PR #5783 THD CUDA graphs: cu_seqlens are graph inputs and must keep a
+        # static [thd_max_packed_sequences + 1] shape. Pad by repeating the
+        # endpoint (zero-length trailing sequences), mirroring Megatron-LM's
+        # _pad_cu_seqlens. Only the PackedSeqParams copies are padded.
+        actual_entries = cu_seqlens_padded.shape[0]
+        assert actual_entries <= cu_seqlens_pad_to_entries, (
+            f"Packed micro-batch has {actual_entries - 1} sequences but the static "
+            f"cu_seqlens buffer holds {cu_seqlens_pad_to_entries - 1}; increase "
+            f"policy.megatron_cfg.cuda_graph_max_packed_seqs."
+        )
+        psp_cu_seqlens = torch.nn.functional.pad(
+            cu_seqlens_padded,
+            (0, cu_seqlens_pad_to_entries - actual_entries),
+            value=int(cu_seqlens_padded[-1].item()),
+        )
+
     # total_tokens is required for PackedSeqParams.__post_init__ to build
     # seq_idx, which Mamba uses to reset SSM state at sample boundaries.
     packed_seq_params = PackedSeqParams(
-        cu_seqlens_q=cu_seqlens_padded,
-        cu_seqlens_kv=cu_seqlens_padded,
-        cu_seqlens_q_padded=cu_seqlens_padded,
-        cu_seqlens_kv_padded=cu_seqlens_padded,
+        cu_seqlens_q=psp_cu_seqlens,
+        cu_seqlens_kv=psp_cu_seqlens,
+        cu_seqlens_q_padded=psp_cu_seqlens,
+        cu_seqlens_kv_padded=psp_cu_seqlens,
         max_seqlen_q=int(max_seqlen),
         max_seqlen_kv=int(max_seqlen),
         qkv_format="thd",
         total_tokens=packed_input_ids.shape[1],
     )
+    if cu_seqlens_pad_to_entries is not None:
+        # Endpoint-repeated cu_seqlens must not be interpreted as padded THD
+        # layout by TE attention. Set post-init so the pinned (non-PR) Megatron
+        # PackedSeqParams, which lacks this field, keeps working.
+        packed_seq_params.pad_between_seqs = False
 
     return (
         all_input_ids.contiguous(),
@@ -1183,6 +1229,7 @@ def _get_pack_sequence_parameters_for_megatron(
     megatron_cfg: dict,
     pad_individual_seqs_to_multiple_of: int,
     max_seq_len_in_batch: int,
+    max_total_sequence_length: Optional[int] = None,
 ):
     """Get pack sequence parameters for Megatron model processing with optional context parallelism.
 
@@ -1190,6 +1237,8 @@ def _get_pack_sequence_parameters_for_megatron(
         megatron_cfg: Megatron configuration
         pad_individual_seqs_to_multiple_of: Pad individual sequences to a multiple of this value
         max_seq_len_in_batch: Maximum sequence length in batch
+        max_total_sequence_length: Fixed pad target used by the PR #5783 THD
+            CUDA-graph mode (required when cuda_graph_pr5783_thd is set)
 
     Returns:
         Tuple of:
@@ -1265,8 +1314,22 @@ def _get_pack_sequence_parameters_for_megatron(
         cuda_graph_buckets = sorted(cuda_graph_buckets)
     min_fill_ratio = megatron_cfg.get("cuda_graph_min_fill_ratio", 0.0)
 
+    pr5783_thd = megatron_cfg.get("cuda_graph_impl") == "local" and megatron_cfg.get(
+        "cuda_graph_pr5783_thd", False
+    )
+
     is_cg_step = False
-    if pp_size > 1:
+    if pr5783_thd:
+        # Megatron-LM PR #5783 THD CUDA graphs replay a single static shape:
+        # always pad the packed batch to max_total_sequence_length so the
+        # per-rank length matches max_seqlen_per_dp_cp_rank used at capture.
+        # cuda_graph_buckets are ignored in this mode.
+        assert max_total_sequence_length is not None, (
+            "max_total_sequence_length is required when cuda_graph_pr5783_thd is set."
+        )
+        pad_packed_seq_to = max_total_sequence_length
+        is_cg_step = True
+    elif pp_size > 1:
         # PP requires all micro-batches to have the same shape.
         pad_packed_seq_to = max_seq_len_in_batch
         is_cg_step = cuda_graph_pad_packed_seq
