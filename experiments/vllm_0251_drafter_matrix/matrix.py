@@ -16,8 +16,16 @@
 
 from __future__ import annotations
 
+import argparse
+import json
+import os
+import shlex
+import subprocess
+import tempfile
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, Mapping, Sequence
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,9 +34,20 @@ class RecipeSpec:
 
     key: str
     path: str
+    target_repo_id: str
     nodes: int
     segment: int
     max_osl: int
+
+    def target_ref_path(self, hf_home: Path) -> Path:
+        """Return the Hugging Face ``main`` ref used by the recipe target."""
+        return (
+            hf_home
+            / "hub"
+            / f"models--{self.target_repo_id.replace('/', '--')}"
+            / "refs"
+            / "main"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,12 +156,23 @@ class ResolvedRun:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class CheckoutState:
+    """Validated Git identity for a submission checkout."""
+
+    branch: str
+    head: str
+    fork_ref: str
+    submodules: tuple[str, ...]
+
+
 G_MODEL_KEYS = frozenset(("qwen30", "qwen32", "qwen235"))
 
 G_RECIPES = (
     RecipeSpec(
         key="qwen30",
         path="examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
+        target_repo_id="Qwen/Qwen3-30B-A3B",
         nodes=4,
         segment=4,
         max_osl=4096,
@@ -150,6 +180,7 @@ G_RECIPES = (
     RecipeSpec(
         key="qwen32",
         path="examples/configs/recipes/llm/performance/grpo-qwen3-32b-4n4g.yaml",
+        target_repo_id="Qwen/Qwen3-32B",
         nodes=4,
         segment=4,
         max_osl=4096,
@@ -157,6 +188,7 @@ G_RECIPES = (
     RecipeSpec(
         key="qwen235",
         path="examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g.yaml",
+        target_repo_id="Qwen/Qwen3-235B-A22B",
         nodes=16,
         segment=16,
         max_osl=8192,
@@ -472,3 +504,340 @@ def resolve_run(
             cluster_spec.hf_home,
         ),
     )
+
+
+G_DEFAULT_CONTAINER = Path(
+    "/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/"
+    "nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh"
+)
+G_DEFAULT_EXPERIMENT_ROOT = Path(
+    "/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/"
+    "vllm0251_drafter_matrix"
+)
+G_WANDB_PROJECT = "nemo-rl-vllm0251-drafter-matrix"
+
+
+def build_runtime_command(
+    run: ResolvedRun,
+    repo_dir: Path,
+    run_dir: Path,
+    run_tag: str,
+) -> tuple[str, ...]:
+    """Build the command executed by ``ray.sub`` inside the container."""
+    runner_v2 = "1" if run.variant.runner == "mrv2" else "0"
+    safe_tag = "".join(char if char.isalnum() or char in "-_" else "-" for char in run_tag)
+    environment = (
+        f"VLLM_USE_V2_MODEL_RUNNER={runner_v2}",
+        f"GPUS_PER_NODE={run.cluster.gpus_per_node}",
+        "WANDB_RUN_GROUP=vllm0251-drafter-matrix",
+        "WANDB_RESUME=never",
+        f"HF_HOME={run.cluster.hf_home}",
+        "HF_HUB_OFFLINE=1",
+        "TRANSFORMERS_OFFLINE=1",
+        f"PYTHONPATH={repo_dir}",
+        f"NEMO_RL_VENV_DIR=/tmp/nemorl-v0251-{safe_tag}",
+        "NRL_FORCE_REBUILD_VENVS=true",
+        f"TRITON_CACHE_DIR=/tmp/nemorl-v0251-triton-{safe_tag}",
+        f"TORCHINDUCTOR_CACHE_DIR=/tmp/nemorl-v0251-inductor-{safe_tag}",
+        "PYTHONFAULTHANDLER=1",
+        "RAY_DEDUP_LOGS=0",
+    )
+    output_overrides = (
+        f"checkpointing.checkpoint_dir={run_dir / 'checkpoints'}",
+        f"logger.log_dir={run_dir / 'nemo_logs'}",
+        f"logger.wandb.project={G_WANDB_PROJECT}",
+        f"logger.wandb.name={run_tag}",
+    )
+    return (
+        "env",
+        *environment,
+        "/opt/nemo_rl_venv/bin/python",
+        "examples/run_grpo.py",
+        "--config",
+        run.recipe.path,
+        *run.hydra_overrides,
+        *output_overrides,
+    )
+
+
+def build_scheduler_command(
+    run: ResolvedRun,
+    repo_dir: Path,
+    run_dir: Path,
+    mode: str,
+) -> tuple[str, ...]:
+    """Build an exact scheduler preflight or submission command."""
+    if mode not in {"test-only", "submit"}:
+        raise ValueError(f"Unsupported scheduler mode: {mode}")
+    base = run.sbatch_parts()
+    mode_flag = "--test-only" if mode == "test-only" else "--parsable"
+    return (
+        *base[:-1],
+        f"--output={run_dir / 'slurm-%j.out'}",
+        "--comment=metrics",
+        mode_flag,
+        str(repo_dir / base[-1]),
+    )
+
+
+def _git(repo_dir: Path, *args: str) -> str:
+    result = subprocess.run(
+        ("git", *args),
+        cwd=repo_dir,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def validate_checkout(repo_dir: Path) -> CheckoutState:
+    """Require a clean branch whose exact HEAD exists on the user fork."""
+    status = _git(repo_dir, "status", "--porcelain=v1", "--untracked-files=normal")
+    if status:
+        raise RuntimeError("Submission requires a clean tracked and untracked checkout")
+    branch = _git(repo_dir, "symbolic-ref", "--quiet", "--short", "HEAD")
+    head = _git(repo_dir, "rev-parse", "HEAD")
+    fork_ref = f"refs/remotes/fork/{branch}"
+    try:
+        fork_head = _git(repo_dir, "rev-parse", "--verify", fork_ref)
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(f"Branch has no pushed fork ref: {fork_ref}") from error
+    if fork_head != head:
+        raise RuntimeError(
+            f"HEAD {head} is not pushed to the fork branch {fork_ref} ({fork_head})"
+        )
+    submodule_text = _git(repo_dir, "submodule", "status", "--recursive")
+    submodules = tuple(line for line in submodule_text.splitlines() if line)
+    invalid = tuple(line for line in submodules if not line.startswith(" "))
+    if invalid:
+        raise RuntimeError(
+            "Recursive submodules are not initialized at recorded commits: "
+            + "; ".join(invalid)
+        )
+    return CheckoutState(
+        branch=branch,
+        head=head,
+        fork_ref=fork_ref,
+        submodules=submodules,
+    )
+
+
+def resolve_target_snapshot(recipe: RecipeSpec, hf_home: Path) -> Path:
+    """Resolve and validate the immutable target snapshot behind ``refs/main``."""
+    ref_path = recipe.target_ref_path(hf_home)
+    if not ref_path.is_file():
+        raise FileNotFoundError(f"Target model ref is missing: {ref_path}")
+    revision = ref_path.read_text(encoding="utf-8").strip()
+    if not revision or any(char not in "0123456789abcdef" for char in revision.lower()):
+        raise RuntimeError(f"Target model ref is not an immutable revision: {ref_path}")
+    snapshot = ref_path.parent.parent / "snapshots" / revision
+    if not snapshot.is_dir() or not (snapshot / "config.json").is_file():
+        raise FileNotFoundError(f"Target model snapshot is incomplete: {snapshot}")
+    return snapshot
+
+
+def validate_runtime_inputs(
+    run: ResolvedRun,
+    repo_dir: Path,
+    container: Path,
+) -> tuple[Path, Path | None]:
+    """Validate immutable runtime artifacts before contacting SLURM."""
+    if not container.is_file():
+        raise FileNotFoundError(f"Container image is missing: {container}")
+    if not (repo_dir / "ray.sub").is_file():
+        raise FileNotFoundError(f"ray.sub is missing from checkout: {repo_dir}")
+    target_snapshot = resolve_target_snapshot(run.recipe, run.cluster.hf_home)
+    draft_snapshot = None
+    if run.draft_checkpoint is not None:
+        draft_snapshot = run.draft_checkpoint.snapshot_path(run.cluster.hf_home)
+        if not draft_snapshot.is_dir() or not (draft_snapshot / "config.json").is_file():
+            raise FileNotFoundError(
+                f"Draft model snapshot is incomplete: {draft_snapshot}"
+            )
+    return target_snapshot, draft_snapshot
+
+
+def _flatten_provenance(
+    value: Any, prefix: str = ""
+) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    if isinstance(value, Mapping):
+        for key in sorted(value):
+            next_prefix = f"{prefix}.{key}" if prefix else str(key)
+            rows.extend(_flatten_provenance(value[key], next_prefix))
+    elif isinstance(value, (list, tuple)):
+        rows.append((prefix, json.dumps(value, sort_keys=True)))
+    else:
+        rows.append((prefix, "" if value is None else str(value)))
+    return rows
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        handle.write(content)
+        temporary = Path(handle.name)
+    temporary.replace(path)
+
+
+def write_provenance(run_dir: Path, payload: Mapping[str, Any]) -> None:
+    """Atomically persist machine- and human-readable run provenance."""
+    serialized = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    if "WANDB_API_KEY" in serialized:
+        raise ValueError("Secrets must not be written to provenance")
+    text = "".join(
+        f"{key}={value}\n" for key, value in _flatten_provenance(payload)
+    )
+    _atomic_write(run_dir / "provenance.json", serialized)
+    _atomic_write(run_dir / "provenance.txt", text)
+
+
+def _run_tag(model: str, variant: str, phase: str) -> str:
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    return f"{model}-v0251-{variant}-{phase}-{timestamp}"
+
+
+def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--model", required=True, choices=tuple(r.key for r in G_RECIPES))
+    parser.add_argument(
+        "--variant", required=True, choices=tuple(v.key for v in G_VARIANTS)
+    )
+    parser.add_argument("--phase", default="smoke2", choices=tuple(p.key for p in G_PHASES))
+    parser.add_argument("--cluster", default="lyris", choices=tuple(c.key for c in G_CLUSTERS))
+    parser.add_argument("--repo-dir", type=Path, default=Path.cwd())
+    parser.add_argument("--experiment-root", type=Path, default=G_DEFAULT_EXPERIMENT_ROOT)
+    parser.add_argument("--container", type=Path, default=G_DEFAULT_CONTAINER)
+    parser.add_argument("--mounts", default="/lustre:/lustre")
+    parser.add_argument("--run-tag")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the deterministic matrix command-line parser."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    subparsers = parser.add_subparsers(dest="action", required=True)
+    for action in ("show", "test-only", "submit"):
+        _add_common_arguments(subparsers.add_parser(action))
+    return parser
+
+
+def _show_record(
+    run: ResolvedRun,
+    repo_dir: Path,
+    run_dir: Path,
+    run_tag: str,
+    container: Path,
+    mounts: str,
+) -> dict[str, Any]:
+    scheduler = build_scheduler_command(run, repo_dir, run_dir, "test-only")
+    return {
+        "run_tag": run_tag,
+        "model": run.recipe.key,
+        "variant": run.variant.key,
+        "phase": run.phase.key,
+        "runner": run.variant.runner,
+        "recipe": run.recipe.path,
+        "target_repo_id": run.recipe.target_repo_id,
+        "draft_repo_id": (
+            run.draft_checkpoint.repo_id if run.draft_checkpoint is not None else None
+        ),
+        "draft_revision": (
+            run.draft_checkpoint.revision if run.draft_checkpoint is not None else None
+        ),
+        "container": str(container),
+        "mounts": mounts,
+        "run_dir": str(run_dir),
+        "runtime_command": list(build_runtime_command(run, repo_dir, run_dir, run_tag)),
+        "scheduler_command": list(scheduler),
+    }
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    """Resolve, preflight, or submit one matrix entry."""
+    args = build_parser().parse_args(argv)
+    run = resolve_run(args.model, args.variant, args.phase, args.cluster)
+    run_tag = args.run_tag or _run_tag(args.model, args.variant, args.phase)
+    repo_dir = args.repo_dir.resolve()
+    run_dir = (args.experiment_root / run_tag).resolve()
+    container = args.container.resolve()
+    show_record = _show_record(
+        run,
+        repo_dir,
+        run_dir,
+        run_tag,
+        container,
+        args.mounts,
+    )
+    if args.action == "show":
+        print(json.dumps(show_record, indent=2, sort_keys=True))
+        return
+
+    checkout = validate_checkout(repo_dir)
+    target_snapshot, draft_snapshot = validate_runtime_inputs(
+        run, repo_dir, container
+    )
+    runtime_command = build_runtime_command(run, repo_dir, run_dir, run_tag)
+    scheduler_command = build_scheduler_command(
+        run, repo_dir, run_dir, args.action
+    )
+    safe_environment = {
+        "BASE_LOG_DIR": str(run_dir),
+        "CONTAINER": str(container),
+        "GPUS_PER_NODE": str(run.cluster.gpus_per_node),
+        "HF_HOME": str(run.cluster.hf_home),
+        "MOUNTS": args.mounts,
+    }
+    provenance: dict[str, Any] = {
+        **show_record,
+        "checkout": {
+            "branch": checkout.branch,
+            "head": checkout.head,
+            "fork_ref": checkout.fork_ref,
+            "submodules": checkout.submodules,
+        },
+        "target_snapshot": str(target_snapshot),
+        "draft_snapshot": str(draft_snapshot) if draft_snapshot else None,
+        "hydra_overrides": run.hydra_overrides,
+        "runtime_command": runtime_command,
+        "scheduler_command": scheduler_command,
+        "environment": safe_environment,
+        "submission_state": "preflight" if args.action == "test-only" else "submitting",
+    }
+    write_provenance(run_dir, provenance)
+    environment = os.environ.copy()
+    environment.update(safe_environment)
+    environment["COMMAND"] = shlex.join(runtime_command)
+    result = subprocess.run(
+        scheduler_command,
+        cwd=repo_dir,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if result.stderr:
+        print(result.stderr, end="", file=os.sys.stderr)
+    if args.action == "test-only":
+        provenance["submission_state"] = "preflight-passed"
+        provenance["scheduler_output"] = result.stdout.strip()
+        write_provenance(run_dir, provenance)
+        print(result.stdout, end="")
+        return
+    job_id = result.stdout.strip().split(";", maxsplit=1)[0]
+    if not job_id.isdigit():
+        raise RuntimeError(f"Could not parse SLURM job ID: {result.stdout!r}")
+    provenance["submission_state"] = "submitted"
+    provenance["job_id"] = job_id
+    write_provenance(run_dir, provenance)
+    print(f"job_id={job_id}\nrun_dir={run_dir}")
+
+
+if __name__ == "__main__":
+    main()

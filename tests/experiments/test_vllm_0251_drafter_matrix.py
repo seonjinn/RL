@@ -1,9 +1,18 @@
+import json
+import subprocess
+import sys
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
 
-from experiments.vllm_0251_drafter_matrix.matrix import resolve_run
+from experiments.vllm_0251_drafter_matrix.matrix import (
+    build_runtime_command,
+    build_scheduler_command,
+    resolve_run,
+    validate_checkout,
+    write_provenance,
+)
 
 
 def test_matrix_module_has_nvidia_apache_header() -> None:
@@ -347,3 +356,153 @@ def test_resolved_records_are_immutable() -> None:
 
     with pytest.raises(FrozenInstanceError):
         run.recipe.nodes = 99  # type: ignore[misc]
+
+
+def test_runtime_command_uses_container_python_and_external_run_directory(
+    tmp_path: Path,
+) -> None:
+    run = resolve_run("qwen32", "eagle3_k5", "smoke2", "lyris")
+    repo_dir = tmp_path / "checkout"
+    run_dir = tmp_path / "results" / "unit-run"
+
+    command = build_runtime_command(run, repo_dir, run_dir, "unit-run")
+
+    assert "/opt/nemo_rl_venv/bin/python" in command
+    assert "python3" not in command
+    assert f"PYTHONPATH={repo_dir}" in command
+    assert f"checkpointing.checkpoint_dir={run_dir / 'checkpoints'}" in command
+    assert f"logger.log_dir={run_dir / 'nemo_logs'}" in command
+    assert "logger.wandb.project=nemo-rl-vllm0251-drafter-matrix" in command
+    assert "logger.wandb.name=unit-run" in command
+    assert not run_dir.is_relative_to(repo_dir)
+
+
+@pytest.mark.parametrize(
+    ("mode", "required_flag"),
+    [("test-only", "--test-only"), ("submit", "--parsable")],
+)
+def test_scheduler_command_is_mode_specific_and_dependency_free(
+    tmp_path: Path, mode: str, required_flag: str
+) -> None:
+    run = resolve_run("qwen235", "baseline", "smoke2", "lyris")
+    repo_dir = tmp_path / "repo"
+    run_dir = tmp_path / "runs" / "unit"
+
+    command = build_scheduler_command(run, repo_dir, run_dir, mode)
+
+    assert required_flag in command
+    assert "--dependency=" in command
+    assert "--segment=16" in command
+    assert "--output=" + str(run_dir / "slurm-%j.out") in command
+    assert command[-1] == str(repo_dir / "ray.sub")
+    assert not any("singleton" in part for part in command)
+    assert not any(part.startswith("--gres") for part in command)
+
+
+def _git(repo: Path, *args: str) -> str:
+    result = subprocess.run(
+        ("git", *args),
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def _make_pushed_checkout(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "matrix")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Test User")
+    (repo / "tracked.txt").write_text("clean\n", encoding="utf-8")
+    _git(repo, "add", "tracked.txt")
+    _git(repo, "commit", "-m", "initial")
+    _git(repo, "update-ref", "refs/remotes/fork/matrix", "HEAD")
+    return repo
+
+
+def test_checkout_validation_requires_clean_fork_pushed_commit(tmp_path: Path) -> None:
+    repo = _make_pushed_checkout(tmp_path)
+
+    state = validate_checkout(repo)
+
+    assert state.branch == "matrix"
+    assert state.head == _git(repo, "rev-parse", "HEAD")
+    assert state.fork_ref == "refs/remotes/fork/matrix"
+
+
+def test_checkout_validation_rejects_dirty_checkout(tmp_path: Path) -> None:
+    repo = _make_pushed_checkout(tmp_path)
+    (repo / "untracked.txt").write_text("dirty\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="clean"):
+        validate_checkout(repo)
+
+
+def test_checkout_validation_rejects_unpushed_commit(tmp_path: Path) -> None:
+    repo = _make_pushed_checkout(tmp_path)
+    (repo / "tracked.txt").write_text("second\n", encoding="utf-8")
+    _git(repo, "add", "tracked.txt")
+    _git(repo, "commit", "-m", "unpushed")
+
+    with pytest.raises(RuntimeError, match="fork"):
+        validate_checkout(repo)
+
+
+def test_provenance_is_written_atomically_without_secrets(tmp_path: Path) -> None:
+    run = resolve_run("qwen30", "eagle3_k3", "smoke2", "lyris")
+    run_dir = tmp_path / "run"
+    payload = {
+        "run_tag": "unit",
+        "recipe": run.recipe.path,
+        "environment": {"HF_HOME": str(run.cluster.hf_home)},
+    }
+
+    write_provenance(run_dir, payload)
+
+    assert json.loads((run_dir / "provenance.json").read_text()) == payload
+    text = (run_dir / "provenance.txt").read_text()
+    assert "run_tag=unit" in text
+    assert "WANDB_API_KEY" not in text
+    assert not list(run_dir.glob("*.tmp"))
+
+
+def test_show_cli_emits_deterministic_json_without_cluster_access(tmp_path: Path) -> None:
+    matrix_path = Path(__file__).parents[2] / "experiments/vllm_0251_drafter_matrix/matrix.py"
+    result = subprocess.run(
+        (
+            sys.executable,
+            str(matrix_path),
+            "show",
+            "--model",
+            "qwen30",
+            "--variant",
+            "suffix_k32",
+            "--phase",
+            "smoke2",
+            "--cluster",
+            "lyris",
+            "--repo-dir",
+            str(tmp_path / "repo"),
+            "--experiment-root",
+            str(tmp_path / "runs"),
+            "--container",
+            str(tmp_path / "image.sqsh"),
+            "--run-tag",
+            "unit-show",
+        ),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["run_tag"] == "unit-show"
+    assert payload["model"] == "qwen30"
+    assert payload["variant"] == "suffix_k32"
+    assert payload["runner"] == "mrv1"
+    assert payload["container"] == str(tmp_path / "image.sqsh")
+    assert payload["run_dir"] == str(tmp_path / "runs" / "unit-show")
+    assert "--dependency=" in payload["scheduler_command"]
