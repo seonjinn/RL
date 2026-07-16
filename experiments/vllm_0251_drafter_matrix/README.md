@@ -1,0 +1,102 @@
+# NeMo-RL vLLM 0.25.1 Drafter Matrix
+
+This experiment measures the applicable speculative proposers shipped by
+vLLM 0.25.1 against matched NeMo-RL performance-recipe baselines. Final
+comparisons average steps 2 through 20; step 1 is initialization warmup.
+
+## Controlled Recipes
+
+| Model | Recipe | Topology | Max OSL | Sampling |
+|---|---|---:|---:|---|
+| Qwen3-30B-A3B | `grpo-qwen3-30ba3b-4n4g.yaml` | 4 nodes x 4 GPUs | 4096 | temperature 1.0, top-p 1.0 |
+| Qwen3-32B | `grpo-qwen3-32b-4n4g.yaml` | 4 nodes x 4 GPUs | 4096 | temperature 1.0, top-p 1.0 |
+| Qwen3-235B-A22B | `grpo-qwen3-235b-16n4g.yaml` | 16 nodes x 4 GPUs | 8192 | temperature 1.0, top-p 1.0 |
+
+The recipe remains authoritative for model, dataset, batching, placement,
+parallelism, MoE backend, and sampling. The matrix changes only step count,
+output/log paths, checkpoint saving, CUDA Graph mode, and SpecDec settings.
+Every run uses `enforce_eager=false`, `FULL_AND_PIECEWISE`, native recipe/vLLM
+capture sizing, Triton MoE from the recipes, and `checkpointing.enabled=false`.
+
+## Matrix
+
+| Variant | Runner | Qwen30 | Qwen32 | Qwen235 | Setting/checkpoint |
+|---|---|---:|---:|---:|---|
+| `baseline` | MRv2 | yes | yes | yes | no speculative config |
+| `baseline_mrv1` | MRv1 | yes | yes | yes | matched control for MRv1 methods |
+| `eagle3_k1/k3/k5` | MRv2 | yes | yes | yes | exact target-specific EAGLE3 head |
+| `dflash_k3/k5` | MRv2 | yes | yes | no | exact DFlash head, draft `FLASH_ATTN` |
+| `draft_k1/k5` | MRv1 | yes | yes | yes | sequential `amd/PARD-Qwen3-0.6B` |
+| `pard_k5/k16` | MRv1 | yes | yes | yes | parallel `amd/PARD-Qwen3-0.6B` |
+| `suffix_k32` | MRv1 | yes | yes | yes | suffix tree depth 32 |
+| `ngram_k5` | MRv1 | yes | yes | yes | prompt lookup min=max=5 |
+| `ngram_gpu_k5` | MRv1 | yes | yes | yes | GPU prompt lookup min=max=5 |
+
+Exact model-based drafter identities:
+
+| Target | Method | Repository | Revision |
+|---|---|---|---|
+| Qwen30 | EAGLE3 | `RedHatAI/Qwen3-30B-A3B-speculator.eagle3` | `6afc5aa2477b923467fb9a8d906782b984a9a6ba` |
+| Qwen32 | EAGLE3 | `RedHatAI/Qwen3-32B-speculator.eagle3` | `dc84fe7ff1db31efa824776f49c141fc8195eb47` |
+| Qwen235 | EAGLE3 | `nvidia/Qwen3-235B-A22B-Eagle3` | `33f3c01ce807376d1171301b9a148b1b28f239ba` |
+| Qwen30 | DFlash | `RedHatAI/Qwen3-30B-A3B-speculator.dflash` | `edcff83783141eb9383e2bd6c33610d9a3104288` |
+| Qwen32 | DFlash | `AICP-Labs/qwen3-32b-dflash-en-zh` | `68ccc7fd27b104271321b179a2959c759dce5eef` |
+| all | draft/PARD | `amd/PARD-Qwen3-0.6B` | `f9f650fbab180c26498817718f0db5cae8f25136` |
+
+Qwen235 DFlash has no exact public checkpoint and is rejected before
+submission. Native MTP requires target-embedded heads absent from these Qwen3
+checkpoints. DSpark and Medusa lack exact target-specific checkpoints;
+`mlp_speculator` has an MRv1 runtime gap; hidden-state extraction and custom
+classes are not acceleration proposers. PARD-2 and DFlare require non-upstream
+patches and stay in separate experiments.
+
+## Run Workflow
+
+Run these commands from the clean, pushed cluster checkout. Results default to
+`/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/vllm0251_drafter_matrix`,
+outside the Git worktree.
+
+```bash
+SCRIPT=experiments/vllm_0251_drafter_matrix/submit_matrix.sh
+
+bash "$SCRIPT" show \
+  --model qwen30 --variant eagle3_k3 --phase smoke2 --cluster lyris
+
+bash "$SCRIPT" test-only \
+  --model qwen30 --variant eagle3_k3 --phase smoke2 --cluster lyris
+
+bash "$SCRIPT" submit \
+  --model qwen30 --variant eagle3_k3 --phase smoke2 --cluster lyris
+```
+
+Promotion is `smoke2` (load/config) to `smoke5` (short performance) to
+`final20` (reportable). A run advances only after its exact baseline and
+candidate complete without config fallback, missing metrics, or early exit.
+Lyris jobs use account `coreai_dlalgo_llm`, partition `gb200`, four GPUs per
+node, `--segment=<nodes>`, no `--gres`, and no dependency/singleton constraint.
+
+Submission requires a clean checkout whose exact HEAD is present on the same
+branch under remote `fork`, plus recursively initialized submodules. The CLI
+validates the container, target `refs/main`, exact drafter snapshot, and writes
+atomic `provenance.json` and `provenance.txt` before invoking SLURM. W&B uses
+project `nemo-rl-vllm0251-drafter-matrix`; credentials come only from the
+environment.
+
+## Collect Results
+
+Each input is a JSONL file with one validated metric record per step. Strict
+collection requires the complete 2-20 window; use partial output only for
+timeout diagnosis.
+
+```bash
+/opt/nemo_rl_venv/bin/python \
+  experiments/vllm_0251_drafter_matrix/collect_results.py \
+  /lustre/path/to/steps-*.jsonl \
+  --csv /lustre/path/to/drafter-matrix.csv \
+  --markdown /lustre/path/to/drafter-matrix.md
+```
+
+The report keeps E2E/generation time and throughput, policy and logprob time,
+generation ratio, acceptance rate, mean accepted length, runner, CUDA Graph
+resolution/coverage, job/log/W&B links, and explicit failed/unsupported states.
+
