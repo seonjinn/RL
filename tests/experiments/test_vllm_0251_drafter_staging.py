@@ -154,7 +154,7 @@ def test_sbatch_command_is_single_node_lyris_staging_without_gpu_request(
     )
 
 
-def test_submit_wrapper_execs_the_container_python() -> None:
+def test_submit_wrapper_separates_host_and_container_python() -> None:
     wrapper = (
         Path(__file__).parents[2]
         / "experiments/vllm_0251_drafter_matrix/submit_stage_drafters.sh"
@@ -162,7 +162,10 @@ def test_submit_wrapper_execs_the_container_python() -> None:
 
     text = wrapper.read_text()
     assert "set -euo pipefail" in text
-    assert 'exec /opt/nemo_rl_venv/bin/python' in text
+    assert 'if [[ "${1:-}" == "--worker" ]]' in text
+    assert 'python_bin="/opt/nemo_rl_venv/bin/python"' in text
+    assert 'python_bin="${PYTHON_BIN:-python3}"' in text
+    assert 'exec "${python_bin}"' in text
 
 
 def test_show_cli_is_runnable_as_a_script(tmp_path: Path) -> None:
