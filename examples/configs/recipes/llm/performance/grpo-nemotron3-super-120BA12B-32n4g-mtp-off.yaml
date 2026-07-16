@@ -1,0 +1,16 @@
+defaults: ./grpo-nemotron3-super-120BA12B-32n4g.yaml
+
+checkpointing:
+  enabled: false
+
+policy:
+  generation:
+    vllm_kwargs:
+      moe_backend: triton
+      compilation_config:
+        cudagraph_mode: PIECEWISE
+
+logger:
+  wandb:
+    project: nemo-rl-nemotron3-super-mtp
+    name: grpo-nemotron3-super-120BA12B-32n4g-mtp-off

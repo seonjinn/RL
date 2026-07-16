@@ -1,0 +1,12 @@
+defaults: ./grpo-nemotron3-super-120BA12B-32n4g-mtp-off.yaml
+
+policy:
+  generation:
+    vllm_kwargs:
+      speculative_config:
+        method: mtp
+        num_speculative_tokens: 5
+
+logger:
+  wandb:
+    name: grpo-nemotron3-super-120BA12B-32n4g-native-mtp-k5
