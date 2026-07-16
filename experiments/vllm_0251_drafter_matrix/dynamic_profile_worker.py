@@ -14,6 +14,7 @@ import math
 import os
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -27,8 +28,9 @@ G_K_VALUES = tuple(range(6))
 G_NUM_BATCHES = 20
 G_OUTPUT_LEN = 256
 G_ACCEPTANCE_PROMPTS = 1024
-G_VLLM_BIN = "/opt/nemo_rl_venv/bin/vllm"
-G_PYTHON_BIN = "/opt/nemo_rl_venv/bin/python"
+G_DATASET_REVISION = "469216e3f46f4dacf476b382e192485ea51a143e"
+G_PYTHON_BIN = sys.executable
+G_VLLM_BIN = str(Path(G_PYTHON_BIN).with_name("vllm"))
 
 
 class ChatTokenizer(Protocol):
@@ -211,7 +213,9 @@ def _ensure_prompt_file(
             target_snapshot, local_files_only=True, trust_remote_code=True
         )
         dataset = datasets_module.load_dataset(
-            "nvidia/OpenMathInstruct-2", split="train_1M"
+            "nvidia/OpenMathInstruct-2",
+            revision=G_DATASET_REVISION,
+            split="train_1M",
         ).train_test_split(test_size=0.05, seed=42)["train"]
         dataset = dataset.shuffle(seed=42).select(range(num_prompts))
         lines = []
@@ -239,6 +243,7 @@ def _ensure_prompt_file(
                 {
                     "dataset_name": "OpenMathInstruct-2",
                     "dataset_repo": "nvidia/OpenMathInstruct-2",
+                    "dataset_revision": G_DATASET_REVISION,
                     "dataset_split": "train_1M",
                     "dataset_seed": 42,
                     "num_prompts": num_prompts,
@@ -501,6 +506,8 @@ def assemble_profile(
     prompt_meta = json.loads(
         (root / "prompts.meta.json").read_text(encoding="utf-8")
     )
+    if prompt_meta.get("dataset_revision") != G_DATASET_REVISION:
+        raise ValueError("prompt data must use the pinned OpenMathInstruct-2 revision")
     rows: list[dict[str, Any]] = []
     for k in G_K_VALUES:
         for batch_size in batch_sizes:
@@ -530,6 +537,7 @@ def assemble_profile(
         "runtime_vllm": "0.25.1",
         "cuda_graph_mode": "FULL_AND_PIECEWISE",
         "dataset_name": prompt_meta["dataset_name"],
+        "dataset_revision": prompt_meta["dataset_revision"],
         "prompt_template_sha256": prompt_meta["prompt_template_sha256"],
         "temperature": 1.0,
         "top_p": 1.0,

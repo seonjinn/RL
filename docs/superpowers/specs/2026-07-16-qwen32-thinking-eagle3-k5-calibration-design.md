@@ -14,10 +14,13 @@ The profile matches the Qwen3-32B NeMo-RL performance recipe:
 - Thinking EAGLE3 revision `a1403e07b73a66fc9ef561463631c31864616933`;
 - vLLM 0.25.1, model-runner v2, target TP2, draft TP1;
 - CUDA Graph enabled with `FULL_AND_PIECEWISE` and native capture sizing;
-- maximum model/output length 4096;
+- maximum model/output cap 4096, with 256 generated tokens per profiling
+  request as in the upstream offline-profiler methodology;
 - temperature 1.0, top-p 1.0, prefix caching disabled, chunked prefill enabled;
 - `max_num_batched_tokens=16384` and `max_num_seqs=256`;
 - OpenMathInstruct-2 prompts rendered with `examples/prompts/cot.txt`;
+- OpenMathInstruct-2 revision
+  `469216e3f46f4dacf476b382e192485ea51a143e`;
 - twenty steady-state batches per profiled point after warmup.
 
 The profile grid is batch sizes `1, 4, 16, 32, 64, 128, 192, 256` and draft
@@ -78,4 +81,3 @@ the reviewed schedule artifact SHA-256 in the local allowlist.
 - Lyris profile launcher and immutable raw artifacts;
 - calibrated K0-K5 schedule with hash provenance;
 - DynamicSD final20 job and step 2-20 report after calibration.
-

@@ -39,6 +39,7 @@ def _profile_payload() -> dict[str, object]:
         "runtime_vllm": "0.25.1",
         "cuda_graph_mode": "FULL_AND_PIECEWISE",
         "dataset_name": "OpenMathInstruct-2",
+        "dataset_revision": "469216e3f46f4dacf476b382e192485ea51a143e",
         "prompt_template_sha256": "1" * 64,
         "temperature": 1.0,
         "top_p": 1.0,

@@ -37,6 +37,7 @@ class DynamicProfile:
     runtime_vllm: str
     cuda_graph_mode: str
     dataset_name: str
+    dataset_revision: str
     prompt_template_sha256: str
     temperature: float
     top_p: float
@@ -84,6 +85,7 @@ G_PROFILE_KEYS = {
     "runtime_vllm",
     "cuda_graph_mode",
     "dataset_name",
+    "dataset_revision",
     "prompt_template_sha256",
     "temperature",
     "top_p",
@@ -177,6 +179,13 @@ def load_profile(path: Path) -> DynamicProfile:
         raise ValueError(
             "DynamicSD profile prompt_template_sha256 must be a full SHA-256 digest"
         )
+    dataset_revision = _require_string(
+        payload["dataset_revision"], "dataset_revision"
+    )
+    if re.fullmatch(r"[0-9a-f]{40}", dataset_revision) is None:
+        raise ValueError(
+            "DynamicSD profile dataset_revision must be a full hex digest"
+        )
 
     batch_sizes = _strict_int_list(payload["batch_sizes"], "batch_sizes")
     if batch_sizes[0] != 1:
@@ -262,6 +271,7 @@ def load_profile(path: Path) -> DynamicProfile:
             payload["cuda_graph_mode"], "cuda_graph_mode"
         ),
         dataset_name=_require_string(payload["dataset_name"], "dataset_name"),
+        dataset_revision=dataset_revision,
         prompt_template_sha256=prompt_template_sha256,
         temperature=_require_float(payload["temperature"], "temperature"),
         top_p=_require_float(payload["top_p"], "top_p", minimum=0.0, maximum=1.0),

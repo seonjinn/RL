@@ -29,8 +29,9 @@ the default NeMo-RL port path that passed their smoke gates.
 | `baseline` | MRv2 | yes | yes | yes | no speculative config |
 | `baseline_mrv1` | MRv1 | yes | yes | yes | matched control for MRv1 methods |
 | `eagle3_k1/k3/k5` | MRv2 | yes | yes | yes | exact target-specific EAGLE3 head |
-| `eagle3_thinking_k1/k2/k3/k5` | MRv2 | alias | yes | yes | reasoning-distribution EAGLE3 head |
-| `eagle3_thinking_dynamic_k123` | MRv2 | no | yes | no | validated K0-K3 DynamicSD schedule artifact |
+| `eagle3_thinking_k1/k2/k3/k4/k5` | MRv2 | alias | yes | yes | reasoning-distribution EAGLE3 head |
+| `eagle3_thinking_dynamic_k123` | MRv2 | no | yes | no | historical K0-K3 smoke schedule only |
+| `eagle3_thinking_dynamic_k5` | MRv2 | no | yes | no | calibrated K0-K5 DynamicSD schedule artifact |
 | `dflash_k3/k5` | MRv2 | yes | yes | no | exact DFlash head, draft `FLASH_ATTN` |
 | `draft_k1/k5` | MRv1 | yes | yes | yes | sequential `amd/PARD-Qwen3-0.6B` |
 | `pard_k5/k16` | MRv1 | yes | yes | yes | parallel `amd/PARD-Qwen3-0.6B` |
@@ -127,6 +128,74 @@ the source-guarded EAGLE3 CUDA Graph fix through a run-scoped post-sync hook;
 fixed-K runs do not load that patch. Final20 additionally requires the exact
 reviewed schedule artifact SHA-256 in the empty-by-default final allowlist, so
 editing metadata cannot promote this seed.
+
+Reportable K0-K5 DynamicSD uses a matched offline profile before NeMo-RL is
+submitted. The profiler follows the goodput method from vLLM PR #32374:
+`accepted_length(K) / median_ITL(batch_size,K)`. It measures K0-K5 at scheduler
+batch-size points `1,4,16,32,64,128,192,256`, with twenty batches per point,
+then linearly interpolates ITL between adjacent measured batch sizes and
+selects the maximizing K. The runtime key is the number of requests actually
+scheduled in one engine step, so serving concurrency is a controlled proxy;
+final promotion also requires selected-K and verified-draft telemetry from the
+NeMo-RL smoke run.
+
+The profile is matched to Qwen3-32B TP2, Thinking drafter TP1, temperature 1.0,
+top-p 1.0, max model length 4096, max batched tokens 16384, chunked prefill,
+disabled prefix caching, and `FULL_AND_PIECEWISE` CUDA Graphs. K0 is measured
+as a true no-drafter server. K5 separately records position-level acceptance
+on deterministic OpenMathInstruct-2 prompts rendered with `cot.txt`. Every
+completed result is written immediately, so a timeout preserves completed
+cells, but an incomplete 48-cell grid cannot produce a calibrated schedule.
+The dataset snapshot is pinned to revision
+`469216e3f46f4dacf476b382e192485ea51a143e`.
+
+Show the exact six-job plan, run all scheduler preflights, and submit only
+after the checkout has been committed, pushed, and pulled on Lyris:
+
+```bash
+PROFILE_LAUNCHER=experiments/vllm_0251_drafter_matrix/profile_dynamic_sd.py
+PROFILE_ROOT=/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/vllm0251_dynamic_profile/qwen32-thinking
+COMMON_ARGS=(
+  --repo-dir "$PWD"
+  --output-dir "$PROFILE_ROOT"
+  --hf-home /lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home
+  --container /lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260715.sqsh
+  --mounts /lustre:/lustre
+)
+
+python3 "$PROFILE_LAUNCHER" show "${COMMON_ARGS[@]}"
+python3 "$PROFILE_LAUNCHER" test-only "${COMMON_ARGS[@]}"
+python3 "$PROFILE_LAUNCHER" submit "${COMMON_ARGS[@]}"
+```
+
+The launcher explicitly passes `--dependency=` because the shared `ray.sub`
+contains a historical singleton directive. Each K uses an independent
+one-node, `--segment=1`, five-hour allocation without GRES. A per-job locked
+vLLM 0.25.1 environment is materialized under `/tmp`; the base container
+environment is not replaced.
+
+After all profile jobs complete, assemble and derive the immutable artifacts:
+
+```bash
+PROFILE_ROOT=/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/vllm0251_dynamic_profile/qwen32-thinking
+WORKER=experiments/vllm_0251_drafter_matrix/dynamic_profile_worker.py
+CALIBRATOR=experiments/vllm_0251_drafter_matrix/calibrate_dynamic_sd.py
+
+/opt/nemo_rl_venv/bin/python "$WORKER" assemble \
+  --root "$PROFILE_ROOT" \
+  --target-revision 9216db5781bf21249d130ec9da846c4624c16137 \
+  --drafter-revision a1403e07b73a66fc9ef561463631c31864616933 \
+  --output "$PROFILE_ROOT/profile.json"
+
+/opt/nemo_rl_venv/bin/python "$CALIBRATOR" \
+  "$PROFILE_ROOT/profile.json" \
+  --output "$PROFILE_ROOT/schedule.json"
+```
+
+Schema-v2 schedules declare global K5 even when profiling selects only lower
+Ks. This prevents vLLM from silently clamping a selected K4/K5 to a K3 global
+maximum. Final20 rejects schema-v1 schedules, non-vLLM-0.25.1 profiles, and
+schedule artifacts whose reviewed SHA-256 is not allowlisted.
 
 ```bash
 bash "$SCRIPT" submit \

@@ -4,6 +4,9 @@ from pathlib import Path
 import pytest
 
 from experiments.vllm_0251_drafter_matrix.dynamic_profile_worker import (
+    G_DATASET_REVISION,
+    G_PYTHON_BIN,
+    G_VLLM_BIN,
     assemble_profile,
     build_benchmark_command,
     build_server_command,
@@ -29,6 +32,10 @@ def test_render_math_prompt_matches_recipe_processor_contract() -> None:
     rendered = render_math_prompt("2+2?", "Solve carefully: {}", _Tokenizer())
 
     assert rendered == "CHAT:[{'role': 'user', 'content': 'Solve carefully: 2+2?'}]"
+
+
+def test_worker_uses_the_active_locked_vllm_environment() -> None:
+    assert Path(G_VLLM_BIN) == Path(G_PYTHON_BIN).with_name("vllm")
 
 
 def test_server_command_matches_performance_recipe_and_k5() -> None:
@@ -113,6 +120,7 @@ def test_assemble_profile_requires_and_preserves_the_complete_grid(
         json.dumps(
             {
                 "dataset_name": "OpenMathInstruct-2",
+                "dataset_revision": G_DATASET_REVISION,
                 "prompt_template_sha256": "3" * 64,
                 "prompt_file_sha256": "4" * 64,
                 "num_prompts": 5120,
@@ -129,6 +137,7 @@ def test_assemble_profile_requires_and_preserves_the_complete_grid(
     )
 
     assert payload["calibration_status"] == "complete"
+    assert payload["dataset_revision"] == G_DATASET_REVISION
     assert payload["k_values"] == list(range(6))
     assert len(payload["rows"]) == 12
     assert payload["acceptance_rate_per_pos"] == [0.9, 0.8, 0.7, 0.6, 0.5]
@@ -151,6 +160,7 @@ def test_assemble_profile_fails_when_a_cell_is_missing(tmp_path: Path) -> None:
         json.dumps(
             {
                 "dataset_name": "OpenMathInstruct-2",
+                "dataset_revision": G_DATASET_REVISION,
                 "prompt_template_sha256": "3" * 64,
                 "prompt_file_sha256": "4" * 64,
                 "num_prompts": 5120,

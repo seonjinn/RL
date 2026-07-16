@@ -180,6 +180,41 @@ mixes K3 and K1 intervals, and vLLM does not expose a selected-K histogram.
 The current seed remains ineligible for final20 until a matched vLLM 0.25.1
 NeMo-RL calibration is produced and allowlisted.
 
+### K0-K5 Offline Calibration
+
+The reportable DynamicSD path now declares global K5 and profiles fixed
+K0-K5 before final20. This avoids the vLLM behavior that silently clamps a
+schedule entry above the configured global K. The grid uses Qwen3-32B TP2,
+Thinking EAGLE3 draft TP1, temperature/top-p 1.0/1.0, max model length 4096,
+256 generated profiling tokens, max batched tokens 16384, and native
+`FULL_AND_PIECEWISE` CUDA Graph sizing.
+
+The batch-size points are `1,4,16,32,64,128,192,256`; every K/BS point runs
+twenty batches on deterministic OpenMathInstruct-2 prompts. K5 separately
+collects position-level acceptance. The schedule uses the vLLM PR #32374
+criterion `accepted_length / median_ITL` and linearly interpolates only between
+measured batch-size points. Missing cells cannot produce a calibrated
+artifact, and schema-v2 final20 remains blocked until the reviewed schedule
+SHA-256 is allowlisted.
+
+The OpenMathInstruct-2 source is pinned to revision
+`469216e3f46f4dacf476b382e192485ea51a143e`. Profiling jobs materialize a
+per-job locked vLLM 0.25.1 environment under `/tmp` and leave the container's
+base `/opt/nemo_rl_venv` unchanged.
+
+The runtime lookup key is the number of requests assigned tokens in the
+current scheduler step, not total rollout size. The serving profile therefore
+approximates this key with fixed concurrency. Before promotion, a NeMo-RL
+smoke must record selected K and actual verified draft length so a parsed
+schedule alone is not treated as proof that transitions occurred.
+
+| Stage | State | Required evidence |
+|---|---|---|
+| Pure derivation and schema | complete | focused tests, Ruff, Pyright |
+| K0-K5 Lyris profile | ready to submit | 48 complete cells plus K5 position acceptance |
+| Derived schedule review | waiting profile | raw-profile SHA-256 and explicit K ranges |
+| DynamicSD final20 | blocked by design | reviewed schedule hash and transition telemetry |
+
 ## Qwen3-235B Port Failure
 
 Baseline job `2402495` and base EAGLE3 K1 job `2402497` failed at the same
