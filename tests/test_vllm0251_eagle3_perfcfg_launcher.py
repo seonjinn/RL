@@ -124,8 +124,33 @@ def test_dynamic_sd_patch_and_graph_metrics_are_opt_in() -> None:
         "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker"
         in dynamic_output
     )
-    assert "++policy.generation.vllm_kwargs.cudagraph_metrics=true" in dynamic_output
+    assert "vllm_kwargs.cudagraph_metrics" not in dynamic_output
     assert "policy.generation.vllm_cfg.enable_vllm_metrics_logger=true" in dynamic_output
+
+
+def test_dynamic_sd_rejects_compact_capture_profile() -> None:
+    env = os.environ.copy()
+    env.update(
+        {
+            "CAPTURE_PROFILE": "compact",
+            "DYNAMIC_SD_SCHEDULE": "[[1,4,3],[5,64,0]]",
+            "MODE": "dry-run",
+            "REPO_DIR": str(REPO_ROOT),
+            "RUN_TAG": "contract-test",
+            "VARIANT": "eagle3_k3",
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(LAUNCHER)],
+        check=False,
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 2
+    assert "DynamicSD requires CAPTURE_PROFILE=native" in result.stderr
 
 
 def test_invalid_variant_fails_before_submission() -> None:

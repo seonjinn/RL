@@ -54,6 +54,10 @@ if [[ -n "${DYNAMIC_SD_SCHEDULE}" && "${SPECULATIVE_TOKENS}" -eq 0 ]]; then
   printf 'DYNAMIC_SD_SCHEDULE requires an Eagle-3 variant\n' >&2
   exit 2
 fi
+if [[ -n "${DYNAMIC_SD_SCHEDULE}" && "${CAPTURE_PROFILE}" != "native" ]]; then
+  printf 'DynamicSD requires CAPTURE_PROFILE=native\n' >&2
+  exit 2
+fi
 
 overrides=(
   "grpo.max_num_steps=${MAX_STEPS}"
@@ -73,7 +77,6 @@ if [[ "${WANDB_ENABLED}" == "true" ]]; then
 fi
 if [[ "${CUDAGRAPH_METRICS}" == "true" ]]; then
   overrides+=(
-    "++policy.generation.vllm_kwargs.cudagraph_metrics=true"
     "policy.generation.vllm_cfg.enable_vllm_metrics_logger=true"
   )
 fi

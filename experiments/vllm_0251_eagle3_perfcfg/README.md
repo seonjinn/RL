@@ -5,7 +5,9 @@ performance recipe against Eagle-3 K1/K3/K5/K7/K9. Both baseline and
 speculative runs use Model Runner V2 and `FULL_AND_PIECEWISE` CUDA Graph mode.
 The default `CAPTURE_PROFILE=native` leaves graph sizing to vLLM 0.25.1's
 MRv2 implementation. `CAPTURE_PROFILE=compact` reproduces the earlier
-`(K+1) * request_count` capture list for a controlled A/B comparison.
+`(K+1) * request_count` capture list through 64 requests for a fixed-K,
+reduced-coverage A/B comparison. DynamicSD requires the native profile because
+vLLM derives separate graph descriptors for each runtime K.
 
 The launcher defaults to a two-step smoke test. Promote a passing matched pair
 to `MAX_STEPS=20`; report step 2 through 20 to exclude initialization.
@@ -24,3 +26,5 @@ MODE=submit VARIANT=eagle3_k3 MAX_STEPS=20 CAPTURE_PROFILE=compact \
 DynamicSD is opt-in through `DYNAMIC_SD_SCHEDULE`. Its vLLM 0.25.1 source
 patch only prevents target DynamicSD shapes from being incorrectly applied to
 the autoregressive draft model's one-token CUDA Graph manager.
+`CUDAGRAPH_METRICS=true` enables NeMo-RL's vLLM metrics logger; it does not
+inject a nonstandard vLLM engine argument.
