@@ -23,10 +23,10 @@
 - Modify: `3rdparty/Megatron-LM-workspace/Megatron-LM/megatron/rl/rl_utils.py`
 - Modify: `3rdparty/Megatron-LM-workspace/Megatron-LM/tests/unit_tests/rl/test_rl_utils.py`
 
-- [ ] Write a failing unit test where an MoE model requests `[moe_router, moe_preprocess]` and verify that the list is restored after `megatron_rl_inference_mode` exits.
-- [ ] Replace the unconditional MoE scope override with a copy of `args.cuda_graph_modules`; retain `transition_moe_cudagraphs(..., "partial")` so expert dispatch stays eager.
+- [x] Write a failing unit test where an MoE model requests `[moe_router, moe_preprocess]` and verify that the list is restored after `megatron_rl_inference_mode` exits.
+- [x] Replace the unconditional MoE scope override with a copy of `args.cuda_graph_modules`; retain `transition_moe_cudagraphs(..., "partial")` so expert dispatch stays eager.
 - [ ] Run the focused unit tests and the existing non-MoE restoration test.
-- [ ] Commit the MCore patch to a dedicated seonjinn fork branch.
+- [x] Commit the MCore patch to a dedicated seonjinn fork branch.
 
 ### Task 2: Create branch-local Qwen3-30B-A3B recipes and launch validation
 
@@ -34,8 +34,8 @@
 - Create: current/PR#5672/PR#4359 branch-local `grpo-qwen3-30ba3b-4n4g-*-w3.yaml` recipes
 - Modify: Ptyche launcher and model-prefetch helper
 
-- [ ] Create no-CG, ATTN, router+preprocess, and ATTN+router+preprocess variants with unique result paths.
-- [ ] Resolve defaults and verify the final configuration has the requested module list, packed-sequence invariants, EP=16, and warmup=3.
+- [x] Create no-CG, ATTN, router+preprocess, and ATTN+router+preprocess variants with unique result paths.
+- [x] Resolve defaults and verify the final configuration has the requested module list, packed-sequence invariants, EP=16, and warmup=3.
 - [ ] Stage Qwen/Qwen3-30B-A3B into a branch-isolated Megatron conversion cache.
 - [ ] Submit each 20-step matrix after `sbatch --test-only`, commit/push, and remote fast-forward.
 
@@ -48,3 +48,10 @@
 - [ ] Submit a 40-step no-CG versus selected-condition pair per implementation.
 - [ ] Compare validation accuracy at steps 10, 20, 30, and 40, plus loss, reward, generation KL, response length, and reward distributions.
 - [ ] Report E2E, generation, logprob, and policy-training time and throughput with sample count, step window, and implementation SHA.
+
+## Progress note (2026-07-16)
+
+- Current MCore scope fix: `5fac56ce6` on `experiment/pr5783-te-compat-20260716`.
+- PR #5672 scope fix: `bed605f29` on `experiment/pr5672-moe-scope-20260716`.
+- PR #4359 scope fix: `74037a62d` on `experiment/pr4359-moe-scope-20260716`.
+- The local macOS environment cannot import the test suite because it lacks Ray; source-level red/green checks and Python syntax validation pass. The focused tests remain required in the Ptyche container before submission.
