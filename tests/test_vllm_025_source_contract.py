@@ -78,6 +78,8 @@ def test_tokenization_service_constructor_does_not_receive_engine_client() -> No
 
     assert "models" in keyword_names
     assert "online_renderer" in keyword_names
+    assert "default_chat_template_kwargs" in keyword_names
+    assert "trust_request_chat_template" in keyword_names
     assert "openai_serving_render" not in keyword_names
     assert "engine_client" not in keyword_names
 

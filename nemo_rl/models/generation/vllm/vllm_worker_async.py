@@ -839,6 +839,12 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
             ],
             models=serving_chat_kwargs["models"],
             online_renderer=online_renderer,
+            default_chat_template_kwargs=serving_chat_kwargs.get(
+                "default_chat_template_kwargs"
+            ),
+            trust_request_chat_template=serving_chat_kwargs.get(
+                "trust_request_chat_template", False
+            ),
         )
         openai_serving_tokenization = NeMoRLServingTokenization(
             **serving_tokenization_kwargs
