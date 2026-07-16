@@ -19,9 +19,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
+import sys
 import tempfile
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -229,6 +232,19 @@ G_EAGLE3_CHECKPOINTS = (
     ),
 )
 
+G_EAGLE3_THINKING_CHECKPOINTS = (
+    CheckpointSpec(
+        model_key="qwen32",
+        repo_id="RedHatAI/Qwen3-32B-Thinking-speculator.eagle3",
+        revision="a1403e07b73a66fc9ef561463631c31864616933",
+    ),
+    CheckpointSpec(
+        model_key="qwen235",
+        repo_id="RedHatAI/Qwen3-235B-A22B-Thinking-2507-speculator.eagle3",
+        revision="3c0c5cbad8e1fa7ce9e6fb6a1b0a35458b124e87",
+    ),
+)
+
 G_PARD_CHECKPOINTS = (
     CheckpointSpec(
         model_key="qwen30",
@@ -300,6 +316,33 @@ G_VARIANTS = (
         num_speculative_tokens=5,
         compatible_models=G_MODEL_KEYS,
         checkpoints=G_EAGLE3_CHECKPOINTS,
+        uses_draft_model=True,
+    ),
+    VariantSpec(
+        key="eagle3_thinking_k1",
+        method="eagle3",
+        runner="mrv2",
+        num_speculative_tokens=1,
+        compatible_models=frozenset(("qwen32", "qwen235")),
+        checkpoints=G_EAGLE3_THINKING_CHECKPOINTS,
+        uses_draft_model=True,
+    ),
+    VariantSpec(
+        key="eagle3_thinking_k3",
+        method="eagle3",
+        runner="mrv2",
+        num_speculative_tokens=3,
+        compatible_models=frozenset(("qwen32", "qwen235")),
+        checkpoints=G_EAGLE3_THINKING_CHECKPOINTS,
+        uses_draft_model=True,
+    ),
+    VariantSpec(
+        key="eagle3_thinking_k5",
+        method="eagle3",
+        runner="mrv2",
+        num_speculative_tokens=5,
+        compatible_models=frozenset(("qwen32", "qwen235")),
+        checkpoints=G_EAGLE3_THINKING_CHECKPOINTS,
         uses_draft_model=True,
     ),
     VariantSpec(
@@ -515,6 +558,30 @@ G_DEFAULT_EXPERIMENT_ROOT = Path(
     "vllm0251_drafter_matrix"
 )
 G_WANDB_PROJECT = "nemo-rl-vllm0251-drafter-matrix"
+G_FORK_URL = "git@github-seonjinn:seonjinn/RL.git"
+G_LUSTRE_ROOT = Path("/lustre")
+G_ALLOWED_ENVIRONMENT = frozenset(
+    {
+        "HOME",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LOGNAME",
+        "NO_PROXY",
+        "PATH",
+        "SHELL",
+        "SLURM_CONF",
+        "TMPDIR",
+        "USER",
+        "WANDB_API_KEY",
+        "WANDB_BASE_URL",
+    }
+)
+G_SECRET_ENVIRONMENT = frozenset({"WANDB_API_KEY"})
+_FULL_SHA = re.compile(r"[0-9a-f]{40}")
+_RUN_TAG = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 def build_runtime_command(
@@ -522,10 +589,15 @@ def build_runtime_command(
     repo_dir: Path,
     run_dir: Path,
     run_tag: str,
+    *,
+    target_snapshot: Path | None = None,
+    runtime_id: str | None = None,
 ) -> tuple[str, ...]:
     """Build the command executed by ``ray.sub`` inside the container."""
     runner_v2 = "1" if run.variant.runner == "mrv2" else "0"
-    safe_tag = "".join(char if char.isalnum() or char in "-_" else "-" for char in run_tag)
+    safe_tag = runtime_id or "".join(
+        char if char.isalnum() or char in "-_" else "-" for char in run_tag
+    )
     environment = (
         f"VLLM_USE_V2_MODEL_RUNNER={runner_v2}",
         f"GPUS_PER_NODE={run.cluster.gpus_per_node}",
@@ -548,6 +620,11 @@ def build_runtime_command(
         f"logger.wandb.project={G_WANDB_PROJECT}",
         f"logger.wandb.name={run_tag}",
     )
+    target_override = (
+        (f"policy.model_name={target_snapshot}",)
+        if target_snapshot is not None
+        else ()
+    )
     return (
         "env",
         *environment,
@@ -556,6 +633,7 @@ def build_runtime_command(
         "--config",
         run.recipe.path,
         *run.hydra_overrides,
+        *target_override,
         *output_overrides,
     )
 
@@ -580,6 +658,21 @@ def build_scheduler_command(
     )
 
 
+def build_scheduler_sequence(
+    run: ResolvedRun,
+    repo_dir: Path,
+    run_dir: Path,
+    action: str,
+) -> tuple[tuple[str, ...], ...]:
+    """Return the exact preflight/submission sequence for one CLI action."""
+    preflight = build_scheduler_command(run, repo_dir, run_dir, "test-only")
+    if action == "test-only":
+        return (preflight,)
+    if action == "submit":
+        return (preflight, build_scheduler_command(run, repo_dir, run_dir, "submit"))
+    raise ValueError(f"Unsupported scheduler action: {action}")
+
+
 def _git(repo_dir: Path, *args: str) -> str:
     result = subprocess.run(
         ("git", *args),
@@ -591,18 +684,27 @@ def _git(repo_dir: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def validate_checkout(repo_dir: Path) -> CheckoutState:
+def validate_checkout(
+    repo_dir: Path, expected_fork_url: str = G_FORK_URL
+) -> CheckoutState:
     """Require a clean branch whose exact HEAD exists on the user fork."""
     status = _git(repo_dir, "status", "--porcelain=v1", "--untracked-files=normal")
     if status:
         raise RuntimeError("Submission requires a clean tracked and untracked checkout")
     branch = _git(repo_dir, "symbolic-ref", "--quiet", "--short", "HEAD")
     head = _git(repo_dir, "rev-parse", "HEAD")
+    push_url = _git(repo_dir, "remote", "get-url", "--push", "fork")
+    if push_url != expected_fork_url:
+        raise RuntimeError(
+            f"fork push URL must be {expected_fork_url!r}; found {push_url!r}"
+        )
     fork_ref = f"refs/remotes/fork/{branch}"
-    try:
-        fork_head = _git(repo_dir, "rev-parse", "--verify", fork_ref)
-    except subprocess.CalledProcessError as error:
-        raise RuntimeError(f"Branch has no pushed fork ref: {fork_ref}") from error
+    remote_ref = f"refs/heads/{branch}"
+    remote_line = _git(repo_dir, "ls-remote", "--exit-code", "fork", remote_ref)
+    remote_parts = remote_line.split()
+    if len(remote_parts) != 2 or remote_parts[1] != remote_ref:
+        raise RuntimeError(f"Branch has no pushed fork ref: {remote_ref}")
+    fork_head = remote_parts[0]
     if fork_head != head:
         raise RuntimeError(
             f"HEAD {head} is not pushed to the fork branch {fork_ref} ({fork_head})"
@@ -623,17 +725,34 @@ def validate_checkout(repo_dir: Path) -> CheckoutState:
     )
 
 
+def validate_snapshot(snapshot: Path, revision: str, label: str) -> None:
+    """Require a full immutable SHA, config, and at least one weight artifact."""
+    if _FULL_SHA.fullmatch(revision) is None:
+        raise RuntimeError(f"{label} revision must be a 40-character Git SHA")
+    if snapshot.name != revision:
+        raise RuntimeError(
+            f"{label} snapshot directory does not match revision {revision}: {snapshot}"
+        )
+    if not snapshot.is_dir() or not (snapshot / "config.json").is_file():
+        raise FileNotFoundError(f"{label} snapshot is incomplete: {snapshot}")
+    has_index = (snapshot / "model.safetensors.index.json").is_file()
+    has_weights = any(path.is_file() for path in snapshot.glob("*.safetensors"))
+    if not has_index and not has_weights:
+        raise FileNotFoundError(f"{label} snapshot has no model weights: {snapshot}")
+
+
 def resolve_target_snapshot(recipe: RecipeSpec, hf_home: Path) -> Path:
     """Resolve and validate the immutable target snapshot behind ``refs/main``."""
     ref_path = recipe.target_ref_path(hf_home)
     if not ref_path.is_file():
         raise FileNotFoundError(f"Target model ref is missing: {ref_path}")
     revision = ref_path.read_text(encoding="utf-8").strip()
-    if not revision or any(char not in "0123456789abcdef" for char in revision.lower()):
-        raise RuntimeError(f"Target model ref is not an immutable revision: {ref_path}")
+    if _FULL_SHA.fullmatch(revision) is None:
+        raise RuntimeError(
+            f"Target model ref is not a full immutable revision: {ref_path}"
+        )
     snapshot = ref_path.parent.parent / "snapshots" / revision
-    if not snapshot.is_dir() or not (snapshot / "config.json").is_file():
-        raise FileNotFoundError(f"Target model snapshot is incomplete: {snapshot}")
+    validate_snapshot(snapshot, revision, "Target model")
     return snapshot
 
 
@@ -651,11 +770,55 @@ def validate_runtime_inputs(
     draft_snapshot = None
     if run.draft_checkpoint is not None:
         draft_snapshot = run.draft_checkpoint.snapshot_path(run.cluster.hf_home)
-        if not draft_snapshot.is_dir() or not (draft_snapshot / "config.json").is_file():
-            raise FileNotFoundError(
-                f"Draft model snapshot is incomplete: {draft_snapshot}"
-            )
+        validate_snapshot(
+            draft_snapshot,
+            run.draft_checkpoint.revision,
+            "Draft model",
+        )
     return target_snapshot, draft_snapshot
+
+
+def validate_run_destination(
+    repo_dir: Path,
+    experiment_root: Path,
+    run_tag: str,
+    *,
+    require_lustre: bool,
+) -> Path:
+    """Resolve a fresh run directory that cannot escape its external root."""
+    if _RUN_TAG.fullmatch(run_tag) is None or run_tag in {".", ".."}:
+        raise ValueError(
+            "run tag must be one simple alphanumeric/dot/dash/underscore name"
+        )
+    root = experiment_root.resolve()
+    run_dir = (root / run_tag).resolve()
+    if require_lustre and not root.is_relative_to(G_LUSTRE_ROOT):
+        raise ValueError(f"Experiment root must be on Lustre: {root}")
+    if run_dir.parent != root:
+        raise ValueError(f"Run tag escapes experiment root: {run_tag}")
+    if run_dir.is_relative_to(repo_dir.resolve()):
+        raise ValueError(f"Run directory must remain outside the checkout: {run_dir}")
+    if run_dir.exists():
+        raise FileExistsError(f"Run directory already exists: {run_dir}")
+    return run_dir
+
+
+def build_submission_environment(
+    public_environment: Mapping[str, str],
+    command: str,
+    source_environment: Mapping[str, str] | None = None,
+) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Allowlist scheduler inputs while forwarding credentials by name only."""
+    source = os.environ if source_environment is None else source_environment
+    environment = {
+        key: value for key, value in source.items() if key in G_ALLOWED_ENVIRONMENT
+    }
+    environment.update(public_environment)
+    environment["COMMAND"] = command
+    forwarded_secrets = tuple(
+        sorted(key for key in G_SECRET_ENVIRONMENT if key in environment)
+    )
+    return environment, forwarded_secrets
 
 
 def _flatten_provenance(
@@ -701,7 +864,7 @@ def write_provenance(run_dir: Path, payload: Mapping[str, Any]) -> None:
 
 
 def _run_tag(model: str, variant: str, phase: str) -> str:
-    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
     return f"{model}-v0251-{variant}-{phase}-{timestamp}"
 
 
@@ -765,7 +928,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     run = resolve_run(args.model, args.variant, args.phase, args.cluster)
     run_tag = args.run_tag or _run_tag(args.model, args.variant, args.phase)
     repo_dir = args.repo_dir.resolve()
-    run_dir = (args.experiment_root / run_tag).resolve()
+    run_dir = validate_run_destination(
+        repo_dir,
+        args.experiment_root,
+        run_tag,
+        require_lustre=args.action != "show",
+    )
     container = args.container.resolve()
     show_record = _show_record(
         run,
@@ -783,8 +951,16 @@ def main(argv: Sequence[str] | None = None) -> None:
     target_snapshot, draft_snapshot = validate_runtime_inputs(
         run, repo_dir, container
     )
-    runtime_command = build_runtime_command(run, repo_dir, run_dir, run_tag)
-    scheduler_command = build_scheduler_command(
+    runtime_id = uuid.uuid4().hex
+    runtime_command = build_runtime_command(
+        run,
+        repo_dir,
+        run_dir,
+        run_tag,
+        target_snapshot=target_snapshot,
+        runtime_id=runtime_id,
+    )
+    scheduler_sequence = build_scheduler_sequence(
         run, repo_dir, run_dir, args.action
     )
     safe_environment = {
@@ -794,6 +970,17 @@ def main(argv: Sequence[str] | None = None) -> None:
         "HF_HOME": str(run.cluster.hf_home),
         "MOUNTS": args.mounts,
     }
+    environment, forwarded_secret_names = build_submission_environment(
+        safe_environment,
+        shlex.join(runtime_command),
+    )
+    forwarded_environment_names = tuple(
+        sorted(
+            key
+            for key in environment
+            if key not in G_SECRET_ENVIRONMENT and key != "COMMAND"
+        )
+    )
     provenance: dict[str, Any] = {
         **show_record,
         "checkout": {
@@ -805,17 +992,35 @@ def main(argv: Sequence[str] | None = None) -> None:
         "target_snapshot": str(target_snapshot),
         "draft_snapshot": str(draft_snapshot) if draft_snapshot else None,
         "hydra_overrides": run.hydra_overrides,
+        "runtime_id": runtime_id,
         "runtime_command": runtime_command,
-        "scheduler_command": scheduler_command,
+        "scheduler_commands": scheduler_sequence,
         "environment": safe_environment,
-        "submission_state": "preflight" if args.action == "test-only" else "submitting",
+        "forwarded_environment_names": forwarded_environment_names,
+        "wandb_credential_forwarded": bool(forwarded_secret_names),
+        "submission_state": "preflight",
     }
     write_provenance(run_dir, provenance)
-    environment = os.environ.copy()
-    environment.update(safe_environment)
-    environment["COMMAND"] = shlex.join(runtime_command)
+    preflight_result = subprocess.run(
+        scheduler_sequence[0],
+        cwd=repo_dir,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if preflight_result.stderr:
+        print(preflight_result.stderr, end="", file=sys.stderr)
+    provenance["submission_state"] = "preflight-passed"
+    provenance["preflight_output"] = preflight_result.stdout.strip()
+    write_provenance(run_dir, provenance)
+    if args.action == "test-only":
+        print(preflight_result.stdout, end="")
+        return
+    provenance["submission_state"] = "submitting"
+    write_provenance(run_dir, provenance)
     result = subprocess.run(
-        scheduler_command,
+        scheduler_sequence[1],
         cwd=repo_dir,
         env=environment,
         check=True,
@@ -823,13 +1028,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         text=True,
     )
     if result.stderr:
-        print(result.stderr, end="", file=os.sys.stderr)
-    if args.action == "test-only":
-        provenance["submission_state"] = "preflight-passed"
-        provenance["scheduler_output"] = result.stdout.strip()
-        write_provenance(run_dir, provenance)
-        print(result.stdout, end="")
-        return
+        print(result.stderr, end="", file=sys.stderr)
     job_id = result.stdout.strip().split(";", maxsplit=1)[0]
     if not job_id.isdigit():
         raise RuntimeError(f"Could not parse SLURM job ID: {result.stdout!r}")

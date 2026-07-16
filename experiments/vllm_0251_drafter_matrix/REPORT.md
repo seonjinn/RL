@@ -20,9 +20,12 @@ baseline and candidate both complete steps 2-20.
 ## Lyris Preflight Inventory
 
 Read-only inspection on 2026-07-16 found all three target snapshots, all three
-EAGLE3 snapshots, and the shared PARD snapshot complete at their pinned
-revisions. Both exact DFlash snapshots are absent and must pass the staging
-job before DFlash smoke submission. The available image is
+base EAGLE3 snapshots, and the shared PARD snapshot complete at their pinned
+revisions. Both exact DFlash snapshots and the distinct Qwen32/Qwen235
+Thinking EAGLE3 snapshots are absent and must pass the staging job before
+their smoke submissions. Qwen30 has no separate Thinking row because its
+previously inspected Thinking alias has identical model/config blobs to the
+selected reasoning-enabled base checkpoint. The available image is
 `nemo_rl_nightly_20260715.sqsh`; the older derived image referenced by the
 previous experiment has been removed.
 
@@ -46,11 +49,13 @@ after real submission.
 | Qwen3-30B-A3B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
 | Qwen3-32B | baseline | MRv2, MRv1 | mixed | planned | pending | exact controls for both runner families |
 | Qwen3-32B | EAGLE3 | K1, K3, K5 | MRv2 | planned | pending | exact base-model head |
+| Qwen3-32B | EAGLE3 Thinking | K1, K3, K5 | MRv2 | planned | staging required | exact reasoning-distribution head |
 | Qwen3-32B | DFlash | K3, K5 | MRv2 | planned | pending | exact head; draft FlashAttention |
 | Qwen3-32B | draft/PARD | draft K1/K5; PARD K5/K16 | MRv1 | planned | pending | shared AMD 0.6B drafter; sequential/parallel split |
 | Qwen3-32B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
 | Qwen3-235B-A22B | baseline | MRv2, MRv1 | mixed | planned | pending | exact controls for both runner families |
 | Qwen3-235B-A22B | EAGLE3 | K1, K3, K5 | MRv2 | planned | pending | exact NVIDIA head |
+| Qwen3-235B-A22B | EAGLE3 Thinking | K1, K3, K5 | MRv2 | planned | staging required | exact RedHatAI reasoning-distribution head |
 | Qwen3-235B-A22B | DFlash | K3, K5 | MRv2 | unsupported | n/a | no exact public Qwen3-235B DFlash checkpoint |
 | Qwen3-235B-A22B | draft/PARD | draft K1/K5; PARD K5/K16 | MRv1 | planned | pending | shared AMD 0.6B drafter; sequential/parallel split |
 | Qwen3-235B-A22B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
@@ -96,7 +101,12 @@ bash -n experiments/vllm_0251_drafter_matrix/submit_stage_drafters.sh
 ruff check \
   experiments/vllm_0251_drafter_matrix \
   tests/experiments/test_vllm_0251_drafter_matrix.py \
-  tests/experiments/test_vllm_0251_drafter_results.py
+  tests/experiments/test_vllm_0251_drafter_results.py \
+  tests/experiments/test_vllm_0251_drafter_staging.py
+pyright \
+  experiments/vllm_0251_drafter_matrix/matrix.py \
+  experiments/vllm_0251_drafter_matrix/stage_drafters.py \
+  experiments/vllm_0251_drafter_matrix/collect_results.py
 uv lock --check
 git diff --check
 ```

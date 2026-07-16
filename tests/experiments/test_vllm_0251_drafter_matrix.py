@@ -9,7 +9,11 @@ import pytest
 from experiments.vllm_0251_drafter_matrix.matrix import (
     build_runtime_command,
     build_scheduler_command,
+    build_scheduler_sequence,
+    build_submission_environment,
     resolve_run,
+    validate_run_destination,
+    validate_snapshot,
     validate_checkout,
     write_provenance,
 )
@@ -114,6 +118,9 @@ def test_eagle_selects_mrv2_without_compact_capture_sizes() -> None:
         ("eagle3_k1", "eagle3", "mrv2", 1),
         ("eagle3_k3", "eagle3", "mrv2", 3),
         ("eagle3_k5", "eagle3", "mrv2", 5),
+        ("eagle3_thinking_k1", "eagle3", "mrv2", 1),
+        ("eagle3_thinking_k3", "eagle3", "mrv2", 3),
+        ("eagle3_thinking_k5", "eagle3", "mrv2", 5),
         ("draft_k1", "draft_model", "mrv1", 1),
         ("draft_k5", "draft_model", "mrv1", 5),
         ("pard_k5", "draft_model", "mrv1", 5),
@@ -287,12 +294,63 @@ def test_eagle3_exposes_exact_base_checkpoint_identity(
 
 
 @pytest.mark.parametrize(
+    ("model_key", "repo_id", "revision"),
+    [
+        (
+            "qwen32",
+            "RedHatAI/Qwen3-32B-Thinking-speculator.eagle3",
+            "a1403e07b73a66fc9ef561463631c31864616933",
+        ),
+        (
+            "qwen235",
+            "RedHatAI/Qwen3-235B-A22B-Thinking-2507-speculator.eagle3",
+            "3c0c5cbad8e1fa7ce9e6fb6a1b0a35458b124e87",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("variant_key", "tokens"),
+    [
+        ("eagle3_thinking_k1", 1),
+        ("eagle3_thinking_k3", 3),
+        ("eagle3_thinking_k5", 5),
+    ],
+)
+def test_eagle3_thinking_exposes_exact_reasoning_checkpoint_identity(
+    model_key: str,
+    repo_id: str,
+    revision: str,
+    variant_key: str,
+    tokens: int,
+) -> None:
+    run = resolve_run(model_key, variant_key, "smoke2", "lyris")
+
+    assert run.variant.runner == "mrv2"
+    assert run.variant.num_speculative_tokens == tokens
+    assert run.draft_checkpoint is not None
+    assert run.draft_checkpoint.repo_id == repo_id
+    assert run.draft_checkpoint.revision == revision
+
+
+@pytest.mark.parametrize(
+    "variant_key",
+    ("eagle3_thinking_k1", "eagle3_thinking_k3", "eagle3_thinking_k5"),
+)
+def test_qwen30_rejects_duplicate_thinking_alias(variant_key: str) -> None:
+    with pytest.raises(ValueError, match="not available"):
+        resolve_run("qwen30", variant_key, "smoke2", "lyris")
+
+
+@pytest.mark.parametrize(
     "variant_key",
     [
         "baseline",
         "eagle3_k1",
         "eagle3_k3",
         "eagle3_k5",
+        "eagle3_thinking_k1",
+        "eagle3_thinking_k3",
+        "eagle3_thinking_k5",
         "draft_k1",
         "draft_k5",
         "pard_k5",
@@ -377,6 +435,25 @@ def test_runtime_command_uses_container_python_and_external_run_directory(
     assert not run_dir.is_relative_to(repo_dir)
 
 
+def test_runtime_command_binds_the_validated_target_snapshot(tmp_path: Path) -> None:
+    run = resolve_run("qwen30", "eagle3_k3", "smoke2", "lyris")
+    target_snapshot = tmp_path / "hf" / "snapshots" / ("a" * 40)
+
+    command = build_runtime_command(
+        run,
+        tmp_path / "repo",
+        tmp_path / "runs" / "unit",
+        "unit",
+        target_snapshot=target_snapshot,
+        runtime_id="runtime-123",
+    )
+
+    assert f"policy.model_name={target_snapshot}" in command
+    assert "NEMO_RL_VENV_DIR=/tmp/nemorl-v0251-runtime-123" in command
+    assert "TRITON_CACHE_DIR=/tmp/nemorl-v0251-triton-runtime-123" in command
+    assert "TORCHINDUCTOR_CACHE_DIR=/tmp/nemorl-v0251-inductor-runtime-123" in command
+
+
 @pytest.mark.parametrize(
     ("mode", "required_flag"),
     [("test-only", "--test-only"), ("submit", "--parsable")],
@@ -399,6 +476,24 @@ def test_scheduler_command_is_mode_specific_and_dependency_free(
     assert not any(part.startswith("--gres") for part in command)
 
 
+def test_submit_scheduler_sequence_preflights_the_exact_submission(
+    tmp_path: Path,
+) -> None:
+    run = resolve_run("qwen30", "baseline", "smoke2", "lyris")
+    repo_dir = tmp_path / "repo"
+    run_dir = Path("/lustre/unit/run")
+
+    preflight, submission = build_scheduler_sequence(
+        run, repo_dir, run_dir, "submit"
+    )
+
+    assert "--test-only" in preflight
+    assert "--parsable" in submission
+    assert tuple(part for part in preflight if part != "--test-only") == tuple(
+        part for part in submission if part != "--parsable"
+    )
+
+
 def _git(repo: Path, *args: str) -> str:
     result = subprocess.run(
         ("git", *args),
@@ -411,6 +506,9 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def _make_pushed_checkout(tmp_path: Path) -> Path:
+    remote = tmp_path / "fork.git"
+    remote.mkdir()
+    _git(remote, "init", "--bare")
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-b", "matrix")
@@ -419,14 +517,15 @@ def _make_pushed_checkout(tmp_path: Path) -> Path:
     (repo / "tracked.txt").write_text("clean\n", encoding="utf-8")
     _git(repo, "add", "tracked.txt")
     _git(repo, "commit", "-m", "initial")
-    _git(repo, "update-ref", "refs/remotes/fork/matrix", "HEAD")
+    _git(repo, "remote", "add", "fork", str(remote))
+    _git(repo, "push", "-u", "fork", "matrix")
     return repo
 
 
 def test_checkout_validation_requires_clean_fork_pushed_commit(tmp_path: Path) -> None:
     repo = _make_pushed_checkout(tmp_path)
 
-    state = validate_checkout(repo)
+    state = validate_checkout(repo, expected_fork_url=str(tmp_path / "fork.git"))
 
     assert state.branch == "matrix"
     assert state.head == _git(repo, "rev-parse", "HEAD")
@@ -438,7 +537,7 @@ def test_checkout_validation_rejects_dirty_checkout(tmp_path: Path) -> None:
     (repo / "untracked.txt").write_text("dirty\n", encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="clean"):
-        validate_checkout(repo)
+        validate_checkout(repo, expected_fork_url=str(tmp_path / "fork.git"))
 
 
 def test_checkout_validation_rejects_unpushed_commit(tmp_path: Path) -> None:
@@ -448,7 +547,82 @@ def test_checkout_validation_rejects_unpushed_commit(tmp_path: Path) -> None:
     _git(repo, "commit", "-m", "unpushed")
 
     with pytest.raises(RuntimeError, match="fork"):
-        validate_checkout(repo)
+        validate_checkout(repo, expected_fork_url=str(tmp_path / "fork.git"))
+
+
+def test_checkout_validation_rejects_an_unapproved_fork_url(tmp_path: Path) -> None:
+    repo = _make_pushed_checkout(tmp_path)
+
+    with pytest.raises(RuntimeError, match="push URL"):
+        validate_checkout(repo, expected_fork_url="git@example.invalid:user/RL.git")
+
+
+@pytest.mark.parametrize("run_tag", ("../escape", "/absolute", "nested/name", "."))
+def test_run_destination_rejects_escaping_tags(tmp_path: Path, run_tag: str) -> None:
+    with pytest.raises(ValueError, match="run tag"):
+        validate_run_destination(
+            tmp_path / "repo",
+            Path("/lustre/unit/experiments"),
+            run_tag,
+            require_lustre=True,
+        )
+
+
+def test_run_destination_requires_lustre_outside_checkout(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="Lustre"):
+        validate_run_destination(
+            tmp_path / "repo", tmp_path / "runs", "unit", require_lustre=True
+        )
+    with pytest.raises(ValueError, match="outside"):
+        validate_run_destination(
+            Path("/lustre/unit/repo"),
+            Path("/lustre/unit/repo/runs"),
+            "unit",
+            require_lustre=True,
+        )
+
+
+def test_snapshot_validation_requires_full_sha_and_weights(tmp_path: Path) -> None:
+    snapshot = tmp_path / "snapshots" / ("a" * 40)
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(FileNotFoundError, match="weights"):
+        validate_snapshot(snapshot, "a" * 40, "unit")
+    (snapshot / "model.safetensors").write_bytes(b"weights")
+    validate_snapshot(snapshot, "a" * 40, "unit")
+    with pytest.raises(RuntimeError, match="40-character"):
+        validate_snapshot(snapshot, "a", "unit")
+
+
+def test_submission_environment_drops_ambient_execution_controls() -> None:
+    source = {
+        "PATH": "/usr/bin",
+        "HOME": "/home/test",
+        "USER": "test",
+        "WANDB_API_KEY": "secret",
+        "SETUP_COMMAND": "touch /tmp/unsafe",
+        "UV_CACHE_DIR_OVERRIDE": "/tmp/unsafe-cache",
+        "NODE_MANAGER_PORT": "9999",
+    }
+    public = {
+        "CONTAINER": "/lustre/image.sqsh",
+        "MOUNTS": "/lustre:/lustre",
+        "BASE_LOG_DIR": "/lustre/run",
+        "GPUS_PER_NODE": "4",
+    }
+
+    environment, forwarded_secret_names = build_submission_environment(
+        public, "env python command", source
+    )
+
+    assert environment["WANDB_API_KEY"] == "secret"
+    assert forwarded_secret_names == ("WANDB_API_KEY",)
+    assert environment["COMMAND"] == "env python command"
+    assert "SETUP_COMMAND" not in environment
+    assert "UV_CACHE_DIR_OVERRIDE" not in environment
+    assert "NODE_MANAGER_PORT" not in environment
+    assert "secret" not in json.dumps(public)
 
 
 def test_provenance_is_written_atomically_without_secrets(tmp_path: Path) -> None:
@@ -506,3 +680,15 @@ def test_show_cli_emits_deterministic_json_without_cluster_access(tmp_path: Path
     assert payload["container"] == str(tmp_path / "image.sqsh")
     assert payload["run_dir"] == str(tmp_path / "runs" / "unit-show")
     assert "--dependency=" in payload["scheduler_command"]
+
+
+def test_submit_wrapper_has_repository_license_header() -> None:
+    wrapper = (
+        Path(__file__).parents[2]
+        / "experiments/vllm_0251_drafter_matrix/submit_matrix.sh"
+    )
+
+    assert wrapper.read_text().startswith(
+        "#!/usr/bin/env bash\n"
+        "# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.\n"
+    )

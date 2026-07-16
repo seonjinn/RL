@@ -25,6 +25,7 @@ capture sizing, Triton MoE from the recipes, and `checkpointing.enabled=false`.
 | `baseline` | MRv2 | yes | yes | yes | no speculative config |
 | `baseline_mrv1` | MRv1 | yes | yes | yes | matched control for MRv1 methods |
 | `eagle3_k1/k3/k5` | MRv2 | yes | yes | yes | exact target-specific EAGLE3 head |
+| `eagle3_thinking_k1/k3/k5` | MRv2 | alias | yes | yes | reasoning-distribution EAGLE3 head |
 | `dflash_k3/k5` | MRv2 | yes | yes | no | exact DFlash head, draft `FLASH_ATTN` |
 | `draft_k1/k5` | MRv1 | yes | yes | yes | sequential `amd/PARD-Qwen3-0.6B` |
 | `pard_k5/k16` | MRv1 | yes | yes | yes | parallel `amd/PARD-Qwen3-0.6B` |
@@ -39,9 +40,18 @@ Exact model-based drafter identities:
 | Qwen30 | EAGLE3 | `RedHatAI/Qwen3-30B-A3B-speculator.eagle3` | `6afc5aa2477b923467fb9a8d906782b984a9a6ba` |
 | Qwen32 | EAGLE3 | `RedHatAI/Qwen3-32B-speculator.eagle3` | `dc84fe7ff1db31efa824776f49c141fc8195eb47` |
 | Qwen235 | EAGLE3 | `nvidia/Qwen3-235B-A22B-Eagle3` | `33f3c01ce807376d1171301b9a148b1b28f239ba` |
+| Qwen32 | EAGLE3 Thinking | `RedHatAI/Qwen3-32B-Thinking-speculator.eagle3` | `a1403e07b73a66fc9ef561463631c31864616933` |
+| Qwen235 | EAGLE3 Thinking | `RedHatAI/Qwen3-235B-A22B-Thinking-2507-speculator.eagle3` | `3c0c5cbad8e1fa7ce9e6fb6a1b0a35458b124e87` |
 | Qwen30 | DFlash | `RedHatAI/Qwen3-30B-A3B-speculator.dflash` | `edcff83783141eb9383e2bd6c33610d9a3104288` |
 | Qwen32 | DFlash | `AICP-Labs/qwen3-32b-dflash-en-zh` | `68ccc7fd27b104271321b179a2959c759dce5eef` |
 | all | draft/PARD | `amd/PARD-Qwen3-0.6B` | `f9f650fbab180c26498817718f0db5cae8f25136` |
+
+Qwen30 does not get a duplicate Thinking row. The previously inspected
+`Qwen3-30B-A3B-Thinking-2507-speculator.eagle3` revision and the selected
+`Qwen3-30B-A3B-speculator.eagle3` revision resolve to identical model/config
+blobs, and the selected checkpoint was trained with reasoning enabled. Qwen32
+and Qwen235 have distinct Thinking checkpoints, so their K1/K3/K5 rows are
+controlled A/B comparisons against the base EAGLE3 rows.
 
 Qwen235 DFlash has no exact public checkpoint and is rejected before
 submission. Native MTP requires target-embedded heads absent from these Qwen3

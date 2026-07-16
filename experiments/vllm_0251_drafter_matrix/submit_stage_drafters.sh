@@ -1,9 +1,27 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-if [[ "${1:-}" == "--worker" ]]; then
+if [[ "${1:-}" == "--worker-script" ]]; then
+  shift
+  worker_script="${1:?missing absolute worker script path}"
+  shift
   python_bin="/opt/nemo_rl_venv/bin/python"
+  exec "${python_bin}" "${worker_script}" --worker "$@"
 else
   python_bin="${PYTHON_BIN:-python3}"
 fi

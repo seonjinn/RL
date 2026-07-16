@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import re
@@ -26,7 +27,7 @@ import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, cast
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -35,6 +36,7 @@ from experiments.vllm_0251_drafter_matrix.matrix import (
     CheckpointSpec,
     G_CLUSTERS,
     G_VARIANTS,
+    validate_snapshot,
 )
 
 
@@ -68,6 +70,7 @@ class StagingFailure(RuntimeError):
 
 
 SnapshotDownload = Callable[..., str]
+SnapshotDownloadFactory = Callable[[], SnapshotDownload]
 
 
 def _lyris_hf_home() -> Path:
@@ -134,6 +137,11 @@ def stage_targets(
                     "snapshot_download returned an unexpected snapshot path: "
                     f"expected {expected_path}, got {downloaded_path}"
                 )
+            validate_snapshot(
+                downloaded_path,
+                checkpoint.revision,
+                f"Drafter {checkpoint.repo_id}",
+            )
         except Exception as error:
             entries[index] = ManifestEntry(
                 repo_id=checkpoint.repo_id,
@@ -153,11 +161,23 @@ def stage_targets(
     return tuple(entries)
 
 
-def write_manifest(output_dir: Path, entries: Sequence[ManifestEntry]) -> Path:
+def write_manifest(
+    output_dir: Path,
+    entries: Sequence[ManifestEntry],
+    *,
+    status: str | None = None,
+    error: str | None = None,
+) -> Path:
     """Atomically write the checkpoint staging manifest."""
     output_dir.mkdir(parents=True, exist_ok=True)
     destination = output_dir / MANIFEST_NAME
-    payload = {"checkpoints": [asdict(entry) for entry in entries]}
+    payload: dict[str, object] = {
+        "checkpoints": [asdict(entry) for entry in entries]
+    }
+    if status is not None:
+        payload["status"] = status
+    if error is not None:
+        payload["error"] = error
     with tempfile.NamedTemporaryFile(
         mode="w",
         encoding="utf-8",
@@ -181,6 +201,7 @@ def build_sbatch_command(
     container: Path,
     mounts: str,
     wrapper_path: Path,
+    worker_path: Path,
 ) -> tuple[str, ...]:
     """Build the bounded Lyris staging job without requesting GPU resources."""
     if mode == "test-only":
@@ -202,11 +223,12 @@ def build_sbatch_command(
         "--segment=1",
         "--job-name=nemorl-drafter-stage",
         f"--output={output_dir / 'slurm-%j.out'}",
-        f"--export=HF_HOME={hf_home}",
+        f"--export=ALL,HF_HOME={hf_home}",
         f"--container-image={container}",
         f"--container-mounts={mounts}",
         str(wrapper_path),
-        "--worker",
+        "--worker-script",
+        str(worker_path),
         "--output-dir",
         str(output_dir),
         "--hf-home",
@@ -216,8 +238,8 @@ def build_sbatch_command(
 
 def _parse_job_id(stdout: str) -> str:
     job_id = stdout.strip().split(";", maxsplit=1)[0]
-    if not job_id:
-        raise RuntimeError("sbatch --parsable returned no job ID")
+    if not job_id.isdigit():
+        raise RuntimeError(f"sbatch --parsable returned an invalid job ID: {stdout!r}")
     return job_id
 
 
@@ -240,6 +262,11 @@ def _build_parser() -> argparse.ArgumentParser:
                 type=Path,
                 default=Path(__file__).with_name("submit_stage_drafters.sh"),
             )
+            subparser.add_argument(
+                "--worker-path",
+                type=Path,
+                default=Path(__file__),
+            )
     return parser
 
 
@@ -247,18 +274,51 @@ def _emit_manifest(path: Path) -> None:
     print(path.read_text(encoding="utf-8"), end="")
 
 
-def _run_stage(output_dir: Path, hf_home: Path) -> Path:
-    from huggingface_hub import snapshot_download
+def _snapshot_download_factory() -> SnapshotDownload:
+    module: Any = importlib.import_module("huggingface_hub")
+    return cast(SnapshotDownload, module.snapshot_download)
 
-    checkpoints = collect_checkpoint_specs()
+
+def run_stage(
+    output_dir: Path,
+    hf_home: Path,
+    *,
+    checkpoints: Sequence[CheckpointSpec] | None = None,
+    snapshot_download_factory: SnapshotDownloadFactory = _snapshot_download_factory,
+) -> Path:
+    """Stage every checkpoint and persist a terminal manifest on any failure."""
+    resolved_checkpoints: tuple[CheckpointSpec, ...] = ()
     job_id = os.environ.get("SLURM_JOB_ID")
     try:
-        entries = stage_targets(checkpoints, hf_home, snapshot_download, job_id)
+        resolved_checkpoints = tuple(
+            collect_checkpoint_specs() if checkpoints is None else checkpoints
+        )
+        snapshot_download = snapshot_download_factory()
+        entries = stage_targets(
+            resolved_checkpoints, hf_home, snapshot_download, job_id
+        )
     except StagingFailure as error:
-        manifest_path = write_manifest(output_dir, error.entries)
+        manifest_path = write_manifest(
+            output_dir,
+            error.entries,
+            status="failed",
+            error=str(error),
+        )
         _emit_manifest(manifest_path)
         raise
-    manifest_path = write_manifest(output_dir, entries)
+    except Exception as error:
+        failed_entries = _entries_for(
+            resolved_checkpoints, hf_home, "failed", job_id
+        )
+        manifest_path = write_manifest(
+            output_dir,
+            failed_entries,
+            status="failed",
+            error=str(error),
+        )
+        _emit_manifest(manifest_path)
+        raise
+    manifest_path = write_manifest(output_dir, entries, status="staged")
     _emit_manifest(manifest_path)
     return manifest_path
 
@@ -274,7 +334,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = tuple(sys.argv[1:] if argv is None else argv)
     if arguments[:1] == ("--worker",):
         args = _worker_parser().parse_args(arguments[1:])
-        _run_stage(args.output_dir, args.hf_home)
+        run_stage(args.output_dir, args.hf_home)
         return 0
 
     args = _build_parser().parse_args(arguments)
@@ -286,13 +346,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         _emit_manifest(manifest_path)
         return 0
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    container = args.container.resolve()
+    wrapper_path = args.wrapper_path.resolve()
+    worker_path = args.worker_path.resolve()
+    for label, path in (
+        ("container", container),
+        ("staging wrapper", wrapper_path),
+        ("staging worker", worker_path),
+    ):
+        if not path.is_file():
+            raise FileNotFoundError(f"Missing {label}: {path}")
     command = build_sbatch_command(
         mode=args.command,
         output_dir=args.output_dir,
         hf_home=args.hf_home,
-        container=args.container,
+        container=container,
         mounts=args.mounts,
-        wrapper_path=args.wrapper_path,
+        wrapper_path=wrapper_path,
+        worker_path=worker_path,
     )
     result = subprocess.run(command, check=True, capture_output=True, text=True)
     if args.command == "test-only":
@@ -300,7 +371,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         job_id = _parse_job_id(result.stdout)
         entries = _entries_for(checkpoints, args.hf_home, "queued", job_id)
-    manifest_path = write_manifest(args.output_dir, entries)
+    manifest_path = write_manifest(args.output_dir, entries, status=args.command)
     _emit_manifest(manifest_path)
     return 0
 
