@@ -34,6 +34,12 @@ for module in ("ray", "torch", "transformer_engine", "pytest", "nemo_rl"):
 PY
             fi
         done
+        echo "== Hugging Face Qwen cache candidates =="
+        for cache_dir in /root/.cache/huggingface/hub /opt/.cache/huggingface/hub; do
+            if [ -d "${cache_dir}" ]; then
+                find "${cache_dir}" -maxdepth 1 -type d -iname "*qwen*" -printf "%f\\n"
+            fi
+        done
         echo "== CUDA =="
         nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
     '
