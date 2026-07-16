@@ -142,6 +142,7 @@ def test_eagle_selects_mrv2_without_compact_capture_sizes() -> None:
         ("eagle3_thinking_k1", "eagle3", "mrv2", 1),
         ("eagle3_thinking_k2", "eagle3", "mrv2", 2),
         ("eagle3_thinking_k3", "eagle3", "mrv2", 3),
+        ("eagle3_thinking_k4", "eagle3", "mrv2", 4),
         ("eagle3_thinking_k5", "eagle3", "mrv2", 5),
         ("draft_k1", "draft_model", "mrv1", 1),
         ("draft_k5", "draft_model", "mrv1", 5),
@@ -336,6 +337,7 @@ def test_eagle3_exposes_exact_base_checkpoint_identity(
         ("eagle3_thinking_k1", 1),
         ("eagle3_thinking_k2", 2),
         ("eagle3_thinking_k3", 3),
+        ("eagle3_thinking_k4", 4),
         ("eagle3_thinking_k5", 5),
     ],
 )
@@ -361,6 +363,7 @@ def test_eagle3_thinking_exposes_exact_reasoning_checkpoint_identity(
         "eagle3_thinking_k1",
         "eagle3_thinking_k2",
         "eagle3_thinking_k3",
+        "eagle3_thinking_k4",
         "eagle3_thinking_k5",
     ),
 )
@@ -379,6 +382,7 @@ def test_qwen30_rejects_duplicate_thinking_alias(variant_key: str) -> None:
         "eagle3_thinking_k1",
         "eagle3_thinking_k2",
         "eagle3_thinking_k3",
+        "eagle3_thinking_k4",
         "eagle3_thinking_k5",
         "draft_k1",
         "draft_k5",

@@ -32,10 +32,36 @@ def _schedule_payload() -> dict[str, object]:
     }
 
 
+def _schedule_v2_payload() -> dict[str, object]:
+    return {
+        "schema_version": 2,
+        "calibration_status": "calibrated",
+        "model_key": "qwen32",
+        "target_revision": G_TARGET_REVISION,
+        "drafter_revision": G_DRAFTER_REVISION,
+        "source_runtime_vllm": "0.25.1",
+        "target_runtime_vllm": "0.25.1",
+        "target_cuda_graph_mode": "FULL_AND_PIECEWISE",
+        "profile_sha256": G_PROFILE_SHA256,
+        "max_num_speculative_tokens": 5,
+        "selection_metric": "accepted_length_over_median_itl",
+        "minimum_goodput_gain": 0.0,
+        "ranges": [[1, 31, 5], [32, 127, 3], [128, 256, 1]],
+    }
+
+
 def _write_schedule(tmp_path: Path, **overrides: object) -> Path:
     payload = _schedule_payload()
     payload.update(overrides)
     path = tmp_path / "schedule.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _write_schedule_v2(tmp_path: Path, **overrides: object) -> Path:
+    payload = _schedule_v2_payload()
+    payload.update(overrides)
+    path = tmp_path / "schedule-v2.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
@@ -61,6 +87,55 @@ def test_seed_schedule_resolves_for_smoke_with_exact_dynamic_overrides(
         "++policy.generation.vllm_kwargs.speculative_config."
         "num_speculative_tokens_per_batch_size=[[1,127,3],[128,256,1]]"
     ) in run.hydra_overrides
+
+
+def test_calibrated_k5_schedule_resolves_without_silent_clamping(
+    tmp_path: Path,
+) -> None:
+    schedule = load_dynamic_schedule(_write_schedule_v2(tmp_path))
+    run = resolve_run(
+        "qwen32",
+        "eagle3_thinking_dynamic_k5",
+        "smoke2",
+        "lyris",
+        dynamic_schedule=schedule,
+    )
+
+    assert schedule.max_num_speculative_tokens == 5
+    assert schedule.vllm_ranges()[0] == (1, 31, 5)
+    assert (
+        "++policy.generation.vllm_kwargs.speculative_config."
+        "num_speculative_tokens=5"
+    ) in run.hydra_overrides
+    assert (
+        "++policy.generation.vllm_kwargs.speculative_config."
+        "num_speculative_tokens_per_batch_size="
+        "[[1,31,5],[32,127,3],[128,256,1]]"
+    ) in run.hydra_overrides
+
+
+def test_schedule_max_k_must_match_dynamic_variant(tmp_path: Path) -> None:
+    schedule = load_dynamic_schedule(_write_schedule_v2(tmp_path))
+
+    with pytest.raises(ValueError, match="maximum K"):
+        resolve_run(
+            "qwen32",
+            "eagle3_thinking_dynamic_k123",
+            "smoke2",
+            "lyris",
+            dynamic_schedule=schedule,
+        )
+
+
+def test_schema_v2_rejects_invalid_selection_contract(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="selection_metric"):
+        load_dynamic_schedule(
+            _write_schedule_v2(tmp_path, selection_metric="throughput")
+        )
+    with pytest.raises(ValueError, match="minimum_goodput_gain"):
+        load_dynamic_schedule(
+            _write_schedule_v2(tmp_path, minimum_goodput_gain=-0.1)
+        )
 
 
 def test_dynamic_runtime_applies_only_the_run_scoped_cuda_graph_patch(
@@ -138,6 +213,21 @@ def test_final20_requires_a_matched_vllm0251_source_profile(tmp_path: Path) -> N
 
 
 def test_final20_requires_an_allowlisted_schedule_artifact(tmp_path: Path) -> None:
+    schedule = load_dynamic_schedule(_write_schedule_v2(tmp_path))
+
+    with pytest.raises(ValueError, match="approved calibration artifact"):
+        resolve_run(
+            "qwen32",
+            "eagle3_thinking_dynamic_k5",
+            "final20",
+            "lyris",
+            dynamic_schedule=schedule,
+        )
+
+
+def test_final20_requires_schema_v2_even_for_a_matched_v1_profile(
+    tmp_path: Path,
+) -> None:
     schedule = load_dynamic_schedule(
         _write_schedule(
             tmp_path,
@@ -146,7 +236,7 @@ def test_final20_requires_an_allowlisted_schedule_artifact(tmp_path: Path) -> No
         )
     )
 
-    with pytest.raises(ValueError, match="approved calibration artifact"):
+    with pytest.raises(ValueError, match="schema version 2"):
         resolve_run(
             "qwen32",
             "eagle3_thinking_dynamic_k123",

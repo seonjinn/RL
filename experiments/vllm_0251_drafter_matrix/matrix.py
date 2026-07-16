@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
@@ -109,6 +110,7 @@ class DynamicSchedule:
 
     source_path: Path
     source_sha256: str
+    schema_version: int
     calibration_status: str
     model_key: str
     target_revision: str
@@ -117,6 +119,9 @@ class DynamicSchedule:
     target_runtime_vllm: str
     target_cuda_graph_mode: str
     profile_sha256: str
+    max_num_speculative_tokens: int
+    selection_metric: str
+    minimum_goodput_gain: float
     ranges: tuple[DynamicRange, ...]
 
     def vllm_ranges(self) -> tuple[tuple[int, int, int], ...]:
@@ -384,6 +389,15 @@ G_VARIANTS = (
         uses_draft_model=True,
     ),
     VariantSpec(
+        key="eagle3_thinking_k4",
+        method="eagle3",
+        runner="mrv2",
+        num_speculative_tokens=4,
+        compatible_models=frozenset(("qwen32", "qwen235")),
+        checkpoints=G_EAGLE3_THINKING_CHECKPOINTS,
+        uses_draft_model=True,
+    ),
+    VariantSpec(
         key="eagle3_thinking_k5",
         method="eagle3",
         runner="mrv2",
@@ -397,6 +411,16 @@ G_VARIANTS = (
         method="eagle3",
         runner="mrv2",
         num_speculative_tokens=3,
+        compatible_models=frozenset(("qwen32",)),
+        checkpoints=G_EAGLE3_THINKING_CHECKPOINTS,
+        uses_draft_model=True,
+        dynamic_schedule_required=True,
+    ),
+    VariantSpec(
+        key="eagle3_thinking_dynamic_k5",
+        method="eagle3",
+        runner="mrv2",
+        num_speculative_tokens=5,
         compatible_models=frozenset(("qwen32",)),
         checkpoints=G_EAGLE3_THINKING_CHECKPOINTS,
         uses_draft_model=True,
@@ -495,7 +519,7 @@ def load_dynamic_schedule(path: Path) -> DynamicSchedule:
     if not isinstance(payload, dict):
         raise ValueError("DynamicSD schedule must be a JSON object")
 
-    required_keys = {
+    base_keys = {
         "schema_version",
         "calibration_status",
         "model_key",
@@ -507,20 +531,36 @@ def load_dynamic_schedule(path: Path) -> DynamicSchedule:
         "profile_sha256",
         "ranges",
     }
+    schema_version = payload.get("schema_version")
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version not in {1, 2}
+    ):
+        raise ValueError("DynamicSD schedule schema_version must be 1 or 2")
+    versioned_keys = (
+        set()
+        if schema_version == 1
+        else {
+            "max_num_speculative_tokens",
+            "selection_metric",
+            "minimum_goodput_gain",
+        }
+    )
+    required_keys = base_keys | versioned_keys
     if set(payload) != required_keys:
         missing = sorted(required_keys - set(payload))
         unknown = sorted(set(payload) - required_keys)
         raise ValueError(
             f"DynamicSD schedule schema mismatch: missing={missing}, unknown={unknown}"
         )
-    if (
-        not isinstance(payload["schema_version"], int)
-        or isinstance(payload["schema_version"], bool)
-        or payload["schema_version"] != 1
-    ):
-        raise ValueError("DynamicSD schedule schema_version must be 1")
-
-    string_keys = required_keys - {"schema_version", "ranges"}
+    non_string_keys = {
+        "schema_version",
+        "ranges",
+        "max_num_speculative_tokens",
+        "minimum_goodput_gain",
+    }
+    string_keys = required_keys - non_string_keys
     for key in string_keys:
         if not isinstance(payload[key], str) or not payload[key]:
             raise ValueError(f"DynamicSD schedule {key} must be a non-empty string")
@@ -541,6 +581,35 @@ def load_dynamic_schedule(path: Path) -> DynamicSchedule:
         raise ValueError(
             "DynamicSD schedule profile_sha256 must be a full SHA-256 digest"
         )
+    if schema_version == 1:
+        max_num_speculative_tokens = 3
+        selection_metric = "historical_seed"
+        minimum_goodput_gain = 0.0
+    else:
+        raw_max_k = payload["max_num_speculative_tokens"]
+        if (
+            not isinstance(raw_max_k, int)
+            or isinstance(raw_max_k, bool)
+            or raw_max_k < 1
+        ):
+            raise ValueError(
+                "DynamicSD schedule max_num_speculative_tokens must be positive"
+            )
+        max_num_speculative_tokens = raw_max_k
+        selection_metric = str(payload["selection_metric"])
+        if selection_metric != "accepted_length_over_median_itl":
+            raise ValueError("DynamicSD schedule selection_metric is unsupported")
+        raw_minimum_gain = payload["minimum_goodput_gain"]
+        if (
+            not isinstance(raw_minimum_gain, (int, float))
+            or isinstance(raw_minimum_gain, bool)
+            or not math.isfinite(float(raw_minimum_gain))
+            or float(raw_minimum_gain) < 0.0
+        ):
+            raise ValueError(
+                "DynamicSD schedule minimum_goodput_gain must be finite and non-negative"
+            )
+        minimum_goodput_gain = float(raw_minimum_gain)
 
     raw_ranges = payload["ranges"]
     if not isinstance(raw_ranges, list) or not raw_ranges:
@@ -556,19 +625,23 @@ def load_dynamic_schedule(path: Path) -> DynamicSchedule:
         start_batch, end_batch, k = raw_range
         if start_batch < 1 or end_batch < start_batch:
             raise ValueError("DynamicSD batch ranges must be positive and ordered")
-        if not 0 <= k <= 3:
-            raise ValueError("DynamicSD K must be between 0 and 3")
+        if not 0 <= k <= max_num_speculative_tokens:
+            raise ValueError(
+                "DynamicSD K must be between 0 and "
+                f"{max_num_speculative_tokens}"
+            )
         if ranges and start_batch != ranges[-1].end_batch + 1:
             raise ValueError("DynamicSD ranges must be contiguous and non-overlapping")
         ranges.append(DynamicRange(start_batch, end_batch, k))
     if ranges[0].start_batch != 1:
         raise ValueError("DynamicSD ranges must start at batch size 1")
-    if max(item.k for item in ranges) != 3:
+    if schema_version == 1 and max(item.k for item in ranges) != 3:
         raise ValueError("DynamicSD schedule maximum K must equal 3")
 
     return DynamicSchedule(
         source_path=source_path,
         source_sha256=hashlib.sha256(content).hexdigest(),
+        schema_version=schema_version,
         calibration_status=str(payload["calibration_status"]),
         model_key=str(payload["model_key"]),
         target_revision=str(payload["target_revision"]),
@@ -577,6 +650,9 @@ def load_dynamic_schedule(path: Path) -> DynamicSchedule:
         target_runtime_vllm=str(payload["target_runtime_vllm"]),
         target_cuda_graph_mode=str(payload["target_cuda_graph_mode"]),
         profile_sha256=str(payload["profile_sha256"]),
+        max_num_speculative_tokens=max_num_speculative_tokens,
+        selection_metric=selection_metric,
+        minimum_goodput_gain=minimum_goodput_gain,
         ranges=tuple(ranges),
     )
 
@@ -715,6 +791,14 @@ def resolve_run(
                 "DynamicSD schedule target CUDA Graph mode must be FULL_AND_PIECEWISE"
             )
         if (
+            variant.num_speculative_tokens is None
+            or dynamic_schedule.max_num_speculative_tokens
+            != variant.num_speculative_tokens
+        ):
+            raise ValueError(
+                "DynamicSD schedule maximum K does not match the dynamic variant"
+            )
+        if (
             phase_spec.key == "final20"
             and dynamic_schedule.calibration_status != "calibrated"
         ):
@@ -726,6 +810,8 @@ def resolve_run(
             raise ValueError(
                 "DynamicSD final20 source profile must use vLLM 0.25.1"
             )
+        if phase_spec.key == "final20" and dynamic_schedule.schema_version != 2:
+            raise ValueError("DynamicSD final20 requires schedule schema version 2")
         if (
             phase_spec.key == "final20"
             and dynamic_schedule.source_sha256
@@ -1203,11 +1289,17 @@ def _show_record(
             {
                 "source_path": str(dynamic_schedule.source_path),
                 "source_sha256": dynamic_schedule.source_sha256,
+                "schema_version": dynamic_schedule.schema_version,
                 "calibration_status": dynamic_schedule.calibration_status,
                 "source_runtime_vllm": dynamic_schedule.source_runtime_vllm,
                 "target_runtime_vllm": dynamic_schedule.target_runtime_vllm,
                 "target_cuda_graph_mode": dynamic_schedule.target_cuda_graph_mode,
                 "profile_sha256": dynamic_schedule.profile_sha256,
+                "max_num_speculative_tokens": (
+                    dynamic_schedule.max_num_speculative_tokens
+                ),
+                "selection_metric": dynamic_schedule.selection_metric,
+                "minimum_goodput_gain": dynamic_schedule.minimum_goodput_gain,
                 "ranges": dynamic_schedule.vllm_ranges(),
             }
             if dynamic_schedule is not None
