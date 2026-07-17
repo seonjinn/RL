@@ -396,6 +396,25 @@ FLOPs never amortize - consistent with the BS x K grids and the replay
 study. SpecDec pays in this environment only at low per-engine concurrency
 or long-decode regimes.
 
+A recalibration follow-up refutes the obvious rescue. The engine telemetry
+shows 52-55% of active engine steps sit at BS 1-8 (the regime where our
+grids give K3 a 1.5-2x win) while producing only ~12% of tokens, suggesting
+a tail-only schedule `[[1,8,3],[9,16,2],[17,512,0]]` should clamp the
+high-BS loss at zero and keep the tail gain (naive ceiling ~1.3x). vLLM
+0.25.1 accepts K=0 ranges, the schedule ran - and lost to everything:
+374 s vs fixed-K3 305 s and dynsd-K1 336 s. **Batch-size-adaptive K
+optimizes per-step throughput, but a barriered sync rollout is a makespan
+problem**: the batch drains into the low-BS tail only as fast as its
+longest trajectories move, and those trajectories benefit from speculation
+during the high-BS phase too. Turning speculation off at high BS delays the
+very transition the schedule was waiting for. The right adaptive axis for
+sync rollout is per-trajectory (length/age-aware, as in DAS's speculation
+policy), not per-batch-size. A cross-run suffix-match oracle on the SWE1
+outputs (independent temp-1.0 runs of the same 100 prompts) caps the DAS
+corpus-drafter ceiling at ~1.15x token rate for this single-step env - the
+rollout-corpus ingredient of DAS needs true multi-turn copy density (our
+replay measured suffix AL 3.10 there) to pay.
+
 ## Do our numbers match the upstream DynamicSD PRs?
 
 Yes, when compared apples-to-apples. PR #32374 reports +7.5% over no-SD at
