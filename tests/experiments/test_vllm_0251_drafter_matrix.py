@@ -134,8 +134,8 @@ def test_eagle_selects_mrv2_without_compact_capture_sizes() -> None:
     assert all("cudagraph_capture_sizes" not in item for item in run.hydra_overrides)
 
 
-def test_qwen235_thinking_k3_cg128_captures_the_full_generation_batch() -> None:
-    run = resolve_run("qwen235", "eagle3_thinking_k3_cg128", "smoke2", "lyris")
+def test_qwen235_thinking_k3_cg256_captures_the_full_generation_batch() -> None:
+    run = resolve_run("qwen235", "eagle3_thinking_k3_cg256", "smoke2", "lyris")
 
     assert run.draft_checkpoint is not None
     assert (
@@ -145,7 +145,7 @@ def test_qwen235_thinking_k3_cg128_captures_the_full_generation_batch() -> None:
     assert run.variant.num_speculative_tokens == 3
     assert (
         "policy.generation.vllm_kwargs.compilation_config."
-        "cudagraph_capture_sizes=[1,2,4,8,16,32,64,128]"
+        "cudagraph_capture_sizes=[1,2,4,8,16,32,64,128,256]"
     ) in run.hydra_overrides
 
 

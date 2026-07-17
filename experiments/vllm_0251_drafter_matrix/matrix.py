@@ -392,14 +392,14 @@ G_VARIANTS = (
         uses_draft_model=True,
     ),
     VariantSpec(
-        key="eagle3_thinking_k3_cg128",
+        key="eagle3_thinking_k3_cg256",
         method="eagle3",
         runner="mrv2",
         num_speculative_tokens=3,
         compatible_models=frozenset(("qwen235",)),
         checkpoints=G_EAGLE3_THINKING_CHECKPOINTS,
         uses_draft_model=True,
-        cudagraph_capture_sizes=(1, 2, 4, 8, 16, 32, 64, 128),
+        cudagraph_capture_sizes=(1, 2, 4, 8, 16, 32, 64, 128, 256),
     ),
     VariantSpec(
         key="eagle3_thinking_k4",

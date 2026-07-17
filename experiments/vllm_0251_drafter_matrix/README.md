@@ -30,7 +30,7 @@ the default NeMo-RL port path that passed their smoke gates.
 | `baseline_mrv1` | MRv1 | yes | yes | yes | matched control for MRv1 methods |
 | `eagle3_k1/k3/k5` | MRv2 | yes | yes | yes | exact target-specific EAGLE3 head |
 | `eagle3_thinking_k1/k2/k3/k4/k5` | MRv2 | alias | yes | yes | reasoning-distribution EAGLE3 head |
-| `eagle3_thinking_k3_cg128` | MRv2 | no | no | yes | K3 capture coverage through 32 concurrent requests |
+| `eagle3_thinking_k3_cg256` | MRv2 | no | no | yes | K3 capture coverage through 64 concurrent requests |
 | `eagle3_thinking_dynamic_k123` | MRv2 | no | yes | no | historical K0-K3 smoke schedule only |
 | `eagle3_thinking_dynamic_k5` | MRv2 | no | yes | no | calibrated K0-K5 DynamicSD schedule artifact |
 | `dflash_k3/k5` | MRv2 | yes | yes | no | exact DFlash head, draft `FLASH_ATTN` |
@@ -120,10 +120,10 @@ metrics, or early exit.
 Lyris jobs use account `coreai_dlalgo_llm`, partition `gb200`, four GPUs per
 node, `--segment=<nodes>`, no `--gres`, and no dependency/singleton constraint.
 
-The Qwen235 `eagle3_thinking_k3_cg128` ablation changes only the inherited
+The Qwen235 `eagle3_thinking_k3_cg256` ablation changes only the inherited
 capture-size list from `[1,2,4,8,16,32,64]` to
-`[1,2,4,8,16,32,64,128]`. With K3, verification consumes four tokens per
-request, so 128 tokens cover the recipe's 32-request generation batch. The
+`[1,2,4,8,16,32,64,128,256]`. With K3, verification consumes four tokens per
+request, so 256 tokens cover the recipe's peak 64 requests per vLLM replica. The
 matched baseline and the original K3 run remain unchanged.
 
 DynamicSD requires an explicit versioned schedule artifact. The checked-in
