@@ -513,6 +513,28 @@ class MegatronPolicyWorkerImpl(
         for m in self._get_cg_modules():
             m.cuda_graphs = []
 
+    def _invalidate_cuda_graphs_after_parameter_move(self) -> None:
+        """Drop TE graphs whose captured parameter storage has been relocated."""
+        has_cuda_graphs = (
+            self._cuda_graph_helper is not None
+            or bool(self._cuda_graph_bucket_helpers)
+            or bool(self._cuda_graph_bucket_graphs)
+            or any(module.cuda_graphs for module in self._get_cg_modules())
+        )
+        if not has_cuda_graphs:
+            return
+
+        self._clear_all_cuda_graphs()
+        self._cuda_graph_helper = None
+        self._cuda_graph_bucket_helpers = {}
+        self._cuda_graph_bucket_graphs = {}
+        self._cuda_graph_active_bucket = None
+        self._cuda_graph_saved_graphs = {}
+        self._cuda_graph_captured_seq_length = None
+        self._cuda_graph_train_steps = getattr(
+            self.megatron_cfg.model, "cuda_graph_warmup_steps", 3
+        )
+
     def _save_bucket_graphs(self, bucket: int) -> None:
         """Snapshot per-module graph references for the given bucket."""
         self._cuda_graph_bucket_graphs[bucket] = {
@@ -2565,6 +2587,7 @@ class MegatronPolicyWorkerImpl(
         """Offload as much as possible on the CPU."""
         no_grad = torch.no_grad()
         no_grad.__enter__()
+        self._invalidate_cuda_graphs_after_parameter_move()
         self.model = self.move_model(self.model, "cpu")
         self.model.eval()
         torch.randn(1).cuda()  # wake up torch allocator
