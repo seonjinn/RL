@@ -106,7 +106,7 @@ sbatch --test-only \
   --account="${ACCOUNT}" \
   --partition="${PARTITION}" \
   --time=04:00:00 \
-  --job-name="q30-${CONDITION}" \
+  --job-name="${ACCOUNT}-q30.${CONDITION}" \
   "${WORKTREE}/ray.sub"
 
 echo "Submission validated. Set SUBMIT=1 to submit this condition."
@@ -125,6 +125,6 @@ if [[ "${SUBMIT:-0}" == "1" ]]; then
     --account="${ACCOUNT}" \
     --partition="${PARTITION}" \
     --time=04:00:00 \
-    --job-name="q30-${CONDITION}" \
+    --job-name="${ACCOUNT}-q30.${CONDITION}" \
     "${WORKTREE}/ray.sub"
 fi
