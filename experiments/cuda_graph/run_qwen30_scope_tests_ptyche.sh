@@ -16,6 +16,7 @@ set -euo pipefail
 WORKTREE=${WORKTREE:?Set WORKTREE to the remote NeMo-RL worktree.}
 CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/nemo_rl_nightly_20260715.sqsh}
 STATIC_THD_TEST=${STATIC_THD_TEST:-0}
+PR5672_STATIC_THD_TEST=${PR5672_STATIC_THD_TEST:-0}
 
 tests=(
   "tests/unit_tests/rl/test_rl_utils.py::TestRLUtils::test_megatron_rl_inference_mode_restores_training_cuda_graph_state"
@@ -27,6 +28,11 @@ if [[ "${STATIC_THD_TEST}" == "1" ]]; then
   static_thd_suffix=" && cd '${WORKTREE}' && pytest -q \\
     --confcutdir='${WORKTREE}/tests/unit/models/megatron' \\
     '${WORKTREE}/tests/unit/models/megatron/test_megatron_setup.py::test_static_thd_cuda_graph_preserves_transformer_engine_packing_mode'"
+fi
+
+if [[ "${PR5672_STATIC_THD_TEST}" == "1" ]]; then
+  static_thd_suffix+=" && cd '${WORKTREE}' && pytest -q \\
+    '${WORKTREE}/tests/unit/test_config_validation.py::test_pr5672_qwen30_packed_attention_recipes_enable_static_thd'"
 fi
 
 export NRL_IGNORE_VERSION_MISMATCH=1
