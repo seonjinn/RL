@@ -35,4 +35,4 @@ srun --nodes=1 --ntasks=1 --no-container-mount-home \
   --container-image="${CONTAINER}" \
   --container-mounts=/lustre:/lustre \
   --container-workdir="${WORKTREE}" \
-  uv run --locked --directory "${WORKTREE}" pytest -q "${tests[@]}"
+  uv run --locked --extra mcore --directory "${WORKTREE}" pytest -q "${tests[@]}"
