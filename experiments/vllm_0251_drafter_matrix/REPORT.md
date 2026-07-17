@@ -105,10 +105,10 @@ Thinking K1.
 | Qwen3-32B | baseline | `2405077` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/zy22udd0) | completed (`0:0`) |
 | Qwen3-32B | base EAGLE3 K1 | `2405076` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/on935s9p) | completed (`0:0`) |
 | Qwen3-32B | Thinking EAGLE3 K1 | `2405078` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/0rgf8mxc) | completed (`0:0`) |
-| Qwen3-32B | Thinking EAGLE3 K3 | `2409618` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/8zf8g77s) | running; reached step 4/20 |
-| Qwen3-235B-A22B | baseline | `2409727` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/pgzi0h7u) | running; initialization |
-| Qwen3-235B-A22B | Thinking EAGLE3 K3 | `2409729` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/xjr83tib) | running; initialization |
-| Qwen3-235B-A22B | Thinking EAGLE3 K5 | `2409731` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/kblsp1fm) | running; initialization |
+| Qwen3-32B | Thinking EAGLE3 K3 | `2409618` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/8zf8g77s) | completed (`0:0`) |
+| Qwen3-235B-A22B | baseline | `2409727` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/pgzi0h7u) | completed (`0:0`) |
+| Qwen3-235B-A22B | Thinking EAGLE3 K3 | `2409729` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/xjr83tib) | running; step 20 active, complete metrics through step 19 |
+| Qwen3-235B-A22B | Thinking EAGLE3 K5 | `2409731` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/kblsp1fm) | running; step 17 active, complete metrics through step 16 |
 
 ### Final20 Results
 
@@ -123,12 +123,34 @@ averaged directly rather than reconstructed from averaged time.
 | Qwen3-32B | baseline | 262.36s | 1.000x | 109.61s | 1.000x | 41.8% | 1610.78 | 1.000x | 3850.38 | 1.000x | n/a | n/a | 0.5242 |
 | Qwen3-32B | base EAGLE3 K1 | 255.69s | 1.026x | 103.44s | 1.060x | 40.5% | 1653.10 | 1.026x | 4099.08 | 1.065x | 69.4% | 1.69 | 0.5248 |
 | Qwen3-32B | Thinking EAGLE3 K1 | 245.08s | 1.071x | 94.22s | 1.163x | 38.4% | 1722.97 | 1.070x | 4484.79 | 1.165x | 80.0% | 1.80 | 0.5268 |
+| Qwen3-32B | Thinking EAGLE3 K3 | 259.71s | 1.010x | 107.82s | 1.017x | 41.5% | 1626.36 | 1.010x | 3925.38 | 1.019x | 63.0% | 2.89 | 0.5232 |
 
 The Qwen3-32B Thinking head is the stronger K1 checkpoint in this matched
 window. Its reward remains aligned with the baseline while generation and E2E
 throughput improve by 16.5% and 7.0%, respectively. Qwen3-30B-A3B K3 delivers
 the largest final20 gain in this wave: 59.3% generation-throughput and 16.9%
 E2E-throughput improvement.
+
+### Qwen3-235B Live Final20 Snapshot
+
+The baseline row is complete over steps 2-20. Thinking K3 and K5 remain live,
+so their rows are partial and are not final performance claims. Acceptance and
+mean accepted length are counter-weighted across the included steps; throughput
+is averaged directly from the logged per-GPU metrics.
+
+| Variant | Window | E2E time | E2E time speedup | Gen time | Gen time speedup | Gen ratio | E2E tok/s/GPU | E2E throughput | Gen tok/s/GPU | Gen throughput | Acceptance | Mean accepted | Prepare-for-gen avg/max |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| baseline | steps 2-20 (19/19) | 315.32s | 1.000x | 150.92s | 1.000x | 52.8% | 156.68 | 1.000x | 298.57 | 1.000x | n/a | n/a | 77.39s / 304.67s |
+| Thinking EAGLE3 K3 | steps 2-19 (18/19), partial | 598.24s | 0.527x | 418.94s | 0.360x | 75.2% | 80.86 | 0.516x | 107.54 | 0.360x | 48.1% | 2.44 | 107.77s / 868.40s |
+| Thinking EAGLE3 K5 | steps 2-16 (15/19), partial | 745.08s | 0.423x | 437.11s | 0.345x | 67.8% | 71.58 | 0.457x | 105.56 | 0.354x | 35.2% | 2.76 | 234.39s / 1065.21s |
+
+The current Qwen3-235B Thinking runs are regressions despite nonzero
+acceptance. Generation itself is about 2.8x slower than baseline, so the result
+cannot be explained only by the intermittent prepare-for-generation stalls.
+Every SpecDec engine logs that the recipe's `max_num_batched_tokens=2048`
+leaves only 2048 scheduled tokens once draft slots are included and may be
+suboptimal. A matched rerun must increase the token budget enough to preserve
+target-token concurrency before drawing a checkpoint-quality conclusion.
 
 ## Qwen3-32B K2 And DynamicSD Smoke Wave
 
@@ -332,12 +354,12 @@ after real submission.
 | Qwen3-30B-A3B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
 | Qwen3-32B | baseline | MRv2, MRv1 | mixed | final20 complete | `2405077` | MRv2 control complete; MRv1 remains planned |
 | Qwen3-32B | EAGLE3 | K1, K3, K5 | MRv2 | K1 control final20 complete | `2405076` | K1 retained for same-K checkpoint comparison |
-| Qwen3-32B | EAGLE3 Thinking | K1, K2, K3, K5 | MRv2 | K1 final20 complete; K3 final20 running | `2405078`, `2409618` | K2/K3 smoke complete; K3 promoted to the full window |
+| Qwen3-32B | EAGLE3 Thinking | K1, K2, K3, K5 | MRv2 | K1/K3 final20 complete | `2405078`, `2409618` | K3 is nearly neutral over steps 2-20 |
 | Qwen3-32B | EAGLE3 Thinking DynamicSD | K0-K3 | MRv2 | seed smoke complete | `2406255` | final20 requires matched vLLM 0.25.1 calibration |
 | Qwen3-32B | DFlash | K3, K5 | MRv2 | planned | pending | exact head; draft FlashAttention |
 | Qwen3-32B | draft/PARD | draft K1/K5; PARD K5/K16 | MRv1 | planned | pending | shared AMD 0.6B drafter; sequential/parallel split |
 | Qwen3-32B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
-| Qwen3-235B-A22B | baseline | MRv2, MRv1 | mixed | corrected smoke reached step 2/2; MRv2 final20 running | `2409674`, `2409727` | vLLM owns rendezvous ports; complete Megatron cache avoids repeated conversion |
+| Qwen3-235B-A22B | baseline | MRv2, MRv1 | mixed | corrected smoke and MRv2 final20 complete | `2409674`, `2409727` | vLLM owns rendezvous ports; complete Megatron cache avoids repeated conversion |
 | Qwen3-235B-A22B | EAGLE3 | K1, K3, K5 | MRv2 | blocked by baseline gate | `2402497/500/502` | K1 port failure reproduced; K3/K5 cancelled |
 | Qwen3-235B-A22B | EAGLE3 Thinking | K1, K3, K5 | MRv2 | K3/K5 final20 running | `2409729`, `2409731` | matched Thinking-checkpoint comparison against `2409727` |
 | Qwen3-235B-A22B | DFlash | K3, K5 | MRv2 | unsupported | n/a | no exact public Qwen3-235B DFlash checkpoint |
