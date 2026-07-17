@@ -17,7 +17,10 @@ HF_HOME="/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home"
 TARGET_SNAPSHOT_GLOB="${HF_HOME}/hub/models--Qwen--Qwen3-30B-A3B-Thinking-2507/snapshots"
 DRAFT_SNAPSHOT="${HF_HOME}/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf"
 DYNAMIC_SD_SCHEDULE="[[1,8,3],[9,32,2],[33,512,1]]"
-RUN_TAG="${VARIANT}-$(date +%m%d-%H%M%S)"
+METRICS="${METRICS:-false}"
+CAP512="${CAP512:-false}"
+TAG="${TAG:-${VARIANT}}"
+RUN_TAG="${TAG}-$(date +%m%d-%H%M%S)"
 RUN_DIR="${WT}/experiments/nemogym_swe1_specdec/runs/${RUN_TAG}"
 
 case "${VARIANT}" in
@@ -50,6 +53,17 @@ fi
 if [[ -n "${SCHED}" ]]; then
   overrides+=(
     "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens_per_batch_size=${SCHED}"
+  )
+fi
+if [[ "${METRICS}" == "true" ]]; then
+  overrides+=(
+    "++policy.generation.vllm_kwargs.cudagraph_metrics=true"
+    "policy.generation.vllm_cfg.enable_vllm_metrics_logger=true"
+  )
+fi
+if [[ "${CAP512}" == "true" ]]; then
+  overrides+=(
+    "++policy.generation.vllm_kwargs.compilation_config.max_cudagraph_capture_size=512"
   )
 fi
 
