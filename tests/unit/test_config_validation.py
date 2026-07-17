@@ -187,6 +187,26 @@ def test_reward_penalty_config_requires_explicit_unwanted_token_ids():
     assert config.token_ids.unwanted == [2]
 
 
+@pytest.mark.parametrize(
+    "recipe_name",
+    [
+        "grpo-qwen3-30ba3b-4n4g-cg-attn-w3.yaml",
+        "grpo-qwen3-30ba3b-4n4g-cg-attn-moe-router-w3.yaml",
+    ],
+)
+def test_pr5672_qwen30_packed_attention_recipes_enable_static_thd(recipe_name):
+    """PR #5672 must capture packed attention with static THD metadata."""
+    recipe_path = (
+        configs_dir / "recipes" / "llm" / "performance" / recipe_name
+    )
+    config = load_config_with_inheritance(str(recipe_path))
+    config_dict = OmegaConf.to_container(config, resolve=True)
+
+    megatron_cfg = config_dict["policy"]["megatron_cfg"]
+    assert megatron_cfg["cuda_graph_impl"] == "transformer_engine"
+    assert megatron_cfg["cuda_graph_pr5672_thd"] is True
+
+
 @pytest.mark.parametrize("config_file", config_files)
 def test_all_config_no_tp_size_accuracy_issues(config_file):
     """Test that all config files in examples/configs have no TP size >= 4 accuracy issues.
