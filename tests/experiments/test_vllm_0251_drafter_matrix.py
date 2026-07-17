@@ -13,6 +13,7 @@ from experiments.vllm_0251_drafter_matrix.matrix import (
     build_scheduler_command,
     build_scheduler_sequence,
     build_submission_environment,
+    load_login_wandb_environment,
     resolve_run,
     resolve_target_snapshot,
     validate_megatron_checkpoint_cache,
@@ -851,6 +852,60 @@ def test_submission_environment_drops_ambient_execution_controls() -> None:
     assert "UV_CACHE_DIR_OVERRIDE" not in environment
     assert "NODE_MANAGER_PORT" not in environment
     assert "secret" not in json.dumps(public)
+
+
+def test_missing_wandb_key_is_loaded_from_login_shell_without_literal_secret() -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def run_login_shell(
+        command: tuple[str, ...], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        assert kwargs == {
+            "check": True,
+            "capture_output": True,
+            "text": True,
+        }
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(
+                "shell startup output\n"
+                "__NRL_WANDB_API_KEY_BEGIN__from-bashrc"
+                "__NRL_WANDB_API_KEY_END__\n"
+            ),
+            stderr="",
+        )
+
+    environment = load_login_wandb_environment(
+        {"HOME": "/home/test", "PATH": "/usr/bin"},
+        run_login_shell=run_login_shell,
+    )
+
+    assert environment["WANDB_API_KEY"] == "from-bashrc"
+    assert calls == [
+        (
+            "bash",
+            "-ilc",
+            'printf "__NRL_WANDB_API_KEY_BEGIN__%s'
+            '__NRL_WANDB_API_KEY_END__\\n" "${WANDB_API_KEY:-}"',
+        )
+    ]
+    assert "from-bashrc" not in " ".join(calls[0])
+
+
+def test_existing_wandb_key_does_not_start_a_login_shell() -> None:
+    def fail_if_called(
+        command: tuple[str, ...], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        raise AssertionError((command, kwargs))
+
+    environment = load_login_wandb_environment(
+        {"WANDB_API_KEY": "ambient"},
+        run_login_shell=fail_if_called,
+    )
+
+    assert environment["WANDB_API_KEY"] == "ambient"
 
 
 def test_provenance_is_written_atomically_without_secrets(tmp_path: Path) -> None:

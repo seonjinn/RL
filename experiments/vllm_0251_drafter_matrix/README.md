@@ -119,6 +119,9 @@ its exact baseline and candidate complete without config fallback, missing
 metrics, or early exit.
 Lyris jobs use account `coreai_dlalgo_llm`, partition `gb200`, four GPUs per
 node, `--segment=<nodes>`, no `--gres`, and no dependency/singleton constraint.
+Submission reads `WANDB_API_KEY` from the inherited environment or, when it is
+missing, from the user's `bash -ilc` login environment backed by `~/.bashrc`.
+The credential value is never written to commands, provenance, or reports.
 
 The Qwen235 `eagle3_thinking_k3_cg256` ablation changes only the inherited
 capture-size list from `[1,2,4,8,16,32,64]` to

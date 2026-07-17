@@ -112,7 +112,7 @@ Thinking K1.
 | Qwen3-235B-A22B | NVIDIA EAGLE3 K3 reproduction | `2411704` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/7ychqvya) | `TIMEOUT` at 5:00:28; metrics through step 18 |
 | Qwen3-235B-A22B | NVIDIA EAGLE3 K5 reproduction | `2411706` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/9x0cy42u) | completed (`0:0`) |
 | Qwen3-235B-A22B | Thinking EAGLE3 K3, capture max 256 smoke | `2416514` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/vtlenlbo) | completed (`0:0`) |
-| Qwen3-235B-A22B | Thinking EAGLE3 K3, capture max 256 final20 | `2416712` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/hnes2hk4) | running |
+| Qwen3-235B-A22B | Thinking EAGLE3 K3, capture max 256 final20 | `2416712` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/hnes2hk4) | completed (`0:0`) |
 
 ### Final20 Results
 
@@ -156,12 +156,13 @@ window. Throughput is averaged directly from logged per-GPU metrics.
 | Thinking EAGLE3 K5 | steps 2-20 (19/19) | 707.19s | 0.446x | 443.17s | 0.341x | 62.7% | 73.35 | 0.468x | 103.48 | 0.347x | 35.4% | 2.77 | 187.28s / 1065.21s |
 | NVIDIA EAGLE3 K3 | steps 2-18 (17/19), timeout | 957.12s | 0.330x | 551.66s | 0.275x | 57.6% | 57.57 | 0.364x | 83.81 | 0.279x | 36.2% | 2.09 | 297.81s / 1100.36s |
 | NVIDIA EAGLE3 K5 | steps 2-20 (19/19) | 819.82s | 0.385x | 561.67s | 0.269x | 68.5% | 59.25 | 0.378x | 81.50 | 0.273x | 23.9% | 2.19 | 173.38s / 656.82s |
+| Thinking EAGLE3 K3, capture max 256 | steps 2-20 (19/19) | 254.91s | 1.237x | 85.21s | 1.771x | 40.9% | 215.66 | 1.376x | 528.68 | 1.771x | 48.3% | 2.45 | 91.29s / 694.97s |
 
-Both Qwen3-235B drafter families regress despite nonzero acceptance. Swapping
-from the Thinking checkpoint to the NVIDIA checkpoint does not recover the
-earlier high-throughput cohort: NVIDIA K3 times out and NVIDIA K5 completes at
-only 0.378x baseline E2E throughput. Drafter identity is therefore not a
-sufficient explanation. The effective 16-node performance recipe supplies
+The original compact-capture runs from both Qwen3-235B drafter families regress
+despite nonzero acceptance. Swapping from the Thinking checkpoint to the NVIDIA
+checkpoint alone does not recover the earlier high-throughput cohort: NVIDIA K3
+times out and NVIDIA K5 completes at only 0.378x baseline E2E throughput.
+Drafter identity is therefore not a sufficient explanation. Those runs used
 only CUDA Graph capture sizes
 `[1,2,4,8,16,32,64]`; a controlled vLLM 0.25.1 ablation elsewhere in this
 repository slowed generation by 2.425x when coverage was reduced while
@@ -191,9 +192,13 @@ final average:
 | matched baseline | step 2 | 3773.36 | 199.04s | 1.000x | 131.24s | 1.000x | 155.42 | 1.000x | 235.73 | 1.000x | n/a | n/a |
 | Thinking EAGLE3 K3, capture max 256 | step 2 | 3719.77 | 150.42s | 1.323x | 74.83s | 1.754x | 202.82 | 1.305x | 407.67 | 1.729x | 49.3% | 2.48 |
 
-Final20 job `2416712` repeats the same controlled setup. Final promotion waits
-for the complete steps 2-20 window and uses logged throughput rather than a
-time-derived estimate.
+Final20 job `2416712` completed the full steps 2-20 window. It improves
+generation time and throughput by 1.771x, E2E time by 1.237x, and E2E
+throughput by 1.376x. Mean output size is matched within 0.1% (5525.85 versus
+5530.68 tokens/sample), and mean reward remains aligned (0.5831 versus 0.5852).
+The result therefore establishes a positive CUDA-Graph-on Qwen3-235B EAGLE3
+case. Refit remains a secondary cost: its average rises from 77.39 to 91.29
+seconds and its maximum rises from 304.67 to 694.97 seconds.
 
 ## Qwen3-32B K2 And DynamicSD Smoke Wave
 
@@ -420,7 +425,7 @@ after real submission.
 | Qwen3-235B-A22B | baseline | MRv2, MRv1 | mixed | corrected smoke and MRv2 final20 complete | `2409674`, `2409727` | vLLM owns rendezvous ports; complete Megatron cache avoids repeated conversion |
 | Qwen3-235B-A22B | EAGLE3 | K1, K3, K5 | MRv2 | K5 complete; K3 timed out after step 18 | `2411704`, `2411706` | NVIDIA checkpoint swap does not recover the regression |
 | Qwen3-235B-A22B | EAGLE3 Thinking | K1, K3, K5 | MRv2 | K3/K5 final20 complete | `2409729`, `2409731` | both regress against matched baseline `2409727` |
-| Qwen3-235B-A22B | EAGLE3 Thinking CG coverage | K3, capture max 256 | MRv2 | smoke2 complete; final20 running | `2416514`, `2416712` | step-2 signal: 1.729x generation and 1.305x E2E throughput |
+| Qwen3-235B-A22B | EAGLE3 Thinking CG coverage | K3, capture max 256 | MRv2 | final20 complete | `2416514`, `2416712` | 1.771x generation and 1.376x E2E throughput over steps 2-20 |
 | Qwen3-235B-A22B | DFlash | K3, K5 | MRv2 | unsupported | n/a | no exact public Qwen3-235B DFlash checkpoint |
 | Qwen3-235B-A22B | draft/PARD | draft K1/K5; PARD K5/K16 | MRv1 | planned | pending | shared AMD 0.6B drafter; sequential/parallel split |
 | Qwen3-235B-A22B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
@@ -449,7 +454,7 @@ after real submission.
 
 | Model | Variant | Steps | E2E time | E2E TPS/GPU | Gen time | Gen TPS/GPU | Gen ratio | Acceptance | Mean accepted | Speedups | W&B |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|
-| pending | pending | pending | pending | pending | pending | pending | pending | pending | pending | pending | pending |
+| Qwen3-235B-A22B | Thinking EAGLE3 K3, capture max 256 | 2-20 | 254.91s | 215.66 | 85.21s | 528.68 | 40.9% | 48.3% | 2.45 | E2E 1.376x; generation 1.771x throughput | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/hnes2hk4) |
 
 ## Validation
 

@@ -30,7 +30,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 
 @dataclass(frozen=True, slots=True)
@@ -910,6 +910,8 @@ G_ALLOWED_ENVIRONMENT = frozenset(
     }
 )
 G_SECRET_ENVIRONMENT = frozenset({"WANDB_API_KEY"})
+G_WANDB_KEY_BEGIN = "__NRL_WANDB_API_KEY_BEGIN__"
+G_WANDB_KEY_END = "__NRL_WANDB_API_KEY_END__"
 _FULL_SHA = re.compile(r"[0-9a-f]{40}")
 _RUN_TAG = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
@@ -1260,6 +1262,36 @@ def build_submission_environment(
     return environment, forwarded_secrets
 
 
+def load_login_wandb_environment(
+    source_environment: Mapping[str, str] | None = None,
+    *,
+    run_login_shell: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> dict[str, str]:
+    """Load the W&B credential from the login shell when it is not inherited."""
+    environment = dict(os.environ if source_environment is None else source_environment)
+    if environment.get("WANDB_API_KEY"):
+        return environment
+
+    shell_command = (
+        f'printf "{G_WANDB_KEY_BEGIN}%s{G_WANDB_KEY_END}\\n" '
+        '"${WANDB_API_KEY:-}"'
+    )
+    result = run_login_shell(
+        ("bash", "-ilc", shell_command),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    match = re.search(
+        f"{re.escape(G_WANDB_KEY_BEGIN)}(.*?){re.escape(G_WANDB_KEY_END)}",
+        result.stdout,
+        flags=re.DOTALL,
+    )
+    if match is not None and match.group(1):
+        environment["WANDB_API_KEY"] = match.group(1)
+    return environment
+
+
 def _flatten_provenance(
     value: Any, prefix: str = ""
 ) -> list[tuple[str, str]]:
@@ -1442,10 +1474,21 @@ def main(argv: Sequence[str] | None = None) -> None:
         "HF_HOME": str(run.cluster.hf_home),
         "MOUNTS": args.mounts,
     }
+    source_environment = (
+        load_login_wandb_environment()
+        if args.action == "submit"
+        else dict(os.environ)
+    )
     environment, forwarded_secret_names = build_submission_environment(
         safe_environment,
         shlex.join(runtime_command),
+        source_environment,
     )
+    if args.action == "submit" and "WANDB_API_KEY" not in forwarded_secret_names:
+        raise RuntimeError(
+            "WANDB_API_KEY is not available from the ambient environment or the "
+            "bash login environment; configure it in ~/.bashrc before submitting"
+        )
     forwarded_environment_names = tuple(
         sorted(
             key
