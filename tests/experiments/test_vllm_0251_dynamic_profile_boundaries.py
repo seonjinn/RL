@@ -1,6 +1,7 @@
 import importlib
 import json
 import subprocess
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -11,6 +12,23 @@ def _boundaries() -> ModuleType:
     return importlib.import_module(
         "experiments.vllm_0251_drafter_matrix.profile_dynamic_sd_boundaries"
     )
+
+
+def test_direct_cli_entrypoint_resolves_repository_imports(tmp_path: Path) -> None:
+    script = (
+        Path(__file__).parents[2]
+        / "experiments/vllm_0251_drafter_matrix/profile_dynamic_sd_boundaries.py"
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        cwd=tmp_path,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_build_cells_matches_the_exact_boundary_matrix(tmp_path: Path) -> None:

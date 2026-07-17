@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -157,6 +158,12 @@ def test_dynamic_runtime_applies_only_the_run_scoped_cuda_graph_patch(
     fixed_command = build_runtime_command(
         fixed, tmp_path / "repo", tmp_path / "fixed", "fixed"
     )
+    final_command = build_runtime_command(
+        replace(dynamic, phase=replace(dynamic.phase, key="final20")),
+        tmp_path / "repo",
+        tmp_path / "dynamic-final",
+        "dynamic-final",
+    )
     patch = (
         tmp_path / "repo" / "experiments/vllm_0251_eagle3_perfcfg/"
         "apply_vllm0251_dynamic_sd_cg_fix.py"
@@ -168,6 +175,7 @@ def test_dynamic_runtime_applies_only_the_run_scoped_cuda_graph_patch(
         "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker"
     ) in dynamic_command
     assert "NRL_VLLM_DYNAMIC_SD_SMOKE_TELEMETRY=1" in dynamic_command
+    assert "NRL_VLLM_DYNAMIC_SD_SMOKE_TELEMETRY=1" in final_command
     assert not any(item.startswith("NRL_VENV_POST_SYNC_") for item in fixed_command)
     assert "NRL_VLLM_DYNAMIC_SD_SMOKE_TELEMETRY=1" not in fixed_command
     assert not any("cudagraph_capture_sizes" in item for item in dynamic_command)
@@ -256,6 +264,7 @@ def test_final20_requires_schema_v2_even_for_a_matched_v1_profile(
         ({"ranges": [[2, 256, 3]]}, "batch size 1"),
         ({"ranges": [[1, 127, 3], [129, 256, 1]]}, "contiguous"),
         ({"ranges": [[1, 128, 3], [128, 256, 1]]}, "contiguous"),
+        ({"ranges": [[1, 127, 3], [128, 255, 1]]}, "batch size 256"),
         ({"ranges": [[1, 256, 4]]}, "between 0 and 3"),
         ({"ranges": [[1, 127, 2], [128, 256, 1]]}, "maximum K"),
         ({"target_revision": "a" * 41}, "target_revision"),

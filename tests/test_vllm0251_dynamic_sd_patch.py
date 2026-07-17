@@ -35,11 +35,21 @@ def _write_model_runner(path: Path) -> str:
         "        finished_req_ids = self.execute_model_state.finished_req_ids\n"
         "        self.execute_model_state = None\n"
         "\n"
+        "        if self.speculator is not None:\n"
+        "            assert self.sampler is not None\n"
+        "            # Let the target override the hidden state fed to the drafter\n"
         "            draft_tokens = self.speculator.propose(\n"
         "                input_batch,\n"
         "                attn_metadata,\n"
+        "                mm_inputs=mm_inputs,\n"
         "            )\n"
         "            self.req_states.draft_tokens[input_batch.idx_mapping] = draft_tokens\n"
+        "\n"
+        "        if self.num_speculative_steps > 0:\n"
+        "            self.draft_tokens_handler.set_draft_tokens(\n"
+        "                input_batch,\n"
+        "                self.req_states.draft_tokens[input_batch.idx_mapping],\n"
+        "            )\n"
         "\n"
         "class ExecuteModelState(NamedTuple):\n"
         "    input_batch: InputBatch\n"
@@ -170,7 +180,43 @@ def test_smoke_telemetry_patch_records_selected_and_actual_draft_width(
         encoding="utf-8",
     )
     speculator.write_text(
-        "            cudagraph_mode,\n            decode_query_len=1,\n        )\n",
+        "            cudagraph_mode,\n"
+        "            decode_query_len=1,\n"
+        "        )\n"
+        "\n"
+        "    @torch.inference_mode()\n"
+        "    def propose(\n"
+        "        self,\n"
+        "        input_batch: InputBatch,\n"
+        "        is_profile: bool = False,\n"
+        "    ) -> torch.Tensor:\n"
+        "        num_tokens = input_batch.num_tokens_after_padding\n"
+        "        num_reqs = input_batch.num_reqs\n"
+        "        max_query_len = input_batch.num_scheduled_tokens.max()\n"
+        "        max_seq_len = input_batch.seq_lens_cpu_upper_bound[:num_reqs].max().item()\n"
+        "        self.draft_max_seq_len = min(\n"
+        "            max_seq_len + self.num_speculative_steps, self.max_model_len\n"
+        "        )\n"
+        "        if self.num_speculative_steps == 1:\n"
+        "            # Early exit.\n"
+        "            return self.draft_tokens[:num_reqs, :1]\n"
+        "        self._multi_step_decode(\n"
+        "            num_reqs,\n"
+        "            False,\n"
+        "            decode_batch_desc,\n"
+        "            num_tokens_across_dp,\n"
+        "        )\n"
+        "        return self.draft_tokens[:num_reqs]\n"
+        "\n"
+        "    def _multi_step_decode(\n"
+        "        self,\n"
+        "        num_reqs: int,\n"
+        "        skip_attn: bool,\n"
+        "        batch_desc: BatchExecutionDescriptor,\n"
+        "        num_tokens_across_dp: torch.Tensor | None,\n"
+        "    ) -> None:\n"
+        "        for step in range(1, self.num_speculative_steps):\n"
+        "            self.current_draft_step.fill_(step)\n",
         encoding="utf-8",
     )
     _write_model_runner(model_runner)
@@ -200,3 +246,16 @@ def test_smoke_telemetry_patch_records_selected_and_actual_draft_width(
     assert "actual_draft_width = draft_tokens.shape[1]" in patched
     assert "DYNAMIC_SD_SMOKE_TELEMETRY" in patched
     assert "if not dummy_run and not is_profile" in patched
+    assert "num_speculative_steps=requested_draft_width" in patched
+    assert "input_batch.idx_mapping, :actual_draft_width" in patched
+    assert "] = draft_tokens" in patched
+    assert "draft_token_state.copy_" not in patched
+
+    patched_speculator = speculator.read_text(encoding="utf-8")
+    assert "num_speculative_steps: int | None = None" in patched_speculator
+    assert "selected_num_speculative_steps == 0" in patched_speculator
+    assert "range(1, selected_num_speculative_steps)" in patched_speculator
+    assert (
+        "self.draft_tokens[:num_reqs, :selected_num_speculative_steps]"
+        in patched_speculator
+    )

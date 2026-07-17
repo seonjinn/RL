@@ -106,10 +106,93 @@ def apply_patch(site_packages: Path) -> bool:
 
 
 def apply_smoke_telemetry_patch(site_packages: Path) -> bool:
-    """Add run-scoped DynamicSD telemetry without changing draft behavior."""
+    """Apply run-scoped variable-width drafting and its smoke telemetry."""
     model_runner = site_packages / "vllm/v1/worker/gpu/model_runner.py"
-    if not model_runner.is_file():
-        raise FileNotFoundError(f"vLLM 0.25.1 model runner not found: {model_runner}")
+    speculator = (
+        site_packages / "vllm/v1/worker/gpu/spec_decode/autoregressive/speculator.py"
+    )
+    if not model_runner.is_file() or not speculator.is_file():
+        raise FileNotFoundError(
+            f"vLLM 0.25.1 DynamicSD sources not found under {site_packages}"
+        )
+
+    speculator_text = speculator.read_text(encoding="utf-8")
+    speculator_text, signature_changed = _replace_once(
+        speculator_text,
+        "        is_profile: bool = False,\n"
+        "    ) -> torch.Tensor:\n",
+        "        is_profile: bool = False,\n"
+        "        num_speculative_steps: int | None = None,\n"
+        "    ) -> torch.Tensor:\n",
+        "DynamicSD selected-K proposal signature",
+    )
+    speculator_text, selection_changed = _replace_once(
+        speculator_text,
+        "        num_reqs = input_batch.num_reqs\n"
+        "        max_query_len = input_batch.num_scheduled_tokens.max()\n",
+        "        num_reqs = input_batch.num_reqs\n"
+        "        selected_num_speculative_steps = (\n"
+        "            self.num_speculative_steps\n"
+        "            if num_speculative_steps is None\n"
+        "            else num_speculative_steps\n"
+        "        )\n"
+        "        if not 0 <= selected_num_speculative_steps <= self.num_speculative_steps:\n"
+        "            raise ValueError(\n"
+        '                "DynamicSD selected K must be between 0 and the configured "\n'
+        "                f\"maximum {self.num_speculative_steps}, got \"\n"
+        "                f\"{selected_num_speculative_steps}\"\n"
+        "            )\n"
+        "        if selected_num_speculative_steps == 0:\n"
+        "            return self.draft_tokens[:num_reqs, :0]\n"
+        "        max_query_len = input_batch.num_scheduled_tokens.max()\n",
+        "DynamicSD selected-K validation",
+    )
+    speculator_text, sequence_length_changed = _replace_once(
+        speculator_text,
+        "            max_seq_len + self.num_speculative_steps, self.max_model_len\n",
+        "            max_seq_len + selected_num_speculative_steps, self.max_model_len\n",
+        "DynamicSD selected-K sequence length",
+    )
+    speculator_text, early_exit_changed = _replace_once(
+        speculator_text,
+        "        if self.num_speculative_steps == 1:\n"
+        "            # Early exit.\n"
+        "            return self.draft_tokens[:num_reqs, :1]\n",
+        "        if selected_num_speculative_steps == 1:\n"
+        "            # Early exit.\n"
+        "            return self.draft_tokens[:num_reqs, :1]\n",
+        "DynamicSD selected-K early exit",
+    )
+    speculator_text, call_changed = _replace_once(
+        speculator_text,
+        "            num_tokens_across_dp,\n"
+        "        )\n",
+        "            num_tokens_across_dp,\n"
+        "            selected_num_speculative_steps,\n"
+        "        )\n",
+        "DynamicSD selected-K decode call",
+    )
+    speculator_text, return_changed = _replace_once(
+        speculator_text,
+        "        return self.draft_tokens[:num_reqs]\n",
+        "        return self.draft_tokens[:num_reqs, :selected_num_speculative_steps]\n",
+        "DynamicSD selected-K return width",
+    )
+    speculator_text, decode_signature_changed = _replace_once(
+        speculator_text,
+        "        num_tokens_across_dp: torch.Tensor | None,\n"
+        "    ) -> None:\n",
+        "        num_tokens_across_dp: torch.Tensor | None,\n"
+        "        selected_num_speculative_steps: int,\n"
+        "    ) -> None:\n",
+        "DynamicSD selected-K decode signature",
+    )
+    speculator_text, loop_changed = _replace_once(
+        speculator_text,
+        "        for step in range(1, self.num_speculative_steps):\n",
+        "        for step in range(1, selected_num_speculative_steps):\n",
+        "DynamicSD selected-K decode loop",
+    )
 
     text = model_runner.read_text(encoding="utf-8")
     text, state_changed = _replace_once(
@@ -153,6 +236,26 @@ def apply_smoke_telemetry_patch(site_packages: Path) -> bool:
         "        self.execute_model_state = None\n",
         "DynamicSD smoke telemetry state extraction",
     )
+    text, default_width_changed = _replace_once(
+        text,
+        "        if self.speculator is not None:\n"
+        "            assert self.sampler is not None\n"
+        "            # Let the target override the hidden state fed to the drafter\n",
+        "        actual_draft_width = self.num_speculative_steps\n"
+        "        if self.speculator is not None:\n"
+        "            assert self.sampler is not None\n"
+        "            # Let the target override the hidden state fed to the drafter\n",
+        "DynamicSD default draft width",
+    )
+    text, proposal_changed = _replace_once(
+        text,
+        "                mm_inputs=mm_inputs,\n"
+        "            )\n",
+        "                mm_inputs=mm_inputs,\n"
+        "                num_speculative_steps=requested_draft_width,\n"
+        "            )\n",
+        "DynamicSD selected-K proposal",
+    )
     text, logging_changed = _replace_once(
         text,
         "            self.req_states.draft_tokens[input_batch.idx_mapping] = draft_tokens\n",
@@ -177,8 +280,20 @@ def apply_smoke_telemetry_patch(site_packages: Path) -> bool:
         "                        actual_draft_width,\n"
         "                    )\n"
         "                    self.dynamic_sd_smoke_telemetry_seen.add(telemetry_key)\n"
-        "            self.req_states.draft_tokens[input_batch.idx_mapping] = draft_tokens\n",
+        "            self.req_states.draft_tokens[\n"
+        "                input_batch.idx_mapping, :actual_draft_width\n"
+        "            ] = draft_tokens\n",
         "DynamicSD smoke telemetry logging",
+    )
+    text, scheduler_width_changed = _replace_once(
+        text,
+        "                self.req_states.draft_tokens[input_batch.idx_mapping],\n"
+        "            )\n",
+        "                self.req_states.draft_tokens[\n"
+        "                    input_batch.idx_mapping, :actual_draft_width\n"
+        "                ],\n"
+        "            )\n",
+        "DynamicSD scheduler draft width",
     )
     text, tuple_changed = _replace_once(
         text,
@@ -192,14 +307,26 @@ def apply_smoke_telemetry_patch(site_packages: Path) -> bool:
     )
     changed = any(
         (
+            signature_changed,
+            selection_changed,
+            sequence_length_changed,
+            early_exit_changed,
+            call_changed,
+            return_changed,
+            decode_signature_changed,
+            loop_changed,
             state_changed,
             creation_changed,
             extraction_changed,
+            default_width_changed,
+            proposal_changed,
             logging_changed,
+            scheduler_width_changed,
             tuple_changed,
         )
     )
     if changed:
+        speculator.write_text(speculator_text, encoding="utf-8")
         model_runner.write_text(text, encoding="utf-8")
     return changed
 

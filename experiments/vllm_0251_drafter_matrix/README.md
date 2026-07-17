@@ -124,10 +124,13 @@ DynamicSD requires an explicit versioned schedule artifact. The checked-in
 profile only as a smoke seed: K3 for scheduler batch sizes 1-127 and K1 for
 128-256. It may run only `smoke2` or `smoke5`; `final20` rejects it until a
 matched vLLM 0.25.1 calibration replaces the seed status. Dynamic runs apply
-the source-guarded EAGLE3 CUDA Graph fix through a run-scoped post-sync hook;
-fixed-K runs do not load that patch. Final20 additionally requires the exact
-reviewed schedule artifact SHA-256 in the empty-by-default final allowlist, so
-editing metadata cannot promote this seed.
+the source-guarded EAGLE3 CUDA Graph and variable-width drafting patch through
+a run-scoped post-sync hook; fixed-K runs do not load that patch. The checked-in
+K0-K5 calibration is reproducible, but `final20` remains closed until a GPU
+smoke proves that scheduler-selected K equals the actual returned draft width.
+Final20 additionally requires the exact reviewed schedule artifact SHA-256 in
+the empty-by-default final allowlist, so editing metadata cannot bypass that
+runtime gate.
 
 Reportable K0-K5 DynamicSD uses a matched offline profile before NeMo-RL is
 submitted. The profiler follows the goodput method from vLLM PR #32374:

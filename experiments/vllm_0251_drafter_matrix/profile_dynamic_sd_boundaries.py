@@ -27,6 +27,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 from experiments.vllm_0251_drafter_matrix.profile_dynamic_sd import (
     CONTAINER_PYTHON,
     DATASET_REPO_ID,

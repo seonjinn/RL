@@ -635,6 +635,8 @@ def load_dynamic_schedule(path: Path) -> DynamicSchedule:
         ranges.append(DynamicRange(start_batch, end_batch, k))
     if ranges[0].start_batch != 1:
         raise ValueError("DynamicSD ranges must start at batch size 1")
+    if ranges[-1].end_batch != 256:
+        raise ValueError("DynamicSD ranges must cover through batch size 256")
     if schema_version == 1 and max(item.k for item in ranges) != 3:
         raise ValueError("DynamicSD schedule maximum K must equal 3")
 
@@ -932,7 +934,6 @@ def build_runtime_command(
         *(
             ("NRL_VLLM_DYNAMIC_SD_SMOKE_TELEMETRY=1",)
             if run.dynamic_schedule is not None
-            and run.phase.key in {"smoke2", "smoke5"}
             else ()
         ),
         *(
