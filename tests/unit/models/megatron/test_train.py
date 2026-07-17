@@ -266,6 +266,56 @@ class TestForwardWithPostProcessingFn:
         assert isinstance(output, torch.Tensor)
 
     @patch("nemo_rl.models.megatron.train.model_forward")
+    def test_forward_with_loss_post_processor_uses_real_packed_loss_metadata(
+        self, mock_model_forward
+    ):
+        """Static THD graph metadata must not change the RL loss batch shape."""
+        from nemo_rl.models.megatron.data import ProcessedMicrobatch
+        from nemo_rl.models.megatron.train import (
+            LossPostProcessor,
+            forward_with_post_processing_fn,
+        )
+
+        class CapturingLossPostProcessor(LossPostProcessor):
+            def __init__(self):
+                self.loss_cu_seqlens_padded = None
+
+            def __call__(
+                self,
+                data_dict,
+                packed_seq_params=None,
+                cu_seqlens_padded=None,
+                **kwargs,
+            ):
+                self.loss_cu_seqlens_padded = cu_seqlens_padded
+                return MagicMock()
+
+        mock_model_forward.return_value = torch.randn(1, 4, 8)
+        real_cu_seqlens_padded = torch.tensor([0, 4], dtype=torch.int32)
+        static_packed_seq_params = MagicMock()
+        static_packed_seq_params.cu_seqlens_q = torch.tensor(
+            [0, 4, 4, 4], dtype=torch.int32
+        )
+        processed_mb = ProcessedMicrobatch(
+            data_dict=MagicMock(),
+            input_ids=torch.tensor([[1, 2, 3, 4]]),
+            input_ids_cp_sharded=torch.tensor([[1, 2, 3, 4]]),
+            attention_mask=None,
+            position_ids=None,
+            packed_seq_params=static_packed_seq_params,
+            cu_seqlens_padded=real_cu_seqlens_padded,
+        )
+        post_processor = CapturingLossPostProcessor()
+
+        forward_with_post_processing_fn(
+            data_iterator=iter([processed_mb]),
+            model=MagicMock(),
+            post_processing_fn=post_processor,
+        )
+
+        assert post_processor.loss_cu_seqlens_padded is real_cu_seqlens_padded
+
+    @patch("nemo_rl.models.megatron.train.model_forward")
     def test_forward_with_logprobs_post_processor(self, mock_model_forward):
         """Test forward with LogprobsPostProcessor."""
         from nemo_rl.models.megatron.data import ProcessedMicrobatch
@@ -874,10 +924,17 @@ class TestLossPostProcessor:
 
         processor = LossPostProcessor(loss_fn=mock_loss_fn, cfg=cfg, cp_normalize=False)
 
-        processor(data_dict=MagicMock(), packed_seq_params=mock_packed_seq_params)
+        real_cu_seqlens_padded = torch.tensor([0, 8, 16])
+        processor(
+            data_dict=MagicMock(),
+            packed_seq_params=mock_packed_seq_params,
+            cu_seqlens_padded=real_cu_seqlens_padded,
+        )
 
         # Verify SequencePackingLossWrapper was called
         mock_wrapper.assert_called_once()
+        assert mock_wrapper.call_args.kwargs["cu_seqlens_q"] is real_cu_seqlens_padded
+        assert mock_wrapper.call_args.kwargs["cu_seqlens_q_padded"] is real_cu_seqlens_padded
 
 
 class TestLogprobsPostProcessor:
