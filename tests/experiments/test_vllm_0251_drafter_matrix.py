@@ -489,13 +489,13 @@ def test_runtime_command_binds_the_validated_target_snapshot(tmp_path: Path) -> 
 
 
 @pytest.mark.parametrize(
-    ("model_key", "disables_nemorl_port_override"),
+    ("model_key", "uses_qwen235_startup_workarounds"),
     [("qwen30", False), ("qwen32", False), ("qwen235", True)],
 )
-def test_runtime_command_delegates_qwen235_rendezvous_ports_to_vllm(
+def test_runtime_command_uses_qwen235_startup_workarounds(
     tmp_path: Path,
     model_key: str,
-    disables_nemorl_port_override: bool,
+    uses_qwen235_startup_workarounds: bool,
 ) -> None:
     run = resolve_run(model_key, "baseline", "smoke2", "lyris")
 
@@ -508,7 +508,10 @@ def test_runtime_command_delegates_qwen235_rendezvous_ports_to_vllm(
 
     assert (
         "NRL_DISABLE_VLLM_PORT_OVERRIDE=1" in command
-    ) is disables_nemorl_port_override
+    ) is uses_qwen235_startup_workarounds
+    assert (
+        "NRL_DISABLE_NUMA_MEMBIND=1" in command
+    ) is uses_qwen235_startup_workarounds
 
 
 @pytest.mark.parametrize(

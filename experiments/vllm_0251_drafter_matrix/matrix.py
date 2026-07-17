@@ -931,7 +931,14 @@ def build_runtime_command(
             and run.phase.key in {"smoke2", "smoke5"}
             else ()
         ),
-        *(("NRL_DISABLE_VLLM_PORT_OVERRIDE=1",) if run.recipe.key == "qwen235" else ()),
+        *(
+            (
+                "NRL_DISABLE_VLLM_PORT_OVERRIDE=1",
+                "NRL_DISABLE_NUMA_MEMBIND=1",
+            )
+            if run.recipe.key == "qwen235"
+            else ()
+        ),
         "PYTHONFAULTHANDLER=1",
         "RAY_DEDUP_LOGS=0",
     )
