@@ -35,5 +35,5 @@ srun --nodes=1 --ntasks=1 --no-container-mount-home \
   --container-image="${CONTAINER}" \
   --container-mounts=/lustre:/lustre \
   --container-workdir="${WORKTREE}" \
-  bash -lc 'cd "$1" && uv run --locked --extra mcore --directory "$2" pytest -q "${@:3}"' \
-  _ "${WORKTREE}/3rdparty/Megatron-LM-workspace/Megatron-LM" "${WORKTREE}" "${tests[@]}"
+  bash -lc "cd '${WORKTREE}/3rdparty/Megatron-LM-workspace/Megatron-LM' && \
+    uv run --locked --extra mcore --directory '${WORKTREE}' pytest -q ${tests[*]}"
