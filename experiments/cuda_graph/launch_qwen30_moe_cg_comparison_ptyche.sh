@@ -82,7 +82,7 @@ cd ${WORKTREE}
 export NRL_IGNORE_VERSION_MISMATCH=1
 export NRL_MEGATRON_CHECKPOINT_DIR=${CHECKPOINT_DIR}
 export PYTHONPATH=${WORKTREE}:${WORKTREE}/3rdparty/Megatron-LM-workspace/Megatron-LM:${WORKTREE}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge:\${PYTHONPATH:-}
-uv run --locked --directory ${WORKTREE} python ${WORKTREE}/examples/run_grpo.py \\
+uv run --locked --extra mcore --directory ${WORKTREE} python ${WORKTREE}/examples/run_grpo.py \\
   --config ${CONFIG} \\
   grpo.max_num_steps=${STEPS} \\
   grpo.val_period=10 \\

@@ -18,13 +18,13 @@ CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/contai
 STATIC_THD_TEST=${STATIC_THD_TEST:-0}
 
 tests=(
-  "3rdparty/Megatron-LM-workspace/Megatron-LM/tests/unit_tests/rl/test_rl_utils.py::TestRLUtils::test_megatron_rl_inference_mode_restores_training_cuda_graph_state"
-  "3rdparty/Megatron-LM-workspace/Megatron-LM/tests/unit_tests/rl/test_rl_utils.py::TestRLUtils::test_megatron_rl_inference_mode_preserves_requested_moe_cuda_graph_modules"
+  "tests/unit_tests/rl/test_rl_utils.py::TestRLUtils::test_megatron_rl_inference_mode_restores_training_cuda_graph_state"
+  "tests/unit_tests/rl/test_rl_utils.py::TestRLUtils::test_megatron_rl_inference_mode_preserves_requested_moe_cuda_graph_modules"
 )
 
 if [[ "${STATIC_THD_TEST}" == "1" ]]; then
   tests+=(
-    "tests/unit/models/megatron/test_megatron_setup.py::test_static_thd_cuda_graph_preserves_transformer_engine_packing_mode"
+    "${WORKTREE}/tests/unit/models/megatron/test_megatron_setup.py::test_static_thd_cuda_graph_preserves_transformer_engine_packing_mode"
   )
 fi
 
@@ -35,4 +35,5 @@ srun --nodes=1 --ntasks=1 --no-container-mount-home \
   --container-image="${CONTAINER}" \
   --container-mounts=/lustre:/lustre \
   --container-workdir="${WORKTREE}" \
-  uv run --locked --extra mcore --directory "${WORKTREE}" pytest -q "${tests[@]}"
+  bash -lc 'cd "$1" && uv run --locked --extra mcore --directory "$2" pytest -q "${@:3}"' \
+  _ "${WORKTREE}/3rdparty/Megatron-LM-workspace/Megatron-LM" "${WORKTREE}" "${tests[@]}"

@@ -190,6 +190,8 @@ mcore = [
   "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@a48493600c4886c1b297aaa78db0e1ebc2d8dd6c ; platform_machine == 'aarch64'",
   "quart",
   "hypercorn",
+  # Megatron-LM RL inference imports AsyncOpenAI for its inference interface.
+  "openai[aiohttp]",
   "orjson",
   "flashinfer-python==0.6.8.post1",
   "flashinfer-cubin==0.6.8.post1",
