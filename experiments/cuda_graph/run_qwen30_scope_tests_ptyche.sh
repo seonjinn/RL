@@ -17,6 +17,7 @@ WORKTREE=${WORKTREE:?Set WORKTREE to the remote NeMo-RL worktree.}
 CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/nemo_rl_nightly_20260715.sqsh}
 STATIC_THD_TEST=${STATIC_THD_TEST:-0}
 PR5672_STATIC_THD_TEST=${PR5672_STATIC_THD_TEST:-0}
+PR5672_REFIT_CG_TEST=${PR5672_REFIT_CG_TEST:-0}
 
 tests=(
   "tests/unit_tests/rl/test_rl_utils.py::TestRLUtils::test_megatron_rl_inference_mode_restores_training_cuda_graph_state"
@@ -33,6 +34,12 @@ fi
 if [[ "${PR5672_STATIC_THD_TEST}" == "1" ]]; then
   static_thd_suffix+=" && cd '${WORKTREE}' && pytest -q \\
     '${WORKTREE}/tests/unit/test_config_validation.py::test_pr5672_qwen30_packed_attention_recipes_enable_static_thd'"
+fi
+
+if [[ "${PR5672_REFIT_CG_TEST}" == "1" ]]; then
+  static_thd_suffix+=" && cd '${WORKTREE}' && pytest -q \\
+    --confcutdir='${WORKTREE}/tests/unit/models/policy' \\
+    '${WORKTREE}/tests/unit/models/policy/test_pr5672_cuda_graph_adapter.py::test_pr5672_parameter_move_invalidates_cuda_graphs'"
 fi
 
 export NRL_IGNORE_VERSION_MISMATCH=1
