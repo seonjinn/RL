@@ -342,7 +342,7 @@ not execute.
 | Boundary spot check | launcher ready | exact checks near BS35, BS76, and BS86 |
 | DynamicSD runtime smoke | complete (`2412001`) | K0/K1/K2/K3/K5 selected, requested, and returned widths match |
 | MRv2 variable-width patch | GPU validated | CUDA Graph retained; fixed-K and baseline paths unchanged |
-| DynamicSD final20 | approved for submission | checked-in schedule SHA-256 allowlisted after smoke gate |
+| DynamicSD final20 | pending (`2412674`) | checked-in schedule SHA-256 allowlisted after smoke gate |
 
 ## Qwen3-235B Port Failure
 
@@ -385,7 +385,7 @@ after real submission.
 | Qwen3-32B | baseline | MRv2, MRv1 | mixed | final20 complete | `2405077` | MRv2 control complete; MRv1 remains planned |
 | Qwen3-32B | EAGLE3 | K1, K3, K5 | MRv2 | K1 control final20 complete | `2405076` | K1 retained for same-K checkpoint comparison |
 | Qwen3-32B | EAGLE3 Thinking | K1, K2, K3, K5 | MRv2 | K1/K3 final20 complete | `2405078`, `2409618` | K3 is nearly neutral over steps 2-20 |
-| Qwen3-32B | EAGLE3 Thinking DynamicSD | K0-K5 | MRv2 | corrected smoke complete; final20 approved | `2407523`, `2412001` | final20 schedule allowlisted after exact width parity and CUDA Graph validation |
+| Qwen3-32B | EAGLE3 Thinking DynamicSD | K0-K5 | MRv2 | corrected smoke complete; final20 pending | `2407523`, `2412001`, `2412674` | exact width parity and CUDA Graph validation passed before final20 submission |
 | Qwen3-32B | DFlash | K3, K5 | MRv2 | planned | pending | exact head; draft FlashAttention |
 | Qwen3-32B | draft/PARD | draft K1/K5; PARD K5/K16 | MRv1 | planned | pending | shared AMD 0.6B drafter; sequential/parallel split |
 | Qwen3-32B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
