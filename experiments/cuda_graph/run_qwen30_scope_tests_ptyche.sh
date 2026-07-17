@@ -22,10 +22,11 @@ tests=(
   "tests/unit_tests/rl/test_rl_utils.py::TestRLUtils::test_megatron_rl_inference_mode_preserves_requested_moe_cuda_graph_modules"
 )
 
+static_thd_suffix=""
 if [[ "${STATIC_THD_TEST}" == "1" ]]; then
-  tests+=(
-    "${WORKTREE}/tests/unit/models/megatron/test_megatron_setup.py::test_static_thd_cuda_graph_preserves_transformer_engine_packing_mode"
-  )
+  static_thd_suffix=" && cd '${WORKTREE}' && pytest -q \\
+    --confcutdir='${WORKTREE}/tests/unit/models/megatron' \\
+    '${WORKTREE}/tests/unit/models/megatron/test_megatron_setup.py::test_static_thd_cuda_graph_preserves_transformer_engine_packing_mode'"
 fi
 
 export NRL_IGNORE_VERSION_MISMATCH=1
@@ -35,5 +36,5 @@ srun --nodes=1 --ntasks=1 --no-container-mount-home \
   --container-image="${CONTAINER}" \
   --container-mounts=/lustre:/lustre \
   --container-workdir="${WORKTREE}" \
-  bash -lc "cd '${WORKTREE}/3rdparty/Megatron-LM-workspace/Megatron-LM' && \
-    uv run --locked --extra mcore --directory '${WORKTREE}' pytest -q ${tests[*]}"
+  uv run --locked --extra mcore --directory "${WORKTREE}" bash -lc \
+  "cd '${WORKTREE}/3rdparty/Megatron-LM-workspace/Megatron-LM' && pytest -q ${tests[*]}${static_thd_suffix}"
