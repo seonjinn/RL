@@ -17,6 +17,7 @@ WORKTREE=${WORKTREE:?Set WORKTREE to the remote NeMo-RL worktree.}
 CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/nemo_rl_nightly_20260715.sqsh}
 STATIC_THD_TEST=${STATIC_THD_TEST:-0}
 STATIC_THD_LOSS_TEST=${STATIC_THD_LOSS_TEST:-0}
+STATIC_THD_OPTIONAL_KV_TEST=${STATIC_THD_OPTIONAL_KV_TEST:-0}
 
 tests=(
   "tests/unit_tests/rl/test_rl_utils.py::TestRLUtils::test_megatron_rl_inference_mode_restores_training_cuda_graph_state"
@@ -35,6 +36,11 @@ if [[ "${STATIC_THD_LOSS_TEST}" == "1" ]]; then
     --confcutdir='${WORKTREE}/tests/unit/models/megatron' \\
     '${WORKTREE}/tests/unit/models/megatron/test_train.py::TestForwardWithPostProcessingFn::test_forward_with_loss_post_processor_uses_real_packed_loss_metadata' \\
     '${WORKTREE}/tests/unit/models/megatron/test_train.py::TestLossPostProcessor::test_loss_post_processor_with_packing'"
+fi
+
+if [[ "${STATIC_THD_OPTIONAL_KV_TEST}" == "1" ]]; then
+  static_thd_suffix+=" && cd '${WORKTREE}/3rdparty/Megatron-LM-workspace/Megatron-LM' && pytest -q \\
+    'tests/unit_tests/transformer/test_thd_cuda_graph.py::TestDecomposeReconstruct::test_round_trip_omits_optional_kv_inputs'"
 fi
 
 export NRL_IGNORE_VERSION_MISMATCH=1
