@@ -394,6 +394,7 @@ after real submission.
 | Qwen3-235B-A22B | baseline | MRv2, MRv1 | mixed | corrected smoke and MRv2 final20 complete | `2409674`, `2409727` | vLLM owns rendezvous ports; complete Megatron cache avoids repeated conversion |
 | Qwen3-235B-A22B | EAGLE3 | K1, K3, K5 | MRv2 | K5 complete; K3 timed out after step 18 | `2411704`, `2411706` | NVIDIA checkpoint swap does not recover the regression |
 | Qwen3-235B-A22B | EAGLE3 Thinking | K1, K3, K5 | MRv2 | K3/K5 final20 complete | `2409729`, `2409731` | both regress against matched baseline `2409727` |
+| Qwen3-235B-A22B | EAGLE3 Thinking CG coverage | K3, capture max 128 | MRv2 | smoke2 planned | pending | isolates full-graph coverage for all 32 generation requests |
 | Qwen3-235B-A22B | DFlash | K3, K5 | MRv2 | unsupported | n/a | no exact public Qwen3-235B DFlash checkpoint |
 | Qwen3-235B-A22B | draft/PARD | draft K1/K5; PARD K5/K16 | MRv1 | planned | pending | shared AMD 0.6B drafter; sequential/parallel split |
 | Qwen3-235B-A22B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |

@@ -145,6 +145,7 @@ class VariantSpec:
     suffix_tree_depth: int | None = None
     ngram_size: int | None = None
     dynamic_schedule_required: bool = False
+    cudagraph_capture_sizes: tuple[int, ...] = ()
 
     def checkpoint_for(self, model_key: str) -> CheckpointSpec | None:
         """Return the exact drafter checkpoint for a compatible model."""
@@ -389,6 +390,16 @@ G_VARIANTS = (
         compatible_models=frozenset(("qwen32", "qwen235")),
         checkpoints=G_EAGLE3_THINKING_CHECKPOINTS,
         uses_draft_model=True,
+    ),
+    VariantSpec(
+        key="eagle3_thinking_k3_cg128",
+        method="eagle3",
+        runner="mrv2",
+        num_speculative_tokens=3,
+        compatible_models=frozenset(("qwen235",)),
+        checkpoints=G_EAGLE3_THINKING_CHECKPOINTS,
+        uses_draft_model=True,
+        cudagraph_capture_sizes=(1, 2, 4, 8, 16, 32, 64, 128),
     ),
     VariantSpec(
         key="eagle3_thinking_k4",
@@ -834,6 +845,13 @@ def resolve_run(
         "logger.wandb_enabled=true",
         "logger.tensorboard_enabled=false",
     )
+    capture_overrides = ()
+    if variant.cudagraph_capture_sizes:
+        capture_sizes = ",".join(str(size) for size in variant.cudagraph_capture_sizes)
+        capture_overrides = (
+            "policy.generation.vllm_kwargs.compilation_config."
+            f"cudagraph_capture_sizes=[{capture_sizes}]",
+        )
     return ResolvedRun(
         recipe=recipe,
         cluster=cluster_spec,
@@ -842,6 +860,7 @@ def resolve_run(
         draft_checkpoint=draft_checkpoint,
         dynamic_schedule=dynamic_schedule,
         hydra_overrides=base_overrides
+        + capture_overrides
         + _speculative_overrides(
             variant,
             draft_checkpoint,
