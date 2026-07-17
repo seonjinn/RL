@@ -105,6 +105,10 @@ Thinking K1.
 | Qwen3-32B | baseline | `2405077` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/zy22udd0) | completed (`0:0`) |
 | Qwen3-32B | base EAGLE3 K1 | `2405076` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/on935s9p) | completed (`0:0`) |
 | Qwen3-32B | Thinking EAGLE3 K1 | `2405078` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/0rgf8mxc) | completed (`0:0`) |
+| Qwen3-32B | Thinking EAGLE3 K3 | `2409618` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/8zf8g77s) | running; reached step 4/20 |
+| Qwen3-235B-A22B | baseline | `2409727` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/pgzi0h7u) | running; initialization |
+| Qwen3-235B-A22B | Thinking EAGLE3 K3 | `2409729` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/xjr83tib) | running; initialization |
+| Qwen3-235B-A22B | Thinking EAGLE3 K5 | `2409731` | [run](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/kblsp1fm) | running; initialization |
 
 ### Final20 Results
 
@@ -299,11 +303,19 @@ producing `torch.distributed.DistNetworkError: EADDRINUSE` on ports such as
 against either Qwen3-235B checkpoint.
 
 The isolated retry delegates rendezvous allocation to vLLM 0.25.1 by setting
-`NRL_DISABLE_VLLM_PORT_OVERRIDE=1` only for Qwen3-235B. Qwen3-30B and Qwen3-32B
-retain their already validated runtime environment. The remaining old 235B
-smokes were cancelled before allocation and will be resubmitted only after the
-fixed baseline passes. Fixed baseline smoke job `2405130` passed scheduler
-preflight and is pending Lyris capacity.
+`NRL_DISABLE_VLLM_PORT_OVERRIDE=1` only for Qwen3-235B. A later retry exposed a
+separate host-memory cgroup OOM during the initial HF-to-Megatron conversion:
+the default cache contained only 59 of 128 shards and no completion marker,
+while hard NUMA memory binding concentrated policy-load and vLLM sleep-mode CPU
+backing memory on individual NUMA nodes. The corrected path disables only hard
+NUMA memory binding, retains CPU affinity, and reuses a validated complete
+128-shard Megatron cache. It does not change model, sampling, or training code.
+
+Corrected baseline smoke job `2409674` reached step 2/2 without the previous
+port, host OOM, or NCCL failure. The matched Qwen3-235B baseline, Thinking K3,
+and Thinking K5 final20 jobs are `2409727`, `2409729`, and `2409731`; all use
+the original 16-node performance recipe, five-hour limit, CUDA Graph enabled,
+and checkpoint saving disabled.
 
 ## Applicability And Run Ledger
 
@@ -320,14 +332,14 @@ after real submission.
 | Qwen3-30B-A3B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
 | Qwen3-32B | baseline | MRv2, MRv1 | mixed | final20 complete | `2405077` | MRv2 control complete; MRv1 remains planned |
 | Qwen3-32B | EAGLE3 | K1, K3, K5 | MRv2 | K1 control final20 complete | `2405076` | K1 retained for same-K checkpoint comparison |
-| Qwen3-32B | EAGLE3 Thinking | K1, K2, K3, K5 | MRv2 | K1 final20 complete; K2/K3 smoke complete | `2405078`, `2406250`, `2406253` | K2 fills the fixed-policy gap; K3 has a matched smoke rerun |
+| Qwen3-32B | EAGLE3 Thinking | K1, K2, K3, K5 | MRv2 | K1 final20 complete; K3 final20 running | `2405078`, `2409618` | K2/K3 smoke complete; K3 promoted to the full window |
 | Qwen3-32B | EAGLE3 Thinking DynamicSD | K0-K3 | MRv2 | seed smoke complete | `2406255` | final20 requires matched vLLM 0.25.1 calibration |
 | Qwen3-32B | DFlash | K3, K5 | MRv2 | planned | pending | exact head; draft FlashAttention |
 | Qwen3-32B | draft/PARD | draft K1/K5; PARD K5/K16 | MRv1 | planned | pending | shared AMD 0.6B drafter; sequential/parallel split |
 | Qwen3-32B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
-| Qwen3-235B-A22B | baseline | MRv2, MRv1 | mixed | fixed smoke pending | `2405130` | MRv2 retry delegates rendezvous ports to vLLM |
+| Qwen3-235B-A22B | baseline | MRv2, MRv1 | mixed | corrected smoke reached step 2/2; MRv2 final20 running | `2409674`, `2409727` | vLLM owns rendezvous ports; complete Megatron cache avoids repeated conversion |
 | Qwen3-235B-A22B | EAGLE3 | K1, K3, K5 | MRv2 | blocked by baseline gate | `2402497/500/502` | K1 port failure reproduced; K3/K5 cancelled |
-| Qwen3-235B-A22B | EAGLE3 Thinking | K1, K3, K5 | MRv2 | blocked by baseline gate | `2402626/30/32` | cancelled before allocation pending fixed baseline |
+| Qwen3-235B-A22B | EAGLE3 Thinking | K1, K3, K5 | MRv2 | K3/K5 final20 running | `2409729`, `2409731` | matched Thinking-checkpoint comparison against `2409727` |
 | Qwen3-235B-A22B | DFlash | K3, K5 | MRv2 | unsupported | n/a | no exact public Qwen3-235B DFlash checkpoint |
 | Qwen3-235B-A22B | draft/PARD | draft K1/K5; PARD K5/K16 | MRv1 | planned | pending | shared AMD 0.6B drafter; sequential/parallel split |
 | Qwen3-235B-A22B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |
