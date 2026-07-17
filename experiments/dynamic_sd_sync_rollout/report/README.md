@@ -342,6 +342,60 @@ SpecDec value behind tool execution. Speculation pays in agent loops only
 where turns produce long generations (reasoning-heavy steps), which is also
 where EAGLE3 (in-distribution) rather than suffix carries the win.
 
+## Real NemoGym environment validation (PR #3243 eval mode)
+
+All prior sections simulate rollout; this one measures the real thing.
+NVIDIA-NeMo/RL PR #3243 (`run_grpo_rollout_benchmark.py`) converts a GRPO
+recipe into an eval-only run: vLLM async engines plus a NemoGym environment
+actor, no training workers, one GB200 node. We ran the SWE1-pivot recipe
+(`grpo_qwen3_30ba3b_thinking_swe1.yaml`, Qwen3-30B-A3B-Thinking-2507, 100
+val prompts x 4 generations, 32 prompts/step, temperature 1.0) on Lyris with
+two stacks: the PR's own vLLM 0.20 pin and a worktree of the validated vLLM
+0.25.1 eagle3-fullcg stack with the PR cherry-picked on top. Two integration
+fixes were needed: NemoGym subprocess venvs inherit the parent's
+`openai==2.44.0` pin, which is unsatisfiable against nemo-gym's
+`openai<=2.7.2` (clamped at the injection point in `global_config.py`), and
+the capture-size fix below.
+
+Rollout-collection wall (sum of per-batch progress walls, engine init
+excluded), vLLM 0.25.1:
+
+| Variant | Wall | vs baseline | Graph coverage (steps / tokens) |
+|---|---:|---:|---|
+| Baseline (no SD) | 264-279 s | 1.00x | 100% / 100% |
+| EAGLE3 K3, default capture | 448-529 s | 0.56x | 52.6% / much lower |
+| EAGLE3 K3, dense capture to 512 | 305 s | 0.87x | 100% / 100% |
+| K3 + DynamicSD `[[1,8,3],[9,32,2],[33,512,1]]`, dense capture | 336 s | 0.79x | 100% / 100% |
+
+Rewards were 0.185-0.2275 across all variants (noise band), confirming
+losslessness. The same workload on vLLM 0.20 gave baseline 524 s - the
+0.20 -> 0.25.1 upgrade alone is worth 1.88x, larger than any SpecDec effect.
+
+**The dominant slowdown was a capture cliff inside NeMo-RL, not acceptance.**
+The engine resolved `max_cudagraph_capture_size=64`, so speculative verify
+steps (uniform-decode shape = BS x (K+1) tokens) fell off the captured path
+for BS > 16 while the baseline's BS <= 64 decode stayed fully covered. We
+measured this from the PR's `inflight_batch_sizes` telemetry: 47.4% of K3
+engine steps - and the large-BS majority of tokens - ran uncaptured.
+Passing an explicit dense `cudagraph_capture_sizes` list up to 512 restored
+100% coverage and recovered K3 from 0.56x to 0.87x. (An attempt to set
+`compilation_config.max_cudagraph_capture_size` directly dies in vLLM
+0.25.1 with `TypeError: cannot pickle 'pydantic_core.ArgsKwargs'` - the
+explicit list is the working syntax.) Acceptance is not the binding
+constraint: the same drafter measures 64.8% acceptance (MAL 2.94) on math
+GRPO and MAL ~2.2 on SWEBench standalone.
+
+Two portable lessons. First, **DynamicSD schedules are calibrated to a
+capture configuration, not just to a model**: the schedule above was derived
+under the broken capture regime (back off to K1 at BS >= 33, where K3 was
+eager); once capture covers K3 everywhere, plain fixed K3 beats it (305 vs
+336 s). Second, even at 100% coverage SpecDec does not beat no-SD on this
+workload: SWE1 rollouts are prefill-heavy (long recorded-trajectory
+contexts) with short tool-call decodes at engine BS ~64, so the K+1 verify
+FLOPs never amortize - consistent with the BS x K grids and the replay
+study. SpecDec pays in this environment only at low per-engine concurrency
+or long-decode regimes.
+
 ## Do our numbers match the upstream DynamicSD PRs?
 
 Yes, when compared apples-to-apples. PR #32374 reports +7.5% over no-SD at
