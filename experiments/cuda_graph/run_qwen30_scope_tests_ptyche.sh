@@ -32,6 +32,7 @@ fi
 
 if [[ "${STATIC_THD_LOSS_TEST}" == "1" ]]; then
   static_thd_suffix+=" && cd '${WORKTREE}' && pytest -q \\
+    --confcutdir='${WORKTREE}/tests/unit/models/megatron' \\
     '${WORKTREE}/tests/unit/models/megatron/test_train.py::TestForwardWithPostProcessingFn::test_forward_with_loss_post_processor_uses_real_packed_loss_metadata' \\
     '${WORKTREE}/tests/unit/models/megatron/test_train.py::TestLossPostProcessor::test_loss_post_processor_with_packing'"
 fi
