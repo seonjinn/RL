@@ -15,6 +15,7 @@ from experiments.vllm_0251_drafter_matrix.matrix import (
     build_submission_environment,
     resolve_run,
     resolve_target_snapshot,
+    validate_megatron_checkpoint_cache,
     validate_run_destination,
     validate_snapshot,
     validate_checkout,
@@ -512,6 +513,32 @@ def test_runtime_command_uses_qwen235_startup_workarounds(
     assert (
         "NRL_DISABLE_NUMA_MEMBIND=1" in command
     ) is uses_qwen235_startup_workarounds
+    assert any(
+        part.startswith("NRL_MEGATRON_CHECKPOINT_DIR=") for part in command
+    ) is uses_qwen235_startup_workarounds
+
+
+def test_megatron_checkpoint_cache_requires_completion_marker(
+    tmp_path: Path,
+) -> None:
+    target_snapshot = tmp_path / "hf" / "snapshots" / ("a" * 40)
+    checkpoint_root = tmp_path / "megatron"
+    model_dir = checkpoint_root / f"model_{str(target_snapshot).replace('/', '_')}"
+    iteration_dir = model_dir / "iter_0000000"
+    iteration_dir.mkdir(parents=True)
+    (iteration_dir / "metadata.json").write_text("{}\n", encoding="utf-8")
+    (iteration_dir / "run_config.yaml").write_text("model: unit\n", encoding="utf-8")
+
+    with pytest.raises(FileNotFoundError, match="incomplete"):
+        validate_megatron_checkpoint_cache(checkpoint_root, target_snapshot)
+
+    tracker = model_dir / "latest_checkpointed_iteration.txt"
+    tracker.write_text("0\n", encoding="utf-8")
+    validate_megatron_checkpoint_cache(checkpoint_root, target_snapshot)
+
+    tracker.write_text("1\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="unexpected iteration"):
+        validate_megatron_checkpoint_cache(checkpoint_root, target_snapshot)
 
 
 @pytest.mark.parametrize(

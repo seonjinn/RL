@@ -855,6 +855,10 @@ G_DEFAULT_EXPERIMENT_ROOT = Path(
     "/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/"
     "vllm0251_drafter_matrix"
 )
+G_QWEN235_MEGATRON_CHECKPOINT_DIR = Path(
+    "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/"
+    "20260714_e2e_p0_235b/checkpoints/qwen235b_sync_baseline"
+)
 G_WANDB_PROJECT = "nemo-rl-vllm0251-drafter-matrix"
 G_FORK_URLS = frozenset(
     {
@@ -935,6 +939,7 @@ def build_runtime_command(
             (
                 "NRL_DISABLE_VLLM_PORT_OVERRIDE=1",
                 "NRL_DISABLE_NUMA_MEMBIND=1",
+                f"NRL_MEGATRON_CHECKPOINT_DIR={G_QWEN235_MEGATRON_CHECKPOINT_DIR}",
             )
             if run.recipe.key == "qwen235"
             else ()
@@ -1138,6 +1143,31 @@ def resolve_target_snapshot(recipe: RecipeSpec, hf_home: Path) -> Path:
     return snapshot
 
 
+def validate_megatron_checkpoint_cache(
+    checkpoint_root: Path,
+    target_snapshot: Path,
+) -> None:
+    """Require a completed converted checkpoint for the pinned HF target."""
+    model_dir = checkpoint_root / f"model_{str(target_snapshot).replace('/', '_')}"
+    iteration_dir = model_dir / "iter_0000000"
+    required_files = (
+        model_dir / "latest_checkpointed_iteration.txt",
+        iteration_dir / "metadata.json",
+        iteration_dir / "run_config.yaml",
+    )
+    missing = tuple(str(path) for path in required_files if not path.is_file())
+    if missing:
+        raise FileNotFoundError(
+            "Converted Megatron checkpoint is incomplete: " + ", ".join(missing)
+        )
+    iteration = required_files[0].read_text(encoding="utf-8").strip()
+    if iteration != "0":
+        raise RuntimeError(
+            "Converted Megatron checkpoint has an unexpected iteration marker: "
+            f"{required_files[0]}={iteration!r}"
+        )
+
+
 def validate_runtime_inputs(
     run: ResolvedRun,
     repo_dir: Path,
@@ -1156,6 +1186,11 @@ def validate_runtime_inputs(
             draft_snapshot,
             run.draft_checkpoint.revision,
             "Draft model",
+        )
+    if run.recipe.key == "qwen235":
+        validate_megatron_checkpoint_cache(
+            G_QWEN235_MEGATRON_CHECKPOINT_DIR,
+            target_snapshot,
         )
     return target_snapshot, draft_snapshot
 
