@@ -40,7 +40,7 @@ fi
 
 if [[ "${STATIC_THD_OPTIONAL_KV_TEST}" == "1" ]]; then
   static_thd_suffix+=" && cd '${WORKTREE}/3rdparty/Megatron-LM-workspace/Megatron-LM' && pytest -q \\
-    'tests/unit_tests/transformer/test_thd_cuda_graph.py::TestDecomposeReconstruct::test_round_trip_omits_optional_kv_inputs'"
+    'tests/unit_tests/transformer/test_thd_cuda_graph.py::TestDecomposeReconstruct::test_round_trip_canonicalizes_optional_kv_inputs'"
 fi
 
 export NRL_IGNORE_VERSION_MISMATCH=1
