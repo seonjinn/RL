@@ -15,6 +15,7 @@ PR5672_WORKTREE=${PR5672_WORKTREE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cg
 PR4359_WORKTREE=${PR4359_WORKTREE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr4359-vs-pr5783-ptyche-20260716}
 CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/nemo_rl_nightly_20260715.sqsh}
 HF_HOME=${HF_HOME:-/lustre/fsw/coreai_dlalgo_llm/users/sna/hf}
+CHECKPOINT_ROOT=${CHECKPOINT_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/checkpoints}
 ACCOUNT=${ACCOUNT:-coreai_dlalgo_llm}
 PARTITION=${PARTITION:-batch}
 
@@ -68,7 +69,17 @@ fi
 
 LOG_BASE="${WORKTREE}/experiments/cuda_graph/logs"
 CONFIG="${WORKTREE}/examples/configs/recipes/llm/performance/${RECIPE}"
-CHECKPOINT_DIR="/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/checkpoints/qwen3-30b-a3b-${IMPLEMENTATION}-20260716"
+CHECKPOINT_DIR="${CHECKPOINT_ROOT}/qwen3-30b-a3b-${IMPLEMENTATION}-20260716"
+CHECKPOINT_READY_FILE="${CHECKPOINT_DIR}/Qwen/Qwen3-30B-A3B/iter_0000000/run_config.yaml"
+
+# The no-CG baseline performs the one-time HF-to-Megatron conversion for its
+# implementation. Other conditions must not observe the partially-created
+# directory while that conversion is still writing its run config.
+if [[ "${CONDITION#*-}" != "nocg" && ! -f "${CHECKPOINT_READY_FILE}" ]]; then
+  echo "Megatron checkpoint is not ready: ${CHECKPOINT_READY_FILE}" >&2
+  echo "Run ${IMPLEMENTATION}-nocg first and wait for its conversion to finish." >&2
+  exit 3
+fi
 
 mkdir -p "${LOG_BASE}" "${CHECKPOINT_DIR}"
 
