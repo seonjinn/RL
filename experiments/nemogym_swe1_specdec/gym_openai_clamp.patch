@@ -1,0 +1,13 @@
+diff --git a/nemo_gym/global_config.py b/nemo_gym/global_config.py
+index b29a093..c815c93 100644
+--- a/nemo_gym/global_config.py
++++ b/nemo_gym/global_config.py
+@@ -686,7 +686,7 @@ Found global config dict yaml:
+                 # The ray extra [default] should also exactly match the extra in the top-level Gym pyproject.toml.
+                 f"ray[default]=={ray_version}",
+                 # OpenAI version is also sensitive since it changes so often and may introduce subtle incompatibilities.
+-                f"openai=={openai_version}",
++                "openai==2.7.2",  # clamped: nemo-gym pins openai<=2.7.2; parent carries 2.44 via uv override
+             ]
+ 
+             # Constrain python version since ray is sensitive to this.
