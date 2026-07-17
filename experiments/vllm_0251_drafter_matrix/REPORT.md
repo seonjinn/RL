@@ -154,6 +154,19 @@ K3/K5 under the exact current configuration to isolate checkpoint cost. A
 second native-capture comparison is required to reproduce the earlier high
 throughput cohort.
 
+The first matched non-warmup Step 2 from the NVIDIA-checkpoint reproductions
+already argues against drafter identity as the primary regression source. These
+single-step rows are diagnostic only; the running jobs must finish before they
+replace the final20 table above.
+
+| Drafter / K | Step 2 E2E | E2E speedup | Step 2 gen | Gen speedup | E2E tok/s/GPU | E2E throughput | Gen tok/s/GPU | Gen throughput |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| baseline | 199.04s | 1.000x | 131.24s | 1.000x | 155.42 | 1.000x | 235.73 | 1.000x |
+| Thinking K3 | 365.80s | 0.544x | 297.88s | 0.441x | 83.56 | 0.538x | 102.61 | 0.435x |
+| NVIDIA K3 | 382.69s | 0.520x | 315.55s | 0.416x | 80.31 | 0.517x | 97.40 | 0.413x |
+| Thinking K5 | 426.10s | 0.467x | 364.34s | 0.360x | 71.92 | 0.463x | 84.12 | 0.357x |
+| NVIDIA K5 | 521.73s | 0.382x | 458.11s | 0.286x | 59.03 | 0.380x | 67.22 | 0.285x |
+
 ## Qwen3-32B K2 And DynamicSD Smoke Wave
 
 The isolated matrix now includes fixed Thinking EAGLE3 K2 and a validated
@@ -282,10 +295,10 @@ drafting work changed.
 Source inspection found a specific MRv2 risk in vLLM 0.25.1: the scheduler
 records `num_spec_tokens_to_schedule`, while the EAGLE3 autoregressive
 speculator loops over the global `num_speculative_steps` and returns that
-global-width tensor. A smoke-only, run-scoped telemetry patch now records the
-scheduler batch size, selected K, requested width, and returned width without
-changing the inference path. Final20 remains blocked until this runtime gate
-passes.
+global-width tensor. The run-scoped patch now forwards the selected K into the
+autoregressive speculator, limits the decode loop and returned tensor to that
+K, supports K0 by bypassing drafting, and records selected, requested, and
+returned widths. Baseline and fixed-K paths remain unchanged.
 
 Telemetry smoke job `2407523` completed both NeMo-RL steps with exit code
 `0:0` ([W&B](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/3e4mav6e)).
@@ -297,11 +310,22 @@ range. Unique scheduler batch-size observations contained 34 K5-to-width-5,
 that the vLLM 0.25.1 MRv2 scheduler changes target verification width but does
 not reduce EAGLE3 drafting work. The final20 gate therefore failed for a
 specific implementation reason rather than a profiling or configuration
-error. The run-scoped patch now forwards selected K into the autoregressive
-speculator, limits the decode loop and returned tensor to that K, supports K0
-by bypassing drafting, and returns only that width to the scheduler. It applies
-cleanly and idempotently to the pinned vLLM 0.25.1 source, but remains
-unapproved until a GPU smoke confirms runtime width parity and CUDA Graph use.
+error.
+
+Corrected smoke job `2412001` completed all five steps with exit code `0:0`
+([W&B](https://wandb.ai/nvidia/nemo-rl-vllm0251-drafter-matrix/runs/azohuw4p)).
+All four generation nodes applied the source-guarded patch, retained
+`FULL_AND_PIECEWISE` CUDA Graph capture, and observed exact selected/requested/
+returned-width parity for K0, K1, K2, K3, and K5. Steps 2-5 averaged:
+
+| Window | E2E time | Gen time | E2E tok/s/GPU | Gen tok/s/GPU | E2E vs baseline | Gen vs baseline | E2E throughput | Gen throughput |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| DynamicSD steps 2-5 | 250.76s | 96.25s | 1688.59 | 4405.40 | 1.046x | 1.139x | 1.048x | 1.144x |
+
+This passes the correctness and smoke performance gates. It is 3.6-12.2%
+better than fixed K3 across the four timing/throughput comparisons, but remains
+1.8-2.3% behind the fixed-K1 final20 result. The schedule is therefore approved
+for final20 measurement, not yet promoted as the best Qwen3-32B policy.
 
 The boundary launcher is ready for twelve isolated fresh-server cells:
 BS34/35 with K3/K5, BS75/76 with K2/K3, and BS85/86 with K1/K2. Each cell
@@ -316,9 +340,9 @@ not execute.
 | K0-K5 Lyris profile | complete | 48/48 cells and K5 position acceptance |
 | Derived schedule review | complete | immutable profile and schedule hashes |
 | Boundary spot check | launcher ready | exact checks near BS35, BS76, and BS86 |
-| DynamicSD runtime smoke | rerun required | previous smoke selected K but returned K5 width |
-| MRv2 variable-width patch | local validation complete | K0-K5 GPU smoke and runtime width parity |
-| DynamicSD final20 | blocked by design | corrected runtime and confidence-qualified schedule |
+| DynamicSD runtime smoke | complete (`2412001`) | K0/K1/K2/K3/K5 selected, requested, and returned widths match |
+| MRv2 variable-width patch | GPU validated | CUDA Graph retained; fixed-K and baseline paths unchanged |
+| DynamicSD final20 | approved for submission | checked-in schedule SHA-256 allowlisted after smoke gate |
 
 ## Qwen3-235B Port Failure
 
@@ -361,7 +385,7 @@ after real submission.
 | Qwen3-32B | baseline | MRv2, MRv1 | mixed | final20 complete | `2405077` | MRv2 control complete; MRv1 remains planned |
 | Qwen3-32B | EAGLE3 | K1, K3, K5 | MRv2 | K1 control final20 complete | `2405076` | K1 retained for same-K checkpoint comparison |
 | Qwen3-32B | EAGLE3 Thinking | K1, K2, K3, K5 | MRv2 | K1/K3 final20 complete | `2405078`, `2409618` | K3 is nearly neutral over steps 2-20 |
-| Qwen3-32B | EAGLE3 Thinking DynamicSD | K0-K5 | MRv2 | calibrated; corrected GPU smoke pending | `2407523` | final20 remains blocked until actual width equals selected K |
+| Qwen3-32B | EAGLE3 Thinking DynamicSD | K0-K5 | MRv2 | corrected smoke complete; final20 approved | `2407523`, `2412001` | final20 schedule allowlisted after exact width parity and CUDA Graph validation |
 | Qwen3-32B | DFlash | K3, K5 | MRv2 | planned | pending | exact head; draft FlashAttention |
 | Qwen3-32B | draft/PARD | draft K1/K5; PARD K5/K16 | MRv1 | planned | pending | shared AMD 0.6B drafter; sequential/parallel split |
 | Qwen3-32B | suffix/ngram | suffix K32; ngram K5; ngram-gpu K5 | MRv1 | planned | pending | checkpoint-free proposers |

@@ -126,11 +126,10 @@ profile only as a smoke seed: K3 for scheduler batch sizes 1-127 and K1 for
 matched vLLM 0.25.1 calibration replaces the seed status. Dynamic runs apply
 the source-guarded EAGLE3 CUDA Graph and variable-width drafting patch through
 a run-scoped post-sync hook; fixed-K runs do not load that patch. The checked-in
-K0-K5 calibration is reproducible, but `final20` remains closed until a GPU
-smoke proves that scheduler-selected K equals the actual returned draft width.
+K0-K5 calibration passed GPU smoke job `2412001`: selected, requested, and
+returned widths matched for K0, K1, K2, K3, and K5 with CUDA Graphs enabled.
 Final20 additionally requires the exact reviewed schedule artifact SHA-256 in
-the empty-by-default final allowlist, so editing metadata cannot bypass that
-runtime gate.
+the final allowlist, so editing metadata cannot bypass that runtime gate.
 
 Reportable K0-K5 DynamicSD uses a matched offline profile before NeMo-RL is
 submitted. The profiler follows the goodput method from vLLM PR #32374:
@@ -199,9 +198,9 @@ The completed Qwen3-32B Thinking calibration is checked in as
 `calibration/qwen32_thinking_k5_vllm0251_profile.json` and
 `calibration/qwen32_thinking_k5_vllm0251_schedule.json`. Its zero-margin
 schedule is `[[1,34,5],[35,75,3],[76,85,2],[86,256,1]]`. This schedule is
-derived from all 48 fixed-K profile cells; final promotion still requires a
-runtime smoke proving that the scheduler-selected K changes both target
-verification length and actual drafter width.
+derived from all 48 fixed-K profile cells and its corrected five-step runtime
+smoke completed successfully before the schedule SHA-256 was allowlisted for
+final20.
 
 Schema-v2 schedules declare global K5 even when profiling selects only lower
 Ks. This prevents vLLM from silently clamping a selected K4/K5 to a K3 global

@@ -16,6 +16,7 @@ from experiments.vllm_0251_drafter_matrix.matrix import (
 G_TARGET_REVISION = "9216db5781bf21249d130ec9da846c4624c16137"
 G_DRAFTER_REVISION = "a1403e07b73a66fc9ef561463631c31864616933"
 G_PROFILE_SHA256 = "efcd9ad3f74ecb260ab7a580a062e56266b67196fd16d90b792c4176a25e5f69"
+G_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _schedule_payload() -> dict[str, object]:
@@ -233,6 +234,24 @@ def test_final20_requires_an_allowlisted_schedule_artifact(tmp_path: Path) -> No
             "lyris",
             dynamic_schedule=schedule,
         )
+
+
+def test_checked_in_calibrated_schedule_is_approved_for_final20() -> None:
+    schedule = load_dynamic_schedule(
+        G_REPO_ROOT
+        / "experiments/vllm_0251_drafter_matrix/calibration/"
+        "qwen32_thinking_k5_vllm0251_schedule.json"
+    )
+
+    run = resolve_run(
+        "qwen32",
+        "eagle3_thinking_dynamic_k5",
+        "final20",
+        "lyris",
+        dynamic_schedule=schedule,
+    )
+
+    assert "grpo.max_num_steps=20" in run.hydra_overrides
 
 
 def test_final20_requires_schema_v2_even_for_a_matched_v1_profile(

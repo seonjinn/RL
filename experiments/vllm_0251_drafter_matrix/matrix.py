@@ -209,7 +209,9 @@ class CheckoutState:
 
 
 G_MODEL_KEYS = frozenset(("qwen30", "qwen32", "qwen235"))
-G_APPROVED_DYNAMIC_FINAL_SCHEDULE_SHA256: frozenset[str] = frozenset()
+G_APPROVED_DYNAMIC_FINAL_SCHEDULE_SHA256: frozenset[str] = frozenset(
+    {"8cdfed304302f45e04e72cd219cb0be26c23c30b509c010fe9081d0c6da5fc14"}
+)
 
 G_RECIPES = (
     RecipeSpec(
