@@ -168,9 +168,8 @@ only CUDA Graph capture sizes
 repository slowed generation by 2.425x when coverage was reduced while
 acceptance remained unchanged. The NVIDIA runs also increase average
 `prepare_for_generation` to 173-298 seconds versus 77 seconds for baseline,
-which is the dominant system-level regression to isolate next. A second
-native-capture comparison is required to reproduce the earlier high-throughput
-cohort.
+which further obscures the generation result. The corrected full-coverage
+comparison below isolates the capture-size issue.
 
 ### Qwen3-235B Corrected CUDA Graph Coverage
 
