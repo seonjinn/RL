@@ -3130,8 +3130,15 @@ def _make_optimizer_offload_worker(state, *, mode: str):
 def test_optimizer_offload_roundtrip_preserves_values(mode: str) -> None:
     state = {
         0: {
-            "exp_avg": torch.randn((64, 128), device="cuda"),
-            "exp_avg_sq": torch.randn((64, 128), device="cuda").abs(),
+            "exp_avg": torch.randn((65, 129), device="cuda"),
+            "exp_avg_sq": torch.randn(67, device="cuda", dtype=torch.bfloat16),
+            "master_remainder": torch.randint(
+                torch.iinfo(torch.int16).min,
+                torch.iinfo(torch.int16).max,
+                (513,),
+                device="cuda",
+                dtype=torch.int16,
+            ),
             "step": torch.tensor(10.0, device="cuda"),
         }
     }
@@ -3147,7 +3154,7 @@ def test_optimizer_offload_roundtrip_preserves_values(mode: str) -> None:
     worker.move_optimizer("cuda")
     for key, value in state[0].items():
         assert value.is_cuda
-        torch.testing.assert_close(value, originals[key])
+        assert torch.equal(value, originals[key])
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
@@ -3176,3 +3183,12 @@ def test_optimizer_cuda_bytes_accepts_items_only_proxy_state() -> None:
     worker = _make_optimizer_offload_worker(ItemsOnlyState(state), mode="pageable")
 
     assert worker._optimizer_cuda_bytes() == 16 * 4
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_coalesced_optimizer_offload_rejects_noncontiguous_state() -> None:
+    state = {0: {"exp_avg": torch.randn((8, 9), device="cuda").transpose(0, 1)}}
+    worker = _make_optimizer_offload_worker(state, mode="coalesced-pinned")
+
+    with pytest.raises(ValueError, match="requires contiguous state tensors"):
+        worker.move_optimizer("cpu")

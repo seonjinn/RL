@@ -2307,8 +2307,9 @@ class MegatronPolicyWorkerImpl(
                 if value.dim() == 0:
                     state[key] = value.cpu()
                     continue
-                destination = torch.empty(
-                    value.shape,
+                destination = torch.empty_strided(
+                    value.size(),
+                    value.stride(),
                     dtype=value.dtype,
                     device="cpu",
                     pin_memory=True,
@@ -2347,6 +2348,11 @@ class MegatronPolicyWorkerImpl(
                 if value.dim() == 0:
                     state[key] = value.cpu()
                     continue
+                if not value.is_contiguous():
+                    raise ValueError(
+                        "Coalesced pinned optimizer offload requires contiguous "
+                        f"state tensors; state {key!r} has stride {value.stride()}."
+                    )
                 offset = (total_bytes + alignment - 1) // alignment * alignment
                 num_bytes = value.numel() * value.element_size()
                 entries.append((state, key, value, offset, num_bytes))
