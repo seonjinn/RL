@@ -1,0 +1,21 @@
+diff --git a/responses_api_agents/swe_agents/app.py b/responses_api_agents/swe_agents/app.py
+index f492ba1..9eda015 100644
+--- a/responses_api_agents/swe_agents/app.py
++++ b/responses_api_agents/swe_agents/app.py
+@@ -3168,6 +3168,16 @@ class SWEBenchWrapper(SimpleResponsesAPIAgent):
+             mount_args.append(f"--mount type=bind,src={miniforge3_path},dst=/openhands_setup/miniforge3,ro")
+             mount_args.append(f"--mount type=bind,src={miniforge3_path},dst={miniforge3_path},ro")
+ 
++            # Synthetic /swe_util layer for images lacking the OpenHands
++            # harness bake (e.g. official swebench arm64 images).
++            _swe_util_synth = os.environ.get("NRL_SWE_UTIL_SYNTH")
++            if _swe_util_synth:
++                _synth_dir = Path(_swe_util_synth) / data_point["instance_id"]
++                if _synth_dir.is_dir():
++                    mount_args.append(
++                        f"--mount type=bind,src={_synth_dir},dst=/swe_util,ro"
++                    )
++
+         # Add SWE-bench setup directory mount if available (for evaluation)
+         # swe-bench-ext, nv-internal-1, and deepswe don't use the swebench harness
+         if command.mode == "eval" and data_point["dataset_name"] not in ("nv-internal-1", "swe-bench-ext", "deepswe"):
