@@ -165,6 +165,46 @@ def create_megatron_config(
 
 
 @pytest.mark.parametrize(
+    "use_pinned,use_coalesced,error",
+    [
+        (True, False, "only supported with the Megatron"),
+        (False, True, "requires policy.use_pinned_optimizer_offload=true"),
+    ],
+)
+def test_dtensor_rejects_pinned_optimizer_refit_offload(
+    tiny_llama_model_path,
+    use_pinned,
+    use_coalesced,
+    error,
+):
+    config = create_dtensor_config(tiny_llama_model_path, tp=1)
+    config["use_pinned_optimizer_offload"] = use_pinned
+    config["use_coalesced_optimizer_offload"] = use_coalesced
+
+    with pytest.raises(ValueError, match=error):
+        Policy(
+            cluster=create_mock_cluster(world_size=1),
+            config=config,
+            tokenizer=create_mock_tokenizer(),
+        )
+
+
+def test_megatron_pinned_optimizer_refit_rejects_optimizer_cpu_offload(
+    tiny_llama_model_path,
+):
+    config = create_megatron_config(tiny_llama_model_path, tp=1)
+    config["use_pinned_optimizer_offload"] = True
+    config["megatron_cfg"]["optimizer"] = {"optimizer_cpu_offload": True}
+
+    with pytest.raises(ValueError, match="optimizer_cpu_offload=false"):
+        Policy(
+            cluster=create_mock_cluster(world_size=1),
+            config=config,
+            tokenizer=create_mock_tokenizer(),
+        )
+
+
+@pytest.mark.parametrize(
     "world_size,tp,cp,should_pass,expected_error_type,description",
     [
         # Valid cases - DTensor backend (PP is always 1 for DTensor)

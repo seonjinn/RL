@@ -1998,7 +1998,16 @@ class MegatronPolicyWorkerImpl(
             and self.optimizer is not None
             and not self.optimizer_cpu_offload
         ):
-            self.move_optimizer("cuda")
+            optimizer_bytes = (
+                self._optimizer_tensor_bytes()
+                if self._refit_offload_diagnostics_enabled
+                else None
+            )
+            self._measure_refit_phase(
+                "prepare_for_training.optimizer_h2d",
+                lambda: self.move_optimizer("cuda"),
+                optimizer_cuda_bytes=optimizer_bytes,
+            )
 
         if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
             torch.cuda.empty_cache()
@@ -2038,7 +2047,7 @@ class MegatronPolicyWorkerImpl(
         )
 
     @wrap_with_nvtx_name("megatron_policy_worker/offload_before_refit")
-    def offload_before_refit(self):
+    def offload_before_refit(self, phase_prefix: str = "offload_before_refit"):
         """Offload the optimizer and buffers to the CPU."""
         no_grad = torch.no_grad()
         no_grad.__enter__()
@@ -2048,7 +2057,7 @@ class MegatronPolicyWorkerImpl(
             f"GPU Memory before optimizer offload: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved"
         )
         self.model = self._measure_refit_phase(
-            "offload_before_refit.gradient_release",
+            f"{phase_prefix}.gradient_release",
             lambda: self.move_model(
                 self.model, "cpu", move_params=False, move_grads=True
             ),
@@ -2113,7 +2122,7 @@ class MegatronPolicyWorkerImpl(
                 pass
 
         self._measure_refit_phase(
-            "offload_before_refit.allocator_wake",
+            f"{phase_prefix}.allocator_wake",
             lambda: torch.randn(1).cuda(),
         )
         if (
@@ -2121,17 +2130,19 @@ class MegatronPolicyWorkerImpl(
             and self.optimizer is not None
             and not self.optimizer_cpu_offload
         ):
-            optimizer_cuda_bytes = self._optimizer_cuda_bytes()
+            optimizer_cuda_bytes = (
+                self._optimizer_cuda_bytes()
+                if self._refit_offload_diagnostics_enabled
+                else None
+            )
             self._measure_refit_phase(
-                "offload_before_refit.optimizer_d2h",
+                f"{phase_prefix}.optimizer_d2h",
                 lambda: self.move_optimizer("cpu"),
                 optimizer_cuda_bytes=optimizer_cuda_bytes,
             )
 
-        self._measure_refit_phase("offload_before_refit.gc", gc.collect)
-        self._measure_refit_phase(
-            "offload_before_refit.empty_cache", torch.cuda.empty_cache
-        )
+        self._measure_refit_phase(f"{phase_prefix}.gc", gc.collect)
+        self._measure_refit_phase(f"{phase_prefix}.empty_cache", torch.cuda.empty_cache)
 
         # Print memory stats after offloading
         allocated = torch.cuda.memory_allocated() / (1024**3)  # Convert to GB
@@ -2147,12 +2158,12 @@ class MegatronPolicyWorkerImpl(
         no_grad = torch.no_grad()
         no_grad.__enter__()
         self.model = self._measure_refit_phase(
-            "offload_after_refit.model_offload",
+            "offload_after_refit.model_offload_enqueued",
             lambda: self.move_model(self.model, "cpu"),
         )
         self.model.eval()
         torch.randn(1).cuda()  # wake up torch allocator
-        self.offload_before_refit()  # rerun the old offload function
+        self.offload_before_refit(phase_prefix="offload_after_refit")
 
         allocated = torch.cuda.memory_allocated() / (1024**3)  # Convert to GB
         reserved = torch.cuda.memory_reserved() / (1024**3)  # Convert to GB
@@ -2246,9 +2257,17 @@ class MegatronPolicyWorkerImpl(
 
     def _optimizer_cuda_bytes(self) -> int:
         total_bytes = 0
-        for state in self._optimizer_state().values():
+        for _, state in self._optimizer_state().items():
             for value in state.values():
                 if torch.is_tensor(value) and value.is_cuda:
+                    total_bytes += value.numel() * value.element_size()
+        return total_bytes
+
+    def _optimizer_tensor_bytes(self) -> int:
+        total_bytes = 0
+        for _, state in self._optimizer_state().items():
+            for value in state.values():
+                if torch.is_tensor(value):
                     total_bytes += value.numel() * value.element_size()
         return total_bytes
 

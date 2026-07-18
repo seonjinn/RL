@@ -34,8 +34,9 @@ class HostMemorySnapshot:
     """Process and node memory counters sampled around one refit phase."""
 
     rss_bytes: int | None
-    major_faults: int
+    major_faults: int | None
     mem_available_bytes: int | None
+    minor_faults: int | None = None
 
 
 def _read_kib_value(path: Path, key: str) -> int | None:
@@ -59,10 +60,12 @@ def _read_kib_value(path: Path, key: str) -> int | None:
 
 def capture_host_memory_snapshot() -> HostMemorySnapshot:
     """Capture current process RSS, major faults, and node available memory."""
+    usage = resource.getrusage(resource.RUSAGE_SELF)
     return HostMemorySnapshot(
         rss_bytes=_read_kib_value(Path("/proc/self/status"), "VmRSS"),
-        major_faults=resource.getrusage(resource.RUSAGE_SELF).ru_majflt,
+        major_faults=usage.ru_majflt,
         mem_available_bytes=_read_kib_value(Path("/proc/meminfo"), "MemAvailable"),
+        minor_faults=usage.ru_minflt,
     )
 
 
@@ -72,31 +75,41 @@ def _delta(after: int | None, before: int | None) -> int | None:
     return after - before
 
 
-def measure_refit_phase(
-    operation: Callable[[], T],
+def _capture_snapshot_safely(
+    capture_snapshot: Callable[[], HostMemorySnapshot],
+) -> HostMemorySnapshot:
+    try:
+        return capture_snapshot()
+    except Exception:
+        return HostMemorySnapshot(
+            rss_bytes=None,
+            major_faults=None,
+            mem_available_bytes=None,
+            minor_faults=None,
+        )
+
+
+def _monotonic_safely(monotonic: Callable[[], float]) -> float | None:
+    try:
+        return monotonic()
+    except Exception:
+        return None
+
+
+def _emit_record_safely(
     *,
     phase: str,
     rank: int,
     optimizer_cuda_bytes: int | None,
-    capture_snapshot: Callable[[], HostMemorySnapshot] = capture_host_memory_snapshot,
-    monotonic: Callable[[], float] = time.perf_counter,
-    hostname: str | None = None,
-    stream: TextIO | None = None,
-) -> T:
-    """Run one refit phase and emit a single structured rank-local record."""
-    before = capture_snapshot()
-    started = monotonic()
-    status = "ok"
-    error_type: str | None = None
+    before: HostMemorySnapshot,
+    after: HostMemorySnapshot,
+    elapsed_s: float | None,
+    status: str,
+    error_type: str | None,
+    hostname: str | None,
+    stream: TextIO | None,
+) -> None:
     try:
-        result = operation()
-    except Exception as error:
-        status = "error"
-        error_type = type(error).__name__
-        raise
-    finally:
-        elapsed_s = monotonic() - started
-        after = capture_snapshot()
         payload: dict[str, object] = {
             "schema_version": 1,
             "event": "refit_offload_phase",
@@ -111,7 +124,10 @@ def measure_refit_phase(
             "rss_bytes_delta": _delta(after.rss_bytes, before.rss_bytes),
             "major_faults_before": before.major_faults,
             "major_faults_after": after.major_faults,
-            "major_faults_delta": after.major_faults - before.major_faults,
+            "major_faults_delta": _delta(after.major_faults, before.major_faults),
+            "minor_faults_before": before.minor_faults,
+            "minor_faults_after": after.minor_faults,
+            "minor_faults_delta": _delta(after.minor_faults, before.minor_faults),
             "mem_available_bytes_before": before.mem_available_bytes,
             "mem_available_bytes_after": after.mem_available_bytes,
             "mem_available_bytes_delta": _delta(
@@ -126,4 +142,60 @@ def measure_refit_phase(
             file=destination,
             flush=True,
         )
+    except Exception:
+        pass
+
+
+def measure_refit_phase(
+    operation: Callable[[], T],
+    *,
+    phase: str,
+    rank: int,
+    optimizer_cuda_bytes: int | None,
+    capture_snapshot: Callable[[], HostMemorySnapshot] = capture_host_memory_snapshot,
+    monotonic: Callable[[], float] = time.perf_counter,
+    hostname: str | None = None,
+    stream: TextIO | None = None,
+) -> T:
+    """Run one refit phase and emit a single structured rank-local record."""
+    before = _capture_snapshot_safely(capture_snapshot)
+    started = _monotonic_safely(monotonic)
+    try:
+        result = operation()
+    except Exception as error:
+        finished = _monotonic_safely(monotonic)
+        after = _capture_snapshot_safely(capture_snapshot)
+        _emit_record_safely(
+            phase=phase,
+            rank=rank,
+            optimizer_cuda_bytes=optimizer_cuda_bytes,
+            before=before,
+            after=after,
+            elapsed_s=(
+                finished - started
+                if finished is not None and started is not None
+                else None
+            ),
+            status="error",
+            error_type=type(error).__name__,
+            hostname=hostname,
+            stream=stream,
+        )
+        raise
+    finished = _monotonic_safely(monotonic)
+    after = _capture_snapshot_safely(capture_snapshot)
+    _emit_record_safely(
+        phase=phase,
+        rank=rank,
+        optimizer_cuda_bytes=optimizer_cuda_bytes,
+        before=before,
+        after=after,
+        elapsed_s=(
+            finished - started if finished is not None and started is not None else None
+        ),
+        status="ok",
+        error_type=None,
+        hostname=hostname,
+        stream=stream,
+    )
     return result

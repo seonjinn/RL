@@ -3107,7 +3107,7 @@ class _OptimizerOffloadTestOptimizer:
         return self._state
 
 
-def _make_optimizer_offload_worker(state, *, coalesced: bool):
+def _make_optimizer_offload_worker(state, *, mode: str):
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
         MegatronPolicyWorkerImpl,
     )
@@ -3116,8 +3116,8 @@ def _make_optimizer_offload_worker(state, *, coalesced: bool):
     worker.cfg = cast(
         PolicyConfig,
         {
-            "use_pinned_optimizer_offload": coalesced,
-            "use_coalesced_optimizer_offload": coalesced,
+            "use_pinned_optimizer_offload": mode != "pageable",
+            "use_coalesced_optimizer_offload": mode == "coalesced-pinned",
         },
     )
     worker.optimizer = _OptimizerOffloadTestOptimizer(state)
@@ -3126,8 +3126,8 @@ def _make_optimizer_offload_worker(state, *, coalesced: bool):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-@pytest.mark.parametrize("coalesced", [False, True], ids=["pageable", "coalesced"])
-def test_optimizer_offload_roundtrip_preserves_values(coalesced: bool) -> None:
+@pytest.mark.parametrize("mode", ["pageable", "pinned", "coalesced-pinned"])
+def test_optimizer_offload_roundtrip_preserves_values(mode: str) -> None:
     state = {
         0: {
             "exp_avg": torch.randn((64, 128), device="cuda"),
@@ -3136,11 +3136,11 @@ def test_optimizer_offload_roundtrip_preserves_values(coalesced: bool) -> None:
         }
     }
     originals = {key: value.clone() for key, value in state[0].items()}
-    worker = _make_optimizer_offload_worker(state, coalesced=coalesced)
+    worker = _make_optimizer_offload_worker(state, mode=mode)
 
     worker.move_optimizer("cpu")
     assert all(not value.is_cuda for value in state[0].values())
-    if coalesced:
+    if mode != "pageable":
         assert state[0]["exp_avg"].is_pinned()
         assert state[0]["exp_avg_sq"].is_pinned()
 
@@ -3153,7 +3153,7 @@ def test_optimizer_offload_roundtrip_preserves_values(coalesced: bool) -> None:
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_coalesced_optimizer_offload_reuses_pinned_buffer() -> None:
     state = {0: {"exp_avg": torch.randn((64, 128), device="cuda")}}
-    worker = _make_optimizer_offload_worker(state, coalesced=True)
+    worker = _make_optimizer_offload_worker(state, mode="coalesced-pinned")
 
     worker.move_optimizer("cpu")
     first_pointer = worker._optimizer_pinned_buf.data_ptr()
@@ -3161,3 +3161,18 @@ def test_coalesced_optimizer_offload_reuses_pinned_buffer() -> None:
     worker.move_optimizer("cpu")
 
     assert worker._optimizer_pinned_buf.data_ptr() == first_pointer
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
+def test_optimizer_cuda_bytes_accepts_items_only_proxy_state() -> None:
+    class ItemsOnlyState:
+        def __init__(self, state):
+            self._state = state
+
+        def items(self):
+            return self._state.items()
+
+    state = {0: {"exp_avg": torch.empty(16, device="cuda", dtype=torch.float32)}}
+    worker = _make_optimizer_offload_worker(ItemsOnlyState(state), mode="pageable")
+
+    assert worker._optimizer_cuda_bytes() == 16 * 4

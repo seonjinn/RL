@@ -537,7 +537,7 @@ class PolicyConfig(TypedDict):
     sequence_packing: NotRequired[SequencePackingConfig | SequencePackingConfigDisabled]
     make_sequence_length_divisible_by: int
     max_total_sequence_length: int
-    offload_optimizer_for_logprob: NotRequired[bool]
+    offload_optimizer_for_logprob: bool
     # Pin optimizer state tensors in CPU memory for asynchronous D2H/H2D copies.
     use_pinned_optimizer_offload: NotRequired[bool]
     # Pack optimizer state into one reusable pinned buffer. Requires pinning.

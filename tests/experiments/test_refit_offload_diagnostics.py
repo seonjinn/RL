@@ -18,11 +18,13 @@ def test_measure_refit_phase_emits_rank_resource_deltas() -> None:
                 rss_bytes=1000,
                 major_faults=7,
                 mem_available_bytes=9000,
+                minor_faults=100,
             ),
             HostMemorySnapshot(
                 rss_bytes=1600,
                 major_faults=9,
                 mem_available_bytes=8100,
+                minor_faults=140,
             ),
         )
     )
@@ -53,6 +55,9 @@ def test_measure_refit_phase_emits_rank_resource_deltas() -> None:
         "mem_available_bytes_after": 8100,
         "mem_available_bytes_before": 9000,
         "mem_available_bytes_delta": -900,
+        "minor_faults_after": 140,
+        "minor_faults_before": 100,
+        "minor_faults_delta": 40,
         "optimizer_cuda_bytes": 4096,
         "phase": "offload_before_refit.optimizer_d2h",
         "rank": 17,
@@ -91,6 +96,88 @@ def test_measure_refit_phase_records_failure_before_reraising() -> None:
     assert payload["status"] == "error"
     assert payload["error_type"] == "RuntimeError"
     assert payload["elapsed_s"] == 0.5
+
+
+def test_measure_refit_phase_runs_operation_when_initial_snapshot_fails() -> None:
+    calls = 0
+
+    def fail_snapshot() -> HostMemorySnapshot:
+        raise OSError("procfs unavailable")
+
+    def operation() -> str:
+        nonlocal calls
+        calls += 1
+        return "complete"
+
+    assert (
+        measure_refit_phase(
+            operation,
+            phase="offload_before_refit.optimizer_d2h",
+            rank=1,
+            optimizer_cuda_bytes=1024,
+            capture_snapshot=fail_snapshot,
+            stream=io.StringIO(),
+        )
+        == "complete"
+    )
+    assert calls == 1
+
+
+def test_measure_refit_phase_preserves_operation_error_when_logging_fails() -> None:
+    snapshot_calls = 0
+
+    def fail_final_snapshot() -> HostMemorySnapshot:
+        nonlocal snapshot_calls
+        snapshot_calls += 1
+        if snapshot_calls == 1:
+            return HostMemorySnapshot(1, 0, 2)
+        raise OSError("procfs disappeared")
+
+    class BrokenStream(io.StringIO):
+        def write(self, text: str) -> int:
+            raise OSError("log destination closed")
+
+    def fail_operation() -> None:
+        raise RuntimeError("original refit failure")
+
+    with pytest.raises(RuntimeError, match="original refit failure"):
+        measure_refit_phase(
+            fail_operation,
+            phase="offload_before_refit.optimizer_d2h",
+            rank=2,
+            optimizer_cuda_bytes=2048,
+            capture_snapshot=fail_final_snapshot,
+            stream=BrokenStream(),
+        )
+
+
+def test_measure_refit_phase_uses_null_fault_deltas_when_snapshot_fails() -> None:
+    snapshots = iter(
+        (
+            HostMemorySnapshot(1, 7, 2, 11),
+            OSError("procfs disappeared"),
+        )
+    )
+    output = io.StringIO()
+
+    def capture_snapshot() -> HostMemorySnapshot:
+        value = next(snapshots)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    measure_refit_phase(
+        lambda: None,
+        phase="offload_before_refit.gc",
+        rank=3,
+        optimizer_cuda_bytes=None,
+        capture_snapshot=capture_snapshot,
+        stream=output,
+    )
+
+    payload = json.loads(output.getvalue().strip().split(" ", 1)[1])
+    assert payload["major_faults_delta"] is None
+    assert payload["minor_faults_delta"] is None
 
 
 def test_megatron_worker_exposes_pageable_and_coalesced_pinned_paths() -> None:

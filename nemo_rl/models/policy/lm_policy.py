@@ -113,10 +113,37 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         megatron_enable = bool(config.get("megatron_cfg", {}).get("enabled", False))
         dtensor_enable = bool(config.get("dtensor_cfg", {}).get("enabled", False))
         draft_enabled = bool(config.get("draft", {}).get("enabled", False))
+        use_pinned_optimizer_offload = bool(
+            config.get("use_pinned_optimizer_offload", False)
+        )
+        use_coalesced_optimizer_offload = bool(
+            config.get("use_coalesced_optimizer_offload", False)
+        )
         if megatron_enable and dtensor_enable:
             raise ValueError(
                 "Configure either Megatron (policy.megatron_cfg.enabled=true) or "
                 "DTensor (policy.dtensor_cfg.enabled=true), not both."
+            )
+        if use_coalesced_optimizer_offload and not use_pinned_optimizer_offload:
+            raise ValueError(
+                "policy.use_coalesced_optimizer_offload=true requires "
+                "policy.use_pinned_optimizer_offload=true."
+            )
+        if (
+            use_pinned_optimizer_offload or use_coalesced_optimizer_offload
+        ) and not megatron_enable:
+            raise ValueError(
+                "Pinned optimizer refit offload is only supported with the Megatron "
+                "policy backend."
+            )
+        if use_pinned_optimizer_offload and bool(
+            config.get("megatron_cfg", {})
+            .get("optimizer", {})
+            .get("optimizer_cpu_offload", False)
+        ):
+            raise ValueError(
+                "Pinned optimizer refit offload requires "
+                "policy.megatron_cfg.optimizer.optimizer_cpu_offload=false."
             )
         if draft_enabled and not megatron_enable:
             raise ValueError(
