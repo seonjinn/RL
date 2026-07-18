@@ -11,6 +11,8 @@ TIME_LIMIT="${TIME_LIMIT:-02:30:00}"
 NUM_PROMPTS="${NUM_PROMPTS:-32}"
 NUM_GENS="${NUM_GENS:-4}"
 WT="/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-wt-nemogym-dynsd-lyris"
+CONFIG="${CONFIG:-${WT}/examples/nemo_gym/grpo_qwen3_30ba3b_thinking_swe1.yaml}"
+DATA="${DATA:-${WT}/data/swe1/val-split.jsonl}"
 CONTAINER="/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260715.sqsh"
 MOUNTS="/lustre:/lustre"
 HF_HOME="/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home"
@@ -31,8 +33,8 @@ case "${VARIANT}" in
 esac
 
 overrides=(
-  "data.train.data_path=${WT}/data/swe1/val-split.jsonl"
-  "data.validation.data_path=${WT}/data/swe1/val-split.jsonl"
+  "data.train.data_path=${DATA}"
+  "data.validation.data_path=${DATA}"
   "cluster.num_nodes=1"
   "cluster.gpus_per_node=4"
   "grpo.num_prompts_per_step=${NUM_PROMPTS}"
@@ -61,6 +63,9 @@ if [[ "${METRICS}" == "true" ]]; then
     "policy.generation.vllm_cfg.enable_vllm_metrics_logger=true"
   )
 fi
+if [[ -n "${EXTRA_OVERRIDES:-}" ]]; then
+  overrides+=(${EXTRA_OVERRIDES})
+fi
 if [[ "${CAP512}" == "true" ]]; then
   overrides+=(
     "++policy.generation.vllm_kwargs.compilation_config.max_cudagraph_capture_size=512"
@@ -80,6 +85,8 @@ command_env=(
   "UV_LOCK_TIMEOUT=3600"
   "PYTHONFAULTHANDLER=1"
   "RAY_DEDUP_LOGS=0"
+  "APPTAINER_CACHEDIR=/lustre/fsw/coreai_dlalgo_llm/users/sna/apptainer_cache"
+  "APPTAINER_TMPDIR=/tmp/apptainer-${RUN_TAG}"
 )
 if [[ -n "${SCHED}" ]]; then
   command_env+=(
@@ -94,7 +101,7 @@ command_parts=(
   /opt/nemo_rl_venv/bin/python
   "${WT}/examples/nemo_gym/run_grpo_rollout_benchmark.py"
   --config
-  "${WT}/examples/nemo_gym/grpo_qwen3_30ba3b_thinking_swe1.yaml"
+  "${CONFIG}"
   "${overrides[@]}"
 )
 printf -v command '%q ' "${command_parts[@]}"

@@ -1,0 +1,32 @@
+# SWE2 (swe_agents/OpenHands) smoke: 5 SWE-bench_Verified instances, arm64
+# runtime images, base Thinking model, tiny turn/concurrency budget.
+defaults: "grpo_qwen3_30ba3b_thinking_swe2.yaml"
+
+policy:
+  model_name: Qwen/Qwen3-30B-A3B-Thinking-2507
+data:
+  train:
+    data_path: /lustre/fsw/coreai_dlalgo_llm/users/sna/RL-wt-nemogym-dynsd-lyris/data/swe2/val-mini5.jsonl
+  validation:
+    data_path: /lustre/fsw/coreai_dlalgo_llm/users/sna/RL-wt-nemogym-dynsd-lyris/data/swe2/val-mini5.jsonl
+env:
+  nemo_gym:
+    swe_agents_train:
+      responses_api_agents:
+        swe_agents:
+          agent_max_turns: 8
+          concurrency: 8
+          swebench_agent_timeout: 900
+          run_with_mixed_prompts: true
+          dataset_path: ${data.train.data_path}
+          container_formatter:
+          - docker://swebench/sweb.eval.arm64.{instance_id}
+    swe_agents_val:
+      responses_api_agents:
+        swe_agents:
+          agent_max_turns: 8
+          concurrency: 8
+          swebench_agent_timeout: 900
+          dataset_path: ${data.validation.data_path}
+          container_formatter:
+          - docker://swebench/sweb.eval.arm64.{instance_id}
