@@ -214,7 +214,10 @@ five-hour allocation without GRES: one node with `--segment=1` for Qwen3-32B,
 or two nodes with `--segment=2` for Qwen3-235B. A per-job locked vLLM 0.25.1
 environment is materialized under `/tmp`; the base container environment is
 not replaced. Its vLLM `site-packages` path is exported to the driver so Ray
-actors on every node import the same locked and patched vLLM environment.
+actors on every node import the same locked and patched vLLM environment. The
+run-scoped vLLM patch also copies that `PYTHONPATH` into Ray's actor
+`runtime_env`; the CLI server otherwise starts outside a Ray task and vLLM
+0.25.1 leaves the worker runtime environment empty.
 
 After all profile jobs complete, assemble and derive the immutable artifacts:
 

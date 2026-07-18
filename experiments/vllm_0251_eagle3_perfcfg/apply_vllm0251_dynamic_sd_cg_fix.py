@@ -34,6 +34,28 @@ def _find_site_packages() -> Path:
     raise RuntimeError("Could not find the installed vLLM package")
 
 
+def apply_ray_worker_environment_patch(site_packages: Path) -> bool:
+    """Forward the locked vLLM environment to Ray model-worker actors."""
+    ray_executor = site_packages / "vllm/v1/executor/ray_executor_v2.py"
+    if not ray_executor.is_file():
+        raise FileNotFoundError(
+            f"vLLM 0.25.1 Ray executor not found under {site_packages}"
+        )
+
+    text = ray_executor.read_text(encoding="utf-8")
+    text, changed = _replace_once(
+        text,
+        '        env_vars = runtime_env.setdefault("env_vars", {})\n',
+        '        env_vars = runtime_env.setdefault("env_vars", {})\n'
+        '        if pythonpath := os.environ.get("PYTHONPATH"):\n'
+        '            env_vars.setdefault("PYTHONPATH", pythonpath)\n',
+        "DynamicSD Ray actor profile environment",
+    )
+    if changed:
+        ray_executor.write_text(text, encoding="utf-8")
+    return changed
+
+
 def apply_patch(site_packages: Path) -> bool:
     cudagraph_utils = site_packages / "vllm/v1/worker/gpu/cudagraph_utils.py"
     speculator = (
@@ -96,8 +118,15 @@ def apply_patch(site_packages: Path) -> bool:
         "autoregressive draft decode manager",
     )
 
+    ray_environment_changed = apply_ray_worker_environment_patch(site_packages)
     changed = any(
-        (signature_changed, attribute_changed, condition_changed, speculator_changed)
+        (
+            signature_changed,
+            attribute_changed,
+            condition_changed,
+            speculator_changed,
+            ray_environment_changed,
+        )
     )
     if changed:
         cudagraph_utils.write_text(cudagraph_text, encoding="utf-8")
