@@ -33,6 +33,7 @@ the default NeMo-RL port path that passed their smoke gates.
 | `eagle3_thinking_k3_cg256` | MRv2 | no | no | yes | K3 capture coverage through 64 concurrent requests |
 | `eagle3_thinking_dynamic_k123` | MRv2 | no | yes | no | historical K0-K3 smoke schedule only |
 | `eagle3_thinking_dynamic_k5` | MRv2 | no | yes | no | calibrated K0-K5 DynamicSD schedule artifact |
+| `eagle3_thinking_dynamic_k123_cg256` | MRv2 | no | no | yes | matched K0-K3 profile, batch-size endpoint 64, capture sizes through 256 |
 | `dflash_k3/k5` | MRv2 | yes | yes | no | exact DFlash head, draft `FLASH_ATTN` |
 | `draft_k1/k5` | MRv1 | yes | yes | yes | sequential `amd/PARD-Qwen3-0.6B` |
 | `pard_k5/k16` | MRv1 | yes | yes | yes | parallel `amd/PARD-Qwen3-0.6B` |
@@ -125,9 +126,12 @@ The credential value is never written to commands, provenance, or reports.
 
 The Qwen235 `eagle3_thinking_k3_cg256` ablation changes only the inherited
 capture-size list from `[1,2,4,8,16,32,64]` to
-`[1,2,4,8,16,32,64,128,256]`. With K3, verification consumes four tokens per
-request, so 256 tokens cover the recipe's peak 64 requests per vLLM replica. The
-matched baseline and the original K3 run remain unchanged.
+`[1,2,4,8,16,32,64,128,192,256]`. With K3, verification consumes four tokens
+per request, so 256 tokens cover the recipe's peak 64 requests per vLLM
+replica. The 192-token shape covers K2 at that same endpoint. Historical job
+`2416712` established the K3 benefit without the unused 192-token shape; the
+fixed-K3 and DynamicSD comparison must rerun both candidates with the identical
+expanded capture list.
 
 DynamicSD requires an explicit versioned schedule artifact. The checked-in
 `calibration/qwen32_thinking_k123_seed.json` uses the historical vLLM 0.24
@@ -141,7 +145,7 @@ returned widths matched for K0, K1, K2, K3, and K5 with CUDA Graphs enabled.
 Final20 additionally requires the exact reviewed schedule artifact SHA-256 in
 the final allowlist, so editing metadata cannot bypass that runtime gate.
 
-Reportable K0-K5 DynamicSD uses a matched offline profile before NeMo-RL is
+Reportable DynamicSD uses a matched offline profile before NeMo-RL is
 submitted. The profiler follows the goodput method from vLLM PR #32374:
 `accepted_length(K) / median_ITL(batch_size,K)`. It measures K0-K5 at scheduler
 batch-size points `1,4,16,32,64,128,192,256`, with twenty batches per point,
@@ -151,40 +155,65 @@ scheduled in one engine step, so serving concurrency is a controlled proxy;
 final promotion also requires selected-K and verified-draft telemetry from the
 NeMo-RL smoke run.
 
-The profile is matched to Qwen3-32B TP2, Thinking drafter TP1, temperature 1.0,
-top-p 1.0, max model length 4096, max batched tokens 16384, chunked prefill,
-disabled prefix caching, and `FULL_AND_PIECEWISE` CUDA Graphs. K0 is measured
-as a true no-drafter server. K5 separately records position-level acceptance
-on deterministic OpenMathInstruct-2 prompts rendered with `cot.txt`. Every
-completed result is written immediately, so a timeout preserves completed
-cells, but an incomplete 48-cell grid cannot produce a calibrated schedule.
-The dataset snapshot is pinned to revision
-`469216e3f46f4dacf476b382e192485ea51a143e`.
+The model-specific profile contracts are:
 
-Show the exact six-job plan, run all scheduler preflights, and submit only
-after the checkout has been committed, pushed, and pulled on Lyris:
+| Model | Target TP | Draft TP | K grid | Active batch-size points | Max model length | Max batched tokens | Prefix cache | CUDA Graph capture sizes |
+|---|---:|---:|---|---|---:|---:|---|---|
+| Qwen3-32B | 2 | 1 | K0-K5 | 1,4,16,32,64,128,192,256 | 4096 | 16384 | disabled | native |
+| Qwen3-235B-A22B | 8 across 2 nodes | 1 | K0-K3 | 1,4,8,16,32,48,64 | 8192 | 2048 | enabled | 1,2,4,8,16,32,64,128,192,256 |
+
+Both use temperature 1.0, top-p 1.0, chunked prefill, and
+`FULL_AND_PIECEWISE` CUDA Graphs. The Qwen3-235B server uses Ray without a
+`CUDA_VISIBLE_DEVICES` restriction so all TP8 workers remain visible. The engine
+keeps its recipe-derived capacity of 128 sequences while the measured active
+batch endpoint is 64. K0 loads the same drafter and executes EAGLE prefill, then
+uses a zero-width dynamic schedule; this preserves draft KV synchronization and
+measures the actual runtime cost of switching from K0 to K1-K3. The largest K
+separately records position-level acceptance on deterministic
+OpenMathInstruct-2 prompts rendered with `cot.txt`. Every completed result is
+written immediately, so a timeout preserves completed cells, but an incomplete
+model-specific grid cannot produce a calibrated schedule. The dataset snapshot
+is pinned to revision `469216e3f46f4dacf476b382e192485ea51a143e`.
+
+Show the exact model-specific plan, run all scheduler preflights, and submit
+only after the checkout has been committed, pushed, and pulled on Lyris. The
+Qwen3-32B plan has six K0-K5 jobs; the Qwen3-235B plan has four K0-K3 jobs:
 
 ```bash
 PROFILE_LAUNCHER=experiments/vllm_0251_drafter_matrix/profile_dynamic_sd.py
 PROFILE_ROOT=/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/vllm0251_dynamic_profile/qwen32-thinking
 COMMON_ARGS=(
   --repo-dir "$PWD"
-  --output-dir "$PROFILE_ROOT"
   --hf-home /lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home
   --container /lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260715.sqsh
   --mounts /lustre:/lustre
 )
 
-python3 "$PROFILE_LAUNCHER" show "${COMMON_ARGS[@]}"
-python3 "$PROFILE_LAUNCHER" test-only "${COMMON_ARGS[@]}"
-python3 "$PROFILE_LAUNCHER" submit "${COMMON_ARGS[@]}"
+python3 "$PROFILE_LAUNCHER" show "${COMMON_ARGS[@]}" --output-dir "$PROFILE_ROOT"
+python3 "$PROFILE_LAUNCHER" test-only "${COMMON_ARGS[@]}" --output-dir "$PROFILE_ROOT"
+python3 "$PROFILE_LAUNCHER" submit "${COMMON_ARGS[@]}" --output-dir "$PROFILE_ROOT"
+```
+
+For Qwen3-235B, select the TP8 K0-K3 contract explicitly and use a separate
+output root:
+
+```bash
+PROFILE_ROOT=/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/vllm0251_dynamic_profile/qwen235-thinking-k0-k3
+
+python3 "$PROFILE_LAUNCHER" show --model qwen235 "${COMMON_ARGS[@]}" \
+  --output-dir "$PROFILE_ROOT"
+python3 "$PROFILE_LAUNCHER" test-only --model qwen235 "${COMMON_ARGS[@]}" \
+  --output-dir "$PROFILE_ROOT"
+python3 "$PROFILE_LAUNCHER" submit --model qwen235 "${COMMON_ARGS[@]}" \
+  --output-dir "$PROFILE_ROOT"
 ```
 
 The launcher explicitly passes `--dependency=` because the shared `ray.sub`
 contains a historical singleton directive. Each K uses an independent
-one-node, `--segment=1`, five-hour allocation without GRES. A per-job locked
-vLLM 0.25.1 environment is materialized under `/tmp`; the base container
-environment is not replaced.
+five-hour allocation without GRES: one node with `--segment=1` for Qwen3-32B,
+or two nodes with `--segment=2` for Qwen3-235B. A per-job locked vLLM 0.25.1
+environment is materialized under `/tmp`; the base container environment is
+not replaced.
 
 After all profile jobs complete, assemble and derive the immutable artifacts:
 
@@ -203,6 +232,13 @@ CALIBRATOR=experiments/vllm_0251_drafter_matrix/calibrate_dynamic_sd.py
   "$PROFILE_ROOT/profile.json" \
   --output "$PROFILE_ROOT/schedule.json"
 ```
+
+The Qwen3-235B assembly command additionally supplies `--model-key qwen235`,
+`--max-k 3`, `--batch-sizes 1 4 8 16 32 48 64`, `--target-tp 8`,
+`--max-model-len 8192`, `--max-num-seqs 128`,
+`--profile-max-batch-size 64`, `--max-num-batched-tokens 2048`,
+`--enable-prefix-caching`, `--moe-backend triton`, and
+`--cudagraph-capture-sizes 1 2 4 8 16 32 64 128 192 256`.
 
 The completed Qwen3-32B Thinking calibration is checked in as
 `calibration/qwen32_thinking_k5_vllm0251_profile.json` and

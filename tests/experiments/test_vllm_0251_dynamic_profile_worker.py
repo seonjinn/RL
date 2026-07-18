@@ -61,10 +61,21 @@ def test_server_command_matches_performance_recipe_and_k5() -> None:
     assert str(G_DRAFTER) in joined
 
 
-def test_k0_server_is_a_true_no_drafter_baseline() -> None:
-    command = build_server_command(0, G_TARGET, None, 8100)
+def test_k0_server_uses_dynamic_zero_width_with_the_drafter_loaded() -> None:
+    command = build_server_command(
+        0,
+        G_TARGET,
+        G_DRAFTER,
+        8100,
+        max_k=5,
+        profile_max_batch_size=256,
+    )
+    joined = " ".join(command)
 
-    assert "--speculative-config" not in command
+    assert "--speculative-config" in command
+    assert '"num_speculative_tokens":5' in joined
+    assert '"num_speculative_tokens_per_batch_size":[[1,256,0]]' in joined
+    assert str(G_DRAFTER) in joined
 
 
 def test_benchmark_command_uses_twenty_batches_and_math_sampling(
@@ -341,9 +352,12 @@ def test_assemble_profile_requires_and_preserves_the_complete_grid(
         target_revision="1" * 40,
         drafter_revision="2" * 40,
         batch_sizes=batch_sizes,
+        profile_max_batch_size=4,
     )
 
     assert payload["calibration_status"] == "complete"
+    assert payload["schema_version"] == 2
+    assert payload["profile_max_batch_size"] == 4
     assert payload["dataset_revision"] == G_DATASET_REVISION
     assert payload["k_values"] == list(range(6))
     assert len(payload["rows"]) == 12
@@ -382,4 +396,5 @@ def test_assemble_profile_fails_when_a_cell_is_missing(tmp_path: Path) -> None:
             target_revision="1" * 40,
             drafter_revision="2" * 40,
             batch_sizes=(1,),
+            profile_max_batch_size=1,
         )

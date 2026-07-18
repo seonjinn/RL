@@ -36,9 +36,7 @@ G_VLLM_BIN = str(Path(G_PYTHON_BIN).with_name("vllm"))
 class ChatTokenizer(Protocol):
     """Small tokenizer surface required by the prompt exporter."""
 
-    def apply_chat_template(
-        self, messages: object, **kwargs: object
-    ) -> str: ...
+    def apply_chat_template(self, messages: object, **kwargs: object) -> str: ...
 
 
 def validate_batch_sizes(batch_sizes: Sequence[int]) -> tuple[int, ...]:
@@ -95,35 +93,62 @@ def build_server_command(
     target_snapshot: Path,
     drafter_snapshot: Path | None,
     port: int,
+    *,
+    max_k: int = 5,
+    profile_max_batch_size: int | None = None,
+    served_model_name: str = "qwen32-profile",
+    target_tensor_parallel_size: int = 2,
+    max_model_len: int = 4096,
+    max_num_seqs: int = 256,
+    max_num_batched_tokens: int = 16384,
+    gpu_memory_utilization: float = 0.6,
+    enable_prefix_caching: bool = False,
+    distributed_executor_backend: str | None = None,
+    moe_backend: str | None = None,
+    cudagraph_capture_sizes: tuple[int, ...] = (),
 ) -> tuple[str, ...]:
     """Build one matched target server command for a fixed K."""
-    if k not in G_K_VALUES:
+    if max_k not in G_K_VALUES or k not in tuple(range(max_k + 1)):
         raise ValueError(f"K must be one of {G_K_VALUES}")
-    if k > 0 and drafter_snapshot is None:
-        raise ValueError("K > 0 requires the exact drafter snapshot")
-    compilation = json.dumps(
-        {"cudagraph_mode": "FULL_AND_PIECEWISE"}, separators=(",", ":")
-    )
+    if drafter_snapshot is None:
+        raise ValueError("DynamicSD profiling requires the exact drafter snapshot")
+    if k == 0 and profile_max_batch_size is None:
+        raise ValueError("K0 profiling requires the active profile batch endpoint")
+    compilation_config: dict[str, object] = {"cudagraph_mode": "FULL_AND_PIECEWISE"}
+    if cudagraph_capture_sizes:
+        compilation_config["cudagraph_capture_sizes"] = list(cudagraph_capture_sizes)
+    compilation = json.dumps(compilation_config, separators=(",", ":"))
+    speculative_config: dict[str, object] = {
+        "method": "eagle3",
+        "model": str(drafter_snapshot),
+        "num_speculative_tokens": k if k > 0 else max_k,
+        "draft_tensor_parallel_size": 1,
+    }
+    if k == 0:
+        assert profile_max_batch_size is not None
+        speculative_config["num_speculative_tokens_per_batch_size"] = [
+            [1, profile_max_batch_size, 0]
+        ]
     speculative = (
-        (
-            "--speculative-config",
-            json.dumps(
-                {
-                    "method": "eagle3",
-                    "model": str(drafter_snapshot),
-                    "num_speculative_tokens": k,
-                    "draft_tensor_parallel_size": 1,
-                },
-                separators=(",", ":"),
-                sort_keys=True,
-            ),
-        )
-        if k > 0
+        "--speculative-config",
+        json.dumps(
+            speculative_config,
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+    )
+    distributed_backend = (
+        ("--distributed-executor-backend", distributed_executor_backend)
+        if distributed_executor_backend is not None
         else ()
+    )
+    moe = ("--moe-backend", moe_backend) if moe_backend is not None else ()
+    visible_devices = (
+        () if distributed_executor_backend == "ray" else ("CUDA_VISIBLE_DEVICES=0,1",)
     )
     return (
         "env",
-        "CUDA_VISIBLE_DEVICES=0,1",
+        *visible_devices,
         "VLLM_USE_V2_MODEL_RUNNER=1",
         "HF_HUB_OFFLINE=1",
         "TRANSFORMERS_OFFLINE=1",
@@ -135,21 +160,25 @@ def build_server_command(
         "--port",
         str(port),
         "--served-model-name",
-        "qwen32-profile",
+        served_model_name,
         "--tensor-parallel-size",
-        "2",
+        str(target_tensor_parallel_size),
         "--max-model-len",
-        "4096",
+        str(max_model_len),
         "--max-num-seqs",
-        "256",
+        str(max_num_seqs),
         "--max-num-batched-tokens",
-        "16384",
+        str(max_num_batched_tokens),
         "--gpu-memory-utilization",
-        "0.6",
+        str(gpu_memory_utilization),
         "--enable-chunked-prefill",
-        "--no-enable-prefix-caching",
+        "--enable-prefix-caching"
+        if enable_prefix_caching
+        else "--no-enable-prefix-caching",
         "--compilation-config",
         compilation,
+        *distributed_backend,
+        *moe,
         *speculative,
     )
 
@@ -161,6 +190,7 @@ def build_benchmark_command(
     tokenizer_snapshot: Path,
     result_dir: Path,
     port: int,
+    served_model_name: str = "qwen32-profile",
 ) -> tuple[str, ...]:
     """Build an upstream-style twenty-batch serving benchmark."""
     validate_batch_sizes((batch_size,))
@@ -175,7 +205,7 @@ def build_benchmark_command(
         "--endpoint",
         "/v1/completions",
         "--model",
-        "qwen32-profile",
+        served_model_name,
         "--tokenizer",
         str(tokenizer_snapshot),
         "--dataset-name",
@@ -344,14 +374,29 @@ def run_fixed_k(
     port: int,
     *,
     batch_sizes: tuple[int, ...] = G_BATCH_SIZES,
+    model_key: str = "qwen32",
+    max_k: int = 5,
+    profile_max_batch_size: int = 256,
+    served_model_name: str = "qwen32-profile",
+    target_tensor_parallel_size: int = 2,
+    max_model_len: int = 4096,
+    max_num_seqs: int = 256,
+    max_num_batched_tokens: int = 16384,
+    gpu_memory_utilization: float = 0.6,
+    enable_prefix_caching: bool = False,
+    distributed_executor_backend: str | None = None,
+    moe_backend: str | None = None,
+    cudagraph_capture_sizes: tuple[int, ...] = (),
 ) -> None:
     """Run selected batch-size points for one K and preserve completed cells."""
     batch_sizes = validate_batch_sizes(batch_sizes)
+    if max_k not in G_K_VALUES or k not in tuple(range(max_k + 1)):
+        raise ValueError(f"K must be in 0..{max_k}, got {k}")
     prompt_file = _ensure_prompt_file(
         root,
         target_snapshot,
         prompt_template_path,
-        num_prompts=max(G_BATCH_SIZES) * G_NUM_BATCHES,
+        num_prompts=max(batch_sizes) * G_NUM_BATCHES,
     )
     output_dir = root / f"k-{k}"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -368,8 +413,20 @@ def run_fixed_k(
         build_server_command(
             k,
             target_snapshot,
-            drafter_snapshot if k > 0 else None,
+            drafter_snapshot,
             port,
+            max_k=max_k,
+            profile_max_batch_size=profile_max_batch_size,
+            served_model_name=served_model_name,
+            target_tensor_parallel_size=target_tensor_parallel_size,
+            max_model_len=max_model_len,
+            max_num_seqs=max_num_seqs,
+            max_num_batched_tokens=max_num_batched_tokens,
+            gpu_memory_utilization=gpu_memory_utilization,
+            enable_prefix_caching=enable_prefix_caching,
+            distributed_executor_backend=distributed_executor_backend,
+            moe_backend=moe_backend,
+            cudagraph_capture_sizes=cudagraph_capture_sizes,
         ),
         stdout=server_log,
         stderr=subprocess.STDOUT,
@@ -388,6 +445,7 @@ def run_fixed_k(
                     tokenizer_snapshot=target_snapshot,
                     result_dir=result_dir,
                     port=port,
+                    served_model_name=served_model_name,
                 ),
                 check=True,
                 env={
@@ -401,7 +459,9 @@ def run_fixed_k(
         _terminate_process_group(process)
         server_log.close()
 
-    if k == 5 and batch_sizes == G_BATCH_SIZES:
+    if k == max_k and (
+        batch_sizes == G_BATCH_SIZES or batch_sizes[-1] == profile_max_batch_size
+    ):
         subprocess.run(
             (
                 G_PYTHON_BIN,
@@ -413,11 +473,41 @@ def run_fixed_k(
                 str(target_snapshot),
                 "--drafter-snapshot",
                 str(drafter_snapshot),
+                "--max-k",
+                str(max_k),
+                "--target-tp",
+                str(target_tensor_parallel_size),
+                "--max-model-len",
+                str(max_model_len),
+                "--max-num-seqs",
+                str(max_num_seqs),
+                "--profile-max-batch-size",
+                str(profile_max_batch_size),
+                "--max-num-batched-tokens",
+                str(max_num_batched_tokens),
+                "--gpu-memory-utilization",
+                str(gpu_memory_utilization),
+                "--enable-prefix-caching"
+                if enable_prefix_caching
+                else "--no-enable-prefix-caching",
+                *(
+                    ("--distributed-executor-backend", distributed_executor_backend)
+                    if distributed_executor_backend is not None
+                    else ()
+                ),
+                *(("--moe-backend", moe_backend) if moe_backend is not None else ()),
+                *(
+                    (
+                        "--cudagraph-capture-sizes",
+                        *(str(size) for size in cudagraph_capture_sizes),
+                    )
+                    if cudagraph_capture_sizes
+                    else ()
+                ),
             ),
             check=True,
             env={
                 **os.environ,
-                "CUDA_VISIBLE_DEVICES": "0,1",
                 "VLLM_USE_V2_MODEL_RUNNER": "1",
                 "HF_HUB_OFFLINE": "1",
                 "TRANSFORMERS_OFFLINE": "1",
@@ -429,8 +519,22 @@ def collect_acceptance(
     root: Path,
     target_snapshot: Path,
     drafter_snapshot: Path,
+    *,
+    max_k: int = 5,
+    profile_max_batch_size: int = 256,
+    target_tensor_parallel_size: int = 2,
+    max_model_len: int = 4096,
+    max_num_seqs: int = 256,
+    max_num_batched_tokens: int = 16384,
+    gpu_memory_utilization: float = 0.6,
+    enable_prefix_caching: bool = False,
+    distributed_executor_backend: str | None = None,
+    moe_backend: str | None = None,
+    cudagraph_capture_sizes: tuple[int, ...] = (),
 ) -> None:
-    """Collect K5 position-level acceptance on deterministic Math prompts."""
+    """Collect max-K position-level acceptance on deterministic Math prompts."""
+    if max_k not in G_K_VALUES or max_k == 0:
+        raise ValueError("acceptance profiling requires max K in 1..5")
     prompt_file = root / "prompts.jsonl"
     raw_prompts = [
         json.loads(line)["prompt"]
@@ -448,25 +552,34 @@ def collect_acceptance(
         {"prompt_token_ids": tokenizer.encode(prompt, add_special_tokens=False)}
         for prompt in raw_prompts
     ]
+    compilation_config: dict[str, object] = {"cudagraph_mode": "FULL_AND_PIECEWISE"}
+    if cudagraph_capture_sizes:
+        compilation_config["cudagraph_capture_sizes"] = list(cudagraph_capture_sizes)
+    llm_kwargs: dict[str, object] = {}
+    if distributed_executor_backend is not None:
+        llm_kwargs["distributed_executor_backend"] = distributed_executor_backend
+    if moe_backend is not None:
+        llm_kwargs["moe_backend"] = moe_backend
     llm = vllm_module.LLM(
         model=str(target_snapshot),
         tokenizer=str(target_snapshot),
-        tensor_parallel_size=2,
-        max_model_len=4096,
-        max_num_seqs=256,
-        max_num_batched_tokens=16384,
-        gpu_memory_utilization=0.6,
+        tensor_parallel_size=target_tensor_parallel_size,
+        max_model_len=max_model_len,
+        max_num_seqs=max_num_seqs,
+        max_num_batched_tokens=max_num_batched_tokens,
+        gpu_memory_utilization=gpu_memory_utilization,
         enable_chunked_prefill=True,
-        enable_prefix_caching=False,
+        enable_prefix_caching=enable_prefix_caching,
         enforce_eager=False,
-        compilation_config={"cudagraph_mode": "FULL_AND_PIECEWISE"},
+        compilation_config=compilation_config,
         disable_log_stats=False,
         speculative_config={
             "method": "eagle3",
             "model": str(drafter_snapshot),
-            "num_speculative_tokens": 5,
+            "num_speculative_tokens": max_k,
             "draft_tensor_parallel_size": 1,
         },
+        **llm_kwargs,
     )
     llm.generate(
         prompts,
@@ -481,7 +594,7 @@ def collect_acceptance(
     num_drafts = 0
     num_draft_tokens = 0
     num_accepted_tokens = 0
-    acceptance_counts = [0] * 5
+    acceptance_counts = [0] * max_k
     for metric in llm.get_metrics():
         if metric.name == "vllm:spec_decode_num_drafts":
             if not isinstance(metric, metrics_module.Counter):
@@ -498,18 +611,16 @@ def collect_acceptance(
         elif metric.name == "vllm:spec_decode_num_accepted_tokens_per_pos":
             if not isinstance(metric, metrics_module.Vector):
                 raise TypeError("position acceptance metric has an unexpected type")
-            for position, value in enumerate(metric.values[:5]):
+            for position, value in enumerate(metric.values[:max_k]):
                 acceptance_counts[position] += value
     if num_drafts <= 0:
-        raise RuntimeError("K5 acceptance profile emitted no draft events")
+        raise RuntimeError(f"K{max_k} acceptance profile emitted no draft events")
     payload = {
         "num_prompts": len(prompts),
         "num_drafts": num_drafts,
         "num_draft_tokens": num_draft_tokens,
         "num_accepted_tokens": num_accepted_tokens,
-        "acceptance_rate_per_pos": [
-            count / num_drafts for count in acceptance_counts
-        ],
+        "acceptance_rate_per_pos": [count / num_drafts for count in acceptance_counts],
     }
     _atomic_write(
         root / "acceptance.json",
@@ -520,22 +631,46 @@ def collect_acceptance(
 def assemble_profile(
     root: Path,
     *,
+    model_key: str = "qwen32",
     target_revision: str,
     drafter_revision: str,
     batch_sizes: tuple[int, ...] = G_BATCH_SIZES,
+    k_values: tuple[int, ...] = G_K_VALUES,
+    max_model_len: int = 4096,
+    max_num_batched_tokens: int = 16384,
+    max_num_seqs: int = 256,
+    profile_max_batch_size: int = 256,
+    target_tensor_parallel_size: int = 2,
+    enable_prefix_caching: bool = False,
+    moe_backend: str | None = None,
+    cudagraph_capture_sizes: tuple[int, ...] = (),
 ) -> dict[str, Any]:
     """Assemble all complete cells into the calibrator's strict raw schema."""
+    if batch_sizes[-1] != profile_max_batch_size:
+        raise ValueError("profile batch-size grid must end at profile_max_batch_size")
+    if profile_max_batch_size > max_num_seqs:
+        raise ValueError("profile_max_batch_size must not exceed max_num_seqs")
+    if max_num_batched_tokens < max_num_seqs:
+        raise ValueError("max_num_batched_tokens must not be smaller than max_num_seqs")
+    if cudagraph_capture_sizes:
+        required_endpoint_shapes = {
+            profile_max_batch_size * (k + 1) for k in k_values[1:]
+        }
+        missing_shapes = sorted(required_endpoint_shapes - set(cudagraph_capture_sizes))
+        if missing_shapes:
+            raise ValueError(
+                "CUDA Graph capture sizes do not cover profile endpoint shapes: "
+                f"{missing_shapes}"
+            )
     acceptance = json.loads((root / "acceptance.json").read_text(encoding="utf-8"))
     rates = acceptance.get("acceptance_rate_per_pos")
-    if not isinstance(rates, list) or len(rates) != 5:
-        raise ValueError("acceptance profile must contain five positions")
-    prompt_meta = json.loads(
-        (root / "prompts.meta.json").read_text(encoding="utf-8")
-    )
+    if not isinstance(rates, list) or len(rates) != k_values[-1]:
+        raise ValueError(f"acceptance profile must contain {k_values[-1]} positions")
+    prompt_meta = json.loads((root / "prompts.meta.json").read_text(encoding="utf-8"))
     if prompt_meta.get("dataset_revision") != G_DATASET_REVISION:
         raise ValueError("prompt data must use the pinned OpenMathInstruct-2 revision")
     rows: list[dict[str, Any]] = []
-    for k in G_K_VALUES:
+    for k in k_values:
         for batch_size in batch_sizes:
             result_path = root / f"k-{k}" / f"bs-{batch_size}" / "result.json"
             if not result_path.is_file():
@@ -555,9 +690,9 @@ def assemble_profile(
                 }
             )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "calibration_status": "complete",
-        "model_key": "qwen32",
+        "model_key": model_key,
         "target_revision": target_revision,
         "drafter_revision": drafter_revision,
         "runtime_vllm": "0.25.1",
@@ -567,14 +702,18 @@ def assemble_profile(
         "prompt_template_sha256": prompt_meta["prompt_template_sha256"],
         "temperature": 1.0,
         "top_p": 1.0,
-        "max_model_len": 4096,
-        "max_num_batched_tokens": 16384,
-        "max_num_seqs": batch_sizes[-1],
-        "target_tensor_parallel_size": 2,
+        "max_model_len": max_model_len,
+        "max_num_batched_tokens": max_num_batched_tokens,
+        "max_num_seqs": max_num_seqs,
+        "profile_max_batch_size": profile_max_batch_size,
+        "enable_prefix_caching": enable_prefix_caching,
+        "moe_backend": moe_backend,
+        "cudagraph_capture_sizes": list(cudagraph_capture_sizes),
+        "target_tensor_parallel_size": target_tensor_parallel_size,
         "draft_tensor_parallel_size": 1,
         "num_batches_per_point": G_NUM_BATCHES,
         "batch_sizes": list(batch_sizes),
-        "k_values": list(G_K_VALUES),
+        "k_values": list(k_values),
         "acceptance_rate_per_pos": rates,
         "rows": rows,
     }
@@ -592,16 +731,65 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--prompt-template", type=Path, required=True)
     run.add_argument("--port", type=int, default=8100)
     run.add_argument("--batch-sizes", nargs="+", type=int, default=G_BATCH_SIZES)
+    run.add_argument("--model-key", default="qwen32")
+    run.add_argument("--max-k", type=int, choices=G_K_VALUES, default=5)
+    run.add_argument("--profile-max-batch-size", type=int, default=256)
+    run.add_argument("--served-model-name", default="qwen32-profile")
+    run.add_argument("--target-tp", type=int, default=2)
+    run.add_argument("--max-model-len", type=int, default=4096)
+    run.add_argument("--max-num-seqs", type=int, default=256)
+    run.add_argument("--max-num-batched-tokens", type=int, default=16384)
+    run.add_argument("--gpu-memory-utilization", type=float, default=0.6)
+    run.add_argument(
+        "--enable-prefix-caching",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    run.add_argument("--distributed-executor-backend")
+    run.add_argument("--moe-backend")
+    run.add_argument("--cudagraph-capture-sizes", nargs="+", type=int, default=())
 
     acceptance = subparsers.add_parser("acceptance")
     acceptance.add_argument("--root", type=Path, required=True)
     acceptance.add_argument("--target-snapshot", type=Path, required=True)
     acceptance.add_argument("--drafter-snapshot", type=Path, required=True)
+    acceptance.add_argument("--max-k", type=int, choices=G_K_VALUES, default=5)
+    acceptance.add_argument("--profile-max-batch-size", type=int, default=256)
+    acceptance.add_argument("--target-tp", type=int, default=2)
+    acceptance.add_argument("--max-model-len", type=int, default=4096)
+    acceptance.add_argument("--max-num-seqs", type=int, default=256)
+    acceptance.add_argument("--max-num-batched-tokens", type=int, default=16384)
+    acceptance.add_argument("--gpu-memory-utilization", type=float, default=0.6)
+    acceptance.add_argument(
+        "--enable-prefix-caching",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    acceptance.add_argument("--distributed-executor-backend")
+    acceptance.add_argument("--moe-backend")
+    acceptance.add_argument(
+        "--cudagraph-capture-sizes", nargs="+", type=int, default=()
+    )
 
     assemble = subparsers.add_parser("assemble")
     assemble.add_argument("--root", type=Path, required=True)
     assemble.add_argument("--target-revision", required=True)
     assemble.add_argument("--drafter-revision", required=True)
+    assemble.add_argument("--model-key", default="qwen32")
+    assemble.add_argument("--max-k", type=int, choices=G_K_VALUES, default=5)
+    assemble.add_argument("--profile-max-batch-size", type=int, default=256)
+    assemble.add_argument("--batch-sizes", nargs="+", type=int, default=G_BATCH_SIZES)
+    assemble.add_argument("--target-tp", type=int, default=2)
+    assemble.add_argument("--max-model-len", type=int, default=4096)
+    assemble.add_argument("--max-num-seqs", type=int, default=256)
+    assemble.add_argument("--max-num-batched-tokens", type=int, default=16384)
+    assemble.add_argument(
+        "--enable-prefix-caching",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    assemble.add_argument("--moe-backend")
+    assemble.add_argument("--cudagraph-capture-sizes", nargs="+", type=int, default=())
     assemble.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -622,15 +810,54 @@ def main(argv: Sequence[str] | None = None) -> None:
             args.prompt_template,
             args.port,
             batch_sizes=batch_sizes,
+            model_key=args.model_key,
+            max_k=args.max_k,
+            profile_max_batch_size=args.profile_max_batch_size,
+            served_model_name=args.served_model_name,
+            target_tensor_parallel_size=args.target_tp,
+            max_model_len=args.max_model_len,
+            max_num_seqs=args.max_num_seqs,
+            max_num_batched_tokens=args.max_num_batched_tokens,
+            gpu_memory_utilization=args.gpu_memory_utilization,
+            enable_prefix_caching=args.enable_prefix_caching,
+            distributed_executor_backend=args.distributed_executor_backend,
+            moe_backend=args.moe_backend,
+            cudagraph_capture_sizes=tuple(args.cudagraph_capture_sizes),
         )
         return
     if args.command == "acceptance":
-        collect_acceptance(args.root, args.target_snapshot, args.drafter_snapshot)
+        collect_acceptance(
+            args.root,
+            args.target_snapshot,
+            args.drafter_snapshot,
+            max_k=args.max_k,
+            profile_max_batch_size=args.profile_max_batch_size,
+            target_tensor_parallel_size=args.target_tp,
+            max_model_len=args.max_model_len,
+            max_num_seqs=args.max_num_seqs,
+            max_num_batched_tokens=args.max_num_batched_tokens,
+            gpu_memory_utilization=args.gpu_memory_utilization,
+            enable_prefix_caching=args.enable_prefix_caching,
+            distributed_executor_backend=args.distributed_executor_backend,
+            moe_backend=args.moe_backend,
+            cudagraph_capture_sizes=tuple(args.cudagraph_capture_sizes),
+        )
         return
     payload = assemble_profile(
         args.root,
+        model_key=args.model_key,
         target_revision=args.target_revision,
         drafter_revision=args.drafter_revision,
+        batch_sizes=validate_batch_sizes(args.batch_sizes),
+        k_values=tuple(range(args.max_k + 1)),
+        max_model_len=args.max_model_len,
+        max_num_batched_tokens=args.max_num_batched_tokens,
+        max_num_seqs=args.max_num_seqs,
+        profile_max_batch_size=args.profile_max_batch_size,
+        target_tensor_parallel_size=args.target_tp,
+        enable_prefix_caching=args.enable_prefix_caching,
+        moe_backend=args.moe_backend,
+        cudagraph_capture_sizes=tuple(args.cudagraph_capture_sizes),
     )
     _atomic_write(args.output, json.dumps(payload, indent=2, sort_keys=True) + "\n")
     print(args.output.resolve())

@@ -138,6 +138,12 @@ def _write_runtime_inputs(
     worker = repo_dir / module.WORKER_RELATIVE_PATH
     worker.parent.mkdir(parents=True)
     worker.write_text("# worker\n", encoding="utf-8")
+    patcher = (
+        repo_dir
+        / "experiments/vllm_0251_eagle3_perfcfg/apply_vllm0251_dynamic_sd_cg_fix.py"
+    )
+    patcher.parent.mkdir(parents=True, exist_ok=True)
+    patcher.write_text("# patcher\n", encoding="utf-8")
     (repo_dir / "ray.sub").write_text("#!/bin/bash\n", encoding="utf-8")
     (repo_dir / "pyproject.toml").write_text(
         """
@@ -268,15 +274,19 @@ def test_submit_preflights_every_exact_cell_before_any_submission(
     assert manifest["profile_contract"] == {
         "batch_sizes": [34, 35, 75, 76, 85, 86],
         "chunked_prefill": True,
+        "cudagraph_capture_sizes": [],
         "cuda_graph_mode": "FULL_AND_PIECEWISE",
         "dataset_revision": module.DATASET_REVISION,
         "draft_tensor_parallel_size": 1,
+        "k_values": list(range(6)),
         "max_model_len": 4096,
         "max_num_batched_tokens": 16384,
         "max_num_seqs": 256,
+        "profile_max_batch_size": 256,
         "num_prompts_per_batch_size": "batch_size * 20",
         "output_len": 256,
         "prefix_cache": False,
+        "moe_backend": None,
         "runtime_vllm": "0.25.1",
         "target_tensor_parallel_size": 2,
         "temperature": 1.0,

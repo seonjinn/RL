@@ -135,9 +135,10 @@ def test_write_schedule_records_profile_hash_and_k5_contract(tmp_path: Path) -> 
     assert payload["schema_version"] == 2
     assert payload["max_num_speculative_tokens"] == 5
     assert payload["selection_metric"] == "accepted_length_over_median_itl"
-    assert payload["profile_sha256"] == hashlib.sha256(
-        profile_path.read_bytes()
-    ).hexdigest()
+    assert (
+        payload["profile_sha256"]
+        == hashlib.sha256(profile_path.read_bytes()).hexdigest()
+    )
     assert payload["ranges"] == [
         [item.start_batch, item.end_batch, item.k] for item in schedule.ranges
     ]
@@ -147,7 +148,10 @@ def test_write_schedule_records_profile_hash_and_k5_contract(tmp_path: Path) -> 
     ("mutate", "error"),
     [
         (lambda payload: payload.update(calibration_status="partial"), "complete"),
-        (lambda payload: payload.update(k_values=[0, 1, 2, 3, 5]), "K0 through K5"),
+        (
+            lambda payload: payload.update(k_values=[0, 1, 2, 3, 5]),
+            "K0 through max K",
+        ),
         (lambda payload: payload.update(batch_sizes=[2, 4]), "batch size 1"),
         (lambda payload: payload.update(max_num_seqs=8), "max_num_seqs"),
         (

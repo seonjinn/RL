@@ -1,6 +1,6 @@
 # Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
 
-"""Launch the matched Qwen3-32B DynamicSD GPU profile on Lyris."""
+"""Launch matched DynamicSD GPU profiles for controlled Qwen recipes."""
 
 from __future__ import annotations
 
@@ -18,14 +18,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 
-TARGET_REPO_ID = "Qwen/Qwen3-32B"
-TARGET_REVISION = "9216db5781bf21249d130ec9da846c4624c16137"
-DRAFTER_REPO_ID = "RedHatAI/Qwen3-32B-Thinking-speculator.eagle3"
-DRAFTER_REVISION = "a1403e07b73a66fc9ef561463631c31864616933"
 DATASET_REPO_ID = "nvidia/OpenMathInstruct-2"
 DATASET_REVISION = "469216e3f46f4dacf476b382e192485ea51a143e"
-BATCH_SIZES = (1, 4, 16, 32, 64, 128, 192, 256)
-K_VALUES = tuple(range(6))
 MANIFEST_NAME = "dynamic-profile-launch-manifest.json"
 
 DEFAULT_HF_HOME = Path("/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home")
@@ -36,6 +30,9 @@ DEFAULT_MOUNTS = "/lustre:/lustre"
 CONTAINER_PYTHON = "/opt/nemo_rl_venv/bin/python"
 WORKER_RELATIVE_PATH = Path(
     "experiments/vllm_0251_drafter_matrix/dynamic_profile_worker.py"
+)
+DYNAMIC_PATCHER_RELATIVE_PATH = Path(
+    "experiments/vllm_0251_eagle3_perfcfg/apply_vllm0251_dynamic_sd_cg_fix.py"
 )
 PASSTHROUGH_ENVIRONMENT = (
     "HOME",
@@ -66,12 +63,95 @@ SECRET_ENVIRONMENT = frozenset(
 
 
 @dataclass(frozen=True, slots=True)
+class ProfileSpec:
+    """Immutable model and topology contract for one DynamicSD profile."""
+
+    key: str
+    target_repo_id: str
+    target_revision: str
+    drafter_repo_id: str
+    drafter_revision: str
+    batch_sizes: tuple[int, ...]
+    k_values: tuple[int, ...]
+    nodes: int
+    segment: int
+    target_tensor_parallel_size: int
+    max_model_len: int
+    max_num_batched_tokens: int
+    max_num_seqs: int
+    profile_max_batch_size: int
+    gpu_memory_utilization: float
+    enable_prefix_caching: bool
+    moe_backend: str | None = None
+    visible_devices: str | None = None
+    cudagraph_capture_sizes: tuple[int, ...] = ()
+
+
+G_QWEN32_PROFILE = ProfileSpec(
+    key="qwen32",
+    target_repo_id="Qwen/Qwen3-32B",
+    target_revision="9216db5781bf21249d130ec9da846c4624c16137",
+    drafter_repo_id="RedHatAI/Qwen3-32B-Thinking-speculator.eagle3",
+    drafter_revision="a1403e07b73a66fc9ef561463631c31864616933",
+    batch_sizes=(1, 4, 16, 32, 64, 128, 192, 256),
+    k_values=tuple(range(6)),
+    nodes=1,
+    segment=1,
+    target_tensor_parallel_size=2,
+    max_model_len=4096,
+    max_num_batched_tokens=16384,
+    max_num_seqs=256,
+    profile_max_batch_size=256,
+    gpu_memory_utilization=0.6,
+    enable_prefix_caching=False,
+    visible_devices="0,1",
+)
+G_QWEN235_PROFILE = ProfileSpec(
+    key="qwen235",
+    target_repo_id="Qwen/Qwen3-235B-A22B",
+    target_revision="8efa61729e24bd65b1d152b5ab5409052aa80e65",
+    drafter_repo_id=("RedHatAI/Qwen3-235B-A22B-Thinking-2507-speculator.eagle3"),
+    drafter_revision="3c0c5cbad8e1fa7ce9e6fb6a1b0a35458b124e87",
+    batch_sizes=(1, 4, 8, 16, 32, 48, 64),
+    k_values=tuple(range(4)),
+    nodes=2,
+    segment=2,
+    target_tensor_parallel_size=8,
+    max_model_len=8192,
+    max_num_batched_tokens=2048,
+    max_num_seqs=128,
+    profile_max_batch_size=64,
+    gpu_memory_utilization=0.4,
+    enable_prefix_caching=True,
+    moe_backend="triton",
+    cudagraph_capture_sizes=(1, 2, 4, 8, 16, 32, 64, 128, 192, 256),
+)
+G_PROFILE_SPECS = (G_QWEN32_PROFILE, G_QWEN235_PROFILE)
+
+# Preserve the original Qwen3-32B public constants for existing callers.
+TARGET_REPO_ID = G_QWEN32_PROFILE.target_repo_id
+TARGET_REVISION = G_QWEN32_PROFILE.target_revision
+DRAFTER_REPO_ID = G_QWEN32_PROFILE.drafter_repo_id
+DRAFTER_REVISION = G_QWEN32_PROFILE.drafter_revision
+BATCH_SIZES = G_QWEN32_PROFILE.batch_sizes
+K_VALUES = G_QWEN32_PROFILE.k_values
+
+
+@dataclass(frozen=True, slots=True)
 class ProfileJob:
     """One independent fixed-K profiling allocation."""
 
     k: int
     job_name: str
     output_dir: Path
+
+
+def get_profile_spec(model_key: str) -> ProfileSpec:
+    """Return the immutable profile contract for one supported model."""
+    for profile in G_PROFILE_SPECS:
+        if profile.key == model_key:
+            return profile
+    raise ValueError(f"Unsupported DynamicSD profile model: {model_key}")
 
 
 def snapshot_path(hf_home: Path, repo_id: str, revision: str) -> Path:
@@ -85,30 +165,35 @@ def snapshot_path(hf_home: Path, repo_id: str, revision: str) -> Path:
     )
 
 
-def build_jobs(profile_root: Path) -> tuple[ProfileJob, ...]:
-    """Build the complete K0-K5 job set in deterministic order."""
+def build_jobs(
+    profile_root: Path,
+    *,
+    profile: ProfileSpec = G_QWEN32_PROFILE,
+) -> tuple[ProfileJob, ...]:
+    """Build the complete fixed-K job set in deterministic order."""
     return tuple(
         ProfileJob(
             k=k,
-            job_name=f"nemorl-qwen32-dynamicsd-k{k}",
+            job_name=f"nemorl-{profile.key}-dynamicsd-k{k}",
             output_dir=profile_root / f"k-{k}",
         )
-        for k in K_VALUES
+        for k in profile.k_values
     )
 
 
 def _profile_venv_root(job: ProfileJob) -> Path:
-    return Path(f"/tmp/nemorl-v0251-qwen32-dynamicsd-k{job.k}")
+    runtime_id = job.job_name.removeprefix("nemorl-")
+    return Path(f"/tmp/nemorl-v0251-{runtime_id}")
 
 
 def _profile_python(job: ProfileJob) -> Path:
     return _profile_venv_root(job) / "profile" / "bin" / "python"
 
 
-def _require_known_job(job: ProfileJob) -> None:
-    if job.k not in K_VALUES:
-        raise ValueError(f"K must be one of {K_VALUES}, got {job.k}")
-    expected_name = f"nemorl-qwen32-dynamicsd-k{job.k}"
+def _require_known_job(job: ProfileJob, profile: ProfileSpec) -> None:
+    if job.k not in profile.k_values:
+        raise ValueError(f"K must be one of {profile.k_values}, got {job.k}")
+    expected_name = f"nemorl-{profile.key}-dynamicsd-k{job.k}"
     if job.job_name != expected_name:
         raise ValueError(f"Unexpected profile job name: {job.job_name!r}")
 
@@ -116,6 +201,7 @@ def _require_known_job(job: ProfileJob) -> None:
 def build_runtime_command(
     job: ProfileJob,
     *,
+    profile: ProfileSpec = G_QWEN32_PROFILE,
     repo_dir: Path,
     profile_root: Path,
     target_snapshot: Path,
@@ -123,15 +209,31 @@ def build_runtime_command(
     prompt_template: Path,
 ) -> tuple[str, ...]:
     """Build the exact command executed by ``ray.sub`` on the job's head node."""
-    _require_known_job(job)
-    if target_snapshot.name != TARGET_REVISION:
-        raise ValueError("Target snapshot must use the immutable Qwen3-32B revision")
-    if drafter_snapshot.name != DRAFTER_REVISION:
+    _require_known_job(job, profile)
+    if target_snapshot.name != profile.target_revision:
+        raise ValueError("Target snapshot must use the immutable profile revision")
+    if drafter_snapshot.name != profile.drafter_revision:
         raise ValueError("Drafter snapshot must use the immutable matched revision")
-    runtime_id = f"qwen32-dynamicsd-k{job.k}"
+    runtime_id = f"{profile.key}-dynamicsd-k{job.k}"
+    visible_devices = (
+        (f"CUDA_VISIBLE_DEVICES={profile.visible_devices}",)
+        if profile.visible_devices is not None
+        else ()
+    )
+    distributed_backend = (
+        ("--distributed-executor-backend", "ray") if profile.nodes > 1 else ()
+    )
+    capture_sizes = (
+        (
+            "--cudagraph-capture-sizes",
+            *(str(size) for size in profile.cudagraph_capture_sizes),
+        )
+        if profile.cudagraph_capture_sizes
+        else ()
+    )
     return (
         "env",
-        "CUDA_VISIBLE_DEVICES=0,1",
+        *visible_devices,
         "VLLM_USE_V2_MODEL_RUNNER=1",
         "HF_HUB_OFFLINE=1",
         "TRANSFORMERS_OFFLINE=1",
@@ -154,15 +256,45 @@ def build_runtime_command(
         str(prompt_template),
         "--port",
         "8100",
+        "--model-key",
+        profile.key,
+        "--target-tp",
+        str(profile.target_tensor_parallel_size),
+        "--max-k",
+        str(profile.k_values[-1]),
+        "--max-model-len",
+        str(profile.max_model_len),
+        "--max-num-batched-tokens",
+        str(profile.max_num_batched_tokens),
+        "--max-num-seqs",
+        str(profile.max_num_seqs),
+        "--profile-max-batch-size",
+        str(profile.profile_max_batch_size),
+        "--gpu-memory-utilization",
+        str(profile.gpu_memory_utilization),
+        "--enable-prefix-caching"
+        if profile.enable_prefix_caching
+        else "--no-enable-prefix-caching",
+        "--served-model-name",
+        f"{profile.key}-profile",
+        "--batch-sizes",
+        *(str(size) for size in profile.batch_sizes),
+        *distributed_backend,
+        *(("--moe-backend", profile.moe_backend) if profile.moe_backend else ()),
+        *capture_sizes,
     )
 
 
 def build_venv_setup_command(job: ProfileJob, repo_dir: Path) -> tuple[str, ...]:
     """Materialize this checkout's locked vLLM extra outside the base venv."""
+    patcher = repo_dir / DYNAMIC_PATCHER_RELATIVE_PATH
     setup = (
+        "import os,subprocess;"
         "from nemo_rl.distributed.virtual_cluster import PY_EXECUTABLES;"
         "from nemo_rl.utils.venvs import create_local_venv;"
-        "create_local_venv(PY_EXECUTABLES.VLLM, 'profile')"
+        "create_local_venv(PY_EXECUTABLES.VLLM, 'profile');"
+        f"subprocess.run([{str(_profile_python(job))!r},{str(patcher)!r}],"
+        "check=True,env={**os.environ,'NRL_VLLM_DYNAMIC_SD_SMOKE_TELEMETRY':'1'})"
     )
     return (
         "env",
@@ -177,11 +309,12 @@ def build_venv_setup_command(job: ProfileJob, repo_dir: Path) -> tuple[str, ...]
 def build_sbatch_command(
     job: ProfileJob,
     *,
+    profile: ProfileSpec = G_QWEN32_PROFILE,
     repo_dir: Path,
     mode: Literal["test-only", "submit"] | str,
 ) -> tuple[str, ...]:
     """Build one bounded Lyris ``ray.sub`` preflight or submission command."""
-    _require_known_job(job)
+    _require_known_job(job, profile)
     if mode == "test-only":
         mode_flag = "--test-only"
     elif mode == "submit":
@@ -194,32 +327,36 @@ def build_sbatch_command(
         "--dependency=",
         "--account=coreai_dlalgo_llm",
         "--partition=gb200",
-        "--nodes=1",
+        f"--nodes={profile.nodes}",
         "--ntasks-per-node=1",
         "--exclusive",
         "--time=05:00:00",
-        "--segment=1",
+        f"--segment={profile.segment}",
         f"--job-name={job.job_name}",
         f"--output={job.output_dir / 'slurm-%j.out'}",
         str(repo_dir / "ray.sub"),
     )
 
 
-def _profile_contract() -> dict[str, object]:
+def _profile_contract(profile: ProfileSpec = G_QWEN32_PROFILE) -> dict[str, object]:
     return {
-        "batch_sizes": list(BATCH_SIZES),
+        "batch_sizes": list(profile.batch_sizes),
         "chunked_prefill": True,
         "cuda_graph_mode": "FULL_AND_PIECEWISE",
         "dataset_revision": DATASET_REVISION,
+        "cudagraph_capture_sizes": list(profile.cudagraph_capture_sizes),
         "draft_tensor_parallel_size": 1,
-        "max_model_len": 4096,
-        "max_num_batched_tokens": 16384,
-        "max_num_seqs": 256,
+        "k_values": list(profile.k_values),
+        "max_model_len": profile.max_model_len,
+        "max_num_batched_tokens": profile.max_num_batched_tokens,
+        "max_num_seqs": profile.max_num_seqs,
+        "profile_max_batch_size": profile.profile_max_batch_size,
         "num_prompts_per_batch_size": "batch_size * 20",
         "output_len": 256,
-        "prefix_cache": False,
+        "prefix_cache": profile.enable_prefix_caching,
+        "moe_backend": profile.moe_backend,
         "runtime_vllm": "0.25.1",
-        "target_tensor_parallel_size": 2,
+        "target_tensor_parallel_size": profile.target_tensor_parallel_size,
         "temperature": 1.0,
         "top_p": 1.0,
         "vllm_runner": "MRv2",
@@ -229,6 +366,7 @@ def _profile_contract() -> dict[str, object]:
 def _manifest_payload(
     *,
     status: str,
+    profile: ProfileSpec = G_QWEN32_PROFILE,
     jobs: Sequence[ProfileJob],
     repo_dir: Path,
     profile_root: Path,
@@ -245,16 +383,16 @@ def _manifest_payload(
         "prompt_jsonl": str(profile_root / "prompts.jsonl"),
         "prompt_template": str(prompt_template),
         "target": {
-            "repo_id": TARGET_REPO_ID,
-            "revision": TARGET_REVISION,
+            "repo_id": profile.target_repo_id,
+            "revision": profile.target_revision,
             "snapshot": str(target_snapshot),
         },
         "drafter": {
-            "repo_id": DRAFTER_REPO_ID,
-            "revision": DRAFTER_REVISION,
+            "repo_id": profile.drafter_repo_id,
+            "revision": profile.drafter_revision,
             "snapshot": str(drafter_snapshot),
         },
-        "profile_contract": _profile_contract(),
+        "profile_contract": _profile_contract(profile),
         "jobs": [
             {
                 **asdict(job),
@@ -263,6 +401,7 @@ def _manifest_payload(
                 "runtime_command": list(
                     build_runtime_command(
                         job,
+                        profile=profile,
                         repo_dir=repo_dir,
                         profile_root=profile_root,
                         target_snapshot=target_snapshot,
@@ -271,10 +410,20 @@ def _manifest_payload(
                     )
                 ),
                 "preflight_command": list(
-                    build_sbatch_command(job, repo_dir=repo_dir, mode="test-only")
+                    build_sbatch_command(
+                        job,
+                        profile=profile,
+                        repo_dir=repo_dir,
+                        mode="test-only",
+                    )
                 ),
                 "submission_command": list(
-                    build_sbatch_command(job, repo_dir=repo_dir, mode="submit")
+                    build_sbatch_command(
+                        job,
+                        profile=profile,
+                        repo_dir=repo_dir,
+                        mode="submit",
+                    )
                 ),
             }
             for job in jobs
@@ -356,6 +505,7 @@ def _validate_vllm_pin(repo_dir: Path) -> None:
 
 def _validate_runtime_inputs(
     *,
+    profile: ProfileSpec = G_QWEN32_PROFILE,
     repo_dir: Path,
     profile_root: Path,
     hf_home: Path,
@@ -368,6 +518,7 @@ def _validate_runtime_inputs(
     required_files = (
         (repo_dir / "ray.sub", "ray.sub"),
         (repo_dir / WORKER_RELATIVE_PATH, "profile worker"),
+        (repo_dir / DYNAMIC_PATCHER_RELATIVE_PATH, "DynamicSD runtime patcher"),
         (repo_dir / "pyproject.toml", "pyproject"),
         (prompt_template, "prompt template"),
         (container, "container"),
@@ -376,8 +527,8 @@ def _validate_runtime_inputs(
         if not path.is_file():
             raise FileNotFoundError(f"Missing {label}: {path}")
     for snapshot, label, revision in (
-        (target_snapshot, "target", TARGET_REVISION),
-        (drafter_snapshot, "drafter", DRAFTER_REVISION),
+        (target_snapshot, "target", profile.target_revision),
+        (drafter_snapshot, "drafter", profile.drafter_revision),
     ):
         if snapshot.name != revision or not (snapshot / "config.json").is_file():
             raise FileNotFoundError(f"Missing immutable {label} snapshot: {snapshot}")
@@ -457,6 +608,11 @@ def _parse_job_id(stdout: str) -> str:
 
 
 def _add_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--model",
+        choices=tuple(profile.key for profile in G_PROFILE_SPECS),
+        default=G_QWEN32_PROFILE.key,
+    )
     parser.add_argument("--repo-dir", type=Path, default=Path.cwd())
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--hf-home", type=Path, default=DEFAULT_HF_HOME)
@@ -479,8 +635,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Show, preflight, or submit all six fixed-K profile jobs."""
+    """Show, preflight, or submit one model's complete fixed-K profile."""
     args = build_parser().parse_args(argv)
+    profile = get_profile_spec(args.model)
     repo_dir = args.repo_dir.resolve()
     profile_root = args.output_dir.resolve()
     hf_home = args.hf_home.resolve()
@@ -489,15 +646,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not prompt_template.is_absolute():
         prompt_template = repo_dir / prompt_template
     prompt_template = prompt_template.resolve()
-    target_snapshot = snapshot_path(hf_home, TARGET_REPO_ID, TARGET_REVISION)
-    drafter_snapshot = snapshot_path(hf_home, DRAFTER_REPO_ID, DRAFTER_REVISION)
-    jobs = build_jobs(profile_root)
+    target_snapshot = snapshot_path(
+        hf_home, profile.target_repo_id, profile.target_revision
+    )
+    drafter_snapshot = snapshot_path(
+        hf_home, profile.drafter_repo_id, profile.drafter_revision
+    )
+    jobs = build_jobs(profile_root, profile=profile)
     job_ids: dict[int, str | None] = {job.k: None for job in jobs}
     manifest_path = profile_root / MANIFEST_NAME
 
     def persist(status: str) -> dict[str, Any]:
         payload = _manifest_payload(
             status=status,
+            profile=profile,
             jobs=jobs,
             repo_dir=repo_dir,
             profile_root=profile_root,
@@ -515,6 +677,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     _validate_runtime_inputs(
+        profile=profile,
         repo_dir=repo_dir,
         profile_root=profile_root,
         hf_home=hf_home,
@@ -532,6 +695,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     runtime_commands = {
         job.k: build_runtime_command(
             job,
+            profile=profile,
             repo_dir=repo_dir,
             profile_root=profile_root,
             target_snapshot=target_snapshot,
@@ -554,7 +718,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         for job in jobs:
             _run_sbatch(
-                build_sbatch_command(job, repo_dir=repo_dir, mode="test-only"),
+                build_sbatch_command(
+                    job,
+                    profile=profile,
+                    repo_dir=repo_dir,
+                    mode="test-only",
+                ),
                 repo_dir=repo_dir,
                 environment=environments[job.k],
             )
@@ -570,7 +739,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         for job in jobs:
             result = _run_sbatch(
-                build_sbatch_command(job, repo_dir=repo_dir, mode="submit"),
+                build_sbatch_command(
+                    job,
+                    profile=profile,
+                    repo_dir=repo_dir,
+                    mode="submit",
+                ),
                 repo_dir=repo_dir,
                 environment=environments[job.k],
             )

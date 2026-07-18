@@ -44,6 +44,10 @@ class DynamicProfile:
     max_model_len: int
     max_num_batched_tokens: int
     max_num_seqs: int
+    profile_max_batch_size: int
+    enable_prefix_caching: bool
+    moe_backend: str | None
+    cudagraph_capture_sizes: tuple[int, ...]
     target_tensor_parallel_size: int
     draft_tensor_parallel_size: int
     num_batches_per_point: int
@@ -76,7 +80,7 @@ class DerivedSchedule:
     ranges: tuple[ScheduleRange, ...]
 
 
-G_PROFILE_KEYS = {
+G_PROFILE_KEYS_V1 = {
     "schema_version",
     "calibration_status",
     "model_key",
@@ -100,7 +104,12 @@ G_PROFILE_KEYS = {
     "acceptance_rate_per_pos",
     "rows",
 }
-G_REQUIRED_K_VALUES = tuple(range(6))
+G_PROFILE_KEYS_V2 = G_PROFILE_KEYS_V1 | {
+    "profile_max_batch_size",
+    "enable_prefix_caching",
+    "moe_backend",
+    "cudagraph_capture_sizes",
+}
 
 
 def _require_int(value: object, name: str, *, minimum: int = 1) -> int:
@@ -143,29 +152,37 @@ def _strict_int_list(value: object, name: str) -> tuple[int, ...]:
     return items
 
 
+def _strict_int_list_allow_empty(value: object, name: str) -> tuple[int, ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"DynamicSD profile {name} must be a list")
+    if not value:
+        return ()
+    return _strict_int_list(value, name)
+
+
 def load_profile(path: Path) -> DynamicProfile:
-    """Load a complete K0-K5 profile and reject ambiguous data."""
+    """Load a complete contiguous K0-Kmax profile and reject ambiguous data."""
     source_path = path.resolve()
     content = source_path.read_bytes()
     payload = json.loads(content)
     if not isinstance(payload, dict):
         raise ValueError("DynamicSD profile must be a JSON object")
-    if set(payload) != G_PROFILE_KEYS:
-        missing = sorted(G_PROFILE_KEYS - set(payload))
-        unknown = sorted(set(payload) - G_PROFILE_KEYS)
+    schema_version = _require_int(payload.get("schema_version"), "schema_version")
+    if schema_version not in (1, 2):
+        raise ValueError("DynamicSD profile schema_version must be 1 or 2")
+    expected_keys = G_PROFILE_KEYS_V1 if schema_version == 1 else G_PROFILE_KEYS_V2
+    if set(payload) != expected_keys:
+        missing = sorted(expected_keys - set(payload))
+        unknown = sorted(set(payload) - expected_keys)
         raise ValueError(
             f"DynamicSD profile schema mismatch: missing={missing}, unknown={unknown}"
         )
-    if _require_int(payload["schema_version"], "schema_version") != 1:
-        raise ValueError("DynamicSD profile schema_version must be 1")
     if payload["calibration_status"] != "complete":
         raise ValueError("DynamicSD profile calibration_status must be complete")
 
     model_key = _require_string(payload["model_key"], "model_key")
     target_revision = _require_string(payload["target_revision"], "target_revision")
-    drafter_revision = _require_string(
-        payload["drafter_revision"], "drafter_revision"
-    )
+    drafter_revision = _require_string(payload["drafter_revision"], "drafter_revision")
     for name, revision in (
         ("target_revision", target_revision),
         ("drafter_revision", drafter_revision),
@@ -179,35 +196,81 @@ def load_profile(path: Path) -> DynamicProfile:
         raise ValueError(
             "DynamicSD profile prompt_template_sha256 must be a full SHA-256 digest"
         )
-    dataset_revision = _require_string(
-        payload["dataset_revision"], "dataset_revision"
-    )
+    dataset_revision = _require_string(payload["dataset_revision"], "dataset_revision")
     if re.fullmatch(r"[0-9a-f]{40}", dataset_revision) is None:
-        raise ValueError(
-            "DynamicSD profile dataset_revision must be a full hex digest"
-        )
+        raise ValueError("DynamicSD profile dataset_revision must be a full hex digest")
 
     batch_sizes = _strict_int_list(payload["batch_sizes"], "batch_sizes")
     if batch_sizes[0] != 1:
         raise ValueError("DynamicSD profile must include batch size 1")
     max_num_seqs = _require_int(payload["max_num_seqs"], "max_num_seqs")
-    if batch_sizes[-1] != max_num_seqs:
+    profile_max_batch_size = (
+        max_num_seqs
+        if schema_version == 1
+        else _require_int(payload["profile_max_batch_size"], "profile_max_batch_size")
+    )
+    if batch_sizes[-1] != profile_max_batch_size:
         raise ValueError(
-            "DynamicSD profile largest batch size must equal max_num_seqs"
+            "DynamicSD profile largest batch size must equal "
+            "profile_max_batch_size (max_num_seqs for schema 1)"
+        )
+    if profile_max_batch_size > max_num_seqs:
+        raise ValueError(
+            "DynamicSD profile profile_max_batch_size must not exceed max_num_seqs"
         )
     k_values = _strict_int_list(payload["k_values"], "k_values")
-    if k_values != G_REQUIRED_K_VALUES:
-        raise ValueError("DynamicSD profile must measure every K0 through K5")
+    if (
+        k_values[0] != 0
+        or k_values[-1] < 1
+        or k_values != tuple(range(k_values[-1] + 1))
+    ):
+        raise ValueError(
+            "DynamicSD profile K values must be contiguous from K0 through max K"
+        )
 
     raw_acceptance = payload["acceptance_rate_per_pos"]
     if not isinstance(raw_acceptance, list) or len(raw_acceptance) != k_values[-1]:
         raise ValueError(
-            "DynamicSD profile acceptance_rate_per_pos must contain five values"
+            "DynamicSD profile acceptance_rate_per_pos must contain one value "
+            "per draft position"
         )
     acceptance = tuple(
         _require_float(item, "acceptance_rate_per_pos", minimum=0.0, maximum=1.0)
         for item in raw_acceptance
     )
+    if schema_version == 1:
+        enable_prefix_caching = False
+        moe_backend = None
+        cudagraph_capture_sizes: tuple[int, ...] = ()
+    else:
+        if not isinstance(payload["enable_prefix_caching"], bool):
+            raise ValueError(
+                "DynamicSD profile enable_prefix_caching must be a boolean"
+            )
+        enable_prefix_caching = payload["enable_prefix_caching"]
+        raw_moe_backend = payload["moe_backend"]
+        if raw_moe_backend is not None and (
+            not isinstance(raw_moe_backend, str) or not raw_moe_backend
+        ):
+            raise ValueError(
+                "DynamicSD profile moe_backend must be null or a non-empty string"
+            )
+        moe_backend = raw_moe_backend
+        cudagraph_capture_sizes = _strict_int_list_allow_empty(
+            payload["cudagraph_capture_sizes"], "cudagraph_capture_sizes"
+        )
+        if cudagraph_capture_sizes:
+            required_endpoint_shapes = {
+                profile_max_batch_size * (k + 1) for k in k_values[1:]
+            }
+            missing_shapes = sorted(
+                required_endpoint_shapes - set(cudagraph_capture_sizes)
+            )
+            if missing_shapes:
+                raise ValueError(
+                    "DynamicSD profile cudagraph_capture_sizes must cover every "
+                    f"profile endpoint draft width: missing={missing_shapes}"
+                )
 
     num_batches = _require_int(
         payload["num_batches_per_point"], "num_batches_per_point"
@@ -267,9 +330,7 @@ def load_profile(path: Path) -> DynamicProfile:
         target_revision=target_revision,
         drafter_revision=drafter_revision,
         runtime_vllm=_require_string(payload["runtime_vllm"], "runtime_vllm"),
-        cuda_graph_mode=_require_string(
-            payload["cuda_graph_mode"], "cuda_graph_mode"
-        ),
+        cuda_graph_mode=_require_string(payload["cuda_graph_mode"], "cuda_graph_mode"),
         dataset_name=_require_string(payload["dataset_name"], "dataset_name"),
         dataset_revision=dataset_revision,
         prompt_template_sha256=prompt_template_sha256,
@@ -280,6 +341,10 @@ def load_profile(path: Path) -> DynamicProfile:
             payload["max_num_batched_tokens"], "max_num_batched_tokens"
         ),
         max_num_seqs=max_num_seqs,
+        profile_max_batch_size=profile_max_batch_size,
+        enable_prefix_caching=enable_prefix_caching,
+        moe_backend=moe_backend,
+        cudagraph_capture_sizes=cudagraph_capture_sizes,
         target_tensor_parallel_size=_require_int(
             payload["target_tensor_parallel_size"], "target_tensor_parallel_size"
         ),
@@ -335,11 +400,10 @@ def derive_schedule(
     if not math.isfinite(minimum_goodput_gain) or minimum_goodput_gain < 0.0:
         raise ValueError("minimum_goodput_gain must be finite and non-negative")
     accepted_lengths = {
-        k: 1.0 + sum(profile.acceptance_rate_per_pos[:k])
-        for k in profile.k_values
+        k: 1.0 + sum(profile.acceptance_rate_per_pos[:k]) for k in profile.k_values
     }
     selected: dict[int, int] = {}
-    for batch_size in range(1, profile.max_num_seqs + 1):
+    for batch_size in range(1, profile.profile_max_batch_size + 1):
         goodput = {
             k: accepted_lengths[k] / _interpolate_itl(profile, batch_size, k)
             for k in profile.k_values
@@ -405,19 +469,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     profile = load_profile(args.profile)
-    schedule = derive_schedule(
-        profile, minimum_goodput_gain=args.minimum_goodput_gain
-    )
+    schedule = derive_schedule(profile, minimum_goodput_gain=args.minimum_goodput_gain)
     write_schedule(profile, schedule, args.output)
     print(f"profile_sha256={profile.source_sha256}")
     print(f"schedule={args.output.resolve()}")
     print(
         "ranges="
         + json.dumps(
-            [
-                [item.start_batch, item.end_batch, item.k]
-                for item in schedule.ranges
-            ],
+            [[item.start_batch, item.end_batch, item.k] for item in schedule.ranges],
             separators=(",", ":"),
         )
     )

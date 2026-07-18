@@ -106,8 +106,7 @@ def test_calibrated_k5_schedule_resolves_without_silent_clamping(
     assert schedule.max_num_speculative_tokens == 5
     assert schedule.vllm_ranges()[0] == (1, 31, 5)
     assert (
-        "++policy.generation.vllm_kwargs.speculative_config."
-        "num_speculative_tokens=5"
+        "++policy.generation.vllm_kwargs.speculative_config.num_speculative_tokens=5"
     ) in run.hydra_overrides
     assert (
         "++policy.generation.vllm_kwargs.speculative_config."
@@ -135,9 +134,7 @@ def test_schema_v2_rejects_invalid_selection_contract(tmp_path: Path) -> None:
             _write_schedule_v2(tmp_path, selection_metric="throughput")
         )
     with pytest.raises(ValueError, match="minimum_goodput_gain"):
-        load_dynamic_schedule(
-            _write_schedule_v2(tmp_path, minimum_goodput_gain=-0.1)
-        )
+        load_dynamic_schedule(_write_schedule_v2(tmp_path, minimum_goodput_gain=-0.1))
 
 
 def test_dynamic_runtime_applies_only_the_run_scoped_cuda_graph_patch(
@@ -238,8 +235,7 @@ def test_final20_requires_an_allowlisted_schedule_artifact(tmp_path: Path) -> No
 
 def test_checked_in_calibrated_schedule_is_approved_for_final20() -> None:
     schedule = load_dynamic_schedule(
-        G_REPO_ROOT
-        / "experiments/vllm_0251_drafter_matrix/calibration/"
+        G_REPO_ROOT / "experiments/vllm_0251_drafter_matrix/calibration/"
         "qwen32_thinking_k5_vllm0251_schedule.json"
     )
 
@@ -283,7 +279,6 @@ def test_final20_requires_schema_v2_even_for_a_matched_v1_profile(
         ({"ranges": [[2, 256, 3]]}, "batch size 1"),
         ({"ranges": [[1, 127, 3], [129, 256, 1]]}, "contiguous"),
         ({"ranges": [[1, 128, 3], [128, 256, 1]]}, "contiguous"),
-        ({"ranges": [[1, 127, 3], [128, 255, 1]]}, "batch size 256"),
         ({"ranges": [[1, 256, 4]]}, "between 0 and 3"),
         ({"ranges": [[1, 127, 2], [128, 256, 1]]}, "maximum K"),
         ({"target_revision": "a" * 41}, "target_revision"),
@@ -313,6 +308,23 @@ def test_schedule_identity_must_match_the_resolved_run(
     schedule = load_dynamic_schedule(_write_schedule(tmp_path, **overrides))
 
     with pytest.raises(ValueError, match=error):
+        resolve_run(
+            "qwen32",
+            "eagle3_thinking_dynamic_k123",
+            "smoke2",
+            "lyris",
+            dynamic_schedule=schedule,
+        )
+
+
+def test_qwen32_recipe_rejects_schedule_without_profiled_batch_256(
+    tmp_path: Path,
+) -> None:
+    schedule = load_dynamic_schedule(
+        _write_schedule(tmp_path, ranges=[[1, 127, 3], [128, 255, 1]])
+    )
+
+    with pytest.raises(ValueError, match="profiled batch size 256"):
         resolve_run(
             "qwen32",
             "eagle3_thinking_dynamic_k123",
@@ -391,7 +403,9 @@ def test_show_cli_requires_dynamic_schedule_and_rejects_it_for_fixed_k(
 def test_show_cli_records_dynamic_schedule_provenance_and_fixed_k_isolation(
     tmp_path: Path,
 ) -> None:
-    matrix_path = Path(__file__).parents[2] / "experiments/vllm_0251_drafter_matrix/matrix.py"
+    matrix_path = (
+        Path(__file__).parents[2] / "experiments/vllm_0251_drafter_matrix/matrix.py"
+    )
     schedule_path = _write_schedule(tmp_path)
     common = (
         sys.executable,
@@ -429,9 +443,10 @@ def test_show_cli_records_dynamic_schedule_provenance_and_fixed_k_isolation(
     fixed_payload = json.loads(fixed.stdout)
     provenance = dynamic_payload["dynamic_schedule"]
     assert provenance["source_path"] == str(schedule_path.resolve())
-    assert provenance["source_sha256"] == load_dynamic_schedule(
-        schedule_path
-    ).source_sha256
+    assert (
+        provenance["source_sha256"]
+        == load_dynamic_schedule(schedule_path).source_sha256
+    )
     assert provenance["calibration_status"] == "seed"
     assert provenance["ranges"] == [[1, 127, 3], [128, 256, 1]]
     assert provenance["source_runtime_vllm"] == "0.24.0"

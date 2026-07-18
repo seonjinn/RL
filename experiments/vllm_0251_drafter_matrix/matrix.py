@@ -44,6 +44,7 @@ class RecipeSpec:
     nodes: int
     segment: int
     max_osl: int
+    dynamic_profile_max_batch_size: int | None = None
 
     def target_ref_path(self, hf_home: Path) -> Path:
         """Return the Hugging Face ``main`` ref used by the recipe target."""
@@ -232,6 +233,7 @@ G_RECIPES = (
         nodes=4,
         segment=4,
         max_osl=4096,
+        dynamic_profile_max_batch_size=256,
     ),
     RecipeSpec(
         key="qwen235",
@@ -241,6 +243,7 @@ G_RECIPES = (
         nodes=16,
         segment=16,
         max_osl=8192,
+        dynamic_profile_max_batch_size=64,
     ),
 )
 
@@ -399,7 +402,7 @@ G_VARIANTS = (
         compatible_models=frozenset(("qwen235",)),
         checkpoints=G_EAGLE3_THINKING_CHECKPOINTS,
         uses_draft_model=True,
-        cudagraph_capture_sizes=(1, 2, 4, 8, 16, 32, 64, 128, 256),
+        cudagraph_capture_sizes=(1, 2, 4, 8, 16, 32, 64, 128, 192, 256),
     ),
     VariantSpec(
         key="eagle3_thinking_k4",
@@ -428,6 +431,17 @@ G_VARIANTS = (
         checkpoints=G_EAGLE3_THINKING_CHECKPOINTS,
         uses_draft_model=True,
         dynamic_schedule_required=True,
+    ),
+    VariantSpec(
+        key="eagle3_thinking_dynamic_k123_cg256",
+        method="eagle3",
+        runner="mrv2",
+        num_speculative_tokens=3,
+        compatible_models=frozenset(("qwen235",)),
+        checkpoints=G_EAGLE3_THINKING_CHECKPOINTS,
+        uses_draft_model=True,
+        dynamic_schedule_required=True,
+        cudagraph_capture_sizes=(1, 2, 4, 8, 16, 32, 64, 128, 192, 256),
     ),
     VariantSpec(
         key="eagle3_thinking_dynamic_k5",
@@ -581,10 +595,7 @@ def load_dynamic_schedule(path: Path) -> DynamicSchedule:
         raise ValueError("DynamicSD schedule calibration_status is unsupported")
     for key in ("target_revision", "drafter_revision"):
         value = payload[key]
-        if (
-            not isinstance(value, str)
-            or re.fullmatch(r"[0-9a-f]{40}", value) is None
-        ):
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
             raise ValueError(f"DynamicSD schedule {key} must be a full hex digest")
     profile_sha256 = payload["profile_sha256"]
     if (
@@ -640,16 +651,13 @@ def load_dynamic_schedule(path: Path) -> DynamicSchedule:
             raise ValueError("DynamicSD batch ranges must be positive and ordered")
         if not 0 <= k <= max_num_speculative_tokens:
             raise ValueError(
-                "DynamicSD K must be between 0 and "
-                f"{max_num_speculative_tokens}"
+                f"DynamicSD K must be between 0 and {max_num_speculative_tokens}"
             )
         if ranges and start_batch != ranges[-1].end_batch + 1:
             raise ValueError("DynamicSD ranges must be contiguous and non-overlapping")
         ranges.append(DynamicRange(start_batch, end_batch, k))
     if ranges[0].start_batch != 1:
         raise ValueError("DynamicSD ranges must start at batch size 1")
-    if ranges[-1].end_batch != 256:
-        raise ValueError("DynamicSD ranges must cover through batch size 256")
     if schema_version == 1 and max(item.k for item in ranges) != 3:
         raise ValueError("DynamicSD schedule maximum K must equal 3")
 
@@ -776,8 +784,7 @@ def resolve_run(
     draft_checkpoint = variant.checkpoint_for(model_key)
     if variant.uses_draft_model and draft_checkpoint is None:
         raise ValueError(
-            f"Variant '{variant_key}' has no exact checkpoint for model "
-            f"'{model_key}'"
+            f"Variant '{variant_key}' has no exact checkpoint for model '{model_key}'"
         )
     if variant.dynamic_schedule_required and dynamic_schedule is None:
         raise ValueError(f"Variant '{variant_key}' requires a DynamicSD schedule")
@@ -786,6 +793,16 @@ def resolve_run(
             f"Variant '{variant_key}' does not accept a DynamicSD schedule"
         )
     if dynamic_schedule is not None:
+        expected_max_batch = recipe.dynamic_profile_max_batch_size
+        if expected_max_batch is None:
+            raise ValueError(
+                f"Recipe '{recipe.key}' has no DynamicSD profile batch contract"
+            )
+        if dynamic_schedule.ranges[-1].end_batch != expected_max_batch:
+            raise ValueError(
+                "DynamicSD schedule must cover through the recipe's profiled "
+                f"batch size {expected_max_batch}"
+            )
         if dynamic_schedule.model_key != model_key:
             raise ValueError("DynamicSD schedule model does not match the run")
         if dynamic_schedule.target_revision != recipe.target_revision:
@@ -822,9 +839,7 @@ def resolve_run(
             phase_spec.key == "final20"
             and dynamic_schedule.source_runtime_vllm != "0.25.1"
         ):
-            raise ValueError(
-                "DynamicSD final20 source profile must use vLLM 0.25.1"
-            )
+            raise ValueError("DynamicSD final20 source profile must use vLLM 0.25.1")
         if phase_spec.key == "final20" and dynamic_schedule.schema_version != 2:
             raise ValueError("DynamicSD final20 requires schedule schema version 2")
         if (
@@ -871,12 +886,10 @@ def resolve_run(
 
 
 G_DEFAULT_CONTAINER = Path(
-    "/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/"
-    "nemo_rl_nightly_20260715.sqsh"
+    "/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260715.sqsh"
 )
 G_DEFAULT_EXPERIMENT_ROOT = Path(
-    "/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/"
-    "vllm0251_drafter_matrix"
+    "/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/vllm0251_drafter_matrix"
 )
 G_QWEN235_MEGATRON_CHECKPOINT_DIR = Path(
     "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_reference_runs/"
@@ -1055,9 +1068,7 @@ def validate_checkout(
     head = _git(repo_dir, "rev-parse", "HEAD")
     push_url = _git(repo_dir, "remote", "get-url", "--push", "fork")
     allowed_fork_urls = (
-        frozenset({expected_fork_url})
-        if expected_fork_url is not None
-        else G_FORK_URLS
+        frozenset({expected_fork_url}) if expected_fork_url is not None else G_FORK_URLS
     )
     if push_url not in allowed_fork_urls:
         raise RuntimeError(
@@ -1123,7 +1134,9 @@ def validate_snapshot(snapshot: Path, revision: str, label: str) -> None:
             index = json.loads(index_path.read_text(encoding="utf-8"))
             weight_map = index["weight_map"]
         except (json.JSONDecodeError, KeyError, TypeError, AttributeError) as error:
-            raise RuntimeError(f"{label} has an invalid weight index: {index_path}") from error
+            raise RuntimeError(
+                f"{label} has an invalid weight index: {index_path}"
+            ) from error
         if not isinstance(weight_map, dict) or not weight_map:
             raise RuntimeError(f"{label} has an invalid weight index: {index_path}")
         shard_values = tuple(weight_map.values())
@@ -1132,14 +1145,14 @@ def validate_snapshot(snapshot: Path, revision: str, label: str) -> None:
         shard_names = set(shard_values)
         relative_shards = {PurePosixPath(name) for name in shard_names}
         if any(
-            path.is_absolute()
-            or ".." in path.parts
-            or path.suffix != ".safetensors"
+            path.is_absolute() or ".." in path.parts or path.suffix != ".safetensors"
             for path in relative_shards
         ):
             raise RuntimeError(f"{label} has an unsafe weight index: {index_path}")
         shards = {snapshot.joinpath(*path.parts) for path in relative_shards}
-        missing_shards = tuple(sorted(str(path) for path in shards if not path.is_file()))
+        missing_shards = tuple(
+            sorted(str(path) for path in shards if not path.is_file())
+        )
         if missing_shards:
             raise FileNotFoundError(
                 f"{label} snapshot is missing indexed weight shards: "
@@ -1273,8 +1286,7 @@ def load_login_wandb_environment(
         return environment
 
     shell_command = (
-        f'printf "{G_WANDB_KEY_BEGIN}%s{G_WANDB_KEY_END}\\n" '
-        '"${WANDB_API_KEY:-}"'
+        f'printf "{G_WANDB_KEY_BEGIN}%s{G_WANDB_KEY_END}\\n" "${{WANDB_API_KEY:-}}"'
     )
     result = run_login_shell(
         ("bash", "-ilc", shell_command),
@@ -1292,9 +1304,7 @@ def load_login_wandb_environment(
     return environment
 
 
-def _flatten_provenance(
-    value: Any, prefix: str = ""
-) -> list[tuple[str, str]]:
+def _flatten_provenance(value: Any, prefix: str = "") -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = []
     if isinstance(value, Mapping):
         for key in sorted(value):
@@ -1327,9 +1337,7 @@ def write_provenance(run_dir: Path, payload: Mapping[str, Any]) -> None:
     serialized = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     if "WANDB_API_KEY" in serialized:
         raise ValueError("Secrets must not be written to provenance")
-    text = "".join(
-        f"{key}={value}\n" for key, value in _flatten_provenance(payload)
-    )
+    text = "".join(f"{key}={value}\n" for key, value in _flatten_provenance(payload))
     _atomic_write(run_dir / "provenance.json", serialized)
     _atomic_write(run_dir / "provenance.txt", text)
 
@@ -1340,14 +1348,22 @@ def _run_tag(model: str, variant: str, phase: str) -> str:
 
 
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--model", required=True, choices=tuple(r.key for r in G_RECIPES))
+    parser.add_argument(
+        "--model", required=True, choices=tuple(r.key for r in G_RECIPES)
+    )
     parser.add_argument(
         "--variant", required=True, choices=tuple(v.key for v in G_VARIANTS)
     )
-    parser.add_argument("--phase", default="smoke2", choices=tuple(p.key for p in G_PHASES))
-    parser.add_argument("--cluster", default="lyris", choices=tuple(c.key for c in G_CLUSTERS))
+    parser.add_argument(
+        "--phase", default="smoke2", choices=tuple(p.key for p in G_PHASES)
+    )
+    parser.add_argument(
+        "--cluster", default="lyris", choices=tuple(c.key for c in G_CLUSTERS)
+    )
     parser.add_argument("--repo-dir", type=Path, default=Path.cwd())
-    parser.add_argument("--experiment-root", type=Path, default=G_DEFAULT_EXPERIMENT_ROOT)
+    parser.add_argument(
+        "--experiment-root", type=Path, default=G_DEFAULT_EXPERIMENT_ROOT
+    )
     parser.add_argument("--container", type=Path, default=G_DEFAULT_CONTAINER)
     parser.add_argument("--mounts", default="/lustre:/lustre")
     parser.add_argument("--run-tag")
@@ -1452,9 +1468,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         return
 
     checkout = validate_checkout(repo_dir)
-    target_snapshot, draft_snapshot = validate_runtime_inputs(
-        run, repo_dir, container
-    )
+    target_snapshot, draft_snapshot = validate_runtime_inputs(run, repo_dir, container)
     runtime_id = uuid.uuid4().hex
     runtime_command = build_runtime_command(
         run,
@@ -1464,9 +1478,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         target_snapshot=target_snapshot,
         runtime_id=runtime_id,
     )
-    scheduler_sequence = build_scheduler_sequence(
-        run, repo_dir, run_dir, args.action
-    )
+    scheduler_sequence = build_scheduler_sequence(run, repo_dir, run_dir, args.action)
     safe_environment = {
         "BASE_LOG_DIR": str(run_dir),
         "CONTAINER": str(container),
@@ -1475,9 +1487,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         "MOUNTS": args.mounts,
     }
     source_environment = (
-        load_login_wandb_environment()
-        if args.action == "submit"
-        else dict(os.environ)
+        load_login_wandb_environment() if args.action == "submit" else dict(os.environ)
     )
     environment, forwarded_secret_names = build_submission_environment(
         safe_environment,

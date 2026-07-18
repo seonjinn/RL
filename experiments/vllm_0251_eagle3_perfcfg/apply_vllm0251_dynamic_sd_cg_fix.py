@@ -119,8 +119,7 @@ def apply_smoke_telemetry_patch(site_packages: Path) -> bool:
     speculator_text = speculator.read_text(encoding="utf-8")
     speculator_text, signature_changed = _replace_once(
         speculator_text,
-        "        is_profile: bool = False,\n"
-        "    ) -> torch.Tensor:\n",
+        "        is_profile: bool = False,\n    ) -> torch.Tensor:\n",
         "        is_profile: bool = False,\n"
         "        num_speculative_steps: int | None = None,\n"
         "    ) -> torch.Tensor:\n",
@@ -139,11 +138,9 @@ def apply_smoke_telemetry_patch(site_packages: Path) -> bool:
         "        if not 0 <= selected_num_speculative_steps <= self.num_speculative_steps:\n"
         "            raise ValueError(\n"
         '                "DynamicSD selected K must be between 0 and the configured "\n'
-        "                f\"maximum {self.num_speculative_steps}, got \"\n"
-        "                f\"{selected_num_speculative_steps}\"\n"
+        '                f"maximum {self.num_speculative_steps}, got "\n'
+        '                f"{selected_num_speculative_steps}"\n'
         "            )\n"
-        "        if selected_num_speculative_steps == 0:\n"
-        "            return self.draft_tokens[:num_reqs, :0]\n"
         "        max_query_len = input_batch.num_scheduled_tokens.max()\n",
         "DynamicSD selected-K validation",
     )
@@ -158,6 +155,9 @@ def apply_smoke_telemetry_patch(site_packages: Path) -> bool:
         "        if self.num_speculative_steps == 1:\n"
         "            # Early exit.\n"
         "            return self.draft_tokens[:num_reqs, :1]\n",
+        "        if selected_num_speculative_steps == 0:\n"
+        "            # Keep draft KV state synchronized by returning after prefill.\n"
+        "            return self.draft_tokens[:num_reqs, :0]\n"
         "        if selected_num_speculative_steps == 1:\n"
         "            # Early exit.\n"
         "            return self.draft_tokens[:num_reqs, :1]\n",
@@ -165,8 +165,7 @@ def apply_smoke_telemetry_patch(site_packages: Path) -> bool:
     )
     speculator_text, call_changed = _replace_once(
         speculator_text,
-        "            num_tokens_across_dp,\n"
-        "        )\n",
+        "            num_tokens_across_dp,\n        )\n",
         "            num_tokens_across_dp,\n"
         "            selected_num_speculative_steps,\n"
         "        )\n",
@@ -180,8 +179,7 @@ def apply_smoke_telemetry_patch(site_packages: Path) -> bool:
     )
     speculator_text, decode_signature_changed = _replace_once(
         speculator_text,
-        "        num_tokens_across_dp: torch.Tensor | None,\n"
-        "    ) -> None:\n",
+        "        num_tokens_across_dp: torch.Tensor | None,\n    ) -> None:\n",
         "        num_tokens_across_dp: torch.Tensor | None,\n"
         "        selected_num_speculative_steps: int,\n"
         "    ) -> None:\n",
@@ -249,8 +247,7 @@ def apply_smoke_telemetry_patch(site_packages: Path) -> bool:
     )
     text, proposal_changed = _replace_once(
         text,
-        "                mm_inputs=mm_inputs,\n"
-        "            )\n",
+        "                mm_inputs=mm_inputs,\n            )\n",
         "                mm_inputs=mm_inputs,\n"
         "                num_speculative_steps=requested_draft_width,\n"
         "            )\n",

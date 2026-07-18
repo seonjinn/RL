@@ -10,12 +10,14 @@ from experiments.vllm_0251_drafter_matrix.profile_dynamic_sd import (
     DATASET_REVISION,
     DRAFTER_REPO_ID,
     DRAFTER_REVISION,
+    DYNAMIC_PATCHER_RELATIVE_PATH,
     MANIFEST_NAME,
     TARGET_REPO_ID,
     TARGET_REVISION,
     build_jobs,
     build_runtime_command,
     build_sbatch_command,
+    build_venv_setup_command,
     main,
     snapshot_path,
 )
@@ -57,9 +59,7 @@ def test_runtime_command_uses_matched_snapshots_and_profile_worker(
     assert "VLLM_USE_V2_MODEL_RUNNER=1" in command
     assert "NRL_FORCE_REBUILD_VENVS=true" not in command
     assert f"PYTHONPATH={repo_dir}" in command
-    assert (
-        "/tmp/nemorl-v0251-qwen32-dynamicsd-k5/profile/bin/python" in command
-    )
+    assert "/tmp/nemorl-v0251-qwen32-dynamicsd-k5/profile/bin/python" in command
     assert (
         str(
             repo_dir
@@ -105,10 +105,23 @@ def test_sbatch_command_clears_singleton_and_uses_bounded_ray_sub(
     assert command[-1] == str(repo_dir / "ray.sub")
     assert not any(part.startswith("--gres") for part in command)
     assert not any(
-        part.startswith("--dependency=") and part != "--dependency="
-        for part in command
+        part.startswith("--dependency=") and part != "--dependency=" for part in command
     )
     assert not any("singleton" in part for part in command)
+
+
+def test_profile_venv_setup_applies_the_run_scoped_dynamic_patch(
+    tmp_path: Path,
+) -> None:
+    repo_dir = tmp_path / "repo"
+    job = build_jobs(tmp_path / "profile")[0]
+
+    command = build_venv_setup_command(job, repo_dir)
+    joined = " ".join(command)
+
+    assert "create_local_venv" in joined
+    assert str(repo_dir / DYNAMIC_PATCHER_RELATIVE_PATH) in joined
+    assert "NRL_VLLM_DYNAMIC_SD_SMOKE_TELEMETRY" in joined
 
 
 def _write_runtime_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
@@ -121,6 +134,9 @@ def _write_runtime_inputs(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     )
     worker.parent.mkdir(parents=True)
     worker.write_text("# worker\n", encoding="utf-8")
+    patcher = repo_dir / DYNAMIC_PATCHER_RELATIVE_PATH
+    patcher.parent.mkdir(parents=True, exist_ok=True)
+    patcher.write_text("# patcher\n", encoding="utf-8")
     (repo_dir / "ray.sub").write_text("#!/bin/bash\n", encoding="utf-8")
     (repo_dir / "pyproject.toml").write_text(
         """
@@ -180,9 +196,10 @@ def test_submit_preflights_all_jobs_then_writes_secret_free_job_ids(
         assert "create_local_venv" in environment["SETUP_COMMAND"]
         assert "PY_EXECUTABLES.VLLM" in environment["SETUP_COMMAND"]
         assert "force_rebuild=True" not in environment["SETUP_COMMAND"]
-        assert "NEMO_RL_VENV_DIR=/tmp/nemorl-v0251-qwen32-dynamicsd-" in environment[
-            "SETUP_COMMAND"
-        ]
+        assert (
+            "NEMO_RL_VENV_DIR=/tmp/nemorl-v0251-qwen32-dynamicsd-"
+            in environment["SETUP_COMMAND"]
+        )
         assert "'profile'" in environment["SETUP_COMMAND"]
         assert "WANDB_API_KEY" not in environment
         assert "HF_TOKEN" not in environment
@@ -221,15 +238,19 @@ def test_submit_preflights_all_jobs_then_writes_secret_free_job_ids(
     assert manifest["profile_contract"] == {
         "batch_sizes": list(BATCH_SIZES),
         "chunked_prefill": True,
+        "cudagraph_capture_sizes": [],
         "cuda_graph_mode": "FULL_AND_PIECEWISE",
         "dataset_revision": DATASET_REVISION,
         "draft_tensor_parallel_size": 1,
+        "k_values": list(range(6)),
         "max_model_len": 4096,
         "max_num_batched_tokens": 16384,
         "max_num_seqs": 256,
+        "profile_max_batch_size": 256,
         "num_prompts_per_batch_size": "batch_size * 20",
         "output_len": 256,
         "prefix_cache": False,
+        "moe_backend": None,
         "runtime_vllm": "0.25.1",
         "target_tensor_parallel_size": 2,
         "temperature": 1.0,

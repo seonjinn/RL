@@ -25,12 +25,14 @@ from experiments.vllm_0251_drafter_matrix.matrix import (
 
 
 def test_matrix_module_has_nvidia_apache_header() -> None:
-    matrix_path = Path(__file__).parents[2] / "experiments/vllm_0251_drafter_matrix/matrix.py"
+    matrix_path = (
+        Path(__file__).parents[2] / "experiments/vllm_0251_drafter_matrix/matrix.py"
+    )
 
     assert matrix_path.read_text().startswith(
         "# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.\n"
         "#\n"
-        "# Licensed under the Apache License, Version 2.0 (the \"License\");\n"
+        '# Licensed under the Apache License, Version 2.0 (the "License");\n'
     )
 
 
@@ -146,7 +148,7 @@ def test_qwen235_thinking_k3_cg256_captures_the_full_generation_batch() -> None:
     assert run.variant.num_speculative_tokens == 3
     assert (
         "policy.generation.vllm_kwargs.compilation_config."
-        "cudagraph_capture_sizes=[1,2,4,8,16,32,64,128,256]"
+        "cudagraph_capture_sizes=[1,2,4,8,16,32,64,128,192,256]"
     ) in run.hydra_overrides
 
 
@@ -281,8 +283,7 @@ def test_draft_model_override_uses_cluster_immutable_snapshot(
     )
     snapshot = run.draft_checkpoint.snapshot_path(run.cluster.hf_home)
     assert (
-        "++policy.generation.vllm_kwargs.speculative_config.model="
-        f"{snapshot}"
+        f"++policy.generation.vllm_kwargs.speculative_config.model={snapshot}"
     ) in run.hydra_overrides
     assert (
         "++policy.generation.vllm_kwargs.speculative_config.model="
@@ -526,12 +527,11 @@ def test_runtime_command_uses_qwen235_startup_workarounds(
     assert (
         "NRL_DISABLE_VLLM_PORT_OVERRIDE=1" in command
     ) is uses_qwen235_startup_workarounds
+    assert ("NRL_DISABLE_NUMA_MEMBIND=1" in command) is uses_qwen235_startup_workarounds
     assert (
-        "NRL_DISABLE_NUMA_MEMBIND=1" in command
-    ) is uses_qwen235_startup_workarounds
-    assert any(
-        part.startswith("NRL_MEGATRON_CHECKPOINT_DIR=") for part in command
-    ) is uses_qwen235_startup_workarounds
+        any(part.startswith("NRL_MEGATRON_CHECKPOINT_DIR=") for part in command)
+        is uses_qwen235_startup_workarounds
+    )
 
 
 def test_megatron_checkpoint_cache_requires_completion_marker(
@@ -586,9 +586,7 @@ def test_submit_scheduler_sequence_preflights_the_exact_submission(
     repo_dir = tmp_path / "repo"
     run_dir = Path("/lustre/unit/run")
 
-    preflight, submission = build_scheduler_sequence(
-        run, repo_dir, run_dir, "submit"
-    )
+    preflight, submission = build_scheduler_sequence(run, repo_dir, run_dir, "submit")
 
     assert "--test-only" in preflight
     assert "--parsable" in submission
@@ -711,9 +709,7 @@ def test_checkout_validation_preserves_initialized_submodule_status(
     _git(repo, "commit", "-am", "add submodule")
     _git(repo, "push", "fork", "matrix")
 
-    state = validate_checkout(
-        repo, expected_fork_url=str(tmp_path / "fork.git")
-    )
+    state = validate_checkout(repo, expected_fork_url=str(tmp_path / "fork.git"))
 
     assert state.submodules[0].startswith(" ")
 
@@ -926,8 +922,12 @@ def test_provenance_is_written_atomically_without_secrets(tmp_path: Path) -> Non
     assert not list(run_dir.glob("*.tmp"))
 
 
-def test_show_cli_emits_deterministic_json_without_cluster_access(tmp_path: Path) -> None:
-    matrix_path = Path(__file__).parents[2] / "experiments/vllm_0251_drafter_matrix/matrix.py"
+def test_show_cli_emits_deterministic_json_without_cluster_access(
+    tmp_path: Path,
+) -> None:
+    matrix_path = (
+        Path(__file__).parents[2] / "experiments/vllm_0251_drafter_matrix/matrix.py"
+    )
     result = subprocess.run(
         (
             sys.executable,
