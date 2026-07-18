@@ -121,6 +121,10 @@ def test_qwen235_profile_commands_preserve_multinode_topology(tmp_path: Path) ->
     )
 
     assert "CUDA_VISIBLE_DEVICES=0,1" not in runtime
+    assert (
+        "PYTHONPATH=/tmp/nemorl-v0251-qwen235-dynamicsd-k3/profile/"
+        f"lib/python3.13/site-packages:{repo_dir}"
+    ) in runtime
     assert runtime[runtime.index("--model-key") + 1] == "qwen235"
     assert runtime[runtime.index("--target-tp") + 1] == "8"
     assert runtime[runtime.index("--max-k") + 1] == "3"

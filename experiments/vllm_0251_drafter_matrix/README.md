@@ -213,7 +213,8 @@ contains a historical singleton directive. Each K uses an independent
 five-hour allocation without GRES: one node with `--segment=1` for Qwen3-32B,
 or two nodes with `--segment=2` for Qwen3-235B. A per-job locked vLLM 0.25.1
 environment is materialized under `/tmp`; the base container environment is
-not replaced.
+not replaced. Its vLLM `site-packages` path is exported to the driver so Ray
+actors on every node import the same locked and patched vLLM environment.
 
 After all profile jobs complete, assemble and derive the immutable artifacts:
 

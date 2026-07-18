@@ -28,6 +28,7 @@ DEFAULT_CONTAINER = Path(
 )
 DEFAULT_MOUNTS = "/lustre:/lustre"
 CONTAINER_PYTHON = "/opt/nemo_rl_venv/bin/python"
+PROFILE_PYTHON_VERSION = "3.13"
 WORKER_RELATIVE_PATH = Path(
     "experiments/vllm_0251_drafter_matrix/dynamic_profile_worker.py"
 )
@@ -190,6 +191,16 @@ def _profile_python(job: ProfileJob) -> Path:
     return _profile_venv_root(job) / "profile" / "bin" / "python"
 
 
+def _profile_site_packages(job: ProfileJob) -> Path:
+    return (
+        _profile_venv_root(job)
+        / "profile"
+        / "lib"
+        / f"python{PROFILE_PYTHON_VERSION}"
+        / "site-packages"
+    )
+
+
 def _require_known_job(job: ProfileJob, profile: ProfileSpec) -> None:
     if job.k not in profile.k_values:
         raise ValueError(f"K must be one of {profile.k_values}, got {job.k}")
@@ -237,7 +248,7 @@ def build_runtime_command(
         "VLLM_USE_V2_MODEL_RUNNER=1",
         "HF_HUB_OFFLINE=1",
         "TRANSFORMERS_OFFLINE=1",
-        f"PYTHONPATH={repo_dir}",
+        f"PYTHONPATH={_profile_site_packages(job)}:{repo_dir}",
         f"TRITON_CACHE_DIR=/tmp/nemorl-v0251-triton-{runtime_id}",
         f"TORCHINDUCTOR_CACHE_DIR=/tmp/nemorl-v0251-inductor-{runtime_id}",
         "PYTHONFAULTHANDLER=1",
@@ -288,11 +299,15 @@ def build_runtime_command(
 def build_venv_setup_command(job: ProfileJob, repo_dir: Path) -> tuple[str, ...]:
     """Materialize this checkout's locked vLLM extra outside the base venv."""
     patcher = repo_dir / DYNAMIC_PATCHER_RELATIVE_PATH
+    site_packages = _profile_site_packages(job)
     setup = (
         "import os,subprocess;"
+        "from pathlib import Path;"
         "from nemo_rl.distributed.virtual_cluster import PY_EXECUTABLES;"
         "from nemo_rl.utils.venvs import create_local_venv;"
         "create_local_venv(PY_EXECUTABLES.VLLM, 'profile');"
+        f"site_packages=Path({str(site_packages)!r});"
+        "assert site_packages.is_dir(),f'Missing profile site-packages: {site_packages}';"
         f"subprocess.run([{str(_profile_python(job))!r},{str(patcher)!r}],"
         "check=True,env={**os.environ,'NRL_VLLM_DYNAMIC_SD_SMOKE_TELEMETRY':'1'})"
     )

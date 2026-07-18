@@ -58,7 +58,10 @@ def test_runtime_command_uses_matched_snapshots_and_profile_worker(
     assert command[:2] == ("env", "CUDA_VISIBLE_DEVICES=0,1")
     assert "VLLM_USE_V2_MODEL_RUNNER=1" in command
     assert "NRL_FORCE_REBUILD_VENVS=true" not in command
-    assert f"PYTHONPATH={repo_dir}" in command
+    assert (
+        "PYTHONPATH=/tmp/nemorl-v0251-qwen32-dynamicsd-k5/profile/"
+        f"lib/python3.13/site-packages:{repo_dir}"
+    ) in command
     assert "/tmp/nemorl-v0251-qwen32-dynamicsd-k5/profile/bin/python" in command
     assert (
         str(
@@ -120,6 +123,7 @@ def test_profile_venv_setup_applies_the_run_scoped_dynamic_patch(
     joined = " ".join(command)
 
     assert "create_local_venv" in joined
+    assert "Missing profile site-packages" in joined
     assert str(repo_dir / DYNAMIC_PATCHER_RELATIVE_PATH) in joined
     assert "NRL_VLLM_DYNAMIC_SD_SMOKE_TELEMETRY" in joined
 
