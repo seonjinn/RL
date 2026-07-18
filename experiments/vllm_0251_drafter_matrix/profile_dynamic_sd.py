@@ -114,7 +114,7 @@ G_QWEN235_PROFILE = ProfileSpec(
     drafter_repo_id=("RedHatAI/Qwen3-235B-A22B-Thinking-2507-speculator.eagle3"),
     drafter_revision="3c0c5cbad8e1fa7ce9e6fb6a1b0a35458b124e87",
     batch_sizes=(1, 4, 8, 16, 32, 48, 64),
-    k_values=tuple(range(4)),
+    k_values=tuple(range(6)),
     nodes=2,
     segment=2,
     target_tensor_parallel_size=8,
@@ -125,7 +125,20 @@ G_QWEN235_PROFILE = ProfileSpec(
     gpu_memory_utilization=0.4,
     enable_prefix_caching=True,
     moe_backend="triton",
-    cudagraph_capture_sizes=(1, 2, 4, 8, 16, 32, 64, 128, 192, 256),
+    cudagraph_capture_sizes=(
+        1,
+        2,
+        4,
+        8,
+        16,
+        32,
+        64,
+        128,
+        192,
+        256,
+        320,
+        384,
+    ),
 )
 G_PROFILE_SPECS = (G_QWEN32_PROFILE, G_QWEN235_PROFILE)
 

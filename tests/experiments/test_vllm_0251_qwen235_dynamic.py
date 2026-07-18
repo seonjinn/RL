@@ -25,7 +25,7 @@ from experiments.vllm_0251_drafter_matrix.profile_dynamic_sd import (
 
 def _write_qwen235_profile(path: Path) -> Path:
     batch_sizes = [1, 4, 8, 16, 32, 48, 64]
-    k_values = [0, 1, 2, 3]
+    k_values = [0, 1, 2, 3, 4, 5]
     payload = {
         "schema_version": 2,
         "calibration_status": "complete",
@@ -45,13 +45,26 @@ def _write_qwen235_profile(path: Path) -> Path:
         "profile_max_batch_size": 64,
         "enable_prefix_caching": True,
         "moe_backend": "triton",
-        "cudagraph_capture_sizes": [1, 2, 4, 8, 16, 32, 64, 128, 192, 256],
+        "cudagraph_capture_sizes": [
+            1,
+            2,
+            4,
+            8,
+            16,
+            32,
+            64,
+            128,
+            192,
+            256,
+            320,
+            384,
+        ],
         "target_tensor_parallel_size": 8,
         "draft_tensor_parallel_size": 1,
         "num_batches_per_point": 20,
         "batch_sizes": batch_sizes,
         "k_values": k_values,
-        "acceptance_rate_per_pos": [0.6, 0.4, 0.25],
+        "acceptance_rate_per_pos": [0.6, 0.4, 0.25, 0.15, 0.1],
         "rows": [
             {
                 "batch_size": batch_size,
@@ -67,7 +80,7 @@ def _write_qwen235_profile(path: Path) -> Path:
     return path
 
 
-def test_qwen235_profile_uses_matched_tp8_k0_k3_contract(tmp_path: Path) -> None:
+def test_qwen235_profile_uses_matched_tp8_k0_k5_contract(tmp_path: Path) -> None:
     profile = get_profile_spec("qwen235")
 
     assert profile.target_repo_id == "Qwen/Qwen3-235B-A22B"
@@ -77,7 +90,7 @@ def test_qwen235_profile_uses_matched_tp8_k0_k3_contract(tmp_path: Path) -> None
         == "RedHatAI/Qwen3-235B-A22B-Thinking-2507-speculator.eagle3"
     )
     assert profile.drafter_revision == "3c0c5cbad8e1fa7ce9e6fb6a1b0a35458b124e87"
-    assert profile.k_values == (0, 1, 2, 3)
+    assert profile.k_values == (0, 1, 2, 3, 4, 5)
     assert profile.batch_sizes == (1, 4, 8, 16, 32, 48, 64)
     assert (profile.nodes, profile.segment, profile.target_tensor_parallel_size) == (
         2,
@@ -89,12 +102,12 @@ def test_qwen235_profile_uses_matched_tp8_k0_k3_contract(tmp_path: Path) -> None
     assert profile.max_num_batched_tokens == 2048
     assert profile.moe_backend == "triton"
     assert 192 in profile.cudagraph_capture_sizes
-    assert profile.cudagraph_capture_sizes[-1] == 256
+    assert profile.cudagraph_capture_sizes[-2:] == (320, 384)
 
     jobs = build_jobs(tmp_path / "profile", profile=profile)
-    assert [job.k for job in jobs] == [0, 1, 2, 3]
+    assert [job.k for job in jobs] == [0, 1, 2, 3, 4, 5]
     assert [job.job_name for job in jobs] == [
-        f"nemorl-qwen235-dynamicsd-k{k}" for k in range(4)
+        f"nemorl-qwen235-dynamicsd-k{k}" for k in range(6)
     ]
 
 
@@ -105,7 +118,7 @@ def test_qwen235_profile_commands_preserve_multinode_topology(tmp_path: Path) ->
     hf_home = tmp_path / "hf"
     target = snapshot_path(hf_home, profile.target_repo_id, profile.target_revision)
     drafter = snapshot_path(hf_home, profile.drafter_repo_id, profile.drafter_revision)
-    job = build_jobs(profile_root, profile=profile)[3]
+    job = build_jobs(profile_root, profile=profile)[5]
 
     runtime = build_runtime_command(
         job,
@@ -122,12 +135,12 @@ def test_qwen235_profile_commands_preserve_multinode_topology(tmp_path: Path) ->
 
     assert "CUDA_VISIBLE_DEVICES=0,1" not in runtime
     assert (
-        "PYTHONPATH=/tmp/nemorl-v0251-qwen235-dynamicsd-k3/profile/"
+        "PYTHONPATH=/tmp/nemorl-v0251-qwen235-dynamicsd-k5/profile/"
         f"lib/python3.13/site-packages:{repo_dir}"
     ) in runtime
     assert runtime[runtime.index("--model-key") + 1] == "qwen235"
     assert runtime[runtime.index("--target-tp") + 1] == "8"
-    assert runtime[runtime.index("--max-k") + 1] == "3"
+    assert runtime[runtime.index("--max-k") + 1] == "5"
     assert runtime[runtime.index("--max-num-seqs") + 1] == "128"
     assert runtime[runtime.index("--profile-max-batch-size") + 1] == "64"
     assert runtime[runtime.index("--moe-backend") + 1] == "triton"
@@ -142,6 +155,8 @@ def test_qwen235_profile_commands_preserve_multinode_topology(tmp_path: Path) ->
         "128",
         "192",
         "256",
+        "320",
+        "384",
     )
     assert "--nodes=2" in scheduler
     assert "--segment=2" in scheduler
@@ -150,7 +165,7 @@ def test_qwen235_profile_commands_preserve_multinode_topology(tmp_path: Path) ->
 
 def test_qwen235_server_does_not_hide_ray_worker_gpus(tmp_path: Path) -> None:
     command = build_server_command(
-        3,
+        5,
         tmp_path / "target",
         tmp_path / "drafter",
         8100,
@@ -163,7 +178,20 @@ def test_qwen235_server_does_not_hide_ray_worker_gpus(tmp_path: Path) -> None:
         enable_prefix_caching=True,
         distributed_executor_backend="ray",
         moe_backend="triton",
-        cudagraph_capture_sizes=(1, 2, 4, 8, 16, 32, 64, 128, 192, 256),
+        cudagraph_capture_sizes=(
+            1,
+            2,
+            4,
+            8,
+            16,
+            32,
+            64,
+            128,
+            192,
+            256,
+            320,
+            384,
+        ),
     )
     joined = " ".join(command)
 
@@ -172,38 +200,38 @@ def test_qwen235_server_does_not_hide_ray_worker_gpus(tmp_path: Path) -> None:
     assert "--distributed-executor-backend ray" in joined
     assert "--moe-backend triton" in joined
     assert "--enable-prefix-caching" in command
-    assert '"cudagraph_capture_sizes":[1,2,4,8,16,32,64,128,192,256]' in joined
+    assert '"cudagraph_capture_sizes":[1,2,4,8,16,32,64,128,192,256,320,384]' in joined
 
 
-def test_calibrator_accepts_complete_k0_k3_profile(tmp_path: Path) -> None:
+def test_calibrator_accepts_complete_k0_k5_profile(tmp_path: Path) -> None:
     profile = load_profile(_write_qwen235_profile(tmp_path / "profile.json"))
     schedule = derive_schedule(profile)
 
-    assert profile.k_values == (0, 1, 2, 3)
+    assert profile.k_values == (0, 1, 2, 3, 4, 5)
     assert profile.max_num_seqs == 128
     assert profile.profile_max_batch_size == 64
     assert profile.enable_prefix_caching is True
     assert profile.moe_backend == "triton"
-    assert profile.cudagraph_capture_sizes[-2:] == (192, 256)
-    assert len(profile.acceptance_rate_per_pos) == 3
-    assert schedule.max_num_speculative_tokens == 3
+    assert profile.cudagraph_capture_sizes[-2:] == (320, 384)
+    assert len(profile.acceptance_rate_per_pos) == 5
+    assert schedule.max_num_speculative_tokens == 5
     assert schedule.ranges[0].start_batch == 1
     assert schedule.ranges[-1].end_batch == 64
 
 
-def test_calibrator_rejects_qwen235_profile_without_k2_endpoint_capture(
+def test_calibrator_rejects_qwen235_profile_without_k5_endpoint_capture(
     tmp_path: Path,
 ) -> None:
     profile_path = _write_qwen235_profile(tmp_path / "profile.json")
     payload = json.loads(profile_path.read_text(encoding="utf-8"))
-    payload["cudagraph_capture_sizes"].remove(192)
+    payload["cudagraph_capture_sizes"].remove(384)
     profile_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(ValueError, match=r"missing=\[192\]"):
+    with pytest.raises(ValueError, match=r"missing=\[384\]"):
         load_profile(profile_path)
 
 
-def test_qwen235_dynamic_variant_requires_range64_and_captures_to256(
+def test_qwen235_dynamic_k5_variant_requires_range64_and_captures_to384(
     tmp_path: Path,
 ) -> None:
     profile = load_profile(_write_qwen235_profile(tmp_path / "profile.json"))
@@ -217,7 +245,7 @@ def test_qwen235_dynamic_variant_requires_range64_and_captures_to256(
     loaded = load_dynamic_schedule(schedule_path)
     run = resolve_run(
         "qwen235",
-        "eagle3_thinking_dynamic_k123_cg256",
+        "eagle3_thinking_dynamic_k5_cg384",
         "smoke2",
         "lyris",
         dynamic_schedule=loaded,
@@ -225,30 +253,12 @@ def test_qwen235_dynamic_variant_requires_range64_and_captures_to256(
 
     assert (
         "policy.generation.vllm_kwargs.compilation_config."
-        "cudagraph_capture_sizes=[1,2,4,8,16,32,64,128,192,256]"
+        "cudagraph_capture_sizes=[1,2,4,8,16,32,64,128,192,256,320,384]"
     ) in run.hydra_overrides
     assert (
         "++policy.generation.vllm_kwargs.speculative_config."
         "num_speculative_tokens_per_batch_size=" in "\n".join(run.hydra_overrides)
     )
-
-    fixed_run = resolve_run(
-        "qwen235",
-        "eagle3_thinking_k3_cg256",
-        "smoke2",
-        "lyris",
-    )
-    capture_prefix = (
-        "policy.generation.vllm_kwargs.compilation_config."
-        "cudagraph_capture_sizes="
-    )
-    fixed_capture = next(
-        item for item in fixed_run.hydra_overrides if item.startswith(capture_prefix)
-    )
-    dynamic_capture = next(
-        item for item in run.hydra_overrides if item.startswith(capture_prefix)
-    )
-    assert dynamic_capture == fixed_capture
 
 
 def test_qwen235_dynamic_variant_rejects_schedule_beyond_active_batch64(
@@ -258,7 +268,15 @@ def test_qwen235_dynamic_variant_rejects_schedule_beyond_active_batch64(
     payload = json.loads(profile_path.read_text(encoding="utf-8"))
     payload["max_num_seqs"] = 256
     payload["profile_max_batch_size"] = 256
-    payload["cudagraph_capture_sizes"] = [1, 256, 512, 768, 1024]
+    payload["cudagraph_capture_sizes"] = [
+        1,
+        256,
+        512,
+        768,
+        1024,
+        1280,
+        1536,
+    ]
     payload["batch_sizes"] = [1, 4, 16, 32, 64, 128, 192, 256]
     payload["rows"] = [
         {
@@ -283,7 +301,7 @@ def test_qwen235_dynamic_variant_rejects_schedule_beyond_active_batch64(
     with pytest.raises(ValueError, match="profiled batch size 64"):
         resolve_run(
             "qwen235",
-            "eagle3_thinking_dynamic_k123_cg256",
+            "eagle3_thinking_dynamic_k5_cg384",
             "smoke2",
             "lyris",
             dynamic_schedule=load_dynamic_schedule(schedule_path),
