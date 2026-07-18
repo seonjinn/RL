@@ -396,6 +396,14 @@ FLOPs never amortize - consistent with the BS x K grids and the replay
 study. SpecDec pays in this environment only at low per-engine concurrency
 or long-decode regimes.
 
+The verdict is Gym-version-invariant. Re-running the trio after bumping the
+NeMo Gym submodule from v0.4.0 to latest main (f0c460f, including the
+PR #1825 rollout-timeline instrumentation) reproduces the same ordering:
+baseline 286 s, K3 + dense capture 319 s (0.90x), DynamicSD 333 s (0.86x),
+rewards 0.20-0.22, prefix-cache hits still 0.0%. The binding structure -
+22:1 prefill dominance and the concurrent-identical-prompt cache miss -
+lives in the NeMo-RL submission pattern and the workload shape, not in Gym.
+
 A recalibration follow-up refutes the obvious rescue. The engine telemetry
 shows 52-55% of active engine steps sit at BS 1-8 (the regime where our
 grids give K3 a 1.5-2x win) while producing only ~12% of tokens, suggesting
