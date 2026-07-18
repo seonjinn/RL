@@ -8,6 +8,7 @@ import pytest
 
 from experiments.vllm_0251_drafter_matrix.matrix import (
     G_FORK_URLS,
+    OptimizerOffloadMode,
     RecipeSpec,
     build_runtime_command,
     build_scheduler_command,
@@ -83,6 +84,58 @@ def test_phase_controls_only_the_step_count(phase: str, max_steps: int) -> None:
 
     assert run.phase.max_steps == max_steps
     assert f"grpo.max_num_steps={max_steps}" in run.hydra_overrides
+
+
+@pytest.mark.parametrize(
+    ("offload_mode", "use_pinned", "use_coalesced"),
+    [
+        ("pageable", "false", "false"),
+        ("coalesced-pinned", "true", "true"),
+    ],
+)
+def test_optimizer_offload_ab_is_an_explicit_single_variable(
+    offload_mode: OptimizerOffloadMode,
+    use_pinned: str,
+    use_coalesced: str,
+) -> None:
+    run = resolve_run(
+        "qwen235",
+        "eagle3_thinking_k3",
+        "smoke5",
+        "lyris",
+        optimizer_offload_mode=offload_mode,
+    )
+
+    assert run.optimizer_offload_mode == offload_mode
+    assert f"++policy.use_pinned_optimizer_offload={use_pinned}" in run.hydra_overrides
+    assert (
+        f"++policy.use_coalesced_optimizer_offload={use_coalesced}"
+        in run.hydra_overrides
+    )
+
+
+def test_optimizer_offload_ab_enables_identical_rank_diagnostics(
+    tmp_path: Path,
+) -> None:
+    commands = []
+    for offload_mode in ("pageable", "coalesced-pinned"):
+        run = resolve_run(
+            "qwen235",
+            "eagle3_thinking_k3",
+            "smoke5",
+            "lyris",
+            optimizer_offload_mode=offload_mode,
+        )
+        commands.append(
+            build_runtime_command(
+                run,
+                tmp_path / "repo",
+                tmp_path / "runs" / offload_mode,
+                f"unit-{offload_mode}",
+            )
+        )
+
+    assert all("NRL_REFIT_OFFLOAD_DIAGNOSTICS=1" in command for command in commands)
 
 
 @pytest.mark.parametrize("model_key", ["qwen30", "qwen32", "qwen235"])

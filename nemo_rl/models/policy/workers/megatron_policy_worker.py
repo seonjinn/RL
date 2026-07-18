@@ -20,7 +20,7 @@ import time
 import warnings
 from collections import defaultdict
 from contextlib import AbstractContextManager, contextmanager, nullcontext
-from typing import Any, Iterable, Iterator, Optional, TypeVar, cast
+from typing import Any, Callable, Iterable, Iterator, Optional, TypeVar, cast
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +67,7 @@ from nemo_rl.models.megatron.pipeline_parallel import (
     broadcast_obj_from_pp_rank,
     broadcast_tensors_from_last_stage,
 )
+from nemo_rl.models.megatron.refit_offload_diagnostics import measure_refit_phase
 from nemo_rl.models.megatron.router_replay import router_replay_enabled
 from nemo_rl.models.megatron.setup import (
     finalize_megatron_setup,
@@ -101,6 +102,7 @@ from nemo_rl.utils.r3_trace import maybe_r3_trace_stage
 from nemo_rl.utils.timer import Timer
 
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
+OperationResultType = TypeVar("OperationResultType")
 
 
 def _should_use_router_replay(
@@ -289,6 +291,17 @@ class MegatronPolicyWorkerImpl(
 
         self.cfg = config
         self._router_replay_enabled = router_replay_enabled(config)
+        if config.get("use_coalesced_optimizer_offload") and not config.get(
+            "use_pinned_optimizer_offload"
+        ):
+            raise ValueError(
+                "use_coalesced_optimizer_offload requires "
+                "use_pinned_optimizer_offload=True."
+            )
+        self._refit_offload_diagnostics_enabled = (
+            os.environ.get("NRL_REFIT_OFFLOAD_DIAGNOSTICS") == "1"
+        )
+        self._optimizer_pinned_buf: torch.Tensor | None = None
 
         # Set rank for non-collocated to check which ranks to broadcast from
         self.rank = get_rank_safe()
@@ -2034,9 +2047,12 @@ class MegatronPolicyWorkerImpl(
         print(
             f"GPU Memory before optimizer offload: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved"
         )
-        self.model = self.move_model(
-            self.model, "cpu", move_params=False, move_grads=True
-        )  # get rid of grad buffers
+        self.model = self._measure_refit_phase(
+            "offload_before_refit.gradient_release",
+            lambda: self.move_model(
+                self.model, "cpu", move_params=False, move_grads=True
+            ),
+        )
 
         # When True, clear Transformer Engine's per-module _fp8_workspaces scratch
         # buffers in offload_before_refit (before weight transfer to the inference
@@ -2096,16 +2112,26 @@ class MegatronPolicyWorkerImpl(
             except Exception:
                 pass
 
-        torch.randn(1).cuda()  # wake up torch allocator
+        self._measure_refit_phase(
+            "offload_before_refit.allocator_wake",
+            lambda: torch.randn(1).cuda(),
+        )
         if (
             hasattr(self, "optimizer")
             and self.optimizer is not None
             and not self.optimizer_cpu_offload
         ):
-            self.move_optimizer("cpu")
+            optimizer_cuda_bytes = self._optimizer_cuda_bytes()
+            self._measure_refit_phase(
+                "offload_before_refit.optimizer_d2h",
+                lambda: self.move_optimizer("cpu"),
+                optimizer_cuda_bytes=optimizer_cuda_bytes,
+            )
 
-        gc.collect()
-        torch.cuda.empty_cache()
+        self._measure_refit_phase("offload_before_refit.gc", gc.collect)
+        self._measure_refit_phase(
+            "offload_before_refit.empty_cache", torch.cuda.empty_cache
+        )
 
         # Print memory stats after offloading
         allocated = torch.cuda.memory_allocated() / (1024**3)  # Convert to GB
@@ -2120,7 +2146,10 @@ class MegatronPolicyWorkerImpl(
         """Offload as much as possible on the CPU."""
         no_grad = torch.no_grad()
         no_grad.__enter__()
-        self.model = self.move_model(self.model, "cpu")
+        self.model = self._measure_refit_phase(
+            "offload_after_refit.model_offload",
+            lambda: self.move_model(self.model, "cpu"),
+        )
         self.model.eval()
         torch.randn(1).cuda()  # wake up torch allocator
         self.offload_before_refit()  # rerun the old offload function
@@ -2182,27 +2211,148 @@ class MegatronPolicyWorkerImpl(
         return model
 
     def move_optimizer(self, device: str):
-        # Iterate through the state dictionaries for each parameter group
-        if isinstance(self.optimizer, ChainedOptimizer):
-            optimizer_state = self.optimizer.state
+        optimizer_state = self._optimizer_state()
+        use_pinned = bool(self.cfg.get("use_pinned_optimizer_offload"))
+        use_coalesced = bool(self.cfg.get("use_coalesced_optimizer_offload"))
+        if use_coalesced and not use_pinned:
+            raise ValueError(
+                "use_coalesced_optimizer_offload requires "
+                "use_pinned_optimizer_offload=True."
+            )
+
+        if device == "cpu":
+            if use_coalesced:
+                self._coalesced_optimizer_to_cpu(optimizer_state)
+            elif use_pinned:
+                self._pinned_optimizer_to_cpu(optimizer_state)
+            else:
+                self._optimizer_to_cpu(optimizer_state)
+        elif device == "cuda":
+            if use_coalesced:
+                self._coalesced_optimizer_to_cuda(optimizer_state)
+            elif use_pinned:
+                self._pinned_optimizer_to_cuda(optimizer_state)
+            else:
+                self._optimizer_to_cuda(optimizer_state)
         else:
-            optimizer_state = self.optimizer._get_state()
+            raise ValueError(
+                f"Invalid device: {device}. Only strings 'cpu' and 'cuda' are supported."
+            )
+
+    def _optimizer_state(self) -> Any:
+        if isinstance(self.optimizer, ChainedOptimizer):
+            return self.optimizer.state
+        return self.optimizer._get_state()
+
+    def _optimizer_cuda_bytes(self) -> int:
+        total_bytes = 0
+        for state in self._optimizer_state().values():
+            for value in state.values():
+                if torch.is_tensor(value) and value.is_cuda:
+                    total_bytes += value.numel() * value.element_size()
+        return total_bytes
+
+    def _measure_refit_phase(
+        self,
+        phase: str,
+        operation: Callable[[], OperationResultType],
+        *,
+        optimizer_cuda_bytes: int | None = None,
+    ) -> OperationResultType:
+        if not self._refit_offload_diagnostics_enabled:
+            return operation()
+        return measure_refit_phase(
+            operation,
+            phase=phase,
+            rank=self.rank,
+            optimizer_cuda_bytes=optimizer_cuda_bytes,
+        )
+
+    def _optimizer_to_cpu(self, optimizer_state: Any) -> None:
         for _, state in optimizer_state.items():
-            # Iterate through the state items (e.g., momentum, variance) for a parameter
             for k, v in state.items():
-                # Check if the item is a tensor
-                if torch.is_tensor(v):
-                    # Move the tensor to device and update the state dictionary
-                    if device == "cpu":
-                        if v.is_cuda:
-                            state[k] = v.to("cpu")
-                    elif device == "cuda":
-                        if not v.is_cuda:
-                            state[k] = v.to("cuda")
-                    else:
-                        raise ValueError(
-                            f"Invalid device: {device}. Only strings 'cpu' and 'cuda' are supported."
-                        )
+                if torch.is_tensor(v) and v.is_cuda:
+                    state[k] = v.to("cpu")
+
+    def _optimizer_to_cuda(self, optimizer_state: Any) -> None:
+        for _, state in optimizer_state.items():
+            for k, v in state.items():
+                if torch.is_tensor(v) and not v.is_cuda:
+                    state[k] = v.to("cuda")
+
+    def _pinned_optimizer_to_cpu(self, optimizer_state: Any) -> None:
+        for _, state in optimizer_state.items():
+            for key, value in state.items():
+                if not torch.is_tensor(value) or not value.is_cuda:
+                    continue
+                if value.dim() == 0:
+                    state[key] = value.cpu()
+                    continue
+                destination = torch.empty(
+                    value.shape,
+                    dtype=value.dtype,
+                    device="cpu",
+                    pin_memory=True,
+                )
+                destination.copy_(value, non_blocking=True)
+                state[key] = destination
+        torch.cuda.synchronize()
+
+    def _pinned_optimizer_to_cuda(self, optimizer_state: Any) -> None:
+        for _, state in optimizer_state.items():
+            for key, value in state.items():
+                if torch.is_tensor(value) and not value.is_cuda:
+                    state[key] = value.to("cuda", non_blocking=True)
+        torch.cuda.synchronize()
+
+    def _get_or_alloc_pinned_buf(self, total_bytes: int) -> torch.Tensor:
+        buffer = self._optimizer_pinned_buf
+        if buffer is None or buffer.numel() < total_bytes:
+            buffer = torch.empty(
+                total_bytes,
+                device="cpu",
+                dtype=torch.uint8,
+                pin_memory=True,
+            )
+            self._optimizer_pinned_buf = buffer
+        return buffer
+
+    def _coalesced_optimizer_to_cpu(self, optimizer_state: Any) -> None:
+        alignment = 512
+        entries = []
+        total_bytes = 0
+        for _, state in optimizer_state.items():
+            for key, value in state.items():
+                if not torch.is_tensor(value) or not value.is_cuda:
+                    continue
+                if value.dim() == 0:
+                    state[key] = value.cpu()
+                    continue
+                offset = (total_bytes + alignment - 1) // alignment * alignment
+                num_bytes = value.numel() * value.element_size()
+                entries.append((state, key, value, offset, num_bytes))
+                total_bytes = offset + num_bytes
+
+        if not entries:
+            return
+
+        cpu_buffer = self._get_or_alloc_pinned_buf(total_bytes)
+        for state, key, value, offset, num_bytes in entries:
+            destination = (
+                cpu_buffer[offset : offset + num_bytes]
+                .view(value.dtype)
+                .reshape(value.shape)
+            )
+            destination.copy_(value, non_blocking=True)
+            state[key] = destination
+        torch.cuda.synchronize()
+
+    def _coalesced_optimizer_to_cuda(self, optimizer_state: Any) -> None:
+        for _, state in optimizer_state.items():
+            for key, value in state.items():
+                if torch.is_tensor(value) and not value.is_cuda:
+                    state[key] = value.to("cuda", non_blocking=True)
+        torch.cuda.synchronize()
 
     def save_checkpoint(
         self,

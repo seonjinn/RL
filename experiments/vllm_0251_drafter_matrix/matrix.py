@@ -30,7 +30,10 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Literal, Mapping, Sequence
+
+
+OptimizerOffloadMode = Literal["pageable", "coalesced-pinned"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +168,7 @@ class ResolvedRun:
     phase: PhaseSpec
     variant: VariantSpec
     draft_checkpoint: CheckpointSpec | None
+    optimizer_offload_mode: OptimizerOffloadMode
     hydra_overrides: tuple[str, ...]
     dynamic_schedule: DynamicSchedule | None = None
 
@@ -211,6 +215,10 @@ class CheckoutState:
 
 
 G_MODEL_KEYS = frozenset(("qwen30", "qwen32", "qwen235"))
+G_OPTIMIZER_OFFLOAD_MODES: tuple[OptimizerOffloadMode, ...] = (
+    "pageable",
+    "coalesced-pinned",
+)
 G_APPROVED_DYNAMIC_FINAL_SCHEDULE_SHA256: frozenset[str] = frozenset(
     {"8cdfed304302f45e04e72cd219cb0be26c23c30b509c010fe9081d0c6da5fc14"}
 )
@@ -795,12 +803,17 @@ def resolve_run(
     cluster: str,
     *,
     dynamic_schedule: DynamicSchedule | None = None,
+    optimizer_offload_mode: OptimizerOffloadMode = "pageable",
 ) -> ResolvedRun:
     """Resolve an allowed model, variant, phase, and cluster into a run record."""
     recipe = _find_recipe(model_key)
     variant = _find_variant(variant_key)
     phase_spec = _find_phase(phase)
     cluster_spec = _find_cluster(cluster)
+    if optimizer_offload_mode not in G_OPTIMIZER_OFFLOAD_MODES:
+        raise ValueError(
+            f"Unsupported optimizer offload mode: {optimizer_offload_mode}"
+        )
     if model_key not in variant.compatible_models:
         raise ValueError(
             f"Variant '{variant_key}' is not available for model '{model_key}'"
@@ -884,6 +897,12 @@ def resolve_run(
         "logger.wandb_enabled=true",
         "logger.tensorboard_enabled=false",
     )
+    optimizer_offload_overrides = (
+        "++policy.use_pinned_optimizer_offload="
+        + ("true" if optimizer_offload_mode == "coalesced-pinned" else "false"),
+        "++policy.use_coalesced_optimizer_offload="
+        + ("true" if optimizer_offload_mode == "coalesced-pinned" else "false"),
+    )
     capture_overrides = ()
     if variant.cudagraph_capture_sizes:
         capture_sizes = ",".join(str(size) for size in variant.cudagraph_capture_sizes)
@@ -897,8 +916,10 @@ def resolve_run(
         phase=phase_spec,
         variant=variant,
         draft_checkpoint=draft_checkpoint,
+        optimizer_offload_mode=optimizer_offload_mode,
         dynamic_schedule=dynamic_schedule,
         hydra_overrides=base_overrides
+        + optimizer_offload_overrides
         + capture_overrides
         + _speculative_overrides(
             variant,
@@ -1007,6 +1028,7 @@ def build_runtime_command(
         ),
         "PYTHONFAULTHANDLER=1",
         "RAY_DEDUP_LOGS=0",
+        "NRL_REFIT_OFFLOAD_DIAGNOSTICS=1",
     )
     output_overrides = (
         f"checkpointing.checkpoint_dir={run_dir / 'checkpoints'}",
@@ -1366,9 +1388,14 @@ def write_provenance(run_dir: Path, payload: Mapping[str, Any]) -> None:
     _atomic_write(run_dir / "provenance.txt", text)
 
 
-def _run_tag(model: str, variant: str, phase: str) -> str:
+def _run_tag(
+    model: str,
+    variant: str,
+    phase: str,
+    optimizer_offload_mode: OptimizerOffloadMode,
+) -> str:
     timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
-    return f"{model}-v0251-{variant}-{phase}-{timestamp}"
+    return f"{model}-v0251-{variant}-{optimizer_offload_mode}-{phase}-{timestamp}"
 
 
 def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
@@ -1392,6 +1419,11 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--mounts", default="/lustre:/lustre")
     parser.add_argument("--run-tag")
     parser.add_argument("--dynamic-schedule", type=Path)
+    parser.add_argument(
+        "--optimizer-offload-mode",
+        default="pageable",
+        choices=G_OPTIMIZER_OFFLOAD_MODES,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1418,6 +1450,7 @@ def _show_record(
         "model": run.recipe.key,
         "variant": run.variant.key,
         "phase": run.phase.key,
+        "optimizer_offload_mode": run.optimizer_offload_mode,
         "runner": run.variant.runner,
         "recipe": run.recipe.path,
         "target_repo_id": run.recipe.target_repo_id,
@@ -1469,8 +1502,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.phase,
         args.cluster,
         dynamic_schedule=dynamic_schedule,
+        optimizer_offload_mode=args.optimizer_offload_mode,
     )
-    run_tag = args.run_tag or _run_tag(args.model, args.variant, args.phase)
+    run_tag = args.run_tag or _run_tag(
+        args.model,
+        args.variant,
+        args.phase,
+        args.optimizer_offload_mode,
+    )
     repo_dir = args.repo_dir.resolve()
     run_dir = validate_run_destination(
         repo_dir,

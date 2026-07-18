@@ -124,6 +124,8 @@ policy:
   precision: "bfloat16"
   logprob_chunk_size: null
   offload_optimizer_for_logprob: false # Only useful for non-colocated generation since colocated generation will always offload optimizer to cuda before refit
+  use_pinned_optimizer_offload: false # Use pinned CPU optimizer-state buffers for asynchronous refit transfers
+  use_coalesced_optimizer_offload: false # Reuse one aligned pinned optimizer buffer; requires use_pinned_optimizer_offload=true
 
   dtensor_cfg:
     _v2: true

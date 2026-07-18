@@ -11,6 +11,7 @@ from experiments.vllm_0251_drafter_matrix.dynamic_profile_worker import (
     build_server_command,
 )
 from experiments.vllm_0251_drafter_matrix.matrix import (
+    build_runtime_command as build_matrix_runtime_command,
     load_dynamic_schedule,
     resolve_run,
 )
@@ -306,3 +307,58 @@ def test_qwen235_dynamic_variant_rejects_schedule_beyond_active_batch64(
             "lyris",
             dynamic_schedule=load_dynamic_schedule(schedule_path),
         )
+
+
+def test_qwen235_dynamic_k3_optimizer_offload_ab_changes_only_offload_mode(
+    tmp_path: Path,
+) -> None:
+    schedule_path = tmp_path / "qwen235-k3-schedule.json"
+    schedule_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "calibration_status": "seed",
+                "model_key": "qwen235",
+                "target_revision": "8efa61729e24bd65b1d152b5ab5409052aa80e65",
+                "drafter_revision": "3c0c5cbad8e1fa7ce9e6fb6a1b0a35458b124e87",
+                "source_runtime_vllm": "0.25.1",
+                "target_runtime_vllm": "0.25.1",
+                "target_cuda_graph_mode": "FULL_AND_PIECEWISE",
+                "profile_sha256": "f" * 64,
+                "ranges": [[1, 64, 3]],
+            }
+        ),
+        encoding="utf-8",
+    )
+    schedule = load_dynamic_schedule(schedule_path)
+    runs = {
+        mode: resolve_run(
+            "qwen235",
+            "eagle3_thinking_dynamic_k123_cg256",
+            "smoke5",
+            "lyris",
+            dynamic_schedule=schedule,
+            optimizer_offload_mode=mode,
+        )
+        for mode in ("pageable", "coalesced-pinned")
+    }
+
+    def without_offload_overrides(overrides: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(
+            item
+            for item in overrides
+            if "policy.use_pinned_optimizer_offload" not in item
+            and "policy.use_coalesced_optimizer_offload" not in item
+        )
+
+    assert without_offload_overrides(
+        runs["pageable"].hydra_overrides
+    ) == without_offload_overrides(runs["coalesced-pinned"].hydra_overrides)
+    for mode, run in runs.items():
+        command = build_matrix_runtime_command(
+            run,
+            tmp_path / "repo",
+            tmp_path / "runs" / mode,
+            f"qwen235-dynamic-k3-{mode}",
+        )
+        assert "NRL_REFIT_OFFLOAD_DIAGNOSTICS=1" in command
