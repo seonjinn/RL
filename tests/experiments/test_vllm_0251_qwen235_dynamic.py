@@ -262,6 +262,41 @@ def test_qwen235_dynamic_k5_variant_requires_range64_and_captures_to384(
     )
 
 
+def test_qwen235_dynamic_schedule_transport_requires_explicit_opt_in(
+    tmp_path: Path,
+) -> None:
+    profile = load_profile(_write_qwen235_profile(tmp_path / "profile.json"))
+    schedule = derive_schedule(profile)
+    schedule_path = tmp_path / "schedule.json"
+    from experiments.vllm_0251_drafter_matrix.calibrate_dynamic_sd import (
+        write_schedule,
+    )
+
+    write_schedule(profile, schedule, schedule_path)
+    loaded = load_dynamic_schedule(schedule_path)
+
+    with pytest.raises(ValueError, match="transport"):
+        resolve_run(
+            "qwen235",
+            "eagle3_thinking_dynamic_k5_cg384",
+            "smoke2",
+            "lyris",
+            dynamic_schedule=loaded,
+            max_osl=32768,
+        )
+
+    transported = resolve_run(
+        "qwen235",
+        "eagle3_thinking_dynamic_k5_cg384",
+        "smoke2",
+        "lyris",
+        dynamic_schedule=loaded,
+        max_osl=32768,
+        allow_dynamic_schedule_transport=True,
+    )
+    assert transported.dynamic_schedule_transport is True
+
+
 def test_qwen235_dynamic_variant_rejects_schedule_beyond_active_batch64(
     tmp_path: Path,
 ) -> None:

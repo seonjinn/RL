@@ -177,6 +177,7 @@ class ResolvedRun:
     optimizer_offload_mode: OptimizerOffloadMode
     hydra_overrides: tuple[str, ...]
     dynamic_schedule: DynamicSchedule | None = None
+    dynamic_schedule_transport: bool = False
 
     def command_parts(self) -> tuple[str, ...]:
         """Return the deterministic training command as an argument tuple."""
@@ -897,9 +898,11 @@ def resolve_run(
     dynamic_schedule: DynamicSchedule | None = None,
     optimizer_offload_mode: OptimizerOffloadMode = "pageable",
     max_osl: int | None = None,
+    allow_dynamic_schedule_transport: bool = False,
 ) -> ResolvedRun:
     """Resolve an allowed model, variant, phase, and cluster into a run record."""
     recipe = _find_recipe(model_key)
+    default_max_osl = recipe.max_osl
     if max_osl is not None:
         if isinstance(max_osl, bool) or not 1 <= max_osl <= 40960:
             raise ValueError("max OSL must be between 1 and 40960 tokens")
@@ -927,6 +930,12 @@ def resolve_run(
             f"Variant '{variant_key}' does not accept a DynamicSD schedule"
         )
     if dynamic_schedule is not None:
+        dynamic_schedule_transport = max_osl is not None and max_osl != default_max_osl
+        if dynamic_schedule_transport and not allow_dynamic_schedule_transport:
+            raise ValueError(
+                "DynamicSD schedule transport across max OSL values requires "
+                "explicit opt-in"
+            )
         expected_max_batch = recipe.dynamic_profile_max_batch_size
         if expected_max_batch is None:
             raise ValueError(
@@ -984,6 +993,8 @@ def resolve_run(
             raise ValueError(
                 "DynamicSD final20 requires an approved calibration artifact"
             )
+    else:
+        dynamic_schedule_transport = False
 
     base_overrides = (
         f"grpo.max_num_steps={phase_spec.max_steps}",
@@ -1047,6 +1058,7 @@ def resolve_run(
         draft_checkpoint=draft_checkpoint,
         optimizer_offload_mode=optimizer_offload_mode,
         dynamic_schedule=dynamic_schedule,
+        dynamic_schedule_transport=dynamic_schedule_transport,
         hydra_overrides=base_overrides
         + optimizer_offload_overrides
         + sequence_length_overrides
@@ -1556,6 +1568,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--run-tag")
     parser.add_argument("--dynamic-schedule", type=Path)
     parser.add_argument("--max-osl", type=int)
+    parser.add_argument("--allow-dynamic-schedule-transport", action="store_true")
     parser.add_argument(
         "--optimizer-offload-mode",
         default="pageable",
@@ -1618,6 +1631,7 @@ def _show_record(
             if dynamic_schedule is not None
             else None
         ),
+        "dynamic_schedule_transport": run.dynamic_schedule_transport,
         "container": str(container),
         "mounts": mounts,
         "run_dir": str(run_dir),
@@ -1642,6 +1656,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         dynamic_schedule=dynamic_schedule,
         optimizer_offload_mode=args.optimizer_offload_mode,
         max_osl=args.max_osl,
+        allow_dynamic_schedule_transport=args.allow_dynamic_schedule_transport,
     )
     run_tag = args.run_tag or _run_tag(
         args.model,
