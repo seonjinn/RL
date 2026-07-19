@@ -20,6 +20,8 @@ TARGET_SNAPSHOT_GLOB="${HF_HOME}/hub/models--Qwen--Qwen3-30B-A3B-Thinking-2507/s
 DRAFT_SNAPSHOT="${HF_HOME}/hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf"
 DYNAMIC_SD_SCHEDULE="[[1,8,3],[9,32,2],[33,512,1]]"
 METRICS="${METRICS:-false}"
+V2="${V2:-1}"
+ARCTIC="${ARCTIC:-false}"
 CAP512="${CAP512:-false}"
 TAG="${TAG:-${VARIANT}}"
 RUN_TAG="${TAG}-$(date +%m%d-%H%M%S)"
@@ -73,7 +75,7 @@ if [[ "${CAP512}" == "true" ]]; then
 fi
 
 command_env=(
-  "VLLM_USE_V2_MODEL_RUNNER=1"
+  "VLLM_USE_V2_MODEL_RUNNER=${V2}"
   "HF_HOME=${HF_HOME}"
   "HF_HUB_OFFLINE=1"
   "TRANSFORMERS_OFFLINE=1"
@@ -93,6 +95,13 @@ command_env=(
 if [[ -n "${SCHED}" ]]; then
   command_env+=(
     "NRL_VENV_POST_SYNC_SCRIPT=${WT}/experiments/vllm_0251_eagle3_perfcfg/apply_vllm0251_dynamic_sd_cg_fix.py"
+    "NRL_VENV_POST_SYNC_TARGET=nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker"
+  )
+fi
+
+if [[ "${ARCTIC}" == "true" ]]; then
+  command_env+=(
+    "NRL_VENV_POST_SYNC_SCRIPT=${WT}/experiments/nemogym_swe1_specdec/install_arctic_post_sync.py"
     "NRL_VENV_POST_SYNC_TARGET=nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker"
   )
 fi
