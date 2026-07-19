@@ -228,3 +228,15 @@ def test_pinned_slab_plan_rejects_oversized_entry() -> None:
         refit_offload_diagnostics.plan_pinned_slabs(
             (2 * gib + 512,), slab_bytes=2 * gib, alignment=512
         )
+
+
+def test_pinned_slab_plan_allocates_only_used_extent() -> None:
+    kib = 1024
+    gib = 1024**3
+
+    plan = refit_offload_diagnostics.plan_pinned_slabs(
+        (32 * kib,), slab_bytes=2 * gib, alignment=512
+    )
+
+    assert plan.slab_sizes == (32 * kib,)
+    assert plan.entries == (refit_offload_diagnostics.PinnedSlabEntry(0, 0, 32 * kib),)

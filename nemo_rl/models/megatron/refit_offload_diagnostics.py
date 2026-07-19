@@ -62,7 +62,7 @@ def plan_pinned_slabs(
     slab_bytes: int,
     alignment: int,
 ) -> PinnedSlabPlan:
-    """Pack entries into fixed-size slabs without splitting an entry."""
+    """Pack entries into size-capped slabs without splitting an entry."""
     if slab_bytes <= 0:
         raise ValueError("slab_bytes must be positive")
     if alignment <= 0:
@@ -85,10 +85,11 @@ def plan_pinned_slabs(
         offset = (active_offset + alignment - 1) // alignment * alignment
         if active_slab is None or offset + num_bytes > slab_bytes:
             active_slab = len(slab_sizes)
-            slab_sizes.append(slab_bytes)
+            slab_sizes.append(0)
             offset = 0
         entries.append(PinnedSlabEntry(active_slab, offset, num_bytes))
         active_offset = offset + num_bytes
+        slab_sizes[active_slab] = active_offset
 
     return PinnedSlabPlan(tuple(slab_sizes), tuple(entries))
 
