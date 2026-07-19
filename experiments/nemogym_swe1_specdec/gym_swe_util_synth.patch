@@ -1,5 +1,5 @@
 diff --git a/responses_api_agents/swe_agents/app.py b/responses_api_agents/swe_agents/app.py
-index f492ba1..8fce622 100644
+index f492ba1..bfbee31 100644
 --- a/responses_api_agents/swe_agents/app.py
 +++ b/responses_api_agents/swe_agents/app.py
 @@ -3168,6 +3168,16 @@ class SWEBenchWrapper(SimpleResponsesAPIAgent):
@@ -30,15 +30,17 @@ index f492ba1..8fce622 100644
          # Launch Apptainer container and execute the script file
          apptainer_cmd = (
              f"apptainer exec --writable-tmpfs --cleanenv --pid --no-mount home,tmp,bind-paths "
-@@ -3680,6 +3694,11 @@ class SWEBenchWrapper(SimpleResponsesAPIAgent):
+@@ -3680,6 +3694,13 @@ class SWEBenchWrapper(SimpleResponsesAPIAgent):
                  "input": json.loads(metadata["input"]),
                  "tools": [t.model_dump() for t in response.tools] if response.tools else [],
              }
-+            # openai<=2.7.2 (clamped in subprocess venvs) rejects strict=None
-+            # on function tools; newer SDKs allow it. Normalize for validation.
-+            for _t in responses_create_params.get("tools") or []:
-+                if isinstance(_t, dict) and _t.get("type") == "function" and _t.get("strict") is None:
-+                    _t["strict"] = False
++            # openai<=2.7.2 (clamped in subprocess venvs) rejects None values
++            # on optional tool fields that model_dump() emits (strict,
++            # defer_loading, ...). Drop None keys so TypedDict validation passes.
++            responses_create_params["tools"] = [
++                ({k: v for k, v in _t.items() if v is not None} if isinstance(_t, dict) else _t)
++                for _t in (responses_create_params.get("tools") or [])
++            ]
              metrics = SWEBenchMetrics.model_validate_json(metadata["metrics"])
              subagent_trajectories = None
              if "subagent_trajectories" in metadata:
