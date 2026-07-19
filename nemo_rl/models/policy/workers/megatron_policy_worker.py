@@ -67,7 +67,10 @@ from nemo_rl.models.megatron.pipeline_parallel import (
     broadcast_obj_from_pp_rank,
     broadcast_tensors_from_last_stage,
 )
-from nemo_rl.models.megatron.refit_offload_diagnostics import measure_refit_phase
+from nemo_rl.models.megatron.refit_offload_diagnostics import (
+    measure_refit_phase,
+    plan_pinned_slabs,
+)
 from nemo_rl.models.megatron.router_replay import router_replay_enabled
 from nemo_rl.models.megatron.setup import (
     finalize_megatron_setup,
@@ -301,7 +304,7 @@ class MegatronPolicyWorkerImpl(
         self._refit_offload_diagnostics_enabled = (
             os.environ.get("NRL_REFIT_OFFLOAD_DIAGNOSTICS") == "1"
         )
-        self._optimizer_pinned_buf: torch.Tensor | None = None
+        self._optimizer_pinned_bufs: list[torch.Tensor] = []
 
         # Set rank for non-collocated to check which ranks to broadcast from
         self.rank = get_rank_safe()
@@ -2325,22 +2328,25 @@ class MegatronPolicyWorkerImpl(
                     state[key] = value.to("cuda", non_blocking=True)
         torch.cuda.synchronize()
 
-    def _get_or_alloc_pinned_buf(self, total_bytes: int) -> torch.Tensor:
-        buffer = self._optimizer_pinned_buf
-        if buffer is None or buffer.numel() < total_bytes:
+    def _get_or_alloc_pinned_buf(
+        self, slab_index: int, total_bytes: int
+    ) -> torch.Tensor:
+        while len(self._optimizer_pinned_bufs) <= slab_index:
+            self._optimizer_pinned_bufs.append(torch.empty(0, dtype=torch.uint8))
+        buffer = self._optimizer_pinned_bufs[slab_index]
+        if buffer.numel() < total_bytes or not buffer.is_pinned():
             buffer = torch.empty(
                 total_bytes,
                 device="cpu",
                 dtype=torch.uint8,
                 pin_memory=True,
             )
-            self._optimizer_pinned_buf = buffer
+            self._optimizer_pinned_bufs[slab_index] = buffer
         return buffer
 
     def _coalesced_optimizer_to_cpu(self, optimizer_state: Any) -> None:
         alignment = 512
         entries = []
-        total_bytes = 0
         for _, state in optimizer_state.items():
             for key, value in state.items():
                 if not torch.is_tensor(value) or not value.is_cuda:
@@ -2353,16 +2359,26 @@ class MegatronPolicyWorkerImpl(
                         "Coalesced pinned optimizer offload requires contiguous "
                         f"state tensors; state {key!r} has stride {value.stride()}."
                     )
-                offset = (total_bytes + alignment - 1) // alignment * alignment
                 num_bytes = value.numel() * value.element_size()
-                entries.append((state, key, value, offset, num_bytes))
-                total_bytes = offset + num_bytes
+                entries.append((state, key, value, num_bytes))
 
         if not entries:
             return
 
-        cpu_buffer = self._get_or_alloc_pinned_buf(total_bytes)
-        for state, key, value, offset, num_bytes in entries:
+        slab_plan = plan_pinned_slabs(
+            [num_bytes for _, _, _, num_bytes in entries],
+            slab_bytes=2 * 1024**3,
+            alignment=alignment,
+        )
+        cpu_buffers = [
+            self._get_or_alloc_pinned_buf(index, slab_size)
+            for index, slab_size in enumerate(slab_plan.slab_sizes)
+        ]
+        for (state, key, value, num_bytes), placement in zip(
+            entries, slab_plan.entries, strict=True
+        ):
+            cpu_buffer = cpu_buffers[placement.slab_index]
+            offset = placement.offset_bytes
             destination = (
                 cpu_buffer[offset : offset + num_bytes]
                 .view(value.dtype)

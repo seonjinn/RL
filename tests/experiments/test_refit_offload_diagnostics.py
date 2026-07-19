@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from nemo_rl.models.megatron import refit_offload_diagnostics
 from nemo_rl.models.megatron.refit_offload_diagnostics import (
     HostMemorySnapshot,
     measure_refit_phase,
@@ -200,3 +201,30 @@ def test_megatron_worker_exposes_pageable_and_coalesced_pinned_paths() -> None:
         "_coalesced_optimizer_to_cuda",
         "_get_or_alloc_pinned_buf",
     }.issubset(methods)
+
+
+def test_pinned_slab_plan_avoids_power_of_two_amplification() -> None:
+    planner = getattr(refit_offload_diagnostics, "plan_pinned_slabs", None)
+    assert callable(planner), "bounded pinned-slab planning is required"
+
+    gib = 1024**3
+    entry_sizes = (gib // 2,) * 68
+    plan = planner(entry_sizes, slab_bytes=2 * gib, alignment=512)
+
+    assert plan.slab_sizes == (2 * gib,) * 17
+    assert sum(plan.slab_sizes) == 34 * gib
+    assert sum(plan.slab_sizes) < 64 * gib
+    assert len(plan.entries) == len(entry_sizes)
+    assert all(
+        entry.offset_bytes + entry.num_bytes <= plan.slab_sizes[entry.slab_index]
+        for entry in plan.entries
+    )
+
+
+def test_pinned_slab_plan_rejects_oversized_entry() -> None:
+    gib = 1024**3
+
+    with pytest.raises(ValueError, match="exceeds pinned slab size"):
+        refit_offload_diagnostics.plan_pinned_slabs(
+            (2 * gib + 512,), slab_bytes=2 * gib, alignment=512
+        )

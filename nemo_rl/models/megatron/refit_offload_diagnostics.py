@@ -19,7 +19,7 @@ import resource
 import socket
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO, TypeVar
@@ -37,6 +37,60 @@ class HostMemorySnapshot:
     major_faults: int | None
     mem_available_bytes: int | None
     minor_faults: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PinnedSlabEntry:
+    """Location of one contiguous optimizer tensor inside a pinned slab."""
+
+    slab_index: int
+    offset_bytes: int
+    num_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class PinnedSlabPlan:
+    """Bounded pinned allocations and entry placements for optimizer offload."""
+
+    slab_sizes: tuple[int, ...]
+    entries: tuple[PinnedSlabEntry, ...]
+
+
+def plan_pinned_slabs(
+    entry_sizes: Sequence[int],
+    *,
+    slab_bytes: int,
+    alignment: int,
+) -> PinnedSlabPlan:
+    """Pack entries into fixed-size slabs without splitting an entry."""
+    if slab_bytes <= 0:
+        raise ValueError("slab_bytes must be positive")
+    if alignment <= 0:
+        raise ValueError("alignment must be positive")
+
+    slab_sizes: list[int] = []
+    entries: list[PinnedSlabEntry] = []
+    active_slab: int | None = None
+    active_offset = 0
+
+    for num_bytes in entry_sizes:
+        if num_bytes <= 0:
+            raise ValueError("entry sizes must be positive")
+        if num_bytes > slab_bytes:
+            raise ValueError(
+                f"optimizer entry size {num_bytes} exceeds pinned slab size "
+                f"{slab_bytes}"
+            )
+
+        offset = (active_offset + alignment - 1) // alignment * alignment
+        if active_slab is None or offset + num_bytes > slab_bytes:
+            active_slab = len(slab_sizes)
+            slab_sizes.append(slab_bytes)
+            offset = 0
+        entries.append(PinnedSlabEntry(active_slab, offset, num_bytes))
+        active_offset = offset + num_bytes
+
+    return PinnedSlabPlan(tuple(slab_sizes), tuple(entries))
 
 
 def _read_kib_value(path: Path, key: str) -> int | None:

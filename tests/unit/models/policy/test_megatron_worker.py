@@ -3121,7 +3121,7 @@ def _make_optimizer_offload_worker(state, *, mode: str):
         },
     )
     worker.optimizer = _OptimizerOffloadTestOptimizer(state)
-    worker._optimizer_pinned_buf = None
+    worker._optimizer_pinned_bufs = []
     return worker
 
 
@@ -3163,11 +3163,15 @@ def test_coalesced_optimizer_offload_reuses_pinned_buffer() -> None:
     worker = _make_optimizer_offload_worker(state, mode="coalesced-pinned")
 
     worker.move_optimizer("cpu")
-    first_pointer = worker._optimizer_pinned_buf.data_ptr()
+    first_pointers = tuple(
+        buffer.data_ptr() for buffer in worker._optimizer_pinned_bufs
+    )
     worker.move_optimizer("cuda")
     worker.move_optimizer("cpu")
 
-    assert worker._optimizer_pinned_buf.data_ptr() == first_pointer
+    assert tuple(buffer.data_ptr() for buffer in worker._optimizer_pinned_bufs) == (
+        first_pointers
+    )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
