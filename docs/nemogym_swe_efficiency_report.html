@@ -168,7 +168,10 @@ SWE2는 decode-heavy라 Amdahl 상한 1.21&times;를 기대했으나, <b>실측 
 </table>
 <p><b>판정.</b> (1) <b>acceptance가 범인 확정</b>: EAGLE3는 8K 컨텍스트를 넘으면 MAL이 1.31→1.05로 붕괴 — drafter 학습 분포(짧은 지시-응답) 밖. K3 손익분기(MAL≈1.6–1.8)에 못 미쳐 NemoGym 실측 0.90&times;가 설명된다.
 (2) <b>모델-프리 drafter는 붕괴하지 않는다</b>: suffix는 컨텍스트 길이에 평평(1.5–1.8), n-gram은 오히려 상승(코드/tool 출력 반복이 매칭 소스). n-gram은 selective drafting(매칭 있을 때만 draft)이라 정밀도가 높은 대신 커버리지가 낮고(생성 토큰의 ~17%), suffix는 커버리지 37%로 균형형 — eager 처리량은 suffix가 최고(+53% vs eagle3).
-(3) <b>다음 검증</b>: NeMo-RL vLLM 워커 venv에 arctic-inference를 추가해 NemoGym 경로에서 suffix/ngram end-to-end 실측 (주의: V1 러너 전용), 또는 RL 학습 중 drafter를 rollout 데이터로 갱신하는 eagle3-online으로 분포 문제 자체를 해소.</p>
+(3) <b>E2E 실측 결과 (스코어보드 완성)</b>: NemoGym 경로에서 suffix(arctic post-sync 주입)와 ngram(내장)을 실측 —
+<b>baseline 209 &gt; eagle3 189 (0.90&times;) &gt; suffix 101 (0.48&times;) &gt; ngram 99 (0.47&times;) tok/s</b>.
+모델-프리 drafter의 replay-산술 천장(suffix 1.60&times;)은 실현되지 않았다: <b>proposal 비용이 컨텍스트 길이에 비례</b>(suffix는 요청마다 16–33K 토큰 트리 구축, ngram은 매 decode 스텝 프롬프트 스캔)해서 장문에서 스텝 비용을 지배한다. 결론: <b>기성 SpecDec 3종 모두 SWE2 멀티턴에서 역효과</b> — 모델 drafter는 acceptance(분포)로, 모델-프리는 proposal 비용으로, 같은 뿌리(장문 컨텍스트)에서 죽는다.
+유효 경로는 ① eagle3-online(RL rollout 데이터로 drafter 장문 재학습), ② DAS식 증분 suffix tree(요청별 재구축 제거 — 우리 실측이 그 설계 필요성을 재확인).</p>
 <p class="muted">부가 발견(upstream): eagle3 + V2 러너 + 장문(&gt;24K) 프롬프트 조합에서 CUDA illegal memory access (vLLM 0.25.0 patched wheel, eager/V1은 정상) — ledger 추가 대상.</p>
 <p></p>
 
