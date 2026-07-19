@@ -960,7 +960,9 @@ class Logger(LoggerInterface):
         os.makedirs(self.base_log_dir, exist_ok=True)
 
         if cfg["wandb_enabled"]:
-            wandb_log_dir = os.path.join(self.base_log_dir, "wandb")
+            wandb_log_dir = os.environ.get("NRL_WANDB_LOG_DIR") or os.path.join(
+                self.base_log_dir, "wandb"
+            )
             os.makedirs(wandb_log_dir, exist_ok=True)
             self.wandb_logger = WandbLogger(cfg["wandb"], log_dir=wandb_log_dir)
             self.loggers.append(self.wandb_logger)

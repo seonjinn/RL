@@ -1131,6 +1131,7 @@ def build_runtime_command(
         f"PYTHONPATH={repo_dir}",
         f"NEMO_RL_VENV_DIR=/tmp/nemorl-v0251-{safe_tag}",
         "NRL_FORCE_REBUILD_VENVS=true",
+        f"NRL_WANDB_LOG_DIR=/tmp/nemorl-v0251-wandb-{safe_tag}",
         f"TRITON_CACHE_DIR=/tmp/nemorl-v0251-triton-{safe_tag}",
         f"TORCHINDUCTOR_CACHE_DIR=/tmp/nemorl-v0251-inductor-{safe_tag}",
         *(

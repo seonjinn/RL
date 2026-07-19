@@ -655,6 +655,7 @@ def test_runtime_command_binds_the_validated_target_snapshot(tmp_path: Path) -> 
     assert f"policy.model_name={target_snapshot}" in command
     assert f"policy.tokenizer.name={target_snapshot}" in command
     assert "NEMO_RL_VENV_DIR=/tmp/nemorl-v0251-runtime-123" in command
+    assert "NRL_WANDB_LOG_DIR=/tmp/nemorl-v0251-wandb-runtime-123" in command
     assert "TRITON_CACHE_DIR=/tmp/nemorl-v0251-triton-runtime-123" in command
     assert "TORCHINDUCTOR_CACHE_DIR=/tmp/nemorl-v0251-inductor-runtime-123" in command
 

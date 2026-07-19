@@ -1538,6 +1538,30 @@ class TestLogger:
         mock_tb_logger.assert_not_called()
 
     @patch("nemo_rl.utils.logger.WandbLogger")
+    def test_init_wandb_uses_node_local_override(
+        self, mock_wandb_logger, temp_dir, monkeypatch
+    ):
+        wandb_log_dir = tempfile.mkdtemp()
+        monkeypatch.setenv("NRL_WANDB_LOG_DIR", wandb_log_dir)
+        cfg = {
+            "wandb_enabled": True,
+            "tensorboard_enabled": False,
+            "mlflow_enabled": False,
+            "swanlab_enabled": False,
+            "monitor_gpus": False,
+            "wandb": {"project": "test-project"},
+            "log_dir": temp_dir,
+        }
+
+        try:
+            Logger(cfg)
+            mock_wandb_logger.assert_called_once_with(
+                {"project": "test-project"}, log_dir=wandb_log_dir
+            )
+        finally:
+            shutil.rmtree(wandb_log_dir)
+
+    @patch("nemo_rl.utils.logger.WandbLogger")
     @patch("nemo_rl.utils.logger.SwanlabLogger")
     @patch("nemo_rl.utils.logger.TensorboardLogger")
     def test_init_swanlab_only(self, mock_tb_logger, mock_swanlab_logger, temp_dir):
