@@ -423,6 +423,34 @@ corpus-drafter ceiling at ~1.15x token rate for this single-step env - the
 rollout-corpus ingredient of DAS needs true multi-turn copy density (our
 replay measured suffix AL 3.10 there) to pay.
 
+## True agentic SWE2 on GB200: pipeline built, timeline decomposed
+
+The SWE1 verdict does not extend to true multi-turn agentic SWE, and we can
+now say so with measurements instead of extrapolation. We stood up the full
+SWE2 stack (OpenHands agents inside per-instance SWE-bench apptainer
+containers, driven through NemoGym and PR #3243's eval mode) on Lyris GB200
+- previously assumed impossible without x86 infrastructure. Seven distinct
+failure layers had to be root-caused; the load-bearing one was a single
+hardcoded `jq-linux-amd64` download in Gym's OpenHands setup script that
+made the entry script kill its tmux pane on aarch64, masquerading as a
+universal command-timeout. With arm64 SIF prepull, a /dev/fuse bind for
+apptainer-in-enroot, a synthetic /swe_util layer (official arm64 images
+lack the OpenHands bake), and openai-2.7.2 tool-schema normalization, 3/3
+SWE-bench_Verified rollouts complete end-to-end (5-8 turns, all producing
+patches, eval harness scoring).
+
+The rollout-timeline instrumentation (Gym PR #1825 + nv-OpenHands PR #19)
+then gives the decomposition SWE1 could only approximate. Over 3 instances
+(agent + eval wall 434 s): **LLM generation 45.7%**, agent init 24.5%,
+framework overhead between turns 17.2%, final evaluation 11.2%, tool
+execution 0.5%. Per-turn LLM latency is p50 6.6 s / p90 28.4 s (n=18) at
+~2.3K completion tokens per turn - decode-heavy, the opposite regime from
+SWE1's 22:1 prefill dominance. Amdahl over the 45.7% LLM share puts the
+SpecDec E2E ceiling at ~1.21x with the measured 1.63x eagle3 generation
+speedup (1.27x at the standalone-SWE 1.85x) - a positive headroom, in
+contrast to SWE1's measured 0.87x. Caveat: 3 instances x <=8 turns, single
+generation each; acceptance on SWE2 outputs not yet measured directly.
+
 ## Do our numbers match the upstream DynamicSD PRs?
 
 Yes, when compared apples-to-apples. PR #32374 reports +7.5% over no-SD at
