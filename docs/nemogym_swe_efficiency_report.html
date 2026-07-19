@@ -163,7 +163,8 @@ SWE2는 decode-heavy라 Amdahl 상한 1.21&times;를 기대했으나, <b>실측 
 <tr><th>drafter</th><th class="num">MAL 전체</th><th class="num">ctx &lt;8K</th><th class="num">8–16K</th><th class="num">16–24K</th><th class="num">&gt;24K</th><th>per-pos accept</th><th class="num">eager tok/s</th></tr>
 <tr><td>EAGLE3 K3</td><td class="num"><b>1.39</b></td><td class="num">1.96</td><td class="num">1.31</td><td class="num">1.07</td><td class="num">1.05</td><td>[0.26, 0.09, 0.04]</td><td class="num">15</td></tr>
 <tr><td>Suffix K8</td><td class="num">1.64</td><td class="num">1.54</td><td class="num">1.78</td><td class="num">1.78</td><td class="num">1.60</td><td>[0.34, 0.14, 0.06, …]</td><td class="num"><b>23</b></td></tr>
-<tr><td>N-gram K8 <span class="muted">(부분: 9/33턴)</span></td><td class="num"><b>3.53</b></td><td class="num">3.13</td><td class="num">4.07</td><td class="num">3.59</td><td class="num">3.23</td><td>[0.62, 0.46, 0.36, …]</td><td class="num">18</td></tr>
+<tr><td>N-gram K8 <span class="muted">(18/33턴, walltime)</span></td><td class="num"><b>3.68</b></td><td class="num">3.45</td><td class="num">4.00</td><td class="num">3.59</td><td class="num">3.23</td><td>[0.63, 0.47, 0.38, …]</td><td class="num">18</td></tr>
+<tr><td colspan="8" class="muted">draft 커버리지(수락 토큰/전체 생성): eagle3 28.2% · suffix 37.4% · ngram 17.5% — ngram은 고정밀 저커버리지, suffix는 균형형</td></tr>
 </table>
 <p><b>판정.</b> (1) <b>acceptance가 범인 확정</b>: EAGLE3는 8K 컨텍스트를 넘으면 MAL이 1.31→1.05로 붕괴 — drafter 학습 분포(짧은 지시-응답) 밖. K3 손익분기(MAL≈1.6–1.8)에 못 미쳐 NemoGym 실측 0.90&times;가 설명된다.
 (2) <b>모델-프리 drafter는 붕괴하지 않는다</b>: suffix는 컨텍스트 길이에 평평(1.5–1.8), n-gram은 오히려 상승(코드/tool 출력 반복이 매칭 소스). n-gram은 selective drafting(매칭 있을 때만 draft)이라 정밀도가 높은 대신 커버리지가 낮고(생성 토큰의 ~17%), suffix는 커버리지 37%로 균형형 — eager 처리량은 suffix가 최고(+53% vs eagle3).
