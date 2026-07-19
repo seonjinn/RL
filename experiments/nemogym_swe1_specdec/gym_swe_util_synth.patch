@@ -1,5 +1,5 @@
 diff --git a/responses_api_agents/swe_agents/app.py b/responses_api_agents/swe_agents/app.py
-index f492ba1..0e1ce88 100644
+index f492ba1..b2a6358 100644
 --- a/responses_api_agents/swe_agents/app.py
 +++ b/responses_api_agents/swe_agents/app.py
 @@ -3168,6 +3168,16 @@ class SWEBenchWrapper(SimpleResponsesAPIAgent):
@@ -19,3 +19,14 @@ index f492ba1..0e1ce88 100644
          # Add SWE-bench setup directory mount if available (for evaluation)
          # swe-bench-ext, nv-internal-1, and deepswe don't use the swebench harness
          if command.mode == "eval" and data_point["dataset_name"] not in ("nv-internal-1", "swe-bench-ext", "deepswe"):
+@@ -3326,6 +3336,10 @@ class SWEBenchWrapper(SimpleResponsesAPIAgent):
+         env_args += "--env CHROME_BIN=/tmp/chrome-wrapper.sh "
+         env_args += "--env CHROMIUM_BIN=/tmp/chrome-wrapper.sh "
+ 
++        # Verbose OpenHands runtime logs for debugging session handshake issues.
++        if os.environ.get("NRL_OH_DEBUG"):
++            env_args += "--env DEBUG=true --env LOG_ALL_EVENTS=true "
++
+         # Launch Apptainer container and execute the script file
+         apptainer_cmd = (
+             f"apptainer exec --writable-tmpfs --cleanenv --pid --no-mount home,tmp,bind-paths "

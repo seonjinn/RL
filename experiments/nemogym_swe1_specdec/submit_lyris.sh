@@ -85,6 +85,7 @@ command_env=(
   "UV_LOCK_TIMEOUT=3600"
   "PYTHONFAULTHANDLER=1"
   "RAY_DEDUP_LOGS=0"
+  "NRL_OH_DEBUG=1"
   "NRL_SWE_UTIL_SYNTH=/lustre/fsw/coreai_dlalgo_llm/users/sna/swe_util_synth"
   "APPTAINER_CACHEDIR=/lustre/fsw/coreai_dlalgo_llm/users/sna/apptainer_cache"
   "APPTAINER_TMPDIR=/tmp/apptainer-${RUN_TAG}"
