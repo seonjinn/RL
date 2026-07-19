@@ -68,6 +68,11 @@ REPORT_GROUPS = [
                 "dynamic_sd_sync_rollout_results_latest.html",
                 "Qwen3-30B-A3B/32B/235B with EAGLE3 Thinking drafters on GB200; NeMo-RL SyncRL recipe shapes.",
             ),
+            (
+                "NemoGym SWE rollout inefficiency report",
+                "nemogym_swe_efficiency_report.html",
+                "Measured timeline decomposition (PR #3243 + PR #1825 profiler), 8 inefficiencies with code segments, fix plan with trade-off and correctness analysis.",
+            ),
         ],
     },
     {

@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NeMo-RL + NeMo-Gym SWE Rollout Inefficiency Report &amp; Fix Plan</title>
+<style>
+  body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 13px; line-height: 1.55;
+         color: #1a2233; max-width: 1080px; margin: 0 auto; padding: 24px 20px 80px; background: #fbfcfe; }
+  h1 { font-size: 20px; border-bottom: 3px solid #2a4d8f; padding-bottom: 8px; }
+  h2 { font-size: 16px; color: #2a4d8f; margin-top: 34px; border-left: 4px solid #2a4d8f; padding-left: 8px; }
+  h3 { font-size: 14px; margin-top: 22px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; margin: 10px 0; }
+  th, td { border: 1px solid #c9d4e5; padding: 5px 8px; text-align: left; vertical-align: top; }
+  th { background: #eef3fa; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  pre { background: #14192b; color: #dce4f5; padding: 10px 12px; border-radius: 6px; overflow-x: auto;
+        font-size: 11px; line-height: 1.45; }
+  code { font-family: 'SF Mono', Menlo, monospace; }
+  p > code, li > code, td > code { background: #e8edf6; padding: 1px 4px; border-radius: 3px; font-size: 11.5px; color: #1d3461; }
+  .verdict { background: #eef7ee; border: 1px solid #9fc99f; border-radius: 6px; padding: 10px 14px; margin: 12px 0; }
+  .warn { background: #fdf3e4; border: 1px solid #e0b66a; border-radius: 6px; padding: 10px 14px; margin: 12px 0; }
+  .risk-none { color: #1e7d32; font-weight: 600; }
+  .risk-low { color: #8a6d00; font-weight: 600; }
+  .risk-med { color: #b45309; font-weight: 600; }
+  .tag { display: inline-block; background: #2a4d8f; color: #fff; border-radius: 3px; padding: 0 6px;
+         font-size: 10.5px; margin-right: 6px; }
+  .muted { color: #66718a; font-size: 11.5px; }
+  details { margin: 8px 0; }
+  summary { cursor: pointer; font-weight: 600; color: #2a4d8f; }
+</style>
+</head>
+<body>
+
+<h1>NeMo-RL + NeMo-Gym SWE Rollout: 비효율 인벤토리와 수정 계획</h1>
+<p class="muted">측정 기반: NVIDIA-NeMo/RL PR #3243 (rollout-only eval mode) + Gym PR #1825 / nv-OpenHands PR #19 (rollout timeline profiler).
+스택: Lyris GB200 1n4g, vLLM 0.25.1, Qwen3-30B-A3B-Thinking-2507, Gym latest main(fbde772), nv-OpenHands sdd/multilingual-fixes@5f018005.
+워크로드: SWE1-pivot 400 rollouts / SWE2(OpenHands agentic) SWE-bench_Verified 3 instances &times; &le;8 turns.</p>
+
+<div class="verdict"><b>요약.</b> 실측으로 확인된 비효율은 8개이며 크게 세 계열이다:
+(1) <b>GPU 시간 낭비</b> — prefix cache가 두 워크로드 모두에서 0% 히트 (라우팅/제출 패턴 문제, I1·I2),
+(2) <b>CPU측 고정비</b> — agent init 24.5% + framework overhead 17.2% (콜드 임포트, 순차 셋업 명령, lustre 이벤트 쓰기, I3–I5),
+(3) <b>파이프라인 직렬성</b> — eval이 크리티컬 패스에 있고 venv 재빌드가 반복 실험을 지배 (I7·I8).
+LLM Generation은 SWE2 wall의 45.7%로, SpecDec 이득의 Amdahl 상한은 gen 1.63&times; 기준 <b>E2E ~1.21&times;</b>.</div>
+
+<h2>1. 측정된 타임라인 분해 (SWE2, 3 instances, agent+eval 434s)</h2>
+<table>
+<tr><th>구성요소</th><th class="num">시간(s)</th><th class="num">비중</th><th>비고</th></tr>
+<tr><td><b>LLM Generation</b></td><td class="num">198.4</td><td class="num"><b>45.7%</b></td><td>턴당 p50 6.6s / p90 28.4s / max 49.4s (n=18); 턴당 완성 ~2.3K tok (decode-heavy)</td></tr>
+<tr><td>Agent Init</td><td class="num">106.4</td><td class="num">24.5%</td><td>connect 14.84s(상수!) + initialize 20.6s, 인스턴스당 ~35.5s</td></tr>
+<tr><td>Framework overhead</td><td class="num">74.6</td><td class="num">17.2%</td><td>턴 사이 북키핑 ~4.1s/턴</td></tr>
+<tr><td>Final evaluation</td><td class="num">48.7</td><td class="num">11.2%</td><td>인스턴스당 ~16s, agent 종료 후 직렬</td></tr>
+<tr><td>Tool execution</td><td class="num">2.0</td><td class="num">0.5%</td><td>read/find 위주 (astropy)</td></tr>
+<tr><td>Apptainer spinups</td><td class="num">3.6</td><td class="num">0.8%</td><td>SIF 사전 pull 후에는 미미</td></tr>
+</table>
+<p class="muted">비교: SWE1-pivot(단일 스텝)은 정반대 레짐 — prefill:decode 22:1, decode p50 508 tok.
+SWE1에서 SpecDec 실측은 0.87&times;(역효과), SWE2 천장은 +1.21&times; — 워크로드 형태가 SpecDec 유효성을 결정.</p>
+
+<h2>2. 비효율 인벤토리 — 증거 / 코드 / 수정 / 트레이드오프</h2>
+
+<h3>I1. 멀티턴 prefix cache 0% — 세션리스 클라이언트 &times; per-request round-robin</h3>
+<p><span class="tag">GPU</span><b>증거:</b> SWE2 18턴 전부 <code>cache_read_tokens=0</code>. 턴 프롬프트는 5.7K→16.2K→16.9K…로 성장(동일 대화 prefix)하며 매 턴 전체 재-prefill.
+인스턴스당 프롬프트 토큰 합계 78K/56K/154K vs 완성 16.5K/7.6K/17.3K.</p>
+<p><b>코드 (Gym <code>responses_api_models/vllm_model/app.py:525</code>):</b> 어댑터는 세션-sticky 라우팅을 구현했지만, 스티키의 키가 <i>HTTP 세션 쿠키</i>다.
+컨테이너 안 OpenHands LLM 클라이언트는 쿠키를 유지하지 않으므로 매 요청이 새 세션 → <code>len(map) % len(clients)</code>가 요청마다 증가 → <b>엄격한 엔진 교대</b> → 직전 턴의 KV가 항상 반대편 엔진에 있음 → 0% 히트.</p>
+<pre><code>def _resolve_client(self, request: Request) -&gt; NeMoGymAsyncOpenAI:
+    session_id = request.session[SESSION_ID_KEY]
+    if session_id not in self._session_id_to_client:
+        # There is probably a better way to select the endpoint for this request. But this will do for now.
+        client_idx = len(self._session_id_to_client) % len(self._clients)   # ← 쿠키 없는 클라이언트는 매번 여기
+        ...</code></pre>
+<p><b>수정:</b> 스티키 키를 쿠키가 아니라 <b>요청 내용</b>에서 유도 — 대화 첫 user 메시지(또는 <code>metadata.instance_id</code>)의 해시로 클라이언트 선택.
+클라이언트 수정 불필요, 어댑터 ~10줄.</p>
+<p><b>기대 이득:</b> 턴2+ prefill의 80–90% 캐시화 → SWE2 LLM 시간 −15~25%. SWE1의 same-prompt 4-gen에도 동일 적용(I2와 결합).</p>
+<p><b>트레이드오프/정합성:</b> <span class="risk-low">낮음</span> —
+(a) <i>부하 불균형</i>: 긴 대화가 한 엔진에 몰릴 수 있음 → 해시 분산으로 평균은 균형, 최악 케이스는 엔진 수 늘리면 완화. (b) <i>correctness</i>: 없음 — 모든 엔진은 동일 가중치이며 RL refit도 전 엔진 동기 갱신;
+라우팅은 어떤 엔진이 계산하느냐만 바꿈. (c) KV 캐시 메모리 압박이 특정 엔진에 몰릴 수 있으나 APC는 LRU 축출이라 안전(성능만 영향).</p>
+
+<h3>I2. SWE1 same-prompt 4-gen 동시 제출 → cascade miss</h3>
+<p><span class="tag">GPU</span><b>증거:</b> SWE1 400 rollouts 전부 <code>cached_tokens=0</code> (평균 24K 토큰 프롬프트 &times;4벌 = 중복 75%).
+3중 검증: usage 0 &times;400 / 배치 dispatch spread 61–91s가 무중복 prefill 처리량과 일치 / KV 점유 27%가 무공유 footprint와 일치.</p>
+<p><b>원인:</b> 동일 프롬프트 4개가 같은 스케줄링 웨이브에 동시 admission → APC prefix 매칭은 admission 시점에 일어나므로 아무 것도 캐시에 없음 + 엔진 분산.</p>
+<p><b>수정:</b> NeMo-RL 제출 경로에서 (a) same-prompt gens를 같은 엔진으로(I1의 해시 라우팅으로 해결) + (b) 첫 gen의 prefill 완료 후 형제 3개 제출(stagger).</p>
+<p><b>기대 이득:</b> prefill 토큰 9.67M 중 최대 75% 제거 → 배치 wall ~1.8&times; 추정. 학습 config(gens/prompt 8–32)에서는 중복률 87–97%라 더 큼.</p>
+<p><b>트레이드오프:</b> <span class="risk-low">낮음~중간</span> —
+(a) stagger는 형제 gen들의 시작을 첫 prefill만큼(수 초) 지연 → 배치 초반 병렬성 소폭 감소, 순 이득은 큼.
+(b) 구현 위치가 NeMo-RL rollout 제출 루프라 async GRPO의 in-flight 로직과의 상호작용 검증 필요(제출 순서만 바꾸므로 수학적 결과 불변 — temp 샘플링 RNG 경로는 요청별 시드라 영향 없음).</p>
+
+<h3>I3. connect_to_runtime = 14.84s 상수 (action server 콜드 스타트)</h3>
+<p><span class="tag">CPU</span><b>증거:</b> 9회 이상 측정에서 14.83–14.87s로 사실상 상수. 폴링은 2s 간격이므로 낭비 &le;2s — 지배 요인은
+lustre에 마운트된 OpenHands venv에서 action_execution_server의 <b>python 임포트 ~13s</b>.</p>
+<p><b>코드 (nv-OpenHands <code>openhands/runtime/impl/local/local_runtime.py:415</code>):</b></p>
+<pre><code>@tenacity.retry(
+    wait=tenacity.wait_fixed(2),
+    stop=tenacity.stop_after_delay(300) | stop_if_should_exit(),
+    ...)
+def _wait_until_alive(self) -&gt; bool:
+    response = self.session.get(f'{self.api_url}/alive')</code></pre>
+<p><b>수정:</b> ① 잡 시작 시 OpenHands venv(또는 최소 <code>PYTHONPYCACHEPREFIX</code> 바이트코드 캐시)를 노드 로컬 /tmp로 1회 복사 후 그 경로로 서버 기동, ② <code>wait_fixed(2)→0.5</code>.</p>
+<p><b>기대 이득:</b> 14.8→4–6s (rollout당 −10s).</p>
+<p><b>트레이드오프:</b> <span class="risk-low">낮음</span> — /tmp 디스크 ~1–2GB(컨테이너 tmpfs 여유 확인됨), 복사 비용은 노드당 1회로 상각,
+복사본은 잡 시작 시점 스냅샷이라 잡 도중 코드 수정이 반영 안 됨(오히려 재현성엔 이점). correctness 영향 없음.</p>
+
+<h3>I4. initialize_runtime = 20.6s (순차 셋업 명령 ~7개)</h3>
+<p><span class="tag">CPU</span><b>증거:</b> entry 스크립트 자체는 1.77s(수동 실측)인데 initialize 단계는 20.6s.
+<code>run_infer.py:1016–1147</code>이 <code>CmdRunAction</code>을 순차로 ~7회 실행(initial setup, entry source, 복합 명령 3, cd, git reset) — 각각 HTTP+tmux+PS1 감지 왕복(~1–2s)을 지불.</p>
+<p><b>수정:</b> 독립 셋업 명령을 1–2개 복합 명령으로 병합(<code>cmd1 && echo M1 && cmd2 && echo M2 …</code> 마커 방식으로 단계 식별 유지).</p>
+<p><b>기대 이득:</b> 20.6→~10s (rollout당 −10s).</p>
+<p><b>트레이드오프:</b> <span class="risk-low">낮음</span> — (a) 단계별 <code>assert_and_raise</code>의 오류 귀속 정밀도 하락 → echo 마커+rc 체크로 보완,
+(b) 단일 명령 타임아웃이 합산 시간을 커버해야 함(<code>command_exec_timeout</code> 상향), (c) 셸 상태(cd, env)는 같은 세션이라 동일. eval 정확도 영향 없음.</p>
+
+<h3>I5. 이벤트 스토어가 lustre에 per-event 쓰기</h3>
+<p><span class="tag">CPU</span><b>증거:</b> framework overhead 4.1s/턴의 구성 요소. OpenHands 이벤트 스트림(<code>.eval_sessions</code>)이 lustre 바인드 밑에 있어
+액션/관찰 이벤트마다 lustre 파일 쓰기 발생.</p>
+<p><b>코드:</b> <code>run_infer.py:654</code> — <code>EVAL_FILE_STORE_PATH</code> 환경변수로 오버라이드 가능 (코드 수정 자체가 불필요).</p>
+<p><b>수정:</b> 컨테이너 내 /tmp로 지정 (agent 스크립트 env 1줄).</p>
+<p><b>기대 이득:</b> 턴당 −0.5~1s (측정 후 확정).</p>
+<p><b>트레이드오프:</b> <span class="risk-low">낮음</span> — 이벤트 스트림 파일이 컨테이너 종료와 함께 소멸 → 디버깅용 이벤트 히스토리 상실.
+단, 분석에 쓰는 trajectory(<code>output.jsonl</code>)와 profiler 메트릭은 별도 경로(lustre)에 보존되므로 실사용 손실 없음. resume 기능은 eval 모드에서 미사용.</p>
+
+<h3>I6. LLM 호출 2-hop + 매 턴 전체 히스토리 재직렬화</h3>
+<p><span class="tag">CPU</span><b>증거:</b> OpenHands → vllm_model 어댑터 → NeMo-RL vLLM 서버의 2-hop HTTP.
+턴 N 프롬프트 = 전체 히스토리(최대 154K tok/rollout 누적) → 턴마다 300–600KB JSON 인코드/디코드 &times;2 hop.</p>
+<p><b>수정(중기):</b> 어댑터 keep-alive 확인 + 어댑터측 대화 캐시(콘텐츠 해시 키)로 델타 전송. </p>
+<p><b>트레이드오프:</b> <span class="risk-med">중간</span> — 어댑터가 상태를 가지게 됨(메모리 성장 → LRU 축출 필요),
+캐시 키 충돌/히스토리 편집(condenser 활성 시) 시 <b>정합성 버그 가능</b> → 무효화 규칙 필수. 이득 대비 복잡도가 높아 I1–I5 이후로 후순위 권장.</p>
+
+<h3>I7. venv 재빌드가 잡마다 12–15분 (NRL_FORCE_REBUILD_VENVS=true)</h3>
+<p><span class="tag">DX</span><b>증거:</b> 모든 스모크 잡의 elapsed ~27분 중 rollout은 ~5분 — 셋업이 지배.</p>
+<p><b>Persistent venv의 오버헤드/리스크 (질문 주신 부분):</b></p>
+<table>
+<tr><th>리스크</th><th>내용</th><th>완화</th></tr>
+<tr><td>스테일 코드</td><td>lock/pyproject/휠 패치 변경이 기존 venv에 반영 안 됨 → <b>조용히 옛 의존성으로 실행</b> (이 클래스의 버그를 과거 실측으로 겪음: 컨테이너 py버전 바뀐 뒤 venv 재사용 → ModuleNotFoundError, uv lock 해시 스테일)</td><td>venv 디렉토리명 = hash(uv.lock)로 자동 무효화</td></tr>
+<tr><td>공유 FS 쓰기 경합</td><td>동시 잡이 같은 lustre venv에 쓰면 반쯤 설치된 상태 관측 (과거 실측: 병렬 잡 ray import 실패)</td><td>노드 로컬 /tmp에 두거나, lustre면 lockdir + 완료 마커</td></tr>
+<tr><td>노드 이동</td><td>/tmp venv는 다른 노드에서 재사용 불가</td><td>lustre 스냅샷 → 노드 로컬 rsync (1회 ~30s)</td></tr>
+<tr><td>디스크</td><td>venv ~5–8GB &times; 보존 개수</td><td>hash 기반이라 lock당 1개만 유지</td></tr>
+</table>
+<p><b>권장:</b> 반복 측정(스모크) = hash-키 persistent venv, 프로덕션/최종 수치 = FORCE_REBUILD 유지. 이 구분이면 correctness 리스크 없이 iteration 2&times;.</p>
+
+<h3>I8. Final eval이 크리티컬 패스에 직렬 (11.2%)</h3>
+<p><span class="tag">Pipeline</span><b>수정:</b> 채점(별도 apptainer)을 rollout 수집과 오버랩 — eval 큐 비동기화.</p>
+<p><b>트레이드오프:</b> <span class="risk-med">중간</span> — <b>벤치마크/eval 모드에서는 순수 이득</b>이지만,
+RL 학습에서는 reward가 advantage 계산의 선행 조건이라 비동기 eval은 reward 도착을 늦춤 → async GRPO의 trajectory age와 상호작용(늦은 reward = 더 오래된 정책의 샘플 사용).
+학습 정확성 자체는 불변이나 on-policy성이 미세하게 약화 → <code>max_trajectory_age</code> 예산 안에서만 적용해야 함.</p>
+
+<h2>3. SpecDec: LLM Generation 45.7%는 실제로 줄어드나</h2>
+<p>SWE1(prefill 22:1)에서는 <b>안 줄었다</b> — 실측 0.87&times; (투기 대상인 decode 자체가 4.4%뿐).
+SWE2는 턴당 ~2.3K tok decode-heavy로 레짐이 반대라 Amdahl 상한 <b>1.21&times;</b>(gen 1.63&times;) ~ 1.27&times;(gen 1.85&times;).
+eagle3-K3 실측 잡이 진행 중이며(2429766) 완료 시 이 섹션에 <code>total_model_call_time</code> 전후 비교와 tok/s(기준 209 tok/s)를 갱신한다.
+주의: 샘플링 경로가 달라져 trajectory가 바뀌므로 1차 지표는 tok/s와 턴당 latency 분포.</p>
+
+<h2>4. 통합 로드맵 (효과 &times; 난이도 &times; 리스크)</h2>
+<table>
+<tr><th>#</th><th>수정</th><th>레이어</th><th>기대 이득</th><th>난이도</th><th>정합성 리스크</th></tr>
+<tr><td>1</td><td>내용-해시 sticky 라우팅 (I1)</td><td>Gym 어댑터 ~10줄</td><td>SWE2 LLM −15~25%</td><td>낮음</td><td class="risk-none">없음</td></tr>
+<tr><td>2</td><td>same-prompt stagger (I2)</td><td>NeMo-RL 제출 루프</td><td>SWE1류 배치 ~1.8&times;</td><td>중간</td><td class="risk-low">낮음(async GRPO 검증)</td></tr>
+<tr><td>3</td><td>action server 노드 로컬 기동 (I3)</td><td>Gym 셋업/agent 스크립트</td><td>rollout −10s</td><td>낮음</td><td class="risk-none">없음</td></tr>
+<tr><td>4</td><td>init 명령 병합 (I4)</td><td>nv-OpenHands run_infer</td><td>rollout −10s</td><td>낮음</td><td class="risk-low">오류 귀속만</td></tr>
+<tr><td>5</td><td>이벤트 스토어 /tmp (I5)</td><td>env 1줄</td><td>턴당 −0.5~1s</td><td>최소</td><td class="risk-low">디버그 로그 소멸</td></tr>
+<tr><td>6</td><td>hash-키 persistent venv (I7)</td><td>런처 env</td><td>iteration 2&times;</td><td>낮음</td><td class="risk-low">스테일 가드 필수</td></tr>
+<tr><td>7</td><td>eval 비동기화 (I8)</td><td>Gym swe_agents</td><td>처리량 +11%</td><td>중간</td><td class="risk-med">학습 시 age 예산 내</td></tr>
+<tr><td>8</td><td>어댑터 대화 캐시 (I6)</td><td>Gym 어댑터</td><td>턴당 −1~2s</td><td>높음</td><td class="risk-med">무효화 규칙 필요</td></tr>
+</table>
+<p><b>결합 추정 (SWE2 rollout당 agent 단계 ~130s):</b> 1+3+4+5 적용 시 ~130→~85s (≈1.5&times;),
+SpecDec가 천장(1.2&times;)대로 실현되면 ~70s (≈1.85&times;). GPU 시간 관점에서는 1번(캐시 복원)이 가장 크고 스케일 불변.</p>
+
+<h2>부록: 이번 검증에서 수정한 버그 체인 (upstream 리포트 대상)</h2>
+<table>
+<tr><th>#</th><th>버그</th><th>위치</th><th>증상</th></tr>
+<tr><td>B1</td><td><b>jq amd64 하드코딩</b></td><td>Gym <code>setup_scripts/openhands.sh:55</code> (<code>jq-linux-amd64</code>)</td><td>aarch64에서 Exec format error → entry exit 1 → tmux pane 사망 → 전 명령 600s 타임아웃 (aarch64 전멸의 근본 원인)</td></tr>
+<tr><td>B2</td><td>openai 버전 주입 충돌</td><td>Gym <code>global_config.py:689</code> (부모 venv 버전 그대로 주입)</td><td>nemo-gym pin(&le;2.7.2)과 unsatisfiable → 서브프로세스 venv 전멸</td></tr>
+<tr><td>B3</td><td>tool None-필드 dump/validate 비대칭</td><td>openai&le;2.7.2 + <code>SWEBenchVerifyResponse</code></td><td>430 validation errors (strict/defer_loading None)</td></tr>
+<tr><td>B4</td><td>음수 spinup timestamp</td><td>PR #1825 계측 (<code>generation_apptainer_spinup_time</code>)</td><td>미설정 시 -1.78e9 기록</td></tr>
+<tr><td>B5</td><td>공식 arm64 이미지에 OpenHands 레이어 부재</td><td><code>swebench/sweb.eval.arm64.*</code></td><td>/swe_util 없음 → 합성 바인드(NRL_SWE_UTIL_SYNTH)로 우회</td></tr>
+</table>
+
+<p class="muted">생성: 2026-07-19 · worktree pr3243-nemogym-swe-specdec · 데이터: swe2_smoke10(2428815) + SWE1 매트릭스(2408776, 2409247-49, 2409491-92, 2423996-98)</p>
+</body>
+</html>
