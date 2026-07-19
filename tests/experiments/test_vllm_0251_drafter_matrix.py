@@ -239,10 +239,7 @@ def test_qwen235_pard_cuda_graph_variants_cover_verification_shapes(
         "draft_tensor_parallel_size=8"
     ) in run.hydra_overrides
     assert "++policy.generation.vllm_kwargs.max_num_seqs=64" in run.hydra_overrides
-    assert (
-        "++policy.generation.vllm_kwargs.max_num_scheduled_tokens=2048"
-        in run.hydra_overrides
-    )
+    assert not any("max_num_scheduled_tokens" in item for item in run.hydra_overrides)
     assert (
         f"++policy.generation.vllm_kwargs.max_num_batched_tokens={2048 + 64 * k}"
         in run.hydra_overrides
@@ -262,10 +259,7 @@ def test_qwen235_pard_matched_baseline_uses_the_same_scheduler_budget() -> None:
 
     assert run.variant.runner == "mrv1"
     assert "++policy.generation.vllm_kwargs.max_num_seqs=64" in run.hydra_overrides
-    assert (
-        "++policy.generation.vllm_kwargs.max_num_scheduled_tokens=2048"
-        in run.hydra_overrides
-    )
+    assert not any("max_num_scheduled_tokens" in item for item in run.hydra_overrides)
     assert (
         "++policy.generation.vllm_kwargs.max_num_batched_tokens=2048"
         in run.hydra_overrides

@@ -154,7 +154,6 @@ class VariantSpec:
     draft_tensor_parallel_size: int = 1
     max_num_seqs: int | None = None
     max_num_batched_tokens: int | None = None
-    max_num_scheduled_tokens: int | None = None
     disable_compilation_sequence_parallelism: bool = False
 
     def checkpoint_for(self, model_key: str) -> CheckpointSpec | None:
@@ -367,7 +366,6 @@ G_VARIANTS = (
         compatible_models=frozenset(("qwen235",)),
         max_num_seqs=64,
         max_num_batched_tokens=2048,
-        max_num_scheduled_tokens=2048,
     ),
     VariantSpec(
         key="eagle3_k1",
@@ -600,7 +598,6 @@ G_VARIANTS = (
         draft_tensor_parallel_size=8,
         max_num_seqs=64,
         max_num_batched_tokens=2368,
-        max_num_scheduled_tokens=2048,
         disable_compilation_sequence_parallelism=True,
     ),
     VariantSpec(
@@ -616,7 +613,6 @@ G_VARIANTS = (
         draft_tensor_parallel_size=8,
         max_num_seqs=64,
         max_num_batched_tokens=2496,
-        max_num_scheduled_tokens=2048,
         disable_compilation_sequence_parallelism=True,
     ),
     VariantSpec(
@@ -632,7 +628,6 @@ G_VARIANTS = (
         draft_tensor_parallel_size=8,
         max_num_seqs=64,
         max_num_batched_tokens=3072,
-        max_num_scheduled_tokens=2048,
         disable_compilation_sequence_parallelism=True,
     ),
     VariantSpec(
@@ -1026,12 +1021,6 @@ def resolve_run(
                 f"++policy.generation.vllm_kwargs.max_num_batched_tokens="
                 f"{variant.max_num_batched_tokens}"
                 if variant.max_num_batched_tokens is not None
-                else None
-            ),
-            (
-                f"++policy.generation.vllm_kwargs.max_num_scheduled_tokens="
-                f"{variant.max_num_scheduled_tokens}"
-                if variant.max_num_scheduled_tokens is not None
                 else None
             ),
             (
