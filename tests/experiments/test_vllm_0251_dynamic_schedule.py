@@ -179,6 +179,34 @@ def test_dynamic_runtime_applies_only_the_run_scoped_cuda_graph_patch(
     assert not any("cudagraph_capture_sizes" in item for item in dynamic_command)
 
 
+def test_qwen235_dynamic_runtime_patches_the_async_generation_worker() -> None:
+    schedule = load_dynamic_schedule(
+        G_REPO_ROOT / "experiments/vllm_0251_drafter_matrix/calibration/"
+        "qwen235_thinking_k5_vllm0251_schedule.json"
+    )
+    run = resolve_run(
+        "qwen235",
+        "eagle3_thinking_dynamic_k5_cg384",
+        "smoke2",
+        "lyris",
+        dynamic_schedule=schedule,
+        optimizer_offload_mode="coalesced-pinned",
+    )
+
+    command = build_runtime_command(
+        run,
+        G_REPO_ROOT,
+        Path("/tmp/qwen235-dynamic"),
+        "qwen235-dynamic",
+    )
+
+    assert (
+        "NRL_VENV_POST_SYNC_TARGET="
+        "nemo_rl.models.generation.vllm.vllm_worker_async."
+        "VllmAsyncGenerationWorker"
+    ) in command
+
+
 @pytest.mark.parametrize("phase", ["smoke2", "smoke5"])
 def test_seed_schedule_is_limited_to_smoke_phases(tmp_path: Path, phase: str) -> None:
     schedule = load_dynamic_schedule(_write_schedule(tmp_path))

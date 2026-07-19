@@ -13,6 +13,15 @@ PATCH_SCRIPT = (
 )
 
 
+def _write_ray_executor(site_packages: Path) -> None:
+    ray_executor = site_packages / "vllm/v1/executor/ray_executor_v2.py"
+    ray_executor.parent.mkdir(parents=True, exist_ok=True)
+    ray_executor.write_text(
+        '        env_vars = runtime_env.setdefault("env_vars", {})\n',
+        encoding="utf-8",
+    )
+
+
 def _write_model_runner(path: Path) -> str:
     source = (
         "        # For transferring state from execute_model to subsequent sample_tokens call.\n"
@@ -92,6 +101,7 @@ def test_patch_updates_vllm0251_and_is_idempotent(tmp_path: Path) -> None:
         "            cudagraph_mode,\n            decode_query_len=1,\n        )\n",
         encoding="utf-8",
     )
+    _write_ray_executor(site_packages)
 
     command = [
         sys.executable,
@@ -140,6 +150,7 @@ def test_default_patch_leaves_model_runner_byte_for_byte_unchanged(
         "            cudagraph_mode,\n            decode_query_len=1,\n        )\n",
         encoding="utf-8",
     )
+    _write_ray_executor(site_packages)
     original = _write_model_runner(model_runner)
 
     subprocess.run(
@@ -219,6 +230,7 @@ def test_smoke_telemetry_patch_records_selected_and_actual_draft_width(
         "            self.current_draft_step.fill_(step)\n",
         encoding="utf-8",
     )
+    _write_ray_executor(site_packages)
     _write_model_runner(model_runner)
     environment = {
         **os.environ,

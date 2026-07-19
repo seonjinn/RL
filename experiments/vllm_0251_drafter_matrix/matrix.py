@@ -48,6 +48,7 @@ class RecipeSpec:
     segment: int
     max_osl: int
     dynamic_profile_max_batch_size: int | None = None
+    async_vllm_engine: bool = False
 
     def target_ref_path(self, hf_home: Path) -> Path:
         """Return the Hugging Face ``main`` ref used by the recipe target."""
@@ -255,6 +256,7 @@ G_RECIPES = (
         segment=16,
         max_osl=8192,
         dynamic_profile_max_batch_size=64,
+        async_vllm_engine=True,
     ),
 )
 
@@ -1009,8 +1011,13 @@ def build_runtime_command(
                 "NRL_VENV_POST_SYNC_SCRIPT="
                 f"{repo_dir / 'experiments/vllm_0251_eagle3_perfcfg/' / 'apply_vllm0251_dynamic_sd_cg_fix.py'}",
                 "NRL_VENV_POST_SYNC_TARGET="
-                "nemo_rl.models.generation.vllm.vllm_worker."
-                "VllmGenerationWorker",
+                + (
+                    "nemo_rl.models.generation.vllm.vllm_worker_async."
+                    "VllmAsyncGenerationWorker"
+                    if run.recipe.async_vllm_engine
+                    else "nemo_rl.models.generation.vllm.vllm_worker."
+                    "VllmGenerationWorker"
+                ),
             )
             if run.dynamic_schedule is not None
             else ()
