@@ -64,6 +64,31 @@ def test_recipe_topology_is_authoritative(
     )
 
 
+def test_qwen235_long_context_override_updates_resolved_osl_and_hydra() -> None:
+    run = resolve_run(
+        "qwen235",
+        "baseline",
+        "smoke2",
+        "lyris",
+        max_osl=32768,
+    )
+
+    assert run.recipe.max_osl == 32768
+    assert "policy.max_total_sequence_length=32768" in run.hydra_overrides
+
+
+@pytest.mark.parametrize("max_osl", [0, 40961])
+def test_qwen235_long_context_override_rejects_invalid_limits(max_osl: int) -> None:
+    with pytest.raises(ValueError, match="max OSL"):
+        resolve_run(
+            "qwen235",
+            "baseline",
+            "smoke2",
+            "lyris",
+            max_osl=max_osl,
+        )
+
+
 def test_recipe_targets_use_expected_immutable_revisions() -> None:
     assert {
         model: resolve_run(model, "baseline", "smoke2", "lyris").recipe.target_revision
@@ -182,6 +207,72 @@ def test_pard_selects_mrv1_and_parallel_drafting() -> None:
     assert "VLLM_USE_V2_MODEL_RUNNER=0" in run.command_parts()
 
 
+@pytest.mark.parametrize(
+    ("variant_key", "k", "capture_endpoint"),
+    [
+        ("pard_k5_cg384", 5, 384),
+        ("pard_k7_cg512", 7, 512),
+        ("pard_k16_cg1088", 16, 1088),
+    ],
+)
+def test_qwen235_pard_cuda_graph_variants_cover_verification_shapes(
+    variant_key: str,
+    k: int,
+    capture_endpoint: int,
+) -> None:
+    run = resolve_run("qwen235", variant_key, "smoke2", "lyris")
+
+    assert run.variant.runner == "mrv1"
+    assert run.variant.num_speculative_tokens == k
+    assert run.variant.cudagraph_capture_sizes[-1] == capture_endpoint
+    assert (
+        "++policy.generation.vllm_kwargs.speculative_config.parallel_drafting=true"
+        in run.hydra_overrides
+    )
+    assert any(
+        item.endswith(f",{capture_endpoint}]")
+        for item in run.hydra_overrides
+        if "cudagraph_capture_sizes" in item
+    )
+    assert (
+        "++policy.generation.vllm_kwargs.speculative_config."
+        "draft_tensor_parallel_size=8"
+    ) in run.hydra_overrides
+    assert "++policy.generation.vllm_kwargs.max_num_seqs=64" in run.hydra_overrides
+    assert (
+        "++policy.generation.vllm_kwargs.max_num_scheduled_tokens=2048"
+        in run.hydra_overrides
+    )
+    assert (
+        f"++policy.generation.vllm_kwargs.max_num_batched_tokens={2048 + 64 * k}"
+        in run.hydra_overrides
+    )
+    assert (
+        "++policy.generation.vllm_kwargs.compilation_config.pass_config.enable_sp=false"
+    ) in run.hydra_overrides
+
+
+def test_qwen235_pard_matched_baseline_uses_the_same_scheduler_budget() -> None:
+    run = resolve_run(
+        "qwen235",
+        "baseline_mrv1_sched64",
+        "smoke2",
+        "lyris",
+    )
+
+    assert run.variant.runner == "mrv1"
+    assert "++policy.generation.vllm_kwargs.max_num_seqs=64" in run.hydra_overrides
+    assert (
+        "++policy.generation.vllm_kwargs.max_num_scheduled_tokens=2048"
+        in run.hydra_overrides
+    )
+    assert (
+        "++policy.generation.vllm_kwargs.max_num_batched_tokens=2048"
+        in run.hydra_overrides
+    )
+    assert not any("speculative_config" in item for item in run.hydra_overrides)
+
+
 def test_eagle_selects_mrv2_without_compact_capture_sizes() -> None:
     run = resolve_run("qwen30", "eagle3_k3", "smoke2", "lyris")
 
@@ -202,6 +293,21 @@ def test_qwen235_thinking_k3_cg256_captures_the_full_generation_batch() -> None:
     assert (
         "policy.generation.vllm_kwargs.compilation_config."
         "cudagraph_capture_sizes=[1,2,4,8,16,32,64,128,192,256]"
+    ) in run.hydra_overrides
+
+
+def test_qwen235_thinking_k5_cg384_captures_the_full_generation_batch() -> None:
+    run = resolve_run("qwen235", "eagle3_thinking_k5_cg384", "smoke2", "lyris")
+
+    assert run.draft_checkpoint is not None
+    assert (
+        run.draft_checkpoint.repo_id
+        == "RedHatAI/Qwen3-235B-A22B-Thinking-2507-speculator.eagle3"
+    )
+    assert run.variant.num_speculative_tokens == 5
+    assert (
+        "policy.generation.vllm_kwargs.compilation_config."
+        "cudagraph_capture_sizes=[1,2,4,8,16,32,64,128,192,256,320,384]"
     ) in run.hydra_overrides
 
 

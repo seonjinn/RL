@@ -27,7 +27,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Literal, Mapping, Sequence
@@ -151,6 +151,11 @@ class VariantSpec:
     ngram_size: int | None = None
     dynamic_schedule_required: bool = False
     cudagraph_capture_sizes: tuple[int, ...] = ()
+    draft_tensor_parallel_size: int = 1
+    max_num_seqs: int | None = None
+    max_num_batched_tokens: int | None = None
+    max_num_scheduled_tokens: int | None = None
+    disable_compilation_sequence_parallelism: bool = False
 
     def checkpoint_for(self, model_key: str) -> CheckpointSpec | None:
         """Return the exact drafter checkpoint for a compatible model."""
@@ -354,6 +359,16 @@ G_VARIANTS = (
         compatible_models=G_MODEL_KEYS,
     ),
     VariantSpec(
+        key="baseline_mrv1_sched64",
+        method=None,
+        runner="mrv1",
+        num_speculative_tokens=None,
+        compatible_models=frozenset(("qwen235",)),
+        max_num_seqs=64,
+        max_num_batched_tokens=2048,
+        max_num_scheduled_tokens=2048,
+    ),
+    VariantSpec(
         key="eagle3_k1",
         method="eagle3",
         runner="mrv2",
@@ -416,6 +431,29 @@ G_VARIANTS = (
         checkpoints=G_EAGLE3_THINKING_CHECKPOINTS,
         uses_draft_model=True,
         cudagraph_capture_sizes=(1, 2, 4, 8, 16, 32, 64, 128, 192, 256),
+    ),
+    VariantSpec(
+        key="eagle3_thinking_k5_cg384",
+        method="eagle3",
+        runner="mrv2",
+        num_speculative_tokens=5,
+        compatible_models=frozenset(("qwen235",)),
+        checkpoints=G_EAGLE3_THINKING_CHECKPOINTS,
+        uses_draft_model=True,
+        cudagraph_capture_sizes=(
+            1,
+            2,
+            4,
+            8,
+            16,
+            32,
+            64,
+            128,
+            192,
+            256,
+            320,
+            384,
+        ),
     ),
     VariantSpec(
         key="eagle3_thinking_k4",
@@ -547,6 +585,54 @@ G_VARIANTS = (
         checkpoints=G_PARD_CHECKPOINTS,
         uses_draft_model=True,
         parallel_drafting=True,
+    ),
+    VariantSpec(
+        key="pard_k5_cg384",
+        method="draft_model",
+        runner="mrv1",
+        num_speculative_tokens=5,
+        compatible_models=frozenset(("qwen235",)),
+        checkpoints=G_PARD_CHECKPOINTS,
+        uses_draft_model=True,
+        parallel_drafting=True,
+        cudagraph_capture_sizes=(6, 12, 24, 48, 96, 192, 288, 384),
+        draft_tensor_parallel_size=8,
+        max_num_seqs=64,
+        max_num_batched_tokens=2368,
+        max_num_scheduled_tokens=2048,
+        disable_compilation_sequence_parallelism=True,
+    ),
+    VariantSpec(
+        key="pard_k7_cg512",
+        method="draft_model",
+        runner="mrv1",
+        num_speculative_tokens=7,
+        compatible_models=frozenset(("qwen235",)),
+        checkpoints=G_PARD_CHECKPOINTS,
+        uses_draft_model=True,
+        parallel_drafting=True,
+        cudagraph_capture_sizes=(8, 16, 32, 64, 128, 256, 384, 512),
+        draft_tensor_parallel_size=8,
+        max_num_seqs=64,
+        max_num_batched_tokens=2496,
+        max_num_scheduled_tokens=2048,
+        disable_compilation_sequence_parallelism=True,
+    ),
+    VariantSpec(
+        key="pard_k16_cg1088",
+        method="draft_model",
+        runner="mrv1",
+        num_speculative_tokens=16,
+        compatible_models=frozenset(("qwen235",)),
+        checkpoints=G_PARD_CHECKPOINTS,
+        uses_draft_model=True,
+        parallel_drafting=True,
+        cudagraph_capture_sizes=(17, 34, 68, 136, 272, 544, 816, 1088),
+        draft_tensor_parallel_size=8,
+        max_num_seqs=64,
+        max_num_batched_tokens=3072,
+        max_num_scheduled_tokens=2048,
+        disable_compilation_sequence_parallelism=True,
     ),
     VariantSpec(
         key="suffix_k32",
@@ -778,7 +864,8 @@ def _speculative_overrides(
         overrides.extend(
             (
                 f"{prefix}.model={draft_checkpoint.snapshot_path(hf_home)}",
-                f"{prefix}.draft_tensor_parallel_size=1",
+                f"{prefix}.draft_tensor_parallel_size="
+                f"{variant.draft_tensor_parallel_size}",
             )
         )
     if variant.draft_attention_backend is not None:
@@ -809,9 +896,14 @@ def resolve_run(
     *,
     dynamic_schedule: DynamicSchedule | None = None,
     optimizer_offload_mode: OptimizerOffloadMode = "pageable",
+    max_osl: int | None = None,
 ) -> ResolvedRun:
     """Resolve an allowed model, variant, phase, and cluster into a run record."""
     recipe = _find_recipe(model_key)
+    if max_osl is not None:
+        if isinstance(max_osl, bool) or not 1 <= max_osl <= 40960:
+            raise ValueError("max OSL must be between 1 and 40960 tokens")
+        recipe = replace(recipe, max_osl=max_osl)
     variant = _find_variant(variant_key)
     phase_spec = _find_phase(phase)
     cluster_spec = _find_cluster(cluster)
@@ -908,6 +1000,38 @@ def resolve_run(
         "++policy.use_coalesced_optimizer_offload="
         + ("true" if optimizer_offload_mode == "coalesced-pinned" else "false"),
     )
+    sequence_length_overrides = (
+        (f"policy.max_total_sequence_length={max_osl}",) if max_osl is not None else ()
+    )
+    scheduler_overrides = tuple(
+        override
+        for override in (
+            (
+                f"++policy.generation.vllm_kwargs.max_num_seqs={variant.max_num_seqs}"
+                if variant.max_num_seqs is not None
+                else None
+            ),
+            (
+                f"++policy.generation.vllm_kwargs.max_num_batched_tokens="
+                f"{variant.max_num_batched_tokens}"
+                if variant.max_num_batched_tokens is not None
+                else None
+            ),
+            (
+                f"++policy.generation.vllm_kwargs.max_num_scheduled_tokens="
+                f"{variant.max_num_scheduled_tokens}"
+                if variant.max_num_scheduled_tokens is not None
+                else None
+            ),
+            (
+                "++policy.generation.vllm_kwargs.compilation_config."
+                "pass_config.enable_sp=false"
+                if variant.disable_compilation_sequence_parallelism
+                else None
+            ),
+        )
+        if override is not None
+    )
     capture_overrides = ()
     if variant.cudagraph_capture_sizes:
         capture_sizes = ",".join(str(size) for size in variant.cudagraph_capture_sizes)
@@ -925,6 +1049,8 @@ def resolve_run(
         dynamic_schedule=dynamic_schedule,
         hydra_overrides=base_overrides
         + optimizer_offload_overrides
+        + sequence_length_overrides
+        + scheduler_overrides
         + capture_overrides
         + _speculative_overrides(
             variant,
@@ -1429,6 +1555,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--mounts", default="/lustre:/lustre")
     parser.add_argument("--run-tag")
     parser.add_argument("--dynamic-schedule", type=Path)
+    parser.add_argument("--max-osl", type=int)
     parser.add_argument(
         "--optimizer-offload-mode",
         default="pageable",
@@ -1460,6 +1587,7 @@ def _show_record(
         "model": run.recipe.key,
         "variant": run.variant.key,
         "phase": run.phase.key,
+        "max_osl": run.recipe.max_osl,
         "optimizer_offload_mode": run.optimizer_offload_mode,
         "runner": run.variant.runner,
         "recipe": run.recipe.path,
@@ -1513,6 +1641,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.cluster,
         dynamic_schedule=dynamic_schedule,
         optimizer_offload_mode=args.optimizer_offload_mode,
+        max_osl=args.max_osl,
     )
     run_tag = args.run_tag or _run_tag(
         args.model,
