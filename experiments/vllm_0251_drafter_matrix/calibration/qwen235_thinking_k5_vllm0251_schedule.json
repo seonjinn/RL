@@ -1,0 +1,41 @@
+{
+  "calibration_status": "calibrated",
+  "drafter_revision": "3c0c5cbad8e1fa7ce9e6fb6a1b0a35458b124e87",
+  "max_num_speculative_tokens": 5,
+  "minimum_goodput_gain": 0.0,
+  "model_key": "qwen235",
+  "profile_sha256": "e3ad6a27f2c6bc9b2d659be4230c2d71c9ec390a42b843649066d991494ceeb4",
+  "ranges": [
+    [
+      1,
+      1,
+      5
+    ],
+    [
+      2,
+      4,
+      4
+    ],
+    [
+      5,
+      33,
+      3
+    ],
+    [
+      34,
+      57,
+      5
+    ],
+    [
+      58,
+      64,
+      4
+    ]
+  ],
+  "schema_version": 2,
+  "selection_metric": "accepted_length_over_median_itl",
+  "source_runtime_vllm": "0.25.1",
+  "target_cuda_graph_mode": "FULL_AND_PIECEWISE",
+  "target_revision": "8efa61729e24bd65b1d152b5ab5409052aa80e65",
+  "target_runtime_vllm": "0.25.1"
+}

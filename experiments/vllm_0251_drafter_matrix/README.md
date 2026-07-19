@@ -238,11 +238,11 @@ CALIBRATOR=experiments/vllm_0251_drafter_matrix/calibrate_dynamic_sd.py
 ```
 
 The Qwen3-235B assembly command additionally supplies `--model-key qwen235`,
-`--max-k 3`, `--batch-sizes 1 4 8 16 32 48 64`, `--target-tp 8`,
+`--max-k 5`, `--batch-sizes 1 4 8 16 32 48 64`, `--target-tp 8`,
 `--max-model-len 8192`, `--max-num-seqs 128`,
 `--profile-max-batch-size 64`, `--max-num-batched-tokens 2048`,
 `--enable-prefix-caching`, `--moe-backend triton`, and
-`--cudagraph-capture-sizes 1 2 4 8 16 32 64 128 192 256`.
+`--cudagraph-capture-sizes 1 2 4 8 16 32 64 128 192 256 320 384`.
 
 The completed Qwen3-32B Thinking calibration is checked in as
 `calibration/qwen32_thinking_k5_vllm0251_profile.json` and
@@ -251,6 +251,12 @@ schedule is `[[1,34,5],[35,75,3],[76,85,2],[86,256,1]]`. This schedule is
 derived from all 48 fixed-K profile cells and its corrected five-step runtime
 smoke completed successfully before the schedule SHA-256 was allowlisted for
 final20.
+
+The completed Qwen3-235B Thinking calibration is checked in as
+`calibration/qwen235_thinking_k5_vllm0251_profile.json` and
+`calibration/qwen235_thinking_k5_vllm0251_schedule.json`. Its zero-margin
+schedule is `[[1,1,5],[2,4,4],[5,33,3],[34,57,5],[58,64,4]]`, derived from all
+42 fixed-K profile cells with CUDA Graph endpoint coverage through 384.
 
 Schema-v2 schedules declare global K5 even when profiling selects only lower
 Ks. This prevents vLLM from silently clamping a selected K4/K5 to a K3 global

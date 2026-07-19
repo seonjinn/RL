@@ -220,7 +220,10 @@ G_OPTIMIZER_OFFLOAD_MODES: tuple[OptimizerOffloadMode, ...] = (
     "coalesced-pinned",
 )
 G_APPROVED_DYNAMIC_FINAL_SCHEDULE_SHA256: frozenset[str] = frozenset(
-    {"8cdfed304302f45e04e72cd219cb0be26c23c30b509c010fe9081d0c6da5fc14"}
+    {
+        "8cdfed304302f45e04e72cd219cb0be26c23c30b509c010fe9081d0c6da5fc14",
+        "7116b0ce15d4c176888eac72d345f22d3dbd074eb4cc439da99bab4782b59449",
+    }
 )
 
 G_RECIPES = (

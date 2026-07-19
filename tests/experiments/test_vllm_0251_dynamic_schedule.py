@@ -250,6 +250,25 @@ def test_checked_in_calibrated_schedule_is_approved_for_final20() -> None:
     assert "grpo.max_num_steps=20" in run.hydra_overrides
 
 
+def test_checked_in_qwen235_calibrated_schedule_is_approved_for_final20() -> None:
+    schedule = load_dynamic_schedule(
+        G_REPO_ROOT / "experiments/vllm_0251_drafter_matrix/calibration/"
+        "qwen235_thinking_k5_vllm0251_schedule.json"
+    )
+
+    run = resolve_run(
+        "qwen235",
+        "eagle3_thinking_dynamic_k5_cg384",
+        "final20",
+        "lyris",
+        dynamic_schedule=schedule,
+        optimizer_offload_mode="coalesced-pinned",
+    )
+
+    assert "grpo.max_num_steps=20" in run.hydra_overrides
+    assert "++policy.use_pinned_optimizer_offload=true" in run.hydra_overrides
+
+
 def test_final20_requires_schema_v2_even_for_a_matched_v1_profile(
     tmp_path: Path,
 ) -> None:
