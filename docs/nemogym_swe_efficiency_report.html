@@ -145,9 +145,17 @@ RL 학습에서는 reward가 advantage 계산의 선행 조건이라 비동기 e
 
 <h2>3. SpecDec: LLM Generation 45.7%는 실제로 줄어드나</h2>
 <p>SWE1(prefill 22:1)에서는 <b>안 줄었다</b> — 실측 0.87&times; (투기 대상인 decode 자체가 4.4%뿐).
-SWE2는 턴당 ~2.3K tok decode-heavy로 레짐이 반대라 Amdahl 상한 <b>1.21&times;</b>(gen 1.63&times;) ~ 1.27&times;(gen 1.85&times;).
-eagle3-K3 실측 잡이 진행 중이며(2429766) 완료 시 이 섹션에 <code>total_model_call_time</code> 전후 비교와 tok/s(기준 209 tok/s)를 갱신한다.
-주의: 샘플링 경로가 달라져 trajectory가 바뀌므로 1차 지표는 tok/s와 턴당 latency 분포.</p>
+SWE2는 decode-heavy라 Amdahl 상한 1.21&times;를 기대했으나, <b>실측 결과 SWE2에서도 줄지 않았다</b>:</p>
+<table>
+<tr><th></th><th class="num">LLM 시간 합</th><th class="num">완성 토큰</th><th class="num">tok/s</th><th class="num">턴당 p50/p90</th><th class="num">gen 배율</th></tr>
+<tr><td>baseline (smoke10)</td><td class="num">198.4s</td><td class="num">41,378</td><td class="num">209</td><td class="num">6.6 / 28.4</td><td class="num">1.00&times;</td></tr>
+<tr><td>eagle3-K3 (2429766)</td><td class="num">282.8s</td><td class="num">53,433</td><td class="num"><b>189</b></td><td class="num">9.4 / 25.6</td><td class="num"><b>0.90&times;</b></td></tr>
+</table>
+<p class="muted">temp 1.0이라 trajectory가 달라져(turns 21 vs 18, 토큰 +29%) 총시간 비교는 무의미 — per-token 처리량(tok/s)이 1차 지표.</p>
+<p><b>해석 — 왜 decode-heavy인데도 지는가:</b> 두 요인의 결합.
+(a) <b>I1과의 커플링</b>: cache 0% 때문에 매 턴의 model_call_time에 6–25K 토큰 히스토리 재-prefill이 포함되고, 이 prefill은 SpecDec이 가속 못 함 — 즉 <b>I1(sticky 라우팅) 픽스가 SpecDec 유효성의 선행 조건</b>.
+(b) <b>장문 컨텍스트 acceptance 붕괴</b>: EAGLE3 drafter는 6–25K 컨텍스트에서 분포 밖 — standalone에서 측정한 acceptance 급감(깊은 위치 &lt;0.06)과 일치. 같은 스택·같은 drafter가 짧은 컨텍스트 math GRPO에서 1.63&times;를 내는 것과 대비.
+따라서 순서는: I1 픽스 → decode 비중 회복 → SpecDec 재평가(그때도 장문 acceptance가 남는 한계면 length-aware/drafter 장문 재학습 트랙).</p>
 
 <h2>4. 통합 로드맵 (효과 &times; 난이도 &times; 리스크)</h2>
 <table>
