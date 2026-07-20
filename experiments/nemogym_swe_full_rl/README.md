@@ -54,6 +54,8 @@ Variants:
 - `eagle3_k3`: Thinking-2507 Eagle-3 drafter, K=3, V2 model runner.
 - `baseline_v1`: V1 model runner baseline for DFlash, using
   FULL_AND_PIECEWISE graphs and request capture sizes `[1,2,4,8,16]`.
+- `dflash_k5`: DFlash K=5 with K-aligned capture sizes
+  `[6,12,24,48,96]` and the V1 runner.
 - `dflash_k7`: DFlash K=7 with its 40960-token draft limit and V1 runner.
 - `dflash_k9`: DFlash K=9 exploration with the same V1 runner.
 

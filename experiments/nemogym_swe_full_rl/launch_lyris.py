@@ -93,6 +93,9 @@ VARIANTS = {
     "baseline": Variant("baseline", None, None, None, (), True),
     "baseline_v1": Variant("baseline_v1", None, None, None, (1, 2, 4, 8, 16), False),
     "eagle3_k3": Variant("eagle3_k3", "eagle3", EAGLE3_SNAPSHOT, 3, (), True),
+    "dflash_k5": Variant(
+        "dflash_k5", "dflash", DFLASH_SNAPSHOT, 5, (6, 12, 24, 48, 96), False
+    ),
     "dflash_k7": Variant(
         "dflash_k7", "dflash", DFLASH_SNAPSHOT, 7, (8, 16, 32, 64, 128), False
     ),

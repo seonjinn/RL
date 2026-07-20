@@ -266,6 +266,7 @@ def test_training_and_generation_topology_fit_nine_lyris_nodes() -> None:
 
 def test_dflash_variants_use_verified_checkpoint_and_k_aligned_graphs() -> None:
     expected = {
+        "dflash_k5": (5, "[6,12,24,48,96]"),
         "dflash_k7": (7, "[8,16,32,64,128]"),
         "dflash_k9": (9, "[10,20,40,80,160]"),
     }
@@ -294,6 +295,7 @@ def test_dflash_variants_use_verified_checkpoint_and_k_aligned_graphs() -> None:
     ("variant", "speculative_tokens", "expected_batched_tokens"),
     [
         ("baseline_v1", 0, 2048),
+        ("dflash_k5", 5, 2064),
         ("dflash_k7", 7, 2072),
         ("dflash_k9", 9, 2080),
     ],
