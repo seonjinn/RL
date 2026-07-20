@@ -275,6 +275,37 @@ def test_eagle_selects_mrv2_without_compact_capture_sizes() -> None:
     assert all("cudagraph_capture_sizes" not in item for item in run.hydra_overrides)
 
 
+@pytest.mark.parametrize(
+    ("variant_key", "k", "capture_sizes"),
+    [
+        (
+            "eagle3_thinking_k1_cg128",
+            1,
+            (1, 2, 4, 8, 16, 32, 64, 96, 128),
+        ),
+        (
+            "eagle3_thinking_k2_cg192",
+            2,
+            (1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 144, 192),
+        ),
+    ],
+)
+def test_qwen235_thinking_small_k_captures_all_verification_shapes(
+    variant_key: str,
+    k: int,
+    capture_sizes: tuple[int, ...],
+) -> None:
+    run = resolve_run("qwen235", variant_key, "smoke2", "lyris")
+
+    assert run.variant.num_speculative_tokens == k
+    assert run.variant.cudagraph_capture_sizes == capture_sizes
+    joined_sizes = ",".join(str(size) for size in capture_sizes)
+    assert (
+        "policy.generation.vllm_kwargs.compilation_config."
+        f"cudagraph_capture_sizes=[{joined_sizes}]"
+    ) in run.hydra_overrides
+
+
 def test_qwen235_thinking_k3_cg256_captures_the_full_generation_batch() -> None:
     run = resolve_run("qwen235", "eagle3_thinking_k3_cg256", "smoke2", "lyris")
 
