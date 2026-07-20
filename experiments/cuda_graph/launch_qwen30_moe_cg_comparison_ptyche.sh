@@ -2,17 +2,18 @@
 
 # Submit one independently schedulable Qwen3-30B-A3B CUDA Graph condition.
 # Example:
-#   CONDITION=current-attn STEPS=20 \
+#   CONDITION=adapter-attn STEPS=20 \
 #     ./experiments/cuda_graph/launch_qwen30_moe_cg_comparison_ptyche.sh
 
 set -euo pipefail
 
-CONDITION=${CONDITION:?Set CONDITION to <implementation>-<nocg|attn|moe-router|attn-moe-router>.}
+CONDITION=${CONDITION:?Set CONDITION to <current|pr5672|pr4359|adapter>-<nocg|attn|moe-router|attn-moe-router>.}
 STEPS=${STEPS:-20}
 RUN_TAG=${RUN_TAG:-${CONDITION}-steps${STEPS}}
 CURRENT_WORKTREE=${CURRENT_WORKTREE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr5783-ptyche-runtime-20260716}
 PR5672_WORKTREE=${PR5672_WORKTREE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr5672-vs-pr5783-ptyche-20260716}
 PR4359_WORKTREE=${PR4359_WORKTREE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr4359-vs-pr5783-ptyche-20260716}
+ADAPTER_WORKTREE=${ADAPTER_WORKTREE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr5672-adapter-ptyche-20260719}
 CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/nemo_rl_nightly_20260715.sqsh}
 HF_HOME=${HF_HOME:-/lustre/fsw/coreai_dlalgo_llm/users/sna/hf}
 CHECKPOINT_ROOT=${CHECKPOINT_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/checkpoints}
@@ -32,6 +33,10 @@ case "${CONDITION}" in
     IMPLEMENTATION=pr4359
     WORKTREE=${PR4359_WORKTREE}
     ;;
+  adapter-* )
+    IMPLEMENTATION=adapter
+    WORKTREE=${ADAPTER_WORKTREE}
+    ;;
   *)
     echo "Unknown CONDITION: ${CONDITION}" >&2
     exit 2
@@ -43,7 +48,11 @@ case "${CONDITION#*-}" in
     RECIPE=grpo-qwen3-30ba3b-4n4g-nocg-w3.yaml
     ;;
   attn)
-    RECIPE=grpo-qwen3-30ba3b-4n4g-cg-attn-w3.yaml
+    if [[ "${IMPLEMENTATION}" == "adapter" ]]; then
+      RECIPE=grpo-qwen3-30ba3b-4n4g-cg-attn.yaml
+    else
+      RECIPE=grpo-qwen3-30ba3b-4n4g-cg-attn-w3.yaml
+    fi
     ;;
   moe-router)
     RECIPE=grpo-qwen3-30ba3b-4n4g-cg-moe-router-w3.yaml
@@ -56,6 +65,12 @@ case "${CONDITION#*-}" in
     exit 2
     ;;
 esac
+
+ROUTER_DTYPE_OVERRIDE=""
+if [[ "${IMPLEMENTATION}" == "adapter" ]] && [[ "${CONDITION#*-}" == *moe-router ]]; then
+  # These FP32 router runs are diagnostics only; do not use them for accuracy claims.
+  ROUTER_DTYPE_OVERRIDE="policy.megatron_cfg.moe_router_dtype=fp32"
+fi
 
 if [[ ! -s "${HF_HOME}/token" ]]; then
   echo "Missing Hugging Face token at ${HF_HOME}/token" >&2
@@ -85,6 +100,9 @@ mkdir -p "${LOG_BASE}" "${CHECKPOINT_DIR}"
 
 echo "condition=${CONDITION} implementation=${IMPLEMENTATION} steps=${STEPS}"
 echo "worktree=${WORKTREE} recipe=${RECIPE}"
+if [[ -n "${ROUTER_DTYPE_OVERRIDE}" ]]; then
+  echo "router_dtype=fp32 (diagnostic only; exclude from production accuracy)"
+fi
 git -C "${WORKTREE}" rev-parse HEAD
 git -C "${WORKTREE}/3rdparty/Megatron-LM-workspace/Megatron-LM" rev-parse HEAD
 
@@ -100,7 +118,7 @@ uv run --locked --extra mcore --directory ${WORKTREE} python ${WORKTREE}/example
   logger.wandb_enabled=false \\
   logger.tensorboard_enabled=false \\
   logger.log_dir=logs/qwen30b-a3b-moe-cg/${RUN_TAG} \\
-  logger.wandb.name=${RUN_TAG}
+  logger.wandb.name=${RUN_TAG} ${ROUTER_DTYPE_OVERRIDE}
 EOF
 
 COMMAND="${COMMAND}" \

@@ -25,11 +25,31 @@ nemo_rl.models.megatron.setup, focusing on:
 """
 
 import os
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+import yaml
+
+
+def test_pr5672_qwen30_packed_attention_recipe_uses_te_static_thd():
+    """The production Qwen3-30B attention recipe must use the TE adapter."""
+    recipe = yaml.safe_load(
+        (
+            Path(__file__).parents[4] / "examples/configs/recipes/llm/performance/"
+            "grpo-qwen3-30ba3b-4n4g-cg-attn.yaml"
+        ).read_text()
+    )
+    cfg = recipe["policy"]["megatron_cfg"]
+
+    assert cfg["cuda_graph_impl"] == "transformer_engine"
+    assert cfg["cuda_graph_scope"] == "attn"
+    assert cfg["cuda_graph_pr5672_thd"] is True
+    assert cfg["cuda_graph_packed_seq"] is True
+    assert cfg["cuda_graph_max_packed_seqs"] == 64
+    assert cfg["cuda_graph_warmup_steps"] == 3
 
 
 @pytest.mark.mcore
