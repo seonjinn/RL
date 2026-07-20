@@ -39,6 +39,10 @@ DFLASH_SNAPSHOT = DEFAULT_HF_HOME / (
     "hub/models--RedHatAI--Qwen3-30B-A3B-speculator.dflash/"
     "snapshots/edcff83783141eb9383e2bd6c33610d9a3104288"
 )
+EAGLE3_SNAPSHOT = DEFAULT_HF_HOME / (
+    "hub/models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3/"
+    "snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf"
+)
 WANDB_PROJECT = "nemo-rl-vllm0251-swe-full-grpo"
 INCOMPATIBLE_INHERITED_ENVIRONMENT = (
     "CONDA_PREFIX",
@@ -60,8 +64,11 @@ INCOMPATIBLE_INHERITED_ENVIRONMENT = (
 @dataclass(frozen=True)
 class Variant:
     name: str
+    method: str | None
+    draft_model: Path | None
     speculative_tokens: int | None
     capture_sizes: tuple[int, ...]
+    use_v2_model_runner: bool
 
 
 @dataclass(frozen=True)
@@ -82,9 +89,15 @@ class RunPlan:
 
 
 VARIANTS = {
-    "baseline": Variant("baseline", None, ()),
-    "dflash_k7": Variant("dflash_k7", 7, (8, 16, 32, 64, 128)),
-    "dflash_k9": Variant("dflash_k9", 9, (10, 20, 40, 80, 160)),
+    "baseline": Variant("baseline", None, None, None, (), True),
+    "baseline_v1": Variant("baseline_v1", None, None, None, (), False),
+    "eagle3_k3": Variant("eagle3_k3", "eagle3", EAGLE3_SNAPSHOT, 3, (), True),
+    "dflash_k7": Variant(
+        "dflash_k7", "dflash", DFLASH_SNAPSHOT, 7, (8, 16, 32, 64, 128), False
+    ),
+    "dflash_k9": Variant(
+        "dflash_k9", "dflash", DFLASH_SNAPSHOT, 9, (10, 20, 40, 80, 160), False
+    ),
 }
 
 
@@ -185,18 +198,32 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
         "env.nemo_gym.swe_agents_train.responses_api_agents.swe_agents.concurrency=4",
         "env.nemo_gym.swe_agents_train.responses_api_agents.swe_agents.swebench_agent_timeout=900",
     ]
-    if variant.speculative_tokens is None:
+    if variant.method is None:
         overrides.append(
             "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode="
             "FULL_AND_PIECEWISE"
         )
-    else:
+    elif variant.method == "eagle3":
+        overrides.extend(
+            [
+                "++policy.generation.vllm_kwargs.speculative_config.method=eagle3",
+                f"++policy.generation.vllm_kwargs.speculative_config.model={variant.draft_model}",
+                "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=1",
+                "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode="
+                "FULL_AND_PIECEWISE",
+                (
+                    "++policy.generation.vllm_kwargs.speculative_config."
+                    f"num_speculative_tokens={variant.speculative_tokens}"
+                ),
+            ]
+        )
+    elif variant.method == "dflash":
         overrides.extend(
             [
                 "++policy.generation.vllm_kwargs.speculative_config.method=dflash",
-                f"++policy.generation.vllm_kwargs.speculative_config.model={DFLASH_SNAPSHOT}",
+                f"++policy.generation.vllm_kwargs.speculative_config.model={variant.draft_model}",
                 "++policy.generation.vllm_kwargs.speculative_config.draft_tensor_parallel_size=1",
-                "++policy.generation.vllm_kwargs.speculative_config.max_model_len=4096",
+                "++policy.generation.vllm_kwargs.speculative_config.max_model_len=40960",
                 "++policy.generation.vllm_kwargs.speculative_config.attention_backend=FLASH_ATTN",
                 "++policy.generation.vllm_kwargs.kernel_config.enable_flashinfer_autotune=false",
                 "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=FULL",
@@ -207,6 +234,8 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
                 _capture_sizes_override(variant.capture_sizes),
             ]
         )
+    else:
+        raise ValueError(f"Unsupported speculative decoding method: {variant.method}")
 
     unset_environment = [
         item for name in INCOMPATIBLE_INHERITED_ENVIRONMENT for item in ("-u", name)
@@ -214,7 +243,7 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
     command = [
         "env",
         *unset_environment,
-        "VLLM_USE_V2_MODEL_RUNNER=1",
+        f"VLLM_USE_V2_MODEL_RUNNER={int(variant.use_v2_model_runner)}",
         f"HF_HOME={args.hf_home}",
         f"NEMO_GYM_VENV_DIR={gym_venv_dir}",
         "HF_HUB_OFFLINE=1",
@@ -290,8 +319,9 @@ def validate_remote_inputs(plan: RunPlan, repo_dir: Path) -> None:
         Path(plan.dataset),
         Path(plan.container),
     ]
-    if plan.variant != "baseline":
-        required_paths.append(DFLASH_SNAPSHOT)
+    draft_model = VARIANTS[plan.variant].draft_model
+    if draft_model is not None:
+        required_paths.append(draft_model)
     missing = [str(path) for path in required_paths if not path.exists()]
     if missing:
         raise FileNotFoundError("Missing required paths: " + ", ".join(missing))

@@ -50,9 +50,17 @@ Gym writes runtime artifacts below its source tree.
 
 Variants:
 
-- `baseline`
-- `dflash_k7`
-- `dflash_k9`
+- `baseline`: V2 model runner baseline for Eagle-3.
+- `eagle3_k3`: Thinking-2507 Eagle-3 drafter, K=3, V2 model runner.
+- `baseline_v1`: V1 model runner baseline for DFlash.
+- `dflash_k7`: DFlash K=7 with its 40960-token draft limit and V1 runner.
+- `dflash_k9`: DFlash K=9 exploration with the same V1 runner.
+
+Eagle-3 and DFlash are reported in separate matched lanes. DFlash uses the V1
+model runner because vLLM 0.25.1 V1 stops drafting safely after the drafter's
+40960-token context limit, while the target can continue to the recipe's
+131072-token limit. Comparing it with `baseline_v1` avoids attributing model
+runner differences to speculative decoding.
 
 Validate OpenHands `libtmux` startup in the same Astropy SWE image before the
 multi-node run:

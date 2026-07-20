@@ -277,10 +277,33 @@ def test_dflash_variants_use_verified_checkpoint_and_k_aligned_graphs() -> None:
         assert "snapshots/edcff83783141eb9383e2bd6c33610d9a3104288" in rendered
         assert f"speculative_config.num_speculative_tokens={k}" in rendered
         assert "speculative_config.draft_tensor_parallel_size=1" in rendered
-        assert "speculative_config.max_model_len=4096" in rendered
+        assert "speculative_config.max_model_len=40960" in rendered
         assert "speculative_config.attention_backend=FLASH_ATTN" in rendered
         assert "compilation_config.cudagraph_mode=FULL" in rendered
         assert f"compilation_config.cudagraph_capture_sizes={capture_sizes}" in rendered
+        assert "VLLM_USE_V2_MODEL_RUNNER=0" in payload["command"]
+
+
+def test_eagle3_k3_uses_thinking_drafter_and_v2_runner() -> None:
+    payload = _dry_run("eagle3_k3")
+    rendered = " ".join(payload["overrides"])
+
+    assert "speculative_config.method=eagle3" in rendered
+    assert "models--RedHatAI--Qwen3-30B-A3B-Thinking-2507-speculator.eagle3" in rendered
+    assert "snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf" in rendered
+    assert "speculative_config.num_speculative_tokens=3" in rendered
+    assert "speculative_config.draft_tensor_parallel_size=1" in rendered
+    assert "compilation_config.cudagraph_mode=FULL_AND_PIECEWISE" in rendered
+    assert "VLLM_USE_V2_MODEL_RUNNER=1" in payload["command"]
+
+
+def test_dflash_has_a_model_runner_matched_baseline() -> None:
+    payload = _dry_run("baseline_v1")
+    rendered = " ".join(payload["overrides"])
+
+    assert "speculative_config" not in rendered
+    assert "compilation_config.cudagraph_mode=FULL_AND_PIECEWISE" in rendered
+    assert "VLLM_USE_V2_MODEL_RUNNER=0" in payload["command"]
 
 
 def test_grpo_rejects_single_generation_per_prompt() -> None:

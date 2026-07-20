@@ -20,7 +20,7 @@ refit rather than the rollout-only benchmark.
 ## Checkpoints And Runtime
 
 - Eagle-3 uses the pinned RedHatAI Qwen3-30B-A3B Thinking-2507 snapshot and
-  draft TP1. It uses native Model Runner V2 CUDA Graph sizing.
+  draft TP1. It preserves the V2 baseline's CUDA Graph sizing.
 - DFlash uses the pinned RedHatAI Qwen3-30B-A3B DFlash snapshot, K7, draft TP1,
   and draft `max_model_len=40960`.
 - DFlash uses Model Runner V1 because vLLM 0.25.1 Model Runner V2 does not
@@ -36,4 +36,3 @@ refit rather than the rollout-only benchmark.
 - Submission uses a clean fresh worktree with recursive submodules at pinned
   commits, `sbatch --test-only`, five-hour Lyris allocation, and five-minute
   startup monitoring.
-
