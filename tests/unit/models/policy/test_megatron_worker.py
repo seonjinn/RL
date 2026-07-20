@@ -188,9 +188,10 @@ def test_pr5672_mcore_source_uses_direct_workspace():
 
     assert pyproject["tool"]["uv"]["sources"]["megatron-core"]["path"] == expected_path
     assert megatron_core["source"] == {"editable": expected_path}
-    assert "Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM" not in (
-        project_root / "uv.lock"
-    ).read_text()
+    assert (
+        "Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
+        not in (project_root / "uv.lock").read_text()
+    )
 
 
 class _FakeTrainableModel:
