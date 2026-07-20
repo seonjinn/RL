@@ -183,7 +183,20 @@ ISSTA26 논문(2604.26469)이 SWE-bench에서 suffix 1.66–3.35&times;를 보�
 <b>drafter 4K 컨텍스트 캡</b>(<code>speculative_config.max_model_len=4096</code> — 장문 OOD 붕괴 우회).
 async 스케줄링 유지(EagleModelTypes 소속) + FULL 그래프((K+1)-배수 캡처) + flashinfer autotune off 레시피로,
 <b>base-A3B drafter로도 250 tok/s (baseline 209의 1.20&times;)</b> — Thinking-2507 매칭 drafter가 아님에도 세션 최고 기록.
+K-스윕 결과 <b>K7/K9 = 309/310 tok/s (1.48&times;)</b> — K16은 과잉 드래프팅이었고 최적은 K≈7–9.
 Instruct-2507 dflash drafter로 추가 개선 여지가 있다.</p>
+
+<h3>5. 최종 오버헤드 원장 (rollout당 ~145s, 전부 실측)</h3>
+<table>
+<tr><th>성분</th><th class="num">시간</th><th class="num">비중</th><th>근본 원인 (실측 방법)</th><th>픽스 → 기대치</th></tr>
+<tr><td>LLM generation</td><td class="num">~66s</td><td class="num">45.7%</td><td>—</td><td><b>DFlash K9: 1.48&times; 실측</b> → ~45s</td></tr>
+<tr><td><b>Python 콜드 임포트</b></td><td class="num">~34s</td><td class="num">23%</td><td>lustre 바인드 venv에서 action server(14.8s) + run_infer(~19s) 임포트. PR#19 타임스탬프로 판정: <b>턴 사이 framework ≈ 0</b> (LLM 호출이 구간의 98–99%), 잔여는 전부 프로세스 기동</td><td>I3b venv 노드 로컬화 → ~8s</td></tr>
+<tr><td><b>git 심층 정리</b></td><td class="num">~18.5s</td><td class="num">13%</td><td>INIT_T 마커: setup 0.3 + 업로드 0.01 + entry/cd/reset 2.1s → 잔여 = <code>_deep_reset_to_base_commit</code> (3만 커밋 repo ref/reflog 수술 on fuse-overlayfs)</td><td>git 연산 융합·fsync off / SIF에 사전 수술 / 컨테이너 풀 → ~5s</td></tr>
+<tr><td>Final eval</td><td class="num">~16s</td><td class="num">11%</td><td>채점 apptainer 직렬</td><td>비동기 오버랩</td></tr>
+<tr><td>셋업/업로드/툴/스핀업</td><td class="num">~5s</td><td class="num">3%</td><td>해결/미미</td><td>—</td></tr>
+</table>
+<p><b>결합 전망: rollout당 145s → ~70s (≈2&times;)</b> = DFlash-K9(1.48&times; LLM) + venv 로컬화(−25s) + git 픽스(−13s) + eval 비동기(−16s). vLLM 업그레이드로 이미 얻은 1.88&times;에 곱해지는 값.</p>
+<p class="muted">계측 방법론 주의: 이벤트 타임스탬프는 UTC-naive, PR#19 레코드는 UTC-aware — 정규화 없이 섞으면 7시간(25200s) 가짜 gap이 생긴다 (팀원 전달 사항).</p>
 <p><b>최종 스코어보드 (SWE2 E2E tok/s)</b>: <b>DFlash-K16 250</b> &gt; eagle3-K1 218 &gt; baseline 209 = V1-baseline 209 &gt; eagle3-K3 189 &gt; suffix-K1 168 &gt; suffix-K32 115 &gt; suffix K2–K8 100–126 &gt; ngram 99.</p>
 
 <h3>2.1 (후속) Init/Framework 패치 A/B — 정직한 부정 결과와 계획 수정</h3>
