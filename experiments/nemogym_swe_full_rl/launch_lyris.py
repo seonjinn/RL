@@ -182,6 +182,14 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
 
     command = [
         "env",
+        "-u",
+        "CONDA_PREFIX",
+        "-u",
+        "CONDA_DEFAULT_ENV",
+        "-u",
+        "CONDA_PYTHON_EXE",
+        "-u",
+        "VIRTUAL_ENV",
         "VLLM_USE_V2_MODEL_RUNNER=1",
         f"HF_HOME={args.hf_home}",
         "HF_HUB_OFFLINE=1",

@@ -67,6 +67,14 @@ def test_baseline_runs_full_async_swe_grpo_training() -> None:
     assert any(
         part.endswith("grpo_qwen3_30ba3b_thinking_swe2_smoke.yaml") for part in command
     )
+    for inherited_env in (
+        "CONDA_PREFIX",
+        "CONDA_DEFAULT_ENV",
+        "CONDA_PYTHON_EXE",
+        "VIRTUAL_ENV",
+    ):
+        position = command.index(inherited_env)
+        assert command[position - 1 : position + 1] == ["-u", inherited_env]
     assert "grpo.async_grpo.enabled=true" in overrides
     assert "grpo.async_grpo.in_flight_weight_updates=true" in overrides
     assert "grpo.max_num_steps=2" in overrides
