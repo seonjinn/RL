@@ -10,7 +10,7 @@ set -euo pipefail
 CONDITION=${CONDITION:?Set CONDITION to adapter-nocg or adapter-attn.}
 STEPS=${STEPS:-20}
 RUN_TAG=${RUN_TAG:-${CONDITION}-steps${STEPS}}
-ADAPTER_WORKTREE=${ADAPTER_WORKTREE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-pr5672-adapter-ptyche-20260719}
+ADAPTER_WORKTREE=${ADAPTER_WORKTREE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr5672-adapter-ptyche-20260719}
 CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/nemo_rl_nightly_20260715.sqsh}
 HF_HOME=${HF_HOME:-/lustre/fsw/coreai_dlalgo_llm/users/sna/hf}
 CHECKPOINT_ROOT=${CHECKPOINT_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/checkpoints}

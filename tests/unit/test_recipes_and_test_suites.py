@@ -14,6 +14,7 @@
 import glob
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +26,33 @@ project_root = os.path.abspath(os.path.join(dir_path, "..", ".."))
 configs_dir = os.path.join(project_root, "examples", "configs")
 recipes_dir = os.path.join(project_root, "examples", "configs", "recipes")
 test_suites_dir = os.path.join(project_root, "tests", "test_suites")
+
+
+def test_qwen_cuda_graph_launchers_share_adapter_worktree_default():
+    canonical_worktree = (
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/"
+        "RL-cgseqpack-pr5672-adapter-ptyche-20260719"
+    )
+    launcher_paths = (
+        Path(project_root)
+        / "experiments/cuda_graph/launch_qwen30_moe_cg_comparison_ptyche.sh",
+        Path(project_root)
+        / "experiments/cuda_graph/launch_qwen235_cg_comparison_ptyche.sh",
+    )
+
+    adapter_defaults = {
+        next(
+            line
+            for line in launcher_path.read_text().splitlines()
+            if line.startswith("ADAPTER_WORKTREE=")
+        )
+        for launcher_path in launcher_paths
+    }
+
+    assert adapter_defaults == {
+        f"ADAPTER_WORKTREE=${{ADAPTER_WORKTREE:-{canonical_worktree}}}"
+    }
+
 
 nightly_test_suite_path = os.path.join(test_suites_dir, "nightly.txt")
 release_test_suite_path = os.path.join(test_suites_dir, "release.txt")
