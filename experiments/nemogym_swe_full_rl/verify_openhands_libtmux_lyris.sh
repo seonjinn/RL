@@ -28,6 +28,7 @@ srun \
         --cleanenv \
         --bind "${REPO_DIR}:${REPO_DIR}:ro" \
         --bind "${OPENHANDS_SETUP}:/openhands_setup:ro" \
+        --bind "${OPENHANDS_SETUP}:${OPENHANDS_SETUP}:ro" \
         "${SIF}" \
         env \
         PATH="/openhands_setup/miniforge3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
