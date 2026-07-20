@@ -15,6 +15,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
+from gym_openhands_tmux import apply_gym_openhands_tmux_fix
+
 
 DEFAULT_REMOTE_REPO = Path(
     "/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-wt-nemogym-swe-full-rl"
@@ -303,6 +305,7 @@ def validate_remote_inputs(plan: RunPlan, repo_dir: Path) -> None:
 def write_provenance(plan: RunPlan, repo_dir: Path) -> Path:
     run_dir = Path(plan.run_dir)
     run_dir.mkdir(parents=True, exist_ok=False)
+    gym_app_path, _, gym_app_sha256 = apply_gym_openhands_tmux_fix(repo_dir)
     provenance = {
         **asdict(plan),
         "repo_head": _git_output(repo_dir, "rev-parse", "HEAD"),
@@ -312,6 +315,10 @@ def write_provenance(plan: RunPlan, repo_dir: Path) -> Path:
         ).splitlines(),
         "dataset_sha256": _sha256(Path(plan.dataset)),
         "container_size_bytes": Path(plan.container).stat().st_size,
+        "gym_openhands_tmux_fix": {
+            "path": str(gym_app_path),
+            "sha256": gym_app_sha256,
+        },
     }
     path = run_dir / "provenance.json"
     path.write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n")
@@ -336,6 +343,7 @@ def execute(plan: RunPlan, repo_dir: Path, mode: str) -> int:
     if mode == "test-only":
         command = ["sbatch", "--test-only", *plan.sbatch_args, str(ray_sub)]
     else:
+        apply_gym_openhands_tmux_fix(repo_dir)
         provenance_path = write_provenance(plan, repo_dir)
         command = ["sbatch", "--parsable", *plan.sbatch_args, str(ray_sub)]
         print(f"provenance={provenance_path}", file=sys.stderr)

@@ -7,6 +7,12 @@ import sys
 from pathlib import Path
 from typing import TypedDict, cast
 
+import pytest
+
+from experiments.nemogym_swe_full_rl.gym_openhands_tmux import (
+    patch_gym_openhands_tmux_source,
+)
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = REPO_ROOT / "experiments" / "nemogym_swe_full_rl" / "launch_lyris.py"
@@ -19,6 +25,18 @@ class DryRunPayload(TypedDict):
     run_dir: str
     sbatch_args: list[str]
     submission_unset_environment: list[str]
+
+
+BUGGY_GYM_TMUX_SOURCE = """
+        agent_main_cmd = (
+            "export TMUX_TMPDIR=/tmp && "
+            "export TMUX=/tmp/tmux-$uid/default && "
+            "mkdir -p /tmp/tmux-$uid && "
+            "chown $uid:$uid /tmp/tmux-$uid || true && "
+            "chmod 700 /tmp/tmux-$uid && "
+            "tmux -S /tmp/tmux-$uid/default start-server || true && "
+        )
+"""
 
 
 def _run_launcher(
@@ -57,6 +75,26 @@ def _run_launcher(
 def _dry_run(variant: str, *extra_args: str) -> DryRunPayload:
     result = _run_launcher(variant, *extra_args)
     return cast(DryRunPayload, json.loads(result.stdout))
+
+
+def test_gym_openhands_tmux_patch_leaves_server_ownership_to_libtmux() -> None:
+    patched = patch_gym_openhands_tmux_source(BUGGY_GYM_TMUX_SOURCE)
+
+    assert '"export TMUX_TMPDIR=/tmp && "' in patched
+    assert '"unset TMUX && "' in patched
+    assert '"export TMUX=/tmp/tmux-$uid/default && "' not in patched
+    assert "start-server" not in patched
+
+
+def test_gym_openhands_tmux_patch_is_idempotent() -> None:
+    patched = patch_gym_openhands_tmux_source(BUGGY_GYM_TMUX_SOURCE)
+
+    assert patch_gym_openhands_tmux_source(patched) == patched
+
+
+def test_gym_openhands_tmux_patch_rejects_unknown_upstream_source() -> None:
+    with pytest.raises(ValueError, match="expected Gym tmux setup block"):
+        patch_gym_openhands_tmux_source("agent_main_cmd = 'unknown upstream'\n")
 
 
 def test_baseline_runs_full_async_swe_grpo_training() -> None:

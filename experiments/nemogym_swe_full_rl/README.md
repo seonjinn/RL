@@ -19,6 +19,15 @@ NeMo Gym server environments are stored under the shared Lustre
 with the server environment's Python path, so a node-local `/opt/gym_venvs`
 directory is invalid for this multi-node run.
 
+The pinned Gym revision exports an incomplete `TMUX` client value before
+OpenHands lets `libtmux` create its server. That points `libtmux` at a dead
+socket and stalls `instance_swe_entry.sh`. On submission, the launcher applies
+the exact-match `gym_openhands_tmux.py` compatibility fix after validating a
+clean worktree: `TMUX_TMPDIR` remains `/tmp`, while `TMUX` is unset so
+`libtmux.Server().new_session()` owns server creation. The patched source SHA is
+stored in `provenance.json`. Use a fresh remote worktree for each submitted run
+because Gym writes runtime artifacts below its source tree.
+
 Variants:
 
 - `baseline`
