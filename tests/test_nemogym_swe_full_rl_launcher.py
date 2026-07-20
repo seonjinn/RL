@@ -17,6 +17,7 @@ class DryRunPayload(TypedDict):
     overrides: list[str]
     run_dir: str
     sbatch_args: list[str]
+    submission_unset_environment: list[str]
 
 
 def _run_launcher(
@@ -214,3 +215,14 @@ def test_submit_requires_wandb_key_before_sbatch() -> None:
     assert result.returncode == 2
     assert "WANDB_API_KEY must be set in the submission environment" in result.stderr
     assert "sbatch" not in result.stderr
+
+
+def test_submission_sanitizes_host_python_environment_before_ray_starts() -> None:
+    payload = _dry_run("baseline")
+
+    assert payload["submission_unset_environment"] == [
+        "CONDA_PREFIX",
+        "CONDA_DEFAULT_ENV",
+        "CONDA_PYTHON_EXE",
+        "VIRTUAL_ENV",
+    ]

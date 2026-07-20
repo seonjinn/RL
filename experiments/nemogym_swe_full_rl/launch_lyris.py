@@ -32,6 +32,12 @@ DFLASH_SNAPSHOT = DEFAULT_HF_HOME / (
     "snapshots/edcff83783141eb9383e2bd6c33610d9a3104288"
 )
 WANDB_PROJECT = "nemo-rl-vllm0251-swe-full-grpo"
+INCOMPATIBLE_INHERITED_ENVIRONMENT = (
+    "CONDA_PREFIX",
+    "CONDA_DEFAULT_ENV",
+    "CONDA_PYTHON_EXE",
+    "VIRTUAL_ENV",
+)
 
 
 @dataclass(frozen=True)
@@ -54,6 +60,7 @@ class RunPlan:
     command: tuple[str, ...]
     overrides: tuple[str, ...]
     sbatch_args: tuple[str, ...]
+    submission_unset_environment: tuple[str, ...]
 
 
 VARIANTS = {
@@ -236,6 +243,7 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
         command=tuple(command),
         overrides=tuple(overrides),
         sbatch_args=tuple(sbatch_args),
+        submission_unset_environment=INCOMPATIBLE_INHERITED_ENVIRONMENT,
     )
 
 
@@ -295,6 +303,8 @@ def execute(plan: RunPlan, repo_dir: Path, mode: str) -> int:
     validate_remote_inputs(plan, repo_dir)
     ray_sub = repo_dir / "ray.sub"
     env = os.environ.copy()
+    for name in plan.submission_unset_environment:
+        env.pop(name, None)
     env.update(
         {
             "COMMAND": shlex.join(plan.command),
