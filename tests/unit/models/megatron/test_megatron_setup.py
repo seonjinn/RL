@@ -84,6 +84,7 @@ class TestValidateModelPaths:
         checkpoint_dir = tmp_path / "checkpoints" / "test-model"
         iter_dir = checkpoint_dir / "iter_0000000"
         iter_dir.mkdir(parents=True)
+        (iter_dir / "run_config.yaml").touch()
 
         config = {"model_name": "test-model"}
 
@@ -97,6 +98,26 @@ class TestValidateModelPaths:
 
         assert hf_model_name == "test-model"
         assert pt_checkpoint_exists is True
+
+    def test_incomplete_hf_conversion_is_not_treated_as_checkpoint(self, tmp_path):
+        """An interrupted HF import must be retried instead of loaded."""
+        from nemo_rl.models.megatron.setup import validate_model_paths
+
+        checkpoint_dir = tmp_path / "checkpoints" / "test-model"
+        iter_dir = checkpoint_dir / "iter_0000000"
+        iter_dir.mkdir(parents=True)
+        (iter_dir / "common.pt").touch()
+        (iter_dir / "__1_0.distcp").touch()
+
+        config = {"model_name": "test-model"}
+
+        with patch(
+            "nemo_rl.models.megatron.setup.get_megatron_checkpoint_dir",
+            return_value=str(tmp_path / "checkpoints"),
+        ):
+            _, _, pt_checkpoint_exists = validate_model_paths(config)
+
+        assert pt_checkpoint_exists is False
 
     def test_hf_config_overrides_change_hashed_pretrained_path(self, tmp_path):
         """Test that different hf_config_overrides map to different hashed paths."""

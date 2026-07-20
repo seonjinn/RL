@@ -455,8 +455,8 @@ def validate_model_paths(config: PolicyConfig) -> tuple[str, str, bool]:
         overrides_hash = _get_hf_config_overrides_hash(hf_config_overrides)
         hf_model_subdir = f"{hf_model_subdir}__hfovr_{overrides_hash}"
     pretrained_path = os.path.join(get_megatron_checkpoint_dir(), hf_model_subdir)
-    pt_checkpoint_exists = os.path.exists(pretrained_path) and os.path.exists(
-        os.path.join(pretrained_path, "iter_0000000")
+    pt_checkpoint_exists = os.path.exists(
+        os.path.join(pretrained_path, "iter_0000000", "run_config.yaml")
     )
     return hf_model_name, pretrained_path, pt_checkpoint_exists
 
