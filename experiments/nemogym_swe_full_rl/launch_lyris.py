@@ -37,8 +37,17 @@ DFLASH_SNAPSHOT = DEFAULT_HF_HOME / (
 WANDB_PROJECT = "nemo-rl-vllm0251-swe-full-grpo"
 INCOMPATIBLE_INHERITED_ENVIRONMENT = (
     "CONDA_PREFIX",
+    "CONDA_PREFIX_1",
     "CONDA_DEFAULT_ENV",
     "CONDA_PYTHON_EXE",
+    "CONDA_EXE",
+    "_CONDA_EXE",
+    "CONDA_ROOT",
+    "_CONDA_ROOT",
+    "CONDA_SHLVL",
+    "CONDA_PROMPT_MODIFIER",
+    "_CE_M",
+    "_CE_CONDA",
     "VIRTUAL_ENV",
 )
 
@@ -191,16 +200,14 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
             ]
         )
 
+    unset_environment = [
+        item
+        for name in INCOMPATIBLE_INHERITED_ENVIRONMENT
+        for item in ("-u", name)
+    ]
     command = [
         "env",
-        "-u",
-        "CONDA_PREFIX",
-        "-u",
-        "CONDA_DEFAULT_ENV",
-        "-u",
-        "CONDA_PYTHON_EXE",
-        "-u",
-        "VIRTUAL_ENV",
+        *unset_environment,
         "VLLM_USE_V2_MODEL_RUNNER=1",
         f"HF_HOME={args.hf_home}",
         "HF_HUB_OFFLINE=1",

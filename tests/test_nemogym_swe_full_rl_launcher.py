@@ -71,8 +71,17 @@ def test_baseline_runs_full_async_swe_grpo_training() -> None:
     )
     for inherited_env in (
         "CONDA_PREFIX",
+        "CONDA_PREFIX_1",
         "CONDA_DEFAULT_ENV",
         "CONDA_PYTHON_EXE",
+        "CONDA_EXE",
+        "_CONDA_EXE",
+        "CONDA_ROOT",
+        "_CONDA_ROOT",
+        "CONDA_SHLVL",
+        "CONDA_PROMPT_MODIFIER",
+        "_CE_M",
+        "_CE_CONDA",
         "VIRTUAL_ENV",
     ):
         position = command.index(inherited_env)
@@ -238,7 +247,16 @@ def test_submission_sanitizes_host_python_environment_before_ray_starts() -> Non
 
     assert payload["submission_unset_environment"] == [
         "CONDA_PREFIX",
+        "CONDA_PREFIX_1",
         "CONDA_DEFAULT_ENV",
         "CONDA_PYTHON_EXE",
+        "CONDA_EXE",
+        "_CONDA_EXE",
+        "CONDA_ROOT",
+        "_CONDA_ROOT",
+        "CONDA_SHLVL",
+        "CONDA_PROMPT_MODIFIER",
+        "_CE_M",
+        "_CE_CONDA",
         "VIRTUAL_ENV",
     ]
