@@ -1,5 +1,6 @@
-config,swe2_rollout_toks,speedup_vs_baseline,job_id
-baseline_no_specdec,209,1.0,
-public_dflash_800k_generic_K9,310,1.48,
-ours_ultrachat10k_kl_div_K9,206,0.99,2439526
-ours_mixswe10k_kl_div_K9,269,1.29,2439527
+config,swe2_rollout_toks,speedup_vs_baseline,job_id,note
+baseline_no_specdec,209,1.0,,
+public_dflash_800k_generic_K9,310,1.48,,800K generic samples
+ours_ultrachat10k_kl_div_K9,206,0.99,2439526,no SWE data
+ours_mixpub10k_swesmith_K9,220,1.05,2440577,"public SWE-smith 10%, eval instances UNSEEN, SWE-agent scaffold"
+ours_mixswe10k_own_K9,269,1.29,2439527,CONTAMINATED: trained on trajectories of eval instances + same OpenHands scaffold

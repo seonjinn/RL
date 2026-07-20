@@ -79,6 +79,29 @@ real benchmark, not just the leaky val split. Third, the mix drafter already rec
 ~60% of the public drafter's gain with 80x less data, and the public drafter had zero
 SWE data - which bounds how much generic scale alone can matter.
 
+### Contamination split: how much of the gain is memorization?
+
+The mix-own drafter was trained on trajectories from the *same three astropy instances*
+used in the eval - a contamination the user flagged. A third arm isolates it:
+**mix-public** replaces our trajectories with SWE-smith public trajectories (synthetic
+tasks on disjoint repos, astropy filtered out, SWE-agent scaffold), same 10% share and
+budget, evaluated on the same (now fully unseen) astropy instances:
+
+| Drafter (all 10K, kl_div, K9) | tok/s | vs baseline |
+|---|---|---|
+| UltraChat only | 206 | 0.99x |
+| + 10% public SWE (unseen instances, foreign scaffold) | 220 | 1.05x |
+| + 10% own rollouts (seen instances, matched scaffold) | 269 | 1.29x |
+
+The clean cross-domain generalization effect is +7% (206 -> 220); the remaining +49
+tok/s of the contaminated arm comes from the combination of instance familiarity and
+**scaffold match** (our trajectories share the deployment's OpenHands system prompt and
+tool-call format; SWE-smith uses the SWE-agent scaffold). For general SWE serving
+claims, 220 is the honest number at this scale. For the RL-rollout use case both
+components are legitimately available - GRPO re-rolls the same instance pool with the
+same scaffold every step, so "contamination" is exactly the adaptation that deployment
+provides.
+
 ## Key takeaway
 
 **Loss engineering is not where 235B drafter acceptance will come from - kl_div is
