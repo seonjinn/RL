@@ -11,12 +11,23 @@ set -euo pipefail
 
 REPO_DIR="${REPO_DIR:?REPO_DIR must point to the committed NeMo-RL worktree}"
 SIF="${SIF:-/lustre/fsw/coreai_dlalgo_llm/users/sna/sweb_sifs/astropy__astropy-12907.sif}"
+NEMO_CONTAINER="${NEMO_CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260715.sqsh}"
 
-apptainer exec \
-    --cleanenv \
-    --bind "${REPO_DIR}:${REPO_DIR}:ro" \
-    "${SIF}" \
-    env \
-    PATH="/openhands_setup/miniforge3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-    /openhands_setup/OpenHands/.venv/bin/python \
-    "${REPO_DIR}/experiments/nemogym_swe_full_rl/verify_openhands_libtmux.py"
+srun \
+    --no-container-mount-home \
+    --mpi=pmix \
+    --container-mounts="/lustre:/lustre,/dev/fuse:/dev/fuse" \
+    --container-image="${NEMO_CONTAINER}" \
+    --container-workdir="${REPO_DIR}" \
+    --nodes=1 \
+    --ntasks=1 \
+    --partition="${SLURM_JOB_PARTITION}" \
+    --account="${SLURM_JOB_ACCOUNT}" \
+    apptainer exec \
+        --cleanenv \
+        --bind "${REPO_DIR}:${REPO_DIR}:ro" \
+        "${SIF}" \
+        env \
+        PATH="/openhands_setup/miniforge3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+        /openhands_setup/OpenHands/.venv/bin/python \
+        "${REPO_DIR}/experiments/nemogym_swe_full_rl/verify_openhands_libtmux.py"
