@@ -870,6 +870,9 @@ def test_correctness_audit_accepts_missing_next_batch_at_natural_termination() -
     sft_path = REPO_ROOT / "nemo_rl/algorithms/sft.py"
     train_source = ast.unparse(_function_node(sft_path, "sft_train"))
     assert "correctness_auditor.finalize_terminal()" in train_source
+    assert train_source.index(
+        "if total_steps >= master_config.sft.max_num_steps"
+    ) < train_source.index("if should_save_by_timeout")
 
 
 class _FakeCorrectnessAuditError(RuntimeError):
