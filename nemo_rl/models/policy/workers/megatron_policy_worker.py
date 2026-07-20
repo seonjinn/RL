@@ -360,6 +360,13 @@ class MegatronPolicyWorkerImpl(
         self._refit_prequant_names: set[str] = set()
         self._refit_transform_requests_by_name: dict[str, "RefitTransformRequest"] = {}
         self._nixl_preinit_agent = maybe_preinit_nixl_checkpoint_engine(config)
+        # Pinned host staging for the reference-policy swap; only populated when
+        # megatron_cfg["pinned_reference_swap"] is enabled. Buffer contents are
+        # only live within a single use_reference_model call (every copy
+        # synchronizes before control leaves it) and each call re-reads
+        # model.state_dict(), so offload_before/after_refit moving or replacing
+        # param storages between calls cannot collide with these buffers.
+        self._pinned_swap_save_buffers: dict[str, torch.Tensor] = {}
 
         # Set rank for non-collocated to check which ranks to broadcast from
         self.rank = get_rank_safe()
@@ -1671,16 +1678,10 @@ class MegatronPolicyWorkerImpl(
             self.disable_forward_pre_hook()
 
         with torch.no_grad():
-            use_pinned_swap = self.cfg["megatron_cfg"].get(
-                "pinned_reference_swap", False
+            # NotRequired key: absent means disabled, default lives in the exemplar YAML.
+            use_pinned_swap = bool(
+                self.cfg["megatron_cfg"].get("pinned_reference_swap")
             )
-            if use_pinned_swap and not hasattr(self, "_pinned_swap_save_buffers"):
-                # Buffer contents are only live within a single
-                # use_reference_model call (every copy synchronizes before
-                # control leaves it) and each call re-reads model.state_dict(),
-                # so offload_before/after_refit moving or replacing param
-                # storages between calls cannot collide with these buffers.
-                self._pinned_swap_save_buffers: dict[str, torch.Tensor] = {}
 
             # Save original references
             model_state_dict = {}
@@ -2944,7 +2945,7 @@ class MegatronPolicyWorkerImpl(
         )
         no_grad.__exit__(None, None, None)
 
-    def _clear_rope_and_moe_dispatcher_caches(self):
+    def _clear_rope_and_moe_dispatcher_caches(self) -> None:
         """Clear rotary-embedding and MoE dispatcher caches repopulated by forwards."""
         # Clear RotaryEmbedding's @lru_cache(maxsize=32). The cache accumulates one
         # entry per unique (max_seq_len, offset, packed_seq) seen, and each entry is
