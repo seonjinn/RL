@@ -11,6 +11,9 @@ policy:
     sequence_length_round: 64
   megatron_cfg:
     cuda_graph_impl: none
+    recompute_granularity: selective
+    recompute_modules:
+    - moe
 logger:
   log_dir: logs/grpo-qwen3-235b-16n4g-nocg-adapter
   wandb:

@@ -11,6 +11,9 @@ policy:
     sequence_length_round: 64
   megatron_cfg:
     cuda_graph_impl: transformer_engine
+    recompute_granularity: selective
+    recompute_modules:
+    - moe
     cuda_graph_scope: attn
     cuda_graph_warmup_steps: 3
     cuda_graph_packed_seq: true
