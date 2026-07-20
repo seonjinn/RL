@@ -145,6 +145,37 @@ def test_pr5672_parameter_move_invalidates_all_graph_state_without_graphs():
     assert worker._cuda_graph_train_steps == 3
 
 
+def test_pr5672_parameter_move_invalidates_populated_graph_state():
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    module = SimpleNamespace(cuda_graphs=[object()])
+    worker.model = SimpleNamespace(modules=lambda: [module])
+    worker._cuda_graph_helper = object()
+    worker._cuda_graph_bucket_helpers = {4096: object()}
+    worker._cuda_graph_bucket_graphs = {4096: {module: module.cuda_graphs}}
+    worker._cuda_graph_active_bucket = 4096
+    worker._cuda_graph_saved_graphs = {module: module.cuda_graphs}
+    worker._cuda_graph_captured_seq_length = 4096
+    worker._cuda_graph_train_steps = 99
+    worker.megatron_cfg = SimpleNamespace(
+        model=SimpleNamespace(cuda_graph_warmup_steps=3)
+    )
+
+    worker._invalidate_cuda_graphs_after_parameter_move()
+
+    assert module.cuda_graphs == []
+    assert worker._cuda_graph_helper is None
+    assert worker._cuda_graph_bucket_helpers == {}
+    assert worker._cuda_graph_bucket_graphs == {}
+    assert worker._cuda_graph_active_bucket is None
+    assert worker._cuda_graph_saved_graphs == {}
+    assert worker._cuda_graph_captured_seq_length is None
+    assert worker._cuda_graph_train_steps == 3
+
+
 def test_pr5672_mcore_source_uses_direct_workspace():
     project_root = Path(__file__).resolve().parents[4]
     expected_path = "3rdparty/Megatron-LM-workspace/Megatron-LM"
