@@ -123,6 +123,46 @@ git commit -s -m "test: add Qwen3 235B packed graph comparison"
 
 Expected: static checks pass; execute locked pytest on Ptyche in Task 2.
 
+## Task 1.5: Preserve configured CUDA-graph buckets with pipeline parallelism
+
+**Files:**
+
+- Modify: `nemo_rl/models/megatron/data.py`
+- Modify: `tests/unit/models/megatron/test_megatron_data.py`
+
+**Consumes:** The Qwen3-235B treatment's PP4 configuration, `cuda_graph_buckets: [8192]`, and the worker's requirement that the packed sequence length equal an active bucket before capture/replay.
+
+**Produces:** A PP>1 packed CUDA-graph step pads an eligible non-bucket batch to the selected configured bucket rather than silently disabling graph replay.
+
+- [ ] **Step 1: Write the failing PP+bucket test**
+
+Directly exercise `_get_pack_sequence_parameters_for_megatron` with pipeline model parallel size 4, CUDA-graph packed padding enabled, `cuda_graph_buckets: [8192]`, and a natural `max_seq_len_in_batch` such as 4096. Assert the returned packed target is 8192. Add a second case with a minimum fill ratio that rejects the 8192 bucket and assert the PP fallback target remains the natural 4096 length.
+
+- [ ] **Step 2: Confirm RED**
+
+Run the focused test. Before the fix, the eligible PP case returns 4096 because the PP branch preempts `_select_cuda_graph_bucket`.
+
+```bash
+uv run --locked --extra mcore pytest \
+  tests/unit/models/megatron/test_megatron_data.py -k pp_cuda_graph_bucket -q
+```
+
+- [ ] **Step 3: Select a bucket before PP fallback**
+
+In `_get_pack_sequence_parameters_for_megatron`, retain the fixed-shape PP invariant but, when `cuda_graph_pad_packed_seq` and non-empty `cuda_graph_buckets` are configured, call `_select_cuda_graph_bucket(max_seq_len_in_batch, cuda_graph_buckets, min_fill_ratio)`. If it returns a bucket, set `pad_packed_seq_to` to that bucket and set `is_cg_step=True`; otherwise retain the PP natural-length padding and set `is_cg_step=False`. Do not alter the PR5783 special path, non-PP behavior, or no-bucket PP behavior.
+
+- [ ] **Step 4: Verify and commit**
+
+Run the focused test and the existing packed-data tests, then:
+
+```bash
+ruff check nemo_rl/models/megatron/data.py tests/unit/models/megatron/test_megatron_data.py
+ruff format --check nemo_rl/models/megatron/data.py tests/unit/models/megatron/test_megatron_data.py
+git diff --check
+git add nemo_rl/models/megatron/data.py tests/unit/models/megatron/test_megatron_data.py
+git commit -s -m "fix: honor CUDA graph buckets with pipeline parallelism"
+```
+
 ## Task 2: Stage, smoke-test, and benchmark on Ptyche
 
 **Files:**
