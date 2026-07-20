@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NeMo-RL + NeMo-Gym SWE Rollout Inefficiency Report &amp; Fix Plan</title>
+<title>NeMo-RL + NeMo-Gym SWE Rollouts: Overhead Analysis &amp; Speculative Decoding Study</title>
 <style>
   body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 13px; line-height: 1.55;
          color: #1a2233; max-width: 1080px; margin: 0 auto; padding: 24px 20px 80px; background: #fbfcfe; }
@@ -23,219 +23,147 @@
   .risk-none { color: #1e7d32; font-weight: 600; }
   .risk-low { color: #8a6d00; font-weight: 600; }
   .risk-med { color: #b45309; font-weight: 600; }
-  .tag { display: inline-block; background: #2a4d8f; color: #fff; border-radius: 3px; padding: 0 6px;
-         font-size: 10.5px; margin-right: 6px; }
   .muted { color: #66718a; font-size: 11.5px; }
-  details { margin: 8px 0; }
-  summary { cursor: pointer; font-weight: 600; color: #2a4d8f; }
+  .win { background: #eef7ee; }
 </style>
 </head>
 <body>
 
-<h1>NeMo-RL + NeMo-Gym SWE Rollout: 비효율 인벤토리와 수정 계획</h1>
-<p class="muted">측정 기반: NVIDIA-NeMo/RL PR #3243 (rollout-only eval mode) + Gym PR #1825 / nv-OpenHands PR #19 (rollout timeline profiler).
-스택: Lyris GB200 1n4g, vLLM 0.25.1, Qwen3-30B-A3B-Thinking-2507, Gym latest main(fbde772), nv-OpenHands sdd/multilingual-fixes@5f018005.
-워크로드: SWE1-pivot 400 rollouts / SWE2(OpenHands agentic) SWE-bench_Verified 3 instances &times; &le;8 turns.</p>
+<h1>NeMo-RL + NeMo-Gym SWE Rollouts: Overhead Analysis &amp; Speculative Decoding Study</h1>
+<p class="muted">Measurement stack: NVIDIA-NeMo/RL PR #3243 (rollout-only eval mode) + Gym PR #1825 / nv-OpenHands PR #19 (rollout timeline profiler).
+Environment: Lyris GB200 (1 node, 4 GPUs), vLLM 0.25.1, Qwen3-30B-A3B-Thinking-2507 (TP2 &times; 2 engines), Gym latest main (fbde772),
+nv-OpenHands <code>sdd/multilingual-fixes@5f018005</code>. Workloads: SWE1-pivot (single-step, 400 rollouts) and SWE2
+(OpenHands agentic SWE-bench_Verified, 3 instances &times; &le;8 turns, temperature 1.0). All numbers in this report are direct measurements.</p>
 
-<div class="verdict"><b>요약.</b> 실측으로 확인된 비효율은 8개이며 크게 세 계열이다:
-(1) <b>GPU 시간 낭비</b> — prefix cache가 두 워크로드 모두에서 0% 히트 (라우팅/제출 패턴 문제, I1·I2),
-(2) <b>CPU측 고정비</b> — agent init 24.5% + framework overhead 17.2% (콜드 임포트, 순차 셋업 명령, lustre 이벤트 쓰기, I3–I5),
-(3) <b>파이프라인 직렬성</b> — eval이 크리티컬 패스에 있고 venv 재빌드가 반복 실험을 지배 (I7·I8).
-LLM Generation은 SWE2 wall의 45.7%로, SpecDec 이득의 Amdahl 상한은 gen 1.63&times; 기준 <b>E2E ~1.21&times;</b>.</div>
+<div class="verdict"><b>Executive summary.</b>
+(1) The two dominant non-LLM overheads in a SWE2 rollout are <b>Python cold imports from Lustre-mounted virtual environments
+(~34&nbsp;s, 23%)</b> and <b>git deep-clean surgery inside the task container (~18.5&nbsp;s, 13%)</b>. What looked like
+"agent init" and "per-turn framework overhead" both reduce to these two mechanisms — measured inter-turn framework overhead is
+essentially <b>zero</b> (LLM calls occupy 98–99% of the call-to-call span).
+(2) For speculative decoding, off-the-shelf model-free drafters (Suffix, N-gram) lose at every setting on this workload, EAGLE-3
+only wins at K=1 (+4%), and <b>DFlash at K=7–9 is the clear winner: 309–310 tok/s = 1.48&times; over the 209 tok/s baseline</b>,
+using a parallel one-pass draft and a 4K drafter context window.
+(3) Combined projection with all fixes: <b>~145&nbsp;s → ~70&nbsp;s per rollout (≈2&times;)</b>, multiplying the 1.88&times;
+already gained from the vLLM 0.20 → 0.25.1 upgrade.</div>
 
-<h2>1. 측정된 타임라인 분해 (SWE2, 3 instances, agent+eval 434s)</h2>
+<h2>1. Where a rollout spends its time (final measured ledger)</h2>
+<p>Per SWE2 rollout, agent + evaluation wall ≈ 145 s (3-instance mean, baseline configuration):</p>
 <table>
-<tr><th>구성요소</th><th class="num">시간(s)</th><th class="num">비중</th><th>비고</th></tr>
-<tr><td><b>LLM Generation</b></td><td class="num">198.4</td><td class="num"><b>45.7%</b></td><td>턴당 p50 6.6s / p90 28.4s / max 49.4s (n=18); 턴당 완성 ~2.3K tok (decode-heavy)</td></tr>
-<tr><td>Agent Init</td><td class="num">106.4</td><td class="num">24.5%</td><td>connect 14.84s(상수!) + initialize 20.6s, 인스턴스당 ~35.5s</td></tr>
-<tr><td>Framework overhead</td><td class="num">74.6</td><td class="num">17.2%</td><td>턴 사이 북키핑 ~4.1s/턴</td></tr>
-<tr><td>Final evaluation</td><td class="num">48.7</td><td class="num">11.2%</td><td>인스턴스당 ~16s, agent 종료 후 직렬</td></tr>
-<tr><td>Tool execution</td><td class="num">2.0</td><td class="num">0.5%</td><td>read/find 위주 (astropy)</td></tr>
-<tr><td>Apptainer spinups</td><td class="num">3.6</td><td class="num">0.8%</td><td>SIF 사전 pull 후에는 미미</td></tr>
+<tr><th>Component</th><th class="num">Time</th><th class="num">Share</th><th>Root cause (how it was pinned down)</th><th>Fix → expected</th></tr>
+<tr><td>LLM generation</td><td class="num">~66 s</td><td class="num">45.7%</td><td>Decode-heavy turns (~2.3K completion tokens/turn) over very long contexts (per-turn ISL p50 16K, max 29K)</td><td><b>DFlash K9: 1.48&times; measured</b> → ~45 s</td></tr>
+<tr class="win"><td><b>Python cold imports</b></td><td class="num"><b>~34 s</b></td><td class="num"><b>23%</b></td><td>The OpenHands action server (14.8 s) and the <code>run_infer</code> process (~19 s) both import Python packages from Lustre-mounted venvs inside the container. Identified via PR #19 per-call timestamps: between the first and last LLM call, LLM busy time covers 98–99% of the span — <b>inter-turn framework overhead ≈ 0</b>; the residual is process cold start, once per rollout.</td><td>Node-local venv / bytecode cache → ~8 s</td></tr>
+<tr class="win"><td><b>Git deep-clean surgery</b></td><td class="num"><b>~18.5 s</b></td><td class="num"><b>13%</b></td><td>Per-step timers inserted into <code>initialize_runtime</code>: initial setup 0.3 s + uploads 0.01 s + (entry script + cd + git reset) 2.1 s → the remainder is <code>_deep_reset_to_base_commit</code>: deleting every branch/tag/reflog/note of a 30K-commit repo on fuse-overlayfs (metadata-heavy git ops are slow over FUSE).</td><td>Fuse git ops into one command + <code>core.fsync=false</code>, or pre-clean at SIF build time, or container pooling → ~5 s</td></tr>
+<tr><td>Final evaluation</td><td class="num">~16 s</td><td class="num">11%</td><td>Grading apptainer runs serially after the agent finishes</td><td>Overlap with rollout collection (async eval)</td></tr>
+<tr><td>Setup / uploads / tools / spinups</td><td class="num">~5 s</td><td class="num">3%</td><td>Solved or negligible (tool execution itself: 0.5%)</td><td>—</td></tr>
 </table>
-<p class="muted">비교: SWE1-pivot(단일 스텝)은 정반대 레짐 — prefill:decode 22:1, decode p50 508 tok.
-SWE1에서 SpecDec 실측은 0.87&times;(역효과), SWE2 천장은 +1.21&times; — 워크로드 형태가 SpecDec 유효성을 결정.</p>
 
-<h2>2. 비효율 인벤토리 — 증거 / 코드 / 수정 / 트레이드오프</h2>
+<div class="warn"><b>Honest negative result (A/B-verified).</b> Our first-round fixes — merging init session commands (7 → 4),
+faster server alive-polling (<code>wait_fixed 2 → 0.5</code>), moving the event store to /tmp — produced
+<b>no measurable improvement</b> (connect 15.9 vs 14.8 s; init 20.9 vs 20.6 s; framework −10%). The per-command
+round-trip cost model was wrong: init is <b>work-bound</b> (git surgery), connect is <b>import-bound</b>. Only the A/B run
+exposed this; the plan was revised accordingly.</div>
 
-<h3>I1. 멀티턴 prefix cache 0% — 세션리스 클라이언트 &times; per-request round-robin</h3>
-<p><span class="tag">GPU</span><b>증거:</b> SWE2 18턴 전부 <code>cache_read_tokens=0</code>. 턴 프롬프트는 5.7K→16.2K→16.9K…로 성장(동일 대화 prefix)하며 매 턴 전체 재-prefill.
-인스턴스당 프롬프트 토큰 합계 78K/56K/154K vs 완성 16.5K/7.6K/17.3K.</p>
-<p><b>코드 (Gym <code>responses_api_models/vllm_model/app.py:525</code>):</b> 어댑터는 세션-sticky 라우팅을 구현했지만, 스티키의 키가 <i>HTTP 세션 쿠키</i>다.
-컨테이너 안 OpenHands LLM 클라이언트는 쿠키를 유지하지 않으므로 매 요청이 새 세션 → <code>len(map) % len(clients)</code>가 요청마다 증가 → <b>엄격한 엔진 교대</b> → 직전 턴의 KV가 항상 반대편 엔진에 있음 → 0% 히트.</p>
+<h2>2. Speculative decoding: full scoreboard and root causes</h2>
+
+<h3>2.1 Final scoreboard (SWE2 end-to-end, tok/s; baseline = 209)</h3>
+<table>
+<tr><th>Method</th><th class="num">K=1</th><th class="num">K=2</th><th class="num">K=3</th><th class="num">K=5</th><th class="num">K=7</th><th class="num">K=8/9</th><th class="num">K=16</th><th class="num">K=32</th></tr>
+<tr class="win"><td><b>DFlash</b> (parallel draft)</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num"><b>309</b></td><td class="num"><b>310 (K9)</b></td><td class="num">250</td><td class="num">—</td></tr>
+<tr><td>EAGLE-3</td><td class="num">218</td><td class="num">—</td><td class="num">189</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>
+<tr><td>Suffix (arctic-inference)</td><td class="num">168</td><td class="num">126</td><td class="num">100</td><td class="num">109</td><td class="num">—</td><td class="num">101 (K8)</td><td class="num">—</td><td class="num">115</td></tr>
+<tr><td>N-gram (prompt lookup)</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">99 (K4)</td><td class="num">—</td><td class="num">99 (K8)</td><td class="num">—</td><td class="num">—</td></tr>
+</table>
+<p><b>Winner: DFlash K7–K9 at 1.48&times;.</b> It is the only method that simultaneously avoids all three measured failure
+modes: it drafts in <b>one parallel pass</b> (no K sequential drafter forwards), it is <b>model-based</b> (better acceptance
+than lookup), and its drafter runs with a <b>4K context cap</b> (<code>speculative_config.max_model_len=4096</code>), which
+sidesteps the long-context collapse below. It keeps vLLM async scheduling (it is grouped with the EAGLE model types) and ran
+with FULL CUDA graphs captured at (K+1)-multiple sizes. Notably this used the generic
+<code>RedHatAI/Qwen3-30B-A3B-speculator.dflash</code> drafter — not even matched to the Thinking-2507 target — so there is
+further headroom with a matched drafter. K=16 over-drafts (250 tok/s); the optimum sits near K≈7–9.</p>
+
+<h3>2.2 Why EAGLE-3 fails at K=3: acceptance collapses with context length</h3>
+<p>Teacher-forced replay of the real SWE2 trajectories, reading vLLM speculative counters (mean acceptance length = MAL):</p>
+<table>
+<tr><th>Drafter</th><th class="num">MAL overall</th><th class="num">ctx &lt;8K</th><th class="num">8–16K</th><th class="num">16–24K</th><th class="num">&gt;24K</th><th>Per-position acceptance</th></tr>
+<tr><td>EAGLE-3 K3</td><td class="num"><b>1.39</b></td><td class="num">1.96</td><td class="num">1.31</td><td class="num">1.07</td><td class="num">1.05</td><td>[0.26, 0.09, 0.04]</td></tr>
+<tr><td>Suffix K8</td><td class="num">1.64</td><td class="num">1.54</td><td class="num">1.78</td><td class="num">1.78</td><td class="num">1.60</td><td>[0.34, 0.14, 0.06, …]</td></tr>
+<tr><td>N-gram K8</td><td class="num">3.68</td><td class="num">3.45</td><td class="num">4.00</td><td class="num">3.59</td><td class="num">3.23</td><td>[0.63, 0.47, 0.38, …]</td></tr>
+</table>
+<p>The EAGLE-3 drafter (trained on short instruction-response data) is out-of-distribution beyond ~8K context: past 16K it
+accepts almost nothing (MAL 1.05–1.07), far below the K=3 break-even (~1.6–1.8). This explains the measured 0.90&times; at
+K=3. At K=1 the position-1 acceptance (26%, MAL ≈ 1.26) clears the minimal cost of one drafter forward plus a 2-token
+verify, yielding the small +4% win. The same drafter reaches 64.8% acceptance (MAL 2.94) and 1.63&times; generation speedup
+on short-context math GRPO on this exact stack — the workload, not the stack, is decisive.</p>
+
+<h3>2.3 Why model-free drafters fail: proposal cost scales with context</h3>
+<p>Suffix and N-gram keep healthy, context-stable acceptance (table above) but still lose end-to-end at every K:
+suffix builds/walks its tree over the 16–33K-token context per request, and N-gram scans the prompt every decode step.
+Confound checks all passed: a V1-piecewise no-spec baseline measured <b>209 tok/s — identical to the V2 FULL-graph
+baseline</b> at this concurrency (BS 1–2), so CUDA-graph configuration was not the cause; replaying with the ISSTA'26
+paper's exact adaptive setting (K<sub>max</sub>=32, match-length-proportional budget) still lost (115 tok/s). The
+1.66–3.35&times; suffix speedups reported by that paper on SWE-bench come from greedy decoding, thinking-mode disabled,
+and a slow vLLM v0.12 baseline — none of which transfer to RL rollouts (temperature 1.0, Thinking policy). Their finding
+that EAGLE-3 loses on SWE-bench (0.70–1.10&times;) matches ours.</p>
+
+<h3>2.4 Prefix cache: 0% hits in both workloads</h3>
+<p>Despite <code>enable_prefix_caching=True</code>, measured cache hits are zero across 400 SWE1 rollouts and all SWE2 turns.
+Two mechanisms, one root: (a) in SWE1, all 4 generations of the same 24K-token prompt are admitted in the same scheduling
+wave, so no block is cached before its twins arrive; (b) in SWE2 multi-turn, the adapter's session-sticky routing
+(<code>vllm_model/app.py:525</code>) is keyed on an HTTP session cookie that the OpenHands client never carries, so every
+request round-robins to the other engine and the previous turn's KV is always on the wrong replica.</p>
 <pre><code>def _resolve_client(self, request: Request) -&gt; NeMoGymAsyncOpenAI:
     session_id = request.session[SESSION_ID_KEY]
     if session_id not in self._session_id_to_client:
-        # There is probably a better way to select the endpoint for this request. But this will do for now.
-        client_idx = len(self._session_id_to_client) % len(self._clients)   # ← 쿠키 없는 클라이언트는 매번 여기
-        ...</code></pre>
-<p><b>수정:</b> 스티키 키를 쿠키가 아니라 <b>요청 내용</b>에서 유도 — 대화 첫 user 메시지(또는 <code>metadata.instance_id</code>)의 해시로 클라이언트 선택.
-클라이언트 수정 불필요, 어댑터 ~10줄.</p>
-<p><b>기대 이득:</b> 턴2+ prefill의 80–90% 캐시화 → SWE2 LLM 시간 −15~25%. SWE1의 same-prompt 4-gen에도 동일 적용(I2와 결합).</p>
-<p><b>트레이드오프/정합성:</b> <span class="risk-low">낮음</span> —
-(a) <i>부하 불균형</i>: 긴 대화가 한 엔진에 몰릴 수 있음 → 해시 분산으로 평균은 균형, 최악 케이스는 엔진 수 늘리면 완화. (b) <i>correctness</i>: 없음 — 모든 엔진은 동일 가중치이며 RL refit도 전 엔진 동기 갱신;
-라우팅은 어떤 엔진이 계산하느냐만 바꿈. (c) KV 캐시 메모리 압박이 특정 엔진에 몰릴 수 있으나 APC는 LRU 축출이라 안전(성능만 영향).</p>
+        # "There is probably a better way to select the endpoint..." (upstream comment)
+        client_idx = len(self._session_id_to_client) % len(self._clients)  # cookie-less client lands here every call
+</code></pre>
+<p><b>Fix:</b> derive stickiness from request content (hash of the first user message or <code>metadata.instance_id</code>)
+— ~10 lines in the adapter, <span class="risk-none">no correctness risk</span> (all engines hold identical weights; RL refit
+updates them in lockstep). Note: prefill is only 3.6% of SWE2 LLM time at this concurrency, so this fix is about GPU
+efficiency at scale (and about giving SpecDec a cleaner decode share), not about the small-batch latency measured here.</p>
 
-<h3>I2. SWE1 same-prompt 4-gen 동시 제출 → cascade miss</h3>
-<p><span class="tag">GPU</span><b>증거:</b> SWE1 400 rollouts 전부 <code>cached_tokens=0</code> (평균 24K 토큰 프롬프트 &times;4벌 = 중복 75%).
-3중 검증: usage 0 &times;400 / 배치 dispatch spread 61–91s가 무중복 prefill 처리량과 일치 / KV 점유 27%가 무공유 footprint와 일치.</p>
-<p><b>원인:</b> 동일 프롬프트 4개가 같은 스케줄링 웨이브에 동시 admission → APC prefix 매칭은 admission 시점에 일어나므로 아무 것도 캐시에 없음 + 엔진 분산.</p>
-<p><b>수정:</b> NeMo-RL 제출 경로에서 (a) same-prompt gens를 같은 엔진으로(I1의 해시 라우팅으로 해결) + (b) 첫 gen의 prefill 완료 후 형제 3개 제출(stagger).</p>
-<p><b>기대 이득:</b> prefill 토큰 9.67M 중 최대 75% 제거 → 배치 wall ~1.8&times; 추정. 학습 config(gens/prompt 8–32)에서는 중복률 87–97%라 더 큼.</p>
-<p><b>트레이드오프:</b> <span class="risk-low">낮음~중간</span> —
-(a) stagger는 형제 gen들의 시작을 첫 prefill만큼(수 초) 지연 → 배치 초반 병렬성 소폭 감소, 순 이득은 큼.
-(b) 구현 위치가 NeMo-RL rollout 제출 루프라 async GRPO의 in-flight 로직과의 상호작용 검증 필요(제출 순서만 바꾸므로 수학적 결과 불변 — temp 샘플링 RNG 경로는 요청별 시드라 영향 없음).</p>
-
-<h3>I3. connect_to_runtime = 14.84s 상수 (action server 콜드 스타트)</h3>
-<p><span class="tag">CPU</span><b>증거:</b> 9회 이상 측정에서 14.83–14.87s로 사실상 상수. 폴링은 2s 간격이므로 낭비 &le;2s — 지배 요인은
-lustre에 마운트된 OpenHands venv에서 action_execution_server의 <b>python 임포트 ~13s</b>.</p>
-<p><b>코드 (nv-OpenHands <code>openhands/runtime/impl/local/local_runtime.py:415</code>):</b></p>
-<pre><code>@tenacity.retry(
-    wait=tenacity.wait_fixed(2),
-    stop=tenacity.stop_after_delay(300) | stop_if_should_exit(),
-    ...)
-def _wait_until_alive(self) -&gt; bool:
-    response = self.session.get(f'{self.api_url}/alive')</code></pre>
-<p><b>수정:</b> ① 잡 시작 시 OpenHands venv(또는 최소 <code>PYTHONPYCACHEPREFIX</code> 바이트코드 캐시)를 노드 로컬 /tmp로 1회 복사 후 그 경로로 서버 기동, ② <code>wait_fixed(2)→0.5</code>.</p>
-<p><b>기대 이득:</b> 14.8→4–6s (rollout당 −10s).</p>
-<p><b>트레이드오프:</b> <span class="risk-low">낮음</span> — /tmp 디스크 ~1–2GB(컨테이너 tmpfs 여유 확인됨), 복사 비용은 노드당 1회로 상각,
-복사본은 잡 시작 시점 스냅샷이라 잡 도중 코드 수정이 반영 안 됨(오히려 재현성엔 이점). correctness 영향 없음.</p>
-
-<h3>I4. initialize_runtime = 20.6s (순차 셋업 명령 ~7개)</h3>
-<p><span class="tag">CPU</span><b>증거:</b> entry 스크립트 자체는 1.77s(수동 실측)인데 initialize 단계는 20.6s.
-<code>run_infer.py:1016–1147</code>이 <code>CmdRunAction</code>을 순차로 ~7회 실행(initial setup, entry source, 복합 명령 3, cd, git reset) — 각각 HTTP+tmux+PS1 감지 왕복(~1–2s)을 지불.</p>
-<p><b>수정:</b> 독립 셋업 명령을 1–2개 복합 명령으로 병합(<code>cmd1 && echo M1 && cmd2 && echo M2 …</code> 마커 방식으로 단계 식별 유지).</p>
-<p><b>기대 이득:</b> 20.6→~10s (rollout당 −10s).</p>
-<p><b>트레이드오프:</b> <span class="risk-low">낮음</span> — (a) 단계별 <code>assert_and_raise</code>의 오류 귀속 정밀도 하락 → echo 마커+rc 체크로 보완,
-(b) 단일 명령 타임아웃이 합산 시간을 커버해야 함(<code>command_exec_timeout</code> 상향), (c) 셸 상태(cd, env)는 같은 세션이라 동일. eval 정확도 영향 없음.</p>
-
-<h3>I5. 이벤트 스토어가 lustre에 per-event 쓰기</h3>
-<p><span class="tag">CPU</span><b>증거:</b> framework overhead 4.1s/턴의 구성 요소. OpenHands 이벤트 스트림(<code>.eval_sessions</code>)이 lustre 바인드 밑에 있어
-액션/관찰 이벤트마다 lustre 파일 쓰기 발생.</p>
-<p><b>코드:</b> <code>run_infer.py:654</code> — <code>EVAL_FILE_STORE_PATH</code> 환경변수로 오버라이드 가능 (코드 수정 자체가 불필요).</p>
-<p><b>수정:</b> 컨테이너 내 /tmp로 지정 (agent 스크립트 env 1줄).</p>
-<p><b>기대 이득:</b> 턴당 −0.5~1s (측정 후 확정).</p>
-<p><b>트레이드오프:</b> <span class="risk-low">낮음</span> — 이벤트 스트림 파일이 컨테이너 종료와 함께 소멸 → 디버깅용 이벤트 히스토리 상실.
-단, 분석에 쓰는 trajectory(<code>output.jsonl</code>)와 profiler 메트릭은 별도 경로(lustre)에 보존되므로 실사용 손실 없음. resume 기능은 eval 모드에서 미사용.</p>
-
-<h3>I6. LLM 호출 2-hop + 매 턴 전체 히스토리 재직렬화</h3>
-<p><span class="tag">CPU</span><b>증거:</b> OpenHands → vllm_model 어댑터 → NeMo-RL vLLM 서버의 2-hop HTTP.
-턴 N 프롬프트 = 전체 히스토리(최대 154K tok/rollout 누적) → 턴마다 300–600KB JSON 인코드/디코드 &times;2 hop.</p>
-<p><b>수정(중기):</b> 어댑터 keep-alive 확인 + 어댑터측 대화 캐시(콘텐츠 해시 키)로 델타 전송. </p>
-<p><b>트레이드오프:</b> <span class="risk-med">중간</span> — 어댑터가 상태를 가지게 됨(메모리 성장 → LRU 축출 필요),
-캐시 키 충돌/히스토리 편집(condenser 활성 시) 시 <b>정합성 버그 가능</b> → 무효화 규칙 필수. 이득 대비 복잡도가 높아 I1–I5 이후로 후순위 권장.</p>
-
-<h3>I7. venv 재빌드가 잡마다 12–15분 (NRL_FORCE_REBUILD_VENVS=true)</h3>
-<p><span class="tag">DX</span><b>증거:</b> 모든 스모크 잡의 elapsed ~27분 중 rollout은 ~5분 — 셋업이 지배.</p>
-<p><b>Persistent venv의 오버헤드/리스크 (질문 주신 부분):</b></p>
+<h2>3. Fix plan with trade-offs and correctness analysis</h2>
 <table>
-<tr><th>리스크</th><th>내용</th><th>완화</th></tr>
-<tr><td>스테일 코드</td><td>lock/pyproject/휠 패치 변경이 기존 venv에 반영 안 됨 → <b>조용히 옛 의존성으로 실행</b> (이 클래스의 버그를 과거 실측으로 겪음: 컨테이너 py버전 바뀐 뒤 venv 재사용 → ModuleNotFoundError, uv lock 해시 스테일)</td><td>venv 디렉토리명 = hash(uv.lock)로 자동 무효화</td></tr>
-<tr><td>공유 FS 쓰기 경합</td><td>동시 잡이 같은 lustre venv에 쓰면 반쯤 설치된 상태 관측 (과거 실측: 병렬 잡 ray import 실패)</td><td>노드 로컬 /tmp에 두거나, lustre면 lockdir + 완료 마커</td></tr>
-<tr><td>노드 이동</td><td>/tmp venv는 다른 노드에서 재사용 불가</td><td>lustre 스냅샷 → 노드 로컬 rsync (1회 ~30s)</td></tr>
-<tr><td>디스크</td><td>venv ~5–8GB &times; 보존 개수</td><td>hash 기반이라 lock당 1개만 유지</td></tr>
+<tr><th>#</th><th>Fix</th><th>Layer</th><th>Expected gain</th><th>Effort</th><th>Correctness / trade-offs</th></tr>
+<tr><td>1</td><td>DFlash K≈9 as the rollout drafter</td><td>config only (<code>vllm_kwargs.speculative_config</code>)</td><td>LLM part 1.48&times; (measured)</td><td>none</td><td><span class="risk-none">Lossless</span>: rewards 0.185–0.33 across all variants (noise band). Drafter is frozen while the policy trains — monitor acceptance drift; retrain or use eagle3-online style updates if it decays.</td></tr>
+<tr><td>2</td><td>Node-local venv / <code>PYTHONPYCACHEPREFIX</code> for action server &amp; run_infer</td><td>Gym agent script + one rsync per node</td><td>−25 s/rollout</td><td>low</td><td><span class="risk-low">Low</span>: /tmp disk 1–2 GB; snapshot semantics (job-start copy) — arguably better for reproducibility.</td></tr>
+<tr><td>3</td><td>Git surgery: single fused command with <code>core.fsync=false</code>, or pre-cleaned images, or per-instance container pool</td><td>nv-OpenHands <code>_deep_reset_to_base_commit</code> / image build</td><td>−13 s/rollout</td><td>low–medium</td><td><span class="risk-low">Low</span> for fusion; pre-cleaned images shift cost to build time; container pooling must re-verify workspace isolation between generations (git reset chain).</td></tr>
+<tr><td>4</td><td>Content-hash sticky routing (prefix cache revival)</td><td>Gym vllm_model adapter (~10 lines)</td><td>GPU efficiency at scale; up to 75–97% redundant prefill removed in training configs (8–32 gens/prompt)</td><td>low</td><td><span class="risk-none">None</span>; watch load skew for very long conversations.</td></tr>
+<tr><td>5</td><td>Async final evaluation</td><td>Gym swe_agents</td><td>+11% rollout throughput</td><td>medium</td><td><span class="risk-med">Medium for training</span>: delayed rewards interact with async-GRPO trajectory age — keep within the <code>max_trajectory_age</code> budget. Pure win for benchmarking.</td></tr>
+<tr><td>6</td><td>Hash-keyed persistent worker venvs (iteration speed)</td><td>launcher env</td><td>−12–15 min per experiment job</td><td>low</td><td><span class="risk-low">Low with guard</span>: venv dir name = hash(uv.lock) auto-invalidates on lock change; avoids the stale-venv and shared-FS-race failure classes we have hit before.</td></tr>
+<tr><td>—</td><td><s>Merge init session commands; faster alive-poll; adapter delta-payloads</s></td><td>—</td><td>≈0 (A/B-refuted)</td><td>—</td><td>Retracted: round-trips and per-turn adapter overhead measured negligible.</td></tr>
 </table>
-<p><b>권장:</b> 반복 측정(스모크) = hash-키 persistent venv, 프로덕션/최종 수치 = FORCE_REBUILD 유지. 이 구분이면 correctness 리스크 없이 iteration 2&times;.</p>
+<p><b>Combined projection:</b> 145 s → ~70 s per rollout (≈2&times;), on top of the 1.88&times; from the vLLM 0.20→0.25.1
+upgrade (measured on the same workload: baseline 524 s → 279 s per 400 SWE1 rollouts).</p>
 
-<h3>I8. Final eval이 크리티컬 패스에 직렬 (11.2%)</h3>
-<p><span class="tag">Pipeline</span><b>수정:</b> 채점(별도 apptainer)을 rollout 수집과 오버랩 — eval 큐 비동기화.</p>
-<p><b>트레이드오프:</b> <span class="risk-med">중간</span> — <b>벤치마크/eval 모드에서는 순수 이득</b>이지만,
-RL 학습에서는 reward가 advantage 계산의 선행 조건이라 비동기 eval은 reward 도착을 늦춤 → async GRPO의 trajectory age와 상호작용(늦은 reward = 더 오래된 정책의 샘플 사용).
-학습 정확성 자체는 불변이나 on-policy성이 미세하게 약화 → <code>max_trajectory_age</code> 예산 안에서만 적용해야 함.</p>
+<h2>4. Methodology notes</h2>
+<ul>
+<li><b>Profiler:</b> Gym PR #1825 + nv-OpenHands PR #19 give per-phase times (create/connect/initialize runtime,
+openhands_run, final eval) and per-call LLM latency records with completion timestamps. The Chrome-trace converter
+(<code>swe_trace_converter.py</code>) renders Perfetto timelines.</li>
+<li><b>Acceptance measurement:</b> teacher-forced replay of real trajectories against a standalone engine, reading
+<code>vllm:spec_decode_num_accepted_tokens / num_drafts / per_pos</code> counters (eager mode — acceptance is
+execution-mode independent).</li>
+<li><b>Fair-baseline discipline:</b> every claimed confound (V1 vs V2 graphs, capture sizes, paper hyperparameters) was
+closed with a dedicated control run; per-token throughput (tok/s) is the primary metric because temperature-1.0
+trajectories diverge across variants.</li>
+<li><b>Timestamp gotcha:</b> trajectory event timestamps are UTC-naive while PR #19 records are UTC-aware — normalize
+before mixing or you will see fake 7-hour gaps.</li>
+</ul>
 
-<h2>3. SpecDec: LLM Generation 45.7%는 실제로 줄어드나</h2>
-<p>SWE1(prefill 22:1)에서는 <b>안 줄었다</b> — 실측 0.87&times; (투기 대상인 decode 자체가 4.4%뿐).
-SWE2는 decode-heavy라 Amdahl 상한 1.21&times;를 기대했으나, <b>실측 결과 SWE2에서도 줄지 않았다</b>:</p>
+<h2>Appendix: bugs found and fixed along the way (upstream report candidates)</h2>
 <table>
-<tr><th></th><th class="num">LLM 시간 합</th><th class="num">완성 토큰</th><th class="num">tok/s</th><th class="num">턴당 p50/p90</th><th class="num">gen 배율</th></tr>
-<tr><td>baseline (smoke10)</td><td class="num">198.4s</td><td class="num">41,378</td><td class="num">209</td><td class="num">6.6 / 28.4</td><td class="num">1.00&times;</td></tr>
-<tr><td>eagle3-K3 (2429766)</td><td class="num">282.8s</td><td class="num">53,433</td><td class="num"><b>189</b></td><td class="num">9.4 / 25.6</td><td class="num"><b>0.90&times;</b></td></tr>
-</table>
-<p class="muted">temp 1.0이라 trajectory가 달라져(turns 21 vs 18, 토큰 +29%) 총시간 비교는 무의미 — per-token 처리량(tok/s)이 1차 지표.</p>
-<p><b>해석 — 왜 decode-heavy인데도 지는가:</b> 두 요인의 결합.
-(a) <b>I1과의 커플링</b>: cache 0% 때문에 매 턴의 model_call_time에 6–25K 토큰 히스토리 재-prefill이 포함되고, 이 prefill은 SpecDec이 가속 못 함 — 즉 <b>I1(sticky 라우팅) 픽스가 SpecDec 유효성의 선행 조건</b>.
-(b) <b>장문 컨텍스트 acceptance 붕괴</b>: EAGLE3 drafter는 6–25K 컨텍스트에서 분포 밖 — standalone에서 측정한 acceptance 급감(깊은 위치 &lt;0.06)과 일치. 같은 스택·같은 drafter가 짧은 컨텍스트 math GRPO에서 1.63&times;를 내는 것과 대비.
-따라서 순서는: I1 픽스 → decode 비중 회복 → SpecDec 재평가(그때도 장문 acceptance가 남는 한계면 length-aware/drafter 장문 재학습 트랙).</p>
-
-<h3>3.1 근본 원인 실측: acceptance 붕괴 (teacher-forced replay, 실제 SWE2 턴 33개)</h3>
-<p>실제 SWE2 trajectory를 standalone replay로 재생하며 vLLM spec 카운터로 acceptance를 직접 측정 (eager V1 — acceptance는 실행 모드와 무관하게 유효, tok/s는 상대 비교만).</p>
-<table>
-<tr><th>drafter</th><th class="num">MAL 전체</th><th class="num">ctx &lt;8K</th><th class="num">8–16K</th><th class="num">16–24K</th><th class="num">&gt;24K</th><th>per-pos accept</th><th class="num">eager tok/s</th></tr>
-<tr><td>EAGLE3 K3</td><td class="num"><b>1.39</b></td><td class="num">1.96</td><td class="num">1.31</td><td class="num">1.07</td><td class="num">1.05</td><td>[0.26, 0.09, 0.04]</td><td class="num">15</td></tr>
-<tr><td>Suffix K8</td><td class="num">1.64</td><td class="num">1.54</td><td class="num">1.78</td><td class="num">1.78</td><td class="num">1.60</td><td>[0.34, 0.14, 0.06, …]</td><td class="num"><b>23</b></td></tr>
-<tr><td>N-gram K8 <span class="muted">(18/33턴, walltime)</span></td><td class="num"><b>3.68</b></td><td class="num">3.45</td><td class="num">4.00</td><td class="num">3.59</td><td class="num">3.23</td><td>[0.63, 0.47, 0.38, …]</td><td class="num">18</td></tr>
-<tr><td colspan="8" class="muted">draft 커버리지(수락 토큰/전체 생성): eagle3 28.2% · suffix 37.4% · ngram 17.5% — ngram은 고정밀 저커버리지, suffix는 균형형</td></tr>
-</table>
-<p><b>판정.</b> (1) <b>acceptance가 범인 확정</b>: EAGLE3는 8K 컨텍스트를 넘으면 MAL이 1.31→1.05로 붕괴 — drafter 학습 분포(짧은 지시-응답) 밖. K3 손익분기(MAL≈1.6–1.8)에 못 미쳐 NemoGym 실측 0.90&times;가 설명된다.
-(2) <b>모델-프리 drafter는 붕괴하지 않는다</b>: suffix는 컨텍스트 길이에 평평(1.5–1.8), n-gram은 오히려 상승(코드/tool 출력 반복이 매칭 소스). n-gram은 selective drafting(매칭 있을 때만 draft)이라 정밀도가 높은 대신 커버리지가 낮고(생성 토큰의 ~17%), suffix는 커버리지 37%로 균형형 — eager 처리량은 suffix가 최고(+53% vs eagle3).
-(3) <b>E2E 실측 결과 (스코어보드 완성)</b>: NemoGym 경로에서 suffix(arctic post-sync 주입)와 ngram(내장)을 실측 —
-<b>baseline 209 &gt; eagle3 189 (0.90&times;) &gt; suffix 101 (0.48&times;) &gt; ngram 99 (0.47&times;) tok/s</b>.</p>
-<p><b>저-K 스윕 (acceptance가 낮으면 최적 K가 내려간다는 가설 검증):</b>
-<b>eagle3 K=1이 218 tok/s (1.04&times;)로 baseline을 넘는 첫 구성</b> — 위치1 수락률 26%(MAL≈1.26)로도 K1의 최소 비용(드래프터 1회 forward + 2토큰 verify)이면 순이득. 턴 p50 latency 6.6→4.4s.
-반면 suffix K3/K5 = 100/109, ngram K4 = 99 tok/s — K와 무관하게 동일한 손해로, 모델-프리 실패가 proposal 비용(컨텍스트 비례) 때문이라는 진단의 교차 확인.</p>
-<p><b>CUDA graph 교란 검증과 suffix K축 완결.</b> suffix/ngram은 arctic 요구로 V1 러너에서 돌아 PIECEWISE(mixed) 3-shape만 캡처됐다 — 교란 가능성을 확인하기 위해 <b>V1-piecewise baseline을 별도 실측: 209 tok/s로 V2 baseline과 동일</b> (BS 1–2에서는 FULL 그래프 이득이 미미). 즉 그래프 설정은 교란이 아니었고 suffix의 패배는 진짜다.
-suffix 전체 K축: K1 168 / K2 126 / K3 100 / K5 109 / K8 101 / <b>K32(논문 적응형 세팅) 115</b> — 모든 K에서 baseline 미달.
-ISSTA26 논문(2604.26469)이 SWE-bench에서 suffix 1.66–3.35&times;를 보고한 것과의 차이는 설정이 아니라 <b>조건</b>: greedy(temp 0)·thinking 비활성·vLLM v0.12 베이스라인 — RL rollout(temp 1.0, Thinking 정책)에는 전이 불가. 단 같은 논문의 "eagle3는 SWE-bench에서 진다"(0.70–1.10&times;)는 우리 실측과 일치.</p>
-
-<h3>3.2 DFlash: 병렬 드래프팅이 최종 우승 — 250 tok/s (1.20&times;)</h3>
-<p>DFlash(vLLM 0.25 네이티브, <code>parallel_drafting=True</code>)는 측정된 3대 실패 요인을 동시에 회피한다:
-<b>1-pass 병렬 draft</b>(eagle3의 K회 순차 drafter 비용 제거), <b>모델 기반 acceptance</b>(lookup보다 우수),
-<b>drafter 4K 컨텍스트 캡</b>(<code>speculative_config.max_model_len=4096</code> — 장문 OOD 붕괴 우회).
-async 스케줄링 유지(EagleModelTypes 소속) + FULL 그래프((K+1)-배수 캡처) + flashinfer autotune off 레시피로,
-<b>base-A3B drafter로도 250 tok/s (baseline 209의 1.20&times;)</b> — Thinking-2507 매칭 drafter가 아님에도 세션 최고 기록.
-K-스윕 결과 <b>K7/K9 = 309/310 tok/s (1.48&times;)</b> — K16은 과잉 드래프팅이었고 최적은 K≈7–9.
-Instruct-2507 dflash drafter로 추가 개선 여지가 있다.</p>
-
-<h3>5. 최종 오버헤드 원장 (rollout당 ~145s, 전부 실측)</h3>
-<table>
-<tr><th>성분</th><th class="num">시간</th><th class="num">비중</th><th>근본 원인 (실측 방법)</th><th>픽스 → 기대치</th></tr>
-<tr><td>LLM generation</td><td class="num">~66s</td><td class="num">45.7%</td><td>—</td><td><b>DFlash K9: 1.48&times; 실측</b> → ~45s</td></tr>
-<tr><td><b>Python 콜드 임포트</b></td><td class="num">~34s</td><td class="num">23%</td><td>lustre 바인드 venv에서 action server(14.8s) + run_infer(~19s) 임포트. PR#19 타임스탬프로 판정: <b>턴 사이 framework ≈ 0</b> (LLM 호출이 구간의 98–99%), 잔여는 전부 프로세스 기동</td><td>I3b venv 노드 로컬화 → ~8s</td></tr>
-<tr><td><b>git 심층 정리</b></td><td class="num">~18.5s</td><td class="num">13%</td><td>INIT_T 마커: setup 0.3 + 업로드 0.01 + entry/cd/reset 2.1s → 잔여 = <code>_deep_reset_to_base_commit</code> (3만 커밋 repo ref/reflog 수술 on fuse-overlayfs)</td><td>git 연산 융합·fsync off / SIF에 사전 수술 / 컨테이너 풀 → ~5s</td></tr>
-<tr><td>Final eval</td><td class="num">~16s</td><td class="num">11%</td><td>채점 apptainer 직렬</td><td>비동기 오버랩</td></tr>
-<tr><td>셋업/업로드/툴/스핀업</td><td class="num">~5s</td><td class="num">3%</td><td>해결/미미</td><td>—</td></tr>
-</table>
-<p><b>결합 전망: rollout당 145s → ~70s (≈2&times;)</b> = DFlash-K9(1.48&times; LLM) + venv 로컬화(−25s) + git 픽스(−13s) + eval 비동기(−16s). vLLM 업그레이드로 이미 얻은 1.88&times;에 곱해지는 값.</p>
-<p class="muted">계측 방법론 주의: 이벤트 타임스탬프는 UTC-naive, PR#19 레코드는 UTC-aware — 정규화 없이 섞으면 7시간(25200s) 가짜 gap이 생긴다 (팀원 전달 사항).</p>
-<p><b>최종 스코어보드 (SWE2 E2E tok/s)</b>: <b>DFlash-K16 250</b> &gt; eagle3-K1 218 &gt; baseline 209 = V1-baseline 209 &gt; eagle3-K3 189 &gt; suffix-K1 168 &gt; suffix-K32 115 &gt; suffix K2–K8 100–126 &gt; ngram 99.</p>
-
-<h3>2.1 (후속) Init/Framework 패치 A/B — 정직한 부정 결과와 계획 수정</h3>
-<p>별도 worktree에서 I3a(wait_fixed 0.5)+I4(init 명령 병합)+I5(이벤트 스토어 /tmp)를 구현·실측한 결과:
-connect 15.9s(기준 14.8, 노이즈), init 20.9s(기준 20.6, 변화 없음), framework 3.67s/턴(기준 ~4.1, −10%).
-<b>결론: I4는 철회</b> — init은 왕복이 아니라 <b>작업</b>(3만 커밋 astropy 레포의 git 정리 + entry + 업로드)이 지배하고,
-connect는 폴링이 아니라 <b>action server의 lustre 임포트(~14s)</b>가 지배한다. 유효한 후속: I3b(서버 venv/pyc 노드 로컬화, −10s 기대)와
-인스턴스 단위 컨테이너 풀(구조적 상각). 계측 기반 계획이라도 <b>구성 요소의 비용 모델(왕복 vs 작업)은 A/B로만 확정된다</b>는 교훈.</p>
-<p>
-모델-프리 drafter의 replay-산술 천장(suffix 1.60&times;)은 실현되지 않았다: <b>proposal 비용이 컨텍스트 길이에 비례</b>(suffix는 요청마다 16–33K 토큰 트리 구축, ngram은 매 decode 스텝 프롬프트 스캔)해서 장문에서 스텝 비용을 지배한다. 결론: <b>기성 SpecDec 3종 모두 SWE2 멀티턴에서 역효과</b> — 모델 drafter는 acceptance(분포)로, 모델-프리는 proposal 비용으로, 같은 뿌리(장문 컨텍스트)에서 죽는다.
-유효 경로는 ① eagle3-online(RL rollout 데이터로 drafter 장문 재학습), ② DAS식 증분 suffix tree(요청별 재구축 제거 — 우리 실측이 그 설계 필요성을 재확인).</p>
-<p class="muted">부가 발견(upstream): eagle3 + V2 러너 + 장문(&gt;24K) 프롬프트 조합에서 CUDA illegal memory access (vLLM 0.25.0 patched wheel, eager/V1은 정상) — ledger 추가 대상.</p>
-<p></p>
-
-<h2>4. 통합 로드맵 (효과 &times; 난이도 &times; 리스크)</h2>
-<table>
-<tr><th>#</th><th>수정</th><th>레이어</th><th>기대 이득</th><th>난이도</th><th>정합성 리스크</th></tr>
-<tr><td>1</td><td>내용-해시 sticky 라우팅 (I1)</td><td>Gym 어댑터 ~10줄</td><td>SWE2 LLM −15~25%</td><td>낮음</td><td class="risk-none">없음</td></tr>
-<tr><td>2</td><td>same-prompt stagger (I2)</td><td>NeMo-RL 제출 루프</td><td>SWE1류 배치 ~1.8&times;</td><td>중간</td><td class="risk-low">낮음(async GRPO 검증)</td></tr>
-<tr><td>3</td><td>action server 노드 로컬 기동 (I3)</td><td>Gym 셋업/agent 스크립트</td><td>rollout −10s</td><td>낮음</td><td class="risk-none">없음</td></tr>
-<tr><td>4</td><td>init 명령 병합 (I4)</td><td>nv-OpenHands run_infer</td><td>rollout −10s</td><td>낮음</td><td class="risk-low">오류 귀속만</td></tr>
-<tr><td>5</td><td>이벤트 스토어 /tmp (I5)</td><td>env 1줄</td><td>턴당 −0.5~1s</td><td>최소</td><td class="risk-low">디버그 로그 소멸</td></tr>
-<tr><td>6</td><td>hash-키 persistent venv (I7)</td><td>런처 env</td><td>iteration 2&times;</td><td>낮음</td><td class="risk-low">스테일 가드 필수</td></tr>
-<tr><td>7</td><td>eval 비동기화 (I8)</td><td>Gym swe_agents</td><td>처리량 +11%</td><td>중간</td><td class="risk-med">학습 시 age 예산 내</td></tr>
-<tr><td>8</td><td>어댑터 대화 캐시 (I6)</td><td>Gym 어댑터</td><td>턴당 −1~2s</td><td>높음</td><td class="risk-med">무효화 규칙 필요</td></tr>
-</table>
-<p><b>결합 추정 (SWE2 rollout당 agent 단계 ~130s):</b> 1+3+4+5 적용 시 ~130→~85s (≈1.5&times;),
-SpecDec가 천장(1.2&times;)대로 실현되면 ~70s (≈1.85&times;). GPU 시간 관점에서는 1번(캐시 복원)이 가장 크고 스케일 불변.</p>
-
-<h2>부록: 이번 검증에서 수정한 버그 체인 (upstream 리포트 대상)</h2>
-<table>
-<tr><th>#</th><th>버그</th><th>위치</th><th>증상</th></tr>
-<tr><td>B1</td><td><b>jq amd64 하드코딩</b></td><td>Gym <code>setup_scripts/openhands.sh:55</code> (<code>jq-linux-amd64</code>)</td><td>aarch64에서 Exec format error → entry exit 1 → tmux pane 사망 → 전 명령 600s 타임아웃 (aarch64 전멸의 근본 원인)</td></tr>
-<tr><td>B2</td><td>openai 버전 주입 충돌</td><td>Gym <code>global_config.py:689</code> (부모 venv 버전 그대로 주입)</td><td>nemo-gym pin(&le;2.7.2)과 unsatisfiable → 서브프로세스 venv 전멸</td></tr>
-<tr><td>B3</td><td>tool None-필드 dump/validate 비대칭</td><td>openai&le;2.7.2 + <code>SWEBenchVerifyResponse</code></td><td>430 validation errors (strict/defer_loading None)</td></tr>
-<tr><td>B4</td><td>음수 spinup timestamp</td><td>PR #1825 계측 (<code>generation_apptainer_spinup_time</code>)</td><td>미설정 시 -1.78e9 기록</td></tr>
-<tr><td>B5</td><td>공식 arm64 이미지에 OpenHands 레이어 부재</td><td><code>swebench/sweb.eval.arm64.*</code></td><td>/swe_util 없음 → 합성 바인드(NRL_SWE_UTIL_SYNTH)로 우회</td></tr>
+<tr><th>#</th><th>Bug</th><th>Location</th><th>Symptom</th></tr>
+<tr><td>B1</td><td><b>jq binary hardcoded to amd64</b></td><td>Gym <code>setup_scripts/openhands.sh:55</code></td><td>Exec format error on aarch64 → entry script exits 1 → tmux pane dies → every agent command times out at 600 s. Root cause of the "SWE2 impossible on GB200" myth; fixed with jq-linux-arm64.</td></tr>
+<tr><td>B2</td><td>openai version injection unsatisfiable</td><td>Gym <code>global_config.py:689</code> (parent venv version injected into child venvs)</td><td>nemo-gym pins <code>openai&lt;=2.7.2</code>; parent carries 2.44 via uv override → all subprocess venvs fail to resolve. Clamped at the injection point.</td></tr>
+<tr><td>B3</td><td>Tool-schema None-field dump/validate asymmetry</td><td>openai&le;2.7.2 + <code>SWEBenchVerifyResponse</code></td><td>430 pydantic validation errors (strict / defer_loading = None); normalized before validation (keep required <code>strict</code>, drop other None keys).</td></tr>
+<tr><td>B4</td><td>Negative spinup timestamp</td><td>PR #1825 metric <code>generation_apptainer_spinup_time</code></td><td>Records −1.78e9 (epoch subtraction against unset start) when spinup did not complete.</td></tr>
+<tr><td>B5</td><td>Official arm64 SWE-bench images lack the OpenHands layer</td><td><code>swebench/sweb.eval.arm64.*</code></td><td>No <code>/swe_util</code>; solved with a per-instance synthetic writable bind (<code>NRL_SWE_UTIL_SYNTH</code>). Also: Gym's container resolver requires local SIF paths (no docker:// pull), and apptainer-in-enroot needs a <code>/dev/fuse</code> bind.</td></tr>
+<tr><td>B6</td><td>eagle3 + V2 runner + &gt;24K prompt crash</td><td>vLLM 0.25.0 (patched wheel)</td><td>CUDA illegal memory access during replay; eager/V1 unaffected.</td></tr>
 </table>
 
-<p class="muted">생성: 2026-07-19 · worktree pr3243-nemogym-swe-specdec · 데이터: swe2_smoke10(2428815) + SWE1 매트릭스(2408776, 2409247-49, 2409491-92, 2423996-98)</p>
+<p class="muted">Generated 2026-07-19 · worktree pr3243-nemogym-swe-specdec · data: SWE1 matrix (jobs 2408776, 2409247–49, 2409491–92, 2423996–98),
+SWE2 smokes and sweeps (2428815, 2429766, 2430546/584/812–815/895–896/935/939, 2431308/546/547), acceptance replay (2430291),
+init timing (2431555), opt A/B (2431360).</p>
 </body>
 </html>
