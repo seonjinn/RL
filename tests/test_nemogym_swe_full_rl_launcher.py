@@ -17,6 +17,15 @@ from experiments.nemogym_swe_full_rl.gym_openhands_tmux import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = REPO_ROOT / "experiments" / "nemogym_swe_full_rl" / "launch_lyris.py"
 GRPO = REPO_ROOT / "nemo_rl" / "algorithms" / "grpo.py"
+SWE_ENTRY_SMOKE = (
+    REPO_ROOT / "experiments" / "nemogym_swe_full_rl" / "verify_openhands_swe_entry.py"
+)
+SWE_ENTRY_SMOKE_LYRIS = (
+    REPO_ROOT
+    / "experiments"
+    / "nemogym_swe_full_rl"
+    / "verify_openhands_swe_entry_lyris.sh"
+)
 
 
 class DryRunPayload(TypedDict):
@@ -313,3 +322,17 @@ def test_submission_sanitizes_host_python_environment_before_ray_starts() -> Non
         "_CE_CONDA",
         "VIRTUAL_ENV",
     ]
+
+
+def test_swe_entry_smoke_compares_direct_and_openhands_bash_execution() -> None:
+    python_source = SWE_ENTRY_SMOKE.read_text()
+    shell_source = SWE_ENTRY_SMOKE_LYRIS.read_text()
+
+    assert "direct_source_elapsed_s=" in python_source
+    assert "BashSession" in python_source
+    assert "openhands_source_elapsed_s=" in python_source
+    assert "PROMPT_COMMAND" in python_source
+    assert "instance_swe_entry.sh" in python_source
+    assert "#SBATCH --segment=1" in shell_source
+    assert "--writable-tmpfs" in shell_source
+    assert "--no-mount home,tmp,bind-paths" in shell_source
