@@ -1,0 +1,8 @@
+# SWE2 smoke for Qwen3-235B-A22B-Thinking-2507 on GB200: single TP4 engine.
+defaults: "grpo_qwen3_30ba3b_thinking_swe2_smoke.yaml"
+
+policy:
+  model_name: Qwen/Qwen3-235B-A22B-Thinking-2507
+  generation:
+    vllm_cfg:
+      tensor_parallel_size: 4
