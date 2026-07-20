@@ -83,20 +83,23 @@ def test_pr5672_qwen235_packed_attention_recipe_matches_no_cg_baseline():
     OmegaConf.resolve(no_cg_config)
     OmegaConf.resolve(attention_config)
 
+    expected_packing = {
+        "enabled": True,
+        "train_mb_tokens": 8192,
+        "logprob_mb_tokens": 8192,
+        "algorithm": "modified_first_fit_decreasing",
+        "sequence_length_round": 64,
+    }
     for config in (no_cg_config, attention_config):
         assert config.cluster.num_nodes == 16
         assert config.cluster.gpus_per_node == 4
         assert config.cluster.segment_size == 16
         assert config.policy.megatron_cfg.moe_router_dtype == "fp64"
         assert config.checkpointing.enabled is False
+        for field, expected_value in expected_packing.items():
+            assert config.policy.sequence_packing[field] == expected_value
 
-    for field in (
-        "enabled",
-        "train_mb_tokens",
-        "logprob_mb_tokens",
-        "algorithm",
-        "sequence_length_round",
-    ):
+    for field in expected_packing:
         assert (
             no_cg_config.policy.sequence_packing[field]
             == attention_config.policy.sequence_packing[field]

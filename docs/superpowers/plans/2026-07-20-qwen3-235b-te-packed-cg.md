@@ -103,7 +103,7 @@ CHECKPOINT_DIR="${CHECKPOINT_ROOT}/qwen3-235b-a22b-adapter-20260720"
 CHECKPOINT_READY_FILE="${CHECKPOINT_DIR}/Qwen/Qwen3-235B-A22B/iter_0000000/run_config.yaml"
 ```
 
-Require the ready file before attention but allow no-CG to create it. Check the HF token, worktree, and config. Export direct-MCore-first `PYTHONPATH`, `NRL_MEGATRON_CHECKPOINT_DIR`, and HF caches. Override only steps, validation period, telemetry, log directory, and W&B name. Run `sbatch --test-only` first; require `SUBMIT=1` for `q235` submission. Do not create dependencies or enable checkpoint saves.
+Require the ready file before attention but allow no-CG to create it. Check the HF token, worktree, and config. Export direct-MCore-first `PYTHONPATH`, `NRL_MEGATRON_CHECKPOINT_DIR`, and HF caches. Override only steps, validation period, telemetry, log directory, and W&B name. Use `--time=04:00:00`, which fits Ptyche batch's five-hour maximum for the 20-step pair. Run `sbatch --test-only` first; require `SUBMIT=1` for `q235` submission. Do not create dependencies or enable checkpoint saves.
 
 - [ ] **Step 5: Verify and commit**
 
@@ -167,4 +167,3 @@ Record commit/MCore SHA, container, topology, router dtype, packing, Nmax, bucke
 - Scope: no full-layer/MoE graph, MXFP8, async, 16n8g/32n4g, or 235B accuracy claim.
 - Reproducibility: resolved config test enforces identical workload semantics outside the graph settings.
 - Platform: locked tests and Slurm work happen only on Ptyche after Kerberos preflight.
-

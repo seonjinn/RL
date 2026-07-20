@@ -93,7 +93,7 @@ sbatch --test-only \
   --exclusive \
   --account="${ACCOUNT}" \
   --partition="${PARTITION}" \
-  --time=08:00:00 \
+  --time=04:00:00 \
   --job-name="${ACCOUNT}-q235.${CONDITION}" \
   "${WORKTREE}/ray.sub"
 
@@ -113,7 +113,7 @@ if [[ "${SUBMIT:-0}" == "1" ]]; then
     --exclusive \
     --account="${ACCOUNT}" \
     --partition="${PARTITION}" \
-    --time=08:00:00 \
+    --time=04:00:00 \
     --job-name="${ACCOUNT}-q235.${CONDITION}" \
     "${WORKTREE}/ray.sub"
 fi
