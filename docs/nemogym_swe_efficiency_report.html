@@ -175,7 +175,24 @@ SWE2는 decode-heavy라 Amdahl 상한 1.21&times;를 기대했으나, <b>실측 
 반면 suffix K3/K5 = 100/109, ngram K4 = 99 tok/s — K와 무관하게 동일한 손해로, 모델-프리 실패가 proposal 비용(컨텍스트 비례) 때문이라는 진단의 교차 확인.</p>
 <p><b>CUDA graph 교란 검증과 suffix K축 완결.</b> suffix/ngram은 arctic 요구로 V1 러너에서 돌아 PIECEWISE(mixed) 3-shape만 캡처됐다 — 교란 가능성을 확인하기 위해 <b>V1-piecewise baseline을 별도 실측: 209 tok/s로 V2 baseline과 동일</b> (BS 1–2에서는 FULL 그래프 이득이 미미). 즉 그래프 설정은 교란이 아니었고 suffix의 패배는 진짜다.
 suffix 전체 K축: K1 168 / K2 126 / K3 100 / K5 109 / K8 101 / <b>K32(논문 적응형 세팅) 115</b> — 모든 K에서 baseline 미달.
-ISSTA26 논문(2604.26469)이 SWE-bench에서 suffix 1.66–3.35&times;를 보고한 것과의 차이는 설정이 아니라 <b>조건</b>: greedy(temp 0)·thinking 비활성·vLLM v0.12 베이스라인 — RL rollout(temp 1.0, Thinking 정책)에는 전이 불가. 단 같은 논문의 "eagle3는 SWE-bench에서 진다"(0.70–1.10&times;)는 우리 실측과 일치.
+ISSTA26 논문(2604.26469)이 SWE-bench에서 suffix 1.66–3.35&times;를 보고한 것과의 차이는 설정이 아니라 <b>조건</b>: greedy(temp 0)·thinking 비활성·vLLM v0.12 베이스라인 — RL rollout(temp 1.0, Thinking 정책)에는 전이 불가. 단 같은 논문의 "eagle3는 SWE-bench에서 진다"(0.70–1.10&times;)는 우리 실측과 일치.</p>
+
+<h3>3.2 DFlash: 병렬 드래프팅이 최종 우승 — 250 tok/s (1.20&times;)</h3>
+<p>DFlash(vLLM 0.25 네이티브, <code>parallel_drafting=True</code>)는 측정된 3대 실패 요인을 동시에 회피한다:
+<b>1-pass 병렬 draft</b>(eagle3의 K회 순차 drafter 비용 제거), <b>모델 기반 acceptance</b>(lookup보다 우수),
+<b>drafter 4K 컨텍스트 캡</b>(<code>speculative_config.max_model_len=4096</code> — 장문 OOD 붕괴 우회).
+async 스케줄링 유지(EagleModelTypes 소속) + FULL 그래프((K+1)-배수 캡처) + flashinfer autotune off 레시피로,
+<b>base-A3B drafter로도 250 tok/s (baseline 209의 1.20&times;)</b> — Thinking-2507 매칭 drafter가 아님에도 세션 최고 기록.
+Instruct-2507 dflash drafter로 추가 개선 여지가 있다.</p>
+<p><b>최종 스코어보드 (SWE2 E2E tok/s)</b>: <b>DFlash-K16 250</b> &gt; eagle3-K1 218 &gt; baseline 209 = V1-baseline 209 &gt; eagle3-K3 189 &gt; suffix-K1 168 &gt; suffix-K32 115 &gt; suffix K2–K8 100–126 &gt; ngram 99.</p>
+
+<h3>2.1 (후속) Init/Framework 패치 A/B — 정직한 부정 결과와 계획 수정</h3>
+<p>별도 worktree에서 I3a(wait_fixed 0.5)+I4(init 명령 병합)+I5(이벤트 스토어 /tmp)를 구현·실측한 결과:
+connect 15.9s(기준 14.8, 노이즈), init 20.9s(기준 20.6, 변화 없음), framework 3.67s/턴(기준 ~4.1, −10%).
+<b>결론: I4는 철회</b> — init은 왕복이 아니라 <b>작업</b>(3만 커밋 astropy 레포의 git 정리 + entry + 업로드)이 지배하고,
+connect는 폴링이 아니라 <b>action server의 lustre 임포트(~14s)</b>가 지배한다. 유효한 후속: I3b(서버 venv/pyc 노드 로컬화, −10s 기대)와
+인스턴스 단위 컨테이너 풀(구조적 상각). 계측 기반 계획이라도 <b>구성 요소의 비용 모델(왕복 vs 작업)은 A/B로만 확정된다</b>는 교훈.</p>
+<p>
 모델-프리 drafter의 replay-산술 천장(suffix 1.60&times;)은 실현되지 않았다: <b>proposal 비용이 컨텍스트 길이에 비례</b>(suffix는 요청마다 16–33K 토큰 트리 구축, ngram은 매 decode 스텝 프롬프트 스캔)해서 장문에서 스텝 비용을 지배한다. 결론: <b>기성 SpecDec 3종 모두 SWE2 멀티턴에서 역효과</b> — 모델 drafter는 acceptance(분포)로, 모델-프리는 proposal 비용으로, 같은 뿌리(장문 컨텍스트)에서 죽는다.
 유효 경로는 ① eagle3-online(RL rollout 데이터로 drafter 장문 재학습), ② DAS식 증분 suffix tree(요청별 재구축 제거 — 우리 실측이 그 설계 필요성을 재확인).</p>
 <p class="muted">부가 발견(upstream): eagle3 + V2 러너 + 장문(&gt;24K) 프롬프트 조합에서 CUDA illegal memory access (vLLM 0.25.0 patched wheel, eager/V1은 정상) — ledger 추가 대상.</p>
