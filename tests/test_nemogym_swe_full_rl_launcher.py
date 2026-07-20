@@ -11,6 +11,7 @@ import pytest
 
 from experiments.nemogym_swe_full_rl.gym_openhands_tmux import (
     patch_gym_openhands_jq_source,
+    patch_gym_openhands_response_tool_source,
     patch_gym_openhands_tmux_source,
 )
 
@@ -53,6 +54,13 @@ BUGGY_GYM_JQ_SOURCE = """
             "export PATH=/openhands_setup/miniforge3/bin:$PATH && "
             "cp /openhands_setup/miniforge3/bin/jq /usr/local/bin/jq 2>/dev/null || true && "
         )
+"""
+
+BUGGY_GYM_RESPONSE_TOOL_SOURCE = """
+            responses_create_params = body.responses_create_params.model_dump() | {
+                "input": json.loads(metadata["input"]),
+                "tools": [t.model_dump() for t in response.tools] if response.tools else [],
+            }
 """
 
 
@@ -134,6 +142,24 @@ def test_gym_openhands_jq_patch_is_idempotent() -> None:
 def test_gym_openhands_jq_patch_rejects_unknown_upstream_source() -> None:
     with pytest.raises(ValueError, match="expected Gym jq setup block"):
         patch_gym_openhands_jq_source("agent_main_cmd = 'unknown upstream'\n")
+
+
+def test_gym_openhands_response_tool_patch_omits_invalid_null_fields() -> None:
+    patched = patch_gym_openhands_response_tool_source(BUGGY_GYM_RESPONSE_TOOL_SOURCE)
+
+    assert "t.model_dump(exclude_none=True)" in patched
+    assert "[t.model_dump() for t in response.tools]" not in patched
+
+
+def test_gym_openhands_response_tool_patch_is_idempotent() -> None:
+    patched = patch_gym_openhands_response_tool_source(BUGGY_GYM_RESPONSE_TOOL_SOURCE)
+
+    assert patch_gym_openhands_response_tool_source(patched) == patched
+
+
+def test_gym_openhands_response_tool_patch_rejects_unknown_upstream_source() -> None:
+    with pytest.raises(ValueError, match="expected Gym response tool serialization"):
+        patch_gym_openhands_response_tool_source("responses_create_params = {}\n")
 
 
 def test_baseline_runs_full_async_swe_grpo_training() -> None:

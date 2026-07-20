@@ -26,6 +26,8 @@ FIXED_JQ_BLOCK = '''            "mkdir -p /tmp/nemorl-native-tools && "
             "ln -sf /openhands_setup/miniforge3/bin/jq /tmp/nemorl-native-tools/jq; "
             "else echo 'No runnable jq found for OpenHands SWE setup' >&2; exit 126; fi && "
             "export PATH=/tmp/nemorl-native-tools:$PATH && "'''
+LEGACY_RESPONSE_TOOL_SERIALIZATION = """                "tools": [t.model_dump() for t in response.tools] if response.tools else [],"""
+FIXED_RESPONSE_TOOL_SERIALIZATION = """                "tools": [t.model_dump(exclude_none=True) for t in response.tools] if response.tools else [],"""
 
 
 def patch_gym_openhands_tmux_source(source: str) -> str:
@@ -56,9 +58,27 @@ def patch_gym_openhands_jq_source(source: str) -> str:
     )
 
 
+def patch_gym_openhands_response_tool_source(source: str) -> str:
+    """Omit optional null tool fields rejected by OpenAI Responses types."""
+    legacy_count = source.count(LEGACY_RESPONSE_TOOL_SERIALIZATION)
+    fixed_count = source.count(FIXED_RESPONSE_TOOL_SERIALIZATION)
+    if legacy_count == 1 and fixed_count == 0:
+        return source.replace(
+            LEGACY_RESPONSE_TOOL_SERIALIZATION,
+            FIXED_RESPONSE_TOOL_SERIALIZATION,
+        )
+    if legacy_count == 0 and fixed_count == 1:
+        return source
+    raise ValueError(
+        "expected Gym response tool serialization exactly once; "
+        f"found legacy={legacy_count}, fixed={fixed_count}"
+    )
+
+
 def patch_gym_openhands_source(source: str) -> str:
     patched = patch_gym_openhands_tmux_source(source)
-    return patch_gym_openhands_jq_source(patched)
+    patched = patch_gym_openhands_jq_source(patched)
+    return patch_gym_openhands_response_tool_source(patched)
 
 
 def apply_gym_openhands_runtime_fix(repo_dir: Path) -> tuple[Path, bool, str]:
