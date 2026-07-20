@@ -144,10 +144,11 @@ def test_gym_openhands_jq_patch_rejects_unknown_upstream_source() -> None:
         patch_gym_openhands_jq_source("agent_main_cmd = 'unknown upstream'\n")
 
 
-def test_gym_openhands_response_tool_patch_omits_invalid_null_fields() -> None:
+def test_gym_openhands_response_tool_patch_normalizes_openai_function_tools() -> None:
     patched = patch_gym_openhands_response_tool_source(BUGGY_GYM_RESPONSE_TOOL_SOURCE)
 
     assert "t.model_dump(exclude_none=True)" in patched
+    assert '{"strict": bool(t.strict)} if t.type == "function" else {}' in patched
     assert "[t.model_dump() for t in response.tools]" not in patched
 
 

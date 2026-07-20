@@ -27,7 +27,13 @@ FIXED_JQ_BLOCK = '''            "mkdir -p /tmp/nemorl-native-tools && "
             "else echo 'No runnable jq found for OpenHands SWE setup' >&2; exit 126; fi && "
             "export PATH=/tmp/nemorl-native-tools:$PATH && "'''
 LEGACY_RESPONSE_TOOL_SERIALIZATION = """                "tools": [t.model_dump() for t in response.tools] if response.tools else [],"""
-FIXED_RESPONSE_TOOL_SERIALIZATION = """                "tools": [t.model_dump(exclude_none=True) for t in response.tools] if response.tools else [],"""
+FIXED_RESPONSE_TOOL_SERIALIZATION = """                "tools": [
+                    t.model_dump(exclude_none=True)
+                    | ({"strict": bool(t.strict)} if t.type == "function" else {})
+                    for t in response.tools
+                ]
+                if response.tools
+                else [],"""
 
 
 def patch_gym_openhands_tmux_source(source: str) -> str:
@@ -59,7 +65,7 @@ def patch_gym_openhands_jq_source(source: str) -> str:
 
 
 def patch_gym_openhands_response_tool_source(source: str) -> str:
-    """Omit optional null tool fields rejected by OpenAI Responses types."""
+    """Normalize completed-rollout tools for OpenAI Responses validation."""
     legacy_count = source.count(LEGACY_RESPONSE_TOOL_SERIALIZATION)
     fixed_count = source.count(FIXED_RESPONSE_TOOL_SERIALIZATION)
     if legacy_count == 1 and fixed_count == 0:

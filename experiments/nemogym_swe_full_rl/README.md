@@ -26,15 +26,19 @@ OpenHands setup can contain an x86-64 Miniforge `jq`, while the SWE image is
 ARM64. Sourcing `instance_swe_entry.sh` then exits the tmux shell and appears as
 a 600-second OpenHands timeout because the completion marker can no longer be
 printed. Third, SWE tools are serialized with optional `None` fields. OpenAI
-2.7.2 rejects `defer_loading: null` while validating the completed rollout,
-causing the Gym `/run` endpoint to return HTTP 500.
+2.7.2 rejects `defer_loading: null`, but its function-tool schema also requires
+the `strict` boolean. Omitting every null therefore changes the first error
+into a missing-field error. Both failures cause the Gym `/run` endpoint to
+return HTTP 500 while validating a completed rollout.
 
 After validating a clean worktree, the launcher applies exact-match source
 fixes in `gym_openhands_tmux.py`. `TMUX_TMPDIR` remains `/tmp`, `TMUX` is unset
 so `libtmux.Server().new_session()` owns server creation, and only a `jq` that
 passes an execution probe is exposed through `/tmp/nemorl-native-tools`. The
 SWE image's native `/usr/bin/jq` is preferred over the shared Miniforge copy.
-Completed-rollout tool definitions are serialized with `exclude_none=True`.
+Completed-rollout tool definitions omit optional null fields and normalize a
+function tool's optional runtime `strict=None` value to schema-valid
+`strict=false`.
 The patched source SHA is stored under `gym_openhands_runtime_fix` in
 `provenance.json`. Use a fresh remote worktree for each submitted run because
 Gym writes runtime artifacts below its source tree.
