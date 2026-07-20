@@ -462,7 +462,7 @@ Expected: capture after step 3, refit/offload, reload, and replay complete witho
 
 - [ ] **Step 3: Run the FP64 production performance pair**
 
-Submit current-nocg and adapter-attn for 20 steps with identical seed, data, checkpoint, 4n4g topology, token budget, sequence packing, and validation cadence. Disable checkpoints.
+Submit `adapter-nocg` and `adapter-attn` for 20 steps with identical seed, data, checkpoint, 4n4g topology, token budget, sequence packing, and validation cadence. Run both conditions from the adapter worktree and its shared converted Megatron checkpoint namespace. Disable checkpoints.
 
 - [ ] **Step 4: Run separately labelled FP32 router diagnostics**
 
@@ -470,7 +470,7 @@ After the FP64 pair passes, run adapter-moe-router and adapter-attn-moe-router w
 
 - [ ] **Step 5: Run FP64 accuracy sign-off and write the report**
 
-Run No-CG FP64 and adapter-attn FP64 for three identical seeds, 40 steps per seed, and 1,024 fixed validation samples. Report accuracy, reward, GenKL, policy loss, ratio/clip diagnostics, NaN count, total step time, E2E TPS/GPU, policy TPS/GPU, logprob TPS/GPU, and generation TPS/GPU.
+Run `adapter-nocg` FP64 and `adapter-attn` FP64 for three identical seeds, 40 steps per seed, and 1,024 fixed validation samples. Report accuracy, reward, GenKL, policy loss, ratio/clip diagnostics, NaN count, total step time, E2E TPS/GPU, policy TPS/GPU, logprob TPS/GPU, and generation TPS/GPU.
 
 Use performance steps 4-19 excluding validation steps. Record RL commit, MCore SHA, container, model, topology, packing, Nmax, warmup, scope, router dtype, sample count, and included steps.
 
