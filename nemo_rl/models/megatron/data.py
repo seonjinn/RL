@@ -1343,8 +1343,19 @@ def _get_pack_sequence_parameters_for_megatron(
         is_cg_step = True
     elif pp_size > 1:
         # PP requires all micro-batches to have the same shape.
-        pad_packed_seq_to = max_seq_len_in_batch
-        is_cg_step = cuda_graph_pad_packed_seq
+        if cuda_graph_pad_packed_seq and cuda_graph_buckets:
+            bucket = _select_cuda_graph_bucket(
+                max_seq_len_in_batch, cuda_graph_buckets, min_fill_ratio
+            )
+            if bucket is not None:
+                pad_packed_seq_to = bucket
+                is_cg_step = True
+            else:
+                # Retain PP's fixed natural shape when this batch is eager.
+                pad_packed_seq_to = max_seq_len_in_batch
+        else:
+            pad_packed_seq_to = max_seq_len_in_batch
+            is_cg_step = cuda_graph_pad_packed_seq
     elif cuda_graph_pad_packed_seq:
         if cuda_graph_buckets:
             bucket = _select_cuda_graph_bucket(

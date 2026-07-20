@@ -1599,3 +1599,46 @@ def test_pr5672_graph_psp_rejects_too_many_sequences():
             pad_packed_seq_to=3,
             cu_seqlens_pad_to_entries=3,
         )
+
+
+@pytest.mark.mcore
+def test_pp_cuda_graph_bucket_uses_configured_bucket():
+    """PP packed CUDA-graph steps pad to an eligible configured bucket."""
+    from nemo_rl.models.megatron.data import _get_pack_sequence_parameters_for_megatron
+
+    _, _, pad_packed_seq_to = _get_pack_sequence_parameters_for_megatron(
+        {
+            "tensor_model_parallel_size": 1,
+            "sequence_parallel": False,
+            "pipeline_model_parallel_size": 4,
+            "context_parallel_size": 1,
+            "cuda_graph_packed_seq": True,
+            "cuda_graph_buckets": [8192],
+        },
+        pad_individual_seqs_to_multiple_of=1,
+        max_seq_len_in_batch=4096,
+    )
+
+    assert pad_packed_seq_to == 8192
+
+
+@pytest.mark.mcore
+def test_pp_cuda_graph_bucket_min_fill_uses_natural_pp_shape():
+    """PP falls back to its natural fixed shape when bucket fill is too low."""
+    from nemo_rl.models.megatron.data import _get_pack_sequence_parameters_for_megatron
+
+    _, _, pad_packed_seq_to = _get_pack_sequence_parameters_for_megatron(
+        {
+            "tensor_model_parallel_size": 1,
+            "sequence_parallel": False,
+            "pipeline_model_parallel_size": 4,
+            "context_parallel_size": 1,
+            "cuda_graph_packed_seq": True,
+            "cuda_graph_buckets": [8192],
+            "cuda_graph_min_fill_ratio": 0.75,
+        },
+        pad_individual_seqs_to_multiple_of=1,
+        max_seq_len_in_batch=4096,
+    )
+
+    assert pad_packed_seq_to == 4096
