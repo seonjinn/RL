@@ -10,9 +10,7 @@ from typing import TypedDict, cast
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = REPO_ROOT / "experiments" / "nemogym_swe_full_rl" / "launch_lyris.py"
-COMPAT_RUNNER = (
-    REPO_ROOT / "experiments" / "nemogym_swe_full_rl" / "run_with_gym_openai_clamp.py"
-)
+GRPO = REPO_ROOT / "nemo_rl" / "algorithms" / "grpo.py"
 
 
 class DryRunPayload(TypedDict):
@@ -89,19 +87,19 @@ def test_baseline_runs_full_async_swe_grpo_training() -> None:
     assert "checkpointing.enabled=false" in overrides
 
 
-def test_full_grpo_uses_versioned_gym_openai_compatibility_runner() -> None:
+def test_full_grpo_pins_only_gym_subprocess_openai_version() -> None:
     payload = _dry_run("baseline")
     command = payload["command"]
+    overrides = payload["overrides"]
 
-    assert str(COMPAT_RUNNER) in command
-    runner_position = command.index(str(COMPAT_RUNNER))
-    assert command[runner_position + 1] == "--entrypoint"
-    assert command[runner_position + 2].endswith("run_grpo_nemo_gym.py")
+    assert any(part.endswith("run_grpo_nemo_gym.py") for part in command)
+    assert "++env.nemo_gym.subprocess_openai_version=2.7.2" in overrides
 
-    source = COMPAT_RUNNER.read_text()
-    assert 'NEMO_GYM_SUBPROCESS_OPENAI_VERSION = "2.7.2"' in source
-    assert "global_config.openai_version = NEMO_GYM_SUBPROCESS_OPENAI_VERSION" in source
-    assert "runpy.run_path" in source
+
+def test_full_grpo_uses_shared_nemo_gym_actor_config_builder() -> None:
+    source = GRPO.read_text()
+
+    assert "build_nemo_gym_config(" in source
 
 
 def test_training_and_generation_topology_fit_nine_lyris_nodes() -> None:

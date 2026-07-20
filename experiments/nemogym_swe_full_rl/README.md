@@ -10,8 +10,8 @@ two generations per prompt, and two optimizer steps. Generation occupies one
 four-GPU GB200 node. The Megatron policy occupies eight four-GPU nodes with
 TP4, PP2, CP4, and EP8. Checkpoint saving is disabled.
 
-`run_with_gym_openai_clamp.py` keeps Gym-created subprocesses on OpenAI 2.7.2,
-the newest version allowed by the pinned Gym submodule. The parent NeMo-RL
+`env.nemo_gym.subprocess_openai_version=2.7.2` keeps Gym-created subprocesses
+on the newest version allowed by the pinned Gym submodule. The parent NeMo-RL
 environment remains unchanged.
 
 Variants:

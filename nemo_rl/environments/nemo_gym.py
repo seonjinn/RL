@@ -82,6 +82,60 @@ class NemoGymConfig(TypedDict):
     require_routed_experts: NotRequired[
         bool
     ]  # Require Gym output items to carry R3 routed_experts
+    subprocess_openai_version: NotRequired[
+        str
+    ]  # OpenAI SDK version used only in Gym-created subprocess environments
+
+
+def build_nemo_gym_config(
+    *,
+    model_name: str,
+    base_urls: list[str],
+    nemo_gym_config: dict[str, Any],
+    require_routed_experts: bool = False,
+) -> NemoGymConfig:
+    """Separate NeMo-RL actor settings from NeMo Gym global config."""
+    initial_global_config_dict = dict(nemo_gym_config)
+    invalid_tool_call_patterns = initial_global_config_dict.pop(
+        "invalid_tool_call_patterns", None
+    )
+    thinking_tags = initial_global_config_dict.pop("thinking_tags", None)
+    subprocess_openai_version = initial_global_config_dict.pop(
+        "subprocess_openai_version", None
+    )
+    if subprocess_openai_version is not None and not isinstance(
+        subprocess_openai_version, str
+    ):
+        raise TypeError("subprocess_openai_version must be a string")
+
+    uv_cache_dir = get_nemo_gym_uv_cache_dir()
+    if uv_cache_dir is not None:
+        initial_global_config_dict.setdefault("uv_cache_dir", uv_cache_dir)
+    uv_venv_dir = get_nemo_gym_venv_dir()
+    if uv_venv_dir is not None:
+        initial_global_config_dict.setdefault("uv_venv_dir", uv_venv_dir)
+
+    config = NemoGymConfig(
+        model_name=model_name,
+        base_urls=base_urls,
+        invalid_tool_call_patterns=invalid_tool_call_patterns,
+        thinking_tags=thinking_tags,
+        require_routed_experts=require_routed_experts,
+        initial_global_config_dict=initial_global_config_dict,
+    )
+    if subprocess_openai_version is not None:
+        config["subprocess_openai_version"] = subprocess_openai_version
+    return config
+
+
+def _set_nemo_gym_subprocess_openai_version(version: str | None) -> None:
+    if version is None:
+        return
+
+    from nemo_gym import global_config
+
+    global_config.openai_version = version
+    print(f"NeMo Gym subprocess OpenAI version: {version}")
 
 
 def _detect_invalid_tool_call_and_malformed_thinking(
@@ -158,6 +212,9 @@ class NemoGym(EnvironmentInterface):
         scheduled onto reserved nodes) and spun up explicitly once the vLLM
         server URLs are available, overlapping with vLLM model loading.
         """
+        _set_nemo_gym_subprocess_openai_version(
+            self.cfg.get("subprocess_openai_version")
+        )
         self.node_ip = _get_node_ip_local()
         _gym_port_low = self.cfg.get("port_range_low", DEFAULT_GYM_PORT_RANGE_LOW)
         _gym_port_high = self.cfg.get("port_range_high", DEFAULT_GYM_PORT_RANGE_HIGH)
@@ -493,26 +550,11 @@ def create_nemo_gym_actor(
             nemo_gym_py_exec, "nemo_rl.environments.nemo_gym.NemoGym"
         )
 
-    initial_global_config_dict = dict(nemo_gym_config)
-    invalid_tool_call_patterns = initial_global_config_dict.pop(
-        "invalid_tool_call_patterns", None
-    )
-    thinking_tags = initial_global_config_dict.pop("thinking_tags", None)
-
-    uv_cache_dir = get_nemo_gym_uv_cache_dir()
-    if uv_cache_dir is not None:
-        initial_global_config_dict.setdefault("uv_cache_dir", uv_cache_dir)
-    uv_venv_dir = get_nemo_gym_venv_dir()
-    if uv_venv_dir is not None:
-        initial_global_config_dict.setdefault("uv_venv_dir", uv_venv_dir)
-
-    nemo_gym_cfg = NemoGymConfig(
+    nemo_gym_cfg = build_nemo_gym_config(
         model_name=model_name,
         base_urls=base_urls,
-        invalid_tool_call_patterns=invalid_tool_call_patterns,
-        thinking_tags=thinking_tags,
+        nemo_gym_config=nemo_gym_config,
         require_routed_experts=False,
-        initial_global_config_dict=initial_global_config_dict,
     )
     runtime_env = {
         "py_executable": nemo_gym_py_exec,

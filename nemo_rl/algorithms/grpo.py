@@ -82,9 +82,7 @@ from nemo_rl.distributed.virtual_cluster import (
 from nemo_rl.environments.interfaces import EnvironmentInterface
 from nemo_rl.environments.nemo_gym import (
     NemoGym,
-    NemoGymConfig,
-    get_nemo_gym_uv_cache_dir,
-    get_nemo_gym_venv_dir,
+    build_nemo_gym_config,
 )
 from nemo_rl.experience.rollouts import (
     EffortLevelsConfig,
@@ -567,28 +565,11 @@ def setup(
             nemo_gym_py_exec = create_local_venv_on_each_node(
                 nemo_gym_py_exec, "nemo_rl.environments.nemo_gym.NemoGym"
             )
-        nemo_gym_dict = dict(env_configs["nemo_gym"])
-        # NeMo-RL-side detection knobs are top-level NemoGymConfig fields
-        # (where the detector reads them), not part of Gym's global config.
-        invalid_tool_call_patterns = nemo_gym_dict.pop(
-            "invalid_tool_call_patterns", None
-        )
-        thinking_tags = nemo_gym_dict.pop("thinking_tags", None)
-        # Pass prebuilt cache + venv dirs through the global config so the gym reuses
-        # image-baked venvs instead of rebuilding them.
-        uv_cache_dir = get_nemo_gym_uv_cache_dir()
-        if uv_cache_dir is not None:
-            nemo_gym_dict.setdefault("uv_cache_dir", uv_cache_dir)
-        uv_venv_dir = get_nemo_gym_venv_dir()
-        if uv_venv_dir is not None:
-            nemo_gym_dict.setdefault("uv_venv_dir", uv_venv_dir)
-        nemo_gym_cfg = NemoGymConfig(
+        nemo_gym_cfg = build_nemo_gym_config(
             model_name=model_name,
             base_urls=base_urls,
-            invalid_tool_call_patterns=invalid_tool_call_patterns,
-            thinking_tags=thinking_tags,
+            nemo_gym_config=env_configs["nemo_gym"],
             require_routed_experts=router_replay_enabled(policy_config),
-            initial_global_config_dict=nemo_gym_dict,
         )
         nemo_gym_opts = {}
         if nemo_gym_num_nodes:

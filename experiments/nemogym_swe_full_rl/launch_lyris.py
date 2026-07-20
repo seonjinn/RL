@@ -56,7 +56,6 @@ class RunPlan:
     run_tag: str
     run_dir: str
     config: str
-    compatibility_runner: str
     dataset: str
     container: str
     wandb_project: str
@@ -120,9 +119,6 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
         args.repo_dir / "examples/nemo_gym/grpo_qwen3_30ba3b_thinking_swe2_smoke.yaml"
     )
     entrypoint = args.repo_dir / "examples/nemo_gym/run_grpo_nemo_gym.py"
-    compatibility_runner = (
-        args.repo_dir / "experiments/nemogym_swe_full_rl/run_with_gym_openai_clamp.py"
-    )
     global_batch_size = args.num_prompts * args.num_generations
     wandb_run_name = f"q30-swe-full-rl-{variant.name}-{run_tag}"
 
@@ -133,6 +129,7 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
         "cluster.gpus_per_node=4",
         "++cluster.segment_size=8",
         "++env.nemo_gym.is_trajectory_collection=false",
+        "++env.nemo_gym.subprocess_openai_version=2.7.2",
         f"grpo.max_num_steps={args.steps}",
         f"grpo.num_prompts_per_step={args.num_prompts}",
         f"grpo.num_generations_per_prompt={args.num_generations}",
@@ -221,8 +218,6 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
         "APPTAINER_CACHEDIR=/lustre/fsw/coreai_dlalgo_llm/users/sna/apptainer_cache",
         f"APPTAINER_TMPDIR=/tmp/apptainer-swe-full-{variant.name}-{run_tag}",
         "/opt/nemo_rl_venv/bin/python",
-        str(compatibility_runner),
-        "--entrypoint",
         str(entrypoint),
         "--config",
         str(config),
@@ -245,7 +240,6 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
         run_tag=run_tag,
         run_dir=str(run_dir),
         config=str(config),
-        compatibility_runner=str(compatibility_runner),
         dataset=str(args.dataset),
         container=str(args.container),
         wandb_project=WANDB_PROJECT,
@@ -278,7 +272,6 @@ def validate_remote_inputs(plan: RunPlan, repo_dir: Path) -> None:
     required_paths = [
         repo_dir / "ray.sub",
         Path(plan.config),
-        Path(plan.compatibility_runner),
         Path(plan.dataset),
         Path(plan.container),
     ]

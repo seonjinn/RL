@@ -17,18 +17,53 @@ These run in the default L0 suite. Keep this module free of heavy imports
 (e.g. vllm) so the fast detector tests are not gated behind the nemo_gym extra.
 """
 
+import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 from nemo_rl.environments import nemo_gym as nemo_gym_mod
 from nemo_rl.environments.nemo_gym import (
+    _set_nemo_gym_subprocess_openai_version,
     _detect_invalid_tool_call_and_malformed_thinking,
+    build_nemo_gym_config,
     create_nemo_gym_actor,
     get_nemo_gym_uv_cache_dir,
     get_nemo_gym_venv_dir,
     setup_nemo_gym_generation_config,
 )
+
+
+def test_build_nemo_gym_config_keeps_subprocess_version_actor_local(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(nemo_gym_mod, "get_nemo_gym_uv_cache_dir", lambda: None)
+    monkeypatch.setattr(nemo_gym_mod, "get_nemo_gym_venv_dir", lambda: None)
+
+    config = build_nemo_gym_config(
+        model_name="test-model",
+        base_urls=["http://worker-0:8000/v1"],
+        nemo_gym_config={
+            "config_paths": ["gym.yaml"],
+            "invalid_tool_call_patterns": ["<bad>"],
+            "subprocess_openai_version": "2.7.2",
+        },
+        require_routed_experts=True,
+    )
+
+    assert config["subprocess_openai_version"] == "2.7.2"
+    assert config["require_routed_experts"] is True
+    assert config["initial_global_config_dict"] == {"config_paths": ["gym.yaml"]}
+
+
+def test_build_nemo_gym_config_rejects_non_string_subprocess_version() -> None:
+    with pytest.raises(TypeError, match="subprocess_openai_version must be a string"):
+        build_nemo_gym_config(
+            model_name="test-model",
+            base_urls=["http://worker-0:8000/v1"],
+            nemo_gym_config={"subprocess_openai_version": 2.7},
+        )
 
 
 def test_create_nemo_gym_actor_starts_with_generation_endpoints(monkeypatch) -> None:
@@ -50,6 +85,7 @@ def test_create_nemo_gym_actor_starts_with_generation_endpoints(monkeypatch) -> 
         nemo_gym_config={
             "config_paths": ["gym.yaml"],
             "invalid_tool_call_patterns": ["<bad>"],
+            "subprocess_openai_version": "2.7.2",
         },
     )
 
@@ -60,10 +96,23 @@ def test_create_nemo_gym_actor_starts_with_generation_endpoints(monkeypatch) -> 
     assert nemo_gym_config["model_name"] == "test-model"
     assert nemo_gym_config["base_urls"] == ["http://worker-0:8000/v1"]
     assert nemo_gym_config["invalid_tool_call_patterns"] == ["<bad>"]
+    assert nemo_gym_config["subprocess_openai_version"] == "2.7.2"
     assert nemo_gym_config["initial_global_config_dict"] == {
         "config_paths": ["gym.yaml"]
     }
     ray_get.assert_called_once_with("started")
+
+
+def test_sets_gym_subprocess_openai_version_without_changing_parent_package(
+    monkeypatch,
+) -> None:
+    global_config = SimpleNamespace(openai_version="2.44.0")
+    nemo_gym = SimpleNamespace(global_config=global_config)
+    monkeypatch.setitem(sys.modules, "nemo_gym", nemo_gym)
+
+    _set_nemo_gym_subprocess_openai_version("2.7.2")
+
+    assert global_config.openai_version == "2.7.2"
 
 
 def test_setup_nemo_gym_generation_config_enables_http_rollouts() -> None:
