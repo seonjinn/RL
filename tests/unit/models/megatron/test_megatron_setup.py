@@ -95,6 +95,9 @@ def test_pr5672_qwen235_packed_attention_recipe_matches_no_cg_baseline():
         assert config.cluster.gpus_per_node == 4
         assert config.cluster.segment_size == 16
         assert config.policy.megatron_cfg.moe_router_dtype == "fp64"
+        assert config.policy.megatron_cfg.activation_checkpointing is True
+        assert config.policy.megatron_cfg.recompute_granularity == "selective"
+        assert list(config.policy.megatron_cfg.recompute_modules) == ["moe"]
         assert config.checkpointing.enabled is False
         for field, expected_value in expected_packing.items():
             assert config.policy.sequence_packing[field] == expected_value
