@@ -90,7 +90,7 @@ class RunPlan:
 
 VARIANTS = {
     "baseline": Variant("baseline", None, None, None, (), True),
-    "baseline_v1": Variant("baseline_v1", None, None, None, (), False),
+    "baseline_v1": Variant("baseline_v1", None, None, None, (1, 2, 4, 8, 16), False),
     "eagle3_k3": Variant("eagle3_k3", "eagle3", EAGLE3_SNAPSHOT, 3, (), True),
     "dflash_k7": Variant(
         "dflash_k7", "dflash", DFLASH_SNAPSHOT, 7, (8, 16, 32, 64, 128), False
@@ -199,10 +199,13 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
         "env.nemo_gym.swe_agents_train.responses_api_agents.swe_agents.swebench_agent_timeout=900",
     ]
     if variant.method is None:
+        cudagraph_mode = "FULL_AND_PIECEWISE" if variant.use_v2_model_runner else "FULL"
         overrides.append(
             "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode="
-            "FULL_AND_PIECEWISE"
+            f"{cudagraph_mode}"
         )
+        if variant.capture_sizes:
+            overrides.append(_capture_sizes_override(variant.capture_sizes))
     elif variant.method == "eagle3":
         overrides.extend(
             [

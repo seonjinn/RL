@@ -27,6 +27,8 @@ refit rather than the rollout-only benchmark.
   enforce the draft model's context limit. V1 safely disables drafting after
   the DFlash K7 boundary while target-only decoding can continue to 131072.
 - DFlash CUDA Graph capture sizes are `[8,16,32,64,128]`.
+- The matched V1 baseline uses FULL graphs with request capture sizes
+  `[1,2,4,8,16]`, corresponding to the DFlash K7 query-token shapes.
 
 ## Safety Gates
 

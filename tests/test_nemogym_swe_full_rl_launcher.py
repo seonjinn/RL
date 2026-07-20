@@ -302,7 +302,8 @@ def test_dflash_has_a_model_runner_matched_baseline() -> None:
     rendered = " ".join(payload["overrides"])
 
     assert "speculative_config" not in rendered
-    assert "compilation_config.cudagraph_mode=FULL_AND_PIECEWISE" in rendered
+    assert "compilation_config.cudagraph_mode=FULL" in rendered
+    assert "compilation_config.cudagraph_capture_sizes=[1,2,4,8,16]" in rendered
     assert "VLLM_USE_V2_MODEL_RUNNER=0" in payload["command"]
 
 

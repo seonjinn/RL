@@ -52,7 +52,8 @@ Variants:
 
 - `baseline`: V2 model runner baseline for Eagle-3.
 - `eagle3_k3`: Thinking-2507 Eagle-3 drafter, K=3, V2 model runner.
-- `baseline_v1`: V1 model runner baseline for DFlash.
+- `baseline_v1`: V1 model runner baseline for DFlash, using FULL graphs and
+  request capture sizes `[1,2,4,8,16]`.
 - `dflash_k7`: DFlash K=7 with its 40960-token draft limit and V1 runner.
 - `dflash_k9`: DFlash K=9 exploration with the same V1 runner.
 
@@ -61,6 +62,8 @@ model runner because vLLM 0.25.1 V1 stops drafting safely after the drafter's
 40960-token context limit, while the target can continue to the recipe's
 131072-token limit. Comparing it with `baseline_v1` avoids attributing model
 runner differences to speculative decoding.
+The baseline request shapes correspond to DFlash's K7 query-token shapes
+`[8,16,32,64,128]`, so both lanes cover 1, 2, 4, 8, and 16 requests.
 
 Validate OpenHands `libtmux` startup in the same Astropy SWE image before the
 multi-node run:
