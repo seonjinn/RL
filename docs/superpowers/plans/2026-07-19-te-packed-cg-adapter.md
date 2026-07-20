@@ -114,7 +114,7 @@ def test_pr5672_graph_psp_padding_keeps_loss_boundaries_unpadded():
 
     input_ids = torch.tensor([[11, 12, 0, 0], [21, 22, 23, 0]], device="cuda")
     lengths = torch.tensor([2, 3], device="cuda")
-    _, psp, loss_cu, loss_cu_padded = _pack_sequences_for_megatron(
+    _, _, psp, loss_cu, loss_cu_padded = _pack_sequences_for_megatron(
         input_ids=input_ids,
         seq_lengths=lengths,
         pad_packed_seq_to=8,
