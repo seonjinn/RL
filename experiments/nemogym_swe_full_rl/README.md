@@ -14,6 +14,11 @@ TP4, PP2, CP4, and EP8. Checkpoint saving is disabled.
 on the newest version allowed by the pinned Gym submodule. The parent NeMo-RL
 environment remains unchanged.
 
+NeMo Gym server environments are stored under the shared Lustre
+`gym_venvs/<Gym commit>-py312-openai2.7.2` directory. Gym launches Ray workers
+with the server environment's Python path, so a node-local `/opt/gym_venvs`
+directory is invalid for this multi-node run.
+
 Variants:
 
 - `baseline`

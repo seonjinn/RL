@@ -105,6 +105,21 @@ def test_full_grpo_pins_only_gym_subprocess_openai_version() -> None:
     assert "++env.nemo_gym.subprocess_openai_version=2.7.2" in overrides
 
 
+def test_nemo_gym_server_venvs_use_shared_lustre_storage() -> None:
+    payload = _dry_run("baseline")
+    command = payload["command"]
+
+    gym_venv_assignments = [
+        part for part in command if part.startswith("NEMO_GYM_VENV_DIR=")
+    ]
+    assert len(gym_venv_assignments) == 1
+    assert gym_venv_assignments[0].startswith(
+        "NEMO_GYM_VENV_DIR=/lustre/fsw/coreai_dlalgo_llm/users/sna/"
+        "experiments/nemogym_swe_full_rl/gym_venvs/"
+    )
+    assert "/opt/gym_venvs" not in gym_venv_assignments[0]
+
+
 def test_full_grpo_uses_shared_nemo_gym_actor_config_builder() -> None:
     source = GRPO.read_text()
 

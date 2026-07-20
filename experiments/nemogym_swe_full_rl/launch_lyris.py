@@ -30,6 +30,9 @@ DEFAULT_HF_HOME = Path("/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home")
 DEFAULT_RUN_ROOT = Path(
     "/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/nemogym_swe_full_rl/runs"
 )
+DEFAULT_GYM_VENV_ROOT = Path(
+    "/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/nemogym_swe_full_rl/gym_venvs"
+)
 DFLASH_SNAPSHOT = DEFAULT_HF_HOME / (
     "hub/models--RedHatAI--Qwen3-30B-A3B-speculator.dflash/"
     "snapshots/edcff83783141eb9383e2bd6c33610d9a3104288"
@@ -67,6 +70,7 @@ class RunPlan:
     config: str
     dataset: str
     container: str
+    gym_venv_dir: str
     wandb_project: str
     wandb_run_name: str
     command: tuple[str, ...]
@@ -130,6 +134,10 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
     entrypoint = args.repo_dir / "examples/nemo_gym/run_grpo_nemo_gym.py"
     global_batch_size = args.num_prompts * args.num_generations
     wandb_run_name = f"q30-swe-full-rl-{variant.name}-{run_tag}"
+    gym_revision = _git_output(
+        args.repo_dir, "rev-parse", "HEAD:3rdparty/Gym-workspace/Gym"
+    )
+    gym_venv_dir = DEFAULT_GYM_VENV_ROOT / (f"{gym_revision}-py312-openai2.7.2")
 
     overrides = [
         f"data.train.data_path={args.dataset}",
@@ -201,15 +209,14 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
         )
 
     unset_environment = [
-        item
-        for name in INCOMPATIBLE_INHERITED_ENVIRONMENT
-        for item in ("-u", name)
+        item for name in INCOMPATIBLE_INHERITED_ENVIRONMENT for item in ("-u", name)
     ]
     command = [
         "env",
         *unset_environment,
         "VLLM_USE_V2_MODEL_RUNNER=1",
         f"HF_HOME={args.hf_home}",
+        f"NEMO_GYM_VENV_DIR={gym_venv_dir}",
         "HF_HUB_OFFLINE=1",
         "TRANSFORMERS_OFFLINE=1",
         f"PYTHONPATH={args.repo_dir}",
@@ -249,6 +256,7 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
         config=str(config),
         dataset=str(args.dataset),
         container=str(args.container),
+        gym_venv_dir=str(gym_venv_dir),
         wandb_project=WANDB_PROJECT,
         wandb_run_name=wandb_run_name,
         command=tuple(command),
