@@ -83,7 +83,8 @@ def test_training_and_generation_topology_fit_nine_lyris_nodes() -> None:
 
     assert "cluster.num_nodes=9" in overrides
     assert "cluster.gpus_per_node=4" in overrides
-    assert "cluster.segment_size=9" in overrides
+    assert "++cluster.segment_size=8" in overrides
+    assert "++env.nemo_gym.is_trajectory_collection=false" in overrides
     assert "policy.generation.colocated.enabled=false" in overrides
     assert "policy.generation.colocated.resources.num_nodes=1" in overrides
     assert "policy.generation.colocated.resources.gpus_per_node=4" in overrides
