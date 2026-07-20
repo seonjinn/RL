@@ -64,9 +64,10 @@ model runner because vLLM 0.25.1 V1 stops drafting safely after the drafter's
 runner differences to speculative decoding.
 The baseline request shapes correspond to DFlash's K7 query-token shapes
 `[8,16,32,64,128]`, so both lanes cover 1, 2, 4, 8, and 16 requests.
-The launcher caps `max_num_seqs` at the rollout concurrency and preserves a
-2048-token target scheduling budget. For DFlash, `max_num_batched_tokens` also
-reserves `(K-1) * max_num_seqs` parallel-draft slots, as required by vLLM.
+The launcher caps `max_num_seqs` at the rollout concurrency. It does not pass
+the internal-only `max_num_scheduled_tokens` field through `AsyncEngineArgs`.
+Instead, `max_num_batched_tokens` preserves a derived 2048-token target budget
+and reserves `(K-1) * max_num_seqs` parallel-draft slots, as required by vLLM.
 CUDA Graph diagnostics register vLLM's text logger when `cudagraph_metrics` is
 enabled, so runtime FULL, PIECEWISE, and NONE counts are retained in the job log.
 

@@ -201,10 +201,6 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
         "policy.generation.vllm_kwargs.moe_backend=triton",
         f"++policy.generation.vllm_kwargs.max_num_seqs={global_batch_size}",
         (
-            "++policy.generation.vllm_kwargs.max_num_scheduled_tokens="
-            f"{TARGET_SCHEDULED_TOKENS}"
-        ),
-        (
             "++policy.generation.vllm_kwargs.max_num_batched_tokens="
             f"{max_num_batched_tokens}"
         ),

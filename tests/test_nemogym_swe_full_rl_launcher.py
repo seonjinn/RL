@@ -298,7 +298,7 @@ def test_dflash_variants_use_verified_checkpoint_and_k_aligned_graphs() -> None:
         ("dflash_k9", 9, 2080),
     ],
 )
-def test_dflash_scheduler_budget_reserves_parallel_draft_slots(
+def test_dflash_scheduler_budget_lets_vllm_derive_target_budget(
     variant: str,
     speculative_tokens: int,
     expected_batched_tokens: int,
@@ -307,14 +307,13 @@ def test_dflash_scheduler_budget_reserves_parallel_draft_slots(
     overrides = payload["overrides"]
 
     assert "++policy.generation.vllm_kwargs.max_num_seqs=4" in overrides
-    assert "++policy.generation.vllm_kwargs.max_num_scheduled_tokens=2048" in overrides
+    assert not any("max_num_scheduled_tokens=" in item for item in overrides)
     assert (
         f"++policy.generation.vllm_kwargs.max_num_batched_tokens={expected_batched_tokens}"
         in overrides
     )
-    if speculative_tokens:
-        reserved_slots = (speculative_tokens - 1) * 4
-        assert expected_batched_tokens - 2048 == reserved_slots
+    reserved_slots = max(speculative_tokens - 1, 0) * 4
+    assert expected_batched_tokens - reserved_slots == 2048
 
 
 def test_dflash_scheduler_budget_tracks_rollout_concurrency() -> None:
@@ -328,8 +327,9 @@ def test_dflash_scheduler_budget_tracks_rollout_concurrency() -> None:
     overrides = payload["overrides"]
 
     assert "++policy.generation.vllm_kwargs.max_num_seqs=6" in overrides
-    assert "++policy.generation.vllm_kwargs.max_num_scheduled_tokens=2048" in overrides
+    assert not any("max_num_scheduled_tokens=" in item for item in overrides)
     assert "++policy.generation.vllm_kwargs.max_num_batched_tokens=2084" in overrides
+    assert 2084 - (7 - 1) * 6 == 2048
 
 
 def test_cudagraph_diagnostics_enable_vllm_text_logger() -> None:

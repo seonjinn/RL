@@ -29,9 +29,10 @@ refit rather than the rollout-only benchmark.
 - DFlash CUDA Graph capture sizes are `[8,16,32,64,128]`.
 - The matched V1 baseline uses FULL_AND_PIECEWISE graphs with request capture sizes
   `[1,2,4,8,16]`, corresponding to the DFlash K7 query-token shapes.
-- Scheduler limits match the four-request rollout concurrency. The target
-  scheduling budget remains 2048 tokens, while DFlash adds `(K-1)` draft slots
-  per request to `max_num_batched_tokens`.
+- Scheduler limits match the four-request rollout concurrency. The launcher
+  leaves the internal-only `max_num_scheduled_tokens` unset and sets
+  `max_num_batched_tokens` so vLLM derives a 2048-token target budget after
+  subtracting `(K-1)` parallel-draft slots per request.
 - Runs with `cudagraph_metrics=true` include vLLM's text logger so graph runtime
   mode counts are present in the driver log rather than discarded by the
   Prometheus-only NeMo-RL collector.
