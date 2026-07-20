@@ -34,6 +34,14 @@ Variants:
 - `dflash_k7`
 - `dflash_k9`
 
+Validate OpenHands `libtmux` startup in the same Astropy SWE image before the
+multi-node run:
+
+```bash
+REPO_DIR="$PWD" sbatch \
+  experiments/nemogym_swe_full_rl/verify_openhands_libtmux_lyris.sh
+```
+
 Run scheduling validation before submission:
 
 ```bash
