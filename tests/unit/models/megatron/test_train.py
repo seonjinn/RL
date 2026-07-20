@@ -888,19 +888,57 @@ class TestLossPostProcessor:
         "nemo_rl.models.megatron.train.get_context_parallel_world_size", return_value=1
     )
     @patch("nemo_rl.models.megatron.train.SequencePackingLossWrapper")
-    def test_loss_post_processor_uses_explicit_loss_boundaries_for_graph_psp(
-        self, mock_wrapper, mock_cp_size, mock_cp_grp, mock_tp_grp, mock_tp_rank
+    @patch("nemo_rl.models.megatron.train.model_forward")
+    @patch("nemo_rl.models.megatron.data.process_microbatch")
+    def test_processed_microbatch_forward_uses_explicit_loss_boundaries_for_graph_psp(
+        self,
+        mock_process_microbatch,
+        mock_model_forward,
+        mock_wrapper,
+        mock_cp_size,
+        mock_cp_grp,
+        mock_tp_grp,
+        mock_tp_rank,
     ):
-        """Endpoint-padded graph PSPs must not define sequence-packing loss spans."""
-        from nemo_rl.models.megatron.train import LossPostProcessor
+        """The processed-microbatch forward path must preserve real loss spans."""
+        from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+        from nemo_rl.models.megatron.data import (
+            ProcessedInputs,
+            make_processed_microbatch_iterator,
+        )
+        from nemo_rl.models.megatron.train import (
+            LossPostProcessor,
+            forward_with_post_processing_fn,
+        )
 
         mock_tp_grp.return_value = MagicMock()
         mock_cp_grp.return_value = MagicMock()
         loss_cu_seqlens = torch.tensor([0, 2, 5])
-        loss_cu_seqlens_padded = torch.tensor([0, 2, 5])
+        loss_cu_seqlens_padded = torch.tensor([0, 2, 8])
         graph_packed_seq_params = MagicMock()
-        graph_packed_seq_params.cu_seqlens_q = torch.tensor([0, 2, 5, 5, 5])
-        graph_packed_seq_params.cu_seqlens_q_padded = torch.tensor([0, 2, 5, 5, 5])
+        graph_packed_seq_params.cu_seqlens_q = torch.tensor([0, 2, 8, 8, 8])
+        graph_packed_seq_params.cu_seqlens_q_padded = torch.tensor([0, 2, 8, 8, 8])
+        processed_inputs = ProcessedInputs(
+            input_ids=torch.tensor([[11, 12, 21, 22, 23, 0, 0, 0]]),
+            input_ids_cp_sharded=torch.tensor([[11, 12, 21, 22, 23, 0, 0, 0]]),
+            attention_mask=None,
+            position_ids=None,
+            packed_seq_params=graph_packed_seq_params,
+            cu_seqlens=loss_cu_seqlens,
+            cu_seqlens_padded=loss_cu_seqlens_padded,
+        )
+        mock_process_microbatch.return_value = processed_inputs
+        mock_model_forward.return_value = torch.empty(1, 8, 1)
+
+        processed_iterator = make_processed_microbatch_iterator(
+            raw_iterator=iter([BatchedDataDict()]),
+            cfg={"sequence_packing": {"enabled": True}},
+            seq_length_key="input_lengths",
+            pad_individual_seqs_to_multiple_of=1,
+            pad_packed_seq_to_multiple_of=1,
+            straggler_timer=MagicMock(),
+            pad_full_seq_to=8,
+        )
 
         processor = LossPostProcessor(
             loss_fn=MagicMock(),
@@ -908,14 +946,17 @@ class TestLossPostProcessor:
             cp_normalize=False,
         )
 
-        processor(
-            data_dict=MagicMock(),
-            packed_seq_params=graph_packed_seq_params,
-            loss_cu_seqlens=loss_cu_seqlens,
-            loss_cu_seqlens_padded=loss_cu_seqlens_padded,
+        forward_with_post_processing_fn(
+            data_iterator=processed_iterator,
+            model=MagicMock(),
+            post_processing_fn=processor,
         )
 
         wrapper_kwargs = mock_wrapper.call_args.kwargs
+        assert (
+            mock_model_forward.call_args.kwargs["packed_seq_params"]
+            is graph_packed_seq_params
+        )
         assert wrapper_kwargs["cu_seqlens_q"] is loss_cu_seqlens
         assert wrapper_kwargs["cu_seqlens_q_padded"] is loss_cu_seqlens_padded
 

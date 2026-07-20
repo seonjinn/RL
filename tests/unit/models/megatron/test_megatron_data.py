@@ -1150,6 +1150,80 @@ class TestMakeProcessedMicrobatchIterator:
         assert call_kwargs["pad_packed_seq_to_multiple_of"] == 16
         assert call_kwargs["pad_full_seq_to"] == 1024
 
+    @pytest.mark.parametrize(
+        ("megatron_cfg", "expected_entries"),
+        [
+            (
+                {
+                    "cuda_graph_impl": "transformer_engine",
+                    "cuda_graph_pr5672_thd": True,
+                    "cuda_graph_max_packed_seqs": 4,
+                },
+                5,
+            ),
+            (
+                {
+                    "cuda_graph_impl": "transformer_engine",
+                    "cuda_graph_pr5672_thd": False,
+                    "cuda_graph_max_packed_seqs": 4,
+                },
+                None,
+            ),
+            (
+                {
+                    "cuda_graph_impl": "local",
+                    "cuda_graph_pr5672_thd": True,
+                    "cuda_graph_max_packed_seqs": 4,
+                },
+                None,
+            ),
+        ],
+    )
+    def test_static_psp_entries_require_transformer_engine_pr5672(
+        self, megatron_cfg, expected_entries
+    ):
+        """The PR5672 flag requests static PSP entries only with transformer engine."""
+        from nemo_rl.models.megatron.data import (
+            ProcessedInputs,
+            make_processed_microbatch_iterator,
+        )
+
+        processed_inputs = ProcessedInputs(
+            input_ids=MagicMock(),
+            input_ids_cp_sharded=MagicMock(),
+            attention_mask=None,
+            position_ids=None,
+            packed_seq_params=MagicMock(),
+            cu_seqlens_padded=torch.tensor([0, 2, 8]),
+            cu_seqlens=torch.tensor([0, 2, 5]),
+        )
+        raw_data_dict = MagicMock()
+        raw_data_dict.to.return_value = raw_data_dict
+
+        with patch(
+            "nemo_rl.models.megatron.data.process_microbatch",
+            return_value=processed_inputs,
+        ) as mock_process:
+            next(
+                make_processed_microbatch_iterator(
+                    raw_iterator=iter([raw_data_dict]),
+                    cfg={
+                        "sequence_packing": {"enabled": True},
+                        "megatron_cfg": megatron_cfg,
+                    },
+                    seq_length_key="input_lengths",
+                    pad_individual_seqs_to_multiple_of=1,
+                    pad_packed_seq_to_multiple_of=1,
+                    straggler_timer=MagicMock(),
+                    pad_full_seq_to=8,
+                )
+            )
+
+        assert (
+            mock_process.call_args.kwargs["cu_seqlens_pad_to_entries"]
+            == expected_entries
+        )
+
 
 PACK_SEQUENCES_TEST_ACTOR_FQN = (
     f"{PackSequencesTestActor.__module__}.PackSequencesTestActor"
@@ -1505,9 +1579,9 @@ def test_pr5672_graph_psp_padding_keeps_loss_boundaries_unpadded():
     )
 
     assert loss_cu.tolist() == [0, 2, 5]
-    assert loss_cu_padded.tolist() == [0, 2, 5]
-    assert psp.cu_seqlens_q.tolist() == [0, 2, 5, 5, 5]
-    assert psp.cu_seqlens_q_padded.tolist() == [0, 2, 5, 5, 5]
+    assert loss_cu_padded.tolist() == [0, 2, 8]
+    assert psp.cu_seqlens_q.tolist() == [0, 2, 8, 8, 8]
+    assert psp.cu_seqlens_q_padded.tolist() == [0, 2, 8, 8, 8]
 
 
 @pytest.mark.mcore
