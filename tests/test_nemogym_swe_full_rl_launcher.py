@@ -10,6 +10,7 @@ from typing import TypedDict, cast
 import pytest
 
 from experiments.nemogym_swe_full_rl.gym_openhands_tmux import (
+    patch_gym_openhands_jq_source,
     patch_gym_openhands_tmux_source,
 )
 
@@ -44,6 +45,13 @@ BUGGY_GYM_TMUX_SOURCE = """
             "chown $uid:$uid /tmp/tmux-$uid || true && "
             "chmod 700 /tmp/tmux-$uid && "
             "tmux -S /tmp/tmux-$uid/default start-server || true && "
+        )
+"""
+
+BUGGY_GYM_JQ_SOURCE = """
+        agent_main_cmd = (
+            "export PATH=/openhands_setup/miniforge3/bin:$PATH && "
+            "cp /openhands_setup/miniforge3/bin/jq /usr/local/bin/jq 2>/dev/null || true && "
         )
 """
 
@@ -104,6 +112,28 @@ def test_gym_openhands_tmux_patch_is_idempotent() -> None:
 def test_gym_openhands_tmux_patch_rejects_unknown_upstream_source() -> None:
     with pytest.raises(ValueError, match="expected Gym tmux setup block"):
         patch_gym_openhands_tmux_source("agent_main_cmd = 'unknown upstream'\n")
+
+
+def test_gym_openhands_jq_patch_selects_a_runnable_architecture() -> None:
+    patched = patch_gym_openhands_jq_source(BUGGY_GYM_JQ_SOURCE)
+
+    assert "/usr/bin/jq --version" in patched
+    assert "/openhands_setup/miniforge3/bin/jq --version" in patched
+    assert "ln -sf /usr/bin/jq /tmp/nemorl-native-tools/jq" in patched
+    assert "export PATH=/tmp/nemorl-native-tools:$PATH" in patched
+    assert "cp /openhands_setup/miniforge3/bin/jq" not in patched
+    assert "|| true" not in patched
+
+
+def test_gym_openhands_jq_patch_is_idempotent() -> None:
+    patched = patch_gym_openhands_jq_source(BUGGY_GYM_JQ_SOURCE)
+
+    assert patch_gym_openhands_jq_source(patched) == patched
+
+
+def test_gym_openhands_jq_patch_rejects_unknown_upstream_source() -> None:
+    with pytest.raises(ValueError, match="expected Gym jq setup block"):
+        patch_gym_openhands_jq_source("agent_main_cmd = 'unknown upstream'\n")
 
 
 def test_baseline_runs_full_async_swe_grpo_training() -> None:
@@ -333,6 +363,8 @@ def test_swe_entry_smoke_compares_direct_and_openhands_bash_execution() -> None:
     assert "openhands_source_elapsed_s=" in python_source
     assert "PROMPT_COMMAND" in python_source
     assert "instance_swe_entry.sh" in python_source
+    assert "_select_runnable_jq" in python_source
+    assert "selected_jq=" in python_source
     assert "#SBATCH --segment=1" in shell_source
     assert "--writable-tmpfs" in shell_source
     assert "--no-mount home,tmp,bind-paths" in shell_source

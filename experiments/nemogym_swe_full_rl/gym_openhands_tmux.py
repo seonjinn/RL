@@ -18,6 +18,14 @@ LEGACY_TMUX_BLOCK = '''            "export TMUX_TMPDIR=/tmp && "
             "tmux -S /tmp/tmux-$uid/default start-server || true && "'''
 FIXED_TMUX_BLOCK = '''            "export TMUX_TMPDIR=/tmp && "
             "unset TMUX && "'''
+LEGACY_JQ_BLOCK = '''            "cp /openhands_setup/miniforge3/bin/jq /usr/local/bin/jq 2>/dev/null || true && "'''
+FIXED_JQ_BLOCK = '''            "mkdir -p /tmp/nemorl-native-tools && "
+            "if /usr/bin/jq --version >/dev/null 2>&1; then "
+            "ln -sf /usr/bin/jq /tmp/nemorl-native-tools/jq; "
+            "elif /openhands_setup/miniforge3/bin/jq --version >/dev/null 2>&1; then "
+            "ln -sf /openhands_setup/miniforge3/bin/jq /tmp/nemorl-native-tools/jq; "
+            "else echo 'No runnable jq found for OpenHands SWE setup' >&2; exit 126; fi && "
+            "export PATH=/tmp/nemorl-native-tools:$PATH && "'''
 
 
 def patch_gym_openhands_tmux_source(source: str) -> str:
@@ -34,10 +42,29 @@ def patch_gym_openhands_tmux_source(source: str) -> str:
     )
 
 
-def apply_gym_openhands_tmux_fix(repo_dir: Path) -> tuple[Path, bool, str]:
+def patch_gym_openhands_jq_source(source: str) -> str:
+    """Select a runnable jq instead of trusting a cached host architecture."""
+    legacy_count = source.count(LEGACY_JQ_BLOCK)
+    fixed_count = source.count(FIXED_JQ_BLOCK)
+    if legacy_count == 1 and fixed_count == 0:
+        return source.replace(LEGACY_JQ_BLOCK, FIXED_JQ_BLOCK)
+    if legacy_count == 0 and fixed_count == 1:
+        return source
+    raise ValueError(
+        "expected Gym jq setup block exactly once; "
+        f"found legacy={legacy_count}, fixed={fixed_count}"
+    )
+
+
+def patch_gym_openhands_source(source: str) -> str:
+    patched = patch_gym_openhands_tmux_source(source)
+    return patch_gym_openhands_jq_source(patched)
+
+
+def apply_gym_openhands_runtime_fix(repo_dir: Path) -> tuple[Path, bool, str]:
     app_path = repo_dir / GYM_APP_RELATIVE_PATH
     source = app_path.read_text()
-    patched = patch_gym_openhands_tmux_source(source)
+    patched = patch_gym_openhands_source(source)
     changed = patched != source
     if changed:
         app_path.write_text(patched)
@@ -47,11 +74,11 @@ def apply_gym_openhands_tmux_fix(repo_dir: Path) -> tuple[Path, bool, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Apply the NeMo Gym OpenHands libtmux startup fix"
+        description="Apply NeMo Gym OpenHands runtime compatibility fixes"
     )
     parser.add_argument("--repo-dir", type=Path, required=True)
     args = parser.parse_args()
-    app_path, changed, digest = apply_gym_openhands_tmux_fix(args.repo_dir)
+    app_path, changed, digest = apply_gym_openhands_runtime_fix(args.repo_dir)
     print(f"path={app_path}")
     print(f"changed={str(changed).lower()}")
     print(f"sha256={digest}")

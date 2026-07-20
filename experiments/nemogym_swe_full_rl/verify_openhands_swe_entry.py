@@ -16,6 +16,42 @@ from openhands.events.action import CmdRunAction
 from openhands.runtime.utils.bash import BashSession
 
 
+def _select_runnable_jq() -> Path:
+    candidates = (
+        Path("/usr/bin/jq"),
+        Path("/openhands_setup/miniforge3/bin/jq"),
+    )
+    selected: Path | None = None
+    for candidate in candidates:
+        try:
+            result = subprocess.run(
+                [str(candidate), "--version"],
+                check=False,
+                text=True,
+                capture_output=True,
+                timeout=5,
+            )
+            detail = (result.stdout or result.stderr).strip()
+            print(
+                f"jq_probe={candidate} returncode={result.returncode} detail={detail}"
+            )
+            if result.returncode == 0 and selected is None:
+                selected = candidate
+        except (OSError, subprocess.TimeoutExpired) as error:
+            print(f"jq_probe={candidate} error={error}")
+    if selected is None:
+        raise RuntimeError("no runnable jq found in the SWE container")
+
+    tool_dir = Path("/tmp/nemorl-native-tools")
+    tool_dir.mkdir(parents=True, exist_ok=True)
+    jq_link = tool_dir / "jq"
+    jq_link.unlink(missing_ok=True)
+    jq_link.symlink_to(selected)
+    os.environ["PATH"] = f"{tool_dir}:{os.environ.get('PATH', '')}"
+    print(f"selected_jq={selected}")
+    return selected
+
+
 def _load_instance(dataset_path: Path) -> dict[str, Any]:
     record = json.loads(dataset_path.read_text().splitlines()[0])
     metadata = record["responses_create_params"]["metadata"]
@@ -120,6 +156,7 @@ def main() -> int:
     instance_id = str(instance["instance_id"])
     os.environ["SWE_INSTANCE_ID"] = instance_id
     _prepare_swe_util(args.entry_script, instance)
+    _select_runnable_jq()
     workspace = _workspace_path(instance)
 
     print(f"instance_id={instance_id}")

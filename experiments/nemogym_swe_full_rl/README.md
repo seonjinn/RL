@@ -19,14 +19,22 @@ NeMo Gym server environments are stored under the shared Lustre
 with the server environment's Python path, so a node-local `/opt/gym_venvs`
 directory is invalid for this multi-node run.
 
-The pinned Gym revision exports an incomplete `TMUX` client value before
-OpenHands lets `libtmux` create its server. That points `libtmux` at a dead
-socket and stalls `instance_swe_entry.sh`. On submission, the launcher applies
-the exact-match `gym_openhands_tmux.py` compatibility fix after validating a
-clean worktree: `TMUX_TMPDIR` remains `/tmp`, while `TMUX` is unset so
-`libtmux.Server().new_session()` owns server creation. The patched source SHA is
-stored in `provenance.json`. Use a fresh remote worktree for each submitted run
-because Gym writes runtime artifacts below its source tree.
+The pinned Gym revision has two OpenHands runtime compatibility issues on
+Lyris. First, it exports an incomplete `TMUX` client value before `libtmux`
+creates its server, which points the client at a dead socket. Second, a shared
+OpenHands setup can contain an x86-64 Miniforge `jq`, while the SWE image is
+ARM64. Sourcing `instance_swe_entry.sh` then exits the tmux shell and appears as
+a 600-second OpenHands timeout because the completion marker can no longer be
+printed.
+
+After validating a clean worktree, the launcher applies exact-match source
+fixes in `gym_openhands_tmux.py`. `TMUX_TMPDIR` remains `/tmp`, `TMUX` is unset
+so `libtmux.Server().new_session()` owns server creation, and only a `jq` that
+passes an execution probe is exposed through `/tmp/nemorl-native-tools`. The
+SWE image's native `/usr/bin/jq` is preferred over the shared Miniforge copy.
+The patched source SHA is stored under `gym_openhands_runtime_fix` in
+`provenance.json`. Use a fresh remote worktree for each submitted run because
+Gym writes runtime artifacts below its source tree.
 
 Variants:
 
