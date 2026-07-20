@@ -45,7 +45,11 @@ esac
 
 case "${CONDITION#*-}" in
   nocg)
-    RECIPE=grpo-qwen3-30ba3b-4n4g-nocg-w3.yaml
+    if [[ "${IMPLEMENTATION}" == "adapter" ]]; then
+      RECIPE=grpo-qwen3-30ba3b-4n4g-nocg-adapter.yaml
+    else
+      RECIPE=grpo-qwen3-30ba3b-4n4g-nocg-w3.yaml
+    fi
     ;;
   attn)
     if [[ "${IMPLEMENTATION}" == "adapter" ]]; then

@@ -1,0 +1,16 @@
+defaults: ./grpo-qwen3-30ba3b-4n4g-nocg.yaml
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-30ba3b-4n4g-nocg-adapter
+policy:
+  sequence_packing:
+    enabled: true
+    train_mb_tokens: 4096
+    logprob_mb_tokens: 4096
+    algorithm: modified_first_fit_decreasing
+    sequence_length_round: 64
+  megatron_cfg:
+    cuda_graph_impl: none
+logger:
+  log_dir: logs/grpo-qwen3-30ba3b-4n4g-nocg-adapter
+  wandb:
+    name: grpo-qwen3-30ba3b-4n4g-nocg-adapter

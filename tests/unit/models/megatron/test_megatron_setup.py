@@ -37,24 +37,39 @@ from nemo_rl.utils.config import load_config, register_omegaconf_resolvers
 
 
 def test_pr5672_qwen30_packed_attention_recipe_uses_te_static_thd():
-    """The resolved production recipe must preserve the TE adapter contract."""
+    """The resolved adapter recipes must preserve comparable FP64 production."""
     register_omegaconf_resolvers()
-    config = load_config(
-        Path(__file__).parents[4] / "examples/configs/recipes/llm/performance/"
-        "grpo-qwen3-30ba3b-4n4g-cg-attn.yaml"
-    )
-    OmegaConf.resolve(config)
-    cfg = config.policy.megatron_cfg
+    recipe_dir = Path(__file__).parents[4] / "examples/configs/recipes/llm/performance"
+    no_cg_config = load_config(recipe_dir / "grpo-qwen3-30ba3b-4n4g-nocg-adapter.yaml")
+    attention_config = load_config(recipe_dir / "grpo-qwen3-30ba3b-4n4g-cg-attn.yaml")
+    OmegaConf.resolve(no_cg_config)
+    OmegaConf.resolve(attention_config)
+    no_cg_megatron_cfg = no_cg_config.policy.megatron_cfg
+    attention_megatron_cfg = attention_config.policy.megatron_cfg
 
-    assert config.checkpointing.enabled is False
-    assert cfg.moe_router_dtype == "fp64"
-    assert cfg.cuda_graph_impl == "transformer_engine"
-    assert cfg.cuda_graph_scope == "attn"
-    assert cfg.cuda_graph_pr5672_thd is True
-    assert cfg.cuda_graph_packed_seq is True
-    assert cfg.cuda_graph_max_packed_seqs == 64
-    assert cfg.cuda_graph_warmup_steps == 3
-    assert list(cfg.cuda_graph_buckets) == [4096]
+    assert no_cg_config.checkpointing.enabled is False
+    assert attention_config.checkpointing.enabled is False
+    assert no_cg_megatron_cfg.moe_router_dtype == "fp64"
+    assert attention_megatron_cfg.moe_router_dtype == "fp64"
+    assert no_cg_megatron_cfg.cuda_graph_impl == "none"
+    assert attention_megatron_cfg.cuda_graph_impl == "transformer_engine"
+    assert attention_megatron_cfg.cuda_graph_scope == "attn"
+    assert attention_megatron_cfg.cuda_graph_pr5672_thd is True
+    assert attention_megatron_cfg.cuda_graph_packed_seq is True
+    assert attention_megatron_cfg.cuda_graph_max_packed_seqs == 64
+    assert attention_megatron_cfg.cuda_graph_warmup_steps == 3
+    assert list(attention_megatron_cfg.cuda_graph_buckets) == [4096]
+
+    expected_packing = {
+        "enabled": True,
+        "train_mb_tokens": 4096,
+        "logprob_mb_tokens": 4096,
+        "algorithm": "modified_first_fit_decreasing",
+        "sequence_length_round": 64,
+    }
+    for key, expected_value in expected_packing.items():
+        assert no_cg_config.policy.sequence_packing[key] == expected_value
+        assert attention_config.policy.sequence_packing[key] == expected_value
 
 
 @pytest.mark.mcore

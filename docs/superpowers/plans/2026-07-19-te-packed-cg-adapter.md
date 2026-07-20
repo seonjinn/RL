@@ -34,6 +34,7 @@
 | tests/unit/models/megatron/test_train.py | Loss-boundary forwarding tests. |
 | tests/unit/models/policy/test_megatron_worker.py | Capture sample and parameter-relocation tests. |
 | tests/unit/models/megatron/test_megatron_setup.py | Production recipe contract test. |
+| examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-nocg-adapter.yaml | Comparable packed no-CG adapter baseline. |
 | examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-cg-attn.yaml | FP64 production attention recipe. |
 | examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-cg-attn-moe-router-w3.yaml | FP32 router diagnostic recipe. |
 | experiments/cuda_graph/launch_qwen30_moe_cg_comparison_ptyche.sh | Ptyche smoke and benchmark launcher. |
@@ -343,6 +344,7 @@ git commit -s -m "feat: capture TE packed graphs with fresh parameters"
 ## Task 4: Encode the production recipe contract
 
 **Files:**
+- Create: examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-nocg-adapter.yaml
 - Modify: examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-cg-attn.yaml
 - Modify: examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-cg-attn-moe-router-w3.yaml
 - Modify: experiments/cuda_graph/launch_qwen30_moe_cg_comparison_ptyche.sh
@@ -350,29 +352,43 @@ git commit -s -m "feat: capture TE packed graphs with fresh parameters"
 
 **Consumes:** Tasks 1-3.
 
-**Produces:** A production-safe FP64 attention recipe and separately labelled FP32 router diagnostics.
+**Produces:** A comparable packed no-CG adapter baseline, a production-safe FP64 attention recipe, and separately labelled FP32 router diagnostics.
 
 - [ ] **Step 1: Write the failing recipe test**
 
 ~~~python
 def test_pr5672_qwen30_packed_attention_recipe_uses_te_static_thd():
-    from pathlib import Path
-    import yaml
+    register_omegaconf_resolvers()
+    recipe_dir = Path(__file__).parents[4] / "examples/configs/recipes/llm/performance"
+    no_cg = load_config(recipe_dir / "grpo-qwen3-30ba3b-4n4g-nocg-adapter.yaml")
+    attn = load_config(recipe_dir / "grpo-qwen3-30ba3b-4n4g-cg-attn.yaml")
+    OmegaConf.resolve(no_cg)
+    OmegaConf.resolve(attn)
 
-    recipe = yaml.safe_load(
-        (
-            Path(__file__).parents[4]
-            / "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-cg-attn.yaml"
-        ).read_text()
-    )
-    cfg = recipe["policy"]["megatron_cfg"]
+    assert no_cg.checkpointing.enabled is False
+    assert no_cg.policy.megatron_cfg.cuda_graph_impl == "none"
+    assert no_cg.policy.megatron_cfg.moe_router_dtype == "fp64"
+    assert attn.checkpointing.enabled is False
+    assert attn.policy.megatron_cfg.moe_router_dtype == "fp64"
+    cfg = attn.policy.megatron_cfg
+    assert cfg.cuda_graph_impl == "transformer_engine"
+    assert cfg.cuda_graph_scope == "attn"
+    assert cfg.cuda_graph_pr5672_thd is True
+    assert cfg.cuda_graph_packed_seq is True
+    assert cfg.cuda_graph_max_packed_seqs == 64
+    assert cfg.cuda_graph_warmup_steps == 3
+    assert list(cfg.cuda_graph_buckets) == [4096]
 
-    assert cfg["cuda_graph_impl"] == "transformer_engine"
-    assert cfg["cuda_graph_scope"] == "attn"
-    assert cfg["cuda_graph_pr5672_thd"] is True
-    assert cfg["cuda_graph_packed_seq"] is True
-    assert cfg["cuda_graph_max_packed_seqs"] == 64
-    assert cfg["cuda_graph_warmup_steps"] == 3
+    expected_packing = {
+        "enabled": True,
+        "train_mb_tokens": 4096,
+        "logprob_mb_tokens": 4096,
+        "algorithm": "modified_first_fit_decreasing",
+        "sequence_length_round": 64,
+    }
+    for key, value in expected_packing.items():
+        assert no_cg.policy.sequence_packing[key] == value
+        assert attn.policy.sequence_packing[key] == value
 ~~~
 
 - [ ] **Step 2: Confirm failure**
@@ -382,7 +398,7 @@ uv run --locked --extra mcore pytest \
   tests/unit/models/megatron/test_megatron_setup.py::test_pr5672_qwen30_packed_attention_recipe_uses_te_static_thd -q
 ~~~
 
-Expected: FAIL because the parent production recipe does not enable the adapter, Nmax, or three-step warmup.
+Expected: FAIL because the dedicated comparable adapter no-CG baseline does not exist.
 
 - [ ] **Step 3: Update recipes and launcher**
 
@@ -401,7 +417,7 @@ cuda_graph_buckets:
 
 For the MoE diagnostic recipe, add cuda_graph_pr5672_thd: true and retain FP32 router override only in launcher invocation. Add a comment that this condition is diagnostic and cannot establish production accuracy.
 
-Add ADAPTER_WORKTREE and adapter-* handling to the launcher. Map adapter-attn to the production attention recipe. Preserve --test-only as the default and require SUBMIT=1 for submission.
+Create the dedicated `adapter-nocg` recipe with the same enabled packing, 4096-token train/logprob budgets, `modified_first_fit_decreasing`, and 64-token rounding as `adapter-attn`. Add ADAPTER_WORKTREE and adapter-* handling to the launcher. Map only adapter-nocg to the dedicated no-CG recipe and adapter-attn to the production attention recipe. Preserve --test-only as the default and require SUBMIT=1 for submission.
 
 - [ ] **Step 4: Run recipe and launcher checks**
 
@@ -409,16 +425,20 @@ Add ADAPTER_WORKTREE and adapter-* handling to the launcher. Map adapter-attn to
 uv run --locked --extra mcore pytest \
   tests/unit/models/megatron/test_megatron_setup.py::test_pr5672_qwen30_packed_attention_recipe_uses_te_static_thd -q
 ADAPTER_WORKTREE=/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr5672-adapter-ptyche-20260719 \
+  CONDITION=adapter-nocg STEPS=20 \
+  ./experiments/cuda_graph/launch_qwen30_moe_cg_comparison_ptyche.sh
+ADAPTER_WORKTREE=/lustre/fsw/coreai_dlalgo_llm/users/sna/RL-cgseqpack-pr5672-adapter-ptyche-20260719 \
   CONDITION=adapter-attn STEPS=20 \
   ./experiments/cuda_graph/launch_qwen30_moe_cg_comparison_ptyche.sh
 ~~~
 
-Expected: recipe test passes and Slurm accepts the dry-run submission.
+Expected: recipe test passes and Slurm accepts each dry-run submission.
 
 - [ ] **Step 5: Commit**
 
 ~~~bash
-git add examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-cg-attn.yaml \
+git add examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-nocg-adapter.yaml \
+  examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-cg-attn.yaml \
   examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-cg-attn-moe-router-w3.yaml \
   experiments/cuda_graph/launch_qwen30_moe_cg_comparison_ptyche.sh \
   tests/unit/models/megatron/test_megatron_setup.py
@@ -462,7 +482,7 @@ Expected: capture after step 3, refit/offload, reload, and replay complete witho
 
 - [ ] **Step 3: Run the FP64 production performance pair**
 
-Submit `adapter-nocg` and `adapter-attn` for 20 steps with identical seed, data, checkpoint, 4n4g topology, token budget, sequence packing, and validation cadence. Run both conditions from the adapter worktree and its shared converted Megatron checkpoint namespace. Disable checkpoints.
+Submit `adapter-nocg` (the dedicated packed no-CG baseline) and `adapter-attn` for 20 steps with identical seed, data, checkpoint, 4n4g topology, and validation cadence. Enforce equal packing/token budgets in both recipes: enabled packing, train_mb_tokens=4096, logprob_mb_tokens=4096, algorithm=modified_first_fit_decreasing, and sequence_length_round=64. Run both conditions from the adapter worktree and its shared converted Megatron checkpoint namespace. Disable checkpoints.
 
 - [ ] **Step 4: Run separately labelled FP32 router diagnostics**
 
