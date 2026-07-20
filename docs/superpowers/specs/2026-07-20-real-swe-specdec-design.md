@@ -36,6 +36,9 @@ refit rather than the rollout-only benchmark.
 - Runs with `cudagraph_metrics=true` include vLLM's text logger so graph runtime
   mode counts are present in the driver log rather than discarded by the
   Prometheus-only NeMo-RL collector.
+- `--disable-custom-all-reduce` is an opt-in diagnostic for CUDA Graph profiling
+  crashes in vLLM's custom all-reduce kernel. It must be applied to both sides
+  of any performance comparison and is not part of the default lane.
 
 ## Safety Gates
 

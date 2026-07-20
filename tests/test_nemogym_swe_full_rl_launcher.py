@@ -332,6 +332,19 @@ def test_dflash_scheduler_budget_tracks_rollout_concurrency() -> None:
     assert 2084 - (7 - 1) * 6 == 2048
 
 
+def test_custom_all_reduce_diagnostic_is_opt_in() -> None:
+    default_payload = _dry_run("dflash_k7")
+    diagnostic_payload = _dry_run("dflash_k7", "--disable-custom-all-reduce")
+
+    assert not any(
+        "disable_custom_all_reduce=" in item for item in default_payload["overrides"]
+    )
+    assert (
+        "++policy.generation.vllm_kwargs.disable_custom_all_reduce=true"
+        in diagnostic_payload["overrides"]
+    )
+
+
 def test_cudagraph_diagnostics_enable_vllm_text_logger() -> None:
     source = VLLM_ASYNC_WORKER.read_text()
 

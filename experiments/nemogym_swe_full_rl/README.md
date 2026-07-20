@@ -70,6 +70,10 @@ Instead, `max_num_batched_tokens` preserves a derived 2048-token target budget
 and reserves `(K-1) * max_num_seqs` parallel-draft slots, as required by vLLM.
 CUDA Graph diagnostics register vLLM's text logger when `cudagraph_metrics` is
 enabled, so runtime FULL, PIECEWISE, and NONE counts are retained in the job log.
+The optional `--disable-custom-all-reduce` launcher flag isolates vLLM custom
+all-reduce failures during CUDA Graph profiling. It is diagnostic-only; use the
+same setting for a speculative run and its matched baseline before comparing
+performance.
 
 Validate OpenHands `libtmux` startup in the same Astropy SWE image before the
 multi-node run:

@@ -120,6 +120,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-prompts", type=int, default=2)
     parser.add_argument("--num-generations", type=int, default=2)
     parser.add_argument("--time-limit", default="05:00:00")
+    parser.add_argument("--disable-custom-all-reduce", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     if args.steps < 1:
@@ -215,6 +216,10 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
         "env.nemo_gym.swe_agents_train.responses_api_agents.swe_agents.concurrency=4",
         "env.nemo_gym.swe_agents_train.responses_api_agents.swe_agents.swebench_agent_timeout=900",
     ]
+    if args.disable_custom_all_reduce:
+        overrides.append(
+            "++policy.generation.vllm_kwargs.disable_custom_all_reduce=true"
+        )
     if variant.method is None:
         overrides.append(
             "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode="
