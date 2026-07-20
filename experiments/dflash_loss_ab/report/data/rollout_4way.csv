@@ -1,0 +1,5 @@
+config,swe2_rollout_toks,speedup_vs_baseline,job_id
+baseline_no_specdec,209,1.0,
+public_dflash_800k_generic_K9,310,1.48,
+ours_ultrachat10k_kl_div_K9,206,0.99,2439526
+ours_mixswe10k_kl_div_K9,269,1.29,2439527

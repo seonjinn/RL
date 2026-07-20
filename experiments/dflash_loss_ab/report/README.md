@@ -58,6 +58,27 @@ DFlash-paper-scale run (~800K samples) is roughly 35 GPU-hours x 8 GPUs: one
 `batch_long` job, no offline hidden-state storage (online mode used zero disk beyond
 checkpoints).
 
+## Real-rollout 4-way: 10% SWE data converts a useless drafter into a 1.29x one
+
+The leakage concern above made the val-EAL gap (+54% for the SWE mix) untrustworthy on
+its own, so both 10K drafters were dropped into the real NemoGym SWE2 rollout on Lyris
+(GB200, vLLM 0.25, K=9, identical overrides to the public-drafter runs):
+
+| Drafter | SWE2 rollout tok/s | vs baseline |
+|---|---|---|
+| none (baseline) | 209 | 1.00x |
+| public DFlash (800K generic) | 310 | 1.48x |
+| ours, UltraChat 10K | 206 | 0.99x |
+| ours, UltraChat + 10% SWE trajectories 10K | **269** | **1.29x** |
+
+Three conclusions. First, **a small generic drafter is worthless on agentic SWE** - the
+UltraChat-only drafter lands at baseline parity: whatever it accepts is exactly eaten by
+SpecDec overhead. Second, **swapping 10% of the same 10K budget to SWE trajectories
+buys +31% rollout throughput** (206 -> 269) - the domain-data hypothesis survives the
+real benchmark, not just the leaky val split. Third, the mix drafter already recovers
+~60% of the public drafter's gain with 80x less data, and the public drafter had zero
+SWE data - which bounds how much generic scale alone can matter.
+
 ## Key takeaway
 
 **Loss engineering is not where 235B drafter acceptance will come from - kl_div is
