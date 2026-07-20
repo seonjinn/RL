@@ -263,7 +263,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
         from vllm.config import CompilationConfig
         from vllm.engine.arg_utils import AsyncEngineArgs
         from vllm.v1.engine.async_llm import AsyncLLM
-        from vllm.v1.metrics.loggers import PrometheusStatLogger
+        from vllm.v1.metrics.loggers import LoggingStatLogger, PrometheusStatLogger
 
         # Workaround: convert compilation_config dict to CompilationConfig object
         # since AsyncEngineArgs doesn't handle the dict-to-pydantic conversion.
@@ -287,11 +287,11 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
             llm_kwargs["compilation_config"] = CompilationConfig(**compilation_config)
 
         self.llm_async_engine_args = AsyncEngineArgs(**llm_kwargs)
-        self.stat_loggers = (
-            [PrometheusStatLogger]
-            if self.cfg["vllm_cfg"].get("enable_vllm_metrics_logger", False)
-            else []
-        )
+        self.stat_loggers = []
+        if self.cfg["vllm_cfg"].get("enable_vllm_metrics_logger", False):
+            self.stat_loggers.append(PrometheusStatLogger)
+        if llm_kwargs.get("cudagraph_metrics", False):
+            self.stat_loggers.append(LoggingStatLogger)
         self.llm = AsyncLLM.from_engine_args(
             self.llm_async_engine_args, stat_loggers=self.stat_loggers
         )

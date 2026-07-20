@@ -52,8 +52,8 @@ Variants:
 
 - `baseline`: V2 model runner baseline for Eagle-3.
 - `eagle3_k3`: Thinking-2507 Eagle-3 drafter, K=3, V2 model runner.
-- `baseline_v1`: V1 model runner baseline for DFlash, using FULL graphs and
-  request capture sizes `[1,2,4,8,16]`.
+- `baseline_v1`: V1 model runner baseline for DFlash, using
+  FULL_AND_PIECEWISE graphs and request capture sizes `[1,2,4,8,16]`.
 - `dflash_k7`: DFlash K=7 with its 40960-token draft limit and V1 runner.
 - `dflash_k9`: DFlash K=9 exploration with the same V1 runner.
 
@@ -64,6 +64,11 @@ model runner because vLLM 0.25.1 V1 stops drafting safely after the drafter's
 runner differences to speculative decoding.
 The baseline request shapes correspond to DFlash's K7 query-token shapes
 `[8,16,32,64,128]`, so both lanes cover 1, 2, 4, 8, and 16 requests.
+The launcher caps `max_num_seqs` at the rollout concurrency and preserves a
+2048-token target scheduling budget. For DFlash, `max_num_batched_tokens` also
+reserves `(K-1) * max_num_seqs` parallel-draft slots, as required by vLLM.
+CUDA Graph diagnostics register vLLM's text logger when `cudagraph_metrics` is
+enabled, so runtime FULL, PIECEWISE, and NONE counts are retained in the job log.
 
 Validate OpenHands `libtmux` startup in the same Astropy SWE image before the
 multi-node run:

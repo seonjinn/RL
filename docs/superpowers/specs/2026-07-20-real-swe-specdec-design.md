@@ -27,8 +27,14 @@ refit rather than the rollout-only benchmark.
   enforce the draft model's context limit. V1 safely disables drafting after
   the DFlash K7 boundary while target-only decoding can continue to 131072.
 - DFlash CUDA Graph capture sizes are `[8,16,32,64,128]`.
-- The matched V1 baseline uses FULL graphs with request capture sizes
+- The matched V1 baseline uses FULL_AND_PIECEWISE graphs with request capture sizes
   `[1,2,4,8,16]`, corresponding to the DFlash K7 query-token shapes.
+- Scheduler limits match the four-request rollout concurrency. The target
+  scheduling budget remains 2048 tokens, while DFlash adds `(K-1)` draft slots
+  per request to `max_num_batched_tokens`.
+- Runs with `cudagraph_metrics=true` include vLLM's text logger so graph runtime
+  mode counts are present in the driver log rather than discarded by the
+  Prometheus-only NeMo-RL collector.
 
 ## Safety Gates
 

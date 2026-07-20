@@ -19,6 +19,9 @@ from experiments.nemogym_swe_full_rl.gym_openhands_tmux import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = REPO_ROOT / "experiments" / "nemogym_swe_full_rl" / "launch_lyris.py"
 GRPO = REPO_ROOT / "nemo_rl" / "algorithms" / "grpo.py"
+VLLM_ASYNC_WORKER = (
+    REPO_ROOT / "nemo_rl" / "models" / "generation" / "vllm" / "vllm_worker_async.py"
+)
 SWE_ENTRY_SMOKE = (
     REPO_ROOT / "experiments" / "nemogym_swe_full_rl" / "verify_openhands_swe_entry.py"
 )
@@ -279,9 +282,62 @@ def test_dflash_variants_use_verified_checkpoint_and_k_aligned_graphs() -> None:
         assert "speculative_config.draft_tensor_parallel_size=1" in rendered
         assert "speculative_config.max_model_len=40960" in rendered
         assert "speculative_config.attention_backend=FLASH_ATTN" in rendered
-        assert "compilation_config.cudagraph_mode=FULL" in rendered
+        assert (
+            "++policy.generation.vllm_kwargs.compilation_config."
+            "cudagraph_mode=FULL_AND_PIECEWISE" in overrides
+        )
         assert f"compilation_config.cudagraph_capture_sizes={capture_sizes}" in rendered
         assert "VLLM_USE_V2_MODEL_RUNNER=0" in payload["command"]
+
+
+@pytest.mark.parametrize(
+    ("variant", "speculative_tokens", "expected_batched_tokens"),
+    [
+        ("baseline_v1", 0, 2048),
+        ("dflash_k7", 7, 2072),
+        ("dflash_k9", 9, 2080),
+    ],
+)
+def test_dflash_scheduler_budget_reserves_parallel_draft_slots(
+    variant: str,
+    speculative_tokens: int,
+    expected_batched_tokens: int,
+) -> None:
+    payload = _dry_run(variant)
+    overrides = payload["overrides"]
+
+    assert "++policy.generation.vllm_kwargs.max_num_seqs=4" in overrides
+    assert "++policy.generation.vllm_kwargs.max_num_scheduled_tokens=2048" in overrides
+    assert (
+        f"++policy.generation.vllm_kwargs.max_num_batched_tokens={expected_batched_tokens}"
+        in overrides
+    )
+    if speculative_tokens:
+        reserved_slots = (speculative_tokens - 1) * 4
+        assert expected_batched_tokens - 2048 == reserved_slots
+
+
+def test_dflash_scheduler_budget_tracks_rollout_concurrency() -> None:
+    payload = _dry_run(
+        "dflash_k7",
+        "--num-prompts",
+        "3",
+        "--num-generations",
+        "2",
+    )
+    overrides = payload["overrides"]
+
+    assert "++policy.generation.vllm_kwargs.max_num_seqs=6" in overrides
+    assert "++policy.generation.vllm_kwargs.max_num_scheduled_tokens=2048" in overrides
+    assert "++policy.generation.vllm_kwargs.max_num_batched_tokens=2084" in overrides
+
+
+def test_cudagraph_diagnostics_enable_vllm_text_logger() -> None:
+    source = VLLM_ASYNC_WORKER.read_text()
+
+    assert "LoggingStatLogger" in source
+    assert 'llm_kwargs.get("cudagraph_metrics", False)' in source
+    assert "self.stat_loggers.append(LoggingStatLogger)" in source
 
 
 def test_eagle3_k3_uses_thinking_drafter_and_v2_runner() -> None:
@@ -302,7 +358,10 @@ def test_dflash_has_a_model_runner_matched_baseline() -> None:
     rendered = " ".join(payload["overrides"])
 
     assert "speculative_config" not in rendered
-    assert "compilation_config.cudagraph_mode=FULL" in rendered
+    assert (
+        "++policy.generation.vllm_kwargs.compilation_config."
+        "cudagraph_mode=FULL_AND_PIECEWISE" in payload["overrides"]
+    )
     assert "compilation_config.cudagraph_capture_sizes=[1,2,4,8,16]" in rendered
     assert "VLLM_USE_V2_MODEL_RUNNER=0" in payload["command"]
 

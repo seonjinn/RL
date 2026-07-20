@@ -44,6 +44,7 @@ EAGLE3_SNAPSHOT = DEFAULT_HF_HOME / (
     "snapshots/a7ec796dd65236f1ecd4ed2958a7f0689e5da5cf"
 )
 WANDB_PROJECT = "nemo-rl-vllm0251-swe-full-grpo"
+TARGET_SCHEDULED_TOKENS = 2048
 INCOMPATIBLE_INHERITED_ENVIRONMENT = (
     "CONDA_PREFIX",
     "CONDA_PREFIX_1",
@@ -138,6 +139,13 @@ def _capture_sizes_override(capture_sizes: tuple[int, ...]) -> str:
     )
 
 
+def _parallel_draft_slots_per_request(variant: Variant) -> int:
+    if variant.method != "dflash":
+        return 0
+    assert variant.speculative_tokens is not None
+    return variant.speculative_tokens - 1
+
+
 def build_plan(args: argparse.Namespace) -> RunPlan:
     variant = VARIANTS[args.variant]
     run_tag = args.run_tag or datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -148,6 +156,10 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
     )
     entrypoint = args.repo_dir / "examples/nemo_gym/run_grpo_nemo_gym.py"
     global_batch_size = args.num_prompts * args.num_generations
+    reserved_draft_slots = (
+        _parallel_draft_slots_per_request(variant) * global_batch_size
+    )
+    max_num_batched_tokens = TARGET_SCHEDULED_TOKENS + reserved_draft_slots
     wandb_run_name = f"q30-swe-full-rl-{variant.name}-{run_tag}"
     gym_revision = _git_output(
         args.repo_dir, "rev-parse", "HEAD:3rdparty/Gym-workspace/Gym"
@@ -187,6 +199,15 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
         "policy.generation.vllm_cfg.enable_vllm_metrics_logger=true",
         "policy.generation.vllm_cfg.vllm_metrics_logger_interval=0.5",
         "policy.generation.vllm_kwargs.moe_backend=triton",
+        f"++policy.generation.vllm_kwargs.max_num_seqs={global_batch_size}",
+        (
+            "++policy.generation.vllm_kwargs.max_num_scheduled_tokens="
+            f"{TARGET_SCHEDULED_TOKENS}"
+        ),
+        (
+            "++policy.generation.vllm_kwargs.max_num_batched_tokens="
+            f"{max_num_batched_tokens}"
+        ),
         "++policy.generation.vllm_kwargs.cudagraph_metrics=true",
         "checkpointing.enabled=false",
         f"logger.log_dir={run_dir / 'logs'}",
@@ -199,10 +220,9 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
         "env.nemo_gym.swe_agents_train.responses_api_agents.swe_agents.swebench_agent_timeout=900",
     ]
     if variant.method is None:
-        cudagraph_mode = "FULL_AND_PIECEWISE" if variant.use_v2_model_runner else "FULL"
         overrides.append(
             "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode="
-            f"{cudagraph_mode}"
+            "FULL_AND_PIECEWISE"
         )
         if variant.capture_sizes:
             overrides.append(_capture_sizes_override(variant.capture_sizes))
@@ -229,7 +249,8 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
                 "++policy.generation.vllm_kwargs.speculative_config.max_model_len=40960",
                 "++policy.generation.vllm_kwargs.speculative_config.attention_backend=FLASH_ATTN",
                 "++policy.generation.vllm_kwargs.kernel_config.enable_flashinfer_autotune=false",
-                "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode=FULL",
+                "++policy.generation.vllm_kwargs.compilation_config.cudagraph_mode="
+                "FULL_AND_PIECEWISE",
                 (
                     "++policy.generation.vllm_kwargs.speculative_config."
                     f"num_speculative_tokens={variant.speculative_tokens}"
