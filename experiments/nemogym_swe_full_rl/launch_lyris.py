@@ -327,6 +327,12 @@ def main() -> int:
                 )
             )
         return 0
+    if args.mode == "submit" and not os.environ.get("WANDB_API_KEY"):
+        print(
+            "WANDB_API_KEY must be set in the submission environment",
+            file=sys.stderr,
+        )
+        return 2
     return execute(plan, args.repo_dir, args.mode)
 
 

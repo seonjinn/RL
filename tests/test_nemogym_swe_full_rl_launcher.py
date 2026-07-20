@@ -180,3 +180,29 @@ def test_run_artifacts_live_outside_the_git_worktree() -> None:
         "/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/nemogym_swe_full_rl/runs/"
     )
     assert not payload["run_dir"].startswith(str(REPO_ROOT))
+
+
+def test_submit_requires_wandb_key_before_sbatch() -> None:
+    env = os.environ.copy()
+    env.pop("WANDB_API_KEY", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(LAUNCHER),
+            "--mode",
+            "submit",
+            "--variant",
+            "baseline",
+            "--repo-dir",
+            str(REPO_ROOT),
+        ],
+        check=False,
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 2
+    assert "WANDB_API_KEY must be set in the submission environment" in result.stderr
+    assert "sbatch" not in result.stderr
