@@ -46,6 +46,23 @@ from tests.unit.test_utils import SimpleLossFn
 pytestmark = pytest.mark.mcore
 
 
+class _HashableCudaGraphModule:
+    """Minimal hashable module fixture carrying CUDA graph state."""
+
+    def __init__(self, cuda_graphs):
+        self.cuda_graphs = cuda_graphs
+
+
+class _SingleModuleModel:
+    """Minimal model fixture exposing one CUDA graph-capable module."""
+
+    def __init__(self, module):
+        self._module = module
+
+    def modules(self):
+        return [self._module]
+
+
 def test_pr5672_sample_packed_seq_params_keeps_shape_and_metadata():
     from megatron.core.packed_seq_params import PackedSeqParams
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
@@ -120,8 +137,8 @@ def test_pr5672_parameter_move_invalidates_all_graph_state_without_graphs():
     )
 
     worker = object.__new__(MegatronPolicyWorkerImpl)
-    module = SimpleNamespace(cuda_graphs=[])
-    worker.model = SimpleNamespace(modules=lambda: [module])
+    module = _HashableCudaGraphModule(cuda_graphs=[])
+    worker.model = _SingleModuleModel(module)
     worker._cuda_graph_helper = None
     worker._cuda_graph_bucket_helpers = {}
     worker._cuda_graph_bucket_graphs = {}
@@ -151,8 +168,8 @@ def test_pr5672_parameter_move_invalidates_populated_graph_state():
     )
 
     worker = object.__new__(MegatronPolicyWorkerImpl)
-    module = SimpleNamespace(cuda_graphs=[object()])
-    worker.model = SimpleNamespace(modules=lambda: [module])
+    module = _HashableCudaGraphModule(cuda_graphs=[object()])
+    worker.model = _SingleModuleModel(module)
     worker._cuda_graph_helper = object()
     worker._cuda_graph_bucket_helpers = {4096: object()}
     worker._cuda_graph_bucket_graphs = {4096: {module: module.cuda_graphs}}
