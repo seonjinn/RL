@@ -1,0 +1,24 @@
+defaults: ./grpo-qwen3-235b-16n4g.yaml
+checkpointing:
+  enabled: false
+  checkpoint_dir: results/grpo-qwen3-235b-16n4g-cg-attn-adapter
+policy:
+  sequence_packing:
+    enabled: true
+    train_mb_tokens: 8192
+    logprob_mb_tokens: 8192
+    algorithm: modified_first_fit_decreasing
+    sequence_length_round: 64
+  megatron_cfg:
+    cuda_graph_impl: transformer_engine
+    cuda_graph_scope: attn
+    cuda_graph_warmup_steps: 3
+    cuda_graph_packed_seq: true
+    cuda_graph_pr5672_thd: true
+    cuda_graph_max_packed_seqs: 512
+    cuda_graph_buckets:
+    - 8192
+logger:
+  log_dir: logs/grpo-qwen3-235b-16n4g-cg-attn-adapter
+  wandb:
+    name: grpo-qwen3-235b-16n4g-cg-attn-adapter

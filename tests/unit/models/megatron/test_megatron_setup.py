@@ -72,6 +72,46 @@ def test_pr5672_qwen30_packed_attention_recipe_uses_te_static_thd():
         assert attention_config.policy.sequence_packing[key] == expected_value
 
 
+def test_pr5672_qwen235_packed_attention_recipe_matches_no_cg_baseline():
+    """The Qwen3-235B treatment changes only the packed TE graph settings."""
+    register_omegaconf_resolvers()
+    recipe_dir = Path(__file__).parents[4] / "examples/configs/recipes/llm/performance"
+    no_cg_config = load_config(recipe_dir / "grpo-qwen3-235b-16n4g-nocg-adapter.yaml")
+    attention_config = load_config(
+        recipe_dir / "grpo-qwen3-235b-16n4g-cg-attn-adapter.yaml"
+    )
+    OmegaConf.resolve(no_cg_config)
+    OmegaConf.resolve(attention_config)
+
+    for config in (no_cg_config, attention_config):
+        assert config.cluster.num_nodes == 16
+        assert config.cluster.gpus_per_node == 4
+        assert config.cluster.segment_size == 16
+        assert config.policy.megatron_cfg.moe_router_dtype == "fp64"
+        assert config.checkpointing.enabled is False
+
+    for field in (
+        "enabled",
+        "train_mb_tokens",
+        "logprob_mb_tokens",
+        "algorithm",
+        "sequence_length_round",
+    ):
+        assert (
+            no_cg_config.policy.sequence_packing[field]
+            == attention_config.policy.sequence_packing[field]
+        )
+
+    assert no_cg_config.policy.megatron_cfg.cuda_graph_impl == "none"
+    assert attention_config.policy.megatron_cfg.cuda_graph_impl == "transformer_engine"
+    assert attention_config.policy.megatron_cfg.cuda_graph_scope == "attn"
+    assert attention_config.policy.megatron_cfg.cuda_graph_pr5672_thd is True
+    assert attention_config.policy.megatron_cfg.cuda_graph_packed_seq is True
+    assert attention_config.policy.megatron_cfg.cuda_graph_warmup_steps == 3
+    assert attention_config.policy.megatron_cfg.cuda_graph_max_packed_seqs == 512
+    assert list(attention_config.policy.megatron_cfg.cuda_graph_buckets) == [8192]
+
+
 @pytest.mark.mcore
 class TestValidateModelPaths:
     """Tests for validate_model_paths function."""
