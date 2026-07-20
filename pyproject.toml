@@ -252,7 +252,7 @@ test = [
 ]
 
 [tool.uv.sources]
-megatron-core = { path = "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM", editable = true }
+megatron-core = { path = "3rdparty/Megatron-LM-workspace/Megatron-LM", editable = true }
 nemo-automodel = { path = "3rdparty/Automodel-workspace/Automodel", editable = true }
 megatron-bridge = { path = "3rdparty/Megatron-Bridge-workspace", editable = true }
 nemo_gym = { workspace = true }

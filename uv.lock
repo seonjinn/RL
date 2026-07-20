@@ -2589,7 +2589,7 @@ requires-dist = [
 
 [[package]]
 name = "megatron-core"
-source = { editable = "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM" }
+source = { editable = "3rdparty/Megatron-LM-workspace/Megatron-LM" }
 dependencies = [
     { name = "numpy", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "packaging", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
@@ -3513,7 +3513,7 @@ requires-dist = [
     { name = "math-verify" },
     { name = "matplotlib" },
     { name = "megatron-bridge", marker = "extra == 'mcore'", editable = "3rdparty/Megatron-Bridge-workspace" },
-    { name = "megatron-core", marker = "extra == 'mcore'", editable = "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM" },
+    { name = "megatron-core", marker = "extra == 'mcore'", editable = "3rdparty/Megatron-LM-workspace/Megatron-LM" },
     { name = "mistral-common", marker = "extra == 'automodel'", specifier = ">=1.11.0" },
     { name = "mlflow", specifier = ">=3.13.0" },
     { name = "mooncake-transfer-engine-cuda13", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')", specifier = "==0.3.10.post2" },

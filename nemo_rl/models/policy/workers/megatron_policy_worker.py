@@ -515,15 +515,6 @@ class MegatronPolicyWorkerImpl(
 
     def _invalidate_cuda_graphs_after_parameter_move(self) -> None:
         """Drop TE graphs whose captured parameter storage has been relocated."""
-        has_cuda_graphs = (
-            self._cuda_graph_helper is not None
-            or bool(self._cuda_graph_bucket_helpers)
-            or bool(self._cuda_graph_bucket_graphs)
-            or any(module.cuda_graphs for module in self._get_cg_modules())
-        )
-        if not has_cuda_graphs:
-            return
-
         self._clear_all_cuda_graphs()
         self._cuda_graph_helper = None
         self._cuda_graph_bucket_helpers = {}
@@ -614,20 +605,20 @@ class MegatronPolicyWorkerImpl(
         model_cfg = self.megatron_cfg.model
         for bucket in buckets:
             self._clear_all_cuda_graphs()
-            helper = TECudaGraphHelper(
-                model=[self.model],
-                config=model_cfg,
-                seq_length=bucket,
-                micro_batch_size=micro_batch_size,
-                optimizers=[self.optimizer],
-                sample_packed_seq_params=(
+            helper_kwargs = {
+                "model": [self.model],
+                "config": model_cfg,
+                "seq_length": bucket,
+                "micro_batch_size": micro_batch_size,
+                "optimizers": [self.optimizer],
+            }
+            if packed_seq_params is not None:
+                helper_kwargs["sample_packed_seq_params"] = (
                     self._make_cuda_graph_sample_packed_seq_params(
                         packed_seq_params, bucket
                     )
-                    if packed_seq_params is not None
-                    else None
-                ),
-            )
+                )
+            helper = TECudaGraphHelper(**helper_kwargs)
             if self.should_disable_forward_pre_hook:
                 self.disable_forward_pre_hook(param_sync=False)
             helper.create_cudagraphs()
@@ -794,20 +785,20 @@ class MegatronPolicyWorkerImpl(
                     self._cuda_graph_train_steps,
                     seq_length,
                 )
-            self._cuda_graph_helper = TECudaGraphHelper(
-                model=[self.model],
-                config=model_cfg,
-                seq_length=seq_length,
-                micro_batch_size=micro_batch_size,
-                optimizers=[self.optimizer],
-                sample_packed_seq_params=(
+            helper_kwargs = {
+                "model": [self.model],
+                "config": model_cfg,
+                "seq_length": seq_length,
+                "micro_batch_size": micro_batch_size,
+                "optimizers": [self.optimizer],
+            }
+            if packed_seq_params is not None:
+                helper_kwargs["sample_packed_seq_params"] = (
                     self._make_cuda_graph_sample_packed_seq_params(
                         packed_seq_params, seq_length
                     )
-                    if packed_seq_params is not None
-                    else None
-                ),
-            )
+                )
+            self._cuda_graph_helper = TECudaGraphHelper(**helper_kwargs)
             if self.should_disable_forward_pre_hook:
                 self.disable_forward_pre_hook(param_sync=False)
             self._cuda_graph_helper.create_cudagraphs()

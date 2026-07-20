@@ -15,6 +15,7 @@ import ast
 import os
 import tempfile
 import time
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
@@ -69,19 +70,63 @@ def test_pr5672_sample_packed_seq_params_keeps_shape_and_metadata():
     assert sample.cu_seqlens_q.tolist() == [0, 16, 16, 16, 16]
 
 
-def test_pr5672_parameter_move_invalidates_all_graph_state():
+def test_non_pr5672_cuda_graph_capture_omits_packed_seq_params_keyword(monkeypatch):
+    from megatron.core.transformer import cuda_graphs
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    class LegacyTECudaGraphHelper:
+        def __init__(self, model, config, seq_length, micro_batch_size, optimizers):
+            self.model = model
+            self.config = config
+            self.seq_length = seq_length
+            self.micro_batch_size = micro_batch_size
+            self.optimizers = optimizers
+            self.created = False
+
+        def create_cudagraphs(self):
+            self.created = True
+
+    monkeypatch.setattr(cuda_graphs, "TECudaGraphHelper", LegacyTECudaGraphHelper)
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.model = object()
+    worker.optimizer = object()
+    worker.megatron_cfg = SimpleNamespace(
+        model=SimpleNamespace(
+            cuda_graph_impl="transformer_engine", cuda_graph_warmup_steps=0
+        )
+    )
+    worker.cfg = {"megatron_cfg": {}}
+    worker._cuda_graph_helper = None
+    worker._cuda_graph_train_steps = 0
+    worker._cuda_graph_captured_seq_length = None
+    worker._cuda_graph_bucket_helpers = {}
+    worker._cuda_graph_bucket_graphs = {}
+    worker._cuda_graph_active_bucket = None
+    worker._cuda_graph_saved_graphs = {}
+    worker.should_disable_forward_pre_hook = False
+
+    worker._maybe_capture_cuda_graphs(seq_length=16, micro_batch_size=1)
+
+    assert isinstance(worker._cuda_graph_helper, LegacyTECudaGraphHelper)
+    assert worker._cuda_graph_helper.created
+
+
+def test_pr5672_parameter_move_invalidates_all_graph_state_without_graphs():
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
         MegatronPolicyWorkerImpl,
     )
 
     worker = object.__new__(MegatronPolicyWorkerImpl)
-    module = SimpleNamespace(cuda_graphs=[object()])
+    module = SimpleNamespace(cuda_graphs=[])
     worker.model = SimpleNamespace(modules=lambda: [module])
-    worker._cuda_graph_helper = object()
-    worker._cuda_graph_bucket_helpers = {4096: object()}
-    worker._cuda_graph_bucket_graphs = {4096: {module: module.cuda_graphs}}
+    worker._cuda_graph_helper = None
+    worker._cuda_graph_bucket_helpers = {}
+    worker._cuda_graph_bucket_graphs = {}
     worker._cuda_graph_active_bucket = 4096
-    worker._cuda_graph_saved_graphs = {module: module.cuda_graphs}
+    worker._cuda_graph_saved_graphs = {module: [object()]}
     worker._cuda_graph_captured_seq_length = 4096
     worker._cuda_graph_train_steps = 99
     worker.megatron_cfg = SimpleNamespace(
@@ -98,6 +143,23 @@ def test_pr5672_parameter_move_invalidates_all_graph_state():
     assert worker._cuda_graph_saved_graphs == {}
     assert worker._cuda_graph_captured_seq_length is None
     assert worker._cuda_graph_train_steps == 3
+
+
+def test_pr5672_mcore_source_uses_direct_workspace():
+    project_root = Path(__file__).resolve().parents[4]
+    expected_path = "3rdparty/Megatron-LM-workspace/Megatron-LM"
+
+    pyproject = tomllib.loads((project_root / "pyproject.toml").read_text())
+    lock = tomllib.loads((project_root / "uv.lock").read_text())
+    megatron_core = next(
+        package for package in lock["package"] if package["name"] == "megatron-core"
+    )
+
+    assert pyproject["tool"]["uv"]["sources"]["megatron-core"]["path"] == expected_path
+    assert megatron_core["source"] == {"editable": expected_path}
+    assert "Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM" not in (
+        project_root / "uv.lock"
+    ).read_text()
 
 
 class _FakeTrainableModel:
