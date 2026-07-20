@@ -957,6 +957,16 @@ class SFTCorrectnessAuditor:
                 f"train-batch evidence for validation step(s): {steps}"
             )
 
+    def finalize_terminal(self) -> None:
+        while self._pending_records:
+            pending_record = self._pending_records.pop(0)
+            self._record_sink(
+                dataclasses.replace(
+                    pending_record,
+                    status="terminal_without_next_train_batch",
+                )
+            )
+
     def consume_elapsed_seconds(self) -> float:
         elapsed = self._elapsed_seconds
         self._elapsed_seconds = 0.0

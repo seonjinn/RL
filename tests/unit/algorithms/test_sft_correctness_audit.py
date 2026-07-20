@@ -1168,3 +1168,32 @@ def test_auditor_finalizes_next_batch_and_compares_to_no_validation_control() ->
     assert (
         compare_next_train_batch_to_control(changed_control, records[0]).ready is False
     )
+
+
+def test_auditor_allows_terminal_validation_without_a_next_train_batch() -> None:
+    records: list[CorrectnessAuditRecord] = []
+    auditor = SFTCorrectnessAuditor(
+        policy=MagicMock(),
+        train_loader=_LoaderFixture(),
+        explicit_generator=None,
+        record_sink=records.append,
+    )
+    snapshot = dataclasses.replace(_snapshot_fixture(), next_train_batch_digest=None)
+
+    with patch(
+        "nemo_rl.algorithms.sft_correctness_audit.capture_correctness_snapshot",
+        side_effect=[snapshot, snapshot],
+    ):
+        auditor.audit_validation(
+            step=200,
+            validation=lambda: _validation_evidence_pair(),
+            validation_evidence=_validation_evidence_pair,
+        )
+
+    auditor.finalize_terminal()
+
+    assert len(records) == 1
+    assert records[0].validation_step == 200
+    assert records[0].gate.ready is True
+    assert records[0].next_train_batch is None
+    assert records[0].status == "terminal_without_next_train_batch"

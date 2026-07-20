@@ -855,6 +855,23 @@ def test_correctness_audit_finalizes_next_batch_and_captures_runtime_validation_
     assert '"input_mode"' not in train_source
 
 
+def test_correctness_audit_accepts_missing_next_batch_at_natural_termination() -> None:
+    audit_path = REPO_ROOT / "nemo_rl/algorithms/sft_correctness_audit.py"
+    terminal_finalizer = _function_node(
+        audit_path,
+        "finalize_terminal",
+        class_name="SFTCorrectnessAuditor",
+    )
+    terminal_source = ast.unparse(terminal_finalizer)
+
+    assert "terminal_without_next_train_batch" in terminal_source
+    assert "CorrectnessAuditError" not in terminal_source
+
+    sft_path = REPO_ROOT / "nemo_rl/algorithms/sft.py"
+    train_source = ast.unparse(_function_node(sft_path, "sft_train"))
+    assert "correctness_auditor.finalize_terminal()" in train_source
+
+
 class _FakeCorrectnessAuditError(RuntimeError):
     pass
 

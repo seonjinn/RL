@@ -615,7 +615,8 @@ def test_sft_train_enabled_audit_uses_natural_batch_and_separate_timing(
         2,
         3,
     ]
-    auditor_instance.flush_pending.assert_called_once_with()
+    auditor_instance.finalize_terminal.assert_called_once_with()
+    auditor_instance.flush_pending.assert_not_called()
     audit_timing_calls = [
         log_call
         for log_call in mock_components["logger"].log_metrics.call_args_list

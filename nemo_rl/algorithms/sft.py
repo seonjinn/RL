@@ -2192,7 +2192,7 @@ def sft_train(
                 return
             if total_steps >= master_config.sft.max_num_steps:
                 if correctness_auditor is not None:
-                    correctness_auditor.flush_pending()
+                    correctness_auditor.finalize_terminal()
                 print(
                     "Max number of steps has been reached, stopping training early",
                     flush=True,
@@ -2203,4 +2203,4 @@ def sft_train(
         current_step = 0  # Reset step counter for new epoch
 
     if correctness_auditor is not None:
-        correctness_auditor.flush_pending()
+        correctness_auditor.finalize_terminal()
