@@ -38,7 +38,9 @@ Validate OpenHands `libtmux` startup in the same Astropy SWE image before the
 multi-node run:
 
 ```bash
-REPO_DIR="$PWD" sbatch \
+REPO_DIR="$PWD" \
+OPENHANDS_SETUP="$PWD/3rdparty/Gym-workspace/Gym/responses_api_agents/swe_agents/swe_openhands_setup" \
+sbatch --export=ALL,REPO_DIR,OPENHANDS_SETUP \
   experiments/nemogym_swe_full_rl/verify_openhands_libtmux_lyris.sh
 ```
 

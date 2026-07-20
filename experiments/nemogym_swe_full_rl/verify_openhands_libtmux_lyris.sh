@@ -12,6 +12,7 @@ set -euo pipefail
 REPO_DIR="${REPO_DIR:?REPO_DIR must point to the committed NeMo-RL worktree}"
 SIF="${SIF:-/lustre/fsw/coreai_dlalgo_llm/users/sna/sweb_sifs/astropy__astropy-12907.sif}"
 NEMO_CONTAINER="${NEMO_CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260715.sqsh}"
+OPENHANDS_SETUP="${OPENHANDS_SETUP:?OPENHANDS_SETUP must contain OpenHands and miniforge3}"
 
 srun \
     --no-container-mount-home \
@@ -26,6 +27,7 @@ srun \
     apptainer exec \
         --cleanenv \
         --bind "${REPO_DIR}:${REPO_DIR}:ro" \
+        --bind "${OPENHANDS_SETUP}:/openhands_setup:ro" \
         "${SIF}" \
         env \
         PATH="/openhands_setup/miniforge3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
