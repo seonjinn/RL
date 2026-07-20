@@ -174,6 +174,7 @@ class ResolvedRun:
     variant: VariantSpec
     draft_checkpoint: CheckpointSpec | None
     optimizer_offload_mode: OptimizerOffloadMode
+    logprob_batch_size: int | None
     hydra_overrides: tuple[str, ...]
     dynamic_schedule: DynamicSchedule | None = None
     dynamic_schedule_transport: bool = False
@@ -929,6 +930,7 @@ def resolve_run(
     dynamic_schedule: DynamicSchedule | None = None,
     optimizer_offload_mode: OptimizerOffloadMode = "pageable",
     max_osl: int | None = None,
+    logprob_batch_size: int | None = None,
     allow_dynamic_schedule_transport: bool = False,
 ) -> ResolvedRun:
     """Resolve an allowed model, variant, phase, and cluster into a run record."""
@@ -938,6 +940,10 @@ def resolve_run(
         if isinstance(max_osl, bool) or not 1 <= max_osl <= 40960:
             raise ValueError("max OSL must be between 1 and 40960 tokens")
         recipe = replace(recipe, max_osl=max_osl)
+    if logprob_batch_size is not None and (
+        isinstance(logprob_batch_size, bool) or logprob_batch_size < 1
+    ):
+        raise ValueError("logprob batch size must be a positive integer")
     variant = _find_variant(variant_key)
     phase_spec = _find_phase(phase)
     cluster_spec = _find_cluster(cluster)
@@ -1045,6 +1051,11 @@ def resolve_run(
     sequence_length_overrides = (
         (f"policy.max_total_sequence_length={max_osl}",) if max_osl is not None else ()
     )
+    logprob_overrides = (
+        (f"policy.logprob_batch_size={logprob_batch_size}",)
+        if logprob_batch_size is not None
+        else ()
+    )
     scheduler_overrides = tuple(
         override
         for override in (
@@ -1082,11 +1093,13 @@ def resolve_run(
         variant=variant,
         draft_checkpoint=draft_checkpoint,
         optimizer_offload_mode=optimizer_offload_mode,
+        logprob_batch_size=logprob_batch_size,
         dynamic_schedule=dynamic_schedule,
         dynamic_schedule_transport=dynamic_schedule_transport,
         hydra_overrides=base_overrides
         + optimizer_offload_overrides
         + sequence_length_overrides
+        + logprob_overrides
         + scheduler_overrides
         + capture_overrides
         + _speculative_overrides(
@@ -1594,6 +1607,7 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--run-tag")
     parser.add_argument("--dynamic-schedule", type=Path)
     parser.add_argument("--max-osl", type=int)
+    parser.add_argument("--logprob-batch-size", type=int)
     parser.add_argument("--allow-dynamic-schedule-transport", action="store_true")
     parser.add_argument(
         "--optimizer-offload-mode",
@@ -1627,6 +1641,7 @@ def _show_record(
         "variant": run.variant.key,
         "phase": run.phase.key,
         "max_osl": run.recipe.max_osl,
+        "logprob_batch_size": run.logprob_batch_size,
         "optimizer_offload_mode": run.optimizer_offload_mode,
         "runner": run.variant.runner,
         "recipe": run.recipe.path,
@@ -1682,6 +1697,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         dynamic_schedule=dynamic_schedule,
         optimizer_offload_mode=args.optimizer_offload_mode,
         max_osl=args.max_osl,
+        logprob_batch_size=args.logprob_batch_size,
         allow_dynamic_schedule_transport=args.allow_dynamic_schedule_transport,
     )
     run_tag = args.run_tag or _run_tag(

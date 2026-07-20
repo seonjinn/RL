@@ -77,6 +77,35 @@ def test_qwen235_long_context_override_updates_resolved_osl_and_hydra() -> None:
     assert "policy.max_total_sequence_length=32768" in run.hydra_overrides
 
 
+def test_long_context_logprob_batch_override_is_explicit_and_reproducible() -> None:
+    run = resolve_run(
+        "qwen32",
+        "baseline",
+        "smoke2",
+        "lyris",
+        max_osl=32768,
+        logprob_batch_size=1,
+    )
+
+    assert run.logprob_batch_size == 1
+    assert "policy.logprob_batch_size=1" in run.hydra_overrides
+
+
+@pytest.mark.parametrize("logprob_batch_size", [False, 0, -1])
+def test_logprob_batch_override_rejects_invalid_values(
+    logprob_batch_size: int,
+) -> None:
+    with pytest.raises(ValueError, match="logprob batch size"):
+        resolve_run(
+            "qwen32",
+            "baseline",
+            "smoke2",
+            "lyris",
+            max_osl=32768,
+            logprob_batch_size=logprob_batch_size,
+        )
+
+
 @pytest.mark.parametrize("max_osl", [0, 40961])
 def test_qwen235_long_context_override_rejects_invalid_limits(max_osl: int) -> None:
     with pytest.raises(ValueError, match="max OSL"):
