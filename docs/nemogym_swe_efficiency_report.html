@@ -172,7 +172,10 @@ SWE2는 decode-heavy라 Amdahl 상한 1.21&times;를 기대했으나, <b>실측 
 <b>baseline 209 &gt; eagle3 189 (0.90&times;) &gt; suffix 101 (0.48&times;) &gt; ngram 99 (0.47&times;) tok/s</b>.</p>
 <p><b>저-K 스윕 (acceptance가 낮으면 최적 K가 내려간다는 가설 검증):</b>
 <b>eagle3 K=1이 218 tok/s (1.04&times;)로 baseline을 넘는 첫 구성</b> — 위치1 수락률 26%(MAL≈1.26)로도 K1의 최소 비용(드래프터 1회 forward + 2토큰 verify)이면 순이득. 턴 p50 latency 6.6→4.4s.
-반면 suffix K3/K5 = 100/109, ngram K4 = 99 tok/s — K와 무관하게 동일한 손해로, 모델-프리 실패가 proposal 비용(컨텍스트 비례) 때문이라는 진단의 교차 확인.
+반면 suffix K3/K5 = 100/109, ngram K4 = 99 tok/s — K와 무관하게 동일한 손해로, 모델-프리 실패가 proposal 비용(컨텍스트 비례) 때문이라는 진단의 교차 확인.</p>
+<p><b>CUDA graph 교란 검증과 suffix K축 완결.</b> suffix/ngram은 arctic 요구로 V1 러너에서 돌아 PIECEWISE(mixed) 3-shape만 캡처됐다 — 교란 가능성을 확인하기 위해 <b>V1-piecewise baseline을 별도 실측: 209 tok/s로 V2 baseline과 동일</b> (BS 1–2에서는 FULL 그래프 이득이 미미). 즉 그래프 설정은 교란이 아니었고 suffix의 패배는 진짜다.
+suffix 전체 K축: K1 168 / K2 126 / K3 100 / K5 109 / K8 101 / <b>K32(논문 적응형 세팅) 115</b> — 모든 K에서 baseline 미달.
+ISSTA26 논문(2604.26469)이 SWE-bench에서 suffix 1.66–3.35&times;를 보고한 것과의 차이는 설정이 아니라 <b>조건</b>: greedy(temp 0)·thinking 비활성·vLLM v0.12 베이스라인 — RL rollout(temp 1.0, Thinking 정책)에는 전이 불가. 단 같은 논문의 "eagle3는 SWE-bench에서 진다"(0.70–1.10&times;)는 우리 실측과 일치.
 모델-프리 drafter의 replay-산술 천장(suffix 1.60&times;)은 실현되지 않았다: <b>proposal 비용이 컨텍스트 길이에 비례</b>(suffix는 요청마다 16–33K 토큰 트리 구축, ngram은 매 decode 스텝 프롬프트 스캔)해서 장문에서 스텝 비용을 지배한다. 결론: <b>기성 SpecDec 3종 모두 SWE2 멀티턴에서 역효과</b> — 모델 drafter는 acceptance(분포)로, 모델-프리는 proposal 비용으로, 같은 뿌리(장문 컨텍스트)에서 죽는다.
 유효 경로는 ① eagle3-online(RL rollout 데이터로 drafter 장문 재학습), ② DAS식 증분 suffix tree(요청별 재구축 제거 — 우리 실측이 그 설계 필요성을 재확인).</p>
 <p class="muted">부가 발견(upstream): eagle3 + V2 러너 + 장문(&gt;24K) 프롬프트 조합에서 CUDA illegal memory access (vLLM 0.25.0 patched wheel, eager/V1은 정상) — ledger 추가 대상.</p>
