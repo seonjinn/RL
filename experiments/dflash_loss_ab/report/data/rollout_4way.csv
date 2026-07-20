@@ -1,6 +1,11 @@
 config,swe2_rollout_toks,speedup_vs_baseline,job_id,note
 baseline_no_specdec,209,1.0,,
-public_dflash_800k_generic_K9,310,1.48,,800K generic samples
-ours_ultrachat10k_kl_div_K9,206,0.99,2439526,no SWE data
-ours_mixpub10k_swesmith_K9,220,1.05,2440577,"public SWE-smith 10%, eval instances UNSEEN, SWE-agent scaffold"
-ours_mixswe10k_own_K9,269,1.29,2439527,CONTAMINATED: trained on trajectories of eval instances + same OpenHands scaffold
+public_dflash_800k_K9,310,1.48,,800K generic; its own optimum
+ours_uc10k_K9,206,0.99,2439526,0% SWE
+ours_mixpub3pct_K9,220,1.05,2440577,~3% SWE-smith (actual share; shuffle-select dilution)
+ours_swe50_K9,213,1.02,2441547,50% SWE-smith - NO gain over 3%: foreign scaffold saturates
+ours_swe50_K5,279,1.33,2441546,
+ours_mixown3pct_K9,269,1.29,2439527,58 matched-scaffold convs (contaminated for general claims; legit for RL pool)
+ours_mixown3pct_K7,270,1.29,2441005,
+ours_mixown3pct_K5,313,1.5,2441011,BEST - beats public 800K
+ours_mixown3pct_K3,311,1.49,2441341,K3-K5 plateau

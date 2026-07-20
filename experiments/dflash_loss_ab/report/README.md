@@ -102,6 +102,27 @@ components are legitimately available - GRPO re-rolls the same instance pool wit
 same scaffold every step, so "contamination" is exactly the adaptation that deployment
 provides.
 
+## K re-tuning and the ratio sweep: match beats mass
+
+Two follow-up sweeps completed the picture. First, re-tuning K for our drafter
+(the public drafter's optimum was K=9): K3=311, **K5=313**, K7=270, K9=269 tok/s.
+Our 10K drafter's acceptance decays faster with draft position, so shorter drafts cut
+wasted draft cost - at K5 the 58-conversation matched-scaffold drafter **beats the
+public 800K drafter's best (313 vs 310, 1.50x vs baseline)**.
+
+Second, scaling the contamination-free SWE share (SWE-smith, SWE-agent scaffold) at a
+fixed 10K budget, evaluated on the astropy OpenHands rollout at K9: 0% -> 206, ~3% ->
+220, 50% -> 213. **Foreign-scaffold SWE data saturates by ~3%** - even though val EAL
+kept climbing (1.211 -> 1.238 -> 2.680, and 3.274 at 100% SWE), the rollout number did
+not move. The val metric inflates in-distribution: a textbook case of a fit-time metric
+decoupling from downstream impact. Meanwhile 58 matched-scaffold conversations (~3%
+share) moved the rollout from 206 to 269@K9 / 313@K5.
+
+**The dominant axis is deployment match (OpenHands scaffold + instance pool), not SWE
+token mass.** Also validated: speculators resume-from-checkpoint works across chained
+jobs (`Resuming training on epoch 5` after a dependency-chained restart), so 4h-wall
+chunked training and the 7d `batch_long` partition are both viable for the 235B run.
+
 ## Key takeaway
 
 **Loss engineering is not where 235B drafter acceptance will come from - kl_div is
