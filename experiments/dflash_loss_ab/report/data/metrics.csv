@@ -1,0 +1,6 @@
+target,loss_fn,val_eal,pos1_acc,pos2_acc,pos3_acc,val_loss,arm_minutes,job_id
+Qwen3-30B-A3B-Thinking-2507,kl_div,1.211,0.702,0.488,0.351,1.355,25,2718608
+Qwen3-30B-A3B-Thinking-2507,nla,1.180,0.692,0.479,0.342,1.082,23,2718608
+Qwen3-30B-A3B-Thinking-2507,ce,1.188,0.695,0.481,0.344,,23,2718889
+Qwen3-30B-A3B-Thinking-2507,tv,0.571,0.417,0.293,0.211,,22,2718889
+Qwen3-235B-A22B-Thinking-2507,kl_div,1.128,0.681,0.458,0.323,1.390,26,2719072
