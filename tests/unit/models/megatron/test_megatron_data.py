@@ -1488,3 +1488,40 @@ def test_get_pack_sequence_parameters_for_megatron(get_pack_sequence_parameters_
         # Check that all workers succeeded
         for i, result in enumerate(results):
             assert result["success"], f"Worker {i} failed: {result['error']}"
+
+
+@pytest.mark.mcore
+def test_pr5672_graph_psp_padding_keeps_loss_boundaries_unpadded():
+    """Graph PSP padding must not change the loss sequence boundaries."""
+    from nemo_rl.models.megatron.data import _pack_sequences_for_megatron
+
+    input_ids = torch.tensor([[11, 12, 0, 0], [21, 22, 23, 0]], device="cuda")
+    lengths = torch.tensor([2, 3], device="cuda")
+    _, _, psp, loss_cu, loss_cu_padded = _pack_sequences_for_megatron(
+        input_ids=input_ids,
+        seq_lengths=lengths,
+        pad_packed_seq_to=8,
+        cu_seqlens_pad_to_entries=5,
+    )
+
+    assert loss_cu.tolist() == [0, 2, 5]
+    assert loss_cu_padded.tolist() == [0, 2, 5]
+    assert psp.cu_seqlens_q.tolist() == [0, 2, 5, 5, 5]
+    assert psp.cu_seqlens_q_padded.tolist() == [0, 2, 5, 5, 5]
+
+
+@pytest.mark.mcore
+def test_pr5672_graph_psp_rejects_too_many_sequences():
+    """Static graph PSPs require enough entries for every packed sequence."""
+    from nemo_rl.models.megatron.data import _pack_sequences_for_megatron
+
+    with pytest.raises(
+        AssertionError,
+        match="increase policy.megatron_cfg.cuda_graph_max_packed_seqs",
+    ):
+        _pack_sequences_for_megatron(
+            input_ids=torch.tensor([[1], [2], [3]], device="cuda"),
+            seq_lengths=torch.tensor([1, 1, 1], device="cuda"),
+            pad_packed_seq_to=3,
+            cu_seqlens_pad_to_entries=3,
+        )

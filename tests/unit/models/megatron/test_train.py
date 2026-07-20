@@ -879,6 +879,46 @@ class TestLossPostProcessor:
         # Verify SequencePackingLossWrapper was called
         mock_wrapper.assert_called_once()
 
+    @patch(
+        "nemo_rl.models.megatron.train.get_tensor_model_parallel_rank", return_value=0
+    )
+    @patch("nemo_rl.models.megatron.train.get_tensor_model_parallel_group")
+    @patch("nemo_rl.models.megatron.train.get_context_parallel_group")
+    @patch(
+        "nemo_rl.models.megatron.train.get_context_parallel_world_size", return_value=1
+    )
+    @patch("nemo_rl.models.megatron.train.SequencePackingLossWrapper")
+    def test_loss_post_processor_uses_explicit_loss_boundaries_for_graph_psp(
+        self, mock_wrapper, mock_cp_size, mock_cp_grp, mock_tp_grp, mock_tp_rank
+    ):
+        """Endpoint-padded graph PSPs must not define sequence-packing loss spans."""
+        from nemo_rl.models.megatron.train import LossPostProcessor
+
+        mock_tp_grp.return_value = MagicMock()
+        mock_cp_grp.return_value = MagicMock()
+        loss_cu_seqlens = torch.tensor([0, 2, 5])
+        loss_cu_seqlens_padded = torch.tensor([0, 2, 5])
+        graph_packed_seq_params = MagicMock()
+        graph_packed_seq_params.cu_seqlens_q = torch.tensor([0, 2, 5, 5, 5])
+        graph_packed_seq_params.cu_seqlens_q_padded = torch.tensor([0, 2, 5, 5, 5])
+
+        processor = LossPostProcessor(
+            loss_fn=MagicMock(),
+            cfg={"sequence_packing": {"enabled": True}},
+            cp_normalize=False,
+        )
+
+        processor(
+            data_dict=MagicMock(),
+            packed_seq_params=graph_packed_seq_params,
+            loss_cu_seqlens=loss_cu_seqlens,
+            loss_cu_seqlens_padded=loss_cu_seqlens_padded,
+        )
+
+        wrapper_kwargs = mock_wrapper.call_args.kwargs
+        assert wrapper_kwargs["cu_seqlens_q"] is loss_cu_seqlens
+        assert wrapper_kwargs["cu_seqlens_q_padded"] is loss_cu_seqlens_padded
+
 
 class TestLogprobsPostProcessor:
     """Tests for LogprobsPostProcessor class."""

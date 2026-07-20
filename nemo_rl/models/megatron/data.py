@@ -45,6 +45,7 @@ class ProcessedInputs:
     position_ids: Optional[torch.Tensor]
     packed_seq_params: Optional[PackedSeqParams]
     cu_seqlens_padded: Optional[torch.Tensor]
+    cu_seqlens: Optional[torch.Tensor] = None
     mtp_loss_mask: Optional[torch.Tensor] = None
     routed_experts: Optional[torch.Tensor] = None
     routed_experts_cp_sharded: Optional[torch.Tensor] = None
@@ -64,6 +65,7 @@ class ProcessedMicrobatch:
         attention_mask: Attention mask tensor (None for packed sequences)
         position_ids: Position IDs tensor (None for packed sequences)
         packed_seq_params: PackedSeqParams for sequence packing (None if not packing)
+        cu_seqlens: Unpadded cumulative sequence lengths for loss computation
         cu_seqlens_padded: Padded cumulative sequence lengths (None if not packing)
         mtp_loss_mask: Pre-computed MTP loss mask (token_mask × sample_mask).
             None when MTP is disabled or token/sample masks are absent.
@@ -78,6 +80,7 @@ class ProcessedMicrobatch:
     position_ids: Optional[torch.Tensor]
     packed_seq_params: Optional[PackedSeqParams]
     cu_seqlens_padded: Optional[torch.Tensor]
+    cu_seqlens: Optional[torch.Tensor] = None
     mtp_loss_mask: Optional[torch.Tensor] = None
     routed_experts: Optional[torch.Tensor] = None
     routed_experts_cp_sharded: Optional[torch.Tensor] = None
@@ -113,15 +116,17 @@ def make_processed_microbatch_iterator(
     pack_sequences = cfg["sequence_packing"]["enabled"]
 
     megatron_cfg = cfg.get("megatron_cfg") or {}
-    cu_seqlens_pad_to_entries = None
-    if (
-        pack_sequences
-        and megatron_cfg.get("cuda_graph_impl") == "local"
+    uses_static_packed_seq_graph_inputs = (
+        megatron_cfg.get("cuda_graph_impl") == "local"
         and megatron_cfg.get("cuda_graph_pr5783_thd", False)
-    ):
-        # PR #5783 THD CUDA graphs: cu_seqlens tensors are graph inputs, so
-        # PackedSeqParams must carry a static [thd_max_packed_sequences + 1]
-        # shape (thd_max_packed_sequences = cuda_graph_max_packed_seqs).
+    ) or (
+        megatron_cfg.get("cuda_graph_impl") == "transformer_engine"
+        and megatron_cfg.get("cuda_graph_pr5672_thd", False)
+    )
+    cu_seqlens_pad_to_entries = None
+    if pack_sequences and uses_static_packed_seq_graph_inputs:
+        # CUDA-graph THD inputs must have a static
+        # [cuda_graph_max_packed_seqs + 1] PackedSeqParams shape.
         cu_seqlens_pad_to_entries = (
             megatron_cfg.get("cuda_graph_max_packed_seqs") or 64
         ) + 1
@@ -150,6 +155,7 @@ def make_processed_microbatch_iterator(
             attention_mask=processed_inputs.attention_mask,
             position_ids=processed_inputs.position_ids,
             packed_seq_params=processed_inputs.packed_seq_params,
+            cu_seqlens=processed_inputs.cu_seqlens,
             cu_seqlens_padded=processed_inputs.cu_seqlens_padded,
             mtp_loss_mask=processed_inputs.mtp_loss_mask,
             routed_experts=processed_inputs.routed_experts,
@@ -493,6 +499,7 @@ def process_microbatch(
         attention_mask=attention_mask,
         position_ids=position_ids,
         packed_seq_params=packed_seq_params,
+        cu_seqlens=cu_seqlens,
         cu_seqlens_padded=cu_seqlens_padded,
         mtp_loss_mask=mtp_loss_mask,
         routed_experts=routed_experts,
@@ -841,7 +848,13 @@ def _pack_sequences_for_megatron(
     cp_rank: int = 0,
     cp_size: int = 1,
     cu_seqlens_pad_to_entries: Optional[int] = None,
-) -> tuple[torch.Tensor, PackedSeqParams, torch.Tensor, Optional[torch.Tensor]]:
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    PackedSeqParams,
+    torch.Tensor,
+    torch.Tensor,
+]:
     """Pack sequences for Megatron model processing with optional context parallelism.
 
     Args:
@@ -853,9 +866,8 @@ def _pack_sequences_for_megatron(
             - The three parameters above can be calculated using _get_pack_sequence_parameters_for_megatron, we do not recommend users to set these parameters manually.
         cp_size: Context parallelism size
         cu_seqlens_pad_to_entries: Pad the cu_seqlens tensors inside PackedSeqParams
-            to this fixed entry count by repeating the endpoint (PR #5783 THD
-            CUDA-graph static-input requirement). Returned cu_seqlens /
-            cu_seqlens_padded stay unpadded.
+            to this fixed entry count by repeating the endpoint for CUDA-graph
+            static inputs. Returned cu_seqlens / cu_seqlens_padded stay unpadded.
 
     Returns:
         Tuple of:
@@ -1018,9 +1030,9 @@ def _pack_sequences_for_megatron(
 
     psp_cu_seqlens = cu_seqlens_padded
     if cu_seqlens_pad_to_entries is not None:
-        # PR #5783 THD CUDA graphs: cu_seqlens are graph inputs and must keep a
-        # static [thd_max_packed_sequences + 1] shape. Pad by repeating the
-        # endpoint (zero-length trailing sequences), mirroring Megatron-LM's
+        # CUDA-graph THD inputs must keep a static
+        # [cuda_graph_max_packed_seqs + 1] shape. Pad by repeating the endpoint
+        # (zero-length trailing sequences), mirroring Megatron-LM's
         # _pad_cu_seqlens. Only the PackedSeqParams copies are padded.
         actual_entries = cu_seqlens_padded.shape[0]
         assert actual_entries <= cu_seqlens_pad_to_entries, (
