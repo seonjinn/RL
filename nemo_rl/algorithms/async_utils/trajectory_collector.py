@@ -18,6 +18,7 @@ import concurrent.futures
 import threading as _threading
 import time
 from collections import defaultdict
+from collections.abc import Iterator
 from typing import Any, Optional
 
 import ray
@@ -271,7 +272,13 @@ class AsyncTrajectoryCollector:
         """Run the collection loop in background thread."""
         dataloader_exhausted = False
         try:
-            for batch in self.dataloader:
+            max_num_epochs = int(self.master_config.grpo["max_num_epochs"])
+
+            def iter_epoch_batches() -> Iterator[BatchedDataDict[DatumSpec]]:
+                for _ in range(max_num_epochs):
+                    yield from self.dataloader
+
+            for batch in iter_epoch_batches():
                 if not self.running:
                     break
 

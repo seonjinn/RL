@@ -160,8 +160,6 @@ def build_plan(args: argparse.Namespace) -> RunPlan:
         f"policy.generation_batch_size={global_batch_size}",
         "policy.train_micro_batch_size=1",
         "policy.logprob_batch_size=1",
-        "policy.max_total_sequence_length=32768",
-        "policy.generation.max_new_tokens=32768",
         "policy.generation.temperature=1.0",
         "policy.generation.top_p=1.0",
         "policy.megatron_cfg.tensor_model_parallel_size=4",

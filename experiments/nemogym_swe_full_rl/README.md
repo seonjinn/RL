@@ -10,6 +10,11 @@ two generations per prompt, and two optimizer steps. Generation occupies one
 four-GPU GB200 node. The Megatron policy occupies eight four-GPU nodes with
 TP4, PP2, CP4, and EP8. Checkpoint saving is disabled.
 
+The launcher preserves the SWE2 recipe's 131072-token total sequence and
+generation limits. Its async collector also honors `grpo.max_num_epochs`, so a
+finite smoke dataset can be reused across configured epochs just like the
+synchronous GRPO path.
+
 `env.nemo_gym.subprocess_openai_version=2.7.2` keeps Gym-created subprocesses
 on the newest version allowed by the pinned Gym submodule. The parent NeMo-RL
 environment remains unchanged.

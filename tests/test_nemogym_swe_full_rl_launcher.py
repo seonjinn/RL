@@ -200,6 +200,20 @@ def test_baseline_runs_full_async_swe_grpo_training() -> None:
     assert "checkpointing.enabled=false" in overrides
 
 
+def test_full_grpo_preserves_swe_recipe_context_limits() -> None:
+    payload = _dry_run("baseline")
+    overrides = payload["overrides"]
+
+    assert not any(
+        override.startswith("policy.max_total_sequence_length=")
+        for override in overrides
+    )
+    assert not any(
+        override.startswith("policy.generation.max_new_tokens=")
+        for override in overrides
+    )
+
+
 def test_full_grpo_pins_only_gym_subprocess_openai_version() -> None:
     payload = _dry_run("baseline")
     command = payload["command"]
