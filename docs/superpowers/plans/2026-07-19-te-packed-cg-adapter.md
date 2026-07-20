@@ -474,7 +474,13 @@ Run No-CG FP64 and adapter-attn FP64 for three identical seeds, 40 steps per see
 
 Use performance steps 4-19 excluding validation steps. Record RL commit, MCore SHA, container, model, topology, packing, Nmax, warmup, scope, router dtype, sample count, and included steps.
 
-- [ ] **Step 6: Commit the report**
+- [ ] **Step 6: Extend the FP64 performance pair to Qwen3-235B-A22B**
+
+After the Qwen3-30B-A3B smoke passes, run the same no-CG versus PR5672 `attn` comparison on the native Ptyche `grpo-qwen3-235b-16n4g` topology (16 nodes x 4 GPUs). Keep the base recipe's FP64 router, eager router/dispatch/experts, sequence packing, token budget, seed, and validation cadence identical; disable checkpointing and external telemetry. Do not use the MXFP8-rollout, async, 16n8g, or 32n4g overlays for this first comparison.
+
+Before submitting, verify the model snapshot, OpenMath cache/access, converted Megatron checkpoint cache, and the direct MCore `TECudaGraphHelper` API on Ptyche. Use `cuda_graph_buckets=[8192]`, three warmup steps, and `cuda_graph_max_packed_seqs=512` for the first five-step smoke and the 20-step pair. Record the high-water actual packed-sequence count from train, logprob, and validation; only lower Nmax after that evidence. Report the 235B pair as performance-only unless it also completes the separately specified three-seed accuracy protocol.
+
+- [ ] **Step 7: Commit the report**
 
 ~~~bash
 git add experiments/cuda_graph/report/te_packed_adapter_20260719.md
