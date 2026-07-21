@@ -21,10 +21,11 @@ ACCOUNT=${ACCOUNT:-coreai_dlalgo_llm}
 PARTITION=${PARTITION:-batch}
 RAY_LOG_SYNC_FREQUENCY=${RAY_LOG_SYNC_FREQUENCY:-30}
 
+CG_ARGS=()
 case "${SCOPE_CASE}" in
   nocg)
     CUDA_GRAPH_SCOPE=none
-    CG_OVERRIDES='policy.megatron_cfg.cuda_graph_impl=none'
+    CG_ARGS=("policy.megatron_cfg.cuda_graph_impl=none")
     ;;
   attn)
     CUDA_GRAPH_SCOPE='[attn]'
@@ -62,13 +63,15 @@ case "${SCOPE_CASE}" in
 esac
 
 if [[ "${SCOPE_CASE}" != "nocg" ]]; then
-  CG_OVERRIDES="policy.megatron_cfg.cuda_graph_impl=transformer_engine \\
-policy.megatron_cfg.cuda_graph_scope=${CUDA_GRAPH_SCOPE} \\
-policy.megatron_cfg.cuda_graph_warmup_steps=3 \\
-policy.megatron_cfg.cuda_graph_packed_seq=true \\
-policy.megatron_cfg.cuda_graph_pr5672_thd=true \\
-policy.megatron_cfg.cuda_graph_max_packed_seqs=512 \\
-policy.megatron_cfg.cuda_graph_buckets=[8192]"
+  CG_ARGS=(
+    "policy.megatron_cfg.cuda_graph_impl=transformer_engine"
+    "policy.megatron_cfg.cuda_graph_scope=${CUDA_GRAPH_SCOPE}"
+    "policy.megatron_cfg.cuda_graph_warmup_steps=3"
+    "policy.megatron_cfg.cuda_graph_packed_seq=true"
+    "policy.megatron_cfg.cuda_graph_pr5672_thd=true"
+    "policy.megatron_cfg.cuda_graph_max_packed_seqs=512"
+    "policy.megatron_cfg.cuda_graph_buckets=[8192]"
+  )
 fi
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
@@ -100,46 +103,38 @@ echo "cuda_graph_scope=${CUDA_GRAPH_SCOPE}"
 git -C "${WORKTREE}" rev-parse HEAD
 git -C "${WORKTREE}/3rdparty/Megatron-LM-workspace/Megatron-LM" rev-parse HEAD
 
-read -r -d '' COMMAND <<EOF || true
-cd ${WORKTREE}
-export NRL_IGNORE_VERSION_MISMATCH=1
-export NRL_MEGATRON_CHECKPOINT_DIR=${MODEL_CACHE_ROOT}
-export PYTHONPATH=${WORKTREE}:${WORKTREE}/3rdparty/Megatron-LM-workspace/Megatron-LM:${WORKTREE}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge:\${PYTHONPATH:-}
-uv run --locked --extra mcore --directory ${WORKTREE} python ${WORKTREE}/examples/run_grpo.py \\
-  --config ${CONFIG} \\
-  grpo.max_num_steps=${STEPS} \\
-  grpo.val_period=10 \\
-  checkpointing.enabled=false \\
-  logger.wandb_enabled=false \\
-  logger.tensorboard_enabled=false \\
-  logger.log_dir=logs/nanov3-30b-a3b-cg/${RUN_TAG} \\
-  logger.wandb.name=${RUN_TAG} \\
-  ${CG_OVERRIDES}
-EOF
+BASE_ARGS=(
+  "grpo.max_num_steps=${STEPS}"
+  "grpo.val_period=10"
+  "checkpointing.enabled=false"
+  "logger.wandb_enabled=false"
+  "logger.tensorboard_enabled=false"
+  "logger.log_dir=logs/nanov3-30b-a3b-cg/${RUN_TAG}"
+  "logger.wandb.name=${RUN_TAG}"
+  "${CG_ARGS[@]}"
+)
+printf -v RUN_ARGS ' %q' "${BASE_ARGS[@]}"
+COMMAND=$(printf '%s\n' \
+  "cd ${WORKTREE}" \
+  'export NRL_IGNORE_VERSION_MISMATCH=1' \
+  "export NRL_MEGATRON_CHECKPOINT_DIR=${MODEL_CACHE_ROOT}" \
+  "export PYTHONPATH=${WORKTREE}:${WORKTREE}/3rdparty/Megatron-LM-workspace/Megatron-LM:${WORKTREE}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge:\${PYTHONPATH:-}" \
+  "uv run --locked --extra mcore --directory ${WORKTREE} python ${WORKTREE}/examples/run_grpo.py --config ${CONFIG}${RUN_ARGS}")
 
 submit() {
-  COMMAND="${COMMAND}" \\
-  CONTAINER="${CONTAINER}" \\
-  HF_HOME="${HF_HOME}" \\
-  HF_HUB_CACHE="${HF_HOME}/hub" \\
-  HF_DATASETS_CACHE="${HF_HOME}/datasets" \\
-  MOUNTS="/lustre:/lustre" \\
-  GPUS_PER_NODE=4 \\
-  BASE_LOG_DIR="${LOG_BASE}" \\
-  RAY_LOG_SYNC_FREQUENCY="${RAY_LOG_SYNC_FREQUENCY}" \\
-  "$@" \\
-  --nodes=4 \\
-  --segment=4 \\
-  --exclusive \\
-  --account="${ACCOUNT}" \\
-  --partition="${PARTITION}" \\
-  --time=04:00:00 \\
-  --job-name="${ACCOUNT}-nanov3.${SCOPE_CASE}" \\
-  "${WORKTREE}/ray.sub"
+  (
+    export COMMAND CONTAINER HF_HOME RAY_LOG_SYNC_FREQUENCY
+    export HF_HUB_CACHE="${HF_HOME}/hub"
+    export HF_DATASETS_CACHE="${HF_HOME}/datasets"
+    export MOUNTS="/lustre:/lustre"
+    export GPUS_PER_NODE=4
+    export BASE_LOG_DIR="${LOG_BASE}"
+    sbatch "$@" --nodes=4 --segment=4 --exclusive --account="${ACCOUNT}" --partition="${PARTITION}" --time=04:00:00 --job-name="${ACCOUNT}-nanov3.${SCOPE_CASE}" "${WORKTREE}/ray.sub"
+  )
 }
 
-submit sbatch --test-only
+submit --test-only
 echo "Submission validated. Set SUBMIT=1 to submit this scope."
 if [[ "${SUBMIT:-0}" == "1" ]]; then
-  submit sbatch
+  submit
 fi
