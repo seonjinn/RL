@@ -399,6 +399,7 @@ def setup_single_controller(
             enable_router_replay=enable_router_replay,
             routed_experts_dtype=routed_experts_dtype,
             use_fastokens=bool(policy_config["tokenizer"].get("use_fastokens")),
+            tokenizer=tokenizer,
         )
 
     # ==========================

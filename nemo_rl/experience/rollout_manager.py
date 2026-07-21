@@ -524,7 +524,7 @@ class AsyncNemoGymRolloutImpl:
             env_timing_metrics: dict[str, Any] = {}
             async for result_ref in nemo_gym_env.run_rollouts.options(
                 num_returns="streaming"
-            ).remote(inputs, self._tokenizer, timer_prefix):
+            ).remote(inputs, timer_prefix):
                 rowidx, result, timing_metrics = await result_ref
                 if not isinstance(rowidx, int) or not 0 <= rowidx < len(inputs):
                     raise ValueError(
