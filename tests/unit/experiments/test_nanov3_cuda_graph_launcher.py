@@ -36,3 +36,11 @@ def test_nanov3_launcher_rejects_moe_act_as_a_graph_scope() -> None:
 
     assert result.returncode == 2
     assert "moe_act is an activation-recompute module, not a CUDA Graph scope" in result.stderr
+
+
+def test_nanov3_launcher_appends_cuda_graph_fields_to_the_base_recipe() -> None:
+    launcher_source = LAUNCHER.read_text(encoding="utf-8")
+
+    assert '"+policy.megatron_cfg.cuda_graph_impl=transformer_engine"' in launcher_source
+    assert '"+policy.megatron_cfg.cuda_graph_scope=${CUDA_GRAPH_SCOPE}"' in launcher_source
+    assert '"+policy.megatron_cfg.cuda_graph_packed_seq=true"' in launcher_source

@@ -25,7 +25,6 @@ CG_ARGS=()
 case "${SCOPE_CASE}" in
   nocg)
     CUDA_GRAPH_SCOPE=none
-    CG_ARGS=("policy.megatron_cfg.cuda_graph_impl=none")
     ;;
   attn)
     CUDA_GRAPH_SCOPE='[attn]'
@@ -64,13 +63,13 @@ esac
 
 if [[ "${SCOPE_CASE}" != "nocg" ]]; then
   CG_ARGS=(
-    "policy.megatron_cfg.cuda_graph_impl=transformer_engine"
-    "policy.megatron_cfg.cuda_graph_scope=${CUDA_GRAPH_SCOPE}"
-    "policy.megatron_cfg.cuda_graph_warmup_steps=3"
-    "policy.megatron_cfg.cuda_graph_packed_seq=true"
-    "policy.megatron_cfg.cuda_graph_pr5672_thd=true"
-    "policy.megatron_cfg.cuda_graph_max_packed_seqs=512"
-    "policy.megatron_cfg.cuda_graph_buckets=[8192]"
+    "+policy.megatron_cfg.cuda_graph_impl=transformer_engine"
+    "+policy.megatron_cfg.cuda_graph_scope=${CUDA_GRAPH_SCOPE}"
+    "+policy.megatron_cfg.cuda_graph_warmup_steps=3"
+    "+policy.megatron_cfg.cuda_graph_packed_seq=true"
+    "+policy.megatron_cfg.cuda_graph_pr5672_thd=true"
+    "+policy.megatron_cfg.cuda_graph_max_packed_seqs=512"
+    "+policy.megatron_cfg.cuda_graph_buckets=[8192]"
   )
 fi
 
