@@ -347,12 +347,15 @@ def test_custom_all_reduce_diagnostic_is_opt_in() -> None:
     )
 
 
-def test_cudagraph_diagnostics_enable_vllm_text_logger() -> None:
+def test_cudagraph_diagnostics_flush_vllm_stats_at_step_boundaries() -> None:
     source = VLLM_ASYNC_WORKER.read_text()
 
-    assert "LoggingStatLogger" in source
     assert 'llm_kwargs.get("cudagraph_metrics", False)' in source
-    assert "self.stat_loggers.append(LoggingStatLogger)" in source
+    assert "self._cudagraph_metrics_enabled" in source
+    assert "async def _get_raw_spec_counters" in source
+    assert "await self.llm.do_log_stats()" in source
+    assert "return super()._get_raw_spec_counters()" in source
+    assert "self.stat_loggers.append(LoggingStatLogger)" not in source
 
 
 def test_eagle3_k3_uses_thinking_drafter_and_v2_runner() -> None:

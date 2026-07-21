@@ -190,6 +190,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
         self._reserved_node_ip = None
         self._deferred_bundle_indices = None
         self._deferred_seed = None
+        self._cudagraph_metrics_enabled = False
 
         # Defaults for HTTP server state; overwritten by _create_engine()
         # when the worker is a model owner and the model is actually loaded.
@@ -263,7 +264,7 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
         from vllm.config import CompilationConfig
         from vllm.engine.arg_utils import AsyncEngineArgs
         from vllm.v1.engine.async_llm import AsyncLLM
-        from vllm.v1.metrics.loggers import LoggingStatLogger, PrometheusStatLogger
+        from vllm.v1.metrics.loggers import PrometheusStatLogger
 
         # Workaround: convert compilation_config dict to CompilationConfig object
         # since AsyncEngineArgs doesn't handle the dict-to-pydantic conversion.
@@ -287,11 +288,12 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
             llm_kwargs["compilation_config"] = CompilationConfig(**compilation_config)
 
         self.llm_async_engine_args = AsyncEngineArgs(**llm_kwargs)
+        self._cudagraph_metrics_enabled = bool(
+            llm_kwargs.get("cudagraph_metrics", False)
+        )
         self.stat_loggers = []
         if self.cfg["vllm_cfg"].get("enable_vllm_metrics_logger", False):
             self.stat_loggers.append(PrometheusStatLogger)
-        if llm_kwargs.get("cudagraph_metrics", False):
-            self.stat_loggers.append(LoggingStatLogger)
         self.llm = AsyncLLM.from_engine_args(
             self.llm_async_engine_args, stat_loggers=self.stat_loggers
         )
@@ -309,6 +311,11 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
         self._vllm_metrics_lock = threading.Lock()
         if self.cfg["vllm_cfg"].get("enable_vllm_metrics_logger", False):
             self._start_vllm_metrics_logger()
+
+    async def _get_raw_spec_counters(self) -> dict[str, float | list[float]]:
+        if self.llm is not None and self._cudagraph_metrics_enabled:
+            await self.llm.do_log_stats()
+        return super()._get_raw_spec_counters()
 
     def _install_engine_input_socket_lock(self) -> None:
         """Serialise sends on AsyncMPClient.input_socket across OS threads
