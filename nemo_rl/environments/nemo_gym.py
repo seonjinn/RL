@@ -178,8 +178,12 @@ def _detect_invalid_tool_call_and_malformed_thinking(
 class NemoGym(EnvironmentInterface):
     """This environment class isn't really used for training. It's really meant as an integration wrapper around NeMo-Gym that hooks into the existing NeMo RL resource management via ray. So there is still one source of truth for resource management in NeMo RL."""
 
-    def __init__(self, cfg: NemoGymConfig):
+    def __init__(
+        self, cfg: NemoGymConfig, tokenizer: PreTrainedTokenizerBase | None = None
+    ):
         self.cfg = cfg
+        # Held once so run_rollouts need not re-ship it per prompt group.
+        self.tokenizer = tokenizer
 
     def _spinup(self) -> None:
         """Start the NeMo-Gym head server and rollout collection helper.
@@ -279,17 +283,20 @@ Depending on your data shape, you may want to change these values."""
     async def run_rollouts(
         self,
         nemo_gym_examples: list[dict],
-        tokenizer: PreTrainedTokenizerBase,
         timer_prefix: str,
     ) -> AsyncGenerator[tuple[int, dict, dict | None], None]:
         """Stream postprocessed rollouts as NeMo-Gym tasks complete."""
         if not nemo_gym_examples:
             raise ValueError("NeMo-Gym rollout batch must not be empty")
 
+        tokenizer = self.tokenizer
+        assert tokenizer is not None, (
+            "NemoGym has no tokenizer; pass one to the constructor before run_rollouts"
+        )
+
         from nemo_rl.utils.fastokens import maybe_patch_fastokens
 
         maybe_patch_fastokens(bool(self.cfg.get("use_fastokens")))
-
         timer = Timer()
         counts_left = Counter(row["agent_ref"]["name"] for row in nemo_gym_examples)
 
@@ -627,6 +634,7 @@ def spinup_nemo_gym_actor(
     enable_router_replay: bool,
     routed_experts_dtype: str,
     use_fastokens: bool,
+    tokenizer: PreTrainedTokenizerBase,
 ) -> Any:
     """Spin up the NeMo-Gym actor against the given generation server URLs.
 
@@ -645,6 +653,8 @@ def spinup_nemo_gym_actor(
             resolved by the caller from the model's expert count.
         use_fastokens: Forwarded from policy.tokenizer.use_fastokens so the rollout actor
             patches its tokenizer consistently with the driver.
+        tokenizer: Constructed once in the driver and stored on the actor to avoid
+            serializing it for every prompt group.
 
     Returns:
         The spun-up NemoGym Ray actor handle (_spinup already awaited).
@@ -697,7 +707,7 @@ def spinup_nemo_gym_actor(
         },
     }
 
-    actor = NemoGym.options(**nemo_gym_opts).remote(nemo_gym_cfg)
+    actor = NemoGym.options(**nemo_gym_opts).remote(nemo_gym_cfg, tokenizer)
     ray.get(actor._spinup.remote())
     return actor
 

@@ -562,7 +562,7 @@ def setup(
                             soft=True,
                         )
                     )
-                actor = NemoGym.options(**nemo_gym_opts).remote(nemo_gym_cfg)
+                actor = NemoGym.options(**nemo_gym_opts).remote(nemo_gym_cfg, tokenizer)
                 ray.get(actor._spinup.remote())
                 return actor
 
