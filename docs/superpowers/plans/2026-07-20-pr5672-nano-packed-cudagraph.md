@@ -736,7 +736,7 @@ git -C 3rdparty/Megatron-LM-workspace/Megatron-LM fetch origin experiment/pr5672
 git -C 3rdparty/Megatron-LM-workspace/Megatron-LM checkout --detach origin/experiment/pr5672-nano-packed-support-20260720
 git add 3rdparty/Megatron-LM-workspace/Megatron-LM experiments/cuda_graph/launch_nanov3_packed_cg_scope_ptyche.sh tests/unit/experiments/test_nanov3_cuda_graph_launcher.py
 git commit -s -m "feat: integrate Nano packed CUDA graph validation"
-git push
+git push seonjinn HEAD:experiment/pr5672-nano-packed-support-20260720
 ~~~
 
 - [ ] **Step 4: Submit in validation order on Ptyche**
