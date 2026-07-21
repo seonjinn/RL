@@ -309,7 +309,7 @@ Expected: complete PR5672 packed-ABI suite PASS.
 
 **Produces:** captured Mamba receives flattened sample tensors; replay flattens runtime params and base replay receives tensors only.
 
-- [ ] **Step 1: Write the failing sample test**
+- [x] **Step 1: Write the failing sample test**
 
 ~~~python
 class _MambaLayerCudaGraphStub:
@@ -376,7 +376,7 @@ def test_mamba_replay_flattens_packed_seq_params_before_tensor_gate():
     assert kwargs["_mamba_packed_seq_params_seq_idx"] is params.seq_idx
 ~~~
 
-- [ ] **Step 2: Confirm red**
+- [x] **Step 2: Confirm red**
 
 ~~~
 cd /Users/sna/CudaGraph_PR/Megatron-LM-pr5672-nano-extension-20260720
@@ -385,7 +385,7 @@ uv run python -m torch.distributed.run --nproc-per-node 1 -m pytest -q tests/uni
 
 Expected: FAIL on missing sample helper.
 
-- [ ] **Step 3: Add the Mamba sample helper and selection**
+- [x] **Step 3: Add the Mamba sample helper and selection**
 
 In cuda_graphs.py, import MambaLayer and the Task 2 helpers. Add:
 
@@ -427,7 +427,7 @@ elif contains_mamba:
     )
 ~~~
 
-- [ ] **Step 4: Adapt Mamba capture and replay**
+- [x] **Step 4: Adapt Mamba capture and replay**
 
 In mamba_layer.py, import the Task 2 helpers. Add the following Mamba methods; no change to GraphableMegatronModule:
 
@@ -482,7 +482,7 @@ def _te_cuda_graph_replay(self, *args, **kwargs):
 
 Use the current TransformerLayer packed helper's descriptive errors for missing static metadata, changed tensor names, and duplicate kwarg names.
 
-- [ ] **Step 5: Confirm green, commit, and push**
+- [x] **Step 5: Confirm green, commit, and push**
 
 ~~~
 cd /Users/sna/CudaGraph_PR/Megatron-LM-pr5672-nano-extension-20260720
