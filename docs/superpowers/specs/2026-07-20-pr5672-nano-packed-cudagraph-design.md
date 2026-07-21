@@ -79,7 +79,7 @@ NeMo-RL packed batch
        └─ Mamba graph adapter (new)
             ├─ dynamic tensor fields: Mamba-consumed packed tensors,
             │    including seq_idx when present
-            └─ static metadata: total-token and topology values
+            └─ static metadata: THD layout and CP topology values
 
 Per graph bucket / model chunk
   ├─ fixed-shape packed metadata buffers
@@ -134,10 +134,12 @@ Add Mamba-specific capture and replay preparation next to the existing
    signature.
 
 `seq_idx` is dynamic because its values vary with document boundaries, even
-when the hidden-state bucket is unchanged. `total_tokens` remains static only
-when it is equal to the selected graph bucket's token count; otherwise the
-call is not graph-compatible. The adapter must not pass a `PackedSeqParams`
-object through Transformer Engine's tensor-only replay interface.
+when the hidden-state bucket is unchanged. `total_tokens` is deliberately not
+reconstructed at the graph boundary: after `seq_idx` is materialized, Mamba
+does not consume it, while `PackedSeqParams.__post_init__` would otherwise
+allocate and recompute `seq_idx` during capture. The adapter must not pass a
+`PackedSeqParams` object through Transformer Engine's tensor-only replay
+interface.
 
 ### 3. Packed CP attention capability gate
 
