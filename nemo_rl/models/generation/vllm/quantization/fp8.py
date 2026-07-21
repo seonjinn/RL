@@ -317,6 +317,15 @@ def init_fp8(vllm_cfg, model_name, model_parallel_size):
         else:
             fp8_block_quant_kwargs["ignored_layers"].extend(ignored_layers)
         print("ignored_layers", fp8_block_quant_kwargs["ignored_layers"])
+    # vLLM >= 0.25 quantizes ParallelLMHead under ModelOptMxFp8Config
+    # (modelopt.py get_quant_method matches ParallelLMHead, not just LinearBase).
+    # The refit pipeline ships lm_head in BF16 and never provides block scales
+    # (dummy load leaves weight_scale uninitialized), so logits would be computed
+    # with garbage e8m0 scales. Keep lm_head unquantized: matches vLLM 0.20
+    # behavior and stock ModelOpt checkpoints, which all exclude lm_head.
+    fp8_block_quant_kwargs.setdefault("ignored_layers", [])
+    if "lm_head" not in fp8_block_quant_kwargs["ignored_layers"]:
+        fp8_block_quant_kwargs["ignored_layers"].append("lm_head")
     if "ignored_layers" in fp8_block_quant_kwargs:
         fp8_block_quant_kwargs["ignore"] = fp8_block_quant_kwargs["ignored_layers"]
 
