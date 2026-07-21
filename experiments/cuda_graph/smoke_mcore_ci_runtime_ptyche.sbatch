@@ -10,10 +10,13 @@
 set -euo pipefail
 
 CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/megatron_lm_mcore_ci_dev_main.sqsh}
+MCORE_WORKTREE=${MCORE_WORKTREE:?Set MCORE_WORKTREE to the remote Megatron-LM source tree.}
 
 srun --nodes=1 --ntasks=1 --no-container-mount-home \
   --container-image="${CONTAINER}" \
-  --container-mounts=/lustre:/lustre \
+  --container-mounts=/lustre:/lustre,/project:/project \
+  --container-workdir="${MCORE_WORKTREE}" \
+  --export=ALL,PYTHONPATH="${MCORE_WORKTREE}" \
   python -c '
 from importlib.metadata import version
 
