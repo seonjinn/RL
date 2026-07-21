@@ -553,7 +553,7 @@ git -C /Users/sna/CudaGraph_PR/Megatron-LM-pr5672-nano-extension-20260720 push
 
 **Produces:** failure before model construction and a requested/effective scope log line.
 
-- [ ] **Step 1: Write failing validation tests**
+- [x] **Step 1: Write failing validation tests**
 
 ~~~python
 def test_nanov3_packed_cp_attention_scope_is_rejected_before_capture():
@@ -585,7 +585,7 @@ def test_te_fp64_router_scope_is_rejected_before_graph_creation():
         _validate_te_cuda_graph_model_scope(model_cfg)
 ~~~
 
-- [ ] **Step 2: Confirm red**
+- [x] **Step 2: Confirm red**
 
 ~~~
 cd /Users/sna/CudaGraph_PR/RL-pr5672-nano-extension-20260720
@@ -594,7 +594,7 @@ uv run --group test pytest -q tests/unit/models/megatron/test_megatron_setup.py 
 
 Expected: FAIL because neither guard exists.
 
-- [ ] **Step 3: Implement deterministic preflight**
+- [x] **Step 3: Implement deterministic preflight**
 
 Add these helpers to setup.py and make _cuda_graph_scope_includes_attention call _cuda_graph_scope_values:
 
@@ -644,7 +644,7 @@ if (
 
 Call _validate_te_cuda_graph_model_scope(model_cfg) immediately after model_cfg.__post_init__() in setup_model_config().
 
-- [ ] **Step 4: Add requested/effective logging**
+- [x] **Step 4: Add requested/effective logging**
 
 Immediately before validate_and_set_config(), save the raw request. After self.megatron_cfg = runtime_config.megatron_cfg, emit:
 
@@ -663,7 +663,7 @@ if self.rank == 0:
     )
 ~~~
 
-- [ ] **Step 5: Confirm green and commit**
+- [x] **Step 5: Confirm green and commit**
 
 ~~~
 cd /Users/sna/CudaGraph_PR/RL-pr5672-nano-extension-20260720
