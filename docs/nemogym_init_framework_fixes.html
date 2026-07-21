@@ -166,6 +166,26 @@ and bind-mounting it read-only turns "thousands of small-file RPCs" into "one bi
 per-job cost drops from 216 s to ~0, staleness is handled by versioned image names.
 Lustre is bad at many small files, but perfectly fast at one 5 GB file.</div>
 
+<h3>Replication at recipe depth (n=24, statistically meaningful)</h3>
+<p>The 3-rollout smoke numbers replicate in a paired A/B at recipe conditions
+(24 rollouts = 3 instances &times; 8 generations, <code>agent_max_turns=200</code>,
+concurrency 24, same drafter):</p>
+<p><img src="plots_patch_ab_n24.png" alt="n=24 phase breakdown, unpatched vs patched"
+     style="max-width:780px; width:100%; border:1px solid #d5dce8; border-radius:6px"></p>
+<table>
+<tr><th>Per-rollout phase (mean, n=24)</th><th>Unpatched</th><th>Patched</th><th>&Delta;</th></tr>
+<tr><td>Connect (action server)</td><td class="num">15.0 s</td><td class="num">11.1 s</td><td class="num good">&minus;3.9 s (replicated)</td></tr>
+<tr><td>Framework (run_infer start)</td><td class="num">21.8 s</td><td class="num">16.4 s</td><td class="num good">&minus;5.4 s</td></tr>
+<tr><td>Initialize (workspace copy)</td><td class="num">22.1 s</td><td class="num">21.8 s</td><td class="num neutral">&plusmn;0 (replicated)</td></tr>
+<tr><td>LLM / eval</td><td colspan="3">parity within run-to-run token noise (tok/s 276 vs 277)</td></tr>
+</table>
+<p class="small">Framework savings are smaller than at concurrency 8 (&minus;5.4 vs &minus;12 s) because
+concurrent rollouts overlap each other's latency. Measured savings &asymp; 9 s &times; 24 rollouts
+&asymp; the 216 s one-time mirror cost &mdash; break-even lands at ~24 rollouts per job; every rollout
+beyond that is profit, and the planned squashfs bake removes the one-time cost entirely.
+At production concurrency (768) the unpatched path additionally risks Lustre metadata-server
+contention from hundreds of simultaneous imports, which the mirror avoids by construction.</p>
+
 <h2>4. Inefficiency #2: the git myth (a useful null result)</h2>
 <p>Instrumentation showed <code>initialize_runtime</code> = 20.1 s per rollout, and the visible command
 in that window is <code>source entry_script &amp;&amp; cd workspace &amp;&amp; git reset --hard</code>.
