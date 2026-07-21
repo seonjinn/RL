@@ -2129,7 +2129,7 @@ async def run_async_nemo_gym_rollout(
         with timer.time(run_rollouts_timer_label):
             rollout_gen = nemo_gym_environment.run_rollouts.options(
                 num_returns="streaming"
-            ).remote(nemo_gym_rows, tokenizer, timer_prefix)
+            ).remote(nemo_gym_rows, timer_prefix)
         rollout_iterator = rollout_gen.__aiter__()
 
     while True:
