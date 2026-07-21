@@ -137,6 +137,66 @@ def test_nanov3_packed_cp_attention_scope_is_rejected_before_capture():
         _enforce_packed_seq_cuda_graph_consistency(config)
 
 
+def test_nanov3_packed_cp_attention_is_rejected_before_hf_import():
+    """The worker must reject the invalid raw request before HF model construction."""
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    config = {
+        "model_name": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16",
+        "sequence_packing": {"enabled": True},
+        "megatron_cfg": {
+            "cuda_graph_impl": "transformer_engine",
+            "cuda_graph_scope": ["attn"],
+            "cuda_graph_packed_seq": True,
+            "context_parallel_size": 2,
+        },
+    }
+
+    with (
+        patch(
+            "nemo_rl.models.policy.workers.megatron_policy_worker.log_gpu_memory_diagnostics"
+        ),
+        patch(
+            "nemo_rl.models.policy.workers.megatron_policy_worker.ray.get_gpu_ids",
+            return_value=[0],
+        ),
+        patch(
+            "nemo_rl.models.policy.workers.megatron_policy_worker.torch.cuda.set_device"
+        ),
+        patch(
+            "nemo_rl.models.policy.workers.megatron_policy_worker.apply_transformer_engine_patch"
+        ),
+        patch("nemo_rl.distributed.numa_utils.bind_to_gpu_numa"),
+        patch(
+            "nemo_rl.models.policy.workers.megatron_policy_worker.get_rank_safe",
+            return_value=0,
+        ),
+        patch("nemo_rl.models.policy.workers.megatron_policy_worker.setup_distributed"),
+        patch(
+            "nemo_rl.models.policy.workers.megatron_policy_worker.torch.cuda.current_device",
+            return_value=0,
+        ),
+        patch(
+            "nemo_rl.models.policy.workers.megatron_policy_worker.validate_model_paths",
+            return_value=("test-model", "/tmp/model", False),
+        ),
+        patch(
+            "nemo_rl.models.policy.workers.megatron_policy_worker.handle_model_import",
+            side_effect=AssertionError("HF model import must not begin"),
+        ) as mock_handle_model_import,
+    ):
+        with pytest.raises(ValueError, match="Nano packed CP attention"):
+            MegatronPolicyWorkerImpl(
+                config,
+                MagicMock(),
+                worker_sharding_annotations=MagicMock(),
+            )
+
+    mock_handle_model_import.assert_not_called()
+
+
 def test_qwen_packed_cp_attention_scope_remains_allowed():
     """The Nano preflight must not change existing Qwen packed-attention behavior."""
     from nemo_rl.models.megatron.setup import _enforce_packed_seq_cuda_graph_consistency

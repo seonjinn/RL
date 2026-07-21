@@ -71,6 +71,7 @@ from nemo_rl.models.megatron.pipeline_parallel import (
 )
 from nemo_rl.models.megatron.router_replay import router_replay_enabled
 from nemo_rl.models.megatron.setup import (
+    _enforce_packed_seq_cuda_graph_consistency,
     finalize_megatron_setup,
     handle_model_import,
     setup_distributed,
@@ -327,6 +328,7 @@ class MegatronPolicyWorkerImpl(
         # layer-spec hooks on ``self`` before calling
         # super().__init__() to inject quantization hooks into HF->Megatron
         # import.
+        _enforce_packed_seq_cuda_graph_consistency(config)
         handle_model_import(
             config,
             hf_model_name,
