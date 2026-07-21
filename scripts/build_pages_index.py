@@ -73,6 +73,11 @@ REPORT_GROUPS = [
                 "nemogym_swe_efficiency_report.html",
                 "Measured timeline decomposition (PR #3243 + PR #1825 profiler), 8 inefficiencies with code segments, fix plan with trade-off and correctness analysis.",
             ),
+            (
+                "Init & framework overhead fixes",
+                "nemogym_init_framework_fixes.html",
+                "Node-local mirror fix (-10% wall, correctness intact), the git-reset null result and workspace-copy re-attribution, Amdahl shift after the K5 drafter, upstreaming map.",
+            ),
         ],
     },
     {

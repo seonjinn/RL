@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Killing the Cold Start: Init &amp; Framework Overhead Fixes for NeMo-Gym SWE Rollouts</title>
+<style>
+  body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 13px; line-height: 1.55;
+         color: #1a2233; max-width: 1080px; margin: 0 auto; padding: 24px 20px 80px; background: #fbfcfe; }
+  code { font-family: 'SF Mono', Menlo, monospace; font-size: 12px; background: #eef1f6; padding: 1px 4px; border-radius: 3px; }
+  pre { background: #12161f; color: #dce3ee; padding: 12px 14px; border-radius: 6px; overflow-x: auto;
+        font-family: 'SF Mono', Menlo, monospace; font-size: 11.5px; line-height: 1.5; }
+  pre code { background: none; color: inherit; padding: 0; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  h2 { font-size: 17px; margin-top: 36px; border-bottom: 2px solid #dce3ee; padding-bottom: 6px; }
+  h3 { font-size: 14px; margin-top: 24px; }
+  .subtitle { color: #5a6a85; margin-bottom: 24px; }
+  table { border-collapse: collapse; margin: 12px 0; width: 100%; }
+  th, td { border: 1px solid #d5dce8; padding: 6px 10px; text-align: left; }
+  th { background: #eef1f6; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .good { color: #0b7a3e; font-weight: 600; }
+  .bad { color: #b3261e; font-weight: 600; }
+  .neutral { color: #8a6d00; font-weight: 600; }
+  .callout { background: #eef6ee; border-left: 4px solid #0b7a3e; padding: 10px 14px; margin: 14px 0; border-radius: 0 6px 6px 0; }
+  .warn { background: #fdf3e7; border-left: 4px solid #c77700; padding: 10px 14px; margin: 14px 0; border-radius: 0 6px 6px 0; }
+  .lesson { background: #eef1fb; border-left: 4px solid #3355bb; padding: 10px 14px; margin: 14px 0; border-radius: 0 6px 6px 0; }
+  .flow { font-family: 'SF Mono', Menlo, monospace; font-size: 11.5px; background: #f2f4f9;
+          border: 1px solid #d5dce8; border-radius: 6px; padding: 12px 14px; white-space: pre; overflow-x: auto; }
+  .small { font-size: 11.5px; color: #5a6a85; }
+</style>
+</head>
+<body>
+
+<h1>Killing the Cold Start</h1>
+<p class="subtitle">Why NeMo-Gym SWE rollouts spend half their time before and around the LLM,
+what exactly was inefficient, how we fixed it, and the measured before/after.
+Companion page to the <a href="nemogym_swe_efficiency_report.html">overhead analysis &amp; SpecDec study</a>.</p>
+
+<h2>1. Executive summary</h2>
+<table>
+<tr><th>Per-rollout phase</th><th>Before</th><th>After (patched)</th><th>Change</th><th>Root cause</th></tr>
+<tr><td>Framework (run_infer startup)</td><td class="num">~27 s</td><td class="num">~15 s</td><td class="num good">&minus;12 s</td><td>Python cold imports from Lustre venv</td></tr>
+<tr><td>Agent init: <code>connect_to_runtime</code></td><td class="num">14.8 s</td><td class="num">10.9 s</td><td class="num good">&minus;3.9 s</td><td>Action-server Python imports from Lustre; remainder is genuine server boot work</td></tr>
+<tr><td>Agent init: <code>initialize_runtime</code></td><td class="num">20.1 s</td><td class="num">19.9 s</td><td class="num neutral">&plusmn;0</td><td><b>Not git</b> &mdash; workspace copy out of the squashfs image (see &sect;4)</td></tr>
+<tr><td>End-to-end wall (3-rollout benchmark)</td><td class="num">382 s</td><td class="num">342 s</td><td class="num good">&minus;10%</td><td></td></tr>
+<tr><td>Generation quality / throughput</td><td class="num">313 tok/s</td><td class="num">316 tok/s</td><td class="num good">intact</td><td>correctness A/B passed</td></tr>
+</table>
+
+<p>One structural fix produced all of the gain: <b>stop importing Python from Lustre</b>.
+A second hypothesized fix (skipping <code>git reset</code>) turned out to be chasing a mis-attributed cost
+&mdash; a genuinely useful null result that redirected the roadmap (&sect;4).</p>
+
+<h2>2. Why this matters now: the drafter moved the bottleneck</h2>
+<p>After deploying our DFlash speculative-decoding drafter at its optimal draft length (K=5),
+LLM generation got 1.5&times; faster &mdash; and the fixed costs around it became the binding constraint:</p>
+
+<table>
+<tr><th>Phase share of rollout</th><th>No drafter</th><th>With DFlash K5 drafter</th></tr>
+<tr><td>LLM generation</td><td class="num">46.7%</td><td class="num">36.1%</td></tr>
+<tr><td>Agent init</td><td class="num">27.2%</td><td class="num">28.1%</td></tr>
+<tr><td>Framework</td><td class="num">20.0%</td><td class="num">21.1%</td></tr>
+<tr><td><b>Init + framework combined</b></td><td class="num">47.2%</td><td class="num bad">49.2% &mdash; now exceeds LLM</td></tr>
+</table>
+
+<p>This is Amdahl's law in action: every further generation speedup is worth less until the
+serial overhead around it is removed. Note the flip side measured earlier: <em>between turns</em>
+the framework adds nearly nothing (98&ndash;99% of the agent call span is LLM time) &mdash; the entire
+overhead is a <b>once-per-rollout cold start</b>.</p>
+
+<h2>3. Inefficiency #1: Python cold-starts from Lustre (fixed)</h2>
+
+<h3>What was happening</h3>
+<p>The OpenHands agent harness lives in a 5.3 GB directory on Lustre
+(<code>swe_openhands_setup/</code> = OpenHands checkout + its poetry venv + a miniforge Python).
+Every rollout starts <b>two fresh Python processes</b> from it:</p>
+
+<div class="flow">per rollout:
+  [1] run_infer.py            (evaluation harness)   ~19 s  before first useful line
+  [2] action_execution_server (sandbox tool server)  14.8 s  inside connect_to_runtime wait
+
+both interpreters resolve thousands of small files:
+  .pth files -> site-packages -> package __init__ chains -> stdlib
+  each open()/stat() = one Lustre metadata RPC to the MDS server</div>
+
+<p><b>Why it is slow:</b> Lustre is engineered for large streaming I/O, not for
+"stat and read 8,000 tiny <code>.py</code> files". Every import touches the metadata server over the
+network; page-cache helps little because each rollout is a new process tree and much of the cost
+is metadata round-trips, not data. On a local NVMe disk the same import chain takes 2&ndash;4 s.</p>
+
+<h3>The fix: node-local mirror with container-aware path rewriting</h3>
+<p>Once per job, copy the whole setup to node-local storage and point everything at the copy
+(<code>NRL_OH_NODE_LOCAL=1</code>, implemented in Gym's <code>swe_agents/app.py</code>):</p>
+
+<pre><code># app.py :: _node_local_mirror(), called from setup()
+local_root = /tmp/oh_setup_local_$SLURM_JOB_ID       # node-local NVMe
+cp -a swe_openhands_setup/{OpenHands,miniforge3}  local_root/
+# 1) rewrite absolute paths in text files: pyvenv.cfg, bin/* shebangs,
+#    site-packages *.pth, direct_url.json, RECORD
+# 2) re-point absolute symlinks (.venv/bin/python -> miniforge3/bin/python3.12)
+# target prefix for BOTH rewrites: /openhands_setup   (see below, not /tmp!)</code></pre>
+
+<div class="warn"><b>The subtle part (and how the first attempt failed):</b>
+rollouts run inside an Apptainer container that bind-mounts the setup at
+<code>/openhands_setup</code>. The container cannot see the host's <code>/tmp</code> path.
+Our first attempt rewrote paths to the host <code>/tmp/...</code> prefix; inside the container poetry
+declared the venv "broken" and tried to recreate it on a read-only mount
+(<code>[Errno 30] Read-only file system</code>). The correct rewrite target is the
+<b>container-side mount point</b> <code>/openhands_setup</code> &mdash; the host-side bind <em>source</em>
+switches to the local mirror, and every in-container path stays valid.</div>
+
+<div class="flow">                HOST                                 CONTAINER
+before:  /lustre/.../swe_openhands_setup  --bind-->  /openhands_setup   (imports traverse Lustre)
+after:   /tmp/oh_setup_local_&lt;job&gt;        --bind-->  /openhands_setup   (imports hit local NVMe)
+         paths inside venv all say "/openhands_setup/..." -- valid only in-container, by design</div>
+
+<h3>Why this is safe</h3>
+<ul>
+<li>The setup is <b>read-only at runtime</b> and byte-identical for every rollout &mdash; mirroring changes where it is read from, not what is read.</li>
+<li>Guarded by an env flag, default off; zero impact on existing runs.</li>
+<li>Correctness A/B: same benchmark, same drafter &mdash; 316 tok/s and sane scores after the patch.</li>
+</ul>
+
+<h3>Cost model: when the mirror pays for itself</h3>
+<table>
+<tr><th></th><th>Mirror cost (once per job)</th><th>Saving per rollout</th><th>Break-even</th></tr>
+<tr><td>Measured</td><td class="num">216 s</td><td class="num">~16 s</td><td class="num">&asymp; 14 rollouts</td></tr>
+<tr><td>3-rollout smoke test</td><td colspan="3" class="bad">net negative &mdash; don't enable</td></tr>
+<tr><td>RL training run (hundreds of rollouts/job)</td><td colspan="3" class="good">clear win; this is the target workload</td></tr>
+</table>
+
+<div class="callout"><b>Planned upgrade &mdash; squashfs bake:</b> the mirror content is identical across
+nodes and jobs, so copying it repeatedly is still wasteful. Building it once into a squashfs image
+and bind-mounting it read-only turns "thousands of small-file RPCs" into "one big cached file":
+per-job cost drops from 216 s to ~0, staleness is handled by versioned image names.
+Lustre is bad at many small files, but perfectly fast at one 5 GB file.</div>
+
+<h2>4. Inefficiency #2: the git myth (a useful null result)</h2>
+<p>Instrumentation showed <code>initialize_runtime</code> = 20.1 s per rollout, and the visible command
+in that window is <code>source entry_script &amp;&amp; cd workspace &amp;&amp; git reset --hard</code>.
+We attributed the cost to git churning the repository and added an opt-in skip
+(<code>NRL_SKIP_GIT_RESET=1</code> &mdash; safe because the workspace is freshly copied from the
+image and therefore already clean).</p>
+
+<p><b>Result: the skip works (zero <code>git reset</code> executions in the logs) and saves
+nothing (20.1 &rarr; 19.9 s).</b></p>
+
+<div class="lesson"><b>What the null result taught us:</b> the ~20 s is the <b>workspace copy</b>
+performed by the entry script &mdash; extracting the instance repository out of the compressed
+squashfs container image into <code>/workspace</code>. Git was never the problem.
+This redirects the next fix: cache the extracted repository per instance on node-local disk
+(first rollout of an instance pays the extraction, all re-rollouts reuse it). That pattern fits RL
+training exactly, because GRPO re-rolls the <em>same instance pool</em> every step.</div>
+
+<h2>5. What was already fine (checked, not fixed)</h2>
+<ul>
+<li><b>Inter-turn framework overhead &asymp; 0.</b> Between agent turns, 98&ndash;99% of the call span is LLM time. No per-turn tax to remove.</li>
+<li><b>Apptainer container spin-up &asymp; 0.7 s.</b> SIF caching works.</li>
+<li><b>Two earlier micro-patches (retry interval 2s&rarr;0.5s, merged-init round-trip fusion, file-store relocation) measured &asymp; zero gain</b> in an honest A/B &mdash; the mass was never in those places.</li>
+</ul>
+
+<h2>6. Combined effect and remaining roadmap</h2>
+<table>
+<tr><th>Step</th><th>3-rollout wall</th><th>Mechanism</th></tr>
+<tr><td>Baseline (no drafter, unpatched)</td><td class="num">403 s</td><td></td></tr>
+<tr><td>+ DFlash drafter @ K5</td><td class="num">382 s</td><td>LLM phase 1.5&times; faster (46.7% &rarr; 36.1% share)</td></tr>
+<tr><td>+ node-local mirror &amp; flags</td><td class="num"><b>342 s</b></td><td>cold-start imports off Lustre</td></tr>
+</table>
+
+<table>
+<tr><th>Remaining inefficiency</th><th>Size (per rollout)</th><th>Planned fix</th></tr>
+<tr><td>Workspace copy from image</td><td class="num">~20 s</td><td>node-local extract-once cache per instance (&sect;4)</td></tr>
+<tr><td>Framework residual</td><td class="num">~15 s</td><td>needs further decomposition (controller/event-stream setup)</td></tr>
+<tr><td>Action-server boot floor</td><td class="num">~10 s</td><td>server pooling/reuse &mdash; larger surgery, deferred</td></tr>
+<tr><td>Prefix-cache misses (0% hit measured)</td><td>throughput, not latency</td><td>session-affinity fix; same root cause as Gym PR #1669 (harbor), not yet applied to the OpenHands path</td></tr>
+</table>
+
+<h2>7. Where each change should be upstreamed</h2>
+<table>
+<tr><th>Change</th><th>Repository</th><th>Rationale</th></tr>
+<tr><td>Node-local mirror / squashfs bake</td><td>NVIDIA-NeMo/Gym (<code>swe_agents/app.py</code>)</td><td>Gym owns cloning and placing the OpenHands setup</td></tr>
+<tr><td>INIT_T instrumentation, merged-init, git-skip flag, retry interval</td><td>nv-OpenHands fork</td><td>changes live inside <code>run_infer.py</code> / <code>local_runtime.py</code>; Gym pins a commit of this fork, so a pin bump in Gym follows the fork merge</td></tr>
+<tr><td>Workspace extract-once cache (future)</td><td>nv-OpenHands fork (entry script) + Gym (cache dir bind)</td><td>split ownership</td></tr>
+<tr><td>Session-affinity / sticky routing</td><td>NVIDIA-NeMo/Gym (<code>vllm_model</code>)</td><td>extends the diagnosis of Gym PR #1669 to the OpenHands agent path</td></tr>
+</table>
+
+<p class="small">All numbers measured on Lyris GB200 (aarch64), Qwen3-30B-A3B-Thinking-2507 target,
+NemoGym SWE2 smoke (3 astropy SWE-bench_Verified instances), vLLM 0.25, DFlash drafter K=5.
+Data: <code>experiments/dflash_loss_ab/report/</code>. Patches live in the
+<code>RL-wt-nemogym-opt</code> worktree behind env flags, defaults off.</p>
+
+</body>
+</html>
