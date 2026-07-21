@@ -33,7 +33,8 @@ case "${SCOPE_CASE}" in
     CUDA_GRAPH_SCOPE='[mamba]'
     ;;
   mlp)
-    CUDA_GRAPH_SCOPE='[mlp]'
+    echo 'Nano has no dense MLP-only layers; use mamba or a supported MoE diagnostic scope' >&2
+    exit 2
     ;;
   moe-router)
     CUDA_GRAPH_SCOPE='[moe_router]'
@@ -60,6 +61,8 @@ case "${SCOPE_CASE}" in
     exit 2
     ;;
 esac
+
+echo "requested_scope=$(printf %s "$SCOPE_CASE")"
 
 if [[ "${SCOPE_CASE}" != "nocg" ]]; then
   CG_ARGS=(

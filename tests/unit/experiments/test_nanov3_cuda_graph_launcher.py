@@ -38,6 +38,21 @@ def test_nanov3_launcher_rejects_moe_act_as_a_graph_scope() -> None:
     assert "moe_act is an activation-recompute module, not a CUDA Graph scope" in result.stderr
 
 
+def test_nanov3_launcher_rejects_dense_mlp_scope() -> None:
+    result = _run_launcher("mlp")
+
+    assert result.returncode == 2
+    assert "Nano has no dense MLP-only layers" in result.stderr
+
+
+def test_nanov3_launcher_records_requested_scope() -> None:
+    result = _run_launcher("mamba")
+
+    assert result.returncode == 0, result.stderr
+    assert "requested_scope=mamba" in result.stdout
+    assert "cuda_graph_warmup_steps=3" in result.stdout
+
+
 def test_nanov3_launcher_appends_cuda_graph_fields_to_the_base_recipe() -> None:
     launcher_source = LAUNCHER.read_text(encoding="utf-8")
 
