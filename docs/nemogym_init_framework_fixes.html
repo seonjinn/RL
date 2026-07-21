@@ -172,6 +172,11 @@ Lustre is bad at many small files, but perfectly fast at one 5 GB file.</div>
 concurrency 24, same drafter):</p>
 <p><img src="plots_patch_ab_n24.png" alt="n=24 phase breakdown, unpatched vs patched"
      style="max-width:780px; width:100%; border:1px solid #d5dce8; border-radius:6px"></p>
+<p><img src="plots_patch_ab_n24_shares.png" alt="n=24 phase shares, unpatched vs patched"
+     style="max-width:780px; width:100%; border:1px solid #d5dce8; border-radius:6px"></p>
+<p class="small">Relative view of the same data: the patched run shifts share out of
+Connect (11.8&rarr;9.0%) and Framework (17.1&rarr;13.3%) and back into useful LLM time
+(38.6&rarr;43.5%); Initialize's share is untouched &mdash; it is the next target.</p>
 <table>
 <tr><th>Per-rollout phase (mean, n=24)</th><th>Unpatched</th><th>Patched</th><th>&Delta;</th></tr>
 <tr><td>Connect (action server)</td><td class="num">15.0 s</td><td class="num">11.1 s</td><td class="num good">&minus;3.9 s (replicated)</td></tr>
