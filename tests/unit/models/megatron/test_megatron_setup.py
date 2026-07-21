@@ -118,6 +118,71 @@ def test_pr5672_qwen235_packed_attention_recipe_matches_no_cg_baseline():
     assert list(attention_config.policy.megatron_cfg.cuda_graph_buckets) == [8192]
 
 
+def test_nanov3_packed_cp_attention_scope_is_rejected_before_capture():
+    """Nano packed CP attention must fail before model construction."""
+    from nemo_rl.models.megatron.setup import _enforce_packed_seq_cuda_graph_consistency
+
+    config = {
+        "model_name": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16",
+        "sequence_packing": {"enabled": True},
+        "megatron_cfg": {
+            "cuda_graph_impl": "transformer_engine",
+            "cuda_graph_scope": ["attn"],
+            "cuda_graph_packed_seq": True,
+            "context_parallel_size": 2,
+        },
+    }
+
+    with pytest.raises(ValueError, match="Nano packed CP attention"):
+        _enforce_packed_seq_cuda_graph_consistency(config)
+
+
+def test_qwen_packed_cp_attention_scope_remains_allowed():
+    """The Nano preflight must not change existing Qwen packed-attention behavior."""
+    from nemo_rl.models.megatron.setup import _enforce_packed_seq_cuda_graph_consistency
+
+    config = {
+        "model_name": "Qwen/Qwen3-30B-A3B",
+        "sequence_packing": {"enabled": True},
+        "megatron_cfg": {
+            "cuda_graph_impl": "transformer_engine",
+            "cuda_graph_scope": ["attn"],
+            "cuda_graph_packed_seq": True,
+            "context_parallel_size": 2,
+        },
+    }
+
+    _enforce_packed_seq_cuda_graph_consistency(config)
+
+
+def test_te_fp64_router_scope_is_rejected_before_graph_creation():
+    """Resolved FP64 router graph scope must fail before graph creation."""
+    from nemo_rl.models.megatron.setup import _validate_te_cuda_graph_model_scope
+
+    model_cfg = SimpleNamespace(
+        cuda_graph_impl="transformer_engine",
+        cuda_graph_modules=["moe_router"],
+        moe_router_dtype="fp64",
+    )
+
+    with pytest.raises(ValueError, match="FP64 MoE router"):
+        _validate_te_cuda_graph_model_scope(model_cfg)
+
+
+def test_te_fp64_preprocess_scope_is_rejected_before_graph_creation():
+    """Resolved FP64 preprocess graph scope must fail before graph creation."""
+    from nemo_rl.models.megatron.setup import _validate_te_cuda_graph_model_scope
+
+    model_cfg = SimpleNamespace(
+        cuda_graph_impl="transformer_engine",
+        cuda_graph_modules=["moe_preprocess"],
+        moe_router_dtype="fp64",
+    )
+
+    with pytest.raises(ValueError, match="FP64 MoE router"):
+        _validate_te_cuda_graph_model_scope(model_cfg)
+
+
 @pytest.mark.mcore
 class TestValidateModelPaths:
     """Tests for validate_model_paths function."""
