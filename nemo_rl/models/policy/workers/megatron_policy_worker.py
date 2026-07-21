@@ -354,6 +354,7 @@ class MegatronPolicyWorkerImpl(
                 "transformer_impl=inference_optimized must not be set on training workers. "
                 "Use policy.generation.mcore_generation_config.transformer_impl=inference_optimized instead."
             )
+        requested_cuda_graph_scope = config["megatron_cfg"].get("cuda_graph_scope")
         runtime_config = validate_and_set_config(
             config,
             self.rank,
@@ -364,6 +365,17 @@ class MegatronPolicyWorkerImpl(
         )
 
         self.megatron_cfg = runtime_config.megatron_cfg
+        effective_cuda_graph_scope = [
+            module.value if hasattr(module, "value") else str(module)
+            for module in self.megatron_cfg.model.cuda_graph_modules
+        ]
+        if self.rank == 0:
+            log.info(
+                "CUDA graph scope requested=%s effective=%s impl=%s",
+                requested_cuda_graph_scope,
+                effective_cuda_graph_scope,
+                self.megatron_cfg.model.cuda_graph_impl,
+            )
         self.dtype = runtime_config.dtype
         self.optimizer_cpu_offload = runtime_config.optimizer_cpu_offload
         self.offload_optimizer_for_logprob = (

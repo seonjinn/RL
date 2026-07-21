@@ -153,18 +153,45 @@ from nemo_rl.models.value.config import ValueConfig
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
 
 
-def _cuda_graph_scope_includes_attention(scope) -> bool:
+def _cuda_graph_scope_values(scope: object) -> set[str]:
+    if scope in (None, "", [], "full"):
+        return {"full"}
+    values = scope if isinstance(scope, list) else str(scope).split(",")
+    return {str(value).strip() for value in values if str(value).strip()}
+
+
+def _cuda_graph_scope_includes_attention(scope: object) -> bool:
     """True when the CUDA-graph scope covers the attention submodule.
 
     Accepts the raw config value: None/empty/"full" (whole layer), a single
     scope string, a comma-separated string ("attn,mlp" — Megatron's own
     __post_init__ splits on commas), or a list of scope strings.
     """
-    if scope in (None, "", [], "full"):
-        # Empty/full scope captures the whole layer, including attention.
-        return True
-    scopes = scope if isinstance(scope, list) else str(scope).split(",")
-    return any(str(s).strip() in ("attn", "full", "full_iteration") for s in scopes)
+    return bool({"attn", "full", "full_iteration"} & _cuda_graph_scope_values(scope))
+
+
+def _is_nanov3_model(config: PolicyConfig) -> bool:
+    return (
+        str(config.get("model_name", ""))
+        .lower()
+        .startswith("nvidia/nvidia-nemotron-3-nano-")
+    )
+
+
+def _validate_te_cuda_graph_model_scope(model_cfg: Any) -> None:
+    graph_modules = {
+        str(module.value if hasattr(module, "value") else module)
+        for module in model_cfg.cuda_graph_modules
+    }
+    if (
+        model_cfg.cuda_graph_impl == "transformer_engine"
+        and {"moe_router", "moe_preprocess"} & graph_modules
+        and model_cfg.moe_router_dtype == "fp64"
+    ):
+        raise ValueError(
+            "FP64 MoE router CUDA graphs are unsupported by the installed Transformer Engine; "
+            "keep the router eager or use a separately labelled FP32 diagnostic recipe."
+        )
 
 
 def _enforce_packed_seq_cuda_graph_consistency(config: PolicyConfig) -> None:
@@ -230,6 +257,18 @@ def _enforce_packed_seq_cuda_graph_consistency(config: PolicyConfig) -> None:
             stacklevel=2,
         )
         megatron_cfg["cuda_graph_packed_seq"] = True
+
+    if (
+        _is_nanov3_model(config)
+        and megatron_cfg.get("cuda_graph_impl") == "transformer_engine"
+        and megatron_cfg.get("context_parallel_size", 1) > 1
+        and _cuda_graph_scope_includes_attention(megatron_cfg.get("cuda_graph_scope"))
+    ):
+        raise ValueError(
+            "Nano packed CP attention CUDA graphs are unsupported by the installed Transformer "
+            "Engine. Remove 'attn' from policy.megatron_cfg.cuda_graph_scope until the TE "
+            "packed-CP backward capture fix is available."
+        )
 
 
 def destroy_parallel_state():
@@ -652,6 +691,7 @@ def setup_model_config(
         model_cfg.finalize()
 
     model_cfg.__post_init__()
+    _validate_te_cuda_graph_model_scope(model_cfg)
 
     # Derive fp8_param_enabled once from the config dict so that load_main_params_from_ckpt
     # and _create_megatron_config both use the same canonical check (fp8 enabled AND fp8_param).
