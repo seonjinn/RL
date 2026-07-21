@@ -155,7 +155,7 @@ git commit -s -m "fix: preserve packed RoPE CP layout in TE CUDA graphs"
 
 **Produces:** Mamba-specific split/build functions with seq_idx dynamic and total_tokens omitted.
 
-- [ ] **Step 1: Write failing ABI tests**
+- [x] **Step 1: Write failing ABI tests**
 
 Append:
 
@@ -204,7 +204,7 @@ def test_mamba_packed_cuda_graph_rebuild_uses_supplied_seq_idx():
     assert set(kwargs) == {"hidden_states"}
 ~~~
 
-- [ ] **Step 2: Confirm red**
+- [x] **Step 2: Confirm red**
 
 ~~~
 cd /Users/sna/CudaGraph_PR/Megatron-LM-pr5672-nano-extension-20260720
@@ -213,7 +213,7 @@ uv run python -m torch.distributed.run --nproc-per-node 1 -m pytest -q tests/uni
 
 Expected: FAIL on missing import.
 
-- [ ] **Step 3: Implement the smallest Mamba ABI**
+- [x] **Step 3: Implement the smallest Mamba ABI**
 
 Add after the existing PR5672 constants and helpers:
 
@@ -287,7 +287,7 @@ def build_mamba_packed_seq_params_from_cuda_graph_kwargs(
     return PackedSeqParams(**params_kwargs)
 ~~~
 
-- [ ] **Step 4: Confirm green and commit**
+- [x] **Step 4: Confirm green and commit**
 
 ~~~
 cd /Users/sna/CudaGraph_PR/Megatron-LM-pr5672-nano-extension-20260720
