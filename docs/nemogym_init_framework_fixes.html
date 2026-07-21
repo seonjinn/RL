@@ -177,6 +177,12 @@ concurrency 24, same drafter):</p>
 <p class="small">Relative view of the same data: the patched run shifts share out of
 Connect (11.8&rarr;9.0%) and Framework (17.1&rarr;13.3%) and back into useful LLM time
 (38.6&rarr;43.5%); Initialize's share is untouched &mdash; it is the next target.</p>
+<p><img src="plots_patch_ab_n24_relative.png" alt="patched/unpatched ratio per phase"
+     style="max-width:680px; width:100%; border:1px solid #d5dce8; border-radius:6px"></p>
+<p class="small">Per-phase ratio (patched &divide; unpatched, dashed line = no change): the two
+import-bound phases drop to ~0.75&times;, Initialize stays at 0.99&times;, and the +9%/+6% on
+LLM/eval are run-to-run trajectory noise (token counts differ at temp=1.0), not regression &mdash;
+throughput per generated token is identical (276 vs 277 tok/s).</p>
 <table>
 <tr><th>Per-rollout phase (mean, n=24)</th><th>Unpatched</th><th>Patched</th><th>&Delta;</th></tr>
 <tr><td>Connect (action server)</td><td class="num">15.0 s</td><td class="num">11.1 s</td><td class="num good">&minus;3.9 s (replicated)</td></tr>
