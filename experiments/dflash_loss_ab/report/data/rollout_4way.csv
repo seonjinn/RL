@@ -9,3 +9,4 @@ ours_mixown3pct_K9,269,1.29,2439527,58 matched-scaffold convs (contaminated for 
 ours_mixown3pct_K7,270,1.29,2441005,
 ours_mixown3pct_K5,313,1.5,2441011,BEST - beats public 800K
 ours_mixown3pct_K3,311,1.49,2441341,K3-K5 plateau
+ours_swe100_K5,265,1.27,2442032,100% SWE-smith - monotonic decline confirmed (313>279>265 @K5)
