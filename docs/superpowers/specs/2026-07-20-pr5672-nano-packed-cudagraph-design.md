@@ -108,9 +108,10 @@ duplicates and conflicts with PR5672's adapter.
 
 Port these Ultra properties through the current PR5672 interfaces:
 
-- Each graph bucket has its own packed metadata buffers and immutable
-  signature. The key includes the hidden-state bucket and the model
-  chunk/pipeline stage so PP2/VPP runs cannot alias metadata.
+- Use PR5672/TE's existing per-callable, per-model-chunk sample ownership for
+  packed metadata buffers; do not add a second global buffer registry. Each
+  Mamba callable stores an immutable static signature and TE owns its matching
+  tensor input surfaces, so PP2/VPP calls cannot alias a Python data class.
 - A metadata-shape overflow raises an actionable configuration error. It does
   not truncate a cumulative-length tensor or replay a differently shaped
   graph.
