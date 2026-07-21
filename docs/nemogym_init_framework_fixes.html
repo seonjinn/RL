@@ -51,6 +51,37 @@ Companion page to the <a href="nemogym_swe_efficiency_report.html">overhead anal
 A second hypothesized fix (skipping <code>git reset</code>) turned out to be chasing a mis-attributed cost
 &mdash; a genuinely useful null result that redirected the roadmap (&sect;4).</p>
 
+<h3>Figure 1 &mdash; where the 3-rollout wall time goes (measured)</h3>
+<div style="font-size:11.5px">
+<div style="margin:6px 0"><b>Baseline</b> (no drafter, unpatched) &mdash; 403 s
+  <div style="display:flex; height:22px; width:100%; border-radius:4px; overflow:hidden; margin-top:2px">
+    <div style="width:46.7%; background:#4a7fd4; color:#fff; padding:2px 6px">LLM 188s</div>
+    <div style="width:27.2%; background:#d47f4a; color:#fff; padding:2px 6px">Init 110s</div>
+    <div style="width:20.0%; background:#c94f4f; color:#fff; padding:2px 6px">Framework 81s</div>
+    <div style="width:6.1%; background:#8a8f9c; color:#fff; padding:2px 4px">Eval</div>
+  </div>
+</div>
+<div style="margin:6px 0"><b>+ DFlash drafter K5</b> &mdash; 382 s
+  <div style="display:flex; height:22px; width:94.8%; border-radius:4px; overflow:hidden; margin-top:2px">
+    <div style="width:38.1%; background:#4a7fd4; color:#fff; padding:2px 6px">LLM 138s</div>
+    <div style="width:29.6%; background:#d47f4a; color:#fff; padding:2px 6px">Init 107s</div>
+    <div style="width:22.2%; background:#c94f4f; color:#fff; padding:2px 6px">Framework 81s</div>
+    <div style="width:10.1%; background:#8a8f9c; color:#fff; padding:2px 4px">Eval 55s</div>
+  </div>
+</div>
+<div style="margin:6px 0"><b>+ node-local mirror &amp; flags</b> &mdash; 342 s <span class="good">(&minus;15% vs baseline)</span>
+  <div style="display:flex; height:22px; width:84.9%; border-radius:4px; overflow:hidden; margin-top:2px">
+    <div style="width:44.2%; background:#4a7fd4; color:#fff; padding:2px 6px">LLM 151s*</div>
+    <div style="width:27.1%; background:#d47f4a; color:#fff; padding:2px 6px">Init 93s</div>
+    <div style="width:13.2%; background:#7ab87a; color:#fff; padding:2px 6px">Fw 45s</div>
+    <div style="width:15.5%; background:#8a8f9c; color:#fff; padding:2px 4px">Eval 53s</div>
+  </div>
+</div>
+<p class="small">*Absolute LLM/eval seconds vary between runs because agent trajectories differ
+(different tool paths, different token counts) &mdash; compare shares and totals, not single segments.
+Bars are drawn to a common time scale (baseline = full width).</p>
+</div>
+
 <h2>2. Why this matters now: the drafter moved the bottleneck</h2>
 <p>After deploying our DFlash speculative-decoding drafter at its optimal draft length (K=5),
 LLM generation got 1.5&times; faster &mdash; and the fixed costs around it became the binding constraint:</p>
