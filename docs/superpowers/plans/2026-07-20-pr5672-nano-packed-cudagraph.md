@@ -503,7 +503,7 @@ Expected: PASS and pushed immutable MCore commit.
 
 **Produces:** CP2 eager/graph parity coverage for two document-boundary layouts in one token bucket.
 
-- [ ] **Step 1: Write a failing GPU parity test**
+- [x] **Step 1: Write a failing GPU parity test**
 
 ~~~python
 def test_packed_mamba_te_cuda_graph_replay_matches_eager():
@@ -525,7 +525,7 @@ def test_packed_mamba_te_cuda_graph_replay_matches_eager():
 
 The helper must use CP2, cuda_graph_modules=[CudaGraphModule.mamba], total_tokens=32, and real PackedSeqParams. It invokes TECudaGraphHelper with the first packed sample before the replay invocation.
 
-- [ ] **Step 2: Run the focused GPU parity test**
+- [x] **Step 2: Run the focused GPU parity test**
 
 ~~~
 cd /Users/sna/CudaGraph_PR/Megatron-LM-pr5672-nano-extension-20260720
@@ -534,7 +534,7 @@ uv run python -m torch.distributed.run --nproc-per-node 2 -m pytest -q tests/uni
 
 Expected: PASS. The prior Nano job established the baseline failure before Task 3; if a later TE/Mamba CP operation is capture-unsafe, preserve that exact failure and stop Mamba promotion rather than changing the test to CP1.
 
-- [ ] **Step 3: Commit GPU coverage**
+- [x] **Step 3: Commit GPU coverage**
 
 ~~~
 git -C /Users/sna/CudaGraph_PR/Megatron-LM-pr5672-nano-extension-20260720 add tests/unit_tests/transformer/test_cuda_graphs.py
