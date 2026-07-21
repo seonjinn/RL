@@ -28,7 +28,7 @@ import transformer_engine.pytorch
 assert torch.cuda.is_available()
 print(f"cuda_devices={torch.cuda.device_count()}")
 print(f"torch={torch.__version__}")
-print(f"transformer_engine={version('transformer_engine')}")
-print(f"mamba_ssm={version('mamba_ssm')}")
+print(f"transformer_engine={version(\"transformer_engine\")}")
+print(f"mamba_ssm={version(\"mamba_ssm\")}")
 print("megatron_core=imported")
 '
