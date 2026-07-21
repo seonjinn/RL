@@ -147,8 +147,10 @@ The current installed TE cannot capture Nano's packed CP2 attention backward.
 Megatron-LM cannot safely fix that external capture operation by changing the
 PR5672 metadata adapter alone.
 
-Before any graph is captured, the extension checks the tuple
-`(packed THD, local_cp_size > 1, attention scope, TE capability)`. If the
+Before any graph is captured, the Nano recipe path checks the tuple
+`(NVIDIA-Nemotron-3-Nano model, packed THD, local_cp_size > 1, attention
+scope, TE capability)`. This gate is deliberately Nano-specific: it must not
+block existing packed CP attention experiments on other model families. If the
 known-unsafe TE capability is present, it removes only attention from the
 effective graph scope when another requested scope remains; otherwise it
 raises one clear configuration error describing the required TE capability.
