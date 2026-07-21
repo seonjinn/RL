@@ -94,11 +94,15 @@ from nemo_rl.experience.rollouts import (
     run_async_nemo_gym_rollout,
     run_multi_turn_rollout,
 )
-from nemo_rl.models.generation.interfaces import GenerationInterface
+from nemo_rl.models.generation.interfaces import (
+    GenerationInterface,
+    resolve_routed_experts_dtype_name_for_model,
+)
 from nemo_rl.models.generation.megatron import MegatronGeneration
 from nemo_rl.models.generation.sglang.config import SGLangConfig
 from nemo_rl.models.generation.sglang.sglang_generation import SGLangGeneration
 from nemo_rl.models.generation.vllm import VllmConfig, VllmGeneration
+from nemo_rl.models.generation.vllm.config import normalize_vllm_refit_config
 from nemo_rl.models.megatron.router_replay import (
     configure_vllm_for_router_replay,
     router_replay_enabled,
@@ -352,6 +356,8 @@ def setup(
     assert generation_config is not None, (
         "A generation config in the PolicyConfig is required for GRPO"
     )
+    if generation_config["backend"] == "vllm":
+        normalize_vllm_refit_config(cast(VllmConfig, generation_config))
 
     # Set seed for all random number generators
     set_seed(grpo_config["seed"])
@@ -589,6 +595,11 @@ def setup(
             invalid_tool_call_patterns=invalid_tool_call_patterns,
             thinking_tags=thinking_tags,
             require_routed_experts=router_replay_enabled(policy_config),
+            routed_experts_dtype=(
+                resolve_routed_experts_dtype_name_for_model(model_name)
+                if router_replay_enabled(policy_config)
+                else "int16"
+            ),
             initial_global_config_dict=nemo_gym_dict,
         )
         nemo_gym_opts = {}
@@ -900,6 +911,9 @@ def setup(
     # vllm model loading prefers clean environment, initialize policy_generation before policy in colocated mode
     backend = generation_config["backend"]
     generation_config["model_name"] = policy_config["model_name"]  # Needed for vLLM
+    remote_transport = None
+    remote_synchronizer_cls = None
+    remote_baseline_init_refs: list[Any] = []
 
     # Dictionary to store worker initialization timing stats for logging
     worker_init_timing_metrics = {}
@@ -960,6 +974,11 @@ def setup(
             init_optimizer=True,
             init_reference_model=init_reference_model,
         )
+        if remote_transport is not None:
+            assert remote_synchronizer_cls is not None
+            remote_baseline_init_refs.extend(
+                remote_synchronizer_cls.start_baseline(p, remote_transport)
+            )
         return p, time.perf_counter() - t0
 
     def init_vllm():
@@ -1088,6 +1107,21 @@ def setup(
     elif backend == "vllm":
         # vLLM generation: setup config, then initialize with policy
         generation_config = cast(VllmConfig, generation_config)
+        if generation_config.get("refit_transport") is not None:
+            # Keep optional remote transport dependencies off the default path.
+            from nemo_rl.weight_sync.vllm_remote_sparse_weight_synchronizer import (
+                VllmRemoteSparseWeightSynchronizer,
+                validate_vllm_remote_sparse_refit,
+            )
+
+            remote_transport = validate_vllm_remote_sparse_refit(
+                generation_config,
+                colocated=colocated_inference,
+                megatron_enabled=policy_config["megatron_cfg"]["enabled"],
+            )
+            assert remote_transport is not None
+            remote_synchronizer_cls = VllmRemoteSparseWeightSynchronizer
+
         if generation_config["vllm_cfg"]["precision"] == "fp8":
             assert loss_config.use_importance_sampling_correction, (
                 "Importance sampling must be enabled for vLLM FP8 generation for good convergence!"
@@ -1225,7 +1259,7 @@ def setup(
     policy.print_node_ip_and_gpu_id()
 
     # if it is not colocated inference, initialize collective communication for update weights
-    if not colocated_inference:
+    if not colocated_inference and remote_transport is None:
         t0 = time.perf_counter()
         ip, port = train_cluster.get_master_address_and_port()
         print(f"Using ip: {ip}, port: {port} for collective communication", flush=True)
@@ -1264,9 +1298,30 @@ def setup(
             ray.get(futures_train + futures_inference)
         worker_init_timing_metrics["collective_init_time_s"] = time.perf_counter() - t0
 
-    state_dict_info = policy.prepare_refit_info()
-    if policy_generation is not None:
-        policy_generation.prepare_refit_info(state_dict_info)
+    if remote_transport is not None:
+        t0 = time.perf_counter()
+        assert isinstance(policy_generation, VllmGeneration)
+        assert remote_synchronizer_cls is not None
+        refit_config = generation_config["refit_cfg"]
+        assert refit_config is not None
+        policy_generation.weight_synchronizer = remote_synchronizer_cls(
+            policy,
+            policy_generation,
+            transport=remote_transport,
+            api_key_env_var=generation_config["vllm_cfg"].get(
+                "http_refit_api_key_env_var"
+            ),
+            request_timeout_s=refit_config.request_timeout_s,
+            baseline_init_refs=remote_baseline_init_refs,
+        )
+        policy_generation.weight_synchronizer.init_communicator()
+        worker_init_timing_metrics[f"vllm_{remote_transport}_sparse_init_time_s"] = (
+            time.perf_counter() - t0
+        )
+    else:
+        state_dict_info = policy.prepare_refit_info()
+        if policy_generation is not None:
+            policy_generation.prepare_refit_info(state_dict_info)
 
     # Spin up non-colocated OPD teacher worker groups AFTER policy / vLLM are
     # ready. Parallelizing with policy init races on Megatron-Bridge's HF->mcore
@@ -2026,7 +2081,7 @@ def refit_policy_generation(
     _refit_buffer_size_gb: Optional[float] = None,
     timer: Optional[Timer] = None,
     kv_scales: Optional[dict[str, float]] = None,
-) -> None:
+) -> dict[str, float]:
     """Refit the policy generation interface with the latest policy weights.
 
     Args:
@@ -2036,7 +2091,14 @@ def refit_policy_generation(
             the buffer size is computed from remaining memory.
         timer: Optional Timer used to time the prepare/transfer/update phase
         kv_scales: Optional dictionary of KV cache scales for FP8 quantization.
+
+    Returns:
+        Scalar metrics reported by the selected weight synchronizer.
     """
+    synchronizer = getattr(policy_generation, "weight_synchronizer", None)
+    if synchronizer is not None:
+        return synchronizer.sync_weights(timer=timer, kv_scales=kv_scales) or {}
+
     # Megatron generation backend needs explicit suspend/resume around refits.
     if isinstance(policy_generation, MegatronGeneration):
         policy_generation.suspend_for_refit()
@@ -2136,6 +2198,16 @@ def refit_policy_generation(
 
     if isinstance(policy_generation, MegatronGeneration):
         policy_generation.resume_after_refit()
+
+    return {}
+
+
+def _initial_policy_generation_stale(
+    policy_generation: GenerationInterface, completed_steps: int
+) -> bool:
+    """Skip a fresh run's redundant sync when the synchronizer is already current."""
+    synchronizer = getattr(policy_generation, "weight_synchronizer", None)
+    return completed_steps > 0 or synchronizer is None or synchronizer.is_stale
 
 
 def _log_mixed_rewards_and_advantages_information(
@@ -2326,7 +2398,6 @@ def grpo_train(
         isinstance(policy_generation, MegatronGeneration)
         and master_config.policy["generation"]["colocated"]["enabled"]
     )
-    POLICY_GENERATION_STALE = True  # tracks if generation needs a refit before running
     assert policy_generation is not None
 
     # Check if we need to sync KV cache scales
@@ -2336,6 +2407,9 @@ def grpo_train(
     # common config/state times
     current_step = grpo_save_state["current_step"]  # current step within an epoch
     total_steps = grpo_save_state["total_steps"]  # total steps across all epochs
+    POLICY_GENERATION_STALE = _initial_policy_generation_stale(
+        policy_generation, total_steps
+    )
     max_num_steps = master_config.grpo[
         "max_num_steps"
     ]  # max number of steps to train for
@@ -2395,6 +2469,8 @@ def grpo_train(
             "See https://github.com/NVIDIA-NeMo/RL/blob/main/docs/guides/grpo.md#multiple-dataloaders for more details."
         )
 
+    ft_save_period = master_config.checkpointing.get("ft_save_period")
+
     while current_epoch < max_num_epochs and total_steps < max_num_steps:
         memory_tracker.snapshot_start_of_stage("Preparing batch", dir())
         print(f"\n{'=' * 25} Epoch {current_epoch + 1}/{max_num_epochs} {'=' * 25}")
@@ -2405,6 +2481,7 @@ def grpo_train(
 
         # Run grpo/dapo training loop (single-turn)
         for batch in wrapped_dataloader:
+            refit_metrics: dict[str, float] = {}
             # A central place to store logging data that won't be deleted until the loop ends
             metrics_logging_data = dict()
             metrics = dict()
@@ -2481,7 +2558,7 @@ def grpo_train(
                                 calibration_data, include_q=True
                             )["layers"]
 
-                        refit_policy_generation(
+                        refit_metrics = refit_policy_generation(
                             policy,
                             policy_generation,
                             colocated_inference,
@@ -2941,7 +3018,7 @@ def grpo_train(
                 ):
                     memory_tracker.snapshot_start_of_stage("Validation", dir())
                     if NEED_REFIT and POLICY_GENERATION_STALE:
-                        refit_policy_generation(
+                        refit_metrics = refit_policy_generation(
                             policy,
                             policy_generation,
                             colocated_inference,
@@ -3057,12 +3134,16 @@ def grpo_train(
                 consumed_samples += master_config.grpo["num_prompts_per_step"]
                 timeout.mark_iteration()
 
+                # +1 because step is 0-indexed
                 should_save_by_step = (
                     is_last_step
                     or (total_steps + 1) % master_config.checkpointing["save_period"]
                     == 0
+                    or (
+                        ft_save_period is not None
+                        and (total_steps + 1) % ft_save_period == 0
+                    )
                 )
-                # +1 because step is 0-indexed
                 # Check if timeout-based checkpointing is enabled in config.
                 should_save_by_timeout = timeout.check_save()
 
@@ -3295,6 +3376,8 @@ def grpo_train(
                 train_results, metrics, timing_metrics, master_config
             )
 
+            if refit_metrics:
+                logger.log_metrics(refit_metrics, total_steps + 1, prefix="refit")
             logger.log_metrics(metrics, total_steps + 1, prefix="train")
             logger.log_metrics(
                 performance_metrics, total_steps + 1, prefix="performance"
@@ -3626,11 +3709,11 @@ def async_grpo_train(
         isinstance(policy_generation, MegatronGeneration)
         and master_config.policy["generation"]["colocated"]["enabled"]
     )
-    POLICY_GENERATION_STALE = True
     assert policy_generation is not None
 
     # Training state
     step = grpo_save_state["current_step"]
+    POLICY_GENERATION_STALE = _initial_policy_generation_stale(policy_generation, step)
     weight_version = step  # Tracks refitted weight versions
     consumed_samples = grpo_save_state["consumed_samples"]
     total_valid_tokens = grpo_save_state.get(
@@ -3890,9 +3973,12 @@ def async_grpo_train(
     timer.stop("init/total")
     print(f"✅ Buffer ready for step {step}! Starting training loop...")
 
+    ft_save_period = master_config.checkpointing.get("ft_save_period")
+
     # Main training loop
     try:
         while step < master_config.grpo["max_num_steps"]:
+            refit_metrics: dict[str, float] = {}
             print(
                 f"\n{'=' * 25} Step {step + 1}/{master_config.grpo['max_num_steps']} {'=' * 25}"
             )
@@ -4285,7 +4371,7 @@ def async_grpo_train(
                     # Only the actual refit/weight transfer should be counted as weight_sync
                     print("🔄 Performing policy generation refit...")
                     with timer.time("weight_sync"):
-                        refit_policy_generation(
+                        refit_metrics = refit_policy_generation(
                             policy,
                             policy_generation,
                             colocated_inference,
@@ -4316,7 +4402,7 @@ def async_grpo_train(
                         trajectory_collector.pause.remote()
 
                         if NEED_REFIT and POLICY_GENERATION_STALE:
-                            refit_policy_generation(
+                            refit_metrics = refit_policy_generation(
                                 policy, policy_generation, colocated_inference
                             )
                             POLICY_GENERATION_STALE = False
@@ -4425,11 +4511,12 @@ def async_grpo_train(
                 consumed_samples += master_config.grpo["num_prompts_per_step"]
                 timeout.mark_iteration()
 
+                # +1 because step is 0-indexed
                 should_save_by_step = (
                     is_last_step
                     or (step + 1) % master_config.checkpointing["save_period"] == 0
+                    or (ft_save_period is not None and (step + 1) % ft_save_period == 0)
                 )
-                # +1 because step is 0-indexed
                 # Check if timeout-based checkpointing is enabled in config.
                 should_save_by_timeout = timeout.check_save()
 
@@ -4648,6 +4735,8 @@ def async_grpo_train(
                 merged_efficiency, total_wall_time, step + 1
             )
 
+            if refit_metrics:
+                logger.log_metrics(refit_metrics, step + 1, prefix="refit")
             logger.log_metrics(performance_metrics, step + 1, prefix="performance")
             logger.log_metrics(metrics, step + 1, prefix="train")
             logger.log_metrics(efficiency_loggable, step + 1, prefix="")

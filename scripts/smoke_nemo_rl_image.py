@@ -21,7 +21,12 @@ import json
 import platform
 from pathlib import Path
 
+import cutlass
 import torch
+from cutlass import cute
+
+import nemo_rl
+import transformer_engine.pytorch as te
 
 
 def _distribution_version(name: str) -> str:
@@ -38,31 +43,41 @@ def main() -> None:
         raise RuntimeError("no visible CUDA devices")
 
     modules = {
-        name: importlib.import_module(name)
-        for name in (
-            "nemo_rl",
-            "transformer_engine.pytorch",
-            "megatron.core",
-            "megatron.bridge",
-            "modelopt.torch",
-        )
+        "cutlass": cutlass,
+        "cutlass.cute": cute,
+        "nemo_rl": nemo_rl,
+        "transformer_engine.pytorch": te,
+        "megatron.core": importlib.import_module("megatron.core"),
+        "megatron.bridge": importlib.import_module("megatron.bridge"),
+        "modelopt.torch": importlib.import_module("modelopt.torch"),
     }
-    transformer_engine = modules["transformer_engine.pytorch"]
-    device = torch.device("cuda:0")
-    layer = transformer_engine.Linear(64, 64).to(device)
-    inputs = torch.randn(8, 64, device=device, requires_grad=True)
-    outputs = layer(inputs)
-    outputs.sum().backward()
-    torch.cuda.synchronize(device)
-    if not torch.isfinite(outputs).all():
-        raise RuntimeError("Transformer Engine produced non-finite output")
-    if inputs.grad is None or not torch.isfinite(inputs.grad).all():
-        raise RuntimeError("Transformer Engine produced an invalid input gradient")
+    actual_devices = torch.cuda.device_count()
+    device_names = [
+        torch.cuda.get_device_name(index) for index in range(actual_devices)
+    ]
+    if not all("GB200" in device_name for device_name in device_names):
+        raise RuntimeError(f"expected only GB200 devices, found {device_names}")
+    for device_index in range(actual_devices):
+        device = torch.device(f"cuda:{device_index}")
+        layer = te.Linear(64, 64).to(device)
+        inputs = torch.randn(8, 64, device=device, requires_grad=True)
+        outputs = layer(inputs)
+        outputs.sum().backward()
+        torch.cuda.synchronize(device)
+        if not torch.isfinite(outputs).all():
+            raise RuntimeError(
+                f"Transformer Engine produced non-finite output on {device}"
+            )
+        if inputs.grad is None or not torch.isfinite(inputs.grad).all():
+            raise RuntimeError(
+                f"Transformer Engine produced an invalid input gradient on {device}"
+            )
     evidence = {
         "architecture": platform.machine(),
         "cuda_available": True,
-        "cuda_device_count": torch.cuda.device_count(),
-        "cuda_device_name": torch.cuda.get_device_name(0),
+        "cuda_device_count": actual_devices,
+        "cuda_device_name": device_names[0],
+        "cuda_device_names": device_names,
         "cuda_version": torch.version.cuda,
         "transformer_engine_linear_backward": "pass",
         "module_paths": {

@@ -926,6 +926,7 @@ def test_committed_incident_evidence_is_bounded_redacted_and_linked() -> None:
         "2376637",
         "2372711",
         "2373152-2376677",
+        "2376852",
         "local-refresh-20260712",
         "login-preflight-uv-20260714",
         "preflight-segment-20260712",
@@ -1574,7 +1575,7 @@ def test_committed_current_status_keeps_unmeasured_features_out_of_claims() -> N
 
     cutedsl = entries["CuTeDSL fused Grouped GEMM"]
     assert cutedsl["state"] == "provisional"
-    assert cutedsl["jobs"] == ["2373273"]
+    assert cutedsl["jobs"] == ["2373273", "2376852"]
     assert "20 measured-step" in cutedsl["evidence"]
     assert "5270.9812" in cutedsl["evidence"]
     assert "4902.8530" in cutedsl["evidence"]

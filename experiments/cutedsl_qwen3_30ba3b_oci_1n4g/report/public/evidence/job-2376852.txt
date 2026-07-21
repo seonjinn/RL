@@ -7,22 +7,18 @@ Feature cell: CuTeDSL ON, Full-iteration CUDA Graph OFF, A2A overlap OFF
 Source: 2d6938b75a32fb0020f1b5a6740db31b4217bc65
 Image SHA256: f01387b5a9426ccd4c51822e1c48bd967329b61cd9948fa1faf3eb9c8d3e0c8c
 Result: FAILED before the first GRPO update
-
 Passed gates:
 - immutable source and image preflight
 - locked runtime bootstrap
 - resolved configuration and exact-topology validation
-
 Terminal error:
 - vLLM constructed ipc://<TMPDIR>/<uuid> from the inherited shared Lustre TMPDIR
 - the resulting Unix-domain socket path exceeded sockaddr_un.sun_path's 107-character limit
 - pyzmq raised ZMQError from socket.bind before policy model execution
-
-Evidence:
+Original remote log: bounded diagnosis transcribed from Slurm and Ray logs.
 - status.json: exit_code=1, finished_at_utc=2026-07-14T20:58:47Z
 - events.jsonl: functional_grpo started, then failed; timing, profile, and metrics export were skipped
 - no functional_gate_summary.json, timing_summary.json, or accepted performance metrics were produced
-
 Root cause:
 - the existing-Ray harness exported ${CONTAINER_RUNTIME_DIR}/tmp to run_grpo.py
 - Ray propagated the driver environment to VllmAsyncGenerationWorker

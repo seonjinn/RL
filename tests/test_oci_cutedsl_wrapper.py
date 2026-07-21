@@ -35,6 +35,9 @@ BENCHMARK_SUBMIT_SCRIPT = (
 SMOKE_SCRIPT = (
     Path(__file__).parents[1] / "scripts/smoke_nemo_rl_container.sbatch"
 ).read_text()
+SMOKE_PY = (
+    Path(__file__).parents[1] / "scripts/smoke_nemo_rl_image.py"
+).read_text()
 
 
 def _focused_srun_invocation_source() -> str:
@@ -153,8 +156,7 @@ def test_wrapper_isolates_bridge_and_nemo_rl_pytest_roots() -> None:
         tests/unit/models/policy/test_megatron_worker.py \\
         --mcore-only \\
         -k "${mcore_lifecycle_test_filter}" \\
-        -q
-) 2>&1 | tee -a "${CONTAINER_RESULT_DIR}/focused_tests.log"""
+        -q"""
 
     assert "set -euo pipefail" in focused_gate
     assert bridge_subshell in focused_gate
@@ -165,7 +167,7 @@ def test_wrapper_isolates_bridge_and_nemo_rl_pytest_roots() -> None:
     assert "test_megatron_offload_emits_host_memory_at_oom_boundaries" in focused_gate
     assert "test_megatron_offload_memory_diagnostics_are_best_effort" in focused_gate
     assert "test_sync_sleep_memory_diagnostics_are_best_effort" in focused_gate
-    assert focused_gate.count("--mcore-only") == 1
+    assert focused_gate.count("--mcore-only") == 3
     assert focused_gate.count('| tee "${CONTAINER_RESULT_DIR}/focused_tests.log"') == 1
     assert (
         focused_gate.count('| tee -a "${CONTAINER_RESULT_DIR}/focused_tests.log"') == 1
@@ -853,14 +855,19 @@ def test_wrapper_keeps_high_churn_runtime_off_lustre_across_srun_steps() -> None
     assert 'export RAY_TMPDIR="${CONTAINER_RESULT_DIR}/ray_tmp"' not in SCRIPT
 
 
-def test_smoke_uses_result_mount_for_logs_and_image_prebuilt_environment() -> None:
-    required_fragments = (
+def test_smoke_uses_result_mount_and_locked_runtime_environment() -> None:
+    script_fragments = (
         "${CONTAINER_SMOKE_DIR:?",
         '[[ "${CONTAINER_SMOKE_DIR}" != /* ]]',
         "${CONTAINER_SMOKE_DIR}:/results",
-        'readonly python_bin="/opt/nemo_rl_venv/bin/python"',
-        '[[ "$("${python_bin}" --version)" == "Python 3.13.13" ]]',
-        "\"${python_bin}\" - <<'PY'",
+        'export UV_PROJECT_ENVIRONMENT="/runtime/venv"',
+        'readonly UV_BIN="/root/.local/bin/uv"',
+        '"${UV_BIN}" sync --locked --extra mcore --python 3.13.13',
+        '[[ "$("${UV_PROJECT_ENVIRONMENT}/bin/python" --version)" == "Python 3.13.13" ]]',
+        '"${UV_BIN}" lock --check',
+        '"${UV_BIN}" run --active --no-sync python scripts/smoke_nemo_rl_image.py',
+    )
+    smoke_fragments = (
         "import cutlass",
         "from cutlass import cute",
         "import nemo_rl",
@@ -869,38 +876,33 @@ def test_smoke_uses_result_mount_for_logs_and_image_prebuilt_environment() -> No
         "torch.isfinite(outputs).all()",
         "torch.isfinite(inputs.grad).all()",
     )
-    for fragment in required_fragments:
+    for fragment in script_fragments:
         assert fragment in SMOKE_SCRIPT, fragment
+    for fragment in smoke_fragments:
+        assert fragment in SMOKE_PY, fragment
     assert ".bashrc" not in SMOKE_SCRIPT
 
 
 def test_smoke_has_bounded_runtime_and_proves_gb200_allocation() -> None:
-    required_fragments = (
+    script_fragments = (
         "#SBATCH --time=00:10:00",
-        "device_names = [torch.cuda.get_device_name(index) for index in range(actual_devices)]",
-        'assert all("GB200" in device_name for device_name in device_names)',
         'tee "${CONTAINER_SMOKE_DIR}/smoke.log"',
     )
-    for fragment in required_fragments:
+    smoke_fragments = (
+        "device_names = [",
+        "torch.cuda.get_device_name(index) for index in range(actual_devices)",
+        'if not all("GB200" in device_name for device_name in device_names)',
+    )
+    for fragment in script_fragments:
         assert fragment in SMOKE_SCRIPT, fragment
+    for fragment in smoke_fragments:
+        assert fragment in SMOKE_PY, fragment
 
 
 def test_smoke_does_not_create_a_second_uv_environment() -> None:
     assert "export UV_PROJECT_ENVIRONMENT=/results/venv" not in SMOKE_SCRIPT
     assert "export UV_CACHE_DIR=/results/uv-cache" not in SMOKE_SCRIPT
     assert "/tmp/nemo-rl-smoke-" not in SMOKE_SCRIPT
-
-
-def test_smoke_uses_image_prebuilt_environment_without_sync() -> None:
-    required_fragments = (
-        'readonly python_bin="/opt/nemo_rl_venv/bin/python"',
-        '[[ "$("${python_bin}" --version)" == "Python 3.13.13" ]]',
-        "\"${python_bin}\" - <<'PY'",
-    )
-    for fragment in required_fragments:
-        assert fragment in SMOKE_SCRIPT, fragment
-    assert "uv sync" not in SMOKE_SCRIPT
-    assert "astral.sh/uv" not in SMOKE_SCRIPT
 
 
 def test_wrapper_preserves_failure_artifacts_and_enforces_metrics() -> None:

@@ -452,6 +452,31 @@ def test_colocated_refit_offload_lifecycle_first_post_update_is_sequence_three(
     assert completion_sequences[2] == 3
 
 
+class _ModelWithNonSerializableExtraState(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.ones(1))
+        self.register_buffer("scale", torch.ones(1))
+
+    def get_extra_state(self):
+        raise AssertionError("moving a module must not serialize its extra state")
+
+
+def test_megatron_move_model_does_not_serialize_extra_state():
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    model = _ModelWithNonSerializableExtraState()
+
+    moved_model = MegatronPolicyWorkerImpl.move_model(worker, model, "cpu")
+
+    assert moved_model is model
+    assert model.weight.device.type == "cpu"
+    assert model.scale.device.type == "cpu"
+
+
 def test_megatron_prepare_for_training_restores_optimizer():
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
         MegatronPolicyWorkerImpl,
@@ -1156,7 +1181,13 @@ def test_megatron_eval_results_omit_optimizer_update_status():
     assert guarded_update_status
 
 
-def test_disable_forward_pre_hook_until_next_step_uses_worker_override():
+@pytest.mark.parametrize(
+    ("kwargs", "expected_param_sync"),
+    [({}, False), ({"param_sync": True}, True)],
+)
+def test_disable_forward_pre_hook_until_next_step_uses_worker_override(
+    kwargs: dict[str, bool], expected_param_sync: bool
+) -> None:
     source_path = (
         Path(__file__).parents[4]
         / "nemo_rl/models/policy/workers/megatron_policy_worker.py"
@@ -1195,6 +1226,8 @@ def test_disable_forward_pre_hook_until_next_step_uses_worker_override():
     namespace = {
         "DistributedDataParallel": FakeDDP,
         "get_model_config": lambda _: model_config,
+        "_model_chunks": lambda model: [model],
+        "_primary_model": lambda model: model,
     }
     exec(compile(test_module, str(source_path), "exec"), namespace)
 
@@ -1206,12 +1239,53 @@ def test_disable_forward_pre_hook_until_next_step_uses_worker_override():
         param_sync
     )
 
-    worker._disable_forward_pre_hook_until_next_train_step()
+    worker._disable_forward_pre_hook_until_next_train_step(**kwargs)
 
-    assert disable_calls == [False]
+    assert disable_calls == [expected_param_sync]
     assert worker._first_train_step_param_sync_func == "sync"
     assert model_config.param_sync_func is None
     assert worker._first_train_step_forward_pre_hook_disabled is True
+
+
+def test_prepare_for_generation_disables_param_gather_hook_before_wake(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nemo_rl.models.generation.megatron import megatron_worker
+
+    events = []
+    model = SimpleNamespace(
+        config=SimpleNamespace(flash_decode=True),
+        eval=lambda: events.append("eval"),
+    )
+    worker = object.__new__(megatron_worker.MegatronGenerationMixin)
+    worker.cfg = {
+        "generation": {"mcore_generation_config": {"cuda_graph_impl": "none"}}
+    }
+    worker.model = model
+    worker.is_generation_colocated = True
+    worker.should_disable_forward_pre_hook = True
+    worker.move_model = lambda model, device, **kwargs: (
+        events.append("move_to_cuda") or model
+    )
+    worker._forward_pre_hook_enabled = lambda: True
+    worker._disable_forward_pre_hook_until_next_train_step = (
+        lambda *, param_sync=False: events.append(("disable_hook", param_sync))
+    )
+    worker._inference_engine_initialized = True
+    worker._wake = lambda: events.append("wake_engine")
+
+    monkeypatch.setattr(megatron_worker, "log_gpu_memory", lambda *_: None)
+    monkeypatch.setattr(megatron_worker, "unwrap_model", lambda model: model)
+
+    worker.prepare_for_generation()
+
+    assert events == [
+        "move_to_cuda",
+        ("disable_hook", True),
+        "eval",
+        "wake_engine",
+    ]
+    assert model.config.flash_decode is False
 
 
 def create_megatron_test_config(
@@ -2429,6 +2503,9 @@ def test_megatron_checkpoint_save_kill_and_restore(
                 weights_path=weights_path,
                 optimizer_path=optimizer_path,
             )
+            # save_checkpoint() may use MCore's async save path.  Complete the
+            # write before inspecting the checkpoint or terminating its workers.
+            policy1.finalize_async_save()
 
             # Verify checkpoint was created
             assert os.path.exists(checkpoint_dir), "Checkpoint directory not created"
