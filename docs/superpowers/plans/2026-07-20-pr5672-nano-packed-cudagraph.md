@@ -46,7 +46,7 @@
 
 **Produces:** a clean experiment/pr5672-nano-packed-support-20260720 MCore branch.
 
-- [ ] **Step 1: Create a MCore worktree**
+- [x] **Step 1: Create a MCore worktree**
 
 ~~~
 git -C /Users/sna/CudaGraph_PR/RL-pr5672-adapter-ptyche-20260719/3rdparty/Megatron-LM-workspace/Megatron-LM fetch upstream pull/5672/head:refs/remotes/upstream/pr5672-latest
@@ -57,7 +57,7 @@ git -C /Users/sna/CudaGraph_PR/Megatron-LM-pr5672-nano-extension-20260720 rev-pa
 
 Expected: 6ff66f0a000ee65efa4f322c17871a3938f33427.
 
-- [ ] **Step 2: Run the unmodified PR5672 test**
+- [x] **Step 2: Run the unmodified PR5672 test**
 
 ~~~
 cd /Users/sna/CudaGraph_PR/Megatron-LM-pr5672-nano-extension-20260720
@@ -66,7 +66,7 @@ uv run python -m torch.distributed.run --nproc-per-node 1 -m pytest -q tests/uni
 
 Expected: PASS. Stop and diagnose environment/base failures before adding code.
 
-- [ ] **Step 3: Restore and verify the packed RoPE CP regression before Mamba work**
+- [x] **Step 3: Restore and verify the packed RoPE CP regression before Mamba work**
 
 Append this failing test to the same test file:
 
