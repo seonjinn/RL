@@ -27,6 +27,11 @@ pins it, focused tests, and reproducible 5-, 20-, and 40-step experiments.
 - The current Mamba path passes `PackedSeqParams` directly to
   `GraphableMegatronModule._te_cuda_graph_replay`, which accepts only tensors
   and `None`. It consequently fails before graph replay.
+- The completed Nano `moe_router` and `moe_router,moe_preprocess` jobs reach
+  TE graph creation but fail while TE weak-references a `torch.float64`
+  router output. The installed TE weak-reference conversion supports no
+  `float64` dtype. This is independent of packed metadata and reproduces for
+  both router scopes.
 - The existing `sj/cudagraph-on-ultra` branch supplies useful replay-safety
   behavior: no silent overflow truncation, bucket collision checks, and
   correct eager behavior when a graph cannot be reused. It does not change
@@ -55,6 +60,9 @@ Out of scope:
   zeroing capture-safe.
 - Capturing full dropless MoE dispatch, all-to-all, expert compute, generation,
   or the whole iteration.
+- Capturing a production FP64 MoE router. The model's FP64 router numerical
+  contract is retained; lowering its dtype merely to make TE graph capture
+  work is not a production fix.
 - Treating `moe_act` as a CUDA-graph scope. It is activation-recompute
   configuration, not a capturable module.
 - Enabling the `moe` scope for Nano's packed EP all-to-all workload.
@@ -152,8 +160,12 @@ changing NeMo-RL's public configuration.
 NeMo-RL preserves the existing packed boundary and loss semantics from the
 PR5672 adapter branch. It adds validation for the effective Nano scopes:
 
-- `moe_router` and `moe_router,moe_preprocess` are valid Nano diagnostic
-  scopes. `moe_preprocess` requires `moe_router`.
+- A requested `moe_router` or `moe_router,moe_preprocess` scope with an FP64
+  router fails during preflight with the TE dtype limitation. The effective
+  scope must never include router capture in that configuration.
+- A separate FP32-router recipe may be used only as a non-production
+  diagnostic after it explicitly records the changed router precision.
+  `moe_preprocess` still requires `moe_router`.
 - `mamba` becomes valid after the Mamba adapter passes its graph test.
 - `attn` is enabled only when the TE capability gate permits it.
 - `mlp`, `moe`, and `moe_act` fail early for this packed Nano recipe with an
@@ -196,14 +208,15 @@ in performance reports.
 ### NeMo-RL tests and experiments
 
 1. Add launcher/config tests for scope validation and persisted provenance.
-2. Run Nano baseline, `moe_router`, and `moe_router,moe_preprocess` for five
-   steps. Run `mamba` for five steps after its MCore GPU test passes. Each run
-   uses the packed 4-node x 4-GPU topology, warmup 3, and no checkpoints.
-3. Run matched no-CG and each passing scope for 20 steps with identical data,
+2. Assert that a production FP64 router scope fails in preflight before TE
+   graph creation. Run the no-CG baseline and `mamba` for five steps after its
+   MCore GPU test passes. Each run uses the packed 4-node x 4-GPU topology,
+   warmup 3, and no checkpoints.
+3. Run matched no-CG and each production-passing scope for 20 steps with identical data,
    seed, topology, and packed-sequence limit. Report E2E, generation,
    logprob, policy-training time, and their token throughputs over post-warmup
    steps only.
-4. Run a 40-step no-CG versus each passing graph scope comparison using the
+4. Run a 40-step no-CG versus each production-passing graph scope comparison using the
    same seed and fixed validation set. Compare reward, accuracy, policy loss,
    KL, clipping diagnostics, NaN/invalid counts, and completion rate.
 5. Once TE makes packed CP attention capture-safe, rerun the exact attention,
@@ -216,8 +229,9 @@ in performance reports.
   code.
 - Unit tests demonstrate safe dynamic packed metadata handling and Mamba
   replay without a non-tensor TE argument.
-- Nano's valid scopes either complete the five-step smoke test or fail at a
-  deterministic preflight before CUDA graph capture.
+- Nano's production-valid scopes either complete the five-step smoke test or
+  fail at a deterministic preflight before CUDA graph capture. FP64 router
+  graph requests are rejected before `make_graphed_callables`.
 - 20-step performance rows are comparable and identify requested versus
   effective scope; 40-step rows report convergence diagnostics against no-CG.
 - A merge is considered only after the focused MCore tests, NeMo-RL launcher
