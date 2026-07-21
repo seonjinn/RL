@@ -312,9 +312,12 @@ class VllmAsyncGenerationWorkerImpl(BaseVllmGenerationWorker):
         if self.cfg["vllm_cfg"].get("enable_vllm_metrics_logger", False):
             self._start_vllm_metrics_logger()
 
-    async def _get_raw_spec_counters(self) -> dict[str, float | list[float]]:
+    async def flush_vllm_stats(self) -> None:
         if self.llm is not None and self._cudagraph_metrics_enabled:
             await self.llm.do_log_stats()
+
+    async def _get_raw_spec_counters(self) -> dict[str, float | list[float]]:
+        await self.flush_vllm_stats()
         return super()._get_raw_spec_counters()
 
     def _install_engine_input_socket_lock(self) -> None:

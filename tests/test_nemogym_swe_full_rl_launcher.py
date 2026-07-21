@@ -22,6 +22,9 @@ GRPO = REPO_ROOT / "nemo_rl" / "algorithms" / "grpo.py"
 VLLM_ASYNC_WORKER = (
     REPO_ROOT / "nemo_rl" / "models" / "generation" / "vllm" / "vllm_worker_async.py"
 )
+VLLM_GENERATION = (
+    REPO_ROOT / "nemo_rl" / "models" / "generation" / "vllm" / "vllm_generation.py"
+)
 SWE_ENTRY_SMOKE = (
     REPO_ROOT / "experiments" / "nemogym_swe_full_rl" / "verify_openhands_swe_entry.py"
 )
@@ -348,14 +351,17 @@ def test_custom_all_reduce_diagnostic_is_opt_in() -> None:
 
 
 def test_cudagraph_diagnostics_flush_vllm_stats_at_step_boundaries() -> None:
-    source = VLLM_ASYNC_WORKER.read_text()
+    worker_source = VLLM_ASYNC_WORKER.read_text()
+    generation_source = VLLM_GENERATION.read_text()
 
-    assert 'llm_kwargs.get("cudagraph_metrics", False)' in source
-    assert "self._cudagraph_metrics_enabled" in source
-    assert "async def _get_raw_spec_counters" in source
-    assert "await self.llm.do_log_stats()" in source
-    assert "return super()._get_raw_spec_counters()" in source
-    assert "self.stat_loggers.append(LoggingStatLogger)" not in source
+    assert 'llm_kwargs.get("cudagraph_metrics", False)' in worker_source
+    assert "self._cudagraph_metrics_enabled" in worker_source
+    assert "async def flush_vllm_stats" in worker_source
+    assert "await self.llm.do_log_stats()" in worker_source
+    assert "def flush_vllm_stats" in generation_source
+    assert '"flush_vllm_stats"' in generation_source
+    assert "self.flush_vllm_stats()" in generation_source
+    assert "self.stat_loggers.append(LoggingStatLogger)" not in worker_source
 
 
 def test_eagle3_k3_uses_thinking_drafter_and_v2_runner() -> None:

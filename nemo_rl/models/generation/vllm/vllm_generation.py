@@ -1041,8 +1041,21 @@ class VllmGeneration(GenerationInterface):
         """Clear logger metrics for performance reporting."""
         self.clear_vllm_logger_metrics()
 
+    def flush_vllm_stats(self) -> None:
+        """Flush diagnostic vLLM stats at the current reporting boundary."""
+        if not self.cfg["vllm_cfg"].get("async_engine", False):
+            return
+        if not self.cfg.get("vllm_kwargs", {}).get("cudagraph_metrics", False):
+            return
+        futures = self.worker_group.run_all_workers_single_data(
+            "flush_vllm_stats",
+            run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+        )
+        ray.get(futures)
+
     def get_logger_metrics(self) -> dict[str, Any]:
         """Get logger metrics for performance reporting."""
+        self.flush_vllm_stats()
         return self.get_vllm_logger_metrics()
 
     def __del__(self) -> None:
