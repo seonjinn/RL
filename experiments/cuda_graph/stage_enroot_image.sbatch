@@ -3,7 +3,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem=0
 #SBATCH --time=02:00:00
-#SBATCH --job-name=stage_training_container
+#SBATCH --job-name=coreai_dlalgo_llm-pr5672.mcore-ci-stage
 #SBATCH --output=stage_training_container_%j.log
 
 set -euo pipefail
