@@ -82,9 +82,13 @@ if [[ "${DRAFT_SAMPLE_METHOD}" != "greedy" ]]; then
   TAG_SUFFIX="_${DRAFT_SAMPLE_METHOD}"
 fi
 
-# SPEC_METHOD=eagle3 (default, external drafter) or mtp (in-checkpoint MTP
-# head, e.g. Nemotron3 - no separate draft model).
+# SPEC_METHOD=eagle3 (default, external drafter), mtp (in-checkpoint MTP
+# head, e.g. Nemotron3 - no separate draft model), or dflash (parallel 1-pass
+# draft; DRAFT_MODEL = local checkpoint dir, e.g. our trained
+# drafters/dflash_235bthink_v1; drafter context capped at
+# DFLASH_DRAFT_MAX_MODEL_LEN per the SWE2-validated recipe).
 SPEC_METHOD="${SPEC_METHOD:-eagle3}"
+DFLASH_DRAFT_MAX_MODEL_LEN="${DFLASH_DRAFT_MAX_MODEL_LEN:-4096}"
 
 # EAGLE3 heads are single-layer: draft TP=1 regardless of target TP (matches
 # prior specdec scripts in this repo).
@@ -92,6 +96,9 @@ spec_json_fixed() {
   local k="$1"
   if [[ "${SPEC_METHOD}" == "mtp" ]]; then
     printf '{"method": "mtp", "num_speculative_tokens": %d}' "${k}"
+  elif [[ "${SPEC_METHOD}" == "dflash" ]]; then
+    printf '{"method": "dflash", "model": "%s", "num_speculative_tokens": %d, "parallel_drafting": true, "max_model_len": %d}' \
+      "${DRAFT_MODEL}" "${k}" "${DFLASH_DRAFT_MAX_MODEL_LEN}"
   else
     printf '{"method": "eagle3", "model": "%s", "num_speculative_tokens": %d, "draft_tensor_parallel_size": 1, "draft_sample_method": "%s"}' \
       "${DRAFT_MODEL}" "${k}" "${DRAFT_SAMPLE_METHOD}"
