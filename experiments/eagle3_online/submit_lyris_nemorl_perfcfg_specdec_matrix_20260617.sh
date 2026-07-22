@@ -41,6 +41,7 @@ PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
 MEGATRON_DATASET_HELPERS_BUILD_DIR="${MEGATRON_DATASET_HELPERS_BUILD_DIR:-${NODE_LOCAL_CACHE_ROOT}/megatron_dataset_helpers}"
 WANDB_PROJECT="${WANDB_PROJECT:-nemo-rl-perfcfg-specdec-lyris}"
 WANDB_ENABLED="${WANDB_ENABLED:-true}"
+WANDB_NETRC_HOME="${WANDB_NETRC_HOME:-}"
 
 MODELS="${MODELS:-qwen30ba3b qwen32 qwen235b}"
 MODES="${MODES:-sync async1off}"
@@ -109,6 +110,8 @@ ARCTIC_SITE="${ARCTIC_SITE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/nemorl_refer
 
 PARD_SPEC_TOKENS="${PARD_SPEC_TOKENS:-}"
 PARD2_SPEC_TOKENS="${PARD2_SPEC_TOKENS:-}"
+PARD_DRAFT_TP="${PARD_DRAFT_TP:-}"
+PARD2_DRAFT_TP="${PARD2_DRAFT_TP:-}"
 QWEN30_PARD_SPEC_TOKENS="${QWEN30_PARD_SPEC_TOKENS:-5}"
 QWEN32_PARD_SPEC_TOKENS="${QWEN32_PARD_SPEC_TOKENS:-5}"
 QWEN235B_PARD_SPEC_TOKENS="${QWEN235B_PARD_SPEC_TOKENS:-11}"
@@ -129,10 +132,17 @@ RAY_PYTHON_SPEC="${RAY_PYTHON_SPEC:-3.13.13}"
 RAY_USE_EXISTING_ENV="${RAY_USE_EXISTING_ENV:-true}"
 USE_SYSTEM_ENV="${USE_SYSTEM_ENV:-true}"
 # With USE_SYSTEM_ENV=true the driver uses the container's active
-# /opt/nemo_rl_venv. NEMO_RL_VENV_DIR is the Ray actor venv cache root.
+# /opt/nemo_rl_venv. Keep global/vLLM actors off the system executable so vLLM
+# gets its dependency env; MCore stays on its mcore actor env unless explicitly
+# overridden because policy workers need transformer-engine/modelopt.
 NEMO_RL_VENV_DIR="${NEMO_RL_VENV_DIR:-/opt/ray_venvs}"
 NEMO_RL_PY_EXECUTABLES_SYSTEM="${NEMO_RL_PY_EXECUTABLES_SYSTEM:-0}"
-SYSTEM_PYDEPS_SITE="${SYSTEM_PYDEPS_SITE:-}"
+NEMO_RL_MCORE_PY_EXECUTABLES_SYSTEM="${NEMO_RL_MCORE_PY_EXECUTABLES_SYSTEM:-0}"
+SYSTEM_PYDEPS_SITE="${SYSTEM_PYDEPS_SITE:-${RUN_CACHE_ROOT}/system_pydeps}"
+TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-12.0}"
+CUDA_ARCH_LIST="${CUDA_ARCH_LIST:-12.0}"
+CMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCHITECTURES:-120}"
+CUDAARCHS="${CUDAARCHS:-120}"
 DRIVER_UV_PROJECT_ENVIRONMENT="${DRIVER_UV_PROJECT_ENVIRONMENT:-${RUN_WORK_ROOT}/driver_venvs/reference_py313_mcore}"
 AUTO_INIT_SUBMODULES="${AUTO_INIT_SUBMODULES:-true}"
 PARD2_OFFICIAL_VLLM_PATCH_DIR="${PARD2_OFFICIAL_VLLM_PATCH_DIR:-/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/patches/pard2_official_target_feat_20260612}"
@@ -142,6 +152,7 @@ PARD2_VLLM_SOURCE_SITE="${PARD2_VLLM_SOURCE_SITE:-}"
 NRL_ACTOR_UV_LOCK_MODE="${NRL_ACTOR_UV_LOCK_MODE:---locked}"
 NRL_FORCE_REBUILD_VENVS="${NRL_FORCE_REBUILD_VENVS:-false}"
 NRL_FORCE_REBUILD_ACTOR_VENVS="${NRL_FORCE_REBUILD_ACTOR_VENVS:-false}"
+NRL_SERIALIZE_ACTOR_VENV_CREATION="${NRL_SERIALIZE_ACTOR_VENV_CREATION:-false}"
 
 is_true() {
   case "${1:-}" in
@@ -420,6 +431,11 @@ method_contract() {
       specdec_method=draft_model
       draft_model="${PARD_DRAFT_MODEL}"
       spec_tokens="$(spec_tokens_for_model pard "${model}")"
+      # draft_model currently expects target and draft TP to match in the vLLM
+      # proposer. Keep the recipe/model TP unless a specific smoke test overrides it.
+      if [[ -n "${PARD_DRAFT_TP}" ]]; then
+        draft_tp="${PARD_DRAFT_TP}"
+      fi
       parallel_drafting=true
       omit_generation_logprobs=true
       ;;
@@ -429,6 +445,9 @@ method_contract() {
       specdec_method=pard2
       draft_model="$(pard2_drafter_for_model "${model}")"
       spec_tokens="$(spec_tokens_for_model pard2 "${model}")"
+      if [[ -n "${PARD2_DRAFT_TP}" ]]; then
+        draft_tp="${PARD2_DRAFT_TP}"
+      fi
       parallel_drafting=true
       omit_generation_logprobs=true
       source_vllm_site="${PARD2_OFFICIAL_VLLM_SITE}"
@@ -493,9 +512,6 @@ submit_one() {
   local job_megatron_dataset_helpers_build_dir="${job_node_local_cache_root}/megatron_dataset_helpers"
   local job_pip_cache_dir="${PIP_CACHE_DIR}/${cache_suffix}"
   local job_system_pydeps_site="${SYSTEM_PYDEPS_SITE}"
-  if [[ "${method_label}" != "pard2" ]]; then
-    job_system_pydeps_site=""
-  fi
   local common_overrides
   local cuda_device_max_connections="${CUDA_DEVICE_MAX_CONNECTIONS}"
   if [[ "${model}" == "qwen235b" && -z "${cuda_device_max_connections}" ]]; then
@@ -548,6 +564,7 @@ HF_DATASETS_CACHE='${HF_DATASETS_CACHE}' \\
 WANDB_PROJECT='${WANDB_PROJECT}' \\
 WANDB_ENABLED='${WANDB_ENABLED}' \\
 WANDB_API_KEY='${WANDB_API_KEY:-}' \\
+WANDB_NETRC_HOME='${WANDB_NETRC_HOME}' \\
 BASE_LOG_DIR='${base_log_dir}' \\
 ACCOUNT='${ACCOUNT}' \\
 PARTITION='${PARTITION}' \\
@@ -580,6 +597,7 @@ RAY_USE_EXISTING_ENV='${RAY_USE_EXISTING_ENV}' \\
 USE_SYSTEM_ENV='${USE_SYSTEM_ENV}' \\
 NEMO_RL_VENV_DIR='${NEMO_RL_VENV_DIR}' \\
 NEMO_RL_PY_EXECUTABLES_SYSTEM='${NEMO_RL_PY_EXECUTABLES_SYSTEM}' \\
+NEMO_RL_MCORE_PY_EXECUTABLES_SYSTEM='${NEMO_RL_MCORE_PY_EXECUTABLES_SYSTEM}' \\
 RUN_CACHE_ROOT='${RUN_CACHE_ROOT}' \\
 NODE_LOCAL_CACHE_ROOT='${job_node_local_cache_root}' \\
 UV_CACHE_DIR_OVERRIDE='${UV_CACHE_DIR_OVERRIDE}' \\
@@ -591,6 +609,10 @@ FLASHINFER_CACHE_DIR='${job_flashinfer_cache_dir}' \\
 TRITON_CACHE_DIR='${job_triton_cache_dir}' \\
 TORCHINDUCTOR_CACHE_DIR='${job_torchinductor_cache_dir}' \\
 CUDA_CACHE_PATH='${job_cuda_cache_path}' \\
+TORCH_CUDA_ARCH_LIST='${TORCH_CUDA_ARCH_LIST}' \\
+CUDA_ARCH_LIST='${CUDA_ARCH_LIST}' \\
+CMAKE_CUDA_ARCHITECTURES='${CMAKE_CUDA_ARCHITECTURES}' \\
+CUDAARCHS='${CUDAARCHS}' \\
 PYTHONPYCACHEPREFIX='${job_pythonpycacheprefix}' \\
 PYTHONDONTWRITEBYTECODE='${PYTHONDONTWRITEBYTECODE}' \\
 MEGATRON_DATASET_HELPERS_BUILD_DIR='${job_megatron_dataset_helpers_build_dir}' \\
@@ -599,10 +621,11 @@ NRL_FORCE_REBUILD_VENVS='${NRL_FORCE_REBUILD_VENVS}' \\
 NRL_FORCE_REBUILD_ACTOR_VENVS='${NRL_FORCE_REBUILD_ACTOR_VENVS}' \\
 NRL_ACTOR_VENV_CACHE_SUFFIX='${cache_suffix}' \\
 NRL_ACTOR_UV_LOCK_MODE='${NRL_ACTOR_UV_LOCK_MODE}' \\
-NRL_SERIALIZE_ACTOR_VENV_CREATION=false \\
+NRL_SERIALIZE_ACTOR_VENV_CREATION='${NRL_SERIALIZE_ACTOR_VENV_CREATION}' \\
 DRIVER_UV_PROJECT_ENVIRONMENT='${DRIVER_UV_PROJECT_ENVIRONMENT}' \\
 NRL_MEGATRON_CHECKPOINT_DIR='${checkpoint_dir}' \\
 NRL_MEGATRON_NCCL_TIMEOUT_SECONDS=3600 \\
+NCCL_COLLNET_ENABLE='${NCCL_COLLNET_ENABLE:-1}' \\
 NRL_MEGATRON_TOKENIZER_MODEL='${tokenizer}' \\
 CUDA_DEVICE_MAX_CONNECTIONS='${cuda_device_max_connections}' \\
 FORCE_RECONVERT_FROM_HF=false \\
@@ -705,9 +728,6 @@ remote_preflight >&2
         max_new_tokens_label="$(effective_max_new_tokens_label "${model}")"
         min_tokens_label="${MIN_TOKENS:-default}"
         csv_system_pydeps_site="${SYSTEM_PYDEPS_SITE}"
-        if [[ "${method_label}" != "pard2" ]]; then
-          csv_system_pydeps_site=""
-        fi
         wandb_name="${model_label}_PerfCfg_${mode}_${method_label}_${RUN_ID}"
         echo "${job_id},${model},${mode},${method_label},${MAX_STEPS},${max_new_tokens_label},${min_tokens_label},${GENERATION_TEMPERATURE},${GENERATION_TOP_P},${GENERATION_TOP_K},${VLLM_ENFORCE_EAGER},${VLLM_ENABLE_PREFIX_CACHING},${VLLM_MOE_BACKEND},${VLLM_MAX_NUM_SEQS},${VLLM_MAX_NUM_BATCHED_TOKENS},${target_model},${draft_model},${spec_tokens},${num_nodes},${gpus_per_node},${segment},${LAUNCHER_GRES_FLAG:-none},${USE_SYSTEM_ENV},${RAY_USE_EXISTING_ENV},${csv_system_pydeps_site},${config},${RUN_ID},${REMOTE_REPO},${CONTAINER},${LOG_ROOT}/${model}_${mode}_${method_label},${dependency},${WANDB_ENABLED},${WANDB_PROJECT},${wandb_name},"
       done
