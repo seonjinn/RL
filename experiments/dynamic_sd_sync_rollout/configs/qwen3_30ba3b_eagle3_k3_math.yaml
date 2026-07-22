@@ -1,0 +1,45 @@
+# Validated 2026-07-15 era (0.25 rerun pilots): fixed-K3 2.19x on openmath
+# (3-seed 2.192+/-0.007); E2E GRPO (vllm 0.20 container, perf config verbatim):
+# generation 1.62x -> E2E step 1.07x (jobs 2458658/59, wandb runs vrq3c6le/e1gwxigj).
+# 30B runs 128 seqs/engine -> K3 verify max 512 tokens = exactly the default
+# capture cap; explicit captures still recommended for headroom.
+cluster: lyris
+partition: gb200
+venv: /lustre/fsw/coreai_dlalgo_llm/users/sna/venvs/vllm025
+env:
+  VLLM_USE_V2_MODEL_RUNNER: "1"   # REQUIRED for Qwen3MoE
+  HF_HOME: /lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home
+
+model: Qwen/Qwen3-30B-A3B
+tensor_parallel_size: 1
+gpu_memory_utilization: 0.85
+max_model_len: 8192
+max_num_seqs: 128
+attention_backend: FLASHINFER
+disable_custom_all_reduce: true
+
+speculative_config:
+  method: eagle3
+  model: RedHatAI/Qwen3-30B-A3B-Thinking-2507-speculator.eagle3
+  num_speculative_tokens: 3
+  draft_tensor_parallel_size: 1
+  draft_sample_method: greedy
+
+cudagraph_capture_sizes: [1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512]  # covers 128 x (3+1)
+
+# One DP-engine shard of grpo-qwen3-30ba3b-4n4g.yaml (64x32 over 16 TP1 engines)
+rollout:
+  num_prompts_per_step: 4
+  num_generations_per_prompt: 32
+  num_steps: 4
+  max_tokens: 4096
+  temperature: 1.0
+  top_p: 1.0
+  seed: 42
+prompts: vllm-benchmark/data/openmath2_prompts_2048.jsonl  # isl_cap 1024
+
+reproduce: |
+  MODE=rollout ROLLOUT_VARIANTS=fixed FIXED_K=3 \
+  CUDAGRAPH_SIZES="1 2 4 8 12 16 24 32 48 64 96 128 192 256 384 512" \
+  PYTHON_BIN=<venv>/bin/python VLLM_USE_V2_MODEL_RUNNER=1 \
+  bash experiments/dynamic_sd_sync_rollout/submit_matrix_lyris.sh qwen3_30ba3b math

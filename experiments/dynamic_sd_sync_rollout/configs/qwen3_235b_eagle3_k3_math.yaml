@@ -1,0 +1,48 @@
+# Validated 2026-07-22 (job 2460190): 1.66x step-wall vs baseline (147.0s), AL 2.5-2.6.
+# The cudagraph_capture_sizes list is THE critical setting: spec-decode verify
+# batches are max_num_seqs x (K+1) tokens; without (K+1)-multiple captures up to
+# that product the verify falls back to eager and SpecDec turns into a net loss
+# (this exact config measured 0.31-0.44x with recipe captures [1..64]).
+cluster: lyris
+partition: gb200
+venv: /lustre/fsw/coreai_dlalgo_llm/users/sna/venvs/vllm025   # vllm 0.25.0 patched (zerodiv, Qwen3MoE V2, torchcodec)
+env:
+  VLLM_USE_V2_MODEL_RUNNER: "1"   # REQUIRED for Qwen3MoE FULL-graph spec verify
+  HF_HOME: /lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home
+
+model: Qwen/Qwen3-235B-A22B-Thinking-2507
+tensor_parallel_size: 4            # single GB200 node (recipe TP8 is cross-node; broken on Lyris)
+gpu_memory_utilization: 0.85
+max_model_len: 12288
+max_num_seqs: 64
+attention_backend: FLASHINFER
+disable_custom_all_reduce: true
+
+speculative_config:
+  method: eagle3
+  model: RedHatAI/Qwen3-235B-A22B-Thinking-2507-speculator.eagle3
+  num_speculative_tokens: 3
+  draft_tensor_parallel_size: 1
+  draft_sample_method: greedy
+
+cudagraph_capture_sizes: [1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256]  # covers 64 x (3+1)
+
+# GRPO sync-rollout shape: one DP-engine shard of grpo-qwen3-235b-16n4g.yaml
+rollout:
+  num_prompts_per_step: 2
+  num_generations_per_prompt: 32
+  num_steps: 3
+  max_tokens: 8192
+  temperature: 1.0
+  top_p: 1.0
+  seed: 42
+prompts: vllm-benchmark/data/openmath2_prompts_2048.jsonl  # isl_cap 1024
+
+reproduce: |
+  MODEL="Qwen/Qwen3-235B-A22B-Thinking-2507" MODEL_LABEL="qwen3_235bthink_eagle3" TP=4 BENCH=openmath \
+  PROMPT_JSONL=<remote>/data/openmath2_prompts_2048.jsonl ISL_CAP=1024 \
+  MAX_MODEL_LEN=12288 MAX_NUM_SEQS=64 NUM_PROMPTS_PER_STEP=2 NUM_GENERATIONS_PER_PROMPT=32 NUM_STEPS=3 MAX_TOKENS=8192 \
+  PYTHON_BIN=<venv>/bin/python VLLM_USE_V2_MODEL_RUNNER=1 MODE=rollout SPEC_METHOD=eagle3 \
+  DRAFT_MODEL=RedHatAI/Qwen3-235B-A22B-Thinking-2507-speculator.eagle3 DISABLE_FLASHINFER_AUTOTUNE=true \
+  ROLLOUT_VARIANTS=fixed FIXED_K=3 CUDAGRAPH_SIZES="1 2 4 8 12 16 24 32 48 64 96 128 192 256" \
+  bash experiments/dynamic_sd_sync_rollout/submit_lyris_dynamic_sd.sh

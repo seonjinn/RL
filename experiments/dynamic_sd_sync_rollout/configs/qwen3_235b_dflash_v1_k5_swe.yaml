@@ -1,0 +1,50 @@
+# Validated 2026-07-21 (job 2458639): 1.39x on SWE-verified single-turn (AL 2.25);
+# same config on openmath = 1.55x (job 2458036). Best SWE config for 235B.
+# DFlash landmines: drafter MUST run FLASH_ATTN (FLASHINFER drafter = CUDA illegal
+# memory access), draft TP=1, flashinfer autotune off. K plateau is K2-K5;
+# K>=7 collapses (trained draft block ~5).
+cluster: lyris
+partition: gb200
+venv: /lustre/fsw/coreai_dlalgo_llm/users/sna/venvs/vllm025
+env:
+  VLLM_USE_V2_MODEL_RUNNER: "1"
+  HF_HOME: /lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home
+
+model: Qwen/Qwen3-235B-A22B-Thinking-2507
+tensor_parallel_size: 4
+gpu_memory_utilization: 0.85
+max_model_len: 12288
+max_num_seqs: 64
+attention_backend: FLASHINFER        # target only; drafter overridden below
+disable_custom_all_reduce: true
+kernel_config:
+  enable_flashinfer_autotune: false  # REQUIRED for dflash
+
+speculative_config:
+  method: dflash
+  model: /lustre/fsw/coreai_dlalgo_llm/users/sna/drafters/dflash_235bthink_v1  # our 600K-generic kl_div v1
+  num_speculative_tokens: 5
+  draft_tensor_parallel_size: 1
+  attention_backend: FLASH_ATTN      # REQUIRED (drafter-level)
+  max_model_len: 4096                # drafter context window
+
+cudagraph_capture_sizes: [1, 2, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 192, 384]  # covers 64 x (5+1)
+
+rollout:
+  num_prompts_per_step: 2
+  num_generations_per_prompt: 32
+  num_steps: 3
+  max_tokens: 8192
+  temperature: 1.0
+  top_p: 1.0
+  seed: 42
+prompts: vllm-benchmark/data/swebench_verified_prompts_all.jsonl  # isl_cap 4096
+
+reproduce: |
+  MODEL="Qwen/Qwen3-235B-A22B-Thinking-2507" MODEL_LABEL="qwen3_235bthink_dflashv1" TP=4 BENCH=swe_verified \
+  PROMPT_JSONL=<remote>/data/swebench_verified_prompts_all.jsonl ISL_CAP=4096 \
+  MAX_MODEL_LEN=12288 MAX_NUM_SEQS=64 NUM_PROMPTS_PER_STEP=2 NUM_GENERATIONS_PER_PROMPT=32 NUM_STEPS=3 MAX_TOKENS=8192 \
+  PYTHON_BIN=<venv>/bin/python VLLM_USE_V2_MODEL_RUNNER=1 MODE=rollout SPEC_METHOD=dflash \
+  DRAFT_MODEL=/lustre/fsw/coreai_dlalgo_llm/users/sna/drafters/dflash_235bthink_v1 DISABLE_FLASHINFER_AUTOTUNE=true \
+  ROLLOUT_VARIANTS=fixed FIXED_K=5 CUDAGRAPH_SIZES="1 2 4 8 16 32 64 6 12 24 48 96 192 384" \
+  bash experiments/dynamic_sd_sync_rollout/submit_lyris_dynamic_sd.sh
