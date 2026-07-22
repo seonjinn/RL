@@ -1,0 +1,8 @@
+# DynamicSD rollout jobs (20260721)
+remote_host=login-lyris
+model=Qwen/Qwen3-235B-A22B-Thinking-2507
+draft=/lustre/fsw/coreai_dlalgo_llm/users/sna/drafters/dflash_235bthink_v1
+bench=openmath prompts=/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/data/openmath2_prompts_2048.jsonl
+temperature=1.0 tp=4 max_num_seqs=64
+csv_header=job_id,tag,model,bench,logs_dir
+2457789,qwen3_235bthink_dflashv1_openmath_rollout_baseline_20260721,Qwen/Qwen3-235B-A22B-Thinking-2507,openmath,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_235bthink_dflashv1_openmath_rollout_baseline_20260721

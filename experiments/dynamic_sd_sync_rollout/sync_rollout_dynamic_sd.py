@@ -268,8 +268,13 @@ def build_llm(args: argparse.Namespace) -> Any:
         kwargs["disable_custom_all_reduce"] = True
     if args.attention_backend:
         kwargs["attention_backend"] = args.attention_backend
+    kernel_config: dict[str, Any] = {}
     if args.moe_backend:
-        kwargs["kernel_config"] = {"moe_backend": args.moe_backend}
+        kernel_config["moe_backend"] = args.moe_backend
+    if args.disable_flashinfer_autotune:
+        kernel_config["enable_flashinfer_autotune"] = False
+    if kernel_config:
+        kwargs["kernel_config"] = kernel_config
     if args.cudagraph_capture_sizes:
         kwargs["compilation_config"] = {
             "cudagraph_capture_sizes": sorted(set(args.cudagraph_capture_sizes))
@@ -489,7 +494,9 @@ def run_replay(args: argparse.Namespace, llm: Any) -> None:
     from vllm import SamplingParams, TokensPrompt
 
     tokenizer = llm.get_tokenizer()
-    trajs = load_trajectories(args.replay_jsonl, args.replay_trajectories, args.replay_max_turns)
+    trajs = load_trajectories(
+        args.replay_jsonl, args.replay_trajectories, args.replay_max_turns
+    )
     results: list[dict[str, Any]] = []
     flush = make_flusher(args, results)
 
@@ -508,13 +515,17 @@ def run_replay(args: argparse.Namespace, llm: Any) -> None:
             ids = normalize_token_ids(ids)
             if len(ids) > args.max_model_len - args.replay_turn_max_tokens:
                 break
-            ref_len = len(tokenizer.encode(m.get("content") or "", add_special_tokens=False))
+            ref_len = len(
+                tokenizer.encode(m.get("content") or "", add_special_tokens=False)
+            )
             sampling = SamplingParams(
                 temperature=args.temperature,
                 top_p=args.top_p,
                 top_k=args.top_k,
                 max_tokens=min(max(ref_len, 16), args.replay_turn_max_tokens),
-                seed=args.seed + ti * 1000 + turn_idx if args.per_request_seed else None,
+                seed=args.seed + ti * 1000 + turn_idx
+                if args.per_request_seed
+                else None,
                 detokenize=False,
             )
             before = read_spec_decode_metrics(llm)
@@ -527,17 +538,19 @@ def run_replay(args: argparse.Namespace, llm: Any) -> None:
             wall = time.perf_counter() - t0
             after = read_spec_decode_metrics(llm)
             gen_tokens = sum(len(o.token_ids) for out in outs for o in out.outputs)
-            results.append({
-                "mode": "replay",
-                "trajectory": ti,
-                "turn": turn_idx,
-                "prefix_tokens": len(ids),
-                "ref_turn_tokens": ref_len,
-                "wall_s": wall,
-                "gen_tokens": gen_tokens,
-                "output_tok_s": gen_tokens / wall if wall > 0 else 0.0,
-                "spec_decode": diff_spec_decode_metrics(after, before),
-            })
+            results.append(
+                {
+                    "mode": "replay",
+                    "trajectory": ti,
+                    "turn": turn_idx,
+                    "prefix_tokens": len(ids),
+                    "ref_turn_tokens": ref_len,
+                    "wall_s": wall,
+                    "gen_tokens": gen_tokens,
+                    "output_tok_s": gen_tokens / wall if wall > 0 else 0.0,
+                    "spec_decode": diff_spec_decode_metrics(after, before),
+                }
+            )
             turn_idx += 1
         flush(partial=True)
         print(f"[replay] traj={ti} turns={turn_idx}", flush=True)
@@ -546,7 +559,9 @@ def run_replay(args: argparse.Namespace, llm: Any) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("profile", "rollout", "replay"), required=True)
+    parser.add_argument(
+        "--mode", choices=("profile", "rollout", "replay"), required=True
+    )
     parser.add_argument("--model", required=True)
     parser.add_argument("--speculative-config")
     parser.add_argument("--tp", type=int, default=1)
@@ -555,6 +570,7 @@ def main() -> None:
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.85)
     parser.add_argument("--enforce-eager", action="store_true")
     parser.add_argument("--disable-custom-all-reduce", action="store_true")
+    parser.add_argument("--disable-flashinfer-autotune", action="store_true")
     parser.add_argument("--attention-backend", default=None)
     parser.add_argument("--moe-backend", default=None)
     parser.add_argument("--max-model-len", type=int)

@@ -89,6 +89,7 @@ fi
 # DFLASH_DRAFT_MAX_MODEL_LEN per the SWE2-validated recipe).
 SPEC_METHOD="${SPEC_METHOD:-eagle3}"
 DFLASH_DRAFT_MAX_MODEL_LEN="${DFLASH_DRAFT_MAX_MODEL_LEN:-4096}"
+DISABLE_FLASHINFER_AUTOTUNE="${DISABLE_FLASHINFER_AUTOTUNE:-}"
 
 # EAGLE3 heads are single-layer: draft TP=1 regardless of target TP (matches
 # prior specdec scripts in this repo).
@@ -97,7 +98,9 @@ spec_json_fixed() {
   if [[ "${SPEC_METHOD}" == "mtp" ]]; then
     printf '{"method": "mtp", "num_speculative_tokens": %d}' "${k}"
   elif [[ "${SPEC_METHOD}" == "dflash" ]]; then
-    printf '{"method": "dflash", "model": "%s", "num_speculative_tokens": %d, "parallel_drafting": true, "max_model_len": %d}' \
+    # Exact SWE2-validated recipe: drafter on FLASH_ATTN (FLASHINFER drafter
+    # crashes with CUDA illegal memory access), draft TP=1, 4K drafter window.
+    printf '{"method": "dflash", "model": "%s", "num_speculative_tokens": %d, "draft_tensor_parallel_size": 1, "attention_backend": "FLASH_ATTN", "max_model_len": %d}' \
       "${DRAFT_MODEL}" "${k}" "${DFLASH_DRAFT_MAX_MODEL_LEN}"
   else
     printf '{"method": "eagle3", "model": "%s", "num_speculative_tokens": %d, "draft_tensor_parallel_size": 1, "draft_sample_method": "%s"}' \
@@ -139,6 +142,9 @@ submit_job() {
   fi
   if [[ -n "${MOE_BACKEND}" ]]; then
     backend_args="${backend_args} --moe-backend ${MOE_BACKEND}"
+  fi
+  if [[ -n "${DISABLE_FLASHINFER_AUTOTUNE}" ]]; then
+    backend_args="${backend_args} --disable-flashinfer-autotune"
   fi
   ssh "${REMOTE_HOST}" "mkdir -p '${logs_dir}'"
   if [[ -n "${spec_json}" ]]; then
