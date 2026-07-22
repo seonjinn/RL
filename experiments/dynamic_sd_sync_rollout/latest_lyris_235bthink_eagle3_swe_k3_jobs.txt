@@ -1,0 +1,8 @@
+# DynamicSD rollout jobs (20260722)
+remote_host=login-lyris
+model=Qwen/Qwen3-235B-A22B-Thinking-2507
+draft=RedHatAI/Qwen3-235B-A22B-Thinking-2507-speculator.eagle3
+bench=swe_verified prompts=/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/data/swebench_verified_prompts_all.jsonl
+temperature=1.0 tp=4 max_num_seqs=64
+csv_header=job_id,tag,model,bench,logs_dir
+2460191,qwen3_235bthink_eagle3_swe_verified_rollout_fixed_k3_20260722,Qwen/Qwen3-235B-A22B-Thinking-2507,swe_verified,/lustre/fsw/coreai_dlalgo_llm/users/sna/vllm-benchmark/dynamic_sd_runs/qwen3_235bthink_eagle3_swe_verified_rollout_fixed_k3_20260722
