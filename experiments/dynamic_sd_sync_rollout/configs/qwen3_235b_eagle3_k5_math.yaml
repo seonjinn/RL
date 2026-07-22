@@ -1,4 +1,6 @@
-# Validated 2026-07-22 (job 2460190): 1.66x step-wall vs baseline (147.0s), AL 2.5-2.6.
+# Validated 2026-07-22. K-curve (jobs 2460190/2465399/2465400):
+#   K3 1.66x (AL 2.5-2.6) / K5 1.71x (AL 2.8-3.0, OPTIMUM) / K7 1.58x (AL 2.9-3.2)
+# eagle3 has no trained-block cliff (unlike dflash); optimum is cost-driven at K5.
 # The cudagraph_capture_sizes list is THE critical setting: spec-decode verify
 # batches are max_num_seqs x (K+1) tokens; without (K+1)-multiple captures up to
 # that product the verify falls back to eager and SpecDec turns into a net loss
@@ -21,11 +23,11 @@ disable_custom_all_reduce: true
 speculative_config:
   method: eagle3
   model: RedHatAI/Qwen3-235B-A22B-Thinking-2507-speculator.eagle3
-  num_speculative_tokens: 3
+  num_speculative_tokens: 5   # optimum (K3 also fine at -0.05x)
   draft_tensor_parallel_size: 1
   draft_sample_method: greedy
 
-cudagraph_capture_sizes: [1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256]  # covers 64 x (3+1)
+cudagraph_capture_sizes: [1, 2, 4, 6, 12, 24, 48, 96, 192, 384]  # covers 64 x (5+1)
 
 # GRPO sync-rollout shape: one DP-engine shard of grpo-qwen3-235b-16n4g.yaml
 rollout:
