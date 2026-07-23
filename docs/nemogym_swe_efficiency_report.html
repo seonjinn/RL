@@ -33,56 +33,60 @@
 <p class="muted">Measurement stack: NVIDIA-NeMo/RL PR #3243 (rollout-only eval mode) + Gym PR #1825 / nv-OpenHands PR #19 (rollout timeline profiler).
 Environment: Lyris GB200 (1 node, 4 GPUs), vLLM 0.25.1, Qwen3-30B-A3B-Thinking-2507 (TP2 &times; 2 engines), Gym latest main (fbde772),
 nv-OpenHands <code>sdd/multilingual-fixes@5f018005</code>. Workloads: SWE1-pivot (single-step, 400 rollouts) and SWE2
-(OpenHands agentic SWE-bench_Verified, 3 instances &times; &le;8 turns, temperature 1.0). Corrected SWE2 overhead-analysis statements are labeled
-<b>Measured</b> (committed raw artifact), <b>Handoff-reported</b> (reported without a committed raw artifact), or
-<b>Projected</b> (a cost model or unvalidated hypothesis).</p>
+(OpenHands agentic SWE-bench_Verified, 3 instances &times; 8 generations, <code>agent_max_turns=200</code>, concurrency 24,
+temperature 1.0). Corrected SWE2 overhead statements are labeled <b>Committed aggregate</b> (arm-level means and duration
+sums without per-rollout rows or job timestamps), <b>Handoff-reported</b> (supporting artifact not committed),
+<b>Code-inspected</b> (read from the pinned remote checkout), or <b>Projected</b> (a model or unvalidated hypothesis).</p>
 
 <div class="verdict"><b>Executive summary.</b>
-(1) <b>Measured:</b> the n=24 paired ledger shows that the patch lowers phase sum from <b>127.4 to 123.6 s/rollout</b>.
+(1) <b>Committed aggregate:</b> the n=24 ledger shows that the patch lowers phase sum from <b>127.4 to 123.6 s/rollout</b>.
 The stable savings are connect/action-server (3.9 s) and framework/run-infer (5.4 s), while initialization changes only
 0.3 s. Workspace initialization is dominated by a cross-filesystem full-copy fallback, not git cleanup: <code>cp -al</code>
 cannot hard-link from the read-only instance squashfs to the writable workspace filesystem, so it falls back to <code>cp -r</code>.
-<code>NRL_SKIP_GIT_RESET=1</code> changed initialization only from 20.1 to 19.9 s.
+The git-skip 20.1-to-19.9-second null result is handoff-reported because its raw timing artifact is not committed.
 (2) For speculative decoding, off-the-shelf model-free drafters (Suffix, N-gram) lose at every setting on this workload, EAGLE-3
 only wins at K=1 (+4%), and <b>DFlash at K=7–9 is the clear winner: 309–310 tok/s = 1.48&times; over the 209 tok/s baseline</b>,
 using a parallel one-pass draft and a 4K drafter context window.
-(3) <b>Projected:</b> from the 123.6-second patched phase model, removing the identified approximately 45 seconds gives a
-<b>78.6-second realistic bound (1.57&times;)</b>; removing all 49.3 seconds of connect + initialize + framework gives the
+(3) <b>Projected:</b> an illustrative aggressive scenario assumes residual Connect/Initialize/Framework costs of
+1.1/1.8/1.4 seconds, saving 10/20/15 seconds respectively. It gives <b>78.6 seconds (1.57&times;)</b>; removing all
+49.3 seconds of connect + initialize + framework gives the
 <b>74.3-second zero-overhead bound (1.66&times;)</b>. Neither is an observed job-wall result. See the
 <a href="nemogym_init_framework_fixes.html">detailed initialization and framework analysis</a> for code paths and validation gates.
 (4) The compact trial summary classifies the null, invalid, design-rejected, and deferred experiments so that none is treated as a validated optimization.</div>
 
 <h2>1. Corrected SWE2 overhead evidence</h2>
-<p>The committed canonical source is <code>experiments/dflash_loss_ab/report/data/patch_ab_n24.csv</code>. The phase totals
-below are per rollout and are a phase-normalized cost model; they do not replace full-job wall-time comparisons.</p>
+<p>The committed aggregate source is <code>experiments/dflash_loss_ab/report/data/patch_ab_n24.csv</code>. It contains
+rounded arm-level means and the sum of 24 rollout durations, not per-rollout observations, pairing keys, job IDs, or
+allocation-to-result timestamps. The phase totals below do not replace elapsed full-job comparisons.</p>
 <table>
 <tr><th>Phase (s/rollout)</th><th class="num">Unpatched</th><th class="num">Patched</th><th class="num">Delta</th><th>Evidence / interpretation</th></tr>
-<tr class="win"><td>Connect / action server</td><td class="num">15.0</td><td class="num">11.1</td><td class="num">−3.9</td><td>Measured n=24; a fresh action-server process still imports and bootstraps for every rollout.</td></tr>
-<tr><td>Initialize / workspace copy</td><td class="num">22.1</td><td class="num">21.8</td><td class="num">−0.3</td><td>Measured n=24; full-copy fallback is the real cost, not git reset.</td></tr>
-<tr class="win"><td>Framework / run_infer</td><td class="num">21.8</td><td class="num">16.4</td><td class="num">−5.4</td><td>Measured n=24; the per-rollout Python process eagerly imports the OpenHands stack.</td></tr>
-<tr><td>LLM</td><td class="num">49.2</td><td class="num">53.8</td><td class="num">+4.6</td><td>Measured n=24; stochastic workload phase, excluded from the stable-savings model.</td></tr>
-<tr><td>Evaluation</td><td class="num">19.3</td><td class="num">20.5</td><td class="num">+1.2</td><td>Measured n=24; stochastic workload phase, excluded from the stable-savings model.</td></tr>
-<tr><th>Phase sum</th><th class="num">127.4</th><th class="num">123.6</th><th class="num">−3.8</th><th>Measured n=24 phase sum.</th></tr>
+<tr class="win"><td>Connect / action server</td><td class="num">15.0</td><td class="num">11.1</td><td class="num">−3.9</td><td>Committed aggregate n=24; a fresh action-server process still imports and bootstraps for every rollout.</td></tr>
+<tr><td>Initialize / workspace copy</td><td class="num">22.1</td><td class="num">21.8</td><td class="num">−0.3</td><td>Committed aggregate n=24; code inspection identifies the full-copy fallback.</td></tr>
+<tr class="win"><td>Framework / run_infer</td><td class="num">21.8</td><td class="num">16.4</td><td class="num">−5.4</td><td>Committed aggregate n=24; code inspection identifies the one-shot Python import path.</td></tr>
+<tr><td>LLM</td><td class="num">49.2</td><td class="num">53.8</td><td class="num">+4.6</td><td>Committed aggregate n=24; trajectory-varying phase, excluded from the stable-savings model.</td></tr>
+<tr><td>Evaluation</td><td class="num">19.3</td><td class="num">20.5</td><td class="num">+1.2</td><td>Committed aggregate n=24; trajectory-varying phase, excluded from the stable-savings model.</td></tr>
+<tr><th>Phase sum</th><th class="num">127.4</th><th class="num">123.6</th><th class="num">−3.8</th><th>Committed aggregate n=24 phase sum.</th></tr>
 </table>
 
 <h3>1.1 Compact evidence ledger</h3>
 <table>
 <tr><th>Claim</th><th>Status</th><th>Result</th></tr>
-<tr><td>n=24 rollout-phase wall (mirror setup excluded)</td><td><b>Measured</b></td><td>3,059 s unpatched → 2,968 s patched.</td></tr>
-<tr><td>Full n=24 rollout wall, including 216 s mirror preparation</td><td><b>Measured</b></td><td>Patched total 3,184 s: a 4.09% regression.</td></tr>
+<tr><td>Sum of 24 rollout durations, mirror setup excluded</td><td><b>Committed aggregate</b></td><td>3,059 s unpatched → 2,968 s patched; not elapsed job wall.</td></tr>
+<tr><td>Setup-inclusive aggregate cost model</td><td><b>Projected</b></td><td>Add one 216 s mirror setup: 3,059 → 3,184 s, +4.09%. This is not an observed full-job regression.</td></tr>
+<tr><td>Allocation-to-result full-job wall</td><td><b>Unavailable</b></td><td>Requires committed start/result timestamps including setup, failures, and concurrency drain.</td></tr>
 <tr><td>Approximately 24-rollout break-even</td><td><b>Projected</b></td><td>Phase-normalized model using 9.3 s stable connect + framework savings; not observed break-even.</td></tr>
 <tr><td>n=80 net job-wall savings</td><td><b>Handoff-reported</b></td><td>948 s / 7.7%; job IDs and raw CSV remain pending.</td></tr>
-<tr><td>Remaining ceiling after patched 123.6 s phase total</td><td><b>Projected</b></td><td>78.6 s realistic bound (1.57&times;); 74.3 s zero-overhead bound (1.66&times;).</td></tr>
+<tr><td>Remaining ceiling after patched 123.6 s phase total</td><td><b>Projected</b></td><td>78.6 s illustrative aggressive scenario (1.57&times;); 74.3 s zero-overhead bound (1.66&times;).</td></tr>
 </table>
 
 <h3>1.2 시행착오: retracted, invalid, and deferred trials</h3>
 <table>
-<tr><th>Trial</th><th>Outcome</th><th>Why / retry condition</th></tr>
-<tr><td><code>NRL_SKIP_GIT_RESET=1</code></td><td>Null</td><td>20.1 → 19.9 s; workspace copy, not git cleanup, dominates initialization.</td></tr>
-<tr><td>Merge initialization commands; 0.5 s polling; event store in <code>/tmp</code></td><td>Null</td><td>No measurable gain; work and process boot dominate rather than command round trips or inter-turn overhead.</td></tr>
-<tr><td>Direct <code>NRL_WS_CACHE</code> bind over <code>/workspace</code></td><td>Invalid</td><td>Collided with OpenHands workspace ownership and produced non-git workspaces.</td></tr>
-<tr><td>Writable hard-link cache</td><td>Rejected by design</td><td>Shared inodes can leak mutations across rollouts; use a private reflink workspace instead.</td></tr>
-<tr><td>Full action-server reuse</td><td>Deferred</td><td>Require an explicit reset protocol and isolation proof before reuse.</td></tr>
+<tr><th>Trial</th><th>Outcome</th><th>Evidence</th><th>Why / retry condition</th></tr>
+<tr><td><code>NRL_SKIP_GIT_RESET=1</code></td><td>Null</td><td>Handoff-reported</td><td>20.1 → 19.9 s; workspace copy, not git cleanup, dominates initialization.</td></tr>
+<tr><td>Merge initialization commands; 0.5 s polling; event store in <code>/tmp</code></td><td>Null</td><td>Handoff-reported</td><td>No reported gain; work and process boot dominate rather than command round trips or inter-turn overhead.</td></tr>
+<tr><td>Direct <code>NRL_WS_CACHE</code> bind over <code>/workspace</code></td><td>Invalid</td><td>Handoff-reported</td><td>Collided with OpenHands workspace ownership and produced non-git workspaces.</td></tr>
+<tr><td>Writable hard-link cache</td><td>Rejected by design</td><td>Projected</td><td>Shared inodes can leak mutations across rollouts; use a private reflink workspace instead.</td></tr>
+<tr><td>Full action-server reuse</td><td>Deferred</td><td>Projected</td><td>Require an explicit reset protocol and isolation proof before reuse.</td></tr>
 </table>
 
 <h2>2. Speculative decoding: full scoreboard and root causes</h2>
@@ -148,15 +152,17 @@ efficiency at scale (and about giving SpecDec a cleaner decode share), not about
 <p>This broader study summarizes the code-grounded roadmap. The <a href="nemogym_init_framework_fixes.html">detailed initialization
 and framework analysis</a> contains the implementation paths, correctness analysis, and full validation matrix.</p>
 <table>
-<tr><th>#</th><th>Candidate</th><th>Status</th><th>Why it should help</th><th>Acceptance gate</th></tr>
-<tr><td>1</td><td>Prebuilt OpenHands squashfs</td><td><span class="risk-none">High-confidence, low-risk candidate</span></td><td>Replace the 216 s metadata-heavy mirror with one large sequential read and local extraction; bake rewritten paths and checked-hash bytecode into a versioned artifact.</td><td>Setup ≤36 s, ≥180 s below current setup; manifest parity; unchanged rollout phases and valid-rollout rate.</td></tr>
-<tr><td>2</td><td>Per-instance immutable cache + private reflink workspace</td><td><span class="risk-none">High-confidence design, filesystem support unverified</span></td><td>Cache by image digest, instance ID, and base commit; use a private <code>cp --reflink=always -a</code> clone after one extraction.</td><td>Warm initialization ≤5 s; n=80 full wall improves ≥8%; no workspace leakage and identical evaluation output. Never use writable hard links.</td></tr>
-<tr><td>3</td><td>Pre-imported forkserver</td><td><span class="risk-med">Medium-risk candidate requiring instrumentation first</span></td><td>Pay Python module imports once while retaining a fresh child process for every rollout.</td><td>Framework improves ≥3 s and full wall ≥2%; deterministic event ordering and output parity; no inherited thread, socket, logger, or environment state.</td></tr>
-<tr><td>4</td><td>Persistent controller with one-use prewarmed servers</td><td><span class="risk-med">Higher-risk follow-up</span></td><td>Overlap action-server import and boot; lease each server to one rollout, then destroy it instead of recycling an executor.</td><td>Connect p50 ≤5 s and p95 improves ≥30%; sentinel tests prove no process, filesystem, environment, secret, tmux, plugin, todo, or download state crosses rollouts.</td></tr>
-<tr><td>5</td><td>Small isolated candidates</td><td><span class="risk-low">Measure independently</span></td><td>Direct venv Python in place of <code>poetry run</code>; checked-hash <code>.pyc</code> files in the versioned squashfs; treat async final evaluation as a separate throughput project.</td><td>Each change must clear its own measurement gate; async evaluation additionally must preserve RL reward/trajectory-age semantics.</td></tr>
+<tr><th>#</th><th>Candidate</th><th>Maturity</th><th>Evidence</th><th>Why it should help</th><th>Acceptance gate</th></tr>
+<tr><td>1</td><td>Prebuilt OpenHands squashfs</td><td><span class="risk-none">High-confidence, low-risk</span></td><td>Projected</td><td>Replace the 216 s metadata-heavy mirror with one large sequential artifact; bake rewritten paths and checked-hash bytecode.</td><td>Setup ≤36 s, ≥180 s below current setup; manifest parity; no rollout-phase or valid-rate regression.</td></tr>
+<tr><td>2</td><td>Per-instance immutable cache + private reflink workspace</td><td><span class="risk-none">High-confidence design; filesystem unverified</span></td><td>Projected</td><td>Cache by image digest, instance ID, and base commit; use a private <code>cp --reflink=always -a</code> clone.</td><td>Warm initialization ≤5 s; n=80 allocation-to-result wall improves ≥8%; no workspace leakage and identical evaluation output.</td></tr>
+<tr><td>3</td><td>Pre-imported forkserver</td><td><span class="risk-med">Medium-risk; instrumentation first</span></td><td>Projected</td><td>Pay Python module imports once while retaining a fresh child process for every rollout.</td><td>Framework improves ≥3 s and allocation-to-result wall ≥2%; deterministic ordering/output parity; no inherited state.</td></tr>
+<tr><td>4</td><td>Persistent controller with one-use prewarmed servers</td><td><span class="risk-med">Higher-risk follow-up</span></td><td>Projected</td><td>Overlap action-server import and boot; destroy every server after one lease.</td><td>Connect p50 ≤5 s and p95 improves ≥30%; no process, filesystem, environment, secret, tmux, plugin, todo, or download leakage.</td></tr>
+<tr><td>5</td><td>Small isolated startup candidates</td><td><span class="risk-low">Measure independently</span></td><td>Projected</td><td>Direct venv Python; checked-hash <code>.pyc</code> files in the versioned squashfs.</td><td>Each change improves its named phase with output parity when tested alone.</td></tr>
+<tr><td>6</td><td>Asynchronous final evaluation</td><td><span class="risk-med">Separate throughput project</span></td><td>Projected</td><td>Overlap grading with rollout collection.</td><td>Lower allocation-to-result wall, bitwise-identical rewards, and trajectory age within bound; reward delay must not change RL semantics.</td></tr>
 </table>
-<p><b>Projection boundary:</b> 78.6 s is the realistic phase-model bound after removing identified overhead, and 74.3 s is the
-zero-overhead bound. These are not observed job-wall measurements; full-job comparisons must include one-time setup costs.</p>
+<p><b>Projection boundary:</b> 78.6 s assumes residual Connect/Initialize/Framework costs of 1.1/1.8/1.4 seconds; these
+residuals are not acceptance-gate guarantees. The 74.3 s value is the zero-overhead bound. Neither is an observed
+allocation-to-result measurement.</p>
 
 <h2>4. Methodology notes</h2>
 <ul>
@@ -184,7 +190,7 @@ before mixing or you will see fake 7-hour gaps.</li>
 <tr><td>B6</td><td>eagle3 + V2 runner + &gt;24K prompt crash</td><td>vLLM 0.25.0 (patched wheel)</td><td>CUDA illegal memory access during replay; eager/V1 unaffected.</td></tr>
 </table>
 
-<p class="muted">Updated 2026-07-23 · worktree pr3243-nemogym-swe-specdec · corrected n=24 source:
+<p class="muted">Updated 2026-07-23 · worktree pr3243-nemogym-swe-specdec · corrected n=24 aggregate source:
 <code>experiments/dflash_loss_ab/report/data/patch_ab_n24.csv</code>; supporting data: SWE1 matrix (jobs 2408776, 2409247–49, 2409491–92, 2423996–98),
 SWE2 smokes and sweeps (2428815, 2429766, 2430546/584/812–815/895–896/935/939, 2431308/546/547), acceptance replay (2430291),
 init timing (2431555), opt A/B (2431360).</p>

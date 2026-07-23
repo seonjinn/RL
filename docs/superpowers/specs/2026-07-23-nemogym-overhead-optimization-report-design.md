@@ -13,17 +13,18 @@ The work is documentation and analysis only. It does not change Gym, OpenHands, 
 
 ## Evidence Model
 
-Every performance statement will use one of three labels:
+Every performance statement will use one of four labels:
 
-- **Measured:** backed by a committed raw artifact in this worktree.
+- **Committed aggregate:** backed by committed arm-level means or duration sums, without implying per-rollout raw rows or elapsed-job timestamps.
 - **Handoff-reported:** recorded in `HANDOFF_CODEX.md` but missing a committed raw artifact.
-- **Projected:** derived from a measured ledger or an unvalidated code-path hypothesis.
+- **Projected:** derived from the committed aggregate ledger or an unvalidated code-path hypothesis.
+- **Code-inspected:** established by read-only inspection of the pinned remote checkout whose source is not vendored here.
 
-One-time setup costs must be included in full-job comparisons. Phase-normalized comparisons may exclude stochastic LLM and evaluation differences, but must be labeled as cost models rather than observed job-wall results.
+One-time setup costs must be included in full-job comparisons. The committed n=24 source contains aggregate rollout-duration sums, not allocation-to-result timestamps, so adding setup is a cost model rather than an observed job-wall result.
 
 ## Corrected Ledger
 
-The n=24 paired data in `experiments/dflash_loss_ab/report/data/patch_ab_n24.csv` is the canonical committed source.
+The n=24 aggregate ledger in `experiments/dflash_loss_ab/report/data/patch_ab_n24.csv` is the canonical committed source.
 
 | Phase, seconds per rollout | Unpatched | Patched | Delta |
 |---|---:|---:|---:|
@@ -34,7 +35,7 @@ The n=24 paired data in `experiments/dflash_loss_ab/report/data/patch_ab_n24.csv
 | Evaluation | 19.3 | 20.5 | +1.2 |
 | Phase sum | 127.4 | 123.6 | -3.8 |
 
-Observed n=24 rollout wall excluding mirror preparation is 3,059 to 2,968 seconds. Including the 216-second mirror preparation cost changes the patched total to 3,184 seconds, a 4.09% regression. The approximately 24-rollout break-even is a phase-normalized model based on 9.3 seconds of stable connect plus framework savings, not an observed break-even.
+The committed n=24 aggregate rollout-duration sum excluding mirror preparation is 3,059 to 2,968 seconds. Adding the 216-second mirror preparation cost changes the modeled patched aggregate to 3,184 seconds, a modeled 4.09% regression. Neither value is allocation-to-result job wall. The approximately 24-rollout break-even is a phase-normalized model based on 9.3 seconds of stable connect plus framework savings, not an observed break-even.
 
 The n=80 claim of 948 seconds or 7.7% net job-wall savings will be retained only as handoff-reported, with a note that job IDs and raw CSV are pending.
 
@@ -124,7 +125,7 @@ The HTML will include a table with symptom, evidence, root cause, and retry cond
 
 ## Validation Protocol
 
-Use an ABBA job-level crossover with at least four independent pairs at n=24 and four at n=80. Include allocation-to-result wall time, setup, failed rollouts, and drain time.
+Use an ABBA job-level crossover with at least four independent job pairs at n=24 and four at n=80. Include allocation-to-result wall time, setup, failed rollouts, and drain time. Resample paired jobs, never rollouts within a job.
 
 Run two layers:
 
@@ -133,10 +134,10 @@ Run two layers:
 
 Common gates:
 
-- One-sided 95% paired-bootstrap confidence interval shows at least 3% lower full job wall including setup.
-- Valid-rollout-rate lower confidence bound is no worse than -1 percentage point.
-- Generation throughput lower confidence bound is no worse than -2%.
-- Reward lower confidence bound is no worse than -0.01 absolute.
+- One-sided 95% paired-bootstrap confidence bound over paired jobs shows at least 3% lower allocation-to-result wall including setup and drain.
+- One-sided 95% paired-bootstrap lower bound for the valid-rollout-rate difference is no worse than -1 percentage point.
+- One-sided 95% paired-bootstrap lower bound for the generation-throughput relative difference is no worse than -2%.
+- One-sided 95% paired-bootstrap lower bound for the reward difference is no worse than -0.01 absolute.
 - No new timeout, OOM, Ray, stale-cache, workspace-isolation, or process-leak failure class.
 
 ## Page Structure
@@ -144,20 +145,20 @@ Common gates:
 `nemogym_init_framework_fixes.html` will become the detailed canonical page:
 
 1. Evidence status and provenance.
-2. Corrected observed full-job ledger.
+2. Corrected committed aggregate ledger and setup-inclusive cost model.
 3. Root-cause code paths.
 4. Ranked optimization candidates.
 5. Validation matrix.
 6. Failed attempts and retracted hypotheses.
-7. Remaining measured and theoretical ceiling.
+7. Remaining committed aggregate and projected ceiling.
 
 `nemogym_swe_efficiency_report.html` will be corrected and kept as the broader study:
 
 1. Replace the git-cleanup diagnosis with workspace-copy evidence.
-2. Separate measured, handoff-reported, and projected numbers.
-3. Replace the obsolete 145-to-70-second projection with the latest 123.6-second ledger, 78.6-second realistic bound, and 74.3-second zero-overhead bound.
+2. Separate committed aggregate, code-inspected, handoff-reported, and projected claims.
+3. Replace the obsolete 145-to-70-second projection with the latest 123.6-second ledger, the explicit 78.6-second illustrative scenario, and the 74.3-second zero-overhead bound.
 4. Link to the detailed fixes page for implementation analysis and validation gates.
 
 ## Remaining Ceiling
 
-From the n=24 patched ledger, Connect + Initialize + Framework is 49.3 seconds of a 123.6-second phase total. Removing the identified approximately 45 seconds gives a projected 78.6 seconds, a 36.4% wall reduction or 1.57x throughput ceiling. Removing all 49.3 seconds is the absolute 74.3-second, 1.66x bound. Neither is a measured result.
+From the n=24 patched ledger, Connect + Initialize + Framework is 49.3 seconds of a 123.6-second phase total. An illustrative aggressive scenario assumes residual Connect/Initialize/Framework costs of 1.1/1.8/1.4 seconds, saving 10/20/15 seconds and yielding 78.6 seconds, a 36.4% reduction or 1.57x phase-model speedup. These residuals are assumptions, not gate guarantees. Removing all 49.3 seconds is the absolute 74.3-second, 1.66x bound. Neither is a measured result.

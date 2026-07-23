@@ -4,7 +4,7 @@
 
 **Goal:** Correct the SWE rollout overhead reports and add code-grounded optimization recommendations, explicit evidence labels, validation gates, and a complete failed-attempt ledger.
 
-**Architecture:** Keep `nemogym_init_framework_fixes.html` as the canonical technical analysis and `nemogym_swe_efficiency_report.html` as the broad summary. Both pages use the committed n=24 CSV as the measured source, distinguish handoff-only n=80 claims, and present projected ceilings as unmeasured cost models.
+**Architecture:** Keep `nemogym_init_framework_fixes.html` as the canonical technical analysis and `nemogym_swe_efficiency_report.html` as the broad summary. Both pages use the committed n=24 CSV as an aggregate ledger, distinguish handoff-only n=80 claims, and present setup-inclusive accounting and projected ceilings as unmeasured cost models.
 
 **Tech Stack:** Static HTML/CSS, Python standard-library HTML parser, ripgrep, Git.
 
@@ -31,13 +31,13 @@ Expected: the existing page exposes stale or overconfident wording that the upda
 
 Edit the page so it states:
 
-- n=24 rollout wall excluding mirror preparation: 3,059 to 2,968 seconds, -91 seconds or -2.97%.
-- patched wall including the 216-second mirror: 3,184 seconds, +125 seconds or +4.09%.
+- n=24 aggregate rollout-duration sum excluding mirror preparation: 3,059 to 2,968 seconds, -91 seconds or -2.97%.
+- setup-inclusive aggregate cost model after adding the 216-second mirror: 3,184 seconds, +125 seconds or +4.09%; not observed elapsed job wall.
 - stable connect plus framework savings: 9.3 seconds per rollout.
 - modeled break-even: 216 / 9.3 = 23.2, approximately 24 rollouts.
 - n=80 result: handoff-reported only, with raw artifact and job IDs pending.
 
-Label every result as Measured, Handoff-reported, or Projected.
+Label results as Committed aggregate, Code-inspected, Handoff-reported, or Projected.
 
 **Step 3: Document the code-grounded root causes**
 
@@ -71,7 +71,7 @@ Include `NRL_SKIP_GIT_RESET`, merged init commands, faster polling, `/tmp` event
 
 Use the patched 123.6-second phase total:
 
-- realistic identified-lever projection: 78.6 seconds, -36.4%, 1.57x.
+- illustrative aggressive scenario with explicit 1.1/1.8/1.4-second residual assumptions: 78.6 seconds, -36.4%, 1.57x.
 - zero-overhead absolute bound: 74.3 seconds, -39.9%, 1.66x.
 
 State explicitly that neither is measured.
@@ -84,11 +84,11 @@ State explicitly that neither is measured.
 
 **Step 1: Replace obsolete diagnosis and projections**
 
-Replace the git-cleanup diagnosis with the measured workspace-copy diagnosis. Remove the obsolete 145-to-70-second, approximately 2x projection.
+Replace the git-cleanup diagnosis with the code-inspected workspace-copy diagnosis and handoff-reported git-skip timing. Remove the obsolete 145-to-70-second, approximately 2x projection.
 
 **Step 2: Add a compact evidence ledger**
 
-Summarize measured n=24 full wall, mirror-inclusive result, phase-normalized model, handoff-only n=80 claim, and projected 78.6/74.3-second bounds.
+Summarize the committed n=24 aggregate duration sum, setup-inclusive cost model, phase-normalized model, handoff-only n=80 claim, and projected 78.6/74.3-second scenarios.
 
 **Step 3: Replace the optimization roadmap**
 
