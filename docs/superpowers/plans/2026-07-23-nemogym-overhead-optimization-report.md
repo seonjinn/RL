@@ -60,8 +60,9 @@ Document:
 3. Instrumented pre-import forkservers.
 4. Persistent controller with one-use prewarmed action servers.
 5. Isolated small candidates such as direct venv Python and checked-hash bytecode.
+6. Asynchronous final evaluation as a separate throughput project.
 
-For every candidate include mechanism, expected benefit, risk, and a quantitative pass/fail gate.
+For every candidate include mechanism, expected benefit, maturity/risk, evidence status, and a quantitative pass/fail gate. Use allocation-to-result wall terminology and require forkservers to prove no inherited thread, socket, logger, or environment state.
 
 **Step 5: Add the complete failed-attempt ledger**
 

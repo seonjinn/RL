@@ -71,7 +71,7 @@ Use the existing `NRL_OH_SQUASHFS` branch to replace the 216-second small-file m
 
 **Why it should help:** Lustre handles one large file substantially better than thousands of metadata-heavy Python and venv files.
 
-**Acceptance gate:** setup at most 36 seconds, at least 180 seconds below the current setup; byte-level manifest parity; no change to rollout phases or valid-rollout rate.
+**Acceptance gate:** setup at most 36 seconds, at least 180 seconds below the current setup; byte-level manifest parity; no rollout-phase or valid-rollout-rate regression.
 
 ### 2. Per-instance immutable cache plus private reflink workspace
 
@@ -83,7 +83,7 @@ Populate an immutable node-local cache keyed by instance-image digest, instance 
 
 **Correctness requirement:** never use writable hard-linked clones. A plain `cp -al` cache would allow one rollout to mutate shared inodes and contaminate other rollouts.
 
-**Acceptance gate:** warm initialization at most 5 seconds; n=80 full-wall improvement at least 8%; clean base commit, no tracked/untracked file leakage, and identical evaluation output for every rollout.
+**Acceptance gate:** warm initialization at most 5 seconds; n=80 allocation-to-result wall improvement at least 8%; clean base commit, no tracked/untracked file leakage, and identical evaluation output for every rollout.
 
 ### 3. Pre-imported forkserver
 
@@ -93,7 +93,7 @@ Create separate pre-imported forkservers for the run-infer harness and action se
 
 **Why it should help:** Python module import execution and filesystem lookups are paid once while per-rollout process isolation remains.
 
-**Acceptance gate:** framework improves by at least 3 seconds and full wall by at least 2%; deterministic event ordering and output parity; no inherited thread, socket, logger, or environment state.
+**Acceptance gate:** framework improves by at least 3 seconds and allocation-to-result wall by at least 2%; deterministic event ordering and output parity; no inherited thread, socket, logger, or environment state.
 
 ### 4. Persistent controller with one-use prewarmed servers
 
@@ -109,7 +109,14 @@ Keep a controller alive across rollouts, prewarm action servers, lease each serv
 
 - Invoke the venv Python directly instead of `poetry run`; expected benefit is below one second and must be measured alone.
 - Precompile checked-hash `.pyc` files in the versioned squashfs; test independently from delivery changes.
-- Treat asynchronous final evaluation as a separate throughput project because delayed rewards and trajectory age can affect RL semantics.
+
+### 6. Asynchronous final evaluation
+
+**Status:** Separate throughput project.
+
+Overlap grading with rollout collection. Delayed rewards and trajectory age can affect RL semantics, so this is not a startup optimization.
+
+**Acceptance gate:** lower allocation-to-result wall, bitwise-identical rewards, and trajectory age within the configured bound; reward delay must not change RL semantics.
 
 ## Failed Attempts and Retracted Hypotheses
 
