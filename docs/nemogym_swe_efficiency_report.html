@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NeMo-RL + NeMo-Gym SWE Rollouts: Overhead Analysis &amp; Speculative Decoding Study</title>
+<style>
+  body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 13px; line-height: 1.55;
+         color: #1a2233; max-width: 1080px; margin: 0 auto; padding: 24px 20px 80px; background: #fbfcfe; }
+  h1 { font-size: 20px; border-bottom: 3px solid #2a4d8f; padding-bottom: 8px; }
+  h2 { font-size: 16px; color: #2a4d8f; margin-top: 34px; border-left: 4px solid #2a4d8f; padding-left: 8px; }
+  h3 { font-size: 14px; margin-top: 22px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; margin: 10px 0; }
+  th, td { border: 1px solid #c9d4e5; padding: 5px 8px; text-align: left; vertical-align: top; }
+  th { background: #eef3fa; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  pre { background: #14192b; color: #dce4f5; padding: 10px 12px; border-radius: 6px; overflow-x: auto;
+        font-size: 11px; line-height: 1.45; }
+  code { font-family: 'SF Mono', Menlo, monospace; }
+  p > code, li > code, td > code { background: #e8edf6; padding: 1px 4px; border-radius: 3px; font-size: 11.5px; color: #1d3461; }
+  .verdict { background: #eef7ee; border: 1px solid #9fc99f; border-radius: 6px; padding: 10px 14px; margin: 12px 0; }
+  .warn { background: #fdf3e4; border: 1px solid #e0b66a; border-radius: 6px; padding: 10px 14px; margin: 12px 0; }
+  .risk-none { color: #1e7d32; font-weight: 600; }
+  .risk-low { color: #8a6d00; font-weight: 600; }
+  .risk-med { color: #b45309; font-weight: 600; }
+  .muted { color: #66718a; font-size: 11.5px; }
+  .win { background: #eef7ee; }
+</style>
+</head>
+<body>
+
+<h1>NeMo-RL + NeMo-Gym SWE Rollouts: Overhead Analysis &amp; Speculative Decoding Study</h1>
+<p class="muted">Measurement stack: NVIDIA-NeMo/RL PR #3243 (rollout-only eval mode) + Gym PR #1825 / nv-OpenHands PR #19 (rollout timeline profiler).
+Environment: Lyris GB200 (1 node, 4 GPUs), vLLM 0.25.1, Qwen3-30B-A3B-Thinking-2507 (TP2 &times; 2 engines), Gym latest main (fbde772),
+nv-OpenHands <code>sdd/multilingual-fixes@5f018005</code>. Workloads: SWE1-pivot (single-step, 400 rollouts) and SWE2
+(OpenHands agentic SWE-bench_Verified, 3 instances &times; 8 generations, <code>agent_max_turns=200</code>, concurrency 24,
+temperature 1.0). Corrected SWE2 overhead statements are labeled <b>Committed aggregate</b> (arm-level means and duration
+sums without per-rollout rows or job timestamps), <b>Handoff-reported</b> (supporting artifact not committed),
+<b>Code-inspected</b> (read from the pinned remote checkout), or <b>Projected</b> (a model or unvalidated hypothesis).</p>
+
+<div class="verdict"><b>Executive summary.</b>
+(1) <b>Committed aggregate:</b> the n=24 ledger shows that the patch lowers phase sum from <b>127.4 to 123.6 s/rollout</b>.
+The stable savings are connect/action-server (3.9 s) and framework/run-infer (5.4 s), while initialization changes only
+0.3 s. Workspace initialization is dominated by a cross-filesystem full-copy fallback, not git cleanup: <code>cp -al</code>
+cannot hard-link from the read-only instance squashfs to the writable workspace filesystem, so it falls back to <code>cp -r</code>.
+The git-skip 20.1-to-19.9-second null result is handoff-reported because its raw timing artifact is not committed.
+(2) For speculative decoding, off-the-shelf model-free drafters (Suffix, N-gram) lose at every setting on this workload, EAGLE-3
+only wins at K=1 (+4%), and <b>DFlash at K=7–9 is the clear winner: 309–310 tok/s = 1.48&times; over the 209 tok/s baseline</b>,
+using a parallel one-pass draft and a 4K drafter context window.
+(3) <b>Projected:</b> an illustrative aggressive scenario assumes residual Connect/Initialize/Framework costs of
+1.1/1.8/1.4 seconds, saving 10/20/15 seconds respectively. It gives <b>78.6 seconds (1.57&times;)</b>; removing all
+49.3 seconds of connect + initialize + framework gives the
+<b>74.3-second zero-overhead bound (1.66&times;)</b>. Neither is an observed job-wall result. See the
+<a href="nemogym_init_framework_fixes.html">detailed initialization and framework analysis</a> for code paths and validation gates.
+(4) The compact trial summary classifies the null, invalid, design-rejected, and deferred experiments so that none is treated as a validated optimization.</div>
+
+<h2>1. Corrected SWE2 overhead evidence</h2>
+<p>The committed aggregate source is <code>experiments/dflash_loss_ab/report/data/patch_ab_n24.csv</code>. It contains
+rounded arm-level means and the sum of 24 rollout durations, not per-rollout observations, pairing keys, job IDs, or
+allocation-to-result timestamps. The phase totals below do not replace elapsed full-job comparisons.</p>
+<table>
+<tr><th>Phase (s/rollout)</th><th class="num">Unpatched</th><th class="num">Patched</th><th class="num">Delta</th><th>Evidence / interpretation</th></tr>
+<tr class="win"><td>Connect / action server</td><td class="num">15.0</td><td class="num">11.1</td><td class="num">−3.9</td><td>Committed aggregate n=24; a fresh action-server process still imports and bootstraps for every rollout.</td></tr>
+<tr><td>Initialize / workspace copy</td><td class="num">22.1</td><td class="num">21.8</td><td class="num">−0.3</td><td>Committed aggregate n=24; code inspection identifies the full-copy fallback.</td></tr>
+<tr class="win"><td>Framework / run_infer</td><td class="num">21.8</td><td class="num">16.4</td><td class="num">−5.4</td><td>Committed aggregate n=24; code inspection identifies the one-shot Python import path.</td></tr>
+<tr><td>LLM</td><td class="num">49.2</td><td class="num">53.8</td><td class="num">+4.6</td><td>Committed aggregate n=24; trajectory-varying phase, excluded from the stable-savings model.</td></tr>
+<tr><td>Evaluation</td><td class="num">19.3</td><td class="num">20.5</td><td class="num">+1.2</td><td>Committed aggregate n=24; trajectory-varying phase, excluded from the stable-savings model.</td></tr>
+<tr><th>Phase sum</th><th class="num">127.4</th><th class="num">123.6</th><th class="num">−3.8</th><th>Committed aggregate n=24 phase sum.</th></tr>
+</table>
+
+<h3>1.1 Compact evidence ledger</h3>
+<table>
+<tr><th>Claim</th><th>Status</th><th>Result</th></tr>
+<tr><td>Sum of 24 rollout durations, mirror setup excluded</td><td><b>Committed aggregate</b></td><td>3,059 s unpatched → 2,968 s patched; not elapsed job wall.</td></tr>
+<tr><td>Setup-inclusive aggregate cost model</td><td><b>Projected</b></td><td>Add one 216 s mirror setup: 3,059 → 3,184 s, +4.09%. This is not an observed full-job regression.</td></tr>
+<tr><td>Allocation-to-result full-job wall</td><td><b>Unavailable</b></td><td>Requires committed start/result timestamps including setup, failures, and concurrency drain.</td></tr>
+<tr><td>Approximately 24-rollout break-even</td><td><b>Projected</b></td><td>Phase-normalized model using 9.3 s stable connect + framework savings; not observed break-even.</td></tr>
+<tr><td>n=80 net job-wall savings</td><td><b>Handoff-reported</b></td><td>948 s / 7.7%; job IDs and raw CSV remain pending.</td></tr>
+<tr><td>Remaining ceiling after patched 123.6 s phase total</td><td><b>Projected</b></td><td>78.6 s illustrative aggressive scenario (1.57&times;); 74.3 s zero-overhead bound (1.66&times;).</td></tr>
+</table>
+
+<h3>1.2 시행착오: retracted, invalid, and deferred trials</h3>
+<table>
+<tr><th>Trial</th><th>Outcome</th><th>Evidence</th><th>Why / retry condition</th></tr>
+<tr><td><code>NRL_SKIP_GIT_RESET=1</code></td><td>Null</td><td>Handoff-reported</td><td>20.1 → 19.9 s; workspace copy, not git cleanup, dominates initialization.</td></tr>
+<tr><td>Merge initialization commands; 0.5 s polling; event store in <code>/tmp</code></td><td>Null</td><td>Handoff-reported</td><td>No reported gain; work and process boot dominate rather than command round trips or inter-turn overhead.</td></tr>
+<tr><td>Direct <code>NRL_WS_CACHE</code> bind over <code>/workspace</code></td><td>Invalid</td><td>Handoff-reported</td><td>Collided with OpenHands workspace ownership and produced non-git workspaces.</td></tr>
+<tr><td>Writable hard-link cache</td><td>Rejected by design</td><td>Projected</td><td>Shared inodes can leak mutations across rollouts; use a private reflink workspace instead.</td></tr>
+<tr><td>Full action-server reuse</td><td>Deferred</td><td>Projected</td><td>Require an explicit reset protocol and isolation proof before reuse.</td></tr>
+</table>
+
+<h2>2. Speculative decoding: full scoreboard and root causes</h2>
+
+<h3>2.1 Final scoreboard (SWE2 end-to-end, tok/s; baseline = 209)</h3>
+<table>
+<tr><th>Method</th><th class="num">K=1</th><th class="num">K=2</th><th class="num">K=3</th><th class="num">K=5</th><th class="num">K=7</th><th class="num">K=8/9</th><th class="num">K=16</th><th class="num">K=32</th></tr>
+<tr class="win"><td><b>DFlash</b> (parallel draft)</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num"><b>309</b></td><td class="num"><b>310 (K9)</b></td><td class="num">250</td><td class="num">—</td></tr>
+<tr><td>EAGLE-3</td><td class="num">218</td><td class="num">—</td><td class="num">189</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>
+<tr><td>Suffix (arctic-inference)</td><td class="num">168</td><td class="num">126</td><td class="num">100</td><td class="num">109</td><td class="num">—</td><td class="num">101 (K8)</td><td class="num">—</td><td class="num">115</td></tr>
+<tr><td>N-gram (prompt lookup)</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">99 (K4)</td><td class="num">—</td><td class="num">99 (K8)</td><td class="num">—</td><td class="num">—</td></tr>
+</table>
+<p><b>Winner: DFlash K7–K9 at 1.48&times;.</b> It is the only method that simultaneously avoids all three measured failure
+modes: it drafts in <b>one parallel pass</b> (no K sequential drafter forwards), it is <b>model-based</b> (better acceptance
+than lookup), and its drafter runs with a <b>4K context cap</b> (<code>speculative_config.max_model_len=4096</code>), which
+sidesteps the long-context collapse below. It keeps vLLM async scheduling (it is grouped with the EAGLE model types) and ran
+with FULL CUDA graphs captured at (K+1)-multiple sizes. Notably this used the generic
+<code>RedHatAI/Qwen3-30B-A3B-speculator.dflash</code> drafter — not even matched to the Thinking-2507 target — so there is
+further headroom with a matched drafter. K=16 over-drafts (250 tok/s); the optimum sits near K≈7–9.</p>
+
+<h3>2.2 Why EAGLE-3 fails at K=3: acceptance collapses with context length</h3>
+<p>Teacher-forced replay of the real SWE2 trajectories, reading vLLM speculative counters (mean acceptance length = MAL):</p>
+<table>
+<tr><th>Drafter</th><th class="num">MAL overall</th><th class="num">ctx &lt;8K</th><th class="num">8–16K</th><th class="num">16–24K</th><th class="num">&gt;24K</th><th>Per-position acceptance</th></tr>
+<tr><td>EAGLE-3 K3</td><td class="num"><b>1.39</b></td><td class="num">1.96</td><td class="num">1.31</td><td class="num">1.07</td><td class="num">1.05</td><td>[0.26, 0.09, 0.04]</td></tr>
+<tr><td>Suffix K8</td><td class="num">1.64</td><td class="num">1.54</td><td class="num">1.78</td><td class="num">1.78</td><td class="num">1.60</td><td>[0.34, 0.14, 0.06, …]</td></tr>
+<tr><td>N-gram K8</td><td class="num">3.68</td><td class="num">3.45</td><td class="num">4.00</td><td class="num">3.59</td><td class="num">3.23</td><td>[0.63, 0.47, 0.38, …]</td></tr>
+</table>
+<p>The EAGLE-3 drafter (trained on short instruction-response data) is out-of-distribution beyond ~8K context: past 16K it
+accepts almost nothing (MAL 1.05–1.07), far below the K=3 break-even (~1.6–1.8). This explains the measured 0.90&times; at
+K=3. At K=1 the position-1 acceptance (26%, MAL ≈ 1.26) clears the minimal cost of one drafter forward plus a 2-token
+verify, yielding the small +4% win. The same drafter reaches 64.8% acceptance (MAL 2.94) and 1.63&times; generation speedup
+on short-context math GRPO on this exact stack — the workload, not the stack, is decisive.</p>
+
+<h3>2.3 Why model-free drafters fail: proposal cost scales with context</h3>
+<p>Suffix and N-gram keep healthy, context-stable acceptance (table above) but still lose end-to-end at every K:
+suffix builds/walks its tree over the 16–33K-token context per request, and N-gram scans the prompt every decode step.
+Confound checks all passed: a V1-piecewise no-spec baseline measured <b>209 tok/s — identical to the V2 FULL-graph
+baseline</b> at this concurrency (BS 1–2), so CUDA-graph configuration was not the cause; replaying with the ISSTA'26
+paper's exact adaptive setting (K<sub>max</sub>=32, match-length-proportional budget) still lost (115 tok/s). The
+1.66–3.35&times; suffix speedups reported by that paper on SWE-bench come from greedy decoding, thinking-mode disabled,
+and a slow vLLM v0.12 baseline — none of which transfer to RL rollouts (temperature 1.0, Thinking policy). Their finding
+that EAGLE-3 loses on SWE-bench (0.70–1.10&times;) matches ours.</p>
+
+<h3>2.4 Prefix cache: 0% hits in both workloads</h3>
+<p>Despite <code>enable_prefix_caching=True</code>, measured cache hits are zero across 400 SWE1 rollouts and all SWE2 turns.
+Two mechanisms, one root: (a) in SWE1, all 4 generations of the same 24K-token prompt are admitted in the same scheduling
+wave, so no block is cached before its twins arrive; (b) in SWE2 multi-turn, the adapter's session-sticky routing
+(<code>vllm_model/app.py:525</code>) is keyed on an HTTP session cookie that the OpenHands client never carries, so every
+request round-robins to the other engine and the previous turn's KV is always on the wrong replica.</p>
+<pre><code>def _resolve_client(self, request: Request) -&gt; NeMoGymAsyncOpenAI:
+    session_id = request.session[SESSION_ID_KEY]
+    if session_id not in self._session_id_to_client:
+        # "There is probably a better way to select the endpoint..." (upstream comment)
+        client_idx = len(self._session_id_to_client) % len(self._clients)  # cookie-less client lands here every call
+</code></pre>
+<p><b>Fix:</b> derive stickiness from request content (hash of the first user message or <code>metadata.instance_id</code>)
+— ~10 lines in the adapter, <span class="risk-none">no correctness risk</span> (all engines hold identical weights; RL refit
+updates them in lockstep). Note: prefill is only 3.6% of SWE2 LLM time at this concurrency, so this fix is about GPU
+efficiency at scale (and about giving SpecDec a cleaner decode share), not about the small-batch latency measured here.</p>
+
+<h2>3. Ranked system-overhead optimization roadmap</h2>
+<p>This broader study summarizes the code-grounded roadmap. The <a href="nemogym_init_framework_fixes.html">detailed initialization
+and framework analysis</a> contains the implementation paths, correctness analysis, and full validation matrix.</p>
+<table>
+<tr><th>#</th><th>Candidate</th><th>Maturity</th><th>Evidence</th><th>Why it should help</th><th>Acceptance gate</th></tr>
+<tr><td>1</td><td>Prebuilt OpenHands squashfs</td><td><span class="risk-none">High-confidence, low-risk</span></td><td>Projected</td><td>Replace the 216 s metadata-heavy mirror with one large sequential artifact; bake rewritten paths and checked-hash bytecode.</td><td>Setup ≤36 s, ≥180 s below current setup; manifest parity; no rollout-phase or valid-rate regression.</td></tr>
+<tr><td>2</td><td>Per-instance immutable cache + private reflink workspace</td><td><span class="risk-none">High-confidence design; filesystem unverified</span></td><td>Projected</td><td>Cache by image digest, instance ID, and base commit; use a private <code>cp --reflink=always -a</code> clone.</td><td>Warm initialization ≤5 s; n=80 allocation-to-result wall improves ≥8%; no workspace leakage and identical evaluation output.</td></tr>
+<tr><td>3</td><td>Pre-imported forkserver</td><td><span class="risk-med">Medium-risk; instrumentation first</span></td><td>Projected</td><td>Pay Python module imports once while retaining a fresh child process for every rollout.</td><td>Framework improves ≥3 s and allocation-to-result wall ≥2%; deterministic ordering/output parity; no inherited thread, socket, logger, or environment state.</td></tr>
+<tr><td>4</td><td>Persistent controller with one-use prewarmed servers</td><td><span class="risk-med">Higher-risk follow-up</span></td><td>Projected</td><td>Overlap action-server import and boot; destroy every server after one lease.</td><td>Connect p50 ≤5 s and p95 improves ≥30%; no process, filesystem, environment, secret, tmux, plugin, todo, or download leakage.</td></tr>
+<tr><td>5</td><td>Small isolated startup candidates</td><td><span class="risk-low">Measure independently</span></td><td>Projected</td><td>Direct venv Python; checked-hash <code>.pyc</code> files in the versioned squashfs.</td><td>Each change improves its named phase with output parity when tested alone.</td></tr>
+<tr><td>6</td><td>Asynchronous final evaluation</td><td><span class="risk-med">Separate throughput project</span></td><td>Projected</td><td>Overlap grading with rollout collection.</td><td>Lower allocation-to-result wall, bitwise-identical rewards, and trajectory age within bound; reward delay must not change RL semantics.</td></tr>
+</table>
+<p><b>Projection boundary:</b> 78.6 s assumes residual Connect/Initialize/Framework costs of 1.1/1.8/1.4 seconds; these
+residuals are not acceptance-gate guarantees. The 74.3 s value is the zero-overhead bound. Neither is an observed
+allocation-to-result measurement.</p>
+
+<h2>4. Methodology notes</h2>
+<ul>
+<li><b>Profiler:</b> Gym PR #1825 + nv-OpenHands PR #19 give per-phase times (create/connect/initialize runtime,
+openhands_run, final eval) and per-call LLM latency records with completion timestamps. The Chrome-trace converter
+(<code>swe_trace_converter.py</code>) renders Perfetto timelines.</li>
+<li><b>Acceptance measurement:</b> teacher-forced replay of real trajectories against a standalone engine, reading
+<code>vllm:spec_decode_num_accepted_tokens / num_drafts / per_pos</code> counters (eager mode — acceptance is
+execution-mode independent).</li>
+<li><b>Fair-baseline discipline:</b> every claimed confound (V1 vs V2 graphs, capture sizes, paper hyperparameters) was
+closed with a dedicated control run; per-token throughput (tok/s) is the primary metric because temperature-1.0
+trajectories diverge across variants.</li>
+<li><b>Timestamp gotcha:</b> trajectory event timestamps are UTC-naive while PR #19 records are UTC-aware — normalize
+before mixing or you will see fake 7-hour gaps.</li>
+</ul>
+
+<h2>Appendix: bugs found and fixed along the way (upstream report candidates)</h2>
+<table>
+<tr><th>#</th><th>Bug</th><th>Location</th><th>Symptom</th></tr>
+<tr><td>B1</td><td><b>jq binary hardcoded to amd64</b></td><td>Gym <code>setup_scripts/openhands.sh:55</code></td><td>Exec format error on aarch64 → entry script exits 1 → tmux pane dies → every agent command times out at 600 s. Root cause of the "SWE2 impossible on GB200" myth; fixed with jq-linux-arm64.</td></tr>
+<tr><td>B2</td><td>openai version injection unsatisfiable</td><td>Gym <code>global_config.py:689</code> (parent venv version injected into child venvs)</td><td>nemo-gym pins <code>openai&lt;=2.7.2</code>; parent carries 2.44 via uv override → all subprocess venvs fail to resolve. Clamped at the injection point.</td></tr>
+<tr><td>B3</td><td>Tool-schema None-field dump/validate asymmetry</td><td>openai&le;2.7.2 + <code>SWEBenchVerifyResponse</code></td><td>430 pydantic validation errors (strict / defer_loading = None); normalized before validation (keep required <code>strict</code>, drop other None keys).</td></tr>
+<tr><td>B4</td><td>Negative spinup timestamp</td><td>PR #1825 metric <code>generation_apptainer_spinup_time</code></td><td>Records −1.78e9 (epoch subtraction against unset start) when spinup did not complete.</td></tr>
+<tr><td>B5</td><td>Official arm64 SWE-bench images lack the OpenHands layer</td><td><code>swebench/sweb.eval.arm64.*</code></td><td>No <code>/swe_util</code>; solved with a per-instance synthetic writable bind (<code>NRL_SWE_UTIL_SYNTH</code>). Also: Gym's container resolver requires local SIF paths (no docker:// pull), and apptainer-in-enroot needs a <code>/dev/fuse</code> bind.</td></tr>
+<tr><td>B6</td><td>eagle3 + V2 runner + &gt;24K prompt crash</td><td>vLLM 0.25.0 (patched wheel)</td><td>CUDA illegal memory access during replay; eager/V1 unaffected.</td></tr>
+</table>
+
+<p class="muted">Updated 2026-07-23 · worktree pr3243-nemogym-swe-specdec · corrected n=24 aggregate source:
+<code>experiments/dflash_loss_ab/report/data/patch_ab_n24.csv</code>; supporting data: SWE1 matrix (jobs 2408776, 2409247–49, 2409491–92, 2423996–98),
+SWE2 smokes and sweeps (2428815, 2429766, 2430546/584/812–815/895–896/935/939, 2431308/546/547), acceptance replay (2430291),
+init timing (2431555), opt A/B (2431360).</p>
+</body>
+</html>

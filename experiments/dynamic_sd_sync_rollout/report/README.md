@@ -342,6 +342,115 @@ SpecDec value behind tool execution. Speculation pays in agent loops only
 where turns produce long generations (reasoning-heavy steps), which is also
 where EAGLE3 (in-distribution) rather than suffix carries the win.
 
+## Real NemoGym environment validation (PR #3243 eval mode)
+
+All prior sections simulate rollout; this one measures the real thing.
+NVIDIA-NeMo/RL PR #3243 (`run_grpo_rollout_benchmark.py`) converts a GRPO
+recipe into an eval-only run: vLLM async engines plus a NemoGym environment
+actor, no training workers, one GB200 node. We ran the SWE1-pivot recipe
+(`grpo_qwen3_30ba3b_thinking_swe1.yaml`, Qwen3-30B-A3B-Thinking-2507, 100
+val prompts x 4 generations, 32 prompts/step, temperature 1.0) on Lyris with
+two stacks: the PR's own vLLM 0.20 pin and a worktree of the validated vLLM
+0.25.1 eagle3-fullcg stack with the PR cherry-picked on top. Two integration
+fixes were needed: NemoGym subprocess venvs inherit the parent's
+`openai==2.44.0` pin, which is unsatisfiable against nemo-gym's
+`openai<=2.7.2` (clamped at the injection point in `global_config.py`), and
+the capture-size fix below.
+
+Rollout-collection wall (sum of per-batch progress walls, engine init
+excluded), vLLM 0.25.1:
+
+| Variant | Wall | vs baseline | Graph coverage (steps / tokens) |
+|---|---:|---:|---|
+| Baseline (no SD) | 264-279 s | 1.00x | 100% / 100% |
+| EAGLE3 K3, default capture | 448-529 s | 0.56x | 52.6% / much lower |
+| EAGLE3 K3, dense capture to 512 | 305 s | 0.87x | 100% / 100% |
+| K3 + DynamicSD `[[1,8,3],[9,32,2],[33,512,1]]`, dense capture | 336 s | 0.79x | 100% / 100% |
+
+Rewards were 0.185-0.2275 across all variants (noise band), confirming
+losslessness. The same workload on vLLM 0.20 gave baseline 524 s - the
+0.20 -> 0.25.1 upgrade alone is worth 1.88x, larger than any SpecDec effect.
+
+**The dominant slowdown was a capture cliff inside NeMo-RL, not acceptance.**
+The engine resolved `max_cudagraph_capture_size=64`, so speculative verify
+steps (uniform-decode shape = BS x (K+1) tokens) fell off the captured path
+for BS > 16 while the baseline's BS <= 64 decode stayed fully covered. We
+measured this from the PR's `inflight_batch_sizes` telemetry: 47.4% of K3
+engine steps - and the large-BS majority of tokens - ran uncaptured.
+Passing an explicit dense `cudagraph_capture_sizes` list up to 512 restored
+100% coverage and recovered K3 from 0.56x to 0.87x. (An attempt to set
+`compilation_config.max_cudagraph_capture_size` directly dies in vLLM
+0.25.1 with `TypeError: cannot pickle 'pydantic_core.ArgsKwargs'` - the
+explicit list is the working syntax.) Acceptance is not the binding
+constraint: the same drafter measures 64.8% acceptance (MAL 2.94) on math
+GRPO and MAL ~2.2 on SWEBench standalone.
+
+Two portable lessons. First, **DynamicSD schedules are calibrated to a
+capture configuration, not just to a model**: the schedule above was derived
+under the broken capture regime (back off to K1 at BS >= 33, where K3 was
+eager); once capture covers K3 everywhere, plain fixed K3 beats it (305 vs
+336 s). Second, even at 100% coverage SpecDec does not beat no-SD on this
+workload: SWE1 rollouts are prefill-heavy (long recorded-trajectory
+contexts) with short tool-call decodes at engine BS ~64, so the K+1 verify
+FLOPs never amortize - consistent with the BS x K grids and the replay
+study. SpecDec pays in this environment only at low per-engine concurrency
+or long-decode regimes.
+
+The verdict is Gym-version-invariant. Re-running the trio after bumping the
+NeMo Gym submodule from v0.4.0 to latest main (f0c460f, including the
+PR #1825 rollout-timeline instrumentation) reproduces the same ordering:
+baseline 286 s, K3 + dense capture 319 s (0.90x), DynamicSD 333 s (0.86x),
+rewards 0.20-0.22, prefix-cache hits still 0.0%. The binding structure -
+22:1 prefill dominance and the concurrent-identical-prompt cache miss -
+lives in the NeMo-RL submission pattern and the workload shape, not in Gym.
+
+A recalibration follow-up refutes the obvious rescue. The engine telemetry
+shows 52-55% of active engine steps sit at BS 1-8 (the regime where our
+grids give K3 a 1.5-2x win) while producing only ~12% of tokens, suggesting
+a tail-only schedule `[[1,8,3],[9,16,2],[17,512,0]]` should clamp the
+high-BS loss at zero and keep the tail gain (naive ceiling ~1.3x). vLLM
+0.25.1 accepts K=0 ranges, the schedule ran - and lost to everything:
+374 s vs fixed-K3 305 s and dynsd-K1 336 s. **Batch-size-adaptive K
+optimizes per-step throughput, but a barriered sync rollout is a makespan
+problem**: the batch drains into the low-BS tail only as fast as its
+longest trajectories move, and those trajectories benefit from speculation
+during the high-BS phase too. Turning speculation off at high BS delays the
+very transition the schedule was waiting for. The right adaptive axis for
+sync rollout is per-trajectory (length/age-aware, as in DAS's speculation
+policy), not per-batch-size. A cross-run suffix-match oracle on the SWE1
+outputs (independent temp-1.0 runs of the same 100 prompts) caps the DAS
+corpus-drafter ceiling at ~1.15x token rate for this single-step env - the
+rollout-corpus ingredient of DAS needs true multi-turn copy density (our
+replay measured suffix AL 3.10 there) to pay.
+
+## True agentic SWE2 on GB200: pipeline built, timeline decomposed
+
+The SWE1 verdict does not extend to true multi-turn agentic SWE, and we can
+now say so with measurements instead of extrapolation. We stood up the full
+SWE2 stack (OpenHands agents inside per-instance SWE-bench apptainer
+containers, driven through NemoGym and PR #3243's eval mode) on Lyris GB200
+- previously assumed impossible without x86 infrastructure. Seven distinct
+failure layers had to be root-caused; the load-bearing one was a single
+hardcoded `jq-linux-amd64` download in Gym's OpenHands setup script that
+made the entry script kill its tmux pane on aarch64, masquerading as a
+universal command-timeout. With arm64 SIF prepull, a /dev/fuse bind for
+apptainer-in-enroot, a synthetic /swe_util layer (official arm64 images
+lack the OpenHands bake), and openai-2.7.2 tool-schema normalization, 3/3
+SWE-bench_Verified rollouts complete end-to-end (5-8 turns, all producing
+patches, eval harness scoring).
+
+The rollout-timeline instrumentation (Gym PR #1825 + nv-OpenHands PR #19)
+then gives the decomposition SWE1 could only approximate. Over 3 instances
+(agent + eval wall 434 s): **LLM generation 45.7%**, agent init 24.5%,
+framework overhead between turns 17.2%, final evaluation 11.2%, tool
+execution 0.5%. Per-turn LLM latency is p50 6.6 s / p90 28.4 s (n=18) at
+~2.3K completion tokens per turn - decode-heavy, the opposite regime from
+SWE1's 22:1 prefill dominance. Amdahl over the 45.7% LLM share puts the
+SpecDec E2E ceiling at ~1.21x with the measured 1.63x eagle3 generation
+speedup (1.27x at the standalone-SWE 1.85x) - a positive headroom, in
+contrast to SWE1's measured 0.87x. Caveat: 3 instances x <=8 turns, single
+generation each; acceptance on SWE2 outputs not yet measured directly.
+
 ## Do our numbers match the upstream DynamicSD PRs?
 
 Yes, when compared apples-to-apples. PR #32374 reports +7.5% over no-SD at

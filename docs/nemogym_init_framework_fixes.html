@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NeMo-Gym SWE Initialization and Framework Overhead</title>
+<style>
+  body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 14px; line-height: 1.55;
+         color: #1a2233; max-width: 1080px; margin: 0 auto; padding: 24px 20px 80px; background: #fbfcfe; }
+  code { font-family: 'SF Mono', Menlo, monospace; font-size: 12px; background: #eef1f6; padding: 1px 4px; border-radius: 3px; }
+  pre { background: #12161f; color: #dce3ee; padding: 12px 14px; border-radius: 6px; overflow-x: auto;
+        font-family: 'SF Mono', Menlo, monospace; font-size: 12px; line-height: 1.5; }
+  pre code { background: none; color: inherit; padding: 0; }
+  h1 { font-size: 23px; margin-bottom: 4px; }
+  h2 { font-size: 18px; margin-top: 36px; border-bottom: 2px solid #dce3ee; padding-bottom: 6px; }
+  h3 { font-size: 15px; margin-top: 24px; }
+  .subtitle { color: #5a6a85; margin-bottom: 24px; }
+  table { border-collapse: collapse; margin: 12px 0 20px; width: 100%; }
+  th, td { border: 1px solid #d5dce8; padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: #eef1f6; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .good { color: #0b7a3e; font-weight: 600; }
+  .bad { color: #b3261e; font-weight: 600; }
+  .neutral { color: #8a6d00; font-weight: 600; }
+  .callout, .warn, .lesson { padding: 10px 14px; margin: 14px 0; border-radius: 0 6px 6px 0; }
+  .callout { background: #eef6ee; border-left: 4px solid #0b7a3e; }
+  .warn { background: #fdf3e7; border-left: 4px solid #c77700; }
+  .lesson { background: #eef1fb; border-left: 4px solid #3355bb; }
+  .small { font-size: 12px; color: #5a6a85; }
+  .status { display: inline-block; border-radius: 999px; padding: 1px 7px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+  .committed { background: #dff3e5; color: #075e2c; }
+  .inspected { background: #e8edf6; color: #1d3461; }
+  .handoff { background: #fff0d7; color: #815300; }
+  .projected { background: #e4eafe; color: #284598; }
+</style>
+</head>
+<body>
+
+<h1>NeMo-Gym SWE initialization and framework overhead</h1>
+<p class="subtitle">Canonical evidence page for the remaining cold-start costs in NeMo-Gym SWE rollouts.
+It supersedes the earlier smoke-test narrative and separates committed measurements from handoff claims and models.
+Companion to the <a href="nemogym_swe_efficiency_report.html">broader overhead analysis</a>.</p>
+
+<h2>1. Evidence status and provenance</h2>
+<p>Every quantitative claim below has one status. <span class="status committed">Committed aggregate</span> means the worktree contains arm-level phase means and aggregate duration sums, but not per-rollout rows, pairing keys, job IDs, or elapsed-job timestamps. <span class="status handoff">Handoff-reported</span> means it is recorded in <code>HANDOFF_CODEX.md</code>, but its supporting artifact is not committed. <span class="status projected">Projected</span> means it is a calculation or unvalidated hypothesis. <span class="status inspected">Code-inspected</span> means the path was read from the pinned remote checkout; that source is not vendored in this worktree.</p>
+
+<div class="callout"><b>Current decision:</b> the n=24 aggregate ledger supports phase-level import and connect savings. It does not contain allocation-to-result timestamps, so it cannot establish a full-job speedup or regression. A complete-job comparison must include mirror setup, failures, concurrency drain, and elapsed timestamps.</div>
+
+<table>
+<tr><th>Claim</th><th>Status</th><th>Evidence / limitation</th></tr>
+<tr><td>n=24 phase and aggregate-duration ledger</td><td><span class="status committed">Committed aggregate</span></td><td><code>experiments/dflash_loss_ab/report/data/patch_ab_n24.csv</code>; rounded arm-level means and the sum of 24 rollout durations.</td></tr>
+<tr><td>n=80 net job-wall result</td><td><span class="status handoff">Handoff-reported</span></td><td>Reported as 948 seconds or 7.7% net job-wall savings; raw artifact and job IDs are pending.</td></tr>
+<tr><td>Optimization ceilings and candidate benefits</td><td><span class="status projected">Projected</span></td><td>Derived from the n=24 ledger or from the stated mechanism; none is a measured outcome.</td></tr>
+</table>
+
+<h2>2. Corrected committed aggregate ledger</h2>
+<h3>Per-rollout phases, n=24</h3>
+<table>
+<tr><th>Phase, seconds per rollout</th><th>Unpatched</th><th>Patched</th><th>Delta</th><th>Status</th><th>Interpretation</th></tr>
+<tr><td>Connect / action server</td><td class="num">15.0</td><td class="num">11.1</td><td class="num good">&minus;3.9</td><td><span class="status committed">Committed aggregate</span></td><td>Fresh action-server import and boot are lower, not eliminated.</td></tr>
+<tr><td>Initialize / workspace copy</td><td class="num">22.1</td><td class="num">21.8</td><td class="num neutral">&minus;0.3</td><td><span class="status committed">Committed aggregate</span></td><td>Copy fallback remains the dominant initialization cost.</td></tr>
+<tr><td>Framework / <code>run_infer.py</code></td><td class="num">21.8</td><td class="num">16.4</td><td class="num good">&minus;5.4</td><td><span class="status committed">Committed aggregate</span></td><td>One-shot harness import work is lower after local mirroring.</td></tr>
+<tr><td>LLM generation</td><td class="num">49.2</td><td class="num">53.8</td><td class="num bad">+4.6</td><td><span class="status committed">Committed aggregate</span></td><td>Trajectory/token-count variation; throughput is 276 versus 277 tok/s.</td></tr>
+<tr><td>Final evaluation</td><td class="num">19.3</td><td class="num">20.5</td><td class="num bad">+1.2</td><td><span class="status committed">Committed aggregate</span></td><td>Instance-dependent test-suite time.</td></tr>
+<tr><td><b>Phase sum</b></td><td class="num"><b>127.4</b></td><td class="num"><b>123.6</b></td><td class="num good"><b>&minus;3.8</b></td><td><span class="status committed">Committed aggregate</span></td><td>Phase-normalized view; not elapsed job wall.</td></tr>
+</table>
+
+<h3>Aggregate rollout-time and setup cost model</h3>
+<table>
+<tr><th>Comparison</th><th>Unpatched</th><th>Patched</th><th>Delta</th><th>Status</th></tr>
+<tr><td>Sum of 24 rollout durations, mirror preparation excluded</td><td class="num">3,059 s</td><td class="num">2,968 s</td><td class="num good">&minus;91 s (&minus;2.97%)</td><td><span class="status committed">Committed aggregate</span></td></tr>
+<tr><td>Setup-inclusive aggregate cost model: add one 216 s mirror preparation</td><td class="num">3,059 s</td><td class="num">3,184 s</td><td class="num bad">+125 s (+4.09%)</td><td><span class="status projected">Projected</span></td></tr>
+</table>
+<p>The 3,059 and 2,968-second values are sums of concurrent rollout durations, not allocation-to-result elapsed job wall. Adding one serial setup cost gives an aggregate cost model only. Observed full-job wall is unavailable until job start/result timestamps, setup, failures, and drain are committed.</p>
+<p>The stable connect plus framework saving is 9.3 seconds per rollout (3.9 + 5.4). The modeled mirror break-even is <span class="status projected">Projected</span> <code>216 / 9.3 = 23.2</code>, or approximately 24 rollouts. This is a phase-normalized model, not an observed break-even result.</p>
+<p>The n=80 result is <span class="status handoff">Handoff-reported</span>: 948 seconds or 7.7% net job-wall savings. Its raw artifact and job IDs remain pending, so it must not be used as a validated replication.</p>
+
+<h2>3. Code-grounded root causes</h2>
+<h3>Workspace initialization: a hard-link attempt always falls back to a full copy</h3>
+<p>The entry script attempts this exact workspace setup:</p>
+<pre><code>if ! cp -al /testbed /workspace/$WORKSPACE_NAME 2&gt;/dev/null; then
+    cp -r /testbed /workspace/$WORKSPACE_NAME
+fi</code></pre>
+<p><span class="status inspected">Code-inspected</span> The <code>cp -al</code> path cannot create hard links across the read-only instance squashfs and the writable workspace filesystem. It therefore fails and the script takes <code>cp -r</code> for every rollout. This explains why full copying, rather than git cleanup, dominates initialization.</p>
+<p><span class="status handoff">Handoff-reported</span> <code>NRL_SKIP_GIT_RESET=1</code> changes initialization only from 20.1 to 19.9 seconds. Its raw timing artifact is not committed; the result nonetheless warns against prioritizing further git work.</p>
+
+<h3>Framework startup: one-shot import work is paid every rollout</h3>
+<p><span class="status inspected">Code-inspected</span> Each rollout launches <code>run_infer.sh</code>, which starts a new Python process for <code>run_infer.py</code>. That process eagerly imports the OpenHands evaluation, agent, controller, configuration, and runtime stack before creating the runtime. The framework phase is consequently a once-per-rollout process and import cold start, not an inter-turn tax.</p>
+
+<h3>Action-server connection: warm globals cannot survive the process boundary</h3>
+<p><span class="status inspected">Code-inspected</span> <code>LocalRuntime</code> starts a fresh <code>python -u -m openhands.runtime.action_execution_server</code> process. It imports its stack, constructs <code>ActionExecutor</code>, and initializes bash, plugins, and environment state. The process is terminated when the rollout completes. Any warm-server globals are process-local and disappear when the one-shot <code>run_infer.py</code> process exits.</p>
+
+<h2>4. Ranked optimization candidates</h2>
+<table>
+<tr><th>Rank and candidate</th><th>Mechanism and expected benefit</th><th>Maturity</th><th>Quantitative pass / fail gate</th><th>Evidence</th></tr>
+<tr><td><b>1. Versioned prebuilt OpenHands squashfs</b></td><td>Replace the 216-second metadata-heavy mirror with a versioned large sequential artifact; bake rewritten container paths and checked-hash bytecode.</td><td>High-confidence, low-risk candidate.</td><td>Pass only if setup is at most 36 s, at least 180 s below current setup, with byte-level manifest parity and no rollout-phase or valid-rate regression.</td><td><span class="status projected">Projected</span></td></tr>
+<tr><td><b>2. Immutable per-instance node-local cache plus private reflink workspace</b></td><td>Key immutable cache by image digest, instance ID, and base commit; use locking, temp directories, atomic rename, manifest, and <code>cp --reflink=always -a</code> when available.</td><td>High-confidence design; filesystem support unverified.</td><td>Pass only if warm initialization is at most 5 s, n=80 allocation-to-result wall improves at least 8%, and every rollout has a clean base commit, no file leakage, and identical evaluation output.</td><td><span class="status projected">Projected</span></td></tr>
+<tr><td><b>3. Instrumented pre-import forkservers</b></td><td>Pre-import separate run-infer and action-server forkservers, then fork a fresh child per rollout.</td><td>Medium-risk; instrumentation first.</td><td>Pass only if framework improves at least 3 s and allocation-to-result wall at least 2%, with deterministic event ordering and output parity and no inherited thread, socket, logger, or environment state.</td><td><span class="status projected">Projected</span></td></tr>
+<tr><td><b>4. Persistent controller with one-use prewarmed action servers</b></td><td>Keep controller alive, prewarm servers, lease each to one rollout, then destroy it.</td><td>Higher-risk follow-up.</td><td>Pass only if connect p50 is at most 5 s, p95 improves at least 30%, and sentinels prove no process, filesystem, environment, secret, tmux, plugin, todo, or download state crosses boundaries.</td><td><span class="status projected">Projected</span></td></tr>
+<tr><td><b>5. Small isolated startup candidates</b></td><td>Test direct venv Python instead of <code>poetry run</code> and checked-hash bytecode independently.</td><td>Measure independently.</td><td>Each change must improve its named phase with output parity when tested alone.</td><td><span class="status projected">Projected</span></td></tr>
+<tr><td><b>6. Asynchronous final evaluation</b></td><td>Overlap grading with rollout collection.</td><td>Separate throughput project.</td><td>Require lower allocation-to-result wall with bitwise-identical rewards and trajectory age within the configured bound; reward delay must not change RL semantics.</td><td><span class="status projected">Projected</span></td></tr>
+</table>
+<div class="warn"><b>Isolation rule:</b> never use a writable hard-link cache. Shared writable inodes would allow one rollout to mutate another rollout's workspace and invalidate SWE isolation.</div>
+
+<h2>5. Validation matrix</h2>
+<p><span class="status projected">Projected protocol</span> Run an ABBA job-level crossover with at least four independent job pairs at n=24 and four at n=80. Record allocation-to-result wall, setup, failed rollouts, and drain time. Resample paired jobs, never rollouts within a job. Use deterministic replay for systems isolation and temperature-1 live rollout for operational, reward, and completion validation.</p>
+<table>
+<tr><th>Common acceptance gate</th><th>Pass condition</th><th>Status</th></tr>
+<tr><td>Full-wall performance</td><td>One-sided 95% paired-bootstrap bound over paired jobs shows at least 3% lower allocation-to-result wall including setup and drain.</td><td><span class="status projected">Projected</span></td></tr>
+<tr><td>Validity</td><td>One-sided 95% paired-bootstrap lower bound for the valid-rollout-rate difference is at least -1 percentage point.</td><td><span class="status projected">Projected</span></td></tr>
+<tr><td>Generation</td><td>One-sided 95% paired-bootstrap lower bound for the generation-throughput relative difference is at least -2%.</td><td><span class="status projected">Projected</span></td></tr>
+<tr><td>Reward</td><td>One-sided 95% paired-bootstrap lower bound for the reward difference is at least -0.01 absolute.</td><td><span class="status projected">Projected</span></td></tr>
+<tr><td>Failure safety</td><td>No new timeout, OOM, Ray, stale-cache, workspace-isolation, or process-leak failure class.</td><td><span class="status projected">Projected</span></td></tr>
+</table>
+
+<h2>6. Failed-attempt ledger and retracted hypotheses</h2>
+<table>
+<tr><th>Attempt</th><th>Result</th><th>Classification</th><th>Root cause / retry condition</th><th>Status</th></tr>
+<tr><td><code>NRL_SKIP_GIT_RESET=1</code></td><td>About 0.2 s saved (20.1 to 19.9 s).</td><td>Null result</td><td>Git reset was not the cost center; workspace copy is. Do not prioritize further git work.</td><td><span class="status handoff">Handoff-reported</span></td></tr>
+<tr><td>Merge initialization commands from seven to four</td><td>No measurable gain.</td><td>Null result</td><td>Initialization is work-bound, not round-trip-bound. Retry only if a new trace shows command latency.</td><td><span class="status handoff">Handoff-reported</span></td></tr>
+<tr><td>Faster polling: 0.5 s instead of 2 s</td><td>No measurable gain.</td><td>Null result</td><td>Action-server import and boot dominate. Retry only after the boot path changes.</td><td><span class="status handoff">Handoff-reported</span></td></tr>
+<tr><td>Move event store to <code>/tmp</code></td><td>No measurable gain.</td><td>Null result</td><td>Inter-turn framework overhead is already near zero. Treat async evaluation as a separate throughput project.</td><td><span class="status handoff">Handoff-reported</span></td></tr>
+<tr><td>Direct <code>NRL_WS_CACHE</code> bind over <code>/workspace</code></td><td>Non-git workspaces.</td><td>Invalid experiment</td><td>The bind collided with OpenHands workspace ownership; do not interpret timing. Retry only with a private workspace design.</td><td><span class="status handoff">Handoff-reported</span></td></tr>
+<tr><td>Writable hard-link cache</td><td>Not run as a valid rollout optimization.</td><td>Rejected by design</td><td>Writable shared inodes break rollout isolation. No retry; use immutable cache plus private reflink workspace instead.</td><td><span class="status projected">Projected</span></td></tr>
+<tr><td>Reuse a used action server</td><td>Deferred.</td><td>Unvalidated</td><td>Require a proven reset protocol and leakage sentinels before testing; start with one-use prewarmed servers.</td><td><span class="status projected">Projected</span></td></tr>
+</table>
+
+<h2>7. Remaining committed aggregate and projected ceiling</h2>
+<p><span class="status committed">Committed aggregate</span> In the patched n=24 ledger, Connect + Initialize + Framework is 49.3 seconds of the 123.6-second phase total.</p>
+<table>
+<tr><th>Ceiling</th><th>Calculation</th><th>Result</th><th>Status</th></tr>
+<tr><td>Illustrative aggressive scenario</td><td>Assume residuals of 1.1 s Connect (save 10.0), 1.8 s Initialize (save 20.0), and 1.4 s Framework (save 15.0): 45.0 s total assumed saving.</td><td class="num">78.6 s; &minus;36.4%; 1.57&times;</td><td><span class="status projected">Projected</span></td></tr>
+<tr><td>Zero-overhead absolute bound</td><td>Remove all 49.3 s of Connect + Initialize + Framework from 123.6 s.</td><td class="num">74.3 s; &minus;39.9%; 1.66&times;</td><td><span class="status projected">Projected</span></td></tr>
+</table>
+<div class="warn"><b>Neither ceiling is measured.</b> The 78.6-second residuals are assumptions, not acceptance-gate guarantees; 74.3 seconds is the mathematical zero-overhead bound.</div>
+
+<p class="small">Canonical aggregate source: <code>experiments/dflash_loss_ab/report/data/patch_ab_n24.csv</code>. This page documents analysis and acceptance gates; it does not change Gym, OpenHands, launcher, or runtime behavior.</p>
+
+</body>
+</html>

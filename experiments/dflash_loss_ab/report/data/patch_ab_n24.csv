@@ -1,0 +1,7 @@
+phase,unpatched_s_per_rollout,patched_s_per_rollout,delta_s,note
+connect_to_runtime,15.0,11.1,-3.9,action server python import; remainder is server boot floor
+initialize_runtime,22.1,21.8,-0.3,workspace copy from SIF; git-reset skip confirmed no-op
+framework_run_infer,21.8,16.4,-5.4,run_infer python import; smaller than smoke -12s due to concurrency overlap
+llm_generation,49.2,53.8,4.6,token-count noise between runs; tok/s 276 vs 277 (parity)
+final_eval,19.3,20.5,1.2,instance-dependent test-suite time
+TOTAL_wall_sum_24_rollouts,3059,2968,-91,mirror one-time cost 216s NOT included; break-even at ~24 rollouts/job

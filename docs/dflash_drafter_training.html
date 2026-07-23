@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Building DFlash Drafters for Qwen3-235B: Data, Stack, and Training Configuration</title>
+<style>
+  body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 13px; line-height: 1.55;
+         color: #1a2233; max-width: 1080px; margin: 0 auto; padding: 24px 20px 80px; background: #fbfcfe; }
+  code { font-family: 'SF Mono', Menlo, monospace; font-size: 12px; background: #eef1f6; padding: 1px 4px; border-radius: 3px; }
+  pre { background: #12161f; color: #dce3ee; padding: 12px 14px; border-radius: 6px; overflow-x: auto;
+        font-family: 'SF Mono', Menlo, monospace; font-size: 11.5px; line-height: 1.5; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  h2 { font-size: 17px; margin-top: 36px; border-bottom: 2px solid #dce3ee; padding-bottom: 6px; }
+  h3 { font-size: 14px; margin-top: 24px; }
+  .subtitle { color: #5a6a85; margin-bottom: 24px; }
+  table { border-collapse: collapse; margin: 12px 0; width: 100%; }
+  th, td { border: 1px solid #d5dce8; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #eef1f6; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .good { color: #0b7a3e; font-weight: 600; }
+  .callout { background: #eef6ee; border-left: 4px solid #0b7a3e; padding: 10px 14px; margin: 14px 0; border-radius: 0 6px 6px 0; }
+  .warn { background: #fdf3e7; border-left: 4px solid #c77700; padding: 10px 14px; margin: 14px 0; border-radius: 0 6px 6px 0; }
+  .flow { font-family: 'SF Mono', Menlo, monospace; font-size: 11.5px; background: #f2f4f9;
+          border: 1px solid #d5dce8; border-radius: 6px; padding: 12px 14px; white-space: pre; overflow-x: auto; }
+  .small { font-size: 11.5px; color: #5a6a85; }
+</style>
+</head>
+<body>
+
+<h1>Building DFlash Drafters for Qwen3-235B</h1>
+<p class="subtitle">Everything that goes into our speculative-decoding drafters: the datasets (with
+train/test separation guarantees), the software stack, the training configuration, and the
+wall-clock relay that fits multi-day training into 4-hour queue slots.
+Companion pages: <a href="nemogym_swe_efficiency_report.html">overhead &amp; SpecDec study</a>,
+<a href="nemogym_init_framework_fixes.html">init/framework fixes</a>.</p>
+
+<h2>1. The drafters at a glance</h2>
+<table>
+<tr><th>Drafter</th><th>Target</th><th>Unique samples</th><th>Epochs</th><th>Total passes</th><th>Final val EAL</th><th>SWE rollout (K=5)</th></tr>
+<tr><td>30B screening series (8 arms)</td><td>Qwen3-30B-A3B-Thinking-2507</td><td class="num">10K each</td><td class="num">5</td><td class="num">50K</td><td class="num">0.57&ndash;2.68*</td><td class="num">206&ndash;313 tok/s</td></tr>
+<tr><td>235B screening</td><td rowspan="3">Qwen3-235B-A22B-Thinking-2507</td><td class="num">10K</td><td class="num">5</td><td class="num">50K</td><td class="num">1.128</td><td>&mdash;</td></tr>
+<tr><td><b>235B v1</b> (generic only)</td><td class="num">600,000</td><td class="num">3</td><td class="num">1.80M</td><td class="num"><b>1.967</b></td><td class="num"><b>116 tok/s = 1.33&times;</b></td></tr>
+<tr><td><b>235B v2</b> (SWE mix, in training)</td><td class="num">850,220</td><td class="num">2</td><td class="num">1.70M</td><td class="num">1.132 @epoch0**</td><td>pending</td></tr>
+</table>
+<p class="small">*val EAL is only comparable within the same validation distribution; the 30B range spans
+loss ablations (tv collapse 0.57) to the SWE-mix arm (2.68 on a leaky val &mdash; its honest rollout number is 313 tok/s).
+**v2's val split contains 16K-token SWE trajectories and is strictly harder than v1's generic 8K val;
+the deciding metric is the SWE rollout, evaluated on fully held-out astropy instances.</p>
+
+<h2>2. Datasets</h2>
+
+<h3>2.1 v1 &mdash; generic corpus (paper-parity baseline)</h3>
+<table>
+<tr><th>Source</th><th>Rows available</th><th>Used</th><th>Character</th></tr>
+<tr><td><code>HuggingFaceH4/ultrachat_200k</code> (train_sft)</td><td class="num">207,865</td><td rowspan="3">600,000 selected after concat &rarr; shuffle &rarr; cap</td><td>general dialogue</td></tr>
+<tr><td><code>Magpie-Align/Magpie-Llama-3.1-Pro-300K-Filtered</code></td><td class="num">300,000</td><td>synthetic instructions</td></tr>
+<tr><td><code>Aeala/ShareGPT_Vicuna_unfiltered</code></td><td class="num">120,675</td><td>ChatGPT conversation dumps</td></tr>
+</table>
+<p>This is the same data family the public RedHatAI speculators drafters use (their cards list
+Magpie + UltraChat subsets, &le;~500K, 5 epochs). Responses are <b>not</b> taken from the datasets &mdash;
+see &sect;3: the target model regenerates every response online, so only prompts matter.</p>
+
+<h3>2.2 v2 &mdash; the SWE mix (what changed and why)</h3>
+<table>
+<tr><th>Component</th><th>Rows</th><th>Share</th><th>Why (measured on 30B first)</th></tr>
+<tr><td>Generic (v1 trio + <code>mlabonne/open-perfectblend</code> 190K of 1.42M)</td><td class="num">818,540</td><td class="num">96.3%</td><td>diversity base; unique count raised to paper scale</td></tr>
+<tr><td>Public SWE trajectories: <code>nebius/SWE-rebench-openhands-trajectories</code> (30K of 67K, OpenHands scaffold, tool_calls rendered inline)</td><td class="num">30,000</td><td class="num">3.5%</td><td>clean SWE data lifted 30B rollouts 206&rarr;273-279 tok/s; scaffold matches deployment</td></tr>
+<tr><td>Own pool rollouts: 56 trajectories generated by the 235B target itself on the 7-instance training pool, upsampled &times;30</td><td class="num">1,680</td><td class="num">0.2%</td><td>instance-pool familiarity was worth +34 tok/s on 30B (279&rarr;313) &mdash; the only path past the public-data plateau</td></tr>
+<tr><th>Total</th><th class="num">850,220</th><th></th><th>seq length raised 8192 &rarr; 16384 to match SWE deployment contexts</th></tr>
+</table>
+
+<div class="callout"><b>Train/test separation (three walls, all enforced in code):</b>
+(1) <b>instance wall</b> &mdash; evaluation = 3 astropy SWE-bench_Verified instances
+(12907/13236/13398); the training pool = 7 disjoint instances (django&times;4, sympy, sphinx, requests);
+(2) <b>content wall</b> &mdash; any public-SWE conversation that even mentions "astropy" is dropped
+(827 dropped); (3) <b>fingerprint gate</b> &mdash; the final 850K corpus is scanned for the eval
+instance IDs, distinctive problem-statement phrases, and the OpenHands system prompt before
+training may start (result: 0 hits). The gate is not theoretical: it caught a real contamination
+accident (a dataset-builder bug had stamped astropy's task payload into 1,680 pool rows) and
+blocked it from entering training.</div>
+
+<h2>3. Software stack</h2>
+<div class="flow">AWS-DFW GB200 (aarch64), 2 nodes per training job
+┌────────────────────────────────────┐   ┌──────────────────────────────────────┐
+│ Node 0 — target server             │   │ Node 1 — drafter training            │
+│ vLLM 0.25.x (vllm_venv, uv py3.12) │   │ speculators @ repo HEAD (editable)   │
+│ Qwen3-235B-A22B-Thinking, TP=4     │──▶│ + hs_connectors sub-package          │
+│ --target-layer-ids 1 23 46 68 91   │   │ torchrun --nproc_per_node 4          │
+│ hidden-state KV-connector ────────▶│   │ FileBackend reads from lustre cache  │
+│ --hidden-states-path (lustre)      │   │ --vllm-endpoint http://node0:8000/v1 │
+└────────────────────────────────────┘   └──────────────────────────────────────┘</div>
+<ul>
+<li><b>Trainer</b>: <code>vllm-project/speculators</code> installed editable from the repo
+(<code>scripts/train.py</code> + <code>scripts/prepare_data.py</code>); the PyPI release lags the repo scripts.</li>
+<li><b>Online mode</b> (<code>--on-missing generate --on-generate delete</code>): the target regenerates every
+response and streams hidden states through a shared-filesystem connector; nothing is stored
+(offline caching would have needed 24&ndash;40 TB for this corpus).</li>
+<li><b>Cross-node</b>: training connects to the server via <code>--vllm-endpoint</code>; hidden-state files
+transit a lustre path visible to both nodes.</li>
+<li><b>Cluster plumbing</b>: <code>CUDA_HOME=/cm/shared/apps/cuda13.0/toolkit/13.0.2</code> + <code>ninja/cmake</code>
+in the venv (GB200 sm_100 JIT), <code>TMPDIR=/tmp</code> (ZMQ 107-char limit), system-forced
+<code>HF_HUB_CACHE</code> on the project share.</li>
+<li><b>Drafter checkpoints</b> are speculators-format (<code>DFlashDraftModel</code>) &mdash; loaded directly by
+vLLM 0.25 <code>speculative_config</code> with no conversion; shipped between clusters via PBSS S3 (~1 min for 4 GB).</li>
+</ul>
+
+<h2>4. Training configuration (v2; v1 differs only where noted)</h2>
+<table>
+<tr><th>Knob</th><th>Value</th><th>Rationale</th></tr>
+<tr><td>Loss</td><td><code>kl_div</code></td><td>won the 4-way ablation (ce 1.188 / nla 1.180 / tv 0.571 vs kl_div 1.211 val EAL at 10K); tv's collapse confirmed the vanishing-gradient analysis</td></tr>
+<tr><td>Drafter architecture</td><td>DFlash, 5 layers, silu, draft vocab 32,000, sliding window 2048</td><td>public-drafter parity; drafter hidden size follows the target (4096) so 30B and 235B drafters are the same size (~1.4&ndash;3.9 GB)</td></tr>
+<tr><td>Target layer taps</td><td>1 23 46 68 91 (of 94)</td><td>5 uniformly spaced hidden-state layers (30B used 1 12 23 34 45 of 48)</td></tr>
+<tr><td>Optimizer</td><td>lr 6e-4, cosine, Muon+AdamW split (trainer default)</td><td>speculators defaults, validated in screening</td></tr>
+<tr><td>Epochs / seq</td><td>2 &times; 850,220 @ seq 16384 (v1: 3 &times; 600,000 @ 8192)</td><td>diversity over repetition; 16K matches SWE deployment context</td></tr>
+<tr><td>Anchors</td><td><code>--max-anchors 1024</code></td><td>block-diffusion draft training positions per sample</td></tr>
+<tr><td>Checkpointing</td><td><code>--checkpoint-freq 0.25</code> + save on SIGTERM</td><td>survives 4h wall-kills with &le;25% epoch rework; trainer also auto-saves an "interrupted" checkpoint</td></tr>
+<tr><td>Deployment K</td><td><b>num_speculative_tokens = 5</b></td><td>K-sweep on real rollouts: K3 311 / K5 313 / K7 270 / K9 269 tok/s &mdash; our drafters' acceptance decays faster with position than the public 800K drafter (optimum K9), so shorter drafts win</td></tr>
+</table>
+
+<h3>4.1 The wall-clock relay (how 26+ hours fit in 4-hour queue slots)</h3>
+<div class="flow">sbatch chain (interactive QoS, starts in seconds; batch_long queue waits hours):
+c1 ──afterany──▶ c2 ──▶ c3 ──▶ … ──▶ c8 ──afterany──▶ batch_long finisher (40h)
+ each chunk: same sbatch, same --save-path → trainer auto-resumes
+ (epoch + mid-epoch step skip from training_state.json; optimizer/scheduler restored)
+ finished early? remaining chunks boot, see "nothing to train", exit in minutes (idempotent)</div>
+<p><b>Chunks are wall-time, not data</b>: the total sample count is fixed by
+(unique samples &times; epochs) &mdash; v2 trains 1,700,440 passes whether it takes 5 chunks or 8.</p>
+
+<h2>5. Evaluation methodology</h2>
+<ul>
+<li><b>During training</b>: per-epoch validation reports EAL (expected acceptance length =
+&Sigma;<sub>k</sub> P(first k draft tokens all accepted)) and per-position acceptance. Useful for
+screening, but <b>only comparable within one val distribution</b> &mdash; we measured a drafter with
+val EAL 3.27 (100% SWE-smith) that was <i>slower</i> on real rollouts than one at 1.86.</li>
+<li><b>The real scoreboard</b>: NemoGym SWE2 rollouts (OpenHands agent, apptainer per instance,
+vLLM 0.25, K=5) on the held-out astropy instances &mdash; tok/s = completion tokens &divide; model-call time.</li>
+<li><b>Contamination scans</b> accompany every claim: v1's 1.33&times; was backed by scanning all
+628,540 training rows for eval fingerprints (0 hits).</li>
+</ul>
+
+<h2>6. Reproduce</h2>
+<pre><code># AWS-DFW, base B=/lustre/fsw/portfolios/nemotron/users/sna/dflash_training
+# environment:      experiments/dynamic_sd_sync_rollout/setup_speculators_dflash.sh
+# loss ablation:    $B/dflash_loss_ab.sbatch          (kl_div + nla arms, 30B, 10K)
+# 235B v1:          $B/dflash_235b_main.sbatch        (600K x 3ep, 2-node online)
+# 235B v2:          $B/dflash_235b_v2.sbatch          (850K mix x 2ep, seq 16K)
+# v2 data pipeline: $B/build_v2_swe.sbatch (public SWE + filters) + combine_gate_v2.py (fingerprint gate)
+# chain launch:     for i in 1..8: sbatch -p batch --qos=interactive -t 4:00:00 --dependency=afterany:$prev ...
+# eval (Lyris):     experiments/nemogym_swe1_specdec/submit_lyris.sh with
+#                   ++policy.generation.vllm_kwargs.speculative_config.{method=dflash,model=&lt;ckpt&gt;,num_speculative_tokens=5,...}</code></pre>
+
+<p class="small">Repo copies of the sbatch scripts and result CSVs: <code>experiments/dflash_loss_ab/</code>.
+All numbers in this page trace to committed data (<code>report/data/*.csv</code>) or logged runs referenced in the
+project memory. Status as of 2026-07-22: v2 training in epoch 1 of 2 (chunk c5), rollout verdict pending.</p>
+
+</body>
+</html>
