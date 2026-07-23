@@ -33,35 +33,57 @@
 <p class="muted">Measurement stack: NVIDIA-NeMo/RL PR #3243 (rollout-only eval mode) + Gym PR #1825 / nv-OpenHands PR #19 (rollout timeline profiler).
 Environment: Lyris GB200 (1 node, 4 GPUs), vLLM 0.25.1, Qwen3-30B-A3B-Thinking-2507 (TP2 &times; 2 engines), Gym latest main (fbde772),
 nv-OpenHands <code>sdd/multilingual-fixes@5f018005</code>. Workloads: SWE1-pivot (single-step, 400 rollouts) and SWE2
-(OpenHands agentic SWE-bench_Verified, 3 instances &times; &le;8 turns, temperature 1.0). All numbers in this report are direct measurements.</p>
+(OpenHands agentic SWE-bench_Verified, 3 instances &times; &le;8 turns, temperature 1.0). Performance statements are labeled
+<b>Measured</b> (committed raw artifact), <b>Handoff-reported</b> (reported without a committed raw artifact), or
+<b>Projected</b> (a cost model or unvalidated hypothesis).</p>
 
 <div class="verdict"><b>Executive summary.</b>
-(1) The two dominant non-LLM overheads in a SWE2 rollout are <b>Python cold imports from Lustre-mounted virtual environments
-(~34&nbsp;s, 23%)</b> and <b>git deep-clean surgery inside the task container (~18.5&nbsp;s, 13%)</b>. What looked like
-"agent init" and "per-turn framework overhead" both reduce to these two mechanisms — measured inter-turn framework overhead is
-essentially <b>zero</b> (LLM calls occupy 98–99% of the call-to-call span).
+(1) <b>Measured:</b> the n=24 paired ledger shows that the patch lowers phase sum from <b>127.4 to 123.6 s/rollout</b>.
+The stable savings are connect/action-server (3.9 s) and framework/run-infer (5.4 s), while initialization changes only
+0.3 s. Workspace initialization is dominated by a cross-filesystem full-copy fallback, not git cleanup: <code>cp -al</code>
+cannot hard-link from the read-only instance squashfs to the writable workspace filesystem, so it falls back to <code>cp -r</code>.
+<code>NRL_SKIP_GIT_RESET=1</code> changed initialization only from 20.1 to 19.9 s.
 (2) For speculative decoding, off-the-shelf model-free drafters (Suffix, N-gram) lose at every setting on this workload, EAGLE-3
 only wins at K=1 (+4%), and <b>DFlash at K=7–9 is the clear winner: 309–310 tok/s = 1.48&times; over the 209 tok/s baseline</b>,
 using a parallel one-pass draft and a 4K drafter context window.
-(3) Combined projection with all fixes: <b>~145&nbsp;s → ~70&nbsp;s per rollout (≈2&times;)</b>, multiplying the 1.88&times;
-already gained from the vLLM 0.20 → 0.25.1 upgrade.</div>
+(3) <b>Projected:</b> from the 123.6-second patched phase model, removing the identified approximately 45 seconds gives a
+<b>78.6-second realistic bound (1.57&times;)</b>; removing all 49.3 seconds of connect + initialize + framework gives the
+<b>74.3-second zero-overhead bound (1.66&times;)</b>. Neither is an observed job-wall result. See the
+<a href="nemogym_init_framework_fixes.html">detailed initialization and framework analysis</a> for code paths and validation gates.
+(4) The compact trial summary classifies the null, invalid, design-rejected, and deferred experiments so that none is treated as a validated optimization.</div>
 
-<h2>1. Where a rollout spends its time (final measured ledger)</h2>
-<p>Per SWE2 rollout, agent + evaluation wall ≈ 145 s (3-instance mean, baseline configuration):</p>
+<h2>1. Corrected SWE2 overhead evidence</h2>
+<p>The committed canonical source is <code>experiments/dflash_loss_ab/report/data/patch_ab_n24.csv</code>. The phase totals
+below are per rollout and are a phase-normalized cost model; they do not replace full-job wall-time comparisons.</p>
 <table>
-<tr><th>Component</th><th class="num">Time</th><th class="num">Share</th><th>Root cause (how it was pinned down)</th><th>Fix → expected</th></tr>
-<tr><td>LLM generation</td><td class="num">~66 s</td><td class="num">45.7%</td><td>Decode-heavy turns (~2.3K completion tokens/turn) over very long contexts (per-turn ISL p50 16K, max 29K)</td><td><b>DFlash K9: 1.48&times; measured</b> → ~45 s</td></tr>
-<tr class="win"><td><b>Python cold imports</b></td><td class="num"><b>~34 s</b></td><td class="num"><b>23%</b></td><td>The OpenHands action server (14.8 s) and the <code>run_infer</code> process (~19 s) both import Python packages from Lustre-mounted venvs inside the container. Identified via PR #19 per-call timestamps: between the first and last LLM call, LLM busy time covers 98–99% of the span — <b>inter-turn framework overhead ≈ 0</b>; the residual is process cold start, once per rollout.</td><td>Node-local venv / bytecode cache → ~8 s</td></tr>
-<tr class="win"><td><b>Git deep-clean surgery</b></td><td class="num"><b>~18.5 s</b></td><td class="num"><b>13%</b></td><td>Per-step timers inserted into <code>initialize_runtime</code>: initial setup 0.3 s + uploads 0.01 s + (entry script + cd + git reset) 2.1 s → the remainder is <code>_deep_reset_to_base_commit</code>: deleting every branch/tag/reflog/note of a 30K-commit repo on fuse-overlayfs (metadata-heavy git ops are slow over FUSE).</td><td>Fuse git ops into one command + <code>core.fsync=false</code>, or pre-clean at SIF build time, or container pooling → ~5 s</td></tr>
-<tr><td>Final evaluation</td><td class="num">~16 s</td><td class="num">11%</td><td>Grading apptainer runs serially after the agent finishes</td><td>Overlap with rollout collection (async eval)</td></tr>
-<tr><td>Setup / uploads / tools / spinups</td><td class="num">~5 s</td><td class="num">3%</td><td>Solved or negligible (tool execution itself: 0.5%)</td><td>—</td></tr>
+<tr><th>Phase (s/rollout)</th><th class="num">Unpatched</th><th class="num">Patched</th><th class="num">Delta</th><th>Evidence / interpretation</th></tr>
+<tr class="win"><td>Connect / action server</td><td class="num">15.0</td><td class="num">11.1</td><td class="num">−3.9</td><td>Measured n=24; a fresh action-server process still imports and bootstraps for every rollout.</td></tr>
+<tr><td>Initialize / workspace copy</td><td class="num">22.1</td><td class="num">21.8</td><td class="num">−0.3</td><td>Measured n=24; full-copy fallback is the real cost, not git reset.</td></tr>
+<tr class="win"><td>Framework / run_infer</td><td class="num">21.8</td><td class="num">16.4</td><td class="num">−5.4</td><td>Measured n=24; the per-rollout Python process eagerly imports the OpenHands stack.</td></tr>
+<tr><td>LLM</td><td class="num">49.2</td><td class="num">53.8</td><td class="num">+4.6</td><td>Measured n=24; stochastic workload phase, excluded from the stable-savings model.</td></tr>
+<tr><td>Evaluation</td><td class="num">19.3</td><td class="num">20.5</td><td class="num">+1.2</td><td>Measured n=24; stochastic workload phase, excluded from the stable-savings model.</td></tr>
+<tr><th>Phase sum</th><th class="num">127.4</th><th class="num">123.6</th><th class="num">−3.8</th><th>Measured n=24 phase sum.</th></tr>
 </table>
 
-<div class="warn"><b>Honest negative result (A/B-verified).</b> Our first-round fixes — merging init session commands (7 → 4),
-faster server alive-polling (<code>wait_fixed 2 → 0.5</code>), moving the event store to /tmp — produced
-<b>no measurable improvement</b> (connect 15.9 vs 14.8 s; init 20.9 vs 20.6 s; framework −10%). The per-command
-round-trip cost model was wrong: init is <b>work-bound</b> (git surgery), connect is <b>import-bound</b>. Only the A/B run
-exposed this; the plan was revised accordingly.</div>
+<h3>1.1 Compact evidence ledger</h3>
+<table>
+<tr><th>Claim</th><th>Status</th><th>Result</th></tr>
+<tr><td>Full n=24 rollout wall, excluding mirror preparation</td><td><b>Measured</b></td><td>3,059 s unpatched → 2,968 s patched.</td></tr>
+<tr><td>Full n=24 rollout wall, including 216 s mirror preparation</td><td><b>Measured</b></td><td>Patched total 3,184 s: a 4.09% regression.</td></tr>
+<tr><td>Approximately 24-rollout break-even</td><td><b>Projected</b></td><td>Phase-normalized model using 9.3 s stable connect + framework savings; not observed break-even.</td></tr>
+<tr><td>n=80 net job-wall savings</td><td><b>Handoff-reported</b></td><td>948 s / 7.7%; job IDs and raw CSV remain pending.</td></tr>
+<tr><td>Remaining ceiling after patched 123.6 s phase total</td><td><b>Projected</b></td><td>78.6 s realistic bound (1.57&times;); 74.3 s zero-overhead bound (1.66&times;).</td></tr>
+</table>
+
+<h3>1.2 시행착오: retracted, invalid, and deferred trials</h3>
+<table>
+<tr><th>Trial</th><th>Outcome</th><th>Why / retry condition</th></tr>
+<tr><td><code>NRL_SKIP_GIT_RESET=1</code></td><td>Null</td><td>20.1 → 19.9 s; workspace copy, not git cleanup, dominates initialization.</td></tr>
+<tr><td>Merge initialization commands; 0.5 s polling; event store in <code>/tmp</code></td><td>Null</td><td>No measurable gain; work and process boot dominate rather than command round trips or inter-turn overhead.</td></tr>
+<tr><td>Direct <code>NRL_WS_CACHE</code> bind over <code>/workspace</code></td><td>Invalid</td><td>Collided with OpenHands workspace ownership and produced non-git workspaces.</td></tr>
+<tr><td>Writable hard-link cache</td><td>Rejected by design</td><td>Shared inodes can leak mutations across rollouts; use a private reflink workspace instead.</td></tr>
+<tr><td>Full action-server reuse</td><td>Deferred</td><td>Require an explicit reset protocol and isolation proof before reuse.</td></tr>
+</table>
 
 <h2>2. Speculative decoding: full scoreboard and root causes</h2>
 
@@ -122,19 +144,19 @@ request round-robins to the other engine and the previous turn's KV is always on
 updates them in lockstep). Note: prefill is only 3.6% of SWE2 LLM time at this concurrency, so this fix is about GPU
 efficiency at scale (and about giving SpecDec a cleaner decode share), not about the small-batch latency measured here.</p>
 
-<h2>3. Fix plan with trade-offs and correctness analysis</h2>
+<h2>3. Ranked system-overhead optimization roadmap</h2>
+<p>This broader study summarizes the code-grounded roadmap. The <a href="nemogym_init_framework_fixes.html">detailed initialization
+and framework analysis</a> contains the implementation paths, correctness analysis, and full validation matrix.</p>
 <table>
-<tr><th>#</th><th>Fix</th><th>Layer</th><th>Expected gain</th><th>Effort</th><th>Correctness / trade-offs</th></tr>
-<tr><td>1</td><td>DFlash K≈9 as the rollout drafter</td><td>config only (<code>vllm_kwargs.speculative_config</code>)</td><td>LLM part 1.48&times; (measured)</td><td>none</td><td><span class="risk-none">Lossless</span>: rewards 0.185–0.33 across all variants (noise band). Drafter is frozen while the policy trains — monitor acceptance drift; retrain or use eagle3-online style updates if it decays.</td></tr>
-<tr><td>2</td><td>Node-local venv / <code>PYTHONPYCACHEPREFIX</code> for action server &amp; run_infer</td><td>Gym agent script + one rsync per node</td><td>−25 s/rollout</td><td>low</td><td><span class="risk-low">Low</span>: /tmp disk 1–2 GB; snapshot semantics (job-start copy) — arguably better for reproducibility.</td></tr>
-<tr><td>3</td><td>Git surgery: single fused command with <code>core.fsync=false</code>, or pre-cleaned images, or per-instance container pool</td><td>nv-OpenHands <code>_deep_reset_to_base_commit</code> / image build</td><td>−13 s/rollout</td><td>low–medium</td><td><span class="risk-low">Low</span> for fusion; pre-cleaned images shift cost to build time; container pooling must re-verify workspace isolation between generations (git reset chain).</td></tr>
-<tr><td>4</td><td>Content-hash sticky routing (prefix cache revival)</td><td>Gym vllm_model adapter (~10 lines)</td><td>GPU efficiency at scale; up to 75–97% redundant prefill removed in training configs (8–32 gens/prompt)</td><td>low</td><td><span class="risk-none">None</span>; watch load skew for very long conversations.</td></tr>
-<tr><td>5</td><td>Async final evaluation</td><td>Gym swe_agents</td><td>+11% rollout throughput</td><td>medium</td><td><span class="risk-med">Medium for training</span>: delayed rewards interact with async-GRPO trajectory age — keep within the <code>max_trajectory_age</code> budget. Pure win for benchmarking.</td></tr>
-<tr><td>6</td><td>Hash-keyed persistent worker venvs (iteration speed)</td><td>launcher env</td><td>−12–15 min per experiment job</td><td>low</td><td><span class="risk-low">Low with guard</span>: venv dir name = hash(uv.lock) auto-invalidates on lock change; avoids the stale-venv and shared-FS-race failure classes we have hit before.</td></tr>
-<tr><td>—</td><td><s>Merge init session commands; faster alive-poll; adapter delta-payloads</s></td><td>—</td><td>≈0 (A/B-refuted)</td><td>—</td><td>Retracted: round-trips and per-turn adapter overhead measured negligible.</td></tr>
+<tr><th>#</th><th>Candidate</th><th>Status</th><th>Why it should help</th><th>Acceptance gate</th></tr>
+<tr><td>1</td><td>Prebuilt OpenHands squashfs</td><td><span class="risk-none">High-confidence, low-risk candidate</span></td><td>Replace the 216 s metadata-heavy mirror with one large sequential read and local extraction; bake rewritten paths and checked-hash bytecode into a versioned artifact.</td><td>Setup ≤36 s, ≥180 s below current setup; manifest parity; unchanged rollout phases and valid-rollout rate.</td></tr>
+<tr><td>2</td><td>Per-instance immutable cache + private reflink workspace</td><td><span class="risk-none">High-confidence design, filesystem support unverified</span></td><td>Cache by image digest, instance ID, and base commit; use a private <code>cp --reflink=always -a</code> clone after one extraction.</td><td>Warm initialization ≤5 s; n=80 full wall improves ≥8%; no workspace leakage and identical evaluation output. Never use writable hard links.</td></tr>
+<tr><td>3</td><td>Pre-imported forkserver</td><td><span class="risk-med">Medium-risk candidate requiring instrumentation first</span></td><td>Pay Python module imports once while retaining a fresh child process for every rollout.</td><td>Framework improves ≥3 s and full wall ≥2%; deterministic event ordering and output parity; no inherited thread, socket, logger, or environment state.</td></tr>
+<tr><td>4</td><td>Persistent controller with one-use prewarmed servers</td><td><span class="risk-med">Higher-risk follow-up</span></td><td>Overlap action-server import and boot; lease each server to one rollout, then destroy it instead of recycling an executor.</td><td>Connect p50 ≤5 s and p95 improves ≥30%; sentinel tests prove no process, filesystem, environment, secret, tmux, plugin, todo, or download state crosses rollouts.</td></tr>
+<tr><td>5</td><td>Small isolated candidates</td><td><span class="risk-low">Measure independently</span></td><td>Direct venv Python in place of <code>poetry run</code>; checked-hash <code>.pyc</code> files in the versioned squashfs; treat async final evaluation as a separate throughput project.</td><td>Each change must clear its own measurement gate; async evaluation additionally must preserve RL reward/trajectory-age semantics.</td></tr>
 </table>
-<p><b>Combined projection:</b> 145 s → ~70 s per rollout (≈2&times;), on top of the 1.88&times; from the vLLM 0.20→0.25.1
-upgrade (measured on the same workload: baseline 524 s → 279 s per 400 SWE1 rollouts).</p>
+<p><b>Projection boundary:</b> 78.6 s is the realistic phase-model bound after removing identified overhead, and 74.3 s is the
+zero-overhead bound. These are not observed job-wall measurements; full-job comparisons must include one-time setup costs.</p>
 
 <h2>4. Methodology notes</h2>
 <ul>
@@ -162,7 +184,8 @@ before mixing or you will see fake 7-hour gaps.</li>
 <tr><td>B6</td><td>eagle3 + V2 runner + &gt;24K prompt crash</td><td>vLLM 0.25.0 (patched wheel)</td><td>CUDA illegal memory access during replay; eager/V1 unaffected.</td></tr>
 </table>
 
-<p class="muted">Generated 2026-07-19 · worktree pr3243-nemogym-swe-specdec · data: SWE1 matrix (jobs 2408776, 2409247–49, 2409491–92, 2423996–98),
+<p class="muted">Updated 2026-07-23 · worktree pr3243-nemogym-swe-specdec · corrected n=24 source:
+<code>experiments/dflash_loss_ab/report/data/patch_ab_n24.csv</code>; supporting data: SWE1 matrix (jobs 2408776, 2409247–49, 2409491–92, 2423996–98),
 SWE2 smokes and sweeps (2428815, 2429766, 2430546/584/812–815/895–896/935/939, 2431308/546/547), acceptance replay (2430291),
 init timing (2431555), opt A/B (2431360).</p>
 </body>
