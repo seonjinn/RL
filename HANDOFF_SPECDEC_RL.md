@@ -241,7 +241,59 @@ and dense `EXTRA_OVERRIDES=++...compilation_config.cudagraph_capture_sizes=[1..5
 
 ---
 
-## 8. Codex kickoff (fresh session)
+## 8. HTML report pages (GitLab Pages)
+
+**Live site**: `https://specdec-rl-49ed10.gitlab-master-pages.nvidia.com/`
+**Repo**: `ssh://git@gitlab-master.nvidia.com:12051/sna/specdec_rl.git`
+
+Pages are authored under `docs/*.html`, mirrored to `public/reports/*.html` by the index
+builder, and served by the `pages` CI job (`.gitlab-ci.yml`, artifact = `public/`). The CI
+job hard-asserts a fixed set of files exist (see `.gitlab-ci.yml` `script:` block) — if you
+rename or drop one of those, the pages deploy fails.
+
+### Page map (grouped as in `scripts/build_pages_index.py` REPORT_GROUPS)
+- **DynamicSD (vLLM 0.24/0.25)** — `dynamic_sd_sync_rollout_results_latest.html` — the canonical standalone sync-rollout results page (per-model TP sections, speedup + tok/s charts, PATCH_LEDGER rendered). **This is the one that needs the capture-cliff correction.**
+- **vLLM Standalone** — `vllm_standalone_results_latest.html` (canonical matched matrix) + dated mirrors (`_20260621/20/19`, `clean_results_20260617`), `vllm_standalone_temp0_temp1_trends_20260616.html`, plus 235B diagnostics (`lyris_qwen235b_*`).
+- **NeMo-RL** — `lyris_nemorl_perfcfg_specdec_live_status_latest.html` (E2E live status), `specdec_rl_framework_lessons_and_nemorl_gaps_20260709.html` (integration lessons), `nemorl_pard_pard2_status_20260615.html`, `oci_hsg_mathrl_multimodel_specdec_step20_status_20260616.html`.
+- **Broad dashboards / background** — `specdec_benchmark_metrics_dashboard_20260616.html`, `specdec_clean_benchmark_results_20260617.html`, `specdec_background_and_observations_charts.html`, `specdec_completed_eval_bar_graphs.html`, `qwen3_235b_team_report_20260606.html`.
+- **Index**: `docs/specdec_reports_index_latest.html` → `public/index.html`.
+- **NemoGym efficiency** (worktree): `docs/nemogym_swe_efficiency_report.html`, `docs/nemogym_init_framework_fixes.html`.
+
+### Publish pipeline
+```
+harvest results.json (remote vllm-benchmark/dynamic_sd_runs/<tag>/)
+  -> experiments/dynamic_sd_sync_rollout/summarize_results.py
+  -> experiments/dynamic_sd_sync_rollout/plot_results.py        # compact house-style seaborn
+  -> scripts/build_dynamic_sd_results_page.py                    # builds the DynamicSD page
+  -> scripts/build_pages_index.py                                # mirrors docs/->public/, builds index
+  -> commit docs/ + public/ ; git push -> GitLab CI `pages` job deploys
+```
+- **5MiB gotcha**: `docs/specdec_current_nemorl_early_speedup.png` (5.3MB) gets copied into `public/` every index build and GitLab rejects >5MiB pushes. Before committing: `git checkout origin/main -- public/reports/specdec_current_nemorl_early_speedup.png`.
+- **Chart prefs (user)**: very compact figures (~2.0in tall), small fonts (labels 9 / ticks 8), short y-labels ("Tokens/s", "Step speedup"), page CSS caps img width 540px, 2-col inline-block flow, per-model sections with TP in the heading.
+
+---
+
+## 9. Metrics that matter (glossary + how to read them)
+
+Primary decision metric is **step-wall speedup** for RL rollout; everything else diagnoses it.
+
+- **Step-wall speedup** = `baseline_mean_step_time / specdec_mean_step_time` over the barriered rollout. This is the headline number (RL cares about makespan per GRPO step, not single-request latency). Reported as mean over >=3 steps; 3-seed for paper gates.
+- **Generation speedup vs E2E step speedup** — SpecDec only accelerates the generation phase. E2E gain is Amdahl-bounded by the **generation fraction** of the step (30B E2E: gen 1.62x but gen is ~33% of step → E2E 1.07x). Always report both; the gap is expected, not a bug.
+- **AL / MAL (acceptance / mean accepted length)** — mean number of draft tokens accepted per verify step (>=1). Breakeven ≈ 1.6–1.8 for K3. **Per-position acceptance** (pos1/pos2/...) shows where acceptance decays — the diagnostic that reveals trained-block cliffs (dflash collapses past pos5) and long-context collapse (eagle3 drops <8K→>24K ctx: 1.96→1.05 MAL).
+- **tok/s (steady-state generation throughput)** — the valid metric when trajectory counts differ between arms (temp 1.0 divergence changes turn counts, so wall isn't directly comparable — use tok/s). Steady-state, not including cold start.
+- **Capture coverage** — fraction of engine steps whose spec-verify batch (`BS x (K+1)` tokens) was cudagraph-captured vs eager fallback. Measured via PR#3243 `enable_vllm_metrics_logger` → `inflight_batch_sizes`, or native 0.25 `cudagraph_metrics=true` (`CUDAGraphStat` per step). Low coverage = the capture cliff; target ~100%.
+- **Drafter training: val EAL + per-position acc** (speculators trainer built-in, `eal_epoch`) — the downstream-acceptance proxy for offline drafter quality. NOTE it **inflates in-distribution** and decouples from rollout tok/s (fit-time-metric trap): val EAL climbed 1.2→2.68→3.27 as SWE share rose, but rollout tok/s saturated ~275–280. **Rollout is the judge, not val EAL.**
+- **Quality / correctness (must stay lossless)** — bitwise greedy parity is an INVALID gate (baseline itself gives 2–28 distinct outputs across 32 greedy copies from batch-position numerics). Use **answer-level majority agreement** and, in RL, **reward parity** across variants (measured 0.185–0.2275, lossless across all SpecDec variants).
+- **Workload shape diagnostics** (explain why SpecDec wins or loses):
+  - **Prefill:decode ratio** — SWE1 is prefill-bound 22:1 (input 24K / output p50 508) → SpecDec can't help (accelerates decode only). Math is decode-heavy → wins.
+  - **Per-engine BS** — wins need low per-engine BS or long decode; at BS~64/engine with short decode, verify compute dominates.
+  - **Drain tail** — 4K-capped recipes have `p50=p90=max` (cap-truncated, no tail) → fixed-K wins; DynamicSD's depth-aware value only appears at 32K+ generation.
+  - **Prefix-cache hit rate** — SWE1 measured 0.0% (concurrent identical-prompt gens + round-robin routing → cascade miss); fixing it (~1.8x) dwarfs SpecDec on that bench.
+- **K (num_speculative_tokens)** — the swept axis. eagle3 optimum is cost-driven (235B K5); dflash optimum is trained-block-bound (K2–K5, collapse K>=7). Higher K needs proportionally larger captures (`BS x (K+1)`).
+
+---
+
+## 10. Codex kickoff (fresh session)
 
 To resume with Codex:
 1. Read this file + `experiments/dynamic_sd_sync_rollout/README.md` + `configs/*.yaml` (`reproduce:` blocks) + `PATCH_LEDGER.md`.
