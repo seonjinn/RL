@@ -109,7 +109,7 @@ Ensure the overview states which trials were null, invalid, rejected by design, 
 Run:
 
 ```bash
-python - <<'PY'
+python3 - <<'PY'
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -143,7 +143,7 @@ Expected: all required evidence and candidate terms are present; stale claims ar
 Run:
 
 ```bash
-python - <<'PY'
+python3 - <<'PY'
 from html.parser import HTMLParser
 from pathlib import Path
 
