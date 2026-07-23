@@ -33,7 +33,7 @@
 <p class="muted">Measurement stack: NVIDIA-NeMo/RL PR #3243 (rollout-only eval mode) + Gym PR #1825 / nv-OpenHands PR #19 (rollout timeline profiler).
 Environment: Lyris GB200 (1 node, 4 GPUs), vLLM 0.25.1, Qwen3-30B-A3B-Thinking-2507 (TP2 &times; 2 engines), Gym latest main (fbde772),
 nv-OpenHands <code>sdd/multilingual-fixes@5f018005</code>. Workloads: SWE1-pivot (single-step, 400 rollouts) and SWE2
-(OpenHands agentic SWE-bench_Verified, 3 instances &times; &le;8 turns, temperature 1.0). Performance statements are labeled
+(OpenHands agentic SWE-bench_Verified, 3 instances &times; &le;8 turns, temperature 1.0). Corrected SWE2 overhead-analysis statements are labeled
 <b>Measured</b> (committed raw artifact), <b>Handoff-reported</b> (reported without a committed raw artifact), or
 <b>Projected</b> (a cost model or unvalidated hypothesis).</p>
 
@@ -68,7 +68,7 @@ below are per rollout and are a phase-normalized cost model; they do not replace
 <h3>1.1 Compact evidence ledger</h3>
 <table>
 <tr><th>Claim</th><th>Status</th><th>Result</th></tr>
-<tr><td>Full n=24 rollout wall, excluding mirror preparation</td><td><b>Measured</b></td><td>3,059 s unpatched → 2,968 s patched.</td></tr>
+<tr><td>n=24 rollout-phase wall (mirror setup excluded)</td><td><b>Measured</b></td><td>3,059 s unpatched → 2,968 s patched.</td></tr>
 <tr><td>Full n=24 rollout wall, including 216 s mirror preparation</td><td><b>Measured</b></td><td>Patched total 3,184 s: a 4.09% regression.</td></tr>
 <tr><td>Approximately 24-rollout break-even</td><td><b>Projected</b></td><td>Phase-normalized model using 9.3 s stable connect + framework savings; not observed break-even.</td></tr>
 <tr><td>n=80 net job-wall savings</td><td><b>Handoff-reported</b></td><td>948 s / 7.7%; job IDs and raw CSV remain pending.</td></tr>
