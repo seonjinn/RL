@@ -107,7 +107,11 @@ DS16 is expected to use more compute than DS8. Compare both final checkpoints at
 
 ### DSpark architecture controls
 
-Use the frozen DFlash v2 manifest of 850,220 prompts:
+Use the existing read-only DFlash v2 prepared dataset at
+`$B/output/data_v2mix`. Its `dataset_info.json` records 850,220 examples and its
+Hugging Face state fingerprint is `99f237d8d7e06e8c`. DS8 and DS16 must point to
+this exact directory instead of regenerating Arrow shards. The underlying prompt
+mix contains:
 
 - 818,540 generic prompts, including approximately 190,000 Open-PerfectBlend prompts.
 - 30,000 filtered public SWE trajectories.
@@ -149,6 +153,10 @@ Every manifest must pass before GPU submission:
 7. Manifest SHA256 plus immutable train and validation split hashes.
 8. Cross-arm assertion that DS8 and DS16 manifest hashes are identical.
 9. Token-mass assertion that DF-PUBLIC and DF-HARD differ by at most 1%.
+
+For DS8 and DS16, item 8 means an identical prepared-data inventory: the same
+eleven Arrow shard hashes plus `dataset_info.json`, `state.json`, `d2t.npy`,
+`t2d.npy`, and `token_freq.pt`.
 
 A failed contamination or hash gate blocks submission. The launcher must not provide a bypass flag for production runs.
 
