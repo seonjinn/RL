@@ -41,11 +41,12 @@ Companion pages: <a href="nemogym_swe_efficiency_report.html">overhead &amp; Spe
 <tr><td>30B screening series (8 arms)</td><td>Qwen3-30B-A3B-Thinking-2507</td><td class="num">10K each</td><td class="num">5</td><td class="num">50K</td><td class="num">0.57&ndash;2.68*</td><td class="num">206&ndash;313 tok/s</td></tr>
 <tr><td>235B screening</td><td rowspan="3">Qwen3-235B-A22B-Thinking-2507</td><td class="num">10K</td><td class="num">5</td><td class="num">50K</td><td class="num">1.128</td><td>&mdash;</td></tr>
 <tr><td><b>235B v1</b> (generic only)</td><td class="num">600,000</td><td class="num">3</td><td class="num">1.80M</td><td class="num"><b>1.967</b></td><td class="num"><b>116 tok/s = 1.33&times;</b></td></tr>
-<tr><td><b>235B v2</b> (SWE mix, in training)</td><td class="num">850,220</td><td class="num">2</td><td class="num">1.70M</td><td class="num">1.132 @epoch0**</td><td>pending</td></tr>
+<tr><td><b>235B v2</b> (SWE mix, complete)</td><td class="num">850,220</td><td class="num">2</td><td class="num">1.70M</td><td class="num"><b>1.475</b> @epoch1**</td><td class="num"><b>133.2 tok/s = 1.52&times; baseline, 1.15&times; v1</b></td></tr>
 </table>
 <p class="small">*val EAL is only comparable within the same validation distribution; the 30B range spans
 loss ablations (tv collapse 0.57) to the SWE-mix arm (2.68 on a leaky val &mdash; its honest rollout number is 313 tok/s).
-**v2's val split contains 16K-token SWE trajectories and is strictly harder than v1's generic 8K val;
+**v2's final epoch-1 metrics were loss 0.6087, full accuracy 0.5046, and EAL 1.4751.
+Its val split contains 16K-token SWE trajectories and is strictly harder than v1's generic 8K val;
 the deciding metric is the SWE rollout, evaluated on fully held-out astropy instances.</p>
 
 <h2>2. Datasets</h2>
@@ -139,7 +140,63 @@ vLLM 0.25, K=5) on the held-out astropy instances &mdash; tok/s = completion tok
 628,540 training rows for eval fingerprints (0 hits).</li>
 </ul>
 
-<h2>6. Reproduce</h2>
+<h2>6. Held-out SWE rollout result</h2>
+<div class="callout"><b>V2 passes the rollout gate.</b> On the same three held-out astropy
+instances and the same K=5 harness, V2 delivered <b>133.21 completion tok/s</b>:
+<b>+52.4%</b> over non-speculative decoding and <b>+15.0%</b> over v1.
+This is the primary deployment result; the cross-dataset validation EAL values are not used
+to claim the v2-over-v1 gain.</div>
+
+<table>
+<tr><th>Run</th><th>SLURM job</th><th>Completion tokens</th><th>&Sigma; model-call time</th><th>Throughput</th><th>vs baseline</th><th>3-rollout collection</th><th>Reward</th></tr>
+<tr><td>Baseline, no SpecDec</td><td class="num">2451569</td><td class="num">47,078</td><td class="num">538.490 s</td><td class="num">87.43 tok/s</td><td class="num">1.000&times;</td><td class="num">6:31</td><td class="num">0/3</td></tr>
+<tr><td>DFlash v1, K=5</td><td class="num">2451570</td><td class="num">41,924</td><td class="num">361.947 s</td><td class="num">115.83 tok/s</td><td class="num">1.325&times;</td><td class="num">3:52</td><td class="num">1/3</td></tr>
+<tr><td><b>DFlash v2, K=5</b></td><td class="num"><b>2477286</b></td><td class="num">37,033</td><td class="num">277.999 s</td><td class="num"><b>133.21 tok/s</b></td><td class="num"><b>1.524&times;</b></td><td class="num"><b>4:27</b></td><td class="num">0/3</td></tr>
+</table>
+<p class="small">Throughput uses the same trajectory-weighted formula for every row:
+&Sigma; completion tokens &divide; &Sigma; model-call seconds. Per-token model time fell from
+11.44 ms (baseline) to 8.63 ms (v1) to 7.51 ms (v2), a 34.4% reduction from baseline and
+13.0% from v1. The three stochastic trajectories generated different token counts, so this
+small smoke set establishes a strong performance signal, not a confidence interval or a
+quality comparison. Speculative acceptance counters were not serialized by this logger and
+are therefore reported as <b>not collected</b>, rather than inferred.</p>
+
+<h3>6.1 Validated runtime configuration</h3>
+<pre><code>target: Qwen3-235B-A22B-Thinking-2507, TP=4, BF16
+drafter: /home/sna/drafters/dflash_235bthink_v2, draft TP=1
+method=dflash, num_speculative_tokens=5, max_model_len=4096
+attention_backend=FLASH_ATTN, flashinfer autotune=false
+cudagraph_mode=FULL, capture_sizes=[6,12,24,48,96]
+dataset: data/swe2/val-mini3.jsonl (3 prompts &times; 1 generation)
+source: nemogym-dynsd @ b9c29565bde277e997eb969af9cc47da55ef4d16
+container: nemo_rl_nightly_20260715.sqsh</code></pre>
+
+<h3>6.2 What failed on the way (and what each failure proved)</h3>
+<table>
+<tr><th>Attempt / job</th><th>Observed failure</th><th>Diagnosis and correction</th></tr>
+<tr><td>PBSS staging</td><td>Helper emitted a <code>//lustre</code> object key; old Lyris rclone could not consume it.</td><td>Re-uploaded with a normalized key. A later helper also assumed an unavailable external <code>time</code> binary; removed that assumption.</td></tr>
+<tr><td>Checkpoint copy</td><td>x86 rclone returned 126 on the ARM compute node; <code>sbatch --wrap</code> recorded <code>Command=(null)</code>.</td><td>Used the ARM rclone and a real submission script. Lustre then rejected the write at its inode hard limit, so the 4 GB checkpoint was staged on NFS <code>/home</code>.</td></tr>
+<tr><td>2476734</td><td>Pyxis could not chdir into <code>/home</code>.</td><td>Added the explicit <code>/home:/home</code> mount.</td></tr>
+<tr><td>2476760</td><td><code>uv sync</code> attempted editable egg-info writes on inode-full Lustre.</td><td>Exported the exact source state to writable NFS <code>/home</code>.</td></tr>
+<tr><td>2476906</td><td>The first source export omitted the nested Automodel repository.</td><td>Re-exported main, Gym, Automodel, Megatron-Bridge, and Megatron-LM; verified critical hashes.</td></tr>
+<tr><td>2477006</td><td>Hydra received CUDA graph capture sizes as a string.</td><td>Escaped the override so the final config contains the real list <code>[6,12,24,48,96]</code>.</td></tr>
+<tr><td>2477029</td><td>All three SWE sandboxes timed out for 600 s while sourcing <code>/swe_util/instance_swe_entry.sh</code>.</td><td>Initially suspected the concurrent inode scan and stopped it. The hypothesis required a clean retry.</td></tr>
+<tr><td>2477187</td><td>The same pre-model timeout reproduced without the inode scan.</td><td>Disproved the scan-contention hypothesis. Package locks matched, but the fresh OpenHands setup log contained <code>jq: Exec format error</code>.</td></tr>
+<tr><td>Root cause</td><td><code>setup_scripts/openhands.sh</code> hardcodes <code>jq-linux-amd64</code> on Lyris aarch64.</td><td>Preserved the bad binary and linked the known-good ARM <code>jq-1.7.1</code> from the v1 environment. Compute-node SHA256: <code>4dd2d8a0...a8b4a5</code>. The permanent fix is an architecture switch plus an executable smoke check.</td></tr>
+<tr><td><b>2477286</b></td><td><b>Success: 3/3 in 4:27; job completed 0:0 in 14:13.</b></td><td>Proves the checkpoint, DFlash graphs, OpenHands runtime, and held-out evaluation path work end to end.</td></tr>
+</table>
+
+<h3>6.3 Lyris inode cleanup</h3>
+<p>The project had reached its exact hard limit of 62,914,560 files. Cleanup job 2477047
+removed only the unreferenced, rebuildable
+<code>nemo-rl-cgfix/job_venvs</code>, freeing 189,951 inodes and restoring file creation.
+The partial inode census then found two additional unreferenced caches:
+<code>job_cache/uv</code> (302,353 inodes) and
+<code>wandb_netrc_home/.cache</code> (297,323 inodes, primarily uv and vLLM caches).
+Source worktrees, checkpoints, experiment results, and a 427,877-inode venv tree referenced
+by twelve pending jobs were explicitly preserved.</p>
+
+<h2>7. Reproduce</h2>
 <pre><code># AWS-DFW, base B=/lustre/fsw/portfolios/nemotron/users/sna/dflash_training
 # environment:      experiments/dynamic_sd_sync_rollout/setup_speculators_dflash.sh
 # loss ablation:    $B/dflash_loss_ab.sbatch          (kl_div + nla arms, 30B, 10K)
@@ -152,7 +209,7 @@ vLLM 0.25, K=5) on the held-out astropy instances &mdash; tok/s = completion tok
 
 <p class="small">Repo copies of the sbatch scripts and result CSVs: <code>experiments/dflash_loss_ab/</code>.
 All numbers in this page trace to committed data (<code>report/data/*.csv</code>) or logged runs referenced in the
-project memory. Status as of 2026-07-22: v2 training in epoch 1 of 2 (chunk c5), rollout verdict pending.</p>
+project memory. Status as of 2026-07-23: v2 training and the held-out K=5 rollout gate are complete.</p>
 
 </body>
 </html>

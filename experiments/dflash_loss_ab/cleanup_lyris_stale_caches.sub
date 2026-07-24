@@ -1,0 +1,37 @@
+#!/bin/bash
+
+#SBATCH --job-name=coreai_dlalgo_llm-maint.cleanup-stale-caches
+#SBATCH --output=/home/sna/pbss-logs/cleanup-stale-caches-%j.log
+#SBATCH --account=coreai_dlalgo_llm
+#SBATCH --partition=gb200-backfill
+#SBATCH --nodes=1
+#SBATCH --exclusive
+#SBATCH --mem=0
+#SBATCH --overcommit
+#SBATCH --time=1:00:00
+
+set -euo pipefail
+
+targets=(
+  /lustre/fsw/coreai_dlalgo_llm/users/sna/job_cache/uv
+  /lustre/fsw/coreai_dlalgo_llm/users/sna/wandb_netrc_home/.cache
+)
+
+for target in "${targets[@]}"; do
+  if squeue -h -o '%Z|%o' | grep -F -- "${target}" >/dev/null; then
+    echo "Refusing to remove active SLURM path: ${target}" >&2
+    exit 2
+  fi
+done
+
+echo "[$(date)] Removing rebuildable caches"
+srun rm -rf -- "${targets[@]}"
+
+for target in "${targets[@]}"; do
+  if [[ -e "${target}" ]]; then
+    echo "Cleanup target still exists: ${target}" >&2
+    exit 3
+  fi
+done
+
+echo "[$(date)] Cleanup complete"
