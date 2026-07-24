@@ -152,6 +152,7 @@ to claim the v2-over-v1 gain.</div>
 <tr><td>Baseline, no SpecDec</td><td class="num">2451569</td><td class="num">47,078</td><td class="num">538.490 s</td><td class="num">87.43 tok/s</td><td class="num">1.000&times;</td><td class="num">6:31</td><td class="num">0/3</td></tr>
 <tr><td>DFlash v1, K=5</td><td class="num">2451570</td><td class="num">41,924</td><td class="num">361.947 s</td><td class="num">115.83 tok/s</td><td class="num">1.325&times;</td><td class="num">3:52</td><td class="num">1/3</td></tr>
 <tr><td><b>DFlash v2, K=5</b></td><td class="num"><b>2477286</b></td><td class="num">37,033</td><td class="num">277.999 s</td><td class="num"><b>133.21 tok/s</b></td><td class="num"><b>1.524&times;</b></td><td class="num"><b>4:27</b></td><td class="num">0/3</td></tr>
+<tr><td>DFlash v2, K=7</td><td class="num">2477610</td><td class="num">31,355</td><td class="num">331.181 s</td><td class="num">94.68 tok/s</td><td class="num">1.083&times;</td><td class="num">4:07</td><td class="num">1/3</td></tr>
 </table>
 <p class="small">Throughput uses the same trajectory-weighted formula for every row:
 &Sigma; completion tokens &divide; &Sigma; model-call seconds. Per-token model time fell from
@@ -160,6 +161,16 @@ to claim the v2-over-v1 gain.</div>
 small smoke set establishes a strong performance signal, not a confidence interval or a
 quality comparison. Speculative acceptance counters were not serialized by this logger and
 are therefore reported as <b>not collected</b>, rather than inferred.</p>
+
+<div class="warn"><b>K=7 is rejected.</b> It reached only <b>94.68 tok/s</b>:
+8.3% above baseline, 18.3% below v1 K=5, and 28.9% below v2 K=5. The K=7
+capture sizes <code>[8,16,32,64,128]</code> were captured successfully, so the result is not
+explained by a missing graph bucket. vLLM did warn that the speculative settings limited
+<code>max_num_scheduled_tokens</code> to 1280 and that first-inference Triton kernels were
+JIT-compiled. Because acceptance counters were not serialized and the smoke contains only
+three stochastic trajectories, the safe conclusion is operational: K=7 does not pass the
+deployment gate; K=5 remains the measured optimum. A larger warm-cache matched repeat is
+needed before attributing the full regression to acceptance decay versus runtime scheduling.</div>
 
 <h3>6.1 Validated runtime configuration</h3>
 <pre><code>target: Qwen3-235B-A22B-Thinking-2507, TP=4, BF16
@@ -184,6 +195,7 @@ container: nemo_rl_nightly_20260715.sqsh</code></pre>
 <tr><td>2477187</td><td>The same pre-model timeout reproduced without the inode scan.</td><td>Disproved the scan-contention hypothesis. Package locks matched, but the fresh OpenHands setup log contained <code>jq: Exec format error</code>.</td></tr>
 <tr><td>Root cause</td><td><code>setup_scripts/openhands.sh</code> hardcodes <code>jq-linux-amd64</code> on Lyris aarch64.</td><td>Preserved the bad binary and linked the known-good ARM <code>jq-1.7.1</code> from the v1 environment. Compute-node SHA256: <code>4dd2d8a0...a8b4a5</code>. The permanent fix is an architecture switch plus an executable smoke check.</td></tr>
 <tr><td><b>2477286</b></td><td><b>Success: 3/3 in 4:27; job completed 0:0 in 14:13.</b></td><td>Proves the checkpoint, DFlash graphs, OpenHands runtime, and held-out evaluation path work end to end.</td></tr>
+<tr><td>2477610</td><td>K=7 completed 3/3 in 4:07 and job exit 0:0 in 13:47, but throughput fell to 94.68 tok/s.</td><td>Matched K-aware capture sizes were present and captured. The longer draft did not pay for its extra work on this sample; retain K=5.</td></tr>
 </table>
 
 <h3>6.3 Lyris inode cleanup</h3>
@@ -214,7 +226,8 @@ by twelve pending jobs were explicitly preserved.</p>
 
 <p class="small">Repo copies of the sbatch scripts and result CSVs: <code>experiments/dflash_loss_ab/</code>.
 All numbers in this page trace to committed data (<code>report/data/*.csv</code>) or logged runs referenced in the
-project memory. Status as of 2026-07-23: v2 training and the held-out K=5 rollout gate are complete.</p>
+project memory. Status as of 2026-07-23: v2 training and the held-out K=5/K=7 rollout gates are complete;
+K=5 is the selected deployment point.</p>
 
 </body>
 </html>
