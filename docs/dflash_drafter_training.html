@@ -194,9 +194,10 @@ The partial inode census then found two additional unreferenced caches:
 <code>job_cache/uv</code> (302,353 inodes) and
 <code>wandb_netrc_home/.cache</code> (297,323 inodes, primarily uv and vLLM caches).
 Cleanup job 2477454 removed both in 5:19 with exit 0. Across both cleanup jobs, the
-pre-counted targets contained 789,627 inodes; the user's quota count fell from 16,108,439
-to 15,346,108 (a net 762,331 after concurrent experiment file creation). The shared project
-count is now 59,295,201, or 3,619,359 below its hard limit.
+pre-counted targets contained 789,627 inodes. In the immediate post-cleanup snapshot, the
+user's quota count fell from 16,108,439 to 15,346,108 (a net 762,331 after concurrent
+experiment file creation), while the shared project count was 59,295,201, or 3,619,359
+below its hard limit. The project number is account-wide and continues to change with other jobs.
 Source worktrees, checkpoints, experiment results, and a 427,877-inode venv tree referenced
 by twelve pending jobs were explicitly preserved.</p>
 
