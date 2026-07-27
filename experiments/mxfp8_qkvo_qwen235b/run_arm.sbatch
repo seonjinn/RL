@@ -12,6 +12,7 @@ set -euo pipefail
 : "${REFIT_OPT:?REFIT_OPT is required}"
 : "${RUN_NAME:?RUN_NAME is required}"
 : "${MAX_STEPS:?MAX_STEPS is required}"
+: "${NUM_NODES:?NUM_NODES is required}"
 : "${GPUS_PER_NODE:?GPUS_PER_NODE is required}"
 : "${EXPECTED_REPO_SHA:?EXPECTED_REPO_SHA is required}"
 
@@ -104,8 +105,9 @@ fi
 
 export CONTAINER
 export MOUNTS=${CONTAINER_MOUNTS:-/lustre:/lustre,/project:/project}
+export NUM_NODES
 export GPUS_PER_NODE
-export HF_HOME=$BASE/hf_home
+export HF_HOME=${NRL_HF_HOME:-$BASE/hf_home}
 export HF_DATASETS_CACHE=$HF_HOME/datasets
 export HF_HUB_CACHE=$HF_HOME/hub
 export TRANSFORMERS_CACHE=$HF_HOME/hub
@@ -134,6 +136,7 @@ fi
 export WANDB_MODE=${WANDB_MODE:-online}
 export WANDB_PROJECT=${WANDB_PROJECT:-sna-mxfp8-qkvo-qwen235b}
 export WANDB_ENTITY=${WANDB_ENTITY:-nvidia}
+export EXPERIMENT_CLUSTER=${EXPERIMENT_CLUSTER:-unknown}
 
 {
   echo "arm=$ARM"
@@ -142,8 +145,10 @@ export WANDB_ENTITY=${WANDB_ENTITY:-nvidia}
   echo "container=$CONTAINER"
   echo "max_steps=$MAX_STEPS"
   echo "model=Qwen/Qwen3-235B-A22B"
-  echo "nodes=16"
+  echo "cluster=$EXPERIMENT_CLUSTER"
+  echo "nodes=$NUM_NODES"
   echo "gpus_per_node=$GPUS_PER_NODE"
+  echo "total_gpus=$((NUM_NODES * GPUS_PER_NODE))"
   echo "train_global_batch_size=512"
   echo "seed=42"
   echo "real_importance_sampling=true"
@@ -224,12 +229,14 @@ if [[ '$WANDB_MODE' != offline && '$WANDB_MODE' != disabled ]]; then
 fi
 /opt/nemo_rl_venv/bin/python examples/run_grpo.py \
   --config '$CONFIG_PATH' \
+  cluster.num_nodes='$NUM_NODES' \
+  cluster.gpus_per_node='$GPUS_PER_NODE' \
+  cluster.segment_size='$NUM_NODES' \
   grpo.max_num_steps='$MAX_STEPS' \
   grpo.seed=42 \
   policy.train_global_batch_size=512 \
   loss_fn.force_on_policy_ratio=false \
   loss_fn.use_importance_sampling_correction=true \
-  cluster.segment_size=16 \
   policy.megatron_cfg.moe_token_dispatcher_type=alltoall \
   policy.megatron_cfg.moe_flex_dispatcher_backend=deepep \
   +policy.generation.vllm_kwargs.distributed_timeout_seconds=2400 \

@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -55,6 +57,11 @@ def _load_resolved_yaml(path: Path, seen: set[Path] | None = None) -> dict:
     return _deep_merge(base_config, config)
 
 
+def _write_executable(path: Path, content: str) -> None:
+    path.write_text(content, encoding="utf-8")
+    path.chmod(0o755)
+
+
 def test_qkvo_recipe_only_changes_quantization_scope() -> None:
     base_config = _load_resolved_yaml(BASE_RECIPE)
     qkvo_config = _load_resolved_yaml(QKVO_RECIPE)
@@ -91,7 +98,10 @@ def test_submitter_defines_the_five_arm_64_gpu_matrix() -> None:
         assert arm in submitter
     assert 'NUM_NODES=${NUM_NODES:-16}' in submitter
     assert 'GPUS_PER_NODE=${GPUS_PER_NODE:-4}' in submitter
-    assert "requires NUM_NODES=16 and GPUS_PER_NODE=4" in submitter
+    assert "requires 64 GPUs total" in submitter
+    assert "TOTAL_GPUS=$((NUM_NODES * GPUS_PER_NODE))" in submitter
+    assert '--gpus-per-node="$GPUS_PER_NODE"' in submitter
+    assert "GPU_REQUEST_MODE" in submitter
     assert "EXPECTED_REPO_SHA=$REPO_SHA" in submitter
     assert 'CONTAINER=$(readlink -f "$CONTAINER")' in submitter
     assert "--ignore-submodules=dirty" in submitter
@@ -117,3 +127,86 @@ def test_launcher_matches_the_validated_235b_workload() -> None:
     assert 'export WANDB_API_KEY=$WANDB_NETRC_KEY' in launcher
     assert "export WANDB_ENTITY=${WANDB_ENTITY:-nvidia}" in launcher
     assert "/opt/nemo_rl_venv/bin/python examples/run_grpo.py" in launcher
+    assert "cluster.num_nodes='$NUM_NODES'" in launcher
+    assert "cluster.gpus_per_node='$GPUS_PER_NODE'" in launcher
+    assert "cluster.segment_size='$NUM_NODES'" in launcher
+    assert 'echo "nodes=$NUM_NODES"' in launcher
+
+
+def test_gcp_nrt_profile_uses_eight_b200_gpus_per_node() -> None:
+    profile = (EXPERIMENT_DIR / "submit_gcp_nrt.sh").read_text(encoding="utf-8")
+
+    assert "coreai_chef_posttrain" in profile
+    assert "PARTITION=${PARTITION:-batch}" in profile
+    assert "NUM_NODES=8" in profile
+    assert "GPUS_PER_NODE=8" in profile
+    assert "GPU_REQUEST_MODE=gpus-per-node" in profile
+    assert "SLURM_NETWORK=" in profile
+    assert "CONTAINER_MOUNTS=${CONTAINER_MOUNTS:-/lustre:/lustre}" in profile
+    assert "/.cache/huggingface" in profile
+    assert "nemo-rl-nightly-main-20260705.sqsh" in profile
+    assert "OccupiedIdleGPUsJobReaper" in profile
+
+
+def test_gcp_nrt_profile_emits_the_expected_sbatch_shape(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    sbatch_calls = tmp_path / "sbatch-calls.txt"
+    container = tmp_path / "container.sqsh"
+    container.touch()
+
+    _write_executable(
+        fake_bin / "git",
+        """#!/bin/bash
+if [[ "$*" == *"rev-parse"* ]]; then
+  echo deadbeef
+fi
+""",
+    )
+    _write_executable(
+        fake_bin / "readlink",
+        """#!/bin/bash
+printf '%s\n' "$2"
+""",
+    )
+    _write_executable(
+        fake_bin / "sbatch",
+        """#!/bin/bash
+printf '%s\n' "$*" >"$SBATCH_CALLS"
+echo "Submitted batch job 12345"
+""",
+    )
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "ACTION": "test-only",
+            "ARM_FILTER": "qkvo-optimized",
+            "BASE": str(tmp_path / "base"),
+            "CONTAINER": str(container),
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "REPO": str(PROJECT_ROOT),
+            "RUN_SUFFIX": "pytest-gcp",
+            "SBATCH_CALLS": str(sbatch_calls),
+            "WORK": str(tmp_path / "work"),
+        }
+    )
+    subprocess.run(
+        [str(EXPERIMENT_DIR / "submit_gcp_nrt.sh")],
+        check=True,
+        capture_output=True,
+        env=env,
+        text=True,
+    )
+
+    call = sbatch_calls.read_text(encoding="utf-8")
+    assert "--account=coreai_chef_posttrain" in call
+    assert "--partition=batch" in call
+    assert "--nodes=8" in call
+    assert "--gpus-per-node=8" in call
+    assert "--network=" not in call
+    assert "--segment=" not in call
+    assert "NUM_NODES=8" in call
+    assert "GPUS_PER_NODE=8" in call
+    assert "EXPERIMENT_CLUSTER=gcp-nrt-b200" in call
+    assert "OccupiedIdleGPUsJobReaper" in call

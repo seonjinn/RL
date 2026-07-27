@@ -73,3 +73,36 @@ W&B project:
 ```text
 nvidia/sna-mxfp8-qkvo-qwen235b
 ```
+
+## GCP-NRT B200
+
+The same 64-GPU matrix maps to 8 nodes x 8 B200 GPUs on GCP-NRT. The profile
+sets `--gpus-per-node=8` and overrides NeMo-RL's cluster node, GPU, and segment
+counts to 8.
+
+Dry-run all five arms:
+
+```bash
+ACTION=test-only MAX_STEPS=20 \
+  ./experiments/mxfp8_qkvo_qwen235b/submit_gcp_nrt.sh
+```
+
+Submit all five arms:
+
+```bash
+ACTION=submit MAX_STEPS=20 \
+  ./experiments/mxfp8_qkvo_qwen235b/submit_gcp_nrt.sh
+```
+
+The GCP-NRT profile uses:
+
+- account `coreai_chef_posttrain`
+- partition `batch`
+- 8 nodes x 8 B200 GPUs
+- `/lustre:/lustre` container mount
+- the local Qwen3-235B Hugging Face cache under `.cache/huggingface`
+- a 120-minute GPU-idle reaper exemption for model loading and autotuning
+
+GCP-NRT does not expose the Slurm `--segment` option. The application-side
+`cluster.segment_size=8` matches prior completed Qwen3-235B jobs on the same
+8-node B200 allocation.

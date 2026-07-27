@@ -7,18 +7,25 @@ REPO=${REPO:-$BASE/RL-mxfp8-qkvo-pr3294-ab}
 WORK=${WORK:-$BASE/experiments/mxfp8-qkvo-qwen235b}
 CONTAINER=${CONTAINER:-$BASE/containers/nemo_rl_nightly.sqsh}
 CONTAINER_MOUNTS=${CONTAINER_MOUNTS:-/lustre:/lustre,/project:/project}
+NRL_HF_HOME=${NRL_HF_HOME:-$BASE/hf_home}
 SLURM_ACCOUNT=${SLURM_ACCOUNT:-coreai_dlalgo_llm}
 PARTITION=${PARTITION:-gb200}
 NUM_NODES=${NUM_NODES:-16}
 GPUS_PER_NODE=${GPUS_PER_NODE:-4}
-USE_GRES=${USE_GRES:-0}
-SLURM_NETWORK=${SLURM_NETWORK:-sharp}
+GPU_REQUEST_MODE=${GPU_REQUEST_MODE:-none}
+SLURM_NETWORK=${SLURM_NETWORK-sharp}
+SLURM_SEGMENT=${SLURM_SEGMENT-$NUM_NODES}
+SBATCH_COMMENT=${SBATCH_COMMENT-metrics}
+WALLTIME=${WALLTIME:-4:00:00}
 DEPENDENCY=${DEPENDENCY:-}
 JOB_PREFIX=${JOB_PREFIX:-coreai_dlalgo_llm-mxfp8.qkvo-235b}
 ACTION=${ACTION:-test-only}
 MAX_STEPS=${MAX_STEPS:-20}
 ARM_FILTER=${ARM_FILTER:-}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
+WANDB_PROJECT=${WANDB_PROJECT:-sna-mxfp8-qkvo-qwen235b}
+WANDB_ENTITY=${WANDB_ENTITY:-nvidia}
+EXPERIMENT_CLUSTER=${EXPERIMENT_CLUSTER:-lyris}
 BATCH_SCRIPT=$REPO/experiments/mxfp8_qkvo_qwen235b/run_arm.sbatch
 
 case "$ACTION" in
@@ -34,8 +41,9 @@ case "$ACTION" in
     ;;
 esac
 
-if [[ "$NUM_NODES" != "16" || "$GPUS_PER_NODE" != "4" ]]; then
-  echo "Qwen3-235B suite requires NUM_NODES=16 and GPUS_PER_NODE=4" >&2
+TOTAL_GPUS=$((NUM_NODES * GPUS_PER_NODE))
+if [[ "$TOTAL_GPUS" -ne 64 ]]; then
+  echo "Qwen3-235B suite requires 64 GPUs total, got $TOTAL_GPUS" >&2
   exit 2
 fi
 
@@ -98,16 +106,33 @@ for arm_spec in "${ARMS[@]}"; do
     --partition="$PARTITION"
     --nodes="$NUM_NODES"
     --ntasks-per-node=1
-    --segment="$NUM_NODES"
+    --time="$WALLTIME"
     --job-name="$RUN_NAME"
     --output="$WORK/slurm/%x-%j.out"
-    --export="ALL,ARM=$ARM,CONFIG_NAME=$CONFIG_NAME,REFIT_OPT=$REFIT_OPT,RUN_NAME=$RUN_NAME,MAX_STEPS=$MAX_STEPS,BASE=$BASE,REPO=$REPO,WORK=$WORK,CONTAINER=$CONTAINER,GPUS_PER_NODE=$GPUS_PER_NODE,EXPECTED_REPO_SHA=$REPO_SHA"
+    --export="ALL,ARM=$ARM,CONFIG_NAME=$CONFIG_NAME,REFIT_OPT=$REFIT_OPT,RUN_NAME=$RUN_NAME,MAX_STEPS=$MAX_STEPS,BASE=$BASE,REPO=$REPO,WORK=$WORK,CONTAINER=$CONTAINER,NRL_HF_HOME=$NRL_HF_HOME,NUM_NODES=$NUM_NODES,GPUS_PER_NODE=$GPUS_PER_NODE,EXPECTED_REPO_SHA=$REPO_SHA,WANDB_PROJECT=$WANDB_PROJECT,WANDB_ENTITY=$WANDB_ENTITY,EXPERIMENT_CLUSTER=$EXPERIMENT_CLUSTER"
   )
-  if [[ "$USE_GRES" == "1" ]]; then
-    args+=(--gres="gpu:$GPUS_PER_NODE")
-  fi
+  case "$GPU_REQUEST_MODE" in
+    none)
+      ;;
+    gres)
+      args+=(--gres="gpu:$GPUS_PER_NODE")
+      ;;
+    gpus-per-node)
+      args+=(--gpus-per-node="$GPUS_PER_NODE")
+      ;;
+    *)
+      echo "GPU_REQUEST_MODE must be none, gres, or gpus-per-node" >&2
+      exit 2
+      ;;
+  esac
   if [[ -n "$SLURM_NETWORK" ]]; then
     args+=(--network="$SLURM_NETWORK")
+  fi
+  if [[ -n "$SLURM_SEGMENT" ]]; then
+    args+=(--segment="$SLURM_SEGMENT")
+  fi
+  if [[ -n "$SBATCH_COMMENT" ]]; then
+    args+=(--comment="$SBATCH_COMMENT")
   fi
   if [[ -n "$DEPENDENCY" ]]; then
     args+=(--dependency="$DEPENDENCY")

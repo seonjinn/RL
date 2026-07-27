@@ -17,7 +17,10 @@ Q/K/V/O projections improve Qwen3-235B-A22B GRPO performance?
 
 ## Controlled Setup
 
-- Hardware: 16 Lyris nodes x 4 GB200 GPUs, 64 GPUs total
+- Hardware:
+  - Lyris: 16 nodes x 4 GB200 GPUs
+  - GCP-NRT: 8 nodes x 8 B200 GPUs
+  - Both: 64 GPUs total
 - Steps: 20
 - Seed: 42
 - GBS: 512
@@ -33,6 +36,10 @@ Q/K/V/O projections improve Qwen3-235B-A22B GRPO performance?
 
 The vLLM TP difference comes from the repository's validated 235B performance
 recipes. MoE-only versus QKVO comparisons remain topology-matched at TP4.
+
+On GCP-NRT, `cluster.segment_size=8` reproduces the topology used by prior
+completed 8-node Qwen3-235B jobs. GCP-NRT's Slurm does not expose
+`sbatch --segment`, so only the application-side segment is set.
 
 ## Metrics
 
