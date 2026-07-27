@@ -25,9 +25,22 @@ commit.
 
 ## Run
 
+AWS-DFW:
+
 ```bash
 ACTION=test-only MAX_STEPS=20 ./experiments/mxfp8_qkvo_pr3294/submit_suite.sh
 ACTION=submit MAX_STEPS=20 ./experiments/mxfp8_qkvo_pr3294/submit_suite.sh
+```
+
+OCI-HSG:
+
+```bash
+BASE=/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna \
+SLURM_ACCOUNT=coreai_dlalgo_nemorl \
+PARTITION=batch \
+ACTION=test-only \
+MAX_STEPS=20 \
+./experiments/mxfp8_qkvo_pr3294/submit_suite.sh
 ```
 
 Logs and manifests are written below:
@@ -35,3 +48,6 @@ Logs and manifests are written below:
 ```text
 /lustre/fsw/portfolios/nemotron/projects/nemotron_sw_post/users/sna/experiments/mxfp8-qkvo-pr3294-ab
 ```
+
+The same relative result path is used below the selected `BASE` on other
+clusters.

@@ -5,6 +5,11 @@ set -euo pipefail
 BASE=${BASE:-/lustre/fsw/portfolios/nemotron/projects/nemotron_sw_post/users/sna}
 REPO=${REPO:-$BASE/RL-mxfp8-qkvo-pr3294-ab}
 WORK=${WORK:-$BASE/experiments/mxfp8-qkvo-pr3294-ab}
+CONTAINER=${CONTAINER:-$BASE/containers/nemo_rl_nightly.sqsh}
+SLURM_ACCOUNT=${SLURM_ACCOUNT:-nemotron_sw_post}
+PARTITION=${PARTITION:-batch}
+NUM_NODES=${NUM_NODES:-4}
+GPUS_PER_NODE=${GPUS_PER_NODE:-4}
 ACTION=${ACTION:-test-only}
 MAX_STEPS=${MAX_STEPS:-20}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
@@ -44,15 +49,15 @@ for arm_spec in "${ARMS[@]}"; do
   RUN_NAME="aws-dfw-pr3294-${ARM}-${MAX_STEPS}step-${RUN_SUFFIX}"
 
   args=(
-    --account=nemotron_sw_post
-    --partition=batch
-    --nodes=4
+    --account="$SLURM_ACCOUNT"
+    --partition="$PARTITION"
+    --nodes="$NUM_NODES"
     --ntasks-per-node=1
-    --gres=gpu:4
-    --segment=4
+    --gres="gpu:$GPUS_PER_NODE"
+    --segment="$NUM_NODES"
     --job-name="$RUN_NAME"
     --output="$WORK/slurm/%x-%j.out"
-    --export="ALL,ARM=$ARM,CONFIG_NAME=$CONFIG_NAME,REFIT_OPT=$REFIT_OPT,RUN_NAME=$RUN_NAME,MAX_STEPS=$MAX_STEPS,REPO=$REPO,WORK=$WORK"
+    --export="ALL,ARM=$ARM,CONFIG_NAME=$CONFIG_NAME,REFIT_OPT=$REFIT_OPT,RUN_NAME=$RUN_NAME,MAX_STEPS=$MAX_STEPS,BASE=$BASE,REPO=$REPO,WORK=$WORK,CONTAINER=$CONTAINER,GPUS_PER_NODE=$GPUS_PER_NODE"
   )
   if [[ -n "$ACTION_ARG" ]]; then
     args+=("$ACTION_ARG")

@@ -12,6 +12,7 @@ set -euo pipefail
 : "${REFIT_OPT:?REFIT_OPT is required}"
 : "${RUN_NAME:?RUN_NAME is required}"
 : "${MAX_STEPS:?MAX_STEPS is required}"
+: "${GPUS_PER_NODE:?GPUS_PER_NODE is required}"
 
 BASE=${BASE:-/lustre/fsw/portfolios/nemotron/projects/nemotron_sw_post/users/sna}
 REPO=${REPO:-$BASE/RL-mxfp8-qkvo-pr3294-ab}
@@ -55,7 +56,7 @@ fi
 
 export CONTAINER
 export MOUNTS=/lustre:/lustre,/scratch:/scratch
-export GPUS_PER_NODE=4
+export GPUS_PER_NODE
 export HF_HOME=$BASE/hf_home
 export HF_DATASETS_CACHE=$HF_HOME/datasets
 export HF_HUB_CACHE=$HF_HOME/hub
