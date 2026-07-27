@@ -32,6 +32,10 @@ At submission, the container symlink is resolved to its immutable squashfs
 filename and the exact repository SHA is passed to every job. A queued job
 fails before allocation setup if the shared checkout moves to another commit.
 
+The Lyris host's `api.wandb.ai` entry in `~/.netrc` is the canonical W&B
+credential source. It overrides stale values loaded from `.nemo_rl_tokens`;
+the driver verifies the credential before model initialization.
+
 ## Dry Run
 
 ```bash

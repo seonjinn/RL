@@ -83,7 +83,7 @@ if [[ -f "$HOME/.nemo_rl_tokens" ]]; then
 fi
 
 WANDB_AUTH_SOURCE=environment
-if [[ -z "${WANDB_API_KEY:-}" && -f "$HOME/.netrc" ]]; then
+if [[ -f "$HOME/.netrc" ]]; then
   WANDB_NETRC_KEY=$(awk '
     {
       for (i = 1; i <= NF; i++) {

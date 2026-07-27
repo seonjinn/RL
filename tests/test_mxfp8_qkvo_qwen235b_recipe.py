@@ -113,6 +113,7 @@ def test_launcher_matches_the_validated_235b_workload() -> None:
     assert "export NRL_FORCE_REBUILD_VENVS=false" in launcher
     assert ': "${EXPECTED_REPO_SHA:?EXPECTED_REPO_SHA is required}"' in launcher
     assert 'if [[ "$ACTUAL_REPO_SHA" != "$EXPECTED_REPO_SHA" ]]' in launcher
-    assert 'if [[ -z "${WANDB_API_KEY:-}" && -f "$HOME/.netrc" ]]' in launcher
+    assert 'if [[ -f "$HOME/.netrc" ]]' in launcher
+    assert 'export WANDB_API_KEY=$WANDB_NETRC_KEY' in launcher
     assert "export WANDB_ENTITY=${WANDB_ENTITY:-nvidia}" in launcher
     assert "/opt/nemo_rl_venv/bin/python examples/run_grpo.py" in launcher
