@@ -54,6 +54,26 @@ if [[ -f "$HOME/.nemo_rl_tokens" ]]; then
   source "$HOME/.nemo_rl_tokens"
 fi
 
+WANDB_AUTH_SOURCE=environment
+if [[ -f "$HOME/.netrc" ]]; then
+  WANDB_NETRC_KEY=$(awk '
+    {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "machine") {
+          wandb_machine = ($(i + 1) == "api.wandb.ai")
+        } else if (wandb_machine && $i == "password") {
+          print $(i + 1)
+          exit
+        }
+      }
+    }
+  ' "$HOME/.netrc")
+  if [[ -n "$WANDB_NETRC_KEY" ]]; then
+    export WANDB_API_KEY=$WANDB_NETRC_KEY
+    WANDB_AUTH_SOURCE=netrc-host
+  fi
+fi
+
 export CONTAINER
 export MOUNTS=${CONTAINER_MOUNTS:-/lustre:/lustre,/scratch:/scratch}
 export GPUS_PER_NODE
@@ -104,13 +124,7 @@ export WANDB_PROJECT=${WANDB_PROJECT:-sna-mxfp8-qkvo-refit-pr3294}
 
 export COMMAND="set -euo pipefail
 cd '$REPO'
-if [[ -f \"\$HOME/.nemo_rl_tokens\" ]]; then source \"\$HOME/.nemo_rl_tokens\"; fi
-if grep -Eq 'machine[[:space:]]+api\.wandb\.ai' \"\$HOME/.netrc\" 2>/dev/null; then
-  unset WANDB_API_KEY
-  echo WANDB_AUTH_SOURCE=netrc
-else
-  echo WANDB_AUTH_SOURCE=environment
-fi
+echo WANDB_AUTH_SOURCE='$WANDB_AUTH_SOURCE'
 mkdir -p '$LOG_DIR'
 export HF_HOME='$HF_HOME'
 export HF_DATASETS_CACHE='$HF_DATASETS_CACHE'
