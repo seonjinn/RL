@@ -24,6 +24,7 @@ export JOB_PREFIX=${JOB_PREFIX:-coreai_chef_posttrain-mxfp8.qkvo-235b}
 export WANDB_PROJECT=${WANDB_PROJECT:-sna-mxfp8-qkvo-qwen235b-gcp-nrt}
 export WANDB_ENTITY=${WANDB_ENTITY:-nvidia}
 export EXPERIMENT_CLUSTER=gcp-nrt-b200
+export INIT_SUBMODULES=0
 export SBATCH_COMMENT=${SBATCH_COMMENT:-'{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"qwen235b_qkvo","description":"Model load and MXFP8 autotuning may leave GPUs idle during startup"}}'}
 
 exec "$SCRIPT_DIR/submit_suite.sh"

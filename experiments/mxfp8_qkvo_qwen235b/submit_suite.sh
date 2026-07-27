@@ -26,6 +26,7 @@ RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
 WANDB_PROJECT=${WANDB_PROJECT:-sna-mxfp8-qkvo-qwen235b}
 WANDB_ENTITY=${WANDB_ENTITY:-nvidia}
 EXPERIMENT_CLUSTER=${EXPERIMENT_CLUSTER:-lyris}
+INIT_SUBMODULES=${INIT_SUBMODULES:-1}
 BATCH_SCRIPT=$REPO/experiments/mxfp8_qkvo_qwen235b/run_arm.sbatch
 
 case "$ACTION" in
@@ -56,7 +57,12 @@ if [[ "$before_pull_sha" != "$after_pull_sha" && "${SUBMIT_SUITE_REEXEC:-0}" != 
   export SUBMIT_SUITE_REEXEC=1
   exec "${BASH_SOURCE[0]}"
 fi
-git -C "$REPO" submodule update --init --recursive
+if [[ "$INIT_SUBMODULES" == "1" ]]; then
+  git -C "$REPO" submodule update --init --recursive
+elif [[ "$INIT_SUBMODULES" != "0" ]]; then
+  echo "INIT_SUBMODULES must be 0 or 1" >&2
+  exit 2
+fi
 if [[ -n "$(git -C "$REPO" status --porcelain --untracked-files=all --ignore-submodules=dirty)" ]]; then
   echo "Repository has uncommitted superproject changes: $REPO" >&2
   git -C "$REPO" status --short --ignore-submodules=dirty >&2

@@ -106,3 +106,8 @@ The GCP-NRT profile uses:
 GCP-NRT does not expose the Slurm `--segment` option. The application-side
 `cluster.segment_size=8` matches prior completed Qwen3-235B jobs on the same
 8-node B200 allocation.
+
+The GCP-NRT profile skips recursive submodule initialization. The current
+GCP-NRT Lustre is inode-constrained, while the pinned container already
+provides the runtime dependencies; the sparse experiment checkout supplies the
+NeMo-RL source, recipes, and launch files.

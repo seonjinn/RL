@@ -102,6 +102,8 @@ def test_submitter_defines_the_five_arm_64_gpu_matrix() -> None:
     assert "TOTAL_GPUS=$((NUM_NODES * GPUS_PER_NODE))" in submitter
     assert '--gpus-per-node="$GPUS_PER_NODE"' in submitter
     assert "GPU_REQUEST_MODE" in submitter
+    assert "INIT_SUBMODULES" in submitter
+    assert 'if [[ "$INIT_SUBMODULES" == "1" ]]' in submitter
     assert "EXPECTED_REPO_SHA=$REPO_SHA" in submitter
     assert 'CONTAINER=$(readlink -f "$CONTAINER")' in submitter
     assert "--ignore-submodules=dirty" in submitter
@@ -141,6 +143,7 @@ def test_gcp_nrt_profile_uses_eight_b200_gpus_per_node() -> None:
     assert "NUM_NODES=8" in profile
     assert "GPUS_PER_NODE=8" in profile
     assert "GPU_REQUEST_MODE=gpus-per-node" in profile
+    assert "INIT_SUBMODULES=0" in profile
     assert "SLURM_NETWORK=" in profile
     assert "CONTAINER_MOUNTS=${CONTAINER_MOUNTS:-/lustre:/lustre}" in profile
     assert "/.cache/huggingface" in profile
