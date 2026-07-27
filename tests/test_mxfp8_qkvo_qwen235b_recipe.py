@@ -104,9 +104,11 @@ def test_submitter_defines_the_five_arm_64_gpu_matrix() -> None:
     assert "GPU_REQUEST_MODE" in submitter
     assert "INIT_SUBMODULES" in submitter
     assert 'if [[ "$INIT_SUBMODULES" == "1" ]]' in submitter
+    assert 'SUBMODULE_STATUS_MODE=all' in submitter
+    assert '--ignore-submodules="$SUBMODULE_STATUS_MODE"' in submitter
     assert "EXPECTED_REPO_SHA=$REPO_SHA" in submitter
     assert 'CONTAINER=$(readlink -f "$CONTAINER")' in submitter
-    assert "--ignore-submodules=dirty" in submitter
+    assert "SUBMODULE_STATUS_MODE=dirty" in submitter
 
 
 def test_launcher_matches_the_validated_235b_workload() -> None:

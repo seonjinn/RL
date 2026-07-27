@@ -59,13 +59,16 @@ if [[ "$before_pull_sha" != "$after_pull_sha" && "${SUBMIT_SUITE_REEXEC:-0}" != 
 fi
 if [[ "$INIT_SUBMODULES" == "1" ]]; then
   git -C "$REPO" submodule update --init --recursive
+  SUBMODULE_STATUS_MODE=dirty
 elif [[ "$INIT_SUBMODULES" != "0" ]]; then
   echo "INIT_SUBMODULES must be 0 or 1" >&2
   exit 2
+else
+  SUBMODULE_STATUS_MODE=all
 fi
-if [[ -n "$(git -C "$REPO" status --porcelain --untracked-files=all --ignore-submodules=dirty)" ]]; then
+if [[ -n "$(git -C "$REPO" status --porcelain --untracked-files=all --ignore-submodules="$SUBMODULE_STATUS_MODE")" ]]; then
   echo "Repository has uncommitted superproject changes: $REPO" >&2
-  git -C "$REPO" status --short --ignore-submodules=dirty >&2
+  git -C "$REPO" status --short --ignore-submodules="$SUBMODULE_STATUS_MODE" >&2
   exit 2
 fi
 CONTAINER=$(readlink -f "$CONTAINER")
