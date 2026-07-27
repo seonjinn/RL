@@ -17,7 +17,7 @@ import os
 import time
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional, Union, cast
 
 import ray
 from ray.util.placement_group import PlacementGroup
@@ -97,6 +97,11 @@ class MultiWorkerFuture:
                     for i in self.return_from_workers
                     if i < len(self.futures)
                 ]
+
+        if include_unfiltered and any(
+            isinstance(future, ObjectRefGenerator) for future in self.futures
+        ):
+            raise ValueError("Unfiltered results do not support streaming generators")
 
         object_refs: list[ObjectRef] = []
         has_generator = False
@@ -1062,8 +1067,11 @@ class RayWorkerGroup:
         Returns:
             List of results, deduplicated as specified in the future_bundle
         """
-        return future_bundle.get_results(
-            self, return_generators_as_proxies=return_generators_as_proxies
+        return cast(
+            list[Any],
+            future_bundle.get_results(
+                self, return_generators_as_proxies=return_generators_as_proxies
+            ),
         )
 
     def get_all_worker_results_with_unfiltered(

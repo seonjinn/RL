@@ -138,6 +138,31 @@ def test_multi_worker_future_can_return_filtered_and_unfiltered_results_once(
     assert ray_get_calls == [["rank-0-ref", "rank-1-ref", "rank-2-ref", "rank-3-ref"]]
 
 
+def test_multi_worker_future_rejects_unfiltered_stream_before_consuming(
+    monkeypatch,
+):
+    class FakeObjectRefGenerator:
+        def __iter__(self):
+            raise AssertionError("streaming generator must not be consumed")
+
+    future_bundle = MultiWorkerFuture(futures=[FakeObjectRefGenerator()])
+    monkeypatch.setattr(ray, "ObjectRefGenerator", FakeObjectRefGenerator)
+    monkeypatch.setattr(
+        ray,
+        "get",
+        lambda refs: pytest.fail("ray.get must not run for an unsupported stream"),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Unfiltered results do not support streaming generators",
+    ):
+        future_bundle.get_results(
+            worker_group=None,
+            include_unfiltered=True,
+        )
+
+
 @ray.remote(
     runtime_env={
         "env_vars": {

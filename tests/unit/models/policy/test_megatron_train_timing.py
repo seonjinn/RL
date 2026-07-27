@@ -288,6 +288,22 @@ def test_megatron_worker_train_wires_required_phase_boundaries():
         and isinstance(call.func, ast.Attribute)
         and call.func.attr == "barrier"
     ]
+    synchronized_phase_labels = {
+        call.args[0].value
+        for call in ast.walk(train_method)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "stop"
+        and call.args
+        and isinstance(call.args[0], ast.Constant)
+        and isinstance(call.args[0].value, str)
+        and any(
+            keyword.arg == "synchronize_cuda"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value is True
+            for keyword in call.keywords
+        )
+    }
 
     assert {
         "setup",
@@ -308,6 +324,20 @@ def test_megatron_worker_train_wires_required_phase_boundaries():
         "aggregate_statistics",
         "result_materialization",
     } <= labels
+    assert {
+        "setup",
+        "batch_preparation",
+        "zero_grad_setup",
+        "forward_backward",
+        "post_forward_backward",
+        "optimizer",
+        "model_parallel_reductions",
+        "loss_metric_processing",
+        "loss_metric_broadcast",
+        "eval_state_restore",
+        "aggregate_statistics",
+        "result_materialization",
+    } <= synchronized_phase_labels
     assert len(cuda_sync_calls) == 2
     assert len(barrier_calls) == 2
     for label in labels - {"train"}:

@@ -619,7 +619,7 @@ class MegatronPolicyWorkerImpl(
             saved_extra_state = None
             reenable_forward_pre_hook_after_eval = False
 
-        phase_timer.stop("setup")
+        phase_timer.stop("setup", synchronize_cuda=True)
         phase_timer.start("entry_barrier")
         torch.distributed.barrier()  # pragma: no cover
         phase_timer.stop("entry_barrier")
@@ -858,7 +858,7 @@ class MegatronPolicyWorkerImpl(
             # param AG to finish. Keep hooks disabled for that one step so grad
             # accumulation starts from a clean shared param/grad buffer.
             self._disable_forward_pre_hook_until_next_train_step()
-        phase_timer.stop("eval_state_restore")
+        phase_timer.stop("eval_state_restore", synchronize_cuda=True)
 
         phase_timer.start("exit_barrier")
         torch.distributed.barrier()  # pragma: no cover
