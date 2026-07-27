@@ -109,5 +109,5 @@ GCP-NRT does not expose the Slurm `--segment` option. The application-side
 
 The GCP-NRT profile skips recursive submodule initialization. The current
 GCP-NRT Lustre is inode-constrained, so the launcher reuses the existing
-QKVO-specific Git worktree. The pinned container supplies the runtime
-dependencies, while that worktree tracks the exact submitted NeMo-RL commit.
+refit-optimization Git checkout. The pinned container supplies the runtime
+dependencies, while that checkout tracks the exact submitted NeMo-RL commit.

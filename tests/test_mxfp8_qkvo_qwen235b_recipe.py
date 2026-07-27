@@ -150,7 +150,7 @@ def test_gcp_nrt_profile_uses_eight_b200_gpus_per_node() -> None:
     assert "CONTAINER_MOUNTS=${CONTAINER_MOUNTS:-/lustre:/lustre}" in profile
     assert "/.cache/huggingface" in profile
     assert "nemo-rl-nightly-main-20260705.sqsh" in profile
-    assert "experiments/refit-opt-qwen30b/nemo-rl-mxfp8-qkv" in profile
+    assert "experiments/refit-opt-qwen30b/nemo-rl-refit-opt-r2" in profile
     assert "OccupiedIdleGPUsJobReaper" in profile
 
 
