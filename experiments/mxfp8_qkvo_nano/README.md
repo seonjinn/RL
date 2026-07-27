@@ -18,8 +18,9 @@ a recommended default.
 | `qkvo-baseline` | QKVO-inclusive MXFP8 | off |
 | `qkvo-optimized` | QKVO-inclusive MXFP8 | on |
 
-All arms use the canonical Nano trainer topology from
-`grpo-nanov3-30BA3B-2n8g-megatron-pack-cp.yaml`: TP2, PP2, CP2, and EP8.
+All arms use TP2, PP2, CP2, and EP8 from the canonical
+`grpo-nanov3-30BA3B-2n8g-megatron-pack-cp.yaml` trainer recipe. The MXFP8
+overlays use `4n4g` filenames to reflect the effective Lyris allocation.
 The Lyris allocation is 4 nodes with 4 GB200 GPUs per node. Every arm uses
 vLLM TP1, `gpu_memory_utilization=0.5`, train GBS 16, seed 42, real importance
 sampling, and checkpointing disabled.

@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 
 set -euo pipefail
 
@@ -51,6 +53,19 @@ if [[ "$before_pull_sha" != "$after_pull_sha" && "${SUBMIT_SUITE_REEXEC:-0}" != 
   export SUBMIT_SUITE_REEXEC=1
   exec "${BASH_SOURCE[0]}"
 fi
+if ! git -C "$REPO" diff --quiet || ! git -C "$REPO" diff --cached --quiet; then
+  echo "Repository has tracked changes: $REPO" >&2
+  exit 2
+fi
+if [[ -n "$(git -C "$REPO" ls-files --others --exclude-standard)" ]]; then
+  echo "Repository has untracked files: $REPO" >&2
+  exit 2
+fi
+upstream_sha=$(git -C "$REPO" rev-parse '@{upstream}')
+if [[ "$after_pull_sha" != "$upstream_sha" ]]; then
+  echo "Repository HEAD does not match its upstream" >&2
+  exit 2
+fi
 git -C "$REPO" submodule update --init --recursive
 mkdir -p "$WORK/slurm" "$WORK/manifests"
 export CONTAINER_MOUNTS
@@ -58,10 +73,10 @@ export NANO_MODEL_PATH
 
 ARMS=(
   "bf16:grpo-nanov3-30BA3B-2n8g-megatron-pack-cp:0"
-  "moe-baseline:grpo-nanov3-30BA3B-2n8g-megatron-pack-cp-mxfp8-rollout:0"
-  "moe-optimized:grpo-nanov3-30BA3B-2n8g-megatron-pack-cp-mxfp8-rollout:1"
-  "qkvo-baseline:grpo-nanov3-30BA3B-2n8g-megatron-pack-cp-mxfp8-qkvo-rollout:0"
-  "qkvo-optimized:grpo-nanov3-30BA3B-2n8g-megatron-pack-cp-mxfp8-qkvo-rollout:1"
+  "moe-baseline:grpo-nanov3-30BA3B-4n4g-megatron-pack-cp-mxfp8-rollout:0"
+  "moe-optimized:grpo-nanov3-30BA3B-4n4g-megatron-pack-cp-mxfp8-rollout:1"
+  "qkvo-baseline:grpo-nanov3-30BA3B-4n4g-megatron-pack-cp-mxfp8-qkvo-rollout:0"
+  "qkvo-optimized:grpo-nanov3-30BA3B-4n4g-megatron-pack-cp-mxfp8-qkvo-rollout:1"
 )
 
 arm_is_selected() {

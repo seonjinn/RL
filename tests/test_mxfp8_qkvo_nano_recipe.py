@@ -23,9 +23,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RECIPE_DIR = PROJECT_ROOT / "examples/configs/recipes/llm"
 EXPERIMENT_DIR = PROJECT_ROOT / "experiments/mxfp8_qkvo_nano"
 CANONICAL_RECIPE = RECIPE_DIR / "grpo-nanov3-30BA3B-2n8g-megatron-pack-cp.yaml"
-BASE_RECIPE = RECIPE_DIR / "grpo-nanov3-30BA3B-2n8g-megatron-pack-cp-mxfp8-rollout.yaml"
+BASE_RECIPE = RECIPE_DIR / "grpo-nanov3-30BA3B-4n4g-megatron-pack-cp-mxfp8-rollout.yaml"
 QKVO_RECIPE = (
-    RECIPE_DIR / "grpo-nanov3-30BA3B-2n8g-megatron-pack-cp-mxfp8-qkvo-rollout.yaml"
+    RECIPE_DIR / "grpo-nanov3-30BA3B-4n4g-megatron-pack-cp-mxfp8-qkvo-rollout.yaml"
 )
 DEFAULT_MODEL_PATH = (
     "/lustre/fsw/coreai_dlalgo_llm/users/sna/models/nemotron-nano3/"
@@ -175,6 +175,9 @@ def test_launcher_enforces_matched_arm_settings_and_nightly_preflight() -> None:
     assert "/opt/nemo_rl_venv/bin/python examples/run_grpo.py" in launcher
     assert "Ray version mismatch before driver launch" in launcher
     assert "Driver did not import NeMo-RL from the experiment checkout" in launcher
+    assert "DRIVER_VLLM_VERSION" in launcher
+    assert "ModelOptMxFp8FusedMoE" in launcher
+    assert "ModelOptMxFp8LinearMethod" in launcher
     assert "WANDB_AUTH_SOURCE=netrc-host" in launcher
     assert "wandb.login(verify=True)" in launcher
 
@@ -193,6 +196,9 @@ def test_submitter_defaults_to_lyris_4x4_and_declares_five_arms() -> None:
     assert "Nano suite requires NUM_NODES=4 and GPUS_PER_NODE=4" in submitter
     assert 'test -f "$NANO_MODEL_PATH/config.json"' in submitter
     assert "SUBMIT_SUITE_REEXEC" in submitter
+    assert 'git -C "$REPO" diff --quiet' in submitter
+    assert 'git -C "$REPO" ls-files --others --exclude-standard' in submitter
+    assert "Repository HEAD does not match its upstream" in submitter
     assert (
         "CONTAINER_MOUNTS=${CONTAINER_MOUNTS:-/lustre:/lustre,/project:/project}"
         in (submitter)
@@ -206,14 +212,14 @@ def test_submitter_defaults_to_lyris_4x4_and_declares_five_arms() -> None:
     ]
     assert arm_lines == [
         '"bf16:grpo-nanov3-30BA3B-2n8g-megatron-pack-cp:0"',
-        ('"moe-baseline:grpo-nanov3-30BA3B-2n8g-megatron-pack-cp-mxfp8-rollout:0"'),
-        ('"moe-optimized:grpo-nanov3-30BA3B-2n8g-megatron-pack-cp-mxfp8-rollout:1"'),
+        ('"moe-baseline:grpo-nanov3-30BA3B-4n4g-megatron-pack-cp-mxfp8-rollout:0"'),
+        ('"moe-optimized:grpo-nanov3-30BA3B-4n4g-megatron-pack-cp-mxfp8-rollout:1"'),
         (
-            '"qkvo-baseline:grpo-nanov3-30BA3B-2n8g-megatron-pack-cp-'
+            '"qkvo-baseline:grpo-nanov3-30BA3B-4n4g-megatron-pack-cp-'
             'mxfp8-qkvo-rollout:0"'
         ),
         (
-            '"qkvo-optimized:grpo-nanov3-30BA3B-2n8g-megatron-pack-cp-'
+            '"qkvo-optimized:grpo-nanov3-30BA3B-4n4g-megatron-pack-cp-'
             'mxfp8-qkvo-rollout:1"'
         ),
     ]
@@ -233,7 +239,7 @@ def test_submitter_applies_comma_separated_arm_filter(
     _write_executable(
         fake_bin / "git",
         """#!/bin/bash
-if [[ "$*" == *"rev-parse HEAD"* ]]; then
+if [[ "$*" == *"rev-parse"* ]]; then
   echo deadbeef
 fi
 """,

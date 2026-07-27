@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (c) 2026, NVIDIA CORPORATION. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 #SBATCH --account=coreai_dlalgo_llm
 #SBATCH --partition=gb200
 #SBATCH --exclusive
@@ -19,6 +21,7 @@ REPO=${REPO:-$BASE/RL-mxfp8-qkvo-pr3294-ab}
 WORK=${WORK:-$BASE/experiments/mxfp8-qkvo-nano}
 CONTAINER=${CONTAINER:-$BASE/containers/nemo_rl_nightly.sqsh}
 NANO_MODEL_PATH=${NANO_MODEL_PATH:-/lustre/fsw/coreai_dlalgo_llm/users/sna/models/nemotron-nano3/Ultra-SFTb2-512K-hermes20k-lr2e-5-iter_0005000/hf}
+CONTAINER_RESOLVED=$(readlink -f "$CONTAINER")
 CONFIG_PATH=examples/configs/recipes/llm/${CONFIG_NAME}.yaml
 EXP_DIR=$WORK/results/$RUN_NAME
 LOG_DIR=$EXP_DIR/logs
@@ -53,7 +56,7 @@ fi
 test -d "$REPO/.git"
 test -f "$REPO/$CONFIG_PATH"
 test -f "$NANO_MODEL_PATH/config.json"
-test -f "$CONTAINER"
+test -f "$CONTAINER_RESOLVED"
 mkdir -p "$WORK/slurm" "$LOG_DIR" "$BASE/uv_cache/mxfp8-qkvo-nano"
 
 if [[ -f "$HOME/.nemo_rl_tokens" ]]; then
@@ -115,6 +118,7 @@ export WANDB_PROJECT=${WANDB_PROJECT:-sna-mxfp8-qkvo-nano}
   echo "arm=$ARM"
   echo "config=$CONFIG_PATH"
   echo "repo_sha=$(git -C "$REPO" rev-parse HEAD)"
+  echo "container=$CONTAINER_RESOLVED"
   echo "model_path=$NANO_MODEL_PATH"
   echo "max_steps=$MAX_STEPS"
   echo "train_global_batch_size=16"
@@ -164,9 +168,11 @@ git submodule status --recursive
 RAY_CLI_VERSION=\$(ray --version | sed -n 's/^ray, version //p')
 DRIVER_RAY_VERSION=\$(/opt/nemo_rl_venv/bin/python -c 'import ray; print(ray.__version__)')
 DRIVER_NRL_SOURCE=\$(/opt/nemo_rl_venv/bin/python -c 'import nemo_rl; print(nemo_rl.__file__)')
+DRIVER_VLLM_VERSION=\$(/opt/nemo_rl_venv/bin/python -c 'import vllm; print(vllm.__version__)')
 echo RAY_CLI_VERSION=\$RAY_CLI_VERSION
 echo DRIVER_RAY_VERSION=\$DRIVER_RAY_VERSION
 echo DRIVER_NRL_SOURCE=\$DRIVER_NRL_SOURCE
+echo DRIVER_VLLM_VERSION=\$DRIVER_VLLM_VERSION
 if [[ \"\$RAY_CLI_VERSION\" != \"\$DRIVER_RAY_VERSION\" ]]; then
   echo 'Ray version mismatch before driver launch' >&2
   exit 3
@@ -178,6 +184,7 @@ case \"\$DRIVER_NRL_SOURCE\" in
     exit 3
     ;;
 esac
+/opt/nemo_rl_venv/bin/python -c 'from vllm.model_executor.layers.quantization.modelopt import ModelOptMxFp8FusedMoE, ModelOptMxFp8LinearMethod; assert all(hasattr(ModelOptMxFp8FusedMoE, name) for name in (\"create_weights\", \"process_weights_after_loading\", \"apply_monolithic\")); assert hasattr(ModelOptMxFp8LinearMethod, \"process_weights_after_loading\")'
 if [[ '$WANDB_MODE' != offline && '$WANDB_MODE' != disabled ]]; then
   /opt/nemo_rl_venv/bin/python -c 'import wandb; assert wandb.login(verify=True), \"W&B login verification failed\"'
 fi
