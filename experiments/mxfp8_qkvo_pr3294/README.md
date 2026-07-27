@@ -51,6 +51,8 @@ SLURM_ACCOUNT=coreai_dlalgo_llm \
 PARTITION=gb200 \
 USE_GRES=0 \
 SLURM_NETWORK=sharp \
+CONTAINER_MOUNTS=/lustre:/lustre,/project:/project \
+JOB_PREFIX=coreai_dlalgo_llm-mxfp8.pr3294 \
 ACTION=test-only \
 MAX_STEPS=20 \
 ./experiments/mxfp8_qkvo_pr3294/submit_suite.sh

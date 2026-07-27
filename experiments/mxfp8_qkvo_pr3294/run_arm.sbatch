@@ -55,7 +55,7 @@ if [[ -f "$HOME/.nemo_rl_tokens" ]]; then
 fi
 
 export CONTAINER
-export MOUNTS=/lustre:/lustre,/scratch:/scratch
+export MOUNTS=${CONTAINER_MOUNTS:-/lustre:/lustre,/scratch:/scratch}
 export GPUS_PER_NODE
 export HF_HOME=$BASE/hf_home
 export HF_DATASETS_CACHE=$HF_HOME/datasets
