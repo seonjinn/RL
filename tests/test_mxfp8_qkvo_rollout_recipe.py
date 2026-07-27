@@ -109,3 +109,32 @@ def test_submitter_includes_selectable_bf16_baseline() -> None:
     assert '"bf16:grpo-qwen3-30ba3b-4n4g:0"' in submitter
     assert "ARM_FILTER=${ARM_FILTER:-}" in submitter
     assert 'arm_is_selected "$ARM"' in submitter
+    assert "Qwen suite requires NUM_NODES=4 and GPUS_PER_NODE=4" in submitter
+    assert "SUBMIT_SUITE_REEXEC" in submitter
+
+
+def test_bf16_baseline_keeps_matched_qwen_topology() -> None:
+    bf16_config = _load_resolved_yaml(
+        PERF_CONFIG_DIR / "grpo-qwen3-30ba3b-4n4g.yaml"
+    )
+    mxfp8_config = _load_resolved_yaml(BASE_RECIPE)
+    launcher = (
+        PROJECT_ROOT / "experiments/mxfp8_qkvo_pr3294/run_arm.sbatch"
+    ).read_text(encoding="utf-8")
+
+    for config in (bf16_config, mxfp8_config):
+        assert config["policy"]["model_name"] == "Qwen/Qwen3-30B-A3B"
+        assert config["policy"]["megatron_cfg"]["tensor_model_parallel_size"] == 1
+        assert config["policy"]["megatron_cfg"]["pipeline_model_parallel_size"] == 1
+        assert config["policy"]["megatron_cfg"]["expert_model_parallel_size"] == 16
+        assert config["policy"]["generation"]["vllm_cfg"]["tensor_parallel_size"] == 1
+        assert config["cluster"]["gpus_per_node"] == 4
+        assert config["cluster"]["num_nodes"] == 4
+        assert config["cluster"]["segment_size"] == 4
+
+    assert (
+        bf16_config["policy"]["generation"]["vllm_kwargs"]["moe_backend"] == "triton"
+    )
+    assert "policy.train_global_batch_size=2048" in launcher
+    assert "loss_fn.force_on_policy_ratio=false" in launcher
+    assert "loss_fn.use_importance_sampling_correction=true" in launcher

@@ -34,9 +34,20 @@ case "$ACTION" in
     ;;
 esac
 
+if [[ "$NUM_NODES" != "4" || "$GPUS_PER_NODE" != "4" ]]; then
+  echo "Qwen suite requires NUM_NODES=4 and GPUS_PER_NODE=4" >&2
+  exit 2
+fi
+
 test -x "$BATCH_SCRIPT"
+before_pull_sha=$(git -C "$REPO" rev-parse HEAD)
 git -C "$REPO" -c fetch.recurseSubmodules=false \
   pull --ff-only --recurse-submodules=no
+after_pull_sha=$(git -C "$REPO" rev-parse HEAD)
+if [[ "$before_pull_sha" != "$after_pull_sha" && "${SUBMIT_SUITE_REEXEC:-0}" != "1" ]]; then
+  export SUBMIT_SUITE_REEXEC=1
+  exec "${BASH_SOURCE[0]}"
+fi
 git -C "$REPO" submodule update --init --recursive
 mkdir -p "$WORK/slurm" "$WORK/manifests"
 export CONTAINER_MOUNTS
