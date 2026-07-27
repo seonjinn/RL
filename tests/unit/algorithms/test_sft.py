@@ -268,6 +268,8 @@ def test_training_logs_worker_phase_timing_distribution(mock_components):
             "mean": 5.0,
             "median": 5.0,
             "max": 6.0,
+            "max_rank": 511,
+            "critical_rank_value": 5.5,
         }
     }
 
@@ -289,6 +291,12 @@ def test_training_logs_worker_phase_timing_distribution(mock_components):
         if call.kwargs.get("prefix") == "timing/train"
     )
     assert timing_call.args[0]["worker_train/forward_backward_max"] == 6.0
+    diagnostic_call = next(
+        call
+        for call in mock_components["logger"].log_metrics.call_args_list
+        if call.kwargs.get("prefix") == "diagnostics/train"
+    )
+    assert diagnostic_call.args[0]["worker_train/forward_backward_max_rank"] == 511
 
 
 def test_ft_save_period_triggers_periodic_saves(mock_components):

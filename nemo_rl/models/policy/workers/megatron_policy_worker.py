@@ -574,6 +574,7 @@ class MegatronPolicyWorkerImpl(
             "Megatron does not run cross-tokenizer distillation."
         )
         phase_timer = TrainPhaseTimer.from_env(synchronize=torch.cuda.synchronize)
+        phase_timer.start("worker_total")
         phase_timer.start("setup")
         self.timer.start("train")
         # Note: zero_grad_buffer is called at the start of each global batch iteration
@@ -678,7 +679,7 @@ class MegatronPolicyWorkerImpl(
                     sampling_params=self.sampling_params,
                     draft_model=self.draft_model,
                 )
-                phase_timer.stop("batch_preparation")
+                phase_timer.stop("batch_preparation", synchronize_cuda=True)
 
                 rerun_state_machine = get_rerun_state_machine()
                 while rerun_state_machine.should_run_forward_backward(data_iterator):
@@ -707,7 +708,7 @@ class MegatronPolicyWorkerImpl(
                     # Set mtp_grad_scale_func for MTP loss scaling (scales by valid tokens)
                     mtp_scale = 1.0 / global_valid_toks.clamp(min=1).float()
                     self._set_mtp_grad_scale_func(lambda: mtp_scale)
-                    phase_timer.stop("zero_grad_setup")
+                    phase_timer.stop("zero_grad_setup", synchronize_cuda=True)
 
                     # Forward pass.
                     phase_timer.start("forward_backward")
@@ -740,7 +741,7 @@ class MegatronPolicyWorkerImpl(
                             use_router_replay=use_router_replay,
                             router_replay_train=not eval_mode,
                         )
-                    phase_timer.stop("forward_backward")
+                    phase_timer.stop("forward_backward", synchronize_cuda=True)
 
                 phase_timer.start("post_forward_backward")
                 # Clear mtp_grad_scale_func after the forward-backward pass so
@@ -753,7 +754,7 @@ class MegatronPolicyWorkerImpl(
                 # Empty unused memory.
                 if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
                     torch.cuda.empty_cache()
-                phase_timer.stop("post_forward_backward")
+                phase_timer.stop("post_forward_backward", synchronize_cuda=True)
 
                 # Update parameters.
                 phase_timer.start("optimizer")
@@ -770,7 +771,7 @@ class MegatronPolicyWorkerImpl(
                 else:
                     update_successful, grad_norm, num_zeros_in_grad = (True, 0.0, 0.0)
                     mtp_grad_norm = None
-                phase_timer.stop("optimizer")
+                phase_timer.stop("optimizer", synchronize_cuda=True)
 
                 phase_timer.start("model_parallel_reductions")
                 pg_collection = get_pg_collection(self.model)
@@ -810,7 +811,7 @@ class MegatronPolicyWorkerImpl(
                 # Empty unused memory.
                 if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 2:
                     torch.cuda.empty_cache()
-                phase_timer.stop("model_parallel_reductions")
+                phase_timer.stop("model_parallel_reductions", synchronize_cuda=True)
 
                 phase_timer.start("loss_metric_processing")
                 if parallel_state.is_pipeline_last_stage(ignore_virtual=True):
@@ -835,7 +836,7 @@ class MegatronPolicyWorkerImpl(
 
                 else:
                     gb_loss_metrics = None
-                phase_timer.stop("loss_metric_processing")
+                phase_timer.stop("loss_metric_processing", synchronize_cuda=True)
 
                 # Broadcast loss metrics from last stage to all stages
                 phase_timer.start("loss_metric_broadcast")
@@ -847,7 +848,7 @@ class MegatronPolicyWorkerImpl(
 
                 all_mb_metrics.extend(gb_loss_metrics)
                 losses.append(torch.tensor(mb_losses).sum().item())
-                phase_timer.stop("loss_metric_broadcast")
+                phase_timer.stop("loss_metric_broadcast", synchronize_cuda=True)
 
         phase_timer.start("eval_state_restore")
         if saved_extra_state is not None:
@@ -891,7 +892,7 @@ class MegatronPolicyWorkerImpl(
         mb_metrics = strip_context_parallel_local_loss_metric(
             mb_metrics, enabled=reduce_loss_across_cp
         )
-        phase_timer.stop("aggregate_statistics")
+        phase_timer.stop("aggregate_statistics", synchronize_cuda=True)
 
         phase_timer.start("result_materialization")
         metrics = {
@@ -945,9 +946,17 @@ class MegatronPolicyWorkerImpl(
                 metrics["num_ranks"] = torch.distributed.get_world_size()
             except Exception as e:
                 warnings.warn(f"Failed to compute FLOPs for MFU reporting: {e}")
-        phase_timer.stop("result_materialization")
+        phase_timer.stop("result_materialization", synchronize_cuda=True)
         if phase_timer.enabled:
-            phase_timer.metrics["accounted_total"] = phase_timer.total_elapsed
+            accounted_total = sum(
+                value
+                for phase, value in phase_timer.metrics.items()
+                if phase != "worker_total"
+            )
+            phase_timer.stop("worker_total")
+            phase_timer.metrics["uninstrumented_residual"] = (
+                phase_timer.metrics["worker_total"] - accounted_total
+            )
             metrics["train_phase_timings"] = dict(phase_timer.metrics)
         self.timer.stop("train")
         return metrics

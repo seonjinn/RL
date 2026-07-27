@@ -108,24 +108,34 @@ class MyTestActor:
         return resources, env_vars_update, init_kwargs_update, {}
 
 
-def test_multi_worker_future_can_return_unfiltered_rank_results(monkeypatch):
+def test_multi_worker_future_can_return_filtered_and_unfiltered_results_once(
+    monkeypatch,
+):
     future_bundle = MultiWorkerFuture(
         futures=["rank-0-ref", "rank-1-ref", "rank-2-ref", "rank-3-ref"],
         called_workers=[0, 1, 2, 3],
         return_from_workers=[0, 2],
     )
+    ray_get_calls = []
+
+    def fake_ray_get(refs):
+        ray_get_calls.append(refs)
+        return [f"result-{rank}" for rank, _ in enumerate(refs)]
+
     monkeypatch.setattr(
         ray,
         "get",
-        lambda refs: [f"result-{rank}" for rank, _ in enumerate(refs)],
+        fake_ray_get,
     )
 
-    assert future_bundle.get_unfiltered_results() == [
-        "result-0",
-        "result-1",
-        "result-2",
-        "result-3",
-    ]
+    filtered, unfiltered = future_bundle.get_results(
+        worker_group=None,
+        include_unfiltered=True,
+    )
+
+    assert filtered == ["result-0", "result-2"]
+    assert unfiltered == ["result-0", "result-1", "result-2", "result-3"]
+    assert ray_get_calls == [["rank-0-ref", "rank-1-ref", "rank-2-ref", "rank-3-ref"]]
 
 
 @ray.remote(

@@ -44,7 +44,10 @@ from nemo_rl.distributed.virtual_cluster import (
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.interfaces import PolicyInterface
 from nemo_rl.models.policy.lm_policy import Policy
-from nemo_rl.models.policy.workers.train_timing import flatten_train_phase_timings
+from nemo_rl.models.policy.workers.train_timing import (
+    flatten_train_phase_metadata,
+    flatten_train_phase_timings,
+)
 from nemo_rl.utils.checkpoint import CheckpointingConfig, CheckpointManager
 from nemo_rl.utils.logger import Logger, LoggerConfig
 from nemo_rl.utils.nsys import maybe_gpu_profile_step
@@ -677,9 +680,13 @@ def sft_train(
                         )
 
             timing_metrics = timer.get_timing_metrics(reduction_op="sum")
+            timing_metadata = {}
             if "train_phase_timings" in train_results:
                 timing_metrics.update(
                     flatten_train_phase_timings(train_results["train_phase_timings"])
+                )
+                timing_metadata = flatten_train_phase_metadata(
+                    train_results["train_phase_timings"]
                 )
 
             print("\n📊 Training Results:")
@@ -725,6 +732,12 @@ def sft_train(
                 timing_metrics["valid_tokens_per_sec_per_gpu"] = 0.0
             logger.log_metrics(metrics, total_steps + 1, prefix="train")
             logger.log_metrics(timing_metrics, total_steps + 1, prefix="timing/train")
+            if timing_metadata:
+                logger.log_metrics(
+                    timing_metadata,
+                    total_steps + 1,
+                    prefix="diagnostics/train",
+                )
 
             timer.reset()
             current_step += 1

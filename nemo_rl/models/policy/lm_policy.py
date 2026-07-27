@@ -838,7 +838,9 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                     "check_dim_skip_keys": check_dim_skip_keys,
                 },
             )
-        results = self.worker_group.get_all_worker_results(futures)
+        results, timing_results = (
+            self.worker_group.get_all_worker_results_with_unfiltered(futures)
+        )
 
         # Aggregate the results
         aggregated_results = {
@@ -849,12 +851,8 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             aggregated_results["moe_metrics"] = results[0]["moe_metrics"]
         if "mtp_metrics" in results[0]:
             aggregated_results["mtp_metrics"] = results[0]["mtp_metrics"]
-        timing_results = results
-        if results and "train_phase_timings" in results[0]:
-            timing_results = self.worker_group.get_all_worker_results_unfiltered(
-                futures
-            )
         train_phase_timings = aggregate_train_phase_timings(timing_results)
+        del timing_results
         if train_phase_timings:
             aggregated_results["train_phase_timings"] = train_phase_timings
 

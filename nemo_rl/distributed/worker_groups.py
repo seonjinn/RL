@@ -44,8 +44,11 @@ class MultiWorkerFuture:
     called_workers: Optional[list[int]] = None
 
     def get_results(
-        self, worker_group: "RayWorkerGroup", return_generators_as_proxies: bool = False
-    ) -> list[Any]:
+        self,
+        worker_group: "RayWorkerGroup",
+        return_generators_as_proxies: bool = False,
+        include_unfiltered: bool = False,
+    ) -> list[Any] | tuple[list[Any], list[Any]]:
         """Get results from the futures, optionally respecting tied workers.
 
         The method uses worker_group.worker_to_tied_group_index to identify which tied
@@ -57,6 +60,8 @@ class MultiWorkerFuture:
                 is required for the deduplication path.
             return_generators_as_proxies: If True, and a future is an ObjectRefGenerator,
                                           return the ObjectRefGenerator itself instead of consuming it.
+            include_unfiltered: Return both the normal filtered results and one
+                result per called worker from the same ``ray.get``.
 
         Returns:
             List of results
@@ -64,6 +69,10 @@ class MultiWorkerFuture:
         from ray import ObjectRef, ObjectRefGenerator
 
         if return_generators_as_proxies:
+            if include_unfiltered:
+                raise ValueError(
+                    "Unfiltered results do not support streaming generators"
+                )
             # Directly return the futures, which are expected to be ObjectRefGenerators (or other proxies).
             # No ray.get() is called on them. The consumer is responsible for handling the proxies.
             if self.return_from_workers is None:
@@ -106,6 +115,10 @@ class MultiWorkerFuture:
         # If expanded generator was present we are in streaming mode.
         # Every ObjectRef now corresponds to a unique, ordered chunk of data
         if has_generator:
+            if include_unfiltered:
+                raise ValueError(
+                    "Unfiltered results do not support streaming generators"
+                )
             return all_results
 
         if self.return_from_workers is not None:
@@ -119,22 +132,20 @@ class MultiWorkerFuture:
                     w for w in self.return_from_workers if w in worker_to_result_idx
                 ]
                 # Map global worker indices to local result indices and get results
-                return [
+                filtered_results = [
                     all_results[worker_to_result_idx[worker]]
                     for worker in valid_return_workers
                 ]
             else:
-                return [all_results[worker] for worker in self.return_from_workers]
+                filtered_results = [
+                    all_results[worker] for worker in self.return_from_workers
+                ]
+        else:
+            filtered_results = all_results
 
-        return all_results
-
-    def get_unfiltered_results(self) -> list[Any]:
-        """Return one concrete result for every called worker rank."""
-        from ray import ObjectRefGenerator
-
-        if any(isinstance(future, ObjectRefGenerator) for future in self.futures):
-            raise ValueError("Unfiltered results do not support streaming generators")
-        return ray.get(self.futures)
+        if include_unfiltered:
+            return filtered_results, all_results
+        return filtered_results
 
 
 class RayWorkerBuilder:
@@ -1055,11 +1066,13 @@ class RayWorkerGroup:
             self, return_generators_as_proxies=return_generators_as_proxies
         )
 
-    def get_all_worker_results_unfiltered(
+    def get_all_worker_results_with_unfiltered(
         self, future_bundle: MultiWorkerFuture
-    ) -> list[Any]:
-        """Return one result per called worker without replicated-axis filtering."""
-        return future_bundle.get_unfiltered_results()
+    ) -> tuple[list[Any], list[Any]]:
+        """Return filtered and per-rank results from one object-store retrieval."""
+        results = future_bundle.get_results(self, include_unfiltered=True)
+        assert isinstance(results, tuple)
+        return results
 
     def shutdown(
         self,

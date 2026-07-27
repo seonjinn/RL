@@ -73,13 +73,17 @@ def _policy(
     policy.flops_tracker = None
     policy.worker_group = MagicMock()
     policy.worker_group.run_all_workers_sharded_data.return_value = ["future"]
-    policy.worker_group.get_all_worker_results.return_value = [
+    filtered_results = [
         {
             "global_loss": torch.tensor(0.5),
             "grad_norm": torch.tensor(1.0),
             "all_mb_metrics": {},
         }
     ]
+    policy.worker_group.get_all_worker_results_with_unfiltered.return_value = (
+        filtered_results,
+        filtered_results,
+    )
     return cast(Policy, policy)
 
 
@@ -104,7 +108,7 @@ def test_direct_packed_rows_construct_dp_strides_from_source_order():
 
 def test_train_aggregates_worker_phase_timing_distribution():
     policy = _policy()
-    policy.worker_group.get_all_worker_results.return_value = [
+    filtered_results = [
         {
             "global_loss": torch.tensor(0.5),
             "grad_norm": torch.tensor(1.0),
@@ -118,24 +122,44 @@ def test_train_aggregates_worker_phase_timing_distribution():
             "train_phase_timings": {"forward_backward": 6.0, "optimizer": 1.0},
         },
     ]
-    policy.worker_group.get_all_worker_results_unfiltered.return_value = [
+    unfiltered_results = [
         {
             "rank": 8,
-            "train_phase_timings": {"forward_backward": 4.0, "optimizer": 2.0},
+            "train_phase_timings": {
+                "forward_backward": 4.0,
+                "optimizer": 2.0,
+                "worker_total": 8.0,
+            },
         },
         {
             "rank": 511,
-            "train_phase_timings": {"forward_backward": 8.0, "optimizer": 1.0},
+            "train_phase_timings": {
+                "forward_backward": 8.0,
+                "optimizer": 1.0,
+                "worker_total": 12.0,
+            },
         },
         {
             "rank": 120,
-            "train_phase_timings": {"forward_backward": 6.0, "optimizer": 4.0},
+            "train_phase_timings": {
+                "forward_backward": 6.0,
+                "optimizer": 4.0,
+                "worker_total": 14.0,
+            },
         },
         {
             "rank": 42,
-            "train_phase_timings": {"forward_backward": 10.0, "optimizer": 3.0},
+            "train_phase_timings": {
+                "forward_backward": 10.0,
+                "optimizer": 3.0,
+                "worker_total": 15.0,
+            },
         },
     ]
+    policy.worker_group.get_all_worker_results_with_unfiltered.return_value = (
+        filtered_results,
+        unfiltered_results,
+    )
 
     result = policy.train(_direct_batch(), MagicMock())
 
@@ -146,6 +170,7 @@ def test_train_aggregates_worker_phase_timing_distribution():
             "median": pytest.approx(7.0),
             "max": pytest.approx(10.0),
             "max_rank": 42,
+            "critical_rank_value": pytest.approx(10.0),
         },
         "optimizer": {
             "min": pytest.approx(1.0),
@@ -153,6 +178,15 @@ def test_train_aggregates_worker_phase_timing_distribution():
             "median": pytest.approx(2.5),
             "max": pytest.approx(4.0),
             "max_rank": 120,
+            "critical_rank_value": pytest.approx(3.0),
+        },
+        "worker_total": {
+            "min": pytest.approx(8.0),
+            "mean": pytest.approx(12.25),
+            "median": pytest.approx(13.0),
+            "max": pytest.approx(15.0),
+            "max_rank": 42,
+            "critical_rank_value": pytest.approx(15.0),
         },
     }
 

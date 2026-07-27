@@ -36,10 +36,6 @@ class TrainPhaseTimer:
         self.metrics: dict[str, float] = {}
         self._started_at: dict[str, float] = {}
 
-    @property
-    def total_elapsed(self) -> float:
-        return sum(self.metrics.values())
-
     @classmethod
     def from_env(
         cls,
@@ -102,6 +98,17 @@ def aggregate_train_phase_timings(
         if set(result.get("train_phase_timings", {})) != expected_keys:
             raise ValueError("Every worker must report the same phase keys")
 
+    critical_phase = (
+        "worker_total" if "worker_total" in expected_keys else min(expected_keys)
+    )
+    critical_values = [
+        float(result["train_phase_timings"][critical_phase]) for result in results
+    ]
+    critical_index = max(
+        range(len(critical_values)),
+        key=critical_values.__getitem__,
+    )
+
     aggregated: dict[str, dict[str, float | int]] = {}
     for key in sorted(expected_keys):
         values = [float(result["train_phase_timings"][key]) for result in results]
@@ -112,6 +119,7 @@ def aggregate_train_phase_timings(
             "median": median(values),
             "max": max(values),
             "max_rank": int(results[max_index].get("rank", max_index)),
+            "critical_rank_value": values[critical_index],
         }
     return aggregated
 
@@ -124,4 +132,20 @@ def flatten_train_phase_timings(
         f"worker_train/{phase}_{statistic}": value
         for phase, statistics in sorted(timings.items())
         for statistic, value in statistics.items()
+        if statistic in {"min", "mean", "median", "max", "critical_rank_value"}
     }
+
+
+def flatten_train_phase_metadata(
+    timings: dict[str, dict[str, float | int]],
+) -> dict[str, int]:
+    """Flatten rank identifiers separately from duration metrics."""
+    metadata = {
+        f"worker_train/{phase}_max_rank": int(statistics["max_rank"])
+        for phase, statistics in sorted(timings.items())
+    }
+    if "worker_total" in timings:
+        metadata["worker_train/critical_rank"] = int(
+            timings["worker_total"]["max_rank"]
+        )
+    return metadata

@@ -34,6 +34,7 @@ SPEC.loader.exec_module(TRAIN_TIMING)
 TrainPhaseTimer = TRAIN_TIMING.TrainPhaseTimer
 aggregate_train_phase_timings = TRAIN_TIMING.aggregate_train_phase_timings
 flatten_train_phase_timings = TRAIN_TIMING.flatten_train_phase_timings
+flatten_train_phase_metadata = TRAIN_TIMING.flatten_train_phase_metadata
 
 
 def _clock(values: list[float]) -> tuple[Iterator[float], Callable[[], float]]:
@@ -77,18 +78,6 @@ def test_train_phase_timer_supports_explicit_phase_boundaries():
     timer.stop("optimizer")
 
     assert timer.metrics == {"optimizer": pytest.approx(3.5)}
-
-
-def test_train_phase_timer_reports_sum_of_recorded_phases():
-    _, clock = _clock([1.0, 3.0, 4.0, 7.5])
-    timer = TrainPhaseTimer(enabled=True, clock=clock, synchronize=lambda: None)
-
-    with timer.time("forward_backward"):
-        pass
-    with timer.time("optimizer"):
-        pass
-
-    assert timer.total_elapsed == pytest.approx(5.5)
 
 
 def test_disabled_train_phase_timer_has_zero_observer_effect():
@@ -150,15 +139,27 @@ def test_aggregate_train_phase_timings_reports_rank_distribution():
     results = [
         {
             "rank": 8,
-            "train_phase_timings": {"forward_backward": 4.0, "optimizer": 2.0},
+            "train_phase_timings": {
+                "forward_backward": 4.0,
+                "optimizer": 2.0,
+                "worker_total": 7.0,
+            },
         },
         {
             "rank": 511,
-            "train_phase_timings": {"forward_backward": 6.0, "optimizer": 1.0},
+            "train_phase_timings": {
+                "forward_backward": 6.0,
+                "optimizer": 1.0,
+                "worker_total": 9.0,
+            },
         },
         {
             "rank": 120,
-            "train_phase_timings": {"forward_backward": 5.0, "optimizer": 3.0},
+            "train_phase_timings": {
+                "forward_backward": 5.0,
+                "optimizer": 3.0,
+                "worker_total": 10.0,
+            },
         },
     ]
 
@@ -169,6 +170,7 @@ def test_aggregate_train_phase_timings_reports_rank_distribution():
             "median": pytest.approx(5.0),
             "max": pytest.approx(6.0),
             "max_rank": 511,
+            "critical_rank_value": pytest.approx(5.0),
         },
         "optimizer": {
             "min": pytest.approx(1.0),
@@ -176,6 +178,15 @@ def test_aggregate_train_phase_timings_reports_rank_distribution():
             "median": pytest.approx(2.0),
             "max": pytest.approx(3.0),
             "max_rank": 120,
+            "critical_rank_value": pytest.approx(3.0),
+        },
+        "worker_total": {
+            "min": pytest.approx(7.0),
+            "mean": pytest.approx(26.0 / 3.0),
+            "median": pytest.approx(9.0),
+            "max": pytest.approx(10.0),
+            "max_rank": 120,
+            "critical_rank_value": pytest.approx(10.0),
         },
     }
 
@@ -199,6 +210,7 @@ def test_flatten_train_phase_timings_creates_logger_safe_metrics():
                 "median": 5.0,
                 "max": 6.0,
                 "max_rank": 511,
+                "critical_rank_value": 4.5,
             }
         }
     ) == {
@@ -206,7 +218,31 @@ def test_flatten_train_phase_timings_creates_logger_safe_metrics():
         "worker_train/forward_backward_mean": 5.0,
         "worker_train/forward_backward_median": 5.0,
         "worker_train/forward_backward_max": 6.0,
+        "worker_train/forward_backward_critical_rank_value": 4.5,
+    }
+    assert flatten_train_phase_metadata(
+        {
+            "forward_backward": {
+                "min": 4.0,
+                "mean": 5.0,
+                "median": 5.0,
+                "max": 6.0,
+                "max_rank": 511,
+                "critical_rank_value": 4.5,
+            },
+            "worker_total": {
+                "min": 8.0,
+                "mean": 9.0,
+                "median": 9.0,
+                "max": 10.0,
+                "max_rank": 120,
+                "critical_rank_value": 10.0,
+            },
+        }
+    ) == {
+        "worker_train/critical_rank": 120,
         "worker_train/forward_backward_max_rank": 511,
+        "worker_train/worker_total_max_rank": 120,
     }
 
 
@@ -274,3 +310,26 @@ def test_megatron_worker_train_wires_required_phase_boundaries():
     } <= labels
     assert len(cuda_sync_calls) == 2
     assert len(barrier_calls) == 2
+    for label in labels - {"train"}:
+        starts = [
+            call.lineno
+            for call in ast.walk(train_method)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "start"
+            and call.args
+            and isinstance(call.args[0], ast.Constant)
+            and call.args[0].value == label
+        ]
+        stops = [
+            call.lineno
+            for call in ast.walk(train_method)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "stop"
+            and call.args
+            and isinstance(call.args[0], ast.Constant)
+            and call.args[0].value == label
+        ]
+        assert len(starts) == len(stops) == 1
+        assert starts[0] < stops[0]
