@@ -258,7 +258,7 @@ def test_training_with_negative_val_period(mock_components):
     assert mock_components["policy"].train.call_count == 3
 
 
-def test_training_logs_worker_phase_timing_distribution(mock_components):
+def test_training_logs_worker_phase_timing_distribution(mock_components, capsys):
     mock_components["master_config"].sft.val_period = 0
     mock_components["master_config"].sft.max_num_steps = 1
     mock_components["master_config"].sft.max_num_epochs = 1
@@ -297,6 +297,7 @@ def test_training_logs_worker_phase_timing_distribution(mock_components):
         if call.kwargs.get("prefix") == "diagnostics/train"
     )
     assert diagnostic_call.args[0]["worker_train/forward_backward_max_rank"] == 511
+    assert "worker_train/forward_backward_max_rank: 511" in capsys.readouterr().out
 
 
 def test_ft_save_period_triggers_periodic_saves(mock_components):

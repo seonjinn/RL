@@ -719,6 +719,10 @@ def sft_train(
                 if k != "total_step_time":
                     percent = (v / total_time * 100) if total_time > 0 else 0
                     print(f"  • {k}: {v:.2f}s ({percent:.1f}%)")
+            if timing_metadata:
+                print("\nTiming rank metadata:")
+                for key, value in sorted(timing_metadata.items()):
+                    print(f"  • {key}: {value}")
 
             total_num_gpus = (
                 master_config.cluster["num_nodes"]
