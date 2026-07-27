@@ -4,6 +4,8 @@ This experiment measures the refit performance impact of NeMo-RL PR #3294
 with the existing MoE-only quantization scope and with Q/K/V/O projections
 included in MXFP8 quantization.
 
+[Results](RESULTS.md) contains the validated 20-step comparison.
+
 ## Matrix
 
 | Arm | Recipe | PR refit optimizations |

@@ -1,0 +1,6 @@
+Exp,Wandb link
+BF16,https://wandb.ai/nvidia/sna-mxfp8-qkvo-refit-pr3294/runs/f9ld5mh8
+MoE baseline,https://wandb.ai/nvidia/sna-mxfp8-qkvo-refit-pr3294/runs/8dr0kzml
+MoE optimized,https://wandb.ai/nvidia/sna-mxfp8-qkvo-refit-pr3294/runs/9sjcdtn8
+QKVO baseline,https://wandb.ai/nvidia/sna-mxfp8-qkvo-refit-pr3294/runs/gso4vqja
+QKVO optimized,https://wandb.ai/nvidia/sna-mxfp8-qkvo-refit-pr3294/runs/daod8kce

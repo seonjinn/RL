@@ -1,0 +1,6 @@
+Exp,Wandb link,Step window,Included steps,Missing steps,Valid count,Transfer/update time (s)
+BF16,https://wandb.ai/nvidia/sna-mxfp8-qkvo-nano/runs/60ayvb27,3-19 inclusive,3;4;5;6;7;8;9;10;12;13;14;15;16;17;18;19,11,16,0.985979
+MoE baseline,https://wandb.ai/nvidia/sna-mxfp8-qkvo-nano/runs/87340q06,3-19 inclusive,3;4;5;6;7;8;9;10;12;13;14;15;16;17;18;19,11,16,4.356029
+MoE optimized,https://wandb.ai/nvidia/sna-mxfp8-qkvo-nano/runs/l2zoecxw,3-19 inclusive,3;4;5;6;7;8;9;10;12;13;14;15;16;17;18;19,11,16,2.151420
+QKVO baseline,https://wandb.ai/nvidia/sna-mxfp8-qkvo-nano/runs/o7oz28v8,3-19 inclusive,3;4;5;6;7;8;9;10;12;13;14;15;16;17;18;19,11,16,4.361044
+QKVO optimized,https://wandb.ai/nvidia/sna-mxfp8-qkvo-nano/runs/ondgz3au,3-19 inclusive,3;4;5;6;7;8;9;10;12;13;14;15;16;17;18;19,11,16,2.219643

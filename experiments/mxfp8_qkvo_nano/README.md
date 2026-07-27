@@ -3,6 +3,8 @@
 This suite measures Nemotron 3 Nano rollout and refit performance with the
 standard MXFP8 quantization scope and with Q/K/V/O projections included.
 
+[Results](RESULTS.md) contains the validated 20-step comparison.
+
 QKVO enables q/k/v/o relative to the standard MXFP8 scope, while all other
 ModelOpt-eligible layers stay unchanged. A prior QKV run showed
 probability-ratio outliers, so this is performance/correctness validation, not

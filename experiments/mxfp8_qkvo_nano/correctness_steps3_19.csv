@@ -1,0 +1,6 @@
+Exp,Wandb link,Step window,Valid count,Mean token_mult_prob_error,Max token_mult_prob_error,Mean max_seq_mult_prob_error,Max max_seq_mult_prob_error,Mean gen_kl_error,Mean reward,Max masked sequences
+BF16,https://wandb.ai/nvidia/sna-mxfp8-qkvo-nano/runs/60ayvb27,3-19 inclusive,17,1.017100,1.025401,1.021505,1.028069,0.000851,0.742647,0
+MoE baseline,https://wandb.ai/nvidia/sna-mxfp8-qkvo-nano/runs/87340q06,3-19 inclusive,17,1.049857,1.087237,1.096141,1.494156,0.004719,0.742647,0
+MoE optimized,https://wandb.ai/nvidia/sna-mxfp8-qkvo-nano/runs/l2zoecxw,3-19 inclusive,17,1.047330,1.068613,1.064957,1.128786,0.004843,0.713235,0
+QKVO baseline,https://wandb.ai/nvidia/sna-mxfp8-qkvo-nano/runs/o7oz28v8,3-19 inclusive,17,2.440699,23.755907,12.030831,177.545029,0.006380,0.724265,0
+QKVO optimized,https://wandb.ai/nvidia/sna-mxfp8-qkvo-nano/runs/ondgz3au,3-19 inclusive,17,1.300380,3.049968,3.477015,16.018091,0.006709,0.731618,0
