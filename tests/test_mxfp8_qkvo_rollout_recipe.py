@@ -86,6 +86,9 @@ def test_lyris_launcher_reuses_container_runtime_with_local_source() -> None:
     assert "/opt/nemo_rl_venv/bin/python examples/run_grpo.py" in launcher
     assert "uv run examples/run_grpo.py" not in launcher
     assert "Ray version mismatch before driver launch" in launcher
+    assert "WANDB_AUTH_SOURCE=netrc" in launcher
+    assert "unset WANDB_API_KEY" in launcher
+    assert "wandb.login(verify=True)" in launcher
 
 
 def test_submitter_pulls_branch_without_fetching_unrelated_submodule_refs() -> None:

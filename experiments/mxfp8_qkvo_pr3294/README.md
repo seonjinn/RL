@@ -27,7 +27,9 @@ The launcher runs the local checkout with the nightly container's prebuilt
 Python and Ray environments. It prepends the checkout to `PYTHONPATH`, disables
 worker-venv rebuilds, and verifies the Ray version and imported NeMo-RL source
 before starting the driver. This prevents `uv run` from replacing the
-container's Ray version with the older version pinned by the PR branch.
+container's Ray version with the older version pinned by the PR branch. When
+`~/.netrc` contains W&B credentials, the launcher prefers them over a stale
+`WANDB_API_KEY` and verifies authentication before model initialization.
 
 ## Run
 

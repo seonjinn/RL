@@ -105,6 +105,12 @@ export WANDB_PROJECT=${WANDB_PROJECT:-sna-mxfp8-qkvo-refit-pr3294}
 export COMMAND="set -euo pipefail
 cd '$REPO'
 if [[ -f \"\$HOME/.nemo_rl_tokens\" ]]; then source \"\$HOME/.nemo_rl_tokens\"; fi
+if grep -Eq 'machine[[:space:]]+api\.wandb\.ai' \"\$HOME/.netrc\" 2>/dev/null; then
+  unset WANDB_API_KEY
+  echo WANDB_AUTH_SOURCE=netrc
+else
+  echo WANDB_AUTH_SOURCE=environment
+fi
 mkdir -p '$LOG_DIR'
 export HF_HOME='$HF_HOME'
 export HF_DATASETS_CACHE='$HF_DATASETS_CACHE'
@@ -148,6 +154,9 @@ case \"\$DRIVER_NRL_SOURCE\" in
     exit 3
     ;;
 esac
+if [[ '$WANDB_MODE' != offline && '$WANDB_MODE' != disabled ]]; then
+  /opt/nemo_rl_venv/bin/python -c 'import wandb; assert wandb.login(verify=True), \"W&B login verification failed\"'
+fi
 /opt/nemo_rl_venv/bin/python examples/run_grpo.py \
   --config '$CONFIG_PATH' \
   grpo.max_num_steps='$MAX_STEPS' \
