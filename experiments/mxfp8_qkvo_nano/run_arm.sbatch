@@ -14,14 +14,15 @@ set -euo pipefail
 : "${REFIT_OPT:?REFIT_OPT is required}"
 : "${RUN_NAME:?RUN_NAME is required}"
 : "${MAX_STEPS:?MAX_STEPS is required}"
+: "${NUM_NODES:?NUM_NODES is required}"
 : "${GPUS_PER_NODE:?GPUS_PER_NODE is required}"
+: "${EXPECTED_REPO_SHA:?EXPECTED_REPO_SHA is required}"
 
 BASE=${BASE:-/lustre/fsw/coreai_dlalgo_llm/users/sna}
 REPO=${REPO:-$BASE/RL-mxfp8-qkvo-pr3294-ab}
 WORK=${WORK:-$BASE/experiments/mxfp8-qkvo-nano}
 CONTAINER=${CONTAINER:-$BASE/containers/nemo_rl_nightly.sqsh}
 NANO_MODEL_PATH=${NANO_MODEL_PATH:-/lustre/fsw/coreai_dlalgo_llm/users/sna/models/nemotron-nano3/Ultra-SFTb2-512K-hermes20k-lr2e-5-iter_0005000/hf}
-CONTAINER_RESOLVED=$(readlink -f "$CONTAINER")
 CONFIG_PATH=examples/configs/recipes/llm/${CONFIG_NAME}.yaml
 EXP_DIR=$WORK/results/$RUN_NAME
 LOG_DIR=$EXP_DIR/logs
@@ -48,15 +49,37 @@ case "$REFIT_OPT" in
     ;;
 esac
 
-VLLM_BACKEND_OVERRIDE=
-if [[ "$ARM" == "bf16" ]]; then
-  VLLM_BACKEND_OVERRIDE="++policy.generation.vllm_kwargs.moe_backend=triton"
-fi
+case "$ARM" in
+  bf16)
+    ROLLOUT_PRECISION=bf16
+    QUANTIZATION_SCOPE=none
+    VLLM_BACKEND_OVERRIDE="++policy.generation.vllm_kwargs.moe_backend=triton"
+    ;;
+  moe-baseline | moe-optimized)
+    ROLLOUT_PRECISION=mxfp8
+    QUANTIZATION_SCOPE=moe-only
+    VLLM_BACKEND_OVERRIDE=
+    ;;
+  qkvo-baseline | qkvo-optimized)
+    ROLLOUT_PRECISION=mxfp8
+    QUANTIZATION_SCOPE=moe+qkvo
+    VLLM_BACKEND_OVERRIDE=
+    ;;
+  *)
+    echo "Unsupported arm: $ARM" >&2
+    exit 2
+    ;;
+esac
 
-test -d "$REPO/.git"
+git -C "$REPO" rev-parse --git-dir >/dev/null
 test -f "$REPO/$CONFIG_PATH"
 test -f "$NANO_MODEL_PATH/config.json"
-test -f "$CONTAINER_RESOLVED"
+test -f "$CONTAINER"
+ACTUAL_REPO_SHA=$(git -C "$REPO" rev-parse HEAD)
+if [[ "$ACTUAL_REPO_SHA" != "$EXPECTED_REPO_SHA" ]]; then
+  echo "Repository changed after submission: expected $EXPECTED_REPO_SHA, got $ACTUAL_REPO_SHA" >&2
+  exit 3
+fi
 mkdir -p "$WORK/slurm" "$LOG_DIR" "$BASE/uv_cache/mxfp8-qkvo-nano"
 
 if [[ -f "$HOME/.nemo_rl_tokens" ]]; then
@@ -86,8 +109,9 @@ fi
 
 export CONTAINER
 export MOUNTS=${CONTAINER_MOUNTS:-/lustre:/lustre,/project:/project}
+export NUM_NODES
 export GPUS_PER_NODE
-export HF_HOME=$BASE/hf_home
+export HF_HOME=${NRL_HF_HOME:-$BASE/hf_home}
 export HF_DATASETS_CACHE=$HF_HOME/datasets
 export HF_HUB_CACHE=$HF_HOME/hub
 export TRANSFORMERS_CACHE=$HF_HOME/hub
@@ -113,20 +137,36 @@ fi
 
 export WANDB_MODE=${WANDB_MODE:-online}
 export WANDB_PROJECT=${WANDB_PROJECT:-sna-mxfp8-qkvo-nano}
+export WANDB_ENTITY=${WANDB_ENTITY:-nvidia}
+export EXPERIMENT_CLUSTER=${EXPERIMENT_CLUSTER:-unknown}
+export TENSORBOARD_ENABLED=${TENSORBOARD_ENABLED:-True}
 
 {
   echo "arm=$ARM"
   echo "config=$CONFIG_PATH"
-  echo "repo_sha=$(git -C "$REPO" rev-parse HEAD)"
-  echo "container=$CONTAINER_RESOLVED"
+  echo "repo_sha=$ACTUAL_REPO_SHA"
+  echo "container=$CONTAINER"
   echo "model_path=$NANO_MODEL_PATH"
+  echo "cluster=$EXPERIMENT_CLUSTER"
+  echo "nodes=$NUM_NODES"
+  echo "gpus_per_node=$GPUS_PER_NODE"
+  echo "total_gpus=$((NUM_NODES * GPUS_PER_NODE))"
   echo "max_steps=$MAX_STEPS"
   echo "train_global_batch_size=16"
   echo "seed=42"
   echo "real_importance_sampling=true"
+  echo "rollout_precision=$ROLLOUT_PRECISION"
+  echo "quantization_scope=$QUANTIZATION_SCOPE"
   echo "vllm_tensor_parallel_size=1"
   echo "vllm_gpu_memory_utilization=0.5"
   echo "vllm_backend_override=$VLLM_BACKEND_OVERRIDE"
+  echo "megatron_tensor_parallel_size=2"
+  echo "megatron_pipeline_parallel_size=2"
+  echo "megatron_context_parallel_size=2"
+  echo "megatron_expert_parallel_size=8"
+  echo "wandb_entity=$WANDB_ENTITY"
+  echo "wandb_project=$WANDB_PROJECT"
+  echo "tensorboard_enabled=$TENSORBOARD_ENABLED"
   echo "pinned_reference_swap=false"
   echo "refit_prequantize=$PREQUANTIZE"
   echo "refit_persistent_ipc_buffers=$PERSISTENT_IPC"
@@ -155,6 +195,7 @@ export VLLM_CACHE_ROOT='$VLLM_CACHE_ROOT'
 export NVTE_CUDA_ARCHS='$NVTE_CUDA_ARCHS'
 export WANDB_MODE='$WANDB_MODE'
 export WANDB_PROJECT='$WANDB_PROJECT'
+export WANDB_ENTITY='$WANDB_ENTITY'
 export NRL_MXFP8_BATCHED_SHUFFLE='$NRL_MXFP8_BATCHED_SHUFFLE'
 export NRL_REFIT_CACHED_LOADERS='$NRL_REFIT_CACHED_LOADERS'
 export NRL_MXFP8_SHUFFLE_VERIFY=0
@@ -196,9 +237,9 @@ fi
   grpo.seed=42 \
   policy.model_name='$NANO_MODEL_PATH' \
   policy.tokenizer.name='$NANO_MODEL_PATH' \
-  cluster.num_nodes=4 \
-  cluster.gpus_per_node=4 \
-  cluster.segment_size=4 \
+  cluster.num_nodes='$NUM_NODES' \
+  cluster.gpus_per_node='$GPUS_PER_NODE' \
+  cluster.segment_size='$NUM_NODES' \
   policy.train_global_batch_size=16 \
   loss_fn.force_on_policy_ratio=false \
   loss_fn.use_importance_sampling_correction=true \
@@ -215,9 +256,10 @@ fi
   logger.log_dir='$LOG_DIR' \
   logger.wandb_enabled=True \
   logger.wandb.project='$WANDB_PROJECT' \
+  logger.wandb.entity='$WANDB_ENTITY' \
   logger.wandb.name='$RUN_NAME' \
   logger.monitor_gpus=True \
-  logger.tensorboard_enabled=True \
+  logger.tensorboard_enabled='$TENSORBOARD_ENABLED' \
   2>&1 | tee '$RUN_LOG'"
 
 cd "$REPO"

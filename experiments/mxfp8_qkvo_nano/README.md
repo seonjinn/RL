@@ -23,9 +23,11 @@ a recommended default.
 All arms use TP2, PP2, CP2, and EP8 from the canonical
 `grpo-nanov3-30BA3B-2n8g-megatron-pack-cp.yaml` trainer recipe. The MXFP8
 overlays use `4n4g` filenames to reflect the effective Lyris allocation.
-The Lyris allocation is 4 nodes with 4 GB200 GPUs per node. Every arm uses
-vLLM TP1, `gpu_memory_utilization=0.5`, train GBS 16, seed 42, real importance
-sampling, and checkpointing disabled.
+The validated Lyris allocation is 4 nodes with 4 GB200 GPUs per node. The
+GCP-NRT profile maps the same 16-GPU application topology to 2 nodes with
+8 B200 GPUs per node. Every arm uses vLLM TP1,
+`gpu_memory_utilization=0.5`, train GBS 16, seed 42, real importance sampling,
+and checkpointing disabled.
 
 The BF16 arm uses Triton for the MoE kernel because that is the refit-compatible
 BF16 path in the current vLLM container. MXFP8 uses its supported ModelOpt
@@ -58,6 +60,15 @@ test-only submission:
 ACTION=submit ./experiments/mxfp8_qkvo_nano/submit_suite.sh
 ```
 
+On GCP-NRT, use the cluster profile. It defaults to `ACTION=test-only`,
+2 B200 nodes, `--gpus-per-node=8`, a four-hour wall time, and the
+`nvidia/sna-mxfp8-qkvo-nano-gcp-nrt` W&B project:
+
+```bash
+./experiments/mxfp8_qkvo_nano/submit_gcp_nrt.sh
+ACTION=submit ./experiments/mxfp8_qkvo_nano/submit_gcp_nrt.sh
+```
+
 Select one or more comma-separated arms:
 
 ```bash
@@ -71,4 +82,10 @@ Logs, manifests, and results default to:
 
 ```text
 /lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/mxfp8-qkvo-nano
+```
+
+The GCP-NRT profile writes to:
+
+```text
+/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna/experiments/mxfp8-qkvo-nano-gcp-nrt
 ```
