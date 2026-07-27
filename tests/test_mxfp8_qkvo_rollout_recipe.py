@@ -114,9 +114,7 @@ def test_submitter_includes_selectable_bf16_baseline() -> None:
 
 
 def test_bf16_baseline_keeps_matched_qwen_topology() -> None:
-    bf16_config = _load_resolved_yaml(
-        PERF_CONFIG_DIR / "grpo-qwen3-30ba3b-4n4g.yaml"
-    )
+    bf16_config = _load_resolved_yaml(PERF_CONFIG_DIR / "grpo-qwen3-30ba3b-4n4g.yaml")
     mxfp8_config = _load_resolved_yaml(BASE_RECIPE)
     launcher = (
         PROJECT_ROOT / "experiments/mxfp8_qkvo_pr3294/run_arm.sbatch"
@@ -132,9 +130,7 @@ def test_bf16_baseline_keeps_matched_qwen_topology() -> None:
         assert config["cluster"]["num_nodes"] == 4
         assert config["cluster"]["segment_size"] == 4
 
-    assert (
-        bf16_config["policy"]["generation"]["vllm_kwargs"]["moe_backend"] == "triton"
-    )
+    assert bf16_config["policy"]["generation"]["vllm_kwargs"]["moe_backend"] == "triton"
     assert "policy.train_global_batch_size=2048" in launcher
     assert "loss_fn.force_on_policy_ratio=false" in launcher
     assert "loss_fn.use_importance_sampling_correction=true" in launcher

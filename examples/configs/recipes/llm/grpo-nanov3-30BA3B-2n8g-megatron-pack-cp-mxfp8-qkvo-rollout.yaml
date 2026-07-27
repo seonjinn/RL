@@ -1,0 +1,11 @@
+defaults: ./grpo-nanov3-30BA3B-2n8g-megatron-pack-cp-mxfp8-rollout.yaml
+checkpointing:
+  checkpoint_dir: results/grpo-nanov3-30BA3B-2n8g-megatron-pack-cp-mxfp8-qkvo-rollout
+policy:
+  generation:
+    vllm_cfg:
+      quantization_ignored_layer_kws: []
+logger:
+  log_dir: logs/grpo-nanov3-30BA3B-2n8g-megatron-pack-cp-mxfp8-qkvo-rollout
+  wandb:
+    name: grpo-nanov3-30BA3B-2n8g-megatron-pack-cp-mxfp8-qkvo-rollout
