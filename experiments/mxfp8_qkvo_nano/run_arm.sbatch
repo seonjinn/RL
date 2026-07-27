@@ -168,11 +168,11 @@ git submodule status --recursive
 RAY_CLI_VERSION=\$(ray --version | sed -n 's/^ray, version //p')
 DRIVER_RAY_VERSION=\$(/opt/nemo_rl_venv/bin/python -c 'import ray; print(ray.__version__)')
 DRIVER_NRL_SOURCE=\$(/opt/nemo_rl_venv/bin/python -c 'import nemo_rl; print(nemo_rl.__file__)')
-DRIVER_VLLM_VERSION=\$(/opt/nemo_rl_venv/bin/python -c 'import vllm; print(vllm.__version__)')
+VLLM_WORKER_VERSION=\$(uv run --locked --extra vllm --directory '$REPO' python -c 'import vllm; print(vllm.__version__)')
 echo RAY_CLI_VERSION=\$RAY_CLI_VERSION
 echo DRIVER_RAY_VERSION=\$DRIVER_RAY_VERSION
 echo DRIVER_NRL_SOURCE=\$DRIVER_NRL_SOURCE
-echo DRIVER_VLLM_VERSION=\$DRIVER_VLLM_VERSION
+echo VLLM_WORKER_VERSION=\$VLLM_WORKER_VERSION
 if [[ \"\$RAY_CLI_VERSION\" != \"\$DRIVER_RAY_VERSION\" ]]; then
   echo 'Ray version mismatch before driver launch' >&2
   exit 3
@@ -184,7 +184,7 @@ case \"\$DRIVER_NRL_SOURCE\" in
     exit 3
     ;;
 esac
-/opt/nemo_rl_venv/bin/python -c 'from vllm.model_executor.layers.quantization.modelopt import ModelOptMxFp8FusedMoE, ModelOptMxFp8LinearMethod; assert all(hasattr(ModelOptMxFp8FusedMoE, name) for name in (\"create_weights\", \"process_weights_after_loading\", \"apply_monolithic\")); assert hasattr(ModelOptMxFp8LinearMethod, \"process_weights_after_loading\")'
+uv run --locked --extra vllm --directory '$REPO' python -c 'from vllm.model_executor.layers.quantization.modelopt import ModelOptMxFp8FusedMoE, ModelOptMxFp8LinearMethod; assert all(hasattr(ModelOptMxFp8FusedMoE, name) for name in (\"create_weights\", \"process_weights_after_loading\", \"apply_monolithic\")); assert hasattr(ModelOptMxFp8LinearMethod, \"process_weights_after_loading\")'
 if [[ '$WANDB_MODE' != offline && '$WANDB_MODE' != disabled ]]; then
   /opt/nemo_rl_venv/bin/python -c 'import wandb; assert wandb.login(verify=True), \"W&B login verification failed\"'
 fi

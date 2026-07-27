@@ -175,7 +175,15 @@ def test_launcher_enforces_matched_arm_settings_and_nightly_preflight() -> None:
     assert "/opt/nemo_rl_venv/bin/python examples/run_grpo.py" in launcher
     assert "Ray version mismatch before driver launch" in launcher
     assert "Driver did not import NeMo-RL from the experiment checkout" in launcher
-    assert "DRIVER_VLLM_VERSION" in launcher
+    assert "VLLM_WORKER_VERSION" in launcher
+    assert (
+        "uv run --locked --extra vllm --directory '$REPO' python -c "
+        "'import vllm; print(vllm.__version__)'" in launcher
+    )
+    assert (
+        "/opt/nemo_rl_venv/bin/python -c 'import vllm; print(vllm.__version__)'"
+        not in launcher
+    )
     assert "ModelOptMxFp8FusedMoE" in launcher
     assert "ModelOptMxFp8LinearMethod" in launcher
     assert "WANDB_AUTH_SOURCE=netrc-host" in launcher
