@@ -15,6 +15,7 @@
 import asyncio
 import copy
 import gc
+import json
 import logging
 import threading
 import time
@@ -437,6 +438,15 @@ class VllmAsyncGenerationWorkerImpl(
         if self._sparse_refit_receiver is not None:
             hostnames = await self.llm.collective_rpc("report_node_hostname", args=())
             self._sparse_refit_receiver.set_worker_hostnames(hostnames)
+        identities = await self.llm.collective_rpc(
+            "get_nemorl_runtime_identity", args=tuple()
+        )
+        for identity in identities:
+            print(
+                "NEMORL_VLLM_RUNTIME_IDENTITY="
+                + json.dumps(identity, sort_keys=True, separators=(",", ":")),
+                flush=True,
+            )
 
     async def get_reserved_url(self) -> Optional[str]:
         """Return the URL from the reserved socket, available before model loading."""

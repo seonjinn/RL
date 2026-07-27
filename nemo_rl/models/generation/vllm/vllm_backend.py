@@ -249,6 +249,14 @@ class VllmInternalWorkerExtension:
         """Return the host shared by worker processes on this node."""
         return socket.gethostname()
 
+    def get_nemorl_runtime_identity(self) -> dict[str, object]:
+        """Return post-initialization SpecDec and CUDA Graph identity."""
+        from nemo_rl.models.generation.vllm.runtime_identity import (
+            build_vllm_runtime_identity,
+        )
+
+        return build_vllm_runtime_identity(self.model_runner)
+
     def get_zmq_address(self):
         """Get the ZMQ address for the current device."""
         return f"ipc:///tmp/{self.report_device_id()}.sock"

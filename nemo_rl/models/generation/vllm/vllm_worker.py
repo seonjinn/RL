@@ -14,6 +14,7 @@
 
 import copy
 import gc
+import json
 import logging
 import os
 import sys
@@ -756,6 +757,15 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
             )
         if self._sparse_refit_receiver is not None:
             self._sparse_refit_receiver.start_sync_server()
+        identities = self.llm.collective_rpc(
+            "get_nemorl_runtime_identity", args=tuple()
+        )
+        for identity in identities:
+            print(
+                "NEMORL_VLLM_RUNTIME_IDENTITY="
+                + json.dumps(identity, sort_keys=True, separators=(",", ":")),
+                flush=True,
+            )
 
     def init_collective(
         self,
