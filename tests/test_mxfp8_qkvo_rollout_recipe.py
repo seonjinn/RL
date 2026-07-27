@@ -99,3 +99,13 @@ def test_submitter_pulls_branch_without_fetching_unrelated_submodule_refs() -> N
     assert "fetch.recurseSubmodules=false" in submitter
     assert "pull --ff-only --recurse-submodules=no" in submitter
     assert "submodule update --init --recursive" in submitter
+
+
+def test_submitter_includes_selectable_bf16_baseline() -> None:
+    submitter = (
+        PROJECT_ROOT / "experiments/mxfp8_qkvo_pr3294/submit_suite.sh"
+    ).read_text(encoding="utf-8")
+
+    assert '"bf16:grpo-qwen3-30ba3b-4n4g:0"' in submitter
+    assert "ARM_FILTER=${ARM_FILTER:-}" in submitter
+    assert 'arm_is_selected "$ARM"' in submitter

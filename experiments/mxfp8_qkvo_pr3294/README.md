@@ -8,6 +8,7 @@ included in MXFP8 quantization.
 
 | Arm | Recipe | PR refit optimizations |
 | --- | --- | --- |
+| `bf16` | BF16 rollout, Triton MoE backend | off |
 | `moe-baseline` | standard MXFP8 rollout | off |
 | `moe-optimized` | standard MXFP8 rollout | on |
 | `qkvo-baseline` | QKVO-inclusive MXFP8 rollout | off |
@@ -17,6 +18,11 @@ All arms use Qwen3-30B-A3B, 4 nodes with 4 GB200 GPUs per node, GBS 2048,
 seed 42, real importance sampling, vLLM TP1, sleep level 1, and a fixed 4 GiB
 refit buffer. The pinned reference-policy swap stays disabled so the comparison
 isolates the refit path.
+
+The BF16 arm is the repository's canonical performance recipe. It uses Triton
+for MoE generation because the MXFP8 implementation requires its supported
+FlashInfer TRTLLM path. This backend difference is part of the precision-path
+comparison and must be disclosed when interpreting generation time.
 
 The optimized arms enable trainer-side prequantization, persistent IPC staging
 buffers, slim post-refit offload, batched MoE shuffle, and cached weight-loader
@@ -39,6 +45,15 @@ AWS-DFW:
 ```bash
 ACTION=test-only MAX_STEPS=20 ./experiments/mxfp8_qkvo_pr3294/submit_suite.sh
 ACTION=submit MAX_STEPS=20 ./experiments/mxfp8_qkvo_pr3294/submit_suite.sh
+```
+
+Submit only the BF16 baseline:
+
+```bash
+ARM_FILTER=bf16 \
+ACTION=submit \
+MAX_STEPS=20 \
+./experiments/mxfp8_qkvo_pr3294/submit_suite.sh
 ```
 
 OCI-HSG:

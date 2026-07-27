@@ -17,6 +17,7 @@ DEPENDENCY=${DEPENDENCY:-}
 JOB_PREFIX=${JOB_PREFIX:-mxfp8-pr3294}
 ACTION=${ACTION:-test-only}
 MAX_STEPS=${MAX_STEPS:-20}
+ARM_FILTER=${ARM_FILTER:-}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
 BATCH_SCRIPT=$REPO/experiments/mxfp8_qkvo_pr3294/run_arm.sbatch
 
@@ -41,18 +42,37 @@ mkdir -p "$WORK/slurm" "$WORK/manifests"
 export CONTAINER_MOUNTS
 
 ARMS=(
+  "bf16:grpo-qwen3-30ba3b-4n4g:0"
   "moe-baseline:grpo-qwen3-30ba3b-4n4g-mxfp8-rollout:0"
   "moe-optimized:grpo-qwen3-30ba3b-4n4g-mxfp8-rollout:1"
   "qkvo-baseline:grpo-qwen3-30ba3b-4n4g-mxfp8-qkvo-rollout:0"
   "qkvo-optimized:grpo-qwen3-30ba3b-4n4g-mxfp8-qkvo-rollout:1"
 )
 
+arm_is_selected() {
+  local arm=$1
+  local selected_arm
+  local -a selected_arms
+
+  [[ -z "$ARM_FILTER" ]] && return 0
+  IFS=, read -r -a selected_arms <<<"$ARM_FILTER"
+  for selected_arm in "${selected_arms[@]}"; do
+    [[ "$selected_arm" == "$arm" ]] && return 0
+  done
+  return 1
+}
+
 REPO_SHA=$(git -C "$REPO" rev-parse HEAD)
 MANIFEST=$WORK/manifests/submission-$RUN_SUFFIX.tsv
 printf 'arm\taction\tjob_id\trepo_sha\trun_name\n' >"$MANIFEST"
+selected_count=0
 
 for arm_spec in "${ARMS[@]}"; do
   IFS=: read -r ARM CONFIG_NAME REFIT_OPT <<<"$arm_spec"
+  if ! arm_is_selected "$ARM"; then
+    continue
+  fi
+  selected_count=$((selected_count + 1))
   RUN_NAME="${JOB_PREFIX}-${ARM}-${MAX_STEPS}step-${RUN_SUFFIX}"
 
   args=(
@@ -83,5 +103,10 @@ for arm_spec in "${ARMS[@]}"; do
   printf '%s\t%s\t%s\t%s\t%s\n' \
     "$ARM" "$ACTION" "${job_id:-n/a}" "$REPO_SHA" "$RUN_NAME" | tee -a "$MANIFEST"
 done
+
+if [[ "$selected_count" -eq 0 ]]; then
+  echo "ARM_FILTER did not match any arm: $ARM_FILTER" >&2
+  exit 2
+fi
 
 echo "manifest=$MANIFEST"
