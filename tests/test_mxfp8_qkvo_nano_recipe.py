@@ -197,6 +197,7 @@ def test_launcher_enforces_matched_arm_settings_and_nightly_preflight() -> None:
     assert 'test -d "$REPO/.git"' not in launcher
     assert 'if [[ "$ACTUAL_REPO_SHA" != "$EXPECTED_REPO_SHA" ]]' in launcher
     assert "export WANDB_ENTITY=${WANDB_ENTITY:-nvidia}" in launcher
+    assert "+logger.wandb.entity='$WANDB_ENTITY'" in launcher
     assert 'echo "cluster=$EXPERIMENT_CLUSTER"' in launcher
     assert 'echo "nodes=$NUM_NODES"' in launcher
 

@@ -256,7 +256,7 @@ fi
   logger.log_dir='$LOG_DIR' \
   logger.wandb_enabled=True \
   logger.wandb.project='$WANDB_PROJECT' \
-  logger.wandb.entity='$WANDB_ENTITY' \
+  +logger.wandb.entity='$WANDB_ENTITY' \
   logger.wandb.name='$RUN_NAME' \
   logger.monitor_gpus=True \
   logger.tensorboard_enabled='$TENSORBOARD_ENABLED' \
