@@ -13,15 +13,21 @@ included in MXFP8 quantization.
 | `qkvo-baseline` | QKVO-inclusive MXFP8 rollout | off |
 | `qkvo-optimized` | QKVO-inclusive MXFP8 rollout | on |
 
-All arms use Qwen3-30B-A3B, 4 AWS-DFW nodes with 4 GB200 GPUs per node,
-GBS 2048, seed 42, real importance sampling, vLLM TP1, sleep level 1, and a
-fixed 4 GiB refit buffer. The pinned reference-policy swap stays disabled so
-the comparison isolates the refit path.
+All arms use Qwen3-30B-A3B, 4 nodes with 4 GB200 GPUs per node, GBS 2048,
+seed 42, real importance sampling, vLLM TP1, sleep level 1, and a fixed 4 GiB
+refit buffer. The pinned reference-policy swap stays disabled so the comparison
+isolates the refit path.
 
 The optimized arms enable trainer-side prequantization, persistent IPC staging
 buffers, slim post-refit offload, batched MoE shuffle, and cached weight-loader
 replay. The baseline arms explicitly disable all five paths on the same PR
 commit.
+
+The launcher runs the local checkout with the nightly container's prebuilt
+Python and Ray environments. It prepends the checkout to `PYTHONPATH`, disables
+worker-venv rebuilds, and verifies the Ray version and imported NeMo-RL source
+before starting the driver. This prevents `uv run` from replacing the
+container's Ray version with the older version pinned by the PR branch.
 
 ## Run
 

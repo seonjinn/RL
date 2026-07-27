@@ -34,7 +34,8 @@ case "$ACTION" in
 esac
 
 test -x "$BATCH_SCRIPT"
-git -C "$REPO" pull --ff-only
+git -C "$REPO" -c fetch.recurseSubmodules=false \
+  pull --ff-only --recurse-submodules=no
 git -C "$REPO" submodule update --init --recursive
 mkdir -p "$WORK/slurm" "$WORK/manifests"
 export CONTAINER_MOUNTS

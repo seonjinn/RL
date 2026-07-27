@@ -125,12 +125,30 @@ export WANDB_PROJECT='$WANDB_PROJECT'
 export NRL_MXFP8_BATCHED_SHUFFLE='$NRL_MXFP8_BATCHED_SHUFFLE'
 export NRL_REFIT_CACHED_LOADERS='$NRL_REFIT_CACHED_LOADERS'
 export NRL_MXFP8_SHUFFLE_VERIFY=0
+export PYTHONPATH='$REPO':\${PYTHONPATH:-}
+export NRL_FORCE_REBUILD_VENVS=false
 echo RUN_NAME='$RUN_NAME'
 echo CONFIG_PATH='$CONFIG_PATH'
 echo REPO_SHA=\$(git rev-parse HEAD)
 git submodule status --recursive
-NRL_FORCE_REBUILD_VENVS='${NRL_FORCE_REBUILD_VENVS:-true}' \
-  uv run examples/run_grpo.py \
+RAY_CLI_VERSION=\$(ray --version | sed -n 's/^ray, version //p')
+DRIVER_RAY_VERSION=\$(/opt/nemo_rl_venv/bin/python -c 'import ray; print(ray.__version__)')
+DRIVER_NRL_SOURCE=\$(/opt/nemo_rl_venv/bin/python -c 'import nemo_rl; print(nemo_rl.__file__)')
+echo RAY_CLI_VERSION=\$RAY_CLI_VERSION
+echo DRIVER_RAY_VERSION=\$DRIVER_RAY_VERSION
+echo DRIVER_NRL_SOURCE=\$DRIVER_NRL_SOURCE
+if [[ \"\$RAY_CLI_VERSION\" != \"\$DRIVER_RAY_VERSION\" ]]; then
+  echo 'Ray version mismatch before driver launch' >&2
+  exit 3
+fi
+case \"\$DRIVER_NRL_SOURCE\" in
+  '$REPO'/nemo_rl/*) ;;
+  *)
+    echo 'Driver did not import NeMo-RL from the experiment checkout' >&2
+    exit 3
+    ;;
+esac
+/opt/nemo_rl_venv/bin/python examples/run_grpo.py \
   --config '$CONFIG_PATH' \
   grpo.max_num_steps='$MAX_STEPS' \
   grpo.seed=42 \

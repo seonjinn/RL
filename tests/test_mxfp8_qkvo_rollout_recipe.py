@@ -74,3 +74,25 @@ def test_qkvo_recipe_only_changes_quantization_scope() -> None:
     base_config.pop("defaults")
     qkvo_config.pop("defaults")
     assert qkvo_config == base_config
+
+
+def test_lyris_launcher_reuses_container_runtime_with_local_source() -> None:
+    launcher = (
+        PROJECT_ROOT / "experiments/mxfp8_qkvo_pr3294/run_arm.sbatch"
+    ).read_text(encoding="utf-8")
+
+    assert "export PYTHONPATH='$REPO':" in launcher
+    assert "export NRL_FORCE_REBUILD_VENVS=false" in launcher
+    assert "/opt/nemo_rl_venv/bin/python examples/run_grpo.py" in launcher
+    assert "uv run examples/run_grpo.py" not in launcher
+    assert "Ray version mismatch before driver launch" in launcher
+
+
+def test_submitter_pulls_branch_without_fetching_unrelated_submodule_refs() -> None:
+    submitter = (
+        PROJECT_ROOT / "experiments/mxfp8_qkvo_pr3294/submit_suite.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "fetch.recurseSubmodules=false" in submitter
+    assert "pull --ff-only --recurse-submodules=no" in submitter
+    assert "submodule update --init --recursive" in submitter
