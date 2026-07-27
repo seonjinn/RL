@@ -128,6 +128,14 @@ class MultiWorkerFuture:
 
         return all_results
 
+    def get_unfiltered_results(self) -> list[Any]:
+        """Return one concrete result for every called worker rank."""
+        from ray import ObjectRefGenerator
+
+        if any(isinstance(future, ObjectRefGenerator) for future in self.futures):
+            raise ValueError("Unfiltered results do not support streaming generators")
+        return ray.get(self.futures)
+
 
 class RayWorkerBuilder:
     @ray.remote
@@ -1046,6 +1054,12 @@ class RayWorkerGroup:
         return future_bundle.get_results(
             self, return_generators_as_proxies=return_generators_as_proxies
         )
+
+    def get_all_worker_results_unfiltered(
+        self, future_bundle: MultiWorkerFuture
+    ) -> list[Any]:
+        """Return one result per called worker without replicated-axis filtering."""
+        return future_bundle.get_unfiltered_results()
 
     def shutdown(
         self,

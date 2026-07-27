@@ -50,6 +50,7 @@ from nemo_rl.models.policy.utils import (
     aggregate_per_sample_handles,
     resolve_policy_worker_cls,
 )
+from nemo_rl.models.policy.workers.train_timing import aggregate_train_phase_timings
 from nemo_rl.utils.checkpoint import CheckpointingConfig
 from nemo_rl.utils.flops_tracker import (
     FLOPTracker,
@@ -848,6 +849,14 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             aggregated_results["moe_metrics"] = results[0]["moe_metrics"]
         if "mtp_metrics" in results[0]:
             aggregated_results["mtp_metrics"] = results[0]["mtp_metrics"]
+        timing_results = results
+        if results and "train_phase_timings" in results[0]:
+            timing_results = self.worker_group.get_all_worker_results_unfiltered(
+                futures
+            )
+        train_phase_timings = aggregate_train_phase_timings(timing_results)
+        if train_phase_timings:
+            aggregated_results["train_phase_timings"] = train_phase_timings
 
         if self.flops_tracker is not None:
             aggregated_results["total_flops"] = self.flops_tracker.total_flops

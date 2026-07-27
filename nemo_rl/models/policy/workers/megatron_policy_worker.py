@@ -92,6 +92,7 @@ from nemo_rl.models.policy.interfaces import (
     LogprobOutputSpec,
     ReferenceLogprobOutputSpec,
 )
+from nemo_rl.models.policy.workers.train_timing import TrainPhaseTimer
 from nemo_rl.models.policy.utils import get_runtime_env_for_policy_worker
 from nemo_rl.models.policy.workers.base_policy_worker import AbstractPolicyWorker
 from nemo_rl.models.policy.workers.checkpoint_engine import (
@@ -572,6 +573,8 @@ class MegatronPolicyWorkerImpl(
             "check_dim_skip_keys is only supported by the v2 DTensor worker; "
             "Megatron does not run cross-tokenizer distillation."
         )
+        phase_timer = TrainPhaseTimer.from_env(synchronize=torch.cuda.synchronize)
+        phase_timer.start("setup")
         self.timer.start("train")
         # Note: zero_grad_buffer is called at the start of each global batch iteration
         # in the loop below, so we don't need to call it here.
@@ -615,8 +618,13 @@ class MegatronPolicyWorkerImpl(
             saved_extra_state = None
             reenable_forward_pre_hook_after_eval = False
 
+        phase_timer.stop("setup")
+        phase_timer.start("entry_barrier")
         torch.distributed.barrier()  # pragma: no cover
+        phase_timer.stop("entry_barrier")
+        phase_timer.start("entry_cuda_sync")
         torch.cuda.synchronize()  # pragma: no cover
+        phase_timer.stop("entry_cuda_sync")
         _train_t0 = time.perf_counter()  # pragma: no cover
 
         with ctx:
@@ -624,6 +632,7 @@ class MegatronPolicyWorkerImpl(
             losses = []
             total_num_microbatches = 0
             for gb_idx in range(num_global_batches):
+                phase_timer.start("batch_preparation")
                 gb_result = process_global_batch(
                     data,
                     loss_fn=loss_fn,
@@ -669,9 +678,11 @@ class MegatronPolicyWorkerImpl(
                     sampling_params=self.sampling_params,
                     draft_model=self.draft_model,
                 )
+                phase_timer.stop("batch_preparation")
 
                 rerun_state_machine = get_rerun_state_machine()
                 while rerun_state_machine.should_run_forward_backward(data_iterator):
+                    phase_timer.start("zero_grad_setup")
                     # Set grad to zero. For MXFP8 overlap eval, the param and
                     # grad buffers are shared and pre-hooks are disabled above.
                     # Avoid zeroing the shared param buffer before forward-only eval.
@@ -696,8 +707,10 @@ class MegatronPolicyWorkerImpl(
                     # Set mtp_grad_scale_func for MTP loss scaling (scales by valid tokens)
                     mtp_scale = 1.0 / global_valid_toks.clamp(min=1).float()
                     self._set_mtp_grad_scale_func(lambda: mtp_scale)
+                    phase_timer.stop("zero_grad_setup")
 
                     # Forward pass.
+                    phase_timer.start("forward_backward")
                     draft_enabled = "draft" in self.cfg and self.cfg["draft"]["enabled"]
                     use_router_replay = _should_use_router_replay(
                         enabled=self._router_replay_enabled,
@@ -727,7 +740,9 @@ class MegatronPolicyWorkerImpl(
                             use_router_replay=use_router_replay,
                             router_replay_train=not eval_mode,
                         )
+                    phase_timer.stop("forward_backward")
 
+                phase_timer.start("post_forward_backward")
                 # Clear mtp_grad_scale_func after the forward-backward pass so
                 # it doesn't get serialized in the run_config.yaml when saving
                 self._set_mtp_grad_scale_func(None)
@@ -738,8 +753,10 @@ class MegatronPolicyWorkerImpl(
                 # Empty unused memory.
                 if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
                     torch.cuda.empty_cache()
+                phase_timer.stop("post_forward_backward")
 
                 # Update parameters.
+                phase_timer.start("optimizer")
                 if not eval_mode:
                     update_successful, grad_norm, num_zeros_in_grad = (
                         self.optimizer.step()
@@ -753,7 +770,9 @@ class MegatronPolicyWorkerImpl(
                 else:
                     update_successful, grad_norm, num_zeros_in_grad = (True, 0.0, 0.0)
                     mtp_grad_norm = None
+                phase_timer.stop("optimizer")
 
+                phase_timer.start("model_parallel_reductions")
                 pg_collection = get_pg_collection(self.model)
 
                 # when freezing sub-models we may have a mixture of successful and unsucessful ranks,
@@ -791,7 +810,9 @@ class MegatronPolicyWorkerImpl(
                 # Empty unused memory.
                 if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 2:
                     torch.cuda.empty_cache()
+                phase_timer.stop("model_parallel_reductions")
 
+                phase_timer.start("loss_metric_processing")
                 if parallel_state.is_pipeline_last_stage(ignore_virtual=True):
                     # keep all microbatch metrics to be normalized later
                     gb_loss_metrics = []
@@ -814,8 +835,10 @@ class MegatronPolicyWorkerImpl(
 
                 else:
                     gb_loss_metrics = None
+                phase_timer.stop("loss_metric_processing")
 
                 # Broadcast loss metrics from last stage to all stages
+                phase_timer.start("loss_metric_broadcast")
                 gb_loss_metrics = broadcast_loss_metrics_from_last_stage(
                     gb_loss_metrics
                 )
@@ -824,7 +847,9 @@ class MegatronPolicyWorkerImpl(
 
                 all_mb_metrics.extend(gb_loss_metrics)
                 losses.append(torch.tensor(mb_losses).sum().item())
+                phase_timer.stop("loss_metric_broadcast")
 
+        phase_timer.start("eval_state_restore")
         if saved_extra_state is not None:
             self._restore_model_extra_state_dict(saved_extra_state)
         if reenable_forward_pre_hook_after_eval:
@@ -832,11 +857,17 @@ class MegatronPolicyWorkerImpl(
             # param AG to finish. Keep hooks disabled for that one step so grad
             # accumulation starts from a clean shared param/grad buffer.
             self._disable_forward_pre_hook_until_next_train_step()
+        phase_timer.stop("eval_state_restore")
 
+        phase_timer.start("exit_barrier")
         torch.distributed.barrier()  # pragma: no cover
+        phase_timer.stop("exit_barrier")
+        phase_timer.start("exit_cuda_sync")
         torch.cuda.synchronize()  # pragma: no cover
+        phase_timer.stop("exit_cuda_sync")
         metrics_train_elapsed = time.perf_counter() - _train_t0  # pragma: no cover
 
+        phase_timer.start("scheduler")
         if not eval_mode:
             # Step LR scheduler once per train() call, not per global batch.
             # Megatron's OptimizerParamScheduler.step takes an `increment` in
@@ -844,8 +875,10 @@ class MegatronPolicyWorkerImpl(
             # passing increment=gbs cancels that scaling and one tick == one
             # train() call regardless of batch size.
             self.scheduler.step(increment=gbs)
+        phase_timer.stop("scheduler")
 
         # Aggregate metrics across all microbatches
+        phase_timer.start("aggregate_statistics")
         reduce_loss_across_cp = should_reduce_loss_across_context_parallel(data)
         loss_reduction_group = parallel_state.get_data_parallel_group(
             with_context_parallel=reduce_loss_across_cp
@@ -858,7 +891,9 @@ class MegatronPolicyWorkerImpl(
         mb_metrics = strip_context_parallel_local_loss_metric(
             mb_metrics, enabled=reduce_loss_across_cp
         )
+        phase_timer.stop("aggregate_statistics")
 
+        phase_timer.start("result_materialization")
         metrics = {
             "global_loss": global_loss.cpu(),
             "rank": torch.distributed.get_rank(),
@@ -910,6 +945,10 @@ class MegatronPolicyWorkerImpl(
                 metrics["num_ranks"] = torch.distributed.get_world_size()
             except Exception as e:
                 warnings.warn(f"Failed to compute FLOPs for MFU reporting: {e}")
+        phase_timer.stop("result_materialization")
+        if phase_timer.enabled:
+            phase_timer.metrics["accounted_total"] = phase_timer.total_elapsed
+            metrics["train_phase_timings"] = dict(phase_timer.metrics)
         self.timer.stop("train")
         return metrics
 

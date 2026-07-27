@@ -25,7 +25,11 @@ from nemo_rl.distributed.ray_actor_environment_registry import (
     PY_EXECUTABLES,
 )
 from nemo_rl.distributed.virtual_cluster import RayVirtualCluster
-from nemo_rl.distributed.worker_groups import RayWorkerBuilder, RayWorkerGroup
+from nemo_rl.distributed.worker_groups import (
+    MultiWorkerFuture,
+    RayWorkerBuilder,
+    RayWorkerGroup,
+)
 
 
 @ray.remote
@@ -102,6 +106,26 @@ class MyTestActor:
         resources = {"num_gpus": num_gpus}
         env_vars_update = {"CONFIGURED_WORKER_CALLED": "1"}
         return resources, env_vars_update, init_kwargs_update, {}
+
+
+def test_multi_worker_future_can_return_unfiltered_rank_results(monkeypatch):
+    future_bundle = MultiWorkerFuture(
+        futures=["rank-0-ref", "rank-1-ref", "rank-2-ref", "rank-3-ref"],
+        called_workers=[0, 1, 2, 3],
+        return_from_workers=[0, 2],
+    )
+    monkeypatch.setattr(
+        ray,
+        "get",
+        lambda refs: [f"result-{rank}" for rank, _ in enumerate(refs)],
+    )
+
+    assert future_bundle.get_unfiltered_results() == [
+        "result-0",
+        "result-1",
+        "result-2",
+        "result-3",
+    ]
 
 
 @ray.remote(

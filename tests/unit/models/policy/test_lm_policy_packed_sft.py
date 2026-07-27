@@ -102,6 +102,61 @@ def test_direct_packed_rows_construct_dp_strides_from_source_order():
     }
 
 
+def test_train_aggregates_worker_phase_timing_distribution():
+    policy = _policy()
+    policy.worker_group.get_all_worker_results.return_value = [
+        {
+            "global_loss": torch.tensor(0.5),
+            "grad_norm": torch.tensor(1.0),
+            "all_mb_metrics": {},
+            "train_phase_timings": {"forward_backward": 4.0, "optimizer": 2.0},
+        },
+        {
+            "global_loss": torch.tensor(0.5),
+            "grad_norm": torch.tensor(1.0),
+            "all_mb_metrics": {},
+            "train_phase_timings": {"forward_backward": 6.0, "optimizer": 1.0},
+        },
+    ]
+    policy.worker_group.get_all_worker_results_unfiltered.return_value = [
+        {
+            "rank": 8,
+            "train_phase_timings": {"forward_backward": 4.0, "optimizer": 2.0},
+        },
+        {
+            "rank": 511,
+            "train_phase_timings": {"forward_backward": 8.0, "optimizer": 1.0},
+        },
+        {
+            "rank": 120,
+            "train_phase_timings": {"forward_backward": 6.0, "optimizer": 4.0},
+        },
+        {
+            "rank": 42,
+            "train_phase_timings": {"forward_backward": 10.0, "optimizer": 3.0},
+        },
+    ]
+
+    result = policy.train(_direct_batch(), MagicMock())
+
+    assert result["train_phase_timings"] == {
+        "forward_backward": {
+            "min": pytest.approx(4.0),
+            "mean": pytest.approx(7.0),
+            "median": pytest.approx(7.0),
+            "max": pytest.approx(10.0),
+            "max_rank": 42,
+        },
+        "optimizer": {
+            "min": pytest.approx(1.0),
+            "mean": pytest.approx(2.5),
+            "median": pytest.approx(2.5),
+            "max": pytest.approx(4.0),
+            "max_rank": 120,
+        },
+    }
+
+
 @pytest.mark.parametrize(
     ("policy_kwargs", "gbs", "message"),
     [

@@ -258,6 +258,39 @@ def test_training_with_negative_val_period(mock_components):
     assert mock_components["policy"].train.call_count == 3
 
 
+def test_training_logs_worker_phase_timing_distribution(mock_components):
+    mock_components["master_config"].sft.val_period = 0
+    mock_components["master_config"].sft.max_num_steps = 1
+    mock_components["master_config"].sft.max_num_epochs = 1
+    mock_components["policy"].train.return_value["train_phase_timings"] = {
+        "forward_backward": {
+            "min": 4.0,
+            "mean": 5.0,
+            "median": 5.0,
+            "max": 6.0,
+        }
+    }
+
+    sft_train(
+        mock_components["policy"],
+        mock_components["train_dataloader"],
+        None,
+        mock_components["tokenizer"],
+        mock_components["loss_fn"],
+        mock_components["master_config"],
+        mock_components["logger"],
+        mock_components["checkpointer"],
+        _initial_sft_save_state(),
+    )
+
+    timing_call = next(
+        call
+        for call in mock_components["logger"].log_metrics.call_args_list
+        if call.kwargs.get("prefix") == "timing/train"
+    )
+    assert timing_call.args[0]["worker_train/forward_backward_max"] == 6.0
+
+
 def test_ft_save_period_triggers_periodic_saves(mock_components):
     """ft_save_period triggers checkpoint saves independent of save_period."""
     cfg = mock_components["master_config"]

@@ -44,6 +44,7 @@ from nemo_rl.distributed.virtual_cluster import (
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.interfaces import PolicyInterface
 from nemo_rl.models.policy.lm_policy import Policy
+from nemo_rl.models.policy.workers.train_timing import flatten_train_phase_timings
 from nemo_rl.utils.checkpoint import CheckpointingConfig, CheckpointManager
 from nemo_rl.utils.logger import Logger, LoggerConfig
 from nemo_rl.utils.nsys import maybe_gpu_profile_step
@@ -676,6 +677,10 @@ def sft_train(
                         )
 
             timing_metrics = timer.get_timing_metrics(reduction_op="sum")
+            if "train_phase_timings" in train_results:
+                timing_metrics.update(
+                    flatten_train_phase_timings(train_results["train_phase_timings"])
+                )
 
             print("\n📊 Training Results:")
             print(f"  • Loss: {float(metrics['loss']):.4f}")
