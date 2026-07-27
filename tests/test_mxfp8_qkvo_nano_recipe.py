@@ -177,13 +177,12 @@ def test_launcher_enforces_matched_arm_settings_and_nightly_preflight() -> None:
     assert "Driver did not import NeMo-RL from the experiment checkout" in launcher
     assert "VLLM_WORKER_VERSION" in launcher
     assert (
-        "uv run --locked --extra vllm --directory '$REPO' python -c "
-        "'import vllm; print(vllm.__version__)'" in launcher
+        "VLLM_WORKER_PYTHON=/opt/ray_venvs/"
+        "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker/"
+        "bin/python" in launcher
     )
-    assert (
-        "/opt/nemo_rl_venv/bin/python -c 'import vllm; print(vllm.__version__)'"
-        not in launcher
-    )
+    assert 'test -x \\"\\$VLLM_WORKER_PYTHON\\"' in launcher
+    assert "uv run --locked --extra vllm" not in launcher
     assert "ModelOptMxFp8FusedMoE" in launcher
     assert "ModelOptMxFp8LinearMethod" in launcher
     assert "WANDB_AUTH_SOURCE=netrc-host" in launcher
