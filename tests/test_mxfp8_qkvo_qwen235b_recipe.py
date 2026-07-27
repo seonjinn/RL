@@ -129,6 +129,8 @@ def test_launcher_matches_the_validated_235b_workload() -> None:
     assert 'export WANDB_API_KEY=$WANDB_NETRC_KEY' in launcher
     assert "export WANDB_ENTITY=${WANDB_ENTITY:-nvidia}" in launcher
     assert "/opt/nemo_rl_venv/bin/python examples/run_grpo.py" in launcher
+    assert 'git -C "$REPO" rev-parse --git-dir' in launcher
+    assert 'test -d "$REPO/.git"' not in launcher
     assert "cluster.num_nodes='$NUM_NODES'" in launcher
     assert "cluster.gpus_per_node='$GPUS_PER_NODE'" in launcher
     assert "cluster.segment_size='$NUM_NODES'" in launcher
@@ -148,6 +150,7 @@ def test_gcp_nrt_profile_uses_eight_b200_gpus_per_node() -> None:
     assert "CONTAINER_MOUNTS=${CONTAINER_MOUNTS:-/lustre:/lustre}" in profile
     assert "/.cache/huggingface" in profile
     assert "nemo-rl-nightly-main-20260705.sqsh" in profile
+    assert "experiments/refit-opt-qwen30b/nemo-rl-mxfp8-qkv" in profile
     assert "OccupiedIdleGPUsJobReaper" in profile
 
 

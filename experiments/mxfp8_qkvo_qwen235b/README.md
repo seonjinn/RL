@@ -108,6 +108,6 @@ GCP-NRT does not expose the Slurm `--segment` option. The application-side
 8-node B200 allocation.
 
 The GCP-NRT profile skips recursive submodule initialization. The current
-GCP-NRT Lustre is inode-constrained, while the pinned container already
-provides the runtime dependencies; the sparse experiment checkout supplies the
-NeMo-RL source, recipes, and launch files.
+GCP-NRT Lustre is inode-constrained, so the launcher reuses the existing
+QKVO-specific Git worktree. The pinned container supplies the runtime
+dependencies, while that worktree tracks the exact submitted NeMo-RL commit.

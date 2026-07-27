@@ -68,7 +68,7 @@ case "$ARM" in
     ;;
 esac
 
-test -d "$REPO/.git"
+git -C "$REPO" rev-parse --git-dir >/dev/null
 test -f "$REPO/$CONFIG_PATH"
 test -f "$CONTAINER"
 ACTUAL_REPO_SHA=$(git -C "$REPO" rev-parse HEAD)

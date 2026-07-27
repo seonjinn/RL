@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 export BASE=${BASE:-/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna}
-export REPO=${REPO:-$BASE/RL-mxfp8-qkvo-pr3294-ab}
+export REPO=${REPO:-$BASE/experiments/refit-opt-qwen30b/nemo-rl-mxfp8-qkv}
 export WORK=${WORK:-$BASE/experiments/mxfp8-qkvo-qwen235b-gcp-nrt}
 export CONTAINER=${CONTAINER:-$BASE/mopd_nano_fast/images/nemo-rl-nightly-main-20260705.sqsh}
 export CONTAINER_MOUNTS=${CONTAINER_MOUNTS:-/lustre:/lustre}
