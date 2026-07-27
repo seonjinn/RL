@@ -10,6 +10,8 @@ SLURM_ACCOUNT=${SLURM_ACCOUNT:-nemotron_sw_post}
 PARTITION=${PARTITION:-batch}
 NUM_NODES=${NUM_NODES:-4}
 GPUS_PER_NODE=${GPUS_PER_NODE:-4}
+USE_GRES=${USE_GRES:-1}
+SLURM_NETWORK=${SLURM_NETWORK:-}
 ACTION=${ACTION:-test-only}
 MAX_STEPS=${MAX_STEPS:-20}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
@@ -53,12 +55,17 @@ for arm_spec in "${ARMS[@]}"; do
     --partition="$PARTITION"
     --nodes="$NUM_NODES"
     --ntasks-per-node=1
-    --gres="gpu:$GPUS_PER_NODE"
     --segment="$NUM_NODES"
     --job-name="$RUN_NAME"
     --output="$WORK/slurm/%x-%j.out"
     --export="ALL,ARM=$ARM,CONFIG_NAME=$CONFIG_NAME,REFIT_OPT=$REFIT_OPT,RUN_NAME=$RUN_NAME,MAX_STEPS=$MAX_STEPS,BASE=$BASE,REPO=$REPO,WORK=$WORK,CONTAINER=$CONTAINER,GPUS_PER_NODE=$GPUS_PER_NODE"
   )
+  if [[ "$USE_GRES" == "1" ]]; then
+    args+=(--gres="gpu:$GPUS_PER_NODE")
+  fi
+  if [[ -n "$SLURM_NETWORK" ]]; then
+    args+=(--network="$SLURM_NETWORK")
+  fi
   if [[ -n "$ACTION_ARG" ]]; then
     args+=("$ACTION_ARG")
   fi

@@ -43,6 +43,19 @@ MAX_STEPS=20 \
 ./experiments/mxfp8_qkvo_pr3294/submit_suite.sh
 ```
 
+Lyris:
+
+```bash
+BASE=/lustre/fsw/coreai_dlalgo_llm/users/sna \
+SLURM_ACCOUNT=coreai_dlalgo_llm \
+PARTITION=gb200 \
+USE_GRES=0 \
+SLURM_NETWORK=sharp \
+ACTION=test-only \
+MAX_STEPS=20 \
+./experiments/mxfp8_qkvo_pr3294/submit_suite.sh
+```
+
 Logs and manifests are written below:
 
 ```text
