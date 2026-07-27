@@ -5,6 +5,7 @@ Qwen3-235B-A22B. It measures both the quantization-scope effect and the refit
 optimization effect using five arms.
 
 See [PLAN.md](PLAN.md) for the controlled setup and reporting criteria.
+The completed GCP-NRT B200 measurements are in [RESULTS.md](RESULTS.md).
 
 ## Runtime
 

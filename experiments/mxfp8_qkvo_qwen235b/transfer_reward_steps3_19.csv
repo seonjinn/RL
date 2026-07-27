@@ -1,0 +1,6 @@
+Arm,Job ID,W&B Run,Valid Count,Transfer and Update Time (s),Mean Rollout Reward
+BF16,474462,w425ns70,16,6.542920,0.566406
+MoE baseline,474463,auf703va,16,22.327085,0.566162
+MoE optimized,474464,55dkfjpv,16,7.158831,0.565918
+QKVO baseline,474465,ljul0jic,16,22.632525,0.552124
+QKVO optimized,474466,dwvwsdus,16,7.164441,0.553467
