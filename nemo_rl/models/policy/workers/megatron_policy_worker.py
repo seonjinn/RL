@@ -74,6 +74,7 @@ from nemo_rl.models.megatron.setup import (
     setup_distributed,
     setup_model_and_optimizer,
     setup_reference_model_state,
+    validate_cuda_graph_request,
     validate_and_set_config,
     validate_model_paths,
 )
@@ -106,6 +107,29 @@ from nemo_rl.utils.r3_trace import maybe_r3_trace_stage
 from nemo_rl.utils.timer import Timer
 
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
+
+
+def _import_model_after_cuda_graph_scope_validation(
+    config: PolicyConfig,
+    hf_model_name: str,
+    pretrained_path: str,
+    pt_checkpoint_exists: bool,
+    *,
+    model_post_wrap_hook: Any = None,
+    transformer_layer_spec: Any = None,
+    mamba_stack_spec: Any = None,
+) -> None:
+    """Validate CUDA Graph scope before the potentially expensive model import."""
+    validate_cuda_graph_request(config)
+    handle_model_import(
+        config,
+        hf_model_name,
+        pretrained_path,
+        pt_checkpoint_exists,
+        model_post_wrap_hook=model_post_wrap_hook,
+        transformer_layer_spec=transformer_layer_spec,
+        mamba_stack_spec=mamba_stack_spec,
+    )
 
 
 def _should_use_router_replay(
@@ -328,7 +352,7 @@ class MegatronPolicyWorkerImpl(
         # layer-spec hooks on ``self`` before calling
         # super().__init__() to inject quantization hooks into HF->Megatron
         # import.
-        handle_model_import(
+        _import_model_after_cuda_graph_scope_validation(
             config,
             hf_model_name,
             pretrained_path,

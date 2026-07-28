@@ -1,0 +1,5 @@
+defaults: ../grpo-nanov3-30BA3B-2n8g-megatron-pack-cp.yaml
+checkpointing:
+  enabled: false
+logger:
+  wandb_enabled: true

@@ -14,12 +14,15 @@
 
 import hashlib
 import json
+import logging
 import os
 import threading
 import time
 import warnings
 from typing import Any, Callable, Optional, TypeVar
 
+import megatron.bridge
+import megatron.core
 import torch
 from megatron.bridge import AutoBridge
 from megatron.bridge.models.model_provider import get_model
@@ -59,7 +62,11 @@ from megatron.bridge.utils.vocab_utils import calculate_padded_vocab_size
 from megatron.core import parallel_state
 from megatron.core.process_groups_config import ProcessGroupCollection
 from megatron.core.transformer import MegatronModule
-from megatron.core.transformer.enums import AttnBackend, InferenceCudaGraphScope
+from megatron.core.transformer.enums import (
+    AttnBackend,
+    CudaGraphModule,
+    InferenceCudaGraphScope,
+)
 from megatron.core.transformer.module import Float16Module
 from megatron.core.transformer.transformer_config import TransformerConfig
 from transformers import PreTrainedTokenizerBase
@@ -238,6 +245,127 @@ from nemo_rl.models.policy.utils import (
 from nemo_rl.models.value.config import ValueConfig
 
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
+
+log = logging.getLogger(__name__)
+
+_CUDA_GRAPH_SCOPE_ORDER = (
+    "attn",
+    "mamba",
+    "moe",
+    "moe_router",
+    "moe_preprocess",
+)
+_CUDA_GRAPH_SCOPE_MODULES = frozenset(_CUDA_GRAPH_SCOPE_ORDER)
+
+
+def normalize_cuda_graph_scope(scope: object) -> tuple[str, ...]:
+    """Validate and canonicalize a user-requested per-layer CUDA Graph scope.
+
+    Args:
+        scope: An empty value, a list or tuple of module names, or a comma-separated
+            module-name string supplied through Hydra.
+
+    Returns:
+        The requested modules in MCore's canonical capture order.
+
+    Raises:
+        ValueError: If the scope has unsupported modules, duplicate modules, or an
+            unsupported MoE capture combination.
+    """
+    if scope is None:
+        requested_scope: tuple[object, ...] = ()
+    elif isinstance(scope, str):
+        requested_scope = (
+            () if not scope else tuple(item.strip() for item in scope.split(","))
+        )
+    elif isinstance(scope, (list, tuple)):
+        requested_scope = tuple(scope)
+    else:
+        raise ValueError(
+            "cuda_graph_scope must be a comma-separated string, list, or tuple; "
+            f"got {type(scope).__name__}."
+        )
+
+    if not requested_scope:
+        return ()
+    if not all(isinstance(module, str) and module for module in requested_scope):
+        raise ValueError(
+            "cuda_graph_scope entries must be non-empty strings; "
+            f"got {requested_scope!r}."
+        )
+
+    requested_names = tuple(requested_scope)
+    if len(set(requested_names)) != len(requested_names):
+        raise ValueError(
+            "cuda_graph_scope must not contain duplicate modules; "
+            f"got {requested_names!r}."
+        )
+
+    unknown_modules = set(requested_names) - _CUDA_GRAPH_SCOPE_MODULES
+    if unknown_modules:
+        raise ValueError(
+            "cuda_graph_scope contains unsupported modules "
+            f"{sorted(unknown_modules)!r}; supported modules are "
+            f"{list(_CUDA_GRAPH_SCOPE_ORDER)!r}."
+        )
+    if "moe_preprocess" in requested_names and "moe_router" not in requested_names:
+        raise ValueError(
+            "cuda_graph_scope 'moe_preprocess' requires 'moe_router'."
+        )
+    if "moe" in requested_names and (
+        "moe_router" in requested_names or "moe_preprocess" in requested_names
+    ):
+        raise ValueError(
+            "cuda_graph_scope 'moe' cannot be combined with 'moe_router' or "
+            "'moe_preprocess'."
+        )
+
+    return tuple(
+        module for module in _CUDA_GRAPH_SCOPE_ORDER if module in requested_names
+    )
+
+
+def validate_cuda_graph_request(config: PolicyConfig) -> tuple[str, ...]:
+    """Validate a training CUDA Graph request before model import or setup."""
+    megatron_cfg = config["megatron_cfg"]
+    scope = normalize_cuda_graph_scope(megatron_cfg.get("cuda_graph_scope"))
+    cuda_graph_impl = megatron_cfg.get("cuda_graph_impl")
+
+    if scope and cuda_graph_impl in (None, "none"):
+        raise ValueError(
+            "cuda_graph_scope requires a CUDA Graph implementation; set "
+            "policy.megatron_cfg.cuda_graph_impl to 'transformer_engine' or 'local'."
+        )
+    if not scope and cuda_graph_impl not in (None, "none"):
+        raise ValueError(
+            "cuda_graph_scope must be non-empty when cuda_graph_impl is enabled; "
+            "the no-CG condition is the only supported empty scope."
+        )
+
+    return scope
+
+
+def _log_cuda_graph_provenance(
+    config: PolicyConfig, rank: int, effective_scope: tuple[str, ...]
+) -> None:
+    """Log the rank-zero CUDA Graph request and source provenance."""
+    if rank != 0:
+        return
+
+    megatron_cfg = config["megatron_cfg"]
+    log.info(
+        "CUDA Graph request: requested_scope=%r effective_scope=%r "
+        "implementation=%r packed_sequence=%r warmup_steps=%r "
+        "source_paths={nemo_rl=%s, megatron_bridge=%s, megatron_core=%s}",
+        megatron_cfg.get("cuda_graph_scope"),
+        effective_scope,
+        megatron_cfg.get("cuda_graph_impl"),
+        megatron_cfg.get("cuda_graph_packed_seq"),
+        megatron_cfg.get("cuda_graph_warmup_steps"),
+        __file__,
+        megatron.bridge.__file__,
+        megatron.core.__file__,
+    )
 
 
 def destroy_parallel_state():
@@ -637,6 +765,11 @@ def setup_model_config(
 
     # Apply performance settings
     _apply_performance_config(model_cfg, config)
+    _log_cuda_graph_provenance(
+        config,
+        rank,
+        validate_cuda_graph_request(config),
+    )
 
     # Validate optimizer configuration
     _validate_optimizer_config(config)
@@ -935,6 +1068,7 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
             )
 
     # These overrides need to be applied before the workers spawn.
+    cuda_graph_scope = validate_cuda_graph_request(config)
     if "transformer_impl" in config["megatron_cfg"]:
         model_cfg.transformer_impl = config["megatron_cfg"]["transformer_impl"]
     if "cuda_graph_impl" in config["megatron_cfg"]:
@@ -945,6 +1079,13 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
             model_cfg.inference_cuda_graph_scope = InferenceCudaGraphScope[
                 config["megatron_cfg"]["inference_cuda_graph_scope"]
             ]
+    model_cfg.cuda_graph_modules = [
+        CudaGraphModule[module] for module in cuda_graph_scope
+    ]
+    if "cuda_graph_warmup_steps" in config["megatron_cfg"]:
+        model_cfg.cuda_graph_warmup_steps = config["megatron_cfg"][
+            "cuda_graph_warmup_steps"
+        ]
 
     # Use the graph-safe TE RNG tracker for either training graphs or inference graphs.
     if "generation" in config and config["generation"] is not None:

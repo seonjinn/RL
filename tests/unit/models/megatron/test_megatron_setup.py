@@ -25,11 +25,13 @@ nemo_rl.models.megatron.setup, focusing on:
 """
 
 import os
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+import yaml
 
 
 VALID_SCOPE_CASES = [
@@ -89,6 +91,27 @@ def test_normalize_cuda_graph_scope_rejects_invalid_requests(scope):
 
     with pytest.raises(ValueError):
         normalize_cuda_graph_scope(scope)
+
+
+def test_nanov3_cuda_graph_matrix_recipe_defaults_to_eager_training():
+    """Per-scope scripts, not the shared recipe, own CUDA Graph overrides."""
+    recipe_path = (
+        Path(__file__).parents[4]
+        / "examples/configs/recipes/llm/performance"
+        / "grpo-nanov3-30BA3B-2n8g-megatron-pack-cp-cudagraph-matrix.yaml"
+    )
+
+    with recipe_path.open() as recipe_file:
+        recipe = yaml.safe_load(recipe_file)
+
+    assert recipe["defaults"] == "../grpo-nanov3-30BA3B-2n8g-megatron-pack-cp.yaml"
+    assert recipe["checkpointing"]["enabled"] is False
+    assert recipe["logger"]["wandb_enabled"] is True
+    assert not {
+        "cuda_graph_impl",
+        "cuda_graph_scope",
+        "cuda_graph_warmup_steps",
+    } & recipe.get("policy", {}).get("megatron_cfg", {}).keys()
 
 
 @pytest.mark.mcore
@@ -968,6 +991,33 @@ class TestApplyPrecisionConfig:
 @pytest.mark.mcore
 class TestApplyPerformanceConfig:
     """Tests for _apply_performance_config function."""
+
+    def test_cuda_graph_scope_maps_to_mcore_modules_and_warmup(self):
+        """The requested scope is the only list passed to MCore's graph config."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg = MagicMock()
+        model_cfg.gated_linear_unit = True
+        config = {
+            "megatron_cfg": {
+                "activation_checkpointing": False,
+                "apply_rope_fusion": False,
+                "bias_activation_fusion": False,
+                "gradient_accumulation_fusion": False,
+                "use_fused_weighted_squared_relu": False,
+                "cuda_graph_impl": "transformer_engine",
+                "cuda_graph_scope": "mamba,attn",
+                "cuda_graph_warmup_steps": 3,
+            }
+        }
+
+        _apply_performance_config(model_cfg, config)
+
+        assert [module.name for module in model_cfg.cuda_graph_modules] == [
+            "attn",
+            "mamba",
+        ]
+        assert model_cfg.cuda_graph_warmup_steps == 3
 
     def test_basic_performance_config(self):
         """Test applying basic performance configuration."""
