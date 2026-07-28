@@ -41,6 +41,8 @@ fi
 RUN_NAME="latestmain-nanov3-mamba-moe-router-${PHASE}${RUN_SUFFIX}"
 COMMAND="NRL_FORCE_REBUILD_VENVS=true uv run --extra mcore examples/run_grpo.py \
   --config ${CONFIG} \
+  policy.model_name=${NANOV3_MODEL_SNAPSHOT:?Set NANOV3_MODEL_SNAPSHOT} \
+  policy.tokenizer.name=${NANOV3_TOKENIZER_SNAPSHOT:?Set NANOV3_TOKENIZER_SNAPSHOT} \
   cluster.num_nodes=${NUM_ACTOR_NODES} \
   cluster.gpus_per_node=${GPUS_PER_NODE} \
   grpo.max_num_steps=${STEPS:-5} \

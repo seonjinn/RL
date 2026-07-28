@@ -177,18 +177,31 @@ def test_baked_baseline_uses_verified_ptyche_snapshot_without_hub_access(
 ) -> None:
     """The recovery baseline cannot regress to vLLM Hub metadata requests."""
     result = _run_test_only("00_nocg_baked_uv_cache.sh", tmp_path)
-    snapshot = (
+    model_snapshot = (
         "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
         "models--nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16/"
         "snapshots/97ab8012882a655dc38df4fee47422aca9caca07"
     )
+    tokenizer_snapshot = (
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+        "models--nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-BF16/"
+        "snapshots/2d59de1cbd51c0adf384eb906b766d1aee0e0517"
+    )
 
     assert result.returncode == 0, result.stderr
-    assert f"policy.model_name={snapshot}" in result.stdout
-    assert f"policy.tokenizer.name={snapshot}" in result.stdout
+    assert f"policy.model_name={model_snapshot}" in result.stdout
+    assert f"policy.tokenizer.name={tokenizer_snapshot}" in result.stdout
     assert "\nHF_HUB_OFFLINE=1\n" in result.stdout
     assert "\nTRANSFORMERS_OFFLINE=1\n" in result.stdout
     assert "\nWANDB_MODE=offline\n" in result.stdout
+
+
+def test_all_scope_scripts_use_the_instruction_tokenizer_snapshot() -> None:
+    """The Base checkpoint has no chat template, so it cannot be its tokenizer."""
+    for script_name in set(SCOPE_SCRIPTS) | AUXILIARY_SCOPE_SCRIPTS:
+        source = _script_source(script_name)
+        assert "policy.tokenizer.name=${NANOV3_TOKENIZER_SNAPSHOT" in source
+        assert "policy.tokenizer.name=${NANOV3_MODEL_SNAPSHOT}" not in source
 
 
 def test_baked_baseline_accepts_an_explicit_backfill_partition(
