@@ -117,6 +117,22 @@ def test_recursive_checkout_uses_the_branch_that_exposes_the_bridge_gitlink() ->
     assert "git submodule update --init --recursive" in launcher
 
 
+def test_launcher_allows_shared_non_lustre_logs_without_changing_defaults() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    launcher = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "oci-hsg"
+        / "hybridep"
+        / "submit_grpo.sh"
+    ).read_text()
+
+    assert "EXTRA_MOUNTS=${EXTRA_MOUNTS:-}" in launcher
+    assert 'MOUNTS="${MOUNTS},${EXTRA_MOUNTS}"' in launcher
+    assert "NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-true}" in launcher
+
+
 def test_x86_wheel_build_job_is_arch_specific_and_reproducible() -> None:
     project_root = Path(__file__).resolve().parents[3]
     build_script = (

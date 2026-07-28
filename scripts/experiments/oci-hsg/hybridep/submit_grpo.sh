@@ -86,11 +86,21 @@ CONTAINER=${CONTAINER:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemo
 HF_HOME=${HF_HOME:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home}
 HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-"${HF_HOME}/cache"}
 RUN_ROOT=${RUN_ROOT:-"${PROJECT_ROOT}/exp_logs/hybridep/${MODEL_ID}/${RUN_NAME}"}
+EXTRA_MOUNTS=${EXTRA_MOUNTS:-}
+NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-true}
 
 case "${DISPATCHER_MODE}" in
   hybridep | recipe) ;;
   *)
     printf 'DISPATCHER_MODE must be either hybridep or recipe.\n' >&2
+    exit 2
+    ;;
+esac
+
+case "${NRL_FORCE_REBUILD_VENVS}" in
+  true | false) ;;
+  *)
+    printf 'NRL_FORCE_REBUILD_VENVS must be true or false.\n' >&2
     exit 2
     ;;
 esac
@@ -284,6 +294,8 @@ metadata_path="${RUN_ROOT}/submission.env"
   printf 'padding_log_ranks=%q\n' "${PADDING_LOG_RANKS}"
   printf 'padding_log_reduce=%q\n' "${PADDING_LOG_REDUCE}"
   printf 'nccl_nvls_enable=%q\n' "${NCCL_NVLS_ENABLE:-}"
+  printf 'nrl_force_rebuild_venvs=%q\n' "${NRL_FORCE_REBUILD_VENVS}"
+  printf 'extra_mounts=%q\n' "${EXTRA_MOUNTS}"
   printf 'rl_commit=%q\n' "${RL_COMMIT}"
   printf 'bridge_commit=%q\n' "${BRIDGE_COMMIT}"
   printf 'megatron_lm_commit=%q\n' "${MEGATRON_LM_COMMIT}"
@@ -299,8 +311,12 @@ export COMMAND
 export CONTAINER
 export HF_DATASETS_CACHE
 export HF_HOME
-export MOUNTS="${PROJECT_ROOT}:${PROJECT_ROOT},/lustre:/lustre"
-export NRL_FORCE_REBUILD_VENVS=true
+MOUNTS="${PROJECT_ROOT}:${PROJECT_ROOT},/lustre:/lustre"
+if [[ -n "${EXTRA_MOUNTS}" ]]; then
+  MOUNTS="${MOUNTS},${EXTRA_MOUNTS}"
+fi
+export MOUNTS
+export NRL_FORCE_REBUILD_VENVS
 export GPUS_PER_NODE
 export SETUP_COMMAND
 export BASE_LOG_DIR="${RUN_ROOT}/ray"
