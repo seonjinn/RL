@@ -218,6 +218,13 @@ def test_requested_performance_matrix_submits_independent_20_step_jobs() -> None
         assert 'TIME_LIMIT="${TIME_LIMIT_OVERRIDE:-${TIME_LIMIT}}"' in launcher
 
 
+def test_requested_performance_scopes_use_the_verified_baked_uv_cache_path() -> None:
+    """Ray must not import packages from the incomplete persistent UV overlay."""
+    for script_name in REQUESTED_PERFORMANCE_SCOPE_SCRIPTS:
+        source = _script_source(script_name)
+        assert "unset UV_CACHE_DIR_OVERRIDE" in source
+
+
 def test_baked_baseline_uses_verified_ptyche_snapshot_without_hub_access(
     tmp_path: Path,
 ) -> None:
