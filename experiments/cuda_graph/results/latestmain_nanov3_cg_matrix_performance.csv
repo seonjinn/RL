@@ -3,3 +3,11 @@ nocg-offline-snapshot,2463752,step-1,269.54,16.06,85.16,102.99,77.03,0.0000,0.00
 nocg-offline-snapshot,2463752,step-2,55.95,47.00,41.59,2.05,4.96,0.0000,0.0000,2505.8750,first warm step; run is still in progress
 nocg-offline-snapshot,2463752,step-3,51.38,67.64,40.46,2.05,2.86,0.0625,0.1448,3338.5000,warm step; first nonzero reward and loss
 nocg-offline-snapshot,2463752,step-4,50.06,50.30,39.63,1.78,2.61,0.0000,0.0000,2420.6875,warm step; run is still in progress
+nocg-offline-snapshot,2463752,step-5,61.69,49.12,39.58,10.14,5.97,0.2500,-0.1610,2922.8125,warm step
+nocg-offline-snapshot,2463752,step-6,48.98,52.45,35.94,1.87,4.99,0.0000,0.0000,2464.0000,warm step
+nocg-offline-snapshot,2463752,step-7,51.26,51.27,39.56,2.79,2.72,0.1875,-0.1684,2555.3750,warm step
+nocg-offline-snapshot,2463752,step-8,50.70,58.14,40.03,1.80,2.73,0.0000,0.0000,2849.3750,warm step
+nocg-offline-snapshot,2463752,step-9,53.53,45.23,30.67,10.73,5.87,0.0625,-0.0562,2316.1875,warm step
+nocg-offline-snapshot,2463752,step-10,115.37,23.91,39.84,1.73,2.69,0.0000,0.0000,2679.5625,warm step with unexplained non-component delay; retain for E2E tail analysis
+nocg-offline-snapshot,2463752,step-11,46.76,69.48,39.83,2.06,2.86,0.0625,0.0797,3146.6875,warm step
+nocg-offline-snapshot,2463752,step-12,51.84,57.55,40.70,2.10,3.07,0.0000,0.0001,2899.7500,last completed step before scheduler preemption

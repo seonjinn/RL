@@ -132,7 +132,9 @@ by GRPO preprocessing.
 | Tokenizer fix | All matrix launchers now preserve the official recipe split: Base checkpoint revision `97ab8012` and Instruct tokenizer revision `2d59de1c`; source `41c1c1caa197679bb852854d9585da692a17bf9a` |
 | Launcher regression tests | 21 passed locally; they require the immutable Instruct tokenizer path, offline Hub/W&B settings, exact scope, and checkpoint disablement |
 | Scheduler preflight | `2463751` accepted four Ptyche nodes in `backfill` |
-| Current 20-step baseline | `2463752` (`RUNNING` on `ptyche[0175-0178]`; steps 1–4 completed and step 5 started at last capture) |
+| First working 20-step baseline | `2463752` (`PREEMPTED` after steps 1–12 completed; step 13 was in progress) |
+| Runtime failure check | No Python, Ray, or CUDA fatal error; SLURM marked the backfill allocation `PREEMPTED` after `30m17s` and sent SIGTERM to the batch shell |
+| Current 20-step retry | `2464026` (`PENDING` in `backfill`; preflight `2464025` accepted; time limit reduced to 45 minutes based on observed runtime) |
 | First-step timing | E2E `269.54s`; generation `85.16s`; policy and reference logprobs `77.03s`; policy training `102.99s` |
 | First-step throughput | E2E `16.06 tokens/s/GPU`; policy training `42.04 tokens/s/GPU`; policy/reference logprobs `56.21 tokens/s/GPU`; generation worker group `50.84 tokens/s/GPU` |
 | First-step training signal | Loss `0.0000`; average reward `0.0000`; generation KL error `0.0018`; mean generation length `4210.0625` |
@@ -145,14 +147,16 @@ by GRPO preprocessing.
 | Step-4 timing | E2E `50.06s`; generation `39.63s`; policy and reference logprobs `2.61s`; policy training `1.78s` |
 | Step-4 throughput | E2E `50.30 tokens/s/GPU`; policy training `1416.81 tokens/s/GPU`; policy/reference logprobs `964.10 tokens/s/GPU`; generation worker group `63.54 tokens/s/GPU` |
 | Step-4 training signal | Loss `0.0000`; average reward `0.0000`; generation KL error `0.0021`; mean generation length `2420.6875` |
+| Warm-step coverage before preemption | Steps 2–12 completed; individual timing and training signals are recorded in `latestmain_nanov3_cg_matrix_performance.csv` |
+| E2E tail observation | Step 10 took `115.37s` although generation was `39.84s`, policy training `1.73s`, and logprobs `2.69s`; retain this sample for rollout/Ray tail analysis |
 | Exact workload | NanoV3 30B-A3B baseline without CUDA Graph, sequence packing config, 4 nodes × 4 GPUs, 20 steps |
 | Checkpoint policy | Disabled |
 
 The current retry uses the same immutable container and workload as the earlier
 attempts. Its parsed config shows the intended Base model and Instruct
-tokenizer revisions. It has now completed generation, reward processing,
-policy/reference logprobs, and policy training for four steps. The first step
-is a cold-start sample and is excluded from steady-state aggregation. Steps
-2–4 are warm samples, including the first nonzero reward and loss at step 3,
-but remain insufficient for a final comparison. Aggregate performance and
-accuracy will be calculated after the 20-step run.
+tokenizer revisions. Job `2463752` completed generation, reward processing,
+policy/reference logprobs, and policy training for twelve steps before an
+external scheduler preemption. The first step is a cold-start sample and is
+excluded from steady-state aggregation. Steps 2–12 remain valid interrupted-run
+baseline samples, but final accuracy and performance comparisons will use a
+complete retry where possible. Job `2464026` is that retry.
