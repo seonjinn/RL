@@ -245,7 +245,7 @@ def test_ptyche_uv_cache_is_provenance_keyed_and_mounted_by_both_launchers() -> 
     for provenance_component in (
         "linux-aarch64-cp313",
         "image-67ad116cb0a969ad2644869a4d0e2e3c5d7a859588dd1789dc25732ef3700dba",
-        "nemo-rl-51727413636105f0b1a3ff8a6178b68b34b0dd02",
+        "nemo-rl-21efc14f84d243f0ce7a23442cf4e57c01418383",
         "bridge-59c163cce9cb8cc209dcd0424b2b9de9d1be5027",
         "mcore-53f5161ce000b5320bc16cb260949c2e6808da83",
         "uv-lock-30a35a07db7a646a7e0fb4e458daf264cf6c805a",
