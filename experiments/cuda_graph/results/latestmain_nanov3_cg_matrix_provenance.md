@@ -132,11 +132,16 @@ by GRPO preprocessing.
 | Tokenizer fix | All matrix launchers now preserve the official recipe split: Base checkpoint revision `97ab8012` and Instruct tokenizer revision `2d59de1c`; source `41c1c1caa197679bb852854d9585da692a17bf9a` |
 | Launcher regression tests | 21 passed locally; they require the immutable Instruct tokenizer path, offline Hub/W&B settings, exact scope, and checkpoint disablement |
 | Scheduler preflight | `2463751` accepted four Ptyche nodes in `backfill` |
-| Current 20-step baseline | `2463752` (`RUNNING` on `ptyche[0175-0178]` at last capture) |
+| Current 20-step baseline | `2463752` (`RUNNING` on `ptyche[0175-0178]`; step 1 completed and step 2 started at last capture) |
+| First-step timing | E2E `269.54s`; generation `85.16s`; policy and reference logprobs `77.03s`; policy training `102.99s` |
+| First-step throughput | E2E `16.06 tokens/s/GPU`; policy training `42.04 tokens/s/GPU`; policy/reference logprobs `56.21 tokens/s/GPU`; generation worker group `50.84 tokens/s/GPU` |
+| First-step training signal | Loss `0.0000`; average reward `0.0000`; generation KL error `0.0018`; mean generation length `4210.0625` |
 | Exact workload | NanoV3 30B-A3B baseline without CUDA Graph, sequence packing config, 4 nodes × 4 GPUs, 20 steps |
 | Checkpoint policy | Disabled |
 
 The current retry uses the same immutable container and workload as the earlier
 attempts. Its parsed config shows the intended Base model and Instruct
-tokenizer revisions, and dataset setup has passed. Performance and accuracy
-fields remain empty until `2463752` reaches GRPO steps.
+tokenizer revisions. It has now completed generation, reward processing,
+policy/reference logprobs, and policy training for step 1. The first step is a
+cold-start sample and is not used as the steady-state baseline; aggregate
+performance and accuracy will be calculated after the 20-step run.
