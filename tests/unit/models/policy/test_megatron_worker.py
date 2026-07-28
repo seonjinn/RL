@@ -63,6 +63,37 @@ def test_invalid_cuda_graph_scope_is_rejected_before_model_import():
     model_import.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("cuda_graph_impl", "cuda_graph_scope"),
+    [
+        ("full_iteration", ["attn"]),
+        ("unsupported", ["attn"]),
+    ],
+)
+def test_invalid_cuda_graph_implementation_is_rejected_before_model_import(
+    cuda_graph_impl, cuda_graph_scope
+):
+    """Only partial implementations may carry a partial CUDA Graph scope."""
+    from nemo_rl.models.policy.workers import megatron_policy_worker
+
+    config = {
+        "megatron_cfg": {
+            "cuda_graph_impl": cuda_graph_impl,
+            "cuda_graph_scope": cuda_graph_scope,
+        }
+    }
+    with patch.object(megatron_policy_worker, "handle_model_import") as model_import:
+        with pytest.raises(ValueError, match="cuda_graph_impl"):
+            megatron_policy_worker._import_model_after_cuda_graph_scope_validation(
+                config=config,
+                hf_model_name="test/model",
+                pretrained_path="/tmp/model",
+                pt_checkpoint_exists=False,
+            )
+
+    model_import.assert_not_called()
+
+
 class _FakeTrainableModel:
     def __init__(self):
         self.train_called = False

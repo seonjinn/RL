@@ -256,6 +256,7 @@ _CUDA_GRAPH_SCOPE_ORDER = (
     "moe_preprocess",
 )
 _CUDA_GRAPH_SCOPE_MODULES = frozenset(_CUDA_GRAPH_SCOPE_ORDER)
+_PARTIAL_CUDA_GRAPH_IMPLS = frozenset(("local", "transformer_engine"))
 
 
 def normalize_cuda_graph_scope(scope: object) -> tuple[str, ...]:
@@ -331,15 +332,29 @@ def validate_cuda_graph_request(config: PolicyConfig) -> tuple[str, ...]:
     scope = normalize_cuda_graph_scope(megatron_cfg.get("cuda_graph_scope"))
     cuda_graph_impl = megatron_cfg.get("cuda_graph_impl")
 
-    if scope and cuda_graph_impl in (None, "none"):
+    if cuda_graph_impl in (None, "none"):
+        if scope:
+            raise ValueError(
+                "cuda_graph_scope requires a CUDA Graph implementation; set "
+                "policy.megatron_cfg.cuda_graph_impl to 'transformer_engine' or 'local'."
+            )
+    elif cuda_graph_impl in _PARTIAL_CUDA_GRAPH_IMPLS:
+        if not scope:
+            raise ValueError(
+                "cuda_graph_scope must be non-empty when cuda_graph_impl is "
+                "'transformer_engine' or 'local'."
+            )
+    elif cuda_graph_impl == "full_iteration":
+        if scope:
+            raise ValueError(
+                "cuda_graph_impl 'full_iteration' requires an empty "
+                "cuda_graph_scope."
+            )
+    else:
         raise ValueError(
-            "cuda_graph_scope requires a CUDA Graph implementation; set "
-            "policy.megatron_cfg.cuda_graph_impl to 'transformer_engine' or 'local'."
-        )
-    if not scope and cuda_graph_impl not in (None, "none"):
-        raise ValueError(
-            "cuda_graph_scope must be non-empty when cuda_graph_impl is enabled; "
-            "the no-CG condition is the only supported empty scope."
+            "Unsupported cuda_graph_impl "
+            f"{cuda_graph_impl!r}; expected one of 'none', 'local', "
+            "'transformer_engine', or 'full_iteration'."
         )
 
     return scope

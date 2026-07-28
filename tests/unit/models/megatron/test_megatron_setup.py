@@ -93,6 +93,23 @@ def test_normalize_cuda_graph_scope_rejects_invalid_requests(scope):
         normalize_cuda_graph_scope(scope)
 
 
+def test_validate_cuda_graph_request_allows_full_iteration_without_scope():
+    """Full-iteration graphs do not use the partial-module scope list."""
+    from nemo_rl.models.megatron.setup import validate_cuda_graph_request
+
+    assert (
+        validate_cuda_graph_request(
+            {
+                "megatron_cfg": {
+                    "cuda_graph_impl": "full_iteration",
+                    "cuda_graph_scope": [],
+                }
+            }
+        )
+        == ()
+    )
+
+
 def test_nanov3_cuda_graph_matrix_recipe_defaults_to_eager_training():
     """Per-scope scripts, not the shared recipe, own CUDA Graph overrides."""
     recipe_path = (
