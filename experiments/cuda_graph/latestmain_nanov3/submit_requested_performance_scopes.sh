@@ -6,7 +6,6 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 SCOPE_SCRIPTS=(
   01_attn.sh
-  16_mlp.sh
   02_mamba.sh
   04_moe.sh
   08_moe_router.sh

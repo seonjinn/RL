@@ -87,12 +87,11 @@ SCOPE_SCRIPTS = {
         "moe_router",
         "moe_preprocess",
     ),
-    "16_mlp.sh": ("mlp",),
 }
+EXTRA_SCOPE_SCRIPTS = {"16_mlp.sh": ("mlp",)}
 AUXILIARY_SCOPE_SCRIPTS = {"00_nocg_baked_uv_cache.sh"}
 REQUESTED_PERFORMANCE_SCOPE_SCRIPTS = (
     "01_attn.sh",
-    "16_mlp.sh",
     "02_mamba.sh",
     "04_moe.sh",
     "08_moe_router.sh",
@@ -170,9 +169,10 @@ def _run_ray_venv_bootstrap_smoke(
 
 def test_scope_scripts_are_exact_task3_matrix_with_visible_scope_per_file() -> None:
     """Every reusable file has the sole, hard-coded scope it submits."""
-    assert list(SCOPE_SCRIPTS.values()) == VALID_SCOPE_CASES
+    nanov3_scope_cases = [case for case in VALID_SCOPE_CASES if case != ("mlp",)]
+    assert list(SCOPE_SCRIPTS.values()) == nanov3_scope_cases
     assert sorted(path.name for path in SCOPE_ROOT.glob("*.sh")) == sorted(
-        set(SCOPE_SCRIPTS) | AUXILIARY_SCOPE_SCRIPTS
+        set(SCOPE_SCRIPTS) | set(EXTRA_SCOPE_SCRIPTS) | AUXILIARY_SCOPE_SCRIPTS
     )
 
     for script_name, expected_scope in SCOPE_SCRIPTS.items():
@@ -185,7 +185,7 @@ def test_scope_scripts_are_exact_task3_matrix_with_visible_scope_per_file() -> N
 def test_mlp_scope_has_a_reusable_te_partial_cuda_graph_launcher(
     tmp_path: Path,
 ) -> None:
-    """Dense MLP capture is an explicit, independently submitted comparison."""
+    """Dense MLP capture remains opt-in because Nano has no dense-MLP layers."""
     result = _run_test_only("16_mlp.sh", tmp_path)
     source = _script_source("16_mlp.sh")
 
@@ -198,6 +198,17 @@ def test_mlp_scope_has_a_reusable_te_partial_cuda_graph_launcher(
     assert "NRL_FORCE_REBUILD_VENVS=true uv run --extra mcore " in source
     assert "WANDB_MODE=offline" in source
     assert "sbatch --test-only" in result.stdout
+
+
+def test_nanov3_submitters_exclude_dense_mlp() -> None:
+    """Nano's hybrid pattern has no '-' dense-MLP layer to capture."""
+    submit_all = (SCRIPT_ROOT / "submit_all_valid_scopes.sh").read_text()
+    submit_requested = (
+        SCRIPT_ROOT / "submit_requested_performance_scopes.sh"
+    ).read_text()
+
+    assert "16_mlp.sh" not in submit_all
+    assert "16_mlp.sh" not in submit_requested
 
 
 def test_nemo_rl_scope_validation_exposes_mcore_mlp_capture() -> None:
