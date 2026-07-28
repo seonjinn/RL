@@ -26,6 +26,9 @@ SCRIPT_ROOT = REPO_ROOT / "experiments/cuda_graph/latestmain_nanov3"
 SCOPE_ROOT = SCRIPT_ROOT / "scopes"
 SETUP_TEST = REPO_ROOT / "tests/unit/models/megatron/test_megatron_setup.py"
 RAY_SUB = REPO_ROOT / "ray.sub"
+FULL_RUNTIME_PROBE = (
+    REPO_ROOT / "experiments/cuda_graph/probe_latestmain_full_runtime.sbatch"
+)
 
 
 def _task3_valid_scope_cases() -> list[tuple[str, ...]]:
@@ -204,6 +207,31 @@ def test_profiles_have_stable_container_paths_and_cluster_specific_gpu_requests(
     assert "SBATCH_GPU_ARGS=(--gpus-per-node=4)" in ptyche
     assert "SBATCH_GPU_ARGS=(--gres" not in ptyche
     assert "SBATCH_GPU_ARGS=(--gres=gpu:4)" in oci_hsg
+
+
+def test_ptyche_profile_uses_the_staged_nightly_stable_link() -> None:
+    """Ptyche model jobs consume the immutable-nightly stable link, never July's image."""
+    ptyche = (SCRIPT_ROOT / "profiles/ptyche.env").read_text()
+    assert (
+        "CONTAINER=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/nemo_rl_nightly.sqsh"
+        in ptyche
+    )
+    assert "nemo_rl_latestmain_nanov3.sqsh" not in ptyche
+
+
+def test_full_runtime_probe_checks_the_required_gpu_and_package_gates() -> None:
+    """The pre-matrix probe must reject incomplete nightly images before model jobs."""
+    source = FULL_RUNTIME_PROBE.read_text()
+    assert "torch.cuda.is_available()" in source
+    assert "sys.version_info >= (3, 13, 13)" in source
+    assert "uv lock --check" in source
+    assert "transformer_engine.pytorch" in source
+    assert "megatron.core" in source
+    assert "mamba_ssm" in source
+    assert "nemo_rl" in source
+    assert "load_config" in source
+    assert "cuda_graph_warmup_steps=3" in source
+    assert "#SBATCH --gres" not in source
 
 
 def test_submit_all_invokes_each_named_file_without_dynamic_scope_rewrite() -> None:

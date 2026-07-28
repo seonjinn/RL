@@ -1,0 +1,2 @@
+cluster,phase,scope,job_id,state,reason,source_sha,container,script,log_link,wandb_link,source_image_digest,container_sha256,exit_code,capture_evidence,replay_evidence
+ptyche,stage,nightly,2456107,COMPLETED,immutable staging validated; full runtime smoke pending,24996e441d7095638f4bd8addf8f6d72aeb3c434,/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/nemo_rl_nightly.sqsh,../../../scripts/stage_enroot_image.sbatch,,,sha256:67ad116cb0a969ad2644869a4d0e2e3c5d7a859588dd1789dc25732ef3700dba,5781f94d8d7224957bb1c5d0d5a230c04042ac40545f086c9297e12d8c77b64b,0:0,,
