@@ -138,6 +138,9 @@ by GRPO preprocessing.
 | Parallel TE CG submissions | `2464091` attn; `2464092` mlp; `2464093` mamba; `2464094` moe; `2464095` moe_router; `2464096` moe_router+moe_preprocess; `2464097` attn+mamba+moe_router+moe_preprocess |
 | TE CG submission contract | Independent jobs without SLURM dependency; 20 steps; sequence packing; `cuda_graph_impl=transformer_engine`; 3 capture warmups; checkpointing disabled |
 | TE CG preflights | `2464083`–`2464089` all accepted on four Ptyche nodes in `backfill` |
+| First parallel TE CG attempt | `2464091`–`2464097` all failed before GRPO Step 0 because the persistent UV overlay shadowed the image environment and Ray could not import `urllib3.exceptions` |
+| UV overlay isolation fix | Requested performance launchers now use the verified baked image cache path by unsetting `UV_CACHE_DIR_OVERRIDE`; source `1ffbdca95c9e68648b878b381073141bd14fad7b`; 24 launcher tests passed |
+| Current parallel TE CG retry | `2464548`, `2464549`, `2464550`, `2464551`, `2464552`, `2464554`, and `2464555` all reached RUNNING; Ray head and driver started with zero common-import or driver fatal errors through the first five minutes |
 | First-step timing | E2E `269.54s`; generation `85.16s`; policy and reference logprobs `77.03s`; policy training `102.99s` |
 | First-step throughput | E2E `16.06 tokens/s/GPU`; policy training `42.04 tokens/s/GPU`; policy/reference logprobs `56.21 tokens/s/GPU`; generation worker group `50.84 tokens/s/GPU` |
 | First-step training signal | Loss `0.0000`; average reward `0.0000`; generation KL error `0.0018`; mean generation length `4210.0625` |
