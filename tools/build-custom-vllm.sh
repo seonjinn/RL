@@ -30,7 +30,7 @@ fi
 GIT_URL="$1"
 GIT_REF="$2"
 VLLM_PRECOMPILED_WHEEL_LOCATION="$3"
-if [[ ! "$GIT_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+if [[ ! "$GIT_REF" =~ ^[0-9a-f]{40}$ ]]; then
   echo "[ERROR] GIT_REF must be an immutable 40-character Git commit." >&2
   exit 2
 fi
@@ -60,7 +60,7 @@ GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
 cd "$BUILD_DIR"
 git checkout --detach "$GIT_REF"
 RESOLVED_VLLM_COMMIT="$(git rev-parse HEAD)"
-if [[ "${RESOLVED_VLLM_COMMIT,,}" != "${GIT_REF,,}" ]]; then
+if [[ "$RESOLVED_VLLM_COMMIT" != "$GIT_REF" ]]; then
   echo "[ERROR] Requested vLLM commit $GIT_REF resolved to $RESOLVED_VLLM_COMMIT." >&2
   exit 1
 fi
@@ -68,19 +68,22 @@ echo "  vLLM resolved commit: $RESOLVED_VLLM_COMMIT"
 
 # Create a new Python environment using uv
 echo "Creating Python environment..."
-# Pop the project environment set by user to not interfere with the one we create for the vllm repo
+# Preserve caller environment selectors without letting them redirect custom vLLM installs.
 OLD_UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-}"
-unset UV_PROJECT_ENVIRONMENT
-uv venv
+OLD_VIRTUAL_ENV="${VIRTUAL_ENV:-}"
+unset UV_PROJECT_ENVIRONMENT VIRTUAL_ENV
+VLLM_VENV="$BUILD_DIR/.venv"
+VLLM_PYTHON="$VLLM_VENV/bin/python"
+uv venv "$VLLM_VENV"
 
 # Install dependencies
 echo "Installing dependencies..."
-uv pip install --upgrade pip
-uv pip install numpy setuptools setuptools_scm
+uv pip install --python "$VLLM_PYTHON" --upgrade pip
+uv pip install --python "$VLLM_PYTHON" numpy setuptools setuptools_scm
 
 # Install vLLM using precompiled wheel
 echo "Installing vLLM with precompiled wheel..."
-uv pip install --no-build-isolation -e .
+uv pip install --python "$VLLM_PYTHON" --no-build-isolation -e .
 
 echo "Build completed successfully!"
 echo "The built vLLM is available in: $BUILD_DIR"
@@ -98,9 +101,13 @@ cd "$REPO_ROOT"
 if [[ -n "$OLD_UV_PROJECT_ENVIRONMENT" ]]; then
   # Preserve an explicitly configured project environment for the root project.
   export UV_PROJECT_ENVIRONMENT="$OLD_UV_PROJECT_ENVIRONMENT"
-  export VIRTUAL_ENV="$OLD_UV_PROJECT_ENVIRONMENT"
 else
   unset UV_PROJECT_ENVIRONMENT
+fi
+if [[ -n "$OLD_VIRTUAL_ENV" ]]; then
+  export VIRTUAL_ENV="$OLD_VIRTUAL_ENV"
+else
+  unset VIRTUAL_ENV
 fi
 
 uv run --no-project --with packaging --with tomlkit \

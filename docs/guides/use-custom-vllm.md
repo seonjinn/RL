@@ -10,20 +10,22 @@ reproducible build provenance.
 The MXFP8 adaptive rollout integration is developed from:
 
 ```sh
-VLLM_URL=https://github.com/puririshi98/vllm.git
+VLLM_URL=https://github.com/seonjinn/vllm.git
 VLLM_BRANCH=sna/mxfp8-adaptive-v0.20.2-nemorl
 git ls-remote "$VLLM_URL" "refs/heads/$VLLM_BRANCH"
 ```
 
-Review the branch head, then copy its full 40-character commit into
-`VLLM_COMMIT`. Do not pass the branch name to the build script.
+The approved immutable build commit for this integration is
+`bc5881924556fcf830f8158815d5a62cef0fbcba`. The branch may advance beyond
+that commit, so use `ls-remote` only to confirm the published branch and do not
+pass the branch name or its newer head to the build script.
 
 The following wheel is the vLLM 0.20.2 Linux aarch64 release wheel used by the
 GB200 CUDA 13.0 build. For another platform, supply a vLLM 0.20.2 wheel built
 for the same Python, PyTorch, CUDA, architecture, and C++ ABI as NeMo RL.
 
 ```sh
-VLLM_COMMIT=<reviewed-40-character-commit>
+VLLM_COMMIT=bc5881924556fcf830f8158815d5a62cef0fbcba
 VLLM_WHEEL=https://github.com/vllm-project/vllm/releases/download/v0.20.2/vllm-0.20.2-cp38-abi3-manylinux_2_35_aarch64.whl
 
 bash tools/build-custom-vllm.sh \

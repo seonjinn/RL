@@ -1,3 +1,5 @@
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -160,3 +162,134 @@ def test_cli_updates_pyproject_in_place(tmp_path: Path) -> None:
         "path": "3rdparty/vllm",
         "editable": True,
     }
+
+
+def test_build_script_isolates_vllm_venv_and_restores_root_selectors(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    tools_dir = repo_root / "tools"
+    tools_dir.mkdir(parents=True)
+    source_script = Path(__file__).parents[3] / "tools" / "build-custom-vllm.sh"
+    script_path = tools_dir / source_script.name
+    shutil.copy2(source_script, script_path)
+    (repo_root / "3rdparty").mkdir()
+    (repo_root / "pyproject.toml").write_text("[project]\nname = 'test'\n")
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        """\
+#!/bin/bash
+set -eu
+case "$1" in
+  clone)
+    mkdir -p "${@: -1}"
+    ;;
+  checkout)
+    ;;
+  rev-parse)
+    printf '%s\\n' "$TEST_GIT_REF"
+    ;;
+  *)
+    printf 'unexpected git command: %s\\n' "$*" >&2
+    exit 1
+    ;;
+esac
+"""
+    )
+    fake_git.chmod(0o755)
+
+    uv_log = tmp_path / "uv.log"
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text(
+        """\
+#!/bin/bash
+set -eu
+printf '%s\\t%s\\t%s\\t%s\\n' \
+  "$PWD" \
+  "${UV_PROJECT_ENVIRONMENT-<unset>}" \
+  "${VIRTUAL_ENV-<unset>}" \
+  "$*" >>"$TEST_UV_LOG"
+if [[ "$1" == "venv" ]]; then
+  venv_path="${2:-$PWD/.venv}"
+  mkdir -p "$venv_path/bin"
+  touch "$venv_path/bin/python"
+fi
+"""
+    )
+    fake_uv.chmod(0o755)
+    fake_realpath = fake_bin / "realpath"
+    fake_realpath.write_text(
+        """\
+#!/bin/bash
+set -eu
+target="$1"
+parent="$(dirname "$target")"
+name="$(basename "$target")"
+printf '%s/%s\\n' "$(cd "$parent" && pwd -P)" "$name"
+"""
+    )
+    fake_realpath.chmod(0o755)
+
+    git_ref = "a" * 40
+    root_project_environment = str(tmp_path / "root-project-environment")
+    root_virtual_environment = str(tmp_path / "root-virtual-environment")
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "TEST_GIT_REF": git_ref,
+        "TEST_UV_LOG": str(uv_log),
+        "UV_PROJECT_ENVIRONMENT": root_project_environment,
+        "VIRTUAL_ENV": root_virtual_environment,
+    }
+
+    completed = subprocess.run(
+        [
+            "bash",
+            str(script_path),
+            "https://example.invalid/vllm.git",
+            git_ref,
+            "https://example.invalid/vllm.whl",
+        ],
+        cwd=repo_root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+    calls = [line.split("\t", maxsplit=3) for line in uv_log.read_text().splitlines()]
+    vllm_root = repo_root / "3rdparty" / "vllm"
+    vllm_venv = vllm_root / ".venv"
+    venv_call = next(call for call in calls if call[3].startswith("venv"))
+    assert venv_call == [
+        str(vllm_root),
+        "<unset>",
+        "<unset>",
+        f"venv {vllm_venv}",
+    ]
+
+    custom_pip_calls = [
+        call
+        for call in calls
+        if call[0] == str(vllm_root) and call[3].startswith("pip install")
+    ]
+    assert len(custom_pip_calls) == 3
+    for _, uv_project_environment, virtual_environment, arguments in custom_pip_calls:
+        assert uv_project_environment == "<unset>"
+        assert virtual_environment == "<unset>"
+        assert f"--python {vllm_venv / 'bin' / 'python'}" in arguments
+
+    root_pip_call = next(
+        call
+        for call in calls
+        if call[0] == str(repo_root) and call[3] == "pip install setuptools_scm"
+    )
+    assert root_pip_call[1:] == [
+        root_project_environment,
+        root_virtual_environment,
+        "pip install setuptools_scm",
+    ]
