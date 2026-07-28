@@ -9,13 +9,27 @@ is always enabled. The default transport is the DOCA/RDMA path; set
 `HYBRID_EP_TRANSPORT=nixl` together with `NIXL_HOME` and `UCX_HOME` only when
 the container provides those dependencies.
 
+For CW-DFW H100, source the checked-in hardware profile before building or
+submitting. It pins the Hopper SM90 build, the eight-GPU NVLink domain,
+non-MNNVL transport topology, the combine-chunk workaround used by the
+Megatron-Bridge performance harness, and the CW account/partition defaults:
+
+```bash
+source scripts/experiments/x86/hybridep/clusters/cw-dfw-h100.env
+```
+
+The model recipe still owns model parallelism and dispatcher selection. The
+Qwen3-30B-A3B HybridEP overlay inherits the baseline 4n8g performance recipe
+and changes only the flex/HybridEP dispatcher settings. This keeps H100 and
+B200 A/B comparisons matched.
+
 From a clean, pushed NeMo-RL checkout on the target cluster:
 
 ```bash
 export DEEPEP_COMMIT=f725d29699f5bda9ba789456bb9579af69844685
 export CONTAINER=/lustre/absolute/path/nemo_rl_nightly.sqsh
 export OUTPUT_DIR=/lustre/absolute/path/deepep-wheels
-export GPU_ARCH=9.0
+export GPU_ARCH=9.0  # supplied by cw-dfw-h100.env on CW
 
 sbatch --test-only \
   --account="${ACCOUNT}" \

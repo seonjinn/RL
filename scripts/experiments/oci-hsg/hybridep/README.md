@@ -96,6 +96,19 @@ export CONTAINER=/absolute/shared/path/nemo_rl_nightly.sqsh
 export HF_HOME=/absolute/shared/path/hf_home
 ```
 
+On CW-DFW, load the H100 hardware profile first. It supplies
+`GPU_ARCH=9.0`, the eight-rank NVLink-domain topology, non-MNNVL mode, the
+combine chunk size, and the default account/partition:
+
+```bash
+source scripts/experiments/x86/hybridep/clusters/cw-dfw-h100.env
+```
+
+These values mirror Megatron-Bridge's `h100` HybridEP performance path. The
+SM90 wheel must still pass imports of `deep_ep`, `deep_ep_cpp`, and
+`hybrid_ep_cpp` inside the exact NeMo-RL container before a training job is
+considered valid.
+
 If the nightly image and repository lock contain different Ray versions,
 prepare a shared driver environment with
 `scripts/experiments/x86/hybridep/submit_driver_venv.sh`, then use it for both

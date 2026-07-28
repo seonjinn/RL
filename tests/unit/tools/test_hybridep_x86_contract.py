@@ -229,3 +229,31 @@ def test_x86_driver_venv_job_prepares_the_shared_ray_runtime() -> None:
     assert "git pull --ff-only --recurse-submodules=no" in submit_script
     assert "git submodule update --init --recursive" in submit_script
     assert 'sbatch --test-only "${sbatch_args[@]}"' in submit_script
+
+
+def test_cw_h100_profile_pins_the_hopper_build_and_nvl8_topology() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    profile = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "x86"
+        / "hybridep"
+        / "clusters"
+        / "cw-dfw-h100.env"
+    ).read_text()
+
+    required_lines = {
+        "CLUSTER_ID=cw-dfw-h100",
+        "ACCOUNT=${ACCOUNT:-coreai_dlalgo_nemorl}",
+        "PARTITION=${PARTITION:-batch}",
+        "GPU_ARCH=9.0",
+        "GPUS_PER_NODE=${GPUS_PER_NODE:-8}",
+        "export NCCL_NVLS_ENABLE=0",
+        "export NVLINK_DOMAIN_SIZE=8",
+        "export USE_MNNVL=0",
+        "export NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN=8",
+        "export NUM_OF_TOKENS_PER_CHUNK_COMBINE_API=128",
+    }
+
+    assert required_lines <= set(profile.splitlines())
