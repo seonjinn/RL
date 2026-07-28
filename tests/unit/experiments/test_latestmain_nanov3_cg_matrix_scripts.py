@@ -243,6 +243,7 @@ def test_ray_sub_scopes_force_rebuilt_venvs_to_the_current_job_log_dir() -> None
     assert 'LOG_DIR="$BASE_LOG_DIR/$SLURM_JOB_ID-logs"' in source
     assert 'export NEMO_RL_VENV_DIR="${LOG_DIR}/venvs"' in source
     assert 'COMMON_SRUN_ARGS+=" --export=ALL,NEMO_RL_VENV_DIR"' in source
+    assert 'COMMON_SRUN_ARGS+=" --container-env=NEMO_RL_VENV_DIR"' in source
     assert "job-local NEMO_RL_VENV_DIR" in source
 
 
