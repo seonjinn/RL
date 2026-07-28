@@ -240,6 +240,9 @@ git commit -s -m "test(vllm): add Qwen adaptive MXFP8 trace gate"
   `experiments/mxfp8_adaptive_rollout/configs/grpo_qwen3_30ba3b_4n4g.yaml`
 - Create: `experiments/mxfp8_adaptive_rollout/run_ab.sh`
 - Create: `experiments/mxfp8_adaptive_rollout/parse_results.py`
+- Create: `experiments/mxfp8_adaptive_rollout/cluster/oci-hsg.env`
+- Create: `experiments/mxfp8_adaptive_rollout/smoke_container.sh`
+- Create: `scripts/stage_enroot_image.sbatch`
 - Create: `tests/unit/experiments/test_mxfp8_adaptive_rollout_results.py`
 
 **Workload source:** Inherit the current-main model, dataset, prompt/batch,
@@ -273,6 +276,16 @@ use the sibling's MXFP8 rollout configuration; only the JSON config key differs.
   repeats. Keep prompt samples, seeds, and Ray placement identical.
 - [ ] Reject an A/B pair if source commits, container digest, checkpoint,
   topology, or resolved Hydra config outside the one environment key differ.
+- [ ] Add a checked-in OCI-HSG profile with account
+  `coreai_dlalgo_nemorl`, partition `batch`, QoS `normal`, four GPUs per node,
+  `--switches=1@600`, and the user container/Lustre roots.
+- [ ] Copy the standard immutable enroot staging script from the
+  `stage-training-containers` skill. It must import to a temporary file, record
+  registry source, source commit, job ID, retrieval time, and SHA256, then
+  atomically update a stable symlink only after success.
+- [ ] Add a one-node four-GPU smoke that checks CUDA visibility, NeMo-RL,
+  Transformer Engine, Megatron Core, custom vLLM 0.20.2 source/version,
+  FlashInfer 0.6.8.post1, loader import, and exact JSON model/TP/hash validation.
 - [ ] Run parser tests, Ruff, `bash -n`, and `git diff --check`.
 - [ ] Commit with signoff:
 
@@ -290,8 +303,22 @@ git commit -s -m "bench: add Qwen 4n4g MXFP8 rollout A/B"
   branch head.
 - [ ] Run the focused unit suites from Tasks 1, 2, and 4.
 - [ ] Run repository formatting/type checks required for modified files.
-- [ ] Build the container with explicit URL, immutable ref, wheel URL, and
-  version override. Record the resulting image digest.
+- [ ] Use the official vLLM 0.20.2 ARM wheel and verify its expected SHA256:
+
+```text
+https://github.com/vllm-project/vllm/releases/download/v0.20.2/vllm-0.20.2-cp38-abi3-manylinux_2_35_aarch64.whl
+76ccf4c0554556c06f6b0fb1643742d4cf97dcc69f6ef3f04556d0764126035a
+```
+
+- [ ] Build the NeMo-RL `release` target for `linux/arm64` with Buildx, local
+  NeMo source context, exact NeMo/vLLM commit SHAs, explicit custom vLLM
+  URL/ref/wheel arguments, and `VLLM_VERSION_OVERRIDE=0.20.2`. Push an immutable
+  registry tag containing both short SHAs. Prefer the repository's native ARM
+  CI runner; do not assume the OCI login node has a Docker daemon.
+- [ ] On OCI-HSG, run `sbatch --test-only` and then import the immutable
+  registry tag with `scripts/stage_enroot_image.sbatch`. Record the immutable
+  `.sqsh` path, adjacent metadata, and squashfs SHA256; launch experiments with
+  the immutable path rather than the convenience symlink.
 - [ ] In the image, run:
 
 ```bash
@@ -301,6 +328,9 @@ python -c \
   'from vllm.model_executor.kernels.linear.mxfp8.tactic_config import load_mxfp8_dense_runtime_config; print("loader-ok")'
 ```
 
+- [ ] Run the checked-in one-node/four-GPU smoke before any multi-node Qwen
+  job. Record package versions, custom source paths/commits, smoke job ID, and
+  JSON loader result in the experiment metadata.
 - [ ] Commit the lock and provenance updates with signoff.
 
 ### Task 6: Execute validation gates on GB200
