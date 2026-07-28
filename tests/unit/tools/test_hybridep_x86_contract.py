@@ -40,3 +40,59 @@ def test_lock_does_not_retain_the_pre_hybridep_x86_commit() -> None:
     assert OLD_X86_COMMIT not in lock
     assert f"DeepEP.git?rev={DEEPEP_COMMIT}" in lock
 
+
+def test_qwen_4n8g_hybridep_only_adds_x86_dispatcher_settings() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    config_path = (
+        project_root
+        / "examples"
+        / "configs"
+        / "recipes"
+        / "llm"
+        / "performance"
+        / "grpo-qwen3-30ba3b-4n8g-hybridep.yaml"
+    )
+
+    assert config_path.read_text() == (
+        "defaults: grpo-qwen3-30ba3b-4n8g.yaml\n"
+        "\n"
+        "policy:\n"
+        "  megatron_cfg:\n"
+        "    moe_token_dispatcher_type: flex\n"
+        "    moe_flex_dispatcher_backend: hybridep\n"
+        "    moe_hybridep_num_sms: 32\n"
+        "    env_vars:\n"
+        '      NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN: "8"\n'
+        '      NUM_OF_TOKENS_PER_CHUNK_COMBINE_API: "128"\n'
+        '      NVLINK_DOMAIN_SIZE: "8"\n'
+        '      USE_MNNVL: "0"\n'
+    )
+
+
+def test_qwen_4n8g_x86_profiles_are_matched() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    profile_dir = (
+        project_root / "scripts" / "experiments" / "oci-hsg" / "hybridep" / "models"
+    )
+    baseline = (profile_dir / "qwen3-30ba3b-4n8g-x86.env").read_text()
+    hybridep = (profile_dir / "qwen3-30ba3b-4n8g-x86-hybridep.env").read_text()
+
+    common_lines = {
+        "export NCCL_NVLS_ENABLE=0",
+        "NUM_ACTOR_NODES=${NUM_ACTOR_NODES:-4}",
+        "GPUS_PER_NODE=${GPUS_PER_NODE:-8}",
+        "SEGMENT_SIZE=${SEGMENT_SIZE:-4}",
+        "MAX_STEPS=${MAX_STEPS:-20}",
+        "TIME_LIMIT=${TIME_LIMIT:-04:00:00}",
+        f"DEFAULT_DEEPEP_COMMIT={DEEPEP_COMMIT}",
+    }
+    assert common_lines <= set(baseline.splitlines())
+    assert common_lines <= set(hybridep.splitlines())
+    assert (
+        "CONFIG_PATH=examples/configs/recipes/llm/performance/"
+        "grpo-qwen3-30ba3b-4n8g.yaml"
+    ) in baseline
+    assert (
+        "CONFIG_PATH=examples/configs/recipes/llm/performance/"
+        "grpo-qwen3-30ba3b-4n8g-hybridep.yaml"
+    ) in hybridep

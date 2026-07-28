@@ -71,13 +71,16 @@ policy:
     moe_hybridep_num_sms: 32
     env_vars:
       NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN: "8"
+      NUM_OF_TOKENS_PER_CHUNK_COMBINE_API: "128"
       NVLINK_DOMAIN_SIZE: "8"
       USE_MNNVL: "0"
 ```
 
 The baseline preserves the recipe-native dispatcher. Model, data, batch
 sizes, packing, seed, optimizer, parallelism, and rollout settings remain
-identical within each cluster.
+identical within each cluster. Both x86 profiles export
+`NCCL_NVLS_ENABLE=0`; applying it to both arms prevents this H100/B200
+performance-harness setting from becoming an A/B variable.
 
 ## Execution Gates
 
@@ -133,4 +136,3 @@ Extend the existing GitLab Pages HybridEP report with:
 
 Keep detailed logs out of Git and link to their cluster paths. Preserve the
 existing GB200 findings as a separate hardware section.
-

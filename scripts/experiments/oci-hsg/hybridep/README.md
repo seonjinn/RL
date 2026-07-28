@@ -76,6 +76,68 @@ scripts/experiments/oci-hsg/hybridep/submit_grpo.sh \
   scripts/experiments/oci-hsg/hybridep/models/nemotron3-super-120ba12b-32n4g-sync-hybridep.env
 ```
 
+## x86 H100 and B200
+
+Megatron-Bridge supports HybridEP on Ampere, Hopper, and Blackwell. The x86
+profiles use the native four-node, eight-GPU Qwen3-30B-A3B performance recipe.
+The inherited HybridEP recipe additionally follows the upstream x86
+performance defaults: 32 dispatcher SMs, an eight-rank NVLink domain,
+non-MNNVL topology, and combine chunk size 128.
+
+Build and validate an immutable `f725d296` wheel for the target GPU before
+submitting. Set `TORCH_CUDA_ARCH_LIST=9.0` for H100 or `10.0` for B200 and
+build with `HYBRID_EP_MULTINODE=1`. Export the resulting wheel and cluster
+paths:
+
+```bash
+export DEEPEP_COMMIT=f725d29699f5bda9ba789456bb9579af69844685
+export DEEPEP_WHEEL=/absolute/shared/path/deep_ep-f725-x86_64.whl
+export CONTAINER=/absolute/shared/path/nemo_rl_nightly.sqsh
+export HF_HOME=/absolute/shared/path/hf_home
+```
+
+Run the two-node, three-step compatibility gate first:
+
+```bash
+DISPATCHER_MODE=recipe \
+WANDB_ENABLED=False \
+NEMO_RL_HYBRIDEP_LOG_PACKING=0 \
+NUM_ACTOR_NODES=2 \
+SEGMENT_SIZE=2 \
+MAX_STEPS=3 \
+RUN_NAME=qwen3-30ba3b-2n8g-x86-alltoall-smoke \
+scripts/experiments/oci-hsg/hybridep/submit_grpo.sh \
+  scripts/experiments/oci-hsg/hybridep/models/qwen3-30ba3b-4n8g-x86.env
+
+DISPATCHER_MODE=recipe \
+WANDB_ENABLED=False \
+NEMO_RL_HYBRIDEP_LOG_PACKING=0 \
+NUM_ACTOR_NODES=2 \
+SEGMENT_SIZE=2 \
+MAX_STEPS=3 \
+RUN_NAME=qwen3-30ba3b-2n8g-x86-hybridep-smoke \
+scripts/experiments/oci-hsg/hybridep/submit_grpo.sh \
+  scripts/experiments/oci-hsg/hybridep/models/qwen3-30ba3b-4n8g-x86-hybridep.env
+```
+
+After both smoke jobs complete, run the four-node, 20-step performance pair:
+
+```bash
+DISPATCHER_MODE=recipe \
+WANDB_ENABLED=False \
+NEMO_RL_HYBRIDEP_LOG_PACKING=0 \
+RUN_NAME=qwen3-30ba3b-4n8g-x86-alltoall-20step \
+scripts/experiments/oci-hsg/hybridep/submit_grpo.sh \
+  scripts/experiments/oci-hsg/hybridep/models/qwen3-30ba3b-4n8g-x86.env
+
+DISPATCHER_MODE=recipe \
+WANDB_ENABLED=False \
+NEMO_RL_HYBRIDEP_LOG_PACKING=0 \
+RUN_NAME=qwen3-30ba3b-4n8g-x86-hybridep-20step \
+scripts/experiments/oci-hsg/hybridep/submit_grpo.sh \
+  scripts/experiments/oci-hsg/hybridep/models/qwen3-30ba3b-4n8g-x86-hybridep.env
+```
+
 The launcher selects the highest current user-level FairShare account. Set
 `ACCOUNT` only to override that choice. Set `WANDB_ENABLED=True` to enable W&B;
 the launcher requires `WANDB_API_KEY` in the environment and never writes its
