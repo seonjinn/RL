@@ -32,6 +32,65 @@ import pytest
 import torch
 
 
+VALID_SCOPE_CASES = [
+    (),
+    ("attn",),
+    ("mamba",),
+    ("attn", "mamba"),
+    ("moe",),
+    ("attn", "moe"),
+    ("mamba", "moe"),
+    ("attn", "mamba", "moe"),
+    ("moe_router",),
+    ("attn", "moe_router"),
+    ("mamba", "moe_router"),
+    ("attn", "mamba", "moe_router"),
+    ("moe_router", "moe_preprocess"),
+    ("attn", "moe_router", "moe_preprocess"),
+    ("mamba", "moe_router", "moe_preprocess"),
+    ("attn", "mamba", "moe_router", "moe_preprocess"),
+]
+
+
+@pytest.mark.parametrize("scope", VALID_SCOPE_CASES)
+def test_normalize_cuda_graph_scope_accepts_exact_valid_matrix(scope):
+    """Every supported partial CUDA Graph scope normalizes to its canonical tuple."""
+    from nemo_rl.models.megatron.setup import normalize_cuda_graph_scope
+
+    assert normalize_cuda_graph_scope(scope) == scope
+
+
+def test_normalize_cuda_graph_scope_accepts_comma_separated_input():
+    """Hydra comma-separated scope input uses the matrix's canonical order."""
+    from nemo_rl.models.megatron.setup import normalize_cuda_graph_scope
+
+    assert normalize_cuda_graph_scope("mamba, attn, moe_router") == (
+        "attn",
+        "mamba",
+        "moe_router",
+    )
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        ("moe_preprocess",),
+        ("moe", "moe_router"),
+        ("moe", "moe_preprocess"),
+        ("moe_act",),
+        ("shared_experts",),
+        ("attn", "attn"),
+        ("unknown",),
+    ],
+)
+def test_normalize_cuda_graph_scope_rejects_invalid_requests(scope):
+    """Unsupported or ambiguous CUDA Graph requests fail before model setup."""
+    from nemo_rl.models.megatron.setup import normalize_cuda_graph_scope
+
+    with pytest.raises(ValueError):
+        normalize_cuda_graph_scope(scope)
+
+
 @pytest.mark.mcore
 class TestValidateModelPaths:
     """Tests for validate_model_paths function."""

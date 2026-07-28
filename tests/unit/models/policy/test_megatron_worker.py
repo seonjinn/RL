@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -43,6 +44,23 @@ from nemo_rl.utils.checkpoint import CheckpointManager
 from tests.unit.test_utils import SimpleLossFn
 
 pytestmark = pytest.mark.mcore
+
+
+def test_invalid_cuda_graph_scope_is_rejected_before_model_import():
+    """The worker must not import a model for a rejected CUDA Graph scope."""
+    from nemo_rl.models.policy.workers import megatron_policy_worker
+
+    config = {"megatron_cfg": {"cuda_graph_scope": ["moe_preprocess"]}}
+    with patch.object(megatron_policy_worker, "handle_model_import") as model_import:
+        with pytest.raises(ValueError, match="moe_preprocess"):
+            megatron_policy_worker._import_model_after_cuda_graph_scope_validation(
+                config=config,
+                hf_model_name="test/model",
+                pretrained_path="/tmp/model",
+                pt_checkpoint_exists=False,
+            )
+
+    model_import.assert_not_called()
 
 
 class _FakeTrainableModel:
