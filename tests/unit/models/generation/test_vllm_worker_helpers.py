@@ -28,11 +28,20 @@ from nemo_rl.models.generation.vllm.worker_utils import (
         (2, 1, 2, "ray"),
         (1, 2, 2, "ray"),
         (1, 1, 8, "uni"),
-        (1, 1, 1, None),
     ],
 )
 def test_resolve_distributed_executor_backend(tp, pp, ep, expected):
     assert resolve_distributed_executor_backend(tp, pp, ep) == expected
+
+
+def test_qwen_tp1_does_not_create_internal_ray_executor():
+    executor_backend = resolve_distributed_executor_backend(
+        tensor_parallel_size=1,
+        pipeline_parallel_size=1,
+        expert_parallel_size=1,
+    )
+
+    assert executor_backend is None
 
 
 @pytest.mark.parametrize(

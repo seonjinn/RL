@@ -1279,6 +1279,7 @@ def test_environment_variable_precedence_full(
     os.environ["TEST_VAR_2"] = "system_value"
     os.environ["TEST_VAR_3"] = "system_value"
     os.environ["TEST_VAR_4"] = "system_value"
+    os.environ["VLLM_MXFP8_DENSE_CONFIG_FILE"] = "parent-config.json"
 
     try:
         # Create a worker builder with configure_worker method
@@ -1288,47 +1289,62 @@ def test_environment_variable_precedence_full(
         env_vars = {
             "TEST_VAR_1": "yaml_worker_group_value",
             "TEST_VAR_2": "yaml_worker_group_value",
+            "VLLM_MXFP8_DENSE_CONFIG_FILE": (
+                "qwen3_30ba3b_tp1_v0202_rollout_trace_bootstrap.json"
+            ),
         }
 
         # Create worker group
         worker_group = RayWorkerGroup(
             cluster=virtual_cluster,
             remote_worker_builder=builder,
-            workers_per_node=1,
+            workers_per_node=None,
             ## passing env_vars here mimics passing env vars from yaml config
             ## because lm_policy automicatically passes env vars to RayWorkerGroup
             env_vars=env_vars,
         )
 
-        assert len(worker_group.workers) == 1
-        worker = worker_group.workers[0]
+        assert len(worker_group.workers) == 2
 
-        # Verify configure_worker has highest precedence
-        assert (
-            ray.get(worker.get_env_var.remote("TEST_VAR_1")) == "configure_worker_value"
-        )  # configure_worker overrides all
-        assert (
-            ray.get(worker.get_env_var.remote("TEST_VAR_2"))
-            == "yaml_worker_group_value"
-        )  # RayWorkerGroup value preserved
-        assert (
-            ray.get(worker.get_env_var.remote("TEST_VAR_3")) == "system_value"
-        )  # system value takes precedence over worker env vars
-        assert (
-            ray.get(worker.get_env_var.remote("TEST_VAR_4")) == "system_value"
-        )  # system value preserved
-        assert (
-            ray.get(worker.get_env_var.remote("WORKER_VAR")) == "worker_only"
-        )  # configure_worker value set
-        assert (
-            ray.get(worker.get_env_var.remote("RAY_REMOTE_VAR")) == "ray_remote_only"
-        )  # ray.remote runtime_env value preserved
+        for worker in worker_group.workers:
+            # Verify configure_worker has highest precedence
+            assert (
+                ray.get(worker.get_env_var.remote("TEST_VAR_1"))
+                == "configure_worker_value"
+            )  # configure_worker overrides all
+            assert (
+                ray.get(worker.get_env_var.remote("TEST_VAR_2"))
+                == "yaml_worker_group_value"
+            )  # RayWorkerGroup value preserved
+            assert (
+                ray.get(worker.get_env_var.remote("TEST_VAR_3")) == "system_value"
+            )  # system value takes precedence over worker env vars
+            assert (
+                ray.get(worker.get_env_var.remote("TEST_VAR_4")) == "system_value"
+            )  # system value preserved
+            assert (
+                ray.get(worker.get_env_var.remote("WORKER_VAR")) == "worker_only"
+            )  # configure_worker value set
+            assert (
+                ray.get(worker.get_env_var.remote("RAY_REMOTE_VAR"))
+                == "ray_remote_only"
+            )  # ray.remote runtime_env value preserved
+            assert (
+                ray.get(worker.get_env_var.remote("VLLM_MXFP8_DENSE_CONFIG_FILE"))
+                == "qwen3_30ba3b_tp1_v0202_rollout_trace_bootstrap.json"
+            )  # explicit worker-group value overrides the parent environment
 
         worker_group.shutdown(force=True)
 
     finally:
         # Restore original environment
-        for key in ["TEST_VAR_1", "TEST_VAR_2", "TEST_VAR_3", "TEST_VAR_4"]:
+        for key in [
+            "TEST_VAR_1",
+            "TEST_VAR_2",
+            "TEST_VAR_3",
+            "TEST_VAR_4",
+            "VLLM_MXFP8_DENSE_CONFIG_FILE",
+        ]:
             if key in original_env:
                 os.environ[key] = original_env[key]
             else:

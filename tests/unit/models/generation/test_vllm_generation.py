@@ -26,6 +26,7 @@ import ray
 import requests
 import torch
 
+import nemo_rl.models.generation.vllm.vllm_generation as vllm_generation_module
 from nemo_rl.algorithms.grpo import refit_policy_generation
 from nemo_rl.algorithms.loss import NLLLossFn
 from nemo_rl.algorithms.utils import get_tokenizer
@@ -136,6 +137,44 @@ basic_dtensor_test_config: PolicyConfig = {
     "make_sequence_length_divisible_by": 1,
     "generation": deepcopy(basic_vllm_test_config),
 }
+
+
+def test_vllm_config_env_vars_are_stringified_for_outer_worker_group(
+    monkeypatch,
+):
+    config = deepcopy(basic_vllm_test_config)
+    config["vllm_cfg"]["env_vars"] = {
+        "VLLM_MXFP8_DENSE_CONFIG_FILE": Path(
+            "qwen3_30ba3b_tp1_v0202_rollout_trace_bootstrap.json"
+        )
+    }
+    cluster = MagicMock(
+        num_gpus_per_node=2,
+        max_colocated_worker_groups=1,
+    )
+    cluster.world_size.return_value = 2
+    captured_env_vars = []
+
+    class CapturingWorkerGroup:
+        def __init__(self, *args, env_vars, **kwargs):
+            self.dp_size = 2
+            captured_env_vars.append(dict(env_vars))
+
+    monkeypatch.setattr(
+        vllm_generation_module,
+        "RayWorkerGroup",
+        CapturingWorkerGroup,
+    )
+
+    VllmGeneration(
+        cluster,
+        config,
+        workers_per_node=2,
+        defer_model_load=True,
+    )
+
+    expected = "qwen3_30ba3b_tp1_v0202_rollout_trace_bootstrap.json"
+    assert captured_env_vars[0]["VLLM_MXFP8_DENSE_CONFIG_FILE"] == expected
 
 
 def test_resolve_enable_prefix_caching_respects_explicit_config(monkeypatch):
