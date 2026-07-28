@@ -61,6 +61,9 @@ srun \
     export UV_PROJECT_ENVIRONMENT="${DRIVER_VENV}"
     export UV_CACHE_DIR="${UV_CACHE_DIR}"
     uv sync --frozen
+    sed -i \
+      "s/context\\.py_executable = \" \"\\.join(self\\.nsight_cmd) + \" python\"/context.py_executable = \" \".join(self.nsight_cmd) + f\" {context.py_executable}\"/g" \
+      "${DRIVER_VENV}"/lib/python*/site-packages/ray/_private/runtime_env/nsight.py
     export PATH="${DRIVER_VENV}/bin:${PATH}"
     ray --version
     python -c "import ray; print(ray.__version__)"

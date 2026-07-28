@@ -350,6 +350,7 @@ fi
 export MOUNTS
 export NRL_FORCE_REBUILD_VENVS
 export GPUS_PER_NODE
+export RAY_VENV
 export SETUP_COMMAND
 export BASE_LOG_DIR="${RUN_ROOT}/ray"
 if [[ -n "${RAY_VENV}" ]]; then
