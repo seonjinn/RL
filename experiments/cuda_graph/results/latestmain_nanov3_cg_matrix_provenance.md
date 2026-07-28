@@ -134,7 +134,10 @@ by GRPO preprocessing.
 | Scheduler preflight | `2463751` accepted four Ptyche nodes in `backfill` |
 | First working 20-step baseline | `2463752` (`PREEMPTED` after steps 1–12 completed; step 13 was in progress) |
 | Runtime failure check | No Python, Ray, or CUDA fatal error; SLURM marked the backfill allocation `PREEMPTED` after `30m17s` and sent SIGTERM to the batch shell |
-| Current 20-step retry | `2464026` (`PENDING` in `backfill`; preflight `2464025` accepted; time limit reduced to 45 minutes based on observed runtime) |
+| Current 20-step retry | `2464026` (`RUNNING` on `ptyche[0171-0174]`; preflight `2464025` accepted; time limit reduced to 45 minutes based on observed runtime) |
+| Parallel TE CG submissions | `2464091` attn; `2464092` mlp; `2464093` mamba; `2464094` moe; `2464095` moe_router; `2464096` moe_router+moe_preprocess; `2464097` attn+mamba+moe_router+moe_preprocess |
+| TE CG submission contract | Independent jobs without SLURM dependency; 20 steps; sequence packing; `cuda_graph_impl=transformer_engine`; 3 capture warmups; checkpointing disabled |
+| TE CG preflights | `2464083`–`2464089` all accepted on four Ptyche nodes in `backfill` |
 | First-step timing | E2E `269.54s`; generation `85.16s`; policy and reference logprobs `77.03s`; policy training `102.99s` |
 | First-step throughput | E2E `16.06 tokens/s/GPU`; policy training `42.04 tokens/s/GPU`; policy/reference logprobs `56.21 tokens/s/GPU`; generation worker group `50.84 tokens/s/GPU` |
 | First-step training signal | Loss `0.0000`; average reward `0.0000`; generation KL error `0.0018`; mean generation length `4210.0625` |
