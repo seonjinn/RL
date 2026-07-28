@@ -21,6 +21,10 @@ REPO_ROOT=$(cd -- "${SCRIPT_DIR}/../../.." && pwd)
 cd "${REPO_ROOT}"
 source "${SCRIPT_DIR}/profiles/${CLUSTER:?Set CLUSTER to ptyche or oci-hsg}.env"
 PARTITION="${PARTITION_OVERRIDE:-${PARTITION}}"
+# The nightly driver venv links packages into its baked /root/.cache/uv.
+# Overlaying that directory hides targets such as urllib3/exceptions.py before
+# Ray starts, so this acceptance gate must match the baked-cache model launcher.
+unset UV_CACHE_DIR_OVERRIDE
 
 RUN_NAME=latestmain-nanov3-ray-venv-bootstrap-smoke
 COMMAND='uv sync --frozen && NRL_FORCE_REBUILD_VENVS=true uv run --extra mcore --frozen python - <<'"'"'PY'"'"'
