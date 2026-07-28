@@ -130,11 +130,33 @@ if [[ "${HYBRID_EP_BUILD_STAGE:-host}" != "container" ]]; then
   if [[ "${BUILD_ROOT}" != /lustre/* ]]; then
     container_mounts="${container_mounts},${BUILD_ROOT}:${BUILD_ROOT}"
   fi
-  exec srun --container-image="${CONTAINER}" \
+  srun_status=0
+  srun --container-image="${CONTAINER}" \
     --no-container-mount-home \
     --container-mounts="${container_mounts}" \
     --export=ALL,HYBRID_EP_BUILD_STAGE=container \
-    bash "${SCRIPT_PATH}"
+    bash "${SCRIPT_PATH}" || srun_status=$?
+  if [[ "${BUILD_ROOT_EPHEMERAL}" == "1" ]]; then
+    case "${BUILD_ROOT}" in
+      "${LOCAL_SCRATCH_ROOT}"/nemo-rl-hybridep-"${SLURM_JOB_ID}".*)
+        rmdir -- "${BUILD_ROOT}" || {
+          printf 'Failed to remove empty job-local build root: %s\n' \
+            "${BUILD_ROOT}" >&2
+          if [[ "${srun_status}" == "0" ]]; then
+            srun_status=1
+          fi
+        }
+        ;;
+      *)
+        printf 'Refusing to clean unexpected host build root: %s\n' \
+          "${BUILD_ROOT}" >&2
+        if [[ "${srun_status}" == "0" ]]; then
+          srun_status=1
+        fi
+        ;;
+    esac
+  fi
+  exit "${srun_status}"
 fi
 
 if [[ ! -x "${PYTHON_BIN}" ]]; then
@@ -192,13 +214,13 @@ build_succeeded=0
 
 cleanup() {
   if [[ "${BUILD_ROOT_EPHEMERAL}" == "1" ]]; then
-    case "${BUILD_ROOT}" in
-      "${LOCAL_SCRATCH_ROOT}"/nemo-rl-hybridep-"${SLURM_JOB_ID}".*)
-        rm -rf -- "${BUILD_ROOT}"
+    case "${build_dir}" in
+      "${BUILD_ROOT}"/deepep-"${short_commit}"-sm"${arch_tag}"-"${SLURM_JOB_ID}".*)
+        rm -rf -- "${build_dir}"
         ;;
       *)
-        printf 'Refusing to clean unexpected ephemeral build root: %s\n' \
-          "${BUILD_ROOT}" >&2
+        printf 'Refusing to clean unexpected ephemeral build directory: %s\n' \
+          "${build_dir}" >&2
         ;;
     esac
   elif [[ "${build_succeeded}" == "1" ]]; then

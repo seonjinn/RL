@@ -145,6 +145,7 @@ def test_x86_wheel_build_job_is_arch_specific_and_reproducible() -> None:
         'srun --container-image="${CONTAINER}"',
         "--no-container-mount-home",
         'container_mounts="${container_mounts},${BUILD_ROOT}:${BUILD_ROOT}"',
+        'rmdir -- "${BUILD_ROOT}"',
         "git clone --filter=blob:none --recurse-submodules",
         'git -C "${source_dir}" checkout --detach "${DEEPEP_COMMIT}"',
         'git -C "${source_dir}" submodule update --init --recursive',
