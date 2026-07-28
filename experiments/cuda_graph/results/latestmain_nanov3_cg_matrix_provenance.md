@@ -68,3 +68,24 @@ by NeMo-RL commit `db8a0ef4304e449e8629201602cf4f8fdc531582`
 (`build: Update deps for Megatron Inference`, 2026-06-04). This is a source
 packaging/lock coherence failure, not a CUDA Graph or model-runtime result.
 No OCI staging or model job was submitted.
+
+## Corrected Bridge exact MCore overlay
+
+| Field | Value |
+| --- | --- |
+| Scheduler preflight | `2456757` accepted one exclusive Ptyche GB200 node (test-only) |
+| Probe job | `2456759` (`TIMEOUT`, scheduler limit, 20m13s) |
+| Fresh source checkout | `51727413636105f0b1a3ff8a6178b68b34b0dd02`, a probe-contract-only child of reviewed NeMo source `e4880ea4f7e6b2b805644fccc1f7434107b5beaf` |
+| Fresh source path | `/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-latestmain-nanov3-uv-overlay-mcore-20260727-51727413` |
+| Recursive workspaces | Gym present; corrected Bridge `59c163cce9cb8cc209dcd0424b2b9de9d1be5027`; nested MCore `53f5161ce000b5320bc16cb260949c2e6808da83` |
+| Probe log | `/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-latestmain-nanov3-uv-overlay-mcore-20260727-51727413/exp_logs/cuda_graph_uv_overlay_mcore_probe/ptyche_2456759.out` |
+| Exact launcher | `NRL_FORCE_REBUILD_VENVS=true uv run --extra mcore --frozen python -c ...` importing Transformer Engine, MCore, Mamba, and NeMo-RL |
+| Successful stages | The corrected editable Bridge build, `megatron-core`, `nemo-rl`, DeepEP, Mamba, causal-conv1d, and the other non-TE native dependencies built successfully |
+| Terminal blocker | Transformer Engine `42b840051647eef89761a16dfdff87e82bb253ab` was still building when Slurm cancelled the job at the script's 20-minute limit; imports never ran and `uv_overlay_imports=passed` was not emitted |
+| Lock integrity | `uv lock --check` still reported that the tracked lock needs an update, while frozen `uv.lock` remained clean and equal to `HEAD:uv.lock` (`30a35a07db7a646a7e0fb4e458daf264cf6c805a`, SHA256 `58535d4aab618394a6926d6ad93da4b3ca01d95bee8d36b1a88635aa9ea36e66`); no source `.venv` was created |
+
+This timeout supersedes the earlier Bridge metadata failure as the current
+environment gate. It establishes that the Bridge correction resolves editable
+package construction, but does not establish successful Transformer Engine or
+Mamba import. No OCI staging, model smoke, CUDA Graph matrix, performance, or
+accuracy job was submitted after this terminal result.
