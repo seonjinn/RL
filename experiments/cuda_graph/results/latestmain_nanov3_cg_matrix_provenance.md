@@ -16,7 +16,14 @@
 | Metadata | `/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/nemo_rl_nightly_20260727_2456107.sqsh.metadata.txt` |
 | Staging log | `/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/stage_nemo_rl_nightly_2456107.log` |
 | Integrity check | Metadata SHA256 equals an independently recomputed SHA256 |
-| Runtime smoke | Pending full GPU/runtime probe |
+| Runtime probe job | `2456229` (`FAILED`, exit `1:0`, 1m02s) |
+| Runtime probe log | `/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-latestmain-nanov3-stage-20260727-8663093c/exp_logs/cuda_graph_runtime_probe/ptyche_2456229.out` |
+| Runtime gate result | Python `3.13.13` and four GPUs passed; `transformer_engine` import failed with `ModuleNotFoundError` |
+
+The required Transformer Engine gate failed before `megatron.core`, `mamba_ssm`,
+the current config parse, or any model job could run. No NanoV3 CUDA Graph
+model smoke was submitted. OCI-HSG staging and all performance/accuracy work
+remain held because the same ARM64 image digest cannot satisfy this gate.
 
 The 2026-07-15 image and the Megatron-LM CI image are not valid baselines for
 this matrix and are not used here.
