@@ -90,6 +90,7 @@ EXTRA_MOUNTS=${EXTRA_MOUNTS:-}
 NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-true}
 DRIVER_VENV=${DRIVER_VENV:-}
 RAY_VENV=${RAY_VENV:-}
+UV_LOCK_TIMEOUT=${UV_LOCK_TIMEOUT:-1800}
 
 case "${DISPATCHER_MODE}" in
   hybridep | recipe) ;;
@@ -106,6 +107,11 @@ case "${NRL_FORCE_REBUILD_VENVS}" in
     exit 2
     ;;
 esac
+
+if [[ ! "${UV_LOCK_TIMEOUT}" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'UV_LOCK_TIMEOUT must be a positive integer number of seconds.\n' >&2
+  exit 2
+fi
 
 if [[ -n "${DRIVER_VENV}" ]]; then
   case "${DRIVER_VENV}" in
@@ -328,6 +334,7 @@ metadata_path="${RUN_ROOT}/submission.env"
   printf 'extra_mounts=%q\n' "${EXTRA_MOUNTS}"
   printf 'driver_venv=%q\n' "${DRIVER_VENV}"
   printf 'ray_venv=%q\n' "${RAY_VENV}"
+  printf 'uv_lock_timeout=%q\n' "${UV_LOCK_TIMEOUT}"
   printf 'rl_commit=%q\n' "${RL_COMMIT}"
   printf 'bridge_commit=%q\n' "${BRIDGE_COMMIT}"
   printf 'megatron_lm_commit=%q\n' "${MEGATRON_LM_COMMIT}"
@@ -349,6 +356,7 @@ if [[ -n "${EXTRA_MOUNTS}" ]]; then
 fi
 export MOUNTS
 export NRL_FORCE_REBUILD_VENVS
+export UV_LOCK_TIMEOUT
 export GPUS_PER_NODE
 export RAY_VENV
 export SETUP_COMMAND

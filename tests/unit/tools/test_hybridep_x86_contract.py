@@ -133,6 +133,9 @@ def test_launcher_allows_shared_non_lustre_logs_without_changing_defaults() -> N
     assert "NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-true}" in launcher
     assert "DRIVER_VENV=${DRIVER_VENV:-}" in launcher
     assert "RAY_VENV=${RAY_VENV:-}" in launcher
+    assert "UV_LOCK_TIMEOUT=${UV_LOCK_TIMEOUT:-1800}" in launcher
+    assert "export UV_LOCK_TIMEOUT" in launcher
+    assert "uv_lock_timeout=%q" in launcher
     assert 'driver_args=(env "UV_PROJECT_ENVIRONMENT=${DRIVER_VENV}"' in launcher
     assert 'PATH="${RAY_VENV}/bin:${PATH}"' in launcher
     assert "export PATH" in launcher
@@ -145,6 +148,21 @@ def test_launcher_allows_shared_non_lustre_logs_without_changing_defaults() -> N
     assert '"$RAY_BIN" stop' in ray_submit
     assert '"$RAY_BIN" start --head' in ray_submit
     assert '"$RAY_BIN" start --address' in ray_submit
+
+
+def test_launcher_rejects_an_invalid_uv_lock_timeout() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    launcher = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "oci-hsg"
+        / "hybridep"
+        / "submit_grpo.sh"
+    ).read_text()
+
+    assert '[[ ! "${UV_LOCK_TIMEOUT}" =~ ^[1-9][0-9]*$ ]]' in launcher
+    assert "UV_LOCK_TIMEOUT must be a positive integer number of seconds." in launcher
 
 
 def test_x86_wheel_build_job_is_arch_specific_and_reproducible() -> None:

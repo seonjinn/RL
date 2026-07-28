@@ -119,6 +119,12 @@ export DRIVER_VENV=/absolute/shared/path/driver-venv
 export RAY_VENV="${DRIVER_VENV}"
 ```
 
+When multiple nodes populate one mounted UV cache, source builds are
+serialized by a distribution lock. The launcher exports
+`UV_LOCK_TIMEOUT=1800` by default so a second node can reuse the first node's
+completed build instead of failing at UV's 300-second default. Override it
+only with a positive integer number of seconds.
+
 Run the two-node, three-step compatibility gate first:
 
 ```bash
