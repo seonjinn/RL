@@ -195,12 +195,13 @@ The rollout actors continue to use NeMo-RL's dedicated
 or a `PYTHONPATH` overlay is not an accepted production path.
 
 `vllm_cfg.env_vars` already reaches the outer NeMo-RL generation actors.
-NeMo-RL is additionally changed so every configured variable name is merged
-into vLLM 0.20's internal Ray-worker `ADDITIONAL_ENV_VARS` list. The merge is
-deterministic, monotonic, idempotent, and protected by the existing patch
-file lock. A later actor with a different environment-variable set must
-extend the whitelist rather than silently retain the first actor's list.
-Missing or changed vLLM 0.20 patch anchors fail loudly.
+Qwen rollout TP1 does not create vLLM internal Ray workers. For a later TP>1
+run, vLLM 0.20.2's native `ray_env.get_env_vars_to_copy()` copies every
+`VLLM_*` variable before internal worker initialization, so
+`VLLM_MXFP8_DENSE_CONFIG_FILE` requires no NeMo source rewrite. The obsolete
+`ADDITIONAL_ENV_VARS` assignment patch remains optional and must not become a
+required vLLM 0.20.2 anchor. Arbitrary non-`VLLM_*` variables, if ever needed,
+use vLLM's supported `VLLM_RAY_EXTRA_ENV_VARS_TO_COPY` contract.
 
 Docker custom-build arguments are quoted independently so an omitted optional
 argument cannot shift the wheel URL into the Git-ref position.
@@ -252,8 +253,8 @@ Run the JSON parser/configuration tests and the ported adaptive contracts:
 - invalid and conflicting configuration rejection;
 - configuration freeze;
 - NeMo-RL custom-vLLM dependency rewrite;
-- repeatable union of configured names into vLLM internal Ray-worker
-  environment forwarding;
+- exact JSON-key forwarding into every NeMo generation actor and vLLM 0.20's
+  native `VLLM_*` internal-worker copy contract;
 - NeMo-RL vLLM refit-loader compatibility.
 
 ### Gate 2: Qwen Trace Applicability

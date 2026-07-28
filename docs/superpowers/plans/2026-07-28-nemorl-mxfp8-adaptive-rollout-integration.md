@@ -8,8 +8,9 @@ workloads.
 **Architecture:** Keep the custom vLLM source as the sole `vllm` dependency in
 the locked NeMo-RL environment. Put the tactic JSON inside the custom vLLM
 package and pass only `VLLM_MXFP8_DENSE_CONFIG_FILE` through
-`policy.generation.vllm_cfg.env_vars`. Extend the existing vLLM source patch so
-the configured key reaches vLLM's internal tensor-parallel Ray workers. Use the
+`policy.generation.vllm_cfg.env_vars`. Use NeMo-RL's existing outer-actor
+runtime environment and vLLM 0.20.2's native `VLLM_*` internal-worker
+forwarding; do not patch an obsolete `ADDITIONAL_ENV_VARS` assignment. Use the
 exact latest-main Qwen3-30B-A3B 4n4g MXFP8 rollout as the primary integration
 and performance workload. Trace and qualify Qwen TP1 shapes first; if the MoE
 and ignored-projection execution path produces zero eligible dense MXFP8 calls,
@@ -122,61 +123,66 @@ git diff --check
 git commit -s -m "build: make custom vLLM source reproducible"
 ```
 
-### Task 2: Forward configured environment keys to internal vLLM Ray workers
+### Task 2: Lock the JSON key forwarding contract without source rewriting
 
 **Files:**
 
-- Modify: `nemo_rl/models/generation/vllm/patches.py`
-- Modify: `nemo_rl/models/generation/vllm/vllm_worker.py`
+- Create: `tests/unit/models/generation/test_vllm_env_forwarding.py`
 - Create: `tests/unit/models/generation/test_vllm_patches.py`
+- Modify: `tests/unit/distributed/test_worker_groups.py`
 - Modify: `tests/unit/models/generation/test_vllm_generation.py`
+- Modify: `tests/unit/models/generation/test_vllm_worker_helpers.py`
 
-**Interfaces:**
+**Verified production flow:**
 
-```python
-def _merge_additional_env_vars_assignment(
-    content: str,
-    required_names: Collection[str],
-) -> str:
-    ...
-
-def _configured_vllm_env_var_names(config: VllmConfig) -> list[str]:
-    ...
+```text
+VllmSpecificArgs.env_vars
+-> VllmGeneration stringifies and merges values
+-> RayWorkerGroup preserves explicit values over inherited parent values
+-> every outer generation actor receives the runtime_env
+-> Qwen TP1 uses no internal vLLM Ray executor
+-> TP>1 vLLM ray_env copies every VLLM_* key before worker initialization
 ```
 
-- [ ] Add pure tests for sorted deterministic union, repeated application,
-  sequential actors with disjoint key sets, malformed environment names, and
-  a missing assignment anchor.
-- [ ] Add worker tests proving keys from `vllm_cfg.env_vars` are merged with
-  subclass-provided `extra_env_vars` before `_apply_vllm_patches`.
-- [ ] Observe the new tests fail on the current first-writer-wins patch.
-- [ ] Parse the existing `ADDITIONAL_ENV_VARS = {...}` assignment under the
-  current file lock, union defaults and requested keys, and rewrite it in
-  sorted order. Raise a descriptive error if the single expected assignment
-  cannot be found or parsed.
-- [ ] Validate environment variable names against
-  `[A-Za-z_][A-Za-z0-9_]*`.
-- [ ] In `_init_config`, derive names from `config["vllm_cfg"]["env_vars"]`,
-  merge them with `extra_env_vars`, store the merged list, and pass it to
-  `_apply_vllm_patches`.
+- [ ] Add a config-to-worker-group capture test proving the exact
+  `VLLM_MXFP8_DENSE_CONFIG_FILE` value is stringified and passed to every outer
+  generation actor.
+- [ ] Extend the existing actual-Ray worker-group test to prove an explicit
+  JSON path overrides a conflicting parent environment value.
+- [ ] Test Qwen TP1 backend resolution and assert that it does not create an
+  internal Ray executor.
+- [ ] Against the checked-out custom vLLM 0.20.2 source, test
+  `ray_env.get_env_vars_to_copy()` includes
+  `VLLM_MXFP8_DENSE_CONFIG_FILE` without
+  `VLLM_RAY_EXTRA_ENV_VARS_TO_COPY`.
+- [ ] Add a regression that the legacy optional patch remains a no-op when
+  vLLM 0.20.2 has no `ADDITIONAL_ENV_VARS` assignment. Do not add a missing
+  anchor failure for this obsolete patch.
+- [ ] Keep production code unchanged unless a new test exposes an actual gap.
+  If arbitrary non-`VLLM_*` keys are later required, use
+  `VLLM_RAY_EXTRA_ENV_VARS_TO_COPY` rather than rewriting vLLM source.
 - [ ] Run:
 
 ```bash
 uv run --group test pytest \
+  tests/unit/models/generation/test_vllm_env_forwarding.py \
   tests/unit/models/generation/test_vllm_patches.py \
-  tests/unit/models/generation/test_vllm_generation.py -q
+  tests/unit/distributed/test_worker_groups.py \
+  tests/unit/models/generation/test_vllm_generation.py \
+  tests/unit/models/generation/test_vllm_worker_helpers.py -q
 uv run --group lint ruff check \
-  nemo_rl/models/generation/vllm/patches.py \
-  nemo_rl/models/generation/vllm/vllm_worker.py \
+  tests/unit/models/generation/test_vllm_env_forwarding.py \
   tests/unit/models/generation/test_vllm_patches.py \
-  tests/unit/models/generation/test_vllm_generation.py
+  tests/unit/distributed/test_worker_groups.py \
+  tests/unit/models/generation/test_vllm_generation.py \
+  tests/unit/models/generation/test_vllm_worker_helpers.py
 git diff --check
 ```
 
 - [ ] Commit with signoff:
 
 ```bash
-git commit -s -m "fix(vllm): forward configured env to TP workers"
+git commit -s -m "test(vllm): lock JSON env forwarding contract"
 ```
 
 ### Task 3: Add the Qwen3-30B-A3B 4n4g adaptive MXFP8 trace gate
