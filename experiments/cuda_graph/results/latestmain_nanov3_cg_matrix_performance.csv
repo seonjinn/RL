@@ -1,2 +1,5 @@
 scope,job_id,step_window,timing/train/total_step_time,performance/tokens_per_sec_per_gpu,timing/train/generation,timing/train/policy_training,timing/train/policy_and_reference_logprobs,avg_reward,loss,mean_generation_length,note
 nocg-offline-snapshot,2463752,step-1,269.54,16.06,85.16,102.99,77.03,0.0000,0.0000,4210.0625,cold first step only; exclude from steady-state comparison
+nocg-offline-snapshot,2463752,step-2,55.95,47.00,41.59,2.05,4.96,0.0000,0.0000,2505.8750,first warm step; run is still in progress
+nocg-offline-snapshot,2463752,step-3,51.38,67.64,40.46,2.05,2.86,0.0625,0.1448,3338.5000,warm step; first nonzero reward and loss
+nocg-offline-snapshot,2463752,step-4,50.06,50.30,39.63,1.78,2.61,0.0000,0.0000,2420.6875,warm step; run is still in progress
