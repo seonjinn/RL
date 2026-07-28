@@ -27,6 +27,11 @@ set -euo pipefail
 : "${GPU_ARCH:?GPU_ARCH is required}"
 : "${DEEPEP_COMMIT:?DEEPEP_COMMIT is required}"
 : "${SLURM_JOB_ID:?SLURM_JOB_ID is required}"
+if [[ -z "${HYBRID_EP_SCRIPT_PATH:-}" ]]; then
+  : "${SLURM_SUBMIT_DIR:?HYBRID_EP_SCRIPT_PATH or SLURM_SUBMIT_DIR is required}"
+  HYBRID_EP_SCRIPT_PATH="${SLURM_SUBMIT_DIR}/scripts/experiments/x86/hybridep/build_deepep_wheel.sbatch"
+fi
+: "${HYBRID_EP_SCRIPT_PATH:?HYBRID_EP_SCRIPT_PATH is required}"
 
 [[ "${DEEPEP_COMMIT}" =~ ^[0-9a-f]{40}$ ]]
 case "${GPU_ARCH}" in
@@ -50,8 +55,14 @@ esac
 
 PYTHON_BIN=${PYTHON_BIN:-/opt/nemo_rl_venv/bin/python}
 DEEPEP_REPO_URL=${DEEPEP_REPO_URL:-https://github.com/deepseek-ai/DeepEP.git}
-SCRIPT_PATH=$(readlink -f -- "${BASH_SOURCE[0]}")
+SCRIPT_PATH=$(readlink -f -- "${HYBRID_EP_SCRIPT_PATH}")
 CONTAINER=$(readlink -f -- "${CONTAINER}")
+
+if [[ ! -f "${SCRIPT_PATH}" ]]; then
+  printf 'Original build script does not exist: %s\n' \
+    "${HYBRID_EP_SCRIPT_PATH}" >&2
+  exit 2
+fi
 
 for shared_path in "${SCRIPT_PATH}" "${CONTAINER}" "${OUTPUT_DIR}"; do
   case "${shared_path}" in
@@ -101,6 +112,7 @@ export HYBRID_EP_TRANSPORT
 export PYTHON_BIN
 export DEEPEP_REPO_URL
 export SCRIPT_PATH
+export HYBRID_EP_SCRIPT_PATH="${SCRIPT_PATH}"
 export CONTAINER_SHA256="${container_sha256}"
 
 if [[ "${HYBRID_EP_BUILD_STAGE:-host}" != "container" ]]; then
