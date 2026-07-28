@@ -200,6 +200,7 @@ def forward_with_post_processing_fn(
     attention_mask = processed_mb.attention_mask
     position_ids = processed_mb.position_ids
     packed_seq_params = processed_mb.packed_seq_params
+    cu_seqlens = processed_mb.cu_seqlens
     cu_seqlens_padded = processed_mb.cu_seqlens_padded
     mtp_loss_mask = processed_mb.mtp_loss_mask
     routed_experts_cp_sharded = processed_mb.routed_experts_cp_sharded
@@ -273,6 +274,8 @@ def forward_with_post_processing_fn(
         post_processing_fn_wrapped = post_processing_fn(
             data_dict=data_dict,
             packed_seq_params=packed_seq_params,
+            cu_seqlens=cu_seqlens,
+            cu_seqlens_padded=cu_seqlens_padded,
             global_valid_seqs=global_valid_seqs,
             global_valid_toks=global_valid_toks,
         )
@@ -414,6 +417,8 @@ class LossPostProcessor:
         self,
         data_dict: BatchedDataDict[Any],
         packed_seq_params: Optional[PackedSeqParams] = None,
+        cu_seqlens: Optional[torch.Tensor] = None,
+        cu_seqlens_padded: Optional[torch.Tensor] = None,
         global_valid_seqs: Optional[torch.Tensor] = None,
         global_valid_toks: Optional[torch.Tensor] = None,
     ) -> Callable[[torch.Tensor], Tuple[torch.Tensor, Dict[str, Any]]]:
@@ -426,6 +431,10 @@ class LossPostProcessor:
         Args:
             data_dict: Batched data dictionary for the current microbatch
             packed_seq_params: Parameters for packed sequences (optional)
+            cu_seqlens: Actual unpadded sample boundaries. These can be shorter
+                than the fixed graph metadata.
+            cu_seqlens_padded: Actual padded sample boundaries. These can be
+                shorter than the fixed graph metadata.
             global_valid_seqs: Global valid sequence count for loss normalization
             global_valid_toks: Global valid token count for loss normalization
 
@@ -470,8 +479,16 @@ class LossPostProcessor:
             loss_fn_wrapped = wrapper_cls(
                 loss_fn=self.loss_fn,
                 prepare_fn=prepare_fn,
-                cu_seqlens_q=packed_seq_params.cu_seqlens_q,
-                cu_seqlens_q_padded=packed_seq_params.cu_seqlens_q_padded,
+                cu_seqlens_q=(
+                    cu_seqlens
+                    if cu_seqlens is not None
+                    else packed_seq_params.cu_seqlens_q
+                ),
+                cu_seqlens_q_padded=(
+                    cu_seqlens_padded
+                    if cu_seqlens_padded is not None
+                    else packed_seq_params.cu_seqlens_q_padded
+                ),
                 vocab_parallel_rank=get_tensor_model_parallel_rank(),
                 vocab_parallel_group=get_tensor_model_parallel_group(),
                 context_parallel_group=get_context_parallel_group(),

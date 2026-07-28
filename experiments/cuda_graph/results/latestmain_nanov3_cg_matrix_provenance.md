@@ -206,3 +206,23 @@ pipeline microbatch schedule checks, and the independent scope launchers. This
 is a CPU contract result. A GPU smoke must still prove actual Transformer
 Engine graph capture and replay before any CUDA Graph performance sample is
 accepted.
+
+## First corrected GPU smoke
+
+| Field | Value |
+| --- | --- |
+| Scheduler preflight | `2465026` accepted eight Ptyche GB200 nodes in `backfill` |
+| Smoke job | `2465030` (`FAILED`, exit `1:0`, 17m41s) |
+| Source SHA | `17e0c0150f9e2aef9a8ad5feb1452f5b6ed88b39` |
+| Scope | `attn`; Transformer Engine; packed sequence; maximum 16 sequences; three warmup optimizer steps |
+| Successful stages | Ray 32/32; vLLM workers 16/16; Megatron workers 16/16; vLLM and policy/reference models loaded; GRPO Step 1 generation, rewards, and logprobs completed |
+| Failure | First policy-training loss sliced a fixed graph sentinel as a real sequence: `end: 2 is greater than the shape of the tensor: 1 for key: advantages` |
+| Log | `/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-latestmain-nanov3-energon-20260728-6718b0a4b/exp_logs/latestmain-nanov3-attn-smoke/2465030-logs/ray-driver.log` |
+
+The forward path correctly needs fixed-shape Transformer Engine metadata, but
+the per-sample loss path must retain the actual unpadded and padded boundaries.
+The smoke exposed that these two contracts had been conflated. The correction
+threads the actual boundaries separately into the loss wrapper while retaining
+the sentinel-padded metadata for model forward and graph capture. Job
+`2465030` contains no capture or replay evidence and is not a performance
+sample.

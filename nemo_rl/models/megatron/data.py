@@ -47,6 +47,7 @@ class ProcessedInputs:
     mtp_loss_mask: Optional[torch.Tensor] = None
     routed_experts: Optional[torch.Tensor] = None
     routed_experts_cp_sharded: Optional[torch.Tensor] = None
+    cu_seqlens: Optional[torch.Tensor] = None
 
 
 @dataclass
@@ -80,6 +81,7 @@ class ProcessedMicrobatch:
     mtp_loss_mask: Optional[torch.Tensor] = None
     routed_experts: Optional[torch.Tensor] = None
     routed_experts_cp_sharded: Optional[torch.Tensor] = None
+    cu_seqlens: Optional[torch.Tensor] = None
 
 
 def make_processed_microbatch_iterator(
@@ -140,6 +142,7 @@ def make_processed_microbatch_iterator(
             mtp_loss_mask=processed_inputs.mtp_loss_mask,
             routed_experts=processed_inputs.routed_experts,
             routed_experts_cp_sharded=processed_inputs.routed_experts_cp_sharded,
+            cu_seqlens=processed_inputs.cu_seqlens,
         )
 
 
@@ -488,6 +491,7 @@ def process_microbatch(
         mtp_loss_mask=mtp_loss_mask,
         routed_experts=routed_experts,
         routed_experts_cp_sharded=routed_experts_cp_sharded,
+        cu_seqlens=cu_seqlens,
     )
 
 
