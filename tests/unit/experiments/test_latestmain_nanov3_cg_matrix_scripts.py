@@ -266,6 +266,7 @@ def test_uv_overlay_probe_preserves_the_lock_and_tests_the_actual_launcher_path(
     assert "NRL_FORCE_REBUILD_VENVS=true uv run --frozen python -c" not in source
     assert "transformer_engine.pytorch" in source
     assert "megatron.core" in source
+    assert "mamba_ssm" in source
     assert "nemo_rl" in source
 
 
