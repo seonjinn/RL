@@ -98,6 +98,25 @@ def test_qwen_4n8g_x86_profiles_are_matched() -> None:
     ) in hybridep
 
 
+def test_recursive_checkout_uses_the_branch_that_exposes_the_bridge_gitlink() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    gitmodules = (project_root / ".gitmodules").read_text()
+    launcher = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "oci-hsg"
+        / "hybridep"
+        / "submit_grpo.sh"
+    ).read_text()
+
+    assert "branch = sna/super-autobridge-config-reuse-20260727" in gitmodules
+    assert (
+        "git -c fetch.recurseSubmodules=false pull --ff-only --recurse-submodules=no"
+    ) in launcher
+    assert "git submodule update --init --recursive" in launcher
+
+
 def test_x86_wheel_build_job_is_arch_specific_and_reproducible() -> None:
     project_root = Path(__file__).resolve().parents[3]
     build_script = (

@@ -29,7 +29,7 @@ if [[ -n "$(git status --porcelain)" ]]; then
 fi
 
 HEAD_BEFORE_PULL=$(git rev-parse HEAD)
-git pull --ff-only
+git -c fetch.recurseSubmodules=false pull --ff-only --recurse-submodules=no
 git submodule sync --recursive
 git submodule update --init --recursive
 HEAD_AFTER_PULL=$(git rev-parse HEAD)

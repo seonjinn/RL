@@ -1,7 +1,7 @@
 [submodule "3rdparty/Megatron-Bridge"]
 	path = 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
 	url = https://github.com/seonjinn/Megatron-Bridge.git
-	branch = sna/pin-hybridep-seqpack-mlm-20260626
+	branch = sna/super-autobridge-config-reuse-20260727
 	shallow = true
 [submodule "3rdparty/Automodel-workspace/Automodel"]
 	path = 3rdparty/Automodel-workspace/Automodel
