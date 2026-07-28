@@ -88,6 +88,7 @@ SCOPE_SCRIPTS = {
         "moe_preprocess",
     ),
 }
+AUXILIARY_SCOPE_SCRIPTS = {"00_nocg_baked_uv_cache.sh"}
 
 
 def _script_source(script_name: str) -> str:
@@ -104,7 +105,10 @@ def _visible_scope(script_source: str) -> tuple[str, ...]:
 def _fake_sbatch(tmp_path: Path) -> Path:
     sbatch_path = tmp_path / "sbatch"
     sbatch_path.write_text(
-        "#!/usr/bin/env bash\nprintf 'fake-sbatch %q ' \"$@\"\nprintf '\\n'\n"
+        "#!/usr/bin/env bash\n"
+        "printf 'fake-sbatch %q ' \"$@\"\n"
+        "printf '\\nHF_HUB_OFFLINE=%q\\n' \"${HF_HUB_OFFLINE:-}\"\n"
+        "printf 'TRANSFORMERS_OFFLINE=%q\\n' \"${TRANSFORMERS_OFFLINE:-}\"\n"
     )
     sbatch_path.chmod(0o755)
     return sbatch_path
@@ -157,7 +161,7 @@ def test_scope_scripts_are_exact_task3_matrix_with_visible_scope_per_file() -> N
     """Every reusable file has the sole, hard-coded scope it submits."""
     assert list(SCOPE_SCRIPTS.values()) == VALID_SCOPE_CASES
     assert sorted(path.name for path in SCOPE_ROOT.glob("*.sh")) == sorted(
-        SCOPE_SCRIPTS
+        set(SCOPE_SCRIPTS) | AUXILIARY_SCOPE_SCRIPTS
     )
 
     for script_name, expected_scope in SCOPE_SCRIPTS.items():
@@ -165,6 +169,24 @@ def test_scope_scripts_are_exact_task3_matrix_with_visible_scope_per_file() -> N
         assert "CONFIG=examples/configs/recipes/llm/performance/" in source
         assert "RUN_NAME=" in source
         assert _visible_scope(source) == expected_scope
+
+
+def test_baked_baseline_uses_verified_ptyche_snapshot_without_hub_access(
+    tmp_path: Path,
+) -> None:
+    """The recovery baseline cannot regress to vLLM Hub metadata requests."""
+    result = _run_test_only("00_nocg_baked_uv_cache.sh", tmp_path)
+    snapshot = (
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+        "models--nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16/"
+        "snapshots/97ab8012882a655dc38df4fee47422aca9caca07"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"policy.model_name={snapshot}" in result.stdout
+    assert f"policy.tokenizer.name={snapshot}" in result.stdout
+    assert "\nHF_HUB_OFFLINE=1\n" in result.stdout
+    assert "\nTRANSFORMERS_OFFLINE=1\n" in result.stdout
 
 
 def test_non_cg_scripts_keep_required_te_graph_settings_visible() -> None:

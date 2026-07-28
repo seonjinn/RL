@@ -37,6 +37,8 @@ CONFIG=examples/configs/recipes/llm/performance/grpo-nanov3-30BA3B-2n8g-megatron
 RUN_NAME="latestmain-nanov3-nocg-${PHASE}-baked-uv-cache"
 COMMAND="NRL_FORCE_REBUILD_VENVS=true uv run --extra mcore examples/run_grpo.py \
   --config ${CONFIG} \
+  policy.model_name=${NANOV3_MODEL_SNAPSHOT:?Set NANOV3_MODEL_SNAPSHOT} \
+  policy.tokenizer.name=${NANOV3_MODEL_SNAPSHOT} \
   cluster.num_nodes=${NUM_ACTOR_NODES} \
   cluster.gpus_per_node=${GPUS_PER_NODE} \
   grpo.max_num_steps=${STEPS:-5} \
@@ -75,6 +77,8 @@ COMMAND="${COMMAND}" \
 CONTAINER="${CONTAINER}" \
 HF_HOME="${HF_HOME}" \
 HF_DATASETS_CACHE="${HF_DATASETS_CACHE}" \
+HF_HUB_OFFLINE=1 \
+TRANSFORMERS_OFFLINE=1 \
 WANDB_API_KEY="${WANDB_API_KEY:-}" \
 MOUNTS="${MOUNTS}" \
 BASE_LOG_DIR="exp_logs/${RUN_NAME}" \
