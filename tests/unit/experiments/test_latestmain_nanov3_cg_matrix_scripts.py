@@ -26,6 +26,9 @@ SCRIPT_ROOT = REPO_ROOT / "experiments/cuda_graph/latestmain_nanov3"
 SCOPE_ROOT = SCRIPT_ROOT / "scopes"
 SETUP_TEST = REPO_ROOT / "tests/unit/models/megatron/test_megatron_setup.py"
 RAY_SUB = REPO_ROOT / "ray.sub"
+FRESH_CLONE_SCRIPT = (
+    REPO_ROOT / "experiments/cuda_graph/prepare_latestmain_nanov3_fresh_clone.sh"
+)
 FULL_RUNTIME_PROBE = (
     REPO_ROOT / "experiments/cuda_graph/probe_latestmain_full_runtime.sbatch"
 )
@@ -153,6 +156,14 @@ def test_non_cg_scripts_keep_required_te_graph_settings_visible() -> None:
         assert "ray.sub" in source
 
 
+def test_all_scope_scripts_install_the_optional_mcore_runtime_extra() -> None:
+    """Every baseline and graph scope must install TE/MCore before ray.sub runs."""
+    for script_name in SCOPE_SCRIPTS:
+        source = _script_source(script_name)
+        assert "NRL_FORCE_REBUILD_VENVS=true uv run --extra mcore " in source
+        assert "NRL_FORCE_REBUILD_VENVS=true uv run examples/run_grpo.py" not in source
+
+
 def test_nocg_script_emits_no_training_cuda_graph_override() -> None:
     """The baseline remains eager even when the shared recipe changes later."""
     source = _script_source("00_nocg.sh")
@@ -260,3 +271,18 @@ def test_submit_all_invokes_each_named_file_without_dynamic_scope_rewrite() -> N
     assert "cuda_graph_scope" not in source
     for script_name in SCOPE_SCRIPTS:
         assert script_name in source
+
+
+def test_fresh_clone_procedure_initializes_gym_and_nested_provenance() -> None:
+    """A fresh runtime checkout must initialize every workspace before probing."""
+    source = FRESH_CLONE_SCRIPT.read_text()
+    assert 'BRANCH="experiment/latestmain-pr5672-nano-matrix-20260727"' in source
+    assert "git submodule sync --recursive" in source
+    assert "git submodule update --init --recursive" in source
+    assert "3rdparty/Gym-workspace/Gym" in source
+    assert "Gym workspace is missing after recursive submodule initialization" in source
+    assert "git rev-parse HEAD" in source
+    assert 'git -C "${BRIDGE_PATH}" rev-parse HEAD' in source
+    assert 'git -C "${MCORE_PATH}" rev-parse HEAD' in source
+    assert "sbatch" not in source
+    assert "ray.sub" not in source

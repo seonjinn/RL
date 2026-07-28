@@ -39,7 +39,7 @@ if [[ "${MOE_ACT_RECOMPUTE}" == "1" ]]; then
   RUN_SUFFIX+="-moe-act-recompute"
 fi
 RUN_NAME="latestmain-nanov3-mamba-moe-router-preprocess-${PHASE}${RUN_SUFFIX}"
-COMMAND="NRL_FORCE_REBUILD_VENVS=true uv run examples/run_grpo.py \
+COMMAND="NRL_FORCE_REBUILD_VENVS=true uv run --extra mcore examples/run_grpo.py \
   --config ${CONFIG} \
   cluster.num_nodes=${NUM_ACTOR_NODES} \
   cluster.gpus_per_node=${GPUS_PER_NODE} \

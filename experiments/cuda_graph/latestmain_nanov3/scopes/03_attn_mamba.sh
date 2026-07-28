@@ -17,7 +17,7 @@ esac
 
 CONFIG=examples/configs/recipes/llm/performance/grpo-nanov3-30BA3B-2n8g-megatron-pack-cp-cudagraph-matrix.yaml
 RUN_NAME="latestmain-nanov3-attn-mamba-${PHASE}"
-COMMAND="NRL_FORCE_REBUILD_VENVS=true uv run examples/run_grpo.py \
+COMMAND="NRL_FORCE_REBUILD_VENVS=true uv run --extra mcore examples/run_grpo.py \
   --config ${CONFIG} \
   cluster.num_nodes=${NUM_ACTOR_NODES} \
   cluster.gpus_per_node=${GPUS_PER_NODE} \
