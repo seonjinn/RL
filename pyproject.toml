@@ -258,6 +258,7 @@ test = [
   "pytest-asyncio",
   "pytest-testmon",
   "pytest-shard",
+  "tomlkit",
 ]
 
 [tool.uv.sources]

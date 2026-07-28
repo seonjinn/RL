@@ -18,64 +18,65 @@ set -eou pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(realpath "$SCRIPT_DIR/..")"
 
+usage() {
+  echo "Usage: $0 <GIT_URL> <IMMUTABLE_GIT_COMMIT> <VLLM_PRECOMPILED_WHEEL_LOCATION>" >&2
+  exit 2
+}
 
-# Parse command line arguments
-GIT_URL=${1:-https://github.com/vllm-project/vllm.git}
-GIT_REF=${2:-cc99baf14dacc2497d0c5ed84e076ef2c37f6a4d}
-# Specifying an explicit wheel URL avoids relying on vllm's nightly wheel discovery, which
-# fails when building from a fork (setup.py can't find the base commit on main) and falls back
-# to the "nightly" wheel — a moving target that may not have wheels for all architectures.
-# The v0.16.0 release wheels are pinned here for stability.
-if [[ -n "${3:-}" ]]; then
-  VLLM_PRECOMPILED_WHEEL_LOCATION="$3"
-elif [[ "$(uname -m)" == "aarch64" ]]; then
-  VLLM_PRECOMPILED_WHEEL_LOCATION="https://github.com/vllm-project/vllm/releases/download/v0.16.0/vllm-0.16.0-cp38-abi3-manylinux_2_31_aarch64.whl"
-else
-  VLLM_PRECOMPILED_WHEEL_LOCATION="https://github.com/vllm-project/vllm/releases/download/v0.16.0/vllm-0.16.0-cp38-abi3-manylinux_2_31_x86_64.whl"
+if [[ $# -ne 3 || -z "$1" || -z "$2" || -z "$3" ]]; then
+  usage
 fi
+
+GIT_URL="$1"
+GIT_REF="$2"
+VLLM_PRECOMPILED_WHEEL_LOCATION="$3"
+if [[ ! "$GIT_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  echo "[ERROR] GIT_REF must be an immutable 40-character Git commit." >&2
+  exit 2
+fi
+
+export VLLM_USE_PRECOMPILED=1
 export VLLM_PRECOMPILED_WHEEL_LOCATION
+export VLLM_VERSION_OVERRIDE=0.20.2
 
 BUILD_DIR=$(realpath "$SCRIPT_DIR/../3rdparty/vllm")
 if [[ -e "$BUILD_DIR" ]]; then
   echo "[ERROR] $BUILD_DIR already exists. Please remove or move it before running this script."
-  exit 1 
+  exit 1
 fi
 
 echo "Building vLLM from:"
-echo "  Vllm Git URL: $GIT_URL"
-echo "  Vllm Git ref: $GIT_REF"
-echo "  Vllm Wheel location: $VLLM_PRECOMPILED_WHEEL_LOCATION"
+echo "  vLLM Git URL: $GIT_URL"
+echo "  vLLM requested commit: $GIT_REF"
+echo "  vLLM wheel location: $VLLM_PRECOMPILED_WHEEL_LOCATION"
+echo "  vLLM version override: $VLLM_VERSION_OVERRIDE"
 
 # Clone the repository
 echo "Cloning repository..."
 # When running inside Docker with --mount=type=ssh, the known_hosts file is empty.
 # Skip host key verification for internal builds (only applies to SSH URLs).
-GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" git clone "$GIT_URL" "$BUILD_DIR"
+GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+  git clone --no-checkout "$GIT_URL" "$BUILD_DIR"
 cd "$BUILD_DIR"
-git checkout "$GIT_REF"
+git checkout --detach "$GIT_REF"
+RESOLVED_VLLM_COMMIT="$(git rev-parse HEAD)"
+if [[ "${RESOLVED_VLLM_COMMIT,,}" != "${GIT_REF,,}" ]]; then
+  echo "[ERROR] Requested vLLM commit $GIT_REF resolved to $RESOLVED_VLLM_COMMIT." >&2
+  exit 1
+fi
+echo "  vLLM resolved commit: $RESOLVED_VLLM_COMMIT"
 
 # Create a new Python environment using uv
 echo "Creating Python environment..."
 # Pop the project environment set by user to not interfere with the one we create for the vllm repo
-OLD_UV_PROJECT_ENVIRONMENT=$UV_PROJECT_ENVIRONMENT
+OLD_UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-}"
 unset UV_PROJECT_ENVIRONMENT
 uv venv
-
-# Remove all comments from requirements files to prevent use_existing_torch.py from incorrectly removing xformers
-echo "Removing comments from requirements files..."
-find requirements/ -name "*.txt" -type f -exec sed -i 's/#.*$//' {} \; 2>/dev/null || true
-find requirements/ -name "*.txt" -type f -exec sed -i '/^[[:space:]]*$/d' {} \; 2>/dev/null || true
-# Replace xformers==.* (but preserve any platform markers at the end)
-# NOTE: that xformers is bumped from 0.0.30 to 0.0.31 to work with torch==2.7.1. This version may need to change to change when we upgrade torch.
-find requirements/ -name "*.txt" -type f -exec sed -i -E 's/^(xformers)==[^;[:space:]]*/\1==0.0.32.post1/' {} \; 2>/dev/null || true
-
-uv run --no-project use_existing_torch.py
 
 # Install dependencies
 echo "Installing dependencies..."
 uv pip install --upgrade pip
 uv pip install numpy setuptools setuptools_scm
-uv pip install torch==2.10.0 --torch-backend=cu129
 
 # Install vLLM using precompiled wheel
 echo "Installing vLLM with precompiled wheel..."
@@ -94,84 +95,40 @@ fi
 
 cd "$REPO_ROOT"
 
-export UV_PROJECT_ENVIRONMENT=$OLD_UV_PROJECT_ENVIRONMENT
-if [[ -n "$UV_PROJECT_ENVIRONMENT" ]]; then
-    # We optionally set this if the project environment is outside of the project directory.
-    # If we do not set this then uv pip install commands will fail
-    export VIRTUAL_ENV=$UV_PROJECT_ENVIRONMENT
+if [[ -n "$OLD_UV_PROJECT_ENVIRONMENT" ]]; then
+  # Preserve an explicitly configured project environment for the root project.
+  export UV_PROJECT_ENVIRONMENT="$OLD_UV_PROJECT_ENVIRONMENT"
+  export VIRTUAL_ENV="$OLD_UV_PROJECT_ENVIRONMENT"
+else
+  unset UV_PROJECT_ENVIRONMENT
 fi
-# Use tomlkit via uv to idempotently update pyproject.toml
-uv run --no-project --with tomlkit python - <<'PY'
-from pathlib import Path
-from tomlkit import parse, dumps, inline_table
 
-pyproject_path = Path("pyproject.toml")
-text = pyproject_path.read_text()
-doc = parse(text)
-
-# 1) Ensure setuptools_scm in [project].dependencies
-project = doc.get("project")
-if project is None:
-    raise SystemExit("[ERROR] Missing [project] in pyproject.toml")
-
-deps = project.get("dependencies")
-
-if not any(x.startswith("setuptools_scm") for x in deps):
-    deps.append("setuptools_scm")
-
-# 2) Update [project.optional-dependencies].vllm: unpin vllm==... -> vllm
-opt = project.get("optional-dependencies")
-vllm_list = opt["vllm"]
-# Remove any pinned vllm==...
-keep_items = []
-has_unpinned_vllm = False
-for item in vllm_list:
-    s = str(item).strip()
-    if s.startswith("vllm=="):
-        continue
-    if s == "vllm":
-        has_unpinned_vllm = True
-    keep_items.append(item)
-if not has_unpinned_vllm:
-    keep_items.append("vllm")
-vllm_list.clear()
-for it in keep_items:
-    vllm_list.append(it)
-
-# 3) Add [tool.uv.sources].vllm = { path = "3rdparty/vllm", editable = true }
-tool = doc.setdefault("tool", {})
-uv = tool.setdefault("uv", {})
-sources = uv.setdefault("sources", {})
-desired = inline_table()
-desired.update({"path": "3rdparty/vllm", "editable": True})
-sources["vllm"] = desired
-
-# 4) Ensure [tool.uv].no-build-isolation-package includes "vllm"
-nbip = uv.setdefault("no-build-isolation-package", [])
-nbip_strs = [str(x) for x in nbip]
-if "vllm" not in nbip_strs:
-    nbip.append("vllm")
-
-pyproject_path.write_text(dumps(doc))
-print("[INFO] Updated pyproject.toml for local vLLM.")
-PY
+uv run --no-project --with packaging --with tomlkit \
+  python tools/configure_custom_vllm.py "$PYPROJECT_TOML"
 
 # Ensure build deps and re-lock
 uv pip install setuptools_scm
 uv lock
 
 # Write to a file that a docker build will use to set the necessary env vars
-cat <<EOF >$BUILD_DIR/nemo-rl.env
-export VLLM_GIT_REF=$GIT_REF
-export VLLM_PRECOMPILED_WHEEL_LOCATION=$VLLM_PRECOMPILED_WHEEL_LOCATION
-EOF
+{
+  printf 'export VLLM_GIT_URL=%q\n' "$GIT_URL"
+  printf 'export VLLM_GIT_REF=%q\n' "$GIT_REF"
+  printf 'export VLLM_GIT_COMMIT=%q\n' "$RESOLVED_VLLM_COMMIT"
+  printf 'export VLLM_USE_PRECOMPILED=%q\n' "$VLLM_USE_PRECOMPILED"
+  printf 'export VLLM_PRECOMPILED_WHEEL_LOCATION=%q\n' "$VLLM_PRECOMPILED_WHEEL_LOCATION"
+  printf 'export VLLM_VERSION_OVERRIDE=%q\n' "$VLLM_VERSION_OVERRIDE"
+} >"$BUILD_DIR/nemo-rl.env"
 
 cat <<EOF
 [INFO] pyproject.toml updated. NeMo RL is now configured to use the local vLLM at 3rdparty/vllm.
 [INFO] Verify this new vllm version by running:
 
+VLLM_USE_PRECOMPILED=$VLLM_USE_PRECOMPILED \\
 VLLM_PRECOMPILED_WHEEL_LOCATION=$VLLM_PRECOMPILED_WHEEL_LOCATION \\
-  uv run --extra vllm vllm serve Qwen/Qwen3-0.6B
+VLLM_VERSION_OVERRIDE=$VLLM_VERSION_OVERRIDE \\
+  uv run --locked --extra vllm python -c \\
+  'import flashinfer, vllm; print(vllm.__version__, flashinfer.__version__, vllm.__file__)'
 
 [INFO] For more information on this custom install, visit https://github.com/NVIDIA-NeMo/RL/blob/main/docs/guides/use-custom-vllm.md
 [IMPORTANT] Remember to set the shell variable 'VLLM_PRECOMPILED_WHEEL_LOCATION' when running NeMo RL apps with this custom vLLM to avoid re-compiling.

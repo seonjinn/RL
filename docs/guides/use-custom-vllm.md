@@ -1,61 +1,75 @@
 # Experiment with Custom vLLM
 
-This guide explains how to use your own version of vLLM while leveraging a pre-compiled vLLM wheel, so you don't have to recompile the C++ source code.
+This guide explains how to use an immutable custom vLLM commit with an
+ABI-matching precompiled wheel. The Git commit and wheel URL are required
+inputs: moving branches and automatically discovered nightly wheels are not
+reproducible build provenance.
 
 ## Clone and Build Your Custom vLLM
 
-Clone your vLLM fork and build it using the provided script. For example:
+The MXFP8 adaptive rollout integration is developed from:
 
 ```sh
-# Usage: bash tools/build-custom-vllm.sh <GIT_URL> <GIT_REF> <VLLM_PRECOMPILED_WHEEL_LOCATION>
-bash tools/build-custom-vllm.sh https://github.com/terrykong/vllm.git terryk/demo-custom-vllm https://wheels.vllm.ai/862f2ef893d9751db0a92bd2d4ae0e3d9677872f/vllm-1.0.0.dev-cp38-abi3-manylinux1_x86_64.whl
+VLLM_URL=https://github.com/puririshi98/vllm.git
+VLLM_BRANCH=sna/mxfp8-adaptive-v0.20.2-nemorl
+git ls-remote "$VLLM_URL" "refs/heads/$VLLM_BRANCH"
+```
 
-# [INFO] pyproject.toml updated. NeMo RL is now configured to use the local vLLM at 3rdparty/vllm.
-# [INFO] Verify this new vllm version by running:
-#
-# VLLM_PRECOMPILED_WHEEL_LOCATION=http://.....whl \
-#   uv run --extra vllm vllm serve Qwen/Qwen3-0.6B
-#
-# [INFO] For more information on this custom install, visit https://github.com/NVIDIA-NeMo/RL/blob/main/docs/guides/use-custom-vllm.md
-# [IMPORTANT] Remember to set the shell variable 'VLLM_PRECOMPILED_WHEEL_LOCATION' when running NeMo RL apps with this custom vLLM to avoid re-compiling.
+Review the branch head, then copy its full 40-character commit into
+`VLLM_COMMIT`. Do not pass the branch name to the build script.
+
+The following wheel is the vLLM 0.20.2 Linux aarch64 release wheel used by the
+GB200 CUDA 13.0 build. For another platform, supply a vLLM 0.20.2 wheel built
+for the same Python, PyTorch, CUDA, architecture, and C++ ABI as NeMo RL.
+
+```sh
+VLLM_COMMIT=<reviewed-40-character-commit>
+VLLM_WHEEL=https://github.com/vllm-project/vllm/releases/download/v0.20.2/vllm-0.20.2-cp38-abi3-manylinux_2_35_aarch64.whl
+
+bash tools/build-custom-vllm.sh \
+  "$VLLM_URL" \
+  "$VLLM_COMMIT" \
+  "$VLLM_WHEEL"
 ```
 
 This script does the following:
-1. Clones the `vllm` you specify at a particular branch.
-2. Builds `vllm`.
-3. Updates NeMo RL's pyproject.toml to work with this `vllm`.
-4. Updates `uv.lock`.
 
-Make sure to add the updated `pyproject.toml` and `uv.lock` to version control so that your branch can be reproduced by others.
+1. Clones and checks out the exact vLLM commit in detached-HEAD mode.
+2. Builds the editable source with `VLLM_USE_PRECOMPILED=1`,
+   `VLLM_PRECOMPILED_WHEEL_LOCATION`, and
+   `VLLM_VERSION_OVERRIDE=0.20.2`.
+3. Replaces all vLLM requirements with one editable
+   `3rdparty/vllm` source.
+4. Regenerates `uv.lock`.
+5. Records the URL, requested commit, resolved commit, wheel URL, and build
+   environment in `3rdparty/vllm/nemo-rl.env`.
+
+Commit the updated `pyproject.toml` and `uv.lock` together so other builds use
+the same dependency graph.
 
 ## Verify Your Custom vLLM in Isolation
-Test your setup to ensure your custom vLLM is being used:
+
+Verify the immutable checkout, lock, versions, and import source:
+
 ```sh
-uv run --extra vllm python -c 'import vllm; print(f"Successfully imported vLLM version: {vllm.__version__}")'
-# Uninstalled 1 package in 1ms
-# Installed 1 package in 2ms
-# Hi! If you see this, you're using a custom version of vLLM for the purposes of this tutorial
-# INFO 06-18 09:22:44 [__init__.py:244] Automatically detected platform cuda.
-# Successfully imported vLLM version: 0.0.1.dev1+g69d5add74.d20250910
+test "$(git -C 3rdparty/vllm rev-parse HEAD)" = "$VLLM_COMMIT"
+uv lock --check
+source 3rdparty/vllm/nemo-rl.env
+uv run --locked --extra vllm python -c \
+  'import flashinfer, vllm; print(vllm.__version__, flashinfer.__version__, vllm.__file__)'
 ```
 
-If you don't see the log message `Hi! If you see this...`, it's because this message is unique to the tutorial's specific `vLLM` fork. It was added in [this commit](https://github.com/terrykong/vllm/commit/69d5add744e51b988e985736f35c162d3e87b683) and doesn't exist in the main `vLLM` project.
+The output must report vLLM `0.20.2`, FlashInfer `0.6.8.post1`, and a vLLM
+module path below `3rdparty/vllm`.
 
 ## Running NeMo RL Apps with Custom vLLM
 
-To ensure the custom vLLM install is setup properly in NeMo RL applications, always run the following before anything:
+Source the recorded build environment before running a NeMo RL application:
 
 ```sh
-# Ensures vLLM uses the precompiled wheel and avoids recompiling C++ sources
-export VLLM_PRECOMPILED_WHEEL_LOCATION=https://wheels.vllm.ai/862f2ef893d9751db0a92bd2d4ae0e3d9677872f/vllm-1.0.0.dev-cp38-abi3-manylinux1_x86_64.whl
-# Ensures worker venvs are rebuilt to use the custom vLLM. Otherwise it may use the cached version in cached venvs
+source 3rdparty/vllm/nemo-rl.env
 export NRL_FORCE_REBUILD_VENVS=true
-# This isn't necessary if you only do `uv run foobar.py`, but may be needed if you switching between optional extras `uv run --extra vllm foobar.py`. If you are unsure if you need this, it's safer to include it.
 uv pip install setuptools_scm
-```
-
-Then run your application:
-```sh
 uv run examples/run_grpo.py
 ```
 
@@ -66,18 +80,30 @@ Using a custom vllm may require you to rebuild the docker image. The two most co
 1. The `ray` version was changed, so you **must** rebuild the image to allow `ray.sub` to start the ray cluster with the same version as the application.
 2. Many dependencies changed and add a large overhead when `NRL_FORCE_REBUILD_VENVS=true` is set to rebuild venvs, so you wish to cache the dependencies in the image to avoid re-build/re-pulling wheels.
 
-For convenience, you can have the image build your custom vLLM by running the same script inside the Docker build.
-Pass `--build-arg BUILD_CUSTOM_VLLM=1` to enable this path; the build will create `3rdparty/vllm` and source `3rdparty/vllm/nemo-rl.env` automatically.
+The Docker build requires the same three explicit dependency inputs. It creates
+`3rdparty/vllm` and sources `3rdparty/vllm/nemo-rl.env` automatically.
 
 ```sh
 docker buildx build \
   --build-arg BUILD_CUSTOM_VLLM=1 \
+  --build-arg BUILD_CUSTOM_VLLM_URL="$VLLM_URL" \
+  --build-arg BUILD_CUSTOM_VLLM_REF="$VLLM_COMMIT" \
+  --build-arg BUILD_CUSTOM_VLLM_PRECOMPILED_WHEEL_LOCATION="$VLLM_WHEEL" \
   --target release \
   --build-context nemo-rl=. \
   -f docker/Dockerfile \
   --tag <registry>/nemo-rl:latest \
   --push \
   .
+```
+
+After the image is built, verify the recorded commit and installed packages:
+
+```sh
+docker run --rm <registry>/nemo-rl:latest bash -lc \
+  'source 3rdparty/vllm/nemo-rl.env &&
+   test "$(git -C 3rdparty/vllm rev-parse HEAD)" = "$VLLM_GIT_COMMIT" &&
+   python -c "import flashinfer, vllm; print(vllm.__version__, flashinfer.__version__, vllm.__file__)"'
 ```
 
 ### SSH Setup for Private Repositories
@@ -123,6 +149,9 @@ ssh-add -l
 ```sh
 docker buildx build \
   --build-arg BUILD_CUSTOM_VLLM=1 \
+  --build-arg BUILD_CUSTOM_VLLM_URL="$VLLM_URL" \
+  --build-arg BUILD_CUSTOM_VLLM_REF="$VLLM_COMMIT" \
+  --build-arg BUILD_CUSTOM_VLLM_PRECOMPILED_WHEEL_LOCATION="$VLLM_WHEEL" \
   --target release \
   --build-context nemo-rl=. \
   -f docker/Dockerfile \
