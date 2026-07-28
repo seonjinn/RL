@@ -236,6 +236,17 @@ def test_shared_ray_submission_template_has_no_job_dependency() -> None:
     assert "--dependency" not in RAY_SUB.read_text()
 
 
+def test_shared_ray_submission_uses_job_unique_container_names() -> None:
+    """A node must not reuse mutable named-container state from an older job."""
+    source = RAY_SUB.read_text()
+
+    assert 'RAY_CONTAINER_SUFFIX="${SLURM_JOB_ID}-${SLURM_RESTART_COUNT:-0}"' in source
+    assert 'RAY_HEAD_CONTAINER_NAME="ray-head-${RAY_CONTAINER_SUFFIX}"' in source
+    assert 'RAY_WORKER_CONTAINER_NAME="ray-worker-${RAY_CONTAINER_SUFFIX}"' in source
+    assert "--container-name=ray-head " not in source
+    assert "--container-name=ray-worker " not in source
+
+
 def test_ray_sub_scopes_force_rebuilt_venvs_to_the_current_job_log_dir() -> None:
     """Concurrent jobs must not rebuild the same shared ``venvs/`` directory."""
     source = RAY_SUB.read_text()
