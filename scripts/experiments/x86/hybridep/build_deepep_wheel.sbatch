@@ -79,21 +79,29 @@ if [[ ! -f "${CONTAINER}" ]]; then
   exit 2
 fi
 
-if [[ -z "${BUILD_ROOT:-}" ]]; then
-  : "${SLURM_TMPDIR:?BUILD_ROOT or SLURM_TMPDIR is required}"
-  BUILD_ROOT="${SLURM_TMPDIR}/nemo-rl-hybridep-build"
+LOCAL_SCRATCH_ROOT=${SLURM_TMPDIR:-${TMPDIR:-/tmp}}
+LOCAL_SCRATCH_ROOT=$(readlink -f -- "${LOCAL_SCRATCH_ROOT}")
+if [[ ! -d "${LOCAL_SCRATCH_ROOT}" || ! -w "${LOCAL_SCRATCH_ROOT}" ]]; then
+  printf 'Local scratch root must be a writable directory: %s\n' \
+    "${LOCAL_SCRATCH_ROOT}" >&2
+  exit 2
 fi
 
-BUILD_ROOT=$(readlink -m -- "${BUILD_ROOT}")
+BUILD_ROOT_EPHEMERAL=${BUILD_ROOT_EPHEMERAL:-0}
+if [[ -z "${BUILD_ROOT:-}" ]]; then
+  BUILD_ROOT=$(mktemp -d "${LOCAL_SCRATCH_ROOT}/nemo-rl-hybridep-${SLURM_JOB_ID}.XXXXXX")
+  BUILD_ROOT_EPHEMERAL=1
+else
+  BUILD_ROOT=$(readlink -m -- "${BUILD_ROOT}")
+fi
+
 case "${BUILD_ROOT}" in
   /lustre/*) ;;
   *)
-    : "${SLURM_TMPDIR:?Non-Lustre BUILD_ROOT requires SLURM_TMPDIR}"
-    SLURM_TMPDIR=$(readlink -f -- "${SLURM_TMPDIR}")
-    case "${BUILD_ROOT}" in
-      "${SLURM_TMPDIR}"/*) ;;
+    case "${BUILD_ROOT_EPHEMERAL}:${BUILD_ROOT}" in
+      "1:${LOCAL_SCRATCH_ROOT}/nemo-rl-hybridep-${SLURM_JOB_ID}."*) ;;
       *)
-        printf 'BUILD_ROOT must be under /lustre or SLURM_TMPDIR: %s\n' \
+        printf 'Non-Lustre BUILD_ROOT must be a job-local mktemp path: %s\n' \
           "${BUILD_ROOT}" >&2
         exit 2
         ;;
@@ -114,11 +122,13 @@ export DEEPEP_REPO_URL
 export SCRIPT_PATH
 export HYBRID_EP_SCRIPT_PATH="${SCRIPT_PATH}"
 export CONTAINER_SHA256="${container_sha256}"
+export LOCAL_SCRATCH_ROOT
+export BUILD_ROOT_EPHEMERAL
 
 if [[ "${HYBRID_EP_BUILD_STAGE:-host}" != "container" ]]; then
   container_mounts="/lustre:/lustre"
   if [[ "${BUILD_ROOT}" != /lustre/* ]]; then
-    container_mounts="${container_mounts},${SLURM_TMPDIR}:${SLURM_TMPDIR}"
+    container_mounts="${container_mounts},${BUILD_ROOT}:${BUILD_ROOT}"
   fi
   exec srun --container-image="${CONTAINER}" \
     --container-mounts="${container_mounts}" \
@@ -180,7 +190,17 @@ import_overlay="${build_dir}/import-overlay"
 build_succeeded=0
 
 cleanup() {
-  if [[ "${build_succeeded}" == "1" ]]; then
+  if [[ "${BUILD_ROOT_EPHEMERAL}" == "1" ]]; then
+    case "${BUILD_ROOT}" in
+      "${LOCAL_SCRATCH_ROOT}"/nemo-rl-hybridep-"${SLURM_JOB_ID}".*)
+        rm -rf -- "${BUILD_ROOT}"
+        ;;
+      *)
+        printf 'Refusing to clean unexpected ephemeral build root: %s\n' \
+          "${BUILD_ROOT}" >&2
+        ;;
+    esac
+  elif [[ "${build_succeeded}" == "1" ]]; then
     case "${build_dir}" in
       "${BUILD_ROOT}"/deepep-"${short_commit}"-sm"${arch_tag}"-"${SLURM_JOB_ID}".*)
         rm -rf -- "${build_dir}"
