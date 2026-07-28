@@ -111,5 +111,26 @@ accuracy job was submitted after this terminal result.
 The current launcher passes the verified snapshot directory as both
 `policy.model_name` and `policy.tokenizer.name`, and propagates
 `HF_HUB_OFFLINE=1` plus `TRANSFORMERS_OFFLINE=1` to the Slurm/Ray job. This
-removes the Hub metadata request that stopped `2457775`; performance and
-accuracy fields remain empty until `2458270` reaches GRPO steps.
+removes the Hub metadata request that stopped `2457775`.
+
+## Worker environment fixes and current 20-step retry
+
+| Field | Value |
+| --- | --- |
+| Initial offline retry | `2458270` (`FAILED` before GRPO step 0: MCore worker environment omitted `megatron.energon`) |
+| Energon fix | NeMo-RL `mcore` extra now includes `megatron-energon[av-decode]~=7.0`; locked source commit `6718b0a4b` |
+| Worker import smoke | MCore, Mamba, Energon, Transformer Engine, and `MegatronPolicyWorker` imports passed in jobs `2463184` and `2463234` |
+| First 20-step retry | `2463283` (`FAILED`, exit `1:0`, 4m52s) |
+| New root cause | Four Ray nodes received `force_rebuild=True` and concurrently removed the same job-local Lustre VLLM venv; one `shutil.rmtree()` failed with `OSError: [Errno 39] Directory not empty` |
+| Failing regression | `2463382` reproduced two builders for one shared venv (`build_calls == 2`) at source `d880732b68b1839778b6cf90141d1ef18d4fc881` |
+| Synchronization fix | Atomic `O_CREAT|O_EXCL` lock outside the deletable venv plus a per-invocation completion ID at source `dc2269a0a280328275968cbfe4c3644f24ba6762` |
+| Passing regression | `2463458` completed (`0:0`); the same shared-force-rebuild test passed in the immutable Ptyche nightly container |
+| Scheduler preflight | `2463473` accepted four Ptyche nodes in `backfill` |
+| Current 20-step baseline | `2463474` (`PENDING`, reason `Resources`, scheduler estimate 2026-07-28 12:20 PDT at last capture) |
+| Exact workload | NanoV3 30B-A3B baseline without CUDA Graph, sequence packing config, 4 nodes × 4 GPUs, 20 steps |
+| Checkpoint policy | Disabled |
+
+The current retry uses the same committed performance launcher and immutable
+container as `2463283`; only the shared worker-venv coordination changed.
+Performance and accuracy fields remain empty until `2463474` reaches GRPO
+steps.
