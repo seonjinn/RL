@@ -314,8 +314,15 @@ class MegatronPolicyWorkerImpl(
         os.environ["LOCAL_RANK"] = str(local_rank)
         torch.cuda.set_device(local_rank)
 
-        # Apply patch from https://github.com/NVIDIA/TransformerEngine/pull/2286/files
-        apply_transformer_engine_patch()
+        # Apply runtime compatibility fixes before importing Transformer Engine.
+        megatron_config = config["megatron_cfg"]
+        apply_transformer_engine_patch(
+            require_thd_context_parallel_cuda_graph=(
+                megatron_config.get("cuda_graph_impl") == "transformer_engine"
+                and bool(megatron_config.get("cuda_graph_packed_seq", False))
+                and bool(config.get("sequence_packing", {}).get("enabled", False))
+            )
+        )
 
         from nemo_rl.distributed.numa_utils import bind_to_gpu_numa
 

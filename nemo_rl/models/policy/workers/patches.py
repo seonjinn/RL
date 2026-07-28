@@ -13,7 +13,44 @@
 # limitations under the License.
 
 import os
+from fcntl import LOCK_EX, LOCK_UN, flock
 from importlib.util import find_spec
+
+
+_THD_CONTEXT_PARALLEL_PATH = (
+    "pytorch/attention/dot_product_attention/context_parallel.py"
+)
+_THD_CONTEXT_PARALLEL_UNPATCHED = """\
+        if ctx.qkv_format == "thd" and not ctx.use_fused_attention:
+            dq[cu_seqlens_q_padded[-1] :].fill_(0)
+            dk[cu_seqlens_kv_padded[-1] :].fill_(0)
+            dv[cu_seqlens_kv_padded[-1] :].fill_(0)
+"""
+_THD_CONTEXT_PARALLEL_PATCHED = """\
+        if (
+            ctx.qkv_format == "thd"
+            and not ctx.use_fused_attention
+            and cu_seqlens_q_padded is not None
+            and cu_seqlens_kv_padded is not None
+        ):
+            if is_graph_capturing():
+                q_pad_mask = (
+                    torch.arange(dq.shape[0], device=dq.device)
+                    >= cu_seqlens_q_padded[-1]
+                )
+                kv_pad_mask = (
+                    torch.arange(dk.shape[0], device=dk.device)
+                    >= cu_seqlens_kv_padded[-1]
+                )
+                dq[q_pad_mask] = 0
+                dk[kv_pad_mask] = 0
+                dv[kv_pad_mask] = 0
+            else:
+                dq[cu_seqlens_q_padded[-1] :].fill_(0)
+                dk[cu_seqlens_kv_padded[-1] :].fill_(0)
+                dv[cu_seqlens_kv_padded[-1] :].fill_(0)
+"""
+_THD_CONTEXT_PARALLEL_PATCH_MARKER = "dq[q_pad_mask] = 0"
 
 
 def _get_transformer_engine_file(relative_path: str) -> str:
@@ -44,7 +81,59 @@ def _get_transformer_engine_file(relative_path: str) -> str:
     return file_path
 
 
-def apply_transformer_engine_patch():
+def _patch_thd_context_parallel_cuda_graph(*, required: bool) -> None:
+    """Backport Transformer Engine's graph-safe THD CP gradient tail masking."""
+    context_parallel_file = _get_transformer_engine_file(_THD_CONTEXT_PARALLEL_PATH)
+
+    with open(context_parallel_file) as source_file:
+        content = source_file.read()
+        if (
+            _THD_CONTEXT_PARALLEL_UNPATCHED not in content
+            and _THD_CONTEXT_PARALLEL_PATCH_MARKER in content
+        ):
+            return
+
+    with open(context_parallel_file, "r+") as source_file:
+        flock(source_file.fileno(), LOCK_EX)
+        try:
+            content = source_file.read()
+            if (
+                _THD_CONTEXT_PARALLEL_UNPATCHED not in content
+                and _THD_CONTEXT_PARALLEL_PATCH_MARKER in content
+            ):
+                return
+            if _THD_CONTEXT_PARALLEL_UNPATCHED not in content:
+                message = (
+                    "Packed Transformer Engine CUDA Graph training found an "
+                    "unsupported Transformer Engine context_parallel.py. "
+                    "Upgrade to a build containing TransformerEngine #2898."
+                )
+                if required:
+                    raise RuntimeError(message)
+                print(message)
+                return
+
+            patched_content = content.replace(
+                _THD_CONTEXT_PARALLEL_UNPATCHED,
+                _THD_CONTEXT_PARALLEL_PATCHED,
+                1,
+            )
+            source_file.seek(0)
+            source_file.write(patched_content)
+            source_file.truncate()
+            source_file.flush()
+        finally:
+            flock(source_file.fileno(), LOCK_UN)
+
+    print(
+        "Applied Transformer Engine #2898 THD context-parallel CUDA Graph "
+        f"fix to {context_parallel_file}."
+    )
+
+
+def apply_transformer_engine_patch(
+    *, require_thd_context_parallel_cuda_graph: bool = False
+) -> None:
     """Apply patch from https://github.com/NVIDIA/TransformerEngine/pull/2286/files.
 
     This locates the target file via importlib metadata instead of importing
@@ -104,3 +193,6 @@ def apply_transformer_engine_patch():
 
     except Exception as e:
         print(f"Error checking/patching transformer_engine: {e}")
+
+    if require_thd_context_parallel_cuda_graph:
+        _patch_thd_context_parallel_cuda_graph(required=True)

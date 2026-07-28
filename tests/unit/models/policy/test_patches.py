@@ -21,6 +21,7 @@ import pytest
 
 from nemo_rl.models.policy.workers.patches import (
     _get_transformer_engine_file,
+    _patch_thd_context_parallel_cuda_graph,
     apply_transformer_engine_patch,
 )
 
@@ -352,6 +353,122 @@ def some_kernel(x):
             captured = capsys.readouterr()
             assert "Applying Triton fix" in captured.out
             assert "Successfully patched" not in captured.out
+
+
+class TestPatchThdContextParallelCudaGraph:
+    UNPATCHED_CONTENT = """
+        if ctx.qkv_format == "thd" and not ctx.use_fused_attention:
+            dq[cu_seqlens_q_padded[-1] :].fill_(0)
+            dk[cu_seqlens_kv_padded[-1] :].fill_(0)
+            dv[cu_seqlens_kv_padded[-1] :].fill_(0)
+"""
+
+    PATCHED_CONTENT = """
+        if (
+            ctx.qkv_format == "thd"
+            and not ctx.use_fused_attention
+            and cu_seqlens_q_padded is not None
+            and cu_seqlens_kv_padded is not None
+        ):
+            if is_graph_capturing():
+                q_pad_mask = torch.arange(dq.shape[0], device=dq.device) >= cu_seqlens_q_padded[-1]
+                kv_pad_mask = (
+                    torch.arange(dk.shape[0], device=dk.device) >= cu_seqlens_kv_padded[-1]
+                )
+                dq[q_pad_mask] = 0
+                dk[kv_pad_mask] = 0
+                dv[kv_pad_mask] = 0
+            else:
+                dq[cu_seqlens_q_padded[-1] :].fill_(0)
+                dk[cu_seqlens_kv_padded[-1] :].fill_(0)
+                dv[cu_seqlens_kv_padded[-1] :].fill_(0)
+"""
+
+    def test_applies_upstream_thd_capture_fix(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False
+        ) as tmp_file:
+            tmp_file.write(self.UNPATCHED_CONTENT)
+            tmp_path = tmp_file.name
+
+        try:
+            with patch(
+                "nemo_rl.models.policy.workers.patches._get_transformer_engine_file",
+                return_value=tmp_path,
+            ):
+                _patch_thd_context_parallel_cuda_graph(required=True)
+
+            with open(tmp_path) as patched_file:
+                patched_content = patched_file.read()
+
+            assert "if is_graph_capturing():" in patched_content
+            assert "dq[q_pad_mask] = 0" in patched_content
+            assert "dk[kv_pad_mask] = 0" in patched_content
+            assert "dv[kv_pad_mask] = 0" in patched_content
+        finally:
+            os.unlink(tmp_path)
+
+    def test_is_idempotent_with_upstream_fix_present(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False
+        ) as tmp_file:
+            tmp_file.write(self.PATCHED_CONTENT)
+            tmp_path = tmp_file.name
+
+        try:
+            with patch(
+                "nemo_rl.models.policy.workers.patches._get_transformer_engine_file",
+                return_value=tmp_path,
+            ):
+                _patch_thd_context_parallel_cuda_graph(required=True)
+                _patch_thd_context_parallel_cuda_graph(required=True)
+
+            with open(tmp_path) as patched_file:
+                assert patched_file.read() == self.PATCHED_CONTENT
+        finally:
+            os.unlink(tmp_path)
+
+    def test_does_not_confuse_an_unrelated_mask_with_the_target_fix(self):
+        content = self.UNPATCHED_CONTENT + "\n" + self.PATCHED_CONTENT
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False
+        ) as tmp_file:
+            tmp_file.write(content)
+            tmp_path = tmp_file.name
+
+        try:
+            with patch(
+                "nemo_rl.models.policy.workers.patches._get_transformer_engine_file",
+                return_value=tmp_path,
+            ):
+                _patch_thd_context_parallel_cuda_graph(required=True)
+
+            with open(tmp_path) as patched_file:
+                patched_content = patched_file.read()
+
+            assert self.UNPATCHED_CONTENT not in patched_content
+            assert patched_content.count("if is_graph_capturing():") == 2
+        finally:
+            os.unlink(tmp_path)
+
+    def test_required_patch_rejects_unknown_transformer_engine_source(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False
+        ) as tmp_file:
+            tmp_file.write("# unexpected Transformer Engine source")
+            tmp_path = tmp_file.name
+
+        try:
+            with (
+                patch(
+                    "nemo_rl.models.policy.workers.patches._get_transformer_engine_file",
+                    return_value=tmp_path,
+                ),
+                pytest.raises(RuntimeError, match="unsupported Transformer Engine"),
+            ):
+                _patch_thd_context_parallel_cuda_graph(required=True)
+        finally:
+            os.unlink(tmp_path)
 
 
 class TestPatchIntegration:

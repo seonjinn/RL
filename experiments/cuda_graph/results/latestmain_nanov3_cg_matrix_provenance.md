@@ -226,3 +226,29 @@ threads the actual boundaries separately into the loss wrapper while retaining
 the sentinel-padded metadata for model forward and graph capture. Job
 `2465030` contains no capture or replay evidence and is not a performance
 sample.
+
+## Corrected loss boundary and first capture attempt
+
+| Field | Value |
+| --- | --- |
+| Source SHA | `6a703f45e8e8a0cef9101562c90490adc1d5d3ce` |
+| Full MCore test job | `2465159` (`FAILED`, exit `1:0`, 11m04s) |
+| Full MCore result | 207 tests passed before an external Hugging Face `401` on the gated `meta-llama/Llama-3.2-1B` generation fixture |
+| Offline MCore preflight | `2465214` accepted one Ptyche GB200 node |
+| Offline MCore job | `2465215` (`COMPLETED`, exit `0:0`, 24m15s) |
+| Offline MCore result | 210 tests passed, 2 gated generation tests deselected |
+| Attn smoke preflight | `2465216` accepted eight Ptyche GB200 nodes |
+| Attn smoke job | `2465217` (`FAILED`, exit `1:0`, 23m41s) |
+| Successful stages | Eager policy-training steps 1–3 completed, proving the graph sentinel no longer enters the loss slicing path |
+| Capture failure | Step 4 backward capture called `dq[cu_seqlens_q_padded[-1]:].fill_(0)` in Transformer Engine THD context parallelism and raised `CUDA error: operation not permitted when stream is capturing` |
+| Installed Transformer Engine | `2.15.0+42b84005` from `release_v2.15` |
+| Upstream correction | Transformer Engine commit `4cd705b75394563c0246bdddfa5d3148106c9285` / PR `#2898` uses device-side masks for the THD context-parallel gradient tail during capture |
+| Checkpoint policy | Disabled |
+
+Job `2465217` is the first run to reach real Transformer Engine graph capture,
+but it did not complete capture or replay and therefore contains no valid CUDA
+Graph performance sample. The exact upstream correction is a Python source
+change in `context_parallel.py`; the observed attention path does not require a
+Transformer Engine native rebuild. NeMo-RL now applies this correction only
+for packed Transformer Engine graph training and rejects an unknown source
+signature during worker initialization.
