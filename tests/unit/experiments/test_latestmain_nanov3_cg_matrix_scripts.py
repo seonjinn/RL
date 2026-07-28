@@ -257,11 +257,17 @@ def test_ray_venv_bootstrap_smoke_uses_frozen_driver_and_worker_bootstrap() -> N
     assert "create_local_venv_on_each_node" in source
     assert "PY_EXECUTABLES.MCORE" in source
     assert "MegatronPolicyWorker" in source
+    assert (
+        "from nemo_rl.models.policy.workers.megatron_policy_worker import MegatronPolicyWorker"
+        in source
+    )
     assert '"py_executable": str(python_path)' in source
     assert "transformer_engine.pytorch" in source
     assert "megatron.core" in source
+    assert "megatron.energon" in source
     assert "mamba_ssm" in source
     assert "ray_venv_bootstrap_smoke=passed" in source
+    assert 'PARTITION="${PARTITION_OVERRIDE:-${PARTITION}}"' in source
 
 
 def test_ray_venv_bootstrap_smoke_has_a_single_node_test_only_submission(
@@ -355,7 +361,7 @@ def test_ptyche_uv_cache_is_provenance_keyed_and_mounted_by_both_launchers() -> 
         "nemo-rl-21efc14f84d243f0ce7a23442cf4e57c01418383",
         "bridge-59c163cce9cb8cc209dcd0424b2b9de9d1be5027",
         "mcore-53f5161ce000b5320bc16cb260949c2e6808da83",
-        "uv-lock-30a35a07db7a646a7e0fb4e458daf264cf6c805a",
+        "uv-lock-601375294162ccfc8728d871781eb83f51643fd5f0ffbb9a3bfc7ed888440f65",
     ):
         assert provenance_component in ptyche
 

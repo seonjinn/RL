@@ -20,6 +20,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "${SCRIPT_DIR}/../../.." && pwd)
 cd "${REPO_ROOT}"
 source "${SCRIPT_DIR}/profiles/${CLUSTER:?Set CLUSTER to ptyche or oci-hsg}.env"
+PARTITION="${PARTITION_OVERRIDE:-${PARTITION}}"
 
 RUN_NAME=latestmain-nanov3-ray-venv-bootstrap-smoke
 COMMAND='uv sync --frozen && NRL_FORCE_REBUILD_VENVS=true uv run --extra mcore --frozen python - <<'"'"'PY'"'"'
@@ -56,13 +57,17 @@ runtime_env = {
 def worker_runtime_probe() -> dict[str, str]:
     import mamba_ssm
     import megatron.core
+    import megatron.energon
     import transformer_engine.pytorch
+    from nemo_rl.models.policy.workers.megatron_policy_worker import MegatronPolicyWorker
 
     return {
         "python": sys.executable,
         "virtual_env": os.environ["VIRTUAL_ENV"],
         "mamba_ssm": str(Path(mamba_ssm.__file__).resolve()),
         "megatron_core": str(Path(megatron.core.__file__).resolve()),
+        "megatron_energon": str(Path(megatron.energon.__file__).resolve()),
+        "policy_worker": f"{MegatronPolicyWorker.__module__}.{MegatronPolicyWorker.__name__}",
         "transformer_engine": str(Path(transformer_engine.pytorch.__file__).resolve()),
     }
 
@@ -70,7 +75,11 @@ def worker_runtime_probe() -> dict[str, str]:
 result = ray.get(worker_runtime_probe.options(runtime_env=runtime_env).remote())
 assert Path(result["python"]) == python_path, result
 assert Path(result["virtual_env"]) == worker_venv, result
-assert all(result[module] for module in ("mamba_ssm", "megatron_core", "transformer_engine")), result
+assert result["policy_worker"].endswith(".MegatronPolicyWorker"), result
+assert all(
+    result[module]
+    for module in ("mamba_ssm", "megatron_core", "megatron_energon", "transformer_engine")
+), result
 print(f"ray_venv_root={venv_root}")
 print(f"ray_venv_python={python_path}")
 print("ray_venv_bootstrap_smoke=passed")

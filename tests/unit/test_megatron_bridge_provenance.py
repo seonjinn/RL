@@ -23,6 +23,14 @@ REPO_ROOT = Path(__file__).parents[2]
 BRIDGE_PATH = Path("3rdparty/Megatron-Bridge-workspace/Megatron-Bridge")
 BRIDGE_COMMIT = "59c163cce9cb8cc209dcd0424b2b9de9d1be5027"
 BRIDGE_TRANSFORMERS_REQUIREMENT = "transformers>=5.8.1,<5.9.0"
+MEGATRON_ENERGON_REQUIREMENT = "megatron-energon[av-decode]~=7.0"
+
+
+def test_mcore_extra_includes_bridge_import_dependencies() -> None:
+    """The isolated MCore worker must install Bridge's eager import dependencies."""
+    config = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+
+    assert MEGATRON_ENERGON_REQUIREMENT in config["project"]["optional-dependencies"]["mcore"]
 
 
 def test_root_bridge_gitlink_and_lock_metadata_match_corrected_requirement() -> None:
@@ -52,3 +60,4 @@ def test_root_bridge_gitlink_and_lock_metadata_match_corrected_requirement() -> 
         "name": "transformers",
         "specifier": ">=5.8.1,<5.9.0",
     } in bridge_package["metadata"]["requires-dist"]
+    assert any(package["name"] == "megatron-energon" for package in lock["package"])

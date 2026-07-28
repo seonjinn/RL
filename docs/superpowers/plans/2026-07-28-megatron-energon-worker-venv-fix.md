@@ -4,7 +4,7 @@
 
 **Goal:** Make NeMo-RL's isolated MCore policy-worker environment install the Bridge dependencies required to import `MegatronPolicyWorker`, then rerun the actual NanoV3 baseline.
 
-**Architecture:** Treat the Bridge workspace proxy as the canonical dependency declaration and make the root uv static metadata identical to it. Regenerate the frozen lock, verify the exact worker import boundary on Ptyche, and only then submit the unchanged four-node baseline.
+**Architecture:** Preserve NeMo-RL's workspace-dependency omission contract and add the missing eager Bridge import dependency directly to the `mcore` extra. Regenerate the frozen lock, verify the exact worker import boundary on Ptyche, and only then submit the unchanged four-node baseline.
 
 **Tech Stack:** Python 3.13, uv, TOML, pytest, Ray, Slurm, NeMo-RL, Megatron-Bridge, Megatron Core.
 
@@ -18,30 +18,27 @@
 
 ---
 
-### Task 1: Lock the Bridge metadata contract
+### Task 1: Lock the MCore worker dependency contract
 
 **Files:**
 - Modify: `tests/unit/test_megatron_bridge_provenance.py`
 - Read: `pyproject.toml`
-- Read: `3rdparty/Megatron-Bridge-workspace/setup.py`
+- Read: `tools/check_mbridge_deps.py`
 
 **Interfaces:**
-- Consumes: `CACHED_DEPENDENCIES: list[str]` assigned in the Bridge workspace proxy.
-- Produces: a repository test that requires the root `tool.uv.dependency-metadata` entry for `megatron-bridge` to contain the identical dependency set.
+- Consumes: NeMo-RL's `project.optional-dependencies.mcore` declaration.
+- Produces: a repository test requiring the isolated worker extra to install Bridge's eager Energon import dependency.
 
 - [ ] **Step 1: Write the failing test**
 
-Add an AST helper that reads the literal `CACHED_DEPENDENCIES` assignment and a test equivalent to:
+Add a test equivalent to:
 
 ```python
-def test_root_bridge_static_metadata_matches_workspace_proxy() -> None:
+def test_mcore_extra_includes_bridge_import_dependencies() -> None:
     root = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
-    bridge_metadata = next(
-        item
-        for item in root["tool"]["uv"]["dependency-metadata"]
-        if item["name"] == "megatron-bridge"
+    assert "megatron-energon[av-decode]~=7.0" in (
+        root["project"]["optional-dependencies"]["mcore"]
     )
-    assert set(bridge_metadata["requires-dist"]) == _bridge_cached_dependencies()
 ```
 
 - [ ] **Step 2: Run the test and verify RED**
@@ -50,17 +47,17 @@ Run:
 
 ```bash
 python3 -m pytest --confcutdir=tests/unit -q \
-  tests/unit/test_megatron_bridge_provenance.py::test_root_bridge_static_metadata_matches_workspace_proxy
+  tests/unit/test_megatron_bridge_provenance.py::test_mcore_extra_includes_bridge_import_dependencies
 ```
 
-Expected: failure showing `megatron-core[dev,mlm]` only on the workspace-proxy side.
+Expected: failure because the MCore worker extra omits Energon.
 
-- [ ] **Step 3: Add the missing canonical dependency**
+- [ ] **Step 3: Add the missing worker dependency**
 
-Add this literal to the root static `megatron-bridge` `requires-dist` list next to the other Bridge requirements:
+Add this literal to `project.optional-dependencies.mcore` next to the Bridge requirements:
 
 ```toml
-"megatron-core[dev,mlm]",
+"megatron-energon[av-decode]~=7.0",
 ```
 
 - [ ] **Step 4: Run the target test and verify GREEN**
@@ -74,21 +71,12 @@ Run the same target test. Expected: one pass.
 - Modify: `tests/unit/test_megatron_bridge_provenance.py`
 
 **Interfaces:**
-- Consumes: the corrected root static metadata from Task 1.
-- Produces: a frozen lock in which the editable `megatron-bridge` depends on the `dev` and `mlm` MCore extras and the graph contains `megatron-energon`.
+- Consumes: the corrected `mcore` extra from Task 1.
+- Produces: a frozen lock in which the selected `mcore` environment contains `megatron-energon`.
 
 - [ ] **Step 1: Extend the lock provenance test**
 
-Require the lock's `megatron-bridge` package metadata to contain:
-
-```python
-{
-    "name": "megatron-core",
-    "extras": ["dev", "mlm"],
-}
-```
-
-and require a package named `megatron-energon` to exist in `lock["package"]`.
+Require a package named `megatron-energon` to exist in `lock["package"]`.
 
 - [ ] **Step 2: Run the extended test and verify RED**
 
@@ -98,7 +86,7 @@ Run:
 python3 -m pytest --confcutdir=tests/unit -q tests/unit/test_megatron_bridge_provenance.py
 ```
 
-Expected: failure because the existing lock omits the Bridge-to-MCore extra edge.
+Expected: failure because the existing lock omits Energon.
 
 - [ ] **Step 3: Regenerate the lock**
 
@@ -108,8 +96,8 @@ Run:
 uv lock
 ```
 
-Inspect `git diff --stat` and the `megatron-bridge`, `megatron-core`, and
-`megatron-energon` lock records. Reject unrelated source changes.
+Inspect `git diff --stat` and the `megatron-energon` lock record. Confirm the
+additional transitive packages are required by Energon.
 
 - [ ] **Step 4: Run focused and neighboring tests**
 
@@ -130,7 +118,7 @@ Stage only `pyproject.toml`, `uv.lock`, and
 `tests/unit/test_megatron_bridge_provenance.py`, then run:
 
 ```bash
-git commit -s -m "fix: restore Bridge MCore worker dependencies"
+git commit -s -m "fix: install Energon in MCore worker environments"
 git push seonjinn HEAD:experiment/latestmain-pr5672-nano-matrix-20260727
 ```
 

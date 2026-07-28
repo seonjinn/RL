@@ -7,26 +7,28 @@ vLLM initialization, and Ray cluster startup. It failed while importing
 `MegatronPolicyWorker` because the isolated MCore venv did not contain
 `megatron.energon`.
 
-The NeMo-RL root project supplies static dependency metadata for the editable
-`megatron-bridge` workspace. That metadata omits the
-`megatron-core[dev,mlm]` dependency declared by both the Bridge source
-`pyproject.toml` and the NeMo-RL Bridge workspace proxy. The omitted `dev`
-extra is what provides `megatron-energon`.
+The NeMo-RL root project intentionally omits the editable workspace dependency
+`megatron-core[dev,mlm]` from its static Bridge metadata to avoid uv
+workspace-name shadowing. NeMo-RL's `mcore` extra manually supplies the MCore
+runtime dependencies, but it omitted `megatron-energon`. Bridge imports
+Energon eagerly through its training configuration even for this text-only
+policy-worker path.
 
 ## Decision
 
-Align NeMo-RL's static `megatron-bridge` metadata with the Bridge workspace
-proxy by restoring `megatron-core[dev,mlm]`, then regenerate `uv.lock`.
+Add `megatron-energon[av-decode]~=7.0` directly to NeMo-RL's `mcore` extra,
+then regenerate `uv.lock`.
 
-This fixes the dependency graph at its source. Adding only
-`megatron-energon` would hide the metadata drift and could expose another
-missing Bridge dependency later. Changing Bridge to lazily import Energon is
-broader than this experiment and is out of scope.
+Adding `megatron-core[dev,mlm]` to the root static Bridge metadata was tested
+and rejected: it violates the repository's explicit
+`OMITTED_WORKSPACE_DEPS` contract and produces conflicting Git URLs for
+`fast-hadamard-transform`. Changing Bridge's eager imports is broader than
+this experiment and remains out of scope.
 
 ## Validation
 
-1. Add a regression test that compares the static Bridge dependency metadata
-   with `CACHED_DEPENDENCIES` from the workspace proxy.
+1. Add a regression test requiring the `mcore` extra to include the direct
+   Energon runtime requirement.
 2. Confirm that the test fails on the current tree and passes after the fix.
 3. Regenerate the lock and verify that the selected `mcore` environment
    contains `megatron-energon`.
