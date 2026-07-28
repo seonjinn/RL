@@ -110,6 +110,90 @@ def test_validate_cuda_graph_request_allows_full_iteration_without_scope():
     )
 
 
+@pytest.mark.parametrize(
+    ("megatron_cfg", "expected_scope"),
+    [
+        pytest.param({"cuda_graph_scope": []}, (), id="unset-empty"),
+        pytest.param({"cuda_graph_scope": ["attn"]}, None, id="unset-nonempty"),
+        pytest.param(
+            {"cuda_graph_impl": None, "cuda_graph_scope": []},
+            (),
+            id="none-empty",
+        ),
+        pytest.param(
+            {"cuda_graph_impl": None, "cuda_graph_scope": ["attn"]},
+            None,
+            id="none-nonempty",
+        ),
+        pytest.param(
+            {"cuda_graph_impl": "none", "cuda_graph_scope": []},
+            (),
+            id="string-none-empty",
+        ),
+        pytest.param(
+            {"cuda_graph_impl": "none", "cuda_graph_scope": ["attn"]},
+            None,
+            id="string-none-nonempty",
+        ),
+        pytest.param(
+            {"cuda_graph_impl": "local", "cuda_graph_scope": ["attn"]},
+            ("attn",),
+            id="local-nonempty",
+        ),
+        pytest.param(
+            {"cuda_graph_impl": "local", "cuda_graph_scope": []},
+            None,
+            id="local-empty",
+        ),
+        pytest.param(
+            {
+                "cuda_graph_impl": "transformer_engine",
+                "cuda_graph_scope": ["attn"],
+            },
+            ("attn",),
+            id="transformer-engine-nonempty",
+        ),
+        pytest.param(
+            {"cuda_graph_impl": "transformer_engine", "cuda_graph_scope": []},
+            None,
+            id="transformer-engine-empty",
+        ),
+        pytest.param(
+            {"cuda_graph_impl": "full_iteration", "cuda_graph_scope": []},
+            (),
+            id="full-iteration-empty",
+        ),
+        pytest.param(
+            {"cuda_graph_impl": "full_iteration", "cuda_graph_scope": ["attn"]},
+            None,
+            id="full-iteration-nonempty",
+        ),
+        pytest.param(
+            {"cuda_graph_impl": "unsupported", "cuda_graph_scope": []},
+            None,
+            id="unknown-empty",
+        ),
+        pytest.param(
+            {"cuda_graph_impl": "unsupported", "cuda_graph_scope": ["attn"]},
+            None,
+            id="unknown-nonempty",
+        ),
+    ],
+)
+def test_validate_cuda_graph_request_covers_implementation_scope_state_matrix(
+    megatron_cfg, expected_scope
+):
+    """Only the implementation/scope states supported by MCore reach model setup."""
+    from nemo_rl.models.megatron.setup import validate_cuda_graph_request
+
+    config = {"megatron_cfg": megatron_cfg}
+    if expected_scope is None:
+        with pytest.raises(ValueError):
+            validate_cuda_graph_request(config)
+    else:
+        assert validate_cuda_graph_request(config) == expected_scope
+
+
 def test_nanov3_cuda_graph_matrix_recipe_defaults_to_eager_training():
     """Per-scope scripts, not the shared recipe, own CUDA Graph overrides."""
     recipe_path = (
