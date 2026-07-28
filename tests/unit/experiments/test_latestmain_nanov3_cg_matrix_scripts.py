@@ -180,6 +180,10 @@ def test_scope_scripts_are_exact_task3_matrix_with_visible_scope_per_file() -> N
         assert "CONFIG=examples/configs/recipes/llm/performance/" in source
         assert "RUN_NAME=" in source
         assert _visible_scope(source) == expected_scope
+        if expected_scope:
+            assert "cuda_graph_max_packed_seqs=16" in source
+            assert "policy.generation.colocated.enabled=false" in source
+            assert "INFERENCE_NODES" in source
 
 
 def test_mlp_scope_has_a_reusable_te_partial_cuda_graph_launcher(

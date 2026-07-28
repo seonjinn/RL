@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -44,6 +44,60 @@ from nemo_rl.utils.checkpoint import CheckpointManager
 from tests.unit.test_utils import SimpleLossFn
 
 pytestmark = pytest.mark.mcore
+
+
+def test_te_cuda_graph_capture_uses_safe_forward_pre_hook_boundary():
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    lifecycle = MagicMock()
+    lifecycle.ready_to_capture.return_value = True
+    lifecycle.capture_if_ready.return_value = True
+    lifecycle.successful_steps = 3
+    worker._te_cuda_graph_lifecycle = lifecycle
+    worker.cfg = {
+        "max_total_sequence_length": 8192,
+        "train_micro_batch_size": 1,
+    }
+    worker.should_disable_forward_pre_hook = True
+    worker._forward_pre_hook_enabled = MagicMock(return_value=True)
+    worker.disable_forward_pre_hook = MagicMock()
+    worker.enable_forward_pre_hook = MagicMock()
+
+    worker._maybe_capture_te_cuda_graphs(
+        padded_seq_length=8192,
+        micro_batch_size=1,
+    )
+
+    worker.disable_forward_pre_hook.assert_called_once_with(param_sync=False)
+    lifecycle.capture_if_ready.assert_called_once_with()
+    worker.enable_forward_pre_hook.assert_called_once_with()
+    lifecycle.helper.cuda_graph_set_manual_hooks.assert_called_once_with()
+
+
+def test_te_cuda_graph_capture_rejects_changed_geometry():
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    lifecycle = MagicMock()
+    lifecycle.ready_to_capture.return_value = True
+    worker._te_cuda_graph_lifecycle = lifecycle
+    worker.cfg = {
+        "max_total_sequence_length": 8192,
+        "train_micro_batch_size": 1,
+    }
+
+    with pytest.raises(RuntimeError, match="geometry changed"):
+        worker._maybe_capture_te_cuda_graphs(
+            padded_seq_length=4096,
+            micro_batch_size=1,
+        )
+
+    lifecycle.capture_if_ready.assert_not_called()
 
 
 def test_invalid_cuda_graph_scope_is_rejected_before_model_import():

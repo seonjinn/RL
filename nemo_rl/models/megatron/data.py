@@ -91,6 +91,7 @@ def make_processed_microbatch_iterator(
     straggler_timer: StragglerDetector,
     pad_full_seq_to: Optional[int],
     delegate_pack_to_model: bool = False,
+    cuda_graph_max_packed_seqs: Optional[int] = None,
 ) -> Iterator[ProcessedMicrobatch]:
     """Wrap a raw microbatch iterator to yield processed microbatches.
 
@@ -124,6 +125,7 @@ def make_processed_microbatch_iterator(
             pad_full_seq_to=pad_full_seq_to,
             pack_sequences=pack_sequences,
             delegate_pack_to_model=delegate_pack_to_model,
+            cuda_graph_max_packed_seqs=cuda_graph_max_packed_seqs,
             straggler_timer=straggler_timer,
         )
 
@@ -173,6 +175,7 @@ def get_microbatch_iterator(
     pad_factor = 1
     pad_full_seq_to = None
     pad_packed_seq_to_multiple_of = 1
+    cuda_graph_max_packed_seqs = None
 
     _, seq_dim_size = get_and_validate_seqlen(data)
 
@@ -197,6 +200,19 @@ def get_microbatch_iterator(
             cfg["make_sequence_length_divisible_by"],
             pack_seq_dim_size,
         )
+        megatron_cfg = cfg["megatron_cfg"]
+        if megatron_cfg.get(
+            "cuda_graph_impl"
+        ) == "transformer_engine" and megatron_cfg.get("cuda_graph_packed_seq", False):
+            cuda_graph_max_packed_seqs = megatron_cfg.get("cuda_graph_max_packed_seqs")
+            fixed_seq_length = cfg["max_total_sequence_length"]
+            if fixed_seq_length % pad_packed_seq_to_multiple_of != 0:
+                raise ValueError(
+                    "max_total_sequence_length must be divisible by the packed "
+                    "sequence CUDA Graph alignment; got "
+                    f"{fixed_seq_length} and {pad_packed_seq_to_multiple_of}."
+                )
+            pad_full_seq_to = fixed_seq_length
         micro_batch_size = 1
     else:
         raw_iterator = data.make_microbatch_iterator(mbs)
@@ -212,6 +228,7 @@ def get_microbatch_iterator(
         pad_full_seq_to=pad_full_seq_to,
         straggler_timer=straggler_timer,
         delegate_pack_to_model=delegate_pack_to_model,
+        cuda_graph_max_packed_seqs=cuda_graph_max_packed_seqs,
     )
 
     # Compute padded sequence length for pipeline parallelism
@@ -246,6 +263,7 @@ def process_microbatch(
     pad_full_seq_to: Optional[int] = None,
     pack_sequences: bool = False,
     delegate_pack_to_model: bool = False,
+    cuda_graph_max_packed_seqs: Optional[int] = None,
     straggler_timer: Optional[StragglerDetector] = None,
 ) -> ProcessedInputs:
     """Process a microbatch for Megatron model forward pass."""
@@ -343,6 +361,7 @@ def process_microbatch(
                     pad_full_seq_to,
                     cp_rank=get_context_parallel_rank(),
                     cp_size=get_context_parallel_world_size(),
+                    cuda_graph_max_packed_seqs=cuda_graph_max_packed_seqs,
                 )
                 # routed_experts and the R3 trace token identity ride the SAME
                 # per-seq zigzag CP sharding as input_ids, re-derived from
@@ -403,6 +422,7 @@ def process_microbatch(
                         pad_full_seq_to,
                         cp_rank=get_context_parallel_rank(),
                         cp_size=get_context_parallel_world_size(),
+                        cuda_graph_max_packed_seqs=cuda_graph_max_packed_seqs,
                     )
 
                 # For packed sequences, position_ids and attention_mask are typically None
@@ -807,6 +827,7 @@ def _pack_sequences_for_megatron(
     pad_packed_seq_to: Optional[int] = None,
     cp_rank: int = 0,
     cp_size: int = 1,
+    cuda_graph_max_packed_seqs: Optional[int] = None,
 ) -> tuple[torch.Tensor, PackedSeqParams, torch.Tensor, Optional[torch.Tensor]]:
     """Pack sequences for Megatron model processing with optional context parallelism.
 
@@ -828,6 +849,16 @@ def _pack_sequences_for_megatron(
         - cu_seqlens_padded: Padded cumulative sequence lengths
     """
     batch_size = input_ids.shape[0]
+    if (
+        cuda_graph_max_packed_seqs is not None
+        and batch_size > cuda_graph_max_packed_seqs
+    ):
+        raise ValueError(
+            f"Packed batch sequence count {batch_size} exceeds "
+            "cuda_graph_max_packed_seqs="
+            f"{cuda_graph_max_packed_seqs}; increase the model/workload bound "
+            "or split the packed bin."
+        )
 
     # Build cumulative sequence lengths (cu_seqlens) and extract valid tokens
     needs_padding = (
@@ -965,15 +996,29 @@ def _pack_sequences_for_megatron(
     if cu_seqlens_padded is None:
         cu_seqlens_padded = cu_seqlens.clone()
 
+    graph_cu_seqlens = cu_seqlens_padded
+    graph_max_seqlen = int(max_seqlen)
+    if cuda_graph_max_packed_seqs is not None:
+        if pad_packed_seq_to is None:
+            raise ValueError(
+                "cuda_graph_max_packed_seqs requires a fixed pad_packed_seq_to."
+            )
+        graph_cu_seqlens = cu_seqlens_padded.new_full(
+            (cuda_graph_max_packed_seqs + 2,),
+            pad_packed_seq_to,
+        )
+        graph_cu_seqlens[: cu_seqlens_padded.numel()] = cu_seqlens_padded
+        graph_max_seqlen = pad_packed_seq_to
+
     # total_tokens is required for PackedSeqParams.__post_init__ to build
     # seq_idx, which Mamba uses to reset SSM state at sample boundaries.
     packed_seq_params = PackedSeqParams(
-        cu_seqlens_q=cu_seqlens_padded,
-        cu_seqlens_kv=cu_seqlens_padded,
-        cu_seqlens_q_padded=cu_seqlens_padded,
-        cu_seqlens_kv_padded=cu_seqlens_padded,
-        max_seqlen_q=int(max_seqlen),
-        max_seqlen_kv=int(max_seqlen),
+        cu_seqlens_q=graph_cu_seqlens,
+        cu_seqlens_kv=graph_cu_seqlens,
+        cu_seqlens_q_padded=graph_cu_seqlens,
+        cu_seqlens_kv_padded=graph_cu_seqlens,
+        max_seqlen_q=graph_max_seqlen,
+        max_seqlen_kv=graph_max_seqlen,
         qkv_format="thd",
         total_tokens=packed_input_ids.shape[1],
     )
@@ -984,6 +1029,33 @@ def _pack_sequences_for_megatron(
         packed_seq_params,
         cu_seqlens,
         cu_seqlens_padded,
+    )
+
+
+def make_cuda_graph_packed_seq_params(
+    seq_length: int,
+    max_packed_seqs: int,
+    device: torch.device,
+) -> PackedSeqParams:
+    """Build the fixed packed THD sample passed to ``TECudaGraphHelper``."""
+    if seq_length <= 0 or max_packed_seqs <= 0:
+        raise ValueError("CUDA Graph packed sequence bounds must be positive")
+    cu_seqlens = torch.full(
+        (max_packed_seqs + 2,),
+        seq_length,
+        dtype=torch.int32,
+        device=device,
+    )
+    cu_seqlens[0] = 0
+    return PackedSeqParams(
+        qkv_format="thd",
+        cu_seqlens_q=cu_seqlens,
+        cu_seqlens_kv=cu_seqlens,
+        cu_seqlens_q_padded=cu_seqlens,
+        cu_seqlens_kv_padded=cu_seqlens,
+        max_seqlen_q=seq_length,
+        max_seqlen_kv=seq_length,
+        total_tokens=seq_length,
     )
 
 

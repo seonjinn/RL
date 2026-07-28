@@ -166,3 +166,22 @@ external scheduler preemption. The first step is a cold-start sample and is
 excluded from steady-state aggregation. Steps 2–12 remain valid interrupted-run
 baseline samples, but final accuracy and performance comparisons will use a
 complete retry where possible. Job `2464026` is that retry.
+
+## TE capture audit correction
+
+The apparent CUDA Graph retries `2464548`–`2464555` are not performance
+results. A source-level audit found that NeMo-RL only copied
+`cuda_graph_impl`, module scope, and warmup values into MCore config; its custom
+policy loop never constructed or invoked `TECudaGraphHelper`. The jobs that
+reached policy steps therefore executed eager training under CUDA-Graph labels.
+They were cancelled and are recorded as `INVALID_NO_CAPTURE`.
+
+The corrective implementation adds the missing helper lifecycle, captures
+after three globally successful optimizer updates, fixes packed token length
+and `cu_seqlens` shape using the configured maximum packed-sequence count,
+keeps gradient buffers resident after capture, and deletes graphs before
+worker teardown. It also rejects colocated generation for TE training graphs
+because the refit path moves model parameters to CPU and invalidates captured
+addresses. The next performance gate is a single five-step `attn` smoke that
+must emit explicit capture and replay evidence before the parallel matrix is
+resubmitted.

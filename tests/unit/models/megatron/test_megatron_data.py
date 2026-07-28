@@ -602,6 +602,69 @@ class TestProcessMicrobatch:
 
 
 @pytest.mark.mcore
+def test_pack_sequences_uses_fixed_cuda_graph_metadata_shape():
+    """Graph replay keeps THD tensor shapes fixed while returning original boundaries."""
+    from nemo_rl.models.megatron.data import (
+        _pack_sequences_for_megatron,
+        make_cuda_graph_packed_seq_params,
+    )
+
+    input_ids = torch.tensor(
+        [
+            [1, 2, 3, 0, 0, 0, 0, 0],
+            [4, 5, 0, 0, 0, 0, 0, 0],
+        ]
+    )
+    seq_lengths = torch.tensor([3, 2])
+
+    _, packed_input_ids, packed_seq_params, cu_seqlens, cu_seqlens_padded = (
+        _pack_sequences_for_megatron(
+            input_ids,
+            seq_lengths,
+            pad_packed_seq_to=16,
+            cuda_graph_max_packed_seqs=4,
+        )
+    )
+
+    assert packed_input_ids.shape == (1, 16)
+    assert cu_seqlens.tolist() == [0, 3, 5]
+    assert cu_seqlens_padded.tolist() == [0, 3, 16]
+    expected_graph_cu = [0, 3, 16, 16, 16, 16]
+    assert packed_seq_params.cu_seqlens_q.tolist() == expected_graph_cu
+    assert packed_seq_params.cu_seqlens_kv.tolist() == expected_graph_cu
+    assert packed_seq_params.cu_seqlens_q_padded.tolist() == expected_graph_cu
+    assert packed_seq_params.cu_seqlens_kv_padded.tolist() == expected_graph_cu
+    assert packed_seq_params.max_seqlen_q == 16
+    assert packed_seq_params.max_seqlen_kv == 16
+    assert packed_seq_params.total_tokens == 16
+
+    sample = make_cuda_graph_packed_seq_params(
+        seq_length=16,
+        max_packed_seqs=4,
+        device=torch.device("cpu"),
+    )
+    assert sample.cu_seqlens_q.tolist() == [0, 16, 16, 16, 16, 16]
+    assert (
+        sample.cu_seqlens_q_padded.shape == packed_seq_params.cu_seqlens_q_padded.shape
+    )
+    assert sample.seq_idx.shape == packed_seq_params.seq_idx.shape
+
+
+@pytest.mark.mcore
+def test_pack_sequences_rejects_cuda_graph_sequence_count_overflow():
+    """A packed batch cannot exceed its captured sequence-count bound."""
+    from nemo_rl.models.megatron.data import _pack_sequences_for_megatron
+
+    with pytest.raises(ValueError, match="exceeds cuda_graph_max_packed_seqs"):
+        _pack_sequences_for_megatron(
+            torch.ones((3, 4), dtype=torch.long),
+            torch.tensor([1, 1, 1]),
+            pad_packed_seq_to=4,
+            cuda_graph_max_packed_seqs=2,
+        )
+
+
+@pytest.mark.mcore
 class TestPrepareVlmBatchForMegatron:
     """Tests for _prepare_vlm_batch_for_megatron.
 

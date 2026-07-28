@@ -45,16 +45,20 @@ COMMAND="NRL_FORCE_REBUILD_VENVS=true uv run --extra mcore examples/run_grpo.py 
   policy.tokenizer.name=${NANOV3_TOKENIZER_SNAPSHOT:?Set NANOV3_TOKENIZER_SNAPSHOT} \
   cluster.num_nodes=${NUM_ACTOR_NODES} \
   cluster.gpus_per_node=${GPUS_PER_NODE} \
+  policy.generation.colocated.enabled=false \
+  policy.generation.colocated.resources.num_nodes=${INFERENCE_NODES:?Set INFERENCE_NODES} \
+  policy.generation.colocated.resources.gpus_per_node=${GPUS_PER_NODE} \
   grpo.max_num_steps=${STEPS:-5} \
   checkpointing.enabled=false \
   logger.log_dir=exp_logs/${RUN_NAME} \
   logger.wandb_enabled=true \
   logger.wandb.project=sna-async-grpo-gb200 \
   logger.wandb.name=${RUN_NAME} \
-  '+policy.megatron_cfg.cuda_graph_scope=[mamba,moe]' \
-  '+policy.megatron_cfg.cuda_graph_impl=transformer_engine' \
-  '+policy.megatron_cfg.cuda_graph_packed_seq=true' \
-  '+policy.megatron_cfg.cuda_graph_warmup_steps=3'"
+  'policy.megatron_cfg.cuda_graph_scope=[mamba,moe]' \
+  'policy.megatron_cfg.cuda_graph_impl=transformer_engine' \
+  'policy.megatron_cfg.cuda_graph_packed_seq=true' \
+  'policy.megatron_cfg.cuda_graph_max_packed_seqs=16' \
+  'policy.megatron_cfg.cuda_graph_warmup_steps=3'"
 COMMAND+=" ${MOE_OVERRIDES}"
 
 if [[ -z "${CONTAINER:-}" ]]; then

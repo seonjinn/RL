@@ -216,6 +216,13 @@ policy:
     mtp_detach_heads: false
     gradient_accumulation_fusion: false
     use_fused_weighted_squared_relu: false
+    # Partial training CUDA Graphs are opt-in. Packed TE graphs additionally
+    # require a model/workload-specific maximum sequence count per packed bin.
+    cuda_graph_impl: "none"
+    cuda_graph_scope: []
+    cuda_graph_packed_seq: false
+    cuda_graph_max_packed_seqs: null
+    cuda_graph_warmup_steps: 3
 
     peft:
       enabled: false

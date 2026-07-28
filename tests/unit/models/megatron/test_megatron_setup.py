@@ -111,6 +111,46 @@ def test_validate_cuda_graph_request_allows_full_iteration_without_scope():
     )
 
 
+def test_validate_te_cuda_graph_packing_requires_fixed_contract():
+    """Packed TE graphs require a fixed token and sequence-count shape."""
+    from nemo_rl.models.megatron.setup import validate_cuda_graph_request
+
+    config = {
+        "megatron_cfg": {
+            "cuda_graph_impl": "transformer_engine",
+            "cuda_graph_scope": ["attn"],
+            "cuda_graph_packed_seq": True,
+        },
+        "sequence_packing": {"enabled": True},
+        "generation": {"colocated": {"enabled": False}},
+    }
+
+    with pytest.raises(ValueError, match="cuda_graph_max_packed_seqs"):
+        validate_cuda_graph_request(config)
+
+    config["megatron_cfg"]["cuda_graph_max_packed_seqs"] = 16
+    assert validate_cuda_graph_request(config) == ("attn",)
+
+
+def test_validate_te_cuda_graph_rejects_colocated_generation():
+    """Captured training graphs cannot survive colocated model CPU offload."""
+    from nemo_rl.models.megatron.setup import validate_cuda_graph_request
+
+    config = {
+        "megatron_cfg": {
+            "cuda_graph_impl": "transformer_engine",
+            "cuda_graph_scope": ["attn"],
+            "cuda_graph_packed_seq": True,
+            "cuda_graph_max_packed_seqs": 16,
+        },
+        "sequence_packing": {"enabled": True},
+        "generation": {"colocated": {"enabled": True}},
+    }
+
+    with pytest.raises(ValueError, match="non-colocated generation"):
+        validate_cuda_graph_request(config)
+
+
 @pytest.mark.parametrize(
     ("megatron_cfg", "expected_scope"),
     [
@@ -209,11 +249,14 @@ def test_nanov3_cuda_graph_matrix_recipe_defaults_to_eager_training():
     assert recipe["defaults"] == "../grpo-nanov3-30BA3B-2n8g-megatron-pack-cp.yaml"
     assert recipe["checkpointing"]["enabled"] is False
     assert recipe["logger"]["wandb_enabled"] is True
-    assert not {
-        "cuda_graph_impl",
-        "cuda_graph_scope",
-        "cuda_graph_warmup_steps",
-    } & recipe.get("policy", {}).get("megatron_cfg", {}).keys()
+    assert (
+        not {
+            "cuda_graph_impl",
+            "cuda_graph_scope",
+            "cuda_graph_warmup_steps",
+        }
+        & recipe.get("policy", {}).get("megatron_cfg", {}).keys()
+    )
 
 
 @pytest.mark.mcore

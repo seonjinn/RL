@@ -311,9 +311,7 @@ def normalize_cuda_graph_scope(scope: object) -> tuple[str, ...]:
             f"{list(_CUDA_GRAPH_SCOPE_ORDER)!r}."
         )
     if "moe_preprocess" in requested_names and "moe_router" not in requested_names:
-        raise ValueError(
-            "cuda_graph_scope 'moe_preprocess' requires 'moe_router'."
-        )
+        raise ValueError("cuda_graph_scope 'moe_preprocess' requires 'moe_router'.")
     if "moe" in requested_names and (
         "moe_router" in requested_names or "moe_preprocess" in requested_names
     ):
@@ -345,11 +343,40 @@ def validate_cuda_graph_request(config: PolicyConfig) -> tuple[str, ...]:
                 "cuda_graph_scope must be non-empty when cuda_graph_impl is "
                 "'transformer_engine' or 'local'."
             )
+        if cuda_graph_impl == "transformer_engine":
+            sequence_packing = config.get("sequence_packing", {}).get("enabled", False)
+            packed_graph = megatron_cfg.get("cuda_graph_packed_seq", False)
+            max_packed_seqs = megatron_cfg.get("cuda_graph_max_packed_seqs")
+            if sequence_packing:
+                if not packed_graph:
+                    raise ValueError(
+                        "Packed Transformer Engine CUDA Graph training requires "
+                        "policy.megatron_cfg.cuda_graph_packed_seq=true."
+                    )
+                if not isinstance(max_packed_seqs, int) or max_packed_seqs <= 0:
+                    raise ValueError(
+                        "Packed Transformer Engine CUDA Graph training requires a "
+                        "positive policy.megatron_cfg.cuda_graph_max_packed_seqs."
+                    )
+            elif packed_graph or max_packed_seqs is not None:
+                raise ValueError(
+                    "cuda_graph_packed_seq and cuda_graph_max_packed_seqs require "
+                    "policy.sequence_packing.enabled=true."
+                )
+
+            colocated = (
+                config.get("generation", {}).get("colocated", {}).get("enabled", False)
+            )
+            if colocated:
+                raise ValueError(
+                    "Transformer Engine training CUDA Graphs require non-colocated "
+                    "generation because colocated refit offloads model parameters and "
+                    "invalidates captured memory addresses."
+                )
     elif cuda_graph_impl == "full_iteration":
         if scope:
             raise ValueError(
-                "cuda_graph_impl 'full_iteration' requires an empty "
-                "cuda_graph_scope."
+                "cuda_graph_impl 'full_iteration' requires an empty cuda_graph_scope."
             )
     else:
         raise ValueError(
@@ -371,12 +398,14 @@ def _log_cuda_graph_provenance(
     megatron_cfg = config["megatron_cfg"]
     log.info(
         "CUDA Graph request: requested_scope=%r effective_scope=%r "
-        "implementation=%r packed_sequence=%r warmup_steps=%r "
+        "implementation=%r packed_sequence=%r max_packed_sequences=%r "
+        "warmup_steps=%r "
         "source_paths={nemo_rl=%s, megatron_bridge=%s, megatron_core=%s}",
         megatron_cfg.get("cuda_graph_scope"),
         effective_scope,
         megatron_cfg.get("cuda_graph_impl"),
         megatron_cfg.get("cuda_graph_packed_seq"),
+        megatron_cfg.get("cuda_graph_max_packed_seqs"),
         megatron_cfg.get("cuda_graph_warmup_steps"),
         __file__,
         megatron.bridge.__file__,

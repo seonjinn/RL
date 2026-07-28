@@ -23,6 +23,9 @@ COMMAND="NRL_FORCE_REBUILD_VENVS=true uv run --extra mcore examples/run_grpo.py 
   policy.tokenizer.name=${NANOV3_TOKENIZER_SNAPSHOT:?Set NANOV3_TOKENIZER_SNAPSHOT} \
   cluster.num_nodes=${NUM_ACTOR_NODES} \
   cluster.gpus_per_node=${GPUS_PER_NODE} \
+  policy.generation.colocated.enabled=false \
+  policy.generation.colocated.resources.num_nodes=${INFERENCE_NODES:?Set INFERENCE_NODES} \
+  policy.generation.colocated.resources.gpus_per_node=${GPUS_PER_NODE} \
   grpo.max_num_steps=${STEPS:-5} \
   checkpointing.enabled=false \
   logger.log_dir=exp_logs/${RUN_NAME} \
