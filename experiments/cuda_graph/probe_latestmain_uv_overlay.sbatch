@@ -25,5 +25,5 @@ srun \
     else
       echo "tracked_uv_lock_check=failed"
     fi
-    NRL_FORCE_REBUILD_VENVS=true uv run --frozen python -c "import transformer_engine.pytorch; import megatron.core; import nemo_rl; print(\"uv_overlay_imports=passed\")"
+    NRL_FORCE_REBUILD_VENVS=true uv run --extra mcore --frozen python -c "import transformer_engine.pytorch; import megatron.core; import nemo_rl; print(\"uv_overlay_imports=passed\")"
   '
