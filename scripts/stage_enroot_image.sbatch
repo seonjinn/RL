@@ -1,13 +1,14 @@
 #!/bin/bash
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:1
 #SBATCH --mem=0
 #SBATCH --time=02:00:00
 #SBATCH --job-name=stage_training_container
 #SBATCH --output=stage_training_container_%j.log
 
-# Import one registry image into an immutable Enroot squashfs artifact.
+# Import one registry image into an immutable Enroot squashfs artifact.  The
+# import is CPU/I/O-only, so deliberately do not request a GPU; this keeps the
+# script portable to Ptyche, whose scheduler rejects the legacy GRES syntax.
 #
 # SOURCE_DIGEST is deliberately explicit: a mutable registry tag alone is not
 # sufficient provenance for a performance experiment. Resolve the tag before
