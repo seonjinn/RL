@@ -264,6 +264,7 @@ def test_ray_venv_bootstrap_smoke_uses_frozen_driver_and_worker_bootstrap() -> N
         "from nemo_rl.models.policy.workers.megatron_policy_worker import MegatronPolicyWorker"
         in source
     )
+    assert '"policy_worker": str(MegatronPolicyWorker)' in source
     assert '"py_executable": str(python_path)' in source
     assert "transformer_engine.pytorch" in source
     assert "megatron.core" in source

@@ -73,7 +73,7 @@ def worker_runtime_probe() -> dict[str, str]:
         "mamba_ssm": str(Path(mamba_ssm.__file__).resolve()),
         "megatron_core": str(Path(megatron.core.__file__).resolve()),
         "megatron_energon": str(Path(megatron.energon.__file__).resolve()),
-        "policy_worker": f"{MegatronPolicyWorker.__module__}.{MegatronPolicyWorker.__name__}",
+        "policy_worker": str(MegatronPolicyWorker),
         "transformer_engine": str(Path(transformer_engine.pytorch.__file__).resolve()),
     }
 
@@ -81,7 +81,7 @@ def worker_runtime_probe() -> dict[str, str]:
 result = ray.get(worker_runtime_probe.options(runtime_env=runtime_env).remote())
 assert Path(result["python"]) == python_path, result
 assert Path(result["virtual_env"]) == worker_venv, result
-assert result["policy_worker"].endswith(".MegatronPolicyWorker"), result
+assert "MegatronPolicyWorker" in result["policy_worker"], result
 assert all(
     result[module]
     for module in ("mamba_ssm", "megatron_core", "megatron_energon", "transformer_engine")
