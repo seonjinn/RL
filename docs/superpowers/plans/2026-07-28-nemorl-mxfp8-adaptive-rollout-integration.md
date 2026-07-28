@@ -302,10 +302,12 @@ python -c \
 This task starts only after both branches are clean, committed, pushed, and
 referenced by immutable commit SHA.
 
-- [ ] Compare current Pre-Tyche and OCI-HSG FairShare/queue state. Prefer
-  Pre-Tyche for the primary run because prior vLLM 0.20.2 adaptive artifacts
-  and the matching four-GPU-per-node topology are already available; record
-  any decision to use OCI-HSG instead.
+- [ ] Record the OCI-HSG scheduling preflight for account
+  `coreai_dlalgo_nemorl`: reachable login, four-GPU nodes, user FairShare,
+  queue estimate, and an accepted four-node `srun --test-only` request.
+- [ ] Use OCI-HSG for the primary run. Its vLLM 0.20.2 adaptive containers and
+  user Lustre roots are already readable. Use Pre-Tyche for same-hardware
+  reproduction after the local Kerberos credential is refreshed.
 - [ ] Pull the exact NeMo-RL commit on the selected GB200 cluster.
 - [ ] Submit the Qwen 4n4g MXFP8 trace gate.
 - [ ] Monitor the job for five minutes and stop on import, source, worker-env,

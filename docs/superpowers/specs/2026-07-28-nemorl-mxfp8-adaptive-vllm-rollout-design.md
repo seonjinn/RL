@@ -23,7 +23,10 @@ duration, TTFT, TPOT, output-token count, and numerical/correctness signals.
 - Custom vLLM integration branch:
   `sna/mxfp8-adaptive-v0.20.2-nemorl`.
 - FlashInfer: `0.6.8.post1`, including its private TRTLLM runner API.
-- Primary hardware target: four Pre-Tyche GB200 nodes with four GPUs per node.
+- Primary hardware target: four OCI-HSG GB200 nodes with four GPUs per node.
+  OCI-HSG is reachable from the current development session and accepts the
+  4n4g scheduling request. Pre-Tyche is the same-hardware reproduction target
+  after its Kerberos credential is refreshed.
 - Primary workload: the latest-main Qwen3-30B-A3B 4n4g GRPO recipe, with
   MXFP8 rollout enabled and vLLM tensor parallel size 1.
 - Secondary efficacy workload: Nemotron 3 Ultra MXFP8 with vLLM tensor
@@ -255,7 +258,7 @@ Run the JSON parser/configuration tests and the ported adaptive contracts:
 
 ### Gate 2: Qwen Trace Applicability
 
-Run the exact Qwen 4n4g MXFP8 rollout on Pre-Tyche with adaptive shape tracing
+Run the exact Qwen 4n4g MXFP8 rollout on OCI-HSG with adaptive shape tracing
 and default tactic `-1`.
 
 - If at least one eligible dense shape is observed, offline-shmoo every unique
