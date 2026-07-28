@@ -133,7 +133,7 @@ automodel = [
   "causal-conv1d",
   "nv-grouped-gemm",
   "transformer-engine[pytorch,core_cu13] @ git+https://github.com/NVIDIA/TransformerEngine.git@v2.14.1",
-  "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@29d31c095796f3c8ece47ee9cdcc167051bbeed9 ; platform_machine == 'x86_64'",
+  "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@f725d29699f5bda9ba789456bb9579af69844685 ; platform_machine == 'x86_64'",
   "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@f725d29699f5bda9ba789456bb9579af69844685 ; platform_machine == 'aarch64'",
 ]
 vllm = [
@@ -142,7 +142,7 @@ vllm = [
   # deep_ep also needs libibverbs-dev
   # sudo apt-get update
   # sudo apt-get install libibverbs-dev
-  "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@29d31c095796f3c8ece47ee9cdcc167051bbeed9 ; platform_machine == 'x86_64'",
+  "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@f725d29699f5bda9ba789456bb9579af69844685 ; platform_machine == 'x86_64'",
   "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@f725d29699f5bda9ba789456bb9579af69844685 ; platform_machine == 'aarch64'",
   # Default wheels on GitHub are cu130. See v0.20.0 release assets:
   # https://github.com/vllm-project/vllm/releases/tag/v0.20.0
@@ -192,7 +192,7 @@ mcore = [
   "causal-conv1d",
   "fast-hadamard-transform",
   "emerging-optimizers==0.2.0",
-  "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@29d31c095796f3c8ece47ee9cdcc167051bbeed9 ; platform_machine == 'x86_64'",
+  "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@f725d29699f5bda9ba789456bb9579af69844685 ; platform_machine == 'x86_64'",
   "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@f725d29699f5bda9ba789456bb9579af69844685 ; platform_machine == 'aarch64'",
   "quart",
   "hypercorn",
@@ -367,7 +367,7 @@ override-dependencies = [
   "llguidance>=1.3.0,<1.4.0",
   # Override setuptools range in other dependencies to address CVE GHSA-58pv-8j8x-9vj2
   "setuptools>=80.10.2",
-  "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@29d31c095796f3c8ece47ee9cdcc167051bbeed9 ; platform_machine == 'x86_64'",
+  "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@f725d29699f5bda9ba789456bb9579af69844685 ; platform_machine == 'x86_64'",
   "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@f725d29699f5bda9ba789456bb9579af69844685 ; platform_machine == 'aarch64'",
   # Relax megatron-core workspace member's opentelemetry-api ceiling (<1.34) for protobuf 6.x compat with ray
   "opentelemetry-api>=1.33.1",
