@@ -244,11 +244,11 @@ def test_cw_h100_profile_pins_the_hopper_build_and_nvl8_topology() -> None:
     ).read_text()
 
     required_lines = {
-        "CLUSTER_ID=cw-dfw-h100",
-        "ACCOUNT=${ACCOUNT:-coreai_dlalgo_nemorl}",
-        "PARTITION=${PARTITION:-batch}",
-        "GPU_ARCH=9.0",
-        "GPUS_PER_NODE=${GPUS_PER_NODE:-8}",
+        "export CLUSTER_ID=cw-dfw-h100",
+        "export ACCOUNT=${ACCOUNT:-coreai_dlalgo_nemorl}",
+        "export PARTITION=${PARTITION:-batch}",
+        "export GPU_ARCH=9.0",
+        "export GPUS_PER_NODE=${GPUS_PER_NODE:-8}",
         "export NCCL_NVLS_ENABLE=0",
         "export NVLINK_DOMAIN_SIZE=8",
         "export USE_MNNVL=0",
@@ -257,3 +257,25 @@ def test_cw_h100_profile_pins_the_hopper_build_and_nvl8_topology() -> None:
     }
 
     assert required_lines <= set(profile.splitlines())
+
+
+def test_cw_h100_profile_exports_values_to_slurm_jobs() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    profile = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "x86"
+        / "hybridep"
+        / "clusters"
+        / "cw-dfw-h100.env"
+    ).read_text()
+
+    assignments = [
+        line
+        for line in profile.splitlines()
+        if line and not line.startswith("#") and "=" in line
+    ]
+
+    assert assignments
+    assert all(line.startswith("export ") for line in assignments)
