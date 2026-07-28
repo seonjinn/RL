@@ -56,7 +56,7 @@ class SequencePacker(ABC):
             bin_count_multiple: The total number of bins must be a multiple of this value.
                                If None, no multiple constraint is enforced.
             max_sequences_per_bin: Maximum number of sequences assigned to one bin.
-                                   If None, no sequence-count limit is enforced.
+                                   None and -1 disable the sequence-count limit.
 
         Raises:
             ValueError: If min_bin_count or bin_count_multiple are invalid.
@@ -65,7 +65,9 @@ class SequencePacker(ABC):
         self.collect_metrics = collect_metrics
         self.min_bin_count = min_bin_count
         self.bin_count_multiple = bin_count_multiple
-        self.max_sequences_per_bin = max_sequences_per_bin
+        self.max_sequences_per_bin = (
+            -1 if max_sequences_per_bin is None else max_sequences_per_bin
+        )
         self.metrics = None
 
         # Validate parameters
@@ -73,7 +75,7 @@ class SequencePacker(ABC):
             raise ValueError("min_bin_count must be nonnegative")
         if bin_count_multiple is not None and bin_count_multiple < 1:
             raise ValueError("bin_count_multiple must be positive")
-        if max_sequences_per_bin is not None and max_sequences_per_bin < 1:
+        if self.max_sequences_per_bin != -1 and self.max_sequences_per_bin < 1:
             raise ValueError("max_sequences_per_bin must be positive")
 
         if collect_metrics:
@@ -186,7 +188,7 @@ class SequencePacker(ABC):
         # Call the implementation
         bins = self._pack_implementation(sequence_lengths)
 
-        if self.max_sequences_per_bin is not None:
+        if self.max_sequences_per_bin != -1:
             bins = [
                 bin_contents[start : start + self.max_sequences_per_bin]
                 for bin_contents in bins
@@ -685,7 +687,7 @@ def get_packer(
         bin_count_multiple: The total number of bins must be a multiple of this value.
                            If None, no multiple constraint is enforced.
         max_sequences_per_bin: Maximum number of sequences assigned to one bin.
-                               If None, no sequence-count limit is enforced.
+                               None and -1 disable the sequence-count limit.
 
     Returns:
         A SequencePacker instance for the specified algorithm.

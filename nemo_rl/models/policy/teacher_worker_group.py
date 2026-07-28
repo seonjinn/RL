@@ -236,9 +236,6 @@ class TeacherWorkerGroup:
                 "input_key": "input_ids",
                 "input_lengths_key": "input_lengths",
                 "sequence_length_pad_multiple": self.sequence_length_pad_multiple,
-                "max_sequences_per_microbatch": cfg.get("megatron_cfg", {}).get(
-                    "cuda_graph_max_packed_seqs"
-                ),
             }
 
     def get_logprobs(

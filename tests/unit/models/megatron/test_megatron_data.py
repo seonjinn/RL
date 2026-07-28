@@ -668,6 +668,19 @@ def test_pack_sequences_rejects_cuda_graph_sequence_count_overflow():
 
 
 @pytest.mark.mcore
+def test_pack_sequences_rejects_fixed_cuda_graph_token_capacity_overflow():
+    from nemo_rl.models.megatron.data import _pack_sequences_for_megatron
+
+    with pytest.raises(ValueError, match="actual padded tokens=6, capacity=4"):
+        _pack_sequences_for_megatron(
+            torch.ones((2, 4), dtype=torch.long),
+            torch.tensor([3, 3]),
+            pad_packed_seq_to=4,
+            cuda_graph_max_packed_seqs=2,
+        )
+
+
+@pytest.mark.mcore
 class TestPrepareVlmBatchForMegatron:
     """Tests for _prepare_vlm_batch_for_megatron.
 

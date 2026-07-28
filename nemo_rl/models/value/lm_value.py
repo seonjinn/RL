@@ -222,9 +222,6 @@ class Value(ValueInterface):
                 "input_key": "input_ids",
                 "input_lengths_key": "input_lengths",
                 "sequence_length_pad_multiple": sequence_length_pad_multiple,
-                "max_sequences_per_microbatch": config.get("megatron_cfg", {}).get(
-                    "cuda_graph_max_packed_seqs"
-                ),
             }
             assert not config["dynamic_batching"]["enabled"], (
                 "Sequence Packing is exclusive of Dynamic Batching. Please disable Dynamic Batching"

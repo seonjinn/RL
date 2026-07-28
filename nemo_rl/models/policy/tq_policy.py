@@ -264,6 +264,11 @@ class TQPolicy(Policy):
             args["max_tokens_per_microbatch"] = self.cfg["sequence_packing"][
                 mb_tokens_key
             ]
+            args["max_sequences_per_microbatch"] = (
+                self.cfg.get("megatron_cfg", {}).get("cuda_graph_max_packed_seqs")
+                if mb_tokens_key == "train_mb_tokens"
+                else None
+            )
             return args, None
         return None, None
 

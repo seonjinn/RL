@@ -1009,11 +1009,18 @@ def _pack_sequences_for_megatron(
             raise ValueError(
                 "cuda_graph_max_packed_seqs requires a fixed pad_packed_seq_to."
             )
+        assert graph_sequence_boundaries is not None
+        actual_padded_tokens = int(graph_sequence_boundaries[-1].item())
+        if actual_padded_tokens > pad_packed_seq_to:
+            raise ValueError(
+                "Packed batch exceeds the fixed Transformer Engine CUDA Graph "
+                f"token capacity: actual padded tokens={actual_padded_tokens}, "
+                f"capacity={pad_packed_seq_to}."
+            )
         graph_cu_seqlens = cu_seqlens_padded.new_full(
             (cuda_graph_max_packed_seqs + 2,),
             pad_packed_seq_to,
         )
-        assert graph_sequence_boundaries is not None
         graph_cu_seqlens[: graph_sequence_boundaries.numel()] = (
             graph_sequence_boundaries
         )

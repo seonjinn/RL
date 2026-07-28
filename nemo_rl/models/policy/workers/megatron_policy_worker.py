@@ -592,6 +592,9 @@ class MegatronPolicyWorkerImpl(
                 f"{configured_num_microbatches}."
             )
 
+    def _pipeline_parallel_size(self) -> int:
+        return torch.distributed.get_world_size(group=get_pg_collection(self.model).pp)
+
     def _any_model_parallel_rank_created_cuda_graphs(self) -> bool:
         lifecycle = self._te_cuda_graph_lifecycle
         assert lifecycle is not None
@@ -632,7 +635,10 @@ class MegatronPolicyWorkerImpl(
             )
 
         if getattr(self, "_te_cuda_graph_capture_complete", False):
-            if num_microbatches != self._captured_te_cuda_graph_num_microbatches:
+            if (
+                self._pipeline_parallel_size() > 1
+                and num_microbatches != self._captured_te_cuda_graph_num_microbatches
+            ):
                 raise RuntimeError(
                     "Packed Transformer Engine CUDA Graph replay requires the "
                     "same pipeline microbatch count used for capture: "
@@ -644,10 +650,13 @@ class MegatronPolicyWorkerImpl(
         if not lifecycle.ready_to_capture():
             return
 
-        self._configure_pipeline_cuda_graph_microbatches(
-            num_microbatches=num_microbatches,
-            micro_batch_size=micro_batch_size,
-        )
+        if self._pipeline_parallel_size() > 1:
+            # The helper and every later PP replay must observe the same global
+            # calculator because its static-buffer liveness follows that schedule.
+            self._configure_pipeline_cuda_graph_microbatches(
+                num_microbatches=num_microbatches,
+                micro_batch_size=micro_batch_size,
+            )
         restore_forward_pre_hook = (
             self.should_disable_forward_pre_hook and self._forward_pre_hook_enabled()
         )
@@ -1426,26 +1435,27 @@ class MegatronPolicyWorkerImpl(
             straggler_timer=self.mcore_state.straggler_timer,
             for_cuda_graph_training=True,
         )
-        te_cuda_graph_geometry = (
-            padded_seq_length,
-            micro_batch_size,
-            num_microbatches,
-        )
-        if state["te_cuda_graph_geometry"] is None:
-            state["te_cuda_graph_geometry"] = te_cuda_graph_geometry
-        elif state["te_cuda_graph_geometry"] != te_cuda_graph_geometry:
-            raise RuntimeError(
-                "All split-policy microbatch calls in one optimizer step must "
-                "use identical Transformer Engine CUDA Graph geometry; "
-                f"expected {state['te_cuda_graph_geometry']}, got "
-                f"{te_cuda_graph_geometry}."
+        if self._te_cuda_graph_lifecycle is not None:
+            te_cuda_graph_geometry = (
+                padded_seq_length,
+                micro_batch_size,
+                num_microbatches,
             )
-        if self._te_cuda_graphs_created():
-            self._maybe_capture_te_cuda_graphs(
-                padded_seq_length=padded_seq_length,
-                micro_batch_size=micro_batch_size,
-                num_microbatches=num_microbatches,
-            )
+            if state["te_cuda_graph_geometry"] is None:
+                state["te_cuda_graph_geometry"] = te_cuda_graph_geometry
+            elif state["te_cuda_graph_geometry"] != te_cuda_graph_geometry:
+                raise RuntimeError(
+                    "All split-policy microbatch calls in one optimizer step must "
+                    "use identical Transformer Engine CUDA Graph geometry; "
+                    f"expected {state['te_cuda_graph_geometry']}, got "
+                    f"{te_cuda_graph_geometry}."
+                )
+            if self._te_cuda_graphs_created():
+                self._maybe_capture_te_cuda_graphs(
+                    padded_seq_length=padded_seq_length,
+                    micro_batch_size=micro_batch_size,
+                    num_microbatches=num_microbatches,
+                )
         state["total_num_microbatches"] += int(num_microbatches)
 
         loss_post_processor = LossPostProcessor(
@@ -1595,7 +1605,11 @@ class MegatronPolicyWorkerImpl(
             update_successful, mp_group=pg_collection.mp
         )
         self._record_successful_te_cuda_graph_warmup_step(bool(update_successful))
-        if update_successful and state["te_cuda_graph_geometry"] is not None:
+        if (
+            self._te_cuda_graph_lifecycle is not None
+            and update_successful
+            and state["te_cuda_graph_geometry"] is not None
+        ):
             self._last_te_cuda_graph_geometry = state["te_cuda_graph_geometry"]
         self._restore_forward_pre_hook_after_successful_step(bool(update_successful))
         grad_norm = reduce_max_stat_across_model_parallel_group(

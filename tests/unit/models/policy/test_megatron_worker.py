@@ -46,6 +46,37 @@ from tests.unit.test_utils import SimpleLossFn
 pytestmark = pytest.mark.mcore
 
 
+def test_sequence_count_cap_applies_to_training_packing_only():
+    policy = object.__new__(Policy)
+    policy.sharding_annotations = MagicMock()
+    policy.sharding_annotations.get_axis_size.return_value = 1
+    policy.use_dynamic_batches = False
+    policy.use_sequence_packing = True
+    policy.sequence_packing_args = {
+        "algorithm": "modified_first_fit_decreasing",
+        "input_key": "input_ids",
+        "input_lengths_key": "input_lengths",
+        "sequence_length_pad_multiple": 1,
+    }
+    policy.cfg = {
+        "sequence_packing": {
+            "train_mb_tokens": 8192,
+            "logprob_mb_tokens": 8192,
+        },
+        "megatron_cfg": {"cuda_graph_max_packed_seqs": 16},
+    }
+    data = MagicMock()
+    data.shard_by_batch_size.return_value = ([MagicMock()], None)
+
+    policy._shard_for_train(data, batch_size=16)
+    train_args = data.shard_by_batch_size.call_args.kwargs["sequence_packing_args"]
+    assert train_args["max_sequences_per_microbatch"] == 16
+
+    policy._shard_for_logprob(data)
+    logprob_args = data.shard_by_batch_size.call_args.kwargs["sequence_packing_args"]
+    assert logprob_args["max_sequences_per_microbatch"] is None
+
+
 def test_te_cuda_graph_capture_uses_safe_forward_pre_hook_boundary():
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
         MegatronPolicyWorkerImpl,
@@ -67,6 +98,7 @@ def test_te_cuda_graph_capture_uses_safe_forward_pre_hook_boundary():
     worker.disable_forward_pre_hook = MagicMock()
     worker.enable_forward_pre_hook = MagicMock()
     worker._configure_pipeline_cuda_graph_microbatches = MagicMock()
+    worker._pipeline_parallel_size = MagicMock(return_value=2)
     worker._any_model_parallel_rank_created_cuda_graphs = MagicMock(return_value=True)
 
     worker._maybe_capture_te_cuda_graphs(
@@ -168,6 +200,7 @@ def test_captured_pipeline_schedule_rejects_changed_microbatch_count():
     worker._te_cuda_graph_lifecycle = MagicMock()
     worker._te_cuda_graph_capture_complete = True
     worker._captured_te_cuda_graph_num_microbatches = 4
+    worker._pipeline_parallel_size = MagicMock(return_value=2)
     worker.cfg = {
         "max_total_sequence_length": 8192,
         "train_micro_batch_size": 1,
@@ -180,6 +213,29 @@ def test_captured_pipeline_schedule_rejects_changed_microbatch_count():
             micro_batch_size=1,
             num_microbatches=3,
         )
+
+
+def test_pp_one_reuses_single_graph_across_microbatch_counts():
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._te_cuda_graph_lifecycle = MagicMock()
+    worker._te_cuda_graph_capture_complete = True
+    worker._captured_te_cuda_graph_num_microbatches = 4
+    worker._pipeline_parallel_size = MagicMock(return_value=1)
+    worker.cfg = {
+        "max_total_sequence_length": 8192,
+        "train_micro_batch_size": 1,
+        "sequence_packing": {"enabled": False},
+    }
+
+    worker._maybe_capture_te_cuda_graphs(
+        padded_seq_length=8192,
+        micro_batch_size=1,
+        num_microbatches=3,
+    )
 
 
 def test_invalid_cuda_graph_scope_is_rejected_before_model_import():

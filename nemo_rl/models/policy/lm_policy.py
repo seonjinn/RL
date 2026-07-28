@@ -337,9 +337,6 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                 "input_key": "input_ids",
                 "input_lengths_key": "input_lengths",
                 "sequence_length_pad_multiple": sequence_length_pad_multiple,
-                "max_sequences_per_microbatch": config.get("megatron_cfg", {}).get(
-                    "cuda_graph_max_packed_seqs"
-                ),
             }
             assert not config["dynamic_batching"]["enabled"], (
                 "Sequence Packing is exclusive of Dynamic Batching. Please disable Dynamic Batching"
@@ -467,6 +464,7 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             self.sequence_packing_args["max_tokens_per_microbatch"] = self.cfg[
                 "sequence_packing"
             ]["logprob_mb_tokens"]
+            self.sequence_packing_args["max_sequences_per_microbatch"] = None
             # we just shard into DP shards here as Sequence packing allows for CP.
             sharded_data, unsorted_data_indices = data.shard_by_batch_size(
                 dp_size,
@@ -508,6 +506,9 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             self.sequence_packing_args["max_tokens_per_microbatch"] = self.cfg[
                 "sequence_packing"
             ]["train_mb_tokens"]
+            self.sequence_packing_args["max_sequences_per_microbatch"] = self.cfg.get(
+                "megatron_cfg", {}
+            ).get("cuda_graph_max_packed_seqs")
             sharded_data, _ = data.shard_by_batch_size(
                 dp_size,
                 batch_size=batch_size,
@@ -980,6 +981,7 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             self.sequence_packing_args["max_tokens_per_microbatch"] = self.cfg[
                 "sequence_packing"
             ]["logprob_mb_tokens"]
+            self.sequence_packing_args["max_sequences_per_microbatch"] = None
             sharded_data, _ = data.shard_by_batch_size(
                 dp_size,
                 batch_size=None,
