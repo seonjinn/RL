@@ -23,6 +23,7 @@ REPO_ROOT=$(cd -- "${SCRIPT_DIR}/../../../.." && pwd)
 cd "${REPO_ROOT}"
 source "${SCRIPT_DIR}/../profiles/${CLUSTER:?Set CLUSTER to ptyche or oci-hsg}.env"
 unset UV_CACHE_DIR_OVERRIDE
+PARTITION="${PARTITION_OVERRIDE:-${PARTITION}}"
 
 PHASE="${PHASE:-smoke}"
 case "${PHASE}" in

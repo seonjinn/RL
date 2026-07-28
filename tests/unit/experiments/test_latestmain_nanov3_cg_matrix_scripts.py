@@ -189,6 +189,20 @@ def test_baked_baseline_uses_verified_ptyche_snapshot_without_hub_access(
     assert "\nTRANSFORMERS_OFFLINE=1\n" in result.stdout
 
 
+def test_baked_baseline_accepts_an_explicit_backfill_partition(
+    tmp_path: Path,
+) -> None:
+    """A schedulable backfill run must not require editing the Ptyche profile."""
+    result = _run_test_only(
+        "00_nocg_baked_uv_cache.sh",
+        tmp_path,
+        PARTITION_OVERRIDE="backfill",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--partition=backfill" in result.stdout
+
+
 def test_non_cg_scripts_keep_required_te_graph_settings_visible() -> None:
     """Graph conditions make their TE packed-THD settings easy to diff."""
     for script_name in list(SCOPE_SCRIPTS)[1:]:
