@@ -29,6 +29,9 @@ RAY_SUB = REPO_ROOT / "ray.sub"
 FULL_RUNTIME_PROBE = (
     REPO_ROOT / "experiments/cuda_graph/probe_latestmain_full_runtime.sbatch"
 )
+UV_OVERLAY_PROBE = (
+    REPO_ROOT / "experiments/cuda_graph/probe_latestmain_uv_overlay.sbatch"
+)
 
 
 def _task3_valid_scope_cases() -> list[tuple[str, ...]]:
@@ -235,6 +238,20 @@ def test_full_runtime_probe_checks_the_required_gpu_and_package_gates() -> None:
     assert "load_config" in source
     assert "cuda_graph_warmup_steps=3" in source
     assert "#SBATCH --gres" not in source
+
+
+def test_uv_overlay_probe_preserves_the_lock_and_tests_the_actual_launcher_path() -> (
+    None
+):
+    """The recovery probe records lock drift without rewriting source state."""
+    source = UV_OVERLAY_PROBE.read_text()
+    assert "#SBATCH --exclusive" in source
+    assert "#SBATCH --gres" not in source
+    assert "uv lock --check" in source
+    assert "NRL_FORCE_REBUILD_VENVS=true uv run --frozen python -c" in source
+    assert "transformer_engine.pytorch" in source
+    assert "megatron.core" in source
+    assert "nemo_rl" in source
 
 
 def test_submit_all_invokes_each_named_file_without_dynamic_scope_rewrite() -> None:
