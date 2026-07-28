@@ -109,6 +109,7 @@ def _fake_sbatch(tmp_path: Path) -> Path:
         "printf 'fake-sbatch %q ' \"$@\"\n"
         "printf '\\nHF_HUB_OFFLINE=%q\\n' \"${HF_HUB_OFFLINE:-}\"\n"
         "printf 'TRANSFORMERS_OFFLINE=%q\\n' \"${TRANSFORMERS_OFFLINE:-}\"\n"
+        "printf 'WANDB_MODE=%q\\n' \"${WANDB_MODE:-}\"\n"
     )
     sbatch_path.chmod(0o755)
     return sbatch_path
@@ -187,6 +188,7 @@ def test_baked_baseline_uses_verified_ptyche_snapshot_without_hub_access(
     assert f"policy.tokenizer.name={snapshot}" in result.stdout
     assert "\nHF_HUB_OFFLINE=1\n" in result.stdout
     assert "\nTRANSFORMERS_OFFLINE=1\n" in result.stdout
+    assert "\nWANDB_MODE=offline\n" in result.stdout
 
 
 def test_baked_baseline_accepts_an_explicit_backfill_partition(
@@ -221,6 +223,12 @@ def test_all_scope_scripts_install_the_optional_mcore_runtime_extra() -> None:
         source = _script_source(script_name)
         assert "NRL_FORCE_REBUILD_VENVS=true uv run --extra mcore " in source
         assert "NRL_FORCE_REBUILD_VENVS=true uv run examples/run_grpo.py" not in source
+
+
+def test_all_scope_scripts_run_wandb_offline_without_an_api_key() -> None:
+    """Committed matrix jobs must not depend on interactive W&B credentials."""
+    for script_name in set(SCOPE_SCRIPTS) | AUXILIARY_SCOPE_SCRIPTS:
+        assert "WANDB_MODE=offline" in _script_source(script_name)
 
 
 def test_nocg_script_emits_no_training_cuda_graph_override() -> None:
