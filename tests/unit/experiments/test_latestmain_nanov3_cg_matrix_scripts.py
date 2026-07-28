@@ -172,7 +172,8 @@ def test_all_scope_dry_run_prints_test_only_submission_with_exact_scope(
     assert "cuda_graph_scope=[attn,mamba,moe_router,moe_preprocess]" in result.stdout
     assert "sbatch --test-only" in result.stdout
     assert "fake-sbatch --test-only" in result.stdout
-    assert "--gpus-per-node=4" in result.stdout
+    assert "--gpus-per-node" not in result.stdout
+    assert "--gres=gpu" not in result.stdout
 
 
 def test_moe_scope_scripts_validate_explicit_binary_experiment_axes(
@@ -196,15 +197,16 @@ def test_moe_scope_scripts_validate_explicit_binary_experiment_axes(
     assert "SHARED_EXPERT_OVERLAP must be 0 or 1" in invalid.stderr
 
 
-def test_profiles_have_stable_container_paths_and_cluster_specific_gpu_requests() -> (
-    None
-):
-    """Ptyche avoids unsupported GRES while OCI retains its supported request form."""
+def test_profiles_have_stable_container_paths_and_live_cluster_gpu_requests() -> None:
+    """Ptyche relies on its whole-node allocation while OCI retains its GRES request."""
     ptyche = (SCRIPT_ROOT / "profiles/ptyche.env").read_text()
     oci_hsg = (SCRIPT_ROOT / "profiles/oci-hsg.env").read_text()
     assert re.search(r"^CONTAINER=\S+", ptyche, re.MULTILINE)
     assert re.search(r"^CONTAINER=\S+", oci_hsg, re.MULTILINE)
-    assert "SBATCH_GPU_ARGS=(--gpus-per-node=4)" in ptyche
+    assert "SBATCH_GPU_ARGS=()" in ptyche
+    assert not re.search(
+        r"^SBATCH_GPU_ARGS=\([^)]*--gpus-per-node", ptyche, re.MULTILINE
+    )
     assert "SBATCH_GPU_ARGS=(--gres" not in ptyche
     assert "SBATCH_GPU_ARGS=(--gres=gpu:4)" in oci_hsg
 
@@ -222,6 +224,7 @@ def test_ptyche_profile_uses_the_staged_nightly_stable_link() -> None:
 def test_full_runtime_probe_checks_the_required_gpu_and_package_gates() -> None:
     """The pre-matrix probe must reject incomplete nightly images before model jobs."""
     source = FULL_RUNTIME_PROBE.read_text()
+    assert "#SBATCH --exclusive" in source
     assert "torch.cuda.is_available()" in source
     assert "sys.version_info >= (3, 13, 13)" in source
     assert "uv lock --check" in source

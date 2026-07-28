@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
+#SBATCH --exclusive
 #SBATCH --time=00:20:00
 
 # Callers own the cluster-specific GPU request: Ptyche requires

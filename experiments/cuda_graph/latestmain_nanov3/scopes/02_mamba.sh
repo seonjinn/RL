@@ -43,7 +43,7 @@ if [[ "${TEST_ONLY:-0}" == "1" ]]; then
 fi
 SBATCH_CMD+=(
   "--nodes=${NUM_ACTOR_NODES}"
-  "${SBATCH_GPU_ARGS[@]}"
+  "${SBATCH_GPU_ARGS[@]+${SBATCH_GPU_ARGS[@]}}"
   "--account=${ACCOUNT}"
   "--job-name=${ACCOUNT}.${RUN_NAME}"
   "--partition=${PARTITION}"
