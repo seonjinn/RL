@@ -30,10 +30,7 @@ srun \
     echo "uv_cache_dir=${UV_CACHE_DIR}"
     echo "uv_cache_marker=${uv_cache_marker}"
     cd "${SLURM_SUBMIT_DIR}"
-    if uv lock --check; then
-      echo "tracked_uv_lock_check=passed"
-    else
-      echo "tracked_uv_lock_check=failed"
-    fi
+    uv sync --frozen
+    echo "frozen_uv_sync=passed"
     NRL_FORCE_REBUILD_VENVS=true uv run --extra mcore --frozen python -c "import transformer_engine.pytorch; import megatron.core; import mamba_ssm; import nemo_rl; print(\"uv_overlay_imports=passed\")"
   '

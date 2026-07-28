@@ -35,6 +35,10 @@ FULL_RUNTIME_PROBE = (
 UV_OVERLAY_PROBE = (
     REPO_ROOT / "experiments/cuda_graph/probe_latestmain_uv_overlay.sbatch"
 )
+RAY_VENV_BOOTSTRAP_SMOKE = (
+    REPO_ROOT
+    / "experiments/cuda_graph/latestmain_nanov3/run_ray_venv_bootstrap_smoke.sh"
+)
 
 
 def _task3_valid_scope_cases() -> list[tuple[str, ...]]:
@@ -130,6 +134,25 @@ def _run_test_only(
     )
 
 
+def _run_ray_venv_bootstrap_smoke(
+    tmp_path: Path,
+) -> subprocess.CompletedProcess[str]:
+    _fake_sbatch(tmp_path)
+    env = os.environ | {
+        "CLUSTER": "ptyche",
+        "TEST_ONLY": "1",
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+    }
+    return subprocess.run(
+        ["bash", str(RAY_VENV_BOOTSTRAP_SMOKE)],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
 def test_scope_scripts_are_exact_task3_matrix_with_visible_scope_per_file() -> None:
     """Every reusable file has the sole, hard-coded scope it submits."""
     assert list(SCOPE_SCRIPTS.values()) == VALID_SCOPE_CASES
@@ -175,6 +198,49 @@ def test_nocg_script_emits_no_training_cuda_graph_override() -> None:
 def test_shared_ray_submission_template_has_no_job_dependency() -> None:
     """Independent scope submissions must not be serialized by ray.sub."""
     assert "--dependency" not in RAY_SUB.read_text()
+
+
+def test_ray_sub_scopes_force_rebuilt_venvs_to_the_current_job_log_dir() -> None:
+    """Concurrent jobs must not rebuild the same shared ``venvs/`` directory."""
+    source = RAY_SUB.read_text()
+
+    assert 'LOG_DIR="$BASE_LOG_DIR/$SLURM_JOB_ID-logs"' in source
+    assert 'export NEMO_RL_VENV_DIR="${LOG_DIR}/venvs"' in source
+    assert 'COMMON_SRUN_ARGS+=" --export=ALL,NEMO_RL_VENV_DIR"' in source
+    assert "job-local NEMO_RL_VENV_DIR" in source
+
+
+def test_ray_venv_bootstrap_smoke_uses_frozen_driver_and_worker_bootstrap() -> None:
+    """The deferred Ray worker acceptance gate matches the frozen prewarm path."""
+    source = RAY_VENV_BOOTSTRAP_SMOKE.read_text()
+
+    assert (
+        "uv sync --frozen && NRL_FORCE_REBUILD_VENVS=true uv run --extra mcore --frozen"
+        in source
+    )
+    assert "create_local_venv_on_each_node" in source
+    assert "PY_EXECUTABLES.MCORE" in source
+    assert "MegatronPolicyWorker" in source
+    assert '"py_executable": str(python_path)' in source
+    assert "transformer_engine.pytorch" in source
+    assert "megatron.core" in source
+    assert "mamba_ssm" in source
+    assert "ray_venv_bootstrap_smoke=passed" in source
+
+
+def test_ray_venv_bootstrap_smoke_has_a_single_node_test_only_submission(
+    tmp_path: Path,
+) -> None:
+    """The deferred acceptance gate can be scheduler-validated before use."""
+    result = _run_ray_venv_bootstrap_smoke(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert "sbatch --test-only" in result.stdout
+    assert "fake-sbatch --test-only" in result.stdout
+    assert "--nodes=1" in result.stdout
+    assert "--time=01:00:00" in result.stdout
+    assert "--gpus-per-node" not in result.stdout
+    assert "--gres=gpu" not in result.stdout
 
 
 def test_all_scope_dry_run_prints_test_only_submission_with_exact_scope(
@@ -253,7 +319,10 @@ def test_ptyche_uv_cache_is_provenance_keyed_and_mounted_by_both_launchers() -> 
         assert provenance_component in ptyche
 
     assert ': "${UV_CACHE_DIR_OVERRIDE:?Set UV_CACHE_DIR_OVERRIDE' in direct_probe
-    assert 'CONTAINER_MOUNTS="${MOUNTS},${UV_CACHE_DIR_OVERRIDE}:/root/.cache/uv"' in direct_probe
+    assert (
+        'CONTAINER_MOUNTS="${MOUNTS},${UV_CACHE_DIR_OVERRIDE}:/root/.cache/uv"'
+        in direct_probe
+    )
     assert '--container-mounts="${CONTAINER_MOUNTS}"' in direct_probe
     assert "export UV_CACHE_DIR=/root/.cache/uv" in direct_probe
     assert "uv_cache_marker=" in direct_probe
@@ -281,14 +350,17 @@ def test_full_runtime_probe_checks_the_required_gpu_and_package_gates() -> None:
 def test_uv_overlay_probe_preserves_the_lock_and_tests_the_actual_launcher_path() -> (
     None
 ):
-    """The recovery probe records lock drift without rewriting source state."""
+    """The recovery probe syncs the committed lock before the MCore import gate."""
     source = UV_OVERLAY_PROBE.read_text()
     assert "#SBATCH --exclusive" in source
     assert "#SBATCH --gres" not in source
-    assert "uv lock --check" in source
+    assert "uv lock --check" not in source
+    assert "uv sync --frozen" in source
     assert (
+        "NRL_FORCE_REBUILD_VENVS=true uv run --extra mcore --frozen python -c" in source
+    )
+    assert source.index("uv sync --frozen") < source.index(
         "NRL_FORCE_REBUILD_VENVS=true uv run --extra mcore --frozen python -c"
-        in source
     )
     assert "NRL_FORCE_REBUILD_VENVS=true uv run --frozen python -c" not in source
     assert "transformer_engine.pytorch" in source

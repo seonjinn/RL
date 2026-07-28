@@ -93,8 +93,11 @@ def create_local_venv(
     # Command doesn't matter, since `uv` syncs the environment no matter the command.
     exec_cmd.extend(["echo", f"Finished creating venv {venv_path}"])
 
-    # Always run uv sync first to ensure the build requirements are set (for --no-build-isolation packages)
-    subprocess.run(["uv", "sync", "--directory", git_root], env=env, check=True)
+    # Always sync the committed lock first so declared build requirements are
+    # available without resolving or rewriting the shared checkout's lockfile.
+    subprocess.run(
+        ["uv", "sync", "--frozen", "--directory", git_root], env=env, check=True
+    )
     subprocess.run(exec_cmd, env=env, check=True)
 
     # Return the path to the python executable in the virtual environment

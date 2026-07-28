@@ -247,6 +247,12 @@ def test_mcore_py_executable():
             assert "megatron-training is imported" in result.stdout
 
 
+def test_mcore_py_executable_uses_the_frozen_lock() -> None:
+    """MCore workers must use the committed lock without a fresh resolution."""
+    assert "uv run --frozen --extra mcore" in PY_EXECUTABLES.MCORE
+    assert "uv run --locked --extra mcore" not in PY_EXECUTABLES.MCORE
+
+
 def test_create_sorted_bundle_indices_for_unified_pg():
     """Test that sorted bundle indices are created for a unified placement group."""
     cluster = RayVirtualCluster(bundle_ct_per_node_list=[2], use_gpus=True)

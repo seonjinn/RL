@@ -205,6 +205,15 @@ mkdir -p $LOG_DIR
 echo "$SLURM_JOB_ID" > "$LOG_DIR/.shared_fs_canary"
 log_phase "shared-FS log dir ready ($LOG_DIR)"
 
+# A force-rebuilt Ray worker environment cannot use the repository's shared
+# ``venvs/`` default: independent Slurm jobs can otherwise remove and recreate
+# the same path concurrently. LOG_DIR includes the Slurm job ID (and restart
+# count), is already verified to be shared by every allocated node, and is
+# retained with the job's logs for post-mortem inspection.
+export NEMO_RL_VENV_DIR="${LOG_DIR}/venvs"
+mkdir -p "$NEMO_RL_VENV_DIR"
+log_phase "job-local NEMO_RL_VENV_DIR ready ($NEMO_RL_VENV_DIR)"
+
 # Write setup commands to a file so they can be executed inside each container
 # without heredoc escaping surprises.
 SETUP_COMMAND_FILE=""
@@ -238,6 +247,7 @@ fi
 COMMON_SRUN_ARGS="$GRES_ARG"
 COMMON_SRUN_ARGS+=" --no-container-mount-home"
 COMMON_SRUN_ARGS+=" --mpi=pmix"
+COMMON_SRUN_ARGS+=" --export=ALL,NEMO_RL_VENV_DIR"
 COMMON_SRUN_ARGS+=" --container-mounts=$MOUNTS"
 COMMON_SRUN_ARGS+=" --container-image=$CONTAINER"
 COMMON_SRUN_ARGS+=" --container-workdir=$SLURM_SUBMIT_DIR"

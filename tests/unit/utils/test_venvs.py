@@ -16,6 +16,7 @@ import subprocess
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from nemo_rl.utils import venvs
 from nemo_rl.utils.venvs import create_local_venv
 from tests.unit.conftest import TEST_ASSETS_DIR
 
@@ -48,3 +49,35 @@ def test_create_local_venv():
             # Verify the command executed successfully (return code 0)
             assert result.returncode == 0, f"Failed to import sphinx: {result.stderr}"
             assert "Sphinx package is installed" in result.stdout
+
+
+def test_create_local_venv_syncs_the_frozen_lock_before_running_the_extra() -> None:
+    """The worker bootstrap must not resolve or rewrite the shared lockfile."""
+    venv_name = "frozen_sync_contract"
+    with TemporaryDirectory(dir=TEST_ASSETS_DIR) as tempdir:
+        venvs.create_local_venv.cache_clear()
+        try:
+            with (
+                patch.dict(os.environ, {"NEMO_RL_VENV_DIR": tempdir}),
+                patch("nemo_rl.utils.venvs.subprocess.run") as run,
+            ):
+                create_local_venv(
+                    py_executable="uv run --frozen --extra mcore",
+                    venv_name=venv_name,
+                )
+        finally:
+            venvs.create_local_venv.cache_clear()
+
+    sync_call = next(
+        call for call in run.call_args_list if call.args[0][:2] == ["uv", "sync"]
+    )
+    assert sync_call.args[0] == [
+        "uv",
+        "sync",
+        "--frozen",
+        "--directory",
+        venvs.git_root,
+    ]
+    assert sync_call.kwargs["env"]["UV_PROJECT_ENVIRONMENT"] == os.path.join(
+        tempdir, venv_name
+    )
