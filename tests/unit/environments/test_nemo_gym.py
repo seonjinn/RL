@@ -15,6 +15,7 @@ import json
 import time
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import ray
@@ -22,6 +23,7 @@ import requests
 import torch
 from yaml import safe_load
 
+import nemo_rl.environments.nemo_gym as nemo_gym_module
 from nemo_rl.algorithms.grpo import MasterConfig
 from nemo_rl.distributed.ray_actor_environment_registry import (
     get_actor_python_env,
@@ -50,6 +52,19 @@ def test_nemo_gym_stub_module():
     print(
         f"NeMo-Gym test successfully run! NeMo-Gym config_types module: {config_types}"
     )
+
+
+def test_nemo_gym_child_processes_use_gym_compatible_openai_version():
+    global_config_module = SimpleNamespace(openai_version="2.44.0")
+    configure_dependencies = getattr(
+        nemo_gym_module,
+        "_configure_nemo_gym_child_dependencies",
+        lambda _: None,
+    )
+
+    configure_dependencies(global_config_module)
+
+    assert global_config_module.openai_version == "2.7.2"
 
 
 @pytest.fixture(scope="function")
