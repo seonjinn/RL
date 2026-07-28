@@ -12,8 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
+import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Event, Lock
 from unittest.mock import patch
 
 from nemo_rl.utils import venvs
@@ -81,3 +85,71 @@ def test_create_local_venv_syncs_the_frozen_lock_before_running_the_extra() -> N
     assert sync_call.kwargs["env"]["UV_PROJECT_ENVIRONMENT"] == os.path.join(
         tempdir, venv_name
     )
+
+
+def test_force_rebuild_keeps_other_nodes_from_rebuilding_shared_venv() -> None:
+    venv_name = "shared.Worker"
+    with TemporaryDirectory(dir=TEST_ASSETS_DIR) as tempdir:
+        venv_path = os.path.join(tempdir, venv_name)
+        python_path = os.path.join(venv_path, "bin", "python")
+        os.makedirs(os.path.dirname(python_path))
+        Path(python_path).touch()
+
+        first_build_started = Event()
+        release_first_build = Event()
+        duplicate_build_started = Event()
+        calls_lock = Lock()
+        build_calls = 0
+
+        def rebuild_shared_venv(
+            py_executable: str, requested_venv_name: str, force_rebuild: bool
+        ) -> str:
+            del py_executable
+            assert requested_venv_name == venv_name
+            assert force_rebuild
+
+            nonlocal build_calls
+            with calls_lock:
+                build_calls += 1
+                call_number = build_calls
+
+            if call_number == 1:
+                shutil.rmtree(venv_path)
+                first_build_started.set()
+                assert release_first_build.wait(timeout=5)
+                os.makedirs(os.path.dirname(python_path))
+                Path(python_path).touch()
+            else:
+                duplicate_build_started.set()
+            return python_path
+
+        with (
+            patch.dict(os.environ, {"NEMO_RL_VENV_DIR": tempdir}),
+            patch(
+                "nemo_rl.utils.venvs.create_local_venv",
+                side_effect=rebuild_shared_venv,
+            ),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            first_result = executor.submit(
+                venvs._env_builder._function,
+                "uv run --frozen --extra mcore",
+                venv_name,
+                0,
+                True,
+            )
+            assert first_build_started.wait(timeout=5)
+            second_result = executor.submit(
+                venvs._env_builder._function,
+                "uv run --frozen --extra mcore",
+                venv_name,
+                0,
+                True,
+            )
+            duplicate_build_started.wait(timeout=1)
+            release_first_build.set()
+
+            assert first_result.result(timeout=5) == python_path
+            assert second_result.result(timeout=5) == python_path
+
+        assert build_calls == 1
