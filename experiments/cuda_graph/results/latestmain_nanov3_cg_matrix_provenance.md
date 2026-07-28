@@ -105,15 +105,16 @@ accuracy job was submitted after this terminal result.
 | Fresh source path | `/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-latestmain-nanov3-offline-snapshot-20260727-220a05a67` |
 | Recursive pins | Bridge `59c163cce9cb8cc209dcd0424b2b9de9d1be5027`; MCore `53f5161ce000b5320bc16cb260949c2e6808da83` |
 | Scheduler preflight | `2458269` accepted four Ptyche nodes in `backfill` |
-| Current 20-step baseline | `2458270` (`PENDING`, reason `Priority`, scheduler estimate 2026-07-28 03:55 PDT) |
+| First local-path 20-step baseline | `2458270` (`FAILED` before GRPO step 0 because the MCore worker environment omitted `megatron.energon`) |
 | Checkpoint policy | Disabled |
 
-The current launcher passes the verified snapshot directory as both
-`policy.model_name` and `policy.tokenizer.name`, and propagates
-`HF_HUB_OFFLINE=1` plus `TRANSFORMERS_OFFLINE=1` to the Slurm/Ray job. This
-removes the Hub metadata request that stopped `2457775`.
+The offline launcher passes immutable local paths for both the Base model and
+the separate Instruct tokenizer. It also propagates `HF_HUB_OFFLINE=1` plus
+`TRANSFORMERS_OFFLINE=1` to the Slurm/Ray job. This removes the Hub metadata
+request that stopped `2457775` without discarding the chat template required
+by GRPO preprocessing.
 
-## Worker environment fixes and current 20-step retry
+## Worker environment and launcher fixes
 
 | Field | Value |
 | --- | --- |
@@ -125,12 +126,17 @@ removes the Hub metadata request that stopped `2457775`.
 | Failing regression | `2463382` reproduced two builders for one shared venv (`build_calls == 2`) at source `d880732b68b1839778b6cf90141d1ef18d4fc881` |
 | Synchronization fix | Atomic `O_CREAT|O_EXCL` lock outside the deletable venv plus a per-invocation completion ID at source `dc2269a0a280328275968cbfe4c3644f24ba6762` |
 | Passing regression | `2463458` completed (`0:0`); the same shared-force-rebuild test passed in the immutable Ptyche nightly container |
-| Scheduler preflight | `2463473` accepted four Ptyche nodes in `backfill` |
-| Current 20-step baseline | `2463474` (`PENDING`, reason `Resources`, scheduler estimate 2026-07-28 12:20 PDT at last capture) |
+| First post-race retry | `2463474` (`FAILED`, exit `1:0`, 4m34s); W&B offline mode had not been propagated and no API key was configured |
+| W&B-offline retry | `2463609` (`FAILED`, exit `1:0`, 14m49s); all 16 vLLM and 16 MCore workers plus model/reference-model loading succeeded |
+| New root cause | The launcher incorrectly passed the Base model snapshot as `policy.tokenizer.name`; that tokenizer has no `chat_template`, so the first DataLoader batch failed in `apply_chat_template()` |
+| Tokenizer fix | All matrix launchers now preserve the official recipe split: Base checkpoint revision `97ab8012` and Instruct tokenizer revision `2d59de1c`; source `41c1c1caa197679bb852854d9585da692a17bf9a` |
+| Launcher regression tests | 21 passed locally; they require the immutable Instruct tokenizer path, offline Hub/W&B settings, exact scope, and checkpoint disablement |
+| Scheduler preflight | `2463751` accepted four Ptyche nodes in `backfill` |
+| Current 20-step baseline | `2463752` (`RUNNING` on `ptyche[0175-0178]` at last capture) |
 | Exact workload | NanoV3 30B-A3B baseline without CUDA Graph, sequence packing config, 4 nodes × 4 GPUs, 20 steps |
 | Checkpoint policy | Disabled |
 
-The current retry uses the same committed performance launcher and immutable
-container as `2463283`; only the shared worker-venv coordination changed.
-Performance and accuracy fields remain empty until `2463474` reaches GRPO
-steps.
+The current retry uses the same immutable container and workload as the earlier
+attempts. Its parsed config shows the intended Base model and Instruct
+tokenizer revisions, and dataset setup has passed. Performance and accuracy
+fields remain empty until `2463752` reaches GRPO steps.
