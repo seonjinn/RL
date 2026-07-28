@@ -542,11 +542,19 @@ def test_uv_overlay_probe_preserves_the_lock_and_tests_the_actual_launcher_path(
 
 
 def test_submit_all_invokes_each_named_file_without_dynamic_scope_rewrite() -> None:
-    """The matrix launcher selects committed scripts instead of constructing scopes."""
+    """The safe launcher selects committed scripts instead of constructing scopes."""
     source = (SCRIPT_ROOT / "submit_all_valid_scopes.sh").read_text()
+    full_moe_scripts = {
+        "04_moe.sh",
+        "05_attn_moe.sh",
+        "06_mamba_moe.sh",
+        "07_attn_mamba_moe.sh",
+    }
     assert "cuda_graph_scope" not in source
-    for script_name in SCOPE_SCRIPTS:
+    for script_name in set(SCOPE_SCRIPTS) - full_moe_scripts:
         assert script_name in source
+    for script_name in full_moe_scripts:
+        assert script_name not in source
 
 
 def test_fresh_clone_procedure_initializes_gym_and_nested_provenance() -> None:
