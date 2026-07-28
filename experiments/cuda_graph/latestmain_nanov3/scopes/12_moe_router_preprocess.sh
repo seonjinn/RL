@@ -5,6 +5,8 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "${SCRIPT_DIR}/../../../.." && pwd)
 cd "${REPO_ROOT}"
 source "${SCRIPT_DIR}/../profiles/${CLUSTER:?Set CLUSTER to ptyche or oci-hsg}.env"
+PARTITION="${PARTITION_OVERRIDE:-${PARTITION}}"
+TIME_LIMIT="${TIME_LIMIT_OVERRIDE:-${TIME_LIMIT}}"
 
 PHASE="${PHASE:-smoke}"
 case "${PHASE}" in

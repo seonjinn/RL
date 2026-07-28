@@ -88,7 +88,19 @@ SCOPE_SCRIPTS = {
         "moe_preprocess",
     ),
 }
+EXTRA_SCOPE_SCRIPTS = {
+    "16_mlp.sh": ("mlp",),
+}
 AUXILIARY_SCOPE_SCRIPTS = {"00_nocg_baked_uv_cache.sh"}
+REQUESTED_PERFORMANCE_SCOPE_SCRIPTS = (
+    "01_attn.sh",
+    "16_mlp.sh",
+    "02_mamba.sh",
+    "04_moe.sh",
+    "08_moe_router.sh",
+    "12_moe_router_preprocess.sh",
+    "15_attn_mamba_moe_router_preprocess.sh",
+)
 
 
 def _script_source(script_name: str) -> str:
@@ -162,7 +174,7 @@ def test_scope_scripts_are_exact_task3_matrix_with_visible_scope_per_file() -> N
     """Every reusable file has the sole, hard-coded scope it submits."""
     assert list(SCOPE_SCRIPTS.values()) == VALID_SCOPE_CASES
     assert sorted(path.name for path in SCOPE_ROOT.glob("*.sh")) == sorted(
-        set(SCOPE_SCRIPTS) | AUXILIARY_SCOPE_SCRIPTS
+        set(SCOPE_SCRIPTS) | set(EXTRA_SCOPE_SCRIPTS) | AUXILIARY_SCOPE_SCRIPTS
     )
 
     for script_name, expected_scope in SCOPE_SCRIPTS.items():
@@ -170,6 +182,40 @@ def test_scope_scripts_are_exact_task3_matrix_with_visible_scope_per_file() -> N
         assert "CONFIG=examples/configs/recipes/llm/performance/" in source
         assert "RUN_NAME=" in source
         assert _visible_scope(source) == expected_scope
+
+
+def test_mlp_scope_has_a_reusable_te_partial_cuda_graph_launcher(
+    tmp_path: Path,
+) -> None:
+    """Dense MLP capture is an explicit, independently submitted comparison."""
+    result = _run_test_only("16_mlp.sh", tmp_path)
+    source = _script_source("16_mlp.sh")
+
+    assert result.returncode == 0, result.stderr
+    assert _visible_scope(source) == ("mlp",)
+    assert "cuda_graph_impl=transformer_engine" in source
+    assert "cuda_graph_packed_seq=true" in source
+    assert "cuda_graph_warmup_steps=3" in source
+    assert "checkpointing.enabled=false" in source
+    assert "NRL_FORCE_REBUILD_VENVS=true uv run --extra mcore " in source
+    assert "WANDB_MODE=offline" in source
+    assert "sbatch --test-only" in result.stdout
+
+
+def test_requested_performance_matrix_submits_independent_20_step_jobs() -> None:
+    """The requested comparison can be launched in one command without dependencies."""
+    source = (SCRIPT_ROOT / "submit_requested_performance_scopes.sh").read_text()
+
+    assert "--dependency" not in source
+    assert "PHASE=performance" in source
+    assert "STEPS=20" in source
+    assert "PARTITION_OVERRIDE=backfill" in source
+    assert "TIME_LIMIT_OVERRIDE=01:00:00" in source
+    for script_name in REQUESTED_PERFORMANCE_SCOPE_SCRIPTS:
+        assert script_name in source
+        launcher = _script_source(script_name)
+        assert 'PARTITION="${PARTITION_OVERRIDE:-${PARTITION}}"' in launcher
+        assert 'TIME_LIMIT="${TIME_LIMIT_OVERRIDE:-${TIME_LIMIT}}"' in launcher
 
 
 def test_baked_baseline_uses_verified_ptyche_snapshot_without_hub_access(
