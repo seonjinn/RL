@@ -38,6 +38,12 @@ DEFAULT_INVALID_TOOL_CALL_PATTERNS = [
     "</function_call>",
 ]
 DEFAULT_THINKING_TAGS = ["<think>", "</think>"]
+NEMO_GYM_CHILD_OPENAI_VERSION = "2.7.2"
+
+
+def _configure_nemo_gym_child_dependencies(global_config_module: Any) -> None:
+    """Keep Gym child servers within the OpenAI SDK range supported by Gym."""
+    global_config_module.openai_version = NEMO_GYM_CHILD_OPENAI_VERSION
 
 
 def get_nemo_gym_uv_cache_dir() -> str | None:
@@ -163,10 +169,13 @@ class NemoGym(EnvironmentInterface):
         _gym_port_high = self.cfg.get("port_range_high", DEFAULT_GYM_PORT_RANGE_HIGH)
         self.head_server_port = _get_free_port_local(_gym_port_low, _gym_port_high)
 
+        import nemo_gym.global_config as nemo_gym_global_config
         from nemo_gym.cli import GlobalConfigDictParserConfig, RunHelper
         from nemo_gym.rollout_collection import RolloutCollectionHelper
         from nemo_gym.server_utils import HEAD_SERVER_KEY_NAME, BaseServerConfig
         from omegaconf import DictConfig
+
+        _configure_nemo_gym_child_dependencies(nemo_gym_global_config)
 
         RELATIVE_PATH = "nemo_rl/environments/nemo_gym.py"
         assert __file__.endswith(RELATIVE_PATH)
