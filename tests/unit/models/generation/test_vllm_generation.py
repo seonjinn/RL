@@ -19,6 +19,7 @@ import sys
 import types
 from copy import deepcopy
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -140,12 +141,13 @@ basic_dtensor_test_config: PolicyConfig = {
 
 
 def test_vllm_config_env_vars_are_stringified_for_outer_worker_group(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     config = deepcopy(basic_vllm_test_config)
     config["vllm_cfg"]["env_vars"] = {
-        "VLLM_MXFP8_DENSE_CONFIG_FILE": Path(
-            "qwen3_30ba3b_tp1_v0202_rollout_trace_bootstrap.json"
+        "VLLM_MXFP8_DENSE_CONFIG_FILE": cast(
+            str,
+            Path("qwen3_30ba3b_tp1_v0202_rollout_trace_bootstrap.json"),
         )
     }
     cluster = MagicMock(
@@ -153,10 +155,15 @@ def test_vllm_config_env_vars_are_stringified_for_outer_worker_group(
         max_colocated_worker_groups=1,
     )
     cluster.world_size.return_value = 2
-    captured_env_vars = []
+    captured_env_vars: list[dict[str, str]] = []
 
     class CapturingWorkerGroup:
-        def __init__(self, *args, env_vars, **kwargs):
+        def __init__(
+            self,
+            *args: Any,
+            env_vars: dict[str, str],
+            **kwargs: Any,
+        ) -> None:
             self.dp_size = 2
             captured_env_vars.append(dict(env_vars))
 

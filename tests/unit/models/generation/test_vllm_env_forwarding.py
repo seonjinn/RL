@@ -73,7 +73,7 @@ def _load_custom_vllm_ray_env() -> ModuleType:
 
 
 def test_custom_vllm_forwards_mxfp8_config_via_native_vllm_prefix(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(MXFP8_CONFIG_ENV_VAR, MXFP8_CONFIG_NAME)
     monkeypatch.delenv("VLLM_RAY_EXTRA_ENV_VARS_TO_COPY", raising=False)

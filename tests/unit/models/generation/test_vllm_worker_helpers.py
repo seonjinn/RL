@@ -30,11 +30,13 @@ from nemo_rl.models.generation.vllm.worker_utils import (
         (1, 1, 8, "uni"),
     ],
 )
-def test_resolve_distributed_executor_backend(tp, pp, ep, expected):
+def test_resolve_distributed_executor_backend(
+    tp: int, pp: int, ep: int, expected: str
+) -> None:
     assert resolve_distributed_executor_backend(tp, pp, ep) == expected
 
 
-def test_qwen_tp1_does_not_create_internal_ray_executor():
+def test_qwen_tp1_does_not_create_internal_ray_executor() -> None:
     executor_backend = resolve_distributed_executor_backend(
         tensor_parallel_size=1,
         pipeline_parallel_size=1,
@@ -52,8 +54,11 @@ def test_qwen_tp1_does_not_create_internal_ray_executor():
     ],
 )
 def test_resolve_data_parallel_local_rank(
-    rank, model_parallel_size, executor_backend, expected
-):
+    rank: int,
+    model_parallel_size: int,
+    executor_backend: str,
+    expected: int,
+) -> None:
     assert (
         resolve_data_parallel_local_rank(rank, model_parallel_size, executor_backend)
         == expected
