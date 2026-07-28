@@ -89,3 +89,27 @@ environment gate. It establishes that the Bridge correction resolves editable
 package construction, but does not establish successful Transformer Engine or
 Mamba import. No OCI staging, model smoke, CUDA Graph matrix, performance, or
 accuracy job was submitted after this terminal result.
+
+## Verified offline NanoV3 snapshot and baseline
+
+| Field | Value |
+| --- | --- |
+| HF snapshot root | `/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/models--nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16` |
+| Revision | `97ab8012882a655dc38df4fee47422aca9caca07` |
+| Snapshot size | 59 GiB |
+| Integrity | 13 non-empty safetensors shards; zero broken symlinks; zero incomplete markers |
+| Required metadata | `config.json`, tokenizer files, and `model.safetensors.index.json` present |
+| Initial actual baseline | `2457754` (`FAILED` before model creation because W&B had no API key) |
+| Offline W&B retry | `2457775` (`FAILED` at GRPO step 0 because vLLM requested Hub metadata and received HTTP 429) |
+| Local-path/offline source | `f7addaa2be16e88c0f45ad7de08b4f2aba688f1c` |
+| Fresh source path | `/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-latestmain-nanov3-offline-snapshot-20260727-220a05a67` |
+| Recursive pins | Bridge `59c163cce9cb8cc209dcd0424b2b9de9d1be5027`; MCore `53f5161ce000b5320bc16cb260949c2e6808da83` |
+| Scheduler preflight | `2458269` accepted four Ptyche nodes in `backfill` |
+| Current 20-step baseline | `2458270` (`PENDING`, reason `Priority`, scheduler estimate 2026-07-28 03:55 PDT) |
+| Checkpoint policy | Disabled |
+
+The current launcher passes the verified snapshot directory as both
+`policy.model_name` and `policy.tokenizer.name`, and propagates
+`HF_HUB_OFFLINE=1` plus `TRANSFORMERS_OFFLINE=1` to the Slurm/Ray job. This
+removes the Hub metadata request that stopped `2457775`; performance and
+accuracy fields remain empty until `2458270` reaches GRPO steps.
