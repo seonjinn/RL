@@ -24,7 +24,6 @@ set -euo pipefail
 
 : "${CONTAINER:?CONTAINER is required}"
 : "${OUTPUT_DIR:?OUTPUT_DIR is required}"
-: "${BUILD_ROOT:?BUILD_ROOT is required}"
 : "${GPU_ARCH:?GPU_ARCH is required}"
 : "${DEEPEP_COMMIT:?DEEPEP_COMMIT is required}"
 : "${SLURM_JOB_ID:?SLURM_JOB_ID is required}"
@@ -54,11 +53,11 @@ DEEPEP_REPO_URL=${DEEPEP_REPO_URL:-https://github.com/deepseek-ai/DeepEP.git}
 SCRIPT_PATH=$(readlink -f -- "${BASH_SOURCE[0]}")
 CONTAINER=$(readlink -f -- "${CONTAINER}")
 
-for shared_path in "${SCRIPT_PATH}" "${CONTAINER}" "${OUTPUT_DIR}" "${BUILD_ROOT}"; do
+for shared_path in "${SCRIPT_PATH}" "${CONTAINER}" "${OUTPUT_DIR}"; do
   case "${shared_path}" in
     /lustre/*) ;;
     *)
-      printf 'Shared build paths must be under /lustre: %s\n' "${shared_path}" >&2
+      printf 'Shared paths must be under /lustre: %s\n' "${shared_path}" >&2
       exit 2
       ;;
   esac
@@ -68,6 +67,28 @@ if [[ ! -f "${CONTAINER}" ]]; then
   printf 'Container does not exist: %s\n' "${CONTAINER}" >&2
   exit 2
 fi
+
+if [[ -z "${BUILD_ROOT:-}" ]]; then
+  : "${SLURM_TMPDIR:?BUILD_ROOT or SLURM_TMPDIR is required}"
+  BUILD_ROOT="${SLURM_TMPDIR}/nemo-rl-hybridep-build"
+fi
+
+BUILD_ROOT=$(readlink -m -- "${BUILD_ROOT}")
+case "${BUILD_ROOT}" in
+  /lustre/*) ;;
+  *)
+    : "${SLURM_TMPDIR:?Non-Lustre BUILD_ROOT requires SLURM_TMPDIR}"
+    SLURM_TMPDIR=$(readlink -f -- "${SLURM_TMPDIR}")
+    case "${BUILD_ROOT}" in
+      "${SLURM_TMPDIR}"/*) ;;
+      *)
+        printf 'BUILD_ROOT must be under /lustre or SLURM_TMPDIR: %s\n' \
+          "${BUILD_ROOT}" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+esac
 
 mkdir -p "${OUTPUT_DIR}" "${BUILD_ROOT}"
 container_sha256=$(sha256sum "${CONTAINER}" | cut -d' ' -f1)
@@ -83,8 +104,12 @@ export SCRIPT_PATH
 export CONTAINER_SHA256="${container_sha256}"
 
 if [[ "${HYBRID_EP_BUILD_STAGE:-host}" != "container" ]]; then
+  container_mounts="/lustre:/lustre"
+  if [[ "${BUILD_ROOT}" != /lustre/* ]]; then
+    container_mounts="${container_mounts},${SLURM_TMPDIR}:${SLURM_TMPDIR}"
+  fi
   exec srun --container-image="${CONTAINER}" \
-    --container-mounts=/lustre:/lustre \
+    --container-mounts="${container_mounts}" \
     --export=ALL,HYBRID_EP_BUILD_STAGE=container \
     bash "${SCRIPT_PATH}"
 fi
@@ -126,6 +151,12 @@ artifact_dir="${OUTPUT_DIR}/${DEEPEP_COMMIT}-sm${arch_tag}-${SLURM_JOB_ID}"
 if [[ -e "${artifact_dir}" ]]; then
   printf 'Refusing to overwrite immutable artifact directory: %s\n' \
     "${artifact_dir}" >&2
+  exit 2
+fi
+artifact_stage="${OUTPUT_DIR}/.${DEEPEP_COMMIT}-sm${arch_tag}-${SLURM_JOB_ID}.staging"
+if [[ -e "${artifact_stage}" ]]; then
+  printf 'Refusing to overwrite artifact staging directory: %s\n' \
+    "${artifact_stage}" >&2
   exit 2
 fi
 
@@ -189,16 +220,19 @@ UV_NO_CONFIG=1 uv pip install \
 PYTHONPATH="${import_overlay}" "${PYTHON_BIN}" -c \
   'import deep_ep, deep_ep_cpp, hybrid_ep_cpp; print(deep_ep.__file__); print(deep_ep_cpp.__file__); print(hybrid_ep_cpp.__file__)'
 
-mkdir "${artifact_dir}"
+mkdir "${artifact_stage}"
 final_wheel="${artifact_dir}/$(basename "${built_wheel}")"
+staged_wheel="${artifact_stage}/$(basename "${built_wheel}")"
 if [[ -e "${final_wheel}" ]]; then
   printf 'Refusing to overwrite immutable wheel: %s\n' "${final_wheel}" >&2
   exit 2
 fi
-mv "${built_wheel}" "${final_wheel}"
-sha256sum "${final_wheel}" > "${final_wheel}.sha256"
+mv "${built_wheel}" "${staged_wheel}"
+wheel_sha256=$(sha256sum "${staged_wheel}" | cut -d' ' -f1)
+printf '%s  %s\n' "${wheel_sha256}" "$(basename "${staged_wheel}")" \
+  > "${staged_wheel}.sha256"
 
-metadata_path="${artifact_dir}/metadata.env"
+metadata_path="${artifact_stage}/metadata.env"
 {
   printf 'deepep_commit=%q\n' "${DEEPEP_COMMIT}"
   printf 'deepep_repo=%q\n' "${DEEPEP_REPO_URL}"
@@ -210,10 +244,11 @@ metadata_path="${artifact_dir}/metadata.env"
   printf 'python_bin=%q\n' "${PYTHON_BIN}"
   printf 'slurm_job_id=%q\n' "${SLURM_JOB_ID}"
   printf 'wheel=%q\n' "${final_wheel}"
-  printf 'wheel_sha256=%q\n' "$(cut -d' ' -f1 "${final_wheel}.sha256")"
+  printf 'wheel_sha256=%q\n' "${wheel_sha256}"
   printf 'built_at=%q\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')"
 } > "${metadata_path}"
 
+mv "${artifact_stage}" "${artifact_dir}"
 build_succeeded=1
 printf 'Built immutable HybridEP wheel: %s\nMetadata: %s\n' \
-  "${final_wheel}" "${metadata_path}"
+  "${final_wheel}" "${artifact_dir}/metadata.env"

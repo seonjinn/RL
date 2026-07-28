@@ -15,7 +15,6 @@ From a clean, pushed NeMo-RL checkout on the target cluster:
 export DEEPEP_COMMIT=f725d29699f5bda9ba789456bb9579af69844685
 export CONTAINER=/lustre/absolute/path/nemo_rl_nightly.sqsh
 export OUTPUT_DIR=/lustre/absolute/path/deepep-wheels
-export BUILD_ROOT=/lustre/absolute/path/build-cache
 export GPU_ARCH=9.0
 
 sbatch --test-only \
@@ -32,6 +31,11 @@ sbatch --parsable \
   scripts/experiments/x86/hybridep/build_deepep_wheel.sbatch
 ```
 
+By default, source checkout, compilation, and import validation run below the
+allocation's node-local `SLURM_TMPDIR`; only the final wheel, checksum, and
+metadata are written to `OUTPUT_DIR`. Set `BUILD_ROOT` only when a retained
+shared build tree is explicitly needed.
+
 The job creates:
 
 - `<commit>-sm<arch>-<job-id>/<wheel>.whl`;
@@ -40,4 +44,4 @@ The job creates:
   provenance.
 
 The build directory is removed only after success. A failed build directory is
-retained under `BUILD_ROOT` for bounded diagnosis.
+retained under `BUILD_ROOT` (node-local by default) for bounded diagnosis.
