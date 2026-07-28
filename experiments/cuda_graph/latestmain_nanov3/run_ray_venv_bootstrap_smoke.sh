@@ -89,7 +89,7 @@ SBATCH_CMD+=(
   --nodes=1
   "${SBATCH_GPU_ARGS[@]+${SBATCH_GPU_ARGS[@]}}"
   "--account=${ACCOUNT}"
-  "--job-name=${ACCOUNT}.${RUN_NAME}"
+  "--job-name=${ACCOUNT}-sna.${RUN_NAME}"
   "--partition=${PARTITION}"
   --time=01:00:00
   "--segment=${SEGMENT_SIZE}"

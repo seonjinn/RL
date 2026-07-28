@@ -238,6 +238,10 @@ def test_ray_venv_bootstrap_smoke_has_a_single_node_test_only_submission(
     assert "sbatch --test-only" in result.stdout
     assert "fake-sbatch --test-only" in result.stdout
     assert "--nodes=1" in result.stdout
+    assert (
+        "--job-name=coreai_dlalgo_llm-sna.latestmain-nanov3-ray-venv-bootstrap-smoke"
+        in result.stdout
+    )
     assert "--time=01:00:00" in result.stdout
     assert "--gpus-per-node" not in result.stdout
     assert "--gres=gpu" not in result.stdout
