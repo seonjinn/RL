@@ -17,6 +17,7 @@ import shlex
 import shutil
 import subprocess
 import time
+import uuid
 from functools import lru_cache
 from pathlib import Path
 
@@ -108,15 +109,20 @@ def create_local_venv(
 # Ray-based helper to create a virtual environment on each Ray node
 @ray.remote(num_cpus=1)  # pragma: no cover
 def _env_builder(
-    py_executable: str, venv_name: str, node_idx: int, force_rebuild: bool = False
-):
+    py_executable: str,
+    venv_name: str,
+    node_idx: int,
+    force_rebuild: bool = False,
+    build_id: str = "legacy",
+) -> str:
     # Check if another node is already building
     NEMO_RL_VENV_DIR = os.path.normpath(
         os.environ.get("NEMO_RL_VENV_DIR", DEFAULT_VENV_DIR)
     )
     venv_path = Path(NEMO_RL_VENV_DIR) / venv_name
     python_path = venv_path / "bin" / "python"
-    started_file = venv_path / "STARTED_ENV_BUILDER"
+    started_file = Path(NEMO_RL_VENV_DIR) / f".{venv_name}.STARTED_ENV_BUILDER"
+    completed_file = Path(NEMO_RL_VENV_DIR) / f".{venv_name}.COMPLETED_ENV_BUILDER"
 
     # Skip early return if force_rebuild is True
     if not force_rebuild and python_path.exists():
@@ -126,29 +132,52 @@ def _env_builder(
     # Sleep to stagger node startup
     time.sleep(1 * node_idx)
 
-    if started_file.exists():
-        # Another node is already building, wait for completion
-        logger.info(
-            f"Node {node_idx}: Another node is building {venv_name}, skipping..."
-        )
-        # Wait for the venv to be ready (check for python executable)
-        python_path = venv_path / "bin" / "python"
-        while not python_path.exists():
-            time.sleep(1)
+    if (
+        completed_file.exists()
+        and completed_file.read_text(encoding="utf-8") == build_id
+        and python_path.exists()
+    ):
+        logger.info(f"Node {node_idx}: Using completed venv at {venv_path}")
         return str(python_path)
 
-    # Create the venv directory if needed
-    venv_path.mkdir(parents=True, exist_ok=True)
+    Path(NEMO_RL_VENV_DIR).mkdir(parents=True, exist_ok=True)
+    try:
+        started_fd = os.open(
+            started_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode=0o600
+        )
+    except FileExistsError:
+        # Another node is already building, wait for completion
+        logger.info(
+            f"Node {node_idx}: Another node is building {venv_name}, waiting..."
+        )
+        while started_file.exists():
+            time.sleep(1)
+        if (
+            completed_file.exists()
+            and completed_file.read_text(encoding="utf-8") == build_id
+            and python_path.exists()
+        ):
+            return str(python_path)
+        raise RuntimeError(
+            f"Another node failed to build virtual environment {venv_name}"
+        )
+    else:
+        os.close(started_fd)
 
-    # Touch the started file to signal we're building
-    started_file.touch()
     try:
         # Create the virtual environment on this node
-        return create_local_venv(py_executable, venv_name, force_rebuild=force_rebuild)
+        result = create_local_venv(
+            py_executable, venv_name, force_rebuild=force_rebuild
+        )
+        completed_tmp = completed_file.with_name(
+            f"{completed_file.name}.{os.getpid()}.tmp"
+        )
+        completed_tmp.write_text(build_id, encoding="utf-8")
+        os.replace(completed_tmp, completed_file)
+        return result
     finally:
         # Clean up the started file
-        if started_file.exists():
-            started_file.unlink()
+        started_file.unlink(missing_ok=True)
 
 
 def create_local_venv_on_each_node(py_executable: str, venv_name: str):
@@ -175,10 +204,15 @@ def create_local_venv_on_each_node(py_executable: str, venv_name: str):
     ray.get(pg.ready())
 
     force_rebuild = os.environ.get("NRL_FORCE_REBUILD_VENVS", "false").lower() == "true"
+    build_id = uuid.uuid4().hex
     # Launch one actor per node
     actors = [
         _env_builder.options(placement_group=pg).remote(
-            py_executable, venv_name, i, force_rebuild
+            py_executable,
+            venv_name,
+            i,
+            force_rebuild=force_rebuild,
+            build_id=build_id,
         )
         for i, _ in enumerate(nodes)
     ]
