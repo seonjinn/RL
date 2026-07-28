@@ -9,9 +9,12 @@ workloads.
 the locked NeMo-RL environment. Put the tactic JSON inside the custom vLLM
 package and pass only `VLLM_MXFP8_DENSE_CONFIG_FILE` through
 `policy.generation.vllm_cfg.env_vars`. Extend the existing vLLM source patch so
-the configured key reaches vLLM's internal tensor-parallel Ray workers. Use a
-small Qwen job as the plumbing gate, then trace and qualify the real Nemotron 3
-Ultra TP4 shapes before comparing rollout latency.
+the configured key reaches vLLM's internal tensor-parallel Ray workers. Use the
+exact latest-main Qwen3-30B-A3B 4n4g MXFP8 rollout as the primary integration
+and performance workload. Trace and qualify Qwen TP1 shapes first; if the MoE
+and ignored-projection execution path produces zero eligible dense MXFP8 calls,
+record the workload as not applicable and use Nemotron 3 Ultra TP4 as the
+secondary kernel-efficacy workload.
 
 **Fixed inputs:**
 
@@ -23,7 +26,9 @@ Ultra TP4 shapes before comparing rollout latency.
 - vLLM build version: `VLLM_VERSION_OVERRIDE=0.20.2`
 - FlashInfer: `0.6.8.post1`
 - Target hardware: GB200, compute capability 10.0
-- Target model topology: Nemotron 3 Ultra, tensor parallel size 4
+- Primary model topology: `Qwen/Qwen3-30B-A3B`, rollout tensor parallel size 1
+- Primary cluster topology: four nodes, four GB200 GPUs per node
+- Secondary model topology: Nemotron 3 Ultra, tensor parallel size 4
 
 ## Global Constraints
 
@@ -36,9 +41,13 @@ Ultra TP4 shapes before comparing rollout latency.
   mount is required.
 - Inline tactic environment variables remain a legacy fallback and are not
   used in the performance experiment.
-- The standalone TP4 seed contains only the qualified `M <= 256` 8x4 tactics.
-  High-M tactics stay empty until NeMo-RL rollout traces are re-shmooed.
-- No rollout performance claim is made from the Qwen plumbing smoke test.
+- Qwen TP1 starts from a model-specific trace bootstrap manifest with empty
+  tactic tables, default tactic `-1`, and `pad_to_128=false`.
+- No Qwen tactic is copied from the standalone Ultra TP4 seed.
+- The custom vLLM offline tool owns trace inventory, GPU shmoo, qualification,
+  and deterministic JSON generation. The rollout runtime never writes JSON.
+- A trace with zero eligible dense MXFP8 calls fails promotion and is reported
+  as `not-applicable`; it is never turned into an empty optimized table.
 - GPU jobs follow the repository SLURM protocol: scheduling test, commit and
   push, `git pull` on the cluster, submit, then monitor for five minutes.
 - Every experiment artifact is stored below
@@ -170,21 +179,28 @@ git diff --check
 git commit -s -m "fix(vllm): forward configured env to TP workers"
 ```
 
-### Task 3: Add a GB200 adaptive MXFP8 plumbing smoke
+### Task 3: Add the Qwen3-30B-A3B 4n4g adaptive MXFP8 trace gate
 
 **Files:**
 
+- Create: `tests/functional/grpo_qwen3_30ba3b_mxfp8_adaptive_rollout_gb200.sh`
 - Create:
-  `tests/functional/grpo_vllm_mxfp8_adaptive_rollout_gb200.sh`
+  `examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-adaptive-trace.yaml`
 
-- [ ] Copy the existing dense Qwen MXFP8 functional workload and keep its
-  correctness assertions.
-- [ ] Resolve the tactic JSON by its package-relative name:
+- [ ] Derive the workload from
+  `examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml` and
+  its `-mxfp8-rollout.yaml` sibling. Preserve four nodes, four GPUs per node,
+  vLLM TP1, prompts, generations, maximum sequence length, seeds, and the
+  sibling's MXFP8 precision and ignored q/k/v/o projections.
+- [ ] Resolve the trace bootstrap JSON by its package-relative name:
 
 ```text
-nemotron3_ultra_tp4_v0202_standalone_seed.json
+qwen3_30ba3b_tp1_v0202_rollout_trace_bootstrap.json
 ```
 
+- [ ] The bootstrap manifest has exact model `Qwen/Qwen3-30B-A3B`, TP1, empty
+  8x4/128x4 tactic tables, default `-1`, `pad_to_128=false`, and qualification
+  scope `rollout_trace_bootstrap`.
 - [ ] Pass it with a single Hydra override:
 
 ```text
@@ -194,48 +210,59 @@ nemotron3_ultra_tp4_v0202_standalone_seed.json
 - [ ] Assert the log includes vLLM version `0.20.2`, the exact custom source
   path or commit, FlashInfer `0.6.8.post1`, the config SHA256, and internal
   worker receipt of the config key.
-- [ ] Keep `enforce_eager=true` for this plumbing test; CUDA Graph coverage is
-  a separate Ultra gate.
+- [ ] Enable dense shape tracing and assert every trace record carries the
+  bootstrap config SHA256.
+- [ ] Keep `enforce_eager=true` for this trace gate; CUDA Graph coverage is a
+  later A/B gate.
+- [ ] Run the custom vLLM offline `inventory` stage. At least one shape advances
+  to shmoo; zero shapes produces the explicit `not-applicable` record and
+  selects the Ultra TP4 fallback without creating a promoted Qwen manifest.
 - [ ] Run `bash -n`, ShellCheck if available, and `git diff --check`.
 - [ ] Commit with signoff:
 
 ```bash
-git commit -s -m "test(vllm): add adaptive MXFP8 rollout smoke"
+git commit -s -m "test(vllm): add Qwen adaptive MXFP8 trace gate"
 ```
 
-### Task 4: Create the reproducible Ultra TP4 experiment
+### Task 4: Create the reproducible Qwen 4n4g experiment
 
 **Files:**
 
 - Create: `experiments/mxfp8_adaptive_rollout/README.md`
 - Create: `experiments/mxfp8_adaptive_rollout/PLAN.md`
 - Create:
-  `experiments/mxfp8_adaptive_rollout/configs/grpo_ultra_tp4_rollout.yaml`
+  `experiments/mxfp8_adaptive_rollout/configs/grpo_qwen3_30ba3b_4n4g.yaml`
 - Create: `experiments/mxfp8_adaptive_rollout/run_ab.sh`
 - Create: `experiments/mxfp8_adaptive_rollout/parse_results.py`
 - Create: `tests/unit/experiments/test_mxfp8_adaptive_rollout_results.py`
 
-**Workload source:** Port only the model/checkpoint, TP4/EP4, rollout precision,
-ignored projections, prompt/batch, and generation settings from:
+**Workload source:** Inherit the current-main model, dataset, prompt/batch,
+generation, trainer, and four-node topology settings from:
 
 ```text
-nemo-rl-v41-34n-mxfp8/examples/configs/grpo_ultra_64n4g_pipeclean.yaml
-nemo-rl-v41-34n-mxfp8/launch_ultra_pipeclean.sh
+examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
+examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
 ```
 
-Rebase them onto a current-main GRPO recipe rather than copying the old
-launcher or its vLLM 0.17 dependency handling.
+Do not compare the linked BF16 recipe directly against MXFP8. Both A/B arms
+use the sibling's MXFP8 rollout configuration; only the JSON config key differs.
 
 - [ ] Add parser tests using small literal logs. Required fields are rollout
   wall time, generation time, tokens, throughput, step, arm, repeat, vLLM
   commit, NeMo-RL commit, container digest, config hash, TP, and seed.
 - [ ] Implement the parser and stable JSON/CSV summaries.
-- [ ] Create an experiment launcher with `trace`, `original`, and `adaptive`
-  modes. It writes a resolved config and metadata before launch.
-- [ ] `trace` enables the custom vLLM shape trace and runs one short TP4 Ultra
-  rollout without promoted high-M tactics.
+- [ ] Create an experiment launcher with `trace`, `shmoo`, `original`, and
+  `adaptive` modes. It writes a resolved config and metadata before launch.
+- [ ] `trace` runs one short Qwen TP1 4n4g rollout with the bootstrap manifest
+  and emits exact dense physical shapes.
+- [ ] `shmoo` runs the custom vLLM offline pipeline in the same container and
+  GPU topology, requires at least three repeats, and generates the qualified
+  Qwen TP1 manifest only when eligible shapes exist.
 - [ ] `original` unsets only `VLLM_MXFP8_DENSE_CONFIG_FILE`.
 - [ ] `adaptive` sets only the package-relative JSON config name.
+- [ ] If the trace is not applicable, both performance modes are skipped and a
+  stable not-applicable result names the zero-hit reason and the Ultra TP4
+  fallback plan.
 - [ ] Use matched warmups followed by at least three alternating measured
   repeats. Keep prompt samples, seeds, and Ray placement identical.
 - [ ] Reject an A/B pair if source commits, container digest, checkpoint,
@@ -244,7 +271,7 @@ launcher or its vLLM 0.17 dependency handling.
 - [ ] Commit with signoff:
 
 ```bash
-git commit -s -m "bench: add Ultra TP4 MXFP8 rollout A/B"
+git commit -s -m "bench: add Qwen 4n4g MXFP8 rollout A/B"
 ```
 
 ### Task 5: Build, lock, and perform local provenance checks
@@ -275,18 +302,25 @@ python -c \
 This task starts only after both branches are clean, committed, pushed, and
 referenced by immutable commit SHA.
 
-- [ ] Run the cluster scheduling test and record account/partition selection.
+- [ ] Compare current Pre-Tyche and OCI-HSG FairShare/queue state. Prefer
+  Pre-Tyche for the primary run because prior vLLM 0.20.2 adaptive artifacts
+  and the matching four-GPU-per-node topology are already available; record
+  any decision to use OCI-HSG instead.
 - [ ] Pull the exact NeMo-RL commit on the selected GB200 cluster.
-- [ ] Submit the Qwen functional plumbing test.
+- [ ] Submit the Qwen 4n4g MXFP8 trace gate.
 - [ ] Monitor the job for five minutes and stop on import, source, worker-env,
   or MXFP8 correctness failures.
-- [ ] Run the Ultra TP4 trace arm and extract the exact rollout shape set.
-- [ ] Re-shmoo each traced shape at least three times in the same container and
-  topology. Promote a tactic only if it meets correctness and speed thresholds.
-- [ ] Regenerate the JSON with rollout-qualified provenance. Commit, push,
-  rebuild, and record the new config/image hashes.
-- [ ] Run one Ultra CUDA Graph smoke for both original and adaptive arms.
-- [ ] Run the alternating A/B repeats.
+- [ ] Extract the exact Qwen TP1 dense rollout shape inventory.
+- [ ] If the inventory is non-empty, shmoo each shape at least three times in
+  the same container and topology. Promote only correctness-passing tactics
+  with at least 1.02 median speedup versus runner default `-1`.
+- [ ] Deterministically regenerate the Qwen JSON with rollout-qualified
+  provenance, validate it through the production loader, commit, push, rebuild,
+  and record the new config/image hashes.
+- [ ] Run one Qwen CUDA Graph smoke for both original and adaptive arms, then
+  run the alternating A/B repeats.
+- [ ] If the Qwen inventory is empty, record not-applicable and execute the
+  same trace/shmoo/CUDA-Graph/A/B sequence on Nemotron 3 Ultra TP4 instead.
 - [ ] Accept a performance result only if:
 
 ```text

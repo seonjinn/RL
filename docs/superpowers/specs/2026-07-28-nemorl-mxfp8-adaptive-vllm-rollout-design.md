@@ -23,8 +23,12 @@ duration, TTFT, TPOT, output-token count, and numerical/correctness signals.
 - Custom vLLM integration branch:
   `sna/mxfp8-adaptive-v0.20.2-nemorl`.
 - FlashInfer: `0.6.8.post1`, including its private TRTLLM runner API.
-- Initial hardware target: four GB200 GPUs with vLLM TP4.
-- Initial model target: Nemotron 3 Ultra MXFP8.
+- Primary hardware target: four Pre-Tyche GB200 nodes with four GPUs per node.
+- Primary workload: the latest-main Qwen3-30B-A3B 4n4g GRPO recipe, with
+  MXFP8 rollout enabled and vLLM tensor parallel size 1.
+- Secondary efficacy workload: Nemotron 3 Ultra MXFP8 with vLLM tensor
+  parallel size 4, used only if the Qwen trace has no eligible dense MXFP8
+  calls or after the Qwen integration gate passes.
 
 Both experimental arms use the same NeMo-RL commit, custom vLLM commit,
 precompiled native vLLM wheel, FlashInfer build, container, model checkpoint,
@@ -97,8 +101,8 @@ The optimized manifest has this schema:
     "flashinfer_version": "0.6.8.post1",
     "compute_capability": "10.0",
     "gpu_family": "GB200",
-    "model": "Nemotron 3 Ultra MXFP8",
-    "tensor_parallel_size": 4
+    "model": "Qwen/Qwen3-30B-A3B",
+    "tensor_parallel_size": 1
   },
   "policy": {
     "gemm_backend": "trtllm",
@@ -108,7 +112,7 @@ The optimized manifest has this schema:
     "require_direct_trtllm": true,
     "quant_backend": "cuda",
     "require_8x4_quant": true,
-    "pad_to_128": true,
+    "pad_to_128": false,
     "default_tactic": -1
   },
   "tactics": {
@@ -131,7 +135,8 @@ The optimized manifest has this schema:
 ```
 
 The checked-in manifest replaces each illustrative tactic entry and
-`sha256-hex` value with the complete qualified data.
+`sha256-hex` value with Qwen TP1 data qualified from the actual 4n4g rollout
+trace. A Qwen table is never initialized from the Nemotron Ultra TP4 seed.
 
 Validation is fail-closed for:
 
@@ -148,6 +153,18 @@ Validation is fail-closed for:
 Model, TP size, source hashes, and container hash remain mandatory provenance.
 The launcher verifies them before submission; custom vLLM logs them during
 worker startup.
+
+The custom vLLM fork owns a separate offline qualification CLI. Runtime only
+reads an immutable JSON manifest; it never benchmarks, promotes, or rewrites
+tactics. The offline path:
+
+1. aggregates exact physical `(layout, M, N, K)` records from a real rollout;
+2. aborts if the trace contains zero eligible dense MXFP8 calls;
+3. shmoos runner default `-1` and valid tactics on the same GPU, container,
+   model topology, and layout;
+4. requires BF16/reference correctness and at least three repeats;
+5. promotes only tactics with at least 1.02 median speedup over default; and
+6. deterministically regenerates and validates the runtime JSON.
 
 Legacy inline tactic variables remain available only for compatibility and
 short debugging runs:
@@ -185,17 +202,27 @@ Missing or changed vLLM 0.20 patch anchors fail loudly.
 Docker custom-build arguments are quoted independently so an omitted optional
 argument cannot shift the wheel URL into the Git-ref position.
 
-## A/B Recipes
+## Qwen3-30B-A3B A/B Recipe
 
-Two minimal recipe overlays inherit the same latest-main Nemotron workload:
+Two minimal recipe overlays inherit the latest-main
+`grpo-qwen3-30ba3b-4n4g.yaml` workload and the rollout precision/ignored-layer
+settings from its MXFP8 sibling:
 
 - `original`: the JSON config variable is absent and adaptive mode is
   explicitly disabled;
-- `adaptive`: `VLLM_MXFP8_DENSE_CONFIG_FILE` selects the qualified TP4
+- `adaptive`: `VLLM_MXFP8_DENSE_CONFIG_FILE` selects the qualified Qwen TP1
   manifest and shape tracing is enabled for the initial smoke run.
 
-The initial integration run is rollout-only. It is followed by a short GRPO
-run only after the worker-level and rollout-level gates pass.
+Both arms remain MXFP8; this is not a BF16-versus-MXFP8 comparison. The initial
+integration run is rollout-only. It is followed by a short GRPO run only after
+the worker-level and rollout-level gates pass.
+
+Qwen3-30B-A3B is a MoE model, and the current MXFP8 recipe ignores the q/k/v/o
+dense projections. Its trace may therefore contain zero eligible dense MXFP8
+linear calls. That result is a valid integration finding but not a kernel
+performance result: the pipeline reports `not-applicable`, does not create an
+empty optimized table, and moves the efficacy measurement to the Ultra TP4
+workload.
 
 ## Validation Gates
 
@@ -226,7 +253,18 @@ Run the JSON parser/configuration tests and the ported adaptive contracts:
   environment forwarding;
 - NeMo-RL vLLM refit-loader compatibility.
 
-### Gate 2: GPU Kernel and CUDA Graph
+### Gate 2: Qwen Trace Applicability
+
+Run the exact Qwen 4n4g MXFP8 rollout on Pre-Tyche with adaptive shape tracing
+and default tactic `-1`.
+
+- If at least one eligible dense shape is observed, offline-shmoo every unique
+  physical shape and build a Qwen TP1 manifest.
+- If zero eligible shapes are observed, fail the promotion stage clearly,
+  record the Qwen result as `not-applicable`, and continue with the Ultra TP4
+  efficacy workload.
+
+### Gate 3: GPU Kernel and CUDA Graph
 
 On GB200:
 
@@ -237,7 +275,7 @@ On GB200:
 - verify unseen shapes use runner default `-1`;
 - verify all emitted rollout tokens are valid.
 
-### Gate 3: NeMo-RL Rollout A/B
+### Gate 4: NeMo-RL Rollout A/B
 
 Run matched original and adaptive arms with warmup excluded and at least three
 measured repetitions. Compare:
@@ -253,7 +291,7 @@ The standalone tactic table is not accepted as final evidence until actual
 NeMo-RL rollout shapes are traced. Missing or new shapes are re-shmooed three
 times and qualified using the manifest thresholds.
 
-### Gate 4: Short End-to-End GRPO
+### Gate 5: Short End-to-End GRPO
 
 Run a short matched GRPO A/B and compare total step duration in addition to
 the rollout metrics. Refit, log-probability, and training settings remain
@@ -272,6 +310,6 @@ claim is based only on terminal output or an unversioned remote container.
 - Upstreaming the private FlashInfer runner integration to public vLLM.
 - Changing the MXFP8 MoE backend.
 - Comparing BF16 against MXFP8.
-- Reusing TP8, another model's, or another FlashInfer build's tactic IDs
+- Reusing TP4/TP8, another model's, or another FlashInfer build's tactic IDs
   without requalification.
 - Running a production-length RL campaign before the short A/B gates pass.
