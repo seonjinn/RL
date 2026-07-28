@@ -87,8 +87,6 @@ SCOPE_SCRIPTS = {
         "moe_router",
         "moe_preprocess",
     ),
-}
-EXTRA_SCOPE_SCRIPTS = {
     "16_mlp.sh": ("mlp",),
 }
 AUXILIARY_SCOPE_SCRIPTS = {"00_nocg_baked_uv_cache.sh"}
@@ -174,7 +172,7 @@ def test_scope_scripts_are_exact_task3_matrix_with_visible_scope_per_file() -> N
     """Every reusable file has the sole, hard-coded scope it submits."""
     assert list(SCOPE_SCRIPTS.values()) == VALID_SCOPE_CASES
     assert sorted(path.name for path in SCOPE_ROOT.glob("*.sh")) == sorted(
-        set(SCOPE_SCRIPTS) | set(EXTRA_SCOPE_SCRIPTS) | AUXILIARY_SCOPE_SCRIPTS
+        set(SCOPE_SCRIPTS) | AUXILIARY_SCOPE_SCRIPTS
     )
 
     for script_name, expected_scope in SCOPE_SCRIPTS.items():
@@ -200,6 +198,23 @@ def test_mlp_scope_has_a_reusable_te_partial_cuda_graph_launcher(
     assert "NRL_FORCE_REBUILD_VENVS=true uv run --extra mcore " in source
     assert "WANDB_MODE=offline" in source
     assert "sbatch --test-only" in result.stdout
+
+
+def test_nemo_rl_scope_validation_exposes_mcore_mlp_capture() -> None:
+    """NeMo-RL must not reject the dense-MLP scope supported by MCore."""
+    setup_source = SETUP_TEST.parents[4] / "nemo_rl/models/megatron/setup.py"
+    tree = ast.parse(setup_source.read_text())
+    scope_order = next(
+        assignment.value
+        for assignment in tree.body
+        if isinstance(assignment, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "_CUDA_GRAPH_SCOPE_ORDER"
+            for target in assignment.targets
+        )
+    )
+
+    assert "mlp" in ast.literal_eval(scope_order)
 
 
 def test_requested_performance_matrix_submits_independent_20_step_jobs() -> None:

@@ -254,6 +254,7 @@ _CUDA_GRAPH_SCOPE_ORDER = (
     "moe",
     "moe_router",
     "moe_preprocess",
+    "mlp",
 )
 _CUDA_GRAPH_SCOPE_MODULES = frozenset(_CUDA_GRAPH_SCOPE_ORDER)
 _PARTIAL_CUDA_GRAPH_IMPLS = frozenset(("local", "transformer_engine"))

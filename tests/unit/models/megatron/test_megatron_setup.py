@@ -51,6 +51,7 @@ VALID_SCOPE_CASES = [
     ("attn", "moe_router", "moe_preprocess"),
     ("mamba", "moe_router", "moe_preprocess"),
     ("attn", "mamba", "moe_router", "moe_preprocess"),
+    ("mlp",),
 ]
 
 
