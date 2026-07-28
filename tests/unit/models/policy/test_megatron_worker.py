@@ -60,15 +60,19 @@ def test_te_cuda_graph_capture_uses_safe_forward_pre_hook_boundary():
     worker.cfg = {
         "max_total_sequence_length": 8192,
         "train_micro_batch_size": 1,
+        "sequence_packing": {"enabled": False},
     }
     worker.should_disable_forward_pre_hook = True
     worker._forward_pre_hook_enabled = MagicMock(return_value=True)
     worker.disable_forward_pre_hook = MagicMock()
     worker.enable_forward_pre_hook = MagicMock()
+    worker._configure_pipeline_cuda_graph_microbatches = MagicMock()
+    worker._any_model_parallel_rank_created_cuda_graphs = MagicMock(return_value=True)
 
     worker._maybe_capture_te_cuda_graphs(
         padded_seq_length=8192,
         micro_batch_size=1,
+        num_microbatches=4,
     )
 
     worker.disable_forward_pre_hook.assert_called_once_with(param_sync=False)
@@ -89,15 +93,93 @@ def test_te_cuda_graph_capture_rejects_changed_geometry():
     worker.cfg = {
         "max_total_sequence_length": 8192,
         "train_micro_batch_size": 1,
+        "sequence_packing": {"enabled": False},
     }
 
     with pytest.raises(RuntimeError, match="geometry changed"):
         worker._maybe_capture_te_cuda_graphs(
             padded_seq_length=4096,
             micro_batch_size=1,
+            num_microbatches=4,
         )
 
     lifecycle.capture_if_ready.assert_not_called()
+
+
+def test_packed_te_cuda_graph_geometry_uses_train_token_capacity_and_mbs_one():
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.cfg = {
+        "max_total_sequence_length": 8192,
+        "train_micro_batch_size": 4,
+        "sequence_packing": {
+            "enabled": True,
+            "train_mb_tokens": 32768,
+        },
+    }
+
+    assert worker._training_cuda_graph_geometry() == (32768, 1)
+
+
+def test_te_cuda_graph_capture_accepts_empty_local_pipeline_stage():
+    from nemo_rl.models.megatron.cuda_graph_lifecycle import TECudaGraphLifecycle
+
+    helper = MagicMock()
+    helper.graphs_created.return_value = False
+    lifecycle = TECudaGraphLifecycle(helper=helper, warmup_steps=0)
+
+    assert lifecycle.capture_if_ready() is True
+    helper.create_cudagraphs.assert_called_once_with()
+
+
+def test_split_success_restores_param_hook_and_installs_graph_manual_hooks():
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._first_train_step_forward_pre_hook_disabled = True
+    worker._first_train_step_param_sync_func = "param-sync"
+    worker.enable_forward_pre_hook = MagicMock()
+    worker.model = MagicMock()
+    worker.model.config = SimpleNamespace(param_sync_func=None)
+    lifecycle = MagicMock()
+    lifecycle.helper.graphs_created.return_value = True
+    worker._te_cuda_graph_lifecycle = lifecycle
+    worker._te_cuda_graph_capture_complete = True
+
+    worker._restore_forward_pre_hook_after_successful_step(True)
+
+    worker.enable_forward_pre_hook.assert_called_once_with()
+    assert worker.model.config.param_sync_func == "param-sync"
+    assert worker._first_train_step_forward_pre_hook_disabled is False
+    lifecycle.helper.cuda_graph_set_manual_hooks.assert_called_once_with()
+
+
+def test_captured_pipeline_schedule_rejects_changed_microbatch_count():
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._te_cuda_graph_lifecycle = MagicMock()
+    worker._te_cuda_graph_capture_complete = True
+    worker._captured_te_cuda_graph_num_microbatches = 4
+    worker.cfg = {
+        "max_total_sequence_length": 8192,
+        "train_micro_batch_size": 1,
+        "sequence_packing": {"enabled": False},
+    }
+
+    with pytest.raises(RuntimeError, match="captured 4.*got 3"):
+        worker._maybe_capture_te_cuda_graphs(
+            padded_seq_length=8192,
+            micro_batch_size=1,
+            num_microbatches=3,
+        )
 
 
 def test_invalid_cuda_graph_scope_is_rejected_before_model_import():

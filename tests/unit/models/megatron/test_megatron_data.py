@@ -629,7 +629,7 @@ def test_pack_sequences_uses_fixed_cuda_graph_metadata_shape():
     assert packed_input_ids.shape == (1, 16)
     assert cu_seqlens.tolist() == [0, 3, 5]
     assert cu_seqlens_padded.tolist() == [0, 3, 16]
-    expected_graph_cu = [0, 3, 16, 16, 16, 16]
+    expected_graph_cu = [0, 3, 5, 16, 16, 16]
     assert packed_seq_params.cu_seqlens_q.tolist() == expected_graph_cu
     assert packed_seq_params.cu_seqlens_kv.tolist() == expected_graph_cu
     assert packed_seq_params.cu_seqlens_q_padded.tolist() == expected_graph_cu
@@ -648,6 +648,9 @@ def test_pack_sequences_uses_fixed_cuda_graph_metadata_shape():
         sample.cu_seqlens_q_padded.shape == packed_seq_params.cu_seqlens_q_padded.shape
     )
     assert sample.seq_idx.shape == packed_seq_params.seq_idx.shape
+    assert (
+        packed_seq_params.seq_idx[0, 4].item() != packed_seq_params.seq_idx[0, 5].item()
+    )
 
 
 @pytest.mark.mcore
@@ -1016,6 +1019,52 @@ class TestGetMicrobatchIterator:
         # With sequence packing, micro_batch_size should be 1
         assert micro_batch_size == 1
         assert data_iterator_len == 10
+
+    @patch("nemo_rl.models.megatron.data.get_and_validate_seqlen")
+    @patch("nemo_rl.models.megatron.data.make_processed_microbatch_iterator")
+    @patch("nemo_rl.models.megatron.data._get_pack_sequence_parameters_for_megatron")
+    def test_get_microbatch_iterator_uses_fixed_training_graph_capacity_only(
+        self,
+        mock_get_params,
+        mock_make_iterator,
+        mock_get_and_validate_seqlen,
+    ):
+        from nemo_rl.models.megatron.data import get_microbatch_iterator
+
+        mock_get_and_validate_seqlen.return_value = (1, 256)
+        mock_get_params.return_value = (1, 16, None)
+        mock_data = MagicMock()
+        mock_data.make_microbatch_iterator_for_packable_sequences.return_value = iter(
+            []
+        )
+        mock_data.get_microbatch_iterator_for_packable_sequences_len.return_value = (
+            2,
+            512,
+        )
+        cfg = {
+            "dynamic_batching": {"enabled": False},
+            "sequence_packing": {
+                "enabled": True,
+                "train_mb_tokens": 32768,
+            },
+            "megatron_cfg": {
+                "cuda_graph_impl": "transformer_engine",
+                "cuda_graph_packed_seq": True,
+                "cuda_graph_max_packed_seqs": 16,
+            },
+            "make_sequence_length_divisible_by": 1,
+        }
+
+        get_microbatch_iterator(
+            data=mock_data,
+            cfg=cfg,
+            mbs=4,
+            straggler_timer=MagicMock(),
+            for_cuda_graph_training=True,
+        )
+
+        assert mock_make_iterator.call_args.kwargs["pad_full_seq_to"] == 32768
+        assert mock_make_iterator.call_args.kwargs["cuda_graph_max_packed_seqs"] == 16
 
     @patch("nemo_rl.models.megatron.data.get_and_validate_seqlen")
     @patch("nemo_rl.models.megatron.data.make_processed_microbatch_iterator")

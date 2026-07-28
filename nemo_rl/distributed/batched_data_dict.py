@@ -27,7 +27,7 @@ from typing import (
 )
 
 import torch
-from typing_extensions import Self
+from typing_extensions import NotRequired, Self
 
 from nemo_rl.data.multimodal_utils import (
     PackedTensor,
@@ -54,6 +54,7 @@ class SequencePackingArgs(TypedDict):
     sequence_length_pad_multiple: (
         int  # pad each sequence to a multiple of this value (for CP/TP alignment)
     )
+    max_sequences_per_microbatch: NotRequired[int | None]
 
 
 class DynamicBatchingArgs(TypedDict):
@@ -453,6 +454,9 @@ class BatchedDataDict(UserDict, Generic[DictT]):
                 collect_metrics=False,  # TODO(ahmadki): make configurable
                 min_bin_count=shards,
                 bin_count_multiple=shards,
+                max_sequences_per_bin=sequence_packing_args.get(
+                    "max_sequences_per_microbatch"
+                ),
             )
 
             input_lengths_key = sequence_packing_args["input_lengths_key"]

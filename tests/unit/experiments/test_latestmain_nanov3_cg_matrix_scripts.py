@@ -93,7 +93,6 @@ AUXILIARY_SCOPE_SCRIPTS = {"00_nocg_baked_uv_cache.sh"}
 REQUESTED_PERFORMANCE_SCOPE_SCRIPTS = (
     "01_attn.sh",
     "02_mamba.sh",
-    "04_moe.sh",
     "08_moe_router.sh",
     "12_moe_router_preprocess.sh",
     "15_attn_mamba_moe_router_preprocess.sh",
@@ -213,6 +212,23 @@ def test_nanov3_submitters_exclude_dense_mlp() -> None:
 
     assert "16_mlp.sh" not in submit_all
     assert "16_mlp.sh" not in submit_requested
+
+
+def test_nanov3_default_submitters_exclude_capacity_changing_full_moe() -> None:
+    """Whole-expert graphs need a matching drop-and-pad non-CG baseline."""
+    submit_all = (SCRIPT_ROOT / "submit_all_valid_scopes.sh").read_text()
+    submit_requested = (
+        SCRIPT_ROOT / "submit_requested_performance_scopes.sh"
+    ).read_text()
+
+    for script_name in (
+        "04_moe.sh",
+        "05_attn_moe.sh",
+        "06_mamba_moe.sh",
+        "07_attn_mamba_moe.sh",
+    ):
+        assert script_name not in submit_all
+        assert script_name not in submit_requested
 
 
 def test_nemo_rl_scope_validation_exposes_mcore_mlp_capture() -> None:

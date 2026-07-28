@@ -13,8 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Submit the committed base matrix without Slurm dependencies. Select a
-# particular reusable file directly when varying a MoE experiment axis.
+# Submit scopes that preserve the baseline MoE token semantics without Slurm
+# dependencies. Whole-expert ``moe`` capture requires a separate drop-and-pad
+# capacity-controlled baseline, so 04-07 remain opt-in launchers.
 set -euo pipefail
 
 : "${CLUSTER:?Set CLUSTER to ptyche or oci-hsg.}"
@@ -24,10 +25,6 @@ bash "${SCRIPT_DIR}/scopes/00_nocg.sh"
 bash "${SCRIPT_DIR}/scopes/01_attn.sh"
 bash "${SCRIPT_DIR}/scopes/02_mamba.sh"
 bash "${SCRIPT_DIR}/scopes/03_attn_mamba.sh"
-bash "${SCRIPT_DIR}/scopes/04_moe.sh"
-bash "${SCRIPT_DIR}/scopes/05_attn_moe.sh"
-bash "${SCRIPT_DIR}/scopes/06_mamba_moe.sh"
-bash "${SCRIPT_DIR}/scopes/07_attn_mamba_moe.sh"
 bash "${SCRIPT_DIR}/scopes/08_moe_router.sh"
 bash "${SCRIPT_DIR}/scopes/09_attn_moe_router.sh"
 bash "${SCRIPT_DIR}/scopes/10_mamba_moe_router.sh"

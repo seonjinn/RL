@@ -14,8 +14,6 @@
 
 from unittest.mock import MagicMock
 
-import pytest
-
 
 def test_te_cuda_graph_lifecycle_captures_after_three_successful_steps() -> None:
     from nemo_rl.models.megatron.cuda_graph_lifecycle import TECudaGraphLifecycle
@@ -37,7 +35,7 @@ def test_te_cuda_graph_lifecycle_captures_after_three_successful_steps() -> None
     helper.create_cudagraphs.assert_called_once_with()
 
 
-def test_te_cuda_graph_lifecycle_rejects_empty_capture() -> None:
+def test_te_cuda_graph_lifecycle_allows_empty_local_pipeline_stage() -> None:
     from nemo_rl.models.megatron.cuda_graph_lifecycle import TECudaGraphLifecycle
 
     helper = MagicMock()
@@ -45,8 +43,8 @@ def test_te_cuda_graph_lifecycle_rejects_empty_capture() -> None:
     helper.graphs_created.return_value = False
     lifecycle = TECudaGraphLifecycle(helper=helper, warmup_steps=0)
 
-    with pytest.raises(RuntimeError, match="no graphable layers"):
-        lifecycle.capture_if_ready()
+    assert lifecycle.capture_if_ready() is True
+    helper.create_cudagraphs.assert_called_once_with()
 
 
 def test_te_cuda_graph_lifecycle_deletes_created_graphs_once() -> None:

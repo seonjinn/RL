@@ -481,6 +481,10 @@ class MegatronPolicyWorkerImpl(
         # unpacked [B, S] batch rather than pre-packing + CP-sharding itself.
         self.delegate_pack_to_model = _model_self_packs_for_cp(self.model)
         self._te_cuda_graph_lifecycle: Optional[TECudaGraphLifecycle] = None
+        self._te_cuda_graph_capture_complete = False
+        self._captured_te_cuda_graph_num_microbatches: Optional[int] = None
+        self._te_cuda_graph_replay_logged = False
+        self._last_te_cuda_graph_geometry: Optional[tuple[int, int, int]] = None
         if (
             init_optimizer
             and self.megatron_cfg.model.cuda_graph_impl == "transformer_engine"
@@ -509,8 +513,7 @@ class MegatronPolicyWorkerImpl(
     def _initialize_te_cuda_graph_lifecycle(self) -> None:
         from megatron.core.transformer.cuda_graphs import TECudaGraphHelper
 
-        seq_length = self.cfg["max_total_sequence_length"]
-        micro_batch_size = self.cfg["train_micro_batch_size"]
+        seq_length, micro_batch_size = self._training_cuda_graph_geometry()
         sample_packed_seq_params = None
         if self.cfg.get("sequence_packing", {}).get("enabled", False):
             max_packed_seqs = self.cfg["megatron_cfg"].get("cuda_graph_max_packed_seqs")
@@ -549,18 +552,75 @@ class MegatronPolicyWorkerImpl(
             self.cfg["megatron_cfg"].get("cuda_graph_max_packed_seqs"),
         )
 
+    def _training_cuda_graph_geometry(self) -> tuple[int, int]:
+        if self.cfg.get("sequence_packing", {}).get("enabled", False):
+            return int(self.cfg["sequence_packing"]["train_mb_tokens"]), 1
+        return (
+            int(self.cfg["max_total_sequence_length"]),
+            int(self.cfg["train_micro_batch_size"]),
+        )
+
+    def _configure_pipeline_cuda_graph_microbatches(
+        self,
+        *,
+        num_microbatches: int,
+        micro_batch_size: int,
+    ) -> None:
+        from megatron.core.num_microbatches_calculator import (
+            get_num_microbatches,
+            reconfigure_num_microbatches_calculator,
+        )
+
+        pg_collection = get_pg_collection(self.model)
+        data_parallel_size = torch.distributed.get_world_size(group=pg_collection.dp)
+        reconfigure_num_microbatches_calculator(
+            rank=torch.distributed.get_rank(),
+            rampup_batch_size=None,
+            global_batch_size=num_microbatches * micro_batch_size * data_parallel_size,
+            micro_batch_size=micro_batch_size,
+            data_parallel_size=data_parallel_size,
+            decrease_batch_size_if_needed=False,
+            step_batch_size_schedule=None,
+            seq_length=None,
+        )
+        configured_num_microbatches = get_num_microbatches()
+        if configured_num_microbatches != num_microbatches:
+            raise RuntimeError(
+                "Failed to configure the Megatron pipeline schedule for "
+                "Transformer Engine CUDA Graph capture: "
+                f"expected {num_microbatches} microbatches, got "
+                f"{configured_num_microbatches}."
+            )
+
+    def _any_model_parallel_rank_created_cuda_graphs(self) -> bool:
+        lifecycle = self._te_cuda_graph_lifecycle
+        assert lifecycle is not None
+        created = torch.tensor(
+            int(lifecycle.helper.graphs_created()),
+            dtype=torch.int32,
+            device=torch.device("cuda", torch.cuda.current_device()),
+        )
+        torch.distributed.all_reduce(
+            created,
+            op=torch.distributed.ReduceOp.MAX,
+            group=get_pg_collection(self.model).mp,
+        )
+        return bool(created.item())
+
     def _maybe_capture_te_cuda_graphs(
         self,
         *,
         padded_seq_length: int,
         micro_batch_size: int,
+        num_microbatches: int,
     ) -> None:
         lifecycle = self._te_cuda_graph_lifecycle
-        if lifecycle is None or not lifecycle.ready_to_capture():
+        if lifecycle is None:
             return
 
-        expected_seq_length = self.cfg["max_total_sequence_length"]
-        expected_micro_batch_size = self.cfg["train_micro_batch_size"]
+        expected_seq_length, expected_micro_batch_size = (
+            self._training_cuda_graph_geometry()
+        )
         if (
             padded_seq_length != expected_seq_length
             or micro_batch_size != expected_micro_batch_size
@@ -571,6 +631,23 @@ class MegatronPolicyWorkerImpl(
                 f"got {padded_seq_length}/{micro_batch_size}."
             )
 
+        if getattr(self, "_te_cuda_graph_capture_complete", False):
+            if num_microbatches != self._captured_te_cuda_graph_num_microbatches:
+                raise RuntimeError(
+                    "Packed Transformer Engine CUDA Graph replay requires the "
+                    "same pipeline microbatch count used for capture: "
+                    f"captured {self._captured_te_cuda_graph_num_microbatches}, "
+                    f"got {num_microbatches}. Use a fixed packing geometry or "
+                    "delete and recapture the graphs for the new schedule."
+                )
+            return
+        if not lifecycle.ready_to_capture():
+            return
+
+        self._configure_pipeline_cuda_graph_microbatches(
+            num_microbatches=num_microbatches,
+            micro_batch_size=micro_batch_size,
+        )
         restore_forward_pre_hook = (
             self.should_disable_forward_pre_hook and self._forward_pre_hook_enabled()
         )
@@ -582,7 +659,15 @@ class MegatronPolicyWorkerImpl(
             if restore_forward_pre_hook:
                 self.enable_forward_pre_hook()
 
-        if captured and restore_forward_pre_hook:
+        if captured and not self._any_model_parallel_rank_created_cuda_graphs():
+            raise RuntimeError(
+                "Transformer Engine CUDA Graph capture found no graphable layers "
+                "for the requested scope on any model-parallel rank."
+            )
+        if captured:
+            self._te_cuda_graph_capture_complete = True
+            self._captured_te_cuda_graph_num_microbatches = num_microbatches
+        if captured and restore_forward_pre_hook and lifecycle.helper.graphs_created():
             lifecycle.helper.cuda_graph_set_manual_hooks()
         if captured:
             log.info(
@@ -598,9 +683,43 @@ class MegatronPolicyWorkerImpl(
             self._te_cuda_graph_lifecycle.record_successful_step()
 
     def _te_cuda_graphs_created(self) -> bool:
-        return (
-            self._te_cuda_graph_lifecycle is not None
-            and self._te_cuda_graph_lifecycle.graphs_created()
+        return bool(getattr(self, "_te_cuda_graph_capture_complete", False))
+
+    def _restore_forward_pre_hook_after_successful_step(
+        self, update_successful: bool
+    ) -> None:
+        if not (update_successful and self._first_train_step_forward_pre_hook_disabled):
+            return
+
+        self.enable_forward_pre_hook()
+        get_model_config(
+            self.model
+        ).param_sync_func = self._first_train_step_param_sync_func
+        self._first_train_step_param_sync_func = None
+        self._first_train_step_forward_pre_hook_disabled = False
+
+        lifecycle = self._te_cuda_graph_lifecycle
+        if (
+            lifecycle is not None
+            and self._te_cuda_graphs_created()
+            and lifecycle.helper.graphs_created()
+        ):
+            lifecycle.helper.cuda_graph_set_manual_hooks()
+
+    def _log_first_te_cuda_graph_replay(self, num_microbatches: int) -> None:
+        lifecycle = self._te_cuda_graph_lifecycle
+        if (
+            lifecycle is None
+            or getattr(self, "_te_cuda_graph_replay_logged", False)
+            or not self._te_cuda_graphs_created()
+            or not lifecycle.helper.graphs_created()
+        ):
+            return
+        self._te_cuda_graph_replay_logged = True
+        log.info(
+            "Completed policy forward/backward with Transformer Engine CUDA "
+            "Graphs active: num_microbatches=%d",
+            num_microbatches,
         )
 
     def _reject_model_offload_with_te_cuda_graphs(self, operation: str) -> None:
@@ -793,11 +912,13 @@ class MegatronPolicyWorkerImpl(
                     mbs,
                     straggler_timer=self.mcore_state.straggler_timer,
                     delegate_pack_to_model=self.delegate_pack_to_model,
+                    for_cuda_graph_training=not eval_mode,
                 )
                 if not eval_mode:
                     self._maybe_capture_te_cuda_graphs(
                         padded_seq_length=padded_seq_length,
                         micro_batch_size=micro_batch_size,
+                        num_microbatches=num_microbatches,
                     )
                 # Track total microbatches for MoE aux-loss averaging
                 total_num_microbatches += int(num_microbatches)
@@ -867,6 +988,8 @@ class MegatronPolicyWorkerImpl(
                             use_router_replay=use_router_replay,
                             router_replay_train=not eval_mode,
                         )
+                    if not eval_mode:
+                        self._log_first_te_cuda_graph_replay(num_microbatches)
 
                 # Clear mtp_grad_scale_func after the forward-backward pass so
                 # it doesn't get serialized in the run_config.yaml when saving
@@ -918,17 +1041,10 @@ class MegatronPolicyWorkerImpl(
                 mtp_grad_norm = reduce_max_stat_across_model_parallel_group(
                     mtp_grad_norm, mp_group=pg_collection.mp
                 )
-                if (
-                    not eval_mode
-                    and self._first_train_step_forward_pre_hook_disabled
-                    and update_successful
-                ):
-                    self.enable_forward_pre_hook()
-                    get_model_config(
-                        self.model
-                    ).param_sync_func = self._first_train_step_param_sync_func
-                    self._first_train_step_param_sync_func = None
-                    self._first_train_step_forward_pre_hook_disabled = False
+                if not eval_mode:
+                    self._restore_forward_pre_hook_after_successful_step(
+                        bool(update_successful)
+                    )
 
                 warn_if_inf_grad_norm(grad_norm)
 
@@ -1146,6 +1262,7 @@ class MegatronPolicyWorkerImpl(
             # Saved across the step so we can restore at finish/abort.
             "saved_grad_sync_func": None,
             "saved_no_sync_func": None,
+            "te_cuda_graph_geometry": None,
         }
 
     def _assert_step_open(self) -> dict[str, Any]:
@@ -1194,10 +1311,15 @@ class MegatronPolicyWorkerImpl(
                 module._inference_key_value_memory = None
 
         self.model.train()
-        self._maybe_capture_te_cuda_graphs(
-            padded_seq_length=self.cfg["max_total_sequence_length"],
-            micro_batch_size=mbs or self.cfg["train_micro_batch_size"],
-        )
+        if self._last_te_cuda_graph_geometry is not None:
+            padded_seq_length, micro_batch_size, num_microbatches = (
+                self._last_te_cuda_graph_geometry
+            )
+            self._maybe_capture_te_cuda_graphs(
+                padded_seq_length=padded_seq_length,
+                micro_batch_size=micro_batch_size,
+                num_microbatches=num_microbatches,
+            )
         self.model.zero_grad_buffer()
         self.optimizer.zero_grad()
 
@@ -1302,7 +1424,28 @@ class MegatronPolicyWorkerImpl(
             self.cfg,
             state["mbs"],
             straggler_timer=self.mcore_state.straggler_timer,
+            for_cuda_graph_training=True,
         )
+        te_cuda_graph_geometry = (
+            padded_seq_length,
+            micro_batch_size,
+            num_microbatches,
+        )
+        if state["te_cuda_graph_geometry"] is None:
+            state["te_cuda_graph_geometry"] = te_cuda_graph_geometry
+        elif state["te_cuda_graph_geometry"] != te_cuda_graph_geometry:
+            raise RuntimeError(
+                "All split-policy microbatch calls in one optimizer step must "
+                "use identical Transformer Engine CUDA Graph geometry; "
+                f"expected {state['te_cuda_graph_geometry']}, got "
+                f"{te_cuda_graph_geometry}."
+            )
+        if self._te_cuda_graphs_created():
+            self._maybe_capture_te_cuda_graphs(
+                padded_seq_length=padded_seq_length,
+                micro_batch_size=micro_batch_size,
+                num_microbatches=num_microbatches,
+            )
         state["total_num_microbatches"] += int(num_microbatches)
 
         loss_post_processor = LossPostProcessor(
@@ -1355,6 +1498,7 @@ class MegatronPolicyWorkerImpl(
                     use_router_replay=use_router_replay,
                     router_replay_train=True,
                 )
+                self._log_first_te_cuda_graph_replay(num_microbatches)
 
         if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
             torch.cuda.empty_cache()
@@ -1451,6 +1595,9 @@ class MegatronPolicyWorkerImpl(
             update_successful, mp_group=pg_collection.mp
         )
         self._record_successful_te_cuda_graph_warmup_step(bool(update_successful))
+        if update_successful and state["te_cuda_graph_geometry"] is not None:
+            self._last_te_cuda_graph_geometry = state["te_cuda_graph_geometry"]
+        self._restore_forward_pre_hook_after_successful_step(bool(update_successful))
         grad_norm = reduce_max_stat_across_model_parallel_group(
             grad_norm, mp_group=pg_collection.mp
         )

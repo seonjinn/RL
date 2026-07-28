@@ -55,11 +55,6 @@ class TECudaGraphLifecycle:
 
         self._capture_attempted = True
         self.helper.create_cudagraphs()
-        if not self.helper.graphs_created():
-            raise RuntimeError(
-                "Transformer Engine CUDA Graph capture found no graphable layers "
-                "for the requested scope"
-            )
         return True
 
     def graphs_created(self) -> bool:

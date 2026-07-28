@@ -577,6 +577,39 @@ class TestSequencePacker:
         assert packer3.min_bin_count == 3
         assert packer3.bin_count_multiple == 2
 
+    @pytest.mark.parametrize(
+        "algorithm",
+        [
+            PackingAlgorithm.CONCATENATIVE,
+            PackingAlgorithm.FIRST_FIT_DECREASING,
+            PackingAlgorithm.FIRST_FIT_SHUFFLE,
+            PackingAlgorithm.MODIFIED_FIRST_FIT_DECREASING,
+        ],
+    )
+    def test_max_sequences_per_bin_splits_dense_bins(
+        self,
+        algorithm: PackingAlgorithm,
+    ) -> None:
+        sequence_lengths = [1] * 17
+        packer = get_packer(
+            algorithm,
+            bin_capacity=100,
+            max_sequences_per_bin=4,
+        )
+
+        bins = packer.pack(sequence_lengths)
+
+        assert validate_solution(sequence_lengths, bins, 100)
+        assert max(map(len, bins)) <= 4
+
+    def test_max_sequences_per_bin_must_be_positive(self) -> None:
+        with pytest.raises(ValueError, match="max_sequences_per_bin must be positive"):
+            get_packer(
+                PackingAlgorithm.CONCATENATIVE,
+                bin_capacity=100,
+                max_sequences_per_bin=0,
+            )
+
     def test_no_constraints_unchanged_behavior(
         self, bin_capacity: int, small_sequence_lengths: List[int]
     ):

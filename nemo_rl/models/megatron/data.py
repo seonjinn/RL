@@ -150,6 +150,7 @@ def get_microbatch_iterator(
     straggler_timer: StragglerDetector,
     seq_length_key: Optional[str] = None,
     delegate_pack_to_model: bool = False,
+    for_cuda_graph_training: bool = False,
 ) -> Tuple[Iterator[ProcessedMicrobatch], int, int, int, int]:
     """Create a processed microbatch iterator from a batch of data.
 
@@ -162,6 +163,7 @@ def get_microbatch_iterator(
         cfg: Configuration dictionary
         mbs: Microbatch size
         seq_length_key: Key for sequence lengths in data dict (auto-detected if None)
+        for_cuda_graph_training: Apply the fixed packed training graph geometry.
 
     Returns:
         Tuple containing the iterator and metadata
@@ -201,14 +203,16 @@ def get_microbatch_iterator(
             pack_seq_dim_size,
         )
         megatron_cfg = cfg["megatron_cfg"]
-        if megatron_cfg.get(
-            "cuda_graph_impl"
-        ) == "transformer_engine" and megatron_cfg.get("cuda_graph_packed_seq", False):
+        if (
+            for_cuda_graph_training
+            and megatron_cfg.get("cuda_graph_impl") == "transformer_engine"
+            and megatron_cfg.get("cuda_graph_packed_seq", False)
+        ):
             cuda_graph_max_packed_seqs = megatron_cfg.get("cuda_graph_max_packed_seqs")
-            fixed_seq_length = cfg["max_total_sequence_length"]
+            fixed_seq_length = cfg["sequence_packing"]["train_mb_tokens"]
             if fixed_seq_length % pad_packed_seq_to_multiple_of != 0:
                 raise ValueError(
-                    "max_total_sequence_length must be divisible by the packed "
+                    "sequence_packing.train_mb_tokens must be divisible by the packed "
                     "sequence CUDA Graph alignment; got "
                     f"{fixed_seq_length} and {pad_packed_seq_to_multiple_of}."
                 )
@@ -897,10 +901,12 @@ def _pack_sequences_for_megatron(
 
     # Convert to tensors
     cu_seqlens = torch.tensor(cu_seqlens, dtype=torch.int32, device=input_ids.device)
+    graph_sequence_boundaries = None
     if needs_padding:
         cu_seqlens_padded = torch.tensor(
             cu_seqlens_padded, dtype=torch.int32, device=input_ids.device
         )
+        graph_sequence_boundaries = cu_seqlens_padded.clone()
         if pad_packed_seq_to is not None:
             cu_seqlens_padded[-1] = pad_packed_seq_to
         elif pad_packed_seq_to_multiple_of > 1:
@@ -1007,7 +1013,11 @@ def _pack_sequences_for_megatron(
             (cuda_graph_max_packed_seqs + 2,),
             pad_packed_seq_to,
         )
-        graph_cu_seqlens[: cu_seqlens_padded.numel()] = cu_seqlens_padded
+        assert graph_sequence_boundaries is not None
+        graph_cu_seqlens[: graph_sequence_boundaries.numel()] = (
+            graph_sequence_boundaries
+        )
+        graph_cu_seqlens[graph_sequence_boundaries.numel()] = pad_packed_seq_to
         graph_max_seqlen = pad_packed_seq_to
 
     # total_tokens is required for PackedSeqParams.__post_init__ to build

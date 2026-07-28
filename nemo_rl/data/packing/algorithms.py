@@ -44,6 +44,7 @@ class SequencePacker(ABC):
         collect_metrics: bool = False,
         min_bin_count: Optional[int] = None,
         bin_count_multiple: Optional[int] = None,
+        max_sequences_per_bin: Optional[int] = None,
     ):
         """Initialize the sequence packer.
 
@@ -54,6 +55,8 @@ class SequencePacker(ABC):
                           If None, no minimum is enforced.
             bin_count_multiple: The total number of bins must be a multiple of this value.
                                If None, no multiple constraint is enforced.
+            max_sequences_per_bin: Maximum number of sequences assigned to one bin.
+                                   If None, no sequence-count limit is enforced.
 
         Raises:
             ValueError: If min_bin_count or bin_count_multiple are invalid.
@@ -62,6 +65,7 @@ class SequencePacker(ABC):
         self.collect_metrics = collect_metrics
         self.min_bin_count = min_bin_count
         self.bin_count_multiple = bin_count_multiple
+        self.max_sequences_per_bin = max_sequences_per_bin
         self.metrics = None
 
         # Validate parameters
@@ -69,6 +73,8 @@ class SequencePacker(ABC):
             raise ValueError("min_bin_count must be nonnegative")
         if bin_count_multiple is not None and bin_count_multiple < 1:
             raise ValueError("bin_count_multiple must be positive")
+        if max_sequences_per_bin is not None and max_sequences_per_bin < 1:
+            raise ValueError("max_sequences_per_bin must be positive")
 
         if collect_metrics:
             from nemo_rl.data.packing.metrics import PackingMetrics
@@ -179,6 +185,13 @@ class SequencePacker(ABC):
         """
         # Call the implementation
         bins = self._pack_implementation(sequence_lengths)
+
+        if self.max_sequences_per_bin is not None:
+            bins = [
+                bin_contents[start : start + self.max_sequences_per_bin]
+                for bin_contents in bins
+                for start in range(0, len(bin_contents), self.max_sequences_per_bin)
+            ]
 
         # Adjust bin count to meet constraints
         bins = self._adjust_bin_count(bins)
@@ -658,6 +671,7 @@ def get_packer(
     collect_metrics: bool = False,
     min_bin_count: Optional[int] = None,
     bin_count_multiple: Optional[int] = None,
+    max_sequences_per_bin: Optional[int] = None,
 ) -> SequencePacker:
     """Factory function to get a sequence packer based on the algorithm.
 
@@ -670,6 +684,8 @@ def get_packer(
                       If None, no minimum is enforced.
         bin_count_multiple: The total number of bins must be a multiple of this value.
                            If None, no multiple constraint is enforced.
+        max_sequences_per_bin: Maximum number of sequences assigned to one bin.
+                               If None, no sequence-count limit is enforced.
 
     Returns:
         A SequencePacker instance for the specified algorithm.
@@ -707,4 +723,5 @@ def get_packer(
         collect_metrics=collect_metrics,
         min_bin_count=min_bin_count,
         bin_count_multiple=bin_count_multiple,
+        max_sequences_per_bin=max_sequences_per_bin,
     )
