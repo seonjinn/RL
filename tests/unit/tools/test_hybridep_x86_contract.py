@@ -96,3 +96,41 @@ def test_qwen_4n8g_x86_profiles_are_matched() -> None:
         "CONFIG_PATH=examples/configs/recipes/llm/performance/"
         "grpo-qwen3-30ba3b-4n8g-hybridep.yaml"
     ) in hybridep
+
+
+def test_x86_wheel_build_job_is_arch_specific_and_reproducible() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    build_script = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "x86"
+        / "hybridep"
+        / "build_deepep_wheel.sbatch"
+    )
+    source = build_script.read_text()
+
+    required_snippets = {
+        ': "${CONTAINER:?CONTAINER is required}"',
+        ': "${OUTPUT_DIR:?OUTPUT_DIR is required}"',
+        ': "${BUILD_ROOT:?BUILD_ROOT is required}"',
+        ': "${GPU_ARCH:?GPU_ARCH is required}"',
+        ': "${DEEPEP_COMMIT:?DEEPEP_COMMIT is required}"',
+        '[[ "${DEEPEP_COMMIT}" =~ ^[0-9a-f]{40}$ ]]',
+        '9.0 | 10.0',
+        'export HYBRID_EP_MULTINODE=1',
+        'export TORCH_CUDA_ARCH_LIST="${GPU_ARCH}"',
+        'srun --container-image="${CONTAINER}"',
+        "git clone --filter=blob:none --recurse-submodules",
+        'git -C "${source_dir}" checkout --detach "${DEEPEP_COMMIT}"',
+        'git -C "${source_dir}" submodule update --init --recursive',
+        'uv build --wheel --no-build-isolation',
+        "import deep_ep, deep_ep_cpp, hybrid_ep_cpp",
+        'sha256sum "${final_wheel}"',
+        "container_sha256=",
+        "SLURM_JOB_ID",
+        'if [[ -e "${final_wheel}" ]]',
+    }
+    missing = sorted(snippet for snippet in required_snippets if snippet not in source)
+
+    assert not missing
