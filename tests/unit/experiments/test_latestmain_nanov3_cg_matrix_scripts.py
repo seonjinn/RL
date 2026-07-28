@@ -243,6 +243,7 @@ def test_ray_venv_bootstrap_smoke_has_a_single_node_test_only_submission(
         in result.stdout
     )
     assert "--time=01:00:00" in result.stdout
+    assert "--segment=1" in result.stdout
     assert "--gpus-per-node" not in result.stdout
     assert "--gres=gpu" not in result.stdout
 

@@ -92,7 +92,7 @@ SBATCH_CMD+=(
   "--job-name=${ACCOUNT}-sna.${RUN_NAME}"
   "--partition=${PARTITION}"
   --time=01:00:00
-  "--segment=${SEGMENT_SIZE}"
+  --segment=1
   ray.sub
 )
 
