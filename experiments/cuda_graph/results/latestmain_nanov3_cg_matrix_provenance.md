@@ -25,5 +25,22 @@ the current config parse, or any model job could run. No NanoV3 CUDA Graph
 model smoke was submitted. OCI-HSG staging and all performance/accuracy work
 remain held because the same ARM64 image digest cannot satisfy this gate.
 
+## Forced uv runtime overlay
+
+| Field | Value |
+| --- | --- |
+| Probe job | `2456255` (`FAILED`, exit `1:0`, 2m23s) |
+| Fresh source checkout | `0d37b777f4d9188ceaa5164a3244976292fe566a` |
+| Probe log | `/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-latestmain-nanov3-uv-overlay-20260727-0d37b777/exp_logs/cuda_graph_uv_overlay_probe/ptyche_2456255.out` |
+| Tracked lock check | Failed: `nemo_gym` references a workspace but the fresh checkout had not initialized the Gym submodule |
+| Frozen source integrity | `uv.lock` remained `30a35a07db7a646a7e0fb4e458daf264cf6c805a`, identical to `HEAD:uv.lock`; no source `.venv` was created |
+| Frozen overlay import | Failed: `ModuleNotFoundError: No module named 'transformer_engine'` |
+
+`transformer-engine`, `megatron-core`, and `mamba-ssm` are declared by the
+optional `mcore` extra. The tested `NRL_FORCE_REBUILD_VENVS=true uv run`
+command did not select that extra, so rebuilding its default environment could
+not supply Transformer Engine. This confirms the environment gate without
+rewriting or pushing the tracked lock.
+
 The 2026-07-15 image and the Megatron-LM CI image are not valid baselines for
 this matrix and are not used here.
