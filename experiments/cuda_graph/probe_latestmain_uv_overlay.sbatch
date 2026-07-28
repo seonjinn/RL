@@ -10,15 +10,25 @@ set -euo pipefail
 
 : "${CONTAINER:?Set CONTAINER to the staged NeMo-RL nightly image.}"
 : "${MOUNTS:?Set MOUNTS for the source filesystem.}"
+: "${UV_CACHE_DIR_OVERRIDE:?Set UV_CACHE_DIR_OVERRIDE to a persistent Lustre cache.}"
+
+mkdir -p "${UV_CACHE_DIR_OVERRIDE}"
+CONTAINER_MOUNTS="${MOUNTS},${UV_CACHE_DIR_OVERRIDE}:/root/.cache/uv"
 
 srun \
   --ntasks=1 \
   --container-image="${CONTAINER}" \
-  --container-mounts="${MOUNTS}" \
+  --container-mounts="${CONTAINER_MOUNTS}" \
   --no-container-mount-home \
   --container-workdir="${SLURM_SUBMIT_DIR}" \
   bash -lc '
     set -euo pipefail
+    export UV_CACHE_DIR=/root/.cache/uv
+    test -w "${UV_CACHE_DIR}"
+    uv_cache_marker="${UV_CACHE_DIR}/.nemo_rl_cg_uv_cache_${SLURM_JOB_ID}"
+    printf "job_id=%s\\n" "${SLURM_JOB_ID}" > "${uv_cache_marker}"
+    echo "uv_cache_dir=${UV_CACHE_DIR}"
+    echo "uv_cache_marker=${uv_cache_marker}"
     cd "${SLURM_SUBMIT_DIR}"
     if uv lock --check; then
       echo "tracked_uv_lock_check=passed"
