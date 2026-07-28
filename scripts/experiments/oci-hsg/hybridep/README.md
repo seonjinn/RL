@@ -96,6 +96,16 @@ export CONTAINER=/absolute/shared/path/nemo_rl_nightly.sqsh
 export HF_HOME=/absolute/shared/path/hf_home
 ```
 
+If the nightly image and repository lock contain different Ray versions,
+prepare a shared driver environment with
+`scripts/experiments/x86/hybridep/submit_driver_venv.sh`, then use it for both
+the Ray daemons and driver:
+
+```bash
+export DRIVER_VENV=/absolute/shared/path/driver-venv
+export RAY_VENV="${DRIVER_VENV}"
+```
+
 Run the two-node, three-step compatibility gate first:
 
 ```bash

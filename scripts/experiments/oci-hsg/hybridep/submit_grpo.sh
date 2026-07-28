@@ -89,6 +89,7 @@ RUN_ROOT=${RUN_ROOT:-"${PROJECT_ROOT}/exp_logs/hybridep/${MODEL_ID}/${RUN_NAME}"
 EXTRA_MOUNTS=${EXTRA_MOUNTS:-}
 NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-true}
 DRIVER_VENV=${DRIVER_VENV:-}
+RAY_VENV=${RAY_VENV:-}
 
 case "${DISPATCHER_MODE}" in
   hybridep | recipe) ;;
@@ -116,6 +117,18 @@ if [[ -n "${DRIVER_VENV}" ]]; then
       ;;
   esac
   mkdir -p "$(dirname -- "${DRIVER_VENV}")"
+fi
+
+if [[ -n "${RAY_VENV}" ]]; then
+  if [[ -z "${DRIVER_VENV}" || "${RAY_VENV}" != "${DRIVER_VENV}" ]]; then
+    printf 'RAY_VENV must equal the non-empty DRIVER_VENV so Ray versions match.\n' >&2
+    exit 2
+  fi
+  if [[ ! -f "${RAY_VENV}/bin/ray" ]]; then
+    printf 'RAY_VENV must contain a prepared Ray executable: %s/bin/ray\n' \
+      "${RAY_VENV}" >&2
+    exit 2
+  fi
 fi
 
 if [[ ! "${DEEPEP_COMMIT}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -314,6 +327,7 @@ metadata_path="${RUN_ROOT}/submission.env"
   printf 'nrl_force_rebuild_venvs=%q\n' "${NRL_FORCE_REBUILD_VENVS}"
   printf 'extra_mounts=%q\n' "${EXTRA_MOUNTS}"
   printf 'driver_venv=%q\n' "${DRIVER_VENV}"
+  printf 'ray_venv=%q\n' "${RAY_VENV}"
   printf 'rl_commit=%q\n' "${RL_COMMIT}"
   printf 'bridge_commit=%q\n' "${BRIDGE_COMMIT}"
   printf 'megatron_lm_commit=%q\n' "${MEGATRON_LM_COMMIT}"
@@ -338,6 +352,10 @@ export NRL_FORCE_REBUILD_VENVS
 export GPUS_PER_NODE
 export SETUP_COMMAND
 export BASE_LOG_DIR="${RUN_ROOT}/ray"
+if [[ -n "${RAY_VENV}" ]]; then
+  PATH="${RAY_VENV}/bin:${PATH}"
+fi
+export PATH
 PYTHONPATH="${PROJECT_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 PYTHONPATH="${BRIDGE_SRC}:${PYTHONPATH}"
 if [[ -n "${DEEPEP_OVERLAY}" ]]; then

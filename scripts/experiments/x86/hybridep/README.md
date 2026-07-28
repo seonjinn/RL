@@ -45,3 +45,28 @@ The job creates:
 
 The build directory is removed only after success. A failed build directory is
 retained under `BUILD_ROOT` (node-local by default) for bounded diagnosis.
+
+## Prepare a version-matched Ray driver environment
+
+When the nightly image's bundled Ray differs from the repository lock, prepare
+one shared environment before launching the A/B jobs. The GRPO launcher can
+then use the same Ray executable for the head, workers, and driver:
+
+```bash
+export CONTAINER=/lustre/absolute/path/nemo_rl_nightly.sqsh
+export DRIVER_VENV=/home/sna/experiments/hybridep-x86/driver-venv
+export UV_CACHE_DIR=/home/sna/experiments/hybridep-x86/uv-cache
+
+scripts/experiments/x86/hybridep/submit_driver_venv.sh
+```
+
+After the preparation job completes, export both variables to the same path
+for every paired run:
+
+```bash
+export DRIVER_VENV=/home/sna/experiments/hybridep-x86/driver-venv
+export RAY_VENV="${DRIVER_VENV}"
+```
+
+`submit_grpo.sh` rejects a different `RAY_VENV`, so the cluster cannot start
+with one Ray release while the driver imports another.

@@ -132,7 +132,11 @@ def test_launcher_allows_shared_non_lustre_logs_without_changing_defaults() -> N
     assert 'MOUNTS="${MOUNTS},${EXTRA_MOUNTS}"' in launcher
     assert "NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-true}" in launcher
     assert "DRIVER_VENV=${DRIVER_VENV:-}" in launcher
+    assert "RAY_VENV=${RAY_VENV:-}" in launcher
     assert 'driver_args=(env "UV_PROJECT_ENVIRONMENT=${DRIVER_VENV}"' in launcher
+    assert 'PATH="${RAY_VENV}/bin:${PATH}"' in launcher
+    assert "export PATH" in launcher
+    assert "ray_venv=%q" in launcher
 
 
 def test_x86_wheel_build_job_is_arch_specific_and_reproducible() -> None:
@@ -178,3 +182,41 @@ def test_x86_wheel_build_job_is_arch_specific_and_reproducible() -> None:
     missing = sorted(snippet for snippet in required_snippets if snippet not in source)
 
     assert not missing
+
+
+def test_x86_driver_venv_job_prepares_the_shared_ray_runtime() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    submit_script = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "x86"
+        / "hybridep"
+        / "submit_driver_venv.sh"
+    ).read_text()
+    prepare_script = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "x86"
+        / "hybridep"
+        / "prepare_driver_venv.sbatch"
+    )
+    source = prepare_script.read_text()
+
+    required_snippets = {
+        ': "${CONTAINER:?CONTAINER is required}"',
+        ': "${DRIVER_VENV:?DRIVER_VENV is required}"',
+        ': "${UV_CACHE_DIR:?UV_CACHE_DIR is required}"',
+        "--no-container-mount-home",
+        'UV_PROJECT_ENVIRONMENT="${DRIVER_VENV}"',
+        "uv sync --frozen",
+        "ray --version",
+        'python -c "import ray; print(ray.__version__)"',
+    }
+    missing = sorted(snippet for snippet in required_snippets if snippet not in source)
+
+    assert not missing
+    assert "git pull --ff-only --recurse-submodules=no" in submit_script
+    assert "git submodule update --init --recursive" in submit_script
+    assert 'sbatch --test-only "${sbatch_args[@]}"' in submit_script
