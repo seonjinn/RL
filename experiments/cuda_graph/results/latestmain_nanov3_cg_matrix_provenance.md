@@ -185,3 +185,24 @@ because the refit path moves model parameters to CPU and invalidates captured
 addresses. The next performance gate is a single five-step `attn` smoke that
 must emit explicit capture and replay evidence before the parallel matrix is
 resubmitted.
+
+## Corrected lifecycle validation
+
+| Field | Value |
+| --- | --- |
+| Final source SHA | `c02961ec315284702abb6a01f075516b669f1c56` |
+| Initial lifecycle unit job | `2464809` (`COMPLETED`; 72 tests passed, followed by review that identified missing packed and pipeline contracts) |
+| Packed-contract retry | `2464904` (`FAILED`; exposed the existing `-1` unlimited packer sentinel contract) |
+| Expanded contract retry | `2464941` (`FAILED`; 158 tests passed and one stale safe-submitter expectation failed) |
+| Final scheduler preflight | `2464974` accepted one Ptyche GB200 node in `backfill` |
+| Final contract job | `2464975` (`COMPLETED`, exit `0:0`) |
+| Final test result | 160 tests passed in 29.74 seconds |
+| Final test log | `/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-latestmain-nanov3-energon-20260728-6718b0a4b/exp_logs/cg-lifecycle-unit-c02961ec3/2464975-logs/ray-driver.log` |
+
+The final gate covers delayed capture after three successful optimizer steps,
+pipeline stages with no selected local graph, graph teardown, fixed packed
+token and `cu_seqlens` geometry, training-only maximum packed-sequence caps,
+pipeline microbatch schedule checks, and the independent scope launchers. This
+is a CPU contract result. A GPU smoke must still prove actual Transformer
+Engine graph capture and replay before any CUDA Graph performance sample is
+accepted.
