@@ -131,6 +131,7 @@ if [[ "${HYBRID_EP_BUILD_STAGE:-host}" != "container" ]]; then
     container_mounts="${container_mounts},${BUILD_ROOT}:${BUILD_ROOT}"
   fi
   exec srun --container-image="${CONTAINER}" \
+    --no-container-mount-home \
     --container-mounts="${container_mounts}" \
     --export=ALL,HYBRID_EP_BUILD_STAGE=container \
     bash "${SCRIPT_PATH}"
