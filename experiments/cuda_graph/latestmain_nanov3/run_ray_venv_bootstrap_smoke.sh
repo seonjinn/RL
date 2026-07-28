@@ -80,7 +80,7 @@ def worker_runtime_probe() -> dict[str, str]:
 
 result = ray.get(worker_runtime_probe.options(runtime_env=runtime_env).remote())
 assert Path(result["python"]) == python_path, result
-assert Path(result["virtual_env"]) == worker_venv, result
+assert Path(result["virtual_env"]).resolve() == worker_venv.resolve(), result
 assert "MegatronPolicyWorker" in result["policy_worker"], result
 assert all(
     result[module]
