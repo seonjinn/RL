@@ -257,6 +257,7 @@ def test_ray_venv_bootstrap_smoke_uses_frozen_driver_and_worker_bootstrap() -> N
     )
     assert "unset UV_CACHE_DIR_OVERRIDE" in source
     assert "create_local_venv_on_each_node" in source
+    assert 'ray.init(address="auto")' in source
     assert "PY_EXECUTABLES.MCORE" in source
     assert "MegatronPolicyWorker" in source
     assert (

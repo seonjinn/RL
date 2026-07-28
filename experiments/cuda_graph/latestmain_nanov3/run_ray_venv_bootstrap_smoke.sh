@@ -38,6 +38,8 @@ from nemo_rl.distributed.virtual_cluster import PY_EXECUTABLES
 from nemo_rl.utils.venvs import create_local_venv_on_each_node
 
 
+ray.init(address="auto")
+
 venv_root = Path(os.environ["NEMO_RL_VENV_DIR"])
 assert venv_root.name == "venvs", venv_root
 assert venv_root.parent.name.endswith("-logs"), venv_root
