@@ -106,7 +106,15 @@ def provenance_rows(smoke_rows: list[dict[str, str]]) -> list[list[str]]:
         if values in seen:
             continue
         seen.add(values)
-        rows.append([cell(value) for value in values])
+        cluster, source_sha, container, script = values
+        rows.append(
+            [
+                cell(cluster),
+                cell(source_sha),
+                cell(container),
+                link_cell(script, script) if script else cell(""),
+            ]
+        )
     return rows
 
 
@@ -114,6 +122,7 @@ def job_rows(smoke_rows: list[dict[str, str]]) -> list[list[str]]:
     """Render current Slurm status and evidence links from the smoke index."""
     rows: list[list[str]] = []
     for smoke_row in smoke_rows:
+        script = smoke_row.get("script", "")
         log_link = smoke_row.get("log_link", "")
         wandb_link = smoke_row.get("wandb_link", "")
         rows.append(
@@ -123,6 +132,7 @@ def job_rows(smoke_rows: list[dict[str, str]]) -> list[list[str]]:
                 cell(smoke_row.get("job_id", "")),
                 cell(smoke_row.get("state", "")),
                 cell(smoke_row.get("reason", "")),
+                link_cell(script, script) if script else cell(""),
                 link_cell("log", log_link) if log_link else cell(""),
                 link_cell("W&B", wandb_link) if wandb_link else cell(""),
             ]
@@ -173,7 +183,7 @@ def render_html(
         provenance_rows(smoke_rows),
     )
     jobs = table(
-        ["Cluster", "Scope", "Job ID", "State", "Reason", "Log", "W&B"],
+        ["Cluster", "Scope", "Job ID", "State", "Reason", "Script", "Log", "W&B"],
         job_rows(smoke_rows),
     )
     performance = table(

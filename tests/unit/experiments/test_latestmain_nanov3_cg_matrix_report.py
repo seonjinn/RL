@@ -64,7 +64,19 @@ def test_renderer_writes_escaped_self_contained_matrix_report(tmp_path: Path) ->
                 "log_link": "logs/1234.out",
                 "wandb_link": "https://wandb.ai/example/run",
                 "reason": "<script>alert('hostile')</script>",
-            }
+            },
+            {
+                "cluster": "ptyche",
+                "scope": "mamba",
+                "job_id": "1235",
+                "state": "COMPLETED",
+                "source_sha": "deadbeef",
+                "container": "nemo_rl_latestmain_nanov3.sqsh",
+                "script": "javascript:alert(1)",
+                "log_link": "logs/1235.out",
+                "wandb_link": "https://wandb.ai/example/run-2",
+                "reason": "safe plain text fallback",
+            },
         ],
     )
     _write_csv(
@@ -122,6 +134,9 @@ def test_renderer_writes_escaped_self_contained_matrix_report(tmp_path: Path) ->
     assert "deadbeef" in rendered_html
     assert "nemo_rl_latestmain_nanov3.sqsh" in rendered_html
     assert "scopes/01_attn.sh" in rendered_html
+    assert '<a href="scopes/01_attn.sh">scopes/01_attn.sh</a>' in rendered_html
+    assert 'href="javascript:' not in rendered_html
+    assert "javascript:alert(1)" in rendered_html
     assert "logs/1234.out" in rendered_html
     assert "https://wandb.ai/example/run" in rendered_html
     assert "E2E step time (s)" in rendered_html

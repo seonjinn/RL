@@ -25,6 +25,7 @@ REPO_ROOT = Path(__file__).parents[3]
 SCRIPT_ROOT = REPO_ROOT / "experiments/cuda_graph/latestmain_nanov3"
 SCOPE_ROOT = SCRIPT_ROOT / "scopes"
 SETUP_TEST = REPO_ROOT / "tests/unit/models/megatron/test_megatron_setup.py"
+RAY_SUB = REPO_ROOT / "ray.sub"
 
 
 def _task3_valid_scope_cases() -> list[tuple[str, ...]]:
@@ -152,6 +153,11 @@ def test_nocg_script_emits_no_training_cuda_graph_override() -> None:
     assert "cuda_graph_" not in source
     assert "checkpointing.enabled=false" in source
     assert "ray.sub" in source
+
+
+def test_shared_ray_submission_template_has_no_job_dependency() -> None:
+    """Independent scope submissions must not be serialized by ray.sub."""
+    assert "--dependency" not in RAY_SUB.read_text()
 
 
 def test_all_scope_dry_run_prints_test_only_submission_with_exact_scope(
