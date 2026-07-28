@@ -131,6 +131,8 @@ def test_launcher_allows_shared_non_lustre_logs_without_changing_defaults() -> N
     assert "EXTRA_MOUNTS=${EXTRA_MOUNTS:-}" in launcher
     assert 'MOUNTS="${MOUNTS},${EXTRA_MOUNTS}"' in launcher
     assert "NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-true}" in launcher
+    assert "DRIVER_VENV=${DRIVER_VENV:-}" in launcher
+    assert 'driver_args=(env "UV_PROJECT_ENVIRONMENT=${DRIVER_VENV}"' in launcher
 
 
 def test_x86_wheel_build_job_is_arch_specific_and_reproducible() -> None:

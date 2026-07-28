@@ -88,6 +88,7 @@ HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-"${HF_HOME}/cache"}
 RUN_ROOT=${RUN_ROOT:-"${PROJECT_ROOT}/exp_logs/hybridep/${MODEL_ID}/${RUN_NAME}"}
 EXTRA_MOUNTS=${EXTRA_MOUNTS:-}
 NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-true}
+DRIVER_VENV=${DRIVER_VENV:-}
 
 case "${DISPATCHER_MODE}" in
   hybridep | recipe) ;;
@@ -104,6 +105,18 @@ case "${NRL_FORCE_REBUILD_VENVS}" in
     exit 2
     ;;
 esac
+
+if [[ -n "${DRIVER_VENV}" ]]; then
+  case "${DRIVER_VENV}" in
+    /lustre/* | /home/*) ;;
+    *)
+      printf 'DRIVER_VENV must be on shared /lustre or /home storage: %s\n' \
+        "${DRIVER_VENV}" >&2
+      exit 2
+      ;;
+  esac
+  mkdir -p "$(dirname -- "${DRIVER_VENV}")"
+fi
 
 if [[ ! "${DEEPEP_COMMIT}" =~ ^[0-9a-f]{40}$ ]]; then
   printf 'DEEPEP_COMMIT must be a full lowercase 40-character SHA.\n' >&2
@@ -200,7 +213,11 @@ BRIDGE_COMMIT=$(git -C 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge rev-pa
 MEGATRON_LM_COMMIT=$(git -C 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM rev-parse HEAD)
 CONTAINER_SHA256=$(sha256sum "${CONTAINER}" | cut -d' ' -f1)
 
-driver_args=(
+driver_args=()
+if [[ -n "${DRIVER_VENV}" ]]; then
+  driver_args=(env "UV_PROJECT_ENVIRONMENT=${DRIVER_VENV}")
+fi
+driver_args+=(
   uv run examples/run_grpo.py
   --config "${CONFIG_PATH}"
   "grpo.max_num_steps=${MAX_STEPS}"
@@ -296,6 +313,7 @@ metadata_path="${RUN_ROOT}/submission.env"
   printf 'nccl_nvls_enable=%q\n' "${NCCL_NVLS_ENABLE:-}"
   printf 'nrl_force_rebuild_venvs=%q\n' "${NRL_FORCE_REBUILD_VENVS}"
   printf 'extra_mounts=%q\n' "${EXTRA_MOUNTS}"
+  printf 'driver_venv=%q\n' "${DRIVER_VENV}"
   printf 'rl_commit=%q\n' "${RL_COMMIT}"
   printf 'bridge_commit=%q\n' "${BRIDGE_COMMIT}"
   printf 'megatron_lm_commit=%q\n' "${MEGATRON_LM_COMMIT}"
