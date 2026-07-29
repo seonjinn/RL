@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qwen3-30B-A3B partial CUDA Graph results</title>
+<style>
+body { background: #10141c; color: #e7edf7; font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 1180px; padding: 0 1rem; }
+h1, h2 { color: #9fd7ff; }
+section { background: #18212d; border: 1px solid #2b3a4c; border-radius: 8px; margin: 1rem 0; padding: 1rem; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border-bottom: 1px solid #2b3a4c; padding: .55rem; text-align: left; vertical-align: top; }
+th { color: #9fd7ff; }
+.good { color: #7fe1b9; }
+.bad { color: #ff9c9c; }
+.warn { color: #ffd479; }
+.table-wrap { overflow-x: auto; }
+code { color: #c9e6ff; }
+</style>
+</head>
+<body>
+<h1>Qwen3-30B-A3B partial CUDA Graph results</h1>
+<p>Updated: 2026-07-29 12:45 PDT. Ptyche GB200, 8 nodes × 4 GPUs, 20 GRPO steps.</p>
+
+<section>
+<h2>Conclusion</h2>
+<p class="good"><code>attn</code> completed 20/20 steps and improved E2E step time by 8.10% and E2E throughput by 8.78%.</p>
+<p class="bad"><code>moe_router+moe_preprocess</code> is not safe for this packed Qwen MoE workload. Replay failed on Step 5 because dynamic MoE output lengths did not match the static residual.</p>
+<p class="warn">Standard correctness signals do not show a sustained regression, but a large Step 6 logprob-error transient prevents a strict numerical-equivalence claim.</p>
+</section>
+
+<section>
+<h2>Provenance</h2>
+<div class="table-wrap"><table>
+<tr><th>NeMo-RL source</th><td><code>d3f0692617f9283ebd35f3bf814e0d8e250d4385</code></td></tr>
+<tr><th>Megatron-LM source</th><td><code>53f5161ce000b5320bc16cb260949c2e6808da83</code>, latest-main port of PR 5672 plus packed/Nano support</td></tr>
+<tr><th>Recipe</th><td><code>examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml</code></td></tr>
+<tr><th>Model snapshot</th><td><code>Qwen/Qwen3-30B-A3B@ad44e777bcd18fa416d9da3bd8f70d33ebb85d39</code></td></tr>
+<tr><th>Container</th><td><code>nemo_rl_nightly.sqsh</code>, ARM64 manifest <code>sha256:67ad116c…dba</code></td></tr>
+<tr><th>Graph contract</th><td>Transformer Engine partial graph, packed sequence enabled, max packed sequences 16, three optimizer-step warmups</td></tr>
+<tr><th>Metric window</th><td>Human steps 5–20 inclusive, n=16. Steps 1–3 warm up; capture and first replay occur in Step 4.</td></tr>
+</table></div>
+</section>
+
+<section>
+<h2>Job status</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Scope</th><th>Job</th><th>Result</th><th>Steps</th><th>Elapsed</th></tr></thead>
+<tbody>
+<tr><td>No CG</td><td>2469978</td><td class="good">COMPLETED 0:0</td><td>20/20</td><td>01:21:37</td></tr>
+<tr><td>attn</td><td>2469979</td><td class="good">COMPLETED 0:0</td><td>20/20</td><td>01:16:02</td></tr>
+<tr><td>moe_router+moe_preprocess</td><td>2469980</td><td class="bad">FAILED 1:0</td><td>4/20</td><td>00:35:45</td></tr>
+<tr><td>attn+moe_router+moe_preprocess</td><td>2467596</td><td class="bad">FAILED 1:0</td><td>4/20</td><td>00:37:43</td></tr>
+</tbody>
+</table></div>
+</section>
+
+<section>
+<h2>Performance: no CG vs attn</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Metric</th><th>No CG</th><th>attn</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td>E2E step time</td><td>172.576 s</td><td>158.595 s</td><td class="good">−8.10%</td></tr>
+<tr><td>Generation time</td><td>68.521 s</td><td>69.276 s</td><td class="bad">+1.10%</td></tr>
+<tr><td>Policy training time</td><td>78.396 s</td><td>63.131 s</td><td class="good">−19.47%</td></tr>
+<tr><td>Policy/reference logprob time</td><td>19.018 s</td><td>19.558 s</td><td class="bad">+2.84%</td></tr>
+<tr><td>E2E tokens/s/GPU</td><td>1,206.51</td><td>1,312.47</td><td class="good">+8.78%</td></tr>
+<tr><td>Generation tokens/s/GPU</td><td>6,056.92</td><td>5,987.60</td><td class="bad">−1.14%</td></tr>
+<tr><td>Policy training tokens/s/GPU</td><td>5,296.66</td><td>6,567.59</td><td class="good">+23.99%</td></tr>
+<tr><td>Policy/reference logprob tokens/s/GPU</td><td>21,860.53</td><td>21,334.30</td><td class="bad">−2.41%</td></tr>
+<tr><td>Training worker group tokens/s/GPU</td><td>4,262.24</td><td>5,016.43</td><td class="good">+17.69%</td></tr>
+</tbody>
+</table></div>
+</section>
+
+<section>
+<h2>Correctness and short-horizon accuracy</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Metric</th><th>No CG</th><th>attn</th><th>Interpretation</th></tr></thead>
+<tbody>
+<tr><td>Reward mean / final</td><td>0.531586 / 0.511719</td><td>0.532867 / 0.509766</td><td>No sustained regression</td></tr>
+<tr><td>Validation accuracy mean / final</td><td>0.544922 / 0.539062</td><td>0.570313 / 0.566406</td><td class="good">No observed 20-step accuracy loss</td></tr>
+<tr><td>Generation KL mean / final</td><td>0.001888 / 0.001915</td><td>0.001891 / 0.001920</td><td>Approximately 0.13% mean difference</td></tr>
+<tr><td>Sampling importance ratio mean</td><td>1.000003</td><td>0.999997</td><td>Near one in both runs</td></tr>
+<tr><td>Token mult-prob error median / final</td><td>1.022300 / 1.022232</td><td>1.022030 / 1.021831</td><td>Both pass the recipe's median and Step-10 gates</td></tr>
+<tr><td>Token mult-prob error Step 6</td><td>1,826.818</td><td>17,385.863</td><td class="warn">Transient exists in both; attn is 9.5× larger</td></tr>
+</tbody>
+</table></div>
+<p>Twenty stochastic GRPO steps are a smoke-level correctness check, not a convergence proof. A repeated seeded run and the Step 6 sample-level logprob plot are still required for strict equivalence.</p>
+</section>
+
+<section>
+<h2>Router failure</h2>
+<p>The first synchronous failure is in <code>TransformerLayer._te_cuda_graph_replay_impl → _forward_post_mlp → residual + out</code>. The static residual has sequence length 4096 while replayed MoE outputs vary by rank, including 8192, 820, and 798. The later NCCL watchdog <code>illegal memory access</code> is secondary fallout after ranks diverge.</p>
+</section>
+</body>
+</html>

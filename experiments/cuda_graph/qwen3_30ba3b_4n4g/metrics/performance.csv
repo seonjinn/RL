@@ -1,0 +1,19 @@
+window,scope,metric,unit,mean,median,stddev,n,delta_vs_nocg_pct
+human_steps_5_20,nocg,E2E step time,seconds,172.576147079,168.714691162,12.396858427,16,0.000000
+human_steps_5_20,attn,E2E step time,seconds,158.595113754,154.292945862,11.872016964,16,-8.101371
+human_steps_5_20,nocg,Generation time,seconds,68.521216393,68.377769470,1.354193796,16,0.000000
+human_steps_5_20,attn,Generation time,seconds,69.276453018,69.705783844,1.675028964,16,1.102194
+human_steps_5_20,nocg,Policy training time,seconds,78.395788670,77.617084503,4.529264933,16,0.000000
+human_steps_5_20,attn,Policy training time,seconds,63.130595446,62.440858841,2.970577663,16,-19.471956
+human_steps_5_20,nocg,Policy and reference logprob time,seconds,19.017569900,18.858428955,1.215262752,16,0.000000
+human_steps_5_20,attn,Policy and reference logprob time,seconds,19.558203220,18.776801109,1.977950601,16,2.842810
+human_steps_5_20,nocg,E2E throughput,tokens/sec/GPU,1206.508171082,1228.308349609,81.304860996,16,0.000000
+human_steps_5_20,attn,E2E throughput,tokens/sec/GPU,1312.471984863,1340.552124023,94.331235095,16,8.782685
+human_steps_5_20,nocg,Generation throughput,tokens/sec/GPU,6056.920013428,6053.880371094,286.682879514,16,0.000000
+human_steps_5_20,attn,Generation throughput,tokens/sec/GPU,5987.598541260,6071.956054688,302.389360233,16,-1.144500
+human_steps_5_20,nocg,Policy training throughput,tokens/sec/GPU,5296.663055420,5309.093017578,103.947243241,16,0.000000
+human_steps_5_20,attn,Policy training throughput,tokens/sec/GPU,6567.590148926,6580.512207031,36.407910182,16,23.994864
+human_steps_5_20,nocg,Policy and reference logprob throughput,tokens/sec/GPU,21860.527465820,22279.896484375,1023.473718332,16,0.000000
+human_steps_5_20,attn,Policy and reference logprob throughput,tokens/sec/GPU,21334.296020508,22259.014648438,1610.330365249,16,-2.407222
+human_steps_5_20,nocg,Training worker group throughput,tokens/sec/GPU,4262.243469238,4292.610595703,85.832585431,16,0.000000
+human_steps_5_20,attn,Training worker group throughput,tokens/sec/GPU,5016.425323486,5053.001220703,92.838934118,16,17.694481

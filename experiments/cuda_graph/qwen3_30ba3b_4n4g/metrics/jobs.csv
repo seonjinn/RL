@@ -1,0 +1,5 @@
+scope,job_id,state,exit_code,completed_steps,elapsed,partition,notes
+nocg,2469978,COMPLETED,0:0,20/20,01:21:37,36x2-a01r,No-CG sequence-packing parity baseline
+attn,2469979,COMPLETED,0:0,20/20,01:16:02,36x2-a01r,TE attention partial CUDA Graph
+moe_router+moe_preprocess,2469980,FAILED,1:0,4/20,00:35:45,36x2-a01r,Step 5 replay returned dynamic MoE tensor lengths incompatible with the static residual
+attn+moe_router+moe_preprocess,2467596,FAILED,1:0,4/20,00:37:43,backfill,Step 5 replay hit the same dynamic MoE output-shape contract violation

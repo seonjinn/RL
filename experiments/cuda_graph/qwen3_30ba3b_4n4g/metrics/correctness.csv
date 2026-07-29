@@ -1,0 +1,11 @@
+window,metric,nocg_mean,attn_mean,nocg_median,attn_median,nocg_final,attn_final,interpretation
+human_steps_5_20,train/reward,0.531585693,0.532867432,0.543212891,0.540283203,0.511718750,0.509765625,No sustained reward regression
+human_steps_5_20,train/loss,0.004369714,0.002582363,0.004218971,0.003133624,-0.005493912,0.006094577,Small stochastic values around zero
+human_steps_5_20,train/grad_norm,0.035534595,0.036403818,0.036228834,0.036981076,0.036156639,0.032905240,Comparable and finite
+human_steps_5_20,train/kl_penalty,0.001653639,0.001650819,0.001636876,0.001649129,0.001682861,0.001680860,Mean delta below 0.2 percent
+human_steps_5_20,train/gen_kl_error,0.001888414,0.001890783,0.001874116,0.001879304,0.001915221,0.001919623,Mean delta about 0.13 percent
+human_steps_5_20,train/js_divergence_error,0.000478545,0.000479379,0.000474967,0.000475739,0.000484435,0.000485968,Mean delta about 0.17 percent
+human_steps_5_20,train/sampling_importance_ratio,1.000003017,0.999997128,1.000007451,0.999996454,0.999977946,0.999989212,Near one in both runs
+human_steps_5_20,train/token_mult_prob_error,118.722620,1090.691410,1.022300,1.022030,1.022232,1.021831,Median and final pass but Step 6 transient is much larger with attn
+human_steps_5_20,train/policy_kl_error,117.703289,1089.672100,0.002583670,0.002600490,0.002583477,0.002210221,Mean is dominated by the same Step 6 transient
+validation_steps_10_20,validation/accuracy,0.544921875,0.570312500,0.544921875,0.570312500,0.539062500,0.566406250,No short-horizon accuracy regression observed
