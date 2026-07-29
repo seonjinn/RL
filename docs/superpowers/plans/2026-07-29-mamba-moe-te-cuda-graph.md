@@ -306,6 +306,8 @@ MAMBA_PACKED_SEQ_PARAMS_CUDA_GRAPH_CP_TENSOR_FIELDS = (
   input.
 - Construct the consumed field list from the two constants.
 - Validate every non-`None` dynamic field with `isinstance(value, Tensor)`.
+- Require `seq_idx` to be a Tensor whenever packed Mamba parameters are
+  present, and require its prefixed key during reconstruction.
 - Store only reconstruction metadata that Mamba consumes and omit
   `total_tokens`.
 - Never include KV fields.
@@ -332,8 +334,10 @@ Add tests that assert:
   callable.
 - Whole-layer Mamba capture passes the same sample and does not add attention
   KV fields.
-- A requested explicit `mamba` scope that discovers no `MambaLayer` raises
-  instead of silently using eager execution.
+- A requested explicit `mamba` scope that discovers no `MambaLayer` on any
+  pipeline stage raises consistently on every PP rank instead of silently
+  using eager execution. A rank with no local Mamba layer remains valid when
+  another stage in its pipeline group contains one.
 
 Use signatures containing exact `shape`, `dtype`, `device`, `layout`, and `stride`.
 
