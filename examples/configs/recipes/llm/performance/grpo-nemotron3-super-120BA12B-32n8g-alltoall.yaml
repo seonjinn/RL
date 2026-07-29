@@ -1,6 +1,5 @@
 defaults: ../../../grpo_math_1B.yaml
 grpo:
-  num_prompts_per_step: 32
   num_generations_per_prompt: 8
 loss_fn:
   force_on_policy_ratio: true
@@ -30,17 +29,11 @@ policy:
     moe_router_bias_update_rate: 0.001
     moe_router_enable_expert_bias: true
     defer_fp32_logits: true
-    # MTP — disabled
-    mtp_num_layers: 0
   generation:
     vllm_cfg:
       tensor_parallel_size: 8
       gpu_memory_utilization: 0.7
       async_engine: true
-    # vllm_kwargs:
-    #   # vLLM 0.20's default FlashInfer TRTLLM MoE backend isn't refit-compatible,
-    #   # change to triton to keep same behavior as vLLM 0.17.
-    #   moe_backend: triton
 logger:
   wandb_enabled: true
   tensorboard_enabled: true
