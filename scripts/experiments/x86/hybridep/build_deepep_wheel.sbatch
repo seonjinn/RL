@@ -26,6 +26,9 @@ set -euo pipefail
 : "${OUTPUT_DIR:?OUTPUT_DIR is required}"
 : "${GPU_ARCH:?GPU_ARCH is required}"
 : "${DEEPEP_COMMIT:?DEEPEP_COMMIT is required}"
+: "${DEEPEP_VARIANT:?DEEPEP_VARIANT is required}"
+: "${NCCL_WHEEL:?NCCL_WHEEL is required}"
+: "${NCCL_WHEEL_SHA256:?NCCL_WHEEL_SHA256 is required}"
 : "${SLURM_JOB_ID:?SLURM_JOB_ID is required}"
 if [[ -z "${HYBRID_EP_SCRIPT_PATH:-}" ]]; then
   : "${SLURM_SUBMIT_DIR:?HYBRID_EP_SCRIPT_PATH or SLURM_SUBMIT_DIR is required}"
@@ -34,6 +37,16 @@ fi
 : "${HYBRID_EP_SCRIPT_PATH:?HYBRID_EP_SCRIPT_PATH is required}"
 
 [[ "${DEEPEP_COMMIT}" =~ ^[0-9a-f]{40}$ ]]
+[[ "${NCCL_WHEEL_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+case "${DEEPEP_VARIANT}" in
+  deepep) DEEPEP_BRANCH=main ;;
+  hybridep) DEEPEP_BRANCH=hybrid-ep ;;
+  *)
+    printf 'DEEPEP_VARIANT must be deepep or hybridep: %s\n' \
+      "${DEEPEP_VARIANT}" >&2
+    exit 2
+    ;;
+esac
 case "${GPU_ARCH}" in
   9.0 | 10.0) ;;
   *)
@@ -43,20 +56,25 @@ case "${GPU_ARCH}" in
     ;;
 esac
 
-HYBRID_EP_TRANSPORT=${HYBRID_EP_TRANSPORT:-doca}
-case "${HYBRID_EP_TRANSPORT}" in
-  doca | nixl) ;;
-  *)
-    printf 'HYBRID_EP_TRANSPORT must be doca or nixl: %s\n' \
-      "${HYBRID_EP_TRANSPORT}" >&2
-    exit 2
-    ;;
-esac
+if [[ "${DEEPEP_VARIANT}" == "hybridep" ]]; then
+  HYBRID_EP_TRANSPORT=${HYBRID_EP_TRANSPORT:-doca}
+  case "${HYBRID_EP_TRANSPORT}" in
+    doca | nixl) ;;
+    *)
+      printf 'HYBRID_EP_TRANSPORT must be doca or nixl: %s\n' \
+        "${HYBRID_EP_TRANSPORT}" >&2
+      exit 2
+      ;;
+  esac
+else
+  unset HYBRID_EP_MULTINODE HYBRID_EP_TRANSPORT USE_NIXL
+fi
 
 PYTHON_BIN=${PYTHON_BIN:-/opt/nemo_rl_venv/bin/python}
 DEEPEP_REPO_URL=${DEEPEP_REPO_URL:-https://github.com/deepseek-ai/DeepEP.git}
 SCRIPT_PATH=$(readlink -f -- "${HYBRID_EP_SCRIPT_PATH}")
 CONTAINER=$(readlink -f -- "${CONTAINER}")
+NCCL_WHEEL=$(readlink -f -- "${NCCL_WHEEL}")
 
 if [[ ! -f "${SCRIPT_PATH}" ]]; then
   printf 'Original build script does not exist: %s\n' \
@@ -64,7 +82,7 @@ if [[ ! -f "${SCRIPT_PATH}" ]]; then
   exit 2
 fi
 
-for shared_path in "${SCRIPT_PATH}" "${CONTAINER}" "${OUTPUT_DIR}"; do
+for shared_path in "${SCRIPT_PATH}" "${CONTAINER}" "${OUTPUT_DIR}" "${NCCL_WHEEL}"; do
   case "${shared_path}" in
     /lustre/*) ;;
     *)
@@ -76,6 +94,16 @@ done
 
 if [[ ! -f "${CONTAINER}" ]]; then
   printf 'Container does not exist: %s\n' "${CONTAINER}" >&2
+  exit 2
+fi
+if [[ ! -f "${NCCL_WHEEL}" ]]; then
+  printf 'NCCL wheel does not exist: %s\n' "${NCCL_WHEEL}" >&2
+  exit 2
+fi
+actual_nccl_wheel_sha256=$(sha256sum "${NCCL_WHEEL}" | cut -d' ' -f1)
+if [[ "${actual_nccl_wheel_sha256}" != "${NCCL_WHEEL_SHA256}" ]]; then
+  printf 'NCCL wheel checksum mismatch: expected %s, got %s\n' \
+    "${NCCL_WHEEL_SHA256}" "${actual_nccl_wheel_sha256}" >&2
   exit 2
 fi
 
@@ -116,7 +144,13 @@ export OUTPUT_DIR
 export BUILD_ROOT
 export GPU_ARCH
 export DEEPEP_COMMIT
-export HYBRID_EP_TRANSPORT
+export DEEPEP_VARIANT
+export DEEPEP_BRANCH
+export NCCL_WHEEL
+export NCCL_WHEEL_SHA256
+if [[ "${DEEPEP_VARIANT}" == "hybridep" ]]; then
+  export HYBRID_EP_TRANSPORT
+fi
 export PYTHON_BIN
 export DEEPEP_REPO_URL
 export SCRIPT_PATH
@@ -169,15 +203,17 @@ if ! command -v uv >/dev/null; then
   exit 2
 fi
 
-export HYBRID_EP_MULTINODE=1
 export TORCH_CUDA_ARCH_LIST="${GPU_ARCH}"
-if [[ "${HYBRID_EP_TRANSPORT}" == "nixl" ]]; then
-  : "${NIXL_HOME:?NIXL_HOME is required for NIXL builds}"
-  : "${UCX_HOME:?UCX_HOME is required for NIXL builds}"
-  export USE_NIXL=1
-else
-  unset USE_NIXL
-  export RDMA_CORE_HOME=${RDMA_CORE_HOME:-/usr}
+if [[ "${DEEPEP_VARIANT}" == "hybridep" ]]; then
+  export HYBRID_EP_MULTINODE=1
+  if [[ "${HYBRID_EP_TRANSPORT}" == "nixl" ]]; then
+    : "${NIXL_HOME:?NIXL_HOME is required for NIXL builds}"
+    : "${UCX_HOME:?UCX_HOME is required for NIXL builds}"
+    export USE_NIXL=1
+  else
+    unset USE_NIXL
+    export RDMA_CORE_HOME=${RDMA_CORE_HOME:-/usr}
+  fi
 fi
 
 gpu_capability=$(
@@ -192,13 +228,13 @@ fi
 
 short_commit=${DEEPEP_COMMIT:0:12}
 arch_tag=${GPU_ARCH//./}
-artifact_dir="${OUTPUT_DIR}/${DEEPEP_COMMIT}-sm${arch_tag}-${SLURM_JOB_ID}"
+artifact_dir="${OUTPUT_DIR}/${DEEPEP_VARIANT}-${DEEPEP_COMMIT}-sm${arch_tag}-${SLURM_JOB_ID}"
 if [[ -e "${artifact_dir}" ]]; then
   printf 'Refusing to overwrite immutable artifact directory: %s\n' \
     "${artifact_dir}" >&2
   exit 2
 fi
-artifact_stage="${OUTPUT_DIR}/.${DEEPEP_COMMIT}-sm${arch_tag}-${SLURM_JOB_ID}.staging"
+artifact_stage="${OUTPUT_DIR}/.${DEEPEP_VARIANT}-${DEEPEP_COMMIT}-sm${arch_tag}-${SLURM_JOB_ID}.staging"
 if [[ -e "${artifact_stage}" ]]; then
   printf 'Refusing to overwrite artifact staging directory: %s\n' \
     "${artifact_stage}" >&2
@@ -209,7 +245,7 @@ build_dir=$(mktemp -d \
   "${BUILD_ROOT}/deepep-${short_commit}-sm${arch_tag}-${SLURM_JOB_ID}.XXXXXX")
 source_dir="${build_dir}/DeepEP"
 wheel_stage="${build_dir}/wheel"
-import_overlay="${build_dir}/import-overlay"
+build_overlay="${build_dir}/build-overlay"
 build_succeeded=0
 
 cleanup() {
@@ -240,7 +276,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-git clone --filter=blob:none --recurse-submodules --branch hybrid-ep \
+git clone --filter=blob:none --recurse-submodules --branch "${DEEPEP_BRANCH}" \
   "${DEEPEP_REPO_URL}" "${source_dir}"
 git -C "${source_dir}" checkout --detach "${DEEPEP_COMMIT}"
 git -C "${source_dir}" submodule update --init --recursive
@@ -250,9 +286,47 @@ if [[ "${actual_commit}" != "${DEEPEP_COMMIT}" ]]; then
     "${DEEPEP_COMMIT}" "${actual_commit}" >&2
   exit 2
 fi
+if ! git -C "${source_dir}" merge-base --is-ancestor "${DEEPEP_COMMIT}" "origin/${DEEPEP_BRANCH}"; then
+  printf 'DeepEP commit %s is not on branch %s.\n' \
+    "${DEEPEP_COMMIT}" "${DEEPEP_BRANCH}" >&2
+  exit 2
+fi
 
-mkdir -p "${wheel_stage}" "${import_overlay}"
+nccl_version=$("${PYTHON_BIN}" - "${NCCL_WHEEL}" <<'PY'
+import sys
+import zipfile
+
+wheel_path = sys.argv[1]
+with zipfile.ZipFile(wheel_path) as wheel:
+    metadata_paths = [
+        path for path in wheel.namelist() if path.endswith(".dist-info/METADATA")
+    ]
+    if len(metadata_paths) != 1:
+        raise SystemExit(f"expected one NCCL metadata file, found {len(metadata_paths)}")
+    metadata = wheel.read(metadata_paths[0]).decode("utf-8")
+
+fields = {
+    line.split(": ", maxsplit=1)[0]: line.split(": ", maxsplit=1)[1]
+    for line in metadata.splitlines()
+    if ": " in line
+}
+if fields.get("Name") != "nvidia-nccl-cu13" or not fields.get("Version"):
+    raise SystemExit(
+        f"unexpected NCCL wheel metadata: Name={fields.get('Name')!r}, "
+        f"Version={fields.get('Version')!r}"
+    )
+print(fields["Version"])
+PY
+)
+
+mkdir -p "${wheel_stage}" "${build_overlay}"
 unset UV_CONFIG_FILE
+if [[ "${DEEPEP_VARIANT}" == "deepep" ]]; then
+  UV_NO_CONFIG=1 uv pip install --python "${PYTHON_BIN}" --target "${build_overlay}" --reinstall --no-deps --no-index "${NCCL_WHEEL}"
+  export PYTHONPATH="${build_overlay}:${PYTHONPATH:-}"
+  export LD_LIBRARY_PATH="${build_overlay}/nvidia/nccl/lib:${LD_LIBRARY_PATH:-}"
+  export CPLUS_INCLUDE_PATH="${build_overlay}/nvidia/nccl/include:/usr/local/cuda/include/cccl"
+fi
 UV_NO_CONFIG=1 uv build --wheel --no-build-isolation \
   --python "${PYTHON_BIN}" \
   --out-dir "${wheel_stage}" \
@@ -267,13 +341,18 @@ built_wheel=${built_wheels[0]}
 
 UV_NO_CONFIG=1 uv pip install \
   --python "${PYTHON_BIN}" \
-  --target "${import_overlay}" \
+  --target "${build_overlay}" \
   --reinstall \
   --no-deps \
   --no-index \
   "${built_wheel}"
-PYTHONPATH="${import_overlay}" "${PYTHON_BIN}" -c \
-  'import deep_ep, deep_ep_cpp, hybrid_ep_cpp; print(deep_ep.__file__); print(deep_ep_cpp.__file__); print(hybrid_ep_cpp.__file__)'
+if [[ "${DEEPEP_VARIANT}" == "deepep" ]]; then
+  PYTHONPATH="${build_overlay}" "${PYTHON_BIN}" -c \
+    'import deep_ep._C; from deep_ep import Buffer, ElasticBuffer, EventOverlap, EventHandle; print(deep_ep._C.__file__); print(Buffer, ElasticBuffer, EventOverlap, EventHandle)'
+else
+  PYTHONPATH="${build_overlay}" "${PYTHON_BIN}" -c \
+    'import deep_ep_cpp, hybrid_ep_cpp; from deep_ep import Buffer, HybridEPBuffer; print(deep_ep_cpp.__file__); print(hybrid_ep_cpp.__file__); print(Buffer, HybridEPBuffer)'
+fi
 
 mkdir "${artifact_stage}"
 final_wheel="${artifact_dir}/$(basename "${built_wheel}")"
@@ -289,11 +368,18 @@ printf '%s  %s\n' "${wheel_sha256}" "$(basename "${staged_wheel}")" \
 
 metadata_path="${artifact_stage}/metadata.env"
 {
+  printf 'deepep_variant=%q\n' "${DEEPEP_VARIANT}"
+  printf 'deepep_branch=%q\n' "${DEEPEP_BRANCH}"
   printf 'deepep_commit=%q\n' "${DEEPEP_COMMIT}"
   printf 'deepep_repo=%q\n' "${DEEPEP_REPO_URL}"
+  printf 'deepep_wheel_sha256=%q\n' "${wheel_sha256}"
+  printf 'nccl_version=%q\n' "${nccl_version}"
+  printf 'nccl_wheel_sha256=%q\n' "${NCCL_WHEEL_SHA256}"
   printf 'gpu_arch=%q\n' "${GPU_ARCH}"
-  printf 'hybrid_ep_multinode=1\n'
-  printf 'hybrid_ep_transport=%q\n' "${HYBRID_EP_TRANSPORT}"
+  if [[ "${DEEPEP_VARIANT}" == "hybridep" ]]; then
+    printf 'hybrid_ep_multinode=1\n'
+    printf 'hybrid_ep_transport=%q\n' "${HYBRID_EP_TRANSPORT}"
+  fi
   printf 'container=%q\n' "${CONTAINER}"
   printf 'container_sha256=%q\n' "${CONTAINER_SHA256}"
   printf 'python_bin=%q\n' "${PYTHON_BIN}"
@@ -305,5 +391,5 @@ metadata_path="${artifact_stage}/metadata.env"
 
 mv "${artifact_stage}" "${artifact_dir}"
 build_succeeded=1
-printf 'Built immutable HybridEP wheel: %s\nMetadata: %s\n' \
-  "${final_wheel}" "${artifact_dir}/metadata.env"
+printf 'Built immutable %s wheel: %s\nMetadata: %s\n' \
+  "${DEEPEP_VARIANT}" "${final_wheel}" "${artifact_dir}/metadata.env"

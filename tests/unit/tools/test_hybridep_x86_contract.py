@@ -632,7 +632,29 @@ def test_launcher_rejects_an_invalid_uv_lock_timeout() -> None:
     assert "UV_LOCK_TIMEOUT must be a positive integer number of seconds." in launcher
 
 
-def test_deepep_setup_probe_uses_the_ray_runtime_python() -> None:
+@pytest.mark.parametrize(
+    ("deepep_variant", "required_probe_imports"),
+    (
+        (
+            "deepep",
+            (
+                "import deep_ep._C",
+                "from deep_ep import Buffer, ElasticBuffer, EventOverlap, EventHandle",
+            ),
+        ),
+        (
+            "hybridep",
+            (
+                "import deep_ep_cpp, hybrid_ep_cpp",
+                "from deep_ep import Buffer, HybridEPBuffer",
+            ),
+        ),
+    ),
+)
+def test_deepep_setup_probe_uses_the_ray_runtime_python(
+    deepep_variant: str, required_probe_imports: tuple[str, ...]
+) -> None:
+    """Removing a variant-specific import or the matched NCCL wheel breaks Ray setup."""
     project_root = Path(__file__).resolve().parents[3]
     renderer = (
         project_root
@@ -644,9 +666,12 @@ def test_deepep_setup_probe_uses_the_ray_runtime_python() -> None:
     )
     env = {
         **os.environ,
-        "DEEPEP_OVERLAY": "/tmp/deepep-overlay",
+        "DEEPEP_OVERLAY": "/tmp/nemo-rl-deepep-render-contract",
         "DEEPEP_WHEEL": "/lustre/deep_ep.whl",
         "DEEPEP_WHEEL_SHA256": "a" * 64,
+        "DEEPEP_VARIANT": deepep_variant,
+        "NCCL_WHEEL": "/lustre/nvidia_nccl_cu13.whl",
+        "NCCL_WHEEL_SHA256": "b" * 64,
         "RAY_VENV": "/lustre/driver-venv",
     }
 
@@ -663,9 +688,276 @@ def test_deepep_setup_probe_uses_the_ray_runtime_python() -> None:
         'PYTHONPATH="${overlay}" "${runtime_python}" -c '
         '"import importlib.metadata as md, os;'
     ) in result.stdout
+    assert (
+        'UV_NO_CONFIG=1 uv pip install --python "${runtime_python}" '
+        '--target "${overlay}" --reinstall --no-deps --no-index '
+        '"${nccl_wheel}" "${deepep_wheel}"'
+    ) in result.stdout
+    assert 'actual_nccl_wheel_sha256=$(sha256sum "${nccl_wheel}"' in result.stdout
+    assert 'actual_deepep_wheel_sha256=$(sha256sum "${deepep_wheel}"' in result.stdout
+    assert all(marker in result.stdout for marker in (
+        "DEEPEP_RUNTIME_VARIANT",
+        "DEEPEP_RUNTIME_VERSION",
+        "DEEPEP_RUNTIME_PATHS",
+        "DEEPEP_RUNTIME_NCCL",
+    ))
+    assert all(required_import in result.stdout for required_import in required_probe_imports)
+
+
+@pytest.mark.parametrize(
+    ("deepep_variant", "overlay", "expected_error"),
+    (
+        (
+            "unsupported",
+            "/tmp/nemo-rl-deepep-invalid-variant",
+            "DEEPEP_VARIANT must be deepep or hybridep",
+        ),
+        (
+            "deepep",
+            "/tmp/nemo-rl-deepep-render-contract/../outside",
+            "DEEPEP_OVERLAY must be an immediate child of /tmp",
+        ),
+    ),
+)
+def test_deepep_setup_renderer_rejects_unsafe_inputs_before_emitting_a_command(
+    deepep_variant: str, overlay: str, expected_error: str
+) -> None:
+    """Invalid variants and traversing overlays must not produce runnable setup."""
+    project_root = Path(__file__).resolve().parents[3]
+    renderer = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "oci-hsg"
+        / "hybridep"
+        / "render_deepep_setup_command.sh"
+    )
+
+    result = subprocess.run(
+        ["bash", str(renderer)],
+        check=False,
+        capture_output=True,
+        env={
+            **os.environ,
+            "DEEPEP_OVERLAY": overlay,
+            "DEEPEP_WHEEL": "/lustre/deep_ep.whl",
+            "DEEPEP_WHEEL_SHA256": "a" * 64,
+            "DEEPEP_VARIANT": deepep_variant,
+            "NCCL_WHEEL": "/lustre/nvidia_nccl_cu13.whl",
+            "NCCL_WHEEL_SHA256": "b" * 64,
+        },
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert expected_error in result.stderr
+    assert not result.stdout
+
+
+@pytest.mark.parametrize(
+    ("wheel_variable", "traversing_path", "expected_error"),
+    (
+        (
+            "DEEPEP_WHEEL",
+            "/lustre/../tmp/evil-deepep.whl",
+            "DEEPEP_WHEEL must be under /lustre",
+        ),
+        (
+            "NCCL_WHEEL",
+            "/lustre/../tmp/evil-nccl.whl",
+            "NCCL_WHEEL must be under /lustre",
+        ),
+    ),
+)
+def test_deepep_setup_renderer_rejects_wheel_paths_that_escape_lustre(
+    wheel_variable: str, traversing_path: str, expected_error: str
+) -> None:
+    """A wheel path resolving outside /lustre must not produce setup code."""
+    project_root = Path(__file__).resolve().parents[3]
+    renderer = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "oci-hsg"
+        / "hybridep"
+        / "render_deepep_setup_command.sh"
+    )
+    env = {
+        **os.environ,
+        "DEEPEP_OVERLAY": "/tmp/nemo-rl-deepep-wheel-contract",
+        "DEEPEP_WHEEL": "/lustre/deep_ep.whl",
+        "DEEPEP_WHEEL_SHA256": "a" * 64,
+        "DEEPEP_VARIANT": "deepep",
+        "NCCL_WHEEL": "/lustre/nvidia_nccl_cu13.whl",
+        "NCCL_WHEEL_SHA256": "b" * 64,
+    }
+    env[wheel_variable] = traversing_path
+
+    result = subprocess.run(
+        ["bash", str(renderer)],
+        check=False,
+        capture_output=True,
+        env=env,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert expected_error in result.stderr
+    assert not result.stdout
+
+
+def test_deepep_setup_renderer_rejects_a_symlinked_overlay(tmp_path: Path) -> None:
+    """A final overlay symlink must not be passed to the generated rm command."""
+    project_root = Path(__file__).resolve().parents[3]
+    renderer = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "oci-hsg"
+        / "hybridep"
+        / "render_deepep_setup_command.sh"
+    )
+    overlay = Path("/tmp") / f"nemo-rl-deepep-symlink-{tmp_path.name}"
+    overlay.symlink_to(tmp_path)
+    try:
+        result = subprocess.run(
+            ["bash", str(renderer)],
+            check=False,
+            capture_output=True,
+            env={
+                **os.environ,
+                "DEEPEP_OVERLAY": str(overlay),
+                "DEEPEP_WHEEL": "/lustre/deep_ep.whl",
+                "DEEPEP_WHEEL_SHA256": "a" * 64,
+                "DEEPEP_VARIANT": "deepep",
+                "NCCL_WHEEL": "/lustre/nvidia_nccl_cu13.whl",
+                "NCCL_WHEEL_SHA256": "b" * 64,
+            },
+            text=True,
+        )
+    finally:
+        overlay.unlink(missing_ok=True)
+
+    assert result.returncode == 2
+    assert "DEEPEP_OVERLAY must not be a symlink" in result.stderr
+    assert not result.stdout
+
+
+def test_x86_wheel_builder_rejects_an_invalid_variant_before_building() -> None:
+    """An unsupported arm must fail before the builder touches artifacts or Slurm."""
+    project_root = Path(__file__).resolve().parents[3]
+    builder = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "x86"
+        / "hybridep"
+        / "build_deepep_wheel.sbatch"
+    )
+
+    result = subprocess.run(
+        ["bash", str(builder)],
+        check=False,
+        capture_output=True,
+        env={
+            **os.environ,
+            "CONTAINER": "/lustre/container.sqsh",
+            "OUTPUT_DIR": "/lustre/wheels",
+            "GPU_ARCH": "9.0",
+            "DEEPEP_COMMIT": "a" * 40,
+            "DEEPEP_VARIANT": "unsupported",
+            "NCCL_WHEEL": "/lustre/nccl.whl",
+            "NCCL_WHEEL_SHA256": "b" * 64,
+            "SLURM_JOB_ID": "1234",
+            "HYBRID_EP_SCRIPT_PATH": str(builder),
+        },
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "DEEPEP_VARIANT must be deepep or hybridep" in result.stderr
+
+
+def test_x86_wheel_builder_rejects_a_commit_outside_the_selected_branch(
+    tmp_path: Path,
+) -> None:
+    """A detached SHA outside the selected branch must stop the build before packaging."""
+    project_root = Path(__file__).resolve().parents[3]
+    builder = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "x86"
+        / "hybridep"
+        / "build_deepep_wheel.sbatch"
+    )
+    source = builder.read_text()
+    container_stage = source[source.index('if [[ ! -x "${PYTHON_BIN}" ]]') :]
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    git_log = tmp_path / "git.log"
+    _write_fake_command(
+        fake_bin / "git",
+        """#!/bin/bash
+printf '%s\\n' "$*" >> "$FAKE_GIT_LOG"
+if [[ "$1" == "clone" ]]; then
+  mkdir -p "${!#}"
+  exit 0
+fi
+if [[ "$3" == "rev-parse" ]]; then
+  printf '%s\\n' "$DEEPEP_COMMIT"
+  exit 0
+fi
+if [[ "$3" == "merge-base" ]]; then
+  exit 1
+fi
+""",
+    )
+    _write_fake_command(fake_bin / "uv", "#!/bin/sh\nexit 0\n")
+    python_bin = fake_bin / "python"
+    _write_fake_command(
+        python_bin,
+        """#!/bin/sh
+if [ "$1" = "-c" ]; then printf '%s\\n' 9.0; fi
+""",
+    )
+    build_root = tmp_path / "build-root"
+    build_root.mkdir()
+    commit = "a" * 40
+
+    result = subprocess.run(
+        ["bash", "-c", container_stage],
+        check=False,
+        capture_output=True,
+        cwd=project_root,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "FAKE_GIT_LOG": str(git_log),
+            "PYTHON_BIN": str(python_bin),
+            "DEEPEP_COMMIT": commit,
+            "DEEPEP_VARIANT": "deepep",
+            "DEEPEP_BRANCH": "main",
+            "DEEPEP_REPO_URL": "https://example.invalid/DeepEP.git",
+            "NCCL_WHEEL": str(tmp_path / "nccl.whl"),
+            "GPU_ARCH": "9.0",
+            "SLURM_JOB_ID": "1234",
+            "BUILD_ROOT": str(build_root),
+            "BUILD_ROOT_EPHEMERAL": "0",
+            "OUTPUT_DIR": str(tmp_path / "output"),
+        },
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert f"DeepEP commit {commit} is not on branch main." in result.stderr
+    git_calls = git_log.read_text()
+    assert "clone --filter=blob:none --recurse-submodules --branch main" in git_calls
+    assert f"merge-base --is-ancestor {commit} origin/main" in git_calls
 
 
 def test_x86_wheel_build_job_is_arch_specific_and_reproducible() -> None:
+    """Wrong branch selection, API probe, or NCCL build overlay rejects an arm."""
     project_root = Path(__file__).resolve().parents[3]
     build_script = (
         project_root
@@ -682,23 +974,33 @@ def test_x86_wheel_build_job_is_arch_specific_and_reproducible() -> None:
         ': "${OUTPUT_DIR:?OUTPUT_DIR is required}"',
         ': "${GPU_ARCH:?GPU_ARCH is required}"',
         ': "${DEEPEP_COMMIT:?DEEPEP_COMMIT is required}"',
+        ': "${DEEPEP_VARIANT:?DEEPEP_VARIANT is required}"',
+        ': "${NCCL_WHEEL:?NCCL_WHEEL is required}"',
+        ': "${NCCL_WHEEL_SHA256:?NCCL_WHEEL_SHA256 is required}"',
         ': "${HYBRID_EP_SCRIPT_PATH:?HYBRID_EP_SCRIPT_PATH is required}"',
         "LOCAL_SCRATCH_ROOT=${SLURM_TMPDIR:-${TMPDIR:-/tmp}}",
         'BUILD_ROOT=$(mktemp -d "${LOCAL_SCRATCH_ROOT}/nemo-rl-hybridep-${SLURM_JOB_ID}.XXXXXX")',
         '[[ "${DEEPEP_COMMIT}" =~ ^[0-9a-f]{40}$ ]]',
         "9.0 | 10.0",
-        "export HYBRID_EP_MULTINODE=1",
         'export TORCH_CUDA_ARCH_LIST="${GPU_ARCH}"',
         'SCRIPT_PATH=$(readlink -f -- "${HYBRID_EP_SCRIPT_PATH}")',
         'srun --container-image="${CONTAINER}"',
         "--no-container-mount-home",
         'container_mounts="${container_mounts},${BUILD_ROOT}:${BUILD_ROOT}"',
         'rmdir -- "${BUILD_ROOT}"',
-        "git clone --filter=blob:none --recurse-submodules",
+        'git clone --filter=blob:none --recurse-submodules --branch "${DEEPEP_BRANCH}"',
         'git -C "${source_dir}" checkout --detach "${DEEPEP_COMMIT}"',
         'git -C "${source_dir}" submodule update --init --recursive',
+        'git -C "${source_dir}" merge-base --is-ancestor "${DEEPEP_COMMIT}" "origin/${DEEPEP_BRANCH}"',
         "uv build --wheel --no-build-isolation",
-        "import deep_ep, deep_ep_cpp, hybrid_ep_cpp",
+        'UV_NO_CONFIG=1 uv pip install --python "${PYTHON_BIN}" --target "${build_overlay}"',
+        'export PYTHONPATH="${build_overlay}:${PYTHONPATH:-}"',
+        'export LD_LIBRARY_PATH="${build_overlay}/nvidia/nccl/lib:${LD_LIBRARY_PATH:-}"',
+        'export CPLUS_INCLUDE_PATH="${build_overlay}/nvidia/nccl/include:/usr/local/cuda/include/cccl"',
+        "import deep_ep._C",
+        "from deep_ep import Buffer, ElasticBuffer, EventOverlap, EventHandle",
+        "import deep_ep_cpp, hybrid_ep_cpp",
+        "from deep_ep import Buffer, HybridEPBuffer",
         'sha256sum "${staged_wheel}"',
         "container_sha256=",
         "SLURM_JOB_ID",
@@ -708,6 +1010,17 @@ def test_x86_wheel_build_job_is_arch_specific_and_reproducible() -> None:
     missing = sorted(snippet for snippet in required_snippets if snippet not in source)
 
     assert not missing
+    assert (
+        'case "${DEEPEP_VARIANT}" in\n'
+        '  deepep) DEEPEP_BRANCH=main ;;\n'
+        '  hybridep) DEEPEP_BRANCH=hybrid-ep ;;'
+    ) in source
+    assert "DEEPEP_VARIANT must be deepep or hybridep" in source
+    assert "deepep_variant=%q" in source
+    assert "deepep_branch=%q" in source
+    assert "deepep_wheel_sha256=%q" in source
+    assert "nccl_version=%q" in source
+    assert "nccl_wheel_sha256=%q" in source
 
 
 def test_x86_driver_venv_job_prepares_the_shared_ray_runtime() -> None:
