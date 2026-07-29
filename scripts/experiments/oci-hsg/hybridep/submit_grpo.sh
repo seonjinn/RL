@@ -91,6 +91,9 @@ NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-true}
 DRIVER_VENV=${DRIVER_VENV:-}
 RAY_VENV=${RAY_VENV:-}
 UV_LOCK_TIMEOUT=${UV_LOCK_TIMEOUT:-1800}
+MODEL_TOKENIZER_OVERRIDE_ENV=${MODEL_TOKENIZER_OVERRIDE_ENV:-}
+MODEL_NAME_OVERRIDE=
+TOKENIZER_NAME_OVERRIDE=
 
 case "${DISPATCHER_MODE}" in
   hybridep | recipe) ;;
@@ -111,6 +114,25 @@ esac
 if [[ ! "${UV_LOCK_TIMEOUT}" =~ ^[1-9][0-9]*$ ]]; then
   printf 'UV_LOCK_TIMEOUT must be a positive integer number of seconds.\n' >&2
   exit 2
+fi
+
+if [[ -n "${MODEL_TOKENIZER_OVERRIDE_ENV}" ]]; then
+  if [[ ! "${MODEL_TOKENIZER_OVERRIDE_ENV}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    printf 'MODEL_TOKENIZER_OVERRIDE_ENV must name an environment variable.\n' >&2
+    exit 2
+  fi
+  MODEL_NAME_OVERRIDE=${!MODEL_TOKENIZER_OVERRIDE_ENV:-}
+  if [[ -z "${MODEL_NAME_OVERRIDE}" ]]; then
+    printf '%s must be set for model profile %s.\n' \
+      "${MODEL_TOKENIZER_OVERRIDE_ENV}" "${MODEL_ID}" >&2
+    exit 2
+  fi
+  if [[ ! -d "${MODEL_NAME_OVERRIDE}" ]]; then
+    printf '%s must point to an existing checkpoint directory: %s\n' \
+      "${MODEL_TOKENIZER_OVERRIDE_ENV}" "${MODEL_NAME_OVERRIDE}" >&2
+    exit 2
+  fi
+  TOKENIZER_NAME_OVERRIDE=${MODEL_NAME_OVERRIDE}
 fi
 
 if [[ -n "${DRIVER_VENV}" ]]; then
@@ -252,6 +274,12 @@ driver_args+=(
   checkpointing.enabled=false
   "++deepep_override=${DEEPEP_COMMIT}"
 )
+if [[ -n "${MODEL_NAME_OVERRIDE}" ]]; then
+  driver_args+=(
+    "policy.model_name=${MODEL_NAME_OVERRIDE}"
+    "policy.tokenizer.name=${TOKENIZER_NAME_OVERRIDE}"
+  )
+fi
 if [[ "${DISPATCHER_MODE}" == "hybridep" ]]; then
   driver_args+=(
     policy.megatron_cfg.moe_token_dispatcher_type=flex
@@ -326,6 +354,8 @@ metadata_path="${RUN_ROOT}/submission.env"
   printf 'driver_venv=%q\n' "${DRIVER_VENV}"
   printf 'ray_venv=%q\n' "${RAY_VENV}"
   printf 'uv_lock_timeout=%q\n' "${UV_LOCK_TIMEOUT}"
+  printf 'model_name_override=%q\n' "${MODEL_NAME_OVERRIDE}"
+  printf 'tokenizer_name_override=%q\n' "${TOKENIZER_NAME_OVERRIDE}"
   printf 'rl_commit=%q\n' "${RL_COMMIT}"
   printf 'bridge_commit=%q\n' "${BRIDGE_COMMIT}"
   printf 'megatron_lm_commit=%q\n' "${MEGATRON_LM_COMMIT}"

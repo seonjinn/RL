@@ -83,28 +83,32 @@ def test_x86_profiles_are_matched() -> None:
             "grpo-qwen3-30ba3b-4n8g",
             4,
             4,
+            None,
         ),
         (
             "qwen3-235b-16n8g-x86",
             "grpo-qwen3-235b-16n8g",
             16,
             16,
+            None,
         ),
         (
             "nemotron3-super-120ba12b-32n8g-sync-x86",
             "grpo-nemotron3-super-120BA12B-32n8g",
             32,
             16,
+            None,
         ),
         (
             "deepseek-v3-32n8g-x86",
             "grpo-deepseek-v3-32n8g",
             32,
             16,
+            "MODEL_TOKENIZER_OVERRIDE_ENV=NRL_DEEPSEEK_V3_BF16_CKPT",
         ),
     )
 
-    for profile_name, recipe_name, nodes, segment_size in pairs:
+    for profile_name, recipe_name, nodes, segment_size, required_line in pairs:
         baseline = (profile_dir / f"{profile_name}.env").read_text()
         hybridep = (profile_dir / f"{profile_name}-hybridep.env").read_text()
         common_lines = {
@@ -118,6 +122,8 @@ def test_x86_profiles_are_matched() -> None:
             "TIME_LIMIT=${TIME_LIMIT:-04:00:00}",
             f"DEFAULT_DEEPEP_COMMIT={DEEPEP_COMMIT}",
         }
+        if required_line is not None:
+            common_lines.add(required_line)
 
         assert common_lines <= set(baseline.splitlines())
         assert common_lines <= set(hybridep.splitlines())

@@ -146,7 +146,9 @@ Use the following matched profiles after the shared runtime is prepared:
 
 The DeepSeek profiles are reusable, but there is no CW DeepSeek-V3 BF16
 checkpoint configured currently. Do not submit either DeepSeek arm until
-`NRL_DEEPSEEK_V3_BF16_CKPT` is set to a verified CW checkpoint path.
+`NRL_DEEPSEEK_V3_BF16_CKPT` is set to a verified CW checkpoint directory. The
+launcher rejects an unset or missing path and applies the verified path to
+both `policy.model_name` and `policy.tokenizer.name`.
 
 Run the two-node, three-step compatibility gate first:
 

@@ -24,8 +24,26 @@ def _run_launcher(
     tmp_path: Path,
     *,
     dispatcher_mode: str,
+    model_config_name: str = "qwen3-30ba3b-4n4g.env",
     extra_env: dict[str, str] | None = None,
 ) -> list[str]:
+    result, command_capture = _run_launcher_result(
+        tmp_path,
+        dispatcher_mode=dispatcher_mode,
+        model_config_name=model_config_name,
+        extra_env=extra_env,
+    )
+    result.check_returncode()
+    return shlex.split(command_capture.read_text())
+
+
+def _run_launcher_result(
+    tmp_path: Path,
+    *,
+    dispatcher_mode: str,
+    model_config_name: str = "qwen3-30ba3b-4n4g.env",
+    extra_env: dict[str, str] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
     project_root = Path(__file__).resolve().parents[3]
     launcher = (
         project_root
@@ -35,7 +53,7 @@ def _run_launcher(
         / "hybridep"
         / "submit_grpo.sh"
     )
-    model_config = launcher.parent / "models" / "qwen3-30ba3b-4n4g.env"
+    model_config = launcher.parent / "models" / model_config_name
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
 
@@ -88,15 +106,15 @@ printf '%s\\n' '999999'
     if extra_env:
         env.update(extra_env)
 
-    subprocess.run(
+    result = subprocess.run(
         ["bash", str(launcher), str(model_config)],
-        check=True,
+        check=False,
         cwd=project_root,
         env=env,
         capture_output=True,
         text=True,
     )
-    return shlex.split(command_capture.read_text())
+    return result, command_capture
 
 
 def test_recipe_dispatcher_preserves_recipe_default(tmp_path: Path) -> None:
@@ -110,6 +128,38 @@ def test_recipe_dispatcher_preserves_recipe_default(tmp_path: Path) -> None:
 def test_unknown_dispatcher_mode_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(subprocess.CalledProcessError):
         _run_launcher(tmp_path, dispatcher_mode="unknown")
+
+
+def test_deepseek_profile_requires_a_checkpoint_path(tmp_path: Path) -> None:
+    result, _ = _run_launcher_result(
+        tmp_path,
+        dispatcher_mode="recipe",
+        model_config_name="deepseek-v3-32n8g-x86.env",
+    )
+
+    assert result.returncode == 2
+    assert "NRL_DEEPSEEK_V3_BF16_CKPT must be set for model profile" in result.stderr
+
+
+def test_deepseek_profile_applies_a_verified_checkpoint_to_model_and_tokenizer(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "deepseek-v3-bf16"
+    checkpoint.mkdir()
+
+    driver_args = _run_launcher(
+        tmp_path,
+        dispatcher_mode="recipe",
+        model_config_name="deepseek-v3-32n8g-x86.env",
+        extra_env={"NRL_DEEPSEEK_V3_BF16_CKPT": str(checkpoint)},
+    )
+
+    assert f"policy.model_name={checkpoint}" in driver_args
+    assert f"policy.tokenizer.name={checkpoint}" in driver_args
+
+    metadata = (tmp_path / "run" / "submission.env").read_text()
+    assert f"model_name_override={checkpoint}\n" in metadata
+    assert f"tokenizer_name_override={checkpoint}\n" in metadata
 
 
 def test_padding_logging_reaches_megatron_worker_environment(tmp_path: Path) -> None:
