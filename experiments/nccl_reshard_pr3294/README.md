@@ -10,14 +10,19 @@ main commit `e40aa046e5fd4af30f93c27acdcdb9cc748670ab`.
 | `baseline` | Exact `e40aa046` main commit | Disabled |
 | `optimized` | `sna/pr3294-after-nccl-reshard` | Batched MoE shuffle and loader replay enabled |
 
-Both arms use non-colocated `refit_transport=nccl_reshard`. Trainer-side
-prequantization, persistent IPC buffers, and slim colocated offload are disabled
-because the NCCL-Reshard path does not execute them.
+The NCCL modes compare the exact `e40aa046` main commit with the optimized
+branch. The `mxfp8-rollout` mode instead uses the optimized branch for both
+arms and toggles only batched MoE shuffle and loader replay. It uses the legacy
+collective transport because NCCL-Reshard does not yet support BF16 trainer
+storage to MXFP8 generation storage.
 
 ## Modes
 
 - `bf16`: supported BF16 training and generation.
 - `blockwise-fp8`: supported blockwise FP8 parameter storage and FP8 generation.
+- `mxfp8-rollout`: BF16 training and MXFP8 generation over the legacy collective
+  transport. Use the same optimized commit for both arms to isolate the receiver
+  optimizations that remain applicable after the NCCL-Reshard merge.
 - `mxfp8-probe`: probes blockwise FP8 trainer storage with vLLM MXFP8 enabled.
   This is intentionally a compatibility smoke test, not a supported performance
   result.
@@ -33,4 +38,3 @@ NCCL-Reshard validator, which only accepts `fp8_recipe=blockwise`.
 
 Use `MAX_STEPS=2` for smoke tests and `MAX_STEPS=20` for reported performance.
 Reported steady-state values use steps 3-20.
-

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 : "${ARM:?ARM is required: baseline or optimized}"
-: "${MODE:?MODE is required: bf16, blockwise-fp8, or mxfp8-probe}"
+: "${MODE:?MODE is required: bf16, blockwise-fp8, mxfp8-rollout, or mxfp8-probe}"
 : "${REPO:?REPO is required}"
 : "${CONTAINER:?CONTAINER is required}"
 : "${TOTAL_NODES:?TOTAL_NODES is required}"
@@ -17,6 +17,7 @@ set -euo pipefail
 RAY_SUB_PATH=${RAY_SUB_PATH:-${REPO}/ray.sub}
 CONFIG_BF16=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
 CONFIG_FP8=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
+REFIT_TRANSPORT=${REFIT_TRANSPORT:-}
 
 case "${ARM}" in
   baseline)
@@ -36,40 +37,27 @@ esac
 case "${MODE}" in
   bf16)
     CONFIG=${CONFIG_BF16}
-    PRECISION_OVERRIDES="
-      policy.megatron_cfg.fp8_cfg.enabled=false
-      policy.megatron_cfg.fp8_cfg.fp8_param=false
-      ++policy.generation.vllm_cfg.precision=bfloat16
-      ++policy.generation.vllm_cfg.is_mx=false
-    "
+    PRECISION_OVERRIDES="policy.megatron_cfg.fp8_cfg.enabled=false policy.megatron_cfg.fp8_cfg.fp8_param=false ++policy.generation.vllm_cfg.precision=bfloat16 ++policy.generation.vllm_cfg.is_mx=false"
     ;;
   blockwise-fp8)
     CONFIG=${CONFIG_FP8}
-    PRECISION_OVERRIDES="
-      policy.megatron_cfg.fp8_cfg.enabled=true
-      policy.megatron_cfg.fp8_cfg.fp8=e4m3
-      policy.megatron_cfg.fp8_cfg.fp8_recipe=blockwise
-      policy.megatron_cfg.fp8_cfg.fp8_param=true
-      policy.generation.vllm_cfg.precision=fp8
-      policy.generation.vllm_cfg.is_mx=false
-    "
+    PRECISION_OVERRIDES="policy.megatron_cfg.fp8_cfg.enabled=true policy.megatron_cfg.fp8_cfg.fp8=e4m3 policy.megatron_cfg.fp8_cfg.fp8_recipe=blockwise policy.megatron_cfg.fp8_cfg.fp8_param=true policy.generation.vllm_cfg.precision=fp8 policy.generation.vllm_cfg.is_mx=false"
+    ;;
+  mxfp8-rollout)
+    CONFIG=${CONFIG_FP8}
+    REFIT_TRANSPORT=${REFIT_TRANSPORT:-null}
+    PRECISION_OVERRIDES="policy.megatron_cfg.fp8_cfg.enabled=false policy.megatron_cfg.fp8_cfg.fp8_param=false policy.generation.vllm_cfg.precision=fp8 policy.generation.vllm_cfg.is_mx=true"
     ;;
   mxfp8-probe)
     CONFIG=${CONFIG_FP8}
-    PRECISION_OVERRIDES="
-      policy.megatron_cfg.fp8_cfg.enabled=true
-      policy.megatron_cfg.fp8_cfg.fp8=e4m3
-      policy.megatron_cfg.fp8_cfg.fp8_recipe=blockwise
-      policy.megatron_cfg.fp8_cfg.fp8_param=true
-      policy.generation.vllm_cfg.precision=fp8
-      policy.generation.vllm_cfg.is_mx=true
-    "
+    PRECISION_OVERRIDES="policy.megatron_cfg.fp8_cfg.enabled=true policy.megatron_cfg.fp8_cfg.fp8=e4m3 policy.megatron_cfg.fp8_cfg.fp8_recipe=blockwise policy.megatron_cfg.fp8_cfg.fp8_param=true policy.generation.vllm_cfg.precision=fp8 policy.generation.vllm_cfg.is_mx=true"
     ;;
   *)
-    echo "MODE must be bf16, blockwise-fp8, or mxfp8-probe" >&2
+    echo "MODE must be bf16, blockwise-fp8, mxfp8-rollout, or mxfp8-probe" >&2
     exit 2
     ;;
 esac
+REFIT_TRANSPORT=${REFIT_TRANSPORT:-nccl_reshard}
 
 git -C "${REPO}" rev-parse --git-dir >/dev/null
 test -f "${REPO}/${CONFIG}"
@@ -103,6 +91,7 @@ total_nodes=${TOTAL_NODES}
 gpus_per_node=${GPUS_PER_NODE}
 generation_nodes=${GEN_NODES}
 max_steps=${MAX_STEPS}
+refit_transport=${REFIT_TRANSPORT}
 ray_sub_path=${RAY_SUB_PATH}
 ray_bootstrap_venv=${RAY_BOOTSTRAP_VENV}
 shared_uv_cache=${SHARED_UV_CACHE}
@@ -148,7 +137,7 @@ uv run --frozen examples/run_grpo.py \
   policy.generation.colocated.enabled=false \
   policy.generation.colocated.resources.num_nodes='${GEN_NODES}' \
   policy.generation.colocated.resources.gpus_per_node='${GPUS_PER_NODE}' \
-  policy.generation.refit_transport=nccl_reshard \
+  policy.generation.refit_transport='${REFIT_TRANSPORT}' \
   policy.megatron_cfg.tensor_model_parallel_size=1 \
   policy.megatron_cfg.pipeline_model_parallel_size=1 \
   policy.megatron_cfg.expert_model_parallel_size=16 \

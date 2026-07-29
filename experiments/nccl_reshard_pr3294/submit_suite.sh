@@ -4,7 +4,7 @@ set -euo pipefail
 
 PLATFORM=${PLATFORM:-gcp-b200}
 ACTION=${ACTION:-test-only}
-MODE_FILTER=${MODE_FILTER:-bf16,mxfp8-probe}
+MODE_FILTER=${MODE_FILTER:-bf16,mxfp8-rollout}
 ARM_FILTER=${ARM_FILTER:-baseline,optimized}
 MAX_STEPS=${MAX_STEPS:-2}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
@@ -43,6 +43,7 @@ esac
 
 OPT_REPO=${OPT_REPO:-${WORK_ROOT}/RL-pr3294-nccl-benchmark}
 BASELINE_REPO=${BASELINE_REPO:-${WORK_ROOT}/RL-e40-nccl-reshard-baseline}
+REFIT_TRANSPORT=${REFIT_TRANSPORT:-}
 CONTAINER=${CONTAINER:?CONTAINER is required}
 RESULT_ROOT=${RESULT_ROOT:-${WORK_ROOT}/experiments/pr3294-nccl-reshard/${PLATFORM}}
 BATCH_SCRIPT=${OPT_REPO}/experiments/nccl_reshard_pr3294/run_arm.sbatch
@@ -54,8 +55,11 @@ case "${ACTION}" in
 esac
 
 git -C "${OPT_REPO}" pull --ff-only
-test "$(git -C "${BASELINE_REPO}" rev-parse HEAD)" = \
-  "e40aa046e5fd4af30f93c27acdcdb9cc748670ab"
+if [[ "$(git -C "${BASELINE_REPO}" rev-parse HEAD)" != \
+  "$(git -C "${OPT_REPO}" rev-parse HEAD)" ]]; then
+  test "$(git -C "${BASELINE_REPO}" rev-parse HEAD)" = \
+    "e40aa046e5fd4af30f93c27acdcdb9cc748670ab"
+fi
 test -x "${BATCH_SCRIPT}"
 test -f "${CONTAINER}"
 mkdir -p "${RESULT_ROOT}/slurm" "${RESULT_ROOT}/manifests"
@@ -69,7 +73,7 @@ selected() {
 MANIFEST=${RESULT_ROOT}/manifests/submission-${RUN_SUFFIX}.tsv
 printf 'platform\tmode\tarm\taction\tjob_id\trepo_sha\trun_name\n' >"${MANIFEST}"
 
-for MODE in bf16 blockwise-fp8 mxfp8-probe; do
+for MODE in bf16 blockwise-fp8 mxfp8-rollout mxfp8-probe; do
   selected "${MODE}" "${MODE_FILTER}" || continue
   for ARM in baseline optimized; do
     selected "${ARM}" "${ARM_FILTER}" || continue
@@ -89,7 +93,7 @@ for MODE in bf16 blockwise-fp8 mxfp8-probe; do
       --time="${WALLTIME}"
       --job-name="${RUN_NAME}"
       --output="${RESULT_ROOT}/slurm/%x-%j.out"
-      --export="ALL,ARM=${ARM},MODE=${MODE},REPO=${REPO},CONTAINER=${CONTAINER},TOTAL_NODES=${TOTAL_NODES},GPUS_PER_NODE=${GPUS_PER_NODE},GEN_NODES=${GEN_NODES},SEGMENT_SIZE=${SEGMENT_SIZE},MAX_STEPS=${MAX_STEPS},RUN_NAME=${RUN_NAME},EXPERIMENT_ROOT=${EXPERIMENT_ROOT},WORK_ROOT=${WORK_ROOT},RAY_SUB_PATH=${OPT_REPO}/ray.sub,RAY_BOOTSTRAP_VENV=${RAY_BOOTSTRAP_VENV:-},CONTAINER_ENV_VARS=PATH"
+      --export="ALL,ARM=${ARM},MODE=${MODE},REPO=${REPO},CONTAINER=${CONTAINER},TOTAL_NODES=${TOTAL_NODES},GPUS_PER_NODE=${GPUS_PER_NODE},GEN_NODES=${GEN_NODES},SEGMENT_SIZE=${SEGMENT_SIZE},MAX_STEPS=${MAX_STEPS},RUN_NAME=${RUN_NAME},EXPERIMENT_ROOT=${EXPERIMENT_ROOT},WORK_ROOT=${WORK_ROOT},RAY_SUB_PATH=${OPT_REPO}/ray.sub,RAY_BOOTSTRAP_VENV=${RAY_BOOTSTRAP_VENV:-},REFIT_TRANSPORT=${REFIT_TRANSPORT},CONTAINER_ENV_VARS=PATH"
     )
     if [[ "${PLATFORM}" == gcp-b200 ]]; then
       args+=(--gpus-per-node="${GPUS_PER_NODE}")
