@@ -80,6 +80,7 @@ HF_HOME=${HF_HOME:-${WORK_ROOT}/.cache/huggingface}
 CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/mopd_nano_fast/.cache/nccl-reshard-pr3294/${ARM}-${MODE}}
 WANDB_PROJECT=${WANDB_PROJECT:-sna-pr3294-nccl-reshard}
 WANDB_KEY_FILE=${WANDB_KEY_FILE:-${CACHE_ROOT}/.wandb_key}
+PYTHON_BIN=${PYTHON_BIN:-/opt/nemo_rl_venv/bin/python}
 
 mkdir -p "${HF_HOME}" "${CACHE_ROOT}/uv" "${CACHE_ROOT}/venvs"
 if [[ ! -s "${WANDB_KEY_FILE}" && -f "${HOME}/.netrc" ]]; then
@@ -113,7 +114,7 @@ set -euo pipefail
 cd '${REPO}'
 export PYTHONPATH='${REPO}'
 export HF_HOME='${HF_HOME}'
-export NRL_FORCE_REBUILD_VENVS=true
+export NRL_FORCE_REBUILD_VENVS=false
 export NEMO_RL_VENV_DIR='${CACHE_ROOT}/venvs'
 export UV_CACHE_DIR='${CACHE_ROOT}/uv'
 export UV_LOCK_TIMEOUT=7200
@@ -125,7 +126,7 @@ export NRL_REFIT_CACHED_LOADERS='${NRL_REFIT_CACHED_LOADERS}'
 if [[ -s '${WANDB_KEY_FILE}' ]]; then
   export WANDB_API_KEY=\$(cat '${WANDB_KEY_FILE}')
 fi
-uv run --frozen examples/run_grpo.py \
+'${PYTHON_BIN}' examples/run_grpo.py \
   --config '${CONFIG}' \
   cluster.num_nodes='${TOTAL_NODES}' \
   cluster.gpus_per_node='${GPUS_PER_NODE}' \
@@ -156,4 +157,3 @@ uv run --frozen examples/run_grpo.py \
 "
 
 exec bash "${REPO}/ray.sub"
-
