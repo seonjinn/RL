@@ -380,10 +380,12 @@ def validate_ab_pair(
     original: Mapping[str, object],
     adaptive: Mapping[str, object],
     *,
-    expected_config_file: str,
-    expected_config_sha256: str,
+    expected_baseline_config_file: str,
+    expected_baseline_config_sha256: str,
+    expected_adaptive_config_file: str,
+    expected_adaptive_config_sha256: str,
 ) -> None:
-    """Reject an A/B pair with any difference outside the adaptive JSON key."""
+    """Reject an A/B pair with any difference outside its manifest JSON keys."""
     for field in MATCHED_PROVENANCE_FIELDS:
         original_value = _required_value(original, field)
         adaptive_value = _required_value(adaptive, field)
@@ -394,15 +396,18 @@ def validate_ab_pair(
     adaptive_raw_config = _required_value(adaptive, "resolved_config")
     original_environment = _config_environment(original_raw_config) or {}
     adaptive_environment = _config_environment(adaptive_raw_config) or {}
-    if CONFIG_ENV_KEY in original_environment:
-        raise ValueError(f"original arm requires {CONFIG_ENV_KEY} to be absent")
-    if adaptive_environment.get(CONFIG_ENV_KEY) != expected_config_file:
+    if original_environment.get(CONFIG_ENV_KEY) != expected_baseline_config_file:
         raise ValueError(
-            f"adaptive arm requires exact {CONFIG_ENV_KEY}={expected_config_file}"
+            f"baseline arm requires exact {CONFIG_ENV_KEY}="
+            f"{expected_baseline_config_file}"
         )
-    if _required_value(original, "config_hash") != "none":
-        raise ValueError("original arm config_hash must be 'none'")
-    if _required_value(adaptive, "config_hash") != expected_config_sha256:
+    if adaptive_environment.get(CONFIG_ENV_KEY) != expected_adaptive_config_file:
+        raise ValueError(
+            f"adaptive arm requires exact {CONFIG_ENV_KEY}={expected_adaptive_config_file}"
+        )
+    if _required_value(original, "config_hash") != expected_baseline_config_sha256:
+        raise ValueError("baseline arm config_hash does not match expected JSON SHA256")
+    if _required_value(adaptive, "config_hash") != expected_adaptive_config_sha256:
         raise ValueError("adaptive arm config_hash does not match expected JSON SHA256")
 
     original_config = _strip_adaptive_config_key(original_raw_config)
@@ -532,6 +537,63 @@ def validate_runtime_tactic_coverage(
         "qualified_tactics_hit": len(hit_shapes),
         "runtime_record_count": runtime_records,
         "tactic_hit_record_count": tactic_hit_records,
+    }
+
+
+def validate_default_runtime_dispatch(
+    trace_paths: Sequence[Path],
+    *,
+    expected_config_sha256: str,
+) -> dict[str, object]:
+    """Require baseline dispatches to use TRTLLM runner defaults only."""
+    if not trace_paths:
+        raise ValueError("baseline runtime produced no tactic trace files")
+
+    dispatch_records = 0
+    for path in trace_paths:
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError(f"{path}:{line_number} is not valid JSON") from error
+            if not isinstance(record, dict):
+                raise ValueError(f"{path}:{line_number} must be a JSON object")
+            if record.get("event") != "mxfp8_adaptive_dispatch":
+                continue
+            if record.get("backend") != "trtllm":
+                raise ValueError(f"{path}:{line_number} backend must be trtllm")
+            if record.get("config_sha256") != expected_config_sha256:
+                raise ValueError(
+                    f"{path}:{line_number} config_sha256 does not match baseline JSON"
+                )
+            layout = record.get("layout")
+            if layout not in {"8x4", "128x4"}:
+                raise ValueError(f"{path}:{line_number} has invalid layout")
+            for name in ("m", "n", "k"):
+                value = record.get(name)
+                if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                    raise ValueError(f"{path}:{line_number} has invalid {name}")
+            tactic = record.get("tactic")
+            if isinstance(tactic, bool) or not isinstance(tactic, int) or tactic != -1:
+                raise ValueError(f"{path}:{line_number} runner_default tactic must be -1")
+            if record.get("tactic_source") != "runner_default":
+                raise ValueError(
+                    f"{path}:{line_number} tactic_source must be runner_default"
+                )
+            dispatch_records += 1
+
+    if dispatch_records == 0:
+        raise ValueError("baseline runtime produced zero dispatch records")
+    return {
+        "backend": "trtllm",
+        "config_sha256": expected_config_sha256,
+        "dispatch_record_count": dispatch_records,
+        "runner_default_record_count": dispatch_records,
+        "tactic": -1,
     }
 
 
@@ -668,8 +730,10 @@ def _validate_pair_command(args: argparse.Namespace) -> int:
     validate_ab_pair(
         _load_json_object(args.original),
         _load_json_object(args.adaptive),
-        expected_config_file=args.expected_config_file,
-        expected_config_sha256=args.expected_config_sha256,
+        expected_baseline_config_file=args.expected_baseline_config_file,
+        expected_baseline_config_sha256=args.expected_baseline_config_sha256,
+        expected_adaptive_config_file=args.expected_adaptive_config_file,
+        expected_adaptive_config_sha256=args.expected_adaptive_config_sha256,
     )
     print("matched-ab-pair")
     return 0
@@ -692,6 +756,16 @@ def _validate_runtime_command(args: argparse.Namespace) -> int:
         TACTIC_COVERAGE_PREFIX
         + json.dumps(coverage, sort_keys=True, separators=(",", ":"))
     )
+    return 0
+
+
+def _validate_default_runtime_command(args: argparse.Namespace) -> int:
+    summary = validate_default_runtime_dispatch(
+        tuple(args.trace),
+        expected_config_sha256=args.expected_config_sha256,
+    )
+    _write_json_object(args.output, summary)
+    print(json.dumps(summary, sort_keys=True, separators=(",", ":")))
     return 0
 
 
@@ -753,8 +827,10 @@ def _parser() -> argparse.ArgumentParser:
     validate_pair = subparsers.add_parser("validate-pair")
     validate_pair.add_argument("--original", type=Path, required=True)
     validate_pair.add_argument("--adaptive", type=Path, required=True)
-    validate_pair.add_argument("--expected-config-file", required=True)
-    validate_pair.add_argument("--expected-config-sha256", required=True)
+    validate_pair.add_argument("--expected-baseline-config-file", required=True)
+    validate_pair.add_argument("--expected-baseline-config-sha256", required=True)
+    validate_pair.add_argument("--expected-adaptive-config-file", required=True)
+    validate_pair.add_argument("--expected-adaptive-config-sha256", required=True)
     validate_pair.set_defaults(handler=_validate_pair_command)
 
     validate_qualified = subparsers.add_parser("validate-qualified")
@@ -767,6 +843,14 @@ def _parser() -> argparse.ArgumentParser:
     validate_runtime.add_argument("--expected-config-sha256", required=True)
     validate_runtime.add_argument("--output", type=Path, required=True)
     validate_runtime.set_defaults(handler=_validate_runtime_command)
+
+    validate_default_runtime = subparsers.add_parser("validate-default-runtime")
+    validate_default_runtime.add_argument(
+        "--trace", type=Path, action="append", required=True
+    )
+    validate_default_runtime.add_argument("--expected-config-sha256", required=True)
+    validate_default_runtime.add_argument("--output", type=Path, required=True)
+    validate_default_runtime.set_defaults(handler=_validate_default_runtime_command)
 
     emit_context = subparsers.add_parser("emit-context")
     emit_context.add_argument("--metadata", type=Path, required=True)

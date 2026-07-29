@@ -36,6 +36,7 @@ NEMO_COMMIT = "8" * 40
 VLLM_COMMIT = "b" * 40
 CONTAINER_DIGEST = "sha256:" + "c" * 64
 CONFIG_HASH = "d" * 64
+BASELINE_HASH = "3" * 64
 QUALIFIED_CONFIG_NAME = "qwen3_30ba3b_tp1_v0202_qualified.json"
 
 
@@ -176,7 +177,7 @@ MXFP8_AB_METADATA {json.dumps(metadata, sort_keys=True)}
         parser.parse_log(log)
 
 
-def test_validate_ab_pair_allows_only_the_json_environment_key_to_differ() -> None:
+def test_validate_ab_pair_requires_exact_baseline_and_adaptive_manifests() -> None:
     parser = _load_parser()
     common = {
         "nemo_rl_commit": NEMO_COMMIT,
@@ -189,9 +190,9 @@ def test_validate_ab_pair_allows_only_the_json_environment_key_to_differ() -> No
             "tensor_parallel_size": 1,
         },
     }
-    original = {
+    baseline = {
         **common,
-        "config_hash": "none",
+        "config_hash": "3" * 64,
         "resolved_config": {
             "grpo": {"seed": 42},
             "policy": {
@@ -199,7 +200,12 @@ def test_validate_ab_pair_allows_only_the_json_environment_key_to_differ() -> No
                     "vllm_cfg": {
                         "precision": "fp8",
                         "is_mx": True,
-                        "env_vars": {"KEEP_ME": "same"},
+                        "env_vars": {
+                            "KEEP_ME": "same",
+                            "VLLM_MXFP8_DENSE_CONFIG_FILE": (
+                                "qwen3_30ba3b_tp1_v0202_rollout_trace_bootstrap.json"
+                            ),
+                        },
                     }
                 }
             },
@@ -226,116 +232,101 @@ def test_validate_ab_pair_allows_only_the_json_environment_key_to_differ() -> No
     }
 
     parser.validate_ab_pair(
-        original,
+        baseline,
         adaptive,
-        expected_config_file=QUALIFIED_CONFIG_NAME,
-        expected_config_sha256=CONFIG_HASH,
+        expected_baseline_config_file=(
+            "qwen3_30ba3b_tp1_v0202_rollout_trace_bootstrap.json"
+        ),
+        expected_baseline_config_sha256="3" * 64,
+        expected_adaptive_config_file=QUALIFIED_CONFIG_NAME,
+        expected_adaptive_config_sha256=CONFIG_HASH,
     )
+
+    cases = (
+        ("expected_baseline_config_file", "wrong-baseline.json", "baseline.*exact"),
+        ("expected_baseline_config_sha256", "4" * 64, "baseline.*SHA256"),
+        ("expected_adaptive_config_file", "wrong-adaptive.json", "adaptive.*exact"),
+        ("expected_adaptive_config_sha256", "5" * 64, "adaptive.*SHA256"),
+    )
+    for argument, value, message in cases:
+        arguments = {
+            "expected_baseline_config_file": (
+                "qwen3_30ba3b_tp1_v0202_rollout_trace_bootstrap.json"
+            ),
+            "expected_baseline_config_sha256": "3" * 64,
+            "expected_adaptive_config_file": QUALIFIED_CONFIG_NAME,
+            "expected_adaptive_config_sha256": CONFIG_HASH,
+        }
+        arguments[argument] = value
+        with pytest.raises(ValueError, match=message):
+            parser.validate_ab_pair(baseline, adaptive, **arguments)
 
     adaptive["resolved_config"]["grpo"]["seed"] = 43
     with pytest.raises(ValueError, match="resolved Hydra config"):
         parser.validate_ab_pair(
-            original,
+            baseline,
             adaptive,
-            expected_config_file=QUALIFIED_CONFIG_NAME,
-            expected_config_sha256=CONFIG_HASH,
-        )
-
-
-def test_validate_ab_pair_rejects_original_with_adaptive_key() -> None:
-    parser = _load_parser()
-    base_config = {
-        "policy": {
-            "generation": {
-                "vllm_cfg": {
-                    "env_vars": {"VLLM_MXFP8_DENSE_CONFIG_FILE": QUALIFIED_CONFIG_NAME}
-                }
-            }
-        }
-    }
-    common = {
-        "nemo_rl_commit": NEMO_COMMIT,
-        "vllm_commit": VLLM_COMMIT,
-        "container_digest": CONTAINER_DIGEST,
-        "checkpoint": "Qwen/Qwen3-30B-A3B",
-        "topology": {"num_nodes": 4, "gpus_per_node": 4},
-    }
-    original = {**common, "config_hash": "none", "resolved_config": base_config}
-    adaptive = {
-        **common,
-        "config_hash": CONFIG_HASH,
-        "resolved_config": base_config,
-    }
-
-    with pytest.raises(ValueError, match="original.*absent"):
-        parser.validate_ab_pair(
-            original,
-            adaptive,
-            expected_config_file=QUALIFIED_CONFIG_NAME,
-            expected_config_sha256=CONFIG_HASH,
-        )
-
-
-def test_validate_ab_pair_binds_adaptive_key_to_expected_file_and_hash() -> None:
-    parser = _load_parser()
-    common = {
-        "nemo_rl_commit": NEMO_COMMIT,
-        "vllm_commit": VLLM_COMMIT,
-        "container_digest": CONTAINER_DIGEST,
-        "checkpoint": "Qwen/Qwen3-30B-A3B",
-        "topology": {"num_nodes": 4, "gpus_per_node": 4},
-    }
-    original = {
-        **common,
-        "config_hash": "none",
-        "resolved_config": {"policy": {"generation": {"vllm_cfg": {}}}},
-    }
-    adaptive = {
-        **common,
-        "config_hash": "e" * 64,
-        "resolved_config": {
-            "policy": {
-                "generation": {
-                    "vllm_cfg": {
-                        "env_vars": {"VLLM_MXFP8_DENSE_CONFIG_FILE": "wrong.json"}
-                    }
-                }
-            }
-        },
-    }
-
-    with pytest.raises(ValueError, match="adaptive.*exact"):
-        parser.validate_ab_pair(
-            original,
-            adaptive,
-            expected_config_file=QUALIFIED_CONFIG_NAME,
-            expected_config_sha256=CONFIG_HASH,
+            expected_baseline_config_file=(
+                "qwen3_30ba3b_tp1_v0202_rollout_trace_bootstrap.json"
+            ),
+            expected_baseline_config_sha256="3" * 64,
+            expected_adaptive_config_file=QUALIFIED_CONFIG_NAME,
+            expected_adaptive_config_sha256=CONFIG_HASH,
         )
 
 
 def test_validate_ab_pair_rejects_provenance_mismatch() -> None:
     parser = _load_parser()
-    original = {
+    baseline = {
         "nemo_rl_commit": NEMO_COMMIT,
         "vllm_commit": VLLM_COMMIT,
         "container_digest": CONTAINER_DIGEST,
         "checkpoint": "Qwen/Qwen3-30B-A3B",
         "topology": {"num_nodes": 4, "gpus_per_node": 4},
-        "config_hash": "none",
-        "resolved_config": {"grpo": {"seed": 42}},
+        "config_hash": "3" * 64,
+        "resolved_config": {
+            "grpo": {"seed": 42},
+            "policy": {
+                "generation": {
+                    "vllm_cfg": {
+                        "env_vars": {
+                            "VLLM_MXFP8_DENSE_CONFIG_FILE": (
+                                "qwen3_30ba3b_tp1_v0202_rollout_trace_bootstrap.json"
+                            )
+                        }
+                    }
+                }
+            },
+        },
     }
     adaptive = {
-        **original,
+        **baseline,
         "container_digest": "sha256:" + "e" * 64,
         "config_hash": CONFIG_HASH,
+        "resolved_config": {
+            "grpo": {"seed": 42},
+            "policy": {
+                "generation": {
+                    "vllm_cfg": {
+                        "env_vars": {
+                            "VLLM_MXFP8_DENSE_CONFIG_FILE": QUALIFIED_CONFIG_NAME
+                        }
+                    }
+                }
+            },
+        },
     }
 
     with pytest.raises(ValueError, match="container_digest"):
         parser.validate_ab_pair(
-            original,
+            baseline,
             adaptive,
-            expected_config_file=QUALIFIED_CONFIG_NAME,
-            expected_config_sha256=CONFIG_HASH,
+            expected_baseline_config_file=(
+                "qwen3_30ba3b_tp1_v0202_rollout_trace_bootstrap.json"
+            ),
+            expected_baseline_config_sha256="3" * 64,
+            expected_adaptive_config_file=QUALIFIED_CONFIG_NAME,
+            expected_adaptive_config_sha256=CONFIG_HASH,
         )
 
 
@@ -524,6 +515,93 @@ def test_validate_runtime_tactic_coverage_reports_unseen_fallback_rate(
         "runtime_record_count": 2,
         "tactic_hit_record_count": 1,
     }
+
+
+def test_validate_default_runtime_dispatch_summarizes_runner_defaults(
+    tmp_path: Path,
+) -> None:
+    parser = _load_parser()
+    trace_path = tmp_path / "baseline_dispatch.jsonl"
+    trace_path.write_text(
+        json.dumps(
+            {
+                "event": "mxfp8_adaptive_dispatch",
+                "backend": "trtllm",
+                "config_sha256": BASELINE_HASH,
+                "layout": "8x4",
+                "m": 64,
+                "n": 128,
+                "k": 2048,
+                "tactic": -1,
+                "tactic_source": "runner_default",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert parser.validate_default_runtime_dispatch(
+        (trace_path,),
+        expected_config_sha256=BASELINE_HASH,
+    ) == {
+        "backend": "trtllm",
+        "config_sha256": BASELINE_HASH,
+        "dispatch_record_count": 1,
+        "runner_default_record_count": 1,
+        "tactic": -1,
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("backend", "vllm", "backend"),
+        ("config_sha256", CONFIG_HASH, "config_sha256"),
+        ("tactic", 17, "tactic"),
+        ("tactic_source", "static_hint", "tactic_source"),
+    ),
+)
+def test_validate_default_runtime_dispatch_rejects_non_default_records(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    parser = _load_parser()
+    trace_path = tmp_path / "baseline_dispatch.jsonl"
+    record: dict[str, object] = {
+        "event": "mxfp8_adaptive_dispatch",
+        "backend": "trtllm",
+        "config_sha256": BASELINE_HASH,
+        "layout": "8x4",
+        "m": 64,
+        "n": 128,
+        "k": 2048,
+        "tactic": -1,
+        "tactic_source": "runner_default",
+    }
+    record[field] = value
+    trace_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        parser.validate_default_runtime_dispatch(
+            (trace_path,),
+            expected_config_sha256=BASELINE_HASH,
+        )
+
+
+def test_validate_default_runtime_dispatch_rejects_zero_dispatch_records(
+    tmp_path: Path,
+) -> None:
+    parser = _load_parser()
+    trace_path = tmp_path / "baseline_dispatch.jsonl"
+    trace_path.write_text('{"event":"unrelated"}\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="zero dispatch records"):
+        parser.validate_default_runtime_dispatch(
+            (trace_path,),
+            expected_config_sha256=BASELINE_HASH,
+        )
 
 
 def _write_executable(path: Path, text: str) -> None:
