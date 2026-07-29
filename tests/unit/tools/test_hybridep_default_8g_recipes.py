@@ -127,7 +127,9 @@ def _megatron_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _environment(megatron_cfg: dict[str, Any]) -> dict[str, Any]:
-    env_vars = megatron_cfg.get("env_vars", {})
+    env_vars = megatron_cfg.get("env_vars")
+    if env_vars is None:
+        return {}
     assert isinstance(env_vars, dict)
     return env_vars
 
@@ -143,7 +145,9 @@ def _without_dispatcher_contract(config: dict[str, Any]) -> dict[str, Any]:
         megatron_cfg.pop(key, None)
 
     env_vars = megatron_cfg.get("env_vars")
-    if env_vars is not None:
+    if env_vars is None:
+        megatron_cfg.pop("env_vars", None)
+    else:
         assert isinstance(env_vars, dict)
         for key in X86_HYBRIDEP_ENVIRONMENT_KEYS:
             env_vars.pop(key, None)
@@ -162,7 +166,7 @@ def test_moe_8g_canonical_recipes_default_to_x86_hybridep(
     assert megatron_cfg["moe_token_dispatcher_type"] == "flex"
     assert megatron_cfg["moe_flex_dispatcher_backend"] == "hybridep"
     assert megatron_cfg["moe_hybridep_num_sms"] == 32
-    assert _environment(megatron_cfg) >= X86_HYBRIDEP_ENVIRONMENT
+    assert X86_HYBRIDEP_ENVIRONMENT.items() <= _environment(megatron_cfg).items()
 
 
 @pytest.mark.parametrize("_canonical, baseline", MOE_8G_RECIPE_PAIRS)
