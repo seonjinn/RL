@@ -164,8 +164,21 @@ def test_cli_updates_pyproject_in_place(tmp_path: Path) -> None:
     }
 
 
-def test_build_script_isolates_vllm_venv_and_restores_root_selectors(
+@pytest.mark.parametrize(
+    ("project_selector", "virtual_selector", "expected_root_selector"),
+    [
+        pytest.param(None, None, "repo-default", id="selectors-unset"),
+        pytest.param("project", None, "project", id="uv-only"),
+        pytest.param(None, "virtual", "virtual", id="virtual-only"),
+        pytest.param("shared", "shared", "shared", id="matching-selectors"),
+        pytest.param("project", "virtual", None, id="conflicting-selectors"),
+    ],
+)
+def test_build_script_selects_root_interpreter_and_isolates_vllm_venv(
     tmp_path: Path,
+    project_selector: str | None,
+    virtual_selector: str | None,
+    expected_root_selector: str | None,
 ) -> None:
     repo_root = tmp_path / "repo"
     tools_dir = repo_root / "tools"
@@ -234,16 +247,30 @@ printf '%s/%s\\n' "$(cd "$parent" && pwd -P)" "$name"
     fake_realpath.chmod(0o755)
 
     git_ref = "a" * 40
-    root_project_environment = str(tmp_path / "root-project-environment")
-    root_virtual_environment = str(tmp_path / "root-virtual-environment")
+    root_environments = {
+        "repo-default": repo_root / ".venv",
+        "project": tmp_path / "root-project-environment",
+        "virtual": tmp_path / "root-virtual-environment",
+        "shared": tmp_path / "root-shared-environment",
+    }
+    for root_environment in root_environments.values():
+        root_python = root_environment / "bin" / "python"
+        root_python.parent.mkdir(parents=True)
+        root_python.touch()
+        root_python.chmod(0o755)
+
     env = {
         **os.environ,
         "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
         "TEST_GIT_REF": git_ref,
         "TEST_UV_LOG": str(uv_log),
-        "UV_PROJECT_ENVIRONMENT": root_project_environment,
-        "VIRTUAL_ENV": root_virtual_environment,
     }
+    env.pop("UV_PROJECT_ENVIRONMENT", None)
+    env.pop("VIRTUAL_ENV", None)
+    if project_selector is not None:
+        env["UV_PROJECT_ENVIRONMENT"] = str(root_environments[project_selector])
+    if virtual_selector is not None:
+        env["VIRTUAL_ENV"] = str(root_environments[virtual_selector])
 
     completed = subprocess.run(
         [
@@ -259,6 +286,13 @@ printf '%s/%s\\n' "$(cd "$parent" && pwd -P)" "$name"
         capture_output=True,
         text=True,
     )
+
+    if expected_root_selector is None:
+        assert completed.returncode == 2
+        assert "select different Python environments" in completed.stderr
+        assert not (repo_root / "3rdparty" / "vllm").exists()
+        return
+
     assert completed.returncode == 0, completed.stderr
 
     calls = [line.split("\t", maxsplit=3) for line in uv_log.read_text().splitlines()]
@@ -286,10 +320,22 @@ printf '%s/%s\\n' "$(cd "$parent" && pwd -P)" "$name"
     root_pip_call = next(
         call
         for call in calls
-        if call[0] == str(repo_root) and call[3] == "pip install setuptools_scm"
+        if call[0] == str(repo_root) and call[3].startswith("pip install")
     )
     assert root_pip_call[1:] == [
-        root_project_environment,
-        root_virtual_environment,
-        "pip install setuptools_scm",
+        (
+            str(root_environments[project_selector])
+            if project_selector is not None
+            else "<unset>"
+        ),
+        (
+            str(root_environments[virtual_selector])
+            if virtual_selector is not None
+            else "<unset>"
+        ),
+        (
+            "pip install --python "
+            f"{root_environments[expected_root_selector] / 'bin' / 'python'} "
+            "setuptools_scm"
+        ),
     ]

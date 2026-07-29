@@ -39,6 +39,35 @@ export VLLM_USE_PRECOMPILED=1
 export VLLM_PRECOMPILED_WHEEL_LOCATION
 export VLLM_VERSION_OVERRIDE=0.20.2
 
+OLD_UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-}"
+OLD_VIRTUAL_ENV="${VIRTUAL_ENV:-}"
+if [[ -n "$OLD_UV_PROJECT_ENVIRONMENT" && -n "$OLD_VIRTUAL_ENV" ]]; then
+  UV_PROJECT_PYTHON="$OLD_UV_PROJECT_ENVIRONMENT/bin/python"
+  VIRTUAL_ENV_PYTHON="$OLD_VIRTUAL_ENV/bin/python"
+  if [[ ! -x "$UV_PROJECT_PYTHON" || ! -x "$VIRTUAL_ENV_PYTHON" ]]; then
+    echo "[ERROR] Both configured root environment selectors must contain an executable bin/python." >&2
+    exit 2
+  fi
+  UV_PROJECT_PYTHON="$(realpath "$UV_PROJECT_PYTHON")"
+  VIRTUAL_ENV_PYTHON="$(realpath "$VIRTUAL_ENV_PYTHON")"
+  if [[ "$UV_PROJECT_PYTHON" != "$VIRTUAL_ENV_PYTHON" ]]; then
+    echo "[ERROR] UV_PROJECT_ENVIRONMENT and VIRTUAL_ENV select different Python environments." >&2
+    exit 2
+  fi
+  ROOT_PYTHON="$UV_PROJECT_PYTHON"
+elif [[ -n "$OLD_VIRTUAL_ENV" ]]; then
+  ROOT_PYTHON="$OLD_VIRTUAL_ENV/bin/python"
+elif [[ -n "$OLD_UV_PROJECT_ENVIRONMENT" ]]; then
+  ROOT_PYTHON="$OLD_UV_PROJECT_ENVIRONMENT/bin/python"
+else
+  ROOT_PYTHON="$REPO_ROOT/.venv/bin/python"
+fi
+if [[ ! -x "$ROOT_PYTHON" ]]; then
+  echo "[ERROR] Root project Python is not executable at $ROOT_PYTHON." >&2
+  exit 2
+fi
+ROOT_PYTHON="$(realpath "$ROOT_PYTHON")"
+
 BUILD_DIR=$(realpath "$SCRIPT_DIR/../3rdparty/vllm")
 if [[ -e "$BUILD_DIR" ]]; then
   echo "[ERROR] $BUILD_DIR already exists. Please remove or move it before running this script."
@@ -69,8 +98,6 @@ echo "  vLLM resolved commit: $RESOLVED_VLLM_COMMIT"
 # Create a new Python environment using uv
 echo "Creating Python environment..."
 # Preserve caller environment selectors without letting them redirect custom vLLM installs.
-OLD_UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-}"
-OLD_VIRTUAL_ENV="${VIRTUAL_ENV:-}"
 unset UV_PROJECT_ENVIRONMENT VIRTUAL_ENV
 VLLM_VENV="$BUILD_DIR/.venv"
 VLLM_PYTHON="$VLLM_VENV/bin/python"
@@ -114,7 +141,7 @@ uv run --no-project --with packaging --with tomlkit \
   python tools/configure_custom_vllm.py "$PYPROJECT_TOML"
 
 # Ensure build deps and re-lock
-uv pip install setuptools_scm
+uv pip install --python "$ROOT_PYTHON" setuptools_scm
 uv lock
 
 # Write to a file that a docker build will use to set the necessary env vars
