@@ -47,12 +47,16 @@ Megatron-LM:
 
 NeMo-RL:
 
-- `nemo_rl/models/megatron/cuda_graph_lifecycle.py`: schedule key, LRU, warmup, capture result, and cleanup.
+- `nemo_rl/models/megatron/cuda_graph_lifecycle.py`: new schedule key, LRU, warmup, capture result, and cleanup.
+- `nemo_rl/data/packing/algorithms.py`: packed-bin sequence-count bound.
+- `nemo_rl/distributed/batched_data_dict.py`: sequence-count bound plumbing.
+- `nemo_rl/models/megatron/data.py`: fixed packed token/boundary geometry and capture sample.
 - `nemo_rl/models/policy/__init__.py`: user-facing cache setting type.
 - `nemo_rl/models/megatron/setup.py`: config validation and provenance logging.
 - `nemo_rl/models/policy/workers/megatron_policy_worker.py`: helper factory, schedule activation, PP calculator reconfiguration, telemetry, and offload guards.
-- `examples/configs/grpo_math_1B.yaml`: exemplar default.
 - `tests/unit/models/megatron/test_cuda_graph_lifecycle.py`: LRU and failure behavior.
+- `tests/unit/data/packing/test_algorithms.py`: packed-bin sequence-count bound.
+- `tests/unit/models/megatron/test_megatron_data.py`: fixed graph geometry.
 - `tests/unit/models/megatron/test_megatron_setup.py`: config validation.
 - `tests/unit/models/policy/test_megatron_worker.py`: worker schedule transitions and split-step pinning.
 - `experiments/cuda_graph/mamba_moe_te_graph_20260729/`: reusable launchers, manifests, collection, and report generation.
@@ -705,6 +709,11 @@ Do not advertise `moe_act` or `shared_expert` as independent graph scopes:
 verify from graph discovery and replay telemetry that their work executes
 inside the selected MoE boundary.
 
+Full `moe` tests explicitly configure expert-capacity drop-and-pad as required
+by MCore. Default-model configurations that do not satisfy this contract must
+fail preflight and be labeled unsupported rather than silently changing the
+recipe.
+
 Use successful warmups 1-3, schedule 5 on step 4, schedule 3 on steps 5-6, and schedule 5 on step 7.
 
 - [ ] **Step 5: Commit tests**
@@ -722,8 +731,8 @@ git commit -s -S -m "test: cover hybrid TE graph bank switching"
 ### Task 6: Refactor NeMo-RL Lifecycle into a Bounded Schedule LRU
 
 **Files:**
-- Modify: `nemo_rl/models/megatron/cuda_graph_lifecycle.py`
-- Modify: `tests/unit/models/megatron/test_cuda_graph_lifecycle.py`
+- Create: `nemo_rl/models/megatron/cuda_graph_lifecycle.py`
+- Create: `tests/unit/models/megatron/test_cuda_graph_lifecycle.py`
 
 **Interfaces:**
 - Consumes: MCore bank objects with `activate()` and `reset()`.
@@ -757,7 +766,8 @@ uv run python -m pytest -q \
   tests/unit/models/megatron/test_cuda_graph_lifecycle.py
 ```
 
-Expected: FAIL because the lifecycle accepts one helper and one capture attempt.
+Expected: FAIL at an assertion-based module discovery helper because latest
+NeMo-RL main has no training graph lifecycle module.
 
 - [ ] **Step 3: Implement typed schedule and result objects**
 
@@ -806,25 +816,38 @@ git commit -s -m "feat: cache TE CUDA graphs by PP schedule"
 ### Task 7: Integrate Schedule Banks into the NeMo-RL Worker
 
 **Files:**
+- Modify: `nemo_rl/data/packing/algorithms.py`
+- Modify: `nemo_rl/distributed/batched_data_dict.py`
+- Modify: `nemo_rl/models/megatron/data.py`
 - Modify: `nemo_rl/models/policy/__init__.py`
 - Modify: `nemo_rl/models/megatron/setup.py`
 - Modify: `nemo_rl/models/policy/workers/megatron_policy_worker.py`
-- Modify: `examples/configs/grpo_math_1B.yaml`
+- Modify: `tests/unit/data/packing/test_algorithms.py`
+- Modify: `tests/unit/models/megatron/test_megatron_data.py`
 - Modify: `tests/unit/models/megatron/test_megatron_setup.py`
 - Modify: `tests/unit/models/policy/test_megatron_worker.py`
 
 **Interfaces:**
 - Consumes: lifecycle from Task 6 and MCore graph-bank manager from Tasks 3-4.
-- Produces: full worker behavior for `5 -> 3 -> 5`, config default 2, schedule telemetry, and zero fallback.
+- Produces: training graph scope/config plumbing absent from latest NeMo-RL
+  main, fixed packed token/boundary geometry, full worker behavior for
+  `5 -> 3 -> 5`, TE-only cache default 2, schedule telemetry, and zero
+  fallback.
 
 - [ ] **Step 1: Add failing config tests**
 
 Add config tests that assert:
 
-- The fully loaded policy config contains cache capacity two.
+- A TE training-graph config that omits the cache field is normalized to
+  capacity two during setup.
 - Zero, negative, Boolean, and non-integer capacities are rejected.
-- Capacity greater than one is rejected for a non-TE implementation.
+- Any explicitly supplied cache capacity is rejected for a non-TE
+  implementation.
 - Eviction is rejected when the parsed TE version is below 2.10.
+- Packed TE graphs require positive `cuda_graph_max_packed_seqs` and sequence
+  packing.
+- `moe` and `moe_router` are mutually exclusive; `moe_preprocess` without
+  `moe_router` is rejected.
 
 - [ ] **Step 2: Verify RED for config**
 
@@ -838,19 +861,36 @@ uv run python -m pytest -q \
 
 Expected: FAIL because the setting is undefined.
 
-- [ ] **Step 3: Add the user-facing setting**
+- [ ] **Step 3: Add user-facing settings and fixed packed geometry**
 
-Add to the existing TypedDict and exemplar:
+Add to the existing TypedDict:
 
 ```python
+cuda_graph_modules: NotRequired[list[str]]
+cuda_graph_packed_seq: NotRequired[bool]
+cuda_graph_max_packed_seqs: NotRequired[int | None]
+cuda_graph_warmup_steps: NotRequired[int]
 cuda_graph_max_cached_schedules: NotRequired[int]
 ```
 
-```yaml
-cuda_graph_max_cached_schedules: 2
-```
+When `cuda_graph_impl=transformer_engine`, setup inserts cache capacity two
+before the worker is constructed. The worker reads the normalized value
+directly; do not add a worker call-site fallback. Graph-specific experiment
+scripts set warmup 3 and the model/workload-specific
+`cuda_graph_max_packed_seqs`.
 
-Read it directly from the loaded config; do not add a call-site fallback.
+Port the fixed packed-geometry contract from the prior experiment with new
+tests:
+
+- Split packed bins so no microbatch exceeds
+  `cuda_graph_max_packed_seqs`.
+- Pad packed tokens to `sequence_packing.train_mb_tokens`.
+- Build fixed-length cumulative-boundary Tensors of
+  `cuda_graph_max_packed_seqs + 2`, including the terminal capacity sentinel.
+- Preserve the true `cu_seqlens` separately for loss slicing.
+- Build the helper's sample `PackedSeqParams` on the model device with the same
+  token and sequence-count capacities.
+- Reject runtime token or sequence counts that exceed either capacity.
 
 - [ ] **Step 4: Add failing worker tests**
 
@@ -910,6 +950,13 @@ delayed-wgrad queue, asynchronous collective, or MoE dispatcher Tensor store
 is live. It is passed to the MCore manager and exercised before every bank
 mutation.
 
+Latest NeMo-RL main has no training `TECudaGraphHelper` lifecycle. Reintroduce
+helper construction after model finalization, call schedule activation before
+both synchronous and split forward/backward schedules, advance warmup only
+after the MP-wide optimizer result succeeds, release a split-step pinned key on
+finish or abort, guard every CPU relocation/refit path while any bank is
+cached, and add worker shutdown cleanup.
+
 - [ ] **Step 8: Verify GREEN**
 
 Run:
@@ -931,9 +978,13 @@ Run:
 ```bash
 git add \
   nemo_rl/models/policy/__init__.py \
+  nemo_rl/data/packing/algorithms.py \
+  nemo_rl/distributed/batched_data_dict.py \
+  nemo_rl/models/megatron/data.py \
   nemo_rl/models/megatron/setup.py \
   nemo_rl/models/policy/workers/megatron_policy_worker.py \
-  examples/configs/grpo_math_1B.yaml \
+  tests/unit/data/packing/test_algorithms.py \
+  tests/unit/models/megatron/test_megatron_data.py \
   tests/unit/models/megatron/test_megatron_setup.py \
   tests/unit/models/policy/test_megatron_worker.py
 git commit -s -m "feat: switch TE graphs across packed PP schedules"
@@ -1015,6 +1066,21 @@ Expected: FAIL because the experiment directory is absent.
 
 `run_scope.sh` validates `PHASE=smoke|performance|accuracy`, `SCOPE`, cluster profile, model snapshot, and container. It emits the full `COMMAND` and `sbatch` command under `TEST_ONLY=1`.
 
+Profiles select one immutable base recipe:
+
+```text
+Nano hybrid:
+  examples/configs/recipes/llm/grpo-nanov3-30BA3B-2n8g-megatron_generation.yaml
+Qwen3-30B-A3B:
+  examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
+Qwen3-235B-A22B:
+  examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g.yaml
+```
+
+Cluster profiles must pin the exact HF revision or existing model snapshot and
+the staged nightly container digest. Missing values make real submission fail
+before `sbatch`; `TEST_ONLY=1` reports every unresolved field.
+
 Every `scopes/*.sh` contains only its scope tuple and delegates:
 
 ```bash
@@ -1043,6 +1109,21 @@ and Provenance sections. It distinguishes no-CG baseline from empty-scope TE
 whole-layer capture.
 It additionally labels `moe_act` and shared-expert overlap as configuration
 variants so they cannot be mistaken for graph scopes.
+
+Map W&B metrics exactly:
+
+```text
+E2E throughput: performance/tokens_per_sec_per_gpu
+generation throughput: performance/generation_tokens_per_sec_per_gpu
+policy throughput: performance/policy_training_tokens_per_sec_per_gpu
+logprob throughput:
+  performance/policy_and_reference_logprobs_tokens_per_sec_per_gpu
+E2E time: timing/train/total_step_time
+generation time: timing/train/generation
+policy time: timing/train/policy_training
+logprob time: timing/train/policy_and_reference_logprobs
+quality: train/reward, train/accuracy, train/token_mult_prob_error, train/loss
+```
 
 - [ ] **Step 5: Verify GREEN**
 
@@ -1174,14 +1255,18 @@ Read completely:
 
 ```text
 /Users/sna/.codex/plugins/cache/e2etrain-marketplace/e2etrain/1.0.0/skills/ssh-slurm/SKILL.md
+/Users/sna/.claude/plugins/marketplaces/e2etrain-container-image-skill/plugins/e2etrain/skills/stage-training-containers/SKILL.md
 /Users/sna/.Codex/docs/clusters/slurm/ptyche.md
 ```
 
-Use the documented login, FairShare, `--test-only`, container, and five-minute monitoring procedures.
+Use the documented login, FairShare, `--test-only`, immutable nightly
+container staging, and five-minute monitoring procedures.
 
 - [ ] **Step 2: Submit preflight and all scope/variant five-step smokes**
 
-Run test-only for every script, then submit independent jobs without dependencies:
+Run test-only for every theoretical script. Classify model-incompatible scopes
+using MCore validation and graph-layer discovery, then submit every
+model-compatible job independently without dependencies:
 
 ```bash
 CLUSTER=ptyche TEST_ONLY=1 \
@@ -1190,9 +1275,12 @@ CLUSTER=ptyche \
   bash experiments/cuda_graph/mamba_moe_te_graph_20260729/submit_all_smokes.sh
 ```
 
-Expected: baseline, all 32 TE scope jobs, and targeted MoE configuration
-variants use fixed-rollout schedule `[5, 5, 5, 5, 3]`; TE jobs use warmup 3
-and cache capacity 2.
+Expected: baseline, all 32 theoretical TE scope rows, and targeted MoE
+configuration variants have an audited preflight result. Submitted jobs use
+fixed-rollout schedule `[5, 5, 5, 5, 3]`; TE jobs use warmup 3 and cache
+capacity 2. Unsupported rows such as dense `mlp` on a model without dense
+layers or full `moe` without drop-and-pad are recorded and not treated as
+runtime failures.
 
 - [ ] **Step 3: Monitor early failures**
 
