@@ -235,12 +235,35 @@ def _write_nccl_wheel(wheel: Path) -> None:
     with zipfile.ZipFile(wheel, "w") as archive:
         archive.writestr(
             "nvidia_nccl_cu13-2.30.4.dist-info/METADATA",
-            "Name: nvidia-nccl-cu13\\nVersion: 2.30.4\\n",
+            "Name: nvidia-nccl-cu13\nVersion: 2.30.4\n",
         )
 
 
 def _write_metadata(path: Path, values: dict[str, str]) -> None:
-    path.write_text("".join(f"{key}={value}\\n" for key, value in values.items()))
+    path.write_text("".join(f"{key}={value}\n" for key, value in values.items()))
+
+
+def test_standard_artifact_helpers_write_separate_metadata_lines(tmp_path: Path) -> None:
+    metadata_path = tmp_path / "metadata.env"
+    _write_metadata(
+        metadata_path,
+        {"package": "nvidia-nccl-cu13", "version": NCCL_VERSION},
+    )
+    assert metadata_path.read_text().splitlines() == [
+        "package=nvidia-nccl-cu13",
+        f"version={NCCL_VERSION}",
+    ]
+
+    wheel_path = tmp_path / "nvidia_nccl_cu13.whl"
+    _write_nccl_wheel(wheel_path)
+    with zipfile.ZipFile(wheel_path) as archive:
+        metadata = archive.read(
+            "nvidia_nccl_cu13-2.30.4.dist-info/METADATA"
+        ).decode()
+    assert metadata.splitlines() == [
+        "Name: nvidia-nccl-cu13",
+        "Version: 2.30.4",
+    ]
 
 
 def standard_deepep_artifact_env(shared_root: Path) -> dict[str, str]:

@@ -110,6 +110,13 @@ root. The controller will cherry-pick it onto the temporary RED branch and
 rerun RED/GREEN with the writable per-user root. That rerun evidence remains
 pending.
 
+Remote r3 then established the intended split: RED job `480213` failed as
+expected, and GREEN job `480214` reached artifact validation. GREEN exposed a
+test-helper defect: its generated `metadata.env` and wheel `METADATA` used
+literal `\\n` text instead of newline characters. A second test-only follow-up
+fixes those writers and directly asserts the generated metadata has separate
+parseable lines. The controller rerun with this fix is pending.
+
 ## Self-review
 
 - The launcher keeps `/tmp` restricted to the existing bounded worker overlay;
