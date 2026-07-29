@@ -80,7 +80,6 @@ HF_HOME=${HF_HOME:-${WORK_ROOT}/.cache/huggingface}
 CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/mopd_nano_fast/.cache/nccl-reshard-pr3294/${ARM}-${MODE}}
 WANDB_PROJECT=${WANDB_PROJECT:-sna-pr3294-nccl-reshard}
 WANDB_KEY_FILE=${WANDB_KEY_FILE:-${CACHE_ROOT}/.wandb_key}
-PYTHON_BIN=${PYTHON_BIN:-}
 RAY_BOOTSTRAP_VENV=${RAY_BOOTSTRAP_VENV:-}
 
 mkdir -p "${HF_HOME}" "${CACHE_ROOT}/uv" "${CACHE_ROOT}/venvs"
@@ -115,19 +114,16 @@ if [[ -n "${RAY_BOOTSTRAP_VENV}" ]]; then
   export PATH="${RAY_BOOTSTRAP_VENV}/bin:${PATH}"
   export PYTHONPATH="${RAY_BOOTSTRAP_VENV}/lib/python3.13/site-packages${PYTHONPATH:+:${PYTHONPATH}}"
 fi
-COMMAND_PYTHONPATH=${REPO}
-if [[ -n "${RAY_BOOTSTRAP_VENV}" ]]; then
-  COMMAND_PYTHONPATH+=":${RAY_BOOTSTRAP_VENV}/lib/python3.13/site-packages"
-fi
 
 export COMMAND="
 set -euo pipefail
 cd '${REPO}'
-export PYTHONPATH='${COMMAND_PYTHONPATH}'
+export PYTHONPATH='${REPO}'
 export HF_HOME='${HF_HOME}'
 export NRL_FORCE_REBUILD_VENVS=false
 export NEMO_RL_VENV_DIR='${CACHE_ROOT}/venvs'
 export UV_CACHE_DIR='${CACHE_ROOT}/uv'
+export UV_PROJECT_ENVIRONMENT='${CACHE_ROOT}/driver-venv'
 export UV_LOCK_TIMEOUT=7200
 export NVTE_CUDA_ARCHS='${NVTE_CUDA_ARCHS_OVERRIDE:-100}'
 export TORCH_CUDA_ARCH_LIST='${TORCH_CUDA_ARCH_LIST_OVERRIDE:-10.0}'
@@ -137,16 +133,7 @@ export NRL_REFIT_CACHED_LOADERS='${NRL_REFIT_CACHED_LOADERS}'
 if [[ -s '${WANDB_KEY_FILE}' ]]; then
   export WANDB_API_KEY=\$(cat '${WANDB_KEY_FILE}')
 fi
-PYTHON_BIN='${PYTHON_BIN}'
-if [[ -z \"\${PYTHON_BIN}\" ]]; then
-  PYTHON_BIN=/opt/nemo_rl_venv/bin/python
-fi
-if [[ ! -x \"\${PYTHON_BIN}\" ]]; then
-  PYTHON_BIN=\$(find /root/.local/share/uv/python \
-    -type f -path '*/bin/python3.13' -perm -u+x -print -quit)
-fi
-test -n \"\${PYTHON_BIN}\" && test -x \"\${PYTHON_BIN}\"
-\"\${PYTHON_BIN}\" examples/run_grpo.py \
+uv run --frozen examples/run_grpo.py \
   --config '${CONFIG}' \
   cluster.num_nodes='${TOTAL_NODES}' \
   cluster.gpus_per_node='${GPUS_PER_NODE}' \
