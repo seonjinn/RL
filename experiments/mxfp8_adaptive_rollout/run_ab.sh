@@ -762,10 +762,12 @@ run_in_container() {
   local run_id=$2
   local repeat=$3
   local python_bin=${PYTHON_BIN:-/opt/nemo_rl_venv/bin/python}
+  local vllm_python_bin=${VLLM_PYTHON_BIN:-/usr/local/bin/python-VllmGenerationWorker}
   local run_dir="$EXPERIMENT_ROOT/runs/$run_id"
   local vllm_root
 
   require_file "$python_bin"
+  require_file "$vllm_python_bin"
   require_file "$PARSER"
   require_file "$PERFORMANCE_CONFIG"
   if [[ ! -d "$run_dir" ]]; then
@@ -787,7 +789,7 @@ run_in_container() {
     exit 2
   fi
   mkdir -p "$EXPERIMENT_ROOT/artifacts"
-  vllm_root=$(runtime_preflight "$python_bin")
+  vllm_root=$(runtime_preflight "$vllm_python_bin")
   write_lines_new "$run_dir/runtime.env" \
     "vllm_repository=$VLLM_REPOSITORY" \
     "vllm_commit=$VLLM_COMMIT" \

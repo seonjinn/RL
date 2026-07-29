@@ -957,7 +957,8 @@ def test_performance_arms_resolve_and_validate_isolated_manifests(
     for manifest in (BOOTSTRAP_CONFIG_NAME, QUALIFIED_CONFIG_NAME):
         (manifest_dir / manifest).write_text("{}\n", encoding="utf-8")
 
-    capture = tmp_path / "python.calls"
+    driver_capture = tmp_path / "driver-python.calls"
+    vllm_capture = tmp_path / "vllm-python.calls"
     trace_dir = tmp_path / "runtime-trace"
     trace_dir.mkdir()
     fake_bin = tmp_path / "bin"
@@ -978,12 +979,36 @@ case "$1" in
 esac
 """,
     )
-    fake_python = tmp_path / "python"
+    fake_python = tmp_path / "driver-python"
     _write_executable(
         fake_python,
+        """#!/bin/bash
+printf '%q ' "$@" >>"$DRIVER_PYTHON_CAPTURE"
+printf '\\n' >>"$DRIVER_PYTHON_CAPTURE"
+if [[ "$1" == "-c" && "$2" == *"import flashinfer, vllm"* ]]; then
+  echo "driver interpreter must not run vLLM runtime preflight" >&2
+  exit 97
+fi
+if [[ "$1" == *"parse_results.py" ]]; then
+  for ((index = 1; index <= $#; index++)); do
+    if [[ "${!index}" == "--output" ]]; then
+      next=$((index + 1))
+      printf '{}\\n' >"${!next}"
+    fi
+  done
+  exit 0
+fi
+if [[ "$1" == *"examples/run_grpo.py" ]]; then
+  touch "$RUNTIME_TRACE_DIR/adaptive_dispatch_fake_fake.jsonl"
+fi
+""",
+    )
+    vllm_python = tmp_path / "vllm-actor-python"
+    _write_executable(
+        vllm_python,
         f"""#!/bin/bash
-printf '%q ' "$@" >>"$PYTHON_CAPTURE"
-printf '\\n' >>"$PYTHON_CAPTURE"
+printf '%q ' "$@" >>"$VLLM_PYTHON_CAPTURE"
+printf '\\n' >>"$VLLM_PYTHON_CAPTURE"
 if [[ "$1" == "-c" ]]; then
   if [[ "$2" == *"from pathlib import Path; import vllm"* ]]; then
     echo "{vllm_root}"
@@ -993,18 +1018,6 @@ if [[ "$1" == "-c" ]]; then
     echo 1
   fi
   exit 0
-fi
-if [[ "$1" == *"parse_results.py" ]]; then
-  for ((index = 1; index <= $#; index++)); do
-    if [[ "${{!index}}" == "--output" ]]; then
-      next=$((index + 1))
-      printf '{{}}\\n' >"${{!next}}"
-    fi
-  done
-  exit 0
-fi
-if [[ "$1" == *"examples/run_grpo.py" ]]; then
-  touch "$RUNTIME_TRACE_DIR/adaptive_dispatch_fake_fake.jsonl"
 fi
 """,
     )
@@ -1017,7 +1030,9 @@ fi
         "GPUS_PER_NODE": "4",
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "PYTHON_BIN": str(fake_python),
-        "PYTHON_CAPTURE": str(capture),
+        "VLLM_PYTHON_BIN": str(vllm_python),
+        "DRIVER_PYTHON_CAPTURE": str(driver_capture),
+        "VLLM_PYTHON_CAPTURE": str(vllm_capture),
         "RUNTIME_TRACE_DIR": str(original_dir / "runtime_dispatch"),
     }
     original = subprocess.run(
@@ -1052,15 +1067,19 @@ fi
 
     assert original.returncode == 0, original.stderr
     assert adaptive.returncode == 0, adaptive.stderr
-    calls = capture.read_text(encoding="utf-8").splitlines()
-    resolve_calls = [call for call in calls if "resolve-config" in call]
+    driver_calls = driver_capture.read_text(encoding="utf-8").splitlines()
+    vllm_calls = vllm_capture.read_text(encoding="utf-8").splitlines()
+    assert any("from\\ pathlib" in call and "import\\ vllm" in call for call in vllm_calls)
+    assert any("import\\ flashinfer" in call and "vllm" in call for call in vllm_calls)
+    assert all("flashinfer" not in call for call in driver_calls)
+    resolve_calls = [call for call in driver_calls if "resolve-config" in call]
     assert len(resolve_calls) == 2
     assert f"VLLM_MXFP8_DENSE_CONFIG_FILE={BOOTSTRAP_CONFIG_NAME}" in resolve_calls[0]
     assert f"VLLM_MXFP8_DENSE_CONFIG_FILE={QUALIFIED_CONFIG_NAME}" in resolve_calls[1]
-    metadata_calls = [call for call in calls if "make-metadata" in call]
+    metadata_calls = [call for call in driver_calls if "make-metadata" in call]
     assert BOOTSTRAP_CONFIG_SHA256 in metadata_calls[0]
     assert QUALIFIED_CONFIG_SHA256 in metadata_calls[1]
-    grpo_calls = [call for call in calls if "examples/run_grpo.py" in call]
+    grpo_calls = [call for call in driver_calls if "examples/run_grpo.py" in call]
     assert "logger.wandb.project=sna_mxfp8_kernel_test" in grpo_calls[0]
     assert "logger.wandb.name=mxfp8-qwen-baseline-no-shmoo-trtllm-r1" in grpo_calls[0]
     assert "logger.wandb.name=mxfp8-qwen-shmoo-qualified-r1" in grpo_calls[1]
@@ -1070,16 +1089,18 @@ fi
         for call in grpo_calls
     )
     default_runtime_call = next(
-        call for call in calls if "validate-default-runtime" in call
+        call for call in driver_calls if "validate-default-runtime" in call
     )
-    adaptive_runtime_call = next(call for call in calls if "validate-runtime" in call)
+    adaptive_runtime_call = next(
+        call for call in driver_calls if "validate-runtime" in call
+    )
     assert BOOTSTRAP_CONFIG_SHA256 in default_runtime_call
     assert "default_tactic_coverage.json" in default_runtime_call
     assert QUALIFIED_CONFIG_SHA256 in adaptive_runtime_call
     assert "tactic_coverage.json" in adaptive_runtime_call
     assert (original_dir / "default_tactic_coverage.json").is_file()
     assert (adaptive_dir / "tactic_coverage.json").is_file()
-    pair_calls = [call for call in calls if "validate-pair" in call]
+    pair_calls = [call for call in driver_calls if "validate-pair" in call]
     assert len(pair_calls) == 1
     for flag, value in (
         ("--expected-baseline-config-file", BOOTSTRAP_CONFIG_NAME),
