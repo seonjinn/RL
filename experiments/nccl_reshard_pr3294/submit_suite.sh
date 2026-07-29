@@ -19,7 +19,6 @@ case "${PLATFORM}" in
     GPUS_PER_NODE=${GPUS_PER_NODE:-8}
     GEN_NODES=${GEN_NODES:-2}
     SEGMENT_SIZE=${SEGMENT_SIZE:-4}
-    USE_GRES=${USE_GRES:-1}
     ;;
   gb200)
     WORK_ROOT=${WORK_ROOT:?Set WORK_ROOT to the GB200 user root}
@@ -27,7 +26,6 @@ case "${PLATFORM}" in
     GPUS_PER_NODE=${GPUS_PER_NODE:-4}
     GEN_NODES=${GEN_NODES:-1}
     SEGMENT_SIZE=${SEGMENT_SIZE:-4}
-    USE_GRES=${USE_GRES:-0}
     ;;
   *)
     echo "PLATFORM must be gcp-b200 or gb200" >&2
@@ -85,8 +83,10 @@ for MODE in bf16 blockwise-fp8 mxfp8-probe; do
       --output="${RESULT_ROOT}/slurm/%x-%j.out"
       --export="ALL,ARM=${ARM},MODE=${MODE},REPO=${REPO},CONTAINER=${CONTAINER},TOTAL_NODES=${TOTAL_NODES},GPUS_PER_NODE=${GPUS_PER_NODE},GEN_NODES=${GEN_NODES},SEGMENT_SIZE=${SEGMENT_SIZE},MAX_STEPS=${MAX_STEPS},RUN_NAME=${RUN_NAME},EXPERIMENT_ROOT=${EXPERIMENT_ROOT},WORK_ROOT=${WORK_ROOT}"
     )
-    if [[ "${USE_GRES}" == 1 ]]; then
+    if [[ "${PLATFORM}" == gcp-b200 ]]; then
       args+=(--gpus-per-node="${GPUS_PER_NODE}")
+    else
+      args+=(--gres="gpu:${GPUS_PER_NODE}")
     fi
     if [[ "${PLATFORM}" == gcp-b200 ]]; then
       args+=(--comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"nccl_reshard_refit","description":"venv setup and model initialization"}}')
@@ -103,4 +103,3 @@ for MODE in bf16 blockwise-fp8 mxfp8-probe; do
 done
 
 echo "manifest=${MANIFEST}"
-
