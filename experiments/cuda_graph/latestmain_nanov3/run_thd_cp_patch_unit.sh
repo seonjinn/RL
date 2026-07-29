@@ -28,7 +28,7 @@ RUN_NAME="latestmain-nanov3-thd-cp-patch-unit-${SOURCE_SHA}"
 COMMAND="uv run --extra mcore --frozen pytest -q \
   tests/unit/models/policy/test_patches.py \
   --mcore-only \
-  -k PatchThdContextParallelCudaGraph"
+  -k 'PatchThdContextParallelCudaGraph or ThdContextParallelPatchBootstrap'"
 
 if [[ -z "${CONTAINER:-}" ]]; then
   echo "CONTAINER must not be blank" >&2
