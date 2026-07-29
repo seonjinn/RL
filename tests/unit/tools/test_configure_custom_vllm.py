@@ -170,7 +170,12 @@ def test_cli_updates_pyproject_in_place(tmp_path: Path) -> None:
         pytest.param(None, None, "repo-default", id="selectors-unset"),
         pytest.param("project", None, "project", id="uv-only"),
         pytest.param(None, "virtual", "virtual", id="virtual-only"),
-        pytest.param("shared", "shared", "shared", id="matching-selectors"),
+        pytest.param(
+            "shared-alias",
+            "shared",
+            "shared",
+            id="same-canonical-environment",
+        ),
         pytest.param("project", "virtual", None, id="conflicting-selectors"),
     ],
 )
@@ -239,9 +244,13 @@ fi
 #!/bin/bash
 set -eu
 target="$1"
-parent="$(dirname "$target")"
-name="$(basename "$target")"
-printf '%s/%s\\n' "$(cd "$parent" && pwd -P)" "$name"
+if [[ -e "$target" || -L "$target" ]]; then
+  /bin/realpath "$target"
+else
+  parent="$(dirname "$target")"
+  name="$(basename "$target")"
+  printf '%s/%s\\n' "$(/bin/realpath "$parent")" "$name"
+fi
 """
     )
     fake_realpath.chmod(0o755)
@@ -253,11 +262,16 @@ printf '%s/%s\\n' "$(cd "$parent" && pwd -P)" "$name"
         "virtual": tmp_path / "root-virtual-environment",
         "shared": tmp_path / "root-shared-environment",
     }
+    managed_python = tmp_path / "managed-python"
+    managed_python.write_text("#!/bin/bash\nexit 0\n")
+    managed_python.chmod(0o755)
     for root_environment in root_environments.values():
         root_python = root_environment / "bin" / "python"
         root_python.parent.mkdir(parents=True)
-        root_python.touch()
-        root_python.chmod(0o755)
+        root_python.symlink_to(managed_python)
+    shared_alias = tmp_path / "root-shared-environment-alias"
+    shared_alias.symlink_to(root_environments["shared"], target_is_directory=True)
+    root_environments["shared-alias"] = shared_alias
 
     env = {
         **os.environ,

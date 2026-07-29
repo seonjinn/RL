@@ -42,31 +42,34 @@ export VLLM_VERSION_OVERRIDE=0.20.2
 OLD_UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-}"
 OLD_VIRTUAL_ENV="${VIRTUAL_ENV:-}"
 if [[ -n "$OLD_UV_PROJECT_ENVIRONMENT" && -n "$OLD_VIRTUAL_ENV" ]]; then
-  UV_PROJECT_PYTHON="$OLD_UV_PROJECT_ENVIRONMENT/bin/python"
-  VIRTUAL_ENV_PYTHON="$OLD_VIRTUAL_ENV/bin/python"
-  if [[ ! -x "$UV_PROJECT_PYTHON" || ! -x "$VIRTUAL_ENV_PYTHON" ]]; then
-    echo "[ERROR] Both configured root environment selectors must contain an executable bin/python." >&2
+  if [[ ! -d "$OLD_UV_PROJECT_ENVIRONMENT" || ! -d "$OLD_VIRTUAL_ENV" ]]; then
+    echo "[ERROR] Both configured root environment selectors must be directories." >&2
     exit 2
   fi
-  UV_PROJECT_PYTHON="$(realpath "$UV_PROJECT_PYTHON")"
-  VIRTUAL_ENV_PYTHON="$(realpath "$VIRTUAL_ENV_PYTHON")"
-  if [[ "$UV_PROJECT_PYTHON" != "$VIRTUAL_ENV_PYTHON" ]]; then
+  UV_PROJECT_ROOT_ENVIRONMENT="$(realpath "$OLD_UV_PROJECT_ENVIRONMENT")"
+  VIRTUAL_ROOT_ENVIRONMENT="$(realpath "$OLD_VIRTUAL_ENV")"
+  if [[ "$UV_PROJECT_ROOT_ENVIRONMENT" != "$VIRTUAL_ROOT_ENVIRONMENT" ]]; then
     echo "[ERROR] UV_PROJECT_ENVIRONMENT and VIRTUAL_ENV select different Python environments." >&2
     exit 2
   fi
-  ROOT_PYTHON="$UV_PROJECT_PYTHON"
+  ROOT_ENVIRONMENT="$UV_PROJECT_ROOT_ENVIRONMENT"
 elif [[ -n "$OLD_VIRTUAL_ENV" ]]; then
-  ROOT_PYTHON="$OLD_VIRTUAL_ENV/bin/python"
+  ROOT_ENVIRONMENT="$OLD_VIRTUAL_ENV"
 elif [[ -n "$OLD_UV_PROJECT_ENVIRONMENT" ]]; then
-  ROOT_PYTHON="$OLD_UV_PROJECT_ENVIRONMENT/bin/python"
+  ROOT_ENVIRONMENT="$OLD_UV_PROJECT_ENVIRONMENT"
 else
-  ROOT_PYTHON="$REPO_ROOT/.venv/bin/python"
+  ROOT_ENVIRONMENT="$REPO_ROOT/.venv"
 fi
+if [[ ! -d "$ROOT_ENVIRONMENT" ]]; then
+  echo "[ERROR] Root project environment is not a directory at $ROOT_ENVIRONMENT." >&2
+  exit 2
+fi
+ROOT_ENVIRONMENT="$(realpath "$ROOT_ENVIRONMENT")"
+ROOT_PYTHON="$ROOT_ENVIRONMENT/bin/python"
 if [[ ! -x "$ROOT_PYTHON" ]]; then
   echo "[ERROR] Root project Python is not executable at $ROOT_PYTHON." >&2
   exit 2
 fi
-ROOT_PYTHON="$(realpath "$ROOT_PYTHON")"
 
 BUILD_DIR=$(realpath "$SCRIPT_DIR/../3rdparty/vllm")
 if [[ -e "$BUILD_DIR" ]]; then
