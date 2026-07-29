@@ -8,6 +8,8 @@ EXPECTED_VLLM_VERSION=${EXPECTED_VLLM_VERSION:-0.20.2}
 EXPECTED_FLASHINFER_VERSION=${EXPECTED_FLASHINFER_VERSION:-0.6.8.post1}
 EXPECTED_MODEL=${EXPECTED_MODEL:-Qwen/Qwen3-30B-A3B}
 EXPECTED_TP=${EXPECTED_TP:-1}
+VLLM_PYTHON_BIN=${VLLM_PYTHON_BIN:-/usr/local/bin/python-VllmGenerationWorker}
+MCORE_PYTHON_BIN=${MCORE_PYTHON_BIN:-/usr/local/bin/python-MegatronPolicyWorker}
 
 : "${EXPECTED_NEMO_RL_COMMIT:?Set the immutable NeMo-RL commit}"
 : "${EXPECTED_CONFIG_NAME:?Set the package-relative MXFP8 JSON name}"
@@ -39,17 +41,15 @@ export EXPECTED_NEMO_RL_COMMIT
 export EXPECTED_CONFIG_NAME
 export EXPECTED_CONFIG_SHA256
 
-python - <<'PY'
+"$VLLM_PYTHON_BIN" - <<'PY'
 import hashlib
 import os
 import subprocess
 from pathlib import Path
 
 import flashinfer
-import megatron.core
 import nemo_rl
 import torch
-import transformer_engine.pytorch
 import vllm
 from vllm.model_executor.kernels.linear.mxfp8.tactic_config import (
     load_mxfp8_dense_runtime_config,
@@ -111,4 +111,26 @@ print(f"flashinfer_version={flashinfer.__version__}")
 print(f"config_path={runtime_config.source_path}")
 print(f"config_sha256={runtime_config.source_sha256}")
 print("loader_ok=true")
+PY
+
+"$MCORE_PYTHON_BIN" - <<'PY'
+from pathlib import Path
+
+import megatron.core
+import torch
+import transformer_engine.pytorch
+
+expected_gpu_count = 4
+assert torch.cuda.is_available(), "CUDA is unavailable in the mcore environment"
+assert torch.cuda.device_count() == expected_gpu_count, (
+    f"expected {expected_gpu_count} visible GPUs in the mcore environment, "
+    f"got {torch.cuda.device_count()}"
+)
+
+print(f"megatron_core_source={Path(megatron.core.__file__).resolve()}")
+print(
+    "transformer_engine_source="
+    f"{Path(transformer_engine.pytorch.__file__).resolve()}"
+)
+print("mcore_loader_ok=true")
 PY

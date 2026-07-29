@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -25,6 +26,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).parents[3]
 PARSER_PATH = REPO_ROOT / "experiments" / "mxfp8_adaptive_rollout" / "parse_results.py"
+SMOKE_PATH = REPO_ROOT / "experiments" / "mxfp8_adaptive_rollout" / "smoke_container.sh"
 NEMO_COMMIT = "8" * 40
 VLLM_COMMIT = "b" * 40
 CONTAINER_DIGEST = "sha256:" + "c" * 64
@@ -522,6 +524,90 @@ def test_validate_runtime_tactic_coverage_reports_unseen_fallback_rate(
 def _write_executable(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
     path.chmod(0o755)
+
+
+def test_container_smoke_defaults_to_recipe_actor_wrappers() -> None:
+    smoke = SMOKE_PATH.read_text(encoding="utf-8")
+
+    assert (
+        "VLLM_PYTHON_BIN=${VLLM_PYTHON_BIN:-"
+        "/usr/local/bin/python-VllmGenerationWorker}" in smoke
+    )
+    assert (
+        "MCORE_PYTHON_BIN=${MCORE_PYTHON_BIN:-"
+        "/usr/local/bin/python-MegatronPolicyWorker}" in smoke
+    )
+    assert "python-VllmQuantGenerationWorker" not in smoke
+    assert "python-MegatronQuantPolicyWorker" not in smoke
+
+
+def test_container_smoke_uses_split_vllm_and_mcore_interpreters(
+    tmp_path: Path,
+) -> None:
+    container = tmp_path / "runtime.sqsh"
+    container.write_bytes(b"immutable-container")
+    capture = tmp_path / "python-probes"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(
+        fake_bin / "python",
+        """#!/bin/bash
+echo combined >>"$PROBE_CAPTURE"
+exit 97
+""",
+    )
+    vllm_python = tmp_path / "vllm-python"
+    _write_executable(
+        vllm_python,
+        """#!/bin/bash
+cat >"$VLLM_PROBE"
+echo vllm >>"$PROBE_CAPTURE"
+""",
+    )
+    mcore_python = tmp_path / "mcore-python"
+    _write_executable(
+        mcore_python,
+        """#!/bin/bash
+cat >"$MCORE_PROBE"
+echo mcore >>"$PROBE_CAPTURE"
+""",
+    )
+    environment = {
+        **os.environ,
+        "CONTAINER_IMAGE": str(container),
+        "EXPECTED_CONFIG_NAME": "bootstrap.json",
+        "EXPECTED_CONFIG_SHA256": CONFIG_HASH,
+        "EXPECTED_CONTAINER_SHA256": hashlib.sha256(container.read_bytes()).hexdigest(),
+        "EXPECTED_NEMO_RL_COMMIT": NEMO_COMMIT,
+        "MCORE_PYTHON_BIN": str(mcore_python),
+        "MCORE_PROBE": str(tmp_path / "mcore-probe.py"),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "PROBE_CAPTURE": str(capture),
+        "SLURM_JOB_NUM_NODES": "1",
+        "VLLM_PYTHON_BIN": str(vllm_python),
+        "VLLM_PROBE": str(tmp_path / "vllm-probe.py"),
+    }
+
+    result = subprocess.run(
+        ["bash", str(SMOKE_PATH)],
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert capture.read_text(encoding="utf-8").splitlines() == ["vllm", "mcore"]
+    vllm_probe = (tmp_path / "vllm-probe.py").read_text(encoding="utf-8")
+    assert "import flashinfer" in vllm_probe
+    assert "import vllm" in vllm_probe
+    assert "import megatron.core" not in vllm_probe
+    assert "import transformer_engine.pytorch" not in vllm_probe
+    mcore_probe = (tmp_path / "mcore-probe.py").read_text(encoding="utf-8")
+    assert "import megatron.core" in mcore_probe
+    assert "import transformer_engine.pytorch" in mcore_probe
+    assert "import flashinfer" not in mcore_probe
+    assert "import vllm" not in mcore_probe
 
 
 def _run_spool_launcher(
