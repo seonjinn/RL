@@ -1,0 +1,3 @@
+# Both performance arms inherit the exact current-main MXFP8 rollout recipe.
+# The launcher adds only VLLM_MXFP8_DENSE_CONFIG_FILE for the adaptive arm.
+defaults: ../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
