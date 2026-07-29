@@ -254,6 +254,15 @@ COMMON_SRUN_ARGS+=" --container-workdir=$SLURM_SUBMIT_DIR"
 # Pass partition/account explicitly for overlapping srun calls.
 COMMON_SRUN_ARGS+=" -p $SLURM_JOB_PARTITION"
 COMMON_SRUN_ARGS+=" -A $SLURM_JOB_ACCOUNT"
+
+# Container image environment variables take precedence at the Pyxis boundary.
+# Reinject an explicitly selected shared actor-venv root after that boundary so
+# the Ray daemons build every actor runtime_env from the validated host path.
+RAY_CONTAINER_ENV=(env)
+if [[ -n "${NEMO_RL_VENV_DIR:-}" ]]; then
+  RAY_CONTAINER_ENV+=("NEMO_RL_VENV_DIR=${NEMO_RL_VENV_DIR}")
+fi
+
 # Number of CPUs per worker node. If the user did not set CPUS_PER_WORKER
 # explicitly, auto-detect it from SLURM so we claim every CPU the node actually
 # has (instead of the old GPUS_PER_NODE * 16 heuristic, which under-claims on
@@ -577,6 +586,7 @@ head_cmd=$(cat <<EOF
 if [[ "\${RAY_SUB_DEBUG_ENV:-0}" == "1" ]]; then
   env | grep -viE '(WANDB_API_KEY|HF_TOKEN|API_KEY|TOKEN|SECRET|PASSWORD)=' || true
 fi
+echo "[INFO] Effective NEMO_RL_VENV_DIR=\${NEMO_RL_VENV_DIR:-<container-default>}"
 
 # Turn on pipefail here; it does not carry into this 'bash -c' subshell from the
 # submit host. Without it, 'ray status | grep worker_units | awk ...' exits 0 even
@@ -805,6 +815,7 @@ worker_cmd=$(cat <<EOF
 if [[ "\${RAY_SUB_DEBUG_ENV:-0}" == "1" ]]; then
   env | grep -viE '(WANDB_API_KEY|HF_TOKEN|API_KEY|TOKEN|SECRET|PASSWORD)=' || true
 fi
+echo "[INFO] Effective NEMO_RL_VENV_DIR=\${NEMO_RL_VENV_DIR:-<container-default>}"
 echo "[INFO] Worker \$SLURM_PROCID on node \$SLURMD_NODENAME"
 
 # Fail fast if LOG_DIR is not actually shared with the submit host -- the worker
@@ -1005,7 +1016,7 @@ fi
 
 # Start the Ray head.
 log_phase "launching Ray head + worker sruns"
-srun $COMMON_SRUN_ARGS --container-name=ray-head --nodes=1 --ntasks=1 --cpus-per-task=$CPUS_PER_WORKER -w "$head_node" -o $LOG_DIR/ray-head.log bash -x -c "$head_cmd" &
+srun $COMMON_SRUN_ARGS --container-name=ray-head --nodes=1 --ntasks=1 --cpus-per-task=$CPUS_PER_WORKER -w "$head_node" -o $LOG_DIR/ray-head.log "${RAY_CONTAINER_ENV[@]}" bash -x -c "$head_cmd" &
 SRUN_PIDS["ray-head"]=$!
 
 # Start the Ray workers (all nodes except the head) with a single batched srun, so
@@ -1025,7 +1036,7 @@ if [[ $_num_workers -gt 0 ]]; then
     --kill-on-bad-exit=0 \
     --exclude="$head_node" \
     -o "$LOG_DIR/ray-worker-%0${_task_digits}t.log" \
-    bash -x -c "$worker_cmd" &
+    "${RAY_CONTAINER_ENV[@]}" bash -x -c "$worker_cmd" &
   SRUN_PIDS["ray-workers"]=$!
 else
   echo "[INFO] Single-node mode: head node is the only compute node, no workers to launch"

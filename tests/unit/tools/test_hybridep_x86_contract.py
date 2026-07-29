@@ -190,6 +190,30 @@ def test_launcher_allows_shared_non_lustre_logs_without_changing_defaults() -> N
     assert '"$RAY_BIN" start --address' in ray_submit
 
 
+def test_ray_sub_reinjects_actor_venv_after_the_container_boundary() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    source = (project_root / "ray.sub").read_text()
+
+    assert "RAY_CONTAINER_ENV=(env)" in source
+    assert (
+        'RAY_CONTAINER_ENV+=("NEMO_RL_VENV_DIR=${NEMO_RL_VENV_DIR}")' in source
+    )
+    assert source.count('"${RAY_CONTAINER_ENV[@]}" bash -x -c') == 2
+    assert (
+        source.count(
+            'echo "[INFO] Effective NEMO_RL_VENV_DIR='
+            '\\${NEMO_RL_VENV_DIR:-<container-default>}"'
+        )
+        == 2
+    )
+    assert source.index("--container-name=ray-head") < source.index(
+        '"${RAY_CONTAINER_ENV[@]}" bash -x -c "$head_cmd"'
+    )
+    assert source.index("--container-name=ray-worker") < source.index(
+        '"${RAY_CONTAINER_ENV[@]}" bash -x -c "$worker_cmd"'
+    )
+
+
 def test_x86_driver_venv_preparation_allows_time_for_actor_prefetch() -> None:
     project_root = Path(__file__).resolve().parents[3]
     submitter = (
