@@ -78,3 +78,9 @@ grep -q "^optimized|test-pair-optimized|${TMP_DIR}/pair-results/results/test-pai
 bash -n "${REPO_ROOT}/experiments/nccl_reshard_pr3294/run_arm.sbatch"
 bash -n "${REPO_ROOT}/experiments/nccl_reshard_pr3294/run_pair.sbatch"
 bash -n "${REPO_ROOT}/experiments/nccl_reshard_pr3294/submit_suite.sh"
+
+if grep -Fq 'REFIT_TRANSPORT=${REFIT_TRANSPORT},CONTAINER_ENV_VARS=PATH"' \
+  "${REPO_ROOT}/experiments/nccl_reshard_pr3294/submit_suite.sh"; then
+  echo "submit_suite must not overwrite the container PATH without a bootstrap venv" >&2
+  exit 1
+fi
