@@ -405,6 +405,7 @@ git commit -s -S -m "feat: support packed Mamba TE CUDA graphs"
 **Files:**
 - Create: `megatron/core/transformer/te_cuda_graph_bank.py`
 - Modify: `megatron/core/transformer/cuda_graphs.py`
+- Modify: `megatron/core/transformer/module.py`
 - Test: `tests/unit_tests/transformer/test_te_cuda_graph_bank.py`
 
 **Interfaces:**
@@ -442,10 +443,15 @@ assert:
 - Resetting an inactive bank leaves every active graph untouched.
 - A capture exception restores the previously active bank.
 - Reset is idempotent and resets only graph identities owned by the bank.
+- Reset unregisters the bank and severs graph/contract references so cache
+  eviction also releases captured Tensor storage; a reset bank cannot replay.
 - Activation and eviction reject a model-drain callback that reports live
   delayed-wgrad or communication work.
 - Activation rejects a bank whose capture scope, packed static signature, or
   layer topology differs from the manager fingerprint.
+- Reusing a consumed helper fails before installed layer state is changed.
+- Forward and delayed-wgrad replay validate the active bank's normalized
+  runtime microbatch count before the legacy modulo selection.
 
 - [ ] **Step 2: Verify RED**
 
@@ -489,9 +495,11 @@ class TECudaGraphBank:
         self._manager.reset(self)
 ```
 
-The manager owns one active bank, verifies every layer identity and graph
-count, invokes a model-drain assertion before capture/activation/reset, and
-synchronizes before explicit reset.
+The manager owns one active bank, verifies exact registration identity, every
+layer/list/graph/contract identity and graph count, invokes a model-drain
+assertion before capture/activation/reset, and synchronizes before explicit
+reset. A helper is one-shot: a consumed or finished helper is rejected before
+any active layer state is changed.
 
 Each `(layer, graphs)` entry also owns the layer replay contract active at
 capture time:
@@ -504,9 +512,13 @@ _te_cuda_graph_mamba_packed_seq_params_static_metadata
 _te_cuda_graph_mamba_packed_seq_params_tensor_signatures
 ```
 
-Activation installs the contract and hooks before assigning
-`layer.cuda_graphs`. A bank without packed inputs explicitly clears stale
-packed attributes from the previously active bank.
+Activation installs the packed contract and the last explicitly refreshed
+manual-hook object before assigning `layer.cuda_graphs`. Capture must not
+synthesize DDP manual hooks: existing training call sites refresh the active
+bank only after forward pre-hooks are enabled. A bank without packed inputs
+explicitly clears stale packed attributes from the previously active bank.
+Activation also installs a manager-owned replay guard consumed by both forward
+and delayed-wgrad graph selection.
 
 - [ ] **Step 4: Refactor helper capture to return owned graph lists**
 
@@ -529,6 +541,10 @@ previous bank. Map TE results with the existing normal and EP-overlap index
 formulas into those same list objects; list identity is the ownership token.
 Vision wrapping mutates the owned list in place.
 
+The manager exposes an explicit manual-hook refresh operation. Compatibility
+training calls retain their existing timing; `cuda_graph_set_manual_hooks()`
+refreshes the active compatibility bank after the authorized hook setup.
+
 Existing `create_cudagraphs()` captures one bank, activates it, and stores that
 exact bank for its compatibility `delete_cuda_graphs()`. Compatibility deletion
 resets only its owned callables and clears layer-facing state only when the
@@ -538,7 +554,8 @@ installed list is the same object.
 
 Ensure `_finish_capturing` or a dedicated abort cleanup runs from `finally`,
 clears both MCore and TE capture flags, unfreezes GC, resets fine-grained
-offload capture state, resets partial owned callables under the TE 2.10 guard,
+offload capture state, synchronizes before resetting partial owned callables
+under the TE 2.10 guard,
 marks the failed helper uncreated, and restores the previously active lists,
 hooks, and packed replay contracts before re-raising.
 
