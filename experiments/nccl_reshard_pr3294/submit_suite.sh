@@ -20,6 +20,13 @@ case "${PLATFORM}" in
     GEN_NODES=${GEN_NODES:-2}
     SEGMENT_SIZE=${SEGMENT_SIZE:-4}
     ;;
+  cw-h100)
+    WORK_ROOT=${WORK_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna}
+    TOTAL_NODES=${TOTAL_NODES:-3}
+    GPUS_PER_NODE=${GPUS_PER_NODE:-8}
+    GEN_NODES=${GEN_NODES:-1}
+    SEGMENT_SIZE=${SEGMENT_SIZE:-4}
+    ;;
   gb200)
     WORK_ROOT=${WORK_ROOT:?Set WORK_ROOT to the GB200 user root}
     TOTAL_NODES=${TOTAL_NODES:-5}
@@ -28,7 +35,7 @@ case "${PLATFORM}" in
     SEGMENT_SIZE=${SEGMENT_SIZE:-4}
     ;;
   *)
-    echo "PLATFORM must be gcp-b200 or gb200" >&2
+    echo "PLATFORM must be gcp-b200, cw-h100, or gb200" >&2
     exit 2
     ;;
 esac
