@@ -78,6 +78,7 @@ RAY_BOOTSTRAP_LOCAL_ROOT=${RAY_BOOTSTRAP_LOCAL_ROOT:-}
 USE_CONTAINER_VENVS=${USE_CONTAINER_VENVS:-false}
 CONTAINER_DRIVER_VENV=${CONTAINER_DRIVER_VENV:-/opt/nemo_rl_venv}
 CONTAINER_ACTOR_VENV_ROOT=${CONTAINER_ACTOR_VENV_ROOT:-/opt/ray_venvs}
+CONTAINER_REPO_ROOT=${CONTAINER_REPO_ROOT:-/opt/nemo-rl}
 
 if [[ -n "${RAY_BOOTSTRAP_ARCHIVE}" ]]; then
   test -f "${RAY_BOOTSTRAP_ARCHIVE}"
@@ -126,6 +127,7 @@ force_rebuild_venvs=${NRL_FORCE_REBUILD_VENVS}
 use_container_venvs=${USE_CONTAINER_VENVS}
 container_driver_venv=${CONTAINER_DRIVER_VENV}
 container_actor_venv_root=${CONTAINER_ACTOR_VENV_ROOT}
+container_repo_root=${CONTAINER_REPO_ROOT}
 NRL_MXFP8_BATCHED_SHUFFLE=${NRL_MXFP8_BATCHED_SHUFFLE}
 NRL_REFIT_CACHED_LOADERS=${NRL_REFIT_CACHED_LOADERS}
 EOF
@@ -148,29 +150,33 @@ fi
 case "${USE_CONTAINER_VENVS}" in
   true)
     unset UV_CACHE_DIR_OVERRIDE
+    MOUNTS="${MOUNTS},${REPO}:${CONTAINER_REPO_ROOT}"
     VLLM_ACTOR_PYTHON="${CONTAINER_ACTOR_VENV_ROOT}/nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker/bin/python"
     MCORE_ACTOR_PYTHON="${CONTAINER_ACTOR_VENV_ROOT}/nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker/bin/python"
     export SETUP_COMMAND="${SETUP_COMMAND:-}
 set -euo pipefail
+test -f '${CONTAINER_REPO_ROOT}/${CONFIG}'
 test -x '${CONTAINER_DRIVER_VENV}/bin/python'
 test -x '${VLLM_ACTOR_PYTHON}'
 test -x '${MCORE_ACTOR_PYTHON}'
 "
     if [[ -n "${RAY_BOOTSTRAP_VENV}" ]]; then
-      DRIVER_PYTHONPATH="${REPO}:${RAY_BOOTSTRAP_VENV}/lib/python3.13/site-packages"
+      DRIVER_PYTHONPATH="${CONTAINER_REPO_ROOT}:${RAY_BOOTSTRAP_VENV}/lib/python3.13/site-packages"
     else
-      DRIVER_PYTHONPATH="${REPO}"
+      DRIVER_PYTHONPATH="${CONTAINER_REPO_ROOT}"
     fi
+    DRIVER_WORKDIR="${CONTAINER_REPO_ROOT}"
     DRIVER_ENV_COMMANDS="
 export NEMO_RL_VENV_DIR='${CONTAINER_ACTOR_VENV_ROOT}'
 export UV_PROJECT_ENVIRONMENT='${CONTAINER_DRIVER_VENV}'
 unset UV_CACHE_DIR
 "
-    DRIVER_LAUNCH="'${CONTAINER_DRIVER_VENV}/bin/python' examples/run_grpo.py"
+    DRIVER_LAUNCH="'${CONTAINER_DRIVER_VENV}/bin/python' '${CONTAINER_REPO_ROOT}/examples/run_grpo.py'"
     ;;
   false)
     export UV_CACHE_DIR_OVERRIDE="${SHARED_UV_CACHE}"
     DRIVER_PYTHONPATH="${REPO}"
+    DRIVER_WORKDIR="${REPO}"
     DRIVER_ENV_COMMANDS="
 export NEMO_RL_VENV_DIR='${CACHE_ROOT}/venvs'
 export UV_CACHE_DIR='${SHARED_UV_CACHE}'
@@ -187,7 +193,7 @@ esac
 
 export COMMAND="
 set -euo pipefail
-cd '${REPO}'
+cd '${DRIVER_WORKDIR}'
 export PYTHONPATH='${DRIVER_PYTHONPATH}'
 export HF_HOME='${HF_HOME}'
 export NRL_FORCE_REBUILD_VENVS='${NRL_FORCE_REBUILD_VENVS}'

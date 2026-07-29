@@ -12,6 +12,7 @@ cat >"${TMP_DIR}/capture_command.sh" <<'EOF'
 printf 'SETUP_COMMAND=%s\n' "${SETUP_COMMAND:-}"
 printf 'PATH=%s\n' "${PATH}"
 printf 'UV_CACHE_DIR_OVERRIDE=%s\n' "${UV_CACHE_DIR_OVERRIDE:-}"
+printf 'MOUNTS=%s\n' "${MOUNTS:-}"
 printf '%s\n' "${COMMAND}"
 EOF
 chmod +x "${TMP_DIR}/capture_command.sh"
@@ -110,9 +111,12 @@ grep -q "test -x '/opt/ray_venvs/nemo_rl.models.policy.workers.megatron_policy_w
 grep -q "export NEMO_RL_VENV_DIR='/opt/ray_venvs'" <<<"${container_command}"
 grep -q "export UV_PROJECT_ENVIRONMENT='/opt/nemo_rl_venv'" \
   <<<"${container_command}"
-grep -q "export PYTHONPATH='${REPO_ROOT}:/tmp/test-ray-bootstrap/lib/python3.13/site-packages'" \
+grep -q "^MOUNTS=/lustre:/lustre,${REPO_ROOT}:/opt/nemo-rl$" \
   <<<"${container_command}"
-grep -q "/opt/nemo_rl_venv/bin/python' examples/run_grpo.py" \
+grep -q "cd '/opt/nemo-rl'" <<<"${container_command}"
+grep -q "export PYTHONPATH='/opt/nemo-rl:/tmp/test-ray-bootstrap/lib/python3.13/site-packages'" \
+  <<<"${container_command}"
+grep -Fq "'/opt/nemo_rl_venv/bin/python' '/opt/nemo-rl/examples/run_grpo.py'" \
   <<<"${container_command}"
 if grep -q "^uv run --frozen examples/run_grpo.py" <<<"${container_command}"; then
   echo "container venv mode must not build a driver environment" >&2
