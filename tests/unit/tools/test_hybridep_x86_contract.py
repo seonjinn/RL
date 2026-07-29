@@ -138,6 +138,46 @@ def test_x86_profiles_are_matched() -> None:
         ) in hybridep
 
 
+def test_x86_standard_deepep_profiles_are_matched_to_alltoall() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    profile_dir = (
+        project_root / "scripts" / "experiments" / "oci-hsg" / "hybridep" / "models"
+    )
+    pairs = (
+        ("qwen3-30ba3b-4n8g-x86-deepep", "grpo-qwen3-30ba3b-4n8g", 4, 4),
+        ("qwen3-235b-16n8g-x86-deepep", "grpo-qwen3-235b-16n8g", 16, 16),
+        (
+            "nemotron3-super-120ba12b-32n8g-sync-x86-deepep",
+            "grpo-nemotron3-super-120BA12B-32n8g",
+            32,
+            16,
+        ),
+    )
+    required_lines = {
+        "DISPATCHER_MODE=deepep",
+        "NRL_FORCE_REBUILD_VENVS=false",
+        "REQUIRE_PREBUILT_ACTOR_VENVS=true",
+        "REQUIRE_DEEPEP_WHEEL=true",
+        "REQUIRE_NCCL_WHEEL=true",
+        "DEEPEP_VARIANT=deepep",
+        "GPUS_PER_NODE=${GPUS_PER_NODE:-8}",
+        "MAX_STEPS=${MAX_STEPS:-20}",
+        "TIME_LIMIT=${TIME_LIMIT:-04:00:00}",
+        "DEFAULT_DEEPEP_COMMIT=dd758caf451848bd150e1046af3d0a73e5fff38d",
+    }
+
+    for profile_name, recipe_name, nodes, segment_size in pairs:
+        profile = (profile_dir / f"{profile_name}.env").read_text()
+
+        assert required_lines <= set(profile.splitlines())
+        assert f"NUM_ACTOR_NODES=${{NUM_ACTOR_NODES:-{nodes}}}" in profile
+        assert f"SEGMENT_SIZE=${{SEGMENT_SIZE:-{segment_size}}}" in profile
+        assert (
+            "CONFIG_PATH=examples/configs/recipes/llm/performance/"
+            f"{recipe_name}-alltoall.yaml"
+        ) in profile
+
+
 def test_recursive_checkout_uses_the_branch_that_exposes_the_bridge_gitlink() -> None:
     project_root = Path(__file__).resolve().parents[3]
     gitmodules = (project_root / ".gitmodules").read_text()

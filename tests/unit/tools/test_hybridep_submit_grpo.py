@@ -17,6 +17,7 @@ import shutil
 import shlex
 import subprocess
 import tempfile
+import zipfile
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -28,6 +29,8 @@ ACTOR_FQNS = (
     "nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker",
 )
 DEEPEP_COMMIT = "f725d29699f5bda9ba789456bb9579af69844685"
+STANDARD_DEEPEP_COMMIT = "dd758caf451848bd150e1046af3d0a73e5fff38d"
+NCCL_VERSION = "2.30.4"
 
 
 def _run_launcher(
@@ -95,6 +98,8 @@ if [ "$1" = "--test-only" ]; then
   exit 0
 fi
 printf '%s\\n' "$COMMAND" > "$COMMAND_CAPTURE"
+printf '%s\\n' "${SETUP_COMMAND:-}" > "$SETUP_COMMAND_CAPTURE"
+printf '%s\\n' "${LD_LIBRARY_PATH:-}" > "$RAY_PARENT_LD_LIBRARY_PATH_CAPTURE"
 printf '%s\\n' "${NEMO_RL_VENV_DIR:-}" > "$VENV_DIR_CAPTURE"
 printf '%s\\n' '999999'
 """
@@ -109,6 +114,10 @@ printf '%s\\n' '999999'
         "FAKE_PROJECT_ROOT": str(project_root),
         "FAKE_USER": subprocess.check_output(["id", "-un"], text=True).strip(),
         "COMMAND_CAPTURE": str(command_capture),
+        "SETUP_COMMAND_CAPTURE": str(tmp_path / "setup-command.txt"),
+        "RAY_PARENT_LD_LIBRARY_PATH_CAPTURE": str(
+            tmp_path / "ray-parent-ld-library-path.txt"
+        ),
         "VENV_DIR_CAPTURE": str(tmp_path / "venv-dir.txt"),
         "CONTAINER": str(container),
         "RUN_ROOT": str(tmp_path / "run"),
@@ -192,6 +201,70 @@ def _x86_shared_env(shared_root: Path) -> dict[str, str]:
     }
 
 
+def _write_nccl_wheel(wheel: Path) -> None:
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr(
+            "nvidia_nccl_cu13-2.30.4.dist-info/METADATA",
+            "Name: nvidia-nccl-cu13\\nVersion: 2.30.4\\n",
+        )
+
+
+def _write_metadata(path: Path, values: dict[str, str]) -> None:
+    path.write_text("".join(f"{key}={value}\\n" for key, value in values.items()))
+
+
+def standard_deepep_artifact_env(shared_root: Path) -> dict[str, str]:
+    deepep_dir = shared_root / "deepep-artifact"
+    nccl_dir = shared_root / "nccl-artifact"
+    deepep_dir.mkdir()
+    nccl_dir.mkdir()
+    deepep_wheel = deepep_dir / "deep_ep-standard.whl"
+    deepep_wheel.write_bytes(b"standard-deepep-wheel")
+    nccl_wheel = nccl_dir / "nvidia_nccl_cu13-2.30.4.whl"
+    _write_nccl_wheel(nccl_wheel)
+    deepep_sha256 = subprocess.check_output(
+        ["sha256sum", str(deepep_wheel)], text=True
+    ).split()[0]
+    nccl_sha256 = subprocess.check_output(
+        ["sha256sum", str(nccl_wheel)], text=True
+    ).split()[0]
+    _write_metadata(
+        deepep_dir / "metadata.env",
+        {
+            "deepep_variant": "deepep",
+            "deepep_branch": "main",
+            "deepep_commit": STANDARD_DEEPEP_COMMIT,
+            "deepep_wheel_sha256": deepep_sha256,
+            "nccl_version": NCCL_VERSION,
+            "nccl_wheel_sha256": nccl_sha256,
+            "wheel": str(deepep_wheel),
+            "wheel_sha256": deepep_sha256,
+        },
+    )
+    _write_metadata(
+        nccl_dir / "metadata.env",
+        {
+            "package": "nvidia-nccl-cu13",
+            "version": NCCL_VERSION,
+            "wheel": str(nccl_wheel),
+            "wheel_sha256": nccl_sha256,
+        },
+    )
+    container = shared_root / "nightly.sqsh"
+    container.touch()
+    return {
+        "CONTAINER": str(container),
+        "DEEPEP_COMMIT": STANDARD_DEEPEP_COMMIT,
+        "DEEPEP_WHEEL": str(deepep_wheel),
+        "DEEPEP_VARIANT": "deepep",
+        "HF_HOME": str(shared_root / "hf-home"),
+        "HF_DATASETS_CACHE": str(shared_root / "hf-home" / "cache"),
+        "NCCL_WHEEL": str(nccl_wheel),
+        "RUN_ROOT": str(shared_root / "run"),
+        "UV_CACHE_DIR": str(shared_root / "uv-cache"),
+    }
+
+
 def test_recipe_dispatcher_preserves_recipe_default(tmp_path: Path) -> None:
     driver_args = _run_launcher(tmp_path, dispatcher_mode="recipe")
 
@@ -200,6 +273,175 @@ def test_recipe_dispatcher_preserves_recipe_default(tmp_path: Path) -> None:
         "++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep" not in driver_args
     )
     assert "++policy.megatron_cfg.moe_hybridep_num_sms=32" not in driver_args
+
+
+def test_deepep_dispatcher_applies_standard_backend(
+    tmp_path: Path, lustre_tmp_path: Path
+) -> None:
+    args = _run_launcher(
+        tmp_path,
+        dispatcher_mode="deepep",
+        extra_env=standard_deepep_artifact_env(lustre_tmp_path),
+    )
+
+    assert "policy.megatron_cfg.moe_token_dispatcher_type=flex" in args
+    assert "++policy.megatron_cfg.moe_flex_dispatcher_backend=deepep" in args
+    assert "++policy.megatron_cfg.moe_deepep_num_sms=20" in args
+    assert not any("moe_hybridep_num_sms" in arg for arg in args)
+
+
+def test_deepep_dispatcher_rejects_an_invalid_variant(
+    tmp_path: Path, lustre_tmp_path: Path
+) -> None:
+    result, _ = _run_launcher_result(
+        tmp_path,
+        dispatcher_mode="deepep",
+        extra_env={
+            **standard_deepep_artifact_env(lustre_tmp_path),
+            "DEEPEP_VARIANT": "invalid",
+        },
+    )
+
+    assert result.returncode == 2
+    assert "DEEPEP_VARIANT must be deepep or hybridep" in result.stderr
+
+
+def test_deepep_dispatcher_rejects_branch_variant_mismatch(
+    tmp_path: Path, lustre_tmp_path: Path
+) -> None:
+    env = standard_deepep_artifact_env(lustre_tmp_path)
+    metadata_path = Path(env["DEEPEP_WHEEL"]).parent / "metadata.env"
+    _write_metadata(
+        metadata_path,
+        {
+            **dict(
+                line.split("=", maxsplit=1)
+                for line in metadata_path.read_text().splitlines()
+            ),
+            "deepep_branch": "hybrid-ep",
+        },
+    )
+    result, _ = _run_launcher_result(
+        tmp_path, dispatcher_mode="deepep", extra_env=env
+    )
+
+    assert result.returncode == 2
+    assert "DeepEP artifact branch does not match variant deepep" in result.stderr
+
+
+def test_deepep_dispatcher_requires_the_nccl_wheel(
+    tmp_path: Path, lustre_tmp_path: Path
+) -> None:
+    env = standard_deepep_artifact_env(lustre_tmp_path)
+    env.pop("NCCL_WHEEL")
+    result, _ = _run_launcher_result(
+        tmp_path, dispatcher_mode="deepep", extra_env=env
+    )
+
+    assert result.returncode == 2
+    assert "NCCL_WHEEL is required for model profile" in result.stderr
+
+
+def test_deepep_dispatcher_rejects_the_wrong_nccl_version(
+    tmp_path: Path, lustre_tmp_path: Path
+) -> None:
+    env = standard_deepep_artifact_env(lustre_tmp_path)
+    metadata_path = Path(env["NCCL_WHEEL"]).parent / "metadata.env"
+    _write_metadata(
+        metadata_path,
+        {
+            **dict(
+                line.split("=", maxsplit=1)
+                for line in metadata_path.read_text().splitlines()
+            ),
+            "version": "2.30.5",
+        },
+    )
+    result, _ = _run_launcher_result(
+        tmp_path, dispatcher_mode="deepep", extra_env=env
+    )
+
+    assert result.returncode == 2
+    assert "NCCL artifact version must be 2.30.4" in result.stderr
+
+
+def test_deepep_dispatcher_rejects_the_wrong_nccl_checksum(
+    tmp_path: Path, lustre_tmp_path: Path
+) -> None:
+    env = standard_deepep_artifact_env(lustre_tmp_path)
+    metadata_path = Path(env["NCCL_WHEEL"]).parent / "metadata.env"
+    _write_metadata(
+        metadata_path,
+        {
+            **dict(
+                line.split("=", maxsplit=1)
+                for line in metadata_path.read_text().splitlines()
+            ),
+            "wheel_sha256": "0" * 64,
+        },
+    )
+    result, _ = _run_launcher_result(
+        tmp_path, dispatcher_mode="deepep", extra_env=env
+    )
+
+    assert result.returncode == 2
+    assert "NCCL artifact wheel checksum mismatch" in result.stderr
+
+
+def test_deepep_dispatcher_rejects_mismatched_deepep_metadata(
+    tmp_path: Path, lustre_tmp_path: Path
+) -> None:
+    env = standard_deepep_artifact_env(lustre_tmp_path)
+    metadata_path = Path(env["DEEPEP_WHEEL"]).parent / "metadata.env"
+    _write_metadata(
+        metadata_path,
+        {
+            **dict(
+                line.split("=", maxsplit=1)
+                for line in metadata_path.read_text().splitlines()
+            ),
+            "deepep_commit": DEEPEP_COMMIT,
+        },
+    )
+    result, _ = _run_launcher_result(
+        tmp_path, dispatcher_mode="deepep", extra_env=env
+    )
+
+    assert result.returncode == 2
+    assert "DeepEP artifact commit does not match DEEPEP_COMMIT" in result.stderr
+
+
+def test_deepep_dispatcher_wires_both_wheels_and_ray_parent_loader_path(
+    tmp_path: Path, lustre_tmp_path: Path
+) -> None:
+    env = standard_deepep_artifact_env(lustre_tmp_path)
+    _run_launcher(tmp_path, dispatcher_mode="deepep", extra_env=env)
+
+    overlay = "/tmp/nemo-rl-deepep-dd758caf4518-test"
+    setup_command = (tmp_path / "setup-command.txt").read_text()
+    ray_parent_loader_path = (tmp_path / "ray-parent-ld-library-path.txt").read_text()
+    metadata = (Path(env["RUN_ROOT"]) / "submission.env").read_text()
+
+    assert "deepep_variant=deepep" in setup_command
+    assert f"nccl_wheel={env['NCCL_WHEEL']}" in setup_command
+    assert "expected_nccl_wheel_sha256=" in setup_command
+    assert ray_parent_loader_path.startswith(f"{overlay}/nvidia/nccl/lib:")
+    assert f"deepep_variant=deepep\\n" in metadata
+    assert f"deepep_wheel={env['DEEPEP_WHEEL']}\\n" in metadata
+    assert f"nccl_wheel={env['NCCL_WHEEL']}\\n" in metadata
+    assert f"nccl_version={NCCL_VERSION}\\n" in metadata
+    project_root = Path(__file__).resolve().parents[3]
+    expected_config_sha256 = subprocess.check_output(
+        [
+            "sha256sum",
+            str(
+                project_root
+                / "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
+            ),
+        ],
+        text=True,
+    ).split()[0]
+    assert f"config_sha256={expected_config_sha256}\\n" in metadata
 
 
 def test_unknown_dispatcher_mode_is_rejected(tmp_path: Path) -> None:
