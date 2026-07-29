@@ -222,3 +222,46 @@ def test_patch_is_idempotent(patched_source, monkeypatch):
     )
     patches._patch_vllm_ray_executor_v2_tcpstore_port(logging.getLogger(__name__))
     assert patched_source.read_text() == before
+
+
+def test_patch_repairs_legacy_offset_trapped_in_none_branch(tmp_path, monkeypatch):
+    """Migrate the first v0.25 backport whose marker hid in a dead branch.
+
+    ``ParallelConfig`` gives a plain NeMo-RL engine ``local_dp_rank=0``. The
+    earlier backport placed the VLLM_PORT offset under
+    ``if local_dp_rank is None`` and then treated the marker as proof that the
+    patch was active. On GB200 the worker therefore still selected port 7000
+    and failed with EADDRINUSE.
+    """
+    source = tmp_path / "ray_executor_v2.py"
+    source.write_text(
+        """class RayExecutorV2:
+    @staticmethod
+    def _select_tcpstore_port(local_dp_rank, master_port):
+        if local_dp_rank is None:
+            if envs.VLLM_PORT is not None:
+                # NeMo-RL: skip the ports the broadcast MessageQueue
+                # allocates from VLLM_PORT before the TCPStore binds.
+                try:
+                    return _get_open_port(
+                        start_port=envs.VLLM_PORT + 32, max_attempts=32
+                    )
+                except RuntimeError:
+                    return get_open_port()
+            return get_open_port()
+        window = 32
+        start_port = master_port + 100 + local_dp_rank * window
+        try:
+            return _get_open_port(start_port=start_port, max_attempts=window)
+        except RuntimeError:
+            return get_open_port()
+"""
+    )
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _relative: str(source))
+
+    patches._patch_vllm_ray_executor_v2_tcpstore_port(logging.getLogger(__name__))
+
+    base = _find_free_port_band(_WINDOW * 2)
+    monkeypatch.setenv("VLLM_PORT", str(base))
+    select = _load_select_tcpstore_port(source)
+    assert select(_NON_DP_LOCAL_RANK, _NON_DP_MASTER_PORT) == base + _WINDOW

@@ -250,6 +250,13 @@ def _patch_vllm_ray_executor_v2_tcpstore_port(logger) -> None:
     and falls through to ``get_open_port()`` — straight back to ``VLLM_PORT``.
     That is exactly the port the MessageQueue takes. See RL-1104.
 
+    The first v0.25 compatibility backport placed the offset inside the
+    ``local_dp_rank is None`` branch and used the offset text itself as the
+    idempotency marker. A later worker therefore saw the marker, skipped the
+    patch, and still selected port 7000 for the ordinary ``local_dp_rank=0``
+    path. Migrate that exact legacy shape instead of treating marker presence
+    alone as proof that the invariant holds.
+
     Returns without raising when the snippet is missing, but logs at warning
     level so a silent no-op is visible in worker logs.
     """
@@ -265,6 +272,19 @@ def _patch_vllm_ray_executor_v2_tcpstore_port(logger) -> None:
     marker = "start_port=envs.VLLM_PORT + 32"
     old_snippet = (
         "        if local_dp_rank is None:\n            return get_open_port()\n"
+    )
+    legacy_misplaced_snippet = (
+        "        if local_dp_rank is None:\n"
+        "            if envs.VLLM_PORT is not None:\n"
+        "                # NeMo-RL: skip the ports the broadcast MessageQueue\n"
+        "                # allocates from VLLM_PORT before the TCPStore binds.\n"
+        "                try:\n"
+        "                    return _get_open_port(\n"
+        "                        start_port=envs.VLLM_PORT + 32, max_attempts=32\n"
+        "                    )\n"
+        "                except RuntimeError:\n"
+        "                    return get_open_port()\n"
+        "            return get_open_port()\n"
     )
     new_snippet = (
         "        if envs.VLLM_PORT is not None:\n"
@@ -292,27 +312,37 @@ def _patch_vllm_ray_executor_v2_tcpstore_port(logger) -> None:
     )
 
     with _locked_file_patch(file_to_patch) as (content, write_back):
-        if marker in content:
+        if new_snippet in content:
             logger.info("vLLM RayExecutorV2 TCPStore port patch already applied.")
             return
 
-        if old_snippet not in content:
+        if legacy_misplaced_snippet in content:
+            content = content.replace(
+                legacy_misplaced_snippet,
+                new_snippet,
+                1,
+            )
+            write_back(content)
+        elif old_snippet in content:
+            content = content.replace(old_snippet, new_snippet, 1)
+            write_back(content)
+        else:
+            marker_state = "misplaced" if marker in content else "absent"
             logger.warning(
                 "Could not apply RayExecutorV2 TCPStore port patch: expected "
-                "snippet not found in %s. The vLLM version may have changed. "
+                "snippet not found in %s (marker=%s). The vLLM version may "
+                "have changed. "
                 "Engines spanning nodes may fail with EADDRINUSE at startup.",
                 file_to_patch,
+                marker_state,
             )
             return
-
-        content = content.replace(old_snippet, new_snippet, 1)
-        write_back(content)
 
     # Read back so a patch that silently failed to land is not reported as
     # applied; this is the failure mode that previously went unnoticed.
     try:
         with open(file_to_patch) as handle:
-            applied = marker in handle.read()
+            applied = new_snippet in handle.read()
     except OSError as error:
         logger.warning("Could not verify TCPStore port patch: %s", error)
         return
