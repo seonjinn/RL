@@ -108,6 +108,11 @@ grep -q "test -x '/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker.Vllm
   <<<"${container_command}"
 grep -q "test -x '/opt/ray_venvs/nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker/bin/python'" \
   <<<"${container_command}"
+grep -q "git -C '/opt/nemo-rl' rev-parse HEAD" <<<"${container_command}"
+grep -q "import nemo_rl.models.generation.vllm.vllm_worker as worker" \
+  <<<"${container_command}"
+grep -q "import nemo_rl.models.policy.workers.megatron_policy_worker as worker" \
+  <<<"${container_command}"
 grep -q "export NEMO_RL_VENV_DIR='/opt/ray_venvs'" <<<"${container_command}"
 grep -q "export UV_PROJECT_ENVIRONMENT='/opt/nemo_rl_venv'" \
   <<<"${container_command}"
@@ -122,6 +127,28 @@ if grep -q "^uv run --frozen examples/run_grpo.py" <<<"${container_command}"; th
   echo "container venv mode must not build a driver environment" >&2
   exit 1
 fi
+
+container_no_archive_command=$(
+  ARM=optimized \
+  MODE=mxfp8-rollout \
+  REPO="${REPO_ROOT}" \
+  CONTAINER="${TMP_DIR}/container.sqsh" \
+  TOTAL_NODES=3 \
+  GPUS_PER_NODE=8 \
+  GEN_NODES=1 \
+  SEGMENT_SIZE=2 \
+  MAX_STEPS=5 \
+  RUN_NAME=test-container-no-archive \
+  EXPERIMENT_ROOT="${TMP_DIR}/container-no-archive" \
+  WORK_ROOT="${TMP_DIR}/work" \
+  CACHE_ROOT="${TMP_DIR}/cache-container-no-archive" \
+  RAY_SUB_PATH="${TMP_DIR}/capture_command.sh" \
+  USE_CONTAINER_VENVS=true \
+  REFIT_TRANSPORT=null \
+  bash "${REPO_ROOT}/experiments/nccl_reshard_pr3294/run_arm.sbatch"
+)
+setup_command=$(sed -n '/^SETUP_COMMAND=/,/^PATH=/p' <<<"${container_no_archive_command}")
+grep -q "set -euo pipefail" <<<"${setup_command}"
 
 cat >"${TMP_DIR}/capture_arm.sh" <<'EOF'
 #!/usr/bin/env bash

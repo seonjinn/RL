@@ -60,6 +60,7 @@ esac
 REFIT_TRANSPORT=${REFIT_TRANSPORT:-nccl_reshard}
 
 git -C "${REPO}" rev-parse --git-dir >/dev/null
+REPO_SHA=$(git -C "${REPO}" rev-parse HEAD)
 test -f "${REPO}/${CONFIG}"
 test -f "${CONTAINER}"
 test -f "${RAY_SUB_PATH}"
@@ -78,7 +79,7 @@ RAY_BOOTSTRAP_LOCAL_ROOT=${RAY_BOOTSTRAP_LOCAL_ROOT:-}
 USE_CONTAINER_VENVS=${USE_CONTAINER_VENVS:-false}
 CONTAINER_DRIVER_VENV=${CONTAINER_DRIVER_VENV:-/opt/nemo_rl_venv}
 CONTAINER_ACTOR_VENV_ROOT=${CONTAINER_ACTOR_VENV_ROOT:-/opt/ray_venvs}
-CONTAINER_REPO_ROOT=${CONTAINER_REPO_ROOT:-/opt/nemo-rl}
+CONTAINER_REPO_ROOT=/opt/nemo-rl
 
 if [[ -n "${RAY_BOOTSTRAP_ARCHIVE}" ]]; then
   test -f "${RAY_BOOTSTRAP_ARCHIVE}"
@@ -112,7 +113,7 @@ cat >"${EXPERIMENT_ROOT}/metadata.env" <<EOF
 arm=${ARM}
 mode=${MODE}
 repo=${REPO}
-repo_sha=$(git -C "${REPO}" rev-parse HEAD)
+repo_sha=${REPO_SHA}
 container=${CONTAINER}
 total_nodes=${TOTAL_NODES}
 gpus_per_node=${GPUS_PER_NODE}
@@ -156,9 +157,12 @@ case "${USE_CONTAINER_VENVS}" in
     export SETUP_COMMAND="${SETUP_COMMAND:-}
 set -euo pipefail
 test -f '${CONTAINER_REPO_ROOT}/${CONFIG}'
+test \"\$(git -C '${CONTAINER_REPO_ROOT}' rev-parse HEAD)\" = '${REPO_SHA}'
 test -x '${CONTAINER_DRIVER_VENV}/bin/python'
 test -x '${VLLM_ACTOR_PYTHON}'
 test -x '${MCORE_ACTOR_PYTHON}'
+'${VLLM_ACTOR_PYTHON}' -c \"import nemo_rl.models.generation.vllm.vllm_worker as worker; assert worker.__file__.startswith('${CONTAINER_REPO_ROOT}/')\"
+'${MCORE_ACTOR_PYTHON}' -c \"import nemo_rl.models.policy.workers.megatron_policy_worker as worker; assert worker.__file__.startswith('${CONTAINER_REPO_ROOT}/')\"
 "
     if [[ -n "${RAY_BOOTSTRAP_VENV}" ]]; then
       DRIVER_PYTHONPATH="${CONTAINER_REPO_ROOT}:${RAY_BOOTSTRAP_VENV}/lib/python3.13/site-packages"
