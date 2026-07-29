@@ -1,4 +1,4 @@
-defaults: ./grpo-deepseek-v3-64n8g-async-1off.yaml
+defaults: ./grpo-deepseek-v3-64n8g-async-1off-alltoall.yaml
 checkpointing:
   checkpoint_dir: results/grpo-deepseek-v3-64n4g-async-1off
 policy:

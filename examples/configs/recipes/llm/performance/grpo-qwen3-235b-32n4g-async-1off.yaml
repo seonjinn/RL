@@ -1,4 +1,4 @@
-defaults: ./grpo-qwen3-235b-32n8g-async-1off.yaml
+defaults: ./grpo-qwen3-235b-32n8g-async-1off-alltoall.yaml
 checkpointing:
   checkpoint_dir: results/grpo-qwen3-235b-32n4g-async-1off
 policy:

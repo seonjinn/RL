@@ -1,4 +1,4 @@
-defaults: ./grpo-deepseek-v3-32n8g.yaml
+defaults: ./grpo-deepseek-v3-32n8g-alltoall.yaml
 checkpointing:
   checkpoint_dir: results/grpo-deepseek-v3-32n4g
 policy:
