@@ -110,18 +110,14 @@ export CONTAINER
 export MOUNTS=/lustre:/lustre
 export BASE_LOG_DIR="${EXPERIMENT_ROOT}"
 export UV_CACHE_DIR_OVERRIDE="${CACHE_ROOT}/uv"
-RAY_BOOTSTRAP_PYTHONPATH=
 if [[ -n "${RAY_BOOTSTRAP_VENV}" ]]; then
-  RAY_BOOTSTRAP_PYTHONPATH="${CACHE_ROOT}/ray-bootstrap"
-  mkdir -p "${RAY_BOOTSTRAP_PYTHONPATH}"
-  ln -sfn \
-    "${RAY_BOOTSTRAP_VENV}/lib/python3.13/site-packages/urllib3" \
-    "${RAY_BOOTSTRAP_PYTHONPATH}/urllib3"
-  export PYTHONPATH="${RAY_BOOTSTRAP_PYTHONPATH}${PYTHONPATH:+:${PYTHONPATH}}"
+  test -x "${RAY_BOOTSTRAP_VENV}/bin/ray"
+  export PATH="${RAY_BOOTSTRAP_VENV}/bin:${PATH}"
+  export PYTHONPATH="${RAY_BOOTSTRAP_VENV}/lib/python3.13/site-packages${PYTHONPATH:+:${PYTHONPATH}}"
 fi
 COMMAND_PYTHONPATH=${REPO}
-if [[ -n "${RAY_BOOTSTRAP_PYTHONPATH}" ]]; then
-  COMMAND_PYTHONPATH+=":${RAY_BOOTSTRAP_PYTHONPATH}"
+if [[ -n "${RAY_BOOTSTRAP_VENV}" ]]; then
+  COMMAND_PYTHONPATH+=":${RAY_BOOTSTRAP_VENV}/lib/python3.13/site-packages"
 fi
 
 export COMMAND="

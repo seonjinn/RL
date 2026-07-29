@@ -26,7 +26,7 @@ case "${PLATFORM}" in
     GPUS_PER_NODE=${GPUS_PER_NODE:-8}
     GEN_NODES=${GEN_NODES:-1}
     SEGMENT_SIZE=${SEGMENT_SIZE:-4}
-    RAY_BOOTSTRAP_VENV=${RAY_BOOTSTRAP_VENV:-/opt/ray_venvs/nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker}
+    RAY_BOOTSTRAP_VENV=${RAY_BOOTSTRAP_VENV:-${WORK_ROOT}/experiments/pr3294-nccl-reshard/cw-h100-quick/venvs/ray-2.56.1}
     ;;
   gb200)
     WORK_ROOT=${WORK_ROOT:?Set WORK_ROOT to the GB200 user root}
