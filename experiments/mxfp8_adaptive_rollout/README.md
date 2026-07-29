@@ -201,8 +201,9 @@ The required runtime evidence is the dispatch trace plus each arm's resolved
 configuration, metadata, environment, and run log. The baseline's
 `default_tactic_coverage.json` must show only TRTLLM runner defaults at
 `tactic=-1`. The adaptive arm's `tactic_coverage.json` must report at least one
-runtime tactic hit, all 106 qualified tactics hit, and its distinct-dispatch
-fallback rate only for unqualified shapes. Fallback on a qualified shape,
+runtime tactic hit, all 106 qualified tactics hit, and its fallback-record rate
+across runtime dispatch records, counting fallback records only for unqualified
+shapes. Fallback on a qualified shape,
 zero tactic hits, or all-default/fallback adaptive execution is rejected.
 
 The launcher writes these artifacts under the ignored shared
@@ -224,11 +225,13 @@ python3 "$NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout/parse_results.py"
 The stable summaries in `experiments/mxfp8_adaptive_rollout/report/results.json`
 and `experiments/mxfp8_adaptive_rollout/report/results.csv` include independently
 logged whole-run wall time, generation time, total step time, generated tokens,
-generated-token throughput per GPU, runtime tactic hits, distinct-record
-fallback rate, step, arm, repeat, source commits, container digest, config hash,
-TP, and seed. Whole-run wall time is measured by monotonic launcher boundaries
-and is repeated on measured step rows; it is not presented as per-step rollout
-latency. Accept the shmoo arm only with correctness, higher median
+generated-token throughput per GPU, runtime tactic hits, fallback-record rate
+across runtime dispatch records, with fallback records restricted to
+unqualified shapes, step, arm, repeat,
+source commits, container digest, config hash, TP, and seed. Whole-run wall
+time is measured by monotonic launcher boundaries and is repeated on measured
+step rows; it is not presented as per-step rollout latency. Accept the shmoo arm
+only with correctness, higher median
 output-token throughput, lower median generation time, and no total-step or
 independently measured run-wall regression. Both output paths must be new; the
 parser atomically creates them and refuses replacement.
