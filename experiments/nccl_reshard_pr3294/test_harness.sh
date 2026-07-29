@@ -101,6 +101,7 @@ container_command=$(
   bash "${REPO_ROOT}/experiments/nccl_reshard_pr3294/run_arm.sbatch"
 )
 grep -q "^UV_CACHE_DIR_OVERRIDE=$" <<<"${container_command}"
+grep -q "set -euo pipefail" <<<"${container_command}"
 grep -q "test -x '/opt/nemo_rl_venv/bin/python'" <<<"${container_command}"
 grep -q "test -x '/opt/ray_venvs/nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker/bin/python'" \
   <<<"${container_command}"
@@ -108,6 +109,8 @@ grep -q "test -x '/opt/ray_venvs/nemo_rl.models.policy.workers.megatron_policy_w
   <<<"${container_command}"
 grep -q "export NEMO_RL_VENV_DIR='/opt/ray_venvs'" <<<"${container_command}"
 grep -q "export UV_PROJECT_ENVIRONMENT='/opt/nemo_rl_venv'" \
+  <<<"${container_command}"
+grep -q "export PYTHONPATH='${REPO_ROOT}:/tmp/test-ray-bootstrap/lib/python3.13/site-packages'" \
   <<<"${container_command}"
 grep -q "/opt/nemo_rl_venv/bin/python' examples/run_grpo.py" \
   <<<"${container_command}"

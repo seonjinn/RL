@@ -97,7 +97,10 @@ test -x '${RAY_BOOTSTRAP_LOCAL_ROOT}/bin/uv'
 "
 fi
 
-mkdir -p "${HF_HOME}" "${SHARED_UV_CACHE}" "${CACHE_ROOT}/venvs"
+mkdir -p "${HF_HOME}"
+if [[ "${USE_CONTAINER_VENVS}" != true ]]; then
+  mkdir -p "${SHARED_UV_CACHE}" "${CACHE_ROOT}/venvs"
+fi
 if [[ ! -s "${WANDB_KEY_FILE}" && -f "${HOME}/.netrc" ]]; then
   mkdir -p "$(dirname "${WANDB_KEY_FILE}")"
   (umask 077; awk '/machine api.wandb.ai/{f=1} f&&/password/{print $2; exit}' \
@@ -148,12 +151,13 @@ case "${USE_CONTAINER_VENVS}" in
     VLLM_ACTOR_PYTHON="${CONTAINER_ACTOR_VENV_ROOT}/nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker/bin/python"
     MCORE_ACTOR_PYTHON="${CONTAINER_ACTOR_VENV_ROOT}/nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker/bin/python"
     export SETUP_COMMAND="${SETUP_COMMAND:-}
+set -euo pipefail
 test -x '${CONTAINER_DRIVER_VENV}/bin/python'
 test -x '${VLLM_ACTOR_PYTHON}'
 test -x '${MCORE_ACTOR_PYTHON}'
 "
     if [[ -n "${RAY_BOOTSTRAP_VENV}" ]]; then
-      DRIVER_PYTHONPATH="${RAY_BOOTSTRAP_VENV}/lib/python3.13/site-packages:${REPO}"
+      DRIVER_PYTHONPATH="${REPO}:${RAY_BOOTSTRAP_VENV}/lib/python3.13/site-packages"
     else
       DRIVER_PYTHONPATH="${REPO}"
     fi
