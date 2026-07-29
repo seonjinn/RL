@@ -12,20 +12,27 @@ The required runtime is:
 
 - NeMo-RL: the committed and pushed experiment checkout.
 - vLLM repository: `https://github.com/seonjinn/vllm.git`.
-- vLLM commit: `77d5e10eec8f5cc217d16a9230f2955cf8553cee`.
+- vLLM commit: `217ece36ee503ee8ccfbfaa0a5331765b21d2160`.
 - vLLM public version: `0.20.2`.
 - FlashInfer: `0.6.8.post1`.
 - Hardware: four OCI-HSG GB200 nodes, four GPUs per node.
 - Model: `Qwen/Qwen3-30B-A3B`, vLLM TP1.
-- Original arm: `VLLM_MXFP8_DENSE_CONFIG_FILE` is absent.
-- Adaptive arm: only that key is added, with package-relative value
-  `qwen3_30ba3b_tp1_v0202_qualified.json`.
+- Both arms use the same custom vLLM overlay and direct
+  `flashinfer_trtllm` adaptive path with `switch_m=256`; this is explicitly
+  **not** a comparison against stock vLLM.
+- Baseline (`original`) uses the package-relative bootstrap manifest
+  `qwen3_30ba3b_tp1_v0202_rollout_trace_bootstrap.json`. Its `8x4` and
+  `128x4` tactic tables are empty, so every recorded dispatch must take the
+  TRTLLM runner default (`tactic=-1`, `tactic_source=runner_default`).
+- Shmoo-qualified (`adaptive`) differs only by selecting
+  `qwen3_30ba3b_tp1_v0202_qualified.json`, the manifest containing the 106
+  qualified tactics for this handoff.
 
 The launcher compares both fully resolved Hydra configs after removing exactly
-that nested key. It first requires the key to be absent from original, present
-with the exact package-relative filename in adaptive, and bound to the expected
-JSON SHA256. It rejects differences in source commits, container digest,
-checkpoint, topology, seed, or any other resolved setting.
+the manifest-selection key. It requires the bootstrap filename and SHA256 for
+`original`, the qualified filename and SHA256 for `adaptive`, and rejects
+differences in source commits, container digest, checkpoint, topology, seed, or
+any other resolved setting.
 
 Set the canonical checkout before invoking any launcher command. Slurm runs a
 spooled copy of submitted scripts, so the launcher never derives repository
@@ -163,32 +170,46 @@ TP4 as the efficacy fallback. It never produces an empty optimized table.
 ## Alternating performance suite
 
 After the qualified JSON is installed under the package config directory in a
-new immutable container, smoke that JSON and run:
+new immutable container, invoke the launcher from the repository root. First
+preflight each suite, then submit the same suite:
 
 ```bash
-export CONTAINER_IMAGE=<qualified-immutable-sqsh>
-export QUALIFIED_CONFIG_SHA256=<raw-qualified-json-sha256>
-export REPEATS=3
-
-ACTION=test-only bash "$NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout/run_ab.sh" ab
-ACTION=submit bash "$NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout/run_ab.sh" ab
+ACTION=test-only bash experiments/mxfp8_adaptive_rollout/run_ab.sh smoke-ab
+ACTION=submit bash experiments/mxfp8_adaptive_rollout/run_ab.sh smoke-ab
+ACTION=test-only bash experiments/mxfp8_adaptive_rollout/run_ab.sh ab
+ACTION=submit bash experiments/mxfp8_adaptive_rollout/run_ab.sh ab
 ```
 
-The schedule alternates `original, adaptive` for each measured repeat, and
-`REPEATS` values below three are rejected. Each measured job runs
-`WARMUP_STEPS` cold steps (default one) followed by `MEASURE_STEPS` measured
-steps (default three) in the same allocation and process lifecycle. The parser
-uses the recorded warmup count to discard those cold steps.
+`smoke-ab` schedules one sequential matched `original`/`adaptive` pair and
+sets exactly one measured step per arm. Production `ab` requires exactly three
+sequential matched repeats: `original-r1`, `adaptive-r1`, `original-r2`,
+`adaptive-r2`, `original-r3`, `adaptive-r3`. Every arm keeps its own cold
+one-step in-job warmup, which the parser discards. Production then records the
+launcher default of 20 measured steps per arm; `REPEATS` values other than
+three are rejected for `ab`.
+
+The W&B project is exactly `sna_mxfp8_kernel_test`. The baseline arm name is
+`mxfp8-qwen-baseline-no-shmoo-trtllm-rN` and the shmoo-qualified arm name is
+`mxfp8-qwen-shmoo-qualified-rN`, where `N` is the repeat number. Both use the
+same model, seed, topology, container, custom vLLM overlay, and runtime trace;
+the manifest is the intended sole A/B difference.
 
 Both arms enable the same runtime dispatch tracing and use identical
 container-visible paths. Fresh run-local shared directories are bind-mounted at
 those paths so neither resolved config nor prior raw output is reused.
-Adaptive acceptance requires at least one runtime tactic-hit record and every
-promoted shape to hit its exact tactic. `tactic_coverage.json` reports the
-fallback fraction among distinct dispatch records for unqualified shapes;
-fallback for a qualified shape and all-default/fallback execution are rejected.
-Every run also writes `resolved_config.json`, `metadata.json`, `runtime.env`,
-and `run.log` under the ignored shared experiment root.
+The required runtime evidence is the dispatch trace plus each arm's resolved
+configuration, metadata, environment, and run log. The baseline's
+`default_tactic_coverage.json` must show only TRTLLM runner defaults at
+`tactic=-1`. The adaptive arm's `tactic_coverage.json` must report at least one
+runtime tactic hit, all 106 qualified tactics hit, and its distinct-dispatch
+fallback rate only for unqualified shapes. Fallback on a qualified shape,
+zero tactic hits, or all-default/fallback adaptive execution is rejected.
+
+The launcher writes these artifacts under the ignored shared
+`$NEMO_RL_EXPERIMENT_ROOT/runs/<suite-id>/measured-{original,adaptive}-rN/`.
+It also writes the suite submission manifest under
+`$NEMO_RL_EXPERIMENT_ROOT/submissions/`; preserve that file with the Slurm job
+IDs and raw logs as the handoff evidence.
 
 Parse only measured logs:
 
@@ -200,10 +221,14 @@ python3 "$NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout/parse_results.py"
   --csv-output experiments/mxfp8_adaptive_rollout/report/results.csv
 ```
 
-The stable summaries include independently logged whole-run wall time,
-generation time, total step time, generated tokens, generated-token throughput
-per GPU, runtime tactic hits, distinct-record fallback rate, step, arm, repeat,
-source commits, container digest, config hash, TP, and seed. Whole-run wall time
-is measured by monotonic launcher boundaries and is repeated on measured step
-rows; it is not presented as per-step rollout latency. Both output paths must
-be new; the parser atomically creates them and refuses replacement.
+The stable summaries in `experiments/mxfp8_adaptive_rollout/report/results.json`
+and `experiments/mxfp8_adaptive_rollout/report/results.csv` include independently
+logged whole-run wall time, generation time, total step time, generated tokens,
+generated-token throughput per GPU, runtime tactic hits, distinct-record
+fallback rate, step, arm, repeat, source commits, container digest, config hash,
+TP, and seed. Whole-run wall time is measured by monotonic launcher boundaries
+and is repeated on measured step rows; it is not presented as per-step rollout
+latency. Accept the shmoo arm only with correctness, higher median
+output-token throughput, lower median generation time, and no total-step or
+independently measured run-wall regression. Both output paths must be new; the
+parser atomically creates them and refuses replacement.
