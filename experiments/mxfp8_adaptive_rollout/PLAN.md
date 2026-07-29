@@ -3,7 +3,7 @@
 ## Source and image gate
 
 - [ ] Commit and push the NeMo-RL experiment branch.
-- [ ] Build the ARM64 image from `seonjinn/vllm` commit `bc588192`.
+- [ ] Build the ARM64 image from `seonjinn/vllm` commit `73da4b2c`.
 - [ ] Verify vLLM `0.20.2`, FlashInfer `0.6.8.post1`, custom source, loader,
   and the package-relative bootstrap JSON.
 - [ ] Run OCI-HSG FairShare and `sbatch --test-only`.

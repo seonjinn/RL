@@ -169,3 +169,22 @@ def test_apply_fp8_patches_registers_modelopt_patches_only_for_mxfp8(
         for path in patched_paths
     )
     assert all(patcher.started for patcher in fp8.fp8_state.vllm_patches)
+
+
+def test_mxfp8_linear_delegates_to_refit_safe_native_kernel(fp8_module):
+    fp8 = fp8_module
+    calls = []
+
+    class RefitSafeKernel:
+        preserves_checkpoint_weight_scale_for_refit = True
+
+        def process_weights_after_loading(self, layer):
+            calls.append(layer)
+
+    layer = types.SimpleNamespace(weight=types.SimpleNamespace(ndim=2))
+    method = types.SimpleNamespace(kernel=RefitSafeKernel())
+
+    fp8.process_weights_after_loading_mxfp8_linear(method, layer)
+
+    assert calls == [layer]
+    assert not hasattr(layer, "weight_scale_from_checkpoint")

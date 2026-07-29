@@ -616,15 +616,20 @@ def process_weights_after_loading(self, layer) -> None:
 
 
 def process_weights_after_loading_mxfp8_linear(self, layer) -> None:
-    from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
-        swizzle_mxfp8_scale,
-    )
-    from vllm.model_executor.parameter import ModelWeightParameter
-
     if layer.weight.ndim != 2:
         raise ValueError(
             f"MXFP8 linear layer weight must be 2D, but got {layer.weight.ndim}D"
         )
+
+    kernel = getattr(self, "kernel", None)
+    if getattr(kernel, "preserves_checkpoint_weight_scale_for_refit", False):
+        kernel.process_weights_after_loading(layer)
+        return
+
+    from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
+        swizzle_mxfp8_scale,
+    )
+    from vllm.model_executor.parameter import ModelWeightParameter
 
     backend = getattr(self, "backend", None)
     if backend is not None:
@@ -640,7 +645,6 @@ def process_weights_after_loading_mxfp8_linear(self, layer) -> None:
         else:
             assert backend == Mxfp8LinearBackend.FLASHINFER_CUTLASS
     else:
-        kernel = getattr(self, "kernel", None)
         kernel_name = type(kernel).__name__ if kernel is not None else None
         if "FlashInferCutlass" not in str(kernel_name):
             raise AssertionError(
