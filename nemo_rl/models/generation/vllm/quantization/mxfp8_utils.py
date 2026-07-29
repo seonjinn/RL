@@ -15,6 +15,25 @@
 from typing import Any
 
 
+def mxfp8_refit_scale_name(weight_name: str, module: Any) -> str:
+    quant_methods = (
+        getattr(module, "quant_method", None),
+        getattr(module, "base_quant_method", None),
+    )
+    preserves_checkpoint_scale = any(
+        getattr(method, "preserves_checkpoint_weight_scale_for_refit", False)
+        or getattr(
+            getattr(method, "kernel", None),
+            "preserves_checkpoint_weight_scale_for_refit",
+            False,
+        )
+        for method in quant_methods
+        if method is not None
+    )
+    suffix = "_scale" if preserves_checkpoint_scale else "_scale_from_checkpoint"
+    return weight_name + suffix
+
+
 def flashinfer_scale_k_pad_width(k: int) -> int:
     if k < 0:
         raise ValueError("MXFP8 scale K dimension must be non-negative")

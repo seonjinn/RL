@@ -27,6 +27,7 @@ from vllm.v1.engine.core import EngineCoreProc
 from vllm.v1.engine.utils import CoreEngineProcManager
 
 from nemo_rl.models.generation.vllm.quantization.mxfp8_utils import (
+    mxfp8_refit_scale_name,
     pad_flashinfer_scale_k,
 )
 
@@ -451,7 +452,8 @@ def load_weights(weights, model_runner):
         param_scale = torch.squeeze(param_scale, dim=-1)
         if global_fp8_config.is_mx:
             weights_quantized.append([k, param_lp])
-            weights_quantized.append([k + "_scale_from_checkpoint", param_scale])
+            module = _get_module_from_param_name(model, k)
+            weights_quantized.append([mxfp8_refit_scale_name(k, module), param_scale])
         else:
             weights_quantized.append([k, param_lp])
             weights_quantized.append([k + "_scale_inv", param_scale])
