@@ -805,3 +805,75 @@ def test_cw_h100_profile_exports_values_to_slurm_jobs() -> None:
 
     assert assignments
     assert all(line.startswith("export ") for line in assignments)
+
+
+def test_stage_enroot_image_publishes_an_immutable_image_with_provenance() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    staging_script = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "x86"
+        / "hybridep"
+        / "stage_enroot_image.sbatch"
+    )
+    source = staging_script.read_text()
+
+    required_snippets = {
+        "SOURCE_IMAGE",
+        "OUTPUT_PREFIX",
+        "CONTAINER_DIR",
+        "SOURCE_COMMIT",
+        "SLURM_JOB_ID",
+        'CONTAINER_DIR=$(readlink -m -- "${CONTAINER_DIR}")',
+        'ENROOT_CACHE_PATH=$(readlink -m -- "${ENROOT_CACHE_PATH}")',
+        'ENROOT_DATA_PATH=$(readlink -m -- "${ENROOT_DATA_PATH}")',
+        "for shared_path_name in CONTAINER_DIR ENROOT_CACHE_PATH ENROOT_DATA_PATH; do",
+        "/lustre/*",
+        "must be on shared /lustre storage",
+        "output_file",
+        "metadata_file",
+        ".metadata.txt",
+        "sha256sum",
+        "Immutable output already exists",
+        "ln -s",
+        "mv",
+    }
+    missing = sorted(snippet for snippet in required_snippets if snippet not in source)
+
+    assert not missing
+
+
+def test_stage_nccl_wheel_pins_and_publishes_the_exact_runtime() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    staging_script = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "x86"
+        / "hybridep"
+        / "stage_nccl_wheel.sbatch"
+    )
+    source = staging_script.read_text()
+
+    required_snippets = {
+        "NCCL_PACKAGE=nvidia-nccl-cu13",
+        "NCCL_VERSION=2.30.4",
+        "pip download --no-deps",
+        "sha256sum",
+        'if [[ -e "${artifact_dir}" ]]',
+        "Refusing to overwrite immutable artifact directory",
+        "/lustre/*",
+        "metadata.env",
+        "package=%q",
+        "version=%q",
+        "wheel=%q",
+        "wheel_sha256=%q",
+        "container=%q",
+        "container_sha256=%q",
+        "slurm_job_id=%q",
+        "staged_at=%q",
+    }
+    missing = sorted(snippet for snippet in required_snippets if snippet not in source)
+
+    assert not missing
