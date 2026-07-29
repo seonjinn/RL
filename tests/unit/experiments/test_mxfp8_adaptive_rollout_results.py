@@ -60,7 +60,13 @@ def _load_parser() -> ModuleType:
     return module
 
 
-def _literal_log(*, arm: str = "original", repeat: int = 1) -> str:
+def _literal_log(
+    *,
+    arm: str = "original",
+    repeat: int = 1,
+    qualified_tactic_count: int = 2,
+    qualified_tactics_hit: int = 2,
+) -> str:
     metadata = {
         "arm": arm,
         "repeat": repeat,
@@ -82,8 +88,8 @@ def _literal_log(*, arm: str = "original", repeat: int = 1) -> str:
                 {
                     "fallback_record_count": 1,
                     "fallback_record_rate": 0.25,
-                    "qualified_tactic_count": 2,
-                    "qualified_tactics_hit": 2,
+                    "qualified_tactic_count": qualified_tactic_count,
+                    "qualified_tactics_hit": qualified_tactics_hit,
                     "runtime_record_count": 4,
                     "tactic_hit_record_count": 3,
                 },
@@ -157,6 +163,45 @@ def test_parse_log_rejects_adaptive_result_without_runtime_tactic_hits() -> None
 
     with pytest.raises(ValueError, match="tactic coverage"):
         parser.parse_log(log)
+
+
+def test_parse_log_accepts_partial_qualified_tactic_coverage() -> None:
+    parser = _load_parser()
+
+    records = parser.parse_log(
+        _literal_log(
+            arm="adaptive",
+            qualified_tactic_count=106,
+            qualified_tactics_hit=2,
+        )
+    )
+
+    assert records[0].qualified_tactic_count == 106
+    assert records[0].qualified_tactics_hit == 2
+
+
+@pytest.mark.parametrize(
+    ("qualified_tactic_count", "qualified_tactics_hit", "message"),
+    (
+        (2, 0, "zero qualified tactics"),
+        (2, 3, "more qualified tactics than promoted"),
+    ),
+)
+def test_parse_log_rejects_invalid_qualified_tactic_hit_count(
+    qualified_tactic_count: int,
+    qualified_tactics_hit: int,
+    message: str,
+) -> None:
+    parser = _load_parser()
+
+    with pytest.raises(ValueError, match=message):
+        parser.parse_log(
+            _literal_log(
+                arm="adaptive",
+                qualified_tactic_count=qualified_tactic_count,
+                qualified_tactics_hit=qualified_tactics_hit,
+            )
+        )
 
 
 def test_parse_log_rejects_missing_required_provenance() -> None:
@@ -444,7 +489,7 @@ def test_validate_runtime_tactic_coverage_rejects_all_fallback(
         )
 
 
-def test_validate_runtime_tactic_coverage_requires_every_promoted_shape(
+def test_validate_runtime_tactic_coverage_accepts_observed_qualified_subset(
     tmp_path: Path,
 ) -> None:
     parser = _load_parser()
@@ -470,7 +515,54 @@ def test_validate_runtime_tactic_coverage_requires_every_promoted_shape(
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="not hit at runtime"):
+    assert parser.validate_runtime_tactic_coverage(
+        manifest,
+        (trace_path,),
+        expected_config_sha256=CONFIG_HASH,
+    ) == {
+        "fallback_record_count": 0,
+        "fallback_record_rate": 0.0,
+        "qualified_tactic_count": 2,
+        "qualified_tactics_hit": 1,
+        "runtime_record_count": 1,
+        "tactic_hit_record_count": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    ("tactic", "source", "message"),
+    (
+        (23, "static_hint", "static tactic is not qualified"),
+        (-1, "runner_default", "fell back for a qualified shape"),
+    ),
+)
+def test_validate_runtime_tactic_coverage_rejects_invalid_qualified_dispatch(
+    tmp_path: Path,
+    tactic: int,
+    source: str,
+    message: str,
+) -> None:
+    parser = _load_parser()
+    manifest = _qualified_manifest(("8x4", 8, 2048, 8192, 17))
+    trace_path = tmp_path / "adaptive_dispatch.jsonl"
+    trace_path.write_text(
+        json.dumps(
+            {
+                "event": "mxfp8_adaptive_dispatch",
+                "config_sha256": CONFIG_HASH,
+                "layout": "8x4",
+                "m": 8,
+                "n": 2048,
+                "k": 8192,
+                "tactic": tactic,
+                "tactic_source": source,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
         parser.validate_runtime_tactic_coverage(
             manifest,
             (trace_path,),

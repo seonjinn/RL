@@ -260,8 +260,12 @@ def _tactic_coverage_from_log(text: str, *, arm: object) -> ParsedTacticCoverage
         raise ValueError("adaptive tactic coverage has zero runtime tactic-hit records")
     if coverage["qualified_tactic_count"] <= 0:
         raise ValueError("adaptive tactic coverage has zero promoted tactics")
-    if coverage["qualified_tactics_hit"] != coverage["qualified_tactic_count"]:
-        raise ValueError("adaptive tactic coverage did not hit every qualified tactic")
+    if coverage["qualified_tactics_hit"] <= 0:
+        raise ValueError("adaptive tactic coverage has zero qualified tactics hit")
+    if coverage["qualified_tactics_hit"] > coverage["qualified_tactic_count"]:
+        raise ValueError(
+            "adaptive tactic coverage has more qualified tactics than promoted"
+        )
     return {
         "runtime_record_count": cast(int, coverage["runtime_record_count"]),
         "tactic_hit_record_count": cast(int, coverage["tactic_hit_record_count"]),
@@ -460,7 +464,7 @@ def validate_runtime_tactic_coverage(
     *,
     expected_config_sha256: str,
 ) -> dict[str, int | float]:
-    """Require every promoted tactic to hit and summarize runtime fallback records."""
+    """Validate observed qualified tactics and summarize runtime fallback records."""
     promoted = validate_qualified_manifest(manifest)
     if not trace_paths:
         raise ValueError("adaptive runtime produced no tactic trace files")
@@ -525,9 +529,6 @@ def validate_runtime_tactic_coverage(
 
     if tactic_hit_records == 0:
         raise ValueError("adaptive runtime has zero runtime tactic-hit records")
-    missed = sorted(set(promoted) - hit_shapes)
-    if missed:
-        raise ValueError(f"qualified tactics were not hit at runtime: {missed}")
     if runtime_records == 0:
         raise ValueError("adaptive runtime produced zero dispatch records")
     return {

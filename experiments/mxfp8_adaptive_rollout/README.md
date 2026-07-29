@@ -201,10 +201,13 @@ The required runtime evidence is the dispatch trace plus each arm's resolved
 configuration, metadata, environment, and run log. The baseline's
 `default_tactic_coverage.json` must show only TRTLLM runner defaults at
 `tactic=-1`. The adaptive arm's `tactic_coverage.json` must report at least one
-runtime tactic hit, all 106 qualified tactics hit, and its fallback-record rate
-across runtime dispatch records, counting fallback records only for unqualified
-shapes. Fallback on a qualified shape,
-zero tactic hits, or all-default/fallback adaptive execution is rejected.
+runtime tactic hit, the observed qualified-tactic hit/count, and its
+fallback-record rate across runtime dispatch records, counting fallback records
+only for unqualified shapes. A finite compiled run may exercise only a subset
+of the qualified manifest, so the observed hit count may be lower than the
+qualified count. Every observed static-hint shape and tactic must exactly match
+the manifest. Fallback on a qualified shape, zero tactic hits, or
+all-default/fallback adaptive execution is rejected.
 
 The launcher writes these artifacts under the ignored shared
 `$NEMO_RL_EXPERIMENT_ROOT/runs/<suite-id>/measured-{original,adaptive}-rN/`.
