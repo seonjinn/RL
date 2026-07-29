@@ -87,6 +87,19 @@ def test_check_nccl_reshard_refit_support_rejects_invalid_config(
     assert expected_violation in str(exc_info.value)
 
 
+def test_check_nccl_reshard_refit_support_rejects_refit_prequantize() -> None:
+    config = _valid_nccl_reshard_config()
+    config.policy["generation"]["vllm_cfg"]["refit_prequantize"] = True
+
+    with pytest.raises(ValueError) as exc_info:
+        check_nccl_reshard_refit_support(config)
+
+    assert (
+        "policy.generation.vllm_cfg.refit_prequantize must be False"
+        in str(exc_info.value)
+    )
+
+
 # --------------------------------------------------------------------------
 # MeshInfo
 # --------------------------------------------------------------------------
