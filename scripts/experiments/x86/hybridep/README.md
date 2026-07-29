@@ -78,8 +78,13 @@ scripts/experiments/x86/hybridep/submit_driver_venv.sh
 The single preparation job builds the driver/Ray environment, then serially
 prefetches the vLLM generation and Megatron policy actor environments into
 `NEMO_RL_VENV_DIR`. It verifies both actor Python interpreters before it
-finishes. After the job completes, export all three variables for every paired
-run:
+finishes. The job pins uv-managed Python installations to
+`NEMO_RL_VENV_DIR/.uv-python`, logs the effective path before building, and
+rejects actor interpreters that resolve outside that shared directory. uv does
+not relocate existing virtual environments: if preparation reports a stale
+unmanaged Python target, quarantine or remove the named actor environment and
+rerun preparation instead of reusing it. After the job completes, export all
+three variables for every paired run:
 
 ```bash
 export DRIVER_VENV=/lustre/absolute/path/hybridep-x86/driver-venv

@@ -36,13 +36,30 @@ for shared_path_name in DRIVER_VENV UV_CACHE_DIR NEMO_RL_VENV_DIR; do
   esac
 done
 
+UV_PYTHON_INSTALL_DIR="${NEMO_RL_VENV_DIR}/.uv-python"
+UV_PYTHON_INSTALL_DIR=$(python3 -c \
+  'import os, sys; print(os.path.realpath(sys.argv[1]))' \
+  "${UV_PYTHON_INSTALL_DIR}")
+case "${UV_PYTHON_INSTALL_DIR}" in
+  "${NEMO_RL_VENV_DIR}"/*) ;;
+  *)
+    printf 'UV_PYTHON_INSTALL_DIR must resolve under NEMO_RL_VENV_DIR: %s\n' \
+      "${UV_PYTHON_INSTALL_DIR}" >&2
+    exit 2
+    ;;
+esac
+
 PROJECT_ROOT=$(readlink -f -- "${HYBRID_EP_PROJECT_ROOT}")
 if [[ ! -f "${PROJECT_ROOT}/pyproject.toml" || ! -f "${PROJECT_ROOT}/uv.lock" ]]; then
   printf 'NeMo-RL project files are missing from %s.\n' "${PROJECT_ROOT}" >&2
   exit 2
 fi
 
-mkdir -p "$(dirname -- "${DRIVER_VENV}")" "${UV_CACHE_DIR}" "${NEMO_RL_VENV_DIR}"
+mkdir -p \
+  "$(dirname -- "${DRIVER_VENV}")" \
+  "${UV_CACHE_DIR}" \
+  "${NEMO_RL_VENV_DIR}" \
+  "${UV_PYTHON_INSTALL_DIR}"
 
 MOUNTS="${PROJECT_ROOT}:${PROJECT_ROOT},/lustre:/lustre"
 if [[ -n "${EXTRA_MOUNTS:-}" ]]; then
@@ -58,14 +75,17 @@ srun \
     DRIVER_VENV="${DRIVER_VENV}" \
     UV_CACHE_DIR="${UV_CACHE_DIR}" \
     NEMO_RL_VENV_DIR="${NEMO_RL_VENV_DIR}" \
+    UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR}" \
     bash -lc '
     set -euo pipefail
     printf "Effective DRIVER_VENV=%s\\n" "${DRIVER_VENV}"
     printf "Effective UV_CACHE_DIR=%s\\n" "${UV_CACHE_DIR}"
     printf "Effective NEMO_RL_VENV_DIR=%s\\n" "${NEMO_RL_VENV_DIR}"
+    printf "Effective UV_PYTHON_INSTALL_DIR=%s\\n" "${UV_PYTHON_INSTALL_DIR}"
     export UV_PROJECT_ENVIRONMENT="${DRIVER_VENV}"
     export UV_CACHE_DIR
     export NEMO_RL_VENV_DIR
+    export UV_PYTHON_INSTALL_DIR
     uv sync --frozen
     sed -i \
       "s/context\\.py_executable = \" \"\\.join(self\\.nsight_cmd) + \" python\"/context.py_executable = \" \".join(self.nsight_cmd) + f\" {context.py_executable}\"/g" \
@@ -76,6 +96,20 @@ srun \
     for actor_fqn in \
       nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker \
       nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker; do
+      actor_python="${NEMO_RL_VENV_DIR}/${actor_fqn}/bin/python"
+      if [[ -e "${actor_python}" || -L "${actor_python}" ]]; then
+        resolved_actor_python=$(readlink -f -- "${actor_python}" 2>/dev/null || true)
+        case "${resolved_actor_python}" in
+          "${UV_PYTHON_INSTALL_DIR}"/*) ;;
+          *)
+            printf "Stale actor environment uses unmanaged Python: %s -> %s\\n" \
+              "${actor_python}" "${resolved_actor_python:-unresolved}" >&2
+            printf "Quarantine or remove the actor environment at %s and rerun preparation.\\n" \
+              "${NEMO_RL_VENV_DIR}/${actor_fqn}" >&2
+            exit 2
+            ;;
+        esac
+      fi
       if ! prefetch_output=$(python -m nemo_rl.utils.prefetch_venvs "${actor_fqn}" 2>&1); then
         printf "%s\\n" "${prefetch_output}"
         printf "Actor environment prefetch failed: %s\\n" "${actor_fqn}" >&2
@@ -86,7 +120,6 @@ srun \
         printf "Actor environment prefetch failed: %s\\n" "${actor_fqn}" >&2
         exit 2
       fi
-      actor_python="${NEMO_RL_VENV_DIR}/${actor_fqn}/bin/python"
       if [[ ! -x "${actor_python}" ]]; then
         printf "Missing prefetched actor interpreter: %s\\n" "${actor_python}" >&2
         exit 2
@@ -100,5 +133,15 @@ srun \
           "${actor_python}" "${required_import}" >&2
         exit 2
       fi
+      resolved_actor_python=$(readlink -f -- "${actor_python}" 2>/dev/null || true)
+      case "${resolved_actor_python}" in
+        "${UV_PYTHON_INSTALL_DIR}"/*) ;;
+        *)
+          printf "Actor environment uses unmanaged Python: %s -> %s; expected a target under %s.\\n" \
+            "${actor_python}" "${resolved_actor_python:-unresolved}" \
+            "${UV_PYTHON_INSTALL_DIR}" >&2
+          exit 2
+          ;;
+      esac
     done
   '

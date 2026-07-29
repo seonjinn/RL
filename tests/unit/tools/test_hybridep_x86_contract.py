@@ -347,14 +347,17 @@ def test_driver_venv_host_paths_override_container_image_defaults() -> None:
         '    DRIVER_VENV="${DRIVER_VENV}" \\\n'
         '    UV_CACHE_DIR="${UV_CACHE_DIR}" \\\n'
         '    NEMO_RL_VENV_DIR="${NEMO_RL_VENV_DIR}" \\\n'
+        '    UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR}" \\\n'
         "    bash -lc '"
     )
     diagnostics = (
         'printf "Effective DRIVER_VENV=%s\\\\n" "${DRIVER_VENV}"',
         'printf "Effective UV_CACHE_DIR=%s\\\\n" "${UV_CACHE_DIR}"',
         'printf "Effective NEMO_RL_VENV_DIR=%s\\\\n" "${NEMO_RL_VENV_DIR}"',
+        'printf "Effective UV_PYTHON_INSTALL_DIR=%s\\\\n" "${UV_PYTHON_INSTALL_DIR}"',
     )
 
+    assert 'UV_PYTHON_INSTALL_DIR="${NEMO_RL_VENV_DIR}/.uv-python"' in source
     assert injection in source
     assert source.index("--container-workdir=") < source.index(injection)
     assert all(diagnostic in source for diagnostic in diagnostics)
@@ -365,7 +368,12 @@ def test_driver_venv_host_paths_override_container_image_defaults() -> None:
 
 
 def _run_prepare_payload(
-    tmp_path: Path, *, prefetch_reports_failure: bool, actor_import_exit: int
+    tmp_path: Path,
+    *,
+    prefetch_reports_failure: bool,
+    actor_import_exit: int,
+    actor_python_outside_managed: bool = False,
+    precreate_stale_actor: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     project_root = Path(__file__).resolve().parents[3]
     fake_bin = tmp_path / "bin"
@@ -396,9 +404,17 @@ def _run_prepare_payload(
 if [[ "$1" == "-m" ]]; then
   actor_fqn=$3
   actor_python="${NEMO_RL_VENV_DIR}/${actor_fqn}/bin/python"
+  if [[ "${ACTOR_PYTHON_OUTSIDE_MANAGED:-0}" == "1" ]]; then
+    managed_python="${NEMO_RL_VENV_DIR}/unmanaged-python/${actor_fqn}/python"
+  else
+    managed_python="${UV_PYTHON_INSTALL_DIR}/cpython-3.13/bin/python3.13"
+  fi
+  mkdir -p "$(dirname -- "${managed_python}")"
+  printf '%s\\n' '#!/bin/bash' 'exit "${ACTOR_IMPORT_EXIT:-0}"' > "${managed_python}"
+  chmod +x "${managed_python}"
   mkdir -p "$(dirname -- "${actor_python}")"
-  printf '%s\\n' '#!/bin/bash' 'exit "${ACTOR_IMPORT_EXIT:-0}"' > "${actor_python}"
-  chmod +x "${actor_python}"
+  rm -f -- "${actor_python}"
+  ln -s "${managed_python}" "${actor_python}"
   if [[ "${PREFETCH_REPORTS_FAILURE:-0}" == "1" ]]; then
     printf '%s\\n' '  Failed: 1'
   else
@@ -409,6 +425,19 @@ exit 0
 """,
     )
     actor_venv_dir = tmp_path / "actor-venvs"
+    uv_python_install_dir = actor_venv_dir / ".uv-python"
+    if precreate_stale_actor:
+        stale_python = tmp_path / "container-root" / "bin" / "python3.13"
+        stale_python.parent.mkdir(parents=True)
+        _write_fake_command(stale_python, "#!/bin/sh\nexit 0\n")
+        stale_actor_python = (
+            actor_venv_dir
+            / "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker"
+            / "bin"
+            / "python"
+        )
+        stale_actor_python.parent.mkdir(parents=True)
+        stale_actor_python.symlink_to(stale_python)
     return subprocess.run(
         ["bash", "-c", _prepare_payload(project_root)],
         check=False,
@@ -419,8 +448,12 @@ exit 0
             "DRIVER_VENV": str(driver_venv),
             "UV_CACHE_DIR": str(tmp_path / "uv-cache"),
             "NEMO_RL_VENV_DIR": str(actor_venv_dir),
+            "UV_PYTHON_INSTALL_DIR": str(uv_python_install_dir),
             "PREFETCH_REPORTS_FAILURE": "1" if prefetch_reports_failure else "0",
             "ACTOR_IMPORT_EXIT": str(actor_import_exit),
+            "ACTOR_PYTHON_OUTSIDE_MANAGED": (
+                "1" if actor_python_outside_managed else "0"
+            ),
         },
         capture_output=True,
         text=True,
@@ -445,6 +478,35 @@ def test_actor_prefetch_rejects_an_interpreter_without_required_imports(
 
     assert result.returncode == 2
     assert "Actor environment validation failed" in result.stderr
+
+
+def test_actor_prefetch_rejects_a_new_unmanaged_python_target(
+    tmp_path: Path,
+) -> None:
+    result = _run_prepare_payload(
+        tmp_path,
+        prefetch_reports_failure=False,
+        actor_import_exit=0,
+        actor_python_outside_managed=True,
+    )
+
+    assert result.returncode == 2
+    assert "Actor environment uses unmanaged Python" in result.stderr
+
+
+def test_actor_prefetch_rejects_a_stale_existing_python_target(
+    tmp_path: Path,
+) -> None:
+    result = _run_prepare_payload(
+        tmp_path,
+        prefetch_reports_failure=False,
+        actor_import_exit=0,
+        precreate_stale_actor=True,
+    )
+
+    assert result.returncode == 2
+    assert "Stale actor environment uses unmanaged Python" in result.stderr
+    assert "Quarantine or remove the actor environment" in result.stderr
 
 
 def test_launcher_rejects_an_invalid_uv_lock_timeout() -> None:
