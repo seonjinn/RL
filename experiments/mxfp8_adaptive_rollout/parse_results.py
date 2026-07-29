@@ -26,7 +26,7 @@ import re
 import sys
 import tempfile
 from pathlib import Path
-from typing import Mapping, NamedTuple, Sequence
+from typing import Mapping, NamedTuple, Sequence, TypedDict, cast
 
 
 METADATA_PREFIX = "MXFP8_AB_METADATA "
@@ -120,6 +120,17 @@ class ResultRecord(NamedTuple):
     seed: int
 
 
+class ParsedTacticCoverage(TypedDict):
+    """Runtime coverage fields attached to parsed adaptive result rows."""
+
+    runtime_record_count: int | None
+    tactic_hit_record_count: int | None
+    fallback_record_count: int | None
+    fallback_record_rate: float | None
+    qualified_tactic_count: int | None
+    qualified_tactics_hit: int | None
+
+
 def _required_value(metadata: Mapping[str, object], key: str) -> object:
     if key not in metadata:
         raise ValueError(f"metadata is missing required field {key!r}")
@@ -207,9 +218,7 @@ def _run_wall_time(text: str) -> float:
     return run_wall_time_s
 
 
-def _tactic_coverage_from_log(
-    text: str, *, arm: object
-) -> dict[str, int | float | None]:
+def _tactic_coverage_from_log(text: str, *, arm: object) -> ParsedTacticCoverage:
     coverage_lines = [
         line.removeprefix(TACTIC_COVERAGE_PREFIX)
         for line in text.splitlines()
@@ -218,7 +227,14 @@ def _tactic_coverage_from_log(
     if arm == "original":
         if coverage_lines:
             raise ValueError("original log must not contain adaptive tactic coverage")
-        return {field: None for field in COVERAGE_FIELDS}
+        return {
+            "runtime_record_count": None,
+            "tactic_hit_record_count": None,
+            "fallback_record_count": None,
+            "fallback_record_rate": None,
+            "qualified_tactic_count": None,
+            "qualified_tactics_hit": None,
+        }
     if len(coverage_lines) != 1:
         raise ValueError("adaptive log must contain exactly one tactic coverage record")
     try:
@@ -246,7 +262,14 @@ def _tactic_coverage_from_log(
         raise ValueError("adaptive tactic coverage has zero promoted tactics")
     if coverage["qualified_tactics_hit"] != coverage["qualified_tactic_count"]:
         raise ValueError("adaptive tactic coverage did not hit every qualified tactic")
-    return {field: coverage[field] for field in COVERAGE_FIELDS}
+    return {
+        "runtime_record_count": cast(int, coverage["runtime_record_count"]),
+        "tactic_hit_record_count": cast(int, coverage["tactic_hit_record_count"]),
+        "fallback_record_count": cast(int, coverage["fallback_record_count"]),
+        "fallback_record_rate": float(coverage["fallback_record_rate"]),
+        "qualified_tactic_count": cast(int, coverage["qualified_tactic_count"]),
+        "qualified_tactics_hit": cast(int, coverage["qualified_tactics_hit"]),
+    }
 
 
 def parse_log(text: str) -> list[ResultRecord]:
@@ -343,9 +366,10 @@ def _strip_adaptive_config_key(config: object) -> object:
     env_vars = _config_environment(normalized)
     if env_vars is None:
         return normalized
-    policy = normalized["policy"]
-    generation = policy["generation"]
-    vllm_cfg = generation["vllm_cfg"]
+    normalized_mapping = cast(dict[str, object], normalized)
+    policy = cast(dict[str, object], normalized_mapping["policy"])
+    generation = cast(dict[str, object], policy["generation"])
+    vllm_cfg = cast(dict[str, object], generation["vllm_cfg"])
     env_vars.pop(CONFIG_ENV_KEY, None)
     if not env_vars:
         vllm_cfg.pop("env_vars")

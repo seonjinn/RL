@@ -294,7 +294,9 @@ run_in_allocation() {
   else
     export MOUNTS="$CONTAINER_MOUNTS"
   fi
-  export COMMAND="cd '$REPO_ROOT' && bash '$LAUNCHER' __container '$MODE' '$RUN_ID' '$REPEAT'"
+  printf -v COMMAND 'cd %q && bash %q __container %q %q %q' \
+    "$REPO_ROOT" "$LAUNCHER" "$MODE" "$RUN_ID" "$REPEAT"
+  export COMMAND
   exec bash "$REPO_ROOT/ray.sub"
 }
 

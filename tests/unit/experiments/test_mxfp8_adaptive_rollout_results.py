@@ -638,6 +638,87 @@ def test_ab_schedule_uses_same_job_warmup_and_three_alternating_repeats(
     assert all("WARMUP=" not in call for call in calls)
 
 
+def test_allocation_driver_command_handles_apostrophe_in_repo_path(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "task4-review-o'brien"
+    experiment_dir = repo_root / "experiments" / "mxfp8_adaptive_rollout"
+    experiment_dir.mkdir(parents=True)
+    launcher = experiment_dir / "run_ab.sh"
+    _write_executable(
+        launcher,
+        """#!/bin/bash
+[[ "$*" == "__container trace suite/measured-trace-r1 1" ]]
+touch "$DRIVER_MARKER"
+""",
+    )
+
+    command_capture = tmp_path / "driver-command.txt"
+    _write_executable(
+        repo_root / "ray.sub",
+        """#!/bin/bash
+printf '%s\\n' "$COMMAND" >"$COMMAND_CAPTURE"
+bash -c "$COMMAND"
+""",
+    )
+    container = tmp_path / "runtime.sqsh"
+    container.touch()
+    output_root = tmp_path / "experiment-output"
+    (output_root / "runs" / "suite").mkdir(parents=True)
+    profile = tmp_path / "profile.env"
+    profile.write_text(
+        "\n".join(
+            (
+                'export SLURM_ACCOUNT="test-account"',
+                'export PARTITION="batch"',
+                'export QOS="normal"',
+                'export NUM_NODES="4"',
+                'export GPUS_PER_NODE="4"',
+                'export SLURM_SWITCHES="1@600"',
+                'export WALLTIME="00:10:00"',
+                f'export NEMO_RL_REPO_ROOT="{repo_root}"',
+                f'export NEMO_RL_EXPERIMENT_ROOT="{output_root}"',
+                f'export CONTAINER_IMAGE="{container}"',
+                f'export CONTAINER_MOUNTS="{repo_root}:{repo_root},{tmp_path}:{tmp_path}"',
+                f'export HF_HOME="{tmp_path / "hf"}"',
+                f'export CACHE_ROOT="{tmp_path / "cache"}"',
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    spool_copy = tmp_path / "slurm_script"
+    shutil.copy2(
+        REPO_ROOT / "experiments" / "mxfp8_adaptive_rollout" / "run_ab.sh",
+        spool_copy,
+    )
+    driver_marker = tmp_path / "driver-invoked"
+    environment = {
+        **os.environ,
+        "COMMAND_CAPTURE": str(command_capture),
+        "DRIVER_MARKER": str(driver_marker),
+        "MODE": "trace",
+        "NEMO_RL_REPO_ROOT": str(repo_root),
+        "PROFILE_PATH": str(profile),
+        "REPEAT": "1",
+        "RUN_ID": "suite/measured-trace-r1",
+        "SLURM_JOB_ID": "123",
+    }
+
+    result = subprocess.run(
+        ["bash", str(spool_copy), "trace", str(profile)],
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert command_capture.is_file()
+    assert driver_marker.is_file()
+    assert "__container" in command_capture.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("source_commit", [None, "", "abc123"])
 def test_stage_script_requires_full_source_commit(
     tmp_path: Path, source_commit: str | None
