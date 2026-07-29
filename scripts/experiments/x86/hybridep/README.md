@@ -68,8 +68,8 @@ then use the same Ray executable for the head, workers, and driver:
 
 ```bash
 export CONTAINER=/lustre/absolute/path/nemo_rl_nightly.sqsh
-export DRIVER_VENV=/home/sna/experiments/hybridep-x86/driver-venv
-export UV_CACHE_DIR=/home/sna/experiments/hybridep-x86/uv-cache
+export DRIVER_VENV=/lustre/absolute/path/hybridep-x86/driver-venv
+export UV_CACHE_DIR=/lustre/absolute/path/hybridep-x86/uv-cache
 
 scripts/experiments/x86/hybridep/submit_driver_venv.sh
 ```
@@ -78,9 +78,16 @@ After the preparation job completes, export both variables to the same path
 for every paired run:
 
 ```bash
-export DRIVER_VENV=/home/sna/experiments/hybridep-x86/driver-venv
+export DRIVER_VENV=/lustre/absolute/path/hybridep-x86/driver-venv
 export RAY_VENV="${DRIVER_VENV}"
 ```
 
 `submit_grpo.sh` rejects a different `RAY_VENV`, so the cluster cannot start
 with one Ray release while the driver imports another.
+
+For a matched all-to-all/HybridEP pair, prepare this environment once and
+reuse it for both submissions. The x86 profiles set
+`NRL_FORCE_REBUILD_VENVS=false`, which replaces per-actor `venvs.py` cache
+isolation with the prepared shared driver/Ray environment and shared Lustre UV
+cache. Do not allow concurrent actor source rebuilds for either arm; rebuild
+only through the single preparation job before the pair is submitted.

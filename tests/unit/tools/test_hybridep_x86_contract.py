@@ -72,33 +72,63 @@ def test_create_local_venv_does_not_set_a_per_actor_uv_cache() -> None:
     assert not uv_cache_assignments
 
 
-def test_qwen_4n8g_x86_profiles_are_matched() -> None:
+def test_x86_profiles_are_matched() -> None:
     project_root = Path(__file__).resolve().parents[3]
     profile_dir = (
         project_root / "scripts" / "experiments" / "oci-hsg" / "hybridep" / "models"
     )
-    baseline = (profile_dir / "qwen3-30ba3b-4n8g-x86.env").read_text()
-    hybridep = (profile_dir / "qwen3-30ba3b-4n8g-x86-hybridep.env").read_text()
+    pairs = (
+        (
+            "qwen3-30ba3b-4n8g-x86",
+            "grpo-qwen3-30ba3b-4n8g",
+            4,
+            4,
+        ),
+        (
+            "qwen3-235b-16n8g-x86",
+            "grpo-qwen3-235b-16n8g",
+            16,
+            16,
+        ),
+        (
+            "nemotron3-super-120ba12b-32n8g-sync-x86",
+            "grpo-nemotron3-super-120BA12B-32n8g",
+            32,
+            16,
+        ),
+        (
+            "deepseek-v3-32n8g-x86",
+            "grpo-deepseek-v3-32n8g",
+            32,
+            16,
+        ),
+    )
 
-    common_lines = {
-        "export NCCL_NVLS_ENABLE=0",
-        "NUM_ACTOR_NODES=${NUM_ACTOR_NODES:-4}",
-        "GPUS_PER_NODE=${GPUS_PER_NODE:-8}",
-        "SEGMENT_SIZE=${SEGMENT_SIZE:-4}",
-        "MAX_STEPS=${MAX_STEPS:-20}",
-        "TIME_LIMIT=${TIME_LIMIT:-04:00:00}",
-        f"DEFAULT_DEEPEP_COMMIT={DEEPEP_COMMIT}",
-    }
-    assert common_lines <= set(baseline.splitlines())
-    assert common_lines <= set(hybridep.splitlines())
-    assert (
-        "CONFIG_PATH=examples/configs/recipes/llm/performance/"
-        "grpo-qwen3-30ba3b-4n8g.yaml"
-    ) in baseline
-    assert (
-        "CONFIG_PATH=examples/configs/recipes/llm/performance/"
-        "grpo-qwen3-30ba3b-4n8g-hybridep.yaml"
-    ) in hybridep
+    for profile_name, recipe_name, nodes, segment_size in pairs:
+        baseline = (profile_dir / f"{profile_name}.env").read_text()
+        hybridep = (profile_dir / f"{profile_name}-hybridep.env").read_text()
+        common_lines = {
+            "export NCCL_NVLS_ENABLE=0",
+            "DISPATCHER_MODE=recipe",
+            "NRL_FORCE_REBUILD_VENVS=false",
+            f"NUM_ACTOR_NODES=${{NUM_ACTOR_NODES:-{nodes}}}",
+            "GPUS_PER_NODE=${GPUS_PER_NODE:-8}",
+            f"SEGMENT_SIZE=${{SEGMENT_SIZE:-{segment_size}}}",
+            "MAX_STEPS=${MAX_STEPS:-20}",
+            "TIME_LIMIT=${TIME_LIMIT:-04:00:00}",
+            f"DEFAULT_DEEPEP_COMMIT={DEEPEP_COMMIT}",
+        }
+
+        assert common_lines <= set(baseline.splitlines())
+        assert common_lines <= set(hybridep.splitlines())
+        assert (
+            "CONFIG_PATH=examples/configs/recipes/llm/performance/"
+            f"{recipe_name}-alltoall.yaml"
+        ) in baseline
+        assert (
+            "CONFIG_PATH=examples/configs/recipes/llm/performance/"
+            f"{recipe_name}.yaml"
+        ) in hybridep
 
 
 def test_recursive_checkout_uses_the_branch_that_exposes_the_bridge_gitlink() -> None:

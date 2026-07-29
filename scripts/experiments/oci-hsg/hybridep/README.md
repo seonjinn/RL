@@ -79,10 +79,12 @@ scripts/experiments/oci-hsg/hybridep/submit_grpo.sh \
 ## x86 H100 and B200
 
 Megatron-Bridge supports HybridEP on Ampere, Hopper, and Blackwell. The x86
-profiles use the native four-node, eight-GPU Qwen3-30B-A3B performance recipe.
-The inherited HybridEP recipe additionally follows the upstream x86
-performance defaults: 32 dispatcher SMs, an eight-rank NVLink domain,
-non-MNNVL topology, and combine chunk size 128.
+profiles provide matched all-to-all and HybridEP recipe pairs for Qwen3-30B,
+Qwen3-235B, synchronous Nemotron3 Super, and DeepSeek-V3. The canonical
+HybridEP recipes follow the upstream x86 performance defaults: 32 dispatcher
+SMs, an eight-rank NVLink domain, non-MNNVL topology, and combine chunk size
+128. Every profile sets `DISPATCHER_MODE=recipe`, so recipe selection is the
+only dispatcher-control surface.
 
 Build and validate an immutable `f725d296` wheel for the target GPU before
 submitting. Set `TORCH_CUDA_ARCH_LIST=9.0` for H100 or `10.0` for B200 and
@@ -110,20 +112,41 @@ SM90 wheel must still pass imports of `deep_ep`, `deep_ep_cpp`, and
 considered valid.
 
 If the nightly image and repository lock contain different Ray versions,
-prepare a shared driver environment with
+prepare one shared driver environment with
 `scripts/experiments/x86/hybridep/submit_driver_venv.sh`, then use it for both
-the Ray daemons and driver:
+the Ray daemons and driver. Keep the environment and UV cache on `/lustre`:
 
 ```bash
-export DRIVER_VENV=/absolute/shared/path/driver-venv
+export DRIVER_VENV=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/$USER/hybridep-x86/driver-venv
 export RAY_VENV="${DRIVER_VENV}"
+export UV_CACHE_DIR=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/$USER/hybridep-x86/uv-cache
+
+scripts/experiments/x86/hybridep/submit_driver_venv.sh
 ```
 
-When multiple nodes populate one mounted UV cache, source builds are
-serialized by a distribution lock. The launcher exports
+The x86 model profiles set `NRL_FORCE_REBUILD_VENVS=false`: this prebuild and
+reuse workflow replaces per-actor `venvs.py` cache isolation for matched runs.
+Do not submit either arm while actors can rebuild from source, and do not
+override that setting to `true`; both arms must reuse the prepared driver/Ray
+environment and shared cache. When multiple nodes populate one mounted UV
+cache during the one preparation job, source builds are serialized by a
+distribution lock. The launcher exports
 `UV_LOCK_TIMEOUT=1800` by default so a second node can reuse the first node's
 completed build instead of failing at UV's 300-second default. Override it
 only with a positive integer number of seconds.
+
+Use the following matched profiles after the shared runtime is prepared:
+
+| Model | All-to-all profile | HybridEP profile |
+| --- | --- | --- |
+| Qwen3-30B-A3B | `qwen3-30ba3b-4n8g-x86.env` | `qwen3-30ba3b-4n8g-x86-hybridep.env` |
+| Qwen3-235B | `qwen3-235b-16n8g-x86.env` | `qwen3-235b-16n8g-x86-hybridep.env` |
+| Nemotron3 Super sync | `nemotron3-super-120ba12b-32n8g-sync-x86.env` | `nemotron3-super-120ba12b-32n8g-sync-x86-hybridep.env` |
+| DeepSeek-V3 | `deepseek-v3-32n8g-x86.env` | `deepseek-v3-32n8g-x86-hybridep.env` |
+
+The DeepSeek profiles are reusable, but there is no CW DeepSeek-V3 BF16
+checkpoint configured currently. Do not submit either DeepSeek arm until
+`NRL_DEEPSEEK_V3_BF16_CKPT` is set to a verified CW checkpoint path.
 
 Run the two-node, three-step compatibility gate first:
 
