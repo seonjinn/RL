@@ -11,15 +11,15 @@ submitted workload.
 
 ## Scope
 
-The HybridEP default applies to these MoE recipe families:
+The HybridEP default applies to every MoE `*n8g*.yaml` performance recipe in
+these families:
 
-- Qwen3-30B-A3B: `grpo-qwen3-30ba3b-4n8g.yaml`;
-- Qwen3-235B-A22B: `grpo-qwen3-235b-16n8g.yaml` and its
-  `grpo-qwen3-235b-32n8g.yaml` derivative;
-- Nemotron3 Super 120B-A12B:
-  `grpo-nemotron3-super-120BA12B-32n8g.yaml`;
-- DeepSeek-V3: `grpo-deepseek-v3-32n8g.yaml` and its
-  `grpo-deepseek-v3-64n8g.yaml` derivative.
+- Qwen3-30B-A3B: 4-node sync, 4-node async 1-off, 24-node async 8-off, and the
+  independent 40K-context recipe;
+- Qwen3-235B-A22B: 16-node sync, 32-node sync, and 32-node async 1-off;
+- Nemotron3 Super 120B-A12B: 32-node sync and 32-node async 1-off;
+- DeepSeek-V3: 32-node sync, 64-node sync, 64-node async 1-off, and 64-node
+  FP8 async 1-off.
 
 Dense `*n8g` recipes, including Qwen3-32B and Llama 3.1 8B, remain unchanged.
 They do not contain experts and therefore cannot exercise HybridEP.
@@ -41,20 +41,24 @@ policy:
       USE_MNNVL: "0"
 ```
 
-Existing model-specific environment variables remain present. Derived
-32-node and 64-node recipes inherit this block from their base recipe.
+Existing model-specific environment variables remain present.
 
-For each affected recipe family, preserve the prior dispatcher as a separate
+For each affected recipe variant, preserve the prior dispatcher as a separate
 `-alltoall.yaml` recipe. The all-to-all file retains the pre-change recipe,
-while the canonical filename becomes a minimal child of that baseline and
-adds only the HybridEP block. This inheritance direction is required because
-NeMo-RL YAML inheritance supports merging and complete section replacement,
-but not deleting individual inherited keys.
+while the canonical filename becomes a minimal child of that exact baseline
+and adds only the HybridEP block. This inheritance direction is required
+because NeMo-RL YAML inheritance supports merging and complete section
+replacement, but not deleting individual inherited keys.
 
-Derived 32-node and 64-node all-to-all files inherit the corresponding
-all-to-all base recipe. Their canonical counterparts continue to inherit the
-canonical HybridEP base recipe. A resolved-config contract test must prove
-that every non-dispatcher field is identical between each pair.
+An all-to-all file that previously inherited another affected recipe must
+instead inherit that parent's all-to-all file. This produces a parallel
+all-to-all inheritance tree without HybridEP-only keys.
+
+Existing 4-GPU descendants are outside this x86 change. Repoint any such child
+to the matching all-to-all 8-GPU parent so it preserves its current dispatcher
+and does not inherit the x86 NVL8 environment. A resolved-config contract test
+must prove that every non-dispatcher field is identical between each 8-GPU
+pair and that each 4-GPU descendant is semantically unchanged.
 
 ## Dependency and Runtime Contract
 
@@ -79,8 +83,8 @@ Before cluster submission:
 1. Add failing recipe-contract tests first.
 2. Resolve every MoE HybridEP and all-to-all pair and compare the full
    configuration after excluding only dispatcher keys and run-label paths.
-3. Verify all six MoE `*n8g` recipes resolve to `flex` plus `hybridep`, 32 SMs,
-   and an eight-rank NVLink domain.
+3. Verify all thirteen MoE `*n8g*.yaml` recipe variants resolve to `flex` plus
+   `hybridep`, 32 SMs, and an eight-rank NVLink domain.
 4. Verify the dense `*n8g` recipes do not select HybridEP.
 5. Verify `nemo_rl/utils/venvs.py` has no diff from the selected base.
 6. Run focused unit tests, recipe validation, shell syntax checks,
