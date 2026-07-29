@@ -120,17 +120,22 @@ the Ray daemons and driver. Keep the environment and UV cache on `/lustre`:
 export DRIVER_VENV=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/$USER/hybridep-x86/driver-venv
 export RAY_VENV="${DRIVER_VENV}"
 export UV_CACHE_DIR=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/$USER/hybridep-x86/uv-cache
+export NEMO_RL_VENV_DIR=/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/$USER/hybridep-x86/actor-venvs
 
 scripts/experiments/x86/hybridep/submit_driver_venv.sh
 ```
 
-The x86 model profiles set `NRL_FORCE_REBUILD_VENVS=false`: this prebuild and
-reuse workflow replaces per-actor `venvs.py` cache isolation for matched runs.
-Do not submit either arm while actors can rebuild from source, and do not
-override that setting to `true`; both arms must reuse the prepared driver/Ray
-environment and shared cache. When multiple nodes populate one mounted UV
-cache during the one preparation job, source builds are serialized by a
-distribution lock. The launcher exports
+The preparation job serially prefetches the vLLM generation and Megatron
+policy actor environments into `NEMO_RL_VENV_DIR` and verifies both Python
+interpreters. The x86 model profiles set `NRL_FORCE_REBUILD_VENVS=false` and
+require those prepared interpreters: the launcher rejects a missing or
+incomplete shared actor-venv directory before submission. This shared
+prefetch, not a `venvs.py` change, prevents workload-time actor source
+rebuilds for matched runs. Do not submit either arm while actors can rebuild
+from source, and do not override that setting to `true`; both arms must reuse
+the prepared driver/Ray environment, actor environments, and shared cache.
+When multiple nodes populate one mounted UV cache during the one preparation
+job, source builds are serialized by a distribution lock. The launcher exports
 `UV_LOCK_TIMEOUT=1800` by default so a second node can reuse the first node's
 completed build instead of failing at UV's 300-second default. Override it
 only with a positive integer number of seconds.

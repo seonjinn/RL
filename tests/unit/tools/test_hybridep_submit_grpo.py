@@ -20,6 +20,12 @@ from pathlib import Path
 import pytest
 
 
+ACTOR_FQNS = (
+    "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker",
+    "nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker",
+)
+
+
 def _run_launcher(
     tmp_path: Path,
     *,
@@ -85,6 +91,7 @@ if [ "$1" = "--test-only" ]; then
   exit 0
 fi
 printf '%s\\n' "$COMMAND" > "$COMMAND_CAPTURE"
+printf '%s\\n' "${NEMO_RL_VENV_DIR:-}" > "$VENV_DIR_CAPTURE"
 printf '%s\\n' '999999'
 """
     )
@@ -98,11 +105,13 @@ printf '%s\\n' '999999'
         "FAKE_PROJECT_ROOT": str(project_root),
         "FAKE_USER": subprocess.check_output(["id", "-un"], text=True).strip(),
         "COMMAND_CAPTURE": str(command_capture),
+        "VENV_DIR_CAPTURE": str(tmp_path / "venv-dir.txt"),
         "CONTAINER": str(container),
         "RUN_ROOT": str(tmp_path / "run"),
         "RUN_SUFFIX": "test",
         "DISPATCHER_MODE": dispatcher_mode,
     }
+    env.pop("NEMO_RL_VENV_DIR", None)
     if extra_env:
         env.update(extra_env)
 
@@ -115,6 +124,26 @@ printf '%s\\n' '999999'
         text=True,
     )
     return result, command_capture
+
+
+def _x86_actor_venv_dir(tmp_path: Path) -> Path:
+    return tmp_path / "actor-venvs"
+
+
+def _lustre_qualified_path(path: Path) -> str:
+    return str(Path("/lustre") / ".." / path.relative_to("/"))
+
+
+def _write_actor_python(actor_venv_dir: Path, actor_fqn: str) -> None:
+    python_path = actor_venv_dir / actor_fqn / "bin" / "python"
+    python_path.parent.mkdir(parents=True)
+    python_path.write_text("#!/bin/sh\n")
+    python_path.chmod(0o755)
+
+
+def _write_prefetched_actor_pythons(actor_venv_dir: Path) -> None:
+    for actor_fqn in ACTOR_FQNS:
+        _write_actor_python(actor_venv_dir, actor_fqn)
 
 
 def test_recipe_dispatcher_preserves_recipe_default(tmp_path: Path) -> None:
@@ -131,10 +160,14 @@ def test_unknown_dispatcher_mode_is_rejected(tmp_path: Path) -> None:
 
 
 def test_deepseek_profile_requires_a_checkpoint_path(tmp_path: Path) -> None:
+    actor_venv_dir = _x86_actor_venv_dir(tmp_path)
+    _write_prefetched_actor_pythons(actor_venv_dir)
+
     result, _ = _run_launcher_result(
         tmp_path,
         dispatcher_mode="recipe",
         model_config_name="deepseek-v3-32n8g-x86.env",
+        extra_env={"NEMO_RL_VENV_DIR": _lustre_qualified_path(actor_venv_dir)},
     )
 
     assert result.returncode == 2
@@ -146,12 +179,17 @@ def test_deepseek_profile_applies_a_verified_checkpoint_to_model_and_tokenizer(
 ) -> None:
     checkpoint = tmp_path / "deepseek-v3-bf16"
     checkpoint.mkdir()
+    actor_venv_dir = _x86_actor_venv_dir(tmp_path)
+    _write_prefetched_actor_pythons(actor_venv_dir)
 
     driver_args = _run_launcher(
         tmp_path,
         dispatcher_mode="recipe",
         model_config_name="deepseek-v3-32n8g-x86.env",
-        extra_env={"NRL_DEEPSEEK_V3_BF16_CKPT": str(checkpoint)},
+        extra_env={
+            "NEMO_RL_VENV_DIR": _lustre_qualified_path(actor_venv_dir),
+            "NRL_DEEPSEEK_V3_BF16_CKPT": str(checkpoint),
+        },
     )
 
     assert f"policy.model_name={checkpoint}" in driver_args
@@ -160,6 +198,64 @@ def test_deepseek_profile_applies_a_verified_checkpoint_to_model_and_tokenizer(
     metadata = (tmp_path / "run" / "submission.env").read_text()
     assert f"model_name_override={checkpoint}\n" in metadata
     assert f"tokenizer_name_override={checkpoint}\n" in metadata
+
+
+def test_x86_profile_requires_a_prefetched_actor_venv_directory(tmp_path: Path) -> None:
+    result, _ = _run_launcher_result(
+        tmp_path,
+        dispatcher_mode="recipe",
+        model_config_name="qwen3-30ba3b-4n8g-x86.env",
+    )
+
+    assert result.returncode == 2
+    assert "NEMO_RL_VENV_DIR is required for model profile" in result.stderr
+
+
+def test_x86_profile_rejects_an_incomplete_prefetched_actor_venv_directory(
+    tmp_path: Path,
+) -> None:
+    actor_venv_dir = _x86_actor_venv_dir(tmp_path)
+    _write_actor_python(
+        actor_venv_dir,
+        "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker",
+    )
+
+    result, _ = _run_launcher_result(
+        tmp_path,
+        dispatcher_mode="recipe",
+        model_config_name="qwen3-30ba3b-4n8g-x86.env",
+        extra_env={"NEMO_RL_VENV_DIR": _lustre_qualified_path(actor_venv_dir)},
+    )
+
+    assert result.returncode == 2
+    assert "Missing prebuilt actor interpreter" in result.stderr
+    assert "MegatronPolicyWorker/bin/python" in result.stderr
+
+
+def test_x86_profile_exports_prefetched_actor_venv_directory_to_ray(
+    tmp_path: Path,
+) -> None:
+    actor_venv_dir = _x86_actor_venv_dir(tmp_path)
+    _write_prefetched_actor_pythons(actor_venv_dir)
+
+    _run_launcher(
+        tmp_path,
+        dispatcher_mode="recipe",
+        model_config_name="qwen3-30ba3b-4n8g-x86.env",
+        extra_env={"NEMO_RL_VENV_DIR": _lustre_qualified_path(actor_venv_dir)},
+    )
+
+    assert (tmp_path / "venv-dir.txt").read_text().strip() == str(actor_venv_dir)
+    metadata = (tmp_path / "run" / "submission.env").read_text()
+    assert f"nemo_rl_venv_dir={actor_venv_dir}\n" in metadata
+    assert "prebuilt_actor_venvs_required=true\n" in metadata
+
+
+def test_generic_profile_does_not_require_prefetched_actor_venvs(tmp_path: Path) -> None:
+    _run_launcher(tmp_path, dispatcher_mode="recipe")
+
+    metadata = (tmp_path / "run" / "submission.env").read_text()
+    assert "prebuilt_actor_venvs_required=false\n" in metadata
 
 
 def test_padding_logging_reaches_megatron_worker_environment(tmp_path: Path) -> None:

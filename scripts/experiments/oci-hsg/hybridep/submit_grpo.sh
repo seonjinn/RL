@@ -92,8 +92,14 @@ DRIVER_VENV=${DRIVER_VENV:-}
 RAY_VENV=${RAY_VENV:-}
 UV_LOCK_TIMEOUT=${UV_LOCK_TIMEOUT:-1800}
 MODEL_TOKENIZER_OVERRIDE_ENV=${MODEL_TOKENIZER_OVERRIDE_ENV:-}
+REQUIRE_PREBUILT_ACTOR_VENVS=${REQUIRE_PREBUILT_ACTOR_VENVS:-false}
+NEMO_RL_VENV_DIR=${NEMO_RL_VENV_DIR:-}
 MODEL_NAME_OVERRIDE=
 TOKENIZER_NAME_OVERRIDE=
+PREBUILT_ACTOR_FQNS=(
+  nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker
+  nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker
+)
 
 case "${DISPATCHER_MODE}" in
   hybridep | recipe) ;;
@@ -111,9 +117,41 @@ case "${NRL_FORCE_REBUILD_VENVS}" in
     ;;
 esac
 
+case "${REQUIRE_PREBUILT_ACTOR_VENVS}" in
+  true | false) ;;
+  *)
+    printf 'REQUIRE_PREBUILT_ACTOR_VENVS must be true or false.\n' >&2
+    exit 2
+    ;;
+esac
+
 if [[ ! "${UV_LOCK_TIMEOUT}" =~ ^[1-9][0-9]*$ ]]; then
   printf 'UV_LOCK_TIMEOUT must be a positive integer number of seconds.\n' >&2
   exit 2
+fi
+
+if [[ "${REQUIRE_PREBUILT_ACTOR_VENVS}" == "true" ]]; then
+  if [[ -z "${NEMO_RL_VENV_DIR}" ]]; then
+    printf 'NEMO_RL_VENV_DIR is required for model profile %s.\n' "${MODEL_ID}" >&2
+    exit 2
+  fi
+  case "${NEMO_RL_VENV_DIR}" in
+    /lustre/*) ;;
+    *)
+      printf 'NEMO_RL_VENV_DIR must be on shared /lustre storage: %s\n' \
+        "${NEMO_RL_VENV_DIR}" >&2
+      exit 2
+      ;;
+  esac
+  NEMO_RL_VENV_DIR=$(python3 -c \
+    'import os, sys; print(os.path.normpath(sys.argv[1]))' "${NEMO_RL_VENV_DIR}")
+  for actor_fqn in "${PREBUILT_ACTOR_FQNS[@]}"; do
+    actor_python="${NEMO_RL_VENV_DIR}/${actor_fqn}/bin/python"
+    if [[ ! -x "${actor_python}" ]]; then
+      printf 'Missing prebuilt actor interpreter: %s\n' "${actor_python}" >&2
+      exit 2
+    fi
+  done
 fi
 
 if [[ -n "${MODEL_TOKENIZER_OVERRIDE_ENV}" ]]; then
@@ -354,6 +392,8 @@ metadata_path="${RUN_ROOT}/submission.env"
   printf 'driver_venv=%q\n' "${DRIVER_VENV}"
   printf 'ray_venv=%q\n' "${RAY_VENV}"
   printf 'uv_lock_timeout=%q\n' "${UV_LOCK_TIMEOUT}"
+  printf 'nemo_rl_venv_dir=%q\n' "${NEMO_RL_VENV_DIR}"
+  printf 'prebuilt_actor_venvs_required=%q\n' "${REQUIRE_PREBUILT_ACTOR_VENVS}"
   printf 'model_name_override=%q\n' "${MODEL_NAME_OVERRIDE}"
   printf 'tokenizer_name_override=%q\n' "${TOKENIZER_NAME_OVERRIDE}"
   printf 'rl_commit=%q\n' "${RL_COMMIT}"
@@ -377,6 +417,9 @@ if [[ -n "${EXTRA_MOUNTS}" ]]; then
 fi
 export MOUNTS
 export NRL_FORCE_REBUILD_VENVS
+if [[ "${REQUIRE_PREBUILT_ACTOR_VENVS}" == "true" ]]; then
+  export NEMO_RL_VENV_DIR
+fi
 export UV_LOCK_TIMEOUT
 export GPUS_PER_NODE
 export RAY_VENV

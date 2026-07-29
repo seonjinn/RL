@@ -39,9 +39,22 @@ fi
 : "${CONTAINER:?CONTAINER is required}"
 : "${DRIVER_VENV:?DRIVER_VENV is required}"
 : "${UV_CACHE_DIR:?UV_CACHE_DIR is required}"
+: "${NEMO_RL_VENV_DIR:?NEMO_RL_VENV_DIR is required}"
+
+for shared_path_name in DRIVER_VENV UV_CACHE_DIR NEMO_RL_VENV_DIR; do
+  shared_path=${!shared_path_name}
+  case "${shared_path}" in
+    /lustre/*) ;;
+    *)
+      printf '%s must be on shared /lustre storage: %s\n' \
+        "${shared_path_name}" "${shared_path}" >&2
+      exit 2
+      ;;
+  esac
+done
 
 PARTITION=${PARTITION:-batch}
-TIME_LIMIT=${TIME_LIMIT:-00:45:00}
+TIME_LIMIT=${TIME_LIMIT:-02:00:00}
 VENV_LOG_DIR=${VENV_LOG_DIR:-"$(dirname -- "${DRIVER_VENV}")/logs"}
 
 FAIRSHARE_ROWS=$(sshare -a --user="$(id -un)" -o Account,User,FairShare -n -P)
@@ -75,6 +88,7 @@ export CONTAINER
 export DRIVER_VENV
 export HYBRID_EP_PROJECT_ROOT="${PROJECT_ROOT}"
 export UV_CACHE_DIR
+export NEMO_RL_VENV_DIR
 
 sbatch_args=(
   --export=ALL

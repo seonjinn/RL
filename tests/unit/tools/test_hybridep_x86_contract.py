@@ -115,6 +115,7 @@ def test_x86_profiles_are_matched() -> None:
             "export NCCL_NVLS_ENABLE=0",
             "DISPATCHER_MODE=recipe",
             "NRL_FORCE_REBUILD_VENVS=false",
+            "REQUIRE_PREBUILT_ACTOR_VENVS=true",
             f"NUM_ACTOR_NODES=${{NUM_ACTOR_NODES:-{nodes}}}",
             "GPUS_PER_NODE=${GPUS_PER_NODE:-8}",
             f"SEGMENT_SIZE=${{SEGMENT_SIZE:-{segment_size}}}",
@@ -187,6 +188,20 @@ def test_launcher_allows_shared_non_lustre_logs_without_changing_defaults() -> N
     assert '"$RAY_BIN" stop' in ray_submit
     assert '"$RAY_BIN" start --head' in ray_submit
     assert '"$RAY_BIN" start --address' in ray_submit
+
+
+def test_x86_driver_venv_preparation_allows_time_for_actor_prefetch() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    submitter = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "x86"
+        / "hybridep"
+        / "submit_driver_venv.sh"
+    ).read_text()
+
+    assert "TIME_LIMIT=${TIME_LIMIT:-02:00:00}" in submitter
 
 
 def test_launcher_rejects_an_invalid_uv_lock_timeout() -> None:
@@ -306,18 +321,26 @@ def test_x86_driver_venv_job_prepares_the_shared_ray_runtime() -> None:
         ': "${CONTAINER:?CONTAINER is required}"',
         ': "${DRIVER_VENV:?DRIVER_VENV is required}"',
         ': "${UV_CACHE_DIR:?UV_CACHE_DIR is required}"',
+        ': "${NEMO_RL_VENV_DIR:?NEMO_RL_VENV_DIR is required}"',
         "--no-container-mount-home",
         'UV_PROJECT_ENVIRONMENT="${DRIVER_VENV}"',
+        'export NEMO_RL_VENV_DIR="${NEMO_RL_VENV_DIR}"',
         "uv sync --frozen",
         "site-packages/ray/_private/runtime_env/nsight.py",
         "ray --version",
         'python -c "import ray; print(ray.__version__)"',
+        "python -m nemo_rl.utils.prefetch_venvs",
+        "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker",
+        "nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker",
+        "Missing prefetched actor interpreter",
     }
     missing = sorted(snippet for snippet in required_snippets if snippet not in source)
 
     assert not missing
     assert "git pull --ff-only --recurse-submodules=no" in submit_script
     assert "git submodule update --init --recursive" in submit_script
+    assert ': "${NEMO_RL_VENV_DIR:?NEMO_RL_VENV_DIR is required}"' in submit_script
+    assert "TIME_LIMIT=${TIME_LIMIT:-02:00:00}" in submit_script
     assert 'sbatch --test-only "${sbatch_args[@]}"' in submit_script
 
 
