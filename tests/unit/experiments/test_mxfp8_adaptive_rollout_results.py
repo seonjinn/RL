@@ -116,6 +116,86 @@ MXFP8_RUN_WALL_TIME_S 21.125
 """
 
 
+def _ab_pair_with_wandb_names(
+    *,
+    baseline_name: object = "mxfp8-qwen-baseline-no-shmoo-trtllm-r1",
+    adaptive_name: object = "mxfp8-qwen-shmoo-qualified-r1",
+) -> tuple[dict[str, object], dict[str, object]]:
+    common = {
+        "nemo_rl_commit": NEMO_COMMIT,
+        "vllm_commit": VLLM_COMMIT,
+        "container_digest": CONTAINER_DIGEST,
+        "checkpoint": "Qwen/Qwen3-30B-A3B",
+        "topology": {
+            "num_nodes": 4,
+            "gpus_per_node": 4,
+            "tensor_parallel_size": 1,
+        },
+    }
+    baseline = {
+        **common,
+        "config_hash": BOOTSTRAP_CONFIG_SHA256,
+        "resolved_config": {
+            "logger": {
+                "wandb": {
+                    "project": "sna_mxfp8_kernel_test",
+                    "name": baseline_name,
+                }
+            },
+            "grpo": {"seed": 42},
+            "policy": {
+                "generation": {
+                    "vllm_cfg": {
+                        "precision": "fp8",
+                        "is_mx": True,
+                        "env_vars": {
+                            "KEEP_ME": "same",
+                            "VLLM_MXFP8_DENSE_CONFIG_FILE": BOOTSTRAP_CONFIG_NAME,
+                        },
+                    }
+                }
+            },
+        },
+    }
+    adaptive = {
+        **common,
+        "config_hash": QUALIFIED_CONFIG_SHA256,
+        "resolved_config": {
+            "logger": {
+                "wandb": {
+                    "project": "sna_mxfp8_kernel_test",
+                    "name": adaptive_name,
+                }
+            },
+            "grpo": {"seed": 42},
+            "policy": {
+                "generation": {
+                    "vllm_cfg": {
+                        "precision": "fp8",
+                        "is_mx": True,
+                        "env_vars": {
+                            "KEEP_ME": "same",
+                            "VLLM_MXFP8_DENSE_CONFIG_FILE": QUALIFIED_CONFIG_NAME,
+                        },
+                    }
+                }
+            },
+        },
+    }
+    return baseline, adaptive
+
+
+def _validate_ab_pair(parser: ModuleType, baseline: object, adaptive: object) -> None:
+    parser.validate_ab_pair(
+        baseline,
+        adaptive,
+        expected_baseline_config_file=BOOTSTRAP_CONFIG_NAME,
+        expected_baseline_config_sha256=BOOTSTRAP_CONFIG_SHA256,
+        expected_adaptive_config_file=QUALIFIED_CONFIG_NAME,
+        expected_adaptive_config_sha256=QUALIFIED_CONFIG_SHA256,
+    )
+
+
 def test_parse_log_extracts_step_metrics_and_provenance() -> None:
     parser = _load_parser()
 
@@ -247,6 +327,12 @@ def test_validate_ab_pair_requires_exact_baseline_and_adaptive_manifests() -> No
         **common,
         "config_hash": "3" * 64,
         "resolved_config": {
+            "logger": {
+                "wandb": {
+                    "project": "sna_mxfp8_kernel_test",
+                    "name": "mxfp8-qwen-baseline-no-shmoo-trtllm-r1",
+                }
+            },
             "grpo": {"seed": 42},
             "policy": {
                 "generation": {
@@ -268,6 +354,12 @@ def test_validate_ab_pair_requires_exact_baseline_and_adaptive_manifests() -> No
         **common,
         "config_hash": CONFIG_HASH,
         "resolved_config": {
+            "logger": {
+                "wandb": {
+                    "project": "sna_mxfp8_kernel_test",
+                    "name": "mxfp8-qwen-shmoo-qualified-r1",
+                }
+            },
             "grpo": {"seed": 42},
             "policy": {
                 "generation": {
@@ -381,6 +473,91 @@ def test_validate_ab_pair_rejects_provenance_mismatch() -> None:
             expected_adaptive_config_file=QUALIFIED_CONFIG_NAME,
             expected_adaptive_config_sha256=CONFIG_HASH,
         )
+
+
+def test_validate_ab_pair_accepts_only_the_intended_remote_wandb_names() -> None:
+    parser = _load_parser()
+    baseline, adaptive = _ab_pair_with_wandb_names()
+
+    _validate_ab_pair(parser, baseline, adaptive)
+
+
+@pytest.mark.parametrize(
+    ("baseline_name", "adaptive_name", "message"),
+    (
+        (
+            "mxfp8-qwen-baseline-no-shmoo-trtllm-r1",
+            "unrelated-adaptive-run-r1",
+            "adaptive.*W&B.*name",
+        ),
+        (
+            "mxfp8-qwen-shmoo-qualified-r1",
+            "mxfp8-qwen-baseline-no-shmoo-trtllm-r1",
+            "baseline.*W&B.*name",
+        ),
+        (
+            "mxfp8-qwen-baseline-no-shmoo-trtllm-r1",
+            "mxfp8-qwen-shmoo-qualified-r2",
+            "repeat suffix",
+        ),
+    ),
+)
+def test_validate_ab_pair_rejects_unapproved_wandb_name_pairs(
+    baseline_name: str,
+    adaptive_name: str,
+    message: str,
+) -> None:
+    parser = _load_parser()
+    baseline, adaptive = _ab_pair_with_wandb_names(
+        baseline_name=baseline_name,
+        adaptive_name=adaptive_name,
+    )
+
+    with pytest.raises(ValueError, match=message):
+        _validate_ab_pair(parser, baseline, adaptive)
+
+
+@pytest.mark.parametrize(
+    ("logger", "message"),
+    (
+        (None, "logger must be a mapping"),
+        ({}, "logger.wandb must be a mapping"),
+        ({"wandb": "not-a-mapping"}, "logger.wandb must be a mapping"),
+        ({"wandb": {}}, "logger.wandb.name must be a string"),
+        ({"wandb": {"name": 1}}, "logger.wandb.name must be a string"),
+        ({"wandb": {"name": ""}}, "baseline.*W&B.*name"),
+    ),
+)
+def test_validate_ab_pair_rejects_malformed_wandb_config(
+    logger: object,
+    message: str,
+) -> None:
+    parser = _load_parser()
+    baseline, adaptive = _ab_pair_with_wandb_names()
+    baseline_config = baseline["resolved_config"]
+    assert isinstance(baseline_config, dict)
+    if logger is None:
+        baseline_config.pop("logger")
+    else:
+        baseline_config["logger"] = logger
+
+    with pytest.raises(ValueError, match=message):
+        _validate_ab_pair(parser, baseline, adaptive)
+
+
+def test_validate_ab_pair_rejects_wandb_project_drift() -> None:
+    parser = _load_parser()
+    baseline, adaptive = _ab_pair_with_wandb_names()
+    adaptive_config = adaptive["resolved_config"]
+    assert isinstance(adaptive_config, dict)
+    adaptive_logger = adaptive_config["logger"]
+    assert isinstance(adaptive_logger, dict)
+    adaptive_wandb = adaptive_logger["wandb"]
+    assert isinstance(adaptive_wandb, dict)
+    adaptive_wandb["project"] = "another-project"
+
+    with pytest.raises(ValueError, match="resolved Hydra config"):
+        _validate_ab_pair(parser, baseline, adaptive)
 
 
 def test_write_summaries_is_stable_across_input_order(tmp_path: Path) -> None:

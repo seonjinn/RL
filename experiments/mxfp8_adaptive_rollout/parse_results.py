@@ -33,6 +33,12 @@ METADATA_PREFIX = "MXFP8_AB_METADATA "
 RUN_WALL_PREFIX = "MXFP8_RUN_WALL_TIME_S "
 TACTIC_COVERAGE_PREFIX = "MXFP8_TACTIC_COVERAGE "
 CONFIG_ENV_KEY = "VLLM_MXFP8_DENSE_CONFIG_FILE"
+BASELINE_WANDB_NAME_RE = re.compile(
+    r"^mxfp8-qwen-baseline-no-shmoo-trtllm-r(?P<repeat>[1-9]\d*)$"
+)
+ADAPTIVE_WANDB_NAME_RE = re.compile(
+    r"^mxfp8-qwen-shmoo-qualified-r(?P<repeat>[1-9]\d*)$"
+)
 CSV_FIELDS = (
     "step",
     "arm",
@@ -380,6 +386,40 @@ def _strip_adaptive_config_key(config: object) -> object:
     return normalized
 
 
+def _wandb_name(config: object) -> str:
+    if not isinstance(config, dict):
+        raise ValueError("resolved_config must be a JSON object")
+    logger = config.get("logger")
+    if not isinstance(logger, dict):
+        raise ValueError("resolved config logger must be a mapping")
+    wandb = logger.get("wandb")
+    if not isinstance(wandb, dict):
+        raise ValueError("resolved config logger.wandb must be a mapping")
+    name = wandb.get("name")
+    if not isinstance(name, str):
+        raise ValueError("resolved config logger.wandb.name must be a string")
+    return name
+
+
+def _wandb_repeat(config: object, *, arm: str) -> str:
+    name = _wandb_name(config)
+    name_pattern = (
+        BASELINE_WANDB_NAME_RE if arm == "baseline" else ADAPTIVE_WANDB_NAME_RE
+    )
+    match = name_pattern.fullmatch(name)
+    if match is None:
+        raise ValueError(f"{arm} arm has an unapproved W&B run name")
+    return match.group("repeat")
+
+
+def _strip_wandb_name(config: object) -> object:
+    normalized_mapping = cast(dict[str, object], config)
+    logger = cast(dict[str, object], normalized_mapping["logger"])
+    wandb = cast(dict[str, object], logger["wandb"])
+    wandb.pop("name")
+    return config
+
+
 def validate_ab_pair(
     original: Mapping[str, object],
     adaptive: Mapping[str, object],
@@ -416,6 +456,12 @@ def validate_ab_pair(
 
     original_config = _strip_adaptive_config_key(original_raw_config)
     adaptive_config = _strip_adaptive_config_key(adaptive_raw_config)
+    original_repeat = _wandb_repeat(original_config, arm="baseline")
+    adaptive_repeat = _wandb_repeat(adaptive_config, arm="adaptive")
+    if original_repeat != adaptive_repeat:
+        raise ValueError("A/B pair W&B run-name repeat suffixes do not match")
+    _strip_wandb_name(original_config)
+    _strip_wandb_name(adaptive_config)
     if original_config != adaptive_config:
         raise ValueError(
             f"A/B pair mismatch in resolved Hydra config outside {CONFIG_ENV_KEY}"
