@@ -741,6 +741,7 @@ echo mcore >>"$PROBE_CAPTURE"
 def _run_spool_launcher(
     tmp_path: Path,
     mode: str = "ab",
+    action: str = "test-only",
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     spool_dir = tmp_path / "slurm-spool"
     spool_dir.mkdir()
@@ -782,6 +783,7 @@ def _run_spool_launcher(
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     capture = tmp_path / "sbatch.calls"
+    counter = tmp_path / "sbatch.counter"
     _write_executable(
         fake_bin / "git",
         f"""#!/bin/bash
@@ -794,16 +796,27 @@ fi
         fake_bin / "sbatch",
         """#!/bin/bash
 printf '%s\\n' "$*" >>"$SBATCH_CAPTURE"
-echo "sbatch preflight accepted"
+count=0
+if [[ -f "$SBATCH_COUNTER" ]]; then
+  count=$(<"$SBATCH_COUNTER")
+fi
+count=$((count + 1))
+printf '%s' "$count" >"$SBATCH_COUNTER"
+if [[ "$*" == *"--parsable"* ]]; then
+  echo "$count;test-cluster"
+else
+  echo "sbatch preflight accepted"
+fi
 """,
     )
     environment = {
         **os.environ,
-        "ACTION": "test-only",
+        "ACTION": action,
         "NEMO_RL_REPO_ROOT": str(REPO_ROOT),
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "REPEATS": "3",
         "SBATCH_CAPTURE": str(capture),
+        "SBATCH_COUNTER": str(counter),
         "SUITE_ID": "spool-harness",
     }
     result = subprocess.run(
@@ -876,10 +889,10 @@ def test_container_entrypoint_restores_exported_experiment_root(
     assert result.stderr == f"required file is missing: {missing_python}\n"
 
 
-def test_ab_schedule_uses_same_job_warmup_and_three_alternating_repeats(
+def test_ab_schedule_exports_default_measurement_and_chains_three_pairs(
     tmp_path: Path,
 ) -> None:
-    result, calls = _run_spool_launcher(tmp_path)
+    result, calls = _run_spool_launcher(tmp_path, action="submit")
 
     assert result.returncode == 0, result.stderr
     assert len(calls) == 6
@@ -897,26 +910,161 @@ def test_ab_schedule_uses_same_job_warmup_and_three_alternating_repeats(
         "--job-name=mxfp8-original-3",
         "--job-name=mxfp8-adaptive-3",
     ]
+    dependencies = [
+        next(
+            (argument for argument in call.split() if argument.startswith("--dependency=")),
+            None,
+        )
+        for call in calls
+    ]
+    assert dependencies == [
+        None,
+        "--dependency=afterok:1",
+        "--dependency=afterok:2",
+        "--dependency=afterok:3",
+        "--dependency=afterok:4",
+        "--dependency=afterok:5",
+    ]
+    assert all("MEASURE_STEPS=20" in call for call in calls)
+    assert all("--parsable" in call for call in calls)
     assert all("WARMUP=" not in call for call in calls)
 
 
-def test_launcher_pins_isolated_manifest_and_runtime_contract() -> None:
-    launcher = RUN_AB_PATH.read_text(encoding="utf-8")
+def test_performance_arms_resolve_and_validate_isolated_manifests(
+    tmp_path: Path,
+) -> None:
+    experiment_root = tmp_path / "experiment-output"
+    original_dir = experiment_root / "runs" / "suite" / "measured-original-r1"
+    adaptive_dir = experiment_root / "runs" / "suite" / "measured-adaptive-r1"
+    for run_dir in (original_dir, adaptive_dir):
+        (run_dir / "configured_logs").mkdir(parents=True)
+        (run_dir / "runtime_dispatch").mkdir()
 
-    assert f'VLLM_COMMIT="{VLLM_OVERLAY_COMMIT}"' in launcher
-    assert f'BOOTSTRAP_CONFIG_SHA256="{BOOTSTRAP_CONFIG_SHA256}"' in launcher
-    assert f'QUALIFIED_CONFIG_SHA256="{QUALIFIED_CONFIG_SHA256}"' in launcher
-    assert 'WANDB_PROJECT="sna_mxfp8_kernel_test"' in launcher
-    assert "measured_steps=${MEASURE_STEPS:-20}" in launcher
-    assert "logger.wandb.project=$WANDB_PROJECT" in launcher
-    assert "mxfp8-qwen-baseline-no-shmoo-trtllm-r${repeat}" in launcher
-    assert "mxfp8-qwen-shmoo-qualified-r${repeat}" in launcher
-    assert "validate-default-runtime" in launcher
-    assert "default_tactic_coverage.json" in launcher
-    assert "--expected-baseline-config-file \"$BOOTSTRAP_CONFIG_NAME\"" in launcher
-    assert "--expected-baseline-config-sha256 \"$BOOTSTRAP_CONFIG_SHA256\"" in launcher
-    assert "--expected-adaptive-config-file \"$QUALIFIED_CONFIG_NAME\"" in launcher
-    assert "--expected-adaptive-config-sha256 \"$QUALIFIED_CONFIG_SHA256\"" in launcher
+    vllm_root = tmp_path / "vllm-overlay"
+    manifest_dir = (
+        vllm_root
+        / "vllm/model_executor/kernels/linear/mxfp8/tactic_configs"
+    )
+    manifest_dir.mkdir(parents=True)
+    for manifest in (BOOTSTRAP_CONFIG_NAME, QUALIFIED_CONFIG_NAME):
+        (manifest_dir / manifest).write_text("{}\n", encoding="utf-8")
+
+    capture = tmp_path / "python.calls"
+    trace_dir = tmp_path / "runtime-trace"
+    trace_dir.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(
+        fake_bin / "git",
+        f"""#!/bin/bash
+echo "{VLLM_OVERLAY_COMMIT}"
+""",
+    )
+    _write_executable(
+        fake_bin / "sha256sum",
+        f"""#!/bin/bash
+case "$1" in
+  *{BOOTSTRAP_CONFIG_NAME}) echo "{BOOTSTRAP_CONFIG_SHA256}  $1" ;;
+  *{QUALIFIED_CONFIG_NAME}) echo "{QUALIFIED_CONFIG_SHA256}  $1" ;;
+  *) exit 91 ;;
+esac
+""",
+    )
+    fake_python = tmp_path / "python"
+    _write_executable(
+        fake_python,
+        f"""#!/bin/bash
+printf '%q ' "$@" >>"$PYTHON_CAPTURE"
+printf '\\n' >>"$PYTHON_CAPTURE"
+if [[ "$1" == "-c" ]]; then
+  if [[ "$2" == *"from pathlib import Path; import vllm"* ]]; then
+    echo "{vllm_root}"
+  elif [[ "$2" == *"import flashinfer, vllm"* ]]; then
+    echo "0.20.2 0.6.8.post1"
+  else
+    echo 1
+  fi
+  exit 0
+fi
+if [[ "$1" == *"parse_results.py" ]]; then
+  for ((index = 1; index <= $#; index++)); do
+    if [[ "${{!index}}" == "--output" ]]; then
+      next=$((index + 1))
+      printf '{{}}\\n' >"${{!next}}"
+    fi
+  done
+  exit 0
+fi
+if [[ "$1" == *"examples/run_grpo.py" ]]; then
+  touch "$RUNTIME_TRACE_DIR/adaptive_dispatch_fake_fake.jsonl"
+fi
+""",
+    )
+    environment = {
+        **os.environ,
+        "CONTAINER_SHA256": "f" * 64,
+        "NEMO_RL_EXPERIMENT_ROOT": str(experiment_root),
+        "NEMO_RL_REPO_ROOT": str(REPO_ROOT),
+        "NUM_NODES": "4",
+        "GPUS_PER_NODE": "4",
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "PYTHON_BIN": str(fake_python),
+        "PYTHON_CAPTURE": str(capture),
+        "RUNTIME_TRACE_DIR": str(original_dir / "runtime_dispatch"),
+    }
+    original = subprocess.run(
+        ["bash", str(RUN_AB_PATH), "__container", "original", "suite/measured-original-r1", "1"],
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+    )
+    environment["RUNTIME_TRACE_DIR"] = str(adaptive_dir / "runtime_dispatch")
+    adaptive = subprocess.run(
+        ["bash", str(RUN_AB_PATH), "__container", "adaptive", "suite/measured-adaptive-r1", "1"],
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+    )
+
+    assert original.returncode == 0, original.stderr
+    assert adaptive.returncode == 0, adaptive.stderr
+    calls = capture.read_text(encoding="utf-8").splitlines()
+    resolve_calls = [call for call in calls if "resolve-config" in call]
+    assert len(resolve_calls) == 2
+    assert f"VLLM_MXFP8_DENSE_CONFIG_FILE={BOOTSTRAP_CONFIG_NAME}" in resolve_calls[0]
+    assert f"VLLM_MXFP8_DENSE_CONFIG_FILE={QUALIFIED_CONFIG_NAME}" in resolve_calls[1]
+    metadata_calls = [call for call in calls if "make-metadata" in call]
+    assert BOOTSTRAP_CONFIG_SHA256 in metadata_calls[0]
+    assert QUALIFIED_CONFIG_SHA256 in metadata_calls[1]
+    grpo_calls = [call for call in calls if "examples/run_grpo.py" in call]
+    assert "logger.wandb.project=sna_mxfp8_kernel_test" in grpo_calls[0]
+    assert "logger.wandb.name=mxfp8-qwen-baseline-no-shmoo-trtllm-r1" in grpo_calls[0]
+    assert "logger.wandb.name=mxfp8-qwen-shmoo-qualified-r1" in grpo_calls[1]
+    assert all("VLLM_MXFP8_DENSE_SHAPE_TRACE=1" in call for call in grpo_calls)
+    assert all("VLLM_MXFP8_DENSE_SHAPE_TRACE_DIR=/mxfp8_runtime_trace" in call for call in grpo_calls)
+    default_runtime_call = next(
+        call for call in calls if "validate-default-runtime" in call
+    )
+    adaptive_runtime_call = next(
+        call for call in calls if "validate-runtime" in call
+    )
+    assert BOOTSTRAP_CONFIG_SHA256 in default_runtime_call
+    assert "default_tactic_coverage.json" in default_runtime_call
+    assert QUALIFIED_CONFIG_SHA256 in adaptive_runtime_call
+    assert "tactic_coverage.json" in adaptive_runtime_call
+    assert (original_dir / "default_tactic_coverage.json").is_file()
+    assert (adaptive_dir / "tactic_coverage.json").is_file()
+    pair_calls = [call for call in calls if "validate-pair" in call]
+    assert len(pair_calls) == 1
+    for flag, value in (
+        ("--expected-baseline-config-file", BOOTSTRAP_CONFIG_NAME),
+        ("--expected-baseline-config-sha256", BOOTSTRAP_CONFIG_SHA256),
+        ("--expected-adaptive-config-file", QUALIFIED_CONFIG_NAME),
+        ("--expected-adaptive-config-sha256", QUALIFIED_CONFIG_SHA256),
+    ):
+        assert f"{flag} {value}" in pair_calls[0]
 
 
 def test_allocation_driver_command_handles_apostrophe_in_repo_path(
