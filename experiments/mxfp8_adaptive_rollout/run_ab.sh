@@ -21,7 +21,7 @@ TRACE_CONFIG_REL="examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4
 PROFILE_DEFAULT="$EXPERIMENT_DIR/cluster/oci-hsg.env"
 
 VLLM_REPOSITORY="https://github.com/seonjinn/vllm.git"
-VLLM_COMMIT="73da4b2c233a45eced4def252e90dbe2079194db"
+VLLM_COMMIT="77d5e10eec8f5cc217d16a9230f2955cf8553cee"
 VLLM_BASE_COMMIT="5246e3c5df5fb8266b50ceaa6eca2836fb2d13b1"
 VLLM_VERSION="0.20.2"
 FLASHINFER_VERSION="0.6.8.post1"

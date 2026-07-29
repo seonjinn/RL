@@ -847,6 +847,15 @@ def process_weights_after_loading_moe(self, layer) -> None:
 
 def process_weights_after_loading_mxfp8_moe(self, layer) -> None:
     """Shuffle weights and scales into FlashInfer TRTLLM MXFP8 layout."""
+    if getattr(self, "preserves_checkpoint_weight_scale_for_refit", False):
+        native_process = getattr(self, "process_weights_after_loading_refit_safe", None)
+        if not callable(native_process):
+            raise RuntimeError(
+                "Refit-safe MXFP8 MoE kernel is missing its native post-load method"
+            )
+        native_process(layer)
+        return
+
     from flashinfer import (
         reorder_rows_for_gated_act_gemm,
         shuffle_matrix_a,

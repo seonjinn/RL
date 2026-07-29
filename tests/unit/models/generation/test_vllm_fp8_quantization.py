@@ -188,3 +188,22 @@ def test_mxfp8_linear_delegates_to_refit_safe_native_kernel(fp8_module):
 
     assert calls == [layer]
     assert not hasattr(layer, "weight_scale_from_checkpoint")
+
+
+def test_mxfp8_moe_delegates_to_refit_safe_native_method(fp8_module):
+    fp8 = fp8_module
+    calls = []
+
+    class RefitSafeMoeMethod:
+        preserves_checkpoint_weight_scale_for_refit = True
+
+        def process_weights_after_loading_refit_safe(self, layer):
+            calls.append(layer)
+
+    layer = types.SimpleNamespace()
+    method = RefitSafeMoeMethod()
+
+    fp8.process_weights_after_loading_mxfp8_moe(method, layer)
+
+    assert calls == [layer]
+    assert not hasattr(layer, "w13_weight_scale_from_checkpoint")
