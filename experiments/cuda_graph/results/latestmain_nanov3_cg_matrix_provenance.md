@@ -252,3 +252,22 @@ change in `context_parallel.py`; the observed attention path does not require a
 Transformer Engine native rebuild. NeMo-RL now applies this correction only
 for packed Transformer Engine graph training and rejects an unknown source
 signature during worker initialization.
+
+## TE #2898 backport validation matrix
+
+| Scope | Preflight | Job | Initial state |
+| --- | --- | --- | --- |
+| THD CP patch unit gate | `2465361` | `2465362` | `RUNNING` on `ptyche0206` |
+| baseline | `2465401` | `2465406` | `PENDING` |
+| `attn` | `2465398` | `2465399` | `PENDING` |
+| `mamba` | `2465402` | `2465407` | `RUNNING` |
+| `moe_router` | `2465403` | `2465408` | `RUNNING` |
+| `moe_router+moe_preprocess` | `2465404` | `2465409` | `RUNNING` |
+| `attn+mamba+moe_router+moe_preprocess` | `2465405` | `2465410` | `RUNNING` |
+
+All model jobs use source `4b000db4ea7f55446c4a330a5a7f91460ff7d2ef`,
+five steps, three completed optimizer warmups before capture, fixed packed
+geometry `8192/K16`, non-colocated generation, and checkpointing disabled. The
+four immediately scheduled graph scopes are independent jobs with no Slurm
+dependencies. A scope is accepted only after both an explicit capture event and
+a subsequent replay complete.
