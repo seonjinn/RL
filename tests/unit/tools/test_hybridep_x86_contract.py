@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import ast
 import os
 from pathlib import Path
 import subprocess
@@ -46,9 +47,29 @@ def test_lock_does_not_retain_the_pre_hybridep_x86_commit() -> None:
 def test_create_local_venv_does_not_set_a_per_actor_uv_cache() -> None:
     project_root = Path(__file__).resolve().parents[3]
     source = (project_root / "nemo_rl" / "utils" / "venvs.py").read_text()
-    create_local_venv_source = source.split("@ray.remote", maxsplit=1)[0]
+    module = ast.parse(source)
+    create_local_venv = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.FunctionDef) and node.name == "create_local_venv"
+    )
+    uv_cache_assignments = [
+        node
+        for node in ast.walk(create_local_venv)
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign))
+        and any(
+            isinstance(target, ast.Subscript)
+            and isinstance(target.slice, ast.Constant)
+            and target.slice.value == "UV_CACHE_DIR"
+            for target in (
+                node.targets
+                if isinstance(node, ast.Assign)
+                else [node.target]
+            )
+        )
+    ]
 
-    assert 'env["UV_CACHE_DIR"]' not in create_local_venv_source
+    assert not uv_cache_assignments
 
 
 def test_qwen_4n8g_x86_profiles_are_matched() -> None:
