@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from pathlib import Path
+import subprocess
 
 
 DEEPEP_COMMIT = "f725d29699f5bda9ba789456bb9579af69844685"
@@ -163,6 +165,39 @@ def test_launcher_rejects_an_invalid_uv_lock_timeout() -> None:
 
     assert '[[ ! "${UV_LOCK_TIMEOUT}" =~ ^[1-9][0-9]*$ ]]' in launcher
     assert "UV_LOCK_TIMEOUT must be a positive integer number of seconds." in launcher
+
+
+def test_deepep_setup_probe_uses_the_ray_runtime_python() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    renderer = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "oci-hsg"
+        / "hybridep"
+        / "render_deepep_setup_command.sh"
+    )
+    env = {
+        **os.environ,
+        "DEEPEP_OVERLAY": "/tmp/deepep-overlay",
+        "DEEPEP_WHEEL": "/lustre/deep_ep.whl",
+        "DEEPEP_WHEEL_SHA256": "a" * 64,
+        "RAY_VENV": "/lustre/driver-venv",
+    }
+
+    result = subprocess.run(
+        ["bash", str(renderer)],
+        check=True,
+        capture_output=True,
+        env=env,
+        text=True,
+    )
+
+    assert "runtime_python=/lustre/driver-venv/bin/python" in result.stdout
+    assert (
+        'PYTHONPATH="${overlay}" "${runtime_python}" -c '
+        '"import importlib.metadata as md, os;'
+    ) in result.stdout
 
 
 def test_x86_wheel_build_job_is_arch_specific_and_reproducible() -> None:

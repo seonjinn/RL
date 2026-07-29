@@ -289,22 +289,13 @@ if [[ -n "${DEEPEP_WHEEL}" ]]; then
 
   DEEPEP_OVERLAY="/tmp/nemo-rl-deepep-${DEEPEP_COMMIT:0:12}-${RUN_SUFFIX}"
   DEEPEP_WHEEL_SHA256=$(sha256sum "${DEEPEP_WHEEL}" | cut -d' ' -f1)
-  printf -v overlay_assignment 'overlay=%q' "${DEEPEP_OVERLAY}"
-  printf -v wheel_assignment 'wheel=%q' "${DEEPEP_WHEEL}"
-  printf -v wheel_sha_assignment 'expected_wheel_sha256=%q' "${DEEPEP_WHEEL_SHA256}"
-  printf -v SETUP_COMMAND '%s\n' \
-    'set -euo pipefail' \
-    "${overlay_assignment}" \
-    "${wheel_assignment}" \
-    "${wheel_sha_assignment}" \
-    '[[ "${overlay}" == /tmp/nemo-rl-deepep-* && "${overlay}" != /tmp/nemo-rl-deepep- ]]' \
-    'actual_wheel_sha256=$(sha256sum "${wheel}" | cut -d" " -f1)' \
-    '[[ "${actual_wheel_sha256}" == "${expected_wheel_sha256}" ]]' \
-    'rm -rf -- "${overlay}"' \
-    'mkdir -p "${overlay}"' \
-    'unset UV_CONFIG_FILE' \
-    'UV_NO_CONFIG=1 uv pip install --python /opt/nemo_rl_venv/bin/python --target "${overlay}" --reinstall --no-deps --no-index "${wheel}"' \
-    'PYTHONPATH="${overlay}" /opt/nemo_rl_venv/bin/python -c "import importlib.metadata as md, os; import deep_ep, deep_ep_cpp, hybrid_ep_cpp; root = os.path.realpath(os.environ[\"PYTHONPATH\"]); paths = [os.path.realpath(deep_ep.__file__), os.path.realpath(deep_ep_cpp.__file__), os.path.realpath(hybrid_ep_cpp.__file__)]; assert all(os.path.commonpath([root, path]) == root for path in paths), paths; print(\"DEEPEP_RUNTIME_VERSION\", md.version(\"deep_ep\")); print(\"DEEPEP_RUNTIME_PATHS\", *paths)"'
+  SETUP_COMMAND=$(
+    DEEPEP_OVERLAY="${DEEPEP_OVERLAY}" \
+      DEEPEP_WHEEL="${DEEPEP_WHEEL}" \
+      DEEPEP_WHEEL_SHA256="${DEEPEP_WHEEL_SHA256}" \
+      RAY_VENV="${RAY_VENV}" \
+      bash "${SCRIPT_DIR}/render_deepep_setup_command.sh"
+  )
 fi
 
 COMMAND="${driver_command}"
