@@ -112,12 +112,15 @@ Use isolated worktrees and separate branches:
 
 - NeMo-RL: latest upstream main, branch
   `experiment/pr5672-mamba-moe-graph-cache-20260729`;
+- Megatron-Bridge: latest upstream main, branch
+  `sna/pr5672-mamba-moe-graph-cache-20260729`;
 - Megatron-LM: latest NVIDIA main, branch
   `sj/pr5672-mamba-moe-graph-cache-20260729`;
 - apply the latest PR 5672 changes to Megatron-LM, then implement the Mamba and
   graph-bank extensions;
-- update NeMo-RL's Megatron-LM submodule pointer only after the Megatron-LM
-  branch is pushed to the personal fork.
+- push the Megatron-LM branch to the personal fork, update and push
+  Megatron-Bridge's nested Megatron-LM pointer, then update NeMo-RL's
+  Megatron-Bridge pointer.
 
 Do not reuse or merge the old experimental Megatron-LM branch wholesale.
 Forward-port only reviewed changes needed by this design.
@@ -394,5 +397,5 @@ The implementation is complete only when:
 - paired 20-step performance results and accuracy metrics are recorded;
 - the static HTML report distinguishes correctness, smoke, performance, and
   unsupported cases;
-- both branches and the NeMo-RL submodule pointer are pushed with reproducible
-  commit provenance.
+- the Megatron-LM, Megatron-Bridge, and NeMo-RL branches and both submodule
+  pointers are pushed with reproducible commit provenance.
