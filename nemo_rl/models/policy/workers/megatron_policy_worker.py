@@ -346,6 +346,7 @@ class MegatronPolicyWorkerImpl(
         apply_transformer_engine_weak_ref_float64_patch(
             required=(
                 megatron_config.get("cuda_graph_impl") == "transformer_engine"
+                and megatron_config.get("moe_router_dtype") == "fp64"
                 and "moe_router" in cuda_graph_scopes
             )
         )

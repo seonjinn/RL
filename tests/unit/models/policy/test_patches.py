@@ -20,6 +20,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
+import torch
 
 from nemo_rl.models.policy.workers.patches import (
     _get_transformer_engine_file,
@@ -602,6 +603,24 @@ _torch_dtype_to_np_typestr_dict = {
             pytest.raises(RuntimeError, match="float64 weak-reference support"),
         ):
             apply_transformer_engine_weak_ref_float64_patch(required=True)
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+    def test_installed_te_make_weak_ref_preserves_float64_storage(self):
+        apply_transformer_engine_weak_ref_float64_patch(required=True)
+
+        from transformer_engine.pytorch.utils import make_weak_ref
+
+        original = torch.tensor(
+            [1.25, -2.5],
+            device=torch.device("cuda", torch.cuda.current_device()),
+            dtype=torch.float64,
+        )
+        weak_reference = make_weak_ref(original)
+
+        assert weak_reference.dtype == torch.float64
+        assert weak_reference.shape == original.shape
+        assert weak_reference.data_ptr() == original.data_ptr()
+        torch.testing.assert_close(weak_reference, original)
 
 
 class TestThdContextParallelPatchBootstrap:
