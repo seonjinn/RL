@@ -64,9 +64,7 @@ def test_create_local_venv_does_not_set_a_per_actor_uv_cache() -> None:
             and isinstance(target.slice, ast.Constant)
             and target.slice.value == "UV_CACHE_DIR"
             for target in (
-                node.targets
-                if isinstance(node, ast.Assign)
-                else [node.target]
+                node.targets if isinstance(node, ast.Assign) else [node.target]
             )
         )
     ]
@@ -118,6 +116,7 @@ def test_x86_profiles_are_matched() -> None:
             "DISPATCHER_MODE=recipe",
             "NRL_FORCE_REBUILD_VENVS=false",
             "REQUIRE_PREBUILT_ACTOR_VENVS=true",
+            "REQUIRE_DEEPEP_WHEEL=true",
             f"NUM_ACTOR_NODES=${{NUM_ACTOR_NODES:-{nodes}}}",
             "GPUS_PER_NODE=${GPUS_PER_NODE:-8}",
             f"SEGMENT_SIZE=${{SEGMENT_SIZE:-{segment_size}}}",
@@ -135,8 +134,7 @@ def test_x86_profiles_are_matched() -> None:
             f"{recipe_name}-alltoall.yaml"
         ) in baseline
         assert (
-            "CONFIG_PATH=examples/configs/recipes/llm/performance/"
-            f"{recipe_name}.yaml"
+            f"CONFIG_PATH=examples/configs/recipes/llm/performance/{recipe_name}.yaml"
         ) in hybridep
 
 
@@ -275,9 +273,7 @@ if [ "$1" != "--test-only" ]; then printf '%s\\n' '999999'; fi
     )
 
     assert result.returncode == 2
-    assert (
-        f"{traversal_variable} must be on shared /lustre storage" in result.stderr
-    )
+    assert f"{traversal_variable} must be on shared /lustre storage" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -319,9 +315,7 @@ def test_driver_venv_preparer_rejects_paths_that_traverse_outside_lustre(
     )
 
     assert result.returncode == 2
-    assert (
-        f"{traversal_variable} must be on shared /lustre storage" in result.stderr
-    )
+    assert f"{traversal_variable} must be on shared /lustre storage" in result.stderr
 
 
 def _prepare_payload(project_root: Path) -> str:
@@ -333,7 +327,9 @@ def _prepare_payload(project_root: Path) -> str:
         / "hybridep"
         / "prepare_driver_venv.sbatch"
     ).read_text()
-    return source.split("  bash -lc '\n", maxsplit=1)[1].rsplit("\n  '\n", maxsplit=1)[0]
+    return source.split("  bash -lc '\n", maxsplit=1)[1].rsplit("\n  '\n", maxsplit=1)[
+        0
+    ]
 
 
 def _run_prepare_payload(

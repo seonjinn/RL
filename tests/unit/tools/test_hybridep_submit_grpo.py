@@ -27,6 +27,7 @@ ACTOR_FQNS = (
     "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker",
     "nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker",
 )
+DEEPEP_COMMIT = "f725d29699f5bda9ba789456bb9579af69844685"
 
 
 def _run_launcher(
@@ -157,11 +158,35 @@ def _write_prefetched_actor_pythons(actor_venv_dir: Path) -> None:
         _write_actor_python(actor_venv_dir, actor_fqn)
 
 
+def _synthetic_x86_shared_env() -> dict[str, str]:
+    return {
+        "DEEPEP_COMMIT": DEEPEP_COMMIT,
+        "DEEPEP_WHEEL": "/lustre/nemo-rl-test/deep-ep.whl",
+        "HF_HOME": "/lustre/nemo-rl-test/hf-home",
+        "HF_DATASETS_CACHE": "/lustre/nemo-rl-test/hf-home/cache",
+        "RUN_ROOT": "/lustre/nemo-rl-test/run",
+    }
+
+
+def _x86_shared_env(shared_root: Path) -> dict[str, str]:
+    wheel = shared_root / "deep-ep.whl"
+    wheel.touch()
+    return {
+        "DEEPEP_COMMIT": DEEPEP_COMMIT,
+        "DEEPEP_WHEEL": str(wheel),
+        "HF_HOME": str(shared_root / "hf-home"),
+        "HF_DATASETS_CACHE": str(shared_root / "hf-home" / "cache"),
+        "RUN_ROOT": str(shared_root / "run"),
+    }
+
+
 def test_recipe_dispatcher_preserves_recipe_default(tmp_path: Path) -> None:
     driver_args = _run_launcher(tmp_path, dispatcher_mode="recipe")
 
     assert "policy.megatron_cfg.moe_token_dispatcher_type=flex" not in driver_args
-    assert "++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep" not in driver_args
+    assert (
+        "++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep" not in driver_args
+    )
     assert "++policy.megatron_cfg.moe_hybridep_num_sms=32" not in driver_args
 
 
@@ -180,7 +205,10 @@ def test_deepseek_profile_requires_a_checkpoint_path(
         tmp_path,
         dispatcher_mode="recipe",
         model_config_name="deepseek-v3-32n8g-x86.env",
-        extra_env={"NEMO_RL_VENV_DIR": str(actor_venv_dir)},
+        extra_env={
+            **_synthetic_x86_shared_env(),
+            "NEMO_RL_VENV_DIR": str(actor_venv_dir),
+        },
     )
 
     assert result.returncode == 2
@@ -190,16 +218,18 @@ def test_deepseek_profile_requires_a_checkpoint_path(
 def test_deepseek_profile_applies_a_verified_checkpoint_to_model_and_tokenizer(
     tmp_path: Path, lustre_tmp_path: Path
 ) -> None:
-    checkpoint = tmp_path / "deepseek-v3-bf16"
+    checkpoint = lustre_tmp_path / "deepseek-v3-bf16"
     checkpoint.mkdir()
     actor_venv_dir = lustre_tmp_path / "actor-venvs"
     _write_prefetched_actor_pythons(actor_venv_dir)
+    shared_env = _x86_shared_env(lustre_tmp_path)
 
     driver_args = _run_launcher(
         tmp_path,
         dispatcher_mode="recipe",
         model_config_name="deepseek-v3-32n8g-x86.env",
         extra_env={
+            **shared_env,
             "NEMO_RL_VENV_DIR": str(actor_venv_dir),
             "NRL_DEEPSEEK_V3_BF16_CKPT": str(checkpoint),
         },
@@ -208,7 +238,7 @@ def test_deepseek_profile_applies_a_verified_checkpoint_to_model_and_tokenizer(
     assert f"policy.model_name={checkpoint}" in driver_args
     assert f"policy.tokenizer.name={checkpoint}" in driver_args
 
-    metadata = (tmp_path / "run" / "submission.env").read_text()
+    metadata = (Path(shared_env["RUN_ROOT"]) / "submission.env").read_text()
     assert f"model_name_override={checkpoint}\n" in metadata
     assert f"tokenizer_name_override={checkpoint}\n" in metadata
 
@@ -218,10 +248,91 @@ def test_x86_profile_requires_a_prefetched_actor_venv_directory(tmp_path: Path) 
         tmp_path,
         dispatcher_mode="recipe",
         model_config_name="qwen3-30ba3b-4n8g-x86.env",
+        extra_env={
+            **_synthetic_x86_shared_env(),
+        },
     )
 
     assert result.returncode == 2
     assert "NEMO_RL_VENV_DIR is required for model profile" in result.stderr
+
+
+def test_x86_profile_requires_an_explicit_deepep_wheel(tmp_path: Path) -> None:
+    result, _ = _run_launcher_result(
+        tmp_path,
+        dispatcher_mode="recipe",
+        model_config_name="qwen3-30ba3b-4n8g-x86.env",
+        extra_env={
+            "HF_HOME": "/lustre/nemo-rl-test/hf-home",
+            "HF_DATASETS_CACHE": "/lustre/nemo-rl-test/hf-home/cache",
+            "RUN_ROOT": "/lustre/nemo-rl-test/run",
+        },
+    )
+
+    assert result.returncode == 2
+    assert "DEEPEP_WHEEL is required for model profile" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "path_variable",
+    (
+        "DRIVER_VENV",
+        "RAY_VENV",
+        "UV_CACHE_DIR",
+        "HF_HOME",
+        "HF_DATASETS_CACHE",
+        "RUN_ROOT",
+        "DEEPEP_WHEEL",
+    ),
+)
+def test_x86_profile_rejects_shared_paths_that_traverse_outside_lustre(
+    tmp_path: Path, path_variable: str
+) -> None:
+    escaped_path = tmp_path / path_variable.lower()
+    if path_variable == "DEEPEP_WHEEL":
+        escaped_path.touch()
+    traversal_path = Path("/lustre") / ".." / escaped_path.relative_to("/")
+    extra_env = {
+        **_synthetic_x86_shared_env(),
+        "DRIVER_VENV": "/lustre/driver-venv",
+        "RAY_VENV": "/lustre/driver-venv",
+        "UV_CACHE_DIR": "/lustre/uv-cache",
+    }
+    extra_env[path_variable] = str(traversal_path)
+
+    result, _ = _run_launcher_result(
+        tmp_path,
+        dispatcher_mode="recipe",
+        model_config_name="qwen3-30ba3b-4n8g-x86.env",
+        extra_env=extra_env,
+    )
+
+    assert result.returncode == 2
+    assert f"{path_variable} must resolve under shared /lustre storage" in result.stderr
+
+
+def test_deepseek_profile_rejects_a_checkpoint_that_traverses_outside_lustre(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "deepseek-v3-bf16"
+    checkpoint.mkdir()
+    traversal_path = Path("/lustre") / ".." / checkpoint.relative_to("/")
+
+    result, _ = _run_launcher_result(
+        tmp_path,
+        dispatcher_mode="recipe",
+        model_config_name="deepseek-v3-32n8g-x86.env",
+        extra_env={
+            **_synthetic_x86_shared_env(),
+            "NRL_DEEPSEEK_V3_BF16_CKPT": str(traversal_path),
+        },
+    )
+
+    assert result.returncode == 2
+    assert (
+        "NRL_DEEPSEEK_V3_BF16_CKPT must resolve under shared /lustre storage"
+        in result.stderr
+    )
 
 
 def test_x86_profile_rejects_an_incomplete_prefetched_actor_venv_directory(
@@ -237,7 +348,10 @@ def test_x86_profile_rejects_an_incomplete_prefetched_actor_venv_directory(
         tmp_path,
         dispatcher_mode="recipe",
         model_config_name="qwen3-30ba3b-4n8g-x86.env",
-        extra_env={"NEMO_RL_VENV_DIR": str(actor_venv_dir)},
+        extra_env={
+            **_x86_shared_env(lustre_tmp_path),
+            "NEMO_RL_VENV_DIR": str(actor_venv_dir),
+        },
     )
 
     assert result.returncode == 2
@@ -250,16 +364,20 @@ def test_x86_profile_exports_prefetched_actor_venv_directory_to_ray(
 ) -> None:
     actor_venv_dir = lustre_tmp_path / "actor-venvs"
     _write_prefetched_actor_pythons(actor_venv_dir)
+    shared_env = _x86_shared_env(lustre_tmp_path)
 
     _run_launcher(
         tmp_path,
         dispatcher_mode="recipe",
         model_config_name="qwen3-30ba3b-4n8g-x86.env",
-        extra_env={"NEMO_RL_VENV_DIR": str(actor_venv_dir)},
+        extra_env={
+            **shared_env,
+            "NEMO_RL_VENV_DIR": str(actor_venv_dir),
+        },
     )
 
     assert (tmp_path / "venv-dir.txt").read_text().strip() == str(actor_venv_dir)
-    metadata = (tmp_path / "run" / "submission.env").read_text()
+    metadata = (Path(shared_env["RUN_ROOT"]) / "submission.env").read_text()
     assert f"nemo_rl_venv_dir={actor_venv_dir}\n" in metadata
     assert "prebuilt_actor_venvs_required=true\n" in metadata
 
@@ -275,14 +393,19 @@ def test_x86_profile_rejects_a_lustre_path_that_traverses_outside_lustre(
         tmp_path,
         dispatcher_mode="recipe",
         model_config_name="qwen3-30ba3b-4n8g-x86.env",
-        extra_env={"NEMO_RL_VENV_DIR": str(traversal_path)},
+        extra_env={
+            **_synthetic_x86_shared_env(),
+            "NEMO_RL_VENV_DIR": str(traversal_path),
+        },
     )
 
     assert result.returncode == 2
     assert "NEMO_RL_VENV_DIR must be on shared /lustre storage" in result.stderr
 
 
-def test_generic_profile_does_not_require_prefetched_actor_venvs(tmp_path: Path) -> None:
+def test_generic_profile_does_not_require_prefetched_actor_venvs(
+    tmp_path: Path,
+) -> None:
     _run_launcher(tmp_path, dispatcher_mode="recipe")
 
     metadata = (tmp_path / "run" / "submission.env").read_text()
@@ -302,8 +425,7 @@ def test_padding_logging_reaches_megatron_worker_environment(tmp_path: Path) -> 
     )
 
     assert (
-        "++policy.megatron_cfg.env_vars.NEMO_RL_HYBRIDEP_LOG_PACKING='1'"
-        in driver_args
+        "++policy.megatron_cfg.env_vars.NEMO_RL_HYBRIDEP_LOG_PACKING='1'" in driver_args
     )
     assert (
         "++policy.megatron_cfg.env_vars.NEMO_RL_HYBRIDEP_LOG_PACKING_MAX_CALLS='4096'"

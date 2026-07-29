@@ -93,7 +93,9 @@ RAY_VENV=${RAY_VENV:-}
 UV_LOCK_TIMEOUT=${UV_LOCK_TIMEOUT:-1800}
 MODEL_TOKENIZER_OVERRIDE_ENV=${MODEL_TOKENIZER_OVERRIDE_ENV:-}
 REQUIRE_PREBUILT_ACTOR_VENVS=${REQUIRE_PREBUILT_ACTOR_VENVS:-false}
+REQUIRE_DEEPEP_WHEEL=${REQUIRE_DEEPEP_WHEEL:-false}
 NEMO_RL_VENV_DIR=${NEMO_RL_VENV_DIR:-}
+UV_CACHE_DIR=${UV_CACHE_DIR:-}
 MODEL_NAME_OVERRIDE=
 TOKENIZER_NAME_OVERRIDE=
 PREBUILT_ACTOR_FQNS=(
@@ -125,9 +127,81 @@ case "${REQUIRE_PREBUILT_ACTOR_VENVS}" in
     ;;
 esac
 
+case "${REQUIRE_DEEPEP_WHEEL}" in
+  true | false) ;;
+  *)
+    printf 'REQUIRE_DEEPEP_WHEEL must be true or false.\n' >&2
+    exit 2
+    ;;
+esac
+
 if [[ ! "${UV_LOCK_TIMEOUT}" =~ ^[1-9][0-9]*$ ]]; then
   printf 'UV_LOCK_TIMEOUT must be a positive integer number of seconds.\n' >&2
   exit 2
+fi
+
+canonicalize_shared_lustre_path() {
+  local path_name=$1
+  local path_value=$2
+  local canonical_path
+  canonical_path=$(python3 -c \
+    'import os, sys; print(os.path.realpath(sys.argv[1]))' "${path_value}")
+  case "${canonical_path}" in
+    /lustre/*) ;;
+    *)
+      printf '%s must resolve under shared /lustre storage: %s\n' \
+        "${path_name}" "${canonical_path}" >&2
+      return 2
+      ;;
+  esac
+  printf '%s\n' "${canonical_path}"
+}
+
+if [[ "${REQUIRE_DEEPEP_WHEEL}" == "true" && -z "${DEEPEP_WHEEL}" ]]; then
+  printf 'DEEPEP_WHEEL is required for model profile %s.\n' "${MODEL_ID}" >&2
+  exit 2
+fi
+
+if [[ -n "${MODEL_TOKENIZER_OVERRIDE_ENV}" ]]; then
+  if [[ ! "${MODEL_TOKENIZER_OVERRIDE_ENV}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    printf 'MODEL_TOKENIZER_OVERRIDE_ENV must name an environment variable.\n' >&2
+    exit 2
+  fi
+  MODEL_NAME_OVERRIDE=${!MODEL_TOKENIZER_OVERRIDE_ENV:-}
+  if [[ -z "${MODEL_NAME_OVERRIDE}" ]]; then
+    printf '%s must be set for model profile %s.\n' \
+      "${MODEL_TOKENIZER_OVERRIDE_ENV}" "${MODEL_ID}" >&2
+    exit 2
+  fi
+  TOKENIZER_NAME_OVERRIDE=${MODEL_NAME_OVERRIDE}
+fi
+
+if [[ "${REQUIRE_DEEPEP_WHEEL}" == "true" ]]; then
+  for shared_path_name in \
+    DRIVER_VENV \
+    RAY_VENV \
+    UV_CACHE_DIR \
+    HF_HOME \
+    HF_DATASETS_CACHE \
+    RUN_ROOT \
+    DEEPEP_WHEEL; do
+    shared_path=${!shared_path_name}
+    if [[ -z "${shared_path}" ]]; then
+      continue
+    fi
+    canonical_path=$(
+      canonicalize_shared_lustre_path "${shared_path_name}" "${shared_path}"
+    )
+    printf -v "${shared_path_name}" '%s' "${canonical_path}"
+  done
+
+  if [[ -n "${MODEL_NAME_OVERRIDE}" ]]; then
+    MODEL_NAME_OVERRIDE=$(
+      canonicalize_shared_lustre_path \
+        "${MODEL_TOKENIZER_OVERRIDE_ENV}" "${MODEL_NAME_OVERRIDE}"
+    )
+    TOKENIZER_NAME_OVERRIDE=${MODEL_NAME_OVERRIDE}
+  fi
 fi
 
 if [[ "${REQUIRE_PREBUILT_ACTOR_VENVS}" == "true" ]]; then
@@ -155,22 +229,11 @@ if [[ "${REQUIRE_PREBUILT_ACTOR_VENVS}" == "true" ]]; then
 fi
 
 if [[ -n "${MODEL_TOKENIZER_OVERRIDE_ENV}" ]]; then
-  if [[ ! "${MODEL_TOKENIZER_OVERRIDE_ENV}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-    printf 'MODEL_TOKENIZER_OVERRIDE_ENV must name an environment variable.\n' >&2
-    exit 2
-  fi
-  MODEL_NAME_OVERRIDE=${!MODEL_TOKENIZER_OVERRIDE_ENV:-}
-  if [[ -z "${MODEL_NAME_OVERRIDE}" ]]; then
-    printf '%s must be set for model profile %s.\n' \
-      "${MODEL_TOKENIZER_OVERRIDE_ENV}" "${MODEL_ID}" >&2
-    exit 2
-  fi
   if [[ ! -d "${MODEL_NAME_OVERRIDE}" ]]; then
     printf '%s must point to an existing checkpoint directory: %s\n' \
       "${MODEL_TOKENIZER_OVERRIDE_ENV}" "${MODEL_NAME_OVERRIDE}" >&2
     exit 2
   fi
-  TOKENIZER_NAME_OVERRIDE=${MODEL_NAME_OVERRIDE}
 fi
 
 if [[ -n "${DRIVER_VENV}" ]]; then
@@ -339,19 +402,13 @@ SETUP_COMMAND=
 DEEPEP_OVERLAY=
 DEEPEP_WHEEL_SHA256=
 if [[ -n "${DEEPEP_WHEEL}" ]]; then
+  DEEPEP_WHEEL=$(
+    canonicalize_shared_lustre_path "DEEPEP_WHEEL" "${DEEPEP_WHEEL}"
+  )
   if [[ ! -f "${DEEPEP_WHEEL}" ]]; then
     printf 'DeepEP wheel does not exist: %s\n' "${DEEPEP_WHEEL}" >&2
     exit 2
   fi
-
-  DEEPEP_WHEEL=$(readlink -f -- "${DEEPEP_WHEEL}")
-  case "${DEEPEP_WHEEL}" in
-    /lustre/*) ;;
-    *)
-      printf 'DEEPEP_WHEEL must resolve under the shared /lustre mount: %s\n' "${DEEPEP_WHEEL}" >&2
-      exit 2
-      ;;
-  esac
 
   DEEPEP_OVERLAY="/tmp/nemo-rl-deepep-${DEEPEP_COMMIT:0:12}-${RUN_SUFFIX}"
   DEEPEP_WHEEL_SHA256=$(sha256sum "${DEEPEP_WHEEL}" | cut -d' ' -f1)
@@ -391,6 +448,7 @@ metadata_path="${RUN_ROOT}/submission.env"
   printf 'extra_mounts=%q\n' "${EXTRA_MOUNTS}"
   printf 'driver_venv=%q\n' "${DRIVER_VENV}"
   printf 'ray_venv=%q\n' "${RAY_VENV}"
+  printf 'uv_cache_dir=%q\n' "${UV_CACHE_DIR}"
   printf 'uv_lock_timeout=%q\n' "${UV_LOCK_TIMEOUT}"
   printf 'nemo_rl_venv_dir=%q\n' "${NEMO_RL_VENV_DIR}"
   printf 'prebuilt_actor_venvs_required=%q\n' "${REQUIRE_PREBUILT_ACTOR_VENVS}"
@@ -419,6 +477,9 @@ export MOUNTS
 export NRL_FORCE_REBUILD_VENVS
 if [[ "${REQUIRE_PREBUILT_ACTOR_VENVS}" == "true" ]]; then
   export NEMO_RL_VENV_DIR
+fi
+if [[ -n "${UV_CACHE_DIR}" ]]; then
+  export UV_CACHE_DIR
 fi
 export UV_LOCK_TIMEOUT
 export GPUS_PER_NODE
