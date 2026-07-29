@@ -26,6 +26,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).parents[3]
 PARSER_PATH = REPO_ROOT / "experiments" / "mxfp8_adaptive_rollout" / "parse_results.py"
+README_PATH = REPO_ROOT / "experiments" / "mxfp8_adaptive_rollout" / "README.md"
 SMOKE_PATH = REPO_ROOT / "experiments" / "mxfp8_adaptive_rollout" / "smoke_container.sh"
 NEMO_COMMIT = "8" * 40
 VLLM_COMMIT = "b" * 40
@@ -539,6 +540,17 @@ def test_container_smoke_defaults_to_recipe_actor_wrappers() -> None:
     )
     assert "python-VllmQuantGenerationWorker" not in smoke
     assert "python-MegatronQuantPolicyWorker" not in smoke
+
+
+def test_container_smoke_preserves_frozen_actor_environments() -> None:
+    readme = README_PATH.read_text(encoding="utf-8")
+    smoke_command = next(
+        line
+        for line in readme.splitlines()
+        if "--container-image=${CONTAINER_IMAGE}" in line
+    )
+
+    assert "--no-container-mount-home" in smoke_command
 
 
 def test_container_smoke_uses_split_vllm_and_mcore_interpreters(

@@ -104,7 +104,7 @@ sbatch --test-only \
   --ntasks-per-node=1 \
   --gres=gpu:4 \
   --switches="${SLURM_SWITCHES}" \
-  --wrap="srun --container-image=${CONTAINER_IMAGE} --container-mounts=/lustre:/lustre,/scratch:/scratch bash ${NEMO_RL_REPO_ROOT}/experiments/mxfp8_adaptive_rollout/smoke_container.sh"
+  --wrap="srun --no-container-mount-home --container-image=${CONTAINER_IMAGE} --container-mounts=/lustre:/lustre,/scratch:/scratch bash ${NEMO_RL_REPO_ROOT}/experiments/mxfp8_adaptive_rollout/smoke_container.sh"
 ```
 
 The smoke follows NeMo-RL's intentionally split actor environments. It checks
@@ -113,7 +113,9 @@ Core plus Transformer Engine with `python-MegatronPolicyWorker`, matching this
 recipe's unset `quant_cfg`. It does not attempt to install the conflicting
 `vllm` and `mcore` extras into one environment. Override `VLLM_PYTHON_BIN` or
 `MCORE_PYTHON_BIN` only when the immutable image uses different frozen-actor
-wrapper names.
+wrapper names. Keep `--no-container-mount-home`, as `ray.sub` does, so the host
+home does not hide the image's `/root` Python and uv cache used by those
+wrappers.
 
 Repeat without `--test-only`, monitor for at least five minutes, and record the
 smoke job ID and output in the local report.
