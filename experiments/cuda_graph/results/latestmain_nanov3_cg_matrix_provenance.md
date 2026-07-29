@@ -329,3 +329,24 @@ microbatch, so NeMo-RL's safety check rejected the changed schedule before
 policy training. This is a variable sequence-packing schedule contract, not a
 scope-specific CUDA failure. The four completed samples are retained, but the
 run is not counted as a five-step pass.
+
+## Direct Transformer Engine float64 CUDA validation
+
+| Field | Value |
+| --- | --- |
+| First preflight | `2465808` accepted |
+| First job | `2465809` (`FAILED`, exit `1:0`, 1m37s) |
+| First result | 9 source tests passed; the direct assertion was collected in the driver environment, which does not install Transformer Engine |
+| Corrected source | `1e67507c2cc9073a79f2d196152b80e3b6e4a785` |
+| Corrected preflight | `2465819` accepted |
+| Corrected job | `2465820` (`COMPLETED`, exit `0:0`, 8m46s) |
+| Source-test result | 12 passed, 1 driver-only TE test skipped, 16 deselected |
+| Direct GPU result | `te_float64_weak_ref_cuda_smoke=passed` in the rebuilt MCore worker venv on GB200 |
+
+The corrected launcher builds the exact MCore worker environment used by model
+jobs, starts a one-GPU Ray task in that environment, applies the compatibility
+patch, and calls Transformer Engine's installed `make_weak_ref` implementation.
+The resulting tensor retained `torch.float64`, shape `(2,)`, the original CUDA
+storage pointer, and exact values. This closes the test-harness gap in job
+`2465809`; it does not change the separate PP2 variable-microbatch limitation
+observed in job `2465645`.
