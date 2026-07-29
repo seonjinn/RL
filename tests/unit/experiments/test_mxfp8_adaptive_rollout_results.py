@@ -670,7 +670,10 @@ def test_oci_profile_overlays_checkout_onto_container_nemo_root() -> None:
 
     profile = PROFILE_PATH.read_text(encoding="utf-8")
     assert "VLLM_OVERLAY_ROOT" in profile
-    assert "vllm-overlay-217ece36ee503ee8ccfbfaa0a5331765b21d2160" in profile
+    assert (
+        "${NEMO_RL_EXPERIMENT_ROOT}/runtime/"
+        "vllm-217ece36ee50-wheel-overlay"
+    ) in profile
 
 
 def test_container_smoke_uses_split_vllm_and_mcore_interpreters(
