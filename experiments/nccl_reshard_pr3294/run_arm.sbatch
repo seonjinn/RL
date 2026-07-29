@@ -78,11 +78,13 @@ mkdir -p "${EXPERIMENT_ROOT}" "${EXPERIMENT_ROOT}/logs"
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna}
 HF_HOME=${HF_HOME:-${WORK_ROOT}/.cache/huggingface}
 CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/mopd_nano_fast/.cache/nccl-reshard-pr3294/${ARM}-${MODE}}
+SHARED_UV_CACHE=${SHARED_UV_CACHE:-${CACHE_ROOT}/uv}
 WANDB_PROJECT=${WANDB_PROJECT:-sna-pr3294-nccl-reshard}
 WANDB_KEY_FILE=${WANDB_KEY_FILE:-${CACHE_ROOT}/.wandb_key}
+NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-false}
 RAY_BOOTSTRAP_VENV=${RAY_BOOTSTRAP_VENV:-}
 
-mkdir -p "${HF_HOME}" "${CACHE_ROOT}/uv" "${CACHE_ROOT}/venvs"
+mkdir -p "${HF_HOME}" "${SHARED_UV_CACHE}" "${CACHE_ROOT}/venvs"
 if [[ ! -s "${WANDB_KEY_FILE}" && -f "${HOME}/.netrc" ]]; then
   mkdir -p "$(dirname "${WANDB_KEY_FILE}")"
   (umask 077; awk '/machine api.wandb.ai/{f=1} f&&/password/{print $2; exit}' \
@@ -100,6 +102,8 @@ gpus_per_node=${GPUS_PER_NODE}
 generation_nodes=${GEN_NODES}
 max_steps=${MAX_STEPS}
 ray_bootstrap_venv=${RAY_BOOTSTRAP_VENV}
+shared_uv_cache=${SHARED_UV_CACHE}
+force_rebuild_venvs=${NRL_FORCE_REBUILD_VENVS}
 NRL_MXFP8_BATCHED_SHUFFLE=${NRL_MXFP8_BATCHED_SHUFFLE}
 NRL_REFIT_CACHED_LOADERS=${NRL_REFIT_CACHED_LOADERS}
 EOF
@@ -108,7 +112,7 @@ export NRL_REFIT_NUM_STREAMS=${NRL_REFIT_NUM_STREAMS:-2}
 export CONTAINER
 export MOUNTS=/lustre:/lustre
 export BASE_LOG_DIR="${EXPERIMENT_ROOT}"
-export UV_CACHE_DIR_OVERRIDE="${CACHE_ROOT}/uv"
+export UV_CACHE_DIR_OVERRIDE="${SHARED_UV_CACHE}"
 if [[ -n "${RAY_BOOTSTRAP_VENV}" ]]; then
   test -x "${RAY_BOOTSTRAP_VENV}/bin/ray"
   export PATH="${RAY_BOOTSTRAP_VENV}/bin:${PATH}"
@@ -120,9 +124,9 @@ set -euo pipefail
 cd '${REPO}'
 export PYTHONPATH='${REPO}'
 export HF_HOME='${HF_HOME}'
-export NRL_FORCE_REBUILD_VENVS=false
+export NRL_FORCE_REBUILD_VENVS='${NRL_FORCE_REBUILD_VENVS}'
 export NEMO_RL_VENV_DIR='${CACHE_ROOT}/venvs'
-export UV_CACHE_DIR='${CACHE_ROOT}/uv'
+export UV_CACHE_DIR='${SHARED_UV_CACHE}'
 export UV_PROJECT_ENVIRONMENT='${CACHE_ROOT}/driver-venv'
 export UV_LOCK_TIMEOUT=7200
 export NVTE_CUDA_ARCHS='${NVTE_CUDA_ARCHS_OVERRIDE:-100}'
