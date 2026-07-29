@@ -489,6 +489,21 @@ The manager owns one active bank, verifies every layer identity and graph
 count, invokes a model-drain assertion before capture/activation/reset, and
 synchronizes before explicit reset.
 
+Each `(layer, graphs)` entry also owns the layer replay contract active at
+capture time:
+
+```text
+cuda_graph_manual_hooks
+_te_cuda_graph_packed_seq_params_static_metadata
+_te_cuda_graph_packed_seq_params_tensor_kwarg_names
+_te_cuda_graph_mamba_packed_seq_params_static_metadata
+_te_cuda_graph_mamba_packed_seq_params_tensor_signatures
+```
+
+Activation installs the contract and hooks before assigning
+`layer.cuda_graphs`. A bank without packed inputs explicitly clears stale
+packed attributes from the previously active bank.
+
 - [ ] **Step 4: Refactor helper capture to return owned graph lists**
 
 Split existing capture into a private `_capture_cuda_graph_lists()` method
@@ -504,11 +519,31 @@ def create_cuda_graph_bank(
     return manager.capture(self, num_microbatches=num_microbatches)
 ```
 
-The helper no longer needs to write shared layer lists to map TE results. Existing `create_cudagraphs()` captures one bank, activates it, and stores that exact bank for its compatibility `delete_cuda_graphs()`.
+Before capture, install empty manager-owned lists on every graphable layer so
+`GraphableMegatronModule.__call__` enters capture instead of replaying the
+previous bank. Map TE results with the existing normal and EP-overlap index
+formulas into those same list objects; list identity is the ownership token.
+Vision wrapping mutates the owned list in place.
+
+Existing `create_cudagraphs()` captures one bank, activates it, and stores that
+exact bank for its compatibility `delete_cuda_graphs()`. Compatibility deletion
+resets only its owned callables and clears layer-facing state only when the
+installed list is the same object.
 
 - [ ] **Step 5: Make capture exception-safe**
 
-Ensure `_finish_capturing` or a dedicated abort cleanup runs from `finally`, clears transient capture flags, resets partial graph handles, and restores the previously active bank before re-raising.
+Ensure `_finish_capturing` or a dedicated abort cleanup runs from `finally`,
+clears both MCore and TE capture flags, unfreezes GC, resets fine-grained
+offload capture state, resets partial owned callables under the TE 2.10 guard,
+marks the failed helper uncreated, and restores the previously active lists,
+hooks, and packed replay contracts before re-raising.
+
+Add mapping tests for two layers/two microbatches:
+
+```text
+normal mapping: layer0=[g0,g2], layer1=[g1,g3]
+EP-overlap mapping: layer0=[g0,g1], layer1=[g2,g3]
+```
 
 - [ ] **Step 6: Verify GREEN**
 
@@ -551,9 +586,9 @@ git commit -s -S -m "feat: add owned TE CUDA graph banks"
 **Interfaces:**
 - Consumes: bank manager from Task 3 and latest-main explicit MoE graph outputs.
 - Produces:
-  - `MoETransformerLayer.te_cuda_graph_bank_schema()`.
-  - `MoETransformerLayer.assert_te_cuda_graph_bank_drained()`.
-  - `MoETransformerLayer.clear_te_cuda_graph_bank_references()`.
+  - `TransformerLayer.te_cuda_graph_bank_schema()`.
+  - `TransformerLayer.assert_te_cuda_graph_bank_drained()`.
+  - `TransformerLayer.clear_te_cuda_graph_bank_references()`.
   - bank fingerprint validation for dispatcher attribute names.
 
 - [ ] **Step 1: Add failing MoE drained-state tests**
@@ -589,24 +624,36 @@ Expected: FAIL because bank switching has no MoE hooks.
 
 - [ ] **Step 3: Implement MoE layer hooks**
 
-Add these exact hooks:
+Add hooks to ordinary `TransformerLayer`, guarded by `self.is_moe_layer`;
+`MoETransformerLayer` inherits them. Standard GPT MoE layers are not instances
+of `MoETransformerLayer`.
 
 ```python
 def te_cuda_graph_bank_schema(self) -> tuple[str, ...]:
+    if not self.is_moe_layer:
+        return ()
     return tuple(self.mlp.token_dispatcher.valid_cudagraph_attrs or ())
-
-
-def assert_te_cuda_graph_bank_drained(self) -> None:
-    assert self.mlp.cudagraph_tensor_store.is_empty(), (
-        "Cannot switch TE CUDA graph banks with live MoE dispatcher tensors."
-    )
-
-
-def clear_te_cuda_graph_bank_references(self) -> None:
-    self.mlp.cudagraph_tensor_store.clear()
 ```
 
-The bank manager calls these hooks before uninstall, activation, and reset. It retains `valid_cudagraph_attrs` as structural schema and never restores the old weak-reference side channel.
+After the model-level drain callback and `torch.cuda.synchronize()`, the drain
+assertion checks:
+
+- all four `cudagraph_tensor_store` fields are `None`;
+- overlapped shared-expert state is `IDLE` and its cached forward fields are
+  `None`;
+- Flex/HybridEP dispatcher `handle` or NCCL EP `_buffer` is `None`;
+- a live grouped-MLP `moe_act` checkpoint has no retained context/output.
+
+Only uninstalling the active bank clears active dispatcher leaf references and
+the Tensor store. Resetting an inactive bank never calls a layer-global clear
+hook and never touches active bank state. Preserve `valid_cudagraph_attrs` as
+structural schema, clear only its resolved leaf values, and do not restore the
+old weak-reference side channel.
+
+There is no reliable host-visible pending flag for every delayed-wgrad and
+communication stream. The model-level callback therefore proves the
+optimizer/schedule boundary, then synchronizes CUDA before these logical
+assertions.
 
 - [ ] **Step 4: Verify GREEN and existing MoE tests**
 
@@ -620,6 +667,11 @@ uv run python -m pytest -q \
 ```
 
 Expected: new tests pass; applicable existing tests pass or GPU-skip.
+
+Run FP64 preservation at the graph boundary or with all-to-all. DeepEP and
+HybridEP intentionally cast router probabilities to FP32, so they are not a
+universal FP64 end-to-end gate. Do not cross shared-expert overlap with EP
+overlap, and enable grouped GEMM for selective `moe_act` tests.
 
 - [ ] **Step 5: Commit**
 
