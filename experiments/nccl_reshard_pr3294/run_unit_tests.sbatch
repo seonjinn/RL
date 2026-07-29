@@ -29,6 +29,11 @@ srun \
     test -n \"\${PYTHON_BIN}\" && test -x \"\${PYTHON_BIN}\"
     \"\${PYTHON_BIN}\" -m pytest -q \
       tests/unit/weight_sync/test_nccl_reshard_utils.py
+    VLLM_SITE_PACKAGES=\$(find /opt/ray_venvs \
+      -type d -path '*Vllm*GenerationWorker/lib/python*/site-packages' \
+      -print -quit)
+    test -n \"\${VLLM_SITE_PACKAGES}\"
+    export PYTHONPATH=\"\${VLLM_SITE_PACKAGES}:${REPO}\"
     \"\${PYTHON_BIN}\" -m pytest -q --vllm-only \
       tests/unit/models/generation/test_vllm_backend.py::test_nccl_reshard_refit_processes_weights_once
   " 2>&1 | tee "${TEST_LOG}"
