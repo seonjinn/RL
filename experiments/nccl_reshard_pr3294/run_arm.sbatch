@@ -75,6 +75,9 @@ NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-false}
 RAY_BOOTSTRAP_VENV=${RAY_BOOTSTRAP_VENV:-}
 RAY_BOOTSTRAP_ARCHIVE=${RAY_BOOTSTRAP_ARCHIVE:-}
 RAY_BOOTSTRAP_LOCAL_ROOT=${RAY_BOOTSTRAP_LOCAL_ROOT:-}
+USE_CONTAINER_VENVS=${USE_CONTAINER_VENVS:-false}
+CONTAINER_DRIVER_VENV=${CONTAINER_DRIVER_VENV:-/opt/nemo_rl_venv}
+CONTAINER_ACTOR_VENV_ROOT=${CONTAINER_ACTOR_VENV_ROOT:-/opt/ray_venvs}
 
 if [[ -n "${RAY_BOOTSTRAP_ARCHIVE}" ]]; then
   test -f "${RAY_BOOTSTRAP_ARCHIVE}"
@@ -117,6 +120,9 @@ ray_bootstrap_venv=${RAY_BOOTSTRAP_VENV}
 ray_bootstrap_archive=${RAY_BOOTSTRAP_ARCHIVE}
 shared_uv_cache=${SHARED_UV_CACHE}
 force_rebuild_venvs=${NRL_FORCE_REBUILD_VENVS}
+use_container_venvs=${USE_CONTAINER_VENVS}
+container_driver_venv=${CONTAINER_DRIVER_VENV}
+container_actor_venv_root=${CONTAINER_ACTOR_VENV_ROOT}
 NRL_MXFP8_BATCHED_SHUFFLE=${NRL_MXFP8_BATCHED_SHUFFLE}
 NRL_REFIT_CACHED_LOADERS=${NRL_REFIT_CACHED_LOADERS}
 EOF
@@ -125,7 +131,6 @@ export NRL_REFIT_NUM_STREAMS=${NRL_REFIT_NUM_STREAMS:-2}
 export CONTAINER
 export MOUNTS=/lustre:/lustre
 export BASE_LOG_DIR="${EXPERIMENT_ROOT}"
-export UV_CACHE_DIR_OVERRIDE="${SHARED_UV_CACHE}"
 if [[ -n "${RAY_BOOTSTRAP_VENV}" ]]; then
   if [[ -z "${RAY_BOOTSTRAP_ARCHIVE}" ]]; then
     test -x "${RAY_BOOTSTRAP_VENV}/bin/ray"
@@ -137,16 +142,52 @@ else
   UV_PYTHON_COMMAND=
 fi
 
-export COMMAND="
-set -euo pipefail
-cd '${REPO}'
-export PYTHONPATH='${REPO}'
-export HF_HOME='${HF_HOME}'
-export NRL_FORCE_REBUILD_VENVS='${NRL_FORCE_REBUILD_VENVS}'
+case "${USE_CONTAINER_VENVS}" in
+  true)
+    unset UV_CACHE_DIR_OVERRIDE
+    VLLM_ACTOR_PYTHON="${CONTAINER_ACTOR_VENV_ROOT}/nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker/bin/python"
+    MCORE_ACTOR_PYTHON="${CONTAINER_ACTOR_VENV_ROOT}/nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker/bin/python"
+    export SETUP_COMMAND="${SETUP_COMMAND:-}
+test -x '${CONTAINER_DRIVER_VENV}/bin/python'
+test -x '${VLLM_ACTOR_PYTHON}'
+test -x '${MCORE_ACTOR_PYTHON}'
+"
+    if [[ -n "${RAY_BOOTSTRAP_VENV}" ]]; then
+      DRIVER_PYTHONPATH="${RAY_BOOTSTRAP_VENV}/lib/python3.13/site-packages:${REPO}"
+    else
+      DRIVER_PYTHONPATH="${REPO}"
+    fi
+    DRIVER_ENV_COMMANDS="
+export NEMO_RL_VENV_DIR='${CONTAINER_ACTOR_VENV_ROOT}'
+export UV_PROJECT_ENVIRONMENT='${CONTAINER_DRIVER_VENV}'
+unset UV_CACHE_DIR
+"
+    DRIVER_LAUNCH="'${CONTAINER_DRIVER_VENV}/bin/python' examples/run_grpo.py"
+    ;;
+  false)
+    export UV_CACHE_DIR_OVERRIDE="${SHARED_UV_CACHE}"
+    DRIVER_PYTHONPATH="${REPO}"
+    DRIVER_ENV_COMMANDS="
 export NEMO_RL_VENV_DIR='${CACHE_ROOT}/venvs'
 export UV_CACHE_DIR='${SHARED_UV_CACHE}'
 export UV_PROJECT_ENVIRONMENT='${CACHE_ROOT}/driver-venv'
 ${UV_PYTHON_COMMAND}
+"
+    DRIVER_LAUNCH="uv run --frozen examples/run_grpo.py"
+    ;;
+  *)
+    echo "USE_CONTAINER_VENVS must be true or false" >&2
+    exit 2
+    ;;
+esac
+
+export COMMAND="
+set -euo pipefail
+cd '${REPO}'
+export PYTHONPATH='${DRIVER_PYTHONPATH}'
+export HF_HOME='${HF_HOME}'
+export NRL_FORCE_REBUILD_VENVS='${NRL_FORCE_REBUILD_VENVS}'
+${DRIVER_ENV_COMMANDS}
 export UV_LOCK_TIMEOUT=7200
 export NVTE_CUDA_ARCHS='${NVTE_CUDA_ARCHS_OVERRIDE:-100}'
 export TORCH_CUDA_ARCH_LIST='${TORCH_CUDA_ARCH_LIST_OVERRIDE:-10.0}'
@@ -156,7 +197,7 @@ export NRL_REFIT_CACHED_LOADERS='${NRL_REFIT_CACHED_LOADERS}'
 if [[ -s '${WANDB_KEY_FILE}' ]]; then
   export WANDB_API_KEY=\$(cat '${WANDB_KEY_FILE}')
 fi
-uv run --frozen examples/run_grpo.py \
+${DRIVER_LAUNCH} \
   --config '${CONFIG}' \
   cluster.num_nodes='${TOTAL_NODES}' \
   cluster.gpus_per_node='${GPUS_PER_NODE}' \

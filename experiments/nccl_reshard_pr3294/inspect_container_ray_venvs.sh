@@ -23,14 +23,21 @@ echo "== sizes =="
 du -sh /opt/ray_venvs/* | sort -h
 
 echo "== targeted imports =="
+status=0
 while IFS= read -r executable; do
   environment=${executable%/bin/python}
   case "${environment}" in
-    *VllmGenerationWorker*|*VllmQuantGenerationWorker*)
+    *VllmQuantGenerationWorker*)
       imports="import modelopt, ray, requests, urllib3, vllm"
       ;;
-    *MegatronPolicyWorker*|*MegatronQuantPolicyWorker*)
+    *VllmGenerationWorker*)
+      imports="import ray, requests, urllib3, vllm; from vllm.model_executor.layers.quantization.modelopt import ModelOptMxFp8Config"
+      ;;
+    *MegatronQuantPolicyWorker*)
       imports="import megatron.core, modelopt, ray, requests, torch, urllib3"
+      ;;
+    *MegatronPolicyWorker*)
+      imports="import megatron.core, ray, requests, torch, urllib3"
       ;;
     *)
       continue
@@ -42,8 +49,11 @@ while IFS= read -r executable; do
     :
   else
     echo "failed"
+    status=1
   fi
 done < <(
   find /opt/ray_venvs -mindepth 3 -maxdepth 3 \
     \( -type f -o -type l \) -path '*/bin/python' | sort
 )
+
+exit "${status}"
