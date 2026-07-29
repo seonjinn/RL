@@ -54,11 +54,18 @@ srun \
   --container-image="${CONTAINER}" \
   --container-mounts="${MOUNTS}" \
   --container-workdir="${PROJECT_ROOT}" \
-  bash -lc '
+  env \
+    DRIVER_VENV="${DRIVER_VENV}" \
+    UV_CACHE_DIR="${UV_CACHE_DIR}" \
+    NEMO_RL_VENV_DIR="${NEMO_RL_VENV_DIR}" \
+    bash -lc '
     set -euo pipefail
+    printf "Effective DRIVER_VENV=%s\\n" "${DRIVER_VENV}"
+    printf "Effective UV_CACHE_DIR=%s\\n" "${UV_CACHE_DIR}"
+    printf "Effective NEMO_RL_VENV_DIR=%s\\n" "${NEMO_RL_VENV_DIR}"
     export UV_PROJECT_ENVIRONMENT="${DRIVER_VENV}"
-    export UV_CACHE_DIR="${UV_CACHE_DIR}"
-    export NEMO_RL_VENV_DIR="${NEMO_RL_VENV_DIR}"
+    export UV_CACHE_DIR
+    export NEMO_RL_VENV_DIR
     uv sync --frozen
     sed -i \
       "s/context\\.py_executable = \" \"\\.join(self\\.nsight_cmd) + \" python\"/context.py_executable = \" \".join(self.nsight_cmd) + f\" {context.py_executable}\"/g" \

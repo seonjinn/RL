@@ -327,9 +327,41 @@ def _prepare_payload(project_root: Path) -> str:
         / "hybridep"
         / "prepare_driver_venv.sbatch"
     ).read_text()
-    return source.split("  bash -lc '\n", maxsplit=1)[1].rsplit("\n  '\n", maxsplit=1)[
-        0
-    ]
+    return source.split("    bash -lc '\n", maxsplit=1)[1].rsplit(
+        "\n  '\n", maxsplit=1
+    )[0]
+
+
+def test_driver_venv_host_paths_override_container_image_defaults() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    source = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "x86"
+        / "hybridep"
+        / "prepare_driver_venv.sbatch"
+    ).read_text()
+    injection = (
+        "  env \\\n"
+        '    DRIVER_VENV="${DRIVER_VENV}" \\\n'
+        '    UV_CACHE_DIR="${UV_CACHE_DIR}" \\\n'
+        '    NEMO_RL_VENV_DIR="${NEMO_RL_VENV_DIR}" \\\n'
+        "    bash -lc '"
+    )
+    diagnostics = (
+        'printf "Effective DRIVER_VENV=%s\\\\n" "${DRIVER_VENV}"',
+        'printf "Effective UV_CACHE_DIR=%s\\\\n" "${UV_CACHE_DIR}"',
+        'printf "Effective NEMO_RL_VENV_DIR=%s\\\\n" "${NEMO_RL_VENV_DIR}"',
+    )
+
+    assert injection in source
+    assert source.index("--container-workdir=") < source.index(injection)
+    assert all(diagnostic in source for diagnostic in diagnostics)
+    assert all(
+        source.index(diagnostic) < source.index("uv sync --frozen")
+        for diagnostic in diagnostics
+    )
 
 
 def _run_prepare_payload(
@@ -535,7 +567,7 @@ def test_x86_driver_venv_job_prepares_the_shared_ray_runtime() -> None:
         ': "${NEMO_RL_VENV_DIR:?NEMO_RL_VENV_DIR is required}"',
         "--no-container-mount-home",
         'UV_PROJECT_ENVIRONMENT="${DRIVER_VENV}"',
-        'export NEMO_RL_VENV_DIR="${NEMO_RL_VENV_DIR}"',
+        "export NEMO_RL_VENV_DIR",
         "uv sync --frozen",
         "site-packages/ray/_private/runtime_env/nsight.py",
         "ray --version",
