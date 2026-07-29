@@ -70,7 +70,7 @@ case "${MODE}" in
     ;;
 esac
 
-test -d "${REPO}/.git"
+git -C "${REPO}" rev-parse --git-dir >/dev/null
 test -f "${REPO}/${CONFIG}"
 test -f "${CONTAINER}"
 mkdir -p "${EXPERIMENT_ROOT}" "${EXPERIMENT_ROOT}/logs"
