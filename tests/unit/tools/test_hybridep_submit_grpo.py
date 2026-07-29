@@ -479,10 +479,10 @@ def test_deepep_dispatcher_wires_both_wheels_and_ray_parent_loader_path(
     assert f"nccl_wheel={env['NCCL_WHEEL']}" in setup_command
     assert "expected_nccl_wheel_sha256=" in setup_command
     assert ray_parent_loader_path.startswith(f"{overlay}/nvidia/nccl/lib:")
-    assert f"deepep_variant=deepep\\n" in metadata
-    assert f"deepep_wheel={env['DEEPEP_WHEEL']}\\n" in metadata
-    assert f"nccl_wheel={env['NCCL_WHEEL']}\\n" in metadata
-    assert f"nccl_version={NCCL_VERSION}\\n" in metadata
+    assert f"deepep_variant=deepep\n" in metadata
+    assert f"deepep_wheel={env['DEEPEP_WHEEL']}\n" in metadata
+    assert f"nccl_wheel={env['NCCL_WHEEL']}\n" in metadata
+    assert f"nccl_version={NCCL_VERSION}\n" in metadata
     project_root = Path(__file__).resolve().parents[3]
     expected_config_sha256 = subprocess.check_output(
         [
@@ -494,7 +494,7 @@ def test_deepep_dispatcher_wires_both_wheels_and_ray_parent_loader_path(
         ],
         text=True,
     ).split()[0]
-    assert f"config_sha256={expected_config_sha256}\\n" in metadata
+    assert f"config_sha256={expected_config_sha256}\n" in metadata
 
 
 def test_unknown_dispatcher_mode_is_rejected(tmp_path: Path) -> None:

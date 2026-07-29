@@ -117,6 +117,13 @@ literal `\\n` text instead of newline characters. A second test-only follow-up
 fixes those writers and directly asserts the generated metadata has separate
 parseable lines. The controller rerun with this fix is pending.
 
+Remote r4 confirmed RED job `480228` still failed as expected and GREEN job
+`480230` ran all eight artifact-backed tests: seven passed. The remaining
+failure was another test-only literal-`\\n` typo in the wiring test's
+`submission.env` assertions; the file correctly contained real newline
+characters. A final assertion-only follow-up corrects those comparisons. The
+controller's final rerun is pending.
+
 ## Self-review
 
 - The launcher keeps `/tmp` restricted to the existing bounded worker overlay;
