@@ -123,3 +123,47 @@ def test_build_hf_to_local_param_map_train_side():
     ctx = g.pre(g.base)
     assert ctx.buf.shape == (2, 128, 16)
     assert torch.equal(ctx.buf[0], e0) and torch.equal(ctx.buf[1], e1)
+
+
+def test_build_mxfp8_source_specs_quantize_direct_and_grouped_once():
+    w = object.__new__(MegatronPolicyWorkerImpl)
+    prefix = "model.layers.0.mlp.experts"
+    direct = torch.randn(32, 64, dtype=torch.bfloat16)
+    e0 = torch.randn(64, 32, dtype=torch.bfloat16)
+    e1 = torch.randn(64, 32, dtype=torch.bfloat16)
+    w._iter_local_hf_param_shards = lambda: [
+        ("model.layers.0.mlp.down_proj.weight", direct),
+        (f"{prefix}.0.gate_proj.weight", e0),
+        (f"{prefix}.1.gate_proj.weight", e1),
+    ]
+    refit_info = {
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": "model.layers.0.mlp.down_proj.weight",
+                    "global_shape": [32, 64],
+                    "refit_transform": "mxfp8",
+                },
+                {
+                    "name": f"{prefix}.gate_proj.weight",
+                    "global_shape": [2, 64, 32],
+                    "grouped_expert_proj": "gate_proj",
+                    "refit_transform": "mxfp8",
+                },
+            ]
+        },
+    }
+
+    pmap = w.build_hf_to_local_param_map(refit_info)
+    direct_ctx = pmap.get("model.layers.0.mlp.down_proj.weight").pre(direct)
+    grouped_spec = pmap.get(f"{prefix}.gate_proj.weight")
+    grouped_ctx = grouped_spec.pre(grouped_spec.base)
+
+    assert direct_ctx.buf.dtype == torch.float8_e4m3fn
+    assert direct_ctx.extra["scale_buf"].shape == (32, 2)
+    assert direct_ctx.extra["scale_buf"].dtype == torch.uint8
+    assert grouped_ctx.buf.dtype == torch.float8_e4m3fn
+    assert grouped_ctx.buf.shape == (2, 64, 32)
+    assert grouped_ctx.extra["scale_buf"].shape == (2, 64, 1)
+    assert grouped_ctx.extra["scale_buf"].dtype == torch.uint8
