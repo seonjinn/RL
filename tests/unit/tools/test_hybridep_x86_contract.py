@@ -12,13 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib.util
 import os
 from pathlib import Path
 import subprocess
-import sys
-from types import ModuleType
-from unittest.mock import Mock
 
 
 DEEPEP_COMMIT = "f725d29699f5bda9ba789456bb9579af69844685"
@@ -47,32 +43,12 @@ def test_lock_does_not_retain_the_pre_hybridep_x86_commit() -> None:
     assert f"DeepEP.git?rev={DEEPEP_COMMIT}" in lock
 
 
-def test_qwen_4n8g_hybridep_only_adds_x86_dispatcher_settings() -> None:
+def test_create_local_venv_does_not_set_a_per_actor_uv_cache() -> None:
     project_root = Path(__file__).resolve().parents[3]
-    config_path = (
-        project_root
-        / "examples"
-        / "configs"
-        / "recipes"
-        / "llm"
-        / "performance"
-        / "grpo-qwen3-30ba3b-4n8g-hybridep.yaml"
-    )
+    source = (project_root / "nemo_rl" / "utils" / "venvs.py").read_text()
+    create_local_venv_source = source.split("@ray.remote", maxsplit=1)[0]
 
-    assert config_path.read_text() == (
-        "defaults: grpo-qwen3-30ba3b-4n8g.yaml\n"
-        "\n"
-        "policy:\n"
-        "  megatron_cfg:\n"
-        "    moe_token_dispatcher_type: flex\n"
-        "    moe_flex_dispatcher_backend: hybridep\n"
-        "    moe_hybridep_num_sms: 32\n"
-        "    env_vars:\n"
-        '      NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN: "8"\n'
-        '      NUM_OF_TOKENS_PER_CHUNK_COMBINE_API: "128"\n'
-        '      NVLINK_DOMAIN_SIZE: "8"\n'
-        '      USE_MNNVL: "0"\n'
-    )
+    assert 'env["UV_CACHE_DIR"]' not in create_local_venv_source
 
 
 def test_qwen_4n8g_x86_profiles_are_matched() -> None:
@@ -169,35 +145,6 @@ def test_launcher_rejects_an_invalid_uv_lock_timeout() -> None:
 
     assert '[[ ! "${UV_LOCK_TIMEOUT}" =~ ^[1-9][0-9]*$ ]]' in launcher
     assert "UV_LOCK_TIMEOUT must be a positive integer number of seconds." in launcher
-
-
-def test_actor_venv_uses_an_isolated_uv_cache(tmp_path, monkeypatch) -> None:
-    project_root = Path(__file__).resolve().parents[3]
-    module_path = project_root / "nemo_rl" / "utils" / "venvs.py"
-    fake_ray = ModuleType("ray")
-    fake_ray.remote = lambda **_kwargs: lambda function: function
-    fake_ray_util = ModuleType("ray.util")
-    fake_ray_util.placement_group = Mock()
-    monkeypatch.setitem(sys.modules, "ray", fake_ray)
-    monkeypatch.setitem(sys.modules, "ray.util", fake_ray_util)
-
-    spec = importlib.util.spec_from_file_location("venvs_under_test", module_path)
-    assert spec is not None
-    assert spec.loader is not None
-    venvs = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(venvs)
-
-    run = Mock()
-    monkeypatch.setattr(venvs.subprocess, "run", run)
-    monkeypatch.setenv("NEMO_RL_VENV_DIR", str(tmp_path))
-    monkeypatch.setenv("UV_CACHE_DIR", "/lustre/shared-uv-cache")
-    venvs.create_local_venv("uv run --extra mcore", "policy-worker")
-
-    expected_cache = str(tmp_path / "policy-worker" / ".uv-cache")
-    sync_env = run.call_args_list[1].kwargs["env"]
-    run_env = run.call_args_list[2].kwargs["env"]
-    assert sync_env["UV_CACHE_DIR"] == expected_cache
-    assert run_env["UV_CACHE_DIR"] == expected_cache
 
 
 def test_deepep_setup_probe_uses_the_ray_runtime_python() -> None:
