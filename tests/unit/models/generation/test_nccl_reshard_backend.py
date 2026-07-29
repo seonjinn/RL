@@ -262,3 +262,52 @@ def test_build_hf_to_local_param_map_specs_and_roundtrip():
     egctx.buf.fill_(5.0)
     eg.post(egctx)
     assert torch.equal(w13[:, 0:Pl, :], torch.full_like(w13[:, 0:Pl, :], 5.0))
+
+
+def test_build_mxfp8_map_receives_value_and_scale_into_matching_slices():
+    H = 32
+    refit_info = {
+        "gen_tp_size": 2,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": "model.layers.0.mlp.gate_proj.weight",
+                    "global_shape": [128, H],
+                    "refit_transform": "mxfp8",
+                    "scale_global_shape": [128, H // 32],
+                    "scale_dtype": "torch.uint8",
+                }
+            ]
+        },
+    }
+    gate_up = torch.empty(128, H, dtype=torch.float8_e4m3fn)
+    gate_up_scale = torch.empty(128, H // 32, dtype=torch.uint8)
+    ext = _make_ext(
+        {
+            "model.layers.0.mlp.gate_up_proj.weight": gate_up,
+            "model.layers.0.mlp.gate_up_proj.weight_scale_from_checkpoint": (
+                gate_up_scale
+            ),
+        }
+    )
+
+    spec = ext.build_hf_to_local_param_map(refit_info).get(
+        "model.layers.0.mlp.gate_proj.weight"
+    )
+    assert spec is not None and spec.pre is not None and spec.post is not None
+
+    ctx = spec.pre(spec.base)
+    assert ctx.buf.shape == (64, H)
+    assert ctx.buf.dtype == torch.float8_e4m3fn
+    assert ctx.extra["scale_buf"].shape == (64, H // 32)
+    assert ctx.extra["scale_buf"].dtype == torch.uint8
+
+    ctx.buf.fill_(1.0)
+    ctx.extra["scale_buf"].fill_(127)
+    spec.post(ctx)
+    assert torch.equal(gate_up[:64], torch.ones_like(gate_up[:64]))
+    assert torch.equal(
+        gate_up_scale[:64],
+        torch.full_like(gate_up_scale[:64], 127),
+    )

@@ -87,17 +87,51 @@ def test_check_nccl_reshard_refit_support_rejects_invalid_config(
     assert expected_violation in str(exc_info.value)
 
 
-def test_check_nccl_reshard_refit_support_rejects_refit_prequantize() -> None:
+def test_check_nccl_reshard_refit_support_accepts_mxfp8_refit_prequantize() -> None:
     config = _valid_nccl_reshard_config()
-    config.policy["generation"]["vllm_cfg"]["refit_prequantize"] = True
+    config.policy["generation"]["vllm_cfg"].update(
+        {
+            "precision": "fp8",
+            "is_mx": True,
+            "refit_prequantize": True,
+        }
+    )
+
+    check_nccl_reshard_refit_support(config)
+
+
+def test_check_nccl_reshard_refit_support_rejects_non_mx_prequantize() -> None:
+    config = _valid_nccl_reshard_config()
+    config.policy["generation"]["vllm_cfg"].update(
+        {
+            "precision": "fp8",
+            "is_mx": False,
+            "refit_prequantize": True,
+        }
+    )
 
     with pytest.raises(ValueError) as exc_info:
         check_nccl_reshard_refit_support(config)
 
     assert (
-        "policy.generation.vllm_cfg.refit_prequantize must be False"
+        "policy.generation.vllm_cfg.refit_prequantize requires is_mx=True"
         in str(exc_info.value)
     )
+
+
+def test_check_nccl_reshard_refit_support_rejects_nvfp4_real_quant() -> None:
+    config = _valid_nccl_reshard_config()
+    config.policy["generation"].update(
+        {
+            "quant_cfg": "examples/modelopt/quant_configs/nvfp4_a16.yaml",
+            "real_quant": True,
+        }
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        check_nccl_reshard_refit_support(config)
+
+    assert "NVFP4 real-quant rollout is not supported" in str(exc_info.value)
 
 
 # --------------------------------------------------------------------------
@@ -488,4 +522,37 @@ def test_build_refit_info_groups_experts_and_tags_them():
         ".experts.0." in p["name"] or ".experts.1." in p["name"]
         for layer in info["layer_names"]
         for p in info["per_layer_params"][layer]
+    )
+
+
+def test_build_refit_info_carries_mxfp8_value_and_scale_metadata():
+    name = "model.layers.0.mlp.down_proj.weight"
+    info = build_nccl_reshard_refit_info(
+        {
+            name: {
+                "shape": [64, 128],
+                "dtype": "torch.float8_e4m3fn",
+                "refit_transform": "mxfp8",
+                "scale_shape": [64, 4],
+                "scale_dtype": "torch.uint8",
+            }
+        },
+        train_parallelism={"tp_size": 2, "ep_size": 1, "pp_size": 1},
+        gen_parallelism={"tp_size": 2, "ep_size": 1, "pp_size": 1},
+        train_world_size=2,
+        gen_world_size=2,
+    )
+
+    param = _find(info, name)
+    assert param["refit_transform"] == "mxfp8"
+    assert param["global_shape"] == (64, 128)
+    assert param["scale_global_shape"] == (64, 4)
+    assert param["scale_dtype"] == "torch.uint8"
+    assert any(
+        isinstance(placement, Shard) and placement.dim == 1
+        for placement in param["scale_src_placements"]
+    )
+    assert any(
+        isinstance(placement, Shard) and placement.dim == 1
+        for placement in param["scale_dst_placements"]
     )
