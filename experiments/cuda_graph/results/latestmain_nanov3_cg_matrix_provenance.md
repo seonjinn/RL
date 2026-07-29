@@ -306,12 +306,26 @@ illegal-memory behavior.
 | Unit preflight | `2465632` accepted |
 | Unit job | `2465636` (`COMPLETED`, exit `0:0`, 1m26s) |
 | Unit result | 12 tests passed; source rewrite, fail-closed behavior, bootstrap order, and visible rank-zero capture/replay event contracts |
-| `moe_router` retry | `2465644` (`RUNNING`, independent backfill allocation) |
-| `moe_router+moe_preprocess` retry | `2465645` (`RUNNING`, independent backfill allocation) |
-| Combined retry | `2465646` (`RUNNING`, independent backfill allocation) |
+| `moe_router` retry | `2465644` (`COMPLETED`, exit `0:0`, 23m06s); five steps and explicit capture/replay |
+| `moe_router+moe_preprocess` retry | `2465645` (`FAILED`, exit `1:0`, 27m11s); Step 4 capture/replay passed, then Step 5 changed the PP packed-microbatch count from five to three |
+| Combined retry | `2465646` (`COMPLETED`, exit `0:0`, 24m53s); five steps and explicit capture/replay |
 | Checkpoint policy | Disabled |
 
 The retries were independently submitted with no Slurm dependency after
 backfill preflights `2465641`–`2465643`. They retain the exact Nano model,
 TP2/PP2/CP2/EP8 topology, packed `8192/K16` geometry, three graph warmups, and
 five total steps.
+
+The float64 compatibility correction removed the original router capture
+failure: both `moe_router` and the full combined scope completed five steps
+without a CUDA, NCCL, or illegal-memory error. Their first post-capture samples
+remained finite; generation KL was `0.0016` and `0.0019`, respectively.
+
+`moe_router+moe_preprocess` also proved that the scope and its fp64 graph
+outputs can capture and replay. Its Step 4 packed policy batch happened to
+contain five pipeline microbatches, while the next rollout produced only three.
+MCore's TE helper captures a PP schedule and one graph slot per pipeline
+microbatch, so NeMo-RL's safety check rejected the changed schedule before
+policy training. This is a variable sequence-packing schedule contract, not a
+scope-specific CUDA failure. The four completed samples are retained, but the
+run is not counted as a five-step pass.
