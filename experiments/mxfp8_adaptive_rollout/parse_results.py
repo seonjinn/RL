@@ -34,10 +34,10 @@ RUN_WALL_PREFIX = "MXFP8_RUN_WALL_TIME_S "
 TACTIC_COVERAGE_PREFIX = "MXFP8_TACTIC_COVERAGE "
 CONFIG_ENV_KEY = "VLLM_MXFP8_DENSE_CONFIG_FILE"
 BASELINE_WANDB_NAME_RE = re.compile(
-    r"^mxfp8-qwen-baseline-no-shmoo-trtllm-r(?P<repeat>[1-9]\d*)$"
+    r"^mxfp8-qwen-baseline-no-shmoo-trtllm-r(?P<repeat>[1-9][0-9]*)$"
 )
 ADAPTIVE_WANDB_NAME_RE = re.compile(
-    r"^mxfp8-qwen-shmoo-qualified-r(?P<repeat>[1-9]\d*)$"
+    r"^mxfp8-qwen-shmoo-qualified-r(?P<repeat>[1-9][0-9]*)$"
 )
 CSV_FIELDS = (
     "step",

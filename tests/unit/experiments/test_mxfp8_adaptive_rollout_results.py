@@ -517,6 +517,17 @@ def test_validate_ab_pair_rejects_unapproved_wandb_name_pairs(
         _validate_ab_pair(parser, baseline, adaptive)
 
 
+def test_validate_ab_pair_rejects_unicode_wandb_repeat_suffix() -> None:
+    parser = _load_parser()
+    baseline, adaptive = _ab_pair_with_wandb_names(
+        baseline_name="mxfp8-qwen-baseline-no-shmoo-trtllm-r1١",
+        adaptive_name="mxfp8-qwen-shmoo-qualified-r1١",
+    )
+
+    with pytest.raises(ValueError, match="baseline.*W&B.*name"):
+        _validate_ab_pair(parser, baseline, adaptive)
+
+
 @pytest.mark.parametrize(
     ("logger", "message"),
     (
