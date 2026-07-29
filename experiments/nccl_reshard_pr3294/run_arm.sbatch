@@ -81,7 +81,7 @@ CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/mopd_nano_fast/.cache/nccl-reshard-pr3294/
 WANDB_PROJECT=${WANDB_PROJECT:-sna-pr3294-nccl-reshard}
 WANDB_KEY_FILE=${WANDB_KEY_FILE:-${CACHE_ROOT}/.wandb_key}
 PYTHON_BIN=${PYTHON_BIN:-}
-RAY_BOOTSTRAP_SITE_PACKAGES=${RAY_BOOTSTRAP_SITE_PACKAGES:-}
+RAY_BOOTSTRAP_VENV=${RAY_BOOTSTRAP_VENV:-}
 
 mkdir -p "${HF_HOME}" "${CACHE_ROOT}/uv" "${CACHE_ROOT}/venvs"
 if [[ ! -s "${WANDB_KEY_FILE}" && -f "${HOME}/.netrc" ]]; then
@@ -100,7 +100,7 @@ total_nodes=${TOTAL_NODES}
 gpus_per_node=${GPUS_PER_NODE}
 generation_nodes=${GEN_NODES}
 max_steps=${MAX_STEPS}
-ray_bootstrap_site_packages=${RAY_BOOTSTRAP_SITE_PACKAGES}
+ray_bootstrap_venv=${RAY_BOOTSTRAP_VENV}
 NRL_MXFP8_BATCHED_SHUFFLE=${NRL_MXFP8_BATCHED_SHUFFLE}
 NRL_REFIT_CACHED_LOADERS=${NRL_REFIT_CACHED_LOADERS}
 EOF
@@ -110,12 +110,13 @@ export CONTAINER
 export MOUNTS=/lustre:/lustre
 export BASE_LOG_DIR="${EXPERIMENT_ROOT}"
 export UV_CACHE_DIR_OVERRIDE="${CACHE_ROOT}/uv"
-if [[ -n "${RAY_BOOTSTRAP_SITE_PACKAGES}" ]]; then
-  export PYTHONPATH="${RAY_BOOTSTRAP_SITE_PACKAGES}${PYTHONPATH:+:${PYTHONPATH}}"
+if [[ -n "${RAY_BOOTSTRAP_VENV}" ]]; then
+  export PATH="${RAY_BOOTSTRAP_VENV}/bin:${PATH}"
+  export PYTHONPATH="${RAY_BOOTSTRAP_VENV}/lib/python3.13/site-packages${PYTHONPATH:+:${PYTHONPATH}}"
 fi
 COMMAND_PYTHONPATH=${REPO}
-if [[ -n "${RAY_BOOTSTRAP_SITE_PACKAGES}" ]]; then
-  COMMAND_PYTHONPATH+=":${RAY_BOOTSTRAP_SITE_PACKAGES}"
+if [[ -n "${RAY_BOOTSTRAP_VENV}" ]]; then
+  COMMAND_PYTHONPATH+=":${RAY_BOOTSTRAP_VENV}/lib/python3.13/site-packages"
 fi
 
 export COMMAND="
