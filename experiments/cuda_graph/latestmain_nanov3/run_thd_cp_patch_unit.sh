@@ -25,9 +25,8 @@ unset UV_CACHE_DIR_OVERRIDE
 
 SOURCE_SHA=$(git rev-parse --short=9 HEAD)
 RUN_NAME="latestmain-nanov3-thd-cp-patch-unit-${SOURCE_SHA}"
-COMMAND="uv run --extra mcore --frozen pytest -q \
+COMMAND="uv run --no-sync pytest -q \
   tests/unit/models/policy/test_patches.py \
-  --mcore-only \
   -k 'PatchThdContextParallelCudaGraph or ThdContextParallelPatchBootstrap'"
 
 if [[ -z "${CONTAINER:-}" ]]; then
