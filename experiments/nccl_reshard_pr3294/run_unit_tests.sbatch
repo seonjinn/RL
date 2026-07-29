@@ -28,6 +28,7 @@ srun \
     fi
     test -n \"\${PYTHON_BIN}\" && test -x \"\${PYTHON_BIN}\"
     \"\${PYTHON_BIN}\" -m pytest -q \
-      tests/unit/weight_sync/test_nccl_reshard_utils.py \
+      tests/unit/weight_sync/test_nccl_reshard_utils.py
+    \"\${PYTHON_BIN}\" -m pytest -q --vllm-only \
       tests/unit/models/generation/test_vllm_backend.py::test_nccl_reshard_refit_processes_weights_once
   " 2>&1 | tee "${TEST_LOG}"
