@@ -26,6 +26,9 @@ import pytest
 
 REPO_ROOT = Path(__file__).parents[3]
 PARSER_PATH = REPO_ROOT / "experiments" / "mxfp8_adaptive_rollout" / "parse_results.py"
+PROFILE_PATH = (
+    REPO_ROOT / "experiments" / "mxfp8_adaptive_rollout" / "cluster" / "oci-hsg.env"
+)
 README_PATH = REPO_ROOT / "experiments" / "mxfp8_adaptive_rollout" / "README.md"
 SMOKE_PATH = REPO_ROOT / "experiments" / "mxfp8_adaptive_rollout" / "smoke_container.sh"
 NEMO_COMMIT = "8" * 40
@@ -551,6 +554,32 @@ def test_container_smoke_preserves_frozen_actor_environments() -> None:
     )
 
     assert "--no-container-mount-home" in smoke_command
+    assert "--container-mounts=${CONTAINER_MOUNTS}" in smoke_command
+
+
+def test_oci_profile_overlays_checkout_onto_container_nemo_root() -> None:
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            (
+                "set -euo pipefail; "
+                "export NEMO_RL_REPO_ROOT=/lustre/current-nemo-rl; "
+                "unset CONTAINER_MOUNTS; "
+                'source "$1"; '
+                'printf "%s" "$CONTAINER_MOUNTS"'
+            ),
+            "_",
+            str(PROFILE_PATH),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout == (
+        "/lustre:/lustre,/scratch:/scratch,/lustre/current-nemo-rl:/opt/nemo-rl"
+    )
 
 
 def test_container_smoke_uses_split_vllm_and_mcore_interpreters(
