@@ -1,0 +1,8 @@
+defaults: ./grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
+policy:
+  generation:
+    vllm_cfg:
+      enforce_eager: true
+      env_vars:
+        VLLM_MXFP8_DENSE_SHAPE_TRACE: "1"
+        VLLM_MXFP8_DENSE_SHAPE_TRACE_DIR: ${oc.env:NEMO_RL_MXFP8_TRACE_DIR}
