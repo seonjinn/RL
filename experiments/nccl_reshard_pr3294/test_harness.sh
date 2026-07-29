@@ -74,6 +74,8 @@ archive_command=$(
 )
 grep -q "tar -xzf '${TMP_DIR}/ray-bootstrap.tar.gz'" <<<"${archive_command}"
 grep -q "^PATH=/tmp/test-ray-bootstrap/bin:" <<<"${archive_command}"
+grep -q "export UV_PYTHON='/tmp/test-ray-bootstrap/bin/python3.13'" \
+  <<<"${archive_command}"
 
 cat >"${TMP_DIR}/capture_arm.sh" <<'EOF'
 #!/usr/bin/env bash
