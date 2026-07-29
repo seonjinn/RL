@@ -195,9 +195,7 @@ def test_ray_sub_reinjects_actor_venv_after_the_container_boundary() -> None:
     source = (project_root / "ray.sub").read_text()
 
     assert "RAY_CONTAINER_ENV=(env)" in source
-    assert (
-        'RAY_CONTAINER_ENV+=("NEMO_RL_VENV_DIR=${NEMO_RL_VENV_DIR}")' in source
-    )
+    assert 'RAY_CONTAINER_ENV+=("NEMO_RL_VENV_DIR=${NEMO_RL_VENV_DIR}")' in source
     assert source.count('"${RAY_CONTAINER_ENV[@]}" bash -x -c') == 2
     assert (
         source.count(
@@ -394,6 +392,42 @@ def test_driver_venv_host_paths_override_container_image_defaults() -> None:
     )
 
 
+def test_x86_prebuilt_actor_cuda_libraries_override_broken_image_links() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    prepare_source = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "x86"
+        / "hybridep"
+        / "prepare_driver_venv.sbatch"
+    ).read_text()
+    launcher_source = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "oci-hsg"
+        / "hybridep"
+        / "submit_grpo.sh"
+    ).read_text()
+
+    assert 'find "${actor_root}/lib" -type d' in prepare_source
+    assert "-path '*/site-packages/nvidia/*/lib'" in prepare_source
+    assert (
+        'LD_LIBRARY_PATH="${actor_library_path}:${LD_LIBRARY_PATH:-}"' in prepare_source
+    )
+    assert '"${actor_python}" -c "import ${required_import}"' in prepare_source
+    assert "transformer_engine.pytorch" in prepare_source
+
+    assert 'find "${policy_actor_root}/lib" -type d' in launcher_source
+    assert "-path '*/site-packages/nvidia/*/lib'" in launcher_source
+    assert (
+        'driver_command="export LD_LIBRARY_PATH=${quoted_actor_library_path}:'
+        '\\${LD_LIBRARY_PATH:-}; ${driver_command}"'
+    ) in launcher_source
+    assert "prebuilt_actor_library_path=%q" in launcher_source
+
+
 def _run_prepare_payload(
     tmp_path: Path,
     *,
@@ -473,6 +507,9 @@ if [[ "$1" == "-m" ]]; then
   mkdir -p "$(dirname -- "${actor_python}")"
   rm -f -- "${actor_python}"
   ln -s "${managed_python}" "${actor_python}"
+  actor_root="${NEMO_RL_VENV_DIR}/${actor_fqn}"
+  mkdir -p "${actor_root}/lib/python3.13/site-packages/nvidia/cudnn/lib"
+  : > "${actor_root}/lib/python3.13/site-packages/nvidia/cudnn/lib/libcudnn.so.9"
   if [[ "${PREFETCH_REPORTS_FAILURE:-0}" == "1" ]]; then
     printf '%s\\n' '  Failed: 1'
   else

@@ -96,6 +96,7 @@ REQUIRE_PREBUILT_ACTOR_VENVS=${REQUIRE_PREBUILT_ACTOR_VENVS:-false}
 REQUIRE_DEEPEP_WHEEL=${REQUIRE_DEEPEP_WHEEL:-false}
 NEMO_RL_VENV_DIR=${NEMO_RL_VENV_DIR:-}
 UV_CACHE_DIR=${UV_CACHE_DIR:-}
+PREBUILT_ACTOR_LIBRARY_PATH=
 MODEL_NAME_OVERRIDE=
 TOKENIZER_NAME_OVERRIDE=
 PREBUILT_ACTOR_FQNS=(
@@ -232,6 +233,18 @@ if [[ "${REQUIRE_PREBUILT_ACTOR_VENVS}" == "true" ]]; then
       exit 2
     fi
   done
+  policy_actor_root="${NEMO_RL_VENV_DIR}/${PREBUILT_ACTOR_FQNS[1]}"
+  while IFS= read -r actor_library_dir; do
+    PREBUILT_ACTOR_LIBRARY_PATH="${PREBUILT_ACTOR_LIBRARY_PATH:+${PREBUILT_ACTOR_LIBRARY_PATH}:}${actor_library_dir}"
+  done < <(
+    find "${policy_actor_root}/lib" -type d \
+      -path '*/site-packages/nvidia/*/lib' -print | LC_ALL=C sort
+  )
+  if [[ -z "${PREBUILT_ACTOR_LIBRARY_PATH}" ]]; then
+    printf 'Prebuilt policy actor has no NVIDIA library directories: %s\n' \
+      "${policy_actor_root}" >&2
+    exit 2
+  fi
 fi
 
 if [[ -n "${MODEL_TOKENIZER_OVERRIDE_ENV}" ]]; then
@@ -403,6 +416,10 @@ if [[ "${DISPATCHER_MODE}" == "hybridep" ]]; then
   fi
 fi
 printf -v driver_command '%q ' "${driver_args[@]}"
+if [[ -n "${PREBUILT_ACTOR_LIBRARY_PATH}" ]]; then
+  printf -v quoted_actor_library_path '%q' "${PREBUILT_ACTOR_LIBRARY_PATH}"
+  driver_command="export LD_LIBRARY_PATH=${quoted_actor_library_path}:\${LD_LIBRARY_PATH:-}; ${driver_command}"
+fi
 
 SETUP_COMMAND=
 DEEPEP_OVERLAY=
@@ -457,6 +474,7 @@ metadata_path="${RUN_ROOT}/submission.env"
   printf 'uv_cache_dir=%q\n' "${UV_CACHE_DIR}"
   printf 'uv_lock_timeout=%q\n' "${UV_LOCK_TIMEOUT}"
   printf 'nemo_rl_venv_dir=%q\n' "${NEMO_RL_VENV_DIR}"
+  printf 'prebuilt_actor_library_path=%q\n' "${PREBUILT_ACTOR_LIBRARY_PATH}"
   printf 'prebuilt_actor_venvs_required=%q\n' "${REQUIRE_PREBUILT_ACTOR_VENVS}"
   printf 'model_name_override=%q\n' "${MODEL_NAME_OVERRIDE}"
   printf 'tokenizer_name_override=%q\n' "${TOKENIZER_NAME_OVERRIDE}"

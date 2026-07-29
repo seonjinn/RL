@@ -147,10 +147,16 @@ def lustre_tmp_path() -> Iterator[Path]:
 
 
 def _write_actor_python(actor_venv_dir: Path, actor_fqn: str) -> None:
-    python_path = actor_venv_dir / actor_fqn / "bin" / "python"
+    actor_root = actor_venv_dir / actor_fqn
+    python_path = actor_root / "bin" / "python"
     python_path.parent.mkdir(parents=True)
     python_path.write_text("#!/bin/sh\n")
     python_path.chmod(0o755)
+    nvidia_library_dir = (
+        actor_root / "lib" / "python3.13" / "site-packages" / "nvidia" / "cudnn" / "lib"
+    )
+    nvidia_library_dir.mkdir(parents=True)
+    (nvidia_library_dir / "libcudnn.so.9").touch()
 
 
 def _write_prefetched_actor_pythons(actor_venv_dir: Path) -> None:
@@ -417,6 +423,43 @@ def test_x86_profile_exports_prefetched_actor_venv_directory_to_ray(
     metadata = (Path(shared_env["RUN_ROOT"]) / "submission.env").read_text()
     assert f"nemo_rl_venv_dir={actor_venv_dir}\n" in metadata
     assert "prebuilt_actor_venvs_required=true\n" in metadata
+
+
+def test_x86_profile_prepends_actor_libraries_and_preserves_container_paths(
+    tmp_path: Path, lustre_tmp_path: Path
+) -> None:
+    actor_venv_dir = lustre_tmp_path / "actor-venvs"
+    _write_prefetched_actor_pythons(actor_venv_dir)
+    shared_env = _x86_shared_env(lustre_tmp_path)
+
+    result, command_capture = _run_launcher_result(
+        tmp_path,
+        dispatcher_mode="recipe",
+        model_config_name="qwen3-30ba3b-4n8g-x86.env",
+        extra_env={
+            **shared_env,
+            "NEMO_RL_VENV_DIR": str(actor_venv_dir),
+            "LD_LIBRARY_PATH": "/container/cuda/lib",
+        },
+    )
+
+    result.check_returncode()
+    policy_library_dir = (
+        actor_venv_dir
+        / ACTOR_FQNS[1]
+        / "lib"
+        / "python3.13"
+        / "site-packages"
+        / "nvidia"
+        / "cudnn"
+        / "lib"
+    )
+    command = command_capture.read_text()
+    assert command.startswith(f"export LD_LIBRARY_PATH={policy_library_dir}:")
+    assert "${LD_LIBRARY_PATH:-};" in command
+
+    metadata = (Path(shared_env["RUN_ROOT"]) / "submission.env").read_text()
+    assert f"prebuilt_actor_library_path={policy_library_dir}\n" in metadata
 
 
 def test_x86_profile_rejects_a_lustre_path_that_traverses_outside_lustre(

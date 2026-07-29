@@ -127,11 +127,27 @@ srun \
         printf "Missing prefetched actor interpreter: %s\\n" "${actor_python}" >&2
         exit 2
       fi
+      actor_root="${NEMO_RL_VENV_DIR}/${actor_fqn}"
+      actor_library_path=
+      while IFS= read -r actor_library_dir; do
+        actor_library_path="${actor_library_path:+${actor_library_path}:}${actor_library_dir}"
+      done < <(
+        find "${actor_root}/lib" -type d \
+          -path '*/site-packages/nvidia/*/lib' -print | LC_ALL=C sort
+      )
+      if [[ -z "${actor_library_path}" ]]; then
+        printf "Actor environment has no NVIDIA library directories: %s\\n" \
+          "${actor_root}" >&2
+        exit 2
+      fi
       case "${actor_fqn}" in
         *VllmGenerationWorker) required_import=vllm ;;
-        *MegatronPolicyWorker) required_import=megatron.core ;;
+        *MegatronPolicyWorker)
+          required_import="megatron.core, transformer_engine.pytorch"
+          ;;
       esac
-      if ! "${actor_python}" -c "import ${required_import}"; then
+      if ! LD_LIBRARY_PATH="${actor_library_path}:${LD_LIBRARY_PATH:-}" \
+        "${actor_python}" -c "import ${required_import}"; then
         printf "Actor environment validation failed: %s cannot import %s\\n" \
           "${actor_python}" "${required_import}" >&2
         exit 2
