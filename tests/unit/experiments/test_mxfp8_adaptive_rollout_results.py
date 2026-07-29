@@ -30,6 +30,7 @@ PROFILE_PATH = (
     REPO_ROOT / "experiments" / "mxfp8_adaptive_rollout" / "cluster" / "oci-hsg.env"
 )
 README_PATH = REPO_ROOT / "experiments" / "mxfp8_adaptive_rollout" / "README.md"
+RUN_AB_PATH = REPO_ROOT / "experiments" / "mxfp8_adaptive_rollout" / "run_ab.sh"
 SMOKE_PATH = REPO_ROOT / "experiments" / "mxfp8_adaptive_rollout" / "smoke_container.sh"
 NEMO_COMMIT = "8" * 40
 VLLM_COMMIT = "b" * 40
@@ -739,6 +740,38 @@ def test_submitted_spool_copy_exports_canonical_shared_paths(
     assert all(f"NEMO_RL_REPO_ROOT={REPO_ROOT}" in call for call in calls)
     assert all("NEMO_RL_EXPERIMENT_ROOT=" in call for call in calls)
     assert all(call.endswith(str(checked_in_launcher)) for call in calls)
+
+
+def test_container_entrypoint_restores_exported_experiment_root(
+    tmp_path: Path,
+) -> None:
+    experiment_root = tmp_path / "experiment-output"
+    (experiment_root / "runs" / "suite" / "measured-trace-r1").mkdir(parents=True)
+    missing_python = tmp_path / "missing-python"
+    environment = {
+        **os.environ,
+        "NEMO_RL_EXPERIMENT_ROOT": str(experiment_root),
+        "NEMO_RL_REPO_ROOT": str(REPO_ROOT),
+        "PYTHON_BIN": str(missing_python),
+    }
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(RUN_AB_PATH),
+            "__container",
+            "trace",
+            "suite/measured-trace-r1",
+            "1",
+        ],
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert result.stderr == f"required file is missing: {missing_python}\n"
 
 
 def test_ab_schedule_uses_same_job_warmup_and_three_alternating_repeats(

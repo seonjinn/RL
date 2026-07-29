@@ -770,6 +770,7 @@ run_in_container() {
 
 if [[ "${1:-}" == "__container" ]]; then
   shift
+  EXPERIMENT_ROOT=${NEMO_RL_EXPERIMENT_ROOT:?Set NEMO_RL_EXPERIMENT_ROOT}
   run_in_container "$@"
   exit 0
 fi
