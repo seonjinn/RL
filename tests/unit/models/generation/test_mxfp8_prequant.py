@@ -73,6 +73,22 @@ def test_last_dim_not_divisible_raises():
         _mxfp8_e4m3_quantize_torch(x)
 
 
+def test_aligned_last_dim_shards_match_full_weight_quantization():
+    torch.manual_seed(0)
+    x = torch.randn(8, 128, dtype=torch.bfloat16)
+
+    full_value, full_scale = _mxfp8_e4m3_quantize_torch(x)
+    shard_pairs = [
+        _mxfp8_e4m3_quantize_torch(shard)
+        for shard in torch.chunk(x, chunks=2, dim=-1)
+    ]
+
+    sharded_value = torch.cat([pair[0] for pair in shard_pairs], dim=-1)
+    sharded_scale = torch.cat([pair[1] for pair in shard_pairs], dim=-1)
+    assert torch.equal(sharded_value.view(torch.uint8), full_value.view(torch.uint8))
+    assert torch.equal(sharded_scale, full_scale)
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_refit_quantize_matches_receiver_path():
     """Bitwise parity with the vLLM receiver path (mxfp8_e4m3_quantize + squeeze)."""
