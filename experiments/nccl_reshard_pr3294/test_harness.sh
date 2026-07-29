@@ -150,6 +150,21 @@ container_no_archive_command=$(
 setup_command=$(sed -n '/^SETUP_COMMAND=/,/^PATH=/p' <<<"${container_no_archive_command}")
 grep -q "set -euo pipefail" <<<"${setup_command}"
 
+refit_focus_command=$(
+  NUM_PROMPTS_PER_STEP=16 \
+  NUM_GENERATIONS_PER_PROMPT=4 \
+  TRAIN_GLOBAL_BATCH_SIZE=64 \
+  REFERENCE_POLICY_KL_PENALTY=0 \
+  SKIP_REFERENCE_POLICY_LOGPROBS=true \
+  render_command mxfp8-rollout
+)
+grep -q "grpo.num_prompts_per_step='16'" <<<"${refit_focus_command}"
+grep -q "grpo.num_generations_per_prompt='4'" <<<"${refit_focus_command}"
+grep -q "policy.train_global_batch_size='64'" <<<"${refit_focus_command}"
+grep -q "loss_fn.reference_policy_kl_penalty='0'" <<<"${refit_focus_command}"
+grep -q "grpo.skip_reference_policy_logprobs_calculation='true'" \
+  <<<"${refit_focus_command}"
+
 cat >"${TMP_DIR}/capture_arm.sh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s|%s|%s\n' "${ARM}" "${RUN_NAME}" "${EXPERIMENT_ROOT}"
