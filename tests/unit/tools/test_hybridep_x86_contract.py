@@ -17,6 +17,8 @@ import os
 from pathlib import Path
 import subprocess
 
+import pytest
+
 
 DEEPEP_COMMIT = "f725d29699f5bda9ba789456bb9579af69844685"
 OLD_X86_COMMIT = "29d31c095796f3c8ece47ee9cdcc167051bbeed9"
@@ -202,6 +204,219 @@ def test_x86_driver_venv_preparation_allows_time_for_actor_prefetch() -> None:
     ).read_text()
 
     assert "TIME_LIMIT=${TIME_LIMIT:-02:00:00}" in submitter
+
+
+def _write_fake_command(path: Path, source: str) -> None:
+    path.write_text(source)
+    path.chmod(0o755)
+
+
+@pytest.mark.parametrize(
+    "traversal_variable",
+    ("DRIVER_VENV", "UV_CACHE_DIR", "NEMO_RL_VENV_DIR"),
+)
+def test_driver_venv_submitter_rejects_paths_that_traverse_outside_lustre(
+    tmp_path: Path, traversal_variable: str
+) -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    submitter = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "x86"
+        / "hybridep"
+        / "submit_driver_venv.sh"
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(
+        fake_bin / "git",
+        """#!/bin/sh
+case "$*" in
+  *"rev-parse --show-toplevel"*) printf '%s\\n' "$FAKE_PROJECT_ROOT" ;;
+esac
+""",
+    )
+    _write_fake_command(
+        fake_bin / "sshare",
+        """#!/bin/sh
+printf '%s|%s|%s|\\n' 'nemotron_sw_pre' "$FAKE_USER" '0.900000'
+""",
+    )
+    _write_fake_command(
+        fake_bin / "sbatch",
+        """#!/bin/sh
+if [ "$1" != "--test-only" ]; then printf '%s\\n' '999999'; fi
+""",
+    )
+    paths = {
+        "DRIVER_VENV": "/lustre/driver-venv",
+        "UV_CACHE_DIR": "/lustre/uv-cache",
+        "NEMO_RL_VENV_DIR": "/lustre/actor-venvs",
+    }
+    paths[traversal_variable] = str(
+        Path("/lustre") / ".." / tmp_path.relative_to("/") / traversal_variable
+    )
+    result = subprocess.run(
+        ["bash", str(submitter)],
+        check=False,
+        cwd=project_root,
+        env={
+            **os.environ,
+            **paths,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "FAKE_PROJECT_ROOT": str(project_root),
+            "FAKE_USER": subprocess.check_output(["id", "-un"], text=True).strip(),
+            "CONTAINER": "/lustre/container.sqsh",
+            "VENV_LOG_DIR": str(tmp_path / "logs"),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert (
+        f"{traversal_variable} must be on shared /lustre storage" in result.stderr
+    )
+
+
+@pytest.mark.parametrize(
+    "traversal_variable",
+    ("DRIVER_VENV", "UV_CACHE_DIR", "NEMO_RL_VENV_DIR"),
+)
+def test_driver_venv_preparer_rejects_paths_that_traverse_outside_lustre(
+    tmp_path: Path, traversal_variable: str
+) -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    preparer = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "x86"
+        / "hybridep"
+        / "prepare_driver_venv.sbatch"
+    )
+    paths = {
+        "DRIVER_VENV": "/lustre/driver-venv",
+        "UV_CACHE_DIR": "/lustre/uv-cache",
+        "NEMO_RL_VENV_DIR": "/lustre/actor-venvs",
+    }
+    paths[traversal_variable] = str(
+        Path("/lustre") / ".." / tmp_path.relative_to("/") / traversal_variable
+    )
+    result = subprocess.run(
+        ["bash", str(preparer)],
+        check=False,
+        cwd=project_root,
+        env={
+            **os.environ,
+            **paths,
+            "CONTAINER": "/lustre/container.sqsh",
+            "HYBRID_EP_PROJECT_ROOT": str(project_root),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert (
+        f"{traversal_variable} must be on shared /lustre storage" in result.stderr
+    )
+
+
+def _prepare_payload(project_root: Path) -> str:
+    source = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "x86"
+        / "hybridep"
+        / "prepare_driver_venv.sbatch"
+    ).read_text()
+    return source.split("  bash -lc '\n", maxsplit=1)[1].rsplit("\n  '\n", maxsplit=1)[0]
+
+
+def _run_prepare_payload(
+    tmp_path: Path, *, prefetch_reports_failure: bool, actor_import_exit: int
+) -> subprocess.CompletedProcess[str]:
+    project_root = Path(__file__).resolve().parents[3]
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_command(fake_bin / "uv", "#!/bin/sh\nexit 0\n")
+    _write_fake_command(fake_bin / "sed", "#!/bin/sh\nexit 0\n")
+    driver_venv = tmp_path / "driver-venv"
+    nsight_patch_target = (
+        driver_venv
+        / "lib"
+        / "python3.12"
+        / "site-packages"
+        / "ray"
+        / "_private"
+        / "runtime_env"
+        / "nsight.py"
+    )
+    nsight_patch_target.parent.mkdir(parents=True)
+    nsight_patch_target.write_text(
+        'context.py_executable = " ".join(self.nsight_cmd) + " python"\n'
+    )
+    driver_bin = driver_venv / "bin"
+    driver_bin.mkdir()
+    _write_fake_command(driver_bin / "ray", "#!/bin/sh\nexit 0\n")
+    _write_fake_command(
+        driver_bin / "python",
+        """#!/bin/bash
+if [[ "$1" == "-m" ]]; then
+  actor_fqn=$3
+  actor_python="${NEMO_RL_VENV_DIR}/${actor_fqn}/bin/python"
+  mkdir -p "$(dirname -- "${actor_python}")"
+  printf '%s\\n' '#!/bin/bash' 'exit "${ACTOR_IMPORT_EXIT:-0}"' > "${actor_python}"
+  chmod +x "${actor_python}"
+  if [[ "${PREFETCH_REPORTS_FAILURE:-0}" == "1" ]]; then
+    printf '%s\\n' '  Failed: 1'
+  else
+    printf '%s\\n' '  Failed: 0'
+  fi
+fi
+exit 0
+""",
+    )
+    actor_venv_dir = tmp_path / "actor-venvs"
+    return subprocess.run(
+        ["bash", "-c", _prepare_payload(project_root)],
+        check=False,
+        cwd=project_root,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "DRIVER_VENV": str(driver_venv),
+            "UV_CACHE_DIR": str(tmp_path / "uv-cache"),
+            "NEMO_RL_VENV_DIR": str(actor_venv_dir),
+            "PREFETCH_REPORTS_FAILURE": "1" if prefetch_reports_failure else "0",
+            "ACTOR_IMPORT_EXIT": str(actor_import_exit),
+        },
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_actor_prefetch_summary_failure_is_fatal(tmp_path: Path) -> None:
+    result = _run_prepare_payload(
+        tmp_path, prefetch_reports_failure=True, actor_import_exit=0
+    )
+
+    assert result.returncode == 2
+    assert "Actor environment prefetch failed" in result.stderr
+
+
+def test_actor_prefetch_rejects_an_interpreter_without_required_imports(
+    tmp_path: Path,
+) -> None:
+    result = _run_prepare_payload(
+        tmp_path, prefetch_reports_failure=False, actor_import_exit=1
+    )
+
+    assert result.returncode == 2
+    assert "Actor environment validation failed" in result.stderr
 
 
 def test_launcher_rejects_an_invalid_uv_lock_timeout() -> None:

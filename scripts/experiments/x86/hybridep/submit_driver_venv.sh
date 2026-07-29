@@ -43,6 +43,9 @@ fi
 
 for shared_path_name in DRIVER_VENV UV_CACHE_DIR NEMO_RL_VENV_DIR; do
   shared_path=${!shared_path_name}
+  shared_path=$(python3 -c \
+    'import os, sys; print(os.path.realpath(sys.argv[1]))' "${shared_path}")
+  printf -v "${shared_path_name}" '%s' "${shared_path}"
   case "${shared_path}" in
     /lustre/*) ;;
     *)

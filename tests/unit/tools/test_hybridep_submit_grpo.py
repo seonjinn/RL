@@ -13,8 +13,11 @@
 # limitations under the License.
 
 import os
+import shutil
 import shlex
 import subprocess
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -130,8 +133,16 @@ def _x86_actor_venv_dir(tmp_path: Path) -> Path:
     return tmp_path / "actor-venvs"
 
 
-def _lustre_qualified_path(path: Path) -> str:
-    return str(Path("/lustre") / ".." / path.relative_to("/"))
+@pytest.fixture
+def lustre_tmp_path() -> Iterator[Path]:
+    lustre_root = Path("/lustre")
+    if not lustre_root.is_dir() or not os.access(lustre_root, os.W_OK):
+        pytest.skip("requires a writable /lustre mount")
+    path = Path(tempfile.mkdtemp(prefix="nemo-rl-test-", dir=lustre_root))
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path)
 
 
 def _write_actor_python(actor_venv_dir: Path, actor_fqn: str) -> None:
@@ -159,15 +170,17 @@ def test_unknown_dispatcher_mode_is_rejected(tmp_path: Path) -> None:
         _run_launcher(tmp_path, dispatcher_mode="unknown")
 
 
-def test_deepseek_profile_requires_a_checkpoint_path(tmp_path: Path) -> None:
-    actor_venv_dir = _x86_actor_venv_dir(tmp_path)
+def test_deepseek_profile_requires_a_checkpoint_path(
+    tmp_path: Path, lustre_tmp_path: Path
+) -> None:
+    actor_venv_dir = lustre_tmp_path / "actor-venvs"
     _write_prefetched_actor_pythons(actor_venv_dir)
 
     result, _ = _run_launcher_result(
         tmp_path,
         dispatcher_mode="recipe",
         model_config_name="deepseek-v3-32n8g-x86.env",
-        extra_env={"NEMO_RL_VENV_DIR": _lustre_qualified_path(actor_venv_dir)},
+        extra_env={"NEMO_RL_VENV_DIR": str(actor_venv_dir)},
     )
 
     assert result.returncode == 2
@@ -175,11 +188,11 @@ def test_deepseek_profile_requires_a_checkpoint_path(tmp_path: Path) -> None:
 
 
 def test_deepseek_profile_applies_a_verified_checkpoint_to_model_and_tokenizer(
-    tmp_path: Path,
+    tmp_path: Path, lustre_tmp_path: Path
 ) -> None:
     checkpoint = tmp_path / "deepseek-v3-bf16"
     checkpoint.mkdir()
-    actor_venv_dir = _x86_actor_venv_dir(tmp_path)
+    actor_venv_dir = lustre_tmp_path / "actor-venvs"
     _write_prefetched_actor_pythons(actor_venv_dir)
 
     driver_args = _run_launcher(
@@ -187,7 +200,7 @@ def test_deepseek_profile_applies_a_verified_checkpoint_to_model_and_tokenizer(
         dispatcher_mode="recipe",
         model_config_name="deepseek-v3-32n8g-x86.env",
         extra_env={
-            "NEMO_RL_VENV_DIR": _lustre_qualified_path(actor_venv_dir),
+            "NEMO_RL_VENV_DIR": str(actor_venv_dir),
             "NRL_DEEPSEEK_V3_BF16_CKPT": str(checkpoint),
         },
     )
@@ -212,9 +225,9 @@ def test_x86_profile_requires_a_prefetched_actor_venv_directory(tmp_path: Path) 
 
 
 def test_x86_profile_rejects_an_incomplete_prefetched_actor_venv_directory(
-    tmp_path: Path,
+    tmp_path: Path, lustre_tmp_path: Path
 ) -> None:
-    actor_venv_dir = _x86_actor_venv_dir(tmp_path)
+    actor_venv_dir = lustre_tmp_path / "actor-venvs"
     _write_actor_python(
         actor_venv_dir,
         "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker",
@@ -224,7 +237,7 @@ def test_x86_profile_rejects_an_incomplete_prefetched_actor_venv_directory(
         tmp_path,
         dispatcher_mode="recipe",
         model_config_name="qwen3-30ba3b-4n8g-x86.env",
-        extra_env={"NEMO_RL_VENV_DIR": _lustre_qualified_path(actor_venv_dir)},
+        extra_env={"NEMO_RL_VENV_DIR": str(actor_venv_dir)},
     )
 
     assert result.returncode == 2
@@ -233,22 +246,40 @@ def test_x86_profile_rejects_an_incomplete_prefetched_actor_venv_directory(
 
 
 def test_x86_profile_exports_prefetched_actor_venv_directory_to_ray(
-    tmp_path: Path,
+    tmp_path: Path, lustre_tmp_path: Path
 ) -> None:
-    actor_venv_dir = _x86_actor_venv_dir(tmp_path)
+    actor_venv_dir = lustre_tmp_path / "actor-venvs"
     _write_prefetched_actor_pythons(actor_venv_dir)
 
     _run_launcher(
         tmp_path,
         dispatcher_mode="recipe",
         model_config_name="qwen3-30ba3b-4n8g-x86.env",
-        extra_env={"NEMO_RL_VENV_DIR": _lustre_qualified_path(actor_venv_dir)},
+        extra_env={"NEMO_RL_VENV_DIR": str(actor_venv_dir)},
     )
 
     assert (tmp_path / "venv-dir.txt").read_text().strip() == str(actor_venv_dir)
     metadata = (tmp_path / "run" / "submission.env").read_text()
     assert f"nemo_rl_venv_dir={actor_venv_dir}\n" in metadata
     assert "prebuilt_actor_venvs_required=true\n" in metadata
+
+
+def test_x86_profile_rejects_a_lustre_path_that_traverses_outside_lustre(
+    tmp_path: Path,
+) -> None:
+    actor_venv_dir = _x86_actor_venv_dir(tmp_path)
+    _write_prefetched_actor_pythons(actor_venv_dir)
+    traversal_path = Path("/lustre") / ".." / actor_venv_dir.relative_to("/")
+
+    result, _ = _run_launcher_result(
+        tmp_path,
+        dispatcher_mode="recipe",
+        model_config_name="qwen3-30ba3b-4n8g-x86.env",
+        extra_env={"NEMO_RL_VENV_DIR": str(traversal_path)},
+    )
+
+    assert result.returncode == 2
+    assert "NEMO_RL_VENV_DIR must be on shared /lustre storage" in result.stderr
 
 
 def test_generic_profile_does_not_require_prefetched_actor_venvs(tmp_path: Path) -> None:

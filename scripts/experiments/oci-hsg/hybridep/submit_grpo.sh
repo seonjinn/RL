@@ -135,6 +135,8 @@ if [[ "${REQUIRE_PREBUILT_ACTOR_VENVS}" == "true" ]]; then
     printf 'NEMO_RL_VENV_DIR is required for model profile %s.\n' "${MODEL_ID}" >&2
     exit 2
   fi
+  NEMO_RL_VENV_DIR=$(python3 -c \
+    'import os, sys; print(os.path.realpath(sys.argv[1]))' "${NEMO_RL_VENV_DIR}")
   case "${NEMO_RL_VENV_DIR}" in
     /lustre/*) ;;
     *)
@@ -143,8 +145,6 @@ if [[ "${REQUIRE_PREBUILT_ACTOR_VENVS}" == "true" ]]; then
       exit 2
       ;;
   esac
-  NEMO_RL_VENV_DIR=$(python3 -c \
-    'import os, sys; print(os.path.normpath(sys.argv[1]))' "${NEMO_RL_VENV_DIR}")
   for actor_fqn in "${PREBUILT_ACTOR_FQNS[@]}"; do
     actor_python="${NEMO_RL_VENV_DIR}/${actor_fqn}/bin/python"
     if [[ ! -x "${actor_python}" ]]; then

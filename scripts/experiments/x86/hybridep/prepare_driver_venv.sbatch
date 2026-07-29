@@ -23,6 +23,9 @@ set -euo pipefail
 
 for shared_path_name in DRIVER_VENV UV_CACHE_DIR NEMO_RL_VENV_DIR; do
   shared_path=${!shared_path_name}
+  shared_path=$(python3 -c \
+    'import os, sys; print(os.path.realpath(sys.argv[1]))' "${shared_path}")
+  printf -v "${shared_path_name}" '%s' "${shared_path}"
   case "${shared_path}" in
     /lustre/*) ;;
     *)
@@ -66,10 +69,28 @@ srun \
     for actor_fqn in \
       nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker \
       nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker; do
-      python -m nemo_rl.utils.prefetch_venvs "${actor_fqn}"
+      if ! prefetch_output=$(python -m nemo_rl.utils.prefetch_venvs "${actor_fqn}" 2>&1); then
+        printf "%s\\n" "${prefetch_output}"
+        printf "Actor environment prefetch failed: %s\\n" "${actor_fqn}" >&2
+        exit 2
+      fi
+      printf "%s\\n" "${prefetch_output}"
+      if grep -Eq "^[[:space:]]*Failed: [1-9][0-9]*$" <<< "${prefetch_output}"; then
+        printf "Actor environment prefetch failed: %s\\n" "${actor_fqn}" >&2
+        exit 2
+      fi
       actor_python="${NEMO_RL_VENV_DIR}/${actor_fqn}/bin/python"
       if [[ ! -x "${actor_python}" ]]; then
         printf "Missing prefetched actor interpreter: %s\\n" "${actor_python}" >&2
+        exit 2
+      fi
+      case "${actor_fqn}" in
+        *VllmGenerationWorker) required_import=vllm ;;
+        *MegatronPolicyWorker) required_import=megatron.core ;;
+      esac
+      if ! "${actor_python}" -c "import ${required_import}"; then
+        printf "Actor environment validation failed: %s cannot import %s\\n" \
+          "${actor_python}" "${required_import}" >&2
         exit 2
       fi
     done
