@@ -237,6 +237,9 @@ else
 fi
 
 COMMON_SRUN_ARGS="$GRES_ARG"
+if [[ -n "${CONTAINER_ENV_VARS:-}" ]]; then
+  COMMON_SRUN_ARGS+=" --container-env=$CONTAINER_ENV_VARS"
+fi
 COMMON_SRUN_ARGS+=" --no-container-mount-home"
 COMMON_SRUN_ARGS+=" --mpi=pmix"
 COMMON_SRUN_ARGS+=" --container-mounts=$MOUNTS"

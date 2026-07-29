@@ -14,6 +14,7 @@ set -euo pipefail
 : "${RUN_NAME:?RUN_NAME is required}"
 : "${EXPERIMENT_ROOT:?EXPERIMENT_ROOT is required}"
 
+RAY_SUB_PATH=${RAY_SUB_PATH:-${REPO}/ray.sub}
 CONFIG_BF16=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
 CONFIG_FP8=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
 
@@ -73,6 +74,7 @@ esac
 git -C "${REPO}" rev-parse --git-dir >/dev/null
 test -f "${REPO}/${CONFIG}"
 test -f "${CONTAINER}"
+test -f "${RAY_SUB_PATH}"
 mkdir -p "${EXPERIMENT_ROOT}" "${EXPERIMENT_ROOT}/logs"
 
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna}
@@ -101,6 +103,7 @@ total_nodes=${TOTAL_NODES}
 gpus_per_node=${GPUS_PER_NODE}
 generation_nodes=${GEN_NODES}
 max_steps=${MAX_STEPS}
+ray_sub_path=${RAY_SUB_PATH}
 ray_bootstrap_venv=${RAY_BOOTSTRAP_VENV}
 shared_uv_cache=${SHARED_UV_CACHE}
 force_rebuild_venvs=${NRL_FORCE_REBUILD_VENVS}
@@ -167,4 +170,4 @@ uv run --frozen examples/run_grpo.py \
   ${PRECISION_OVERRIDES}
 "
 
-exec bash "${REPO}/ray.sub"
+exec bash "${RAY_SUB_PATH}"
