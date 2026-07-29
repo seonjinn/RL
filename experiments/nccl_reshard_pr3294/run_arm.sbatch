@@ -80,7 +80,7 @@ HF_HOME=${HF_HOME:-${WORK_ROOT}/.cache/huggingface}
 CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/mopd_nano_fast/.cache/nccl-reshard-pr3294/${ARM}-${MODE}}
 WANDB_PROJECT=${WANDB_PROJECT:-sna-pr3294-nccl-reshard}
 WANDB_KEY_FILE=${WANDB_KEY_FILE:-${CACHE_ROOT}/.wandb_key}
-PYTHON_BIN=${PYTHON_BIN:-/opt/nemo_rl_venv/bin/python}
+PYTHON_BIN=${PYTHON_BIN:-}
 
 mkdir -p "${HF_HOME}" "${CACHE_ROOT}/uv" "${CACHE_ROOT}/venvs"
 if [[ ! -s "${WANDB_KEY_FILE}" && -f "${HOME}/.netrc" ]]; then
@@ -126,7 +126,16 @@ export NRL_REFIT_CACHED_LOADERS='${NRL_REFIT_CACHED_LOADERS}'
 if [[ -s '${WANDB_KEY_FILE}' ]]; then
   export WANDB_API_KEY=\$(cat '${WANDB_KEY_FILE}')
 fi
-'${PYTHON_BIN}' examples/run_grpo.py \
+PYTHON_BIN='${PYTHON_BIN}'
+if [[ -z \"\${PYTHON_BIN}\" ]]; then
+  PYTHON_BIN=/opt/nemo_rl_venv/bin/python
+fi
+if [[ ! -x \"\${PYTHON_BIN}\" ]]; then
+  PYTHON_BIN=\$(find /root/.local/share/uv/python \
+    -type f -path '*/bin/python3.13' -perm -u+x -print -quit)
+fi
+test -n \"\${PYTHON_BIN}\" && test -x \"\${PYTHON_BIN}\"
+\"\${PYTHON_BIN}\" examples/run_grpo.py \
   --config '${CONFIG}' \
   cluster.num_nodes='${TOTAL_NODES}' \
   cluster.gpus_per_node='${GPUS_PER_NODE}' \
