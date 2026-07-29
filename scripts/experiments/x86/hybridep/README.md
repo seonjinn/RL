@@ -1,8 +1,8 @@
 # x86 HybridEP wheel build
 
-`build_deepep_wheel.sbatch` builds the exact DeepEP `hybrid-ep` source in a
-one-GPU allocation and publishes an immutable wheel only after extension
-imports pass.
+`build_deepep_wheel.sbatch` builds either the standard DeepEP `main` source or
+the HybridEP `hybrid-ep` source in a one-GPU allocation and publishes an
+immutable wheel only after the variant's extension imports pass.
 
 Use `GPU_ARCH=9.0` for H100 and `GPU_ARCH=10.0` for B200. Multi-node HybridEP
 is always enabled. The default transport is the DOCA/RDMA path; set
@@ -27,6 +27,7 @@ From a clean, pushed NeMo-RL checkout on the target cluster:
 
 ```bash
 export DEEPEP_COMMIT=f725d29699f5bda9ba789456bb9579af69844685
+export DEEPEP_VARIANT=hybridep
 export CONTAINER=/lustre/absolute/path/nemo_rl_nightly.sqsh
 export OUTPUT_DIR=/lustre/absolute/path/deepep-wheels
 export GPU_ARCH=9.0  # supplied by cw-dfw-h100.env on CW
@@ -59,6 +60,15 @@ The job creates:
 
 The build directory is removed only after success. A failed build directory is
 retained under `BUILD_ROOT` (node-local by default) for bounded diagnosis.
+
+For the standard DeepEP arm, first stage the exact NCCL runtime with
+`stage_nccl_wheel.sbatch`, then build `DEEPEP_VARIANT=deepep` from the upstream
+`main` commit `dd758caf451848bd150e1046af3d0a73e5fff38d`. The generated
+`metadata.env` files are part of the immutable artifacts: the GRPO launcher
+requires their wheel paths, hashes, version `2.30.4`, and matching standard
+DeepEP branch provenance. It installs the two wheels into a bounded per-worker
+`/tmp/nemo-rl-deepep-*` overlay and exports that overlay's NCCL library path to
+the Ray parent before Ray starts.
 
 ## Prepare a version-matched Ray driver environment
 

@@ -79,23 +79,28 @@ scripts/experiments/oci-hsg/hybridep/submit_grpo.sh \
 ## x86 H100 and B200
 
 Megatron-Bridge supports HybridEP on Ampere, Hopper, and Blackwell. The x86
-profiles provide matched all-to-all and HybridEP recipe pairs for Qwen3-30B,
-Qwen3-235B, synchronous Nemotron3 Super, and DeepSeek-V3. The canonical
+profiles provide matched all-to-all, standard DeepEP, and HybridEP recipe pairs
+for Qwen3-30B, Qwen3-235B, and synchronous Nemotron3 Super; DeepSeek-V3 has
+all-to-all and HybridEP profiles. The canonical
 HybridEP recipes follow the upstream x86 performance defaults: 32 dispatcher
 SMs, an eight-rank NVLink domain, non-MNNVL topology, and combine chunk size
-128. Every profile sets `DISPATCHER_MODE=recipe`, so recipe selection is the
-only dispatcher-control surface.
+128. The all-to-all and HybridEP profiles set `DISPATCHER_MODE=recipe`, while
+the standard DeepEP profiles select their launcher override explicitly.
 
-Build and validate an immutable `f725d296` wheel for the target GPU before
-submitting. Set `TORCH_CUDA_ARCH_LIST=9.0` for H100 or `10.0` for B200 and
-build with `HYBRID_EP_MULTINODE=1`. Export the resulting wheel and cluster
-paths:
+Build and validate immutable DeepEP and NCCL wheels for the target GPU before
+submitting. The standard DeepEP profiles use the upstream `main` commit
+`dd758caf451848bd150e1046af3d0a73e5fff38d`; HybridEP profiles continue to use
+their `hybrid-ep` artifact. Stage NCCL `2.30.4`, export both immutable wheel
+paths, and retain each artifact's adjacent `metadata.env` file. The launcher
+validates the variant, branch, commit, paths, checksums, and NCCL provenance
+before it asks Slurm to schedule the job.
 
 ```bash
-export DEEPEP_COMMIT=f725d29699f5bda9ba789456bb9579af69844685
-export DEEPEP_WHEEL=/absolute/shared/path/deep_ep-f725-x86_64.whl
-export CONTAINER=/absolute/shared/path/nemo_rl_nightly.sqsh
-export HF_HOME=/absolute/shared/path/hf_home
+export DEEPEP_COMMIT=dd758caf451848bd150e1046af3d0a73e5fff38d
+export DEEPEP_WHEEL=/lustre/absolute/path/deepep-artifact/deep_ep-dd758-x86_64.whl
+export NCCL_WHEEL=/lustre/absolute/path/nccl-artifact/nvidia_nccl_cu13-2.30.4-py3-none-manylinux_2_27_x86_64.whl
+export CONTAINER=/lustre/absolute/path/nemo_rl_nightly.sqsh
+export HF_HOME=/lustre/absolute/path/hf_home
 ```
 
 On CW-DFW, load the H100 hardware profile first. It supplies
@@ -142,12 +147,12 @@ only with a positive integer number of seconds.
 
 Use the following matched profiles after the shared runtime is prepared:
 
-| Model | All-to-all profile | HybridEP profile |
-| --- | --- | --- |
-| Qwen3-30B-A3B | `qwen3-30ba3b-4n8g-x86.env` | `qwen3-30ba3b-4n8g-x86-hybridep.env` |
-| Qwen3-235B | `qwen3-235b-16n8g-x86.env` | `qwen3-235b-16n8g-x86-hybridep.env` |
-| Nemotron3 Super sync | `nemotron3-super-120ba12b-32n8g-sync-x86.env` | `nemotron3-super-120ba12b-32n8g-sync-x86-hybridep.env` |
-| DeepSeek-V3 | `deepseek-v3-32n8g-x86.env` | `deepseek-v3-32n8g-x86-hybridep.env` |
+| Model | All-to-all profile | DeepEP profile | HybridEP profile |
+| --- | --- | --- | --- |
+| Qwen3-30B-A3B | `qwen3-30ba3b-4n8g-x86.env` | `qwen3-30ba3b-4n8g-x86-deepep.env` | `qwen3-30ba3b-4n8g-x86-hybridep.env` |
+| Qwen3-235B | `qwen3-235b-16n8g-x86.env` | `qwen3-235b-16n8g-x86-deepep.env` | `qwen3-235b-16n8g-x86-hybridep.env` |
+| Nemotron3 Super sync | `nemotron3-super-120ba12b-32n8g-sync-x86.env` | `nemotron3-super-120ba12b-32n8g-sync-x86-deepep.env` | `nemotron3-super-120ba12b-32n8g-sync-x86-hybridep.env` |
+| DeepSeek-V3 | `deepseek-v3-32n8g-x86.env` | — | `deepseek-v3-32n8g-x86-hybridep.env` |
 
 The DeepSeek profiles are reusable, but there is no CW DeepSeek-V3 BF16
 checkpoint configured currently. Do not submit either DeepSeek arm until

@@ -73,6 +73,8 @@ PARTITION=${PARTITION:-batch}
 DEEPEP_COMMIT_EXPLICIT=${DEEPEP_COMMIT-}
 DEEPEP_COMMIT=${DEEPEP_COMMIT:-"${DEFAULT_DEEPEP_COMMIT}"}
 DEEPEP_WHEEL=${DEEPEP_WHEEL:-}
+DEEPEP_VARIANT=${DEEPEP_VARIANT:-}
+NCCL_WHEEL=${NCCL_WHEEL:-}
 RUN_SUFFIX=${RUN_SUFFIX:-"$(date +%Y%m%d-%H%M%S)"}
 RUN_NAME=${RUN_NAME:-"${MODEL_ID}-hybridep-${DEEPEP_COMMIT:0:8}-${RUN_SUFFIX}"}
 WANDB_ENABLED=${WANDB_ENABLED:-False}
@@ -94,6 +96,7 @@ UV_LOCK_TIMEOUT=${UV_LOCK_TIMEOUT:-1800}
 MODEL_TOKENIZER_OVERRIDE_ENV=${MODEL_TOKENIZER_OVERRIDE_ENV:-}
 REQUIRE_PREBUILT_ACTOR_VENVS=${REQUIRE_PREBUILT_ACTOR_VENVS:-false}
 REQUIRE_DEEPEP_WHEEL=${REQUIRE_DEEPEP_WHEEL:-false}
+REQUIRE_NCCL_WHEEL=${REQUIRE_NCCL_WHEEL:-false}
 NEMO_RL_VENV_DIR=${NEMO_RL_VENV_DIR:-}
 UV_CACHE_DIR=${UV_CACHE_DIR:-}
 PREBUILT_ACTOR_LIBRARY_PATH=
@@ -105,9 +108,9 @@ PREBUILT_ACTOR_FQNS=(
 )
 
 case "${DISPATCHER_MODE}" in
-  hybridep | recipe) ;;
+  deepep | hybridep | recipe) ;;
   *)
-    printf 'DISPATCHER_MODE must be either hybridep or recipe.\n' >&2
+    printf 'DISPATCHER_MODE must be deepep, hybridep, or recipe.\n' >&2
     exit 2
     ;;
 esac
@@ -136,6 +139,19 @@ case "${REQUIRE_DEEPEP_WHEEL}" in
     ;;
 esac
 
+case "${REQUIRE_NCCL_WHEEL}" in
+  true | false) ;;
+  *)
+    printf 'REQUIRE_NCCL_WHEEL must be true or false.\n' >&2
+    exit 2
+    ;;
+esac
+
+if [[ "${DISPATCHER_MODE}" == "deepep" ]]; then
+  REQUIRE_DEEPEP_WHEEL=true
+  REQUIRE_NCCL_WHEEL=true
+fi
+
 if [[ ! "${UV_LOCK_TIMEOUT}" =~ ^[1-9][0-9]*$ ]]; then
   printf 'UV_LOCK_TIMEOUT must be a positive integer number of seconds.\n' >&2
   exit 2
@@ -158,6 +174,26 @@ canonicalize_shared_lustre_path() {
   printf '%s\n' "${canonical_path}"
 }
 
+artifact_metadata_value() {
+  local metadata_path=$1
+  local field_name=$2
+  local -a values=()
+
+  mapfile -t values < <(
+    awk -v field_name="${field_name}" '
+      index($0, field_name "=") == 1 {
+        print substr($0, length(field_name) + 2)
+      }
+    ' "${metadata_path}"
+  )
+  if [[ "${#values[@]}" != "1" || -z "${values[0]}" ]]; then
+    printf 'Artifact metadata must contain exactly one non-empty %s: %s\n' \
+      "${field_name}" "${metadata_path}" >&2
+    return 2
+  fi
+  printf '%s\n' "${values[0]}"
+}
+
 if [[ "${REQUIRE_DEEPEP_WHEEL}" == "true" && -z "${DEEPEP_WHEEL}" ]]; then
   printf 'DEEPEP_WHEEL is required for model profile %s.\n' "${MODEL_ID}" >&2
   exit 2
@@ -165,6 +201,11 @@ fi
 
 if [[ "${REQUIRE_DEEPEP_WHEEL}" == "true" && -z "${UV_CACHE_DIR}" ]]; then
   printf 'UV_CACHE_DIR is required for model profile %s.\n' "${MODEL_ID}" >&2
+  exit 2
+fi
+
+if [[ "${REQUIRE_NCCL_WHEEL}" == "true" && -z "${NCCL_WHEEL}" ]]; then
+  printf 'NCCL_WHEEL is required for model profile %s.\n' "${MODEL_ID}" >&2
   exit 2
 fi
 
@@ -191,7 +232,8 @@ if [[ "${REQUIRE_DEEPEP_WHEEL}" == "true" ]]; then
     HF_HOME \
     HF_DATASETS_CACHE \
     RUN_ROOT \
-    DEEPEP_WHEEL; do
+    DEEPEP_WHEEL \
+    NCCL_WHEEL; do
     shared_path=${!shared_path_name}
     if [[ -z "${shared_path}" ]]; then
       continue
@@ -314,6 +356,7 @@ if [[ ! -f "${CONFIG_PATH}" ]]; then
   printf 'Recipe does not exist: %s\n' "${CONFIG_PATH}" >&2
   exit 2
 fi
+CONFIG_SHA256=$(sha256sum "${CONFIG_PATH}" | cut -d' ' -f1)
 
 if [[ ! -d "${BRIDGE_SRC}/megatron/bridge" ]]; then
   printf 'Megatron-Bridge source package does not exist: %s\n' "${BRIDGE_SRC}" >&2
@@ -415,6 +458,13 @@ if [[ "${DISPATCHER_MODE}" == "hybridep" ]]; then
     )
   fi
 fi
+if [[ "${DISPATCHER_MODE}" == "deepep" ]]; then
+  driver_args+=(
+    policy.megatron_cfg.moe_token_dispatcher_type=flex
+    ++policy.megatron_cfg.moe_flex_dispatcher_backend=deepep
+    ++policy.megatron_cfg.moe_deepep_num_sms=20
+  )
+fi
 printf -v driver_command '%q ' "${driver_args[@]}"
 if [[ -n "${PREBUILT_ACTOR_LIBRARY_PATH}" ]]; then
   printf -v quoted_actor_library_path '%q' "${PREBUILT_ACTOR_LIBRARY_PATH}"
@@ -424,6 +474,10 @@ fi
 SETUP_COMMAND=
 DEEPEP_OVERLAY=
 DEEPEP_WHEEL_SHA256=
+NCCL_WHEEL_SHA256=
+NCCL_VERSION=
+DEEPEP_BRANCH=
+DEEPEP_RUNTIME_PROBE_FIELDS=
 if [[ -n "${DEEPEP_WHEEL}" ]]; then
   DEEPEP_WHEEL=$(
     canonicalize_shared_lustre_path "DEEPEP_WHEEL" "${DEEPEP_WHEEL}"
@@ -435,13 +489,111 @@ if [[ -n "${DEEPEP_WHEEL}" ]]; then
 
   DEEPEP_OVERLAY="/tmp/nemo-rl-deepep-${DEEPEP_COMMIT:0:12}-${RUN_SUFFIX}"
   DEEPEP_WHEEL_SHA256=$(sha256sum "${DEEPEP_WHEEL}" | cut -d' ' -f1)
-  SETUP_COMMAND=$(
-    DEEPEP_OVERLAY="${DEEPEP_OVERLAY}" \
-      DEEPEP_WHEEL="${DEEPEP_WHEEL}" \
-      DEEPEP_WHEEL_SHA256="${DEEPEP_WHEEL_SHA256}" \
-      RAY_VENV="${RAY_VENV}" \
-      bash "${SCRIPT_DIR}/render_deepep_setup_command.sh"
-  )
+  if [[ "${REQUIRE_NCCL_WHEEL}" == "true" ]]; then
+    case "${DEEPEP_VARIANT}" in
+      deepep) DEEPEP_BRANCH=main ;;
+      hybridep) DEEPEP_BRANCH=hybrid-ep ;;
+      *)
+        printf 'DEEPEP_VARIANT must be deepep or hybridep: %s\n' \
+          "${DEEPEP_VARIANT}" >&2
+        exit 2
+        ;;
+    esac
+
+    NCCL_WHEEL=$(canonicalize_shared_lustre_path "NCCL_WHEEL" "${NCCL_WHEEL}")
+    if [[ ! -f "${NCCL_WHEEL}" ]]; then
+      printf 'NCCL wheel does not exist: %s\n' "${NCCL_WHEEL}" >&2
+      exit 2
+    fi
+
+    deepep_metadata_path="$(dirname -- "${DEEPEP_WHEEL}")/metadata.env"
+    nccl_metadata_path="$(dirname -- "${NCCL_WHEEL}")/metadata.env"
+    for artifact_metadata_path in "${deepep_metadata_path}" "${nccl_metadata_path}"; do
+      if [[ ! -f "${artifact_metadata_path}" ]]; then
+        printf 'Artifact metadata does not exist: %s\n' "${artifact_metadata_path}" >&2
+        exit 2
+      fi
+    done
+
+    metadata_variant=$(artifact_metadata_value "${deepep_metadata_path}" deepep_variant)
+    if [[ "${metadata_variant}" != "${DEEPEP_VARIANT}" ]]; then
+      printf 'DeepEP artifact variant does not match DEEPEP_VARIANT: %s\n' \
+        "${metadata_variant}" >&2
+      exit 2
+    fi
+    metadata_branch=$(artifact_metadata_value "${deepep_metadata_path}" deepep_branch)
+    if [[ "${metadata_branch}" != "${DEEPEP_BRANCH}" ]]; then
+      printf 'DeepEP artifact branch does not match variant %s: %s\n' \
+        "${DEEPEP_VARIANT}" "${metadata_branch}" >&2
+      exit 2
+    fi
+    metadata_commit=$(artifact_metadata_value "${deepep_metadata_path}" deepep_commit)
+    if [[ "${metadata_commit}" != "${DEEPEP_COMMIT}" ]]; then
+      printf 'DeepEP artifact commit does not match DEEPEP_COMMIT: %s\n' \
+        "${metadata_commit}" >&2
+      exit 2
+    fi
+    metadata_deepep_wheel=$(artifact_metadata_value "${deepep_metadata_path}" wheel)
+    if [[ "${metadata_deepep_wheel}" != "${DEEPEP_WHEEL}" ]]; then
+      printf 'DeepEP artifact wheel path does not match DEEPEP_WHEEL.\n' >&2
+      exit 2
+    fi
+    metadata_deepep_sha256=$(artifact_metadata_value \
+      "${deepep_metadata_path}" deepep_wheel_sha256)
+    metadata_wheel_sha256=$(artifact_metadata_value \
+      "${deepep_metadata_path}" wheel_sha256)
+    if [[ "${metadata_deepep_sha256}" != "${DEEPEP_WHEEL_SHA256}" || \
+      "${metadata_wheel_sha256}" != "${DEEPEP_WHEEL_SHA256}" ]]; then
+      printf 'DeepEP artifact wheel checksum mismatch.\n' >&2
+      exit 2
+    fi
+
+    NCCL_WHEEL_SHA256=$(sha256sum "${NCCL_WHEEL}" | cut -d' ' -f1)
+    metadata_nccl_package=$(artifact_metadata_value "${nccl_metadata_path}" package)
+    if [[ "${metadata_nccl_package}" != "nvidia-nccl-cu13" ]]; then
+      printf 'NCCL artifact package must be nvidia-nccl-cu13: %s\n' \
+        "${metadata_nccl_package}" >&2
+      exit 2
+    fi
+    NCCL_VERSION=$(artifact_metadata_value "${nccl_metadata_path}" version)
+    if [[ "${NCCL_VERSION}" != "2.30.4" ]]; then
+      printf 'NCCL artifact version must be 2.30.4: %s\n' "${NCCL_VERSION}" >&2
+      exit 2
+    fi
+    metadata_nccl_wheel=$(artifact_metadata_value "${nccl_metadata_path}" wheel)
+    if [[ "${metadata_nccl_wheel}" != "${NCCL_WHEEL}" ]]; then
+      printf 'NCCL artifact wheel path does not match NCCL_WHEEL.\n' >&2
+      exit 2
+    fi
+    metadata_nccl_sha256=$(artifact_metadata_value \
+      "${nccl_metadata_path}" wheel_sha256)
+    if [[ "${metadata_nccl_sha256}" != "${NCCL_WHEEL_SHA256}" ]]; then
+      printf 'NCCL artifact wheel checksum mismatch.\n' >&2
+      exit 2
+    fi
+    metadata_deepep_nccl_version=$(artifact_metadata_value \
+      "${deepep_metadata_path}" nccl_version)
+    metadata_deepep_nccl_sha256=$(artifact_metadata_value \
+      "${deepep_metadata_path}" nccl_wheel_sha256)
+    if [[ "${metadata_deepep_nccl_version}" != "${NCCL_VERSION}" || \
+      "${metadata_deepep_nccl_sha256}" != "${NCCL_WHEEL_SHA256}" ]]; then
+      printf 'DeepEP artifact NCCL metadata does not match the staged NCCL wheel.\n' >&2
+      exit 2
+    fi
+
+    DEEPEP_RUNTIME_PROBE_FIELDS=\
+"DEEPEP_RUNTIME_VARIANT,DEEPEP_RUNTIME_VERSION,DEEPEP_RUNTIME_PATHS,DEEPEP_RUNTIME_NCCL"
+    SETUP_COMMAND=$(
+      DEEPEP_OVERLAY="${DEEPEP_OVERLAY}" \
+        DEEPEP_WHEEL="${DEEPEP_WHEEL}" \
+        DEEPEP_WHEEL_SHA256="${DEEPEP_WHEEL_SHA256}" \
+        DEEPEP_VARIANT="${DEEPEP_VARIANT}" \
+        NCCL_WHEEL="${NCCL_WHEEL}" \
+        NCCL_WHEEL_SHA256="${NCCL_WHEEL_SHA256}" \
+        RAY_VENV="${RAY_VENV}" \
+        bash "${SCRIPT_DIR}/render_deepep_setup_command.sh"
+    )
+  fi
 fi
 
 COMMAND="${driver_command}"
@@ -453,6 +605,7 @@ metadata_path="${RUN_ROOT}/submission.env"
   printf 'run_name=%q\n' "${RUN_NAME}"
   printf 'model_id=%q\n' "${MODEL_ID}"
   printf 'config_path=%q\n' "${CONFIG_PATH}"
+  printf 'config_sha256=%q\n' "${CONFIG_SHA256}"
   printf 'account=%q\n' "${ACCOUNT}"
   printf 'account_fairshare=%q\n' "${ACCOUNT_FAIRSHARE}"
   printf 'highest_fairshare_account=%q\n' "${AUTO_ACCOUNT}"
@@ -482,8 +635,14 @@ metadata_path="${RUN_ROOT}/submission.env"
   printf 'bridge_commit=%q\n' "${BRIDGE_COMMIT}"
   printf 'megatron_lm_commit=%q\n' "${MEGATRON_LM_COMMIT}"
   printf 'deepep_commit=%q\n' "${DEEPEP_COMMIT}"
+  printf 'deepep_variant=%q\n' "${DEEPEP_VARIANT}"
+  printf 'deepep_branch=%q\n' "${DEEPEP_BRANCH}"
   printf 'deepep_wheel=%q\n' "${DEEPEP_WHEEL}"
   printf 'deepep_wheel_sha256=%q\n' "${DEEPEP_WHEEL_SHA256}"
+  printf 'nccl_wheel=%q\n' "${NCCL_WHEEL}"
+  printf 'nccl_wheel_sha256=%q\n' "${NCCL_WHEEL_SHA256}"
+  printf 'nccl_version=%q\n' "${NCCL_VERSION}"
+  printf 'deepep_runtime_probe_fields=%q\n' "${DEEPEP_RUNTIME_PROBE_FIELDS}"
   printf 'container=%q\n' "${CONTAINER}"
   printf 'container_sha256=%q\n' "${CONTAINER_SHA256}"
   printf 'submitted_at=%q\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')"
@@ -509,6 +668,10 @@ export UV_LOCK_TIMEOUT
 export GPUS_PER_NODE
 export RAY_VENV
 export SETUP_COMMAND
+if [[ -n "${DEEPEP_OVERLAY}" && "${REQUIRE_NCCL_WHEEL}" == "true" ]]; then
+  LD_LIBRARY_PATH="${DEEPEP_OVERLAY}/nvidia/nccl/lib:${LD_LIBRARY_PATH:-}"
+  export LD_LIBRARY_PATH
+fi
 export BASE_LOG_DIR="${RUN_ROOT}/ray"
 if [[ -n "${RAY_VENV}" ]]; then
   PATH="${RAY_VENV}/bin:${PATH}"
