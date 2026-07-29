@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import multiprocessing
 import os
 import sys
 import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -23,7 +25,16 @@ from nemo_rl.models.policy.workers.patches import (
     _get_transformer_engine_file,
     _patch_thd_context_parallel_cuda_graph,
     apply_transformer_engine_patch,
+    apply_transformer_engine_thd_context_parallel_patch,
 )
+
+
+def _apply_thd_patch_in_subprocess(source_path: str) -> None:
+    with patch(
+        "nemo_rl.models.policy.workers.patches._get_transformer_engine_file",
+        return_value=source_path,
+    ):
+        _patch_thd_context_parallel_cuda_graph(required=True)
 
 
 class TestGetTransformerEngineFile:
@@ -469,6 +480,84 @@ class TestPatchThdContextParallelCudaGraph:
                 _patch_thd_context_parallel_cuda_graph(required=True)
         finally:
             os.unlink(tmp_path)
+
+    def test_concurrent_processes_share_one_complete_rewrite(self):
+        if "fork" not in multiprocessing.get_all_start_methods():
+            pytest.skip("requires multiprocessing fork")
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False
+        ) as tmp_file:
+            tmp_file.write(self.UNPATCHED_CONTENT)
+            tmp_path = tmp_file.name
+
+        lock_path = f"{tmp_path}.nemo_rl_patch.lock"
+        try:
+            context = multiprocessing.get_context("fork")
+            processes = [
+                context.Process(
+                    target=_apply_thd_patch_in_subprocess,
+                    args=(tmp_path,),
+                )
+                for _ in range(8)
+            ]
+            for process in processes:
+                process.start()
+            for process in processes:
+                process.join(timeout=10)
+
+            assert all(process.exitcode == 0 for process in processes)
+            with open(tmp_path) as patched_file:
+                patched_content = patched_file.read()
+            assert self.UNPATCHED_CONTENT not in patched_content
+            assert patched_content.count("if is_graph_capturing():") == 1
+        finally:
+            os.unlink(tmp_path)
+            if os.path.exists(lock_path):
+                os.unlink(lock_path)
+
+
+class TestThdContextParallelPatchBootstrap:
+    def test_bootstrap_import_precedes_megatron_imports(self):
+        repo_root = Path(__file__).resolve().parents[4]
+        worker_source = (
+            repo_root / "nemo_rl/models/policy/workers/megatron_policy_worker.py"
+        ).read_text()
+        bootstrap_source = (
+            repo_root / "nemo_rl/models/policy/workers/te_patch_bootstrap.py"
+        ).read_text()
+
+        bootstrap_import = "import nemo_rl.models.policy.workers.te_patch_bootstrap"
+        assert worker_source.index(bootstrap_import) < worker_source.index(
+            "from megatron."
+        )
+        assert (
+            "apply_transformer_engine_thd_context_parallel_patch()" in bootstrap_source
+        )
+
+    def test_optional_bootstrap_reports_lookup_failure(self, capsys):
+        with patch(
+            "nemo_rl.models.policy.workers.patches."
+            "_patch_thd_context_parallel_cuda_graph",
+            side_effect=OSError("read-only package"),
+        ):
+            apply_transformer_engine_thd_context_parallel_patch()
+
+        assert "read-only package" in capsys.readouterr().out
+
+    def test_required_validation_fails_closed(self):
+        with (
+            patch(
+                "nemo_rl.models.policy.workers.patches."
+                "_patch_thd_context_parallel_cuda_graph",
+                side_effect=OSError("read-only package"),
+            ),
+            pytest.raises(
+                RuntimeError,
+                match="Failed to prepare Transformer Engine",
+            ),
+        ):
+            apply_transformer_engine_thd_context_parallel_patch(required=True)
 
 
 class TestPatchIntegration:

@@ -84,19 +84,12 @@ def _get_transformer_engine_file(relative_path: str) -> str:
 def _patch_thd_context_parallel_cuda_graph(*, required: bool) -> None:
     """Backport Transformer Engine's graph-safe THD CP gradient tail masking."""
     context_parallel_file = _get_transformer_engine_file(_THD_CONTEXT_PARALLEL_PATH)
-
-    with open(context_parallel_file) as source_file:
-        content = source_file.read()
-        if (
-            _THD_CONTEXT_PARALLEL_UNPATCHED not in content
-            and _THD_CONTEXT_PARALLEL_PATCH_MARKER in content
-        ):
-            return
-
-    with open(context_parallel_file, "r+") as source_file:
-        flock(source_file.fileno(), LOCK_EX)
+    lock_file_path = f"{context_parallel_file}.nemo_rl_patch.lock"
+    with open(lock_file_path, "a+") as lock_file:
+        flock(lock_file.fileno(), LOCK_EX)
         try:
-            content = source_file.read()
+            with open(context_parallel_file) as source_file:
+                content = source_file.read()
             if (
                 _THD_CONTEXT_PARALLEL_UNPATCHED not in content
                 and _THD_CONTEXT_PARALLEL_PATCH_MARKER in content
@@ -118,12 +111,11 @@ def _patch_thd_context_parallel_cuda_graph(*, required: bool) -> None:
                 _THD_CONTEXT_PARALLEL_PATCHED,
                 1,
             )
-            source_file.seek(0)
-            source_file.write(patched_content)
-            source_file.truncate()
-            source_file.flush()
+            with open(context_parallel_file, "w") as source_file:
+                source_file.write(patched_content)
+                source_file.flush()
         finally:
-            flock(source_file.fileno(), LOCK_UN)
+            flock(lock_file.fileno(), LOCK_UN)
 
     print(
         "Applied Transformer Engine #2898 THD context-parallel CUDA Graph "
@@ -131,9 +123,24 @@ def _patch_thd_context_parallel_cuda_graph(*, required: bool) -> None:
     )
 
 
-def apply_transformer_engine_patch(
-    *, require_thd_context_parallel_cuda_graph: bool = False
+def apply_transformer_engine_thd_context_parallel_patch(
+    *, required: bool = False
 ) -> None:
+    """Apply the THD CP graph fix, failing closed when a graph request needs it."""
+    try:
+        _patch_thd_context_parallel_cuda_graph(required=required)
+    except (OSError, RuntimeError) as error:
+        if required:
+            raise RuntimeError(
+                "Failed to prepare Transformer Engine for packed THD CUDA Graph "
+                "training."
+            ) from error
+        print(
+            f"Error checking/patching Transformer Engine THD context parallel: {error}"
+        )
+
+
+def apply_transformer_engine_patch() -> None:
     """Apply patch from https://github.com/NVIDIA/TransformerEngine/pull/2286/files.
 
     This locates the target file via importlib metadata instead of importing
@@ -193,6 +200,3 @@ def apply_transformer_engine_patch(
 
     except Exception as e:
         print(f"Error checking/patching transformer_engine: {e}")
-
-    if require_thd_context_parallel_cuda_graph:
-        _patch_thd_context_parallel_cuda_graph(required=True)

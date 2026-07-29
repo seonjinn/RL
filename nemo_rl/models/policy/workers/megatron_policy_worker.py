@@ -26,6 +26,8 @@ log = logging.getLogger(__name__)
 
 import ray
 import torch
+
+import nemo_rl.models.policy.workers.te_patch_bootstrap  # noqa: F401
 from megatron.bridge.training.checkpointing import (
     maybe_finalize_async_save,
     save_checkpoint,
@@ -100,7 +102,10 @@ from nemo_rl.models.policy.workers.checkpoint_engine import (
     PolicyCheckpointEngineMixin,
     maybe_preinit_nixl_checkpoint_engine,
 )
-from nemo_rl.models.policy.workers.patches import apply_transformer_engine_patch
+from nemo_rl.models.policy.workers.patches import (
+    apply_transformer_engine_patch,
+    apply_transformer_engine_thd_context_parallel_patch,
+)
 from nemo_rl.utils.grad_norm import warn_if_inf_grad_norm
 from nemo_rl.utils.nsys import wrap_with_nvtx_name
 from nemo_rl.utils.nvml import log_gpu_memory_diagnostics
@@ -316,8 +321,9 @@ class MegatronPolicyWorkerImpl(
 
         # Apply runtime compatibility fixes before importing Transformer Engine.
         megatron_config = config["megatron_cfg"]
-        apply_transformer_engine_patch(
-            require_thd_context_parallel_cuda_graph=(
+        apply_transformer_engine_patch()
+        apply_transformer_engine_thd_context_parallel_patch(
+            required=(
                 megatron_config.get("cuda_graph_impl") == "transformer_engine"
                 and bool(megatron_config.get("cuda_graph_packed_seq", False))
                 and bool(config.get("sequence_packing", {}).get("enabled", False))
