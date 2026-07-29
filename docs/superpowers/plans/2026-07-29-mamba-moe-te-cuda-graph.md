@@ -132,8 +132,9 @@ git log --oneline --decorate --max-count=6
 git submodule status --recursive
 ```
 
-Expected: only the three documentation commits differ from latest NeMo-RL
-main, both nested repositories are initialized, and the worktree is clean.
+Expected: only the three documentation commits and intentional latest-main
+nested submodule pointers differ from latest NeMo-RL main; both nested
+repositories are initialized and have no uncommitted file changes.
 
 ### Task 1: Establish Latest-Main and PR 5672 Foundation
 
@@ -1132,7 +1133,8 @@ Record the full SHA in the experiment README.
 In Megatron-Bridge:
 
 ```bash
-git switch -c sna/pr5672-mamba-moe-graph-cache-20260729 upstream/main
+git branch --show-current
+git merge-base --is-ancestor upstream/main HEAD
 git add 3rdparty/Megatron-LM
 git commit -s -m "chore: pin MCore Mamba and MoE graph support"
 git push -u origin sna/pr5672-mamba-moe-graph-cache-20260729
