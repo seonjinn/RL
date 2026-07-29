@@ -21,7 +21,7 @@ TRACE_CONFIG_REL="examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4
 PROFILE_DEFAULT="$EXPERIMENT_DIR/cluster/oci-hsg.env"
 
 VLLM_REPOSITORY="https://github.com/seonjinn/vllm.git"
-VLLM_COMMIT="77d5e10eec8f5cc217d16a9230f2955cf8553cee"
+VLLM_COMMIT="217ece36ee503ee8ccfbfaa0a5331765b21d2160"
 VLLM_BASE_COMMIT="5246e3c5df5fb8266b50ceaa6eca2836fb2d13b1"
 VLLM_VERSION="0.20.2"
 FLASHINFER_VERSION="0.6.8.post1"
@@ -29,11 +29,14 @@ MODEL="Qwen/Qwen3-30B-A3B"
 TP_SIZE=1
 BOOTSTRAP_CONFIG_NAME="qwen3_30ba3b_tp1_v0202_rollout_trace_bootstrap.json"
 QUALIFIED_CONFIG_NAME="qwen3_30ba3b_tp1_v0202_qualified.json"
+BOOTSTRAP_CONFIG_SHA256="3c9f2be89e9053df62d07b937bbbf6f1d4bce39867825cda940271762708a447"
+QUALIFIED_CONFIG_SHA256="2baf01def8887db693c35b3070571ab7bb4e72ebfcf30c9fd8b587a3b7c9b2a2"
+WANDB_PROJECT="sna_mxfp8_kernel_test"
 NUM_SAMPLES=2048
 SEED=42
 
 usage() {
-  echo "usage: $0 <trace|shmoo|original|adaptive|ab|parse> [profile]" >&2
+  echo "usage: $0 <trace|shmoo|original|adaptive|smoke-ab|ab|parse> [profile]" >&2
   echo "  ACTION=test-only (default) or ACTION=submit" >&2
   echo "  Override the default account with SLURM_ACCOUNT=nemotron_sw_pre." >&2
 }
@@ -95,6 +98,7 @@ load_profile() {
   : "${GPUS_PER_NODE:?profile must set GPUS_PER_NODE}"
   : "${SLURM_SWITCHES:?profile must set SLURM_SWITCHES}"
   : "${NEMO_RL_EXPERIMENT_ROOT:?profile must set NEMO_RL_EXPERIMENT_ROOT}"
+  : "${VLLM_OVERLAY_ROOT:?profile must set VLLM_OVERLAY_ROOT}"
   : "${CONTAINER_IMAGE:?set CONTAINER_IMAGE to an immutable staged .sqsh}"
   : "${CONTAINER_MOUNTS:?profile must set CONTAINER_MOUNTS}"
   if [[ "$NEMO_RL_EXPERIMENT_ROOT" != /* ||
@@ -107,6 +111,7 @@ load_profile() {
   EXPERIMENT_ROOT="$NEMO_RL_EXPERIMENT_ROOT"
   require_container_visible_path "$REPO_ROOT"
   require_container_visible_path "$EXPERIMENT_ROOT"
+  require_container_visible_path "$VLLM_OVERLAY_ROOT"
   if [[ "$NUM_NODES" != "4" || "$GPUS_PER_NODE" != "4" ]]; then
     echo "Qwen 4n4g requires NUM_NODES=4 and GPUS_PER_NODE=4" >&2
     exit 2
@@ -163,7 +168,7 @@ submit_job() {
     --time="$WALLTIME"
     --job-name="mxfp8-${mode}-${repeat}"
     --output="$EXPERIMENT_ROOT/slurm/%x-%j.out"
-    --export="ALL,MODE=$mode,RUN_ID=$run_id,REPEAT=$repeat,PROFILE_PATH=$PROFILE_PATH,NEMO_RL_REPO_ROOT=$REPO_ROOT,NEMO_RL_EXPERIMENT_ROOT=$EXPERIMENT_ROOT"
+    --export="ALL,MODE=$mode,RUN_ID=$run_id,REPEAT=$repeat,PROFILE_PATH=$PROFILE_PATH,NEMO_RL_REPO_ROOT=$REPO_ROOT,NEMO_RL_EXPERIMENT_ROOT=$EXPERIMENT_ROOT,MEASURE_STEPS=${MEASURE_STEPS:-20}"
   )
   if [[ -n "$dependency" ]]; then
     args+=(--dependency="afterok:$dependency")
@@ -199,15 +204,25 @@ submit_suite() {
   local repeat
   local schedule=$mode
 
-  if (( repeats < 3 )); then
-    echo "REPEATS must be at least 3" >&2
-    exit 2
-  fi
+  case "$mode" in
+    ab)
+      if (( repeats != 3 )); then
+        echo "REPEATS must be exactly 3 for production A/B" >&2
+        exit 2
+      fi
+      export MEASURE_STEPS=${MEASURE_STEPS:-20}
+      ;;
+    smoke-ab)
+      repeats=1
+      export MEASURE_STEPS=1
+      ;;
+  esac
   if [[ ! "$suite_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
     echo "SUITE_ID is not filesystem-safe: $suite_id" >&2
     exit 2
   fi
-  if [[ -f "$EXPERIMENT_ROOT/not-applicable.json" && "$mode" == "ab" ]]; then
+  if [[ -f "$EXPERIMENT_ROOT/not-applicable.json" &&
+        ( "$mode" == "ab" || "$mode" == "smoke-ab" ) ]]; then
     echo "Qwen performance skipped: $EXPERIMENT_ROOT/not-applicable.json"
     return 0
   fi
@@ -218,7 +233,7 @@ submit_suite() {
     exit 2
   fi
 
-  if [[ "$mode" != "ab" ]]; then
+  if [[ "$mode" != "ab" && "$mode" != "smoke-ab" ]]; then
     submit_job "$mode" "$suite_id/measured-${mode}-r${REPEAT:-1}" \
       "${REPEAT:-1}"
   else
@@ -250,6 +265,14 @@ run_in_allocation() {
   local runtime_trace_dir="$run_dir/runtime_dispatch"
 
   check_container
+  if [[ ! -d "$VLLM_OVERLAY_ROOT" ]]; then
+    echo "VLLM_OVERLAY_ROOT must be an existing directory: $VLLM_OVERLAY_ROOT" >&2
+    exit 2
+  fi
+  if [[ "$(git -C "$VLLM_OVERLAY_ROOT" rev-parse HEAD)" != "$VLLM_COMMIT" ]]; then
+    echo "VLLM_OVERLAY_ROOT Git HEAD must match VLLM_COMMIT" >&2
+    exit 2
+  fi
   if [[ ! "$RUN_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
     echo "RUN_ID must contain one filesystem-safe suite/run pair: $RUN_ID" >&2
     exit 2
@@ -280,7 +303,7 @@ run_in_allocation() {
   export VLLM_CACHE_ROOT="$XDG_CACHE_HOME/vllm"
   export BASE_LOG_DIR="$EXPERIMENT_ROOT/slurm"
   export NVTE_CUDA_ARCHS=100
-  export PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}"
+  export PYTHONPATH="$VLLM_OVERLAY_ROOT:$REPO_ROOT:${PYTHONPATH:-}"
   export NRL_FORCE_REBUILD_VENVS=false
 
   mkdir -p "$EXPERIMENT_ROOT/slurm" "$CACHE_ROOT/uv"
@@ -576,16 +599,16 @@ run_performance_arm() {
   local run_dir="$EXPERIMENT_ROOT/runs/$run_id"
   local runtime_trace_dir="$run_dir/runtime_dispatch"
   local warmup_steps=${WARMUP_STEPS:-1}
-  local measured_steps=${MEASURE_STEPS:-3}
+  local measured_steps=${MEASURE_STEPS:-20}
   local total_steps
   local config_hash="none"
-  local qualified_path
-  local actual_qualified_sha256
+  local manifest_path
+  local actual_manifest_sha256
   local pair_dir
   local pair_name
   local peer_metadata
   local run_start_ns
-  local coverage_output="$run_dir/tactic_coverage.json"
+  local coverage_output
   local trace_file
   local -a runtime_trace_files=()
   local -a runtime_trace_args=()
@@ -608,29 +631,43 @@ run_performance_arm() {
     "grpo.seed=$SEED"
     "checkpointing.enabled=false"
     "logger.log_dir=/mxfp8_configured_logs"
-    "logger.wandb.name=mxfp8-qwen-$pair_name"
+    "logger.wandb.project=$WANDB_PROJECT"
     "++policy.generation.vllm_cfg.env_vars.VLLM_MXFP8_DENSE_SHAPE_TRACE=1"
     "++policy.generation.vllm_cfg.env_vars.VLLM_MXFP8_DENSE_SHAPE_TRACE_DIR=/mxfp8_runtime_trace"
   )
 
   case "$arm" in
     original)
-      unset VLLM_MXFP8_DENSE_CONFIG_FILE
+      manifest_path="$vllm_root/vllm/model_executor/kernels/linear/mxfp8/tactic_configs/$BOOTSTRAP_CONFIG_NAME"
+      require_file "$manifest_path"
+      actual_manifest_sha256=$(sha256sum "$manifest_path" | awk '{print $1}')
+      if [[ "$actual_manifest_sha256" != "$BOOTSTRAP_CONFIG_SHA256" ]]; then
+        echo "bootstrap config SHA256 does not match the built package" >&2
+        exit 2
+      fi
+      export VLLM_MXFP8_DENSE_CONFIG_FILE="$BOOTSTRAP_CONFIG_NAME"
+      config_hash="$BOOTSTRAP_CONFIG_SHA256"
+      coverage_output="$run_dir/default_tactic_coverage.json"
+      overrides+=(
+        "logger.wandb.name=mxfp8-qwen-baseline-no-shmoo-trtllm-r${repeat}"
+        "++policy.generation.vllm_cfg.env_vars.VLLM_MXFP8_DENSE_CONFIG_FILE=$BOOTSTRAP_CONFIG_NAME"
+      )
       peer_metadata="$pair_dir/measured-adaptive-r${repeat}/metadata.json"
       ;;
     adaptive)
-      : "${QUALIFIED_CONFIG_SHA256:?Set QUALIFIED_CONFIG_SHA256 from the rebuilt image}"
-      qualified_path="$vllm_root/vllm/model_executor/kernels/linear/mxfp8/tactic_configs/$QUALIFIED_CONFIG_NAME"
-      require_file "$qualified_path"
-      actual_qualified_sha256=$(sha256sum "$qualified_path" | awk '{print $1}')
-      if [[ "$actual_qualified_sha256" != "$QUALIFIED_CONFIG_SHA256" ]]; then
+      manifest_path="$vllm_root/vllm/model_executor/kernels/linear/mxfp8/tactic_configs/$QUALIFIED_CONFIG_NAME"
+      require_file "$manifest_path"
+      actual_manifest_sha256=$(sha256sum "$manifest_path" | awk '{print $1}')
+      if [[ "$actual_manifest_sha256" != "$QUALIFIED_CONFIG_SHA256" ]]; then
         echo "qualified config SHA256 does not match the built package" >&2
         exit 2
       fi
-      "$python_bin" "$PARSER" validate-qualified --manifest "$qualified_path"
+      "$python_bin" "$PARSER" validate-qualified --manifest "$manifest_path"
       export VLLM_MXFP8_DENSE_CONFIG_FILE="$QUALIFIED_CONFIG_NAME"
       config_hash="$QUALIFIED_CONFIG_SHA256"
+      coverage_output="$run_dir/tactic_coverage.json"
       overrides+=(
+        "logger.wandb.name=mxfp8-qwen-shmoo-qualified-r${repeat}"
         "++policy.generation.vllm_cfg.env_vars.VLLM_MXFP8_DENSE_CONFIG_FILE=$QUALIFIED_CONFIG_NAME"
       )
       peer_metadata="$pair_dir/measured-original-r${repeat}/metadata.json"
@@ -660,14 +697,18 @@ run_performance_arm() {
       "$python_bin" "$PARSER" validate-pair \
         --original "$run_dir/metadata.json" \
         --adaptive "$peer_metadata" \
-        --expected-config-file "$QUALIFIED_CONFIG_NAME" \
-        --expected-config-sha256 "$QUALIFIED_CONFIG_SHA256"
+        --expected-baseline-config-file "$BOOTSTRAP_CONFIG_NAME" \
+        --expected-baseline-config-sha256 "$BOOTSTRAP_CONFIG_SHA256" \
+        --expected-adaptive-config-file "$QUALIFIED_CONFIG_NAME" \
+        --expected-adaptive-config-sha256 "$QUALIFIED_CONFIG_SHA256"
     else
       "$python_bin" "$PARSER" validate-pair \
         --original "$peer_metadata" \
         --adaptive "$run_dir/metadata.json" \
-        --expected-config-file "$QUALIFIED_CONFIG_NAME" \
-        --expected-config-sha256 "$QUALIFIED_CONFIG_SHA256"
+        --expected-baseline-config-file "$BOOTSTRAP_CONFIG_NAME" \
+        --expected-baseline-config-sha256 "$BOOTSTRAP_CONFIG_SHA256" \
+        --expected-adaptive-config-file "$QUALIFIED_CONFIG_NAME" \
+        --expected-adaptive-config-sha256 "$QUALIFIED_CONFIG_SHA256"
     fi
   elif [[ "$arm" == "adaptive" ]]; then
     echo "adaptive arm requires matched original metadata: $peer_metadata" >&2
@@ -688,23 +729,28 @@ run_performance_arm() {
       "$run_start_ns"
   } 2>&1 | tee "$run_dir/run.log"
 
-  if [[ "$arm" == "adaptive" ]]; then
-    while IFS= read -r -d '' trace_file; do
-      runtime_trace_files+=("$trace_file")
-    done < <(
-      find "$runtime_trace_dir" -type f \
-        -name 'adaptive_dispatch_*_*.jsonl' -print0 | sort -z
-    )
-    if (( ${#runtime_trace_files[@]} == 0 )); then
-      echo "adaptive runtime produced no tactic trace files" >&2
-      exit 2
-    fi
-    for trace_file in "${runtime_trace_files[@]}"; do
-      runtime_trace_args+=(--trace "$trace_file")
-    done
-    require_new_path "$coverage_output"
+  while IFS= read -r -d '' trace_file; do
+    runtime_trace_files+=("$trace_file")
+  done < <(
+    find "$runtime_trace_dir" -type f \
+      -name 'adaptive_dispatch_*_*.jsonl' -print0 | sort -z
+  )
+  if (( ${#runtime_trace_files[@]} == 0 )); then
+    echo "performance runtime produced no tactic trace files" >&2
+    exit 2
+  fi
+  for trace_file in "${runtime_trace_files[@]}"; do
+    runtime_trace_args+=(--trace "$trace_file")
+  done
+  require_new_path "$coverage_output"
+  if [[ "$arm" == "original" ]]; then
+    "$python_bin" "$PARSER" validate-default-runtime \
+      "${runtime_trace_args[@]}" \
+      --expected-config-sha256 "$BOOTSTRAP_CONFIG_SHA256" \
+      --output "$coverage_output" | tee -a "$run_dir/run.log"
+  else
     "$python_bin" "$PARSER" validate-runtime \
-      --manifest "$qualified_path" \
+      --manifest "$manifest_path" \
       "${runtime_trace_args[@]}" \
       --expected-config-sha256 "$QUALIFIED_CONFIG_SHA256" \
       --output "$coverage_output" | tee -a "$run_dir/run.log"
@@ -796,7 +842,7 @@ if [[ -n "${SLURM_JOB_ID:-}" ]]; then
 fi
 
 case "$MODE" in
-  trace | shmoo | original | adaptive | ab)
+  trace | shmoo | original | adaptive | smoke-ab | ab)
     check_container
     check_submission_checkout
     submit_suite "$MODE"

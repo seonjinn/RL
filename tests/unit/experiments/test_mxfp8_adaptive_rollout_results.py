@@ -38,6 +38,10 @@ CONTAINER_DIGEST = "sha256:" + "c" * 64
 CONFIG_HASH = "d" * 64
 BASELINE_HASH = "3" * 64
 QUALIFIED_CONFIG_NAME = "qwen3_30ba3b_tp1_v0202_qualified.json"
+BOOTSTRAP_CONFIG_NAME = "qwen3_30ba3b_tp1_v0202_rollout_trace_bootstrap.json"
+BOOTSTRAP_CONFIG_SHA256 = "3c9f2be89e9053df62d07b937bbbf6f1d4bce39867825cda940271762708a447"
+QUALIFIED_CONFIG_SHA256 = "2baf01def8887db693c35b3070571ab7bb4e72ebfcf30c9fd8b587a3b7c9b2a2"
+VLLM_OVERLAY_COMMIT = "217ece36ee503ee8ccfbfaa0a5331765b21d2160"
 
 
 def _load_parser() -> ModuleType:
@@ -660,6 +664,10 @@ def test_oci_profile_overlays_checkout_onto_container_nemo_root() -> None:
         "/lustre:/lustre,/scratch:/scratch,/lustre/current-nemo-rl:/opt/nemo-rl"
     )
 
+    profile = PROFILE_PATH.read_text(encoding="utf-8")
+    assert "VLLM_OVERLAY_ROOT" in profile
+    assert "vllm-overlay-217ece36ee503ee8ccfbfaa0a5331765b21d2160" in profile
+
 
 def test_container_smoke_uses_split_vllm_and_mcore_interpreters(
     tmp_path: Path,
@@ -732,6 +740,7 @@ echo mcore >>"$PROBE_CAPTURE"
 
 def _run_spool_launcher(
     tmp_path: Path,
+    mode: str = "ab",
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     spool_dir = tmp_path / "slurm-spool"
     spool_dir.mkdir()
@@ -743,6 +752,8 @@ def _run_spool_launcher(
 
     container = tmp_path / "runtime.sqsh"
     container.touch()
+    overlay_root = tmp_path / "vllm-overlay"
+    overlay_root.mkdir()
     experiment_root = tmp_path / "experiment-output"
     profile = tmp_path / "profile.env"
     profile.write_text(
@@ -759,6 +770,7 @@ def _run_spool_launcher(
                 f'export NEMO_RL_EXPERIMENT_ROOT="{experiment_root}"',
                 f'export CONTAINER_IMAGE="{container}"',
                 f'export CONTAINER_MOUNTS="{REPO_ROOT}:{REPO_ROOT},{tmp_path}:{tmp_path}"',
+                f'export VLLM_OVERLAY_ROOT="{overlay_root}"',
                 f'export HF_HOME="{tmp_path / "hf"}"',
                 f'export CACHE_ROOT="{tmp_path / "cache"}"',
             )
@@ -795,7 +807,7 @@ echo "sbatch preflight accepted"
         "SUITE_ID": "spool-harness",
     }
     result = subprocess.run(
-        ["bash", str(launcher), "ab", str(profile)],
+        ["bash", str(launcher), mode, str(profile)],
         check=False,
         capture_output=True,
         env=environment,
@@ -818,6 +830,18 @@ def test_submitted_spool_copy_exports_canonical_shared_paths(
     assert all(f"NEMO_RL_REPO_ROOT={REPO_ROOT}" in call for call in calls)
     assert all("NEMO_RL_EXPERIMENT_ROOT=" in call for call in calls)
     assert all(call.endswith(str(checked_in_launcher)) for call in calls)
+
+
+def test_smoke_ab_schedule_emits_one_matched_pair_with_one_measured_step(
+    tmp_path: Path,
+) -> None:
+    result, calls = _run_spool_launcher(tmp_path, "smoke-ab")
+
+    assert result.returncode == 0, result.stderr
+    assert len(calls) == 2
+    assert "--job-name=mxfp8-original-1" in calls[0]
+    assert "--job-name=mxfp8-adaptive-1" in calls[1]
+    assert all("MEASURE_STEPS=1" in call for call in calls)
 
 
 def test_container_entrypoint_restores_exported_experiment_root(
@@ -876,6 +900,25 @@ def test_ab_schedule_uses_same_job_warmup_and_three_alternating_repeats(
     assert all("WARMUP=" not in call for call in calls)
 
 
+def test_launcher_pins_isolated_manifest_and_runtime_contract() -> None:
+    launcher = RUN_AB_PATH.read_text(encoding="utf-8")
+
+    assert f'VLLM_COMMIT="{VLLM_OVERLAY_COMMIT}"' in launcher
+    assert f'BOOTSTRAP_CONFIG_SHA256="{BOOTSTRAP_CONFIG_SHA256}"' in launcher
+    assert f'QUALIFIED_CONFIG_SHA256="{QUALIFIED_CONFIG_SHA256}"' in launcher
+    assert 'WANDB_PROJECT="sna_mxfp8_kernel_test"' in launcher
+    assert "measured_steps=${MEASURE_STEPS:-20}" in launcher
+    assert "logger.wandb.project=$WANDB_PROJECT" in launcher
+    assert "mxfp8-qwen-baseline-no-shmoo-trtllm-r${repeat}" in launcher
+    assert "mxfp8-qwen-shmoo-qualified-r${repeat}" in launcher
+    assert "validate-default-runtime" in launcher
+    assert "default_tactic_coverage.json" in launcher
+    assert "--expected-baseline-config-file \"$BOOTSTRAP_CONFIG_NAME\"" in launcher
+    assert "--expected-baseline-config-sha256 \"$BOOTSTRAP_CONFIG_SHA256\"" in launcher
+    assert "--expected-adaptive-config-file \"$QUALIFIED_CONFIG_NAME\"" in launcher
+    assert "--expected-adaptive-config-sha256 \"$QUALIFIED_CONFIG_SHA256\"" in launcher
+
+
 def test_allocation_driver_command_handles_apostrophe_in_repo_path(
     tmp_path: Path,
 ) -> None:
@@ -892,10 +935,12 @@ touch "$DRIVER_MARKER"
     )
 
     command_capture = tmp_path / "driver-command.txt"
+    pythonpath_capture = tmp_path / "driver-pythonpath.txt"
     _write_executable(
         repo_root / "ray.sub",
         """#!/bin/bash
 printf '%s\\n' "$COMMAND" >"$COMMAND_CAPTURE"
+printf '%s\\n' "$PYTHONPATH" >"$PYTHONPATH_CAPTURE"
 bash -c "$COMMAND"
 """,
     )
@@ -903,6 +948,8 @@ bash -c "$COMMAND"
     container.touch()
     output_root = tmp_path / "experiment-output"
     (output_root / "runs" / "suite").mkdir(parents=True)
+    overlay_root = tmp_path / "vllm-overlay"
+    overlay_root.mkdir()
     profile = tmp_path / "profile.env"
     profile.write_text(
         "\n".join(
@@ -920,6 +967,7 @@ bash -c "$COMMAND"
                 f'export CONTAINER_MOUNTS="{repo_root}:{repo_root},{tmp_path}:{tmp_path}"',
                 f'export HF_HOME="{tmp_path / "hf"}"',
                 f'export CACHE_ROOT="{tmp_path / "cache"}"',
+                f'export VLLM_OVERLAY_ROOT="{overlay_root}"',
             )
         )
         + "\n",
@@ -931,6 +979,14 @@ bash -c "$COMMAND"
         spool_copy,
     )
     driver_marker = tmp_path / "driver-invoked"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(
+        fake_bin / "git",
+        f"""#!/bin/bash
+echo \"{VLLM_OVERLAY_COMMIT}\"
+""",
+    )
     environment = {
         **os.environ,
         "COMMAND_CAPTURE": str(command_capture),
@@ -941,6 +997,8 @@ bash -c "$COMMAND"
         "REPEAT": "1",
         "RUN_ID": "suite/measured-trace-r1",
         "SLURM_JOB_ID": "123",
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "PYTHONPATH_CAPTURE": str(pythonpath_capture),
     }
 
     result = subprocess.run(
@@ -955,6 +1013,9 @@ bash -c "$COMMAND"
     assert command_capture.is_file()
     assert driver_marker.is_file()
     assert "__container" in command_capture.read_text(encoding="utf-8")
+    assert pythonpath_capture.read_text(encoding="utf-8").startswith(
+        f"{overlay_root}:"
+    )
 
 
 @pytest.mark.parametrize("source_commit", [None, "", "abc123"])
