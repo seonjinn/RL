@@ -149,9 +149,13 @@ def performance_rows(performance_rows_: list[dict[str, str]]) -> list[list[str]]
         "timing/train/generation",
         "timing/train/policy_training",
         "timing/train/policy_and_reference_logprobs",
+        "avg_reward",
+        "loss",
+        "generation_kl_error",
+        "note",
     )
     return [
-        [cell(performance_row.get(column, "")) for column in columns]
+        [cell(performance_row.get(column, "") or "") for column in columns]
         for performance_row in performance_rows_
     ]
 
@@ -194,6 +198,10 @@ def render_html(
             "Generation time (s)",
             "Policy training time (s)",
             "Logprob time (s)",
+            "Avg reward",
+            "Loss",
+            "Generation KL error",
+            "Sample note",
         ],
         performance_rows(performance_rows_),
     )

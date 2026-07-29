@@ -271,3 +271,47 @@ geometry `8192/K16`, non-colocated generation, and checkpointing disabled. The
 four immediately scheduled graph scopes are independent jobs with no Slurm
 dependencies. A scope is accepted only after both an explicit capture event and
 a subsequent replay complete.
+
+## First completed Nano partial-graph smokes
+
+| Scope | Job | Result | Step-5 E2E | Step-5 policy training | Step-5 logprob |
+| --- | --- | --- | ---: | ---: | ---: |
+| baseline | `2465406` | `COMPLETED` | `48.30s`, `35.29 tok/s/GPU` | `2.15s`, `1587.46 tok/s/GPU` | `4.93s`, `692.03 tok/s/GPU` |
+| `attn` | `2465399` | `COMPLETED` | `46.86s`, `30.67 tok/s/GPU` | `1.65s`, `1737.89 tok/s/GPU` | `2.94s`, `976.70 tok/s/GPU` |
+| `mamba` | `2465407` | `COMPLETED` | `45.46s`, `28.61 tok/s/GPU` | `1.20s`, `2162.83 tok/s/GPU` | `3.01s`, `865.31 tok/s/GPU` |
+
+These are five-step functional smokes, not paired performance or convergence
+runs. Generated lengths differ between jobs, so E2E and generation throughput
+must not be interpreted as a controlled graph delta. The graph-local Step-5
+policy-training throughput is higher than the baseline sample for both
+completed scopes, while all losses are finite and generation KL remains in the
+observed `0.0015`–`0.0021` smoke range. A seeded multi-step comparison is still
+required for an accuracy-impact conclusion.
+
+The original `moe_router` (`2465408`), `moe_router+moe_preprocess` (`2465409`),
+and combined (`2465410`) jobs completed all three eager warmup steps and failed
+at Step 4 graph capture. All three failures are the same Transformer Engine
+buffer-reuse gap: Nano intentionally produces fp64 router probabilities, but
+TE `_WeakRefTensor` lacks the CUDA array-interface mapping for `torch.float64`.
+This is distinct from the earlier THD context-parallel capture failure and from
+illegal-memory behavior.
+
+## Float64 router graph compatibility retry
+
+| Field | Value |
+| --- | --- |
+| Compatibility source | `994342fc0b30acda8594cd8057cb1ef6b8e89b85` |
+| Change | Add `torch.float64: "<f8"` to TE weak-reference dtype metadata without casting router values |
+| Numerical contract | Preserve fp64 probabilities, partial-scope outputs, gradients, and TE graph buffer reuse |
+| Unit preflight | `2465632` accepted |
+| Unit job | `2465636` (`COMPLETED`, exit `0:0`, 1m26s) |
+| Unit result | 12 tests passed; source rewrite, fail-closed behavior, bootstrap order, and visible rank-zero capture/replay event contracts |
+| `moe_router` retry | `2465644` (`RUNNING`, independent backfill allocation) |
+| `moe_router+moe_preprocess` retry | `2465645` (`RUNNING`, independent backfill allocation) |
+| Combined retry | `2465646` (`RUNNING`, independent backfill allocation) |
+| Checkpoint policy | Disabled |
+
+The retries were independently submitted with no Slurm dependency after
+backfill preflights `2465641`–`2465643`. They retain the exact Nano model,
+TP2/PP2/CP2/EP8 topology, packed `8192/K16` geometry, three graph warmups, and
+five total steps.

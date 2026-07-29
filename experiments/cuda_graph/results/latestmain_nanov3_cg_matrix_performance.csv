@@ -1,4 +1,4 @@
-scope,job_id,step_window,timing/train/total_step_time,performance/tokens_per_sec_per_gpu,timing/train/generation,timing/train/policy_training,timing/train/policy_and_reference_logprobs,avg_reward,loss,mean_generation_length,note
+scope,job_id,step_window,timing/train/total_step_time,performance/tokens_per_sec_per_gpu,timing/train/generation,timing/train/policy_training,timing/train/policy_and_reference_logprobs,avg_reward,loss,mean_generation_length,note,generation_kl_error
 nocg-offline-snapshot,2463752,step-1,269.54,16.06,85.16,102.99,77.03,0.0000,0.0000,4210.0625,cold first step only; exclude from steady-state comparison
 nocg-offline-snapshot,2463752,step-2,55.95,47.00,41.59,2.05,4.96,0.0000,0.0000,2505.8750,first warm step; run is still in progress
 nocg-offline-snapshot,2463752,step-3,51.38,67.64,40.46,2.05,2.86,0.0625,0.1448,3338.5000,warm step; first nonzero reward and loss
@@ -11,3 +11,18 @@ nocg-offline-snapshot,2463752,step-9,53.53,45.23,30.67,10.73,5.87,0.0625,-0.0562
 nocg-offline-snapshot,2463752,step-10,115.37,23.91,39.84,1.73,2.69,0.0000,0.0000,2679.5625,warm step with unexplained non-component delay; retain for E2E tail analysis
 nocg-offline-snapshot,2463752,step-11,46.76,69.48,39.83,2.06,2.86,0.0625,0.0797,3146.6875,warm step
 nocg-offline-snapshot,2463752,step-12,51.84,57.55,40.70,2.10,3.07,0.0000,0.0001,2899.7500,last completed step before scheduler preemption
+nocg-smoke,2465406,step-1,257.64,8.22,75.68,102.57,76.74,0.0000,0.0000,4113.6250,cold model initialization sample,0.0020
+nocg-smoke,2465406,step-2,61.03,24.75,40.47,10.08,7.78,0.0000,0.0000,2897.2500,warmup comparison sample,0.0019
+nocg-smoke,2465406,step-3,45.72,30.95,38.83,1.75,2.55,0.0000,0.0000,2692.6250,warmup comparison sample,0.0021
+nocg-smoke,2465406,step-4,45.52,30.87,38.56,1.69,2.58,0.0000,0.0000,2713.3750,steady eager comparison sample,0.0020
+nocg-smoke,2465406,step-5,48.30,35.29,38.66,2.15,4.93,0.0625,0.1294,3301.8125,steady eager comparison sample,0.0017
+attn-smoke,2465399,step-1,268.31,6.90,88.90,100.65,75.97,0.0625,0.1674,3582.8125,cold model initialization sample,0.0017
+attn-smoke,2465399,step-2,52.89,27.97,39.74,2.27,8.12,0.0625,0.1298,2835.3125,warmup optimizer step 2 of 3,0.0018
+attn-smoke,2465399,step-3,47.42,35.77,39.64,2.27,2.82,0.0625,0.1065,3255.2500,warmup optimizer step 3 of 3,0.0018
+attn-smoke,2465399,step-4,47.61,27.70,38.92,3.27,2.74,0.0000,0.0008,2540.1250,Transformer Engine graph capture step,0.0020
+attn-smoke,2465399,step-5,46.86,30.67,39.54,1.65,2.94,0.0000,0.0007,2767.0000,first Transformer Engine graph replay step,0.0020
+mamba-smoke,2465407,step-1,254.96,6.25,73.82,102.42,76.00,0.0625,0.1200,3065.5000,cold model initialization sample,0.0020
+mamba-smoke,2465407,step-2,46.95,30.19,39.63,1.92,2.62,0.0000,0.0003,2711.4375,warmup optimizer step 2 of 3,0.0019
+mamba-smoke,2465407,step-3,44.87,34.92,34.65,2.10,5.37,0.0000,0.0010,2996.0000,warmup optimizer step 3 of 3,0.0020
+mamba-smoke,2465407,step-4,39.72,33.31,27.87,3.41,5.55,0.0000,0.0008,2548.7500,Transformer Engine graph capture step,0.0020
+mamba-smoke,2465407,step-5,45.46,28.61,38.60,1.20,3.01,0.0625,0.0645,2493.8750,first Transformer Engine graph replay step,0.0015
