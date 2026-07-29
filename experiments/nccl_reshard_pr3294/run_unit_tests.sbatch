@@ -14,6 +14,7 @@ mkdir -p "$(dirname "${TEST_LOG}")"
 srun \
   --nodes=1 \
   --ntasks=1 \
+  --no-container-mount-home \
   --container-image="${CONTAINER}" \
   --container-mounts=/lustre:/lustre \
   /bin/bash -lc "
