@@ -22,8 +22,23 @@ The required runtime is:
   `qwen3_30ba3b_tp1_v0202_qualified.json`.
 
 The launcher compares both fully resolved Hydra configs after removing exactly
-that nested key. It rejects differences in source commits, container digest,
+that nested key. It first requires the key to be absent from original, present
+with the exact package-relative filename in adaptive, and bound to the expected
+JSON SHA256. It rejects differences in source commits, container digest,
 checkpoint, topology, seed, or any other resolved setting.
+
+Set the canonical checkout before invoking any launcher command. Slurm runs a
+spooled copy of submitted scripts, so the launcher never derives repository
+paths from its own filename:
+
+```bash
+export NEMO_RL_REPO_ROOT=$(pwd -P)
+source "$NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout/cluster/oci-hsg.env"
+```
+
+Both `NEMO_RL_REPO_ROOT` and `NEMO_RL_EXPERIMENT_ROOT` must be absolute paths
+on shared storage mounted at the same location in the container. The launcher
+validates and explicitly exports both paths with every `sbatch` call.
 
 ## Stage the container
 
@@ -34,20 +49,21 @@ same package path on every node instead of creating a node-local bootstrap.
 Import it on OCI-HSG with the standard two-step scheduling protocol:
 
 ```bash
-source experiments/mxfp8_adaptive_rollout/cluster/oci-hsg.env
+export NEMO_RL_REPO_ROOT=$(pwd -P)
+source "$NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout/cluster/oci-hsg.env"
 
 sbatch --test-only \
   --account="${SLURM_ACCOUNT}" \
   --partition="${PARTITION}" \
   --qos="${QOS}" \
-  --export=ALL,SOURCE_IMAGE=<registry/repository:immutable-tag>,OUTPUT_PREFIX=nemo_rl_mxfp8_adaptive,CONTAINER_DIR="${CONTAINER_ROOT}",SOURCE_COMMIT="nemo-$(git rev-parse HEAD)_vllm-bc5881924556fcf830f8158815d5a62cef0fbcba" \
+  --export=ALL,SOURCE_IMAGE=<registry/repository:immutable-tag>,OUTPUT_PREFIX=nemo_rl_mxfp8_adaptive,CONTAINER_DIR="${CONTAINER_ROOT}",SOURCE_COMMIT="$(git rev-parse HEAD)" \
   scripts/stage_enroot_image.sbatch
 
 sbatch --parsable \
   --account="${SLURM_ACCOUNT}" \
   --partition="${PARTITION}" \
   --qos="${QOS}" \
-  --export=ALL,SOURCE_IMAGE=<registry/repository:immutable-tag>,OUTPUT_PREFIX=nemo_rl_mxfp8_adaptive,CONTAINER_DIR="${CONTAINER_ROOT}",SOURCE_COMMIT="nemo-$(git rev-parse HEAD)_vllm-bc5881924556fcf830f8158815d5a62cef0fbcba" \
+  --export=ALL,SOURCE_IMAGE=<registry/repository:immutable-tag>,OUTPUT_PREFIX=nemo_rl_mxfp8_adaptive,CONTAINER_DIR="${CONTAINER_ROOT}",SOURCE_COMMIT="$(git rev-parse HEAD)" \
   scripts/stage_enroot_image.sbatch
 ```
 
@@ -62,7 +78,7 @@ the currently faster scheduling preflight is:
 SLURM_ACCOUNT=nemotron_sw_pre \
 CONTAINER_IMAGE=<immutable-sqsh> \
 ACTION=test-only \
-bash experiments/mxfp8_adaptive_rollout/run_ab.sh trace
+bash "$NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout/run_ab.sh" trace
 ```
 
 ## One-node/four-GPU smoke
@@ -72,7 +88,8 @@ NeMo-RL, Transformer Engine, Megatron Core, the exact custom vLLM source and
 commit, vLLM/FlashInfer versions, loader import, and JSON model/TP/hash.
 
 ```bash
-source experiments/mxfp8_adaptive_rollout/cluster/oci-hsg.env
+export NEMO_RL_REPO_ROOT=$(pwd -P)
+source "$NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout/cluster/oci-hsg.env"
 export CONTAINER_IMAGE=<immutable-sqsh>
 export EXPECTED_CONTAINER_SHA256=<raw-sha256>
 export EXPECTED_NEMO_RL_COMMIT=$(git rev-parse HEAD)
@@ -87,7 +104,7 @@ sbatch --test-only \
   --ntasks-per-node=1 \
   --gres=gpu:4 \
   --switches="${SLURM_SWITCHES}" \
-  --wrap="srun --container-image=${CONTAINER_IMAGE} --container-mounts=/lustre:/lustre,/scratch:/scratch bash ${REPO_ROOT}/experiments/mxfp8_adaptive_rollout/smoke_container.sh"
+  --wrap="srun --container-image=${CONTAINER_IMAGE} --container-mounts=/lustre:/lustre,/scratch:/scratch bash ${NEMO_RL_REPO_ROOT}/experiments/mxfp8_adaptive_rollout/smoke_container.sh"
 ```
 
 Repeat without `--test-only`, monitor for at least five minutes, and record the
@@ -109,11 +126,11 @@ Run every stage first with `ACTION=test-only`, then with `ACTION=submit`:
 export CONTAINER_IMAGE=<immutable-sqsh>
 export BOOTSTRAP_CONFIG_SHA256=<raw-bootstrap-json-sha256>
 
-ACTION=test-only bash experiments/mxfp8_adaptive_rollout/run_ab.sh trace
-ACTION=submit bash experiments/mxfp8_adaptive_rollout/run_ab.sh trace
+ACTION=test-only bash "$NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout/run_ab.sh" trace
+ACTION=submit bash "$NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout/run_ab.sh" trace
 
-ACTION=test-only bash experiments/mxfp8_adaptive_rollout/run_ab.sh shmoo
-ACTION=submit bash experiments/mxfp8_adaptive_rollout/run_ab.sh shmoo
+ACTION=test-only bash "$NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout/run_ab.sh" shmoo
+ACTION=submit bash "$NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout/run_ab.sh" shmoo
 ```
 
 Each invocation gets a unique UTC-and-PID suite ID by default. A custom
@@ -124,7 +141,8 @@ choose a new suite or experiment root rather than deleting or overwriting them.
 
 Trace writes exact physical shapes and runs the custom vLLM `inventory`
 stage. Shmoo uses the same 4n4g allocation and requires at least three repeats
-before `promote` and byte-reproducing `validate --check`.
+before `promote` and byte-reproducing `validate --check`. Qualification fails
+if both promoted tactic tables are empty.
 
 If Qwen emits no eligible dense MXFP8 calls, the launcher writes the stable
 `not-applicable.json`, skips both performance arms, and names Nemotron 3 Ultra
@@ -140,27 +158,40 @@ export CONTAINER_IMAGE=<qualified-immutable-sqsh>
 export QUALIFIED_CONFIG_SHA256=<raw-qualified-json-sha256>
 export REPEATS=3
 
-ACTION=test-only bash experiments/mxfp8_adaptive_rollout/run_ab.sh ab
-ACTION=submit bash experiments/mxfp8_adaptive_rollout/run_ab.sh ab
+ACTION=test-only bash "$NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout/run_ab.sh" ab
+ACTION=submit bash "$NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout/run_ab.sh" ab
 ```
 
-The schedule is matched original/adaptive warmups followed by
-`original, adaptive` for each measured repeat. `REPEATS` values below three
-are rejected. Every run writes `resolved_config.json`, `metadata.json`,
-`runtime.env`, and `run.log` before or during the launch under the ignored
-shared experiment root.
+The schedule alternates `original, adaptive` for each measured repeat, and
+`REPEATS` values below three are rejected. Each measured job runs
+`WARMUP_STEPS` cold steps (default one) followed by `MEASURE_STEPS` measured
+steps (default three) in the same allocation and process lifecycle. The parser
+uses the recorded warmup count to discard those cold steps.
+
+Both arms enable the same runtime dispatch tracing and use identical
+container-visible paths. Fresh run-local shared directories are bind-mounted at
+those paths so neither resolved config nor prior raw output is reused.
+Adaptive acceptance requires at least one runtime tactic-hit record and every
+promoted shape to hit its exact tactic. `tactic_coverage.json` reports the
+fallback fraction among distinct dispatch records for unqualified shapes;
+fallback for a qualified shape and all-default/fallback execution are rejected.
+Every run also writes `resolved_config.json`, `metadata.json`, `runtime.env`,
+and `run.log` under the ignored shared experiment root.
 
 Parse only measured logs:
 
 ```bash
-python3 experiments/mxfp8_adaptive_rollout/parse_results.py parse \
+python3 "$NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout/parse_results.py" parse \
   --log <measured-original-run.log> \
   --log <measured-adaptive-run.log> \
   --json-output experiments/mxfp8_adaptive_rollout/report/results.json \
   --csv-output experiments/mxfp8_adaptive_rollout/report/results.csv
 ```
 
-The stable summaries include rollout wall time, generation time, total step
-time, generated tokens, generated-token throughput per GPU, step, arm, repeat,
-source commits, container digest, config hash, TP, and seed. Both output paths
-must be new; the parser atomically creates them and refuses replacement.
+The stable summaries include independently logged whole-run wall time,
+generation time, total step time, generated tokens, generated-token throughput
+per GPU, runtime tactic hits, distinct-record fallback rate, step, arm, repeat,
+source commits, container digest, config hash, TP, and seed. Whole-run wall time
+is measured by monotonic launcher boundaries and is repeated on measured step
+rows; it is not presented as per-step rollout latency. Both output paths must
+be new; the parser atomically creates them and refuses replacement.

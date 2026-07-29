@@ -27,18 +27,20 @@
 - [ ] Require BF16/reference correctness and cosine similarity at least 0.999.
 - [ ] Promote only median speedup of at least 1.02 versus tactic `-1`.
 - [ ] Reproduce the qualified JSON bytes with `validate --check`.
+- [ ] Reject qualification if the promoted tactic tables are both empty.
 - [ ] Install the qualified package-relative JSON in a rebuilt immutable image.
 - [ ] Repeat the one-node/four-GPU smoke against the qualified JSON.
 
 ## Matched A/B gate
 
-- [ ] Run one original and one adaptive warmup.
 - [ ] Run at least three alternating measured original/adaptive repeats.
+- [ ] Run and discard cold steps inside every measured arm's own allocation.
 - [ ] Confirm the resolved-config guard passes for every pair.
 - [ ] Confirm every qualified shape hits its tactic and unseen shapes use `-1`.
+- [ ] Reject zero runtime tactic hits and record distinct-dispatch fallback rate.
 - [ ] Parse stable JSON and CSV summaries.
 - [ ] Require correctness, higher median output-token throughput, lower median
-  rollout latency, p95 rollout latency regression no greater than 2%, and no
-  end-to-end step-time regression.
+  generation time, and no total-step or independently measured run-wall
+  regression. Do not infer rollout latency from generation timing.
 - [ ] Save job IDs, raw artifacts, summary tables, and the conclusion under
   the ignored local `report/` directory.

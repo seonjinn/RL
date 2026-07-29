@@ -2,11 +2,23 @@
 
 set -euo pipefail
 
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -L)
-PARSER="$SCRIPT_DIR/parse_results.py"
-PERFORMANCE_CONFIG="$SCRIPT_DIR/configs/grpo_qwen3_30ba3b_4n4g.yaml"
+: "${NEMO_RL_REPO_ROOT:?Set NEMO_RL_REPO_ROOT to the canonical shared checkout}"
+if [[ "$NEMO_RL_REPO_ROOT" != /* || ! -d "$NEMO_RL_REPO_ROOT" ]]; then
+  echo "NEMO_RL_REPO_ROOT must be an existing absolute directory" >&2
+  exit 2
+fi
+REPO_ROOT=$(cd "$NEMO_RL_REPO_ROOT" && pwd -P)
+if [[ "$REPO_ROOT" != "$NEMO_RL_REPO_ROOT" || "$REPO_ROOT" == *","* ]]; then
+  echo "NEMO_RL_REPO_ROOT must be canonical and contain no comma" >&2
+  exit 2
+fi
+export NEMO_RL_REPO_ROOT="$REPO_ROOT"
+EXPERIMENT_DIR="$REPO_ROOT/experiments/mxfp8_adaptive_rollout"
+LAUNCHER="$EXPERIMENT_DIR/run_ab.sh"
+PARSER="$EXPERIMENT_DIR/parse_results.py"
+PERFORMANCE_CONFIG="$EXPERIMENT_DIR/configs/grpo_qwen3_30ba3b_4n4g.yaml"
 TRACE_CONFIG_REL="examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-adaptive-trace.yaml"
-PROFILE_DEFAULT="$SCRIPT_DIR/cluster/oci-hsg.env"
+PROFILE_DEFAULT="$EXPERIMENT_DIR/cluster/oci-hsg.env"
 
 VLLM_REPOSITORY="https://github.com/seonjinn/vllm.git"
 VLLM_COMMIT="bc5881924556fcf830f8158815d5a62cef0fbcba"
@@ -50,6 +62,27 @@ write_lines_new() {
   )
 }
 
+require_container_visible_path() {
+  local path=$1
+  local mount
+  local source
+  local destination
+  local -a mounts
+
+  IFS=',' read -r -a mounts <<<"$CONTAINER_MOUNTS"
+  for mount in "${mounts[@]}"; do
+    source=${mount%%:*}
+    destination=${mount#*:}
+    destination=${destination%%:*}
+    if [[ "$source" == "$destination" &&
+          ( "$path" == "$destination" || "$path" == "$destination/"* ) ]]; then
+      return 0
+    fi
+  done
+  echo "path is not visible at the same absolute location in the container: $path" >&2
+  exit 2
+}
+
 load_profile() {
   local profile=$1
   require_file "$profile"
@@ -61,9 +94,19 @@ load_profile() {
   : "${NUM_NODES:?profile must set NUM_NODES}"
   : "${GPUS_PER_NODE:?profile must set GPUS_PER_NODE}"
   : "${SLURM_SWITCHES:?profile must set SLURM_SWITCHES}"
-  : "${REPO_ROOT:?profile must set REPO_ROOT}"
-  : "${EXPERIMENT_ROOT:?profile must set EXPERIMENT_ROOT}"
+  : "${NEMO_RL_EXPERIMENT_ROOT:?profile must set NEMO_RL_EXPERIMENT_ROOT}"
   : "${CONTAINER_IMAGE:?set CONTAINER_IMAGE to an immutable staged .sqsh}"
+  : "${CONTAINER_MOUNTS:?profile must set CONTAINER_MOUNTS}"
+  if [[ "$NEMO_RL_EXPERIMENT_ROOT" != /* ||
+        "$NEMO_RL_EXPERIMENT_ROOT" == *"/../"* ||
+        "$NEMO_RL_EXPERIMENT_ROOT" == *","* ]]; then
+    echo "NEMO_RL_EXPERIMENT_ROOT must be an absolute normalized path without comma" >&2
+    exit 2
+  fi
+  export NEMO_RL_EXPERIMENT_ROOT
+  EXPERIMENT_ROOT="$NEMO_RL_EXPERIMENT_ROOT"
+  require_container_visible_path "$REPO_ROOT"
+  require_container_visible_path "$EXPERIMENT_ROOT"
   if [[ "$NUM_NODES" != "4" || "$GPUS_PER_NODE" != "4" ]]; then
     echo "Qwen 4n4g requires NUM_NODES=4 and GPUS_PER_NODE=4" >&2
     exit 2
@@ -103,8 +146,7 @@ submit_job() {
   local mode=$1
   local run_id=$2
   local repeat=$3
-  local warmup=$4
-  local dependency=${5:-}
+  local dependency=${4:-}
   local action=${ACTION:-test-only}
   local -a args
   local output
@@ -121,7 +163,7 @@ submit_job() {
     --time="$WALLTIME"
     --job-name="mxfp8-${mode}-${repeat}"
     --output="$EXPERIMENT_ROOT/slurm/%x-%j.out"
-    --export="ALL,MODE=$mode,RUN_ID=$run_id,REPEAT=$repeat,WARMUP=$warmup,PROFILE_PATH=$PROFILE_PATH"
+    --export="ALL,MODE=$mode,RUN_ID=$run_id,REPEAT=$repeat,PROFILE_PATH=$PROFILE_PATH,NEMO_RL_REPO_ROOT=$REPO_ROOT,NEMO_RL_EXPERIMENT_ROOT=$EXPERIMENT_ROOT"
   )
   if [[ -n "$dependency" ]]; then
     args+=(--dependency="afterok:$dependency")
@@ -130,13 +172,13 @@ submit_job() {
   case "$action" in
     test-only)
       args+=(--test-only)
-      output=$(sbatch "${args[@]}" "$SCRIPT_DIR/run_ab.sh")
+      output=$(sbatch "${args[@]}" "$LAUNCHER")
       echo "$output" >&2
       ;;
     submit)
-      output=$(sbatch --parsable "${args[@]}" "$SCRIPT_DIR/run_ab.sh")
+      output=$(sbatch --parsable "${args[@]}" "$LAUNCHER")
       output=${output%%;*}
-      echo "submitted mode=$mode repeat=$repeat warmup=$warmup job=$output" >&2
+      echo "submitted mode=$mode repeat=$repeat job=$output" >&2
       echo "$output"
       ;;
     *)
@@ -178,19 +220,15 @@ submit_suite() {
 
   if [[ "$mode" != "ab" ]]; then
     submit_job "$mode" "$suite_id/measured-${mode}-r${REPEAT:-1}" \
-      "${REPEAT:-1}" 0
+      "${REPEAT:-1}"
   else
-    schedule="original-warmup,adaptive-warmup,(original,adaptive)x${repeats}"
-    job_id=$(submit_job original "$suite_id/warmup-original-r0" 0 1 "$dependency")
-    [[ -n "$job_id" ]] && dependency=$job_id
-    job_id=$(submit_job adaptive "$suite_id/warmup-adaptive-r0" 0 1 "$dependency")
-    [[ -n "$job_id" ]] && dependency=$job_id
+    schedule="(original,adaptive)x${repeats};in-job-warmup-discarded"
     for ((repeat = 1; repeat <= repeats; repeat++)); do
       job_id=$(submit_job original \
-        "$suite_id/measured-original-r${repeat}" "$repeat" 0 "$dependency")
+        "$suite_id/measured-original-r${repeat}" "$repeat" "$dependency")
       [[ -n "$job_id" ]] && dependency=$job_id
       job_id=$(submit_job adaptive \
-        "$suite_id/measured-adaptive-r${repeat}" "$repeat" 0 "$dependency")
+        "$suite_id/measured-adaptive-r${repeat}" "$repeat" "$dependency")
       [[ -n "$job_id" ]] && dependency=$job_id
     done
   fi
@@ -207,6 +245,10 @@ submit_suite() {
 }
 
 run_in_allocation() {
+  local run_dir="$EXPERIMENT_ROOT/runs/$RUN_ID"
+  local configured_log_dir="$run_dir/configured_logs"
+  local runtime_trace_dir="$run_dir/runtime_dispatch"
+
   check_container
   if [[ ! "$RUN_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
     echo "RUN_ID must contain one filesystem-safe suite/run pair: $RUN_ID" >&2
@@ -225,7 +267,6 @@ run_in_allocation() {
   export CONTAINER_SHA256
   CONTAINER_SHA256=$(sha256sum "$CONTAINER_IMAGE" | awk '{print $1}')
   export CONTAINER="$CONTAINER_IMAGE"
-  export MOUNTS="$CONTAINER_MOUNTS"
   export GPUS_PER_NODE
   export HF_HOME
   export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$HF_HOME/datasets}"
@@ -243,11 +284,17 @@ run_in_allocation() {
   export NRL_FORCE_REBUILD_VENVS=false
 
   mkdir -p "$EXPERIMENT_ROOT/slurm" "$CACHE_ROOT/uv"
-  if ! mkdir "$EXPERIMENT_ROOT/runs/$RUN_ID"; then
+  if ! mkdir "$run_dir"; then
     echo "run output already exists; refusing rerun: $RUN_ID" >&2
     exit 2
   fi
-  export COMMAND="cd '$REPO_ROOT' && bash '$SCRIPT_DIR/run_ab.sh' __container '$MODE' '$RUN_ID' '$REPEAT' '$WARMUP'"
+  if [[ "$MODE" == "original" || "$MODE" == "adaptive" ]]; then
+    mkdir "$configured_log_dir" "$runtime_trace_dir"
+    export MOUNTS="$CONTAINER_MOUNTS,$configured_log_dir:/mxfp8_configured_logs,$runtime_trace_dir:/mxfp8_runtime_trace"
+  else
+    export MOUNTS="$CONTAINER_MOUNTS"
+  fi
+  export COMMAND="cd '$REPO_ROOT' && bash '$LAUNCHER' __container '$MODE' '$RUN_ID' '$REPEAT'"
   exec bash "$REPO_ROOT/ray.sub"
 }
 
@@ -305,6 +352,7 @@ make_metadata() {
   local config_hash=$4
   local resolved_config=$5
   local output=$6
+  local warmup_steps=${7:-0}
 
   "$python_bin" "$PARSER" make-metadata \
     --arm "$arm" \
@@ -319,6 +367,7 @@ make_metadata() {
     --num-nodes "$NUM_NODES" \
     --gpus-per-node "$GPUS_PER_NODE" \
     --num-samples "$NUM_SAMPLES" \
+    --warmup-steps "$warmup_steps" \
     --resolved-config "$resolved_config" \
     --output "$output"
 }
@@ -512,6 +561,7 @@ run_shmoo() {
     --model "$MODEL" \
     --tensor-parallel-size "$TP_SIZE" \
     --check
+  "$python_bin" "$PARSER" validate-qualified --manifest "$qualified"
   write_lines_new "$qualified.sha256" "$(sha256sum "$qualified")"
 }
 
@@ -521,40 +571,50 @@ run_performance_arm() {
   local arm=$3
   local run_id=$4
   local repeat=$5
-  local warmup=$6
   local run_dir="$EXPERIMENT_ROOT/runs/$run_id"
-  local phase="measured"
-  local steps=${MEASURE_STEPS:-3}
+  local runtime_trace_dir="$run_dir/runtime_dispatch"
+  local warmup_steps=${WARMUP_STEPS:-1}
+  local measured_steps=${MEASURE_STEPS:-3}
+  local total_steps
   local config_hash="none"
   local qualified_path
   local actual_qualified_sha256
   local pair_dir
   local pair_name
   local peer_metadata
+  local run_start_ns
+  local coverage_output="$run_dir/tactic_coverage.json"
+  local trace_file
+  local -a runtime_trace_files=()
+  local -a runtime_trace_args=()
   local -a overrides
 
   if [[ -f "$EXPERIMENT_ROOT/not-applicable.json" ]]; then
     echo "Qwen performance skipped: $EXPERIMENT_ROOT/not-applicable.json"
     return 0
   fi
-  if [[ "$warmup" == "1" ]]; then
-    phase="warmup"
-    steps=${WARMUP_STEPS:-1}
+  if [[ ! "$warmup_steps" =~ ^[0-9]+$ || "$warmup_steps" -lt 1 ||
+        ! "$measured_steps" =~ ^[0-9]+$ || "$measured_steps" -lt 1 ]]; then
+    echo "WARMUP_STEPS and MEASURE_STEPS must be positive integers" >&2
+    exit 2
   fi
+  total_steps=$((warmup_steps + measured_steps))
   pair_dir=$(dirname "$run_dir")
-  pair_name="${phase}-r${repeat}"
+  pair_name="measured-r${repeat}"
   overrides=(
-    "grpo.max_num_steps=$steps"
+    "grpo.max_num_steps=$total_steps"
     "grpo.seed=$SEED"
     "checkpointing.enabled=false"
-    "logger.log_dir=$pair_dir/configured_logs/$pair_name"
+    "logger.log_dir=/mxfp8_configured_logs"
     "logger.wandb.name=mxfp8-qwen-$pair_name"
+    "++policy.generation.vllm_cfg.env_vars.VLLM_MXFP8_DENSE_SHAPE_TRACE=1"
+    "++policy.generation.vllm_cfg.env_vars.VLLM_MXFP8_DENSE_SHAPE_TRACE_DIR=/mxfp8_runtime_trace"
   )
 
   case "$arm" in
     original)
       unset VLLM_MXFP8_DENSE_CONFIG_FILE
-      peer_metadata="$pair_dir/${phase}-adaptive-r${repeat}/metadata.json"
+      peer_metadata="$pair_dir/measured-adaptive-r${repeat}/metadata.json"
       ;;
     adaptive)
       : "${QUALIFIED_CONFIG_SHA256:?Set QUALIFIED_CONFIG_SHA256 from the rebuilt image}"
@@ -565,12 +625,13 @@ run_performance_arm() {
         echo "qualified config SHA256 does not match the built package" >&2
         exit 2
       fi
+      "$python_bin" "$PARSER" validate-qualified --manifest "$qualified_path"
       export VLLM_MXFP8_DENSE_CONFIG_FILE="$QUALIFIED_CONFIG_NAME"
       config_hash="$QUALIFIED_CONFIG_SHA256"
       overrides+=(
         "++policy.generation.vllm_cfg.env_vars.VLLM_MXFP8_DENSE_CONFIG_FILE=$QUALIFIED_CONFIG_NAME"
       )
-      peer_metadata="$pair_dir/${phase}-original-r${repeat}/metadata.json"
+      peer_metadata="$pair_dir/measured-original-r${repeat}/metadata.json"
       ;;
     *)
       echo "invalid performance arm: $arm" >&2
@@ -590,15 +651,21 @@ run_performance_arm() {
   resolve_config "$python_bin" "$PERFORMANCE_CONFIG" \
     "$run_dir/resolved_config.json" "${overrides[@]}"
   make_metadata "$python_bin" "$arm" "$repeat" "$config_hash" \
-    "$run_dir/resolved_config.json" "$run_dir/metadata.json"
+    "$run_dir/resolved_config.json" "$run_dir/metadata.json" "$warmup_steps"
 
   if [[ -f "$peer_metadata" ]]; then
     if [[ "$arm" == "original" ]]; then
       "$python_bin" "$PARSER" validate-pair \
-        --original "$run_dir/metadata.json" --adaptive "$peer_metadata"
+        --original "$run_dir/metadata.json" \
+        --adaptive "$peer_metadata" \
+        --expected-config-file "$QUALIFIED_CONFIG_NAME" \
+        --expected-config-sha256 "$QUALIFIED_CONFIG_SHA256"
     else
       "$python_bin" "$PARSER" validate-pair \
-        --original "$peer_metadata" --adaptive "$run_dir/metadata.json"
+        --original "$peer_metadata" \
+        --adaptive "$run_dir/metadata.json" \
+        --expected-config-file "$QUALIFIED_CONFIG_NAME" \
+        --expected-config-sha256 "$QUALIFIED_CONFIG_SHA256"
     fi
   elif [[ "$arm" == "adaptive" ]]; then
     echo "adaptive arm requires matched original metadata: $peer_metadata" >&2
@@ -606,19 +673,46 @@ run_performance_arm() {
   fi
 
   require_new_path "$run_dir/run.log"
+  run_start_ns=$(
+    "$python_bin" -c 'import time; print(time.monotonic_ns())'
+  )
   {
     "$python_bin" "$PARSER" emit-context \
       --metadata "$run_dir/metadata.json"
     "$python_bin" "$REPO_ROOT/examples/run_grpo.py" \
       --config "$PERFORMANCE_CONFIG" "${overrides[@]}"
+    "$python_bin" -c \
+      'import sys, time; print(f"MXFP8_RUN_WALL_TIME_S {(time.monotonic_ns() - int(sys.argv[1])) / 1e9:.9f}")' \
+      "$run_start_ns"
   } 2>&1 | tee "$run_dir/run.log"
+
+  if [[ "$arm" == "adaptive" ]]; then
+    while IFS= read -r -d '' trace_file; do
+      runtime_trace_files+=("$trace_file")
+    done < <(
+      find "$runtime_trace_dir" -type f \
+        -name 'adaptive_dispatch_*_*.jsonl' -print0 | sort -z
+    )
+    if (( ${#runtime_trace_files[@]} == 0 )); then
+      echo "adaptive runtime produced no tactic trace files" >&2
+      exit 2
+    fi
+    for trace_file in "${runtime_trace_files[@]}"; do
+      runtime_trace_args+=(--trace "$trace_file")
+    done
+    require_new_path "$coverage_output"
+    "$python_bin" "$PARSER" validate-runtime \
+      --manifest "$qualified_path" \
+      "${runtime_trace_args[@]}" \
+      --expected-config-sha256 "$QUALIFIED_CONFIG_SHA256" \
+      --output "$coverage_output" | tee -a "$run_dir/run.log"
+  fi
 }
 
 run_in_container() {
   local mode=$1
   local run_id=$2
   local repeat=$3
-  local warmup=$4
   local python_bin=${PYTHON_BIN:-/opt/nemo_rl_venv/bin/python}
   local run_dir="$EXPERIMENT_ROOT/runs/$run_id"
   local vllm_root
@@ -630,7 +724,17 @@ run_in_container() {
     echo "reserved run directory is missing: $run_dir" >&2
     exit 2
   fi
-  if find "$run_dir" -mindepth 1 -print -quit | grep -q .; then
+  if [[ "$mode" == "original" || "$mode" == "adaptive" ]]; then
+    if [[ ! -d "$run_dir/configured_logs" ||
+          ! -d "$run_dir/runtime_dispatch" ||
+          -n "$(find "$run_dir" -mindepth 1 -maxdepth 1 \
+            ! -name configured_logs ! -name runtime_dispatch -print -quit)" ||
+          -n "$(find "$run_dir/configured_logs" "$run_dir/runtime_dispatch" \
+            -mindepth 1 -print -quit)" ]]; then
+      echo "reserved performance run directory is not pristine: $run_dir" >&2
+      exit 2
+    fi
+  elif find "$run_dir" -mindepth 1 -print -quit | grep -q .; then
     echo "reserved run directory is not empty: $run_dir" >&2
     exit 2
   fi
@@ -653,7 +757,7 @@ run_in_container() {
       ;;
     original | adaptive)
       run_performance_arm \
-        "$python_bin" "$vllm_root" "$mode" "$run_id" "$repeat" "$warmup"
+        "$python_bin" "$vllm_root" "$mode" "$run_id" "$repeat"
       ;;
     *)
       echo "unsupported container mode: $mode" >&2
@@ -684,7 +788,6 @@ load_profile "$PROFILE_PATH"
 if [[ -n "${SLURM_JOB_ID:-}" ]]; then
   : "${RUN_ID:?RUN_ID is required in an allocation}"
   : "${REPEAT:?REPEAT is required in an allocation}"
-  : "${WARMUP:?WARMUP is required in an allocation}"
   run_in_allocation
   exit 0
 fi

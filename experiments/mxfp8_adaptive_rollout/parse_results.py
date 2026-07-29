@@ -30,16 +30,24 @@ from typing import Mapping, NamedTuple, Sequence
 
 
 METADATA_PREFIX = "MXFP8_AB_METADATA "
+RUN_WALL_PREFIX = "MXFP8_RUN_WALL_TIME_S "
+TACTIC_COVERAGE_PREFIX = "MXFP8_TACTIC_COVERAGE "
 CONFIG_ENV_KEY = "VLLM_MXFP8_DENSE_CONFIG_FILE"
 CSV_FIELDS = (
     "step",
     "arm",
     "repeat",
-    "rollout_wall_time_s",
+    "run_wall_time_s",
     "generation_time_s",
     "total_step_time_s",
     "output_tokens",
     "output_tokens_per_second_per_gpu",
+    "runtime_record_count",
+    "tactic_hit_record_count",
+    "fallback_record_count",
+    "fallback_record_rate",
+    "qualified_tactic_count",
+    "qualified_tactics_hit",
     "vllm_commit",
     "nemo_rl_commit",
     "container_digest",
@@ -58,6 +66,7 @@ REQUIRED_METADATA = (
     "seed",
     "num_samples",
     "generation_num_gpus",
+    "warmup_steps",
 )
 MATCHED_PROVENANCE_FIELDS = (
     "nemo_rl_commit",
@@ -75,11 +84,15 @@ FLOAT_PATTERNS = {
     "generation_time_s": re.compile(
         r"(?m)^\s*[•*-]\s+generation:\s*(?P<value>\d+(?:\.\d+)?)s"
     ),
-    "rollout_wall_time_s": re.compile(
-        r"timing/rollout/(?:run_rollouts|total):\s*"
-        r"(?P<value>\d+(?:\.\d+)?)s"
-    ),
 }
+COVERAGE_FIELDS = (
+    "runtime_record_count",
+    "tactic_hit_record_count",
+    "fallback_record_count",
+    "fallback_record_rate",
+    "qualified_tactic_count",
+    "qualified_tactics_hit",
+)
 
 
 class ResultRecord(NamedTuple):
@@ -88,11 +101,17 @@ class ResultRecord(NamedTuple):
     step: int
     arm: str
     repeat: int
-    rollout_wall_time_s: float
+    run_wall_time_s: float
     generation_time_s: float
     total_step_time_s: float
     output_tokens: int
     output_tokens_per_second_per_gpu: float
+    runtime_record_count: int | None
+    tactic_hit_record_count: int | None
+    fallback_record_count: int | None
+    fallback_record_rate: float | None
+    qualified_tactic_count: int | None
+    qualified_tactics_hit: int | None
     vllm_commit: str
     nemo_rl_commit: str
     container_digest: str
@@ -111,6 +130,13 @@ def _positive_int(metadata: Mapping[str, object], key: str) -> int:
     value = _required_value(metadata, key)
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"metadata field {key!r} must be a positive integer")
+    return value
+
+
+def _nonnegative_int(metadata: Mapping[str, object], key: str) -> int:
+    value = _required_value(metadata, key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"metadata field {key!r} must be a nonnegative integer")
     return value
 
 
@@ -140,6 +166,7 @@ def _metadata_from_log(text: str) -> dict[str, object]:
     _positive_int(metadata, "tensor_parallel_size")
     _positive_int(metadata, "num_samples")
     _positive_int(metadata, "generation_num_gpus")
+    _nonnegative_int(metadata, "warmup_steps")
     seed = metadata["seed"]
     if isinstance(seed, bool) or not isinstance(seed, int):
         raise ValueError("metadata field 'seed' must be an integer")
@@ -161,6 +188,67 @@ def _metric(block: str, name: str) -> float:
     return float(match.group("value"))
 
 
+def _run_wall_time(text: str) -> float:
+    values = [
+        line.removeprefix(RUN_WALL_PREFIX)
+        for line in text.splitlines()
+        if line.startswith(RUN_WALL_PREFIX)
+    ]
+    if len(values) != 1:
+        raise ValueError(
+            f"expected exactly one independent run wall measurement, found {len(values)}"
+        )
+    try:
+        run_wall_time_s = float(values[0])
+    except ValueError as error:
+        raise ValueError("run wall measurement must be a number") from error
+    if run_wall_time_s <= 0:
+        raise ValueError("run wall measurement must be positive")
+    return run_wall_time_s
+
+
+def _tactic_coverage_from_log(
+    text: str, *, arm: object
+) -> dict[str, int | float | None]:
+    coverage_lines = [
+        line.removeprefix(TACTIC_COVERAGE_PREFIX)
+        for line in text.splitlines()
+        if line.startswith(TACTIC_COVERAGE_PREFIX)
+    ]
+    if arm == "original":
+        if coverage_lines:
+            raise ValueError("original log must not contain adaptive tactic coverage")
+        return {field: None for field in COVERAGE_FIELDS}
+    if len(coverage_lines) != 1:
+        raise ValueError("adaptive log must contain exactly one tactic coverage record")
+    try:
+        coverage = json.loads(coverage_lines[0])
+    except json.JSONDecodeError as error:
+        raise ValueError("adaptive tactic coverage is not valid JSON") from error
+    if not isinstance(coverage, dict):
+        raise ValueError("adaptive tactic coverage must be a JSON object")
+
+    integer_fields = set(COVERAGE_FIELDS) - {"fallback_record_rate"}
+    for field in integer_fields:
+        value = _required_value(coverage, field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"adaptive tactic coverage {field} must be nonnegative")
+    fallback_rate = _required_value(coverage, "fallback_record_rate")
+    if (
+        isinstance(fallback_rate, bool)
+        or not isinstance(fallback_rate, (int, float))
+        or not 0 <= fallback_rate <= 1
+    ):
+        raise ValueError("adaptive tactic coverage fallback_record_rate is invalid")
+    if coverage["tactic_hit_record_count"] <= 0:
+        raise ValueError("adaptive tactic coverage has zero runtime tactic-hit records")
+    if coverage["qualified_tactic_count"] <= 0:
+        raise ValueError("adaptive tactic coverage has zero promoted tactics")
+    if coverage["qualified_tactics_hit"] != coverage["qualified_tactic_count"]:
+        raise ValueError("adaptive tactic coverage did not hit every qualified tactic")
+    return {field: coverage[field] for field in COVERAGE_FIELDS}
+
+
 def parse_log(text: str) -> list[ResultRecord]:
     """Parse all measured step blocks from one launcher log.
 
@@ -174,6 +262,8 @@ def parse_log(text: str) -> list[ResultRecord]:
         ValueError: If provenance or a required metric is missing or malformed.
     """
     metadata = _metadata_from_log(text)
+    run_wall_time_s = _run_wall_time(text)
+    coverage = _tactic_coverage_from_log(text, arm=metadata["arm"])
     step_matches = list(STEP_RE.finditer(text))
     if not step_matches:
         raise ValueError("log contains no NeMo-RL step blocks")
@@ -181,7 +271,11 @@ def parse_log(text: str) -> list[ResultRecord]:
     records: list[ResultRecord] = []
     num_samples = _positive_int(metadata, "num_samples")
     generation_num_gpus = _positive_int(metadata, "generation_num_gpus")
+    warmup_steps = _nonnegative_int(metadata, "warmup_steps")
     for index, step_match in enumerate(step_matches):
+        step = int(step_match.group("step"))
+        if step <= warmup_steps:
+            continue
         block_end = (
             step_matches[index + 1].start()
             if index + 1 < len(step_matches)
@@ -189,28 +283,28 @@ def parse_log(text: str) -> list[ResultRecord]:
         )
         block = text[step_match.end() : block_end]
         generation_time_s = _metric(block, "generation_time_s")
-        rollout_match = FLOAT_PATTERNS["rollout_wall_time_s"].search(block)
-        rollout_wall_time_s = (
-            float(rollout_match.group("value"))
-            if rollout_match is not None
-            else generation_time_s
-        )
-        if rollout_wall_time_s <= 0:
-            raise ValueError("rollout wall time must be positive")
+        if generation_time_s <= 0:
+            raise ValueError("generation time must be positive")
         mean_generation_length = _metric(block, "mean_generation_length")
         output_tokens = round(mean_generation_length * num_samples)
         records.append(
             ResultRecord(
-                step=int(step_match.group("step")),
+                step=step,
                 arm=str(metadata["arm"]),
                 repeat=int(metadata["repeat"]),
-                rollout_wall_time_s=rollout_wall_time_s,
+                run_wall_time_s=run_wall_time_s,
                 generation_time_s=generation_time_s,
                 total_step_time_s=_metric(block, "total_step_time_s"),
                 output_tokens=output_tokens,
                 output_tokens_per_second_per_gpu=(
-                    output_tokens / rollout_wall_time_s / generation_num_gpus
+                    output_tokens / generation_time_s / generation_num_gpus
                 ),
+                runtime_record_count=coverage["runtime_record_count"],
+                tactic_hit_record_count=coverage["tactic_hit_record_count"],
+                fallback_record_count=coverage["fallback_record_count"],
+                fallback_record_rate=coverage["fallback_record_rate"],
+                qualified_tactic_count=coverage["qualified_tactic_count"],
+                qualified_tactics_hit=coverage["qualified_tactics_hit"],
                 vllm_commit=str(metadata["vllm_commit"]),
                 nemo_rl_commit=str(metadata["nemo_rl_commit"]),
                 container_digest=str(metadata["container_digest"]),
@@ -219,25 +313,39 @@ def parse_log(text: str) -> list[ResultRecord]:
                 seed=int(metadata["seed"]),
             )
         )
+    if not records:
+        raise ValueError("log contains no measured steps after warmup exclusion")
     return records
+
+
+def _config_environment(config: object) -> dict[str, object] | None:
+    if not isinstance(config, dict):
+        raise ValueError("resolved_config must be a JSON object")
+    policy = config.get("policy")
+    if not isinstance(policy, dict):
+        return None
+    generation = policy.get("generation")
+    if not isinstance(generation, dict):
+        return None
+    vllm_cfg = generation.get("vllm_cfg")
+    if not isinstance(vllm_cfg, dict):
+        return None
+    env_vars = vllm_cfg.get("env_vars")
+    if env_vars is None:
+        return None
+    if not isinstance(env_vars, dict):
+        raise ValueError("resolved config vllm_cfg.env_vars must be a mapping")
+    return env_vars
 
 
 def _strip_adaptive_config_key(config: object) -> object:
     normalized = copy.deepcopy(config)
-    if not isinstance(normalized, dict):
-        raise ValueError("resolved_config must be a JSON object")
-    policy = normalized.get("policy")
-    if not isinstance(policy, dict):
+    env_vars = _config_environment(normalized)
+    if env_vars is None:
         return normalized
-    generation = policy.get("generation")
-    if not isinstance(generation, dict):
-        return normalized
-    vllm_cfg = generation.get("vllm_cfg")
-    if not isinstance(vllm_cfg, dict):
-        return normalized
-    env_vars = vllm_cfg.get("env_vars")
-    if not isinstance(env_vars, dict):
-        return normalized
+    policy = normalized["policy"]
+    generation = policy["generation"]
+    vllm_cfg = generation["vllm_cfg"]
     env_vars.pop(CONFIG_ENV_KEY, None)
     if not env_vars:
         vllm_cfg.pop("env_vars")
@@ -245,7 +353,11 @@ def _strip_adaptive_config_key(config: object) -> object:
 
 
 def validate_ab_pair(
-    original: Mapping[str, object], adaptive: Mapping[str, object]
+    original: Mapping[str, object],
+    adaptive: Mapping[str, object],
+    *,
+    expected_config_file: str,
+    expected_config_sha256: str,
 ) -> None:
     """Reject an A/B pair with any difference outside the adaptive JSON key."""
     for field in MATCHED_PROVENANCE_FIELDS:
@@ -254,16 +366,149 @@ def validate_ab_pair(
         if original_value != adaptive_value:
             raise ValueError(f"A/B pair mismatch in {field}")
 
-    original_config = _strip_adaptive_config_key(
-        _required_value(original, "resolved_config")
-    )
-    adaptive_config = _strip_adaptive_config_key(
-        _required_value(adaptive, "resolved_config")
-    )
+    original_raw_config = _required_value(original, "resolved_config")
+    adaptive_raw_config = _required_value(adaptive, "resolved_config")
+    original_environment = _config_environment(original_raw_config) or {}
+    adaptive_environment = _config_environment(adaptive_raw_config) or {}
+    if CONFIG_ENV_KEY in original_environment:
+        raise ValueError(f"original arm requires {CONFIG_ENV_KEY} to be absent")
+    if adaptive_environment.get(CONFIG_ENV_KEY) != expected_config_file:
+        raise ValueError(
+            f"adaptive arm requires exact {CONFIG_ENV_KEY}={expected_config_file}"
+        )
+    if _required_value(original, "config_hash") != "none":
+        raise ValueError("original arm config_hash must be 'none'")
+    if _required_value(adaptive, "config_hash") != expected_config_sha256:
+        raise ValueError("adaptive arm config_hash does not match expected JSON SHA256")
+
+    original_config = _strip_adaptive_config_key(original_raw_config)
+    adaptive_config = _strip_adaptive_config_key(adaptive_raw_config)
     if original_config != adaptive_config:
         raise ValueError(
             f"A/B pair mismatch in resolved Hydra config outside {CONFIG_ENV_KEY}"
         )
+
+
+def validate_qualified_manifest(
+    manifest: Mapping[str, object],
+) -> dict[tuple[str, int, int, int], int]:
+    """Return all promoted tactics, rejecting empty or malformed manifests."""
+    tactics = _required_value(manifest, "tactics")
+    if not isinstance(tactics, dict):
+        raise ValueError("qualified manifest tactics must be a mapping")
+    promoted: dict[tuple[str, int, int, int], int] = {}
+    for layout in ("8x4", "128x4"):
+        entries = _required_value(tactics, layout)
+        if not isinstance(entries, list):
+            raise ValueError(f"qualified manifest tactics.{layout} must be an array")
+        for index, entry in enumerate(entries):
+            field = f"tactics.{layout}[{index}]"
+            if not isinstance(entry, dict):
+                raise ValueError(f"qualified manifest {field} must be an object")
+            values: list[int] = []
+            for name in ("m", "n", "k", "tactic"):
+                value = _required_value(entry, name)
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, int)
+                    or (name != "tactic" and value <= 0)
+                    or (name == "tactic" and value < 0)
+                ):
+                    raise ValueError(f"qualified manifest {field}.{name} is invalid")
+                values.append(value)
+            key = (layout, values[0], values[1], values[2])
+            if key in promoted:
+                raise ValueError(f"qualified manifest has duplicate tactic shape {key}")
+            promoted[key] = values[3]
+    if not promoted:
+        raise ValueError("qualified manifest has zero promoted tactics")
+    return promoted
+
+
+def validate_runtime_tactic_coverage(
+    manifest: Mapping[str, object],
+    trace_paths: Sequence[Path],
+    *,
+    expected_config_sha256: str,
+) -> dict[str, int | float]:
+    """Require every promoted tactic to hit and summarize runtime fallback records."""
+    promoted = validate_qualified_manifest(manifest)
+    if not trace_paths:
+        raise ValueError("adaptive runtime produced no tactic trace files")
+
+    runtime_records = 0
+    tactic_hit_records = 0
+    fallback_records = 0
+    hit_shapes: set[tuple[str, int, int, int]] = set()
+    for path in trace_paths:
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError(f"{path}:{line_number} is not valid JSON") from error
+            if not isinstance(record, dict):
+                raise ValueError(f"{path}:{line_number} must be a JSON object")
+            if record.get("event") != "mxfp8_adaptive_dispatch":
+                continue
+            if record.get("config_sha256") != expected_config_sha256:
+                raise ValueError(
+                    f"{path}:{line_number} config_sha256 does not match adaptive JSON"
+                )
+            layout = record.get("layout")
+            if layout not in {"8x4", "128x4"}:
+                raise ValueError(f"{path}:{line_number} has invalid layout")
+            dimensions: list[int] = []
+            for name in ("m", "n", "k"):
+                value = record.get(name)
+                if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                    raise ValueError(f"{path}:{line_number} has invalid {name}")
+                dimensions.append(value)
+            tactic = record.get("tactic")
+            if isinstance(tactic, bool) or not isinstance(tactic, int):
+                raise ValueError(f"{path}:{line_number} has invalid tactic")
+            shape = (layout, dimensions[0], dimensions[1], dimensions[2])
+            source = record.get("tactic_source")
+            runtime_records += 1
+            if source == "static_hint":
+                expected_tactic = promoted.get(shape)
+                if expected_tactic is None or tactic != expected_tactic:
+                    raise ValueError(
+                        f"{path}:{line_number} static tactic is not qualified"
+                    )
+                tactic_hit_records += 1
+                hit_shapes.add(shape)
+            elif source == "runner_default":
+                if shape in promoted:
+                    raise ValueError(
+                        f"{path}:{line_number} fell back for a qualified shape"
+                    )
+                if tactic != -1:
+                    raise ValueError(
+                        f"{path}:{line_number} runner_default tactic must be -1"
+                    )
+                fallback_records += 1
+            else:
+                raise ValueError(f"{path}:{line_number} has invalid tactic_source")
+
+    if tactic_hit_records == 0:
+        raise ValueError("adaptive runtime has zero runtime tactic-hit records")
+    missed = sorted(set(promoted) - hit_shapes)
+    if missed:
+        raise ValueError(f"qualified tactics were not hit at runtime: {missed}")
+    if runtime_records == 0:
+        raise ValueError("adaptive runtime produced zero dispatch records")
+    return {
+        "fallback_record_count": fallback_records,
+        "fallback_record_rate": fallback_records / runtime_records,
+        "qualified_tactic_count": len(promoted),
+        "qualified_tactics_hit": len(hit_shapes),
+        "runtime_record_count": runtime_records,
+        "tactic_hit_record_count": tactic_hit_records,
+    }
 
 
 def _record_sort_key(record: ResultRecord) -> tuple[int, int, int]:
@@ -396,8 +641,33 @@ def _parse_command(args: argparse.Namespace) -> int:
 
 
 def _validate_pair_command(args: argparse.Namespace) -> int:
-    validate_ab_pair(_load_json_object(args.original), _load_json_object(args.adaptive))
+    validate_ab_pair(
+        _load_json_object(args.original),
+        _load_json_object(args.adaptive),
+        expected_config_file=args.expected_config_file,
+        expected_config_sha256=args.expected_config_sha256,
+    )
     print("matched-ab-pair")
+    return 0
+
+
+def _validate_qualified_command(args: argparse.Namespace) -> int:
+    promoted = validate_qualified_manifest(_load_json_object(args.manifest))
+    print(f"promoted-tactics={len(promoted)}")
+    return 0
+
+
+def _validate_runtime_command(args: argparse.Namespace) -> int:
+    coverage = validate_runtime_tactic_coverage(
+        _load_json_object(args.manifest),
+        tuple(args.trace),
+        expected_config_sha256=args.expected_config_sha256,
+    )
+    _write_json_object(args.output, coverage)
+    print(
+        TACTIC_COVERAGE_PREFIX
+        + json.dumps(coverage, sort_keys=True, separators=(",", ":"))
+    )
     return 0
 
 
@@ -434,6 +704,7 @@ def _make_metadata_command(args: argparse.Namespace) -> int:
         "resolved_config_sha256": _sha256(args.resolved_config),
         "seed": args.seed,
         "tensor_parallel_size": args.tensor_parallel_size,
+        "warmup_steps": args.warmup_steps,
         "topology": {
             "gpus_per_node": args.gpus_per_node,
             "num_nodes": args.num_nodes,
@@ -458,7 +729,20 @@ def _parser() -> argparse.ArgumentParser:
     validate_pair = subparsers.add_parser("validate-pair")
     validate_pair.add_argument("--original", type=Path, required=True)
     validate_pair.add_argument("--adaptive", type=Path, required=True)
+    validate_pair.add_argument("--expected-config-file", required=True)
+    validate_pair.add_argument("--expected-config-sha256", required=True)
     validate_pair.set_defaults(handler=_validate_pair_command)
+
+    validate_qualified = subparsers.add_parser("validate-qualified")
+    validate_qualified.add_argument("--manifest", type=Path, required=True)
+    validate_qualified.set_defaults(handler=_validate_qualified_command)
+
+    validate_runtime = subparsers.add_parser("validate-runtime")
+    validate_runtime.add_argument("--manifest", type=Path, required=True)
+    validate_runtime.add_argument("--trace", type=Path, action="append", required=True)
+    validate_runtime.add_argument("--expected-config-sha256", required=True)
+    validate_runtime.add_argument("--output", type=Path, required=True)
+    validate_runtime.set_defaults(handler=_validate_runtime_command)
 
     emit_context = subparsers.add_parser("emit-context")
     emit_context.add_argument("--metadata", type=Path, required=True)
@@ -492,6 +776,7 @@ def _parser() -> argparse.ArgumentParser:
     make_metadata.add_argument("--num-nodes", type=int, required=True)
     make_metadata.add_argument("--gpus-per-node", type=int, required=True)
     make_metadata.add_argument("--num-samples", type=int, required=True)
+    make_metadata.add_argument("--warmup-steps", type=int, required=True)
     make_metadata.add_argument("--resolved-config", type=Path, required=True)
     make_metadata.add_argument("--output", type=Path, required=True)
     make_metadata.set_defaults(handler=_make_metadata_command)

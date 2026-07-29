@@ -9,12 +9,16 @@
 set -euo pipefail
 
 : "${SOURCE_IMAGE:?Set SOURCE_IMAGE to registry/repository:tag}"
+: "${SOURCE_COMMIT:?Set SOURCE_COMMIT to the full immutable source commit}"
 : "${OUTPUT_PREFIX:?Set OUTPUT_PREFIX to a filesystem-safe name}"
 : "${CONTAINER_DIR:?Set CONTAINER_DIR to an absolute shared-storage path}"
-SOURCE_COMMIT=${SOURCE_COMMIT:-unknown}
 
 if [[ "$SOURCE_IMAGE" != */* ]]; then
   echo "SOURCE_IMAGE must include a registry and repository" >&2
+  exit 2
+fi
+if [[ ! "$SOURCE_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  echo "SOURCE_COMMIT must be a full 40-character hexadecimal commit" >&2
   exit 2
 fi
 if [[ ! "$OUTPUT_PREFIX" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
