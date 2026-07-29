@@ -279,25 +279,21 @@ git commit -s -m "test(experiments): validate no-shmoo TRTLLM baseline"
 - Produces: `smoke-ab` schedule with one matched one-step pair
 - Produces: `ab` schedule with three matched 20-step pairs
 
-- [ ] **Step 1: Write failing launcher contract tests**
+- [ ] **Step 1: Write failing launcher behavior tests**
 
-Add tests that inspect a resolved spool launch and the checked-in source,
-asserting:
+Run the launcher through fake `sbatch`/spool fixtures and inspect the emitted
+jobs, resolved environment, and Hydra overrides. Require:
 
-```python
-assert 'WANDB_PROJECT="sna_mxfp8_kernel_test"' in launcher
-assert "local measured_steps=${MEASURE_STEPS:-20}" in launcher
-assert "logger.wandb.project=$WANDB_PROJECT" in launcher
-assert "baseline-no-shmoo-trtllm-r${repeat}" in launcher
-assert "shmoo-qualified-r${repeat}" in launcher
-assert "validate-default-runtime" in launcher
-assert "BOOTSTRAP_CONFIG_SHA256=" in launcher
-assert "QUALIFIED_CONFIG_SHA256=" in launcher
-```
+- W&B project `sna_mxfp8_kernel_test` in both arms
+- measured-step default `20`
+- run names `baseline-no-shmoo-trtllm-rN` and `shmoo-qualified-rN`
+- baseline bootstrap and qualified manifest filenames with their exact SHA256
+- baseline `validate-default-runtime` and adaptive `validate-runtime` outputs
+- all four expected filename/hash flags on pair validation
 
-Extend the profile test to require `VLLM_OVERLAY_ROOT` and extend the spool
-test to require it in `PYTHONPATH`. Add a `smoke-ab` schedule test requiring
-exactly two jobs and internal `MEASURE_STEPS=1`.
+Extend the profile behavior test to require `VLLM_OVERLAY_ROOT` and the spool
+test to require it first in `PYTHONPATH`. Add a `smoke-ab` schedule test
+requiring exactly two jobs and resolved `MEASURE_STEPS=1`.
 
 - [ ] **Step 2: Run launcher tests and verify the old defaults fail**
 
@@ -383,27 +379,7 @@ git commit -s -m "feat(experiments): isolate MXFP8 shmoo rollout benefit"
 **Interfaces:**
 - Documents: exact baseline definition, W&B project, smoke command, production command, and accepted metrics
 
-- [ ] **Step 1: Write a failing README contract test**
-
-Assert the README contains all of:
-
-```text
-sna_mxfp8_kernel_test
-baseline-no-shmoo-trtllm
-shmoo-qualified
-smoke-ab
-MEASURE_STEPS=20
-```
-
-- [ ] **Step 2: Run the README test and verify it fails**
-
-```bash
-uv run pytest -q \
-  tests/unit/experiments/test_mxfp8_adaptive_rollout_results.py \
-  -k "readme"
-```
-
-- [ ] **Step 3: Document the exact commands and interpretation**
+- [ ] **Step 1: Document the exact commands and interpretation**
 
 Document that baseline is direct TRTLLM adaptive layout with empty tactic
 tables, not stock vLLM. Provide:
@@ -415,13 +391,19 @@ ACTION=test-only bash experiments/mxfp8_adaptive_rollout/run_ab.sh ab
 ACTION=submit bash experiments/mxfp8_adaptive_rollout/run_ab.sh ab
 ```
 
-- [ ] **Step 4: Verify, commit, and push NeMo-RL**
+- [ ] **Step 2: Review the rendered handoff against the launcher**
+
+Manually verify the README names the exact W&B project, both arm names,
+`smoke-ab`, the 20-step default, and commands that exist in `run_ab.sh`.
+Human-facing prose is reviewed directly rather than locked to substring
+assertions.
+
+- [ ] **Step 3: Verify, commit, and push NeMo-RL**
 
 ```bash
 uv run pytest -q tests/unit/experiments/test_mxfp8_adaptive_rollout_results.py
 git add \
-  experiments/mxfp8_adaptive_rollout/README.md \
-  tests/unit/experiments/test_mxfp8_adaptive_rollout_results.py
+  experiments/mxfp8_adaptive_rollout/README.md
 git diff --cached --check
 git commit -s -m "docs(experiments): document MXFP8 shmoo A/B"
 git push fork sna/mxfp8-adaptive-vllm-nemorl-main
