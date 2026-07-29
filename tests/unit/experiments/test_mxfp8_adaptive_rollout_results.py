@@ -39,8 +39,12 @@ CONFIG_HASH = "d" * 64
 BASELINE_HASH = "3" * 64
 QUALIFIED_CONFIG_NAME = "qwen3_30ba3b_tp1_v0202_qualified.json"
 BOOTSTRAP_CONFIG_NAME = "qwen3_30ba3b_tp1_v0202_rollout_trace_bootstrap.json"
-BOOTSTRAP_CONFIG_SHA256 = "3c9f2be89e9053df62d07b937bbbf6f1d4bce39867825cda940271762708a447"
-QUALIFIED_CONFIG_SHA256 = "2baf01def8887db693c35b3070571ab7bb4e72ebfcf30c9fd8b587a3b7c9b2a2"
+BOOTSTRAP_CONFIG_SHA256 = (
+    "3c9f2be89e9053df62d07b937bbbf6f1d4bce39867825cda940271762708a447"
+)
+QUALIFIED_CONFIG_SHA256 = (
+    "2baf01def8887db693c35b3070571ab7bb4e72ebfcf30c9fd8b587a3b7c9b2a2"
+)
 VLLM_OVERLAY_COMMIT = "217ece36ee503ee8ccfbfaa0a5331765b21d2160"
 
 
@@ -912,7 +916,11 @@ def test_ab_schedule_exports_default_measurement_and_chains_three_pairs(
     ]
     dependencies = [
         next(
-            (argument for argument in call.split() if argument.startswith("--dependency=")),
+            (
+                argument
+                for argument in call.split()
+                if argument.startswith("--dependency=")
+            ),
             None,
         )
         for call in calls
@@ -941,10 +949,7 @@ def test_performance_arms_resolve_and_validate_isolated_manifests(
         (run_dir / "runtime_dispatch").mkdir()
 
     vllm_root = tmp_path / "vllm-overlay"
-    manifest_dir = (
-        vllm_root
-        / "vllm/model_executor/kernels/linear/mxfp8/tactic_configs"
-    )
+    manifest_dir = vllm_root / "vllm/model_executor/kernels/linear/mxfp8/tactic_configs"
     manifest_dir.mkdir(parents=True)
     for manifest in (BOOTSTRAP_CONFIG_NAME, QUALIFIED_CONFIG_NAME):
         (manifest_dir / manifest).write_text("{}\n", encoding="utf-8")
@@ -1013,7 +1018,14 @@ fi
         "RUNTIME_TRACE_DIR": str(original_dir / "runtime_dispatch"),
     }
     original = subprocess.run(
-        ["bash", str(RUN_AB_PATH), "__container", "original", "suite/measured-original-r1", "1"],
+        [
+            "bash",
+            str(RUN_AB_PATH),
+            "__container",
+            "original",
+            "suite/measured-original-r1",
+            "1",
+        ],
         check=False,
         capture_output=True,
         env=environment,
@@ -1021,7 +1033,14 @@ fi
     )
     environment["RUNTIME_TRACE_DIR"] = str(adaptive_dir / "runtime_dispatch")
     adaptive = subprocess.run(
-        ["bash", str(RUN_AB_PATH), "__container", "adaptive", "suite/measured-adaptive-r1", "1"],
+        [
+            "bash",
+            str(RUN_AB_PATH),
+            "__container",
+            "adaptive",
+            "suite/measured-adaptive-r1",
+            "1",
+        ],
         check=False,
         capture_output=True,
         env=environment,
@@ -1043,13 +1062,14 @@ fi
     assert "logger.wandb.name=mxfp8-qwen-baseline-no-shmoo-trtllm-r1" in grpo_calls[0]
     assert "logger.wandb.name=mxfp8-qwen-shmoo-qualified-r1" in grpo_calls[1]
     assert all("VLLM_MXFP8_DENSE_SHAPE_TRACE=1" in call for call in grpo_calls)
-    assert all("VLLM_MXFP8_DENSE_SHAPE_TRACE_DIR=/mxfp8_runtime_trace" in call for call in grpo_calls)
+    assert all(
+        "VLLM_MXFP8_DENSE_SHAPE_TRACE_DIR=/mxfp8_runtime_trace" in call
+        for call in grpo_calls
+    )
     default_runtime_call = next(
         call for call in calls if "validate-default-runtime" in call
     )
-    adaptive_runtime_call = next(
-        call for call in calls if "validate-runtime" in call
-    )
+    adaptive_runtime_call = next(call for call in calls if "validate-runtime" in call)
     assert BOOTSTRAP_CONFIG_SHA256 in default_runtime_call
     assert "default_tactic_coverage.json" in default_runtime_call
     assert QUALIFIED_CONFIG_SHA256 in adaptive_runtime_call
@@ -1161,9 +1181,7 @@ echo \"{VLLM_OVERLAY_COMMIT}\"
     assert command_capture.is_file()
     assert driver_marker.is_file()
     assert "__container" in command_capture.read_text(encoding="utf-8")
-    assert pythonpath_capture.read_text(encoding="utf-8").startswith(
-        f"{overlay_root}:"
-    )
+    assert pythonpath_capture.read_text(encoding="utf-8").startswith(f"{overlay_root}:")
 
 
 @pytest.mark.parametrize("source_commit", [None, "", "abc123"])
