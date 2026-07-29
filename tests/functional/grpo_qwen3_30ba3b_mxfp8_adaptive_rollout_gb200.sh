@@ -145,7 +145,7 @@ assert_fixed "VLLM_VERSION=$EXPECTED_VLLM_VERSION" "$RUN_LOG"
 assert_fixed "FLASHINFER_VERSION=$EXPECTED_FLASHINFER_VERSION" "$RUN_LOG"
 
 uv run --locked --extra vllm python -c \
-    'import sys; from omegaconf import OmegaConf; from tools.config_cli import load_config; config = load_config(sys.argv[1]); OmegaConf.save(config, sys.argv[2], resolve=True)' \
+    'import sys; from omegaconf import OmegaConf; from nemo_rl.utils.config import register_omegaconf_resolvers; register_omegaconf_resolvers(); from tools.config_cli import load_config; config = load_config(sys.argv[1]); OmegaConf.save(config, sys.argv[2], resolve=True)' \
     "$TRACE_RECIPE" "$COMPOSED_TRACE_RECIPE"
 read -r EXPECTED_NUM_NODES EXPECTED_GPUS_PER_NODE ROLLOUT_TP ROLLOUT_PP < <(
     uv run --locked --extra vllm python -c \
@@ -219,7 +219,7 @@ assert (
 PY_BOOTSTRAP_VALIDATOR
 
 uv run --locked --extra vllm python -c \
-    'import sys; from omegaconf import OmegaConf; from tools.config_cli import load_config; config = load_config(sys.argv[1]); OmegaConf.update(config, "policy.generation.vllm_cfg.env_vars.VLLM_MXFP8_DENSE_CONFIG_FILE", sys.argv[2], force_add=True); OmegaConf.save(config, sys.argv[3], resolve=True)' \
+    'import sys; from omegaconf import OmegaConf; from nemo_rl.utils.config import register_omegaconf_resolvers; register_omegaconf_resolvers(); from tools.config_cli import load_config; config = load_config(sys.argv[1]); OmegaConf.update(config, "policy.generation.vllm_cfg.env_vars.VLLM_MXFP8_DENSE_CONFIG_FILE", sys.argv[2], force_add=True); OmegaConf.save(config, sys.argv[3], resolve=True)' \
     "$TRACE_RECIPE" "$BOOTSTRAP_MANIFEST" "$RESOLVED_RUNTIME_CONFIG"
 RESOLVED_CONFIG_SHA256=$(sha256sum -- "$RESOLVED_RUNTIME_CONFIG")
 RESOLVED_CONFIG_SHA256=${RESOLVED_CONFIG_SHA256%% *}
