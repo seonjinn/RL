@@ -70,8 +70,11 @@ The production suite runs three sequential matched repeats:
 Each job runs one in-process warmup step followed by 20 measured steps. The
 parser discards the warmup step. Both arms enable the same dispatch tracing.
 The baseline trace must contain only direct TRTLLM dispatches with
-`tactic=-1`. The shmoo trace must hit every qualified exact-shape tactic and
-must not fall back for a qualified shape.
+`tactic=-1`. The shmoo trace must hit at least one qualified exact-shape
+tactic, every observed static tactic must match the qualified manifest, and it
+must not fall back for a qualified shape. A finite compiled rollout is not
+required to exercise every manifest entry; report
+`qualified_tactics_hit / qualified_tactic_count` explicitly.
 
 The W&B project is fixed to `sna_mxfp8_kernel_test`. Run names include the arm
 and repeat number so baseline and shmoo runs are unambiguous.

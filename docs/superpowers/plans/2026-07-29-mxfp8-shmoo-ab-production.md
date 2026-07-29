@@ -488,8 +488,11 @@ The baseline job must complete before the dependent shmoo job starts.
 
 Require both jobs to finish `COMPLETED 0:0`, `enforce_eager=false`, successful
 first weight refit, and direct TRTLLM dispatches. Require baseline tactic
-summary to report only `-1`; require shmoo coverage to hit all 106 qualified
-tactics without fallback for a qualified shape.
+summary to report only `-1`; require shmoo coverage to hit at least one of the
+106 qualified tactics, use only exact manifest tactics for observed static
+hits, and never fall back for a qualified shape. Record
+`qualified_tactics_hit / qualified_tactic_count`; a finite compiled smoke is
+not required to exercise every manifest entry.
 
 ### Task 7: Run and report the 20-step production A/B
 
