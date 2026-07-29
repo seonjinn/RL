@@ -12,9 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import sys
+from types import ModuleType
+from unittest.mock import Mock
 
 
 DEEPEP_COMMIT = "f725d29699f5bda9ba789456bb9579af69844685"
@@ -165,6 +169,35 @@ def test_launcher_rejects_an_invalid_uv_lock_timeout() -> None:
 
     assert '[[ ! "${UV_LOCK_TIMEOUT}" =~ ^[1-9][0-9]*$ ]]' in launcher
     assert "UV_LOCK_TIMEOUT must be a positive integer number of seconds." in launcher
+
+
+def test_actor_venv_uses_an_isolated_uv_cache(tmp_path, monkeypatch) -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    module_path = project_root / "nemo_rl" / "utils" / "venvs.py"
+    fake_ray = ModuleType("ray")
+    fake_ray.remote = lambda **_kwargs: lambda function: function
+    fake_ray_util = ModuleType("ray.util")
+    fake_ray_util.placement_group = Mock()
+    monkeypatch.setitem(sys.modules, "ray", fake_ray)
+    monkeypatch.setitem(sys.modules, "ray.util", fake_ray_util)
+
+    spec = importlib.util.spec_from_file_location("venvs_under_test", module_path)
+    assert spec is not None
+    assert spec.loader is not None
+    venvs = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(venvs)
+
+    run = Mock()
+    monkeypatch.setattr(venvs.subprocess, "run", run)
+    monkeypatch.setenv("NEMO_RL_VENV_DIR", str(tmp_path))
+    monkeypatch.setenv("UV_CACHE_DIR", "/lustre/shared-uv-cache")
+    venvs.create_local_venv("uv run --extra mcore", "policy-worker")
+
+    expected_cache = str(tmp_path / "policy-worker" / ".uv-cache")
+    sync_env = run.call_args_list[1].kwargs["env"]
+    run_env = run.call_args_list[2].kwargs["env"]
+    assert sync_env["UV_CACHE_DIR"] == expected_cache
+    assert run_env["UV_CACHE_DIR"] == expected_cache
 
 
 def test_deepep_setup_probe_uses_the_ray_runtime_python() -> None:

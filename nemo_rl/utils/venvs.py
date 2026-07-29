@@ -87,6 +87,7 @@ def create_local_venv(
     #  context.
     #  https://docs.astral.sh/uv/concepts/projects/config/#project-environment-path
     env["UV_PROJECT_ENVIRONMENT"] = venv_path
+    env["UV_CACHE_DIR"] = os.path.join(venv_path, ".uv-cache")
 
     # Split the py_executable into command and arguments
     exec_cmd = shlex.split(py_executable)
