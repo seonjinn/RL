@@ -39,6 +39,9 @@ RAY_VENV_BOOTSTRAP_SMOKE = (
     REPO_ROOT
     / "experiments/cuda_graph/latestmain_nanov3/run_ray_venv_bootstrap_smoke.sh"
 )
+THD_CP_PATCH_UNIT = (
+    REPO_ROOT / "experiments/cuda_graph/latestmain_nanov3/run_thd_cp_patch_unit.sh"
+)
 
 
 def _task3_valid_scope_cases() -> list[tuple[str, ...]]:
@@ -413,6 +416,17 @@ def test_ray_venv_bootstrap_smoke_has_a_single_node_test_only_submission(
     assert "--segment=1" in result.stdout
     assert "--gpus-per-node" not in result.stdout
     assert "--gres=gpu" not in result.stdout
+
+
+def test_thd_cp_patch_unit_runs_direct_te_storage_probe_in_mcore_venv() -> None:
+    """The direct CUDA weak-ref assertion must run where TE is installed."""
+    source = THD_CP_PATCH_UNIT.read_text()
+
+    assert "create_local_venv_on_each_node(PY_EXECUTABLES.MCORE" in source
+    assert "worker_runtime_probe.options(runtime_env=runtime_env" in source
+    assert "apply_transformer_engine_weak_ref_float64_patch(required=True)" in source
+    assert "weak_reference.data_ptr() == original.data_ptr()" in source
+    assert 'print("te_float64_weak_ref_cuda_smoke=passed")' in source
 
 
 def test_all_scope_dry_run_prints_test_only_submission_with_exact_scope(

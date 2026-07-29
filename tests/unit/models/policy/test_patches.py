@@ -16,6 +16,7 @@ import multiprocessing
 import os
 import sys
 import tempfile
+from importlib.util import find_spec
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -605,6 +606,10 @@ _torch_dtype_to_np_typestr_dict = {
             apply_transformer_engine_weak_ref_float64_patch(required=True)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+    @pytest.mark.skipif(
+        find_spec("transformer_engine") is None,
+        reason="requires installed Transformer Engine",
+    )
     def test_installed_te_make_weak_ref_preserves_float64_storage(self):
         apply_transformer_engine_weak_ref_float64_patch(required=True)
 

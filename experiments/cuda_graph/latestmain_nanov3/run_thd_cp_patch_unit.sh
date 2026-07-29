@@ -25,10 +25,72 @@ unset UV_CACHE_DIR_OVERRIDE
 
 SOURCE_SHA=$(git rev-parse --short=9 HEAD)
 RUN_NAME="latestmain-nanov3-thd-cp-patch-unit-${SOURCE_SHA}"
-COMMAND="uv run --no-sync pytest -q \
+read -r -d '' COMMAND <<'COMMAND_EOF' || true
+uv run --no-sync pytest -q \
   tests/unit/models/policy/test_patches.py \
   tests/unit/models/policy/test_megatron_worker.py \
-  -k 'PatchThdContextParallelCudaGraph or ThdContextParallelPatchBootstrap or WeakRefFloat64 or te_cuda_graph_capture_uses_safe_forward_pre_hook_boundary or te_cuda_graph_first_replay_emits_visible_rank_zero_event'"
+  -k 'PatchThdContextParallelCudaGraph or ThdContextParallelPatchBootstrap or WeakRefFloat64 or te_cuda_graph_capture_uses_safe_forward_pre_hook_boundary or te_cuda_graph_first_replay_emits_visible_rank_zero_event'
+
+NRL_FORCE_REBUILD_VENVS=true uv run --no-sync python - <<'PY'
+import os
+from pathlib import Path
+
+import ray
+
+from nemo_rl.distributed.virtual_cluster import PY_EXECUTABLES
+from nemo_rl.utils.venvs import create_local_venv_on_each_node
+
+
+ray.init(address="auto")
+worker_name = "nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker"
+python_path = Path(create_local_venv_on_each_node(PY_EXECUTABLES.MCORE, worker_name))
+worker_venv = python_path.parent.parent
+runtime_env = {
+    "py_executable": str(python_path),
+    "env_vars": {
+        "VIRTUAL_ENV": str(worker_venv),
+        "UV_PROJECT_ENVIRONMENT": str(worker_venv),
+    },
+}
+
+
+@ray.remote(num_gpus=1)
+def worker_runtime_probe() -> dict[str, object]:
+    import torch
+
+    from nemo_rl.models.policy.workers.patches import (
+        apply_transformer_engine_weak_ref_float64_patch,
+    )
+
+    apply_transformer_engine_weak_ref_float64_patch(required=True)
+
+    from transformer_engine.pytorch.utils import make_weak_ref
+
+    original = torch.tensor(
+        [1.25, -2.5],
+        device=torch.device("cuda", torch.cuda.current_device()),
+        dtype=torch.float64,
+    )
+    weak_reference = make_weak_ref(original)
+    return {
+        "dtype": str(weak_reference.dtype),
+        "shape": tuple(weak_reference.shape),
+        "same_storage": weak_reference.data_ptr() == original.data_ptr(),
+        "equal": torch.equal(weak_reference, original),
+    }
+
+
+result = ray.get(worker_runtime_probe.options(runtime_env=runtime_env).remote())
+assert result == {
+    "dtype": "torch.float64",
+    "shape": (2,),
+    "same_storage": True,
+    "equal": True,
+}, result
+print(f"mcore_venv_python={python_path}")
+print("te_float64_weak_ref_cuda_smoke=passed")
+PY
+COMMAND_EOF
 
 if [[ -z "${CONTAINER:-}" ]]; then
   echo "CONTAINER must not be blank" >&2
