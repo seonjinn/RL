@@ -27,7 +27,8 @@ SOURCE_SHA=$(git rev-parse --short=9 HEAD)
 RUN_NAME="latestmain-nanov3-thd-cp-patch-unit-${SOURCE_SHA}"
 COMMAND="uv run --no-sync pytest -q \
   tests/unit/models/policy/test_patches.py \
-  -k 'PatchThdContextParallelCudaGraph or ThdContextParallelPatchBootstrap'"
+  tests/unit/models/policy/test_megatron_worker.py \
+  -k 'PatchThdContextParallelCudaGraph or ThdContextParallelPatchBootstrap or WeakRefFloat64 or te_cuda_graph_capture_uses_safe_forward_pre_hook_boundary or te_cuda_graph_first_replay_emits_visible_rank_zero_event'"
 
 if [[ -z "${CONTAINER:-}" ]]; then
   echo "CONTAINER must not be blank" >&2

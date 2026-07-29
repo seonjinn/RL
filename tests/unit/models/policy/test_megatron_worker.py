@@ -77,7 +77,7 @@ def test_sequence_count_cap_applies_to_training_packing_only():
     assert logprob_args["max_sequences_per_microbatch"] is None
 
 
-def test_te_cuda_graph_capture_uses_safe_forward_pre_hook_boundary():
+def test_te_cuda_graph_capture_uses_safe_forward_pre_hook_boundary(capsys):
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
         MegatronPolicyWorkerImpl,
     )
@@ -111,6 +111,29 @@ def test_te_cuda_graph_capture_uses_safe_forward_pre_hook_boundary():
     lifecycle.capture_if_ready.assert_called_once_with()
     worker.enable_forward_pre_hook.assert_called_once_with()
     lifecycle.helper.cuda_graph_set_manual_hooks.assert_called_once_with()
+    assert (
+        "[NRL_CUDA_GRAPH] capture_complete successful_optimizer_steps=3"
+        in capsys.readouterr().out
+    )
+
+
+def test_te_cuda_graph_first_replay_emits_visible_rank_zero_event(capsys):
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    lifecycle = MagicMock()
+    lifecycle.helper.graphs_created.return_value = True
+    worker._te_cuda_graph_lifecycle = lifecycle
+    worker._te_cuda_graph_capture_complete = True
+    worker._te_cuda_graph_replay_logged = False
+
+    worker._log_first_te_cuda_graph_replay(num_microbatches=4)
+    worker._log_first_te_cuda_graph_replay(num_microbatches=4)
+
+    output = capsys.readouterr().out
+    assert output.count("[NRL_CUDA_GRAPH] replay_complete num_microbatches=4") == 1
 
 
 def test_te_cuda_graph_capture_rejects_changed_geometry():

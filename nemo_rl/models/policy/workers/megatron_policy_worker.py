@@ -105,6 +105,7 @@ from nemo_rl.models.policy.workers.checkpoint_engine import (
 from nemo_rl.models.policy.workers.patches import (
     apply_transformer_engine_patch,
     apply_transformer_engine_thd_context_parallel_patch,
+    apply_transformer_engine_weak_ref_float64_patch,
 )
 from nemo_rl.utils.grad_norm import warn_if_inf_grad_norm
 from nemo_rl.utils.nsys import wrap_with_nvtx_name
@@ -157,6 +158,12 @@ def _should_use_router_replay(
         "stopped carrying routed_experts. Reference-logprob intentionally skips "
         "routed_experts; prev-logprob and train must not."
     )
+
+
+def _print_rank_zero_cuda_graph_event(message: str) -> None:
+    """Emit a CUDA Graph lifecycle event that remains visible in Ray driver logs."""
+    if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+        print(f"[NRL_CUDA_GRAPH] {message}", flush=True)
 
 
 def _model_self_packs_for_cp(model: Any) -> bool:
@@ -327,6 +334,19 @@ class MegatronPolicyWorkerImpl(
                 megatron_config.get("cuda_graph_impl") == "transformer_engine"
                 and bool(megatron_config.get("cuda_graph_packed_seq", False))
                 and bool(config.get("sequence_packing", {}).get("enabled", False))
+            )
+        )
+        cuda_graph_scopes = (
+            megatron_config.get(
+                "cuda_graph_modules",
+                megatron_config.get("cuda_graph_scope", []),
+            )
+            or []
+        )
+        apply_transformer_engine_weak_ref_float64_patch(
+            required=(
+                megatron_config.get("cuda_graph_impl") == "transformer_engine"
+                and "moe_router" in cuda_graph_scopes
             )
         )
 
@@ -697,6 +717,10 @@ class MegatronPolicyWorkerImpl(
                 "successful optimizer steps",
                 lifecycle.successful_steps,
             )
+            _print_rank_zero_cuda_graph_event(
+                "capture_complete "
+                f"successful_optimizer_steps={lifecycle.successful_steps}"
+            )
 
     def _record_successful_te_cuda_graph_warmup_step(
         self, update_successful: bool
@@ -742,6 +766,9 @@ class MegatronPolicyWorkerImpl(
             "Completed policy forward/backward with Transformer Engine CUDA "
             "Graphs active: num_microbatches=%d",
             num_microbatches,
+        )
+        _print_rank_zero_cuda_graph_event(
+            f"replay_complete num_microbatches={num_microbatches}"
         )
 
     def _reject_model_offload_with_te_cuda_graphs(self, operation: str) -> None:

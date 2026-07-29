@@ -23,9 +23,11 @@ import pytest
 
 from nemo_rl.models.policy.workers.patches import (
     _get_transformer_engine_file,
+    _patch_transformer_engine_weak_ref_float64,
     _patch_thd_context_parallel_cuda_graph,
     apply_transformer_engine_patch,
     apply_transformer_engine_thd_context_parallel_patch,
+    apply_transformer_engine_weak_ref_float64_patch,
 )
 
 
@@ -517,6 +519,91 @@ class TestPatchThdContextParallelCudaGraph:
                 os.unlink(lock_path)
 
 
+class TestPatchTransformerEngineWeakRefFloat64:
+    UNPATCHED_CONTENT = """\
+_torch_dtype_to_np_typestr_dict = {
+    torch.float16: "<f2",
+    torch.float32: "<f4",
+}
+"""
+    PATCHED_CONTENT = """\
+_torch_dtype_to_np_typestr_dict = {
+    torch.float16: "<f2",
+    torch.float32: "<f4",
+    torch.float64: "<f8",
+}
+"""
+
+    def test_adds_exact_float64_cuda_array_interface_mapping(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False
+        ) as tmp_file:
+            tmp_file.write(self.UNPATCHED_CONTENT)
+            tmp_path = tmp_file.name
+
+        try:
+            with patch(
+                "nemo_rl.models.policy.workers.patches._get_transformer_engine_file",
+                return_value=tmp_path,
+            ):
+                _patch_transformer_engine_weak_ref_float64(required=True)
+
+            with open(tmp_path) as patched_file:
+                assert patched_file.read() == self.PATCHED_CONTENT
+        finally:
+            os.unlink(tmp_path)
+
+    def test_is_idempotent_when_float64_mapping_is_present(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False
+        ) as tmp_file:
+            tmp_file.write(self.PATCHED_CONTENT)
+            tmp_path = tmp_file.name
+
+        try:
+            with patch(
+                "nemo_rl.models.policy.workers.patches._get_transformer_engine_file",
+                return_value=tmp_path,
+            ):
+                _patch_transformer_engine_weak_ref_float64(required=True)
+                _patch_transformer_engine_weak_ref_float64(required=True)
+
+            with open(tmp_path) as patched_file:
+                assert patched_file.read() == self.PATCHED_CONTENT
+        finally:
+            os.unlink(tmp_path)
+
+    def test_required_patch_rejects_unknown_transformer_engine_source(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False
+        ) as tmp_file:
+            tmp_file.write("# unexpected Transformer Engine source")
+            tmp_path = tmp_file.name
+
+        try:
+            with (
+                patch(
+                    "nemo_rl.models.policy.workers.patches._get_transformer_engine_file",
+                    return_value=tmp_path,
+                ),
+                pytest.raises(RuntimeError, match="unsupported Transformer Engine"),
+            ):
+                _patch_transformer_engine_weak_ref_float64(required=True)
+        finally:
+            os.unlink(tmp_path)
+
+    def test_required_wrapper_fails_closed(self):
+        with (
+            patch(
+                "nemo_rl.models.policy.workers.patches."
+                "_patch_transformer_engine_weak_ref_float64",
+                side_effect=OSError("read-only package"),
+            ),
+            pytest.raises(RuntimeError, match="float64 weak-reference support"),
+        ):
+            apply_transformer_engine_weak_ref_float64_patch(required=True)
+
+
 class TestThdContextParallelPatchBootstrap:
     def test_bootstrap_import_precedes_megatron_imports(self):
         repo_root = Path(__file__).resolve().parents[4]
@@ -534,6 +621,7 @@ class TestThdContextParallelPatchBootstrap:
         assert (
             "apply_transformer_engine_thd_context_parallel_patch()" in bootstrap_source
         )
+        assert "apply_transformer_engine_weak_ref_float64_patch()" in bootstrap_source
 
     def test_optional_bootstrap_reports_lookup_failure(self, capsys):
         with patch(

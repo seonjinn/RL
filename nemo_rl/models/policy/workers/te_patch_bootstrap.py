@@ -16,7 +16,9 @@
 
 from nemo_rl.models.policy.workers.patches import (
     apply_transformer_engine_thd_context_parallel_patch,
+    apply_transformer_engine_weak_ref_float64_patch,
 )
 
 
 apply_transformer_engine_thd_context_parallel_patch()
+apply_transformer_engine_weak_ref_float64_patch()
