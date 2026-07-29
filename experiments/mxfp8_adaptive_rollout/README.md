@@ -12,7 +12,7 @@ The required runtime is:
 
 - NeMo-RL: the committed and pushed experiment checkout.
 - vLLM repository: `https://github.com/seonjinn/vllm.git`.
-- vLLM commit: `217ece36ee503ee8ccfbfaa0a5331765b21d2160`.
+- vLLM commit: `b1870e6c454b11d36083ab21c35108defc81b7d7`.
 - vLLM public version: `0.20.2`.
 - FlashInfer: `0.6.8.post1`.
 - Hardware: four OCI-HSG GB200 nodes, four GPUs per node.

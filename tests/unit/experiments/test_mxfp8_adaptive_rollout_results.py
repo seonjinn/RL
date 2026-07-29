@@ -45,7 +45,7 @@ BOOTSTRAP_CONFIG_SHA256 = (
 QUALIFIED_CONFIG_SHA256 = (
     "2baf01def8887db693c35b3070571ab7bb4e72ebfcf30c9fd8b587a3b7c9b2a2"
 )
-VLLM_OVERLAY_COMMIT = "217ece36ee503ee8ccfbfaa0a5331765b21d2160"
+VLLM_OVERLAY_COMMIT = "b1870e6c454b11d36083ab21c35108defc81b7d7"
 
 
 def _load_parser() -> ModuleType:
@@ -672,7 +672,7 @@ def test_oci_profile_overlays_checkout_onto_container_nemo_root() -> None:
     assert "VLLM_OVERLAY_ROOT" in profile
     assert (
         "${NEMO_RL_EXPERIMENT_ROOT}/runtime/"
-        "vllm-217ece36ee50-wheel-overlay"
+        "vllm-b1870e6c454b-wheel-overlay"
     ) in profile
 
 
