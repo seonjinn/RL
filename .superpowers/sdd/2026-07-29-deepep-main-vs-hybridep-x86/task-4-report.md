@@ -98,6 +98,18 @@ subprocess cases. Existing isolated renderer and x86 contract tests pass, but
 controller-run remote RED/GREEN evidence for the `/lustre` cases remains
 pending.
 
+## Remote fixture follow-up
+
+The first approved remote runs, jobs `480170` (RED) and `480171` (GREEN),
+completed but skipped all eight new artifact-backed tests. The fixture checked
+write access on `/lustre` itself, while the cluster grants access only to the
+per-user Lustre subtree. A follow-up test-only fixture commit adds the optional
+`NEMO_RL_TEST_LUSTRE_ROOT` root, requires its resolved path to remain under
+`/lustre`, and creates/cleans only a direct `mkdtemp` child of that configured
+root. The controller will cherry-pick it onto the temporary RED branch and
+rerun RED/GREEN with the writable per-user root. That rerun evidence remains
+pending.
+
 ## Self-review
 
 - The launcher keeps `/tmp` restricted to the existing bounded worker overlay;

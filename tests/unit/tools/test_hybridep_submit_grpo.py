@@ -143,15 +143,45 @@ def _x86_actor_venv_dir(tmp_path: Path) -> Path:
     return tmp_path / "actor-venvs"
 
 
+def _resolve_lustre_test_root(configured_root: str | None) -> Path:
+    lustre_root = Path(configured_root or "/lustre").resolve()
+    try:
+        lustre_root.relative_to("/lustre")
+    except ValueError as error:
+        raise ValueError(
+            "NEMO_RL_TEST_LUSTRE_ROOT must resolve under /lustre: "
+            f"{lustre_root}"
+        ) from error
+    return lustre_root
+
+
+def test_lustre_test_root_accepts_a_configured_lustre_subtree() -> None:
+    assert _resolve_lustre_test_root("/lustre/project/users/tester") == Path(
+        "/lustre/project/users/tester"
+    )
+
+
+def test_lustre_test_root_rejects_a_path_outside_lustre() -> None:
+    with pytest.raises(ValueError, match="must resolve under /lustre"):
+        _resolve_lustre_test_root("/lustre/../tmp/nemo-rl-test")
+
+
 @pytest.fixture
 def lustre_tmp_path() -> Iterator[Path]:
-    lustre_root = Path("/lustre")
+    try:
+        lustre_root = _resolve_lustre_test_root(
+            os.environ.get("NEMO_RL_TEST_LUSTRE_ROOT")
+        )
+    except ValueError as error:
+        pytest.fail(str(error))
     if not lustre_root.is_dir() or not os.access(lustre_root, os.W_OK):
-        pytest.skip("requires a writable /lustre mount")
+        pytest.skip(f"requires a writable /lustre test root: {lustre_root}")
     path = Path(tempfile.mkdtemp(prefix="nemo-rl-test-", dir=lustre_root))
     try:
         yield path
     finally:
+        if path.parent != lustre_root:
+            pytest.fail(f"refusing to clean a path outside the Lustre test root: {path}")
         shutil.rmtree(path)
 
 
