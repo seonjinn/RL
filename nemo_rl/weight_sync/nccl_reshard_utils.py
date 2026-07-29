@@ -218,11 +218,13 @@ _STR_TO_DTYPE = {
     "torch.float32": torch.float32,
     "torch.float8_e4m3fn": torch.float8_e4m3fn,
     "torch.float8_e5m2": torch.float8_e5m2,
+    "torch.uint8": torch.uint8,
     "bfloat16": torch.bfloat16,
     "float16": torch.float16,
     "float32": torch.float32,
     "float8_e4m3fn": torch.float8_e4m3fn,
     "float8_e5m2": torch.float8_e5m2,
+    "uint8": torch.uint8,
 }
 
 
@@ -264,6 +266,11 @@ def restore_refit_info_placements(refit_info: dict) -> dict:
             param_info["dst_placements"] = [
                 _restore_placement(p) for p in param_info["dst_placements"]
             ]
+            for key in ("scale_src_placements", "scale_dst_placements"):
+                if key in param_info:
+                    param_info[key] = [
+                        _restore_placement(p) for p in param_info[key]
+                    ]
             # Reconstruct MeshInfo if serialized to dict
             for key in ("src_mesh_info", "dst_mesh_info"):
                 mesh = param_info.get(key)
@@ -419,11 +426,19 @@ def group_expert_params_in_metadata(
             prefix = name[: -len(".gate_up_proj")]  # ".../experts"
             e_global, inter, hidden = meta["shape"]
             for role in ("gate_proj", "up_proj"):
-                grouped_metadata[f"{prefix}.{role}.weight"] = {
+                role_meta = {
+                    **meta,
                     "shape": [e_global, inter // 2, hidden],
-                    "dtype": meta["dtype"],
                     "grouped_expert_proj": role,
                 }
+                if "scale_shape" in meta:
+                    e_scale, inter_scale, hidden_scale = meta["scale_shape"]
+                    role_meta["scale_shape"] = [
+                        e_scale,
+                        inter_scale // 2,
+                        hidden_scale,
+                    ]
+                grouped_metadata[f"{prefix}.{role}.weight"] = role_meta
             pre_grouped_experts = True
         elif name.endswith("experts.down_proj"):
             # Already-grouped down ``[E, hidden, inter]``: canonicalize the name
@@ -445,12 +460,19 @@ def group_expert_params_in_metadata(
     # HF entry.
     for (prefix, proj), entries in expert_groups.items():
         num_experts_global = len(entries)
-        per_expert_shape = list(entries[0][1]["shape"])
-        grouped_metadata[f"{prefix}.{proj}.weight"] = {
+        first_meta = entries[0][1]
+        per_expert_shape = list(first_meta["shape"])
+        grouped_meta = {
+            **first_meta,
             "shape": [num_experts_global, *per_expert_shape],
-            "dtype": entries[0][1]["dtype"],
             "grouped_expert_proj": proj,
         }
+        if "scale_shape" in first_meta:
+            grouped_meta["scale_shape"] = [
+                num_experts_global,
+                *first_meta["scale_shape"],
+            ]
+        grouped_metadata[f"{prefix}.{proj}.weight"] = grouped_meta
 
     return grouped_metadata
 
@@ -561,11 +583,18 @@ def check_nccl_reshard_refit_support(master_config: dict) -> None:
             "dynamic expert load balancing can change ownership afterwards)."
         )
 
-    if vllm_cfg.get("refit_prequantize", False):
+    refit_prequantize = vllm_cfg.get("refit_prequantize", False)
+    if refit_prequantize and not vllm_cfg.get("is_mx", False):
         violations.append(
-            "policy.generation.vllm_cfg.refit_prequantize must be False "
-            "(nccl_reshard_refit requires matching training and generation "
-            "storage and does not use BF16-to-MXFP8 prequantization)."
+            "policy.generation.vllm_cfg.refit_prequantize requires is_mx=True "
+            "(the transform-aware nccl_reshard path currently supports MXFP8 only)."
+        )
+
+    if generation.get("real_quant", False):
+        violations.append(
+            "NVFP4 real-quant rollout is not supported by nccl_reshard_refit; "
+            "packed weights and their complete scale family require a "
+            "ModelOpt-specific atomic reload path."
         )
 
     # This initial version supports only the Megatron train + vLLM gen
@@ -617,8 +646,8 @@ def check_nccl_reshard_refit_support(master_config: dict) -> None:
         # Precision compatibility (train ↔ gen).  Supported combinations:
         #   BF16 train  ↔ BF16 gen   (default, tested)
         #   FP8  train  ↔ FP8  gen   (fp8_param=True + blockwise + vllm precision=fp8)
-        # BF16→FP8 (train-side quant on the fly) is not implemented; FP8→BF16
-        # has no consumer (vLLM doesn't accept FP8 bytes into a BF16 param).
+        #   BF16 storage → MXFP8 gen  (refit_prequantize=True + is_mx=True)
+        # FP8→BF16 has no consumer (vLLM doesn't accept FP8 bytes into a BF16 param).
         fp8_cfg = megatron_cfg.get("fp8_cfg", {}) or {}
         fp8_param = fp8_cfg.get("fp8_param", False)
         fp8_recipe = fp8_cfg.get("fp8_recipe", None)
@@ -639,11 +668,18 @@ def check_nccl_reshard_refit_support(master_config: dict) -> None:
             )
 
         if gen_precision == "fp8":
-            if not fp8_param:
+            if refit_prequantize:
+                if fp8_param:
+                    violations.append(
+                        "policy.generation.vllm_cfg.refit_prequantize=True "
+                        "requires policy.megatron_cfg.fp8_cfg.fp8_param=False "
+                        "(the sender quantizes BF16 storage to MXFP8 exactly once)."
+                    )
+            elif not fp8_param:
                 violations.append(
                     "policy.generation.vllm_cfg.precision='fp8' requires "
-                    "policy.megatron_cfg.fp8_cfg.fp8_param=True "
-                    "(BF16→FP8 train-side quantization is not implemented yet)."
+                    "policy.megatron_cfg.fp8_cfg.fp8_param=True, or "
+                    "refit_prequantize=True with is_mx=True."
                 )
             elif fp8_recipe != "blockwise":
                 violations.append(
@@ -854,6 +890,27 @@ def build_nccl_reshard_refit_info(
                 "dst_mesh_info": dst_mesh,
                 "dst_placements": get_placements(name, dst_dim_map, ndim),
             }
+
+        if "refit_transform" in meta:
+            scale_shape = tuple(meta["scale_shape"])
+            info.update(
+                {
+                    "refit_transform": meta["refit_transform"],
+                    "scale_global_shape": scale_shape,
+                    "scale_dtype": meta["scale_dtype"],
+                }
+            )
+            if use_per_stage:
+                info["scale_src_placements"] = get_placements(
+                    name, stage_src_dim_map, len(scale_shape)
+                )
+            else:
+                info["scale_src_placements"] = get_placements(
+                    name, this_src_dim_map, len(scale_shape)
+                )
+            info["scale_dst_placements"] = get_placements(
+                name, dst_dim_map, len(scale_shape)
+            )
 
         # Propagate the grouped-expert projection tag (gate_proj/up_proj/
         # down_proj) so the train side stacks the matching per-expert tensors

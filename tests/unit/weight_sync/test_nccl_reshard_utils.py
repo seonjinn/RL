@@ -390,6 +390,33 @@ def test_group_expert_params_no_experts_is_identity():
     assert group_expert_params_in_metadata(md) == md
 
 
+def test_group_expert_params_preserves_mxfp8_scale_family():
+    md = _moe_metadata(num_experts=2, inter=64, hidden=32)
+    for name, meta in md.items():
+        if ".experts." not in name:
+            continue
+        meta.update(
+            {
+                "dtype": "torch.float8_e4m3fn",
+                "refit_transform": "mxfp8",
+                "scale_shape": [meta["shape"][0], meta["shape"][1] // 32],
+                "scale_dtype": "torch.uint8",
+            }
+        )
+
+    grouped = group_expert_params_in_metadata(md)
+    base = "model.layers.0.mlp.experts"
+    gate = grouped[f"{base}.gate_proj.weight"]
+    down = grouped[f"{base}.down_proj.weight"]
+
+    assert gate["refit_transform"] == "mxfp8"
+    assert gate["scale_shape"] == [2, 64, 1]
+    assert gate["scale_dtype"] == "torch.uint8"
+    assert down["refit_transform"] == "mxfp8"
+    assert down["scale_shape"] == [2, 32, 2]
+    assert down["scale_dtype"] == "torch.uint8"
+
+
 # --------------------------------------------------------------------------
 # build_nccl_reshard_refit_info
 # --------------------------------------------------------------------------
