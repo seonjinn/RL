@@ -311,3 +311,99 @@ def test_build_mxfp8_map_receives_value_and_scale_into_matching_slices():
         gate_up_scale[:64],
         torch.full_like(gate_up_scale[:64], 127),
     )
+
+
+def test_build_mxfp8_moe_map_uses_matching_w13_and_w2_scale_slices():
+    E, H, P = 2, 32, 64
+    refit_info = {
+        "gen_tp_size": 1,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": "model.layers.0.mlp.experts.gate_proj.weight",
+                    "global_shape": [E, P, H],
+                    "scale_global_shape": [E, P, H // 32],
+                    "grouped_expert_proj": "gate_proj",
+                    "refit_transform": "mxfp8",
+                },
+                {
+                    "name": "model.layers.0.mlp.experts.up_proj.weight",
+                    "global_shape": [E, P, H],
+                    "scale_global_shape": [E, P, H // 32],
+                    "grouped_expert_proj": "up_proj",
+                    "refit_transform": "mxfp8",
+                },
+                {
+                    "name": "model.layers.0.mlp.experts.down_proj.weight",
+                    "global_shape": [E, H, P],
+                    "scale_global_shape": [E, H, P // 32],
+                    "grouped_expert_proj": "down_proj",
+                    "refit_transform": "mxfp8",
+                },
+            ]
+        },
+    }
+    w13 = torch.empty(E, 2 * P, H, dtype=torch.float8_e4m3fn)
+    w2 = torch.empty(E, H, P, dtype=torch.float8_e4m3fn)
+    w13_scale = torch.empty(E, 2 * P, H // 32, dtype=torch.uint8)
+    w2_scale = torch.empty(E, H, P // 32, dtype=torch.uint8)
+    ext = _make_ext(
+        {
+            "model.layers.0.mlp.experts.w13_weight": w13,
+            "model.layers.0.mlp.experts.w2_weight": w2,
+            "model.layers.0.mlp.experts.w13_weight_scale_from_checkpoint": (
+                w13_scale
+            ),
+            "model.layers.0.mlp.experts.w2_weight_scale_from_checkpoint": w2_scale,
+        }
+    )
+
+    pmap = ext.build_hf_to_local_param_map(refit_info)
+    gate = pmap.get("model.layers.0.mlp.experts.gate_proj.weight")
+    up = pmap.get("model.layers.0.mlp.experts.up_proj.weight")
+    down = pmap.get("model.layers.0.mlp.experts.down_proj.weight")
+
+    gate_ctx = gate.pre(gate.base)
+    up_ctx = up.pre(up.base)
+    down_ctx = down.pre(down.base)
+    assert gate_ctx.extra["scale_buf"].shape == (E, P, H // 32)
+    assert up_ctx.extra["scale_buf"].shape == (E, P, H // 32)
+    assert down_ctx.extra["scale_buf"].shape == (E, H, P // 32)
+
+    gate_ctx.extra["scale_buf"].fill_(11)
+    up_ctx.extra["scale_buf"].fill_(22)
+    down_ctx.extra["scale_buf"].fill_(33)
+    gate.post(gate_ctx)
+    up.post(up_ctx)
+    down.post(down_ctx)
+    assert torch.equal(w13_scale[:, :P], torch.full_like(w13_scale[:, :P], 11))
+    assert torch.equal(w13_scale[:, P:], torch.full_like(w13_scale[:, P:], 22))
+    assert torch.equal(w2_scale, torch.full_like(w2_scale, 33))
+
+
+def test_build_mxfp8_map_rejects_missing_checkpoint_scale_target():
+    refit_info = {
+        "gen_tp_size": 1,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": "model.layers.0.mlp.down_proj.weight",
+                    "global_shape": [32, 64],
+                    "scale_global_shape": [32, 2],
+                    "refit_transform": "mxfp8",
+                }
+            ]
+        },
+    }
+    ext = _make_ext(
+        {
+            "model.layers.0.mlp.down_proj.weight": torch.empty(
+                32, 64, dtype=torch.float8_e4m3fn
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="weight_scale_from_checkpoint"):
+        ext.build_hf_to_local_param_map(refit_info)
