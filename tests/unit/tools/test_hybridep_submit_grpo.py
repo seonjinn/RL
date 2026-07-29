@@ -160,23 +160,29 @@ def _write_prefetched_actor_pythons(actor_venv_dir: Path) -> None:
 
 def _synthetic_x86_shared_env() -> dict[str, str]:
     return {
+        "CONTAINER": "/lustre/nemo-rl-test/nightly.sqsh",
         "DEEPEP_COMMIT": DEEPEP_COMMIT,
         "DEEPEP_WHEEL": "/lustre/nemo-rl-test/deep-ep.whl",
         "HF_HOME": "/lustre/nemo-rl-test/hf-home",
         "HF_DATASETS_CACHE": "/lustre/nemo-rl-test/hf-home/cache",
         "RUN_ROOT": "/lustre/nemo-rl-test/run",
+        "UV_CACHE_DIR": "/lustre/nemo-rl-test/uv-cache",
     }
 
 
 def _x86_shared_env(shared_root: Path) -> dict[str, str]:
+    container = shared_root / "nightly.sqsh"
+    container.touch()
     wheel = shared_root / "deep-ep.whl"
     wheel.touch()
     return {
+        "CONTAINER": str(container),
         "DEEPEP_COMMIT": DEEPEP_COMMIT,
         "DEEPEP_WHEEL": str(wheel),
         "HF_HOME": str(shared_root / "hf-home"),
         "HF_DATASETS_CACHE": str(shared_root / "hf-home" / "cache"),
         "RUN_ROOT": str(shared_root / "run"),
+        "UV_CACHE_DIR": str(shared_root / "uv-cache"),
     }
 
 
@@ -273,9 +279,25 @@ def test_x86_profile_requires_an_explicit_deepep_wheel(tmp_path: Path) -> None:
     assert "DEEPEP_WHEEL is required for model profile" in result.stderr
 
 
+def test_x86_profile_requires_an_explicit_uv_cache_directory(tmp_path: Path) -> None:
+    result, _ = _run_launcher_result(
+        tmp_path,
+        dispatcher_mode="recipe",
+        model_config_name="qwen3-30ba3b-4n8g-x86.env",
+        extra_env={
+            **_synthetic_x86_shared_env(),
+            "UV_CACHE_DIR": "",
+        },
+    )
+
+    assert result.returncode == 2
+    assert "UV_CACHE_DIR is required for model profile" in result.stderr
+
+
 @pytest.mark.parametrize(
     "path_variable",
     (
+        "CONTAINER",
         "DRIVER_VENV",
         "RAY_VENV",
         "UV_CACHE_DIR",
@@ -289,7 +311,7 @@ def test_x86_profile_rejects_shared_paths_that_traverse_outside_lustre(
     tmp_path: Path, path_variable: str
 ) -> None:
     escaped_path = tmp_path / path_variable.lower()
-    if path_variable == "DEEPEP_WHEEL":
+    if path_variable in {"CONTAINER", "DEEPEP_WHEEL"}:
         escaped_path.touch()
     traversal_path = Path("/lustre") / ".." / escaped_path.relative_to("/")
     extra_env = {
@@ -309,6 +331,21 @@ def test_x86_profile_rejects_shared_paths_that_traverse_outside_lustre(
 
     assert result.returncode == 2
     assert f"{path_variable} must resolve under shared /lustre storage" in result.stderr
+
+
+def test_x86_profile_rejects_a_home_backed_container(tmp_path: Path) -> None:
+    result, _ = _run_launcher_result(
+        tmp_path,
+        dispatcher_mode="recipe",
+        model_config_name="qwen3-30ba3b-4n8g-x86.env",
+        extra_env={
+            **_synthetic_x86_shared_env(),
+            "CONTAINER": "/home/sna/nemo_rl_nightly.sqsh",
+        },
+    )
+
+    assert result.returncode == 2
+    assert "CONTAINER must resolve under shared /lustre storage" in result.stderr
 
 
 def test_deepseek_profile_rejects_a_checkpoint_that_traverses_outside_lustre(

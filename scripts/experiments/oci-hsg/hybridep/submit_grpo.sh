@@ -162,6 +162,11 @@ if [[ "${REQUIRE_DEEPEP_WHEEL}" == "true" && -z "${DEEPEP_WHEEL}" ]]; then
   exit 2
 fi
 
+if [[ "${REQUIRE_DEEPEP_WHEEL}" == "true" && -z "${UV_CACHE_DIR}" ]]; then
+  printf 'UV_CACHE_DIR is required for model profile %s.\n' "${MODEL_ID}" >&2
+  exit 2
+fi
+
 if [[ -n "${MODEL_TOKENIZER_OVERRIDE_ENV}" ]]; then
   if [[ ! "${MODEL_TOKENIZER_OVERRIDE_ENV}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
     printf 'MODEL_TOKENIZER_OVERRIDE_ENV must name an environment variable.\n' >&2
@@ -178,6 +183,7 @@ fi
 
 if [[ "${REQUIRE_DEEPEP_WHEEL}" == "true" ]]; then
   for shared_path_name in \
+    CONTAINER \
     DRIVER_VENV \
     RAY_VENV \
     UV_CACHE_DIR \
