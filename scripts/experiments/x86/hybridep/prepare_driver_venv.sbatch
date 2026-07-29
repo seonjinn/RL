@@ -76,16 +76,19 @@ srun \
     UV_CACHE_DIR="${UV_CACHE_DIR}" \
     NEMO_RL_VENV_DIR="${NEMO_RL_VENV_DIR}" \
     UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR}" \
+    UV_MANAGED_PYTHON=1 \
     bash -lc '
     set -euo pipefail
     printf "Effective DRIVER_VENV=%s\\n" "${DRIVER_VENV}"
     printf "Effective UV_CACHE_DIR=%s\\n" "${UV_CACHE_DIR}"
     printf "Effective NEMO_RL_VENV_DIR=%s\\n" "${NEMO_RL_VENV_DIR}"
     printf "Effective UV_PYTHON_INSTALL_DIR=%s\\n" "${UV_PYTHON_INSTALL_DIR}"
+    printf "Effective UV_MANAGED_PYTHON=%s\\n" "${UV_MANAGED_PYTHON}"
     export UV_PROJECT_ENVIRONMENT="${DRIVER_VENV}"
     export UV_CACHE_DIR
     export NEMO_RL_VENV_DIR
     export UV_PYTHON_INSTALL_DIR
+    export UV_MANAGED_PYTHON
     uv sync --frozen
     sed -i \
       "s/context\\.py_executable = \" \"\\.join(self\\.nsight_cmd) + \" python\"/context.py_executable = \" \".join(self.nsight_cmd) + f\" {context.py_executable}\"/g" \

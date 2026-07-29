@@ -348,6 +348,7 @@ def test_driver_venv_host_paths_override_container_image_defaults() -> None:
         '    UV_CACHE_DIR="${UV_CACHE_DIR}" \\\n'
         '    NEMO_RL_VENV_DIR="${NEMO_RL_VENV_DIR}" \\\n'
         '    UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR}" \\\n'
+        "    UV_MANAGED_PYTHON=1 \\\n"
         "    bash -lc '"
     )
     diagnostics = (
@@ -355,10 +356,12 @@ def test_driver_venv_host_paths_override_container_image_defaults() -> None:
         'printf "Effective UV_CACHE_DIR=%s\\\\n" "${UV_CACHE_DIR}"',
         'printf "Effective NEMO_RL_VENV_DIR=%s\\\\n" "${NEMO_RL_VENV_DIR}"',
         'printf "Effective UV_PYTHON_INSTALL_DIR=%s\\\\n" "${UV_PYTHON_INSTALL_DIR}"',
+        'printf "Effective UV_MANAGED_PYTHON=%s\\\\n" "${UV_MANAGED_PYTHON}"',
     )
 
     assert 'UV_PYTHON_INSTALL_DIR="${NEMO_RL_VENV_DIR}/.uv-python"' in source
     assert injection in source
+    assert "export UV_MANAGED_PYTHON" in source
     assert source.index("--container-workdir=") < source.index(injection)
     assert all(diagnostic in source for diagnostic in diagnostics)
     assert all(
@@ -376,9 +379,40 @@ def _run_prepare_payload(
     precreate_stale_actor: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     project_root = Path(__file__).resolve().parents[3]
+    prepare_source = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "x86"
+        / "hybridep"
+        / "prepare_driver_venv.sbatch"
+    ).read_text()
+    uv_managed_python_assignment = next(
+        line.strip().removesuffix("\\").strip()
+        for line in prepare_source.splitlines()
+        if line.strip().startswith("UV_MANAGED_PYTHON=")
+    )
+    uv_managed_python = uv_managed_python_assignment.split("=", maxsplit=1)[1]
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
-    _write_fake_command(fake_bin / "uv", "#!/bin/sh\nexit 0\n")
+    _write_fake_command(
+        fake_bin / "uv",
+        """#!/bin/bash
+if [[ "${UV_MANAGED_PYTHON:-}" != "1" ]]; then
+  printf '%s\\n' 'UV_MANAGED_PYTHON=1 was not enforced' >&2
+  exit 86
+fi
+if [[ ! -d "${UV_PYTHON_INSTALL_DIR:-}" ]]; then
+  printf '%s\\n' 'UV_PYTHON_INSTALL_DIR was not initialized' >&2
+  exit 87
+fi
+if find "${UV_PYTHON_INSTALL_DIR}" -mindepth 1 -print -quit | grep -q .; then
+  printf '%s\\n' 'UV_PYTHON_INSTALL_DIR was not initially empty' >&2
+  exit 88
+fi
+printf '%s\\n' 'managed-python-contract-ok'
+""",
+    )
     _write_fake_command(fake_bin / "sed", "#!/bin/sh\nexit 0\n")
     driver_venv = tmp_path / "driver-venv"
     nsight_patch_target = (
@@ -426,6 +460,7 @@ exit 0
     )
     actor_venv_dir = tmp_path / "actor-venvs"
     uv_python_install_dir = actor_venv_dir / ".uv-python"
+    uv_python_install_dir.mkdir(parents=True)
     if precreate_stale_actor:
         stale_python = tmp_path / "container-root" / "bin" / "python3.13"
         stale_python.parent.mkdir(parents=True)
@@ -449,6 +484,7 @@ exit 0
             "UV_CACHE_DIR": str(tmp_path / "uv-cache"),
             "NEMO_RL_VENV_DIR": str(actor_venv_dir),
             "UV_PYTHON_INSTALL_DIR": str(uv_python_install_dir),
+            "UV_MANAGED_PYTHON": uv_managed_python,
             "PREFETCH_REPORTS_FAILURE": "1" if prefetch_reports_failure else "0",
             "ACTOR_IMPORT_EXIT": str(actor_import_exit),
             "ACTOR_PYTHON_OUTSIDE_MANAGED": (
@@ -467,6 +503,17 @@ def test_actor_prefetch_summary_failure_is_fatal(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert "Actor environment prefetch failed" in result.stderr
+
+
+def test_actor_prefetch_forces_managed_python_from_an_empty_store(
+    tmp_path: Path,
+) -> None:
+    result = _run_prepare_payload(
+        tmp_path, prefetch_reports_failure=False, actor_import_exit=0
+    )
+
+    assert result.returncode == 0
+    assert "managed-python-contract-ok" in result.stdout
 
 
 def test_actor_prefetch_rejects_an_interpreter_without_required_imports(
