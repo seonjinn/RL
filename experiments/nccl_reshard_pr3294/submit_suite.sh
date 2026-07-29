@@ -33,7 +33,7 @@ case "${PLATFORM}" in
     TOTAL_NODES=${TOTAL_NODES:-5}
     GPUS_PER_NODE=${GPUS_PER_NODE:-4}
     GEN_NODES=${GEN_NODES:-1}
-    SEGMENT_SIZE=${SEGMENT_SIZE:-4}
+    SEGMENT_SIZE=${SEGMENT_SIZE:-1}
     ;;
   *)
     echo "PLATFORM must be gcp-b200, cw-h100, or gb200" >&2

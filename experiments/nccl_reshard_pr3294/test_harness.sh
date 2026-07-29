@@ -108,6 +108,12 @@ bash -n "${REPO_ROOT}/experiments/nccl_reshard_pr3294/run_arm.sbatch"
 bash -n "${REPO_ROOT}/experiments/nccl_reshard_pr3294/run_pair.sbatch"
 bash -n "${REPO_ROOT}/experiments/nccl_reshard_pr3294/submit_suite.sh"
 
+gb200_defaults=$(
+  sed -n '/^  gb200)/,/^    ;;/p' \
+    "${REPO_ROOT}/experiments/nccl_reshard_pr3294/submit_suite.sh"
+)
+grep -Fq 'SEGMENT_SIZE=${SEGMENT_SIZE:-1}' <<<"${gb200_defaults}"
+
 if grep -Fq 'REFIT_TRANSPORT=${REFIT_TRANSPORT},CONTAINER_ENV_VARS=PATH"' \
   "${REPO_ROOT}/experiments/nccl_reshard_pr3294/submit_suite.sh"; then
   echo "submit_suite must not overwrite the container PATH without a bootstrap venv" >&2
