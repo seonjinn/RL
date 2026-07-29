@@ -45,18 +45,16 @@ Existing model-specific environment variables remain present. Derived
 32-node and 64-node recipes inherit this block from their base recipe.
 
 For each affected recipe family, preserve the prior dispatcher as a separate
-`-alltoall.yaml` recipe. The baseline recipe inherits its HybridEP-default
-counterpart and overrides only:
+`-alltoall.yaml` recipe. The all-to-all file retains the pre-change recipe,
+while the canonical filename becomes a minimal child of that baseline and
+adds only the HybridEP block. This inheritance direction is required because
+NeMo-RL YAML inheritance supports merging and complete section replacement,
+but not deleting individual inherited keys.
 
-```yaml
-policy:
-  megatron_cfg:
-    moe_token_dispatcher_type: alltoall
-```
-
-The baseline must remove inherited HybridEP-only backend, SM, and environment
-settings through OmegaConf deletion overrides. A resolved-config contract test
-must prove that every non-dispatcher field is identical between the two arms.
+Derived 32-node and 64-node all-to-all files inherit the corresponding
+all-to-all base recipe. Their canonical counterparts continue to inherit the
+canonical HybridEP base recipe. A resolved-config contract test must prove
+that every non-dispatcher field is identical between each pair.
 
 ## Dependency and Runtime Contract
 
