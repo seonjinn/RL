@@ -87,11 +87,23 @@ Commit and push the Megatron-LM change first, update the Megatron-Bridge
 gitlink, then update the NeMo-RL gitlinks. Do not edit Megatron-LM only through
 the enclosing Bridge worktree. All commits must be signed off.
 
-DeepEP main documents PyTorch 2.10 and NCCL 2.30.4 as minimums for V2. Before
-performance work, record the effective PyTorch, CUDA, NCCL, NVSHMEM, driver,
-and firmware versions from the allocated runtime. The first GPU smoke decides
-whether the legacy `Buffer` path works with the current nightly image. A
-documented version mismatch is never hidden.
+DeepEP main requires PyTorch 2.10 and NCCL 2.30.4. The current repository lock
+provides PyTorch 2.11.0 but NCCL 2.28.9. dd758 unconditionally compiles its
+elastic NCCL backend and validates the loaded NCCL binary during top-level
+import, so 2.28.9 is a hard build and import blocker even though
+Megatron-Core uses the legacy `Buffer` path.
+
+Prefer a newly staged NeMo-RL nightly that already contains NCCL 2.30.4. If
+the staged nightly does not, stage the exact `nvidia-nccl-cu13==2.30.4` wheel
+as an immutable Lustre artifact and install it into the same per-run overlay
+as the selected DeepEP wheel. Prepend the overlay's NCCL library directory to
+`LD_LIBRARY_PATH` before Ray starts. Apply the identical NCCL runtime to both
+DeepEP and HybridEP arms so the comparison does not confound the dispatcher
+with an NCCL-version difference.
+
+Before performance work, record the effective PyTorch, CUDA, NCCL, NVSHMEM,
+driver, and firmware versions from the allocated runtime. Require the runtime
+probe to report NCCL 2.30.4 for both arms. A version mismatch is never hidden.
 
 ## Launcher and Recipe Contract
 
