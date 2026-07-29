@@ -73,6 +73,26 @@ WANDB_PROJECT=${WANDB_PROJECT:-sna-pr3294-nccl-reshard}
 WANDB_KEY_FILE=${WANDB_KEY_FILE:-${CACHE_ROOT}/.wandb_key}
 NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-false}
 RAY_BOOTSTRAP_VENV=${RAY_BOOTSTRAP_VENV:-}
+RAY_BOOTSTRAP_ARCHIVE=${RAY_BOOTSTRAP_ARCHIVE:-}
+RAY_BOOTSTRAP_LOCAL_ROOT=${RAY_BOOTSTRAP_LOCAL_ROOT:-}
+
+if [[ -n "${RAY_BOOTSTRAP_ARCHIVE}" ]]; then
+  test -f "${RAY_BOOTSTRAP_ARCHIVE}"
+  RAY_BOOTSTRAP_LOCAL_ROOT=${RAY_BOOTSTRAP_LOCAL_ROOT:-/tmp/nrl-ray-bootstrap-${SLURM_JOB_ID}}
+  RAY_BOOTSTRAP_VENV=${RAY_BOOTSTRAP_LOCAL_ROOT}
+  export SETUP_COMMAND="
+set -euo pipefail
+if [[ ! -x '${RAY_BOOTSTRAP_LOCAL_ROOT}/bin/ray' ]]; then
+  rm -rf '${RAY_BOOTSTRAP_LOCAL_ROOT}' '${RAY_BOOTSTRAP_LOCAL_ROOT}.tmp'
+  mkdir -p '${RAY_BOOTSTRAP_LOCAL_ROOT}.tmp'
+  tar -xzf '${RAY_BOOTSTRAP_ARCHIVE}' \
+    -C '${RAY_BOOTSTRAP_LOCAL_ROOT}.tmp' --strip-components=1
+  mv '${RAY_BOOTSTRAP_LOCAL_ROOT}.tmp' '${RAY_BOOTSTRAP_LOCAL_ROOT}'
+fi
+test -x '${RAY_BOOTSTRAP_LOCAL_ROOT}/bin/ray'
+test -x '${RAY_BOOTSTRAP_LOCAL_ROOT}/bin/uv'
+"
+fi
 
 mkdir -p "${HF_HOME}" "${SHARED_UV_CACHE}" "${CACHE_ROOT}/venvs"
 if [[ ! -s "${WANDB_KEY_FILE}" && -f "${HOME}/.netrc" ]]; then
@@ -94,6 +114,7 @@ max_steps=${MAX_STEPS}
 refit_transport=${REFIT_TRANSPORT}
 ray_sub_path=${RAY_SUB_PATH}
 ray_bootstrap_venv=${RAY_BOOTSTRAP_VENV}
+ray_bootstrap_archive=${RAY_BOOTSTRAP_ARCHIVE}
 shared_uv_cache=${SHARED_UV_CACHE}
 force_rebuild_venvs=${NRL_FORCE_REBUILD_VENVS}
 NRL_MXFP8_BATCHED_SHUFFLE=${NRL_MXFP8_BATCHED_SHUFFLE}
@@ -106,7 +127,9 @@ export MOUNTS=/lustre:/lustre
 export BASE_LOG_DIR="${EXPERIMENT_ROOT}"
 export UV_CACHE_DIR_OVERRIDE="${SHARED_UV_CACHE}"
 if [[ -n "${RAY_BOOTSTRAP_VENV}" ]]; then
-  test -x "${RAY_BOOTSTRAP_VENV}/bin/ray"
+  if [[ -z "${RAY_BOOTSTRAP_ARCHIVE}" ]]; then
+    test -x "${RAY_BOOTSTRAP_VENV}/bin/ray"
+  fi
   export PATH="${RAY_BOOTSTRAP_VENV}/bin:${PATH}"
   export PYTHONPATH="${RAY_BOOTSTRAP_VENV}/lib/python3.13/site-packages${PYTHONPATH:+:${PYTHONPATH}}"
 fi

@@ -9,6 +9,8 @@ trap 'rm -rf "${TMP_DIR}"' EXIT
 touch "${TMP_DIR}/container.sqsh"
 cat >"${TMP_DIR}/capture_command.sh" <<'EOF'
 #!/usr/bin/env bash
+printf 'SETUP_COMMAND=%s\n' "${SETUP_COMMAND:-}"
+printf 'PATH=%s\n' "${PATH}"
 printf '%s\n' "${COMMAND}"
 EOF
 chmod +x "${TMP_DIR}/capture_command.sh"
@@ -47,6 +49,31 @@ probe_command=$(render_command mxfp8-probe)
 uv_line=$(grep '^uv run ' <<<"${probe_command}")
 grep -q "policy.megatron_cfg.fp8_cfg.fp8_param=true" <<<"${uv_line}"
 grep -q "policy.generation.vllm_cfg.is_mx=true" <<<"${uv_line}"
+
+touch "${TMP_DIR}/ray-bootstrap.tar.gz"
+archive_command=$(
+  ARM=optimized \
+  MODE=mxfp8-rollout \
+  REPO="${REPO_ROOT}" \
+  CONTAINER="${TMP_DIR}/container.sqsh" \
+  TOTAL_NODES=3 \
+  GPUS_PER_NODE=8 \
+  GEN_NODES=1 \
+  SEGMENT_SIZE=2 \
+  MAX_STEPS=5 \
+  RUN_NAME=test-archive \
+  EXPERIMENT_ROOT="${TMP_DIR}/archive" \
+  WORK_ROOT="${TMP_DIR}/work" \
+  CACHE_ROOT="${TMP_DIR}/cache-archive" \
+  SHARED_UV_CACHE="${TMP_DIR}/uv" \
+  RAY_SUB_PATH="${TMP_DIR}/capture_command.sh" \
+  RAY_BOOTSTRAP_ARCHIVE="${TMP_DIR}/ray-bootstrap.tar.gz" \
+  RAY_BOOTSTRAP_LOCAL_ROOT=/tmp/test-ray-bootstrap \
+  REFIT_TRANSPORT=null \
+  bash "${REPO_ROOT}/experiments/nccl_reshard_pr3294/run_arm.sbatch"
+)
+grep -q "tar -xzf '${TMP_DIR}/ray-bootstrap.tar.gz'" <<<"${archive_command}"
+grep -q "^PATH=/tmp/test-ray-bootstrap/bin:" <<<"${archive_command}"
 
 cat >"${TMP_DIR}/capture_arm.sh" <<'EOF'
 #!/usr/bin/env bash
