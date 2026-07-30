@@ -106,6 +106,28 @@ image `nemo_rl_nightly_20260729_2472184.sqsh`, recorded as SHA256
 container overrides are intentionally not accepted for this gate. It hashes the
 25 GB image with `sha256sum --` before `srun` and fails closed on a mismatch.
 
+## Persistent native Transformer Engine build
+
+`scripts/build_te_pr2898_backport.sub` is the separate native-build gate for
+TransformerEngine commit `ba256c5b23c8f19b64a0c26499277d15c4133a1c` from
+`${ROOT}/src/TransformerEngine-fp64-thd-cudagraph-20260730`. It validates the
+source HEAD, clean worktree, recursive submodule state, and the same pinned
+nightly image SHA256 before entering the container. The container builds one
+offline PyTorch wheel with `/opt/nemo_rl_venv/bin/python setup.py bdist_wheel`,
+`NVTE_CUDA_ARCHS=100`, and at most 16 build jobs.
+
+The launcher publishes only a fresh commit-named directory under
+`${ROOT}/artifacts/transformer-engine/`, containing exactly one wheel, its
+SHA256 sidecar, and provenance JSON. Publication is an atomic rename; an
+existing commit directory is never replaced. It is deliberately outside every
+performance launcher, so no performance job builds or installs native
+Transformer Engine code.
+
+```bash
+TE_BUILD_JOBS=8 \
+  sbatch experiments/cuda_graph/mamba_moe_te_graph_20260729/scripts/build_te_pr2898_backport.sub
+```
+
 The gate runs from the clean runner checkout
 `${ROOT}/src/RL-pr5672-mamba-moe-graph-cache-runner-20260730`, which must be
 freshly cloned and initialized at the submitted `EXPECTED_SHA`; it never uses
@@ -226,6 +248,13 @@ python3 experiments/cuda_graph/mamba_moe_te_graph_20260729/collect_results.py \
   --input experiments/cuda_graph/results/mamba_moe_te_graph_20260729_submissions.json \
   --output experiments/cuda_graph/results/mamba_moe_te_graph_20260729_results.csv
 ```
+
+The submission ledger preserves failure text, Slurm exit code, elapsed wall
+time, and completed-step count for the Failures table. Those fields are
+provisional job telemetry, not CUDA Graph telemetry: performance JSONL rows
+may legitimately leave them blank. Conversely, absent `eviction_count` or
+`fallback_count` is never converted to zero; a steady-state comparison remains
+invalid until both graph-telemetry counters are actually collected.
 
 The required W&B mappings are:
 

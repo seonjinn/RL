@@ -14,6 +14,10 @@ CSV_FIELDS = (
     "scope",
     "job_id",
     "status",
+    "failure",
+    "exit_code",
+    "elapsed",
+    "completed_steps",
     "step",
     "geometry_key",
     "capture_count",
@@ -157,7 +161,15 @@ def normalize_record(record: Mapping[str, Any]) -> dict[str, Any]:
     metrics.update(nested_metrics)
 
     row = {field: "" for field in CSV_FIELDS}
-    for field in ("scope", "job_id", "status"):
+    for field in (
+        "scope",
+        "job_id",
+        "status",
+        "failure",
+        "exit_code",
+        "elapsed",
+        "completed_steps",
+    ):
         row[field] = record.get(field, "")
     row["step"] = record.get("step", metrics.get("_step", ""))
     for field in TELEMETRY_FIELDS:

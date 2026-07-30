@@ -1425,6 +1425,10 @@ def test_collector_schema_and_wandb_metric_mapping_are_exact() -> None:
         "scope",
         "job_id",
         "status",
+        "failure",
+        "exit_code",
+        "elapsed",
+        "completed_steps",
         "step",
         "geometry_key",
         "capture_count",
@@ -1541,6 +1545,63 @@ def test_collector_normalizes_nested_local_export_without_network() -> None:
     assert row["sampling_importance_ratio"] == 1.04
     assert row["num_masked_seqs_by_logprob_error"] == 5.0
     assert row["policy_loss"] == 0.1
+
+
+def test_collector_preserves_submission_failure_detail_without_inventing_telemetry() -> (
+    None
+):
+    collector = _load_experiment_module("collect_results")
+    row = collector.normalize_record(
+        {
+            "scope": "attn-mamba",
+            "job_id": "2475436",
+            "status": "performance:failed-capture",
+            "failure": "cudaErrorStreamCaptureUnsupported",
+            "exit_code": "1:0",
+            "elapsed": "00:12:50",
+            "completed_steps": 3,
+        }
+    )
+    performance_row = collector.normalize_record(
+        {
+            "scope": "baseline-no-cg",
+            "job_id": "2475435",
+            "status": "performance:completed",
+            "step": 1,
+            "metrics": {"performance/tokens_per_sec_per_gpu": 8.0},
+        }
+    )
+
+    assert row["failure"] == "cudaErrorStreamCaptureUnsupported"
+    assert row["exit_code"] == "1:0"
+    assert row["elapsed"] == "00:12:50"
+    assert row["completed_steps"] == 3
+    assert performance_row["failure"] == ""
+    assert performance_row["exit_code"] == ""
+    assert performance_row["elapsed"] == ""
+    assert performance_row["completed_steps"] == ""
+    assert performance_row["eviction_count"] == ""
+    assert performance_row["fallback_count"] == ""
+
+    renderer = _load_experiment_module("render_report")
+    report = renderer.render_html(
+        [row],
+        te_version="2.15.0+42b84005",
+        te_source_commit="e707aa46869dc2aec08dfea25402e97a61d49fef",
+        te_overlay_sha256=TE_FP64_WEAKREF_SHA256,
+    )
+
+    for value in (
+        "Failure detail",
+        "Exit code",
+        "Elapsed",
+        "Completed steps",
+        "cudaErrorStreamCaptureUnsupported",
+        "1:0",
+        "00:12:50",
+        "3",
+    ):
+        assert value in report
 
 
 def test_collector_writes_repository_safe_lf_csv(tmp_path: Path) -> None:
