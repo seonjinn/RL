@@ -40,6 +40,7 @@ srun --nodes=1 --ntasks=1 \
     bash -lc "
         set -euo pipefail
         export CUDA_VISIBLE_DEVICES=0
+        export UV_CACHE_DIR=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/uv_cache
         cd \"\${SLURM_SUBMIT_DIR}\"
         uv run --frozen --extra mcore python -m pytest -vv \\
           \"${TE_SOURCE_ROOT}/tests/pytorch/test_cuda_graphs.py\" \\
