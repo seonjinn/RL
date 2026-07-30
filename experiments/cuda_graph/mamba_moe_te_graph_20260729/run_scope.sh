@@ -131,11 +131,7 @@ TIME_LIMIT=${TIME_LIMIT_OVERRIDE:-${TIME_LIMIT}}
 COMMAND_ARGS=(
   env
   NRL_FORCE_REBUILD_VENVS=true
-  uv
-  run
-  --frozen
-  --extra
-  mcore
+  /opt/nemo_rl_venv/bin/python
   examples/run_grpo.py
   --config
   "${CONFIG}"

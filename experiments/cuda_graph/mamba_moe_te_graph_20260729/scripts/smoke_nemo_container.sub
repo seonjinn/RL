@@ -27,6 +27,8 @@ srun --nodes=1 --ntasks=1 \
     cd ${REPO}
     NRL_FORCE_REBUILD_VENVS=true uv run --frozen --extra mcore python -c pass
     uv pip install --python /opt/nemo_rl_venv/bin/python --reinstall --no-cache 'ray[default]==2.56.1'
+    uv pip install --python /opt/nemo_rl_venv/bin/python --reinstall --no-cache 'dill==0.4.1'
+    /opt/nemo_rl_venv/bin/python -c 'import dill; assert callable(dill.extend)'
     ray --version
     ray start --head --include-dashboard=False --disable-usage-stats --port=1200
     ray stop

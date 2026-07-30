@@ -328,6 +328,8 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
 def test_gb200_profiles_limit_transformer_engine_build_to_sm100() -> None:
     runner = (EXPERIMENT_DIR / "run_scope.sh").read_text()
 
+    assert "/opt/nemo_rl_venv/bin/python" in runner
+    assert "uv\n  run\n" not in runner
     assert 'NVTE_CUDA_ARCHS="${NVTE_CUDA_ARCHS}" \\' in runner
     assert 'UV_CACHE_DIR_OVERRIDE="${UV_CACHE_DIR_OVERRIDE}" \\' in runner
     assert 'SETUP_COMMAND="${SETUP_COMMAND}" \\' in runner
@@ -341,6 +343,7 @@ def test_gb200_profiles_limit_transformer_engine_build_to_sm100() -> None:
         assert "RAY_CLIENT_SERVER_ENABLED=0" in profile
         assert "RAY_DASHBOARD_ENABLED=0" in profile
         assert "--reinstall --no-cache 'ray[default]==2.56.1'" in profile
+        assert "--reinstall --no-cache 'dill==0.4.1'" in profile
 
 
 def test_container_smoke_reuses_official_mcore_environment() -> None:
@@ -352,6 +355,7 @@ def test_container_smoke_reuses_official_mcore_environment() -> None:
     assert "export NVTE_CUDA_ARCHS=100" in script
     assert "NRL_FORCE_REBUILD_VENVS=true uv run --frozen --extra mcore python -c pass" in script
     assert "--reinstall --no-cache 'ray[default]==2.56.1'" in script
+    assert "--reinstall --no-cache 'dill==0.4.1'" in script
     assert "ray --version" in script
     assert "ray start --head" in script
     assert "ray stop" in script
