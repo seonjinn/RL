@@ -20,9 +20,9 @@ for relative_launcher in "${launchers[@]}"; do
     exit 2
   }
   case "${relative_launcher}" in
-    scopes/*.sh|variants/*.sh) ;;
+    scopes/*.sh|variants/*.sh|pairs/00_drop_pad_baseline_no_cg.sh|pairs/01_drop_pad_moe.sh) ;;
     *)
-      echo "Performance launcher must be under scopes/ or variants/: ${relative_launcher}" >&2
+      echo "Performance launcher must be an approved scopes/, variants/, or drop-pad pair launcher: ${relative_launcher}" >&2
       exit 2
       ;;
   esac

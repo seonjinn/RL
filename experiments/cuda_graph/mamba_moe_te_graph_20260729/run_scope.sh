@@ -94,6 +94,12 @@ fi
 IMMUTABLE_RUNTIME_PYTHONPATH="${RUNTIME_ARCHIVE_PREFIX}:${REPO_ROOT}:${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
 
 MODEL=${MODEL:-nano-hybrid}
+DROP_PAD_MOE_PAIR=${DROP_PAD_MOE_PAIR:-false}
+case "${DROP_PAD_MOE_PAIR}" in
+  false|true) ;;
+  *) fail "DROP_PAD_MOE_PAIR must be false or true" ;;
+esac
+
 case "${MODEL}" in
   nano-hybrid)
     CONFIG=examples/configs/recipes/llm/grpo-nanov3-30BA3B-2n8g-megatron-pack-cp.yaml
@@ -122,6 +128,10 @@ case "${MODEL}" in
     ;;
   *) fail "MODEL must be nano-hybrid, qwen3-30b-a3b, or qwen3-235b-a22b" ;;
 esac
+
+if [[ "${DROP_PAD_MOE_PAIR}" == true && "${MODEL}" != nano-hybrid ]]; then
+  fail "Drop-pad MoE pair requires MODEL=nano-hybrid; Qwen Flex/HybridEP recipes are unsupported"
+fi
 
 if [[ "${MODEL}" == qwen3-* && "${SCOPE}" == *mamba* ]]; then
   fail "${MODEL} recipe has no Mamba layers; Mamba graph scopes are invalid"

@@ -240,6 +240,19 @@ def test_drop_pad_moe_pair_is_isolated_and_matched() -> None:
         assert "moe_pad_expert_input_to_capacity" not in legacy.stdout
 
 
+def test_drop_pad_moe_pair_rejects_non_nano_recipes_before_scheduler() -> None:
+    result = _run_script(
+        "pairs/01_drop_pad_moe.sh",
+        CLUSTER="ptyche",
+        MODEL="qwen3-235b-a22b",
+        TEST_ONLY="1",
+    )
+
+    assert result.returncode == 2
+    assert "Drop-pad MoE pair requires MODEL=nano-hybrid" in result.stderr
+    assert "SBATCH:" not in result.stdout
+
+
 def test_test_only_reports_resolved_ptyche_nano_provenance_and_never_submits() -> None:
     result = _run_script(
         "scopes/17_attn.sh",
@@ -810,6 +823,24 @@ def test_submit_performance_accepts_explicit_reusable_selection() -> None:
     assert result.stdout.count("Submitting performance launcher:") == 2
     assert "baseline-no-cg" in result.stdout
     assert "whole-layer" in result.stdout
+
+
+def test_submit_performance_accepts_drop_pad_pair_selection() -> None:
+    result = _run_script(
+        "submit_performance.sh",
+        CLUSTER="ptyche",
+        TEST_ONLY="1",
+        RUN_TAG="unit-test",
+        PERFORMANCE_SCRIPTS=(
+            "pairs/00_drop_pad_baseline_no_cg.sh pairs/01_drop_pad_moe.sh"
+        ),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count("TEST_ONLY: no submission performed") == 2
+    assert result.stdout.count("Submitting performance launcher:") == 2
+    assert "drop-pad-baseline-no-cg" in result.stdout
+    assert "drop-pad-moe" in result.stdout
 
 
 def test_nemorl_integration_gate_uses_bridge_src_layout() -> None:

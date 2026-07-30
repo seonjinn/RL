@@ -27,7 +27,8 @@ of shared-expert overlap and selective `moe_act` recompute under only the
 no CUDA Graph and `01_drop_pad_moe.sh` captures only `[moe]`. This pair is
 separate from the standard dropless matrix because capacity-based routing can
 drop tokens. The two pair members share all other model, runtime, resource,
-and training settings.
+and training settings. They are fail-closed to `MODEL=nano-hybrid`: the Qwen
+Flex/HybridEP recipes are not compatible with this standalone-MoE graph path.
 
 Every launcher pins three successful warmup updates, two cached PP schedule
 banks, at most 16 packed sequences, checkpoint writes disabled, and W&B
@@ -165,6 +166,14 @@ Select reusable performance rows explicitly:
 ```bash
 TEST_ONLY=1 CLUSTER=ptyche \
 PERFORMANCE_SCRIPTS="scopes/00_baseline_no_cg.sh scopes/01_whole_layer.sh" \
+  bash experiments/cuda_graph/mamba_moe_te_graph_20260729/submit_performance.sh
+```
+
+The two approved drop-and-pad pair launchers can also be selected explicitly:
+
+```bash
+TEST_ONLY=1 CLUSTER=ptyche \
+PERFORMANCE_SCRIPTS="pairs/00_drop_pad_baseline_no_cg.sh pairs/01_drop_pad_moe.sh" \
   bash experiments/cuda_graph/mamba_moe_te_graph_20260729/submit_performance.sh
 ```
 
