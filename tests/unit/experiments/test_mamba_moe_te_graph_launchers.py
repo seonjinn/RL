@@ -321,6 +321,16 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
 
     assert "NRL_FORCE_REBUILD_VENVS=true" in script
     assert "uv run --extra mcore python -m pytest" in script
+    assert "export NVTE_CUDA_ARCHS=100" in script
+
+
+def test_gb200_profiles_limit_transformer_engine_build_to_sm100() -> None:
+    runner = (EXPERIMENT_DIR / "run_scope.sh").read_text()
+
+    assert 'NVTE_CUDA_ARCHS="${NVTE_CUDA_ARCHS}" \\' in runner
+    for cluster in ("ptyche", "oci-hsg"):
+        profile = (EXPERIMENT_DIR / "profiles" / f"{cluster}.env").read_text()
+        assert "NVTE_CUDA_ARCHS=100" in profile
 
 
 def test_container_smoke_reuses_official_mcore_environment() -> None:
