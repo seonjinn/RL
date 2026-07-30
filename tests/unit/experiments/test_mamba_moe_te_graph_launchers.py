@@ -492,7 +492,12 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
     assert "MCORE_VENV=${ROOT}/venvs/nemorl-integration-mcore-${MCORE_VENV_KEY}" in script
     assert "export UV_PROJECT_ENVIRONMENT=${MCORE_VENV}" in script
     sync_index = script.index("uv sync --frozen --extra mcore")
-    first_wrapper_index = script.index("\\${UV_PROJECT_ENVIRONMENT}/bin/python")
+    wrapper_command = (
+        "\\${UV_PROJECT_ENVIRONMENT}/bin/python "
+        "experiments/cuda_graph/mamba_moe_te_graph_20260729/"
+        "run_pytest_with_te_overlay.py"
+    )
+    first_wrapper_index = script.index(wrapper_command)
     sync_block = script[sync_index:first_wrapper_index]
     for sync_flag in (
         "--no-install-project",
@@ -502,9 +507,14 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
     ):
         assert sync_flag in sync_block
     assert re.search(r"(?m)^\s*--no-build(?:\s|\\|$)", sync_block) is None
-    assert sync_block.count("--no-build-package transformer-engine") == 1
-    assert "--no-build-package transformer-engine-torch" not in sync_block
-    last_wrapper_index = script.rindex("\\${UV_PROJECT_ENVIRONMENT}/bin/python")
+    assert sync_block.count("--no-install-package transformer-engine") == 1
+    assert "--no-install-package transformer-engine-torch" not in sync_block
+    assert "--no-build-package" not in sync_block
+    post_sync_te_check = script.index("Unexpected Transformer Engine artifact in venv")
+    assert sync_index < post_sync_te_check < first_wrapper_index
+    assert "sysconfig.get_path('purelib')" in script
+    assert "transformer_engine*.dist-info" in script
+    last_wrapper_index = script.rindex(wrapper_command)
     flock_index = script.index("flock -x 9")
     venv_parent_creation = 'mkdir -p "$(dirname "${MCORE_VENV}")"'
     assert venv_parent_creation in script
@@ -513,7 +523,7 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
     )
     assert flock_index < sync_index < first_wrapper_index < last_wrapper_index
     assert 'exec 9>\\"\\${UV_PROJECT_ENVIRONMENT}.lock\\"' in script
-    assert script.count("\\${UV_PROJECT_ENVIRONMENT}/bin/python") == 2
+    assert script.count(wrapper_command) == 2
     assert script.count("/opt/nemo_rl_venv/bin/python") == 1
     assert script.count("run_pytest_with_te_overlay.py") == 2
     assert "export NVTE_CUDA_ARCHS=100" in script
@@ -553,8 +563,31 @@ def test_nemorl_integration_gate_uses_the_validated_immutable_runtime_archives()
         "setup.py build",
     ):
         assert native_build_command not in script
-    assert script.count("--no-build-package transformer-engine") == 1
-    assert "--no-build-package transformer-engine-torch" not in script
+    assert script.count("--no-install-package transformer-engine") == 1
+    assert "--no-install-package transformer-engine-torch" not in script
+    assert "--no-build-package" not in script
+
+
+def test_nemorl_integration_gate_renders_the_post_sync_venv_check_safely() -> None:
+    script = (
+        EXPERIMENT_DIR / "scripts" / "validate_nemorl_integration.sub"
+    ).read_text()
+    marker = "\\${UV_PROJECT_ENVIRONMENT}/bin/python - <<'PY'\n"
+    _, found_marker, remainder = script.partition(marker)
+    assert found_marker
+    python_source, found_terminator, _ = remainder.partition("\nPY\n")
+    assert found_terminator
+    assert '"' not in python_source
+
+    rendered_command = "bash -lc \"\npython3 - <<'PY'\n" + python_source + "\nPY\n\""
+    result = subprocess.run(
+        ["bash", "-c", rendered_command],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_nemorl_integration_gate_pins_clean_runner_lock_and_image_provenance() -> None:
@@ -668,7 +701,6 @@ def test_nemorl_integration_gate_uses_the_same_immutable_python_for_both_suites(
     assert helper_path.is_file()
     assert "uv run" not in script
     assert "NRL_FORCE_REBUILD_VENVS" not in script
-    assert script.count("\\${UV_PROJECT_ENVIRONMENT}/bin/python") == 2
     assert script.count("run_pytest_with_te_overlay.py") == 2
     assert "tests/unit/models/megatron/test_cuda_graph_lifecycle.py" in script
     assert "${MCORE_ROOT}/tests/unit_tests/transformer/test_te_cuda_graph_bank.py" in script
