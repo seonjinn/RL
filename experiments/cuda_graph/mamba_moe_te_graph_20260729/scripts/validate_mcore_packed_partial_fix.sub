@@ -4,7 +4,6 @@
 #SBATCH --job-name=coreai_dlalgo_llm-sna-cg-study.mcore-packed-partial
 #SBATCH --partition=batch
 #SBATCH --time=00:30:00
-#SBATCH --gres=gpu:4
 #SBATCH --segment=1
 #SBATCH --output=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/logs/mcore-packed-partial-%j.out
 
