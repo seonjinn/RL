@@ -133,6 +133,7 @@ COMMAND_ARGS=(
   NRL_FORCE_REBUILD_VENVS=true
   uv
   run
+  --frozen
   --extra
   mcore
   examples/run_grpo.py

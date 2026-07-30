@@ -19,7 +19,7 @@ test "$(sha256sum "${CONTAINER}" | awk '{print $1}')" = "${CONTAINER_SHA256}"
 srun --nodes=1 --ntasks=1 \
   --container-image="${CONTAINER}" \
   --container-mounts=/lustre:/lustre \
-  bash -lc "cd ${REPO} && uv run --extra mcore --no-sync python -" <<'PY'
+  bash -lc "cd ${REPO} && uv run --frozen --extra mcore --no-sync python -" <<'PY'
 import importlib
 
 import torch

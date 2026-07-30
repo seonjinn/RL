@@ -320,7 +320,7 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
     ).read_text()
 
     assert "NRL_FORCE_REBUILD_VENVS=true" in script
-    assert "uv run --extra mcore python -m pytest" in script
+    assert "uv run --frozen --extra mcore python -m pytest" in script
     assert "export NVTE_CUDA_ARCHS=100" in script
     assert "#SBATCH --time=01:00:00" in script
 
@@ -339,7 +339,7 @@ def test_container_smoke_reuses_official_mcore_environment() -> None:
         EXPERIMENT_DIR / "scripts" / "smoke_nemo_container.sub"
     ).read_text()
 
-    assert "uv run --extra mcore --no-sync python -" in script
+    assert "uv run --frozen --extra mcore --no-sync python -" in script
     assert "src/RL-pr5672-mamba-moe-graph-cache-20260729-d7f1d496f" in script
 
 
