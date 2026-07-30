@@ -72,6 +72,7 @@ case "${MODEL}" in
     CONFIG=examples/configs/recipes/llm/grpo-nanov3-30BA3B-2n8g-megatron-pack-cp.yaml
     MODEL_SNAPSHOT=${NANOV3_MODEL_SNAPSHOT:-}
     TOKENIZER_SNAPSHOT=${NANOV3_TOKENIZER_SNAPSHOT:-}
+    PRETRAINED_CHECKPOINT=${NANOV3_PRETRAINED_CHECKPOINT:-}
     TOTAL_NODES=${NANOV3_TOTAL_NODES:-}
     INFERENCE_NODES=${NANOV3_INFERENCE_NODES:-}
     ;;
@@ -79,6 +80,7 @@ case "${MODEL}" in
     CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
     MODEL_SNAPSHOT=${QWEN3_30BA3B_SNAPSHOT:-}
     TOKENIZER_SNAPSHOT=${QWEN3_30BA3B_SNAPSHOT:-}
+    PRETRAINED_CHECKPOINT=${QWEN3_30BA3B_PRETRAINED_CHECKPOINT:-}
     TOTAL_NODES=${QWEN3_30BA3B_TOTAL_NODES:-}
     INFERENCE_NODES=${QWEN3_30BA3B_INFERENCE_NODES:-}
     ;;
@@ -87,6 +89,7 @@ case "${MODEL}" in
     [[ -f "${REPO_ROOT}/${CONFIG}" ]] || fail "Qwen3-235B profile requires existing recipe: ${CONFIG}"
     MODEL_SNAPSHOT=${QWEN3_235BA22B_SNAPSHOT:-}
     TOKENIZER_SNAPSHOT=${QWEN3_235BA22B_SNAPSHOT:-}
+    PRETRAINED_CHECKPOINT=${QWEN3_235BA22B_PRETRAINED_CHECKPOINT:-}
     TOTAL_NODES=${QWEN3_235BA22B_TOTAL_NODES:-}
     INFERENCE_NODES=${QWEN3_235BA22B_INFERENCE_NODES:-}
     ;;
@@ -151,6 +154,8 @@ COMMAND_ARGS=(
   logger.tensorboard_enabled=true
   "logger.wandb.project=${WANDB_PROJECT}"
   "logger.wandb.name=${RUN_NAME}"
+  "+checkpointing.pretrained_checkpoint.path=${PRETRAINED_CHECKPOINT}"
+  +checkpointing.pretrained_checkpoint.format=megatron_lm
 )
 
 if [[ "${CUDA_GRAPH_IMPL}" == none ]]; then
@@ -215,6 +220,7 @@ for field in \
   MOUNTS \
   MODEL_SNAPSHOT \
   TOKENIZER_SNAPSHOT \
+  PRETRAINED_CHECKPOINT \
   TOTAL_NODES \
   INFERENCE_NODES; do
   value=${!field:-}

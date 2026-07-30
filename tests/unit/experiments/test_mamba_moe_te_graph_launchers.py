@@ -136,7 +136,7 @@ def test_moe_configuration_variants_are_persistent_and_not_graph_scopes() -> Non
         assert _assignment(script, "CHECKPOINTING_ENABLED") == "false"
 
 
-def test_test_only_reports_unresolved_provenance_and_never_submits() -> None:
+def test_test_only_reports_resolved_ptyche_nano_provenance_and_never_submits() -> None:
     result = _run_script(
         "scopes/17_attn.sh",
         CLUSTER="ptyche",
@@ -144,7 +144,7 @@ def test_test_only_reports_unresolved_provenance_and_never_submits() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert "UNRESOLVED:" in result.stdout
+    assert "UNRESOLVED: none" in result.stdout
     assert "COMMAND:" in result.stdout
     assert "SBATCH:" in result.stdout
     assert (
@@ -156,6 +156,16 @@ def test_test_only_reports_unresolved_provenance_and_never_submits() -> None:
     assert "policy.megatron_cfg.cuda_graph_max_cached_schedules=2" in result.stdout
     assert "policy.megatron_cfg.cuda_graph_max_packed_seqs=16" in result.stdout
     assert "checkpointing.enabled=false" in result.stdout
+    assert (
+        "+checkpointing.pretrained_checkpoint.path="
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/checkpoints/"
+        "nanov3-30b-a3b-pr5672-20260720/nvidia/"
+        "NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16" in result.stdout
+    )
+    assert (
+        "+checkpointing.pretrained_checkpoint.format=megatron_lm"
+        in result.stdout
+    )
     assert "logger.wandb.project=sna-cg-study" in result.stdout
     assert "TEST_ONLY: no submission performed" in result.stdout
 
@@ -241,6 +251,7 @@ def test_real_mode_fails_on_unresolved_provenance_before_sbatch() -> None:
     result = _run_script(
         "scopes/17_attn.sh",
         CLUSTER="ptyche",
+        MODEL="qwen3-235b-a22b",
         TEST_ONLY="0",
     )
 
