@@ -11,7 +11,7 @@ set -euo pipefail
 
 ROOT=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg
 REPO=${ROOT}/src/RL-pr5672-mamba-moe-graph-cache-20260729-d7f1d496f
-IMAGE=${ROOT}/containers/nemo_rl_nightly_20260727_2456107.sqsh
+IMAGE=${CONTAINER:-${ROOT}/containers/nemo_rl_nightly_20260729_2472184.sqsh}
 : "${EXPECTED_SHA:?Submit with the immutable NeMo-RL commit SHA}"
 mkdir -p "${ROOT}/uv_cache"
 
