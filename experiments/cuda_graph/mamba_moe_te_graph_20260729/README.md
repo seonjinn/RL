@@ -23,14 +23,13 @@ correctness-first combined
 `moe_act` and `shared_expert` are configuration knobs and never graph-scope
 entries.
 
-`pairs/` contains an isolated drop-and-pad MoE comparison. Both launchers set
-`moe_expert_capacity_factor=1.0` and
-`moe_pad_expert_input_to_capacity=true`; `00_drop_pad_baseline_no_cg.sh` uses
-no CUDA Graph and `01_drop_pad_moe.sh` captures only `[moe]`. This pair is
-separate from the standard dropless matrix because capacity-based routing can
-drop tokens. The two pair members share all other model, runtime, resource,
-and training settings. They are fail-closed to `MODEL=nano-hybrid`: the Qwen
-Flex/HybridEP recipes are not compatible with this standalone-MoE graph path.
+`pairs/` preserves the two drop-and-pad MoE reproducer launchers, but they are
+intentional negative tests. Sequence packing produces rank-local packed token
+extents, while drop-and-pad MoE derives expert capacity from that local extent.
+An expert-parallel group can therefore enter different all-to-all and Mamba
+collectives on the second update. This occurs with and without CUDA Graphs, so
+the launchers now fail before printing or invoking `sbatch`. Use the standard
+dropless scopes, especially `moe_router,moe_preprocess`, for partial capture.
 
 Every launcher pins three successful warmup updates, two cached PP schedule
 banks, at most 16 packed sequences, checkpoint writes disabled, and W&B
@@ -230,18 +229,27 @@ immutable prefix, with no staging directories or locks left behind.
 
 ## Exact 20-step comparison
 
-`submit_20step_native_te_comparison.sh` submits eight independent Nano
-performance jobs. The standard-routing group contains baseline, `attn`,
-`mamba`, `moe_router`, correctness-first `moe_router,moe_preprocess`, and the
-combined correctness-first scope. The separate drop-and-pad group contains its
-own matched baseline and `[moe]` row. Every job uses 20 steps, sequence packing,
-three warmup steps, checkpoint writes disabled, and the same native TE runtime.
-There are no Slurm dependencies or singleton constraints.
+`submit_20step_native_te_comparison.sh` submits six independent, dropless Nano
+performance jobs: baseline, `attn`, `mamba`, `moe_router`, correctness-first
+`moe_router,moe_preprocess`, and the combined correctness-first scope. Every
+job uses 20 steps, sequence packing, three warmup steps, checkpoint writes
+disabled, and the same native TE runtime. There are no Slurm dependencies or
+singleton constraints.
 
 ```bash
 CLUSTER=ptyche \
   bash experiments/cuda_graph/mamba_moe_te_graph_20260729/submit_20step_native_te_comparison.sh
 ```
+
+For the fixed packed-replay validation, use the smaller matched matrix:
+
+```bash
+CLUSTER=ptyche \
+  bash experiments/cuda_graph/mamba_moe_te_graph_20260729/submit_20step_packed_hybrid_fix.sh
+```
+
+It submits only baseline, `moe_router,moe_preprocess`, and
+`attn,mamba,moe_router,moe_preprocess`.
 
 ## Local preflight
 
@@ -252,7 +260,8 @@ TEST_ONLY=1 CLUSTER=ptyche \
   bash experiments/cuda_graph/mamba_moe_te_graph_20260729/scopes/17_attn.sh
 ```
 
-Preflight the standalone-MoE drop-and-pad pair:
+The standalone-MoE drop-and-pad reproducers are expected to exit `2` before
+the scheduler:
 
 ```bash
 TEST_ONLY=1 CLUSTER=ptyche \
@@ -276,7 +285,8 @@ PERFORMANCE_SCRIPTS="scopes/00_baseline_no_cg.sh scopes/01_whole_layer.sh" \
   bash experiments/cuda_graph/mamba_moe_te_graph_20260729/submit_performance.sh
 ```
 
-The two approved drop-and-pad pair launchers can also be selected explicitly:
+Selecting the drop-and-pad pair through the batch helper is also expected to
+exit `2` without printing an `SBATCH:` command:
 
 ```bash
 TEST_ONLY=1 CLUSTER=ptyche \
@@ -303,7 +313,7 @@ existing output when any required metric is incomplete.
 ```bash
 python3 experiments/cuda_graph/mamba_moe_te_graph_20260729/export_tensorboard.py \
   --event /path/to/tensorboard-run \
-  --scope drop-pad-moe \
+  --scope moe-router-preprocess \
   --job-id 2474000 \
   --status performance:passed \
   --output experiments/cuda_graph/results/mamba_moe_te_graph_20260729_events.jsonl
@@ -422,3 +432,6 @@ and Provenance separate. Missing experiment rows remain visibly pending.
 | NeMo-RL Task 7 | Slurm 2472646 | 138 passed integration tests with exit 0 on the pinned nightly container. |
 | NeMo-RL Task 8 | Slurm 2473134, 2473144–2473170 | Baseline plus 27 curated Nano hybrid smoke rows submitted on Ptyche without singleton dependencies. The submission ledger preserves the exact launcher-to-job mapping. |
 | NeMo-RL Task 9 | Slurm 2475736, 2475881 | Native TE `4a18653f` wheel build completed `0:0`; wheel SHA256 `029fdbcb…fff5e`. GB200 validation completed `0:0`, resolved TE Python/native/core from the immutable wheel prefix, and reported 6 passed including graph-safe MoE aux-loss CUDA Graph capture/replay. |
+| Packed hybrid replay fix | Slurm 2477954 | MCore commit `78f8f404` passed all five focused packed-sequence tests: hybrid Identity-attention replay, three logical post-MLP extents, and offload cleanup. |
+| Fixed-scope Nano smoke | Slurm 2477897, 2477898 | Dropless `moe_router,moe_preprocess` and combined `attn,mamba,moe_router,moe_preprocess` both completed two GRPO updates with exit `0:0`; no illegal-memory, watchdog, or NCCL-timeout signature appeared. |
+| Drop-and-pad fail-fast | Slurm 2478037 | The container integration gate completed `0:0`: 222 NeMo-RL tests, 78 MCore tests, and both distributed MCore targets on each rank passed. The no-CG and `[moe]` drop-and-pad deadlocks are now rejected during setup and by every persistent launcher path. |
