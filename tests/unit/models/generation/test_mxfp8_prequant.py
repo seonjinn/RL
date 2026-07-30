@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
+from types import ModuleType
+from typing import cast
+
 import pytest
 import torch
 
@@ -79,14 +83,80 @@ def test_aligned_last_dim_shards_match_full_weight_quantization():
 
     full_value, full_scale = _mxfp8_e4m3_quantize_torch(x)
     shard_pairs = [
-        _mxfp8_e4m3_quantize_torch(shard)
-        for shard in torch.chunk(x, chunks=2, dim=-1)
+        _mxfp8_e4m3_quantize_torch(shard) for shard in torch.chunk(x, chunks=2, dim=-1)
     ]
 
     sharded_value = torch.cat([pair[0] for pair in shard_pairs], dim=-1)
     sharded_scale = torch.cat([pair[1] for pair in shard_pairs], dim=-1)
     assert torch.equal(sharded_value.view(torch.uint8), full_value.view(torch.uint8))
     assert torch.equal(sharded_scale, full_scale)
+
+
+def test_refit_quantize_flattens_grouped_experts_for_flashinfer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    num_experts, rows, columns = 2, 3, 64
+    x = (
+        torch.arange(num_experts * rows * columns)
+        .remainder(31)
+        .sub(15)
+        .to(torch.bfloat16)
+        .reshape(num_experts, rows, columns)
+    )
+    kernel_scales = torch.arange(
+        1,
+        num_experts * rows * columns // MXFP8_BLOCK_SIZE + 1,
+        dtype=torch.uint8,
+    )
+    kernel_input_shapes: list[tuple[int, ...]] = []
+
+    class CudaLikeTensor:
+        is_cuda = True
+        device = torch.device("cuda")
+
+        def __init__(self, tensor: torch.Tensor) -> None:
+            self.tensor = tensor
+
+        @property
+        def shape(self) -> torch.Size:
+            return self.tensor.shape
+
+        @property
+        def ndim(self) -> int:
+            return self.tensor.ndim
+
+        def reshape(self, *shape: int) -> torch.Tensor:
+            return self.tensor.reshape(*shape)
+
+    def fake_mxfp8_quantize(
+        kernel_input: torch.Tensor, **_kwargs: object
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        kernel_input_shapes.append(tuple(kernel_input.shape))
+        if kernel_input.ndim != 2:
+            raise ValueError("FlashInfer mxfp8_quantize accepts only 2D input")
+        return kernel_input.to(torch.float8_e4m3fn), kernel_scales
+
+    flashinfer = ModuleType("flashinfer")
+    flashinfer.mxfp8_quantize = fake_mxfp8_quantize
+    monkeypatch.setitem(sys.modules, "flashinfer", flashinfer)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda _device: (10, 0))
+
+    x_q, scales = mxfp8_e4m3_quantize_for_refit(cast(torch.Tensor, CudaLikeTensor(x)))
+
+    assert kernel_input_shapes == [(num_experts * rows, columns)]
+    assert x_q.shape == (num_experts, rows, columns)
+    assert torch.equal(
+        x_q.view(torch.uint8), x.to(torch.float8_e4m3fn).view(torch.uint8)
+    )
+    assert scales.shape == (
+        num_experts,
+        rows,
+        columns // MXFP8_BLOCK_SIZE,
+    )
+    assert torch.equal(
+        scales,
+        kernel_scales.reshape(num_experts, rows, columns // MXFP8_BLOCK_SIZE),
+    )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")

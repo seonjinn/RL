@@ -173,6 +173,45 @@ def test_apply_fp8_patches_registers_modelopt_patches_only_for_mxfp8(
     assert all(patcher.started for patcher in fp8.fp8_state.vllm_patches)
 
 
+@pytest.mark.parametrize(
+    ("name", "w13_dtype", "w2_dtype"),
+    [
+        (
+            "model.layers.0.mlp.experts.gate_up_proj",
+            torch.float8_e4m3fn,
+            torch.bfloat16,
+        ),
+        (
+            "model.layers.0.mlp.experts.down_proj",
+            torch.bfloat16,
+            torch.float8_e4m3fn,
+        ),
+    ],
+)
+def test_is_fp8_weight_selects_grouped_expert_export_by_matching_target(
+    fp8_module,
+    monkeypatch,
+    name,
+    w13_dtype,
+    w2_dtype,
+):
+    fp8 = fp8_module
+
+    class FakeFusedMoE:
+        def __init__(self):
+            self.w13_weight = torch.empty(1, dtype=w13_dtype)
+            self.w2_weight = torch.empty(1, dtype=w2_dtype)
+
+    monkeypatch.setattr(fp8, "FusedMoE", FakeFusedMoE)
+    monkeypatch.setattr(
+        fp8,
+        "_get_module_from_param_name",
+        lambda _model, _name: FakeFusedMoE(),
+    )
+
+    assert fp8._is_fp8_weight(name, object())
+
+
 def test_load_weights_preserves_prequantized_mxfp8_and_clamps_scales(
     fp8_module, monkeypatch
 ):

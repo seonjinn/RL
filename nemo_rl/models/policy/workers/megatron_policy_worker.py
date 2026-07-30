@@ -2380,8 +2380,8 @@ class MegatronPolicyWorkerImpl(
 
         # Only the FFN gate/up/down weights take the bulk
         # xferdtensor path (>97% of payload for the large models this targets);
-        # everything else (attention, embeddings, norms, router, MLA, scales)
-        # goes to the misc packed_broadcast + vLLM load_weights path.
+        # everything else (attention, embeddings, norms, router, MLA, standalone
+        # scales) goes to the misc packed_broadcast + vLLM load_weights path.
         state_dict_metadata = {}
         misc_meta = OrderedDict()
         _xfer_bytes = _bcast_bytes = 0  # full-tensor payload routed to each path
@@ -2393,6 +2393,7 @@ class MegatronPolicyWorkerImpl(
         from nemo_rl.weight_sync.nccl_reshard_utils import _extract_layer_prefix
 
         layer_prefix = None
+        prequant_scale_suffix = "_scale_from_checkpoint"
         with _meta_tensor_alloc_context():
             for name, tensor in self._iter_params_with_optional_kv_scales():
                 meta = {
@@ -2400,6 +2401,25 @@ class MegatronPolicyWorkerImpl(
                     "dtype": str(tensor.dtype),
                 }
                 _nbytes = tensor.numel() * tensor.element_size()
+                if name.endswith(prequant_scale_suffix):
+                    parent_name = name[: -len(prequant_scale_suffix)]
+                    parent_meta = state_dict_metadata.get(parent_name)
+                    if parent_meta is not None:
+                        scale_shape = meta["shape"]
+                        if len(scale_shape) == len(parent_meta["shape"]) - 1:
+                            scale_shape = [*scale_shape, 1]
+                        parent_meta.update(
+                            {
+                                "refit_transform": "mxfp8",
+                                "scale_shape": scale_shape,
+                                "scale_dtype": meta["dtype"],
+                            }
+                        )
+                        _xfer_bytes += _nbytes
+                    else:
+                        misc_meta[name] = meta
+                        _bcast_bytes += _nbytes
+                    continue
                 # Downsized whitelist: only FFN gate/up/down weights take the bulk
                 # nccl-reshard path; everything else -> misc (packed_broadcast).
                 if is_nccl_reshard_param(name):
@@ -2541,19 +2561,40 @@ class MegatronPolicyWorkerImpl(
         """Build the Megatron-backend ``hf_to_local_param_map`` (HFToLocalParamMap).
 
         Wraps this rank's local Megatron shards into ``LocalParamSpec``s:
-        - direct: ``base`` is sharded local tensor view, sent as-is.
+        - direct: ``base`` is the sharded local tensor view.
         - grouped MoE expert: ``pre`` stacks the per-expert views into
           ``[E_local, ...]`` fresh each refit via ``_group_experts``.
+        - MXFP8 transform: ``pre`` quantizes the direct or grouped source and
+          returns paired value/scale buffers.
         """
         # This rank's local TP/EP HF param shards (live views), and the
         # per-expert views grouped for torch.stack.  Build-time only.
         param_map = dict(self._iter_local_hf_param_shards())
         expert_groups = self._build_expert_groups(param_map)
 
-        def _expert_spec(proj, grouped_name):
-            def pre(_base):
-                return RefitCtx(
-                    buf=self._group_experts(proj, grouped_name, expert_groups)
+        def _mxfp8_ctx(source: torch.Tensor) -> RefitCtx:
+            # Deferred because trainer workers only need vLLM quantization helpers
+            # when prequantized refit is enabled.
+            from nemo_rl.models.generation.vllm.quantization.fp8_train_utils import (
+                MXFP8_BLOCK_SIZE,
+                mxfp8_e4m3_quantize_for_refit,
+            )
+
+            value, scale = mxfp8_e4m3_quantize_for_refit(source)
+            scale = scale.reshape(
+                *source.shape[:-1], source.shape[-1] // MXFP8_BLOCK_SIZE
+            )
+            return RefitCtx(buf=value, extra={"scale_buf": scale})
+
+        def _expert_spec(
+            proj: str, grouped_name: str, refit_transform: Optional[str]
+        ) -> LocalParamSpec:
+            def pre(_base: Any) -> RefitCtx:
+                source = self._group_experts(proj, grouped_name, expert_groups)
+                return (
+                    _mxfp8_ctx(source)
+                    if refit_transform == "mxfp8"
+                    else RefitCtx(buf=source)
                 )
 
             return LocalParamSpec(base=None, pre=pre)
@@ -2562,10 +2603,17 @@ class MegatronPolicyWorkerImpl(
         for layer_name in refit_info["layer_names"]:
             for p in refit_info["per_layer_params"][layer_name]:
                 name = p["name"]
+                refit_transform = p.get("refit_transform")
                 if p.get("grouped_expert_proj"):
-                    mapping[name] = _expert_spec(p["grouped_expert_proj"], name)
+                    mapping[name] = _expert_spec(
+                        p["grouped_expert_proj"], name, refit_transform
+                    )
                 else:
-                    mapping[name] = LocalParamSpec(base=param_map.get(name))
+                    base = param_map.get(name)
+                    mapping[name] = LocalParamSpec(
+                        base=base,
+                        pre=_mxfp8_ctx if refit_transform == "mxfp8" else None,
+                    )
         return HFToLocalParamMap(specs=mapping)
 
     @torch.no_grad()
@@ -2603,8 +2651,8 @@ class MegatronPolicyWorkerImpl(
                 assert spec is not None, (
                     f"no spec for {param_info['name']!r} in hf_to_local_param_map"
                 )
-                # pre stacks grouped MoE experts fresh each refit; a direct
-                # param sends its live TP/EP-local view as-is.
+                # pre stacks grouped experts and/or transforms the source;
+                # untransformed direct params send their live local view.
                 ctx = (
                     spec.pre(spec.base)  # stack grouped MoE experts
                     if spec.pre is not None
@@ -2626,11 +2674,35 @@ class MegatronPolicyWorkerImpl(
                     group,
                     nccl_reshard_stream,
                 )
+                scale_src_tensor = None
+                scale_buf = ctx.extra.get("scale_buf")
+                if param_info.get("refit_transform") == "mxfp8":
+                    assert scale_buf is not None, (
+                        f"no MXFP8 scale tensor for {param_info['name']!r}"
+                    )
+                    scale_src_tensor = DTensorRef(
+                        local_tensor=scale_buf,
+                        global_shape=param_info["scale_global_shape"],
+                    )
+                    xferdtensor(
+                        scale_src_tensor,
+                        param_info["src_mesh_info"],
+                        param_info["scale_src_placements"],
+                        None,
+                        param_info["dst_mesh_info"],
+                        param_info["scale_dst_placements"],
+                        group,
+                        nccl_reshard_stream,
+                    )
                 if spec.post is not None:
                     spec.post(ctx)
-                # Drop refs to the per-iteration grouped MoE tensor so its CUDA
-                # memory returns to the caching allocator
-                del ctx, src_tensor
+                if spec.pre is not None and ctx.buf.is_cuda:
+                    ctx.buf.record_stream(nccl_reshard_stream)
+                if scale_buf is not None and scale_buf.is_cuda:
+                    scale_buf.record_stream(nccl_reshard_stream)
+                # Drop refs to per-iteration transformed/grouped tensors. The
+                # caching allocator retains them until their stream work completes.
+                del ctx, src_tensor, scale_src_tensor, scale_buf
 
         torch.cuda.synchronize()
         torch.cuda.empty_cache()

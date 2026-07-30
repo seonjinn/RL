@@ -26,7 +26,11 @@ Lifecycle:
   init_communicator():
     1. policy/generation.init_collective()           -- model_update_group (misc)
     2. policy/generation.init_nccl_reshard_comm_group()  -- per-PP-stage bulk groups
-    3. policy.prepare_nccl_reshard_refit_info()
+    3. policy.prepare_refit_info()
+       -> generation.prepare_refit_info()             -- optional prequant negotiation
+       -> policy.enable_refit_prequantize()
+       -> generation.prepare_refit_info()             -- refresh transformed metadata
+    4. policy.prepare_nccl_reshard_refit_info()
        -> generation.prepare_nccl_reshard_refit_info()   -- backend-agnostic metadata
   sync_weights():
     policy.nccl_reshard_refit(kv_scales) + generation.nccl_reshard_refit(); verify.
@@ -196,7 +200,19 @@ class NcclReshardWeightSynchronizer(WeightSynchronizer):
         )
         ray.get(futures_train + futures_inference)
 
-        # 3. Refit metadata.  Train builds backend-agnostic per-layer metadata
+        # 3. Negotiate trainer-side prequantization before building the bulk
+        #    metadata so every policy worker has enabled the selected names.
+        state_dict_info = self._policy.prepare_refit_info()
+        prequant_names = self._generation.prepare_refit_info(state_dict_info)
+        if prequant_names:
+            updated_info = self._policy.enable_refit_prequantize(prequant_names)
+            if updated_info is None:
+                raise RuntimeError(
+                    "Trainer-side refit prequantization did not return updated metadata."
+                )
+            self._generation.prepare_refit_info(updated_info)
+
+        # 4. Refit metadata.  Train builds backend-agnostic per-layer metadata
         #    (HF naming convention); gen maps it into its own fused layout
         #    (e.g. vLLM's w13/w2).
         nccl_reshard_refit_info = self._policy.prepare_nccl_reshard_refit_info(

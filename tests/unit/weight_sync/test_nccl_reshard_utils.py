@@ -38,6 +38,7 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
     group_expert_params_in_metadata,
     is_expert_param,
     is_nccl_reshard_param,
+    restore_refit_info_placements,
 )
 
 
@@ -113,9 +114,8 @@ def test_check_nccl_reshard_refit_support_rejects_non_mx_prequantize() -> None:
     with pytest.raises(ValueError) as exc_info:
         check_nccl_reshard_refit_support(config)
 
-    assert (
-        "policy.generation.vllm_cfg.refit_prequantize requires is_mx=True"
-        in str(exc_info.value)
+    assert "policy.generation.vllm_cfg.refit_prequantize requires is_mx=True" in str(
+        exc_info.value
     )
 
 
@@ -335,6 +335,34 @@ def test_get_placements_expert_tp_shifts_by_one():
     )
 
 
+def test_restore_refit_info_restores_mxfp8_dtypes_and_scale_placements():
+    refit_info = {
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "dtype": "torch.float8_e4m3fn",
+                    "src_placements": [{"dim": 1}],
+                    "dst_placements": [{"dim": 1}],
+                    "scale_dtype": "torch.uint8",
+                    "scale_src_placements": [{"dim": 1}],
+                    "scale_dst_placements": [{"dim": 1}],
+                }
+            ]
+        },
+    }
+
+    restored = restore_refit_info_placements(refit_info)
+    param = restored["per_layer_params"]["model.layers.0"][0]
+
+    assert param["dtype"] is torch.float8_e4m3fn
+    assert param["scale_dtype"] is torch.uint8
+    assert param["src_placements"] == [Shard(1)]
+    assert param["dst_placements"] == [Shard(1)]
+    assert param["scale_src_placements"] == [Shard(1)]
+    assert param["scale_dst_placements"] == [Shard(1)]
+
+
 # --------------------------------------------------------------------------
 # group_expert_params_in_metadata
 # --------------------------------------------------------------------------
@@ -444,6 +472,37 @@ def _find(info, name):
             if p["name"] == name:
                 return p
     raise AssertionError(f"{name} not in refit_info")
+
+
+def _mxfp8_metadata(
+    *,
+    shape: list[int] | None = None,
+    scale_shape: list[int] | None = None,
+) -> dict[str, object]:
+    value_shape = shape or [64, 128]
+    return {
+        "shape": value_shape,
+        "dtype": torch.float8_e4m3fn,
+        "refit_transform": "mxfp8",
+        "scale_shape": scale_shape or [*value_shape[:-1], value_shape[-1] // 32],
+        "scale_dtype": torch.uint8,
+    }
+
+
+def _build_single_mxfp8_param(
+    metadata: dict[str, object],
+    *,
+    train_tp: int = 2,
+    gen_tp: int = 2,
+) -> dict[str, object]:
+    name = "model.layers.0.mlp.down_proj.weight"
+    return build_nccl_reshard_refit_info(
+        {name: metadata},
+        train_parallelism={"tp_size": train_tp, "ep_size": 1, "pp_size": 1},
+        gen_parallelism={"tp_size": gen_tp, "ep_size": 1, "pp_size": 1},
+        train_world_size=train_tp,
+        gen_world_size=gen_tp,
+    )
 
 
 def test_build_refit_info_top_level_and_param_fields():
@@ -583,3 +642,84 @@ def test_build_refit_info_carries_mxfp8_value_and_scale_metadata():
         isinstance(placement, Shard) and placement.dim == 1
         for placement in param["scale_dst_placements"]
     )
+
+
+def test_build_refit_info_derives_aligned_mxfp8_scale_placements_from_value():
+    name = "model.layers.0.mlp.down_proj.weight"
+    info = _build_single_mxfp8_param(
+        _mxfp8_metadata(shape=[64, 128], scale_shape=[64, 4]),
+        train_tp=4,
+        gen_tp=2,
+    )
+
+    param = _find(info, name)
+
+    assert param["global_shape"] == (64, 128)
+    assert param["scale_global_shape"] == (64, 4)
+    assert param["src_placements"] == [Shard(1)]
+    assert param["scale_src_placements"] == [Shard(1)]
+    assert param["dst_placements"] == [Shard(1)]
+    assert param["scale_dst_placements"] == [Shard(1)]
+
+
+@pytest.mark.parametrize(
+    ("metadata_update", "error_match"),
+    [
+        ({"refit_transform": "nvfp4"}, "unsupported refit transform"),
+        ({"dtype": torch.bfloat16}, "value dtype"),
+        ({"scale_dtype": torch.bfloat16}, "scale dtype"),
+        ({"scale_shape": [64, 5]}, "scale shape"),
+    ],
+)
+def test_build_refit_info_rejects_invalid_mxfp8_value_scale_metadata(
+    metadata_update: dict[str, object],
+    error_match: str,
+) -> None:
+    metadata = _mxfp8_metadata()
+    metadata.update(metadata_update)
+
+    with pytest.raises(ValueError, match=error_match):
+        _build_single_mxfp8_param(metadata)
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    ["refit_transform", "scale_shape", "scale_dtype"],
+)
+def test_build_refit_info_rejects_incomplete_mxfp8_value_scale_metadata(
+    missing_field: str,
+) -> None:
+    metadata = _mxfp8_metadata()
+    del metadata[missing_field]
+
+    with pytest.raises(ValueError, match="incomplete transform metadata"):
+        _build_single_mxfp8_param(metadata)
+
+
+def test_build_refit_info_rejects_unaligned_mxfp8_global_k() -> None:
+    with pytest.raises(ValueError, match="global K dimension"):
+        _build_single_mxfp8_param(
+            _mxfp8_metadata(shape=[64, 130], scale_shape=[64, 5]),
+            train_tp=1,
+            gen_tp=1,
+        )
+
+
+@pytest.mark.parametrize(
+    ("train_tp", "gen_tp", "error_match"),
+    [
+        (4, 2, "source K-axis shard"),
+        (2, 4, "destination K-axis shard"),
+    ],
+)
+def test_build_refit_info_rejects_unaligned_mxfp8_k_shards(
+    train_tp: int,
+    gen_tp: int,
+    error_match: str,
+) -> None:
+    with pytest.raises(ValueError, match=error_match):
+        _build_single_mxfp8_param(
+            _mxfp8_metadata(shape=[64, 192], scale_shape=[64, 6]),
+            train_tp=train_tp,
+            gen_tp=gen_tp,
+        )
