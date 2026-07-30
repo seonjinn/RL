@@ -210,7 +210,8 @@ def test_te_pr2898_wheel_gate_pins_gpu_source_artifact_and_image() -> None:
     script = SCRIPT_PATH.read_text()
 
     assert "#SBATCH --nodes=1" in script
-    assert "#SBATCH --gres=gpu:1" in script
+    assert "#SBATCH --segment=1" in script
+    assert "#SBATCH --gres" not in script
     assert f"TE_SOURCE={TE_SOURCE}" in script
     assert f"EXPECTED_TE_COMMIT={TE_COMMIT}" in script
     assert f"IMAGE={IMAGE}" in script
@@ -241,6 +242,7 @@ def test_te_pr2898_wheel_gate_is_offline_prefix_first_and_runs_focused_tests() -
     assert "--target" in script
     assert "pip install" not in script.replace("uv pip install", "")
     assert "PYTHONNOUSERSITE=1" in script
+    assert "CUDA_VISIBLE_DEVICES=0" in script
     assert "PYTHONPATH=${INSTALL_SITE_PACKAGES}" in script
     assert "importlib.import_module('transformer_engine_torch')" in script
     assert "_get_shared_object_file('core')" in script

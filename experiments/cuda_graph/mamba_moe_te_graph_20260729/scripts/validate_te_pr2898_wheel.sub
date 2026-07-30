@@ -5,7 +5,6 @@
 #SBATCH --partition=backfill
 #SBATCH --time=00:30:00
 #SBATCH --segment=1
-#SBATCH --gres=gpu:1
 #SBATCH --output=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/logs/te-pr2898-wheel-%j.out
 
 set -euo pipefail
@@ -200,6 +199,7 @@ srun --nodes=1 --ntasks=1 \
     test \"\$(git -C ${TE_SOURCE} rev-parse HEAD)\" = ${EXPECTED_TE_COMMIT}
     export UV_CACHE_DIR=${ROOT}/uv_cache
     export PYTHONNOUSERSITE=1
+    export CUDA_VISIBLE_DEVICES=0
     uv pip install \
       --python /opt/nemo_rl_venv/bin/python \
       --target ${INSTALL_SITE_PACKAGES} \
