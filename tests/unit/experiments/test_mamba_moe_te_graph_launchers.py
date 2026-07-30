@@ -491,6 +491,41 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
     assert "#SBATCH --time=01:00:00" in script
 
 
+def test_nemorl_integration_gate_uses_the_validated_immutable_runtime_archives() -> None:
+    script = (
+        EXPERIMENT_DIR / "scripts" / "validate_nemorl_integration.sub"
+    ).read_text()
+    archives = (
+        ("TE_ARCHIVE", "/root/.cache/uv/archive-v0/AdbVCNRp6JVFPo0e"),
+        ("FLASH_ATTN_ARCHIVE", "/root/.cache/uv/archive-v0/26H_iFoUOK00pyG5"),
+        ("ML_DTYPES_ARCHIVE", "/root/.cache/uv/archive-v0/ymbKBYrUysuiERDQ"),
+        ("ONNX_ARCHIVE", "/root/.cache/uv/archive-v0/Lp_mVBWGrC-sLPL6"),
+        ("ONNX_IR_ARCHIVE", "/root/.cache/uv/archive-v0/kIpfdwf26Al4-BTb"),
+        ("ONNXSCRIPT_ARCHIVE", "/root/.cache/uv/archive-v0/i7-d_jifMXRoKKrY"),
+    )
+    for name, path in archives:
+        assert f"{name}={path}" in script
+
+    assert (
+        "IMMUTABLE_RUNTIME_PYTHONPATH=${TE_ARCHIVE}:${FLASH_ATTN_ARCHIVE}:"
+        "${ML_DTYPES_ARCHIVE}:${ONNX_ARCHIVE}:${ONNX_IR_ARCHIVE}:"
+        "${ONNXSCRIPT_ARCHIVE}" in script
+    )
+    assert (
+        "export PYTHONPATH=${IMMUTABLE_RUNTIME_PYTHONPATH}:\\${PWD}:"
+        "\\${PWD}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:"
+        "\\${PWD}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/"
+        "3rdparty/Megatron-LM" in script
+    )
+    for native_build_command in (
+        "uv run",
+        "NRL_FORCE_REBUILD_VENVS",
+        "pip install",
+        "setup.py build",
+    ):
+        assert native_build_command not in script
+
+
 def test_nemorl_integration_gate_allows_only_generated_unit_result_json_files() -> None:
     script = (
         EXPERIMENT_DIR / "scripts" / "validate_nemorl_integration.sub"
