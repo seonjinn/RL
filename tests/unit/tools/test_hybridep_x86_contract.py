@@ -500,6 +500,40 @@ def test_x86_prebuilt_actor_cuda_libraries_override_broken_image_links() -> None
     assert "prebuilt_actor_library_path=%q" in launcher_source
 
 
+def test_x86_deepep_overlay_is_forwarded_to_policy_actor_pythonpath() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    launcher_source = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "oci-hsg"
+        / "hybridep"
+        / "submit_grpo.sh"
+    ).read_text()
+
+    assert 'printf -v quoted_deepep_overlay \'%q\' "${DEEPEP_OVERLAY}"' in (
+        launcher_source
+    )
+    assert (
+        'printf -v quoted_deepep_overlay_nccl \'%q\' \\\n'
+        '    "${DEEPEP_OVERLAY}/nvidia/nccl/lib"'
+    ) in launcher_source
+    assert (
+        'driver_command="export PYTHONPATH=${quoted_deepep_overlay}:'
+        '\\${PYTHONPATH:-}; export LD_LIBRARY_PATH='
+        '${quoted_deepep_overlay_nccl}:\\${LD_LIBRARY_PATH:-}; '
+        '${driver_command}"'
+    ) in launcher_source
+    assert launcher_source.index(
+        'driver_command="export PYTHONPATH=${quoted_deepep_overlay}:'
+    ) < launcher_source.index('COMMAND="${driver_command}"')
+    assert launcher_source.index(
+        'driver_command="export PYTHONPATH=${quoted_deepep_overlay}:'
+    ) < launcher_source.index(
+        'driver_command="export LD_LIBRARY_PATH=${quoted_actor_library_path}:'
+    )
+
+
 def _run_prepare_payload(
     tmp_path: Path,
     *,

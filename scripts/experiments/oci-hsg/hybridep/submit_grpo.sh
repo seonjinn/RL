@@ -532,10 +532,6 @@ if [[ "${DISPATCHER_MODE}" == "deepep" ]]; then
   )
 fi
 printf -v driver_command '%q ' "${driver_args[@]}"
-if [[ -n "${PREBUILT_ACTOR_LIBRARY_PATH}" ]]; then
-  printf -v quoted_actor_library_path '%q' "${PREBUILT_ACTOR_LIBRARY_PATH}"
-  driver_command="export LD_LIBRARY_PATH=${quoted_actor_library_path}:\${LD_LIBRARY_PATH:-}; ${driver_command}"
-fi
 
 SETUP_COMMAND=
 DEEPEP_OVERLAY=
@@ -662,6 +658,16 @@ if [[ -n "${DEEPEP_WHEEL}" ]]; then
   fi
 fi
 
+if [[ -n "${DEEPEP_OVERLAY}" ]]; then
+  printf -v quoted_deepep_overlay '%q' "${DEEPEP_OVERLAY}"
+  printf -v quoted_deepep_overlay_nccl '%q' \
+    "${DEEPEP_OVERLAY}/nvidia/nccl/lib"
+  driver_command="export PYTHONPATH=${quoted_deepep_overlay}:\${PYTHONPATH:-}; export LD_LIBRARY_PATH=${quoted_deepep_overlay_nccl}:\${LD_LIBRARY_PATH:-}; ${driver_command}"
+fi
+if [[ -n "${PREBUILT_ACTOR_LIBRARY_PATH}" ]]; then
+  printf -v quoted_actor_library_path '%q' "${PREBUILT_ACTOR_LIBRARY_PATH}"
+  driver_command="export LD_LIBRARY_PATH=${quoted_actor_library_path}:\${LD_LIBRARY_PATH:-}; ${driver_command}"
+fi
 COMMAND="${driver_command}"
 
 mkdir -p "${RUN_ROOT}"

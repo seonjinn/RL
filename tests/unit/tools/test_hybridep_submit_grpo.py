@@ -721,6 +721,45 @@ def test_deepep_dispatcher_wires_both_wheels_and_ray_parent_loader_path(
     assert f"config_sha256={expected_config_sha256}\n" in metadata
 
 
+def test_deepep_driver_command_exports_the_node_overlay_first(
+    tmp_path: Path, lustre_tmp_path: Path
+) -> None:
+    env = {
+        **standard_deepep_artifact_env(lustre_tmp_path),
+        "PYTHONPATH": "/seed/pythonpath",
+        "LD_LIBRARY_PATH": "/seed/librarypath",
+    }
+    result, command_capture = _run_launcher_result(
+        tmp_path,
+        dispatcher_mode="deepep",
+        extra_env=env,
+    )
+    result.check_returncode()
+    command = command_capture.read_text()
+    export_prefix, separator, _ = command.partition("uv run ")
+
+    assert separator == "uv run "
+    probe = subprocess.run(
+        [
+            "bash",
+            "-c",
+            (
+                f"{export_prefix}"
+                "printf '%s\\n%s\\n' \"$PYTHONPATH\" \"$LD_LIBRARY_PATH\""
+            ),
+        ],
+        check=True,
+        capture_output=True,
+        env={**os.environ, **env},
+        text=True,
+    )
+    overlay = "/tmp/nemo-rl-deepep-dd758caf4518-test"
+    assert probe.stdout.splitlines() == [
+        f"{overlay}:/seed/pythonpath",
+        f"{overlay}/nvidia/nccl/lib:/seed/librarypath",
+    ]
+
+
 def test_unknown_dispatcher_mode_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(subprocess.CalledProcessError):
         _run_launcher(tmp_path, dispatcher_mode="unknown")
@@ -1077,7 +1116,7 @@ def test_hybridep_launcher_preserves_project_and_bridge_pythonpath() -> None:
     project_path = 'PYTHONPATH="${PROJECT_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"'
     bridge_path = 'PYTHONPATH="${BRIDGE_SRC}:${PYTHONPATH}"'
     overlay_path = 'PYTHONPATH="${DEEPEP_OVERLAY}:${PYTHONPATH}"'
-    export_path = "export PYTHONPATH"
+    export_path = "\nexport PYTHONPATH\n"
 
     assert project_path in source
     assert bridge_path in source
