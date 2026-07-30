@@ -40,12 +40,12 @@ The Nano recipe above is intentionally the packed hybrid recipe. The
 similarly named generation recipe disables sequence packing and is not valid
 for this study.
 
-`profiles/ptyche.env` and `profiles/oci-hsg.env` retain explicit
-`__REQUIRED_*__` placeholders for the immutable model snapshots, staged
-nightly sqsh path, and container SHA256. A real launch refuses to call
-`sbatch` while any required field is unresolved. `TEST_ONLY=1` prints every
-unresolved field and the complete training and Slurm commands, then exits
-without contacting the scheduler.
+Cluster profiles retain explicit `__REQUIRED_*__` placeholders until their
+immutable model snapshots, staged nightly sqsh path, and container SHA256 are
+verified. The Ptyche Nano fields are resolved for this study. A real launch
+refuses to call `sbatch` while any required field is unresolved. `TEST_ONLY=1`
+prints every unresolved field and the complete training and Slurm commands,
+then exits without contacting the scheduler.
 
 ## Local preflight
 
@@ -88,6 +88,15 @@ python3 experiments/cuda_graph/mamba_moe_te_graph_20260729/collect_results.py \
   --output experiments/cuda_graph/results/mamba_moe_te_graph_20260729_results.csv
 ```
 
+The checked-in submission ledger can be normalized before completed-run
+metrics are available:
+
+```bash
+python3 experiments/cuda_graph/mamba_moe_te_graph_20260729/collect_results.py \
+  --input experiments/cuda_graph/results/mamba_moe_te_graph_20260729_submissions.json \
+  --output experiments/cuda_graph/results/mamba_moe_te_graph_20260729_results.csv
+```
+
 The required W&B mappings are:
 
 | Result | W&B metric |
@@ -121,5 +130,5 @@ and Provenance separate. Missing experiment rows remain visibly pending.
 | MCore Task 4 | Slurm 2471681 | 43 + 23 passed |
 | MCore Task 5 | Slurm 2471988 | Completed exit 0 on 4xGB200. Every rank reported 2 passed / 108 deselected: packed Mamba parity 74.33s, MoE 5→3→5 6.96s, total 82.78s. Earlier jobs 2471820 and 2471877 exposed test-config/telemetry assertions rather than production graph failures; focused MoE job 2471888 passed on all four ranks. Its `routing_map.sum` token-count oracle is valid only for this EP1/TP1 test, not EP>1 post-communication counts. Final MCore head: `100047b517ea91526dc465448fcb3b37b2598388`. |
 | NeMo-RL Task 6 | Host suite | 37 host tests plus Pyrefly passed |
-| NeMo-RL Task 7 | No Linux or NeMo job evidence yet | uncommitted / in progress. Config, packed data, policy caller, and worker schedule-bank integration are under active verification. |
-| NeMo-RL Task 8 | Local-only verification | 19 launcher/report tests passed; all 41 persistent launchers passed `TEST_ONLY=1`; 44 shell scripts passed `bash -n`; py_compile, Ruff, import sorting, and diff checks passed. No job was submitted. |
+| NeMo-RL Task 7 | Slurm 2472646 | 138 passed integration tests with exit 0 on the pinned nightly container. |
+| NeMo-RL Task 8 | Slurm 2473134, 2473144–2473170 | Baseline plus 27 curated Nano hybrid smoke rows submitted on Ptyche without singleton dependencies. The submission ledger preserves the exact launcher-to-job mapping. |

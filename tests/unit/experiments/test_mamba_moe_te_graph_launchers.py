@@ -493,6 +493,18 @@ def test_collector_normalizes_nested_local_export_without_network() -> None:
     assert row["policy_loss"] == 0.1
 
 
+def test_collector_writes_repository_safe_lf_csv(tmp_path: Path) -> None:
+    collector = _load_experiment_module("collect_results")
+    output = tmp_path / "results.csv"
+
+    collector.write_csv(
+        [{"scope": "attn", "job_id": "123", "status": "smoke:submitted"}],
+        output,
+    )
+
+    assert b"\r\n" not in output.read_bytes()
+
+
 def test_report_has_required_sections_scope_labels_and_verified_status() -> None:
     renderer = _load_experiment_module("render_report")
     assert renderer.DEFAULT_MCORE_SHA == "100047b517ea91526dc465448fcb3b37b2598388"
@@ -539,7 +551,11 @@ def test_report_has_required_sections_scope_labels_and_verified_status() -> None
     assert "74.33s" in report and "6.96s" in report and "82.78s" in report
     assert "100047b517ea91526dc465448fcb3b37b2598388" in report
     assert "37 host tests + Pyrefly passed" in report
-    assert "Task 7" in report and "uncommitted / in progress" in report
+    assert "Task 7" in report and "Slurm 2472646" in report
+    assert "138 passed" in report
+    assert renderer.DEFAULT_MODEL_SNAPSHOT in report
+    assert renderer.DEFAULT_TOKENIZER_SNAPSHOT in report
+    assert "__REQUIRED_*_MODEL_SNAPSHOT__" not in report
 
 
 def test_checked_in_report_is_static_and_has_all_sections() -> None:
@@ -563,4 +579,7 @@ def test_checked_in_report_is_static_and_has_all_sections() -> None:
         assert f'<section id="{section_id}">' in report
     assert "2471988" in report
     assert renderer.DEFAULT_MCORE_SHA in report
-    assert "uncommitted / in progress" in report
+    assert "Slurm 2472646" in report
+    assert "138 passed" in report
+    assert renderer.DEFAULT_MODEL_SNAPSHOT in report
+    assert renderer.DEFAULT_TOKENIZER_SNAPSHOT in report

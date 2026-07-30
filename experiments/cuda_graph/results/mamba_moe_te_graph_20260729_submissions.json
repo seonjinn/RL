@@ -1,0 +1,176 @@
+{
+  "run_tag": "nano-cg-matrix-s13-20260729T2127Z",
+  "phase": "smoke",
+  "model": "nano-hybrid",
+  "cluster": "ptyche",
+  "rows": [
+    {
+      "scope": "baseline-no-cg",
+      "job_id": "2473134",
+      "status": "smoke:running; tag=nano-s13-source-path-20260729T2125Z",
+      "launcher": "scopes/00_baseline_no_cg.sh"
+    },
+    {
+      "scope": "attn",
+      "job_id": "2473144",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "scopes/17_attn.sh"
+    },
+    {
+      "scope": "mamba",
+      "job_id": "2473145",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "scopes/05_mamba.sh"
+    },
+    {
+      "scope": "attn-mamba",
+      "job_id": "2473146",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "scopes/21_attn_mamba.sh"
+    },
+    {
+      "scope": "moe-router",
+      "job_id": "2473147",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "scopes/03_moe_router.sh"
+    },
+    {
+      "scope": "attn-moe-router",
+      "job_id": "2473148",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "scopes/19_attn_moe_router.sh"
+    },
+    {
+      "scope": "mamba-moe-router",
+      "job_id": "2473149",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "scopes/07_mamba_moe_router.sh"
+    },
+    {
+      "scope": "attn-mamba-moe-router",
+      "job_id": "2473150",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "scopes/23_attn_mamba_moe_router.sh"
+    },
+    {
+      "scope": "moe-router-preprocess",
+      "job_id": "2473151",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "scopes/04_moe_router_preprocess.sh"
+    },
+    {
+      "scope": "attn-moe-router-preprocess",
+      "job_id": "2473152",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "scopes/20_attn_moe_router_preprocess.sh"
+    },
+    {
+      "scope": "mamba-moe-router-preprocess",
+      "job_id": "2473153",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "scopes/08_mamba_moe_router_preprocess.sh"
+    },
+    {
+      "scope": "attn-mamba-moe-router-preprocess",
+      "job_id": "2473154",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "scopes/24_attn_mamba_moe_router_preprocess.sh"
+    },
+    {
+      "scope": "moe",
+      "job_id": "2473155",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "scopes/02_moe.sh"
+    },
+    {
+      "scope": "attn-moe",
+      "job_id": "2473156",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "scopes/18_attn_moe.sh"
+    },
+    {
+      "scope": "mamba-moe",
+      "job_id": "2473157",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "scopes/06_mamba_moe.sh"
+    },
+    {
+      "scope": "attn-mamba-moe",
+      "job_id": "2473158",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "scopes/22_attn_mamba_moe.sh"
+    },
+    {
+      "scope": "mlp",
+      "job_id": "2473159",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "scopes/09_mlp.sh"
+    },
+    {
+      "scope": "attn-mlp",
+      "job_id": "2473160",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "scopes/25_attn_mlp.sh"
+    },
+    {
+      "scope": "mlp-mamba",
+      "job_id": "2473161",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "scopes/13_mlp_mamba.sh"
+    },
+    {
+      "scope": "attn-mlp-mamba",
+      "job_id": "2473162",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "scopes/29_attn_mlp_mamba.sh"
+    },
+    {
+      "scope": "moe-overlap-false-moe-act-false",
+      "job_id": "2473163",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "variants/moe_overlap_false_moe_act_false.sh"
+    },
+    {
+      "scope": "moe-overlap-false-moe-act-true",
+      "job_id": "2473164",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "variants/moe_overlap_false_moe_act_true.sh"
+    },
+    {
+      "scope": "moe-overlap-true-moe-act-false",
+      "job_id": "2473165",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "variants/moe_overlap_true_moe_act_false.sh"
+    },
+    {
+      "scope": "moe-overlap-true-moe-act-true",
+      "job_id": "2473166",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "variants/moe_overlap_true_moe_act_true.sh"
+    },
+    {
+      "scope": "router-preprocess-overlap-false-moe-act-false",
+      "job_id": "2473167",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "variants/router_preprocess_overlap_false_moe_act_false.sh"
+    },
+    {
+      "scope": "router-preprocess-overlap-false-moe-act-true",
+      "job_id": "2473168",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "variants/router_preprocess_overlap_false_moe_act_true.sh"
+    },
+    {
+      "scope": "router-preprocess-overlap-true-moe-act-false",
+      "job_id": "2473169",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "variants/router_preprocess_overlap_true_moe_act_false.sh"
+    },
+    {
+      "scope": "router-preprocess-overlap-true-moe-act-true",
+      "job_id": "2473170",
+      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "launcher": "variants/router_preprocess_overlap_true_moe_act_true.sh"
+    }
+  ]
+}

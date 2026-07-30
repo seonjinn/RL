@@ -24,6 +24,16 @@ DEFAULT_OUTPUT = (
     / "mamba_moe_te_graph_20260729_report.html"
 )
 DEFAULT_MCORE_SHA = "100047b517ea91526dc465448fcb3b37b2598388"
+DEFAULT_MODEL_SNAPSHOT = (
+    "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+    "models--nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16/"
+    "snapshots/97ab8012882a655dc38df4fee47422aca9caca07"
+)
+DEFAULT_TOKENIZER_SNAPSHOT = (
+    "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
+    "models--nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-BF16/"
+    "snapshots/2d59de1cbd51c0adf384eb906b766d1aee0e0517"
+)
 
 
 def escape(value: object) -> str:
@@ -89,6 +99,8 @@ def render_html(
     bridge_sha: str = "__REQUIRED_MEGATRON_BRIDGE_SHA__",
     mcore_sha: str = DEFAULT_MCORE_SHA,
     container_sha256: str = "__REQUIRED_CONTAINER_SHA256__",
+    model_snapshot: str = DEFAULT_MODEL_SNAPSHOT,
+    tokenizer_snapshot: str = DEFAULT_TOKENIZER_SNAPSHOT,
 ) -> str:
     """Build a self-contained report with correctness and experiment ledgers."""
     smoke_rows = [
@@ -132,7 +144,7 @@ def render_html(
 <tr><td>MCore Task 4</td><td>Slurm 2471681</td><td>43 + 23 passed</td></tr>
 <tr><td>MCore Task 5</td><td>Slurm 2471820, 2471877, 2471888, 2471988</td><td>Final job 2471988 completed with exit 0 on 4xGB200: every rank reported 2 passed / 108 deselected. The packed Mamba parity passed in 74.33s; MoE 5→3→5 passed in 6.96s; total test time was 82.78s. Earlier job 2471820 passed packed Mamba and exposed an invalid topk test configuration before graph execution. Job 2471877 reached forward and exposed a stale post-reset telemetry assertion, not a production CUDA Graph failure. Focused MoE job 2471888 completed with each of four ranks reporting 1 passed. Its <code>routing_map.sum</code> token-count oracle is valid for this EP1/TP1 test only and is not generalized to EP&gt;1 post-communication counts. Fixes <code>1f1ca8fd7f36a5121b362ebed4a233a3a1ebee8b</code> and final MCore head <code>100047b517ea91526dc465448fcb3b37b2598388</code> are recorded.</td></tr>
 <tr><td>NeMo-RL Task 6</td><td>Host verification</td><td>37 host tests + Pyrefly passed</td></tr>
-<tr><td>NeMo-RL Task 7</td><td>No Linux or NeMo job evidence yet</td><td>uncommitted / in progress. Config, packed data, policy caller, and worker schedule-bank integration are under active verification.</td></tr>
+<tr><td>NeMo-RL Task 7</td><td>Slurm 2472646</td><td>138 passed integration tests with exit 0 on the pinned nightly container.</td></tr>
 </tbody>
 </table>
 """
@@ -232,7 +244,8 @@ th {{ color: #a8ddff; }} code {{ color: #9de4ba; }} .table-wrap {{ overflow-x: a
 <tr><th>Megatron-Bridge SHA</th><td><code>{escape(bridge_sha)}</code></td></tr>
 <tr><th>Megatron-LM SHA</th><td><code>{escape(mcore_sha)}</code></td></tr>
 <tr><th>Nightly container SHA256</th><td><code>{escape(container_sha256)}</code></td></tr>
-<tr><th>Model snapshots</th><td>Immutable profile-specific paths remain <code>__REQUIRED_*_MODEL_SNAPSHOT__</code> until staging is verified.</td></tr>
+<tr><th>Model snapshot</th><td><code>{escape(model_snapshot)}</code></td></tr>
+<tr><th>Tokenizer snapshot</th><td><code>{escape(tokenizer_snapshot)}</code></td></tr>
 </tbody></table>
 </section>
 </body>
@@ -252,6 +265,8 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_MCORE_SHA,
     )
     parser.add_argument("--container-sha256", default="__REQUIRED_CONTAINER_SHA256__")
+    parser.add_argument("--model-snapshot", default=DEFAULT_MODEL_SNAPSHOT)
+    parser.add_argument("--tokenizer-snapshot", default=DEFAULT_TOKENIZER_SNAPSHOT)
     return parser.parse_args()
 
 
@@ -266,6 +281,8 @@ def main() -> None:
             bridge_sha=args.bridge_sha,
             mcore_sha=args.mcore_sha,
             container_sha256=args.container_sha256,
+            model_snapshot=args.model_snapshot,
+            tokenizer_snapshot=args.tokenizer_snapshot,
         )
     )
 

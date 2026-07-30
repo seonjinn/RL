@@ -141,7 +141,11 @@ def write_csv(records: list[Mapping[str, Any]], output: Path) -> None:
     """Write normalized rows with a stable header."""
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=CSV_FIELDS)
+        writer = csv.DictWriter(
+            csv_file,
+            fieldnames=CSV_FIELDS,
+            lineterminator="\n",
+        )
         writer.writeheader()
         writer.writerows(normalize_record(record) for record in records)
 
