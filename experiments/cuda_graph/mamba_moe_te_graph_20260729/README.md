@@ -129,7 +129,10 @@ The required W&B mappings are:
 Refresh the static report from the available CSV:
 
 ```bash
-python3 experiments/cuda_graph/mamba_moe_te_graph_20260729/render_report.py
+python3 experiments/cuda_graph/mamba_moe_te_graph_20260729/render_report.py \
+  --te-version 2.15.0+42b84005 \
+  --te-source-commit e707aa46869dc2aec08dfea25402e97a61d49fef \
+  --te-overlay-sha256 39f7b26b8cf127e3ca104c0375c97ce4e6d047178f9d00836b92469b1c2e544b
 ```
 
 The report always keeps Correctness, Smoke, Performance, Accuracy, Failures,

@@ -232,12 +232,54 @@ def _telemetry_maximum(rows: Sequence[Mapping[str, str]], field: str) -> int:
     return maximum
 
 
+def _field_issue(field: str, value: str | None, *, integer: bool) -> str | None:
+    """Return a deterministic validation reason for one required field."""
+    if value in {None, ""}:
+        return f"{field}_missing"
+    try:
+        numeric_value = int(value) if integer else float(value)
+    except ValueError:
+        return f"{field}_invalid"
+    if integer:
+        if numeric_value < 0:
+            return f"{field}_negative"
+    elif not math.isfinite(numeric_value):
+        return f"{field}_nonfinite"
+    return None
+
+
+def _group_invalid_reasons(rows: Sequence[Mapping[str, str]]) -> list[str]:
+    """Validate every required steady-state field without averaging bad samples."""
+    reasons = []
+    for field in (*PERFORMANCE_FIELDS, *CORRECTNESS_FIELDS):
+        for row in rows:
+            reason = _field_issue(field, row.get(field), integer=False)
+            if reason is not None:
+                reasons.append(reason)
+                break
+    for field in ("eviction_count", "fallback_count"):
+        for row in rows:
+            reason = _field_issue(field, row.get(field), integer=True)
+            if reason is not None:
+                reasons.append(reason)
+                break
+    return reasons
+
+
 def _baseline_key(
     grouped_rows: Mapping[tuple[str, str], Sequence[Mapping[str, str]]],
 ) -> tuple[str, str] | None:
     """Select the deterministic no-CG baseline aggregate, if present."""
     baseline_keys = sorted(key for key in grouped_rows if key[0] in BASELINE_SCOPES)
     return baseline_keys[0] if baseline_keys else None
+
+
+def _blank_comparisons(aggregate: dict[str, str]) -> None:
+    """Clear comparison cells when no valid baseline comparison is possible."""
+    for field in THROUGHPUT_FIELDS:
+        aggregate[f"{field}_ratio_to_baseline"] = ""
+    for field in CORRECTNESS_FIELDS:
+        aggregate[f"{field}_delta"] = ""
 
 
 def aggregate_performance(rows: Sequence[Mapping[str, str]]) -> list[dict[str, str]]:
@@ -252,54 +294,86 @@ def aggregate_performance(rows: Sequence[Mapping[str, str]]) -> list[dict[str, s
         key = (row.get("scope", ""), row.get("job_id", ""))
         grouped_rows.setdefault(key, []).append(row)
 
-    baseline_key = _baseline_key(grouped_rows)
-    baseline_rows = grouped_rows[baseline_key] if baseline_key is not None else []
-    baseline_medians = {
-        field: _median_value(baseline_rows, field)
-        for field in (*THROUGHPUT_FIELDS, *CORRECTNESS_FIELDS)
-    }
-
     aggregates = []
+    aggregate_by_key = {}
     for (scope, job_id), group_rows in sorted(grouped_rows.items()):
+        invalid_reasons = _group_invalid_reasons(group_rows)
         aggregate = {
             "scope": scope,
             "job_id": job_id,
             "sample_count": str(len(group_rows)),
-            "valid": "true",
-            "invalid_reason": "",
+            "valid": "false" if invalid_reasons else "true",
+            "invalid_reason": "; ".join(invalid_reasons),
         }
+        _blank_comparisons(aggregate)
         for field in PERFORMANCE_FIELDS:
-            median, p95 = _median_and_p95(group_rows, field)
+            median, p95 = (
+                _median_and_p95(group_rows, field) if not invalid_reasons else ("", "")
+            )
             aggregate[f"{field}_median"] = median
             aggregate[f"{field}_p95"] = p95
 
-        invalid_reasons = []
-        for field in ("eviction_count", "fallback_count"):
-            maximum = _telemetry_maximum(group_rows, field)
-            if maximum:
-                invalid_reasons.append(f"{field}={maximum}")
+        if not invalid_reasons:
+            for field in ("eviction_count", "fallback_count"):
+                maximum = _telemetry_maximum(group_rows, field)
+                if maximum:
+                    invalid_reasons.append(f"{field}={maximum}")
         if invalid_reasons:
             aggregate["valid"] = "false"
             aggregate["invalid_reason"] = "; ".join(invalid_reasons)
+        aggregate_by_key[(scope, job_id)] = aggregate
+        aggregates.append(aggregate)
+
+    baseline_key = _baseline_key(grouped_rows)
+    if baseline_key is None:
+        baseline_rows = []
+        baseline_medians: dict[str, float | None] = {}
+    else:
+        baseline_rows = grouped_rows[baseline_key]
+        baseline_aggregate = aggregate_by_key[baseline_key]
+        baseline_medians = (
+            {
+                field: _median_value(baseline_rows, field)
+                for field in (*THROUGHPUT_FIELDS, *CORRECTNESS_FIELDS)
+            }
+            if baseline_aggregate["valid"] == "true"
+            else {}
+        )
+
+    for key, group_rows in sorted(grouped_rows.items()):
+        aggregate = aggregate_by_key[key]
+        if key[0] in BASELINE_SCOPES:
+            continue
+        if baseline_key is None:
+            aggregate["valid"] = "false"
+            aggregate["invalid_reason"] = "; ".join(
+                filter(None, (aggregate["invalid_reason"], "baseline_missing"))
+            )
+            continue
+        baseline_aggregate = aggregate_by_key[baseline_key]
+        if aggregate["valid"] == "false":
+            continue
+        if baseline_aggregate["valid"] == "false":
+            aggregate["valid"] = "false"
+            aggregate["invalid_reason"] = (
+                f"baseline_invalid={baseline_key[0]}/{baseline_key[1]}"
+            )
+            continue
 
         for field in THROUGHPUT_FIELDS:
             median = _median_value(group_rows, field)
             baseline_median = baseline_medians[field]
             if median is None or baseline_median in {None, 0.0}:
-                aggregate[f"{field}_ratio_to_baseline"] = ""
-            else:
-                aggregate[f"{field}_ratio_to_baseline"] = _format_number(
-                    median / baseline_median
-                )
-
+                continue
+            aggregate[f"{field}_ratio_to_baseline"] = _format_number(
+                median / baseline_median
+            )
         for field in CORRECTNESS_FIELDS:
             median = _median_value(group_rows, field)
             baseline_median = baseline_medians[field]
             if median is None or baseline_median is None:
-                aggregate[f"{field}_delta"] = ""
-            else:
-                aggregate[f"{field}_delta"] = _format_number(median - baseline_median)
-        aggregates.append(aggregate)
+                continue
+            aggregate[f"{field}_delta"] = _format_number(median - baseline_median)
     return aggregates
 
 

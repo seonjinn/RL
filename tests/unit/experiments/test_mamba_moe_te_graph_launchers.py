@@ -806,6 +806,145 @@ def test_steady_state_aggregate_invalidates_evictions_and_fallbacks() -> None:
     assert invalid_rows["cg-fallback"]["invalid_reason"] == "fallback_count=2"
 
 
+def test_steady_state_aggregate_rejects_missing_baseline() -> None:
+    collector = _load_experiment_module("collect_results")
+    rows = [
+        _performance_row(
+            scope="attn",
+            job_id="cg-1",
+            step=step,
+            multiplier=2.0,
+        )
+        for step in range(6, 21)
+    ]
+
+    aggregate = collector.aggregate_performance(rows)[0]
+
+    assert aggregate["valid"] == "false"
+    assert aggregate["invalid_reason"] == "baseline_missing"
+    for field in (
+        "e2e_tokens_per_sec_per_gpu",
+        "generation_tokens_per_sec_per_gpu",
+        "policy_training_tokens_per_sec_per_gpu",
+        "logprob_tokens_per_sec_per_gpu",
+        "reward_mean",
+        "generation_kl_error",
+        "policy_loss",
+        "grad_norm",
+    ):
+        suffix = "ratio_to_baseline" if "tokens" in field else "delta"
+        assert aggregate[f"{field}_{suffix}"] == ""
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "baseline_reason"),
+    [
+        ("eviction_count", "1", "eviction_count=1"),
+        ("fallback_count", "1", "fallback_count=1"),
+        ("e2e_step_time", "", "e2e_step_time_missing"),
+    ],
+)
+def test_steady_state_aggregate_rejects_invalid_baseline(
+    field: str,
+    value: str,
+    baseline_reason: str,
+) -> None:
+    collector = _load_experiment_module("collect_results")
+    baseline_rows = [
+        _performance_row(
+            scope="baseline-no-cg",
+            job_id="baseline-1",
+            step=step,
+            multiplier=1.0,
+        )
+        for step in range(6, 21)
+    ]
+    baseline_rows[2][field] = value
+    cg_rows = [
+        _performance_row(
+            scope="attn",
+            job_id="cg-1",
+            step=step,
+            multiplier=2.0,
+        )
+        for step in range(6, 21)
+    ]
+
+    aggregates = collector.aggregate_performance([*baseline_rows, *cg_rows])
+    by_job_id = {aggregate["job_id"]: aggregate for aggregate in aggregates}
+
+    assert by_job_id["baseline-1"]["valid"] == "false"
+    assert by_job_id["baseline-1"]["invalid_reason"] == baseline_reason
+    assert by_job_id["cg-1"]["valid"] == "false"
+    assert (
+        by_job_id["cg-1"]["invalid_reason"]
+        == "baseline_invalid=baseline-no-cg/baseline-1"
+    )
+    assert by_job_id["cg-1"]["e2e_tokens_per_sec_per_gpu_ratio_to_baseline"] == ""
+    assert by_job_id["cg-1"]["reward_mean_delta"] == ""
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("e2e_step_time", "", "e2e_step_time_missing"),
+        ("generation_time", "nan", "generation_time_nonfinite"),
+        ("policy_training_time", "inf", "policy_training_time_nonfinite"),
+        ("eviction_count", None, "eviction_count_missing"),
+        ("fallback_count", None, "fallback_count_missing"),
+        ("reward_mean", "", "reward_mean_missing"),
+    ],
+)
+def test_steady_state_aggregate_rejects_incomplete_or_nonfinite_samples(
+    field: str,
+    value: str | None,
+    reason: str,
+) -> None:
+    collector = _load_experiment_module("collect_results")
+    baseline_rows = [
+        _performance_row(
+            scope="baseline-no-cg",
+            job_id="baseline-1",
+            step=step,
+            multiplier=1.0,
+        )
+        for step in range(6, 21)
+    ]
+    cg_rows = [
+        _performance_row(
+            scope="attn",
+            job_id="cg-1",
+            step=step,
+            multiplier=2.0,
+        )
+        for step in range(6, 21)
+    ]
+    if value is None:
+        del cg_rows[4][field]
+    else:
+        cg_rows[4][field] = value
+
+    aggregates = collector.aggregate_performance([*baseline_rows, *cg_rows])
+    cg_aggregate = next(aggregate for aggregate in aggregates if aggregate["job_id"] == "cg-1")
+
+    assert cg_aggregate["valid"] == "false"
+    assert cg_aggregate["invalid_reason"] == reason
+    for throughput_field in (
+        "e2e_tokens_per_sec_per_gpu",
+        "generation_tokens_per_sec_per_gpu",
+        "policy_training_tokens_per_sec_per_gpu",
+        "logprob_tokens_per_sec_per_gpu",
+    ):
+        assert cg_aggregate[f"{throughput_field}_ratio_to_baseline"] == ""
+    for correctness_field in (
+        "reward_mean",
+        "generation_kl_error",
+        "policy_loss",
+        "grad_norm",
+    ):
+        assert cg_aggregate[f"{correctness_field}_delta"] == ""
+
+
 def test_report_renders_overlay_provenance_steady_state_and_raw_failures() -> None:
     renderer = _load_experiment_module("render_report")
     report = renderer.render_html(
