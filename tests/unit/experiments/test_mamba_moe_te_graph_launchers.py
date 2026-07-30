@@ -969,6 +969,15 @@ def test_nemorl_integration_gate_uses_bridge_src_layout() -> None:
     assert "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src" in script
 
 
+def test_nemorl_integration_gate_uses_batch_partition() -> None:
+    script = (
+        EXPERIMENT_DIR / "scripts" / "validate_nemorl_integration.sub"
+    ).read_text()
+
+    assert "#SBATCH --partition=batch" in script
+    assert "#SBATCH --partition=backfill" not in script
+
+
 def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
     script = (
         EXPERIMENT_DIR / "scripts" / "validate_nemorl_integration.sub"
