@@ -33,8 +33,11 @@
     {
       "scope": "attn-mamba",
       "job_id": "2475436",
-      "status": "performance:submitted",
-      "launcher": "scopes/21_attn_mamba.sh"
+      "status": "performance:failed-capture",
+      "launcher": "scopes/21_attn_mamba.sh",
+      "exit_code": "1:0",
+      "elapsed": "00:12:50",
+      "failure": "Transformer Engine context-parallel attention backward used a tensor-valued slice boundary during CUDA Graph capture: cudaErrorStreamCaptureUnsupported."
     },
     {
       "scope": "moe",
