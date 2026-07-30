@@ -336,7 +336,10 @@ def test_gb200_profiles_limit_transformer_engine_build_to_sm100() -> None:
         assert "NVTE_CUDA_ARCHS=100" in profile
         assert "UV_CACHE_DIR_OVERRIDE=" in profile
         assert "SETUP_COMMAND=" in profile
-        assert "--reinstall --no-deps --no-cache urllib3==2.7.0" in profile
+        assert (
+            "--reinstall --no-deps --no-cache urllib3==2.7.0 click==8.4.2"
+            in profile
+        )
 
 
 def test_container_smoke_reuses_official_mcore_environment() -> None:
@@ -347,7 +350,8 @@ def test_container_smoke_reuses_official_mcore_environment() -> None:
     assert "export UV_CACHE_DIR=" in script
     assert "export NVTE_CUDA_ARCHS=100" in script
     assert "NRL_FORCE_REBUILD_VENVS=true uv run --frozen --extra mcore python -c pass" in script
-    assert "--reinstall --no-deps --no-cache urllib3==2.7.0" in script
+    assert "--reinstall --no-deps --no-cache urllib3==2.7.0 click==8.4.2" in script
+    assert "ray --version" in script
     assert '"ray"' in script
     assert '"grouped_gemm"' not in script
     assert "src/RL-pr5672-mamba-moe-graph-cache-20260729-d7f1d496f" in script
