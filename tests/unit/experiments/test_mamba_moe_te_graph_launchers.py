@@ -504,6 +504,11 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
     first_wrapper_index = script.index("\\${UV_PROJECT_ENVIRONMENT}/bin/python")
     last_wrapper_index = script.rindex("\\${UV_PROJECT_ENVIRONMENT}/bin/python")
     flock_index = script.index("flock -x 9")
+    venv_parent_creation = 'mkdir -p "$(dirname "${MCORE_VENV}")"'
+    assert venv_parent_creation in script
+    assert script.index(venv_parent_creation) < script.index("srun --nodes=1 --ntasks=1") < script.index(
+        'exec 9>\\"\\${UV_PROJECT_ENVIRONMENT}.lock\\"'
+    )
     assert flock_index < sync_index < first_wrapper_index < last_wrapper_index
     assert 'exec 9>\\"\\${UV_PROJECT_ENVIRONMENT}.lock\\"' in script
     assert script.count("\\${UV_PROJECT_ENVIRONMENT}/bin/python") == 2
