@@ -65,11 +65,32 @@ repeat package installation.
 ## GPU integration gate
 
 `scripts/validate_nemorl_integration.sub` mounts the same reviewed
-Transformer Engine overlay read-only and runs `validate_te_fp64_overlay.py`
-before its preserved NeMo-RL unit list. The gate also runs the packed-sequence,
-Transformer Engine graph-bank, FP64 MoE-router boundary, packed-Mamba parity,
-and `5→3→5` graph-bank schedule tests from the pinned Megatron-LM checkout.
-This gate must pass before submitting the 20-step matrix.
+Transformer Engine overlay read-only and validates it in the same Python
+process as each preserved pytest suite. It accepts only the staged nightly
+image `nemo_rl_nightly_20260729_2472184.sqsh`, recorded as SHA256
+`cb8ae0ade02b876f1b3380c8375eb92f95033dece6b2bfdc678b47f2da1aea91`;
+container overrides are intentionally not accepted for this gate.
+
+The gate runs from the clean runner checkout
+`${ROOT}/src/RL-pr5672-mamba-moe-graph-cache-runner-20260730`, which must be
+freshly cloned and initialized at the submitted `EXPECTED_SHA`; it never uses
+the developer's dirty checkout. It checks both the submitted commit's
+`uv.lock` blob and the worktree lockfile against
+`96543608420ac6746cfd18d1fcd8ee1bd3c91caf`, while retaining the exact
+pyproject/submodule diff guards.
+
+Before either suite, the gate locks a persistent, external venv keyed by the
+lock blob, the immutable image SHA prefix, and `py313-aarch64`, then runs
+`uv sync --frozen --extra mcore --no-build --no-install-project
+--no-install-local --python /opt/nemo_rl_venv/bin/python
+--no-python-downloads`. This selects the locked MCore dependencies without
+installing repository or local sources and makes every source/native build a
+hard failure. The immutable archive prefix remains first in `PYTHONPATH`, so
+the mounted Transformer Engine archive is still what the validator and pytest
+import. The gate also runs the packed-sequence, Transformer Engine graph-bank,
+FP64 MoE-router boundary, packed-Mamba parity, and `5→3→5` graph-bank schedule
+tests from the pinned Megatron-LM checkout. This gate must pass before
+submitting the 20-step matrix.
 
 ## Local preflight
 

@@ -485,17 +485,29 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
 
     assert "NRL_FORCE_REBUILD_VENVS" not in script
     assert "uv run" not in script
-    assert "MCORE_VENV=${ROOT}/venvs/nemorl-integration-mcore" in script
+    assert (
+        "MCORE_VENV_KEY=py313-aarch64-lock-${EXPECTED_LOCK_BLOB}-"
+        "image-cb8ae0ade02b" in script
+    )
+    assert "MCORE_VENV=${ROOT}/venvs/nemorl-integration-mcore-${MCORE_VENV_KEY}" in script
     assert "export UV_PROJECT_ENVIRONMENT=${MCORE_VENV}" in script
     sync_index = script.index("uv sync --frozen --extra mcore")
-    assert script.index("--no-build-package transformer-engine", sync_index) < script.index(
-        "--no-build-package transformer-engine-torch", sync_index
-    )
+    for sync_flag in (
+        "--no-build",
+        "--no-install-project",
+        "--no-install-local",
+        "--python /opt/nemo_rl_venv/bin/python",
+        "--no-python-downloads",
+    ):
+        assert sync_flag in script
+    assert "--no-build-package" not in script
     first_wrapper_index = script.index("\\${UV_PROJECT_ENVIRONMENT}/bin/python")
     last_wrapper_index = script.rindex("\\${UV_PROJECT_ENVIRONMENT}/bin/python")
-    assert sync_index < first_wrapper_index < last_wrapper_index
+    flock_index = script.index("flock -x 9")
+    assert flock_index < sync_index < first_wrapper_index < last_wrapper_index
+    assert 'exec 9>\\"\\${UV_PROJECT_ENVIRONMENT}.lock\\"' in script
     assert script.count("\\${UV_PROJECT_ENVIRONMENT}/bin/python") == 2
-    assert "/opt/nemo_rl_venv/bin/python" not in script
+    assert script.count("/opt/nemo_rl_venv/bin/python") == 1
     assert script.count("run_pytest_with_te_overlay.py") == 2
     assert "export NVTE_CUDA_ARCHS=100" in script
     assert "#SBATCH --time=01:00:00" in script
@@ -534,7 +546,33 @@ def test_nemorl_integration_gate_uses_the_validated_immutable_runtime_archives()
         "setup.py build",
     ):
         assert native_build_command not in script
-    assert script.count("--no-build-package transformer-engine") == 2
+    assert "--no-build-package" not in script
+
+
+def test_nemorl_integration_gate_pins_clean_runner_lock_and_image_provenance() -> None:
+    script = (
+        EXPERIMENT_DIR / "scripts" / "validate_nemorl_integration.sub"
+    ).read_text()
+    lock_blob = "96543608420ac6746cfd18d1fcd8ee1bd3c91caf"
+    image_sha256 = "cb8ae0ade02b876f1b3380c8375eb92f95033dece6b2bfdc678b47f2da1aea91"
+
+    assert (
+        "REPO=${ROOT}/src/RL-pr5672-mamba-moe-graph-cache-runner-20260730"
+        in script
+    )
+    assert "RL-pr5672-mamba-moe-graph-cache-20260729-d7f1d496f" not in script
+    assert "IMAGE=${ROOT}/containers/nemo_rl_nightly_20260729_2472184.sqsh" in script
+    assert "CONTAINER" not in script
+    assert f"IMAGE_SHA256={image_sha256}" in script
+    assert f"EXPECTED_LOCK_BLOB={lock_blob}" in script
+    assert (
+        r'test \"\$(git rev-parse ${EXPECTED_SHA}:uv.lock)\" = ${EXPECTED_LOCK_BLOB}'
+        in script
+    )
+    assert r'test \"\$(git hash-object uv.lock)\" = ${EXPECTED_LOCK_BLOB}' in script
+    assert script.count("EXPECTED_LOCK_BLOB") >= 3
+    assert "git diff --quiet --ignore-submodules=dirty -- . ':(exclude)uv.lock'" in script
+    assert "git diff --cached --quiet" in script
 
 
 def test_nemorl_integration_gate_allows_only_generated_unit_result_json_files() -> None:
