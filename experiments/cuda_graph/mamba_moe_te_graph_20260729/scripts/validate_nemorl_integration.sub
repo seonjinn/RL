@@ -33,8 +33,8 @@ srun --nodes=1 --ntasks=1 \
     export PYTHONPATH=\${PWD}:\${PWD}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:\${PWD}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM
     export UV_CACHE_DIR=${ROOT}/uv_cache
     export NVTE_CUDA_ARCHS=100
-    /opt/nemo_rl_venv/bin/python experiments/cuda_graph/mamba_moe_te_graph_20260729/validate_te_fp64_overlay.py --expected-version ${TE_EXPECTED_VERSION} --expected-sha256 ${TE_FP64_WEAKREF_SHA256}
-    NRL_FORCE_REBUILD_VENVS=true uv run --frozen --extra mcore python -m pytest -q \
+    /opt/nemo_rl_venv/bin/python experiments/cuda_graph/mamba_moe_te_graph_20260729/run_pytest_with_te_overlay.py --expected-version ${TE_EXPECTED_VERSION} --expected-sha256 ${TE_FP64_WEAKREF_SHA256} -- \
+      -q \
       tests/unit/models/megatron/test_cuda_graph_lifecycle.py \
       tests/unit/data/packing/test_algorithms.py \
       tests/unit/models/megatron/test_megatron_data.py \
@@ -50,7 +50,8 @@ srun --nodes=1 --ntasks=1 \
       tests/unit/models/policy/test_policy_validation.py::test_te_graph_logprob_sharding_propagates_packed_sequence_capacity \
       tests/unit/models/policy/test_policy_validation.py::test_shutdown_succeeds_before_worker_group_is_initialized
     MCORE_ROOT=3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM
-    python -m pytest -q \
+    /opt/nemo_rl_venv/bin/python experiments/cuda_graph/mamba_moe_te_graph_20260729/run_pytest_with_te_overlay.py --expected-version ${TE_EXPECTED_VERSION} --expected-sha256 ${TE_FP64_WEAKREF_SHA256} -- \
+      -q \
       \"\${MCORE_ROOT}/tests/unit_tests/transformer/test_packed_seq_params_cuda_graph.py\" \
       \"\${MCORE_ROOT}/tests/unit_tests/transformer/test_te_cuda_graph_bank.py\" \
       \"\${MCORE_ROOT}/tests/unit_tests/transformer/test_cuda_graphs.py::test_moe_router_fp64_output_is_preserved_at_te_graph_boundary\" \

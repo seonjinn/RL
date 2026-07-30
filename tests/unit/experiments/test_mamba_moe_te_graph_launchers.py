@@ -460,8 +460,10 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
         EXPERIMENT_DIR / "scripts" / "validate_nemorl_integration.sub"
     ).read_text()
 
-    assert "NRL_FORCE_REBUILD_VENVS=true" in script
-    assert "uv run --frozen --extra mcore python -m pytest" in script
+    assert "NRL_FORCE_REBUILD_VENVS" not in script
+    assert "uv run" not in script
+    assert script.count("/opt/nemo_rl_venv/bin/python") == 2
+    assert script.count("run_pytest_with_te_overlay.py") == 2
     assert "export NVTE_CUDA_ARCHS=100" in script
     assert "#SBATCH --time=01:00:00" in script
 
@@ -480,7 +482,7 @@ def test_nemorl_integration_gate_validates_fp64_overlay_and_mcore_graph_suite() 
         "--container-mounts=/lustre:/lustre,${TE_FP64_WEAKREF_SOURCE}:"
         "${TE_FP64_WEAKREF_TARGET}:ro" in script
     )
-    assert "validate_te_fp64_overlay.py" in script
+    assert "run_pytest_with_te_overlay.py" in script
     assert f"TE_EXPECTED_VERSION={TE_EXPECTED_VERSION}" in script
     assert "--expected-version ${TE_EXPECTED_VERSION}" in script
     assert f"TE_FP64_WEAKREF_SHA256={TE_FP64_WEAKREF_SHA256}" in script
@@ -498,6 +500,52 @@ def test_nemorl_integration_gate_validates_fp64_overlay_and_mcore_graph_suite() 
     ):
         assert f"${{MCORE_ROOT}}/{test_path}" in script
     assert "tests/unit/models/megatron/test_cuda_graph_lifecycle.py" in script
+
+
+def test_nemorl_integration_gate_uses_the_same_immutable_python_for_both_suites() -> None:
+    script_path = EXPERIMENT_DIR / "scripts" / "validate_nemorl_integration.sub"
+    helper_path = EXPERIMENT_DIR / "run_pytest_with_te_overlay.py"
+    script = script_path.read_text()
+
+    assert helper_path.is_file()
+    assert "uv run" not in script
+    assert "NRL_FORCE_REBUILD_VENVS" not in script
+    assert script.count("/opt/nemo_rl_venv/bin/python") == 2
+    assert script.count("run_pytest_with_te_overlay.py") == 2
+    assert "tests/unit/models/megatron/test_cuda_graph_lifecycle.py" in script
+    assert "${MCORE_ROOT}/tests/unit_tests/transformer/test_te_cuda_graph_bank.py" in script
+
+
+def test_overlay_pytest_wrapper_validates_before_running_pytest(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, object]] = []
+    validator = ModuleType("validate_te_fp64_overlay")
+
+    def validate_overlay(*, expected_version: str, expected_sha256: str) -> dict[str, str]:
+        calls.append(("validate", (expected_version, expected_sha256)))
+        return {}
+
+    validator.validate_overlay = validate_overlay
+    monkeypatch.setitem(sys.modules, "validate_te_fp64_overlay", validator)
+    module = _load_experiment_module("run_pytest_with_te_overlay")
+
+    def pytest_main(args: list[str]) -> int:
+        calls.append(("pytest", args))
+        return 7
+
+    monkeypatch.setattr(module.pytest, "main", pytest_main)
+
+    assert (
+        module.run_pytest(
+            expected_version=TE_EXPECTED_VERSION,
+            expected_sha256=TE_FP64_WEAKREF_SHA256,
+            pytest_args=["-q", "test_path.py"],
+        )
+        == 7
+    )
+    assert calls == [
+        ("validate", (TE_EXPECTED_VERSION, TE_FP64_WEAKREF_SHA256)),
+        ("pytest", ["-q", "test_path.py"]),
+    ]
 
 
 def test_gb200_profiles_limit_transformer_engine_build_to_sm100() -> None:
