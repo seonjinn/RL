@@ -344,6 +344,7 @@ def test_container_smoke_reuses_official_mcore_environment() -> None:
     assert "export UV_CACHE_DIR=" in script
     assert "export NVTE_CUDA_ARCHS=100" in script
     assert "NRL_FORCE_REBUILD_VENVS=true uv run --frozen --extra mcore python -" in script
+    assert '"grouped_gemm"' not in script
     assert "src/RL-pr5672-mamba-moe-graph-cache-20260729-d7f1d496f" in script
 
 

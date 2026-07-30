@@ -39,7 +39,6 @@ modules = (
     "megatron.core",
     "mamba_ssm",
     "causal_conv1d",
-    "grouped_gemm",
 )
 for module_name in modules:
     module = importlib.import_module(module_name)
