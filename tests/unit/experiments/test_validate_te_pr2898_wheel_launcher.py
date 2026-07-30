@@ -19,6 +19,13 @@ TE_SOURCE = f"{ROOT}/src/TransformerEngine-fp64-thd-cudagraph-20260730"
 TE_COMMIT = "4a18653fc7274b10e33cd786b91be6261c523dc0"
 IMAGE = f"{ROOT}/containers/nemo_rl_nightly_20260729_2472184.sqsh"
 IMAGE_SHA256 = "cb8ae0ade02b876f1b3380c8375eb92f95033dece6b2bfdc678b47f2da1aea91"
+RUNTIME_DEPENDENCY_ARCHIVES = (
+    "/root/.cache/uv/archive-v0/26H_iFoUOK00pyG5",
+    "/root/.cache/uv/archive-v0/ymbKBYrUysuiERDQ",
+    "/root/.cache/uv/archive-v0/Lp_mVBWGrC-sLPL6",
+    "/root/.cache/uv/archive-v0/kIpfdwf26Al4-BTb",
+    "/root/.cache/uv/archive-v0/i7-d_jifMXRoKKrY",
+)
 
 
 def _git_commit(source: Path) -> str:
@@ -243,7 +250,12 @@ def test_te_pr2898_wheel_gate_is_offline_prefix_first_and_runs_focused_tests() -
     assert "pip install" not in script.replace("uv --no-config pip install", "")
     assert "PYTHONNOUSERSITE=1" in script
     assert "CUDA_VISIBLE_DEVICES=0" in script
-    assert "PYTHONPATH=${INSTALL_SITE_PACKAGES}" in script
+    assert (
+        "PYTHONPATH=${INSTALL_SITE_PACKAGES}:${RUNTIME_DEPENDENCY_PYTHONPATH}" in script
+    )
+    for archive in RUNTIME_DEPENDENCY_ARCHIVES:
+        assert archive in script
+    assert "AdbVCNRp6JVFPo0e" not in script
     assert "importlib.import_module('transformer_engine_torch')" in script
     assert "_get_shared_object_file('core')" in script
     assert "Path(transformer_engine.__file__).resolve()" in script

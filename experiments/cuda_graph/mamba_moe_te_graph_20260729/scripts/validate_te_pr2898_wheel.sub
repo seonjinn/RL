@@ -19,6 +19,12 @@ TE_SOURCE=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/TransformerEngi
 EXPECTED_TE_COMMIT=4a18653fc7274b10e33cd786b91be6261c523dc0
 IMAGE=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/nemo_rl_nightly_20260729_2472184.sqsh
 IMAGE_SHA256=cb8ae0ade02b876f1b3380c8375eb92f95033dece6b2bfdc678b47f2da1aea91
+FLASH_ATTN_ARCHIVE=/root/.cache/uv/archive-v0/26H_iFoUOK00pyG5
+ML_DTYPES_ARCHIVE=/root/.cache/uv/archive-v0/ymbKBYrUysuiERDQ
+ONNX_ARCHIVE=/root/.cache/uv/archive-v0/Lp_mVBWGrC-sLPL6
+ONNX_IR_ARCHIVE=/root/.cache/uv/archive-v0/kIpfdwf26Al4-BTb
+ONNXSCRIPT_ARCHIVE=/root/.cache/uv/archive-v0/i7-d_jifMXRoKKrY
+RUNTIME_DEPENDENCY_PYTHONPATH=${FLASH_ATTN_ARCHIVE}:${ML_DTYPES_ARCHIVE}:${ONNX_ARCHIVE}:${ONNX_IR_ARCHIVE}:${ONNXSCRIPT_ARCHIVE}
 ARTIFACT_DIR=${ROOT}/artifacts/transformer-engine/transformer-engine-pr2898-${EXPECTED_TE_COMMIT}
 ARTIFACT_WHEEL_DIR=${ARTIFACT_DIR}/wheel
 ARTIFACT_PROVENANCE=${ARTIFACT_DIR}/provenance.json
@@ -197,6 +203,11 @@ srun --nodes=1 --ntasks=1 \
     set -euo pipefail
     test \"\$(sha256sum -- ${IMAGE} | awk '{print \$1}')\" = ${IMAGE_SHA256}
     test \"\$(git -C ${TE_SOURCE} rev-parse HEAD)\" = ${EXPECTED_TE_COMMIT}
+    test -d ${FLASH_ATTN_ARCHIVE}
+    test -d ${ML_DTYPES_ARCHIVE}
+    test -d ${ONNX_ARCHIVE}
+    test -d ${ONNX_IR_ARCHIVE}
+    test -d ${ONNXSCRIPT_ARCHIVE}
     export UV_CACHE_DIR=${ROOT}/uv_cache
     export PYTHONNOUSERSITE=1
     export CUDA_VISIBLE_DEVICES=0
@@ -207,7 +218,7 @@ srun --nodes=1 --ntasks=1 \
       --no-index \
       --no-deps \
       ${wheel}
-    export PYTHONPATH=${INSTALL_SITE_PACKAGES}
+    export PYTHONPATH=${INSTALL_SITE_PACKAGES}:${RUNTIME_DEPENDENCY_PYTHONPATH}
     /opt/nemo_rl_venv/bin/python - ${INSTALL_SITE_PACKAGES} <<'PY'
 import importlib
 from pathlib import Path
@@ -240,8 +251,7 @@ for name, path in resolved_paths.items():
 print(f'cuda_device={torch.cuda.get_device_name()}')
 PY
     cd ${ROOT}
-    PYTHONPATH=${INSTALL_SITE_PACKAGES} \
-      /opt/nemo_rl_venv/bin/python -m pytest \
+    /opt/nemo_rl_venv/bin/python -m pytest \
       -q \
       --import-mode=importlib \
       ${TE_SOURCE}/tests/pytorch/test_pr2898_backport_compat.py \

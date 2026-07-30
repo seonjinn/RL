@@ -197,7 +197,10 @@ The gate installs the wheel offline and without dependencies into disposable
 staging. It disables uv config discovery so NeMo-RL's Transformer Engine
 source override cannot replace the explicit immutable wheel. It validates that
 the Python package, PyTorch native extension, and core Transformer Engine
-shared library all resolve from that staged prefix.
+shared library all resolve from that staged prefix. Non-TE runtime dependencies
+come from the same pinned flash-attn, ml-dtypes, ONNX, ONNX IR, and ONNXScript
+uv archives used by the integration gate; the container's legacy Transformer
+Engine archive is deliberately excluded.
 It then runs the static PR2898 compatibility suite and the fused MoE aux-loss
 CUDA graph capture/replay test from the pinned source checkout. Only a fully
 passing install is atomically published under
