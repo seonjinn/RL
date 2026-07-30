@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+#SBATCH --nodes=1
+#SBATCH --account=coreai_dlalgo_llm
+#SBATCH --job-name=coreai_dlalgo_llm-sna-cg-study.mcore-packed-partial
+#SBATCH --partition=batch
+#SBATCH --time=00:30:00
+#SBATCH --gres=gpu:1
+#SBATCH --segment=1
+#SBATCH --output=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/logs/mcore-packed-partial-%j.out
+
+set -euo pipefail
+
+ROOT=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg
+REPO=${ROOT}/src/RL-pr5672-mamba-moe-graph-cache-runner-20260730
+MCORE_ROOT=${REPO}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM
+IMAGE=${ROOT}/containers/nemo_rl_nightly_20260729_2472184.sqsh
+IMAGE_SHA256=cb8ae0ade02b876f1b3380c8375eb92f95033dece6b2bfdc678b47f2da1aea91
+MCORE_DRIVER_PYTHON=${ROOT}/venvs/nemorl-integration-mcore-py313-aarch64-lock-96543608420ac6746cfd18d1fcd8ee1bd3c91caf-image-cb8ae0ade02b/bin/python
+TE_RUNTIME=${ROOT}/runtimes/transformer-engine/transformer-engine-pr2898-4a18653fc7274b10e33cd786b91be6261c523dc0-wheel-029fdbcb3fc0aa17b1a4f7398f56040204307d4bc839d318feda1677c98fff5e/site-packages
+FLASH_ATTN_ARCHIVE=/root/.cache/uv/archive-v0/26H_iFoUOK00pyG5
+ML_DTYPES_ARCHIVE=/root/.cache/uv/archive-v0/ymbKBYrUysuiERDQ
+ONNX_ARCHIVE=/root/.cache/uv/archive-v0/Lp_mVBWGrC-sLPL6
+ONNX_IR_ARCHIVE=/root/.cache/uv/archive-v0/kIpfdwf26Al4-BTb
+ONNXSCRIPT_ARCHIVE=/root/.cache/uv/archive-v0/i7-d_jifMXRoKKrY
+RUNTIME_PREFIX=${TE_RUNTIME}:${FLASH_ATTN_ARCHIVE}:${ML_DTYPES_ARCHIVE}:${ONNX_ARCHIVE}:${ONNX_IR_ARCHIVE}:${ONNXSCRIPT_ARCHIVE}
+
+: "${EXPECTED_MCORE_SHA:?Submit with the immutable Megatron-LM commit SHA}"
+
+test -x "${MCORE_DRIVER_PYTHON}"
+test -f "${IMAGE}"
+test "$(sha256sum -- "${IMAGE}" | awk '{print $1}')" = "${IMAGE_SHA256}"
+test "$(git -C "${MCORE_ROOT}" rev-parse HEAD)" = "${EXPECTED_MCORE_SHA}"
+
+srun --nodes=1 --ntasks=1 \
+  --container-image="${IMAGE}" \
+  --container-mounts=/lustre:/lustre \
+  bash -lc "
+    set -euo pipefail
+    cd ${REPO}
+    export PYTHONPATH=${RUNTIME_PREFIX}:\${PWD}:\${PWD}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${MCORE_ROOT}
+    ${MCORE_DRIVER_PYTHON} -m pytest -q \
+      ${MCORE_ROOT}/tests/unit_tests/transformer/test_packed_seq_params_cuda_graph.py::test_te_cuda_graph_partial_replay_flow \
+      ${MCORE_ROOT}/tests/unit_tests/transformer/test_packed_seq_params_cuda_graph.py::test_packed_partial_moe_post_mlp_inputs_use_logical_replay_extent
+  "
