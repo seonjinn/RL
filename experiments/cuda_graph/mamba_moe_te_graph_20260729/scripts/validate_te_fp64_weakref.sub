@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#SBATCH --nodes=1
+#SBATCH --account=coreai_dlalgo_llm
+#SBATCH --job-name=coreai_dlalgo_llm-sna-te-fp64-weakref
+#SBATCH --partition=batch
+#SBATCH --time=00:15:00
+#SBATCH --segment=1
+#SBATCH --output=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/exp_logs/mamba_moe_te_graph_20260729/te-fp64-weakref/validate-%j.out
+#SBATCH --error=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/exp_logs/mamba_moe_te_graph_20260729/te-fp64-weakref/validate-%j.err
+
+set -euo pipefail
+
+ROOT=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg
+IMAGE=${ROOT}/containers/nemo_rl_nightly_20260729_2472184.sqsh
+TE_OVERLAY_TARGET=/root/.cache/uv/archive-v0/AdbVCNRp6JVFPo0e/transformer_engine/pytorch/utils.py
+
+: "${TE_SOURCE_ROOT:?Submit with the shared Transformer Engine source root}"
+: "${TE_OVERLAY_ENABLED:=0}"
+
+case "${TE_OVERLAY_ENABLED}" in
+    0 | 1) ;;
+    *)
+        echo "TE_OVERLAY_ENABLED must be 0 or 1, got ${TE_OVERLAY_ENABLED}" >&2
+        exit 2
+        ;;
+esac
+
+test -f "${IMAGE}"
+test -f "${TE_SOURCE_ROOT}/tests/pytorch/test_cuda_graphs.py"
+
+CONTAINER_MOUNTS=/lustre:/lustre
+if [[ "${TE_OVERLAY_ENABLED}" == "1" ]]; then
+    test -f "${TE_SOURCE_ROOT}/transformer_engine/pytorch/utils.py"
+    CONTAINER_MOUNTS+=",${TE_SOURCE_ROOT}/transformer_engine/pytorch/utils.py:${TE_OVERLAY_TARGET}:ro"
+fi
+
+srun --nodes=1 --ntasks=1 \
+    --container-image="${IMAGE}" \
+    --container-mounts="${CONTAINER_MOUNTS}" \
+    bash -lc "
+        set -euo pipefail
+        python -m pytest -vv \\
+          \"${TE_SOURCE_ROOT}/tests/pytorch/test_cuda_graphs.py\" \\
+          -k \"fp64_weak_ref or reuses_fp64_outputs\"
+    "
