@@ -22,13 +22,17 @@ def run_pytest(
     return pytest.main(list(pytest_args))
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse overlay provenance requirements and pytest arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-version", required=True)
     parser.add_argument("--expected-sha256", required=True)
     parser.add_argument("pytest_args", nargs=argparse.REMAINDER)
-    return parser.parse_args()
+    args = parser.parse_args(argv)
+    args.pytest_args = list(args.pytest_args)
+    if args.pytest_args[:1] == ["--"]:
+        args.pytest_args.pop(0)
+    return args
 
 
 def main() -> None:

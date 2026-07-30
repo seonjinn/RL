@@ -548,6 +548,47 @@ def test_overlay_pytest_wrapper_validates_before_running_pytest(monkeypatch: pyt
     ]
 
 
+def test_overlay_pytest_wrapper_strips_the_launcher_delimiter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    validator = ModuleType("validate_te_fp64_overlay")
+    validator.validate_overlay = lambda **_: {}
+    monkeypatch.setitem(sys.modules, "validate_te_fp64_overlay", validator)
+    module = _load_experiment_module("run_pytest_with_te_overlay")
+
+    args = module.parse_args(
+        [
+            "--expected-version",
+            TE_EXPECTED_VERSION,
+            "--expected-sha256",
+            TE_FP64_WEAKREF_SHA256,
+            "--",
+            "-q",
+            "tests/unit/test_cuda_graph.py",
+        ]
+    )
+
+    assert args.expected_version == TE_EXPECTED_VERSION
+    assert args.expected_sha256 == TE_FP64_WEAKREF_SHA256
+    assert args.pytest_args == ["-q", "tests/unit/test_cuda_graph.py"]
+
+    forwarded_args: list[list[str]] = []
+    monkeypatch.setattr(
+        module.pytest,
+        "main",
+        lambda pytest_args: forwarded_args.append(pytest_args) or 0,
+    )
+    assert (
+        module.run_pytest(
+            expected_version=args.expected_version,
+            expected_sha256=args.expected_sha256,
+            pytest_args=args.pytest_args,
+        )
+        == 0
+    )
+    assert forwarded_args == [["-q", "tests/unit/test_cuda_graph.py"]]
+
+
 def test_gb200_profiles_limit_transformer_engine_build_to_sm100() -> None:
     runner = (EXPERIMENT_DIR / "run_scope.sh").read_text()
 
