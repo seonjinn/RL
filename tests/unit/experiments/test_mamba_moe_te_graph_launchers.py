@@ -1130,10 +1130,13 @@ def test_overlay_pytest_wrapper_strips_the_launcher_delimiter(
 def test_gb200_profiles_limit_transformer_engine_build_to_sm100() -> None:
     runner = (EXPERIMENT_DIR / "run_scope.sh").read_text()
 
-    assert "/opt/nemo_rl_venv/bin/python" in runner
+    assert "/opt/nemo_rl_venv/bin/python" not in runner
     assert "uv\n  run\n" not in runner
-    assert "MCORE_PYTHONPATH=" in runner
-    assert 'PYTHONPATH="${MCORE_PYTHONPATH}" \\' in runner
+    assert "MCORE_PYTHONPATH=" not in runner
+    assert "IMMUTABLE_RUNTIME_PYTHONPATH=" in runner
+    assert 'PYTHONPATH="${IMMUTABLE_RUNTIME_PYTHONPATH}" \\' in runner
+    assert "NEMO_RL_MCORE_SYSTEM_PYTHON=${MCORE_DRIVER_PYTHON}" in runner
+    assert 'RUNTIME_ARCHIVE_PREFIX="${RUNTIME_ARCHIVE_PREFIX}" \\' in runner
     assert "Megatron-Bridge/3rdparty/Megatron-LM" in runner
     assert "Megatron-Bridge/src" in runner
     assert 'NVTE_CUDA_ARCHS="${NVTE_CUDA_ARCHS}" \\' in runner
@@ -1162,10 +1165,19 @@ def test_gb200_profiles_limit_transformer_engine_build_to_sm100() -> None:
         assert "--editable" not in profile
         assert "RAY_CLIENT_SERVER_ENABLED=0" in profile
         assert "RAY_DASHBOARD_ENABLED=0" in profile
-        assert "--reinstall --no-cache 'ray[default]==2.56.1'" in profile
-        assert "--reinstall --no-cache 'dill==0.4.1'" in profile
-        assert "--reinstall --no-cache 'numpy==2.5.1'" in profile
-        assert "from nemo_rl.algorithms.grpo import MasterConfig" in profile
+        if cluster == "ptyche":
+            assert MCORE_DRIVER_PYTHON in profile
+            assert (
+                "RUNTIME_ARCHIVE_PREFIX=" + ":".join(IMMUTABLE_RUNTIME_ARCHIVES)
+                in profile
+            )
+            assert "--reinstall --no-cache 'ray[default]==2.56.1'" not in profile
+            assert "/opt/nemo_rl_venv/bin/python" not in profile
+        else:
+            assert "--reinstall --no-cache 'ray[default]==2.56.1'" in profile
+            assert "--reinstall --no-cache 'dill==0.4.1'" in profile
+            assert "--reinstall --no-cache 'numpy==2.5.1'" in profile
+            assert "from nemo_rl.algorithms.grpo import MasterConfig" in profile
 
 
 def test_container_smoke_reuses_official_mcore_environment() -> None:
