@@ -3,6 +3,7 @@ import importlib.util
 import itertools
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -88,6 +89,35 @@ def _run_script(
         env=env,
         check=False,
         capture_output=True,
+        text=True,
+    )
+
+
+def _run_integration_repo_preflight(
+    root: Path,
+    repo_override: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Execute only the runner's repository selection before any scheduler command."""
+    script = (
+        EXPERIMENT_DIR / "scripts" / "validate_nemorl_integration.sub"
+    ).read_text()
+    preflight, marker, _ = script.partition("IMAGE=")
+    assert marker
+    preflight = re.sub(
+        r"(?m)^ROOT=.*$",
+        f"ROOT={shlex.quote(str(root))}",
+        preflight,
+    )
+    environment = os.environ.copy()
+    if repo_override is None:
+        environment.pop("REPO_OVERRIDE", None)
+    else:
+        environment["REPO_OVERRIDE"] = repo_override
+    return subprocess.run(
+        ["bash", "-c", preflight + '\nprintf "REPO=%s\\n" "${REPO}"\n'],
+        check=False,
+        capture_output=True,
+        env=environment,
         text=True,
     )
 
@@ -1000,6 +1030,47 @@ def test_nemorl_integration_gate_pins_clean_runner_lock_and_image_provenance() -
         "git diff --quiet --ignore-submodules=dirty -- . ':(exclude)uv.lock'" in script
     )
     assert "git diff --cached --quiet" in script
+
+
+def test_nemorl_integration_repo_override_is_real_and_confined_before_srun(
+    tmp_path: Path,
+) -> None:
+    src_root = tmp_path / "src"
+    clean_runner = src_root / "RL-pr5672-clean-runner"
+    clean_runner.mkdir(parents=True)
+    outside = tmp_path / "outside-runner"
+    outside.mkdir()
+
+    default = _run_integration_repo_preflight(tmp_path)
+    assert default.returncode == 0, default.stderr
+    assert (
+        "REPO=" + str(src_root / "RL-pr5672-mamba-moe-graph-cache-runner-20260730")
+        in default.stdout
+    )
+
+    valid = _run_integration_repo_preflight(tmp_path, str(clean_runner))
+    assert valid.returncode == 0, valid.stderr
+    assert f"REPO={clean_runner.resolve()}" in valid.stdout
+
+    relative = _run_integration_repo_preflight(tmp_path, "src/RL-pr5672-clean-runner")
+    assert relative.returncode == 2
+    assert "REPO_OVERRIDE must be an absolute path" in relative.stderr
+
+    for invalid_path in (
+        str(clean_runner / ".." / ".." / outside.name),
+        str(outside),
+    ):
+        invalid = _run_integration_repo_preflight(tmp_path, invalid_path)
+        assert invalid.returncode == 2
+        assert "REPO_OVERRIDE must resolve below" in invalid.stderr
+        assert "srun" not in invalid.stdout
+
+    script = (
+        EXPERIMENT_DIR / "scripts" / "validate_nemorl_integration.sub"
+    ).read_text()
+    assert script.index('if [[ -n "${REPO_OVERRIDE:-}" ]]') < script.index(
+        "srun --nodes=1 --ntasks=1"
+    )
 
 
 def test_nemorl_integration_gate_allows_only_generated_unit_result_json_files() -> None:
