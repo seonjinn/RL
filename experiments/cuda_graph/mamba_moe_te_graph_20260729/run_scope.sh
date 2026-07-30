@@ -157,31 +157,31 @@ COMMAND_ARGS=(
 
 if [[ "${CUDA_GRAPH_IMPL}" == none ]]; then
   COMMAND_ARGS+=(
-    policy.megatron_cfg.cuda_graph_impl=none
-    "policy.megatron_cfg.cuda_graph_modules=[]"
-    policy.megatron_cfg.activation_checkpointing=false
+    ++policy.megatron_cfg.cuda_graph_impl=none
+    "++policy.megatron_cfg.cuda_graph_modules=[]"
+    ++policy.megatron_cfg.activation_checkpointing=false
   )
 else
   COMMAND_ARGS+=(
-    policy.megatron_cfg.cuda_graph_impl=transformer_engine
-    "policy.megatron_cfg.cuda_graph_modules=${SCOPE}"
-    policy.megatron_cfg.cuda_graph_packed_seq=true
-    "policy.megatron_cfg.cuda_graph_max_packed_seqs=${MAX_PACKED_SEQS}"
-    "policy.megatron_cfg.cuda_graph_warmup_steps=${WARMUP_STEPS}"
-    "policy.megatron_cfg.cuda_graph_max_cached_schedules=${CACHE_CAPACITY}"
+    ++policy.megatron_cfg.cuda_graph_impl=transformer_engine
+    "++policy.megatron_cfg.cuda_graph_modules=${SCOPE}"
+    ++policy.megatron_cfg.cuda_graph_packed_seq=true
+    "++policy.megatron_cfg.cuda_graph_max_packed_seqs=${MAX_PACKED_SEQS}"
+    "++policy.megatron_cfg.cuda_graph_warmup_steps=${WARMUP_STEPS}"
+    "++policy.megatron_cfg.cuda_graph_max_cached_schedules=${CACHE_CAPACITY}"
   )
   if [[ "${MOE_ACT_RECOMPUTE}" == true ]]; then
     COMMAND_ARGS+=(
-      policy.megatron_cfg.activation_checkpointing=true
-      policy.megatron_cfg.recompute_granularity=selective
-      "policy.megatron_cfg.recompute_modules=[moe_act]"
+      ++policy.megatron_cfg.activation_checkpointing=true
+      ++policy.megatron_cfg.recompute_granularity=selective
+      "++policy.megatron_cfg.recompute_modules=[moe_act]"
     )
   else
-    COMMAND_ARGS+=(policy.megatron_cfg.activation_checkpointing=false)
+    COMMAND_ARGS+=(++policy.megatron_cfg.activation_checkpointing=false)
   fi
   if [[ -n "${MOE_SHARED_EXPERT_OVERLAP}" ]]; then
     COMMAND_ARGS+=(
-      "policy.megatron_cfg.moe_shared_expert_overlap=${MOE_SHARED_EXPERT_OVERLAP}"
+      "++policy.megatron_cfg.moe_shared_expert_overlap=${MOE_SHARED_EXPERT_OVERLAP}"
     )
   fi
 fi

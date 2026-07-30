@@ -151,10 +151,10 @@ def test_test_only_reports_resolved_ptyche_nano_provenance_and_never_submits() -
         "examples/configs/recipes/llm/grpo-nanov3-30BA3B-2n8g-megatron-pack-cp.yaml"
         in result.stdout
     )
-    assert "policy.megatron_cfg.cuda_graph_modules=\\[attn\\]" in result.stdout
-    assert "policy.megatron_cfg.cuda_graph_warmup_steps=3" in result.stdout
-    assert "policy.megatron_cfg.cuda_graph_max_cached_schedules=2" in result.stdout
-    assert "policy.megatron_cfg.cuda_graph_max_packed_seqs=16" in result.stdout
+    assert "+policy.megatron_cfg.cuda_graph_modules=\\[attn\\]" in result.stdout
+    assert "+policy.megatron_cfg.cuda_graph_warmup_steps=3" in result.stdout
+    assert "+policy.megatron_cfg.cuda_graph_max_cached_schedules=2" in result.stdout
+    assert "+policy.megatron_cfg.cuda_graph_max_packed_seqs=16" in result.stdout
     assert "checkpointing.enabled=false" in result.stdout
     assert (
         "+checkpointing.pretrained_checkpoint.path="
@@ -268,11 +268,11 @@ def test_variant_command_uses_configuration_not_graph_scope() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert "cuda_graph_modules=\\[moe_router\\,moe_preprocess\\]" in result.stdout
-    assert "moe_shared_expert_overlap=true" in result.stdout
-    assert "activation_checkpointing=true" in result.stdout
-    assert "recompute_granularity=selective" in result.stdout
-    assert "recompute_modules=\\[moe_act\\]" in result.stdout
+    assert "+policy.megatron_cfg.cuda_graph_modules=\\[moe_router\\,moe_preprocess\\]" in result.stdout
+    assert "+policy.megatron_cfg.moe_shared_expert_overlap=true" in result.stdout
+    assert "+policy.megatron_cfg.activation_checkpointing=true" in result.stdout
+    assert "+policy.megatron_cfg.recompute_granularity=selective" in result.stdout
+    assert "+policy.megatron_cfg.recompute_modules=\\[moe_act\\]" in result.stdout
 
 
 def test_submit_all_smokes_reuses_every_persistent_launcher() -> None:
