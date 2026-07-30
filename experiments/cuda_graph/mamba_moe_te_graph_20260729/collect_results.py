@@ -263,6 +263,10 @@ def _group_invalid_reasons(rows: Sequence[Mapping[str, str]]) -> list[str]:
             if reason is not None:
                 reasons.append(reason)
                 break
+        else:
+            maximum = _telemetry_maximum(rows, field)
+            if maximum:
+                reasons.append(f"{field}={maximum}")
     return reasons
 
 
@@ -313,14 +317,6 @@ def aggregate_performance(rows: Sequence[Mapping[str, str]]) -> list[dict[str, s
             aggregate[f"{field}_median"] = median
             aggregate[f"{field}_p95"] = p95
 
-        if not invalid_reasons:
-            for field in ("eviction_count", "fallback_count"):
-                maximum = _telemetry_maximum(group_rows, field)
-                if maximum:
-                    invalid_reasons.append(f"{field}={maximum}")
-        if invalid_reasons:
-            aggregate["valid"] = "false"
-            aggregate["invalid_reason"] = "; ".join(invalid_reasons)
         aggregate_by_key[(scope, job_id)] = aggregate
         aggregates.append(aggregate)
 

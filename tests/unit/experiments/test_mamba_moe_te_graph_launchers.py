@@ -804,6 +804,32 @@ def test_steady_state_aggregate_invalidates_evictions_and_fallbacks() -> None:
     assert invalid_rows["cg-eviction"]["invalid_reason"] == "eviction_count=1"
     assert invalid_rows["cg-fallback"]["valid"] == "false"
     assert invalid_rows["cg-fallback"]["invalid_reason"] == "fallback_count=2"
+    for invalid_job_id in ("cg-eviction", "cg-fallback"):
+        invalid_aggregate = invalid_rows[invalid_job_id]
+        for field in (
+            "e2e_step_time",
+            "e2e_tokens_per_sec_per_gpu",
+            "generation_time",
+            "generation_tokens_per_sec_per_gpu",
+            "policy_training_time",
+            "policy_training_tokens_per_sec_per_gpu",
+            "logprob_time",
+            "logprob_tokens_per_sec_per_gpu",
+        ):
+            assert invalid_aggregate[f"{field}_median"] == ""
+            assert invalid_aggregate[f"{field}_p95"] == ""
+        for field in (
+            "e2e_tokens_per_sec_per_gpu",
+            "generation_tokens_per_sec_per_gpu",
+            "policy_training_tokens_per_sec_per_gpu",
+            "logprob_tokens_per_sec_per_gpu",
+            "reward_mean",
+            "generation_kl_error",
+            "policy_loss",
+            "grad_norm",
+        ):
+            suffix = "ratio_to_baseline" if "tokens" in field else "delta"
+            assert invalid_aggregate[f"{field}_{suffix}"] == ""
 
 
 def test_steady_state_aggregate_rejects_missing_baseline() -> None:
