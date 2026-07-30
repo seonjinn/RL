@@ -293,6 +293,16 @@ def test_submit_performance_accepts_explicit_reusable_selection() -> None:
     assert "whole-layer" in result.stdout
 
 
+def test_nemorl_integration_gate_uses_bridge_src_layout() -> None:
+    script = (
+        EXPERIMENT_DIR / "scripts" / "validate_nemorl_integration.sub"
+    ).read_text()
+
+    assert (
+        "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src" in script
+    )
+
+
 def test_collector_schema_and_wandb_metric_mapping_are_exact() -> None:
     collector = _load_experiment_module("collect_results")
     assert collector.CSV_FIELDS == (

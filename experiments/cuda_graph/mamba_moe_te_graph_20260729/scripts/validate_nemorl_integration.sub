@@ -22,7 +22,7 @@ srun --nodes=1 --ntasks=1 \
     cd ${REPO}
     test \"\$(git rev-parse HEAD)\" = ${EXPECTED_SHA}
     test -z \"\$(git status --porcelain)\"
-    export PYTHONPATH=\${PWD}:\${PWD}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge:\${PWD}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM
+    export PYTHONPATH=\${PWD}:\${PWD}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:\${PWD}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM
     python -m pytest -q \
       tests/unit/models/megatron/test_cuda_graph_lifecycle.py \
       tests/unit/data/packing/test_algorithms.py \
