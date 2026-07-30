@@ -69,7 +69,8 @@ Transformer Engine overlay read-only and validates it in the same Python
 process as each preserved pytest suite. It accepts only the staged nightly
 image `nemo_rl_nightly_20260729_2472184.sqsh`, recorded as SHA256
 `cb8ae0ade02b876f1b3380c8375eb92f95033dece6b2bfdc678b47f2da1aea91`;
-container overrides are intentionally not accepted for this gate.
+container overrides are intentionally not accepted for this gate. It hashes the
+25 GB image with `sha256sum --` before `srun` and fails closed on a mismatch.
 
 The gate runs from the clean runner checkout
 `${ROOT}/src/RL-pr5672-mamba-moe-graph-cache-runner-20260730`, which must be

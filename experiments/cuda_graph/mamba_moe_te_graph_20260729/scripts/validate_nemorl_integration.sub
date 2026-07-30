@@ -31,6 +31,7 @@ MCORE_VENV=${ROOT}/venvs/nemorl-integration-mcore-${MCORE_VENV_KEY}
 : "${EXPECTED_SHA:?Submit with the immutable NeMo-RL commit SHA}"
 mkdir -p "${ROOT}/uv_cache"
 test -f "${IMAGE}"
+test "$(sha256sum -- "${IMAGE}" | awk '{print $1}')" = "${IMAGE_SHA256}"
 test -f "${TE_FP64_WEAKREF_SOURCE}"
 
 srun --nodes=1 --ntasks=1 \

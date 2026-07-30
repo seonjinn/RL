@@ -564,6 +564,9 @@ def test_nemorl_integration_gate_pins_clean_runner_lock_and_image_provenance() -
     assert "IMAGE=${ROOT}/containers/nemo_rl_nightly_20260729_2472184.sqsh" in script
     assert "CONTAINER" not in script
     assert f"IMAGE_SHA256={image_sha256}" in script
+    image_check = "test \"$(sha256sum -- \"${IMAGE}\" | awk '{print $1}')\" = \"${IMAGE_SHA256}\""
+    assert image_check in script
+    assert script.index(image_check) < script.index("srun --nodes=1 --ntasks=1")
     assert f"EXPECTED_LOCK_BLOB={lock_blob}" in script
     assert (
         r'test \"\$(git rev-parse ${EXPECTED_SHA}:uv.lock)\" = ${EXPECTED_LOCK_BLOB}'
