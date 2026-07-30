@@ -23,6 +23,8 @@ ONNX_ARCHIVE=/root/.cache/uv/archive-v0/Lp_mVBWGrC-sLPL6
 ONNX_IR_ARCHIVE=/root/.cache/uv/archive-v0/kIpfdwf26Al4-BTb
 ONNXSCRIPT_ARCHIVE=/root/.cache/uv/archive-v0/i7-d_jifMXRoKKrY
 IMMUTABLE_RUNTIME_PYTHONPATH=${TE_ARCHIVE}:${FLASH_ATTN_ARCHIVE}:${ML_DTYPES_ARCHIVE}:${ONNX_ARCHIVE}:${ONNX_IR_ARCHIVE}:${ONNXSCRIPT_ARCHIVE}
+# Persistent lockfile-derived MCore environment; this is not checkpoint state.
+MCORE_VENV=${ROOT}/venvs/nemorl-integration-mcore
 : "${EXPECTED_SHA:?Submit with the immutable NeMo-RL commit SHA}"
 mkdir -p "${ROOT}/uv_cache"
 test -f "${TE_FP64_WEAKREF_SOURCE}"
@@ -47,10 +49,14 @@ srun --nodes=1 --ntasks=1 \
           ;;
       esac
     done
+    export UV_PROJECT_ENVIRONMENT=${MCORE_VENV}
+    uv sync --frozen --extra mcore \
+      --no-build-package transformer-engine \
+      --no-build-package transformer-engine-torch
     export PYTHONPATH=${IMMUTABLE_RUNTIME_PYTHONPATH}:\${PWD}:\${PWD}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:\${PWD}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM
     export UV_CACHE_DIR=${ROOT}/uv_cache
     export NVTE_CUDA_ARCHS=100
-    /opt/nemo_rl_venv/bin/python experiments/cuda_graph/mamba_moe_te_graph_20260729/run_pytest_with_te_overlay.py --expected-version ${TE_EXPECTED_VERSION} --expected-sha256 ${TE_FP64_WEAKREF_SHA256} -- \
+    \${UV_PROJECT_ENVIRONMENT}/bin/python experiments/cuda_graph/mamba_moe_te_graph_20260729/run_pytest_with_te_overlay.py --expected-version ${TE_EXPECTED_VERSION} --expected-sha256 ${TE_FP64_WEAKREF_SHA256} -- \
       -q \
       tests/unit/models/megatron/test_cuda_graph_lifecycle.py \
       tests/unit/data/packing/test_algorithms.py \
@@ -67,7 +73,7 @@ srun --nodes=1 --ntasks=1 \
       tests/unit/models/policy/test_policy_validation.py::test_te_graph_logprob_sharding_propagates_packed_sequence_capacity \
       tests/unit/models/policy/test_policy_validation.py::test_shutdown_succeeds_before_worker_group_is_initialized
     MCORE_ROOT=3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM
-    /opt/nemo_rl_venv/bin/python experiments/cuda_graph/mamba_moe_te_graph_20260729/run_pytest_with_te_overlay.py --expected-version ${TE_EXPECTED_VERSION} --expected-sha256 ${TE_FP64_WEAKREF_SHA256} -- \
+    \${UV_PROJECT_ENVIRONMENT}/bin/python experiments/cuda_graph/mamba_moe_te_graph_20260729/run_pytest_with_te_overlay.py --expected-version ${TE_EXPECTED_VERSION} --expected-sha256 ${TE_FP64_WEAKREF_SHA256} -- \
       -q \
       \"\${MCORE_ROOT}/tests/unit_tests/transformer/test_packed_seq_params_cuda_graph.py\" \
       \"\${MCORE_ROOT}/tests/unit_tests/transformer/test_te_cuda_graph_bank.py\" \

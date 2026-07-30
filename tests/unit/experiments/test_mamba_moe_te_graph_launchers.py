@@ -485,7 +485,17 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
 
     assert "NRL_FORCE_REBUILD_VENVS" not in script
     assert "uv run" not in script
-    assert script.count("/opt/nemo_rl_venv/bin/python") == 2
+    assert "MCORE_VENV=${ROOT}/venvs/nemorl-integration-mcore" in script
+    assert "export UV_PROJECT_ENVIRONMENT=${MCORE_VENV}" in script
+    sync_index = script.index("uv sync --frozen --extra mcore")
+    assert script.index("--no-build-package transformer-engine", sync_index) < script.index(
+        "--no-build-package transformer-engine-torch", sync_index
+    )
+    first_wrapper_index = script.index("\\${UV_PROJECT_ENVIRONMENT}/bin/python")
+    last_wrapper_index = script.rindex("\\${UV_PROJECT_ENVIRONMENT}/bin/python")
+    assert sync_index < first_wrapper_index < last_wrapper_index
+    assert script.count("\\${UV_PROJECT_ENVIRONMENT}/bin/python") == 2
+    assert "/opt/nemo_rl_venv/bin/python" not in script
     assert script.count("run_pytest_with_te_overlay.py") == 2
     assert "export NVTE_CUDA_ARCHS=100" in script
     assert "#SBATCH --time=01:00:00" in script
@@ -524,6 +534,7 @@ def test_nemorl_integration_gate_uses_the_validated_immutable_runtime_archives()
         "setup.py build",
     ):
         assert native_build_command not in script
+    assert script.count("--no-build-package transformer-engine") == 2
 
 
 def test_nemorl_integration_gate_allows_only_generated_unit_result_json_files() -> None:
@@ -608,7 +619,7 @@ def test_nemorl_integration_gate_uses_the_same_immutable_python_for_both_suites(
     assert helper_path.is_file()
     assert "uv run" not in script
     assert "NRL_FORCE_REBUILD_VENVS" not in script
-    assert script.count("/opt/nemo_rl_venv/bin/python") == 2
+    assert script.count("\\${UV_PROJECT_ENVIRONMENT}/bin/python") == 2
     assert script.count("run_pytest_with_te_overlay.py") == 2
     assert "tests/unit/models/megatron/test_cuda_graph_lifecycle.py" in script
     assert "${MCORE_ROOT}/tests/unit_tests/transformer/test_te_cuda_graph_bank.py" in script
