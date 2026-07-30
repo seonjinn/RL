@@ -147,6 +147,12 @@ case "${MOE_ACT_RECOMPUTE}" in
   false|true) ;;
   *) fail "MOE_ACT_RECOMPUTE must be false or true" ;;
 esac
+MOE_EXPERT_CAPACITY_FACTOR=${MOE_EXPERT_CAPACITY_FACTOR:-}
+MOE_PAD_EXPERT_INPUT_TO_CAPACITY=${MOE_PAD_EXPERT_INPUT_TO_CAPACITY:-}
+case "${MOE_PAD_EXPERT_INPUT_TO_CAPACITY}" in
+  ""|false|true) ;;
+  *) fail "MOE_PAD_EXPERT_INPUT_TO_CAPACITY must be false or true" ;;
+esac
 
 RUN_TAG=${RUN_TAG:-$(date -u +%Y%m%dT%H%M%SZ)}
 RUN_NAME="${RUN_NAME:?RUN_NAME must be set}-${MODEL}-${CLUSTER}-${PHASE}-${RUN_TAG}"
@@ -214,6 +220,17 @@ else
       "++policy.megatron_cfg.moe_shared_expert_overlap=${MOE_SHARED_EXPERT_OVERLAP}"
     )
   fi
+fi
+
+if [[ -n "${MOE_EXPERT_CAPACITY_FACTOR}" ]]; then
+  COMMAND_ARGS+=(
+    "++policy.megatron_cfg.moe_expert_capacity_factor=${MOE_EXPERT_CAPACITY_FACTOR}"
+  )
+fi
+if [[ -n "${MOE_PAD_EXPERT_INPUT_TO_CAPACITY}" ]]; then
+  COMMAND_ARGS+=(
+    "++policy.megatron_cfg.moe_pad_expert_input_to_capacity=${MOE_PAD_EXPERT_INPUT_TO_CAPACITY}"
+  )
 fi
 
 printf -v COMMAND '%q ' "${COMMAND_ARGS[@]}"

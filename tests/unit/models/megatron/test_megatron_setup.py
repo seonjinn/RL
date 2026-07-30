@@ -829,6 +829,38 @@ class TestApplyMoeConfig:
 
         assert not hasattr(model_cfg, "moe_grouped_gemm")
 
+    def test_moe_drop_padding_settings_reach_the_mcore_model_config(self):
+        """Omitting this forwarding leaves standalone MoE CUDA graphs unsupported."""
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        model_cfg = SimpleNamespace(
+            moe_expert_capacity_factor=None,
+            moe_pad_expert_input_to_capacity=False,
+        )
+        config = self._base_moe_cfg(
+            moe_expert_capacity_factor=1.0,
+            moe_pad_expert_input_to_capacity=True,
+        )
+
+        _apply_moe_config(model_cfg, config)
+
+        assert model_cfg.moe_expert_capacity_factor == 1.0
+        assert model_cfg.moe_pad_expert_input_to_capacity is True
+
+    def test_moe_drop_padding_absence_preserves_model_defaults(self):
+        """Existing dropless recipes must not gain a capacity or padding setting."""
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        model_cfg = SimpleNamespace(
+            moe_expert_capacity_factor=None,
+            moe_pad_expert_input_to_capacity=False,
+        )
+
+        _apply_moe_config(model_cfg, self._base_moe_cfg())
+
+        assert model_cfg.moe_expert_capacity_factor is None
+        assert model_cfg.moe_pad_expert_input_to_capacity is False
+
     def test_hybridep_env_vars_auto_set_with_warning(self, monkeypatch):
         """HybridEP backend with no env config: auto-set env vars and emit warnings."""
         from nemo_rl.models.megatron.setup import _apply_moe_config

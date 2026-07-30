@@ -194,6 +194,52 @@ def test_moe_configuration_variants_are_persistent_and_not_graph_scopes() -> Non
         assert _assignment(script, "CHECKPOINTING_ENABLED") == "false"
 
 
+def test_drop_pad_moe_pair_is_isolated_and_matched() -> None:
+    """A standalone-MoE graph needs a drop-pad baseline with identical routing semantics."""
+    expected = {
+        "pairs/00_drop_pad_baseline_no_cg.sh": (
+            "none",
+            r"\[\]",
+            "mamba-moe-te-drop-pad-baseline-no-cg",
+        ),
+        "pairs/01_drop_pad_moe.sh": (
+            "transformer_engine",
+            r"\[moe\]",
+            "mamba-moe-te-drop-pad-moe",
+        ),
+    }
+
+    for launcher, (implementation, modules, run_name) in expected.items():
+        result = _run_script(launcher, CLUSTER="ptyche", TEST_ONLY="1")
+
+        assert result.returncode == 0, result.stderr
+        assert (
+            f"++policy.megatron_cfg.cuda_graph_impl={implementation}" in result.stdout
+        )
+        assert f"++policy.megatron_cfg.cuda_graph_modules={modules}" in result.stdout
+        assert "++policy.megatron_cfg.moe_expert_capacity_factor=1.0" in result.stdout
+        assert (
+            "++policy.megatron_cfg.moe_pad_expert_input_to_capacity=true"
+            in result.stdout
+        )
+        assert "grpo.max_num_steps=5" in result.stdout
+        assert "checkpointing.enabled=false" in result.stdout
+        assert "policy.sequence_packing.enabled=true" in result.stdout
+        assert (
+            f"logger.wandb.name={run_name}-nano-hybrid-ptyche-smoke-" in result.stdout
+        )
+
+    for legacy_launcher in (
+        "scopes/00_baseline_no_cg.sh",
+        "scopes/02_moe.sh",
+    ):
+        legacy = _run_script(legacy_launcher, CLUSTER="ptyche", TEST_ONLY="1")
+
+        assert legacy.returncode == 0, legacy.stderr
+        assert "moe_expert_capacity_factor" not in legacy.stdout
+        assert "moe_pad_expert_input_to_capacity" not in legacy.stdout
+
+
 def test_test_only_reports_resolved_ptyche_nano_provenance_and_never_submits() -> None:
     result = _run_script(
         "scopes/17_attn.sh",

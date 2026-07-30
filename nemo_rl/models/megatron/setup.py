@@ -927,6 +927,14 @@ def _apply_moe_config(model_cfg: Any, config: PolicyConfig) -> None:
     model_cfg.moe_token_dispatcher_type = config["megatron_cfg"][
         "moe_token_dispatcher_type"
     ]
+    if "moe_expert_capacity_factor" in config["megatron_cfg"]:
+        model_cfg.moe_expert_capacity_factor = config["megatron_cfg"][
+            "moe_expert_capacity_factor"
+        ]
+    if "moe_pad_expert_input_to_capacity" in config["megatron_cfg"]:
+        model_cfg.moe_pad_expert_input_to_capacity = config["megatron_cfg"][
+            "moe_pad_expert_input_to_capacity"
+        ]
     if "inference_moe_token_dispatcher_type" in config["megatron_cfg"]:
         model_cfg.inference_moe_token_dispatcher_type = config["megatron_cfg"][
             "inference_moe_token_dispatcher_type"

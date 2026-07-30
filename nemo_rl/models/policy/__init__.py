@@ -370,6 +370,10 @@ class MegatronConfig(TypedDict):
     # Options are 'allgather','alltoall' and 'flex'
     # Use 'flex' when using DeepEP
     moe_token_dispatcher_type: str
+    # Optional finite per-expert capacity used by drop-and-pad MoE.
+    moe_expert_capacity_factor: NotRequired[float | None]
+    # Pad each expert input to the configured capacity. Requires a capacity factor.
+    moe_pad_expert_input_to_capacity: NotRequired[bool]
     # Inference-only MoE dispatcher selection.
     # Options are 'nvls' (requires Hopper+ NVLink) and 'nccl' (fallback for non-NVLS systems).
     inference_moe_token_dispatcher_type: NotRequired[str]

@@ -21,6 +21,14 @@ of shared-expert overlap and selective `moe_act` recompute under only the
 `moe` and `moe_router,moe_preprocess` graph scopes. `moe_act` and
 `shared_expert` are configuration knobs and never graph-scope entries.
 
+`pairs/` contains an isolated drop-and-pad MoE comparison. Both launchers set
+`moe_expert_capacity_factor=1.0` and
+`moe_pad_expert_input_to_capacity=true`; `00_drop_pad_baseline_no_cg.sh` uses
+no CUDA Graph and `01_drop_pad_moe.sh` captures only `[moe]`. This pair is
+separate from the standard dropless matrix because capacity-based routing can
+drop tokens. The two pair members share all other model, runtime, resource,
+and training settings.
+
 Every launcher pins three successful warmup updates, two cached PP schedule
 banks, at most 16 packed sequences, checkpoint writes disabled, and W&B
 project `sna-cg-study`. Runtime names add model, cluster, phase, and a UTC tag
@@ -134,6 +142,15 @@ Run one launcher:
 ```bash
 TEST_ONLY=1 CLUSTER=ptyche \
   bash experiments/cuda_graph/mamba_moe_te_graph_20260729/scopes/17_attn.sh
+```
+
+Preflight the standalone-MoE drop-and-pad pair:
+
+```bash
+TEST_ONLY=1 CLUSTER=ptyche \
+  bash experiments/cuda_graph/mamba_moe_te_graph_20260729/pairs/00_drop_pad_baseline_no_cg.sh
+TEST_ONLY=1 CLUSTER=ptyche \
+  bash experiments/cuda_graph/mamba_moe_te_graph_20260729/pairs/01_drop_pad_moe.sh
 ```
 
 Preflight every persistent smoke launcher:
