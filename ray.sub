@@ -121,6 +121,7 @@ case "$RAY_CLIENT_SERVER_ENABLED" in
 esac
 #REDIT_SHARD_PORTS=${REDIT_SHARD_PORTS:-"random"} ??
 DASHBOARD_PORT=${DASHBOARD_PORT:-8265}  # Also used by debugger
+RAY_DASHBOARD_ENABLED=${RAY_DASHBOARD_ENABLED:-1}
 DASHBOARD_AGENT_LISTEN_PORT=${DASHBOARD_AGENT_LISTEN_PORT:-1311}
 RAY_DEBUGGER_ARGS=
 if [ "${RAY_DEBUG:-}" = "legacy" ]; then
@@ -463,6 +464,15 @@ head_node_ip=${ip_addresses_array[0]}
 
 ip_head=$head_node_ip:$PORT
 
+case "$RAY_DASHBOARD_ENABLED" in
+  0) RAY_DASHBOARD_ARGS="--include-dashboard=False" ;;
+  1) RAY_DASHBOARD_ARGS="--dashboard-port=${DASHBOARD_PORT} --dashboard-host=${head_node_ip} --include-dashboard=True" ;;
+  *)
+    echo "Error: RAY_DASHBOARD_ENABLED must be 0 or 1, got '$RAY_DASHBOARD_ENABLED'." >&2
+    exit 1
+    ;;
+esac
+
 # Write the topology probe script that runs inside each container.
 # Both head_cmd and worker_cmd source this to avoid duplication.
 # The script sets two variables: CLUSTER_UUID and TOPO_RANK.
@@ -704,9 +714,7 @@ ray start --head \
     --node-ip-address="$head_node_ip" \
     --port=${PORT} \
     ${RAY_CLIENT_SERVER_ARG} \
-    --dashboard-port=${DASHBOARD_PORT} \
-    --dashboard-host="$head_node_ip" \
-    --include-dashboard=True \
+    ${RAY_DASHBOARD_ARGS} \
     --min-worker-port=${MIN_WORKER_PORT} \
     --max-worker-port=${MAX_WORKER_PORT} \
     \
