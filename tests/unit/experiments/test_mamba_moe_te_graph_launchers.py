@@ -3,6 +3,7 @@ import itertools
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -29,6 +30,19 @@ VALID_GRAPH_SCOPES = {
     for enabled_dense in itertools.product((False, True), repeat=3)
     for moe_scope in MOE_AXES
 }
+TE_FP64_WEAKREF_COMMIT = "e707aa46869dc2aec08dfea25402e97a61d49fef"
+TE_FP64_WEAKREF_SHA256 = (
+    "39f7b26b8cf127e3ca104c0375c97ce4e6d047178f9d00836b92469b1c2e544b"
+)
+TE_FP64_WEAKREF_SOURCE = (
+    "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/"
+    "TransformerEngine-fp64-weakref-20260729/transformer_engine/pytorch/utils.py"
+)
+TE_FP64_WEAKREF_TARGET = (
+    "/root/.cache/uv/archive-v0/AdbVCNRp6JVFPo0e/"
+    "transformer_engine/pytorch/utils.py"
+)
+TE_EXPECTED_VERSION = "2.15.0+42b84005"
 
 
 def _assignment(script: Path, name: str) -> str:
@@ -168,6 +182,78 @@ def test_test_only_reports_resolved_ptyche_nano_provenance_and_never_submits() -
     )
     assert "logger.wandb.project=sna-cg-study" in result.stdout
     assert "TEST_ONLY: no submission performed" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "launcher",
+    ["scopes/00_baseline_no_cg.sh", "scopes/17_attn.sh"],
+)
+def test_fp64_overlay_provenance_is_identical_for_baseline_and_te_scopes(
+    launcher: str,
+) -> None:
+    result = _run_script(launcher, CLUSTER="ptyche", TEST_ONLY="1")
+
+    assert result.returncode == 0, result.stderr
+    for field, value in (
+        ("TE_FP64_WEAKREF_COMMIT", TE_FP64_WEAKREF_COMMIT),
+        ("TE_FP64_WEAKREF_SHA256", TE_FP64_WEAKREF_SHA256),
+        ("TE_FP64_WEAKREF_SOURCE", TE_FP64_WEAKREF_SOURCE),
+        ("TE_FP64_WEAKREF_TARGET", TE_FP64_WEAKREF_TARGET),
+        ("TE_EXPECTED_VERSION", TE_EXPECTED_VERSION),
+    ):
+        assert f"{field}: {value}" in result.stdout
+    assert f"{TE_FP64_WEAKREF_SOURCE}:{TE_FP64_WEAKREF_TARGET}:ro" in result.stdout
+    assert "validate_te_fp64_overlay.py" in result.stdout
+    assert f"--expected-version {TE_EXPECTED_VERSION}" in result.stdout
+    assert f"--expected-sha256 {TE_FP64_WEAKREF_SHA256}" in result.stdout
+
+
+def test_fp64_overlay_rejects_wrong_sha_before_cuda_preflight(
+    tmp_path: Path,
+) -> None:
+    validator_path = EXPERIMENT_DIR / "validate_te_fp64_overlay.py"
+    assert validator_path.is_file(), "FP64 overlay validator must be committed"
+
+    package_root = tmp_path / "packages"
+    transformer_engine_root = package_root / "transformer_engine"
+    pytorch_root = transformer_engine_root / "pytorch"
+    pytorch_root.mkdir(parents=True)
+    (package_root / "torch.py").write_text(
+        "float64 = object()\n"
+        "def arange(*args, **kwargs):\n"
+        "    raise RuntimeError('CUDA preflight ran')\n"
+    )
+    (transformer_engine_root / "__init__.py").write_text(
+        f"__version__ = {TE_EXPECTED_VERSION!r}\n"
+    )
+    (pytorch_root / "__init__.py").touch()
+    (pytorch_root / "utils.py").write_text(
+        "import torch\n"
+        "_torch_dtype_to_np_typestr_dict = {torch.float64: '<f8'}\n"
+        "def make_weak_ref(tensor):\n"
+        "    return tensor\n"
+    )
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(package_root)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(validator_path),
+            "--expected-version",
+            TE_EXPECTED_VERSION,
+            "--expected-sha256",
+            "0" * 64,
+        ],
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "SHA256 mismatch" in result.stderr
+    assert "CUDA preflight ran" not in result.stderr
 
 
 @pytest.mark.parametrize("phase", ["profile", "benchmark"])

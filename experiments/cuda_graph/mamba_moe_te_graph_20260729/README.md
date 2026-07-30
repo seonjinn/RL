@@ -47,6 +47,19 @@ refuses to call `sbatch` while any required field is unresolved. `TEST_ONLY=1`
 prints every unresolved field and the complete training and Slurm commands,
 then exits without contacting the scheduler.
 
+## Transformer Engine FP64 overlay preflight
+
+Every Ptyche baseline and CUDA-Graph run mounts the reviewed Transformer Engine
+`utils.py` source read-only over the image's exact uv-archive path. The overlay
+is pinned to commit `e707aa46869dc2aec08dfea25402e97a61d49fef`, version
+`2.15.0+42b84005`, and SHA256
+`39f7b26b8cf127e3ca104c0375c97ce4e6d047178f9d00836b92469b1c2e544b`.
+Before Ray starts, the head validates the installed package version, mounted
+source digest, FP64 `<f8` registry entry, and CUDA FP64 weak-reference dtype,
+shape, and data-pointer identity. Any mismatch stops the launch before Ray;
+workers share the same immutable image and read-only mount, so they do not
+repeat package installation.
+
 ## Local preflight
 
 Run one launcher:
