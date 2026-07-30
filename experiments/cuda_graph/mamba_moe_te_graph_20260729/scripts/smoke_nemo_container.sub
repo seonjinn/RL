@@ -26,8 +26,10 @@ srun --nodes=1 --ntasks=1 \
     export NVTE_CUDA_ARCHS=100
     cd ${REPO}
     NRL_FORCE_REBUILD_VENVS=true uv run --frozen --extra mcore python -c pass
-    uv pip install --python /opt/nemo_rl_venv/bin/python --reinstall --no-deps --no-cache urllib3==2.7.0 click==8.4.2
+    uv pip install --python /opt/nemo_rl_venv/bin/python --reinstall --no-cache 'ray[default]==2.56.1'
     ray --version
+    ray start --head --include-dashboard=False --disable-usage-stats --port=1200
+    ray stop
     python -
   " <<'PY'
 import importlib
