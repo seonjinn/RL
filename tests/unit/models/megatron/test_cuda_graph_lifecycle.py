@@ -515,13 +515,15 @@ def test_eviction_reset_exception_keeps_committed_replacement_active() -> None:
 def test_close_resets_every_distinct_cached_bank_once_and_is_idempotent() -> None:
     lifecycle_module = _get_lifecycle_module()
     key_type = lifecycle_module.TECudaGraphScheduleKey
-    lifecycle = lifecycle_module.TECudaGraphLifecycle(capacity=3, warmup_steps=0)
+    lifecycle = lifecycle_module.TECudaGraphLifecycle(capacity=3)
     first_key = _make_key(key_type, 5)
     second_key = _make_key(key_type, 3)
     third_key = _make_key(key_type, 7)
     shared_bank = _FakeBank("shared")
     other_bank = _FakeBank("other")
 
+    for _ in range(3):
+        lifecycle.record_optimizer_step(successful=True)
     lifecycle.ensure_active(first_key, lambda: shared_bank)
     lifecycle.ensure_active(second_key, lambda: shared_bank)
     lifecycle.ensure_active(third_key, lambda: other_bank)
@@ -533,17 +535,23 @@ def test_close_resets_every_distinct_cached_bank_once_and_is_idempotent() -> Non
     assert other_bank.reset_calls == 1
     assert lifecycle.active_key is None
     assert lifecycle.cached_keys == ()
+    assert lifecycle.successful_optimizer_steps == 0
+
+    after_close = lifecycle.ensure_active(first_key, _unexpected_capture)
+    assert after_close.status == "warming"
 
 
 def test_close_continues_after_reset_error_and_leaves_lifecycle_clear() -> None:
     lifecycle_module = _get_lifecycle_module()
     key_type = lifecycle_module.TECudaGraphScheduleKey
-    lifecycle = lifecycle_module.TECudaGraphLifecycle(capacity=2, warmup_steps=0)
+    lifecycle = lifecycle_module.TECudaGraphLifecycle(capacity=2)
     first_key = _make_key(key_type, 5)
     second_key = _make_key(key_type, 3)
     first_bank = _FakeBank("first", reset_error=RuntimeError("reset failed"))
     second_bank = _FakeBank("second")
 
+    for _ in range(3):
+        lifecycle.record_optimizer_step(successful=True)
     lifecycle.ensure_active(first_key, lambda: first_bank)
     lifecycle.ensure_active(second_key, lambda: second_bank)
 
@@ -554,6 +562,7 @@ def test_close_continues_after_reset_error_and_leaves_lifecycle_clear() -> None:
     assert second_bank.reset_calls == 1
     assert lifecycle.active_key is None
     assert lifecycle.cached_keys == ()
+    assert lifecycle.successful_optimizer_steps == 0
 
     lifecycle.close()
     assert first_bank.reset_calls == 1

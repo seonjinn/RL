@@ -188,6 +188,7 @@ class TECudaGraphLifecycle:
 
         self._banks.clear()
         self._active_key = None
+        self._successful_optimizer_steps = 0
 
         first_error: Exception | None = None
         for bank in distinct_banks:
