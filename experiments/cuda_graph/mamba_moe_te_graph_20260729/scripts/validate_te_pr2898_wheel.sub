@@ -69,10 +69,18 @@ test -d "${TE_SOURCE}/.git"
 test "$(git -C "${TE_SOURCE}" rev-parse HEAD)" = "${EXPECTED_TE_COMMIT}"
 git -C "${TE_SOURCE}" diff --quiet
 git -C "${TE_SOURCE}" diff --cached --quiet
-if [[ -n "$(git -C "${TE_SOURCE}" status --porcelain --untracked-files=all)" ]]; then
+if ! source_status=$(
+  git -C "${TE_SOURCE}" status --porcelain --untracked-files=all
+); then
+  fail "Failed to inspect Transformer Engine source status"
+fi
+if [[ -n "${source_status}" ]]; then
   fail "Transformer Engine source must be clean"
 fi
-if git -C "${TE_SOURCE}" submodule status --recursive | grep -Eq '^[+-U]'; then
+if ! submodule_status=$(git -C "${TE_SOURCE}" submodule status --recursive); then
+  fail "Failed to inspect Transformer Engine submodule status"
+fi
+if grep -Eq '^[+-U]' <<<"${submodule_status}"; then
   fail "Transformer Engine source has missing or modified submodules"
 fi
 test -f "${TE_SOURCE}/tests/pytorch/test_pr2898_backport_compat.py"

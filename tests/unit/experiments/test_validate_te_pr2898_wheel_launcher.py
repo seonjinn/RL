@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -303,6 +304,53 @@ def test_te_pr2898_wheel_gate_rejects_provenance_mismatch_before_install(
     assert "provenance" in result.stderr.lower()
     assert not capture.exists()
     assert not (root / "runtimes" / "transformer-engine").exists()
+
+
+def test_te_pr2898_wheel_gate_fails_closed_when_git_inspection_fails(
+    tmp_path: Path,
+) -> None:
+    real_git = shutil.which("git")
+    assert real_git is not None
+
+    for failure_mode in ("status", "submodule"):
+        launcher, root, _, fake_bin = _prepare_launcher_fixture(tmp_path / failure_mode)
+        fake_git = fake_bin / "git"
+        fake_git.write_text(
+            f"""#!/usr/bin/env python3
+import os
+import sys
+
+arguments = sys.argv[1:]
+failure_mode = os.environ["FAKE_GIT_FAILURE_MODE"]
+if failure_mode == "status" and "status" in arguments:
+    raise SystemExit(91)
+if failure_mode == "submodule" and "submodule" in arguments:
+    raise SystemExit(92)
+os.execv({real_git!r}, [{real_git!r}, *arguments])
+"""
+        )
+        fake_git.chmod(0o755)
+        capture = tmp_path / f"srun-command-{failure_mode}"
+        environment = _launcher_environment(fake_bin, mode="pass")
+        environment.update(
+            {
+                "FAKE_GIT_FAILURE_MODE": failure_mode,
+                "FAKE_SRUN_CAPTURE": str(capture),
+            }
+        )
+
+        result = subprocess.run(
+            ["/bin/bash", str(launcher)],
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 2
+        assert "failed to inspect transformer engine" in result.stderr.lower()
+        assert not capture.exists()
+        assert not (root / "runtimes" / "transformer-engine").exists()
 
 
 def test_te_pr2898_wheel_gate_rejects_hash_mismatch_and_extra_artifact(
