@@ -25,7 +25,7 @@ RUNTIME_PREFIX=${TE_RUNTIME}:${FLASH_ATTN_ARCHIVE}:${ML_DTYPES_ARCHIVE}:${ONNX_A
 
 : "${EXPECTED_MCORE_SHA:?Submit with the immutable Megatron-LM commit SHA}"
 
-test -x "${MCORE_DRIVER_PYTHON}"
+test -L "${MCORE_DRIVER_PYTHON}"
 test -f "${IMAGE}"
 test "$(sha256sum -- "${IMAGE}" | awk '{print $1}')" = "${IMAGE_SHA256}"
 test "$(git -C "${MCORE_ROOT}" rev-parse HEAD)" = "${EXPECTED_MCORE_SHA}"
