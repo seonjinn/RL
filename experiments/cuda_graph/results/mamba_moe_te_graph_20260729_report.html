@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mamba/MoE Transformer Engine CUDA Graph study</title>
+<style>
+:root { color-scheme: dark; }
+body { background: #0e1420; color: #e6edf7; font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 1440px; padding: 0 1rem; }
+h1, h2 { color: #8ed6ff; }
+section { background: #172130; border: 1px solid #2a3b52; border-radius: .6rem; margin: 1rem 0; padding: 1rem; }
+.legend { display: grid; gap: .7rem; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); }
+.legend div { background: #101a28; border-left: .25rem solid #70d6a7; padding: .75rem; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border-bottom: 1px solid #2a3b52; padding: .55rem; text-align: left; vertical-align: top; }
+th { color: #a8ddff; } code { color: #9de4ba; } .table-wrap { overflow-x: auto; } .pending { color: #aeb9c9; }
+</style>
+</head>
+<body>
+<h1>Mamba/MoE Transformer Engine CUDA Graph study</h1>
+<p>Generated 2026-07-30 00:58:48 UTC. No experiment submission is performed by this renderer.</p>
+<div class="legend">
+<div><strong>No-CG baseline (CUDA graphs disabled)</strong><br>The baseline uses <code>cuda_graph_impl=none</code>.</div>
+<div><strong>TE whole-layer capture (empty module list)</strong><br>An empty TE scope means whole-layer capture; it is never the no-CG baseline.</div>
+<div><strong>MoE configuration variants</strong><br><code>moe_act</code> recompute and shared-expert overlap are configuration variants; graph scope is unchanged.</div>
+</div>
+<section id="correctness"><h2>Correctness</h2>
+<table>
+<thead><tr><th>Task</th><th>Evidence</th><th>Verified status</th></tr></thead>
+<tbody>
+<tr><td>MCore Task 1</td><td>Slurm 2471224</td><td>66 passed</td></tr>
+<tr><td>MCore Task 2</td><td>Slurm 2471343</td><td>29 + 3 passed</td></tr>
+<tr><td>MCore Task 3</td><td>Slurm 2471570</td><td>38 + 3 passed</td></tr>
+<tr><td>MCore Task 4</td><td>Slurm 2471681</td><td>43 + 23 passed</td></tr>
+<tr><td>MCore Task 5</td><td>Slurm 2471820, 2471877, 2471888, 2471988</td><td>Final job 2471988 completed with exit 0 on 4xGB200: every rank reported 2 passed / 108 deselected. The packed Mamba parity passed in 74.33s; MoE 5→3→5 passed in 6.96s; total test time was 82.78s. Earlier job 2471820 passed packed Mamba and exposed an invalid topk test configuration before graph execution. Job 2471877 reached forward and exposed a stale post-reset telemetry assertion, not a production CUDA Graph failure. Focused MoE job 2471888 completed with each of four ranks reporting 1 passed. Its <code>routing_map.sum</code> token-count oracle is valid for this EP1/TP1 test only and is not generalized to EP&gt;1 post-communication counts. Fixes <code>1f1ca8fd7f36a5121b362ebed4a233a3a1ebee8b</code> and final MCore head <code>100047b517ea91526dc465448fcb3b37b2598388</code> are recorded.</td></tr>
+<tr><td>NeMo-RL Task 6</td><td>Host verification</td><td>37 host tests + Pyrefly passed</td></tr>
+<tr><td>NeMo-RL Task 7</td><td>No Linux or NeMo job evidence yet</td><td>uncommitted / in progress. Config, packed data, policy caller, and worker schedule-bank integration are under active verification.</td></tr>
+</tbody>
+</table>
+</section>
+<section id="smoke"><h2>Smoke</h2><p class="pending">No collected rows yet.</p></section>
+<section id="performance"><h2>Performance</h2><p class="pending">No collected rows yet.</p></section>
+<section id="accuracy"><h2>Accuracy</h2><p class="pending">No collected rows yet.</p></section>
+<section id="failures"><h2>Failures</h2><p class="pending">No collected rows yet.</p></section>
+<section id="provenance"><h2>Provenance</h2>
+<table><tbody>
+<tr><th>NeMo-RL SHA</th><td><code>__REQUIRED_NEMO_RL_SHA__</code></td></tr>
+<tr><th>Megatron-Bridge SHA</th><td><code>__REQUIRED_MEGATRON_BRIDGE_SHA__</code></td></tr>
+<tr><th>Megatron-LM SHA</th><td><code>100047b517ea91526dc465448fcb3b37b2598388</code></td></tr>
+<tr><th>Nightly container SHA256</th><td><code>__REQUIRED_CONTAINER_SHA256__</code></td></tr>
+<tr><th>Model snapshots</th><td>Immutable profile-specific paths remain <code>__REQUIRED_*_MODEL_SNAPSHOT__</code> until staging is verified.</td></tr>
+</tbody></table>
+</section>
+</body>
+</html>
