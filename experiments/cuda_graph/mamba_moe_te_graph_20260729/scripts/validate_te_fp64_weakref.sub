@@ -12,6 +12,13 @@ set -euo pipefail
 
 ROOT=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg
 IMAGE=${ROOT}/containers/nemo_rl_nightly_20260729_2472184.sqsh
+PYTHON=/opt/nemo_rl_venv/bin/python3
+TE_ARCHIVE=/root/.cache/uv/archive-v0/AdbVCNRp6JVFPo0e
+FLASH_ATTN_ARCHIVE=/root/.cache/uv/archive-v0/26H_iFoUOK00pyG5
+ML_DTYPES_ARCHIVE=/root/.cache/uv/archive-v0/ymbKBYrUysuiERDQ
+ONNX_ARCHIVE=/root/.cache/uv/archive-v0/Lp_mVBWGrC-sLPL6
+ONNX_IR_ARCHIVE=/root/.cache/uv/archive-v0/kIpfdwf26Al4-BTb
+ONNXSCRIPT_ARCHIVE=/root/.cache/uv/archive-v0/i7-d_jifMXRoKKrY
 TE_OVERLAY_TARGET=/root/.cache/uv/archive-v0/AdbVCNRp6JVFPo0e/transformer_engine/pytorch/utils.py
 
 : "${TE_SOURCE_ROOT:?Submit with the shared Transformer Engine source root}"
@@ -27,6 +34,7 @@ esac
 
 test -f "${IMAGE}"
 test -f "${TE_SOURCE_ROOT}/tests/pytorch/test_cuda_graphs.py"
+test -x "${PYTHON}"
 
 CONTAINER_MOUNTS=/lustre:/lustre
 if [[ "${TE_OVERLAY_ENABLED}" == "1" ]]; then
@@ -34,15 +42,38 @@ if [[ "${TE_OVERLAY_ENABLED}" == "1" ]]; then
     CONTAINER_MOUNTS+=",${TE_SOURCE_ROOT}/transformer_engine/pytorch/utils.py:${TE_OVERLAY_TARGET}:ro"
 fi
 
+PYTHONPATH="${TE_ARCHIVE}:${FLASH_ATTN_ARCHIVE}:${ML_DTYPES_ARCHIVE}:${ONNX_ARCHIVE}:${ONNX_IR_ARCHIVE}:${ONNXSCRIPT_ARCHIVE}"
+
 srun --nodes=1 --ntasks=1 \
     --container-image="${IMAGE}" \
     --container-mounts="${CONTAINER_MOUNTS}" \
-    bash -lc "
-        set -euo pipefail
-        export CUDA_VISIBLE_DEVICES=0
-        export UV_CACHE_DIR=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/uv_cache
-        cd \"\${SLURM_SUBMIT_DIR}\"
-        uv run --frozen --extra mcore python -m pytest -vv \\
-          \"${TE_SOURCE_ROOT}/tests/pytorch/test_cuda_graphs.py\" \\
-          -k \"fp64\"
-    "
+    --export="ALL,CUDA_VISIBLE_DEVICES=0,PYTHONPATH=${PYTHONPATH}" \
+    "${PYTHON}" - "${TE_SOURCE_ROOT}/tests/pytorch/test_cuda_graphs.py" <<'PY'
+import importlib
+import os
+from pathlib import Path
+import sys
+
+import pytest
+import transformer_engine
+import transformer_engine.pytorch
+import transformer_engine.pytorch.utils as te_utils
+
+test_file = sys.argv[1]
+expected_python = "/opt/nemo_rl_venv/bin/python3"
+expected_utils = "/root/.cache/uv/archive-v0/AdbVCNRp6JVFPo0e/transformer_engine/pytorch/utils.py"
+expected_native_root = "/root/.cache/uv/archive-v0/AdbVCNRp6JVFPo0e/transformer_engine"
+
+assert sys.executable == expected_python
+assert transformer_engine.__version__ == "2.15.0+42b84005"
+assert os.path.realpath(te_utils.__file__) == expected_utils
+native = importlib.import_module("transformer_engine_torch")
+assert Path(native.__file__).resolve().is_relative_to(expected_native_root)
+
+print(f"python={sys.executable}")
+print(f"te_version={transformer_engine.__version__}")
+print(f"te_utils={os.path.realpath(te_utils.__file__)}")
+print(f"te_native={Path(native.__file__).resolve()}")
+
+raise SystemExit(pytest.main(["-vv", test_file, "-k", "fp64"]))
+PY
