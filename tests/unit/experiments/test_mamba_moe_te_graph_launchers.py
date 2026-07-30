@@ -271,6 +271,18 @@ def test_ptyche_performance_launcher_uses_task6_immutable_mcore_runtime() -> Non
 def test_real_submission_fails_before_sbatch_when_runtime_lock_mismatches(
     tmp_path: Path,
 ) -> None:
+    archives = tuple(tmp_path / f"archive-{index}" for index in range(6))
+    for archive in archives:
+        archive.mkdir()
+    driver = tmp_path / "locked-mcore" / "bin" / "python"
+    driver.parent.mkdir(parents=True)
+    driver.write_text("#!/usr/bin/env bash\n")
+    driver.chmod(0o755)
+    overlay = tmp_path / "utils.py"
+    overlay.write_text("fp64 overlay\n")
+    overlay.chmod(0o444)
+    container = tmp_path / "nightly.sqsh"
+    container.touch()
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_sbatch = fake_bin / "sbatch"
@@ -287,6 +299,18 @@ def test_real_submission_fails_before_sbatch_when_runtime_lock_mismatches(
         SBATCH_RECORD=str(record),
         LOG_ROOT_OVERRIDE=str(tmp_path / "logs"),
         PATH=f"{fake_bin}:{os.environ['PATH']}",
+        LAUNCHER_TEST_CONTRACT_OVERRIDE="1",
+        MCORE_DRIVER_PYTHON_OVERRIDE=str(driver),
+        MCORE_LOCK_BLOB_OVERRIDE="0" * 40,
+        RUNTIME_ARCHIVE_PREFIX_OVERRIDE=":".join(map(str, archives)),
+        TE_FP64_WEAKREF_SOURCE_OVERRIDE=str(overlay),
+        TE_FP64_WEAKREF_SHA256_OVERRIDE=hashlib.sha256(
+            overlay.read_bytes()
+        ).hexdigest(),
+        TE_FP64_WEAKREF_TARGET_OVERRIDE=str(
+            archives[0] / "transformer_engine" / "pytorch" / "utils.py"
+        ),
+        CONTAINER_OVERRIDE=str(container),
     )
 
     assert result.returncode == 2
