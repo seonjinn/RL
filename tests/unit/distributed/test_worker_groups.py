@@ -313,6 +313,36 @@ def test_initializer_pool_is_per_node_multi_node(worker_group_2d_sharding):
     assert set(worker_group._initializer_pool.keys()) == {0, 1}
 
 
+def test_initializer_inherits_driver_environment_before_actor_module_import(
+    virtual_cluster, monkeypatch
+):
+    module_name = "tests.unit.distributed.initializer_env_actor"
+    actor_fqn = f"{module_name}.InitializerEnvActor"
+    env_var = "NRL_TEST_INITIALIZER_IMPORT_ENV"
+    env_value = "available-before-actor-import"
+    original_registry_value = ACTOR_ENVIRONMENT_REGISTRY.get(actor_fqn)
+    worker_group = None
+
+    monkeypatch.setenv(env_var, env_value)
+    ACTOR_ENVIRONMENT_REGISTRY[actor_fqn] = PY_EXECUTABLES.SYSTEM
+    try:
+        worker_group = RayWorkerGroup(
+            cluster=virtual_cluster,
+            remote_worker_builder=RayWorkerBuilder(actor_fqn),
+            workers_per_node=1,
+        )
+        assert (
+            ray.get(worker_group.workers[0].get_required_env.remote()) == env_value
+        )
+    finally:
+        if worker_group is not None:
+            worker_group.shutdown(force=True)
+        if original_registry_value is None:
+            ACTOR_ENVIRONMENT_REGISTRY.pop(actor_fqn, None)
+        else:
+            ACTOR_ENVIRONMENT_REGISTRY[actor_fqn] = original_registry_value
+
+
 def test_shutdown_clears_initializer_pool(
     register_test_actor, virtual_cluster_4_bundles
 ):

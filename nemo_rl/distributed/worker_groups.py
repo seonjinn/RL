@@ -320,6 +320,26 @@ class RayWorkerBuilder:
         return worker
 
 
+def _base_actor_env_vars(
+    env_vars: dict[str, str], py_executable: str
+) -> dict[str, str]:
+    actor_env_vars = deepcopy(env_vars)
+    for key in (
+        "RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES",
+        "RAY_CLIENT_MODE",
+        "RAY_JOB_ID",
+        "RAY_LD_PRELOAD",
+        "RAY_RAYLET_PID",
+        "RAY_USAGE_STATS_ENABLED",
+    ):
+        actor_env_vars.pop(key, None)
+
+    py_venv = os.path.dirname(os.path.dirname(py_executable))
+    actor_env_vars["VIRTUAL_ENV"] = py_venv
+    actor_env_vars["UV_PROJECT_ENVIRONMENT"] = py_venv
+    return actor_env_vars
+
+
 class RayWorkerGroup:
     """Manages a group of distributed Ray worker/actor processes that execute tasks in parallel.
 
@@ -469,6 +489,8 @@ class RayWorkerGroup:
         else:
             py_executable = actor_python_env
 
+        base_actor_env_vars = _base_actor_env_vars(env_vars, py_executable)
+
         # Count total workers
         self.world_size = sum(len(indices) for _, indices in bundle_indices_list)
         global_rank = 0
@@ -493,12 +515,15 @@ class RayWorkerGroup:
         available_ports = [port for _, port in addr_port_results]
 
         # Pool one IsolatedWorkerInitializer per unique pg_idx instead of one
-        # per worker. All workers on a node share the same py_executable, so
-        # the initializer only needs that in its runtime_env — per-worker
-        # env_vars are passed through create_worker(). This reduces GCS actor
-        # registrations from N_workers to N_nodes.
+        # per worker. The initializer imports the target actor module before
+        # creating workers, so it needs the base actor environment as well as
+        # the shared py_executable. Rank-specific variables are still added
+        # only to each worker below.
         unique_pg_indices = sorted({pg_idx for pg_idx, _ in bundle_indices_list})
-        initializer_runtime_env = {"py_executable": py_executable}
+        initializer_runtime_env = {
+            "py_executable": py_executable,
+            "env_vars": base_actor_env_vars,
+        }
         self._initializer_pool: dict[int, ray.actor.ActorHandle] = {}
         for pg_idx in unique_pg_indices:
             # num_cpus=0 so the initializer doesn't consume a CPU slot — it
@@ -526,7 +551,7 @@ class RayWorkerGroup:
 
             for local_rank, bundle_idx in enumerate(local_bundle_indices):
                 # Set up basic distributed environment variables
-                worker_env_vars = deepcopy(env_vars)
+                worker_env_vars = deepcopy(base_actor_env_vars)
                 worker_env_vars.update(
                     {
                         "RANK": str(global_rank),
@@ -539,13 +564,6 @@ class RayWorkerGroup:
                         "AVAILABLE_PORT_LIST": str(available_ports),
                     }
                 )
-                # Remove Ray-specific environment variables, let the worker itself set them.
-                worker_env_vars.pop("RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES", None)
-                worker_env_vars.pop("RAY_CLIENT_MODE", None)
-                worker_env_vars.pop("RAY_JOB_ID", None)
-                worker_env_vars.pop("RAY_LD_PRELOAD", None)
-                worker_env_vars.pop("RAY_RAYLET_PID", None)
-                worker_env_vars.pop("RAY_USAGE_STATS_ENABLED", None)
 
                 # Only the first worker in each group gets bundle_indices
                 # This ensures only one worker per group is the model owner
@@ -573,11 +591,6 @@ class RayWorkerGroup:
                     "env_vars": worker_env_vars,
                     "py_executable": py_executable,
                 }
-                py_venv = os.path.dirname(
-                    os.path.dirname(py_executable)
-                )  # to remove the "bin/python" suffix
-                runtime_env["env_vars"]["VIRTUAL_ENV"] = py_venv
-                runtime_env["env_vars"]["UV_PROJECT_ENVIRONMENT"] = py_venv
 
                 extra_options = {"runtime_env": runtime_env, "name": name}
 
