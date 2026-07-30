@@ -303,6 +303,21 @@ def test_nemorl_integration_gate_uses_bridge_src_layout() -> None:
     )
 
 
+def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
+    script = (
+        EXPERIMENT_DIR / "scripts" / "validate_nemorl_integration.sub"
+    ).read_text()
+
+    assert "NRL_FORCE_REBUILD_VENVS=true" in script
+    assert "uv run --extra mcore python -m pytest" in script
+
+
+def test_ray_submission_has_no_singleton_dependency() -> None:
+    script = (EXPERIMENT_DIR.parents[2] / "ray.sub").read_text()
+
+    assert "--dependency=singleton" not in script
+
+
 def test_collector_schema_and_wandb_metric_mapping_are_exact() -> None:
     collector = _load_experiment_module("collect_results")
     assert collector.CSV_FIELDS == (

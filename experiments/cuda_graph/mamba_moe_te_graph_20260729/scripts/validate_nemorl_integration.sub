@@ -3,7 +3,7 @@
 #SBATCH --account=coreai_dlalgo_llm
 #SBATCH --job-name=coreai_dlalgo_llm-sna-cg-study.nemorl-integration
 #SBATCH --partition=backfill
-#SBATCH --time=00:15:00
+#SBATCH --time=00:30:00
 #SBATCH --segment=1
 #SBATCH --output=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/logs/nemorl-integration-%j.out
 
@@ -13,6 +13,7 @@ ROOT=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg
 REPO=${ROOT}/src/RL-pr5672-mamba-moe-graph-cache-20260729-d7f1d496f
 IMAGE=${ROOT}/containers/nemo_rl_nightly_20260727_2456107.sqsh
 : "${EXPECTED_SHA:?Submit with the immutable NeMo-RL commit SHA}"
+mkdir -p "${ROOT}/uv_cache"
 
 srun --nodes=1 --ntasks=1 \
   --container-image="${IMAGE}" \
@@ -23,7 +24,8 @@ srun --nodes=1 --ntasks=1 \
     test \"\$(git rev-parse HEAD)\" = ${EXPECTED_SHA}
     test -z \"\$(git status --porcelain)\"
     export PYTHONPATH=\${PWD}:\${PWD}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:\${PWD}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM
-    python -m pytest -q \
+    export UV_CACHE_DIR=${ROOT}/uv_cache
+    NRL_FORCE_REBUILD_VENVS=true uv run --extra mcore python -m pytest -q \
       tests/unit/models/megatron/test_cuda_graph_lifecycle.py \
       tests/unit/data/packing/test_algorithms.py \
       tests/unit/models/megatron/test_megatron_data.py \
