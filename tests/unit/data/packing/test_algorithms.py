@@ -15,7 +15,7 @@
 """Tests for sequence packing algorithms."""
 
 import random
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import pytest
 
@@ -603,7 +603,35 @@ class TestSequencePacker:
         assert validate_solution(sequence_lengths, bins, 100)
         assert [len(bin_contents) for bin_contents in bins] == [4, 4, 4, 4, 1]
 
-    @pytest.mark.parametrize("capacity", [0, -1, True, 1.5])
+    @pytest.mark.parametrize("capacity", [None, -1])
+    @pytest.mark.parametrize(
+        "algorithm",
+        [
+            PackingAlgorithm.CONCATENATIVE,
+            PackingAlgorithm.FIRST_FIT_DECREASING,
+            PackingAlgorithm.FIRST_FIT_SHUFFLE,
+            PackingAlgorithm.MODIFIED_FIRST_FIT_DECREASING,
+        ],
+    )
+    def test_max_sequences_per_bin_unbounded_sentinels(
+        self,
+        algorithm: PackingAlgorithm,
+        capacity: Optional[int],
+    ) -> None:
+        """None and -1 preserve the unbounded contract for every packer."""
+        sequence_lengths = [1] * 5
+        packer = get_packer(
+            algorithm,
+            bin_capacity=100,
+            max_sequences_per_bin=capacity,
+        )
+
+        bins = packer.pack(sequence_lengths)
+
+        assert len(bins) == 1
+        assert sorted(bins[0]) == list(range(len(sequence_lengths)))
+
+    @pytest.mark.parametrize("capacity", [0, -2, True, 1.5])
     def test_max_sequences_per_bin_must_be_a_positive_integer(
         self,
         capacity,
