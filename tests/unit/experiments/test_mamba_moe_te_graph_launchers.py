@@ -249,11 +249,14 @@ def test_ptyche_performance_launcher_uses_task6_immutable_mcore_runtime() -> Non
     assert "uv pip install" not in profile
     assert "pip install" not in profile
     assert "/opt/nemo_rl_venv/bin/python" not in profile
+    assert "transformer_engine_torch*" in profile
+    assert r"for archive in \${RUNTIME_ARCHIVE_PREFIX//:/ }" in profile
     assert 'git hash-object uv.lock)\\" = \\"${MCORE_LOCK_BLOB}' in profile
 
     archive_prefix = ":".join(IMMUTABLE_RUNTIME_ARCHIVES)
     assert archive_prefix in profile
     assert "${RUNTIME_ARCHIVE_PREFIX}:${REPO_ROOT}:" in launcher
+    assert 'RUNTIME_ARCHIVE_PREFIX="${RUNTIME_ARCHIVE_PREFIX}"' in launcher
     assert "NEMO_RL_REQUIRE_SYSTEM_MCORE=1" in launcher
     assert "NEMO_RL_MCORE_SYSTEM_PYTHON=${MCORE_DRIVER_PYTHON}" in launcher
     assert "NRL_FORCE_REBUILD_VENVS=true" in launcher
@@ -263,6 +266,115 @@ def test_ptyche_performance_launcher_uses_task6_immutable_mcore_runtime() -> Non
     assert "NEMO_RL_MCORE_SYSTEM_PYTHON" in registry
     assert "MCORE_EXECUTABLE" in registry
     assert "PY_EXECUTABLES.SYSTEM" in registry
+
+
+def test_real_submission_fails_before_sbatch_when_runtime_lock_mismatches(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_sbatch = fake_bin / "sbatch"
+    record = tmp_path / "sbatch-invoked"
+    fake_sbatch.write_text(
+        '#!/usr/bin/env bash\nprintf invoked > "${SBATCH_RECORD:?}"\n'
+    )
+    fake_sbatch.chmod(0o755)
+
+    result = _run_script(
+        "scopes/17_attn.sh",
+        CLUSTER="ptyche",
+        SBATCH_TEST_ONLY="1",
+        SBATCH_RECORD=str(record),
+        LOG_ROOT_OVERRIDE=str(tmp_path / "logs"),
+        PATH=f"{fake_bin}:{os.environ['PATH']}",
+    )
+
+    assert result.returncode == 2
+    assert "uv.lock hash mismatch" in result.stderr
+    assert not record.exists()
+
+
+def test_runtime_contract_override_is_rejected_outside_scheduler_test_mode(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_sbatch = fake_bin / "sbatch"
+    record = tmp_path / "sbatch-invoked"
+    fake_sbatch.write_text(
+        '#!/usr/bin/env bash\nprintf invoked > "${SBATCH_RECORD:?}"\n'
+    )
+    fake_sbatch.chmod(0o755)
+
+    result = _run_script(
+        "scopes/17_attn.sh",
+        CLUSTER="ptyche",
+        LAUNCHER_TEST_CONTRACT_OVERRIDE="1",
+        SBATCH_RECORD=str(record),
+        LOG_ROOT_OVERRIDE=str(tmp_path / "logs"),
+        PATH=f"{fake_bin}:{os.environ['PATH']}",
+    )
+
+    assert result.returncode == 2
+    assert "only allowed with SBATCH_TEST_ONLY=1" in result.stderr
+    assert not record.exists()
+
+
+def test_pre_sbatch_runtime_contract_accepts_verified_test_artifacts(
+    tmp_path: Path,
+) -> None:
+    archives = tuple(tmp_path / f"archive-{index}" for index in range(6))
+    for archive in archives:
+        archive.mkdir()
+    driver = tmp_path / "locked-mcore" / "bin" / "python"
+    driver.parent.mkdir(parents=True)
+    driver.write_text("#!/usr/bin/env bash\n")
+    driver.chmod(0o755)
+    overlay = tmp_path / "utils.py"
+    overlay.write_text("fp64 overlay\n")
+    overlay.chmod(0o444)
+    overlay_sha256 = hashlib.sha256(overlay.read_bytes()).hexdigest()
+    container = tmp_path / "nightly.sqsh"
+    container.touch()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_sbatch = fake_bin / "sbatch"
+    record = tmp_path / "sbatch-argv"
+    fake_sbatch.write_text(
+        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" > "${SBATCH_RECORD:?}"\n'
+        "printf '2476001;ptyche\\n'\n"
+    )
+    fake_sbatch.chmod(0o755)
+    lock_blob = subprocess.run(
+        ["git", "hash-object", "uv.lock"],
+        check=True,
+        cwd=EXPERIMENT_DIR.parents[2],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    result = _run_script(
+        "scopes/17_attn.sh",
+        CLUSTER="ptyche",
+        SBATCH_TEST_ONLY="1",
+        SBATCH_RECORD=str(record),
+        LOG_ROOT_OVERRIDE=str(tmp_path / "logs"),
+        PATH=f"{fake_bin}:{os.environ['PATH']}",
+        LAUNCHER_TEST_CONTRACT_OVERRIDE="1",
+        MCORE_DRIVER_PYTHON_OVERRIDE=str(driver),
+        MCORE_LOCK_BLOB_OVERRIDE=lock_blob,
+        RUNTIME_ARCHIVE_PREFIX_OVERRIDE=":".join(map(str, archives)),
+        TE_FP64_WEAKREF_SOURCE_OVERRIDE=str(overlay),
+        TE_FP64_WEAKREF_SHA256_OVERRIDE=overlay_sha256,
+        TE_FP64_WEAKREF_TARGET_OVERRIDE=str(
+            archives[0] / "transformer_engine" / "pytorch" / "utils.py"
+        ),
+        CONTAINER_OVERRIDE=str(container),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "RUNTIME_PREFLIGHT: passed" in result.stdout
+    assert record.exists()
 
 
 def test_real_submission_uses_parsable_sbatch_job_ids_without_dependencies() -> None:
@@ -791,6 +903,7 @@ def test_nemorl_integration_gate_validates_fp64_overlay_and_mcore_graph_suite() 
         "${TE_FP64_WEAKREF_TARGET}:ro" in script
     )
     assert "run_pytest_with_te_overlay.py" in script
+    assert "tests/unit/distributed/test_mcore_system_executable_contract.py" in script
     assert f"TE_EXPECTED_VERSION={TE_EXPECTED_VERSION}" in script
     assert "--expected-version ${TE_EXPECTED_VERSION}" in script
     assert f"TE_FP64_WEAKREF_SHA256={TE_FP64_WEAKREF_SHA256}" in script

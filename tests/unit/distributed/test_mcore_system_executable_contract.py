@@ -33,9 +33,18 @@ def test_mcore_experiment_contract_requires_an_expected_interpreter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("NEMO_RL_REQUIRE_SYSTEM_MCORE", "1")
+    reloaded = importlib.reload(registry)
 
+    assert (
+        reloaded.get_actor_python_env(
+            "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker"
+        )
+        == reloaded.PY_EXECUTABLES.VLLM
+    )
     with pytest.raises(RuntimeError, match="NEMO_RL_MCORE_SYSTEM_PYTHON"):
-        importlib.reload(registry)
+        reloaded.get_actor_python_env(
+            "nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker"
+        )
 
 
 def test_mcore_experiment_contract_rejects_a_mismatched_interpreter(
@@ -46,9 +55,12 @@ def test_mcore_experiment_contract_rejects_a_mismatched_interpreter(
     expected_python.symlink_to(Path(sys.executable).resolve())
     monkeypatch.setenv("NEMO_RL_REQUIRE_SYSTEM_MCORE", "1")
     monkeypatch.setenv("NEMO_RL_MCORE_SYSTEM_PYTHON", str(expected_python))
+    reloaded = importlib.reload(registry)
 
     with pytest.raises(RuntimeError, match="must match sys.executable"):
-        importlib.reload(registry)
+        reloaded.get_actor_python_env(
+            "nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker"
+        )
 
 
 def test_mcore_experiment_contract_uses_the_exact_system_interpreter(
@@ -65,14 +77,20 @@ def test_mcore_experiment_contract_uses_the_exact_system_interpreter(
     reloaded = importlib.reload(registry)
 
     assert (
-        reloaded.ACTOR_ENVIRONMENT_REGISTRY[
+        reloaded.get_actor_python_env(
             "nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker"
-        ]
+        )
         == reloaded.PY_EXECUTABLES.SYSTEM
     )
     assert (
-        reloaded.ACTOR_ENVIRONMENT_REGISTRY[
+        reloaded.get_actor_python_env(
+            "nemo_rl.models.value.workers.megatron_value_worker.MegatronValueWorker"
+        )
+        == reloaded.PY_EXECUTABLES.SYSTEM
+    )
+    assert (
+        reloaded.get_actor_python_env(
             "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker"
-        ]
+        )
         == reloaded.PY_EXECUTABLES.VLLM
     )

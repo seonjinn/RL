@@ -53,9 +53,6 @@ def _require_pinned_mcore_system_interpreter() -> None:
         )
 
 
-if REQUIRE_SYSTEM_MCORE:
-    _require_pinned_mcore_system_interpreter()
-
 VLLM_EXECUTABLE = (
     PY_EXECUTABLES.SYSTEM if USE_SYSTEM_EXECUTABLE else PY_EXECUTABLES.VLLM
 )
@@ -110,6 +107,11 @@ ACTOR_ENVIRONMENT_REGISTRY.update(MODELOPT_ACTOR_REGISTRY)
 
 def get_actor_python_env(actor_class_fqn: str) -> str:
     if actor_class_fqn in ACTOR_ENVIRONMENT_REGISTRY:
+        if REQUIRE_SYSTEM_MCORE and actor_class_fqn in {
+            "nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker",
+            "nemo_rl.models.value.workers.megatron_value_worker.MegatronValueWorker",
+        }:
+            _require_pinned_mcore_system_interpreter()
         return ACTOR_ENVIRONMENT_REGISTRY[actor_class_fqn]
     else:
         raise ValueError(

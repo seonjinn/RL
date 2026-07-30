@@ -66,6 +66,28 @@ PROFILE="${SCRIPT_DIR}/profiles/${CLUSTER}.env"
 [[ -f "${PROFILE}" ]] || fail "Missing cluster profile: ${PROFILE}"
 source "${PROFILE}"
 
+TASK6_RUNTIME_ARCHIVE_PREFIX=/root/.cache/uv/archive-v0/AdbVCNRp6JVFPo0e:/root/.cache/uv/archive-v0/26H_iFoUOK00pyG5:/root/.cache/uv/archive-v0/ymbKBYrUysuiERDQ:/root/.cache/uv/archive-v0/Lp_mVBWGrC-sLPL6:/root/.cache/uv/archive-v0/kIpfdwf26Al4-BTb:/root/.cache/uv/archive-v0/i7-d_jifMXRoKKrY
+EXPECTED_RUNTIME_ARCHIVE_PREFIX="${TASK6_RUNTIME_ARCHIVE_PREFIX}"
+if [[ "${LAUNCHER_TEST_CONTRACT_OVERRIDE:-0}" == 1 ]]; then
+  [[ "${SBATCH_TEST_ONLY:-0}" == 1 ]] || fail "LAUNCHER_TEST_CONTRACT_OVERRIDE is only allowed with SBATCH_TEST_ONLY=1"
+  : "${MCORE_DRIVER_PYTHON_OVERRIDE:?LAUNCHER_TEST_CONTRACT_OVERRIDE requires MCORE_DRIVER_PYTHON_OVERRIDE}"
+  : "${MCORE_LOCK_BLOB_OVERRIDE:?LAUNCHER_TEST_CONTRACT_OVERRIDE requires MCORE_LOCK_BLOB_OVERRIDE}"
+  : "${RUNTIME_ARCHIVE_PREFIX_OVERRIDE:?LAUNCHER_TEST_CONTRACT_OVERRIDE requires RUNTIME_ARCHIVE_PREFIX_OVERRIDE}"
+  : "${TE_FP64_WEAKREF_SOURCE_OVERRIDE:?LAUNCHER_TEST_CONTRACT_OVERRIDE requires TE_FP64_WEAKREF_SOURCE_OVERRIDE}"
+  : "${TE_FP64_WEAKREF_SHA256_OVERRIDE:?LAUNCHER_TEST_CONTRACT_OVERRIDE requires TE_FP64_WEAKREF_SHA256_OVERRIDE}"
+  : "${TE_FP64_WEAKREF_TARGET_OVERRIDE:?LAUNCHER_TEST_CONTRACT_OVERRIDE requires TE_FP64_WEAKREF_TARGET_OVERRIDE}"
+  : "${CONTAINER_OVERRIDE:?LAUNCHER_TEST_CONTRACT_OVERRIDE requires CONTAINER_OVERRIDE}"
+  MCORE_DRIVER_PYTHON="${MCORE_DRIVER_PYTHON_OVERRIDE}"
+  MCORE_LOCK_BLOB="${MCORE_LOCK_BLOB_OVERRIDE}"
+  RUNTIME_ARCHIVE_PREFIX="${RUNTIME_ARCHIVE_PREFIX_OVERRIDE}"
+  EXPECTED_RUNTIME_ARCHIVE_PREFIX="${RUNTIME_ARCHIVE_PREFIX_OVERRIDE}"
+  TE_FP64_WEAKREF_SOURCE="${TE_FP64_WEAKREF_SOURCE_OVERRIDE}"
+  TE_FP64_WEAKREF_SHA256="${TE_FP64_WEAKREF_SHA256_OVERRIDE}"
+  TE_FP64_WEAKREF_TARGET="${TE_FP64_WEAKREF_TARGET_OVERRIDE}"
+  CONTAINER="${CONTAINER_OVERRIDE}"
+  MOUNTS="/lustre:/lustre,${TE_FP64_WEAKREF_SOURCE}:${TE_FP64_WEAKREF_TARGET}:ro"
+fi
+
 : "${MCORE_DRIVER_PYTHON:=}"
 : "${MCORE_LOCK_BLOB:=}"
 : "${RUNTIME_ARCHIVE_PREFIX:=}"
@@ -284,6 +306,53 @@ if ((${#unresolved[@]})); then
   fail "Refusing submission with unresolved fields: ${unresolved[*]}"
 fi
 
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum -- "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+file_mode() {
+  if stat -c '%a' "$1" >/dev/null 2>&1; then
+    stat -c '%a' "$1"
+  else
+    stat -f '%Lp' "$1"
+  fi
+}
+
+preflight_runtime_contract() {
+  [[ "$(git hash-object uv.lock)" == "${MCORE_LOCK_BLOB}" ]] || fail "uv.lock hash mismatch for locked MCore environment"
+  [[ "${RUNTIME_ARCHIVE_PREFIX}" == "${EXPECTED_RUNTIME_ARCHIVE_PREFIX}" ]] || fail "immutable runtime archive prefix mismatch"
+  [[ "${TE_FP64_WEAKREF_TARGET}" == "${RUNTIME_ARCHIVE_PREFIX%%:*}/transformer_engine/pytorch/utils.py" ]] || fail "Transformer Engine overlay target mismatch"
+  [[ "${MOUNTS}" == "/lustre:/lustre,${TE_FP64_WEAKREF_SOURCE}:${TE_FP64_WEAKREF_TARGET}:ro" ]] || fail "Transformer Engine mount mismatch"
+  [[ -r "${CONTAINER}" ]] || fail "pinned container is not readable: ${CONTAINER}"
+  [[ -r "${REPO_ROOT}" ]] || fail "repository source is not readable: ${REPO_ROOT}"
+  [[ -r "${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src" ]] || fail "Bridge source is not readable"
+  [[ -r "${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM" ]] || fail "Megatron-LM source is not readable"
+
+  if [[ "${LAUNCHER_TEST_CONTRACT_OVERRIDE:-0}" != 1 ]]; then
+    [[ "${MCORE_DRIVER_PYTHON}" == /lustre/* ]] || fail "locked MCore interpreter must be on Lustre"
+  fi
+  if [[ -L "${MCORE_DRIVER_PYTHON}" ]]; then
+    local target
+    target=$(readlink "${MCORE_DRIVER_PYTHON}")
+    if [[ ! -e "${MCORE_DRIVER_PYTHON}" ]]; then
+      [[ "${target}" == /root/.local/share/uv/python/*/bin/python ]] || fail "locked MCore interpreter has an unusable symlink target: ${target}"
+    fi
+  elif [[ ! -x "${MCORE_DRIVER_PYTHON}" ]]; then
+    fail "locked MCore interpreter is not executable: ${MCORE_DRIVER_PYTHON}"
+  fi
+
+  [[ -f "${TE_FP64_WEAKREF_SOURCE}" && -r "${TE_FP64_WEAKREF_SOURCE}" ]] || fail "Transformer Engine overlay source is not readable"
+  [[ "$(file_mode "${TE_FP64_WEAKREF_SOURCE}")" == 444 ]] || fail "Transformer Engine overlay mode must be 0444"
+  [[ "$(sha256_file "${TE_FP64_WEAKREF_SOURCE}")" == "${TE_FP64_WEAKREF_SHA256}" ]] || fail "Transformer Engine overlay SHA256 mismatch"
+  printf 'RUNTIME_PREFLIGHT: passed\n'
+}
+
+preflight_runtime_contract
+
 mkdir -p "${RUN_LOG_DIR}"
 job_id="$(
 COMMAND="${COMMAND}" \
@@ -294,6 +363,7 @@ HF_DATASETS_CACHE="${HF_DATASETS_CACHE}" \
 HF_HUB_OFFLINE=1 \
 TRANSFORMERS_OFFLINE=1 \
 PYTHONPATH="${IMMUTABLE_RUNTIME_PYTHONPATH}" \
+RUNTIME_ARCHIVE_PREFIX="${RUNTIME_ARCHIVE_PREFIX}" \
 NEMO_RL_REQUIRE_SYSTEM_MCORE=1 \
 NEMO_RL_MCORE_SYSTEM_PYTHON="${MCORE_DRIVER_PYTHON}" \
 NRL_FORCE_REBUILD_VENVS=true \

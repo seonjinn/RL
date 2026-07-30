@@ -82,6 +82,10 @@ inherits the archive-first `PYTHONPATH` and the read-only overlay mount.
 `TEST_ONLY=1` prints without contacting Slurm. For a scheduler-only validation
 of the exact command, set `SBATCH_TEST_ONLY=1`; it adds `--test-only` while
 preserving `sbatch --parsable` and prints the machine-readable Slurm result.
+Before either real or scheduler-only submission, the launcher verifies the
+working lock blob, six-archive order, readable pinned container and source
+paths, locked interpreter launcher, and the overlay source's `0444` mode and
+SHA256. Pure `TEST_ONLY=1` intentionally skips these host-dependent checks.
 
 ## GPU integration gate
 

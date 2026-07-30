@@ -96,6 +96,7 @@ PY
       tests/unit/models/megatron/test_megatron_setup.py \
       tests/unit/models/policy/test_megatron_worker.py \
       tests/unit/experiments/test_mamba_moe_te_graph_launchers.py \
+      tests/unit/distributed/test_mcore_system_executable_contract.py \
       tests/unit/models/megatron/test_train.py::TestForwardWithPostProcessingFn::test_forward_with_loss_post_processor \
       tests/unit/models/megatron/test_train.py::TestLossPostProcessor::test_loss_post_processor_uses_actual_boundaries_with_graph_sentinels \
       tests/unit/models/megatron/test_train.py::TestLossPostProcessor::test_fused_loss_uses_actual_boundaries_with_graph_sentinels \
