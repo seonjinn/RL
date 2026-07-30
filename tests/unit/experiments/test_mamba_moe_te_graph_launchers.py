@@ -733,7 +733,7 @@ def test_nemorl_integration_gate_runs_required_mcore_targets_distributed() -> No
     ) in distributed_block
     assert "for rank in 0 1; do" in distributed_block
     assert "Missing distributed MCore stdout for rank" in distributed_block
-    assert r'grep -Eq \"(^|[^0-9])2 passed([[:space:]]|$)\"' in distributed_block
+    assert r'grep -Eq \"^2 passed([,[:space:]]|$)\"' in distributed_block
     assert r'grep -Eiq \"SKIPPED|[0-9]+ skipped\"' in distributed_block
     assert "Distributed MCore focused target skipped on rank" in distributed_block
     for target in distributed_targets:
@@ -746,6 +746,39 @@ def test_nemorl_integration_gate_runs_required_mcore_targets_distributed() -> No
     assert "mkdir -p \"${MCORE_DISTRIBUTED_LOG_DIR}\"" in script
     assert "mktemp" not in script
     assert "rm -rf" not in script
+
+
+@pytest.mark.parametrize(
+    ("rank_stdout", "expected"),
+    [
+        ("2 passed, 33 warnings in 73.90s\n", True),
+        ("2 passed\n", True),
+        ("12 passed in 1.00s\n", False),
+        ("20 passed in 1.00s\n", False),
+        ("2x passed in 1.00s\n", False),
+        ("no tests ran in 0.01s\n", False),
+        ("2 passed, 1 skipped in 1.00s\n", False),
+    ],
+)
+def test_nemorl_integration_rank_summary_requires_exact_unskipped_pair(
+    rank_stdout: str, expected: bool
+) -> None:
+    pass_result = subprocess.run(
+        ["grep", "-Eq", r"^2 passed([,[:space:]]|$)"],
+        input=rank_stdout,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    skip_result = subprocess.run(
+        ["grep", "-Eiq", r"SKIPPED|[0-9]+ skipped"],
+        input=rank_stdout,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert (pass_result.returncode == 0 and skip_result.returncode != 0) is expected
 
 
 def test_nemorl_integration_gate_uses_the_same_immutable_python_for_both_suites() -> None:

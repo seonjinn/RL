@@ -131,7 +131,7 @@ PY
         echo \"Missing distributed MCore stdout for rank \${rank}\" >&2
         exit 1
       fi
-      if ! grep -Eq \"(^|[^0-9])2 passed([[:space:]]|$)\" \"\${rank_stdout}\"; then
+      if ! grep -Eq \"^2 passed([,[:space:]]|$)\" \"\${rank_stdout}\"; then
         echo \"Distributed MCore focused targets did not both pass on rank \${rank}\" >&2
         exit 1
       fi
