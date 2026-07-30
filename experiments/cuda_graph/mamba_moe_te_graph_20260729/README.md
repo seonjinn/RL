@@ -62,6 +62,15 @@ dtype, shape, and data-pointer identity. Any mismatch stops the launch before
 Ray; workers share the same immutable image and read-only mount, so they do not
 repeat package installation.
 
+## GPU integration gate
+
+`scripts/validate_nemorl_integration.sub` mounts the same reviewed
+Transformer Engine overlay read-only and runs `validate_te_fp64_overlay.py`
+before its preserved NeMo-RL unit list. The gate also runs the packed-sequence,
+Transformer Engine graph-bank, FP64 MoE-router boundary, packed-Mamba parity,
+and `5→3→5` graph-bank schedule tests from the pinned Megatron-LM checkout.
+This gate must pass before submitting the 20-step matrix.
+
 ## Local preflight
 
 Run one launcher:

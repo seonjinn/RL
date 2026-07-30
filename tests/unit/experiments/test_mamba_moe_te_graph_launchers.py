@@ -466,6 +466,38 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
     assert "#SBATCH --time=01:00:00" in script
 
 
+def test_nemorl_integration_gate_validates_fp64_overlay_and_mcore_graph_suite() -> None:
+    script = (
+        EXPERIMENT_DIR / "scripts" / "validate_nemorl_integration.sub"
+    ).read_text()
+
+    assert (
+        "TE_FP64_WEAKREF_SOURCE=${ROOT}/src/TransformerEngine-fp64-weakref-20260729/"
+        f".overlay/{TE_FP64_WEAKREF_COMMIT}/utils.py" in script
+    )
+    assert f"TE_FP64_WEAKREF_TARGET={TE_FP64_WEAKREF_TARGET}" in script
+    assert (
+        "--container-mounts=/lustre:/lustre,${TE_FP64_WEAKREF_SOURCE}:"
+        "${TE_FP64_WEAKREF_TARGET}:ro" in script
+    )
+    assert "validate_te_fp64_overlay.py" in script
+    assert f"--expected-version {TE_EXPECTED_VERSION}" in script
+    assert f"--expected-sha256 {TE_FP64_WEAKREF_SHA256}" in script
+    assert (
+        "MCORE_ROOT=3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
+        in script
+    )
+    for test_path in (
+        "tests/unit_tests/transformer/test_packed_seq_params_cuda_graph.py",
+        "tests/unit_tests/transformer/test_te_cuda_graph_bank.py",
+        "tests/unit_tests/transformer/test_cuda_graphs.py::test_moe_router_fp64_output_is_preserved_at_te_graph_boundary",
+        "tests/unit_tests/transformer/test_cuda_graphs.py::test_packed_mamba_te_cuda_graph_parity",
+        "tests/unit_tests/transformer/test_cuda_graphs.py::test_te_graph_bank_schedule_switch_5_3_5",
+    ):
+        assert f"${{MCORE_ROOT}}/{test_path}" in script
+    assert "tests/unit/models/megatron/test_cuda_graph_lifecycle.py" in script
+
+
 def test_gb200_profiles_limit_transformer_engine_build_to_sm100() -> None:
     runner = (EXPERIMENT_DIR / "run_scope.sh").read_text()
 
