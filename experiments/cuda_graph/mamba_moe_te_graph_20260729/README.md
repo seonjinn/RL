@@ -194,8 +194,10 @@ SHA256 sidecar, the build provenance schema and values, and the artifact
 whitelist of `provenance.json` plus `wheel/`.
 
 The gate installs the wheel offline and without dependencies into disposable
-staging. It validates that the Python package, PyTorch native extension, and
-core Transformer Engine shared library all resolve from that staged prefix.
+staging. It disables uv config discovery so NeMo-RL's Transformer Engine
+source override cannot replace the explicit immutable wheel. It validates that
+the Python package, PyTorch native extension, and core Transformer Engine
+shared library all resolve from that staged prefix.
 It then runs the static PR2898 compatibility suite and the fused MoE aux-loss
 CUDA graph capture/replay test from the pinned source checkout. Only a fully
 passing install is atomically published under

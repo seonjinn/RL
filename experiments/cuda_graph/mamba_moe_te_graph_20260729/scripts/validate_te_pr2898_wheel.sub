@@ -200,7 +200,7 @@ srun --nodes=1 --ntasks=1 \
     export UV_CACHE_DIR=${ROOT}/uv_cache
     export PYTHONNOUSERSITE=1
     export CUDA_VISIBLE_DEVICES=0
-    uv pip install \
+    uv --no-config pip install \
       --python /opt/nemo_rl_venv/bin/python \
       --target ${INSTALL_SITE_PACKAGES} \
       --offline \

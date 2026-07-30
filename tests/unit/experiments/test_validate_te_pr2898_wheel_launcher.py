@@ -235,12 +235,12 @@ def test_te_pr2898_wheel_gate_pins_gpu_source_artifact_and_image() -> None:
 def test_te_pr2898_wheel_gate_is_offline_prefix_first_and_runs_focused_tests() -> None:
     script = SCRIPT_PATH.read_text()
 
-    assert "uv pip install" in script
+    assert "uv --no-config pip install" in script
     assert "--offline" in script
     assert "--no-index" in script
     assert "--no-deps" in script
     assert "--target" in script
-    assert "pip install" not in script.replace("uv pip install", "")
+    assert "pip install" not in script.replace("uv --no-config pip install", "")
     assert "PYTHONNOUSERSITE=1" in script
     assert "CUDA_VISIBLE_DEVICES=0" in script
     assert "PYTHONPATH=${INSTALL_SITE_PACKAGES}" in script
