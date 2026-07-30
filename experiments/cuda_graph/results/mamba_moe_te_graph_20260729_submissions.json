@@ -1,176 +1,64 @@
 {
-  "run_tag": "nano-cg-matrix-s13-20260729T2127Z",
-  "phase": "smoke",
+  "run_tag": "te-fp64-weakref-20step-20260730",
+  "phase": "performance",
   "model": "nano-hybrid",
   "cluster": "ptyche",
+  "partition": "backfill",
+  "nemo_rl_commit": "e9b58c37b2a521c2549baccbbd61da19be4b9eb5",
+  "matched_run_contract": {
+    "optimizer_steps": 20,
+    "checkpointing_enabled": false,
+    "sequence_packing_enabled": true,
+    "cuda_graph_warmup_steps": 3,
+    "cuda_graph_max_cached_schedules": 2,
+    "cuda_graph_max_packed_seqs": 16
+  },
+  "provenance": {
+    "container": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/nemo_rl_nightly_20260729_2472184.sqsh",
+    "container_sha256": "cb8ae0ade02b876f1b3380c8375eb92f95033dece6b2bfdc678b47f2da1aea91",
+    "te_fp64_weakref_commit": "e707aa46869dc2aec08dfea25402e97a61d49fef",
+    "te_fp64_weakref_sha256": "39f7b26b8cf127e3ca104c0375c97ce4e6d047178f9d00836b92469b1c2e544b",
+    "te_expected_version": "2.15.0+42b84005",
+    "mcore_driver_python": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/venvs/nemorl-integration-mcore-py313-aarch64-lock-96543608420ac6746cfd18d1fcd8ee1bd3c91caf-image-cb8ae0ade02b/bin/python",
+    "mcore_lock_blob": "96543608420ac6746cfd18d1fcd8ee1bd3c91caf",
+    "runtime_archive_prefix": "/root/.cache/uv/archive-v0/AdbVCNRp6JVFPo0e:/root/.cache/uv/archive-v0/26H_iFoUOK00pyG5:/root/.cache/uv/archive-v0/ymbKBYrUysuiERDQ:/root/.cache/uv/archive-v0/Lp_mVBWGrC-sLPL6:/root/.cache/uv/archive-v0/kIpfdwf26Al4-BTb:/root/.cache/uv/archive-v0/i7-d_jifMXRoKKrY"
+  },
   "rows": [
     {
       "scope": "baseline-no-cg",
-      "job_id": "2473134",
-      "status": "smoke:running; tag=nano-s13-source-path-20260729T2125Z",
+      "job_id": "2475435",
+      "status": "performance:submitted",
       "launcher": "scopes/00_baseline_no_cg.sh"
     },
     {
-      "scope": "attn",
-      "job_id": "2473144",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "scopes/17_attn.sh"
-    },
-    {
-      "scope": "mamba",
-      "job_id": "2473145",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "scopes/05_mamba.sh"
-    },
-    {
       "scope": "attn-mamba",
-      "job_id": "2473146",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "job_id": "2475436",
+      "status": "performance:submitted",
       "launcher": "scopes/21_attn_mamba.sh"
     },
     {
-      "scope": "moe-router",
-      "job_id": "2473147",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "scopes/03_moe_router.sh"
-    },
-    {
-      "scope": "attn-moe-router",
-      "job_id": "2473148",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "scopes/19_attn_moe_router.sh"
-    },
-    {
-      "scope": "mamba-moe-router",
-      "job_id": "2473149",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "scopes/07_mamba_moe_router.sh"
-    },
-    {
-      "scope": "attn-mamba-moe-router",
-      "job_id": "2473150",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "scopes/23_attn_mamba_moe_router.sh"
-    },
-    {
-      "scope": "moe-router-preprocess",
-      "job_id": "2473151",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "scopes/04_moe_router_preprocess.sh"
-    },
-    {
-      "scope": "attn-moe-router-preprocess",
-      "job_id": "2473152",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "scopes/20_attn_moe_router_preprocess.sh"
-    },
-    {
-      "scope": "mamba-moe-router-preprocess",
-      "job_id": "2473153",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "scopes/08_mamba_moe_router_preprocess.sh"
-    },
-    {
-      "scope": "attn-mamba-moe-router-preprocess",
-      "job_id": "2473154",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "scopes/24_attn_mamba_moe_router_preprocess.sh"
-    },
-    {
       "scope": "moe",
-      "job_id": "2473155",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
+      "job_id": "2475437",
+      "status": "performance:submitted",
       "launcher": "scopes/02_moe.sh"
     },
     {
-      "scope": "attn-moe",
-      "job_id": "2473156",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "scopes/18_attn_moe.sh"
+      "scope": "moe-router",
+      "job_id": "2475438",
+      "status": "performance:submitted",
+      "launcher": "scopes/03_moe_router.sh"
     },
     {
-      "scope": "mamba-moe",
-      "job_id": "2473157",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "scopes/06_mamba_moe.sh"
+      "scope": "moe-router-preprocess",
+      "job_id": "2475439",
+      "status": "performance:submitted",
+      "launcher": "scopes/04_moe_router_preprocess.sh"
     },
     {
-      "scope": "attn-mamba-moe",
-      "job_id": "2473158",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "scopes/22_attn_mamba_moe.sh"
-    },
-    {
-      "scope": "mlp",
-      "job_id": "2473159",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "scopes/09_mlp.sh"
-    },
-    {
-      "scope": "attn-mlp",
-      "job_id": "2473160",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "scopes/25_attn_mlp.sh"
-    },
-    {
-      "scope": "mlp-mamba",
-      "job_id": "2473161",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "scopes/13_mlp_mamba.sh"
-    },
-    {
-      "scope": "attn-mlp-mamba",
-      "job_id": "2473162",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "scopes/29_attn_mlp_mamba.sh"
-    },
-    {
-      "scope": "moe-overlap-false-moe-act-false",
-      "job_id": "2473163",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "variants/moe_overlap_false_moe_act_false.sh"
-    },
-    {
-      "scope": "moe-overlap-false-moe-act-true",
-      "job_id": "2473164",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "variants/moe_overlap_false_moe_act_true.sh"
-    },
-    {
-      "scope": "moe-overlap-true-moe-act-false",
-      "job_id": "2473165",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "variants/moe_overlap_true_moe_act_false.sh"
-    },
-    {
-      "scope": "moe-overlap-true-moe-act-true",
-      "job_id": "2473166",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "variants/moe_overlap_true_moe_act_true.sh"
-    },
-    {
-      "scope": "router-preprocess-overlap-false-moe-act-false",
-      "job_id": "2473167",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "variants/router_preprocess_overlap_false_moe_act_false.sh"
-    },
-    {
-      "scope": "router-preprocess-overlap-false-moe-act-true",
-      "job_id": "2473168",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "variants/router_preprocess_overlap_false_moe_act_true.sh"
-    },
-    {
-      "scope": "router-preprocess-overlap-true-moe-act-false",
-      "job_id": "2473169",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "variants/router_preprocess_overlap_true_moe_act_false.sh"
-    },
-    {
-      "scope": "router-preprocess-overlap-true-moe-act-true",
-      "job_id": "2473170",
-      "status": "smoke:submitted; tag=nano-cg-matrix-s13-20260729T2127Z",
-      "launcher": "variants/router_preprocess_overlap_true_moe_act_true.sh"
+      "scope": "attn-mamba-moe-router-preprocess",
+      "job_id": "2475440",
+      "status": "performance:submitted",
+      "launcher": "scopes/24_attn_mamba_moe_router_preprocess.sh"
     }
   ]
 }
