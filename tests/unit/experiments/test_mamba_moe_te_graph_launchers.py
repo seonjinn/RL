@@ -481,8 +481,10 @@ def test_nemorl_integration_gate_validates_fp64_overlay_and_mcore_graph_suite() 
         "${TE_FP64_WEAKREF_TARGET}:ro" in script
     )
     assert "validate_te_fp64_overlay.py" in script
-    assert f"--expected-version {TE_EXPECTED_VERSION}" in script
-    assert f"--expected-sha256 {TE_FP64_WEAKREF_SHA256}" in script
+    assert f"TE_EXPECTED_VERSION={TE_EXPECTED_VERSION}" in script
+    assert "--expected-version ${TE_EXPECTED_VERSION}" in script
+    assert f"TE_FP64_WEAKREF_SHA256={TE_FP64_WEAKREF_SHA256}" in script
+    assert "--expected-sha256 ${TE_FP64_WEAKREF_SHA256}" in script
     assert (
         "MCORE_ROOT=3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
         in script
