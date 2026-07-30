@@ -25,7 +25,9 @@ srun --nodes=1 --ntasks=1 \
     export UV_CACHE_DIR=${UV_CACHE}
     export NVTE_CUDA_ARCHS=100
     cd ${REPO}
-    NRL_FORCE_REBUILD_VENVS=true uv run --frozen --extra mcore python -
+    NRL_FORCE_REBUILD_VENVS=true uv run --frozen --extra mcore python -c pass
+    uv pip install --python /opt/nemo_rl_venv/bin/python --reinstall --no-deps --no-cache urllib3==2.7.0
+    python -
   " <<'PY'
 import importlib
 
