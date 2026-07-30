@@ -186,7 +186,31 @@ TEST_ONLY=1 CLUSTER=ptyche MODEL=qwen3-30b-a3b \
 
 ## Local result pipeline
 
-The collector reads a local JSON/JSONL W&B export; it never calls the network:
+For a completed TensorBoard run, first export the local event file or directory
+to the collector's JSONL contract. The exporter never contacts a network. It
+requires exactly one finite sample at each optimizer step 1--20 for every
+canonical timing, throughput, and correctness metric; duplicate scalar steps
+use the latest TensorBoard wall-time event. It fails without replacing an
+existing output when any required metric is incomplete.
+
+```bash
+python3 experiments/cuda_graph/mamba_moe_te_graph_20260729/export_tensorboard.py \
+  --event /path/to/tensorboard-run \
+  --scope drop-pad-moe \
+  --job-id 2474000 \
+  --status performance:passed \
+  --output experiments/cuda_graph/results/mamba_moe_te_graph_20260729_events.jsonl
+```
+
+Then normalize the event JSONL into the CSV consumed by the static renderer:
+
+```bash
+python3 experiments/cuda_graph/mamba_moe_te_graph_20260729/collect_results.py \
+  --input experiments/cuda_graph/results/mamba_moe_te_graph_20260729_events.jsonl \
+  --output experiments/cuda_graph/results/mamba_moe_te_graph_20260729_results.csv
+```
+
+The collector can also read a local JSON/JSONL W&B export; it never calls the network:
 
 ```bash
 python3 experiments/cuda_graph/mamba_moe_te_graph_20260729/collect_results.py \
@@ -217,7 +241,7 @@ The required W&B mappings are:
 | Logprob time | `timing/train/policy_and_reference_logprobs` |
 | Quality | `train/reward`, `train/accuracy`, `train/token_mult_prob_error`, `train/loss` |
 
-Refresh the static report from the available CSV:
+Finally render the normalized CSV into the persistent static report:
 
 ```bash
 python3 experiments/cuda_graph/mamba_moe_te_graph_20260729/render_report.py \
