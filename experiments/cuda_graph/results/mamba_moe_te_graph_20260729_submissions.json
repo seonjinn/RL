@@ -27,8 +27,11 @@
     {
       "scope": "baseline-no-cg",
       "job_id": "2475435",
-      "status": "performance:submitted",
-      "launcher": "scopes/00_baseline_no_cg.sh"
+      "status": "performance:completed",
+      "launcher": "scopes/00_baseline_no_cg.sh",
+      "exit_code": "0:0",
+      "elapsed": "00:27:25",
+      "completed_steps": 20
     },
     {
       "scope": "attn-mamba",
@@ -51,20 +54,29 @@
     {
       "scope": "moe-router",
       "job_id": "2475438",
-      "status": "performance:submitted",
-      "launcher": "scopes/03_moe_router.sh"
+      "status": "performance:completed",
+      "launcher": "scopes/03_moe_router.sh",
+      "exit_code": "0:0",
+      "elapsed": "00:24:41",
+      "completed_steps": 20
     },
     {
       "scope": "moe-router-preprocess",
       "job_id": "2475439",
-      "status": "performance:submitted",
-      "launcher": "scopes/04_moe_router_preprocess.sh"
+      "status": "performance:failed-replay-shape",
+      "launcher": "scopes/04_moe_router_preprocess.sh",
+      "exit_code": "1:0",
+      "elapsed": "00:12:27",
+      "failure": "CUDA Graph replay reached a dynamic packed-token shape mismatch: tensor length 2012 versus padded length 2048."
     },
     {
       "scope": "attn-mamba-moe-router-preprocess",
       "job_id": "2475440",
-      "status": "performance:submitted",
-      "launcher": "scopes/24_attn_mamba_moe_router_preprocess.sh"
+      "status": "performance:failed-capture",
+      "launcher": "scopes/24_attn_mamba_moe_router_preprocess.sh",
+      "exit_code": "1:0",
+      "elapsed": "00:12:25",
+      "failure": "Transformer Engine context-parallel attention backward used a tensor-valued slice boundary during CUDA Graph capture: cudaErrorStreamCaptureUnsupported."
     }
   ]
 }
