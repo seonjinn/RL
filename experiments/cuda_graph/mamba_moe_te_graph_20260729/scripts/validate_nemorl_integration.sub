@@ -3,7 +3,6 @@
 #SBATCH --account=coreai_dlalgo_llm
 #SBATCH --job-name=coreai_dlalgo_llm-sna-cg-study.nemorl-integration
 #SBATCH --partition=backfill
-#SBATCH --gpus=2
 #SBATCH --time=01:00:00
 #SBATCH --segment=1
 #SBATCH --output=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/logs/nemorl-integration-%j.out

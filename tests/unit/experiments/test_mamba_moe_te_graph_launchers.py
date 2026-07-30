@@ -715,7 +715,9 @@ def test_nemorl_integration_gate_runs_required_mcore_targets_distributed() -> No
     )
 
     assert "--nproc_per_node 2" in distributed_block
-    assert "#SBATCH --gpus=2" in script
+    assert "#SBATCH --segment=1" in script
+    assert "#SBATCH --gpus" not in script
+    assert "#SBATCH --gres" not in script
     assert "--nnodes 1" in distributed_block
     assert "--master_addr localhost" in distributed_block
     assert "--node_rank 0" in distributed_block
