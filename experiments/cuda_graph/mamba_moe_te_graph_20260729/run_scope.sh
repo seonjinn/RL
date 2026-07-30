@@ -9,6 +9,7 @@ fail() {
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "${SCRIPT_DIR}/../../.." && pwd)
 cd "${REPO_ROOT}"
+MCORE_PYTHONPATH="${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM:${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src"
 
 PHASE=${PHASE:-smoke}
 case "${PHASE}" in
@@ -131,6 +132,7 @@ TIME_LIMIT=${TIME_LIMIT_OVERRIDE:-${TIME_LIMIT}}
 COMMAND_ARGS=(
   env
   NRL_FORCE_REBUILD_VENVS=true
+  "PYTHONPATH=${MCORE_PYTHONPATH}"
   /opt/nemo_rl_venv/bin/python
   examples/run_grpo.py
   --config
@@ -262,6 +264,7 @@ HF_HOME="${HF_HOME}" \
 HF_DATASETS_CACHE="${HF_DATASETS_CACHE}" \
 HF_HUB_OFFLINE=1 \
 TRANSFORMERS_OFFLINE=1 \
+PYTHONPATH="${MCORE_PYTHONPATH}" \
 NVTE_CUDA_ARCHS="${NVTE_CUDA_ARCHS}" \
 UV_CACHE_DIR_OVERRIDE="${UV_CACHE_DIR_OVERRIDE}" \
 SETUP_COMMAND="${SETUP_COMMAND}" \
