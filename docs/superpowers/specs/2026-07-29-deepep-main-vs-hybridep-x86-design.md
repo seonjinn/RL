@@ -2,8 +2,10 @@
 
 ## Goal
 
-Measure standard DeepEP and HybridEP on CW-DFW H100 and GCP-NRT B200 with
-matched NeMo-RL GRPO workloads. Use the exact latest branch heads observed on
+Measure all-to-all, standard DeepEP, and HybridEP on CW-DFW H100 and GCP-NRT
+B200 with matched NeMo-RL GRPO workloads. The Qwen3-30B-A3B comparison uses
+the performance recipe's native 4-node, 8-GPU-per-node topology without
+launcher topology overrides. Use the exact latest branch heads observed on
 2026-07-29:
 
 - standard DeepEP: `main@dd758caf451848bd150e1046af3d0a73e5fff38d`;
@@ -16,10 +18,11 @@ control rather than relabeling them as DeepEP.
 
 ## Comparison Contract
 
-The primary comparison is a branch-to-branch deployment comparison:
+The primary comparison is a three-arm deployment comparison:
 
 | Arm | DeepEP source | Megatron dispatcher |
 | --- | --- | --- |
+| All-to-all | canonical repository dependency | recipe default |
 | DeepEP | `main@dd758caf451848bd150e1046af3d0a73e5fff38d` | `flex` + `deepep` |
 | HybridEP | `hybrid-ep@f725d29699f5bda9ba789456bb9579af69844685` | `flex` + `hybridep` |
 
@@ -32,9 +35,10 @@ secondary backend-isolation comparison using the same f725 wheel for both
 dispatcher choices. Label that result separately. Do not mix it into the
 primary branch-to-branch headline.
 
-The existing all-to-all arm remains a third control. Its historical
-all-to-all-versus-HybridEP results stay visible in the report but do not count
-as DeepEP-versus-HybridEP measurements.
+The all-to-all arm is the control for both optimized dispatcher arms. Report
+all-to-all versus DeepEP, all-to-all versus HybridEP, and DeepEP versus
+HybridEP separately. Historical all-to-all-versus-HybridEP results stay
+visible but do not count as DeepEP-versus-HybridEP measurements.
 
 ## Dependency and Runtime Architecture
 
@@ -123,6 +127,21 @@ canonical HybridEP performance recipe or the equivalent launcher override.
 Resolved configs must match outside the dispatcher-specific fields and run
 labels.
 
+The selected performance YAML is the source of truth for training topology
+and workload settings. The launcher must not inject CLI overrides for
+`cluster.num_nodes`, `cluster.gpus_per_node`, `cluster.segment_size`, batch
+sizes, sequence length, sequence packing, or model-parallel dimensions. The
+submission profile supplies scheduler resource values only, and a preflight
+check must reject the submission unless those values match the resolved YAML.
+For Qwen3-30B-A3B, both the resolved config and scheduler allocation must be
+4 nodes with 8 GPUs per node. Environment variables must not be able to turn
+this profile into a 2-node run.
+
+Experiment-control overrides remain limited to the requested step count,
+logging destinations and run labels, monitoring, and checkpoint disablement.
+Dispatcher-specific settings are the only model execution settings allowed to
+differ across the three arms.
+
 Every x86 run requires an explicit DeepEP wheel and exact SHA. The launcher
 must reject:
 
@@ -143,10 +162,16 @@ Use the existing valid performance recipes and model revisions. Proceed in
 this order on each hardware platform:
 
 1. one-node allocated-GPU import/API smoke for each wheel;
-2. matched three-step Qwen3-30B-A3B DeepEP and HybridEP runs;
+2. matched 4-node, 8-GPU-per-node, three-step Qwen3-30B-A3B all-to-all,
+   DeepEP, and HybridEP runs using the performance recipe unchanged outside
+   dispatcher and experiment-control fields;
 3. matched short Qwen3-235B and Nemotron3 Super runs at their valid topology;
 4. matched 20-step runs for workloads that pass the compatibility gate and
    fit the current allocation.
+
+Do not use a 2-node override as a Qwen3-30B-A3B compatibility gate. The
+previous two-node jobs are retained only as excluded OOM evidence and never as
+performance data.
 
 Do not submit a larger model until its checkpoint snapshot is complete and
 offline verification reports zero missing referenced shards.
@@ -183,6 +208,9 @@ For each model, hardware platform, and arm, report:
   tokens/second/GPU;
 - generation time and throughput as supporting context;
 - completed-step count, selected step window, topology, and GPU count.
+
+For every metric, publish all three pairwise changes: DeepEP versus
+all-to-all, HybridEP versus all-to-all, and HybridEP versus DeepEP.
 
 Use:
 
