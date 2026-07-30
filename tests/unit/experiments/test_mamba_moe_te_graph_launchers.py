@@ -468,6 +468,29 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
     assert "#SBATCH --time=01:00:00" in script
 
 
+def test_nemorl_integration_gate_allows_only_generated_unit_result_json_files() -> None:
+    script = (
+        EXPERIMENT_DIR / "scripts" / "validate_nemorl_integration.sub"
+    ).read_text()
+    generated_result = re.compile(r"^tests/unit/unit_results/[^/]+\.json$")
+
+    assert generated_result.fullmatch("tests/unit/unit_results/20260729_214835.json")
+    assert generated_result.fullmatch("tests/unit/unit_results/summary.json")
+    for path in (
+        "tests/unit/unit_results.py",
+        "tests/unit/unit_results/summary.py",
+        "tests/unit/unit_results/nested/summary.json",
+        "experiments/untracked.py",
+    ):
+        assert generated_result.fullmatch(path) is None
+
+    assert "while IFS= read -r untracked_path; do" in script
+    assert "tests/unit/unit_results.json" in script
+    assert "^tests/unit/unit_results/[^/]+\\.json$" in script
+    assert "Unexpected untracked path:" in script
+    assert 'test -z "\\$(git ls-files --others --exclude-standard)"' not in script
+
+
 def test_nemorl_integration_gate_validates_fp64_overlay_and_mcore_graph_suite() -> None:
     script = (
         EXPERIMENT_DIR / "scripts" / "validate_nemorl_integration.sub"

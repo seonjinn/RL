@@ -29,7 +29,17 @@ srun --nodes=1 --ntasks=1 \
     test \"\$(git rev-parse HEAD)\" = ${EXPECTED_SHA}
     git diff --quiet --ignore-submodules=dirty -- . ':(exclude)uv.lock'
     git diff --cached --quiet
-    test -z \"\$(git ls-files --others --exclude-standard)\"
+    while IFS= read -r untracked_path; do
+      case \"\${untracked_path}\" in
+        tests/unit/unit_results.json) ;;
+        *)
+          if [[ ! \"\${untracked_path}\" =~ ^tests/unit/unit_results/[^/]+\.json$ ]]; then
+            echo \"Unexpected untracked path: \${untracked_path}\" >&2
+            exit 1
+          fi
+          ;;
+      esac
+    done < <(git ls-files --others --exclude-standard)
     export PYTHONPATH=\${PWD}:\${PWD}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:\${PWD}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM
     export UV_CACHE_DIR=${ROOT}/uv_cache
     export NVTE_CUDA_ARCHS=100
