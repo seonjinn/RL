@@ -217,6 +217,16 @@ sbatch \
   experiments/cuda_graph/mamba_moe_te_graph_20260729/scripts/validate_te_pr2898_wheel.sub
 ```
 
+Ptyche build job `2475736` completed `0:0` and published
+`transformer_engine-2.15.0+4a18653f-cp313-cp313-linux_aarch64.whl` with SHA256
+`029fdbcb3fc0aa17b1a4f7398f56040204307d4bc839d318feda1677c98fff5e`.
+GPU validation job `2475881` completed `0:0` on GB200: all TE Python,
+PyTorch-extension, and core-library paths resolved below the staged wheel
+prefix, and the five static compatibility checks plus the graph-safe MoE
+aux-loss CUDA Graph capture/replay test reported `6 passed` in 3.58 seconds.
+The validated runtime was atomically published under the commit-and-wheel-hash
+immutable prefix, with no staging directories or locks left behind.
+
 ## Local preflight
 
 Run one launcher:
@@ -395,3 +405,4 @@ and Provenance separate. Missing experiment rows remain visibly pending.
 | NeMo-RL Task 6 | Host suite | 37 host tests plus Pyrefly passed |
 | NeMo-RL Task 7 | Slurm 2472646 | 138 passed integration tests with exit 0 on the pinned nightly container. |
 | NeMo-RL Task 8 | Slurm 2473134, 2473144–2473170 | Baseline plus 27 curated Nano hybrid smoke rows submitted on Ptyche without singleton dependencies. The submission ledger preserves the exact launcher-to-job mapping. |
+| NeMo-RL Task 9 | Slurm 2475736, 2475881 | Native TE `4a18653f` wheel build completed `0:0`; wheel SHA256 `029fdbcb…fff5e`. GB200 validation completed `0:0`, resolved TE Python/native/core from the immutable wheel prefix, and reported 6 passed including graph-safe MoE aux-loss CUDA Graph capture/replay. |

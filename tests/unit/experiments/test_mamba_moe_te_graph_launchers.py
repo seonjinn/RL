@@ -2109,6 +2109,9 @@ def test_report_has_required_sections_scope_labels_and_verified_status() -> None
     assert "37 host tests + Pyrefly passed" in report
     assert "Task 7" in report and "Slurm 2472646" in report
     assert "138 passed" in report
+    assert "Task 9" in report and "2475736, 2475881" in report
+    assert "graph-safe MoE aux-loss CUDA Graph capture/replay" in report
+    assert "029fdbcb3fc0aa17b1a4f7398f56040204307d4bc839d318feda1677c98fff5e" in report
     assert renderer.DEFAULT_MODEL_SNAPSHOT in report
     assert renderer.DEFAULT_TOKENIZER_SNAPSHOT in report
     assert "__REQUIRED_*_MODEL_SNAPSHOT__" not in report
@@ -2137,5 +2140,7 @@ def test_checked_in_report_is_static_and_has_all_sections() -> None:
     assert renderer.DEFAULT_MCORE_SHA in report
     assert "Slurm 2472646" in report
     assert "138 passed" in report
+    assert "2475736, 2475881" in report
+    assert "6 passed in 3.58s" in report
     assert renderer.DEFAULT_MODEL_SNAPSHOT in report
     assert renderer.DEFAULT_TOKENIZER_SNAPSHOT in report

@@ -18,7 +18,7 @@ th { color: #a8ddff; } code { color: #9de4ba; } .table-wrap { overflow-x: auto; 
 </head>
 <body>
 <h1>Mamba/MoE Transformer Engine CUDA Graph study</h1>
-<p>Generated 2026-07-30 14:34:19 UTC. No experiment submission is performed by this renderer.</p>
+<p>Generated 2026-07-30 16:01:57 UTC. No experiment submission is performed by this renderer.</p>
 <div class="legend">
 <div><strong>No-CG baseline (CUDA graphs disabled)</strong><br>The baseline uses <code>cuda_graph_impl=none</code>.</div>
 <div><strong>TE whole-layer capture (empty module list)</strong><br>An empty TE scope means whole-layer capture; it is never the no-CG baseline.</div>
@@ -35,6 +35,7 @@ th { color: #a8ddff; } code { color: #9de4ba; } .table-wrap { overflow-x: auto; 
 <tr><td>MCore Task 5</td><td>Slurm 2471820, 2471877, 2471888, 2471988</td><td>Final job 2471988 completed with exit 0 on 4xGB200: every rank reported 2 passed / 108 deselected. The packed Mamba parity passed in 74.33s; MoE 5→3→5 passed in 6.96s; total test time was 82.78s. Earlier job 2471820 passed packed Mamba and exposed an invalid topk test configuration before graph execution. Job 2471877 reached forward and exposed a stale post-reset telemetry assertion, not a production CUDA Graph failure. Focused MoE job 2471888 completed with each of four ranks reporting 1 passed. Its <code>routing_map.sum</code> token-count oracle is valid for this EP1/TP1 test only and is not generalized to EP&gt;1 post-communication counts. Fixes <code>1f1ca8fd7f36a5121b362ebed4a233a3a1ebee8b</code> and final MCore head <code>100047b517ea91526dc465448fcb3b37b2598388</code> are recorded.</td></tr>
 <tr><td>NeMo-RL Task 6</td><td>Host verification</td><td>37 host tests + Pyrefly passed</td></tr>
 <tr><td>NeMo-RL Task 7</td><td>Slurm 2472646</td><td>138 passed integration tests with exit 0 on the pinned nightly container.</td></tr>
+<tr><td>NeMo-RL Task 9</td><td>Slurm 2475736, 2475881</td><td>Native TE <code>4a18653fc7274b10e33cd786b91be6261c523dc0</code> wheel build and GB200 validation both completed with exit 0. Wheel SHA256: <code>029fdbcb3fc0aa17b1a4f7398f56040204307d4bc839d318feda1677c98fff5e</code>. TE Python, PyTorch native extension, and core library resolved from the immutable wheel prefix; five static checks plus graph-safe MoE aux-loss CUDA Graph capture/replay reported 6 passed in 3.58s.</td></tr>
 </tbody>
 </table>
 </section>
