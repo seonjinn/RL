@@ -1,8 +1,7 @@
 # Mamba/MoE Transformer Engine CUDA Graph study
 
 This directory is the persistent launcher and reporting surface for the
-2026-07-29 packed Mamba/MoE training study. Task 8 creates and validates these
-artifacts; it does not submit a Slurm job.
+2026-07-29 packed Mamba/MoE training study.
 
 ## Matrix semantics
 
@@ -18,8 +17,11 @@ artifacts; it does not submit a Slurm job.
 
 `variants/` contains the eight persistent configurations formed by both values
 of shared-expert overlap and selective `moe_act` recompute under only the
-`moe` and `moe_router,moe_preprocess` graph scopes. `moe_act` and
-`shared_expert` are configuration knobs and never graph-scope entries.
+`moe` and `moe_router,moe_preprocess` graph scopes. It also contains the
+correctness-first combined
+`attn,mamba,moe_router,moe_preprocess` row with shared-expert overlap disabled.
+`moe_act` and `shared_expert` are configuration knobs and never graph-scope
+entries.
 
 `pairs/` contains an isolated drop-and-pad MoE comparison. Both launchers set
 `moe_expert_capacity_factor=1.0` and
@@ -56,29 +58,27 @@ refuses to call `sbatch` while any required field is unresolved. `TEST_ONLY=1`
 prints every unresolved field and the complete training and Slurm commands,
 then exits without contacting the scheduler.
 
-## Transformer Engine FP64 overlay preflight
+## Native Transformer Engine preflight
 
-Every Ptyche baseline and CUDA-Graph run mounts a commit-addressed Transformer
-Engine `utils.py` artifact read-only over the image's exact uv-archive path.
-The source artifact lives under `.overlay/<commit>/utils.py` in the shared
-Ptyche Transformer Engine checkout with filesystem mode `0444`. The overlay is
-pinned to commit `e707aa46869dc2aec08dfea25402e97a61d49fef`, version
-`2.15.0+42b84005`, and SHA256
-`39f7b26b8cf127e3ca104c0375c97ce4e6d047178f9d00836b92469b1c2e544b`.
-Before Ray starts, the head validates the installed package version, mounted
-source digest and mode, FP64 `<f8` registry entry, and CUDA FP64 weak-reference
-dtype, shape, and data-pointer identity. Any mismatch stops the launch before
-Ray; workers share the same immutable image and read-only mount, so they do not
-repeat package installation.
+Every Ptyche baseline and CUDA-Graph run uses the same validated native
+Transformer Engine wheel runtime. The runtime is pinned to commit
+`4a18653fc7274b10e33cd786b91be6261c523dc0`, version
+`2.15.0+4a18653f`, and wheel SHA256
+`029fdbcb3fc0aa17b1a4f7398f56040204307d4bc839d318feda1677c98fff5e`.
+Its `site-packages` is first on `PYTHONPATH`; the legacy TE archive is excluded.
+Before Ray starts, the launcher validates the runtime provenance, install
+prefix, image digest, package files, version, Python package, PyTorch extension,
+and core shared-library import paths. Any mismatch stops the launch. No
+performance job builds or installs Transformer Engine.
 
 ## Persistent performance runtime contract
 
-Ptyche performance launchers use the immutable archive prefix proven by the
-integration gate: Transformer Engine, flash-attn, ml-dtypes, ONNX, ONNX IR,
-and ONNXScript, followed by the pinned NeMo-RL checkout, Bridge, and
-Megatron-LM sources. The driver is the external MCore environment keyed by lock
-blob `96543608420ac6746cfd18d1fcd8ee1bd3c91caf` and the nightly image digest;
-the bare image `/opt/nemo_rl_venv` is not used.
+Ptyche performance launchers use the validated native TE runtime followed by
+the immutable flash-attn, ml-dtypes, ONNX, ONNX IR, and ONNXScript archives,
+then the pinned NeMo-RL checkout, Bridge, and Megatron-LM sources. The driver
+is the external MCore environment keyed by lock blob
+`96543608420ac6746cfd18d1fcd8ee1bd3c91caf` and the nightly image digest; the
+bare image `/opt/nemo_rl_venv` is not used.
 
 MCore policy actors receive the same driver interpreter through the explicit
 `NEMO_RL_REQUIRE_SYSTEM_MCORE=1` contract. The registry fails before actor
@@ -86,21 +86,22 @@ creation unless both the lexical interpreter path and `sys.prefix` match the
 pinned external venv. This bypasses NeMo-RL's normal per-node `uv` MCore venv
 creation, so it cannot install or build another Transformer Engine artifact.
 Other actor tiers retain normal forced venv rebuilding; every Ray runtime env
-inherits the archive-first `PYTHONPATH` and the read-only overlay mount.
+inherits the native-TE-first `PYTHONPATH`.
 
 `TEST_ONLY=1` prints without contacting Slurm. For a scheduler-only validation
 of the exact command, set `SBATCH_TEST_ONLY=1`; it adds `--test-only` while
 preserving `sbatch --parsable` and prints the machine-readable Slurm result.
 Before either real or scheduler-only submission, the launcher verifies the
-working lock blob, six-archive order, readable pinned container and source
-paths, locked interpreter launcher, and the overlay source's `0444` mode and
-SHA256. Pure `TEST_ONLY=1` intentionally skips these host-dependent checks.
+working lock blob, six-entry runtime order, readable pinned container and
+source paths, locked interpreter launcher, and native TE provenance. Pure
+`TEST_ONLY=1` intentionally skips these host-dependent checks.
 
 ## GPU integration gate
 
-`scripts/validate_nemorl_integration.sub` mounts the same reviewed
-Transformer Engine overlay read-only and validates it in the same Python
-process as each preserved pytest suite. It accepts only the staged nightly
+`scripts/validate_nemorl_integration.sub` is the earlier source-integration
+gate. It mounts the reviewed Transformer Engine FP64 overlay read-only and
+validates it in the same Python process as each preserved pytest suite. It
+accepts only the staged nightly
 image `nemo_rl_nightly_20260729_2472184.sqsh`, recorded as SHA256
 `cb8ae0ade02b876f1b3380c8375eb92f95033dece6b2bfdc678b47f2da1aea91`;
 container overrides are intentionally not accepted for this gate. It hashes the
@@ -226,6 +227,21 @@ prefix, and the five static compatibility checks plus the graph-safe MoE
 aux-loss CUDA Graph capture/replay test reported `6 passed` in 3.58 seconds.
 The validated runtime was atomically published under the commit-and-wheel-hash
 immutable prefix, with no staging directories or locks left behind.
+
+## Exact 20-step comparison
+
+`submit_20step_native_te_comparison.sh` submits eight independent Nano
+performance jobs. The standard-routing group contains baseline, `attn`,
+`mamba`, `moe_router`, correctness-first `moe_router,moe_preprocess`, and the
+combined correctness-first scope. The separate drop-and-pad group contains its
+own matched baseline and `[moe]` row. Every job uses 20 steps, sequence packing,
+three warmup steps, checkpoint writes disabled, and the same native TE runtime.
+There are no Slurm dependencies or singleton constraints.
+
+```bash
+CLUSTER=ptyche \
+  bash experiments/cuda_graph/mamba_moe_te_graph_20260729/submit_20step_native_te_comparison.sh
+```
 
 ## Local preflight
 

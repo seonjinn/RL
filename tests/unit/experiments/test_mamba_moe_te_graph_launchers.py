@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import itertools
+import json
 import os
 import re
 import shlex
@@ -52,12 +53,26 @@ MCORE_DRIVER_PYTHON = (
     f"{MCORE_LOCK_BLOB}-image-cb8ae0ade02b/bin/python"
 )
 IMMUTABLE_RUNTIME_ARCHIVES = (
-    "/root/.cache/uv/archive-v0/AdbVCNRp6JVFPo0e",
+    (
+        "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/runtimes/"
+        "transformer-engine/transformer-engine-pr2898-"
+        "4a18653fc7274b10e33cd786b91be6261c523dc0-wheel-"
+        "029fdbcb3fc0aa17b1a4f7398f56040204307d4bc839d318feda1677c98fff5e/"
+        "site-packages"
+    ),
     "/root/.cache/uv/archive-v0/26H_iFoUOK00pyG5",
     "/root/.cache/uv/archive-v0/ymbKBYrUysuiERDQ",
     "/root/.cache/uv/archive-v0/Lp_mVBWGrC-sLPL6",
     "/root/.cache/uv/archive-v0/kIpfdwf26Al4-BTb",
     "/root/.cache/uv/archive-v0/i7-d_jifMXRoKKrY",
+)
+TE_NATIVE_COMMIT = "4a18653fc7274b10e33cd786b91be6261c523dc0"
+TE_NATIVE_WHEEL_SHA256 = (
+    "029fdbcb3fc0aa17b1a4f7398f56040204307d4bc839d318feda1677c98fff5e"
+)
+TE_NATIVE_RUNTIME = str(Path(IMMUTABLE_RUNTIME_ARCHIVES[0]).parent)
+CONTAINER_SHA256 = (
+    "cb8ae0ade02b876f1b3380c8375eb92f95033dece6b2bfdc678b47f2da1aea91"
 )
 
 
@@ -91,6 +106,26 @@ def _run_script(
         capture_output=True,
         text=True,
     )
+
+
+def _create_test_native_runtime(site_packages: Path, container: Path) -> Path:
+    package = site_packages / "transformer_engine"
+    package.mkdir(parents=True)
+    (package / "__init__.py").touch()
+    (package / "libtransformer_engine.so").touch()
+    provenance = site_packages.parent / "provenance.json"
+    provenance.write_text(
+        json.dumps(
+            {
+                "commit": TE_NATIVE_COMMIT,
+                "wheel_sha256": TE_NATIVE_WHEEL_SHA256,
+                "image": str(container),
+                "image_sha256": CONTAINER_SHA256,
+                "install_prefix": str(site_packages.parent),
+            }
+        )
+    )
+    return provenance
 
 
 def _run_integration_repo_preflight(
@@ -196,7 +231,11 @@ def test_scope_scripts_pin_graph_and_run_contracts() -> None:
 
 
 def test_moe_configuration_variants_are_persistent_and_not_graph_scopes() -> None:
-    variants = sorted((EXPERIMENT_DIR / "variants").glob("*.sh"))
+    variants = sorted(
+        script
+        for script in (EXPERIMENT_DIR / "variants").glob("*.sh")
+        if script.name != "attn_mamba_router_preprocess_overlap_false.sh"
+    )
     expected = {
         (scope, overlap, moe_act)
         for scope in (
@@ -357,6 +396,45 @@ def test_ptyche_performance_launcher_uses_task6_immutable_mcore_runtime() -> Non
     assert "PY_EXECUTABLES.SYSTEM" in registry
 
 
+def test_ptyche_performance_launcher_uses_validated_native_te_runtime() -> None:
+    profile = (EXPERIMENT_DIR / "profiles" / "ptyche.env").read_text()
+    launcher = (EXPERIMENT_DIR / "run_scope.sh").read_text()
+
+    assert f"TE_NATIVE_COMMIT={TE_NATIVE_COMMIT}" in profile
+    assert f"TE_NATIVE_WHEEL_SHA256={TE_NATIVE_WHEEL_SHA256}" in profile
+    assert f"TE_NATIVE_RUNTIME={TE_NATIVE_RUNTIME}" in profile
+    assert f"RUNTIME_ARCHIVE_PREFIX={':'.join(IMMUTABLE_RUNTIME_ARCHIVES)}" in profile
+    assert "TE_FP64_WEAKREF_SOURCE=" not in profile
+    assert "TE_FP64_WEAKREF_TARGET=" not in profile
+    assert "MOUNTS=/lustre:/lustre" in profile
+    assert "validate_te_native_runtime.py" in profile
+
+    assert "TE_NATIVE_COMMIT" in launcher
+    assert "TE_NATIVE_WHEEL_SHA256" in launcher
+    assert "TE_NATIVE_PROVENANCE" in launcher
+    assert "Transformer Engine native runtime provenance mismatch" in launcher
+    assert "TE_FP64_WEAKREF_SOURCE" not in launcher
+    assert "TE_FP64_WEAKREF_TARGET" not in launcher
+
+
+def test_combined_correctness_first_performance_variant_is_persistent() -> None:
+    launcher = (
+        EXPERIMENT_DIR
+        / "variants"
+        / "attn_mamba_router_preprocess_overlap_false.sh"
+    )
+
+    assert launcher.is_file()
+    assert _scope(launcher) == (
+        "attn",
+        "mamba",
+        "moe_router",
+        "moe_preprocess",
+    )
+    assert _assignment(launcher, "MOE_SHARED_EXPERT_OVERLAP") == "false"
+    assert _assignment(launcher, "MOE_ACT_RECOMPUTE") == "false"
+
+
 def test_real_submission_fails_before_sbatch_when_runtime_lock_mismatches(
     tmp_path: Path,
 ) -> None:
@@ -368,11 +446,9 @@ def test_real_submission_fails_before_sbatch_when_runtime_lock_mismatches(
     driver.symlink_to(
         "/root/.local/share/uv/python/cpython-3.13-linux-aarch64-gnu/bin/python3.13"
     )
-    overlay = tmp_path / "utils.py"
-    overlay.write_text("fp64 overlay\n")
-    overlay.chmod(0o444)
     container = tmp_path / "nightly.sqsh"
     container.touch()
+    provenance = _create_test_native_runtime(archives[0], container)
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_sbatch = fake_bin / "sbatch"
@@ -393,13 +469,7 @@ def test_real_submission_fails_before_sbatch_when_runtime_lock_mismatches(
         MCORE_DRIVER_PYTHON_OVERRIDE=str(driver),
         MCORE_LOCK_BLOB_OVERRIDE="0" * 40,
         RUNTIME_ARCHIVE_PREFIX_OVERRIDE=":".join(map(str, archives)),
-        TE_FP64_WEAKREF_SOURCE_OVERRIDE=str(overlay),
-        TE_FP64_WEAKREF_SHA256_OVERRIDE=hashlib.sha256(
-            overlay.read_bytes()
-        ).hexdigest(),
-        TE_FP64_WEAKREF_TARGET_OVERRIDE=str(
-            archives[0] / "transformer_engine" / "pytorch" / "utils.py"
-        ),
+        TE_NATIVE_PROVENANCE_OVERRIDE=str(provenance),
         CONTAINER_OVERRIDE=str(container),
     )
 
@@ -445,12 +515,9 @@ def test_pre_sbatch_runtime_contract_accepts_verified_test_artifacts(
     driver.symlink_to(
         "/root/.local/share/uv/python/cpython-3.13-linux-aarch64-gnu/bin/python3.13"
     )
-    overlay = tmp_path / "utils.py"
-    overlay.write_text("fp64 overlay\n")
-    overlay.chmod(0o444)
-    overlay_sha256 = hashlib.sha256(overlay.read_bytes()).hexdigest()
     container = tmp_path / "nightly.sqsh"
     container.touch()
+    provenance = _create_test_native_runtime(archives[0], container)
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_sbatch = fake_bin / "sbatch"
@@ -479,11 +546,7 @@ def test_pre_sbatch_runtime_contract_accepts_verified_test_artifacts(
         MCORE_DRIVER_PYTHON_OVERRIDE=str(driver),
         MCORE_LOCK_BLOB_OVERRIDE=lock_blob,
         RUNTIME_ARCHIVE_PREFIX_OVERRIDE=":".join(map(str, archives)),
-        TE_FP64_WEAKREF_SOURCE_OVERRIDE=str(overlay),
-        TE_FP64_WEAKREF_SHA256_OVERRIDE=overlay_sha256,
-        TE_FP64_WEAKREF_TARGET_OVERRIDE=str(
-            archives[0] / "transformer_engine" / "pytorch" / "utils.py"
-        ),
+        TE_NATIVE_PROVENANCE_OVERRIDE=str(provenance),
         CONTAINER_OVERRIDE=str(container),
     )
 
@@ -501,11 +564,9 @@ def test_pre_sbatch_runtime_contract_rejects_arbitrary_interpreter_symlink(
     driver = tmp_path / "locked-mcore" / "bin" / "python"
     driver.parent.mkdir(parents=True)
     driver.symlink_to("/usr/bin/python3")
-    overlay = tmp_path / "utils.py"
-    overlay.write_text("fp64 overlay\n")
-    overlay.chmod(0o444)
     container = tmp_path / "nightly.sqsh"
     container.touch()
+    provenance = _create_test_native_runtime(archives[0], container)
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     record = tmp_path / "sbatch-invoked"
@@ -533,13 +594,7 @@ def test_pre_sbatch_runtime_contract_rejects_arbitrary_interpreter_symlink(
         MCORE_DRIVER_PYTHON_OVERRIDE=str(driver),
         MCORE_LOCK_BLOB_OVERRIDE=lock_blob,
         RUNTIME_ARCHIVE_PREFIX_OVERRIDE=":".join(map(str, archives)),
-        TE_FP64_WEAKREF_SOURCE_OVERRIDE=str(overlay),
-        TE_FP64_WEAKREF_SHA256_OVERRIDE=hashlib.sha256(
-            overlay.read_bytes()
-        ).hexdigest(),
-        TE_FP64_WEAKREF_TARGET_OVERRIDE=str(
-            archives[0] / "transformer_engine/pytorch/utils.py"
-        ),
+        TE_NATIVE_PROVENANCE_OVERRIDE=str(provenance),
         CONTAINER_OVERRIDE=str(container),
     )
 
@@ -566,6 +621,17 @@ def test_real_submission_uses_parsable_sbatch_job_ids_without_dependencies() -> 
 def test_sbatch_test_only_executes_the_exact_parsable_scheduler_command(
     tmp_path: Path,
 ) -> None:
+    archives = tuple(tmp_path / f"archive-{index}" for index in range(6))
+    for archive in archives:
+        archive.mkdir()
+    driver = tmp_path / "locked-mcore" / "bin" / "python"
+    driver.parent.mkdir(parents=True)
+    driver.symlink_to(
+        "/root/.local/share/uv/python/cpython-3.13-linux-aarch64-gnu/bin/python3.13"
+    )
+    container = tmp_path / "nightly.sqsh"
+    container.touch()
+    provenance = _create_test_native_runtime(archives[0], container)
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_sbatch = fake_bin / "sbatch"
@@ -575,6 +641,13 @@ def test_sbatch_test_only_executes_the_exact_parsable_scheduler_command(
         "printf '2476000;ptyche\\n'\n"
     )
     fake_sbatch.chmod(0o755)
+    lock_blob = subprocess.run(
+        ["git", "hash-object", "uv.lock"],
+        check=True,
+        cwd=EXPERIMENT_DIR.parents[2],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
     result = _run_script(
         "scopes/17_attn.sh",
@@ -583,6 +656,12 @@ def test_sbatch_test_only_executes_the_exact_parsable_scheduler_command(
         SBATCH_RECORD=str(sbatch_record),
         LOG_ROOT_OVERRIDE=str(tmp_path / "logs"),
         PATH=f"{fake_bin}:{os.environ['PATH']}",
+        LAUNCHER_TEST_CONTRACT_OVERRIDE="1",
+        MCORE_DRIVER_PYTHON_OVERRIDE=str(driver),
+        MCORE_LOCK_BLOB_OVERRIDE=lock_blob,
+        RUNTIME_ARCHIVE_PREFIX_OVERRIDE=":".join(map(str, archives)),
+        TE_NATIVE_PROVENANCE_OVERRIDE=str(provenance),
+        CONTAINER_OVERRIDE=str(container),
     )
 
     assert result.returncode == 0, result.stderr
@@ -601,24 +680,25 @@ def test_sbatch_test_only_executes_the_exact_parsable_scheduler_command(
     "launcher",
     ["scopes/00_baseline_no_cg.sh", "scopes/17_attn.sh"],
 )
-def test_fp64_overlay_provenance_is_identical_for_baseline_and_te_scopes(
+def test_native_te_provenance_is_identical_for_baseline_and_te_scopes(
     launcher: str,
 ) -> None:
     result = _run_script(launcher, CLUSTER="ptyche", TEST_ONLY="1")
 
     assert result.returncode == 0, result.stderr
     for field, value in (
-        ("TE_FP64_WEAKREF_COMMIT", TE_FP64_WEAKREF_COMMIT),
-        ("TE_FP64_WEAKREF_SHA256", TE_FP64_WEAKREF_SHA256),
-        ("TE_FP64_WEAKREF_SOURCE", TE_FP64_WEAKREF_SOURCE),
-        ("TE_FP64_WEAKREF_TARGET", TE_FP64_WEAKREF_TARGET),
-        ("TE_EXPECTED_VERSION", TE_EXPECTED_VERSION),
+        ("TE_NATIVE_COMMIT", TE_NATIVE_COMMIT),
+        ("TE_NATIVE_WHEEL_SHA256", TE_NATIVE_WHEEL_SHA256),
+        ("TE_NATIVE_RUNTIME", TE_NATIVE_RUNTIME),
+        ("TE_NATIVE_PROVENANCE", f"{TE_NATIVE_RUNTIME}/provenance.json"),
+        ("TE_NATIVE_SITE_PACKAGES", IMMUTABLE_RUNTIME_ARCHIVES[0]),
+        ("TE_EXPECTED_VERSION", "2.15.0+4a18653f"),
     ):
         assert f"{field}: {value}" in result.stdout
-    assert f"{TE_FP64_WEAKREF_SOURCE}:{TE_FP64_WEAKREF_TARGET}:ro" in result.stdout
-    assert "validate_te_fp64_overlay.py" in result.stdout
-    assert f"--expected-version {TE_EXPECTED_VERSION}" in result.stdout
-    assert f"--expected-sha256 {TE_FP64_WEAKREF_SHA256}" in result.stdout
+    assert "MOUNTS: /lustre:/lustre" in result.stdout
+    assert "validate_te_native_runtime.py" in result.stdout
+    assert "--expected-version 2.15.0+4a18653f" in result.stdout
+    assert f"--expected-wheel-sha256 {TE_NATIVE_WHEEL_SHA256}" in result.stdout
 
 
 def test_fp64_overlay_rejects_wrong_sha_before_cuda_preflight(
@@ -835,8 +915,8 @@ def test_submit_all_smokes_reuses_every_persistent_launcher() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.count("TEST_ONLY: no submission performed") == 41
-    assert result.stdout.count("Submitting smoke launcher:") == 41
+    assert result.stdout.count("TEST_ONLY: no submission performed") == 42
+    assert result.stdout.count("Submitting smoke launcher:") == 42
 
 
 def test_submit_performance_accepts_explicit_reusable_selection() -> None:
@@ -869,6 +949,33 @@ def test_submit_performance_accepts_drop_pad_pair_selection() -> None:
     assert result.returncode == 0, result.stderr
     assert result.stdout.count("TEST_ONLY: no submission performed") == 2
     assert result.stdout.count("Submitting performance launcher:") == 2
+
+
+def test_native_te_20step_comparison_reuses_exact_matched_launchers() -> None:
+    result = _run_script(
+        "submit_20step_native_te_comparison.sh",
+        CLUSTER="ptyche",
+        TEST_ONLY="1",
+        RUN_TAG="native-te-unit-test",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count("TEST_ONLY: no submission performed") == 8
+    assert result.stdout.count("Submitting performance launcher:") == 8
+    assert result.stdout.count("grpo.max_num_steps=20") == 8
+    assert result.stdout.count("checkpointing.enabled=false") >= 8
+    assert result.stdout.count("native-te-unit-test") > 8
+    for launcher in (
+        "scopes/00_baseline_no_cg.sh",
+        "scopes/17_attn.sh",
+        "scopes/05_mamba.sh",
+        "scopes/03_moe_router.sh",
+        "variants/router_preprocess_overlap_false_moe_act_false.sh",
+        "variants/attn_mamba_router_preprocess_overlap_false.sh",
+        "pairs/00_drop_pad_baseline_no_cg.sh",
+        "pairs/01_drop_pad_moe.sh",
+    ):
+        assert f"Submitting performance launcher: {launcher}" in result.stdout
     assert "drop-pad-baseline-no-cg" in result.stdout
     assert "drop-pad-moe" in result.stdout
 

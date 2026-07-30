@@ -66,31 +66,36 @@ PROFILE="${SCRIPT_DIR}/profiles/${CLUSTER}.env"
 [[ -f "${PROFILE}" ]] || fail "Missing cluster profile: ${PROFILE}"
 source "${PROFILE}"
 
-TASK6_RUNTIME_ARCHIVE_PREFIX=/root/.cache/uv/archive-v0/AdbVCNRp6JVFPo0e:/root/.cache/uv/archive-v0/26H_iFoUOK00pyG5:/root/.cache/uv/archive-v0/ymbKBYrUysuiERDQ:/root/.cache/uv/archive-v0/Lp_mVBWGrC-sLPL6:/root/.cache/uv/archive-v0/kIpfdwf26Al4-BTb:/root/.cache/uv/archive-v0/i7-d_jifMXRoKKrY
-EXPECTED_RUNTIME_ARCHIVE_PREFIX="${TASK6_RUNTIME_ARCHIVE_PREFIX}"
+NATIVE_TE_RUNTIME=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/runtimes/transformer-engine/transformer-engine-pr2898-4a18653fc7274b10e33cd786b91be6261c523dc0-wheel-029fdbcb3fc0aa17b1a4f7398f56040204307d4bc839d318feda1677c98fff5e
+NATIVE_TE_SITE_PACKAGES=${NATIVE_TE_RUNTIME}/site-packages
+TASK7_RUNTIME_ARCHIVE_PREFIX=${NATIVE_TE_SITE_PACKAGES}:/root/.cache/uv/archive-v0/26H_iFoUOK00pyG5:/root/.cache/uv/archive-v0/ymbKBYrUysuiERDQ:/root/.cache/uv/archive-v0/Lp_mVBWGrC-sLPL6:/root/.cache/uv/archive-v0/kIpfdwf26Al4-BTb:/root/.cache/uv/archive-v0/i7-d_jifMXRoKKrY
+EXPECTED_RUNTIME_ARCHIVE_PREFIX="${TASK7_RUNTIME_ARCHIVE_PREFIX}"
 if [[ "${LAUNCHER_TEST_CONTRACT_OVERRIDE:-0}" == 1 ]]; then
   [[ "${SBATCH_TEST_ONLY:-0}" == 1 ]] || fail "LAUNCHER_TEST_CONTRACT_OVERRIDE is only allowed with SBATCH_TEST_ONLY=1"
   : "${MCORE_DRIVER_PYTHON_OVERRIDE:?LAUNCHER_TEST_CONTRACT_OVERRIDE requires MCORE_DRIVER_PYTHON_OVERRIDE}"
   : "${MCORE_LOCK_BLOB_OVERRIDE:?LAUNCHER_TEST_CONTRACT_OVERRIDE requires MCORE_LOCK_BLOB_OVERRIDE}"
   : "${RUNTIME_ARCHIVE_PREFIX_OVERRIDE:?LAUNCHER_TEST_CONTRACT_OVERRIDE requires RUNTIME_ARCHIVE_PREFIX_OVERRIDE}"
-  : "${TE_FP64_WEAKREF_SOURCE_OVERRIDE:?LAUNCHER_TEST_CONTRACT_OVERRIDE requires TE_FP64_WEAKREF_SOURCE_OVERRIDE}"
-  : "${TE_FP64_WEAKREF_SHA256_OVERRIDE:?LAUNCHER_TEST_CONTRACT_OVERRIDE requires TE_FP64_WEAKREF_SHA256_OVERRIDE}"
-  : "${TE_FP64_WEAKREF_TARGET_OVERRIDE:?LAUNCHER_TEST_CONTRACT_OVERRIDE requires TE_FP64_WEAKREF_TARGET_OVERRIDE}"
+  : "${TE_NATIVE_PROVENANCE_OVERRIDE:?LAUNCHER_TEST_CONTRACT_OVERRIDE requires TE_NATIVE_PROVENANCE_OVERRIDE}"
   : "${CONTAINER_OVERRIDE:?LAUNCHER_TEST_CONTRACT_OVERRIDE requires CONTAINER_OVERRIDE}"
   MCORE_DRIVER_PYTHON="${MCORE_DRIVER_PYTHON_OVERRIDE}"
   MCORE_LOCK_BLOB="${MCORE_LOCK_BLOB_OVERRIDE}"
   RUNTIME_ARCHIVE_PREFIX="${RUNTIME_ARCHIVE_PREFIX_OVERRIDE}"
   EXPECTED_RUNTIME_ARCHIVE_PREFIX="${RUNTIME_ARCHIVE_PREFIX_OVERRIDE}"
-  TE_FP64_WEAKREF_SOURCE="${TE_FP64_WEAKREF_SOURCE_OVERRIDE}"
-  TE_FP64_WEAKREF_SHA256="${TE_FP64_WEAKREF_SHA256_OVERRIDE}"
-  TE_FP64_WEAKREF_TARGET="${TE_FP64_WEAKREF_TARGET_OVERRIDE}"
+  TE_NATIVE_SITE_PACKAGES="${RUNTIME_ARCHIVE_PREFIX%%:*}"
+  TE_NATIVE_RUNTIME=$(dirname -- "${TE_NATIVE_SITE_PACKAGES}")
+  TE_NATIVE_PROVENANCE="${TE_NATIVE_PROVENANCE_OVERRIDE}"
   CONTAINER="${CONTAINER_OVERRIDE}"
-  MOUNTS="/lustre:/lustre,${TE_FP64_WEAKREF_SOURCE}:${TE_FP64_WEAKREF_TARGET}:ro"
+  MOUNTS="/lustre:/lustre"
 fi
 
 : "${MCORE_DRIVER_PYTHON:=}"
 : "${MCORE_LOCK_BLOB:=}"
 : "${RUNTIME_ARCHIVE_PREFIX:=}"
+: "${TE_NATIVE_COMMIT:=}"
+: "${TE_NATIVE_WHEEL_SHA256:=}"
+: "${TE_NATIVE_RUNTIME:=}"
+: "${TE_NATIVE_PROVENANCE:=}"
+: "${TE_NATIVE_SITE_PACKAGES:=}"
 IMMUTABLE_RUNTIME_PYTHONPATH="${RUNTIME_ARCHIVE_PREFIX}:${REPO_ROOT}:${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
 
 MODEL=${MODEL:-nano-hybrid}
@@ -279,10 +284,11 @@ for field in \
   MCORE_DRIVER_PYTHON \
   MCORE_LOCK_BLOB \
   RUNTIME_ARCHIVE_PREFIX \
-  TE_FP64_WEAKREF_COMMIT \
-  TE_FP64_WEAKREF_SHA256 \
-  TE_FP64_WEAKREF_SOURCE \
-  TE_FP64_WEAKREF_TARGET \
+  TE_NATIVE_COMMIT \
+  TE_NATIVE_WHEEL_SHA256 \
+  TE_NATIVE_RUNTIME \
+  TE_NATIVE_PROVENANCE \
+  TE_NATIVE_SITE_PACKAGES \
   TE_EXPECTED_VERSION \
   NVTE_CUDA_ARCHS \
   UV_CACHE_DIR_OVERRIDE \
@@ -310,10 +316,11 @@ else
 fi
 printf 'PROFILE: %s\n' "${PROFILE_ID}"
 printf 'CONTAINER_SHA256: %s\n' "${CONTAINER_SHA256}"
-printf 'TE_FP64_WEAKREF_COMMIT: %s\n' "${TE_FP64_WEAKREF_COMMIT:-}"
-printf 'TE_FP64_WEAKREF_SHA256: %s\n' "${TE_FP64_WEAKREF_SHA256:-}"
-printf 'TE_FP64_WEAKREF_SOURCE: %s\n' "${TE_FP64_WEAKREF_SOURCE:-}"
-printf 'TE_FP64_WEAKREF_TARGET: %s\n' "${TE_FP64_WEAKREF_TARGET:-}"
+printf 'TE_NATIVE_COMMIT: %s\n' "${TE_NATIVE_COMMIT:-}"
+printf 'TE_NATIVE_WHEEL_SHA256: %s\n' "${TE_NATIVE_WHEEL_SHA256:-}"
+printf 'TE_NATIVE_RUNTIME: %s\n' "${TE_NATIVE_RUNTIME:-}"
+printf 'TE_NATIVE_PROVENANCE: %s\n' "${TE_NATIVE_PROVENANCE:-}"
+printf 'TE_NATIVE_SITE_PACKAGES: %s\n' "${TE_NATIVE_SITE_PACKAGES:-}"
 printf 'TE_EXPECTED_VERSION: %s\n' "${TE_EXPECTED_VERSION:-}"
 printf 'MCORE_DRIVER_PYTHON: %s\n' "${MCORE_DRIVER_PYTHON}"
 printf 'MCORE_LOCK_BLOB: %s\n' "${MCORE_LOCK_BLOB}"
@@ -333,27 +340,13 @@ if ((${#unresolved[@]})); then
   fail "Refusing submission with unresolved fields: ${unresolved[*]}"
 fi
 
-sha256_file() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum -- "$1" | awk '{print $1}'
-  else
-    shasum -a 256 "$1" | awk '{print $1}'
-  fi
-}
-
-file_mode() {
-  if stat -c '%a' "$1" >/dev/null 2>&1; then
-    stat -c '%a' "$1"
-  else
-    stat -f '%Lp' "$1"
-  fi
-}
-
 preflight_runtime_contract() {
   [[ "$(git hash-object uv.lock)" == "${MCORE_LOCK_BLOB}" ]] || fail "uv.lock hash mismatch for locked MCore environment"
   [[ "${RUNTIME_ARCHIVE_PREFIX}" == "${EXPECTED_RUNTIME_ARCHIVE_PREFIX}" ]] || fail "immutable runtime archive prefix mismatch"
-  [[ "${TE_FP64_WEAKREF_TARGET}" == "${RUNTIME_ARCHIVE_PREFIX%%:*}/transformer_engine/pytorch/utils.py" ]] || fail "Transformer Engine overlay target mismatch"
-  [[ "${MOUNTS}" == "/lustre:/lustre,${TE_FP64_WEAKREF_SOURCE}:${TE_FP64_WEAKREF_TARGET}:ro" ]] || fail "Transformer Engine mount mismatch"
+  [[ "${TE_NATIVE_SITE_PACKAGES}" == "${RUNTIME_ARCHIVE_PREFIX%%:*}" ]] || fail "Transformer Engine native runtime must be first on PYTHONPATH"
+  [[ "${TE_NATIVE_RUNTIME}" == "$(dirname -- "${TE_NATIVE_SITE_PACKAGES}")" ]] || fail "Transformer Engine native runtime path mismatch"
+  [[ "${TE_NATIVE_PROVENANCE}" == "${TE_NATIVE_RUNTIME}/provenance.json" ]] || fail "Transformer Engine native provenance path mismatch"
+  [[ "${MOUNTS}" == "/lustre:/lustre" ]] || fail "Transformer Engine native runtime mount mismatch"
   [[ -r "${CONTAINER}" ]] || fail "pinned container is not readable: ${CONTAINER}"
   [[ -r "${REPO_ROOT}" ]] || fail "repository source is not readable: ${REPO_ROOT}"
   [[ -r "${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src" ]] || fail "Bridge source is not readable"
@@ -373,9 +366,19 @@ preflight_runtime_contract() {
     fail "locked MCore interpreter is not executable: ${MCORE_DRIVER_PYTHON}"
   fi
 
-  [[ -f "${TE_FP64_WEAKREF_SOURCE}" && -r "${TE_FP64_WEAKREF_SOURCE}" ]] || fail "Transformer Engine overlay source is not readable"
-  [[ "$(file_mode "${TE_FP64_WEAKREF_SOURCE}")" == 444 ]] || fail "Transformer Engine overlay mode must be 0444"
-  [[ "$(sha256_file "${TE_FP64_WEAKREF_SOURCE}")" == "${TE_FP64_WEAKREF_SHA256}" ]] || fail "Transformer Engine overlay SHA256 mismatch"
+  [[ -d "${TE_NATIVE_SITE_PACKAGES}" && -r "${TE_NATIVE_SITE_PACKAGES}" ]] || fail "Transformer Engine native site-packages is not readable"
+  [[ -f "${TE_NATIVE_PROVENANCE}" && -r "${TE_NATIVE_PROVENANCE}" ]] || fail "Transformer Engine native provenance is not readable"
+  if ! python3 \
+    experiments/cuda_graph/mamba_moe_te_graph_20260729/validate_te_native_runtime.py \
+    --provenance "${TE_NATIVE_PROVENANCE}" \
+    --site-packages "${TE_NATIVE_SITE_PACKAGES}" \
+    --expected-commit "${TE_NATIVE_COMMIT}" \
+    --expected-wheel-sha256 "${TE_NATIVE_WHEEL_SHA256}" \
+    --expected-image "${CONTAINER}" \
+    --expected-image-sha256 "${CONTAINER_SHA256}" \
+    --expected-version "${TE_EXPECTED_VERSION}"; then
+    fail "Transformer Engine native runtime provenance mismatch"
+  fi
   printf 'RUNTIME_PREFLIGHT: passed\n'
 }
 
