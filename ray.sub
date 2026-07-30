@@ -99,6 +99,11 @@ CONTAINER=$CONTAINER
 MOUNTS=$MOUNTS
 COMMAND=${COMMAND:-}  # This is a script relative to the SLURM_SUBMIT_DIR. If left empty, it will leave the cluster idle after it's brought up.
 SETUP_COMMAND=${SETUP_COMMAND:-}  # Setup commands to run on all nodes before starting Ray.
+SETUP_COMMAND_ON_WORKERS=${SETUP_COMMAND_ON_WORKERS:-1}
+case "$SETUP_COMMAND_ON_WORKERS" in
+  0|1) ;;
+  *) echo "SETUP_COMMAND_ON_WORKERS must be 0 or 1" >&2; exit 2 ;;
+esac
 ########################################################
 # Ports for all nodes (should be odd numbers since we place head/worker[0] on the same node) so all workers get the odd ports, but the head will get +1 the ports
 NODE_MANAGER_PORT=${NODE_MANAGER_PORT:-1301}
@@ -916,7 +921,7 @@ while [[ \$count -lt $WORKER_NUM_RETRIES ]]; do
   ray stop || true
   rm -rf /tmp/ray/session_* || true
 
-  if [[ -n "$SETUP_COMMAND_FILE" ]] && [[ -f "$SETUP_COMMAND_FILE" ]]; then
+  if [[ "$SETUP_COMMAND_ON_WORKERS" == 1 ]] && [[ -n "$SETUP_COMMAND_FILE" ]] && [[ -f "$SETUP_COMMAND_FILE" ]]; then
     echo "[INFO] Running setup command from $SETUP_COMMAND_FILE..."
     bash "$SETUP_COMMAND_FILE"
   fi

@@ -12,17 +12,14 @@ set -euo pipefail
 : "${CONTAINER:?Submit with the immutable NeMo-RL sqsh path}"
 : "${CONTAINER_SHA256:?Submit with the immutable sqsh SHA256}"
 REPO=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-mamba-moe-graph-cache-20260729-d7f1d496f
-UV_CACHE=/tmp/nemo-rl-uv-cache-${SLURM_JOB_ID}
 
 test -f "${CONTAINER}"
 test "$(sha256sum "${CONTAINER}" | awk '{print $1}')" = "${CONTAINER_SHA256}"
-mkdir -p "${UV_CACHE}"
 
 srun --nodes=1 --ntasks=1 \
   --container-image="${CONTAINER}" \
   --container-mounts=/lustre:/lustre \
   bash -lc "
-    export UV_CACHE_DIR=${UV_CACHE}
     export NVTE_CUDA_ARCHS=100
     cd ${REPO}
     NRL_FORCE_REBUILD_VENVS=true uv run --frozen --extra mcore python -c pass

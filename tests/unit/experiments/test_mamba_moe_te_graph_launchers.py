@@ -333,15 +333,23 @@ def test_gb200_profiles_limit_transformer_engine_build_to_sm100() -> None:
     assert 'NVTE_CUDA_ARCHS="${NVTE_CUDA_ARCHS}" \\' in runner
     assert 'UV_CACHE_DIR_OVERRIDE="${UV_CACHE_DIR_OVERRIDE}" \\' in runner
     assert 'SETUP_COMMAND="${SETUP_COMMAND}" \\' in runner
+    assert 'SETUP_COMMAND_ON_WORKERS="${SETUP_COMMAND_ON_WORKERS}" \\' in runner
     assert 'RAY_CLIENT_SERVER_ENABLED="${RAY_CLIENT_SERVER_ENABLED}" \\' in runner
     assert 'RAY_DASHBOARD_ENABLED="${RAY_DASHBOARD_ENABLED}" \\' in runner
     ray_submit = (EXPERIMENT_DIR.parents[2] / "ray.sub").read_text()
     assert "__CONTAINER_LOCAL__" in ray_submit
+    assert "SETUP_COMMAND_ON_WORKERS" in ray_submit
+    worker_setup = ray_submit.split("# Workers retry more often", maxsplit=1)[1]
+    assert (
+        '[[ "$SETUP_COMMAND_ON_WORKERS" == 1 ]]'
+        " && [[ -n \"$SETUP_COMMAND_FILE\" ]]" in worker_setup
+    )
     for cluster in ("ptyche", "oci-hsg"):
         profile = (EXPERIMENT_DIR / "profiles" / f"{cluster}.env").read_text()
         assert "NVTE_CUDA_ARCHS=100" in profile
         assert "UV_CACHE_DIR_OVERRIDE=__CONTAINER_LOCAL__" in profile
         assert "SETUP_COMMAND=" in profile
+        assert "SETUP_COMMAND_ON_WORKERS=0" in profile
         assert "RAY_CLIENT_SERVER_ENABLED=0" in profile
         assert "RAY_DASHBOARD_ENABLED=0" in profile
         assert "--reinstall --no-cache 'ray[default]==2.56.1'" in profile
@@ -355,8 +363,8 @@ def test_container_smoke_reuses_official_mcore_environment() -> None:
         EXPERIMENT_DIR / "scripts" / "smoke_nemo_container.sub"
     ).read_text()
 
-    assert "UV_CACHE=/tmp/nemo-rl-uv-cache-" in script
-    assert "export UV_CACHE_DIR=" in script
+    assert "UV_CACHE=/tmp/nemo-rl-uv-cache-" not in script
+    assert "export UV_CACHE_DIR=" not in script
     assert "export NVTE_CUDA_ARCHS=100" in script
     assert "NRL_FORCE_REBUILD_VENVS=true uv run --frozen --extra mcore python -c pass" in script
     assert "--reinstall --no-cache 'ray[default]==2.56.1'" in script
