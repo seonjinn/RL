@@ -52,6 +52,19 @@ CORRECTNESS_COLUMNS = (
     ("grad_norm", "Gradient norm"),
 )
 
+TERMINAL_SLURM_FAILURE_STATUSES = frozenset(
+    {
+        "BOOT_FAIL",
+        "DEADLINE",
+        "NODE_FAIL",
+        "OOM",
+        "OUT_OF_MEMORY",
+        "PREEMPTED",
+        "REVOKED",
+        "TIMEOUT",
+    }
+)
+
 
 def escape(value: object) -> str:
     """Escape one value before inserting it in HTML."""
@@ -109,6 +122,31 @@ def _has_value(row: Mapping[str, str], fields: Sequence[str]) -> bool:
     return any(row.get(field, "") not in {"", None} for field in fields)
 
 
+def _has_nonzero_exit_code(exit_code: str) -> bool:
+    fields = exit_code.strip().split(":")
+    if not exit_code.strip() or len(fields) not in {1, 2}:
+        return False
+    try:
+        return any(int(field) != 0 for field in fields)
+    except ValueError:
+        return False
+
+
+def _is_failure_row(row: Mapping[str, str]) -> bool:
+    status = row.get("status", "")
+    normalized_status = status.upper().replace("-", "_")
+    status_parts = normalized_status.replace(":", " ").split()
+    return (
+        row.get("failure", "") != ""
+        or _has_nonzero_exit_code(row.get("exit_code", ""))
+        or any(
+            marker in status.lower()
+            for marker in ("fail", "error", "invalid", "cancel")
+        )
+        or any(part in TERMINAL_SLURM_FAILURE_STATUSES for part in status_parts)
+    )
+
+
 def render_html(
     rows: Sequence[Mapping[str, str]],
     *,
@@ -141,14 +179,7 @@ def render_html(
         steady_state_rows(performance_rows)
     )
     accuracy_rows = [row for row in rows if _has_value(row, CORRECTNESS_FIELDS)]
-    failure_rows = [
-        row
-        for row in rows
-        if any(
-            marker in row.get("status", "").lower()
-            for marker in ("fail", "error", "invalid", "cancel")
-        )
-    ]
+    failure_rows = [row for row in rows if _is_failure_row(row)]
     generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     correctness = """

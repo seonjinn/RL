@@ -1604,6 +1604,96 @@ def test_collector_preserves_submission_failure_detail_without_inventing_telemet
         assert value in report
 
 
+def test_submission_failures_survive_csv_and_render_for_all_terminal_signals(
+    tmp_path: Path,
+) -> None:
+    collector = _load_experiment_module("collect_results")
+    renderer = _load_experiment_module("render_report")
+    csv_path = tmp_path / "results.csv"
+    records = [
+        {
+            "scope": "terminal-status",
+            "job_id": "timeout",
+            "status": "performance:timeout",
+        },
+        {
+            "scope": "terminal-status",
+            "job_id": "oom",
+            "status": "OOM",
+        },
+        {
+            "scope": "terminal-status",
+            "job_id": "preempted",
+            "status": "PREEMPTED",
+        },
+        {
+            "scope": "terminal-status",
+            "job_id": "node-fail",
+            "status": "NODE_FAIL",
+        },
+        {
+            "scope": "terminal-status",
+            "job_id": "boot-fail",
+            "status": "BOOT_FAIL",
+        },
+        {
+            "scope": "terminal-status",
+            "job_id": "deadline",
+            "status": "DEADLINE",
+        },
+        {
+            "scope": "terminal-status",
+            "job_id": "revoked",
+            "status": "REVOKED",
+        },
+        {
+            "scope": "failure-detail",
+            "job_id": "detail-only",
+            "status": "performance:completed",
+            "failure": "post-run validation failed",
+        },
+        {
+            "scope": "nonzero-exit",
+            "job_id": "exit-only",
+            "status": "performance:completed",
+            "exit_code": "1:0",
+        },
+        {
+            "scope": "successful",
+            "job_id": "completed-zero",
+            "status": "performance:completed",
+            "exit_code": "0:0",
+        },
+    ]
+
+    collector.write_csv(records, csv_path)
+    report = renderer.render_html(
+        renderer.read_rows(csv_path),
+        te_version="2.15.0+42b84005",
+        te_source_commit="e707aa46869dc2aec08dfea25402e97a61d49fef",
+        te_overlay_sha256=TE_FP64_WEAKREF_SHA256,
+    )
+    failures = report.split('<section id="failures">', maxsplit=1)[1].split(
+        "</section>", maxsplit=1
+    )[0]
+
+    for job_id in (
+        "timeout",
+        "oom",
+        "preempted",
+        "node-fail",
+        "boot-fail",
+        "deadline",
+        "revoked",
+        "detail-only",
+        "exit-only",
+    ):
+        assert f"<td>{job_id}</td>" in failures
+    assert "<td>completed-zero</td>" not in failures
+    assert "post-run validation failed" in failures
+    assert "<td>1:0</td>" in failures
+
+
 def test_collector_writes_repository_safe_lf_csv(tmp_path: Path) -> None:
     collector = _load_experiment_module("collect_results")
     output = tmp_path / "results.csv"
