@@ -34,7 +34,6 @@ esac
 
 test -f "${IMAGE}"
 test -f "${TE_SOURCE_ROOT}/tests/pytorch/test_cuda_graphs.py"
-test -x "${PYTHON}"
 
 CONTAINER_MOUNTS=/lustre:/lustre
 if [[ "${TE_OVERLAY_ENABLED}" == "1" ]]; then
