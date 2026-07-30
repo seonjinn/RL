@@ -16,7 +16,7 @@ TE_SOURCE = (
     "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/"
     "TransformerEngine-fp64-thd-cudagraph-20260730"
 )
-TE_COMMIT = "c16cb9a1d850f8b8228959145c98541958903b8f"
+TE_COMMIT = "4a18653fc7274b10e33cd786b91be6261c523dc0"
 IMAGE = "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/nemo_rl_nightly_20260729_2472184.sqsh"
 IMAGE_SHA256 = "cb8ae0ade02b876f1b3380c8375eb92f95033dece6b2bfdc678b47f2da1aea91"
 

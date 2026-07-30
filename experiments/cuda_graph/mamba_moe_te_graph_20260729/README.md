@@ -109,7 +109,7 @@ container overrides are intentionally not accepted for this gate. It hashes the
 ## Persistent native Transformer Engine build
 
 `scripts/build_te_pr2898_backport.sub` is the separate native-build gate for
-TransformerEngine commit `c16cb9a1d850f8b8228959145c98541958903b8f` from
+TransformerEngine commit `4a18653fc7274b10e33cd786b91be6261c523dc0` from
 `${ROOT}/src/TransformerEngine-fp64-thd-cudagraph-20260730`. It validates the
 source HEAD, clean worktree, recursive submodule state, and the same pinned
 nightly image SHA256 before entering the container. The container builds one
@@ -141,6 +141,16 @@ graph-safe aux-loss path to the legacy private helpers while preserving the
 public ABI and `Coeff_buf[0]/[1]` semantics. The failed job exited `1:0` after
 `00:21:10`; its build and publication staging directories and output lock were
 removed, and no immutable wheel directory was published.
+
+Ptyche job `2475704` then compiled and linked the native common library through
+target 78/78, including `fused_moe_aux_loss.cu.o`, but failed while compiling
+the PyTorch extension. PR2898's pybind refactor referenced two NVFP4 helpers
+that exist on its newer upstream base but not on the pinned e707 base. Commit
+`4a18653f` omits only those unavailable, graph-unrelated bindings; they were
+not part of the legacy Python API. Its regression suite verifies that the
+graph-safe router binding remains present while the post-pin NVFP4 references
+do not. The failed job exited `1:0` after `00:21:15`; cleanup again left no
+artifact, staging directory, or lock.
 
 The gate runs from the clean runner checkout
 `${ROOT}/src/RL-pr5672-mamba-moe-graph-cache-runner-20260730`, which must be
@@ -176,7 +186,7 @@ before submitting the 20-step matrix.
 
 `scripts/validate_te_pr2898_wheel.sub` is the one-GPU GB200 install and runtime
 gate for the immutable wheel produced by the native build. It accepts only
-TransformerEngine commit `c16cb9a1d850f8b8228959145c98541958903b8f`, the
+TransformerEngine commit `4a18653fc7274b10e33cd786b91be6261c523dc0`, the
 commit-named artifact directory, and the staged nightly image with SHA256
 `cb8ae0ade02b876f1b3380c8375eb92f95033dece6b2bfdc678b47f2da1aea91`.
 Before allocating the container it requires exactly one wheel, its exact
