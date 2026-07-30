@@ -62,6 +62,27 @@ dtype, shape, and data-pointer identity. Any mismatch stops the launch before
 Ray; workers share the same immutable image and read-only mount, so they do not
 repeat package installation.
 
+## Persistent performance runtime contract
+
+Ptyche performance launchers use the immutable archive prefix proven by the
+integration gate: Transformer Engine, flash-attn, ml-dtypes, ONNX, ONNX IR,
+and ONNXScript, followed by the pinned NeMo-RL checkout, Bridge, and
+Megatron-LM sources. The driver is the external MCore environment keyed by lock
+blob `96543608420ac6746cfd18d1fcd8ee1bd3c91caf` and the nightly image digest;
+the bare image `/opt/nemo_rl_venv` is not used.
+
+MCore policy actors receive the same driver interpreter through the explicit
+`NEMO_RL_REQUIRE_SYSTEM_MCORE=1` contract. The registry fails before actor
+creation unless both the lexical interpreter path and `sys.prefix` match the
+pinned external venv. This bypasses NeMo-RL's normal per-node `uv` MCore venv
+creation, so it cannot install or build another Transformer Engine artifact.
+Other actor tiers retain normal forced venv rebuilding; every Ray runtime env
+inherits the archive-first `PYTHONPATH` and the read-only overlay mount.
+
+`TEST_ONLY=1` prints without contacting Slurm. For a scheduler-only validation
+of the exact command, set `SBATCH_TEST_ONLY=1`; it adds `--test-only` while
+preserving `sbatch --parsable` and prints the machine-readable Slurm result.
+
 ## GPU integration gate
 
 `scripts/validate_nemorl_integration.sub` mounts the same reviewed

@@ -13,10 +13,49 @@
 # limitations under the License.
 
 import os
+import sys
+from pathlib import Path
 
 from nemo_rl.distributed.virtual_cluster import PY_EXECUTABLES
 
 USE_SYSTEM_EXECUTABLE = os.environ.get("NEMO_RL_PY_EXECUTABLES_SYSTEM", "0") == "1"
+REQUIRE_SYSTEM_MCORE = os.environ.get("NEMO_RL_REQUIRE_SYSTEM_MCORE", "0") == "1"
+
+
+def _require_pinned_mcore_system_interpreter() -> None:
+    """Fail closed when an experiment pins MCore actors to the driver venv."""
+    expected_python = os.environ.get("NEMO_RL_MCORE_SYSTEM_PYTHON")
+    if not expected_python:
+        raise RuntimeError(
+            "NEMO_RL_REQUIRE_SYSTEM_MCORE=1 requires NEMO_RL_MCORE_SYSTEM_PYTHON"
+        )
+
+    expected_path = Path(expected_python)
+    if not expected_path.is_file() or not expected_path.resolve().is_file():
+        raise RuntimeError(
+            "NEMO_RL_MCORE_SYSTEM_PYTHON must name an existing Python interpreter: "
+            f"{expected_python}"
+        )
+
+    # Do not compare only resolved paths: uv venv Python launchers share a common
+    # managed interpreter target.  The lexical venv path and sys.prefix identify
+    # the locked environment actually selected for the Ray actor.
+    if os.path.abspath(sys.executable) != os.path.abspath(expected_python):
+        raise RuntimeError(
+            "NEMO_RL_MCORE_SYSTEM_PYTHON must match sys.executable exactly; "
+            f"expected {expected_python}, got {sys.executable}"
+        )
+    expected_prefix = expected_path.parent.parent
+    if Path(sys.prefix) != expected_prefix:
+        raise RuntimeError(
+            "NEMO_RL_MCORE_SYSTEM_PYTHON venv root must match sys.prefix; "
+            f"expected {expected_prefix}, got {sys.prefix}"
+        )
+
+
+if REQUIRE_SYSTEM_MCORE:
+    _require_pinned_mcore_system_interpreter()
+
 VLLM_EXECUTABLE = (
     PY_EXECUTABLES.SYSTEM if USE_SYSTEM_EXECUTABLE else PY_EXECUTABLES.VLLM
 )
@@ -24,7 +63,9 @@ SGLANG_EXECUTABLE = (
     PY_EXECUTABLES.SYSTEM if USE_SYSTEM_EXECUTABLE else PY_EXECUTABLES.SGLANG
 )
 MCORE_EXECUTABLE = (
-    PY_EXECUTABLES.SYSTEM if USE_SYSTEM_EXECUTABLE else PY_EXECUTABLES.MCORE
+    PY_EXECUTABLES.SYSTEM
+    if USE_SYSTEM_EXECUTABLE or REQUIRE_SYSTEM_MCORE
+    else PY_EXECUTABLES.MCORE
 )
 TRTLLM_EXECUTABLE = (
     PY_EXECUTABLES.SYSTEM if USE_SYSTEM_EXECUTABLE else PY_EXECUTABLES.TRTLLM

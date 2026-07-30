@@ -41,10 +41,23 @@ TE_FP64_WEAKREF_SOURCE = (
     f"{TE_FP64_WEAKREF_COMMIT}/utils.py"
 )
 TE_FP64_WEAKREF_TARGET = (
-    "/root/.cache/uv/archive-v0/AdbVCNRp6JVFPo0e/"
-    "transformer_engine/pytorch/utils.py"
+    "/root/.cache/uv/archive-v0/AdbVCNRp6JVFPo0e/transformer_engine/pytorch/utils.py"
 )
 TE_EXPECTED_VERSION = "2.15.0+42b84005"
+MCORE_LOCK_BLOB = "96543608420ac6746cfd18d1fcd8ee1bd3c91caf"
+MCORE_DRIVER_PYTHON = (
+    "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/venvs/"
+    "nemorl-integration-mcore-py313-aarch64-lock-"
+    f"{MCORE_LOCK_BLOB}-image-cb8ae0ade02b/bin/python"
+)
+IMMUTABLE_RUNTIME_ARCHIVES = (
+    "/root/.cache/uv/archive-v0/AdbVCNRp6JVFPo0e",
+    "/root/.cache/uv/archive-v0/26H_iFoUOK00pyG5",
+    "/root/.cache/uv/archive-v0/ymbKBYrUysuiERDQ",
+    "/root/.cache/uv/archive-v0/Lp_mVBWGrC-sLPL6",
+    "/root/.cache/uv/archive-v0/kIpfdwf26Al4-BTb",
+    "/root/.cache/uv/archive-v0/i7-d_jifMXRoKKrY",
+)
 
 
 def _assignment(script: Path, name: str) -> str:
@@ -79,7 +92,9 @@ def _run_script(
     )
 
 
-def _run_untracked_path_guard(path_listing_command: str) -> subprocess.CompletedProcess[str]:
+def _run_untracked_path_guard(
+    path_listing_command: str,
+) -> subprocess.CompletedProcess[str]:
     guard = f"""\
 set -euo pipefail
 {path_listing_command} | while IFS= read -r untracked_path; do
@@ -205,12 +220,98 @@ def test_test_only_reports_resolved_ptyche_nano_provenance_and_never_submits() -
         "nanov3-30b-a3b-pr5672-20260720/nvidia/"
         "NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16" in result.stdout
     )
+    assert "+checkpointing.pretrained_checkpoint.format=megatron_lm" in result.stdout
+    assert "logger.wandb.project=sna-cg-study" in result.stdout
+    assert f"MCORE_DRIVER_PYTHON: {MCORE_DRIVER_PYTHON}" in result.stdout
+    assert f"MCORE_LOCK_BLOB: {MCORE_LOCK_BLOB}" in result.stdout
     assert (
-        "+checkpointing.pretrained_checkpoint.format=megatron_lm"
+        "IMMUTABLE_RUNTIME_PYTHONPATH: " + ":".join(IMMUTABLE_RUNTIME_ARCHIVES)
         in result.stdout
     )
-    assert "logger.wandb.project=sna-cg-study" in result.stdout
+    assert "NEMO_RL_REQUIRE_SYSTEM_MCORE=1" in result.stdout
+    assert "NRL_FORCE_REBUILD_VENVS=true" in result.stdout
     assert "TEST_ONLY: no submission performed" in result.stdout
+
+
+def test_ptyche_performance_launcher_uses_task6_immutable_mcore_runtime() -> None:
+    profile = (EXPERIMENT_DIR / "profiles" / "ptyche.env").read_text()
+    launcher = (EXPERIMENT_DIR / "run_scope.sh").read_text()
+    registry = (
+        EXPERIMENT_DIR.parents[2]
+        / "nemo_rl"
+        / "distributed"
+        / "ray_actor_environment_registry.py"
+    ).read_text()
+
+    assert f"MCORE_LOCK_BLOB={MCORE_LOCK_BLOB}" in profile
+    assert MCORE_DRIVER_PYTHON in profile
+    assert "RUNTIME_ARCHIVE_PREFIX=" + ":".join(IMMUTABLE_RUNTIME_ARCHIVES) in profile
+    assert "uv pip install" not in profile
+    assert "pip install" not in profile
+    assert "/opt/nemo_rl_venv/bin/python" not in profile
+    assert 'git hash-object uv.lock)\\" = \\"${MCORE_LOCK_BLOB}' in profile
+
+    archive_prefix = ":".join(IMMUTABLE_RUNTIME_ARCHIVES)
+    assert archive_prefix in profile
+    assert "${RUNTIME_ARCHIVE_PREFIX}:${REPO_ROOT}:" in launcher
+    assert "NEMO_RL_REQUIRE_SYSTEM_MCORE=1" in launcher
+    assert "NEMO_RL_MCORE_SYSTEM_PYTHON=${MCORE_DRIVER_PYTHON}" in launcher
+    assert "NRL_FORCE_REBUILD_VENVS=true" in launcher
+    assert "/opt/nemo_rl_venv/bin/python" not in launcher
+
+    assert "NEMO_RL_REQUIRE_SYSTEM_MCORE" in registry
+    assert "NEMO_RL_MCORE_SYSTEM_PYTHON" in registry
+    assert "MCORE_EXECUTABLE" in registry
+    assert "PY_EXECUTABLES.SYSTEM" in registry
+
+
+def test_real_submission_uses_parsable_sbatch_job_ids_without_dependencies() -> None:
+    result = _run_script(
+        "scopes/17_attn.sh",
+        CLUSTER="ptyche",
+        TEST_ONLY="1",
+    )
+
+    assert result.returncode == 0, result.stderr
+    sbatch_line = next(
+        line for line in result.stdout.splitlines() if line.startswith("SBATCH:")
+    )
+    assert "--parsable" in sbatch_line
+    assert "--dependency" not in sbatch_line
+
+
+def test_sbatch_test_only_executes_the_exact_parsable_scheduler_command(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_sbatch = fake_bin / "sbatch"
+    sbatch_record = tmp_path / "sbatch-argv"
+    fake_sbatch.write_text(
+        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" > "${SBATCH_RECORD:?}"\n'
+        "printf '2476000;ptyche\\n'\n"
+    )
+    fake_sbatch.chmod(0o755)
+
+    result = _run_script(
+        "scopes/17_attn.sh",
+        CLUSTER="ptyche",
+        SBATCH_TEST_ONLY="1",
+        SBATCH_RECORD=str(sbatch_record),
+        LOG_ROOT_OVERRIDE=str(tmp_path / "logs"),
+        PATH=f"{fake_bin}:{os.environ['PATH']}",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--parsable" in result.stdout
+    assert "--test-only" in result.stdout
+    assert "SLURM_JOB_ID: 2476000;ptyche" in result.stdout
+    submitted_argv = sbatch_record.read_text().splitlines()
+    assert "--parsable" in submitted_argv
+    assert "--test-only" in submitted_argv
+    assert "--dependency" not in submitted_argv
+    assert "--nodes=8" in submitted_argv
+    assert submitted_argv[-1] == "ray.sub"
 
 
 @pytest.mark.parametrize(
@@ -432,7 +533,10 @@ def test_variant_command_uses_configuration_not_graph_scope() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert "+policy.megatron_cfg.cuda_graph_modules=\\[moe_router\\,moe_preprocess\\]" in result.stdout
+    assert (
+        "+policy.megatron_cfg.cuda_graph_modules=\\[moe_router\\,moe_preprocess\\]"
+        in result.stdout
+    )
     assert "+policy.megatron_cfg.moe_shared_expert_overlap=true" in result.stdout
     assert "+policy.megatron_cfg.activation_checkpointing=true" in result.stdout
     assert "+policy.megatron_cfg.recompute_granularity=selective" in result.stdout
@@ -473,9 +577,7 @@ def test_nemorl_integration_gate_uses_bridge_src_layout() -> None:
         EXPERIMENT_DIR / "scripts" / "validate_nemorl_integration.sub"
     ).read_text()
 
-    assert (
-        "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src" in script
-    )
+    assert "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src" in script
 
 
 def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
@@ -489,7 +591,9 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
         "MCORE_VENV_KEY=py313-aarch64-lock-${EXPECTED_LOCK_BLOB}-"
         "image-cb8ae0ade02b" in script
     )
-    assert "MCORE_VENV=${ROOT}/venvs/nemorl-integration-mcore-${MCORE_VENV_KEY}" in script
+    assert (
+        "MCORE_VENV=${ROOT}/venvs/nemorl-integration-mcore-${MCORE_VENV_KEY}" in script
+    )
     assert "export UV_PROJECT_ENVIRONMENT=${MCORE_VENV}" in script
     sync_index = script.index("uv sync --frozen --extra mcore")
     wrapper_command = (
@@ -522,8 +626,10 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
     flock_index = script.index("flock -x 9")
     venv_parent_creation = 'mkdir -p "$(dirname "${MCORE_VENV}")"'
     assert venv_parent_creation in script
-    assert script.index(venv_parent_creation) < script.index("srun --nodes=1 --ntasks=1") < script.index(
-        'exec 9>\\"\\${UV_PROJECT_ENVIRONMENT}.lock\\"'
+    assert (
+        script.index(venv_parent_creation)
+        < script.index("srun --nodes=1 --ntasks=1")
+        < script.index('exec 9>\\"\\${UV_PROJECT_ENVIRONMENT}.lock\\"')
     )
     assert flock_index < sync_index < first_wrapper_index < last_wrapper_index
     assert 'exec 9>\\"\\${UV_PROJECT_ENVIRONMENT}.lock\\"' in script
@@ -533,7 +639,9 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
     assert "#SBATCH --time=01:00:00" in script
 
 
-def test_nemorl_integration_gate_uses_the_validated_immutable_runtime_archives() -> None:
+def test_nemorl_integration_gate_uses_the_validated_immutable_runtime_archives() -> (
+    None
+):
     script = (
         EXPERIMENT_DIR / "scripts" / "validate_nemorl_integration.sub"
     ).read_text()
@@ -582,7 +690,7 @@ def test_nemorl_integration_gate_renders_the_post_sync_venv_check_safely() -> No
     assert found_terminator
     assert '"' not in python_source
 
-    rendered_command = "bash -lc \"\npython3 - <<'PY'\n" + python_source + "\nPY\n\""
+    rendered_command = "bash -lc \"\npython3 - <<'PY'\n" + python_source + '\nPY\n"'
     result = subprocess.run(
         ["bash", "-c", rendered_command],
         check=False,
@@ -600,25 +708,26 @@ def test_nemorl_integration_gate_pins_clean_runner_lock_and_image_provenance() -
     lock_blob = "96543608420ac6746cfd18d1fcd8ee1bd3c91caf"
     image_sha256 = "cb8ae0ade02b876f1b3380c8375eb92f95033dece6b2bfdc678b47f2da1aea91"
 
-    assert (
-        "REPO=${ROOT}/src/RL-pr5672-mamba-moe-graph-cache-runner-20260730"
-        in script
-    )
+    assert "REPO=${ROOT}/src/RL-pr5672-mamba-moe-graph-cache-runner-20260730" in script
     assert "RL-pr5672-mamba-moe-graph-cache-20260729-d7f1d496f" not in script
     assert "IMAGE=${ROOT}/containers/nemo_rl_nightly_20260729_2472184.sqsh" in script
     assert "CONTAINER" not in script
     assert f"IMAGE_SHA256={image_sha256}" in script
-    image_check = "test \"$(sha256sum -- \"${IMAGE}\" | awk '{print $1}')\" = \"${IMAGE_SHA256}\""
+    image_check = (
+        'test "$(sha256sum -- "${IMAGE}" | awk \'{print $1}\')" = "${IMAGE_SHA256}"'
+    )
     assert image_check in script
     assert script.index(image_check) < script.index("srun --nodes=1 --ntasks=1")
     assert f"EXPECTED_LOCK_BLOB={lock_blob}" in script
     assert (
-        r'test \"\$(git rev-parse ${EXPECTED_SHA}:uv.lock)\" = ${EXPECTED_LOCK_BLOB}'
+        r"test \"\$(git rev-parse ${EXPECTED_SHA}:uv.lock)\" = ${EXPECTED_LOCK_BLOB}"
         in script
     )
-    assert r'test \"\$(git hash-object uv.lock)\" = ${EXPECTED_LOCK_BLOB}' in script
+    assert r"test \"\$(git hash-object uv.lock)\" = ${EXPECTED_LOCK_BLOB}" in script
     assert script.count("EXPECTED_LOCK_BLOB") >= 3
-    assert "git diff --quiet --ignore-submodules=dirty -- . ':(exclude)uv.lock'" in script
+    assert (
+        "git diff --quiet --ignore-submodules=dirty -- . ':(exclude)uv.lock'" in script
+    )
     assert "git diff --cached --quiet" in script
 
 
@@ -639,7 +748,10 @@ def test_nemorl_integration_gate_allows_only_generated_unit_result_json_files() 
         assert generated_result.fullmatch(path) is None
 
     assert "while IFS= read -r untracked_path; do" in script
-    assert "git ls-files --others --exclude-standard | while IFS= read -r untracked_path; do" in script
+    assert (
+        "git ls-files --others --exclude-standard | while IFS= read -r untracked_path; do"
+        in script
+    )
     assert "done < <(git ls-files --others --exclude-standard)" not in script
     assert "tests/unit/unit_results.json" in script
     assert "^tests/unit/unit_results/[^/]+\\.json$" in script
@@ -659,7 +771,9 @@ def test_nemorl_integration_gate_allows_only_generated_unit_result_json_files() 
         "printf '%s\\n' experiments/untracked.py"
     )
     assert unexpected_path.returncode != 0
-    assert "Unexpected untracked path: experiments/untracked.py" in unexpected_path.stderr
+    assert (
+        "Unexpected untracked path: experiments/untracked.py" in unexpected_path.stderr
+    )
 
 
 def test_nemorl_integration_gate_validates_fp64_overlay_and_mcore_graph_suite() -> None:
@@ -721,20 +835,20 @@ def test_nemorl_integration_gate_runs_required_mcore_targets_distributed() -> No
     assert "--nnodes 1" in distributed_block
     assert "--master_addr localhost" in distributed_block
     assert "--node_rank 0" in distributed_block
-    assert r'--log-dir \"${MCORE_DISTRIBUTED_LOG_DIR}\"' in distributed_block
-    assert r'--tee \"0:3\"' in distributed_block
-    assert r'--redirects \"3\"' in distributed_block
+    assert r"--log-dir \"${MCORE_DISTRIBUTED_LOG_DIR}\"" in distributed_block
+    assert r"--tee \"0:3\"" in distributed_block
+    assert r"--redirects \"3\"" in distributed_block
     assert "run_pytest_with_te_overlay.py" in distributed_block
     assert " -m pytest" not in distributed_block
     assert "-rs" in distributed_block
     assert (
-        r'rank_stdout=\$(find \"${MCORE_DISTRIBUTED_LOG_DIR}\" -type f '
-        r'-path \"*/\${rank}/stdout.log\" -print -quit)'
+        r"rank_stdout=\$(find \"${MCORE_DISTRIBUTED_LOG_DIR}\" -type f "
+        r"-path \"*/\${rank}/stdout.log\" -print -quit)"
     ) in distributed_block
     assert "for rank in 0 1; do" in distributed_block
     assert "Missing distributed MCore stdout for rank" in distributed_block
-    assert r'grep -Eq \"^2 passed([,[:space:]]|$)\"' in distributed_block
-    assert r'grep -Eiq \"SKIPPED|[0-9]+ skipped\"' in distributed_block
+    assert r"grep -Eq \"^2 passed([,[:space:]]|$)\"" in distributed_block
+    assert r"grep -Eiq \"SKIPPED|[0-9]+ skipped\"" in distributed_block
     assert "Distributed MCore focused target skipped on rank" in distributed_block
     for target in distributed_targets:
         assert target not in single_rank_mcore_block
@@ -743,7 +857,7 @@ def test_nemorl_integration_gate_runs_required_mcore_targets_distributed() -> No
         "MCORE_DISTRIBUTED_LOG_DIR=${ROOT}/logs/"
         "nemorl-integration-distributed-${SLURM_JOB_ID:?}" in script
     )
-    assert "mkdir -p \"${MCORE_DISTRIBUTED_LOG_DIR}\"" in script
+    assert 'mkdir -p "${MCORE_DISTRIBUTED_LOG_DIR}"' in script
     assert "mktemp" not in script
     assert "rm -rf" not in script
 
@@ -781,7 +895,9 @@ def test_nemorl_integration_rank_summary_requires_exact_unskipped_pair(
     assert (pass_result.returncode == 0 and skip_result.returncode != 0) is expected
 
 
-def test_nemorl_integration_gate_uses_the_same_immutable_python_for_both_suites() -> None:
+def test_nemorl_integration_gate_uses_the_same_immutable_python_for_both_suites() -> (
+    None
+):
     script_path = EXPERIMENT_DIR / "scripts" / "validate_nemorl_integration.sub"
     helper_path = EXPERIMENT_DIR / "run_pytest_with_te_overlay.py"
     script = script_path.read_text()
@@ -791,14 +907,21 @@ def test_nemorl_integration_gate_uses_the_same_immutable_python_for_both_suites(
     assert "NRL_FORCE_REBUILD_VENVS" not in script
     assert script.count("run_pytest_with_te_overlay.py") == 3
     assert "tests/unit/models/megatron/test_cuda_graph_lifecycle.py" in script
-    assert "${MCORE_ROOT}/tests/unit_tests/transformer/test_te_cuda_graph_bank.py" in script
+    assert (
+        "${MCORE_ROOT}/tests/unit_tests/transformer/test_te_cuda_graph_bank.py"
+        in script
+    )
 
 
-def test_overlay_pytest_wrapper_validates_before_running_pytest(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_overlay_pytest_wrapper_validates_before_running_pytest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[tuple[str, object]] = []
     validator = ModuleType("validate_te_fp64_overlay")
 
-    def validate_overlay(*, expected_version: str, expected_sha256: str) -> dict[str, str]:
+    def validate_overlay(
+        *, expected_version: str, expected_sha256: str
+    ) -> dict[str, str]:
         calls.append(("validate", (expected_version, expected_sha256)))
         return {}
 
@@ -890,7 +1013,7 @@ def test_gb200_profiles_limit_transformer_engine_build_to_sm100() -> None:
     worker_setup = ray_submit.split("# Workers retry more often", maxsplit=1)[1]
     assert (
         '[[ "$SETUP_COMMAND_ON_WORKERS" == 1 ]]'
-        " && [[ -n \"$SETUP_COMMAND_FILE\" ]]" in worker_setup
+        ' && [[ -n "$SETUP_COMMAND_FILE" ]]' in worker_setup
     )
     for cluster in ("ptyche", "oci-hsg"):
         profile = (EXPERIMENT_DIR / "profiles" / f"{cluster}.env").read_text()
@@ -909,9 +1032,7 @@ def test_gb200_profiles_limit_transformer_engine_build_to_sm100() -> None:
 
 
 def test_container_smoke_reuses_official_mcore_environment() -> None:
-    script = (
-        EXPERIMENT_DIR / "scripts" / "smoke_nemo_container.sub"
-    ).read_text()
+    script = (EXPERIMENT_DIR / "scripts" / "smoke_nemo_container.sub").read_text()
 
     assert "UV_CACHE=/tmp/nemo-rl-uv-cache-" not in script
     assert "export UV_CACHE_DIR=" not in script
@@ -1352,7 +1473,9 @@ def test_steady_state_aggregate_rejects_incomplete_or_nonfinite_samples(
         cg_rows[4][field] = value
 
     aggregates = collector.aggregate_performance([*baseline_rows, *cg_rows])
-    cg_aggregate = next(aggregate for aggregate in aggregates if aggregate["job_id"] == "cg-1")
+    cg_aggregate = next(
+        aggregate for aggregate in aggregates if aggregate["job_id"] == "cg-1"
+    )
 
     assert cg_aggregate["valid"] == "false"
     assert cg_aggregate["invalid_reason"] == reason

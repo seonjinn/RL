@@ -9,7 +9,6 @@ fail() {
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "${SCRIPT_DIR}/../../.." && pwd)
 cd "${REPO_ROOT}"
-MCORE_PYTHONPATH="${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM:${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src"
 
 PHASE=${PHASE:-smoke}
 case "${PHASE}" in
@@ -66,6 +65,11 @@ esac
 PROFILE="${SCRIPT_DIR}/profiles/${CLUSTER}.env"
 [[ -f "${PROFILE}" ]] || fail "Missing cluster profile: ${PROFILE}"
 source "${PROFILE}"
+
+: "${MCORE_DRIVER_PYTHON:=}"
+: "${MCORE_LOCK_BLOB:=}"
+: "${RUNTIME_ARCHIVE_PREFIX:=}"
+IMMUTABLE_RUNTIME_PYTHONPATH="${RUNTIME_ARCHIVE_PREFIX}:${REPO_ROOT}:${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
 
 MODEL=${MODEL:-nano-hybrid}
 case "${MODEL}" in
@@ -131,9 +135,11 @@ TIME_LIMIT=${TIME_LIMIT_OVERRIDE:-${TIME_LIMIT}}
 
 COMMAND_ARGS=(
   env
+  NEMO_RL_REQUIRE_SYSTEM_MCORE=1
+  "NEMO_RL_MCORE_SYSTEM_PYTHON=${MCORE_DRIVER_PYTHON}"
   NRL_FORCE_REBUILD_VENVS=true
-  "PYTHONPATH=${MCORE_PYTHONPATH}"
-  /opt/nemo_rl_venv/bin/python
+  "PYTHONPATH=${IMMUTABLE_RUNTIME_PYTHONPATH}"
+  "${MCORE_DRIVER_PYTHON}"
   examples/run_grpo.py
   --config
   "${CONFIG}"
@@ -192,6 +198,7 @@ printf -v COMMAND '%q ' "${COMMAND_ARGS[@]}"
 COMMAND=${COMMAND% }
 SBATCH_CMD=(
   sbatch
+  --parsable
   "--nodes=${TOTAL_NODES}"
 )
 set +u
@@ -207,6 +214,9 @@ SBATCH_CMD+=(
   "--error=${RUN_LOG_DIR}/slurm-%j.out"
   ray.sub
 )
+if [[ "${SBATCH_TEST_ONLY:-0}" == 1 ]]; then
+  SBATCH_CMD=(sbatch --parsable --test-only "${SBATCH_CMD[@]:2}")
+fi
 
 unresolved=()
 for field in \
@@ -217,6 +227,9 @@ for field in \
   HF_HOME \
   HF_DATASETS_CACHE \
   MOUNTS \
+  MCORE_DRIVER_PYTHON \
+  MCORE_LOCK_BLOB \
+  RUNTIME_ARCHIVE_PREFIX \
   TE_FP64_WEAKREF_COMMIT \
   TE_FP64_WEAKREF_SHA256 \
   TE_FP64_WEAKREF_SOURCE \
@@ -253,6 +266,9 @@ printf 'TE_FP64_WEAKREF_SHA256: %s\n' "${TE_FP64_WEAKREF_SHA256:-}"
 printf 'TE_FP64_WEAKREF_SOURCE: %s\n' "${TE_FP64_WEAKREF_SOURCE:-}"
 printf 'TE_FP64_WEAKREF_TARGET: %s\n' "${TE_FP64_WEAKREF_TARGET:-}"
 printf 'TE_EXPECTED_VERSION: %s\n' "${TE_EXPECTED_VERSION:-}"
+printf 'MCORE_DRIVER_PYTHON: %s\n' "${MCORE_DRIVER_PYTHON}"
+printf 'MCORE_LOCK_BLOB: %s\n' "${MCORE_LOCK_BLOB}"
+printf 'IMMUTABLE_RUNTIME_PYTHONPATH: %s\n' "${IMMUTABLE_RUNTIME_PYTHONPATH}"
 printf 'MOUNTS: %s\n' "${MOUNTS}"
 printf 'SETUP_COMMAND: %s\n' "${SETUP_COMMAND}"
 printf 'COMMAND:\n%s\n' "${COMMAND}"
@@ -269,6 +285,7 @@ if ((${#unresolved[@]})); then
 fi
 
 mkdir -p "${RUN_LOG_DIR}"
+job_id="$(
 COMMAND="${COMMAND}" \
 CONTAINER="${CONTAINER}" \
 CONTAINER_SHA256="${CONTAINER_SHA256}" \
@@ -276,7 +293,10 @@ HF_HOME="${HF_HOME}" \
 HF_DATASETS_CACHE="${HF_DATASETS_CACHE}" \
 HF_HUB_OFFLINE=1 \
 TRANSFORMERS_OFFLINE=1 \
-PYTHONPATH="${MCORE_PYTHONPATH}" \
+PYTHONPATH="${IMMUTABLE_RUNTIME_PYTHONPATH}" \
+NEMO_RL_REQUIRE_SYSTEM_MCORE=1 \
+NEMO_RL_MCORE_SYSTEM_PYTHON="${MCORE_DRIVER_PYTHON}" \
+NRL_FORCE_REBUILD_VENVS=true \
 NVTE_CUDA_ARCHS="${NVTE_CUDA_ARCHS}" \
 UV_CACHE_DIR_OVERRIDE="${UV_CACHE_DIR_OVERRIDE}" \
 SETUP_COMMAND="${SETUP_COMMAND}" \
@@ -289,3 +309,5 @@ MOUNTS="${MOUNTS}" \
 BASE_LOG_DIR="${RUN_LOG_DIR}" \
 GPUS_PER_NODE="${GPUS_PER_NODE}" \
 "${SBATCH_CMD[@]}"
+)"
+printf 'SLURM_JOB_ID: %s\n' "${job_id}"
