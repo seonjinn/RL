@@ -276,8 +276,9 @@ def test_real_submission_fails_before_sbatch_when_runtime_lock_mismatches(
         archive.mkdir()
     driver = tmp_path / "locked-mcore" / "bin" / "python"
     driver.parent.mkdir(parents=True)
-    driver.write_text("#!/usr/bin/env bash\n")
-    driver.chmod(0o755)
+    driver.symlink_to(
+        "/root/.local/share/uv/python/cpython-3.13-linux-aarch64-gnu/bin/python3.13"
+    )
     overlay = tmp_path / "utils.py"
     overlay.write_text("fp64 overlay\n")
     overlay.chmod(0o444)
@@ -352,8 +353,9 @@ def test_pre_sbatch_runtime_contract_accepts_verified_test_artifacts(
         archive.mkdir()
     driver = tmp_path / "locked-mcore" / "bin" / "python"
     driver.parent.mkdir(parents=True)
-    driver.write_text("#!/usr/bin/env bash\n")
-    driver.chmod(0o755)
+    driver.symlink_to(
+        "/root/.local/share/uv/python/cpython-3.13-linux-aarch64-gnu/bin/python3.13"
+    )
     overlay = tmp_path / "utils.py"
     overlay.write_text("fp64 overlay\n")
     overlay.chmod(0o444)
