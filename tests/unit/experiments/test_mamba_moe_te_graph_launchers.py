@@ -84,7 +84,11 @@ def _load_experiment_module(name: str) -> ModuleType:
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.path.insert(0, str(EXPERIMENT_DIR))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
     return module
 
 
@@ -644,6 +648,198 @@ def test_collector_writes_repository_safe_lf_csv(tmp_path: Path) -> None:
     assert b"\r\n" not in output.read_bytes()
 
 
+def _performance_row(
+    *,
+    scope: str,
+    job_id: str,
+    step: int,
+    multiplier: float,
+    correctness_offset: float = 0.0,
+    eviction_count: int = 0,
+    fallback_count: int = 0,
+) -> dict[str, str]:
+    """Build one normalized result row with independently checkable metrics."""
+    value = float(step)
+    return {
+        "scope": scope,
+        "job_id": job_id,
+        "status": "performance:passed",
+        "step": str(step),
+        "eviction_count": str(eviction_count),
+        "fallback_count": str(fallback_count),
+        "e2e_step_time": str(value),
+        "e2e_tokens_per_sec_per_gpu": str(value * multiplier),
+        "generation_time": str(value + 1),
+        "generation_tokens_per_sec_per_gpu": str((value + 1) * multiplier),
+        "policy_training_time": str(value + 2),
+        "policy_training_tokens_per_sec_per_gpu": str((value + 2) * multiplier),
+        "logprob_time": str(value + 3),
+        "logprob_tokens_per_sec_per_gpu": str((value + 3) * multiplier),
+        "reward_mean": str(value / 100 + correctness_offset),
+        "generation_kl_error": str(value / 1000 + correctness_offset),
+        "policy_loss": str(value / 10000 + correctness_offset),
+        "grad_norm": str(value / 10 + correctness_offset),
+    }
+
+
+def test_steady_state_rows_excludes_capture_window() -> None:
+    collector = _load_experiment_module("collect_results")
+    rows = [
+        _performance_row(
+            scope="baseline-no-cg",
+            job_id="baseline-1",
+            step=step,
+            multiplier=1.0,
+        )
+        for step in range(4, 21)
+    ]
+
+    steady_rows = collector.steady_state_rows(rows)
+
+    assert [row["step"] for row in steady_rows] == [str(step) for step in range(6, 21)]
+
+
+def test_steady_state_aggregate_groups_runs_and_compares_to_baseline() -> None:
+    collector = _load_experiment_module("collect_results")
+    rows = [
+        _performance_row(
+            scope="baseline-no-cg",
+            job_id="baseline-1",
+            step=step,
+            multiplier=1.0,
+        )
+        for step in range(4, 21)
+    ]
+    rows.extend(
+        _performance_row(
+            scope="attn",
+            job_id="cg-1",
+            step=step,
+            multiplier=2.0,
+            correctness_offset=0.1,
+        )
+        for step in range(4, 21)
+    )
+    rows.extend(
+        _performance_row(
+            scope="attn",
+            job_id="cg-2",
+            step=step,
+            multiplier=1.5,
+        )
+        for step in range(4, 21)
+    )
+
+    aggregated = collector.aggregate_performance(collector.steady_state_rows(rows))
+
+    assert [(row["scope"], row["job_id"]) for row in aggregated] == [
+        ("attn", "cg-1"),
+        ("attn", "cg-2"),
+        ("baseline-no-cg", "baseline-1"),
+    ]
+    cg_row = aggregated[0]
+    for field, median, p95 in (
+        ("e2e_step_time", "13", "20"),
+        ("e2e_tokens_per_sec_per_gpu", "26", "40"),
+        ("generation_time", "14", "21"),
+        ("generation_tokens_per_sec_per_gpu", "28", "42"),
+        ("policy_training_time", "15", "22"),
+        ("policy_training_tokens_per_sec_per_gpu", "30", "44"),
+        ("logprob_time", "16", "23"),
+        ("logprob_tokens_per_sec_per_gpu", "32", "46"),
+    ):
+        assert cg_row[f"{field}_median"] == median
+        assert cg_row[f"{field}_p95"] == p95
+    for field in (
+        "e2e_tokens_per_sec_per_gpu",
+        "generation_tokens_per_sec_per_gpu",
+        "policy_training_tokens_per_sec_per_gpu",
+        "logprob_tokens_per_sec_per_gpu",
+    ):
+        assert cg_row[f"{field}_ratio_to_baseline"] == "2"
+    assert cg_row["reward_mean_delta"] == "0.1"
+    assert cg_row["generation_kl_error_delta"] == "0.1"
+    assert cg_row["policy_loss_delta"] == "0.1"
+    assert cg_row["grad_norm_delta"] == "0.1"
+    assert cg_row["valid"] == "true"
+    assert cg_row["invalid_reason"] == ""
+
+
+def test_steady_state_aggregate_invalidates_evictions_and_fallbacks() -> None:
+    collector = _load_experiment_module("collect_results")
+    rows = [
+        _performance_row(
+            scope="baseline-no-cg",
+            job_id="baseline-1",
+            step=step,
+            multiplier=1.0,
+        )
+        for step in range(6, 21)
+    ]
+    rows.extend(
+        _performance_row(
+            scope="attn",
+            job_id="cg-eviction",
+            step=step,
+            multiplier=2.0,
+            eviction_count=1 if step >= 8 else 0,
+        )
+        for step in range(6, 21)
+    )
+    rows.extend(
+        _performance_row(
+            scope="attn",
+            job_id="cg-fallback",
+            step=step,
+            multiplier=2.0,
+            fallback_count=2 if step >= 12 else 0,
+        )
+        for step in range(6, 21)
+    )
+
+    aggregated = collector.aggregate_performance(rows)
+    invalid_rows = {row["job_id"]: row for row in aggregated}
+
+    assert invalid_rows["cg-eviction"]["valid"] == "false"
+    assert invalid_rows["cg-eviction"]["invalid_reason"] == "eviction_count=1"
+    assert invalid_rows["cg-fallback"]["valid"] == "false"
+    assert invalid_rows["cg-fallback"]["invalid_reason"] == "fallback_count=2"
+
+
+def test_report_renders_overlay_provenance_steady_state_and_raw_failures() -> None:
+    renderer = _load_experiment_module("render_report")
+    report = renderer.render_html(
+        [
+            {
+                "scope": "attn",
+                "job_id": "raw-failure",
+                "status": "performance:invalid",
+                "step": "8",
+                "fallback_count": "1",
+            }
+        ],
+        nemo_rl_sha="nemo-sha",
+        bridge_sha="bridge-sha",
+        container_sha256="container-sha",
+        te_version="2.15.0+42b84005",
+        te_source_commit="e707aa46869dc2aec08dfea25402e97a61d49fef",
+        te_overlay_sha256="39f7b26b8cf127e3ca104c0375c97ce4e6d047178f9d00836b92469b1c2e544b",
+    )
+
+    for value in (
+        "2.15.0+42b84005",
+        "e707aa46869dc2aec08dfea25402e97a61d49fef",
+        "39f7b26b8cf127e3ca104c0375c97ce4e6d047178f9d00836b92469b1c2e544b",
+        "container-sha",
+        "6–20",
+        "raw-failure",
+    ):
+        assert value in report
+    assert '<section id="steady-state-performance">' in report
+    assert '<section id="correctness-deltas">' in report
+    assert '<section id="failures">' in report
+
+
 def test_report_has_required_sections_scope_labels_and_verified_status() -> None:
     renderer = _load_experiment_module("render_report")
     assert renderer.DEFAULT_MCORE_SHA == "100047b517ea91526dc465448fcb3b37b2598388"
@@ -666,7 +862,10 @@ def test_report_has_required_sections_scope_labels_and_verified_status() -> None
                 "status": "accuracy:failed",
                 "reward_mean": "0.25",
             },
-        ]
+        ],
+        te_version="2.15.0+42b84005",
+        te_source_commit="e707aa46869dc2aec08dfea25402e97a61d49fef",
+        te_overlay_sha256=TE_FP64_WEAKREF_SHA256,
     )
 
     for section in (

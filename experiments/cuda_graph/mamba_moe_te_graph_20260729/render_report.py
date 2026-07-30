@@ -8,6 +8,8 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from collect_results import aggregate_performance, steady_state_rows
+
 REPO_ROOT = Path(__file__).parents[3]
 DEFAULT_INPUT = (
     REPO_ROOT
@@ -95,6 +97,9 @@ def _has_value(row: Mapping[str, str], fields: Sequence[str]) -> bool:
 def render_html(
     rows: Sequence[Mapping[str, str]],
     *,
+    te_version: str,
+    te_source_commit: str,
+    te_overlay_sha256: str,
     nemo_rl_sha: str = "__REQUIRED_NEMO_RL_SHA__",
     bridge_sha: str = "__REQUIRED_MEGATRON_BRIDGE_SHA__",
     mcore_sha: str = DEFAULT_MCORE_SHA,
@@ -117,6 +122,9 @@ def render_html(
         "logprob_tokens_per_sec_per_gpu",
     )
     performance_rows = [row for row in rows if _has_value(row, performance_fields)]
+    steady_state_performance = aggregate_performance(
+        steady_state_rows(performance_rows)
+    )
     accuracy_fields = (
         "reward_mean",
         "generation_kl_error",
@@ -185,6 +193,68 @@ def render_html(
             ("peak_reserved_gib", "Peak reserved GiB"),
         ),
     )
+    steady_state = table(
+        steady_state_performance,
+        (
+            ("scope", "Launcher"),
+            ("job_id", "Job"),
+            ("sample_count", "Samples"),
+            ("valid", "Valid"),
+            ("invalid_reason", "Invalid reason"),
+            ("e2e_step_time_median", "E2E time median"),
+            ("e2e_step_time_p95", "E2E time p95"),
+            ("e2e_tokens_per_sec_per_gpu_median", "E2E tokens/s/GPU median"),
+            ("e2e_tokens_per_sec_per_gpu_p95", "E2E tokens/s/GPU p95"),
+            (
+                "e2e_tokens_per_sec_per_gpu_ratio_to_baseline",
+                "E2E throughput / baseline",
+            ),
+            ("generation_time_median", "Generation time median"),
+            ("generation_time_p95", "Generation time p95"),
+            (
+                "generation_tokens_per_sec_per_gpu_median",
+                "Generation tokens/s/GPU median",
+            ),
+            ("generation_tokens_per_sec_per_gpu_p95", "Generation tokens/s/GPU p95"),
+            (
+                "generation_tokens_per_sec_per_gpu_ratio_to_baseline",
+                "Generation throughput / baseline",
+            ),
+            ("policy_training_time_median", "Policy time median"),
+            ("policy_training_time_p95", "Policy time p95"),
+            (
+                "policy_training_tokens_per_sec_per_gpu_median",
+                "Policy tokens/s/GPU median",
+            ),
+            ("policy_training_tokens_per_sec_per_gpu_p95", "Policy tokens/s/GPU p95"),
+            (
+                "policy_training_tokens_per_sec_per_gpu_ratio_to_baseline",
+                "Policy throughput / baseline",
+            ),
+            ("logprob_time_median", "Logprob time median"),
+            ("logprob_time_p95", "Logprob time p95"),
+            ("logprob_tokens_per_sec_per_gpu_median", "Logprob tokens/s/GPU median"),
+            ("logprob_tokens_per_sec_per_gpu_p95", "Logprob tokens/s/GPU p95"),
+            (
+                "logprob_tokens_per_sec_per_gpu_ratio_to_baseline",
+                "Logprob throughput / baseline",
+            ),
+        ),
+    )
+    correctness_deltas = table(
+        steady_state_performance,
+        (
+            ("scope", "Launcher"),
+            ("job_id", "Job"),
+            ("reward_mean_delta", "Reward / accuracy delta"),
+            (
+                "generation_kl_error_delta",
+                "Token multiplication probability error delta",
+            ),
+            ("policy_loss_delta", "Policy loss delta"),
+            ("grad_norm_delta", "Gradient norm delta"),
+        ),
+    )
     accuracy = table(
         accuracy_rows,
         (
@@ -236,7 +306,9 @@ th {{ color: #a8ddff; }} code {{ color: #9de4ba; }} .table-wrap {{ overflow-x: a
 <section id="correctness"><h2>Correctness</h2>{correctness}</section>
 <section id="smoke"><h2>Smoke</h2>{smoke}</section>
 <section id="performance"><h2>Performance</h2>{performance}</section>
+<section id="steady-state-performance"><h2>Steady-state performance (steps 6–20)</h2>{steady_state}</section>
 <section id="accuracy"><h2>Accuracy</h2>{accuracy}</section>
+<section id="correctness-deltas"><h2>Correctness deltas (steps 6–20)</h2>{correctness_deltas}</section>
 <section id="failures"><h2>Failures</h2>{failures}</section>
 <section id="provenance"><h2>Provenance</h2>
 <table><tbody>
@@ -244,6 +316,9 @@ th {{ color: #a8ddff; }} code {{ color: #9de4ba; }} .table-wrap {{ overflow-x: a
 <tr><th>Megatron-Bridge SHA</th><td><code>{escape(bridge_sha)}</code></td></tr>
 <tr><th>Megatron-LM SHA</th><td><code>{escape(mcore_sha)}</code></td></tr>
 <tr><th>Nightly container SHA256</th><td><code>{escape(container_sha256)}</code></td></tr>
+<tr><th>Transformer Engine version</th><td><code>{escape(te_version)}</code></td></tr>
+<tr><th>Transformer Engine source commit</th><td><code>{escape(te_source_commit)}</code></td></tr>
+<tr><th>Transformer Engine overlay SHA256</th><td><code>{escape(te_overlay_sha256)}</code></td></tr>
 <tr><th>Model snapshot</th><td><code>{escape(model_snapshot)}</code></td></tr>
 <tr><th>Tokenizer snapshot</th><td><code>{escape(tokenizer_snapshot)}</code></td></tr>
 </tbody></table>
@@ -265,6 +340,9 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_MCORE_SHA,
     )
     parser.add_argument("--container-sha256", default="__REQUIRED_CONTAINER_SHA256__")
+    parser.add_argument("--te-version", required=True)
+    parser.add_argument("--te-source-commit", required=True)
+    parser.add_argument("--te-overlay-sha256", required=True)
     parser.add_argument("--model-snapshot", default=DEFAULT_MODEL_SNAPSHOT)
     parser.add_argument("--tokenizer-snapshot", default=DEFAULT_TOKENIZER_SNAPSHOT)
     return parser.parse_args()
@@ -277,6 +355,9 @@ def main() -> None:
     args.output.write_text(
         render_html(
             read_rows(args.input),
+            te_version=args.te_version,
+            te_source_commit=args.te_source_commit,
+            te_overlay_sha256=args.te_overlay_sha256,
             nemo_rl_sha=args.nemo_rl_sha,
             bridge_sha=args.bridge_sha,
             mcore_sha=args.mcore_sha,

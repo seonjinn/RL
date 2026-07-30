@@ -4,9 +4,11 @@
 import argparse
 import csv
 import json
+import math
+import statistics
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 CSV_FIELDS = (
     "scope",
@@ -77,6 +79,33 @@ OPTIONAL_METRIC_MAP = {
     "peak_reserved_gib": "memory/peak_reserved_gib",
 }
 
+PERFORMANCE_FIELDS = (
+    "e2e_step_time",
+    "e2e_tokens_per_sec_per_gpu",
+    "generation_time",
+    "generation_tokens_per_sec_per_gpu",
+    "policy_training_time",
+    "policy_training_tokens_per_sec_per_gpu",
+    "logprob_time",
+    "logprob_tokens_per_sec_per_gpu",
+)
+
+THROUGHPUT_FIELDS = (
+    "e2e_tokens_per_sec_per_gpu",
+    "generation_tokens_per_sec_per_gpu",
+    "policy_training_tokens_per_sec_per_gpu",
+    "logprob_tokens_per_sec_per_gpu",
+)
+
+CORRECTNESS_FIELDS = (
+    "reward_mean",
+    "generation_kl_error",
+    "policy_loss",
+    "grad_norm",
+)
+
+BASELINE_SCOPES = frozenset({"baseline-no-cg", "no_cg", "[no_cg]"})
+
 
 def _value(
     record: Mapping[str, Any],
@@ -116,6 +145,162 @@ def normalize_record(record: Mapping[str, Any]) -> dict[str, Any]:
     for output_field, metric_name in OPTIONAL_METRIC_MAP.items():
         row[output_field] = metrics.get(metric_name, record.get(output_field, ""))
     return row
+
+
+def steady_state_rows(
+    rows: Sequence[Mapping[str, str]],
+    *,
+    first_step: int = 6,
+    last_step: int = 20,
+) -> list[Mapping[str, str]]:
+    """Return rows whose optimizer step is within the inclusive measurement window."""
+    if first_step > last_step:
+        raise ValueError("first_step must not exceed last_step")
+
+    selected_rows = []
+    for row in rows:
+        step_text = row.get("step", "")
+        if step_text == "":
+            continue
+        try:
+            step = int(step_text)
+        except ValueError as error:
+            raise ValueError(
+                f"invalid step for {row.get('scope', '')}/{row.get('job_id', '')}: "
+                f"{step_text!r}"
+            ) from error
+        if first_step <= step <= last_step:
+            selected_rows.append(row)
+    return selected_rows
+
+
+def _format_number(value: float) -> str:
+    """Format finite aggregate values deterministically for CSV and HTML."""
+    if not math.isfinite(value):
+        raise ValueError(f"aggregate value must be finite, got {value!r}")
+    return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def _numeric_values(rows: Sequence[Mapping[str, str]], field: str) -> list[float]:
+    """Read present numeric values for one normalized metric field."""
+    values = []
+    for row in rows:
+        value = row.get(field, "")
+        if value == "":
+            continue
+        try:
+            values.append(float(value))
+        except ValueError as error:
+            raise ValueError(
+                f"invalid {field} for {row.get('scope', '')}/{row.get('job_id', '')}: "
+                f"{value!r}"
+            ) from error
+    return values
+
+
+def _median_and_p95(rows: Sequence[Mapping[str, str]], field: str) -> tuple[str, str]:
+    """Calculate the median and nearest-rank 95th percentile for one field."""
+    values = sorted(_numeric_values(rows, field))
+    if not values:
+        return "", ""
+    nearest_rank_index = math.ceil(0.95 * len(values)) - 1
+    return _format_number(statistics.median(values)), _format_number(
+        values[nearest_rank_index]
+    )
+
+
+def _median_value(rows: Sequence[Mapping[str, str]], field: str) -> float | None:
+    """Return the unrounded median used by comparisons, if the field is present."""
+    values = _numeric_values(rows, field)
+    return statistics.median(values) if values else None
+
+
+def _telemetry_maximum(rows: Sequence[Mapping[str, str]], field: str) -> int:
+    """Read the final cumulative telemetry count from per-step snapshots."""
+    maximum = 0
+    for row in rows:
+        value = row.get(field, "")
+        if value == "":
+            continue
+        try:
+            maximum = max(maximum, int(value))
+        except ValueError as error:
+            raise ValueError(
+                f"invalid {field} for {row.get('scope', '')}/{row.get('job_id', '')}: "
+                f"{value!r}"
+            ) from error
+    return maximum
+
+
+def _baseline_key(
+    grouped_rows: Mapping[tuple[str, str], Sequence[Mapping[str, str]]],
+) -> tuple[str, str] | None:
+    """Select the deterministic no-CG baseline aggregate, if present."""
+    baseline_keys = sorted(key for key in grouped_rows if key[0] in BASELINE_SCOPES)
+    return baseline_keys[0] if baseline_keys else None
+
+
+def aggregate_performance(rows: Sequence[Mapping[str, str]]) -> list[dict[str, str]]:
+    """Aggregate one steady-state row per scope and Slurm job.
+
+    Performance ratios and correctness deltas compare each group with the
+    deterministic no-CG baseline group. The caller selects the measurement
+    window with :func:`steady_state_rows` before invoking this function.
+    """
+    grouped_rows: dict[tuple[str, str], list[Mapping[str, str]]] = {}
+    for row in rows:
+        key = (row.get("scope", ""), row.get("job_id", ""))
+        grouped_rows.setdefault(key, []).append(row)
+
+    baseline_key = _baseline_key(grouped_rows)
+    baseline_rows = grouped_rows[baseline_key] if baseline_key is not None else []
+    baseline_medians = {
+        field: _median_value(baseline_rows, field)
+        for field in (*THROUGHPUT_FIELDS, *CORRECTNESS_FIELDS)
+    }
+
+    aggregates = []
+    for (scope, job_id), group_rows in sorted(grouped_rows.items()):
+        aggregate = {
+            "scope": scope,
+            "job_id": job_id,
+            "sample_count": str(len(group_rows)),
+            "valid": "true",
+            "invalid_reason": "",
+        }
+        for field in PERFORMANCE_FIELDS:
+            median, p95 = _median_and_p95(group_rows, field)
+            aggregate[f"{field}_median"] = median
+            aggregate[f"{field}_p95"] = p95
+
+        invalid_reasons = []
+        for field in ("eviction_count", "fallback_count"):
+            maximum = _telemetry_maximum(group_rows, field)
+            if maximum:
+                invalid_reasons.append(f"{field}={maximum}")
+        if invalid_reasons:
+            aggregate["valid"] = "false"
+            aggregate["invalid_reason"] = "; ".join(invalid_reasons)
+
+        for field in THROUGHPUT_FIELDS:
+            median = _median_value(group_rows, field)
+            baseline_median = baseline_medians[field]
+            if median is None or baseline_median in {None, 0.0}:
+                aggregate[f"{field}_ratio_to_baseline"] = ""
+            else:
+                aggregate[f"{field}_ratio_to_baseline"] = _format_number(
+                    median / baseline_median
+                )
+
+        for field in CORRECTNESS_FIELDS:
+            median = _median_value(group_rows, field)
+            baseline_median = baseline_medians[field]
+            if median is None or baseline_median is None:
+                aggregate[f"{field}_delta"] = ""
+            else:
+                aggregate[f"{field}_delta"] = _format_number(median - baseline_median)
+        aggregates.append(aggregate)
+    return aggregates
 
 
 def load_records(path: Path) -> list[Mapping[str, Any]]:
