@@ -22,7 +22,9 @@ srun --nodes=1 --ntasks=1 \
     set -euo pipefail
     cd ${REPO}
     test \"\$(git rev-parse HEAD)\" = ${EXPECTED_SHA}
-    test -z \"\$(git status --porcelain)\"
+    git diff --quiet --ignore-submodules=dirty -- . ':(exclude)uv.lock'
+    git diff --cached --quiet
+    test -z \"\$(git ls-files --others --exclude-standard)\"
     export PYTHONPATH=\${PWD}:\${PWD}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:\${PWD}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM
     export UV_CACHE_DIR=${ROOT}/uv_cache
     export NVTE_CUDA_ARCHS=100
@@ -32,6 +34,12 @@ srun --nodes=1 --ntasks=1 \
       tests/unit/models/megatron/test_megatron_data.py \
       tests/unit/models/megatron/test_megatron_setup.py \
       tests/unit/models/policy/test_megatron_worker.py \
+      tests/unit/experiments/test_mamba_moe_te_graph_launchers.py \
+      tests/unit/models/megatron/test_train.py::TestForwardWithPostProcessingFn::test_forward_with_loss_post_processor \
+      tests/unit/models/megatron/test_train.py::TestLossPostProcessor::test_loss_post_processor_uses_actual_boundaries_with_graph_sentinels \
+      tests/unit/models/megatron/test_train.py::TestLossPostProcessor::test_fused_loss_uses_actual_boundaries_with_graph_sentinels \
+      tests/unit/utils/test_venvs.py::test_create_local_venv_passes_shared_uv_environment_to_every_command \
+      tests/unit/utils/test_venvs.py::test_create_local_venv_preserves_uv_lock_timeout_override \
       tests/unit/models/policy/test_policy_validation.py::test_te_graph_train_sharding_propagates_packed_sequence_capacity \
       tests/unit/models/policy/test_policy_validation.py::test_te_graph_logprob_sharding_propagates_packed_sequence_capacity \
       tests/unit/models/policy/test_policy_validation.py::test_shutdown_succeeds_before_worker_group_is_initialized
