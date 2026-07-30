@@ -39,5 +39,6 @@ srun --nodes=1 --ntasks=1 \
     export PYTHONPATH=${RUNTIME_PREFIX}:\${PWD}:\${PWD}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${MCORE_ROOT}
     ${MCORE_DRIVER_PYTHON} -m pytest -q \
       ${MCORE_ROOT}/tests/unit_tests/transformer/test_packed_seq_params_cuda_graph.py::test_te_cuda_graph_partial_replay_flow \
-      ${MCORE_ROOT}/tests/unit_tests/transformer/test_packed_seq_params_cuda_graph.py::test_packed_partial_moe_post_mlp_inputs_use_logical_replay_extent
+      ${MCORE_ROOT}/tests/unit_tests/transformer/test_packed_seq_params_cuda_graph.py::test_packed_partial_moe_post_mlp_inputs_use_logical_replay_extent \
+      ${MCORE_ROOT}/tests/unit_tests/transformer/test_packed_seq_params_cuda_graph.py::test_te_cuda_graph_replay_exits_offload_when_packed_state_setup_fails
   "
