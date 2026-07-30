@@ -32,7 +32,8 @@ def _make_te_sequence_packing_policy() -> Policy:
     policy = Policy.__new__(Policy)
     policy.use_dynamic_batches = False
     policy.use_sequence_packing = True
-    policy.data_parallel_size = 2
+    policy.sharding_annotations = MagicMock()
+    policy.sharding_annotations.get_axis_size.return_value = 2
     policy.cfg = {
         "sequence_packing": {
             "train_mb_tokens": 32768,
