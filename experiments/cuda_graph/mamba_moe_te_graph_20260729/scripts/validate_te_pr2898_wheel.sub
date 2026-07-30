@@ -1,0 +1,309 @@
+#!/usr/bin/env bash
+#SBATCH --nodes=1
+#SBATCH --account=coreai_dlalgo_llm
+#SBATCH --job-name=coreai_dlalgo_llm-sna-cg-study.te-pr2898-wheel
+#SBATCH --partition=backfill
+#SBATCH --time=00:30:00
+#SBATCH --segment=1
+#SBATCH --gres=gpu:1
+#SBATCH --output=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/logs/te-pr2898-wheel-%j.out
+
+set -euo pipefail
+
+fail() {
+  echo "$*" >&2
+  exit 2
+}
+
+ROOT=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg
+TE_SOURCE=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/TransformerEngine-fp64-thd-cudagraph-20260730
+EXPECTED_TE_COMMIT=c16cb9a1d850f8b8228959145c98541958903b8f
+IMAGE=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/containers/nemo_rl_nightly_20260729_2472184.sqsh
+IMAGE_SHA256=cb8ae0ade02b876f1b3380c8375eb92f95033dece6b2bfdc678b47f2da1aea91
+ARTIFACT_DIR=${ROOT}/artifacts/transformer-engine/transformer-engine-pr2898-${EXPECTED_TE_COMMIT}
+ARTIFACT_WHEEL_DIR=${ARTIFACT_DIR}/wheel
+ARTIFACT_PROVENANCE=${ARTIFACT_DIR}/provenance.json
+INSTALL_ROOT=${ROOT}/runtimes/transformer-engine
+INSTALL_STAGING=
+PUBLISH_STAGING=
+LOCK_DIR=
+LOCK_HELD=false
+PUBLISHED=false
+
+cleanup() {
+  exit_code=$?
+  trap - EXIT
+  if [[ -n "${INSTALL_STAGING}" && -d "${INSTALL_STAGING}" ]]; then
+    case "${INSTALL_STAGING}" in
+      "${INSTALL_ROOT}"/.transformer-engine-pr2898-install-"${EXPECTED_TE_COMMIT}"-wheel-"${wheel_sha256}".*)
+        rm -rf -- "${INSTALL_STAGING}" || exit_code=2
+        ;;
+      *)
+        echo "Refusing to clean unexpected install staging path: ${INSTALL_STAGING}" >&2
+        exit_code=2
+        ;;
+    esac
+  fi
+  if [[ "${PUBLISHED}" != true && -n "${PUBLISH_STAGING}" && -d "${PUBLISH_STAGING}" ]]; then
+    case "${PUBLISH_STAGING}" in
+      "${INSTALL_ROOT}"/.transformer-engine-pr2898-publish-"${EXPECTED_TE_COMMIT}"-wheel-"${wheel_sha256}".*)
+        rm -rf -- "${PUBLISH_STAGING}" || exit_code=2
+        ;;
+      *)
+        echo "Refusing to clean unexpected publish staging path: ${PUBLISH_STAGING}" >&2
+        exit_code=2
+        ;;
+    esac
+  fi
+  if [[ "${LOCK_HELD}" == true ]]; then
+    rmdir -- "${LOCK_DIR}" || exit_code=2
+  fi
+  exit "${exit_code}"
+}
+
+trap cleanup EXIT
+
+test -f "${IMAGE}"
+test "$(sha256sum -- "${IMAGE}" | awk '{print $1}')" = "${IMAGE_SHA256}"
+test -d "${TE_SOURCE}/.git"
+test "$(git -C "${TE_SOURCE}" rev-parse HEAD)" = "${EXPECTED_TE_COMMIT}"
+git -C "${TE_SOURCE}" diff --quiet
+git -C "${TE_SOURCE}" diff --cached --quiet
+if [[ -n "$(git -C "${TE_SOURCE}" status --porcelain --untracked-files=all)" ]]; then
+  fail "Transformer Engine source must be clean"
+fi
+if git -C "${TE_SOURCE}" submodule status --recursive | grep -Eq '^[+-U]'; then
+  fail "Transformer Engine source has missing or modified submodules"
+fi
+test -f "${TE_SOURCE}/tests/pytorch/test_pr2898_backport_compat.py"
+test -f "${TE_SOURCE}/tests/pytorch/test_fused_router.py"
+test -d "${ARTIFACT_WHEEL_DIR}"
+test -f "${ARTIFACT_PROVENANCE}"
+
+artifact_entries=$(
+  find "${ARTIFACT_DIR}" -mindepth 1 -maxdepth 1 -exec basename {} \; |
+    LC_ALL=C sort
+)
+if [[ "${artifact_entries}" != $'provenance.json\nwheel' ]]; then
+  fail "Artifact whitelist mismatch in ${ARTIFACT_DIR}"
+fi
+wheel_count=$(
+  find "${ARTIFACT_WHEEL_DIR}" -maxdepth 1 -type f -name '*.whl' -print |
+    wc -l |
+    tr -d '[:space:]'
+)
+[[ "${wheel_count}" == 1 ]] || fail "Expected exactly one wheel, found ${wheel_count}"
+wheel=$(
+  find "${ARTIFACT_WHEEL_DIR}" -maxdepth 1 -type f -name '*.whl' -print
+)
+wheel_name=$(basename "${wheel}")
+sidecar=${wheel}.sha256
+wheel_entries=$(
+  find "${ARTIFACT_WHEEL_DIR}" -mindepth 1 -maxdepth 1 -exec basename {} \; |
+    LC_ALL=C sort
+)
+expected_wheel_entries=$(printf '%s\n%s' "${wheel_name}" "${wheel_name}.sha256")
+if [[ "${wheel_entries}" != "${expected_wheel_entries}" ]]; then
+  fail "Artifact whitelist mismatch in ${ARTIFACT_WHEEL_DIR}"
+fi
+test -f "${sidecar}"
+wheel_sha256=$(sha256sum -- "${wheel}" | awk '{print $1}')
+sidecar_lines=$(wc -l < "${sidecar}" | tr -d '[:space:]')
+[[ "${sidecar_lines}" == 1 ]] || fail "Wheel SHA256 sidecar must contain exactly one line"
+expected_sidecar="${wheel_sha256}  ${wheel_name}"
+if [[ "$(cat -- "${sidecar}")" != "${expected_sidecar}" ]]; then
+  fail "Wheel SHA256 sidecar mismatch for ${wheel_name}"
+fi
+
+if ! python3 - \
+  "${ARTIFACT_PROVENANCE}" \
+  "${TE_SOURCE}" \
+  "${EXPECTED_TE_COMMIT}" \
+  "${IMAGE}" \
+  "${IMAGE_SHA256}" \
+  "${wheel_name}" \
+  "${wheel_sha256}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path, source, commit, image, image_sha256, wheel, wheel_sha256 = sys.argv[1:]
+data = json.loads(Path(path).read_text())
+expected_keys = {
+    "source",
+    "commit",
+    "image",
+    "image_sha256",
+    "wheel",
+    "wheel_sha256",
+    "nvte_framework",
+    "nvte_cuda_archs",
+    "max_jobs",
+}
+expected = {
+    "source": source,
+    "commit": commit,
+    "image": image,
+    "image_sha256": image_sha256,
+    "wheel": wheel,
+    "wheel_sha256": wheel_sha256,
+    "nvte_framework": "pytorch",
+    "nvte_cuda_archs": "100",
+}
+if set(data) != expected_keys:
+    raise SystemExit(f"Unexpected provenance keys: {sorted(data)}")
+for key, value in expected.items():
+    if data.get(key) != value:
+        raise SystemExit(
+            f"Provenance mismatch for {key}: expected {value!r}, got {data.get(key)!r}"
+        )
+if type(data["max_jobs"]) is not int or not 1 <= data["max_jobs"] <= 16:
+    raise SystemExit(f"Invalid provenance max_jobs: {data['max_jobs']!r}")
+PY
+then
+  fail "Transformer Engine wheel provenance mismatch"
+fi
+
+INSTALL_DIR=${INSTALL_ROOT}/transformer-engine-pr2898-${EXPECTED_TE_COMMIT}-wheel-${wheel_sha256}
+LOCK_DIR=${INSTALL_DIR}.lock
+mkdir -p "${INSTALL_ROOT}"
+if ! mkdir "${LOCK_DIR}"; then
+  fail "Another install owns the immutable prefix lock: ${LOCK_DIR}"
+fi
+LOCK_HELD=true
+[[ ! -e "${INSTALL_DIR}" ]] || fail "Refusing to replace immutable install prefix: ${INSTALL_DIR}"
+INSTALL_STAGING=$(
+  mktemp -d \
+    "${INSTALL_ROOT}/.transformer-engine-pr2898-install-${EXPECTED_TE_COMMIT}-wheel-${wheel_sha256}.XXXXXX"
+)
+PUBLISH_STAGING=$(
+  mktemp -d \
+    "${INSTALL_ROOT}/.transformer-engine-pr2898-publish-${EXPECTED_TE_COMMIT}-wheel-${wheel_sha256}.XXXXXX"
+)
+INSTALL_SITE_PACKAGES=${INSTALL_STAGING}/site-packages
+mkdir -p "${INSTALL_SITE_PACKAGES}"
+
+srun --nodes=1 --ntasks=1 \
+  --container-image="${IMAGE}" \
+  --container-mounts=/lustre:/lustre \
+  bash -lc "
+    set -euo pipefail
+    test \"\$(sha256sum -- ${IMAGE} | awk '{print \$1}')\" = ${IMAGE_SHA256}
+    test \"\$(git -C ${TE_SOURCE} rev-parse HEAD)\" = ${EXPECTED_TE_COMMIT}
+    export UV_CACHE_DIR=${ROOT}/uv_cache
+    export PYTHONNOUSERSITE=1
+    uv pip install \
+      --python /opt/nemo_rl_venv/bin/python \
+      --target ${INSTALL_SITE_PACKAGES} \
+      --offline \
+      --no-index \
+      --no-deps \
+      ${wheel}
+    export PYTHONPATH=${INSTALL_SITE_PACKAGES}
+    /opt/nemo_rl_venv/bin/python - ${INSTALL_SITE_PACKAGES} <<'PY'
+import importlib
+from pathlib import Path
+import sys
+
+import torch
+import transformer_engine
+import transformer_engine.pytorch
+from transformer_engine.common import _get_shared_object_file
+
+install_prefix = Path(sys.argv[1]).resolve()
+transformer_engine_torch = importlib.import_module('transformer_engine_torch')
+resolved_paths = {
+    'transformer_engine': Path(transformer_engine.__file__).resolve(),
+    'transformer_engine.pytorch': Path(transformer_engine.pytorch.__file__).resolve(),
+    'transformer_engine_torch': Path(transformer_engine_torch.__file__).resolve(),
+    'libtransformer_engine': Path(_get_shared_object_file('core')).resolve(),
+}
+for name, path in resolved_paths.items():
+    try:
+        path.relative_to(install_prefix)
+    except ValueError as error:
+        raise SystemExit(
+            f'{name} resolved outside immutable install prefix: {path}'
+        ) from error
+if not torch.cuda.is_available():
+    raise SystemExit('CUDA is unavailable in the native Transformer Engine wheel gate')
+for name, path in resolved_paths.items():
+    print(f'{name}={path}')
+print(f'cuda_device={torch.cuda.get_device_name()}')
+PY
+    cd ${ROOT}
+    PYTHONPATH=${INSTALL_SITE_PACKAGES} \
+      /opt/nemo_rl_venv/bin/python -m pytest \
+      -q \
+      --import-mode=importlib \
+      ${TE_SOURCE}/tests/pytorch/test_pr2898_backport_compat.py \
+      ${TE_SOURCE}/tests/pytorch/test_fused_router.py::test_fused_moe_aux_loss_cuda_graph_capture
+  "
+
+mv -- "${INSTALL_SITE_PACKAGES}" "${PUBLISH_STAGING}/site-packages"
+rmdir -- "${INSTALL_STAGING}"
+INSTALL_STAGING=
+python3 - \
+  "${PUBLISH_STAGING}/provenance.json" \
+  "${ARTIFACT_DIR}" \
+  "${TE_SOURCE}" \
+  "${EXPECTED_TE_COMMIT}" \
+  "${IMAGE}" \
+  "${IMAGE_SHA256}" \
+  "${wheel_name}" \
+  "${wheel_sha256}" \
+  "${INSTALL_DIR}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+(
+    output,
+    artifact_dir,
+    source,
+    commit,
+    image,
+    image_sha256,
+    wheel,
+    wheel_sha256,
+    install_prefix,
+) = sys.argv[1:]
+Path(output).write_text(
+    json.dumps(
+        {
+            "artifact_dir": artifact_dir,
+            "source": source,
+            "commit": commit,
+            "image": image,
+            "image_sha256": image_sha256,
+            "wheel": wheel,
+            "wheel_sha256": wheel_sha256,
+            "install_prefix": install_prefix,
+            "tests": [
+                "tests/pytorch/test_pr2898_backport_compat.py",
+                (
+                    "tests/pytorch/test_fused_router.py::"
+                    "test_fused_moe_aux_loss_cuda_graph_capture"
+                ),
+            ],
+        },
+        indent=2,
+        sort_keys=True,
+    )
+    + "\n"
+)
+PY
+published_entries=$(
+  find "${PUBLISH_STAGING}" -mindepth 1 -maxdepth 1 -exec basename {} \; |
+    LC_ALL=C sort
+)
+if [[ "${published_entries}" != $'provenance.json\nsite-packages' ]]; then
+  fail "Install publication whitelist mismatch in ${PUBLISH_STAGING}"
+fi
+mv -T -- "${PUBLISH_STAGING}" "${INSTALL_DIR}"
+PUBLISHED=true
+PUBLISH_STAGING=
+rmdir -- "${LOCK_DIR}"
+LOCK_HELD=false
+trap - EXIT
+printf 'TE_INSTALL_PREFIX: %s\n' "${INSTALL_DIR}"

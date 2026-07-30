@@ -172,6 +172,36 @@ ranks. Torchrun's per-rank stdout is preserved under
 report exactly `2 passed` with no skip, or the gate fails. This gate must pass
 before submitting the 20-step matrix.
 
+## Native Transformer Engine wheel validation
+
+`scripts/validate_te_pr2898_wheel.sub` is the one-GPU GB200 install and runtime
+gate for the immutable wheel produced by the native build. It accepts only
+TransformerEngine commit `c16cb9a1d850f8b8228959145c98541958903b8f`, the
+commit-named artifact directory, and the staged nightly image with SHA256
+`cb8ae0ade02b876f1b3380c8375eb92f95033dece6b2bfdc678b47f2da1aea91`.
+Before allocating the container it requires exactly one wheel, its exact
+SHA256 sidecar, the build provenance schema and values, and the artifact
+whitelist of `provenance.json` plus `wheel/`.
+
+The gate installs the wheel offline and without dependencies into disposable
+staging. It validates that the Python package, PyTorch native extension, and
+core Transformer Engine shared library all resolve from that staged prefix.
+It then runs the static PR2898 compatibility suite and the fused MoE aux-loss
+CUDA graph capture/replay test from the pinned source checkout. Only a fully
+passing install is atomically published under
+`${ROOT}/runtimes/transformer-engine/` with both the TE commit and full wheel
+SHA256 in its immutable directory name. A per-prefix lock prevents concurrent
+publication; existing prefixes are never replaced, and failures remove both
+install and publication staging. This validation is separate from performance
+jobs and does not rebuild NeMo-RL environments.
+
+```bash
+sbatch --test-only \
+  experiments/cuda_graph/mamba_moe_te_graph_20260729/scripts/validate_te_pr2898_wheel.sub
+sbatch \
+  experiments/cuda_graph/mamba_moe_te_graph_20260729/scripts/validate_te_pr2898_wheel.sub
+```
+
 ## Local preflight
 
 Run one launcher:
