@@ -15,6 +15,4 @@ bash "${SCRIPT_DIR}/submit_performance.sh" \
   scopes/05_mamba.sh \
   scopes/03_moe_router.sh \
   variants/router_preprocess_overlap_false_moe_act_false.sh \
-  variants/attn_mamba_router_preprocess_overlap_false.sh \
-  pairs/00_drop_pad_baseline_no_cg.sh \
-  pairs/01_drop_pad_moe.sh
+  variants/attn_mamba_router_preprocess_overlap_false.sh

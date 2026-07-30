@@ -263,50 +263,33 @@ def test_moe_configuration_variants_are_persistent_and_not_graph_scopes() -> Non
         assert _assignment(script, "CHECKPOINTING_ENABLED") == "false"
 
 
-def test_drop_pad_moe_pair_is_isolated_and_matched() -> None:
-    """A standalone-MoE graph needs a drop-pad baseline with identical routing semantics."""
-    expected = {
-        "pairs/00_drop_pad_baseline_no_cg.sh": (
-            "none",
-            r"\[\]",
-            "mamba-moe-te-drop-pad-baseline-no-cg",
-        ),
-        "pairs/01_drop_pad_moe.sh": (
-            "transformer_engine",
-            r"\[moe\]",
-            "mamba-moe-te-drop-pad-moe",
-        ),
-    }
+@pytest.mark.parametrize(
+    "launcher",
+    [
+        "pairs/00_drop_pad_baseline_no_cg.sh",
+        "pairs/01_drop_pad_moe.sh",
+    ],
+)
+def test_drop_pad_moe_pair_fails_before_scheduler(launcher: str) -> None:
+    """Packed drop-and-pad experiments must not consume nodes and then deadlock."""
+    result = _run_script(launcher, CLUSTER="ptyche", TEST_ONLY="1")
 
-    for launcher, (implementation, modules, run_name) in expected.items():
-        result = _run_script(launcher, CLUSTER="ptyche", TEST_ONLY="1")
+    assert result.returncode == 2
+    assert "sequence packing with drop-and-pad MoE is unsupported" in result.stderr
+    assert "SBATCH:" not in result.stdout
 
-        assert result.returncode == 0, result.stderr
-        assert (
-            f"++policy.megatron_cfg.cuda_graph_impl={implementation}" in result.stdout
-        )
-        assert f"++policy.megatron_cfg.cuda_graph_modules={modules}" in result.stdout
-        assert "++policy.megatron_cfg.moe_expert_capacity_factor=1.0" in result.stdout
-        assert (
-            "++policy.megatron_cfg.moe_pad_expert_input_to_capacity=true"
-            in result.stdout
-        )
-        assert "grpo.max_num_steps=5" in result.stdout
-        assert "checkpointing.enabled=false" in result.stdout
-        assert "policy.sequence_packing.enabled=true" in result.stdout
-        assert (
-            f"logger.wandb.name={run_name}-nano-hybrid-ptyche-smoke-" in result.stdout
-        )
 
-    for legacy_launcher in (
+def test_dropless_moe_launchers_do_not_enable_drop_and_pad() -> None:
+    """Recommended partial scopes must retain the ordinary dropless routing path."""
+    for launcher in (
         "scopes/00_baseline_no_cg.sh",
         "scopes/02_moe.sh",
     ):
-        legacy = _run_script(legacy_launcher, CLUSTER="ptyche", TEST_ONLY="1")
+        result = _run_script(launcher, CLUSTER="ptyche", TEST_ONLY="1")
 
-        assert legacy.returncode == 0, legacy.stderr
-        assert "moe_expert_capacity_factor" not in legacy.stdout
-        assert "moe_pad_expert_input_to_capacity" not in legacy.stdout
+        assert result.returncode == 0, result.stderr
+        assert "moe_expert_capacity_factor" not in result.stdout
+        assert "moe_pad_expert_input_to_capacity" not in result.stdout
 
 
 def test_drop_pad_moe_pair_rejects_non_nano_recipes_before_scheduler() -> None:
@@ -935,7 +918,7 @@ def test_submit_performance_accepts_explicit_reusable_selection() -> None:
     assert "whole-layer" in result.stdout
 
 
-def test_submit_performance_accepts_drop_pad_pair_selection() -> None:
+def test_submit_performance_rejects_drop_pad_pair_before_scheduler() -> None:
     result = _run_script(
         "submit_performance.sh",
         CLUSTER="ptyche",
@@ -946,9 +929,9 @@ def test_submit_performance_accepts_drop_pad_pair_selection() -> None:
         ),
     )
 
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.count("TEST_ONLY: no submission performed") == 2
-    assert result.stdout.count("Submitting performance launcher:") == 2
+    assert result.returncode == 2
+    assert "sequence packing with drop-and-pad MoE is unsupported" in result.stderr
+    assert "SBATCH:" not in result.stdout
 
 
 def test_native_te_20step_comparison_reuses_exact_matched_launchers() -> None:
@@ -960,11 +943,11 @@ def test_native_te_20step_comparison_reuses_exact_matched_launchers() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.count("TEST_ONLY: no submission performed") == 8
-    assert result.stdout.count("Submitting performance launcher:") == 8
-    assert result.stdout.count("grpo.max_num_steps=20") == 8
-    assert result.stdout.count("checkpointing.enabled=false") >= 8
-    assert result.stdout.count("native-te-unit-test") > 8
+    assert result.stdout.count("TEST_ONLY: no submission performed") == 6
+    assert result.stdout.count("Submitting performance launcher:") == 6
+    assert result.stdout.count("grpo.max_num_steps=20") == 6
+    assert result.stdout.count("checkpointing.enabled=false") >= 6
+    assert result.stdout.count("native-te-unit-test") > 6
     for launcher in (
         "scopes/00_baseline_no_cg.sh",
         "scopes/17_attn.sh",
@@ -972,12 +955,10 @@ def test_native_te_20step_comparison_reuses_exact_matched_launchers() -> None:
         "scopes/03_moe_router.sh",
         "variants/router_preprocess_overlap_false_moe_act_false.sh",
         "variants/attn_mamba_router_preprocess_overlap_false.sh",
-        "pairs/00_drop_pad_baseline_no_cg.sh",
-        "pairs/01_drop_pad_moe.sh",
     ):
         assert f"Submitting performance launcher: {launcher}" in result.stdout
-    assert "drop-pad-baseline-no-cg" in result.stdout
-    assert "drop-pad-moe" in result.stdout
+    assert "drop-pad-baseline-no-cg" not in result.stdout
+    assert "drop-pad-moe" not in result.stdout
 
 
 def test_nemorl_integration_gate_uses_bridge_src_layout() -> None:

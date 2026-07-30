@@ -137,6 +137,9 @@ esac
 if [[ "${DROP_PAD_MOE_PAIR}" == true && "${MODEL}" != nano-hybrid ]]; then
   fail "Drop-pad MoE pair requires MODEL=nano-hybrid; Qwen Flex/HybridEP recipes are unsupported"
 fi
+if [[ "${DROP_PAD_MOE_PAIR}" == true ]]; then
+  fail "NeMo-RL sequence packing with drop-and-pad MoE is unsupported; use dropless [moe_router,moe_preprocess]"
+fi
 
 if [[ "${MODEL}" == qwen3-* && "${SCOPE}" == *mamba* ]]; then
   fail "${MODEL} recipe has no Mamba layers; Mamba graph scopes are invalid"
