@@ -3,6 +3,7 @@
 #SBATCH --account=coreai_dlalgo_llm
 #SBATCH --job-name=coreai_dlalgo_llm-sna-cg-study.nemorl-integration
 #SBATCH --partition=backfill
+#SBATCH --gpus=2
 #SBATCH --time=01:00:00
 #SBATCH --segment=1
 #SBATCH --output=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/logs/nemorl-integration-%j.out
@@ -31,6 +32,8 @@ MCORE_VENV=${ROOT}/venvs/nemorl-integration-mcore-${MCORE_VENV_KEY}
 : "${EXPECTED_SHA:?Submit with the immutable NeMo-RL commit SHA}"
 mkdir -p "${ROOT}/uv_cache"
 mkdir -p "$(dirname "${MCORE_VENV}")"
+MCORE_DISTRIBUTED_LOG_DIR=${ROOT}/logs/nemorl-integration-distributed-${SLURM_JOB_ID:?}
+mkdir -p "${MCORE_DISTRIBUTED_LOG_DIR}"
 test -f "${IMAGE}"
 test "$(sha256sum -- "${IMAGE}" | awk '{print $1}')" = "${IMAGE_SHA256}"
 test -f "${TE_FP64_WEAKREF_SOURCE}"
@@ -107,7 +110,35 @@ PY
       -q \
       \"\${MCORE_ROOT}/tests/unit_tests/transformer/test_packed_seq_params_cuda_graph.py\" \
       \"\${MCORE_ROOT}/tests/unit_tests/transformer/test_te_cuda_graph_bank.py\" \
-      \"\${MCORE_ROOT}/tests/unit_tests/transformer/test_cuda_graphs.py::test_moe_router_fp64_output_is_preserved_at_te_graph_boundary\" \
+      \"\${MCORE_ROOT}/tests/unit_tests/transformer/test_cuda_graphs.py::test_moe_router_fp64_output_is_preserved_at_te_graph_boundary\"
+    if ! \${UV_PROJECT_ENVIRONMENT}/bin/python -m torch.distributed.run \
+      --nproc_per_node 2 \
+      --nnodes 1 \
+      --master_addr localhost \
+      --master_port 29500 \
+      --node_rank 0 \
+      --log-dir \"${MCORE_DISTRIBUTED_LOG_DIR}\" \
+      --tee \"0:3\" \
+      --redirects \"3\" \
+      experiments/cuda_graph/mamba_moe_te_graph_20260729/run_pytest_with_te_overlay.py --expected-version ${TE_EXPECTED_VERSION} --expected-sha256 ${TE_FP64_WEAKREF_SHA256} -- \
+      -q -rs \
       \"\${MCORE_ROOT}/tests/unit_tests/transformer/test_cuda_graphs.py::test_packed_mamba_te_cuda_graph_parity\" \
-      \"\${MCORE_ROOT}/tests/unit_tests/transformer/test_cuda_graphs.py::test_te_graph_bank_schedule_switch_5_3_5\"
+      \"\${MCORE_ROOT}/tests/unit_tests/transformer/test_cuda_graphs.py::test_te_graph_bank_schedule_switch_5_3_5\"; then
+      exit 1
+    fi
+    for rank in 0 1; do
+      rank_stdout=\$(find \"${MCORE_DISTRIBUTED_LOG_DIR}\" -type f -path \"*/\${rank}/stdout.log\" -print -quit)
+      if [[ -z \"\${rank_stdout}\" ]]; then
+        echo \"Missing distributed MCore stdout for rank \${rank}\" >&2
+        exit 1
+      fi
+      if ! grep -Eq \"(^|[^0-9])2 passed([[:space:]]|$)\" \"\${rank_stdout}\"; then
+        echo \"Distributed MCore focused targets did not both pass on rank \${rank}\" >&2
+        exit 1
+      fi
+      if grep -Eiq \"SKIPPED|[0-9]+ skipped\" \"\${rank_stdout}\"; then
+        echo \"Distributed MCore focused target skipped on rank \${rank}\" >&2
+        exit 1
+      fi
+    done
   "

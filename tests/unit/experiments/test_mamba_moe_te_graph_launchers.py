@@ -529,7 +529,6 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
     assert 'exec 9>\\"\\${UV_PROJECT_ENVIRONMENT}.lock\\"' in script
     assert script.count(wrapper_command) == 2
     assert script.count("/opt/nemo_rl_venv/bin/python") == 1
-    assert script.count("run_pytest_with_te_overlay.py") == 2
     assert "export NVTE_CUDA_ARCHS=100" in script
     assert "#SBATCH --time=01:00:00" in script
 
@@ -697,6 +696,56 @@ def test_nemorl_integration_gate_validates_fp64_overlay_and_mcore_graph_suite() 
     assert "tests/unit/models/megatron/test_cuda_graph_lifecycle.py" in script
 
 
+def test_nemorl_integration_gate_runs_required_mcore_targets_distributed() -> None:
+    script = (
+        EXPERIMENT_DIR / "scripts" / "validate_nemorl_integration.sub"
+    ).read_text()
+    distributed_command = (
+        "\\${UV_PROJECT_ENVIRONMENT}/bin/python -m torch.distributed.run"
+    )
+    distributed_index = script.index(distributed_command)
+    mcore_root_index = script.index("MCORE_ROOT=")
+    single_rank_mcore_block = script[mcore_root_index:distributed_index]
+    distributed_block = script[distributed_index:]
+    distributed_targets = (
+        "${MCORE_ROOT}/tests/unit_tests/transformer/"
+        "test_cuda_graphs.py::test_packed_mamba_te_cuda_graph_parity",
+        "${MCORE_ROOT}/tests/unit_tests/transformer/"
+        "test_cuda_graphs.py::test_te_graph_bank_schedule_switch_5_3_5",
+    )
+
+    assert "--nproc_per_node 2" in distributed_block
+    assert "#SBATCH --gpus=2" in script
+    assert "--nnodes 1" in distributed_block
+    assert "--master_addr localhost" in distributed_block
+    assert "--node_rank 0" in distributed_block
+    assert r'--log-dir \"${MCORE_DISTRIBUTED_LOG_DIR}\"' in distributed_block
+    assert r'--tee \"0:3\"' in distributed_block
+    assert r'--redirects \"3\"' in distributed_block
+    assert "run_pytest_with_te_overlay.py" in distributed_block
+    assert " -m pytest" not in distributed_block
+    assert "-rs" in distributed_block
+    assert (
+        r'rank_stdout=\$(find \"${MCORE_DISTRIBUTED_LOG_DIR}\" -type f '
+        r'-path \"*/\${rank}/stdout.log\" -print -quit)'
+    ) in distributed_block
+    assert "for rank in 0 1; do" in distributed_block
+    assert "Missing distributed MCore stdout for rank" in distributed_block
+    assert r'grep -Eq \"(^|[^0-9])2 passed([[:space:]]|$)\"' in distributed_block
+    assert r'grep -Eiq \"SKIPPED|[0-9]+ skipped\"' in distributed_block
+    assert "Distributed MCore focused target skipped on rank" in distributed_block
+    for target in distributed_targets:
+        assert target not in single_rank_mcore_block
+        assert distributed_block.count(target) == 1
+    assert (
+        "MCORE_DISTRIBUTED_LOG_DIR=${ROOT}/logs/"
+        "nemorl-integration-distributed-${SLURM_JOB_ID:?}" in script
+    )
+    assert "mkdir -p \"${MCORE_DISTRIBUTED_LOG_DIR}\"" in script
+    assert "mktemp" not in script
+    assert "rm -rf" not in script
+
+
 def test_nemorl_integration_gate_uses_the_same_immutable_python_for_both_suites() -> None:
     script_path = EXPERIMENT_DIR / "scripts" / "validate_nemorl_integration.sub"
     helper_path = EXPERIMENT_DIR / "run_pytest_with_te_overlay.py"
@@ -705,7 +754,7 @@ def test_nemorl_integration_gate_uses_the_same_immutable_python_for_both_suites(
     assert helper_path.is_file()
     assert "uv run" not in script
     assert "NRL_FORCE_REBUILD_VENVS" not in script
-    assert script.count("run_pytest_with_te_overlay.py") == 2
+    assert script.count("run_pytest_with_te_overlay.py") == 3
     assert "tests/unit/models/megatron/test_cuda_graph_lifecycle.py" in script
     assert "${MCORE_ROOT}/tests/unit_tests/transformer/test_te_cuda_graph_bank.py" in script
 

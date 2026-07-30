@@ -93,8 +93,14 @@ installation. The immutable archive prefix remains first in `PYTHONPATH`, so
 the mounted Transformer Engine archive is still what the validator and pytest
 import. The gate also runs the packed-sequence, Transformer Engine graph-bank,
 FP64 MoE-router boundary, packed-Mamba parity, and `5→3→5` graph-bank schedule
-tests from the pinned Megatron-LM checkout. This gate must pass before
-submitting the 20-step matrix.
+tests from the pinned Megatron-LM checkout. The first three MCore selections
+remain single-rank to avoid changing unrelated file-level test topology. The
+two world-size-dependent parity and `5→3→5` nodes instead run through the same
+venv interpreter and overlay validator via `torch.distributed.run` with two
+ranks. Torchrun's per-rank stdout is preserved under
+`${ROOT}/logs/nemorl-integration-distributed-${SLURM_JOB_ID}`; each rank must
+report exactly `2 passed` with no skip, or the gate fails. This gate must pass
+before submitting the 20-step matrix.
 
 ## Local preflight
 
