@@ -323,6 +323,15 @@ def validate_cuda_graph_request(config: PolicyConfig) -> tuple[str, ...]:
     megatron_cfg = config["megatron_cfg"]
     implementation = megatron_cfg.get("cuda_graph_impl")
     modules = normalize_cuda_graph_modules(megatron_cfg.get("cuda_graph_modules"))
+    sequence_packing = bool(config.get("sequence_packing", {}).get("enabled", False))
+
+    if sequence_packing and megatron_cfg.get("moe_pad_expert_input_to_capacity"):
+        raise ValueError(
+            "NeMo-RL sequence packing does not support drop-and-pad MoE because "
+            "rank-local packed lengths can produce inconsistent expert capacities "
+            "across an expert-parallel group. Use dropless MoE partial CUDA Graph "
+            "scopes such as [moe_router,moe_preprocess]."
+        )
 
     cache_field = "cuda_graph_max_cached_schedules"
     if implementation != "transformer_engine" and cache_field in megatron_cfg:
@@ -388,7 +397,6 @@ def validate_cuda_graph_request(config: PolicyConfig) -> tuple[str, ...]:
             minimum=1,
         )
 
-    sequence_packing = bool(config.get("sequence_packing", {}).get("enabled", False))
     if sequence_packing:
         if packed_graph is not True:
             raise ValueError(
