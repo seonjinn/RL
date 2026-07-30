@@ -498,19 +498,33 @@ def _get_module_from_param_name(model, name: str):
 def _is_fp8_weight(name, model):
     if name not in fp8_state.seen_params:
         fp8_state.seen_params.add(name)
-        # Filter out bias params
-        if name.endswith("weight"):
+        grouped_expert_target = None
+        if name.endswith(".experts.gate_up_proj"):
+            grouped_expert_target = "w13_weight"
+        elif name.endswith(".experts.down_proj"):
+            grouped_expert_target = "w2_weight"
+
+        # Grouped-GEMM expert exports omit the conventional ".weight" suffix.
+        if name.endswith("weight") or grouped_expert_target is not None:
             module = _get_module_from_param_name(model, name)
             # We currently only quantize linear layers
-            if (
+            is_fp8_linear = (
                 isinstance(module, LinearBase)
                 and module.weight.dtype == torch.float8_e4m3fn
-                or (
-                    isinstance(module, RoutedExperts)
-                    and module.w13_weight.dtype == torch.float8_e4m3fn
-                    and module.w2_weight.dtype == torch.float8_e4m3fn
-                )
-            ):
+            )
+            is_fp8_moe = False
+            if isinstance(module, RoutedExperts):
+                if grouped_expert_target is None:
+                    is_fp8_moe = (
+                        module.w13_weight.dtype == torch.float8_e4m3fn
+                        and module.w2_weight.dtype == torch.float8_e4m3fn
+                    )
+                else:
+                    is_fp8_moe = (
+                        getattr(module, grouped_expert_target).dtype
+                        == torch.float8_e4m3fn
+                    )
+            if is_fp8_linear or is_fp8_moe:
                 fp8_state.fp8_param_names.add(name)
     return name in fp8_state.fp8_param_names
 

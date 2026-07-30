@@ -23,6 +23,7 @@ no GPU).
 skipped where vllm is unavailable.
 """
 
+import contextlib
 from types import SimpleNamespace
 
 import pytest
@@ -35,6 +36,7 @@ from nemo_rl.models.generation.vllm.vllm_backend import (  # noqa: E402
 )
 from nemo_rl.weight_sync.nccl_reshard_utils import (  # noqa: E402
     HFToLocalParamMap,
+    MeshInfo,
 )
 
 pytestmark = pytest.mark.vllm
@@ -315,6 +317,44 @@ def test_build_hf_to_local_param_map_specs_and_roundtrip():
     assert torch.equal(w13[:, 0:Pl, :], torch.full_like(w13[:, 0:Pl, :], 5.0))
 
 
+@pytest.mark.parametrize(
+    ("dtype", "shape", "error"),
+    [
+        (torch.float32, (32, 64), "dtype"),
+        (torch.bfloat16, (32, 32), "local shape"),
+    ],
+)
+def test_prepare_refit_rejects_untransformed_destination_metadata_mismatch(
+    dtype,
+    shape,
+    error,
+):
+    from torch.distributed.tensor.placement_types import Replicate
+
+    name = "model.layers.0.mlp.down_proj.weight"
+    refit_info = {
+        "gen_tp_size": 1,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": name,
+                    "global_shape": [32, 64],
+                    "dtype": "torch.bfloat16",
+                    "src_mesh_info": MeshInfo(torch.arange(1)),
+                    "src_placements": [Replicate()],
+                    "dst_mesh_info": MeshInfo(torch.arange(1)),
+                    "dst_placements": [Replicate()],
+                }
+            ]
+        },
+    }
+    ext = _make_ext({name: torch.empty(shape, dtype=dtype)})
+
+    with pytest.raises(ValueError, match=error):
+        ext.prepare_nccl_reshard_refit_info(refit_info)
+
+
 def test_build_mxfp8_map_receives_value_and_scale_into_matching_slices():
     H = 32
     refit_info = {
@@ -403,9 +443,7 @@ def test_build_mxfp8_moe_map_uses_matching_w13_and_w2_scale_slices():
         {
             "model.layers.0.mlp.experts.w13_weight": w13,
             "model.layers.0.mlp.experts.w2_weight": w2,
-            "model.layers.0.mlp.experts.w13_weight_scale_from_checkpoint": (
-                w13_scale
-            ),
+            "model.layers.0.mlp.experts.w13_weight_scale_from_checkpoint": (w13_scale),
             "model.layers.0.mlp.experts.w2_weight_scale_from_checkpoint": w2_scale,
         }
     )
@@ -458,3 +496,143 @@ def test_build_mxfp8_map_rejects_missing_checkpoint_scale_target():
 
     with pytest.raises(ValueError, match="weight_scale_from_checkpoint"):
         ext.build_hf_to_local_param_map(refit_info)
+
+
+def test_mxfp8_receive_transfers_value_then_scale_before_merged_post(
+    monkeypatch,
+):
+    from nemo_rl.models.generation.vllm import vllm_backend
+    from nemo_rl.weight_sync import xferdtensor as xferdtensor_module
+
+    src_mesh = object()
+    dst_mesh = object()
+    value_src_placements = [object()]
+    value_dst_placements = [object()]
+    scale_src_placements = [object()]
+    scale_dst_placements = [object()]
+    group = object()
+    stage_stream = object()
+    call_order = []
+
+    param_info = {
+        "name": "model.layers.0.mlp.gate_proj.weight",
+        "global_shape": [128, 32],
+        "refit_transform": "mxfp8",
+        "scale_global_shape": [128, 1],
+        "scale_dtype": "torch.uint8",
+        "src_mesh_info": src_mesh,
+        "src_placements": value_src_placements,
+        "dst_mesh_info": dst_mesh,
+        "dst_placements": value_dst_placements,
+        "scale_src_placements": scale_src_placements,
+        "scale_dst_placements": scale_dst_placements,
+    }
+    mapping_refit_info = {
+        "gen_tp_size": 2,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                param_info,
+                {
+                    "name": "model.layers.0.mlp.up_proj.weight",
+                    "global_shape": [128, 32],
+                    "refit_transform": "mxfp8",
+                    "scale_global_shape": [128, 1],
+                    "scale_dtype": "torch.uint8",
+                },
+            ]
+        },
+    }
+    receive_refit_info = {
+        **mapping_refit_info,
+        "per_layer_params": {"model.layers.0": [param_info]},
+    }
+    gate_up = torch.zeros(128, 32, dtype=torch.float8_e4m3fn)
+    gate_up_scale = torch.zeros(128, 1, dtype=torch.uint8)
+    ext = _make_ext(
+        {
+            "model.layers.0.mlp.gate_up_proj.weight": gate_up,
+            "model.layers.0.mlp.gate_up_proj.weight_scale_from_checkpoint": (
+                gate_up_scale
+            ),
+        }
+    )
+    ext.nccl_reshard_refit_info = receive_refit_info
+    ext.hf_to_local_param_map = ext.build_hf_to_local_param_map(mapping_refit_info)
+    ext.pp_comm_groups = {0: group}
+    ext.model_runner.vllm_config = object()
+    ext.model_config = object()
+    ext.device = object()
+    ext._receive_and_load_misc_params = lambda: call_order.append("misc")
+
+    spec = ext.hf_to_local_param_map.get(param_info["name"])
+    assert spec is not None and spec.post is not None
+    original_post = spec.post
+
+    def recording_post(ctx):
+        assert call_order == ["value", "scale"]
+        call_order.append("post")
+        original_post(ctx)
+
+    spec.post = recording_post
+
+    def recording_xferdtensor(
+        src_tensor,
+        actual_src_mesh,
+        actual_src_placements,
+        dst_tensor,
+        actual_dst_mesh,
+        actual_dst_placements,
+        actual_group,
+        stream,
+    ):
+        assert src_tensor is None
+        assert actual_src_mesh is src_mesh
+        assert actual_dst_mesh is dst_mesh
+        assert actual_group is group
+        assert stream is stage_stream
+        if dst_tensor._local_tensor.dtype == torch.float8_e4m3fn:
+            assert tuple(dst_tensor.shape) == (128, 32)
+            assert actual_src_placements is value_src_placements
+            assert actual_dst_placements is value_dst_placements
+            call_order.append("value")
+            dst_tensor._local_tensor.fill_(1.0)
+        else:
+            assert call_order == ["value"]
+            assert tuple(dst_tensor.shape) == (128, 1)
+            assert actual_src_placements is scale_src_placements
+            assert actual_dst_placements is scale_dst_placements
+            call_order.append("scale")
+            dst_tensor._local_tensor.fill_(127)
+
+    class FakeEvent:
+        def record(self):
+            return None
+
+    monkeypatch.setattr(xferdtensor_module, "xferdtensor", recording_xferdtensor)
+    monkeypatch.setattr(vllm_backend.torch.cuda, "Stream", lambda: stage_stream)
+    monkeypatch.setattr(
+        vllm_backend.torch.cuda,
+        "stream",
+        lambda stream: contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(vllm_backend.torch.cuda, "Event", FakeEvent)
+    monkeypatch.setattr(vllm_backend.torch.cuda, "synchronize", lambda: None)
+    monkeypatch.setattr(vllm_backend.torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(vllm_backend.torch.distributed, "get_rank", lambda: 1)
+    monkeypatch.setattr(
+        "vllm.config.set_current_vllm_config",
+        lambda _: contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(
+        "vllm.model_executor.model_loader.utils.process_weights_after_loading",
+        lambda *_: call_order.append("process"),
+    )
+
+    assert ext.nccl_reshard_refit() is True
+    assert call_order == ["value", "scale", "post", "misc", "process"]
+    assert torch.equal(gate_up[:64], torch.ones_like(gate_up[:64]))
+    assert torch.equal(
+        gate_up_scale[:64],
+        torch.full_like(gate_up_scale[:64], 127),
+    )

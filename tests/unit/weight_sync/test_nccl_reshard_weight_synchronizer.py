@@ -1,0 +1,175 @@
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from nemo_rl.weight_sync.nccl_reshard_weight_synchronizer import (
+    NcclReshardWeightSynchronizer,
+)
+
+
+def _build_synchronizer(
+    events: list[str], updated_info: dict[str, object] | None
+) -> NcclReshardWeightSynchronizer:
+    bf16_info = {"model.layers.0.mlp.down_proj.weight": {"dtype": "torch.bfloat16"}}
+    prequant_names = ["model.layers.0.mlp.down_proj.weight"]
+    mxfp8_info = updated_info
+    nccl_reshard_info = {"layer_names": ["model.layers.0"]}
+
+    policy = MagicMock()
+    policy.cfg = {
+        "megatron_cfg": {
+            "tensor_model_parallel_size": 1,
+            "expert_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 1,
+        },
+        "generation": {"vllm_cfg": {}},
+    }
+    policy.init_collective.return_value = []
+    policy.init_nccl_reshard_comm_group.return_value = []
+
+    def policy_prepare_refit_info() -> dict[str, object]:
+        events.append("policy.prepare_refit_info")
+        return bf16_info
+
+    def policy_enable_refit_prequantize(
+        names: list[str],
+    ) -> dict[str, object] | None:
+        assert names == prequant_names
+        events.append("policy.enable_refit_prequantize")
+        return mxfp8_info
+
+    def policy_prepare_nccl_reshard_refit_info(
+        *_args: object,
+    ) -> dict[str, object]:
+        events.append("policy.prepare_nccl_reshard_refit_info")
+        return nccl_reshard_info
+
+    policy.prepare_refit_info.side_effect = policy_prepare_refit_info
+    policy.enable_refit_prequantize.side_effect = policy_enable_refit_prequantize
+    policy.prepare_nccl_reshard_refit_info.side_effect = (
+        policy_prepare_nccl_reshard_refit_info
+    )
+
+    generation = MagicMock()
+    generation.init_collective.return_value = []
+    generation.init_nccl_reshard_comm_group.return_value = []
+
+    def generation_prepare_refit_info(
+        state_dict_info: dict[str, object],
+    ) -> list[str] | None:
+        if state_dict_info is bf16_info:
+            events.append("generation.prepare_refit_info:bf16")
+            return prequant_names
+        assert state_dict_info is mxfp8_info
+        events.append("generation.prepare_refit_info:mxfp8")
+        return None
+
+    def generation_prepare_nccl_reshard_refit_info(
+        refit_info: dict[str, object],
+    ) -> None:
+        assert refit_info is nccl_reshard_info
+        events.append("generation.prepare_nccl_reshard_refit_info")
+
+    generation.prepare_refit_info.side_effect = generation_prepare_refit_info
+    generation.prepare_nccl_reshard_refit_info.side_effect = (
+        generation_prepare_nccl_reshard_refit_info
+    )
+
+    train_cluster = MagicMock()
+    train_cluster.world_size.return_value = 1
+    train_cluster.num_gpus_per_node = 1
+    train_cluster.get_master_address_and_port.return_value = ("127.0.0.1", 29500)
+    train_cluster.get_available_address_and_port.return_value = (
+        "127.0.0.1",
+        29501,
+    )
+
+    inference_cluster = MagicMock()
+    inference_cluster.world_size.return_value = 1
+
+    return NcclReshardWeightSynchronizer(
+        policy,
+        generation,
+        train_cluster,
+        inference_cluster,
+    )
+
+
+@patch("nemo_rl.weight_sync.nccl_reshard_weight_synchronizer.ray.get")
+def test_init_communicator_completes_prequant_handshake_in_order(
+    _mock_ray_get: MagicMock,
+) -> None:
+    events: list[str] = []
+    updated_info = {
+        "model.layers.0.mlp.down_proj.weight": {"dtype": "torch.float8_e4m3fn"}
+    }
+    synchronizer = _build_synchronizer(events, updated_info)
+
+    synchronizer.init_communicator()
+
+    assert events == [
+        "policy.prepare_refit_info",
+        "generation.prepare_refit_info:bf16",
+        "policy.enable_refit_prequantize",
+        "generation.prepare_refit_info:mxfp8",
+        "policy.prepare_nccl_reshard_refit_info",
+        "generation.prepare_nccl_reshard_refit_info",
+    ]
+
+
+@patch("nemo_rl.weight_sync.nccl_reshard_weight_synchronizer.ray.get")
+def test_init_communicator_rejects_missing_prequant_metadata(
+    _mock_ray_get: MagicMock,
+) -> None:
+    events: list[str] = []
+    synchronizer = _build_synchronizer(events, None)
+
+    with pytest.raises(RuntimeError, match="did not return updated metadata"):
+        synchronizer.init_communicator()
+
+    assert events == [
+        "policy.prepare_refit_info",
+        "generation.prepare_refit_info:bf16",
+        "policy.enable_refit_prequantize",
+    ]
+
+
+@patch("nemo_rl.weight_sync.nccl_reshard_weight_synchronizer.ray.get")
+def test_init_communicator_preserves_untransformed_metadata_path(
+    _mock_ray_get: MagicMock,
+) -> None:
+    events: list[str] = []
+    synchronizer = _build_synchronizer(events, {})
+
+    def generation_prepare_refit_info(
+        _state_dict_info: dict[str, object],
+    ) -> None:
+        events.append("generation.prepare_refit_info:untransformed")
+
+    synchronizer._generation.prepare_refit_info.side_effect = (
+        generation_prepare_refit_info
+    )
+
+    synchronizer.init_communicator()
+
+    assert events == [
+        "policy.prepare_refit_info",
+        "generation.prepare_refit_info:untransformed",
+        "policy.prepare_nccl_reshard_refit_info",
+        "generation.prepare_nccl_reshard_refit_info",
+    ]
+    synchronizer._policy.enable_refit_prequantize.assert_not_called()

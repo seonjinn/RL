@@ -79,11 +79,15 @@ def mxfp8_e4m3_quantize_for_refit(
                 "FlashInfer so it matches the vLLM receiver quantization path."
             ) from exc
         else:
+            orig_shape = x.shape
+            x_2d = x.reshape(-1, x.shape[-1])
             x_q, x_scales = flashinfer_mxfp8_quantize(
-                x, is_sf_swizzled_layout=False, alignment=32
+                x_2d, is_sf_swizzled_layout=False, alignment=32
             )
-            if x_scales.ndim == 1 and x.ndim == 2:
-                x_scales = x_scales.view(x.size(0), -1)
+            x_q = x_q.reshape(orig_shape)
+            x_scales = x_scales.reshape(
+                *orig_shape[:-1], orig_shape[-1] // MXFP8_BLOCK_SIZE
+            )
     if x_q is None or x_scales is None:
         x_q, x_scales = _mxfp8_e4m3_quantize_torch(x)
     x_scales = torch.squeeze(x_scales, dim=-1)

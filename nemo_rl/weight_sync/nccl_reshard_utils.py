@@ -227,6 +227,25 @@ _STR_TO_DTYPE = {
     "uint8": torch.uint8,
 }
 
+_MXFP8_BLOCK_SIZE = 32
+_TRANSFORM_METADATA_KEYS = frozenset({"refit_transform", "scale_shape", "scale_dtype"})
+
+
+def _restore_dtype(
+    value: Any,
+    *,
+    param_name: str,
+    field_name: str,
+) -> torch.dtype:
+    """Restore a serialized torch dtype or validate an existing dtype."""
+    if isinstance(value, torch.dtype):
+        return value
+    if isinstance(value, str) and value in _STR_TO_DTYPE:
+        return _STR_TO_DTYPE[value]
+    raise ValueError(
+        f"nccl_reshard: {param_name!r} has unsupported {field_name} {value!r}."
+    )
+
 
 # =========================================================================
 # Placement restoration (undo msgspec dict-serialization on the wire)
@@ -250,16 +269,24 @@ def _restore_placement(p):
 
 
 def restore_refit_info_placements(refit_info: dict) -> dict:
-    """Restore placements and meshes in ``refit_info`` after msgspec transit.
+    """Restore dtypes, placements, and meshes after msgspec transit.
 
     vLLM's collective_rpc encodes ``Shard``/``Replicate`` as plain dicts and
-    ``MeshInfo`` as a dict with a nested mesh list.  This rebuilds the
-    original Python objects in place so that the canonical
+    ``MeshInfo`` as a dict with a nested mesh list. Dtypes arrive as strings.
+    This rebuilds the original Python objects in place so that the canonical
     ``xferdtensor`` (which relies on ``isinstance(p, Shard)``) works
     correctly.  Idempotent — safe to call on already-restored ``refit_info``.
     """
     for layer_name in refit_info.get("layer_names", []):
         for param_info in refit_info.get("per_layer_params", {}).get(layer_name, []):
+            param_name = param_info.get("name", "<unknown>")
+            for key in ("dtype", "scale_dtype"):
+                if key in param_info:
+                    param_info[key] = _restore_dtype(
+                        param_info[key],
+                        param_name=param_name,
+                        field_name=key,
+                    )
             param_info["src_placements"] = [
                 _restore_placement(p) for p in param_info["src_placements"]
             ]
@@ -268,9 +295,7 @@ def restore_refit_info_placements(refit_info: dict) -> dict:
             ]
             for key in ("scale_src_placements", "scale_dst_placements"):
                 if key in param_info:
-                    param_info[key] = [
-                        _restore_placement(p) for p in param_info[key]
-                    ]
+                    param_info[key] = [_restore_placement(p) for p in param_info[key]]
             # Reconstruct MeshInfo if serialized to dict
             for key in ("src_mesh_info", "dst_mesh_info"):
                 mesh = param_info.get(key)
@@ -370,6 +395,142 @@ def get_placements(param_name: str, dim_map: dict, ndim: int) -> list:
             placements[dim_map["tp"]] = Shard(tp_dim)
 
     return placements
+
+
+def _derive_scale_placements(value_placements: list[Any]) -> list[Any]:
+    """Derive scale sharding from the parent value tensor's logical axes."""
+    scale_placements: list[Any] = []
+    for placement in value_placements:
+        if isinstance(placement, Shard):
+            scale_placements.append(Shard(placement.dim))
+        elif isinstance(placement, Replicate):
+            scale_placements.append(Replicate())
+        else:
+            raise ValueError(
+                "nccl_reshard: MXFP8 scale placement requires Shard or Replicate "
+                f"value placements, got {placement!r}."
+            )
+    return scale_placements
+
+
+def _validate_k_shard_alignment(
+    *,
+    param_name: str,
+    global_shape: tuple[int, ...],
+    mesh_info: MeshInfo,
+    placements: list[Any],
+    side: str,
+) -> None:
+    """Require every local K interval to contain whole MXFP8 blocks."""
+    k_axis = len(global_shape) - 1
+    shard_count = 1
+    mesh_shape = tuple(int(size) for size in mesh_info.mesh.shape)
+    for mesh_dim, placement in enumerate(placements):
+        if isinstance(placement, Shard) and placement.dim == k_axis:
+            shard_count *= mesh_shape[mesh_dim]
+
+    global_k = global_shape[k_axis]
+    base_width, remainder = divmod(global_k, shard_count)
+    local_widths = {base_width}
+    if remainder:
+        local_widths.add(base_width + 1)
+    if any(width % _MXFP8_BLOCK_SIZE for width in local_widths):
+        raise ValueError(
+            f"nccl_reshard: {param_name!r} has an unaligned {side} K-axis shard; "
+            f"global K={global_k}, shard count={shard_count}, "
+            f"local widths={sorted(local_widths)}, block size={_MXFP8_BLOCK_SIZE}."
+        )
+
+
+def _build_transform_metadata(
+    param_name: str,
+    meta: dict[str, Any],
+    info: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    """Validate and build optional value/scale transfer metadata."""
+    present_keys = _TRANSFORM_METADATA_KEYS.intersection(meta)
+    if not present_keys:
+        return None
+    if present_keys != _TRANSFORM_METADATA_KEYS:
+        missing_keys = sorted(_TRANSFORM_METADATA_KEYS - present_keys)
+        raise ValueError(
+            f"nccl_reshard: {param_name!r} has incomplete transform metadata; "
+            f"missing {missing_keys}."
+        )
+
+    transform = meta["refit_transform"]
+    if transform != "mxfp8":
+        raise ValueError(
+            f"nccl_reshard: {param_name!r} has unsupported refit transform "
+            f"{transform!r}."
+        )
+
+    value_dtype = _restore_dtype(
+        meta["dtype"],
+        param_name=param_name,
+        field_name="value dtype",
+    )
+    if value_dtype is not torch.float8_e4m3fn:
+        raise ValueError(
+            f"nccl_reshard: {param_name!r} MXFP8 value dtype must be "
+            f"torch.float8_e4m3fn, got {meta['dtype']!r}."
+        )
+    scale_dtype = _restore_dtype(
+        meta["scale_dtype"],
+        param_name=param_name,
+        field_name="scale dtype",
+    )
+    if scale_dtype is not torch.uint8:
+        raise ValueError(
+            f"nccl_reshard: {param_name!r} MXFP8 scale dtype must be "
+            f"torch.uint8, got {meta['scale_dtype']!r}."
+        )
+
+    value_shape = tuple(int(size) for size in meta["shape"])
+    if not value_shape:
+        raise ValueError(
+            f"nccl_reshard: {param_name!r} MXFP8 value shape must not be empty."
+        )
+    global_k = value_shape[-1]
+    if global_k % _MXFP8_BLOCK_SIZE:
+        raise ValueError(
+            f"nccl_reshard: {param_name!r} global K dimension {global_k} is not "
+            f"divisible by the MXFP8 block size {_MXFP8_BLOCK_SIZE}."
+        )
+
+    expected_scale_shape = (
+        *value_shape[:-1],
+        global_k // _MXFP8_BLOCK_SIZE,
+    )
+    scale_shape = tuple(int(size) for size in meta["scale_shape"])
+    if scale_shape != expected_scale_shape:
+        raise ValueError(
+            f"nccl_reshard: {param_name!r} MXFP8 scale shape must be "
+            f"{expected_scale_shape}, got {scale_shape}."
+        )
+
+    _validate_k_shard_alignment(
+        param_name=param_name,
+        global_shape=value_shape,
+        mesh_info=info["src_mesh_info"],
+        placements=info["src_placements"],
+        side="source",
+    )
+    _validate_k_shard_alignment(
+        param_name=param_name,
+        global_shape=value_shape,
+        mesh_info=info["dst_mesh_info"],
+        placements=info["dst_placements"],
+        side="destination",
+    )
+
+    return {
+        "refit_transform": transform,
+        "scale_global_shape": scale_shape,
+        "scale_dtype": meta["scale_dtype"],
+        "scale_src_placements": _derive_scale_placements(info["src_placements"]),
+        "scale_dst_placements": _derive_scale_placements(info["dst_placements"]),
+    }
 
 
 # =========================================================================
@@ -900,26 +1061,9 @@ def build_nccl_reshard_refit_info(
                 "dst_placements": get_placements(name, dst_dim_map, ndim),
             }
 
-        if "refit_transform" in meta:
-            scale_shape = tuple(meta["scale_shape"])
-            info.update(
-                {
-                    "refit_transform": meta["refit_transform"],
-                    "scale_global_shape": scale_shape,
-                    "scale_dtype": meta["scale_dtype"],
-                }
-            )
-            if use_per_stage:
-                info["scale_src_placements"] = get_placements(
-                    name, stage_src_dim_map, len(scale_shape)
-                )
-            else:
-                info["scale_src_placements"] = get_placements(
-                    name, this_src_dim_map, len(scale_shape)
-                )
-            info["scale_dst_placements"] = get_placements(
-                name, dst_dim_map, len(scale_shape)
-            )
+        transform_metadata = _build_transform_metadata(name, meta, info)
+        if transform_metadata is not None:
+            info.update(transform_metadata)
 
         # Propagate the grouped-expert projection tag (gate_proj/up_proj/
         # down_proj) so the train side stacks the matching per-expert tensors
