@@ -39,8 +39,11 @@
     {
       "scope": "moe",
       "job_id": "2475437",
-      "status": "performance:submitted",
-      "launcher": "scopes/02_moe.sh"
+      "status": "performance:failed-config-constraint",
+      "launcher": "scopes/02_moe.sh",
+      "exit_code": "1:0",
+      "elapsed": "00:06:12",
+      "failure": "AssertionError: moe cuda graph is only supported with drop-padding MoE."
     },
     {
       "scope": "moe-router",
