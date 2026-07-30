@@ -98,7 +98,7 @@ before it asks Slurm to schedule the job.
 ```bash
 export DEEPEP_COMMIT=dd758caf451848bd150e1046af3d0a73e5fff38d
 export DEEPEP_WHEEL=/lustre/absolute/path/deepep-artifact/deep_ep-dd758-x86_64.whl
-export NCCL_WHEEL=/lustre/absolute/path/nccl-artifact/nvidia_nccl_cu13-2.30.4-py3-none-manylinux_2_27_x86_64.whl
+export NCCL_WHEEL=/lustre/absolute/path/nccl-artifact/nvidia_nccl_cu13-2.30.4-py3-none-manylinux_2_18_x86_64.whl
 export CONTAINER=/lustre/absolute/path/nemo_rl_nightly.sqsh
 export HF_HOME=/lustre/absolute/path/hf_home
 ```

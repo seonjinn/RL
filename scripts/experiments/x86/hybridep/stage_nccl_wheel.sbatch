@@ -28,7 +28,6 @@ set -euo pipefail
 
 NCCL_PACKAGE=nvidia-nccl-cu13
 NCCL_VERSION=2.30.4
-expected_wheel="nvidia_nccl_cu13-2.30.4-py3-none-manylinux_2_27_x86_64.whl"
 
 if [[ -z "${HYBRID_EP_SCRIPT_PATH:-}" ]]; then
   : "${SLURM_SUBMIT_DIR:?HYBRID_EP_SCRIPT_PATH or SLURM_SUBMIT_DIR is required}"
@@ -142,7 +141,9 @@ if [[ "${#downloaded_wheels[@]}" != "1" ]]; then
   exit 2
 fi
 downloaded_wheel=${downloaded_wheels[0]}
-if [[ "$(basename "${downloaded_wheel}")" != "${expected_wheel}" ]]; then
+wheel_basename=$(basename "${downloaded_wheel}")
+wheel_pattern='^nvidia_nccl_cu13-2\.30\.4-py3-none-manylinux_[0-9_]+_x86_64\.whl$'
+if [[ ! "${wheel_basename}" =~ ${wheel_pattern} ]]; then
   printf 'Unexpected NCCL wheel filename: %s\n' "${downloaded_wheel}" >&2
   exit 2
 fi
@@ -173,11 +174,11 @@ if fields.get("Name") != expected_name or fields.get("Version") != expected_vers
 PY
 
 mkdir "${artifact_stage}"
-staged_wheel="${artifact_stage}/${expected_wheel}"
-final_wheel="${artifact_dir}/${expected_wheel}"
+staged_wheel="${artifact_stage}/${wheel_basename}"
+final_wheel="${artifact_dir}/${wheel_basename}"
 mv "${downloaded_wheel}" "${staged_wheel}"
 wheel_sha256=$(sha256sum "${staged_wheel}" | cut -d' ' -f1)
-printf '%s  %s\n' "${wheel_sha256}" "${expected_wheel}" \
+printf '%s  %s\n' "${wheel_sha256}" "${wheel_basename}" \
   > "${staged_wheel}.sha256"
 staged_at=$(date '+%Y-%m-%dT%H:%M:%S%z')
 

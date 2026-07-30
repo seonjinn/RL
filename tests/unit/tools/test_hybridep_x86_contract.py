@@ -1245,6 +1245,8 @@ def test_stage_nccl_wheel_pins_and_publishes_the_exact_runtime() -> None:
         "NCCL_PACKAGE=nvidia-nccl-cu13",
         "NCCL_VERSION=2.30.4",
         "pip download --no-deps",
+        "wheel_basename=$(basename",
+        "manylinux_[0-9_]+_x86_64",
         "sha256sum",
         'if [[ -e "${artifact_dir}" ]]',
         "Refusing to overwrite immutable artifact directory",
@@ -1262,3 +1264,4 @@ def test_stage_nccl_wheel_pins_and_publishes_the_exact_runtime() -> None:
     missing = sorted(snippet for snippet in required_snippets if snippet not in source)
 
     assert not missing
+    assert "manylinux_2_27_x86_64" not in source
