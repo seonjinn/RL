@@ -153,6 +153,36 @@ def test_cached_schedule_sequence_packing_requires_packed_graph_mode():
 
 
 @pytest.mark.parametrize(
+    ("implementation", "modules"),
+    [
+        ("none", ()),
+        ("transformer_engine", ("moe",)),
+    ],
+)
+def test_sequence_packing_rejects_drop_and_pad_moe(implementation, modules):
+    """Rank-varying packed lengths cannot define one EP-wide expert capacity."""
+    from nemo_rl.models.megatron.setup import validate_cuda_graph_request
+
+    config = _te_cuda_graph_config(
+        modules=modules,
+        sequence_packing=True,
+    )
+    config["megatron_cfg"].update(
+        {
+            "cuda_graph_impl": implementation,
+            "moe_expert_capacity_factor": 1.0,
+            "moe_pad_expert_input_to_capacity": True,
+        }
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="sequence packing.*drop-and-pad MoE",
+    ):
+        validate_cuda_graph_request(config)
+
+
+@pytest.mark.parametrize(
     ("modules", "message"),
     [
         (["moe", "moe_router"], "must not contain both moe and moe_router"),
