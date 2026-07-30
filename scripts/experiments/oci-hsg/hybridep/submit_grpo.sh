@@ -357,6 +357,53 @@ if [[ ! -f "${CONFIG_PATH}" ]]; then
   exit 2
 fi
 CONFIG_SHA256=$(sha256sum "${CONFIG_PATH}" | cut -d' ' -f1)
+TOPOLOGY_RESOLVER="${SCRIPT_DIR}/resolve_recipe_topology.py"
+topology_python=(python3)
+if [[ -n "${DRIVER_VENV}" ]]; then
+  topology_python=("${DRIVER_VENV}/bin/python")
+fi
+if ! topology_python_path=$(command -v "${topology_python[0]}"); then
+  printf 'Recipe topology Python is not executable: %s\n' \
+    "${topology_python[0]}" >&2
+  exit 2
+fi
+topology_python[0]=${topology_python_path}
+if ! resolved_topology=$(
+  "${topology_python[@]}" "${TOPOLOGY_RESOLVER}" "${CONFIG_PATH}"
+); then
+  printf 'Failed to resolve scheduler topology from recipe: %s\n' \
+    "${CONFIG_PATH}" >&2
+  exit 2
+fi
+IFS=$'\t' read -r \
+  CONFIG_NUM_NODES \
+  CONFIG_GPUS_PER_NODE \
+  CONFIG_SEGMENT_SIZE \
+  RESOLVED_CONFIG_SHA256 <<< "${resolved_topology}"
+if [[ -z "${CONFIG_NUM_NODES}" || -z "${CONFIG_GPUS_PER_NODE}" || \
+  -z "${CONFIG_SEGMENT_SIZE}" || -z "${RESOLVED_CONFIG_SHA256}" ]]; then
+  printf 'Recipe topology resolver returned malformed output: %s\n' \
+    "${resolved_topology}" >&2
+  exit 2
+fi
+for scheduler_field in NUM_ACTOR_NODES GPUS_PER_NODE SEGMENT_SIZE; do
+  scheduler_value=${!scheduler_field}
+  if [[ ! "${scheduler_value}" =~ ^[1-9][0-9]*$ ]]; then
+    printf '%s must be a positive integer: %s\n' \
+      "${scheduler_field}" "${scheduler_value}" >&2
+    exit 2
+  fi
+done
+if [[ "${NUM_ACTOR_NODES}" != "${CONFIG_NUM_NODES}" ]]; then
+  printf 'scheduler nodes %s != recipe nodes %s\n' \
+    "${NUM_ACTOR_NODES}" "${CONFIG_NUM_NODES}" >&2
+  exit 2
+fi
+if [[ "${GPUS_PER_NODE}" != "${CONFIG_GPUS_PER_NODE}" ]]; then
+  printf 'scheduler GPUs per node %s != recipe GPUs per node %s\n' \
+    "${GPUS_PER_NODE}" "${CONFIG_GPUS_PER_NODE}" >&2
+  exit 2
+fi
 
 if [[ ! -d "${BRIDGE_SRC}/megatron/bridge" ]]; then
   printf 'Megatron-Bridge source package does not exist: %s\n' "${BRIDGE_SRC}" >&2
@@ -425,9 +472,6 @@ driver_args+=(
   uv run examples/run_grpo.py
   --config "${CONFIG_PATH}"
   "grpo.max_num_steps=${MAX_STEPS}"
-  "cluster.num_nodes=${NUM_ACTOR_NODES}"
-  "cluster.gpus_per_node=${GPUS_PER_NODE}"
-  "cluster.segment_size=${SEGMENT_SIZE}"
   "logger.log_dir=${RUN_ROOT}/training"
   "logger.wandb_enabled=${WANDB_ENABLED}"
   "logger.wandb.project=${WANDB_PROJECT}"
@@ -613,6 +657,11 @@ metadata_path="${RUN_ROOT}/submission.env"
   printf 'nodes=%q\n' "${NUM_ACTOR_NODES}"
   printf 'gpus_per_node=%q\n' "${GPUS_PER_NODE}"
   printf 'segment_size=%q\n' "${SEGMENT_SIZE}"
+  printf 'config_num_nodes=%q\n' "${CONFIG_NUM_NODES}"
+  printf 'config_gpus_per_node=%q\n' "${CONFIG_GPUS_PER_NODE}"
+  printf 'config_segment_size=%q\n' "${CONFIG_SEGMENT_SIZE}"
+  printf 'scheduler_segment_size=%q\n' "${SEGMENT_SIZE}"
+  printf 'resolved_config_sha256=%q\n' "${RESOLVED_CONFIG_SHA256}"
   printf 'max_steps=%q\n' "${MAX_STEPS}"
   printf 'dispatcher_mode=%q\n' "${DISPATCHER_MODE}"
   printf 'padding_log_enabled=%q\n' "${PADDING_LOG_ENABLED}"

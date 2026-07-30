@@ -178,6 +178,37 @@ def test_x86_standard_deepep_profiles_are_matched_to_alltoall() -> None:
         ) in profile
 
 
+def test_qwen30_triplet_requires_the_same_nccl_runtime() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    profile_dir = (
+        project_root / "scripts" / "experiments" / "oci-hsg" / "hybridep" / "models"
+    )
+    expected = {
+        "qwen3-30ba3b-4n8g-x86.env": "true\thybridep",
+        "qwen3-30ba3b-4n8g-x86-hybridep.env": "true\thybridep",
+        "qwen3-30ba3b-4n8g-x86-deepep.env": "true\tdeepep",
+    }
+
+    for profile_name, expected_runtime in expected.items():
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                (
+                    'source "$1"; printf "%s\\t%s" '
+                    '"${REQUIRE_NCCL_WHEEL:-false}" "${DEEPEP_VARIANT:-unset}"'
+                ),
+                "bash",
+                str(profile_dir / profile_name),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.stdout == expected_runtime
+
+
 def test_recursive_checkout_uses_the_branch_that_exposes_the_bridge_gitlink() -> None:
     project_root = Path(__file__).resolve().parents[3]
     gitmodules = (project_root / ".gitmodules").read_text()

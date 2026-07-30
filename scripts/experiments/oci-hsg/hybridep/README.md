@@ -160,31 +160,42 @@ checkpoint configured currently. Do not submit either DeepSeek arm until
 launcher rejects an unset or missing path and applies the verified path to
 both `policy.model_name` and `policy.tokenizer.name`.
 
-Run the two-node, three-step compatibility gate first:
+Run the native four-node, three-step compatibility triplet first. Do not set
+`NUM_ACTOR_NODES`, `GPUS_PER_NODE`, or `SEGMENT_SIZE`; the launcher resolves
+the performance recipe as 4 nodes and 8 GPUs per node, preserves its
+`cluster.segment_size: null`, and rejects mismatched scheduler resources.
+Before each command, select the matching immutable wheel set described above:
+f725 `hybrid-ep` for all-to-all and HybridEP, or dd758 `main` for DeepEP. All
+three arms must use the same NCCL 2.30.4 wheel.
 
 ```bash
 DISPATCHER_MODE=recipe \
 WANDB_ENABLED=False \
 NEMO_RL_HYBRIDEP_LOG_PACKING=0 \
-NUM_ACTOR_NODES=2 \
-SEGMENT_SIZE=2 \
 MAX_STEPS=3 \
-RUN_NAME=qwen3-30ba3b-2n8g-x86-alltoall-smoke \
+RUN_NAME=qwen3-30ba3b-4n8g-x86-alltoall-smoke \
 scripts/experiments/oci-hsg/hybridep/submit_grpo.sh \
   scripts/experiments/oci-hsg/hybridep/models/qwen3-30ba3b-4n8g-x86.env
+
+DISPATCHER_MODE=deepep \
+WANDB_ENABLED=False \
+NEMO_RL_HYBRIDEP_LOG_PACKING=0 \
+MAX_STEPS=3 \
+RUN_NAME=qwen3-30ba3b-4n8g-x86-deepep-smoke \
+scripts/experiments/oci-hsg/hybridep/submit_grpo.sh \
+  scripts/experiments/oci-hsg/hybridep/models/qwen3-30ba3b-4n8g-x86-deepep.env
 
 DISPATCHER_MODE=recipe \
 WANDB_ENABLED=False \
 NEMO_RL_HYBRIDEP_LOG_PACKING=0 \
-NUM_ACTOR_NODES=2 \
-SEGMENT_SIZE=2 \
 MAX_STEPS=3 \
-RUN_NAME=qwen3-30ba3b-2n8g-x86-hybridep-smoke \
+RUN_NAME=qwen3-30ba3b-4n8g-x86-hybridep-smoke \
 scripts/experiments/oci-hsg/hybridep/submit_grpo.sh \
   scripts/experiments/oci-hsg/hybridep/models/qwen3-30ba3b-4n8g-x86-hybridep.env
 ```
 
-After both smoke jobs complete, run the four-node, 20-step performance pair:
+After all three smoke jobs complete, run the four-node, 20-step performance
+triplet with the same artifact mapping:
 
 ```bash
 DISPATCHER_MODE=recipe \
@@ -193,6 +204,13 @@ NEMO_RL_HYBRIDEP_LOG_PACKING=0 \
 RUN_NAME=qwen3-30ba3b-4n8g-x86-alltoall-20step \
 scripts/experiments/oci-hsg/hybridep/submit_grpo.sh \
   scripts/experiments/oci-hsg/hybridep/models/qwen3-30ba3b-4n8g-x86.env
+
+DISPATCHER_MODE=deepep \
+WANDB_ENABLED=False \
+NEMO_RL_HYBRIDEP_LOG_PACKING=0 \
+RUN_NAME=qwen3-30ba3b-4n8g-x86-deepep-20step \
+scripts/experiments/oci-hsg/hybridep/submit_grpo.sh \
+  scripts/experiments/oci-hsg/hybridep/models/qwen3-30ba3b-4n8g-x86-deepep.env
 
 DISPATCHER_MODE=recipe \
 WANDB_ENABLED=False \
@@ -208,5 +226,6 @@ the launcher requires `WANDB_API_KEY` in the environment and never writes its
 value to metadata.
 
 Each submission first runs `sbatch --test-only`. It then records the model
-profile, all source commits, DeepEP selection, image SHA256, job ID, and log
-paths under `exp_logs/hybridep/<model>/<run-name>/submission.env`.
+profile, resolved-config SHA256, recipe and scheduler topology, all source
+commits, DeepEP selection, image SHA256, job ID, and log paths under
+`exp_logs/hybridep/<model>/<run-name>/submission.env`.

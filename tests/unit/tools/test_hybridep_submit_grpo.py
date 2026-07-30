@@ -16,6 +16,7 @@ import os
 import shutil
 import shlex
 import subprocess
+import sys
 import tempfile
 import zipfile
 from collections.abc import Iterator
@@ -31,6 +32,87 @@ ACTOR_FQNS = (
 DEEPEP_COMMIT = "f725d29699f5bda9ba789456bb9579af69844685"
 STANDARD_DEEPEP_COMMIT = "dd758caf451848bd150e1046af3d0a73e5fff38d"
 NCCL_VERSION = "2.30.4"
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PERFORMANCE_RECIPE_DIR = (
+    PROJECT_ROOT / "examples" / "configs" / "recipes" / "llm" / "performance"
+)
+RECIPE_TOPOLOGY_RESOLVER = (
+    PROJECT_ROOT
+    / "scripts"
+    / "experiments"
+    / "oci-hsg"
+    / "hybridep"
+    / "resolve_recipe_topology.py"
+)
+
+
+@pytest.mark.parametrize(
+    "recipe_name",
+    (
+        "grpo-qwen3-30ba3b-4n8g-alltoall.yaml",
+        "grpo-qwen3-30ba3b-4n8g.yaml",
+    ),
+)
+def test_qwen30_performance_recipe_resolves_native_topology(
+    recipe_name: str,
+) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(RECIPE_TOPOLOGY_RESOLVER),
+            str(PERFORMANCE_RECIPE_DIR / recipe_name),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    nodes, gpus, config_segment, resolved_sha = result.stdout.strip().split("\t")
+
+    assert (nodes, gpus, config_segment) == ("4", "8", "null")
+    assert len(resolved_sha) == 64
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("num_nodes", "0"),
+        ("gpus_per_node", "true"),
+        ("segment_size", "-1"),
+    ),
+)
+def test_recipe_topology_rejects_nonpositive_or_boolean_values(
+    tmp_path: Path,
+    field: str,
+    value: str,
+) -> None:
+    topology = {
+        "num_nodes": "4",
+        "gpus_per_node": "8",
+        "segment_size": "null",
+    }
+    topology[field] = value
+    recipe = tmp_path / "invalid-topology.yaml"
+    recipe.write_text(
+        "\n".join(
+            (
+                "cluster:",
+                f"  num_nodes: {topology['num_nodes']}",
+                f"  gpus_per_node: {topology['gpus_per_node']}",
+                f"  segment_size: {topology['segment_size']}",
+                "",
+            )
+        )
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(RECIPE_TOPOLOGY_RESOLVER), str(recipe)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert f"cluster.{field} must be a positive integer" in result.stderr
 
 
 def _run_launcher(
@@ -38,12 +120,14 @@ def _run_launcher(
     *,
     dispatcher_mode: str,
     model_config_name: str = "qwen3-30ba3b-4n4g.env",
+    model_config_path: Path | None = None,
     extra_env: dict[str, str] | None = None,
 ) -> list[str]:
     result, command_capture = _run_launcher_result(
         tmp_path,
         dispatcher_mode=dispatcher_mode,
         model_config_name=model_config_name,
+        model_config_path=model_config_path,
         extra_env=extra_env,
     )
     result.check_returncode()
@@ -55,6 +139,7 @@ def _run_launcher_result(
     *,
     dispatcher_mode: str,
     model_config_name: str = "qwen3-30ba3b-4n4g.env",
+    model_config_path: Path | None = None,
     extra_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     project_root = Path(__file__).resolve().parents[3]
@@ -66,7 +151,7 @@ def _run_launcher_result(
         / "hybridep"
         / "submit_grpo.sh"
     )
-    model_config = launcher.parent / "models" / model_config_name
+    model_config = model_config_path or launcher.parent / "models" / model_config_name
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
 
@@ -110,7 +195,7 @@ printf '%s\\n' '999999'
     container.touch()
     env = {
         **os.environ,
-        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "PATH": f"{fake_bin}:{Path(sys.executable).parent}:{os.environ['PATH']}",
         "FAKE_PROJECT_ROOT": str(project_root),
         "FAKE_USER": subprocess.check_output(["id", "-un"], text=True).strip(),
         "COMMAND_CAPTURE": str(command_capture),
@@ -137,6 +222,109 @@ printf '%s\\n' '999999'
         text=True,
     )
     return result, command_capture
+
+
+def _write_qwen30_native_topology_profile(tmp_path: Path) -> Path:
+    profile = tmp_path / "qwen3-30ba3b-native-topology.env"
+    profile.write_text(
+        "\n".join(
+            (
+                "MODEL_ID=qwen3-30ba3b-native-topology",
+                (
+                    "CONFIG_PATH=examples/configs/recipes/llm/performance/"
+                    "grpo-qwen3-30ba3b-4n8g-alltoall.yaml"
+                ),
+                "NUM_ACTOR_NODES=${NUM_ACTOR_NODES:-4}",
+                "GPUS_PER_NODE=${GPUS_PER_NODE:-8}",
+                "SEGMENT_SIZE=${SEGMENT_SIZE:-4}",
+                "MAX_STEPS=3",
+                "TIME_LIMIT=04:00:00",
+                f"DEFAULT_DEEPEP_COMMIT={DEEPEP_COMMIT}",
+                "",
+            )
+        )
+    )
+    return profile
+
+
+def test_launcher_preserves_recipe_topology(tmp_path: Path) -> None:
+    args = _run_launcher(
+        tmp_path,
+        dispatcher_mode="recipe",
+        model_config_path=_write_qwen30_native_topology_profile(tmp_path),
+    )
+
+    assert not any(arg.startswith("cluster.") for arg in args)
+
+
+def test_submission_records_recipe_and_scheduler_topology(tmp_path: Path) -> None:
+    _run_launcher(
+        tmp_path,
+        dispatcher_mode="recipe",
+        model_config_path=_write_qwen30_native_topology_profile(tmp_path),
+    )
+
+    metadata = (tmp_path / "run" / "submission.env").read_text()
+    assert "config_num_nodes=4\n" in metadata
+    assert "config_gpus_per_node=8\n" in metadata
+    assert "config_segment_size=null\n" in metadata
+    assert "scheduler_segment_size=4\n" in metadata
+    resolved_hash = next(
+        line.removeprefix("resolved_config_sha256=")
+        for line in metadata.splitlines()
+        if line.startswith("resolved_config_sha256=")
+    )
+    assert len(resolved_hash) == 64
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    (
+        ({"NUM_ACTOR_NODES": "2"}, "scheduler nodes 2 != recipe nodes 4"),
+        (
+            {"GPUS_PER_NODE": "4"},
+            "scheduler GPUs per node 4 != recipe GPUs per node 8",
+        ),
+    ),
+)
+def test_qwen30_launcher_rejects_scheduler_topology_mismatch(
+    tmp_path: Path,
+    override: dict[str, str],
+    message: str,
+) -> None:
+    result, _ = _run_launcher_result(
+        tmp_path,
+        dispatcher_mode="recipe",
+        model_config_path=_write_qwen30_native_topology_profile(tmp_path),
+        extra_env=override,
+    )
+
+    assert result.returncode == 2
+    assert message in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("NUM_ACTOR_NODES", "0"),
+        ("GPUS_PER_NODE", "false"),
+        ("SEGMENT_SIZE", "-1"),
+    ),
+)
+def test_launcher_rejects_invalid_scheduler_topology(
+    tmp_path: Path,
+    field: str,
+    value: str,
+) -> None:
+    result, _ = _run_launcher_result(
+        tmp_path,
+        dispatcher_mode="recipe",
+        model_config_path=_write_qwen30_native_topology_profile(tmp_path),
+        extra_env={field: value},
+    )
+
+    assert result.returncode == 2
+    assert f"{field} must be a positive integer: {value}" in result.stderr
 
 
 def _x86_actor_venv_dir(tmp_path: Path) -> Path:
@@ -207,9 +395,11 @@ def _synthetic_x86_shared_env() -> dict[str, str]:
     return {
         "CONTAINER": "/lustre/nemo-rl-test/nightly.sqsh",
         "DEEPEP_COMMIT": DEEPEP_COMMIT,
+        "DEEPEP_VARIANT": "hybridep",
         "DEEPEP_WHEEL": "/lustre/nemo-rl-test/deep-ep.whl",
         "HF_HOME": "/lustre/nemo-rl-test/hf-home",
         "HF_DATASETS_CACHE": "/lustre/nemo-rl-test/hf-home/cache",
+        "NCCL_WHEEL": "/lustre/nemo-rl-test/nvidia-nccl-cu13.whl",
         "RUN_ROOT": "/lustre/nemo-rl-test/run",
         "UV_CACHE_DIR": "/lustre/nemo-rl-test/uv-cache",
     }
@@ -456,9 +646,7 @@ def test_deepep_dispatcher_rejects_mismatched_deepep_metadata(
             "deepep_commit": DEEPEP_COMMIT,
         },
     )
-    result, _ = _run_launcher_result(
-        tmp_path, dispatcher_mode="deepep", extra_env=env
-    )
+    result, _ = _run_launcher_result(tmp_path, dispatcher_mode="deepep", extra_env=env)
 
     assert result.returncode == 2
     assert "DeepEP artifact commit does not match DEEPEP_COMMIT" in result.stderr
