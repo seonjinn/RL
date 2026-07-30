@@ -351,7 +351,7 @@ if [[ "${DEEPEP_VARIANT}" == "deepep" ]]; then
     'import deep_ep._C; from deep_ep import Buffer, ElasticBuffer, EventOverlap, EventHandle; print(deep_ep._C.__file__); print(Buffer, ElasticBuffer, EventOverlap, EventHandle)'
 else
   PYTHONPATH="${build_overlay}" "${PYTHON_BIN}" -c \
-    'import deep_ep_cpp, hybrid_ep_cpp; from deep_ep import Buffer, HybridEPBuffer; print(deep_ep_cpp.__file__); print(hybrid_ep_cpp.__file__); print(Buffer, HybridEPBuffer)'
+    'import deep_ep; import deep_ep_cpp, hybrid_ep_cpp; from deep_ep import Buffer, HybridEPBuffer; print(deep_ep_cpp.__file__); print(hybrid_ep_cpp.__file__); print(Buffer, HybridEPBuffer)'
 fi
 
 mkdir "${artifact_stage}"

@@ -1071,7 +1071,7 @@ def test_x86_wheel_build_job_is_arch_specific_and_reproducible() -> None:
         'export CPLUS_INCLUDE_PATH="${build_overlay}/nvidia/nccl/include:/usr/local/cuda/include/cccl"',
         "import deep_ep._C",
         "from deep_ep import Buffer, ElasticBuffer, EventOverlap, EventHandle",
-        "import deep_ep_cpp, hybrid_ep_cpp",
+        "import deep_ep; import deep_ep_cpp, hybrid_ep_cpp",
         "from deep_ep import Buffer, HybridEPBuffer",
         'sha256sum "${staged_wheel}"',
         "container_sha256=",
