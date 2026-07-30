@@ -101,9 +101,9 @@ Prefer a newly staged NeMo-RL nightly that already contains NCCL 2.30.4. If
 the staged nightly does not, stage the exact `nvidia-nccl-cu13==2.30.4` wheel
 as an immutable Lustre artifact and install it into the same per-run overlay
 as the selected DeepEP wheel. Prepend the overlay's NCCL library directory to
-`LD_LIBRARY_PATH` before Ray starts. Apply the identical NCCL runtime to both
-DeepEP and HybridEP arms so the comparison does not confound the dispatcher
-with an NCCL-version difference.
+`LD_LIBRARY_PATH` before Ray starts. Apply the identical NCCL runtime to the
+Qwen3-30B all-to-all, DeepEP, and HybridEP arms so no pairwise comparison
+confounds the dispatcher with an NCCL-version difference.
 
 Before performance work, record the effective PyTorch, CUDA, NCCL, NVSHMEM,
 driver, and firmware versions from the allocated runtime. Require the runtime
@@ -131,11 +131,17 @@ The selected performance YAML is the source of truth for training topology
 and workload settings. The launcher must not inject CLI overrides for
 `cluster.num_nodes`, `cluster.gpus_per_node`, `cluster.segment_size`, batch
 sizes, sequence length, sequence packing, or model-parallel dimensions. The
-submission profile supplies scheduler resource values only, and a preflight
-check must reject the submission unless those values match the resolved YAML.
-For Qwen3-30B-A3B, both the resolved config and scheduler allocation must be
-4 nodes with 8 GPUs per node. Environment variables must not be able to turn
-this profile into a 2-node run.
+submission profile supplies scheduler resource values only. A preflight check
+must reject the submission unless scheduler node and GPU counts match the
+resolved YAML. For Qwen3-30B-A3B, both the resolved config and scheduler
+allocation must be 4 nodes with 8 GPUs per node. Environment variables must
+not be able to turn this profile into a 2-node run.
+
+SLURM `--segment` is scheduler placement metadata and is recorded separately
+from NeMo-RL `cluster.segment_size`. The Qwen3-30B-A3B performance recipe
+resolves `cluster.segment_size` to null, so the launcher must preserve that
+null rather than converting the scheduler's 4-node segment into a training
+config override. All three arms use the same SLURM segment value.
 
 Experiment-control overrides remain limited to the requested step count,
 logging destinations and run labels, monitoring, and checkpoint disablement.
