@@ -76,12 +76,16 @@ def create_local_venv(
 
     logger.info(f"Creating new venv at {venv_path}")
 
+    env = os.environ.copy()
+    # Policy and generation venv builders can run concurrently on each Ray node
+    # and legitimately serialize on uv's shared distribution-cache locks.
+    env.setdefault("UV_LOCK_TIMEOUT", "1800")
+
     # Create the virtual environment
     uv_venv_cmd = ["uv", "venv", "--allow-existing", venv_path]
-    subprocess.run(uv_venv_cmd, check=True)
+    subprocess.run(uv_venv_cmd, env=env, check=True)
 
     # Execute the command with the virtual environment
-    env = os.environ.copy()
     # NOTE: UV_PROJECT_ENVIRONMENT is appropriate here only b/c there should only be
     #  one call to this in the driver. It is not safe to use this in a multi-process
     #  context.

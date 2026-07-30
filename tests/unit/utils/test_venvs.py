@@ -20,6 +20,50 @@ from nemo_rl.utils.venvs import create_local_venv
 from tests.unit.conftest import TEST_ASSETS_DIR
 
 
+def test_create_local_venv_passes_shared_uv_environment_to_every_command(tmp_path):
+    create_local_venv.cache_clear()
+
+    with (
+        patch.dict(
+            os.environ,
+            {
+                "NEMO_RL_VENV_DIR": str(tmp_path),
+                "UV_CACHE_DIR": "/tmp/shared-uv-cache",
+            },
+            clear=True,
+        ),
+        patch("nemo_rl.utils.venvs.subprocess.run") as mock_run,
+    ):
+        create_local_venv("uv run --group mcore", "test_lock_timeout")
+
+    command_envs = [call.kwargs["env"] for call in mock_run.call_args_list]
+    assert all(env is command_envs[0] for env in command_envs)
+    assert command_envs[0]["UV_CACHE_DIR"] == "/tmp/shared-uv-cache"
+    assert command_envs[0]["UV_LOCK_TIMEOUT"] == "1800"
+
+
+def test_create_local_venv_preserves_uv_lock_timeout_override(tmp_path):
+    create_local_venv.cache_clear()
+
+    with (
+        patch.dict(
+            os.environ,
+            {
+                "NEMO_RL_VENV_DIR": str(tmp_path),
+                "UV_LOCK_TIMEOUT": "2400",
+            },
+            clear=True,
+        ),
+        patch("nemo_rl.utils.venvs.subprocess.run") as mock_run,
+    ):
+        create_local_venv("uv run --group mcore", "test_timeout_override")
+
+    assert all(
+        call.kwargs["env"]["UV_LOCK_TIMEOUT"] == "2400"
+        for call in mock_run.call_args_list
+    )
+
+
 def test_create_local_venv():
     # The temporary directory is created within the project.
     # For some reason, creating a virtual environment outside of the project

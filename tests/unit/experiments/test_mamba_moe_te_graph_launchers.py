@@ -342,6 +342,8 @@ def test_gb200_profiles_limit_transformer_engine_build_to_sm100() -> None:
     assert 'RAY_DASHBOARD_ENABLED="${RAY_DASHBOARD_ENABLED}" \\' in runner
     ray_submit = (EXPERIMENT_DIR.parents[2] / "ray.sub").read_text()
     assert "__CONTAINER_LOCAL__" in ray_submit
+    assert 'export UV_CACHE_DIR="/root/.cache/uv"' in ray_submit
+    assert 'export UV_LOCK_TIMEOUT="${UV_LOCK_TIMEOUT:-1800}"' in ray_submit
     assert "SETUP_COMMAND_ON_WORKERS" in ray_submit
     worker_setup = ray_submit.split("# Workers retry more often", maxsplit=1)[1]
     assert (

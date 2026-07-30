@@ -242,8 +242,9 @@ class TestForwardWithPostProcessingFn:
             input_ids_cp_sharded=torch.tensor([[1, 2, 3]]),
             attention_mask=torch.ones(1, 3),
             position_ids=torch.tensor([[0, 1, 2]]),
-            packed_seq_params=None,
-            cu_seqlens_padded=None,
+            packed_seq_params=MagicMock(),
+            cu_seqlens=torch.tensor([0, 3]),
+            cu_seqlens_padded=torch.tensor([0, 8]),
         )
 
         data_iterator = iter([processed_mb])
@@ -253,13 +254,24 @@ class TestForwardWithPostProcessingFn:
         mock_loss_fn = MagicMock()
         post_processor = LossPostProcessor(loss_fn=mock_loss_fn, cfg=cfg)
 
-        output, wrapped_fn = forward_with_post_processing_fn(
-            data_iterator=data_iterator,
-            model=mock_model,
-            post_processing_fn=post_processor,
-        )
+        with patch.object(
+            LossPostProcessor, "__call__", return_value=MagicMock()
+        ) as mock_post_process:
+            output, wrapped_fn = forward_with_post_processing_fn(
+                data_iterator=data_iterator,
+                model=mock_model,
+                post_processing_fn=post_processor,
+            )
 
         mock_model_forward.assert_called_once()
+        assert torch.equal(
+            mock_post_process.call_args.kwargs["cu_seqlens"],
+            processed_mb.cu_seqlens,
+        )
+        assert torch.equal(
+            mock_post_process.call_args.kwargs["cu_seqlens_padded"],
+            processed_mb.cu_seqlens_padded,
+        )
 
         # forward_with_post_processing_fn should return a callable
         assert callable(wrapped_fn)
@@ -878,6 +890,86 @@ class TestLossPostProcessor:
 
         # Verify SequencePackingLossWrapper was called
         mock_wrapper.assert_called_once()
+
+    @patch(
+        "nemo_rl.models.megatron.train.get_tensor_model_parallel_rank", return_value=0
+    )
+    @patch("nemo_rl.models.megatron.train.get_tensor_model_parallel_group")
+    @patch("nemo_rl.models.megatron.train.get_context_parallel_group")
+    @patch(
+        "nemo_rl.models.megatron.train.get_context_parallel_world_size", return_value=1
+    )
+    @patch("nemo_rl.models.megatron.train.SequencePackingLossWrapper")
+    def test_loss_post_processor_uses_actual_boundaries_with_graph_sentinels(
+        self, mock_wrapper, mock_cp_size, mock_cp_grp, mock_tp_grp, mock_tp_rank
+    ):
+        from nemo_rl.models.megatron.train import LossPostProcessor
+
+        graph_params = MagicMock()
+        graph_params.cu_seqlens_q = torch.tensor([0, 3, 5, 16, 16, 16])
+        graph_params.cu_seqlens_q_padded = torch.tensor([0, 3, 5, 16, 16, 16])
+        actual_cu_seqlens = torch.tensor([0, 3, 5])
+        actual_cu_seqlens_padded = torch.tensor([0, 3, 16])
+
+        processor = LossPostProcessor(
+            loss_fn=MagicMock(),
+            cfg={"sequence_packing": {"enabled": True}},
+            cp_normalize=False,
+        )
+        processor(
+            data_dict=MagicMock(),
+            packed_seq_params=graph_params,
+            cu_seqlens=actual_cu_seqlens,
+            cu_seqlens_padded=actual_cu_seqlens_padded,
+        )
+
+        assert torch.equal(
+            mock_wrapper.call_args.kwargs["cu_seqlens_q"], actual_cu_seqlens
+        )
+        assert torch.equal(
+            mock_wrapper.call_args.kwargs["cu_seqlens_q_padded"],
+            actual_cu_seqlens_padded,
+        )
+
+    @patch(
+        "nemo_rl.models.megatron.train.get_tensor_model_parallel_rank", return_value=0
+    )
+    @patch("nemo_rl.models.megatron.train.get_tensor_model_parallel_group")
+    @patch("nemo_rl.models.megatron.train.get_context_parallel_group")
+    @patch(
+        "nemo_rl.models.megatron.train.get_context_parallel_world_size", return_value=1
+    )
+    @patch("nemo_rl.models.megatron.train.SequencePackingFusionLossWrapper")
+    def test_fused_loss_uses_actual_boundaries_with_graph_sentinels(
+        self, mock_wrapper, mock_cp_size, mock_cp_grp, mock_tp_grp, mock_tp_rank
+    ):
+        from nemo_rl.models.megatron.train import LossPostProcessor
+
+        graph_params = MagicMock()
+        graph_params.cu_seqlens_q = torch.tensor([0, 3, 5, 16, 16, 16])
+        graph_params.cu_seqlens_q_padded = torch.tensor([0, 3, 5, 16, 16, 16])
+        actual_cu_seqlens = torch.tensor([0, 3, 5])
+        actual_cu_seqlens_padded = torch.tensor([0, 3, 16])
+
+        processor = LossPostProcessor(
+            loss_fn=MagicMock(),
+            cfg={"sequence_packing": {"enabled": True, "fuse_loss": True}},
+            cp_normalize=False,
+        )
+        processor(
+            data_dict=MagicMock(),
+            packed_seq_params=graph_params,
+            cu_seqlens=actual_cu_seqlens,
+            cu_seqlens_padded=actual_cu_seqlens_padded,
+        )
+
+        assert torch.equal(
+            mock_wrapper.call_args.kwargs["cu_seqlens_q"], actual_cu_seqlens
+        )
+        assert torch.equal(
+            mock_wrapper.call_args.kwargs["cu_seqlens_q_padded"],
+            actual_cu_seqlens_padded,
+        )
 
 
 class TestLogprobsPostProcessor:

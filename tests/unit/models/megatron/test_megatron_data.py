@@ -57,6 +57,7 @@ class TestProcessedMicrobatchDataclass:
         mock_attention_mask = torch.tensor([[1, 1, 1]])
         mock_position_ids = torch.tensor([[0, 1, 2]])
         mock_packed_seq_params = MagicMock()
+        mock_cu_seqlens = torch.tensor([0, 3])
         mock_cu_seqlens_padded = torch.tensor([0, 3])
 
         microbatch = ProcessedMicrobatch(
@@ -66,6 +67,7 @@ class TestProcessedMicrobatchDataclass:
             attention_mask=mock_attention_mask,
             position_ids=mock_position_ids,
             packed_seq_params=mock_packed_seq_params,
+            cu_seqlens=mock_cu_seqlens,
             cu_seqlens_padded=mock_cu_seqlens_padded,
         )
 
@@ -75,6 +77,7 @@ class TestProcessedMicrobatchDataclass:
         assert torch.equal(microbatch.attention_mask, mock_attention_mask)
         assert torch.equal(microbatch.position_ids, mock_position_ids)
         assert microbatch.packed_seq_params == mock_packed_seq_params
+        assert torch.equal(microbatch.cu_seqlens, mock_cu_seqlens)
         assert torch.equal(microbatch.cu_seqlens_padded, mock_cu_seqlens_padded)
         assert microbatch.routed_experts is None
         assert microbatch.routed_experts_cp_sharded is None
@@ -303,7 +306,8 @@ class TestProcessMicrobatch:
         # For packed sequences, attention_mask and position_ids are None
         assert result.attention_mask is None
         assert result.position_ids is None
-        assert result.cu_seqlens_padded is not None
+        assert torch.equal(result.cu_seqlens, mock_cu_seqlens)
+        assert torch.equal(result.cu_seqlens_padded, mock_cu_seqlens_padded)
 
         # Verify pack was called
         mock_pack.assert_called_once()
@@ -1240,13 +1244,16 @@ class TestMakeProcessedMicrobatchIterator:
         )
 
         # Setup mocks
+        mock_cu_seqlens = MagicMock()
+        mock_cu_seqlens_padded = MagicMock()
         mock_process.return_value = ProcessedInputs(
             input_ids=MagicMock(),
             input_ids_cp_sharded=MagicMock(),
             attention_mask=None,  # None for packed
             position_ids=None,  # None for packed
             packed_seq_params=MagicMock(),
-            cu_seqlens_padded=MagicMock(),
+            cu_seqlens=mock_cu_seqlens,
+            cu_seqlens_padded=mock_cu_seqlens_padded,
         )
 
         mock_data_dict = MagicMock()
@@ -1276,6 +1283,8 @@ class TestMakeProcessedMicrobatchIterator:
         assert call_kwargs["pad_individual_seqs_to_multiple_of"] == 8
         assert call_kwargs["pad_packed_seq_to_multiple_of"] == 16
         assert call_kwargs["pad_full_seq_to"] == 1024
+        assert microbatch.cu_seqlens is mock_cu_seqlens
+        assert microbatch.cu_seqlens_padded is mock_cu_seqlens_padded
 
 
 PACK_SEQUENCES_TEST_ACTOR_FQN = (
