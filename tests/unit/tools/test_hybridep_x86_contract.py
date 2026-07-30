@@ -295,7 +295,7 @@ def test_x86_driver_venv_preparation_allows_time_for_actor_prefetch() -> None:
         / "submit_driver_venv.sh"
     ).read_text()
 
-    assert "TIME_LIMIT=${TIME_LIMIT:-02:00:00}" in submitter
+    assert "TIME_LIMIT=${TIME_LIMIT:-04:00:00}" in submitter
 
 
 def _write_fake_command(path: Path, source: str) -> None:
@@ -1147,7 +1147,7 @@ def test_x86_driver_venv_job_prepares_the_shared_ray_runtime() -> None:
     assert "git pull --ff-only --recurse-submodules=no" in submit_script
     assert "git submodule update --init --recursive" in submit_script
     assert ': "${NEMO_RL_VENV_DIR:?NEMO_RL_VENV_DIR is required}"' in submit_script
-    assert "TIME_LIMIT=${TIME_LIMIT:-02:00:00}" in submit_script
+    assert "TIME_LIMIT=${TIME_LIMIT:-04:00:00}" in submit_script
     assert 'sbatch --test-only "${sbatch_args[@]}"' in submit_script
 
 

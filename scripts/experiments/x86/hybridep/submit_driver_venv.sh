@@ -57,7 +57,7 @@ for shared_path_name in DRIVER_VENV UV_CACHE_DIR NEMO_RL_VENV_DIR; do
 done
 
 PARTITION=${PARTITION:-batch}
-TIME_LIMIT=${TIME_LIMIT:-02:00:00}
+TIME_LIMIT=${TIME_LIMIT:-04:00:00}
 VENV_LOG_DIR=${VENV_LOG_DIR:-"$(dirname -- "${DRIVER_VENV}")/logs"}
 
 FAIRSHARE_ROWS=$(sshare -a --user="$(id -un)" -o Account,User,FairShare -n -P)
