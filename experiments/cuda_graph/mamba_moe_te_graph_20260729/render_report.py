@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
-from collect_results import aggregate_performance, steady_state_rows
+from collect_results import CORRECTNESS_FIELDS, aggregate_performance, steady_state_rows
 
 REPO_ROOT = Path(__file__).parents[3]
 DEFAULT_INPUT = (
@@ -35,6 +35,21 @@ DEFAULT_TOKENIZER_SNAPSHOT = (
     "/lustre/fsw/coreai_dlalgo_llm/users/sna/hf_home/hub/"
     "models--nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-BF16/"
     "snapshots/2d59de1cbd51c0adf384eb906b766d1aee0e0517"
+)
+
+CORRECTNESS_COLUMNS = (
+    ("reward_mean", "Reward / accuracy"),
+    ("generation_kl_error", "Generation KL error"),
+    ("token_mult_prob_error", "Token multiplication probability error"),
+    ("policy_kl_error", "Policy KL error"),
+    ("js_divergence_error", "JS divergence error"),
+    ("sampling_importance_ratio", "Sampling importance ratio"),
+    (
+        "num_masked_seqs_by_logprob_error",
+        "Masked sequences by logprob error",
+    ),
+    ("policy_loss", "Policy loss"),
+    ("grad_norm", "Gradient norm"),
 )
 
 
@@ -125,13 +140,7 @@ def render_html(
     steady_state_performance = aggregate_performance(
         steady_state_rows(performance_rows)
     )
-    accuracy_fields = (
-        "reward_mean",
-        "generation_kl_error",
-        "policy_loss",
-        "grad_norm",
-    )
-    accuracy_rows = [row for row in rows if _has_value(row, accuracy_fields)]
+    accuracy_rows = [row for row in rows if _has_value(row, CORRECTNESS_FIELDS)]
     failure_rows = [
         row
         for row in rows
@@ -246,13 +255,10 @@ def render_html(
         (
             ("scope", "Launcher"),
             ("job_id", "Job"),
-            ("reward_mean_delta", "Reward / accuracy delta"),
-            (
-                "generation_kl_error_delta",
-                "Token multiplication probability error delta",
+            *(
+                (f"{field}_delta", f"{label} delta")
+                for field, label in CORRECTNESS_COLUMNS
             ),
-            ("policy_loss_delta", "Policy loss delta"),
-            ("grad_norm_delta", "Gradient norm delta"),
         ),
     )
     accuracy = table(
@@ -260,10 +266,7 @@ def render_html(
         (
             ("scope", "Launcher"),
             ("job_id", "Job"),
-            ("reward_mean", "Reward / accuracy"),
-            ("generation_kl_error", "Token multiplication probability error"),
-            ("policy_loss", "Policy loss"),
-            ("grad_norm", "Gradient norm"),
+            *CORRECTNESS_COLUMNS,
         ),
     )
     failures = table(

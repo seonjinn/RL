@@ -239,7 +239,49 @@ The required W&B mappings are:
 | Generation time | `timing/train/generation` |
 | Policy time | `timing/train/policy_training` |
 | Logprob time | `timing/train/policy_and_reference_logprobs` |
-| Quality | `train/reward`, `train/accuracy`, `train/token_mult_prob_error`, `train/loss` |
+| Reward / accuracy | `train/reward` (falls back to `train/accuracy`) |
+| Generation KL error | `train/gen_kl_error` |
+| Token multiplication probability error | `train/token_mult_prob_error` |
+| Policy KL error | `train/policy_kl_error` |
+| JS divergence error | `train/js_divergence_error` |
+| Sampling importance ratio | `train/sampling_importance_ratio` |
+| Masked sequences by logprob error | `train/num_masked_seqs_by_logprob_error` |
+| Policy loss | `train/loss` |
+| Gradient norm | `train/grad_norm` |
+
+All of those correctness values are required to be finite at every step 1--20;
+the exporter does not publish a partial JSONL. Older TensorBoard events may use
+`train/num_mask_sample_filtered` for the masked-sequence value. The exporter
+accepts that source tag only as a backward-compatible alias and writes the
+canonical `train/num_masked_seqs_by_logprob_error` key.
+
+### Correctness schema migration
+
+`generation_kl_error` now means only `train/gen_kl_error`.
+`token_mult_prob_error` is a separate CSV/report field and has its own
+`*_delta` comparison. The policy-KL, JS-divergence, sampling-importance-ratio,
+and masked-sequence fields are likewise explicit CSV fields, validity inputs,
+and correctness deltas. CSV or JSONL files produced before this migration
+mislabelled `train/token_mult_prob_error` as generation KL and omit the new
+fields; do not compare them with new results. Re-export those runs from their
+raw TensorBoard events, re-run the collector, then render the report.
+
+For the checked raw events, the concrete re-export commands are:
+
+```bash
+python3 experiments/cuda_graph/mamba_moe_te_graph_20260729/export_tensorboard.py \
+  --event experiments/cuda_graph/results/raw/2475435/events.out.tfevents.1785417835.ptyche0056.ptyche.clusters.nvidia.com.1871169.0 \
+  --scope baseline-no-cg --job-id 2475435 --status performance:completed \
+  --output /tmp/mamba-moe-2475435.jsonl
+python3 experiments/cuda_graph/mamba_moe_te_graph_20260729/export_tensorboard.py \
+  --event experiments/cuda_graph/results/raw/2475438/events.out.tfevents.1785418205.ptyche0258.ptyche.clusters.nvidia.com.1993316.0 \
+  --scope moe-router --job-id 2475438 --status performance:completed \
+  --output /tmp/mamba-moe-2475438.jsonl
+```
+
+Concatenate those two JSONL outputs (or use a single local event export), then
+run the collector and renderer commands above to replace the obsolete CSV and
+report.
 
 Finally render the normalized CSV into the persistent static report:
 

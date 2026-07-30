@@ -1442,6 +1442,11 @@ def test_collector_schema_and_wandb_metric_mapping_are_exact() -> None:
         "logprob_tokens_per_sec_per_gpu",
         "reward_mean",
         "generation_kl_error",
+        "token_mult_prob_error",
+        "policy_kl_error",
+        "js_divergence_error",
+        "sampling_importance_ratio",
+        "num_masked_seqs_by_logprob_error",
         "policy_loss",
         "grad_norm",
         "peak_allocated_gib",
@@ -1462,15 +1467,29 @@ def test_collector_schema_and_wandb_metric_mapping_are_exact() -> None:
         "generation_time": "timing/train/generation",
         "policy_training_time": "timing/train/policy_training",
         "logprob_time": "timing/train/policy_and_reference_logprobs",
+    }
+    assert collector.CORRECTNESS_METRIC_MAP == {
         "reward_mean": "train/reward",
-        "generation_kl_error": "train/token_mult_prob_error",
+        "generation_kl_error": "train/gen_kl_error",
+        "token_mult_prob_error": "train/token_mult_prob_error",
+        "policy_kl_error": "train/policy_kl_error",
+        "js_divergence_error": "train/js_divergence_error",
+        "sampling_importance_ratio": "train/sampling_importance_ratio",
+        "num_masked_seqs_by_logprob_error": ("train/num_masked_seqs_by_logprob_error"),
         "policy_loss": "train/loss",
+        "grad_norm": "train/grad_norm",
     }
     assert collector.QUALITY_METRICS == (
         "train/reward",
         "train/accuracy",
+        "train/gen_kl_error",
         "train/token_mult_prob_error",
+        "train/policy_kl_error",
+        "train/js_divergence_error",
+        "train/sampling_importance_ratio",
+        "train/num_masked_seqs_by_logprob_error",
         "train/loss",
+        "train/grad_norm",
     )
 
 
@@ -1496,8 +1515,14 @@ def test_collector_normalizes_nested_local_export_without_network() -> None:
                 "timing/train/policy_training": 1.5,
                 "timing/train/policy_and_reference_logprobs": 1.0,
                 "train/reward": 0.75,
+                "train/gen_kl_error": 0.01,
                 "train/token_mult_prob_error": 1.01,
+                "train/policy_kl_error": 0.02,
+                "train/js_divergence_error": 0.03,
+                "train/sampling_importance_ratio": 1.04,
+                "train/num_masked_seqs_by_logprob_error": 5.0,
                 "train/loss": 0.1,
+                "train/grad_norm": 0.4,
             },
         }
     )
@@ -1509,7 +1534,12 @@ def test_collector_normalizes_nested_local_export_without_network() -> None:
     assert row["e2e_tokens_per_sec_per_gpu"] == 42.5
     assert row["logprob_tokens_per_sec_per_gpu"] == 38.0
     assert row["reward_mean"] == 0.75
-    assert row["generation_kl_error"] == 1.01
+    assert row["generation_kl_error"] == 0.01
+    assert row["token_mult_prob_error"] == 1.01
+    assert row["policy_kl_error"] == 0.02
+    assert row["js_divergence_error"] == 0.03
+    assert row["sampling_importance_ratio"] == 1.04
+    assert row["num_masked_seqs_by_logprob_error"] == 5.0
     assert row["policy_loss"] == 0.1
 
 
@@ -1554,6 +1584,11 @@ def _performance_row(
         "logprob_tokens_per_sec_per_gpu": str((value + 3) * multiplier),
         "reward_mean": str(value / 100 + correctness_offset),
         "generation_kl_error": str(value / 1000 + correctness_offset),
+        "token_mult_prob_error": str(value / 900 + correctness_offset),
+        "policy_kl_error": str(value / 800 + correctness_offset),
+        "js_divergence_error": str(value / 700 + correctness_offset),
+        "sampling_importance_ratio": str(value / 600 + correctness_offset),
+        "num_masked_seqs_by_logprob_error": str(value / 500 + correctness_offset),
         "policy_loss": str(value / 10000 + correctness_offset),
         "grad_norm": str(value / 10 + correctness_offset),
     }
@@ -1634,10 +1669,8 @@ def test_steady_state_aggregate_groups_runs_and_compares_to_baseline() -> None:
         "logprob_tokens_per_sec_per_gpu",
     ):
         assert cg_row[f"{field}_ratio_to_baseline"] == "2"
-    assert cg_row["reward_mean_delta"] == "0.1"
-    assert cg_row["generation_kl_error_delta"] == "0.1"
-    assert cg_row["policy_loss_delta"] == "0.1"
-    assert cg_row["grad_norm_delta"] == "0.1"
+    for field in collector.CORRECTNESS_FIELDS:
+        assert cg_row[f"{field}_delta"] == "0.1"
     assert cg_row["valid"] == "true"
     assert cg_row["invalid_reason"] == ""
 
@@ -1695,16 +1728,7 @@ def test_steady_state_aggregate_invalidates_evictions_and_fallbacks() -> None:
         ):
             assert invalid_aggregate[f"{field}_median"] == ""
             assert invalid_aggregate[f"{field}_p95"] == ""
-        for field in (
-            "e2e_tokens_per_sec_per_gpu",
-            "generation_tokens_per_sec_per_gpu",
-            "policy_training_tokens_per_sec_per_gpu",
-            "logprob_tokens_per_sec_per_gpu",
-            "reward_mean",
-            "generation_kl_error",
-            "policy_loss",
-            "grad_norm",
-        ):
+        for field in (*collector.THROUGHPUT_FIELDS, *collector.CORRECTNESS_FIELDS):
             suffix = "ratio_to_baseline" if "tokens" in field else "delta"
             assert invalid_aggregate[f"{field}_{suffix}"] == ""
 
@@ -1725,16 +1749,7 @@ def test_steady_state_aggregate_rejects_missing_baseline() -> None:
 
     assert aggregate["valid"] == "false"
     assert aggregate["invalid_reason"] == "baseline_missing"
-    for field in (
-        "e2e_tokens_per_sec_per_gpu",
-        "generation_tokens_per_sec_per_gpu",
-        "policy_training_tokens_per_sec_per_gpu",
-        "logprob_tokens_per_sec_per_gpu",
-        "reward_mean",
-        "generation_kl_error",
-        "policy_loss",
-        "grad_norm",
-    ):
+    for field in (*collector.THROUGHPUT_FIELDS, *collector.CORRECTNESS_FIELDS):
         suffix = "ratio_to_baseline" if "tokens" in field else "delta"
         assert aggregate[f"{field}_{suffix}"] == ""
 
@@ -1796,6 +1811,7 @@ def test_steady_state_aggregate_rejects_invalid_baseline(
         ("eviction_count", None, "eviction_count_missing"),
         ("fallback_count", None, "fallback_count_missing"),
         ("reward_mean", "", "reward_mean_missing"),
+        ("policy_kl_error", "nan", "policy_kl_error_nonfinite"),
     ],
 )
 def test_steady_state_aggregate_rejects_incomplete_or_nonfinite_samples(
@@ -1841,12 +1857,7 @@ def test_steady_state_aggregate_rejects_incomplete_or_nonfinite_samples(
         "logprob_tokens_per_sec_per_gpu",
     ):
         assert cg_aggregate[f"{throughput_field}_ratio_to_baseline"] == ""
-    for correctness_field in (
-        "reward_mean",
-        "generation_kl_error",
-        "policy_loss",
-        "grad_norm",
-    ):
+    for correctness_field in collector.CORRECTNESS_FIELDS:
         assert cg_aggregate[f"{correctness_field}_delta"] == ""
 
 
@@ -1860,6 +1871,12 @@ def test_report_renders_overlay_provenance_steady_state_and_raw_failures() -> No
                 "status": "performance:invalid",
                 "step": "8",
                 "fallback_count": "1",
+                "generation_kl_error": "0.01",
+                "token_mult_prob_error": "1.01",
+                "policy_kl_error": "0.02",
+                "js_divergence_error": "0.03",
+                "sampling_importance_ratio": "1.04",
+                "num_masked_seqs_by_logprob_error": "5",
             }
         ],
         nemo_rl_sha="nemo-sha",
@@ -1882,6 +1899,12 @@ def test_report_renders_overlay_provenance_steady_state_and_raw_failures() -> No
     assert '<section id="steady-state-performance">' in report
     assert '<section id="correctness-deltas">' in report
     assert '<section id="failures">' in report
+    assert "Generation KL error" in report
+    assert "Token multiplication probability error" in report
+    assert "Policy KL error" in report
+    assert "JS divergence error" in report
+    assert "Sampling importance ratio" in report
+    assert "Masked sequences by logprob error" in report
 
 
 def test_report_has_required_sections_scope_labels_and_verified_status() -> None:

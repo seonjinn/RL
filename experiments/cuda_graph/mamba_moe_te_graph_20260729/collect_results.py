@@ -31,6 +31,11 @@ CSV_FIELDS = (
     "logprob_tokens_per_sec_per_gpu",
     "reward_mean",
     "generation_kl_error",
+    "token_mult_prob_error",
+    "policy_kl_error",
+    "js_divergence_error",
+    "sampling_importance_ratio",
+    "num_masked_seqs_by_logprob_error",
     "policy_loss",
     "grad_norm",
     "peak_allocated_gib",
@@ -52,16 +57,31 @@ WANDB_METRIC_MAP = {
     "generation_time": "timing/train/generation",
     "policy_training_time": "timing/train/policy_training",
     "logprob_time": "timing/train/policy_and_reference_logprobs",
+}
+
+CORRECTNESS_METRIC_MAP = {
     "reward_mean": "train/reward",
-    "generation_kl_error": "train/token_mult_prob_error",
+    "generation_kl_error": "train/gen_kl_error",
+    "token_mult_prob_error": "train/token_mult_prob_error",
+    "policy_kl_error": "train/policy_kl_error",
+    "js_divergence_error": "train/js_divergence_error",
+    "sampling_importance_ratio": "train/sampling_importance_ratio",
+    "num_masked_seqs_by_logprob_error": "train/num_masked_seqs_by_logprob_error",
     "policy_loss": "train/loss",
+    "grad_norm": "train/grad_norm",
 }
 
 QUALITY_METRICS = (
     "train/reward",
     "train/accuracy",
+    "train/gen_kl_error",
     "train/token_mult_prob_error",
+    "train/policy_kl_error",
+    "train/js_divergence_error",
+    "train/sampling_importance_ratio",
+    "train/num_masked_seqs_by_logprob_error",
     "train/loss",
+    "train/grad_norm",
 )
 
 TELEMETRY_FIELDS = (
@@ -74,7 +94,6 @@ TELEMETRY_FIELDS = (
 )
 
 OPTIONAL_METRIC_MAP = {
-    "grad_norm": "train/grad_norm",
     "peak_allocated_gib": "memory/peak_allocated_gib",
     "peak_reserved_gib": "memory/peak_reserved_gib",
 }
@@ -100,6 +119,11 @@ THROUGHPUT_FIELDS = (
 CORRECTNESS_FIELDS = (
     "reward_mean",
     "generation_kl_error",
+    "token_mult_prob_error",
+    "policy_kl_error",
+    "js_divergence_error",
+    "sampling_importance_ratio",
+    "num_masked_seqs_by_logprob_error",
     "policy_loss",
     "grad_norm",
 )
@@ -138,8 +162,9 @@ def normalize_record(record: Mapping[str, Any]) -> dict[str, Any]:
     row["step"] = record.get("step", metrics.get("_step", ""))
     for field in TELEMETRY_FIELDS:
         row[field] = _value(record, metrics, field)
-    for output_field, metric_name in WANDB_METRIC_MAP.items():
-        row[output_field] = metrics.get(metric_name, "")
+    for metric_map in (WANDB_METRIC_MAP, CORRECTNESS_METRIC_MAP):
+        for output_field, metric_name in metric_map.items():
+            row[output_field] = metrics.get(metric_name, "")
     if row["reward_mean"] == "":
         row["reward_mean"] = metrics.get("train/accuracy", "")
     for output_field, metric_name in OPTIONAL_METRIC_MAP.items():

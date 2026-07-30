@@ -11,22 +11,21 @@ from pathlib import Path
 
 from tensorboard.backend.event_processing import event_accumulator
 
-from collect_results import OPTIONAL_METRIC_MAP, WANDB_METRIC_MAP
+from collect_results import CORRECTNESS_METRIC_MAP, PERFORMANCE_FIELDS, WANDB_METRIC_MAP
 
 
 EXPECTED_STEPS = frozenset(range(1, 21))
 
-_PERFORMANCE_TAGS = tuple(WANDB_METRIC_MAP.values())
-_CORRECTNESS_TAGS = (
-    "train/reward",
-    "train/token_mult_prob_error",
-    "train/loss",
-    OPTIONAL_METRIC_MAP["grad_norm"],
-)
-CANONICAL_TAG_ALIASES = {
+_PERFORMANCE_TAGS = tuple(WANDB_METRIC_MAP[field] for field in PERFORMANCE_FIELDS)
+_CORRECTNESS_TAGS = tuple(CORRECTNESS_METRIC_MAP.values())
+CANONICAL_TAG_ALIASES: dict[str, tuple[str, ...]] = {
     tag: (tag,) for tag in (*_PERFORMANCE_TAGS, *_CORRECTNESS_TAGS)
 }
 CANONICAL_TAG_ALIASES["train/reward"] = ("train/reward", "train/accuracy")
+CANONICAL_TAG_ALIASES["train/num_masked_seqs_by_logprob_error"] = (
+    "train/num_masked_seqs_by_logprob_error",
+    "train/num_mask_sample_filtered",
+)
 
 
 def _scalar_events(paths: Sequence[Path]) -> dict[str, dict[int, float]]:
