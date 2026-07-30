@@ -32,6 +32,146 @@ import pytest
 import torch
 
 
+def _te_cuda_graph_config(
+    *,
+    modules: object = ("attn",),
+    sequence_packing: bool = False,
+) -> dict:
+    megatron_cfg = {
+        "cuda_graph_impl": "transformer_engine",
+        "cuda_graph_modules": modules,
+    }
+    return {
+        "megatron_cfg": megatron_cfg,
+        "sequence_packing": {"enabled": sequence_packing},
+        "generation": {"colocated": {"enabled": False}},
+    }
+
+
+def test_graph_cache_defaults_to_two_for_te_training_graphs():
+    """Removing TE cache normalization would leave workers without a capacity."""
+    from nemo_rl.models.megatron.setup import validate_cuda_graph_request
+
+    config = _te_cuda_graph_config()
+
+    with patch(
+        "megatron.core.utils.is_te_min_version",
+        return_value=True,
+    ):
+        modules = validate_cuda_graph_request(config)
+
+    assert modules == ("attn",)
+    assert config["megatron_cfg"]["cuda_graph_max_cached_schedules"] == 2
+
+
+@pytest.mark.parametrize("capacity", [0, -1, True, False, 1.5, "2"])
+def test_graph_cache_rejects_invalid_te_capacities(capacity):
+    """A malformed capacity must fail before graph-bank construction."""
+    from nemo_rl.models.megatron.setup import validate_cuda_graph_request
+
+    config = _te_cuda_graph_config()
+    config["megatron_cfg"]["cuda_graph_max_cached_schedules"] = capacity
+
+    with pytest.raises((TypeError, ValueError), match="max_cached_schedules"):
+        validate_cuda_graph_request(config)
+
+
+@pytest.mark.parametrize("implementation", ["none", "local", "full_iteration"])
+def test_graph_cache_is_te_only(implementation):
+    """Non-TE implementations must not silently ignore an explicit cache."""
+    from nemo_rl.models.megatron.setup import validate_cuda_graph_request
+
+    config = {
+        "megatron_cfg": {
+            "cuda_graph_impl": implementation,
+            "cuda_graph_modules": [] if implementation != "local" else ["attn"],
+            "cuda_graph_max_cached_schedules": 2,
+        },
+        "sequence_packing": {"enabled": False},
+    }
+
+    with pytest.raises(ValueError, match="max_cached_schedules.*transformer_engine"):
+        validate_cuda_graph_request(config)
+
+
+def test_graph_cache_eviction_requires_te_2_10():
+    """Capacity greater than one must not enable unsafe pre-2.10 eviction."""
+    from nemo_rl.models.megatron.setup import validate_cuda_graph_request
+
+    config = _te_cuda_graph_config()
+    config["megatron_cfg"]["cuda_graph_max_cached_schedules"] = 2
+
+    with (
+        patch(
+            "megatron.core.utils.is_te_min_version",
+            return_value=False,
+        ),
+        pytest.raises(ValueError, match="Transformer Engine >= 2.10"),
+    ):
+        validate_cuda_graph_request(config)
+
+
+@pytest.mark.parametrize("max_packed_seqs", [None, 0, -1, True, 1.5])
+def test_cached_schedule_packed_graph_requires_positive_sequence_capacity(
+    max_packed_seqs,
+):
+    """Packed graph metadata cannot be built without a strict sequence bound."""
+    from nemo_rl.models.megatron.setup import validate_cuda_graph_request
+
+    config = _te_cuda_graph_config(sequence_packing=True)
+    config["megatron_cfg"]["cuda_graph_packed_seq"] = True
+    config["megatron_cfg"]["cuda_graph_max_packed_seqs"] = max_packed_seqs
+
+    with pytest.raises((TypeError, ValueError), match="max_packed_seqs"):
+        validate_cuda_graph_request(config)
+
+
+def test_cached_schedule_packed_graph_requires_sequence_packing():
+    """Packed graph flags must not be accepted for an unpacked data path."""
+    from nemo_rl.models.megatron.setup import validate_cuda_graph_request
+
+    config = _te_cuda_graph_config(sequence_packing=False)
+    config["megatron_cfg"].update(
+        {
+            "cuda_graph_packed_seq": True,
+            "cuda_graph_max_packed_seqs": 16,
+        }
+    )
+
+    with pytest.raises(ValueError, match="sequence_packing.enabled=true"):
+        validate_cuda_graph_request(config)
+
+
+def test_cached_schedule_sequence_packing_requires_packed_graph_mode():
+    """TE training over packed inputs must opt into fixed packed metadata."""
+    from nemo_rl.models.megatron.setup import validate_cuda_graph_request
+
+    config = _te_cuda_graph_config(sequence_packing=True)
+
+    with pytest.raises(ValueError, match="cuda_graph_packed_seq=true"):
+        validate_cuda_graph_request(config)
+
+
+@pytest.mark.parametrize(
+    ("modules", "message"),
+    [
+        (["moe", "moe_router"], "must not contain both moe and moe_router"),
+        (["moe_preprocess"], "requires moe_router"),
+        (["moe", "moe_router", "moe_preprocess"], "must not contain both"),
+        (["moe_act"], "unsupported"),
+        (["shared_experts"], "unsupported"),
+    ],
+)
+def test_cached_schedule_rejects_invalid_module_combinations(modules, message):
+    """Invalid graph boundaries must fail before MCore model construction."""
+    from nemo_rl.models.megatron.setup import validate_cuda_graph_request
+
+    config = _te_cuda_graph_config(modules=modules)
+
+    with pytest.raises(ValueError, match=message):
+        validate_cuda_graph_request(config)
+
+
 @pytest.mark.mcore
 class TestValidateModelPaths:
     """Tests for validate_model_paths function."""

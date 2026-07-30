@@ -602,6 +602,86 @@ class TestProcessMicrobatch:
 
 
 @pytest.mark.mcore
+def test_pack_sequences_uses_fixed_cuda_graph_metadata_shape():
+    """Changing real bin occupancy must not change graph Tensor geometry."""
+    from nemo_rl.models.megatron.data import (
+        _pack_sequences_for_megatron,
+        make_cuda_graph_packed_seq_params,
+    )
+
+    input_ids = torch.tensor(
+        [
+            [1, 2, 3, 0, 0, 0, 0, 0],
+            [4, 5, 0, 0, 0, 0, 0, 0],
+        ]
+    )
+    seq_lengths = torch.tensor([3, 2])
+
+    _, packed_input_ids, packed_seq_params, cu_seqlens, cu_seqlens_padded = (
+        _pack_sequences_for_megatron(
+            input_ids,
+            seq_lengths,
+            pad_packed_seq_to=16,
+            cuda_graph_max_packed_seqs=4,
+        )
+    )
+
+    assert packed_input_ids.shape == (1, 16)
+    assert cu_seqlens.tolist() == [0, 3, 5]
+    assert cu_seqlens_padded.tolist() == [0, 3, 16]
+    expected_graph_boundaries = [0, 3, 5, 16, 16, 16]
+    assert packed_seq_params.cu_seqlens_q.tolist() == expected_graph_boundaries
+    assert packed_seq_params.cu_seqlens_kv.tolist() == expected_graph_boundaries
+    assert packed_seq_params.cu_seqlens_q_padded.tolist() == expected_graph_boundaries
+    assert packed_seq_params.cu_seqlens_kv_padded.tolist() == expected_graph_boundaries
+    assert packed_seq_params.max_seqlen_q == 16
+    assert packed_seq_params.max_seqlen_kv == 16
+    assert packed_seq_params.total_tokens == 16
+
+    sample = make_cuda_graph_packed_seq_params(
+        seq_length=16,
+        max_packed_seqs=4,
+        device=torch.device("cpu"),
+    )
+    assert sample.cu_seqlens_q.tolist() == [0, 16, 16, 16, 16, 16]
+    assert (
+        sample.cu_seqlens_q_padded.shape == packed_seq_params.cu_seqlens_q_padded.shape
+    )
+    assert sample.seq_idx.shape == packed_seq_params.seq_idx.shape
+    assert (
+        packed_seq_params.seq_idx[0, 4].item() != packed_seq_params.seq_idx[0, 5].item()
+    )
+
+
+@pytest.mark.mcore
+def test_pack_sequences_rejects_cuda_graph_sequence_count_overflow():
+    """A runtime bin cannot exceed the captured boundary Tensor capacity."""
+    from nemo_rl.models.megatron.data import _pack_sequences_for_megatron
+
+    with pytest.raises(ValueError, match="exceeds cuda_graph_max_packed_seqs"):
+        _pack_sequences_for_megatron(
+            torch.ones((3, 4), dtype=torch.long),
+            torch.tensor([1, 1, 1]),
+            pad_packed_seq_to=4,
+            cuda_graph_max_packed_seqs=2,
+        )
+
+
+@pytest.mark.mcore
+def test_pack_sequences_rejects_cuda_graph_token_capacity_overflow():
+    """A runtime bin cannot contain more tokens than the captured token shape."""
+    from nemo_rl.models.megatron.data import _pack_sequences_for_megatron
+
+    with pytest.raises(ValueError, match="token count 6 exceeds"):
+        _pack_sequences_for_megatron(
+            torch.tensor([[1, 2, 3], [4, 5, 6]]),
+            torch.tensor([3, 3]),
+            pad_packed_seq_to=4,
+            cuda_graph_max_packed_seqs=2,
+        )
+
+
+@pytest.mark.mcore
 class TestPrepareVlmBatchForMegatron:
     """Tests for _prepare_vlm_batch_for_megatron.
 
@@ -953,6 +1033,53 @@ class TestGetMicrobatchIterator:
         # With sequence packing, micro_batch_size should be 1
         assert micro_batch_size == 1
         assert data_iterator_len == 10
+
+    @patch("nemo_rl.models.megatron.data.get_and_validate_seqlen")
+    @patch("nemo_rl.models.megatron.data.make_processed_microbatch_iterator")
+    @patch("nemo_rl.models.megatron.data._get_pack_sequence_parameters_for_megatron")
+    def test_get_microbatch_iterator_uses_fixed_training_graph_capacity_only(
+        self,
+        mock_get_params,
+        mock_make_iterator,
+        mock_get_and_validate_seqlen,
+    ):
+        """Training gets fixed graph shapes while eval retains ordinary packing."""
+        from nemo_rl.models.megatron.data import get_microbatch_iterator
+
+        mock_get_and_validate_seqlen.return_value = (1, 256)
+        mock_get_params.return_value = (1, 16, None)
+        mock_data = MagicMock()
+        mock_data.make_microbatch_iterator_for_packable_sequences.return_value = iter(
+            []
+        )
+        mock_data.get_microbatch_iterator_for_packable_sequences_len.return_value = (
+            2,
+            512,
+        )
+        cfg = {
+            "dynamic_batching": {"enabled": False},
+            "sequence_packing": {
+                "enabled": True,
+                "train_mb_tokens": 32768,
+            },
+            "megatron_cfg": {
+                "cuda_graph_impl": "transformer_engine",
+                "cuda_graph_packed_seq": True,
+                "cuda_graph_max_packed_seqs": 16,
+            },
+            "make_sequence_length_divisible_by": 1,
+        }
+
+        get_microbatch_iterator(
+            data=mock_data,
+            cfg=cfg,
+            mbs=4,
+            straggler_timer=MagicMock(),
+            for_cuda_graph_training=True,
+        )
+
+        assert mock_make_iterator.call_args.kwargs["pad_full_seq_to"] == 32768
+        assert mock_make_iterator.call_args.kwargs["cuda_graph_max_packed_seqs"] == 16
 
     @patch("nemo_rl.models.megatron.data.get_and_validate_seqlen")
     @patch("nemo_rl.models.megatron.data.make_processed_microbatch_iterator")

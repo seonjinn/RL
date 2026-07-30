@@ -464,6 +464,9 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             self.sequence_packing_args["max_tokens_per_microbatch"] = self.cfg[
                 "sequence_packing"
             ]["logprob_mb_tokens"]
+            self.sequence_packing_args["max_sequences_per_microbatch"] = self.cfg[
+                "megatron_cfg"
+            ].get("cuda_graph_max_packed_seqs")
             # we just shard into DP shards here as Sequence packing allows for CP.
             sharded_data, unsorted_data_indices = data.shard_by_batch_size(
                 dp_size,
@@ -505,6 +508,9 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             self.sequence_packing_args["max_tokens_per_microbatch"] = self.cfg[
                 "sequence_packing"
             ]["train_mb_tokens"]
+            self.sequence_packing_args["max_sequences_per_microbatch"] = self.cfg[
+                "megatron_cfg"
+            ].get("cuda_graph_max_packed_seqs")
             sharded_data, _ = data.shard_by_batch_size(
                 dp_size,
                 batch_size=batch_size,

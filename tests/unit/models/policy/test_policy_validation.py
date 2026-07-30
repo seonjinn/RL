@@ -28,6 +28,56 @@ from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.lm_policy import Policy
 
 
+def _make_te_sequence_packing_policy() -> Policy:
+    policy = Policy.__new__(Policy)
+    policy.use_dynamic_batches = False
+    policy.use_sequence_packing = True
+    policy.data_parallel_size = 2
+    policy.cfg = {
+        "sequence_packing": {
+            "train_mb_tokens": 32768,
+            "logprob_mb_tokens": 16384,
+        },
+        "megatron_cfg": {
+            "cuda_graph_impl": "transformer_engine",
+            "cuda_graph_max_packed_seqs": 16,
+        },
+    }
+    policy.sequence_packing_args = {
+        "algorithm": "first_fit_decreasing",
+        "input_key": "input_ids",
+        "input_lengths_key": "input_lengths",
+        "sequence_length_pad_multiple": 1,
+    }
+    return policy
+
+
+def test_te_graph_train_sharding_propagates_packed_sequence_capacity():
+    """Omitting the train caller plumbing would leave dense bins unsplit."""
+    policy = _make_te_sequence_packing_policy()
+    data = MagicMock()
+    data.shard_by_batch_size.return_value = ([MagicMock(), MagicMock()], None)
+
+    policy._shard_for_train(data, batch_size=8)
+
+    packing_args = data.shard_by_batch_size.call_args.kwargs["sequence_packing_args"]
+    assert packing_args["max_tokens_per_microbatch"] == 32768
+    assert packing_args["max_sequences_per_microbatch"] == 16
+
+
+def test_te_graph_logprob_sharding_propagates_packed_sequence_capacity():
+    """Logprob packing must preserve the same maximum bin occupancy."""
+    policy = _make_te_sequence_packing_policy()
+    data = MagicMock()
+    data.shard_by_batch_size.return_value = ([MagicMock(), MagicMock()], None)
+
+    policy._shard_for_logprob(data)
+
+    packing_args = data.shard_by_batch_size.call_args.kwargs["sequence_packing_args"]
+    assert packing_args["max_tokens_per_microbatch"] == 16384
+    assert packing_args["max_sequences_per_microbatch"] == 16
+
+
 def test_shutdown_succeeds_before_worker_group_is_initialized(capsys) -> None:
     policy = Policy.__new__(Policy)
 

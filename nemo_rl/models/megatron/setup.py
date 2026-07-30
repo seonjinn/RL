@@ -59,7 +59,11 @@ from megatron.bridge.utils.vocab_utils import calculate_padded_vocab_size
 from megatron.core import parallel_state
 from megatron.core.process_groups_config import ProcessGroupCollection
 from megatron.core.transformer import MegatronModule
-from megatron.core.transformer.enums import AttnBackend, InferenceCudaGraphScope
+from megatron.core.transformer.enums import (
+    AttnBackend,
+    CudaGraphModule,
+    InferenceCudaGraphScope,
+)
 from megatron.core.transformer.module import Float16Module
 from megatron.core.transformer.transformer_config import TransformerConfig
 from transformers import PreTrainedTokenizerBase
@@ -238,6 +242,171 @@ from nemo_rl.models.policy.utils import (
 from nemo_rl.models.value.config import ValueConfig
 
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
+
+_CUDA_GRAPH_MODULE_ORDER = (
+    "attn",
+    "mlp",
+    "moe",
+    "moe_router",
+    "moe_preprocess",
+    "mamba",
+)
+_CUDA_GRAPH_MODULES = frozenset(_CUDA_GRAPH_MODULE_ORDER)
+_PARTIAL_CUDA_GRAPH_IMPLS = frozenset(("local", "transformer_engine"))
+
+
+def normalize_cuda_graph_modules(modules: object) -> tuple[str, ...]:
+    """Validate and canonicalize user-requested training graph modules."""
+    if modules is None:
+        requested_modules: tuple[object, ...] = ()
+    elif isinstance(modules, str):
+        requested_modules = (
+            () if not modules else tuple(item.strip() for item in modules.split(","))
+        )
+    elif isinstance(modules, (list, tuple)):
+        requested_modules = tuple(modules)
+    else:
+        raise ValueError(
+            "cuda_graph_modules must be a comma-separated string, list, or tuple; "
+            f"got {type(modules).__name__}."
+        )
+
+    if not all(isinstance(module, str) and module for module in requested_modules):
+        raise ValueError(
+            "cuda_graph_modules entries must be non-empty strings; "
+            f"got {requested_modules!r}."
+        )
+
+    requested_names = tuple(requested_modules)
+    if len(set(requested_names)) != len(requested_names):
+        raise ValueError(
+            "cuda_graph_modules must not contain duplicate modules; "
+            f"got {requested_names!r}."
+        )
+
+    unknown_modules = set(requested_names) - _CUDA_GRAPH_MODULES
+    if unknown_modules:
+        raise ValueError(
+            "cuda_graph_modules contains unsupported modules "
+            f"{sorted(unknown_modules)!r}; supported modules are "
+            f"{list(_CUDA_GRAPH_MODULE_ORDER)!r}."
+        )
+    if "moe" in requested_names and "moe_router" in requested_names:
+        raise ValueError("cuda_graph_modules must not contain both moe and moe_router.")
+    if "moe_preprocess" in requested_names and "moe_router" not in requested_names:
+        raise ValueError("cuda_graph_modules moe_preprocess requires moe_router.")
+    if "moe" in requested_names and "moe_preprocess" in requested_names:
+        raise ValueError(
+            "cuda_graph_modules moe cannot be combined with moe_preprocess."
+        )
+
+    return tuple(
+        module for module in _CUDA_GRAPH_MODULE_ORDER if module in requested_names
+    )
+
+
+def _validate_config_integer(
+    name: str,
+    value: object,
+    *,
+    minimum: int,
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{name} must be an integer, got {value!r}")
+    if value < minimum:
+        raise ValueError(f"{name} must be at least {minimum}, got {value}")
+    return value
+
+
+def validate_cuda_graph_request(config: PolicyConfig) -> tuple[str, ...]:
+    """Normalize and validate training CUDA Graph configuration."""
+    megatron_cfg = config["megatron_cfg"]
+    implementation = megatron_cfg.get("cuda_graph_impl")
+    modules = normalize_cuda_graph_modules(megatron_cfg.get("cuda_graph_modules"))
+
+    cache_field = "cuda_graph_max_cached_schedules"
+    if implementation != "transformer_engine" and cache_field in megatron_cfg:
+        raise ValueError(
+            f"{cache_field} is supported only with "
+            "cuda_graph_impl='transformer_engine'."
+        )
+
+    if implementation in (None, "none"):
+        if modules:
+            raise ValueError(
+                "cuda_graph_modules requires cuda_graph_impl='local' or "
+                "'transformer_engine'."
+            )
+        return modules
+    if implementation == "full_iteration":
+        if modules:
+            raise ValueError(
+                "cuda_graph_impl='full_iteration' requires empty cuda_graph_modules."
+            )
+        return modules
+    if implementation not in _PARTIAL_CUDA_GRAPH_IMPLS:
+        raise ValueError(
+            f"Unsupported cuda_graph_impl {implementation!r}; expected one of "
+            "'none', 'local', 'transformer_engine', or 'full_iteration'."
+        )
+
+    megatron_cfg["cuda_graph_modules"] = list(modules)
+    if "cuda_graph_warmup_steps" in megatron_cfg:
+        _validate_config_integer(
+            "cuda_graph_warmup_steps",
+            megatron_cfg["cuda_graph_warmup_steps"],
+            minimum=0,
+        )
+
+    if implementation != "transformer_engine":
+        return modules
+
+    if cache_field not in megatron_cfg:
+        megatron_cfg[cache_field] = 2
+    cache_capacity = _validate_config_integer(
+        cache_field,
+        megatron_cfg[cache_field],
+        minimum=1,
+    )
+    if cache_capacity > 1:
+        from megatron.core.utils import is_te_min_version
+
+        if not is_te_min_version("2.10.0"):
+            raise ValueError(
+                "Transformer Engine >= 2.10 is required for TE CUDA Graph "
+                "schedule eviction."
+            )
+
+    packed_graph = megatron_cfg.get("cuda_graph_packed_seq")
+    if packed_graph is not None and not isinstance(packed_graph, bool):
+        raise TypeError(f"cuda_graph_packed_seq must be a bool, got {packed_graph!r}")
+    max_packed_seqs = megatron_cfg.get("cuda_graph_max_packed_seqs")
+    if max_packed_seqs is not None:
+        _validate_config_integer(
+            "cuda_graph_max_packed_seqs",
+            max_packed_seqs,
+            minimum=1,
+        )
+
+    sequence_packing = bool(config.get("sequence_packing", {}).get("enabled", False))
+    if sequence_packing:
+        if packed_graph is not True:
+            raise ValueError(
+                "Packed Transformer Engine CUDA Graph training requires "
+                "cuda_graph_packed_seq=true."
+            )
+        if max_packed_seqs is None:
+            raise ValueError(
+                "Packed Transformer Engine CUDA Graph training requires a "
+                "positive cuda_graph_max_packed_seqs."
+            )
+    elif packed_graph is not None or max_packed_seqs is not None:
+        raise ValueError(
+            "cuda_graph_packed_seq and cuda_graph_max_packed_seqs require "
+            "sequence_packing.enabled=true."
+        )
+
+    return modules
 
 
 def destroy_parallel_state():
@@ -561,6 +730,7 @@ def setup_model_config(
     pretrained_ckpt = config.get("pretrained_checkpoint")
     fmt = pretrained_ckpt["format"] if pretrained_ckpt is not None else None
     validate_router_replay_config(config)
+    validate_cuda_graph_request(config)
 
     if fmt == "megatron_lm":
         # For megatron_lm format: build the model config from the HF architecture.
@@ -935,6 +1105,9 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
             )
 
     # These overrides need to be applied before the workers spawn.
+    cuda_graph_modules = normalize_cuda_graph_modules(
+        config["megatron_cfg"].get("cuda_graph_modules")
+    )
     if "transformer_impl" in config["megatron_cfg"]:
         model_cfg.transformer_impl = config["megatron_cfg"]["transformer_impl"]
     if "cuda_graph_impl" in config["megatron_cfg"]:
@@ -945,6 +1118,13 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
             model_cfg.inference_cuda_graph_scope = InferenceCudaGraphScope[
                 config["megatron_cfg"]["inference_cuda_graph_scope"]
             ]
+    model_cfg.cuda_graph_modules = [
+        CudaGraphModule[module] for module in cuda_graph_modules
+    ]
+    if "cuda_graph_warmup_steps" in config["megatron_cfg"]:
+        model_cfg.cuda_graph_warmup_steps = config["megatron_cfg"][
+            "cuda_graph_warmup_steps"
+        ]
 
     # Use the graph-safe TE RNG tracker for either training graphs or inference graphs.
     if "generation" in config and config["generation"] is not None:

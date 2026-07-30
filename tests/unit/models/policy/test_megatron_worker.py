@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
+from unittest.mock import MagicMock, call, patch
 
 import numpy as np
 import pytest
@@ -61,6 +62,315 @@ class _ModelWithNonSerializableExtraState(torch.nn.Module):
 
     def get_extra_state(self):
         raise AssertionError("moving a module must not serialize its extra state")
+
+
+class _FakeTECudaGraphBank:
+    def __init__(self, name: str, events: Optional[list[str]] = None) -> None:
+        self.name = name
+        self.events = events if events is not None else []
+        self.activate_count = 0
+        self.reset_count = 0
+
+    def activate(self) -> None:
+        self.activate_count += 1
+        self.events.append(f"activate:{self.name}")
+
+    def reset(self) -> None:
+        self.reset_count += 1
+        self.events.append(f"reset:{self.name}")
+
+
+def _make_cuda_graph_schedule_worker():
+    from nemo_rl.models.megatron.cuda_graph_lifecycle import TECudaGraphLifecycle
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.cfg = {
+        "max_total_sequence_length": 8192,
+        "train_micro_batch_size": 1,
+        "sequence_packing": {"enabled": False},
+        "megatron_cfg": {},
+    }
+    worker._te_cuda_graph_lifecycle = TECudaGraphLifecycle(
+        capacity=2,
+        warmup_steps=0,
+    )
+    worker._active_te_cuda_graph_key = None
+    worker._te_cuda_graph_replay_logged_keys = set()
+    worker._te_cuda_graph_capture_counts = {}
+    worker._te_cuda_graph_replay_counts = {}
+    worker._te_cuda_graph_cache_hit_count = 0
+    worker._te_cuda_graph_eviction_count = 0
+    worker._te_cuda_graph_fallback_count = 0
+    worker._te_cuda_graph_helpers = {}
+    worker._train_step_state = None
+    worker._te_cuda_graph_pipeline_parallel_size = MagicMock(return_value=2)
+    worker._configure_pipeline_cuda_graph_microbatches = MagicMock()
+    worker._install_te_cuda_graph_manual_hooks = MagicMock()
+    return worker
+
+
+@pytest.mark.parametrize(
+    "dense_modules",
+    [
+        (),
+        ("attn",),
+        ("mlp",),
+        ("mamba",),
+        ("attn", "mlp"),
+        ("attn", "mamba"),
+        ("mlp", "mamba"),
+        ("attn", "mlp", "mamba"),
+    ],
+)
+@pytest.mark.parametrize(
+    "moe_mode",
+    [
+        (),
+        ("moe",),
+        ("moe_router",),
+        ("moe_router", "moe_preprocess"),
+    ],
+)
+def test_cuda_graph_valid_module_combinations_map_to_mcore_enums(
+    dense_modules,
+    moe_mode,
+):
+    from nemo_rl.models.megatron.setup import _apply_performance_config
+
+    requested_modules = list(reversed((*dense_modules, *moe_mode)))
+    model_cfg = MagicMock()
+    model_cfg.gated_linear_unit = True
+    config = {
+        "megatron_cfg": {
+            "activation_checkpointing": False,
+            "apply_rope_fusion": False,
+            "bias_activation_fusion": False,
+            "gradient_accumulation_fusion": False,
+            "use_fused_weighted_squared_relu": False,
+            "cuda_graph_impl": "transformer_engine",
+            "cuda_graph_modules": requested_modules,
+        }
+    }
+
+    _apply_performance_config(model_cfg, config)
+
+    canonical_order = (
+        "attn",
+        "mlp",
+        "moe",
+        "moe_router",
+        "moe_preprocess",
+        "mamba",
+    )
+    expected_names = [
+        name for name in canonical_order if name in (*dense_modules, *moe_mode)
+    ]
+    assert [module.name for module in model_cfg.cuda_graph_modules] == expected_names
+
+
+def test_cuda_graph_schedule_banks_switch_5_3_5_and_reconfigure_hits():
+    from nemo_rl.models.megatron.cuda_graph_lifecycle import TECudaGraphScheduleKey
+
+    worker = _make_cuda_graph_schedule_worker()
+    bank_five = _FakeTECudaGraphBank("five")
+    bank_three = _FakeTECudaGraphBank("three")
+    worker._capture_te_cuda_graph_bank = MagicMock(side_effect=[bank_five, bank_three])
+
+    keys = [
+        worker._ensure_te_cuda_graph_schedule(
+            padded_seq_length=8192,
+            micro_batch_size=1,
+            num_microbatches=count,
+        )
+        for count in (5, 3, 5)
+    ]
+
+    key_five = TECudaGraphScheduleKey(5)
+    key_three = TECudaGraphScheduleKey(3)
+    assert keys == [key_five, key_three, key_five]
+    assert worker._active_te_cuda_graph_key == key_five
+    assert worker._capture_te_cuda_graph_bank.call_count == 2
+    assert bank_five.activate_count == 2
+    assert bank_three.activate_count == 1
+    assert worker._te_cuda_graph_capture_counts == {key_five: 1, key_three: 1}
+    assert worker._te_cuda_graph_cache_hit_count == 1
+    assert worker._te_cuda_graph_fallback_count == 0
+    assert worker._configure_pipeline_cuda_graph_microbatches.call_args_list == [
+        call(num_microbatches=5, micro_batch_size=1),
+        call(num_microbatches=3, micro_batch_size=1),
+        call(num_microbatches=5, micro_batch_size=1),
+    ]
+
+
+def test_cuda_graph_split_step_pins_schedule_until_release():
+    worker = _make_cuda_graph_schedule_worker()
+    worker._capture_te_cuda_graph_bank = MagicMock(
+        return_value=_FakeTECudaGraphBank("five")
+    )
+    worker._train_step_state = {
+        "te_cuda_graph_key": None,
+        "total_num_microbatches": 0,
+    }
+
+    key = worker._ensure_te_cuda_graph_schedule(
+        padded_seq_length=8192,
+        micro_batch_size=1,
+        num_microbatches=5,
+    )
+
+    with pytest.raises(RuntimeError, match="pinned"):
+        worker._ensure_te_cuda_graph_schedule(
+            padded_seq_length=8192,
+            micro_batch_size=1,
+            num_microbatches=3,
+        )
+    assert worker._train_step_state["te_cuda_graph_key"] == key
+
+    worker._release_split_te_cuda_graph_key(worker._train_step_state)
+    assert worker._train_step_state["te_cuda_graph_key"] is None
+
+
+def test_cuda_graph_bank_mutation_requires_a_drained_schedule_boundary():
+    from nemo_rl.models.megatron.cuda_graph_lifecycle import TECudaGraphScheduleKey
+
+    worker = _make_cuda_graph_schedule_worker()
+    worker._te_cuda_graph_schedule_live = False
+    assert worker._assert_te_cuda_graph_model_drained()
+
+    worker._te_cuda_graph_schedule_live = True
+    assert not worker._assert_te_cuda_graph_model_drained()
+
+    worker._te_cuda_graph_schedule_live = False
+    worker._train_step_state = {
+        "te_cuda_graph_key": None,
+        "total_num_microbatches": 0,
+    }
+    assert worker._assert_te_cuda_graph_model_drained()
+
+    worker._train_step_state = {
+        "te_cuda_graph_key": TECudaGraphScheduleKey(5),
+        "total_num_microbatches": 1,
+    }
+    assert not worker._assert_te_cuda_graph_model_drained()
+
+
+def test_cuda_graph_replay_telemetry_logs_once_per_schedule(caplog):
+    from nemo_rl.models.megatron.cuda_graph_lifecycle import TECudaGraphScheduleKey
+
+    worker = _make_cuda_graph_schedule_worker()
+    key = TECudaGraphScheduleKey(5)
+    worker._capture_te_cuda_graph_bank = MagicMock(
+        return_value=_FakeTECudaGraphBank("five")
+    )
+    worker._ensure_te_cuda_graph_schedule(
+        padded_seq_length=8192,
+        micro_batch_size=1,
+        num_microbatches=5,
+    )
+
+    with caplog.at_level("INFO"):
+        worker._record_te_cuda_graph_replay(key)
+        worker._record_te_cuda_graph_replay(key)
+
+    replay_messages = [
+        record.message
+        for record in caplog.records
+        if "first replay" in record.message.lower()
+    ]
+    assert len(replay_messages) == 1
+    assert "fallback_count=0" in replay_messages[0]
+    assert worker._te_cuda_graph_replay_counts == {key: 2}
+
+
+def test_cuda_graph_capture_disables_ddp_prehook_only_during_capture():
+    from nemo_rl.models.megatron.cuda_graph_lifecycle import TECudaGraphScheduleKey
+
+    worker = _make_cuda_graph_schedule_worker()
+    events: list[str] = []
+    bank = _FakeTECudaGraphBank("five", events)
+    helper = SimpleNamespace(
+        create_cuda_graph_bank=lambda manager, num_microbatches: (
+            events.append(f"capture:{num_microbatches}") or bank
+        )
+    )
+    worker._new_te_cuda_graph_helper = MagicMock(return_value=helper)
+    worker._te_cuda_graph_bank_manager = object()
+    worker.should_disable_forward_pre_hook = True
+    worker._forward_pre_hook_enabled = MagicMock(return_value=True)
+    worker.disable_forward_pre_hook = lambda param_sync=False: events.append("disable")
+    worker.enable_forward_pre_hook = lambda: events.append("enable")
+    worker._model_parallel_te_cuda_graphs_created = MagicMock(return_value=True)
+
+    captured = worker._capture_te_cuda_graph_bank(TECudaGraphScheduleKey(5))
+
+    assert captured is bank
+    assert events == ["disable", "capture:5", "enable"]
+
+
+def test_cuda_graph_manual_hooks_install_after_registered_ddp_hook_restores():
+    from nemo_rl.models.megatron.cuda_graph_lifecycle import TECudaGraphScheduleKey
+    from nemo_rl.models.policy.workers import megatron_policy_worker
+
+    worker = _make_cuda_graph_schedule_worker()
+    events: list[str] = []
+    key = TECudaGraphScheduleKey(5)
+    model_config = SimpleNamespace(param_sync_func=None)
+    worker.model = object()
+    worker._first_train_step_forward_pre_hook_disabled = True
+    worker._first_train_step_param_sync_func = "param-sync"
+    worker._active_te_cuda_graph_key = key
+    worker.enable_forward_pre_hook = lambda: events.append("registered")
+    worker._install_te_cuda_graph_manual_hooks = lambda active_key: events.append(
+        f"manual:{active_key.num_microbatches}"
+    )
+
+    with patch.object(
+        megatron_policy_worker,
+        "get_model_config",
+        return_value=model_config,
+    ):
+        worker._restore_forward_pre_hook_after_successful_step(True)
+
+    assert events == ["registered", "manual:5"]
+    assert model_config.param_sync_func == "param-sync"
+
+
+def test_cuda_graph_cpu_offload_is_rejected_while_bank_is_cached():
+    worker = _make_cuda_graph_schedule_worker()
+    worker._capture_te_cuda_graph_bank = MagicMock(
+        return_value=_FakeTECudaGraphBank("five")
+    )
+    worker._ensure_te_cuda_graph_schedule(
+        padded_seq_length=8192,
+        micro_batch_size=1,
+        num_microbatches=5,
+    )
+
+    with pytest.raises(RuntimeError, match="invalidate cached Transformer Engine"):
+        worker._reject_model_offload_with_te_cuda_graphs("finish_inference")
+
+
+def test_cuda_graph_worker_shutdown_resets_all_cached_banks():
+    worker = _make_cuda_graph_schedule_worker()
+    bank_five = _FakeTECudaGraphBank("five")
+    bank_three = _FakeTECudaGraphBank("three")
+    worker._capture_te_cuda_graph_bank = MagicMock(side_effect=[bank_five, bank_three])
+    for count in (5, 3):
+        worker._ensure_te_cuda_graph_schedule(
+            padded_seq_length=8192,
+            micro_batch_size=1,
+            num_microbatches=count,
+        )
+
+    assert worker.shutdown()
+
+    assert bank_five.reset_count == 1
+    assert bank_three.reset_count == 1
+    assert worker._te_cuda_graph_lifecycle.cached_keys == ()
+    assert worker._active_te_cuda_graph_key is None
 
 
 def test_megatron_move_model_does_not_serialize_extra_state():

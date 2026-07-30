@@ -577,6 +577,45 @@ class TestSequencePacker:
         assert packer3.min_bin_count == 3
         assert packer3.bin_count_multiple == 2
 
+    @pytest.mark.parametrize(
+        "algorithm",
+        [
+            PackingAlgorithm.CONCATENATIVE,
+            PackingAlgorithm.FIRST_FIT_DECREASING,
+            PackingAlgorithm.FIRST_FIT_SHUFFLE,
+            PackingAlgorithm.MODIFIED_FIRST_FIT_DECREASING,
+        ],
+    )
+    def test_max_sequences_per_bin_splits_dense_bins(
+        self,
+        algorithm: PackingAlgorithm,
+    ) -> None:
+        """Dropping the post-pack split would exceed graph boundary capacity."""
+        sequence_lengths = [1] * 17
+        packer = get_packer(
+            algorithm,
+            bin_capacity=100,
+            max_sequences_per_bin=4,
+        )
+
+        bins = packer.pack(sequence_lengths)
+
+        assert validate_solution(sequence_lengths, bins, 100)
+        assert [len(bin_contents) for bin_contents in bins] == [4, 4, 4, 4, 1]
+
+    @pytest.mark.parametrize("capacity", [0, -1, True, 1.5])
+    def test_max_sequences_per_bin_must_be_a_positive_integer(
+        self,
+        capacity,
+    ) -> None:
+        """Malformed graph sequence bounds must fail at packer construction."""
+        with pytest.raises((TypeError, ValueError), match="max_sequences_per_bin"):
+            get_packer(
+                PackingAlgorithm.CONCATENATIVE,
+                bin_capacity=100,
+                max_sequences_per_bin=capacity,
+            )
+
     def test_no_constraints_unchanged_behavior(
         self, bin_capacity: int, small_sequence_lengths: List[int]
     ):

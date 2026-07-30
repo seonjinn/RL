@@ -386,6 +386,17 @@ class MegatronConfig(TypedDict):
     # CUDA-graph implementation.
     # Options: 'none', 'local', 'transformer_engine', 'full_iteration'.
     cuda_graph_impl: NotRequired[str]
+    # Partial training CUDA Graph modules. An empty list captures whole layers.
+    # Supported values: attn, mlp, mamba, moe, moe_router, moe_preprocess.
+    cuda_graph_modules: NotRequired[list[str]]
+    # Whether TE training graphs consume fixed-shape packed THD metadata.
+    cuda_graph_packed_seq: NotRequired[bool]
+    # Maximum real sequences in one packed training microbatch.
+    cuda_graph_max_packed_seqs: NotRequired[int | None]
+    # Successful optimizer steps completed before TE graph capture starts.
+    cuda_graph_warmup_steps: NotRequired[int]
+    # Maximum PP schedule-specific TE graph banks retained by the worker.
+    cuda_graph_max_cached_schedules: NotRequired[int]
     # When True, each expert sees a fixed number of tokens for cuda-graph capture.
     # Required when cuda_graph_impl= 'local' with transformer_impl != 'inference_optimized'.
     moe_pad_experts_for_cuda_graph_inference: NotRequired[bool]
