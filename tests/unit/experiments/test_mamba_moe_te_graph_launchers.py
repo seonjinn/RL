@@ -322,6 +322,7 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
     assert "NRL_FORCE_REBUILD_VENVS=true" in script
     assert "uv run --extra mcore python -m pytest" in script
     assert "export NVTE_CUDA_ARCHS=100" in script
+    assert "#SBATCH --time=01:00:00" in script
 
 
 def test_gb200_profiles_limit_transformer_engine_build_to_sm100() -> None:
