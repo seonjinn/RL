@@ -3,7 +3,7 @@
 #SBATCH --account=coreai_dlalgo_llm
 #SBATCH --job-name=coreai_dlalgo_llm-sna.te-fp64-weakref
 #SBATCH --partition=batch
-#SBATCH --time=00:15:00
+#SBATCH --time=00:30:00
 #SBATCH --segment=1
 #SBATCH --output=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/exp_logs/mamba_moe_te_graph_20260729/te-fp64-weakref/validate-%j.out
 #SBATCH --error=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/exp_logs/mamba_moe_te_graph_20260729/te-fp64-weakref/validate-%j.err
