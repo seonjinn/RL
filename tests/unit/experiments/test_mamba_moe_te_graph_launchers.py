@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import itertools
 import os
@@ -36,7 +37,8 @@ TE_FP64_WEAKREF_SHA256 = (
 )
 TE_FP64_WEAKREF_SOURCE = (
     "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/"
-    "TransformerEngine-fp64-weakref-20260729/transformer_engine/pytorch/utils.py"
+    "TransformerEngine-fp64-weakref-20260729/.overlay/"
+    f"{TE_FP64_WEAKREF_COMMIT}/utils.py"
 )
 TE_FP64_WEAKREF_TARGET = (
     "/root/.cache/uv/archive-v0/AdbVCNRp6JVFPo0e/"
@@ -253,6 +255,55 @@ def test_fp64_overlay_rejects_wrong_sha_before_cuda_preflight(
 
     assert result.returncode != 0
     assert "SHA256 mismatch" in result.stderr
+    assert "CUDA preflight ran" not in result.stderr
+
+
+def test_fp64_overlay_rejects_writable_source_before_cuda_preflight(
+    tmp_path: Path,
+) -> None:
+    validator_path = EXPERIMENT_DIR / "validate_te_fp64_overlay.py"
+    package_root = tmp_path / "packages"
+    transformer_engine_root = package_root / "transformer_engine"
+    pytorch_root = transformer_engine_root / "pytorch"
+    pytorch_root.mkdir(parents=True)
+    (package_root / "torch.py").write_text(
+        "float64 = object()\n"
+        "def arange(*args, **kwargs):\n"
+        "    raise RuntimeError('CUDA preflight ran')\n"
+    )
+    (transformer_engine_root / "__init__.py").write_text(
+        f"__version__ = {TE_EXPECTED_VERSION!r}\n"
+    )
+    (pytorch_root / "__init__.py").touch()
+    utils_path = pytorch_root / "utils.py"
+    utils_path.write_text(
+        "import torch\n"
+        "_torch_dtype_to_np_typestr_dict = {torch.float64: '<f8'}\n"
+        "def make_weak_ref(tensor):\n"
+        "    return tensor\n"
+    )
+    utils_path.chmod(0o644)
+    expected_sha256 = hashlib.sha256(utils_path.read_bytes()).hexdigest()
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(package_root)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(validator_path),
+            "--expected-version",
+            TE_EXPECTED_VERSION,
+            "--expected-sha256",
+            expected_sha256,
+        ],
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "mode mismatch" in result.stderr
     assert "CUDA preflight ran" not in result.stderr
 
 

@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import stat
 from pathlib import Path
 
 import torch
@@ -43,6 +44,13 @@ def validate_overlay(
             f"expected {expected_sha256}, found {actual_sha256} at {utils_path}"
         )
 
+    actual_mode = stat.S_IMODE(utils_path.stat().st_mode)
+    if actual_mode != 0o444:
+        raise RuntimeError(
+            "Transformer Engine utils.py mode mismatch: "
+            f"expected 0444, found {actual_mode:04o} at {utils_path}"
+        )
+
     try:
         typestr = te_utils._torch_dtype_to_np_typestr_dict[torch.float64]
     except KeyError as error:
@@ -73,6 +81,7 @@ def validate_overlay(
         "te_version": version,
         "te_utils_path": str(utils_path),
         "te_utils_sha256": actual_sha256,
+        "te_utils_mode": f"{actual_mode:04o}",
         "fp64_typestr": typestr,
         "fp64_dtype": str(weak.dtype),
         "fp64_shape": str(tuple(weak.shape)),
