@@ -12,7 +12,7 @@ set -euo pipefail
 : "${CONTAINER:?Submit with the immutable NeMo-RL sqsh path}"
 : "${CONTAINER_SHA256:?Submit with the immutable sqsh SHA256}"
 REPO=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-mamba-moe-graph-cache-20260729-d7f1d496f
-UV_CACHE=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/uv_cache
+UV_CACHE=/tmp/nemo-rl-uv-cache-${SLURM_JOB_ID}
 
 test -f "${CONTAINER}"
 test "$(sha256sum "${CONTAINER}" | awk '{print $1}')" = "${CONTAINER_SHA256}"
@@ -28,7 +28,8 @@ srun --nodes=1 --ntasks=1 \
     NRL_FORCE_REBUILD_VENVS=true uv run --frozen --extra mcore python -c pass
     uv pip install --python /opt/nemo_rl_venv/bin/python --reinstall --no-cache 'ray[default]==2.56.1'
     uv pip install --python /opt/nemo_rl_venv/bin/python --reinstall --no-cache 'dill==0.4.1'
-    /opt/nemo_rl_venv/bin/python -c 'import dill; assert callable(dill.extend)'
+    uv pip install --python /opt/nemo_rl_venv/bin/python --reinstall --no-cache 'numpy==2.5.1'
+    /opt/nemo_rl_venv/bin/python -c 'import dill, numpy; assert callable(dill.extend); assert hasattr(numpy, \"ndarray\"); from nemo_rl.algorithms.grpo import MasterConfig'
     ray --version
     ray start --head --include-dashboard=False --disable-usage-stats --port=1200
     ray stop

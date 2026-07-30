@@ -335,15 +335,19 @@ def test_gb200_profiles_limit_transformer_engine_build_to_sm100() -> None:
     assert 'SETUP_COMMAND="${SETUP_COMMAND}" \\' in runner
     assert 'RAY_CLIENT_SERVER_ENABLED="${RAY_CLIENT_SERVER_ENABLED}" \\' in runner
     assert 'RAY_DASHBOARD_ENABLED="${RAY_DASHBOARD_ENABLED}" \\' in runner
+    ray_submit = (EXPERIMENT_DIR.parents[2] / "ray.sub").read_text()
+    assert "__CONTAINER_LOCAL__" in ray_submit
     for cluster in ("ptyche", "oci-hsg"):
         profile = (EXPERIMENT_DIR / "profiles" / f"{cluster}.env").read_text()
         assert "NVTE_CUDA_ARCHS=100" in profile
-        assert "UV_CACHE_DIR_OVERRIDE=" in profile
+        assert "UV_CACHE_DIR_OVERRIDE=__CONTAINER_LOCAL__" in profile
         assert "SETUP_COMMAND=" in profile
         assert "RAY_CLIENT_SERVER_ENABLED=0" in profile
         assert "RAY_DASHBOARD_ENABLED=0" in profile
         assert "--reinstall --no-cache 'ray[default]==2.56.1'" in profile
         assert "--reinstall --no-cache 'dill==0.4.1'" in profile
+        assert "--reinstall --no-cache 'numpy==2.5.1'" in profile
+        assert "from nemo_rl.algorithms.grpo import MasterConfig" in profile
 
 
 def test_container_smoke_reuses_official_mcore_environment() -> None:
@@ -351,11 +355,14 @@ def test_container_smoke_reuses_official_mcore_environment() -> None:
         EXPERIMENT_DIR / "scripts" / "smoke_nemo_container.sub"
     ).read_text()
 
+    assert "UV_CACHE=/tmp/nemo-rl-uv-cache-" in script
     assert "export UV_CACHE_DIR=" in script
     assert "export NVTE_CUDA_ARCHS=100" in script
     assert "NRL_FORCE_REBUILD_VENVS=true uv run --frozen --extra mcore python -c pass" in script
     assert "--reinstall --no-cache 'ray[default]==2.56.1'" in script
     assert "--reinstall --no-cache 'dill==0.4.1'" in script
+    assert "--reinstall --no-cache 'numpy==2.5.1'" in script
+    assert "from nemo_rl.algorithms.grpo import MasterConfig" in script
     assert "ray --version" in script
     assert "ray start --head" in script
     assert "ray stop" in script

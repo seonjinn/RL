@@ -186,7 +186,9 @@ RAY_LOG_SYNC_FREQUENCY=${RAY_LOG_SYNC_FREQUENCY:-}
 # Unset UV_CACHE_DIR to avoid local cache directory interferring with the container cache
 unset UV_CACHE_DIR
 
-if [[ -n "${UV_CACHE_DIR_OVERRIDE:-}" ]]; then
+if [[ "${UV_CACHE_DIR_OVERRIDE:-}" == "__CONTAINER_LOCAL__" ]]; then
+  :
+elif [[ -n "${UV_CACHE_DIR_OVERRIDE:-}" ]]; then
   mkdir -p "$UV_CACHE_DIR_OVERRIDE"
   if [[ -n $MOUNTS ]]; then
     MOUNTS+=",$UV_CACHE_DIR_OVERRIDE:/root/.cache/uv"
