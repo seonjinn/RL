@@ -60,7 +60,7 @@ srun --nodes=1 --ntasks=1 \
     export UV_PROJECT_ENVIRONMENT=${MCORE_VENV}
     exec 9>\"\${UV_PROJECT_ENVIRONMENT}.lock\"
     flock -x 9
-    uv sync --frozen --extra mcore \
+    uv sync --frozen --extra mcore --group test \
       --no-install-package transformer-engine \
       --no-install-project \
       --no-install-local \

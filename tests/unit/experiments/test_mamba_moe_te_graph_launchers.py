@@ -500,6 +500,7 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
     first_wrapper_index = script.index(wrapper_command)
     sync_block = script[sync_index:first_wrapper_index]
     for sync_flag in (
+        "--group test",
         "--no-install-project",
         "--no-install-local",
         "--python /opt/nemo_rl_venv/bin/python",
@@ -510,6 +511,9 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
     assert sync_block.count("--no-install-package transformer-engine") == 1
     assert "--no-install-package transformer-engine-torch" not in sync_block
     assert "--no-build-package" not in sync_block
+    assert sync_block.count("--group test") == 1
+    assert "uv tool install" not in sync_block
+    assert "pip install" not in sync_block
     post_sync_te_check = script.index("Unexpected Transformer Engine artifact in venv")
     assert sync_index < post_sync_te_check < first_wrapper_index
     assert "sysconfig.get_path('purelib')" in script
