@@ -338,12 +338,10 @@ preflight_runtime_contract() {
   if [[ -L "${MCORE_DRIVER_PYTHON}" ]]; then
     local target
     target=$(readlink "${MCORE_DRIVER_PYTHON}")
-    if [[ ! -e "${MCORE_DRIVER_PYTHON}" ]]; then
-      case "${target}" in
-        /root/.local/share/uv/python/cpython-3.13-linux-aarch64-gnu/bin/python|/root/.local/share/uv/python/cpython-3.13-linux-aarch64-gnu/bin/python3.13) ;;
-        *) fail "locked MCore interpreter has an unusable symlink target: ${target}" ;;
-      esac
-    fi
+    case "${target}" in
+      /root/.local/share/uv/python/cpython-3.13-linux-aarch64-gnu/bin/python|/root/.local/share/uv/python/cpython-3.13-linux-aarch64-gnu/bin/python3.13) ;;
+      *) fail "locked MCore interpreter has an unusable symlink target: ${target}" ;;
+    esac
   elif [[ ! -x "${MCORE_DRIVER_PYTHON}" ]]; then
     fail "locked MCore interpreter is not executable: ${MCORE_DRIVER_PYTHON}"
   fi

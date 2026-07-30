@@ -403,6 +403,62 @@ def test_pre_sbatch_runtime_contract_accepts_verified_test_artifacts(
     assert record.exists()
 
 
+def test_pre_sbatch_runtime_contract_rejects_arbitrary_interpreter_symlink(
+    tmp_path: Path,
+) -> None:
+    archives = tuple(tmp_path / f"archive-{index}" for index in range(6))
+    for archive in archives:
+        archive.mkdir()
+    driver = tmp_path / "locked-mcore" / "bin" / "python"
+    driver.parent.mkdir(parents=True)
+    driver.symlink_to("/usr/bin/python3")
+    overlay = tmp_path / "utils.py"
+    overlay.write_text("fp64 overlay\n")
+    overlay.chmod(0o444)
+    container = tmp_path / "nightly.sqsh"
+    container.touch()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    record = tmp_path / "sbatch-invoked"
+    fake_sbatch = fake_bin / "sbatch"
+    fake_sbatch.write_text(
+        '#!/usr/bin/env bash\nprintf invoked > "${SBATCH_RECORD:?}"\n'
+    )
+    fake_sbatch.chmod(0o755)
+    lock_blob = subprocess.run(
+        ["git", "hash-object", "uv.lock"],
+        check=True,
+        cwd=EXPERIMENT_DIR.parents[2],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    result = _run_script(
+        "scopes/17_attn.sh",
+        CLUSTER="ptyche",
+        SBATCH_TEST_ONLY="1",
+        SBATCH_RECORD=str(record),
+        LOG_ROOT_OVERRIDE=str(tmp_path / "logs"),
+        PATH=f"{fake_bin}:{os.environ['PATH']}",
+        LAUNCHER_TEST_CONTRACT_OVERRIDE="1",
+        MCORE_DRIVER_PYTHON_OVERRIDE=str(driver),
+        MCORE_LOCK_BLOB_OVERRIDE=lock_blob,
+        RUNTIME_ARCHIVE_PREFIX_OVERRIDE=":".join(map(str, archives)),
+        TE_FP64_WEAKREF_SOURCE_OVERRIDE=str(overlay),
+        TE_FP64_WEAKREF_SHA256_OVERRIDE=hashlib.sha256(
+            overlay.read_bytes()
+        ).hexdigest(),
+        TE_FP64_WEAKREF_TARGET_OVERRIDE=str(
+            archives[0] / "transformer_engine/pytorch/utils.py"
+        ),
+        CONTAINER_OVERRIDE=str(container),
+    )
+
+    assert result.returncode == 2
+    assert "unusable symlink target: /usr/bin/python3" in result.stderr
+    assert not record.exists()
+
+
 def test_real_submission_uses_parsable_sbatch_job_ids_without_dependencies() -> None:
     result = _run_script(
         "scopes/17_attn.sh",
