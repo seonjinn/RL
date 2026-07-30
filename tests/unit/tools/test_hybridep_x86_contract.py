@@ -772,7 +772,16 @@ def test_deepep_setup_probe_uses_the_ray_runtime_python(
         "DEEPEP_RUNTIME_VERSION",
         "DEEPEP_RUNTIME_PATHS",
         "DEEPEP_RUNTIME_NCCL",
+        "DEEPEP_RUNTIME_STORAGE_BYTES",
     ))
+    assert (
+        'overlay_storage_bytes=$(du --bytes --summarize "${overlay}" | cut -f1)'
+        in result.stdout
+    )
+    assert (
+        r'printf "DEEPEP_RUNTIME_STORAGE_BYTES %s\n" "${overlay_storage_bytes}"'
+        in result.stdout
+    )
     assert all(required_import in result.stdout for required_import in required_probe_imports)
 
 

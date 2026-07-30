@@ -133,5 +133,8 @@ printf '%s\n' \
   'mkdir -p "${overlay}"' \
   'unset UV_CONFIG_FILE' \
   'UV_NO_CONFIG=1 uv pip install --python "${runtime_python}" --target "${overlay}" --reinstall --no-deps --no-index "${nccl_wheel}" "${deepep_wheel}"' \
+  'overlay_storage_bytes=$(du --bytes --summarize "${overlay}" | cut -f1)' \
+  '[[ "${overlay_storage_bytes}" =~ ^[0-9]+$ ]]' \
+  'printf "DEEPEP_RUNTIME_STORAGE_BYTES %s\n" "${overlay_storage_bytes}"' \
   'export LD_LIBRARY_PATH="${overlay}/nvidia/nccl/lib:${LD_LIBRARY_PATH:-}"' \
   "${probe_command}"
