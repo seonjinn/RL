@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#SBATCH --nodes=1
+#SBATCH --account=coreai_dlalgo_llm
+#SBATCH --job-name=coreai_dlalgo_llm-sna-cg-study.smoke-nemo-container
+#SBATCH --partition=backfill
+#SBATCH --time=00:05:00
+#SBATCH --segment=1
+#SBATCH --output=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/logs/nemo-container-smoke-%j.out
+
+set -euo pipefail
+
+: "${CONTAINER:?Submit with the immutable NeMo-RL sqsh path}"
+: "${CONTAINER_SHA256:?Submit with the immutable sqsh SHA256}"
+
+test -f "${CONTAINER}"
+test "$(sha256sum "${CONTAINER}" | awk '{print $1}')" = "${CONTAINER_SHA256}"
+
+srun --nodes=1 --ntasks=1 \
+  --container-image="${CONTAINER}" \
+  --container-mounts=/lustre:/lustre \
+  python - <<'PY'
+import importlib
+
+import torch
+
+assert torch.cuda.is_available()
+assert torch.cuda.device_count() == 4
+
+modules = (
+    "transformer_engine.pytorch",
+    "megatron.core",
+    "mamba_ssm",
+    "causal_conv1d",
+    "grouped_gemm",
+)
+for module_name in modules:
+    module = importlib.import_module(module_name)
+    print(f"{module_name}={getattr(module, '__version__', 'unknown')}")
+
+print(f"torch={torch.__version__}")
+print(f"cuda_devices={torch.cuda.device_count()}")
+PY
