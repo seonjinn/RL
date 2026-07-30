@@ -79,6 +79,29 @@ def _run_script(
     )
 
 
+def _run_untracked_path_guard(path_listing_command: str) -> subprocess.CompletedProcess[str]:
+    guard = f"""\
+set -euo pipefail
+{path_listing_command} | while IFS= read -r untracked_path; do
+  case "${{untracked_path}}" in
+    tests/unit/unit_results.json) ;;
+    *)
+      if [[ ! "${{untracked_path}}" =~ ^tests/unit/unit_results/[^/]+\\.json$ ]]; then
+        echo "Unexpected untracked path: ${{untracked_path}}" >&2
+        exit 1
+      fi
+      ;;
+  esac
+done
+"""
+    return subprocess.run(
+        ["bash", "-c", guard],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 def _load_experiment_module(name: str) -> ModuleType:
     path = EXPERIMENT_DIR / f"{name}.py"
     spec = importlib.util.spec_from_file_location(name, path)
@@ -485,10 +508,27 @@ def test_nemorl_integration_gate_allows_only_generated_unit_result_json_files() 
         assert generated_result.fullmatch(path) is None
 
     assert "while IFS= read -r untracked_path; do" in script
+    assert "git ls-files --others --exclude-standard | while IFS= read -r untracked_path; do" in script
+    assert "done < <(git ls-files --others --exclude-standard)" not in script
     assert "tests/unit/unit_results.json" in script
     assert "^tests/unit/unit_results/[^/]+\\.json$" in script
     assert "Unexpected untracked path:" in script
     assert 'test -z "\\$(git ls-files --others --exclude-standard)"' not in script
+
+    producer_failure = _run_untracked_path_guard("false")
+    assert producer_failure.returncode != 0
+
+    allowed_paths = _run_untracked_path_guard(
+        "printf '%s\\n' tests/unit/unit_results.json "
+        "tests/unit/unit_results/20260729_214835.json"
+    )
+    assert allowed_paths.returncode == 0, allowed_paths.stderr
+
+    unexpected_path = _run_untracked_path_guard(
+        "printf '%s\\n' experiments/untracked.py"
+    )
+    assert unexpected_path.returncode != 0
+    assert "Unexpected untracked path: experiments/untracked.py" in unexpected_path.stderr
 
 
 def test_nemorl_integration_gate_validates_fp64_overlay_and_mcore_graph_suite() -> None:
