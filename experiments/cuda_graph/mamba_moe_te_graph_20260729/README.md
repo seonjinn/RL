@@ -109,7 +109,7 @@ container overrides are intentionally not accepted for this gate. It hashes the
 ## Persistent native Transformer Engine build
 
 `scripts/build_te_pr2898_backport.sub` is the separate native-build gate for
-TransformerEngine commit `ba256c5b23c8f19b64a0c26499277d15c4133a1c` from
+TransformerEngine commit `c16cb9a1d850f8b8228959145c98541958903b8f` from
 `${ROOT}/src/TransformerEngine-fp64-thd-cudagraph-20260730`. It validates the
 source HEAD, clean worktree, recursive submodule state, and the same pinned
 nightly image SHA256 before entering the container. The container builds one
@@ -129,9 +129,18 @@ outside every performance launcher, so no performance job builds or installs
 native Transformer Engine code.
 
 ```bash
-TE_BUILD_JOBS=8 \
+TE_BUILD_JOBS=16 \
   sbatch experiments/cuda_graph/mamba_moe_te_graph_20260729/scripts/build_te_pr2898_backport.sub
 ```
+
+Ptyche job `2475656` compiled the original `ba256c5b` backport through target
+50/78, then failed in `fused_moe_aux_loss.cu`: PR2898 assumed a newer
+compile-time reducer signature and accumulator conversion helper that are not
+present in the pinned nightly TE base. Commit `c16cb9a1` adapts only the new
+graph-safe aux-loss path to the legacy private helpers while preserving the
+public ABI and `Coeff_buf[0]/[1]` semantics. The failed job exited `1:0` after
+`00:21:10`; its build and publication staging directories and output lock were
+removed, and no immutable wheel directory was published.
 
 The gate runs from the clean runner checkout
 `${ROOT}/src/RL-pr5672-mamba-moe-graph-cache-runner-20260730`, which must be
