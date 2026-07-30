@@ -107,6 +107,10 @@ if mode == "require-isolation":
     expected_cmake = f"export NVTE_CMAKE_BUILD_DIR={staging_dir / 'cmake'}"
     if expected_cmake not in command:
         raise SystemExit(32)
+    for build_directory in ("cmake", "setuptools-build", "bdist"):
+        path = staging_dir / build_directory
+        path.mkdir(parents=True)
+        (path / "build-intermediate").write_text("fixture")
 
 if mode == "concurrent":
     state = Path(os.environ["FAKE_SRUN_STATE"])
@@ -205,7 +209,7 @@ def test_te_pr2898_build_launcher_is_offline_bounded_and_atomically_publishes_on
     assert "Expected exactly one wheel" in script
     assert "wheel_sha256" in script
     assert "provenance.json" in script
-    assert 'mv -T -- "${STAGING_DIR}" "${OUTPUT_DIR}"' in script
+    assert 'mv -T -- "${PUBLISH_STAGING}" "${OUTPUT_DIR}"' in script
     assert "transformer-engine-pr2898-${EXPECTED_TE_COMMIT}" in script
 
 
@@ -289,6 +293,32 @@ def test_te_pr2898_build_isolates_native_and_setuptools_build_dirs(
     )
     assert (output / "provenance.json").is_file()
     assert list(output.glob("wheel/*.whl"))
+
+
+def test_te_pr2898_publish_excludes_build_intermediates(tmp_path: Path) -> None:
+    launcher, root, fake_bin = _prepare_launcher_fixture(tmp_path)
+    result = subprocess.run(
+        ["/bin/bash", str(launcher)],
+        env=_launcher_environment(fake_bin, mode="require-isolation"),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    output_root = root / "artifacts" / "transformer-engine"
+    output = next(
+        path for path in output_root.iterdir() if not path.name.endswith(".lock")
+    )
+    assert sorted(path.name for path in output.iterdir()) == [
+        "provenance.json",
+        "wheel",
+    ]
+    wheel_artifacts = sorted(path.name for path in (output / "wheel").iterdir())
+    assert wheel_artifacts == [
+        "transformer_engine_fixture.whl",
+        "transformer_engine_fixture.whl.sha256",
+    ]
 
 
 def test_te_pr2898_build_failure_cleans_staging_and_releases_lock(

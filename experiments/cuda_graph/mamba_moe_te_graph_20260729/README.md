@@ -120,9 +120,11 @@ The launcher publishes only a fresh commit-named directory under
 `${ROOT}/artifacts/transformer-engine/`, containing exactly one wheel under
 `wheel/`, its SHA256 sidecar, and provenance JSON. An atomic output lock admits
 one builder, and publication uses a no-nesting atomic rename; an existing
-commit directory is never replaced. CMake, setuptools, and wheel build
-directories stay under a fresh staging directory, which is removed if the
-build fails and disarmed only after successful publication. It is deliberately
+commit directory is never replaced. CMake, setuptools, and bdist intermediates
+stay under a disposable build staging directory and are never published. A
+separate publication staging directory contains only the wheel, checksum
+sidecar, and provenance. Both are removed on failure, and the disposable build
+staging is also removed before atomic publication. It is deliberately
 outside every performance launcher, so no performance job builds or installs
 native Transformer Engine code.
 
