@@ -41,6 +41,12 @@ srun --nodes=1 --ntasks=1 \
         set -euo pipefail
         export CUDA_VISIBLE_DEVICES=0
         export PYTHONPATH=/root/.cache/uv/archive-v0/AdbVCNRp6JVFPo0e:\${PYTHONPATH:-}
+        for archive in /root/.cache/uv/archive-v0/*; do
+            if [[ -d \"\${archive}/onnxscript\" ]]; then
+                export PYTHONPATH=\"\${archive}:\${PYTHONPATH}\"
+                break
+            fi
+        done
         python -m pytest -vv \\
           \"${TE_SOURCE_ROOT}/tests/pytorch/test_cuda_graphs.py\" \\
           -k \"fp64_weak_ref or reuses_fp64_outputs\"
