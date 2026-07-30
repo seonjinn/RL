@@ -32,5 +32,7 @@ srun --nodes=1 --ntasks=1 \
       tests/unit/models/megatron/test_megatron_data.py \
       tests/unit/models/megatron/test_megatron_setup.py \
       tests/unit/models/policy/test_megatron_worker.py \
-      tests/unit/models/policy/test_policy_validation.py
+      tests/unit/models/policy/test_policy_validation.py::test_te_graph_train_sharding_propagates_packed_sequence_capacity \
+      tests/unit/models/policy/test_policy_validation.py::test_te_graph_logprob_sharding_propagates_packed_sequence_capacity \
+      tests/unit/models/policy/test_policy_validation.py::test_shutdown_succeeds_before_worker_group_is_initialized
   "
