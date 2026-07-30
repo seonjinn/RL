@@ -492,16 +492,18 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
     assert "MCORE_VENV=${ROOT}/venvs/nemorl-integration-mcore-${MCORE_VENV_KEY}" in script
     assert "export UV_PROJECT_ENVIRONMENT=${MCORE_VENV}" in script
     sync_index = script.index("uv sync --frozen --extra mcore")
+    first_wrapper_index = script.index("\\${UV_PROJECT_ENVIRONMENT}/bin/python")
+    sync_block = script[sync_index:first_wrapper_index]
     for sync_flag in (
-        "--no-build",
         "--no-install-project",
         "--no-install-local",
         "--python /opt/nemo_rl_venv/bin/python",
         "--no-python-downloads",
     ):
-        assert sync_flag in script
-    assert "--no-build-package" not in script
-    first_wrapper_index = script.index("\\${UV_PROJECT_ENVIRONMENT}/bin/python")
+        assert sync_flag in sync_block
+    assert re.search(r"(?m)^\s*--no-build(?:\s|\\|$)", sync_block) is None
+    assert sync_block.count("--no-build-package transformer-engine") == 1
+    assert "--no-build-package transformer-engine-torch" not in sync_block
     last_wrapper_index = script.rindex("\\${UV_PROJECT_ENVIRONMENT}/bin/python")
     flock_index = script.index("flock -x 9")
     venv_parent_creation = 'mkdir -p "$(dirname "${MCORE_VENV}")"'
@@ -551,7 +553,8 @@ def test_nemorl_integration_gate_uses_the_validated_immutable_runtime_archives()
         "setup.py build",
     ):
         assert native_build_command not in script
-    assert "--no-build-package" not in script
+    assert script.count("--no-build-package transformer-engine") == 1
+    assert "--no-build-package transformer-engine-torch" not in script
 
 
 def test_nemorl_integration_gate_pins_clean_runner_lock_and_image_provenance() -> None:

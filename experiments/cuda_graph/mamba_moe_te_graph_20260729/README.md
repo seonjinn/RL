@@ -82,11 +82,11 @@ pyproject/submodule diff guards.
 
 Before either suite, the gate locks a persistent, external venv keyed by the
 lock blob, the immutable image SHA prefix, and `py313-aarch64`, then runs
-`uv sync --frozen --extra mcore --no-build --no-install-project
+`uv sync --frozen --extra mcore --no-build-package transformer-engine --no-install-project
 --no-install-local --python /opt/nemo_rl_venv/bin/python
---no-python-downloads`. This selects the locked MCore dependencies without
-installing repository or local sources and makes every source/native build a
-hard failure. The immutable archive prefix remains first in `PYTHONPATH`, so
+--no-python-downloads`. This selects pure-Python locked dependencies without
+installing repository or local sources, while making a Transformer Engine
+source/native build a hard failure. The immutable archive prefix remains first in `PYTHONPATH`, so
 the mounted Transformer Engine archive is still what the validator and pytest
 import. The gate also runs the packed-sequence, Transformer Engine graph-bank,
 FP64 MoE-router boundary, packed-Mamba parity, and `5→3→5` graph-bank schedule
