@@ -329,9 +329,11 @@ def test_gb200_profiles_limit_transformer_engine_build_to_sm100() -> None:
     runner = (EXPERIMENT_DIR / "run_scope.sh").read_text()
 
     assert 'NVTE_CUDA_ARCHS="${NVTE_CUDA_ARCHS}" \\' in runner
+    assert 'UV_CACHE_DIR_OVERRIDE="${UV_CACHE_DIR_OVERRIDE}" \\' in runner
     for cluster in ("ptyche", "oci-hsg"):
         profile = (EXPERIMENT_DIR / "profiles" / f"{cluster}.env").read_text()
         assert "NVTE_CUDA_ARCHS=100" in profile
+        assert "UV_CACHE_DIR_OVERRIDE=" in profile
 
 
 def test_container_smoke_reuses_official_mcore_environment() -> None:
@@ -339,7 +341,9 @@ def test_container_smoke_reuses_official_mcore_environment() -> None:
         EXPERIMENT_DIR / "scripts" / "smoke_nemo_container.sub"
     ).read_text()
 
-    assert "uv run --frozen --extra mcore --no-sync python -" in script
+    assert "export UV_CACHE_DIR=" in script
+    assert "export NVTE_CUDA_ARCHS=100" in script
+    assert "NRL_FORCE_REBUILD_VENVS=true uv run --frozen --extra mcore python -" in script
     assert "src/RL-pr5672-mamba-moe-graph-cache-20260729-d7f1d496f" in script
 
 
