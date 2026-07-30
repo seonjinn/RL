@@ -117,11 +117,14 @@ offline PyTorch wheel with `/opt/nemo_rl_venv/bin/python setup.py bdist_wheel`,
 `NVTE_CUDA_ARCHS=100`, and at most 16 build jobs.
 
 The launcher publishes only a fresh commit-named directory under
-`${ROOT}/artifacts/transformer-engine/`, containing exactly one wheel, its
-SHA256 sidecar, and provenance JSON. Publication is an atomic rename; an
-existing commit directory is never replaced. It is deliberately outside every
-performance launcher, so no performance job builds or installs native
-Transformer Engine code.
+`${ROOT}/artifacts/transformer-engine/`, containing exactly one wheel under
+`wheel/`, its SHA256 sidecar, and provenance JSON. An atomic output lock admits
+one builder, and publication uses a no-nesting atomic rename; an existing
+commit directory is never replaced. CMake, setuptools, and wheel build
+directories stay under a fresh staging directory, which is removed if the
+build fails and disarmed only after successful publication. It is deliberately
+outside every performance launcher, so no performance job builds or installs
+native Transformer Engine code.
 
 ```bash
 TE_BUILD_JOBS=8 \

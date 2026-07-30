@@ -22,6 +22,32 @@ IMAGE_SHA256=cb8ae0ade02b876f1b3380c8375eb92f95033dece6b2bfdc678b47f2da1aea91
 TE_BUILD_JOBS=${TE_BUILD_JOBS:-8}
 OUTPUT_ROOT=${ROOT}/artifacts/transformer-engine
 OUTPUT_DIR=${OUTPUT_ROOT}/transformer-engine-pr2898-${EXPECTED_TE_COMMIT}
+LOCK_DIR=${OUTPUT_DIR}.lock
+STAGING_DIR=
+LOCK_HELD=false
+PUBLISHED=false
+
+cleanup() {
+  exit_code=$?
+  trap - EXIT
+  if [[ "${PUBLISHED}" != true && -n "${STAGING_DIR}" && -d "${STAGING_DIR}" ]]; then
+    case "${STAGING_DIR}" in
+      "${OUTPUT_ROOT}"/.transformer-engine-pr2898-"${EXPECTED_TE_COMMIT}".*)
+        rm -rf -- "${STAGING_DIR}" || exit_code=2
+        ;;
+      *)
+        echo "Refusing to clean unexpected staging path: ${STAGING_DIR}" >&2
+        exit_code=2
+        ;;
+    esac
+  fi
+  if [[ "${LOCK_HELD}" == true ]]; then
+    rmdir -- "${LOCK_DIR}" || exit_code=2
+  fi
+  exit "${exit_code}"
+}
+
+trap cleanup EXIT
 
 [[ "${TE_BUILD_JOBS}" =~ ^[1-9][0-9]*$ && "${TE_BUILD_JOBS}" -le 16 ]] || \
   fail "TE_BUILD_JOBS must be an integer from 1 through 16"
@@ -39,8 +65,14 @@ if git -C "${TE_SOURCE}" submodule status --recursive | grep -Eq '^[+-U]'; then
 fi
 
 mkdir -p "${OUTPUT_ROOT}"
+if ! mkdir "${LOCK_DIR}"; then
+  fail "Another build owns the immutable output lock: ${LOCK_DIR}"
+fi
+LOCK_HELD=true
 [[ ! -e "${OUTPUT_DIR}" ]] || fail "Refusing to replace immutable wheel output: ${OUTPUT_DIR}"
 STAGING_DIR=$(mktemp -d "${OUTPUT_ROOT}/.transformer-engine-pr2898-${EXPECTED_TE_COMMIT}.XXXXXX")
+WHEEL_DIR=${STAGING_DIR}/wheel
+mkdir -p "${WHEEL_DIR}"
 
 srun --nodes=1 --ntasks=1 \
   --container-image="${IMAGE}" \
@@ -56,17 +88,28 @@ srun --nodes=1 --ntasks=1 \
     export MAX_JOBS=${TE_BUILD_JOBS}
     export PIP_NO_INDEX=1
     export PIP_NO_BUILD_ISOLATION=1
-    /opt/nemo_rl_venv/bin/python setup.py bdist_wheel --dist-dir \"${STAGING_DIR}\"
+    export NVTE_CMAKE_BUILD_DIR=${STAGING_DIR}/cmake
+    /opt/nemo_rl_venv/bin/python setup.py \
+      build --build-base \"${STAGING_DIR}/setuptools-build\" \
+      bdist_wheel --bdist-dir \"${STAGING_DIR}/bdist\" --dist-dir \"${WHEEL_DIR}\"
   "
 
-mapfile -t wheels < <(find "${STAGING_DIR}" -maxdepth 1 -type f -name '*.whl' -print)
+wheels=()
+while IFS= read -r wheel_path; do
+  wheels+=("${wheel_path}")
+done < <(find "${WHEEL_DIR}" -maxdepth 1 -type f -name '*.whl' -print)
 [[ "${#wheels[@]}" -eq 1 ]] || fail "Expected exactly one wheel, found ${#wheels[@]}"
 wheel=${wheels[0]}
 wheel_name=$(basename "${wheel}")
 wheel_sha256=$(sha256sum -- "${wheel}" | awk '{print $1}')
-printf '%s  %s\n' "${wheel_sha256}" "${wheel_name}" > "${STAGING_DIR}/${wheel_name}.sha256"
+printf '%s  %s\n' "${wheel_sha256}" "${wheel_name}" > "${WHEEL_DIR}/${wheel_name}.sha256"
 printf '{\n  "source": "%s",\n  "commit": "%s",\n  "image": "%s",\n  "image_sha256": "%s",\n  "wheel": "%s",\n  "wheel_sha256": "%s",\n  "nvte_framework": "pytorch",\n  "nvte_cuda_archs": "100",\n  "max_jobs": %s\n}\n' \
   "${TE_SOURCE}" "${EXPECTED_TE_COMMIT}" "${IMAGE}" "${IMAGE_SHA256}" "${wheel_name}" \
   "${wheel_sha256}" "${TE_BUILD_JOBS}" > "${STAGING_DIR}/provenance.json"
-mv -- "${STAGING_DIR}" "${OUTPUT_DIR}"
+mv -T -- "${STAGING_DIR}" "${OUTPUT_DIR}"
+PUBLISHED=true
+STAGING_DIR=
+rmdir -- "${LOCK_DIR}"
+LOCK_HELD=false
+trap - EXIT
 printf 'TE_WHEEL_OUTPUT: %s\n' "${OUTPUT_DIR}"
