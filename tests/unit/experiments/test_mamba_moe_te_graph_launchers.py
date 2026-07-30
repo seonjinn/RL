@@ -331,11 +331,13 @@ def test_gb200_profiles_limit_transformer_engine_build_to_sm100() -> None:
     assert 'NVTE_CUDA_ARCHS="${NVTE_CUDA_ARCHS}" \\' in runner
     assert 'UV_CACHE_DIR_OVERRIDE="${UV_CACHE_DIR_OVERRIDE}" \\' in runner
     assert 'SETUP_COMMAND="${SETUP_COMMAND}" \\' in runner
+    assert 'RAY_CLIENT_SERVER_ENABLED="${RAY_CLIENT_SERVER_ENABLED}" \\' in runner
     for cluster in ("ptyche", "oci-hsg"):
         profile = (EXPERIMENT_DIR / "profiles" / f"{cluster}.env").read_text()
         assert "NVTE_CUDA_ARCHS=100" in profile
         assert "UV_CACHE_DIR_OVERRIDE=" in profile
         assert "SETUP_COMMAND=" in profile
+        assert "RAY_CLIENT_SERVER_ENABLED=0" in profile
         assert (
             "--reinstall --no-deps --no-cache urllib3==2.7.0 click==8.4.2"
             in profile
@@ -361,6 +363,8 @@ def test_ray_submission_has_no_singleton_dependency() -> None:
     script = (EXPERIMENT_DIR.parents[2] / "ray.sub").read_text()
 
     assert "--dependency=singleton" not in script
+    assert "RAY_CLIENT_SERVER_ENABLED" in script
+    assert "${RAY_CLIENT_SERVER_ARG}" in script
 
 
 def test_collector_schema_and_wandb_metric_mapping_are_exact() -> None:

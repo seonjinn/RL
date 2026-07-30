@@ -110,6 +110,15 @@ METRICS_EXPORT_PORT=${METRICS_EXPORT_PORT:-1309}
 # Ports for the head node -- all below ephemeral floor (9000 on some GB200 nodes).
 PORT=${PORT:-1200}
 RAY_CLIENT_SERVER_PORT=${RAY_CLIENT_SERVER_PORT:-1201}
+RAY_CLIENT_SERVER_ENABLED=${RAY_CLIENT_SERVER_ENABLED:-1}
+case "$RAY_CLIENT_SERVER_ENABLED" in
+  0) RAY_CLIENT_SERVER_ARG="" ;;
+  1) RAY_CLIENT_SERVER_ARG="--ray-client-server-port=${RAY_CLIENT_SERVER_PORT}" ;;
+  *)
+    echo "Error: RAY_CLIENT_SERVER_ENABLED must be 0 or 1, got '$RAY_CLIENT_SERVER_ENABLED'." >&2
+    exit 1
+    ;;
+esac
 #REDIT_SHARD_PORTS=${REDIT_SHARD_PORTS:-"random"} ??
 DASHBOARD_PORT=${DASHBOARD_PORT:-8265}  # Also used by debugger
 DASHBOARD_AGENT_LISTEN_PORT=${DASHBOARD_AGENT_LISTEN_PORT:-1311}
@@ -694,7 +703,7 @@ ray start --head \
     --resources="\$RAY_RESOURCES" \
     --node-ip-address="$head_node_ip" \
     --port=${PORT} \
-    --ray-client-server-port=${RAY_CLIENT_SERVER_PORT} \
+    ${RAY_CLIENT_SERVER_ARG} \
     --dashboard-port=${DASHBOARD_PORT} \
     --dashboard-host="$head_node_ip" \
     --include-dashboard=True \
