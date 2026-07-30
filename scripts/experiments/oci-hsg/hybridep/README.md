@@ -164,6 +164,9 @@ Run the native four-node, three-step compatibility triplet first. Do not set
 `NUM_ACTOR_NODES`, `GPUS_PER_NODE`, or `SEGMENT_SIZE`; the launcher resolves
 the performance recipe as 4 nodes and 8 GPUs per node, preserves its
 `cluster.segment_size: null`, and rejects mismatched scheduler resources.
+Topology resolution runs with the prepared `DRIVER_VENV` so it uses the
+repository's supported Python and configuration dependencies; it never falls
+back to the login node's ambient Python.
 Before each command, select the matching immutable wheel set described above:
 f725 `hybrid-ep` for all-to-all and HybridEP, or dd758 `main` for DeepEP. All
 three arms must use the same NCCL 2.30.4 wheel.

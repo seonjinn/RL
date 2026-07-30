@@ -196,6 +196,7 @@ printf '%s\\n' '999999'
     env = {
         **os.environ,
         "PATH": f"{fake_bin}:{Path(sys.executable).parent}:{os.environ['PATH']}",
+        "TOPOLOGY_PYTHON": sys.executable,
         "FAKE_PROJECT_ROOT": str(project_root),
         "FAKE_USER": subprocess.check_output(["id", "-un"], text=True).strip(),
         "COMMAND_CAPTURE": str(command_capture),
@@ -237,6 +238,7 @@ def _write_qwen30_native_topology_profile(tmp_path: Path) -> Path:
                 "NUM_ACTOR_NODES=${NUM_ACTOR_NODES:-4}",
                 "GPUS_PER_NODE=${GPUS_PER_NODE:-8}",
                 "SEGMENT_SIZE=${SEGMENT_SIZE:-4}",
+                "REQUIRE_RECIPE_TOPOLOGY_MATCH=true",
                 "MAX_STEPS=3",
                 "TIME_LIMIT=04:00:00",
                 f"DEFAULT_DEEPEP_COMMIT={DEEPEP_COMMIT}",
@@ -245,6 +247,40 @@ def _write_qwen30_native_topology_profile(tmp_path: Path) -> Path:
         )
     )
     return profile
+
+
+def test_generic_profile_does_not_require_topology_python(tmp_path: Path) -> None:
+    reject_bin = tmp_path / "reject-bin"
+    reject_bin.mkdir()
+    reject_python = reject_bin / "python3"
+    reject_python.write_text("#!/bin/sh\nexit 88\n")
+    reject_python.chmod(0o755)
+
+    args = _run_launcher(
+        tmp_path,
+        dispatcher_mode="recipe",
+        extra_env={
+            "PATH": f"{tmp_path / 'bin'}:{reject_bin}:{os.environ['PATH']}",
+            "TOPOLOGY_PYTHON": "",
+        },
+    )
+
+    assert "examples/run_grpo.py" in args
+
+
+def test_topology_matched_profile_requires_a_managed_python(tmp_path: Path) -> None:
+    result, _ = _run_launcher_result(
+        tmp_path,
+        dispatcher_mode="recipe",
+        model_config_path=_write_qwen30_native_topology_profile(tmp_path),
+        extra_env={"TOPOLOGY_PYTHON": ""},
+    )
+
+    assert result.returncode == 2
+    assert (
+        "DRIVER_VENV or TOPOLOGY_PYTHON is required for recipe topology validation"
+        in result.stderr
+    )
 
 
 def test_launcher_preserves_recipe_topology(tmp_path: Path) -> None:

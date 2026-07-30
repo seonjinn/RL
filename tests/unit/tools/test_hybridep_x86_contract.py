@@ -184,9 +184,9 @@ def test_qwen30_triplet_requires_the_same_nccl_runtime() -> None:
         project_root / "scripts" / "experiments" / "oci-hsg" / "hybridep" / "models"
     )
     expected = {
-        "qwen3-30ba3b-4n8g-x86.env": "true\thybridep",
-        "qwen3-30ba3b-4n8g-x86-hybridep.env": "true\thybridep",
-        "qwen3-30ba3b-4n8g-x86-deepep.env": "true\tdeepep",
+        "qwen3-30ba3b-4n8g-x86.env": "true\thybridep\ttrue",
+        "qwen3-30ba3b-4n8g-x86-hybridep.env": "true\thybridep\ttrue",
+        "qwen3-30ba3b-4n8g-x86-deepep.env": "true\tdeepep\ttrue",
     }
 
     for profile_name, expected_runtime in expected.items():
@@ -195,8 +195,9 @@ def test_qwen30_triplet_requires_the_same_nccl_runtime() -> None:
                 "bash",
                 "-c",
                 (
-                    'source "$1"; printf "%s\\t%s" '
-                    '"${REQUIRE_NCCL_WHEEL:-false}" "${DEEPEP_VARIANT:-unset}"'
+                    'source "$1"; printf "%s\\t%s\\t%s" '
+                    '"${REQUIRE_NCCL_WHEEL:-false}" "${DEEPEP_VARIANT:-unset}" '
+                    '"${REQUIRE_RECIPE_TOPOLOGY_MATCH:-false}"'
                 ),
                 "bash",
                 str(profile_dir / profile_name),

@@ -97,6 +97,8 @@ MODEL_TOKENIZER_OVERRIDE_ENV=${MODEL_TOKENIZER_OVERRIDE_ENV:-}
 REQUIRE_PREBUILT_ACTOR_VENVS=${REQUIRE_PREBUILT_ACTOR_VENVS:-false}
 REQUIRE_DEEPEP_WHEEL=${REQUIRE_DEEPEP_WHEEL:-false}
 REQUIRE_NCCL_WHEEL=${REQUIRE_NCCL_WHEEL:-false}
+REQUIRE_RECIPE_TOPOLOGY_MATCH=${REQUIRE_RECIPE_TOPOLOGY_MATCH:-false}
+TOPOLOGY_PYTHON=${TOPOLOGY_PYTHON:-}
 NEMO_RL_VENV_DIR=${NEMO_RL_VENV_DIR:-}
 UV_CACHE_DIR=${UV_CACHE_DIR:-}
 PREBUILT_ACTOR_LIBRARY_PATH=
@@ -143,6 +145,14 @@ case "${REQUIRE_NCCL_WHEEL}" in
   true | false) ;;
   *)
     printf 'REQUIRE_NCCL_WHEEL must be true or false.\n' >&2
+    exit 2
+    ;;
+esac
+
+case "${REQUIRE_RECIPE_TOPOLOGY_MATCH}" in
+  true | false) ;;
+  *)
+    printf 'REQUIRE_RECIPE_TOPOLOGY_MATCH must be true or false.\n' >&2
     exit 2
     ;;
 esac
@@ -357,35 +367,6 @@ if [[ ! -f "${CONFIG_PATH}" ]]; then
   exit 2
 fi
 CONFIG_SHA256=$(sha256sum "${CONFIG_PATH}" | cut -d' ' -f1)
-TOPOLOGY_RESOLVER="${SCRIPT_DIR}/resolve_recipe_topology.py"
-topology_python=(python3)
-if [[ -n "${DRIVER_VENV}" ]]; then
-  topology_python=("${DRIVER_VENV}/bin/python")
-fi
-if ! topology_python_path=$(command -v "${topology_python[0]}"); then
-  printf 'Recipe topology Python is not executable: %s\n' \
-    "${topology_python[0]}" >&2
-  exit 2
-fi
-topology_python[0]=${topology_python_path}
-if ! resolved_topology=$(
-  "${topology_python[@]}" "${TOPOLOGY_RESOLVER}" "${CONFIG_PATH}"
-); then
-  printf 'Failed to resolve scheduler topology from recipe: %s\n' \
-    "${CONFIG_PATH}" >&2
-  exit 2
-fi
-IFS=$'\t' read -r \
-  CONFIG_NUM_NODES \
-  CONFIG_GPUS_PER_NODE \
-  CONFIG_SEGMENT_SIZE \
-  RESOLVED_CONFIG_SHA256 <<< "${resolved_topology}"
-if [[ -z "${CONFIG_NUM_NODES}" || -z "${CONFIG_GPUS_PER_NODE}" || \
-  -z "${CONFIG_SEGMENT_SIZE}" || -z "${RESOLVED_CONFIG_SHA256}" ]]; then
-  printf 'Recipe topology resolver returned malformed output: %s\n' \
-    "${resolved_topology}" >&2
-  exit 2
-fi
 for scheduler_field in NUM_ACTOR_NODES GPUS_PER_NODE SEGMENT_SIZE; do
   scheduler_value=${!scheduler_field}
   if [[ ! "${scheduler_value}" =~ ^[1-9][0-9]*$ ]]; then
@@ -394,15 +375,56 @@ for scheduler_field in NUM_ACTOR_NODES GPUS_PER_NODE SEGMENT_SIZE; do
     exit 2
   fi
 done
-if [[ "${NUM_ACTOR_NODES}" != "${CONFIG_NUM_NODES}" ]]; then
-  printf 'scheduler nodes %s != recipe nodes %s\n' \
-    "${NUM_ACTOR_NODES}" "${CONFIG_NUM_NODES}" >&2
-  exit 2
-fi
-if [[ "${GPUS_PER_NODE}" != "${CONFIG_GPUS_PER_NODE}" ]]; then
-  printf 'scheduler GPUs per node %s != recipe GPUs per node %s\n' \
-    "${GPUS_PER_NODE}" "${CONFIG_GPUS_PER_NODE}" >&2
-  exit 2
+
+CONFIG_NUM_NODES=unchecked
+CONFIG_GPUS_PER_NODE=unchecked
+CONFIG_SEGMENT_SIZE=unchecked
+RESOLVED_CONFIG_SHA256=unchecked
+if [[ "${REQUIRE_RECIPE_TOPOLOGY_MATCH}" == "true" ]]; then
+  if [[ -n "${DRIVER_VENV}" ]]; then
+    TOPOLOGY_PYTHON="${DRIVER_VENV}/bin/python"
+  fi
+  if [[ -z "${TOPOLOGY_PYTHON}" ]]; then
+    printf '%s\n' \
+      'DRIVER_VENV or TOPOLOGY_PYTHON is required for recipe topology validation.' \
+      >&2
+    exit 2
+  fi
+  if [[ ! -x "${TOPOLOGY_PYTHON}" ]]; then
+    printf 'Recipe topology Python is not executable: %s\n' \
+      "${TOPOLOGY_PYTHON}" >&2
+    exit 2
+  fi
+
+  TOPOLOGY_RESOLVER="${SCRIPT_DIR}/resolve_recipe_topology.py"
+  if ! resolved_topology=$(
+    "${TOPOLOGY_PYTHON}" "${TOPOLOGY_RESOLVER}" "${CONFIG_PATH}"
+  ); then
+    printf 'Failed to resolve scheduler topology from recipe: %s\n' \
+      "${CONFIG_PATH}" >&2
+    exit 2
+  fi
+  IFS=$'\t' read -r \
+    CONFIG_NUM_NODES \
+    CONFIG_GPUS_PER_NODE \
+    CONFIG_SEGMENT_SIZE \
+    RESOLVED_CONFIG_SHA256 <<< "${resolved_topology}"
+  if [[ -z "${CONFIG_NUM_NODES}" || -z "${CONFIG_GPUS_PER_NODE}" || \
+    -z "${CONFIG_SEGMENT_SIZE}" || -z "${RESOLVED_CONFIG_SHA256}" ]]; then
+    printf 'Recipe topology resolver returned malformed output: %s\n' \
+      "${resolved_topology}" >&2
+    exit 2
+  fi
+  if [[ "${NUM_ACTOR_NODES}" != "${CONFIG_NUM_NODES}" ]]; then
+    printf 'scheduler nodes %s != recipe nodes %s\n' \
+      "${NUM_ACTOR_NODES}" "${CONFIG_NUM_NODES}" >&2
+    exit 2
+  fi
+  if [[ "${GPUS_PER_NODE}" != "${CONFIG_GPUS_PER_NODE}" ]]; then
+    printf 'scheduler GPUs per node %s != recipe GPUs per node %s\n' \
+      "${GPUS_PER_NODE}" "${CONFIG_GPUS_PER_NODE}" >&2
+    exit 2
+  fi
 fi
 
 if [[ ! -d "${BRIDGE_SRC}/megatron/bridge" ]]; then
@@ -657,6 +679,7 @@ metadata_path="${RUN_ROOT}/submission.env"
   printf 'nodes=%q\n' "${NUM_ACTOR_NODES}"
   printf 'gpus_per_node=%q\n' "${GPUS_PER_NODE}"
   printf 'segment_size=%q\n' "${SEGMENT_SIZE}"
+  printf 'recipe_topology_checked=%q\n' "${REQUIRE_RECIPE_TOPOLOGY_MATCH}"
   printf 'config_num_nodes=%q\n' "${CONFIG_NUM_NODES}"
   printf 'config_gpus_per_node=%q\n' "${CONFIG_GPUS_PER_NODE}"
   printf 'config_segment_size=%q\n' "${CONFIG_SEGMENT_SIZE}"
