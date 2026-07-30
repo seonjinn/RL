@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+#SBATCH --nodes=1
+#SBATCH --account=coreai_dlalgo_llm
+#SBATCH --job-name=coreai_dlalgo_llm-sna-cg-study.nemorl-integration
+#SBATCH --partition=backfill
+#SBATCH --time=00:15:00
+#SBATCH --segment=1
+#SBATCH --output=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/logs/nemorl-integration-%j.out
+
+set -euo pipefail
+
+ROOT=/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg
+REPO=${ROOT}/src/RL-pr5672-mamba-moe-graph-cache-20260729-d7f1d496f
+IMAGE=${ROOT}/containers/nemo_rl_nightly_20260727_2456107.sqsh
+EXPECTED_SHA=ec4682d7a2502030036ae72b6d868c92b0c7f667
+
+srun --nodes=1 --ntasks=1 \
+  --container-image="${IMAGE}" \
+  --container-mounts=/lustre:/lustre \
+  bash -lc "
+    set -euo pipefail
+    cd ${REPO}
+    test \"\$(git rev-parse HEAD)\" = ${EXPECTED_SHA}
+    test -z \"\$(git status --porcelain)\"
+    export PYTHONPATH=\${PWD}:\${PWD}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge:\${PWD}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM
+    python -m pytest -q \
+      tests/unit/models/megatron/test_cuda_graph_lifecycle.py \
+      tests/unit/data/packing/test_algorithms.py \
+      tests/unit/models/megatron/test_megatron_data.py \
+      tests/unit/models/megatron/test_megatron_setup.py \
+      tests/unit/models/policy/test_megatron_worker.py \
+      tests/unit/models/policy/test_policy_validation.py
+  "
