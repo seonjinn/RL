@@ -35,6 +35,7 @@ assert torch.cuda.is_available()
 assert torch.cuda.device_count() == 4
 
 modules = (
+    "ray",
     "transformer_engine.pytorch",
     "megatron.core",
     "mamba_ssm",
