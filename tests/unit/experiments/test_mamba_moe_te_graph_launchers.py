@@ -323,6 +323,15 @@ def test_nemorl_integration_gate_uses_official_mcore_environment() -> None:
     assert "uv run --extra mcore python -m pytest" in script
 
 
+def test_container_smoke_reuses_official_mcore_environment() -> None:
+    script = (
+        EXPERIMENT_DIR / "scripts" / "smoke_nemo_container.sub"
+    ).read_text()
+
+    assert "uv run --extra mcore --no-sync python -" in script
+    assert "src/RL-pr5672-mamba-moe-graph-cache-20260729-d7f1d496f" in script
+
+
 def test_ray_submission_has_no_singleton_dependency() -> None:
     script = (EXPERIMENT_DIR.parents[2] / "ray.sub").read_text()
 
