@@ -932,9 +932,7 @@ git commit -s -S -m "feat: own schedule-specific TE graph banks"
 
 **Files:**
 - Modify: `megatron/core/transformer/cuda_graphs.py`
-- Modify: `megatron/core/transformer/transformer_layer.py`
 - Modify: `megatron/core/models/common/fine_grained_callables.py`
-- Modify: `megatron/core/models/common/utils.py`
 - Test: `tests/unit_tests/transformer/test_cuda_graphs.py`
 - Test: `tests/unit_tests/transformer/test_submodule_callables.py`
 
@@ -942,8 +940,9 @@ git commit -s -S -m "feat: own schedule-specific TE graph banks"
 - Consumes: an MTP `mtp_model_layer` that is either a single graphable layer or
   a nested `HybridStack`.
 - Produces:
-  `_iter_graphable_te_leaves(module, config)` and explicit
-  `shared_expert_wgrad_captured` metadata.
+  `_iter_graphable_te_leaves(module, config)`, one canonical ordered leaf
+  descriptor sequence, and an explicit bounded contract for fine-grained MTP
+  overlap.
 
 - [ ] **Step 1: Add red nested-MTP discovery tests**
 
@@ -979,20 +978,18 @@ def test_te_discovery_descends_into_hybrid_mtp_stack() -> None:
     ]
 
 
-def test_delayed_shared_expert_wgrad_runs_when_not_captured() -> None:
-    wrapper = _BackwardDWWrapper.__new__(_BackwardDWWrapper)
-    wrapper.layer = SimpleNamespace(cuda_graphs=[object()])
-    wrapper.cuda_graph_modules = [CudaGraphModule.moe_router]
-    wrapper.shared_expert_wgrad_captured = False
-    wrapper.shared_expert_dw_callable = Mock()
-    wrapper.attn_dw_callable = Mock()
-    wrapper.graphed_backward_dw_callable = Mock()
+def test_te_discovery_preserves_hybrid_mtp_leaf_order() -> None:
+    mtp_stack = _make_hybrid_mtp_stack(
+        [
+            _make_moe_transformer_leaf(),
+            _make_mamba_leaf(),
+            _make_dense_transformer_leaf(),
+        ]
+    )
 
-    wrapper.backward_dw()
-
-    wrapper.shared_expert_dw_callable.assert_called_once_with()
-    wrapper.graphed_backward_dw_callable.assert_called_once_with()
-    wrapper.attn_dw_callable.assert_called_once_with()
+    assert _discover_mtp_leaf_ids(mtp_stack) == tuple(
+        id(layer) for layer in mtp_stack.layers
+    )
 ```
 
 - [ ] **Step 2: Run the red tests**
@@ -1006,7 +1003,10 @@ uv run pytest -q \
 
 - [ ] **Step 3: Implement one leaf-expansion path**
 
-Use `_iter_graphable_te_leaves` in all three places:
+Use `_iter_graphable_te_leaves` to produce one immutable ordered descriptor
+sequence. Decoder leaves come first, then MTP depth and
+`HybridStack.layers` order. Do not recursively flatten arbitrary children:
+`HybridStack.layers` is the schedule order.
 
 ```python
 def _iter_graphable_te_leaves(module, config):
@@ -1019,26 +1019,38 @@ def _iter_graphable_te_leaves(module, config):
         yield module
 ```
 
-Discovery, static sample membership checks, and current-microbatch assignment
-must consume the same returned leaf sequence. A requested scope with zero
-matching leaves raises during helper construction.
+Every consumer must derive from that exact sequence: helper discovery,
+callable counts, sample-argument ownership, FP8 flags, graph installation,
+manual hooks, Task 6 bank fingerprints, and current-microbatch assignment.
+Graph lists and hooks belong to leaves, never to the `HybridStack` container.
+A requested scope with zero matching leaves raises during helper construction.
+Add a production-path regression that expands a
+`[Transformer MoE, Mamba, Transformer dense]` MTP stack and proves static
+inputs and replay indices target the corresponding leaves.
 
-- [ ] **Step 4: Make MTP overlap scheduling fail closed**
+- [ ] **Step 4: Bound fine-grained MTP overlap explicitly**
 
 Ordinary non-overlapped MTP graph discovery supports a nested `HybridStack`.
 The existing expert-parallel overlap scheduler in
-`models/common/fine_grained_callables.py` assumes that `mtp_model_layer` is a
-single `TransformerLayer`; it must not silently build an incomplete schedule
-for a `HybridStack`. Add a validation in `build_mtp_layer_callables` that
-raises a descriptive `RuntimeError` for packed hybrid MTP with
-`overlap_moe_expert_parallel_comm=True`. The Super correctness and performance
-matrix exercises MTP with that overlap disabled.
+`models/common/fine_grained_callables.py` has one five-slot schedule per MTP
+wrapper. It can safely adapt only a `HybridStack` containing exactly one
+graphable MoE `TransformerLayer`. Preserve the legacy callable contract for
+that case, and reject zero-leaf, mixed, or multi-leaf hybrid MTP before
+scheduling. Non-fine-grained execution may still graph every eligible leaf.
 
-- [ ] **Step 5: Make delayed-wgrad ownership explicit**
+Keep Task 5's overlap plus partial-`moe_preprocess` rejection. It may be lifted
+only in a separate change that carries a typed immutable replay state and
+exact graph index through `node.layer_state`, validates it immediately after
+combine, and cleans it on success and failure. Do not introduce mutable
+layer-global continuation state.
 
-Set `shared_expert_wgrad_captured=True` only when the selected submodules
-actually include the non-overlapped shared expert. AlltoAll overlap restores
-its state-machine transition; Flex overlap remains eager.
+- [ ] **Step 5: Verify delayed-wgrad ownership without changing it**
+
+The inner `TransformerLayer` `_BackwardDWWrapper` already owns attention,
+routed-expert, and shared-expert delayed wgrad exactly once. Add regressions
+showing wrapper setup and current-microbatch selection are performed on each
+Transformer leaf rather than on the outer stack. Mamba leaves never receive
+that wrapper. Do not add a second ownership flag or rewrite MTP forward.
 
 - [ ] **Step 6: Run and commit**
 
@@ -1048,9 +1060,7 @@ uv run pytest -q \
   tests/unit_tests/transformer/test_submodule_callables.py
 git diff --check
 git add megatron/core/transformer/cuda_graphs.py \
-  megatron/core/transformer/transformer_layer.py \
   megatron/core/models/common/fine_grained_callables.py \
-  megatron/core/models/common/utils.py \
   tests/unit_tests/transformer/test_cuda_graphs.py \
   tests/unit_tests/transformer/test_submodule_callables.py
 git commit -s -S -m "fix: graph hybrid MTP and shared-expert ownership"
