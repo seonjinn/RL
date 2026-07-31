@@ -165,6 +165,57 @@ class TestModelForward:
         call_kwargs = mock_model.call_args[1]
         assert call_kwargs["position_ids"] is None
 
+    def test_model_forward_keeps_structural_and_mtp_masks_distinct(self):
+        """Structural padding routes the model while MTP keeps loss semantics."""
+        from nemo_rl.models.megatron.train import model_forward
+
+        mock_model = MagicMock(return_value=torch.randn(1, 4, 8))
+        data_dict = MagicMock()
+        data_dict.get_multimodal_dict.return_value = {}
+        input_ids = torch.tensor([[1, 2, 0, 0]])
+        structural_mask = torch.tensor([[False, False, True, True]])
+        mtp_loss_mask = torch.tensor([[1, 0, 0, 0]])
+
+        model_forward(
+            model=mock_model,
+            data_dict=data_dict,
+            input_ids_cp_sharded=input_ids,
+            position_ids=None,
+            attention_mask=None,
+            structural_padding_mask_cp_sharded=structural_mask,
+            mtp_loss_mask=mtp_loss_mask,
+        )
+
+        call_kwargs = mock_model.call_args.kwargs
+        assert call_kwargs["padding_mask"] is structural_mask
+        assert call_kwargs["loss_mask"] is mtp_loss_mask
+
+    @pytest.mark.parametrize(
+        "structural_mask",
+        [
+            torch.tensor([[0, 0, 1]], dtype=torch.int64),
+            torch.tensor([[False, True]], dtype=torch.bool),
+        ],
+    )
+    def test_model_forward_rejects_invalid_structural_mask(self, structural_mask):
+        from nemo_rl.models.megatron.train import model_forward
+
+        mock_model = MagicMock()
+        data_dict = MagicMock()
+        data_dict.get_multimodal_dict.return_value = {}
+
+        with pytest.raises((TypeError, ValueError), match="structural padding mask"):
+            model_forward(
+                model=mock_model,
+                data_dict=data_dict,
+                input_ids_cp_sharded=torch.tensor([[1, 2, 3]]),
+                position_ids=None,
+                attention_mask=None,
+                structural_padding_mask_cp_sharded=structural_mask,
+            )
+
+        mock_model.assert_not_called()
+
 
 class TestApplyTemperatureScaling:
     """Tests for apply_temperature_scaling function."""
@@ -264,6 +315,80 @@ class TestForwardWithPostProcessingFn:
         # forward_with_post_processing_fn should return a callable
         assert callable(wrapped_fn)
         assert isinstance(output, torch.Tensor)
+
+    @patch(
+        "nemo_rl.models.megatron.train.get_tensor_model_parallel_rank", return_value=0
+    )
+    @patch("nemo_rl.models.megatron.train.get_tensor_model_parallel_group")
+    @patch("nemo_rl.models.megatron.train.get_context_parallel_group")
+    @patch(
+        "nemo_rl.models.megatron.train.get_context_parallel_world_size", return_value=1
+    )
+    @patch("nemo_rl.models.megatron.train.SequencePackingLossWrapper")
+    @patch("nemo_rl.models.megatron.train.model_forward")
+    def test_forward_uses_real_loss_boundaries_with_fixed_model_metadata(
+        self,
+        mock_model_forward,
+        mock_wrapper,
+        mock_cp_size,
+        mock_cp_grp,
+        mock_tp_grp,
+        mock_tp_rank,
+    ):
+        from megatron.core.packed_seq_params import PackedSeqParams
+
+        from nemo_rl.models.megatron.data import ProcessedMicrobatch
+        from nemo_rl.models.megatron.train import (
+            LossPostProcessor,
+            forward_with_post_processing_fn,
+        )
+
+        real_cu_seqlens = torch.tensor([0, 3, 5], dtype=torch.int32)
+        real_cu_seqlens_padded = torch.tensor([0, 4, 8], dtype=torch.int32)
+        model_params = PackedSeqParams(
+            qkv_format="thd",
+            cu_seqlens_q=torch.tensor([0, 3, 5, 13, 13], dtype=torch.int32),
+            cu_seqlens_kv=torch.tensor([0, 3, 5, 13, 13], dtype=torch.int32),
+            cu_seqlens_q_padded=torch.tensor([0, 4, 8, 16, 16], dtype=torch.int32),
+            cu_seqlens_kv_padded=torch.tensor([0, 4, 8, 16, 16], dtype=torch.int32),
+        )
+        structural_mask = torch.tensor([[False, False, False, True] + [True] * 12])
+        processed_mb = ProcessedMicrobatch(
+            data_dict=MagicMock(),
+            input_ids=torch.zeros(1, 16, dtype=torch.long),
+            input_ids_cp_sharded=torch.zeros(1, 16, dtype=torch.long),
+            attention_mask=None,
+            position_ids=None,
+            packed_seq_params=model_params,
+            cu_seqlens=real_cu_seqlens,
+            cu_seqlens_padded=real_cu_seqlens_padded,
+            structural_padding_mask_cp_sharded=structural_mask,
+        )
+        post_processor = LossPostProcessor(
+            loss_fn=MagicMock(),
+            cfg={"sequence_packing": {"enabled": True}},
+            cp_normalize=False,
+        )
+        mock_model_forward.return_value = torch.randn(1, 16, 8)
+
+        forward_with_post_processing_fn(
+            data_iterator=iter([processed_mb]),
+            model=MagicMock(),
+            post_processing_fn=post_processor,
+        )
+
+        assert (
+            mock_model_forward.call_args.kwargs["structural_padding_mask_cp_sharded"]
+            is structural_mask
+        )
+        wrapper_kwargs = mock_wrapper.call_args.kwargs
+        assert wrapper_kwargs["cu_seqlens_q"] is real_cu_seqlens
+        assert wrapper_kwargs["cu_seqlens_q_padded"] is real_cu_seqlens_padded
+        assert wrapper_kwargs["cu_seqlens_q"] is not model_params.cu_seqlens_q
+        assert (
+            wrapper_kwargs["cu_seqlens_q_padded"]
+            is not model_params.cu_seqlens_q_padded
+        )
 
     @patch("nemo_rl.models.megatron.train.model_forward")
     def test_forward_with_logprobs_post_processor(self, mock_model_forward):
@@ -874,10 +999,44 @@ class TestLossPostProcessor:
 
         processor = LossPostProcessor(loss_fn=mock_loss_fn, cfg=cfg, cp_normalize=False)
 
-        processor(data_dict=MagicMock(), packed_seq_params=mock_packed_seq_params)
+        real_cu_seqlens = torch.tensor([0, 5, 10])
+        real_cu_seqlens_padded = torch.tensor([0, 8, 16])
+        processor(
+            data_dict=MagicMock(),
+            packed_seq_params=mock_packed_seq_params,
+            cu_seqlens=real_cu_seqlens,
+            cu_seqlens_padded=real_cu_seqlens_padded,
+        )
 
         # Verify SequencePackingLossWrapper was called
         mock_wrapper.assert_called_once()
+        assert mock_wrapper.call_args.kwargs["cu_seqlens_q"] is real_cu_seqlens
+        assert (
+            mock_wrapper.call_args.kwargs["cu_seqlens_q_padded"]
+            is real_cu_seqlens_padded
+        )
+
+    @pytest.mark.parametrize(
+        ("cu_seqlens", "cu_seqlens_padded"),
+        [(None, torch.tensor([0, 4])), (torch.tensor([0, 3]), None)],
+    )
+    def test_loss_post_processor_requires_both_real_packed_boundaries(
+        self, cu_seqlens, cu_seqlens_padded
+    ):
+        from nemo_rl.models.megatron.train import LossPostProcessor
+
+        processor = LossPostProcessor(
+            loss_fn=MagicMock(),
+            cfg={"sequence_packing": {"enabled": True}},
+        )
+
+        with pytest.raises(ValueError, match="real logical and physical"):
+            processor(
+                data_dict=MagicMock(),
+                packed_seq_params=MagicMock(),
+                cu_seqlens=cu_seqlens,
+                cu_seqlens_padded=cu_seqlens_padded,
+            )
 
 
 class TestLogprobsPostProcessor:

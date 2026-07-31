@@ -74,11 +74,12 @@ def model_forward(
     model: GPTModel,
     data_dict: BatchedDataDict[Any],
     input_ids_cp_sharded: torch.Tensor,
-    position_ids: torch.Tensor,
-    attention_mask: torch.Tensor,
+    position_ids: Optional[torch.Tensor],
+    attention_mask: Optional[torch.Tensor],
     packed_seq_params: Optional[PackedSeqParams] = None,
     defer_fp32_logits: Optional[bool] = False,
     mtp_loss_mask: Optional[torch.Tensor] = None,
+    structural_padding_mask_cp_sharded: Optional[torch.Tensor] = None,
     straggler_timer: Optional[StragglerDetector] = None,
     use_fused_linear_logprobs: bool = False,
 ) -> torch.Tensor:
@@ -93,6 +94,8 @@ def model_forward(
         packed_seq_params: Parameters for packed sequences (optional)
         defer_fp32_logits: Whether to skip the conversion of logits to fp32
         mtp_loss_mask: MTP loss mask to exclude prompt tokens from MTP loss (optional)
+        structural_padding_mask_cp_sharded: CP-local bool structural padding mask.
+            True entries are ignored by model routing but remain separate from loss masks.
         straggler_timer: Straggler detector for profiling the forward pass
         use_fused_linear_logprobs: Whether to compute logprobs with the fused
             chunked linear cross-entropy kernel (directly from hidden states)
@@ -107,13 +110,26 @@ def model_forward(
         position_ids = None
 
     additional_kwargs = {}
-    # Mamba models currently do not support packed_seq_params
     if packed_seq_params is not None:
         additional_kwargs["packed_seq_params"] = packed_seq_params
 
     # Pass MTP loss mask to exclude prompt tokens from MTP loss
     if mtp_loss_mask is not None:
         additional_kwargs["loss_mask"] = mtp_loss_mask
+
+    if structural_padding_mask_cp_sharded is not None:
+        if structural_padding_mask_cp_sharded.dtype != torch.bool:
+            raise TypeError(
+                "The structural padding mask must have bool dtype, got "
+                f"{structural_padding_mask_cp_sharded.dtype}."
+            )
+        if structural_padding_mask_cp_sharded.shape != input_ids_cp_sharded.shape:
+            raise ValueError(
+                "The structural padding mask must match CP-local input_ids shape: "
+                f"{tuple(structural_padding_mask_cp_sharded.shape)} != "
+                f"{tuple(input_ids_cp_sharded.shape)}."
+            )
+        additional_kwargs["padding_mask"] = structural_padding_mask_cp_sharded
 
     if defer_fp32_logits:
         additional_kwargs["fp32_output"] = False
@@ -200,7 +216,9 @@ def forward_with_post_processing_fn(
     attention_mask = processed_mb.attention_mask
     position_ids = processed_mb.position_ids
     packed_seq_params = processed_mb.packed_seq_params
+    cu_seqlens = processed_mb.cu_seqlens
     cu_seqlens_padded = processed_mb.cu_seqlens_padded
+    structural_padding_mask_cp_sharded = processed_mb.structural_padding_mask_cp_sharded
     mtp_loss_mask = processed_mb.mtp_loss_mask
     routed_experts_cp_sharded = processed_mb.routed_experts_cp_sharded
 
@@ -224,6 +242,7 @@ def forward_with_post_processing_fn(
                 packed_seq_params=packed_seq_params,
                 defer_fp32_logits=defer_fp32_logits,
                 mtp_loss_mask=mtp_loss_mask,
+                structural_padding_mask_cp_sharded=(structural_padding_mask_cp_sharded),
                 straggler_timer=straggler_timer,
                 use_fused_linear_logprobs=use_fused_linear_logprobs,
             )
@@ -273,6 +292,8 @@ def forward_with_post_processing_fn(
         post_processing_fn_wrapped = post_processing_fn(
             data_dict=data_dict,
             packed_seq_params=packed_seq_params,
+            cu_seqlens=cu_seqlens,
+            cu_seqlens_padded=cu_seqlens_padded,
             global_valid_seqs=global_valid_seqs,
             global_valid_toks=global_valid_toks,
         )
@@ -414,6 +435,8 @@ class LossPostProcessor:
         self,
         data_dict: BatchedDataDict[Any],
         packed_seq_params: Optional[PackedSeqParams] = None,
+        cu_seqlens: Optional[torch.Tensor] = None,
+        cu_seqlens_padded: Optional[torch.Tensor] = None,
         global_valid_seqs: Optional[torch.Tensor] = None,
         global_valid_toks: Optional[torch.Tensor] = None,
     ) -> Callable[[torch.Tensor], Tuple[torch.Tensor, Dict[str, Any]]]:
@@ -426,6 +449,8 @@ class LossPostProcessor:
         Args:
             data_dict: Batched data dictionary for the current microbatch
             packed_seq_params: Parameters for packed sequences (optional)
+            cu_seqlens: Real compact logical sequence boundaries.
+            cu_seqlens_padded: Real natural physical sequence boundaries.
             global_valid_seqs: Global valid sequence count for loss normalization
             global_valid_toks: Global valid token count for loss normalization
 
@@ -446,7 +471,7 @@ class LossPostProcessor:
 
         # wrap loss function with loss input preparation
         pack_sequences = self.cfg["sequence_packing"]["enabled"]
-        if pack_sequences and packed_seq_params is not None:
+        if pack_sequences:
             fuse_loss = self.cfg.get("sequence_packing", {}).get("fuse_loss", False)
             if fuse_loss:
                 # The fused path prepares loss via prepare_packed_loss_input and
@@ -457,6 +482,12 @@ class LossPostProcessor:
                     "prepare_fn (e.g. the value model's value-specific prep). "
                     "Disable fuse_loss for the value model."
                 )
+            if cu_seqlens is None or cu_seqlens_padded is None:
+                raise ValueError(
+                    "Packed loss requires explicit real logical and physical "
+                    "cu_seqlens boundaries."
+                )
+            if fuse_loss:
                 wrapper_cls = SequencePackingFusionLossWrapper
                 prepare_fn = partial(
                     prepare_packed_loss_input,
@@ -470,8 +501,8 @@ class LossPostProcessor:
             loss_fn_wrapped = wrapper_cls(
                 loss_fn=self.loss_fn,
                 prepare_fn=prepare_fn,
-                cu_seqlens_q=packed_seq_params.cu_seqlens_q,
-                cu_seqlens_q_padded=packed_seq_params.cu_seqlens_q_padded,
+                cu_seqlens_q=cu_seqlens,
+                cu_seqlens_q_padded=cu_seqlens_padded,
                 vocab_parallel_rank=get_tensor_model_parallel_rank(),
                 vocab_parallel_group=get_tensor_model_parallel_group(),
                 context_parallel_group=get_context_parallel_group(),
