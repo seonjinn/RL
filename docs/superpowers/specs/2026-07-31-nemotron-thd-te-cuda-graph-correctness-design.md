@@ -202,8 +202,8 @@ repacked or rejected before model execution.
 1. Dispatcher-owned replay state
    - Each dispatcher snapshots and restores the continuation state it owns.
    - Graph banks own the corresponding immutable structural state.
-   - This is selected because alltoall, allgather, and HybridEP have different
-     continuation contracts.
+   - This is selected because AlltoAll, AllGather, and HybridEP have different
+     continuation contracts and therefore different capability gates.
 
 2. `TransformerLayer` dispatcher-type branches
    - Directly assigning dispatcher fields is smaller initially.
@@ -258,19 +258,21 @@ State requirements:
 
 | Dispatcher | Banked/restored structural state |
 |---|---|
-| AllGather | local `hidden_shape`; eager `dispatch_postprocess` remains the owner of global `hidden_shape_before_permute` |
+| AllGather | Fail closed for packed structural padding: clearing padding routes makes eager permutation dynamically narrow expert input. Retain a capability gate for future static-capacity support. |
 | AlltoAll | `hidden_shape`, `hidden_shape_before_permute`, Python-valued capacity and output-count invariants |
-| Flex/HybridEP | top-level `hidden_shape`, original/padded token counts, `num_permuted_tokens`, capacity, and drop/pad `tokens_per_expert` when applicable |
-| Flex/DeepEP | `hidden_shape`; Tensor token probabilities/indices remain explicit graph outputs |
-| Flex/NCCL-EP | `hidden_shape`, local token count, and a pre-bootstrap maximum-capacity compatibility check |
+| Flex/HybridEP | top-level `hidden_shape`, original/padded token counts, `num_permuted_tokens`, capacity, drop/pad `tokens_per_expert` when applicable, and a fixed topology fingerprint |
+| Flex/DeepEP | Fail closed: eager dispatch owns dynamic handles and narrows expert input from host token counts |
+| Flex/NCCL-EP | Fail closed, including static mode, until graph-bank activation owns external-buffer bootstrap/reset |
 
-Alltoall, allgather, and HybridEP are required production paths. DeepEP and
-NCCL-EP receive state-contract unit tests and dependency-gated GPU smokes.
-They remain fail-closed for packed partial TE graphs until their external
-runtime and static-buffer tests pass.
+AlltoAll and fixed-capacity HybridEP are the required packed production paths
+for this design. AllGather, DeepEP, and NCCL-EP receive explicit capability
+tests and remain fail-closed for packed partial TE graphs until a test proves
+fixed expert-input geometry and, where applicable, graph-bank ownership of
+external runtime state.
 
-After eager expert/combine, output shape must exactly equal residual capacity.
-The output is never padded, truncated, or narrowed at this point.
+After eager expert/combine, output shape, dtype, device, layout, and stride
+must exactly equal residual capacity. The output is never padded, truncated,
+or narrowed at this point.
 
 ### Shared expert and delayed weight gradients
 
@@ -447,7 +449,7 @@ capacity. Never repair it with output padding.
 
 Write and observe failures before production changes for:
 
-- allgather state snapshot/restore;
+- packed AllGather fail-closed capability gate;
 - alltoall state snapshot/restore;
 - HybridEP state snapshot/restore;
 - DeepEP/NCCL-EP fail-closed gates;
@@ -470,7 +472,7 @@ Run eager versus TE graph with identical weights, inputs, and seeds:
 
 - GPT dense: `attn`, `mlp`, `attn+mlp`;
 - hybrid attention/Mamba;
-- allgather and alltoall `moe_router,moe_preprocess`;
+- AlltoAll `moe_router,moe_preprocess` and packed AllGather rejection;
 - alltoall latent MoE;
 - Flex/HybridEP partial MoE;
 - shared expert overlap off/on where supported;

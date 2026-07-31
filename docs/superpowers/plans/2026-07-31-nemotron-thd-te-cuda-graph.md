@@ -674,6 +674,7 @@ git commit -s -S -m "fix: exclude packed padding from hybrid routing"
 - Modify: `megatron/core/transformer/moe/token_dispatcher.py`
 - Modify: `megatron/core/transformer/transformer_layer.py`
 - Test: `tests/unit_tests/transformer/moe/test_token_dispatcher.py`
+- Test: `tests/unit_tests/transformer/moe/test_a2a_token_dispatcher.py`
 - Test: `tests/unit_tests/transformer/test_cuda_graphs.py`
 
 **Interfaces:**
@@ -681,68 +682,34 @@ git commit -s -S -m "fix: exclude packed padding from hybrid routing"
 - Produces:
   `snapshot_cudagraph_replay_state`,
   `restore_cudagraph_replay_state`, and
-  `validate_cudagraph_continuation`.
+  `validate_cudagraph_continuation`, indexed by captured graph runner.
 
 - [ ] **Step 1: Define red contract tests against real dispatcher classes**
 
-```python
-@pytest.mark.parametrize(
-    ("dispatcher_type", "flex_backend"),
-    [("allgather", None), ("alltoall", None), ("flex", "hybridep")],
-)
-def test_dispatcher_replay_state_restores_capacity_geometry(
-    dispatcher_type, flex_backend
-) -> None:
-    if flex_backend == "hybridep" and not is_hybrid_ep_available():
-        pytest.skip("HybridEP is not available")
-    container = MoEModelTestContainer(
-        tp_size=1,
-        ep_size=1,
-        pp_size=1,
-        moe_token_dispatcher_type=dispatcher_type,
-        moe_flex_dispatcher_backend=flex_backend,
-        hidden_size=8,
-    )
-    dispatcher = container.moe_layer.token_dispatcher
-    graph_input = torch.randn(16, 1, 8, device="cuda")
-    probs, routing_map = container.moe_layer.router(graph_input)
-    preprocessed, _ = dispatcher.dispatch_preprocess(
-        graph_input, routing_map, probs
-    )
-    state = dispatcher.snapshot_cudagraph_replay_state(
-        capacity_hidden_states=graph_input,
-        preprocessed_hidden_states=preprocessed,
-    )
-    dispatcher.hidden_shape = torch.Size((1, 1, graph_input.shape[-1]))
-    dispatcher.restore_cudagraph_replay_state(
-        state,
-        capacity_hidden_states=graph_input,
-        preprocessed_hidden_states=preprocessed,
-    )
-    assert dispatcher.hidden_shape.numel() == graph_input.numel()
+Add real-dispatcher tests with these contracts:
 
-
-def test_dispatcher_continuation_rejects_narrow_output() -> None:
-    container = MoEModelTestContainer(
-        tp_size=1,
-        ep_size=1,
-        pp_size=1,
-        moe_token_dispatcher_type="alltoall",
-        hidden_size=8,
-    )
-    dispatcher = container.moe_layer.token_dispatcher
-    with pytest.raises(RuntimeError, match="physical CUDA Graph capacity"):
-        dispatcher.validate_cudagraph_continuation(
-            capacity_hidden_states=torch.randn(16, 1, 8, device="cuda"),
-            output=torch.randn(12, 1, 8, device="cuda"),
-        )
-```
+- AlltoAll snapshots and restores exact `hidden_shape`,
+  `hidden_shape_before_permute`, scalar capacity, and output-count geometry.
+- fixed-capacity Flex/HybridEP snapshots and restores manager
+  `_original_num_tokens`, `_padded_num_tokens`, capacity,
+  `num_permuted_tokens`, and an immutable tuple form of any CPU
+  `tokens_per_expert` required by drop-and-pad.
+- exact input and continuation signatures reject shape, dtype, device, layout,
+  or stride changes even when `.numel()` is unchanged.
+- two mocked graph runners for one layer restore different states in
+  `test_cuda_graphs.py`; a single mutable layer-wide state is forbidden.
+- packed AllGather with cleared padding routes fails capability validation
+  because eager permutation narrows expert input.
+- Flex/DeepEP and Flex/NCCL-EP fail before capture. NCCL-EP static mode remains
+  disabled until Task 6 graph-bank activation owns its external-buffer
+  bootstrap/reset lifecycle.
 
 - [ ] **Step 2: Run the red tests**
 
 ```bash
 uv run pytest -q \
   tests/unit_tests/transformer/moe/test_token_dispatcher.py \
+  tests/unit_tests/transformer/moe/test_a2a_token_dispatcher.py \
   tests/unit_tests/transformer/test_cuda_graphs.py \
   -k "replay_state or continuation"
 ```
@@ -751,42 +718,72 @@ uv run pytest -q \
 
 ```python
 @dataclass(frozen=True)
-class MoECudaGraphReplayState:
-    dispatcher_kind: str
+class TensorReplaySignature:
+    shape: torch.Size
+    dtype: torch.dtype
+    device: torch.device
+    layout: torch.layout
+    stride: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class AlltoAllCudaGraphState:
     hidden_shape: torch.Size
-    hidden_shape_before_permute: torch.Size | None = None
-    capacity: int | None = None
-    num_out_tokens: int | None = None
-    original_num_tokens: int | None = None
-    padded_num_tokens: int | None = None
-    num_permuted_tokens: int | None = None
-    num_local_tokens: int | None = None
+    hidden_shape_before_permute: torch.Size
+    capacity: int | None
+    num_out_tokens: int | None
+
+
+@dataclass(frozen=True)
+class HybridEPCudaGraphState:
+    original_num_tokens: int
+    padded_num_tokens: int
+    capacity: int | None
+    num_permuted_tokens: int
+    tokens_per_expert: tuple[int, ...] | None
+
+
+@dataclass(frozen=True)
+class MoECudaGraphReplayState:
+    dispatcher_kind: Literal["alltoall", "flex-hybridep"]
+    input_signature: TensorReplaySignature
+    flattened_input_shape: torch.Size
+    topology_fingerprint: tuple[tuple[str, object], ...]
+    backend_state: AlltoAllCudaGraphState | HybridEPCudaGraphState
 ```
 
-The base dispatcher methods raise `NotImplementedError`. AllGather restores
-`hidden_shape`; AlltoAll restores both shapes plus Python capacity/output
-counts; Flex/HybridEP restores original/padded counts, permuted-token capacity,
-and drop/pad state. DeepEP and NCCL-EP validate their external buffer
-prerequisites and otherwise fail before capture.
+The base dispatcher methods raise `NotImplementedError`, and capability
+validation runs before any rank starts graph capture. AlltoAll and
+fixed-capacity Flex/HybridEP implement snapshot/restore. The topology
+fingerprint includes backend identity, TP/EP sizes, router top-k, drop-and-pad,
+rank/expert capacity, and HybridEP uneven-input policy. Per-invocation
+stream/event/handle state is never snapshotted.
 
 - [ ] **Step 4: Integrate state with partial replay**
 
-`TransformerLayer` records one immutable state per captured graph index. After
-TE replay restores Tensor `cudagraph_attrs`, it restores this structural state
-before calling eager dispatch/expert/combine. After combine it calls
-`validate_cudagraph_continuation`; no output-size repair is present.
+Capture state after `dispatch_preprocess` produces graph outputs but before
+the graph is committed to its runner. `TransformerLayer` records one immutable
+state per captured graph index. After TE replay restores Tensor
+`cudagraph_attrs`, it restores the state paired with that exact runner before
+calling eager dispatch/expert/combine. After combine it validates exact output
+shape, dtype, device, layout, and stride against the physical-capacity input;
+HybridEP additionally verifies returned rows equal restored
+`original_num_tokens`. No output-size repair, rank-local fallback, prefix
+reconstruction, or hidden final truncation is present.
 
 - [ ] **Step 5: Run and commit**
 
 ```bash
 uv run pytest -q \
   tests/unit_tests/transformer/moe/test_token_dispatcher.py \
+  tests/unit_tests/transformer/moe/test_a2a_token_dispatcher.py \
   tests/unit_tests/transformer/test_cuda_graphs.py
 git diff --check
 git add megatron/core/transformer/moe/cuda_graph_replay.py \
   megatron/core/transformer/moe/token_dispatcher.py \
   megatron/core/transformer/transformer_layer.py \
   tests/unit_tests/transformer/moe/test_token_dispatcher.py \
+  tests/unit_tests/transformer/moe/test_a2a_token_dispatcher.py \
   tests/unit_tests/transformer/test_cuda_graphs.py
 git commit -s -S -m "fix: restore dispatcher-owned TE graph state"
 ```
