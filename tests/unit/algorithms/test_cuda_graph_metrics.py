@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import ast
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -414,7 +414,7 @@ def test_merge_cuda_graph_metrics_uses_each_validated_value_once() -> None:
                 return "changed-after-validation"
             return self._values[key]
 
-        def __iter__(self) -> Iterable[str]:
+        def __iter__(self) -> Iterator[str]:
             return iter(self._values)
 
         def __len__(self) -> int:
