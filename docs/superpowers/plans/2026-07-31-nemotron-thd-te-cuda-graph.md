@@ -512,6 +512,7 @@ def test_hybrid_mtp_receives_padding_mask() -> None:
     hidden = torch.randn(4, 1, 8, device="cuda")
     model = SimpleNamespace(mtp=Mock(return_value=hidden))
     mask = torch.tensor([[False, False, True, True]], device="cuda")
+    packed_seq_params = PackedSeqParams(qkv_format="thd")
     HybridModel._forward_mtp(
         model,
         input_ids=torch.ones(1, 4, dtype=torch.long, device="cuda"),
@@ -520,11 +521,14 @@ def test_hybrid_mtp_receives_padding_mask() -> None:
         attention_mask=None,
         inference_params=None,
         rotary_pos_emb=None,
-        packed_seq_params=None,
+        packed_seq_params=packed_seq_params,
         padding_mask=mask,
         embedding=Mock(),
     )
     assert torch.equal(model.mtp.call_args.kwargs["padding_mask"], mask)
+    assert (
+        model.mtp.call_args.kwargs["packed_seq_params"] is packed_seq_params
+    )
 
 
 def test_hybridep_dropless_removes_padding_routes() -> None:
@@ -556,12 +560,18 @@ uv run pytest -q \
 
 - [ ] **Step 3: Implement the model-local mask transform**
 
-Mirror GPTModel's SP transform exactly:
+Mirror GPTModel's SP transform exactly on the embedding-owning stage. PP
+intermediate stages have neither `input_ids` nor a full global mask to
+validate/scatter:
 
 ```python
-if padding_mask is not None:
+if padding_mask is not None and input_ids is not None:
     assert padding_mask.shape == input_ids.shape
-if padding_mask is not None and self.config.sequence_parallel:
+if (
+    padding_mask is not None
+    and input_ids is not None
+    and self.config.sequence_parallel
+):
     padding_mask = (
         tensor_parallel.scatter_to_sequence_parallel_region(
             padding_mask.transpose(0, 1).contiguous(),
@@ -618,11 +628,14 @@ hidden_states = self._forward_mlp(
 )
 ```
 
-Use that call in `_te_cuda_graph_capture`. In attention-only replay, retain
-the original `padding_mask` and `packed_seq_params` when the eager MLP/router
-tail runs. In full and partial MoE capture, reconstruct graph-static
-`tokens_per_sample` so `_maybe_unflatten_for_moe()` observes the same batch
-geometry as eager execution.
+Task 2 commit `cd170e14e` already uses that call in
+`_te_cuda_graph_capture` and has the capture regression; do not duplicate or
+rewrite it. Add the missing THD static bool mask. In attention-only replay,
+retain the original `padding_mask` and rebuilt `packed_seq_params` before
+clearing graph kwargs, then pass them into the eager MLP/router tail. In full
+and partial MoE capture, preserve Task 2's graph-static `tokens_per_sample` so
+`_maybe_unflatten_for_moe()` observes the same batch geometry as eager
+execution.
 
 - [ ] **Step 5: Apply PR 5542 and retain fail-closed capacity behavior**
 
