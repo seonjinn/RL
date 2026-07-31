@@ -242,6 +242,15 @@ def _validate_fixed_packed_loss_metadata(
         raise invalid("PackedSeqParams is missing")
     if packed_seq_params.qkv_format != "thd":
         raise invalid(f"qkv_format is {packed_seq_params.qkv_format!r}, not 'thd'")
+    if packed_seq_params.pad_between_seqs is not True:
+        raise invalid("pad_between_seqs does not prove fixed THD finalization")
+    if packed_seq_params.total_tokens is None:
+        raise invalid("local total_tokens is missing")
+    if int(packed_seq_params.total_tokens) != local_model_capacity:
+        raise invalid(
+            "local total_tokens does not equal the local logits length "
+            f"({packed_seq_params.total_tokens} != {local_model_capacity})"
+        )
 
     model_q = packed_seq_params.cu_seqlens_q
     model_kv = packed_seq_params.cu_seqlens_kv
@@ -280,11 +289,14 @@ def _validate_fixed_packed_loss_metadata(
     if len(set(model_entry_counts)) != 1:
         raise invalid("model q/kv logical and padded boundary counts differ")
 
+    assert model_q is not None
+    assert model_kv is not None
     assert model_q_padded is not None
     assert model_kv_padded is not None
-    real_entries = cu_seqlens_q_padded.numel()
-    q_padded_sentinels = model_q_padded[real_entries:]
-    kv_padded_sentinels = model_kv_padded[real_entries:]
+    real_logical_entries = cu_seqlens_q.numel()
+    real_padded_entries = cu_seqlens_q_padded.numel()
+    q_padded_sentinels = model_q_padded[real_padded_entries:]
+    kv_padded_sentinels = model_kv_padded[real_padded_entries:]
     global_model_capacity = int(q_padded_sentinels[0].item())
     if int(kv_padded_sentinels[0].item()) != global_model_capacity:
         raise invalid("immediate Q/KV padded sentinels disagree")
@@ -303,13 +315,32 @@ def _validate_fixed_packed_loss_metadata(
             "padded model capacity does not equal local logits length times CP "
             f"({global_model_capacity} != {local_model_capacity} * {cp_size})"
         )
-    if (
-        packed_seq_params.total_tokens is not None
-        and int(packed_seq_params.total_tokens) != local_model_capacity
-    ):
+
+    real_logical_end = int(cu_seqlens_q[-1].item())
+    real_padded_end = int(cu_seqlens_q_padded[-1].item())
+    if real_logical_end < 0 or real_padded_end < 0:
+        raise invalid("real logical or padded endpoint is negative")
+    if real_logical_end > real_padded_end:
+        raise invalid("real logical endpoint exceeds its padded endpoint")
+    dummy_tokens = global_model_capacity - real_padded_end
+    if dummy_tokens <= 0:
         raise invalid(
-            "local total_tokens does not equal the local logits length "
-            f"({packed_seq_params.total_tokens} != {local_model_capacity})"
+            "fixed model capacity does not contain a positive excess dummy tail "
+            f"({global_model_capacity} - {real_padded_end} = {dummy_tokens})"
+        )
+
+    expected_logical_dummy_end = real_logical_end + dummy_tokens
+    if expected_logical_dummy_end > global_model_capacity:
+        raise invalid("logical dummy endpoint exceeds the padded model capacity")
+    q_logical_sentinels = model_q[real_logical_entries:]
+    kv_logical_sentinels = model_kv[real_logical_entries:]
+    if not torch.all(q_logical_sentinels == expected_logical_dummy_end).item():
+        raise invalid(
+            "Q logical fixed/dummy sentinels disagree with the derived endpoint"
+        )
+    if not torch.all(kv_logical_sentinels == expected_logical_dummy_end).item():
+        raise invalid(
+            "KV logical fixed/dummy sentinels disagree with the derived endpoint"
         )
 
 
