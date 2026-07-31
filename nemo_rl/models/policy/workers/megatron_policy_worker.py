@@ -996,13 +996,25 @@ class MegatronPolicyWorkerImpl(
         self,
         call_state: _TECudaGraphCallState,
     ) -> tuple[dict[str, int], dict[str, int]]:
-        """Return MP-normalized raw coverage metrics and fixed call context."""
+        """Return TP/CP/PP-normalized raw coverage metrics and fixed call context."""
         manager = self._te_cuda_graph_bank_manager
         if manager is None:
             raise RuntimeError("TE CUDA Graph counter manager is not initialized.")
         if call_state.normalized_schedule_key is None:
             raise RuntimeError("TE CUDA Graph call has no normalized schedule key.")
         pg_collection = get_pg_collection(self.model)
+
+        def validate_across_model_parallel_replica(value: int, *, name: str) -> int:
+            value = self._collectively_validate_te_cuda_graph_integer(
+                value,
+                name=name,
+                group=pg_collection.tp_cp,
+            )
+            return self._collectively_validate_te_cuda_graph_integer(
+                value,
+                name=name,
+                group=pg_collection.pp,
+            )
 
         lifecycle_values = {
             "capture_count": call_state.capture_count,
@@ -1012,10 +1024,9 @@ class MegatronPolicyWorkerImpl(
             "fallback_count": 0,
         }
         for name, value in lifecycle_values.items():
-            lifecycle_values[name] = self._collectively_validate_te_cuda_graph_integer(
+            lifecycle_values[name] = validate_across_model_parallel_replica(
                 value,
                 name=name,
-                group=pg_collection.mp,
             )
 
         delta = manager.execution_counter_delta(call_state.execution_snapshot)
@@ -1035,7 +1046,12 @@ class MegatronPolicyWorkerImpl(
         torch.distributed.all_reduce(
             execution,
             op=torch.distributed.ReduceOp.SUM,
-            group=pg_collection.mp,
+            group=pg_collection.tp_cp,
+        )
+        torch.distributed.all_reduce(
+            execution,
+            op=torch.distributed.ReduceOp.SUM,
+            group=pg_collection.pp,
         )
 
         geometry_values = {
@@ -1044,10 +1060,9 @@ class MegatronPolicyWorkerImpl(
             "capacity_tokens": call_state.capacity_tokens,
         }
         for name, value in geometry_values.items():
-            geometry_values[name] = self._collectively_validate_te_cuda_graph_integer(
+            geometry_values[name] = validate_across_model_parallel_replica(
                 value,
                 name=name,
-                group=pg_collection.mp,
             )
         geometry = torch.tensor(
             [
@@ -1067,25 +1082,27 @@ class MegatronPolicyWorkerImpl(
         torch.distributed.all_reduce(
             geometry,
             op=torch.distributed.ReduceOp.SUM,
-            group=pg_collection.mp,
+            group=pg_collection.tp_cp,
+        )
+        torch.distributed.all_reduce(
+            geometry,
+            op=torch.distributed.ReduceOp.SUM,
+            group=pg_collection.pp,
         )
 
-        normalized_schedule_key = self._collectively_validate_te_cuda_graph_integer(
+        normalized_schedule_key = validate_across_model_parallel_replica(
             call_state.normalized_schedule_key,
             name="normalized_schedule_key",
-            group=pg_collection.mp,
         )
         token_capacity = self._te_cuda_graph_token_capacity_per_microbatch()
-        token_capacity = self._collectively_validate_te_cuda_graph_integer(
+        token_capacity = validate_across_model_parallel_replica(
             token_capacity,
             name="token_capacity_per_microbatch",
-            group=pg_collection.mp,
         )
         sequence_capacity = int(self.megatron_cfg.model.thd_max_packed_sequences)
-        sequence_capacity = self._collectively_validate_te_cuda_graph_integer(
+        sequence_capacity = validate_across_model_parallel_replica(
             sequence_capacity,
             name="thd_max_packed_sequences",
-            group=pg_collection.mp,
         )
 
         step_metrics = CudaGraphStepMetrics(

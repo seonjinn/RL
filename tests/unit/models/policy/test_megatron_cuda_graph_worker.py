@@ -613,7 +613,7 @@ def test_iterator_modes_eager_isolation_and_relocation_order_are_explicit() -> N
         )
 
 
-def test_metrics_keep_lifecycle_logical_deduplicate_tp_cp_and_sum_pp() -> None:
+def test_metrics_validate_and_reduce_across_tp_cp_then_pp_for_cp_replicas() -> None:
     class FakeTensor:
         def __init__(self, value: Any) -> None:
             self.values = list(value) if isinstance(value, list) else [value]
@@ -634,11 +634,17 @@ def test_metrics_keep_lifecycle_logical_deduplicate_tp_cp_and_sum_pp() -> None:
 
     reduce_op = SimpleNamespace(MIN="min", MAX="max", SUM="sum")
 
+    collective_calls: list[tuple[Any, Any]] = []
+
     def all_reduce(tensor: FakeTensor, *, op: Any, group: Any = None) -> None:
-        assert group == "mp"
-        if op == reduce_op.SUM and len(tensor.values) == 2:
-            # TP/CP leaders from two PP stages contributed disjoint layer calls.
-            tensor.values = [13, 21]
+        collective_calls.append((op, group))
+        assert group in {"tp_cp", "pp"}
+        if op != reduce_op.SUM:
+            return
+        if len(tensor.values) == 2:
+            tensor.values = [5, 8] if group == "tp_cp" else [13, 21]
+        elif len(tensor.values) == 3 and group == "pp":
+            tensor.values = [23, 27, 32]
 
     fake_torch = SimpleNamespace(
         int64="int64",
@@ -647,18 +653,21 @@ def test_metrics_keep_lifecycle_logical_deduplicate_tp_cp_and_sum_pp() -> None:
     )
     fake_parallel_state = SimpleNamespace(
         get_tensor_model_parallel_rank=lambda: 0,
-        get_context_parallel_rank=lambda: 0,
-        get_pipeline_model_parallel_rank=lambda: 0,
+        get_context_parallel_rank=lambda: 1,
+        get_pipeline_model_parallel_rank=lambda: 1,
     )
     worker_type = _extract_worker_methods(
         {
+            "_collectively_validate_te_cuda_graph_integer",
             "_finalize_te_cuda_graph_call",
             "_te_cuda_graph_token_capacity_per_microbatch",
         },
         {
             "torch": fake_torch,
             "parallel_state": fake_parallel_state,
-            "get_pg_collection": lambda model: SimpleNamespace(mp="mp"),
+            "get_pg_collection": lambda model: SimpleNamespace(
+                tp_cp="tp_cp", pp="pp", mp="mp"
+            ),
             "CudaGraphStepMetrics": __import__(
                 "nemo_rl.models.megatron.cuda_graph_lifecycle",
                 fromlist=["CudaGraphStepMetrics"],
@@ -674,9 +683,6 @@ def test_metrics_keep_lifecycle_logical_deduplicate_tp_cp_and_sum_pp() -> None:
         model=SimpleNamespace(thd_max_packed_sequences=9)
     )
     worker._te_cuda_graph_device = lambda: "cpu"
-    worker._collectively_validate_te_cuda_graph_integer = (
-        lambda value, *, name, group=None: value
-    )
     worker._te_cuda_graph_bank_manager = SimpleNamespace(
         execution_counter_delta=lambda start: SimpleNamespace(
             graph_calls=5,
@@ -714,6 +720,13 @@ def test_metrics_keep_lifecycle_logical_deduplicate_tp_cp_and_sum_pp() -> None:
         "token_capacity_per_microbatch": 32,
         "thd_max_packed_sequences": 9,
     }
+    validation_groups = [
+        group for op, group in collective_calls if op in {reduce_op.MIN, reduce_op.MAX}
+    ]
+    sum_groups = [group for op, group in collective_calls if op == reduce_op.SUM]
+    assert validation_groups == ["tp_cp", "tp_cp", "pp", "pp"] * 11
+    assert sum_groups == ["tp_cp", "pp", "tp_cp", "pp"]
+    assert all(group != "mp" for _, group in collective_calls)
 
 
 def test_global_optimizer_consensus_uses_world_min() -> None:
