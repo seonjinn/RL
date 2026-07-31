@@ -1075,10 +1075,12 @@ git commit -s -S -m "fix: graph hybrid MTP and shared-expert ownership"
 - Test: `tests/unit/models/megatron/test_train.py`
 
 **Interfaces:**
-- Consumes: logical sequence lengths and physical `cu_seqlens_padded`.
+- Consumes: real logical sequence lengths, real natural-physical
+  `cu_seqlens_padded`, and fixed graph token/entry capacities.
 - Produces:
   `_build_packed_structural_padding_mask(...) -> tuple[Tensor, Tensor]`,
-  `PackedGeometry`, and a
+  `PackedGeometry`, real loss-boundary arrays, append-dummy model metadata,
+  capacity-shaped Mamba `seq_idx`, and a
   `ProcessedMicrobatch.structural_padding_mask_cp_sharded` in CP-local order.
 
 - [ ] **Step 1: Add red physical-layout tests**
@@ -1088,12 +1090,19 @@ def test_structural_mask_marks_internal_and_capacity_padding() -> None:
     full, local = _build_packed_structural_padding_mask(
         seq_lengths=torch.tensor([3, 2]),
         cu_seqlens_padded=torch.tensor([0, 4, 8]),
+        capacity_tokens=16,
         cp_rank=0,
         cp_size=1,
     )
     assert torch.equal(
         full,
-        torch.tensor([[False, False, False, True, False, False, True, True]]),
+        torch.tensor(
+            [[
+                False, False, False, True,
+                False, False, True, True,
+                True, True, True, True, True, True, True, True,
+            ]]
+        ),
     )
     assert torch.equal(local, full)
 
@@ -1109,7 +1118,11 @@ def test_structural_mask_uses_same_zigzag_cp_order_as_tokens(cp_rank) -> None:
         cp_size=2,
     )
     full_mask, local_mask = _build_packed_structural_padding_mask(
-        torch.tensor([5, 3]), padded, cp_rank=cp_rank, cp_size=2
+        torch.tensor([5, 3]),
+        padded,
+        capacity_tokens=16,
+        cp_rank=cp_rank,
+        cp_size=2,
     )
     assert local_mask.shape == cp_tokens.shape
     expected_parts = []
@@ -1121,8 +1134,13 @@ def test_structural_mask_uses_same_zigzag_cp_order_as_tokens(cp_rank) -> None:
                 sample_mask, cp_rank, 2, seq_dim=0
             )
         )
+    dummy_tokens = 16 - int(padded[-1])
+    expected_parts.append(
+        torch.ones(dummy_tokens // 2, dtype=torch.bool)
+    )
     assert torch.equal(local_mask, torch.cat(expected_parts).unsqueeze(0))
-    assert full_mask.sum() == 8
+    assert full_mask.shape == packed_tokens.shape
+    assert full_mask.sum() == 16 - 8
 ```
 
 - [ ] **Step 2: Run the red tests**
@@ -1141,6 +1159,7 @@ def _build_packed_structural_padding_mask(
     seq_lengths: torch.Tensor,
     cu_seqlens_padded: torch.Tensor,
     *,
+    capacity_tokens: int,
     cp_rank: int,
     cp_size: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1160,9 +1179,21 @@ def _build_packed_structural_padding_mask(
             if cp_size > 1
             else mask
         )
+    natural_physical_tokens = int(cu_seqlens_padded[-1])
+    dummy_tokens = capacity_tokens - natural_physical_tokens
+    if dummy_tokens < 0 or dummy_tokens % (2 * cp_size) != 0:
+        raise ValueError("Fixed dummy capacity is invalid for CP zigzag sharding.")
+    dummy_mask = torch.ones(
+        dummy_tokens, dtype=torch.bool, device=seq_lengths.device
+    )
     return (
-        torch.cat(full_masks).unsqueeze(0).contiguous(),
-        torch.cat(local_masks).unsqueeze(0).contiguous(),
+        torch.cat([*full_masks, dummy_mask]).unsqueeze(0).contiguous(),
+        torch.cat(
+            [
+                *local_masks,
+                dummy_mask[: dummy_tokens // cp_size],
+            ]
+        ).unsqueeze(0).contiguous(),
     )
 ```
 
@@ -1183,8 +1214,24 @@ Add `cu_seqlens`, `structural_padding_mask`,
 `ProcessedInputs` and `ProcessedMicrobatch`. Copy them in the iterator. Pass
 the CP-sharded mask through `forward_with_post_processing_fn`, then call
 `model(..., padding_mask=structural_padding_mask_cp_sharded)`. Loss wrappers
-continue to consume actual `cu_seqlens`; fixed graph sentinel entries never
-become loss boundaries. Reject packed TE training graphs when
+receive the real logical and real natural-physical cumulative arrays
+explicitly; fixed graph dummy/sentinel entries never become loss boundaries.
+
+Keep three representations separate:
+
+- real `cu_seqlens` for loss slicing;
+- real `cu_seqlens_padded` for natural physical unpacking and mask creation;
+- model-facing `PackedSeqParams` from MCore `pad_sequence_for_thd`, with one
+  append-only dummy and fixed entry capacity.
+
+OR MCore's returned dummy-tail mask with the internal per-sequence padding
+mask. Pad routed-expert IDs, MTP loss mask, and every token-like CP-local
+tensor by the same dummy length without changing their loss/reward semantics.
+Construct Mamba `seq_idx` in exact per-sequence CP zigzag order, append a
+distinct dummy sequence ID, and set static `total_tokens` to the CP-local
+capacity. Add CP=2 boundary/reset assertions.
+
+Reject packed TE training graphs when
 `delegate_pack_to_model=True`, because NeMo-RL cannot construct the model's
 internal physical ordering.
 
@@ -1206,24 +1253,35 @@ git commit -s -m "fix: carry packed structural padding into MCore"
 
 **Files:**
 - Create: `nemo_rl/models/megatron/cuda_graph_lifecycle.py`
+- Modify: `3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/te_cuda_graph_bank.py`
+- Modify: `3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/module.py`
+- Modify: `3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/transformer_layer.py`
+- Modify: `3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/ssm/mamba_layer.py`
 - Modify: `nemo_rl/data/packing/algorithms.py`
 - Modify: `nemo_rl/distributed/batched_data_dict.py`
 - Modify: `nemo_rl/models/megatron/setup.py`
 - Modify: `nemo_rl/models/policy/__init__.py`
 - Modify: `nemo_rl/models/policy/workers/megatron_policy_worker.py`
 - Modify: `nemo_rl/models/policy/lm_policy.py`
+- Modify: `nemo_rl/models/policy/tq_policy.py`
 - Modify: `nemo_rl/algorithms/utils.py`
 - Modify: `nemo_rl/algorithms/grpo.py`
 - Modify: `nemo_rl/algorithms/grpo_sync.py`
+- Modify: `nemo_rl/algorithms/single_controller_utils/utils.py`
+- Modify: `nemo_rl/algorithms/single_controller.py`
 - Modify: `pyrefly.toml`
+- Test: `3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/tests/unit_tests/transformer/test_te_cuda_graph_bank.py`
+- Test: `3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/tests/unit_tests/transformer/test_cuda_graphs.py`
 - Test: `tests/unit/data/packing/test_algorithms.py`
 - Test: `tests/unit/models/megatron/test_cuda_graph_lifecycle.py`
 - Test: `tests/unit/models/megatron/test_megatron_setup.py`
 - Test: `tests/unit/models/policy/test_policy_validation.py`
 - Test: `tests/unit/models/policy/test_megatron_worker.py`
 - Test: `tests/unit/models/policy/test_lm_policy.py`
+- Test: split/TQ policy aggregation tests under `tests/unit/models/policy/`
 - Test: `tests/unit/algorithms/test_utils.py`
 - Test: `tests/unit/algorithms/test_grpo.py`
+- Test: SingleController pass-through tests under `tests/unit/single_controller/`
 
 **Interfaces:**
 - Consumes: MCore `TECudaGraphBank`, normalized pipeline microbatch count, and
@@ -1294,6 +1352,34 @@ Forward-port `TECudaGraphScheduleKey`, `TECudaGraphEnsureResult`, and
 TE overlay builders, Python symlink workarounds, output padding, checked
 results, or hard-coded cluster paths.
 
+- [ ] **Step 3a: Enforce one fixed token and sequence-count geometry**
+
+Add canonical `cuda_graph_modules` and `thd_max_packed_sequences` fields to
+`MegatronConfig`; do not revive `cuda_graph_packed_seq` or duplicate
+`cuda_graph_max_packed_seqs`. Derive:
+
+```text
+max_sequences_per_bin = thd_max_packed_sequences - 1
+MCore cumulative-entry capacity = thd_max_packed_sequences + 1
+                                = max_sequences_per_bin + 2
+```
+
+Propagate `max_sequences_per_bin` through every `SequencePackingArgs`,
+`get_packer`, `shard_by_batch_size`, LMPolicy, and TQPolicy path. Split each
+algorithm-produced bin into stable-order chunks within the count cap before
+bin-count adjustment, and retain a defensive worker assertion.
+
+In `_apply_performance_config`, set the MCore fields,
+`pad_packed_seq_to = train_mb_tokens // context_parallel_size`, and packed
+alignment before config post-init. Validate exact divisibility, packing on,
+dynamic batching off, TE graph implementation, supported dispatcher/scope,
+warmup exactly 3, and bank capacity exactly 2.
+
+Add `for_cuda_graph_training` to the microbatch iterator. Sync and split policy
+training always use the configured `sequence_packing.train_mb_tokens` as the
+global fixed token capacity and reject overflow before yielding a model input.
+Eval and logprob do not capture training banks.
+
 - [ ] **Step 4: Return typed step telemetry**
 
 ```python
@@ -1313,20 +1399,44 @@ class CudaGraphStepMetrics:
 
 Worker sync and split APIs return the dataclass as a plain numeric mapping.
 Keep this mapping separate from `all_mb_metrics`. After existing CP/TP/PP
-deduplication, `LMPolicy` verifies that lifecycle counters and geometry keys
-match across DP representatives. It selects one lifecycle-counter value,
-sums logical/padded/capacity tokens and graph/eligible calls across DP, then
-recomputes `coverage = graph_calls / eligible_calls` and
-`capacity_utilization = logical_tokens / capacity_tokens`. It never averages
-ratios or sums replicated capture counts. Both synchronous `train()` and split
-`finish_train_step()` return the same schema. GRPO's two training paths and
-GRPO-sync's training path log the result under `cuda_graph/*`.
+deduplication, `LMPolicy` and `TQPolicy` require replicated lifecycle counters,
+normalized schedule key, and fixed capacities to match. They deduplicate MP
+replicas, select one replicated lifecycle value, sum dynamic
+logical/padded/capacity tokens and graph/eligible calls across DP, then
+recompute `coverage = graph_calls / eligible_calls`,
+`capacity_utilization = logical_tokens / capacity_tokens`, and
+`padding_utilization = logical_tokens / padded_tokens`. They never average
+ratios or require dynamic DP token totals to match. Both synchronous `train()`
+and split `finish_train_step()` return the same schema. TQ split wrappers and
+SingleController pass the dedicated mapping through unchanged. GRPO's two
+training paths and GRPO-sync's training path log the result under
+`cuda_graph/*`.
 `fallback_count` must remain zero; no code path increments it and continues.
+
+Add MCore monotonic execution counters before worker integration.
+`eligible_calls` increments at the real Transformer/Mamba/Hybrid-MTP leaf
+execution boundary on every configured training invocation, including the
+three eager warmup optimizer steps. `graph_calls` increments only after the
+active-bank guard selects the exact registered callable. Expose a stable
+snapshot/delta API and make MCore the source of truth; do not infer coverage
+from configured scopes, layers, or microbatch count.
+
+Warmup advances only after an optimizer update succeeds on every training
+rank, using global training-rank consensus rather than model-parallel
+consensus alone. Capture/activate/reset happens only from explicit drained
+worker states. Sync and split paths set/clear a live schedule flag in
+`try/finally`; split pins the first normalized key until finish/abort and
+rejects a different key before launch. Uninstall before logprob/reference
+swaps. Reset all banks before any parameter/storage relocation and at
+shutdown. A rank-local capture/replay error becomes a collective failure,
+never eager fallback.
 
 - [ ] **Step 5: Run and commit**
 
 ```bash
 uv run pytest -q \
+  3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/tests/unit_tests/transformer/test_te_cuda_graph_bank.py \
+  3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/tests/unit_tests/transformer/test_cuda_graphs.py \
   tests/unit/data/packing/test_algorithms.py \
   tests/unit/models/megatron/test_cuda_graph_lifecycle.py \
   tests/unit/models/megatron/test_megatron_setup.py \
@@ -1334,8 +1444,18 @@ uv run pytest -q \
   tests/unit/models/policy/test_megatron_worker.py \
   tests/unit/models/policy/test_lm_policy.py \
   tests/unit/algorithms/test_utils.py \
-  tests/unit/algorithms/test_grpo.py
+  tests/unit/algorithms/test_grpo.py \
+  tests/unit/single_controller/
 git diff --check
+git -C 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM add \
+  megatron/core/transformer/te_cuda_graph_bank.py \
+  megatron/core/transformer/module.py \
+  megatron/core/transformer/transformer_layer.py \
+  megatron/core/ssm/mamba_layer.py \
+  tests/unit_tests/transformer/test_te_cuda_graph_bank.py \
+  tests/unit_tests/transformer/test_cuda_graphs.py
+git -C 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM \
+  commit -s -S -m "feat: expose exact TE graph execution counters"
 git add nemo_rl/models/megatron/cuda_graph_lifecycle.py \
   nemo_rl/data/packing/algorithms.py \
   nemo_rl/distributed/batched_data_dict.py \
@@ -1343,9 +1463,12 @@ git add nemo_rl/models/megatron/cuda_graph_lifecycle.py \
   nemo_rl/models/policy/__init__.py \
   nemo_rl/models/policy/workers/megatron_policy_worker.py \
   nemo_rl/models/policy/lm_policy.py \
+  nemo_rl/models/policy/tq_policy.py \
   nemo_rl/algorithms/utils.py \
   nemo_rl/algorithms/grpo.py \
   nemo_rl/algorithms/grpo_sync.py \
+  nemo_rl/algorithms/single_controller_utils/utils.py \
+  nemo_rl/algorithms/single_controller.py \
   pyrefly.toml \
   tests/unit/data/packing/test_algorithms.py \
   tests/unit/models/megatron/test_cuda_graph_lifecycle.py \
@@ -1354,7 +1477,8 @@ git add nemo_rl/models/megatron/cuda_graph_lifecycle.py \
   tests/unit/models/policy/test_megatron_worker.py \
   tests/unit/models/policy/test_lm_policy.py \
   tests/unit/algorithms/test_utils.py \
-  tests/unit/algorithms/test_grpo.py
+  tests/unit/algorithms/test_grpo.py \
+  tests/unit/single_controller/
 git commit -s -m "feat: expose bounded TE graph lifecycle metrics"
 ```
 
