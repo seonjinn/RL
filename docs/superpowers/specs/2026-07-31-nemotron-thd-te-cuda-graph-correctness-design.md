@@ -63,8 +63,9 @@ Graph lifetime fixes.
 | Megatron-LM PR 5724 | `3ae5e6d9a` | Port fixed THD cumulative-sequence capacity for eager and graph paths |
 | Megatron-LM PR 5541 | `1392f28a5` | Port real-versus-physical padded THD sequence-length semantics |
 | Megatron-LM PR 5542 | `d1384c2d9` | Port removal of padding rows from routing/capacity accounting |
-| Megatron-LM PR 5668 | `904ef6d86` | Port the invariant that HybridEP graph inputs are statically padded before graph entry |
-| Megatron-LM PR 5401 | `3fae48f4a` | Port when router z-loss is enabled; avoid capture-time host scalar construction |
+| Megatron-LM PR 4359 | `7f9175207` | Manually port main-compatible structural-mask and `PackedSeqParams` plumbing through MLP/router graph paths |
+| Megatron-LM PR 5668 | `904ef6d86` | Do not port; main already contains the HybridEP uneven-input invariant through PR 5008 (`81770cb0`) |
+| Megatron-LM PR 5401 | `3fae48f4a` | Do not port; its z-loss-safe behavior is already in the selected main baseline |
 
 Megatron-LM PR 4359 remains the architectural reference for fixed-capacity THD
 and padding-mask propagation. PR 5258 and PR 5618 are test/reference material;
@@ -73,6 +74,12 @@ they are not implementation bases.
 PR 5635, merge `bf32f4415`, is already in PR 5672's ancestry. Treat its
 TP-broadcast preservation of per-sample packed metadata as a baseline
 regression gate, not a post-5672 port.
+
+The PR 5672 adapter must also retain `pad_between_seqs` and
+`tokens_per_sample` as replay-validated static metadata. `total_tokens` and
+`seq_idx` remain Mamba-only inputs. The selected main baseline uses zigzag CP
+for these Nemotron workloads; do not import the later dev-only
+`cp_partition_mode` scheduler surface as part of the THD capacity port.
 
 The following open work is reference-only:
 
