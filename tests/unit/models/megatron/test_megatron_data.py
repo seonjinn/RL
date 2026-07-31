@@ -1161,6 +1161,34 @@ class TestPackedStructuralGeometry:
         assert model_params.seq_aux_loss_sample_ids.is_contiguous()
         assert torch.equal(model_params.seq_aux_loss_sample_ids, expected_tp)
 
+    @pytest.mark.parametrize(
+        ("tp_rank", "tp_size"),
+        [
+            (0, 0),
+            (2, 2),
+        ],
+    )
+    def test_fixed_sequence_parallel_rejects_invalid_tp_geometry(
+        self,
+        tp_rank: int,
+        tp_size: int,
+    ) -> None:
+        from nemo_rl.models.megatron.data import _pack_sequences_for_megatron
+
+        with pytest.raises(ValueError, match="Invalid TP rank/size"):
+            _pack_sequences_for_megatron(
+                torch.tensor([[1, 2, 3, 0]]),
+                torch.tensor([3]),
+                pad_individual_seqs_to_multiple_of=4,
+                pad_packed_seq_to=16,
+                cp_rank=0,
+                cp_size=1,
+                tp_rank=tp_rank,
+                tp_size=tp_size,
+                sequence_parallel=True,
+                thd_max_packed_sequences=4,
+            )
+
     @patch("nemo_rl.models.megatron.data.trace_cp_routed_experts")
     @patch(
         "nemo_rl.models.megatron.data.r3_trace_verify_forward_enabled",
@@ -1976,6 +2004,33 @@ class TestMakeProcessedMicrobatchIterator:
             next(iterator)
 
     @patch("nemo_rl.models.megatron.data.process_microbatch")
+    def test_direct_iterator_rejects_fixed_capacity_without_graph_training(
+        self,
+        mock_process: MagicMock,
+    ) -> None:
+        from nemo_rl.models.megatron.data import make_processed_microbatch_iterator
+
+        mock_process.side_effect = AssertionError(
+            "process_microbatch must not run for non-graph fixed capacity"
+        )
+        mock_data_dict = MagicMock()
+        mock_data_dict.to.return_value = mock_data_dict
+        iterator = make_processed_microbatch_iterator(
+            raw_iterator=iter([mock_data_dict]),
+            cfg={"sequence_packing": {"enabled": True}},
+            seq_length_key="input_lengths",
+            pad_individual_seqs_to_multiple_of=1,
+            pad_packed_seq_to_multiple_of=1,
+            straggler_timer=MagicMock(),
+            pad_full_seq_to=16,
+            thd_max_packed_sequences=4,
+            for_cuda_graph_training=False,
+        )
+
+        with pytest.raises(ValueError, match="training-graph-only"):
+            next(iterator)
+
+    @patch("nemo_rl.models.megatron.data.process_microbatch")
     def test_make_processed_microbatch_iterator_basic(self, mock_process):
         """Test make_processed_microbatch_iterator yields ProcessedMicrobatch."""
         from nemo_rl.models.megatron.data import (
@@ -2080,7 +2135,6 @@ class TestMakeProcessedMicrobatchIterator:
             pad_packed_seq_to_multiple_of=16,
             straggler_timer=MagicMock(),
             pad_full_seq_to=1024,
-            thd_max_packed_sequences=9,
         )
 
         microbatch = next(processed_iterator)
@@ -2093,7 +2147,7 @@ class TestMakeProcessedMicrobatchIterator:
         assert call_kwargs["pad_individual_seqs_to_multiple_of"] == 8
         assert call_kwargs["pad_packed_seq_to_multiple_of"] == 16
         assert call_kwargs["pad_full_seq_to"] == 1024
-        assert call_kwargs["thd_max_packed_sequences"] == 9
+        assert call_kwargs["thd_max_packed_sequences"] is None
 
     @patch("nemo_rl.models.megatron.data.process_microbatch")
     def test_graph_training_iterator_validates_task8_geometry_before_yield(

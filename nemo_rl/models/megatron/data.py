@@ -380,6 +380,11 @@ def make_processed_microbatch_iterator(
         ProcessedMicrobatch objects containing processed tensors ready for model forward
     """
     pack_sequences = cfg["sequence_packing"]["enabled"]
+    if thd_max_packed_sequences is not None and not for_cuda_graph_training:
+        raise ValueError(
+            "Fixed THD sequence capacity is training-graph-only; set "
+            "for_cuda_graph_training=True."
+        )
     tp_rank = 0
     tp_size = 1
     sequence_parallel = False
@@ -1766,6 +1771,8 @@ def _build_packed_seq_aux_loss_sample_ids(
     local = torch.cat((*local_parts, dummy), dim=0)
 
     if sequence_parallel:
+        if tp_size < 1 or not 0 <= tp_rank < tp_size:
+            raise ValueError(f"Invalid TP rank/size: rank={tp_rank}, size={tp_size}.")
         if local.numel() % tp_size != 0:
             raise ValueError(
                 "CP-local sample IDs must divide evenly across TP/SP ranks."
