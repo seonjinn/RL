@@ -20,6 +20,8 @@ import time
 import warnings
 from collections import OrderedDict, defaultdict
 from contextlib import AbstractContextManager, contextmanager, nullcontext
+from dataclasses import asdict, dataclass
+from enum import Enum, auto
 from typing import Any, Iterable, Iterator, Optional, TypeVar, cast
 
 log = logging.getLogger(__name__)
@@ -59,7 +61,13 @@ from nemo_rl.models.generation.megatron.megatron_worker import (
 )
 from nemo_rl.models.generation.vllm.config import VllmConfig
 from nemo_rl.models.megatron.common import get_moe_metrics
+from nemo_rl.models.megatron.cuda_graph_lifecycle import (
+    CudaGraphStepMetrics,
+    TECudaGraphLifecycle,
+    TECudaGraphScheduleKey,
+)
 from nemo_rl.models.megatron.data import (
+    ProcessedMicrobatch,
     get_microbatch_iterator,
     process_global_batch,
 )
@@ -112,6 +120,29 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
 )
 
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
+
+_TE_CUDA_GRAPH_CACHE_CAPACITY = 2
+_TE_CUDA_GRAPH_WARMUP_STEPS = 3
+
+
+class _TECudaGraphWorkerPhase(Enum):
+    IDLE = auto()
+    SPLIT_OPEN_BEFORE_FIRST = auto()
+    GRAPH_SCHEDULE_LIVE = auto()
+    SPLIT_OPEN_AFTER_FIRST = auto()
+
+
+@dataclass
+class _TECudaGraphCallState:
+    execution_snapshot: Any
+    capture_count: int = 0
+    replay_count: int = 0
+    cache_hit_count: int = 0
+    eviction_count: int = 0
+    logical_tokens: int = 0
+    padded_tokens: int = 0
+    capacity_tokens: int = 0
+    normalized_schedule_key: Optional[int] = None
 
 
 def _should_use_router_replay(
@@ -502,6 +533,25 @@ class MegatronPolicyWorkerImpl(
         # unpacked [B, S] batch rather than pre-packing + CP-sharding itself.
         self.delegate_pack_to_model = _model_self_packs_for_cp(self.model)
 
+        self._te_cuda_graph_phase = _TECudaGraphWorkerPhase.IDLE
+        self._te_cuda_graph_runtime_schedule_count = 1
+        self._te_cuda_graph_lifecycle: Optional[TECudaGraphLifecycle] = None
+        self._te_cuda_graph_bank_manager: Any = None
+        self._te_cuda_graph_installed_key: Optional[TECudaGraphScheduleKey] = None
+        self._te_cuda_graph_capture_helper: Any = None
+        self._te_cuda_graph_capture_sample_packed_seq_params: Any = None
+        self._te_cuda_graph_reset_required = False
+        if (
+            init_optimizer
+            and self.megatron_cfg.model.cuda_graph_impl == "transformer_engine"
+        ):
+            if self.delegate_pack_to_model:
+                raise ValueError(
+                    "Transformer Engine CUDA Graph training requires NeMo-RL to "
+                    "own packed THD geometry; delegate_pack_to_model=True is unsupported."
+                )
+            self._initialize_te_cuda_graph_lifecycle()
+
         # vars used for refit
         ## will be initialized in prepare_refit_info
         # refit_param_info_mcore combines the conversion tasks with the param memory
@@ -520,6 +570,628 @@ class MegatronPolicyWorkerImpl(
         log_gpu_memory_diagnostics(
             label="init_complete", worker_type="MegatronPolicyWorker"
         )
+
+    def _te_cuda_graph_runtime_num_microbatches(self) -> int:
+        """Return the worker-owned normalized runtime schedule count."""
+        return self._te_cuda_graph_runtime_schedule_count
+
+    def get_effective_te_cuda_graph_config(self) -> dict[str, Any]:
+        """Return the validated worker-side graph configuration to the policy."""
+        model_config = self.megatron_cfg.model
+        capacity = getattr(model_config, "thd_max_packed_sequences", None)
+        if capacity is not None and (
+            isinstance(capacity, bool) or not isinstance(capacity, int)
+        ):
+            raise TypeError(
+                "effective thd_max_packed_sequences must be an integer or None"
+            )
+        training_enabled = self._te_cuda_graph_lifecycle is not None
+        if training_enabled and capacity is None:
+            raise RuntimeError(
+                "effective TE CUDA Graph training requires a sequence capacity"
+            )
+        return {
+            "cuda_graph_impl": str(model_config.cuda_graph_impl),
+            "thd_max_packed_sequences": capacity,
+            "training_enabled": training_enabled,
+        }
+
+    def _te_cuda_graph_training_geometry(self) -> tuple[int, int]:
+        """Return the fixed global token length and packed microbatch size."""
+        return self._te_cuda_graph_token_capacity_per_microbatch(), 1
+
+    def _te_cuda_graph_token_capacity_per_microbatch(self) -> int:
+        """Return the validated fixed packed-token capacity."""
+        sequence_packing_cfg = cast(
+            dict[str, Any],
+            self.cfg["sequence_packing"],
+        )
+        token_capacity = sequence_packing_cfg.get("train_mb_tokens")
+        if (
+            isinstance(token_capacity, bool)
+            or not isinstance(token_capacity, int)
+            or token_capacity < 1
+        ):
+            raise RuntimeError(
+                "TE CUDA Graph training requires a positive integer "
+                "sequence_packing.train_mb_tokens."
+            )
+        return token_capacity
+
+    def _build_te_cuda_graph_helper(self, sample_packed_seq_params: Any) -> Any:
+        from megatron.core.transformer.cuda_graphs import TECudaGraphHelper
+
+        seq_length, micro_batch_size = self._te_cuda_graph_training_geometry()
+        return TECudaGraphHelper(
+            model=[self.model],
+            config=self.megatron_cfg.model,
+            seq_length=seq_length,
+            micro_batch_size=micro_batch_size,
+            optimizers=[self.optimizer],
+            pg_collection=get_pg_collection(self.model),
+            sample_packed_seq_params=sample_packed_seq_params,
+        )
+
+    def _initialize_te_cuda_graph_lifecycle(self) -> None:
+        """Attach exact counters to topology before the first eager warmup step."""
+        from megatron.core.transformer.te_cuda_graph_bank import (
+            TECudaGraphBankManager,
+        )
+
+        topology_helper = self._build_te_cuda_graph_helper(None)
+        self._te_cuda_graph_bank_manager = TECudaGraphBankManager(
+            topology_helper.flattened_callables,
+            cuda_graph_modules=getattr(
+                self.megatron_cfg.model, "cuda_graph_modules", ()
+            ),
+            assert_model_drained=self._assert_te_cuda_graph_model_drained,
+            runtime_num_microbatches=self._te_cuda_graph_runtime_num_microbatches,
+        )
+        self._te_cuda_graph_lifecycle = TECudaGraphLifecycle(
+            capacity=_TE_CUDA_GRAPH_CACHE_CAPACITY,
+            warmup_steps=_TE_CUDA_GRAPH_WARMUP_STEPS,
+        )
+        self._te_cuda_graph_capture_helper = None
+        self._te_cuda_graph_capture_sample_packed_seq_params = None
+        log.info(
+            "Initialized Transformer Engine CUDA Graph worker lifecycle with "
+            "warmup_steps=%d and cache_capacity=%d.",
+            _TE_CUDA_GRAPH_WARMUP_STEPS,
+            _TE_CUDA_GRAPH_CACHE_CAPACITY,
+        )
+
+    def _assert_te_cuda_graph_model_drained(self) -> bool:
+        """Prove that graph-bank mutation is at an explicit drained boundary."""
+        phase = self._te_cuda_graph_phase
+        if phase is _TECudaGraphWorkerPhase.IDLE:
+            return True
+        if phase is not _TECudaGraphWorkerPhase.SPLIT_OPEN_BEFORE_FIRST:
+            return False
+        state = getattr(self, "_train_step_state", None)
+        return bool(
+            state is not None
+            and state.get("te_cuda_graph_key") is None
+            and state.get("total_num_microbatches", 0) == 0
+        )
+
+    def _te_cuda_graph_device(self) -> torch.device:
+        return next(self.model.parameters()).device
+
+    def _te_cuda_graph_pipeline_parallel_size(self) -> int:
+        return int(get_pg_collection(self.model).pp.size())
+
+    def _collectively_validate_te_cuda_graph_integer(
+        self,
+        value: int,
+        *,
+        name: str,
+        group: Optional[Any] = None,
+    ) -> int:
+        """Require an integer to be identical on every rank in a group."""
+        local_min = torch.tensor(
+            value,
+            dtype=torch.int64,
+            device=self._te_cuda_graph_device(),
+        )
+        local_max = local_min.clone()
+        torch.distributed.all_reduce(
+            local_min,
+            op=torch.distributed.ReduceOp.MIN,
+            group=group,
+        )
+        torch.distributed.all_reduce(
+            local_max,
+            op=torch.distributed.ReduceOp.MAX,
+            group=group,
+        )
+        minimum = int(local_min.item())
+        maximum = int(local_max.item())
+        if minimum != maximum:
+            raise RuntimeError(
+                f"TE CUDA Graph {name} differs across ranks: {minimum} != {maximum}."
+            )
+        return minimum
+
+    def _reset_te_cuda_graph_banks_after_failure(self) -> None:
+        lifecycle = self._te_cuda_graph_lifecycle
+        if lifecycle is not None:
+            if not self._assert_te_cuda_graph_model_drained():
+                self._te_cuda_graph_reset_required = True
+                return
+            lifecycle.reset_banks()
+        self._te_cuda_graph_reset_required = False
+        self._te_cuda_graph_installed_key = None
+        self._te_cuda_graph_capture_helper = None
+        self._te_cuda_graph_capture_sample_packed_seq_params = None
+
+    def _collectively_raise_te_cuda_graph_failure(
+        self,
+        error: Optional[Exception],
+        *,
+        operation: str,
+    ) -> None:
+        """Turn a rank-local graph error into an all-training-rank failure."""
+        failed = torch.tensor(
+            int(error is not None),
+            dtype=torch.int32,
+            device=self._te_cuda_graph_device(),
+        )
+        torch.distributed.all_reduce(failed, op=torch.distributed.ReduceOp.MAX)
+        if not bool(failed.item()):
+            return
+        cleanup_error: Optional[Exception] = None
+        try:
+            self._reset_te_cuda_graph_banks_after_failure()
+        except Exception as caught_error:
+            cleanup_error = caught_error
+        if error is not None:
+            raise RuntimeError(
+                f"TE CUDA Graph {operation} failed collectively."
+            ) from error
+        if cleanup_error is not None:
+            raise RuntimeError(
+                f"TE CUDA Graph {operation} failed on another rank and local "
+                "bank cleanup also failed."
+            ) from cleanup_error
+        raise RuntimeError(f"TE CUDA Graph {operation} failed on another rank.")
+
+    def _global_te_cuda_graph_optimizer_success(self, successful: bool) -> bool:
+        """AND one optimizer result across every training rank."""
+        global_success = torch.tensor(
+            int(bool(successful)),
+            dtype=torch.int32,
+            device=self._te_cuda_graph_device(),
+        )
+        torch.distributed.all_reduce(
+            global_success,
+            op=torch.distributed.ReduceOp.MIN,
+        )
+        return bool(global_success.item())
+
+    def _model_parallel_te_cuda_graphs_created(self, helper: Any) -> bool:
+        created = torch.tensor(
+            int(helper.graphs_created()),
+            dtype=torch.int32,
+            device=self._te_cuda_graph_device(),
+        )
+        torch.distributed.all_reduce(
+            created,
+            op=torch.distributed.ReduceOp.MAX,
+            group=get_pg_collection(self.model).mp,
+        )
+        return bool(created.item())
+
+    def _capture_te_cuda_graph_bank(
+        self,
+        key: TECudaGraphScheduleKey,
+        sample_packed_seq_params: Any,
+    ) -> Any:
+        """Capture one bank from the exact first real microbatch metadata."""
+        self._te_cuda_graph_capture_sample_packed_seq_params = sample_packed_seq_params
+        helper = self._build_te_cuda_graph_helper(sample_packed_seq_params)
+        self._te_cuda_graph_capture_helper = helper
+        bank = None
+        try:
+            restore_forward_pre_hook = (
+                self.should_disable_forward_pre_hook
+                and self._forward_pre_hook_enabled()
+            )
+            if restore_forward_pre_hook:
+                self.disable_forward_pre_hook(param_sync=False)
+            try:
+                bank = helper.create_cuda_graph_bank(
+                    self._te_cuda_graph_bank_manager,
+                    num_microbatches=key.num_microbatches,
+                )
+            finally:
+                if restore_forward_pre_hook:
+                    self.enable_forward_pre_hook()
+            if not self._model_parallel_te_cuda_graphs_created(helper):
+                raise RuntimeError(
+                    "Transformer Engine CUDA Graph capture found no graphable "
+                    "modules on the model-parallel replica."
+                )
+            return bank
+        except BaseException:
+            if bank is not None:
+                try:
+                    bank.reset()
+                except Exception:
+                    log.exception(
+                        "failed to release a TE CUDA Graph bank after capture error"
+                    )
+            raise
+
+    def _install_te_cuda_graph_manual_hooks(self) -> None:
+        helper = self._te_cuda_graph_capture_helper
+        manager = self._te_cuda_graph_bank_manager
+        if helper is None or manager is None or manager.active_bank is None:
+            raise RuntimeError(
+                "TE CUDA Graph manual hooks require a newly active captured bank."
+            )
+        helper.cuda_graph_set_manual_hooks()
+        manager.refresh_manual_hooks(manager.active_bank)
+
+    def _ensure_te_cuda_graph_schedule(
+        self,
+        *,
+        num_microbatches: int,
+        first_microbatch: ProcessedMicrobatch,
+        call_state: _TECudaGraphCallState,
+        ensure_active: bool,
+    ) -> TECudaGraphScheduleKey:
+        """Normalize, pin, and when allowed collectively ensure one schedule."""
+        lifecycle = self._te_cuda_graph_lifecycle
+        if lifecycle is None:
+            raise RuntimeError("TE CUDA Graph lifecycle is not initialized.")
+        overlap = bool(
+            getattr(
+                self.megatron_cfg.model,
+                "overlap_moe_expert_parallel_comm",
+                False,
+            )
+        )
+        key = TECudaGraphScheduleKey.from_runtime(
+            pipeline_parallel_size=self._te_cuda_graph_pipeline_parallel_size(),
+            num_microbatches=num_microbatches,
+            overlap_moe_expert_parallel_comm=overlap,
+        )
+        agreed_key = self._collectively_validate_te_cuda_graph_integer(
+            key.num_microbatches,
+            name="normalized schedule key",
+        )
+        key = TECudaGraphScheduleKey(agreed_key)
+        if (
+            call_state.normalized_schedule_key is not None
+            and call_state.normalized_schedule_key != key.num_microbatches
+        ):
+            raise RuntimeError(
+                "A policy-training call cannot change its normalized TE CUDA "
+                "Graph pinned schedule key."
+            )
+        call_state.normalized_schedule_key = key.num_microbatches
+        self._te_cuda_graph_runtime_schedule_count = key.num_microbatches
+
+        if not ensure_active:
+            if (
+                self._te_cuda_graph_installed_key is not None
+                and self._te_cuda_graph_installed_key != key
+            ):
+                raise RuntimeError(
+                    "A split train step cannot change its pinned TE CUDA Graph "
+                    "schedule key before optimizer completion."
+                )
+            manager = self._te_cuda_graph_bank_manager
+            if (self._te_cuda_graph_installed_key is None) != (
+                manager.active_bank is None
+            ):
+                raise RuntimeError(
+                    "The pinned TE CUDA Graph key and installed bank disagree."
+                )
+            return key
+        if not self._assert_te_cuda_graph_model_drained():
+            raise RuntimeError(
+                "TE CUDA Graph schedule transition requires a drained worker."
+            )
+        packed_seq_params = first_microbatch.packed_seq_params
+        if packed_seq_params is None:
+            raise RuntimeError(
+                "TE CUDA Graph capture requires the actual first packed metadata."
+            )
+
+        result = None
+        local_error: Optional[Exception] = None
+        try:
+            result = lifecycle.ensure_active(
+                key,
+                lambda: self._capture_te_cuda_graph_bank(
+                    key,
+                    packed_seq_params,
+                ),
+            )
+        except Exception as error:
+            local_error = error
+        self._collectively_raise_te_cuda_graph_failure(
+            local_error,
+            operation="capture or activation",
+        )
+        if result is None:
+            raise RuntimeError("TE CUDA Graph lifecycle produced no ensure result.")
+
+        status_code = {"warming": 0, "hit": 1, "captured": 2}[result.status]
+        self._collectively_validate_te_cuda_graph_integer(
+            status_code,
+            name="lifecycle outcome",
+        )
+        evicted_key = (
+            -1 if result.evicted_key is None else result.evicted_key.num_microbatches
+        )
+        self._collectively_validate_te_cuda_graph_integer(
+            evicted_key,
+            name="evicted schedule key",
+        )
+        transition_error: Optional[Exception] = None
+        try:
+            if result.status == "warming":
+                manager = self._te_cuda_graph_bank_manager
+                if manager.active_bank is not None:
+                    manager.uninstall()
+                self._te_cuda_graph_installed_key = None
+            elif result.status == "hit":
+                call_state.cache_hit_count += 1
+                self._te_cuda_graph_installed_key = key
+            else:
+                call_state.capture_count += 1
+                self._te_cuda_graph_installed_key = key
+                self._install_te_cuda_graph_manual_hooks()
+            if result.evicted_key is not None:
+                call_state.eviction_count += 1
+        except Exception as error:
+            transition_error = error
+        finally:
+            self._te_cuda_graph_capture_helper = None
+            self._te_cuda_graph_capture_sample_packed_seq_params = None
+        self._collectively_raise_te_cuda_graph_failure(
+            transition_error,
+            operation="post-capture hook installation",
+        )
+        return key
+
+    def _record_te_cuda_graph_geometry(
+        self,
+        call_state: _TECudaGraphCallState,
+        microbatch: ProcessedMicrobatch,
+    ) -> None:
+        geometry = microbatch.packed_geometry
+        if geometry is None:
+            raise RuntimeError(
+                "Transformer Engine CUDA Graph training requires packed geometry."
+            )
+        call_state.logical_tokens += int(geometry.logical_tokens)
+        call_state.padded_tokens += int(geometry.padded_tokens)
+        call_state.capacity_tokens += int(geometry.capacity_tokens)
+
+    def _begin_te_cuda_graph_call(self) -> _TECudaGraphCallState:
+        manager = self._te_cuda_graph_bank_manager
+        if manager is None:
+            raise RuntimeError("TE CUDA Graph counter manager is not initialized.")
+        return _TECudaGraphCallState(
+            execution_snapshot=manager.snapshot_execution_counters()
+        )
+
+    def _record_te_cuda_graph_schedule_replay(
+        self,
+        call_state: _TECudaGraphCallState,
+        key: TECudaGraphScheduleKey,
+    ) -> None:
+        manager = self._te_cuda_graph_bank_manager
+        if (
+            manager is not None
+            and manager.active_bank is not None
+            and self._te_cuda_graph_installed_key == key
+        ):
+            call_state.replay_count += 1
+
+    def _finalize_te_cuda_graph_call(
+        self,
+        call_state: _TECudaGraphCallState,
+    ) -> tuple[dict[str, int], dict[str, int]]:
+        """Return MP-normalized raw coverage metrics and fixed call context."""
+        manager = self._te_cuda_graph_bank_manager
+        if manager is None:
+            raise RuntimeError("TE CUDA Graph counter manager is not initialized.")
+        if call_state.normalized_schedule_key is None:
+            raise RuntimeError("TE CUDA Graph call has no normalized schedule key.")
+        pg_collection = get_pg_collection(self.model)
+
+        lifecycle_values = {
+            "capture_count": call_state.capture_count,
+            "replay_count": call_state.replay_count,
+            "cache_hit_count": call_state.cache_hit_count,
+            "eviction_count": call_state.eviction_count,
+            "fallback_count": 0,
+        }
+        for name, value in lifecycle_values.items():
+            lifecycle_values[name] = self._collectively_validate_te_cuda_graph_integer(
+                value,
+                name=name,
+                group=pg_collection.mp,
+            )
+
+        delta = manager.execution_counter_delta(call_state.execution_snapshot)
+        execution = torch.tensor(
+            [
+                int(delta.graph_calls),
+                int(delta.eligible_calls),
+            ],
+            dtype=torch.int64,
+            device=self._te_cuda_graph_device(),
+        )
+        if (
+            parallel_state.get_tensor_model_parallel_rank() != 0
+            or parallel_state.get_context_parallel_rank() != 0
+        ):
+            execution.zero_()
+        torch.distributed.all_reduce(
+            execution,
+            op=torch.distributed.ReduceOp.SUM,
+            group=pg_collection.mp,
+        )
+
+        geometry_values = {
+            "logical_tokens": call_state.logical_tokens,
+            "padded_tokens": call_state.padded_tokens,
+            "capacity_tokens": call_state.capacity_tokens,
+        }
+        for name, value in geometry_values.items():
+            geometry_values[name] = self._collectively_validate_te_cuda_graph_integer(
+                value,
+                name=name,
+                group=pg_collection.mp,
+            )
+        geometry = torch.tensor(
+            [
+                geometry_values["logical_tokens"],
+                geometry_values["padded_tokens"],
+                geometry_values["capacity_tokens"],
+            ],
+            dtype=torch.int64,
+            device=self._te_cuda_graph_device(),
+        )
+        if (
+            parallel_state.get_tensor_model_parallel_rank() != 0
+            or parallel_state.get_context_parallel_rank() != 0
+            or parallel_state.get_pipeline_model_parallel_rank() != 0
+        ):
+            geometry.zero_()
+        torch.distributed.all_reduce(
+            geometry,
+            op=torch.distributed.ReduceOp.SUM,
+            group=pg_collection.mp,
+        )
+
+        normalized_schedule_key = self._collectively_validate_te_cuda_graph_integer(
+            call_state.normalized_schedule_key,
+            name="normalized_schedule_key",
+            group=pg_collection.mp,
+        )
+        token_capacity = self._te_cuda_graph_token_capacity_per_microbatch()
+        token_capacity = self._collectively_validate_te_cuda_graph_integer(
+            token_capacity,
+            name="token_capacity_per_microbatch",
+            group=pg_collection.mp,
+        )
+        sequence_capacity = int(self.megatron_cfg.model.thd_max_packed_sequences)
+        sequence_capacity = self._collectively_validate_te_cuda_graph_integer(
+            sequence_capacity,
+            name="thd_max_packed_sequences",
+            group=pg_collection.mp,
+        )
+
+        step_metrics = CudaGraphStepMetrics(
+            capture_count=lifecycle_values["capture_count"],
+            replay_count=lifecycle_values["replay_count"],
+            cache_hit_count=lifecycle_values["cache_hit_count"],
+            eviction_count=lifecycle_values["eviction_count"],
+            fallback_count=lifecycle_values["fallback_count"],
+            graph_calls=int(execution[0].item()),
+            eligible_calls=int(execution[1].item()),
+            logical_tokens=int(geometry[0].item()),
+            padded_tokens=int(geometry[1].item()),
+            capacity_tokens=int(geometry[2].item()),
+        )
+        return cast(dict[str, int], asdict(step_metrics)), {
+            "normalized_schedule_key": normalized_schedule_key,
+            "token_capacity_per_microbatch": token_capacity,
+            "thd_max_packed_sequences": sequence_capacity,
+        }
+
+    def _peek_te_cuda_graph_training_iterator(
+        self,
+        data_iterator: Iterator[ProcessedMicrobatch],
+        call_state: _TECudaGraphCallState,
+    ) -> tuple[ProcessedMicrobatch, Iterator[ProcessedMicrobatch]]:
+        """Peek the real first microbatch and replay it through a tracked iterator."""
+        try:
+            first = next(data_iterator)
+        except StopIteration as error:
+            raise RuntimeError(
+                "Transformer Engine CUDA Graph training received no microbatches."
+            ) from error
+        if first.packed_seq_params is None or first.packed_geometry is None:
+            raise RuntimeError(
+                "Transformer Engine CUDA Graph training requires actual THD metadata."
+            )
+
+        def tracked_iterator() -> Iterator[ProcessedMicrobatch]:
+            self._record_te_cuda_graph_geometry(call_state, first)
+            yield first
+            for microbatch in data_iterator:
+                self._record_te_cuda_graph_geometry(call_state, microbatch)
+                yield microbatch
+
+        return first, tracked_iterator()
+
+    def _collectively_peek_te_cuda_graph_training_iterator(
+        self,
+        data_iterator: Iterator[ProcessedMicrobatch],
+        call_state: _TECudaGraphCallState,
+    ) -> tuple[ProcessedMicrobatch, Iterator[ProcessedMicrobatch]]:
+        """Agree on first-microbatch THD preflight before any rank captures."""
+        first: Optional[ProcessedMicrobatch] = None
+        preserved: Optional[Iterator[ProcessedMicrobatch]] = None
+        local_error: Optional[Exception] = None
+        try:
+            first, preserved = self._peek_te_cuda_graph_training_iterator(
+                data_iterator,
+                call_state,
+            )
+        except Exception as error:
+            local_error = error
+        self._collectively_raise_te_cuda_graph_failure(
+            local_error,
+            operation="microbatch preflight",
+        )
+        if first is None or preserved is None:
+            raise RuntimeError(
+                "TE CUDA Graph collective microbatch preflight produced no input."
+            )
+        return first, preserved
+
+    def _record_te_cuda_graph_optimizer_step(self, successful: bool) -> None:
+        lifecycle = self._te_cuda_graph_lifecycle
+        if lifecycle is None:
+            return
+        globally_successful = self._global_te_cuda_graph_optimizer_success(successful)
+        lifecycle.record_optimizer_step(successful=globally_successful)
+
+    def _reset_te_cuda_graph_banks_for_storage_relocation(self) -> None:
+        """Reset address-owning banks before model or optimizer storage moves."""
+        lifecycle = getattr(self, "_te_cuda_graph_lifecycle", None)
+        if lifecycle is None:
+            return
+        if self._te_cuda_graph_phase is not _TECudaGraphWorkerPhase.IDLE:
+            raise RuntimeError(
+                "TE CUDA Graph storage relocation requires a drained IDLE worker."
+            )
+        lifecycle.reset_banks()
+        self._te_cuda_graph_reset_required = False
+        self._te_cuda_graph_installed_key = None
+        self._te_cuda_graph_capture_helper = None
+        self._te_cuda_graph_capture_sample_packed_seq_params = None
+
+    def _deactivate_te_cuda_graphs_for_eager_path(self) -> None:
+        """Uninstall replay surfaces before an eager-only model path."""
+        manager = getattr(self, "_te_cuda_graph_bank_manager", None)
+        if manager is None:
+            return
+        if self._te_cuda_graph_phase is not _TECudaGraphWorkerPhase.IDLE:
+            raise RuntimeError(
+                "TE CUDA Graph eager transition requires a drained IDLE worker."
+            )
+        if manager.active_bank is not None:
+            manager.uninstall()
+        self._te_cuda_graph_installed_key = None
 
     def enable_forward_pre_hook(self):
         assert isinstance(self.model, DistributedDataParallel)
@@ -594,6 +1266,7 @@ class MegatronPolicyWorkerImpl(
     def _restore_model_extra_state_dict(self, extra_state: dict[str, Any]) -> None:
         if not extra_state:
             return
+        self._reset_te_cuda_graph_banks_for_storage_relocation()
         self.model.load_state_dict(extra_state, strict=False)
 
     @wrap_with_nvtx_name("megatron_policy_worker/train")
@@ -618,6 +1291,14 @@ class MegatronPolicyWorkerImpl(
             "Megatron does not run cross-tokenizer distillation."
         )
         self.timer.start("train")
+        te_cuda_graph_call_state = (
+            self._begin_te_cuda_graph_call()
+            if getattr(self, "_te_cuda_graph_lifecycle", None) is not None
+            and not eval_mode
+            else None
+        )
+        if eval_mode:
+            self._deactivate_te_cuda_graphs_for_eager_path()
         # Note: zero_grad_buffer is called at the start of each global batch iteration
         # in the loop below, so we don't need to call it here.
         if hasattr(self.model, "inference_params"):
@@ -703,7 +1384,22 @@ class MegatronPolicyWorkerImpl(
                     mbs,
                     straggler_timer=self.mcore_state.straggler_timer,
                     delegate_pack_to_model=self.delegate_pack_to_model,
+                    for_cuda_graph_training=te_cuda_graph_call_state is not None,
                 )
+                te_cuda_graph_key = None
+                if te_cuda_graph_call_state is not None:
+                    first_microbatch, data_iterator = (
+                        self._collectively_peek_te_cuda_graph_training_iterator(
+                            data_iterator,
+                            te_cuda_graph_call_state,
+                        )
+                    )
+                    te_cuda_graph_key = self._ensure_te_cuda_graph_schedule(
+                        num_microbatches=num_microbatches,
+                        first_microbatch=first_microbatch,
+                        call_state=te_cuda_graph_call_state,
+                        ensure_active=True,
+                    )
                 # Track total microbatches for MoE aux-loss averaging
                 total_num_microbatches += int(num_microbatches)
 
@@ -716,6 +1412,7 @@ class MegatronPolicyWorkerImpl(
                 )
 
                 rerun_state_machine = get_rerun_state_machine()
+                losses_reduced: list[dict[str, Any]] = []
                 while rerun_state_machine.should_run_forward_backward(data_iterator):
                     # Set grad to zero. For MXFP8 overlap eval, the param and
                     # grad buffers are shared and pre-hooks are disabled above.
@@ -751,27 +1448,50 @@ class MegatronPolicyWorkerImpl(
                         require=True,
                     )
                     with maybe_r3_trace_stage("train", enabled=use_router_replay):
-                        losses_reduced = megatron_forward_backward(
-                            model=self.model,
-                            data_iterator=data_iterator,
-                            num_microbatches=num_microbatches,
-                            seq_length=padded_seq_length,
-                            mbs=micro_batch_size,
-                            post_processing_fn=loss_post_processor,
-                            forward_only=eval_mode,
-                            defer_fp32_logits=self.defer_fp32_logits,
-                            global_valid_seqs=global_valid_seqs,
-                            global_valid_toks=global_valid_toks,
-                            sampling_params=self.sampling_params,
-                            straggler_timer=self.mcore_state.straggler_timer,
-                            draft_model=self.draft_model,
-                            enable_hidden_capture=draft_enabled,
-                            use_fused_linear_logprobs=self.cfg["megatron_cfg"].get(
-                                "use_fused_linear_logprobs", False
-                            ),
-                            use_router_replay=use_router_replay,
-                            router_replay_train=not eval_mode,
-                        )
+                        local_graph_error: Optional[Exception] = None
+                        if te_cuda_graph_key is not None:
+                            self._te_cuda_graph_phase = (
+                                _TECudaGraphWorkerPhase.GRAPH_SCHEDULE_LIVE
+                            )
+                        try:
+                            losses_reduced = megatron_forward_backward(
+                                model=self.model,
+                                data_iterator=data_iterator,
+                                num_microbatches=num_microbatches,
+                                seq_length=padded_seq_length,
+                                mbs=micro_batch_size,
+                                post_processing_fn=loss_post_processor,
+                                forward_only=eval_mode,
+                                defer_fp32_logits=self.defer_fp32_logits,
+                                global_valid_seqs=global_valid_seqs,
+                                global_valid_toks=global_valid_toks,
+                                sampling_params=self.sampling_params,
+                                straggler_timer=self.mcore_state.straggler_timer,
+                                draft_model=self.draft_model,
+                                enable_hidden_capture=draft_enabled,
+                                use_fused_linear_logprobs=self.cfg["megatron_cfg"].get(
+                                    "use_fused_linear_logprobs", False
+                                ),
+                                use_router_replay=use_router_replay,
+                                router_replay_train=not eval_mode,
+                            )
+                        except Exception as error:
+                            if te_cuda_graph_key is None:
+                                raise
+                            local_graph_error = error
+                        finally:
+                            if te_cuda_graph_key is not None:
+                                self._te_cuda_graph_phase = _TECudaGraphWorkerPhase.IDLE
+                        if te_cuda_graph_key is not None:
+                            assert te_cuda_graph_call_state is not None
+                            self._collectively_raise_te_cuda_graph_failure(
+                                local_graph_error,
+                                operation="training schedule",
+                            )
+                            self._record_te_cuda_graph_schedule_replay(
+                                te_cuda_graph_call_state,
+                                te_cuda_graph_key,
+                            )
 
                 # Clear mtp_grad_scale_func after the forward-backward pass so
                 # it doesn't get serialized in the run_config.yaml when saving
@@ -812,6 +1532,8 @@ class MegatronPolicyWorkerImpl(
                 update_successful = logical_and_across_model_parallel_group(
                     update_successful, mp_group=pg_collection.mp
                 )
+                if te_cuda_graph_call_state is not None:
+                    self._record_te_cuda_graph_optimizer_step(bool(update_successful))
                 # grad_norm and num_zeros_in_grad will be None on ranks without trainable params,
                 # so we must gather across mp ranks
                 grad_norm: float = reduce_max_stat_across_model_parallel_group(
@@ -935,6 +1657,12 @@ class MegatronPolicyWorkerImpl(
         self._collect_mtp_metrics(metrics, total_num_microbatches, mtp_grad_norm)
         if draft_grad_norm is not None:
             metrics["draft_grad_norm"] = torch.tensor([draft_grad_norm])
+        if te_cuda_graph_call_state is not None:
+            cuda_graph_metrics, cuda_graph_contract = self._finalize_te_cuda_graph_call(
+                te_cuda_graph_call_state
+            )
+            metrics["cuda_graph_metrics"] = cuda_graph_metrics
+            metrics["cuda_graph_contract"] = cuda_graph_contract
 
         # Skip FLOPs estimation when sequence packing is enabled: gbs counts original
         # samples but each packed sequence spans max_total_sequence_length tokens,
@@ -1060,6 +1788,8 @@ class MegatronPolicyWorkerImpl(
             # Saved across the step so we can restore at finish/abort.
             "saved_grad_sync_func": None,
             "saved_no_sync_func": None,
+            "te_cuda_graph_key": None,
+            "te_cuda_graph_call_state": None,
         }
 
     def _assert_step_open(self) -> dict[str, Any]:
@@ -1098,6 +1828,16 @@ class MegatronPolicyWorkerImpl(
                 "a train step is already open; "
                 "call finish_train_step or abort_train_step before begin"
             )
+        if (
+            getattr(self, "_te_cuda_graph_phase", _TECudaGraphWorkerPhase.IDLE)
+            is not _TECudaGraphWorkerPhase.IDLE
+        ):
+            raise RuntimeError("begin_train_step requires an IDLE CUDA Graph worker")
+        te_cuda_graph_call_state = (
+            self._begin_te_cuda_graph_call()
+            if getattr(self, "_te_cuda_graph_lifecycle", None) is not None
+            else None
+        )
         # Match sync train() inference-state reset (line 332-340).
         if hasattr(self.model, "inference_params"):
             self.model.inference_params = None
@@ -1112,6 +1852,7 @@ class MegatronPolicyWorkerImpl(
         self.optimizer.zero_grad()
 
         state = self._split_step_state_init(loss_fn=loss_fn, gbs=gbs, mbs=mbs)
+        state["te_cuda_graph_call_state"] = te_cuda_graph_call_state
 
         # Null both mcore hooks that would fire a mid-step DP reduce:
         #   grad_sync_func — PP scheduler's direct call on last-MB boundaries
@@ -1141,6 +1882,8 @@ class MegatronPolicyWorkerImpl(
             state["saved_no_sync_func"] = None
 
         self._train_step_state = state
+        if te_cuda_graph_call_state is not None:
+            self._te_cuda_graph_phase = _TECudaGraphWorkerPhase.SPLIT_OPEN_BEFORE_FIRST
 
     @wrap_with_nvtx_name("megatron_policy_worker/train_microbatch")
     def train_microbatch(
@@ -1212,7 +1955,41 @@ class MegatronPolicyWorkerImpl(
             self.cfg,
             state["mbs"],
             straggler_timer=self.mcore_state.straggler_timer,
+            delegate_pack_to_model=getattr(self, "delegate_pack_to_model", False),
+            for_cuda_graph_training=state["te_cuda_graph_call_state"] is not None,
         )
+        te_cuda_graph_key = None
+        te_cuda_graph_call_state = state["te_cuda_graph_call_state"]
+        if te_cuda_graph_call_state is not None:
+            first_microbatch, data_iterator = (
+                self._collectively_peek_te_cuda_graph_training_iterator(
+                    data_iterator,
+                    te_cuda_graph_call_state,
+                )
+            )
+            first_split_call = state["te_cuda_graph_key"] is None
+            expected_phase = (
+                _TECudaGraphWorkerPhase.SPLIT_OPEN_BEFORE_FIRST
+                if first_split_call
+                else _TECudaGraphWorkerPhase.SPLIT_OPEN_AFTER_FIRST
+            )
+            if self._te_cuda_graph_phase is not expected_phase:
+                raise RuntimeError(
+                    "split TE CUDA Graph worker phase does not match call order"
+                )
+            te_cuda_graph_key = self._ensure_te_cuda_graph_schedule(
+                num_microbatches=num_microbatches,
+                first_microbatch=first_microbatch,
+                call_state=te_cuda_graph_call_state,
+                ensure_active=first_split_call,
+            )
+            pinned_key = state["te_cuda_graph_key"]
+            if pinned_key is not None and pinned_key != te_cuda_graph_key:
+                raise RuntimeError(
+                    "A split train step cannot change its pinned TE CUDA Graph "
+                    "schedule key before launch."
+                )
+            state["te_cuda_graph_key"] = te_cuda_graph_key
         state["total_num_microbatches"] += int(num_microbatches)
 
         loss_post_processor = LossPostProcessor(
@@ -1243,28 +2020,54 @@ class MegatronPolicyWorkerImpl(
             self.model.no_sync(),
         ):
             rerun_state_machine = get_rerun_state_machine()
+            losses_reduced: list[dict[str, Any]] = []
             while rerun_state_machine.should_run_forward_backward(data_iterator):
-                losses_reduced = megatron_forward_backward(
-                    model=self.model,
-                    data_iterator=data_iterator,
-                    num_microbatches=num_microbatches,
-                    seq_length=padded_seq_length,
-                    mbs=micro_batch_size,
-                    post_processing_fn=loss_post_processor,
-                    forward_only=False,
-                    defer_fp32_logits=self.defer_fp32_logits,
-                    global_valid_seqs=placeholder_n,
-                    global_valid_toks=placeholder_n,
-                    sampling_params=self.sampling_params,
-                    straggler_timer=self.mcore_state.straggler_timer,
-                    draft_model=self.draft_model,
-                    enable_hidden_capture=draft_enabled,
-                    use_fused_linear_logprobs=self.cfg["megatron_cfg"].get(
-                        "use_fused_linear_logprobs", False
-                    ),
-                    use_router_replay=use_router_replay,
-                    router_replay_train=True,
-                )
+                local_graph_error: Optional[Exception] = None
+                if te_cuda_graph_key is not None:
+                    self._te_cuda_graph_phase = (
+                        _TECudaGraphWorkerPhase.GRAPH_SCHEDULE_LIVE
+                    )
+                try:
+                    losses_reduced = megatron_forward_backward(
+                        model=self.model,
+                        data_iterator=data_iterator,
+                        num_microbatches=num_microbatches,
+                        seq_length=padded_seq_length,
+                        mbs=micro_batch_size,
+                        post_processing_fn=loss_post_processor,
+                        forward_only=False,
+                        defer_fp32_logits=self.defer_fp32_logits,
+                        global_valid_seqs=placeholder_n,
+                        global_valid_toks=placeholder_n,
+                        sampling_params=self.sampling_params,
+                        straggler_timer=self.mcore_state.straggler_timer,
+                        draft_model=self.draft_model,
+                        enable_hidden_capture=draft_enabled,
+                        use_fused_linear_logprobs=self.cfg["megatron_cfg"].get(
+                            "use_fused_linear_logprobs", False
+                        ),
+                        use_router_replay=use_router_replay,
+                        router_replay_train=True,
+                    )
+                except Exception as error:
+                    if te_cuda_graph_key is None:
+                        raise
+                    local_graph_error = error
+                finally:
+                    if te_cuda_graph_key is not None:
+                        self._te_cuda_graph_phase = (
+                            _TECudaGraphWorkerPhase.SPLIT_OPEN_AFTER_FIRST
+                        )
+                if te_cuda_graph_key is not None:
+                    assert te_cuda_graph_call_state is not None
+                    self._collectively_raise_te_cuda_graph_failure(
+                        local_graph_error,
+                        operation="split training schedule",
+                    )
+                    self._record_te_cuda_graph_schedule_replay(
+                        te_cuda_graph_call_state,
+                        te_cuda_graph_key,
+                    )
 
         if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
             torch.cuda.empty_cache()
@@ -1310,8 +2113,37 @@ class MegatronPolicyWorkerImpl(
                 )
             raise
 
+    def _validate_te_cuda_graph_split_finish(self, state: dict[str, Any]) -> None:
+        """Reject an empty graph split before gradients or parameters mutate."""
+        call_state = state["te_cuda_graph_call_state"]
+        if call_state is None:
+            return
+        local_error: Optional[Exception] = None
+        try:
+            graph_key = state["te_cuda_graph_key"]
+            if (
+                graph_key is None
+                or call_state.normalized_schedule_key is None
+                or graph_key.num_microbatches != call_state.normalized_schedule_key
+                or int(state["total_num_microbatches"]) < 1
+                or call_state.padded_tokens < 1
+                or call_state.capacity_tokens < 1
+            ):
+                raise RuntimeError(
+                    "TE CUDA Graph split finish has no processed microbatch "
+                    "geometry; call abort_train_step instead."
+                )
+        except Exception as error:
+            local_error = error
+        self._collectively_raise_te_cuda_graph_failure(
+            local_error,
+            operation="split finish preflight",
+        )
+
     def _finish_train_step_body(self, state: dict[str, Any]) -> dict[str, Any]:
         from nemo_rl.algorithms.loss.interfaces import LossType
+
+        self._validate_te_cuda_graph_split_finish(state)
 
         # All-reduce accumulated mask sums across DP to recover true N.
         to_reduce = torch.stack(
@@ -1360,6 +2192,9 @@ class MegatronPolicyWorkerImpl(
         update_successful = logical_and_across_model_parallel_group(
             update_successful, mp_group=pg_collection.mp
         )
+        te_cuda_graph_call_state = state["te_cuda_graph_call_state"]
+        if te_cuda_graph_call_state is not None:
+            self._record_te_cuda_graph_optimizer_step(bool(update_successful))
         grad_norm = reduce_max_stat_across_model_parallel_group(
             grad_norm, mp_group=pg_collection.mp
         )
@@ -1476,7 +2311,17 @@ class MegatronPolicyWorkerImpl(
             if moe_metrics:
                 metrics["moe_metrics"] = moe_metrics
 
+        if te_cuda_graph_call_state is not None:
+            cuda_graph_metrics, cuda_graph_contract = self._finalize_te_cuda_graph_call(
+                te_cuda_graph_call_state
+            )
+            metrics["cuda_graph_metrics"] = cuda_graph_metrics
+            metrics["cuda_graph_contract"] = cuda_graph_contract
+
+        state["te_cuda_graph_key"] = None
+        state["te_cuda_graph_call_state"] = None
         self._train_step_state = None
+        self._te_cuda_graph_phase = _TECudaGraphWorkerPhase.IDLE
         return metrics
 
     @wrap_with_nvtx_name("megatron_policy_worker/abort_train_step")
@@ -1484,12 +2329,21 @@ class MegatronPolicyWorkerImpl(
         state = getattr(self, "_train_step_state", None)
         if state is None:
             return
-        # Restore grad_sync_func first so the model is back to a normal
-        # state before zero_grad_buffer touches anything.
-        self._restore_saved_grad_sync_func(state)
-        self.model.zero_grad_buffer()
-        self.optimizer.zero_grad()
-        self._train_step_state = None
+        try:
+            # Restore hooks before zeroing buffers, even when abort follows a
+            # graph schedule error.
+            self._restore_saved_grad_sync_func(state)
+        finally:
+            try:
+                self.model.zero_grad_buffer()
+                self.optimizer.zero_grad()
+            finally:
+                state["te_cuda_graph_key"] = None
+                state["te_cuda_graph_call_state"] = None
+                self._train_step_state = None
+                self._te_cuda_graph_phase = _TECudaGraphWorkerPhase.IDLE
+                if getattr(self, "_te_cuda_graph_reset_required", False):
+                    self._reset_te_cuda_graph_banks_after_failure()
 
     @wrap_with_nvtx_name("megatron_policy_worker/get_logprobs")
     def get_logprobs(
@@ -1512,6 +2366,7 @@ class MegatronPolicyWorkerImpl(
           We use the convention that the logprob of the first token is 0 so that the sequence length is maintained.
           The logprob of input token i is specified at position i in the output logprobs tensor.
         """
+        self._deactivate_te_cuda_graphs_for_eager_path()
         self.timer.start("get_logprobs")
         no_grad = torch.no_grad()
         no_grad.__enter__()
@@ -1535,6 +2390,7 @@ class MegatronPolicyWorkerImpl(
             logprob_batch_size,
             straggler_timer=self.mcore_state.straggler_timer,
             delegate_pack_to_model=self.delegate_pack_to_model,
+            for_cuda_graph_training=False,
         )
 
         use_fused_linear_logprobs = self.cfg["megatron_cfg"].get(
@@ -1652,6 +2508,11 @@ class MegatronPolicyWorkerImpl(
                   is different from the current policy, making filtered logprobs incompatible.
         On exit: Restores original references and re-flips cuda/cpu, restores sampling_params.
         """
+        self._deactivate_te_cuda_graphs_for_eager_path()
+        # Reference FP8 extra-state restoration can replace TE-owned storage even
+        # though ordinary parameter tensors are copied in place. Drop cached
+        # address-owning banks while preserving completed warmup and counters.
+        self._reset_te_cuda_graph_banks_for_storage_relocation()
         ## disable overlap param gather when swapping weights
         if self.should_disable_forward_pre_hook:
             self.disable_forward_pre_hook()
@@ -1729,6 +2590,7 @@ class MegatronPolicyWorkerImpl(
                 - topk_logits: Tensor of top-k logits for each position in the sequence
                 - topk_indices: Tensor of top-k indices for each position in the sequence
         """
+        self._deactivate_te_cuda_graphs_for_eager_path()
         no_grad = torch.no_grad()
         no_grad.__enter__()
 
@@ -1752,6 +2614,7 @@ class MegatronPolicyWorkerImpl(
             logprob_batch_size,
             straggler_timer=self.mcore_state.straggler_timer,
             delegate_pack_to_model=self.delegate_pack_to_model,
+            for_cuda_graph_training=False,
         )
 
         list_of_outputs = megatron_forward_backward(
@@ -2587,6 +3450,41 @@ class MegatronPolicyWorkerImpl(
             post_iter_func=lambda x: x[1].contiguous(),
         )
 
+    def shutdown(self) -> bool:
+        """Release split state, graph banks, exact counters, and base resources."""
+        first_error: Optional[Exception] = None
+        if getattr(self, "_train_step_state", None) is not None:
+            try:
+                self.abort_train_step()
+            except Exception as error:
+                first_error = error
+
+        lifecycle = getattr(self, "_te_cuda_graph_lifecycle", None)
+        manager = getattr(self, "_te_cuda_graph_bank_manager", None)
+        try:
+            if lifecycle is not None:
+                lifecycle.close()
+        except Exception as error:
+            if first_error is None:
+                first_error = error
+        try:
+            if manager is not None:
+                manager.close()
+        except Exception as error:
+            if first_error is None:
+                first_error = error
+        finally:
+            self._te_cuda_graph_lifecycle = None
+            self._te_cuda_graph_bank_manager = None
+            self._te_cuda_graph_installed_key = None
+            self._te_cuda_graph_capture_helper = None
+            self._te_cuda_graph_capture_sample_packed_seq_params = None
+
+        base_result = AbstractPolicyWorker.shutdown(self)
+        if first_error is not None:
+            raise first_error
+        return base_result
+
     def prepare_for_lp_inference(self):
         self.model = self.move_model(self.model, "cuda", move_grads=False)
         self.model.eval()
@@ -2789,6 +3687,7 @@ class MegatronPolicyWorkerImpl(
         move_params: bool = True,
         move_grads: bool = True,
     ) -> torch.nn.Module:
+        self._reset_te_cuda_graph_banks_for_storage_relocation()
         # move all param and grad buffers to the device
         if isinstance(model, DistributedDataParallel):
             # DDP case
@@ -2824,6 +3723,7 @@ class MegatronPolicyWorkerImpl(
         return model
 
     def move_optimizer(self, device: str):
+        self._reset_te_cuda_graph_banks_for_storage_relocation()
         # Iterate through the state dictionaries for each parameter group
         if isinstance(self.optimizer, ChainedOptimizer):
             optimizer_state = self.optimizer.state
@@ -2998,6 +3898,7 @@ class MegatronPolicyWorkerImpl(
             optimizer_path: If not None, attempts to load optimizer and scheduler states
                             if self.optimizer and self.scheduler are initialized.
         """
+        self._reset_te_cuda_graph_banks_for_storage_relocation()
         raise NotImplementedError(
             "Loading checkpoints outside of the init function is not yet implemented for Megatron policy."
         )
