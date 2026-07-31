@@ -416,6 +416,38 @@ python3 experiments/cuda_graph/mamba_moe_te_graph_20260729/render_report.py \
   --te-overlay-sha256 39f7b26b8cf127e3ca104c0375c97ce4e6d047178f9d00836b92469b1c2e544b
 ```
 
+### Dynamic CUDA Graph call evidence
+
+Jobs `2479812` (`moe_router`) and `2479813` (no-CG baseline) profiled only
+Megatron policy workers during policy-training step 5. Both used the same
+six-step Nano hybrid workload; steps 1–3 warmed up, step 4 captured the graph
+bank, step 5 supplied the clean replay window, and the top of step 6 stopped
+and flushed Nsight Systems.
+
+Analyze any equivalent pair of synchronized profile directories with:
+
+```bash
+python3 experiments/cuda_graph/mamba_moe_te_graph_20260729/analyze_cuda_graph_calls.py \
+  --label positive=/path/to/moe-router-run \
+  --label baseline=/path/to/no-cg-run \
+  --jobs 4 \
+  --output-json \
+  experiments/cuda_graph/results/cg_call_coverage_jobs_2479812_2479813.json
+```
+
+The checked result contains 16 policy-worker profiles per variant:
+
+| Variant | Workers with graph launches | Total graph launches | Launches/worker min / median / max | All CUDA API calls | Graph/API share |
+|---|---:|---:|---:|---:|---:|
+| No-CG baseline, job 2479813 | 0 / 16 (0%) | 0 | 0 / 0 / 0 | 3,284,817 | 0% |
+| PR5672 TE `moe_router`, job 2479812 | 16 / 16 (100%) | 1,104 | 66 / 69 / 72 | 3,127,184 | 0.035303% |
+
+Worker coverage is direct evidence that every profiled policy process launched
+CUDA Graphs. The Graph/API share uses every CUDA runtime and driver API call as
+its denominator; it is not graph-eligible model-module call coverage. Exact
+module invocation coverage still requires counters at
+`GraphableMegatronModule.__call__`.
+
 The report always keeps Correctness, Smoke, Performance, Accuracy, Failures,
 and Provenance separate. Missing experiment rows remain visibly pending.
 

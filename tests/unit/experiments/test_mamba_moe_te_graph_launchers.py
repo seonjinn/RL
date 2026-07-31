@@ -2214,6 +2214,139 @@ def test_report_has_required_sections_scope_labels_and_verified_status() -> None
     assert "__REQUIRED_*_MODEL_SNAPSHOT__" not in report
 
 
+def test_report_describes_requested_cuda_graph_coverage_by_scope() -> None:
+    renderer = _load_experiment_module("render_report")
+    scopes = (
+        "baseline-no-cg",
+        "whole-layer",
+        "attn",
+        "mlp",
+        "mamba",
+        "moe",
+        "moe-router",
+        "moe-router-preprocess",
+        "attn-mamba-moe-router-preprocess",
+    )
+    report = renderer.render_html(
+        [
+            {
+                "scope": scope,
+                "job_id": str(index),
+                "status": "performance:completed",
+                "e2e_step_time": "1.0",
+            }
+            for index, scope in enumerate(scopes)
+        ],
+        te_version="2.15.0+42b84005",
+        te_source_commit="e707aa46869dc2aec08dfea25402e97a61d49fef",
+        te_overlay_sha256=TE_FP64_WEAKREF_SHA256,
+    )
+
+    for value in (
+        "CUDA Graph coverage",
+        "No CUDA Graph; all phases eager",
+        "Policy training: graphable whole-layer regions; logprob/generation: eager",
+        "Policy training: attention path (pre-attn LN + attention + BDA); "
+        "logprob/generation: eager",
+        "Policy training: dense MLP path (pre-MLP LN + MLP + BDA); "
+        "logprob/generation: eager",
+        "Policy training: full Mamba layer (norm + mixer + BDA); "
+        "logprob/generation: eager",
+        "Policy training: full MoE path "
+        "(pre-MLP LN + router/dispatch/experts/postprocess; drop-and-pad only); "
+        "logprob/generation: eager",
+        "Policy training: MoE pre-MLP LN + shared expert "
+        "(when configured/non-overlapped) + router; "
+        "preprocess/dispatch/experts/combine/BDA eager; "
+        "logprob/generation: eager",
+        "Policy training: MoE pre-MLP LN + shared expert "
+        "(when configured/non-overlapped) + "
+        "router/dispatcher preprocess; dispatch/experts/combine/BDA eager; "
+        "logprob/generation: eager",
+        "Policy training: attention path (pre-attn LN + attention + BDA) + "
+        "full Mamba layer (norm + mixer + BDA) + MoE pre-MLP LN + "
+        "shared expert (when configured/non-overlapped) + "
+        "router/dispatcher preprocess; dispatch/experts/combine/BDA eager; "
+        "logprob/generation: eager",
+    ):
+        assert value in report
+
+
+def test_report_distinguishes_dynamic_worker_coverage_from_cuda_api_share() -> None:
+    renderer = _load_experiment_module("render_report")
+    report = renderer.render_html(
+        [],
+        te_version="2.15.0+42b84005",
+        te_source_commit="e707aa46869dc2aec08dfea25402e97a61d49fef",
+        te_overlay_sha256=TE_FP64_WEAKREF_SHA256,
+        call_coverage={
+            "positive": {
+                "profile_count": 16,
+                "profiles_with_cuda_graph_launches": 16,
+                "profile_cuda_graph_coverage_pct": 100.0,
+                "total_cuda_api_calls": 3_127_184,
+                "total_cuda_graph_launch_calls": 1_104,
+                "cuda_graph_launch_share_of_cuda_api_calls_pct": 0.035303,
+                "cuda_graph_launch_calls_min": 66,
+                "cuda_graph_launch_calls_median": 69.0,
+                "cuda_graph_launch_calls_max": 72,
+                "profiles": [
+                    {
+                        "path": "/runs/2479812-logs/nsight/"
+                        "megatron_policy_worker_5:6_123.nsys-rep"
+                    }
+                ],
+            },
+            "baseline": {
+                "profile_count": 16,
+                "profiles_with_cuda_graph_launches": 0,
+                "profile_cuda_graph_coverage_pct": 0.0,
+                "total_cuda_api_calls": 3_284_817,
+                "total_cuda_graph_launch_calls": 0,
+                "cuda_graph_launch_share_of_cuda_api_calls_pct": 0.0,
+                "cuda_graph_launch_calls_min": 0,
+                "cuda_graph_launch_calls_median": 0.0,
+                "cuda_graph_launch_calls_max": 0,
+                "profiles": [
+                    {
+                        "path": "/runs/2479813-logs/nsight/"
+                        "megatron_policy_worker_5:6_456.nsys-rep"
+                    }
+                ],
+            },
+        },
+    )
+
+    for value in (
+        "Dynamic CUDA Graph call evidence",
+        "PR5672 TE partial graph: moe_router",
+        "No-CG baseline",
+        "2479812",
+        "2479813",
+        "Step 5",
+        "16 / 16 (100.0%)",
+        "1,104",
+        "66 / 69.0 / 72",
+        "0.035303%",
+        "not graph-eligible model-module call coverage",
+    ):
+        assert value in report
+
+
+def test_call_coverage_reader_rejects_non_object_variant(
+    tmp_path: Path,
+) -> None:
+    renderer = _load_experiment_module("render_report")
+    path = tmp_path / "coverage.json"
+    path.write_text('{"positive": []}')
+
+    with pytest.raises(
+        ValueError,
+        match="CUDA Graph call coverage variant positive must be an object",
+    ):
+        renderer.read_call_coverage(path)
+
+
 def test_checked_in_report_is_static_and_has_all_sections() -> None:
     renderer = _load_experiment_module("render_report")
     report_path = (
@@ -2226,6 +2359,7 @@ def test_checked_in_report_is_static_and_has_all_sections() -> None:
     assert report.startswith("<!doctype html>")
     for section_id in (
         "correctness",
+        "dynamic-call-coverage",
         "smoke",
         "performance",
         "accuracy",
@@ -2239,5 +2373,9 @@ def test_checked_in_report_is_static_and_has_all_sections() -> None:
     assert "138 passed" in report
     assert "2475736, 2475881" in report
     assert "6 passed in 3.58s" in report
+    assert "2479812" in report
+    assert "2479813" in report
+    assert "16 / 16 (100.0%)" in report
+    assert "1,104" in report
     assert renderer.DEFAULT_MODEL_SNAPSHOT in report
     assert renderer.DEFAULT_TOKENIZER_SNAPSHOT in report

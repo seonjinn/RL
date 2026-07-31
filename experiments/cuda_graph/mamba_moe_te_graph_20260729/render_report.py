@@ -4,6 +4,8 @@
 import argparse
 import csv
 import html
+import json
+import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,6 +26,13 @@ DEFAULT_OUTPUT = (
     / "cuda_graph"
     / "results"
     / "mamba_moe_te_graph_20260729_report.html"
+)
+DEFAULT_CALL_COVERAGE = (
+    REPO_ROOT
+    / "experiments"
+    / "cuda_graph"
+    / "results"
+    / "cg_call_coverage_jobs_2479812_2479813.json"
 )
 DEFAULT_MCORE_SHA = "100047b517ea91526dc465448fcb3b37b2598388"
 DEFAULT_MODEL_SNAPSHOT = (
@@ -85,12 +94,151 @@ def scope_label(scope: str) -> str:
     return scope
 
 
+def cuda_graph_coverage_label(scope: str) -> str:
+    """Describe requested model and NeMo-RL phase coverage for one scope."""
+    normalized = scope.lower().replace("_", "-")
+    if normalized in {"baseline-no-cg", "no-cg", "[no-cg]"}:
+        return "No CUDA Graph; all phases eager"
+    if normalized in {"whole-layer", "[]", "te-whole-layer"}:
+        return (
+            "Policy training: graphable whole-layer regions; "
+            "logprob/generation: eager"
+        )
+
+    tokens = set(normalized.split("-"))
+    modules = []
+    if "attn" in tokens:
+        modules.append("attention path (pre-attn LN + attention + BDA)")
+    if "mlp" in tokens:
+        modules.append("dense MLP path (pre-MLP LN + MLP + BDA)")
+    if "mamba" in tokens:
+        modules.append("full Mamba layer (norm + mixer + BDA)")
+
+    eager_boundary = ""
+    if "router" in tokens:
+        if "preprocess" in tokens:
+            modules.append(
+                "MoE pre-MLP LN + shared expert (when configured/non-overlapped) + "
+                "router/dispatcher preprocess"
+            )
+            eager_boundary = "; dispatch/experts/combine/BDA eager"
+        else:
+            modules.append(
+                "MoE pre-MLP LN + shared expert (when configured/non-overlapped) + router"
+            )
+            eager_boundary = "; preprocess/dispatch/experts/combine/BDA eager"
+    elif "moe" in tokens:
+        modules.append(
+            "full MoE path "
+            "(pre-MLP LN + router/dispatch/experts/postprocess; drop-and-pad only)"
+        )
+
+    if not modules:
+        return (
+            "Configuration variant; coverage follows parent graph scope; "
+            "logprob/generation: eager"
+        )
+    return (
+        f"Policy training: {' + '.join(modules)}{eager_boundary}; "
+        "logprob/generation: eager"
+    )
+
+
 def read_rows(path: Path) -> list[dict[str, str]]:
     """Read an optional normalized result CSV."""
     if not path.is_file():
         return []
     with path.open(newline="") as csv_file:
         return list(csv.DictReader(csv_file))
+
+
+def read_call_coverage(path: Path) -> dict[str, dict[str, object]]:
+    """Read an optional dynamic Nsight CUDA Graph call summary."""
+    if not path.is_file():
+        return {}
+    payload = json.loads(path.read_text())
+    if not isinstance(payload, dict):
+        raise ValueError("CUDA Graph call coverage payload must be an object")
+    for name, summary in payload.items():
+        if not isinstance(summary, dict):
+            raise ValueError(
+                f"CUDA Graph call coverage variant {name} must be an object"
+            )
+    return payload
+
+
+def _coverage_evidence(summary: Mapping[str, object]) -> tuple[str, str]:
+    profiles = summary.get("profiles", [])
+    if not isinstance(profiles, list) or not profiles:
+        return "", ""
+    first_profile = profiles[0]
+    if not isinstance(first_profile, dict):
+        return "", ""
+    path = str(first_profile.get("path", ""))
+    job_match = re.search(r"/(\d+)-logs/", path)
+    range_match = re.search(r"_(\d+):(\d+)_", path)
+    job_id = job_match.group(1) if job_match else ""
+    profiled_step = f"Step {range_match.group(1)}" if range_match else ""
+    return job_id, profiled_step
+
+
+def dynamic_call_coverage_table(
+    coverage: Mapping[str, Mapping[str, object]],
+) -> str:
+    """Render dynamic CUDA Graph launch evidence from policy-worker profiles."""
+    if not coverage:
+        return '<p class="pending">No dynamic CUDA Graph call profiles yet.</p>'
+    labels = {
+        "baseline": "No-CG baseline",
+        "positive": "PR5672 TE partial graph: moe_router",
+    }
+    rows = []
+    for name in ("baseline", "positive", *sorted(set(coverage) - {"baseline", "positive"})):
+        if name not in coverage:
+            continue
+        summary = coverage[name]
+        job_id, profiled_step = _coverage_evidence(summary)
+        profile_count = int(summary.get("profile_count", 0))
+        profiles_with_launches = int(
+            summary.get("profiles_with_cuda_graph_launches", 0)
+        )
+        worker_coverage = float(summary.get("profile_cuda_graph_coverage_pct", 0))
+        graph_launches = int(summary.get("total_cuda_graph_launch_calls", 0))
+        total_cuda_api_calls = int(summary.get("total_cuda_api_calls", 0))
+        graph_api_share = float(
+            summary.get("cuda_graph_launch_share_of_cuda_api_calls_pct", 0)
+        )
+        minimum = int(summary.get("cuda_graph_launch_calls_min", 0))
+        median = float(summary.get("cuda_graph_launch_calls_median", 0))
+        maximum = int(summary.get("cuda_graph_launch_calls_max", 0))
+        cells = (
+            labels.get(name, name),
+            job_id,
+            profiled_step,
+            f"{profiles_with_launches} / {profile_count} ({worker_coverage}%)",
+            f"{graph_launches:,}",
+            f"{minimum} / {median} / {maximum}",
+            f"{total_cuda_api_calls:,}",
+            f"{graph_api_share}%",
+        )
+        rows.append(f"<tr>{''.join(f'<td>{escape(cell)}</td>' for cell in cells)}</tr>")
+    headers = (
+        "Variant",
+        "Job",
+        "Profiled policy step",
+        "Workers with graph launches",
+        "Total graph launches",
+        "Graph launches/worker min / median / max",
+        "All CUDA API calls",
+        "Graph launch / CUDA API calls",
+    )
+    return (
+        '<div class="table-wrap"><table><thead><tr>'
+        f"{''.join(f'<th>{escape(header)}</th>' for header in headers)}"
+        f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
+        "<p>The final percentage uses every CUDA runtime/driver API call as its "
+        "denominator; it is not graph-eligible model-module call coverage.</p>"
+    )
 
 
 def table(
@@ -105,11 +253,12 @@ def table(
     for row in rows:
         cells = []
         for field, _ in columns:
-            value = (
-                scope_label(row.get(field, ""))
-                if field == "scope"
-                else row.get(field, "")
-            )
+            if field == "scope":
+                value = scope_label(row.get(field, ""))
+            elif field == "cuda_graph_coverage":
+                value = cuda_graph_coverage_label(row.get("scope", ""))
+            else:
+                value = row.get(field, "")
             cells.append(f"<td>{escape(value)}</td>")
         body_rows.append(f"<tr>{''.join(cells)}</tr>")
     return (
@@ -159,6 +308,7 @@ def render_html(
     container_sha256: str = "__REQUIRED_CONTAINER_SHA256__",
     model_snapshot: str = DEFAULT_MODEL_SNAPSHOT,
     tokenizer_snapshot: str = DEFAULT_TOKENIZER_SNAPSHOT,
+    call_coverage: Mapping[str, Mapping[str, object]] | None = None,
 ) -> str:
     """Build a self-contained report with correctness and experiment ledgers."""
     smoke_rows = [
@@ -201,6 +351,7 @@ def render_html(
         smoke_rows,
         (
             ("scope", "Launcher"),
+            ("cuda_graph_coverage", "CUDA Graph coverage"),
             ("job_id", "Job"),
             ("status", "Status"),
             ("geometry_key", "Geometry key"),
@@ -215,6 +366,7 @@ def render_html(
         performance_rows,
         (
             ("scope", "Launcher"),
+            ("cuda_graph_coverage", "CUDA Graph coverage"),
             ("job_id", "Job"),
             ("e2e_step_time", "E2E step time"),
             ("e2e_tokens_per_sec_per_gpu", "E2E tokens/s/GPU"),
@@ -238,6 +390,7 @@ def render_html(
         steady_state_performance,
         (
             ("scope", "Launcher"),
+            ("cuda_graph_coverage", "CUDA Graph coverage"),
             ("job_id", "Job"),
             ("sample_count", "Samples"),
             ("valid", "Valid"),
@@ -286,6 +439,7 @@ def render_html(
         steady_state_performance,
         (
             ("scope", "Launcher"),
+            ("cuda_graph_coverage", "CUDA Graph coverage"),
             ("job_id", "Job"),
             *(
                 (f"{field}_delta", f"{label} delta")
@@ -297,6 +451,7 @@ def render_html(
         accuracy_rows,
         (
             ("scope", "Launcher"),
+            ("cuda_graph_coverage", "CUDA Graph coverage"),
             ("job_id", "Job"),
             *CORRECTNESS_COLUMNS,
         ),
@@ -305,6 +460,7 @@ def render_html(
         failure_rows,
         (
             ("scope", "Launcher"),
+            ("cuda_graph_coverage", "CUDA Graph coverage"),
             ("job_id", "Job"),
             ("status", "Failure"),
             ("failure", "Failure detail"),
@@ -315,6 +471,7 @@ def render_html(
             ("fallback_count", "Fallbacks"),
         ),
     )
+    dynamic_coverage = dynamic_call_coverage_table(call_coverage or {})
 
     return f"""<!doctype html>
 <html lang="en">
@@ -341,8 +498,10 @@ th {{ color: #a8ddff; }} code {{ color: #9de4ba; }} .table-wrap {{ overflow-x: a
 <div><strong>No-CG baseline (CUDA graphs disabled)</strong><br>The baseline uses <code>cuda_graph_impl=none</code>.</div>
 <div><strong>TE whole-layer capture (empty module list)</strong><br>An empty TE scope means whole-layer capture; it is never the no-CG baseline.</div>
 <div><strong>MoE configuration variants</strong><br><code>moe_act</code> recompute and shared-expert overlap are configuration variants; graph scope is unchanged.</div>
+<div><strong>CUDA Graph coverage</strong><br>Coverage names the requested policy-training regions. Logprob and vLLM generation remain eager; job status and replay telemetry determine whether requested coverage was actually achieved.</div>
 </div>
 <section id="correctness"><h2>Correctness</h2>{correctness}</section>
+<section id="dynamic-call-coverage"><h2>Dynamic CUDA Graph call evidence</h2>{dynamic_coverage}</section>
 <section id="smoke"><h2>Smoke</h2>{smoke}</section>
 <section id="performance"><h2>Performance</h2>{performance}</section>
 <section id="steady-state-performance"><h2>Steady-state performance (steps 6–20)</h2>{steady_state}</section>
@@ -372,6 +531,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--call-coverage",
+        type=Path,
+        default=DEFAULT_CALL_COVERAGE,
+    )
     parser.add_argument("--nemo-rl-sha", default="__REQUIRED_NEMO_RL_SHA__")
     parser.add_argument("--bridge-sha", default="__REQUIRED_MEGATRON_BRIDGE_SHA__")
     parser.add_argument(
@@ -403,6 +567,7 @@ def main() -> None:
             container_sha256=args.container_sha256,
             model_snapshot=args.model_snapshot,
             tokenizer_snapshot=args.tokenizer_snapshot,
+            call_coverage=read_call_coverage(args.call_coverage),
         )
     )
 

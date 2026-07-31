@@ -1,0 +1,188 @@
+{
+  "baseline": {
+    "cuda_graph_launch_calls_max": 0,
+    "cuda_graph_launch_calls_median": 0.0,
+    "cuda_graph_launch_calls_min": 0,
+    "cuda_graph_launch_share_of_cuda_api_calls_pct": 0.0,
+    "profile_count": 16,
+    "profile_cuda_graph_coverage_pct": 0.0,
+    "profiles": [
+      {
+        "cuda_api_calls": 203522,
+        "cuda_graph_launch_calls": 0,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-baseline-no-cg-nano-hybrid-ptyche-smoke-cg-call-profile-baseline-20260730/2479813-logs/ray/ptyche0100/session_2026-07-30_19-53-15_701478_147489/logs/nsight/megatron_policy_worker_5:6_3473108.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 204376,
+        "cuda_graph_launch_calls": 0,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-baseline-no-cg-nano-hybrid-ptyche-smoke-cg-call-profile-baseline-20260730/2479813-logs/ray/ptyche0100/session_2026-07-30_19-53-15_701478_147489/logs/nsight/megatron_policy_worker_5:6_3473132.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 203195,
+        "cuda_graph_launch_calls": 0,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-baseline-no-cg-nano-hybrid-ptyche-smoke-cg-call-profile-baseline-20260730/2479813-logs/ray/ptyche0100/session_2026-07-30_19-53-15_701478_147489/logs/nsight/megatron_policy_worker_5:6_3473150.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 205142,
+        "cuda_graph_launch_calls": 0,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-baseline-no-cg-nano-hybrid-ptyche-smoke-cg-call-profile-baseline-20260730/2479813-logs/ray/ptyche0100/session_2026-07-30_19-53-15_701478_147489/logs/nsight/megatron_policy_worker_5:6_3473177.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 210674,
+        "cuda_graph_launch_calls": 0,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-baseline-no-cg-nano-hybrid-ptyche-smoke-cg-call-profile-baseline-20260730/2479813-logs/ray/ptyche0101/session_2026-07-30_19-53-15_701478_147489/logs/nsight/megatron_policy_worker_5:6_3054654.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 212593,
+        "cuda_graph_launch_calls": 0,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-baseline-no-cg-nano-hybrid-ptyche-smoke-cg-call-profile-baseline-20260730/2479813-logs/ray/ptyche0101/session_2026-07-30_19-53-15_701478_147489/logs/nsight/megatron_policy_worker_5:6_3054669.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 213177,
+        "cuda_graph_launch_calls": 0,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-baseline-no-cg-nano-hybrid-ptyche-smoke-cg-call-profile-baseline-20260730/2479813-logs/ray/ptyche0101/session_2026-07-30_19-53-15_701478_147489/logs/nsight/megatron_policy_worker_5:6_3054705.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 209386,
+        "cuda_graph_launch_calls": 0,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-baseline-no-cg-nano-hybrid-ptyche-smoke-cg-call-profile-baseline-20260730/2479813-logs/ray/ptyche0101/session_2026-07-30_19-53-15_701478_147489/logs/nsight/megatron_policy_worker_5:6_3054706.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 207799,
+        "cuda_graph_launch_calls": 0,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-baseline-no-cg-nano-hybrid-ptyche-smoke-cg-call-profile-baseline-20260730/2479813-logs/ray/ptyche0105/session_2026-07-30_19-53-15_701478_147489/logs/nsight/megatron_policy_worker_5:6_2558816.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 206610,
+        "cuda_graph_launch_calls": 0,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-baseline-no-cg-nano-hybrid-ptyche-smoke-cg-call-profile-baseline-20260730/2479813-logs/ray/ptyche0105/session_2026-07-30_19-53-15_701478_147489/logs/nsight/megatron_policy_worker_5:6_2558824.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 207025,
+        "cuda_graph_launch_calls": 0,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-baseline-no-cg-nano-hybrid-ptyche-smoke-cg-call-profile-baseline-20260730/2479813-logs/ray/ptyche0105/session_2026-07-30_19-53-15_701478_147489/logs/nsight/megatron_policy_worker_5:6_2558839.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 205948,
+        "cuda_graph_launch_calls": 0,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-baseline-no-cg-nano-hybrid-ptyche-smoke-cg-call-profile-baseline-20260730/2479813-logs/ray/ptyche0105/session_2026-07-30_19-53-15_701478_147489/logs/nsight/megatron_policy_worker_5:6_2558870.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 197146,
+        "cuda_graph_launch_calls": 0,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-baseline-no-cg-nano-hybrid-ptyche-smoke-cg-call-profile-baseline-20260730/2479813-logs/ray/session_2026-07-30_19-53-15_701478_147489/logs/nsight/megatron_policy_worker_5:6_158590.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 198311,
+        "cuda_graph_launch_calls": 0,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-baseline-no-cg-nano-hybrid-ptyche-smoke-cg-call-profile-baseline-20260730/2479813-logs/ray/session_2026-07-30_19-53-15_701478_147489/logs/nsight/megatron_policy_worker_5:6_158688.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 200014,
+        "cuda_graph_launch_calls": 0,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-baseline-no-cg-nano-hybrid-ptyche-smoke-cg-call-profile-baseline-20260730/2479813-logs/ray/session_2026-07-30_19-53-15_701478_147489/logs/nsight/megatron_policy_worker_5:6_158732.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 199899,
+        "cuda_graph_launch_calls": 0,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-baseline-no-cg-nano-hybrid-ptyche-smoke-cg-call-profile-baseline-20260730/2479813-logs/ray/session_2026-07-30_19-53-15_701478_147489/logs/nsight/megatron_policy_worker_5:6_158733.nsys-rep"
+      }
+    ],
+    "profiles_with_cuda_graph_launches": 0,
+    "total_cuda_api_calls": 3284817,
+    "total_cuda_graph_launch_calls": 0
+  },
+  "positive": {
+    "cuda_graph_launch_calls_max": 72,
+    "cuda_graph_launch_calls_median": 69.0,
+    "cuda_graph_launch_calls_min": 66,
+    "cuda_graph_launch_share_of_cuda_api_calls_pct": 0.035303,
+    "profile_count": 16,
+    "profile_cuda_graph_coverage_pct": 100.0,
+    "profiles": [
+      {
+        "cuda_api_calls": 197882,
+        "cuda_graph_launch_calls": 72,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-moe-router-nano-hybrid-ptyche-smoke-cg-call-profile-positive-20260730/2479812-logs/ray/ptyche0081/session_2026-07-30_19-53-04_768607_1281786/logs/nsight/megatron_policy_worker_5:6_1705755.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 200591,
+        "cuda_graph_launch_calls": 72,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-moe-router-nano-hybrid-ptyche-smoke-cg-call-profile-positive-20260730/2479812-logs/ray/ptyche0081/session_2026-07-30_19-53-04_768607_1281786/logs/nsight/megatron_policy_worker_5:6_1705756.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 199703,
+        "cuda_graph_launch_calls": 72,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-moe-router-nano-hybrid-ptyche-smoke-cg-call-profile-positive-20260730/2479812-logs/ray/ptyche0081/session_2026-07-30_19-53-04_768607_1281786/logs/nsight/megatron_policy_worker_5:6_1705757.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 200825,
+        "cuda_graph_launch_calls": 72,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-moe-router-nano-hybrid-ptyche-smoke-cg-call-profile-positive-20260730/2479812-logs/ray/ptyche0081/session_2026-07-30_19-53-04_768607_1281786/logs/nsight/megatron_policy_worker_5:6_1705758.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 191831,
+        "cuda_graph_launch_calls": 66,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-moe-router-nano-hybrid-ptyche-smoke-cg-call-profile-positive-20260730/2479812-logs/ray/ptyche0084/session_2026-07-30_19-53-04_768607_1281786/logs/nsight/megatron_policy_worker_5:6_2201357.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 191554,
+        "cuda_graph_launch_calls": 66,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-moe-router-nano-hybrid-ptyche-smoke-cg-call-profile-positive-20260730/2479812-logs/ray/ptyche0084/session_2026-07-30_19-53-04_768607_1281786/logs/nsight/megatron_policy_worker_5:6_2201462.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 190513,
+        "cuda_graph_launch_calls": 66,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-moe-router-nano-hybrid-ptyche-smoke-cg-call-profile-positive-20260730/2479812-logs/ray/ptyche0084/session_2026-07-30_19-53-04_768607_1281786/logs/nsight/megatron_policy_worker_5:6_2201485.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 191727,
+        "cuda_graph_launch_calls": 66,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-moe-router-nano-hybrid-ptyche-smoke-cg-call-profile-positive-20260730/2479812-logs/ray/ptyche0084/session_2026-07-30_19-53-04_768607_1281786/logs/nsight/megatron_policy_worker_5:6_2201508.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 192362,
+        "cuda_graph_launch_calls": 66,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-moe-router-nano-hybrid-ptyche-smoke-cg-call-profile-positive-20260730/2479812-logs/ray/ptyche0085/session_2026-07-30_19-53-04_768607_1281786/logs/nsight/megatron_policy_worker_5:6_551000.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 192447,
+        "cuda_graph_launch_calls": 66,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-moe-router-nano-hybrid-ptyche-smoke-cg-call-profile-positive-20260730/2479812-logs/ray/ptyche0085/session_2026-07-30_19-53-04_768607_1281786/logs/nsight/megatron_policy_worker_5:6_551019.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 192969,
+        "cuda_graph_launch_calls": 66,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-moe-router-nano-hybrid-ptyche-smoke-cg-call-profile-positive-20260730/2479812-logs/ray/ptyche0085/session_2026-07-30_19-53-04_768607_1281786/logs/nsight/megatron_policy_worker_5:6_551052.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 191465,
+        "cuda_graph_launch_calls": 66,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-moe-router-nano-hybrid-ptyche-smoke-cg-call-profile-positive-20260730/2479812-logs/ray/ptyche0085/session_2026-07-30_19-53-04_768607_1281786/logs/nsight/megatron_policy_worker_5:6_551066.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 198436,
+        "cuda_graph_launch_calls": 72,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-moe-router-nano-hybrid-ptyche-smoke-cg-call-profile-positive-20260730/2479812-logs/ray/session_2026-07-30_19-53-04_768607_1281786/logs/nsight/megatron_policy_worker_5:6_1292979.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 198463,
+        "cuda_graph_launch_calls": 72,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-moe-router-nano-hybrid-ptyche-smoke-cg-call-profile-positive-20260730/2479812-logs/ray/session_2026-07-30_19-53-04_768607_1281786/logs/nsight/megatron_policy_worker_5:6_1293131.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 198148,
+        "cuda_graph_launch_calls": 72,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-moe-router-nano-hybrid-ptyche-smoke-cg-call-profile-positive-20260730/2479812-logs/ray/session_2026-07-30_19-53-04_768607_1281786/logs/nsight/megatron_policy_worker_5:6_1293134.nsys-rep"
+      },
+      {
+        "cuda_api_calls": 198268,
+        "cuda_graph_launch_calls": 72,
+        "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/nemo-rl-cg/src/RL-pr5672-cg-call-profile-20260730/exp_logs/mamba_moe_te_graph_20260729/mamba-moe-te-moe-router-nano-hybrid-ptyche-smoke-cg-call-profile-positive-20260730/2479812-logs/ray/session_2026-07-30_19-53-04_768607_1281786/logs/nsight/megatron_policy_worker_5:6_1293161.nsys-rep"
+      }
+    ],
+    "profiles_with_cuda_graph_launches": 16,
+    "total_cuda_api_calls": 3127184,
+    "total_cuda_graph_launch_calls": 1104
+  }
+}
