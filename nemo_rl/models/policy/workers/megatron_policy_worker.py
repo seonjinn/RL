@@ -1005,16 +1005,31 @@ class MegatronPolicyWorkerImpl(
         pg_collection = get_pg_collection(self.model)
 
         def validate_across_model_parallel_replica(value: int, *, name: str) -> int:
-            value = self._collectively_validate_te_cuda_graph_integer(
+            replica_min = torch.tensor(
                 value,
-                name=name,
-                group=pg_collection.tp_cp,
+                dtype=torch.int64,
+                device=self._te_cuda_graph_device(),
             )
-            return self._collectively_validate_te_cuda_graph_integer(
-                value,
-                name=name,
-                group=pg_collection.pp,
-            )
+            replica_max = replica_min.clone()
+            for group in (pg_collection.tp_cp, pg_collection.pp):
+                torch.distributed.all_reduce(
+                    replica_min,
+                    op=torch.distributed.ReduceOp.MIN,
+                    group=group,
+                )
+                torch.distributed.all_reduce(
+                    replica_max,
+                    op=torch.distributed.ReduceOp.MAX,
+                    group=group,
+                )
+            minimum = int(replica_min.item())
+            maximum = int(replica_max.item())
+            if minimum != maximum:
+                raise RuntimeError(
+                    f"TE CUDA Graph {name} differs across ranks: "
+                    f"{minimum} != {maximum}."
+                )
+            return minimum
 
         lifecycle_values = {
             "capture_count": call_state.capture_count,

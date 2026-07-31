@@ -729,6 +729,65 @@ def test_metrics_validate_and_reduce_across_tp_cp_then_pp_for_cp_replicas() -> N
     assert all(group != "mp" for _, group in collective_calls)
 
 
+def test_metric_mismatch_reaches_pp_collectives_before_raise() -> None:
+    class Scalar:
+        def __init__(self, value: int) -> None:
+            self.value = value
+
+        def clone(self) -> "Scalar":
+            return Scalar(self.value)
+
+        def item(self) -> int:
+            return self.value
+
+    reduce_op = SimpleNamespace(MIN="min", MAX="max", SUM="sum")
+    collective_calls: list[tuple[Any, Any]] = []
+
+    def all_reduce(tensor: Scalar, *, op: Any, group: Any = None) -> None:
+        collective_calls.append((op, group))
+        if group == "tp_cp" and op == reduce_op.MIN:
+            tensor.value = 1
+        elif group == "tp_cp" and op == reduce_op.MAX:
+            tensor.value = 2
+
+    fake_torch = SimpleNamespace(
+        int64="int64",
+        tensor=lambda value, *, dtype, device: Scalar(value),
+        distributed=SimpleNamespace(ReduceOp=reduce_op, all_reduce=all_reduce),
+    )
+    worker_type = _extract_worker_methods(
+        {
+            "_collectively_validate_te_cuda_graph_integer",
+            "_finalize_te_cuda_graph_call",
+        },
+        {
+            "torch": fake_torch,
+            "get_pg_collection": lambda model: SimpleNamespace(tp_cp="tp_cp", pp="pp"),
+        },
+    )
+    worker = worker_type()
+    worker.model = object()
+    worker._te_cuda_graph_device = lambda: "cpu"
+    worker._te_cuda_graph_bank_manager = object()
+    call_state = SimpleNamespace(
+        capture_count=1,
+        replay_count=0,
+        cache_hit_count=0,
+        eviction_count=0,
+        normalized_schedule_key=1,
+    )
+
+    with pytest.raises(RuntimeError, match="capture_count differs across ranks"):
+        worker._finalize_te_cuda_graph_call(call_state)
+
+    assert collective_calls == [
+        (reduce_op.MIN, "tp_cp"),
+        (reduce_op.MAX, "tp_cp"),
+        (reduce_op.MIN, "pp"),
+        (reduce_op.MAX, "pp"),
+    ]
+
+
 def test_global_optimizer_consensus_uses_world_min() -> None:
     class Scalar:
         def __init__(self, value: int) -> None:
