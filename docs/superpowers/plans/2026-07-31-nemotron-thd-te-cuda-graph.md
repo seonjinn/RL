@@ -63,6 +63,11 @@ static HTML reporting.
 - Do not build native Transformer Engine separately in each job.
 - Commit and push MCore, then Bridge, then NeMo-RL. Use signed-off commits;
   MCore commits also use repository-required GPG signing.
+- Before Task 10, complete the dedicated graph-safe variable packed
+  `seq_aux_loss` plan at
+  `docs/superpowers/plans/2026-07-31-packed-seq-aux-loss-te-graph.md`. Its
+  padded-versus-packed loss and gradient parity is a load-bearing correctness
+  gate for every MoE experiment.
 
 ---
 
@@ -1520,6 +1525,16 @@ git add nemo_rl/models/megatron/cuda_graph_lifecycle.py \
 git commit -s -m "feat: expose bounded TE graph lifecycle metrics"
 ```
 
+### Packed `seq_aux_loss` Implementation Gate Before Task 10
+
+Complete and independently review all tasks in
+`docs/superpowers/plans/2026-07-31-packed-seq-aux-loss-te-graph.md` before
+starting Task 10 or submitting any packed MoE correctness/performance job. PR
+6115 is reference-only; its runtime-sized metadata and TE rejection are not
+cherry-picked. Task 10 pins the reviewed implementation. Task 12 then requires
+padded eager, fixed-capacity packed eager, and packed TE graph loss/gradient
+parity with dynamic sample-count replay before Task 13 performance jobs.
+
 ### Task 10: Validate Bridge Nemotron Topologies and Pin MCore
 
 **Files:**
@@ -1797,6 +1812,7 @@ uv run pytest -q \
   tests/unit/models/policy/test_megatron_worker.py \
   tests/unit/models/policy/test_lm_policy.py \
   tests/unit/algorithms/test_grpo.py \
+  tests/unit/algorithms/sequence_packing_gradient_actor.py \
   tests/unit/experiments/test_nemotron_thd_te_graph_launchers.py
 ```
 
@@ -1809,10 +1825,21 @@ uv run pytest -q \
   tests/unit_tests/transformer/test_packed_seq_params_cuda_graph.py \
   tests/unit_tests/transformer/test_cuda_graphs.py \
   tests/unit_tests/transformer/test_te_cuda_graph_bank.py \
+  tests/unit_tests/transformer/test_submodule_callables.py \
+  tests/unit_tests/transformer/moe/test_aux_loss.py \
   tests/unit_tests/transformer/moe/test_token_dispatcher.py \
   tests/unit_tests/transformer/moe/test_routers.py \
+  tests/unit_tests/ssm/test_mamba_layer.py \
   tests/unit_tests/models/test_hybrid_moe_model.py
 ```
+
+The runtime validator must capture and replay a minimal
+`torch._assert_async` on the current stream in the pinned PyTorch/TE container.
+It then runs the fixed-capacity router with invalid dynamic `N == 0` and
+`N > S_cap` in separate subprocesses, requiring the expected device assertion
+without `.item()`, recapture, or fallback. Use a fresh process per invalid
+case because a device-side assertion poisons its CUDA context. Failure blocks
+all variable packed `seq_aux_loss` performance rows.
 
 - [ ] **Step 3: Commit and push the outer dependency pointer**
 
@@ -1834,10 +1861,22 @@ Super: the Nano rows plus latent-MoE shared expert and MTP enabled
 Ultra fixture: Flex/HybridEP router/preprocess and combined hybrid scope
 ```
 
-Each job alternates two in-capacity occupancies after capture for 8-20 replay
-iterations. It compares valid-token output, total/router loss, exact top-k
-indices, every parameter gradient, optimizer-updated parameters, padding-row
-gradients, expert counts, and valid-token drop count.
+The packed MoE rows compare padded eager, fixed-capacity packed eager, and
+packed TE graph. After exactly three warmups, one graph replays `N == 1`, an
+intermediate `N`, and `N == seq_aux_loss_max_samples` without recapture or
+fallback. Other rows alternate at least two in-capacity occupancies for 8-20
+replay iterations. Every row compares valid-token output, total/router loss,
+exact top-k indices, every parameter gradient, optimizer-updated parameters,
+padding-row gradients, expert counts, valid-token drop count, and exact graph
+eligible/replay counters. Packed MoE parity additionally compares router
+probabilities, pre/post-drop routing maps, per-sample/per-expert counts,
+attached auxiliary gradient scale, valid input gradients, and padding input
+gradients across padded eager, packed eager, and graph execution.
+
+The TP1/CP1 packed MoE oracle includes equal `[8, 8]` and unequal `[4, 8]`
+physical lengths, exact and tail-padded token capacities, top-k one/two, and
+router score functions `softmax`, `sigmoid`, and `sqrtsoftplus`. Architecture
+rows retain their production score-function settings.
 
 - [ ] **Step 5: Monitor every submitted job for five minutes**
 
