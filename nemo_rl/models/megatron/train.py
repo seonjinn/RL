@@ -266,6 +266,25 @@ def _validate_fixed_packed_loss_metadata(
         raise invalid("real logical and physical boundaries must be one-dimensional")
     if cu_seqlens_q.numel() != cu_seqlens_q_padded.numel():
         raise invalid("real logical and physical boundary counts differ")
+    if cu_seqlens_q.numel() < 2:
+        raise invalid("real logical and physical boundaries contain no real sequence")
+    if int(cu_seqlens_q[0].item()) != 0:
+        raise invalid("real logical boundaries do not start at zero")
+    if int(cu_seqlens_q_padded[0].item()) != 0:
+        raise invalid("real padded boundaries do not start at zero")
+
+    logical_deltas = cu_seqlens_q[1:] - cu_seqlens_q[:-1]
+    padded_deltas = cu_seqlens_q_padded[1:] - cu_seqlens_q_padded[:-1]
+    if torch.any(logical_deltas < 0).item():
+        raise invalid("real logical boundaries are decreasing")
+    if torch.any(padded_deltas < 0).item():
+        raise invalid("real padded boundaries are decreasing")
+    if torch.any(padded_deltas < logical_deltas).item():
+        raise invalid("a real padded segment is shorter than its logical segment")
+    if cp_size > 1:
+        cp_segment_alignment = 2 * cp_size
+        if torch.any(padded_deltas % cp_segment_alignment != 0).item():
+            raise invalid("a real padded segment is not divisible by twice the CP size")
 
     model_entry_counts: list[int] = []
     for name, model_boundaries, real_boundaries in model_fields:
@@ -328,6 +347,8 @@ def _validate_fixed_packed_loss_metadata(
             "fixed model capacity does not contain a positive excess dummy tail "
             f"({global_model_capacity} - {real_padded_end} = {dummy_tokens})"
         )
+    if cp_size > 1 and dummy_tokens % (2 * cp_size) != 0:
+        raise invalid("fixed dummy tail is not divisible by twice the CP size")
 
     expected_logical_dummy_end = real_logical_end + dummy_tokens
     if expected_logical_dummy_end > global_model_capacity:
