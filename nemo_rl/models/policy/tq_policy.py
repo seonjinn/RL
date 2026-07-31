@@ -38,6 +38,7 @@ from typing import Any, Literal, Optional, cast
 import ray
 
 from nemo_rl.algorithms.loss.interfaces import LossFunction
+from nemo_rl.algorithms.utils import aggregate_cuda_graph_metrics
 from nemo_rl.data_plane import DataPlaneConfig, KVBatchMeta, build_data_plane_client
 from nemo_rl.data_plane.column_io import read_columns, round_up, write_columns
 from nemo_rl.data_plane.preshard import shard_meta_for_dp
@@ -73,6 +74,9 @@ def _aggregate_train_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         for k, v in r["all_mb_metrics"].items():
             all_mb_metrics[k].extend(v)
     out["all_mb_metrics"] = dict(all_mb_metrics)
+    cuda_graph_metrics = aggregate_cuda_graph_metrics(results)
+    if cuda_graph_metrics is not None:
+        out["cuda_graph_metrics"] = cuda_graph_metrics
     return out
 
 
