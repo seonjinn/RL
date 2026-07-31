@@ -37,7 +37,11 @@ static HTML reporting.
   baseline.
 - Transformer Engine must be
   `a6c70f4dc84ae9d4a7d0a057c990ac1dc925d480` or newer. Use
-  `869f99c47d5773e3dbf4a85d4cc8679c4e050089`.
+  a nightly-container native artifact built from
+  `869f99c47d5773e3dbf4a85d4cc8679c4e050089` or a later verified commit.
+- The selected MCore main has no Transformer Engine submodule. Do not recreate
+  it or change the dependency to trigger a per-job native build; verify the
+  immutable container digest, TE version, and TE build revision at preflight.
 - `padding_mask` is `torch.bool`, shaped `[batch, local_sequence]`, with
   `True` meaning padding. It is not NeMo-RL's loss `token_mask`.
 - Hidden states remain at fixed physical capacity through graph replay,
@@ -125,12 +129,13 @@ static HTML reporting.
 ### Task 1: Establish the Reproducible Three-Repository Baseline
 
 **Files:**
-- Modify: `3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/third_party/TransformerEngine`
+- Inspect: `3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/pyproject.toml`
 
 **Interfaces:**
 - Consumes: exact source commits from Global Constraints.
 - Produces: MCore branch `sj/thd-cg-hybrid-nemotron-20260731` and Bridge branch
-  `sna/thd-cg-hybrid-nemotron-20260731`, both based on official main.
+  `sna/thd-cg-hybrid-nemotron-20260731`, both based on official main, plus an
+  external-runtime contract deferred to the persistent preflight harness.
 
 - [ ] **Step 1: Verify the isolated worktree and remotes**
 
@@ -153,36 +158,33 @@ git -C 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM s
   -c sj/thd-cg-hybrid-nemotron-20260731 upstream/main
 ```
 
-- [ ] **Step 3: Pin the verified Transformer Engine runtime**
+- [ ] **Step 3: Verify the external Transformer Engine runtime contract**
 
 ```bash
-git -C 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM \
-  submodule update --init third_party/TransformerEngine
-git -C 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/third_party/TransformerEngine \
-  fetch origin 869f99c47d5773e3dbf4a85d4cc8679c4e050089
-git -C 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/third_party/TransformerEngine \
-  checkout 869f99c47d5773e3dbf4a85d4cc8679c4e050089
+test ! -e \
+  3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/third_party/TransformerEngine
+rg -n "transformer-engine" \
+  3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/pyproject.toml
 ```
 
-- [ ] **Step 4: Record provenance and verify ancestry**
+Expected: the removed submodule is absent and MCore declares Transformer
+Engine as an external package. Task 11 adds a persistent
+`validate_te_runtime.py` that checks the immutable nightly container before
+any GPU job.
+
+- [ ] **Step 4: Record source provenance**
 
 ```bash
+git -C 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge rev-parse HEAD
 git -C 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM \
-  merge-base --is-ancestor a6c70f4dc84ae9d4a7d0a057c990ac1dc925d480 \
-  869f99c47d5773e3dbf4a85d4cc8679c4e050089
+  rev-parse HEAD
 git -C 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM \
   diff --check
 ```
 
-Expected: both commands exit zero.
-
-- [ ] **Step 5: Commit the runtime pin**
-
-```bash
-cd 3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM
-git add third_party/TransformerEngine
-git commit -s -S -m "build: pin graph-correct Transformer Engine runtime"
-```
+Expected: Bridge is `3bc95ef5`, MCore is `b19b1f47`, and `diff --check`
+passes. No source commit is expected in this task because the runtime is
+container-owned; the first MCore implementation commit is Task 2.
 
 ### Task 2: Port PR 5672 and Fixed-Capacity THD Metadata
 
@@ -1357,6 +1359,7 @@ git push -u origin sna/thd-cg-hybrid-nemotron-20260731
 - Create: `experiments/cuda_graph/nemotron_thd_te_graph_20260731/analyze_cuda_graph_calls.py`
 - Create: `experiments/cuda_graph/nemotron_thd_te_graph_20260731/export_tensorboard.py`
 - Create: `experiments/cuda_graph/nemotron_thd_te_graph_20260731/render_report.py`
+- Create: `experiments/cuda_graph/nemotron_thd_te_graph_20260731/validate_te_runtime.py`
 - Create: `experiments/cuda_graph/nemotron_thd_te_graph_20260731/scripts/run_nemorl_scope.sub`
 - Create: `experiments/cuda_graph/nemotron_thd_te_graph_20260731/scripts/run_mcore_scope.sub`
 - Create: `experiments/cuda_graph/nemotron_thd_te_graph_20260731/models/nano.env`
@@ -1410,6 +1413,7 @@ git push -u origin sna/thd-cg-hybrid-nemotron-20260731
 - Test: `tests/unit/experiments/test_nemotron_thd_te_graph_launchers.py`
 - Test: `tests/unit/experiments/test_analyze_cuda_graph_calls.py`
 - Test: `tests/unit/experiments/test_export_tensorboard.py`
+- Test: `tests/unit/experiments/test_validate_te_runtime.py`
 
 **Interfaces:**
 - Consumes: model, scope, dispatcher, step count, and cluster profile.
@@ -1437,6 +1441,11 @@ def test_launcher_disables_checkpoints_and_uses_three_warmups() -> None:
     assert "checkpointing.enabled=false" in command
     assert "cuda_graph_warmup_steps=3" in command
     assert "logger.wandb.project='sna-cg-study'" in command
+
+
+def test_launcher_requires_verified_native_te_runtime() -> None:
+    command = render_scope_command(model="nano", scope=("attn",), steps=20)
+    assert "validate_te_runtime.py" in command
 ```
 
 - [ ] **Step 2: Run the red harness tests**
@@ -1445,7 +1454,8 @@ def test_launcher_disables_checkpoints_and_uses_three_warmups() -> None:
 uv run pytest -q \
   tests/unit/experiments/test_nemotron_thd_te_graph_launchers.py \
   tests/unit/experiments/test_analyze_cuda_graph_calls.py \
-  tests/unit/experiments/test_export_tensorboard.py
+  tests/unit/experiments/test_export_tensorboard.py \
+  tests/unit/experiments/test_validate_te_runtime.py
 ```
 
 - [ ] **Step 3: Implement the exact scope matrix**
@@ -1475,6 +1485,12 @@ checkpointing, writes under
 `exp_logs/nemotron_thd_te_graph_20260731/<run-name>`, and never embeds
 credentials. Ultra refuses submission until its external model path, data,
 judge, and launch profile are all present.
+
+Before Python environment rebuild or model launch, the job runs
+`validate_te_runtime.py` inside the immutable nightly container. The validator
+records the container digest, installed TE distribution versions, and native
+TE build revision, and rejects an unverifiable revision or one older than
+`869f99c47`. It never clones or builds Transformer Engine.
 
 Model selectors are fixed to:
 
@@ -1510,12 +1526,14 @@ NaN/Inf status, source commits, TE commit, job id
 uv run pytest -q \
   tests/unit/experiments/test_nemotron_thd_te_graph_launchers.py \
   tests/unit/experiments/test_analyze_cuda_graph_calls.py \
-  tests/unit/experiments/test_export_tensorboard.py
+  tests/unit/experiments/test_export_tensorboard.py \
+  tests/unit/experiments/test_validate_te_runtime.py
 git diff --check
 git add experiments/cuda_graph/nemotron_thd_te_graph_20260731 \
   tests/unit/experiments/test_nemotron_thd_te_graph_launchers.py \
   tests/unit/experiments/test_analyze_cuda_graph_calls.py \
-  tests/unit/experiments/test_export_tensorboard.py
+  tests/unit/experiments/test_export_tensorboard.py \
+  tests/unit/experiments/test_validate_te_runtime.py
 git commit -s -m "test: add Nemotron THD CUDA graph matrix"
 ```
 
@@ -1548,6 +1566,8 @@ uv run pytest -q \
 - [ ] **Step 2: Run MCore focused suites in a compatible GPU container**
 
 ```bash
+uv run python \
+  experiments/cuda_graph/nemotron_thd_te_graph_20260731/validate_te_runtime.py
 uv run pytest -q \
   tests/unit_tests/transformer/test_packed_seq_params_cuda_graph.py \
   tests/unit_tests/transformer/test_cuda_graphs.py \

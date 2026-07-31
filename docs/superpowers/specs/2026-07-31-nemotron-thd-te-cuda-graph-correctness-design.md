@@ -100,11 +100,15 @@ The runtime must contain:
 - PR 3268, merge `8c606cadf`, for device-side attention padding-mask construction
   when unfused attention can be selected.
 
-Megatron-LM main's pinned TE contains PR 2898 but predates PR 2937 and PR 3268.
-Use one immutable staged TE artifact from `869f99c47` or a later verified
-commit. Do not rebuild Transformer Engine inside every NeMo-RL job.
-`NRL_FORCE_REBUILD_VENVS=true` may rebuild the Python environment, but the
-native TE artifact remains provenance-pinned and reusable.
+The selected Megatron-LM main no longer vendors a
+`third_party/TransformerEngine` submodule; Transformer Engine is an external
+package supplied by the runtime container. Use one immutable nightly container
+whose installed native TE artifact is from `869f99c47` or a later verified
+commit. Record the container digest, TE package version, and TE build revision
+before submission, and fail preflight if the revision cannot be verified.
+Do not add the removed submodule back or rebuild Transformer Engine inside
+each NeMo-RL job. `NRL_FORCE_REBUILD_VENVS=true` may rebuild the Python
+environment, but the native TE artifact remains container-pinned and reusable.
 
 ## Confirmed Root Cause
 
