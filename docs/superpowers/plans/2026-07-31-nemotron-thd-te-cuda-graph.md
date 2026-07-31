@@ -799,8 +799,9 @@ git commit -s -S -m "fix: restore dispatcher-owned TE graph state"
 - Test: `tests/unit_tests/transformer/test_cuda_graphs.py`
 
 **Interfaces:**
-- Consumes: a captured `TECudaGraphHelper`, normalized microbatch count, packed
-  signature, structural-mask signature, and dispatcher states.
+- Consumes: a fresh one-shot `TECudaGraphHelper`, normalized microbatch count,
+  packed signature, structural-mask signature, and Task 5 per-runner
+  dispatcher states.
 - Produces: `TECudaGraphBank`, `TECudaGraphBankManager.capture(...)`,
   `.activate()`, and `.reset()`.
 
@@ -809,32 +810,48 @@ git commit -s -S -m "fix: restore dispatcher-owned TE graph state"
 Port only the tests and public behavior from the 20260729 branch, beginning
 with commit `e97dd5e3e`. Bring the test-local `_FakeGraph`, `_FakeMoELayer`,
 `_FakeHelper`, and `_make_manager` fixtures with the assertions; do not copy
-cluster overlays or runtime workarounds. Add this dispatcher-state assertion:
+cluster overlays or runtime workarounds. Adapt them to these exact cases:
 
 ```python
 def test_graph_bank_activation_restores_dispatcher_states() -> None:
     layer = _FakeMoELayer("moe")
     manager = _make_manager([layer], runtime_num_microbatches=lambda: 5)
-    layer._te_cuda_graph_dispatcher_replay_states = (
-        MoECudaGraphReplayState("alltoall", torch.Size((16, 1, 8)), capacity=16),
-    )
+    first_states = tuple(_make_alltoall_state(16) for _ in range(5))
+    layer._te_cuda_graph_dispatcher_replay_states = first_states
     first = manager.capture(
         _FakeHelper([layer], [[_FakeGraph(f"first-{i}") for i in range(5)]]),
         num_microbatches=5,
     )
     manager._runtime_num_microbatches = lambda: 3
-    layer._te_cuda_graph_dispatcher_replay_states = (
-        MoECudaGraphReplayState("alltoall", torch.Size((24, 1, 8)), capacity=24),
-    )
+    second_states = tuple(_make_alltoall_state(24) for _ in range(3))
+    layer._te_cuda_graph_dispatcher_replay_states = second_states
     second = manager.capture(
         _FakeHelper([layer], [[_FakeGraph(f"second-{i}") for i in range(3)]]),
         num_microbatches=3,
     )
+    manager._runtime_num_microbatches = lambda: 5
     first.activate()
-    assert layer._te_cuda_graph_dispatcher_replay_states[0].capacity == 16
+    assert layer._te_cuda_graph_dispatcher_replay_states is first_states
+    manager._runtime_num_microbatches = lambda: 3
     second.activate()
-    assert layer._te_cuda_graph_dispatcher_replay_states[0].capacity == 24
+    assert layer._te_cuda_graph_dispatcher_replay_states is second_states
 ```
+
+`_make_alltoall_state()` constructs the full Task 5
+`TensorReplaySignature`, flattened shape, topology fingerprint, and
+`AlltoAllCudaGraphState`; do not use the obsolete sparse state constructor.
+Add RED tests for:
+
+- exact graph-list, callable, manual-hook, packed-attention, Mamba, mask,
+  ordered MoE Tensor schema, and per-runner dispatcher-state identity;
+- runtime-count mismatch before activation, including the invalid 5→3
+  activation shown above without resetting the provider;
+- capture/activation rollback, helper one-shot behavior, inactive/idempotent
+  reset, and unique-callable reset;
+- live continuation/delayed work blocking every transition;
+- forward and backward-dw replay guards;
+- real `MambaLayer` whole/partial helper routing, closing Task 3's deferred
+  production-path test.
 
 - [ ] **Step 2: Verify the bank tests fail**
 
@@ -853,18 +870,47 @@ Use this fingerprint:
 class TECudaGraphBankFingerprint:
     num_microbatches: int
     layer_ids: tuple[int, ...]
+    graph_identities: tuple[tuple[int, ...], ...]
     graph_counts: tuple[int, ...]
     cuda_graph_modules: tuple[str, ...]
-    packed_input_signature: tuple[tuple[str, object], ...]
-    padding_mask_signature: tuple[tuple[int, ...], str, str, tuple[int, ...]]
+    packed_input_signatures: tuple[tuple[int, tuple[object, ...]], ...]
+    padding_mask_signatures: tuple[
+        tuple[int, TensorReplaySignature | None], ...
+    ]
     moe_attribute_schema: tuple[tuple[int, tuple[str, ...]], ...]
-    dispatcher_state_signature: tuple[tuple[int, MoECudaGraphReplayState], ...]
+    dispatcher_state_signatures: tuple[
+        tuple[int, tuple[MoECudaGraphReplayState | None, ...]], ...
+    ]
 ```
 
-Activation first validates that the model is drained, then installs graph
-lists, manual hooks, packed metadata, mask signature, and dispatcher states as
-one transaction. Capture failure restores the previous bank. Reset is
-idempotent and never resets graphs owned by another bank.
+`packed_input_signatures` freezes the generic attention metadata/key set and
+the separate Mamba static/`seq_idx` signature per layer; it never mixes their
+field lists or freezes dynamic contents. `padding_mask_signatures` represents
+absence explicitly and preserves per-layer shape/dtype/device/layout/stride.
+Dispatcher-state tuple length must equal the corresponding graph count and be
+paired with `graph_identities`.
+
+`capture()` accepts an uncaptured helper, verifies the helper's normalized
+schedule count against the requested/runtime count, installs empty
+manager-owned lists, populates them once, snapshots every contract, and then
+restores the previous active installation. Capture failure restores all
+capture globals and the previous bank. Helper reuse fails.
+
+Activation first verifies the model is drained and the runtime count matches,
+then installs graph-list identity, manual hooks, generic/Mamba metadata, mask
+surface, ordered MoE Tensor schema, dispatcher states, and replay guard as one
+transaction. Capture currently precedes `cuda_graph_set_manual_hooks()`, so
+hook setup must refresh the owning bank contract (or move under the manager)
+before any later activation.
+
+Forward and backward-dw replay guards validate the registered active bank,
+runtime count, exact installed list/callable identity, and selected graph
+index in constant hot-path work. Capture, activation, reset, and eviction call
+the supplied drained callback and reject live partial-MoE continuation,
+delayed-wgrad/communication, activation-checkpoint, or shared-expert state.
+Reset is idempotent, synchronizes at the drained boundary, releases graph
+references, resets each owned callable identity once, and never resets graphs
+owned by another bank.
 
 - [ ] **Step 4: Run and commit**
 
