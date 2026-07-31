@@ -15,7 +15,7 @@ import os
 import warnings
 from collections import defaultdict
 from contextlib import nullcontext
-from typing import Any, Iterable, Optional, Union
+from typing import Any, Iterable, Literal, Optional, Union, cast
 
 import numpy as np
 import ray
@@ -38,7 +38,7 @@ from nemo_rl.models.generation.interfaces import (
     GenerationInterface,
     GenerationOutputSpec,
 )
-from nemo_rl.models.policy import PolicyConfig
+from nemo_rl.models.policy import PolicyConfig, SequencePackingConfig
 from nemo_rl.models.policy.interfaces import (
     ColocatablePolicyInterface,
     LogprobOutputSpec,
@@ -439,6 +439,48 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
     # DRY for Policy's logprob/train methods only. The data-plane sibling
     # TQPolicy shards KVBatchMeta via ``shard_meta_for_dp``; the
     # driver-on-data vs driver-on-meta split is by design.
+    def _sequence_packing_args_for_call(
+        self,
+        mb_tokens_key: Literal["train_mb_tokens", "logprob_mb_tokens"],
+        *,
+        for_cuda_graph_training: bool = False,
+    ) -> Optional[SequencePackingArgs]:
+        """Build isolated sequence-packing arguments for one policy call."""
+        megatron_cfg = self.cfg.get("megatron_cfg") or {}
+        is_te_graph_training = (
+            for_cuda_graph_training
+            and megatron_cfg.get("cuda_graph_impl") == "transformer_engine"
+        )
+        if not getattr(self, "use_sequence_packing", False):
+            if is_te_graph_training:
+                raise ValueError(
+                    "Transformer Engine CUDA Graph training requires "
+                    "sequence_packing.enabled=true."
+                )
+            return None
+
+        args = self.sequence_packing_args.copy()
+        args.pop("max_sequences_per_microbatch", None)
+        sequence_packing_config = cast(
+            SequencePackingConfig,
+            self.cfg["sequence_packing"],
+        )
+        args["max_tokens_per_microbatch"] = sequence_packing_config[mb_tokens_key]
+        if not is_te_graph_training:
+            return args
+
+        capacity = megatron_cfg.get("thd_max_packed_sequences")
+        if isinstance(capacity, bool) or not isinstance(capacity, int):
+            raise TypeError(
+                f"thd_max_packed_sequences must be an integer, got {capacity!r}."
+            )
+        if capacity < 2:
+            raise ValueError(
+                f"thd_max_packed_sequences must be at least 2, got {capacity}."
+            )
+        args["max_sequences_per_microbatch"] = capacity - 1
+        return args
+
     def _shard_for_logprob(
         self,
         data: BatchedDataDict[Any],
@@ -451,6 +493,9 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         (``None`` when neither is enabled).
         """
         dp_size = self.data_parallel_size
+        sequence_packing_args = self._sequence_packing_args_for_call(
+            "logprob_mb_tokens"
+        )
         if self.use_dynamic_batches:
             self.dynamic_batching_args["max_tokens_per_microbatch"] = self.cfg[
                 "dynamic_batching"
@@ -460,15 +505,12 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                 batch_size=None,
                 dynamic_batching_args=self.dynamic_batching_args,
             )
-        elif self.use_sequence_packing:
-            self.sequence_packing_args["max_tokens_per_microbatch"] = self.cfg[
-                "sequence_packing"
-            ]["logprob_mb_tokens"]
+        elif sequence_packing_args is not None:
             # we just shard into DP shards here as Sequence packing allows for CP.
             sharded_data, unsorted_data_indices = data.shard_by_batch_size(
                 dp_size,
                 batch_size=None,
-                sequence_packing_args=self.sequence_packing_args,
+                sequence_packing_args=sequence_packing_args,
             )
         else:
             sharded_data = data.shard_by_batch_size(  # type: ignore
@@ -482,6 +524,8 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         self,
         data: BatchedDataDict[Any],
         batch_size: int,
+        *,
+        eval_mode: bool = False,
     ) -> list["SlicedDataDict"]:
         """Shard inputs for ``train``.
 
@@ -492,6 +536,10 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         scalar metrics (no per-row outputs to reorder).
         """
         dp_size = self.data_parallel_size
+        sequence_packing_args = self._sequence_packing_args_for_call(
+            "train_mb_tokens",
+            for_cuda_graph_training=not eval_mode,
+        )
         if self.use_dynamic_batches:
             self.dynamic_batching_args["max_tokens_per_microbatch"] = self.cfg[
                 "dynamic_batching"
@@ -501,14 +549,11 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                 batch_size=batch_size,
                 dynamic_batching_args=self.dynamic_batching_args,
             )
-        elif self.use_sequence_packing:
-            self.sequence_packing_args["max_tokens_per_microbatch"] = self.cfg[
-                "sequence_packing"
-            ]["train_mb_tokens"]
+        elif sequence_packing_args is not None:
             sharded_data, _ = data.shard_by_batch_size(
                 dp_size,
                 batch_size=batch_size,
-                sequence_packing_args=self.sequence_packing_args,
+                sequence_packing_args=sequence_packing_args,
             )
         else:
             sharded_data = data.shard_by_batch_size(
@@ -744,7 +789,11 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         micro_batch_size = mbs or self.cfg["train_micro_batch_size"]
         # Shard and replicate the batch
         with timer.time("policy_training/sharding_data") if timer else nullcontext():
-            sharded_data = self._shard_for_train(data, batch_size)
+            sharded_data = self._shard_for_train(
+                data,
+                batch_size,
+                eval_mode=eval_mode,
+            )
 
         if self.flops_tracker is not None:
             self.flops_tracker.reset()

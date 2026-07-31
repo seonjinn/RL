@@ -33,7 +33,7 @@ import warnings
 from collections import defaultdict
 from contextlib import nullcontext
 from dataclasses import replace
-from typing import Any, Optional
+from typing import Any, Literal, Optional, cast
 
 import ray
 
@@ -48,6 +48,7 @@ from nemo_rl.data_plane.schema import (
     fields_with_optional_routed_experts,
 )
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+from nemo_rl.models.policy import DynamicBatchingConfig
 from nemo_rl.models.policy.lm_policy import Policy
 from nemo_rl.utils.flops_tracker import get_theoretical_tflops
 from nemo_rl.utils.timer import Timer
@@ -246,25 +247,29 @@ class TQPolicy(Policy):
 
     def _packing_args(
         self,
-        mb_tokens_key: str,
+        mb_tokens_key: Literal["train_mb_tokens", "logprob_mb_tokens"],
+        *,
+        for_cuda_graph_training: bool = False,
     ) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]]]:
         """Resolve (sequence_packing_args, dynamic_batching_args) for a given stage.
 
         The stage is identified by ``mb_tokens_key`` (``"logprob_mb_tokens"`` or
         ``"train_mb_tokens"``).
         """
+        sequence_packing_args = self._sequence_packing_args_for_call(
+            mb_tokens_key,
+            for_cuda_graph_training=for_cuda_graph_training,
+        )
         if getattr(self, "use_dynamic_batches", False):
             args = dict(self.dynamic_batching_args)
-            args["max_tokens_per_microbatch"] = self.cfg["dynamic_batching"][
-                mb_tokens_key
-            ]
+            dynamic_batching_config = cast(
+                DynamicBatchingConfig,
+                self.cfg["dynamic_batching"],
+            )
+            args["max_tokens_per_microbatch"] = dynamic_batching_config[mb_tokens_key]
             return None, args
-        if getattr(self, "use_sequence_packing", False):
-            args = dict(self.sequence_packing_args)
-            args["max_tokens_per_microbatch"] = self.cfg["sequence_packing"][
-                mb_tokens_key
-            ]
-            return args, None
+        if sequence_packing_args is not None:
+            return dict(sequence_packing_args), None
         return None, None
 
     def _logprob_dispatch(
@@ -392,7 +397,10 @@ class TQPolicy(Policy):
         micro_batch_size = mbs or self.cfg["train_micro_batch_size"]
 
         self._stamp_pad_seqlen(meta)
-        spa, dba = self._packing_args("train_mb_tokens")
+        spa, dba = self._packing_args(
+            "train_mb_tokens",
+            for_cuda_graph_training=not eval_mode,
+        )
         # ``train_fields`` (rollout + logprob deltas + advantages + sample_mask;
         # default ``DP_TRAIN_FIELDS``) must be in TQ before this call — written
         # by workers + driver delta-writes. Caller may narrow to drop columns
@@ -520,7 +528,10 @@ class TQPolicy(Policy):
         :meth:`finish_train_step`.
         """
         self._stamp_pad_seqlen(meta)
-        spa, dba = self._packing_args("train_mb_tokens")
+        spa, dba = self._packing_args(
+            "train_mb_tokens",
+            for_cuda_graph_training=True,
+        )
         train_meta = replace(
             meta,
             fields=list(DP_TRAIN_FIELDS),
