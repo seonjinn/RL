@@ -928,6 +928,44 @@ git add megatron/core/transformer/te_cuda_graph_bank.py \
 git commit -s -S -m "feat: own schedule-specific TE graph banks"
 ```
 
+### Task 6.5: Port the Upstream Fine-Grained Routing-Mask Fix
+
+**Files:**
+- Modify: `megatron/core/models/gpt/fine_grained_callables.py`
+- Test: `tests/unit_tests/transformer/test_submodule_callables.py`
+
+**Provenance:**
+- Official MCore `dev` commit:
+  `e348ed156e84b171387fa42a6a7a1b6a1153439b`
+  (`fix: forward padding mask in fine-grained MoE routing`)
+
+- [ ] **Step 1: Add a red production-path test**
+
+Build the fine-grained pre-dispatch callable with a nontrivial
+`node.chunk_state.padding_mask`. Assert the exact Tensor identity reaches
+`layer.mlp.route(..., padding_mask=...)` and that preprocess sees the resulting
+routing map. Cover a `True` structural-padding row so the regression cannot
+pass by checking only shapes.
+
+- [ ] **Step 2: Port only the official one-line dataflow fix**
+
+Apply the upstream change that forwards
+`node.chunk_state.padding_mask` to `layer.mlp.route`. Do not merge MCore
+`dev`, PR 4359, or draft PR 5783, and do not combine this port with Task 7's
+Hybrid-MTP leaf work.
+
+- [ ] **Step 3: Run and commit**
+
+```bash
+uv run pytest -q \
+  tests/unit_tests/transformer/test_submodule_callables.py \
+  -k "padding_mask and pre_dispatch"
+git diff --check
+git add megatron/core/models/gpt/fine_grained_callables.py \
+  tests/unit_tests/transformer/test_submodule_callables.py
+git commit -s -S -m "fix: forward padding mask in fine-grained MoE routing"
+```
+
 ### Task 7: Cover Hybrid MTP and Shared-Expert Weight Gradients
 
 **Files:**
