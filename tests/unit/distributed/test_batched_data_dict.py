@@ -388,6 +388,49 @@ def test_sequence_packing_uniform_lengths():
     assert len(problem_ids_seen) == batch_size
 
 
+@pytest.mark.parametrize(
+    "algorithm",
+    [
+        "concatenative",
+        "first_fit_decreasing",
+        "first_fit_shuffle",
+        "modified_first_fit_decreasing",
+    ],
+)
+def test_sequence_packing_enforces_sequence_capacity_across_dp_shards(
+    algorithm: str,
+) -> None:
+    """Dropping factory propagation would create oversized packed microbatches."""
+    batch_size = 8
+    batch_data = BatchedDataDict(
+        {
+            "input_ids": torch.ones(batch_size, 8, dtype=torch.long),
+            "sequence_lengths": torch.ones(batch_size, dtype=torch.long),
+            "problem_ids": torch.arange(batch_size),
+        }
+    )
+    sequence_packing_args = SequencePackingArgs(
+        max_tokens_per_microbatch=128,
+        max_sequences_per_microbatch=2,
+        input_key="input_ids",
+        input_lengths_key="sequence_lengths",
+        algorithm=algorithm,
+        sequence_length_pad_multiple=1,
+    )
+
+    sharded_batches, _ = batch_data.shard_by_batch_size(
+        shards=2,
+        sequence_packing_args=sequence_packing_args,
+    )
+
+    microbatches = [
+        list(shard.make_microbatch_iterator_for_packable_sequences())
+        for shard in sharded_batches
+    ]
+    assert [len(items) for items in microbatches] == [2, 2]
+    assert all(microbatch.size <= 2 for items in microbatches for microbatch in items)
+
+
 def test_sequence_packing_long_sequences():
     """Test sequence packing with very long sequences that require individual microbatches."""
     batch_size = 4

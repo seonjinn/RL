@@ -910,6 +910,306 @@ class TestApplyPrecisionConfig:
 class TestApplyPerformanceConfig:
     """Tests for _apply_performance_config function."""
 
+    @staticmethod
+    def _fixed_te_graph_request(
+        *,
+        modules: object = None,
+        thd_max_packed_sequences: object = 5,
+        train_mb_tokens: object = 128,
+        context_parallel_size: int = 2,
+        sequence_length_alignment: int = 4,
+    ) -> tuple[SimpleNamespace, dict]:
+        if modules is None:
+            modules = ["attn", "mamba"]
+        model_cfg = SimpleNamespace(
+            gated_linear_unit=True,
+            transformer_impl="transformer_engine",
+            cuda_graph_warmup_steps=3,
+            context_parallel_size=context_parallel_size,
+            num_moe_experts=8,
+            moe_token_dispatcher_type="alltoall",
+            moe_expert_capacity_factor=None,
+            moe_expert_rank_capacity_factor=None,
+            moe_pad_expert_input_to_capacity=False,
+            moe_router_padding_for_quantization=False,
+            moe_flex_dispatcher_backend=None,
+            moe_hybridep_pad_uneven_dispatch_inputs=False,
+            overlap_moe_expert_parallel_comm=False,
+        )
+        config = {
+            "megatron_cfg": {
+                "activation_checkpointing": False,
+                "apply_rope_fusion": False,
+                "bias_activation_fusion": False,
+                "gradient_accumulation_fusion": False,
+                "use_fused_weighted_squared_relu": False,
+                "transformer_impl": "transformer_engine",
+                "cuda_graph_impl": "transformer_engine",
+                "cuda_graph_modules": modules,
+                "thd_max_packed_sequences": thd_max_packed_sequences,
+                "tensor_model_parallel_size": 1,
+                "pipeline_model_parallel_size": 1,
+                "context_parallel_size": context_parallel_size,
+                "sequence_parallel": False,
+                "moe_token_dispatcher_type": "alltoall",
+            },
+            "sequence_packing": {
+                "enabled": True,
+                "train_mb_tokens": train_mb_tokens,
+                "algorithm": "modified_first_fit_decreasing",
+            },
+            "dynamic_batching": {"enabled": False},
+            "make_sequence_length_divisible_by": sequence_length_alignment,
+        }
+        return model_cfg, config
+
+    def test_fixed_te_graph_request_projects_canonical_geometry(self) -> None:
+        """Missing projection would let model and iterator capture different shapes."""
+        from megatron.core.transformer.enums import CudaGraphModule
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request()
+
+        with patch(
+            "nemo_rl.models.megatron.setup.is_te_min_version", return_value=True
+        ):
+            _apply_performance_config(model_cfg, config)
+
+        assert model_cfg.cuda_graph_modules == [
+            CudaGraphModule.attn,
+            CudaGraphModule.mamba,
+        ]
+        assert model_cfg.thd_max_packed_sequences == 5
+        assert model_cfg.pad_packed_seq_to == 64
+        assert model_cfg.pad_packed_seq_alignment == 1
+        assert model_cfg.use_te_rng_tracker is True
+        assert config["megatron_cfg"]["cuda_graph_modules"] == ["attn", "mamba"]
+
+    def test_fixed_te_graph_request_allows_unit_alignment_without_cp(self) -> None:
+        """CP=1 has no zig-zag structural-pair alignment requirement."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request(
+            context_parallel_size=1,
+            sequence_length_alignment=1,
+        )
+
+        with patch(
+            "nemo_rl.models.megatron.setup.is_te_min_version", return_value=True
+        ):
+            _apply_performance_config(model_cfg, config)
+
+        assert model_cfg.pad_packed_seq_alignment == 1
+
+    @pytest.mark.parametrize(
+        "mutation,error",
+        [
+            ("packing_disabled", "sequence_packing.enabled=true"),
+            ("dynamic_batching", "dynamic_batching.enabled=false"),
+            ("missing_sequence_capacity", "thd_max_packed_sequences"),
+            ("small_sequence_capacity", "at least 2"),
+            ("token_capacity_not_cp_divisible", "context_parallel_size"),
+            ("boolean_sequence_alignment", "make_sequence_length_divisible_by"),
+            ("zero_sequence_alignment", "make_sequence_length_divisible_by"),
+            ("wrong_transformer_impl", "transformer_impl='transformer_engine'"),
+            ("wrong_warmup", "exactly 3"),
+        ],
+    )
+    def test_fixed_te_graph_request_rejects_unsafe_geometry(
+        self,
+        mutation: str,
+        error: str,
+    ) -> None:
+        """Every fixed-shape prerequisite must fail before model post-init."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request()
+        if mutation == "packing_disabled":
+            config["sequence_packing"] = {"enabled": False}
+        elif mutation == "dynamic_batching":
+            config["dynamic_batching"]["enabled"] = True
+        elif mutation == "missing_sequence_capacity":
+            del config["megatron_cfg"]["thd_max_packed_sequences"]
+        elif mutation == "small_sequence_capacity":
+            config["megatron_cfg"]["thd_max_packed_sequences"] = 1
+        elif mutation == "token_capacity_not_cp_divisible":
+            config["sequence_packing"]["train_mb_tokens"] = 127
+        elif mutation == "boolean_sequence_alignment":
+            config["make_sequence_length_divisible_by"] = True
+        elif mutation == "zero_sequence_alignment":
+            config["make_sequence_length_divisible_by"] = 0
+        elif mutation == "wrong_transformer_impl":
+            config["megatron_cfg"]["transformer_impl"] = "local"
+        elif mutation == "wrong_warmup":
+            model_cfg.cuda_graph_warmup_steps = 2
+
+        with pytest.raises((TypeError, ValueError), match=error):
+            _apply_performance_config(model_cfg, config)
+
+    @pytest.mark.parametrize(
+        "modules,error",
+        [
+            (["attn", "attn"], "duplicate"),
+            (["unknown"], "unsupported"),
+            ("", "empty list or tuple"),
+            (" , ", "empty list or tuple"),
+            (["moe_preprocess"], "requires moe_router"),
+            (["moe", "moe_router"], "must not contain both"),
+        ],
+    )
+    def test_fixed_te_graph_request_rejects_invalid_scopes(
+        self,
+        modules: object,
+        error: str,
+    ) -> None:
+        """Ambiguous scopes must not reach MCore's mutating post-init."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request(modules=modules)
+
+        with pytest.raises(ValueError, match=error):
+            _apply_performance_config(model_cfg, config)
+
+    @pytest.mark.parametrize(
+        "model_overrides,error",
+        [
+            (
+                {
+                    "moe_token_dispatcher_type": "allgather",
+                },
+                "AllGather",
+            ),
+            (
+                {
+                    "moe_token_dispatcher_type": "flex",
+                    "moe_flex_dispatcher_backend": "deepep",
+                },
+                "Flex/DeepEP",
+            ),
+            (
+                {
+                    "moe_token_dispatcher_type": "flex",
+                    "moe_flex_dispatcher_backend": "hybridep",
+                },
+                "fixed capacity",
+            ),
+            (
+                {
+                    "moe_pad_expert_input_to_capacity": True,
+                },
+                "positive moe_expert_capacity_factor",
+            ),
+            (
+                {
+                    "moe_token_dispatcher_type": "flex",
+                    "moe_flex_dispatcher_backend": "hybridep",
+                    "moe_expert_rank_capacity_factor": 0,
+                },
+                "fixed capacity",
+            ),
+            (
+                {
+                    "overlap_moe_expert_parallel_comm": True,
+                },
+                "overlap_moe_expert_parallel_comm",
+            ),
+        ],
+    )
+    def test_moe_preprocess_scope_rejects_unsafe_dispatchers(
+        self,
+        model_overrides: dict[str, object],
+        error: str,
+    ) -> None:
+        """Task-5 replay cannot safely restore these dispatcher states."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request(
+            modules=["moe_router", "moe_preprocess"]
+        )
+        for name, value in model_overrides.items():
+            setattr(model_cfg, name, value)
+        config["megatron_cfg"]["moe_token_dispatcher_type"] = (
+            model_cfg.moe_token_dispatcher_type
+        )
+        if model_cfg.moe_flex_dispatcher_backend is not None:
+            config["megatron_cfg"]["moe_flex_dispatcher_backend"] = (
+                model_cfg.moe_flex_dispatcher_backend
+            )
+
+        with pytest.raises(ValueError, match=error):
+            _apply_performance_config(model_cfg, config)
+
+    def test_full_moe_scope_requires_drop_and_pad_capacity(self) -> None:
+        """A dynamic expert shape cannot be captured as a whole MoE graph."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request(modules=["moe"])
+
+        with pytest.raises(ValueError, match="fixed drop-and-pad expert capacity"):
+            _apply_performance_config(model_cfg, config)
+
+    def test_fixed_te_graph_request_rejects_old_te_runtime(self) -> None:
+        """A pre-THD TE runtime must fail before any graph helper is built."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request()
+
+        with (
+            patch(
+                "nemo_rl.models.megatron.setup.is_te_min_version",
+                return_value=False,
+            ),
+            pytest.raises(ValueError, match="Transformer Engine >= 2.16"),
+        ):
+            _apply_performance_config(model_cfg, config)
+
+    def test_inherited_te_graph_impl_requires_explicit_policy_scopes(self) -> None:
+        """Provider defaults must not bypass canonical fixed-geometry validation."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request()
+        model_cfg.cuda_graph_impl = "transformer_engine"
+        del config["megatron_cfg"]["cuda_graph_impl"]
+        del config["megatron_cfg"]["cuda_graph_modules"]
+        del config["megatron_cfg"]["thd_max_packed_sequences"]
+
+        with pytest.raises(ValueError, match="cuda_graph_modules must be explicitly"):
+            _apply_performance_config(model_cfg, config)
+
+    def test_inherited_te_graph_impl_with_explicit_geometry_enables_rng_tracker(
+        self,
+    ) -> None:
+        """Effective graph ownership, not only a policy override, selects TE RNG."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request()
+        model_cfg.cuda_graph_impl = "transformer_engine"
+        model_cfg.use_te_rng_tracker = False
+        del config["megatron_cfg"]["cuda_graph_impl"]
+
+        with patch(
+            "nemo_rl.models.megatron.setup.is_te_min_version", return_value=True
+        ):
+            _apply_performance_config(model_cfg, config)
+
+        assert model_cfg.use_te_rng_tracker is True
+
+    def test_explicit_none_disables_inherited_te_graph_impl(self) -> None:
+        """A policy override may intentionally disable a provider graph default."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request()
+        model_cfg.cuda_graph_impl = "transformer_engine"
+        model_cfg.use_te_rng_tracker = False
+        config["megatron_cfg"]["cuda_graph_impl"] = "none"
+        del config["megatron_cfg"]["cuda_graph_modules"]
+        del config["megatron_cfg"]["thd_max_packed_sequences"]
+
+        _apply_performance_config(model_cfg, config)
+
+        assert model_cfg.cuda_graph_impl == "none"
+        assert model_cfg.use_te_rng_tracker is False
+
     def test_basic_performance_config(self):
         """Test applying basic performance configuration."""
         from nemo_rl.models.megatron.setup import _apply_performance_config

@@ -15,7 +15,7 @@
 """Tests for sequence packing algorithms."""
 
 import random
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import pytest
 
@@ -595,3 +595,102 @@ class TestSequencePacker:
 
         # Results should be identical
         assert bins1 == bins2
+
+    @pytest.mark.parametrize(
+        "algorithm,expected_bins",
+        [
+            (PackingAlgorithm.CONCATENATIVE, [[0, 1], [2, 3], [4]]),
+            (PackingAlgorithm.FIRST_FIT_DECREASING, [[4, 3], [2, 1], [0]]),
+            (PackingAlgorithm.FIRST_FIT_SHUFFLE, [[3, 1], [4, 2], [0]]),
+            (
+                PackingAlgorithm.MODIFIED_FIRST_FIT_DECREASING,
+                [[0, 1], [2, 3], [4]],
+            ),
+        ],
+    )
+    def test_max_sequences_per_bin_stably_chunks_every_algorithm(
+        self,
+        algorithm: PackingAlgorithm,
+        expected_bins: List[List[int]],
+    ) -> None:
+        """Removing the common stable split would overflow fixed THD metadata."""
+        random.seed(123)
+        packer = get_packer(
+            algorithm,
+            bin_capacity=100,
+            max_sequences_per_bin=2,
+        )
+
+        assert packer.pack([1, 1, 1, 1, 1]) == expected_bins
+
+    @pytest.mark.parametrize(
+        "algorithm",
+        [
+            PackingAlgorithm.CONCATENATIVE,
+            PackingAlgorithm.FIRST_FIT_DECREASING,
+            PackingAlgorithm.FIRST_FIT_SHUFFLE,
+            PackingAlgorithm.MODIFIED_FIRST_FIT_DECREASING,
+        ],
+    )
+    def test_max_sequences_per_bin_survives_bin_count_adjustment(
+        self,
+        algorithm: PackingAlgorithm,
+    ) -> None:
+        """Bin-count balancing must not rebuild an over-capacity microbatch."""
+        random.seed(123)
+        packer = get_packer(
+            algorithm,
+            bin_capacity=100,
+            min_bin_count=4,
+            bin_count_multiple=4,
+            max_sequences_per_bin=2,
+        )
+
+        bins = packer.pack([1, 1, 1, 1, 1, 1])
+
+        assert len(bins) == 4
+        assert max(map(len, bins)) <= 2
+        assert sorted(index for bin_contents in bins for index in bin_contents) == list(
+            range(6)
+        )
+
+    @pytest.mark.parametrize("capacity", [None, -1])
+    @pytest.mark.parametrize(
+        "algorithm",
+        [
+            PackingAlgorithm.CONCATENATIVE,
+            PackingAlgorithm.FIRST_FIT_DECREASING,
+            PackingAlgorithm.FIRST_FIT_SHUFFLE,
+            PackingAlgorithm.MODIFIED_FIRST_FIT_DECREASING,
+        ],
+    )
+    def test_max_sequences_per_bin_unbounded_sentinels(
+        self,
+        algorithm: PackingAlgorithm,
+        capacity: Optional[int],
+    ) -> None:
+        """None and -1 retain ordinary unbounded packing behavior."""
+        random.seed(123)
+        packer = get_packer(
+            algorithm,
+            bin_capacity=100,
+            max_sequences_per_bin=capacity,
+        )
+
+        bins = packer.pack([1, 1, 1, 1, 1])
+
+        assert len(bins) == 1
+        assert sorted(bins[0]) == list(range(5))
+
+    @pytest.mark.parametrize("capacity", [0, -2, True, 1.5])
+    def test_max_sequences_per_bin_rejects_invalid_values(
+        self,
+        capacity: object,
+    ) -> None:
+        """Malformed graph sequence capacities must fail at construction."""
+        with pytest.raises((TypeError, ValueError), match="max_sequences_per_bin"):
+            get_packer(
+                PackingAlgorithm.CONCATENATIVE,
+                bin_capacity=100,
+                max_sequences_per_bin=capacity,
+            )

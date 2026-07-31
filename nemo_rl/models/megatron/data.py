@@ -119,6 +119,135 @@ class _PackedSequenceOutput:
     packed_geometry: PackedGeometry
 
 
+def _validate_cuda_graph_training_inputs(
+    inputs: ProcessedInputs,
+    *,
+    global_token_capacity: int,
+    thd_max_packed_sequences: int,
+) -> None:
+    """Validate Task 8 fixed THD geometry before yielding a training input."""
+    if global_token_capacity < 1:
+        raise ValueError("CUDA graph training token capacity must be positive.")
+    if thd_max_packed_sequences < 2:
+        raise ValueError(
+            "thd_max_packed_sequences must reserve one real and one dummy sequence."
+        )
+    cp_size = get_context_parallel_world_size()
+    if global_token_capacity % cp_size != 0:
+        raise ValueError(
+            "CUDA graph training token capacity must be divisible by context "
+            f"parallel size ({cp_size})."
+        )
+    local_token_capacity = global_token_capacity // cp_size
+
+    geometry = inputs.packed_geometry
+    if geometry is None:
+        raise ValueError("CUDA graph training requires Task 8 packed geometry.")
+    if geometry.capacity_tokens != global_token_capacity:
+        raise ValueError(
+            "Packed geometry token capacity does not match "
+            "sequence_packing.train_mb_tokens."
+        )
+    if not 1 <= geometry.real_sequence_count <= thd_max_packed_sequences - 1:
+        raise ValueError(
+            f"Packed THD real sequence count ({geometry.real_sequence_count}) exceeds "
+            f"the configured bound ({thd_max_packed_sequences - 1})."
+        )
+    expected_entries = thd_max_packed_sequences + 1
+    if geometry.cu_seqlens_capacity_entries != expected_entries:
+        raise ValueError(
+            "Packed THD cumulative-entry capacity does not match "
+            f"thd_max_packed_sequences + 1 ({expected_entries})."
+        )
+    if not (
+        0
+        <= geometry.logical_tokens
+        <= geometry.padded_tokens
+        <= geometry.capacity_tokens
+    ):
+        raise ValueError(
+            "Packed geometry must satisfy logical_tokens <= padded_tokens <= "
+            "capacity_tokens."
+        )
+
+    if inputs.input_ids.shape[-1] != global_token_capacity:
+        raise ValueError(
+            "Global packed input shape does not match the fixed CUDA graph token "
+            f"capacity: {inputs.input_ids.shape[-1]} != {global_token_capacity}."
+        )
+    if inputs.input_ids_cp_sharded.shape[-1] != local_token_capacity:
+        raise ValueError(
+            "CP-local packed input shape does not match the fixed CUDA graph token "
+            f"capacity: {inputs.input_ids_cp_sharded.shape[-1]} != "
+            f"{local_token_capacity}."
+        )
+    if (
+        inputs.structural_padding_mask is None
+        or inputs.structural_padding_mask.dtype != torch.bool
+        or inputs.structural_padding_mask.shape != inputs.input_ids.shape
+    ):
+        raise ValueError(
+            "Global structural padding mask must be bool and match the fixed packed input."
+        )
+    if (
+        inputs.structural_padding_mask_cp_sharded is None
+        or inputs.structural_padding_mask_cp_sharded.dtype != torch.bool
+        or inputs.structural_padding_mask_cp_sharded.shape
+        != inputs.input_ids_cp_sharded.shape
+    ):
+        raise ValueError(
+            "CP-local structural padding mask must be bool and match the fixed packed input."
+        )
+
+    packed_seq_params = inputs.packed_seq_params
+    if packed_seq_params is None or packed_seq_params.qkv_format != "thd":
+        raise ValueError("CUDA graph training requires THD PackedSeqParams.")
+    for field_name in (
+        "cu_seqlens_q",
+        "cu_seqlens_kv",
+        "cu_seqlens_q_padded",
+        "cu_seqlens_kv_padded",
+    ):
+        cumulative = getattr(packed_seq_params, field_name, None)
+        if (
+            not isinstance(cumulative, torch.Tensor)
+            or cumulative.dim() != 1
+            or cumulative.numel() != expected_entries
+        ):
+            raise ValueError(
+                f"{field_name} must have the fixed CUDA graph entry capacity "
+                f"({expected_entries})."
+            )
+    if packed_seq_params.total_tokens != local_token_capacity:
+        raise ValueError(
+            "PackedSeqParams.total_tokens must equal the CP-local fixed token capacity."
+        )
+    if packed_seq_params.pad_between_seqs is not True:
+        raise ValueError(
+            "Fixed THD CUDA graph metadata requires pad_between_seqs=True."
+        )
+    if (
+        not isinstance(packed_seq_params.seq_idx, torch.Tensor)
+        or packed_seq_params.seq_idx.shape != inputs.input_ids_cp_sharded.shape
+    ):
+        raise ValueError(
+            "Packed Mamba seq_idx must match the CP-local fixed token shape."
+        )
+
+    expected_real_entries = geometry.real_sequence_count + 1
+    for field_name in ("cu_seqlens", "cu_seqlens_padded"):
+        cumulative = getattr(inputs, field_name)
+        if (
+            not isinstance(cumulative, torch.Tensor)
+            or cumulative.dim() != 1
+            or cumulative.numel() != expected_real_entries
+        ):
+            raise ValueError(
+                f"Real {field_name} must contain exactly one endpoint per real "
+                "sequence plus the origin."
+            )
+
+
 def make_processed_microbatch_iterator(
     raw_iterator: Iterator[BatchedDataDict[Any]],
     cfg: dict[str, Any],
@@ -129,6 +258,7 @@ def make_processed_microbatch_iterator(
     pad_full_seq_to: Optional[int],
     delegate_pack_to_model: bool = False,
     thd_max_packed_sequences: Optional[int] = None,
+    for_cuda_graph_training: bool = False,
 ) -> Iterator[ProcessedMicrobatch]:
     """Wrap a raw microbatch iterator to yield processed microbatches.
 
@@ -143,6 +273,7 @@ def make_processed_microbatch_iterator(
         pad_individual_seqs_to_multiple_of: Padding multiple for individual sequences
         pad_packed_seq_to_multiple_of: Padding multiple for packed sequences
         pad_full_seq_to: Target length for full sequence padding (optional)
+        for_cuda_graph_training: Validate fixed Task 8 geometry before every yield.
 
     Yields:
         ProcessedMicrobatch objects containing processed tensors ready for model forward
@@ -165,6 +296,17 @@ def make_processed_microbatch_iterator(
             thd_max_packed_sequences=thd_max_packed_sequences,
             straggler_timer=straggler_timer,
         )
+
+        if for_cuda_graph_training:
+            if pad_full_seq_to is None or thd_max_packed_sequences is None:
+                raise ValueError(
+                    "CUDA graph training requires fixed token and sequence capacities."
+                )
+            _validate_cuda_graph_training_inputs(
+                processed_inputs,
+                global_token_capacity=pad_full_seq_to,
+                thd_max_packed_sequences=thd_max_packed_sequences,
+            )
 
         yield ProcessedMicrobatch(
             data_dict=data_dict,
@@ -194,6 +336,7 @@ def get_microbatch_iterator(
     seq_length_key: Optional[str] = None,
     delegate_pack_to_model: bool = False,
     thd_max_packed_sequences: Optional[int] = None,
+    for_cuda_graph_training: bool = False,
 ) -> Tuple[Iterator[ProcessedMicrobatch], int, int, int, int]:
     """Create a processed microbatch iterator from a batch of data.
 
@@ -206,6 +349,8 @@ def get_microbatch_iterator(
         cfg: Configuration dictionary
         mbs: Microbatch size
         seq_length_key: Key for sequence lengths in data dict (auto-detected if None)
+        for_cuda_graph_training: Use canonical fixed training graph geometry. Evaluation
+            and logprob callers leave this false and retain eager geometry.
 
     Returns:
         Tuple containing the iterator and metadata
@@ -219,6 +364,48 @@ def get_microbatch_iterator(
     pad_factor = 1
     pad_full_seq_to = None
     pad_packed_seq_to_multiple_of = 1
+
+    if not isinstance(for_cuda_graph_training, bool):
+        raise TypeError("for_cuda_graph_training must be a bool.")
+    if for_cuda_graph_training:
+        if cfg["sequence_packing"]["enabled"] is not True:
+            raise ValueError(
+                "CUDA graph training requires sequence_packing.enabled=true."
+            )
+        if cfg["dynamic_batching"]["enabled"] is not False:
+            raise ValueError(
+                "CUDA graph training requires dynamic_batching.enabled=false."
+            )
+        if delegate_pack_to_model:
+            raise ValueError(
+                "CUDA graph training cannot use delegate_pack_to_model=True because "
+                "NeMo-RL must own the fixed physical token order."
+            )
+        configured_sequence_capacity = cfg["megatron_cfg"].get(
+            "thd_max_packed_sequences"
+        )
+        if (
+            isinstance(configured_sequence_capacity, bool)
+            or not isinstance(configured_sequence_capacity, int)
+            or configured_sequence_capacity < 2
+        ):
+            raise ValueError(
+                "CUDA graph training requires thd_max_packed_sequences >= 2."
+            )
+        if (
+            thd_max_packed_sequences is not None
+            and thd_max_packed_sequences != configured_sequence_capacity
+        ):
+            raise ValueError(
+                "Explicit thd_max_packed_sequences differs from the canonical "
+                "megatron_cfg value."
+            )
+        thd_max_packed_sequences = configured_sequence_capacity
+    elif thd_max_packed_sequences is not None:
+        raise ValueError(
+            "Fixed THD sequence capacity is training-graph-only; set "
+            "for_cuda_graph_training=True."
+        )
 
     _, seq_dim_size = get_and_validate_seqlen(data)
 
@@ -243,6 +430,34 @@ def get_microbatch_iterator(
             cfg["make_sequence_length_divisible_by"],
             pack_seq_dim_size,
         )
+        if for_cuda_graph_training:
+            train_mb_tokens = cfg["sequence_packing"].get("train_mb_tokens")
+            if (
+                isinstance(train_mb_tokens, bool)
+                or not isinstance(train_mb_tokens, int)
+                or train_mb_tokens < 1
+            ):
+                raise ValueError(
+                    "CUDA graph training requires a positive "
+                    "sequence_packing.train_mb_tokens."
+                )
+            cp_size = cfg["megatron_cfg"]["context_parallel_size"]
+            if train_mb_tokens % cp_size != 0:
+                raise ValueError(
+                    "sequence_packing.train_mb_tokens must be divisible by "
+                    f"context_parallel_size ({cp_size})."
+                )
+            if train_mb_tokens % pad_factor != 0:
+                raise ValueError(
+                    "sequence_packing.train_mb_tokens must be divisible by the "
+                    f"individual sequence alignment ({pad_factor})."
+                )
+            if train_mb_tokens % pad_packed_seq_to_multiple_of != 0:
+                raise ValueError(
+                    "sequence_packing.train_mb_tokens must be divisible by the packed "
+                    f"alignment ({pad_packed_seq_to_multiple_of})."
+                )
+            pad_full_seq_to = train_mb_tokens
         micro_batch_size = 1
     else:
         raw_iterator = data.make_microbatch_iterator(mbs)
@@ -259,6 +474,7 @@ def get_microbatch_iterator(
         straggler_timer=straggler_timer,
         delegate_pack_to_model=delegate_pack_to_model,
         thd_max_packed_sequences=thd_max_packed_sequences,
+        for_cuda_graph_training=for_cuda_graph_training,
     )
 
     # Compute padded sequence length for pipeline parallelism
@@ -1074,7 +1290,7 @@ def _pack_sequences_for_megatron_with_geometry(
 
     if fixed_capacity:
         dummy_tokens = capacity_tokens - natural_padded_tokens
-        if dummy_tokens % (2 * cp_size) != 0:
+        if cp_size > 1 and dummy_tokens % (2 * cp_size) != 0:
             raise ValueError(
                 f"Fixed THD dummy padding length ({dummy_tokens}) must be divisible "
                 f"by 2 * context parallel size ({2 * cp_size})."

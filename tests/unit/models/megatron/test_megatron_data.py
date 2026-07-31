@@ -23,6 +23,8 @@ focusing on:
 - Sequence dimension validation
 """
 
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -808,6 +810,27 @@ class TestPrepareVlmBatchForMegatron:
 class TestPackedStructuralGeometry:
     """Correctness contracts for fixed-capacity packed THD inputs."""
 
+    def test_fixed_packing_allows_odd_dummy_tail_without_cp(self) -> None:
+        """CP=1 has no zig-zag requirement on the structural dummy length."""
+        from nemo_rl.models.megatron.data import _pack_sequences_for_megatron
+
+        packed, local, params, cu_seqlens, cu_seqlens_padded = (
+            _pack_sequences_for_megatron(
+                torch.tensor([[1, 2, 3]]),
+                torch.tensor([3]),
+                pad_individual_seqs_to_multiple_of=1,
+                pad_packed_seq_to=4,
+                cp_rank=0,
+                cp_size=1,
+                thd_max_packed_sequences=3,
+            )
+        )
+
+        assert packed.shape == local.shape == (1, 4)
+        assert torch.equal(cu_seqlens, torch.tensor([0, 3], dtype=torch.int32))
+        assert torch.equal(cu_seqlens_padded, torch.tensor([0, 3], dtype=torch.int32))
+        assert params.cu_seqlens_q_padded[-2:].tolist() == [4, 4]
+
     def test_structural_mask_marks_internal_and_capacity_padding(self):
         from nemo_rl.models.megatron.data import (
             _build_packed_structural_padding_mask,
@@ -1318,6 +1341,111 @@ class TestGetMicrobatchIterator:
 
     @patch("nemo_rl.models.megatron.data.get_and_validate_seqlen")
     @patch("nemo_rl.models.megatron.data.make_processed_microbatch_iterator")
+    @patch("nemo_rl.models.megatron.data._get_pack_sequence_parameters_for_megatron")
+    def test_graph_training_iterator_forces_canonical_fixed_geometry(
+        self,
+        mock_get_params,
+        mock_make_iterator,
+        mock_get_and_validate_seqlen,
+    ) -> None:
+        """Using the ordinary PP target would expose variable graph input shapes."""
+        from nemo_rl.models.megatron.data import get_microbatch_iterator
+
+        mock_get_and_validate_seqlen.return_value = (1, 96)
+        mock_get_params.return_value = (4, 8, None)
+        mock_make_iterator.return_value = iter([])
+        mock_data = MagicMock()
+        mock_data.make_microbatch_iterator_for_packable_sequences.return_value = iter(
+            []
+        )
+        mock_data.get_microbatch_iterator_for_packable_sequences_len.return_value = (
+            3,
+            96,
+        )
+        cfg = {
+            "dynamic_batching": {"enabled": False},
+            "sequence_packing": {
+                "enabled": True,
+                "train_mb_tokens": 128,
+            },
+            "megatron_cfg": {
+                "tensor_model_parallel_size": 1,
+                "sequence_parallel": False,
+                "pipeline_model_parallel_size": 1,
+                "context_parallel_size": 2,
+                "thd_max_packed_sequences": 5,
+            },
+            "make_sequence_length_divisible_by": 4,
+        }
+
+        result = get_microbatch_iterator(
+            data=mock_data,
+            cfg=cfg,
+            mbs=4,
+            straggler_timer=MagicMock(),
+            for_cuda_graph_training=True,
+        )
+
+        call_kwargs = mock_make_iterator.call_args.kwargs
+        assert call_kwargs["pad_full_seq_to"] == 128
+        assert call_kwargs["thd_max_packed_sequences"] == 5
+        assert call_kwargs["for_cuda_graph_training"] is True
+        assert result[-1] == 128
+
+    @patch("nemo_rl.models.megatron.data.get_and_validate_seqlen")
+    @patch("nemo_rl.models.megatron.data.make_processed_microbatch_iterator")
+    @patch("nemo_rl.models.megatron.data._get_pack_sequence_parameters_for_megatron")
+    def test_eager_iterator_does_not_force_graph_geometry(
+        self,
+        mock_get_params,
+        mock_make_iterator,
+        mock_get_and_validate_seqlen,
+    ) -> None:
+        """Logprob/eval must stay eager even when training graphs are configured."""
+        from nemo_rl.models.megatron.data import get_microbatch_iterator
+
+        mock_get_and_validate_seqlen.return_value = (1, 96)
+        mock_get_params.return_value = (4, 8, None)
+        mock_make_iterator.return_value = iter([])
+        mock_data = MagicMock()
+        mock_data.make_microbatch_iterator_for_packable_sequences.return_value = iter(
+            []
+        )
+        mock_data.get_microbatch_iterator_for_packable_sequences_len.return_value = (
+            3,
+            96,
+        )
+        cfg = {
+            "dynamic_batching": {"enabled": False},
+            "sequence_packing": {
+                "enabled": True,
+                "train_mb_tokens": 128,
+            },
+            "megatron_cfg": {
+                "tensor_model_parallel_size": 1,
+                "sequence_parallel": False,
+                "pipeline_model_parallel_size": 1,
+                "context_parallel_size": 2,
+                "thd_max_packed_sequences": 5,
+            },
+            "make_sequence_length_divisible_by": 4,
+        }
+
+        result = get_microbatch_iterator(
+            data=mock_data,
+            cfg=cfg,
+            mbs=4,
+            straggler_timer=MagicMock(),
+        )
+
+        call_kwargs = mock_make_iterator.call_args.kwargs
+        assert call_kwargs["pad_full_seq_to"] is None
+        assert call_kwargs["thd_max_packed_sequences"] is None
+        assert call_kwargs["for_cuda_graph_training"] is False
+        assert result[-1] == 96
+
+    @patch("nemo_rl.models.megatron.data.get_and_validate_seqlen")
+    @patch("nemo_rl.models.megatron.data.make_processed_microbatch_iterator")
     def test_get_microbatch_iterator_regular(
         self, mock_make_iterator, mock_get_and_validate_seqlen
     ):
@@ -1410,6 +1538,131 @@ class TestGetMicrobatchIterator:
 @pytest.mark.mcore
 class TestMakeProcessedMicrobatchIterator:
     """Tests for make_processed_microbatch_iterator function."""
+
+    @staticmethod
+    def _actual_fixed_graph_inputs() -> Any:
+        from nemo_rl.models.megatron.data import (
+            ProcessedInputs,
+            _pack_sequences_for_megatron_with_geometry,
+        )
+
+        output = _pack_sequences_for_megatron_with_geometry(
+            input_ids=torch.tensor([[1, 2, 3]]),
+            seq_lengths=torch.tensor([3]),
+            pad_individual_seqs_to_multiple_of=1,
+            pad_packed_seq_to=8,
+            cp_rank=0,
+            cp_size=1,
+            thd_max_packed_sequences=3,
+        )
+        return ProcessedInputs(
+            input_ids=output.input_ids,
+            input_ids_cp_sharded=output.input_ids_cp_sharded,
+            attention_mask=None,
+            position_ids=None,
+            packed_seq_params=output.packed_seq_params,
+            cu_seqlens=output.cu_seqlens,
+            cu_seqlens_padded=output.cu_seqlens_padded,
+            structural_padding_mask=output.structural_padding_mask,
+            structural_padding_mask_cp_sharded=(
+                output.structural_padding_mask_cp_sharded
+            ),
+            packed_geometry=output.packed_geometry,
+        )
+
+    def test_actual_task8_fixed_geometry_passes_training_validation(self) -> None:
+        """The producer and pre-yield validator must share one exact THD contract."""
+        from nemo_rl.models.megatron.data import (
+            _validate_cuda_graph_training_inputs,
+        )
+
+        inputs = self._actual_fixed_graph_inputs()
+
+        with patch(
+            "nemo_rl.models.megatron.data.get_context_parallel_world_size",
+            return_value=1,
+        ):
+            _validate_cuda_graph_training_inputs(
+                inputs,
+                global_token_capacity=8,
+                thd_max_packed_sequences=3,
+            )
+
+    @pytest.mark.parametrize(
+        "corruption,error",
+        [
+            ("entry_count", "fixed CUDA graph entry capacity"),
+            ("total_tokens", "CP-local fixed token capacity"),
+            ("seq_idx_shape", "seq_idx"),
+            ("mask_shape", "structural padding mask"),
+            ("capacity", "token capacity"),
+        ],
+    )
+    @patch("nemo_rl.models.megatron.data.process_microbatch")
+    def test_actual_task8_geometry_corruption_rejects_before_yield(
+        self,
+        mock_process: MagicMock,
+        corruption: str,
+        error: str,
+    ) -> None:
+        """Every fixed metadata surface must fail before reaching the model."""
+        from nemo_rl.models.megatron.data import (
+            PackedGeometry,
+            make_processed_microbatch_iterator,
+        )
+
+        inputs = self._actual_fixed_graph_inputs()
+        assert inputs.packed_seq_params is not None
+        assert inputs.packed_geometry is not None
+        if corruption == "entry_count":
+            cu_seqlens_q = inputs.packed_seq_params.cu_seqlens_q
+            assert cu_seqlens_q is not None
+            inputs.packed_seq_params.cu_seqlens_q = cu_seqlens_q[:-1]
+        elif corruption == "total_tokens":
+            inputs.packed_seq_params.total_tokens = 7
+        elif corruption == "seq_idx_shape":
+            seq_idx = inputs.packed_seq_params.seq_idx
+            assert seq_idx is not None
+            inputs.packed_seq_params.seq_idx = seq_idx[:, :-1]
+        elif corruption == "mask_shape":
+            assert inputs.structural_padding_mask_cp_sharded is not None
+            inputs.structural_padding_mask_cp_sharded = (
+                inputs.structural_padding_mask_cp_sharded[:, :-1]
+            )
+        elif corruption == "capacity":
+            geometry = inputs.packed_geometry
+            inputs.packed_geometry = PackedGeometry(
+                logical_tokens=geometry.logical_tokens,
+                padded_tokens=geometry.padded_tokens,
+                capacity_tokens=7,
+                real_sequence_count=geometry.real_sequence_count,
+                cu_seqlens_capacity_entries=geometry.cu_seqlens_capacity_entries,
+            )
+        else:
+            raise AssertionError(f"Unknown corruption {corruption!r}.")
+        mock_process.return_value = inputs
+        mock_data_dict = MagicMock()
+        mock_data_dict.to.return_value = mock_data_dict
+        iterator = make_processed_microbatch_iterator(
+            raw_iterator=iter([mock_data_dict]),
+            cfg={"sequence_packing": {"enabled": True}},
+            seq_length_key="input_lengths",
+            pad_individual_seqs_to_multiple_of=1,
+            pad_packed_seq_to_multiple_of=1,
+            straggler_timer=MagicMock(),
+            pad_full_seq_to=8,
+            thd_max_packed_sequences=3,
+            for_cuda_graph_training=True,
+        )
+
+        with (
+            patch(
+                "nemo_rl.models.megatron.data.get_context_parallel_world_size",
+                return_value=1,
+            ),
+            pytest.raises(ValueError, match=error),
+        ):
+            next(iterator)
 
     @patch("nemo_rl.models.megatron.data.process_microbatch")
     def test_make_processed_microbatch_iterator_basic(self, mock_process):
@@ -1530,6 +1783,70 @@ class TestMakeProcessedMicrobatchIterator:
         assert call_kwargs["pad_packed_seq_to_multiple_of"] == 16
         assert call_kwargs["pad_full_seq_to"] == 1024
         assert call_kwargs["thd_max_packed_sequences"] == 9
+
+    @patch("nemo_rl.models.megatron.data.process_microbatch")
+    def test_graph_training_iterator_validates_task8_geometry_before_yield(
+        self,
+        mock_process,
+    ) -> None:
+        """A sequence overflow must raise before a malformed model input is yielded."""
+        from nemo_rl.models.megatron.data import (
+            PackedGeometry,
+            ProcessedInputs,
+            make_processed_microbatch_iterator,
+        )
+
+        entries = torch.tensor([0, 2, 4, 16, 16], dtype=torch.int32)
+        packed_seq_params = SimpleNamespace(
+            qkv_format="thd",
+            cu_seqlens_q=entries,
+            cu_seqlens_kv=entries.clone(),
+            cu_seqlens_q_padded=entries.clone(),
+            cu_seqlens_kv_padded=entries.clone(),
+            total_tokens=16,
+            pad_between_seqs=True,
+            seq_idx=torch.zeros((1, 16), dtype=torch.int32),
+        )
+        mock_process.return_value = ProcessedInputs(
+            input_ids=torch.zeros((1, 16), dtype=torch.long),
+            input_ids_cp_sharded=torch.zeros((1, 16), dtype=torch.long),
+            attention_mask=None,
+            position_ids=None,
+            packed_seq_params=packed_seq_params,
+            cu_seqlens=torch.tensor([0, 2, 4], dtype=torch.int32),
+            cu_seqlens_padded=torch.tensor([0, 2, 4], dtype=torch.int32),
+            structural_padding_mask=torch.zeros((1, 16), dtype=torch.bool),
+            structural_padding_mask_cp_sharded=torch.zeros((1, 16), dtype=torch.bool),
+            packed_geometry=PackedGeometry(
+                logical_tokens=4,
+                padded_tokens=4,
+                capacity_tokens=16,
+                real_sequence_count=4,
+                cu_seqlens_capacity_entries=5,
+            ),
+        )
+        mock_data_dict = MagicMock()
+        mock_data_dict.to.return_value = mock_data_dict
+        iterator = make_processed_microbatch_iterator(
+            raw_iterator=iter([mock_data_dict]),
+            cfg={
+                "sequence_packing": {
+                    "enabled": True,
+                    "train_mb_tokens": 16,
+                },
+                "megatron_cfg": {"thd_max_packed_sequences": 4},
+            },
+            seq_length_key="input_lengths",
+            pad_individual_seqs_to_multiple_of=1,
+            pad_packed_seq_to_multiple_of=1,
+            straggler_timer=MagicMock(),
+            pad_full_seq_to=16,
+            thd_max_packed_sequences=4,
+            for_cuda_graph_training=True,
+        )
+
+        with pytest.raises(ValueError, match="real sequence count"):
+            next(iterator)
 
 
 PACK_SEQUENCES_TEST_ACTOR_FQN = (
