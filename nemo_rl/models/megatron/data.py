@@ -21,6 +21,8 @@ from megatron.core.packed_seq_params import PackedSeqParams, pad_sequence_for_th
 from megatron.core.parallel_state import (
     get_context_parallel_rank,
     get_context_parallel_world_size,
+    get_tensor_model_parallel_rank,
+    get_tensor_model_parallel_world_size,
 )
 from megatron.core.utils import StragglerDetector
 
@@ -124,6 +126,9 @@ def _validate_cuda_graph_training_inputs(
     *,
     global_token_capacity: int,
     thd_max_packed_sequences: int,
+    tp_rank: int = 0,
+    tp_size: int = 1,
+    sequence_parallel: bool = False,
 ) -> None:
     """Validate Task 8 fixed THD geometry before yielding a training input."""
     if global_token_capacity < 1:
@@ -132,6 +137,7 @@ def _validate_cuda_graph_training_inputs(
         raise ValueError(
             "thd_max_packed_sequences must reserve one real and one dummy sequence."
         )
+    cp_rank = get_context_parallel_rank()
     cp_size = get_context_parallel_world_size()
     if global_token_capacity % cp_size != 0:
         raise ValueError(
@@ -139,6 +145,15 @@ def _validate_cuda_graph_training_inputs(
             f"parallel size ({cp_size})."
         )
     local_token_capacity = global_token_capacity // cp_size
+    if tp_size < 1 or not 0 <= tp_rank < tp_size:
+        raise ValueError(f"Invalid TP rank/size: rank={tp_rank}, size={tp_size}.")
+    router_token_capacity = local_token_capacity
+    if sequence_parallel:
+        if router_token_capacity % tp_size != 0:
+            raise ValueError(
+                "CP-local router token capacity must divide evenly across TP/SP ranks."
+            )
+        router_token_capacity //= tp_size
 
     geometry = inputs.packed_geometry
     if geometry is None:
@@ -247,6 +262,92 @@ def _validate_cuda_graph_training_inputs(
                 "sequence plus the origin."
             )
 
+    sample_ids = packed_seq_params.seq_aux_loss_sample_ids
+    if not isinstance(sample_ids, torch.Tensor):
+        raise ValueError("Packed sequence auxiliary-loss sample IDs must be present.")
+    if sample_ids.dim() != 1 or sample_ids.numel() != router_token_capacity:
+        raise ValueError(
+            "Packed sequence auxiliary-loss sample IDs must match the router-local "
+            f"token capacity ({router_token_capacity})."
+        )
+    if sample_ids.dtype != torch.int64:
+        raise ValueError("Packed sequence auxiliary-loss sample IDs must use int64.")
+    if sample_ids.device != inputs.input_ids.device:
+        raise ValueError(
+            "Packed sequence auxiliary-loss sample IDs must share the input device."
+        )
+    if not sample_ids.is_contiguous():
+        raise ValueError(
+            "Packed sequence auxiliary-loss sample IDs must be contiguous."
+        )
+
+    num_samples = packed_seq_params.seq_aux_loss_num_samples
+    if not isinstance(num_samples, torch.Tensor):
+        raise ValueError(
+            "Packed sequence auxiliary-loss sample count must be a Tensor scalar."
+        )
+    if num_samples.shape != torch.Size([]):
+        raise ValueError(
+            "Packed sequence auxiliary-loss sample count must be a scalar."
+        )
+    if num_samples.dtype != torch.int64:
+        raise ValueError("Packed sequence auxiliary-loss sample count must use int64.")
+    if num_samples.device != inputs.input_ids.device:
+        raise ValueError(
+            "Packed sequence auxiliary-loss sample count must share the input device."
+        )
+    if not num_samples.is_contiguous():
+        raise ValueError(
+            "Packed sequence auxiliary-loss sample count must be contiguous."
+        )
+
+    sample_count = int(num_samples)
+    expected_max_samples = thd_max_packed_sequences - 1
+    max_samples = packed_seq_params.seq_aux_loss_max_samples
+    if (
+        isinstance(max_samples, bool)
+        or not isinstance(max_samples, int)
+        or max_samples != expected_max_samples
+    ):
+        raise ValueError(
+            "Packed sequence auxiliary-loss static sample capacity must equal "
+            f"thd_max_packed_sequences - 1 ({expected_max_samples})."
+        )
+    if not 1 <= sample_count <= expected_max_samples:
+        raise ValueError(
+            "Packed sequence auxiliary-loss sample count must satisfy "
+            f"1 <= N <= {expected_max_samples}."
+        )
+    if sample_count != geometry.real_sequence_count:
+        raise ValueError(
+            "Packed sequence auxiliary-loss sample count must equal packed geometry "
+            f"real_sequence_count ({geometry.real_sequence_count})."
+        )
+    if bool(torch.any(sample_ids < 0)):
+        raise ValueError(
+            "Packed sequence auxiliary-loss sample IDs must be nonnegative."
+        )
+    if bool(torch.any(sample_ids >= sample_count)):
+        raise ValueError(
+            "Packed sequence auxiliary-loss sample IDs must be less than N."
+        )
+
+    expected_sample_ids = _build_packed_seq_aux_loss_sample_ids(
+        inputs.cu_seqlens_padded,
+        capacity_tokens=global_token_capacity,
+        real_sequence_count=geometry.real_sequence_count,
+        cp_rank=cp_rank,
+        cp_size=cp_size,
+        tp_rank=tp_rank,
+        tp_size=tp_size,
+        sequence_parallel=sequence_parallel,
+    )
+    if not torch.equal(sample_ids, expected_sample_ids):
+        raise ValueError(
+            "Packed sequence auxiliary-loss sample IDs do not match the exact "
+            "router order and dummy ownership."
+        )
+
 
 def make_processed_microbatch_iterator(
     raw_iterator: Iterator[BatchedDataDict[Any]],
@@ -279,6 +380,26 @@ def make_processed_microbatch_iterator(
         ProcessedMicrobatch objects containing processed tensors ready for model forward
     """
     pack_sequences = cfg["sequence_packing"]["enabled"]
+    tp_rank = 0
+    tp_size = 1
+    sequence_parallel = False
+    if for_cuda_graph_training:
+        megatron_cfg = cfg["megatron_cfg"]
+        configured_tp_size = megatron_cfg["tensor_model_parallel_size"]
+        sequence_parallel = megatron_cfg["sequence_parallel"]
+        tp_size = get_tensor_model_parallel_world_size()
+        tp_rank = get_tensor_model_parallel_rank()
+        if tp_size != configured_tp_size:
+            raise ValueError(
+                "Initialized tensor model parallel world size "
+                f"({tp_size}) does not match megatron_cfg.tensor_model_parallel_size "
+                f"({configured_tp_size})."
+            )
+        if not 0 <= tp_rank < tp_size:
+            raise ValueError(
+                f"Initialized tensor model parallel rank ({tp_rank}) is outside "
+                f"[0, {tp_size})."
+            )
 
     for data_dict in raw_iterator:
         # Move to GPU
@@ -295,6 +416,9 @@ def make_processed_microbatch_iterator(
             delegate_pack_to_model=delegate_pack_to_model,
             thd_max_packed_sequences=thd_max_packed_sequences,
             straggler_timer=straggler_timer,
+            tp_rank=tp_rank,
+            tp_size=tp_size,
+            sequence_parallel=sequence_parallel,
         )
 
         if for_cuda_graph_training:
@@ -306,6 +430,9 @@ def make_processed_microbatch_iterator(
                 processed_inputs,
                 global_token_capacity=pad_full_seq_to,
                 thd_max_packed_sequences=thd_max_packed_sequences,
+                tp_rank=tp_rank,
+                tp_size=tp_size,
+                sequence_parallel=sequence_parallel,
             )
 
         yield ProcessedMicrobatch(
@@ -511,6 +638,9 @@ def process_microbatch(
     delegate_pack_to_model: bool = False,
     thd_max_packed_sequences: Optional[int] = None,
     straggler_timer: Optional[StragglerDetector] = None,
+    tp_rank: int = 0,
+    tp_size: int = 1,
+    sequence_parallel: bool = False,
 ) -> ProcessedInputs:
     """Process a microbatch for Megatron model forward pass."""
     ctx = straggler_timer(bdata=True) if straggler_timer is not None else nullcontext()
@@ -613,6 +743,9 @@ def process_microbatch(
                     cp_rank=cp_rank,
                     cp_size=cp_size,
                     thd_max_packed_sequences=thd_max_packed_sequences,
+                    tp_rank=tp_rank,
+                    tp_size=tp_size,
+                    sequence_parallel=sequence_parallel,
                 )
                 input_ids = packed_output.input_ids
                 input_ids_cp_sharded = packed_output.input_ids_cp_sharded
@@ -1106,6 +1239,9 @@ def _pack_sequences_for_megatron(
     cp_rank: int = 0,
     cp_size: int = 1,
     thd_max_packed_sequences: Optional[int] = None,
+    tp_rank: int = 0,
+    tp_size: int = 1,
+    sequence_parallel: bool = False,
 ) -> tuple[
     torch.Tensor,
     torch.Tensor,
@@ -1141,6 +1277,9 @@ def _pack_sequences_for_megatron(
         cp_rank=cp_rank,
         cp_size=cp_size,
         thd_max_packed_sequences=thd_max_packed_sequences,
+        tp_rank=tp_rank,
+        tp_size=tp_size,
+        sequence_parallel=sequence_parallel,
     )
     return (
         output.input_ids,
@@ -1160,6 +1299,9 @@ def _pack_sequences_for_megatron_with_geometry(
     cp_rank: int = 0,
     cp_size: int = 1,
     thd_max_packed_sequences: Optional[int] = None,
+    tp_rank: int = 0,
+    tp_size: int = 1,
+    sequence_parallel: bool = False,
 ) -> _PackedSequenceOutput:
     """Pack THD tensors while preserving real and model-facing geometry."""
     if input_ids.dim() != 2:
@@ -1345,6 +1487,24 @@ def _pack_sequences_for_megatron_with_geometry(
                 f"{tuple(packed_seq_params.seq_idx.shape)} != "
                 f"{tuple(input_ids_cp_sharded.shape)}."
             )
+        packed_seq_params.seq_aux_loss_sample_ids = (
+            _build_packed_seq_aux_loss_sample_ids(
+                cu_seqlens_padded,
+                capacity_tokens=capacity_tokens,
+                real_sequence_count=real_sequence_count,
+                cp_rank=cp_rank,
+                cp_size=cp_size,
+                tp_rank=tp_rank,
+                tp_size=tp_size,
+                sequence_parallel=sequence_parallel,
+            )
+        )
+        packed_seq_params.seq_aux_loss_num_samples = torch.tensor(
+            real_sequence_count,
+            dtype=torch.int64,
+            device=input_ids.device,
+        )
+        packed_seq_params.seq_aux_loss_max_samples = thd_max_packed_sequences - 1
 
     geometry = PackedGeometry(
         logical_tokens=logical_endpoints[-1],
@@ -1567,6 +1727,52 @@ def _build_packed_seq_idx(
         )
     )
     return torch.cat(local_parts).unsqueeze(0).contiguous()
+
+
+def _build_packed_seq_aux_loss_sample_ids(
+    cu_seqlens_padded: torch.Tensor,
+    *,
+    capacity_tokens: int,
+    real_sequence_count: int,
+    cp_rank: int,
+    cp_size: int,
+    tp_rank: int,
+    tp_size: int,
+    sequence_parallel: bool,
+) -> torch.Tensor:
+    local_parts: list[torch.Tensor] = []
+    for sample_id in range(real_sequence_count):
+        physical_len = int(
+            cu_seqlens_padded[sample_id + 1] - cu_seqlens_padded[sample_id]
+        )
+        ids = torch.full(
+            (physical_len,),
+            sample_id,
+            dtype=torch.int64,
+            device=cu_seqlens_padded.device,
+        )
+        local_parts.append(
+            _get_tokens_on_this_cp_rank(ids, cp_rank, cp_size, seq_dim=0)
+            if cp_size > 1
+            else ids
+        )
+
+    dummy_tokens = capacity_tokens - int(cu_seqlens_padded[-1])
+    dummy = torch.zeros(
+        (dummy_tokens,), dtype=torch.int64, device=cu_seqlens_padded.device
+    )
+    if cp_size > 1 and dummy_tokens > 0:
+        dummy = _get_tokens_on_this_cp_rank(dummy, cp_rank, cp_size, seq_dim=0)
+    local = torch.cat((*local_parts, dummy), dim=0)
+
+    if sequence_parallel:
+        if local.numel() % tp_size != 0:
+            raise ValueError(
+                "CP-local sample IDs must divide evenly across TP/SP ranks."
+            )
+        width = local.numel() // tp_size
+        local = local.narrow(0, tp_rank * width, width)
+    return local.contiguous()
 
 
 def _pad_token_aligned_tail(

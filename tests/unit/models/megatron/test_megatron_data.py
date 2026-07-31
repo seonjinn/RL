@@ -970,6 +970,46 @@ class TestPackedStructuralGeometry:
             model_params.seq_idx,
             torch.tensor([[0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2]]),
         )
+        assert model_params.seq_aux_loss_sample_ids is not None
+        assert torch.equal(
+            model_params.seq_aux_loss_sample_ids,
+            torch.tensor(
+                [0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+                dtype=torch.int64,
+            ),
+        )
+        assert model_params.seq_aux_loss_num_samples is not None
+        assert model_params.seq_aux_loss_num_samples.shape == torch.Size([])
+        assert model_params.seq_aux_loss_num_samples.dtype == torch.int64
+        assert int(model_params.seq_aux_loss_num_samples) == 2
+        assert model_params.seq_aux_loss_max_samples == 3
+
+    def test_fixed_packing_seq_aux_loss_sample_ids_keep_one_real_sample(self):
+        from nemo_rl.models.megatron.data import _pack_sequences_for_megatron
+
+        _, local, model_params, _, _ = _pack_sequences_for_megatron(
+            torch.tensor([[1, 2, 3, 0]]),
+            torch.tensor([3]),
+            pad_individual_seqs_to_multiple_of=4,
+            pad_packed_seq_to=16,
+            cp_rank=0,
+            cp_size=1,
+            thd_max_packed_sequences=4,
+        )
+
+        assert model_params.seq_aux_loss_sample_ids is not None
+        assert model_params.seq_aux_loss_sample_ids.shape == (16,)
+        assert torch.equal(
+            model_params.seq_aux_loss_sample_ids,
+            torch.zeros(16, dtype=torch.int64),
+        )
+        assert model_params.seq_aux_loss_num_samples is not None
+        assert model_params.seq_aux_loss_num_samples.shape == torch.Size([])
+        assert model_params.seq_aux_loss_num_samples.dtype == torch.int64
+        assert int(model_params.seq_aux_loss_num_samples) == 1
+        assert model_params.seq_aux_loss_max_samples == 3
+        assert local.shape == (1, 16)
+        assert model_params.cu_seqlens_q_padded.tolist() == [0, 4, 16, 16, 16]
 
     @pytest.mark.parametrize(
         ("kwargs", "match"),
@@ -1044,6 +1084,82 @@ class TestPackedStructuralGeometry:
         assert model_params.seq_idx.shape == local.shape
         assert model_params.seq_idx.dtype == torch.int32
         assert torch.equal(model_params.seq_idx, expected)
+
+    @pytest.mark.parametrize("cp_rank", [0, 1])
+    def test_fixed_cp2_seq_aux_loss_sample_ids_match_router_order(self, cp_rank):
+        from nemo_rl.distributed.model_utils import _get_tokens_on_this_cp_rank
+        from nemo_rl.models.megatron.data import _pack_sequences_for_megatron
+
+        _, _, model_params, _, _ = _pack_sequences_for_megatron(
+            torch.arange(16).reshape(2, 8),
+            torch.tensor([5, 3]),
+            pad_individual_seqs_to_multiple_of=8,
+            pad_packed_seq_to=32,
+            cp_rank=cp_rank,
+            cp_size=2,
+            tp_rank=0,
+            tp_size=1,
+            sequence_parallel=False,
+            thd_max_packed_sequences=4,
+        )
+
+        expected_cp = torch.cat(
+            [
+                _get_tokens_on_this_cp_rank(
+                    torch.full((8,), sample_id, dtype=torch.int64),
+                    cp_rank,
+                    2,
+                    seq_dim=0,
+                )
+                for sample_id in (0, 1)
+            ]
+            + [torch.zeros(8, dtype=torch.int64)]
+        )
+        assert model_params.seq_aux_loss_sample_ids is not None
+        assert model_params.seq_aux_loss_sample_ids.shape == (16,)
+        assert model_params.seq_aux_loss_sample_ids.is_contiguous()
+        assert torch.equal(model_params.seq_aux_loss_sample_ids, expected_cp)
+
+    @pytest.mark.parametrize("cp_rank", [0, 1])
+    @pytest.mark.parametrize("tp_rank", [0, 1])
+    def test_fixed_cp2_sp_seq_aux_loss_sample_ids_match_router_order(
+        self,
+        cp_rank,
+        tp_rank,
+    ):
+        from nemo_rl.distributed.model_utils import _get_tokens_on_this_cp_rank
+        from nemo_rl.models.megatron.data import _pack_sequences_for_megatron
+
+        _, _, model_params, _, _ = _pack_sequences_for_megatron(
+            torch.arange(16).reshape(2, 8),
+            torch.tensor([5, 3]),
+            pad_individual_seqs_to_multiple_of=8,
+            pad_packed_seq_to=32,
+            cp_rank=cp_rank,
+            cp_size=2,
+            tp_rank=tp_rank,
+            tp_size=2,
+            sequence_parallel=True,
+            thd_max_packed_sequences=4,
+        )
+
+        expected_cp = torch.cat(
+            [
+                _get_tokens_on_this_cp_rank(
+                    torch.full((8,), sample_id, dtype=torch.int64),
+                    cp_rank,
+                    2,
+                    seq_dim=0,
+                )
+                for sample_id in (0, 1)
+            ]
+            + [torch.zeros(8, dtype=torch.int64)]
+        )
+        expected_tp = expected_cp[tp_rank * 8 : (tp_rank + 1) * 8]
+        assert model_params.seq_aux_loss_sample_ids is not None
+        assert model_params.seq_aux_loss_sample_ids.shape == (8,)
+        assert model_params.seq_aux_loss_sample_ids.is_contiguous()
+        assert torch.equal(model_params.seq_aux_loss_sample_ids, expected_tp)
 
     @patch("nemo_rl.models.megatron.data.trace_cp_routed_experts")
     @patch(
@@ -1547,13 +1663,13 @@ class TestMakeProcessedMicrobatchIterator:
         )
 
         output = _pack_sequences_for_megatron_with_geometry(
-            input_ids=torch.tensor([[1, 2, 3]]),
-            seq_lengths=torch.tensor([3]),
-            pad_individual_seqs_to_multiple_of=1,
-            pad_packed_seq_to=8,
+            input_ids=torch.tensor([[1, 2, 3, 0], [4, 5, 0, 0]]),
+            seq_lengths=torch.tensor([3, 2]),
+            pad_individual_seqs_to_multiple_of=4,
+            pad_packed_seq_to=16,
             cp_rank=0,
             cp_size=1,
-            thd_max_packed_sequences=3,
+            thd_max_packed_sequences=4,
         )
         return ProcessedInputs(
             input_ids=output.input_ids,
@@ -1570,22 +1686,95 @@ class TestMakeProcessedMicrobatchIterator:
             packed_geometry=output.packed_geometry,
         )
 
-    def test_actual_task8_fixed_geometry_passes_training_validation(self) -> None:
+    def test_seq_aux_loss_sample_ids_fixed_geometry_passes_training_validation(
+        self,
+    ) -> None:
         """The producer and pre-yield validator must share one exact THD contract."""
         from nemo_rl.models.megatron.data import (
             _validate_cuda_graph_training_inputs,
         )
 
         inputs = self._actual_fixed_graph_inputs()
+        assert inputs.packed_seq_params is not None
+        assert inputs.packed_seq_params.seq_aux_loss_sample_ids is not None
+        assert torch.equal(
+            inputs.packed_seq_params.seq_aux_loss_sample_ids,
+            torch.tensor(
+                [0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+                dtype=torch.int64,
+            ),
+        )
+        assert inputs.packed_seq_params.seq_aux_loss_num_samples is not None
+        assert int(inputs.packed_seq_params.seq_aux_loss_num_samples) == 2
+        assert inputs.packed_seq_params.seq_aux_loss_max_samples == 3
 
-        with patch(
-            "nemo_rl.models.megatron.data.get_context_parallel_world_size",
-            return_value=1,
+        with (
+            patch(
+                "nemo_rl.models.megatron.data.get_context_parallel_rank",
+                return_value=0,
+            ),
+            patch(
+                "nemo_rl.models.megatron.data.get_context_parallel_world_size",
+                return_value=1,
+            ),
         ):
             _validate_cuda_graph_training_inputs(
                 inputs,
-                global_token_capacity=8,
-                thd_max_packed_sequences=3,
+                global_token_capacity=16,
+                thd_max_packed_sequences=4,
+            )
+
+    def test_seq_aux_loss_sample_ids_cp2_sp_training_validation(self) -> None:
+        from nemo_rl.models.megatron.data import (
+            ProcessedInputs,
+            _pack_sequences_for_megatron_with_geometry,
+            _validate_cuda_graph_training_inputs,
+        )
+
+        output = _pack_sequences_for_megatron_with_geometry(
+            input_ids=torch.arange(16).reshape(2, 8),
+            seq_lengths=torch.tensor([5, 3]),
+            pad_individual_seqs_to_multiple_of=8,
+            pad_packed_seq_to=32,
+            cp_rank=1,
+            cp_size=2,
+            tp_rank=1,
+            tp_size=2,
+            sequence_parallel=True,
+            thd_max_packed_sequences=4,
+        )
+        inputs = ProcessedInputs(
+            input_ids=output.input_ids,
+            input_ids_cp_sharded=output.input_ids_cp_sharded,
+            attention_mask=None,
+            position_ids=None,
+            packed_seq_params=output.packed_seq_params,
+            cu_seqlens=output.cu_seqlens,
+            cu_seqlens_padded=output.cu_seqlens_padded,
+            structural_padding_mask=output.structural_padding_mask,
+            structural_padding_mask_cp_sharded=(
+                output.structural_padding_mask_cp_sharded
+            ),
+            packed_geometry=output.packed_geometry,
+        )
+
+        with (
+            patch(
+                "nemo_rl.models.megatron.data.get_context_parallel_rank",
+                return_value=1,
+            ),
+            patch(
+                "nemo_rl.models.megatron.data.get_context_parallel_world_size",
+                return_value=2,
+            ),
+        ):
+            _validate_cuda_graph_training_inputs(
+                inputs,
+                global_token_capacity=32,
+                thd_max_packed_sequences=4,
+                tp_rank=1,
+                tp_size=2,
+                sequence_parallel=True,
             )
 
     @pytest.mark.parametrize(
@@ -1596,10 +1785,19 @@ class TestMakeProcessedMicrobatchIterator:
             ("seq_idx_shape", "seq_idx"),
             ("mask_shape", "structural padding mask"),
             ("capacity", "token capacity"),
+            ("missing_sample_ids", "sample IDs"),
+            ("sample_ids_length", "router-local token capacity"),
+            ("sample_ids_dtype", "int64"),
+            ("num_samples_shape", "scalar"),
+            ("max_samples", "static sample capacity"),
+            ("num_samples_zero", "1 <= N"),
+            ("negative_sample_id", "nonnegative"),
+            ("sample_id_equals_count", "less than"),
+            ("dummy_sample_id", "router order"),
         ],
     )
     @patch("nemo_rl.models.megatron.data.process_microbatch")
-    def test_actual_task8_geometry_corruption_rejects_before_yield(
+    def test_seq_aux_loss_sample_ids_geometry_corruption_rejects_before_yield(
         self,
         mock_process: MagicMock,
         corruption: str,
@@ -1614,6 +1812,15 @@ class TestMakeProcessedMicrobatchIterator:
         inputs = self._actual_fixed_graph_inputs()
         assert inputs.packed_seq_params is not None
         assert inputs.packed_geometry is not None
+        inputs.packed_seq_params.seq_aux_loss_sample_ids = torch.tensor(
+            [0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+            dtype=torch.int64,
+        )
+        inputs.packed_seq_params.seq_aux_loss_num_samples = torch.tensor(
+            2,
+            dtype=torch.int64,
+        )
+        inputs.packed_seq_params.seq_aux_loss_max_samples = 3
         if corruption == "entry_count":
             cu_seqlens_q = inputs.packed_seq_params.cu_seqlens_q
             assert cu_seqlens_q is not None
@@ -1638,6 +1845,34 @@ class TestMakeProcessedMicrobatchIterator:
                 real_sequence_count=geometry.real_sequence_count,
                 cu_seqlens_capacity_entries=geometry.cu_seqlens_capacity_entries,
             )
+        elif corruption == "missing_sample_ids":
+            inputs.packed_seq_params.seq_aux_loss_sample_ids = None
+        elif corruption == "sample_ids_length":
+            inputs.packed_seq_params.seq_aux_loss_sample_ids = (
+                inputs.packed_seq_params.seq_aux_loss_sample_ids[:-1]
+            )
+        elif corruption == "sample_ids_dtype":
+            inputs.packed_seq_params.seq_aux_loss_sample_ids = (
+                inputs.packed_seq_params.seq_aux_loss_sample_ids.to(torch.int32)
+            )
+        elif corruption == "num_samples_shape":
+            inputs.packed_seq_params.seq_aux_loss_num_samples = torch.tensor(
+                [2],
+                dtype=torch.int64,
+            )
+        elif corruption == "max_samples":
+            inputs.packed_seq_params.seq_aux_loss_max_samples = 2
+        elif corruption == "num_samples_zero":
+            inputs.packed_seq_params.seq_aux_loss_num_samples = torch.tensor(
+                0,
+                dtype=torch.int64,
+            )
+        elif corruption == "negative_sample_id":
+            inputs.packed_seq_params.seq_aux_loss_sample_ids[0] = -1
+        elif corruption == "sample_id_equals_count":
+            inputs.packed_seq_params.seq_aux_loss_sample_ids[0] = 2
+        elif corruption == "dummy_sample_id":
+            inputs.packed_seq_params.seq_aux_loss_sample_ids[-1] = 1
         else:
             raise AssertionError(f"Unknown corruption {corruption!r}.")
         mock_process.return_value = inputs
@@ -1645,20 +1880,96 @@ class TestMakeProcessedMicrobatchIterator:
         mock_data_dict.to.return_value = mock_data_dict
         iterator = make_processed_microbatch_iterator(
             raw_iterator=iter([mock_data_dict]),
-            cfg={"sequence_packing": {"enabled": True}},
+            cfg={
+                "sequence_packing": {"enabled": True},
+                "megatron_cfg": {
+                    "tensor_model_parallel_size": 1,
+                    "sequence_parallel": False,
+                },
+            },
             seq_length_key="input_lengths",
             pad_individual_seqs_to_multiple_of=1,
             pad_packed_seq_to_multiple_of=1,
             straggler_timer=MagicMock(),
-            pad_full_seq_to=8,
-            thd_max_packed_sequences=3,
+            pad_full_seq_to=16,
+            thd_max_packed_sequences=4,
             for_cuda_graph_training=True,
         )
 
         with (
             patch(
+                "nemo_rl.models.megatron.data.get_context_parallel_rank",
+                return_value=0,
+            ),
+            patch(
                 "nemo_rl.models.megatron.data.get_context_parallel_world_size",
                 return_value=1,
+            ),
+            patch(
+                "nemo_rl.models.megatron.data.get_tensor_model_parallel_world_size",
+                return_value=1,
+                create=True,
+            ),
+            patch(
+                "nemo_rl.models.megatron.data.get_tensor_model_parallel_rank",
+                return_value=0,
+                create=True,
+            ),
+            pytest.raises(ValueError, match=error),
+        ):
+            next(iterator)
+
+    @pytest.mark.parametrize(
+        ("configured_tp_size", "runtime_tp_size", "tp_rank", "error"),
+        [
+            (2, 1, 0, "tensor model parallel world size"),
+            (2, 2, 2, "tensor model parallel rank"),
+        ],
+    )
+    @patch("nemo_rl.models.megatron.data.process_microbatch")
+    def test_seq_aux_loss_sample_ids_invalid_tp_geometry_rejects_before_processing(
+        self,
+        mock_process: MagicMock,
+        configured_tp_size: int,
+        runtime_tp_size: int,
+        tp_rank: int,
+        error: str,
+    ) -> None:
+        from nemo_rl.models.megatron.data import make_processed_microbatch_iterator
+
+        mock_process.side_effect = AssertionError(
+            "process_microbatch must not run for invalid TP geometry"
+        )
+        mock_data_dict = MagicMock()
+        mock_data_dict.to.return_value = mock_data_dict
+        iterator = make_processed_microbatch_iterator(
+            raw_iterator=iter([mock_data_dict]),
+            cfg={
+                "sequence_packing": {"enabled": True},
+                "megatron_cfg": {
+                    "tensor_model_parallel_size": configured_tp_size,
+                    "sequence_parallel": True,
+                },
+            },
+            seq_length_key="input_lengths",
+            pad_individual_seqs_to_multiple_of=1,
+            pad_packed_seq_to_multiple_of=1,
+            straggler_timer=MagicMock(),
+            pad_full_seq_to=16,
+            thd_max_packed_sequences=4,
+            for_cuda_graph_training=True,
+        )
+
+        with (
+            patch(
+                "nemo_rl.models.megatron.data.get_tensor_model_parallel_world_size",
+                return_value=runtime_tp_size,
+                create=True,
+            ),
+            patch(
+                "nemo_rl.models.megatron.data.get_tensor_model_parallel_rank",
+                return_value=tp_rank,
+                create=True,
             ),
             pytest.raises(ValueError, match=error),
         ):
@@ -1834,7 +2145,11 @@ class TestMakeProcessedMicrobatchIterator:
                     "enabled": True,
                     "train_mb_tokens": 16,
                 },
-                "megatron_cfg": {"thd_max_packed_sequences": 4},
+                "megatron_cfg": {
+                    "tensor_model_parallel_size": 1,
+                    "sequence_parallel": False,
+                    "thd_max_packed_sequences": 4,
+                },
             },
             seq_length_key="input_lengths",
             pad_individual_seqs_to_multiple_of=1,
@@ -1845,7 +2160,17 @@ class TestMakeProcessedMicrobatchIterator:
             for_cuda_graph_training=True,
         )
 
-        with pytest.raises(ValueError, match="real sequence count"):
+        with (
+            patch(
+                "nemo_rl.models.megatron.data.get_tensor_model_parallel_world_size",
+                return_value=1,
+            ),
+            patch(
+                "nemo_rl.models.megatron.data.get_tensor_model_parallel_rank",
+                return_value=0,
+            ),
+            pytest.raises(ValueError, match="real sequence count"),
+        ):
             next(iterator)
 
 
