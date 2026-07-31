@@ -307,8 +307,9 @@ def merge_cuda_graph_metrics(
                 f"counters ({expected}), got {ratios[key]}."
             )
 
+    validated_metrics: dict[str, int | float] = {**counters, **ratios}
     prefixed = {
-        f"cuda_graph/{key}": policy_mapping[key]
+        f"cuda_graph/{key}": validated_metrics[key]
         for key in _CUDA_GRAPH_POLICY_METRIC_KEYS
     }
     collisions = [key for key in prefixed if key in destination]

@@ -402,6 +402,34 @@ def test_merge_cuda_graph_metrics_prefixes_exact_policy_mapping() -> None:
     assert "cuda_graph_metrics" not in destination
 
 
+def test_merge_cuda_graph_metrics_uses_each_validated_value_once() -> None:
+    class ChangingMapping(Mapping[str, Any]):
+        def __init__(self, values: dict[str, Any]) -> None:
+            self._values = values
+            self._reads = {key: 0 for key in values}
+
+        def __getitem__(self, key: str) -> Any:
+            self._reads[key] += 1
+            if self._reads[key] > 1:
+                return "changed-after-validation"
+            return self._values[key]
+
+        def __iter__(self) -> Iterable[str]:
+            return iter(self._values)
+
+        def __len__(self) -> int:
+            return len(self._values)
+
+    metrics = _policy_metrics()
+    destination: dict[str, Any] = {}
+
+    merge_cuda_graph_metrics(
+        destination, {"cuda_graph_metrics": ChangingMapping(metrics)}
+    )
+
+    assert destination == {f"cuda_graph/{key}": value for key, value in metrics.items()}
+
+
 def test_merge_cuda_graph_metrics_noops_only_when_mapping_is_absent() -> None:
     destination = {"loss": 0.25}
 
