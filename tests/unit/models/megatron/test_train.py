@@ -24,15 +24,33 @@ focusing on:
 
 from contextlib import nullcontext
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
 
 from nemo_rl.algorithms.logits_sampling_utils import TrainingSamplingParams
-from nemo_rl.algorithms.loss.interfaces import LossInputType
+from nemo_rl.algorithms.loss.interfaces import LossInputType, LossType
+from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
 pytestmark = pytest.mark.mcore
+
+
+class _SumLogprobLoss:
+    loss_type = LossType.TOKEN_LEVEL
+    input_type = LossInputType.LOGPROB
+
+    def __call__(
+        self,
+        *,
+        next_token_logprobs: torch.Tensor,
+        data: BatchedDataDict[Any],
+        global_valid_seqs: torch.Tensor | None,
+        global_valid_toks: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
+        del data, global_valid_seqs, global_valid_toks
+        return -next_token_logprobs.sum(), {}
 
 
 class TestModelForward:
@@ -897,6 +915,160 @@ class TestMegatronForwardBackward:
 
 class TestLossPostProcessor:
     """Tests for LossPostProcessor class."""
+
+    @pytest.mark.parametrize(
+        ("cp_size", "cu_seqlens_padded", "local_logit_tokens", "message"),
+        [
+            (2, torch.tensor([0, 9], dtype=torch.int32), 5, "must be divisible"),
+            (1, torch.tensor([0, 8], dtype=torch.int32), 7, "logits are shorter"),
+        ],
+        ids=["non_integral_cp_extent", "short_logits"],
+    )
+    def test_fused_packed_loss_rejects_invalid_natural_extent(
+        self,
+        cp_size: int,
+        cu_seqlens_padded: torch.Tensor,
+        local_logit_tokens: int,
+        message: str,
+    ) -> None:
+        """Invalid natural loss extents fail before distributed logprob kernels."""
+        from nemo_rl.models.megatron.train import LossPostProcessor
+
+        tp_group = object()
+        cp_group = None if cp_size == 1 else object()
+        processor = LossPostProcessor(
+            loss_fn=_SumLogprobLoss(),
+            cfg={"sequence_packing": {"enabled": True, "fuse_loss": True}},
+            cp_normalize=False,
+        )
+        data = BatchedDataDict(
+            {"input_ids": torch.arange(1, 9, dtype=torch.long).unsqueeze(0)}
+        )
+
+        with (
+            patch(
+                "nemo_rl.models.megatron.train.get_tensor_model_parallel_rank",
+                return_value=0,
+            ),
+            patch(
+                "nemo_rl.models.megatron.train.get_tensor_model_parallel_group",
+                return_value=tp_group,
+            ),
+            patch(
+                "nemo_rl.models.megatron.train.get_context_parallel_group",
+                return_value=cp_group,
+            ),
+            patch(
+                "nemo_rl.models.megatron.train.get_context_parallel_world_size",
+                return_value=cp_size,
+            ),
+            patch("torch.distributed.get_world_size", return_value=cp_size),
+        ):
+            wrapped_loss = processor(
+                data_dict=data,
+                cu_seqlens=torch.tensor([0, 8], dtype=torch.int32),
+                cu_seqlens_padded=cu_seqlens_padded,
+            )
+            with pytest.raises(ValueError, match=message):
+                wrapped_loss(torch.randn(1, local_logit_tokens, 16))
+
+    @pytest.mark.parametrize("cp_size", [1, 2])
+    @pytest.mark.parametrize("chunk_size", [None, 2], ids=["unchunked", "chunked"])
+    def test_fused_packed_loss_ignores_fixed_capacity_logits(
+        self, cp_size: int, chunk_size: int | None
+    ) -> None:
+        """Fixed dummy logits must not affect fused packed loss or gradients."""
+        from nemo_rl.models.megatron.train import LossPostProcessor
+
+        tp_group = object()
+        cp_group = None if cp_size == 1 else object()
+        cu_seqlens = torch.tensor([0, 8], dtype=torch.int32)
+        cu_seqlens_padded = torch.tensor([0, 8], dtype=torch.int32)
+        natural_local_tokens = 8 // cp_size
+        capacity_local_tokens = 16 // cp_size
+        base_logits = torch.linspace(
+            -1.5,
+            1.5,
+            steps=natural_local_tokens * 16,
+            dtype=torch.float32,
+        ).reshape(1, natural_local_tokens, 16)
+        dummy_logits = torch.linspace(
+            7.0,
+            11.0,
+            steps=(capacity_local_tokens - natural_local_tokens) * 16,
+            dtype=torch.float32,
+        ).reshape(1, capacity_local_tokens - natural_local_tokens, 16)
+
+        def _make_data() -> BatchedDataDict[Any]:
+            return BatchedDataDict(
+                {"input_ids": torch.arange(1, 9, dtype=torch.long).unsqueeze(0)}
+            )
+
+        cfg = {
+            "sequence_packing": {"enabled": True, "fuse_loss": True},
+            "logprob_chunk_size": chunk_size,
+        }
+
+        def _run(logits: torch.Tensor) -> torch.Tensor:
+            processor = LossPostProcessor(
+                loss_fn=_SumLogprobLoss(),
+                cfg=cfg,
+                cp_normalize=False,
+            )
+            wrapped_loss = processor(
+                data_dict=_make_data(),
+                cu_seqlens=cu_seqlens,
+                cu_seqlens_padded=cu_seqlens_padded,
+            )
+            loss, _ = wrapped_loss(logits)
+            loss.backward()
+            return loss
+
+        natural_logits = base_logits.clone().detach().requires_grad_(True)
+        fixed_logits = (
+            torch.cat([base_logits, dummy_logits], dim=1)
+            .clone()
+            .detach()
+            .requires_grad_(True)
+        )
+
+        with (
+            patch(
+                "nemo_rl.models.megatron.train.get_tensor_model_parallel_rank",
+                return_value=0,
+            ),
+            patch(
+                "nemo_rl.models.megatron.train.get_tensor_model_parallel_group",
+                return_value=tp_group,
+            ),
+            patch(
+                "nemo_rl.models.megatron.train.get_context_parallel_group",
+                return_value=cp_group,
+            ),
+            patch(
+                "nemo_rl.models.megatron.train.get_context_parallel_world_size",
+                return_value=cp_size,
+            ),
+            patch("torch.distributed.get_world_size", return_value=cp_size),
+            patch("torch.distributed.get_rank", return_value=0),
+            patch("torch.distributed.all_reduce"),
+            patch(
+                "torch.distributed.nn.functional.all_reduce",
+                side_effect=lambda tensor, *args, **kwargs: tensor,
+            ),
+            patch(
+                "nemo_rl.distributed.model_utils.allgather_cp_sharded_tensor",
+                side_effect=lambda tensor, group, seq_dim: tensor.repeat(cp_size),
+            ),
+        ):
+            natural_loss = _run(natural_logits)
+            fixed_loss = _run(fixed_logits)
+
+        torch.testing.assert_close(fixed_loss, natural_loss)
+        torch.testing.assert_close(
+            fixed_logits.grad[:, :natural_local_tokens], natural_logits.grad
+        )
+        assert fixed_logits.grad[:, natural_local_tokens:].count_nonzero() == 0
 
     @patch(
         "nemo_rl.models.megatron.train.get_tensor_model_parallel_rank", return_value=0

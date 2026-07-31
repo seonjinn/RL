@@ -168,6 +168,53 @@ def apply_temperature_scaling(
     return logits
 
 
+def _prepare_natural_packed_loss_input(
+    logits: torch.Tensor,
+    data: BatchedDataDict[Any],
+    loss_fn: LossFunction,
+    cu_seqlens_q: torch.Tensor,
+    cu_seqlens_q_padded: torch.Tensor,
+    vocab_parallel_rank: Optional[int] = None,
+    vocab_parallel_group: Optional[torch.distributed.ProcessGroup] = None,
+    context_parallel_group: Optional[torch.distributed.ProcessGroup] = None,
+    sampling_params: Optional[TrainingSamplingParams] = None,
+    chunk_size: Optional[int] = None,
+) -> tuple[dict[str, Any], BatchedDataDict[Any]]:
+    """Exclude fixed graph-capacity logits from packed loss computation."""
+    cp_size = (
+        1
+        if context_parallel_group is None
+        else torch.distributed.get_world_size(context_parallel_group)
+    )
+    natural_physical_tokens = int(cu_seqlens_q_padded[-1].item())
+    natural_tokens, remainder = divmod(natural_physical_tokens, cp_size)
+    if remainder != 0:
+        raise ValueError(
+            "The natural packed physical extent must be divisible by context "
+            f"parallel size: {natural_physical_tokens} % {cp_size} != 0."
+        )
+    if logits.shape[1] < natural_tokens:
+        raise ValueError(
+            "Packed logits are shorter than the natural CP-local physical extent: "
+            f"{logits.shape[1]} < {natural_tokens}."
+        )
+    if logits.shape[1] > natural_tokens:
+        logits = logits[:, :natural_tokens]
+
+    return prepare_packed_loss_input(
+        logits=logits,
+        data=data,
+        loss_fn=loss_fn,
+        cu_seqlens_q=cu_seqlens_q,
+        cu_seqlens_q_padded=cu_seqlens_q_padded,
+        vocab_parallel_rank=vocab_parallel_rank,
+        vocab_parallel_group=vocab_parallel_group,
+        context_parallel_group=context_parallel_group,
+        sampling_params=sampling_params,
+        chunk_size=chunk_size,
+    )
+
+
 def forward_with_post_processing_fn(
     data_iterator: Iterator[ProcessedMicrobatch],
     model: GPTModel,
@@ -490,7 +537,7 @@ class LossPostProcessor:
             if fuse_loss:
                 wrapper_cls = SequencePackingFusionLossWrapper
                 prepare_fn = partial(
-                    prepare_packed_loss_input,
+                    _prepare_natural_packed_loss_input,
                     sampling_params=self.sampling_params,
                     chunk_size=logprob_chunk_size,
                 )
