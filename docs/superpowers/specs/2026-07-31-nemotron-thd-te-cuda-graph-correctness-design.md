@@ -77,8 +77,10 @@ regression gate, not a post-5672 port.
 
 The PR 5672 adapter must also retain `pad_between_seqs` and
 `tokens_per_sample` as replay-validated static metadata. `total_tokens` and
-`seq_idx` remain Mamba-only inputs. The selected main baseline uses zigzag CP
-for these Nemotron workloads; do not import the later dev-only
+`seq_idx` remain Mamba-only inputs: `total_tokens` is replay-validated static
+metadata and the current precomputed `seq_idx` is a Tensor graph input. The
+selected main baseline uses zigzag CP for these Nemotron workloads; do not
+import the later dev-only
 `cp_partition_mode` scheduler surface as part of the THD capacity port.
 
 The following open work is reference-only:

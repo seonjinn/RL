@@ -364,6 +364,7 @@ git commit -s -S -m "feat: preserve fixed-capacity THD graph metadata"
 - Modify: `megatron/core/packed_seq_params.py`
 - Modify: `megatron/core/ssm/mamba_layer.py`
 - Modify: `megatron/core/transformer/cuda_graphs.py`
+- Test: `tests/unit_tests/ssm/test_mamba_layer.py`
 - Test: `tests/unit_tests/transformer/test_packed_seq_params_cuda_graph.py`
 - Test: `tests/unit_tests/transformer/test_cuda_graphs.py`
 
@@ -386,6 +387,7 @@ def test_mamba_graph_uses_capacity_sized_seq_idx() -> None:
     assert tensor_kwargs["_mamba_packed_seq_params_seq_idx"].shape == (1, 16)
     assert "cu_seqlens_kv" not in tensor_kwargs
     assert static["qkv_format"] == "thd"
+    assert static["total_tokens"] == 16
 
 
 def test_mamba_replay_rejects_seq_idx_shape_change() -> None:
@@ -414,7 +416,7 @@ def test_mamba_replay_rejects_seq_idx_shape_change() -> None:
         cu_seqlens_q_padded=torch.tensor([0, 4, 8], dtype=torch.int32),
         total_tokens=12,
     )
-    with pytest.raises(AssertionError, match="seq_idx"):
+    with pytest.raises(AssertionError, match="total_tokens"):
         layer._flatten_te_cuda_graph_mamba_packed_seq_params(
             {"packed_seq_params": replay}
         )
@@ -424,6 +426,7 @@ def test_mamba_replay_rejects_seq_idx_shape_change() -> None:
 
 ```bash
 uv run pytest -q \
+  tests/unit_tests/ssm/test_mamba_layer.py \
   tests/unit_tests/transformer/test_packed_seq_params_cuda_graph.py \
   tests/unit_tests/transformer/test_cuda_graphs.py -k "mamba and packed"
 ```
@@ -440,24 +443,30 @@ MAMBA_PACKED_SEQ_PARAMS_CUDA_GRAPH_STATIC_FIELDS = (
     "qkv_format",
     "local_cp_size",
     "cp_group",
+    "total_tokens",
 )
 ```
 
 `MambaLayer.get_layer_static_inputs()` adds the captured capacity-sized
 `seq_idx`; replay validates field presence, shape, dtype, device, layout, and
-stride. It reuses the captured `seq_idx` storage and never reconstructs it from
-`total_tokens` inside replay.
+stride. `total_tokens` is replay-validated static metadata because a changed
+value requires recapture, but it is never flattened into the attention
+adapter. Replay reuses the current precomputed `seq_idx` Tensor storage and
+never reconstructs it from `total_tokens` inside the graph callable. Preserve
+the existing local-Mamba-graph and inference-context behavior.
 
 - [ ] **Step 4: Run and commit**
 
 ```bash
 uv run pytest -q \
+  tests/unit_tests/ssm/test_mamba_layer.py \
   tests/unit_tests/transformer/test_packed_seq_params_cuda_graph.py \
   tests/unit_tests/transformer/test_cuda_graphs.py -k "mamba or packed"
 git diff --check
 git add megatron/core/packed_seq_params.py \
   megatron/core/ssm/mamba_layer.py \
   megatron/core/transformer/cuda_graphs.py \
+  tests/unit_tests/ssm/test_mamba_layer.py \
   tests/unit_tests/transformer/test_packed_seq_params_cuda_graph.py \
   tests/unit_tests/transformer/test_cuda_graphs.py
 git commit -s -S -m "feat: support packed Mamba TE graph replay"
