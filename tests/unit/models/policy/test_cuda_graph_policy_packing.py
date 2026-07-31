@@ -205,6 +205,13 @@ def _fields_with_optional_routed_experts(
     return list(fields)
 
 
+@dataclass(frozen=True)
+class _EffectiveTECudaGraphConfig:
+    cuda_graph_impl: str
+    thd_max_packed_sequences: int | None
+    training_enabled: bool
+
+
 _CUDA_GRAPH_METRICS = {
     "capture_count": 1,
     "replay_count": 2,
@@ -310,6 +317,7 @@ _METHOD_GLOBALS: dict[str, Any] = {
     "Any": Any,
     "DP_TRAIN_FIELDS": ("input_ids", "input_lengths"),
     "DynamicBatchingConfig": dict,
+    "_EffectiveTECudaGraphConfig": _EffectiveTECudaGraphConfig,
     "LP_SEED_FIELDS": ("input_ids", "input_lengths"),
     "SequencePackingConfig": dict,
     "_aggregate_megatron_flops_metrics": lambda *_args: {},
@@ -435,6 +443,79 @@ def _effective_config(
     }
 
 
+def _resolved_effective_config(
+    *,
+    cuda_graph_impl: str = "transformer_engine",
+    capacity: int | None = 5,
+    training_enabled: bool = True,
+) -> _EffectiveTECudaGraphConfig:
+    return _EffectiveTECudaGraphConfig(
+        cuda_graph_impl=cuda_graph_impl,
+        thd_max_packed_sequences=capacity,
+        training_enabled=training_enabled,
+    )
+
+
+def test_effective_config_cache_has_exact_internal_type_and_init_annotation() -> None:
+    tree = ast.parse(_LM_POLICY_PATH.read_text())
+    config_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "_EffectiveTECudaGraphConfig"
+    )
+    assert [
+        node.target.id
+        for node in config_class.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    ] == [
+        "cuda_graph_impl",
+        "thd_max_packed_sequences",
+        "training_enabled",
+    ]
+    dataclass_decorator = next(
+        decorator
+        for decorator in config_class.decorator_list
+        if isinstance(decorator, ast.Call)
+        and isinstance(decorator.func, ast.Name)
+        and decorator.func.id == "dataclass"
+    )
+    assert any(
+        keyword.arg == "frozen"
+        and isinstance(keyword.value, ast.Constant)
+        and keyword.value.value is True
+        for keyword in dataclass_decorator.keywords
+    )
+
+    policy_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "Policy"
+    )
+    init_method = next(
+        node
+        for node in policy_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+    )
+    cache_annotation = next(
+        node
+        for node in ast.walk(init_method)
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Attribute)
+        and isinstance(node.target.value, ast.Name)
+        and node.target.value.id == "self"
+        and node.target.attr == "_effective_te_cuda_graph_config"
+    )
+    assert ast.unparse(cache_annotation.annotation) == "_EffectiveTECudaGraphConfig"
+    cache_call = next(
+        node
+        for node in ast.walk(init_method)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "_cache_effective_te_cuda_graph_config"
+    )
+    assert cache_annotation.lineno < cache_call.lineno
+
+
 def _construction_policy_config(*, megatron_enabled: bool) -> dict[str, Any]:
     config: dict[str, Any] = {
         "model_name": "test/model",
@@ -516,13 +597,17 @@ def _make_policy(
     policy.worker_group = _WorkerGroup()
     if effective_config is None:
         training_enabled = cuda_graph_impl == "transformer_engine"
-        policy._effective_te_cuda_graph_config = {
-            "cuda_graph_impl": cuda_graph_impl or "none",
-            "thd_max_packed_sequences": capacity,
-            "training_enabled": training_enabled,
-        }
+        policy._effective_te_cuda_graph_config = _resolved_effective_config(
+            cuda_graph_impl=cuda_graph_impl or "none",
+            capacity=cast(int | None, capacity),
+            training_enabled=training_enabled,
+        )
     else:
-        policy._effective_te_cuda_graph_config = dict(effective_config)
+        policy._effective_te_cuda_graph_config = _resolved_effective_config(
+            cuda_graph_impl=effective_config["cuda_graph_impl"],
+            capacity=effective_config["thd_max_packed_sequences"],
+            training_enabled=effective_config["training_enabled"],
+        )
     return policy
 
 
@@ -549,13 +634,17 @@ def _make_tq_policy(
     policy._stamp_pad_seqlen = lambda _meta: None
     if effective_config is None:
         training_enabled = cuda_graph_impl == "transformer_engine"
-        policy._effective_te_cuda_graph_config = {
-            "cuda_graph_impl": cuda_graph_impl or "none",
-            "thd_max_packed_sequences": capacity,
-            "training_enabled": training_enabled,
-        }
+        policy._effective_te_cuda_graph_config = _resolved_effective_config(
+            cuda_graph_impl=cuda_graph_impl or "none",
+            capacity=cast(int | None, capacity),
+            training_enabled=training_enabled,
+        )
     else:
-        policy._effective_te_cuda_graph_config = dict(effective_config)
+        policy._effective_te_cuda_graph_config = _resolved_effective_config(
+            cuda_graph_impl=effective_config["cuda_graph_impl"],
+            capacity=effective_config["thd_max_packed_sequences"],
+            training_enabled=effective_config["training_enabled"],
+        )
     return policy
 
 
@@ -565,7 +654,7 @@ def test_effective_config_resolver_accepts_identical_training_ranks() -> None:
 
     resolved = resolver([dict(expected), dict(expected)])
 
-    assert resolved == expected
+    assert resolved == _resolved_effective_config()
     assert resolved is not expected
 
 
@@ -620,7 +709,9 @@ def test_megatron_policy_construction_caches_worker_resolved_config(
         tokenizer=object(),
     )
 
-    assert policy._effective_te_cuda_graph_config == expected
+    assert policy._effective_te_cuda_graph_config == _resolved_effective_config(
+        capacity=7
+    )
     assert _ConstructionWorkerGroup.instances[-1].dispatches == [
         ("get_effective_te_cuda_graph_config", {})
     ]
@@ -637,7 +728,7 @@ def test_dtensor_policy_construction_skips_worker_config_rpc() -> None:
         tokenizer=object(),
     )
 
-    assert policy._effective_te_cuda_graph_config == _effective_config(
+    assert policy._effective_te_cuda_graph_config == _resolved_effective_config(
         cuda_graph_impl="none",
         capacity=None,
         training_enabled=False,

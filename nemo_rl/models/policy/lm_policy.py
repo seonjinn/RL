@@ -15,6 +15,7 @@ import os
 import warnings
 from collections import defaultdict
 from contextlib import nullcontext
+from dataclasses import dataclass
 from typing import Any, Iterable, Literal, Optional, Union, cast
 
 import numpy as np
@@ -62,6 +63,13 @@ from nemo_rl.utils.timer import Timer
 PathLike = Union[str, "os.PathLike[Any]"]
 
 
+@dataclass(frozen=True)
+class _EffectiveTECudaGraphConfig:
+    cuda_graph_impl: str
+    thd_max_packed_sequences: int | None
+    training_enabled: bool
+
+
 def _aggregate_megatron_flops_metrics(
     results: list[dict],
     world_size: int,
@@ -86,7 +94,7 @@ def _aggregate_megatron_flops_metrics(
 
 def _resolve_effective_te_cuda_graph_config(
     worker_results: object,
-) -> dict[str, Any]:
+) -> _EffectiveTECudaGraphConfig:
     """Validate and resolve one effective TE CUDA Graph config across workers."""
     if not isinstance(worker_results, (list, tuple)):
         raise TypeError(
@@ -100,7 +108,7 @@ def _resolve_effective_te_cuda_graph_config(
         "thd_max_packed_sequences",
         "training_enabled",
     }
-    resolved_configs: list[dict[str, Any]] = []
+    resolved_configs: list[_EffectiveTECudaGraphConfig] = []
     for index, raw_config in enumerate(worker_results):
         if not isinstance(raw_config, dict):
             raise TypeError(
@@ -148,11 +156,11 @@ def _resolve_effective_te_cuda_graph_config(
                 )
 
         resolved_configs.append(
-            {
-                "cuda_graph_impl": cuda_graph_impl,
-                "thd_max_packed_sequences": capacity,
-                "training_enabled": training_enabled,
-            }
+            _EffectiveTECudaGraphConfig(
+                cuda_graph_impl=cuda_graph_impl,
+                thd_max_packed_sequences=capacity,
+                training_enabled=training_enabled,
+            )
         )
 
     resolved = resolved_configs[0]
@@ -162,7 +170,7 @@ def _resolve_effective_te_cuda_graph_config(
                 "Effective TE CUDA Graph config must be consistent across all "
                 f"Megatron workers; rank 0={resolved!r}, rank {index}={config!r}."
             )
-    return dict(resolved)
+    return resolved
 
 
 class Policy(ColocatablePolicyInterface, GenerationInterface):
@@ -180,6 +188,13 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         processor: Optional[AutoProcessor] = None,
         worker_extension_cls_fqn: Optional[str] = None,
     ):
+        self._effective_te_cuda_graph_config: _EffectiveTECudaGraphConfig = (
+            _EffectiveTECudaGraphConfig(
+                cuda_graph_impl="none",
+                thd_max_packed_sequences=None,
+                training_enabled=False,
+            )
+        )
         if weights_path:
             weights_path = os.path.abspath(weights_path)
         if optimizer_path:
@@ -437,11 +452,6 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
     ) -> None:
         """Cache the worker-resolved graph config used by policy-side packing."""
         if not megatron_enabled:
-            self._effective_te_cuda_graph_config = {
-                "cuda_graph_impl": "none",
-                "thd_max_packed_sequences": None,
-                "training_enabled": False,
-            }
             return
 
         futures = self.worker_group.run_all_workers_single_data(
@@ -560,8 +570,8 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             ) from error
         is_te_graph_training = (
             for_cuda_graph_training
-            and effective_config["training_enabled"]
-            and effective_config["cuda_graph_impl"] == "transformer_engine"
+            and effective_config.training_enabled
+            and effective_config.cuda_graph_impl == "transformer_engine"
         )
         if not getattr(self, "use_sequence_packing", False):
             if is_te_graph_training:
@@ -581,7 +591,7 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         if not is_te_graph_training:
             return args
 
-        capacity = effective_config["thd_max_packed_sequences"]
+        capacity = effective_config.thd_max_packed_sequences
         if isinstance(capacity, bool) or not isinstance(capacity, int):
             raise TypeError(
                 f"thd_max_packed_sequences must be an integer, got {capacity!r}."
