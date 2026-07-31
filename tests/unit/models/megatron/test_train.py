@@ -24,7 +24,7 @@ focusing on:
 
 from contextlib import nullcontext
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -34,7 +34,44 @@ from nemo_rl.algorithms.logits_sampling_utils import TrainingSamplingParams
 from nemo_rl.algorithms.loss.interfaces import LossInputType, LossType
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
+if TYPE_CHECKING:
+    from megatron.core.packed_seq_params import PackedSeqParams
+
 pytestmark = pytest.mark.mcore
+
+
+def _make_loss_packed_seq_params(
+    *, cp_size: int, fixed_capacity: bool
+) -> "PackedSeqParams":
+    from megatron.core.packed_seq_params import PackedSeqParams
+
+    real_endpoints = torch.tensor([0, 8], dtype=torch.int32)
+    if fixed_capacity:
+        model_endpoints = torch.tensor([0, 8, 16, 16], dtype=torch.int32)
+        total_tokens = 16 // cp_size
+    else:
+        model_endpoints = real_endpoints.clone()
+        total_tokens = 8 // cp_size
+    packed_seq_params = PackedSeqParams(
+        qkv_format="thd",
+        cu_seqlens_q=model_endpoints.clone(),
+        cu_seqlens_kv=model_endpoints.clone(),
+        cu_seqlens_q_padded=model_endpoints.clone(),
+        cu_seqlens_kv_padded=model_endpoints.clone(),
+        max_seqlen_q=int(model_endpoints[-1].item()),
+        max_seqlen_kv=int(model_endpoints[-1].item()),
+        total_tokens=None if fixed_capacity else total_tokens,
+        pad_between_seqs=fixed_capacity,
+    )
+    if fixed_capacity:
+        packed_seq_params.total_tokens = total_tokens
+        packed_seq_params.seq_idx = torch.cat(
+            (
+                torch.zeros(8 // cp_size, dtype=torch.int32),
+                torch.ones(8 // cp_size, dtype=torch.int32),
+            )
+        ).unsqueeze(0)
+    return packed_seq_params
 
 
 class _SumLogprobLoss:
@@ -972,6 +1009,201 @@ class TestLossPostProcessor:
             with pytest.raises(ValueError, match=message):
                 wrapped_loss(torch.randn(1, local_logit_tokens, 16))
 
+    def test_fused_packed_loss_preserves_natural_logits_identity(self) -> None:
+        """Natural non-fixed logits reach packed loss preparation unchanged."""
+        from nemo_rl.models.megatron.train import (
+            _prepare_natural_packed_loss_input,
+        )
+
+        logits = torch.randn(1, 8, 16)
+        data = BatchedDataDict(
+            {"input_ids": torch.arange(1, 9, dtype=torch.long).unsqueeze(0)}
+        )
+        prepared = object()
+        with patch(
+            "nemo_rl.models.megatron.train.prepare_packed_loss_input",
+            return_value=prepared,
+        ) as prepare_mock:
+            result = _prepare_natural_packed_loss_input(
+                logits=logits,
+                data=data,
+                loss_fn=_SumLogprobLoss(),
+                cu_seqlens_q=torch.tensor([0, 8], dtype=torch.int32),
+                cu_seqlens_q_padded=torch.tensor([0, 8], dtype=torch.int32),
+                packed_seq_params=_make_loss_packed_seq_params(
+                    cp_size=1,
+                    fixed_capacity=False,
+                ),
+            )
+
+        assert result is prepared
+        assert prepare_mock.call_args.kwargs["logits"] is logits
+
+    def test_fused_packed_loss_rejects_non_fixed_excess_logits(self) -> None:
+        """Ordinary packed metadata cannot authorize silent logit truncation."""
+        from nemo_rl.models.megatron.train import LossPostProcessor
+
+        processor = LossPostProcessor(
+            loss_fn=_SumLogprobLoss(),
+            cfg={"sequence_packing": {"enabled": True, "fuse_loss": True}},
+            cp_normalize=False,
+        )
+        data = BatchedDataDict(
+            {"input_ids": torch.arange(1, 9, dtype=torch.long).unsqueeze(0)}
+        )
+        packed_seq_params = _make_loss_packed_seq_params(
+            cp_size=1,
+            fixed_capacity=False,
+        )
+
+        with (
+            patch(
+                "nemo_rl.models.megatron.train.get_tensor_model_parallel_rank",
+                return_value=0,
+            ),
+            patch(
+                "nemo_rl.models.megatron.train.get_tensor_model_parallel_group",
+                return_value=object(),
+            ),
+            patch(
+                "nemo_rl.models.megatron.train.get_context_parallel_group",
+                return_value=None,
+            ),
+            patch(
+                "nemo_rl.models.megatron.train.get_context_parallel_world_size",
+                return_value=1,
+            ),
+            patch("torch.distributed.all_reduce") as all_reduce_mock,
+            patch(
+                "torch.distributed.nn.functional.all_reduce",
+                side_effect=lambda tensor, *args, **kwargs: tensor,
+            ) as differentiable_all_reduce_mock,
+        ):
+            wrapped_loss = processor(
+                data_dict=data,
+                packed_seq_params=packed_seq_params,
+                cu_seqlens=torch.tensor([0, 8], dtype=torch.int32),
+                cu_seqlens_padded=torch.tensor([0, 8], dtype=torch.int32),
+            )
+            with pytest.raises(ValueError, match="fixed-capacity metadata"):
+                wrapped_loss(torch.randn(1, 16, 16))
+        all_reduce_mock.assert_not_called()
+        differentiable_all_reduce_mock.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "corruption",
+        [
+            "missing_params",
+            "wrong_format",
+            "missing_q_logical",
+            "missing_kv_logical",
+            "missing_q_padded",
+            "missing_kv_padded",
+            "q_logical_prefix",
+            "kv_logical_prefix",
+            "q_padded_prefix",
+            "kv_padded_prefix",
+            "q_padded_immediate_sentinel",
+            "kv_padded_immediate_sentinel",
+            "q_padded_terminal_sentinel",
+            "kv_padded_terminal_sentinel",
+            "model_entry_counts",
+            "capacity_vs_logits",
+            "total_tokens",
+        ],
+    )
+    def test_fused_packed_loss_rejects_corrupt_fixed_metadata(
+        self, corruption: str
+    ) -> None:
+        """Every fixed-capacity proof input is validated before logprob kernels."""
+        from nemo_rl.models.megatron.train import LossPostProcessor
+
+        fixed_params = _make_loss_packed_seq_params(
+            cp_size=1,
+            fixed_capacity=True,
+        )
+        packed_seq_params: "PackedSeqParams | None" = fixed_params
+        if corruption == "missing_params":
+            packed_seq_params = None
+        elif corruption == "wrong_format":
+            fixed_params.qkv_format = "sbhd"
+        elif corruption == "missing_q_logical":
+            fixed_params.cu_seqlens_q = None
+        elif corruption == "missing_kv_logical":
+            fixed_params.cu_seqlens_kv = None
+        elif corruption == "missing_q_padded":
+            fixed_params.cu_seqlens_q_padded = None
+        elif corruption == "missing_kv_padded":
+            fixed_params.cu_seqlens_kv_padded = None
+        elif corruption == "q_logical_prefix":
+            fixed_params.cu_seqlens_q[1] = 7
+        elif corruption == "kv_logical_prefix":
+            fixed_params.cu_seqlens_kv[1] = 7
+        elif corruption == "q_padded_prefix":
+            fixed_params.cu_seqlens_q_padded[1] = 7
+        elif corruption == "kv_padded_prefix":
+            fixed_params.cu_seqlens_kv_padded[1] = 7
+        elif corruption == "q_padded_immediate_sentinel":
+            fixed_params.cu_seqlens_q_padded[2] = 15
+        elif corruption == "kv_padded_immediate_sentinel":
+            fixed_params.cu_seqlens_kv_padded[2] = 15
+        elif corruption == "q_padded_terminal_sentinel":
+            fixed_params.cu_seqlens_q_padded[-1] = 15
+        elif corruption == "kv_padded_terminal_sentinel":
+            fixed_params.cu_seqlens_kv_padded[-1] = 15
+        elif corruption == "model_entry_counts":
+            fixed_params.cu_seqlens_q = fixed_params.cu_seqlens_q[:-1]
+        elif corruption == "capacity_vs_logits":
+            fixed_params.cu_seqlens_q_padded[2:] = 17
+            fixed_params.cu_seqlens_kv_padded[2:] = 17
+        elif corruption == "total_tokens":
+            fixed_params.total_tokens = 15
+        else:
+            raise AssertionError(f"Unknown corruption: {corruption}")
+
+        processor = LossPostProcessor(
+            loss_fn=_SumLogprobLoss(),
+            cfg={"sequence_packing": {"enabled": True, "fuse_loss": True}},
+            cp_normalize=False,
+        )
+        data = BatchedDataDict(
+            {"input_ids": torch.arange(1, 9, dtype=torch.long).unsqueeze(0)}
+        )
+
+        with (
+            patch(
+                "nemo_rl.models.megatron.train.get_tensor_model_parallel_rank",
+                return_value=0,
+            ),
+            patch(
+                "nemo_rl.models.megatron.train.get_tensor_model_parallel_group",
+                return_value=object(),
+            ),
+            patch(
+                "nemo_rl.models.megatron.train.get_context_parallel_group",
+                return_value=None,
+            ),
+            patch(
+                "nemo_rl.models.megatron.train.get_context_parallel_world_size",
+                return_value=1,
+            ),
+            patch("torch.distributed.all_reduce") as all_reduce_mock,
+            patch(
+                "torch.distributed.nn.functional.all_reduce",
+                side_effect=lambda tensor, *args, **kwargs: tensor,
+            ) as differentiable_all_reduce_mock,
+        ):
+            wrapped_loss = processor(
+                data_dict=data,
+                packed_seq_params=packed_seq_params,
+                cu_seqlens=torch.tensor([0, 8], dtype=torch.int32),
+                cu_seqlens_padded=torch.tensor([0, 8], dtype=torch.int32),
+            )
+            with pytest.raises(ValueError, match="fixed-capacity metadata"):
+                wrapped_loss(torch.randn(1, 16, 16))
+        all_reduce_mock.assert_not_called()
+        differentiable_all_reduce_mock.assert_not_called()
+
     @pytest.mark.parametrize("cp_size", [1, 2])
     @pytest.mark.parametrize("chunk_size", [None, 2], ids=["unchunked", "chunked"])
     def test_fused_packed_loss_ignores_fixed_capacity_logits(
@@ -1009,7 +1241,10 @@ class TestLossPostProcessor:
             "logprob_chunk_size": chunk_size,
         }
 
-        def _run(logits: torch.Tensor) -> torch.Tensor:
+        def _run(
+            logits: torch.Tensor,
+            packed_seq_params: "PackedSeqParams",
+        ) -> torch.Tensor:
             processor = LossPostProcessor(
                 loss_fn=_SumLogprobLoss(),
                 cfg=cfg,
@@ -1017,6 +1252,7 @@ class TestLossPostProcessor:
             )
             wrapped_loss = processor(
                 data_dict=_make_data(),
+                packed_seq_params=packed_seq_params,
                 cu_seqlens=cu_seqlens,
                 cu_seqlens_padded=cu_seqlens_padded,
             )
@@ -1061,8 +1297,20 @@ class TestLossPostProcessor:
                 side_effect=lambda tensor, group, seq_dim: tensor.repeat(cp_size),
             ),
         ):
-            natural_loss = _run(natural_logits)
-            fixed_loss = _run(fixed_logits)
+            natural_loss = _run(
+                natural_logits,
+                _make_loss_packed_seq_params(
+                    cp_size=cp_size,
+                    fixed_capacity=False,
+                ),
+            )
+            fixed_loss = _run(
+                fixed_logits,
+                _make_loss_packed_seq_params(
+                    cp_size=cp_size,
+                    fixed_capacity=True,
+                ),
+            )
 
         torch.testing.assert_close(fixed_loss, natural_loss)
         torch.testing.assert_close(

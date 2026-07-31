@@ -174,6 +174,7 @@ def _prepare_natural_packed_loss_input(
     loss_fn: LossFunction,
     cu_seqlens_q: torch.Tensor,
     cu_seqlens_q_padded: torch.Tensor,
+    packed_seq_params: Optional[PackedSeqParams],
     vocab_parallel_rank: Optional[int] = None,
     vocab_parallel_group: Optional[torch.distributed.ProcessGroup] = None,
     context_parallel_group: Optional[torch.distributed.ProcessGroup] = None,
@@ -199,6 +200,13 @@ def _prepare_natural_packed_loss_input(
             f"{logits.shape[1]} < {natural_tokens}."
         )
     if logits.shape[1] > natural_tokens:
+        _validate_fixed_packed_loss_metadata(
+            packed_seq_params=packed_seq_params,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_q_padded=cu_seqlens_q_padded,
+            local_model_capacity=logits.shape[1],
+            cp_size=cp_size,
+        )
         logits = logits[:, :natural_tokens]
 
     return prepare_packed_loss_input(
@@ -213,6 +221,96 @@ def _prepare_natural_packed_loss_input(
         sampling_params=sampling_params,
         chunk_size=chunk_size,
     )
+
+
+def _validate_fixed_packed_loss_metadata(
+    packed_seq_params: Optional[PackedSeqParams],
+    cu_seqlens_q: torch.Tensor,
+    cu_seqlens_q_padded: torch.Tensor,
+    *,
+    local_model_capacity: int,
+    cp_size: int,
+) -> None:
+    """Prove that an excess logit suffix is an append-only fixed THD tail."""
+
+    def invalid(reason: str) -> ValueError:
+        return ValueError(
+            f"Excess packed logits require verified fixed-capacity metadata: {reason}."
+        )
+
+    if packed_seq_params is None:
+        raise invalid("PackedSeqParams is missing")
+    if packed_seq_params.qkv_format != "thd":
+        raise invalid(f"qkv_format is {packed_seq_params.qkv_format!r}, not 'thd'")
+
+    model_q = packed_seq_params.cu_seqlens_q
+    model_kv = packed_seq_params.cu_seqlens_kv
+    model_q_padded = packed_seq_params.cu_seqlens_q_padded
+    model_kv_padded = packed_seq_params.cu_seqlens_kv_padded
+    model_fields = (
+        ("cu_seqlens_q", model_q, cu_seqlens_q),
+        ("cu_seqlens_kv", model_kv, cu_seqlens_q),
+        ("cu_seqlens_q_padded", model_q_padded, cu_seqlens_q_padded),
+        ("cu_seqlens_kv_padded", model_kv_padded, cu_seqlens_q_padded),
+    )
+    if cu_seqlens_q.ndim != 1 or cu_seqlens_q_padded.ndim != 1:
+        raise invalid("real logical and physical boundaries must be one-dimensional")
+    if cu_seqlens_q.numel() != cu_seqlens_q_padded.numel():
+        raise invalid("real logical and physical boundary counts differ")
+
+    model_entry_counts: list[int] = []
+    for name, model_boundaries, real_boundaries in model_fields:
+        if model_boundaries is None:
+            raise invalid(f"{name} is missing")
+        if model_boundaries.ndim != 1:
+            raise invalid(f"{name} must be one-dimensional")
+        if model_boundaries.dtype != real_boundaries.dtype:
+            raise invalid(f"{name} dtype differs from its real boundaries")
+        if model_boundaries.device != real_boundaries.device:
+            raise invalid(f"{name} device differs from its real boundaries")
+        if model_boundaries.numel() <= real_boundaries.numel():
+            raise invalid(f"{name} has no additional fixed/dummy entry")
+        if not torch.equal(
+            model_boundaries[: real_boundaries.numel()],
+            real_boundaries,
+        ):
+            raise invalid(f"{name} does not start with the exact real boundaries")
+        model_entry_counts.append(model_boundaries.numel())
+
+    if len(set(model_entry_counts)) != 1:
+        raise invalid("model q/kv logical and padded boundary counts differ")
+
+    assert model_q_padded is not None
+    assert model_kv_padded is not None
+    real_entries = cu_seqlens_q_padded.numel()
+    q_padded_sentinels = model_q_padded[real_entries:]
+    kv_padded_sentinels = model_kv_padded[real_entries:]
+    global_model_capacity = int(q_padded_sentinels[0].item())
+    if int(kv_padded_sentinels[0].item()) != global_model_capacity:
+        raise invalid("immediate Q/KV padded sentinels disagree")
+    if int(model_q_padded[-1].item()) != global_model_capacity:
+        raise invalid("Q terminal padded sentinel disagrees with model capacity")
+    if int(model_kv_padded[-1].item()) != global_model_capacity:
+        raise invalid("KV terminal padded sentinel disagrees with model capacity")
+    if not torch.all(q_padded_sentinels == global_model_capacity).item():
+        raise invalid("Q padded fixed/dummy sentinels disagree")
+    if not torch.all(kv_padded_sentinels == global_model_capacity).item():
+        raise invalid("KV padded fixed/dummy sentinels disagree")
+
+    expected_global_capacity = local_model_capacity * cp_size
+    if global_model_capacity != expected_global_capacity:
+        raise invalid(
+            "padded model capacity does not equal local logits length times CP "
+            f"({global_model_capacity} != {local_model_capacity} * {cp_size})"
+        )
+    if (
+        packed_seq_params.total_tokens is not None
+        and int(packed_seq_params.total_tokens) != local_model_capacity
+    ):
+        raise invalid(
+            "local total_tokens does not equal the local logits length "
+            f"({packed_seq_params.total_tokens} != {local_model_capacity})"
+        )
 
 
 def forward_with_post_processing_fn(
@@ -538,6 +636,7 @@ class LossPostProcessor:
                 wrapper_cls = SequencePackingFusionLossWrapper
                 prepare_fn = partial(
                     _prepare_natural_packed_loss_input,
+                    packed_seq_params=packed_seq_params,
                     sampling_params=self.sampling_params,
                     chunk_size=logprob_chunk_size,
                 )
