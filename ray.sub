@@ -726,7 +726,7 @@ if [[ -n "$DRIVER_COMMAND_FILE" ]]; then
   if [[ -n "$SANDBOX_PORTS_DIR" ]]; then sandbox_ready=0; else sandbox_ready=1; fi
   while true; do
     if [[ "\$workers_ready" -eq 0 ]]; then
-      worker_units=\$(ray status 2>/dev/null | grep "worker_units" | awk -F'[/. ]' '{print \$4}' || echo 0)
+      worker_units=\$("${RAY_CLI}" status 2>/dev/null | grep "worker_units" | awk -F'[/. ]' '{print \$4}' || echo 0)
       echo "[INFO][\$(date '+%Y-%m-%dT%H:%M:%S%z')] Number of actors online: \$worker_units/$NUM_ACTORS"
       if [[ "\$worker_units" -eq "$NUM_ACTORS" ]]; then
         workers_ready=1

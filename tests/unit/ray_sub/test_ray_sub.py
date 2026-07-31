@@ -24,4 +24,5 @@ def test_ray_sub_routes_cli_commands_through_configurable_executable() -> None:
 
     assert "RAY_CLI=${RAY_CLI:-ray}" in source
     assert not re.search(r"^\s*ray (?:start|status|stop)\b", source, re.MULTILINE)
-    assert source.count('"${RAY_CLI}"') == 5
+    assert r"\$(ray status" not in source
+    assert source.count('"${RAY_CLI}"') == 6
