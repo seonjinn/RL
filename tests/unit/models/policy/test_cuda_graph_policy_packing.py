@@ -464,13 +464,13 @@ def test_effective_config_cache_has_exact_internal_type_and_init_annotation() ->
         if isinstance(node, ast.ClassDef) and node.name == "_EffectiveTECudaGraphConfig"
     )
     assert [
-        node.target.id
+        (node.target.id, ast.unparse(node.annotation))
         for node in config_class.body
         if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
     ] == [
-        "cuda_graph_impl",
-        "thd_max_packed_sequences",
-        "training_enabled",
+        ("cuda_graph_impl", "str"),
+        ("thd_max_packed_sequences", "int | None"),
+        ("training_enabled", "bool"),
     ]
     dataclass_decorator = next(
         decorator
@@ -485,6 +485,14 @@ def test_effective_config_cache_has_exact_internal_type_and_init_annotation() ->
         and keyword.value.value is True
         for keyword in dataclass_decorator.keywords
     )
+    resolver = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_resolve_effective_te_cuda_graph_config"
+    )
+    assert resolver.returns is not None
+    assert ast.unparse(resolver.returns) == "_EffectiveTECudaGraphConfig"
 
     policy_class = next(
         node
