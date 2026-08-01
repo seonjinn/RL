@@ -1992,6 +1992,124 @@ def test_setup_auto_enables_skip_reference_policy_logprobs_when_kl_penalty_zero(
     assert master_config.grpo["skip_reference_policy_logprobs_calculation"] is True
 
 
+def test_setup_passes_tokenizer_to_nemo_gym_actor(
+    monkeypatch, mock_grpo_components
+):
+    """The NeMo-Gym actor owns the driver tokenizer for streamed rollouts."""
+    from nemo_rl.algorithms import grpo as grpo_mod
+
+    class DummyLogger:
+        def log_hyperparams(self, *_args, **_kwargs):
+            pass
+
+        def log_metrics(self, *_args, **_kwargs):
+            pass
+
+    class DummyCheckpointer:
+        def get_latest_checkpoint_path(self):
+            return None
+
+        def load_training_info(self, _path):
+            return None
+
+        def get_resume_paths(self, _path):
+            return None, None
+
+    class DummyLoader:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def __len__(self):
+            return 1
+
+        def load_state_dict(self, _state):
+            pass
+
+    class DummyCluster:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def world_size(self):
+            return 1
+
+        def get_master_address_and_port(self):
+            return "127.0.0.1", 1234
+
+    class DummyPolicy:
+        def print_node_ip_and_gpu_id(self):
+            pass
+
+        def init_collective(self, *_args, **_kwargs):
+            return []
+
+        def prepare_refit_info(self):
+            return {}
+
+    class DummyMegatronGeneration:
+        dp_openai_server_base_urls = ["http://generation.example"]
+
+        def prepare_refit_info(self, _state):
+            pass
+
+    monkeypatch.setattr(grpo_mod, "Logger", lambda *_args, **_kwargs: DummyLogger())
+    monkeypatch.setattr(
+        grpo_mod, "CheckpointManager", lambda *_args, **_kwargs: DummyCheckpointer()
+    )
+    monkeypatch.setattr(
+        grpo_mod, "ClippedPGLossFn", lambda *_args, **_kwargs: MagicMock()
+    )
+    monkeypatch.setattr(grpo_mod, "StatefulDataLoader", DummyLoader)
+    monkeypatch.setattr(grpo_mod, "RayVirtualCluster", DummyCluster)
+    monkeypatch.setattr(grpo_mod, "Policy", lambda *_args, **_kwargs: DummyPolicy())
+    monkeypatch.setattr(
+        grpo_mod,
+        "MegatronGeneration",
+        lambda *_args, **_kwargs: DummyMegatronGeneration(),
+    )
+    monkeypatch.setattr(grpo_mod.ray, "get", lambda x: x)
+    monkeypatch.setattr(grpo_mod, "_should_use_nemo_gym", lambda *_args: True)
+    mock_spinup = MagicMock(return_value=MagicMock())
+    monkeypatch.setattr(grpo_mod, "spinup_nemo_gym_actor", mock_spinup)
+
+    master_config = mock_grpo_components["master_config"]
+    master_config.policy["model_name"] = "fake-model"
+    master_config.policy["dtensor_cfg"] = {"enabled": False}
+    master_config.policy["megatron_cfg"] = {
+        "enabled": False,
+        "pipeline_model_parallel_size": 1,
+    }
+    master_config.policy["tokenizer"] = {"use_fastokens": False}
+    master_config.policy["generation"]["backend"] = "megatron"
+    master_config.policy["generation"]["colocated"] = {
+        "enabled": True,
+        "resources": {"gpus_per_node": None, "num_nodes": None},
+    }
+    master_config.policy["generation"]["mcore_generation_config"] = {}
+    master_config.loss_fn = ClippedPGLossConfig(reference_policy_kl_penalty=0.0)
+    master_config.grpo["val_period"] = 0
+    master_config.grpo["batch_multiplier"] = 1
+    master_config.cluster["gpus_per_node"] = 4
+    master_config.data["shuffle"] = False
+    master_config.data["num_workers"] = 0
+    master_config.env = {"nemo_gym": {}}
+
+    tokenizer = MagicMock()
+    dataset = MagicMock()
+    dataset.__len__ = MagicMock(return_value=1)
+
+    grpo_mod.setup(master_config, tokenizer, dataset, None)
+
+    mock_spinup.assert_called_once_with(
+        env_configs=master_config.env,
+        base_urls=["http://generation.example"],
+        model_name="fake-model",
+        enable_router_replay=False,
+        routed_experts_dtype="int16",
+        use_fastokens=False,
+        tokenizer=tokenizer,
+    )
+
+
 def test_grpo_train_collects_generation_logger_and_seq_metrics(
     monkeypatch, mock_grpo_components
 ):
