@@ -249,8 +249,8 @@ for proxy_variable in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_
   fi
 done
 runtime_command='set -euo pipefail
-project_root=$1
-validator=$2
+source_project_root=$1
+source_validator=$2
 environment_root=$3
 container=$4
 container_sha256=$5
@@ -268,6 +268,64 @@ output_flag=${16}
 output=${17}
 if [[ "${output_flag}" != "--output" ]]; then
   echo "Runtime probe payload requires --output" >&2
+  exit 2
+fi
+if [[ "${source_validator}" != "${source_project_root}/"* ]]; then
+  echo "Runtime probe validator must be inside the immutable source root" >&2
+  exit 2
+fi
+validator_relative_path=${source_validator#"${source_project_root}/"}
+runtime_project_root=${environment_root}-source
+if [[ -e "${runtime_project_root}" || -L "${runtime_project_root}" ]]; then
+  echo "Runtime source destination already exists: ${runtime_project_root}" >&2
+  exit 2
+fi
+mkdir -m 0700 -- "${runtime_project_root}"
+cleanup_runtime_workspace() {
+  rm -rf -- "${environment_root}" "${runtime_project_root}"
+}
+trap cleanup_runtime_workspace EXIT
+cp -a -- "${source_project_root}/." "${runtime_project_root}/"
+project_root=${runtime_project_root}
+validator=${project_root}/${validator_relative_path}
+source_provenance_verifier=${project_root}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/scripts/verify_source_provenance.sh
+bridge_root=${project_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
+mcore_root=${bridge_root}/3rdparty/Megatron-LM
+if [[ ! -f "${validator}" || ! -x "${source_provenance_verifier}" ]]; then
+  echo "Runtime source copy is missing its validator or provenance verifier" >&2
+  exit 2
+fi
+verify_no_ignored_source_paths() {
+  local repository=$1
+  local label=$2
+  local allow_source_manifest=$3
+  local index=$4
+  local ignored_path
+  local ignored_paths_file=${project_root}/.git/runtime-ignored-paths-${index}
+  git -C "${repository}" ls-files -z --others --ignored --exclude-standard >"${ignored_paths_file}"
+  while IFS= read -r -d "" ignored_path; do
+    if [[ "${allow_source_manifest}" == "1" && "${ignored_path}" == ".source-manifest.env" ]]; then
+      if [[ -L "${repository}/${ignored_path}" || ! -f "${repository}/${ignored_path}" ]]; then
+        echo "Runtime source manifest must be a regular non-symlink file" >&2
+        return 2
+      fi
+      continue
+    fi
+    echo "Runtime source copy contains unexpected ignored path: ${label}:${ignored_path}" >&2
+    return 2
+  done <"${ignored_paths_file}"
+  rm -f -- "${ignored_paths_file}"
+}
+verify_no_ignored_source_paths "${project_root}" "NeMo-RL" 1 0
+verify_no_ignored_source_paths "${bridge_root}" "Megatron-Bridge" 0 1
+verify_no_ignored_source_paths "${mcore_root}" "Megatron-LM" 0 2
+"${source_provenance_verifier}" \
+  "${project_root}" "${nemo_rl_commit}" \
+  "${bridge_root}" "${bridge_commit}" \
+  "${mcore_root}" "${mcore_commit}"
+copied_uv_lock_sha256=$(sha256sum "${project_root}/uv.lock" | awk "{print \$1}")
+if [[ "${copied_uv_lock_sha256}" != "${uv_lock_sha256}" ]]; then
+  echo "Runtime source copy uv.lock SHA256 mismatch" >&2
   exit 2
 fi
 expected_uv_version=$(sed -nE "s/^ARG UV_VERSION=([0-9]+\\.[0-9]+\\.[0-9]+)$/\\1/p" "${project_root}/docker/Dockerfile")
@@ -303,7 +361,11 @@ rm -rf -- "${staging_uv_dir}" "${uv_installer}"
 cleanup_uv_stage() {
   rm -rf -- "${staging_uv_dir}" "${uv_installer}"
 }
-trap cleanup_uv_stage EXIT
+cleanup_uv_stage_and_workspace() {
+  cleanup_uv_stage
+  cleanup_runtime_workspace
+}
+trap cleanup_uv_stage_and_workspace EXIT
 curl --retry 3 --retry-delay 2 -fsSL \
   -o "${uv_installer}" \
   "https://astral.sh/uv/${expected_uv_version}/install.sh"
@@ -324,7 +386,7 @@ mv --no-clobber --no-target-directory -- "${staging_uv_dir}" "${uv_bin_dir}"
   exit 2
 }
 rm -f -- "${uv_installer}"
-trap - EXIT
+trap cleanup_runtime_workspace EXIT
 actual_uv_version=$("${uv_executable}" --version | awk "{print \$2}")
 if [[ "${actual_uv_version}" != "${expected_uv_version}" ]]; then
   echo "Pinned uv version mismatch: expected ${expected_uv_version}, got ${actual_uv_version}" >&2
@@ -350,7 +412,7 @@ if [[ "${actual_python_version}" != "${expected_python_version}" ]]; then
 fi
 rm -rf -- "${environment_root}"
 cd "${project_root}"
-exec "${uv_executable}" run --python "${expected_python_version}" --managed-python --locked --extra mcore --no-python-downloads --directory "${project_root}" python "${validator}" \
+"${uv_executable}" run --python "${expected_python_version}" --managed-python --locked --extra mcore --no-python-downloads --directory "${project_root}" python "${validator}" \
   --container-image "${container}" \
   --container-sha256 "${container_sha256}" \
   --expected-device-count 4 \

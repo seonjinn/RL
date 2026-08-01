@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -24,6 +25,16 @@ MCORE_COMMIT = "d" * 40
 TE_COMMIT = "e" * 40
 PYTHON_VERSION = "3.13.13"
 UV_VERSION = "0.11.18"
+
+
+@dataclass(frozen=True)
+class RuntimePayloadFixture:
+    source_project_root: Path
+    source_validator: Path
+    source_lock: Path
+    environment_root: Path
+    copied_project_root: Path
+    fake_bin: Path
 
 
 def _load_runtime_probe() -> ModuleType:
@@ -90,6 +101,116 @@ def _run_script(
 def _write_executable(path: Path, body: str) -> None:
     path.write_text(body)
     path.chmod(0o755)
+
+
+def _runtime_payload() -> str:
+    source = (
+        EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
+    ).read_text()
+    start = source.index("runtime_command='") + len("runtime_command='")
+    return source[start : source.index("'\n\nset +e", start)]
+
+
+def _stage_runtime_payload_fixture(
+    tmp_path: Path,
+    *,
+    verifier_body: str,
+    lock_text: str = "fixture lock\n",
+) -> RuntimePayloadFixture:
+    source_project_root = tmp_path / "source-repo"
+    source_validator = (
+        source_project_root
+        / "experiments"
+        / "cuda_graph"
+        / "nemotron_thd_te_graph_20260731"
+        / "validate_container_runtime.py"
+    )
+    source_verifier = (
+        source_validator.parent / "scripts" / "verify_source_provenance.sh"
+    )
+    source_verifier.parent.mkdir(parents=True)
+    source_validator.write_text("raise SystemExit('fixture validator must not run')\n")
+    _write_executable(source_verifier, verifier_body)
+    (source_project_root / "docker").mkdir()
+    (source_project_root / "docker" / "Dockerfile").write_text(
+        f"ARG UV_VERSION={UV_VERSION}\n"
+    )
+    (source_project_root / ".python-version").write_text(f"{PYTHON_VERSION}\n")
+    (source_project_root / "pyproject.toml").write_text("[project]\nname='fixture'\n")
+    source_lock = source_project_root / "uv.lock"
+    source_lock.write_text(lock_text)
+    bridge_root = (
+        source_project_root
+        / "3rdparty"
+        / "Megatron-Bridge-workspace"
+        / "Megatron-Bridge"
+    )
+    mcore_root = bridge_root / "3rdparty" / "Megatron-LM"
+    mcore_root.mkdir(parents=True)
+    for repository in (source_project_root, bridge_root, mcore_root):
+        subprocess.run(
+            ["git", "init", "--quiet"],
+            cwd=repository,
+            check=True,
+        )
+    (source_project_root / ".source-manifest.env").write_text("fixture_manifest=true\n")
+    outer_exclude = source_project_root / ".git" / "info" / "exclude"
+    outer_exclude.write_text(outer_exclude.read_text() + "\n.source-manifest.env\n")
+    environment_root = tmp_path / "runtime-environment"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(
+        fake_bin / "sha256sum",
+        '#!/bin/sh\nexec /usr/bin/shasum -a 256 "$@"\n',
+    )
+    return RuntimePayloadFixture(
+        source_project_root=source_project_root,
+        source_validator=source_validator,
+        source_lock=source_lock,
+        environment_root=environment_root,
+        copied_project_root=Path(f"{environment_root}-source"),
+        fake_bin=fake_bin,
+    )
+
+
+def _run_runtime_payload(
+    fixture: RuntimePayloadFixture,
+    *,
+    environment: dict[str, str],
+    uv_lock_sha256: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    expected_uv_lock_sha256 = (
+        uv_lock_sha256 or hashlib.sha256(fixture.source_lock.read_bytes()).hexdigest()
+    )
+    return subprocess.run(
+        [
+            "bash",
+            "-c",
+            _runtime_payload(),
+            "bash",
+            str(fixture.source_project_root),
+            str(fixture.source_validator),
+            str(fixture.environment_root),
+            str(fixture.source_project_root.parent / "container.sqsh"),
+            "a" * 64,
+            NEMORL_COMMIT,
+            BRIDGE_COMMIT,
+            MCORE_COMMIT,
+            expected_uv_lock_sha256,
+            TE_COMMIT,
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "--output",
+            str(fixture.source_project_root.parent / "runtime.json"),
+        ],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
 
 def _stage_environment(container_dir: Path, **extra: str) -> dict[str, str]:
@@ -498,16 +619,9 @@ printf '{"status":"passed"}\n' >"${output}"
 def test_runtime_payload_rejects_preseeded_uv_without_executing_it(
     tmp_path: Path,
 ) -> None:
-    source = (
-        EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
-    ).read_text()
-    start = source.index("runtime_command='") + len("runtime_command='")
-    runtime_command = source[start : source.index("'\n\nset +e", start)]
-
-    project_root = tmp_path / "repo"
-    (project_root / "docker").mkdir(parents=True)
-    (project_root / "docker" / "Dockerfile").write_text(
-        f"ARG UV_VERSION={UV_VERSION}\n"
+    fixture = _stage_runtime_payload_fixture(
+        tmp_path,
+        verifier_body="#!/bin/sh\nexit 0\n",
     )
     uv_bin_dir = tmp_path / f"uv-{UV_VERSION}-733"
     uv_bin_dir.mkdir()
@@ -522,45 +636,240 @@ def test_runtime_payload_rejects_preseeded_uv_without_executing_it(
     environment = os.environ.copy()
     environment.update(
         {
-            "PATH": "/usr/bin:/bin",
+            "PATH": f"{fixture.fake_bin}:/usr/bin:/bin",
             "PINNED_UV_VERSION": UV_VERSION,
             "UV_EXECUTABLE": str(uv_bin_dir / "uv"),
             "UV_MARKER": str(uv_marker),
         }
     )
-    result = subprocess.run(
-        [
-            "bash",
-            "-c",
-            runtime_command,
-            "bash",
-            str(project_root),
-            str(tmp_path / "validator.py"),
-            str(tmp_path / "environment"),
-            str(tmp_path / "container.sqsh"),
-            "a" * 64,
-            NEMORL_COMMIT,
-            BRIDGE_COMMIT,
-            MCORE_COMMIT,
-            "b" * 64,
-            TE_COMMIT,
-            "1",
-            "2",
-            "3",
-            "4",
-            "5",
-            "--output",
-            str(tmp_path / "runtime.json"),
-        ],
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    result = _run_runtime_payload(fixture, environment=environment)
 
     assert result.returncode == 2
     assert "Pinned uv destination already exists" in result.stderr
     assert not uv_marker.exists()
+
+
+def test_runtime_payload_builds_from_writable_verified_source_copy(
+    tmp_path: Path,
+) -> None:
+    provenance_log = tmp_path / "copied-source-provenance.log"
+    fixture = _stage_runtime_payload_fixture(
+        tmp_path,
+        verifier_body=(
+            "#!/bin/bash\n"
+            "set -euo pipefail\n"
+            'printf \'%s\\n\' "$@" >"${COPY_PROVENANCE_LOG}"\n'
+            'mkdir "$1/nemo_rl.egg-info"\n'
+            "exit 91\n"
+        ),
+    )
+    uv_bin_dir = tmp_path / f"uv-{UV_VERSION}-733"
+    uv_bin_dir.mkdir()
+    _write_executable(
+        uv_bin_dir / "uv",
+        f"#!/bin/sh\nprintf 'uv {UV_VERSION} (fixture)\\n'\n",
+    )
+
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fixture.fake_bin}:/usr/bin:/bin",
+            "COPY_PROVENANCE_LOG": str(provenance_log),
+            "PINNED_UV_VERSION": UV_VERSION,
+            "UV_EXECUTABLE": str(uv_bin_dir / "uv"),
+        }
+    )
+    result = _run_runtime_payload(fixture, environment=environment)
+
+    assert result.returncode == 91, result.stderr
+    assert provenance_log.read_text().splitlines() == [
+        str(fixture.copied_project_root),
+        NEMORL_COMMIT,
+        str(
+            fixture.copied_project_root
+            / "3rdparty"
+            / "Megatron-Bridge-workspace"
+            / "Megatron-Bridge"
+        ),
+        BRIDGE_COMMIT,
+        str(
+            fixture.copied_project_root
+            / "3rdparty"
+            / "Megatron-Bridge-workspace"
+            / "Megatron-Bridge"
+            / "3rdparty"
+            / "Megatron-LM"
+        ),
+        MCORE_COMMIT,
+    ]
+    assert not fixture.copied_project_root.exists()
+    assert not (fixture.source_project_root / "nemo_rl.egg-info").exists()
+
+
+def test_runtime_payload_rejects_mutated_copied_uv_lock(tmp_path: Path) -> None:
+    fixture = _stage_runtime_payload_fixture(
+        tmp_path,
+        verifier_body=(
+            "#!/bin/bash\n"
+            "set -euo pipefail\n"
+            "printf 'mutated copied lock\\n' >\"$1/uv.lock\"\n"
+        ),
+        lock_text="immutable fixture lock\n",
+    )
+    uv_bin_dir = tmp_path / f"uv-{UV_VERSION}-733"
+    uv_bin_dir.mkdir()
+    _write_executable(
+        uv_bin_dir / "uv",
+        f"#!/bin/sh\nprintf 'uv {UV_VERSION} (fixture)\\n'\n",
+    )
+
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fixture.fake_bin}:/usr/bin:/bin",
+            "PINNED_UV_VERSION": UV_VERSION,
+            "UV_EXECUTABLE": str(uv_bin_dir / "uv"),
+        }
+    )
+    result = _run_runtime_payload(fixture, environment=environment)
+
+    assert result.returncode == 2
+    assert "Runtime source copy uv.lock SHA256 mismatch" in result.stderr
+    assert fixture.source_lock.read_text() == "immutable fixture lock\n"
+    assert not fixture.copied_project_root.exists()
+
+
+def test_runtime_payload_rejects_ignored_source_artifact_before_verifier(
+    tmp_path: Path,
+) -> None:
+    fixture = _stage_runtime_payload_fixture(
+        tmp_path,
+        verifier_body="#!/bin/sh\nexit 92\n",
+    )
+    (fixture.source_project_root / ".gitignore").write_text("nemo_rl.egg-info\n")
+    escaped_target = tmp_path / "escaped-target"
+    escaped_target.mkdir()
+    ignored_artifact = fixture.source_project_root / "nemo_rl.egg-info"
+    ignored_artifact.symlink_to(escaped_target, target_is_directory=True)
+    uv_bin_dir = tmp_path / f"uv-{UV_VERSION}-733"
+    uv_bin_dir.mkdir()
+    _write_executable(
+        uv_bin_dir / "uv",
+        f"#!/bin/sh\nprintf 'uv {UV_VERSION} (fixture)\\n'\n",
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fixture.fake_bin}:/usr/bin:/bin",
+            "PINNED_UV_VERSION": UV_VERSION,
+            "UV_EXECUTABLE": str(uv_bin_dir / "uv"),
+        }
+    )
+
+    result = _run_runtime_payload(fixture, environment=environment)
+
+    assert result.returncode == 2
+    assert "unexpected ignored path: NeMo-RL:nemo_rl.egg-info" in result.stderr
+    assert ignored_artifact.is_symlink()
+    assert list(escaped_target.iterdir()) == []
+    assert not fixture.copied_project_root.exists()
+
+
+def test_runtime_payload_cleans_workspace_after_late_uv_failure(tmp_path: Path) -> None:
+    fixture = _stage_runtime_payload_fixture(
+        tmp_path,
+        verifier_body="#!/bin/sh\nexit 0\n",
+    )
+    uv_executable = tmp_path / f"uv-{UV_VERSION}-733" / "uv"
+    fake_uv_template = tmp_path / "fake-uv"
+    python_install_dir = tmp_path / "uv-python-installations"
+    base_python = (
+        python_install_dir
+        / f"cpython-{PYTHON_VERSION}-linux-aarch64-gnu"
+        / "bin"
+        / f"python{'.'.join(PYTHON_VERSION.split('.')[:2])}"
+    )
+    _write_executable(
+        fake_uv_template,
+        "#!/bin/bash\n"
+        "set -euo pipefail\n"
+        'case "${1:-}" in\n'
+        "  --version)\n"
+        f"    printf 'uv {UV_VERSION} (fixture)\\n'\n"
+        "    ;;\n"
+        "  python)\n"
+        '    case "${2:-}" in\n'
+        "      install)\n"
+        f"        base_python={base_python}\n"
+        '        mkdir -p "$(dirname "${base_python}")"\n'
+        f"        printf '%s\\n' '#!/bin/sh' 'printf \"{PYTHON_VERSION}\\\\n\"' >\"${{base_python}}\"\n"
+        '        chmod 755 "${base_python}"\n'
+        "        ;;\n"
+        "      find)\n"
+        f"        printf '%s\\n' {base_python}\n"
+        "        ;;\n"
+        "      *) exit 94 ;;\n"
+        "    esac\n"
+        "    ;;\n"
+        "  run)\n"
+        '    mkdir -p "${UV_PROJECT_ENVIRONMENT}"\n'
+        "    exit 93\n"
+        "    ;;\n"
+        "  *) exit 94 ;;\n"
+        "esac\n",
+    )
+    _write_executable(
+        fixture.fake_bin / "curl",
+        "#!/bin/bash\n"
+        "set -euo pipefail\n"
+        "output=\n"
+        "while (($#)); do\n"
+        "  if [[ \"$1\" == '-o' ]]; then\n"
+        "    shift\n"
+        "    output=$1\n"
+        "  fi\n"
+        "  shift\n"
+        "done\n"
+        "printf '%s\\n' '#!/bin/sh' 'set -eu' "
+        "'mkdir -p \"$UV_UNMANAGED_INSTALL\"' "
+        '\'cp "$FAKE_UV_TEMPLATE" "$UV_UNMANAGED_INSTALL/uv"\' '
+        '\'chmod 755 "$UV_UNMANAGED_INSTALL/uv"\' >"${output}"\n'
+        'chmod 755 "${output}"\n',
+    )
+    _write_executable(
+        fixture.fake_bin / "mv",
+        "#!/bin/bash\n"
+        "set -euo pipefail\n"
+        "operands=()\n"
+        'for argument in "$@"; do\n'
+        '  case "${argument}" in\n'
+        "    --no-clobber|--no-target-directory|--) ;;\n"
+        '    *) operands+=("${argument}") ;;\n'
+        "  esac\n"
+        "done\n"
+        "[[ ${#operands[@]} -eq 2 ]] || exit 95\n"
+        '[[ ! -e "${operands[1]}" ]] || exit 96\n'
+        'exec /bin/mv "${operands[0]}" "${operands[1]}"\n',
+    )
+
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fixture.fake_bin}:/usr/bin:/bin",
+            "FAKE_UV_TEMPLATE": str(fake_uv_template),
+            "PINNED_UV_VERSION": UV_VERSION,
+            "UV_EXECUTABLE": str(uv_executable),
+            "UV_MANAGED_PYTHON": "1",
+            "UV_PYTHON": PYTHON_VERSION,
+            "UV_PYTHON_INSTALL_DIR": str(python_install_dir),
+            "UV_PROJECT_ENVIRONMENT": str(fixture.environment_root),
+        }
+    )
+    result = _run_runtime_payload(fixture, environment=environment)
+
+    assert result.returncode == 93, result.stderr
+    assert not fixture.environment_root.exists()
+    assert not fixture.copied_project_root.exists()
 
 
 def test_runtime_job_rejects_mutable_container_symlink(tmp_path: Path) -> None:

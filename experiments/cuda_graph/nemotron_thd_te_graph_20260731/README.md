@@ -32,6 +32,13 @@ and SHA256 digests and disables further Python downloads before resolving the
 locked training environment. This is a runtime compatibility gate, not a CUDA
 Graph result.
 
+OCI preflight job `5757613` established that exact uv 0.11.18 and managed
+Python 3.13.13 staging work, then failed before the runtime imports because the
+earlier launcher attempted to create `nemo_rl.egg-info` directly on the
+read-only snapshot. Its dependent Nano jobs `5757618` and `5757619` were
+cancelled automatically and never reached CUDA Graph execution. A new
+preflight is required before any performance or correctness result is claimed.
+
 Nano HybridEP `moe_preprocess` rows are fail-closed, while Super and the Qwen
 comparison selector may run their validated preprocess rows. Qwen dense `mlp`
 and `mamba` rows are model-incompatible. Ultra remains dependency-blocked
@@ -78,7 +85,17 @@ Run these gates before submitting a model scope.
    `never` before `uv run --locked`. The preflight uv is installed with
    `UV_UNMANAGED_INSTALL` under `ARTIFACT_DIR/uv-<version>-<job-id>` so it does
    not mutate shell profiles and concurrent preflights cannot share a mutable
-   binary directory.
+   binary directory. The canonical source snapshot remains mounted read-only.
+   Before the editable build, the preflight copies that exact snapshot to the
+   job-local `/tmp/nemo-rl-runtime-<job-id>-source`, verifies the copied
+   NeMo-RL, Bridge, and MCore commits plus the copied `uv.lock` SHA256, runs the
+   editable build from that writable copy, and removes the copy on exit. Before
+   running copied code, it rejects every pre-existing ignored path except the
+   regular, non-symlink `.source-manifest.env`; this prevents stale build
+   outputs or ignored symlinks from escaping the private workspace. The copy
+   permits setuptools to create `*.egg-info`, `build/`, and optional MCore
+   in-place extension artifacts without modifying or racing on the shared
+   snapshot.
 
    ```bash
    CONTAINER=/absolute/shared/containers/nemo_rl_nightly.sqsh \
