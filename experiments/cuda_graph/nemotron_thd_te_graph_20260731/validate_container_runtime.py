@@ -133,7 +133,9 @@ def probe_runtime(
     expected_python_install_dir: Path | None = None,
     expected_uv_version: str | None = None,
     expected_uv_executable: Path | None = None,
+    expected_nvte_with_nccl_ep: str | None = None,
     importer: Callable[[str], Any] = importlib.import_module,
+    optional_importer: Callable[[str], Any] = importlib.import_module,
     version_getter: Callable[[str], str] = importlib.metadata.version,
     interpreter_path: str | os.PathLike[str] = sys.executable,
     base_interpreter_path: str | os.PathLike[str] = DEFAULT_BASE_EXECUTABLE,
@@ -142,6 +144,39 @@ def probe_runtime(
     environment: Mapping[str, str] = os.environ,
 ) -> dict[str, Any]:
     """Import the training stack and require exactly the allocated GPUs."""
+    nvte_with_nccl_ep = environment.get("NVTE_WITH_NCCL_EP")
+    if expected_nvte_with_nccl_ep is not None:
+        if expected_nvte_with_nccl_ep not in {"0", "1"}:
+            raise RuntimeError("expected NVTE_WITH_NCCL_EP must be 0 or 1")
+        if nvte_with_nccl_ep != expected_nvte_with_nccl_ep:
+            raise RuntimeError(
+                "NVTE_WITH_NCCL_EP mismatch: "
+                f"expected {expected_nvte_with_nccl_ep}, got {nvte_with_nccl_ep!r}"
+            )
+    transformer_engine_nccl_ep_available: bool | None = None
+    if expected_nvte_with_nccl_ep is not None:
+        try:
+            optional_importer("transformer_engine.pytorch.ep")
+        except ImportError:
+            transformer_engine_nccl_ep_available = False
+        else:
+            transformer_engine_nccl_ep_available = True
+        if (
+            expected_nvte_with_nccl_ep == "0"
+            and transformer_engine_nccl_ep_available
+        ):
+            raise RuntimeError(
+                "Transformer Engine NCCL-EP module is available despite "
+                "NVTE_WITH_NCCL_EP=0"
+            )
+        if (
+            expected_nvte_with_nccl_ep == "1"
+            and not transformer_engine_nccl_ep_available
+        ):
+            raise RuntimeError(
+                "Transformer Engine NCCL-EP module is unavailable despite "
+                "NVTE_WITH_NCCL_EP=1"
+            )
     environment_root: Path | None = None
     project_root = (
         expected_project_root.resolve(strict=False)
@@ -337,6 +372,10 @@ def probe_runtime(
         "uv_version": uv_version,
         "uv_executable": str(uv_executable) if uv_executable is not None else None,
         "uv_executable_sha256": uv_executable_sha256,
+        "nvte_with_nccl_ep": nvte_with_nccl_ep,
+        "transformer_engine_nccl_ep_available": (
+            transformer_engine_nccl_ep_available
+        ),
         "runtime_prefix": str(python_prefix),
         "torch_cuda_version": getattr(torch_version, "cuda", None),
         "devices": devices,
@@ -380,6 +419,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-python-install-dir", required=True, type=Path)
     parser.add_argument("--expected-uv-version", required=True)
     parser.add_argument("--expected-uv-executable", required=True, type=Path)
+    parser.add_argument("--expected-nvte-with-nccl-ep", required=True)
     parser.add_argument("--nemo-rl-commit", required=True)
     parser.add_argument("--bridge-commit", required=True)
     parser.add_argument("--mcore-commit", required=True)
@@ -406,6 +446,7 @@ def main() -> None:
         "expected_te_commit": args.expected_te_commit,
         "expected_python_version": args.expected_python_version,
         "expected_uv_version": args.expected_uv_version,
+        "expected_nvte_with_nccl_ep": args.expected_nvte_with_nccl_ep,
         "container_device": args.container_device,
         "container_inode": args.container_inode,
         "container_size": args.container_size,
@@ -421,6 +462,7 @@ def main() -> None:
             expected_python_install_dir=args.expected_python_install_dir,
             expected_uv_version=args.expected_uv_version,
             expected_uv_executable=args.expected_uv_executable,
+            expected_nvte_with_nccl_ep=args.expected_nvte_with_nccl_ep,
         )
         te_version = runtime["packages"]["transformer_engine.pytorch"]["version"]
         if _version_pair(te_version) < (2, 16):

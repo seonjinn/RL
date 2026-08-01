@@ -235,6 +235,7 @@ runtime_environment=(
   "LD_LIBRARY_PATH=${runtime_site_packages}/nvidia/cudnn/lib:/usr/local/cuda/lib64:/usr/local/cuda/compat:/usr/local/lib:/usr/lib/x86_64-linux-gnu:/usr/lib/aarch64-linux-gnu"
   NRL_CONTAINER=1
   NRL_FORCE_REBUILD_VENVS=true
+  NVTE_WITH_NCCL_EP=0
   "PINNED_UV_VERSION=${expected_uv_version}"
   "UV_EXECUTABLE=${uv_executable}"
   UV_LINK_MODE=copy
@@ -422,6 +423,7 @@ cd "${project_root}"
   --expected-python-install-dir "${python_install_dir}" \
   --expected-uv-version "${expected_uv_version}" \
   --expected-uv-executable "${uv_executable}" \
+  --expected-nvte-with-nccl-ep "0" \
   --nemo-rl-commit "${nemo_rl_commit}" \
   --bridge-commit "${bridge_commit}" \
   --mcore-commit "${mcore_commit}" \

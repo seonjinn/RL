@@ -29,7 +29,7 @@ UV_VERSION = "0.11.18"
 CONTAINER_ENV_VARS = (
     "CONTAINER_PATH_PREFIX,UV_PROJECT_ENVIRONMENT,UV_LINK_MODE,UV_PYTHON,"
     "UV_PYTHON_INSTALL_DIR,UV_MANAGED_PYTHON,UV_PYTHON_DOWNLOADS,"
-    "PINNED_UV_VERSION,UV_EXECUTABLE,NRL_FORCE_REBUILD_VENVS"
+    "PINNED_UV_VERSION,UV_EXECUTABLE,NRL_FORCE_REBUILD_VENVS,NVTE_WITH_NCCL_EP"
 )
 DENSE_AXES = ("attn", "mlp", "mamba")
 MOE_AXES = (
@@ -543,6 +543,7 @@ def test_scope_launcher_does_not_require_host_uv(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert "COMMAND:" in result.stdout
+    assert "NVTE_WITH_NCCL_EP: 0" in result.stdout
 
 
 def test_scope_classifier_reports_pre_submission_outcomes() -> None:
@@ -1020,6 +1021,7 @@ def test_nemorl_job_wrapper_isolates_driver_on_managed_python(
             "UV_PYTHON_INSTALL_DIR": str(python_install_dir),
             "UV_MANAGED_PYTHON": "1",
             "UV_PYTHON_DOWNLOADS": "never",
+            "NVTE_WITH_NCCL_EP": "0",
             "ENVIRONMENT_LOG": str(environment_log),
         }
     )
@@ -1125,6 +1127,7 @@ def test_scope_job_wrapper_rejects_mutated_uv_before_executing_it(
             "UV_PYTHON_INSTALL_DIR": str(tmp_path / "uv-python-installations"),
             "UV_MANAGED_PYTHON": "1",
             "UV_PYTHON_DOWNLOADS": "never",
+            "NVTE_WITH_NCCL_EP": "0",
             **extra_environment,
         }
     )
@@ -1284,10 +1287,18 @@ def test_ray_and_mcore_sruns_override_image_uv_environment() -> None:
     assert ray_submission.count(r'export PATH="\${CONTAINER_PATH_PREFIX}:\$PATH"') == 2
 
     nemorl_wrapper = (EXPERIMENT_DIR / "scripts" / "run_nemorl_scope.sub").read_text()
+    assert (
+        ': "${NVTE_WITH_NCCL_EP:?run_scope.sh must export NVTE_WITH_NCCL_EP}"'
+        in nemorl_wrapper
+    )
     assert f"CONTAINER_ENV_VARS={CONTAINER_ENV_VARS}" in nemorl_wrapper
     assert "export CONTAINER_ENV_VARS" in nemorl_wrapper
 
     mcore_wrapper = (EXPERIMENT_DIR / "scripts" / "run_mcore_scope.sub").read_text()
+    assert (
+        ': "${NVTE_WITH_NCCL_EP:?run_scope.sh must export NVTE_WITH_NCCL_EP}"'
+        in mcore_wrapper
+    )
     assert f"CONTAINER_ENV_VARS={CONTAINER_ENV_VARS}" in mcore_wrapper
     assert mcore_wrapper.count('"--container-env=${CONTAINER_ENV_VARS}"') == 2
     assert 'export PATH="${CONTAINER_PATH_PREFIX}:$PATH"' in mcore_wrapper

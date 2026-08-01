@@ -87,8 +87,11 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
                     python_base_executable.read_bytes()
                 ).hexdigest(),
                 "expected_uv_version": UV_VERSION,
+                "expected_nvte_with_nccl_ep": "0",
                 "uv_version": UV_VERSION,
                 "uv_executable": str(uv_executable),
+                "nvte_with_nccl_ep": "0",
+                "transformer_engine_nccl_ep_available": False,
                 "uv_executable_sha256": hashlib.sha256(
                     uv_executable.read_bytes()
                 ).hexdigest(),
@@ -135,6 +138,44 @@ def test_validator_accepts_exact_preflight_artifact_without_rehashing_container(
 
     assert result["status"] == "passed"
     assert result["transformer_engine_vcs_commit"] == TE_COMMIT
+    assert result["nvte_with_nccl_ep"] == "0"
+    assert result["transformer_engine_nccl_ep_available"] is False
+
+
+def test_validator_rejects_wrong_nvte_nccl_ep_policy(tmp_path: Path) -> None:
+    module = _load_module()
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(tmp_path)
+    payload = json.loads(attestation.read_text())
+    payload["nvte_with_nccl_ep"] = "1"
+    attestation.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="attestation provenance mismatch"):
+        module.validate_attestation(
+            attestation=attestation,
+            container=container,
+            expected_container_sha256=CONTAINER_SHA256,
+            nemo_rl_commit=NEMORL_COMMIT,
+            bridge_commit=BRIDGE_COMMIT,
+            mcore_commit=MCORE_COMMIT,
+            uv_lock=lock,
+            expected_te_commit=TE_COMMIT,
+            expected_device_count=4,
+            expected_python_version=PYTHON_VERSION,
+            expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
+            expected_nvte_with_nccl_ep="0",
+        )
+
+    module._require_nvte_environment(
+        expected_nvte_with_nccl_ep="0",
+        environment={"NVTE_WITH_NCCL_EP": "0"},
+    )
+    with pytest.raises(ValueError, match="process environment mismatch"):
+        module._require_nvte_environment(
+            expected_nvte_with_nccl_ep="0",
+            environment={},
+        )
 
 
 def test_validator_rejects_mutated_container_identity_or_uv_lock(

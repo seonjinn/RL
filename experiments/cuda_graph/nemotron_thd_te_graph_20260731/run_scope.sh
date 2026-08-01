@@ -41,6 +41,7 @@ SBATCH_TEST_ONLY=${SBATCH_TEST_ONLY:-0}
 RUN_TAG=${RUN_TAG:-$(date -u +%Y%m%dT%H%M%SZ)}
 RUN_GROUP=${RUN_GROUP:-adhoc-${MODEL}-${MODE}-${CLUSTER}-${RUN_TAG}}
 REPEAT_INDEX=${REPEAT_INDEX:-0}
+NVTE_WITH_NCCL_EP=0
 
 [[ "${RUN_GROUP}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || \
   fail "RUN_GROUP must be filesystem-safe"
@@ -295,6 +296,7 @@ runtime_attestation_command=(
   --expected-python-install-dir "${MANAGED_PYTHON_INSTALL_DIR}"
   --expected-uv-version "${PINNED_UV_VERSION}"
   --expected-uv-executable "${UV_EXECUTABLE}"
+  --expected-nvte-with-nccl-ep "${NVTE_WITH_NCCL_EP}"
 )
 printf -v RUNTIME_ATTESTATION_COMMAND '%q ' "${runtime_attestation_command[@]}"
 RUNTIME_ATTESTATION_COMMAND=${RUNTIME_ATTESTATION_COMMAND% }
@@ -340,6 +342,7 @@ printf 'MANAGED_PYTHON_VERSION: %s\n' "${MANAGED_PYTHON_VERSION}"
 printf 'MANAGED_PYTHON_INSTALL_DIR: %s\n' "${MANAGED_PYTHON_INSTALL_DIR}"
 printf 'PINNED_UV_VERSION: %s\n' "${PINNED_UV_VERSION}"
 printf 'UV_EXECUTABLE: %s\n' "${UV_EXECUTABLE}"
+printf 'NVTE_WITH_NCCL_EP: %s\n' "${NVTE_WITH_NCCL_EP}"
 printf 'COMMAND: %q\n' "${COMMAND}"
 printf 'SBATCH:'
 printf ' %q' "${sbatch_command[@]}"
@@ -387,6 +390,7 @@ mkdir -p "${run_log_dir}"
   printf 'managed_python_install_dir=%s\n' "${MANAGED_PYTHON_INSTALL_DIR}"
   printf 'pinned_uv_version=%s\n' "${PINNED_UV_VERSION}"
   printf 'uv_executable=%s\n' "${UV_EXECUTABLE}"
+  printf 'nvte_with_nccl_ep=%s\n' "${NVTE_WITH_NCCL_EP}"
 } >"${run_log_dir}/run-metadata.env"
 export COMMAND CONTAINER CONTAINER_SHA256 MOUNTS RUNTIME_ATTESTATION_COMMAND
 export BASE_LOG_DIR=${run_log_dir}
@@ -402,6 +406,7 @@ export UV_PYTHON_INSTALL_DIR=${MANAGED_PYTHON_INSTALL_DIR}
 export UV_MANAGED_PYTHON=1
 export UV_PYTHON_DOWNLOADS=never
 export PINNED_UV_VERSION UV_EXECUTABLE
+export NVTE_WITH_NCCL_EP
 export SOURCE_PROVENANCE_VERIFIER=${source_provenance_verifier}
 job_id=$("${sbatch_command[@]}")
 printf 'SLURM_JOB_ID: %s\n' "${job_id}"

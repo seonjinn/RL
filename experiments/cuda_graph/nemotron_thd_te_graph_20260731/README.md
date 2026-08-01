@@ -17,6 +17,9 @@ The MCore branch is pinned at `e835b64c55a5c3fc23da573d8c3e5e9c2e706694`
 and the Bridge branch at `51481de3d8b0bd5139f9ac9c8dbc4e7d442e0712`.
 The outer project pins official Transformer Engine main commit
 `bffde8f4a0a4eea9036dc753e28269247e5de69d` (2.19 development metadata).
+The NeMo-RL experiment branch includes official main commit
+`c6b56da14996a986859c286c600764604f953024` in merge commit
+`bbe03ac0fd7677d17e055052f6440e23182e59c9`.
 The local experiment suite passes; Linux/GB200 runtime, correctness, and
 performance results are still pending and must not be inferred from local
 tests.
@@ -31,6 +34,17 @@ then stages uv-managed 3.13.13 once under
 and SHA256 digests and disables further Python downloads before resolving the
 locked training environment. This is a runtime compatibility gate, not a CUDA
 Graph result.
+
+The 2026-08-01 ARM64 nightly registry manifest
+`sha256:c787746e29131704d14d6500eab2ff8f2476ab9cc396d746026d2d9c2103645b`
+advertises NCCL 2.30.4. Transformer Engine commit `bffde8f4` pins an optional
+NCCL-EP extension that uses a public API added in NCCL 2.30.7, so the approved
+HybridEP experiment contract sets `NVTE_WITH_NCCL_EP=0`. This disables only
+that unused optional TE NCCL-EP extension; TE partial CUDA Graph capture for
+attention, Mamba, and the supported MoE scopes remains enabled. The preflight
+attests the exact value and verifies that the built TE NCCL-EP module is absent.
+Each leaf forwards the value through Ray to every worker environment before any
+editable TE build.
 
 OCI preflight job `5757613` established that exact uv 0.11.18 and managed
 Python 3.13.13 staging work, then failed before the runtime imports because the

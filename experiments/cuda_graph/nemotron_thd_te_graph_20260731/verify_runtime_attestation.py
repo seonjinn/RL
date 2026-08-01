@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -41,6 +42,17 @@ REQUIRED_PACKAGES = frozenset(
         "grouped_gemm",
     )
 )
+
+
+def _require_nvte_environment(
+    *, expected_nvte_with_nccl_ep: str, environment: Mapping[str, str]
+) -> None:
+    actual = environment.get("NVTE_WITH_NCCL_EP")
+    if actual != expected_nvte_with_nccl_ep:
+        raise ValueError(
+            "NVTE_WITH_NCCL_EP process environment mismatch: "
+            f"expected {expected_nvte_with_nccl_ep}, got {actual!r}"
+        )
 
 
 def _sha256(path: Path) -> str:
@@ -116,6 +128,7 @@ def validate_attestation(
     expected_python_install_dir: Path,
     expected_uv_version: str,
     expected_uv_executable: Path,
+    expected_nvte_with_nccl_ep: str = "0",
 ) -> dict[str, Any]:
     """Require exact source, image, TE, GPU, and worker-stack provenance."""
     if FULL_SHA256.fullmatch(expected_container_sha256) is None:
@@ -148,6 +161,8 @@ def validate_attestation(
         )
     if re.fullmatch(r"\d+\.\d+\.\d+", expected_uv_version) is None:
         raise ValueError("expected uv version must be an exact X.Y.Z version")
+    if expected_nvte_with_nccl_ep not in {"0", "1"}:
+        raise ValueError("expected NVTE_WITH_NCCL_EP must be 0 or 1")
     if not expected_uv_executable.is_absolute():
         raise ValueError("expected uv executable must be absolute")
     if expected_uv_executable.is_symlink():
@@ -180,6 +195,11 @@ def validate_attestation(
         "expected_uv_version": expected_uv_version,
         "uv_version": expected_uv_version,
         "uv_executable": str(expected_uv_executable),
+        "expected_nvte_with_nccl_ep": expected_nvte_with_nccl_ep,
+        "nvte_with_nccl_ep": expected_nvte_with_nccl_ep,
+        "transformer_engine_nccl_ep_available": (
+            expected_nvte_with_nccl_ep == "1"
+        ),
     }
     mismatches = {
         key: {"expected": expected, "actual": payload.get(key)}
@@ -294,11 +314,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-python-install-dir", required=True, type=Path)
     parser.add_argument("--expected-uv-version", required=True)
     parser.add_argument("--expected-uv-executable", required=True, type=Path)
+    parser.add_argument("--expected-nvte-with-nccl-ep", required=True)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    _require_nvte_environment(
+        expected_nvte_with_nccl_ep=args.expected_nvte_with_nccl_ep,
+        environment=os.environ,
+    )
     payload = validate_attestation(
         attestation=args.attestation,
         container=args.container,
@@ -313,6 +338,7 @@ def main() -> None:
         expected_python_install_dir=args.expected_python_install_dir,
         expected_uv_version=args.expected_uv_version,
         expected_uv_executable=args.expected_uv_executable,
+        expected_nvte_with_nccl_ep=args.expected_nvte_with_nccl_ep,
     )
     print(json.dumps(payload, sort_keys=True))
 

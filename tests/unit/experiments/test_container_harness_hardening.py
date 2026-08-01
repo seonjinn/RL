@@ -329,6 +329,8 @@ def test_runtime_probe_requires_exact_uv_managed_python(tmp_path: Path) -> None:
         expected_python_install_dir=python_install_dir,
         expected_uv_version=UV_VERSION,
         expected_uv_executable=uv_executable,
+        expected_nvte_with_nccl_ep="0",
+        optional_importer=lambda name: (_ for _ in ()).throw(ImportError(name)),
         importer=lambda name: modules[name],
         version_getter=lambda distribution: f"fixture-{distribution}",
         interpreter_path=environment_root / "bin" / "python",
@@ -342,6 +344,7 @@ def test_runtime_probe_requires_exact_uv_managed_python(tmp_path: Path) -> None:
             "UV_PYTHON_DOWNLOADS": "never",
             "PINNED_UV_VERSION": UV_VERSION,
             "UV_EXECUTABLE": str(uv_executable),
+            "NVTE_WITH_NCCL_EP": "0",
         },
     )
 
@@ -350,6 +353,8 @@ def test_runtime_probe_requires_exact_uv_managed_python(tmp_path: Path) -> None:
     assert result["uv_python_install_dir"] == str(python_install_dir)
     assert result["uv_version"] == UV_VERSION
     assert result["uv_executable"] == str(uv_executable)
+    assert result["nvte_with_nccl_ep"] == "0"
+    assert result["transformer_engine_nccl_ep_available"] is False
     assert (
         result["uv_executable_sha256"]
         == hashlib.sha256(uv_executable.read_bytes()).hexdigest()
@@ -358,6 +363,21 @@ def test_runtime_probe_requires_exact_uv_managed_python(tmp_path: Path) -> None:
         result["python_base_executable_sha256"]
         == hashlib.sha256(base_python.read_bytes()).hexdigest()
     )
+
+    with pytest.raises(RuntimeError, match="NVTE_WITH_NCCL_EP mismatch"):
+        module.probe_runtime(
+            expected_device_count=4,
+            expected_nvte_with_nccl_ep="0",
+            environment={"NVTE_WITH_NCCL_EP": "1"},
+        )
+
+    with pytest.raises(RuntimeError, match="NCCL-EP module is available"):
+        module.probe_runtime(
+            expected_device_count=4,
+            expected_nvte_with_nccl_ep="0",
+            optional_importer=lambda name: SimpleNamespace(__name__=name),
+            environment={"NVTE_WITH_NCCL_EP": "0"},
+        )
 
     with pytest.raises(RuntimeError, match="Python version mismatch"):
         module.probe_runtime(
@@ -545,6 +565,7 @@ printf '{"status":"passed"}\n' >"${output}"
     assert "UV_CACHE_DIR=/tmp" not in command
     assert "CUDA_HOME=/usr/local/cuda" in command
     assert "NRL_FORCE_REBUILD_VENVS=true" in command
+    assert "NVTE_WITH_NCCL_EP=0" in command
     assert "UV_PROJECT_ENVIRONMENT=/tmp/nemo-rl-runtime-733" in command
     expected_uv_executable = artifact_dir / f"uv-{UV_VERSION}-733" / "uv"
     assert f"PINNED_UV_VERSION={UV_VERSION}" in command
@@ -586,6 +607,7 @@ printf '{"status":"passed"}\n' >"${output}"
     assert '--expected-python-install-dir "${python_install_dir}"' in command
     assert '--expected-uv-version "${expected_uv_version}"' in command
     assert '--expected-uv-executable "${uv_executable}"' in command
+    assert '--expected-nvte-with-nccl-ep "0"' in command
     assert '--container-device "${container_device}"' in command
     assert '--container-inode "${container_inode}"' in command
     assert '--container-size "${container_size}"' in command
