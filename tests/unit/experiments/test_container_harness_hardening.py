@@ -35,6 +35,7 @@ class RuntimePayloadFixture:
     environment_root: Path
     copied_project_root: Path
     fake_bin: Path
+    cuda_home: Path
 
 
 def _load_runtime_probe() -> ModuleType:
@@ -163,6 +164,12 @@ def _stage_runtime_payload_fixture(
         fake_bin / "sha256sum",
         '#!/bin/sh\nexec /usr/bin/shasum -a 256 "$@"\n',
     )
+    cuda_home = tmp_path / "cuda"
+    cuda_home.joinpath("bin").mkdir(parents=True)
+    _write_executable(
+        cuda_home / "bin" / "nvcc",
+        "#!/bin/sh\nprintf 'Cuda compilation tools, fixture release 13.2\\n'\n",
+    )
     return RuntimePayloadFixture(
         source_project_root=source_project_root,
         source_validator=source_validator,
@@ -170,6 +177,7 @@ def _stage_runtime_payload_fixture(
         environment_root=environment_root,
         copied_project_root=Path(f"{environment_root}-source"),
         fake_bin=fake_bin,
+        cuda_home=cuda_home,
     )
 
 
@@ -179,6 +187,12 @@ def _run_runtime_payload(
     environment: dict[str, str],
     uv_lock_sha256: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    runtime_environment = environment.copy()
+    runtime_environment.setdefault("CUDA_HOME", str(fixture.cuda_home))
+    runtime_environment.setdefault("CUDACXX", str(fixture.cuda_home / "bin" / "nvcc"))
+    runtime_environment["PATH"] = (
+        f"{fixture.cuda_home / 'bin'}:{runtime_environment.get('PATH', '')}"
+    )
     expected_uv_lock_sha256 = (
         uv_lock_sha256 or hashlib.sha256(fixture.source_lock.read_bytes()).hexdigest()
     )
@@ -206,7 +220,7 @@ def _run_runtime_payload(
             "--output",
             str(fixture.source_project_root.parent / "runtime.json"),
         ],
-        env=environment,
+        env=runtime_environment,
         check=False,
         capture_output=True,
         text=True,
@@ -377,10 +391,7 @@ def test_runtime_probe_requires_exact_uv_managed_python(tmp_path: Path) -> None:
             expected_device_count=4,
             expected_nvte_with_nccl_ep="0",
             optional_importer=lambda name: SimpleNamespace(
-                **{
-                    symbol: object()
-                    for symbol in module.NCCL_EP_EXTENSION_SYMBOLS
-                }
+                **{symbol: object() for symbol in module.NCCL_EP_EXTENSION_SYMBOLS}
             ),
             environment={"NVTE_WITH_NCCL_EP": "0"},
         )
@@ -565,11 +576,12 @@ printf '{"status":"passed"}\n' >"${output}"
     assert "env -i" in command
     assert "HOME=/root" in command
     assert (
-        "PATH=/root/.local/bin:/usr/local/bin:/usr/bin:/bin:"
+        "PATH=/root/.local/bin:/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin:"
         "/opt/nemo_rl_venv/bin" in command
     )
     assert "UV_CACHE_DIR=/tmp" not in command
     assert "CUDA_HOME=/usr/local/cuda" in command
+    assert "CUDACXX=/usr/local/cuda/bin/nvcc" in command
     assert "NRL_FORCE_REBUILD_VENVS=true" in command
     assert "NVTE_WITH_NCCL_EP=0" in command
     assert "UV_PROJECT_ENVIRONMENT=/tmp/nemo-rl-runtime-733" in command
@@ -642,6 +654,38 @@ printf '{"status":"passed"}\n' >"${output}"
         ),
         MCORE_COMMIT,
     ]
+
+
+def test_runtime_payload_rejects_missing_nvcc_before_staging_uv(
+    tmp_path: Path,
+) -> None:
+    fixture = _stage_runtime_payload_fixture(
+        tmp_path,
+        verifier_body="#!/bin/sh\nexit 0\n",
+    )
+    uv_stage_marker = tmp_path / "uv-stage-started"
+    _write_executable(
+        fixture.fake_bin / "curl",
+        '#!/bin/sh\nprintf started >"${UV_STAGE_MARKER}"\nexit 97\n',
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fixture.fake_bin}:/usr/bin:/bin",
+            "CUDA_HOME": str(tmp_path / "missing-cuda"),
+            "CUDACXX": "",
+            "UV_STAGE_MARKER": str(uv_stage_marker),
+            "PINNED_UV_VERSION": UV_VERSION,
+            "UV_EXECUTABLE": str(tmp_path / f"uv-{UV_VERSION}-733" / "uv"),
+        }
+    )
+
+    result = _run_runtime_payload(fixture, environment=environment)
+
+    assert result.returncode == 2
+    assert "nvcc" in result.stderr.lower()
+    assert not uv_stage_marker.exists()
+    assert not fixture.copied_project_root.exists()
 
 
 def test_runtime_payload_rejects_preseeded_uv_without_executing_it(

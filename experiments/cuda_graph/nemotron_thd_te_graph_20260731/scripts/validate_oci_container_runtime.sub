@@ -227,8 +227,9 @@ runtime_environment=(
   /usr/bin/env
   -i
   HOME=/root
-  PATH=/root/.local/bin:/usr/local/bin:/usr/bin:/bin:/opt/nemo_rl_venv/bin
+  PATH=/root/.local/bin:/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin:/opt/nemo_rl_venv/bin
   CUDA_HOME=/usr/local/cuda
+  CUDACXX=/usr/local/cuda/bin/nvcc
   CPLUS_INCLUDE_PATH=/usr/local/cuda/include/cccl
   "CUDNN_HOME=${runtime_site_packages}/nvidia/cudnn"
   "CUDNN_PATH=${runtime_site_packages}/nvidia/cudnn"
@@ -273,6 +274,25 @@ if [[ "${output_flag}" != "--output" ]]; then
 fi
 if [[ "${source_validator}" != "${source_project_root}/"* ]]; then
   echo "Runtime probe validator must be inside the immutable source root" >&2
+  exit 2
+fi
+cuda_home=${CUDA_HOME:-}
+cuda_compiler=${CUDACXX:-}
+if [[ -z "${cuda_home}" || "${cuda_home}" != /* ]]; then
+  echo "Runtime probe requires an absolute CUDA_HOME" >&2
+  exit 2
+fi
+if [[ "${cuda_compiler}" != "${cuda_home%/}/bin/nvcc" ]]; then
+  echo "CUDACXX must name CUDA_HOME/bin/nvcc" >&2
+  exit 2
+fi
+if [[ ! -x "${cuda_compiler}" ]]; then
+  echo "CUDA compiler is missing or not executable: ${cuda_compiler}" >&2
+  exit 2
+fi
+path_cuda_compiler=$(command -v nvcc || true)
+if [[ "${path_cuda_compiler}" != "${cuda_compiler}" ]]; then
+  echo "PATH nvcc does not match CUDACXX: ${path_cuda_compiler:-missing}" >&2
   exit 2
 fi
 validator_relative_path=${source_validator#"${source_project_root}/"}
