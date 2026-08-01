@@ -25,6 +25,12 @@ NEMORL_SHA = "0" * 40
 TE_SHA = "e" * 40
 CONTAINER_SHA256 = "32f07be22293d9a3979e8ba04772ad48a8157dad04fd92577063ed4e07ab1493"
 PYTHON_VERSION = "3.13.13"
+UV_VERSION = "0.11.18"
+CONTAINER_ENV_VARS = (
+    "CONTAINER_PATH_PREFIX,UV_PROJECT_ENVIRONMENT,UV_LINK_MODE,UV_PYTHON,"
+    "UV_PYTHON_INSTALL_DIR,UV_MANAGED_PYTHON,UV_PYTHON_DOWNLOADS,"
+    "PINNED_UV_VERSION,UV_EXECUTABLE,NRL_FORCE_REBUILD_VENVS"
+)
 DENSE_AXES = ("attn", "mlp", "mamba")
 MOE_AXES = (
     (),
@@ -820,6 +826,16 @@ def test_leaf_job_depends_on_one_exact_runtime_preflight_artifact(
         "--expected-python-install-dir "
         "/lustre/example/runtime/uv-python-installations" in runtime_attestation_command
     )
+    assert f"PINNED_UV_VERSION: {UV_VERSION}" in result.stdout
+    assert (
+        "UV_EXECUTABLE: /lustre/example/runtime/"
+        f"uv-{UV_VERSION}-733/uv" in result.stdout
+    )
+    assert f"--expected-uv-version {UV_VERSION}" in runtime_attestation_command
+    assert (
+        "--expected-uv-executable /lustre/example/runtime/"
+        f"uv-{UV_VERSION}-733/uv" in runtime_attestation_command
+    )
 
 
 def test_leaf_job_rejects_unmounted_managed_python_installation(
@@ -930,6 +946,8 @@ def test_nemorl_job_wrapper_requires_managed_python_contract(tmp_path: Path) -> 
         }
     )
     for variable in (
+        "PINNED_UV_VERSION",
+        "UV_EXECUTABLE",
         "UV_PYTHON",
         "UV_PYTHON_INSTALL_DIR",
         "UV_MANAGED_PYTHON",
@@ -949,7 +967,7 @@ def test_nemorl_job_wrapper_requires_managed_python_contract(tmp_path: Path) -> 
     )
 
     assert result.returncode != 0
-    assert "UV_PYTHON" in result.stderr
+    assert "PINNED_UV_VERSION" in result.stderr
 
 
 def test_nemorl_job_wrapper_isolates_driver_on_managed_python(
@@ -958,12 +976,16 @@ def test_nemorl_job_wrapper_isolates_driver_on_managed_python(
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     (repo_root / ".python-version").write_text(f"{PYTHON_VERSION}\n")
+    (repo_root / "docker").mkdir()
+    (repo_root / "docker" / "Dockerfile").write_text(f"ARG UV_VERSION={UV_VERSION}\n")
     environment_log = tmp_path / "managed-python.env"
     (repo_root / "ray.sub").write_text(
         "#!/bin/bash\n"
         "printf '%s\\n' \"${UV_PROJECT_ENVIRONMENT:-}\" "
         '"${UV_PYTHON:-}" "${UV_PYTHON_INSTALL_DIR:-}" '
         '"${UV_MANAGED_PYTHON:-}" "${UV_PYTHON_DOWNLOADS:-}" '
+        '"${CONTAINER_ENV_VARS:-}" '
+        '"${CONTAINER_PATH_PREFIX:-}" '
         '"${PATH:-}" '
         '>"${ENVIRONMENT_LOG}"\n'
     )
@@ -973,6 +995,10 @@ def test_nemorl_job_wrapper_isolates_driver_on_managed_python(
     fake_srun.write_text("#!/bin/bash\nexit 0\n")
     fake_srun.chmod(0o755)
     python_install_dir = tmp_path / "uv-python-installations"
+    uv_executable = tmp_path / f"uv-{UV_VERSION}-733" / "uv"
+    uv_executable.parent.mkdir(parents=True)
+    uv_executable.write_text(f"#!/bin/sh\nprintf 'uv {UV_VERSION} (fixture)\\n'\n")
+    uv_executable.chmod(0o755)
     environment = os.environ.copy()
     environment.update(
         {
@@ -988,6 +1014,8 @@ def test_nemorl_job_wrapper_isolates_driver_on_managed_python(
             "EXPECTED_BRIDGE_SHA": BRIDGE_SHA,
             "EXPECTED_MCORE_SHA": MCORE_SHA,
             "SOURCE_PROVENANCE_VERIFIER": "/usr/bin/true",
+            "PINNED_UV_VERSION": UV_VERSION,
+            "UV_EXECUTABLE": str(uv_executable),
             "UV_PYTHON": PYTHON_VERSION,
             "UV_PYTHON_INSTALL_DIR": str(python_install_dir),
             "UV_MANAGED_PYTHON": "1",
@@ -1010,17 +1038,109 @@ def test_nemorl_job_wrapper_isolates_driver_on_managed_python(
 
     assert result.returncode == 0, result.stderr
     environment_lines = environment_log.read_text().splitlines()
-    assert environment_lines[:5] == [
+    assert environment_lines[:7] == [
         "/tmp/nemo-rl-driver-733",
         PYTHON_VERSION,
         str(python_install_dir),
         "1",
         "never",
+        CONTAINER_ENV_VARS,
+        str(uv_executable.parent),
     ]
-    assert environment_lines[5].split(":")[:2] == [
-        "/root/.local/bin",
-        "/opt/nemo_rl_venv/bin",
-    ]
+    assert environment_lines[7].split(":")[0] == str(fake_bin)
+
+
+@pytest.mark.parametrize(
+    ("wrapper_name", "extra_environment"),
+    (
+        ("run_nemorl_scope.sub", {}),
+        ("run_mcore_scope.sub", {"SLURM_JOB_NUM_NODES": "1"}),
+    ),
+)
+def test_scope_job_wrapper_rejects_mutated_uv_before_executing_it(
+    tmp_path: Path,
+    wrapper_name: str,
+    extra_environment: dict[str, str],
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / ".python-version").write_text(f"{PYTHON_VERSION}\n")
+    (repo_root / "docker").mkdir()
+    (repo_root / "docker" / "Dockerfile").write_text(f"ARG UV_VERSION={UV_VERSION}\n")
+    (repo_root / "ray.sub").write_text("#!/bin/bash\nexit 0\n")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_srun = fake_bin / "srun"
+    fake_srun.write_text(
+        "#!/bin/bash\n"
+        "while (( $# > 0 )); do\n"
+        '  if [[ "$1" == /bin/bash ]]; then\n'
+        '    exec "$@"\n'
+        "  fi\n"
+        "  shift\n"
+        "done\n"
+        "exit 97\n"
+    )
+    fake_srun.chmod(0o755)
+
+    execution_marker = tmp_path / "mutated-uv-executed"
+    uv_executable = tmp_path / f"uv-{UV_VERSION}-812" / "uv"
+    uv_executable.parent.mkdir(parents=True)
+    uv_executable.write_text(
+        "#!/bin/sh\n"
+        'printf executed >"${UV_EXECUTION_MARKER}"\n'
+        f"printf 'uv {UV_VERSION} (mutated fixture)\\n'\n"
+    )
+    uv_executable.chmod(0o755)
+    host_execution_marker = tmp_path / "unattested-path-command-executed"
+    sibling_srun = uv_executable.parent / "srun"
+    sibling_srun.write_text(
+        '#!/bin/sh\nprintf executed >"${HOST_EXECUTION_MARKER}"\nexit 72\n'
+    )
+    sibling_srun.chmod(0o755)
+
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "SLURM_JOB_ID": "812",
+            "COMMAND": "true",
+            "CONTAINER": "/lustre/example/nightly.sqsh",
+            "CONTAINER_SHA256": CONTAINER_SHA256,
+            "MOUNTS": "/lustre:/lustre",
+            "RUNTIME_ATTESTATION_COMMAND": (
+                'echo "uv executable SHA256 mismatch" >&2; exit 73'
+            ),
+            "REPO_ROOT": str(repo_root),
+            "EXPECTED_NEMORL_SHA": NEMORL_SHA,
+            "EXPECTED_BRIDGE_SHA": BRIDGE_SHA,
+            "EXPECTED_MCORE_SHA": MCORE_SHA,
+            "SOURCE_PROVENANCE_VERIFIER": "/usr/bin/true",
+            "PINNED_UV_VERSION": UV_VERSION,
+            "UV_EXECUTABLE": str(uv_executable),
+            "UV_EXECUTION_MARKER": str(execution_marker),
+            "HOST_EXECUTION_MARKER": str(host_execution_marker),
+            "UV_PYTHON": PYTHON_VERSION,
+            "UV_PYTHON_INSTALL_DIR": str(tmp_path / "uv-python-installations"),
+            "UV_MANAGED_PYTHON": "1",
+            "UV_PYTHON_DOWNLOADS": "never",
+            **extra_environment,
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(EXPERIMENT_DIR / "scripts" / wrapper_name)],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 73
+    assert "uv executable SHA256 mismatch" in result.stderr
+    assert not execution_marker.exists()
+    assert not host_execution_marker.exists()
 
 
 def test_source_snapshot_copies_exact_recursive_gitlinks_and_writes_manifest(
@@ -1154,6 +1274,24 @@ def test_ray_submission_has_no_global_singleton_dependency() -> None:
     ray_submission = (REPO_ROOT / "ray.sub").read_text()
 
     assert "#SBATCH --dependency=singleton" not in ray_submission
+
+
+def test_ray_and_mcore_sruns_override_image_uv_environment() -> None:
+    ray_submission = (REPO_ROOT / "ray.sub").read_text()
+    assert 'CONTAINER_ENV_VARS="${CONTAINER_ENV_VARS:-}"' in ray_submission
+    assert "--container-env=$CONTAINER_ENV_VARS" in ray_submission
+    assert "invalid CONTAINER_ENV_VARS" in ray_submission
+    assert ray_submission.count(r'export PATH="\${CONTAINER_PATH_PREFIX}:\$PATH"') == 2
+
+    nemorl_wrapper = (EXPERIMENT_DIR / "scripts" / "run_nemorl_scope.sub").read_text()
+    assert f"CONTAINER_ENV_VARS={CONTAINER_ENV_VARS}" in nemorl_wrapper
+    assert "export CONTAINER_ENV_VARS" in nemorl_wrapper
+
+    mcore_wrapper = (EXPERIMENT_DIR / "scripts" / "run_mcore_scope.sub").read_text()
+    assert f"CONTAINER_ENV_VARS={CONTAINER_ENV_VARS}" in mcore_wrapper
+    assert mcore_wrapper.count('"--container-env=${CONTAINER_ENV_VARS}"') == 2
+    assert 'export PATH="${CONTAINER_PATH_PREFIX}:$PATH"' in mcore_wrapper
+    assert "bash -lc" not in mcore_wrapper
 
 
 def test_cluster_profiles_render_cluster_specific_gres_and_segment_contracts() -> None:

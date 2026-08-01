@@ -24,6 +24,7 @@ MCORE_COMMIT = "c" * 40
 TE_COMMIT = "d" * 40
 CONTAINER_SHA256 = "e" * 64
 PYTHON_VERSION = "3.13.13"
+UV_VERSION = "0.11.18"
 
 
 def _load_module() -> ModuleType:
@@ -40,7 +41,7 @@ def _load_module() -> ModuleType:
     return module
 
 
-def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     container = tmp_path / "nemo_rl_immutable.sqsh"
     container.write_bytes(b"fixture-container")
@@ -54,6 +55,10 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     )
     python_base_executable.parent.mkdir(parents=True, exist_ok=True)
     python_base_executable.write_bytes(b"managed-python-fixture")
+    uv_executable = tmp_path / f"uv-{UV_VERSION}-733" / "uv"
+    uv_executable.parent.mkdir(parents=True, exist_ok=True)
+    uv_executable.write_text(f"#!/bin/sh\nprintf 'uv {UV_VERSION} (fixture)\\n'\n")
+    uv_executable.chmod(0o755)
     attestation = tmp_path / "runtime-733.json"
     attestation.write_text(
         json.dumps(
@@ -81,6 +86,12 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
                 "python_base_executable_sha256": hashlib.sha256(
                     python_base_executable.read_bytes()
                 ).hexdigest(),
+                "expected_uv_version": UV_VERSION,
+                "uv_version": UV_VERSION,
+                "uv_executable": str(uv_executable),
+                "uv_executable_sha256": hashlib.sha256(
+                    uv_executable.read_bytes()
+                ).hexdigest(),
                 "packages": {
                     "torch": {"version": "2.11.0"},
                     "transformer_engine.pytorch": {"version": "2.19.0.dev0+bffde8f4"},
@@ -94,14 +105,14 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
             }
         )
     )
-    return attestation, container, lock, python_install_dir
+    return attestation, container, lock, python_install_dir, uv_executable
 
 
 def test_validator_accepts_exact_preflight_artifact_without_rehashing_container(
     tmp_path: Path,
 ) -> None:
     module = _load_module()
-    attestation, container, lock, python_install_dir = _fixture(tmp_path)
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(tmp_path)
     container.chmod(0)
     try:
         result = module.validate_attestation(
@@ -116,6 +127,8 @@ def test_validator_accepts_exact_preflight_artifact_without_rehashing_container(
             expected_device_count=4,
             expected_python_version=PYTHON_VERSION,
             expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
         )
     finally:
         container.chmod(0o644)
@@ -128,7 +141,7 @@ def test_validator_rejects_mutated_container_identity_or_uv_lock(
     tmp_path: Path,
 ) -> None:
     module = _load_module()
-    attestation, container, lock, python_install_dir = _fixture(tmp_path)
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(tmp_path)
     container.write_bytes(b"different-size-container")
 
     with pytest.raises(ValueError, match="container identity mismatch"):
@@ -144,9 +157,11 @@ def test_validator_rejects_mutated_container_identity_or_uv_lock(
             expected_device_count=4,
             expected_python_version=PYTHON_VERSION,
             expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
         )
 
-    attestation, container, lock, python_install_dir = _fixture(tmp_path)
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(tmp_path)
     lock.write_text("mutated-lock\n")
     with pytest.raises(ValueError, match="uv.lock SHA256 mismatch"):
         module.validate_attestation(
@@ -161,6 +176,8 @@ def test_validator_rejects_mutated_container_identity_or_uv_lock(
             expected_device_count=4,
             expected_python_version=PYTHON_VERSION,
             expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
         )
 
 
@@ -168,7 +185,7 @@ def test_validator_rejects_symlink_or_wrong_source_and_te_provenance(
     tmp_path: Path,
 ) -> None:
     module = _load_module()
-    attestation, container, lock, python_install_dir = _fixture(tmp_path)
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(tmp_path)
     symlink = tmp_path / "runtime-latest.json"
     symlink.symlink_to(attestation)
 
@@ -185,6 +202,8 @@ def test_validator_rejects_symlink_or_wrong_source_and_te_provenance(
             expected_device_count=4,
             expected_python_version=PYTHON_VERSION,
             expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
         )
 
     payload = json.loads(attestation.read_text())
@@ -203,6 +222,8 @@ def test_validator_rejects_symlink_or_wrong_source_and_te_provenance(
             expected_device_count=4,
             expected_python_version=PYTHON_VERSION,
             expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
         )
 
 
@@ -210,7 +231,7 @@ def test_validator_requires_complete_worker_stack_and_te_216_or_newer(
     tmp_path: Path,
 ) -> None:
     module = _load_module()
-    attestation, container, lock, python_install_dir = _fixture(tmp_path)
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(tmp_path)
     payload = json.loads(attestation.read_text())
     del payload["packages"]["mamba_ssm"]
     payload["packages"]["transformer_engine.pytorch"]["version"] = "2.15.0"
@@ -229,6 +250,8 @@ def test_validator_requires_complete_worker_stack_and_te_216_or_newer(
             expected_device_count=4,
             expected_python_version=PYTHON_VERSION,
             expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
         )
 
     payload["packages"]["mamba_ssm"] = {"version": "2.2.6.post3"}
@@ -246,12 +269,14 @@ def test_validator_requires_complete_worker_stack_and_te_216_or_newer(
             expected_device_count=4,
             expected_python_version=PYTHON_VERSION,
             expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
         )
 
 
 def test_validator_rejects_wrong_or_mutated_managed_python(tmp_path: Path) -> None:
     module = _load_module()
-    attestation, container, lock, python_install_dir = _fixture(tmp_path)
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(tmp_path)
     payload = json.loads(attestation.read_text())
     payload["python_version"] = "3.13.11"
     attestation.write_text(json.dumps(payload))
@@ -269,9 +294,13 @@ def test_validator_rejects_wrong_or_mutated_managed_python(tmp_path: Path) -> No
             expected_device_count=4,
             expected_python_version=PYTHON_VERSION,
             expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
         )
 
-    attestation, container, lock, python_install_dir = _fixture(tmp_path / "hash")
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(
+        tmp_path / "hash"
+    )
     payload = json.loads(attestation.read_text())
     Path(payload["python_base_executable"]).write_bytes(b"mutated-python")
 
@@ -288,12 +317,16 @@ def test_validator_rejects_wrong_or_mutated_managed_python(tmp_path: Path) -> No
             expected_device_count=4,
             expected_python_version=PYTHON_VERSION,
             expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
         )
 
 
 def test_validator_rejects_symlinked_managed_python_paths(tmp_path: Path) -> None:
     module = _load_module()
-    attestation, container, lock, python_install_dir = _fixture(tmp_path / "install")
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(
+        tmp_path / "install"
+    )
     linked_install_dir = tmp_path / "install" / "uv-python-installations-link"
     linked_install_dir.symlink_to(python_install_dir, target_is_directory=True)
     payload = json.loads(attestation.read_text())
@@ -313,9 +346,13 @@ def test_validator_rejects_symlinked_managed_python_paths(tmp_path: Path) -> Non
             expected_device_count=4,
             expected_python_version=PYTHON_VERSION,
             expected_python_install_dir=linked_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
         )
 
-    attestation, container, lock, python_install_dir = _fixture(tmp_path / "base")
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(
+        tmp_path / "base"
+    )
     payload = json.loads(attestation.read_text())
     python_base_executable = Path(payload["python_base_executable"])
     python_target = python_base_executable.with_name("python3.13.real")
@@ -335,4 +372,54 @@ def test_validator_rejects_symlinked_managed_python_paths(tmp_path: Path) -> Non
             expected_device_count=4,
             expected_python_version=PYTHON_VERSION,
             expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
+        )
+
+
+def test_validator_rejects_wrong_or_mutated_uv(tmp_path: Path) -> None:
+    module = _load_module()
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(
+        tmp_path / "version"
+    )
+    payload = json.loads(attestation.read_text())
+    payload["uv_version"] = "0.11.1"
+    attestation.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="attestation provenance mismatch"):
+        module.validate_attestation(
+            attestation=attestation,
+            container=container,
+            expected_container_sha256=CONTAINER_SHA256,
+            nemo_rl_commit=NEMORL_COMMIT,
+            bridge_commit=BRIDGE_COMMIT,
+            mcore_commit=MCORE_COMMIT,
+            uv_lock=lock,
+            expected_te_commit=TE_COMMIT,
+            expected_device_count=4,
+            expected_python_version=PYTHON_VERSION,
+            expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
+        )
+
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(
+        tmp_path / "hash"
+    )
+    uv_executable.write_text("mutated uv\n")
+    with pytest.raises(ValueError, match="uv executable SHA256 mismatch"):
+        module.validate_attestation(
+            attestation=attestation,
+            container=container,
+            expected_container_sha256=CONTAINER_SHA256,
+            nemo_rl_commit=NEMORL_COMMIT,
+            bridge_commit=BRIDGE_COMMIT,
+            mcore_commit=MCORE_COMMIT,
+            uv_lock=lock,
+            expected_te_commit=TE_COMMIT,
+            expected_device_count=4,
+            expected_python_version=PYTHON_VERSION,
+            expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
         )

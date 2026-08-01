@@ -23,6 +23,7 @@ BRIDGE_COMMIT = "c" * 40
 MCORE_COMMIT = "d" * 40
 TE_COMMIT = "e" * 40
 PYTHON_VERSION = "3.13.13"
+UV_VERSION = "0.11.18"
 
 
 def _load_runtime_probe() -> ModuleType:
@@ -185,6 +186,12 @@ def test_runtime_probe_requires_exact_uv_managed_python(tmp_path: Path) -> None:
     )
     base_python.parent.mkdir(parents=True)
     base_python.write_bytes(b"managed-python-fixture")
+    uv_executable = tmp_path / f"uv-{UV_VERSION}-733" / "uv"
+    uv_executable.parent.mkdir(parents=True)
+    _write_executable(
+        uv_executable,
+        f"#!/bin/sh\nprintf 'uv {UV_VERSION} (fixture)\\n'\n",
+    )
     modules = _runtime_modules(module, environment_root)
     modules["megatron.core"] = SimpleNamespace(
         __file__=str(project_root / "megatron" / "core" / "__init__.py")
@@ -199,6 +206,8 @@ def test_runtime_probe_requires_exact_uv_managed_python(tmp_path: Path) -> None:
         expected_project_root=project_root,
         expected_python_version=PYTHON_VERSION,
         expected_python_install_dir=python_install_dir,
+        expected_uv_version=UV_VERSION,
+        expected_uv_executable=uv_executable,
         importer=lambda name: modules[name],
         version_getter=lambda distribution: f"fixture-{distribution}",
         interpreter_path=environment_root / "bin" / "python",
@@ -210,12 +219,20 @@ def test_runtime_probe_requires_exact_uv_managed_python(tmp_path: Path) -> None:
             "UV_PYTHON_INSTALL_DIR": str(python_install_dir),
             "UV_MANAGED_PYTHON": "1",
             "UV_PYTHON_DOWNLOADS": "never",
+            "PINNED_UV_VERSION": UV_VERSION,
+            "UV_EXECUTABLE": str(uv_executable),
         },
     )
 
     assert result["python_version"] == PYTHON_VERSION
     assert result["python_base_executable"] == str(base_python)
     assert result["uv_python_install_dir"] == str(python_install_dir)
+    assert result["uv_version"] == UV_VERSION
+    assert result["uv_executable"] == str(uv_executable)
+    assert (
+        result["uv_executable_sha256"]
+        == hashlib.sha256(uv_executable.read_bytes()).hexdigest()
+    )
     assert (
         result["python_base_executable_sha256"]
         == hashlib.sha256(base_python.read_bytes()).hexdigest()
@@ -228,6 +245,8 @@ def test_runtime_probe_requires_exact_uv_managed_python(tmp_path: Path) -> None:
             expected_project_root=project_root,
             expected_python_version=PYTHON_VERSION,
             expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
             importer=lambda name: modules[name],
             version_getter=lambda distribution: f"fixture-{distribution}",
             interpreter_path=environment_root / "bin" / "python",
@@ -239,6 +258,8 @@ def test_runtime_probe_requires_exact_uv_managed_python(tmp_path: Path) -> None:
                 "UV_PYTHON_INSTALL_DIR": str(python_install_dir),
                 "UV_MANAGED_PYTHON": "1",
                 "UV_PYTHON_DOWNLOADS": "never",
+                "PINNED_UV_VERSION": UV_VERSION,
+                "UV_EXECUTABLE": str(uv_executable),
             },
         )
 
@@ -397,23 +418,39 @@ printf '{"status":"passed"}\n' >"${output}"
     assert "env -i" in command
     assert "HOME=/root" in command
     assert (
-        "PATH=/root/.local/bin:/usr/local/bin:/usr/bin:/bin:/opt/nemo_rl_venv/bin"
-        in command
+        "PATH=/root/.local/bin:/usr/local/bin:/usr/bin:/bin:"
+        "/opt/nemo_rl_venv/bin" in command
     )
     assert "UV_CACHE_DIR=/tmp" not in command
     assert "CUDA_HOME=/usr/local/cuda" in command
     assert "NRL_FORCE_REBUILD_VENVS=true" in command
     assert "UV_PROJECT_ENVIRONMENT=/tmp/nemo-rl-runtime-733" in command
+    expected_uv_executable = artifact_dir / f"uv-{UV_VERSION}-733" / "uv"
+    assert f"PINNED_UV_VERSION={UV_VERSION}" in command
+    assert f"UV_EXECUTABLE={expected_uv_executable}" in command
+    assert f"PATH={expected_uv_executable.parent}:" not in command
+    assert "https://astral.sh/uv/${expected_uv_version}/install.sh" in command
+    assert 'UV_UNMANAGED_INSTALL="${staging_uv_dir}"' in command
+    assert "command -v sha256sum" in command
+    assert 'if [[ -e "${uv_bin_dir}" || -L "${uv_bin_dir}" ]]' in command
+    assert 'if [[ ! -x "${uv_executable}" ]]' not in command
+    assert "mv --no-clobber --no-target-directory" in command
+    assert '[[ ! -e "${staging_uv_dir}" && ! -L "${staging_uv_dir}" ]]' in command
+    assert '"${uv_executable}" --version' in command
     assert f"UV_PYTHON={PYTHON_VERSION}" in command
     assert "UV_MANAGED_PYTHON=1" in command
     assert f"UV_PYTHON_INSTALL_DIR={artifact_dir}/uv-python-installations" in command
-    assert 'uv python install --managed-python "${expected_python_version}"' in command
+    assert (
+        '"${uv_executable}" python install --managed-python --no-bin '
+        '"${expected_python_version}"' in command
+    )
     assert "UV_PYTHON_DOWNLOADS=never" in command
     assert command.index(
-        'uv python install --managed-python "${expected_python_version}"'
+        '"${uv_executable}" python install --managed-python --no-bin '
+        '"${expected_python_version}"'
     ) < command.index("UV_PYTHON_DOWNLOADS=never")
     assert (
-        'uv run --python "${expected_python_version}" --managed-python '
+        '"${uv_executable}" run --python "${expected_python_version}" --managed-python '
         "--locked --extra mcore --no-python-downloads" in command
     )
     assert "--no-editable" not in command
@@ -426,6 +463,8 @@ printf '{"status":"passed"}\n' >"${output}"
     assert '--expected-te-commit "${expected_te_commit}"' in command
     assert '--expected-python-version "${expected_python_version}"' in command
     assert '--expected-python-install-dir "${python_install_dir}"' in command
+    assert '--expected-uv-version "${expected_uv_version}"' in command
+    assert '--expected-uv-executable "${uv_executable}"' in command
     assert '--container-device "${container_device}"' in command
     assert '--container-inode "${container_inode}"' in command
     assert '--container-size "${container_size}"' in command
@@ -454,6 +493,74 @@ printf '{"status":"passed"}\n' >"${output}"
         ),
         MCORE_COMMIT,
     ]
+
+
+def test_runtime_payload_rejects_preseeded_uv_without_executing_it(
+    tmp_path: Path,
+) -> None:
+    source = (
+        EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
+    ).read_text()
+    start = source.index("runtime_command='") + len("runtime_command='")
+    runtime_command = source[start : source.index("'\n\nset +e", start)]
+
+    project_root = tmp_path / "repo"
+    (project_root / "docker").mkdir(parents=True)
+    (project_root / "docker" / "Dockerfile").write_text(
+        f"ARG UV_VERSION={UV_VERSION}\n"
+    )
+    uv_bin_dir = tmp_path / f"uv-{UV_VERSION}-733"
+    uv_bin_dir.mkdir()
+    uv_marker = tmp_path / "preseeded-uv-executed"
+    _write_executable(
+        uv_bin_dir / "uv",
+        "#!/bin/sh\n"
+        'printf executed >"${UV_MARKER}"\n'
+        f"printf 'uv {UV_VERSION} (preseeded fixture)\\n'\n",
+    )
+
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": "/usr/bin:/bin",
+            "PINNED_UV_VERSION": UV_VERSION,
+            "UV_EXECUTABLE": str(uv_bin_dir / "uv"),
+            "UV_MARKER": str(uv_marker),
+        }
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            runtime_command,
+            "bash",
+            str(project_root),
+            str(tmp_path / "validator.py"),
+            str(tmp_path / "environment"),
+            str(tmp_path / "container.sqsh"),
+            "a" * 64,
+            NEMORL_COMMIT,
+            BRIDGE_COMMIT,
+            MCORE_COMMIT,
+            "b" * 64,
+            TE_COMMIT,
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "--output",
+            str(tmp_path / "runtime.json"),
+        ],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "Pinned uv destination already exists" in result.stderr
+    assert not uv_marker.exists()
 
 
 def test_runtime_job_rejects_mutable_container_symlink(tmp_path: Path) -> None:

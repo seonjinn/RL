@@ -73,8 +73,8 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     echo "CONTAINER_RUNTIME_VALIDATOR must be an existing absolute path" >&2
     exit 2
   fi
-  if [[ "${PROJECT_ROOT}" != /* || ! -f "${PROJECT_ROOT}/pyproject.toml" || ! -f "${PROJECT_ROOT}/uv.lock" || ! -f "${PROJECT_ROOT}/.python-version" ]]; then
-    echo "PROJECT_ROOT must be an absolute NeMo-RL checkout with pyproject.toml, uv.lock, and .python-version" >&2
+  if [[ "${PROJECT_ROOT}" != /* || ! -f "${PROJECT_ROOT}/pyproject.toml" || ! -f "${PROJECT_ROOT}/uv.lock" || ! -f "${PROJECT_ROOT}/.python-version" || ! -f "${PROJECT_ROOT}/docker/Dockerfile" ]]; then
+    echo "PROJECT_ROOT must be an absolute NeMo-RL checkout with pyproject.toml, uv.lock, .python-version, and docker/Dockerfile" >&2
     exit 2
   fi
   if [[ "${SOURCE_PROVENANCE_VERIFIER}" != /* || ! -x "${SOURCE_PROVENANCE_VERIFIER}" ]]; then
@@ -129,8 +129,8 @@ fi
 if [[ -z "${PROJECT_ROOT:-}" ]]; then
   PROJECT_ROOT=$(cd "$(dirname "${CONTAINER_RUNTIME_VALIDATOR}")/../../.." && pwd -P)
 fi
-if [[ "${PROJECT_ROOT}" != /* || ! -f "${PROJECT_ROOT}/pyproject.toml" || ! -f "${PROJECT_ROOT}/uv.lock" || ! -f "${PROJECT_ROOT}/.python-version" ]]; then
-  echo "PROJECT_ROOT must be an absolute NeMo-RL checkout with pyproject.toml, uv.lock, and .python-version" >&2
+if [[ "${PROJECT_ROOT}" != /* || ! -f "${PROJECT_ROOT}/pyproject.toml" || ! -f "${PROJECT_ROOT}/uv.lock" || ! -f "${PROJECT_ROOT}/.python-version" || ! -f "${PROJECT_ROOT}/docker/Dockerfile" ]]; then
+  echo "PROJECT_ROOT must be an absolute NeMo-RL checkout with pyproject.toml, uv.lock, .python-version, and docker/Dockerfile" >&2
   exit 1
 fi
 validator=${CONTAINER_RUNTIME_VALIDATOR}
@@ -202,6 +202,13 @@ if [[ ! "${expected_python_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 python_install_dir=${ARTIFACT_DIR%/}/uv-python-installations
 mkdir -p "${python_install_dir}"
+expected_uv_version=$(sed -nE 's/^ARG UV_VERSION=([0-9]+\.[0-9]+\.[0-9]+)$/\1/p' "${project_root}/docker/Dockerfile")
+if [[ ! "${expected_uv_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "docker/Dockerfile must contain one exact ARG UV_VERSION=X.Y.Z pin" >&2
+  exit 1
+fi
+uv_bin_dir=${ARTIFACT_DIR%/}/uv-${expected_uv_version}-${SLURM_JOB_ID}
+uv_executable=${uv_bin_dir}/uv
 artifact=${ARTIFACT_DIR}/oci-container-runtime-${SLURM_JOB_ID}.json
 partial_artifact=${artifact}.partial
 diagnostic=${ARTIFACT_DIR}/oci-container-runtime-${SLURM_JOB_ID}.diagnostics.log
@@ -228,6 +235,8 @@ runtime_environment=(
   "LD_LIBRARY_PATH=${runtime_site_packages}/nvidia/cudnn/lib:/usr/local/cuda/lib64:/usr/local/cuda/compat:/usr/local/lib:/usr/lib/x86_64-linux-gnu:/usr/lib/aarch64-linux-gnu"
   NRL_CONTAINER=1
   NRL_FORCE_REBUILD_VENVS=true
+  "PINNED_UV_VERSION=${expected_uv_version}"
+  "UV_EXECUTABLE=${uv_executable}"
   UV_LINK_MODE=copy
   "UV_PYTHON=${expected_python_version}"
   UV_MANAGED_PYTHON=1
@@ -261,15 +270,75 @@ if [[ "${output_flag}" != "--output" ]]; then
   echo "Runtime probe payload requires --output" >&2
   exit 2
 fi
+expected_uv_version=$(sed -nE "s/^ARG UV_VERSION=([0-9]+\\.[0-9]+\\.[0-9]+)$/\\1/p" "${project_root}/docker/Dockerfile")
+if [[ "${PINNED_UV_VERSION:?Runtime probe requires the source-pinned uv version}" != "${expected_uv_version}" ]]; then
+  echo "PINNED_UV_VERSION does not match docker/Dockerfile" >&2
+  exit 2
+fi
+uv_executable=${UV_EXECUTABLE:?Runtime probe requires an exact uv executable}
+uv_bin_dir=$(dirname "${uv_executable}")
+if [[ "${uv_executable}" != "${uv_bin_dir}/uv" || "${uv_bin_dir}" != /* ]]; then
+  echo "UV_EXECUTABLE must be an absolute uv binary path" >&2
+  exit 2
+fi
+if [[ -L "${uv_bin_dir}" || -L "${uv_executable}" ]]; then
+  echo "Pinned uv path must not be a symlink" >&2
+  exit 2
+fi
+if [[ -e "${uv_bin_dir}" || -L "${uv_bin_dir}" ]]; then
+  echo "Pinned uv destination already exists: ${uv_bin_dir}" >&2
+  exit 2
+fi
+command -v curl >/dev/null || {
+  echo "curl is required to stage pinned uv" >&2
+  exit 2
+}
+command -v sha256sum >/dev/null || {
+  echo "sha256sum is required for installer artifact verification" >&2
+  exit 2
+}
+staging_uv_dir=${uv_bin_dir}.partial
+uv_installer=${uv_bin_dir}.installer.sh
+rm -rf -- "${staging_uv_dir}" "${uv_installer}"
+cleanup_uv_stage() {
+  rm -rf -- "${staging_uv_dir}" "${uv_installer}"
+}
+trap cleanup_uv_stage EXIT
+curl --retry 3 --retry-delay 2 -fsSL \
+  -o "${uv_installer}" \
+  "https://astral.sh/uv/${expected_uv_version}/install.sh"
+env UV_UNMANAGED_INSTALL="${staging_uv_dir}" sh "${uv_installer}"
+staging_uv_executable=${staging_uv_dir}/uv
+[[ -x "${staging_uv_executable}" ]] || {
+  echo "Pinned uv installer did not create ${staging_uv_executable}" >&2
+  exit 2
+}
+staging_uv_version=$("${staging_uv_executable}" --version | awk "{print \$2}")
+if [[ "${staging_uv_version}" != "${expected_uv_version}" ]]; then
+  echo "Staged uv version mismatch: expected ${expected_uv_version}, got ${staging_uv_version}" >&2
+  exit 2
+fi
+mv --no-clobber --no-target-directory -- "${staging_uv_dir}" "${uv_bin_dir}"
+[[ ! -e "${staging_uv_dir}" && ! -L "${staging_uv_dir}" ]] || {
+  echo "Pinned uv destination appeared during publication: ${uv_bin_dir}" >&2
+  exit 2
+}
+rm -f -- "${uv_installer}"
+trap - EXIT
+actual_uv_version=$("${uv_executable}" --version | awk "{print \$2}")
+if [[ "${actual_uv_version}" != "${expected_uv_version}" ]]; then
+  echo "Pinned uv version mismatch: expected ${expected_uv_version}, got ${actual_uv_version}" >&2
+  exit 2
+fi
 expected_python_version=$(tr -d "[:space:]" <"${project_root}/.python-version")
 if [[ "${UV_PYTHON:?Runtime probe requires an exact Python version}" != "${expected_python_version}" ]]; then
   echo "UV_PYTHON does not match .python-version" >&2
   exit 2
 fi
 python_install_dir=${UV_PYTHON_INSTALL_DIR:?Runtime probe requires a managed Python install directory}
-uv python install --managed-python "${expected_python_version}"
+"${uv_executable}" python install --managed-python --no-bin "${expected_python_version}"
 export UV_PYTHON_DOWNLOADS=never
-base_python=$(uv python find --managed-python "${expected_python_version}")
+base_python=$("${uv_executable}" python find --managed-python "${expected_python_version}")
 if [[ ! -x "${base_python}" ]]; then
   echo "Managed Python is missing or not executable: ${base_python}" >&2
   exit 2
@@ -281,7 +350,7 @@ if [[ "${actual_python_version}" != "${expected_python_version}" ]]; then
 fi
 rm -rf -- "${environment_root}"
 cd "${project_root}"
-exec uv run --python "${expected_python_version}" --managed-python --locked --extra mcore --no-python-downloads --directory "${project_root}" python "${validator}" \
+exec "${uv_executable}" run --python "${expected_python_version}" --managed-python --locked --extra mcore --no-python-downloads --directory "${project_root}" python "${validator}" \
   --container-image "${container}" \
   --container-sha256 "${container_sha256}" \
   --expected-device-count 4 \
@@ -289,6 +358,8 @@ exec uv run --python "${expected_python_version}" --managed-python --locked --ex
   --expected-project-root "${project_root}" \
   --expected-python-version "${expected_python_version}" \
   --expected-python-install-dir "${python_install_dir}" \
+  --expected-uv-version "${expected_uv_version}" \
+  --expected-uv-executable "${uv_executable}" \
   --nemo-rl-commit "${nemo_rl_commit}" \
   --bridge-commit "${bridge_commit}" \
   --mcore-commit "${mcore_commit}" \

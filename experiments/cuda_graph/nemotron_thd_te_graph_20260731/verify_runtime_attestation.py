@@ -114,6 +114,8 @@ def validate_attestation(
     expected_device_count: int,
     expected_python_version: str,
     expected_python_install_dir: Path,
+    expected_uv_version: str,
+    expected_uv_executable: Path,
 ) -> dict[str, Any]:
     """Require exact source, image, TE, GPU, and worker-stack provenance."""
     if FULL_SHA256.fullmatch(expected_container_sha256) is None:
@@ -144,6 +146,17 @@ def validate_attestation(
             "expected Python install directory is missing: "
             f"{expected_python_install_dir}"
         )
+    if re.fullmatch(r"\d+\.\d+\.\d+", expected_uv_version) is None:
+        raise ValueError("expected uv version must be an exact X.Y.Z version")
+    if not expected_uv_executable.is_absolute():
+        raise ValueError("expected uv executable must be absolute")
+    if expected_uv_executable.is_symlink():
+        raise ValueError(
+            f"expected uv executable must not be a symlink: {expected_uv_executable}"
+        )
+    expected_uv_executable = expected_uv_executable.resolve(strict=False)
+    if not expected_uv_executable.is_file():
+        raise ValueError(f"expected uv executable is missing: {expected_uv_executable}")
     if not uv_lock.is_file():
         raise ValueError(f"uv.lock is missing: {uv_lock}")
 
@@ -164,6 +177,9 @@ def validate_attestation(
         "expected_python_version": expected_python_version,
         "python_version": expected_python_version,
         "uv_python_install_dir": str(expected_python_install_dir),
+        "expected_uv_version": expected_uv_version,
+        "uv_version": expected_uv_version,
+        "uv_executable": str(expected_uv_executable),
     }
     mismatches = {
         key: {"expected": expected, "actual": payload.get(key)}
@@ -228,6 +244,19 @@ def validate_attestation(
             f"expected {expected_python_sha256}, got {actual_python_sha256}"
         )
 
+    expected_uv_sha256 = payload.get("uv_executable_sha256")
+    if (
+        not isinstance(expected_uv_sha256, str)
+        or FULL_SHA256.fullmatch(expected_uv_sha256) is None
+    ):
+        raise ValueError("runtime attestation lacks uv executable SHA256")
+    actual_uv_sha256 = _sha256(expected_uv_executable)
+    if actual_uv_sha256 != expected_uv_sha256:
+        raise ValueError(
+            "uv executable SHA256 mismatch: "
+            f"expected {expected_uv_sha256}, got {actual_uv_sha256}"
+        )
+
     packages = payload.get("packages")
     if not isinstance(packages, Mapping):
         raise ValueError("runtime attestation packages must be a JSON object")
@@ -263,6 +292,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-device-count", required=True, type=int)
     parser.add_argument("--expected-python-version", required=True)
     parser.add_argument("--expected-python-install-dir", required=True, type=Path)
+    parser.add_argument("--expected-uv-version", required=True)
+    parser.add_argument("--expected-uv-executable", required=True, type=Path)
     return parser.parse_args()
 
 
@@ -280,6 +311,8 @@ def main() -> None:
         expected_device_count=args.expected_device_count,
         expected_python_version=args.expected_python_version,
         expected_python_install_dir=args.expected_python_install_dir,
+        expected_uv_version=args.expected_uv_version,
+        expected_uv_executable=args.expected_uv_executable,
     )
     print(json.dumps(payload, sort_keys=True))
 

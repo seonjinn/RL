@@ -241,6 +241,30 @@ COMMON_SRUN_ARGS+=" --mpi=pmix"
 COMMON_SRUN_ARGS+=" --container-mounts=$MOUNTS"
 COMMON_SRUN_ARGS+=" --container-image=$CONTAINER"
 COMMON_SRUN_ARGS+=" --container-workdir=$SLURM_SUBMIT_DIR"
+CONTAINER_ENV_VARS="${CONTAINER_ENV_VARS:-}"
+if [[ -n "$CONTAINER_ENV_VARS" ]]; then
+  if [[ ! "$CONTAINER_ENV_VARS" =~ ^[_[:alpha:]][_[:alnum:]]*(,[_[:alpha:]][_[:alnum:]]*)*$ ]]; then
+    echo "[ERROR] invalid CONTAINER_ENV_VARS: $CONTAINER_ENV_VARS" >&2
+    exit 2
+  fi
+  COMMON_SRUN_ARGS+=" --container-env=$CONTAINER_ENV_VARS"
+fi
+CONTAINER_PATH_PREFIX="${CONTAINER_PATH_PREFIX:-}"
+if [[ -n "$CONTAINER_PATH_PREFIX" ]]; then
+  case "$CONTAINER_PATH_PREFIX" in
+    /*) ;;
+    *)
+      echo "[ERROR] CONTAINER_PATH_PREFIX must be absolute: $CONTAINER_PATH_PREFIX" >&2
+      exit 2
+      ;;
+  esac
+  case "$CONTAINER_PATH_PREFIX" in
+    *:*|*$'\n'*)
+      echo "[ERROR] CONTAINER_PATH_PREFIX must not contain a colon or newline" >&2
+      exit 2
+      ;;
+  esac
+fi
 # Pass partition/account explicitly for overlapping srun calls.
 COMMON_SRUN_ARGS+=" -p $SLURM_JOB_PARTITION"
 COMMON_SRUN_ARGS+=" -A $SLURM_JOB_ACCOUNT"
@@ -564,6 +588,10 @@ fi
 # Give the head node actual resources to make it schedulable
 
 head_cmd=$(cat <<EOF
+if [[ -n "\${CONTAINER_PATH_PREFIX:-}" ]]; then
+  export PATH="\${CONTAINER_PATH_PREFIX}:\$PATH"
+fi
+
 if [[ "\${RAY_SUB_DEBUG_ENV:-0}" == "1" ]]; then
   env | grep -viE '(WANDB_API_KEY|HF_TOKEN|API_KEY|TOKEN|SECRET|PASSWORD)=' || true
 fi
@@ -792,6 +820,10 @@ EOF
 # Worker nodes connect to the head. They're launched with a single batched srun
 # below; each task discovers its identity at runtime via SLURM_PROCID/SLURMD_NODENAME.
 worker_cmd=$(cat <<EOF
+if [[ -n "\${CONTAINER_PATH_PREFIX:-}" ]]; then
+  export PATH="\${CONTAINER_PATH_PREFIX}:\$PATH"
+fi
+
 if [[ "\${RAY_SUB_DEBUG_ENV:-0}" == "1" ]]; then
   env | grep -viE '(WANDB_API_KEY|HF_TOKEN|API_KEY|TOKEN|SECRET|PASSWORD)=' || true
 fi

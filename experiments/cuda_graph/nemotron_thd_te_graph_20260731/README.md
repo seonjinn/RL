@@ -21,12 +21,16 @@ The local experiment suite passes; Linux/GB200 runtime, correctness, and
 performance results are still pending and must not be inferred from local
 tests.
 
-The current nightly image provides Python 3.13.11 while this source snapshot
-requires the exact version in `.python-version` (currently 3.13.13). The OCI
-preflight therefore stages uv-managed 3.13.13 once under
-`ARTIFACT_DIR/uv-python-installations`, validates the resolved base executable,
-and disables further Python downloads before resolving the locked training
-environment. This is a runtime compatibility gate, not a CUDA Graph result.
+The current nightly image provides Python 3.13.11 and uv 0.11.1, while this
+source snapshot requires Python 3.13.13 and pins uv 0.11.18 in
+`docker/Dockerfile`. uv 0.11.1 predates the ARM64 Python 3.13.13 download
+metadata. The OCI preflight therefore installs the exact source-pinned uv with
+the official versioned installer into a job-specific immutable directory,
+then stages uv-managed 3.13.13 once under
+`ARTIFACT_DIR/uv-python-installations`. It validates both executable versions
+and SHA256 digests and disables further Python downloads before resolving the
+locked training environment. This is a runtime compatibility gate, not a CUDA
+Graph result.
 
 Nano HybridEP `moe_preprocess` rows are fail-closed, while Super and the Qwen
 comparison selector may run their validated preprocess rows. Qwen dense `mlp`
@@ -71,7 +75,10 @@ Run these gates before submitting a model scope.
    Python patch version, and the managed base-interpreter SHA256 in a
    machine-readable success or failure artifact. Python downloads are enabled
    only for the initial managed-interpreter staging command and are set to
-   `never` before `uv run --locked`.
+   `never` before `uv run --locked`. The preflight uv is installed with
+   `UV_UNMANAGED_INSTALL` under `ARTIFACT_DIR/uv-<version>-<job-id>` so it does
+   not mutate shell profiles and concurrent preflights cannot share a mutable
+   binary directory.
 
    ```bash
    CONTAINER=/absolute/shared/containers/nemo_rl_nightly.sqsh \
@@ -108,11 +115,19 @@ Run these gates before submitting a model scope.
    `RUNTIME_ATTESTATION` to its exact non-symlink JSON artifact. Every leaf is
    submitted with `afterok:<preflight-job>` and validates exact source, lock,
    image identity, device count, package set, TE commit, Python version, managed
-   interpreter path, and interpreter SHA256 before starting Ray. The leaf
+   interpreter path, interpreter SHA256, uv version, uv path, and uv SHA256
+   before starting Ray. The leaf
    derives `UV_PYTHON_INSTALL_DIR` from the immutable attestation directory,
    requires that path to be container-mounted, forces uv-managed Python with
    downloads disabled, and gives the NeMo-RL driver a fresh per-job
-   `UV_PROJECT_ENVIRONMENT`. Leaf jobs do not rehash the image.
+   `UV_PROJECT_ENVIRONMENT`. The wrapper passes the explicit UV allowlist and
+   an attested `CONTAINER_PATH_PREFIX` through Pyxis `--container-env`, then
+   prepends that one directory inside each Ray head, worker, and standalone
+   MCore container. It deliberately does not import the host `PATH`: preserving
+   the image's CUDA, MPI, UCX, and EFA paths avoids replacing runtime libraries
+   while still selecting the attested uv ahead of the image's older uv. Leaf
+   jobs verify the uv SHA256 before any uv execution and do not rehash the
+   image.
 
 `validate_te_runtime.py` remains an offline provenance utility. Production
 leaf jobs use `verify_runtime_attestation.py`, which requires exact equality

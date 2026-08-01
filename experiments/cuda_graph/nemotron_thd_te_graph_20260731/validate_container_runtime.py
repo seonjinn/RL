@@ -24,6 +24,7 @@ import importlib.metadata
 import json
 import os
 import platform
+import subprocess
 import sys
 import tempfile
 from collections.abc import Callable, Mapping
@@ -130,6 +131,8 @@ def probe_runtime(
     expected_project_root: Path | None = None,
     expected_python_version: str | None = None,
     expected_python_install_dir: Path | None = None,
+    expected_uv_version: str | None = None,
+    expected_uv_executable: Path | None = None,
     importer: Callable[[str], Any] = importlib.import_module,
     version_getter: Callable[[str], str] = importlib.metadata.version,
     interpreter_path: str | os.PathLike[str] = sys.executable,
@@ -186,6 +189,58 @@ def probe_runtime(
                 f"base Python executable is missing: {python_base_executable}"
             )
         python_base_executable_sha256 = _sha256(python_base_executable)
+    if (expected_uv_version is None) != (expected_uv_executable is None):
+        raise RuntimeError(
+            "expected uv version and executable must be provided together"
+        )
+    uv_version: str | None = None
+    uv_executable: Path | None = None
+    uv_executable_sha256: str | None = None
+    if expected_uv_version is not None and expected_uv_executable is not None:
+        configured_uv_executable = environment.get("UV_EXECUTABLE")
+        if configured_uv_executable is None:
+            raise RuntimeError("UV_EXECUTABLE is not set")
+        if environment.get("PINNED_UV_VERSION") != expected_uv_version:
+            raise RuntimeError(
+                "PINNED_UV_VERSION does not match the expected uv version"
+            )
+        if expected_uv_executable.is_symlink():
+            raise RuntimeError(
+                f"uv executable must not be a symlink: {expected_uv_executable}"
+            )
+        uv_executable = expected_uv_executable.resolve(strict=False)
+        if (
+            _absolute_path(configured_uv_executable).resolve(strict=False)
+            != uv_executable
+        ):
+            raise RuntimeError(
+                "UV_EXECUTABLE does not match the expected executable: "
+                f"{configured_uv_executable} != {uv_executable}"
+            )
+        if not uv_executable.is_file() or not os.access(uv_executable, os.X_OK):
+            raise RuntimeError(f"uv executable is missing: {uv_executable}")
+        uv_process = subprocess.run(
+            [str(uv_executable), "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        version_fields = uv_process.stdout.strip().split()
+        if (
+            uv_process.returncode != 0
+            or len(version_fields) < 2
+            or version_fields[0] != "uv"
+        ):
+            raise RuntimeError(
+                f"failed to read uv version from {uv_executable}: "
+                f"{uv_process.stderr.strip()}"
+            )
+        uv_version = version_fields[1]
+        if uv_version != expected_uv_version:
+            raise RuntimeError(
+                f"uv version mismatch: expected {expected_uv_version}, got {uv_version}"
+            )
+        uv_executable_sha256 = _sha256(uv_executable)
     if expected_environment_root is not None:
         environment_root = expected_environment_root.resolve(strict=False)
         for variable in ("PYTHONHOME", "PYTHONPATH"):
@@ -279,6 +334,9 @@ def probe_runtime(
         "uv_python_install_dir": (
             str(python_install_dir) if python_install_dir is not None else None
         ),
+        "uv_version": uv_version,
+        "uv_executable": str(uv_executable) if uv_executable is not None else None,
+        "uv_executable_sha256": uv_executable_sha256,
         "runtime_prefix": str(python_prefix),
         "torch_cuda_version": getattr(torch_version, "cuda", None),
         "devices": devices,
@@ -320,6 +378,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-project-root", required=True, type=Path)
     parser.add_argument("--expected-python-version", required=True)
     parser.add_argument("--expected-python-install-dir", required=True, type=Path)
+    parser.add_argument("--expected-uv-version", required=True)
+    parser.add_argument("--expected-uv-executable", required=True, type=Path)
     parser.add_argument("--nemo-rl-commit", required=True)
     parser.add_argument("--bridge-commit", required=True)
     parser.add_argument("--mcore-commit", required=True)
@@ -345,6 +405,7 @@ def main() -> None:
         "uv_lock_sha256": args.uv_lock_sha256,
         "expected_te_commit": args.expected_te_commit,
         "expected_python_version": args.expected_python_version,
+        "expected_uv_version": args.expected_uv_version,
         "container_device": args.container_device,
         "container_inode": args.container_inode,
         "container_size": args.container_size,
@@ -358,6 +419,8 @@ def main() -> None:
             expected_project_root=args.expected_project_root,
             expected_python_version=args.expected_python_version,
             expected_python_install_dir=args.expected_python_install_dir,
+            expected_uv_version=args.expected_uv_version,
+            expected_uv_executable=args.expected_uv_executable,
         )
         te_version = runtime["packages"]["transformer_engine.pytorch"]["version"]
         if _version_pair(te_version) < (2, 16):

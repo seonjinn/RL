@@ -22,6 +22,7 @@ fail() {
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 repo_root=$(cd "${script_dir}/../../.." && pwd -P)
+dockerfile=${repo_root}/docker/Dockerfile
 bridge_root=${repo_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
 mcore_root=${bridge_root}/3rdparty/Megatron-LM
 source_provenance_verifier=${script_dir}/scripts/verify_source_provenance.sh
@@ -132,15 +133,27 @@ case "${RUNTIME_PREFLIGHT_JOB_ID:-}" in
 esac
 [[ -f "${repo_root}/.python-version" ]] || \
   fail "NeMo-RL source snapshot is missing .python-version"
+[[ -f "${dockerfile}" ]] || fail "NeMo-RL source snapshot is missing docker/Dockerfile"
 MANAGED_PYTHON_VERSION=$(tr -d '[:space:]' <"${repo_root}/.python-version")
 [[ "${MANAGED_PYTHON_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || \
   fail ".python-version must contain one exact X.Y.Z version"
+PINNED_UV_VERSION=$(sed -nE 's/^ARG UV_VERSION=([0-9]+\.[0-9]+\.[0-9]+)$/\1/p' "${dockerfile}")
+[[ "${PINNED_UV_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || \
+  fail "docker/Dockerfile must contain one exact ARG UV_VERSION=X.Y.Z pin"
 case "${RUNTIME_ATTESTATION:-}" in
   /*)
     MANAGED_PYTHON_INSTALL_DIR=$(dirname "${RUNTIME_ATTESTATION}")/uv-python-installations
     ;;
   *)
     MANAGED_PYTHON_INSTALL_DIR=__DERIVED_FROM_RUNTIME_ATTESTATION__/uv-python-installations
+    ;;
+esac
+case "${RUNTIME_ATTESTATION:-}:${RUNTIME_PREFLIGHT_JOB_ID:-}" in
+  /*:[1-9]*)
+    UV_EXECUTABLE=$(dirname "${RUNTIME_ATTESTATION}")/uv-${PINNED_UV_VERSION}-${RUNTIME_PREFLIGHT_JOB_ID}/uv
+    ;;
+  *)
+    UV_EXECUTABLE=__DERIVED_FROM_RUNTIME_ATTESTATION__/uv-${PINNED_UV_VERSION}-__PREFLIGHT_JOB_ID__/uv
     ;;
 esac
 if [[ "${MANAGED_PYTHON_INSTALL_DIR}" == /* ]]; then
@@ -158,6 +171,22 @@ if [[ "${MANAGED_PYTHON_INSTALL_DIR}" == /* ]]; then
   done
   [[ "${managed_python_is_mounted}" == "true" ]] || \
     fail "managed Python install directory is not container-mounted: ${MANAGED_PYTHON_INSTALL_DIR}"
+fi
+if [[ "${UV_EXECUTABLE}" == /* ]]; then
+  uv_is_mounted=false
+  IFS=',' read -r -a mount_specs <<<"${MOUNTS}"
+  for mount_spec in "${mount_specs[@]}"; do
+    IFS=':' read -r _ container_mount_path _ <<<"${mount_spec}"
+    [[ "${container_mount_path:-}" == /* ]] || continue
+    case "${UV_EXECUTABLE}" in
+      "${container_mount_path}"|"${container_mount_path}"/*)
+        uv_is_mounted=true
+        break
+        ;;
+    esac
+  done
+  [[ "${uv_is_mounted}" == "true" ]] || \
+    fail "pinned uv executable is not container-mounted: ${UV_EXECUTABLE}"
 fi
 case "${EXPECTED_TE_SHA:-}" in
   ""|__REQUIRED_*__) ;;
@@ -264,6 +293,8 @@ runtime_attestation_command=(
   --expected-device-count "${MODEL_GPUS_PER_NODE}"
   --expected-python-version "${MANAGED_PYTHON_VERSION}"
   --expected-python-install-dir "${MANAGED_PYTHON_INSTALL_DIR}"
+  --expected-uv-version "${PINNED_UV_VERSION}"
+  --expected-uv-executable "${UV_EXECUTABLE}"
 )
 printf -v RUNTIME_ATTESTATION_COMMAND '%q ' "${runtime_attestation_command[@]}"
 RUNTIME_ATTESTATION_COMMAND=${RUNTIME_ATTESTATION_COMMAND% }
@@ -307,6 +338,8 @@ printf 'RUN_LOG_DIR: %s\n' "${run_log_dir}"
 printf 'RUNTIME_ATTESTATION: %q\n' "${RUNTIME_ATTESTATION_COMMAND}"
 printf 'MANAGED_PYTHON_VERSION: %s\n' "${MANAGED_PYTHON_VERSION}"
 printf 'MANAGED_PYTHON_INSTALL_DIR: %s\n' "${MANAGED_PYTHON_INSTALL_DIR}"
+printf 'PINNED_UV_VERSION: %s\n' "${PINNED_UV_VERSION}"
+printf 'UV_EXECUTABLE: %s\n' "${UV_EXECUTABLE}"
 printf 'COMMAND: %q\n' "${COMMAND}"
 printf 'SBATCH:'
 printf ' %q' "${sbatch_command[@]}"
@@ -352,6 +385,8 @@ mkdir -p "${run_log_dir}"
   printf 'runtime_attestation=%s\n' "${RUNTIME_ATTESTATION}"
   printf 'managed_python_version=%s\n' "${MANAGED_PYTHON_VERSION}"
   printf 'managed_python_install_dir=%s\n' "${MANAGED_PYTHON_INSTALL_DIR}"
+  printf 'pinned_uv_version=%s\n' "${PINNED_UV_VERSION}"
+  printf 'uv_executable=%s\n' "${UV_EXECUTABLE}"
 } >"${run_log_dir}/run-metadata.env"
 export COMMAND CONTAINER CONTAINER_SHA256 MOUNTS RUNTIME_ATTESTATION_COMMAND
 export BASE_LOG_DIR=${run_log_dir}
@@ -366,6 +401,7 @@ export UV_PYTHON=${MANAGED_PYTHON_VERSION}
 export UV_PYTHON_INSTALL_DIR=${MANAGED_PYTHON_INSTALL_DIR}
 export UV_MANAGED_PYTHON=1
 export UV_PYTHON_DOWNLOADS=never
+export PINNED_UV_VERSION UV_EXECUTABLE
 export SOURCE_PROVENANCE_VERIFIER=${source_provenance_verifier}
 job_id=$("${sbatch_command[@]}")
 printf 'SLURM_JOB_ID: %s\n' "${job_id}"
