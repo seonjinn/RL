@@ -25,6 +25,51 @@ set -euo pipefail
 LOCK_PYTHON=${LOCK_PYTHON:-python3.12}
 CONTAINER_PYTHON=${CONTAINER_PYTHON:-/opt/nemo_rl_venv/bin/python}
 
+valid_bridge_remote() {
+  local repository=$1
+  local remainder
+  local host
+  local path
+
+  if [[ "${repository}" == *\?* || "${repository}" == *\#* || \
+        "${repository}" =~ [[:space:][:cntrl:]] ]]; then
+    return 1
+  fi
+  case "${repository}" in
+    https://*)
+      remainder=${repository#https://}
+      [[ "${remainder}" == */* ]] || return 1
+      host=${remainder%%/*}
+      path=${remainder#*/}
+      [[ "${host}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?$ ]] || return 1
+      ;;
+    git@*)
+      [[ "${repository}" =~ ^git@[A-Za-z0-9][A-Za-z0-9.-]*: ]] || return 1
+      path=${repository#*:}
+      ;;
+    *) return 1 ;;
+  esac
+  case "/${path}/" in
+    */../*|*/./*) return 1 ;;
+  esac
+  [[ "${path}" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]]
+}
+
+valid_bridge_source() {
+  local repository=$1
+  if [[ "${repository}" == /* ]]; then
+    [[ ! "${repository}" =~ [[:space:][:cntrl:]] && \
+       "${repository}" != *\?* && "${repository}" != *\#* ]]
+    return
+  fi
+  valid_bridge_remote "${repository}"
+}
+
+if ! valid_bridge_source "${BRIDGE_REPOSITORY}"; then
+  echo "BRIDGE_REPOSITORY is not an approved credential-free source" >&2
+  exit 2
+fi
+
 job_key=${SLURM_JOB_ID:-local}
 work_parent=${WORK_ROOT:-${SLURM_TMPDIR:-/tmp}}
 if [[ "${work_parent}" != /* ]]; then

@@ -14,7 +14,7 @@
 # limitations under the License.
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:4
 #SBATCH --mem=0
 #SBATCH --partition=batch
 #SBATCH --time=02:00:00
@@ -27,16 +27,52 @@ if [[ -z "${SOURCE_DIGEST:-}" ]]; then
   echo "Set SOURCE_DIGEST to the resolved sha256 digest" >&2
   exit 2
 fi
+if [[ ! "${SOURCE_COMMIT:-}" =~ ^[[:xdigit:]]{40}$ ]]; then
+  echo "SOURCE_COMMIT must be a full 40-character commit" >&2
+  exit 2
+fi
 : "${OUTPUT_PREFIX:?Set OUTPUT_PREFIX to a filesystem-safe name}"
 : "${CONTAINER_DIR:?Set CONTAINER_DIR to an absolute shared-storage path}"
 
 ACCOUNT=${ACCOUNT:-coreai_dlalgo_nemorl}
 PARTITION=${PARTITION:-batch}
-SOURCE_COMMIT=${SOURCE_COMMIT:-unknown}
 TEST_ONLY=${TEST_ONLY:-0}
 
-if [[ "${SOURCE_IMAGE}" != */* ]]; then
-  echo "SOURCE_IMAGE must include a registry and repository" >&2
+valid_source_image() {
+  local reference=$1
+  local registry
+  local repository_reference
+  local repository
+  local final_component
+  local tag
+
+  if [[ "${reference}" == *://* || "${reference}" == *\?* || \
+        "${reference}" == *\#* || "${reference}" =~ [[:space:]] ]]; then
+    return 1
+  fi
+  [[ "${reference}" == */* ]] || return 1
+  registry=${reference%%/*}
+  repository_reference=${reference#*/}
+  [[ "${registry}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?$ ]] || return 1
+
+  if [[ "${repository_reference}" == *@* ]]; then
+    [[ "${repository_reference}" == *@sha256:* ]] || return 1
+    [[ "${repository_reference##*@}" =~ ^sha256:[[:xdigit:]]{64}$ ]] || return 1
+    repository=${repository_reference%@sha256:*}
+  else
+    repository=${repository_reference}
+    final_component=${repository##*/}
+    if [[ "${final_component}" == *:* ]]; then
+      tag=${final_component#*:}
+      [[ "${tag}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || return 1
+      repository=${repository%:*}
+    fi
+  fi
+  [[ "${repository}" =~ ^[A-Za-z0-9]+([._-][A-Za-z0-9]+)*(/[A-Za-z0-9]+([._-][A-Za-z0-9]+)*)*$ ]]
+}
+
+if ! valid_source_image "${SOURCE_IMAGE}"; then
+  echo "SOURCE_IMAGE must be a credential-free registry/repository reference" >&2
   exit 2
 fi
 if [[ ! "${SOURCE_DIGEST}" =~ ^sha256:[[:xdigit:]]{64}$ ]]; then
@@ -67,7 +103,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     --parsable
     "--partition=${PARTITION}"
     "--account=${ACCOUNT}"
-    --gres=gpu:1
+    --gres=gpu:4
     "--output=${CONTAINER_DIR}/${OUTPUT_PREFIX}_stage-%j.log"
     --export=ALL
     "${script_path}"

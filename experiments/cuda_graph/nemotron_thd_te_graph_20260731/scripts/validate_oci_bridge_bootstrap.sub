@@ -33,6 +33,36 @@ PARTITION=${PARTITION:-batch}
 MOUNTS=${MOUNTS:-/lustre:/lustre}
 TEST_ONLY=${TEST_ONLY:-0}
 
+valid_bridge_remote() {
+  local repository=$1
+  local remainder
+  local host
+  local path
+
+  if [[ "${repository}" == *\?* || "${repository}" == *\#* || \
+        "${repository}" =~ [[:space:][:cntrl:]] ]]; then
+    return 1
+  fi
+  case "${repository}" in
+    https://*)
+      remainder=${repository#https://}
+      [[ "${remainder}" == */* ]] || return 1
+      host=${remainder%%/*}
+      path=${remainder#*/}
+      [[ "${host}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?$ ]] || return 1
+      ;;
+    git@*)
+      [[ "${repository}" =~ ^git@[A-Za-z0-9][A-Za-z0-9.-]*: ]] || return 1
+      path=${repository#*:}
+      ;;
+    *) return 1 ;;
+  esac
+  case "/${path}/" in
+    */../*|*/./*) return 1 ;;
+  esac
+  [[ "${path}" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]]
+}
+
 if [[ ! "${EXPECTED_BRIDGE_SHA}" =~ ^[[:xdigit:]]{40}$ ]]; then
   echo "EXPECTED_BRIDGE_SHA must be a full 40-character commit" >&2
   exit 2
@@ -53,8 +83,8 @@ if [[ "${PARTITION}" != "batch" ]]; then
   echo "Production validation requires PARTITION=batch" >&2
   exit 2
 fi
-if [[ "${BRIDGE_REPOSITORY}" =~ ^https?://[^/]*:[^/]*@ ]]; then
-  echo "BRIDGE_REPOSITORY must not contain embedded credentials" >&2
+if ! valid_bridge_remote "${BRIDGE_REPOSITORY}"; then
+  echo "BRIDGE_REPOSITORY must be a credential-free public HTTPS or git@host:path remote" >&2
   exit 2
 fi
 
