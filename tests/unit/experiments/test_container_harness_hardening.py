@@ -190,6 +190,12 @@ def _run_runtime_payload(
     runtime_environment = environment.copy()
     runtime_environment.setdefault("CUDA_HOME", str(fixture.cuda_home))
     runtime_environment.setdefault("CUDACXX", str(fixture.cuda_home / "bin" / "nvcc"))
+    runtime_environment.setdefault(
+        "UV_CACHE_DIR", f"{fixture.environment_root}-uv-cache"
+    )
+    runtime_environment.setdefault(
+        "NVTE_CMAKE_BUILD_DIR", f"{fixture.environment_root}-te-cmake"
+    )
     runtime_environment["PATH"] = (
         f"{fixture.cuda_home / 'bin'}:{runtime_environment.get('PATH', '')}"
     )
@@ -573,13 +579,16 @@ printf '{"status":"passed"}\n' >"${output}"
     command = srun_log.read_text()
     assert "--export=ALL" not in command
     assert "--export=NIL" in command
+    assert "--no-container-mount-home" in command
     assert "env -i" in command
     assert "HOME=/root" in command
     assert (
         "PATH=/root/.local/bin:/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin:"
         "/opt/nemo_rl_venv/bin" in command
     )
-    assert "UV_CACHE_DIR=/tmp" not in command
+    assert "UV_CACHE_DIR=/tmp/nemo-rl-runtime-733-uv-cache" in command
+    assert "NVTE_CMAKE_BUILD_DIR=/tmp/nemo-rl-runtime-733-te-cmake" in command
+    assert "/root/.cache/uv" not in command
     assert "CUDA_HOME=/usr/local/cuda" in command
     assert "CUDACXX=/usr/local/cuda/bin/nvcc" in command
     assert "NRL_FORCE_REBUILD_VENVS=true" in command
@@ -685,6 +694,48 @@ def test_runtime_payload_rejects_missing_nvcc_before_staging_uv(
     assert result.returncode == 2
     assert "nvcc" in result.stderr.lower()
     assert not uv_stage_marker.exists()
+    assert not fixture.copied_project_root.exists()
+
+
+@pytest.mark.parametrize(
+    ("environment_variable", "path_suffix"),
+    (
+        ("UV_CACHE_DIR", "uv-cache"),
+        ("NVTE_CMAKE_BUILD_DIR", "te-cmake"),
+    ),
+)
+@pytest.mark.parametrize("path_kind", ("directory", "symlink"))
+def test_runtime_payload_rejects_preexisting_job_local_build_state(
+    tmp_path: Path,
+    environment_variable: str,
+    path_suffix: str,
+    path_kind: str,
+) -> None:
+    fixture = _stage_runtime_payload_fixture(
+        tmp_path,
+        verifier_body="#!/bin/sh\nexit 0\n",
+    )
+    state_path = Path(f"{fixture.environment_root}-{path_suffix}")
+    if path_kind == "directory":
+        state_path.mkdir()
+    else:
+        symlink_target = tmp_path / f"{path_suffix}-target"
+        symlink_target.mkdir()
+        state_path.symlink_to(symlink_target, target_is_directory=True)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fixture.fake_bin}:/usr/bin:/bin",
+            "PINNED_UV_VERSION": UV_VERSION,
+            "UV_EXECUTABLE": str(tmp_path / f"uv-{UV_VERSION}-733" / "uv"),
+            environment_variable: str(state_path),
+        }
+    )
+
+    result = _run_runtime_payload(fixture, environment=environment)
+
+    assert result.returncode == 2
+    assert f"Job-local {environment_variable} must not already exist" in result.stderr
     assert not fixture.copied_project_root.exists()
 
 
@@ -884,6 +935,10 @@ def test_runtime_payload_cleans_workspace_after_late_uv_failure(tmp_path: Path) 
         "    esac\n"
         "    ;;\n"
         "  run)\n"
+        '    mkdir -p "${UV_CACHE_DIR}"\n'
+        '    touch "${UV_CACHE_DIR}/build-marker"\n'
+        '    mkdir -p "${NVTE_CMAKE_BUILD_DIR}"\n'
+        '    touch "${NVTE_CMAKE_BUILD_DIR}/CMakeCache.txt"\n'
         '    mkdir -p "${UV_PROJECT_ENVIRONMENT}"\n'
         "    exit 93\n"
         "    ;;\n"
@@ -942,6 +997,8 @@ def test_runtime_payload_cleans_workspace_after_late_uv_failure(tmp_path: Path) 
     assert result.returncode == 93, result.stderr
     assert not fixture.environment_root.exists()
     assert not fixture.copied_project_root.exists()
+    assert not Path(f"{fixture.environment_root}-uv-cache").exists()
+    assert not Path(f"{fixture.environment_root}-te-cmake").exists()
 
 
 def test_runtime_job_rejects_mutable_container_symlink(tmp_path: Path) -> None:

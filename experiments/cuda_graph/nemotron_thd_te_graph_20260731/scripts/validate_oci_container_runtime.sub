@@ -222,6 +222,8 @@ rm -f "${partial_artifact}" "${partial_link}"
 
 container_mounts="${project_root}:${project_root}:ro,${ARTIFACT_DIR}:${ARTIFACT_DIR}"
 runtime_environment_root=/tmp/nemo-rl-runtime-${SLURM_JOB_ID}
+runtime_uv_cache=${runtime_environment_root}-uv-cache
+runtime_te_cmake_dir=${runtime_environment_root}-te-cmake
 runtime_site_packages=${runtime_environment_root}/lib/python3.13/site-packages
 runtime_environment=(
   /usr/bin/env
@@ -244,6 +246,8 @@ runtime_environment=(
   UV_MANAGED_PYTHON=1
   "UV_PYTHON_INSTALL_DIR=${python_install_dir}"
   "UV_PROJECT_ENVIRONMENT=${runtime_environment_root}"
+  "UV_CACHE_DIR=${runtime_uv_cache}"
+  "NVTE_CMAKE_BUILD_DIR=${runtime_te_cmake_dir}"
 )
 for proxy_variable in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
   if [[ -n "${!proxy_variable:-}" ]]; then
@@ -295,17 +299,39 @@ if [[ "${path_cuda_compiler}" != "${cuda_compiler}" ]]; then
   echo "PATH nvcc does not match CUDACXX: ${path_cuda_compiler:-missing}" >&2
   exit 2
 fi
+uv_cache_dir=${UV_CACHE_DIR:-}
+if [[ "${uv_cache_dir}" != "${environment_root}-uv-cache" ]]; then
+  echo "UV_CACHE_DIR must be the job-local runtime cache" >&2
+  exit 2
+fi
+if [[ -e "${uv_cache_dir}" || -L "${uv_cache_dir}" ]]; then
+  echo "Job-local UV_CACHE_DIR must not already exist: ${uv_cache_dir}" >&2
+  exit 2
+fi
+te_cmake_dir=${NVTE_CMAKE_BUILD_DIR:-}
+if [[ "${te_cmake_dir}" != "${environment_root}-te-cmake" ]]; then
+  echo "NVTE_CMAKE_BUILD_DIR must be the job-local TE build directory" >&2
+  exit 2
+fi
+if [[ -e "${te_cmake_dir}" || -L "${te_cmake_dir}" ]]; then
+  echo "Job-local NVTE_CMAKE_BUILD_DIR must not already exist: ${te_cmake_dir}" >&2
+  exit 2
+fi
 validator_relative_path=${source_validator#"${source_project_root}/"}
 runtime_project_root=${environment_root}-source
 if [[ -e "${runtime_project_root}" || -L "${runtime_project_root}" ]]; then
   echo "Runtime source destination already exists: ${runtime_project_root}" >&2
   exit 2
 fi
-mkdir -m 0700 -- "${runtime_project_root}"
 cleanup_runtime_workspace() {
-  rm -rf -- "${environment_root}" "${runtime_project_root}"
+  rm -rf -- \
+    "${environment_root}" \
+    "${runtime_project_root}" \
+    "${uv_cache_dir}" \
+    "${te_cmake_dir}"
 }
 trap cleanup_runtime_workspace EXIT
+mkdir -m 0700 -- "${runtime_project_root}" "${uv_cache_dir}" "${te_cmake_dir}"
 cp -a -- "${source_project_root}/." "${runtime_project_root}/"
 project_root=${runtime_project_root}
 validator=${project_root}/${validator_relative_path}
@@ -461,6 +487,7 @@ srun \
   --nodes=1 \
   --ntasks=1 \
   --gres=gpu:4 \
+  --no-container-mount-home \
   --container-image="${CONTAINER}" \
   --container-mounts="${container_mounts}" \
   --export=NIL \
