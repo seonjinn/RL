@@ -1535,6 +1535,72 @@ cherry-picked. Task 10 pins the reviewed implementation. Task 12 then requires
 padded eager, fixed-capacity packed eager, and packed TE graph loss/gradient
 parity with dynamic sample-count replay before Task 13 performance jobs.
 
+### Task 10A: Preserve Dropless HybridEP Across the Preprocess Graph Boundary
+
+**Files:**
+- Modify: `3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/moe/cuda_graph_replay.py`
+- Modify: `3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/moe/token_dispatcher.py`
+- Modify: `3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/tests/unit_tests/transformer/moe/test_token_dispatcher.py`
+- Modify: `3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/tests/unit_tests/transformer/test_cuda_graphs.py`
+
+**Interfaces:**
+- Consumes: Task 5 dispatcher-owned replay state and the Task 10 topology audit.
+- Produces: a no-drop dropless HybridEP continuation whose dynamic expert
+  dispatch remains eager after the captured router/preprocess boundary.
+
+- [ ] **Step 1: Add failing ownership-boundary tests**
+
+Prove that `moe_preprocess` capture ends after
+`MoEFlexTokenDispatcher.dispatch_preprocess()`. For dropless HybridEP with
+equal fixed physical input rows, snapshot and restore must preserve
+`num_permuted_tokens=None`; the subsequent eager `token_dispatch()` computes
+its routing-dependent value, and eager combine resets it to `None`. The test
+must call the real dispatcher methods, not reproduce their logic.
+
+Keep negative coverage for Flex/DeepEP, Flex/NCCL-EP, and HybridEP uneven-input
+padding. Keep fixed expert/rank capacity behavior supported. A router-only row
+must continue to bypass dispatcher replay-state ownership entirely.
+
+- [ ] **Step 2: Model the actual ownership boundary**
+
+Allow `HybridEPCudaGraphState.num_permuted_tokens` to be `int | None`. The
+`None` value is an explicit pre-dispatch sentinel, not fallback: graph replay
+restores the sentinel, and the routing-dependent dispatch, expert compute, and
+combine remain eager. Do not invent a capacity factor, enable an op fuser,
+drop routes, pad expert buffers, or move dispatch communication into the
+graph. Keep exact Tensor/topology signatures and continuation validation.
+
+Uneven HybridEP source-row equalization remains unsupported because it performs
+a GPU-to-host maximum-token read inside preprocessing. NeMo-RL's fixed physical
+capacity must provide equal TP×EP-local row counts for this path.
+
+- [ ] **Step 3: Run focused verification**
+
+```bash
+uv run python -m pytest -q \
+  tests/unit_tests/transformer/moe/test_token_dispatcher.py \
+  tests/unit_tests/transformer/test_cuda_graphs.py \
+  -k "hybridep and (cudagraph or replay_state or continuation)"
+git diff --check
+```
+
+The locked command is attempted once locally; macOS dependency failure is
+recorded verbatim. Real HybridEP dispatch/capture/replay remains a mandatory
+Task 12 Linux/CUDA/TE multi-rank gate.
+
+- [ ] **Step 4: Commit and independently review**
+
+```bash
+git add megatron/core/transformer/moe/cuda_graph_replay.py \
+  megatron/core/transformer/moe/token_dispatcher.py \
+  tests/unit_tests/transformer/moe/test_token_dispatcher.py \
+  tests/unit_tests/transformer/test_cuda_graphs.py
+git commit -s -S -m "fix: preserve dropless HybridEP graph continuation"
+git log -1 --show-signature --format=fuller
+```
+
+Do not resume the Bridge pin until the scoped review is clean.
+
 ### Task 10: Validate Bridge Nemotron Topologies and Pin MCore
 
 **Files:**
