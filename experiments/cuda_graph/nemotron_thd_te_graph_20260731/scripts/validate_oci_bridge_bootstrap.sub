@@ -91,6 +91,12 @@ fi
 script_path=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")
 
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then
+  BRIDGE_BOOTSTRAP_PAYLOAD=${BRIDGE_BOOTSTRAP_PAYLOAD:-$(dirname "${script_path}")/bridge_bootstrap_payload.sh}
+  if [[ "${BRIDGE_BOOTSTRAP_PAYLOAD}" != /* || ! -f "${BRIDGE_BOOTSTRAP_PAYLOAD}" ]]; then
+    echo "BRIDGE_BOOTSTRAP_PAYLOAD must be an existing absolute path" >&2
+    exit 2
+  fi
+  export BRIDGE_BOOTSTRAP_PAYLOAD
   sbatch_command=(
     sbatch
     --parsable
@@ -116,6 +122,12 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
   exit 0
 fi
 
+: "${BRIDGE_BOOTSTRAP_PAYLOAD:?Submission must export BRIDGE_BOOTSTRAP_PAYLOAD}"
+if [[ "${BRIDGE_BOOTSTRAP_PAYLOAD}" != /* || ! -f "${BRIDGE_BOOTSTRAP_PAYLOAD}" ]]; then
+  echo "BRIDGE_BOOTSTRAP_PAYLOAD must be an existing absolute path" >&2
+  exit 1
+fi
+
 if [[ ! -f "${CONTAINER}" ]]; then
   echo "Immutable container is missing: ${CONTAINER}" >&2
   exit 1
@@ -126,7 +138,6 @@ if [[ "${actual_container_sha}" != "${CONTAINER_SHA256}" ]]; then
   exit 1
 fi
 
-payload=$(dirname "${script_path}")/bridge_bootstrap_payload.sh
 export SLURM_EXPORT_ENV=ALL
 srun \
   --nodes=1 \
@@ -134,4 +145,4 @@ srun \
   --container-image="${CONTAINER}" \
   --container-mounts="${MOUNTS}" \
   --export=ALL \
-  bash "${payload}"
+  bash "${BRIDGE_BOOTSTRAP_PAYLOAD}"
