@@ -565,6 +565,14 @@ fi
 # Give the head node actual resources to make it schedulable
 
 head_cmd=$(cat <<EOF
+# Pyxis does not preserve BASH_ENV startup-file behavior for this shell.
+if [[ -n "\${MOPD_ENV_FILE:-}" ]]; then
+  source "\${MOPD_ENV_FILE}" || {
+    echo "[ERROR] Failed to source MOPD_ENV_FILE=\${MOPD_ENV_FILE}" >&2
+    exit 1
+  }
+fi
+
 if [[ "\${RAY_SUB_DEBUG_ENV:-0}" == "1" ]]; then
   env | grep -viE '(WANDB_API_KEY|HF_TOKEN|API_KEY|TOKEN|SECRET|PASSWORD)=' || true
 fi
@@ -793,6 +801,14 @@ EOF
 # Worker nodes connect to the head. They're launched with a single batched srun
 # below; each task discovers its identity at runtime via SLURM_PROCID/SLURMD_NODENAME.
 worker_cmd=$(cat <<EOF
+# Pyxis does not preserve BASH_ENV startup-file behavior for this shell.
+if [[ -n "\${MOPD_ENV_FILE:-}" ]]; then
+  source "\${MOPD_ENV_FILE}" || {
+    echo "[ERROR] Failed to source MOPD_ENV_FILE=\${MOPD_ENV_FILE}" >&2
+    exit 1
+  }
+fi
+
 if [[ "\${RAY_SUB_DEBUG_ENV:-0}" == "1" ]]; then
   env | grep -viE '(WANDB_API_KEY|HF_TOKEN|API_KEY|TOKEN|SECRET|PASSWORD)=' || true
 fi
