@@ -25,7 +25,6 @@ from nemo_rl.models.generation.interfaces import (
 )
 from nemo_rl.utils.routed_experts_codec import encode_routed_experts
 
-<<<<<<< HEAD
 R3_MISSING_ROUTE_SENTINEL = ROUTED_EXPERTS_MISSING_ROUTE_SENTINEL
 VLLM_LOGPROB_FLOOR = -9999.0
 
