@@ -853,21 +853,24 @@ def test_source_snapshot_copies_exact_recursive_gitlinks_and_writes_manifest(
 ) -> None:
     mcore, mcore_sha = _create_clean_git_repository(tmp_path, "mcore-source")
     bridge, _ = _create_clean_git_repository(tmp_path, "bridge-source")
-    _git(
-        bridge,
-        "update-index",
-        "--add",
-        "--cacheinfo",
-        f"160000,{mcore_sha},3rdparty/Megatron-LM",
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "protocol.file.allow=always",
+            "-C",
+            str(bridge),
+            "submodule",
+            "add",
+            "-q",
+            str(mcore),
+            "3rdparty/Megatron-LM",
+        ],
+        check=True,
     )
     _git(bridge, "commit", "-qm", "pin mcore")
     bridge_sha = _git(bridge, "rev-parse", "HEAD")
     nested_mcore = bridge / "3rdparty" / "Megatron-LM"
-    nested_mcore.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        ["git", "clone", "-q", str(mcore), str(nested_mcore)],
-        check=True,
-    )
 
     outer, _ = _create_clean_git_repository(tmp_path, "nemo-rl-source")
     experiment_scripts = (
@@ -883,25 +886,36 @@ def test_source_snapshot_copies_exact_recursive_gitlinks_and_writes_manifest(
     (outer / "uv.lock").write_text("fixture-lock\n")
     _git(outer, "add", "experiments", "uv.lock")
     _git(outer, "commit", "-qm", "add snapshot tools")
-    _git(
-        outer,
-        "update-index",
-        "--add",
-        "--cacheinfo",
-        f"160000,{bridge_sha},3rdparty/Megatron-Bridge-workspace/Megatron-Bridge",
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "protocol.file.allow=always",
+            "-C",
+            str(outer),
+            "submodule",
+            "add",
+            "-q",
+            str(bridge),
+            "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge",
+        ],
+        check=True,
     )
     _git(outer, "commit", "-qm", "pin bridge")
     outer_sha = _git(outer, "rev-parse", "HEAD")
     nested_bridge = outer / "3rdparty" / "Megatron-Bridge-workspace" / "Megatron-Bridge"
-    nested_bridge.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
-        ["git", "clone", "-q", str(bridge), str(nested_bridge)],
-        check=True,
-    )
-    snapshot_nested_mcore = nested_bridge / "3rdparty" / "Megatron-LM"
-    snapshot_nested_mcore.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        ["git", "clone", "-q", str(mcore), str(snapshot_nested_mcore)],
+        [
+            "git",
+            "-c",
+            "protocol.file.allow=always",
+            "-C",
+            str(outer),
+            "submodule",
+            "update",
+            "--init",
+            "--recursive",
+        ],
         check=True,
     )
 
@@ -946,6 +960,14 @@ def test_source_snapshot_copies_exact_recursive_gitlinks_and_writes_manifest(
         )
         == mcore_sha
     )
+    submodule_status = subprocess.run(
+        ["git", "-C", str(snapshot), "submodule", "status", "--recursive"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    assert len(submodule_status) == 2
+    assert all(line.startswith(" ") for line in submodule_status)
     manifest_text = manifest.read_text()
     assert f"nemo_rl_commit={outer_sha}" in manifest_text
     assert f"bridge_commit={bridge_sha}" in manifest_text

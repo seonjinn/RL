@@ -20,6 +20,19 @@ fail() {
   exit 1
 }
 
+verify_recursive_submodules() {
+  local repository=$1
+  local found=false
+  local status_line
+
+  while IFS= read -r status_line; do
+    found=true
+    [[ "${status_line:0:1}" == " " ]] || \
+      fail "Recursive submodule is not initialized at its pinned commit: ${status_line}"
+  done < <(git -C "${repository}" submodule status --recursive)
+  [[ "${found}" == "true" ]] || fail "Source checkout has no initialized submodules"
+}
+
 : "${SOURCE_ROOT:?Set SOURCE_ROOT to the clean NeMo-RL checkout}"
 : "${SNAPSHOT_STORE:?Set SNAPSHOT_STORE to an absolute persistent directory}"
 : "${EXPECTED_NEMORL_SHA:?Set EXPECTED_NEMORL_SHA}"
@@ -38,6 +51,7 @@ verifier=${script_dir}/verify_source_provenance.sh
   "${source_root}" "${EXPECTED_NEMORL_SHA}" \
   "${bridge_root}" "${EXPECTED_BRIDGE_SHA}" \
   "${mcore_root}" "${EXPECTED_MCORE_SHA}"
+verify_recursive_submodules "${source_root}"
 
 read -r outer_mode outer_type outer_gitlink _ < <(
   git -C "${source_root}" ls-tree HEAD \
@@ -66,6 +80,7 @@ if [[ -e "${snapshot}" ]]; then
     "${EXPECTED_BRIDGE_SHA}" \
     "${snapshot}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM" \
     "${EXPECTED_MCORE_SHA}"
+  verify_recursive_submodules "${snapshot}"
   echo "SOURCE_SNAPSHOT=${snapshot}"
   echo "SOURCE_MANIFEST=${manifest}"
   exit 0
@@ -81,16 +96,9 @@ trap cleanup EXIT
 
 git clone --quiet --no-hardlinks --no-checkout "${source_root}" "${temporary}"
 git -C "${temporary}" checkout --quiet --detach "${EXPECTED_NEMORL_SHA}"
-git clone --quiet --no-hardlinks --no-checkout \
-  "${bridge_root}" \
-  "${temporary}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge"
-git -C "${temporary}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge" \
-  checkout --quiet --detach "${EXPECTED_BRIDGE_SHA}"
-git clone --quiet --no-hardlinks --no-checkout \
-  "${mcore_root}" \
-  "${temporary}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
-git -C "${temporary}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM" \
-  checkout --quiet --detach "${EXPECTED_MCORE_SHA}"
+git -C "${temporary}" submodule sync --recursive
+git -c protocol.file.allow=always -C "${temporary}" \
+  submodule update --init --recursive
 
 snapshot_verifier=${temporary}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/scripts/verify_source_provenance.sh
 "${snapshot_verifier}" \
@@ -99,6 +107,7 @@ snapshot_verifier=${temporary}/experiments/cuda_graph/nemotron_thd_te_graph_2026
   "${EXPECTED_BRIDGE_SHA}" \
   "${temporary}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM" \
   "${EXPECTED_MCORE_SHA}"
+verify_recursive_submodules "${temporary}"
 
 uv_lock_sha256=$(sha256sum "${temporary}/uv.lock" | awk '{print $1}')
 created_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
