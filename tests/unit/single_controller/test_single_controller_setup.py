@@ -414,6 +414,7 @@ class TestSetup:
             None,
         )
         fake_gym_actor = MagicMock(name="nemo_gym_actor")
+        tokenizer = MagicMock(pad_token_id=0)
 
         with (
             patch.object(sc_setup_mod, "_should_use_nemo_gym", return_value=True),
@@ -422,7 +423,7 @@ class TestSetup:
             ) as mock_spinup,
             patch.object(sc_setup_mod, "router_replay_enabled", return_value=False),
         ):
-            actor_args = setup_single_controller(mc, MagicMock(pad_token_id=0))
+            actor_args = setup_single_controller(mc, tokenizer)
 
         mock_spinup.assert_called_once_with(
             env_configs=mc.env,
@@ -433,6 +434,7 @@ class TestSetup:
             enable_router_replay=False,
             routed_experts_dtype="int16",
             use_fastokens=False,
+            tokenizer=tokenizer,
         )
         assert actor_args.env_handles["nemo_gym"] is fake_gym_actor
 
