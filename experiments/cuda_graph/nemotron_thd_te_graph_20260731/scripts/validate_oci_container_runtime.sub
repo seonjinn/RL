@@ -73,8 +73,8 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     echo "CONTAINER_RUNTIME_VALIDATOR must be an existing absolute path" >&2
     exit 2
   fi
-  if [[ "${PROJECT_ROOT}" != /* || ! -f "${PROJECT_ROOT}/pyproject.toml" || ! -f "${PROJECT_ROOT}/uv.lock" ]]; then
-    echo "PROJECT_ROOT must be an absolute NeMo-RL checkout with pyproject.toml and uv.lock" >&2
+  if [[ "${PROJECT_ROOT}" != /* || ! -f "${PROJECT_ROOT}/pyproject.toml" || ! -f "${PROJECT_ROOT}/uv.lock" || ! -f "${PROJECT_ROOT}/.python-version" ]]; then
+    echo "PROJECT_ROOT must be an absolute NeMo-RL checkout with pyproject.toml, uv.lock, and .python-version" >&2
     exit 2
   fi
   if [[ "${SOURCE_PROVENANCE_VERIFIER}" != /* || ! -x "${SOURCE_PROVENANCE_VERIFIER}" ]]; then
@@ -129,8 +129,8 @@ fi
 if [[ -z "${PROJECT_ROOT:-}" ]]; then
   PROJECT_ROOT=$(cd "$(dirname "${CONTAINER_RUNTIME_VALIDATOR}")/../../.." && pwd -P)
 fi
-if [[ "${PROJECT_ROOT}" != /* || ! -f "${PROJECT_ROOT}/pyproject.toml" || ! -f "${PROJECT_ROOT}/uv.lock" ]]; then
-  echo "PROJECT_ROOT must be an absolute NeMo-RL checkout with pyproject.toml and uv.lock" >&2
+if [[ "${PROJECT_ROOT}" != /* || ! -f "${PROJECT_ROOT}/pyproject.toml" || ! -f "${PROJECT_ROOT}/uv.lock" || ! -f "${PROJECT_ROOT}/.python-version" ]]; then
+  echo "PROJECT_ROOT must be an absolute NeMo-RL checkout with pyproject.toml, uv.lock, and .python-version" >&2
   exit 1
 fi
 validator=${CONTAINER_RUNTIME_VALIDATOR}
@@ -195,6 +195,13 @@ fi
 }
 
 mkdir -p "${ARTIFACT_DIR}"
+expected_python_version=$(tr -d '[:space:]' <"${project_root}/.python-version")
+if [[ ! "${expected_python_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo ".python-version must contain one exact X.Y.Z version" >&2
+  exit 1
+fi
+python_install_dir=${ARTIFACT_DIR%/}/uv-python-installations
+mkdir -p "${python_install_dir}"
 artifact=${ARTIFACT_DIR}/oci-container-runtime-${SLURM_JOB_ID}.json
 partial_artifact=${artifact}.partial
 diagnostic=${ARTIFACT_DIR}/oci-container-runtime-${SLURM_JOB_ID}.diagnostics.log
@@ -222,7 +229,9 @@ runtime_environment=(
   NRL_CONTAINER=1
   NRL_FORCE_REBUILD_VENVS=true
   UV_LINK_MODE=copy
-  UV_PYTHON=/opt/nemo_rl_venv/bin/python
+  "UV_PYTHON=${expected_python_version}"
+  UV_MANAGED_PYTHON=1
+  "UV_PYTHON_INSTALL_DIR=${python_install_dir}"
   "UV_PROJECT_ENVIRONMENT=${runtime_environment_root}"
 )
 for proxy_variable in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
@@ -252,25 +261,34 @@ if [[ "${output_flag}" != "--output" ]]; then
   echo "Runtime probe payload requires --output" >&2
   exit 2
 fi
-base_python=${UV_PYTHON:?Runtime probe requires the container Python}
-if [[ ! -x "${base_python}" ]]; then
-  echo "Container Python is missing or not executable: ${base_python}" >&2
+expected_python_version=$(tr -d "[:space:]" <"${project_root}/.python-version")
+if [[ "${UV_PYTHON:?Runtime probe requires an exact Python version}" != "${expected_python_version}" ]]; then
+  echo "UV_PYTHON does not match .python-version" >&2
   exit 2
 fi
-expected_python_version=$(tr -d "[:space:]" <"${project_root}/.python-version")
+python_install_dir=${UV_PYTHON_INSTALL_DIR:?Runtime probe requires a managed Python install directory}
+uv python install --managed-python "${expected_python_version}"
+export UV_PYTHON_DOWNLOADS=never
+base_python=$(uv python find --managed-python "${expected_python_version}")
+if [[ ! -x "${base_python}" ]]; then
+  echo "Managed Python is missing or not executable: ${base_python}" >&2
+  exit 2
+fi
 actual_python_version=$("${base_python}" -c "import platform; print(platform.python_version())")
 if [[ "${actual_python_version}" != "${expected_python_version}" ]]; then
-  echo "Container Python version mismatch: expected ${expected_python_version}, got ${actual_python_version}" >&2
+  echo "Managed Python version mismatch: expected ${expected_python_version}, got ${actual_python_version}" >&2
   exit 2
 fi
 rm -rf -- "${environment_root}"
 cd "${project_root}"
-exec uv run --python "${base_python}" --locked --extra mcore --no-python-downloads --directory "${project_root}" python "${validator}" \
+exec uv run --python "${expected_python_version}" --managed-python --locked --extra mcore --no-python-downloads --directory "${project_root}" python "${validator}" \
   --container-image "${container}" \
   --container-sha256 "${container_sha256}" \
   --expected-device-count 4 \
   --expected-environment-root "${environment_root}" \
   --expected-project-root "${project_root}" \
+  --expected-python-version "${expected_python_version}" \
+  --expected-python-install-dir "${python_install_dir}" \
   --nemo-rl-commit "${nemo_rl_commit}" \
   --bridge-commit "${bridge_commit}" \
   --mcore-commit "${mcore_commit}" \

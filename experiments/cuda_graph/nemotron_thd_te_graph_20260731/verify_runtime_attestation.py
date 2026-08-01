@@ -78,6 +78,13 @@ def _container_identity(container: Path) -> dict[str, int]:
     }
 
 
+def _require_path_within(*, label: str, path: Path, root: Path) -> None:
+    try:
+        path.relative_to(root)
+    except ValueError as error:
+        raise ValueError(f"{label} is outside {root}: {path}") from error
+
+
 def _read_attestation(attestation: Path) -> dict[str, Any]:
     if attestation.is_symlink():
         raise ValueError(f"runtime attestation must not be a symlink: {attestation}")
@@ -105,6 +112,8 @@ def validate_attestation(
     uv_lock: Path,
     expected_te_commit: str,
     expected_device_count: int,
+    expected_python_version: str,
+    expected_python_install_dir: Path,
 ) -> dict[str, Any]:
     """Require exact source, image, TE, GPU, and worker-stack provenance."""
     if FULL_SHA256.fullmatch(expected_container_sha256) is None:
@@ -120,6 +129,21 @@ def validate_attestation(
         _require_full_commit(label, commit)
     if expected_device_count <= 0:
         raise ValueError("expected device count must be positive")
+    if re.fullmatch(r"\d+\.\d+\.\d+", expected_python_version) is None:
+        raise ValueError("expected Python version must be an exact X.Y.Z version")
+    if not expected_python_install_dir.is_absolute():
+        raise ValueError("expected Python install directory must be absolute")
+    if expected_python_install_dir.is_symlink():
+        raise ValueError(
+            "expected Python install directory must not be a symlink: "
+            f"{expected_python_install_dir}"
+        )
+    expected_python_install_dir = expected_python_install_dir.resolve(strict=False)
+    if not expected_python_install_dir.is_dir():
+        raise ValueError(
+            "expected Python install directory is missing: "
+            f"{expected_python_install_dir}"
+        )
     if not uv_lock.is_file():
         raise ValueError(f"uv.lock is missing: {uv_lock}")
 
@@ -137,6 +161,9 @@ def validate_attestation(
         "transformer_engine_vcs_commit": expected_te_commit,
         "device_count": expected_device_count,
         "expected_device_count": expected_device_count,
+        "expected_python_version": expected_python_version,
+        "python_version": expected_python_version,
+        "uv_python_install_dir": str(expected_python_install_dir),
     }
     mismatches = {
         key: {"expected": expected, "actual": payload.get(key)}
@@ -166,6 +193,39 @@ def validate_attestation(
         raise ValueError(
             "uv.lock SHA256 mismatch after runtime preflight: "
             f"expected {payload.get('uv_lock_sha256')}, got {lock_sha256}"
+        )
+
+    python_base_executable_value = payload.get("python_base_executable")
+    if not isinstance(python_base_executable_value, str):
+        raise ValueError("runtime attestation lacks managed Python executable")
+    python_base_executable = Path(python_base_executable_value)
+    if not python_base_executable.is_absolute():
+        raise ValueError("managed Python executable must be absolute")
+    if python_base_executable.is_symlink():
+        raise ValueError(
+            f"managed Python executable must not be a symlink: {python_base_executable}"
+        )
+    python_base_executable = python_base_executable.resolve(strict=False)
+    _require_path_within(
+        label="managed Python executable",
+        path=python_base_executable,
+        root=expected_python_install_dir,
+    )
+    if not python_base_executable.is_file():
+        raise ValueError(
+            f"managed Python executable is missing: {python_base_executable}"
+        )
+    expected_python_sha256 = payload.get("python_base_executable_sha256")
+    if (
+        not isinstance(expected_python_sha256, str)
+        or FULL_SHA256.fullmatch(expected_python_sha256) is None
+    ):
+        raise ValueError("runtime attestation lacks managed Python executable SHA256")
+    actual_python_sha256 = _sha256(python_base_executable)
+    if actual_python_sha256 != expected_python_sha256:
+        raise ValueError(
+            "managed Python executable SHA256 mismatch: "
+            f"expected {expected_python_sha256}, got {actual_python_sha256}"
         )
 
     packages = payload.get("packages")
@@ -201,6 +261,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--uv-lock", required=True, type=Path)
     parser.add_argument("--expected-te-commit", required=True)
     parser.add_argument("--expected-device-count", required=True, type=int)
+    parser.add_argument("--expected-python-version", required=True)
+    parser.add_argument("--expected-python-install-dir", required=True, type=Path)
     return parser.parse_args()
 
 
@@ -216,6 +278,8 @@ def main() -> None:
         uv_lock=args.uv_lock,
         expected_te_commit=args.expected_te_commit,
         expected_device_count=args.expected_device_count,
+        expected_python_version=args.expected_python_version,
+        expected_python_install_dir=args.expected_python_install_dir,
     )
     print(json.dumps(payload, sort_keys=True))
 

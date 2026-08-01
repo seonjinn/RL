@@ -21,6 +21,13 @@ The local experiment suite passes; Linux/GB200 runtime, correctness, and
 performance results are still pending and must not be inferred from local
 tests.
 
+The current nightly image provides Python 3.13.11 while this source snapshot
+requires the exact version in `.python-version` (currently 3.13.13). The OCI
+preflight therefore stages uv-managed 3.13.13 once under
+`ARTIFACT_DIR/uv-python-installations`, validates the resolved base executable,
+and disables further Python downloads before resolving the locked training
+environment. This is a runtime compatibility gate, not a CUDA Graph result.
+
 Nano HybridEP `moe_preprocess` rows are fail-closed, while Super and the Qwen
 comparison selector may run their validated preprocess rows. Qwen dense `mlp`
 and `mamba` rows are model-incompatible. Ultra remains dependency-blocked
@@ -60,8 +67,11 @@ Run these gates before submitting a model scope.
    used by policy workers and requires exactly four visible devices. It imports
    PyTorch, Transformer Engine, Megatron Core, Megatron Bridge, Mamba SSM,
    causal-conv1d, CuPy, and grouped GEMM. It hashes the 67 GB image once and
-   records source, lock, image identity, and the exact TE VCS commit in a
-   machine-readable success or failure artifact.
+   records source, lock, image identity, the exact TE VCS commit, the exact
+   Python patch version, and the managed base-interpreter SHA256 in a
+   machine-readable success or failure artifact. Python downloads are enabled
+   only for the initial managed-interpreter staging command and are set to
+   `never` before `uv run --locked`.
 
    ```bash
    CONTAINER=/absolute/shared/containers/nemo_rl_nightly.sqsh \
@@ -97,8 +107,12 @@ Run these gates before submitting a model scope.
    `RUNTIME_PREFLIGHT_JOB_ID` to the successful preflight job and
    `RUNTIME_ATTESTATION` to its exact non-symlink JSON artifact. Every leaf is
    submitted with `afterok:<preflight-job>` and validates exact source, lock,
-   image identity, device count, package set, and TE commit before starting
-   Ray. Leaf jobs do not rehash the image.
+   image identity, device count, package set, TE commit, Python version, managed
+   interpreter path, and interpreter SHA256 before starting Ray. The leaf
+   derives `UV_PYTHON_INSTALL_DIR` from the immutable attestation directory,
+   requires that path to be container-mounted, forces uv-managed Python with
+   downloads disabled, and gives the NeMo-RL driver a fresh per-job
+   `UV_PROJECT_ENVIRONMENT`. Leaf jobs do not rehash the image.
 
 `validate_te_runtime.py` remains an offline provenance utility. Production
 leaf jobs use `verify_runtime_attestation.py`, which requires exact equality
@@ -175,9 +189,17 @@ uv run export_tensorboard.py \
   --mode nemorl --cluster oci-hsg --profile oci-hsg-runtime-attested \
   --phase performance --steps 20 --job-id 123456 \
   --repeat 1 --run-group nano-performance-20260731 --status passed \
-  --provenance /shared/run/run-metadata.env \
+  --provenance /shared/run/provenance.json \
   --output results/raw/nano-attn-router.jsonl
 ```
+
+`--provenance` is JSON, not `run-metadata.env`. Populate it from the immutable
+runtime attestation and run metadata with the exact keys `nemo_rl_commit`,
+`bridge_commit`, `mcore_commit`, `te_commit`, `te_version`, and
+`container_sha256`. The source commit plus container digest identify the pinned
+`.python-version` and uv implementation; the leaf runtime gate separately
+requires the attested managed interpreter and executable SHA256 before Ray
+starts.
 
 `analyze_cuda_graph_calls.py` consumes local Nsight Systems profiles. Its
 `nsys_cuda_graph_launch_share_of_cuda_api_calls_pct` field uses all CUDA

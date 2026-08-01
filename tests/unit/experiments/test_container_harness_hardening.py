@@ -22,6 +22,7 @@ NEMORL_COMMIT = "b" * 40
 BRIDGE_COMMIT = "c" * 40
 MCORE_COMMIT = "d" * 40
 TE_COMMIT = "e" * 40
+PYTHON_VERSION = "3.13.13"
 
 
 def _load_runtime_probe() -> ModuleType:
@@ -172,6 +173,74 @@ def test_runtime_probe_allows_only_megatron_editables_from_project_root(
     )
 
     assert result["expected_project_root"] == str(project_root)
+
+
+def test_runtime_probe_requires_exact_uv_managed_python(tmp_path: Path) -> None:
+    module = _load_runtime_probe()
+    environment_root = tmp_path / "runtime-venv"
+    project_root = tmp_path / "project"
+    python_install_dir = tmp_path / "uv-python-installations"
+    base_python = (
+        python_install_dir / "cpython-3.13.13-linux-aarch64-gnu" / "bin" / "python3.13"
+    )
+    base_python.parent.mkdir(parents=True)
+    base_python.write_bytes(b"managed-python-fixture")
+    modules = _runtime_modules(module, environment_root)
+    modules["megatron.core"] = SimpleNamespace(
+        __file__=str(project_root / "megatron" / "core" / "__init__.py")
+    )
+    modules["megatron.bridge"] = SimpleNamespace(
+        __file__=str(project_root / "megatron" / "bridge" / "__init__.py")
+    )
+
+    result = module.probe_runtime(
+        expected_device_count=4,
+        expected_environment_root=environment_root,
+        expected_project_root=project_root,
+        expected_python_version=PYTHON_VERSION,
+        expected_python_install_dir=python_install_dir,
+        importer=lambda name: modules[name],
+        version_getter=lambda distribution: f"fixture-{distribution}",
+        interpreter_path=environment_root / "bin" / "python",
+        base_interpreter_path=base_python,
+        runtime_prefix=environment_root,
+        python_version=PYTHON_VERSION,
+        environment={
+            "UV_PROJECT_ENVIRONMENT": str(environment_root),
+            "UV_PYTHON_INSTALL_DIR": str(python_install_dir),
+            "UV_MANAGED_PYTHON": "1",
+            "UV_PYTHON_DOWNLOADS": "never",
+        },
+    )
+
+    assert result["python_version"] == PYTHON_VERSION
+    assert result["python_base_executable"] == str(base_python)
+    assert result["uv_python_install_dir"] == str(python_install_dir)
+    assert (
+        result["python_base_executable_sha256"]
+        == hashlib.sha256(base_python.read_bytes()).hexdigest()
+    )
+
+    with pytest.raises(RuntimeError, match="Python version mismatch"):
+        module.probe_runtime(
+            expected_device_count=4,
+            expected_environment_root=environment_root,
+            expected_project_root=project_root,
+            expected_python_version=PYTHON_VERSION,
+            expected_python_install_dir=python_install_dir,
+            importer=lambda name: modules[name],
+            version_getter=lambda distribution: f"fixture-{distribution}",
+            interpreter_path=environment_root / "bin" / "python",
+            base_interpreter_path=base_python,
+            runtime_prefix=environment_root,
+            python_version="3.13.11",
+            environment={
+                "UV_PROJECT_ENVIRONMENT": str(environment_root),
+                "UV_PYTHON_INSTALL_DIR": str(python_install_dir),
+                "UV_MANAGED_PYTHON": "1",
+                "UV_PYTHON_DOWNLOADS": "never",
+            },
+        )
 
 
 def test_runtime_probe_reads_exact_transformer_engine_vcs_commit() -> None:
@@ -335,8 +404,18 @@ printf '{"status":"passed"}\n' >"${output}"
     assert "CUDA_HOME=/usr/local/cuda" in command
     assert "NRL_FORCE_REBUILD_VENVS=true" in command
     assert "UV_PROJECT_ENVIRONMENT=/tmp/nemo-rl-runtime-733" in command
-    assert "UV_PYTHON=/opt/nemo_rl_venv/bin/python" in command
-    assert 'uv run --python "${base_python}" --locked --extra mcore' in command
+    assert f"UV_PYTHON={PYTHON_VERSION}" in command
+    assert "UV_MANAGED_PYTHON=1" in command
+    assert f"UV_PYTHON_INSTALL_DIR={artifact_dir}/uv-python-installations" in command
+    assert 'uv python install --managed-python "${expected_python_version}"' in command
+    assert "UV_PYTHON_DOWNLOADS=never" in command
+    assert command.index(
+        'uv python install --managed-python "${expected_python_version}"'
+    ) < command.index("UV_PYTHON_DOWNLOADS=never")
+    assert (
+        'uv run --python "${expected_python_version}" --managed-python '
+        "--locked --extra mcore --no-python-downloads" in command
+    )
     assert "--no-editable" not in command
     assert '--expected-environment-root "${environment_root}"' in command
     assert '--expected-project-root "${project_root}"' in command
@@ -345,6 +424,8 @@ printf '{"status":"passed"}\n' >"${output}"
     assert '--mcore-commit "${mcore_commit}"' in command
     assert '--uv-lock-sha256 "${uv_lock_sha256}"' in command
     assert '--expected-te-commit "${expected_te_commit}"' in command
+    assert '--expected-python-version "${expected_python_version}"' in command
+    assert '--expected-python-install-dir "${python_install_dir}"' in command
     assert '--container-device "${container_device}"' in command
     assert '--container-inode "${container_inode}"' in command
     assert '--container-size "${container_size}"' in command

@@ -130,6 +130,35 @@ case "${RUNTIME_PREFLIGHT_JOB_ID:-}" in
   ""|__REQUIRED_*__) ;;
   *[!0-9]*|0) fail "RUNTIME_PREFLIGHT_JOB_ID must be a positive SLURM job ID" ;;
 esac
+[[ -f "${repo_root}/.python-version" ]] || \
+  fail "NeMo-RL source snapshot is missing .python-version"
+MANAGED_PYTHON_VERSION=$(tr -d '[:space:]' <"${repo_root}/.python-version")
+[[ "${MANAGED_PYTHON_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || \
+  fail ".python-version must contain one exact X.Y.Z version"
+case "${RUNTIME_ATTESTATION:-}" in
+  /*)
+    MANAGED_PYTHON_INSTALL_DIR=$(dirname "${RUNTIME_ATTESTATION}")/uv-python-installations
+    ;;
+  *)
+    MANAGED_PYTHON_INSTALL_DIR=__DERIVED_FROM_RUNTIME_ATTESTATION__/uv-python-installations
+    ;;
+esac
+if [[ "${MANAGED_PYTHON_INSTALL_DIR}" == /* ]]; then
+  managed_python_is_mounted=false
+  IFS=',' read -r -a mount_specs <<<"${MOUNTS}"
+  for mount_spec in "${mount_specs[@]}"; do
+    IFS=':' read -r _ container_mount_path _ <<<"${mount_spec}"
+    [[ "${container_mount_path:-}" == /* ]] || continue
+    case "${MANAGED_PYTHON_INSTALL_DIR}" in
+      "${container_mount_path}"|"${container_mount_path}"/*)
+        managed_python_is_mounted=true
+        break
+        ;;
+    esac
+  done
+  [[ "${managed_python_is_mounted}" == "true" ]] || \
+    fail "managed Python install directory is not container-mounted: ${MANAGED_PYTHON_INSTALL_DIR}"
+fi
 case "${EXPECTED_TE_SHA:-}" in
   ""|__REQUIRED_*__) ;;
   *)
@@ -233,6 +262,8 @@ runtime_attestation_command=(
   --uv-lock "${repo_root}/uv.lock"
   --expected-te-commit "${EXPECTED_TE_SHA}"
   --expected-device-count "${MODEL_GPUS_PER_NODE}"
+  --expected-python-version "${MANAGED_PYTHON_VERSION}"
+  --expected-python-install-dir "${MANAGED_PYTHON_INSTALL_DIR}"
 )
 printf -v RUNTIME_ATTESTATION_COMMAND '%q ' "${runtime_attestation_command[@]}"
 RUNTIME_ATTESTATION_COMMAND=${RUNTIME_ATTESTATION_COMMAND% }
@@ -274,6 +305,8 @@ printf 'REPEAT_INDEX: %s\n' "${REPEAT_INDEX}"
 printf 'PROFILE: %s\n' "${PROFILE_ID}"
 printf 'RUN_LOG_DIR: %s\n' "${run_log_dir}"
 printf 'RUNTIME_ATTESTATION: %q\n' "${RUNTIME_ATTESTATION_COMMAND}"
+printf 'MANAGED_PYTHON_VERSION: %s\n' "${MANAGED_PYTHON_VERSION}"
+printf 'MANAGED_PYTHON_INSTALL_DIR: %s\n' "${MANAGED_PYTHON_INSTALL_DIR}"
 printf 'COMMAND: %q\n' "${COMMAND}"
 printf 'SBATCH:'
 printf ' %q' "${sbatch_command[@]}"
@@ -317,6 +350,8 @@ mkdir -p "${run_log_dir}"
   printf 'container_sha256=%s\n' "${CONTAINER_SHA256}"
   printf 'runtime_preflight_job_id=%s\n' "${RUNTIME_PREFLIGHT_JOB_ID}"
   printf 'runtime_attestation=%s\n' "${RUNTIME_ATTESTATION}"
+  printf 'managed_python_version=%s\n' "${MANAGED_PYTHON_VERSION}"
+  printf 'managed_python_install_dir=%s\n' "${MANAGED_PYTHON_INSTALL_DIR}"
 } >"${run_log_dir}/run-metadata.env"
 export COMMAND CONTAINER CONTAINER_SHA256 MOUNTS RUNTIME_ATTESTATION_COMMAND
 export BASE_LOG_DIR=${run_log_dir}
@@ -327,6 +362,10 @@ export MODEL DISPATCHER SCOPE SCOPE_NAME MODE CLUSTER PROFILE_ID PHASE STEPS
 export RUN_GROUP REPEAT_INDEX
 export EXPECTED_NEMORL_SHA EXPECTED_BRIDGE_SHA EXPECTED_MCORE_SHA
 export EXPECTED_TE_SHA RUNTIME_ATTESTATION RUNTIME_PREFLIGHT_JOB_ID
+export UV_PYTHON=${MANAGED_PYTHON_VERSION}
+export UV_PYTHON_INSTALL_DIR=${MANAGED_PYTHON_INSTALL_DIR}
+export UV_MANAGED_PYTHON=1
+export UV_PYTHON_DOWNLOADS=never
 export SOURCE_PROVENANCE_VERIFIER=${source_provenance_verifier}
 job_id=$("${sbatch_command[@]}")
 printf 'SLURM_JOB_ID: %s\n' "${job_id}"

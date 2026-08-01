@@ -30,6 +30,28 @@ set -euo pipefail
 : "${EXPECTED_BRIDGE_SHA:?run_scope.sh must export EXPECTED_BRIDGE_SHA}"
 : "${EXPECTED_MCORE_SHA:?run_scope.sh must export EXPECTED_MCORE_SHA}"
 : "${SOURCE_PROVENANCE_VERIFIER:?run_scope.sh must export SOURCE_PROVENANCE_VERIFIER}"
+: "${UV_PYTHON:?run_scope.sh must export UV_PYTHON}"
+: "${UV_PYTHON_INSTALL_DIR:?run_scope.sh must export UV_PYTHON_INSTALL_DIR}"
+: "${UV_MANAGED_PYTHON:?run_scope.sh must export UV_MANAGED_PYTHON}"
+: "${UV_PYTHON_DOWNLOADS:?run_scope.sh must export UV_PYTHON_DOWNLOADS}"
+
+expected_python_version=$(tr -d '[:space:]' <"${REPO_ROOT}/.python-version")
+[[ "${UV_PYTHON}" == "${expected_python_version}" ]] || {
+  echo "UV_PYTHON must match ${REPO_ROOT}/.python-version" >&2
+  exit 2
+}
+[[ "${UV_PYTHON_INSTALL_DIR}" == /* ]] || {
+  echo "UV_PYTHON_INSTALL_DIR must be absolute" >&2
+  exit 2
+}
+[[ "${UV_MANAGED_PYTHON}" == "1" ]] || {
+  echo "UV_MANAGED_PYTHON must be 1" >&2
+  exit 2
+}
+[[ "${UV_PYTHON_DOWNLOADS}" == "never" ]] || {
+  echo "UV_PYTHON_DOWNLOADS must be never" >&2
+  exit 2
+}
 
 bridge_root=${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
 mcore_root=${bridge_root}/3rdparty/Megatron-LM
@@ -37,6 +59,11 @@ mcore_root=${bridge_root}/3rdparty/Megatron-LM
   "${REPO_ROOT}" "${EXPECTED_NEMORL_SHA}" \
   "${bridge_root}" "${EXPECTED_BRIDGE_SHA}" \
   "${mcore_root}" "${EXPECTED_MCORE_SHA}"
+
+export PATH=/root/.local/bin:/opt/nemo_rl_venv/bin:/usr/local/bin:/usr/bin:/bin:${PATH}
+unset PYTHONHOME PYTHONPATH VIRTUAL_ENV
+export UV_PROJECT_ENVIRONMENT=/tmp/mcore-driver-${SLURM_JOB_ID:?}
+export UV_LINK_MODE=copy
 
 export SLURM_EXPORT_ENV=ALL
 srun \

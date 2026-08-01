@@ -24,6 +24,7 @@ MCORE_SHA = "2d19c0e07d2e8d6f061e05d55af1445bcef120a9"
 NEMORL_SHA = "0" * 40
 TE_SHA = "e" * 40
 CONTAINER_SHA256 = "32f07be22293d9a3979e8ba04772ad48a8157dad04fd92577063ed4e07ab1493"
+PYTHON_VERSION = "3.13.13"
 DENSE_AXES = ("attn", "mlp", "mamba")
 MOE_AXES = (
     (),
@@ -801,6 +802,67 @@ def test_leaf_job_depends_on_one_exact_runtime_preflight_artifact(
     assert "verify_runtime_attestation.py" in result.stdout
     assert attestation in result.stdout
     assert "validate_te_runtime.py" not in result.stdout
+    assert f"MANAGED_PYTHON_VERSION: {PYTHON_VERSION}" in result.stdout
+    assert (
+        "MANAGED_PYTHON_INSTALL_DIR: "
+        "/lustre/example/runtime/uv-python-installations" in result.stdout
+    )
+    runtime_attestation_line = next(
+        line
+        for line in result.stdout.splitlines()
+        if line.startswith("RUNTIME_ATTESTATION: ")
+    )
+    runtime_attestation_command = shlex.split(
+        runtime_attestation_line.removeprefix("RUNTIME_ATTESTATION: ")
+    )[0]
+    assert f"--expected-python-version {PYTHON_VERSION}" in runtime_attestation_command
+    assert (
+        "--expected-python-install-dir "
+        "/lustre/example/runtime/uv-python-installations" in runtime_attestation_command
+    )
+
+
+def test_leaf_job_rejects_unmounted_managed_python_installation(
+    tmp_path: Path,
+) -> None:
+    profile = tmp_path / "oci-runtime-unmounted.env"
+    profile.write_text(
+        "\n".join(
+            (
+                "PROFILE_ID=oci-hsg-runtime-unmounted",
+                "ACCOUNT=coreai_dlalgo_nemorl",
+                "PARTITION=batch",
+                "CONTAINER=/lustre/example/nemo_rl_immutable.sqsh",
+                f"CONTAINER_SHA256={CONTAINER_SHA256}",
+                "MOUNTS=/lustre:/lustre",
+                "SBATCH_GPUS_PER_NODE=4",
+                "SBATCH_GRES=gpu:4",
+                "SBATCH_SEGMENT_SIZE=",
+                "TIME_LIMIT=04:00:00",
+                "RUNTIME_ATTESTATION=/shared/runtime/oci-container-runtime-733.json",
+                "RUNTIME_PREFLIGHT_JOB_ID=733",
+                f"EXPECTED_TE_SHA={TE_SHA}",
+                f"EXPECTED_NEMORL_SHA={NEMORL_SHA}",
+                f"EXPECTED_BRIDGE_SHA={BRIDGE_SHA}",
+                f"EXPECTED_MCORE_SHA={MCORE_SHA}",
+                "",
+            )
+        )
+    )
+
+    result = _run_script(
+        "scopes/17_attn.sh",
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        STEPS="20",
+        TEST_ONLY="1",
+        PROFILE_FILE=str(profile),
+        RUN_TAG="unit",
+    )
+
+    assert result.returncode == 2
+    assert "managed Python install directory is not container-mounted" in result.stderr
 
 
 def test_source_provenance_verifier_rejects_queued_worktree_mutation(
@@ -846,6 +908,119 @@ def test_scope_job_wrappers_revalidate_source_before_container_execution() -> No
         assert "EXPECTED_BRIDGE_SHA" in source
         assert "EXPECTED_MCORE_SHA" in source
         assert 'sha256sum "${CONTAINER}"' not in source
+
+
+def test_nemorl_job_wrapper_requires_managed_python_contract(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / "ray.sub").write_text("#!/bin/bash\nexit 0\n")
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "COMMAND": "true",
+            "CONTAINER": "/lustre/example/nightly.sqsh",
+            "CONTAINER_SHA256": CONTAINER_SHA256,
+            "MOUNTS": "/lustre:/lustre",
+            "RUNTIME_ATTESTATION_COMMAND": "true",
+            "REPO_ROOT": str(repo_root),
+            "EXPECTED_NEMORL_SHA": NEMORL_SHA,
+            "EXPECTED_BRIDGE_SHA": BRIDGE_SHA,
+            "EXPECTED_MCORE_SHA": MCORE_SHA,
+            "SOURCE_PROVENANCE_VERIFIER": "/usr/bin/true",
+        }
+    )
+    for variable in (
+        "UV_PYTHON",
+        "UV_PYTHON_INSTALL_DIR",
+        "UV_MANAGED_PYTHON",
+        "UV_PYTHON_DOWNLOADS",
+    ):
+        environment.pop(variable, None)
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(EXPERIMENT_DIR / "scripts" / "run_nemorl_scope.sub"),
+        ],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "UV_PYTHON" in result.stderr
+
+
+def test_nemorl_job_wrapper_isolates_driver_on_managed_python(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / ".python-version").write_text(f"{PYTHON_VERSION}\n")
+    environment_log = tmp_path / "managed-python.env"
+    (repo_root / "ray.sub").write_text(
+        "#!/bin/bash\n"
+        "printf '%s\\n' \"${UV_PROJECT_ENVIRONMENT:-}\" "
+        '"${UV_PYTHON:-}" "${UV_PYTHON_INSTALL_DIR:-}" '
+        '"${UV_MANAGED_PYTHON:-}" "${UV_PYTHON_DOWNLOADS:-}" '
+        '"${PATH:-}" '
+        '>"${ENVIRONMENT_LOG}"\n'
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_srun = fake_bin / "srun"
+    fake_srun.write_text("#!/bin/bash\nexit 0\n")
+    fake_srun.chmod(0o755)
+    python_install_dir = tmp_path / "uv-python-installations"
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "SLURM_JOB_ID": "733",
+            "COMMAND": "true",
+            "CONTAINER": "/lustre/example/nightly.sqsh",
+            "CONTAINER_SHA256": CONTAINER_SHA256,
+            "MOUNTS": "/lustre:/lustre",
+            "RUNTIME_ATTESTATION_COMMAND": "true",
+            "REPO_ROOT": str(repo_root),
+            "EXPECTED_NEMORL_SHA": NEMORL_SHA,
+            "EXPECTED_BRIDGE_SHA": BRIDGE_SHA,
+            "EXPECTED_MCORE_SHA": MCORE_SHA,
+            "SOURCE_PROVENANCE_VERIFIER": "/usr/bin/true",
+            "UV_PYTHON": PYTHON_VERSION,
+            "UV_PYTHON_INSTALL_DIR": str(python_install_dir),
+            "UV_MANAGED_PYTHON": "1",
+            "UV_PYTHON_DOWNLOADS": "never",
+            "ENVIRONMENT_LOG": str(environment_log),
+        }
+    )
+    environment.pop("UV_PROJECT_ENVIRONMENT", None)
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(EXPERIMENT_DIR / "scripts" / "run_nemorl_scope.sub"),
+        ],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    environment_lines = environment_log.read_text().splitlines()
+    assert environment_lines[:5] == [
+        "/tmp/nemo-rl-driver-733",
+        PYTHON_VERSION,
+        str(python_install_dir),
+        "1",
+        "never",
+    ]
+    assert environment_lines[5].split(":")[:2] == [
+        "/root/.local/bin",
+        "/opt/nemo_rl_venv/bin",
+    ]
 
 
 def test_source_snapshot_copies_exact_recursive_gitlinks_and_writes_manifest(

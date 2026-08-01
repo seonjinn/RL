@@ -18,10 +18,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import importlib.metadata
 import json
 import os
+import platform
 import sys
 import tempfile
 from collections.abc import Callable, Mapping
@@ -41,6 +43,7 @@ REQUIRED_MODULE_DISTRIBUTIONS: dict[str, tuple[str, ...]] = {
 }
 EDITABLE_PROJECT_MODULES = frozenset(("megatron.core", "megatron.bridge"))
 FULL_COMMIT_LENGTH = 40
+DEFAULT_BASE_EXECUTABLE = getattr(sys, "_base_executable", sys.executable)
 
 
 def _distribution_version(
@@ -69,6 +72,14 @@ def _require_path_within(*, label: str, path: Path, root: Path) -> None:
         raise RuntimeError(
             f"{label} resolved outside expected uv environment: {path} (root: {root})"
         ) from error
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _distribution_vcs_commit(
@@ -117,10 +128,14 @@ def probe_runtime(
     expected_device_count: int,
     expected_environment_root: Path | None = None,
     expected_project_root: Path | None = None,
+    expected_python_version: str | None = None,
+    expected_python_install_dir: Path | None = None,
     importer: Callable[[str], Any] = importlib.import_module,
     version_getter: Callable[[str], str] = importlib.metadata.version,
     interpreter_path: str | os.PathLike[str] = sys.executable,
+    base_interpreter_path: str | os.PathLike[str] = DEFAULT_BASE_EXECUTABLE,
     runtime_prefix: str | os.PathLike[str] = sys.prefix,
+    python_version: str = platform.python_version(),
     environment: Mapping[str, str] = os.environ,
 ) -> dict[str, Any]:
     """Import the training stack and require exactly the allocated GPUs."""
@@ -131,7 +146,46 @@ def probe_runtime(
         else None
     )
     python_executable = _absolute_path(interpreter_path)
+    python_base_executable = _absolute_path(base_interpreter_path).resolve(strict=False)
     python_prefix = _absolute_path(runtime_prefix)
+    if (expected_python_version is None) != (expected_python_install_dir is None):
+        raise RuntimeError(
+            "expected Python version and install directory must be provided together"
+        )
+    python_install_dir: Path | None = None
+    python_base_executable_sha256: str | None = None
+    if expected_python_version is not None and expected_python_install_dir is not None:
+        python_install_dir = expected_python_install_dir.resolve(strict=False)
+        configured_install_dir = environment.get("UV_PYTHON_INSTALL_DIR")
+        if configured_install_dir is None:
+            raise RuntimeError("UV_PYTHON_INSTALL_DIR is not set")
+        if (
+            _absolute_path(configured_install_dir).resolve(strict=False)
+            != python_install_dir
+        ):
+            raise RuntimeError(
+                "UV_PYTHON_INSTALL_DIR does not match the expected managed Python "
+                f"directory: {configured_install_dir} != {python_install_dir}"
+            )
+        if environment.get("UV_MANAGED_PYTHON") != "1":
+            raise RuntimeError("UV_MANAGED_PYTHON must be 1")
+        if environment.get("UV_PYTHON_DOWNLOADS") != "never":
+            raise RuntimeError("UV_PYTHON_DOWNLOADS must be never during validation")
+        if python_version != expected_python_version:
+            raise RuntimeError(
+                "Python version mismatch: "
+                f"expected {expected_python_version}, got {python_version}"
+            )
+        _require_path_within(
+            label="base Python executable",
+            path=python_base_executable,
+            root=python_install_dir,
+        )
+        if not python_base_executable.is_file():
+            raise RuntimeError(
+                f"base Python executable is missing: {python_base_executable}"
+            )
+        python_base_executable_sha256 = _sha256(python_base_executable)
     if expected_environment_root is not None:
         environment_root = expected_environment_root.resolve(strict=False)
         for variable in ("PYTHONHOME", "PYTHONPATH"):
@@ -219,6 +273,12 @@ def probe_runtime(
         if project_root is not None
         else None,
         "python_executable": str(python_executable),
+        "python_base_executable": str(python_base_executable),
+        "python_base_executable_sha256": python_base_executable_sha256,
+        "python_version": python_version,
+        "uv_python_install_dir": (
+            str(python_install_dir) if python_install_dir is not None else None
+        ),
         "runtime_prefix": str(python_prefix),
         "torch_cuda_version": getattr(torch_version, "cuda", None),
         "devices": devices,
@@ -258,6 +318,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-device-count", required=True, type=int)
     parser.add_argument("--expected-environment-root", required=True, type=Path)
     parser.add_argument("--expected-project-root", required=True, type=Path)
+    parser.add_argument("--expected-python-version", required=True)
+    parser.add_argument("--expected-python-install-dir", required=True, type=Path)
     parser.add_argument("--nemo-rl-commit", required=True)
     parser.add_argument("--bridge-commit", required=True)
     parser.add_argument("--mcore-commit", required=True)
@@ -282,6 +344,7 @@ def main() -> None:
         "mcore_commit": args.mcore_commit,
         "uv_lock_sha256": args.uv_lock_sha256,
         "expected_te_commit": args.expected_te_commit,
+        "expected_python_version": args.expected_python_version,
         "container_device": args.container_device,
         "container_inode": args.container_inode,
         "container_size": args.container_size,
@@ -293,6 +356,8 @@ def main() -> None:
             expected_device_count=args.expected_device_count,
             expected_environment_root=args.expected_environment_root,
             expected_project_root=args.expected_project_root,
+            expected_python_version=args.expected_python_version,
+            expected_python_install_dir=args.expected_python_install_dir,
         )
         te_version = runtime["packages"]["transformer_engine.pytorch"]["version"]
         if _version_pair(te_version) < (2, 16):
