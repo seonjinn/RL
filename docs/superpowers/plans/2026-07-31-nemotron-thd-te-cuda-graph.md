@@ -1577,7 +1577,7 @@ capacity must provide equal TP×EP-local row counts for this path.
 - [ ] **Step 3: Run focused verification**
 
 ```bash
-uv run python -m pytest -q \
+uv run python -m torch.distributed.run --nproc-per-node 1 -m pytest -q \
   tests/unit_tests/transformer/moe/test_token_dispatcher.py \
   tests/unit_tests/transformer/test_cuda_graphs.py \
   -k "hybridep and (cudagraph or replay_state or continuation)"
