@@ -1109,8 +1109,8 @@ def test_run_async_nemo_gym_rollout_streams_complete_prompt_groups(monkeypatch):
             assert num_returns == "streaming"
             return self
 
-        def remote(self, rows, tokenizer, timer_prefix):
-            del rows, tokenizer, timer_prefix
+        def remote(self, rows, timer_prefix):
+            del rows, timer_prefix
             # Both groups complete out of order internally and group 1 completes first.
             completion_order = [3, 1, 2, 0]
             values = []
@@ -1384,8 +1384,8 @@ def test_rollout_manager_consumes_stream_and_restores_input_order():
             assert num_returns == "streaming"
             return self
 
-        def remote(self, inputs, tokenizer, timer_prefix):
-            del inputs, tokenizer, timer_prefix
+        def remote(self, inputs, timer_prefix):
+            del inputs, timer_prefix
             return _Stream()
 
     manager = object.__new__(AsyncNemoGymRolloutImpl)
@@ -1454,8 +1454,8 @@ def test_rollout_manager_rejects_duplicate_stream_rows():
             assert num_returns == "streaming"
             return self
 
-        def remote(self, inputs, tokenizer, timer_prefix):
-            del inputs, tokenizer, timer_prefix
+        def remote(self, inputs, timer_prefix):
+            del inputs, timer_prefix
             return _DuplicateStream()
 
     manager = object.__new__(AsyncNemoGymRolloutImpl)
