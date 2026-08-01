@@ -92,6 +92,7 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
                 "uv_executable": str(uv_executable),
                 "nvte_with_nccl_ep": "0",
                 "transformer_engine_nccl_ep_available": False,
+                "transformer_engine_nccl_ep_symbols": [],
                 "uv_executable_sha256": hashlib.sha256(
                     uv_executable.read_bytes()
                 ).hexdigest(),

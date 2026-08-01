@@ -200,6 +200,21 @@ def validate_attestation(
         "transformer_engine_nccl_ep_available": (
             expected_nvte_with_nccl_ep == "1"
         ),
+        "transformer_engine_nccl_ep_symbols": (
+            [
+                "ep_initialize",
+                "ep_finalize",
+                "ep_get_zero_copy",
+                "ep_handle_mem_size",
+                "ep_prepare",
+                "ep_dispatch",
+                "ep_combine",
+                "ep_dispatch_bwd",
+                "ep_combine_bwd",
+            ]
+            if expected_nvte_with_nccl_ep == "1"
+            else []
+        ),
     }
     mismatches = {
         key: {"expected": expected, "actual": payload.get(key)}

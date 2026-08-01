@@ -45,6 +45,17 @@ REQUIRED_MODULE_DISTRIBUTIONS: dict[str, tuple[str, ...]] = {
 EDITABLE_PROJECT_MODULES = frozenset(("megatron.core", "megatron.bridge"))
 FULL_COMMIT_LENGTH = 40
 DEFAULT_BASE_EXECUTABLE = getattr(sys, "_base_executable", sys.executable)
+NCCL_EP_EXTENSION_SYMBOLS = (
+    "ep_initialize",
+    "ep_finalize",
+    "ep_get_zero_copy",
+    "ep_handle_mem_size",
+    "ep_prepare",
+    "ep_dispatch",
+    "ep_combine",
+    "ep_dispatch_bwd",
+    "ep_combine_bwd",
+)
 
 
 def _distribution_version(
@@ -154,13 +165,28 @@ def probe_runtime(
                 f"expected {expected_nvte_with_nccl_ep}, got {nvte_with_nccl_ep!r}"
             )
     transformer_engine_nccl_ep_available: bool | None = None
+    transformer_engine_nccl_ep_symbols: list[str] | None = None
     if expected_nvte_with_nccl_ep is not None:
         try:
-            optional_importer("transformer_engine.pytorch.ep")
+            transformer_engine_torch = optional_importer("transformer_engine_torch")
         except ImportError:
-            transformer_engine_nccl_ep_available = False
+            transformer_engine_nccl_ep_symbols = []
         else:
-            transformer_engine_nccl_ep_available = True
+            transformer_engine_nccl_ep_symbols = [
+                symbol
+                for symbol in NCCL_EP_EXTENSION_SYMBOLS
+                if hasattr(transformer_engine_torch, symbol)
+            ]
+        if transformer_engine_nccl_ep_symbols and len(
+            transformer_engine_nccl_ep_symbols
+        ) != len(NCCL_EP_EXTENSION_SYMBOLS):
+            raise RuntimeError(
+                "Transformer Engine has incomplete NCCL-EP extension bindings: "
+                + ", ".join(transformer_engine_nccl_ep_symbols)
+            )
+        transformer_engine_nccl_ep_available = bool(
+            transformer_engine_nccl_ep_symbols
+        )
         if (
             expected_nvte_with_nccl_ep == "0"
             and transformer_engine_nccl_ep_available
@@ -376,6 +402,7 @@ def probe_runtime(
         "transformer_engine_nccl_ep_available": (
             transformer_engine_nccl_ep_available
         ),
+        "transformer_engine_nccl_ep_symbols": transformer_engine_nccl_ep_symbols,
         "runtime_prefix": str(python_prefix),
         "torch_cuda_version": getattr(torch_version, "cuda", None),
         "devices": devices,

@@ -330,7 +330,7 @@ def test_runtime_probe_requires_exact_uv_managed_python(tmp_path: Path) -> None:
         expected_uv_version=UV_VERSION,
         expected_uv_executable=uv_executable,
         expected_nvte_with_nccl_ep="0",
-        optional_importer=lambda name: (_ for _ in ()).throw(ImportError(name)),
+        optional_importer=lambda name: SimpleNamespace(__name__=name),
         importer=lambda name: modules[name],
         version_getter=lambda distribution: f"fixture-{distribution}",
         interpreter_path=environment_root / "bin" / "python",
@@ -355,6 +355,7 @@ def test_runtime_probe_requires_exact_uv_managed_python(tmp_path: Path) -> None:
     assert result["uv_executable"] == str(uv_executable)
     assert result["nvte_with_nccl_ep"] == "0"
     assert result["transformer_engine_nccl_ep_available"] is False
+    assert result["transformer_engine_nccl_ep_symbols"] == []
     assert (
         result["uv_executable_sha256"]
         == hashlib.sha256(uv_executable.read_bytes()).hexdigest()
@@ -375,7 +376,12 @@ def test_runtime_probe_requires_exact_uv_managed_python(tmp_path: Path) -> None:
         module.probe_runtime(
             expected_device_count=4,
             expected_nvte_with_nccl_ep="0",
-            optional_importer=lambda name: SimpleNamespace(__name__=name),
+            optional_importer=lambda name: SimpleNamespace(
+                **{
+                    symbol: object()
+                    for symbol in module.NCCL_EP_EXTENSION_SYMBOLS
+                }
+            ),
             environment={"NVTE_WITH_NCCL_EP": "0"},
         )
 
