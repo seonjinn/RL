@@ -518,6 +518,26 @@ def test_scope_matrix_list_command_prints_every_persistent_row() -> None:
     )
 
 
+def test_scope_launcher_does_not_require_host_uv(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text("#!/bin/bash\nexit 91\n")
+    fake_uv.chmod(0o755)
+
+    result = _run_script(
+        "scopes/17_attn.sh",
+        TEST_ONLY="1",
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        PATH=f"{fake_bin}:{os.environ['PATH']}",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "COMMAND:" in result.stdout
+
+
 def test_scope_classifier_reports_pre_submission_outcomes() -> None:
     module = _load_experiment_module("scope_matrix")
     rows = module.load_scope_matrix()

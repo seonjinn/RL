@@ -156,7 +156,7 @@ fi
 if [[ "${TEST_ONLY}" != "1" && ${#unresolved[@]} -gt 0 ]]; then
   classifier_args+=(--profile-blocked)
 fi
-classification=$(uv run --no-project "${script_dir}/scope_matrix.py" "${classifier_args[@]}")
+classification=$(python3 "${script_dir}/scope_matrix.py" "${classifier_args[@]}")
 IFS=$'\t' read -r status reason <<<"${classification}"
 printf 'STATUS: %s\n' "${status}"
 printf 'REASON: %s\n' "${reason}"
@@ -203,7 +203,7 @@ if [[ "${MODE}" == "nemorl" ]]; then
       render_args+=(--override "${override}")
     done
   fi
-  COMMAND=$(uv run --no-project "${script_dir}/scope_matrix.py" "${render_args[@]}")
+  COMMAND=$(python3 "${script_dir}/scope_matrix.py" "${render_args[@]}")
   job_script=${script_dir}/scripts/run_nemorl_scope.sub
 else
   scope_modules=${SCOPE}

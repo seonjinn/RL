@@ -127,8 +127,8 @@ names a genuine standalone training driver.
 Inspect the matrix without importing the project environment:
 
 ```bash
-uv run --no-project scope_matrix.py list
-uv run --no-project scope_matrix.py classify \
+python3 scope_matrix.py list
+python3 scope_matrix.py classify \
   --model nano --scope attn,moe_router --mode nemorl
 ```
 
