@@ -254,6 +254,7 @@ def test_runtime_job_uses_worker_parity_uv_environment_and_exact_provenance(
     tmp_path: Path,
 ) -> None:
     source_wrapper = EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
+    assert "#SBATCH --time=01:00:00" in source_wrapper.read_text()
     spool_dir = tmp_path / "slurm-spool" / "job733"
     spool_dir.mkdir(parents=True)
     spooled_wrapper = spool_dir / "slurm_script"
@@ -326,6 +327,10 @@ printf '{"status":"passed"}\n' >"${output}"
     assert "--export=NIL" in command
     assert "env -i" in command
     assert "HOME=/root" in command
+    assert (
+        "PATH=/root/.local/bin:/usr/local/bin:/usr/bin:/bin:/opt/nemo_rl_venv/bin"
+        in command
+    )
     assert "UV_CACHE_DIR=/tmp" not in command
     assert "CUDA_HOME=/usr/local/cuda" in command
     assert "NRL_FORCE_REBUILD_VENVS=true" in command

@@ -17,7 +17,7 @@
 #SBATCH --gres=gpu:4
 #SBATCH --mem=0
 #SBATCH --partition=batch
-#SBATCH --time=00:20:00
+#SBATCH --time=01:00:00
 #SBATCH --job-name=validate_oci_container_runtime
 
 set -euo pipefail
@@ -213,7 +213,7 @@ runtime_environment=(
   /usr/bin/env
   -i
   HOME=/root
-  PATH=/usr/local/bin:/usr/bin:/bin:/opt/nemo_rl_venv/bin
+  PATH=/root/.local/bin:/usr/local/bin:/usr/bin:/bin:/opt/nemo_rl_venv/bin
   CUDA_HOME=/usr/local/cuda
   CPLUS_INCLUDE_PATH=/usr/local/cuda/include/cccl
   "CUDNN_HOME=${runtime_site_packages}/nvidia/cudnn"
