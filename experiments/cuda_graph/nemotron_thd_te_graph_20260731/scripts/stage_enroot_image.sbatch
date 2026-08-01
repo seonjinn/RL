@@ -37,6 +37,7 @@ fi
 ACCOUNT=${ACCOUNT:-coreai_dlalgo_nemorl}
 PARTITION=${PARTITION:-batch}
 TEST_ONLY=${TEST_ONLY:-0}
+SBATCH_TEST_ONLY=${SBATCH_TEST_ONLY:-0}
 
 valid_source_image() {
   local reference=$1
@@ -95,17 +96,32 @@ if [[ "${PARTITION}" != "batch" ]]; then
   echo "Container staging requires PARTITION=batch" >&2
   exit 2
 fi
+if [[ ! "${TEST_ONLY}" =~ ^[01]$ || ! "${SBATCH_TEST_ONLY}" =~ ^[01]$ ]]; then
+  echo "TEST_ONLY and SBATCH_TEST_ONLY must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "${TEST_ONLY}" == "1" && "${SBATCH_TEST_ONLY}" == "1" ]]; then
+  echo "TEST_ONLY and SBATCH_TEST_ONLY are mutually exclusive" >&2
+  exit 2
+fi
 
 script_path=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then
+  export ACCOUNT CONTAINER_DIR OUTPUT_PREFIX PARTITION SOURCE_COMMIT SOURCE_DIGEST
+  export SOURCE_IMAGE
+  export_spec=SOURCE_IMAGE,SOURCE_DIGEST,SOURCE_COMMIT,OUTPUT_PREFIX,CONTAINER_DIR,ACCOUNT,PARTITION,HOME,USER,LOGNAME,SHELL,PATH,LD_LIBRARY_PATH,HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy,ENROOT_CACHE_PATH,ENROOT_DATA_PATH
+  submission_flag=--parsable
+  if [[ "${SBATCH_TEST_ONLY}" == "1" ]]; then
+    submission_flag=--test-only
+  fi
   sbatch_command=(
     sbatch
-    --parsable
+    "${submission_flag}"
     "--partition=${PARTITION}"
     "--account=${ACCOUNT}"
     --gres=gpu:4
     "--output=${CONTAINER_DIR}/${OUTPUT_PREFIX}_stage-%j.log"
-    --export=ALL
+    "--export=${export_spec}"
     "${script_path}"
   )
   printf 'SOURCE_IMAGE=%s\n' "${SOURCE_IMAGE}"
@@ -114,13 +130,17 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
   printf ' %q' "${sbatch_command[@]}"
   printf '\n'
   if [[ "${TEST_ONLY}" == "1" ]]; then
-    echo "TEST_ONLY: no submission performed"
+    echo "TEST_ONLY: no submission performed (local render only; scheduler not contacted)"
     exit 0
   fi
-  mkdir -p "${CONTAINER_DIR}"
+  if [[ "${SBATCH_TEST_ONLY}" != "1" ]]; then
+    mkdir -p "${CONTAINER_DIR}"
+  fi
   "${sbatch_command[@]}"
   exit 0
 fi
+
+unset PYTHONHOME PYTHONPATH VIRTUAL_ENV UV_PROJECT_ENVIRONMENT
 
 registry=${SOURCE_IMAGE%%/*}
 repository_reference=${SOURCE_IMAGE#*/}
@@ -142,9 +162,11 @@ export no_proxy="${NO_PROXY}"
 date_stamp=$(date +%Y%m%d)
 output_file=${CONTAINER_DIR}/${OUTPUT_PREFIX}_${date_stamp}_${SLURM_JOB_ID}.sqsh
 metadata_file=${output_file}.metadata.txt
+staging_file=${output_file}.staging.txt
 current_link=${CONTAINER_DIR}/${OUTPUT_PREFIX}.sqsh
 partial_file=${output_file}.partial.${SLURM_JOB_ID}
 partial_metadata_file=${metadata_file}.partial.${SLURM_JOB_ID}
+partial_staging_file=${staging_file}.partial.${SLURM_JOB_ID}
 partial_current_link=${current_link}.partial.${SLURM_JOB_ID}
 
 mkdir -p "${CONTAINER_DIR}"
@@ -153,14 +175,21 @@ export ENROOT_DATA_PATH=${ENROOT_DATA_PATH:-${CONTAINER_DIR}/.enroot_data}
 mkdir -p "${ENROOT_CACHE_PATH}" "${ENROOT_DATA_PATH}"
 
 cleanup() {
-  rm -f "${partial_file}" "${partial_metadata_file}" "${partial_current_link}"
+  rm -f \
+    "${partial_file}" \
+    "${partial_metadata_file}" \
+    "${partial_staging_file}" \
+    "${partial_current_link}"
 }
 trap cleanup EXIT
+cleanup
 
-if [[ -e "${output_file}" || -e "${metadata_file}" ]]; then
-  echo "Immutable output already exists: ${output_file}" >&2
-  exit 1
-fi
+for immutable_artifact in "${output_file}" "${metadata_file}" "${staging_file}"; do
+  if [[ -L "${immutable_artifact}" ]]; then
+    echo "Immutable artifact must not be a symlink: ${immutable_artifact}" >&2
+    exit 1
+  fi
+done
 
 command -v enroot >/dev/null
 command -v sha256sum >/dev/null
@@ -170,24 +199,141 @@ echo "source_digest=${SOURCE_DIGEST}"
 echo "source_commit=${SOURCE_COMMIT}"
 echo "output_file=${output_file}"
 
+metadata_value() {
+  local key=$1
+  local path=$2
+  local line
+
+  line=$(grep -m1 -E "^${key}=" "${path}" || true)
+  [[ -n "${line}" ]] || return 1
+  printf '%s\n' "${line#*=}"
+}
+
+provenance_matches() {
+  local path=$1
+
+  [[ "$(metadata_value source_image "${path}" || true)" == "${SOURCE_IMAGE}" ]] &&
+    [[ "$(metadata_value source_digest "${path}" || true)" == "${SOURCE_DIGEST}" ]] &&
+    [[ "$(metadata_value source_commit "${path}" || true)" == "${SOURCE_COMMIT}" ]] &&
+    [[ "$(metadata_value slurm_job_id "${path}" || true)" == "${SLURM_JOB_ID}" ]]
+}
+
+require_matching_provenance() {
+  local path=$1
+  if ! provenance_matches "${path}"; then
+    echo "Immutable provenance mismatch: ${path}" >&2
+    exit 1
+  fi
+}
+
+publish_no_clobber() {
+  local partial_path=$1
+  local immutable_path=$2
+
+  if ! ln "${partial_path}" "${immutable_path}"; then
+    echo "Refusing to overwrite immutable artifact: ${immutable_path}" >&2
+    exit 1
+  fi
+  rm -f "${partial_path}"
+}
+
+write_staging_record() {
+  {
+    echo "source_image=${SOURCE_IMAGE}"
+    echo "source_digest=${SOURCE_DIGEST}"
+    echo "source_commit=${SOURCE_COMMIT}"
+    echo "slurm_job_id=${SLURM_JOB_ID}"
+  } >"${partial_staging_file}"
+  publish_no_clobber "${partial_staging_file}" "${staging_file}"
+}
+
+write_metadata() {
+  local image_sha256=$1
+
+  {
+    echo "metadata_format_version=1"
+    echo "source_image=${SOURCE_IMAGE}"
+    echo "source_digest=${SOURCE_DIGEST}"
+    echo "imported_enroot_uri=${enroot_image_uri}"
+    echo "source_commit=${SOURCE_COMMIT}"
+    echo "slurm_job_id=${SLURM_JOB_ID}"
+    echo "download_host=$(hostname)"
+    echo "downloaded_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "sha256=${image_sha256}"
+  } >"${partial_metadata_file}"
+  publish_no_clobber "${partial_metadata_file}" "${metadata_file}"
+}
+
+publish_current_link() {
+  if [[ -e "${current_link}" && ! -L "${current_link}" ]]; then
+    echo "Refusing to overwrite non-symlink stable path: ${current_link}" >&2
+    exit 1
+  fi
+  ln -s "$(basename "${output_file}")" "${partial_current_link}"
+  mv -f "${partial_current_link}" "${current_link}"
+}
+
+if [[ -e "${output_file}" && -e "${metadata_file}" ]]; then
+  require_matching_provenance "${metadata_file}"
+  recorded_sha256=$(metadata_value sha256 "${metadata_file}" || true)
+  actual_sha256=$(sha256sum "${output_file}" | awk '{print $1}')
+  if [[ ! "${recorded_sha256}" =~ ^[0-9a-f]{64}$ || "${recorded_sha256}" != "${actual_sha256}" ]]; then
+    echo "Immutable image SHA256 does not match metadata: ${output_file}" >&2
+    exit 1
+  fi
+  if [[ -e "${staging_file}" ]]; then
+    require_matching_provenance "${staging_file}"
+    rm -f "${staging_file}"
+  fi
+  publish_current_link
+  cleanup
+  trap - EXIT
+  echo "container=${output_file}"
+  echo "metadata=${metadata_file}"
+  ls -lh "${output_file}" "${metadata_file}" "${current_link}"
+  exit 0
+fi
+
+if [[ -e "${output_file}" ]]; then
+  if [[ ! -f "${staging_file}" ]]; then
+    echo "Cannot recover image without matching staging provenance: ${output_file}" >&2
+    exit 1
+  fi
+  require_matching_provenance "${staging_file}"
+  image_sha256=$(sha256sum "${output_file}" | awk '{print $1}')
+  write_metadata "${image_sha256}"
+  rm -f "${staging_file}"
+  publish_current_link
+  cleanup
+  trap - EXIT
+  echo "container=${output_file}"
+  echo "metadata=${metadata_file}"
+  ls -lh "${output_file}" "${metadata_file}" "${current_link}"
+  exit 0
+fi
+
+if [[ -e "${metadata_file}" ]]; then
+  require_matching_provenance "${metadata_file}"
+  if [[ -e "${staging_file}" ]]; then
+    require_matching_provenance "${staging_file}"
+    rm -f "${staging_file}"
+  fi
+  rm -f "${metadata_file}"
+fi
+
+if [[ -e "${staging_file}" ]]; then
+  require_matching_provenance "${staging_file}"
+else
+  write_staging_record
+fi
+
 enroot import -o "${partial_file}" "${enroot_image_uri}"
 image_sha256=$(sha256sum "${partial_file}" | awk '{print $1}')
+publish_no_clobber "${partial_file}" "${output_file}"
+write_metadata "${image_sha256}"
+rm -f "${staging_file}"
+publish_current_link
 
-{
-  echo "source_image=${SOURCE_IMAGE}"
-  echo "source_digest=${SOURCE_DIGEST}"
-  echo "imported_enroot_uri=${enroot_image_uri}"
-  echo "source_commit=${SOURCE_COMMIT}"
-  echo "slurm_job_id=${SLURM_JOB_ID}"
-  echo "download_host=$(hostname)"
-  echo "downloaded_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  echo "sha256=${image_sha256}"
-} >"${partial_metadata_file}"
-
-mv "${partial_metadata_file}" "${metadata_file}"
-mv "${partial_file}" "${output_file}"
-ln -s "${output_file}" "${partial_current_link}"
-mv -Tf "${partial_current_link}" "${current_link}"
 cleanup
 trap - EXIT
 

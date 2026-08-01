@@ -1,0 +1,53 @@
+#!/bin/bash
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#SBATCH --nodes=1
+#SBATCH --exclusive
+#SBATCH --partition=batch
+#SBATCH --time=04:00:00
+#SBATCH --job-name=nemorl_cg_scope
+
+set -euo pipefail
+
+: "${COMMAND:?run_scope.sh must export COMMAND}"
+: "${CONTAINER:?run_scope.sh must export CONTAINER}"
+: "${CONTAINER_SHA256:?run_scope.sh must export CONTAINER_SHA256}"
+: "${MOUNTS:?run_scope.sh must export MOUNTS}"
+: "${RUNTIME_ATTESTATION_COMMAND:?run_scope.sh must export RUNTIME_ATTESTATION_COMMAND}"
+: "${REPO_ROOT:?run_scope.sh must export REPO_ROOT}"
+: "${EXPECTED_NEMORL_SHA:?run_scope.sh must export EXPECTED_NEMORL_SHA}"
+: "${EXPECTED_BRIDGE_SHA:?run_scope.sh must export EXPECTED_BRIDGE_SHA}"
+: "${EXPECTED_MCORE_SHA:?run_scope.sh must export EXPECTED_MCORE_SHA}"
+: "${SOURCE_PROVENANCE_VERIFIER:?run_scope.sh must export SOURCE_PROVENANCE_VERIFIER}"
+
+bridge_root=${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
+mcore_root=${bridge_root}/3rdparty/Megatron-LM
+"${SOURCE_PROVENANCE_VERIFIER}" \
+  "${REPO_ROOT}" "${EXPECTED_NEMORL_SHA}" \
+  "${bridge_root}" "${EXPECTED_BRIDGE_SHA}" \
+  "${mcore_root}" "${EXPECTED_MCORE_SHA}"
+
+export SLURM_EXPORT_ENV=ALL
+srun \
+  --nodes=1 \
+  --ntasks=1 \
+  --container-image="${CONTAINER}" \
+  --container-mounts="${MOUNTS}" \
+  --container-workdir="${REPO_ROOT}" \
+  --export=ALL \
+  /bin/bash --noprofile --norc -c "${RUNTIME_ATTESTATION_COMMAND}"
+
+# The allocation is created from this wrapper, so ray.sub's embedded SBATCH
+# comments are inert. Its mature Ray lifecycle remains the runtime implementation.
+exec bash "${REPO_ROOT}/ray.sub"
