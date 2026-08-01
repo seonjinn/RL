@@ -36,13 +36,24 @@ REQUIRED_MODULE_DISTRIBUTIONS: dict[str, tuple[str, ...]] = {
     "torch": ("torch",),
     "transformer_engine.pytorch": ("transformer-engine",),
     "megatron.core": ("megatron-core",),
+    "megatron.core.extensions.transformer_engine": ("megatron-core",),
     "megatron.bridge": ("megatron-bridge",),
     "mamba_ssm": ("mamba-ssm",),
     "causal_conv1d": ("causal-conv1d",),
     "cupy": ("cupy-cuda13x", "cupy-cuda12x", "cupy"),
-    "grouped_gemm": ("nv-grouped-gemm", "grouped-gemm"),
 }
-EDITABLE_PROJECT_MODULES = frozenset(("megatron.core", "megatron.bridge"))
+EDITABLE_PROJECT_MODULES = frozenset(
+    (
+        "megatron.core",
+        "megatron.core.extensions.transformer_engine",
+        "megatron.bridge",
+    )
+)
+TE_GROUPED_LINEAR_MODULE = "megatron.core.extensions.transformer_engine"
+REQUIRED_TE_GROUPED_LINEAR_SYMBOLS = (
+    "TEColumnParallelGroupedLinear",
+    "TERowParallelGroupedLinear",
+)
 FULL_COMMIT_LENGTH = 40
 DEFAULT_BASE_EXECUTABLE = getattr(sys, "_base_executable", sys.executable)
 NCCL_EP_EXTENSION_SYMBOLS = (
@@ -184,13 +195,8 @@ def probe_runtime(
                 "Transformer Engine has incomplete NCCL-EP extension bindings: "
                 + ", ".join(transformer_engine_nccl_ep_symbols)
             )
-        transformer_engine_nccl_ep_available = bool(
-            transformer_engine_nccl_ep_symbols
-        )
-        if (
-            expected_nvte_with_nccl_ep == "0"
-            and transformer_engine_nccl_ep_available
-        ):
+        transformer_engine_nccl_ep_available = bool(transformer_engine_nccl_ep_symbols)
+        if expected_nvte_with_nccl_ep == "0" and transformer_engine_nccl_ep_available:
             raise RuntimeError(
                 "Transformer Engine NCCL-EP module is available despite "
                 "NVTE_WITH_NCCL_EP=0"
@@ -341,6 +347,23 @@ def probe_runtime(
         if module_name != "torch":
             modules[module_name] = importer(module_name)
 
+    te_extension = modules[TE_GROUPED_LINEAR_MODULE]
+    transformer_engine_grouped_linear_symbols = [
+        symbol
+        for symbol in REQUIRED_TE_GROUPED_LINEAR_SYMBOLS
+        if getattr(te_extension, symbol, None) is not None
+    ]
+    unavailable_grouped_linear_symbols = sorted(
+        set(REQUIRED_TE_GROUPED_LINEAR_SYMBOLS).difference(
+            transformer_engine_grouped_linear_symbols
+        )
+    )
+    if unavailable_grouped_linear_symbols:
+        raise RuntimeError(
+            "TE grouped-linear backend is unavailable: "
+            + ", ".join(unavailable_grouped_linear_symbols)
+        )
+
     packages: dict[str, dict[str, str]] = {}
     for module_name, distributions in REQUIRED_MODULE_DISTRIBUTIONS.items():
         distribution, version = _distribution_version(distributions, version_getter)
@@ -399,10 +422,11 @@ def probe_runtime(
         "uv_executable": str(uv_executable) if uv_executable is not None else None,
         "uv_executable_sha256": uv_executable_sha256,
         "nvte_with_nccl_ep": nvte_with_nccl_ep,
-        "transformer_engine_nccl_ep_available": (
-            transformer_engine_nccl_ep_available
-        ),
+        "transformer_engine_nccl_ep_available": (transformer_engine_nccl_ep_available),
         "transformer_engine_nccl_ep_symbols": transformer_engine_nccl_ep_symbols,
+        "transformer_engine_grouped_linear_symbols": (
+            transformer_engine_grouped_linear_symbols
+        ),
         "runtime_prefix": str(python_prefix),
         "torch_cuda_version": getattr(torch_version, "cuda", None),
         "devices": devices,

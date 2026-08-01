@@ -30,16 +30,20 @@ from typing import Any
 FULL_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 FULL_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 MINIMUM_TE_VERSION = (2, 16)
+REQUIRED_TE_GROUPED_LINEAR_SYMBOLS = (
+    "TEColumnParallelGroupedLinear",
+    "TERowParallelGroupedLinear",
+)
 REQUIRED_PACKAGES = frozenset(
     (
         "torch",
         "transformer_engine.pytorch",
         "megatron.core",
+        "megatron.core.extensions.transformer_engine",
         "megatron.bridge",
         "mamba_ssm",
         "causal_conv1d",
         "cupy",
-        "grouped_gemm",
     )
 )
 
@@ -197,9 +201,7 @@ def validate_attestation(
         "uv_executable": str(expected_uv_executable),
         "expected_nvte_with_nccl_ep": expected_nvte_with_nccl_ep,
         "nvte_with_nccl_ep": expected_nvte_with_nccl_ep,
-        "transformer_engine_nccl_ep_available": (
-            expected_nvte_with_nccl_ep == "1"
-        ),
+        "transformer_engine_nccl_ep_available": (expected_nvte_with_nccl_ep == "1"),
         "transformer_engine_nccl_ep_symbols": (
             [
                 "ep_initialize",
@@ -214,6 +216,9 @@ def validate_attestation(
             ]
             if expected_nvte_with_nccl_ep == "1"
             else []
+        ),
+        "transformer_engine_grouped_linear_symbols": list(
+            REQUIRED_TE_GROUPED_LINEAR_SYMBOLS
         ),
     }
     mismatches = {

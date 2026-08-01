@@ -80,6 +80,13 @@ def _runtime_modules(module: ModuleType, environment_root: Path) -> dict[str, ob
         cuda=FakeCuda(),
         version=SimpleNamespace(cuda="13.0"),
     )
+    modules["megatron.core.extensions.transformer_engine"] = SimpleNamespace(
+        __file__=str(
+            site_packages / "megatron" / "core" / "extensions" / "transformer_engine.py"
+        ),
+        TEColumnParallelGroupedLinear=object,
+        TERowParallelGroupedLinear=object,
+    )
     return modules
 
 

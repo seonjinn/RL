@@ -1513,6 +1513,11 @@ def test_container_runtime_probe_requires_four_visible_gpus_and_packages(
         cuda=FakeCuda(),
         version=SimpleNamespace(cuda="13.0"),
     )
+    modules["megatron.core.extensions.transformer_engine"] = SimpleNamespace(
+        __file__=str(tmp_path / "megatron_transformer_engine.py"),
+        TEColumnParallelGroupedLinear=object,
+        TERowParallelGroupedLinear=object,
+    )
 
     result = module.probe_runtime(
         expected_device_count=4,
@@ -1528,16 +1533,66 @@ def test_container_runtime_probe_requires_four_visible_gpus_and_packages(
         "GPU-2",
         "GPU-3",
     ]
+    assert result["transformer_engine_grouped_linear_symbols"] == [
+        "TEColumnParallelGroupedLinear",
+        "TERowParallelGroupedLinear",
+    ]
     assert set(result["packages"]) == {
         "torch",
         "transformer_engine.pytorch",
         "megatron.core",
+        "megatron.core.extensions.transformer_engine",
         "megatron.bridge",
         "mamba_ssm",
         "causal_conv1d",
         "cupy",
-        "grouped_gemm",
     }
+
+
+def test_container_runtime_probe_requires_te_grouped_linear_backend(
+    tmp_path: Path,
+) -> None:
+    module = _load_experiment_module("validate_container_runtime")
+
+    class FakeCuda:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+        @staticmethod
+        def device_count() -> int:
+            return 4
+
+        @staticmethod
+        def get_device_name(index: int) -> str:
+            return f"GPU-{index}"
+
+        @staticmethod
+        def get_device_capability(index: int) -> tuple[int, int]:
+            del index
+            return 10, 0
+
+    modules = {
+        name: SimpleNamespace(__file__=str(tmp_path / f"{name}.py"))
+        for name in module.REQUIRED_MODULE_DISTRIBUTIONS
+    }
+    modules["torch"] = SimpleNamespace(
+        __file__=str(tmp_path / "torch.py"),
+        cuda=FakeCuda(),
+        version=SimpleNamespace(cuda="13.0"),
+    )
+    modules["megatron.core.extensions.transformer_engine"] = SimpleNamespace(
+        __file__=str(tmp_path / "megatron_transformer_engine.py"),
+        TEColumnParallelGroupedLinear=None,
+        TERowParallelGroupedLinear=object,
+    )
+
+    with pytest.raises(RuntimeError, match="TE grouped-linear backend is unavailable"):
+        module.probe_runtime(
+            expected_device_count=4,
+            importer=lambda name: modules[name],
+            version_getter=lambda distribution: f"fixture-{distribution}",
+        )
 
 
 def test_container_runtime_probe_rejects_wrong_gpu_count(tmp_path: Path) -> None:

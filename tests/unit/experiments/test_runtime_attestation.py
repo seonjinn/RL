@@ -93,6 +93,10 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
                 "nvte_with_nccl_ep": "0",
                 "transformer_engine_nccl_ep_available": False,
                 "transformer_engine_nccl_ep_symbols": [],
+                "transformer_engine_grouped_linear_symbols": [
+                    "TEColumnParallelGroupedLinear",
+                    "TERowParallelGroupedLinear",
+                ],
                 "uv_executable_sha256": hashlib.sha256(
                     uv_executable.read_bytes()
                 ).hexdigest(),
@@ -100,11 +104,13 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
                     "torch": {"version": "2.11.0"},
                     "transformer_engine.pytorch": {"version": "2.19.0.dev0+bffde8f4"},
                     "megatron.core": {"version": "0.16.0rc0"},
+                    "megatron.core.extensions.transformer_engine": {
+                        "version": "0.16.0rc0"
+                    },
                     "megatron.bridge": {"version": "0.2.0"},
                     "mamba_ssm": {"version": "2.2.6.post3"},
                     "causal_conv1d": {"version": "1.5.3.post1"},
                     "cupy": {"version": "14.0.1"},
-                    "grouped_gemm": {"version": "1.1.4"},
                 },
             }
         )
