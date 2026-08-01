@@ -222,6 +222,7 @@ runtime_environment=(
   NRL_CONTAINER=1
   NRL_FORCE_REBUILD_VENVS=true
   UV_LINK_MODE=copy
+  UV_PYTHON=/opt/nemo_rl_venv/bin/python
   "UV_PROJECT_ENVIRONMENT=${runtime_environment_root}"
 )
 for proxy_variable in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
@@ -251,9 +252,20 @@ if [[ "${output_flag}" != "--output" ]]; then
   echo "Runtime probe payload requires --output" >&2
   exit 2
 fi
+base_python=${UV_PYTHON:?Runtime probe requires the container Python}
+if [[ ! -x "${base_python}" ]]; then
+  echo "Container Python is missing or not executable: ${base_python}" >&2
+  exit 2
+fi
+expected_python_version=$(tr -d "[:space:]" <"${project_root}/.python-version")
+actual_python_version=$("${base_python}" -c "import platform; print(platform.python_version())")
+if [[ "${actual_python_version}" != "${expected_python_version}" ]]; then
+  echo "Container Python version mismatch: expected ${expected_python_version}, got ${actual_python_version}" >&2
+  exit 2
+fi
 rm -rf -- "${environment_root}"
 cd "${project_root}"
-exec uv run --locked --extra mcore --no-python-downloads --directory "${project_root}" python "${validator}" \
+exec uv run --python "${base_python}" --locked --extra mcore --no-python-downloads --directory "${project_root}" python "${validator}" \
   --container-image "${container}" \
   --container-sha256 "${container_sha256}" \
   --expected-device-count 4 \

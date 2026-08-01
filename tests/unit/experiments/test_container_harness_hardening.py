@@ -335,7 +335,8 @@ printf '{"status":"passed"}\n' >"${output}"
     assert "CUDA_HOME=/usr/local/cuda" in command
     assert "NRL_FORCE_REBUILD_VENVS=true" in command
     assert "UV_PROJECT_ENVIRONMENT=/tmp/nemo-rl-runtime-733" in command
-    assert "uv run --locked --extra mcore" in command
+    assert "UV_PYTHON=/opt/nemo_rl_venv/bin/python" in command
+    assert 'uv run --python "${base_python}" --locked --extra mcore' in command
     assert "--no-editable" not in command
     assert '--expected-environment-root "${environment_root}"' in command
     assert '--expected-project-root "${project_root}"' in command
