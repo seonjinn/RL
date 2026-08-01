@@ -1630,7 +1630,8 @@ def test_readme_documents_container_runtime_gate_and_artifact() -> None:
 
     assert "scripts/validate_oci_container_runtime.sub" in readme
     assert "exactly four visible devices" in readme
-    assert "machine-readable success or failure artifact" in readme
+    assert "machine-readable success or failure artifact" in normalized_readme
+    assert "MCore TE grouped-linear symbols" in normalized_readme
     for package in (
         "PyTorch",
         "Transformer Engine",
@@ -1639,7 +1640,6 @@ def test_readme_documents_container_runtime_gate_and_artifact() -> None:
         "Mamba SSM",
         "causal-conv1d",
         "CuPy",
-        "grouped GEMM",
     ):
         assert package in normalized_readme
 

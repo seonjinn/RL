@@ -306,6 +306,13 @@ def test_runtime_probe_allows_only_megatron_editables_from_project_root(
     modules["megatron.core"] = SimpleNamespace(
         __file__=str(project_root / "megatron" / "core" / "__init__.py")
     )
+    modules["megatron.core.extensions.transformer_engine"] = SimpleNamespace(
+        __file__=str(
+            project_root / "megatron" / "core" / "extensions" / "transformer_engine.py"
+        ),
+        TEColumnParallelGroupedLinear=object,
+        TERowParallelGroupedLinear=object,
+    )
     modules["megatron.bridge"] = SimpleNamespace(
         __file__=str(project_root / "megatron" / "bridge" / "__init__.py")
     )

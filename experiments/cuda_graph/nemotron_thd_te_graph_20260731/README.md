@@ -91,10 +91,11 @@ Run these gates before submitting a model scope.
    The job builds the same editable `uv run --locked --extra mcore` environment
    used by policy workers and requires exactly four visible devices. It imports
    PyTorch, Transformer Engine, Megatron Core, Megatron Bridge, Mamba SSM,
-   causal-conv1d, CuPy, and grouped GEMM. It hashes the 67 GB image once and
-   records source, lock, image identity, the exact TE VCS commit, the exact
-   Python patch version, and the managed base-interpreter SHA256 in a
-   machine-readable success or failure artifact. Python downloads are enabled
+   causal-conv1d, and CuPy, then validates the MCore TE grouped-linear symbols
+   used by Nano's `TEGroupedMLP`. It hashes the 67 GB image once and records
+   source, lock, image identity, the exact TE VCS commit, the exact Python patch
+   version, and the managed base-interpreter SHA256 in a machine-readable
+   success or failure artifact. Python downloads are enabled
    only for the initial managed-interpreter staging command and are set to
    `never` before `uv run --locked`. The preflight uv is installed with
    `UV_UNMANAGED_INSTALL` under `ARTIFACT_DIR/uv-<version>-<job-id>` so it does
