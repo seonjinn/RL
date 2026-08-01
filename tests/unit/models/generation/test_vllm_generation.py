@@ -1645,6 +1645,7 @@ def test_vllm_http_server(cluster, tokenizer):
         top_p=generation_config["top_p"],
         # We want to test the actual train flow and how this is used. So we need to get logprobs here.
         logprobs=True,
+        top_logprobs=0,
         max_tokens=1,
     )
 
