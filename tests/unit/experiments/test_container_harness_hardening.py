@@ -508,7 +508,7 @@ def test_runtime_job_uses_worker_parity_uv_environment_and_exact_provenance(
     tmp_path: Path,
 ) -> None:
     source_wrapper = EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
-    assert "#SBATCH --time=01:00:00" in source_wrapper.read_text()
+    assert "#SBATCH --time=01:30:00" in source_wrapper.read_text()
     spool_dir = tmp_path / "slurm-spool" / "job733"
     spool_dir.mkdir(parents=True)
     spooled_wrapper = spool_dir / "slurm_script"
