@@ -11,8 +11,9 @@ on the same source commit, container, model, topology, batch, and seed.
 | `mxfp8-rollout` | BF16 | MXFP8 | Legacy collective |
 | `mxfp8-nccl-prequant` | BF16 | MXFP8 | NCCL-Reshard value + E8M0 scale pair |
 
-All three modes run sequentially in one allocation. The first functional target
-is GCP-NRT B200: 4 nodes x 8 GPUs, split into 2 training and 2 generation nodes.
+Each mode runs as an independent SLURM job so Ray and actor lifecycles cannot
+leak between comparison arms. The first functional target is GCP-NRT B200:
+4 nodes x 8 GPUs, split into 2 training and 2 generation nodes.
 Qwen3-30B-A3B uses trainer EP16 and vLLM TP1. Q/K/V/O projections stay BF16;
 MXFP8 applies to eligible MoE weights. Importance-sampling correction is
 disabled in all modes and `force_on_policy_ratio=true`.
@@ -24,6 +25,33 @@ The isolated transport comparison is `mxfp8-rollout` versus
 Use `MAX_STEPS=5` for functional smoke tests and `MAX_STEPS=20` for the reported
 A/B. Report `transfer_and_update_weights`, total refit, generation, E2E step
 time, and logged tokens/s/GPU over steps 3-20.
+
+Before reporting performance, run a two-step correctness gate. Step 2 verifies
+that weights changed by the first optimizer update are refit correctly. This
+gate deliberately computes previous-policy logprobs and enables the runtime
+batched-shuffle verifier:
+
+```bash
+CONTAINER=/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna/containers/nemo-rl-nightly-refresh/nemo_rl_nightly_20260730_483099.sqsh \
+ACTION=submit \
+MODES=mxfp8-nccl-prequant \
+MAX_STEPS=2 \
+NUM_PROMPTS_PER_STEP=2 \
+NUM_GENERATIONS_PER_PROMPT=4 \
+TRAIN_GLOBAL_BATCH_SIZE=8 \
+MAX_TOTAL_SEQUENCE_LENGTH=512 \
+FORCE_ON_POLICY_RATIO=false \
+USE_IMPORTANCE_SAMPLING_CORRECTION=true \
+REFERENCE_POLICY_KL_PENALTY=0 \
+SKIP_REFERENCE_POLICY_LOGPROBS=true \
+MXFP8_SHUFFLE_VERIFY=1 \
+./experiments/nccl_reshard_pr3294/submit_prequant_ab.sh
+```
+
+Require two completed training steps, real NCCL-Reshard selection, non-zero
+NCCL MXFP8 payload, no NaN/Inf, `train/gen_kl_error < 0.05`, and
+`train/token_mult_prob_error < 2.0`. A Python transport fallback is sufficient
+for functional debugging but not for a reportable performance result.
 
 For the BF16 versus MXFP8 NCCL prequantization A/B on GCP-NRT:
 
