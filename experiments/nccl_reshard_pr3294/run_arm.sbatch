@@ -244,8 +244,8 @@ ${DRIVER_LAUNCH} \
   policy.generation.vllm_cfg.tensor_parallel_size=1 \
   ++policy.generation.vllm_cfg.pipeline_parallel_size=1 \
   ++policy.generation.vllm_cfg.expert_parallel_size=1 \
-  policy.generation.vllm_cfg.refit_batched_moe_shuffle='${REFIT_BATCHED_MOE_SHUFFLE}' \
-  policy.generation.vllm_cfg.refit_cache_loader_routes='${REFIT_CACHE_LOADER_ROUTES}' \
+  ++policy.generation.vllm_cfg.refit_batched_moe_shuffle='${REFIT_BATCHED_MOE_SHUFFLE}' \
+  ++policy.generation.vllm_cfg.refit_cache_loader_routes='${REFIT_CACHE_LOADER_ROUTES}' \
   grpo.num_prompts_per_step='${NUM_PROMPTS_PER_STEP}' \
   grpo.num_generations_per_prompt='${NUM_GENERATIONS_PER_PROMPT}' \
   policy.train_global_batch_size='${TRAIN_GLOBAL_BATCH_SIZE}' \
