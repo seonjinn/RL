@@ -276,3 +276,83 @@ three warmups and capture transition outside the steady-state window.
 The repository-wide `results/` ignore rule intentionally keeps live outputs
 out of ordinary commits. Use an explicit reviewed `git add -f` only when a
 task requires publishing a particular result ledger or report.
+
+## Qwen MoE router-replay validation campaign
+
+The Qwen campaign is a four-arm, paired comparison that deliberately separates
+router-replay effects from CUDA Graph effects. It supports
+`qwen3_30ba3b` (the 4-node by 4-GPU performance recipe) and
+`qwen3_235b` (the 16-node by 4-GPU performance recipe). Both selectors use
+packed THD, three successful CUDA Graph warmup steps, disabled checkpoints,
+and W&B project `sna-cg-study`.
+
+| Arm | Router Replay (R3) | CUDA Graph scope | Purpose |
+| --- | --- | --- | --- |
+| A | off | none | eager baseline |
+| B | off | `moe_router` | isolates router graph without replay |
+| C | on | none | isolates replay without router graph |
+| E | on | `attn` | replay-safe graph comparison; router remains eager |
+
+The omitted D arm, `R3=on` plus `moe_router` (or `moe_preprocess`) CUDA
+Graph, is intentionally fail-closed. Route IDs are installed after capture
+and are not graph replay inputs, so reusing the router graph could consume
+stale routes. `run_scope.sh` rejects that combination before a scheduler call;
+do not bypass this guard or claim it as a correctness experiment.
+
+Start with the five-step smoke on Qwen3-30B-A3B. `TEST_ONLY=1` renders all
+commands without creating directories or contacting Slurm. A real launch
+requires a refreshed, attested `profiles/oci-hsg.env`; the example profile is
+not production-ready.
+
+```bash
+CLUSTER=oci-hsg MODEL=qwen3_30ba3b PHASE=smoke TEST_ONLY=1 \
+  submit_qwen_router_validation.sh
+
+CLUSTER=oci-hsg MODEL=qwen3_30ba3b PHASE=smoke RUN_TAG=qwen30-smoke \
+  submit_qwen_router_validation.sh
+```
+
+After the five-step guard and paired correctness checks pass, use the 20-step
+performance phase. The same command selects Qwen3-235B-A22B's 16n4g recipe;
+launch it only after the Qwen30 gate is passed and a fresh runtime attestation
+has been recorded.
+
+```bash
+CLUSTER=oci-hsg MODEL=qwen3_30ba3b PHASE=performance RUN_TAG=qwen30-perf \
+  submit_qwen_router_validation.sh
+
+CLUSTER=oci-hsg MODEL=qwen3_235b PHASE=performance RUN_TAG=qwen235-perf \
+  submit_qwen_router_validation.sh
+```
+
+Each R3-on command exports `NRL_ROUTER_REPLAY_VALIDATE=1`, `NRL_R3_TRACE=1`,
+`NRL_R3_TRACE_STEPS=5`, and `NRL_R3_TRACE_VERIFY_FORWARD=1`. Before comparing
+performance, inspect the driver/Ray logs for the trace and validation result
+on every first-five-step R3 run, and require router/expert parity, finite
+losses and gradients, plus no token-multiplicative-probability or policy-KL
+outlier. An arm that lacks those records is not a correctness-passing result.
+
+Collect completed local artifacts and regenerate the static report only after
+all paired arms have finished:
+
+```bash
+uv run --no-project collect_results.py
+uv run --no-project render_report.py
+```
+
+Compare E2E, generation, policy-training, and logprob step time and
+tokens/sec/GPU only within the same model, phase, dispatcher, cluster/runtime
+profile, repeat, and R3 state. The report also retains graph/eligible-call
+coverage, graph fallback information, reward, `gen_kl_error`,
+`token_mult_prob_error`, router/expert parity, and gradient health for the
+correctness decision.
+
+## OCI readiness before submission
+
+OCI-HSG access has been verified, and both Qwen HF snapshots plus the nightly
+container image are available there. No campaign job has been submitted from
+this branch. Before the first non-`TEST_ONLY` leaf, create the clean remote
+campaign checkout and run a fresh runtime attestation against the exact
+source, nested gitlinks, lockfile, container digest, and four-GPU topology.
+The resulting successful attestation path and preflight job ID are required in
+the OCI profile; all campaign leaves then depend on that preflight.
