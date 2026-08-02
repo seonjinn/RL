@@ -36,9 +36,9 @@ CONTAINER=/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna
 ACTION=submit \
 MODES=mxfp8-nccl-prequant \
 MAX_STEPS=2 \
-NUM_PROMPTS_PER_STEP=2 \
+NUM_PROMPTS_PER_STEP=4 \
 NUM_GENERATIONS_PER_PROMPT=4 \
-TRAIN_GLOBAL_BATCH_SIZE=8 \
+TRAIN_GLOBAL_BATCH_SIZE=16 \
 MAX_TOTAL_SEQUENCE_LENGTH=512 \
 FORCE_ON_POLICY_RATIO=false \
 USE_IMPORTANCE_SAMPLING_CORRECTION=true \
@@ -52,6 +52,9 @@ Require two completed training steps, real NCCL-Reshard selection, non-zero
 NCCL MXFP8 payload, no NaN/Inf, `train/gen_kl_error < 0.05`, and
 `train/token_mult_prob_error < 2.0`. A Python transport fallback is sufficient
 for functional debugging but not for a reportable performance result.
+
+With 2 trainer nodes x 8 GPUs and TP1/PP1/CP1, trainer data parallelism is 16;
+the correctness batch must therefore be a multiple of 16.
 
 If source-managed actor environments are not already populated, build them in
 a CPU-only job before allocating GPUs. This avoids idle-GPU reaper cancellation
@@ -69,7 +72,7 @@ sbatch \
 For the BF16 versus MXFP8 NCCL prequantization A/B on GCP-NRT:
 
 ```bash
-CONTAINER=/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna/containers/pr3294-nccl-reshard/nemo_rl_nightly_20260727_14418344.sqsh \
+CONTAINER=/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna/containers/nemo-rl-nightly-refresh/nemo_rl_nightly_20260730_483099.sqsh \
 ACTION=test-only \
 MAX_STEPS=5 \
 ./experiments/nccl_reshard_pr3294/submit_prequant_ab.sh
