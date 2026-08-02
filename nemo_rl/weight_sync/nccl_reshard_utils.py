@@ -35,6 +35,13 @@ import torch
 from torch.distributed._tensor import Shard
 from torch.distributed.tensor.placement_types import Replicate
 
+from nemo_rl.weight_sync.refit_transforms import (
+    RefitTransformPlan,
+    TransformComponentSpec,
+    plan_signature,
+    resolve_transform,
+)
+
 # =========================================================================
 # MeshInfo — lightweight mesh wrapper type
 # =========================================================================
@@ -225,6 +232,27 @@ _STR_TO_DTYPE = {
     "float8_e5m2": torch.float8_e5m2,
 }
 
+_MXFP8_BLOCK_SIZE = 32
+_LEGACY_TRANSFORM_FORMATS = {
+    "mxfp8": ("bf16", "mxfp8_e4m3_e8m0"),
+}
+
+
+def _restore_dtype(
+    value: Any,
+    *,
+    param_name: str,
+    field_name: str,
+) -> torch.dtype:
+    """Restore a serialized torch dtype or validate an existing dtype."""
+    if isinstance(value, torch.dtype):
+        return value
+    if isinstance(value, str) and value in _STR_TO_DTYPE:
+        return _STR_TO_DTYPE[value]
+    raise ValueError(
+        f"nccl_reshard: {param_name!r} has unsupported {field_name} {value!r}."
+    )
+
 
 # =========================================================================
 # Placement restoration (undo msgspec dict-serialization on the wire)
@@ -258,12 +286,31 @@ def restore_refit_info_placements(refit_info: dict) -> dict:
     """
     for layer_name in refit_info.get("layer_names", []):
         for param_info in refit_info.get("per_layer_params", {}).get(layer_name, []):
+            param_name = param_info.get("name", "<unknown>")
+            if "dtype" in param_info:
+                param_info["dtype"] = _restore_dtype(
+                    param_info["dtype"],
+                    param_name=param_name,
+                    field_name="dtype",
+                )
             param_info["src_placements"] = [
                 _restore_placement(p) for p in param_info["src_placements"]
             ]
             param_info["dst_placements"] = [
                 _restore_placement(p) for p in param_info["dst_placements"]
             ]
+            for component in param_info.get("components", []):
+                component["dtype"] = _restore_dtype(
+                    component["dtype"],
+                    param_name=param_name,
+                    field_name=f"{component['role']} component dtype",
+                )
+                component["src_placements"] = [
+                    _restore_placement(p) for p in component["src_placements"]
+                ]
+                component["dst_placements"] = [
+                    _restore_placement(p) for p in component["dst_placements"]
+                ]
             # Reconstruct MeshInfo if serialized to dict
             for key in ("src_mesh_info", "dst_mesh_info"):
                 mesh = param_info.get(key)
@@ -363,6 +410,110 @@ def get_placements(param_name: str, dim_map: dict, ndim: int) -> list:
             placements[dim_map["tp"]] = Shard(tp_dim)
 
     return placements
+
+
+def _validate_k_shard_alignment(
+    *,
+    param_name: str,
+    global_shape: tuple[int, ...],
+    mesh_info: MeshInfo,
+    placements: list[Any],
+    side: str,
+) -> None:
+    """Require every local K interval to contain whole MXFP8 blocks."""
+    k_axis = len(global_shape) - 1
+    shard_count = 1
+    mesh_shape = tuple(int(size) for size in mesh_info.mesh.shape)
+    for mesh_dim, placement in enumerate(placements):
+        if isinstance(placement, Shard) and placement.dim == k_axis:
+            shard_count *= mesh_shape[mesh_dim]
+
+    global_k = global_shape[k_axis]
+    base_width, remainder = divmod(global_k, shard_count)
+    local_widths = {base_width}
+    if remainder:
+        local_widths.add(base_width + 1)
+    if any(width % _MXFP8_BLOCK_SIZE for width in local_widths):
+        raise ValueError(
+            f"nccl_reshard: {param_name!r} has an unaligned {side} K-axis shard; "
+            f"global K={global_k}, shard count={shard_count}, "
+            f"local widths={sorted(local_widths)}, block size={_MXFP8_BLOCK_SIZE}."
+        )
+
+
+def _build_component_metadata(
+    param_name: str,
+    meta: dict[str, Any],
+    info: dict[str, Any],
+    src_dim_map: dict[str, int],
+    dst_dim_map: dict[str, int],
+) -> RefitTransformPlan:
+    """Describe transfer components and attach topology-specific placements."""
+    global_shape = tuple(int(size) for size in meta["shape"])
+    input_dtype = _restore_dtype(
+        meta["dtype"],
+        param_name=param_name,
+        field_name="storage dtype",
+    )
+    transform = meta.get("refit_transform")
+    target_format = None
+    if transform is None:
+        component_specs = (
+            TransformComponentSpec("weight", global_shape, str(input_dtype)),
+        )
+        transform_id = "identity"
+    else:
+        try:
+            source_format, target_format = _LEGACY_TRANSFORM_FORMATS[transform]
+        except KeyError as error:
+            raise ValueError(
+                f"nccl_reshard: {param_name!r} has unsupported refit transform "
+                f"{transform!r}."
+            ) from error
+        codec = resolve_transform(source_format, target_format)
+        component_specs = codec.describe_outputs(global_shape, str(input_dtype))
+        transform_id = codec.transform_id
+
+    components = [
+        {
+            "role": component.role,
+            "global_shape": component.global_shape,
+            "dtype": component.dtype_name,
+            "src_placements": get_placements(
+                param_name, src_dim_map, len(component.global_shape)
+            ),
+            "dst_placements": get_placements(
+                param_name, dst_dim_map, len(component.global_shape)
+            ),
+        }
+        for component in component_specs
+    ]
+    info["components"] = components
+
+    if target_format == "mxfp8_e4m3_e8m0":
+        weight_component = next(
+            component for component in components if component["role"] == "weight"
+        )
+        _validate_k_shard_alignment(
+            param_name=param_name,
+            global_shape=global_shape,
+            mesh_info=info["src_mesh_info"],
+            placements=weight_component["src_placements"],
+            side="source",
+        )
+        _validate_k_shard_alignment(
+            param_name=param_name,
+            global_shape=global_shape,
+            mesh_info=info["dst_mesh_info"],
+            placements=weight_component["dst_placements"],
+            side="destination",
+        )
+
+    return RefitTransformPlan(
+        transform_id=transform_id,
+        components=component_specs,
+        finalize_scope="parameter",
+    )
 
 
 # =========================================================================
@@ -798,6 +949,7 @@ def build_nccl_reshard_refit_info(
         )
 
     per_layer_params: dict[str, list] = OrderedDict()
+    transform_plans: dict[str, RefitTransformPlan] = {}
     for name, meta in state_dict_metadata.items():
         layer = _extract_layer_name(name)
         ndim = len(meta["shape"])
@@ -848,6 +1000,14 @@ def build_nccl_reshard_refit_info(
                 "dst_placements": get_placements(name, dst_dim_map, ndim),
             }
 
+        transform_plans[name] = _build_component_metadata(
+            name,
+            meta,
+            info,
+            stage_src_dim_map if use_per_stage else this_src_dim_map,
+            dst_dim_map,
+        )
+
         # Propagate the grouped-expert projection tag (gate_proj/up_proj/
         # down_proj) so the train side stacks the matching per-expert tensors
         # (_group_experts) and the gen backend maps the grouped HF param into
@@ -864,4 +1024,5 @@ def build_nccl_reshard_refit_info(
         "gen_world_size": gen_world_size,
         "pp_size": pp_size,
         "gen_tp_size": gen_parallelism.get("tp_size", 1),
+        "plan_signature": plan_signature(transform_plans),
     }
