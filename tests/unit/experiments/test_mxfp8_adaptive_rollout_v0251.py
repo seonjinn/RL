@@ -241,6 +241,21 @@ def test_trace_launcher_uses_eager_discovery_then_summarizes_shapes() -> None:
     assert "shape_summary.json" in launcher
 
 
+def test_qwen_submitter_uses_ptyche_without_ultra_tactic_artifacts() -> None:
+    root = Path(__file__).parents[3]
+    submitter = (
+        root
+        / "experiments/mxfp8_adaptive_rollout_v0251/submit_qwen30_ptyche.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "--nodes=2" in submitter
+    assert "--segment=2" in submitter
+    assert "--time=05:00:00" in submitter
+    assert "run_trace.sh" in submitter
+    assert "TACTIC_FILE=" not in submitter
+    assert "LAYER_ALLOWLIST_B64=" not in submitter
+
+
 def test_shape_trace_summary_accepts_zero_eligible_dense_calls(
     tmp_path: Path,
 ) -> None:
