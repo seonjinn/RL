@@ -28,6 +28,7 @@ srun \
     fi
     test -n \"\${PYTHON_BIN}\" && test -x \"\${PYTHON_BIN}\"
     \"\${PYTHON_BIN}\" -m pytest -q \
+      tests/unit/distributed/test_worker_groups.py::test_custom_environment_variables_are_available_during_initializer_import \
       tests/unit/weight_sync/test_nccl_reshard_utils.py \
       tests/unit/weight_sync/test_nccl_reshard_weight_synchronizer.py
     MCORE_SITE_PACKAGES=\$(find /opt/ray_venvs \
