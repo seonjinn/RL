@@ -60,7 +60,7 @@ during first-time TransformerEngine and vLLM dependency builds:
 ```bash
 sbatch \
   --account=coreai_chef_posttrain \
-  --partition=batch \
+  --partition=cpu \
   --output=/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna/experiments/pr3294-nccl-mxfp8-prequant/gcp-b200/slurm/%x-%j.out \
   --export=ALL,REPO=${PWD},EXPECTED_REPO_SHA=$(git rev-parse HEAD),CONTAINER=/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna/containers/nemo-rl-nightly-refresh/nemo_rl_nightly_20260730_483099.sqsh,CACHE_ROOT=/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna/mopd_nano_fast/.cache/nccl-reshard-pr3294/v2-vllm025-py31313,SHARED_UV_CACHE=/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna/mopd_nano_fast/.cache/nccl-reshard-pr3294/v2-vllm025-shared/uv,RAY_BOOTSTRAP_ARCHIVE=/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna/mopd_nano_fast/.cache/nccl-reshard-pr3294/bootstrap/ray-2.56.1-py31313.tar.gz,BUILD_TARGETS='mcore vllm' \
   experiments/nccl_reshard_pr3294/build_actor_venvs.sbatch

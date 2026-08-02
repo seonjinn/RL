@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=112
+#SBATCH --cpus-per-task=72
 #SBATCH --time=02:00:00
 #SBATCH --job-name=build_pr3294_actor_venvs
 
