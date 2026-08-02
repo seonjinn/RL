@@ -21,12 +21,12 @@ REFIT_TRANSPORT=${REFIT_TRANSPORT:-}
 
 case "${ARM}" in
   baseline)
-    export NRL_MXFP8_BATCHED_SHUFFLE=0
-    export NRL_REFIT_CACHED_LOADERS=0
+    REFIT_BATCHED_MOE_SHUFFLE=false
+    REFIT_CACHE_LOADER_ROUTES=false
     ;;
   optimized)
-    export NRL_MXFP8_BATCHED_SHUFFLE=1
-    export NRL_REFIT_CACHED_LOADERS=1
+    REFIT_BATCHED_MOE_SHUFFLE=true
+    REFIT_CACHE_LOADER_ROUTES=true
     ;;
   *)
     echo "ARM must be baseline or optimized" >&2
@@ -148,8 +148,8 @@ use_container_venvs=${USE_CONTAINER_VENVS}
 container_driver_venv=${CONTAINER_DRIVER_VENV}
 container_actor_venv_root=${CONTAINER_ACTOR_VENV_ROOT}
 container_repo_root=${CONTAINER_REPO_ROOT}
-NRL_MXFP8_BATCHED_SHUFFLE=${NRL_MXFP8_BATCHED_SHUFFLE}
-NRL_REFIT_CACHED_LOADERS=${NRL_REFIT_CACHED_LOADERS}
+refit_batched_moe_shuffle=${REFIT_BATCHED_MOE_SHUFFLE}
+refit_cache_loader_routes=${REFIT_CACHE_LOADER_ROUTES}
 EOF
 
 export NRL_REFIT_NUM_STREAMS=${NRL_REFIT_NUM_STREAMS:-2}
@@ -225,8 +225,6 @@ export UV_LOCK_TIMEOUT=7200
 export NVTE_CUDA_ARCHS='${NVTE_CUDA_ARCHS_OVERRIDE:-100}'
 export TORCH_CUDA_ARCH_LIST='${TORCH_CUDA_ARCH_LIST_OVERRIDE:-10.0}'
 export NRL_REFIT_NUM_STREAMS='${NRL_REFIT_NUM_STREAMS}'
-export NRL_MXFP8_BATCHED_SHUFFLE='${NRL_MXFP8_BATCHED_SHUFFLE}'
-export NRL_REFIT_CACHED_LOADERS='${NRL_REFIT_CACHED_LOADERS}'
 if [[ -s '${WANDB_KEY_FILE}' ]]; then
   export WANDB_API_KEY=\$(cat '${WANDB_KEY_FILE}')
 fi
@@ -246,6 +244,8 @@ ${DRIVER_LAUNCH} \
   policy.generation.vllm_cfg.tensor_parallel_size=1 \
   ++policy.generation.vllm_cfg.pipeline_parallel_size=1 \
   ++policy.generation.vllm_cfg.expert_parallel_size=1 \
+  policy.generation.vllm_cfg.refit_batched_moe_shuffle='${REFIT_BATCHED_MOE_SHUFFLE}' \
+  policy.generation.vllm_cfg.refit_cache_loader_routes='${REFIT_CACHE_LOADER_ROUTES}' \
   grpo.num_prompts_per_step='${NUM_PROMPTS_PER_STEP}' \
   grpo.num_generations_per_prompt='${NUM_GENERATIONS_PER_PROMPT}' \
   policy.train_global_batch_size='${TRAIN_GLOBAL_BATCH_SIZE}' \
