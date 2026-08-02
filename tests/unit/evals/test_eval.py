@@ -251,6 +251,8 @@ def test_setup_nemo_gym_environment_uses_rollout_engine_endpoints(monkeypatch) -
         base_urls=["http://worker-0:8000/v1"],
         model_name="test-model",
         enable_router_replay=False,
+        routed_experts_dtype="int16",
+        use_fastokens=False,
     )
 
 
