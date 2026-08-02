@@ -196,13 +196,6 @@ def test_serialized_component_order_changes_plan_agreement() -> None:
     assert first["plan_signature"] != second["plan_signature"]
 
 
-def test_mixed_identity_and_mxfp8_metadata_reproduces_advertised_agreement() -> None:
-    metadata, agreement = _mixed_serialized_metadata()
-
-    assert validate_serialized_plan_agreement(metadata) == agreement
-    assert agreement["component_count"] == 3
-
-
 @pytest.mark.parametrize(
     ("field", "corrupted_value"),
     [

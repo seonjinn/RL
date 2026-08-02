@@ -35,11 +35,11 @@ from nemo_rl.models.generation.vllm.vllm_backend import (  # noqa: E402
 )
 from nemo_rl.weight_sync.nccl_reshard_utils import (  # noqa: E402
     HFToLocalParamMap,
+    MeshInfo,
+    build_nccl_reshard_refit_info,
 )
 from nemo_rl.weight_sync.refit_transforms import (  # noqa: E402
-    RefitTransformPlan,
-    TransformComponentSpec,
-    build_plan_agreement,
+    validate_serialized_plan_agreement,
 )
 
 pytestmark = pytest.mark.vllm
@@ -407,47 +407,41 @@ def test_prepare_refit_rejects_untransformed_destination_metadata_mismatch(
         ext.prepare_nccl_reshard_refit_info(refit_info)
 
 
-def test_prepare_refit_returns_agreement_rebuilt_after_destination_mapping():
-    from torch.distributed.tensor.placement_types import Replicate
-
-    name = "model.layers.0.mlp.down_proj.weight"
-    plan = RefitTransformPlan(
-        transform_id="identity",
-        components=(TransformComponentSpec("weight", (32, 64), "torch.bfloat16"),),
-        finalize_scope="parameter",
-    )
-    expected = build_plan_agreement({name: plan})
-    refit_info = {
-        "gen_tp_size": 1,
-        "layer_names": ["model.layers.0"],
-        "per_layer_params": {
-            "model.layers.0": [
-                {
-                    "name": name,
-                    "global_shape": [32, 64],
-                    "dtype": "torch.bfloat16",
-                    "src_mesh_info": MeshInfo(torch.arange(1)),
-                    "src_placements": [Replicate()],
-                    "dst_mesh_info": MeshInfo(torch.arange(1)),
-                    "dst_placements": [Replicate()],
-                    "transform_id": plan.transform_id,
-                    "finalize_scope": plan.finalize_scope,
-                    "components": _identity_components(
-                        (32, 64),
-                        torch.bfloat16,
-                        src_placements=[Replicate()],
-                        dst_placements=[Replicate()],
-                    ),
-                }
-            ]
+def test_prepare_refit_reproduces_mixed_bulk_path_agreement():
+    gate_name = "model.layers.0.mlp.gate_proj.weight"
+    down_name = "model.layers.0.mlp.down_proj.weight"
+    refit_info = build_nccl_reshard_refit_info(
+        state_dict_metadata={
+            gate_name: {
+                "shape": [64, 32],
+                "dtype": "torch.bfloat16",
+            },
+            down_name: {
+                "shape": [32, 64],
+                "dtype": "torch.bfloat16",
+                "refit_transform": "mxfp8",
+            },
         },
-        "refit_protocol_version": 99,
-        "refit_component_count": 99,
-        "plan_signature": "not-echoed",
-    }
-    ext = _make_ext({name: torch.empty(32, 64, dtype=torch.bfloat16)})
+        train_parallelism={"tp_size": 1, "ep_size": 1, "pp_size": 1},
+        gen_parallelism={"tp_size": 1, "ep_size": 1, "pp_size": 1},
+        train_world_size=1,
+        gen_world_size=1,
+    )
+    source_agreement = validate_serialized_plan_agreement(refit_info)
+    ext = _make_ext(
+        {
+            "model.layers.0.mlp.gate_up_proj.weight": torch.empty(
+                128, 32, dtype=torch.bfloat16
+            ),
+            down_name: torch.empty(32, 64, dtype=torch.float8_e4m3fn),
+            f"{down_name}_scale_from_checkpoint": torch.empty(32, 2, dtype=torch.uint8),
+        }
+    )
 
-    assert ext.prepare_nccl_reshard_refit_info(refit_info) == expected
+    destination_agreement = ext.prepare_nccl_reshard_refit_info(refit_info)
+
+    assert destination_agreement == source_agreement
+    assert destination_agreement["component_count"] == 3
 
 
 def test_build_mxfp8_map_receives_value_and_scale_into_matching_slices():
