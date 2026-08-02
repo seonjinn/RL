@@ -286,6 +286,13 @@ def test_checkpoint_engine_prequant_handshake_exports_mxfp8_weights():
     exported = dict(worker._checkpoint_engine_weight_iterator())
 
     scale_name = name + "_scale_from_checkpoint"
+    assert worker._refit_transform_requests_by_name == {
+        name: RefitTransformRequest(
+            parameter_names=(name,),
+            source_format="bf16",
+            target_format="mxfp8_e4m3_e8m0",
+        )
+    }
     assert generation.refit_info[1][name][1] == torch.float8_e4m3fn
     assert generation.refit_info[1][scale_name][1] == torch.uint8
     assert exported[name].dtype == torch.float8_e4m3fn
@@ -370,6 +377,12 @@ def test_enable_refit_transforms_validates_before_mutating_state(
 
     worker = object.__new__(MegatronPolicyWorkerImpl)
     worker._refit_prequant_names = {"existing.weight"}
+    existing_request = RefitTransformRequest(
+        parameter_names=("existing.weight",),
+        source_format="bf16",
+        target_format="mxfp8_e4m3_e8m0",
+    )
+    worker._refit_transform_requests_by_name = {"existing.weight": existing_request}
     worker._last_refit_param_info_hf = source_info
     worker._iter_params_with_optional_kv_scales = MagicMock(
         side_effect=AssertionError(
@@ -381,6 +394,9 @@ def test_enable_refit_transforms_validates_before_mutating_state(
         worker.enable_refit_transforms(requests)
 
     assert worker._refit_prequant_names == {"existing.weight"}
+    assert worker._refit_transform_requests_by_name == {
+        "existing.weight": existing_request
+    }
 
 
 @pytest.mark.parametrize(

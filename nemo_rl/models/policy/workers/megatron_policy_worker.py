@@ -354,6 +354,7 @@ class MegatronPolicyWorkerImpl(
         # HF param names to MXFP8-quantize on the trainer during refit; set by
         # the structured transform handshake when refit prequantization is on.
         self._refit_prequant_names: set[str] = set()
+        self._refit_transform_requests_by_name: dict[str, "RefitTransformRequest"] = {}
         self._nixl_preinit_agent = maybe_preinit_nixl_checkpoint_engine(config)
 
         # Set rank for non-collocated to check which ranks to broadcast from
@@ -1841,6 +1842,7 @@ class MegatronPolicyWorkerImpl(
             source_info = self.prepare_refit_info()
 
         requested_names: set[str] = set()
+        requests_by_name: dict[str, RefitTransformRequest] = {}
         for request in requests:
             canonical_names = tuple(sorted(set(request.parameter_names)))
             if request.parameter_names != canonical_names:
@@ -1862,8 +1864,10 @@ class MegatronPolicyWorkerImpl(
                     )
                 codec.describe_outputs(tuple(shape), str(dtype))
                 requested_names.add(name)
+                requests_by_name[name] = request
 
         self._refit_prequant_names = requested_names
+        self._refit_transform_requests_by_name = requests_by_name
 
         refit_param_info_hf = {}
         for name, tensor in self._iter_params_with_optional_kv_scales():
@@ -2389,6 +2393,9 @@ class MegatronPolicyWorkerImpl(
         from nemo_rl.weight_sync.nccl_reshard_utils import _extract_layer_prefix
 
         layer_prefix = None
+        prequant_scale_suffix = "_scale_from_checkpoint"
+        source_info = getattr(self, "_last_refit_param_info_hf", {})
+        transform_requests = getattr(self, "_refit_transform_requests_by_name", {})
         with _meta_tensor_alloc_context():
             for name, tensor in self._iter_params_with_optional_kv_scales():
                 meta = {
@@ -2396,6 +2403,37 @@ class MegatronPolicyWorkerImpl(
                     "dtype": str(tensor.dtype),
                 }
                 _nbytes = tensor.numel() * tensor.element_size()
+                if name.endswith(prequant_scale_suffix):
+                    parent_name = name[: -len(prequant_scale_suffix)]
+                    parent_meta = state_dict_metadata.get(parent_name)
+                    if parent_meta is not None:
+                        scale_shape = meta["shape"]
+                        if len(scale_shape) == len(parent_meta["shape"]) - 1:
+                            scale_shape = [*scale_shape, 1]
+                        parent_meta.update(
+                            {
+                                "scale_shape": scale_shape,
+                                "scale_dtype": meta["dtype"],
+                            }
+                        )
+                        _xfer_bytes += _nbytes
+                    else:
+                        misc_meta[name] = meta
+                        _bcast_bytes += _nbytes
+                    continue
+                request = transform_requests.get(name)
+                if request is not None:
+                    source_shape, source_dtype = source_info[name]
+                    meta.update(
+                        {
+                            "refit_transform": {
+                                "source_format": request.source_format,
+                                "target_format": request.target_format,
+                            },
+                            "source_shape": list(source_shape),
+                            "source_dtype": str(source_dtype),
+                        }
+                    )
                 # Downsized whitelist: only FFN gate/up/down weights take the bulk
                 # nccl-reshard path; everything else -> misc (packed_broadcast).
                 if is_nccl_reshard_param(name):
