@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nemotron Nano THD TE CUDA Graph — paired 20-step report</title>
+<style>
+:root { color-scheme: light; }
+body { font-family: system-ui, -apple-system, sans-serif; margin: 2rem; color: #202124; line-height: 1.45; }
+h1, h2 { color: #17365d; }
+h1 { margin-bottom: 0.35rem; }
+.subtitle { color: #5f6368; margin-top: 0; }
+.cards { display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 1.25rem 0; }
+.card { border: 1px solid #c8ccd0; border-radius: 0.5rem; padding: 0.7rem 0.9rem; min-width: 12rem; }
+.pass { color: #137333; font-weight: 700; }
+.fail { color: #b3261e; font-weight: 700; }
+.warn { color: #9a6700; font-weight: 700; }
+.table-wrap { overflow-x: auto; margin-bottom: 1.5rem; }
+table { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
+th, td { border: 1px solid #c8ccd0; padding: 0.42rem 0.58rem; text-align: right; white-space: nowrap; }
+th { background: #edf2f7; }
+th:first-child, td:first-child { text-align: left; }
+.better { color: #137333; }
+.worse { color: #b3261e; }
+.definition { background: #f6f8fa; border-left: 4px solid #4f78a8; padding: 0.75rem; }
+code { background: #f1f3f4; padding: 0.08rem 0.25rem; border-radius: 0.2rem; }
+li { margin: 0.35rem 0; }
+</style>
+</head>
+<body>
+<h1>Nemotron Nano packed-THD Transformer Engine CUDA Graph study</h1>
+<p class="subtitle">Paired 20-step NeMo-RL run, generated 2026-08-02 09:54 UTC</p>
+
+<div class="cards">
+  <div class="card"><div>Runtime stability</div><div class="pass">PASS</div><small>Both jobs completed 0:0</small></div>
+  <div class="card"><div>Performance gate</div><div class="fail">FAIL</div><small>E2E TPS/GPU −4.81%</small></div>
+  <div class="card"><div>Correctness gate</div><div class="fail">FAIL</div><small>Step 18 logprob outlier</small></div>
+  <div class="card"><div>Runtime graph coverage</div><div class="pass">100.00%</div><small>3,224 / 3,224 eligible calls</small></div>
+</div>
+
+<h2>Run inventory</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Variant</th><th>SLURM job</th><th>W&amp;B</th><th>State</th><th>Elapsed</th><th>Scope</th></tr></thead>
+<tbody>
+<tr><td>Baseline</td><td>5784682</td><td><a href="https://wandb.ai/nvidia/sna-cg-study/runs/2e5twppe">2e5twppe</a></td><td class="pass">COMPLETED 0:0</td><td>39:44</td><td>none</td></tr>
+<tr><td>TE partial CG</td><td>5784680</td><td><a href="https://wandb.ai/nvidia/sna-cg-study/runs/ur1u3gma">ur1u3gma</a></td><td class="pass">COMPLETED 0:0</td><td>40:28</td><td>attn, mamba, moe_router</td></tr>
+</tbody>
+</table>
+</div>
+
+<p class="definition">Like-for-like configuration: 4 nodes × 4 GB200 GPUs, TP2/PP2/CP2/EP8, all-to-all dispatcher, packed THD, fused attention, BF16, seed 42, checkpointing disabled, and exactly three successful optimizer warmups. Performance is the arithmetic mean over W&amp;B steps 11–19 inclusive; all 9 requested steps were present. Validation-bearing steps 10 and 20 are excluded.</p>
+
+<h2>Performance</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Metric</th><th>Baseline</th><th>TE partial CG</th><th>CG delta</th></tr></thead>
+<tbody>
+<tr><td>Mean tokens / sample</td><td>2,323.861</td><td>2,670.910</td><td>+14.93%</td></tr>
+<tr><td>E2E step time (s)</td><td>37.141</td><td>44.034</td><td class="worse">+18.56%</td></tr>
+<tr><td>E2E TPS / GPU</td><td>66.178</td><td>62.993</td><td class="worse">−4.81%</td></tr>
+<tr><td>Generation time (s)</td><td>22.088</td><td>26.590</td><td class="worse">+20.38%</td></tr>
+<tr><td>Generation TPS / GPU</td><td>117.495</td><td>104.312</td><td class="worse">−11.22%</td></tr>
+<tr><td>Policy-training time (s)</td><td>2.405</td><td>5.511</td><td class="worse">+129.18%</td></tr>
+<tr><td>Policy-training TPS / GPU</td><td>1,019.430</td><td>502.289</td><td class="worse">−50.73%</td></tr>
+<tr><td>Policy worker-group TPS / GPU</td><td>434.698</td><td>302.883</td><td class="worse">−30.32%</td></tr>
+<tr><td>Policy + reference logprob time (s)</td><td>3.195</td><td>3.620</td><td class="worse">+13.32%</td></tr>
+<tr><td>Logprob TPS / GPU</td><td>762.459</td><td>763.767</td><td class="better">+0.17%</td></tr>
+<tr><td>Refit time (s)</td><td>4.889</td><td>4.568</td><td class="better">−6.55%</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>CUDA Graph coverage and lifecycle</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Window</th><th>Graph / eligible calls</th><th>Coverage</th><th>Capture</th><th>Replay</th><th>Cache hit</th><th>Fallback</th><th>Padding utilization</th><th>Capacity utilization</th></tr></thead>
+<tbody><tr><td>Steps 11–19</td><td>3,224 / 3,224</td><td class="pass">100.00%</td><td>9</td><td>9</td><td class="fail">0</td><td>0</td><td>99.89%</td><td>78.92%</td></tr></tbody>
+</table>
+</div>
+<p class="definition">Coverage proves that every eligible module call entered a graph. It does not prove numerical parity. The lifecycle captured once in every measured step and never hit its graph-bank cache, which explains the policy-training regression.</p>
+
+<h2>Correctness signals</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Metric, steps 11–19</th><th>Baseline mean</th><th>Baseline median / max</th><th>CG mean</th><th>CG median / max</th></tr></thead>
+<tbody>
+<tr><td>Reward</td><td>0.04861</td><td>0 / 0.1875</td><td>0.03472</td><td>0 / 0.1250</td></tr>
+<tr><td>Generation KL error</td><td>0.002599</td><td>0.002602 / 0.003350</td><td>0.002366</td><td>0.002192 / 0.003074</td></tr>
+<tr><td>Policy KL error</td><td>0.007939</td><td>0.004014 / 0.03175</td><td class="fail">35.4723</td><td class="fail">0.002415 / 319.112</td></tr>
+<tr><td>Token multiplicative probability error</td><td>1.04726</td><td>1.04336 / 1.07261</td><td class="fail">36.5108</td><td class="fail">1.04010 / 320.149</td></tr>
+<tr><td>JS divergence error</td><td>0.000687</td><td>0.000717 / 0.000885</td><td>0.000626</td><td>0.000559 / 0.000846</td></tr>
+<tr><td>Masked sequences</td><td>0</td><td>0 / 0</td><td class="fail">0</td><td class="fail">0 / 0</td></tr>
+</tbody>
+</table>
+</div>
+
+<p class="definition">The CG outlier is isolated to training sample index 13 at step 18. One valid token at position 420 had generation logprob −4.8088 and eager Megatron prev-logprob −20.9378, an absolute difference of 16.1290. That sample's mean multiplicative error was 4,275.77. The recipe had <code>grpo.seq_logprob_error_threshold=null</code>, so no sequence was masked.</p>
+
+<h2>Validation accuracy</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>Validation step</th><th>Baseline</th><th>TE partial CG</th><th>Difference (CG − baseline)</th><th>Paired McNemar exact p</th></tr></thead>
+<tbody>
+<tr><td>10</td><td>5 / 256 (1.95%)</td><td>7 / 256 (2.73%)</td><td>+0.78 pp</td><td>0.7744</td></tr>
+<tr><td>20</td><td>36 / 256 (14.06%)</td><td>21 / 256 (8.20%)</td><td class="worse">−5.86 pp</td><td class="warn">0.0489</td></tr>
+</tbody>
+</table>
+</div>
+<p>The runs used the same prompts, config, and seed, but sampled rollout tokens already differed at step 1. One repeat therefore cannot establish a convergence effect; the step-20 result is a correctness warning that requires fixed-rollout parity and repeated runs.</p>
+
+<h2>Root-cause status</h2>
+<ul>
+  <li><strong>Confirmed performance cause:</strong> NeMo-RL calls <code>_reset_te_cuda_graph_banks_for_storage_relocation()</code> whenever it enters the reference-model weight-swap context. In this BF16 run that discards the captured bank every optimizer step. Telemetry confirms capture=1 and cache-hit=0 on every measured step.</li>
+  <li><strong>Correctness boundary:</strong> <code>get_logprobs()</code> explicitly uninstalls TE graph replay and computes prev-logprobs eagerly. The step-18 mismatch therefore existed before that step's graph training replay. It can still be a downstream effect of earlier graphed updates or refit, so graph correctness is not cleared.</li>
+  <li><strong>Next gate:</strong> preserve graph banks only when reference-weight restoration is demonstrably address-stable, then run an identical-batch eager-vs-graph output/gradient parity test before another performance claim.</li>
+</ul>
+
+<h2>Provenance</h2>
+<div class="table-wrap">
+<table>
+<tbody>
+<tr><th>NeMo-RL</th><td><code>e30b4bb810356934893d5b4e2b807b5518f17b94</code></td></tr>
+<tr><th>Megatron Bridge</th><td><code>69c29747e85328d7a5ba39f8cbea844d60314b11</code></td></tr>
+<tr><th>Megatron Core</th><td><code>5d320e339003f5c2820b1ca0a163e1ca44dfb31e</code></td></tr>
+<tr><th>Transformer Engine</th><td><code>04a76c84423d9a4eb2f2010ef6692e347326cc00</code> (<code>2.19.0.dev0+04a76c84</code>)</td></tr>
+<tr><th>Container SHA256</th><td><code>f863be73380afea5c545614612bcec9a38c9f59be54e88d9431fda4acba717aa</code></td></tr>
+</tbody>
+</table>
+</div>
+</body>
+</html>

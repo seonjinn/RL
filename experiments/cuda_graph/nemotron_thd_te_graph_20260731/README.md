@@ -13,50 +13,49 @@ source revisions remain local under `profiles/*.env`.
 
 ## Current status
 
-The MCore branch is pinned at `e835b64c55a5c3fc23da573d8c3e5e9c2e706694`
-and the Bridge branch at `51481de3d8b0bd5139f9ac9c8dbc4e7d442e0712`.
-The outer project pins official Transformer Engine main commit
-`bffde8f4a0a4eea9036dc753e28269247e5de69d` (2.19 development metadata).
-The NeMo-RL experiment branch includes official main commit
-`c6b56da14996a986859c286c600764604f953024` in merge commit
-`bbe03ac0fd7677d17e055052f6440e23182e59c9`.
-The local experiment suite passes; Linux/GB200 runtime, correctness, and
-performance results are still pending and must not be inferred from local
-tests.
+The active outer NeMo-RL revision is
+`e30b4bb810356934893d5b4e2b807b5518f17b94`, with Bridge revision
+`69c29747e85328d7a5ba39f8cbea844d60314b11`, MCore revision
+`5d320e339003f5c2820b1ca0a163e1ca44dfb31e`, and Transformer Engine revision
+`04a76c84423d9a4eb2f2010ef6692e347326cc00`
+(`2.19.0.dev0+04a76c84`). The paired OCI-HSG run used the 2026-08-01 nightly
+container with SHA256
+`f863be73380afea5c545614612bcec9a38c9f59be54e88d9431fda4acba717aa`.
 
-The current nightly image provides Python 3.13.11 and uv 0.11.1, while this
-source snapshot requires Python 3.13.13 and pins uv 0.11.18 in
-`docker/Dockerfile`. uv 0.11.1 predates the ARM64 Python 3.13.13 download
-metadata. The OCI preflight therefore installs the exact source-pinned uv with
-the official versioned installer into a job-specific immutable directory,
-then stages uv-managed 3.13.13 once under
-`ARTIFACT_DIR/uv-python-installations`. It validates both executable versions
-and SHA256 digests and disables further Python downloads before resolving the
-locked training environment. This is a runtime compatibility gate, not a CUDA
-Graph result.
+The first paired 20-step Nano result is complete:
 
-The 2026-08-01 ARM64 nightly registry manifest
-`sha256:c787746e29131704d14d6500eab2ff8f2476ab9cc396d746026d2d9c2103645b`
-advertises NCCL 2.30.4. Transformer Engine commit `bffde8f4` pins an optional
-NCCL-EP extension that uses a public API added in NCCL 2.30.7, so the approved
-HybridEP experiment contract sets `NVTE_WITH_NCCL_EP=0`. This disables only
-that unused optional TE NCCL-EP extension; TE partial CUDA Graph capture for
-attention, Mamba, and the supported MoE scopes remains enabled. The preflight
-attests the exact value and verifies that the built TE NCCL-EP module is absent.
-Each leaf forwards the value through Ray to every worker environment before any
-editable TE build.
+- no-CG baseline job `5784682` and TE partial-CG job `5784680` both completed
+  with exit code `0:0`;
+- the graph scope was `attn,mamba,moe_router`, with all-to-all dispatch,
+  sequence packing, fused attention, and exactly three successful optimizer
+  warmups;
+- steps 11 through 19 reported 3,224 graph calls out of 3,224 eligible calls,
+  zero fallbacks, and 99.89% aggregate padding utilization;
+- E2E throughput regressed 4.81%, while policy-training throughput regressed
+  50.73% relative to the baseline; and
+- correctness is not cleared: step 18 reported
+  `token_mult_prob_error=320.149` and `policy_kl_error=319.112`, caused by one
+  rollout/eager-logprob mismatch. The configured sequence logprob error
+  threshold was null, so the sequence was not masked.
 
-OCI preflight job `5757613` established that exact uv 0.11.18 and managed
-Python 3.13.13 staging work, then failed before the runtime imports because the
-earlier launcher attempted to create `nemo_rl.egg-info` directly on the
-read-only snapshot. Its dependent Nano jobs `5757618` and `5757619` were
-cancelled automatically and never reached CUDA Graph execution. A new
-preflight is required before any performance or correctness result is claimed.
+The confirmed performance issue is lifecycle-level: entering the reference
+model weight-swap context resets every cached TE graph bank. The measured
+window therefore captured one bank per optimizer step and recorded zero cache
+hits. The step-18 numerical outlier was present between vLLM rollout logprobs
+and eager Megatron logprobs before that step's training replay. A fixed-rollout
+eager-versus-graph output and gradient parity gate is required to determine
+whether it is a downstream effect of earlier graphed updates or an independent
+vLLM/Megatron mismatch.
 
-Nano HybridEP `moe_preprocess` rows are fail-closed, while Super and the Qwen
-comparison selector may run their validated preprocess rows. Qwen dense `mlp`
-and `mamba` rows are model-incompatible. Ultra remains dependency-blocked
-until its external launcher inputs and adapter are validated.
+The current HTML report and machine-readable summary are
+`results/report.html` and `results/paired_20step_summary.json`. These files are
+ignored by default; publish them only with an explicit reviewed force-add.
+
+Nano HybridEP `moe_preprocess` rows remain fail-closed, while Super and the
+Qwen comparison selector may run their validated preprocess rows. Qwen dense
+`mlp` and `mamba` rows are model-incompatible. Ultra remains
+dependency-blocked until its external model, data, judge, and launch-profile
+paths are supplied.
 
 ## Required gate order
 

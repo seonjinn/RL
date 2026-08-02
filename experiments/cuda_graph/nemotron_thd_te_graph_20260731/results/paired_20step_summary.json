@@ -1,0 +1,120 @@
+{
+  "generated_at_utc": "2026-08-02T09:54:46Z",
+  "methodology": {
+    "performance_step_window": [11, 19],
+    "window_is_inclusive": true,
+    "requested_steps": 9,
+    "included_steps": 9,
+    "missing_steps": [],
+    "excluded_validation_steps": [10, 20],
+    "aggregation": "arithmetic mean of canonical W&B metrics"
+  },
+  "configuration": {
+    "model": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16",
+    "nodes": 4,
+    "gpus_per_node": 4,
+    "training_topology": "TP2-PP2-CP2-EP8",
+    "dispatcher": "alltoall",
+    "sequence_packing": true,
+    "attention_backend": "fused",
+    "cuda_graph_warmup_steps": 3,
+    "checkpointing_enabled": false,
+    "seed": 42
+  },
+  "runs": {
+    "baseline": {
+      "job_id": "5784682",
+      "wandb_url": "https://wandb.ai/nvidia/sna-cg-study/runs/2e5twppe",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed": "00:39:44",
+      "mean_tokens_per_sample": 2323.8611111111113,
+      "e2e_tokens_per_sec_per_gpu": 66.17777641598003,
+      "generation_tokens_per_sec_per_gpu": 117.49545651434602,
+      "policy_worker_group_tokens_per_sec_per_gpu": 434.6976601930118,
+      "policy_training_tokens_per_sec_per_gpu": 1019.4300011378358,
+      "logprob_tokens_per_sec_per_gpu": 762.4589869343807,
+      "total_step_time": 37.14107354066664,
+      "generation_time": 22.088163064111136,
+      "policy_training_time": 2.4048990978888773,
+      "logprob_time": 3.1945398248889836,
+      "refit_time": 4.888622477999939
+    },
+    "te_partial_cuda_graph": {
+      "job_id": "5784680",
+      "wandb_url": "https://wandb.ai/nvidia/sna-cg-study/runs/ur1u3gma",
+      "state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed": "00:40:28",
+      "scope": ["attn", "mamba", "moe_router"],
+      "mean_tokens_per_sample": 2670.909722222222,
+      "e2e_tokens_per_sec_per_gpu": 62.99266466520375,
+      "generation_tokens_per_sec_per_gpu": 104.31208129995757,
+      "policy_worker_group_tokens_per_sec_per_gpu": 302.8829492234193,
+      "policy_training_tokens_per_sec_per_gpu": 502.288550511123,
+      "logprob_tokens_per_sec_per_gpu": 763.7668556224206,
+      "total_step_time": 44.0343755271234,
+      "generation_time": 26.590199193658513,
+      "policy_training_time": 5.51143233369415,
+      "logprob_time": 3.620177694880921,
+      "refit_time": 4.568338102570528,
+      "graph_calls": 3224,
+      "eligible_calls": 3224,
+      "graph_coverage": 1.0,
+      "capture_count": 9,
+      "replay_count": 9,
+      "cache_hit_count": 0,
+      "fallback_count": 0,
+      "padding_utilization": 0.9989110065588804,
+      "capacity_utilization": 0.7892259167086694
+    }
+  },
+  "cuda_graph_delta_percent": {
+    "mean_tokens_per_sample": 14.93,
+    "e2e_tokens_per_sec_per_gpu": -4.81,
+    "generation_tokens_per_sec_per_gpu": -11.22,
+    "policy_worker_group_tokens_per_sec_per_gpu": -30.32,
+    "policy_training_tokens_per_sec_per_gpu": -50.73,
+    "logprob_tokens_per_sec_per_gpu": 0.17,
+    "total_step_time": 18.56,
+    "generation_time": 20.38,
+    "policy_training_time": 129.18,
+    "logprob_time": 13.32,
+    "refit_time": -6.55
+  },
+  "correctness": {
+    "baseline": {
+      "token_mult_prob_error": {"mean": 1.0472565954876498, "median": 1.0433607975719497, "max": 1.072606942792845},
+      "policy_kl_error": {"mean": 0.007939395754571798, "median": 0.004014148718852084, "max": 0.03175037912459189},
+      "gen_kl_error_mean": 0.002599347342045909,
+      "num_masked_seqs": 0
+    },
+    "te_partial_cuda_graph": {
+      "token_mult_prob_error": {"mean": 36.5108394676758, "median": 1.040100869257003, "max": 320.14891304215416},
+      "policy_kl_error": {"mean": 35.472326398020165, "median": 0.0024152990226866677, "max": 319.1119978189963},
+      "gen_kl_error_mean": 0.0023659083769239763,
+      "num_masked_seqs": 0,
+      "outlier": {
+        "step": 18,
+        "sample_index": 13,
+        "token_position": 420,
+        "generation_logprob": -4.808831691741943,
+        "eager_megatron_prev_logprob": -20.93783950805664,
+        "absolute_logprob_error": 16.129007816314697,
+        "sample_mean_mult_prob_error": 4275.768080784783
+      }
+    },
+    "validation": {
+      "step_10": {"baseline_correct": 5, "cuda_graph_correct": 7, "samples": 256, "mcnemar_exact_two_sided_p": 0.7744140625},
+      "step_20": {"baseline_correct": 36, "cuda_graph_correct": 21, "samples": 256, "mcnemar_exact_two_sided_p": 0.04887389231827033}
+    }
+  },
+  "provenance": {
+    "nemo_rl_commit": "e30b4bb810356934893d5b4e2b807b5518f17b94",
+    "bridge_commit": "69c29747e85328d7a5ba39f8cbea844d60314b11",
+    "mcore_commit": "5d320e339003f5c2820b1ca0a163e1ca44dfb31e",
+    "te_commit": "04a76c84423d9a4eb2f2010ef6692e347326cc00",
+    "te_version": "2.19.0.dev0+04a76c84",
+    "container_sha256": "f863be73380afea5c545614612bcec9a38c9f59be54e88d9431fda4acba717aa"
+  }
+}
