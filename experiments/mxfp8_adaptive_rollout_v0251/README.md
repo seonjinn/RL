@@ -35,6 +35,10 @@ hash and custom vLLM commit. Both arms reuse those same versioned environments.
 It also initializes the pinned shallow workspace submodules before resolving the
 locked environment.
 
+The locked driver environment must be prepared once in the matching container.
+The launcher then uses its Ray binary for the head, worker, and driver processes,
+preventing a container-Ray versus lockfile-Ray version mismatch.
+
 Submit through the repository `ray.sub` launcher on Ptyche with two nodes,
 four GPUs per node, account `coreai_dlalgo_llm`, partition `36x2-a01r`, and
 `--segment=2`. The immutable production form should replace

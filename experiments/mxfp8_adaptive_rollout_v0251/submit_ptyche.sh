@@ -49,6 +49,13 @@ mkdir -p \
   "$NEMO_RL_DRIVER_VENV_DIR" \
   "$NEMO_RL_VENV_DIR"
 
+if [[ ! -x "$NEMO_RL_DRIVER_VENV_DIR/bin/ray" ]]; then
+  echo "locked driver venv is not prepared: $NEMO_RL_DRIVER_VENV_DIR" >&2
+  echo "build it in a matching container before submitting the canary" >&2
+  exit 2
+fi
+export PATH="$NEMO_RL_DRIVER_VENV_DIR/bin:$PATH"
+
 sha256sum --check <(printf '%s  %s\n' "$TACTIC_SHA256" "$TACTIC_FILE")
 git -C "$NEMO_RL_REPO_ROOT" diff --quiet
 git -C "$NEMO_RL_REPO_ROOT" diff --cached --quiet
