@@ -2602,17 +2602,30 @@ class MegatronPolicyWorkerImpl(
             scale = scale.reshape(
                 *source.shape[:-1], source.shape[-1] // MXFP8_BLOCK_SIZE
             )
-            return RefitCtx(buf=value, extra={"scale_buf": scale})
+            return RefitCtx(buf=value, transfer_tensors=(value, scale))
+
+        def _component_family(param_info: dict[str, Any]) -> tuple[str, ...]:
+            components = param_info.get("components")
+            if not components:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: {param_info['name']!r} must "
+                    "provide a nonempty component list"
+                )
+            family = tuple(component.get("role") for component in components)
+            if family not in {("weight",), ("weight", "weight_scale")}:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: unsupported component family "
+                    f"{family!r} for {param_info['name']!r}"
+                )
+            return family
 
         def _expert_spec(
-            proj: str, grouped_name: str, refit_transform: Optional[str]
+            proj: str, grouped_name: str, *, transform_to_mxfp8: bool
         ) -> LocalParamSpec:
             def pre(_base: Any) -> RefitCtx:
                 source = self._group_experts(proj, grouped_name, expert_groups)
                 return (
-                    _mxfp8_ctx(source)
-                    if refit_transform == "mxfp8"
-                    else RefitCtx(buf=source)
+                    _mxfp8_ctx(source) if transform_to_mxfp8 else RefitCtx(buf=source)
                 )
 
             return LocalParamSpec(base=None, pre=pre)
@@ -2621,16 +2634,19 @@ class MegatronPolicyWorkerImpl(
         for layer_name in refit_info["layer_names"]:
             for p in refit_info["per_layer_params"][layer_name]:
                 name = p["name"]
-                refit_transform = p.get("refit_transform")
+                component_family = _component_family(p)
+                transform_to_mxfp8 = component_family == ("weight", "weight_scale")
                 if p.get("grouped_expert_proj"):
                     mapping[name] = _expert_spec(
-                        p["grouped_expert_proj"], name, refit_transform
+                        p["grouped_expert_proj"],
+                        name,
+                        transform_to_mxfp8=transform_to_mxfp8,
                     )
                 else:
                     base = param_map.get(name)
                     mapping[name] = LocalParamSpec(
                         base=base,
-                        pre=_mxfp8_ctx if refit_transform == "mxfp8" else None,
+                        pre=_mxfp8_ctx if transform_to_mxfp8 else None,
                     )
         return HFToLocalParamMap(specs=mapping)
 
@@ -2679,48 +2695,43 @@ class MegatronPolicyWorkerImpl(
                 assert ctx.buf is not None, (
                     f"no local tensor for {param_info['name']!r}"
                 )
-                src_tensor = DTensorRef(
-                    local_tensor=ctx.buf, global_shape=param_info["global_shape"]
-                )
-                xferdtensor(
-                    src_tensor,
-                    param_info["src_mesh_info"],
-                    param_info["src_placements"],
-                    None,
-                    param_info["dst_mesh_info"],
-                    param_info["dst_placements"],
-                    group,
-                    nccl_reshard_stream,
-                )
-                scale_src_tensor = None
-                scale_buf = ctx.extra.get("scale_buf")
-                if param_info.get("refit_transform") == "mxfp8":
-                    assert scale_buf is not None, (
-                        f"no MXFP8 scale tensor for {param_info['name']!r}"
+                components = param_info.get("components")
+                if not components:
+                    raise ValueError(
+                        f"nccl_reshard_refit: {param_info['name']!r} must provide "
+                        "a nonempty component list"
                     )
-                    scale_src_tensor = DTensorRef(
-                        local_tensor=scale_buf,
-                        global_shape=param_info["scale_global_shape"],
+                transfer_tensors = ctx.tensors_for_transfer()
+                if len(transfer_tensors) != len(components):
+                    raise ValueError(
+                        f"nccl_reshard_refit: component count mismatch for "
+                        f"{param_info['name']!r}: context has {len(transfer_tensors)}, "
+                        f"metadata has {len(components)}"
+                    )
+                for tensor, component in zip(transfer_tensors, components):
+                    src_tensor = DTensorRef(
+                        local_tensor=tensor,
+                        global_shape=component["global_shape"],
                     )
                     xferdtensor(
-                        scale_src_tensor,
+                        src_tensor,
                         param_info["src_mesh_info"],
-                        param_info["scale_src_placements"],
+                        component["src_placements"],
                         None,
                         param_info["dst_mesh_info"],
-                        param_info["scale_dst_placements"],
+                        component["dst_placements"],
                         group,
                         nccl_reshard_stream,
                     )
                 if spec.post is not None:
                     spec.post(ctx)
-                if spec.pre is not None and ctx.buf.is_cuda:
-                    ctx.buf.record_stream(nccl_reshard_stream)
-                if scale_buf is not None and scale_buf.is_cuda:
-                    scale_buf.record_stream(nccl_reshard_stream)
+                if spec.pre is not None:
+                    for tensor in transfer_tensors:
+                        if tensor.is_cuda:
+                            tensor.record_stream(nccl_reshard_stream)
                 # Drop refs to per-iteration transformed/grouped tensors. The
                 # caching allocator retains them until their stream work completes.
-                del ctx, src_tensor, scale_src_tensor, scale_buf
+                del ctx, transfer_tensors
 
         torch.cuda.synchronize()
         torch.cuda.empty_cache()

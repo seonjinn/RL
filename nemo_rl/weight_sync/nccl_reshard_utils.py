@@ -73,15 +73,23 @@ class MeshInfo:
 class RefitCtx:
     """Handoff between a param's ``pre`` and ``post`` refit hooks.
 
-    The transfer API (xferdtensor) reads only ``buf``.
-    ``extra`` is provided for flexible, backend-specific state.
+    ``buf`` remains the primary tensor for existing pre/post hooks.
+    ``transfer_tensors`` carries the ordered component payload when one logical
+    parameter has multiple transfer tensors. ``extra`` is provided for
+    backend-specific state that is not transferred.
 
     Use case:
     - vLLM merged params tracks the merged param slice in ``extra["region"]``
     """
 
     buf: torch.Tensor
+    transfer_tensors: tuple[torch.Tensor, ...] | None = None
     extra: dict[str, Any] = field(default_factory=dict)
+
+    def tensors_for_transfer(self) -> tuple[torch.Tensor, ...]:
+        if self.transfer_tensors is None:
+            return (self.buf,)
+        return self.transfer_tensors
 
 
 @dataclass

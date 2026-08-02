@@ -99,11 +99,13 @@ def test_build_hf_to_local_param_map_train_side():
                 {
                     "name": "model.layers.0.mlp.down_proj.weight",
                     "global_shape": [8, 16],
+                    "components": [{"role": "weight"}],
                 },
                 {
                     "name": f"{prefix}.gate_proj.weight",
                     "global_shape": [2, 128, 16],
                     "grouped_expert_proj": "gate_proj",
+                    "components": [{"role": "weight"}],
                 },
             ]
         },
@@ -143,13 +145,19 @@ def test_build_mxfp8_source_specs_quantize_direct_and_grouped_once():
                 {
                     "name": "model.layers.0.mlp.down_proj.weight",
                     "global_shape": [32, 64],
-                    "refit_transform": "mxfp8",
+                    "components": [
+                        {"role": "weight"},
+                        {"role": "weight_scale"},
+                    ],
                 },
                 {
                     "name": f"{prefix}.gate_proj.weight",
                     "global_shape": [2, 64, 32],
                     "grouped_expert_proj": "gate_proj",
-                    "refit_transform": "mxfp8",
+                    "components": [
+                        {"role": "weight"},
+                        {"role": "weight_scale"},
+                    ],
                 },
             ]
         },
@@ -161,29 +169,36 @@ def test_build_mxfp8_source_specs_quantize_direct_and_grouped_once():
     grouped_ctx = grouped_spec.pre(grouped_spec.base)
 
     assert direct_ctx.buf.dtype == torch.float8_e4m3fn
-    assert direct_ctx.extra["scale_buf"].shape == (32, 2)
-    assert direct_ctx.extra["scale_buf"].dtype == torch.uint8
+    assert direct_ctx.tensors_for_transfer()[1].shape == (32, 2)
+    assert direct_ctx.tensors_for_transfer()[1].dtype == torch.uint8
     assert grouped_ctx.buf.dtype == torch.float8_e4m3fn
     assert grouped_ctx.buf.shape == (2, 64, 32)
-    assert grouped_ctx.extra["scale_buf"].shape == (2, 64, 1)
-    assert grouped_ctx.extra["scale_buf"].dtype == torch.uint8
+    assert grouped_ctx.tensors_for_transfer()[1].shape == (2, 64, 1)
+    assert grouped_ctx.tensors_for_transfer()[1].dtype == torch.uint8
 
 
-def test_nccl_reshard_refit_transfers_mxfp8_value_then_scale(monkeypatch):
+def test_refit_ctx_distinguishes_default_from_explicit_empty_transfer_tuple():
+    from nemo_rl.weight_sync.nccl_reshard_utils import RefitCtx
+
+    value = torch.empty(1)
+
+    assert RefitCtx(buf=value).tensors_for_transfer() == (value,)
+    assert RefitCtx(buf=value, transfer_tensors=()).tensors_for_transfer() == ()
+
+
+@pytest.mark.parametrize("component_count", [1, 2, 4])
+def test_nccl_reshard_refit_transfers_ordered_components(monkeypatch, component_count):
     from nemo_rl.weight_sync.nccl_reshard_utils import (
         HFToLocalParamMap,
         LocalParamSpec,
         RefitCtx,
     )
 
-    value = torch.empty(32, 64, dtype=torch.float8_e4m3fn)
-    scale = torch.empty(32, 2, dtype=torch.uint8)
+    tensors = tuple(torch.empty(2, index + 1) for index in range(component_count))
     src_mesh = object()
     dst_mesh = object()
-    value_src_placements = [object()]
-    value_dst_placements = [object()]
-    scale_src_placements = [object()]
-    scale_dst_placements = [object()]
+    component_src_placements = [[object()] for _ in tensors]
+    component_dst_placements = [[object()] for _ in tensors]
     group = object()
     stream = object()
     calls = []
@@ -224,58 +239,116 @@ def test_nccl_reshard_refit_transfers_mxfp8_value_then_scale(monkeypatch):
     worker = object.__new__(MegatronPolicyWorkerImpl)
     worker.my_pp_stage = 0
     worker.pp_comm_group = group
+    components = [
+        {
+            "role": f"component_{index}",
+            "global_shape": tuple(tensor.shape),
+            "src_placements": component_src_placements[index],
+            "dst_placements": component_dst_placements[index],
+        }
+        for index, tensor in enumerate(tensors)
+    ]
     worker.nccl_reshard_refit_info = {
         "layer_names": ["model.layers.0"],
         "per_layer_params": {
             "model.layers.0": [
                 {
                     "name": name,
-                    "global_shape": (32, 64),
                     "src_mesh_info": src_mesh,
-                    "src_placements": value_src_placements,
                     "dst_mesh_info": dst_mesh,
-                    "dst_placements": value_dst_placements,
-                    "refit_transform": "mxfp8",
-                    "scale_global_shape": (32, 2),
-                    "scale_src_placements": scale_src_placements,
-                    "scale_dst_placements": scale_dst_placements,
+                    "components": components,
+                }
+            ]
+        },
+    }
+    spec = (
+        LocalParamSpec(base=tensors[0])
+        if component_count == 1
+        else LocalParamSpec(
+            base=None,
+            pre=lambda _: RefitCtx(
+                buf=tensors[0],
+                transfer_tensors=tensors,
+            ),
+        )
+    )
+    worker.hf_to_local_param_map = HFToLocalParamMap(specs={name: spec})
+    worker._broadcast_misc_params_packed = lambda kv_scales=None: None
+
+    worker.nccl_reshard_refit()
+
+    assert [call[0] for call in calls] == list(tensors)
+    assert [call[1] for call in calls] == [tuple(tensor.shape) for tensor in tensors]
+    for index, call in enumerate(calls):
+        assert call[2:] == (
+            src_mesh,
+            component_src_placements[index],
+            None,
+            dst_mesh,
+            component_dst_placements[index],
+            group,
+            stream,
+        )
+
+
+def test_nccl_reshard_refit_rejects_component_count_before_transfer_or_post(
+    monkeypatch,
+):
+    from nemo_rl.weight_sync.nccl_reshard_utils import (
+        HFToLocalParamMap,
+        LocalParamSpec,
+        RefitCtx,
+    )
+
+    calls = []
+    tensor = torch.empty(2, 2)
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.my_pp_stage = 0
+    worker.pp_comm_group = object()
+    worker.nccl_reshard_refit_info = {
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": "model.layers.0.mlp.down_proj.weight",
+                    "src_mesh_info": object(),
+                    "dst_mesh_info": object(),
+                    "components": [
+                        {
+                            "role": "weight",
+                            "global_shape": (2, 2),
+                            "src_placements": [object()],
+                            "dst_placements": [object()],
+                        },
+                        {
+                            "role": "weight_scale",
+                            "global_shape": (2, 1),
+                            "src_placements": [object()],
+                            "dst_placements": [object()],
+                        },
+                    ],
                 }
             ]
         },
     }
     worker.hf_to_local_param_map = HFToLocalParamMap(
         specs={
-            name: LocalParamSpec(
-                base=None,
-                pre=lambda _: RefitCtx(
-                    buf=value,
-                    extra={"scale_buf": scale},
-                ),
+            "model.layers.0.mlp.down_proj.weight": LocalParamSpec(
+                base=tensor,
+                pre=lambda _: RefitCtx(buf=tensor, transfer_tensors=(tensor,)),
+                post=lambda _: calls.append("post"),
             )
         }
     )
     worker._broadcast_misc_params_packed = lambda kv_scales=None: None
 
-    worker.nccl_reshard_refit()
+    monkeypatch.setattr(
+        "nemo_rl.weight_sync.xferdtensor.xferdtensor",
+        lambda *_args, **_kwargs: calls.append("transfer"),
+    )
+    monkeypatch.setattr(torch.cuda, "current_stream", lambda: object())
 
-    assert calls[0][0] is value
-    assert calls[1][0] is scale
-    assert [call[1] for call in calls] == [(32, 64), (32, 2)]
-    assert calls[0][2:] == (
-        src_mesh,
-        value_src_placements,
-        None,
-        dst_mesh,
-        value_dst_placements,
-        group,
-        stream,
-    )
-    assert calls[1][2:] == (
-        src_mesh,
-        scale_src_placements,
-        None,
-        dst_mesh,
-        scale_dst_placements,
-        group,
-        stream,
-    )
+    with pytest.raises(ValueError, match="component count"):
+        worker.nccl_reshard_refit()
+
+    assert calls == []
