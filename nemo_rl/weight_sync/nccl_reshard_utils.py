@@ -460,12 +460,14 @@ def _build_component_metadata(
     dst_dim_map: dict[str, int],
 ) -> RefitTransformPlan:
     """Describe transfer components and attach topology-specific placements."""
-    global_shape = tuple(int(size) for size in meta["shape"])
-    input_dtype = _restore_dtype(
+    wire_shape = tuple(int(size) for size in meta["shape"])
+    wire_dtype = _restore_dtype(
         meta["dtype"],
         param_name=param_name,
         field_name="storage dtype",
     )
+    global_shape = wire_shape
+    input_dtype = wire_dtype
     transform = meta.get("refit_transform")
     target_format = None
     if transform is None:
@@ -479,16 +481,66 @@ def _build_component_metadata(
         )
         transform_id = "identity"
     else:
-        try:
-            source_format, target_format = _LEGACY_TRANSFORM_FORMATS[transform]
-        except KeyError as error:
-            raise ValueError(
-                f"nccl_reshard: {param_name!r} has unsupported refit transform "
-                f"{transform!r}."
-            ) from error
+        if isinstance(transform, dict):
+            try:
+                source_format = str(transform["source_format"])
+                target_format = str(transform["target_format"])
+                global_shape = tuple(int(size) for size in meta["source_shape"])
+                input_dtype = _restore_dtype(
+                    meta["source_dtype"],
+                    param_name=param_name,
+                    field_name="transform source dtype",
+                )
+            except KeyError as error:
+                raise ValueError(
+                    f"nccl_reshard: {param_name!r} has incomplete structured "
+                    f"refit transform metadata; missing {error.args[0]!r}."
+                ) from error
+        else:
+            try:
+                source_format, target_format = _LEGACY_TRANSFORM_FORMATS[transform]
+            except KeyError as error:
+                raise ValueError(
+                    f"nccl_reshard: {param_name!r} has unsupported refit transform "
+                    f"{transform!r}."
+                ) from error
         codec = resolve_transform(source_format, target_format)
         component_specs = codec.describe_outputs(global_shape, str(input_dtype))
         transform_id = codec.transform_id
+
+        if isinstance(transform, dict):
+            actual_components = {
+                "weight": (wire_shape, str(wire_dtype)),
+            }
+            if "scale_shape" in meta or "scale_dtype" in meta:
+                try:
+                    actual_components["weight_scale"] = (
+                        tuple(int(size) for size in meta["scale_shape"]),
+                        str(
+                            _restore_dtype(
+                                meta["scale_dtype"],
+                                param_name=param_name,
+                                field_name="wire scale dtype",
+                            )
+                        ),
+                    )
+                except KeyError as error:
+                    raise ValueError(
+                        f"nccl_reshard: {param_name!r} has incomplete wire scale "
+                        f"metadata; missing {error.args[0]!r}."
+                    ) from error
+            expected_components = {
+                component.role: (component.global_shape, component.dtype_name)
+                for component in component_specs
+            }
+            if actual_components != expected_components:
+                raise ValueError(
+                    f"nccl_reshard: {param_name!r} transformed wire metadata does "
+                    f"not match codec outputs: actual={actual_components}, "
+                    f"expected={expected_components}."
+                )
+
+        info["global_shape"] = global_shape
 
     components = [
         {
@@ -600,6 +652,13 @@ def group_expert_params_in_metadata(
                         inter_scale // 2,
                         hidden_scale,
                     ]
+                if "source_shape" in meta:
+                    e_source, inter_source, hidden_source = meta["source_shape"]
+                    role_meta["source_shape"] = [
+                        e_source,
+                        inter_source // 2,
+                        hidden_source,
+                    ]
                 grouped_metadata[f"{prefix}.{role}.weight"] = role_meta
             pre_grouped_experts = True
         elif name.endswith("experts.down_proj"):
@@ -633,6 +692,11 @@ def group_expert_params_in_metadata(
             grouped_meta["scale_shape"] = [
                 num_experts_global,
                 *first_meta["scale_shape"],
+            ]
+        if "source_shape" in first_meta:
+            grouped_meta["source_shape"] = [
+                num_experts_global,
+                *first_meta["source_shape"],
             ]
         grouped_metadata[f"{prefix}.{proj}.weight"] = grouped_meta
 

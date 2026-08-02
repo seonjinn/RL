@@ -492,6 +492,33 @@ def test_group_expert_params_preserves_mxfp8_scale_family():
     assert down["scale_dtype"] == "torch.uint8"
 
 
+def test_group_expert_params_groups_structured_transform_source_shape():
+    metadata = _moe_metadata(num_experts=2, inter=64, hidden=32)
+    for name, meta in metadata.items():
+        if ".experts." not in name:
+            continue
+        source_shape = list(meta["shape"])
+        meta.update(
+            {
+                "dtype": "torch.float8_e4m3fn",
+                "refit_transform": {
+                    "source_format": "bf16",
+                    "target_format": "mxfp8_e4m3_e8m0",
+                },
+                "source_shape": source_shape,
+                "source_dtype": "torch.bfloat16",
+                "scale_shape": [source_shape[0], source_shape[1] // 32],
+                "scale_dtype": "torch.uint8",
+            }
+        )
+
+    grouped = group_expert_params_in_metadata(metadata)
+
+    base = "model.layers.0.mlp.experts"
+    assert grouped[f"{base}.gate_proj.weight"]["source_shape"] == [2, 64, 32]
+    assert grouped[f"{base}.down_proj.weight"]["source_shape"] == [2, 32, 64]
+
+
 # --------------------------------------------------------------------------
 # build_nccl_reshard_refit_info
 # --------------------------------------------------------------------------
@@ -744,6 +771,51 @@ def test_build_refit_info_describes_mxfp8_as_ordered_components():
     assert param["finalize_scope"] == "parameter"
     assert "refit_transform" not in param
     assert "scale_global_shape" not in param
+
+
+def test_build_refit_info_uses_declared_source_for_transformed_wire_components():
+    metadata = {
+        "shape": [64, 128],
+        "dtype": "torch.float8_e4m3fn",
+        "refit_transform": {
+            "source_format": "bf16",
+            "target_format": "mxfp8_e4m3_e8m0",
+        },
+        "source_shape": [64, 128],
+        "source_dtype": "torch.bfloat16",
+        "scale_shape": [64, 4],
+        "scale_dtype": "torch.uint8",
+    }
+
+    info = _build_single_mxfp8_param(metadata)
+
+    param = _find(info, "model.layers.0.mlp.down_proj.weight")
+    assert [component["role"] for component in param["components"]] == [
+        "weight",
+        "weight_scale",
+    ]
+    assert [component["dtype"] for component in param["components"]] == [
+        "torch.float8_e4m3fn",
+        "torch.uint8",
+    ]
+
+
+def test_build_refit_info_rejects_transformed_wire_metadata_mismatch():
+    metadata = {
+        "shape": [64, 128],
+        "dtype": "torch.float8_e4m3fn",
+        "refit_transform": {
+            "source_format": "bf16",
+            "target_format": "mxfp8_e4m3_e8m0",
+        },
+        "source_shape": [64, 128],
+        "source_dtype": "torch.bfloat16",
+        "scale_shape": [64, 3],
+        "scale_dtype": "torch.uint8",
+    }
+
+    with pytest.raises(ValueError, match="does not match codec outputs"):
+        _build_single_mxfp8_param(metadata)
 
 
 def test_build_refit_info_describes_grouped_mxfp8_components_with_ep_tp_and_pp():

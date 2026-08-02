@@ -357,6 +357,7 @@ class MegatronPolicyWorkerImpl(
         # HF param names to MXFP8-quantize on the trainer during refit; set by
         # the structured transform handshake when refit prequantization is on.
         self._refit_prequant_names: set[str] = set()
+        self._refit_transform_requests_by_name: dict[str, "RefitTransformRequest"] = {}
         # Pinned host staging for the reference-policy swap; only populated when
         # megatron_cfg["pinned_reference_swap"] is enabled. Buffer contents are
         # only live within a single use_reference_model call (every copy
@@ -1887,6 +1888,7 @@ class MegatronPolicyWorkerImpl(
             source_info = self.prepare_refit_info()
 
         requested_names: set[str] = set()
+        requests_by_name: dict[str, RefitTransformRequest] = {}
         for request in requests:
             canonical_names = tuple(sorted(set(request.parameter_names)))
             if request.parameter_names != canonical_names:
@@ -1908,8 +1910,10 @@ class MegatronPolicyWorkerImpl(
                     )
                 codec.describe_outputs(tuple(shape), str(dtype))
                 requested_names.add(name)
+                requests_by_name[name] = request
 
         self._refit_prequant_names = requested_names
+        self._refit_transform_requests_by_name = requests_by_name
 
         refit_param_info_hf = {}
         for name, tensor in self._iter_params_with_optional_kv_scales():
@@ -2445,6 +2449,8 @@ class MegatronPolicyWorkerImpl(
 
         layer_prefix = None
         prequant_scale_suffix = "_scale_from_checkpoint"
+        source_info = getattr(self, "_last_refit_param_info_hf", {})
+        transform_requests = getattr(self, "_refit_transform_requests_by_name", {})
         with _meta_tensor_alloc_context():
             for name, tensor in self._iter_params_with_optional_kv_scales():
                 meta = {
@@ -2461,7 +2467,6 @@ class MegatronPolicyWorkerImpl(
                             scale_shape = [*scale_shape, 1]
                         parent_meta.update(
                             {
-                                "refit_transform": "mxfp8",
                                 "scale_shape": scale_shape,
                                 "scale_dtype": meta["dtype"],
                             }
@@ -2471,6 +2476,19 @@ class MegatronPolicyWorkerImpl(
                         misc_meta[name] = meta
                         _bcast_bytes += _nbytes
                     continue
+                request = transform_requests.get(name)
+                if request is not None:
+                    source_shape, source_dtype = source_info[name]
+                    meta.update(
+                        {
+                            "refit_transform": {
+                                "source_format": request.source_format,
+                                "target_format": request.target_format,
+                            },
+                            "source_shape": list(source_shape),
+                            "source_dtype": str(source_dtype),
+                        }
+                    )
                 # Downsized whitelist: only FFN gate/up/down weights take the bulk
                 # nccl-reshard path; everything else -> misc (packed_broadcast).
                 if is_nccl_reshard_param(name):
