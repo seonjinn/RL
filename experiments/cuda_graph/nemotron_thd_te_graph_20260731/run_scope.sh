@@ -29,7 +29,7 @@ source_provenance_verifier=${script_dir}/scripts/verify_source_provenance.sh
 runtime_attestation_validator=${script_dir}/verify_runtime_attestation.py
 cd "${repo_root}"
 
-: "${MODEL:?Set MODEL to nano, super, ultra, or qwen3_30ba3b}"
+: "${MODEL:?Set MODEL to nano, super, ultra, qwen3_30ba3b, or qwen3_235b}"
 : "${SCOPE:?Set SCOPE through a persistent scope or variant launcher}"
 : "${SCOPE_NAME:?Set SCOPE_NAME through a persistent launcher}"
 : "${CLUSTER:?Set CLUSTER to ptyche, oci-hsg, or lyris}"
@@ -41,6 +41,7 @@ SBATCH_TEST_ONLY=${SBATCH_TEST_ONLY:-0}
 RUN_TAG=${RUN_TAG:-$(date -u +%Y%m%dT%H%M%SZ)}
 RUN_GROUP=${RUN_GROUP:-adhoc-${MODEL}-${MODE}-${CLUSTER}-${RUN_TAG}}
 REPEAT_INDEX=${REPEAT_INDEX:-0}
+ROUTER_REPLAY=${ROUTER_REPLAY:-off}
 NVTE_WITH_NCCL_EP=0
 
 [[ "${RUN_GROUP}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || \
@@ -49,9 +50,21 @@ NVTE_WITH_NCCL_EP=0
   fail "REPEAT_INDEX must be a non-negative integer"
 
 case "${MODEL}" in
-  nano|super|ultra|qwen3_30ba3b) ;;
-  *) fail "MODEL must be nano, super, ultra, or qwen3_30ba3b" ;;
+  nano|super|ultra|qwen3_30ba3b|qwen3_235b) ;;
+  *) fail "MODEL must be nano, super, ultra, qwen3_30ba3b, or qwen3_235b" ;;
 esac
+case "${ROUTER_REPLAY}" in
+  off) R3_NAME=r3off ;;
+  on) R3_NAME=r3on ;;
+  *) fail "ROUTER_REPLAY must be off or on" ;;
+esac
+if [[ "${ROUTER_REPLAY}" == "on" ]]; then
+  case ",${SCOPE}," in
+    *,moe_router,*|*,moe_preprocess,*)
+      fail "Router Replay cannot be combined with router CUDA Graph scopes"
+      ;;
+  esac
+fi
 case "${MODE}" in
   nemorl|mcore) ;;
   *) fail "MODE must be nemorl or mcore" ;;
@@ -223,7 +236,7 @@ if [[ "${status}" != "runnable" ]]; then
   exit 0
 fi
 
-run_name=${SCOPE_NAME}-${MODEL}-${MODE}-${CLUSTER}-${STEPS}step-${RUN_TAG}
+run_name=${SCOPE_NAME}-${MODEL}-${MODE}-${CLUSTER}-${STEPS}step-${R3_NAME}-${RUN_TAG}
 run_log_dir=${LOG_ROOT_OVERRIDE:-exp_logs/nemotron_thd_te_graph_20260731}/${run_name}
 
 extra_overrides=()
@@ -256,6 +269,7 @@ if [[ "${MODE}" == "nemorl" ]]; then
     --steps "${STEPS}"
     --run-name "${run_name}"
     --log-dir "${run_log_dir}"
+    --router-replay "${ROUTER_REPLAY}"
   )
   if ((${#extra_overrides[@]})); then
     for override in "${extra_overrides[@]}"; do
@@ -379,6 +393,7 @@ mkdir -p "${run_log_dir}"
   printf 'steps=%s\n' "${STEPS}"
   printf 'run_group=%s\n' "${RUN_GROUP}"
   printf 'repeat=%s\n' "${REPEAT_INDEX}"
+  printf 'router_replay=%s\n' "${ROUTER_REPLAY}"
   printf 'nemo_rl_commit=%s\n' "${EXPECTED_NEMORL_SHA}"
   printf 'bridge_commit=%s\n' "${EXPECTED_BRIDGE_SHA}"
   printf 'mcore_commit=%s\n' "${EXPECTED_MCORE_SHA}"

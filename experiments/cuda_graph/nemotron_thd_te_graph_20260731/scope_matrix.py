@@ -35,7 +35,7 @@ MOE_AXES = (
     ("moe_router", "moe_preprocess"),
 )
 VALID_STEPS = (5, 20, 100)
-MODEL_NAMES = ("nano", "super", "ultra", "qwen3_30ba3b")
+MODEL_NAMES = ("nano", "super", "ultra", "qwen3_30ba3b", "qwen3_235b")
 ALLOWED_MCORE_DRIVERS: frozenset[str] = frozenset()
 Status = Literal[
     "runnable",
@@ -258,6 +258,7 @@ def render_scope_command(
     steps: int,
     run_name: str,
     cuda_graph_enabled: bool = True,
+    router_replay_enabled: bool = False,
     log_dir: str | None = None,
     extra_overrides: Sequence[str] = (),
 ) -> str:
@@ -273,6 +274,13 @@ def render_scope_command(
         raise ValueError("run_name must be filesystem-safe")
     if spec.thd_max_packed_sequences < 2:
         raise ValueError("thd_max_packed_sequences must be at least 2")
+    if router_replay_enabled and cuda_graph_enabled and {
+        "moe_router",
+        "moe_preprocess",
+    }.intersection(scope):
+        raise ValueError(
+            "Router Replay cannot be combined with a router CUDA Graph scope"
+        )
     modules = ",".join(scope)
     command = [
         "env",
@@ -293,7 +301,22 @@ def render_scope_command(
         "logger.tensorboard_enabled=true",
         "logger.wandb.project=sna-cg-study",
         f"logger.wandb.name={run_name}",
+        "++policy.router_replay.enabled="
+        f"{str(router_replay_enabled).lower()}",
     ]
+    if router_replay_enabled:
+        command[2:2] = (
+            "NRL_ROUTER_REPLAY_VALIDATE=1",
+            "NRL_R3_TRACE=1",
+            "NRL_R3_TRACE_STEPS=5",
+            "NRL_R3_TRACE_VERIFY_FORWARD=1",
+        )
+        command.extend(
+            (
+                "++policy.generation.vllm_cfg.enable_prefix_caching=false",
+                "++policy.generation.vllm_kwargs.enable_chunked_prefill=false",
+            )
+        )
     if spec.dispatcher == "hybridep":
         command.extend(
             (
@@ -348,6 +371,7 @@ def _build_parser() -> argparse.ArgumentParser:
     render.add_argument("--steps", type=int, choices=VALID_STEPS, required=True)
     render.add_argument("--run-name", required=True)
     render.add_argument("--log-dir")
+    render.add_argument("--router-replay", choices=("off", "on"), default="off")
     render.add_argument("--override", action="append", default=[])
     return parser
 
@@ -385,6 +409,7 @@ def main() -> None:
             steps=args.steps,
             run_name=args.run_name,
             cuda_graph_enabled=row.cuda_graph_enabled,
+            router_replay_enabled=args.router_replay == "on",
             log_dir=args.log_dir,
             extra_overrides=args.override,
         )

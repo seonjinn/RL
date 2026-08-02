@@ -609,6 +609,7 @@ def test_rendered_nemorl_command_uses_only_current_graph_fields() -> None:
     assert "policy.megatron_cfg.thd_max_packed_sequences=16" in command
     assert "logger.wandb.project=sna-cg-study" in shlex.split(command)
     assert "NRL_FORCE_REBUILD_VENVS=true" in command
+    assert "++policy.router_replay.enabled=false" in command
     assert "cuda_graph_scope" not in command
     assert "cuda_graph_max_packed_seqs" not in command
     assert "cuda_graph_max_cached_schedules" not in command
@@ -774,6 +775,7 @@ def test_model_selectors_cover_nemotron_and_qwen_recipes() -> None:
         "super.env": "examples/configs/recipes/llm/grpo-nemotron3-super-120BA12B-8n4g-megatron.yaml",
         "ultra.env": "examples/nemo_gym/nemotron-3-ultra/student_rlvr1.yaml",
         "qwen3_30ba3b.env": "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml",
+        "qwen3_235b.env": "examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g.yaml",
     }
 
     assert {
@@ -784,6 +786,81 @@ def test_model_selectors_cover_nemotron_and_qwen_recipes() -> None:
         )
         for path in sorted((EXPERIMENT_DIR / "models").glob("*.env"))
     } == expected
+
+
+def test_qwen3_235b_selector_enables_router_graphs_but_blocks_preprocess() -> None:
+    module = _load_experiment_module("scope_matrix")
+
+    spec = module.load_model_spec("qwen3_235b")
+
+    assert spec.nemorl_recipe.endswith("grpo-qwen3-235b-16n4g.yaml")
+    assert (spec.num_nodes, spec.gpus_per_node) == (16, 4)
+    assert spec.dispatcher == "hybridep"
+    assert spec.moe_preprocess_graph_ready is False
+    assert (
+        module.classify_scope(
+            module.find_scope_row("moe_router"), model="qwen3_235b"
+        ).status
+        == "runnable"
+    )
+    assert (
+        module.classify_scope(
+            module.find_scope_row("moe_router,moe_preprocess"), model="qwen3_235b"
+        ).status
+        == "capacity-blocked"
+    )
+
+
+def test_router_replay_rendering_is_explicit_and_rejects_router_graphs() -> None:
+    module = _load_experiment_module("scope_matrix")
+
+    arguments = shlex.split(
+        module.render_scope_command(
+            model="qwen3_30ba3b",
+            scope=(),
+            steps=5,
+            run_name="qwen30-baseline-r3on",
+            cuda_graph_enabled=False,
+            router_replay_enabled=True,
+        )
+    )
+
+    assert "++policy.router_replay.enabled=true" in arguments
+    assert "NRL_ROUTER_REPLAY_VALIDATE=1" in arguments
+    assert "NRL_R3_TRACE_VERIFY_FORWARD=1" in arguments
+    with pytest.raises(ValueError, match="Router Replay.*router CUDA Graph"):
+        module.render_scope_command(
+            model="qwen3_30ba3b",
+            scope=("moe_router",),
+            steps=5,
+            run_name="unsafe",
+            router_replay_enabled=True,
+        )
+
+
+def test_router_replay_shell_validation_rejects_invalid_and_unsafe_graphs() -> None:
+    invalid_value = _run_script(
+        "scopes/17_attn.sh",
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        ROUTER_REPLAY="invalid",
+    )
+    unsafe_router_graph = _run_script(
+        "scopes/03_moe_router.sh",
+        CLUSTER="oci-hsg",
+        MODEL="qwen3_30ba3b",
+        MODE="nemorl",
+        ROUTER_REPLAY="on",
+    )
+
+    for result in (invalid_value, unsafe_router_graph):
+        assert result.returncode == 2
+        assert "SBATCH:" not in result.stdout
+    assert "ROUTER_REPLAY must be off or on" in invalid_value.stderr
+    assert "Router Replay cannot be combined with router CUDA Graph scopes" in (
+        unsafe_router_graph.stderr
+    )
 
 
 def test_nano_test_only_launcher_renders_batch_job_without_singleton() -> None:
