@@ -28,8 +28,10 @@ export TACTIC_FILE=/home/sna/mxfp8-safe-backend/vllm-benchmark-v0251-safe/experi
 export TACTIC_SHA256=d5681371ea2476c3732d58089148e13123165b9e740d3e32ddec98d6eca40a1d
 export LAYER_ALLOWLIST_B64=MTI4MCw4MTkyCjIwNDgsODE5Mgo0Mzg0LDgxOTIKODE5MiwxMDI0CjgxOTIsMTI4MAo4MTkyLDIwNDgK
 export CANARY_RESULT_ROOT=/home/sna/results/nemorl-v0251-mxfp8-safe-adaptive/$(date +%Y%m%d_%H%M%S)
-export NEMO_RL_VENV_DIR=/home/sna/.cache/nemorl-venvs-v0251-canary
 ```
+
+The launcher derives separate driver and actor venv paths from the `uv.lock`
+hash and custom vLLM commit. Both arms reuse those same versioned environments.
 
 Submit through the repository `ray.sub` launcher on Ptyche with two nodes,
 four GPUs per node, account `coreai_dlalgo_llm`, partition `36x2-a01r`, and

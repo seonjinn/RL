@@ -10,6 +10,24 @@ fi
 export NEMO_RL_REPO_ROOT=${NEMO_RL_REPO_ROOT:-/home/sna/nemorl-v0251-mxfp8-safe-adaptive-canary}
 export CUSTOM_VLLM_SOURCE=${CUSTOM_VLLM_SOURCE:-/home/sna/mxfp8-safe-backend/vllm-v0251-safe-backend}
 export EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-658d7b1571a914bee7df48f717c2a428ee7c45ad}
+
+for name in \
+  NEMORL_MXFP8_LINEAR_BACKEND \
+  VLLM_MXFP8_DENSE_SHAPE_TRACE \
+  VLLM_MXFP8_DENSE_SHAPE_TRACE_DIR \
+  VLLM_MXFP8_DENSE_SHAPE_TRACE_MAX \
+  VLLM_MXFP8_DENSE_TRTLLM_ALLOW_CUTEDSL_FALLBACK \
+  VLLM_MXFP8_DENSE_TRTLLM_LAYOUT \
+  VLLM_MXFP8_DENSE_TRTLLM_SWITCH_M \
+  VLLM_MXFP8_DENSE_TRTLLM_EXACT_TACTIC_FILE \
+  VLLM_MXFP8_DENSE_TRTLLM_EXACT_TACTIC_SHA256 \
+  VLLM_MXFP8_DENSE_TRTLLM_LAYER_ALLOWLIST \
+  VLLM_MXFP8_DENSE_TRTLLM_LAYER_ALLOWLIST_B64 \
+  VLLM_MXFP8_DENSE_TRTLLM_TACTIC \
+  VLLM_MXFP8_DENSE_TRTLLM_TACTIC_HINTS_128X4; do
+  unset "$name"
+done
+
 export MODEL_PATH=${MODEL_PATH:-/lustre/fsw/coreai_dlalgo_llm/users/sna/ckpts/ultra-v3-sft-hsg-mainfeb5merge-mxfp8_newbase.mxfp8}
 export TACTIC_FILE=${TACTIC_FILE:-/home/sna/mxfp8-safe-backend/vllm-benchmark-v0251-safe/experiments/sweep/data/microbench/mxfp8_v0251_safe_backend_artifacts_20260801_r6_robust/exact_tactics.json}
 export TACTIC_SHA256=${TACTIC_SHA256:-d5681371ea2476c3732d58089148e13123165b9e740d3e32ddec98d6eca40a1d}
@@ -21,8 +39,15 @@ export GPUS_PER_NODE=4
 export BASE_LOG_DIR="$CANARY_RESULT_ROOT/slurm"
 export COMMAND="bash $NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_ab.sh"
 export UV_CACHE_DIR_OVERRIDE=${UV_CACHE_DIR_OVERRIDE:-/home/sna/.cache/uv-canary}
-export NEMO_RL_VENV_DIR=${NEMO_RL_VENV_DIR:-/home/sna/.cache/nemorl-venvs-v0251-canary}
-mkdir -p "$BASE_LOG_DIR" "$UV_CACHE_DIR_OVERRIDE" "$NEMO_RL_VENV_DIR"
+lock_sha=$(sha256sum "$NEMO_RL_REPO_ROOT/uv.lock" | awk '{print $1}')
+venv_key=${lock_sha:0:16}-${EXPECTED_VLLM_COMMIT:0:12}
+export NEMO_RL_DRIVER_VENV_DIR=${NEMO_RL_DRIVER_VENV_DIR:-/home/sna/.cache/nemorl-driver-v0251-canary/$venv_key}
+export NEMO_RL_VENV_DIR=${NEMO_RL_VENV_DIR:-/home/sna/.cache/nemorl-venvs-v0251-canary/$venv_key}
+mkdir -p \
+  "$BASE_LOG_DIR" \
+  "$UV_CACHE_DIR_OVERRIDE" \
+  "$NEMO_RL_DRIVER_VENV_DIR" \
+  "$NEMO_RL_VENV_DIR"
 
 sha256sum --check <(printf '%s  %s\n' "$TACTIC_SHA256" "$TACTIC_FILE")
 git -C "$NEMO_RL_REPO_ROOT" diff --quiet

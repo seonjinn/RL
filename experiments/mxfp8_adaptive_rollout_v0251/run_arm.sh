@@ -52,7 +52,9 @@ git -C "$VLLM_SOURCE" diff --cached --quiet
 printf 'vllm_source=%s\nvllm_commit=%s\n' \
   "$VLLM_SOURCE" "$actual_vllm_commit" | tee "$RESULT_ROOT/$ARM/runtime.txt"
 
-python3 "$ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_eval_canary.py" \
+UV_PROJECT_ENVIRONMENT="${NEMO_RL_DRIVER_VENV_DIR:?set NEMO_RL_DRIVER_VENV_DIR}" \
+  uv run --locked --extra vllm --directory "$ROOT" python \
+  "$ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_eval_canary.py" \
   --config "$CONFIG" \
   --arm "$ARM" \
   2>&1 | tee "$RESULT_ROOT/$ARM/run.log"
