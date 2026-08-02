@@ -39,14 +39,14 @@
 Run:
 
 ```bash
-for path in \
+for source_file in \
   docs/pr_drafts/01-gym-node-local-openhands-staging.md \
   docs/pr_drafts/02-nv-openhands-startup-timing.md \
   docs/pr_drafts/03-nv-openhands-immutable-workspace-cache.md \
   docs/pr_drafts/04-gym-workspace-cache-integration.md \
   docs/nemogym_init_framework_fixes.html \
   experiments/swe_rollout_latest_main_ab/attempts.md; do
-  test -s "$path" || exit 1
+  test -s "$source_file" || exit 1
 done
 ```
 
