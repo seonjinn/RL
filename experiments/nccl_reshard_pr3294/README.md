@@ -16,7 +16,7 @@ leak between comparison arms. The first functional target is GCP-NRT B200:
 4 nodes x 8 GPUs, split into 2 training and 2 generation nodes.
 Qwen3-30B-A3B uses trainer EP16 and vLLM TP1. Q/K/V/O projections stay BF16;
 MXFP8 applies to eligible MoE weights. Importance-sampling correction is
-disabled in all modes and `force_on_policy_ratio=true`.
+enabled in both MXFP8 modes and `force_on_policy_ratio=true`.
 
 The isolated transport comparison is `mxfp8-rollout` versus
 `mxfp8-nccl-prequant`; both use the same MXFP8 recipe and generation backend.
