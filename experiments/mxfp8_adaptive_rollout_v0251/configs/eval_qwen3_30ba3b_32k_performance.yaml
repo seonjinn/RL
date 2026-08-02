@@ -1,0 +1,75 @@
+defaults: "../../../examples/configs/evals/eval.yaml"
+
+eval:
+  num_tests_per_prompt: 8
+  save_path: ${oc.env:CANARY_OUTPUT_DIR}
+  seed: 42
+
+generation:
+  model_name: Qwen/Qwen3-30B-A3B
+  max_new_tokens: 32768
+  temperature: 1.0
+  top_p: 1.0
+  top_k: -1
+  num_prompts_per_step: 64
+  vllm_cfg:
+    async_engine: true
+    precision: fp8
+    is_mx: true
+    kv_cache_dtype: auto
+    tensor_parallel_size: 1
+    pipeline_parallel_size: 1
+    expert_parallel_size: 1
+    gpu_memory_utilization: 0.8
+    max_model_len: 36864
+    enforce_eager: false
+    skip_tokenizer_init: false
+    enable_prefix_caching: false
+    quantization_ignored_layer_kws:
+      - q_proj
+      - k_proj
+      - v_proj
+      - o_proj
+    env_vars:
+      PYTHONPATH: ${oc.env:PYTHONPATH}
+      VLLM_SUBPROCESS_PYTHONPATH: ${oc.env:VLLM_SUBPROCESS_PYTHONPATH}
+      VLLM_RAY_EXTRA_ENV_VARS_TO_COPY: ${oc.env:VLLM_RAY_EXTRA_ENV_VARS_TO_COPY}
+      VLLM_FLASHINFER_MOE_BACKEND: latency
+      VLLM_MXFP8_DENSE_TRTLLM_ALLOW_CUTEDSL_FALLBACK: ${oc.env:VLLM_MXFP8_DENSE_TRTLLM_ALLOW_CUTEDSL_FALLBACK}
+      VLLM_MXFP8_DENSE_TRTLLM_LAYOUT: ${oc.env:VLLM_MXFP8_DENSE_TRTLLM_LAYOUT,}
+      VLLM_MXFP8_DENSE_TRTLLM_SWITCH_M: ${oc.env:VLLM_MXFP8_DENSE_TRTLLM_SWITCH_M,}
+      VLLM_MXFP8_DENSE_TRTLLM_EXACT_TACTIC_FILE: ${oc.env:VLLM_MXFP8_DENSE_TRTLLM_EXACT_TACTIC_FILE,}
+      VLLM_MXFP8_DENSE_TRTLLM_EXACT_TACTIC_SHA256: ${oc.env:VLLM_MXFP8_DENSE_TRTLLM_EXACT_TACTIC_SHA256,}
+      VLLM_MXFP8_DENSE_TRTLLM_LAYER_ALLOWLIST_B64: ${oc.env:VLLM_MXFP8_DENSE_TRTLLM_LAYER_ALLOWLIST_B64,}
+  vllm_kwargs:
+    attention_backend: FLASH_ATTN
+    max_num_seqs: 32
+    max_num_batched_tokens: 16384
+    enable_chunked_prefill: true
+    linear_backend: ${oc.env:NEMORL_MXFP8_LINEAR_BACKEND}
+  colocated:
+    enabled: false
+    resources:
+      gpus_per_node: 4
+      num_nodes: 2
+
+tokenizer:
+  name: ${generation.model_name}
+  chat_template: default
+  chat_template_kwargs: null
+
+data:
+  max_input_seq_length: 4096
+  dataset_name: ${oc.env:NEMO_RL_REPO_ROOT}/experiments/mxfp8_adaptive_rollout_v0251/data/qwen_trace_math.jsonl
+  prompt_file: null
+  system_prompt_file: null
+  processor: math_hf_data_processor
+  problem_key: input
+  solution_key: output
+  file_format: json
+  split: train
+  repeat: 1
+
+cluster:
+  gpus_per_node: 4
+  num_nodes: 2

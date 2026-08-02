@@ -145,3 +145,76 @@ def test_qwen30_ab_submitter_validates_inputs_and_submits_without_dependency() -
     assert "--dependency=" in submitter
     assert "args+=(--test-only)" in submitter
     assert "afterok" not in submitter
+
+
+def test_qwen30_32k_performance_config_defines_bounded_long_decode_workload() -> None:
+    config_path = EXPERIMENT / "configs/eval_qwen3_30ba3b_32k_performance.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+    assert config["eval"] == {
+        "num_tests_per_prompt": 8,
+        "save_path": "${oc.env:CANARY_OUTPUT_DIR}",
+        "seed": 42,
+    }
+    generation = config["generation"]
+    assert generation["max_new_tokens"] == 32768
+    assert generation["num_prompts_per_step"] == 64
+    assert generation["vllm_cfg"]["max_model_len"] == 36864
+    assert generation["vllm_cfg"]["enforce_eager"] is False
+    assert generation["vllm_kwargs"]["max_num_seqs"] == 32
+    assert generation["vllm_kwargs"]["max_num_batched_tokens"] == 16384
+    assert generation["vllm_kwargs"]["enable_chunked_prefill"] is True
+    assert config["data"]["max_input_seq_length"] == 4096
+
+
+def test_qwen30_32k_cuda_graph_trace_matches_performance_workload() -> None:
+    performance = yaml.safe_load(
+        (EXPERIMENT / "configs/eval_qwen3_30ba3b_32k_performance.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    trace = yaml.safe_load(
+        (
+            EXPERIMENT / "configs/eval_qwen3_30ba3b_32k_cuda_graph_trace.yaml"
+        ).read_text(encoding="utf-8")
+    )
+
+    for key in ("eval", "data"):
+        assert trace[key] == performance[key]
+    for key in (
+        "max_new_tokens",
+        "num_prompts_per_step",
+        "vllm_kwargs",
+        "colocated",
+    ):
+        assert trace["generation"][key] == performance["generation"][key]
+    assert trace["generation"]["vllm_cfg"]["max_model_len"] == 36864
+    assert trace["generation"]["vllm_cfg"]["enforce_eager"] is False
+    trace_env = trace["generation"]["vllm_cfg"]["env_vars"]
+    for name in (
+        "VLLM_MXFP8_DENSE_SHAPE_TRACE",
+        "VLLM_MXFP8_DENSE_SHAPE_TRACE_DIR",
+        "VLLM_MXFP8_DENSE_SHAPE_TRACE_MAX",
+    ):
+        assert name in trace_env
+
+
+def test_qwen30_32k_submitters_use_five_hours_without_dependencies() -> None:
+    trace_submitter = (
+        EXPERIMENT / "submit_qwen30_32k_trace_ptyche.sh"
+    ).read_text(encoding="utf-8")
+    ab_submitter = (EXPERIMENT / "submit_qwen30_32k_ab_ptyche.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "eval_qwen3_30ba3b_32k_cuda_graph_trace.yaml" in trace_submitter
+    assert "run_trace.sh" in trace_submitter
+    assert "eval_qwen3_30ba3b_32k_performance.yaml" in ab_submitter
+    assert "run_ab.sh run" in ab_submitter
+    for submitter in (trace_submitter, ab_submitter):
+        assert "--nodes=2" in submitter
+        assert "--time=05:00:00" in submitter
+        assert "--segment=2" in submitter
+        assert "--dependency=" in submitter
+        assert "args+=(--test-only)" in submitter
+        assert "afterok" not in submitter
