@@ -27,9 +27,16 @@ NVTE_DEBUG=${NVTE_DEBUG:-0}
 NVTE_DEBUG_LEVEL=${NVTE_DEBUG_LEVEL:-0}
 RUN_TAG=${RUN_TAG:-$(date -u +%Y%m%dT%H%M%SZ)}
 
-SOURCE_ROOT=${SOURCE_ROOT:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/source-snapshots/nemotron-thd-te-cg/72cba75c1311-0f5956e15fe7-e835b64c55a5}
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+repository_root=$(cd "${script_dir}/../../../.." && pwd -P)
+SOURCE_ROOT=${SOURCE_ROOT:-${repository_root}}
 CONTAINER=${CONTAINER:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/nemo_rl_nightly_20260801_107e892b_20260801_5768359.sqsh}
 EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/sna-cg-study/nemotron-thd-te-graph-20260801/runs/direct}
+if [[ "${SOURCE_ROOT}" == /home/* ]]; then
+  MOUNTS=${MOUNTS:-/lustre:/lustre,/home:/home}
+else
+  MOUNTS=${MOUNTS:-/lustre:/lustre}
+fi
 
 if [[ "${CUDA_GRAPH_IMPL}" == "none" ]]; then
   scope_name=baseline
@@ -73,7 +80,7 @@ COMMAND="env NRL_FORCE_REBUILD_VENVS=true NVTE_WITH_NCCL_EP=0 NVTE_CUDA_ARCHS=10
 export BASE_LOG_DIR=${RUN_DIR}
 export COMMAND CONTAINER
 export GPUS_PER_NODE
-export MOUNTS=/lustre:/lustre
+export MOUNTS
 
 sbatch_args=(
   --nodes="${NUM_NODES}"
