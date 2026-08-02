@@ -9,6 +9,7 @@ fi
 
 export NEMO_RL_REPO_ROOT=${NEMO_RL_REPO_ROOT:-/home/sna/nemorl-v0251-mxfp8-safe-adaptive-canary}
 export CUSTOM_VLLM_SOURCE=${CUSTOM_VLLM_SOURCE:-/home/sna/mxfp8-safe-backend/vllm-v0251-safe-backend}
+export EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-658d7b1571a914bee7df48f717c2a428ee7c45ad}
 export MODEL_PATH=${MODEL_PATH:-/lustre/fsw/coreai_dlalgo_llm/users/sna/ckpts/ultra-v3-sft-hsg-mainfeb5merge-mxfp8_newbase.mxfp8}
 export TACTIC_FILE=${TACTIC_FILE:-/home/sna/mxfp8-safe-backend/vllm-benchmark-v0251-safe/experiments/sweep/data/microbench/mxfp8_v0251_safe_backend_artifacts_20260801_r6_robust/exact_tactics.json}
 export TACTIC_SHA256=${TACTIC_SHA256:-d5681371ea2476c3732d58089148e13123165b9e740d3e32ddec98d6eca40a1d}
@@ -20,12 +21,16 @@ export GPUS_PER_NODE=4
 export BASE_LOG_DIR="$CANARY_RESULT_ROOT/slurm"
 export COMMAND="bash $NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_ab.sh"
 export UV_CACHE_DIR_OVERRIDE=${UV_CACHE_DIR_OVERRIDE:-/home/sna/.cache/uv-canary}
-mkdir -p "$BASE_LOG_DIR" "$UV_CACHE_DIR_OVERRIDE"
+export NEMO_RL_VENV_DIR=${NEMO_RL_VENV_DIR:-/home/sna/.cache/nemorl-venvs-v0251-canary}
+mkdir -p "$BASE_LOG_DIR" "$UV_CACHE_DIR_OVERRIDE" "$NEMO_RL_VENV_DIR"
 
 sha256sum --check <(printf '%s  %s\n' "$TACTIC_SHA256" "$TACTIC_FILE")
 git -C "$NEMO_RL_REPO_ROOT" diff --quiet
 git -C "$NEMO_RL_REPO_ROOT" diff --cached --quiet
 git -C "$NEMO_RL_REPO_ROOT" pull --ff-only
+test "$(git -C "$CUSTOM_VLLM_SOURCE" rev-parse HEAD)" = "$EXPECTED_VLLM_COMMIT"
+git -C "$CUSTOM_VLLM_SOURCE" diff --quiet
+git -C "$CUSTOM_VLLM_SOURCE" diff --cached --quiet
 
 args=(
   --account=coreai_dlalgo_llm

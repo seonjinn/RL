@@ -57,6 +57,8 @@ def main() -> None:
 
     output_dir = Path(os.environ["CANARY_OUTPUT_DIR"])
     output_tokens = _count_output_tokens(output_dir, tokenizer)
+    if output_tokens <= 0:
+        raise RuntimeError("canary produced no output tokens")
     print(f"NEMORL_CANARY event=outputs tokens={output_tokens}", flush=True)
     print(
         f"NEMORL_CANARY arm={args.arm} event=complete epoch={time.time()}",
@@ -66,4 +68,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

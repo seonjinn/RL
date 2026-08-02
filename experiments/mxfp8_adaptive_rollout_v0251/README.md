@@ -22,11 +22,13 @@ failures. It is not a production throughput measurement.
 ```bash
 export NEMO_RL_REPO_ROOT=$(pwd -P)
 export CUSTOM_VLLM_SOURCE=/home/sna/mxfp8-safe-backend/vllm-v0251-safe-backend
+export EXPECTED_VLLM_COMMIT=658d7b1571a914bee7df48f717c2a428ee7c45ad
 export MODEL_PATH=/lustre/fsw/coreai_dlalgo_llm/users/sna/ckpts/ultra-v3-sft-hsg-mainfeb5merge-mxfp8_newbase.mxfp8
 export TACTIC_FILE=/home/sna/mxfp8-safe-backend/vllm-benchmark-v0251-safe/experiments/sweep/data/microbench/mxfp8_v0251_safe_backend_artifacts_20260801_r6_robust/exact_tactics.json
 export TACTIC_SHA256=d5681371ea2476c3732d58089148e13123165b9e740d3e32ddec98d6eca40a1d
 export LAYER_ALLOWLIST_B64=MTI4MCw4MTkyCjIwNDgsODE5Mgo0Mzg0LDgxOTIKODE5MiwxMDI0CjgxOTIsMTI4MAo4MTkyLDIwNDgK
 export CANARY_RESULT_ROOT=/home/sna/results/nemorl-v0251-mxfp8-safe-adaptive/$(date +%Y%m%d_%H%M%S)
+export NEMO_RL_VENV_DIR=/home/sna/.cache/nemorl-venvs-v0251-canary
 ```
 
 Submit through the repository `ray.sub` launcher on Ptyche with two nodes,

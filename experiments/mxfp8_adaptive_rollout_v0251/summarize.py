@@ -52,10 +52,13 @@ def summarize_log(path: Path) -> RunSummary:
             complete = float(fields["epoch"])
 
     is_complete = start is not None and complete is not None
+    elapsed_seconds = None
+    if start is not None and complete is not None:
+        elapsed_seconds = complete - start
     return {
         "arm": arm,
         "complete": is_complete,
-        "elapsed_seconds": complete - start if is_complete else None,
+        "elapsed_seconds": elapsed_seconds,
         "model_load_seconds": (
             model_ready - start if start is not None and model_ready is not None else None
         ),
@@ -78,4 +81,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
