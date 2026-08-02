@@ -73,6 +73,32 @@ def test_qwen30_performance_config_uses_eight_engines_and_adaptive_contract() ->
     assert len(dataset_path.read_text(encoding="utf-8").splitlines()) == 64
 
 
+def test_qwen30_cuda_graph_trace_matches_performance_workload() -> None:
+    performance = yaml.safe_load(
+        (EXPERIMENT / "configs/eval_qwen3_30ba3b_performance.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    trace = yaml.safe_load(
+        (EXPERIMENT / "configs/eval_qwen3_30ba3b_cuda_graph_trace.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert trace["generation"]["vllm_cfg"]["enforce_eager"] is False
+    assert (
+        trace["generation"]["vllm_kwargs"] == performance["generation"]["vllm_kwargs"]
+    )
+    assert trace["generation"]["colocated"] == performance["generation"]["colocated"]
+    trace_env = trace["generation"]["vllm_cfg"]["env_vars"]
+    for name in (
+        "VLLM_MXFP8_DENSE_SHAPE_TRACE",
+        "VLLM_MXFP8_DENSE_SHAPE_TRACE_DIR",
+        "VLLM_MXFP8_DENSE_SHAPE_TRACE_MAX",
+    ):
+        assert name in trace_env
+
+
 def test_qwen30_ab_submitter_binds_committed_artifacts_and_pulls_first() -> None:
     submitter_path = EXPERIMENT / "submit_qwen30_ab_ptyche.sh"
     submitter = submitter_path.read_text(encoding="utf-8")
