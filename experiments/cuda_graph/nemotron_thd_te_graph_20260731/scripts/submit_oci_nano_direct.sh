@@ -44,7 +44,7 @@ fi
 
 if [[ "${CUDA_GRAPH_IMPL}" == "none" ]]; then
   scope_name=baseline
-  cuda_graph_overrides="++policy.megatron_cfg.cuda_graph_impl=none"
+  cuda_graph_overrides="++policy.megatron_cfg.cuda_graph_impl=none ++policy.megatron_cfg.attention_backend=fused"
 else
   scope_name=${CUDA_GRAPH_MODULES//,/-}
   cuda_graph_overrides="++policy.megatron_cfg.cuda_graph_impl=${CUDA_GRAPH_IMPL} ++policy.megatron_cfg.cuda_graph_modules=[${CUDA_GRAPH_MODULES}] ++policy.megatron_cfg.cuda_graph_warmup_steps=3 ++policy.megatron_cfg.thd_max_packed_sequences=16 ++policy.megatron_cfg.attention_backend=fused"
