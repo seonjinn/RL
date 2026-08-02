@@ -13,13 +13,13 @@ export MODEL_PATH=${MODEL_PATH:-/lustre/fsw/coreai_dlalgo_llm/users/sna/ckpts/ul
 export TACTIC_FILE=${TACTIC_FILE:-/home/sna/mxfp8-safe-backend/vllm-benchmark-v0251-safe/experiments/sweep/data/microbench/mxfp8_v0251_safe_backend_artifacts_20260801_r6_robust/exact_tactics.json}
 export TACTIC_SHA256=${TACTIC_SHA256:-d5681371ea2476c3732d58089148e13123165b9e740d3e32ddec98d6eca40a1d}
 export LAYER_ALLOWLIST_B64=${LAYER_ALLOWLIST_B64:-MTI4MCw4MTkyCjIwNDgsODE5Mgo0Mzg0LDgxOTIKODE5MiwxMDI0CjgxOTIsMTI4MAo4MTkyLDIwNDgK}
-export CANARY_RESULT_ROOT=${CANARY_RESULT_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna/results/nemorl-v0251-mxfp8-safe-adaptive/$(date +%Y%m%d_%H%M%S)}
+export CANARY_RESULT_ROOT=${CANARY_RESULT_ROOT:-/home/sna/results/nemorl-v0251-mxfp8-safe-adaptive/$(date +%Y%m%d_%H%M%S)}
 export CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh}
 export MOUNTS=${MOUNTS:-/lustre:/lustre,/home/sna:/home/sna}
 export GPUS_PER_NODE=4
 export BASE_LOG_DIR="$CANARY_RESULT_ROOT/slurm"
 export COMMAND="bash $NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_ab.sh"
-export UV_CACHE_DIR_OVERRIDE=${UV_CACHE_DIR_OVERRIDE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/cache/uv}
+export UV_CACHE_DIR_OVERRIDE=${UV_CACHE_DIR_OVERRIDE:-/home/sna/.cache/uv-canary}
 mkdir -p "$BASE_LOG_DIR" "$UV_CACHE_DIR_OVERRIDE"
 
 sha256sum --check <(printf '%s  %s\n' "$TACTIC_SHA256" "$TACTIC_FILE")
@@ -43,4 +43,3 @@ fi
 
 cd "$NEMO_RL_REPO_ROOT"
 sbatch "${args[@]}" ray.sub
-

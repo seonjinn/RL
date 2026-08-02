@@ -5,11 +5,11 @@ eval:
 
 generation:
   model_name: ${oc.env:MODEL_PATH}
-  max_new_tokens: 256
+  max_new_tokens: 128
   temperature: 1.0
   top_p: 1.0
   top_k: -1
-  num_prompts_per_step: 30
+  num_prompts_per_step: 8
   vllm_cfg:
     async_engine: true
     precision: bfloat16
@@ -18,7 +18,7 @@ generation:
     pipeline_parallel_size: 1
     expert_parallel_size: 8
     gpu_memory_utilization: 0.85
-    max_model_len: 16384
+    max_model_len: 4096
     enforce_eager: false
     skip_tokenizer_init: false
     env_vars:
@@ -35,13 +35,13 @@ generation:
   vllm_kwargs:
     attention_backend: FLASH_ATTN
     mamba_ssm_cache_dtype: float32
-    max_num_seqs: 32
+    max_num_seqs: 8
     max_num_batched_tokens: 8480
     enable_prefix_caching: true
     enable_chunked_prefill: true
     linear_backend: ${oc.env:NEMORL_MXFP8_LINEAR_BACKEND}
     compilation_config:
-      cudagraph_capture_sizes: [1, 2, 4, 8, 16, 32]
+      cudagraph_capture_sizes: [1, 2, 4, 8]
       cudagraph_mode: PIECEWISE
       pass_config:
         fuse_allreduce_rms: false
@@ -58,13 +58,16 @@ tokenizer:
 
 data:
   max_input_seq_length: 4096
-  dataset_name: AIME2024
+  dataset_name: ${oc.env:NEMO_RL_REPO_ROOT}/experiments/mxfp8_adaptive_rollout_v0251/data/tiny_math.jsonl
   prompt_file: null
   system_prompt_file: null
   processor: math_hf_data_processor
+  problem_key: input
+  solution_key: output
+  file_format: json
+  split: train
   repeat: 1
 
 cluster:
   gpus_per_node: 4
   num_nodes: 2
-
