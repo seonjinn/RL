@@ -27,13 +27,19 @@ fi
 source "$RESULT_ROOT/$ARM/arm.env"
 export PYTHONPATH="$ROOT:$PYTHONPATH"
 
-python3 - <<'PY' | tee "$RESULT_ROOT/$ARM/runtime.txt"
+VLLM_PYTHON_BIN=${VLLM_PYTHON_BIN:-python-VllmGenerationWorker}
+if ! command -v "$VLLM_PYTHON_BIN" >/dev/null 2>&1; then
+  echo "missing NeMo-RL vLLM actor interpreter: $VLLM_PYTHON_BIN" >&2
+  exit 2
+fi
+"$VLLM_PYTHON_BIN" - <<'PY' | tee "$RESULT_ROOT/$ARM/runtime.txt"
 import hashlib
 import os
 from pathlib import Path
 import flashinfer
 import torch
 import vllm
+import vllm._C
 
 source = Path(os.environ["CUSTOM_VLLM_SOURCE"]).resolve()
 loaded = Path(vllm.__file__).resolve()
@@ -41,6 +47,7 @@ if source not in loaded.parents:
     raise SystemExit(f"vLLM source mismatch: expected {source}, loaded {loaded}")
 print(f"vllm_version={vllm.__version__}")
 print(f"vllm_file={loaded}")
+print(f"vllm_extension={Path(vllm._C.__file__).resolve()}")
 print(f"flashinfer_version={flashinfer.__version__}")
 print(f"cuda_version={torch.version.cuda}")
 if os.environ.get("TACTIC_FILE") and os.environ.get("NEMORL_MXFP8_LINEAR_BACKEND") == "flashinfer_trtllm":
@@ -52,4 +59,3 @@ python3 "$ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_eval_canary.py" \
   --config "$CONFIG" \
   --arm "$ARM" \
   2>&1 | tee "$RESULT_ROOT/$ARM/run.log"
-
