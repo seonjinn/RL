@@ -20,6 +20,96 @@ fail() {
   exit 2
 }
 
+validate_test_controls() {
+  case "${TEST_ONLY:-0}" in
+    0|1) ;;
+    *) fail "TEST_ONLY must be 0 or 1" ;;
+  esac
+  case "${SBATCH_TEST_ONLY:-0}" in
+    0|1) ;;
+    *) fail "SBATCH_TEST_ONLY must be 0 or 1" ;;
+  esac
+  if [[ "${TEST_ONLY:-0}" == "1" && "${SBATCH_TEST_ONLY:-0}" == "1" ]]; then
+    fail "TEST_ONLY and SBATCH_TEST_ONLY are mutually exclusive"
+  fi
+}
+
+require_gate_inputs() {
+  local file_name=$1
+  local digest_name=$2
+  local file_value=${!file_name:-}
+  local digest_value=${!digest_name:-}
+
+  [[ -n "${file_value}" && -n "${digest_value}" ]] || \
+    fail "${file_name} and ${digest_name} are required"
+}
+
+load_gate_profile() {
+  local profile_file
+  local field
+  local value
+
+  if [[ -n "${PROFILE_FILE:-}" ]]; then
+    profile_file=${PROFILE_FILE}
+    [[ "${profile_file}" == /* ]] || fail "PROFILE_FILE must be an absolute path"
+  elif [[ -f "${script_dir}/profiles/${CLUSTER}.env" ]]; then
+    profile_file=${script_dir}/profiles/${CLUSTER}.env
+  else
+    profile_file=${script_dir}/profiles/${CLUSTER}.env.example
+  fi
+  [[ -f "${profile_file}" && ! -L "${profile_file}" ]] || \
+    fail "Gate profile must be a regular non-symlink file: ${profile_file}"
+  # The selected profile is the trusted source of expected campaign provenance.
+  # shellcheck source=/dev/null
+  source "${profile_file}"
+  for field in \
+    EXPECTED_NEMORL_SHA \
+    EXPECTED_BRIDGE_SHA \
+    EXPECTED_MCORE_SHA \
+    CONTAINER_SHA256 \
+    RUNTIME_ATTESTATION; do
+    value=${!field:-}
+    case "${value}" in
+      ""|__REQUIRED_*__) fail "Gate profile has unresolved ${field}" ;;
+    esac
+  done
+  [[ "${EXPECTED_NEMORL_SHA}" =~ ^[0-9a-f]{40}$ ]] || \
+    fail "Gate profile EXPECTED_NEMORL_SHA must be a full lowercase commit"
+  [[ "${EXPECTED_BRIDGE_SHA}" =~ ^[0-9a-f]{40}$ ]] || \
+    fail "Gate profile EXPECTED_BRIDGE_SHA must be a full lowercase commit"
+  [[ "${EXPECTED_MCORE_SHA}" =~ ^[0-9a-f]{40}$ ]] || \
+    fail "Gate profile EXPECTED_MCORE_SHA must be a full lowercase commit"
+  [[ "${CONTAINER_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
+    fail "Gate profile CONTAINER_SHA256 must be a full lowercase SHA256"
+  [[ "${RUNTIME_ATTESTATION}" == /* ]] || \
+    fail "Gate profile RUNTIME_ATTESTATION must be an absolute path"
+}
+
+validate_gate() {
+  local kind=$1
+  local gate_file=$2
+  local gate_sha256=$3
+  shift 3
+  local -a command=(
+    python3
+    "${validator}"
+    "${kind}"
+    --gate-file "${gate_file}"
+    --gate-sha256 "${gate_sha256}"
+    --model "${MODEL}"
+    --nemo-rl-commit "${EXPECTED_NEMORL_SHA}"
+    --bridge-commit "${EXPECTED_BRIDGE_SHA}"
+    --mcore-commit "${EXPECTED_MCORE_SHA}"
+    --container-sha256 "${CONTAINER_SHA256}"
+    --runtime-attestation "${RUNTIME_ATTESTATION}"
+  )
+  local arm
+  for arm in "$@"; do
+    command+=(--arm "${arm}")
+  done
+  "${command[@]}" || fail "${kind} campaign gate validation failed"
+}
+
 resolve_leaf() {
   local arm=$1
   local relative_leaf
@@ -52,10 +142,16 @@ resolve_leaf() {
 : "${CLUSTER:?Set CLUSTER to ptyche, oci-hsg, or lyris}"
 : "${MODEL:?Set MODEL to qwen3_30ba3b or qwen3_235b}"
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+submitter_path=$(realpath "${BASH_SOURCE[0]}") || fail "Cannot resolve Qwen router submitter"
+validator=$(dirname "${submitter_path}")/validate_campaign_gate.py
+[[ -f "${validator}" && ! -L "${validator}" ]] || \
+  fail "Campaign gate validator must be a regular non-symlink file"
 run_tag=${RUN_TAG:-$(date -u +%Y%m%dT%H%M%SZ)}
 mode=${MODE:-nemorl}
 phase=${PHASE:-smoke}
 repeats=${REPEATS:-1}
+
+validate_test_controls
 
 case "${MODEL}" in
   qwen3_30ba3b|qwen3_235b) ;;
@@ -74,7 +170,41 @@ esac
 if (($#)); then
   arms=("$@")
 else
-  arms=(A B C E)
+  case "${phase}:${MODEL}" in
+    smoke:qwen3_30ba3b) arms=(A B C E) ;;
+    smoke:qwen3_235b|performance:qwen3_30ba3b|performance:qwen3_235b)
+      arms=(A B)
+      ;;
+  esac
+fi
+
+selected_arms=" "
+for arm in "${arms[@]}"; do
+  case "${arm}" in
+    A|B|C|E) ;;
+    *) fail "Qwen router validation arms must be A, B, C, or E" ;;
+  esac
+  [[ "${selected_arms}" != *" ${arm} "* ]] || \
+    fail "Qwen router validation arms must not contain duplicates"
+  selected_arms+="${arm} "
+done
+
+requires_r3_gate=false
+for arm in "${arms[@]}"; do
+  if [[ "${MODEL}" == "qwen3_235b" && ( "${arm}" == C || "${arm}" == E ) ]]; then
+    requires_r3_gate=true
+  fi
+done
+if [[ "${requires_r3_gate}" == "true" || "${phase}" == "performance" ]]; then
+  load_gate_profile
+fi
+if [[ "${requires_r3_gate}" == "true" ]]; then
+  require_gate_inputs R3_PREFLIGHT_FILE R3_PREFLIGHT_SHA256
+  validate_gate r3 "${R3_PREFLIGHT_FILE}" "${R3_PREFLIGHT_SHA256}"
+fi
+if [[ "${phase}" == "performance" ]]; then
+  require_gate_inputs SMOKE_PROMOTION_FILE SMOKE_PROMOTION_SHA256
+  validate_gate promotion "${SMOKE_PROMOTION_FILE}" "${SMOKE_PROMOTION_SHA256}" "${arms[@]}"
 fi
 
 resolved_leaves=()
