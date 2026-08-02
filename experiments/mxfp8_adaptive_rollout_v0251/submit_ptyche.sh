@@ -54,7 +54,7 @@ if [[ ! -x "$NEMO_RL_DRIVER_VENV_DIR/bin/ray" ]]; then
   echo "build it in a matching container before submitting the canary" >&2
   exit 2
 fi
-export PATH="$NEMO_RL_DRIVER_VENV_DIR/bin:$PATH"
+export RAY_CLI="$NEMO_RL_DRIVER_VENV_DIR/bin/ray"
 
 sha256sum --check <(printf '%s  %s\n' "$TACTIC_SHA256" "$TACTIC_FILE")
 git -C "$NEMO_RL_REPO_ROOT" diff --quiet
