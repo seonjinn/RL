@@ -207,6 +207,7 @@ export UV_PROJECT_ENVIRONMENT='${CONTAINER_DRIVER_VENV}'
 unset UV_CACHE_DIR
 "
     DRIVER_LAUNCH="'${CONTAINER_DRIVER_VENV}/bin/python' '${CONTAINER_REPO_ROOT}/examples/run_grpo.py'"
+    MCORE_RUNTIME_OVERRIDES=
     ;;
   false)
     export UV_CACHE_DIR_OVERRIDE="${SHARED_UV_CACHE}"
@@ -219,6 +220,10 @@ export UV_PROJECT_ENVIRONMENT='${CACHE_ROOT}/driver-venv'
 ${UV_PYTHON_COMMAND}
 "
     DRIVER_LAUNCH="uv run --frozen examples/run_grpo.py"
+    MCORE_ACTOR_VENV="${CACHE_ROOT}/venvs/nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker"
+    MCORE_NVIDIA_ROOT="${MCORE_ACTOR_VENV}/lib/python3.13/site-packages/nvidia"
+    MCORE_LD_LIBRARY_PATH="${MCORE_NVIDIA_ROOT}/cudnn/lib:${MCORE_NVIDIA_ROOT}/cu13/lib:${MCORE_NVIDIA_ROOT}/nccl/lib:${MCORE_NVIDIA_ROOT}/nvshmem/lib:/opt/amazon/ofi-nccl/lib:/opt/amazon/efa/lib:/usr/local/cuda/compat/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64"
+    MCORE_RUNTIME_OVERRIDES="++policy.megatron_cfg.env_vars.CUDNN_HOME='${MCORE_NVIDIA_ROOT}/cudnn' ++policy.megatron_cfg.env_vars.CUDNN_PATH='${MCORE_NVIDIA_ROOT}/cudnn' ++policy.megatron_cfg.env_vars.LD_LIBRARY_PATH='${MCORE_LD_LIBRARY_PATH}'"
     ;;
   *)
     echo "USE_CONTAINER_VENVS must be true or false" >&2
@@ -276,6 +281,7 @@ ${DRIVER_LAUNCH} \
   logger.wandb_enabled=true \
   logger.wandb.project='${WANDB_PROJECT}' \
   logger.wandb.name='${RUN_NAME}' \
+  ${MCORE_RUNTIME_OVERRIDES} \
   ${PRECISION_OVERRIDES}
 "
 
