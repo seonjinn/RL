@@ -1055,8 +1055,7 @@ class TestPackedStructuralGeometry:
             )
 
     @pytest.mark.parametrize("cp_rank", [0, 1])
-    def test_fixed_cp2_mamba_seq_idx_matches_token_order(self, cp_rank):
-        from nemo_rl.distributed.model_utils import _get_tokens_on_this_cp_rank
+    def test_fixed_cp2_mamba_seq_idx_matches_post_all_to_all_token_order(self, cp_rank):
         from nemo_rl.models.megatron.data import _pack_sequences_for_megatron
 
         _, local, model_params, _, _ = _pack_sequences_for_megatron(
@@ -1069,19 +1068,12 @@ class TestPackedStructuralGeometry:
             thd_max_packed_sequences=4,
         )
 
-        expected_parts = [
-            _get_tokens_on_this_cp_rank(
-                torch.full((8,), sequence_id, dtype=torch.int32),
-                cp_rank,
-                2,
-                seq_dim=0,
-            )
-            for sequence_id in (0, 1)
-        ]
-        expected_parts.append(torch.full((8,), 2, dtype=torch.int32))
-        expected = torch.cat(expected_parts).unsqueeze(0)
+        expected = torch.tensor(
+            [[0] * 8 + [1] * 8 + [2] * 16],
+            dtype=torch.int32,
+        )
         assert model_params.total_tokens == local.shape[1] == 16
-        assert model_params.seq_idx.shape == local.shape
+        assert model_params.seq_idx.shape == (1, 32)
         assert model_params.seq_idx.dtype == torch.int32
         assert torch.equal(model_params.seq_idx, expected)
 

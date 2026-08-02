@@ -243,10 +243,11 @@ def _validate_cuda_graph_training_inputs(
         )
     if (
         not isinstance(packed_seq_params.seq_idx, torch.Tensor)
-        or packed_seq_params.seq_idx.shape != inputs.input_ids_cp_sharded.shape
+        or packed_seq_params.seq_idx.shape != inputs.input_ids.shape
     ):
         raise ValueError(
-            "Packed Mamba seq_idx must match the CP-local fixed token shape."
+            "Packed Mamba seq_idx must match the global fixed token shape consumed "
+            "after Mamba context-parallel all-to-all."
         )
 
     expected_real_entries = geometry.real_sequence_count + 1
@@ -1483,14 +1484,12 @@ def _pack_sequences_for_megatron_with_geometry(
             cu_seqlens_padded,
             capacity_tokens=capacity_tokens,
             real_sequence_count=real_sequence_count,
-            cp_rank=cp_rank,
-            cp_size=cp_size,
         )
-        if packed_seq_params.seq_idx.shape != input_ids_cp_sharded.shape:
+        if packed_seq_params.seq_idx.shape != all_input_ids.shape:
             raise ValueError(
-                "Packed Mamba seq_idx shape does not match CP-local tokens: "
+                "Packed Mamba seq_idx shape does not match global post-all-to-all tokens: "
                 f"{tuple(packed_seq_params.seq_idx.shape)} != "
-                f"{tuple(input_ids_cp_sharded.shape)}."
+                f"{tuple(all_input_ids.shape)}."
             )
         packed_seq_params.seq_aux_loss_sample_ids = (
             _build_packed_seq_aux_loss_sample_ids(
@@ -1697,11 +1696,9 @@ def _build_packed_seq_idx(
     *,
     capacity_tokens: int,
     real_sequence_count: int,
-    cp_rank: int,
-    cp_size: int,
 ) -> torch.Tensor:
-    """Build a capacity-shaped Mamba sequence index in CP-local token order."""
-    local_parts = []
+    """Build Mamba sequence IDs in the global order restored by its CP all-to-all."""
+    global_parts = []
     for sequence_id in range(real_sequence_count):
         physical_len = int(
             cu_seqlens_padded[sequence_id + 1] - cu_seqlens_padded[sequence_id]
@@ -1712,26 +1709,17 @@ def _build_packed_seq_idx(
             dtype=torch.int32,
             device=cu_seqlens_padded.device,
         )
-        local_parts.append(
-            _get_tokens_on_this_cp_rank(
-                sequence_ids,
-                cp_rank,
-                cp_size,
-                seq_dim=0,
-            )
-            if cp_size > 1
-            else sequence_ids
-        )
+        global_parts.append(sequence_ids)
     dummy_tokens = capacity_tokens - int(cu_seqlens_padded[-1])
-    local_parts.append(
+    global_parts.append(
         torch.full(
-            (dummy_tokens // cp_size,),
+            (dummy_tokens,),
             real_sequence_count,
             dtype=torch.int32,
             device=cu_seqlens_padded.device,
         )
     )
-    return torch.cat(local_parts).unsqueeze(0).contiguous()
+    return torch.cat(global_parts).unsqueeze(0).contiguous()
 
 
 def _build_packed_seq_aux_loss_sample_ids(
