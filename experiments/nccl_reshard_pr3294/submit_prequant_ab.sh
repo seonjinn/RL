@@ -19,6 +19,7 @@ GEN_NODES=${GEN_NODES:-2}
 SEGMENT_SIZE=${SEGMENT_SIZE:-1}
 USE_CONTAINER_VENVS=${USE_CONTAINER_VENVS:-true}
 WANDB_PROJECT=${WANDB_PROJECT:-sna-pr3294-nccl-mxfp8-prequant}
+DEPENDENCY=${DEPENDENCY:-}
 
 case "${ACTION}" in
   test-only) ACTION_ARG=--test-only ;;
@@ -50,6 +51,9 @@ args=(
   --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"nccl_reshard_refit","description":"venv setup and model initialization"}}'
   --export="ALL,REPO=${REPO},EXPECTED_REPO_SHA=${REPO_SHA},CONTAINER=${CONTAINER},TOTAL_NODES=${TOTAL_NODES},GPUS_PER_NODE=${GPUS_PER_NODE},GEN_NODES=${GEN_NODES},SEGMENT_SIZE=${SEGMENT_SIZE},MAX_STEPS=${MAX_STEPS},RUN_SUFFIX=${RUN_SUFFIX},RESULT_ROOT=${RESULT_ROOT},WORK_ROOT=${WORK_ROOT},RAY_SUB_PATH=${REPO}/ray.sub,USE_CONTAINER_VENVS=${USE_CONTAINER_VENVS},WANDB_PROJECT=${WANDB_PROJECT}"
 )
+if [[ -n "${DEPENDENCY}" ]]; then
+  args+=(--dependency="${DEPENDENCY}" --kill-on-invalid-dep=yes)
+fi
 if [[ -n "${ACTION_ARG}" ]]; then
   args+=("${ACTION_ARG}")
 fi
