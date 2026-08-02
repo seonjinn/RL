@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-Arm = Literal["baseline", "adaptive"]
+Arm = Literal["baseline", "trace", "adaptive"]
 
 
 @dataclass(frozen=True)
@@ -17,6 +17,12 @@ class AdaptiveInputs:
     tactic_sha256: str
     layer_allowlist_b64: str
     switch_m: int = 256
+
+
+@dataclass(frozen=True)
+class TraceInputs:
+    trace_dir: Path
+    trace_max: int = 8192
 
 
 def _sha256(path: Path) -> str:
@@ -37,6 +43,7 @@ def build_arm_environment(
     *,
     runtime_root: Path,
     adaptive: AdaptiveInputs | None = None,
+    trace: TraceInputs | None = None,
 ) -> dict[str, str]:
     runtime_root = runtime_root.resolve()
     if not (runtime_root / "vllm").is_dir():
@@ -51,11 +58,31 @@ def build_arm_environment(
         "NEMORL_MXFP8_LINEAR_BACKEND": "flashinfer_cutedsl",
     }
     if arm == "baseline":
+        if adaptive is not None or trace is not None:
+            raise ValueError("baseline arm must not receive adaptive or trace inputs")
+        return env
+    if arm == "trace":
         if adaptive is not None:
-            raise ValueError("baseline arm must not receive adaptive inputs")
+            raise ValueError("trace arm must not receive adaptive inputs")
+        if trace is None:
+            raise ValueError("trace arm requires trace inputs")
+        if trace.trace_max <= 0:
+            raise ValueError("trace_max must be positive")
+        env.update(
+            {
+                "NEMORL_MXFP8_LINEAR_BACKEND": "flashinfer_trtllm",
+                "VLLM_MXFP8_DENSE_SHAPE_TRACE": "1",
+                "VLLM_MXFP8_DENSE_SHAPE_TRACE_DIR": str(
+                    trace.trace_dir.resolve()
+                ),
+                "VLLM_MXFP8_DENSE_SHAPE_TRACE_MAX": str(trace.trace_max),
+            }
+        )
         return env
     if arm != "adaptive":
         raise ValueError(f"unsupported arm: {arm}")
+    if trace is not None:
+        raise ValueError("adaptive arm must not receive trace inputs")
     if adaptive is None:
         raise ValueError("adaptive arm requires a tactic table and allowlist")
     if adaptive.switch_m <= 0:
@@ -90,12 +117,16 @@ def build_arm_environment(
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--arm", choices=("baseline", "adaptive"), required=True)
+    parser.add_argument(
+        "--arm", choices=("baseline", "trace", "adaptive"), required=True
+    )
     parser.add_argument("--runtime-root", type=Path, required=True)
     parser.add_argument("--tactic-file", type=Path)
     parser.add_argument("--tactic-sha256")
     parser.add_argument("--layer-allowlist-b64")
     parser.add_argument("--switch-m", type=int, default=256)
+    parser.add_argument("--trace-dir", type=Path)
+    parser.add_argument("--trace-max", type=int, default=8192)
     parser.add_argument("--shell", action="store_true")
     return parser.parse_args()
 
@@ -103,6 +134,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     adaptive = None
+    trace = None
     if args.arm == "adaptive":
         if not all(
             (args.tactic_file, args.tactic_sha256, args.layer_allowlist_b64)
@@ -114,8 +146,15 @@ def main() -> None:
             layer_allowlist_b64=args.layer_allowlist_b64,
             switch_m=args.switch_m,
         )
+    elif args.arm == "trace":
+        if args.trace_dir is None:
+            raise SystemExit("trace arm requires trace directory")
+        trace = TraceInputs(trace_dir=args.trace_dir, trace_max=args.trace_max)
     env = build_arm_environment(
-        args.arm, runtime_root=args.runtime_root, adaptive=adaptive
+        args.arm,
+        runtime_root=args.runtime_root,
+        adaptive=adaptive,
+        trace=trace,
     )
     for key, value in sorted(env.items()):
         if args.shell:

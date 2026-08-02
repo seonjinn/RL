@@ -7,6 +7,7 @@ import yaml
 
 from experiments.mxfp8_adaptive_rollout_v0251.contract import (
     AdaptiveInputs,
+    TraceInputs,
     build_arm_environment,
 )
 from experiments.mxfp8_adaptive_rollout_v0251.flashinfer_preflight import (
@@ -16,6 +17,9 @@ from experiments.mxfp8_adaptive_rollout_v0251.runtime_overlay import (
     prepare_runtime_overlay,
 )
 from experiments.mxfp8_adaptive_rollout_v0251.summarize import summarize_log
+from experiments.mxfp8_adaptive_rollout_v0251.shape_trace import (
+    summarize_shape_trace,
+)
 
 
 def _write_table(path: Path) -> str:
@@ -66,6 +70,37 @@ def test_adaptive_requires_matching_table_hash(tmp_path: Path) -> None:
                 tactic_sha256="0" * 64,
                 layer_allowlist_b64="MTI4MCw4MTkyCg==",
             ),
+        )
+
+
+def test_trace_uses_trtllm_without_an_offline_tactic_table(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+    (runtime_root / "vllm").mkdir(parents=True)
+    trace_dir = tmp_path / "trace"
+
+    env = build_arm_environment(
+        "trace",
+        runtime_root=runtime_root,
+        trace=TraceInputs(trace_dir=trace_dir, trace_max=8192),
+    )
+
+    assert env["NEMORL_MXFP8_LINEAR_BACKEND"] == "flashinfer_trtllm"
+    assert env["VLLM_MXFP8_DENSE_SHAPE_TRACE"] == "1"
+    assert env["VLLM_MXFP8_DENSE_SHAPE_TRACE_DIR"] == str(trace_dir.resolve())
+    assert env["VLLM_MXFP8_DENSE_SHAPE_TRACE_MAX"] == "8192"
+    assert "VLLM_MXFP8_DENSE_TRTLLM_EXACT_TACTIC_FILE" not in env
+    assert "VLLM_MXFP8_DENSE_TRTLLM_LAYER_ALLOWLIST_B64" not in env
+
+
+def test_trace_requires_a_positive_limit(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "runtime"
+    (runtime_root / "vllm").mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="trace_max must be positive"):
+        build_arm_environment(
+            "trace",
+            runtime_root=runtime_root,
+            trace=TraceInputs(trace_dir=tmp_path / "trace", trace_max=0),
         )
 
 
@@ -162,6 +197,91 @@ def test_canary_config_does_not_duplicate_worker_owned_vllm_arguments() -> None:
     vllm_kwargs = config["generation"]["vllm_kwargs"]
 
     assert "enable_prefix_caching" not in vllm_kwargs
+
+
+def test_qwen_trace_config_matches_performance_generation_scope() -> None:
+    root = Path(__file__).parents[3]
+    config_path = (
+        root
+        / "experiments/mxfp8_adaptive_rollout_v0251/configs/"
+        "eval_qwen3_30ba3b_trace.yaml"
+    )
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+    assert config["eval"]["num_tests_per_prompt"] == 32
+    assert config["generation"]["model_name"] == "Qwen/Qwen3-30B-A3B"
+    assert config["generation"]["num_prompts_per_step"] == 64
+    assert config["generation"]["vllm_cfg"]["precision"] == "fp8"
+    assert config["generation"]["vllm_cfg"]["is_mx"] is True
+    assert config["generation"]["vllm_cfg"]["tensor_parallel_size"] == 1
+    assert config["generation"]["vllm_cfg"]["expert_parallel_size"] == 1
+    assert config["generation"]["vllm_cfg"]["enforce_eager"] is True
+    assert config["generation"]["vllm_cfg"]["quantization_ignored_layer_kws"] == [
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+    ]
+    assert config["generation"]["colocated"]["resources"] == {
+        "gpus_per_node": 4,
+        "num_nodes": 2,
+    }
+    dataset_path = root / "experiments/mxfp8_adaptive_rollout_v0251/data/qwen_trace_math.jsonl"
+    assert len(dataset_path.read_text(encoding="utf-8").splitlines()) == 64
+
+
+def test_trace_launcher_uses_eager_discovery_then_summarizes_shapes() -> None:
+    root = Path(__file__).parents[3]
+    launcher = (
+        root / "experiments/mxfp8_adaptive_rollout_v0251/run_arm.sh"
+    ).read_text(encoding="utf-8")
+
+    assert '--trace-dir "${SHAPE_TRACE_DIR:?set SHAPE_TRACE_DIR}"' in launcher
+    assert "shape_trace" in launcher
+    assert "shape_summary.json" in launcher
+
+
+def test_shape_trace_summary_accepts_zero_eligible_dense_calls(
+    tmp_path: Path,
+) -> None:
+    summary = summarize_shape_trace(tmp_path)
+
+    assert summary == {
+        "eligible": False,
+        "record_count": 0,
+        "unique_signature_count": 0,
+        "signatures": [],
+    }
+
+
+def test_shape_trace_summary_deduplicates_exact_signatures(tmp_path: Path) -> None:
+    record = {
+        "event": "mxfp8_dense_shape",
+        "family": "OtherDense",
+        "hostname": "node-a",
+        "k": 2048,
+        "layout": "8x4",
+        "m": 8,
+        "n_logical": 6144,
+        "n_physical": 6144,
+        "pid": 10,
+        "prefix": "model.layers.0.proj",
+    }
+    (tmp_path / "rank0.jsonl").write_text(
+        json.dumps(record) + "\n" + json.dumps(record) + "\n",
+        encoding="utf-8",
+    )
+    second = dict(record, m=16, pid=11)
+    (tmp_path / "rank1.jsonl").write_text(
+        json.dumps(second) + "\n", encoding="utf-8"
+    )
+
+    summary = summarize_shape_trace(tmp_path)
+
+    assert summary["eligible"] is True
+    assert summary["record_count"] == 3
+    assert summary["unique_signature_count"] == 2
+    assert [entry["m"] for entry in summary["signatures"]] == [8, 16]
 
 
 def test_runtime_overlay_preserves_wheel_extensions_and_overlays_source(

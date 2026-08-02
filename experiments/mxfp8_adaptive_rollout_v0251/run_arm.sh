@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ARM=${1:?usage: run_arm.sh baseline|adaptive}
+ARM=${1:?usage: run_arm.sh baseline|trace|adaptive}
 ROOT=${NEMO_RL_REPO_ROOT:?set NEMO_RL_REPO_ROOT}
 VLLM_SOURCE=${CUSTOM_VLLM_SOURCE:?set CUSTOM_VLLM_SOURCE}
 VLLM_RUNTIME_ROOT=${CUSTOM_VLLM_RUNTIME_ROOT:?set CUSTOM_VLLM_RUNTIME_ROOT}
@@ -38,6 +38,11 @@ if [[ "$ARM" == adaptive ]]; then
     --layer-allowlist-b64 "${LAYER_ALLOWLIST_B64:?set LAYER_ALLOWLIST_B64}"
     --switch-m "${SWITCH_M:-256}"
   )
+elif [[ "$ARM" == trace ]]; then
+  contract+=(
+    --trace-dir "${SHAPE_TRACE_DIR:?set SHAPE_TRACE_DIR}"
+    --trace-max "${SHAPE_TRACE_MAX:-8192}"
+  )
 fi
 "${contract[@]}" > "$RESULT_ROOT/$ARM/arm.env"
 source "$RESULT_ROOT/$ARM/arm.env"
@@ -62,4 +67,11 @@ driver_python="${NEMO_RL_DRIVER_VENV_DIR:?set NEMO_RL_DRIVER_VENV_DIR}/bin/pytho
   --arm "$ARM" \
   2>&1 | tee "$RESULT_ROOT/$ARM/run.log"
 
-grep -q 'enforce_eager.*False' "$RESULT_ROOT/$ARM/run.log"
+if [[ "$ARM" == trace ]]; then
+  "$driver_python" \
+    -m experiments.mxfp8_adaptive_rollout_v0251.shape_trace \
+    "$SHAPE_TRACE_DIR" \
+    --output "$RESULT_ROOT/$ARM/shape_summary.json"
+else
+  grep -q 'enforce_eager.*False' "$RESULT_ROOT/$ARM/run.log"
+fi

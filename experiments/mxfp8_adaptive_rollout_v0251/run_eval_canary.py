@@ -31,7 +31,9 @@ def _count_output_tokens(path: Path, tokenizer: object) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--arm", choices=("baseline", "adaptive"), required=True)
+    parser.add_argument(
+        "--arm", choices=("baseline", "trace", "adaptive"), required=True
+    )
     args, remaining = parser.parse_known_args()
 
     start = time.time()
