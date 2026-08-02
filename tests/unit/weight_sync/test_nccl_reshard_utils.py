@@ -621,6 +621,19 @@ def test_build_refit_info_describes_identity_bf16_as_one_weight_component():
     ]
 
 
+def test_build_refit_info_rejects_fp8_identity_without_explicit_codec():
+    name = "model.layers.0.mlp.down_proj.weight"
+
+    with pytest.raises(ValueError, match="identity refit requires storage dtype"):
+        build_nccl_reshard_refit_info(
+            {name: {"shape": [64, 128], "dtype": "torch.float8_e4m3fn"}},
+            train_parallelism={"tp_size": 2, "ep_size": 1, "pp_size": 1},
+            gen_parallelism={"tp_size": 2, "ep_size": 1, "pp_size": 1},
+            train_world_size=2,
+            gen_world_size=2,
+        )
+
+
 def test_build_refit_info_canonicalizes_component_plan_signature():
     metadata = _dense_metadata()
     first = build_nccl_reshard_refit_info(
@@ -723,6 +736,42 @@ def test_build_refit_info_describes_mxfp8_as_ordered_components():
     ]
     assert "refit_transform" not in param
     assert "scale_global_shape" not in param
+
+
+def test_build_refit_info_describes_grouped_mxfp8_components_with_ep_tp_and_pp():
+    metadata = _moe_metadata(num_experts=2, inter=64, hidden=32)
+    for name, meta in metadata.items():
+        if ".experts." in name:
+            meta["refit_transform"] = "mxfp8"
+
+    info = build_nccl_reshard_refit_info(
+        metadata,
+        train_parallelism={"tp_size": 1, "ep_size": 2, "pp_size": 2},
+        gen_parallelism={"tp_size": 2, "ep_size": 1, "pp_size": 1},
+        train_world_size=4,
+        gen_world_size=2,
+        layer_to_pp_stage={"model.layers.0": 0},
+    )
+
+    param = _find(info, "model.layers.0.mlp.experts.gate_proj.weight")
+
+    assert param["pp_stage"] == 0
+    assert param["components"] == [
+        {
+            "role": "weight",
+            "global_shape": (2, 64, 32),
+            "dtype": "torch.float8_e4m3fn",
+            "src_placements": [Shard(0)],
+            "dst_placements": [Shard(1)],
+        },
+        {
+            "role": "weight_scale",
+            "global_shape": (2, 64, 1),
+            "dtype": "torch.uint8",
+            "src_placements": [Shard(0)],
+            "dst_placements": [Shard(1)],
+        },
+    ]
 
 
 def test_build_refit_info_rejects_blockwise_fp8_source_for_mxfp8_target():
