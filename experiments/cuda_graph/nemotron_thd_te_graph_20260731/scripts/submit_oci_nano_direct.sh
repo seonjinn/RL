@@ -19,6 +19,7 @@ ACCOUNT=${ACCOUNT:-nemotron_n3_post}
 PARTITION=${PARTITION:-batch}
 NUM_NODES=${NUM_NODES:-4}
 GPUS_PER_NODE=${GPUS_PER_NODE:-4}
+SEGMENT_SIZE=${SEGMENT_SIZE:-}
 STEPS=${STEPS:-5}
 CUDA_GRAPH_MODULES=${CUDA_GRAPH_MODULES:-attn,mamba,moe_router}
 CUDA_GRAPH_IMPL=${CUDA_GRAPH_IMPL:-transformer_engine}
@@ -81,9 +82,11 @@ sbatch_args=(
   --partition="${PARTITION}"
   --time=01:00:00
   --gres="gpu:${GPUS_PER_NODE}"
-  --segment=16
   --output="${RUN_DIR}/slurm-%j.log"
 )
+if [[ -n "${SEGMENT_SIZE}" ]]; then
+  sbatch_args+=(--segment="${SEGMENT_SIZE}")
+fi
 
 cd "${SOURCE_ROOT}"
 sbatch --test-only "${sbatch_args[@]}" ray.sub
