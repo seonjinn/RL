@@ -38,7 +38,7 @@ Complete the matched 20-step GCP-NRT B200 transport A/B and report steady-state 
 - [x] Compute mean and median over steps 3-20.
 - [x] Compare reward and generation KL for correctness.
 - [x] Write the final experiment result.
-- [ ] Commit and push the result and session record.
+- [x] Commit and push the result and session record.
 
 ## Assumptions
 
