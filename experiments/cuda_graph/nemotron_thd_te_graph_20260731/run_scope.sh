@@ -112,6 +112,8 @@ profile_snapshot_command=(
   --profile-file "${profile_file}"
 )
 if [[ -n "${VALIDATED_PROFILE_SHA256:-}" ]]; then
+  [[ "${VALIDATED_PROFILE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
+    fail "VALIDATED_PROFILE_SHA256 must be a full lowercase SHA256"
   profile_snapshot_command+=(--expected-sha256 "${VALIDATED_PROFILE_SHA256}")
 fi
 profile_snapshot_output=$("${profile_snapshot_command[@]}") || fail "Cluster profile rejected"
@@ -133,7 +135,6 @@ if [[ ( "${MODEL}" == qwen3_30ba3b || "${MODEL}" == qwen3_235b ) && ( "${STEPS}"
     E) [[ "${SCOPE}" == attn && "${ROUTER_REPLAY}" == on ]] || fail "QWEN_CAMPAIGN_ARM E mismatch" ;;
     *) fail "Qwen campaign launch requires QWEN_CAMPAIGN_ARM" ;;
   esac
-  [[ "${VALIDATED_PROFILE_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] || fail "Qwen campaign launch requires a validated profile digest"
   [[ -f "${campaign_gate_validator}" ]] || fail "Missing campaign gate validator"
   gate_common=(--model "${MODEL}" --profile-file "${profile_file}" --profile-dir "${profile_dir}" --cluster "${CLUSTER}" --expected-profile-sha256 "${PROFILE_SHA256}")
   if [[ "${MODEL}" == qwen3_235b && "${ROUTER_REPLAY}" == on ]]; then

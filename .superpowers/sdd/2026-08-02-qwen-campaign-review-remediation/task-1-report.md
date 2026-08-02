@@ -27,6 +27,20 @@ Implementation:
   condition leaf and repeats all required campaign-gate checks inside
   `run_scope.sh`. Direct Qwen235 R3 and every Qwen 20-step launch now require
   valid arm identity, a matching profile snapshot, and the relevant evidence.
+- Review fix round 4 makes the submitter profile digest optional for direct
+  condition launches. When supplied it must be a lowercase SHA256 matching the
+  local snapshot; campaign evidence remains mandatory and is independently
+  revalidated against that local snapshot.
+- The round-4 direct-leaf regression creates a disposable experiment harness,
+  proves Qwen235 C succeeds with valid R3 evidence and no submitter digest,
+  and proves the same direct leaf fails before `SBATCH:` when evidence is
+  absent.
+- Round 5 moves the runtime-profile fixtures into each disposable copied
+  experiment's trusted `profiles/` directory. It also covers direct Qwen30
+  20-step promotion success and absent-evidence failure without a submitter
+  digest, supplied digest mismatch rejection, explicit-profile Qwen30 smoke,
+  and Qwen235 C rejection when individually valid R3 and promotion gates bind
+  different profile snapshots.
 
 Evidence:
 
@@ -52,6 +66,11 @@ Evidence:
 - Direct Qwen235 C and Qwen30 20-step A probes without evidence both exited 2
   with no `SBATCH:` output. The matrix suite remained green (47 passed) and
   the focused launcher profile/runtime subset remained green (2 passed).
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/python -m pytest
+  --confcutdir=tests/unit/experiments -q
+  tests/unit/experiments/test_matrix_submitters.py
+  tests/unit/experiments/test_nemotron_thd_te_graph_launchers.py` reported
+  `104 passed`.
 
 SHA256:
 

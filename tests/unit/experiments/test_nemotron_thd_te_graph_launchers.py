@@ -100,6 +100,166 @@ def _load_experiment_module(name: str) -> ModuleType:
     return module
 
 
+def _campaign_leaf_harness(tmp_path: Path) -> tuple[Path, Path, Path, dict[str, str]]:
+    root = tmp_path / "repo"
+    experiment = root / "experiments" / "cuda_graph" / EXPERIMENT_DIR.name
+    shutil.copytree(EXPERIMENT_DIR, experiment, ignore=shutil.ignore_patterns("__pycache__"))
+    (root / "docker").mkdir(parents=True)
+    shutil.copy2(REPO_ROOT / ".python-version", root / ".python-version")
+    shutil.copy2(REPO_ROOT / "docker" / "Dockerfile", root / "docker" / "Dockerfile")
+    runtime = tmp_path / "runtime.json"
+    runtime.write_text("{}")
+    provenance = {
+        "nemo_rl_commit": "1" * 40,
+        "bridge_commit": "2" * 40,
+        "mcore_commit": "3" * 40,
+        "container_sha256": "4" * 64,
+        "runtime_attestation_sha256": hashlib.sha256(runtime.read_bytes()).hexdigest(),
+    }
+    profile = experiment / "profiles" / "oci-hsg.env"
+    profile.write_text(
+        "\n".join(
+            (
+                "PROFILE_ID=unit", "ACCOUNT=unit", "PARTITION=batch", "CONTAINER=/tmp/container.sqsh",
+                f"CONTAINER_SHA256={provenance['container_sha256']}", "MOUNTS=/private:/private",
+                "SBATCH_GPUS_PER_NODE=4", "SBATCH_GRES=gpu:4", "SBATCH_SEGMENT_SIZE=", "TIME_LIMIT=01:00:00",
+                f"RUNTIME_ATTESTATION={runtime}", "RUNTIME_PREFLIGHT_JOB_ID=1", f"EXPECTED_TE_SHA={'e' * 40}",
+                f"EXPECTED_NEMORL_SHA={provenance['nemo_rl_commit']}", f"EXPECTED_BRIDGE_SHA={provenance['bridge_commit']}",
+                f"EXPECTED_MCORE_SHA={provenance['mcore_commit']}", "",
+            )
+        )
+    )
+    return root, experiment, profile, provenance
+
+
+def _write_campaign_gate(path: Path, payload: dict[str, object]) -> str:
+    path.write_text(json.dumps(payload, sort_keys=True))
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _run_campaign_leaf(root: Path, experiment: Path, leaf: str, **environment: str) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env.update({"CLUSTER": "oci-hsg", "MODE": "nemorl", "TEST_ONLY": "1", "RUN_TAG": "unit", **environment})
+    return subprocess.run(["bash", str(experiment / "conditions" / leaf)], cwd=root, env=env, check=False, capture_output=True, text=True)
+
+
+def _run_copied_experiment_script(root: Path, experiment: Path, relative_path: str, **environment: str) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env.update(environment)
+    return subprocess.run(["bash", str(experiment / relative_path)], cwd=root, env=env, check=False, capture_output=True, text=True)
+
+
+def _validate_campaign_gate(
+    root: Path,
+    experiment: Path,
+    kind: str,
+    gate_file: Path,
+    gate_sha256: str,
+    model: str,
+    profile: Path,
+    arm: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    command = [
+        "python3", str(experiment / "validate_campaign_gate.py"), kind,
+        "--gate-file", str(gate_file), "--gate-sha256", gate_sha256,
+        "--model", model, "--profile-file", str(profile),
+        "--profile-dir", str(experiment / "profiles"), "--cluster", "oci-hsg",
+    ]
+    if arm is not None:
+        command.extend(("--arm", arm))
+    return subprocess.run(command, cwd=root, check=False, capture_output=True, text=True)
+
+
+def test_direct_qwen_campaign_leaves_revalidate_evidence_without_submitter_digest(tmp_path: Path) -> None:
+    root, experiment, profile, provenance = _campaign_leaf_harness(tmp_path)
+    r3 = {
+        "gate_type": "qwen235_r3_routes", "status": "passed", "model": "qwen3_235b", "slurm_job_id": 1,
+        "provenance": provenance,
+        "diagnostic": {"model": "Qwen/Qwen3-235B-A22B", "num_prompts": 128, "max_tokens": 256, "max_model_len": 8192, "prompt_repeat": 128, "tensor_parallel_size": 8, "pipeline_parallel_size": 1, "dtype": "bfloat16", "gpu_memory_utilization": 0.4, "enable_prefix_caching": False, "enable_chunked_prefill": False, "enforce_eager": False, "moe_backend": "triton", "num_outputs": 128, "num_failures": 0},
+    }
+    r3_file = tmp_path / "r3.json"
+    r3_sha = _write_campaign_gate(r3_file, r3)
+    result = _run_campaign_leaf(root, experiment, "qwen_C_baseline_r3on.sh", MODEL="qwen3_235b", PROFILE_FILE=str(profile), R3_PREFLIGHT_FILE=str(r3_file), R3_PREFLIGHT_SHA256=r3_sha)
+    assert result.returncode == 0, result.stderr
+    assert "SBATCH:" in result.stdout
+    missing = _run_campaign_leaf(root, experiment, "qwen_C_baseline_r3on.sh", MODEL="qwen3_235b", PROFILE_FILE=str(profile))
+    assert missing.returncode == 2
+    assert "SBATCH:" not in missing.stdout
+
+
+def test_direct_qwen30_performance_requires_and_accepts_promotion_without_digest(tmp_path: Path) -> None:
+    root, experiment, profile, provenance = _campaign_leaf_harness(tmp_path)
+    promotion = {
+        "gate_type": "smoke_promotion", "status": "passed", "model": "qwen3_30ba3b", "phase": "smoke", "steps": 5,
+        "provenance": provenance,
+        "arms": {"A": {"job_id": 1, "status": "passed", "completed_steps": 5, "metrics_finite": True, "correctness_passed": True, "undeclared_fallbacks": 0, "router_replay": "off", "graph_coverage_status": "not_applicable", "r3_trace_status": "not_applicable"}},
+    }
+    gate = tmp_path / "promotion.json"
+    digest = _write_campaign_gate(gate, promotion)
+    result = _run_campaign_leaf(root, experiment, "qwen_A_baseline_r3off.sh", MODEL="qwen3_30ba3b", STEPS="20", PROFILE_FILE=str(profile), SMOKE_PROMOTION_FILE=str(gate), SMOKE_PROMOTION_SHA256=digest)
+    assert result.returncode == 0, result.stderr
+    assert "SBATCH:" in result.stdout
+    missing = _run_campaign_leaf(root, experiment, "qwen_A_baseline_r3off.sh", MODEL="qwen3_30ba3b", STEPS="20", PROFILE_FILE=str(profile))
+    assert missing.returncode == 2
+    assert "SBATCH:" not in missing.stdout
+    mismatched = _run_campaign_leaf(root, experiment, "qwen_A_baseline_r3off.sh", MODEL="qwen3_30ba3b", PROFILE_FILE=str(profile), VALIDATED_PROFILE_SHA256="0" * 64)
+    assert mismatched.returncode == 2
+    assert "SBATCH:" not in mismatched.stdout
+
+
+def test_direct_qwen235_performance_rejects_gates_from_different_profiles(tmp_path: Path) -> None:
+    root, experiment, profile, provenance = _campaign_leaf_harness(tmp_path)
+    r3 = {
+        "gate_type": "qwen235_r3_routes", "status": "passed", "model": "qwen3_235b", "slurm_job_id": 1,
+        "provenance": provenance,
+        "diagnostic": {"model": "Qwen/Qwen3-235B-A22B", "num_prompts": 128, "max_tokens": 256, "max_model_len": 8192, "prompt_repeat": 128, "tensor_parallel_size": 8, "pipeline_parallel_size": 1, "dtype": "bfloat16", "gpu_memory_utilization": 0.4, "enable_prefix_caching": False, "enable_chunked_prefill": False, "enforce_eager": False, "moe_backend": "triton", "num_outputs": 128, "num_failures": 0},
+    }
+    promotion_provenance = {**provenance, "container_sha256": "5" * 64}
+    promotion = {
+        "gate_type": "smoke_promotion", "status": "passed", "model": "qwen3_235b", "phase": "smoke", "steps": 5,
+        "provenance": promotion_provenance,
+        "arms": {"C": {"job_id": 1, "status": "passed", "completed_steps": 5, "metrics_finite": True, "correctness_passed": True, "undeclared_fallbacks": 0, "router_replay": "on", "graph_coverage_status": "not_applicable", "r3_trace_status": "passed"}},
+    }
+    r3_file = tmp_path / "r3.json"
+    promotion_file = tmp_path / "promotion.json"
+    r3_sha = _write_campaign_gate(r3_file, r3)
+    promotion_sha = _write_campaign_gate(promotion_file, promotion)
+    alternate_profile = experiment / "profiles" / "oci-hsg-alternate.env"
+    alternate_profile.write_text(
+        profile.read_text().replace(
+            f"CONTAINER_SHA256={provenance['container_sha256']}",
+            f"CONTAINER_SHA256={promotion_provenance['container_sha256']}",
+        )
+    )
+
+    assert _validate_campaign_gate(
+        root, experiment, "r3", r3_file, r3_sha, "qwen3_235b", profile,
+    ).returncode == 0
+    assert _validate_campaign_gate(
+        root, experiment, "promotion", promotion_file, promotion_sha, "qwen3_235b", alternate_profile, arm="C",
+    ).returncode == 0
+
+    result = _run_campaign_leaf(
+        root, experiment, "qwen_C_baseline_r3on.sh", MODEL="qwen3_235b", STEPS="20", PROFILE_FILE=str(profile),
+        R3_PREFLIGHT_FILE=str(r3_file), R3_PREFLIGHT_SHA256=r3_sha,
+        SMOKE_PROMOTION_FILE=str(promotion_file), SMOKE_PROMOTION_SHA256=promotion_sha,
+    )
+
+    assert result.returncode == 2
+    assert "SBATCH:" not in result.stdout
+
+
+def test_direct_qwen30_smoke_accepts_explicit_profile_file(tmp_path: Path) -> None:
+    root, experiment, profile, _ = _campaign_leaf_harness(tmp_path)
+
+    result = _run_campaign_leaf(
+        root, experiment, "qwen_A_baseline_r3off.sh", MODEL="qwen3_30ba3b", PROFILE_FILE=str(profile),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "SBATCH:" in result.stdout
+
+
 def _create_bridge_fixture(tmp_path: Path) -> tuple[Path, str, str]:
     mcore = tmp_path / "mcore-source"
     mcore.mkdir()
@@ -944,7 +1104,7 @@ def test_nano_test_only_launcher_renders_batch_job_without_singleton() -> None:
 def test_leaf_job_depends_on_one_exact_runtime_preflight_artifact(
     tmp_path: Path,
 ) -> None:
-    profile = tmp_path / "oci-runtime-attested.env"
+    root, experiment, profile, _ = _campaign_leaf_harness(tmp_path)
     attestation = "/lustre/example/runtime/oci-container-runtime-733.json"
     profile.write_text(
         "\n".join(
@@ -970,7 +1130,9 @@ def test_leaf_job_depends_on_one_exact_runtime_preflight_artifact(
         )
     )
 
-    result = _run_script(
+    result = _run_copied_experiment_script(
+        root,
+        experiment,
         "scopes/17_attn.sh",
         CLUSTER="oci-hsg",
         MODEL="nano",
@@ -1043,7 +1205,7 @@ def test_leaf_runtime_attestation_uses_the_nightly_container_python() -> None:
 def test_leaf_job_rejects_unmounted_managed_python_installation(
     tmp_path: Path,
 ) -> None:
-    profile = tmp_path / "oci-runtime-unmounted.env"
+    root, experiment, profile, _ = _campaign_leaf_harness(tmp_path)
     profile.write_text(
         "\n".join(
             (
@@ -1068,7 +1230,9 @@ def test_leaf_job_rejects_unmounted_managed_python_installation(
         )
     )
 
-    result = _run_script(
+    result = _run_copied_experiment_script(
+        root,
+        experiment,
         "scopes/17_attn.sh",
         CLUSTER="oci-hsg",
         MODEL="nano",
@@ -1580,7 +1744,7 @@ def test_submitters_pin_smoke_performance_and_accuracy_steps() -> None:
         result = _run_script(
             relative_path,
             CLUSTER="oci-hsg",
-            MODEL="qwen3_30ba3b",
+            MODEL="nano",
             MODE="nemorl",
             TEST_ONLY="1",
             RUN_TAG="unit",
