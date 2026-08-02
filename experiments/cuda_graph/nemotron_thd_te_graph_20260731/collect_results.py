@@ -37,6 +37,7 @@ IDENTITY_FIELDS = (
     "model",
     "dispatcher",
     "scope",
+    "router_replay",
     "status",
     "failure",
     "exit_code",
@@ -113,6 +114,7 @@ REQUIRED_REPORT_FIELDS = (
     "model",
     "dispatcher",
     "scope",
+    "router_replay",
     "status",
     "mode",
     "cluster",
@@ -296,6 +298,8 @@ def normalize_record(record: Mapping[str, Any]) -> dict[str, Any]:
     for field in IDENTITY_FIELDS:
         aliases = (field, "error") if field == "failure" else (field,)
         row[field] = _first_value((record,), aliases)
+    if row["router_replay"] == "":
+        row["router_replay"] = "off"
     if row["step"] == "":
         row["step"] = _first_value((nested_metrics, record), ("_step",))
 

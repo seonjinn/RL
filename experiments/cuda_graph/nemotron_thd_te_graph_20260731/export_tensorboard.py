@@ -150,6 +150,7 @@ GRAPH_CANONICAL_TAGS = frozenset(
 )
 OPTIONAL_CANONICAL_TAGS = frozenset({"cuda_graph/cache_misses"})
 BASELINE_SCOPES = frozenset({"baseline", "baseline_no_cg"})
+ROUTER_REPLAY_VALUES = frozenset({"off", "on"})
 
 
 def _scalar_events(paths: Sequence[Path]) -> dict[str, dict[int, float]]:
@@ -323,10 +324,13 @@ def export_events(
     provenance: Mapping[str, object],
     output: Path,
     parity: Mapping[str, object] | None = None,
+    router_replay: str = "off",
 ) -> None:
     """Export one complete planned run from local TensorBoard event paths."""
     if steps not in PLANNED_STEP_COUNTS:
         raise ValueError("steps must be one of 5, 20, 100")
+    if router_replay not in ROUTER_REPLAY_VALUES:
+        raise ValueError("router_replay must be one of off, on")
     if not event_paths:
         raise ValueError("at least one TensorBoard event path is required")
     if not profile.strip():
@@ -360,6 +364,7 @@ def export_events(
         "run_group": run_group,
         "job_id": job_id,
         "status": status,
+        "router_replay": router_replay,
         "graph_telemetry_status": "not_applicable" if is_baseline else "reported",
         "provenance": _validated_provenance(provenance),
         "parity": _validated_parity(parity),
@@ -397,6 +402,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repeat", type=int, required=True)
     parser.add_argument("--run-group", required=True)
     parser.add_argument("--status", required=True)
+    parser.add_argument("--router-replay", choices=("off", "on"), default="off")
     parser.add_argument("--provenance", required=True, type=Path)
     parser.add_argument("--parity", type=Path)
     parser.add_argument("--output", required=True, type=Path)
@@ -420,6 +426,7 @@ def main() -> None:
         run_group=args.run_group,
         job_id=args.job_id,
         status=args.status,
+        router_replay=args.router_replay,
         provenance=_read_json_mapping(args.provenance, label="provenance"),
         parity=(
             _read_json_mapping(args.parity, label="parity")

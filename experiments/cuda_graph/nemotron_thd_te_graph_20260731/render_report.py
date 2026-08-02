@@ -41,6 +41,7 @@ IDENTITY_FIELDS = (
     "model",
     "dispatcher",
     "scope",
+    "router_replay",
     "status",
     "mode",
     "cluster",
@@ -122,6 +123,7 @@ RUN_KEY_FIELDS = (
     "model",
     "dispatcher",
     "scope",
+    "router_replay",
     "mode",
     "cluster",
     "profile",
@@ -135,6 +137,7 @@ BASELINE_SCOPES = frozenset({"baseline", "baseline_no_cg"})
 MATCH_FIELDS = (
     "model",
     "dispatcher",
+    "router_replay",
     "mode",
     "cluster",
     "profile",
@@ -361,14 +364,22 @@ def summarize_runs(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     for row in rows:
         if _is_failure(row):
             continue
-        key = tuple(str(row.get(field, "")) for field in RUN_KEY_FIELDS)
+        key = tuple(
+            str(row.get(field, "off" if field == "router_replay" else ""))
+            for field in RUN_KEY_FIELDS
+        )
         groups.setdefault(key, []).append(row)
 
     summaries: list[dict[str, Any]] = []
     for group_rows in groups.values():
         ordered = sorted(group_rows, key=_step)
         measurement_rows = [row for row in ordered if _step(row) >= 6]
-        summary = {field: ordered[-1].get(field, "") for field in IDENTITY_FIELDS}
+        summary = {
+            field: ordered[-1].get(
+                field, "off" if field == "router_replay" else ""
+            )
+            for field in IDENTITY_FIELDS
+        }
         summary["sample_count"] = len(measurement_rows)
         for field in NUMERIC_FIELDS:
             values = [
@@ -448,7 +459,10 @@ def build_matched_comparisons(
     baselines: dict[tuple[str, ...], list[Mapping[str, Any]]] = {}
     for row in eligible:
         if str(row.get("scope", "")) in BASELINE_SCOPES:
-            key = tuple(str(row.get(field, "")) for field in MATCH_FIELDS)
+            key = tuple(
+                str(row.get(field, "off" if field == "router_replay" else ""))
+                for field in MATCH_FIELDS
+            )
             baselines.setdefault(key, []).append(row)
 
     paired: dict[tuple[str, ...], list[dict[str, float]]] = {}
@@ -457,7 +471,10 @@ def build_matched_comparisons(
         scope = str(variant.get("scope", ""))
         if scope in BASELINE_SCOPES:
             continue
-        match_key = tuple(str(variant.get(field, "")) for field in MATCH_FIELDS)
+        match_key = tuple(
+            str(variant.get(field, "off" if field == "router_replay" else ""))
+            for field in MATCH_FIELDS
+        )
         candidates = baselines.get(match_key, [])
         if len(candidates) != 1:
             continue
@@ -579,6 +596,7 @@ def render_html(
         ("model", "Model"),
         ("dispatcher", "Dispatcher"),
         ("scope", "Scope"),
+        ("router_replay", "Router replay"),
         ("mode", "Mode"),
         ("cluster", "Cluster"),
         ("profile", "Profile"),
@@ -595,6 +613,7 @@ def render_html(
         ("model", "Model"),
         ("dispatcher", "Dispatcher"),
         ("scope", "Scope"),
+        ("router_replay", "Router replay"),
         ("phase", "Phase"),
         ("steps", "Steps"),
         ("repeat", "Repeat"),
@@ -647,6 +666,7 @@ def render_html(
     failure_columns = (
         ("model", "Model"),
         ("scope", "Scope"),
+        ("router_replay", "Router replay"),
         ("status", "Status"),
         ("failure", "Failure"),
         ("exit_code", "Exit code"),
@@ -663,6 +683,7 @@ def render_html(
         ("model", "Model"),
         ("dispatcher", "Dispatcher"),
         ("scope", "Scope"),
+        ("router_replay", "Router replay"),
         ("profile", "Profile"),
         ("phase", "Phase"),
         ("steps", "Steps"),
@@ -693,6 +714,7 @@ def render_html(
         ("model", "Model"),
         ("dispatcher", "Dispatcher"),
         ("scope", "Scope"),
+        ("router_replay", "Router replay"),
         ("profile", "Profile"),
         ("phase", "Phase"),
         ("steps", "Steps"),

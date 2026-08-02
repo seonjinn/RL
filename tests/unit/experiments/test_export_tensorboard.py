@@ -155,6 +155,7 @@ def test_exporter_supports_every_planned_step_count(
     assert all(row["model"] == "nano" for row in rows)
     assert all(row["dispatcher"] == "alltoall" for row in rows)
     assert all(row["scope"] == "attn,moe_router" for row in rows)
+    assert all(row["router_replay"] == "off" for row in rows)
     assert set(rows[0]["metrics"]) == set(CANONICAL_TAGS)
     assert "train/accuracy" not in rows[0]["metrics"]
 
@@ -197,6 +198,64 @@ def test_exporter_uses_latest_event_for_duplicate_step(tmp_path: Path) -> None:
 
     rows = [json.loads(line) for line in output.read_text().splitlines()]
     assert rows[2]["metrics"]["train/reward"] == 999.0
+
+
+def test_exporter_preserves_router_replay_and_rejects_invalid_values(
+    tmp_path: Path,
+) -> None:
+    exporter = _load_exporter()
+    events = tmp_path / "events"
+    output = tmp_path / "results.jsonl"
+    _write_events(
+        events,
+        suffix=".complete",
+        values_by_step=_full_event_values(5),
+        wall_time_offset=100.0,
+    )
+
+    exporter.export_events(
+        [events],
+        model="nano",
+        dispatcher="alltoall",
+        scope="attn",
+        mode="nemorl",
+        cluster="oci-hsg",
+        profile="oci-hsg-gb200",
+        phase="performance",
+        steps=5,
+        repeat=1,
+        run_group="nano-performance",
+        job_id="2474000",
+        status="passed",
+        router_replay="on",
+        provenance=PROVENANCE,
+        parity=None,
+        output=output,
+    )
+
+    rows = [json.loads(line) for line in output.read_text().splitlines()]
+    assert {row["router_replay"] for row in rows} == {"on"}
+
+    with pytest.raises(ValueError, match="router_replay must be one of off, on"):
+        exporter.export_events(
+            [events],
+            model="nano",
+            dispatcher="alltoall",
+            scope="attn",
+            mode="nemorl",
+            cluster="oci-hsg",
+            profile="oci-hsg-gb200",
+            phase="performance",
+            steps=5,
+            repeat=1,
+            run_group="nano-performance",
+            job_id="2474000",
+            status="passed",
+            router_replay="enabled",
+            provenance=PROVENANCE,
+            parity=None,
+            output=output,
+        )
 
 
 def test_exporter_reports_absent_required_tag_and_preserves_output(

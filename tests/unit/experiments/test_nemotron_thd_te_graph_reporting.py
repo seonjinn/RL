@@ -193,6 +193,7 @@ def _complete_record(
     job_id: str,
     e2e_step_time: float,
     throughput: float,
+    router_replay: str = "off",
     step: int = 6,
     provenance: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -219,6 +220,7 @@ def _complete_record(
         "dispatcher": "hybridep",
         "scope": scope,
         "status": "passed",
+        "router_replay": router_replay,
         "mode": "nemorl",
         "cluster": "oci-hsg",
         "profile": "oci-hsg-gb200",
@@ -345,6 +347,71 @@ def test_report_matches_exact_provenance_and_aggregates_repeat_deltas() -> None:
     assert comparison["e2e_step_time_delta_pct_median"] == pytest.approx(-22.5)
     assert comparison["e2e_step_time_delta_pct_variance"] == pytest.approx(6.25)
     assert comparison["e2e_step_time_delta_pct_p95"] == pytest.approx(-20.25)
+
+
+def test_router_replay_is_an_identity_and_pairing_field() -> None:
+    collector = _load_module("collect_results")
+    renderer = _load_module("render_report")
+    records = [
+        *_complete_run(
+            scope="baseline",
+            repeat=1,
+            job_id="A-baseline-off",
+            e2e_step_time=10.0,
+            throughput=100.0,
+            router_replay="off",
+        ),
+        *_complete_run(
+            scope="attn",
+            repeat=1,
+            job_id="B-variant-off",
+            e2e_step_time=8.0,
+            throughput=125.0,
+            router_replay="off",
+        ),
+        *_complete_run(
+            scope="baseline",
+            repeat=1,
+            job_id="C-baseline-on",
+            e2e_step_time=20.0,
+            throughput=100.0,
+            router_replay="on",
+        ),
+        *_complete_run(
+            scope="attn",
+            repeat=1,
+            job_id="E-variant-on",
+            e2e_step_time=10.0,
+            throughput=125.0,
+            router_replay="on",
+        ),
+    ]
+    rows = [collector.normalize_record(record) for record in records]
+
+    assert {row["router_replay"] for row in rows} == {"off", "on"}
+    summaries = renderer.summarize_runs(rows)
+    comparisons = renderer.build_matched_comparisons(summaries)
+
+    assert len(summaries) == 4
+    assert {(row["scope"], row["router_replay"]) for row in summaries} == {
+        ("baseline", "off"),
+        ("attn", "off"),
+        ("baseline", "on"),
+        ("attn", "on"),
+    }
+    assert {(row["scope"], row["router_replay"]) for row in comparisons} == {
+        ("attn", "off"),
+        ("attn", "on"),
+    }
+    assert {
+        row["router_replay"]: row["e2e_step_time_delta_pct_median"]
+        for row in comparisons
+    } == {"off": pytest.approx(-20.0), "on": pytest.approx(-50.0)}
+
+    report = renderer.render_html(rows)
+    assert "Router replay" in report
+    assert "A-baseline-off" in report
+    assert "C-baseline-on" in report
 
 
 def test_partial_passed_run_is_not_comparison_eligible() -> None:
