@@ -11,12 +11,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import fcntl
 import logging
 import os
 import shlex
 import shutil
 import subprocess
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 
@@ -28,6 +31,26 @@ git_root = os.path.abspath(os.path.join(dir_path, "../.."))
 DEFAULT_VENV_DIR = os.path.join(git_root, "venvs")
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _source_build_lock(py_executable: str) -> Iterator[None]:
+    """Serialize opt-in MCore editable builds that mutate a shared source tree."""
+    lock_path_value = os.environ.get("NRL_VENV_BUILD_LOCK")
+    if not lock_path_value or "mcore" not in shlex.split(py_executable):
+        yield
+        return
+
+    lock_path = Path(lock_path_value)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as lock_file:
+        logger.info("Waiting for MCore source build lock at %s", lock_path)
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            logger.info("Acquired MCore source build lock at %s", lock_path)
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 @lru_cache(maxsize=None)
@@ -93,9 +116,12 @@ def create_local_venv(
     # Command doesn't matter, since `uv` syncs the environment no matter the command.
     exec_cmd.extend(["echo", f"Finished creating venv {venv_path}"])
 
-    # Always run uv sync first to ensure the build requirements are set (for --no-build-isolation packages)
-    subprocess.run(["uv", "sync", "--directory", git_root], env=env, check=True)
-    subprocess.run(exec_cmd, env=env, check=True)
+    # Editable MCore builds compile into the source tree. An optional shared lock
+    # prevents multi-node builds from deleting each other's extension artifacts.
+    with _source_build_lock(py_executable):
+        # Always run uv sync first to ensure the build requirements are set (for --no-build-isolation packages)
+        subprocess.run(["uv", "sync", "--directory", git_root], env=env, check=True)
+        subprocess.run(exec_cmd, env=env, check=True)
 
     # Return the path to the python executable in the virtual environment
     python_path = os.path.join(venv_path, "bin", "python")

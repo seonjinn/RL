@@ -16,6 +16,7 @@ import subprocess
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import nemo_rl.utils.venvs as venvs
 from nemo_rl.utils.venvs import create_local_venv
 from tests.unit.conftest import TEST_ASSETS_DIR
 
@@ -48,3 +49,32 @@ def test_create_local_venv():
             # Verify the command executed successfully (return code 0)
             assert result.returncode == 0, f"Failed to import sphinx: {result.stderr}"
             assert "Sphinx package is installed" in result.stdout
+
+
+def test_source_build_lock_serializes_mcore_build(tmp_path):
+    lock_path = tmp_path / "mcore-build.lock"
+
+    with (
+        patch.dict(os.environ, {"NRL_VENV_BUILD_LOCK": str(lock_path)}),
+        patch.object(venvs.fcntl, "flock") as flock,
+        venvs._source_build_lock("uv run --locked --extra mcore"),
+    ):
+        pass
+
+    assert lock_path.exists()
+    assert [call.args[1] for call in flock.call_args_list] == [
+        venvs.fcntl.LOCK_EX,
+        venvs.fcntl.LOCK_UN,
+    ]
+
+
+def test_source_build_lock_is_disabled_for_other_extras(tmp_path):
+    lock_path = tmp_path / "mcore-build.lock"
+
+    with (
+        patch.dict(os.environ, {"NRL_VENV_BUILD_LOCK": str(lock_path)}),
+        venvs._source_build_lock("uv run --locked --extra vllm"),
+    ):
+        pass
+
+    assert not lock_path.exists()
