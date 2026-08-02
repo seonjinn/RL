@@ -22,6 +22,10 @@ from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.models.generation.interfaces import GenerationDatumSpec
 from nemo_rl.utils.timer import Timer
 
+if TYPE_CHECKING:
+    from nemo_rl.models.policy import PolicyConfig
+    from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
+
 
 class LogprobOutputSpec(TypedDict):
     """logprobs: Tensor of log probabilities."""
@@ -184,6 +188,18 @@ class ColocatablePolicyInterface(PolicyInterface):
     @abstractmethod
     def prepare_refit_info(self) -> Optional[dict[str, Any]]:
         pass
+
+    def enable_refit_transforms(
+        self, requests: list["RefitTransformRequest"]
+    ) -> Optional[dict[str, Any]]:
+        """Enable validated source transforms for subsequent refit exports.
+
+        Returns:
+            Refit info updated with transformed tensor metadata.
+        """
+        raise NotImplementedError(
+            "enable_refit_transforms is not implemented for this policy worker"
+        )
 
     @abstractmethod
     def stream_weights_via_ipc_zmq(

@@ -552,6 +552,12 @@ def test_build_refit_info_canonicalizes_component_plan_signature():
 
     assert first["plan_signature"] == second["plan_signature"]
     assert len(first["plan_signature"]) == 64
+    assert first["refit_protocol_version"] == 1
+    assert first["refit_component_count"] == sum(
+        len(param["components"])
+        for params in first["per_layer_params"].values()
+        for param in params
+    )
 
 
 def test_build_refit_info_sets_pp_stage_when_pp_gt_1():
@@ -633,6 +639,8 @@ def test_build_refit_info_describes_mxfp8_as_ordered_components():
             "dst_placements": [Shard(1)],
         },
     ]
+    assert param["transform_id"] == "bf16_to_mxfp8_e4m3_e8m0"
+    assert param["finalize_scope"] == "parameter"
     assert "refit_transform" not in param
     assert "scale_global_shape" not in param
 

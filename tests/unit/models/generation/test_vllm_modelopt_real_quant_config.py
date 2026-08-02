@@ -504,12 +504,13 @@ def _install_fake_registered_vllm_modelopt(monkeypatch):
         oracle_module.NvFp4MoeBackend.MARLIN,
         FakeMarlinExperts,
     )
-    oracle_module.make_nvfp4_moe_kernel = lambda **kwargs: events.append(
-        ("make_moe_kernel", kwargs)
-    ) or types.SimpleNamespace(
-        fused_experts=types.SimpleNamespace(
-            process_weights_after_loading=lambda layer: events.append(
-                ("process_moe", layer)
+    oracle_module.make_nvfp4_moe_kernel = lambda **kwargs: (
+        events.append(("make_moe_kernel", kwargs))
+        or types.SimpleNamespace(
+            fused_experts=types.SimpleNamespace(
+                process_weights_after_loading=lambda layer: events.append(
+                    ("process_moe", layer)
+                )
             )
         )
     )
@@ -1164,7 +1165,8 @@ def test_real_quant_load_weights_batches_full_experts_and_expands_global_scales(
 
     batched_forwarded = []
     extension = _make_real_quant_extension(backend, make_model(None), [])
-    extension.prepare_refit_info(state_dict_info)
+    _patch_real_quant_load(monkeypatch, backend, batched_forwarded)
+    assert extension.prepare_refit_info(state_dict_info) is None
     extension._nrl_w13_num_shards_by_prefix = {prefix: 1}
     _patch_real_quant_load(monkeypatch, backend, batched_forwarded)
     assert (

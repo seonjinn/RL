@@ -34,6 +34,7 @@ from nemo_rl.weight_sync.interfaces import WeightSynchronizer
 from nemo_rl.weight_sync.ipc_weight_synchronizer import (
     IPCWeightSynchronizer,
 )
+from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -70,6 +71,14 @@ def _mock_generation(**overrides):
     return gen
 
 
+def _transform_request(*names: str) -> RefitTransformRequest:
+    return RefitTransformRequest(
+        parameter_names=tuple(sorted(set(names))),
+        source_format="bf16",
+        target_format="mxfp8_e4m3_e8m0",
+    )
+
+
 def _mock_cluster(world_size=4, ip="127.0.0.1", port=29500):
     cluster = MagicMock()
     cluster.world_size.return_value = world_size
@@ -93,6 +102,113 @@ class TestWeightSynchronizerABC:
 
         with pytest.raises(TypeError):
             IncompleteSync()  # type: ignore[abstract]
+
+
+# ---------------------------------------------------------------------------
+# Shared refit metadata handshake
+# ---------------------------------------------------------------------------
+
+
+class TestInitializeRefitMetadata:
+    def test_forwards_structured_transform_requests_and_refreshes_metadata(self):
+        policy = _mock_policy()
+        policy.cfg = {"megatron_cfg": {"enabled": True}}
+        generation = _mock_generation()
+        state_dict_info = policy.prepare_refit_info.return_value
+        updated_info = {"layer_0": {"dtype": "torch.float8_e4m3fn"}}
+        request = RefitTransformRequest(
+            parameter_names=("layer_0",),
+            source_format="bf16",
+            target_format="mxfp8_e4m3_e8m0",
+        )
+        generation.prepare_refit_info.side_effect = [[request], None]
+        policy.enable_refit_transforms.return_value = updated_info
+
+        initialize_refit_metadata(policy, generation)
+
+        policy.enable_refit_transforms.assert_called_once_with(requests=[request])
+        assert generation.prepare_refit_info.call_args_list == [
+            call(state_dict_info),
+            call(updated_info),
+        ]
+
+    def test_structured_transform_request_uses_consistent_non_megatron_error(self):
+        policy = _mock_policy()
+        policy.cfg = {"megatron_cfg": {"enabled": False}}
+        generation = _mock_generation()
+        generation.prepare_refit_info.return_value = [
+            RefitTransformRequest(
+                parameter_names=("layer_0",),
+                source_format="bf16",
+                target_format="mxfp8_e4m3_e8m0",
+            )
+        ]
+
+        with pytest.raises(ValueError, match="requires the Megatron policy backend"):
+            initialize_refit_metadata(policy, generation)
+
+        policy.enable_refit_transforms.assert_not_called()
+
+    def test_returns_when_generation_does_not_request_prequantization(self):
+        policy = _mock_policy()
+        generation = _mock_generation()
+        state_dict_info = policy.prepare_refit_info.return_value
+
+        initialize_refit_metadata(policy, generation)
+
+        generation.prepare_refit_info.assert_called_once_with(state_dict_info)
+        policy.enable_refit_transforms.assert_not_called()
+
+    def test_rejects_prequantization_without_megatron(self):
+        policy = _mock_policy()
+        policy.cfg = {"megatron_cfg": {"enabled": False}}
+        generation = _mock_generation()
+        generation.prepare_refit_info.return_value = [_transform_request("layer_0")]
+
+        with pytest.raises(ValueError, match="requires the Megatron policy backend"):
+            initialize_refit_metadata(policy, generation)
+
+        policy.enable_refit_transforms.assert_not_called()
+
+    def test_refreshes_generation_metadata_after_prequantization(self):
+        policy = _mock_policy()
+        policy.cfg = {"megatron_cfg": {"enabled": True}}
+        generation = _mock_generation()
+        state_dict_info = policy.prepare_refit_info.return_value
+        updated_info = {
+            "layer_0": {
+                "shape": [4096, 4096],
+                "dtype": "float8_e4m3fn",
+            },
+            "layer_0_scale_from_checkpoint": {
+                "shape": [4096, 128],
+                "dtype": "uint8",
+            },
+        }
+        request = _transform_request("layer_0")
+        generation.prepare_refit_info.side_effect = [[request], None]
+        policy.enable_refit_transforms.return_value = updated_info
+
+        initialize_refit_metadata(policy, generation)
+
+        policy.enable_refit_transforms.assert_called_once_with(requests=[request])
+        assert generation.prepare_refit_info.call_args_list == [
+            call(state_dict_info),
+            call(updated_info),
+        ]
+
+    def test_rejects_missing_prequantized_metadata(self):
+        policy = _mock_policy()
+        policy.cfg = {"megatron_cfg": {"enabled": True}}
+        policy.enable_refit_transforms.return_value = None
+        generation = _mock_generation()
+        generation.prepare_refit_info.return_value = [_transform_request("layer_0")]
+
+        with pytest.raises(
+            RuntimeError,
+            match="did not return updated metadata",
+        ):
+            initialize_refit_metadata(policy, generation)
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +304,30 @@ class TestIPCWeightSynchronizer:
         sync.init_communicator()
         policy.prepare_refit_info.assert_called_once()
         gen.prepare_refit_info.assert_called_once()
+
+    def test_init_communicator_completes_prequantization_handshake(self):
+        policy = _mock_policy()
+        policy.cfg = {"megatron_cfg": {"enabled": True}}
+        updated_info = {
+            "layer_0": {
+                "shape": [4096, 4096],
+                "dtype": "float8_e4m3fn",
+            }
+        }
+        policy.enable_refit_transforms.return_value = updated_info
+        gen = _mock_generation()
+        state_dict_info = policy.prepare_refit_info.return_value
+        request = _transform_request("layer_0")
+        gen.prepare_refit_info.side_effect = [[request], None]
+        sync = IPCWeightSynchronizer(policy, gen)
+
+        sync.init_communicator()
+
+        policy.enable_refit_transforms.assert_called_once_with(requests=[request])
+        assert gen.prepare_refit_info.call_args_list == [
+            call(state_dict_info),
+            call(updated_info),
+        ]
 
     @patch("nemo_rl.weight_sync.ipc_weight_synchronizer.ray")
     def test_phase_restoration_on_transfer_failure(self, mock_ray):
@@ -414,6 +554,38 @@ class TestCollectiveWeightSynchronizer:
         gen.init_collective.assert_called_once_with(
             "10.0.0.1", 29500, 6, train_world_size=4
         )
+
+    @patch("nemo_rl.weight_sync.collective_weight_synchronizer.ray")
+    def test_init_communicator_prequantizes_before_collective_setup(self, mock_ray):
+        mock_ray.get.return_value = [True]
+        policy = _mock_policy()
+        policy.cfg = {"megatron_cfg": {"enabled": True}}
+        updated_info = {
+            "layer_0": {
+                "shape": [4096, 4096],
+                "dtype": "float8_e4m3fn",
+            }
+        }
+        policy.enable_refit_transforms.return_value = updated_info
+        gen = _mock_generation()
+        state_dict_info = policy.prepare_refit_info.return_value
+        request = _transform_request("layer_0")
+        gen.prepare_refit_info.side_effect = [[request], None]
+        sync = CollectiveWeightSynchronizer(
+            policy,
+            gen,
+            _mock_cluster(world_size=4),
+            _mock_cluster(world_size=2),
+        )
+
+        sync.init_communicator()
+
+        policy.enable_refit_transforms.assert_called_once_with(requests=[request])
+        assert gen.prepare_refit_info.call_args_list == [
+            call(state_dict_info),
+            call(updated_info),
+        ]
+        policy.init_collective.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

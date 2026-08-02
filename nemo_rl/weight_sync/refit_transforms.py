@@ -18,7 +18,10 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol, TypedDict, cast
+
+
+REFIT_PLAN_PROTOCOL_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,14 @@ class RefitTransformPlan:
     transform_id: str
     components: tuple[TransformComponentSpec, ...]
     finalize_scope: Literal["parameter", "layer", "model"]
+
+
+class RefitPlanAgreement(TypedDict):
+    """Serializable agreement checked before a refit transfer starts."""
+
+    protocol_version: int
+    component_count: int
+    plan_signature: str
 
 
 class RefitTransformCodec(Protocol):
@@ -130,3 +141,94 @@ def plan_signature(plans: Mapping[str, RefitTransformPlan]) -> str:
     ]
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def build_plan_agreement(
+    plans: Mapping[str, RefitTransformPlan],
+) -> RefitPlanAgreement:
+    """Build the compact protocol agreement for a set of parameter plans."""
+    return {
+        "protocol_version": REFIT_PLAN_PROTOCOL_VERSION,
+        "component_count": sum(len(plan.components) for plan in plans.values()),
+        "plan_signature": plan_signature(plans),
+    }
+
+
+def plans_from_serialized_metadata(
+    refit_info: Mapping[str, Any],
+) -> dict[str, RefitTransformPlan]:
+    """Rebuild topology-independent plans from primitive refit metadata."""
+    plans: dict[str, RefitTransformPlan] = {}
+    for params in refit_info.get("per_layer_params", {}).values():
+        for param in params:
+            name = str(param["name"])
+            if name in plans:
+                raise ValueError(f"Duplicate refit parameter metadata for {name!r}.")
+            components = tuple(
+                TransformComponentSpec(
+                    role=str(component["role"]),
+                    global_shape=tuple(int(size) for size in component["global_shape"]),
+                    dtype_name=str(component["dtype"]),
+                )
+                for component in param["components"]
+            )
+            if not components:
+                raise ValueError(f"Refit parameter {name!r} has no components.")
+            finalize_scope = str(param["finalize_scope"])
+            if finalize_scope not in {"parameter", "layer", "model"}:
+                raise ValueError(
+                    f"Refit parameter {name!r} has invalid finalize scope "
+                    f"{finalize_scope!r}."
+                )
+            plans[name] = RefitTransformPlan(
+                transform_id=str(param["transform_id"]),
+                components=components,
+                finalize_scope=cast(
+                    Literal["parameter", "layer", "model"], finalize_scope
+                ),
+            )
+    return plans
+
+
+def agreement_from_serialized_metadata(
+    refit_info: Mapping[str, Any],
+) -> RefitPlanAgreement:
+    """Independently derive the canonical agreement from serialized metadata."""
+    return build_plan_agreement(plans_from_serialized_metadata(refit_info))
+
+
+def advertised_agreement_from_metadata(
+    refit_info: Mapping[str, Any],
+) -> RefitPlanAgreement:
+    """Read the primitive agreement fields carried on the wire."""
+    return {
+        "protocol_version": int(refit_info["refit_protocol_version"]),
+        "component_count": int(refit_info["refit_component_count"]),
+        "plan_signature": str(refit_info["plan_signature"]),
+    }
+
+
+def validate_serialized_plan_agreement(
+    refit_info: Mapping[str, Any],
+) -> RefitPlanAgreement:
+    """Require advertised fields to match the plan rebuilt from parameters."""
+    advertised = advertised_agreement_from_metadata(refit_info)
+    derived = agreement_from_serialized_metadata(refit_info)
+    if advertised != derived:
+        raise ValueError(
+            "Serialized refit plan agreement does not match parameter metadata: "
+            f"advertised={advertised}, derived={derived}."
+        )
+    return derived
+
+
+def require_matching_agreements(
+    agreements: list[RefitPlanAgreement], *, participants: str
+) -> RefitPlanAgreement:
+    """Collapse actor agreements, rejecting missing or divergent results."""
+    if not agreements:
+        raise ValueError(f"No refit plan agreement returned by {participants}.")
+    first = agreements[0]
+    if any(agreement != first for agreement in agreements[1:]):
+        raise ValueError(f"Refit plan agreement mismatch among {participants}.")
+    return first

@@ -40,6 +40,7 @@ from nemo_rl.models.generation.megatron import MegatronGeneration
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.lm_policy import Policy
 from nemo_rl.utils.checkpoint import CheckpointManager
+from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
 from tests.unit.test_utils import SimpleLossFn
 
 pytestmark = pytest.mark.mcore
@@ -224,6 +225,183 @@ def test_megatron_move_model_does_not_serialize_extra_state():
     assert moved_model is model
     assert model.weight.device.type == "cpu"
     assert model.scale.device.type == "cpu"
+
+
+def test_checkpoint_engine_prequant_handshake_exports_mxfp8_weights():
+    from nemo_rl.models.policy.workers.checkpoint_engine import (
+        MegatronCheckpointEngineSendMixin,
+    )
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+    from nemo_rl.weight_sync.checkpoint_engine_weight_synchronizer import (
+        CheckpointEngineWeightSynchronizer,
+    )
+
+    class _PrequantCheckpointWorker(MegatronCheckpointEngineSendMixin):
+        enable_refit_transforms = MegatronPolicyWorkerImpl.enable_refit_transforms
+        _iter_params_with_optional_kv_scales = (
+            MegatronPolicyWorkerImpl._iter_params_with_optional_kv_scales
+        )
+        _maybe_prequantize_param = MegatronPolicyWorkerImpl._maybe_prequantize_param
+
+    name = "model.layers.0.mlp.down_proj.weight"
+    weight = torch.randn(64, 64, dtype=torch.bfloat16)
+    worker = _PrequantCheckpointWorker()
+    worker._refit_prequant_names = set()
+    worker.model = object()
+    worker.draft_model = None
+    worker.refit_conversion_tasks = []
+    worker.cfg = {"megatron_cfg": {"enabled": True}}
+    worker.megatron_bridge = SimpleNamespace(
+        export_hf_weights=lambda *_args, **_kwargs: iter([(name, weight)])
+    )
+    worker.prepare_refit_info = lambda: {name: (weight.shape, weight.dtype)}
+    worker.checkpoint_engine = SimpleNamespace(get_target_weight_layout=lambda: None)
+
+    class _Generation:
+        def __init__(self) -> None:
+            self.refit_info: list[dict[str, Any]] = []
+
+        def prepare_refit_info(
+            self, state_dict_info: dict[str, Any] | None
+        ) -> list[RefitTransformRequest] | None:
+            assert state_dict_info is not None
+            self.refit_info.append(state_dict_info)
+            if len(self.refit_info) != 1:
+                return None
+            return [
+                RefitTransformRequest(
+                    parameter_names=(name,),
+                    source_format="bf16",
+                    target_format="mxfp8_e4m3_e8m0",
+                )
+            ]
+
+    generation = _Generation()
+    synchronizer = CheckpointEngineWeightSynchronizer(worker, generation, {})
+    synchronizer._ensure_checkpoint_engine_ready = lambda: None
+
+    synchronizer.init_communicator()
+    exported = dict(worker._checkpoint_engine_weight_iterator())
+
+    scale_name = name + "_scale_from_checkpoint"
+    assert generation.refit_info[1][name][1] == torch.float8_e4m3fn
+    assert generation.refit_info[1][scale_name][1] == torch.uint8
+    assert exported[name].dtype == torch.float8_e4m3fn
+    assert exported[scale_name].dtype == torch.uint8
+    assert exported[scale_name].shape == (64, 2)
+
+
+@pytest.mark.parametrize(
+    ("requests", "source_info", "error"),
+    [
+        (
+            [
+                RefitTransformRequest(
+                    parameter_names=("unknown.weight",),
+                    source_format="bf16",
+                    target_format="mxfp8_e4m3_e8m0",
+                )
+            ],
+            {"model.weight": ((64, 64), torch.bfloat16)},
+            "Unknown refit transform parameter",
+        ),
+        (
+            [
+                RefitTransformRequest(
+                    parameter_names=("model.weight",),
+                    source_format="bf16",
+                    target_format="mxfp8_e4m3_e8m0",
+                ),
+                RefitTransformRequest(
+                    parameter_names=("model.weight",),
+                    source_format="bf16",
+                    target_format="mxfp8_e4m3_e8m0",
+                ),
+            ],
+            {"model.weight": ((64, 64), torch.bfloat16)},
+            "Duplicate refit transform request",
+        ),
+        (
+            [
+                RefitTransformRequest(
+                    parameter_names=("model.z.weight", "model.a.weight"),
+                    source_format="bf16",
+                    target_format="mxfp8_e4m3_e8m0",
+                )
+            ],
+            {
+                "model.a.weight": ((64, 64), torch.bfloat16),
+                "model.z.weight": ((64, 64), torch.bfloat16),
+            },
+            "must be sorted and unique",
+        ),
+        (
+            [
+                RefitTransformRequest(
+                    parameter_names=("model.weight",),
+                    source_format="bf16",
+                    target_format="mxfp8_e4m3_e8m0",
+                )
+            ],
+            {"model.weight": ((64, 64), torch.float16)},
+            "requires BF16 parameter storage",
+        ),
+        (
+            [
+                RefitTransformRequest(
+                    parameter_names=("model.weight",),
+                    source_format="bf16",
+                    target_format="unsupported",
+                )
+            ],
+            {"model.weight": ((64, 64), torch.bfloat16)},
+            "No refit transform registered",
+        ),
+    ],
+)
+def test_enable_refit_transforms_validates_before_mutating_state(
+    requests, source_info, error
+) -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._refit_prequant_names = {"existing.weight"}
+    worker._last_refit_param_info_hf = source_info
+    worker._iter_params_with_optional_kv_scales = MagicMock(
+        side_effect=AssertionError(
+            "metadata refresh must not run on validation failure"
+        )
+    )
+
+    with pytest.raises(ValueError, match=error):
+        worker.enable_refit_transforms(requests)
+
+    assert worker._refit_prequant_names == {"existing.weight"}
+
+
+@pytest.mark.parametrize(
+    ("selected", "dtype"),
+    [(False, torch.bfloat16), (True, torch.float8_e4m3fn)],
+)
+def test_maybe_prequantize_param_passthrough(selected, dtype):
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    name = "model.weight"
+    worker._refit_prequant_names = {name} if selected else set()
+    tensor = torch.ones(2, 2, dtype=dtype)
+
+    result = list(worker._maybe_prequantize_param(name, tensor))
+
+    assert len(result) == 1
+    assert result[0][0] == name
+    assert result[0][1] is tensor
 
 
 def test_megatron_prepare_for_training_restores_optimizer():

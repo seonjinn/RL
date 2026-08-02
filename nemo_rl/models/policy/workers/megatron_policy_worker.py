@@ -20,9 +20,12 @@ import time
 import warnings
 from collections import OrderedDict, defaultdict
 from contextlib import AbstractContextManager, contextmanager, nullcontext
-from typing import Any, Iterable, Iterator, Optional, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Iterable, Iterator, Optional, TypeVar, cast
 
 log = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
 
 import ray
 import torch
@@ -348,6 +351,9 @@ class MegatronPolicyWorkerImpl(
 
         self.cfg = config
         self._router_replay_enabled = router_replay_enabled(config)
+        # HF param names to MXFP8-quantize on the trainer during refit; set by
+        # the structured transform handshake when refit prequantization is on.
+        self._refit_prequant_names: set[str] = set()
         self._nixl_preinit_agent = maybe_preinit_nixl_checkpoint_engine(config)
 
         # Set rank for non-collocated to check which ranks to broadcast from
@@ -1805,7 +1811,7 @@ class MegatronPolicyWorkerImpl(
 
     @torch.no_grad()
     @wrap_with_nvtx_name("megatron_policy_worker/prepare_refit_info")
-    def prepare_refit_info(self) -> None:
+    def prepare_refit_info(self) -> dict[str, Any]:
         """Prepare state dict metadata for weight refitting and IPC streaming."""
         self.refit_param_info_mcore = self._calculate_refit_param_info()
 
@@ -1814,7 +1820,75 @@ class MegatronPolicyWorkerImpl(
         for name, tensor in self._iter_params_with_optional_kv_scales():
             refit_param_info_hf[name] = (tensor.shape, tensor.dtype)
 
+        self._last_refit_param_info_hf = refit_param_info_hf
         return refit_param_info_hf
+
+    def enable_refit_transforms(
+        self, requests: list["RefitTransformRequest"]
+    ) -> dict[str, Any]:
+        """Validate and install source transforms before any refit state changes.
+
+        Args:
+            requests: Structured transform requests reported by generation.
+
+        Returns:
+            Updated refit metadata containing transformed value and scale entries.
+        """
+        from nemo_rl.weight_sync.refit_transforms import resolve_transform
+
+        source_info = getattr(self, "_last_refit_param_info_hf", None)
+        if source_info is None:
+            source_info = self.prepare_refit_info()
+
+        requested_names: set[str] = set()
+        for request in requests:
+            canonical_names = tuple(sorted(set(request.parameter_names)))
+            if request.parameter_names != canonical_names:
+                raise ValueError(
+                    "Refit transform parameter names must be sorted and unique; "
+                    f"got {request.parameter_names!r}."
+                )
+            codec = resolve_transform(request.source_format, request.target_format)
+            for name in request.parameter_names:
+                if name in requested_names:
+                    raise ValueError(f"Duplicate refit transform request for {name!r}.")
+                if name not in source_info:
+                    raise ValueError(f"Unknown refit transform parameter {name!r}.")
+                shape, dtype = source_info[name]
+                if request.source_format == "bf16" and dtype is not torch.bfloat16:
+                    raise ValueError(
+                        f"Refit transform for {name!r} requires BF16 parameter "
+                        f"storage; got {dtype}."
+                    )
+                codec.describe_outputs(tuple(shape), str(dtype))
+                requested_names.add(name)
+
+        self._refit_prequant_names = requested_names
+
+        refit_param_info_hf = {}
+        for name, tensor in self._iter_params_with_optional_kv_scales():
+            refit_param_info_hf[name] = (tensor.shape, tensor.dtype)
+        return refit_param_info_hf
+
+    def _maybe_prequantize_param(
+        self, name: str, tensor: torch.Tensor
+    ) -> Iterator[tuple[str, torch.Tensor]]:
+        if (
+            name not in self._refit_prequant_names
+            or tensor.dtype == torch.float8_e4m3fn
+        ):
+            yield name, tensor
+            return
+
+        # Deferred: pulls in the heavy nemo_rl...generation.vllm package init,
+        # which trainer workers only need when prequantized refit is enabled.
+        from nemo_rl.models.generation.vllm.quantization.fp8_train_utils import (
+            mxfp8_e4m3_quantize_for_refit,
+        )
+
+        param_lp, param_scale = mxfp8_e4m3_quantize_for_refit(tensor)
+        yield name, param_lp
+        yield name + "_scale_from_checkpoint", param_scale
 
     def _collect_mtp_metrics(
         self,

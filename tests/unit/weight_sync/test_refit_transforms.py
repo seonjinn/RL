@@ -4,12 +4,63 @@ import pytest
 
 from nemo_rl.weight_sync import refit_transforms
 from nemo_rl.weight_sync.refit_transforms import (
+    REFIT_PLAN_PROTOCOL_VERSION,
     RefitTransformPlan,
     RefitTransformRequest,
     TransformComponentSpec,
+    build_plan_agreement,
     plan_signature,
+    plans_from_serialized_metadata,
     resolve_transform,
+    validate_serialized_plan_agreement,
 )
+
+
+def _mixed_serialized_metadata() -> tuple[dict, dict]:
+    metadata = {
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": "model.layers.0.input_layernorm.weight",
+                    "transform_id": "identity",
+                    "finalize_scope": "parameter",
+                    "components": [
+                        {
+                            "role": "weight",
+                            "global_shape": [64],
+                            "dtype": "torch.bfloat16",
+                        }
+                    ],
+                },
+                {
+                    "name": "model.layers.0.mlp.down_proj.weight",
+                    "transform_id": "bf16_to_mxfp8_e4m3_e8m0",
+                    "finalize_scope": "parameter",
+                    "components": [
+                        {
+                            "role": "weight",
+                            "global_shape": [64, 64],
+                            "dtype": "torch.float8_e4m3fn",
+                        },
+                        {
+                            "role": "weight_scale",
+                            "global_shape": [64, 2],
+                            "dtype": "torch.uint8",
+                        },
+                    ],
+                },
+            ]
+        }
+    }
+    agreement = build_plan_agreement(plans_from_serialized_metadata(metadata))
+    metadata.update(
+        {
+            "refit_protocol_version": agreement["protocol_version"],
+            "refit_component_count": agreement["component_count"],
+            "plan_signature": agreement["plan_signature"],
+        }
+    )
+    return metadata, agreement
 
 
 def test_bf16_to_mxfp8_codec_describes_weight_and_scale_outputs() -> None:
@@ -74,6 +125,100 @@ def test_plan_signature_ignores_parameter_mapping_insertion_order() -> None:
     }
 
     assert plan_signature(first) == plan_signature(second)
+
+
+def test_serialized_metadata_reproduces_plan_agreement() -> None:
+    metadata = {
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": "model.layers.0.mlp.down_proj.weight",
+                    "transform_id": "bf16_to_mxfp8_e4m3_e8m0",
+                    "finalize_scope": "parameter",
+                    "components": [
+                        {
+                            "role": "weight",
+                            "global_shape": [64, 64],
+                            "dtype": "torch.float8_e4m3fn",
+                        },
+                        {
+                            "role": "weight_scale",
+                            "global_shape": [64, 2],
+                            "dtype": "torch.uint8",
+                        },
+                    ],
+                }
+            ]
+        }
+    }
+
+    plans = plans_from_serialized_metadata(metadata)
+    agreement = build_plan_agreement(plans)
+
+    assert agreement == {
+        "protocol_version": REFIT_PLAN_PROTOCOL_VERSION,
+        "component_count": 2,
+        "plan_signature": plan_signature(plans),
+    }
+
+
+def test_serialized_component_order_changes_plan_agreement() -> None:
+    parameter = {
+        "name": "model.layers.0.mlp.down_proj.weight",
+        "transform_id": "bf16_to_mxfp8_e4m3_e8m0",
+        "finalize_scope": "parameter",
+        "components": [
+            {
+                "role": "weight",
+                "global_shape": [64, 64],
+                "dtype": "torch.float8_e4m3fn",
+            },
+            {
+                "role": "weight_scale",
+                "global_shape": [64, 2],
+                "dtype": "torch.uint8",
+            },
+        ],
+    }
+    reordered = {**parameter, "components": list(reversed(parameter["components"]))}
+
+    first = build_plan_agreement(
+        plans_from_serialized_metadata(
+            {"per_layer_params": {"model.layers.0": [parameter]}}
+        )
+    )
+    second = build_plan_agreement(
+        plans_from_serialized_metadata(
+            {"per_layer_params": {"model.layers.0": [reordered]}}
+        )
+    )
+
+    assert first["plan_signature"] != second["plan_signature"]
+
+
+def test_mixed_identity_and_mxfp8_metadata_reproduces_advertised_agreement() -> None:
+    metadata, agreement = _mixed_serialized_metadata()
+
+    assert validate_serialized_plan_agreement(metadata) == agreement
+    assert agreement["component_count"] == 3
+
+
+@pytest.mark.parametrize(
+    ("field", "corrupted_value"),
+    [
+        ("refit_protocol_version", REFIT_PLAN_PROTOCOL_VERSION + 1),
+        ("refit_component_count", 4),
+        ("plan_signature", "corrupted"),
+    ],
+)
+def test_validate_serialized_plan_agreement_rejects_corrupted_advertisement(
+    field: str, corrupted_value: int | str
+) -> None:
+    metadata, _ = _mixed_serialized_metadata()
+    metadata[field] = corrupted_value
+
+    with pytest.raises(ValueError, match="does not match parameter metadata"):
+        validate_serialized_plan_agreement(metadata)
 
 
 def test_registry_preserves_test_codec_component_order(
