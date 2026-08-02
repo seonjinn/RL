@@ -446,7 +446,7 @@ def test_nemo_gym_eval_logs_results_and_generation_metrics(monkeypatch) -> None:
         ),
     ]
     run_rollout = MagicMock(side_effect=rollout_results)
-    monkeypatch.setattr("nemo_rl.evals.eval.run_async_nemo_gym_rollout", run_rollout)
+    monkeypatch.setattr("nemo_rl.evals.eval.run_nemo_gym_rollout_sync", run_rollout)
     monkeypatch.setattr("nemo_rl.evals.eval._print_results", MagicMock())
     monkeypatch.setattr("nemo_rl.evals.eval.ray.get", lambda value: value)
     log_generation_metrics = MagicMock()
@@ -548,7 +548,7 @@ def test_nemo_gym_eval_tracks_multiple_generations_per_prompt(monkeypatch) -> No
         },
     )
     run_rollout = MagicMock(return_value=rollout_result)
-    monkeypatch.setattr("nemo_rl.evals.eval.run_async_nemo_gym_rollout", run_rollout)
+    monkeypatch.setattr("nemo_rl.evals.eval.run_nemo_gym_rollout_sync", run_rollout)
     monkeypatch.setattr("nemo_rl.evals.eval._print_results", MagicMock())
     monkeypatch.setattr("nemo_rl.evals.eval.ray.get", lambda value: value)
 
@@ -581,6 +581,7 @@ def test_nemo_gym_eval_tracks_multiple_generations_per_prompt(monkeypatch) -> No
     assert result.average_score == pytest.approx(0.625)
     original_batch.repeat_interleave.assert_called_once_with(4)
     assert run_rollout.call_args.kwargs["input_batch"] is repeated_batch
+    assert run_rollout.call_args.kwargs["log_full_result_tables"] is True
     result_jsonl_call = next(
         log_call
         for log_call in logger.log_string_list_as_jsonl.call_args_list
@@ -609,7 +610,7 @@ def test_nemo_gym_eval_rejects_incomplete_full_results(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr(
-        "nemo_rl.evals.eval.run_async_nemo_gym_rollout",
+        "nemo_rl.evals.eval.run_nemo_gym_rollout_sync",
         MagicMock(return_value=rollout_result),
     )
     monkeypatch.setattr("nemo_rl.evals.eval.ray.get", lambda value: value)
