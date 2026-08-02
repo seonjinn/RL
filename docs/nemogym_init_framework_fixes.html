@@ -54,7 +54,28 @@ Companion to the <a href="nemogym_swe_efficiency_report.html">broader overhead a
 <tr><td>Optimization ceilings and candidate benefits</td><td><span class="status projected">Projected</span></td><td>Derived from the n=24 ledger or from the stated mechanism; none is a measured outcome.</td></tr>
 </table>
 
-<h2>2. Corrected committed aggregate ledger</h2>
+<h2 id="current-execution-status">2. Current execution status — 2026-08-01</h2>
+<div class="lesson"><b>Live state:</b> OCI-HSG has no active matching SWE rollout performance job. Job <code>5755875</code> completed the Linux/GPU correctness gate; it was not a rollout benchmark.</div>
+<table>
+<tr><th>Arm or stage</th><th>Source</th><th>Verified state</th><th>Next gate</th></tr>
+<tr><td>A — latest main</td><td><code>1afc767c</code></td><td><span class="status inspected">Source prepared</span></td><td>n=1 rollout canary</td></tr>
+<tr><td>B — A + NeMo-RL #3390</td><td><code>41374086</code></td><td><span class="status inspected">Source prepared</span></td><td>n=1 rollout canary</td></tr>
+<tr><td>C — B + NeMo-RL #3283</td><td><code>6f8ca0b6</code></td><td><span class="status committed">Correctness gate passed</span><br>OCI-HSG job <code>5755875</code>: <code>COMPLETED</code>, exit <code>0:0</code>; 246 tests passed, real PIECEWISE/FULL CUDA Graph capture observed.</td><td>n=1 rollout canary</td></tr>
+<tr><td>D — C + node-local OpenHands staging</td><td>Refreshed arm not frozen</td><td><span class="status handoff">Historical measured only</span></td><td>Port and unit-test the opt-in patch, then run n=1</td></tr>
+<tr><td>Progressive candidates</td><td>One candidate per branch</td><td><span class="status projected">Not started; no active job</span></td><td>Begin only after the A/B/C/D gate</td></tr>
+</table>
+<div class="warn"><b>Evidence boundary:</b> job <code>5755875</code> loaded no SWE rollout dataset and produced no trajectory-duration, token-count, ReplayBuffer, throughput, or phase-timing result. The refreshed performance comparison remains pending.</div>
+<h3>One-variable progression</h3>
+<ol>
+  <li>Complete the launcher, provenance manifest, result parser, and parser tests.</li>
+  <li>Run A/B/C/D with one prompt, one generation, and concurrency one.</li>
+  <li>Run matched n=24 ABBA comparisons only for correctness-passing arms.</li>
+  <li>Use allocation-to-result wall including one-time setup, failures, and drain as the primary result; report concurrent phase sums separately.</li>
+  <li>Promote a meaningful and correct result to matched n=80 reproduction.</li>
+  <li>Test each progressive candidate through static/unit, n=1, n=24, and conditional n=80 without combining candidates.</li>
+</ol>
+
+<h2>3. Corrected committed aggregate ledger</h2>
 <h3>Per-rollout phases, n=24</h3>
 <table>
 <tr><th>Phase, seconds per rollout</th><th>Unpatched</th><th>Patched</th><th>Delta</th><th>Status</th><th>Interpretation</th></tr>
@@ -76,7 +97,7 @@ Companion to the <a href="nemogym_swe_efficiency_report.html">broader overhead a
 <p>The stable connect plus framework saving is 9.3 seconds per rollout (3.9 + 5.4). The modeled mirror break-even is <span class="status projected">Projected</span> <code>216 / 9.3 = 23.2</code>, or approximately 24 rollouts. This is a phase-normalized model, not an observed break-even result.</p>
 <p>The n=80 result is <span class="status handoff">Handoff-reported</span>: 948 seconds or 7.7% net job-wall savings. Its raw artifact and job IDs remain pending, so it must not be used as a validated replication.</p>
 
-<h2>3. Code-grounded root causes</h2>
+<h2>4. Code-grounded root causes</h2>
 <h3>Workspace initialization: a hard-link attempt always falls back to a full copy</h3>
 <p>The entry script attempts this exact workspace setup:</p>
 <pre><code>if ! cp -al /testbed /workspace/$WORKSPACE_NAME 2&gt;/dev/null; then
@@ -91,7 +112,7 @@ fi</code></pre>
 <h3>Action-server connection: warm globals cannot survive the process boundary</h3>
 <p><span class="status inspected">Code-inspected</span> <code>LocalRuntime</code> starts a fresh <code>python -u -m openhands.runtime.action_execution_server</code> process. It imports its stack, constructs <code>ActionExecutor</code>, and initializes bash, plugins, and environment state. The process is terminated when the rollout completes. Any warm-server globals are process-local and disappear when the one-shot <code>run_infer.py</code> process exits.</p>
 
-<h2>4. Ranked optimization candidates</h2>
+<h2>5. Ranked optimization candidates</h2>
 <table>
 <tr><th>Rank and candidate</th><th>Mechanism and expected benefit</th><th>Maturity</th><th>Quantitative pass / fail gate</th><th>Evidence</th></tr>
 <tr><td><b>1. Versioned prebuilt OpenHands squashfs</b></td><td>Replace the 216-second metadata-heavy mirror with a versioned large sequential artifact; bake rewritten container paths and checked-hash bytecode.</td><td>High-confidence, low-risk candidate.</td><td>Pass only if setup is at most 36 s, at least 180 s below current setup, with byte-level manifest parity and no rollout-phase or valid-rate regression.</td><td><span class="status projected">Projected</span></td></tr>
@@ -103,7 +124,7 @@ fi</code></pre>
 </table>
 <div class="warn"><b>Isolation rule:</b> never use a writable hard-link cache. Shared writable inodes would allow one rollout to mutate another rollout's workspace and invalidate SWE isolation.</div>
 
-<h2>5. Validation matrix</h2>
+<h2>6. Validation matrix</h2>
 <p><span class="status projected">Projected protocol</span> Run an ABBA job-level crossover with at least four independent job pairs at n=24 and four at n=80. Record allocation-to-result wall, setup, failed rollouts, and drain time. Resample paired jobs, never rollouts within a job. Use deterministic replay for systems isolation and temperature-1 live rollout for operational, reward, and completion validation.</p>
 <table>
 <tr><th>Common acceptance gate</th><th>Pass condition</th><th>Status</th></tr>
@@ -114,7 +135,7 @@ fi</code></pre>
 <tr><td>Failure safety</td><td>No new timeout, OOM, Ray, stale-cache, workspace-isolation, or process-leak failure class.</td><td><span class="status projected">Projected</span></td></tr>
 </table>
 
-<h2>6. Failed-attempt ledger and retracted hypotheses</h2>
+<h2>7. Failed-attempt ledger and retracted hypotheses</h2>
 <table>
 <tr><th>Attempt</th><th>Result</th><th>Classification</th><th>Root cause / retry condition</th><th>Status</th></tr>
 <tr><td><code>NRL_SKIP_GIT_RESET=1</code></td><td>About 0.2 s saved (20.1 to 19.9 s).</td><td>Null result</td><td>Git reset was not the cost center; workspace copy is. Do not prioritize further git work.</td><td><span class="status handoff">Handoff-reported</span></td></tr>
@@ -126,7 +147,7 @@ fi</code></pre>
 <tr><td>Reuse a used action server</td><td>Deferred.</td><td>Unvalidated</td><td>Require a proven reset protocol and leakage sentinels before testing; start with one-use prewarmed servers.</td><td><span class="status projected">Projected</span></td></tr>
 </table>
 
-<h2>7. Remaining committed aggregate and projected ceiling</h2>
+<h2>8. Remaining committed aggregate and projected ceiling</h2>
 <p><span class="status committed">Committed aggregate</span> In the patched n=24 ledger, Connect + Initialize + Framework is 49.3 seconds of the 123.6-second phase total.</p>
 <table>
 <tr><th>Ceiling</th><th>Calculation</th><th>Result</th><th>Status</th></tr>
