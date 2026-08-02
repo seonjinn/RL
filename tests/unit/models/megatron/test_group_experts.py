@@ -291,7 +291,7 @@ def test_nccl_reshard_refit_transfers_ordered_components(monkeypatch, component_
         )
 
 
-def test_nccl_reshard_refit_rejects_component_count_before_transfer_or_post(
+def test_nccl_reshard_refit_records_every_temporary_component_on_transfer_stream(
     monkeypatch,
 ):
     from nemo_rl.weight_sync.nccl_reshard_utils import (
@@ -300,8 +300,99 @@ def test_nccl_reshard_refit_rejects_component_count_before_transfer_or_post(
         RefitCtx,
     )
 
+    stream = object()
+    transfer_calls = []
+
+    class CudaLikeTensor:
+        dtype = torch.float32
+        device = torch.device("cuda")
+        is_cuda = True
+
+        def __init__(self):
+            self.recorded_streams = []
+
+        def record_stream(self, actual_stream):
+            self.recorded_streams.append(actual_stream)
+
+    tensors = tuple(CudaLikeTensor() for _ in range(4))
+    components = [
+        {
+            "role": f"component_{index}",
+            "global_shape": (2, index + 1),
+            "src_placements": [object()],
+            "dst_placements": [object()],
+        }
+        for index in range(len(tensors))
+    ]
+    name = "model.layers.0.mlp.down_proj.weight"
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.my_pp_stage = 0
+    worker.pp_comm_group = object()
+    worker.nccl_reshard_refit_info = {
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": name,
+                    "src_mesh_info": object(),
+                    "dst_mesh_info": object(),
+                    "components": components,
+                }
+            ]
+        },
+    }
+    worker.hf_to_local_param_map = HFToLocalParamMap(
+        specs={
+            name: LocalParamSpec(
+                base=None,
+                pre=lambda _: RefitCtx(
+                    buf=tensors[0],
+                    transfer_tensors=tensors,
+                ),
+            )
+        }
+    )
+    worker._broadcast_misc_params_packed = lambda kv_scales=None: None
+
+    monkeypatch.setattr(
+        "nemo_rl.weight_sync.xferdtensor.xferdtensor",
+        lambda src, *_args, **_kwargs: transfer_calls.append(src._local_tensor),
+    )
+    monkeypatch.setattr(torch.cuda, "current_stream", lambda: stream)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(torch.distributed, "get_rank", lambda: 1)
+
+    worker.nccl_reshard_refit()
+
+    assert transfer_calls == list(tensors)
+    assert [tensor.recorded_streams for tensor in tensors] == [[stream]] * len(tensors)
+
+
+@pytest.mark.parametrize(
+    ("case", "component_count", "transfer_count", "error"),
+    [
+        ("explicit_empty", 1, 0, "component count"),
+        ("empty_components", 0, 1, "nonempty component list"),
+        ("underfilled", 2, 1, "component count"),
+        ("overfilled", 1, 2, "component count"),
+    ],
+)
+def test_nccl_reshard_refit_rejects_invalid_component_counts_before_transfer_or_post(
+    monkeypatch,
+    case,
+    component_count,
+    transfer_count,
+    error,
+):
+    from nemo_rl.weight_sync.nccl_reshard_utils import (
+        HFToLocalParamMap,
+        LocalParamSpec,
+        RefitCtx,
+    )
+
     calls = []
-    tensor = torch.empty(2, 2)
+    tensors = tuple(torch.empty(2, 2) for _ in range(max(transfer_count, 1)))
     worker = object.__new__(MegatronPolicyWorkerImpl)
     worker.my_pp_stage = 0
     worker.pp_comm_group = object()
@@ -315,17 +406,12 @@ def test_nccl_reshard_refit_rejects_component_count_before_transfer_or_post(
                     "dst_mesh_info": object(),
                     "components": [
                         {
-                            "role": "weight",
+                            "role": f"component_{index}",
                             "global_shape": (2, 2),
                             "src_placements": [object()],
                             "dst_placements": [object()],
-                        },
-                        {
-                            "role": "weight_scale",
-                            "global_shape": (2, 1),
-                            "src_placements": [object()],
-                            "dst_placements": [object()],
-                        },
+                        }
+                        for index in range(component_count)
                     ],
                 }
             ]
@@ -334,8 +420,11 @@ def test_nccl_reshard_refit_rejects_component_count_before_transfer_or_post(
     worker.hf_to_local_param_map = HFToLocalParamMap(
         specs={
             "model.layers.0.mlp.down_proj.weight": LocalParamSpec(
-                base=tensor,
-                pre=lambda _: RefitCtx(buf=tensor, transfer_tensors=(tensor,)),
+                base=tensors[0],
+                pre=lambda _: RefitCtx(
+                    buf=tensors[0],
+                    transfer_tensors=tensors[:transfer_count],
+                ),
                 post=lambda _: calls.append("post"),
             )
         }
@@ -348,7 +437,7 @@ def test_nccl_reshard_refit_rejects_component_count_before_transfer_or_post(
     )
     monkeypatch.setattr(torch.cuda, "current_stream", lambda: object())
 
-    with pytest.raises(ValueError, match="component count"):
+    with pytest.raises(ValueError, match=error):
         worker.nccl_reshard_refit()
 
-    assert calls == []
+    assert calls == [], case
