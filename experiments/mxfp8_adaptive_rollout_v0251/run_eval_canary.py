@@ -9,7 +9,11 @@ from pathlib import Path
 
 from omegaconf import OmegaConf
 
+import nemo_rl.evals.eval as eval_module
 from examples.run_eval import setup_data
+from experiments.mxfp8_adaptive_rollout_v0251.generation_timing import (
+    AsyncCallTimer,
+)
 from nemo_rl.algorithms.utils import get_tokenizer
 from nemo_rl.data.datasets.eval_datasets import _is_multimodal_dataset
 from nemo_rl.distributed.virtual_cluster import init_ray
@@ -55,7 +59,16 @@ def main() -> None:
     )
     generation, dataloader, master_config = setup(config, tokenizer, dataset)
     print(f"NEMORL_CANARY event=model_ready epoch={time.time()}", flush=True)
+    generation_timer = AsyncCallTimer()
+    eval_module._generate_texts = generation_timer.wrap(  # noqa: SLF001
+        eval_module._generate_texts  # noqa: SLF001
+    )
     run_env_eval(generation, dataloader, env, master_config)
+    print(
+        "NEMORL_CANARY event=generation "
+        f"seconds={generation_timer.elapsed_seconds} calls={generation_timer.calls}",
+        flush=True,
+    )
 
     output_dir = Path(os.environ["CANARY_OUTPUT_DIR"])
     output_tokens = _count_output_tokens(output_dir, tokenizer)

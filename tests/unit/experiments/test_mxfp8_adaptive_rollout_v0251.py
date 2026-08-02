@@ -1,11 +1,15 @@
 import hashlib
 import json
+import asyncio
 from pathlib import Path
 
 import pytest
 import yaml
 
 from experiments.mxfp8_adaptive_rollout_v0251 import summarize
+from experiments.mxfp8_adaptive_rollout_v0251.generation_timing import (
+    AsyncCallTimer,
+)
 from experiments.mxfp8_adaptive_rollout_v0251.contract import (
     AdaptiveInputs,
     TraceInputs,
@@ -113,8 +117,10 @@ def test_summary_rejects_partial_log(tmp_path: Path) -> None:
         "arm": "baseline",
         "complete": False,
         "elapsed_seconds": None,
+        "generation_calls": None,
         "generation_seconds": None,
         "gpu_count": 8,
+        "measurement_scope": "rollout_eval_wall",
         "model_load_seconds": None,
         "output_tokens": None,
         "tokens_per_second": None,
@@ -143,13 +149,54 @@ def test_summary_reads_completed_run(tmp_path: Path) -> None:
         "arm": "adaptive",
         "complete": True,
         "elapsed_seconds": 10.0,
+        "generation_calls": None,
         "generation_seconds": 5.5,
         "gpu_count": 4,
+        "measurement_scope": "rollout_eval_wall",
         "model_load_seconds": 4.5,
         "output_tokens": 8192,
         "tokens_per_second": pytest.approx(1489.4545454545455),
         "tokens_per_second_per_gpu": pytest.approx(372.3636363636364),
     }
+
+
+def test_generation_timer_accumulates_only_wrapped_async_calls() -> None:
+    clock_values = iter((10.0, 12.5, 20.0, 21.5))
+    timer = AsyncCallTimer(clock=lambda: next(clock_values))
+
+    async def generate(value: str) -> str:
+        return value.upper()
+
+    timed_generate = timer.wrap(generate)
+
+    assert asyncio.run(timed_generate("first")) == "FIRST"
+    assert asyncio.run(timed_generate("second")) == "SECOND"
+    assert timer.calls == 2
+    assert timer.elapsed_seconds == pytest.approx(4.0)
+
+
+def test_summary_prefers_generation_call_timing_marker(tmp_path: Path) -> None:
+    log = tmp_path / "run.log"
+    log.write_text(
+        "\n".join(
+            [
+                "NEMORL_CANARY arm=adaptive event=start epoch=0",
+                "NEMORL_CANARY event=model_ready epoch=10",
+                "NEMORL_CANARY event=generation seconds=4.0 calls=2",
+                "NEMORL_CANARY event=outputs tokens=1000",
+                "NEMORL_CANARY event=complete epoch=20",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    summary = summarize_log(log, gpu_count=8)
+
+    assert summary["generation_seconds"] == 4.0
+    assert summary["generation_calls"] == 2
+    assert summary["measurement_scope"] == "generation_calls"
+    assert summary["tokens_per_second"] == 250.0
+    assert summary["tokens_per_second_per_gpu"] == 31.25
 
 
 def test_summary_rejects_non_positive_gpu_count(tmp_path: Path) -> None:

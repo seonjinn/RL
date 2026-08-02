@@ -13,8 +13,10 @@ class RunSummary(TypedDict):
     arm: str | None
     complete: bool
     elapsed_seconds: float | None
+    generation_calls: int | None
     generation_seconds: float | None
     gpu_count: int
+    measurement_scope: str
     model_load_seconds: float | None
     output_tokens: int | None
     tokens_per_second: float | None
@@ -63,6 +65,26 @@ def _token_count(fields: dict[str, str]) -> int | None:
     return tokens if tokens >= 0 else None
 
 
+def _nonnegative_float(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except ValueError:
+        return None
+    return parsed if math.isfinite(parsed) and parsed >= 0 else None
+
+
+def _positive_count(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
+
+
 def _duration(end: float | None, start: float | None) -> float | None:
     if end is None or start is None or end < start:
         return None
@@ -78,6 +100,8 @@ def summarize_log(path: Path, *, gpu_count: int = 8) -> RunSummary:
     model_ready: float | None = None
     complete: float | None = None
     output_tokens: int | None = None
+    direct_generation_seconds: float | None = None
+    generation_calls: int | None = None
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         fields = _fields(line)
         if not fields:
@@ -95,13 +119,25 @@ def summarize_log(path: Path, *, gpu_count: int = 8) -> RunSummary:
             output_tokens = (
                 parsed_tokens if parsed_tokens is not None else output_tokens
             )
+        elif event == "generation":
+            parsed_seconds = _nonnegative_float(fields.get("seconds"))
+            parsed_calls = _positive_count(fields.get("calls"))
+            if parsed_seconds is not None and parsed_calls is not None:
+                direct_generation_seconds = parsed_seconds
+                generation_calls = parsed_calls
         elif event == "complete":
             parsed_epoch = _epoch(fields)
             complete = parsed_epoch if parsed_epoch is not None else complete
 
     elapsed_seconds = _duration(complete, start)
     model_load_seconds = _duration(model_ready, start)
-    generation_seconds = _duration(complete, model_ready)
+    rollout_eval_seconds = _duration(complete, model_ready)
+    if direct_generation_seconds is None:
+        generation_seconds = rollout_eval_seconds
+        measurement_scope = "rollout_eval_wall"
+    else:
+        generation_seconds = direct_generation_seconds
+        measurement_scope = "generation_calls"
     is_complete = elapsed_seconds is not None
     tokens_per_second: float | None = None
     if (
@@ -117,8 +153,10 @@ def summarize_log(path: Path, *, gpu_count: int = 8) -> RunSummary:
         "arm": arm,
         "complete": is_complete,
         "elapsed_seconds": elapsed_seconds,
+        "generation_calls": generation_calls,
         "generation_seconds": generation_seconds,
         "gpu_count": gpu_count,
+        "measurement_scope": measurement_scope,
         "model_load_seconds": model_load_seconds,
         "output_tokens": output_tokens,
         "tokens_per_second": tokens_per_second,

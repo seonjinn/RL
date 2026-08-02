@@ -73,20 +73,26 @@ def test_qwen30_performance_config_uses_eight_engines_and_adaptive_contract() ->
     assert len(dataset_path.read_text(encoding="utf-8").splitlines()) == 64
 
 
-def test_qwen30_ab_submitter_validates_inputs_and_submits_without_dependency() -> None:
+def test_qwen30_ab_submitter_binds_committed_artifacts_and_pulls_first() -> None:
     submitter_path = EXPERIMENT / "submit_qwen30_ab_ptyche.sh"
     submitter = submitter_path.read_text(encoding="utf-8")
 
     assert "run_ab.sh run" in submitter
     assert "eval_qwen3_30ba3b_performance.yaml" in submitter
-    assert "TACTIC_FILE=${TACTIC_FILE:?" in submitter
-    assert "TACTIC_SHA256=${TACTIC_SHA256:?" in submitter
-    assert "LAYER_ALLOWLIST_B64=${LAYER_ALLOWLIST_B64:?" in submitter
+    assert "data/qwen3_30ba3b_shmoo_2500876" in submitter
+    assert 'TACTIC_FILE="$artifact_dir/exact_tactics.json"' in submitter
+    assert (
+        "a613a598b94d226b4b907477043108882fbf4286b82928d059ba33b74f489f0a" in submitter
+    )
+    assert 'base64 < "$LAYER_ALLOWLIST_FILE"' in submitter
     assert "sha256sum --check" in submitter
 
     assert 'git -C "$NEMO_RL_REPO_ROOT" diff --quiet' in submitter
     assert 'git -C "$NEMO_RL_REPO_ROOT" diff --cached --quiet' in submitter
     assert 'git -C "$NEMO_RL_REPO_ROOT" pull --ff-only' in submitter
+    assert submitter.index('git -C "$NEMO_RL_REPO_ROOT" pull --ff-only') < (
+        submitter.index("lock_sha=")
+    )
     assert 'git -C "$CUSTOM_VLLM_SOURCE" rev-parse HEAD' in submitter
     assert 'git -C "$CUSTOM_VLLM_SOURCE" diff --quiet' in submitter
     assert 'git -C "$CUSTOM_VLLM_SOURCE" diff --cached --quiet' in submitter
@@ -98,3 +104,17 @@ def test_qwen30_ab_submitter_validates_inputs_and_submits_without_dependency() -
     assert "args+=(--test-only)" in submitter
     assert "afterok" not in submitter
     assert "run_trace.sh" not in submitter
+
+
+def test_qwen30_ab_submitter_validates_inputs_and_submits_without_dependency() -> None:
+    submitter_path = EXPERIMENT / "submit_qwen30_ab_ptyche.sh"
+    submitter = submitter_path.read_text(encoding="utf-8")
+
+    assert "run_ab.sh run" in submitter
+    assert "eval_qwen3_30ba3b_performance.yaml" in submitter
+    assert "--nodes=2" in submitter
+    assert "--time=05:00:00" in submitter
+    assert "--segment=2" in submitter
+    assert "--dependency=" in submitter
+    assert "args+=(--test-only)" in submitter
+    assert "afterok" not in submitter

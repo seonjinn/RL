@@ -11,6 +11,11 @@ export NEMO_RL_REPO_ROOT=${NEMO_RL_REPO_ROOT:-/home/sna/nemorl-v0251-mxfp8-safe-
 export CUSTOM_VLLM_SOURCE=${CUSTOM_VLLM_SOURCE:-/home/sna/mxfp8-safe-backend/vllm-v0251-safe-backend}
 export EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-658d7b1571a914bee7df48f717c2a428ee7c45ad}
 
+git -C "$NEMO_RL_REPO_ROOT" diff --quiet
+git -C "$NEMO_RL_REPO_ROOT" diff --cached --quiet
+git -C "$NEMO_RL_REPO_ROOT" pull --ff-only
+git -C "$NEMO_RL_REPO_ROOT" submodule update --init --recursive --depth 1
+
 for name in \
   NEMORL_MXFP8_LINEAR_BACKEND \
   VLLM_MXFP8_DENSE_SHAPE_TRACE \
@@ -28,9 +33,12 @@ for name in \
   unset "$name"
 done
 
-export TACTIC_FILE=${TACTIC_FILE:?set TACTIC_FILE to the Qwen exact tactic table}
-export TACTIC_SHA256=${TACTIC_SHA256:?set TACTIC_SHA256 for the Qwen table}
-export LAYER_ALLOWLIST_B64=${LAYER_ALLOWLIST_B64:?set the Qwen LAYER_ALLOWLIST_B64}
+artifact_dir="$NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout_v0251/data/qwen3_30ba3b_shmoo_2500876"
+export TACTIC_FILE="$artifact_dir/exact_tactics.json"
+export TACTIC_SHA256=a613a598b94d226b4b907477043108882fbf4286b82928d059ba33b74f489f0a
+LAYER_ALLOWLIST_FILE="$artifact_dir/layer_allowlist.txt"
+export LAYER_ALLOWLIST_B64
+LAYER_ALLOWLIST_B64=$(base64 < "$LAYER_ALLOWLIST_FILE")
 
 timestamp=$(date +%Y%m%d_%H%M%S)
 export CANARY_RESULT_ROOT=${CANARY_RESULT_ROOT:-/home/sna/results/nemorl-qwen30-mxfp8-adaptive-ab/$timestamp}
@@ -60,10 +68,6 @@ fi
 export RAY_CLI="$NEMO_RL_DRIVER_VENV_DIR/bin/ray"
 
 sha256sum --check <(printf '%s  %s\n' "$TACTIC_SHA256" "$TACTIC_FILE")
-git -C "$NEMO_RL_REPO_ROOT" diff --quiet
-git -C "$NEMO_RL_REPO_ROOT" diff --cached --quiet
-git -C "$NEMO_RL_REPO_ROOT" pull --ff-only
-git -C "$NEMO_RL_REPO_ROOT" submodule update --init --recursive --depth 1
 
 actual_vllm_commit=$(git -C "$CUSTOM_VLLM_SOURCE" rev-parse HEAD)
 if [[ "$actual_vllm_commit" != "$EXPECTED_VLLM_COMMIT" ]]; then
