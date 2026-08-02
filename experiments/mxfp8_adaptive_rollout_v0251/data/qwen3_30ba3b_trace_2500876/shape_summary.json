@@ -1,0 +1,77 @@
+{
+  "eligible": true,
+  "record_count": 80,
+  "signatures": [
+    {
+      "k": 2048,
+      "layout": "8x4",
+      "m": 1,
+      "n_logical": 151936,
+      "n_physical": 151936
+    },
+    {
+      "k": 2048,
+      "layout": "8x4",
+      "m": 15,
+      "n_logical": 128,
+      "n_physical": 128
+    },
+    {
+      "k": 2048,
+      "layout": "8x4",
+      "m": 35,
+      "n_logical": 128,
+      "n_physical": 128
+    },
+    {
+      "k": 2048,
+      "layout": "8x4",
+      "m": 35,
+      "n_logical": 151936,
+      "n_physical": 151936
+    },
+    {
+      "k": 2048,
+      "layout": "8x4",
+      "m": 36,
+      "n_logical": 128,
+      "n_physical": 128
+    },
+    {
+      "k": 2048,
+      "layout": "8x4",
+      "m": 36,
+      "n_logical": 151936,
+      "n_physical": 151936
+    },
+    {
+      "k": 2048,
+      "layout": "8x4",
+      "m": 256,
+      "n_logical": 128,
+      "n_physical": 128
+    },
+    {
+      "k": 2048,
+      "layout": "8x4",
+      "m": 256,
+      "n_logical": 151936,
+      "n_physical": 151936
+    },
+    {
+      "k": 2048,
+      "layout": "128x4",
+      "m": 4266,
+      "n_logical": 128,
+      "n_physical": 128
+    },
+    {
+      "k": 2048,
+      "layout": "128x4",
+      "m": 16384,
+      "n_logical": 128,
+      "n_physical": 128
+    }
+  ],
+  "unique_signature_count": 10
+}

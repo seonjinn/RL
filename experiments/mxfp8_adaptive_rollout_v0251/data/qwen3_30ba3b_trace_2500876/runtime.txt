@@ -1,0 +1,3 @@
+vllm_source=/home/sna/mxfp8-safe-backend/vllm-v0251-safe-backend
+vllm_runtime_root=/home/sna/.cache/vllm-runtime-overlays/379ff48ec14b7f68-658d7b1571a9/c0651bd34db7c5f3cb25988d
+vllm_commit=658d7b1571a914bee7df48f717c2a428ee7c45ad

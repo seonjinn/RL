@@ -1,0 +1,789 @@
+{
+  "duplicate_record_count": 70,
+  "input_file_count": 8,
+  "layout_counts": {
+    "128x4": {
+      "record_count": 16,
+      "unique_signature_count": 2
+    },
+    "8x4": {
+      "record_count": 64,
+      "unique_signature_count": 8
+    }
+  },
+  "record_count": 80,
+  "schema_version": 1,
+  "signatures": [
+    {
+      "k": 2048,
+      "layout": "8x4",
+      "m": 1,
+      "n_logical": 151936,
+      "n_physical": 151936,
+      "prefixes": [
+        "unknown"
+      ],
+      "provenance": [
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912538,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912538.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912545,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912545.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912552,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912552.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912559,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912559.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794130,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794130.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794137,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794137.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794144,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794144.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794151,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794151.jsonl"
+        }
+      ],
+      "record_count": 8
+    },
+    {
+      "k": 2048,
+      "layout": "8x4",
+      "m": 15,
+      "n_logical": 128,
+      "n_physical": 128,
+      "prefixes": [
+        "model.layers.0.mlp.gate"
+      ],
+      "provenance": [
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912538,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912538.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912545,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912545.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912552,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912552.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912559,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912559.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794130,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794130.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794137,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794137.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794144,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794144.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794151,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794151.jsonl"
+        }
+      ],
+      "record_count": 8
+    },
+    {
+      "k": 2048,
+      "layout": "8x4",
+      "m": 35,
+      "n_logical": 128,
+      "n_physical": 128,
+      "prefixes": [
+        "model.layers.0.mlp.gate"
+      ],
+      "provenance": [
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912538,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912538.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912545,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912545.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912552,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912552.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912559,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912559.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794130,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794130.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794137,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794137.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794144,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794144.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794151,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794151.jsonl"
+        }
+      ],
+      "record_count": 8
+    },
+    {
+      "k": 2048,
+      "layout": "8x4",
+      "m": 35,
+      "n_logical": 151936,
+      "n_physical": 151936,
+      "prefixes": [
+        "unknown"
+      ],
+      "provenance": [
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912538,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912538.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912545,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912545.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912552,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912552.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912559,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912559.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794130,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794130.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794137,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794137.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794144,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794144.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794151,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794151.jsonl"
+        }
+      ],
+      "record_count": 8
+    },
+    {
+      "k": 2048,
+      "layout": "8x4",
+      "m": 36,
+      "n_logical": 128,
+      "n_physical": 128,
+      "prefixes": [
+        "model.layers.0.mlp.gate"
+      ],
+      "provenance": [
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912538,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912538.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912545,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912545.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912552,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912552.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912559,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912559.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794130,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794130.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794137,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794137.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794144,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794144.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794151,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794151.jsonl"
+        }
+      ],
+      "record_count": 8
+    },
+    {
+      "k": 2048,
+      "layout": "8x4",
+      "m": 36,
+      "n_logical": 151936,
+      "n_physical": 151936,
+      "prefixes": [
+        "unknown"
+      ],
+      "provenance": [
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912538,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912538.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912545,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912545.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912552,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912552.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912559,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912559.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794130,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794130.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794137,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794137.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794144,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794144.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794151,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794151.jsonl"
+        }
+      ],
+      "record_count": 8
+    },
+    {
+      "k": 2048,
+      "layout": "8x4",
+      "m": 256,
+      "n_logical": 128,
+      "n_physical": 128,
+      "prefixes": [
+        "model.layers.0.mlp.gate"
+      ],
+      "provenance": [
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912538,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912538.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912545,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912545.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912552,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912552.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912559,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912559.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794130,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794130.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794137,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794137.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794144,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794144.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794151,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794151.jsonl"
+        }
+      ],
+      "record_count": 8
+    },
+    {
+      "k": 2048,
+      "layout": "8x4",
+      "m": 256,
+      "n_logical": 151936,
+      "n_physical": 151936,
+      "prefixes": [
+        "unknown"
+      ],
+      "provenance": [
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912538,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912538.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912545,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912545.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912552,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912552.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912559,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912559.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794130,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794130.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794137,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794137.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794144,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794144.jsonl"
+        },
+        {
+          "family": "OtherDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794151,
+          "prefix": "unknown",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794151.jsonl"
+        }
+      ],
+      "record_count": 8
+    },
+    {
+      "k": 2048,
+      "layout": "128x4",
+      "m": 4266,
+      "n_logical": 128,
+      "n_physical": 128,
+      "prefixes": [
+        "model.layers.0.mlp.gate"
+      ],
+      "provenance": [
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912538,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912538.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912545,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912545.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912552,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912552.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912559,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912559.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794130,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794130.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794137,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794137.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794144,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794144.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794151,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794151.jsonl"
+        }
+      ],
+      "record_count": 8
+    },
+    {
+      "k": 2048,
+      "layout": "128x4",
+      "m": 16384,
+      "n_logical": 128,
+      "n_physical": 128,
+      "prefixes": [
+        "model.layers.0.mlp.gate"
+      ],
+      "provenance": [
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912538,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912538.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912545,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912545.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912552,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912552.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0251.ptyche.clusters.nvidia.com",
+          "pid": 1912559,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0251.ptyche.clusters.nvidia.com_1912559.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794130,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794130.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794137,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794137.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794144,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794144.jsonl"
+        },
+        {
+          "family": "MLPOrExpertDense",
+          "hostname": "ptyche0252.ptyche.clusters.nvidia.com",
+          "pid": 2794151,
+          "prefix": "model.layers.0.mlp.gate",
+          "record_count": 1,
+          "source_file": "dense_shapes_ptyche0252.ptyche.clusters.nvidia.com_2794151.jsonl"
+        }
+      ],
+      "record_count": 8
+    }
+  ],
+  "unique_signature_count": 10
+}
