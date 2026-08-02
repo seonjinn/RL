@@ -36,9 +36,10 @@ from torch.distributed._tensor import Shard
 from torch.distributed.tensor.placement_types import Replicate
 
 from nemo_rl.weight_sync.refit_transforms import (
+    REFIT_PLAN_PROTOCOL_VERSION,
     RefitTransformPlan,
     TransformComponentSpec,
-    plan_signature,
+    build_plan_agreement,
     resolve_transform,
 )
 
@@ -504,6 +505,8 @@ def _build_component_metadata(
         for component in component_specs
     ]
     info["components"] = components
+    info["transform_id"] = transform_id
+    info["finalize_scope"] = "parameter"
 
     if target_format == "mxfp8_e4m3_e8m0":
         weight_component = next(
@@ -1077,6 +1080,7 @@ def build_nccl_reshard_refit_info(
 
         per_layer_params.setdefault(layer, []).append(info)
 
+    agreement = build_plan_agreement(transform_plans)
     return {
         "layer_names": list(per_layer_params.keys()),
         "per_layer_params": per_layer_params,
@@ -1084,5 +1088,7 @@ def build_nccl_reshard_refit_info(
         "gen_world_size": gen_world_size,
         "pp_size": pp_size,
         "gen_tp_size": gen_parallelism.get("tp_size", 1),
-        "plan_signature": plan_signature(transform_plans),
+        "refit_protocol_version": REFIT_PLAN_PROTOCOL_VERSION,
+        "refit_component_count": agreement["component_count"],
+        "plan_signature": agreement["plan_signature"],
     }

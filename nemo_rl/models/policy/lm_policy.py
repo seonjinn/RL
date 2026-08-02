@@ -15,7 +15,7 @@ import os
 import warnings
 from collections import defaultdict
 from contextlib import nullcontext
-from typing import Any, Iterable, Optional, Union
+from typing import TYPE_CHECKING, Any, Iterable, Optional, Union
 
 import numpy as np
 import ray
@@ -59,6 +59,9 @@ from nemo_rl.utils.flops_tracker import (
 from nemo_rl.utils.timer import Timer
 
 PathLike = Union[str, "os.PathLike[Any]"]
+
+if TYPE_CHECKING:
+    from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
 
 
 def _aggregate_megatron_flops_metrics(
@@ -942,18 +945,20 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         # Only get the first worker's info since all workers will have the same result
         return results[0]
 
-    def enable_refit_prequantize(
-        self, param_names: list[str]
+    def enable_refit_transforms(
+        self, requests: list["RefitTransformRequest"]
     ) -> Optional[dict[str, Any]]:
-        """Enable trainer-side MXFP8 quantization of the listed params for refit.
+        """Enable negotiated trainer-side transforms for refit.
 
         Returns:
             dict: Refit info updated with quantized dtypes and scale entries.
         """
         futures = self.worker_group.run_all_workers_single_data(
-            "enable_refit_prequantize", param_names=param_names
+            "enable_refit_transforms", requests=requests
         )
         results = ray.get(futures)
+        if not results:
+            return None
         return results[0]
 
     def finish_inference(self) -> None:
@@ -1133,6 +1138,19 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             gen_world_size=gen_world_size,
         )
         results = ray.get(futures)
+        if not results:
+            raise ValueError(
+                "No NCCL-Reshard refit metadata returned by policy workers."
+            )
+        from nemo_rl.weight_sync.refit_transforms import (
+            require_matching_agreements,
+            validate_serialized_plan_agreement,
+        )
+
+        require_matching_agreements(
+            [validate_serialized_plan_agreement(result) for result in results],
+            participants="policy workers",
+        )
         return results[0]
 
     def nccl_reshard_refit(self, kv_scales=None) -> list[ray.ObjectRef]:

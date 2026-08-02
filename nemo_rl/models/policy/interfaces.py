@@ -24,6 +24,7 @@ from nemo_rl.utils.timer import Timer
 
 if TYPE_CHECKING:
     from nemo_rl.models.policy import PolicyConfig
+    from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
 
 
 class LogprobOutputSpec(TypedDict):
@@ -190,16 +191,16 @@ class ColocatablePolicyInterface(PolicyInterface):
     def prepare_refit_info(self) -> Optional[dict[str, Any]]:
         pass
 
-    def enable_refit_prequantize(
-        self, param_names: list[str]
+    def enable_refit_transforms(
+        self, requests: list["RefitTransformRequest"]
     ) -> Optional[dict[str, Any]]:
-        """Quantize the listed params on the trainer during refit streaming.
+        """Enable validated source transforms for subsequent refit exports.
 
         Returns:
-            Refit info updated with the quantized dtypes and scale entries.
+            Refit info updated with transformed tensor metadata.
         """
         raise NotImplementedError(
-            "enable_refit_prequantize is not implemented for this policy worker"
+            "enable_refit_transforms is not implemented for this policy worker"
         )
 
     @abstractmethod

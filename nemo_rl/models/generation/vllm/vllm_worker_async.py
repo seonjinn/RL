@@ -53,6 +53,7 @@ from nemo_rl.models.generation.vllm.vllm_worker import BaseVllmGenerationWorker
 from nemo_rl.models.generation.openai_server_utils import (
     replace_prefix_tokens,
 )
+from nemo_rl.weight_sync.refit_transforms import RefitPlanAgreement
 
 LOGGER = logging.getLogger(__name__)
 
@@ -1420,10 +1421,17 @@ class VllmAsyncGenerationWorkerImpl(
             ),
         )
 
-    async def prepare_nccl_reshard_refit_info_async(self, refit_info: dict) -> None:
+    async def prepare_nccl_reshard_refit_info_async(
+        self, refit_info: dict
+    ) -> RefitPlanAgreement:
         """Async version of prepare_nccl_reshard_refit_info."""
-        await self.llm.collective_rpc(
+        results = await self.llm.collective_rpc(
             "prepare_nccl_reshard_refit_info", args=(refit_info,)
+        )
+        from nemo_rl.weight_sync.refit_transforms import require_matching_agreements
+
+        return require_matching_agreements(
+            results, participants="internal asynchronous vLLM workers"
         )
 
     async def nccl_reshard_refit_async(self) -> bool:

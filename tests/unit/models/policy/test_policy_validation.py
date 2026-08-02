@@ -26,6 +26,12 @@ import pytest
 
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.lm_policy import Policy
+from nemo_rl.weight_sync.refit_transforms import (
+    RefitTransformPlan,
+    RefitTransformRequest,
+    TransformComponentSpec,
+    build_plan_agreement,
+)
 
 
 def test_shutdown_succeeds_before_worker_group_is_initialized(capsys) -> None:
@@ -35,7 +41,7 @@ def test_shutdown_succeeds_before_worker_group_is_initialized(capsys) -> None:
     assert capsys.readouterr().out == ""
 
 
-def test_enable_refit_prequantize_forwards_names_and_returns_metadata(
+def test_enable_refit_transforms_forwards_requests_and_returns_metadata(
     monkeypatch,
 ) -> None:
     policy = Policy.__new__(Policy)
@@ -49,14 +55,66 @@ def test_enable_refit_prequantize_forwards_names_and_returns_metadata(
     ray_get = MagicMock(return_value=[updated_info])
     monkeypatch.setattr("nemo_rl.models.policy.lm_policy.ray.get", ray_get)
 
-    result = policy.enable_refit_prequantize(["model.weight"])
+    request = RefitTransformRequest(
+        parameter_names=("model.weight",),
+        source_format="bf16",
+        target_format="mxfp8_e4m3_e8m0",
+    )
+    result = policy.enable_refit_transforms([request])
 
     assert result is updated_info
     policy.worker_group.run_all_workers_single_data.assert_called_once_with(
-        "enable_refit_prequantize",
-        param_names=["model.weight"],
+        "enable_refit_transforms",
+        requests=[request],
     )
     ray_get.assert_called_once_with(futures)
+
+
+def test_prepare_nccl_refit_info_rejects_policy_worker_agreement_mismatch(
+    monkeypatch,
+) -> None:
+    policy = Policy.__new__(Policy)
+    policy.worker_group = MagicMock()
+    policy.worker_group.run_all_workers_single_data.return_value = [object(), object()]
+    base = {
+        "per_layer_params": {},
+        "refit_protocol_version": 1,
+        "refit_component_count": 0,
+        "plan_signature": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    }
+    plan = RefitTransformPlan(
+        transform_id="identity",
+        components=(TransformComponentSpec("weight", (2, 2), "torch.bfloat16"),),
+        finalize_scope="parameter",
+    )
+    agreement = build_plan_agreement({"model.weight": plan})
+    other = {
+        "per_layer_params": {
+            "model": [
+                {
+                    "name": "model.weight",
+                    "transform_id": "identity",
+                    "finalize_scope": "parameter",
+                    "components": [
+                        {
+                            "role": "weight",
+                            "global_shape": (2, 2),
+                            "dtype": "torch.bfloat16",
+                        }
+                    ],
+                }
+            ]
+        },
+        "refit_protocol_version": agreement["protocol_version"],
+        "refit_component_count": agreement["component_count"],
+        "plan_signature": agreement["plan_signature"],
+    }
+    monkeypatch.setattr(
+        "nemo_rl.models.policy.lm_policy.ray.get", lambda _refs: [base, other]
+    )
+
+    with pytest.raises(ValueError, match="agreement mismatch among policy workers"):
+        policy.prepare_nccl_reshard_refit_info({}, {}, 1, 1)
 
 
 def create_mock_cluster(world_size: int):

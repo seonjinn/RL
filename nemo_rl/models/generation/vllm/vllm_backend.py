@@ -45,6 +45,7 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
     _STR_TO_DTYPE,
     _extract_layer_prefix,
 )
+from nemo_rl.weight_sync.refit_transforms import RefitPlanAgreement
 
 logger = logging.getLogger(__name__)
 
@@ -944,7 +945,7 @@ class VllmInternalWorkerExtension:
     def finish_sparse_delta_refit(self) -> dict[str, Any]:
         return self._get_sparse_delta_applier().finish_sparse_delta_refit()
 
-    def prepare_nccl_reshard_refit_info(self, refit_info: dict) -> None:
+    def prepare_nccl_reshard_refit_info(self, refit_info: dict) -> RefitPlanAgreement:
         """Restore per-layer param metadata and build the HF→vLLM mapping.
 
         Done once ahead of refit; the cached mapping is reused by every
@@ -961,6 +962,11 @@ class VllmInternalWorkerExtension:
         self.hf_to_local_param_map = self.build_hf_to_local_param_map(  # pyrefly: ignore[implicitly-defined-attribute]
             self.nccl_reshard_refit_info
         )
+        from nemo_rl.weight_sync.refit_transforms import (
+            agreement_from_serialized_metadata,
+        )
+
+        return agreement_from_serialized_metadata(self.nccl_reshard_refit_info)
 
     def build_hf_to_local_param_map(self, refit_info: dict) -> HFToLocalParamMap:
         """Build the vLLM-backend ``hf_to_local_param_map`` (HFToLocalParamMap).

@@ -52,8 +52,8 @@ def initialize_refit_metadata(
 ) -> None:
     """Negotiate the wire-format metadata used by policy-to-generation refit."""
     state_dict_info = policy.prepare_refit_info()
-    prequant_names = generation.prepare_refit_info(state_dict_info)
-    if not prequant_names:
+    requests = generation.prepare_refit_info(state_dict_info)
+    if not requests:
         return
 
     megatron_cfg = policy.cfg.get("megatron_cfg")
@@ -64,7 +64,7 @@ def initialize_refit_metadata(
             "implement trainer-side pre-quantized refit."
         )
 
-    updated_info = policy.enable_refit_prequantize(prequant_names)
+    updated_info = policy.enable_refit_transforms(requests=requests)
     if updated_info is None:
         raise RuntimeError(
             "Trainer-side refit prequantization did not return updated metadata."

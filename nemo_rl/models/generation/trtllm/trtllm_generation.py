@@ -435,9 +435,7 @@ class TrtllmGeneration(GenerationInterface):
             print(f"Error in finish_generation: {e}")
             return False
 
-    def prepare_refit_info(
-        self, state_dict_info: Optional[dict[str, Any]]
-    ) -> Optional[list[str]]:
+    def prepare_refit_info(self, state_dict_info: Optional[dict[str, Any]]) -> None:
         if state_dict_info is None:
             return None
         futures = self.worker_group.run_all_workers_single_data(

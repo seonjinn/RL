@@ -27,8 +27,8 @@ Lifecycle:
     1. policy/generation.init_collective()           -- model_update_group (misc)
     2. policy/generation.init_nccl_reshard_comm_group()  -- per-PP-stage bulk groups
     3. policy.prepare_refit_info()
-       -> generation.prepare_refit_info()             -- optional prequant negotiation
-       -> policy.enable_refit_prequantize()
+       -> generation.prepare_refit_info()             -- optional transform negotiation
+       -> policy.enable_refit_transforms()
        -> generation.prepare_refit_info()             -- refresh transformed metadata
     4. policy.prepare_nccl_reshard_refit_info()
        -> generation.prepare_nccl_reshard_refit_info()   -- backend-agnostic metadata
@@ -46,7 +46,8 @@ from typing import Any, Optional
 import ray
 
 from nemo_rl.utils.timer import Timer
-from nemo_rl.weight_sync.interfaces import WeightSynchronizer
+from nemo_rl.weight_sync.interfaces import WeightSynchronizer, initialize_refit_metadata
+from nemo_rl.weight_sync.refit_transforms import validate_serialized_plan_agreement
 
 
 class NcclReshardWeightSynchronizer(WeightSynchronizer):
@@ -200,17 +201,9 @@ class NcclReshardWeightSynchronizer(WeightSynchronizer):
         )
         ray.get(futures_train + futures_inference)
 
-        # 3. Negotiate trainer-side prequantization before building the bulk
-        #    metadata so every policy worker has enabled the selected names.
-        state_dict_info = self._policy.prepare_refit_info()
-        prequant_names = self._generation.prepare_refit_info(state_dict_info)
-        if prequant_names:
-            updated_info = self._policy.enable_refit_prequantize(prequant_names)
-            if updated_info is None:
-                raise RuntimeError(
-                    "Trainer-side refit prequantization did not return updated metadata."
-                )
-            self._generation.prepare_refit_info(updated_info)
+        # 3. Negotiate source transforms through the shared transport-independent
+        #    handshake before building bulk metadata.
+        initialize_refit_metadata(self._policy, self._generation)
 
         # 4. Refit metadata.  Train builds backend-agnostic per-layer metadata
         #    (HF naming convention); gen maps it into its own fused layout
@@ -221,7 +214,15 @@ class NcclReshardWeightSynchronizer(WeightSynchronizer):
             train_world_size,
             inference_world_size,
         )
-        self._generation.prepare_nccl_reshard_refit_info(nccl_reshard_refit_info)
+        source_agreement = validate_serialized_plan_agreement(nccl_reshard_refit_info)
+        destination_agreement = self._generation.prepare_nccl_reshard_refit_info(
+            nccl_reshard_refit_info
+        )
+        if source_agreement != destination_agreement:
+            raise ValueError(
+                "NCCL-Reshard refit plan agreement mismatch before transfer: "
+                f"source={source_agreement}, destination={destination_agreement}."
+            )
 
     def shutdown(self) -> None:
         # The NCCL process groups' lifecycle is managed by Ray actor teardown;

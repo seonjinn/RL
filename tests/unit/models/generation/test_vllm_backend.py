@@ -228,6 +228,59 @@ async def test_async_prepare_refit_info_unions_worker_names(monkeypatch):
 
 
 @pytest.mark.vllm
+def test_sync_nccl_refit_agreement_propagates_and_rejects_rank_mismatch():
+    from nemo_rl.models.generation.vllm.vllm_worker import (
+        VllmGenerationWorkerImpl,
+    )
+
+    agreement = {
+        "protocol_version": 1,
+        "component_count": 2,
+        "plan_signature": "same",
+    }
+    worker = VllmGenerationWorkerImpl.__new__(VllmGenerationWorkerImpl)
+    worker.llm = SimpleNamespace(
+        collective_rpc=MagicMock(return_value=[agreement, agreement.copy()])
+    )
+
+    assert worker.prepare_nccl_reshard_refit_info({}) == agreement
+
+    worker.llm.collective_rpc.return_value = [
+        agreement,
+        {**agreement, "plan_signature": "different"},
+    ]
+    with pytest.raises(ValueError, match="agreement mismatch"):
+        worker.prepare_nccl_reshard_refit_info({})
+
+
+@pytest.mark.vllm
+@pytest.mark.asyncio
+async def test_async_nccl_refit_agreement_propagates_and_rejects_rank_mismatch():
+    from nemo_rl.models.generation.vllm.vllm_worker_async import (
+        VllmAsyncGenerationWorkerImpl,
+    )
+
+    agreement = {
+        "protocol_version": 1,
+        "component_count": 2,
+        "plan_signature": "same",
+    }
+    worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
+    worker.llm = SimpleNamespace(
+        collective_rpc=AsyncMock(return_value=[agreement, agreement.copy()])
+    )
+
+    assert await worker.prepare_nccl_reshard_refit_info_async({}) == agreement
+
+    worker.llm.collective_rpc.return_value = [
+        agreement,
+        {**agreement, "component_count": 3},
+    ]
+    with pytest.raises(ValueError, match="agreement mismatch"):
+        await worker.prepare_nccl_reshard_refit_info_async({})
+
+
+@pytest.mark.vllm
 @pytest.mark.parametrize("with_mtp", [False, True])
 def test_update_weights_from_collective_processes_weights_after_loading(
     monkeypatch, with_mtp

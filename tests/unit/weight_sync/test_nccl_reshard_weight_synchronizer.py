@@ -19,19 +19,111 @@ import pytest
 from nemo_rl.weight_sync.nccl_reshard_weight_synchronizer import (
     NcclReshardWeightSynchronizer,
 )
+from nemo_rl.weight_sync.refit_transforms import (
+    RefitTransformPlan,
+    RefitTransformRequest,
+    TransformComponentSpec,
+    build_plan_agreement,
+)
+
+
+_PARAM_NAME = "model.layers.0.mlp.down_proj.weight"
+
+
+def _refit_info() -> dict[str, object]:
+    plan = RefitTransformPlan(
+        transform_id="bf16_to_mxfp8_e4m3_e8m0",
+        components=(
+            TransformComponentSpec("weight", (64, 64), "torch.float8_e4m3fn"),
+            TransformComponentSpec("weight_scale", (64, 2), "torch.uint8"),
+        ),
+        finalize_scope="parameter",
+    )
+    agreement = build_plan_agreement({_PARAM_NAME: plan})
+    return {
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": _PARAM_NAME,
+                    "transform_id": plan.transform_id,
+                    "finalize_scope": plan.finalize_scope,
+                    "components": [
+                        {
+                            "role": component.role,
+                            "global_shape": component.global_shape,
+                            "dtype": component.dtype_name,
+                        }
+                        for component in plan.components
+                    ],
+                }
+            ]
+        },
+        "refit_protocol_version": agreement["protocol_version"],
+        "refit_component_count": agreement["component_count"],
+        "plan_signature": agreement["plan_signature"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("protocol_version", 2),
+        ("component_count", 3),
+        ("plan_signature", "destination"),
+    ],
+)
+@patch("nemo_rl.weight_sync.nccl_reshard_weight_synchronizer.ray.get")
+def test_init_communicator_rejects_destination_plan_mismatch_before_refit(
+    _mock_ray_get: MagicMock,
+    field: str,
+    value: object,
+) -> None:
+    synchronizer = _build_synchronizer([], {})
+    request = RefitTransformRequest(
+        parameter_names=("model.layers.0.mlp.down_proj.weight",),
+        source_format="bf16",
+        target_format="mxfp8_e4m3_e8m0",
+    )
+    synchronizer._generation.prepare_refit_info.side_effect = [[request], None]
+    synchronizer._policy.enable_refit_transforms.return_value = {
+        "model.layers.0.mlp.down_proj.weight": {"dtype": "torch.float8_e4m3fn"}
+    }
+    source_info = _refit_info()
+    synchronizer._policy.prepare_nccl_reshard_refit_info.side_effect = None
+    synchronizer._policy.prepare_nccl_reshard_refit_info.return_value = source_info
+    synchronizer._generation.prepare_nccl_reshard_refit_info.side_effect = None
+    destination = {
+        "protocol_version": source_info["refit_protocol_version"],
+        "component_count": source_info["refit_component_count"],
+        "plan_signature": source_info["plan_signature"],
+    }
+    destination[field] = value
+    synchronizer._generation.prepare_nccl_reshard_refit_info.return_value = destination
+
+    with pytest.raises(ValueError, match="refit plan agreement mismatch"):
+        synchronizer.init_communicator()
+
+    synchronizer._policy.nccl_reshard_refit.assert_not_called()
+    synchronizer._generation.nccl_reshard_refit.assert_not_called()
 
 
 def _build_synchronizer(
     events: list[str], updated_info: dict[str, object] | None
 ) -> NcclReshardWeightSynchronizer:
-    bf16_info = {"model.layers.0.mlp.down_proj.weight": {"dtype": "torch.bfloat16"}}
-    prequant_names = ["model.layers.0.mlp.down_proj.weight"]
+    bf16_info = {_PARAM_NAME: {"dtype": "torch.bfloat16"}}
+    request = RefitTransformRequest(
+        parameter_names=(_PARAM_NAME,),
+        source_format="bf16",
+        target_format="mxfp8_e4m3_e8m0",
+    )
     mxfp8_info = updated_info
-    nccl_reshard_info = {"layer_names": ["model.layers.0"]}
+    nccl_reshard_info = _refit_info()
 
     policy = MagicMock()
     policy.cfg = {
         "megatron_cfg": {
+            "enabled": True,
             "tensor_model_parallel_size": 1,
             "expert_model_parallel_size": 1,
             "pipeline_model_parallel_size": 1,
@@ -45,11 +137,12 @@ def _build_synchronizer(
         events.append("policy.prepare_refit_info")
         return bf16_info
 
-    def policy_enable_refit_prequantize(
-        names: list[str],
+    def policy_enable_refit_transforms(
+        *,
+        requests: list[RefitTransformRequest],
     ) -> dict[str, object] | None:
-        assert names == prequant_names
-        events.append("policy.enable_refit_prequantize")
+        assert requests == [request]
+        events.append("policy.enable_refit_transforms")
         return mxfp8_info
 
     def policy_prepare_nccl_reshard_refit_info(
@@ -59,7 +152,7 @@ def _build_synchronizer(
         return nccl_reshard_info
 
     policy.prepare_refit_info.side_effect = policy_prepare_refit_info
-    policy.enable_refit_prequantize.side_effect = policy_enable_refit_prequantize
+    policy.enable_refit_transforms.side_effect = policy_enable_refit_transforms
     policy.prepare_nccl_reshard_refit_info.side_effect = (
         policy_prepare_nccl_reshard_refit_info
     )
@@ -70,19 +163,24 @@ def _build_synchronizer(
 
     def generation_prepare_refit_info(
         state_dict_info: dict[str, object],
-    ) -> list[str] | None:
+    ) -> list[RefitTransformRequest] | None:
         if state_dict_info is bf16_info:
             events.append("generation.prepare_refit_info:bf16")
-            return prequant_names
+            return [request]
         assert state_dict_info is mxfp8_info
         events.append("generation.prepare_refit_info:mxfp8")
         return None
 
     def generation_prepare_nccl_reshard_refit_info(
         refit_info: dict[str, object],
-    ) -> None:
+    ) -> dict[str, object]:
         assert refit_info is nccl_reshard_info
         events.append("generation.prepare_nccl_reshard_refit_info")
+        return {
+            "protocol_version": refit_info["refit_protocol_version"],
+            "component_count": refit_info["refit_component_count"],
+            "plan_signature": refit_info["plan_signature"],
+        }
 
     generation.prepare_refit_info.side_effect = generation_prepare_refit_info
     generation.prepare_nccl_reshard_refit_info.side_effect = (
@@ -124,7 +222,7 @@ def test_init_communicator_completes_prequant_handshake_in_order(
     assert events == [
         "policy.prepare_refit_info",
         "generation.prepare_refit_info:bf16",
-        "policy.enable_refit_prequantize",
+        "policy.enable_refit_transforms",
         "generation.prepare_refit_info:mxfp8",
         "policy.prepare_nccl_reshard_refit_info",
         "generation.prepare_nccl_reshard_refit_info",
@@ -144,7 +242,7 @@ def test_init_communicator_rejects_missing_prequant_metadata(
     assert events == [
         "policy.prepare_refit_info",
         "generation.prepare_refit_info:bf16",
-        "policy.enable_refit_prequantize",
+        "policy.enable_refit_transforms",
     ]
 
 
@@ -172,4 +270,4 @@ def test_init_communicator_preserves_untransformed_metadata_path(
         "policy.prepare_nccl_reshard_refit_info",
         "generation.prepare_nccl_reshard_refit_info",
     ]
-    synchronizer._policy.enable_refit_prequantize.assert_not_called()
+    synchronizer._policy.enable_refit_transforms.assert_not_called()

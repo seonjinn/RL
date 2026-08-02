@@ -38,6 +38,11 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (  # noqa: E402
     HFToLocalParamMap,
     MeshInfo,
 )
+from nemo_rl.weight_sync.refit_transforms import (  # noqa: E402
+    RefitTransformPlan,
+    TransformComponentSpec,
+    build_plan_agreement,
+)
 
 pytestmark = pytest.mark.vllm
 
@@ -402,6 +407,49 @@ def test_prepare_refit_rejects_untransformed_destination_metadata_mismatch(
 
     with pytest.raises(ValueError, match=error):
         ext.prepare_nccl_reshard_refit_info(refit_info)
+
+
+def test_prepare_refit_returns_agreement_rebuilt_after_destination_mapping():
+    from torch.distributed.tensor.placement_types import Replicate
+
+    name = "model.layers.0.mlp.down_proj.weight"
+    plan = RefitTransformPlan(
+        transform_id="identity",
+        components=(TransformComponentSpec("weight", (32, 64), "torch.bfloat16"),),
+        finalize_scope="parameter",
+    )
+    expected = build_plan_agreement({name: plan})
+    refit_info = {
+        "gen_tp_size": 1,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": name,
+                    "global_shape": [32, 64],
+                    "dtype": "torch.bfloat16",
+                    "src_mesh_info": MeshInfo(torch.arange(1)),
+                    "src_placements": [Replicate()],
+                    "dst_mesh_info": MeshInfo(torch.arange(1)),
+                    "dst_placements": [Replicate()],
+                    "transform_id": plan.transform_id,
+                    "finalize_scope": plan.finalize_scope,
+                    "components": _identity_components(
+                        (32, 64),
+                        torch.bfloat16,
+                        src_placements=[Replicate()],
+                        dst_placements=[Replicate()],
+                    ),
+                }
+            ]
+        },
+        "refit_protocol_version": 99,
+        "refit_component_count": 99,
+        "plan_signature": "not-echoed",
+    }
+    ext = _make_ext({name: torch.empty(32, 64, dtype=torch.bfloat16)})
+
+    assert ext.prepare_nccl_reshard_refit_info(refit_info) == expected
 
 
 def test_build_mxfp8_map_receives_value_and_scale_into_matching_slices():

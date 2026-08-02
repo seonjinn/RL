@@ -29,6 +29,7 @@ from nemo_rl.weight_sync.checkpoint_engine_weight_synchronizer import (
     _sort_ranked_metadata,
 )
 from nemo_rl.weight_sync.factory import create_weight_synchronizer
+from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
 
 
 def _mock_policy(**overrides):
@@ -158,15 +159,19 @@ class TestCheckpointEngineWeightSynchronizer:
         sync = _checkpoint_sync(MagicMock())
         sync._ensure_checkpoint_engine_ready = MagicMock()
         state_dict_info = {"layer_0": {"shape": [4096, 4096]}}
-        prequant_names = ["layer_0"]
+        request = RefitTransformRequest(
+            parameter_names=("layer_0",),
+            source_format="bf16",
+            target_format="mxfp8_e4m3_e8m0",
+        )
         updated_info = {"layer_0": {"shape": [4096, 4096], "dtype": "float8_e4m3fn"}}
         sync._policy.prepare_refit_info.return_value = state_dict_info
-        sync._generation.prepare_refit_info.side_effect = [prequant_names, None]
-        sync._policy.enable_refit_prequantize.return_value = updated_info
+        sync._generation.prepare_refit_info.side_effect = [[request], None]
+        sync._policy.enable_refit_transforms.return_value = updated_info
 
         sync.init_communicator()
 
-        sync._policy.enable_refit_prequantize.assert_called_once_with(prequant_names)
+        sync._policy.enable_refit_transforms.assert_called_once_with(requests=[request])
         assert sync._generation.prepare_refit_info.call_args_list == [
             call(state_dict_info),
             call(updated_info),
@@ -176,11 +181,16 @@ class TestCheckpointEngineWeightSynchronizer:
     def test_init_communicator_rejects_missing_prequant_metadata(self):
         sync = _checkpoint_sync(MagicMock())
         sync._ensure_checkpoint_engine_ready = MagicMock()
+        request = RefitTransformRequest(
+            parameter_names=("layer_0",),
+            source_format="bf16",
+            target_format="mxfp8_e4m3_e8m0",
+        )
         sync._policy.prepare_refit_info.return_value = {
             "layer_0": {"shape": [4096, 4096]}
         }
-        sync._generation.prepare_refit_info.return_value = ["layer_0"]
-        sync._policy.enable_refit_prequantize.return_value = None
+        sync._generation.prepare_refit_info.return_value = [request]
+        sync._policy.enable_refit_transforms.return_value = None
 
         with pytest.raises(
             RuntimeError,
@@ -194,12 +204,17 @@ class TestCheckpointEngineWeightSynchronizer:
         sync = _checkpoint_sync(MagicMock())
         sync._ensure_checkpoint_engine_ready = MagicMock()
         sync._policy.cfg = {"megatron_cfg": {"enabled": False}}
-        sync._generation.prepare_refit_info.return_value = ["layer_0"]
+        request = RefitTransformRequest(
+            parameter_names=("layer_0",),
+            source_format="bf16",
+            target_format="mxfp8_e4m3_e8m0",
+        )
+        sync._generation.prepare_refit_info.return_value = [request]
 
         with pytest.raises(ValueError, match="requires the Megatron policy backend"):
             sync.init_communicator()
 
-        sync._policy.enable_refit_prequantize.assert_not_called()
+        sync._policy.enable_refit_transforms.assert_not_called()
         sync._ensure_checkpoint_engine_ready.assert_not_called()
 
     @patch("nemo_rl.weight_sync.checkpoint_engine_weight_synchronizer.ray")
