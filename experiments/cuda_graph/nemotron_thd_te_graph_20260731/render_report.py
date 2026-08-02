@@ -589,7 +589,11 @@ def render_html(
         for summary in summaries
         if summary.get("comparison_status") != "eligible"
     ]
-    failures = [row for row in rows if _is_failure(row)]
+    failures = [
+        {**row, "router_replay": row.get("router_replay") or "off"}
+        for row in rows
+        if _is_failure(row)
+    ]
     generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     identity_columns = (

@@ -512,6 +512,23 @@ def test_report_renders_incomplete_rows_as_provisional_and_never_compares_them()
     assert "No comparison-eligible matched baseline pairs." in report
 
 
+def test_report_defaults_legacy_failure_router_replay_without_mutating_input() -> None:
+    renderer = _load_module("render_report")
+    legacy_failure = {
+        "model": "nano",
+        "scope": "attn",
+        "status": "failed",
+        "failure": "intentional test failure",
+        "job_id": "legacy-failure",
+    }
+
+    report = renderer.render_html([legacy_failure])
+
+    assert "router_replay" not in legacy_failure
+    assert "Router replay" in report
+    assert "<td>nano</td><td>attn</td><td>off</td><td>failed</td>" in report
+
+
 def test_provenance_mismatch_prevents_matched_comparison() -> None:
     collector = _load_module("collect_results")
     renderer = _load_module("render_report")
