@@ -94,3 +94,6 @@ ACTION=submit \
 `baseline` disables batched MoE shuffle and loader-route caching. `optimized`
 enables both. Trainer-side MXFP8 prequantization remains enabled in both arms
 because it is the required BF16-to-MXFP8 storage conversion for this transport.
+The wrapper defaults to the source-managed vLLM 0.25 environment used by the
+validated runs; the container actor venv does not contain the required
+`routed_experts` module for this source revision.
