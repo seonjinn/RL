@@ -838,6 +838,47 @@ def test_router_replay_rendering_is_explicit_and_rejects_router_graphs() -> None
         )
 
 
+@pytest.mark.parametrize(
+    ("router_replay_enabled", "override"),
+    (
+        (False, "++policy.router_replay.enabled=true"),
+        (True, "+policy.router_replay.enabled=false"),
+        (True, "++policy.generation.vllm_cfg.enable_prefix_caching=true"),
+        (True, "++policy.generation.vllm_kwargs.enable_chunked_prefill=true"),
+    ),
+)
+def test_router_replay_rejects_normalized_protected_overrides(
+    router_replay_enabled: bool, override: str
+) -> None:
+    module = _load_experiment_module("scope_matrix")
+
+    with pytest.raises(ValueError, match="protected Router Replay override"):
+        module.render_scope_command(
+            model="qwen3_30ba3b",
+            scope=("attn",),
+            steps=5,
+            run_name="protected-override",
+            router_replay_enabled=router_replay_enabled,
+            extra_overrides=(override,),
+        )
+
+
+def test_router_replay_off_allows_unprotected_vllm_override() -> None:
+    module = _load_experiment_module("scope_matrix")
+
+    command = module.render_scope_command(
+        model="qwen3_30ba3b",
+        scope=("attn",),
+        steps=5,
+        run_name="r3off-vllm-override",
+        extra_overrides=("++policy.generation.vllm_cfg.enable_prefix_caching=true",),
+    )
+
+    assert "++policy.generation.vllm_cfg.enable_prefix_caching=true" in shlex.split(
+        command
+    )
+
+
 def test_router_replay_shell_validation_rejects_invalid_and_unsafe_graphs() -> None:
     invalid_value = _run_script(
         "scopes/17_attn.sh",

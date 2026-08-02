@@ -281,6 +281,18 @@ def render_scope_command(
         raise ValueError(
             "Router Replay cannot be combined with a router CUDA Graph scope"
         )
+    protected_overrides = {"policy.router_replay.enabled"}
+    if router_replay_enabled:
+        protected_overrides.update(
+            (
+                "policy.generation.vllm_cfg.enable_prefix_caching",
+                "policy.generation.vllm_kwargs.enable_chunked_prefill",
+            )
+        )
+    for override in extra_overrides:
+        override_key = override.split("=", 1)[0].lstrip("+")
+        if override_key in protected_overrides:
+            raise ValueError(f"protected Router Replay override: {override_key}")
     modules = ",".join(scope)
     command = [
         "env",
