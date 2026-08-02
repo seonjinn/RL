@@ -61,6 +61,31 @@ def _param(*shape):
     return torch.empty(*shape)
 
 
+def _component(role, shape, dtype, *, src_placements=None, dst_placements=None):
+    component = {
+        "role": role,
+        "global_shape": tuple(shape),
+        "dtype": str(dtype),
+    }
+    if src_placements is not None:
+        component["src_placements"] = src_placements
+    if dst_placements is not None:
+        component["dst_placements"] = dst_placements
+    return component
+
+
+def _identity_components(shape, dtype=torch.float32, **kwargs):
+    return [_component("weight", shape, dtype, **kwargs)]
+
+
+def _mxfp8_components(shape, **kwargs):
+    scale_shape = (*shape[:-1], shape[-1] // 32)
+    return [
+        _component("weight", shape, torch.float8_e4m3fn, **kwargs),
+        _component("weight_scale", scale_shape, torch.uint8, **kwargs),
+    ]
+
+
 def test_build_mapping_ffn_only():
     # Downsized bulk path: only FFN gate/up/down reach the resolver.
     H, E, Pl = 32, 2, 64
@@ -73,27 +98,36 @@ def test_build_mapping_ffn_only():
                 {
                     "name": "model.layers.0.mlp.gate_proj.weight",
                     "global_shape": [256, H],
+                    "components": _identity_components((256, H)),
                 },
-                {"name": "model.layers.0.mlp.up_proj.weight", "global_shape": [256, H]},
+                {
+                    "name": "model.layers.0.mlp.up_proj.weight",
+                    "global_shape": [256, H],
+                    "components": _identity_components((256, H)),
+                },
                 {
                     "name": "model.layers.0.mlp.down_proj.weight",
                     "global_shape": [H, 256],
+                    "components": _identity_components((H, 256)),
                 },
                 # MoE experts: gate/up -> w13 halves, down -> w2.
                 {
                     "name": "model.layers.0.mlp.experts.gate_proj.weight",
                     "global_shape": [E, 128, H],
                     "grouped_expert_proj": "gate_proj",
+                    "components": _identity_components((E, 128, H)),
                 },
                 {
                     "name": "model.layers.0.mlp.experts.up_proj.weight",
                     "global_shape": [E, 128, H],
                     "grouped_expert_proj": "up_proj",
+                    "components": _identity_components((E, 128, H)),
                 },
                 {
                     "name": "model.layers.0.mlp.experts.down_proj.weight",
                     "global_shape": [E, H, 128],
                     "grouped_expert_proj": "down_proj",
+                    "components": _identity_components((E, H, 128)),
                 },
             ]
         },
@@ -242,26 +276,35 @@ def test_build_hf_to_local_param_map_specs_and_roundtrip():
                 {
                     "name": "model.layers.0.mlp.gate_proj.weight",
                     "global_shape": [256, H],
+                    "components": _identity_components((256, H)),
                 },
-                {"name": "model.layers.0.mlp.up_proj.weight", "global_shape": [256, H]},
+                {
+                    "name": "model.layers.0.mlp.up_proj.weight",
+                    "global_shape": [256, H],
+                    "components": _identity_components((256, H)),
+                },
                 {
                     "name": "model.layers.0.mlp.down_proj.weight",
                     "global_shape": [H, 256],
+                    "components": _identity_components((H, 256)),
                 },
                 {
                     "name": "model.layers.0.mlp.experts.gate_proj.weight",
                     "global_shape": [E, 128, H],
                     "grouped_expert_proj": "gate_proj",
+                    "components": _identity_components((E, 128, H)),
                 },
                 {
                     "name": "model.layers.0.mlp.experts.up_proj.weight",
                     "global_shape": [E, 128, H],
                     "grouped_expert_proj": "up_proj",
+                    "components": _identity_components((E, 128, H)),
                 },
                 {
                     "name": "model.layers.0.mlp.experts.down_proj.weight",
                     "global_shape": [E, H, 128],
                     "grouped_expert_proj": "down_proj",
+                    "components": _identity_components((E, H, 128)),
                 },
             ]
         },
@@ -313,3 +356,436 @@ def test_build_hf_to_local_param_map_specs_and_roundtrip():
     egctx.buf.fill_(5.0)
     eg.post(egctx)
     assert torch.equal(w13[:, 0:Pl, :], torch.full_like(w13[:, 0:Pl, :], 5.0))
+
+
+@pytest.mark.parametrize(
+    ("dtype", "shape", "error"),
+    [
+        (torch.float32, (32, 64), "dtype"),
+        (torch.bfloat16, (32, 32), "local shape"),
+    ],
+)
+def test_prepare_refit_rejects_untransformed_destination_metadata_mismatch(
+    dtype,
+    shape,
+    error,
+):
+    from torch.distributed.tensor.placement_types import Replicate
+
+    name = "model.layers.0.mlp.down_proj.weight"
+    refit_info = {
+        "gen_tp_size": 1,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": name,
+                    "global_shape": [32, 64],
+                    "dtype": "torch.bfloat16",
+                    "src_mesh_info": MeshInfo(torch.arange(1)),
+                    "src_placements": [Replicate()],
+                    "dst_mesh_info": MeshInfo(torch.arange(1)),
+                    "dst_placements": [Replicate()],
+                    "components": _identity_components(
+                        (32, 64),
+                        torch.bfloat16,
+                        src_placements=[Replicate()],
+                        dst_placements=[Replicate()],
+                    ),
+                }
+            ]
+        },
+    }
+    ext = _make_ext({name: torch.empty(shape, dtype=dtype)})
+
+    with pytest.raises(ValueError, match=error):
+        ext.prepare_nccl_reshard_refit_info(refit_info)
+
+
+def test_build_mxfp8_map_receives_value_and_scale_into_matching_slices():
+    H = 32
+    refit_info = {
+        "gen_tp_size": 2,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": "model.layers.0.mlp.gate_proj.weight",
+                    "global_shape": [128, H],
+                    "components": _mxfp8_components((128, H)),
+                }
+            ]
+        },
+    }
+    gate_up = torch.empty(128, H, dtype=torch.float8_e4m3fn)
+    gate_up_scale = torch.empty(128, H // 32, dtype=torch.uint8)
+    ext = _make_ext(
+        {
+            "model.layers.0.mlp.gate_up_proj.weight": gate_up,
+            "model.layers.0.mlp.gate_up_proj.weight_scale_from_checkpoint": (
+                gate_up_scale
+            ),
+        }
+    )
+
+    spec = ext.build_hf_to_local_param_map(refit_info).get(
+        "model.layers.0.mlp.gate_proj.weight"
+    )
+    assert spec is not None and spec.pre is not None and spec.post is not None
+
+    ctx = spec.pre(spec.base)
+    value_buf, scale_buf = ctx.tensors_for_transfer()
+    assert value_buf.shape == (64, H)
+    assert value_buf.dtype == torch.float8_e4m3fn
+    assert scale_buf.shape == (64, H // 32)
+    assert scale_buf.dtype == torch.uint8
+
+    value_buf.fill_(1.0)
+    scale_buf.fill_(127)
+    spec.post(ctx)
+    assert torch.equal(gate_up[:64], torch.ones_like(gate_up[:64]))
+    assert torch.equal(
+        gate_up_scale[:64],
+        torch.full_like(gate_up_scale[:64], 127),
+    )
+
+
+def test_build_mxfp8_moe_map_uses_matching_w13_and_w2_scale_slices():
+    E, H, P = 2, 32, 64
+    refit_info = {
+        "gen_tp_size": 1,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": "model.layers.0.mlp.experts.gate_proj.weight",
+                    "global_shape": [E, P, H],
+                    "grouped_expert_proj": "gate_proj",
+                    "components": _mxfp8_components((E, P, H)),
+                },
+                {
+                    "name": "model.layers.0.mlp.experts.up_proj.weight",
+                    "global_shape": [E, P, H],
+                    "grouped_expert_proj": "up_proj",
+                    "components": _mxfp8_components((E, P, H)),
+                },
+                {
+                    "name": "model.layers.0.mlp.experts.down_proj.weight",
+                    "global_shape": [E, H, P],
+                    "grouped_expert_proj": "down_proj",
+                    "components": _mxfp8_components((E, H, P)),
+                },
+            ]
+        },
+    }
+    w13 = torch.empty(E, 2 * P, H, dtype=torch.float8_e4m3fn)
+    w2 = torch.empty(E, H, P, dtype=torch.float8_e4m3fn)
+    w13_scale = torch.empty(E, 2 * P, H // 32, dtype=torch.uint8)
+    w2_scale = torch.empty(E, H, P // 32, dtype=torch.uint8)
+    ext = _make_ext(
+        {
+            "model.layers.0.mlp.experts.w13_weight": w13,
+            "model.layers.0.mlp.experts.w2_weight": w2,
+            "model.layers.0.mlp.experts.w13_weight_scale_from_checkpoint": (w13_scale),
+            "model.layers.0.mlp.experts.w2_weight_scale_from_checkpoint": w2_scale,
+        }
+    )
+
+    pmap = ext.build_hf_to_local_param_map(refit_info)
+    gate = pmap.get("model.layers.0.mlp.experts.gate_proj.weight")
+    up = pmap.get("model.layers.0.mlp.experts.up_proj.weight")
+    down = pmap.get("model.layers.0.mlp.experts.down_proj.weight")
+
+    gate_ctx = gate.pre(gate.base)
+    up_ctx = up.pre(up.base)
+    down_ctx = down.pre(down.base)
+    assert gate_ctx.tensors_for_transfer()[1].shape == (E, P, H // 32)
+    assert up_ctx.tensors_for_transfer()[1].shape == (E, P, H // 32)
+    assert down_ctx.tensors_for_transfer()[1].shape == (E, H, P // 32)
+
+    gate_ctx.tensors_for_transfer()[1].fill_(11)
+    up_ctx.tensors_for_transfer()[1].fill_(22)
+    down_ctx.tensors_for_transfer()[1].fill_(33)
+    gate.post(gate_ctx)
+    up.post(up_ctx)
+    down.post(down_ctx)
+    assert torch.equal(w13_scale[:, :P], torch.full_like(w13_scale[:, :P], 11))
+    assert torch.equal(w13_scale[:, P:], torch.full_like(w13_scale[:, P:], 22))
+    assert torch.equal(w2_scale, torch.full_like(w2_scale, 33))
+
+
+def test_build_mxfp8_map_rejects_missing_checkpoint_scale_target():
+    refit_info = {
+        "gen_tp_size": 1,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": "model.layers.0.mlp.down_proj.weight",
+                    "global_shape": [32, 64],
+                    "components": _mxfp8_components((32, 64)),
+                }
+            ]
+        },
+    }
+    ext = _make_ext(
+        {
+            "model.layers.0.mlp.down_proj.weight": torch.empty(
+                32, 64, dtype=torch.float8_e4m3fn
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="weight_scale_from_checkpoint"):
+        ext.build_hf_to_local_param_map(refit_info)
+
+
+def test_build_mxfp8_map_resolves_routed_expert_scale_from_registered_name():
+    E, P, H = 2, 64, 32
+    refit_info = {
+        "gen_tp_size": 1,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": "model.layers.0.mlp.experts.gate_proj.weight",
+                    "global_shape": [E, P, H],
+                    "grouped_expert_proj": "gate_proj",
+                    "components": _mxfp8_components((E, P, H)),
+                },
+                {
+                    "name": "model.layers.0.mlp.experts.up_proj.weight",
+                    "global_shape": [E, P, H],
+                    "grouped_expert_proj": "up_proj",
+                    "components": _mxfp8_components((E, P, H)),
+                },
+            ]
+        },
+    }
+    routed_name = "model.layers.0.mlp.experts.routed_experts.w13_weight"
+    ext = _make_ext(
+        {
+            routed_name: torch.empty(E, 2 * P, H, dtype=torch.float8_e4m3fn),
+            routed_name + "_scale_from_checkpoint": torch.empty(
+                E, 2 * P, H // 32, dtype=torch.uint8
+            ),
+        }
+    )
+
+    mapping = ext.build_hf_to_local_param_map(refit_info)
+
+    assert mapping.get("model.layers.0.mlp.experts.gate_proj.weight") is not None
+    assert mapping.get("model.layers.0.mlp.experts.up_proj.weight") is not None
+
+
+def test_mxfp8_receive_transfers_value_then_scale_before_merged_post(
+    monkeypatch,
+):
+    from nemo_rl.models.generation.vllm import vllm_backend
+    from nemo_rl.weight_sync import xferdtensor as xferdtensor_module
+
+    src_mesh = object()
+    dst_mesh = object()
+    value_src_placements = [object()]
+    value_dst_placements = [object()]
+    scale_src_placements = [object()]
+    scale_dst_placements = [object()]
+    group = object()
+    stage_stream = object()
+    call_order = []
+
+    param_info = {
+        "name": "model.layers.0.mlp.gate_proj.weight",
+        "global_shape": [128, 32],
+        "src_mesh_info": src_mesh,
+        "dst_mesh_info": dst_mesh,
+        "components": [
+            _component(
+                "weight",
+                (128, 32),
+                torch.float8_e4m3fn,
+                src_placements=value_src_placements,
+                dst_placements=value_dst_placements,
+            ),
+            _component(
+                "weight_scale",
+                (128, 1),
+                torch.uint8,
+                src_placements=scale_src_placements,
+                dst_placements=scale_dst_placements,
+            ),
+        ],
+    }
+    mapping_refit_info = {
+        "gen_tp_size": 2,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                param_info,
+                {
+                    "name": "model.layers.0.mlp.up_proj.weight",
+                    "global_shape": [128, 32],
+                    "components": _mxfp8_components((128, 32)),
+                },
+            ]
+        },
+    }
+    receive_refit_info = {
+        **mapping_refit_info,
+        "per_layer_params": {"model.layers.0": [param_info]},
+    }
+    gate_up = torch.zeros(128, 32, dtype=torch.float8_e4m3fn)
+    gate_up_scale = torch.zeros(128, 1, dtype=torch.uint8)
+    ext = _make_ext(
+        {
+            "model.layers.0.mlp.gate_up_proj.weight": gate_up,
+            "model.layers.0.mlp.gate_up_proj.weight_scale_from_checkpoint": (
+                gate_up_scale
+            ),
+        }
+    )
+    ext.nccl_reshard_refit_info = receive_refit_info
+    ext.hf_to_local_param_map = ext.build_hf_to_local_param_map(mapping_refit_info)
+    ext.pp_comm_groups = {0: group}
+    ext.model_runner.vllm_config = object()
+    ext.model_config = object()
+    ext.device = object()
+    ext._receive_and_load_misc_params = lambda: call_order.append("misc")
+
+    spec = ext.hf_to_local_param_map.get(param_info["name"])
+    assert spec is not None and spec.post is not None
+    original_post = spec.post
+
+    def recording_post(ctx):
+        assert call_order == ["value", "scale"]
+        call_order.append("post")
+        original_post(ctx)
+
+    spec.post = recording_post
+
+    def recording_xferdtensor(
+        src_tensor,
+        actual_src_mesh,
+        actual_src_placements,
+        dst_tensor,
+        actual_dst_mesh,
+        actual_dst_placements,
+        actual_group,
+        stream,
+    ):
+        assert src_tensor is None
+        assert actual_src_mesh is src_mesh
+        assert actual_dst_mesh is dst_mesh
+        assert actual_group is group
+        assert stream is stage_stream
+        if dst_tensor._local_tensor.dtype == torch.float8_e4m3fn:
+            assert tuple(dst_tensor.shape) == (128, 32)
+            assert actual_src_placements is value_src_placements
+            assert actual_dst_placements is value_dst_placements
+            call_order.append("value")
+            dst_tensor._local_tensor.fill_(1.0)
+        else:
+            assert call_order == ["value"]
+            assert tuple(dst_tensor.shape) == (128, 1)
+            assert actual_src_placements is scale_src_placements
+            assert actual_dst_placements is scale_dst_placements
+            call_order.append("scale")
+            dst_tensor._local_tensor.fill_(127)
+
+    class FakeEvent:
+        def record(self):
+            return None
+
+    monkeypatch.setattr(xferdtensor_module, "xferdtensor", recording_xferdtensor)
+    monkeypatch.setattr(vllm_backend.torch.cuda, "Stream", lambda: stage_stream)
+    monkeypatch.setattr(
+        vllm_backend.torch.cuda,
+        "stream",
+        lambda stream: contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(vllm_backend.torch.cuda, "Event", FakeEvent)
+    monkeypatch.setattr(vllm_backend.torch.cuda, "synchronize", lambda: None)
+    monkeypatch.setattr(vllm_backend.torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(vllm_backend.torch.distributed, "get_rank", lambda: 1)
+    monkeypatch.setattr(
+        "vllm.config.set_current_vllm_config",
+        lambda _: contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(
+        "vllm.model_executor.model_loader.utils.process_weights_after_loading",
+        lambda *_: call_order.append("process"),
+    )
+
+    assert ext.nccl_reshard_refit() is True
+    assert call_order == ["value", "scale", "post", "misc", "process"]
+    assert torch.equal(gate_up[:64], torch.ones_like(gate_up[:64]))
+    assert torch.equal(
+        gate_up_scale[:64],
+        torch.full_like(gate_up_scale[:64], 127),
+    )
+
+
+def test_receive_rejects_component_count_before_transfer_or_post(monkeypatch):
+    from nemo_rl.models.generation.vllm import vllm_backend
+    from nemo_rl.weight_sync import xferdtensor as xferdtensor_module
+    from nemo_rl.weight_sync.nccl_reshard_utils import LocalParamSpec, RefitCtx
+
+    calls = []
+    name = "model.layers.0.mlp.down_proj.weight"
+    tensor = torch.empty(2, 2)
+    ext = _make_ext({name: tensor})
+    ext.nccl_reshard_refit_info = {
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": name,
+                    "src_mesh_info": object(),
+                    "dst_mesh_info": object(),
+                    "components": [
+                        _component(
+                            "weight",
+                            (2, 2),
+                            torch.float32,
+                            src_placements=[object()],
+                            dst_placements=[object()],
+                        ),
+                        _component(
+                            "weight_scale",
+                            (2, 1),
+                            torch.uint8,
+                            src_placements=[object()],
+                            dst_placements=[object()],
+                        ),
+                    ],
+                }
+            ]
+        },
+    }
+    ext.hf_to_local_param_map = HFToLocalParamMap(
+        specs={
+            name: LocalParamSpec(
+                base=tensor,
+                pre=lambda _: RefitCtx(buf=tensor, transfer_tensors=(tensor,)),
+                post=lambda _: calls.append("post"),
+            )
+        }
+    )
+    ext.pp_comm_groups = {0: object()}
+
+    monkeypatch.setattr(
+        xferdtensor_module,
+        "xferdtensor",
+        lambda *_args, **_kwargs: calls.append("transfer"),
+    )
+    monkeypatch.setattr(vllm_backend.torch.cuda, "Stream", lambda: object())
+    monkeypatch.setattr(
+        vllm_backend.torch.cuda,
+        "stream",
+        lambda _stream: contextlib.nullcontext(),
+    )
+
+    with pytest.raises(ValueError, match="component count"):
+        ext.nccl_reshard_refit()
+
+    assert calls == []

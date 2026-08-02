@@ -2472,10 +2472,42 @@ class MegatronPolicyWorkerImpl(
         param_map = dict(self._iter_local_hf_param_shards())
         expert_groups = self._build_expert_groups(param_map)
 
-        def _expert_spec(proj, grouped_name):
-            def pre(_base):
-                return RefitCtx(
-                    buf=self._group_experts(proj, grouped_name, expert_groups)
+        def _mxfp8_ctx(source: torch.Tensor) -> RefitCtx:
+            # Deferred because trainer workers only need vLLM quantization helpers
+            # when prequantized refit is enabled.
+            from nemo_rl.models.generation.vllm.quantization.fp8_train_utils import (
+                MXFP8_BLOCK_SIZE,
+                mxfp8_e4m3_quantize_for_refit,
+            )
+
+            value, scale = mxfp8_e4m3_quantize_for_refit(source)
+            scale = scale.reshape(
+                *source.shape[:-1], source.shape[-1] // MXFP8_BLOCK_SIZE
+            )
+            return RefitCtx(buf=value, transfer_tensors=(value, scale))
+
+        def _component_family(param_info: dict[str, Any]) -> tuple[str, ...]:
+            components = param_info.get("components")
+            if not components:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: {param_info['name']!r} must "
+                    "provide a nonempty component list"
+                )
+            family = tuple(component.get("role") for component in components)
+            if family not in {("weight",), ("weight", "weight_scale")}:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: unsupported component family "
+                    f"{family!r} for {param_info['name']!r}"
+                )
+            return family
+
+        def _expert_spec(
+            proj: str, grouped_name: str, *, transform_to_mxfp8: bool
+        ) -> LocalParamSpec:
+            def pre(_base: Any) -> RefitCtx:
+                source = self._group_experts(proj, grouped_name, expert_groups)
+                return (
+                    _mxfp8_ctx(source) if transform_to_mxfp8 else RefitCtx(buf=source)
                 )
 
             return LocalParamSpec(base=None, pre=pre)
@@ -2484,10 +2516,20 @@ class MegatronPolicyWorkerImpl(
         for layer_name in refit_info["layer_names"]:
             for p in refit_info["per_layer_params"][layer_name]:
                 name = p["name"]
+                component_family = _component_family(p)
+                transform_to_mxfp8 = component_family == ("weight", "weight_scale")
                 if p.get("grouped_expert_proj"):
-                    mapping[name] = _expert_spec(p["grouped_expert_proj"], name)
+                    mapping[name] = _expert_spec(
+                        p["grouped_expert_proj"],
+                        name,
+                        transform_to_mxfp8=transform_to_mxfp8,
+                    )
                 else:
-                    mapping[name] = LocalParamSpec(base=param_map.get(name))
+                    base = param_map.get(name)
+                    mapping[name] = LocalParamSpec(
+                        base=base,
+                        pre=_mxfp8_ctx if transform_to_mxfp8 else None,
+                    )
         return HFToLocalParamMap(specs=mapping)
 
     @torch.no_grad()
@@ -2535,24 +2577,43 @@ class MegatronPolicyWorkerImpl(
                 assert ctx.buf is not None, (
                     f"no local tensor for {param_info['name']!r}"
                 )
-                src_tensor = DTensorRef(
-                    local_tensor=ctx.buf, global_shape=param_info["global_shape"]
-                )
-                xferdtensor(
-                    src_tensor,
-                    param_info["src_mesh_info"],
-                    param_info["src_placements"],
-                    None,
-                    param_info["dst_mesh_info"],
-                    param_info["dst_placements"],
-                    group,
-                    nccl_reshard_stream,
-                )
+                components = param_info.get("components")
+                if not components:
+                    raise ValueError(
+                        f"nccl_reshard_refit: {param_info['name']!r} must provide "
+                        "a nonempty component list"
+                    )
+                transfer_tensors = ctx.tensors_for_transfer()
+                if len(transfer_tensors) != len(components):
+                    raise ValueError(
+                        f"nccl_reshard_refit: component count mismatch for "
+                        f"{param_info['name']!r}: context has {len(transfer_tensors)}, "
+                        f"metadata has {len(components)}"
+                    )
+                for tensor, component in zip(transfer_tensors, components):
+                    src_tensor = DTensorRef(
+                        local_tensor=tensor,
+                        global_shape=component["global_shape"],
+                    )
+                    xferdtensor(
+                        src_tensor,
+                        param_info["src_mesh_info"],
+                        component["src_placements"],
+                        None,
+                        param_info["dst_mesh_info"],
+                        component["dst_placements"],
+                        group,
+                        nccl_reshard_stream,
+                    )
                 if spec.post is not None:
                     spec.post(ctx)
-                # Drop refs to the per-iteration grouped MoE tensor so its CUDA
-                # memory returns to the caching allocator
-                del ctx, src_tensor
+                if spec.pre is not None:
+                    for tensor in transfer_tensors:
+                        if tensor.is_cuda:
+                            tensor.record_stream(nccl_reshard_stream)
+                # Drop refs to per-iteration transformed/grouped tensors. The
+                # caching allocator retains them until their stream work completes.
+                del ctx, transfer_tensors
 
         torch.cuda.synchronize()
         torch.cuda.empty_cache()
