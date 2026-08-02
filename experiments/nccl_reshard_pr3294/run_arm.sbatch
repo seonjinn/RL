@@ -110,6 +110,8 @@ if [[ ! -x '${RAY_BOOTSTRAP_LOCAL_ROOT}/bin/ray' ]]; then
 fi
 test -x '${RAY_BOOTSTRAP_LOCAL_ROOT}/bin/ray'
 test -x '${RAY_BOOTSTRAP_LOCAL_ROOT}/bin/uv'
+'${RAY_BOOTSTRAP_LOCAL_ROOT}/bin/python' -c \
+  'import ray, requests, urllib3; from urllib3.exceptions import HTTPError'
 "
 fi
 
@@ -162,8 +164,10 @@ if [[ -n "${RAY_BOOTSTRAP_VENV}" ]]; then
   fi
   export PATH="${RAY_BOOTSTRAP_VENV}/bin:${PATH}"
   export PYTHONPATH="${RAY_BOOTSTRAP_VENV}/lib/python3.13/site-packages${PYTHONPATH:+:${PYTHONPATH}}"
+  export RAY_CLI="${RAY_BOOTSTRAP_VENV}/bin/ray"
   UV_PYTHON_COMMAND="export UV_PYTHON='${RAY_BOOTSTRAP_VENV}/bin/python3.13'"
 else
+  export RAY_CLI=ray
   UV_PYTHON_COMMAND=
 fi
 
