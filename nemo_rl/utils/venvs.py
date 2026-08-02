@@ -13,6 +13,7 @@
 # limitations under the License.
 import fcntl
 import logging
+import math
 import os
 import shlex
 import shutil
@@ -32,20 +33,83 @@ DEFAULT_VENV_DIR = os.path.join(git_root, "venvs")
 
 logger = logging.getLogger(__name__)
 
+SOURCE_BUILD_LOCK_TIMEOUT_ENV = "NRL_VENV_BUILD_LOCK_TIMEOUT"
+DEFAULT_SOURCE_BUILD_LOCK_TIMEOUT = 30 * 60
+SOURCE_BUILD_LOCK_POLL_INTERVAL = 1.0
+
+
+def _uses_mcore_extra(py_executable: str) -> bool:
+    arguments = shlex.split(py_executable)
+    return any(
+        argument == "--extra=mcore"
+        or (
+            argument == "--extra"
+            and index + 1 < len(arguments)
+            and arguments[index + 1] == "mcore"
+        )
+        for index, argument in enumerate(arguments)
+    )
+
 
 @contextmanager
 def _source_build_lock(py_executable: str) -> Iterator[None]:
-    """Serialize opt-in MCore editable builds that mutate a shared source tree."""
+    """Serialize opt-in MCore editable builds that mutate a shared source tree.
+
+    NRL_VENV_BUILD_LOCK must be an absolute path that resolves to the same shared
+    filesystem on every node, and that filesystem must support POSIX flock. Mount
+    sharing cannot be detected portably, so callers are responsible for choosing a
+    suitable path. NRL_VENV_BUILD_LOCK_TIMEOUT configures the wait in seconds and
+    defaults to 30 minutes.
+    """
     lock_path_value = os.environ.get("NRL_VENV_BUILD_LOCK")
-    if not lock_path_value or "mcore" not in shlex.split(py_executable):
+    if not lock_path_value or not _uses_mcore_extra(py_executable):
         yield
         return
 
     lock_path = Path(lock_path_value)
+    if not lock_path.is_absolute():
+        raise ValueError(
+            "NRL_VENV_BUILD_LOCK must be an absolute path on a shared filesystem "
+            "that supports POSIX flock for multi-node builds"
+        )
+
+    timeout_value = os.environ.get(
+        SOURCE_BUILD_LOCK_TIMEOUT_ENV, str(DEFAULT_SOURCE_BUILD_LOCK_TIMEOUT)
+    )
+    timeout_error = (
+        f"{SOURCE_BUILD_LOCK_TIMEOUT_ENV} must be a positive finite number of "
+        f"seconds, got {timeout_value!r}"
+    )
+    try:
+        timeout = float(timeout_value)
+    except ValueError as error:
+        raise ValueError(timeout_error) from error
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError(timeout_error)
+
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+") as lock_file:
-        logger.info("Waiting for MCore source build lock at %s", lock_path)
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        logger.info(
+            "Waiting up to %s seconds for MCore source build lock at %s",
+            timeout,
+            lock_path,
+        )
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError(
+                        f"Timed out after {timeout:g} seconds waiting for MCore source "
+                        f"build lock at {lock_path}. Increase "
+                        f"{SOURCE_BUILD_LOCK_TIMEOUT_ENV} if builds legitimately take "
+                        "longer, and verify NRL_VENV_BUILD_LOCK is on a shared "
+                        "filesystem that supports POSIX flock."
+                    ) from None
+                time.sleep(min(SOURCE_BUILD_LOCK_POLL_INTERVAL, remaining))
         try:
             logger.info("Acquired MCore source build lock at %s", lock_path)
             yield
