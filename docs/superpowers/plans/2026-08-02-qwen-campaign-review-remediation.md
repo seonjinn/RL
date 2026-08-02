@@ -13,7 +13,7 @@
 - Every R3 job validates its own run-unique trace after the driver and fails the SLURM job when validation fails.
 - No push or GPU submission occurs until the final review is clean.
 
-### Task R1: Add immutable route and smoke-promotion gates
+### Task 1: Add immutable route and smoke-promotion gates
 
 **Files:**
 - Create `experiments/cuda_graph/nemotron_thd_te_graph_20260731/validate_campaign_gate.py`.
@@ -29,7 +29,7 @@
 - Reject missing, symlinked, malformed, digest-mismatched, failed, wrong-model, wrong-arm, or provenance-mismatched evidence before invoking any leaf.
 - Use TDD and commit with Signed-off-by.
 
-### Task R2: Make launches self-validating and fully attested
+### Task 2: Make launches self-validating and fully attested
 
 **Files:**
 - Modify every model selector under `experiments/cuda_graph/nemotron_thd_te_graph_20260731/models/`.
@@ -48,7 +48,7 @@
 - Atomically publish run metadata containing exact rendered command, sbatch command, output pattern and resolved output path, job ID, topology, R3 state, source/runtime/container provenance, and R3 validation path.
 - Use TDD, including driver/checker failure propagation and fake-sbatch metadata tests, then commit with Signed-off-by.
 
-### Task R3: Make both result exporters identity-safe
+### Task 3: Make both result exporters identity-safe
 
 **Files:**
 - Modify `experiments/cuda_graph/nemotron_thd_te_graph_20260731/export_tensorboard.py`.
@@ -65,7 +65,7 @@
 - Keep Qwen235 TensorBoard disabled unless a separately recorded exact-runtime compatibility smoke permits changing the selector.
 - Use injected fake W&B protocols for tests; no network is used by unit tests. Commit with Signed-off-by.
 
-### Task R4: Re-verify, document, review, and push
+### Task 4: Re-verify, document, review, and push
 
 **Files:**
 - Modify the campaign README and durable session files.
