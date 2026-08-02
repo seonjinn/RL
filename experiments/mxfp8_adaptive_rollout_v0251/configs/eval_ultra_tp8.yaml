@@ -21,6 +21,7 @@ generation:
     max_model_len: 4096
     enforce_eager: false
     skip_tokenizer_init: false
+    enable_prefix_caching: true
     env_vars:
       PYTHONPATH: ${oc.env:PYTHONPATH}
       VLLM_SUBPROCESS_PYTHONPATH: ${oc.env:VLLM_SUBPROCESS_PYTHONPATH}
@@ -37,7 +38,6 @@ generation:
     mamba_ssm_cache_dtype: float32
     max_num_seqs: 8
     max_num_batched_tokens: 8480
-    enable_prefix_caching: true
     enable_chunked_prefill: true
     linear_backend: ${oc.env:NEMORL_MXFP8_LINEAR_BACKEND}
     compilation_config:

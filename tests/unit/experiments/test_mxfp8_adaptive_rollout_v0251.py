@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from experiments.mxfp8_adaptive_rollout_v0251.contract import (
     AdaptiveInputs,
@@ -120,6 +121,18 @@ def test_overlay_builder_only_clears_pythonpath_during_discovery() -> None:
     runtime = launcher.split("runtime_python=(", maxsplit=1)[1].split(")", maxsplit=1)[0]
     assert "-u PYTHONPATH" in builder
     assert "-u PYTHONPATH" not in runtime
+
+
+def test_canary_config_does_not_duplicate_worker_owned_vllm_arguments() -> None:
+    root = Path(__file__).parents[3]
+    config_path = (
+        root
+        / "experiments/mxfp8_adaptive_rollout_v0251/configs/eval_ultra_tp8.yaml"
+    )
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    vllm_kwargs = config["generation"]["vllm_kwargs"]
+
+    assert "enable_prefix_caching" not in vllm_kwargs
 
 
 def test_runtime_overlay_preserves_wheel_extensions_and_overlays_source(
