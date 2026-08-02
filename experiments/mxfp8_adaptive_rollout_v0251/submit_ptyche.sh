@@ -53,6 +53,7 @@ sha256sum --check <(printf '%s  %s\n' "$TACTIC_SHA256" "$TACTIC_FILE")
 git -C "$NEMO_RL_REPO_ROOT" diff --quiet
 git -C "$NEMO_RL_REPO_ROOT" diff --cached --quiet
 git -C "$NEMO_RL_REPO_ROOT" pull --ff-only
+git -C "$NEMO_RL_REPO_ROOT" submodule update --init --recursive --depth 1
 test "$(git -C "$CUSTOM_VLLM_SOURCE" rev-parse HEAD)" = "$EXPECTED_VLLM_COMMIT"
 git -C "$CUSTOM_VLLM_SOURCE" diff --quiet
 git -C "$CUSTOM_VLLM_SOURCE" diff --cached --quiet

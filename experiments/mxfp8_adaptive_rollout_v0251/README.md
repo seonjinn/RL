@@ -32,6 +32,8 @@ export CANARY_RESULT_ROOT=/home/sna/results/nemorl-v0251-mxfp8-safe-adaptive/$(d
 
 The launcher derives separate driver and actor venv paths from the `uv.lock`
 hash and custom vLLM commit. Both arms reuse those same versioned environments.
+It also initializes the pinned shallow workspace submodules before resolving the
+locked environment.
 
 Submit through the repository `ray.sub` launcher on Ptyche with two nodes,
 four GPUs per node, account `coreai_dlalgo_llm`, partition `36x2-a01r`, and
