@@ -33,9 +33,9 @@ for name in \
   unset "$name"
 done
 
-artifact_dir="$NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout_v0251/data/qwen3_30ba3b_shmoo_2500876"
+artifact_dir=${TACTIC_ARTIFACT_DIR:-$NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout_v0251/data/qwen3_30ba3b_cg_output_shmoo_2501234_2501236_2501238}
 export TACTIC_FILE="$artifact_dir/exact_tactics.json"
-export TACTIC_SHA256=a613a598b94d226b4b907477043108882fbf4286b82928d059ba33b74f489f0a
+export TACTIC_SHA256=${TACTIC_SHA256:-88ea9238c8ce06d3b174b9cae928e4dbfc0d0a5ed4e9d2086c9d0f79ef4d3211}
 LAYER_ALLOWLIST_FILE="$artifact_dir/layer_allowlist.txt"
 export LAYER_ALLOWLIST_B64
 LAYER_ALLOWLIST_B64=$(base64 < "$LAYER_ALLOWLIST_FILE")

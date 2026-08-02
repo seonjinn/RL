@@ -105,10 +105,11 @@ def test_qwen30_ab_submitter_binds_committed_artifacts_and_pulls_first() -> None
 
     assert "run_ab.sh run" in submitter
     assert "eval_qwen3_30ba3b_performance.yaml" in submitter
-    assert "data/qwen3_30ba3b_shmoo_2500876" in submitter
+    assert "data/qwen3_30ba3b_cg_output_shmoo_2501234_2501236_2501238" in submitter
+    assert "TACTIC_ARTIFACT_DIR" in submitter
     assert 'TACTIC_FILE="$artifact_dir/exact_tactics.json"' in submitter
     assert (
-        "a613a598b94d226b4b907477043108882fbf4286b82928d059ba33b74f489f0a" in submitter
+        "88ea9238c8ce06d3b174b9cae928e4dbfc0d0a5ed4e9d2086c9d0f79ef4d3211" in submitter
     )
     assert 'base64 < "$LAYER_ALLOWLIST_FILE"' in submitter
     assert "sha256sum --check" in submitter

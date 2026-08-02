@@ -1,0 +1,24 @@
+{
+  "description": "Qwen3-30B-A3B CUDA Graph output-projection MXFP8 tactic qualification",
+  "runtime_fingerprint": {
+    "cuda_version": "13.0",
+    "device_name": "NVIDIA GB200",
+    "flashinfer_version": "0.6.13",
+    "vllm_version": "0.25.1"
+  },
+  "selection_policy": {
+    "max_speedup_cv": 0.03,
+    "min_cosine": 0.999,
+    "min_repeats": 3,
+    "min_speedup": 1.02,
+    "require_complete_layer_family": true,
+    "require_cuda_graph_capture_and_replay": true
+  },
+  "shape_trace_job_id": 2501220,
+  "shmoo_job_ids": [
+    2501234,
+    2501236,
+    2501238
+  ],
+  "table_sha256": "88ea9238c8ce06d3b174b9cae928e4dbfc0d0a5ed4e9d2086c9d0f79ef4d3211"
+}
