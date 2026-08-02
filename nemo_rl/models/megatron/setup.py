@@ -1083,6 +1083,18 @@ def _configure_fixed_te_graph_geometry(
             "Packed TE training graphs require dynamic_batching.enabled=false."
         )
 
+    requested_attention_backend = megatron_cfg.get("attention_backend")
+    if requested_attention_backend not in (None, "fused"):
+        raise ValueError(
+            "Packed TE training graphs require attention_backend='fused' because "
+            "fixed-capacity THD metadata conservatively enables inter-sequence "
+            "padding, which Transformer Engine only supports with cuDNN fused "
+            "attention."
+        )
+    for nvte_var in ("NVTE_FUSED_ATTN", "NVTE_FLASH_ATTN", "NVTE_UNFUSED_ATTN"):
+        os.environ.pop(nvte_var, None)
+    model_cfg.attention_backend = AttnBackend.fused
+
     thd_max_packed_sequences = _validate_positive_config_integer(
         "thd_max_packed_sequences",
         megatron_cfg.get("thd_max_packed_sequences"),

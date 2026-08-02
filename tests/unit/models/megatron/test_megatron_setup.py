@@ -965,25 +965,50 @@ class TestApplyPerformanceConfig:
 
     def test_fixed_te_graph_request_projects_canonical_geometry(self) -> None:
         """Missing projection would let model and iterator capture different shapes."""
-        from megatron.core.transformer.enums import CudaGraphModule
+        from megatron.core.transformer.enums import AttnBackend, CudaGraphModule
         from nemo_rl.models.megatron.setup import _apply_performance_config
 
         model_cfg, config = self._fixed_te_graph_request()
+        model_cfg.attention_backend = AttnBackend.flash
 
-        with patch(
-            "nemo_rl.models.megatron.setup.is_te_min_version", return_value=True
+        with (
+            patch(
+                "nemo_rl.models.megatron.setup.is_te_min_version", return_value=True
+            ),
+            patch.dict(
+                os.environ,
+                {
+                    "NVTE_FLASH_ATTN": "1",
+                    "NVTE_FUSED_ATTN": "0",
+                    "NVTE_UNFUSED_ATTN": "0",
+                },
+            ),
         ):
             _apply_performance_config(model_cfg, config)
+            assert "NVTE_FLASH_ATTN" not in os.environ
+            assert "NVTE_FUSED_ATTN" not in os.environ
+            assert "NVTE_UNFUSED_ATTN" not in os.environ
 
         assert model_cfg.cuda_graph_modules == [
             CudaGraphModule.attn,
             CudaGraphModule.mamba,
         ]
+        assert model_cfg.attention_backend is AttnBackend.fused
         assert model_cfg.thd_max_packed_sequences == 5
         assert model_cfg.pad_packed_seq_to == 64
         assert model_cfg.pad_packed_seq_alignment == 1
         assert model_cfg.use_te_rng_tracker is True
         assert config["megatron_cfg"]["cuda_graph_modules"] == ["attn", "mamba"]
+
+    def test_fixed_te_graph_request_rejects_explicit_non_fused_attention(self) -> None:
+        """Static THD padding is only supported by TE fused attention."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request()
+        config["megatron_cfg"]["attention_backend"] = "flash"
+
+        with pytest.raises(ValueError, match="attention_backend='fused'"):
+            _apply_performance_config(model_cfg, config)
 
     def test_fixed_te_graph_request_allows_unit_alignment_without_cp(self) -> None:
         """CP=1 has no zig-zag structural-pair alignment requirement."""
