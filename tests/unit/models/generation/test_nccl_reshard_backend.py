@@ -580,6 +580,44 @@ def test_build_mxfp8_map_resolves_routed_expert_scale_from_registered_name():
     assert mapping.get("model.layers.0.mlp.experts.up_proj.weight") is not None
 
 
+@pytest.mark.parametrize(
+    "roles",
+    [
+        ("weight_scale", "weight"),
+        ("weight", "weight"),
+        ("weight", "weight_scale", "input_scale"),
+    ],
+    ids=["wrong-order", "duplicate", "extra"],
+)
+def test_build_hf_to_local_param_map_rejects_unsupported_component_families(roles):
+    name = "model.layers.0.mlp.down_proj.weight"
+    components = [
+        _component(
+            role,
+            (32, 2) if "scale" in role else (32, 64),
+            torch.uint8 if "scale" in role else torch.float8_e4m3fn,
+        )
+        for role in roles
+    ]
+    refit_info = {
+        "gen_tp_size": 1,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": name,
+                    "global_shape": [32, 64],
+                    "components": components,
+                }
+            ]
+        },
+    }
+    ext = _make_ext({name: torch.empty(32, 64, dtype=torch.float8_e4m3fn)})
+
+    with pytest.raises(ValueError, match="unsupported component family"):
+        ext.build_hf_to_local_param_map(refit_info)
+
+
 def test_mxfp8_receive_transfers_value_then_scale_before_merged_post(
     monkeypatch,
 ):
@@ -706,7 +744,16 @@ def test_mxfp8_receive_transfers_value_then_scale_before_merged_post(
         lambda stream: contextlib.nullcontext(),
     )
     monkeypatch.setattr(vllm_backend.torch.cuda, "Event", FakeEvent)
-    monkeypatch.setattr(vllm_backend.torch.cuda, "synchronize", lambda: None)
+
+    def recording_synchronize():
+        if call_order[-1] == "post":
+            call_order.append("stage-barrier")
+        elif call_order[-1] == "misc":
+            call_order.append("misc-barrier")
+        else:
+            raise AssertionError(f"unexpected synchronize after {call_order!r}")
+
+    monkeypatch.setattr(vllm_backend.torch.cuda, "synchronize", recording_synchronize)
     monkeypatch.setattr(vllm_backend.torch.cuda, "empty_cache", lambda: None)
     monkeypatch.setattr(vllm_backend.torch.distributed, "get_rank", lambda: 1)
     monkeypatch.setattr(
@@ -719,7 +766,15 @@ def test_mxfp8_receive_transfers_value_then_scale_before_merged_post(
     )
 
     assert ext.nccl_reshard_refit() is True
-    assert call_order == ["value", "scale", "post", "misc", "process"]
+    assert call_order == [
+        "value",
+        "scale",
+        "post",
+        "stage-barrier",
+        "misc",
+        "misc-barrier",
+        "process",
+    ]
     assert torch.equal(gate_up[:64], torch.ones_like(gate_up[:64]))
     assert torch.equal(
         gate_up_scale[:64],
@@ -727,15 +782,30 @@ def test_mxfp8_receive_transfers_value_then_scale_before_merged_post(
     )
 
 
-def test_receive_rejects_component_count_before_transfer_or_post(monkeypatch):
+@pytest.mark.parametrize(
+    ("case", "component_count", "transfer_count", "error"),
+    [
+        ("explicit_empty", 1, 0, "component count"),
+        ("empty_components", 0, 1, "nonempty component list"),
+        ("underfilled", 2, 1, "component count"),
+        ("overfilled", 1, 2, "component count"),
+    ],
+)
+def test_receive_rejects_invalid_component_counts_before_transfer_or_post(
+    monkeypatch,
+    case,
+    component_count,
+    transfer_count,
+    error,
+):
     from nemo_rl.models.generation.vllm import vllm_backend
     from nemo_rl.weight_sync import xferdtensor as xferdtensor_module
     from nemo_rl.weight_sync.nccl_reshard_utils import LocalParamSpec, RefitCtx
 
     calls = []
     name = "model.layers.0.mlp.down_proj.weight"
-    tensor = torch.empty(2, 2)
-    ext = _make_ext({name: tensor})
+    tensors = tuple(torch.empty(2, 2) for _ in range(max(transfer_count, 1)))
+    ext = _make_ext({name: tensors[0]})
     ext.nccl_reshard_refit_info = {
         "layer_names": ["model.layers.0"],
         "per_layer_params": {
@@ -746,19 +816,13 @@ def test_receive_rejects_component_count_before_transfer_or_post(monkeypatch):
                     "dst_mesh_info": object(),
                     "components": [
                         _component(
-                            "weight",
+                            f"component_{index}",
                             (2, 2),
                             torch.float32,
                             src_placements=[object()],
                             dst_placements=[object()],
-                        ),
-                        _component(
-                            "weight_scale",
-                            (2, 1),
-                            torch.uint8,
-                            src_placements=[object()],
-                            dst_placements=[object()],
-                        ),
+                        )
+                        for index in range(component_count)
                     ],
                 }
             ]
@@ -767,8 +831,11 @@ def test_receive_rejects_component_count_before_transfer_or_post(monkeypatch):
     ext.hf_to_local_param_map = HFToLocalParamMap(
         specs={
             name: LocalParamSpec(
-                base=tensor,
-                pre=lambda _: RefitCtx(buf=tensor, transfer_tensors=(tensor,)),
+                base=tensors[0],
+                pre=lambda _: RefitCtx(
+                    buf=tensors[0],
+                    transfer_tensors=tensors[:transfer_count],
+                ),
                 post=lambda _: calls.append("post"),
             )
         }
@@ -787,7 +854,7 @@ def test_receive_rejects_component_count_before_transfer_or_post(monkeypatch):
         lambda _stream: contextlib.nullcontext(),
     )
 
-    with pytest.raises(ValueError, match="component count"):
+    with pytest.raises(ValueError, match=error):
         ext.nccl_reshard_refit()
 
-    assert calls == []
+    assert calls == [], case
