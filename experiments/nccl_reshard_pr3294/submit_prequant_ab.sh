@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+DEFAULT_REPO=$(git -C "${SCRIPT_DIR}/../.." rev-parse --show-toplevel)
+
 ACTION=${ACTION:-test-only}
 MAX_STEPS=${MAX_STEPS:-5}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
@@ -9,7 +12,7 @@ ACCOUNT=${SLURM_ACCOUNT:-coreai_chef_posttrain}
 PARTITION=${PARTITION:-batch}
 WALLTIME=${WALLTIME:-04:00:00}
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna}
-REPO=${REPO:-${WORK_ROOT}/RL-pr3294-nccl-benchmark}
+REPO=${REPO:-${DEFAULT_REPO}}
 CONTAINER=${CONTAINER:?CONTAINER is required}
 RESULT_ROOT=${RESULT_ROOT:-${WORK_ROOT}/experiments/pr3294-nccl-mxfp8-prequant/gcp-b200}
 
