@@ -4,6 +4,7 @@ set -euo pipefail
 ARM=${1:?usage: run_arm.sh baseline|adaptive}
 ROOT=${NEMO_RL_REPO_ROOT:?set NEMO_RL_REPO_ROOT}
 VLLM_SOURCE=${CUSTOM_VLLM_SOURCE:?set CUSTOM_VLLM_SOURCE}
+VLLM_RUNTIME_ROOT=${CUSTOM_VLLM_RUNTIME_ROOT:?set CUSTOM_VLLM_RUNTIME_ROOT}
 RESULT_ROOT=${CANARY_RESULT_ROOT:?set CANARY_RESULT_ROOT}
 CONFIG=${CANARY_CONFIG:-$ROOT/experiments/mxfp8_adaptive_rollout_v0251/configs/eval_ultra_tp8.yaml}
 mkdir -p "$RESULT_ROOT/$ARM"
@@ -27,7 +28,7 @@ done
 contract=(
   python3 -m experiments.mxfp8_adaptive_rollout_v0251.contract
   --arm "$ARM"
-  --source "$VLLM_SOURCE"
+  --runtime-root "$VLLM_RUNTIME_ROOT"
   --shell
 )
 if [[ "$ARM" == adaptive ]]; then
@@ -49,8 +50,9 @@ if [[ "$actual_vllm_commit" != "${EXPECTED_VLLM_COMMIT:?set EXPECTED_VLLM_COMMIT
 fi
 git -C "$VLLM_SOURCE" diff --quiet
 git -C "$VLLM_SOURCE" diff --cached --quiet
-printf 'vllm_source=%s\nvllm_commit=%s\n' \
-  "$VLLM_SOURCE" "$actual_vllm_commit" | tee "$RESULT_ROOT/$ARM/runtime.txt"
+printf 'vllm_source=%s\nvllm_runtime_root=%s\nvllm_commit=%s\n' \
+  "$VLLM_SOURCE" "$VLLM_RUNTIME_ROOT" "$actual_vllm_commit" \
+  | tee "$RESULT_ROOT/$ARM/runtime.txt"
 
 export NEMO_RL_PY_EXECUTABLES_SYSTEM=1
 UV_PROJECT_ENVIRONMENT="${NEMO_RL_DRIVER_VENV_DIR:?set NEMO_RL_DRIVER_VENV_DIR}" \

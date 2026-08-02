@@ -43,11 +43,13 @@ lock_sha=$(sha256sum "$NEMO_RL_REPO_ROOT/uv.lock" | awk '{print $1}')
 venv_key=${lock_sha:0:16}-${EXPECTED_VLLM_COMMIT:0:12}
 export NEMO_RL_DRIVER_VENV_DIR=${NEMO_RL_DRIVER_VENV_DIR:-/home/sna/.cache/nemorl-driver-v0251-canary/$venv_key}
 export NEMO_RL_VENV_DIR=${NEMO_RL_VENV_DIR:-/home/sna/.cache/nemorl-venvs-v0251-canary/$venv_key}
+export CUSTOM_VLLM_RUNTIME_BASE=${CUSTOM_VLLM_RUNTIME_BASE:-/lustre/fsw/coreai_dlalgo_llm/users/sna/cache/vllm-runtime-overlays/$venv_key}
 mkdir -p \
   "$BASE_LOG_DIR" \
   "$UV_CACHE_DIR_OVERRIDE" \
   "$NEMO_RL_DRIVER_VENV_DIR" \
-  "$NEMO_RL_VENV_DIR"
+  "$NEMO_RL_VENV_DIR" \
+  "$CUSTOM_VLLM_RUNTIME_BASE"
 
 if [[ ! -x "$NEMO_RL_DRIVER_VENV_DIR/bin/ray" ]]; then
   echo "locked driver venv is not prepared: $NEMO_RL_DRIVER_VENV_DIR" >&2

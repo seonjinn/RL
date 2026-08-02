@@ -35,16 +35,16 @@ def _validate_base64(value: str) -> None:
 def build_arm_environment(
     arm: Arm,
     *,
-    source: Path,
+    runtime_root: Path,
     adaptive: AdaptiveInputs | None = None,
 ) -> dict[str, str]:
-    source = source.resolve()
-    if not source.is_dir():
-        raise ValueError(f"custom vLLM source is not a directory: {source}")
+    runtime_root = runtime_root.resolve()
+    if not (runtime_root / "vllm").is_dir():
+        raise ValueError(f"vLLM runtime overlay is not a directory: {runtime_root}")
 
     env = {
-        "PYTHONPATH": str(source),
-        "VLLM_SUBPROCESS_PYTHONPATH": str(source),
+        "PYTHONPATH": str(runtime_root),
+        "VLLM_SUBPROCESS_PYTHONPATH": str(runtime_root),
         "VLLM_RAY_EXTRA_ENV_VARS_TO_COPY": "PYTHONPATH",
         "VLLM_FLASHINFER_MOE_BACKEND": "latency",
         "VLLM_MXFP8_DENSE_TRTLLM_ALLOW_CUTEDSL_FALLBACK": "1",
@@ -91,7 +91,7 @@ def build_arm_environment(
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--arm", choices=("baseline", "adaptive"), required=True)
-    parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--runtime-root", type=Path, required=True)
     parser.add_argument("--tactic-file", type=Path)
     parser.add_argument("--tactic-sha256")
     parser.add_argument("--layer-allowlist-b64")
@@ -114,7 +114,9 @@ def main() -> None:
             layer_allowlist_b64=args.layer_allowlist_b64,
             switch_m=args.switch_m,
         )
-    env = build_arm_environment(args.arm, source=args.source, adaptive=adaptive)
+    env = build_arm_environment(
+        args.arm, runtime_root=args.runtime_root, adaptive=adaptive
+    )
     for key, value in sorted(env.items()):
         if args.shell:
             print(f"export {key}={shlex.quote(value)}")
@@ -124,4 +126,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

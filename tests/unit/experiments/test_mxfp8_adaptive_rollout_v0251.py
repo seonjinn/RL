@@ -8,6 +8,9 @@ from experiments.mxfp8_adaptive_rollout_v0251.contract import (
     AdaptiveInputs,
     build_arm_environment,
 )
+from experiments.mxfp8_adaptive_rollout_v0251.runtime_overlay import (
+    prepare_runtime_overlay,
+)
 from experiments.mxfp8_adaptive_rollout_v0251.summarize import summarize_log
 
 
@@ -20,19 +23,20 @@ def _write_table(path: Path) -> str:
 def test_baseline_uses_same_custom_source_without_adaptive_table(
     tmp_path: Path,
 ) -> None:
-    source = tmp_path / "vllm"
-    source.mkdir()
+    runtime_root = tmp_path / "runtime"
+    (runtime_root / "vllm").mkdir(parents=True)
 
-    env = build_arm_environment("baseline", source=source)
+    env = build_arm_environment("baseline", runtime_root=runtime_root)
 
-    assert env["PYTHONPATH"] == str(source)
+    assert env["PYTHONPATH"] == str(runtime_root)
+    assert env["VLLM_SUBPROCESS_PYTHONPATH"] == str(runtime_root)
     assert env["NEMORL_MXFP8_LINEAR_BACKEND"] == "flashinfer_cutedsl"
     assert "VLLM_MXFP8_DENSE_TRTLLM_EXACT_TACTIC_FILE" not in env
 
 
 def test_adaptive_requires_matching_table_hash(tmp_path: Path) -> None:
-    source = tmp_path / "vllm"
-    source.mkdir()
+    runtime_root = tmp_path / "runtime"
+    (runtime_root / "vllm").mkdir(parents=True)
     table = tmp_path / "tactics.json"
     digest = _write_table(table)
     inputs = AdaptiveInputs(
@@ -41,7 +45,9 @@ def test_adaptive_requires_matching_table_hash(tmp_path: Path) -> None:
         layer_allowlist_b64="MTI4MCw4MTkyCg==",
     )
 
-    env = build_arm_environment("adaptive", source=source, adaptive=inputs)
+    env = build_arm_environment(
+        "adaptive", runtime_root=runtime_root, adaptive=inputs
+    )
 
     assert env["NEMORL_MXFP8_LINEAR_BACKEND"] == "flashinfer_trtllm"
     assert env["VLLM_MXFP8_DENSE_TRTLLM_EXACT_TACTIC_SHA256"] == digest
@@ -50,7 +56,7 @@ def test_adaptive_requires_matching_table_hash(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="SHA256 mismatch"):
         build_arm_environment(
             "adaptive",
-            source=source,
+            runtime_root=runtime_root,
             adaptive=AdaptiveInputs(
                 tactic_file=table,
                 tactic_sha256="0" * 64,
@@ -102,3 +108,85 @@ def test_arm_reuses_locked_driver_interpreter_for_ray_actors() -> None:
     ).read_text(encoding="utf-8")
 
     assert "export NEMO_RL_PY_EXECUTABLES_SYSTEM=1" in launcher
+
+
+def test_runtime_overlay_preserves_wheel_extensions_and_overlays_source(
+    tmp_path: Path,
+) -> None:
+    installed = tmp_path / "installed" / "vllm"
+    installed.mkdir(parents=True)
+    (installed / "__init__.py").write_text("ORIGIN = 'wheel'\n", encoding="utf-8")
+    extension = installed / "_C_stable_libtorch.abi3.so"
+    extension.write_bytes(b"compiled-extension")
+    (installed / "wheel_only.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    source = tmp_path / "source" / "vllm"
+    source.mkdir(parents=True)
+    (source / "__init__.py").write_text("ORIGIN = 'source'\n", encoding="utf-8")
+    (source / "patched.py").write_text("VALUE = 2\n", encoding="utf-8")
+
+    runtime_root = prepare_runtime_overlay(
+        installed_package=installed,
+        source_package=source,
+        destination_base=tmp_path / "runtime",
+        source_revision="deadbeef",
+    )
+
+    runtime_package = runtime_root / "vllm"
+    assert (runtime_package / "__init__.py").read_text(encoding="utf-8") == (
+        "ORIGIN = 'source'\n"
+    )
+    assert (runtime_package / "patched.py").is_file()
+    assert (runtime_package / "wheel_only.py").is_file()
+    assert (runtime_package / extension.name).read_bytes() == b"compiled-extension"
+
+
+def test_runtime_overlay_rejects_wheel_without_stable_extension(
+    tmp_path: Path,
+) -> None:
+    installed = tmp_path / "installed" / "vllm"
+    source = tmp_path / "source" / "vllm"
+    installed.mkdir(parents=True)
+    source.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="_C_stable_libtorch"):
+        prepare_runtime_overlay(
+            installed_package=installed,
+            source_package=source,
+            destination_base=tmp_path / "runtime",
+            source_revision="deadbeef",
+        )
+
+
+def test_runtime_overlay_is_immutable_and_content_addressed(tmp_path: Path) -> None:
+    installed = tmp_path / "installed" / "vllm"
+    source = tmp_path / "source" / "vllm"
+    installed.mkdir(parents=True)
+    source.mkdir(parents=True)
+    extension = installed / "_C_stable_libtorch.abi3.so"
+    extension.write_bytes(b"extension-v1")
+
+    first = prepare_runtime_overlay(
+        installed_package=installed,
+        source_package=source,
+        destination_base=tmp_path / "runtime",
+        source_revision="deadbeef",
+    )
+    reused = prepare_runtime_overlay(
+        installed_package=installed,
+        source_package=source,
+        destination_base=tmp_path / "runtime",
+        source_revision="deadbeef",
+    )
+    extension.write_bytes(b"extension-v2")
+    second = prepare_runtime_overlay(
+        installed_package=installed,
+        source_package=source,
+        destination_base=tmp_path / "runtime",
+        source_revision="deadbeef",
+    )
+
+    assert reused == first
+    assert second != first
+    assert first.is_dir()
+    assert second.is_dir()
