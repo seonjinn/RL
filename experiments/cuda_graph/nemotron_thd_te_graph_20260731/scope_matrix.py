@@ -291,6 +291,8 @@ def render_scope_command(
         )
     for override in extra_overrides:
         override_key = override.split("=", 1)[0].lstrip("+")
+        if override_key.startswith("~"):
+            override_key = override_key[1:]
         if override_key in protected_overrides:
             raise ValueError(f"protected Router Replay override: {override_key}")
     modules = ",".join(scope)

@@ -843,8 +843,14 @@ def test_router_replay_rendering_is_explicit_and_rejects_router_graphs() -> None
     (
         (False, "++policy.router_replay.enabled=true"),
         (True, "+policy.router_replay.enabled=false"),
+        (False, "~policy.router_replay.enabled"),
+        (False, "~policy.router_replay.enabled=true"),
         (True, "++policy.generation.vllm_cfg.enable_prefix_caching=true"),
+        (True, "~policy.generation.vllm_cfg.enable_prefix_caching"),
+        (True, "~policy.generation.vllm_cfg.enable_prefix_caching=true"),
         (True, "++policy.generation.vllm_kwargs.enable_chunked_prefill=true"),
+        (True, "~policy.generation.vllm_kwargs.enable_chunked_prefill"),
+        (True, "~policy.generation.vllm_kwargs.enable_chunked_prefill=true"),
     ),
 )
 def test_router_replay_rejects_normalized_protected_overrides(
