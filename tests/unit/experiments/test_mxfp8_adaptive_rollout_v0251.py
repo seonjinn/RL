@@ -110,6 +110,18 @@ def test_arm_reuses_locked_driver_interpreter_for_ray_actors() -> None:
     assert "export NEMO_RL_PY_EXECUTABLES_SYSTEM=1" in launcher
 
 
+def test_overlay_builder_only_clears_pythonpath_during_discovery() -> None:
+    root = Path(__file__).parents[3]
+    launcher = (
+        root / "experiments/mxfp8_adaptive_rollout_v0251/run_ab.sh"
+    ).read_text(encoding="utf-8")
+
+    builder = launcher.split("builder_python=(", maxsplit=1)[1].split(")", maxsplit=1)[0]
+    runtime = launcher.split("runtime_python=(", maxsplit=1)[1].split(")", maxsplit=1)[0]
+    assert "-u PYTHONPATH" in builder
+    assert "-u PYTHONPATH" not in runtime
+
+
 def test_runtime_overlay_preserves_wheel_extensions_and_overlays_source(
     tmp_path: Path,
 ) -> None:

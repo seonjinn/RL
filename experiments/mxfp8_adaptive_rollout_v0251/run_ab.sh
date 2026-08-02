@@ -22,12 +22,16 @@ fi
 git -C "$VLLM_SOURCE" diff --quiet
 git -C "$VLLM_SOURCE" diff --cached --quiet
 
-runtime_python=(
+builder_python=(
   env -u PYTHONPATH -u VLLM_SUBPROCESS_PYTHONPATH
   "UV_PROJECT_ENVIRONMENT=${NEMO_RL_DRIVER_VENV_DIR:?set NEMO_RL_DRIVER_VENV_DIR}"
   uv run --locked --extra vllm --directory "$ROOT" python
 )
-VLLM_RUNTIME_ROOT=$("${runtime_python[@]}" \
+runtime_python=(
+  env "UV_PROJECT_ENVIRONMENT=${NEMO_RL_DRIVER_VENV_DIR:?set NEMO_RL_DRIVER_VENV_DIR}"
+  uv run --locked --extra vllm --directory "$ROOT" python
+)
+VLLM_RUNTIME_ROOT=$("${builder_python[@]}" \
   "$ROOT/experiments/mxfp8_adaptive_rollout_v0251/runtime_overlay.py" \
   --source-root "$VLLM_SOURCE" \
   --destination-base "$VLLM_RUNTIME_BASE" \
