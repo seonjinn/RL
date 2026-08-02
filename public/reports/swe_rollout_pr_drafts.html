@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SWE Rollout Optimization PR Drafts</title>
+<style>
+  :root {
+    --ink: #182033;
+    --muted: #647087;
+    --line: #cbd5e4;
+    --blue: #214f91;
+    --blue-soft: #edf4ff;
+    --green: #216e3a;
+    --green-soft: #edf8f0;
+    --amber: #8a5a00;
+    --amber-soft: #fff7e6;
+    --purple: #6c3f91;
+    --purple-soft: #f6effc;
+    --gray-soft: #f4f6f9;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0 auto;
+    max-width: 1180px;
+    padding: 28px 22px 80px;
+    color: var(--ink);
+    background: #fbfcfe;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.55;
+  }
+  h1 { margin: 0 0 6px; font-size: 25px; letter-spacing: -0.02em; }
+  h2 {
+    margin: 38px 0 14px;
+    padding-left: 10px;
+    color: var(--blue);
+    border-left: 4px solid var(--blue);
+    font-size: 19px;
+  }
+  h3 { margin: 20px 0 8px; font-size: 16px; }
+  h4 { margin: 18px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; }
+  p { margin: 7px 0 10px; }
+  ul, ol { margin: 7px 0 12px; padding-left: 22px; }
+  li { margin: 4px 0; }
+  a { color: #1558a6; }
+  code {
+    padding: 1px 4px;
+    border-radius: 4px;
+    color: #243f71;
+    background: #eaf0f8;
+    font-family: "SFMono-Regular", Consolas, monospace;
+    font-size: 0.92em;
+  }
+  .subtitle { margin: 0 0 18px; color: var(--muted); }
+  .decision {
+    padding: 15px 17px;
+    border: 1px solid #91b6e4;
+    border-radius: 8px;
+    background: var(--blue-soft);
+  }
+  .decision strong { color: #153f79; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px; margin: 15px 0; }
+  .badge {
+    display: inline-block;
+    padding: 3px 8px;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .ours { color: var(--green); background: var(--green-soft); }
+  .cherry { color: var(--purple); background: var(--purple-soft); }
+  .main { color: var(--blue); background: var(--blue-soft); }
+  .related { color: var(--amber); background: var(--amber-soft); }
+  .ready { color: var(--green); background: var(--green-soft); }
+  .pending { color: var(--amber); background: var(--amber-soft); }
+  .planned { color: #586174; background: var(--gray-soft); }
+  .measured { color: var(--green); background: var(--green-soft); }
+  .projected { color: var(--amber); background: var(--amber-soft); }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+    gap: 16px;
+  }
+  .card {
+    padding: 16px 17px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: white;
+  }
+  .card h3 { margin-top: 8px; color: #233f71; }
+  .card .meta { display: flex; flex-wrap: wrap; gap: 6px; }
+  .copy-block {
+    margin-top: 13px;
+    padding-top: 12px;
+    border-top: 1px solid #dde4ee;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 18px; background: white; }
+  th, td { padding: 8px 9px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+  th { color: #243c68; background: #edf2f8; }
+  td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .note {
+    padding: 11px 13px;
+    border-left: 4px solid #d5a43a;
+    background: var(--amber-soft);
+  }
+  .pipeline { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 15px 0; }
+  .stage { padding: 8px 11px; border: 1px solid var(--line); border-radius: 6px; background: white; font-weight: 650; }
+  .arrow { color: var(--muted); font-weight: 700; }
+  .small { color: var(--muted); font-size: 12px; }
+  @media (max-width: 700px) {
+    body { padding: 20px 12px 60px; }
+    .grid { grid-template-columns: 1fr; }
+    table { display: block; overflow-x: auto; }
+  }
+</style>
+</head>
+<body>
+
+<h1>SWE Rollout Optimization PR Drafts</h1>
+<p class="subtitle">PR-ready changes, upstream adoption, and the progressive validation queue for NeMo-RL + NeMo-Gym + nv-OpenHands.</p>
+
+<section id="decision">
+  <div class="decision">
+    <strong>Decision.</strong> Open a draft for the node-local OpenHands runtime change first. NeMo-RL #3390 and #3283 were user-requested upstream cherry-picks, not changes authored in this workstream. They reduce per-turn serving and Ray handoff costs; node-local staging independently reduces OpenHands process and action-server startup I/O. The mechanisms are complementary, but the combined speedup on refreshed latest main is still a <b>Pending measurement</b>.
+  </div>
+  <div class="legend" aria-label="Provenance legend">
+    <span class="badge ours">Our implementation</span>
+    <span class="badge cherry">User-requested cherry-pick</span>
+    <span class="badge main">Already in latest main</span>
+    <span class="badge related">Related, not duplicate</span>
+    <span class="badge measured">Measured</span>
+    <span class="badge projected">Projected</span>
+  </div>
+  <p>
+    Evidence: <a href="nemogym_init_framework_fixes.html">initialization and framework analysis</a>,
+    <a href="nemogym_swe_efficiency_report.html">SWE rollout efficiency report</a>, and
+    <a href="nemogym_init_framework_fixes.html">latest-main validation attempts</a>.
+  </p>
+</section>
+
+<section id="pr-ready">
+  <h2>PR-ready queue</h2>
+  <p>Each card is deliberately small enough to submit and review independently. A draft can be opened before its final performance gate, but it cannot be marked ready for review with an unverified current-main speedup claim.</p>
+
+  <div class="grid">
+    <article class="card" id="pr-node-local">
+      <div class="meta">
+        <span class="badge ours">Our implementation</span>
+        <span class="badge ready">Draft PR now</span>
+        <span class="badge measured">Historical vLLM 0.25.1 result</span>
+      </div>
+      <h3>[SWE] Stage the OpenHands runtime on node-local storage</h3>
+      <p><b>Repository:</b> NVIDIA-NeMo/Gym</p>
+      <p><b>Root cause:</b> every rollout starts a new OpenHands process and action server. Importing thousands of OpenHands and miniforge files from shared storage makes Connect and Framework startup slow.</p>
+      <div class="copy-block">
+        <h4>Summary</h4>
+        <p>Stage OpenHands and miniforge on node-local storage once per job. SWE rollout containers mount the staged copy at the existing <code>/openhands_setup</code> path.</p>
+        <h4>High-level implementation</h4>
+        <ul>
+          <li>Add an opt-in node-local staging mode to <code>swe_agents/app.py</code>.</li>
+          <li>Build an immutable runtime contract and populate a job-scoped cache under a lock.</li>
+          <li>Rewrite only known environment metadata and shebang launchers for <code>/openhands_setup</code>.</li>
+          <li>Verify source stability, publish an atomic manifest, and keep shared storage as the fallback.</li>
+        </ul>
+        <h4>Performance impact</h4>
+        <ul>
+          <li><span class="badge measured">Measured</span> Connect: <b>15.0 to 11.1 s</b> per rollout, 26.0% lower.</li>
+          <li><span class="badge measured">Measured</span> Framework: <b>21.8 to 16.4 s</b> per rollout, 24.8% lower.</li>
+          <li><span class="badge measured">Measured</span> Combined saving: <b>9.3 s/rollout</b>; generation stayed at 276-277 tok/s.</li>
+          <li><span class="badge projected">Pending measurement</span> Refreshed latest-main setup-inclusive allocation-to-result A/B.</li>
+        </ul>
+        <h4>Validation before ready-for-review</h4>
+        <ul>
+          <li>Run matched n=24 baseline versus node-local jobs, including the 216 s first-copy cost, failures, and drain.</li>
+          <li>Require reward, valid-rate, generated-patch, and generation-throughput parity.</li>
+          <li>Run n=80 only if n=24 is inconclusive but per-rollout Connect + Framework savings remain at least 5 s.</li>
+        </ul>
+      </div>
+      <p class="small">Editable source: <a href="#pr-node-local">Markdown PR draft</a>.</p>
+    </article>
+
+    <article class="card" id="pr-timing">
+      <div class="meta">
+        <span class="badge ours">Our implementation</span>
+        <span class="badge pending">Draft after focused tests</span>
+      </div>
+      <h3>[SWE] Harden OpenHands startup phase metrics</h3>
+      <p><b>Repository:</b> seonjinn/nv-OpenHands, targeting the SWE branch</p>
+      <p><b>Root cause:</b> startup timers exist, but metrics output must remain optional and safe for standalone runs, partial failures, and concurrent readers.</p>
+      <div class="copy-block">
+        <h4>Summary</h4>
+        <p>Move startup metric updates into a small tested helper. Treat a missing metrics path as disabled and publish JSON updates atomically without changing rollout behavior.</p>
+        <h4>High-level implementation</h4>
+        <ul>
+          <li>Keep the existing monotonic phase names and numeric values.</li>
+          <li>Handle missing, empty, malformed, and valid metrics files explicitly.</li>
+          <li>Write to a temporary sibling and use atomic replace.</li>
+          <li>Do not change OpenHands commands, retries, or environment lifecycle.</li>
+        </ul>
+        <h4>Performance impact</h4>
+        <p>No intended speedup. Accept only if median overhead is at most 0.5% and p95 overhead is at most 1%.</p>
+        <h4>Validation before draft</h4>
+        <p>Focused helper tests, standalone and Gym output parity, non-negative phase fields, and enabled-versus-disabled overhead comparison.</p>
+      </div>
+      <p class="small">Editable source: <a href="#pr-timing">Markdown PR draft</a>.</p>
+    </article>
+
+    <article class="card" id="pr-workspace-consumer">
+      <div class="meta">
+        <span class="badge ours">Our implementation</span>
+        <span class="badge planned">Planned</span>
+        <span class="badge projected">Projected benefit</span>
+      </div>
+      <h3>[SWE] Support an immutable workspace cache</h3>
+      <p><b>Repository:</b> seonjinn/nv-OpenHands, targeting the SWE branch</p>
+      <p><b>Root cause:</b> <code>cp -al</code> crosses the read-only testbed and writable workspace filesystems, fails, and falls back to a full <code>cp -r</code> for every rollout.</p>
+      <div class="copy-block">
+        <h4>Summary</h4>
+        <p>Allow the SWE entry script to build a private writable workspace from an optional read-only, immutable cache.</p>
+        <h4>High-level implementation</h4>
+        <ul>
+          <li>Validate instance ID, source image identity, and base commit.</li>
+          <li>Use a private reflink clone when supported; evaluate a private OverlayFS path separately.</li>
+          <li>Fall back to the current full copy when the cache is missing, stale, or unsupported.</li>
+          <li>Never expose shared writable inodes to multiple rollouts.</li>
+        </ul>
+        <h4>Performance target</h4>
+        <p><span class="badge projected">Projected</span> Warm Initialize: <b>21.8 to at most 5 s</b>, saving at least 16.8 s per rollout.</p>
+        <h4>Promotion gate</h4>
+        <p>Two concurrent rollouts must prove no file leakage; base commit, patch, trajectory, and reward must match the current path. Cache miss, stale cache, unsupported reflink, and interrupted population must fall back safely.</p>
+      </div>
+      <p class="small">Editable source: <a href="#pr-workspace-consumer">Markdown PR draft</a>.</p>
+    </article>
+
+    <article class="card" id="pr-workspace-integration">
+      <div class="meta">
+        <span class="badge ours">Our implementation</span>
+        <span class="badge planned">Planned companion PR</span>
+        <span class="badge projected">Projected benefit</span>
+      </div>
+      <h3>[SWE] Stage and mount immutable workspace caches</h3>
+      <p><b>Repository:</b> NVIDIA-NeMo/Gym</p>
+      <p><b>Dependency:</b> the nv-OpenHands immutable workspace-cache consumer contract above.</p>
+      <div class="copy-block">
+        <h4>Summary</h4>
+        <p>Make Gym the safe owner of an immutable per-instance template and mount it read-only at the private OpenHands cache path.</p>
+        <h4>High-level implementation</h4>
+        <ul>
+          <li>Key the cache by source image identity, instance ID, and base commit.</li>
+          <li>Populate under a lock in a temporary directory and publish with atomic rename.</li>
+          <li>Verify a manifest before every mount.</li>
+          <li>Keep <code>/workspace</code> private and writable for each rollout.</li>
+        </ul>
+        <h4>Performance target</h4>
+        <ul>
+          <li><span class="badge projected">Projected</span> Warm Initialize at most 5 s.</li>
+          <li><span class="badge projected">Projected</span> At least 8% lower n=80 allocation-to-result wall.</li>
+          <li>Do not count the consumer and producer benefit twice.</li>
+        </ul>
+        <h4>Promotion gate</h4>
+        <p>Cold- and warm-cache tests; locking, atomic publication, manifest rejection, safe fallback, identical patches and rewards, and no new failure class.</p>
+      </div>
+      <p class="small">Editable source: <a href="#pr-workspace-integration">Markdown PR draft</a>.</p>
+    </article>
+  </div>
+</section>
+
+<section id="upstream">
+  <h2>Upstream adoption and overlap ledger</h2>
+  <p>These changes are dependencies or related work. They are not new PRs to submit under our name.</p>
+  <table>
+    <thead>
+      <tr><th>Optimization</th><th>Provenance</th><th>What it changes</th><th>Our relationship and current evidence</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><a href="https://github.com/NVIDIA-NeMo/RL/pull/3390">NeMo-RL #3390</a><br>Return token metadata with chat completions</td>
+        <td><span class="badge cherry">User-requested cherry-pick</span><br>Original author: jthomson04</td>
+        <td>Removes the awaited raw-vLLM <code>/tokenize</code> round trip from every model turn.</td>
+        <td>Cherry-picked, rebased, and included in our vLLM 0.25.1 compatibility arm. The upstream vLLM 0.23 benchmark reports a 14.6% model-request-wave reduction; our refreshed environment-inclusive effect is pending.</td>
+      </tr>
+      <tr>
+        <td><a href="https://github.com/NVIDIA-NeMo/RL/pull/3283">NeMo-RL #3283</a><br>Give NemoGym its tokenizer at construction</td>
+        <td><span class="badge cherry">User-requested cherry-pick</span><br>Original author: bg51717</td>
+        <td>Ships the tokenizer once per actor instead of serializing it for every prompt group.</td>
+        <td>Cherry-picked and rebased after #3390. The combined Linux/CUDA Graph compatibility gate passed 246 tests; incremental n=24 performance is expected to be smaller than at hundreds of prompt groups.</td>
+      </tr>
+      <tr>
+        <td><a href="https://github.com/NVIDIA-NeMo/RL/pull/3000">NeMo-RL #3000</a><br>Prompt-group streaming</td>
+        <td><span class="badge main">Already in latest main</span></td>
+        <td>Emits complete prompt groups without waiting for the slowest group, reducing barrier and drain time.</td>
+        <td>Inherited through latest main. It does not remove per-rollout OpenHands process, workspace, or action-server startup.</td>
+      </tr>
+      <tr>
+        <td><a href="https://github.com/NVIDIA-NeMo/RL/pull/3292">NeMo-RL #3292</a><br>Routed-expert payload serialization</td>
+        <td><span class="badge main">Already in latest main</span></td>
+        <td>Reduces serialization cost for large routed-expert payloads.</td>
+        <td>Inherited through latest main and relevant only when routed-expert replay is enabled. It does not overlap the OpenHands startup patches.</td>
+      </tr>
+      <tr>
+        <td><a href="https://github.com/NVIDIA-NeMo/RL/pull/3409">NeMo-RL #3409</a><br>Per-node Gym venv prefetch</td>
+        <td><span class="badge main">Already in latest main</span></td>
+        <td>Ensures Gym server venvs exist on every node and avoids failed rollouts on uncovered nodes.</td>
+        <td>Correctness and node coverage work. It does not stage the OpenHands source/miniforge runtime or eliminate per-rollout imports.</td>
+      </tr>
+      <tr>
+        <td><a href="https://github.com/NVIDIA-NeMo/Gym/pull/1669">Gym #1669</a><br>Reuse one HTTP client per Harbor episode</td>
+        <td><span class="badge related">Related, not duplicate</span></td>
+        <td>Preserves vLLM session affinity and prefix-cache locality for the Harbor agent.</td>
+        <td>Our nv-OpenHands path showed the same class of zero-hit prefix-cache problem, but uses a different client and routing path. A separate nv-OpenHands integration remains valid work.</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="progressive">
+  <h2>Progressive optimization queue</h2>
+  <p>Test one mechanism at a time. Promote a candidate only when its named phase improves and its correctness gate passes.</p>
+  <table>
+    <thead>
+      <tr><th>Priority and candidate</th><th>Targeted root cause</th><th>Quantitative acceptance gate</th><th>Risk and stop condition</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>1. Prebuilt runtime artifact</b><br><span class="badge projected">Projected</span></td>
+        <td>Replace the 5.3 GB, 216 s per-job recursive mirror with a baked container layer or versioned squashfs mount.</td>
+        <td>Setup at most 36 s and at least 180 s below the current copy; byte-level manifest parity; no valid-rate or rollout-phase regression.</td>
+        <td>Low implementation risk. Stop if image distribution or mount cost consumes the saved setup time.</td>
+      </tr>
+      <tr>
+        <td><b>2. Private CoW workspace</b><br><span class="badge projected">Projected</span></td>
+        <td>Eliminate the cross-filesystem <code>cp -al</code> failure and full <code>cp -r</code> fallback.</td>
+        <td>Warm Initialize at most 5 s; n=80 job wall at least 8% lower; identical base commit, patch, reward, and trajectory; zero cross-rollout file leakage.</td>
+        <td>Filesystem support and isolation are the primary risks. Stop on any shared writable inode or unsupported fallback ambiguity.</td>
+      </tr>
+      <tr>
+        <td><b>3. Pre-imported forkserver</b><br><span class="badge projected">Projected</span></td>
+        <td>Pay the one-shot <code>run_infer.py</code> import cost once while retaining a fresh child per rollout.</td>
+        <td>Framework at least 3 s lower and allocation-to-result wall at least 2% lower; deterministic event ordering and output parity.</td>
+        <td>Fork only before CUDA, threads, sockets, and loggers are initialized. Stop on inherited process state or nondeterministic shutdown.</td>
+      </tr>
+      <tr>
+        <td><b>4. One-use prewarmed action servers</b><br><span class="badge projected">Projected</span></td>
+        <td>Move action-server import and <code>/alive</code> boot off the rollout critical path without reusing a dirty server.</td>
+        <td>Connect p50 at most 5 s and p95 at least 30% lower; every server receives exactly one lease and is destroyed afterward.</td>
+        <td>Stop on process, environment, filesystem, secret, tmux, plugin, todo, or download state leakage.</td>
+      </tr>
+      <tr>
+        <td><b>5. Trajectory payload compaction</b><br><span class="badge projected">Projected</span></td>
+        <td>After #3390, avoid persisting duplicate token/logprob representations while preserving the OpenAI response contract.</td>
+        <td>Serialized trajectory bytes at least 10% lower and serialization CPU p50 at least 5% lower; token IDs, selected logprobs, rewards, and replay behavior identical.</td>
+        <td>Stop if any public response field changes or offline replay loses information.</td>
+      </tr>
+      <tr>
+        <td><b>6. nv-OpenHands episode affinity</b><br><span class="badge projected">Projected</span></td>
+        <td>Keep consecutive turns of one episode on the same vLLM replica so eligible KV prefixes are local.</td>
+        <td>Eligible prefix-cache hit rate at least 30% and long-context prefill wall at least 5% lower; no more than 2% generation-throughput regression.</td>
+        <td>Use conversation or instance identity, never mutable global order. Stop on load imbalance or session cross-talk.</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="note"><b>Do not add percentages across unmatched experiments.</b> #3390 targets the per-turn model-serving critical path, #3283 targets Ray actor dispatch, and local startup changes target Connect, Initialize, or Framework. Combined impact must come from a matched multi-arm run.</div>
+</section>
+
+<section id="validation">
+  <h2>Validation and promotion workflow</h2>
+  <div class="pipeline" aria-label="Validation pipeline">
+    <span class="stage">Static + unit</span><span class="arrow">→</span>
+    <span class="stage">n=1 correctness</span><span class="arrow">→</span>
+    <span class="stage">n=24 matched A/B</span><span class="arrow">→</span>
+    <span class="stage">Conditional n=80</span><span class="arrow">→</span>
+    <span class="stage">Promote or drop</span>
+  </div>
+  <table>
+    <thead><tr><th>Gate</th><th>Required evidence</th></tr></thead>
+    <tbody>
+      <tr><td>Correctness</td><td>Same base commit and inputs; generated-patch, reward, trajectory, valid-rate, and fallback parity.</td></tr>
+      <tr><td>Isolation</td><td>No workspace, process, environment, credential, server, or cache state crosses rollout boundaries.</td></tr>
+      <tr><td>Performance</td><td>Allocation-to-result job wall includes setup, failures, and drain. Report phase sums and summed concurrent rollout durations separately.</td></tr>
+      <tr><td>Operational safety</td><td>No new timeout, OOM, Ray, stale-cache, workspace-isolation, or process-leak failure class.</td></tr>
+      <tr><td>Promotion</td><td>Only measured, reproducible effects enter a ready-for-review PR. Null or unsafe candidates remain in the attempt ledger and are dropped.</td></tr>
+    </tbody>
+  </table>
+  <p><b>Immediate sequence:</b> open the node-local change as a draft; complete latest-main #3390/#3283/node-local A/B; harden startup metrics; then implement the immutable cache consumer and producer as separate dependent PRs. Test the remaining candidates one at a time after those gates.</p>
+</section>
+
+<p class="small">Prepared 2026-08-01. This page contains no current-main performance claim beyond the evidence labels shown above.</p>
+
+</body>
+</html>
