@@ -28,6 +28,7 @@ mcore_root=${bridge_root}/3rdparty/Megatron-LM
 source_provenance_verifier=${script_dir}/scripts/verify_source_provenance.sh
 runtime_attestation_validator=${script_dir}/verify_runtime_attestation.py
 profile_snapshot_helper=${script_dir}/profile_snapshot.py
+campaign_gate_validator=${script_dir}/validate_campaign_gate.py
 cd "${repo_root}"
 
 : "${MODEL:?Set MODEL to nano, super, ultra, qwen3_30ba3b, or qwen3_235b}"
@@ -124,6 +125,28 @@ while IFS=$'\t' read -r field value; do
   esac
 done <<<"${profile_snapshot_output}"
 [[ "${PROFILE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || fail "Cluster profile snapshot omitted its digest"
+if [[ ( "${MODEL}" == qwen3_30ba3b || "${MODEL}" == qwen3_235b ) && ( "${STEPS}" == 20 || ( "${MODEL}" == qwen3_235b && "${ROUTER_REPLAY}" == on ) ) ]]; then
+  case "${QWEN_CAMPAIGN_ARM:-}" in
+    A) [[ "${SCOPE}" == baseline && "${ROUTER_REPLAY}" == off ]] || fail "QWEN_CAMPAIGN_ARM A mismatch" ;;
+    B) [[ "${SCOPE}" == moe_router && "${ROUTER_REPLAY}" == off ]] || fail "QWEN_CAMPAIGN_ARM B mismatch" ;;
+    C) [[ "${SCOPE}" == baseline && "${ROUTER_REPLAY}" == on ]] || fail "QWEN_CAMPAIGN_ARM C mismatch" ;;
+    E) [[ "${SCOPE}" == attn && "${ROUTER_REPLAY}" == on ]] || fail "QWEN_CAMPAIGN_ARM E mismatch" ;;
+    *) fail "Qwen campaign launch requires QWEN_CAMPAIGN_ARM" ;;
+  esac
+  [[ "${VALIDATED_PROFILE_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] || fail "Qwen campaign launch requires a validated profile digest"
+  [[ -f "${campaign_gate_validator}" ]] || fail "Missing campaign gate validator"
+  gate_common=(--model "${MODEL}" --profile-file "${profile_file}" --profile-dir "${profile_dir}" --cluster "${CLUSTER}" --expected-profile-sha256 "${PROFILE_SHA256}")
+  if [[ "${MODEL}" == qwen3_235b && "${ROUTER_REPLAY}" == on ]]; then
+    [[ -n "${R3_PREFLIGHT_FILE:-}" && -n "${R3_PREFLIGHT_SHA256:-}" ]] || fail "Qwen235 Router Replay requires R3 preflight evidence"
+    gate_output=$(python3 "${campaign_gate_validator}" r3 "${gate_common[@]}" --gate-file "${R3_PREFLIGHT_FILE}" --gate-sha256 "${R3_PREFLIGHT_SHA256}") || fail "Qwen235 R3 campaign gate validation failed"
+    [[ "${gate_output}" == "PROFILE_SHA256=${PROFILE_SHA256}" ]] || fail "Qwen235 R3 gate profile digest mismatch"
+  fi
+  if [[ "${STEPS}" == 20 ]]; then
+    [[ -n "${SMOKE_PROMOTION_FILE:-}" && -n "${SMOKE_PROMOTION_SHA256:-}" ]] || fail "Qwen performance requires smoke promotion evidence"
+    gate_output=$(python3 "${campaign_gate_validator}" promotion "${gate_common[@]}" --gate-file "${SMOKE_PROMOTION_FILE}" --gate-sha256 "${SMOKE_PROMOTION_SHA256}" --arm "${QWEN_CAMPAIGN_ARM}") || fail "Qwen promotion campaign gate validation failed"
+    [[ "${gate_output}" == "PROFILE_SHA256=${PROFILE_SHA256}" ]] || fail "Qwen promotion gate profile digest mismatch"
+  fi
+fi
 [[ "${PARTITION}" == "batch" ]] || fail "All production jobs require PARTITION=batch"
 [[ "${SBATCH_GPUS_PER_NODE:-}" == "${MODEL_GPUS_PER_NODE}" ]] || \
   fail "Profile SBATCH_GPUS_PER_NODE must match model GPUS_PER_NODE=${MODEL_GPUS_PER_NODE}"

@@ -60,6 +60,9 @@ validate_gate() {
     --profile-dir "${profile_dir}"
     --cluster "${CLUSTER}"
   )
+  if [[ -n "${VALIDATED_PROFILE_SHA256:-}" ]]; then
+    command+=(--expected-profile-sha256 "${VALIDATED_PROFILE_SHA256}")
+  fi
   local arm
   for arm in "$@"; do
     command+=(--arm "${arm}")
@@ -68,6 +71,9 @@ validate_gate() {
   validation_output=$("${command[@]}") || fail "${kind} campaign gate validation failed"
   [[ "${validation_output}" =~ ^PROFILE_SHA256=([0-9a-f]{64})$ ]] || \
     fail "${kind} campaign gate returned malformed profile digest"
+  if [[ -n "${VALIDATED_PROFILE_SHA256:-}" && "${VALIDATED_PROFILE_SHA256}" != "${BASH_REMATCH[1]}" ]]; then
+    fail "${kind} campaign gate returned a different profile digest"
+  fi
   VALIDATED_PROFILE_SHA256=${BASH_REMATCH[1]}
 }
 
@@ -161,15 +167,13 @@ for arm in "${arms[@]}"; do
     requires_r3_gate=true
   fi
 done
-if [[ "${requires_r3_gate}" == "true" || "${phase}" == "performance" ]]; then
-  profile_dir=${script_dir}/profiles
-  if [[ -n "${PROFILE_FILE:-}" ]]; then
-    profile_file=${PROFILE_FILE}
-  elif [[ -e "${profile_dir}/${CLUSTER}.env" || -L "${profile_dir}/${CLUSTER}.env" ]]; then
-    profile_file=${profile_dir}/${CLUSTER}.env
-  else
-    profile_file=${profile_dir}/${CLUSTER}.env.example
-  fi
+profile_dir=${script_dir}/profiles
+if [[ -n "${PROFILE_FILE:-}" ]]; then
+  profile_file=${PROFILE_FILE}
+elif [[ -e "${profile_dir}/${CLUSTER}.env" || -L "${profile_dir}/${CLUSTER}.env" ]]; then
+  profile_file=${profile_dir}/${CLUSTER}.env
+else
+  profile_file=${profile_dir}/${CLUSTER}.env.example
 fi
 if [[ "${requires_r3_gate}" == "true" ]]; then
   require_gate_inputs R3_PREFLIGHT_FILE R3_PREFLIGHT_SHA256
@@ -205,6 +209,10 @@ for repeat_index in $(seq 1 "${repeats}"); do
     SBATCH_TEST_ONLY="${SBATCH_TEST_ONLY:-0}" \
     PROFILE_FILE="${profile_file:-}" \
     VALIDATED_PROFILE_SHA256="${VALIDATED_PROFILE_SHA256:-}" \
+    R3_PREFLIGHT_FILE="${R3_PREFLIGHT_FILE:-}" \
+    R3_PREFLIGHT_SHA256="${R3_PREFLIGHT_SHA256:-}" \
+    SMOKE_PROMOTION_FILE="${SMOKE_PROMOTION_FILE:-}" \
+    SMOKE_PROMOTION_SHA256="${SMOKE_PROMOTION_SHA256:-}" \
     RUN_GROUP="${run_group}" \
     REPEAT_INDEX="${repeat_index}" \
     RUN_TAG="${repeat_tag}" \

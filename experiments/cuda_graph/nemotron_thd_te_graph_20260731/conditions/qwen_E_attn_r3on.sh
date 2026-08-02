@@ -24,4 +24,5 @@ case "${MODEL:-}" in
 esac
 
 export ROUTER_REPLAY=on
+export QWEN_CAMPAIGN_ARM=E
 bash "$(dirname "${BASH_SOURCE[0]}")/../scopes/17_attn.sh"

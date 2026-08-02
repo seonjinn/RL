@@ -311,11 +311,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--model", required=True, choices=("qwen3_30ba3b", "qwen3_235b"))
     parser.add_argument("--profile-file")
     parser.add_argument("--profile-dir", required=True)
+    parser.add_argument("--expected-profile-sha256")
     parser.add_argument("--cluster", required=True, choices=("ptyche", "oci-hsg", "lyris"))
     parser.add_argument("--arm", action="append", default=[])
     args = parser.parse_args()
     if FULL_SHA256.fullmatch(args.gate_sha256) is None:
         parser.error("--gate-sha256 must be a full lowercase SHA256")
+    if args.expected_profile_sha256 and FULL_SHA256.fullmatch(args.expected_profile_sha256) is None:
+        parser.error("--expected-profile-sha256 must be a full lowercase SHA256")
     if args.kind == "r3":
         if args.model != "qwen3_235b":
             parser.error("R3 validation requires --model qwen3_235b")
@@ -331,6 +334,8 @@ def main() -> int:
     args = _parse_args()
     try:
         profile, profile_sha256 = _profile_values(args)
+        if args.expected_profile_sha256 and profile_sha256 != args.expected_profile_sha256:
+            _fail("profile SHA256 does not match the expected snapshot")
         gate_content = _read_regular_file(Path(args.gate_file), "gate file")
         if not hmac.compare_digest(hashlib.sha256(gate_content).hexdigest(), args.gate_sha256):
             _fail("gate file SHA256 does not match --gate-sha256")

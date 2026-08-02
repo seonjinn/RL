@@ -23,6 +23,10 @@ Implementation:
   submitter forwards that digest to every leaf, and `run_scope.sh` safely
   snapshots the profile itself and rejects any post-validation replacement
   before `SBATCH:` output or contact.
+- Review fix round 3 binds an immutable `QWEN_CAMPAIGN_ARM` in every Qwen
+  condition leaf and repeats all required campaign-gate checks inside
+  `run_scope.sh`. Direct Qwen235 R3 and every Qwen 20-step launch now require
+  valid arm identity, a matching profile snapshot, and the relevant evidence.
 
 Evidence:
 
@@ -45,12 +49,16 @@ Evidence:
 - Focused launcher checks passed for safe profile rendering and runtime
   attestation command construction; an explicit validated-profile digest
   mismatch exited 2 before `SBATCH:`.
+- Direct Qwen235 C and Qwen30 20-step A probes without evidence both exited 2
+  with no `SBATCH:` output. The matrix suite remained green (47 passed) and
+  the focused launcher profile/runtime subset remained green (2 passed).
 
 SHA256:
 
 - `validate_campaign_gate.py`: `0a10cb1d6c6aa24876ed7b9001d27760b0ab5830cb7fdeb2f804cd13f4f3ca02`
 - `profile_snapshot.py`: `ad7727cac5d265476cc79567ae05ad6c0e6d93aec1158e0a66f0daf4eca56ae0`
 - `validate_campaign_gate.py` (round 2): `86583569f560eaa88cc82df310dfd99bf83de42c926f10cd5a02659c98c5ac53`
+- `validate_campaign_gate.py` (round 3): `8e4b6fff945e9bae42c6e9d4d7b914171d791aa96d3b1286f2039c43752f6703`
 
 Concern:
 
