@@ -233,6 +233,8 @@ def setup_nemo_gym_environment(
         base_urls=base_urls,
         model_name=master_config.generation["model_name"],
         enable_router_replay=False,
+        routed_experts_dtype="int16",
+        use_fastokens=False,
     )
 
 
