@@ -29,3 +29,7 @@ four GPUs per node, account `coreai_dlalgo_llm`, partition `36x2-a01r`, and
 `--segment=2`. The immutable production form should replace
 `CUSTOM_VLLM_SOURCE` with a custom wheel baked into the NeMo-RL container.
 
+```bash
+bash experiments/mxfp8_adaptive_rollout_v0251/submit_ptyche.sh test-only
+bash experiments/mxfp8_adaptive_rollout_v0251/submit_ptyche.sh submit
+```
