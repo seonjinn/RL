@@ -668,6 +668,59 @@ def test_rendered_nano_command_pins_the_claimed_hybridep_dispatcher() -> None:
     assert "policy.megatron_cfg.moe_token_dispatcher_type=hybridep" not in command
 
 
+def test_direct_oci_launcher_submits_hybridep_with_mnnvl_and_node_exclusions(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    sbatch_log = tmp_path / "sbatch.log"
+    fake_sbatch = fake_bin / "sbatch"
+    fake_sbatch.write_text(
+        """#!/bin/bash
+{
+  printf 'ARGS='
+  printf '%q ' "$@"
+  printf '\nCOMMAND=%s\n' "${COMMAND:-}"
+  for argument in "$@"; do
+    printf 'ARG=%s\n' "${argument}"
+  done
+} >> "${FAKE_SBATCH_LOG}"
+if [[ " $* " != *" --test-only "* ]]; then
+  printf '12345\n'
+fi
+"""
+    )
+    fake_sbatch.chmod(0o755)
+
+    exclusion = "nvl72027-T07,nvl72114-T[01-07,09-18]"
+    result = _run_script(
+        "scripts/submit_oci_nano_direct.sh",
+        PATH=f"{fake_bin}:{os.environ['PATH']}",
+        FAKE_SBATCH_LOG=str(sbatch_log),
+        SOURCE_ROOT=str(REPO_ROOT),
+        EXPERIMENT_ROOT=str(tmp_path / "runs"),
+        CONTAINER=str(tmp_path / "hybridep.sqsh"),
+        MOE_TOKEN_DISPATCHER_TYPE="flex",
+        MOE_FLEX_DISPATCHER_BACKEND="hybridep",
+        HYBRID_EP_RANKS_PER_NVLINK_DOMAIN="16",
+        CUDA_GRAPH_MODULES="attn,mamba",
+        EXCLUDE=exclusion,
+        RUN_TAG="unit",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "RUN_NAME=nano-attn-mamba-5step-hybridep-unit" in result.stdout
+    submissions = sbatch_log.read_text()
+    assert submissions.count("ARGS=") == 2
+    assert submissions.count(f"ARG=--exclude={exclusion}") == 2
+    assert "USE_MNNVL=1" in submissions
+    assert "NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN=16" in submissions
+    assert "policy.megatron_cfg.moe_token_dispatcher_type=flex" in submissions
+    assert "++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep" in submissions
+    assert "++policy.megatron_cfg.moe_hybridep_pad_uneven_dispatch_inputs=true" in submissions
+    assert "policy.megatron_cfg.moe_token_dispatcher_type=alltoall" not in submissions
+
+
 def test_rendered_command_shell_quotes_log_paths_without_changing_arguments() -> None:
     module = _load_experiment_module("scope_matrix")
 

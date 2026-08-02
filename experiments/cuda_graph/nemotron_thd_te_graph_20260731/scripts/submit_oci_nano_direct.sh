@@ -25,6 +25,10 @@ CUDA_GRAPH_MODULES=${CUDA_GRAPH_MODULES:-attn,mamba,moe_router}
 CUDA_GRAPH_IMPL=${CUDA_GRAPH_IMPL:-transformer_engine}
 NVTE_DEBUG=${NVTE_DEBUG:-0}
 NVTE_DEBUG_LEVEL=${NVTE_DEBUG_LEVEL:-0}
+MOE_TOKEN_DISPATCHER_TYPE=${MOE_TOKEN_DISPATCHER_TYPE:-alltoall}
+MOE_FLEX_DISPATCHER_BACKEND=${MOE_FLEX_DISPATCHER_BACKEND:-}
+HYBRID_EP_RANKS_PER_NVLINK_DOMAIN=${HYBRID_EP_RANKS_PER_NVLINK_DOMAIN:-}
+EXCLUDE=${EXCLUDE:-}
 RUN_TAG=${RUN_TAG:-$(date -u +%Y%m%dT%H%M%SZ)}
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
@@ -46,6 +50,35 @@ else
   cuda_graph_overrides="++policy.megatron_cfg.cuda_graph_impl=${CUDA_GRAPH_IMPL} ++policy.megatron_cfg.cuda_graph_modules=[${CUDA_GRAPH_MODULES}] ++policy.megatron_cfg.cuda_graph_warmup_steps=3 ++policy.megatron_cfg.thd_max_packed_sequences=16 ++policy.megatron_cfg.attention_backend=fused"
 fi
 
+case "${MOE_TOKEN_DISPATCHER_TYPE}" in
+  alltoall)
+    [[ -z "${MOE_FLEX_DISPATCHER_BACKEND}" ]] || {
+      echo "MOE_FLEX_DISPATCHER_BACKEND must be empty for alltoall" >&2
+      exit 2
+    }
+    dispatcher_name=alltoall
+    dispatcher_env=""
+    dispatcher_overrides="policy.megatron_cfg.moe_token_dispatcher_type=alltoall"
+    ;;
+  flex)
+    [[ "${MOE_FLEX_DISPATCHER_BACKEND}" == "hybridep" ]] || {
+      echo "Direct flex smoke currently requires MOE_FLEX_DISPATCHER_BACKEND=hybridep" >&2
+      exit 2
+    }
+    [[ "${HYBRID_EP_RANKS_PER_NVLINK_DOMAIN}" =~ ^[1-9][0-9]*$ ]] || {
+      echo "HYBRID_EP_RANKS_PER_NVLINK_DOMAIN must be a positive integer" >&2
+      exit 2
+    }
+    dispatcher_name=hybridep
+    dispatcher_env="USE_MNNVL=1 NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN=${HYBRID_EP_RANKS_PER_NVLINK_DOMAIN}"
+    dispatcher_overrides="policy.megatron_cfg.moe_token_dispatcher_type=flex ++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep ++policy.megatron_cfg.moe_hybridep_pad_uneven_dispatch_inputs=true"
+    ;;
+  *)
+    echo "MOE_TOKEN_DISPATCHER_TYPE must be alltoall or flex" >&2
+    exit 2
+    ;;
+esac
+
 debug_suffix=""
 if [[ "${NVTE_DEBUG}" == "1" ]]; then
   [[ "${NVTE_DEBUG_LEVEL}" == "2" ]] || {
@@ -55,12 +88,12 @@ if [[ "${NVTE_DEBUG}" == "1" ]]; then
   debug_suffix=-nvte-debug2
 fi
 
-RUN_NAME="nano-${scope_name}-${STEPS}step-alltoall${debug_suffix}-${RUN_TAG}"
+RUN_NAME="nano-${scope_name}-${STEPS}step-${dispatcher_name}${debug_suffix}-${RUN_TAG}"
 RUN_DIR=${EXPERIMENT_ROOT}/${RUN_NAME}
 LOG_DIR=${RUN_DIR}/exp_logs
 mkdir -p "${RUN_DIR}"
 
-COMMAND="env NRL_FORCE_REBUILD_VENVS=true NVTE_WITH_NCCL_EP=0 NVTE_CUDA_ARCHS=100a NVTE_DEBUG=${NVTE_DEBUG} NVTE_DEBUG_LEVEL=${NVTE_DEBUG_LEVEL} NCCL_GRAPH_REGISTER=0 CUDA_DEVICE_MAX_CONNECTIONS=1 WANDB_DIR=${RUN_DIR}/wandb uv run examples/run_grpo.py \
+COMMAND="env NRL_FORCE_REBUILD_VENVS=true NVTE_WITH_NCCL_EP=0 NVTE_CUDA_ARCHS=100a NVTE_DEBUG=${NVTE_DEBUG} NVTE_DEBUG_LEVEL=${NVTE_DEBUG_LEVEL} NCCL_GRAPH_REGISTER=0 CUDA_DEVICE_MAX_CONNECTIONS=1 ${dispatcher_env} WANDB_DIR=${RUN_DIR}/wandb uv run examples/run_grpo.py \
   --config examples/configs/recipes/llm/grpo-nanov3-30BA3B-2n8g-megatron-pack-cp.yaml \
   grpo.max_num_steps=${STEPS} \
   checkpointing.enabled=false \
@@ -73,7 +106,7 @@ COMMAND="env NRL_FORCE_REBUILD_VENVS=true NVTE_WITH_NCCL_EP=0 NVTE_CUDA_ARCHS=10
   logger.tensorboard_enabled=true \
   logger.wandb.project=sna-cg-study \
   logger.wandb.name=${RUN_NAME} \
-  policy.megatron_cfg.moe_token_dispatcher_type=alltoall \
+  ${dispatcher_overrides} \
   ${cuda_graph_overrides} \
   ++policy.generation.vllm_kwargs.moe_backend=triton"
 
@@ -93,6 +126,9 @@ sbatch_args=(
 )
 if [[ -n "${SEGMENT_SIZE}" ]]; then
   sbatch_args+=(--segment="${SEGMENT_SIZE}")
+fi
+if [[ -n "${EXCLUDE}" ]]; then
+  sbatch_args+=(--exclude="${EXCLUDE}")
 fi
 
 cd "${SOURCE_ROOT}"
