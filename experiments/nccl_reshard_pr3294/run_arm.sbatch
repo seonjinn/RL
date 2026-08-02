@@ -17,8 +17,6 @@ set -euo pipefail
 RAY_SUB_PATH=${RAY_SUB_PATH:-${REPO}/ray.sub}
 CONFIG_BF16=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
 CONFIG_FP8=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
-REFIT_TRANSPORT=${REFIT_TRANSPORT:-}
-
 case "${ARM}" in
   baseline)
     REFIT_BATCHED_MOE_SHUFFLE=false
@@ -37,24 +35,27 @@ esac
 case "${MODE}" in
   bf16)
     CONFIG=${CONFIG_BF16}
+    REFIT_TRANSPORT=nccl_reshard
     PRECISION_OVERRIDES="policy.megatron_cfg.fp8_cfg.enabled=false policy.megatron_cfg.fp8_cfg.fp8_param=false ++policy.generation.vllm_cfg.precision=bfloat16 ++policy.generation.vllm_cfg.is_mx=false"
     ;;
   blockwise-fp8)
     CONFIG=${CONFIG_FP8}
+    REFIT_TRANSPORT=nccl_reshard
     PRECISION_OVERRIDES="policy.megatron_cfg.fp8_cfg.enabled=true policy.megatron_cfg.fp8_cfg.fp8=e4m3 policy.megatron_cfg.fp8_cfg.fp8_recipe=blockwise policy.megatron_cfg.fp8_cfg.fp8_param=true policy.generation.vllm_cfg.precision=fp8 policy.generation.vllm_cfg.is_mx=false"
     ;;
   mxfp8-rollout)
     CONFIG=${CONFIG_FP8}
-    REFIT_TRANSPORT=${REFIT_TRANSPORT:-null}
+    REFIT_TRANSPORT=null
     PRECISION_OVERRIDES="policy.megatron_cfg.fp8_cfg.enabled=false policy.megatron_cfg.fp8_cfg.fp8_param=false policy.generation.vllm_cfg.precision=fp8 policy.generation.vllm_cfg.is_mx=true"
     ;;
   mxfp8-nccl-prequant)
     CONFIG=${CONFIG_FP8}
-    REFIT_TRANSPORT=${REFIT_TRANSPORT:-nccl_reshard}
+    REFIT_TRANSPORT=nccl_reshard
     PRECISION_OVERRIDES="policy.megatron_cfg.fp8_cfg.enabled=false policy.megatron_cfg.fp8_cfg.fp8_param=false policy.generation.vllm_cfg.precision=fp8 policy.generation.vllm_cfg.is_mx=true ++policy.generation.vllm_cfg.refit_prequantize=true"
     ;;
   mxfp8-probe)
     CONFIG=${CONFIG_FP8}
+    REFIT_TRANSPORT=nccl_reshard
     PRECISION_OVERRIDES="policy.megatron_cfg.fp8_cfg.enabled=true policy.megatron_cfg.fp8_cfg.fp8=e4m3 policy.megatron_cfg.fp8_cfg.fp8_recipe=blockwise policy.megatron_cfg.fp8_cfg.fp8_param=true policy.generation.vllm_cfg.precision=fp8 policy.generation.vllm_cfg.is_mx=true"
     ;;
   *)
@@ -62,7 +63,6 @@ case "${MODE}" in
     exit 2
     ;;
 esac
-REFIT_TRANSPORT=${REFIT_TRANSPORT:-nccl_reshard}
 
 git -C "${REPO}" rev-parse --git-dir >/dev/null
 REPO_SHA=$(git -C "${REPO}" rev-parse HEAD)
