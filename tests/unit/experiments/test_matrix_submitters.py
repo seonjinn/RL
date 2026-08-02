@@ -36,6 +36,12 @@ QWEN_PERFORMANCE_SCOPES = (
     "scopes/04_moe_router_preprocess.sh",
     "scopes/20_attn_moe_router_preprocess.sh",
 )
+QWEN_ROUTER_CONDITIONS = (
+    "conditions/qwen_A_baseline_r3off.sh",
+    "conditions/qwen_B_moe_router_r3off.sh",
+    "conditions/qwen_C_baseline_r3on.sh",
+    "conditions/qwen_E_attn_r3on.sh",
+)
 
 
 def _write_launcher(path: Path, relative_path: str) -> None:
@@ -74,7 +80,9 @@ def _run_submitter(
     environment = os.environ.copy()
     for name in (
         "ACCURACY_SCRIPT",
+        "PHASE",
         "PERFORMANCE_SCRIPTS",
+        "REPEATS",
         "RUN_GROUP",
         "REPEAT_INDEX",
     ):
@@ -109,6 +117,117 @@ def _captured_rows(capture_file: Path) -> list[tuple[str, str, str, str, str]]:
         assert len(fields) == 5
         rows.append((fields[0], fields[1], fields[2], fields[3], fields[4]))
     return rows
+
+
+def test_qwen_router_validation_smoke_defaults_to_ordered_paired_arms(
+    tmp_path: Path,
+) -> None:
+    submitter = "submit_qwen_router_validation.sh"
+    harness, capture_file = _make_harness(
+        tmp_path, submitter, QWEN_ROUTER_CONDITIONS
+    )
+
+    result = _run_submitter(
+        harness,
+        submitter,
+        capture_file,
+        model="qwen3_30ba3b",
+        extra_environment={"PHASE": "smoke"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    rows = _captured_rows(capture_file)
+    assert tuple(row[0] for row in rows) == QWEN_ROUTER_CONDITIONS
+    assert {row[1] for row in rows} == {"5"}
+    assert {row[3] for row in rows} == {"1"}
+    assert len({row[2] for row in rows[:2]}) == 1
+    assert len({row[2] for row in rows[2:]}) == 1
+    assert rows[0][2] != rows[2][2]
+
+
+def test_qwen_router_validation_performance_selected_pair_uses_twenty_steps(
+    tmp_path: Path,
+) -> None:
+    submitter = "submit_qwen_router_validation.sh"
+    harness, capture_file = _make_harness(
+        tmp_path, submitter, QWEN_ROUTER_CONDITIONS
+    )
+
+    result = _run_submitter(
+        harness,
+        submitter,
+        capture_file,
+        model="qwen3_235b",
+        arguments=("A", "B"),
+        extra_environment={"PHASE": "performance"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    rows = _captured_rows(capture_file)
+    assert tuple(row[0] for row in rows) == QWEN_ROUTER_CONDITIONS[:2]
+    assert {row[1] for row in rows} == {"20"}
+    assert {row[3] for row in rows} == {"1"}
+    assert len({row[2] for row in rows}) == 1
+
+
+def test_qwen_router_validation_assigns_distinct_repeat_indices(
+    tmp_path: Path,
+) -> None:
+    submitter = "submit_qwen_router_validation.sh"
+    harness, capture_file = _make_harness(
+        tmp_path, submitter, QWEN_ROUTER_CONDITIONS
+    )
+
+    result = _run_submitter(
+        harness,
+        submitter,
+        capture_file,
+        model="qwen3_30ba3b",
+        arguments=("A", "B"),
+        extra_environment={"REPEATS": "3"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    rows = _captured_rows(capture_file)
+    assert [row[3] for row in rows] == ["1", "1", "2", "2", "3", "3"]
+    assert [row[4] for row in rows] == [
+        "unit-r1",
+        "unit-r1",
+        "unit-r2",
+        "unit-r2",
+        "unit-r3",
+        "unit-r3",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "phase", "arguments"),
+    (
+        ("nano", "smoke", ()),
+        ("qwen3_30ba3b", "accuracy", ()),
+        ("qwen3_30ba3b", "smoke", ("D",)),
+        ("qwen3_30ba3b", "smoke", ("../A",)),
+    ),
+)
+def test_qwen_router_validation_rejects_invalid_inputs_before_leaf_invocation(
+    tmp_path: Path, model: str, phase: str, arguments: tuple[str, ...]
+) -> None:
+    submitter = "submit_qwen_router_validation.sh"
+    harness, capture_file = _make_harness(
+        tmp_path, submitter, QWEN_ROUTER_CONDITIONS
+    )
+
+    result = _run_submitter(
+        harness,
+        submitter,
+        capture_file,
+        model=model,
+        arguments=arguments,
+        extra_environment={"PHASE": phase},
+    )
+
+    assert result.returncode == 2
+    assert _captured_rows(capture_file) == []
 
 
 @pytest.mark.parametrize(
