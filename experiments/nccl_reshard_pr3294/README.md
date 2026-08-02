@@ -77,3 +77,20 @@ ACTION=test-only \
 MAX_STEPS=5 \
 ./experiments/nccl_reshard_pr3294/submit_prequant_ab.sh
 ```
+
+To isolate the receiver-side PR 3294 optimizations after switching to the
+transform-aware NCCL-Reshard transport, hold prequantization constant and run
+both shuffle/cache arms:
+
+```bash
+CONTAINER=/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna/containers/nemo-rl-nightly-refresh/nemo_rl_nightly_20260730_483099.sqsh \
+MODES=mxfp8-nccl-prequant \
+ARMS="baseline optimized" \
+MAX_STEPS=20 \
+ACTION=submit \
+./experiments/nccl_reshard_pr3294/submit_prequant_ab.sh
+```
+
+`baseline` disables batched MoE shuffle and loader-route caching. `optimized`
+enables both. Trainer-side MXFP8 prequantization remains enabled in both arms
+because it is the required BF16-to-MXFP8 storage conversion for this transport.
