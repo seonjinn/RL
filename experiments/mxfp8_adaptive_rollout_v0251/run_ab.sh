@@ -22,15 +22,9 @@ fi
 git -C "$VLLM_SOURCE" diff --quiet
 git -C "$VLLM_SOURCE" diff --cached --quiet
 
-builder_python=(
-  env -u PYTHONPATH -u VLLM_SUBPROCESS_PYTHONPATH
-  "UV_PROJECT_ENVIRONMENT=${NEMO_RL_DRIVER_VENV_DIR:?set NEMO_RL_DRIVER_VENV_DIR}"
-  uv run --locked --extra vllm --directory "$ROOT" python
-)
-runtime_python=(
-  env "UV_PROJECT_ENVIRONMENT=${NEMO_RL_DRIVER_VENV_DIR:?set NEMO_RL_DRIVER_VENV_DIR}"
-  uv run --locked --extra vllm --directory "$ROOT" python
-)
+driver_python="${NEMO_RL_DRIVER_VENV_DIR:?set NEMO_RL_DRIVER_VENV_DIR}/bin/python"
+builder_python=(env -u PYTHONPATH -u VLLM_SUBPROCESS_PYTHONPATH "$driver_python")
+runtime_python=("$driver_python")
 VLLM_RUNTIME_ROOT=$("${builder_python[@]}" \
   "$ROOT/experiments/mxfp8_adaptive_rollout_v0251/runtime_overlay.py" \
   --source-root "$VLLM_SOURCE" \
@@ -59,6 +53,9 @@ if runtime_root not in extension_path.parents:
 print(f"vllm_package={package_path}")
 print(f"vllm_stable_extension={extension_path}")
 PY
+
+PYTHONPATH="$ROOT:$VLLM_RUNTIME_ROOT" "${runtime_python[@]}" \
+  -m experiments.mxfp8_adaptive_rollout_v0251.flashinfer_preflight
 
 if [[ "$ACTION" == smoke ]]; then
   exit 0

@@ -9,6 +9,9 @@ from experiments.mxfp8_adaptive_rollout_v0251.contract import (
     AdaptiveInputs,
     build_arm_environment,
 )
+from experiments.mxfp8_adaptive_rollout_v0251.flashinfer_preflight import (
+    prepare_symlink_parents,
+)
 from experiments.mxfp8_adaptive_rollout_v0251.runtime_overlay import (
     prepare_runtime_overlay,
 )
@@ -109,6 +112,32 @@ def test_arm_reuses_locked_driver_interpreter_for_ray_actors() -> None:
     ).read_text(encoding="utf-8")
 
     assert "export NEMO_RL_PY_EXECUTABLES_SYSTEM=1" in launcher
+    assert 'driver_python="${NEMO_RL_DRIVER_VENV_DIR:' in launcher
+    assert '"$driver_python"' in launcher
+    assert "uv run" not in launcher
+
+
+def test_ab_uses_locked_driver_interpreter_without_resyncing_packages() -> None:
+    root = Path(__file__).parents[3]
+    launcher = (
+        root / "experiments/mxfp8_adaptive_rollout_v0251/run_ab.sh"
+    ).read_text(encoding="utf-8")
+
+    assert 'driver_python="${NEMO_RL_DRIVER_VENV_DIR:' in launcher
+    assert 'runtime_python=("$driver_python")' in launcher
+    assert "uv run" not in launcher
+
+
+def test_flashinfer_preflight_precreates_shared_symlink_parents(
+    tmp_path: Path,
+) -> None:
+    prepared = prepare_symlink_parents(tmp_path)
+
+    assert prepared == (
+        tmp_path / "flashinfer/trtllm/batched_gemm",
+        tmp_path / "flashinfer/trtllm/gemm",
+    )
+    assert all(path.is_dir() for path in prepared)
 
 
 def test_overlay_builder_only_clears_pythonpath_during_discovery() -> None:

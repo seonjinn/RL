@@ -55,8 +55,8 @@ printf 'vllm_source=%s\nvllm_runtime_root=%s\nvllm_commit=%s\n' \
   | tee "$RESULT_ROOT/$ARM/runtime.txt"
 
 export NEMO_RL_PY_EXECUTABLES_SYSTEM=1
-UV_PROJECT_ENVIRONMENT="${NEMO_RL_DRIVER_VENV_DIR:?set NEMO_RL_DRIVER_VENV_DIR}" \
-  uv run --locked --extra vllm --directory "$ROOT" python \
+driver_python="${NEMO_RL_DRIVER_VENV_DIR:?set NEMO_RL_DRIVER_VENV_DIR}/bin/python"
+"$driver_python" \
   "$ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_eval_canary.py" \
   --config "$CONFIG" \
   --arm "$ARM" \
