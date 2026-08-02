@@ -1,0 +1,42 @@
+{
+  "median": {
+    "adaptive_tokens_per_second_per_gpu": 1892.2286389489427,
+    "baseline_tokens_per_second_per_gpu": 1911.6145566820599,
+    "paired_speedup": 0.9886420990992923
+  },
+  "repeats": [
+    {
+      "adaptive_generation_seconds": 69.2183809169801,
+      "adaptive_tokens_per_second_per_gpu": 1889.902627986915,
+      "baseline_generation_seconds": 68.4322054060176,
+      "baseline_tokens_per_second_per_gpu": 1911.6145566820599,
+      "gpu_count": 8,
+      "output_tokens": 1046528,
+      "paired_speedup": 0.9886420990992923,
+      "repeat": 1,
+      "source": "experiments/mxfp8_adaptive_rollout_v0251/data/qwen3_30ba3b_nemorl_ab_2501335_2501336_2501337/rep1_summary.json"
+    },
+    {
+      "adaptive_generation_seconds": 69.13329462800175,
+      "adaptive_tokens_per_second_per_gpu": 1892.2286389489427,
+      "baseline_generation_seconds": 69.14715086610522,
+      "baseline_tokens_per_second_per_gpu": 1891.8494596156067,
+      "gpu_count": 8,
+      "output_tokens": 1046528,
+      "paired_speedup": 1.0002004278572,
+      "repeat": 2,
+      "source": "experiments/mxfp8_adaptive_rollout_v0251/data/qwen3_30ba3b_nemorl_ab_2501335_2501336_2501337/rep2_summary.json"
+    },
+    {
+      "adaptive_generation_seconds": 68.7509358949901,
+      "adaptive_tokens_per_second_per_gpu": 1902.7522796170776,
+      "baseline_generation_seconds": 67.96823444199981,
+      "baseline_tokens_per_second_per_gpu": 1924.663794402823,
+      "gpu_count": 8,
+      "output_tokens": 1046528,
+      "paired_speedup": 0.9886154065715441,
+      "repeat": 3,
+      "source": "experiments/mxfp8_adaptive_rollout_v0251/data/qwen3_30ba3b_nemorl_ab_2501335_2501336_2501337/rep3_summary.json"
+    }
+  ]
+}

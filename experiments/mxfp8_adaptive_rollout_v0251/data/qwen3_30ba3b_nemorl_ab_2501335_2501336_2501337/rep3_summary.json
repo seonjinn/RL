@@ -1,0 +1,31 @@
+{
+  "adaptive_vs_baseline_speedup": 0.9886154065715441,
+  "runs": [
+    {
+      "arm": "baseline",
+      "complete": true,
+      "elapsed_seconds": 474.1194064617157,
+      "generation_calls": 1,
+      "generation_seconds": 67.96823444199981,
+      "gpu_count": 8,
+      "measurement_scope": "generation_calls",
+      "model_load_seconds": 397.0240578651428,
+      "output_tokens": 1046528,
+      "tokens_per_second": 15397.310355222584,
+      "tokens_per_second_per_gpu": 1924.663794402823
+    },
+    {
+      "arm": "adaptive",
+      "complete": true,
+      "elapsed_seconds": 631.9025347232819,
+      "generation_calls": 1,
+      "generation_seconds": 68.7509358949901,
+      "gpu_count": 8,
+      "measurement_scope": "generation_calls",
+      "model_load_seconds": 554.1490197181702,
+      "output_tokens": 1046528,
+      "tokens_per_second": 15222.018236936621,
+      "tokens_per_second_per_gpu": 1902.7522796170776
+    }
+  ]
+}

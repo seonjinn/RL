@@ -1,0 +1,22 @@
+{
+  "description": "NeMo-RL Qwen3-30B-A3B CUTLASS baseline versus CUDA Graph-qualified TRTLLM Adaptive A/B",
+  "job_ids": [
+    2501335,
+    2501336,
+    2501337
+  ],
+  "nemorl_commit": "f80aad5c4",
+  "request_count": 2048,
+  "runtime": {
+    "cuda_graph": true,
+    "gpu_count": 8,
+    "max_num_batched_tokens": 16384,
+    "max_num_seqs": 256,
+    "model": "Qwen/Qwen3-30B-A3B",
+    "nodes": 2,
+    "samples_per_prompt": 32,
+    "source_prompts": 64
+  },
+  "tactic_table_sha256": "88ea9238c8ce06d3b174b9cae928e4dbfc0d0a5ed4e9d2086c9d0f79ef4d3211",
+  "vllm_commit": "658d7b1571a914bee7df48f717c2a428ee7c45ad"
+}
