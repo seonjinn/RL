@@ -93,3 +93,12 @@ def test_summary_reads_completed_run(tmp_path: Path) -> None:
         "model_load_seconds": 4.5,
         "output_tokens": 8192,
     }
+
+
+def test_arm_reuses_locked_driver_interpreter_for_ray_actors() -> None:
+    root = Path(__file__).parents[3]
+    launcher = (
+        root / "experiments/mxfp8_adaptive_rollout_v0251/run_arm.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "export NEMO_RL_PY_EXECUTABLES_SYSTEM=1" in launcher
