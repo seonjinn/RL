@@ -464,7 +464,13 @@ def load_weights(weights, model_runner):
             )
         param_scale = torch.squeeze(param_scale, dim=-1)
         if global_fp8_config.is_mx:
-            weights_quantized.append([k, param_lp])
+            module = _get_module_from_param_name(model, k)
+            weight_name = (
+                k + "_from_checkpoint"
+                if hasattr(module, "weight_from_checkpoint")
+                else k
+            )
+            weights_quantized.append([weight_name, param_lp])
             weights_quantized.append([k + "_scale_from_checkpoint", param_scale])
         else:
             weights_quantized.append([k, param_lp])
@@ -653,6 +659,52 @@ def process_weights_after_loading(self, layer) -> None:
         layer.input_scale = None
 
 
+def _process_weights_after_loading_mxfp8_trtllm(self, layer, kernel) -> None:
+    from vllm.model_executor.parameter import ModelWeightParameter
+
+    refreshing = hasattr(layer, "weight_from_checkpoint")
+    previous_weight = layer.weight if refreshing else None
+    previous_scale = layer.weight_scale if refreshing else None
+
+    if not refreshing:
+        layer.weight_from_checkpoint = ModelWeightParameter(
+            data=layer.weight.data,
+            input_dim=1,
+            output_dim=0,
+            weight_loader=layer.weight.weight_loader,
+        )
+        layer.register_parameter("weight_from_checkpoint", layer.weight_from_checkpoint)
+        layer.weight_scale_from_checkpoint = ModelWeightParameter(
+            data=layer.weight_scale.data,
+            input_dim=1,
+            output_dim=0,
+            weight_loader=layer.weight_scale.weight_loader,
+        )
+        layer.register_parameter(
+            "weight_scale_from_checkpoint", layer.weight_scale_from_checkpoint
+        )
+
+    layer.weight = layer.weight_from_checkpoint
+    layer.weight_scale = layer.weight_scale_from_checkpoint
+    kernel.process_weights_after_loading(layer)
+
+    if previous_weight is not None:
+        generated_weight = layer.weight
+        generated_scale = layer.weight_scale
+        if (
+            previous_weight.shape == generated_weight.shape
+            and previous_weight.dtype == generated_weight.dtype
+        ):
+            previous_weight.data.copy_(generated_weight.data)
+            layer.weight = previous_weight
+        if (
+            previous_scale.shape == generated_scale.shape
+            and previous_scale.dtype == generated_scale.dtype
+        ):
+            previous_scale.data.copy_(generated_scale.data)
+            layer.weight_scale = previous_scale
+
+
 def process_weights_after_loading_mxfp8_linear(self, layer) -> None:
     from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
         swizzle_mxfp8_scale,
@@ -680,6 +732,9 @@ def process_weights_after_loading_mxfp8_linear(self, layer) -> None:
     else:
         kernel = getattr(self, "kernel", None)
         kernel_name = type(kernel).__name__ if kernel is not None else None
+        if kernel_name == "FlashInferTrtllmMxfp8LinearKernel":
+            _process_weights_after_loading_mxfp8_trtllm(self, layer, kernel)
+            return
         if kernel_name == "FlashInferCutedslMxfp8LinearKernel":
             # vLLM 0.25 prefers the CuTe-DSL kernel, but it stores the weight
             # column-major [K, N] while this refit-friendly override (and the

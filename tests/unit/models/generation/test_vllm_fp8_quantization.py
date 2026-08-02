@@ -224,3 +224,88 @@ def test_process_weights_after_loading_copies_in_place_on_refit(monkeypatch):
     assert layer.weight_scale_inv is scale_param
     # The processed values must actually land.
     assert torch.equal(layer.weight.data, torch.ones(4, 4))
+
+
+def test_mxfp8_trtllm_refit_preserves_checkpoint_and_prepared_buffers(
+    fp8_module,
+):
+    import torch
+
+    fp8 = fp8_module
+
+    class FlashInferTrtllmMxfp8LinearKernel:
+        def process_weights_after_loading(self, layer):
+            layer.weight = torch.nn.Parameter(
+                (layer.weight.data.float() + 10).to(torch.float8_e4m3fn),
+                requires_grad=False,
+            )
+            layer.weight_scale = torch.nn.Parameter(
+                layer.weight_scale.data.reshape(-1) + 20,
+                requires_grad=False,
+            )
+            layer._mxfp8_trtllm_output_features = 2
+
+    layer = torch.nn.Module()
+    layer.weight = torch.nn.Parameter(
+        torch.ones((2, 4), dtype=torch.float8_e4m3fn), requires_grad=False
+    )
+    layer.weight.weight_loader = object()
+    layer.weight_scale = torch.nn.Parameter(
+        torch.ones((2, 1), dtype=torch.uint8), requires_grad=False
+    )
+    layer.weight_scale.weight_loader = object()
+    method = types.SimpleNamespace(kernel=FlashInferTrtllmMxfp8LinearKernel())
+
+    fp8.process_weights_after_loading_mxfp8_linear(method, layer)
+
+    assert hasattr(layer, "weight_from_checkpoint")
+    assert hasattr(layer, "weight_scale_from_checkpoint")
+    assert torch.equal(layer.weight_from_checkpoint.float(), torch.ones((2, 4)))
+    assert torch.equal(layer.weight.float(), torch.full((2, 4), 11.0))
+    prepared_weight_ptr = layer.weight.data_ptr()
+    prepared_scale_ptr = layer.weight_scale.data_ptr()
+
+    with torch.no_grad():
+        layer.weight_from_checkpoint.fill_(2)
+        layer.weight_scale_from_checkpoint.fill_(3)
+    fp8.process_weights_after_loading_mxfp8_linear(method, layer)
+
+    assert layer.weight.data_ptr() == prepared_weight_ptr
+    assert layer.weight_scale.data_ptr() == prepared_scale_ptr
+    assert torch.equal(layer.weight.float(), torch.full((2, 4), 12.0))
+    assert torch.equal(layer.weight_scale, torch.full((2,), 23, dtype=torch.uint8))
+
+
+def test_mxfp8_refit_loads_trtllm_weight_into_checkpoint_parameter(
+    fp8_module, monkeypatch
+):
+    import torch
+    from vllm.model_executor.layers.quantization.utils import mxfp8_utils
+
+    fp8 = fp8_module
+    loaded = []
+    layer = types.SimpleNamespace(weight_from_checkpoint=object())
+    model = types.SimpleNamespace(load_weights=lambda weights: loaded.extend(weights))
+    runner = types.SimpleNamespace(model=model)
+
+    monkeypatch.setattr(fp8, "_is_fp8_weight", lambda _name, _model: True)
+    monkeypatch.setattr(fp8, "_get_module_from_param_name", lambda *_args: layer)
+    monkeypatch.setattr(
+        mxfp8_utils,
+        "mxfp8_e4m3_quantize",
+        lambda tensor: (
+            tensor.to(torch.float8_e4m3fn),
+            torch.ones((tensor.shape[0], tensor.shape[1] // 32, 1)),
+        ),
+    )
+    fp8.global_fp8_config = fp8.FP8Config(is_mx=True)
+
+    fp8.load_weights(
+        [("model.proj.weight", torch.ones((2, 32), dtype=torch.bfloat16))],
+        runner,
+    )
+
+    assert [name for name, _value in loaded] == [
+        "model.proj.weight_from_checkpoint",
+        "model.proj.weight_scale_from_checkpoint",
+    ]
