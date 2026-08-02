@@ -16,6 +16,9 @@ PYTHON_VERSION=${PYTHON_VERSION:-3.13}
 OUTPUT_PREFIX=${OUTPUT_PREFIX:-ray-${RAY_VERSION}-py${PYTHON_VERSION/./}}
 
 mkdir -p "${OUTPUT_DIR}"
+export UV_PYTHON_INSTALL_DIR=${UV_PYTHON_INSTALL_DIR:-${OUTPUT_DIR}/.uv-python}
+export UV_CACHE_DIR=${UV_CACHE_DIR:-${OUTPUT_DIR}/.uv-cache}
+mkdir -p "${UV_PYTHON_INSTALL_DIR}" "${UV_CACHE_DIR}"
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/nrl-ray-bootstrap.XXXXXX")
 venv_dir="${work_dir}/${OUTPUT_PREFIX}"
 archive="${OUTPUT_DIR}/${OUTPUT_PREFIX}.tar.gz"
