@@ -3,8 +3,8 @@
 - Session: 20260801_233400
 - Repo: `/Users/sna/MXFP8_generation/nemo-rl-pr3294-nccl-mxfp8-prequant-v2`
 - Branch: `sna/pr3294-nccl-mxfp8-prequant-v2`
-- Commit: `45cfb89164d949ab2ea7cd86e6d6c7404ff7c529`
-- Updated: 2026-08-02 00:02 PDT
+- Commit: `9ce62bc60310517b752c52c23455268f0b81357a`
+- Updated: 2026-08-02 PDT
 
 ## Goal
 
@@ -12,7 +12,7 @@ Validate BF16 Megatron training with MXFP8 vLLM rollout through a transform-awar
 
 ## Current Subtask
 
-Complete the matched 20-step GCP-NRT B200 transport A/B and report steady-state refit, E2E, throughput, reward, and KL metrics.
+Document the matched post-NCCL receiver-side optimization A/B and define the boundary for a generic cross-precision NCCL-Reshard follow-up.
 
 ## Loaded Skills
 
@@ -31,6 +31,10 @@ Complete the matched 20-step GCP-NRT B200 transport A/B and report steady-state 
 - Refit decreased 83.6% (`6.10x`), E2E decreased 4.21%, and throughput increased 4.43%.
 - Reward and generation-KL paired 95% confidence intervals include zero; no measurable regression was found.
 - The staged image lacks `nccl.m2n`; the NCCL arm uses `xferdtensor_python (exact-transfer)` over NCCL communicators, not the compiled M2N operator.
+- Matched post-NCCL jobs completed: receiver baseline `487298` / W&B `mzr8x55g`; receiver optimized `487299` / W&B `8c2n3oj7`.
+- Steps 3-20 refit improved from `4.138 s` to `0.887 s`: `-78.6%`, `4.67x` faster. E2E improved `2.06%`; throughput improved `2.21%`.
+- Reward and generation-KL paired confidence intervals again included zero.
+- The current transform contract supports BF16 storage to MXFP8 rollout but is not a generic arbitrary-precision API. It hard-codes one MXFP8 value tensor plus one scale tensor and explicitly rejects NVFP4.
 
 ## Plan
 
@@ -39,6 +43,8 @@ Complete the matched 20-step GCP-NRT B200 transport A/B and report steady-state 
 - [x] Compare reward and generation KL for correctness.
 - [x] Write the final experiment result.
 - [x] Commit and push the result and session record.
+- [x] Measure the residual receiver-side PR 3294 optimizations after NCCL exact-transfer.
+- [x] Review the current cross-precision support matrix and extensibility gaps.
 
 ## Assumptions
 
@@ -48,3 +54,4 @@ Complete the matched 20-step GCP-NRT B200 transport A/B and report steady-state 
 ## Blockers
 
 - Native `nccl.m2n.reshard` is absent from the current nightly image. A custom ABI-compatible library and Python wrapper are required for native M2N benchmarking.
+- A follow-up generic transform API should be split into safety hardening, generic plan/executor infrastructure, and format-specific codecs rather than claiming support for every precision pair at once.

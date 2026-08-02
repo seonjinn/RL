@@ -16,3 +16,13 @@
 - E2E improved from `175.61 s` to `168.23 s`; throughput improved from `1179.61` to `1231.90 tok/s/GPU`.
 - Reward and generation-KL paired confidence intervals included zero.
 - Wrote `experiments/nccl_reshard_pr3294/RESULTS.md`.
+
+## 2026-08-02 Post-NCCL Receiver A/B
+
+- Jobs `487298` and `487299` completed 20/20 steps with exit code `0:0`.
+- Held trainer prequantization and NCCL exact-transfer constant; changed only batched MoE shuffle and loader-route caching.
+- Steps 3-20 refit improved from `4.138 s` to `0.887 s`: `-78.6%`, `4.67x` faster.
+- E2E improved from `175.72 s` to `172.10 s`; throughput improved from `1178.97` to `1205.04 tok/s/GPU`.
+- Reward and generation-KL paired confidence intervals included zero.
+- Initial jobs `487293` and `487294` failed because the container actor venv lacked vLLM 0.25 `routed_experts`; source-managed actor environments fixed the mismatch.
+- Reviewed generic cross-precision support. The current implementation is MXFP8-specific and needs fail-closed validation plus a typed transform-plan/codec abstraction before adding NVFP4 or other storage pairs.

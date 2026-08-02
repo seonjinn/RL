@@ -67,10 +67,52 @@ The paired mean refit reduction was `4.009 s/step` with a 95% confidence interva
 
 The direct refit timer is the primary transport metric. E2E measurements also contain generation-length and node variation, although the paired E2E and throughput results both favored the NCCL arm.
 
+## Residual Optimizations After NCCL-Reshard
+
+This A/B holds trainer-side prequantization and the NCCL exact-transfer path
+constant. It isolates the receiver-side work that remains after transport:
+
+- Baseline: scalar MoE shuffle and uncached loader-route lookup.
+- Optimized: batched MoE shuffle and identity-validated loader-route caching.
+
+| Arm | Job | W&B | Status |
+|---|---:|---|---|
+| NCCL receiver baseline | `487298` | <https://wandb.ai/nvidia/sna-pr3294-nccl-mxfp8-prequant/runs/mzr8x55g> | Completed, `0:0` |
+| NCCL receiver optimized | `487299` | <https://wandb.ai/nvidia/sna-pr3294-nccl-mxfp8-prequant/runs/8c2n3oj7> | Completed, `0:0` |
+
+Results use the 18 steady-state steps from step 3 through step 20.
+
+| Metric | NCCL baseline | NCCL optimized | Change |
+|---|---:|---:|---:|
+| Transfer/update | 4.138 s | 0.886 s | -78.6%, 4.67x faster |
+| Total refit | 4.138 s | 0.887 s | -78.6% |
+| E2E step time | 175.72 s | 172.10 s | -2.06% |
+| E2E throughput | 1178.97 tok/s/GPU | 1205.04 tok/s/GPU | +2.21% |
+| Generation | 48.52 s | 48.59 s | +0.13% |
+| Policy training | 84.43 s | 83.13 s | -1.55% |
+| Policy and reference logprobs | 37.06 s | 37.85 s | +2.14% |
+| Mean rollout reward | 0.52802 | 0.52713 | -0.00090 |
+| Generation KL error | 0.003981 | 0.003974 | -0.000008 |
+
+The paired refit reduction was `3.252 s/step`, with a 95% confidence interval
+of `[3.094, 3.409] s`. The paired E2E reduction was `3.619 s/step`, with a 95%
+confidence interval of `[1.722, 5.516] s`. Reward and generation-KL confidence
+intervals included zero:
+
+- Reward delta: `-0.000895`, 95% CI `[-0.004112, +0.002322]`.
+- Generation KL delta: `-0.000008`, 95% CI `[-0.000021, +0.000005]`.
+
+The relative refit improvement remains comparable to the pre-NCCL PR 3294
+result (`9.67 s -> 2.98 s`, -69.2%). The absolute saving is smaller because
+NCCL exact-transfer has already removed most transport overhead: the post-NCCL
+receiver optimization saves `3.25 s/step`, compared with `6.69 s/step` in the
+historical pre-NCCL measurement. Consequently, its E2E impact is smaller even
+though its relative refit reduction is larger.
+
 ## Runtime Boundary
 
 The staged nightly image does not contain an importable `nccl.m2n` module or `libnccl_m2n.so`. The NCCL arm therefore uses NeMo-RL's `xferdtensor_python (exact-transfer)` implementation over NCCL communicators. These results validate the transform-aware NCCL-Reshard algorithm and its Python exact-transfer fallback; they are not compiled native-M2N measurements.
 
 ## Conclusion
 
-The transform-aware exact shard-transfer path reduced steady-state refit time by 83.6% and improved E2E throughput by 4.43% without a measurable reward or generation-KL regression. Native M2N must be packaged and measured separately before claiming compiled NCCL-M2N performance.
+The transform-aware exact shard-transfer path reduced steady-state refit time by 83.6% and improved E2E throughput by 4.43% without a measurable reward or generation-KL regression. On top of that path, the remaining receiver-side PR 3294 optimizations reduced refit by another 78.6% and improved E2E throughput by 2.21%. Native M2N must be packaged and measured separately before claiming compiled NCCL-M2N performance.
