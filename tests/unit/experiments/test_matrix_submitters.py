@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -60,7 +63,8 @@ def _write_gate(path: Path, payload: dict[str, object]) -> str:
 def _write_gate_profile(tmp_path: Path) -> tuple[Path, str]:
     runtime_attestation = tmp_path / "runtime-attestation.json"
     runtime_attestation.write_text('{"attestation":"unit"}\n')
-    profile = tmp_path / "profile.env"
+    profile = tmp_path / "experiment" / "profiles" / "oci-hsg.env"
+    profile.parent.mkdir(parents=True, exist_ok=True)
     profile.write_text(
         "EXPECTED_NEMORL_SHA=" + PROVENANCE["nemo_rl_commit"] + "\n"
         "EXPECTED_BRIDGE_SHA=" + PROVENANCE["bridge_commit"] + "\n"
@@ -141,11 +145,27 @@ def _make_harness(
 ) -> tuple[Path, Path]:
     harness = tmp_path / "experiment"
     harness.mkdir()
-    (harness / submitter).symlink_to(EXPERIMENT_DIR / submitter)
+    shutil.copy2(EXPERIMENT_DIR / submitter, harness / submitter)
+    shutil.copy2(
+        EXPERIMENT_DIR / "validate_campaign_gate.py",
+        harness / "validate_campaign_gate.py",
+    )
     capture_file = tmp_path / "captured.tsv"
     for relative_path in launchers:
         _write_launcher(harness / relative_path, relative_path)
     return harness, capture_file
+
+
+def _load_gate_validator():
+    spec = importlib.util.spec_from_file_location(
+        "validate_campaign_gate",
+        EXPERIMENT_DIR / "validate_campaign_gate.py",
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _run_submitter(
@@ -432,6 +452,184 @@ def test_qwen235_route_gate_rejects_untrusted_or_invalid_evidence_before_leaf(
 
     assert result.returncode == 2
     assert _captured_rows(capture_file) == []
+
+
+@pytest.mark.parametrize("case", ("outside", "symlink", "malicious"))
+def test_qwen_router_validation_rejects_untrusted_profiles_without_execution(
+    tmp_path: Path, case: str
+) -> None:
+    submitter = "submit_qwen_router_validation.sh"
+    harness, capture_file = _make_harness(
+        tmp_path, submitter, QWEN_ROUTER_CONDITIONS
+    )
+    profile, runtime_digest = _write_gate_profile(tmp_path)
+    gate = tmp_path / "r3-gate.json"
+    gate_digest = _write_gate(gate, _r3_gate(runtime_digest))
+    marker = tmp_path / "scheduler-contacted"
+    if case == "outside":
+        profile = tmp_path / "outside-profile.env"
+        profile.write_text(
+            "EXPECTED_NEMORL_SHA=" + PROVENANCE["nemo_rl_commit"] + "\n"
+            "EXPECTED_BRIDGE_SHA=" + PROVENANCE["bridge_commit"] + "\n"
+            "EXPECTED_MCORE_SHA=" + PROVENANCE["mcore_commit"] + "\n"
+            "CONTAINER_SHA256=" + PROVENANCE["container_sha256"] + "\n"
+            f"RUNTIME_ATTESTATION={tmp_path / 'runtime-attestation.json'}\n"
+        )
+    elif case == "symlink":
+        linked_profile = profile.with_name("linked-profile.env")
+        linked_profile.symlink_to(profile)
+        profile = linked_profile
+    else:
+        profile.write_text(f"$(touch {marker})\n")
+
+    result = _run_submitter(
+        harness,
+        submitter,
+        capture_file,
+        model="qwen3_235b",
+        arguments=("C",),
+        extra_environment={
+            "PHASE": "smoke",
+            "PROFILE_FILE": str(profile),
+            "R3_PREFLIGHT_FILE": str(gate),
+            "R3_PREFLIGHT_SHA256": gate_digest,
+        },
+    )
+
+    assert result.returncode == 2
+    assert not marker.exists()
+    assert _captured_rows(capture_file) == []
+
+
+def test_qwen_router_validation_rejects_cluster_before_profile_or_leaf_resolution(
+    tmp_path: Path,
+) -> None:
+    submitter = "submit_qwen_router_validation.sh"
+    harness, capture_file = _make_harness(
+        tmp_path, submitter, QWEN_ROUTER_CONDITIONS
+    )
+
+    result = _run_submitter(
+        harness,
+        submitter,
+        capture_file,
+        model="qwen3_235b",
+        arguments=("C",),
+        extra_environment={"CLUSTER": "../../outside", "PHASE": "smoke"},
+    )
+
+    assert result.returncode == 2
+    assert _captured_rows(capture_file) == []
+
+
+@pytest.mark.parametrize("job_field", ("slurm_job_id", "job_id"))
+def test_campaign_gate_rejects_fractional_slurm_job_ids(
+    tmp_path: Path, job_field: str
+) -> None:
+    submitter = "submit_qwen_router_validation.sh"
+    harness, capture_file = _make_harness(
+        tmp_path, submitter, QWEN_ROUTER_CONDITIONS
+    )
+    profile, runtime_digest = _write_gate_profile(tmp_path)
+    gate = tmp_path / "gate.json"
+    if job_field == "slurm_job_id":
+        payload = _r3_gate(runtime_digest)
+        payload["slurm_job_id"] = 1.5
+        environment = {
+            "PHASE": "smoke",
+            "R3_PREFLIGHT_FILE": str(gate),
+            "R3_PREFLIGHT_SHA256": "",
+        }
+        arguments = ("C",)
+    else:
+        payload = _promotion_gate("qwen3_235b", runtime_digest, ("A",))
+        arms = payload["arms"]
+        assert isinstance(arms, dict)
+        arm = arms["A"]
+        assert isinstance(arm, dict)
+        arm["job_id"] = 1.5
+        environment = {
+            "PHASE": "performance",
+            "SMOKE_PROMOTION_FILE": str(gate),
+            "SMOKE_PROMOTION_SHA256": "",
+        }
+        arguments = ("A",)
+    digest = _write_gate(gate, payload)
+    for key in tuple(environment):
+        if key.endswith("SHA256"):
+            environment[key] = digest
+    environment["PROFILE_FILE"] = str(profile)
+
+    result = _run_submitter(
+        harness,
+        submitter,
+        capture_file,
+        model="qwen3_235b",
+        arguments=arguments,
+        extra_environment=environment,
+    )
+
+    assert result.returncode == 2
+    assert _captured_rows(capture_file) == []
+
+
+def test_campaign_gate_rejects_duplicate_json_keys(tmp_path: Path) -> None:
+    validator = _load_gate_validator()
+    runtime = tmp_path / "runtime.json"
+    runtime.write_text("{}")
+    gate = tmp_path / "gate.json"
+    gate.write_text('{"status":"failed","status":"passed"}')
+
+    with pytest.raises(ValueError, match="duplicate JSON key"):
+        validator._parse_json(gate.read_bytes())
+
+
+def test_campaign_gate_reads_opened_file_even_if_path_is_swapped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    validator = _load_gate_validator()
+    gate = tmp_path / "gate.json"
+    replacement = tmp_path / "replacement.json"
+    gate.write_bytes(b'{"old":true}')
+    replacement.write_bytes(b'{"new":true}')
+    original_open = validator.os.open
+
+    def open_then_swap(path: str, flags: int) -> int:
+        descriptor = original_open(path, flags)
+        replacement.replace(gate)
+        return descriptor
+
+    monkeypatch.setattr(validator.os, "open", open_then_swap)
+
+    assert validator._read_regular_file(gate, "gate file") == b'{"old":true}'
+
+
+def test_r3_validator_rejects_non_qwen235_argument(monkeypatch: pytest.MonkeyPatch) -> None:
+    validator = _load_gate_validator()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "validate_campaign_gate.py",
+            "r3",
+            "--gate-file",
+            "/tmp/gate.json",
+            "--gate-sha256",
+            "0" * 64,
+            "--model",
+            "qwen3_30ba3b",
+            "--profile-file",
+            "/tmp/profile.env",
+            "--profile-dir",
+            "/tmp",
+            "--cluster",
+            "oci-hsg",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as error:
+        validator._parse_args()
+    assert error.value.code == 2
 
 
 def test_qwen_router_validation_performance_selected_pair_uses_twenty_steps(

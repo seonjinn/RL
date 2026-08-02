@@ -21,8 +21,9 @@ import argparse
 import hashlib
 import hmac
 import json
-import math
+import os
 import re
+import stat
 import sys
 from pathlib import Path
 from typing import NoReturn, cast
@@ -30,6 +31,7 @@ from typing import NoReturn, cast
 
 FULL_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 FULL_COMMIT = re.compile(r"[0-9a-f]{40}\Z")
+PROFILE_ASSIGNMENT = re.compile(r"([A-Z][A-Z0-9_]*)=([A-Za-z0-9_./,:=-]*)\Z")
 ARMS = frozenset({"A", "B", "C", "E"})
 PROVENANCE_FIELDS = frozenset(
     {
@@ -38,6 +40,35 @@ PROVENANCE_FIELDS = frozenset(
         "mcore_commit",
         "container_sha256",
         "runtime_attestation_sha256",
+    }
+)
+PROFILE_FIELDS = frozenset(
+    {
+        "PROFILE_ID",
+        "ACCOUNT",
+        "PARTITION",
+        "CONTAINER",
+        "CONTAINER_SHA256",
+        "MOUNTS",
+        "SBATCH_GPUS_PER_NODE",
+        "SBATCH_GRES",
+        "SBATCH_SEGMENT_SIZE",
+        "TIME_LIMIT",
+        "RUNTIME_ATTESTATION",
+        "RUNTIME_PREFLIGHT_JOB_ID",
+        "EXPECTED_TE_SHA",
+        "EXPECTED_NEMORL_SHA",
+        "EXPECTED_BRIDGE_SHA",
+        "EXPECTED_MCORE_SHA",
+    }
+)
+PROFILE_REQUIRED = frozenset(
+    {
+        "CONTAINER_SHA256",
+        "RUNTIME_ATTESTATION",
+        "EXPECTED_NEMORL_SHA",
+        "EXPECTED_BRIDGE_SHA",
+        "EXPECTED_MCORE_SHA",
     }
 )
 R3_DIAGNOSTIC = {
@@ -76,21 +107,119 @@ def _fail(message: str) -> NoReturn:
     raise ValueError(message)
 
 
-def _regular_absolute_file(value: str, label: str) -> Path:
-    path = Path(value)
+def _read_regular_file(path: Path, label: str) -> bytes:
+    """Read one absolute regular non-symlink file through one opened descriptor."""
     if not path.is_absolute():
         _fail(f"{label} must be an absolute path")
-    if path.is_symlink() or not path.is_file():
-        _fail(f"{label} must be a regular non-symlink file")
-    return path
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        _fail(f"{label} cannot be opened without following symlinks")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | nofollow)
+    except OSError as error:
+        _fail(f"{label} cannot be opened as a non-symlink file: {error}")
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            _fail(f"{label} must be a regular file")
+        content = bytearray()
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                return bytes(content)
+            content.extend(chunk)
+    except OSError as error:
+        _fail(f"{label} cannot be read: {error}")
+    finally:
+        os.close(descriptor)
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _validate_profile_directory(path: Path) -> None:
+    if not path.is_absolute():
+        _fail("profile directory must be an absolute path")
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory is None:
+        _fail("profile directory cannot be opened without following symlinks")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | nofollow | directory)
+    except OSError as error:
+        _fail(f"profile directory is not trusted: {error}")
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            _fail("profile directory must be a directory")
+    finally:
+        os.close(descriptor)
+
+
+def _parse_json(content: bytes) -> dict[str, object]:
+    def reject_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                _fail(f"duplicate JSON key: {key}")
+            result[key] = value
+        return result
+
+    try:
+        payload = json.loads(content.decode("utf-8"), object_pairs_hook=reject_duplicates)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        _fail(f"gate file is not valid JSON: {error}")
+    if not isinstance(payload, dict):
+        _fail("gate file must contain a JSON object")
+    return cast(dict[str, object], payload)
+
+
+def _parse_profile(content: bytes) -> dict[str, str]:
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as error:
+        _fail(f"profile is not valid UTF-8: {error}")
+    values: dict[str, str] = {}
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        if not line or line.startswith("#"):
+            continue
+        match = PROFILE_ASSIGNMENT.fullmatch(line)
+        if match is None:
+            _fail(f"profile line {line_number} must be a literal NAME=value assignment")
+        name, value = match.groups()
+        if name not in PROFILE_FIELDS:
+            _fail(f"profile line {line_number} uses unknown field {name}")
+        if name in values:
+            _fail(f"profile line {line_number} duplicates field {name}")
+        values[name] = value
+    missing = sorted(PROFILE_REQUIRED - set(values))
+    if missing:
+        _fail(f"profile is missing required fields: {missing}")
+    for field in PROFILE_REQUIRED:
+        value = values[field]
+        if not value or value.startswith("__REQUIRED_"):
+            _fail(f"profile has unresolved {field}")
+    return values
+
+
+def _profile_values(args: argparse.Namespace) -> dict[str, str]:
+    profile_dir = Path(args.profile_dir)
+    _validate_profile_directory(profile_dir)
+    if args.profile_file is None:
+        candidate = profile_dir / f"{args.cluster}.env"
+        if not os.path.lexists(candidate):
+            candidate = profile_dir / f"{args.cluster}.env.example"
+    else:
+        candidate = Path(args.profile_file)
+    if not candidate.is_absolute() or candidate.parent != profile_dir:
+        _fail("profile file must be a direct child of the trusted profile directory")
+    values = _parse_profile(_read_regular_file(candidate, "profile file"))
+    if FULL_COMMIT.fullmatch(values["EXPECTED_NEMORL_SHA"]) is None:
+        _fail("profile EXPECTED_NEMORL_SHA must be a full lowercase commit")
+    if FULL_COMMIT.fullmatch(values["EXPECTED_BRIDGE_SHA"]) is None:
+        _fail("profile EXPECTED_BRIDGE_SHA must be a full lowercase commit")
+    if FULL_COMMIT.fullmatch(values["EXPECTED_MCORE_SHA"]) is None:
+        _fail("profile EXPECTED_MCORE_SHA must be a full lowercase commit")
+    if FULL_SHA256.fullmatch(values["CONTAINER_SHA256"]) is None:
+        _fail("profile CONTAINER_SHA256 must be a full lowercase SHA256")
+    if not Path(values["RUNTIME_ATTESTATION"]).is_absolute():
+        _fail("profile RUNTIME_ATTESTATION must be an absolute path")
+    return values
 
 
 def _exact_mapping(value: object, fields: frozenset[str], label: str) -> dict[str, object]:
@@ -104,11 +233,9 @@ def _exact_mapping(value: object, fields: frozenset[str], label: str) -> dict[st
     return cast(dict[str, object], value)
 
 
-def _positive_number(value: object, label: str) -> None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        _fail(f"{label} must be a positive numeric value")
-    if not math.isfinite(value) or value <= 0:
-        _fail(f"{label} must be a positive finite numeric value")
+def _positive_job_id(value: object, label: str) -> None:
+    if type(value) is not int or value <= 0:
+        _fail(f"{label} must be a positive integer job ID")
 
 
 def _require(value: object, expected: object, label: str) -> None:
@@ -116,23 +243,8 @@ def _require(value: object, expected: object, label: str) -> None:
         _fail(f"{label} must equal {expected!r}")
 
 
-def _validate_provenance(
-    value: object,
-    *,
-    nemo_rl_commit: str,
-    bridge_commit: str,
-    mcore_commit: str,
-    container_sha256: str,
-    runtime_attestation_sha256: str,
-) -> None:
+def _validate_provenance(value: object, expected: dict[str, str]) -> None:
     provenance = _exact_mapping(value, PROVENANCE_FIELDS, "provenance")
-    expected = {
-        "nemo_rl_commit": nemo_rl_commit,
-        "bridge_commit": bridge_commit,
-        "mcore_commit": mcore_commit,
-        "container_sha256": container_sha256,
-        "runtime_attestation_sha256": runtime_attestation_sha256,
-    }
     for field, expected_value in expected.items():
         candidate = provenance[field]
         if not isinstance(candidate, str):
@@ -143,7 +255,7 @@ def _validate_provenance(
         _require(candidate, expected_value, f"provenance.{field}")
 
 
-def _validate_r3(payload: dict[str, object], args: argparse.Namespace) -> None:
+def _validate_r3(payload: dict[str, object], expected: dict[str, str]) -> None:
     gate = _exact_mapping(
         payload,
         frozenset({"gate_type", "status", "model", "slurm_job_id", "provenance", "diagnostic"}),
@@ -152,23 +264,16 @@ def _validate_r3(payload: dict[str, object], args: argparse.Namespace) -> None:
     _require(gate["gate_type"], "qwen235_r3_routes", "gate_type")
     _require(gate["status"], "passed", "status")
     _require(gate["model"], "qwen3_235b", "model")
-    _positive_number(gate["slurm_job_id"], "slurm_job_id")
-    _validate_provenance(
-        gate["provenance"],
-        nemo_rl_commit=args.nemo_rl_commit,
-        bridge_commit=args.bridge_commit,
-        mcore_commit=args.mcore_commit,
-        container_sha256=args.container_sha256,
-        runtime_attestation_sha256=args.runtime_attestation_sha256,
-    )
+    _positive_job_id(gate["slurm_job_id"], "slurm_job_id")
+    _validate_provenance(gate["provenance"], expected)
     diagnostic = _exact_mapping(gate["diagnostic"], frozenset(R3_DIAGNOSTIC), "diagnostic")
-    for field, expected in R3_DIAGNOSTIC.items():
-        _require(diagnostic[field], expected, f"diagnostic.{field}")
+    for field, expected_value in R3_DIAGNOSTIC.items():
+        _require(diagnostic[field], expected_value, f"diagnostic.{field}")
 
 
 def _validate_arm(arm: str, value: object) -> None:
     evidence = _exact_mapping(value, ARM_FIELDS, f"arms.{arm}")
-    _positive_number(evidence["job_id"], f"arms.{arm}.job_id")
+    _positive_job_id(evidence["job_id"], f"arms.{arm}.job_id")
     _require(evidence["status"], "passed", f"arms.{arm}.status")
     _require(evidence["completed_steps"], 5, f"arms.{arm}.completed_steps")
     _require(evidence["metrics_finite"], True, f"arms.{arm}.metrics_finite")
@@ -181,7 +286,7 @@ def _validate_arm(arm: str, value: object) -> None:
     _require(evidence["r3_trace_status"], "passed" if r3_on else "not_applicable", f"arms.{arm}.r3_trace_status")
 
 
-def _validate_promotion(payload: dict[str, object], args: argparse.Namespace) -> None:
+def _validate_promotion(payload: dict[str, object], args: argparse.Namespace, expected: dict[str, str]) -> None:
     gate = _exact_mapping(
         payload,
         frozenset({"gate_type", "status", "model", "phase", "steps", "provenance", "arms"}),
@@ -192,14 +297,7 @@ def _validate_promotion(payload: dict[str, object], args: argparse.Namespace) ->
     _require(gate["model"], args.model, "model")
     _require(gate["phase"], "smoke", "phase")
     _require(gate["steps"], 5, "steps")
-    _validate_provenance(
-        gate["provenance"],
-        nemo_rl_commit=args.nemo_rl_commit,
-        bridge_commit=args.bridge_commit,
-        mcore_commit=args.mcore_commit,
-        container_sha256=args.container_sha256,
-        runtime_attestation_sha256=args.runtime_attestation_sha256,
-    )
+    _validate_provenance(gate["provenance"], expected)
     arms = gate["arms"]
     if not isinstance(arms, dict) or not arms:
         _fail("arms must be a non-empty JSON object")
@@ -218,22 +316,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--gate-file", required=True)
     parser.add_argument("--gate-sha256", required=True)
     parser.add_argument("--model", required=True, choices=("qwen3_30ba3b", "qwen3_235b"))
-    parser.add_argument("--nemo-rl-commit", required=True)
-    parser.add_argument("--bridge-commit", required=True)
-    parser.add_argument("--mcore-commit", required=True)
-    parser.add_argument("--container-sha256", required=True)
-    parser.add_argument("--runtime-attestation", required=True)
+    parser.add_argument("--profile-file")
+    parser.add_argument("--profile-dir", required=True)
+    parser.add_argument("--cluster", required=True, choices=("ptyche", "oci-hsg", "lyris"))
     parser.add_argument("--arm", action="append", default=[])
     args = parser.parse_args()
     if FULL_SHA256.fullmatch(args.gate_sha256) is None:
         parser.error("--gate-sha256 must be a full lowercase SHA256")
-    for option in ("nemo_rl_commit", "bridge_commit", "mcore_commit"):
-        if FULL_COMMIT.fullmatch(getattr(args, option)) is None:
-            parser.error(f"--{option.replace('_', '-')} must be a full lowercase commit")
-    if FULL_SHA256.fullmatch(args.container_sha256) is None:
-        parser.error("--container-sha256 must be a full lowercase SHA256")
-    if args.kind == "r3" and args.arm:
-        parser.error("R3 validation does not accept --arm")
+    if args.kind == "r3":
+        if args.model != "qwen3_235b":
+            parser.error("R3 validation requires --model qwen3_235b")
+        if args.arm:
+            parser.error("R3 validation does not accept --arm")
     if args.kind == "promotion":
         if not args.arm or len(set(args.arm)) != len(args.arm) or set(args.arm) - ARMS:
             parser.error("promotion validation requires unique A, B, C, or E --arm values")
@@ -243,21 +337,25 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     try:
-        gate_path = _regular_absolute_file(args.gate_file, "gate file")
-        runtime_path = _regular_absolute_file(args.runtime_attestation, "runtime attestation")
-        if not hmac.compare_digest(_sha256(gate_path), args.gate_sha256):
+        profile = _profile_values(args)
+        gate_content = _read_regular_file(Path(args.gate_file), "gate file")
+        if not hmac.compare_digest(hashlib.sha256(gate_content).hexdigest(), args.gate_sha256):
             _fail("gate file SHA256 does not match --gate-sha256")
-        try:
-            payload = json.loads(gate_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-            _fail(f"gate file is not valid JSON: {error}")
-        if not isinstance(payload, dict):
-            _fail("gate file must contain a JSON object")
-        args.runtime_attestation_sha256 = _sha256(runtime_path)
+        runtime_content = _read_regular_file(
+            Path(profile["RUNTIME_ATTESTATION"]), "runtime attestation"
+        )
+        expected = {
+            "nemo_rl_commit": profile["EXPECTED_NEMORL_SHA"],
+            "bridge_commit": profile["EXPECTED_BRIDGE_SHA"],
+            "mcore_commit": profile["EXPECTED_MCORE_SHA"],
+            "container_sha256": profile["CONTAINER_SHA256"],
+            "runtime_attestation_sha256": hashlib.sha256(runtime_content).hexdigest(),
+        }
+        payload = _parse_json(gate_content)
         if args.kind == "r3":
-            _validate_r3(payload, args)
+            _validate_r3(payload, expected)
         else:
-            _validate_promotion(payload, args)
+            _validate_promotion(payload, args, expected)
     except ValueError as error:
         print(f"Campaign gate rejected: {error}", file=sys.stderr)
         return 2

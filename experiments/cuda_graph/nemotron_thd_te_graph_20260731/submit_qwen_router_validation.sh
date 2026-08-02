@@ -44,47 +44,6 @@ require_gate_inputs() {
     fail "${file_name} and ${digest_name} are required"
 }
 
-load_gate_profile() {
-  local profile_file
-  local field
-  local value
-
-  if [[ -n "${PROFILE_FILE:-}" ]]; then
-    profile_file=${PROFILE_FILE}
-    [[ "${profile_file}" == /* ]] || fail "PROFILE_FILE must be an absolute path"
-  elif [[ -f "${script_dir}/profiles/${CLUSTER}.env" ]]; then
-    profile_file=${script_dir}/profiles/${CLUSTER}.env
-  else
-    profile_file=${script_dir}/profiles/${CLUSTER}.env.example
-  fi
-  [[ -f "${profile_file}" && ! -L "${profile_file}" ]] || \
-    fail "Gate profile must be a regular non-symlink file: ${profile_file}"
-  # The selected profile is the trusted source of expected campaign provenance.
-  # shellcheck source=/dev/null
-  source "${profile_file}"
-  for field in \
-    EXPECTED_NEMORL_SHA \
-    EXPECTED_BRIDGE_SHA \
-    EXPECTED_MCORE_SHA \
-    CONTAINER_SHA256 \
-    RUNTIME_ATTESTATION; do
-    value=${!field:-}
-    case "${value}" in
-      ""|__REQUIRED_*__) fail "Gate profile has unresolved ${field}" ;;
-    esac
-  done
-  [[ "${EXPECTED_NEMORL_SHA}" =~ ^[0-9a-f]{40}$ ]] || \
-    fail "Gate profile EXPECTED_NEMORL_SHA must be a full lowercase commit"
-  [[ "${EXPECTED_BRIDGE_SHA}" =~ ^[0-9a-f]{40}$ ]] || \
-    fail "Gate profile EXPECTED_BRIDGE_SHA must be a full lowercase commit"
-  [[ "${EXPECTED_MCORE_SHA}" =~ ^[0-9a-f]{40}$ ]] || \
-    fail "Gate profile EXPECTED_MCORE_SHA must be a full lowercase commit"
-  [[ "${CONTAINER_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
-    fail "Gate profile CONTAINER_SHA256 must be a full lowercase SHA256"
-  [[ "${RUNTIME_ATTESTATION}" == /* ]] || \
-    fail "Gate profile RUNTIME_ATTESTATION must be an absolute path"
-}
-
 validate_gate() {
   local kind=$1
   local gate_file=$2
@@ -97,11 +56,9 @@ validate_gate() {
     --gate-file "${gate_file}"
     --gate-sha256 "${gate_sha256}"
     --model "${MODEL}"
-    --nemo-rl-commit "${EXPECTED_NEMORL_SHA}"
-    --bridge-commit "${EXPECTED_BRIDGE_SHA}"
-    --mcore-commit "${EXPECTED_MCORE_SHA}"
-    --container-sha256 "${CONTAINER_SHA256}"
-    --runtime-attestation "${RUNTIME_ATTESTATION}"
+    --profile-file "${profile_file}"
+    --profile-dir "${profile_dir}"
+    --cluster "${CLUSTER}"
   )
   local arm
   for arm in "$@"; do
@@ -141,9 +98,9 @@ resolve_leaf() {
 
 : "${CLUSTER:?Set CLUSTER to ptyche, oci-hsg, or lyris}"
 : "${MODEL:?Set MODEL to qwen3_30ba3b or qwen3_235b}"
-script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 submitter_path=$(realpath "${BASH_SOURCE[0]}") || fail "Cannot resolve Qwen router submitter"
-validator=$(dirname "${submitter_path}")/validate_campaign_gate.py
+script_dir=$(dirname "${submitter_path}")
+validator=${script_dir}/validate_campaign_gate.py
 [[ -f "${validator}" && ! -L "${validator}" ]] || \
   fail "Campaign gate validator must be a regular non-symlink file"
 run_tag=${RUN_TAG:-$(date -u +%Y%m%dT%H%M%SZ)}
@@ -152,6 +109,11 @@ phase=${PHASE:-smoke}
 repeats=${REPEATS:-1}
 
 validate_test_controls
+
+case "${CLUSTER}" in
+  ptyche|oci-hsg|lyris) ;;
+  *) fail "CLUSTER must be ptyche, oci-hsg, or lyris" ;;
+esac
 
 case "${MODEL}" in
   qwen3_30ba3b|qwen3_235b) ;;
@@ -196,7 +158,14 @@ for arm in "${arms[@]}"; do
   fi
 done
 if [[ "${requires_r3_gate}" == "true" || "${phase}" == "performance" ]]; then
-  load_gate_profile
+  profile_dir=${script_dir}/profiles
+  if [[ -n "${PROFILE_FILE:-}" ]]; then
+    profile_file=${PROFILE_FILE}
+  elif [[ -e "${profile_dir}/${CLUSTER}.env" || -L "${profile_dir}/${CLUSTER}.env" ]]; then
+    profile_file=${profile_dir}/${CLUSTER}.env
+  else
+    profile_file=${profile_dir}/${CLUSTER}.env.example
+  fi
 fi
 if [[ "${requires_r3_gate}" == "true" ]]; then
   require_gate_inputs R3_PREFLIGHT_FILE R3_PREFLIGHT_SHA256
