@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from experiments.mxfp8_adaptive_rollout_v0251 import summarize
 from experiments.mxfp8_adaptive_rollout_v0251.contract import (
     AdaptiveInputs,
     TraceInputs,
@@ -53,9 +54,7 @@ def test_adaptive_requires_matching_table_hash(tmp_path: Path) -> None:
         layer_allowlist_b64="MTI4MCw4MTkyCg==",
     )
 
-    env = build_arm_environment(
-        "adaptive", runtime_root=runtime_root, adaptive=inputs
-    )
+    env = build_arm_environment("adaptive", runtime_root=runtime_root, adaptive=inputs)
 
     assert env["NEMORL_MXFP8_LINEAR_BACKEND"] == "flashinfer_trtllm"
     assert env["VLLM_MXFP8_DENSE_TRTLLM_EXACT_TACTIC_SHA256"] == digest
@@ -110,8 +109,17 @@ def test_summary_rejects_partial_log(tmp_path: Path) -> None:
 
     summary = summarize_log(log)
 
-    assert summary["complete"] is False
-    assert summary["elapsed_seconds"] is None
+    assert summary == {
+        "arm": "baseline",
+        "complete": False,
+        "elapsed_seconds": None,
+        "generation_seconds": None,
+        "gpu_count": 8,
+        "model_load_seconds": None,
+        "output_tokens": None,
+        "tokens_per_second": None,
+        "tokens_per_second_per_gpu": None,
+    }
 
 
 def test_summary_reads_completed_run(tmp_path: Path) -> None:
@@ -129,22 +137,157 @@ def test_summary_reads_completed_run(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    summary = summarize_log(log)
+    summary = summarize_log(log, gpu_count=4)
 
     assert summary == {
         "arm": "adaptive",
         "complete": True,
         "elapsed_seconds": 10.0,
+        "generation_seconds": 5.5,
+        "gpu_count": 4,
         "model_load_seconds": 4.5,
         "output_tokens": 8192,
+        "tokens_per_second": pytest.approx(1489.4545454545455),
+        "tokens_per_second_per_gpu": pytest.approx(372.3636363636364),
     }
+
+
+def test_summary_rejects_non_positive_gpu_count(tmp_path: Path) -> None:
+    log = tmp_path / "run.log"
+    log.write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="gpu_count must be positive"):
+        summarize_log(log, gpu_count=0)
+
+
+def test_summary_safely_represents_malformed_and_zero_duration_log(
+    tmp_path: Path,
+) -> None:
+    log = tmp_path / "run.log"
+    log.write_text(
+        "\n".join(
+            [
+                "NEMORL_CANARY arm=baseline event=start epoch=not-a-number",
+                "NEMORL_CANARY event=start epoch=10.0",
+                "NEMORL_CANARY event=model_ready epoch=20.0",
+                "NEMORL_CANARY event=outputs tokens=invalid",
+                "NEMORL_CANARY event=outputs tokens=0",
+                "NEMORL_CANARY event=complete epoch=20.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    summary = summarize_log(log)
+
+    assert summary["complete"] is True
+    assert summary["elapsed_seconds"] == 10.0
+    assert summary["model_load_seconds"] == 10.0
+    assert summary["generation_seconds"] == 0.0
+    assert summary["output_tokens"] == 0
+    assert summary["tokens_per_second"] is None
+    assert summary["tokens_per_second_per_gpu"] is None
+
+
+def test_summary_rejects_reversed_timestamps(tmp_path: Path) -> None:
+    log = tmp_path / "run.log"
+    log.write_text(
+        "\n".join(
+            [
+                "NEMORL_CANARY arm=adaptive event=start epoch=30.0",
+                "NEMORL_CANARY event=model_ready epoch=20.0",
+                "NEMORL_CANARY event=outputs tokens=100",
+                "NEMORL_CANARY event=complete epoch=10.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    summary = summarize_log(log)
+
+    assert summary["complete"] is False
+    assert summary["elapsed_seconds"] is None
+    assert summary["model_load_seconds"] is None
+    assert summary["generation_seconds"] is None
+    assert summary["tokens_per_second"] is None
+
+
+def test_summary_reports_adaptive_speedup_for_matched_pair(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline.log"
+    adaptive = tmp_path / "adaptive.log"
+    baseline.write_text(
+        "\n".join(
+            [
+                "NEMORL_CANARY arm=baseline event=start epoch=0",
+                "NEMORL_CANARY event=model_ready epoch=10",
+                "NEMORL_CANARY event=outputs tokens=1000",
+                "NEMORL_CANARY event=complete epoch=20",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    adaptive.write_text(
+        "\n".join(
+            [
+                "NEMORL_CANARY arm=adaptive event=start epoch=100",
+                "NEMORL_CANARY event=model_ready epoch=110",
+                "NEMORL_CANARY event=outputs tokens=1000",
+                "NEMORL_CANARY event=complete epoch=115",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = summarize.summarize_logs([adaptive, baseline], gpu_count=8)
+
+    assert [run["arm"] for run in report["runs"]] == ["adaptive", "baseline"]
+    assert report["adaptive_vs_baseline_speedup"] == pytest.approx(2.0)
+
+
+@pytest.mark.parametrize(
+    "second_arm,baseline_tokens",
+    [("trace", 1000), ("baseline", 0)],
+)
+def test_summary_omits_speedup_for_unmatched_or_zero_throughput_pair(
+    tmp_path: Path,
+    second_arm: str,
+    baseline_tokens: int,
+) -> None:
+    first = tmp_path / "first.log"
+    second = tmp_path / "second.log"
+    first.write_text(
+        "\n".join(
+            [
+                "NEMORL_CANARY arm=adaptive event=start epoch=0",
+                "NEMORL_CANARY event=model_ready epoch=1",
+                "NEMORL_CANARY event=outputs tokens=1000",
+                "NEMORL_CANARY event=complete epoch=2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    second.write_text(
+        "\n".join(
+            [
+                f"NEMORL_CANARY arm={second_arm} event=start epoch=0",
+                "NEMORL_CANARY event=model_ready epoch=1",
+                f"NEMORL_CANARY event=outputs tokens={baseline_tokens}",
+                "NEMORL_CANARY event=complete epoch=2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = summarize.summarize_logs([first, second])
+
+    assert report["adaptive_vs_baseline_speedup"] is None
 
 
 def test_arm_reuses_locked_driver_interpreter_for_ray_actors() -> None:
     root = Path(__file__).parents[3]
-    launcher = (
-        root / "experiments/mxfp8_adaptive_rollout_v0251/run_arm.sh"
-    ).read_text(encoding="utf-8")
+    launcher = (root / "experiments/mxfp8_adaptive_rollout_v0251/run_arm.sh").read_text(
+        encoding="utf-8"
+    )
 
     assert "export NEMO_RL_PY_EXECUTABLES_SYSTEM=1" in launcher
     assert 'driver_python="${NEMO_RL_DRIVER_VENV_DIR:' in launcher
@@ -154,9 +297,9 @@ def test_arm_reuses_locked_driver_interpreter_for_ray_actors() -> None:
 
 def test_ab_uses_locked_driver_interpreter_without_resyncing_packages() -> None:
     root = Path(__file__).parents[3]
-    launcher = (
-        root / "experiments/mxfp8_adaptive_rollout_v0251/run_ab.sh"
-    ).read_text(encoding="utf-8")
+    launcher = (root / "experiments/mxfp8_adaptive_rollout_v0251/run_ab.sh").read_text(
+        encoding="utf-8"
+    )
 
     assert 'driver_python="${NEMO_RL_DRIVER_VENV_DIR:' in launcher
     assert 'runtime_python=("$driver_python")' in launcher
@@ -177,12 +320,16 @@ def test_flashinfer_preflight_precreates_shared_symlink_parents(
 
 def test_overlay_builder_only_clears_pythonpath_during_discovery() -> None:
     root = Path(__file__).parents[3]
-    launcher = (
-        root / "experiments/mxfp8_adaptive_rollout_v0251/run_ab.sh"
-    ).read_text(encoding="utf-8")
+    launcher = (root / "experiments/mxfp8_adaptive_rollout_v0251/run_ab.sh").read_text(
+        encoding="utf-8"
+    )
 
-    builder = launcher.split("builder_python=(", maxsplit=1)[1].split(")", maxsplit=1)[0]
-    runtime = launcher.split("runtime_python=(", maxsplit=1)[1].split(")", maxsplit=1)[0]
+    builder = launcher.split("builder_python=(", maxsplit=1)[1].split(")", maxsplit=1)[
+        0
+    ]
+    runtime = launcher.split("runtime_python=(", maxsplit=1)[1].split(")", maxsplit=1)[
+        0
+    ]
     assert "-u PYTHONPATH" in builder
     assert "-u PYTHONPATH" not in runtime
 
@@ -190,8 +337,7 @@ def test_overlay_builder_only_clears_pythonpath_during_discovery() -> None:
 def test_canary_config_does_not_duplicate_worker_owned_vllm_arguments() -> None:
     root = Path(__file__).parents[3]
     config_path = (
-        root
-        / "experiments/mxfp8_adaptive_rollout_v0251/configs/eval_ultra_tp8.yaml"
+        root / "experiments/mxfp8_adaptive_rollout_v0251/configs/eval_ultra_tp8.yaml"
     )
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     vllm_kwargs = config["generation"]["vllm_kwargs"]
@@ -202,8 +348,7 @@ def test_canary_config_does_not_duplicate_worker_owned_vllm_arguments() -> None:
 def test_qwen_trace_config_matches_performance_generation_scope() -> None:
     root = Path(__file__).parents[3]
     config_path = (
-        root
-        / "experiments/mxfp8_adaptive_rollout_v0251/configs/"
+        root / "experiments/mxfp8_adaptive_rollout_v0251/configs/"
         "eval_qwen3_30ba3b_trace.yaml"
     )
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -226,15 +371,17 @@ def test_qwen_trace_config_matches_performance_generation_scope() -> None:
         "gpus_per_node": 4,
         "num_nodes": 2,
     }
-    dataset_path = root / "experiments/mxfp8_adaptive_rollout_v0251/data/qwen_trace_math.jsonl"
+    dataset_path = (
+        root / "experiments/mxfp8_adaptive_rollout_v0251/data/qwen_trace_math.jsonl"
+    )
     assert len(dataset_path.read_text(encoding="utf-8").splitlines()) == 64
 
 
 def test_trace_launcher_uses_eager_discovery_then_summarizes_shapes() -> None:
     root = Path(__file__).parents[3]
-    launcher = (
-        root / "experiments/mxfp8_adaptive_rollout_v0251/run_arm.sh"
-    ).read_text(encoding="utf-8")
+    launcher = (root / "experiments/mxfp8_adaptive_rollout_v0251/run_arm.sh").read_text(
+        encoding="utf-8"
+    )
 
     assert '--trace-dir "${SHAPE_TRACE_DIR:?set SHAPE_TRACE_DIR}"' in launcher
     assert "shape_trace" in launcher
@@ -244,8 +391,7 @@ def test_trace_launcher_uses_eager_discovery_then_summarizes_shapes() -> None:
 def test_qwen_submitter_uses_ptyche_without_ultra_tactic_artifacts() -> None:
     root = Path(__file__).parents[3]
     submitter = (
-        root
-        / "experiments/mxfp8_adaptive_rollout_v0251/submit_qwen30_ptyche.sh"
+        root / "experiments/mxfp8_adaptive_rollout_v0251/submit_qwen30_ptyche.sh"
     ).read_text(encoding="utf-8")
 
     assert "--nodes=2" in submitter
@@ -287,9 +433,7 @@ def test_shape_trace_summary_deduplicates_exact_signatures(tmp_path: Path) -> No
         encoding="utf-8",
     )
     second = dict(record, m=16, pid=11)
-    (tmp_path / "rank1.jsonl").write_text(
-        json.dumps(second) + "\n", encoding="utf-8"
-    )
+    (tmp_path / "rank1.jsonl").write_text(json.dumps(second) + "\n", encoding="utf-8")
 
     summary = summarize_shape_trace(tmp_path)
 

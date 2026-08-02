@@ -1,0 +1,55 @@
+{
+  "observed_shape_count": 10,
+  "qualified_layer_family_count": 1,
+  "qualified_shape_count": 8,
+  "selection_policy": {
+    "max_speedup_cv": 0.03,
+    "min_cosine": 0.999,
+    "min_repeats": 3,
+    "min_speedup": 1.02,
+    "require_complete_layer_family": true,
+    "require_cuda_graph_capture_and_replay": true
+  },
+  "shape_results": [
+    {
+      "reason": "qualified",
+      "shape": "1,151936,2048"
+    },
+    {
+      "reason": "qualified",
+      "shape": "15,128,2048"
+    },
+    {
+      "reason": "qualified",
+      "shape": "35,128,2048"
+    },
+    {
+      "reason": "qualified",
+      "shape": "35,151936,2048"
+    },
+    {
+      "reason": "qualified",
+      "shape": "36,128,2048"
+    },
+    {
+      "reason": "qualified",
+      "shape": "36,151936,2048"
+    },
+    {
+      "reason": "qualified",
+      "shape": "256,128,2048"
+    },
+    {
+      "reason": "qualified",
+      "shape": "256,151936,2048"
+    },
+    {
+      "reason": "unstable_speedup",
+      "shape": "4266,128,2048"
+    },
+    {
+      "reason": "unstable_speedup",
+      "shape": "16384,128,2048"
+    }
+  ]
+}
