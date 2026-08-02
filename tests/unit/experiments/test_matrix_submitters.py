@@ -150,6 +150,7 @@ def _make_harness(
         EXPERIMENT_DIR / "validate_campaign_gate.py",
         harness / "validate_campaign_gate.py",
     )
+    shutil.copy2(EXPERIMENT_DIR / "profile_snapshot.py", harness / "profile_snapshot.py")
     capture_file = tmp_path / "captured.tsv"
     for relative_path in launchers:
         _write_launcher(harness / relative_path, relative_path)
@@ -163,6 +164,7 @@ def _load_gate_validator():
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(EXPERIMENT_DIR))
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module

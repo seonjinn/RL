@@ -64,7 +64,11 @@ validate_gate() {
   for arm in "$@"; do
     command+=(--arm "${arm}")
   done
-  "${command[@]}" || fail "${kind} campaign gate validation failed"
+  local validation_output
+  validation_output=$("${command[@]}") || fail "${kind} campaign gate validation failed"
+  [[ "${validation_output}" =~ ^PROFILE_SHA256=([0-9a-f]{64})$ ]] || \
+    fail "${kind} campaign gate returned malformed profile digest"
+  VALIDATED_PROFILE_SHA256=${BASH_REMATCH[1]}
 }
 
 resolve_leaf() {
@@ -199,6 +203,8 @@ for repeat_index in $(seq 1 "${repeats}"); do
     STEPS="${steps}" \
     TEST_ONLY="${TEST_ONLY:-0}" \
     SBATCH_TEST_ONLY="${SBATCH_TEST_ONLY:-0}" \
+    PROFILE_FILE="${profile_file:-}" \
+    VALIDATED_PROFILE_SHA256="${VALIDATED_PROFILE_SHA256:-}" \
     RUN_GROUP="${run_group}" \
     REPEAT_INDEX="${repeat_index}" \
     RUN_TAG="${repeat_tag}" \

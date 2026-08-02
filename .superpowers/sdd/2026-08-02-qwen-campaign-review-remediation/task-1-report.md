@@ -18,6 +18,11 @@ Implementation:
   and runtime bytes are each opened once with no-follow semantics and checked
   with `fstat`; hashes and parsers consume those same bytes. JSON duplicate
   keys and fractional job IDs are rejected.
+- Review fix round 2 adds the shared `profile_snapshot.py` reader. Gate
+  validation returns the SHA256 of the exact profile bytes it read; the
+  submitter forwards that digest to every leaf, and `run_scope.sh` safely
+  snapshots the profile itself and rejects any post-validation replacement
+  before `SBATCH:` output or contact.
 
 Evidence:
 
@@ -37,10 +42,15 @@ Evidence:
   creating the scheduler marker. They also reject invalid clusters before path
   resolution, file swaps after descriptor open, duplicate JSON keys, and float
   job IDs.
+- Focused launcher checks passed for safe profile rendering and runtime
+  attestation command construction; an explicit validated-profile digest
+  mismatch exited 2 before `SBATCH:`.
 
 SHA256:
 
 - `validate_campaign_gate.py`: `0a10cb1d6c6aa24876ed7b9001d27760b0ab5830cb7fdeb2f804cd13f4f3ca02`
+- `profile_snapshot.py`: `ad7727cac5d265476cc79567ae05ad6c0e6d93aec1158e0a66f0daf4eca56ae0`
+- `validate_campaign_gate.py` (round 2): `86583569f560eaa88cc82df310dfd99bf83de42c926f10cd5a02659c98c5ac53`
 
 Concern:
 

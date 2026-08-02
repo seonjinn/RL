@@ -28,6 +28,8 @@ import sys
 from pathlib import Path
 from typing import NoReturn, cast
 
+from profile_snapshot import load_profile_snapshot
+
 
 FULL_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 FULL_COMMIT = re.compile(r"[0-9a-f]{40}\Z")
@@ -197,18 +199,9 @@ def _parse_profile(content: bytes) -> dict[str, str]:
     return values
 
 
-def _profile_values(args: argparse.Namespace) -> dict[str, str]:
-    profile_dir = Path(args.profile_dir)
-    _validate_profile_directory(profile_dir)
-    if args.profile_file is None:
-        candidate = profile_dir / f"{args.cluster}.env"
-        if not os.path.lexists(candidate):
-            candidate = profile_dir / f"{args.cluster}.env.example"
-    else:
-        candidate = Path(args.profile_file)
-    if not candidate.is_absolute() or candidate.parent != profile_dir:
-        _fail("profile file must be a direct child of the trusted profile directory")
-    values = _parse_profile(_read_regular_file(candidate, "profile file"))
+def _profile_values(args: argparse.Namespace) -> tuple[dict[str, str], str]:
+    snapshot = load_profile_snapshot(Path(args.profile_dir), args.cluster, args.profile_file)
+    values = snapshot.values
     if FULL_COMMIT.fullmatch(values["EXPECTED_NEMORL_SHA"]) is None:
         _fail("profile EXPECTED_NEMORL_SHA must be a full lowercase commit")
     if FULL_COMMIT.fullmatch(values["EXPECTED_BRIDGE_SHA"]) is None:
@@ -219,7 +212,7 @@ def _profile_values(args: argparse.Namespace) -> dict[str, str]:
         _fail("profile CONTAINER_SHA256 must be a full lowercase SHA256")
     if not Path(values["RUNTIME_ATTESTATION"]).is_absolute():
         _fail("profile RUNTIME_ATTESTATION must be an absolute path")
-    return values
+    return values, snapshot.sha256
 
 
 def _exact_mapping(value: object, fields: frozenset[str], label: str) -> dict[str, object]:
@@ -337,7 +330,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     try:
-        profile = _profile_values(args)
+        profile, profile_sha256 = _profile_values(args)
         gate_content = _read_regular_file(Path(args.gate_file), "gate file")
         if not hmac.compare_digest(hashlib.sha256(gate_content).hexdigest(), args.gate_sha256):
             _fail("gate file SHA256 does not match --gate-sha256")
@@ -351,6 +344,7 @@ def main() -> int:
             "container_sha256": profile["CONTAINER_SHA256"],
             "runtime_attestation_sha256": hashlib.sha256(runtime_content).hexdigest(),
         }
+        print(f"PROFILE_SHA256={profile_sha256}")
         payload = _parse_json(gate_content)
         if args.kind == "r3":
             _validate_r3(payload, expected)

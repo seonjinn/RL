@@ -27,6 +27,7 @@ bridge_root=${repo_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
 mcore_root=${bridge_root}/3rdparty/Megatron-LM
 source_provenance_verifier=${script_dir}/scripts/verify_source_provenance.sh
 runtime_attestation_validator=${script_dir}/verify_runtime_attestation.py
+profile_snapshot_helper=${script_dir}/profile_snapshot.py
 cd "${repo_root}"
 
 : "${MODEL:?Set MODEL to nano, super, ultra, qwen3_30ba3b, or qwen3_235b}"
@@ -94,16 +95,35 @@ source "${model_file}"
 MODEL_NUM_NODES=${NUM_NODES}
 MODEL_GPUS_PER_NODE=${GPUS_PER_NODE}
 
+profile_dir=${script_dir}/profiles
 if [[ -n "${PROFILE_FILE:-}" ]]; then
   profile_file=${PROFILE_FILE}
-elif [[ -f "${script_dir}/profiles/${CLUSTER}.env" ]]; then
-  profile_file=${script_dir}/profiles/${CLUSTER}.env
+elif [[ -e "${profile_dir}/${CLUSTER}.env" || -L "${profile_dir}/${CLUSTER}.env" ]]; then
+  profile_file=${profile_dir}/${CLUSTER}.env
 else
-  profile_file=${script_dir}/profiles/${CLUSTER}.env.example
+  profile_file=${profile_dir}/${CLUSTER}.env.example
 fi
-[[ -f "${profile_file}" ]] || fail "Missing cluster profile: ${profile_file}"
-# shellcheck source=/dev/null
-source "${profile_file}"
+[[ -f "${profile_snapshot_helper}" ]] || fail "Missing profile snapshot helper"
+profile_snapshot_command=(
+  python3 "${profile_snapshot_helper}"
+  --profile-dir "${profile_dir}"
+  --cluster "${CLUSTER}"
+  --profile-file "${profile_file}"
+)
+if [[ -n "${VALIDATED_PROFILE_SHA256:-}" ]]; then
+  profile_snapshot_command+=(--expected-sha256 "${VALIDATED_PROFILE_SHA256}")
+fi
+profile_snapshot_output=$("${profile_snapshot_command[@]}") || fail "Cluster profile rejected"
+PROFILE_SHA256=
+while IFS=$'\t' read -r field value; do
+  case "${field}" in
+    PROFILE_SHA256|PROFILE_ID|ACCOUNT|PARTITION|CONTAINER|CONTAINER_SHA256|MOUNTS|SBATCH_GPUS_PER_NODE|SBATCH_GRES|SBATCH_SEGMENT_SIZE|TIME_LIMIT|RUNTIME_ATTESTATION|RUNTIME_PREFLIGHT_JOB_ID|EXPECTED_TE_SHA|EXPECTED_NEMORL_SHA|EXPECTED_BRIDGE_SHA|EXPECTED_MCORE_SHA)
+      printf -v "${field}" '%s' "${value}"
+      ;;
+    *) fail "Cluster profile snapshot returned an unknown field" ;;
+  esac
+done <<<"${profile_snapshot_output}"
+[[ "${PROFILE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || fail "Cluster profile snapshot omitted its digest"
 [[ "${PARTITION}" == "batch" ]] || fail "All production jobs require PARTITION=batch"
 [[ "${SBATCH_GPUS_PER_NODE:-}" == "${MODEL_GPUS_PER_NODE}" ]] || \
   fail "Profile SBATCH_GPUS_PER_NODE must match model GPUS_PER_NODE=${MODEL_GPUS_PER_NODE}"
