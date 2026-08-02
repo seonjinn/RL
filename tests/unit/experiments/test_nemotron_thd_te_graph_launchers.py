@@ -839,6 +839,30 @@ def test_leaf_job_depends_on_one_exact_runtime_preflight_artifact(
     )
 
 
+def test_leaf_runtime_attestation_uses_the_nightly_container_python() -> None:
+    result = _run_script(
+        "scopes/17_attn.sh",
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        STEPS="20",
+        TEST_ONLY="1",
+        RUN_TAG="unit",
+    )
+
+    assert result.returncode == 0, result.stderr
+    runtime_attestation_line = next(
+        line
+        for line in result.stdout.splitlines()
+        if line.startswith("RUNTIME_ATTESTATION: ")
+    )
+    runtime_attestation_command = shlex.split(
+        runtime_attestation_line.removeprefix("RUNTIME_ATTESTATION: ")
+    )[0]
+    assert runtime_attestation_command.startswith("/opt/nemo_rl_venv/bin/python ")
+    assert "/usr/bin/python3" not in runtime_attestation_command
+
+
 def test_leaf_job_rejects_unmounted_managed_python_installation(
     tmp_path: Path,
 ) -> None:

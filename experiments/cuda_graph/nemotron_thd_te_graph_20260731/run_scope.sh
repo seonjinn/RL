@@ -281,7 +281,7 @@ else
 fi
 
 runtime_attestation_command=(
-  /usr/bin/python3
+  /opt/nemo_rl_venv/bin/python
   "${runtime_attestation_validator}"
   --attestation "${RUNTIME_ATTESTATION}"
   --container "${CONTAINER}"
