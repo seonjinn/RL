@@ -33,6 +33,10 @@ esac
 
 git -C "${REPO}" pull --ff-only
 test -z "$(git -C "${REPO}" status --porcelain --untracked-files=no)"
+if git -C "${REPO}" submodule status --recursive | grep -q '^-'; then
+  echo "All pinned submodules must be initialized before submission" >&2
+  exit 2
+fi
 REPO_SHA=$(git -C "${REPO}" rev-parse HEAD)
 BATCH_SCRIPT=${REPO}/experiments/nccl_reshard_pr3294/run_arm.sbatch
 test -x "${BATCH_SCRIPT}"
