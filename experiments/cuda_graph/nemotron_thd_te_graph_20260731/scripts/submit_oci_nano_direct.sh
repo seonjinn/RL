@@ -57,10 +57,10 @@ fi
 
 RUN_NAME="nano-${scope_name}-${STEPS}step-alltoall${debug_suffix}-${RUN_TAG}"
 RUN_DIR=${EXPERIMENT_ROOT}/${RUN_NAME}
-LOG_DIR=exp_logs/nemotron_thd_te_graph_20260731/${RUN_NAME}
+LOG_DIR=${RUN_DIR}/exp_logs
 mkdir -p "${RUN_DIR}"
 
-COMMAND="env NRL_FORCE_REBUILD_VENVS=true NVTE_WITH_NCCL_EP=0 NVTE_CUDA_ARCHS=100a NVTE_DEBUG=${NVTE_DEBUG} NVTE_DEBUG_LEVEL=${NVTE_DEBUG_LEVEL} NCCL_GRAPH_REGISTER=0 CUDA_DEVICE_MAX_CONNECTIONS=1 uv run examples/run_grpo.py \
+COMMAND="env NRL_FORCE_REBUILD_VENVS=true NVTE_WITH_NCCL_EP=0 NVTE_CUDA_ARCHS=100a NVTE_DEBUG=${NVTE_DEBUG} NVTE_DEBUG_LEVEL=${NVTE_DEBUG_LEVEL} NCCL_GRAPH_REGISTER=0 CUDA_DEVICE_MAX_CONNECTIONS=1 WANDB_DIR=${RUN_DIR}/wandb uv run examples/run_grpo.py \
   --config examples/configs/recipes/llm/grpo-nanov3-30BA3B-2n8g-megatron-pack-cp.yaml \
   grpo.max_num_steps=${STEPS} \
   checkpointing.enabled=false \
