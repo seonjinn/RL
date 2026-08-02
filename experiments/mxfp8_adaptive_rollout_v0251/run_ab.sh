@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ACTION=${1:-run}
+if [[ "$ACTION" != run && "$ACTION" != smoke ]]; then
+  echo "usage: run_ab.sh [run|smoke]" >&2
+  exit 2
+fi
+
 ROOT=${NEMO_RL_REPO_ROOT:?set NEMO_RL_REPO_ROOT}
 RESULT_ROOT=${CANARY_RESULT_ROOT:?set CANARY_RESULT_ROOT}
 VLLM_SOURCE=${CUSTOM_VLLM_SOURCE:?set CUSTOM_VLLM_SOURCE}
@@ -49,6 +55,10 @@ if runtime_root not in extension_path.parents:
 print(f"vllm_package={package_path}")
 print(f"vllm_stable_extension={extension_path}")
 PY
+
+if [[ "$ACTION" == smoke ]]; then
+  exit 0
+fi
 
 bash "$ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_arm.sh" baseline
 bash "$ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_arm.sh" adaptive

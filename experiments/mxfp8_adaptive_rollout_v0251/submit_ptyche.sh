@@ -2,8 +2,9 @@
 set -euo pipefail
 
 ACTION=${1:-submit}
-if [[ "$ACTION" != submit && "$ACTION" != test-only ]]; then
-  echo "usage: submit_ptyche.sh [submit|test-only]" >&2
+if [[ "$ACTION" != submit && "$ACTION" != test-only && \
+      "$ACTION" != smoke && "$ACTION" != smoke-test-only ]]; then
+  echo "usage: submit_ptyche.sh [submit|test-only|smoke|smoke-test-only]" >&2
   exit 2
 fi
 
@@ -37,7 +38,19 @@ export CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers
 export MOUNTS=${MOUNTS:-/lustre:/lustre,/home/sna:/home/sna}
 export GPUS_PER_NODE=4
 export BASE_LOG_DIR="$CANARY_RESULT_ROOT/slurm"
-export COMMAND="bash $NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_ab.sh"
+run_mode=run
+nodes=2
+time_limit=05:00:00
+segment=2
+job_suffix=canary
+if [[ "$ACTION" == smoke || "$ACTION" == smoke-test-only ]]; then
+  run_mode=smoke
+  nodes=1
+  time_limit=00:10:00
+  segment=1
+  job_suffix=overlay-smoke
+fi
+export COMMAND="bash $NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_ab.sh $run_mode"
 export UV_CACHE_DIR_OVERRIDE=${UV_CACHE_DIR_OVERRIDE:-/home/sna/.cache/uv-canary}
 lock_sha=$(sha256sum "$NEMO_RL_REPO_ROOT/uv.lock" | awk '{print $1}')
 venv_key=${lock_sha:0:16}-${EXPECTED_VLLM_COMMIT:0:12}
@@ -70,14 +83,14 @@ git -C "$CUSTOM_VLLM_SOURCE" diff --cached --quiet
 args=(
   --account=coreai_dlalgo_llm
   --partition=36x2-a01r
-  --nodes=2
-  --time=05:00:00
-  --segment=2
-  --job-name=coreai_dlalgo_llm-nemorl.mxfp8-adaptive-canary
+  --nodes="$nodes"
+  --time="$time_limit"
+  --segment="$segment"
+  --job-name="coreai_dlalgo_llm-nemorl.mxfp8-adaptive-$job_suffix"
   --dependency=
   --export=ALL
 )
-if [[ "$ACTION" == test-only ]]; then
+if [[ "$ACTION" == test-only || "$ACTION" == smoke-test-only ]]; then
   args+=(--test-only)
 fi
 
