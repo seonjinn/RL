@@ -445,6 +445,29 @@ def test_custom_environment_variables(register_test_actor, virtual_cluster):
     worker_group.shutdown(force=True)
 
 
+def test_custom_environment_variables_are_available_during_initializer_import(
+    virtual_cluster,
+):
+    actor_fqn = "tests.unit.distributed.initializer_env_actor.InitializerEnvActor"
+    original_registry_value = ACTOR_ENVIRONMENT_REGISTRY.get(actor_fqn)
+    ACTOR_ENVIRONMENT_REGISTRY[actor_fqn] = PY_EXECUTABLES.SYSTEM
+
+    try:
+        worker_group = RayWorkerGroup(
+            cluster=virtual_cluster,
+            remote_worker_builder=RayWorkerBuilder(actor_fqn),
+            workers_per_node=1,
+            env_vars={"NRL_TEST_INITIALIZER_IMPORT_ENV": "present"},
+        )
+        assert ray.get(worker_group.workers[0].import_environment.remote()) == "present"
+        worker_group.shutdown(force=True)
+    finally:
+        if original_registry_value is None:
+            ACTOR_ENVIRONMENT_REGISTRY.pop(actor_fqn, None)
+        else:
+            ACTOR_ENVIRONMENT_REGISTRY[actor_fqn] = original_registry_value
+
+
 def test_custom_environment_variables_override_existing(
     register_test_actor, virtual_cluster
 ):
