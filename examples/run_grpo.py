@@ -16,20 +16,27 @@ import argparse
 import os
 import pprint
 import time
+from collections.abc import Callable
 
 from omegaconf import OmegaConf
 
 from nemo_rl.algorithms.grpo import MasterConfig, grpo_train, setup
 from nemo_rl.algorithms.utils import get_tokenizer
 from nemo_rl.data.utils import setup_response_data
-from nemo_rl.distributed.virtual_cluster import init_ray
+from nemo_rl.distributed.virtual_cluster import RayVirtualCluster, init_ray
 from nemo_rl.models.generation import configure_generation_config
+from nemo_rl.models.generation.interfaces import GenerationInterface
+from nemo_rl.models.policy.interfaces import ColocatablePolicyInterface
 from nemo_rl.utils.config import (
     load_config,
     parse_hydra_overrides,
     register_omegaconf_resolvers,
 )
-from nemo_rl.utils.logger import get_next_experiment_dir, log_container_init_timing
+from nemo_rl.utils.logger import (
+    Logger,
+    get_next_experiment_dir,
+    log_container_init_timing,
+)
 from nemo_rl.utils.timer import Timer
 
 
@@ -47,6 +54,39 @@ def _select_trainer(master_config: MasterConfig):
         return grpo_train_sync
     print("🚀 Running synchronous GRPO training (legacy)")
     return grpo_train
+
+
+def _shutdown_sync_resources(
+    policy: ColocatablePolicyInterface,
+    policy_generation: GenerationInterface,
+    clusters: tuple[RayVirtualCluster, RayVirtualCluster],
+    logger: Logger,
+) -> None:
+    """Release sync GRPO resources before Python begins interpreter teardown."""
+    cleanup_steps: list[tuple[str, Callable[[], object]]] = []
+    if logger.gpu_monitor is not None:
+        cleanup_steps.append(("GPU monitor", logger.gpu_monitor.stop))
+    cleanup_steps.extend(
+        [
+            ("logger", logger.finish),
+            ("generation workers", policy_generation.shutdown),
+        ]
+    )
+    if policy is not policy_generation:
+        cleanup_steps.append(("policy workers", policy.shutdown))
+    seen_clusters: set[int] = set()
+    for cluster in clusters:
+        if id(cluster) not in seen_clusters:
+            cleanup_steps.append(("virtual cluster", cluster.shutdown))
+            seen_clusters.add(id(cluster))
+
+    for label, cleanup in cleanup_steps:
+        try:
+            cleanup()
+        except Exception as error:
+            print(f"Error shutting down {label}: {error}", flush=True)
+
+    logger.gpu_monitor = None
 
 
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
@@ -165,6 +205,7 @@ def main() -> None:
         )
 
     rl_init_timer.record("total", time.perf_counter() - main_start)
+    assert policy_generation is not None
 
     rl_init_metrics = rl_init_timer.get_timing_metrics(reduction_op="sum")
     print("\n" + "=" * 60)
@@ -234,21 +275,24 @@ def main() -> None:
         # grpo_train_sync defers checkpoint finalization to the checkpointer's
         # background threads; the context manager guarantees they are flushed on
         # exit. (grpo_train also flushes internally; shutdown() is idempotent.)
-        with checkpointer:
-            trainer(
-                policy,
-                policy_generation,
-                dataloader,
-                val_dataloader,
-                tokenizer,
-                loss_fn,
-                task_to_env,
-                val_task_to_env,
-                logger,
-                checkpointer,
-                grpo_state,
-                master_config,
-            )
+        try:
+            with checkpointer:
+                trainer(
+                    policy,
+                    policy_generation,
+                    dataloader,
+                    val_dataloader,
+                    tokenizer,
+                    loss_fn,
+                    task_to_env,
+                    val_task_to_env,
+                    logger,
+                    checkpointer,
+                    grpo_state,
+                    master_config,
+                )
+        finally:
+            _shutdown_sync_resources(policy, policy_generation, cluster, logger)
 
 
 if __name__ == "__main__":
