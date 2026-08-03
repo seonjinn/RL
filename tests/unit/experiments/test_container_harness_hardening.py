@@ -214,6 +214,12 @@ def _run_runtime_payload(
     runtime_environment.setdefault("RUNTIME_STAGE_ROOT", str(runtime_stage_root))
     runtime_environment.setdefault("RUNTIME_STAGE_MARKER_SHA256", "f" * 64)
     runtime_environment.setdefault("NVTE_CUDA_ARCHS", "100a")
+    runtime_environment.setdefault("TORCH_CUDA_ARCH_LIST", "10.0a")
+    runtime_environment.setdefault("RUNTIME_FEATURE_SET", "te_eval_capability_8")
+    runtime_environment.setdefault(
+        "RUNTIME_EXCLUDED_PACKAGES",
+        "causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm",
+    )
     runtime_environment["PATH"] = (
         f"{fixture.cuda_home / 'bin'}:{runtime_environment.get('PATH', '')}"
     )
@@ -342,6 +348,57 @@ def test_runtime_probe_allows_only_megatron_editables_from_project_root(
     )
 
     assert result["expected_project_root"] == str(project_root)
+
+
+def test_runtime_probe_binds_narrow_te_eval_feature_set(tmp_path: Path) -> None:
+    module = _load_runtime_probe()
+    environment_root = tmp_path / "runtime-venv"
+    project_root = tmp_path / "project"
+    modules = _runtime_modules(module, environment_root)
+    del modules["mamba_ssm"]
+    del modules["causal_conv1d"]
+    exclusions = (
+        "causal-conv1d",
+        "deep-ep",
+        "fast-hadamard-transform",
+        "mamba-ssm",
+    )
+    environment = {
+        "UV_PROJECT_ENVIRONMENT": str(environment_root),
+        "RUNTIME_FEATURE_SET": "te_eval_capability_8",
+        "RUNTIME_EXCLUDED_PACKAGES": ",".join(exclusions),
+        "TORCH_CUDA_ARCH_LIST": "10.0a",
+        "NVTE_CUDA_ARCHS": "100a",
+    }
+
+    result = module.probe_runtime(
+        expected_device_count=4,
+        expected_environment_root=environment_root,
+        expected_project_root=project_root,
+        expected_runtime_feature_set="te_eval_capability_8",
+        expected_excluded_packages=exclusions,
+        expected_torch_cuda_arch_list="10.0a",
+        expected_nvte_cuda_archs="100a",
+        importer=lambda name: modules[name],
+        version_getter=lambda distribution: f"fixture-{distribution}",
+        interpreter_path=environment_root / "bin" / "python",
+        runtime_prefix=environment_root,
+        environment=environment,
+    )
+
+    assert result["runtime_feature_set"] == "te_eval_capability_8"
+    assert result["excluded_packages"] == list(exclusions)
+    assert "mamba_ssm" not in result["packages"]
+    assert "causal_conv1d" not in result["packages"]
+    with pytest.raises(RuntimeError, match="TORCH_CUDA_ARCH_LIST mismatch"):
+        module.probe_runtime(
+            expected_device_count=4,
+            expected_runtime_feature_set="te_eval_capability_8",
+            expected_excluded_packages=exclusions,
+            expected_torch_cuda_arch_list="10.0a",
+            expected_nvte_cuda_archs="100a",
+            environment={**environment, "TORCH_CUDA_ARCH_LIST": "10.0"},
+        )
 
 
 def test_runtime_probe_requires_exact_uv_managed_python(tmp_path: Path) -> None:
@@ -675,8 +732,14 @@ printf '{"status":"passed"}\n' >"${output}"
         '"${expected_python_version}"'
     ) < command.index("UV_PYTHON_DOWNLOADS=never")
     assert (
-        '"${uv_executable}" run --python "${expected_python_version}" --managed-python '
-        "--locked --extra mcore --no-python-downloads" in command
+        '"${uv_executable}" sync --python "${expected_python_version}" --managed-python'
+        in command
+    )
+    assert "--locked --extra mcore --no-python-downloads" in command
+    assert 'sync_command+=(--no-install-package "${excluded_package}")' in command
+    assert (
+        "RUNTIME_EXCLUDED_PACKAGES=causal-conv1d,deep-ep,"
+        "fast-hadamard-transform,mamba-ssm" in command
     )
     assert "--no-editable" not in command
     assert '"schema=runtime-stage-v1"' in command
@@ -715,6 +778,14 @@ def test_runtime_wrapper_separates_cpu_stage_from_gpu_attestation() -> None:
     assert "RUNTIME_PHASE=${RUNTIME_PHASE:-attest}" in source
     assert 'if [[ "${RUNTIME_PHASE}" == "stage" ]]' in source
     assert "NVTE_CUDA_ARCHS=100a" in source
+    assert "RUNTIME_FEATURE_SET=te_eval_capability_8" in source
+    assert "TORCH_CUDA_ARCH_LIST=10.0a" in source
+    assert (
+        "RUNTIME_EXCLUDED_PACKAGES=causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm"
+        in source
+    )
+    assert '"${uv_executable}" sync' in source
+    assert "--no-install-package" in source
     assert "runtime-stage-v1" in source
     assert "uv_lock_sha256" in source
     assert "RUNTIME_STAGE_MARKER_SHA256" in source
@@ -1078,7 +1149,7 @@ def test_runtime_payload_cleans_workspace_after_late_uv_failure(tmp_path: Path) 
         "      *) exit 94 ;;\n"
         "    esac\n"
         "    ;;\n"
-        "  run)\n"
+        "  sync)\n"
         '    mkdir -p "${UV_CACHE_DIR}"\n'
         '    touch "${UV_CACHE_DIR}/build-marker"\n'
         '    mkdir -p "${NVTE_CMAKE_BUILD_DIR}"\n'

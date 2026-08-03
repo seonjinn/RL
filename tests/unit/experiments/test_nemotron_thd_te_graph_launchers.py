@@ -2004,8 +2004,13 @@ def test_ray_and_mcore_sruns_override_image_uv_environment() -> None:
     mcore_container_env_vars = CONTAINER_ENV_VARS.removesuffix(",NRL_SLURM_JOB_ID,NRL_SLURM_RESTART_COUNT")
     assert f"CONTAINER_ENV_VARS={mcore_container_env_vars}" in mcore_wrapper
     assert mcore_wrapper.count('"--container-env=${CONTAINER_ENV_VARS}"') == 2
-    assert '"${UV_EXECUTABLE}" run --python "${UV_PYTHON}"' in mcore_wrapper
-    assert "/bin/bash --noprofile --norc -c" not in mcore_wrapper
+    assert (
+        "NVTE_CUDA_ARCHS,TORCH_CUDA_ARCH_LIST,RUNTIME_FEATURE_SET,"
+        "RUNTIME_EXCLUDED_PACKAGES" in mcore_wrapper
+    )
+    assert 'sync_command+=(--no-install-package "${excluded_package}")' in mcore_wrapper
+    assert 'exec "${environment_root}/bin/python" "$@"' in mcore_wrapper
+    assert "/bin/bash --noprofile --norc -c" in mcore_wrapper
     assert "bash -lc" not in mcore_wrapper
 
 

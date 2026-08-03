@@ -43,6 +43,14 @@ REQUIRED_MODULE_DISTRIBUTIONS: dict[str, tuple[str, ...]] = {
     "causal_conv1d": ("causal-conv1d",),
     "cupy": ("cupy-cuda13x", "cupy-cuda12x", "cupy"),
 }
+TE_EVAL_FEATURE_SET = "te_eval_capability_8"
+TE_EVAL_EXCLUDED_PACKAGES = (
+    "causal-conv1d",
+    "deep-ep",
+    "fast-hadamard-transform",
+    "mamba-ssm",
+)
+TE_EVAL_OPTIONAL_MODULES = frozenset(("mamba_ssm", "causal_conv1d"))
 EDITABLE_PROJECT_MODULES = frozenset(
     (
         "megatron.core",
@@ -160,15 +168,23 @@ def validate_transformer_engine_identities(
         ("expected source commit", expected_source_commit),
         ("expected version-base commit", expected_version_base_commit),
     ):
-        if len(commit) != FULL_COMMIT_LENGTH or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
-            raise RuntimeError(f"Transformer Engine {label} must be one lowercase full SHA")
+        if (
+            len(commit) != FULL_COMMIT_LENGTH
+            or re.fullmatch(r"[0-9a-f]{40}", commit) is None
+        ):
+            raise RuntimeError(
+                f"Transformer Engine {label} must be one lowercase full SHA"
+            )
     if source_commit != expected_source_commit:
         raise RuntimeError(
             "Transformer Engine source commit mismatch: "
             f"expected {expected_source_commit}, got {source_commit}"
         )
     version_match = re.search(r"\+([0-9a-f]{8})(?:\D|$)", version)
-    if version_match is None or version_match.group(1) != expected_version_base_commit[:8]:
+    if (
+        version_match is None
+        or version_match.group(1) != expected_version_base_commit[:8]
+    ):
         raise RuntimeError(
             "Transformer Engine version-base commit mismatch: "
             f"expected {expected_version_base_commit[:8]} in {version}"
@@ -189,6 +205,10 @@ def probe_runtime(
     expected_uv_version: str | None = None,
     expected_uv_executable: Path | None = None,
     expected_nvte_with_nccl_ep: str | None = None,
+    expected_runtime_feature_set: str | None = None,
+    expected_excluded_packages: tuple[str, ...] | None = None,
+    expected_torch_cuda_arch_list: str | None = None,
+    expected_nvte_cuda_archs: str | None = None,
     importer: Callable[[str], Any] = importlib.import_module,
     optional_importer: Callable[[str], Any] = importlib.import_module,
     version_getter: Callable[[str], str] = importlib.metadata.version,
@@ -199,6 +219,22 @@ def probe_runtime(
     environment: Mapping[str, str] = os.environ,
 ) -> dict[str, Any]:
     """Import the training stack and require exactly the allocated GPUs."""
+    if expected_runtime_feature_set is not None:
+        if expected_runtime_feature_set != TE_EVAL_FEATURE_SET:
+            raise RuntimeError("unsupported runtime feature set")
+        if expected_excluded_packages != TE_EVAL_EXCLUDED_PACKAGES:
+            raise RuntimeError("runtime exclusions do not match the typed feature set")
+        assert expected_excluded_packages is not None
+        if environment.get("RUNTIME_FEATURE_SET") != expected_runtime_feature_set:
+            raise RuntimeError("RUNTIME_FEATURE_SET mismatch")
+        if environment.get("RUNTIME_EXCLUDED_PACKAGES") != ",".join(
+            expected_excluded_packages
+        ):
+            raise RuntimeError("RUNTIME_EXCLUDED_PACKAGES mismatch")
+        if environment.get("TORCH_CUDA_ARCH_LIST") != expected_torch_cuda_arch_list:
+            raise RuntimeError("TORCH_CUDA_ARCH_LIST mismatch")
+        if environment.get("NVTE_CUDA_ARCHS") != expected_nvte_cuda_archs:
+            raise RuntimeError("NVTE_CUDA_ARCHS mismatch")
     nvte_with_nccl_ep = environment.get("NVTE_WITH_NCCL_EP")
     if expected_nvte_with_nccl_ep is not None:
         if expected_nvte_with_nccl_ep not in {"0", "1"}:
@@ -376,7 +412,14 @@ def probe_runtime(
         )
 
     modules = {"torch": torch_module}
-    for module_name in REQUIRED_MODULE_DISTRIBUTIONS:
+    required_module_distributions = dict(REQUIRED_MODULE_DISTRIBUTIONS)
+    if expected_runtime_feature_set == TE_EVAL_FEATURE_SET:
+        required_module_distributions = {
+            name: distributions
+            for name, distributions in required_module_distributions.items()
+            if name not in TE_EVAL_OPTIONAL_MODULES
+        }
+    for module_name in required_module_distributions:
         if module_name != "torch":
             modules[module_name] = importer(module_name)
 
@@ -398,7 +441,7 @@ def probe_runtime(
         )
 
     packages: dict[str, dict[str, str]] = {}
-    for module_name, distributions in REQUIRED_MODULE_DISTRIBUTIONS.items():
+    for module_name, distributions in required_module_distributions.items():
         distribution, version = _distribution_version(distributions, version_getter)
         module_file = getattr(modules[module_name], "__file__", None)
         if module_file is None:
@@ -441,6 +484,14 @@ def probe_runtime(
         "candidate_sha": None,
         "integration_sha": None,
         "test_row_id": "runtime_preflight",
+        "runtime_feature_set": expected_runtime_feature_set,
+        "excluded_packages": (
+            list(expected_excluded_packages)
+            if expected_excluded_packages is not None
+            else None
+        ),
+        "torch_cuda_arch_list": expected_torch_cuda_arch_list,
+        "nvte_cuda_archs": expected_nvte_cuda_archs,
         "topology": {
             "num_nodes": 1,
             "gpus_per_node": device_count,
@@ -515,6 +566,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-uv-version", required=True)
     parser.add_argument("--expected-uv-executable", required=True, type=Path)
     parser.add_argument("--expected-nvte-with-nccl-ep", required=True)
+    parser.add_argument("--runtime-feature-set", required=True)
+    parser.add_argument("--excluded-packages", required=True)
+    parser.add_argument("--torch-cuda-arch-list", required=True)
+    parser.add_argument("--nvte-cuda-archs", required=True)
     parser.add_argument("--nemo-rl-commit", required=True)
     parser.add_argument("--bridge-commit", required=True)
     parser.add_argument("--mcore-commit", required=True)
@@ -544,6 +599,10 @@ def main() -> None:
         "expected_python_version": args.expected_python_version,
         "expected_uv_version": args.expected_uv_version,
         "expected_nvte_with_nccl_ep": args.expected_nvte_with_nccl_ep,
+        "runtime_feature_set": args.runtime_feature_set,
+        "excluded_packages": args.excluded_packages.split(","),
+        "torch_cuda_arch_list": args.torch_cuda_arch_list,
+        "nvte_cuda_archs": args.nvte_cuda_archs,
         "container_device": args.container_device,
         "container_inode": args.container_inode,
         "container_size": args.container_size,
@@ -560,6 +619,10 @@ def main() -> None:
             expected_uv_version=args.expected_uv_version,
             expected_uv_executable=args.expected_uv_executable,
             expected_nvte_with_nccl_ep=args.expected_nvte_with_nccl_ep,
+            expected_runtime_feature_set=args.runtime_feature_set,
+            expected_excluded_packages=tuple(args.excluded_packages.split(",")),
+            expected_torch_cuda_arch_list=args.torch_cuda_arch_list,
+            expected_nvte_cuda_archs=args.nvte_cuda_archs,
         )
         te_version = runtime["packages"]["transformer_engine.pytorch"]["version"]
         if _version_pair(te_version) < (2, 16):

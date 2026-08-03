@@ -46,6 +46,14 @@ REQUIRED_PACKAGES = frozenset(
         "cupy",
     )
 )
+TE_EVAL_FEATURE_SET = "te_eval_capability_8"
+TE_EVAL_EXCLUDED_PACKAGES = (
+    "causal-conv1d",
+    "deep-ep",
+    "fast-hadamard-transform",
+    "mamba-ssm",
+)
+TE_EVAL_OPTIONAL_PACKAGES = frozenset(("mamba_ssm", "causal_conv1d"))
 MATRIX_ROWS = {
     "mcore": frozenset(
         (
@@ -156,17 +164,23 @@ def validate_matrix_results(
     ):
         _require_full_commit(label, commit)
     if FULL_SHA256.fullmatch(expected_container_sha256) is None:
-        raise ValueError("expected container SHA256 must be 64 lowercase hexadecimal characters")
+        raise ValueError(
+            "expected container SHA256 must be 64 lowercase hexadecimal characters"
+        )
     if not required_rows or len(required_rows) != len(set(required_rows)):
         raise ValueError("required rows must be non-empty and unique")
     unknown_rows = set(required_rows).difference(MATRIX_ROWS[candidate_kind])
     if unknown_rows:
         raise ValueError(f"unknown required matrix rows: {sorted(unknown_rows)}")
     if test_result_dir.is_symlink() or not test_result_dir.is_dir():
-        raise ValueError(f"test result directory is missing or unsafe: {test_result_dir}")
+        raise ValueError(
+            f"test result directory is missing or unsafe: {test_result_dir}"
+        )
     candidate_dir = test_result_dir / candidate_kind / candidate_sha
     if candidate_dir.is_symlink() or not candidate_dir.is_dir():
-        raise ValueError(f"candidate result directory is missing or unsafe: {candidate_dir}")
+        raise ValueError(
+            f"candidate result directory is missing or unsafe: {candidate_dir}"
+        )
     actual_files = {path.name for path in candidate_dir.iterdir() if path.is_file()}
     expected_files = {f"{row_id}.json" for row_id in required_rows}
     extra_files = actual_files.difference(expected_files)
@@ -188,9 +202,7 @@ def validate_matrix_results(
             "integration_sha": integration_sha,
             "container_sha256": expected_container_sha256,
             "transformer_engine_source_commit": expected_te_commit,
-            "transformer_engine_version_base_commit": (
-                expected_te_version_base_commit
-            ),
+            "transformer_engine_version_base_commit": (expected_te_version_base_commit),
             "test_row_id": row_id,
         }
         mismatches = {
@@ -224,7 +236,9 @@ def validate_matrix_results(
             False,
             "not_implemented",
         }:
-            raise ValueError("matrix result has an unsafe MCore eval buffer-reuse policy")
+            raise ValueError(
+                "matrix result has an unsafe MCore eval buffer-reuse policy"
+            )
         results[row_id] = payload
     return results
 
@@ -246,6 +260,10 @@ def validate_attestation(
     expected_uv_executable: Path,
     expected_nvte_with_nccl_ep: str = "0",
     expected_te_version_base_commit: str | None = None,
+    expected_runtime_feature_set: str | None = None,
+    expected_excluded_packages: tuple[str, ...] | None = None,
+    expected_torch_cuda_arch_list: str | None = None,
+    expected_nvte_cuda_archs: str | None = None,
 ) -> dict[str, Any]:
     """Require exact source, image, TE, GPU, and worker-stack provenance."""
     if FULL_SHA256.fullmatch(expected_container_sha256) is None:
@@ -300,6 +318,29 @@ def validate_attestation(
     payload = _read_attestation(attestation)
     if payload.get("status") != "passed":
         raise ValueError("runtime attestation status is not passed")
+    runtime_contract = (
+        expected_runtime_feature_set,
+        expected_excluded_packages,
+        expected_torch_cuda_arch_list,
+        expected_nvte_cuda_archs,
+    )
+    if any(value is not None for value in runtime_contract):
+        expected_contract = (
+            TE_EVAL_FEATURE_SET,
+            TE_EVAL_EXCLUDED_PACKAGES,
+            "10.0a",
+            "100a",
+        )
+        if runtime_contract != expected_contract:
+            raise ValueError("unsupported runtime feature contract")
+        actual_contract = (
+            payload.get("runtime_feature_set"),
+            tuple(payload.get("excluded_packages", ())),
+            payload.get("torch_cuda_arch_list"),
+            payload.get("nvte_cuda_archs"),
+        )
+        if actual_contract != expected_contract:
+            raise ValueError("runtime attestation feature contract mismatch")
 
     expected_provenance: dict[str, object] = {
         "container_image": str(container),
@@ -427,7 +468,10 @@ def validate_attestation(
     packages = payload.get("packages")
     if not isinstance(packages, Mapping):
         raise ValueError("runtime attestation packages must be a JSON object")
-    missing_packages = sorted(REQUIRED_PACKAGES.difference(packages))
+    required_packages = REQUIRED_PACKAGES
+    if expected_runtime_feature_set == TE_EVAL_FEATURE_SET:
+        required_packages = required_packages.difference(TE_EVAL_OPTIONAL_PACKAGES)
+    missing_packages = sorted(required_packages.difference(packages))
     if missing_packages:
         raise ValueError(
             "runtime attestation is missing required packages: "
@@ -463,6 +507,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-uv-version")
     parser.add_argument("--expected-uv-executable", type=Path)
     parser.add_argument("--expected-nvte-with-nccl-ep")
+    parser.add_argument("--runtime-feature-set")
+    parser.add_argument("--excluded-packages")
+    parser.add_argument("--torch-cuda-arch-list")
+    parser.add_argument("--nvte-cuda-archs")
     parser.add_argument("--profile-file", type=Path)
     parser.add_argument("--candidate-kind", choices=("mcore", "bridge"))
     parser.add_argument("--candidate-sha")
@@ -510,15 +558,17 @@ def main() -> None:
             mcore_commit=values["EXPECTED_MCORE_SHA"],
             uv_lock=repository_root / "uv.lock",
             expected_te_commit=values["EXPECTED_TE_SHA"],
-            expected_te_version_base_commit=values[
-                "EXPECTED_TE_VERSION_BASE_SHA"
-            ],
+            expected_te_version_base_commit=values["EXPECTED_TE_VERSION_BASE_SHA"],
             expected_device_count=int(values["SBATCH_GPUS_PER_NODE"]),
             expected_python_version=runtime_payload["expected_python_version"],
             expected_python_install_dir=Path(runtime_payload["uv_python_install_dir"]),
             expected_uv_version=runtime_payload["expected_uv_version"],
             expected_uv_executable=Path(runtime_payload["uv_executable"]),
             expected_nvte_with_nccl_ep=runtime_payload["expected_nvte_with_nccl_ep"],
+            expected_runtime_feature_set=TE_EVAL_FEATURE_SET,
+            expected_excluded_packages=TE_EVAL_EXCLUDED_PACKAGES,
+            expected_torch_cuda_arch_list="10.0a",
+            expected_nvte_cuda_archs="100a",
         )
         integration_sha = (
             values["EXPECTED_MCORE_SHA"]
@@ -531,9 +581,7 @@ def main() -> None:
             integration_sha=integration_sha,
             expected_container_sha256=values["CONTAINER_SHA256"],
             expected_te_commit=values["EXPECTED_TE_SHA"],
-            expected_te_version_base_commit=values[
-                "EXPECTED_TE_VERSION_BASE_SHA"
-            ],
+            expected_te_version_base_commit=values["EXPECTED_TE_VERSION_BASE_SHA"],
             test_result_dir=args.test_result_dir,
             required_rows=tuple(args.required_rows.split()),
         )
@@ -560,9 +608,18 @@ def main() -> None:
         raise ValueError("legacy mode requires every runtime-attestation argument")
     _require_nvte_environment(
         expected_nvte_with_nccl_ep=args.expected_nvte_with_nccl_ep,
-        expected_te_version_base_commit=args.expected_te_version_base_commit,
         environment=os.environ,
     )
+    runtime_contract = (
+        args.runtime_feature_set,
+        args.excluded_packages,
+        args.torch_cuda_arch_list,
+        args.nvte_cuda_archs,
+    )
+    if any(value is not None for value in runtime_contract) and any(
+        value is None for value in runtime_contract
+    ):
+        raise ValueError("runtime feature contract arguments must be provided together")
     payload = validate_attestation(
         attestation=args.attestation,
         container=args.container,
@@ -578,6 +635,14 @@ def main() -> None:
         expected_uv_version=args.expected_uv_version,
         expected_uv_executable=args.expected_uv_executable,
         expected_nvte_with_nccl_ep=args.expected_nvte_with_nccl_ep,
+        expected_runtime_feature_set=args.runtime_feature_set,
+        expected_excluded_packages=(
+            tuple(args.excluded_packages.split(","))
+            if args.excluded_packages is not None
+            else None
+        ),
+        expected_torch_cuda_arch_list=args.torch_cuda_arch_list,
+        expected_nvte_cuda_archs=args.nvte_cuda_archs,
     )
     print(json.dumps(payload, sort_keys=True))
 

@@ -72,6 +72,35 @@ for field in ACCOUNT CONTAINER CONTAINER_SHA256 MOUNTS RUNTIME_ATTESTATION EXPEC
   [[ -n "${value}" && "${value}" != *"__REQUIRED"* ]] || fail "Profile field ${field} is unresolved"
 done
 
+runtime_contract=$(SELECTION="${selection}" python3 - "${RUNTIME_ATTESTATION}" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text())
+feature_set = payload.get("runtime_feature_set")
+excluded = payload.get("excluded_packages")
+torch_arch = payload.get("torch_cuda_arch_list")
+nvte_arch = payload.get("nvte_cuda_archs")
+expected_excluded = [
+    "causal-conv1d",
+    "deep-ep",
+    "fast-hadamard-transform",
+    "mamba-ssm",
+]
+rows = [line.split("\t", 1)[0] for line in os.environ["SELECTION"].splitlines()]
+if feature_set != "te_eval_capability_8" or rows != [feature_set]:
+    raise SystemExit("narrow runtime attestation may only authorize te_eval_capability_8")
+if excluded != expected_excluded or torch_arch != "10.0a" or nvte_arch != "100a":
+    raise SystemExit("runtime attestation feature contract mismatch")
+print("\t".join((feature_set, ",".join(excluded), torch_arch, nvte_arch)))
+PY
+) || fail "Runtime feature contract rejected"
+IFS=$'\t' read -r RUNTIME_FEATURE_SET RUNTIME_EXCLUDED_PACKAGES \
+  TORCH_CUDA_ARCH_LIST NVTE_CUDA_ARCHS <<<"${runtime_contract}"
+[[ -n "${NVTE_CUDA_ARCHS}" ]] || fail "Runtime feature contract is incomplete"
+
 mcore_root=${repo_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM
 remote_sha=$(git -C "${mcore_root}" ls-remote origin refs/heads/sj/thd-cg-hybrid-nemotron-20260731 | awk 'NF == 2 {print $1}')
 [[ "${remote_sha}" =~ ^[0-9a-f]{40}$ ]] || fail "Candidate branch did not resolve to exactly one pushed SHA"
@@ -106,7 +135,7 @@ fi
 intent_dir=${RUN_LOG_ROOT}/submission-intents/mcore/${MCORE_CANDIDATE_SHA}
 mkdir -p "${intent_dir}"
 intent=${intent_dir}/$(date -u +%Y%m%dT%H%M%SZ)-$$.json
-SELECTION=${selection} python3 - "${intent}" "${MCORE_CANDIDATE_SHA}" "${integration_sha}" "${PROFILE_SHA256}" <<'PY'
+SELECTION=${selection} python3 - "${intent}" "${MCORE_CANDIDATE_SHA}" "${integration_sha}" "${PROFILE_SHA256}" "${RUNTIME_FEATURE_SET}" "${RUNTIME_EXCLUDED_PACKAGES}" "${TORCH_CUDA_ARCH_LIST}" "${NVTE_CUDA_ARCHS}" <<'PY'
 import json
 import os
 import sys
@@ -119,6 +148,10 @@ payload = {
     "candidate_sha": sys.argv[2],
     "integration_sha": sys.argv[3],
     "profile_sha256": sys.argv[4],
+    "runtime_feature_set": sys.argv[5],
+    "excluded_packages": sys.argv[6].split(","),
+    "torch_cuda_arch_list": sys.argv[7],
+    "nvte_cuda_archs": sys.argv[8],
     "rows": [line.split("\t")[0] for line in os.environ["SELECTION"].splitlines()],
 }
 temporary = path.with_name(f".{path.name}.tmp")
@@ -128,7 +161,7 @@ PY
 
 while IFS=$'\t' read -r row_id world_size num_nodes gpus_per_node; do
   [[ "${SBATCH_GPUS_PER_NODE}" == "${gpus_per_node}" ]] || fail "Profile/allocation GPU mismatch"
-  exports="ALL,TEST_ROW_ID=${row_id},TEST_WORLD_SIZE=${world_size},TEST_NUM_NODES=${num_nodes},TEST_GPUS_PER_NODE=${gpus_per_node},CANDIDATE_KIND=mcore,CANDIDATE_SHA=${MCORE_CANDIDATE_SHA},INTEGRATION_SHA=${integration_sha},CANDIDATE_SOURCE_ROOT=${snapshot},RUN_LOG_ROOT=${RUN_LOG_ROOT},TEST_MATRIX=${matrix},RUNNER_PATH=${driver},CONTAINER=${CONTAINER},CONTAINER_SHA256=${CONTAINER_SHA256},MOUNTS=${MOUNTS},EXPECTED_TE_SHA=${EXPECTED_TE_SHA},EXPECTED_TE_VERSION_BASE_SHA=${EXPECTED_TE_VERSION_BASE_SHA},RUNTIME_ATTESTATION=${RUNTIME_ATTESTATION},SUBMISSION_INTENT=${intent},REPO_ROOT=${repo_root},EXPECTED_NEMORL_SHA=${EXPECTED_NEMORL_SHA},EXPECTED_BRIDGE_SHA=${EXPECTED_BRIDGE_SHA},EXPECTED_MCORE_SHA=${EXPECTED_MCORE_SHA},SOURCE_PROVENANCE_VERIFIER=${source_provenance_verifier},RUNTIME_ATTESTATION_COMMAND=${runtime_attestation_command}"
+  exports="ALL,TEST_ROW_ID=${row_id},TEST_WORLD_SIZE=${world_size},TEST_NUM_NODES=${num_nodes},TEST_GPUS_PER_NODE=${gpus_per_node},CANDIDATE_KIND=mcore,CANDIDATE_SHA=${MCORE_CANDIDATE_SHA},INTEGRATION_SHA=${integration_sha},CANDIDATE_SOURCE_ROOT=${snapshot},RUN_LOG_ROOT=${RUN_LOG_ROOT},TEST_MATRIX=${matrix},RUNNER_PATH=${driver},CONTAINER=${CONTAINER},CONTAINER_SHA256=${CONTAINER_SHA256},MOUNTS=${MOUNTS},EXPECTED_TE_SHA=${EXPECTED_TE_SHA},EXPECTED_TE_VERSION_BASE_SHA=${EXPECTED_TE_VERSION_BASE_SHA},RUNTIME_ATTESTATION=${RUNTIME_ATTESTATION},SUBMISSION_INTENT=${intent},REPO_ROOT=${repo_root},EXPECTED_NEMORL_SHA=${EXPECTED_NEMORL_SHA},EXPECTED_BRIDGE_SHA=${EXPECTED_BRIDGE_SHA},EXPECTED_MCORE_SHA=${EXPECTED_MCORE_SHA},SOURCE_PROVENANCE_VERIFIER=${source_provenance_verifier},RUNTIME_ATTESTATION_COMMAND=${runtime_attestation_command},RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET},RUNTIME_EXCLUDED_PACKAGES=${RUNTIME_EXCLUDED_PACKAGES},TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST},NVTE_CUDA_ARCHS=${NVTE_CUDA_ARCHS}"
   command=(sbatch --parsable "--nodes=${num_nodes}" "--account=${ACCOUNT}" "--partition=${PARTITION}" "--time=${TIME_LIMIT}" "--job-name=mcore-${row_id}" "--output=${RUN_LOG_ROOT}/slurm/mcore-${row_id}-%j.log" "--export=${exports}")
   [[ "${SBATCH_GRES}" == none ]] || command+=("--gres=${SBATCH_GRES}")
   [[ -z "${SBATCH_SEGMENT_SIZE}" ]] || command+=("--segment=${SBATCH_SEGMENT_SIZE}")

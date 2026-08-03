@@ -343,6 +343,77 @@ def test_validator_requires_complete_worker_stack_and_te_216_or_newer(
         )
 
 
+def test_validator_binds_typed_te_eval_runtime_contract(tmp_path: Path) -> None:
+    module = _load_module()
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(tmp_path)
+    payload = json.loads(attestation.read_text())
+    payload.update(
+        {
+            "runtime_feature_set": "te_eval_capability_8",
+            "excluded_packages": [
+                "causal-conv1d",
+                "deep-ep",
+                "fast-hadamard-transform",
+                "mamba-ssm",
+            ],
+            "torch_cuda_arch_list": "10.0a",
+            "nvte_cuda_archs": "100a",
+        }
+    )
+    del payload["packages"]["mamba_ssm"]
+    del payload["packages"]["causal_conv1d"]
+    attestation.write_text(json.dumps(payload))
+    contract = {
+        "expected_runtime_feature_set": "te_eval_capability_8",
+        "expected_excluded_packages": (
+            "causal-conv1d",
+            "deep-ep",
+            "fast-hadamard-transform",
+            "mamba-ssm",
+        ),
+        "expected_torch_cuda_arch_list": "10.0a",
+        "expected_nvte_cuda_archs": "100a",
+    }
+
+    result = module.validate_attestation(
+        attestation=attestation,
+        container=container,
+        expected_container_sha256=CONTAINER_SHA256,
+        nemo_rl_commit=NEMORL_COMMIT,
+        bridge_commit=BRIDGE_COMMIT,
+        mcore_commit=MCORE_COMMIT,
+        uv_lock=lock,
+        expected_te_commit=TE_COMMIT,
+        expected_device_count=4,
+        expected_python_version=PYTHON_VERSION,
+        expected_python_install_dir=python_install_dir,
+        expected_uv_version=UV_VERSION,
+        expected_uv_executable=uv_executable,
+        **contract,
+    )
+
+    assert result["runtime_feature_set"] == "te_eval_capability_8"
+    payload["torch_cuda_arch_list"] = "10.0"
+    attestation.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="feature contract mismatch"):
+        module.validate_attestation(
+            attestation=attestation,
+            container=container,
+            expected_container_sha256=CONTAINER_SHA256,
+            nemo_rl_commit=NEMORL_COMMIT,
+            bridge_commit=BRIDGE_COMMIT,
+            mcore_commit=MCORE_COMMIT,
+            uv_lock=lock,
+            expected_te_commit=TE_COMMIT,
+            expected_device_count=4,
+            expected_python_version=PYTHON_VERSION,
+            expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
+            **contract,
+        )
+
+
 def test_validator_rejects_wrong_or_mutated_managed_python(tmp_path: Path) -> None:
     module = _load_module()
     attestation, container, lock, python_install_dir, uv_executable = _fixture(tmp_path)
