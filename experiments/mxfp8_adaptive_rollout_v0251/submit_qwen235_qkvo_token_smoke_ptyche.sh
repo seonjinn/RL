@@ -51,6 +51,7 @@ export GPUS_PER_NODE=4
 export BASE_LOG_DIR="$CANARY_RESULT_ROOT/slurm"
 export NEMORL_ENABLE_QWEN235_QKVO_TOKEN_SMOKE=1
 export NEMORL_QWEN235_TOKEN_SMOKE_SCOPE=$SCOPE
+export NEMORL_MXFP8_MOE_BACKEND=${NEMORL_MXFP8_MOE_BACKEND:-flashinfer_trtllm}
 export COMMAND="bash $NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_qwen235_qkvo_token_smoke.sh"
 export UV_CACHE_DIR_OVERRIDE=${UV_CACHE_DIR_OVERRIDE:-/home/sna/.cache/uv-canary}
 

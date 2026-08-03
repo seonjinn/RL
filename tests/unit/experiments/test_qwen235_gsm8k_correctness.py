@@ -454,7 +454,9 @@ def test_qwen235_qkvo_token_smoke_is_small_and_validity_gated() -> None:
     ]
     assert generation["vllm_cfg"]["enforce_eager"] is False
     assert generation["vllm_kwargs"]["linear_backend"] == "flashinfer_cutedsl"
-    assert generation["vllm_kwargs"]["moe_backend"] == "flashinfer_trtllm"
+    assert generation["vllm_kwargs"]["moe_backend"] == (
+        "${oc.env:NEMORL_MXFP8_MOE_BACKEND,flashinfer_trtllm}"
+    )
 
     moe_config = yaml.safe_load(moe_config_path.read_text(encoding="utf-8"))
     assert moe_config["generation"]["vllm_cfg"]["quantization_ignored_layer_kws"] == [
@@ -469,7 +471,7 @@ def test_qwen235_qkvo_token_smoke_is_small_and_validity_gated() -> None:
         "flashinfer_cutedsl"
     )
     assert moe_config["generation"]["vllm_kwargs"]["moe_backend"] == (
-        "flashinfer_trtllm"
+        "${oc.env:NEMORL_MXFP8_MOE_BACKEND,flashinfer_trtllm}"
     )
 
     bf16_config = yaml.safe_load(bf16_config_path.read_text(encoding="utf-8"))
@@ -492,6 +494,7 @@ def test_qwen235_qkvo_token_smoke_is_small_and_validity_gated() -> None:
     submitter = submitter_path.read_text(encoding="utf-8")
     assert "NEMORL_ENABLE_QWEN235_QKVO_TOKEN_SMOKE=1" in submitter
     assert "run_qwen235_qkvo_token_smoke.sh" in submitter
+    assert "NEMORL_MXFP8_MOE_BACKEND" in submitter
     assert "--nodes=2" in submitter
     assert "--segment=2" in submitter
     assert "--dependency=" in submitter

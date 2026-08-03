@@ -34,10 +34,9 @@ generation:
       PYTHONPATH: ${oc.env:PYTHONPATH}
       VLLM_SUBPROCESS_PYTHONPATH: ${oc.env:VLLM_SUBPROCESS_PYTHONPATH}
       VLLM_RAY_EXTRA_ENV_VARS_TO_COPY: ${oc.env:VLLM_RAY_EXTRA_ENV_VARS_TO_COPY}
-      VLLM_FLASHINFER_MOE_BACKEND: latency
   vllm_kwargs:
     attention_backend: FLASH_ATTN
-    moe_backend: flashinfer_trtllm
+    moe_backend: ${oc.env:NEMORL_MXFP8_MOE_BACKEND,flashinfer_trtllm}
     max_num_seqs: 32
     max_num_batched_tokens: 16384
     enable_chunked_prefill: true
