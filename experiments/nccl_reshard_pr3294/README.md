@@ -9,6 +9,7 @@ on the same source commit, container, model, topology, batch, and seed.
 |---|---|---|---|
 | `bf16` | BF16 | BF16 | NCCL-Reshard |
 | `mxfp8-rollout` | BF16 | MXFP8 | Legacy collective |
+| `mxfp8-nccl-receiver-quant` | BF16 | MXFP8 | NCCL-Reshard BF16, then receiver-side quantization |
 | `mxfp8-nccl-prequant` | BF16 | MXFP8 | NCCL-Reshard value + E8M0 scale pair |
 
 Each mode runs as an independent SLURM job so Ray and actor lifecycles cannot
@@ -111,24 +112,22 @@ The wrapper defaults to the source-managed vLLM 0.25 environment used by the
 validated runs; the container actor venv does not contain the required
 `routed_experts` module for this source revision.
 
-## Cumulative PR 3294 Ablation
+## NCCL-First Cumulative Ablation
 
-The cumulative experiment adds one optimization at a time:
+NCCL-Reshard is enabled in every run. The experiment then adds one optimization
+at a time:
 
-| Step | Transport | Trainer prequantization | Batched MoE shuffle | Loader-route cache |
+| Step | Mode and arm | Trainer prequantization | Batched MoE shuffle | Loader-route cache |
 |---|---|---:|---:|---:|
-| Baseline | Legacy collective | Off | Off | Off |
-| + Prequantization | Legacy collective | On | Off | Off |
-| + Batched shuffle | Legacy collective | On | On | Off |
-| + Loader cache | Legacy collective | On | On | On |
-| + NCCL-Reshard | NCCL-Reshard | On | On | On |
+| NCCL baseline | `mxfp8-nccl-receiver-quant:baseline` | Off | Off | Off |
+| + Prequantization | `mxfp8-nccl-prequant:baseline` | On | Off | Off |
+| + Batched shuffle | `mxfp8-nccl-prequant:batched-shuffle` | On | On | Off |
+| + Loader cache | `mxfp8-nccl-prequant:optimized` | On | On | On |
 
-The first four rows are the cumulative PR 3294 ablation. They retain the same
-legacy collective transport so each delta isolates one optimization. The last
-row measures the additional transport change. A no-prequantization
-BF16-to-MXFP8 NCCL-Reshard row is intentionally absent: prequantization is the
-cross-precision wire transform required by the current NCCL-Reshard contract,
-so disabling it is rejected before launch.
+The baseline sends BF16 through NCCL-Reshard and quantizes on each generation
+worker. The remaining runs quantize once on the trainer and send the MXFP8 value
+and E8M0 scale components through the same NCCL transport. This isolates each
+incremental optimization without changing transport between rows.
 
 Run the complete matrix with identical model, batch, topology, and training
 settings:
