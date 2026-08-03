@@ -388,6 +388,37 @@ def test_load_weights_preserves_prequantized_mxfp8_and_clamps_scales(
     )
 
 
+def test_quantize_mxfp8_weight_preserves_batched_weight_shape(
+    fp8_module, monkeypatch
+):
+    from vllm.model_executor.layers.quantization.utils import mxfp8_utils
+
+    fp8 = fp8_module
+    weight = torch.zeros(2, 3, 64, dtype=torch.bfloat16)
+    flat_value = torch.ones(6, 64, dtype=torch.float8_e4m3fn)
+    flat_scale = torch.tensor([[0, 9]], dtype=torch.uint8).expand(6, 2).clone()
+
+    def fake_quantize(tensor, **_kwargs):
+        assert tensor.shape == (6, 64)
+        return flat_value, flat_scale
+
+    monkeypatch.setattr(
+        mxfp8_utils,
+        "mxfp8_e4m3_quantize",
+        fake_quantize,
+    )
+
+    value, scale = fp8.quantize_mxfp8_weight(weight)
+
+    assert value.shape == weight.shape
+    assert scale.shape == (2, 3, 2)
+    assert torch.equal(value.reshape(6, 64), flat_value)
+    assert torch.equal(
+        scale,
+        torch.tensor([[[1, 9]]], dtype=torch.uint8).expand(2, 3, 2),
+    )
+
+
 def test_mxfp8_padding_helpers_preserve_values_and_fill_padding(
     fp8_module: types.ModuleType,
 ) -> None:
