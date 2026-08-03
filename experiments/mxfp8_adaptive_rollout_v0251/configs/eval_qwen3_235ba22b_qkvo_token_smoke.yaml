@@ -37,6 +37,7 @@ generation:
       VLLM_FLASHINFER_MOE_BACKEND: latency
   vllm_kwargs:
     attention_backend: FLASH_ATTN
+    moe_backend: flashinfer_trtllm
     max_num_seqs: 32
     max_num_batched_tokens: 16384
     enable_chunked_prefill: true

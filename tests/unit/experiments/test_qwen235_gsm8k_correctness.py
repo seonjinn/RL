@@ -454,6 +454,7 @@ def test_qwen235_qkvo_token_smoke_is_small_and_validity_gated() -> None:
     ]
     assert generation["vllm_cfg"]["enforce_eager"] is False
     assert generation["vllm_kwargs"]["linear_backend"] == "flashinfer_cutedsl"
+    assert generation["vllm_kwargs"]["moe_backend"] == "flashinfer_trtllm"
 
     moe_config = yaml.safe_load(moe_config_path.read_text(encoding="utf-8"))
     assert moe_config["generation"]["vllm_cfg"]["quantization_ignored_layer_kws"] == [
@@ -466,6 +467,9 @@ def test_qwen235_qkvo_token_smoke_is_small_and_validity_gated() -> None:
     ]
     assert moe_config["generation"]["vllm_kwargs"]["linear_backend"] == (
         "flashinfer_cutedsl"
+    )
+    assert moe_config["generation"]["vllm_kwargs"]["moe_backend"] == (
+        "flashinfer_trtllm"
     )
 
     bf16_config = yaml.safe_load(bf16_config_path.read_text(encoding="utf-8"))
