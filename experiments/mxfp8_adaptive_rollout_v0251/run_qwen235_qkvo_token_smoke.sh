@@ -29,7 +29,7 @@ export CANARY_CONFIG="$ROOT/experiments/mxfp8_adaptive_rollout_v0251/configs/$co
 bash "$ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_ab.sh" baseline
 
 driver_python="${NEMO_RL_DRIVER_VENV_DIR:?set NEMO_RL_DRIVER_VENV_DIR}/bin/python"
-PYTHONPATH="$ROOT:${CUSTOM_VLLM_RUNTIME_ROOT:?set CUSTOM_VLLM_RUNTIME_ROOT}" \
+PYTHONPATH="$ROOT" \
   "$driver_python" \
   -m experiments.mxfp8_adaptive_rollout_v0251.response_validity_gate \
   --evaluation "$RESULT_ROOT/baseline/eval/evaluation_data.json" \

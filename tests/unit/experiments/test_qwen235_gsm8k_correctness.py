@@ -482,6 +482,7 @@ def test_qwen235_qkvo_token_smoke_is_small_and_validity_gated() -> None:
     assert "response_validity_gate" in wrapper
     assert "--expected-rows 64" in wrapper
     assert "CANARY_EXPECTED_REQUESTS" not in wrapper
+    assert "CUSTOM_VLLM_RUNTIME_ROOT" not in wrapper
     assert "NEMORL_QWEN235_TOKEN_SMOKE_SCOPE" in wrapper
 
     submitter = submitter_path.read_text(encoding="utf-8")
