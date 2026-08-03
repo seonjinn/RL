@@ -178,7 +178,7 @@ near `1.04`.
 The exact run manifest is in `factorial_runs_5152b5e56.csv`, and the canonical
 W&B Steps 3-20 export is in `factorial_results_5152b5e56.csv`.
 
-## Cumulative Prequantization Ablation
+## Historical Legacy-First Cumulative Ablation
 
 The cumulative ablation at source `5c50597f3ec684e455a6d5f64daeb48ed6122e22`
 adds trainer prequantization, batched MoE shuffle, and loader-route caching in
@@ -207,11 +207,101 @@ Steps 3-20:
 
 | Cumulative arm | Job | Status at submission |
 |---|---:|---|
-| Receiver-quant baseline | `489157` | Running |
-| + Trainer prequantization | `489158` | Queued |
-| + Batched MoE shuffle | `489159` | Queued |
-| + Loader-route cache | `489160` | Queued |
-| + NCCL-Reshard | `489161` | Queued |
+| Receiver-quant baseline | `489157` | Cancelled before measurement |
+| + Trainer prequantization | `489158` | Cancelled before measurement |
+| + Batched MoE shuffle | `489159` | Cancelled before measurement |
+| + Loader-route cache | `489160` | Cancelled before measurement |
+| + NCCL-Reshard | `489161` | Cancelled before measurement |
+
+## NCCL-First Cumulative Ablation
+
+The replacement experiment holds `refit_transport=nccl_reshard` constant and
+adds the PR 3294 components in the requested order:
+
+1. NCCL-Reshard with receiver-side BF16-to-MXFP8 quantization.
+2. Trainer-side MXFP8 prequantization.
+3. Batched MoE shuffle.
+4. Loader-route caching.
+
+All runs use Qwen3-30B-A3B on four B200 nodes split into two BF16 trainer nodes
+and two MoE-only MXFP8 generation nodes. Trainer parallelism is TP1/PP1/EP16;
+generation parallelism is TP1/PP1/EP1. Real importance sampling is enabled,
+checkpointing is disabled, and QKVO remains BF16. The source is
+`3a108dc8a90b176e1c7bfc0815d1e5af75a3f0ff`.
+
+The first receiver-quant attempt, job `489310`, exposed a Blackwell
+FlashInfer shape boundary: a three-dimensional expert tensor was returned in
+flattened two-dimensional form and copied directly into a grouped expert
+region. The common MXFP8 quantization helper now quantizes the flattened 2D
+view and restores both value and scale tensors to their checkpoint shapes.
+The focused vLLM refit suite passed 38 tests in job `489345`.
+
+All four two-step correctness gates completed with exit code `0:0`. Step 2
+follows an optimizer update and validates a non-initial refit.
+
+| Cumulative arm | Job | W&B | Step 2 transfer/update | Generation KL | Token probability error | Reward |
+|---|---:|---|---:|---:|---:|---:|
+| NCCL receiver quant | `489347` | [7w5nn49d](https://wandb.ai/nvidia/sna-pr3294-nccl-first-cumulative-ablation/runs/7w5nn49d) | 4.151 s | 0.004364 | 1.03275 | 0.25 |
+| + Trainer prequantization | `489311` | [r2f55gkm](https://wandb.ai/nvidia/sna-pr3294-nccl-first-cumulative-ablation/runs/r2f55gkm) | 4.085 s | 0.004364 | 1.03275 | 0.25 |
+| + Batched MoE shuffle | `489312` | [fag858b7](https://wandb.ai/nvidia/sna-pr3294-nccl-first-cumulative-ablation/runs/fag858b7) | 0.965 s | 0.004364 | 1.03275 | 0.25 |
+| + Loader-route cache | `489313` | [ugmyqgsp](https://wandb.ai/nvidia/sna-pr3294-nccl-first-cumulative-ablation/runs/ugmyqgsp) | 0.629 s | 0.004364 | 1.03275 | 0.25 |
+
+These tiny-batch gates establish correctness only. The reportable jobs below
+use 64 prompts x 32 generations, GBS 2048, sequence length 4096, and 20 steps;
+the analysis window is Steps 3-20.
+
+| Cumulative arm | Job | W&B | Status |
+|---|---:|---|---|
+| NCCL receiver quant | `489362` | [s73hqgro](https://wandb.ai/nvidia/sna-pr3294-nccl-first-cumulative-ablation/runs/s73hqgro) | 20/20, `0:0` |
+| + Trainer prequantization | `489363` | [8stzrkhw](https://wandb.ai/nvidia/sna-pr3294-nccl-first-cumulative-ablation/runs/8stzrkhw) | 20/20, `0:0` |
+| + Batched MoE shuffle | `489364` | [tmqnvpwe](https://wandb.ai/nvidia/sna-pr3294-nccl-first-cumulative-ablation/runs/tmqnvpwe) | 20/20, `0:0` |
+| + Loader-route cache | `489365` | [jnwuqc9p](https://wandb.ai/nvidia/sna-pr3294-nccl-first-cumulative-ablation/runs/jnwuqc9p) | 20/20, `0:0` |
+
+Every metric below has 18 valid observations over Steps 3-20 and no missing
+steps.
+
+| Metric | NCCL receiver quant | + Prequantization | + Batched shuffle | + Loader cache |
+|---|---:|---:|---:|---:|
+| Transfer/update | 3.861 s | 4.021 s | 0.700 s | 0.701 s |
+| Total refit | 3.861 s | 4.022 s | 0.700 s | 0.702 s |
+| E2E step time | 170.407 s | 170.782 s | 169.530 s | 167.981 s |
+| E2E throughput | 1215.81 tok/s/GPU | 1214.34 | 1222.38 | 1233.80 |
+| Generation | 48.350 s | 48.719 s | 48.548 s | 48.069 s |
+| Policy training | 82.061 s | 82.038 s | 83.572 s | 82.216 s |
+| Policy/reference logprobs | 34.219 s | 34.263 s | 34.750 s | 35.197 s |
+| Mean rollout reward | 0.52862 | 0.52569 | 0.52851 | 0.53033 |
+| Generation KL error | 0.003990 | 0.003988 | 0.003978 | 0.003977 |
+| Median token probability error | 1.0405 | 1.0366 | 1.0380 | 1.0599 |
+
+| Increment | Refit change | E2E change | Throughput change |
+|---|---:|---:|---:|
+| Add trainer prequantization | +4.1%, 0.160 s slower | +0.2% | -0.1% |
+| Add batched MoE shuffle | -82.6%, 3.321 s faster | -0.7% | +0.7% |
+| Add loader-route cache | +0.2%, no measurable change | -0.9% | +0.9% |
+| NCCL baseline to final arm | -81.8%, 3.160 s faster | -1.4% | +1.5% |
+
+The paired 95% confidence interval for the batched-shuffle refit reduction is
+`[-3.423, -3.220] s/step`. Loader caching changes refit by only `+0.001 s`,
+with a confidence interval of `[-0.087, +0.089] s`; it has no measurable refit
+benefit on this path. The final arm's lower E2E time cannot be attributed to
+loader caching because its refit time is unchanged while training and logprob
+times vary across node allocations.
+
+Trainer prequantization also provides no benefit in this runtime: it makes
+refit `0.160 s` slower, with a confidence interval of `[+0.032, +0.288] s`.
+This environment uses the Python exact-transfer fallback rather than compiled
+native M2N. Moving quantization to the trainer reduces wire bytes but adds a
+second value/scale component and does not reduce the fallback's end-to-end
+transform cost. Native M2N should be measured separately before generalizing
+this result.
+
+Reward and generation-KL confidence intervals versus the NCCL baseline include
+zero for every cumulative arm. Token probability error contains sparse large
+outliers in every run; the medians remain near `1.04-1.06` and are more
+representative than its arithmetic mean.
+
+The run manifest is in `nccl_first_cumulative_runs_3a108dc8a.csv`; the
+canonical W&B export is in `nccl_first_cumulative_results_3a108dc8a.csv`.
 
 ## Runtime Boundary
 
@@ -266,3 +356,10 @@ two-arm run measured a 2.21% E2E throughput gain, but the four-arm run did not
 reproduce that E2E result because unrelated policy-training time differed by
 node allocation. Native M2N and a topology-controlled E2E repeat remain before
 making broader performance claims.
+
+The NCCL-first cumulative repeat reaches the same component conclusion while
+also isolating trainer prequantization. With the Python exact-transfer fallback,
+prequantization did not improve refit; batched MoE shuffle reduced refit by
+82.6%, and loader-route caching again had no measurable refit effect. The full
+stack reduced refit by 81.8% and E2E time by 1.4% versus the NCCL receiver-quant
+baseline, with no measurable reward or generation-KL regression.

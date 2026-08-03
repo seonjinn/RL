@@ -1,0 +1,5 @@
+Exp,Job,Commit,Wandb link
+NCCL receiver quant,489362,3a108dc8a90b176e1c7bfc0815d1e5af75a3f0ff,https://wandb.ai/nvidia/sna-pr3294-nccl-first-cumulative-ablation/runs/s73hqgro
++ Trainer prequantization,489363,3a108dc8a90b176e1c7bfc0815d1e5af75a3f0ff,https://wandb.ai/nvidia/sna-pr3294-nccl-first-cumulative-ablation/runs/8stzrkhw
++ Batched MoE shuffle,489364,3a108dc8a90b176e1c7bfc0815d1e5af75a3f0ff,https://wandb.ai/nvidia/sna-pr3294-nccl-first-cumulative-ablation/runs/tmqnvpwe
++ Loader-route cache,489365,3a108dc8a90b176e1c7bfc0815d1e5af75a3f0ff,https://wandb.ai/nvidia/sna-pr3294-nccl-first-cumulative-ablation/runs/jnwuqc9p
