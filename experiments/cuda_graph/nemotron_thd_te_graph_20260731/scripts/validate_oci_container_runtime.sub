@@ -17,7 +17,7 @@
 #SBATCH --gres=gpu:4
 #SBATCH --mem=0
 #SBATCH --partition=batch
-#SBATCH --time=01:30:00
+#SBATCH --time=04:00:00
 #SBATCH --job-name=validate_oci_container_runtime
 
 set -euo pipefail
