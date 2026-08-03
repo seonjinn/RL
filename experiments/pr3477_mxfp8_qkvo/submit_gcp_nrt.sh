@@ -25,6 +25,7 @@ EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${WORK_ROOT}/experiments/pr3477-mxfp8-qkvo/re
 WANDB_PROJECT=${WANDB_PROJECT:-sna-pr3477-mxfp8-qkvo}
 WANDB_NAME=${WANDB_NAME:-qkvo-${MAX_STEPS}step-${RUN_SUFFIX}}
 WANDB_ENTITY=${WANDB_ENTITY:-nvidia}
+WANDB_ENABLED=${WANDB_ENABLED:-true}
 CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-qkvo-rollout.yaml
 
 case "${ACTION}" in
@@ -57,13 +58,17 @@ done
 
 mkdir -p "${EXPERIMENT_ROOT}" "${CACHE_ROOT}" "${WORK_ROOT}/.cache/huggingface"
 WANDB_KEY_FILE=${CACHE_ROOT}/.wandb_key
-if [[ -n "${WANDB_API_KEY:-}" ]]; then
-  (umask 077; printf '%s\n' "${WANDB_API_KEY}" >"${WANDB_KEY_FILE}")
-elif [[ ! -s "${WANDB_KEY_FILE}" && -f "${HOME}/.netrc" ]]; then
-  (umask 077; awk '/api.wandb.ai/{f=1} f&&/password/{print $2; exit}' \
-    "${HOME}/.netrc" >"${WANDB_KEY_FILE}")
+WANDB_EXPORT=
+if [[ "${WANDB_ENABLED}" == true ]]; then
+  if [[ -n "${WANDB_API_KEY:-}" ]]; then
+    (umask 077; printf '%s\n' "${WANDB_API_KEY}" >"${WANDB_KEY_FILE}")
+  elif [[ ! -s "${WANDB_KEY_FILE}" && -f "${HOME}/.netrc" ]]; then
+    (umask 077; awk '/api.wandb.ai/{f=1} f&&/password/{print $2; exit}' \
+      "${HOME}/.netrc" >"${WANDB_KEY_FILE}")
+  fi
+  test -s "${WANDB_KEY_FILE}"
+  WANDB_EXPORT="export WANDB_API_KEY=\"\$(cat ${WANDB_KEY_FILE})\""
 fi
-test -s "${WANDB_KEY_FILE}"
 
 COMMAND=$(cat <<EOF
 set -euo pipefail
@@ -78,7 +83,7 @@ export UV_CACHE_DIR=/root/.cache/uv
 export UV_PROJECT_ENVIRONMENT=${CACHE_ROOT}/driver-venv
 export UV_PYTHON_INSTALL_DIR=${CACHE_ROOT}/uv-python
 export UV_LOCK_TIMEOUT=7200
-export WANDB_API_KEY="\$(cat ${WANDB_KEY_FILE})"
+${WANDB_EXPORT}
 printf 'NEMO_RL_SOURCE_COMMIT=%s\n' "\$(git rev-parse HEAD)"
 uv run --frozen examples/run_grpo.py \
   --config ${CONFIG} \
@@ -102,7 +107,7 @@ uv run --frozen examples/run_grpo.py \
   ++grpo.val_at_end=false \
   checkpointing.enabled=false \
   logger.log_dir='${EXPERIMENT_ROOT}/logs' \
-  logger.wandb_enabled=true \
+  logger.wandb_enabled='${WANDB_ENABLED}' \
   ++logger.wandb.entity='${WANDB_ENTITY}' \
   logger.wandb.project='${WANDB_PROJECT}' \
   logger.wandb.name='${WANDB_NAME}'

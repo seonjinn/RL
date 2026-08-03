@@ -91,3 +91,4 @@ def test_gcp_nrt_submitter_exercises_qkvo_nccl_reshard() -> None:
     assert "--gpus-per-node=\"${GPUS_PER_NODE}\"" in submitter
     assert "loss_fn.force_on_policy_ratio=false" in submitter
     assert "++logger.wandb.entity='${WANDB_ENTITY}'" in submitter
+    assert "logger.wandb_enabled='${WANDB_ENABLED}'" in submitter
