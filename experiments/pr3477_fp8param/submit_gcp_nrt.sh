@@ -12,6 +12,9 @@ TOTAL_NODES=${TOTAL_NODES:-4}
 GPUS_PER_NODE=${GPUS_PER_NODE:-8}
 GEN_NODES=${GEN_NODES:-2}
 MAX_STEPS=${MAX_STEPS:-5}
+NUM_PROMPTS=${NUM_PROMPTS:-8}
+NUM_GENERATIONS=${NUM_GENERATIONS:-4}
+TRAIN_GLOBAL_BATCH_SIZE=${TRAIN_GLOBAL_BATCH_SIZE:-32}
 WALLTIME=${WALLTIME:-04:00:00}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
 
@@ -100,6 +103,9 @@ uv run --frozen examples/run_grpo.py \
   policy.generation.vllm_cfg.pipeline_parallel_size=1 \
   policy.generation.vllm_cfg.expert_parallel_size=1 \
   policy.generation.vllm_cfg.use_tqdm=false \
+  grpo.num_prompts_per_step='${NUM_PROMPTS}' \
+  grpo.num_generations_per_prompt='${NUM_GENERATIONS}' \
+  policy.train_global_batch_size='${TRAIN_GLOBAL_BATCH_SIZE}' \
   grpo.max_num_steps='${MAX_STEPS}' \
   grpo.val_at_start=false \
   ++grpo.val_at_end=false \
