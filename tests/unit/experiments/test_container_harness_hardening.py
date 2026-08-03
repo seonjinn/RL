@@ -676,6 +676,12 @@ printf '{"status":"passed"}\n' >"${output}"
             "RUNTIME_PHASE": "stage",
             "RUNTIME_STAGE_ROOT": str(runtime_stage_root),
             "RUNTIME_STAGE_MARKER_SHA256": "b" * 64,
+            "RUNTIME_FEATURE_SET": "te_eval_capability_8",
+            "RUNTIME_EXCLUDED_PACKAGES": (
+                "causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm"
+            ),
+            "TORCH_CUDA_ARCH_LIST": "10.0a",
+            "NVTE_CUDA_ARCHS": "100a",
         }
     )
 
