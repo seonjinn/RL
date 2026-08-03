@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-: "${ARM:?ARM is required: baseline or optimized}"
+: "${ARM:?ARM is required: baseline, batched-shuffle, loader-cache, or optimized}"
 : "${MODE:?MODE is required: bf16, blockwise-fp8, mxfp8-rollout, mxfp8-nccl-prequant, or mxfp8-probe}"
 : "${REPO:?REPO is required}"
 : "${CONTAINER:?CONTAINER is required}"
@@ -22,12 +22,20 @@ case "${ARM}" in
     REFIT_BATCHED_MOE_SHUFFLE=false
     REFIT_CACHE_LOADER_ROUTES=false
     ;;
+  batched-shuffle)
+    REFIT_BATCHED_MOE_SHUFFLE=true
+    REFIT_CACHE_LOADER_ROUTES=false
+    ;;
+  loader-cache)
+    REFIT_BATCHED_MOE_SHUFFLE=false
+    REFIT_CACHE_LOADER_ROUTES=true
+    ;;
   optimized)
     REFIT_BATCHED_MOE_SHUFFLE=true
     REFIT_CACHE_LOADER_ROUTES=true
     ;;
   *)
-    echo "ARM must be baseline or optimized" >&2
+    echo "ARM must be baseline, batched-shuffle, loader-cache, or optimized" >&2
     exit 2
     ;;
 esac

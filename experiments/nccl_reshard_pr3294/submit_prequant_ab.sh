@@ -56,8 +56,11 @@ printf 'mode\tarm\taction\tjob_id\trepo_sha\trun_name\n' >"${MANIFEST}"
 for mode in ${MODES}; do
   for arm in ${ARMS}; do
     case "${arm}" in
-      baseline|optimized) ;;
-      *) echo "ARMS entries must be baseline or optimized" >&2; exit 2 ;;
+      baseline|batched-shuffle|loader-cache|optimized) ;;
+      *)
+        echo "ARMS entries must be baseline, batched-shuffle, loader-cache, or optimized" >&2
+        exit 2
+        ;;
     esac
 
     run_name="pr3294-nccl-gcp-b200-${mode}-${arm}-${MAX_STEPS}step-${RUN_SUFFIX}"

@@ -86,20 +86,27 @@ MAX_STEPS=5 \
 
 To isolate the receiver-side PR 3294 optimizations after switching to the
 transform-aware NCCL-Reshard transport, hold prequantization constant and run
-both shuffle/cache arms:
+the full shuffle/cache factorial ablation:
 
 ```bash
 CONTAINER=/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna/containers/nemo-rl-nightly-refresh/nemo_rl_nightly_20260730_483099.sqsh \
 MODES=mxfp8-nccl-prequant \
-ARMS="baseline optimized" \
+ARMS="baseline batched-shuffle loader-cache optimized" \
 MAX_STEPS=20 \
 ACTION=submit \
 ./experiments/nccl_reshard_pr3294/submit_prequant_ab.sh
 ```
 
-`baseline` disables batched MoE shuffle and loader-route caching. `optimized`
-enables both. Trainer-side MXFP8 prequantization remains enabled in both arms
-because it is the required BF16-to-MXFP8 storage conversion for this transport.
+| Arm | Batched MoE shuffle | Loader-route cache |
+|---|---:|---:|
+| `baseline` | Off | Off |
+| `batched-shuffle` | On | Off |
+| `loader-cache` | Off | On |
+| `optimized` | On | On |
+
+Trainer-side MXFP8 prequantization remains enabled in all four arms because it
+is the required BF16-to-MXFP8 storage conversion for this transport. This
+factorial design measures both individual effects and their interaction.
 The wrapper defaults to the source-managed vLLM 0.25 environment used by the
 validated runs; the container actor venv does not contain the required
 `routed_experts` module for this source revision.
