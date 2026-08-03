@@ -26,10 +26,15 @@ NeMo-RL, Ray, SLURM, pytest, uv, W&B, TensorBoard, and static HTML reporting.
 - Work only in
   `/Users/sna/CudaGraph_PR/RL-thd-cg-hybrid-nemotron-20260731` and its existing
   nested Bridge and MCore worktrees.
-- The reviewed pre-merge commits are NeMo-RL `43f9b90e6`, Bridge `69c29747`,
-  and MCore `5d320e339`.
-- The locally fetched official-main tips at plan time are NeMo-RL
-  `55296257`, Bridge `a90af7c4`, and MCore `714c24a7`.
+- The preserved pre-merge commits are NeMo-RL `f21423769405e2b986edf956ebb1999bd1ec18c8`,
+  Bridge `69c29747e85328d7a5ba39f8cbea844d60314b11`, and MCore
+  `5d320e339003f5c2820b1ca0a163e1ca44dfb31e`.
+- Task 1 re-anchored the implementation baseline to NeMo-RL
+  `6ced958f1156e1f70872630a34b135b6360cb449`, Bridge
+  `7447569e3602f8d5c2142085bb44dfb7a0c6d046`, and MCore
+  `22919a3d7d29e543722acd40f92adf466c8a2a6f`.
+- The official-main tips fetched for that re-anchor were NeMo-RL
+  `89f4d1f85`, Bridge `573e088c9`, and MCore `42460a7af`.
 - Fetch and merge the then-latest official main in dependency order before
   production edits; never reset or recreate the worktrees.
 - PR 5672 is reference history, not a branch to cherry-pick over the current

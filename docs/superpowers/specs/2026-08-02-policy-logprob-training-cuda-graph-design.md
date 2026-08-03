@@ -51,9 +51,9 @@ The design was verified against this isolated stack:
 
 | Repository | Branch | Commit |
 |---|---|---|
-| NeMo-RL | `experiment/thd-cg-hybrid-nemotron-20260731` | `b1e7a1d15e61c1f80883e2b18696ad61b6a74ec2` |
-| Megatron-Bridge | `sna/thd-cg-hybrid-nemotron-20260731` | `69c29747e85328d7a5ba39f8cbea844d60314b11` |
-| Megatron-LM | `sj/thd-cg-hybrid-nemotron-20260731` | `5d320e339003f5c2820b1ca0a163e1ca44dfb31e` |
+| NeMo-RL | `experiment/thd-cg-hybrid-nemotron-20260731` | `6ced958f1156e1f70872630a34b135b6360cb449` |
+| Megatron-Bridge | `sna/thd-cg-hybrid-nemotron-20260731` | `7447569e3602f8d5c2142085bb44dfb7a0c6d046` |
+| Megatron-LM | `sj/thd-cg-hybrid-nemotron-20260731` | `22919a3d7d29e543722acd40f92adf466c8a2a6f` |
 
 The implementation must first merge the latest upstream main branches using
 the repository's normal dependency order, then revalidate every code anchor
