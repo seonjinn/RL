@@ -179,7 +179,7 @@ def test_qwen235_forced_32k_config_and_submitter_require_exact_outputs() -> None
 
 def test_qwen235_qkvo_trace_uses_separate_quantization_scope() -> None:
     config_path = (
-        EXPERIMENT / "configs/eval_qwen3_235ba22b_qkvo_32k_cuda_graph_trace.yaml"
+        EXPERIMENT / "configs/eval_qwen3_235ba22b_qkvo_32k_eager_trace.yaml"
     )
     submitter_path = EXPERIMENT / "submit_qwen235_qkvo_32k_trace_ptyche.sh"
     assert config_path.is_file()
@@ -194,11 +194,11 @@ def test_qwen235_qkvo_trace_uses_separate_quantization_scope() -> None:
     assert generation["vllm_cfg"]["quantization_ignored_layer_kws"] == [
         ".mlp.gate"
     ]
-    assert generation["vllm_cfg"]["enforce_eager"] is False
+    assert generation["vllm_cfg"]["enforce_eager"] is True
     assert generation["vllm_kwargs"]["max_num_batched_tokens"] == 16384
 
     submitter = submitter_path.read_text(encoding="utf-8")
-    assert "eval_qwen3_235ba22b_qkvo_32k_cuda_graph_trace.yaml" in submitter
+    assert "eval_qwen3_235ba22b_qkvo_32k_eager_trace.yaml" in submitter
     assert "run_qwen235_qkvo_trace_gate.sh" in submitter
     assert "nemorl-qwen235-mxfp8-qkvo-32k-shape-trace" in submitter
     assert "coreai_dlalgo_llm-nemorl.qwen235-mxfp8-qkvo-32k-trace" in submitter
