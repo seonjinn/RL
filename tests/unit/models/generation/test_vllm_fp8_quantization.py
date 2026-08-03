@@ -410,7 +410,7 @@ def test_quantize_mxfp8_weight_preserves_batched_weight_shape(fp8_module, monkey
 
     assert value.shape == weight.shape
     assert scale.shape == (2, 3, 2)
-    assert torch.equal(value.reshape(6, 64), flat_value)
+    assert torch.equal(value.reshape(6, 64).float(), flat_value.float())
     assert torch.equal(
         scale,
         torch.tensor([[[1, 9]]], dtype=torch.uint8).expand(2, 3, 2),
