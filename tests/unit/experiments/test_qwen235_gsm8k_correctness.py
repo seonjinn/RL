@@ -300,3 +300,26 @@ def test_qwen235_gsm8k_config_and_wrapper_are_greedy_matched_and_opt_in() -> Non
     )
     assert disabled.returncode == 2
     assert "explicit opt-in" in disabled.stderr
+
+
+def test_qwen235_gsm8k_submitter_is_pinned_and_dependency_free() -> None:
+    submitter_path = EXPERIMENT / "submit_qwen235_gsm8k_correctness_ptyche.sh"
+    assert submitter_path.is_file()
+    submitter = submitter_path.read_text(encoding="utf-8")
+
+    assert "run_qwen235_gsm8k_correctness.sh" in submitter
+    assert "NEMORL_ENABLE_QWEN235_GSM8K_CORRECTNESS=1" in submitter
+    assert "qwen235_tp4ep4_8x4_fix1_20260802" in submitter
+    assert "bf1630d7327d58b6742ab0359c5993b59dc28c4ec96d9008c9fe0a1e399c189e" in submitter
+    assert "models--Qwen--Qwen3-235B-A22B" in submitter
+    assert "HF_DATASETS_CACHE=/home/sna/.cache/hf-datasets-canary" in submitter
+    assert "--nodes=2" in submitter
+    assert "--time=05:00:00" in submitter
+    assert "--segment=2" in submitter
+    assert "--dependency=" in submitter
+    assert "args+=(--test-only)" in submitter
+    assert "afterok" not in submitter
+    assert "status --porcelain --untracked-files=all" in submitter
+    assert 'git -C "$NEMO_RL_REPO_ROOT" pull --ff-only' in submitter
+    assert 'require_clean_repo "$NEMO_RL_REPO_ROOT"' in submitter
+    assert 'require_clean_repo "$CUSTOM_VLLM_SOURCE"' in submitter
