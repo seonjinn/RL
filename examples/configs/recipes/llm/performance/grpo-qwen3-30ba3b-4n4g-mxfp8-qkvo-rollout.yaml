@@ -1,0 +1,5 @@
+defaults: ./grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
+policy:
+  generation:
+    vllm_cfg:
+      quantization_ignored_layer_kws: []
