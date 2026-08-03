@@ -910,6 +910,23 @@ def process_weights_after_loading_moe(self, layer) -> None:
         )
 
 
+def initialize_mxfp8_moe_kernel(self, layer) -> None:
+    """Initialize vLLM 0.25's modular MoE kernel on the first model load."""
+    self.moe_quant_config = self.get_fused_moe_quant_config(layer)
+    if self.moe_quant_config and self.moe_kernel is None:
+        from vllm.model_executor.layers.quantization.fp8 import make_fp8_moe_kernel
+
+        assert self.experts_cls is not None
+        self.moe_kernel = make_fp8_moe_kernel(
+            moe_quant_config=self.moe_quant_config,
+            moe_config=self.moe,
+            fp8_backend=self.mxfp8_backend,
+            experts_cls=self.experts_cls,
+            routing_tables=layer._expert_routing_tables(),
+            layer=layer,
+        )
+
+
 def process_weights_after_loading_mxfp8_moe(self, layer) -> None:
     """Shuffle weights and scales into FlashInfer TRTLLM MXFP8 layout."""
     from flashinfer import (
@@ -1035,6 +1052,7 @@ def process_weights_after_loading_mxfp8_moe(self, layer) -> None:
         layer.w2_weight_scale.copy_(torch.stack(w2_scale_shuffled).contiguous())
     layer.w13_weight.copy_(torch.stack(w13_weight_shuffled).contiguous())
     layer.w2_weight.copy_(torch.stack(w2_weight_shuffled).contiguous())
+    initialize_mxfp8_moe_kernel(self, layer)
 
 
 def process_weights_after_loading_kv(self, layer) -> None:
