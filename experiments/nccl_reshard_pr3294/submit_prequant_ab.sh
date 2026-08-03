@@ -25,6 +25,7 @@ WANDB_PROJECT=${WANDB_PROJECT:-sna-pr3294-nccl-mxfp8-prequant}
 DEPENDENCY=${DEPENDENCY:-}
 MODES=${MODES:-"bf16 mxfp8-nccl-prequant mxfp8-rollout"}
 ARMS=${ARMS:-optimized}
+RUN_MATRIX=${RUN_MATRIX:-}
 CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/mopd_nano_fast/.cache/nccl-reshard-pr3294/v2-vllm025-py31313}
 SHARED_UV_CACHE=${SHARED_UV_CACHE:-${WORK_ROOT}/mopd_nano_fast/.cache/nccl-reshard-pr3294/v2-vllm025-shared/uv}
 RAY_BOOTSTRAP_ARCHIVE=${RAY_BOOTSTRAP_ARCHIVE:-${WORK_ROOT}/mopd_nano_fast/.cache/nccl-reshard-pr3294/bootstrap/ray-2.56.1-py31313.tar.gz}
@@ -53,8 +54,24 @@ mkdir -p "${RESULT_ROOT}/slurm" "${RESULT_ROOT}/manifests"
 MANIFEST=${RESULT_ROOT}/manifests/submission-${RUN_SUFFIX}.tsv
 printf 'mode\tarm\taction\tjob_id\trepo_sha\trun_name\n' >"${MANIFEST}"
 
-for mode in ${MODES}; do
-  for arm in ${ARMS}; do
+combinations=()
+if [[ -n "${RUN_MATRIX}" ]]; then
+  read -r -a combinations <<<"${RUN_MATRIX}"
+else
+  for mode in ${MODES}; do
+    for arm in ${ARMS}; do
+      combinations+=("${mode}:${arm}")
+    done
+  done
+fi
+
+for combination in "${combinations[@]}"; do
+    if [[ "${combination}" != *:* ]]; then
+      echo "RUN_MATRIX entries must use MODE:ARM syntax" >&2
+      exit 2
+    fi
+    mode=${combination%%:*}
+    arm=${combination#*:}
     case "${arm}" in
       baseline|batched-shuffle|loader-cache|optimized) ;;
       *)
@@ -89,7 +106,6 @@ for mode in ${MODES}; do
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
       "${mode}" "${arm}" "${ACTION}" "${job_id:-n/a}" "${REPO_SHA}" "${run_name}" \
       | tee -a "${MANIFEST}"
-  done
 done
 
 echo "manifest=${MANIFEST}"

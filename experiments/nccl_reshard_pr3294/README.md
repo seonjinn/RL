@@ -110,3 +110,36 @@ factorial design measures both individual effects and their interaction.
 The wrapper defaults to the source-managed vLLM 0.25 environment used by the
 validated runs; the container actor venv does not contain the required
 `routed_experts` module for this source revision.
+
+## Cumulative PR 3294 Ablation
+
+The cumulative experiment adds one optimization at a time:
+
+| Step | Transport | Trainer prequantization | Batched MoE shuffle | Loader-route cache |
+|---|---|---:|---:|---:|
+| Baseline | Legacy collective | Off | Off | Off |
+| + Prequantization | Legacy collective | On | Off | Off |
+| + Batched shuffle | Legacy collective | On | On | Off |
+| + Loader cache | Legacy collective | On | On | On |
+| + NCCL-Reshard | NCCL-Reshard | On | On | On |
+
+The first four rows are the cumulative PR 3294 ablation. They retain the same
+legacy collective transport so each delta isolates one optimization. The last
+row measures the additional transport change. A no-prequantization
+BF16-to-MXFP8 NCCL-Reshard row is intentionally absent: prequantization is the
+cross-precision wire transform required by the current NCCL-Reshard contract,
+so disabling it is rejected before launch.
+
+Run the complete matrix with identical model, batch, topology, and training
+settings:
+
+```bash
+CONTAINER=/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna/containers/nemo-rl-nightly-refresh/nemo_rl_nightly_20260730_483099.sqsh \
+ACTION=test-only \
+MAX_STEPS=20 \
+./experiments/nccl_reshard_pr3294/submit_cumulative_ablation.sh
+```
+
+After the scheduling check succeeds, change `ACTION=submit`. For performance
+reporting, compare steps 3-20 and include both incremental and cumulative
+deltas from the baseline.

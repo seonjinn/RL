@@ -3,7 +3,7 @@
 set -euo pipefail
 
 : "${ARM:?ARM is required: baseline, batched-shuffle, loader-cache, or optimized}"
-: "${MODE:?MODE is required: bf16, blockwise-fp8, mxfp8-rollout, mxfp8-nccl-prequant, or mxfp8-probe}"
+: "${MODE:?MODE is required: bf16, blockwise-fp8, mxfp8-legacy-receiver-quant, mxfp8-legacy-prequant, mxfp8-nccl-prequant, or mxfp8-probe}"
 : "${REPO:?REPO is required}"
 : "${CONTAINER:?CONTAINER is required}"
 : "${TOTAL_NODES:?TOTAL_NODES is required}"
@@ -51,10 +51,15 @@ case "${MODE}" in
     REFIT_TRANSPORT=nccl_reshard
     PRECISION_OVERRIDES="policy.megatron_cfg.fp8_cfg.enabled=true policy.megatron_cfg.fp8_cfg.fp8=e4m3 policy.megatron_cfg.fp8_cfg.fp8_recipe=blockwise policy.megatron_cfg.fp8_cfg.fp8_param=true policy.generation.vllm_cfg.precision=fp8 policy.generation.vllm_cfg.is_mx=false"
     ;;
-  mxfp8-rollout)
+  mxfp8-legacy-receiver-quant|mxfp8-rollout)
     CONFIG=${CONFIG_FP8}
     REFIT_TRANSPORT=null
-    PRECISION_OVERRIDES="policy.megatron_cfg.fp8_cfg.enabled=false policy.megatron_cfg.fp8_cfg.fp8_param=false policy.generation.vllm_cfg.precision=fp8 policy.generation.vllm_cfg.is_mx=true"
+    PRECISION_OVERRIDES="policy.megatron_cfg.fp8_cfg.enabled=false policy.megatron_cfg.fp8_cfg.fp8_param=false policy.generation.vllm_cfg.precision=fp8 policy.generation.vllm_cfg.is_mx=true policy.generation.vllm_cfg.refit_prequantize=false"
+    ;;
+  mxfp8-legacy-prequant)
+    CONFIG=${CONFIG_FP8}
+    REFIT_TRANSPORT=null
+    PRECISION_OVERRIDES="policy.megatron_cfg.fp8_cfg.enabled=false policy.megatron_cfg.fp8_cfg.fp8_param=false policy.generation.vllm_cfg.precision=fp8 policy.generation.vllm_cfg.is_mx=true policy.generation.vllm_cfg.refit_prequantize=true"
     ;;
   mxfp8-nccl-prequant)
     CONFIG=${CONFIG_FP8}
@@ -67,7 +72,7 @@ case "${MODE}" in
     PRECISION_OVERRIDES="policy.megatron_cfg.fp8_cfg.enabled=true policy.megatron_cfg.fp8_cfg.fp8=e4m3 policy.megatron_cfg.fp8_cfg.fp8_recipe=blockwise policy.megatron_cfg.fp8_cfg.fp8_param=true policy.generation.vllm_cfg.precision=fp8 policy.generation.vllm_cfg.is_mx=true"
     ;;
   *)
-    echo "MODE must be bf16, blockwise-fp8, mxfp8-rollout, mxfp8-nccl-prequant, or mxfp8-probe" >&2
+    echo "MODE must be bf16, blockwise-fp8, mxfp8-legacy-receiver-quant, mxfp8-legacy-prequant, mxfp8-nccl-prequant, or mxfp8-probe" >&2
     exit 2
     ;;
 esac
