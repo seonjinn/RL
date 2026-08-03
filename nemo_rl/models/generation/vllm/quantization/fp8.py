@@ -19,7 +19,7 @@ from unittest.mock import patch
 import ray
 import torch
 from accelerate import init_empty_weights
-from transformers import AutoConfig, AutoModel
+from transformers import AutoConfig, AutoModel, AutoModelForCausalLM
 from vllm.logger import init_logger
 from vllm.model_executor.layers.fused_moe.routed_experts import RoutedExperts
 from vllm.model_executor.layers.fused_moe.runner.moe_runner import MoERunner
@@ -45,6 +45,13 @@ MXFP8_BLOCK_QUANT_KWARGS = {
     "quant_method": "modelopt",
     "quant_algo": "MXFP8",
 }
+
+
+def _hf_parameter_to_vllm_layer_name(parameter_name: str) -> str:
+    layer_name = parameter_name.removesuffix(".weight")
+    if layer_name.startswith(("model.", "backbone.")) or layer_name == "lm_head":
+        return layer_name
+    return f"model.{layer_name}"
 
 
 @dataclass(frozen=True)
@@ -280,11 +287,9 @@ def init_fp8(vllm_cfg, model_name, model_parallel_size):
     quantization_ignored_layer_kws = vllm_cfg.get("quantization_ignored_layer_kws", [])
     if len(quantization_ignored_layer_kws):
         with init_empty_weights():
-            model = AutoModel.from_config(config)
+            model = AutoModelForCausalLM.from_config(config)
         param_names = [
-            f"model.{name}".removesuffix(".weight").replace(
-                "model.backbone.", "backbone."
-            )
+            _hf_parameter_to_vllm_layer_name(name)
             for name, _ in model.named_parameters()
         ]
         ignored_layers = [

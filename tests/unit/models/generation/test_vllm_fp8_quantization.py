@@ -80,6 +80,50 @@ def test_init_fp8_uses_mxfp8_quantization_config(fp8_module, monkeypatch):
     assert "VLLM_USE_DEEP_GEMM_E8M0" not in fp8.os.environ
 
 
+def test_init_fp8_can_exclude_causal_lm_head(fp8_module, monkeypatch):
+    fp8 = fp8_module
+
+    class FakeCausalLM:
+        def named_parameters(self):
+            return iter(
+                [
+                    ("model.layers.0.mlp.gate.weight", object()),
+                    ("lm_head.weight", object()),
+                ]
+            )
+
+    monkeypatch.setattr(
+        fp8.AutoConfig,
+        "from_pretrained",
+        lambda *_args, **_kwargs: types.SimpleNamespace(num_hidden_layers=1),
+    )
+    monkeypatch.setattr(
+        fp8.AutoModelForCausalLM,
+        "from_config",
+        lambda *_args, **_kwargs: FakeCausalLM(),
+    )
+    monkeypatch.setattr(fp8, "monkey_patch_vllm_ray_executor", lambda _config: None)
+
+    vllm_kwargs = fp8.init_fp8(
+        {
+            "precision": "fp8",
+            "kv_cache_dtype": "auto",
+            "async_engine": False,
+            "is_mx": True,
+            "quantization_ignored_layer_kws": [".mlp.gate", "lm_head"],
+        },
+        "dummy-model",
+        model_parallel_size=1,
+    )
+
+    quantization_config = vllm_kwargs["hf_overrides"]["quantization_config"]
+    assert quantization_config["ignored_layers"] == [
+        "model.layers.0.mlp.gate",
+        "lm_head",
+    ]
+    assert quantization_config["ignore"] == quantization_config["ignored_layers"]
+
+
 @pytest.mark.parametrize(
     ("field", "error"),
     [
