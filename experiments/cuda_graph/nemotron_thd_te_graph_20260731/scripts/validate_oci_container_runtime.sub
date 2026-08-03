@@ -371,6 +371,14 @@ if [[ ! "${RUNTIME_STAGE_MARKER_SHA256:?Submission must export RUNTIME_STAGE_MAR
   echo "RUNTIME_STAGE_MARKER_SHA256 must be 64 lowercase hexadecimal characters" >&2
   exit 1
 fi
+runtime_stage_job_id=${RUNTIME_STAGE_JOB_ID:-}
+if [[ "${RUNTIME_PHASE}" == "stage" ]]; then
+  runtime_stage_job_id=${SLURM_JOB_ID}
+fi
+if [[ ! "${runtime_stage_job_id}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Runtime stage job ID must be a positive integer" >&2
+  exit 1
+fi
 uv_bin_dir=${runtime_stage_root}/uv
 uv_executable=${uv_bin_dir}/uv
 artifact=${ARTIFACT_DIR}/oci-container-runtime-${SLURM_JOB_ID}.json
@@ -417,6 +425,8 @@ runtime_environment=(
   "UV_CACHE_DIR=${runtime_uv_cache}"
   "NVTE_CMAKE_BUILD_DIR=${runtime_te_cmake_dir}"
   "RUNTIME_STAGE_ROOT=${runtime_stage_root}"
+  "RUNTIME_STAGE_MARKER=${runtime_stage_marker}"
+  "RUNTIME_STAGE_JOB_ID=${runtime_stage_job_id}"
   "RUNTIME_STAGE_MARKER_SHA256=${RUNTIME_STAGE_MARKER_SHA256}"
   "RUNTIME_STAGE_CPUS_PER_TASK=${RUNTIME_STAGE_CPUS_PER_TASK}"
 )
@@ -501,9 +511,15 @@ if [[ -e "${te_cmake_dir}" || -L "${te_cmake_dir}" ]]; then
 fi
 validator_relative_path=${source_validator#"${source_project_root}/"}
 runtime_project_root=${runtime_stage_root}/source
-marker=${RUNTIME_STAGE_MARKER:?Runtime stage payload requires RUNTIME_STAGE_MARKER}
+: "${RUNTIME_STAGE_MARKER:?Runtime stage payload requires RUNTIME_STAGE_MARKER}"
+: "${RUNTIME_STAGE_JOB_ID:?Runtime stage payload requires RUNTIME_STAGE_JOB_ID}"
+if [[ ! "${RUNTIME_STAGE_JOB_ID}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "RUNTIME_STAGE_JOB_ID must be a positive integer" >&2
+  exit 2
+fi
+marker=${RUNTIME_STAGE_MARKER}
 marker_dir=$(dirname "${marker}")
-partial_marker=${marker_dir}/.$(basename "${runtime_stage_root}").${SLURM_JOB_ID}.partial
+partial_marker=${marker_dir}/.$(basename "${runtime_stage_root}").${RUNTIME_STAGE_JOB_ID}.partial
 stage_job_record=${runtime_stage_root}/stage-job-id
 if [[ -e "${runtime_stage_root}" || -L "${runtime_stage_root}" ]]; then
   echo "Runtime stage destination already exists: ${runtime_stage_root}" >&2
@@ -676,7 +692,7 @@ done
 "${environment_root}/bin/python" -c \
   "import megatron.core; import torch; import transformer_engine; import transformer_engine_torch"
 rm -rf -- "${uv_cache_dir}" "${te_cmake_dir}"
-printf "%s\n" "${SLURM_JOB_ID}" >"${stage_job_record}"
+printf "%s\n" "${RUNTIME_STAGE_JOB_ID}" >"${stage_job_record}"
 printf "%s\n" \
   "schema=runtime-stage-v1" \
   "stage_key=$(basename "${runtime_stage_root}")" \
@@ -724,7 +740,7 @@ done < <(find "${runtime_stage_root}" -type l -print0)
 mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"
 trap - EXIT
 printf "RUNTIME_STAGE_READY=%s\nRUNTIME_STAGE_MARKER=%s\nRUNTIME_STAGE_JOB_ID=%s\n" \
-  "${runtime_stage_root}" "${marker}" "${SLURM_JOB_ID}"'
+  "${runtime_stage_root}" "${marker}" "${RUNTIME_STAGE_JOB_ID}"'
 
 attestation_command='set -euo pipefail
 source_project_root=$1
@@ -750,10 +766,12 @@ if [[ "${output_flag}" != "--output" ]]; then
   echo "Runtime probe payload requires --output" >&2
   exit 2
 fi
-marker=${RUNTIME_STAGE_MARKER:?Submission must export RUNTIME_STAGE_MARKER}
+: "${RUNTIME_STAGE_MARKER:?Runtime attestation requires RUNTIME_STAGE_MARKER}"
+: "${RUNTIME_STAGE_JOB_ID:?Runtime attestation requires RUNTIME_STAGE_JOB_ID}"
+marker=${RUNTIME_STAGE_MARKER}
 marker_dir=$(dirname "${marker}")
 stage_job_record=${runtime_stage_root}/stage-job-id
-if [[ ! "${RUNTIME_STAGE_JOB_ID:?Submission must export RUNTIME_STAGE_JOB_ID}" =~ ^[1-9][0-9]*$ ]]; then
+if [[ ! "${RUNTIME_STAGE_JOB_ID}" =~ ^[1-9][0-9]*$ ]]; then
   echo "RUNTIME_STAGE_JOB_ID must be a positive integer" >&2
   exit 2
 fi

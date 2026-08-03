@@ -219,6 +219,7 @@ def _run_runtime_payload(
     )
     runtime_environment.setdefault("RUNTIME_STAGE_MARKER_SHA256", "f" * 64)
     runtime_environment.setdefault("SLURM_JOB_ID", "733")
+    runtime_environment.setdefault("RUNTIME_STAGE_JOB_ID", "733")
     runtime_environment.setdefault("RUNTIME_STAGE_CPUS_PER_TASK", "32")
     runtime_environment.setdefault("CMAKE_BUILD_PARALLEL_LEVEL", "32")
     runtime_environment.setdefault("NVTE_CUDA_ARCHS", "100a")
@@ -729,6 +730,11 @@ printf '{"status":"passed"}\n' >"${output}"
     assert "NRL_FORCE_REBUILD_VENVS=true" in command
     assert "NVTE_WITH_NCCL_EP=0" in command
     assert f"UV_PROJECT_ENVIRONMENT={runtime_stage_root}/environment" in command
+    expected_marker = artifact_dir / "stage-markers" / f"{runtime_stage_root.name}.env"
+    assert command.count(f"RUNTIME_STAGE_MARKER={expected_marker}") == 1
+    assert command.count("RUNTIME_STAGE_JOB_ID=733") == 1
+    assert "RUNTIME_STAGE_MARKER= " not in command
+    assert "RUNTIME_STAGE_JOB_ID= " not in command
     expected_uv_executable = runtime_stage_root / "uv" / "uv"
     assert f"PINNED_UV_VERSION={UV_VERSION}" in command
     assert f"UV_EXECUTABLE={expected_uv_executable}" in command
@@ -830,14 +836,23 @@ def test_runtime_stage_publishes_marker_only_after_immutable_symlink_safe_audits
     source = (
         EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
     ).read_text()
+    runtime_environment = source.split("runtime_environment=(", 1)[1].split("\n)", 1)[0]
     stage = source.split("stage_command='", 1)[1].split("'\n\nattestation_command=", 1)[
         0
     ]
+    attestation = source.split("attestation_command='", 1)[1].split("'\n\n", 1)[0]
     cleanup = stage.split("cleanup_runtime_workspace() {", 1)[1].split("\n}", 1)[0]
 
     assert cleanup.index('rm -f -- "${marker}"') < cleanup.index(
         'chmod -R u+w -- "${runtime_stage_root}"'
     )
+    assert runtime_environment.count(
+        '"RUNTIME_STAGE_MARKER=${runtime_stage_marker}"'
+    ) == 1
+    assert runtime_environment.count(
+        '"RUNTIME_STAGE_JOB_ID=${runtime_stage_job_id}"'
+    ) == 1
+    assert 'if [[ ! "${runtime_stage_job_id}" =~ ^[1-9][0-9]*$ ]]' in source
     assert "${ARTIFACT_DIR%/}/stage-markers/${runtime_stage_key}.env" in source
     assert 'find "${runtime_stage_root}"' in stage
     assert r"\( -type f -o -type d \)" in stage
@@ -845,7 +860,11 @@ def test_runtime_stage_publishes_marker_only_after_immutable_symlink_safe_audits
     assert 'realpath -e -- "${symlink_path}"' in stage
     assert '"${runtime_stage_root}"/*' in stage
     assert '"${python_install_dir}"/*' in stage
-    assert '"${SLURM_JOB_ID}" >"${stage_job_record}"' in stage
+    assert ': "${RUNTIME_STAGE_MARKER:?Runtime stage payload requires RUNTIME_STAGE_MARKER}"' in stage
+    assert ': "${RUNTIME_STAGE_JOB_ID:?Runtime stage payload requires RUNTIME_STAGE_JOB_ID}"' in stage
+    assert '"${RUNTIME_STAGE_JOB_ID}" >"${stage_job_record}"' in stage
+    assert ': "${RUNTIME_STAGE_MARKER:?Runtime attestation requires RUNTIME_STAGE_MARKER}"' in attestation
+    assert ': "${RUNTIME_STAGE_JOB_ID:?Runtime attestation requires RUNTIME_STAGE_JOB_ID}"' in attestation
 
     cleanup_index = stage.index('rm -rf -- "${uv_cache_dir}" "${te_cmake_dir}"')
     chmod_index = stage.index('chmod -R a-w -- "${runtime_stage_root}"')
@@ -1045,7 +1064,7 @@ def test_runtime_stage_audit_failure_never_publishes_marker(
             "PATH": f"{fake_bin}:{environment['PATH']}",
             "uv_cache_dir": str(stage_root / "build-cache"),
             "te_cmake_dir": str(stage_root / "te-cmake"),
-            "SLURM_JOB_ID": "733",
+            "RUNTIME_STAGE_JOB_ID": "733",
             "stage_job_record": str(stage_root / "stage-job-id"),
             "container_sha256": "a" * 64,
             "uv_lock_sha256": "b" * 64,
