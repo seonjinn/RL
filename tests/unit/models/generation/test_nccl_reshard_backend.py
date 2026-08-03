@@ -505,9 +505,7 @@ def test_build_mxfp8_receiver_quant_map_stages_bf16_and_loads_value_and_scale(
                 {
                     "name": name,
                     "global_shape": [32, 64],
-                    "components": _identity_components(
-                        (32, 64), torch.bfloat16
-                    ),
+                    "components": _identity_components((32, 64), torch.bfloat16),
                 }
             ]
         },
@@ -537,7 +535,8 @@ def test_build_mxfp8_receiver_quant_map_stages_bf16_and_loads_value_and_scale(
     assert spec is not None and spec.pre is not None and spec.post is not None
 
     ctx = spec.pre(spec.base)
-    assert ctx.tensors_for_transfer() == (ctx.buf,)
+    assert len(ctx.tensors_for_transfer()) == 1
+    assert ctx.tensors_for_transfer()[0] is ctx.buf
     assert ctx.buf.shape == (32, 64)
     assert ctx.buf.dtype == torch.bfloat16
     ctx.buf.fill_(3.0)

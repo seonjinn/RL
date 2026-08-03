@@ -982,11 +982,11 @@ class VllmInternalWorkerExtension:
         """
 
         def _merged_param_spec(vllm_param, merged_slice):
-            def pre(_base):
+            def pre(_base: torch.Tensor) -> RefitCtx:
                 region = vllm_param.data[merged_slice]
                 return RefitCtx(buf=torch.empty_like(region), extra={"region": region})
 
-            def post(ctx):
+            def post(ctx: RefitCtx) -> None:
                 ctx.extra["region"].copy_(ctx.buf)
 
             return LocalParamSpec(base=vllm_param, pre=pre, post=post)
@@ -1215,6 +1215,38 @@ class VllmInternalWorkerExtension:
 
             return LocalParamSpec(base=value_param.data, pre=pre, post=post)
 
+        def _mxfp8_receiver_quant_spec(
+            value_param: torch.Tensor,
+            scale_param: torch.Tensor,
+            merged_slice: Optional[tuple[slice, ...]],
+        ) -> LocalParamSpec:
+            def pre(_base):
+                value_region = (
+                    value_param.data
+                    if merged_slice is None
+                    else value_param.data[merged_slice]
+                )
+                scale_region = (
+                    scale_param.data
+                    if merged_slice is None
+                    else scale_param.data[merged_slice]
+                )
+                return RefitCtx(
+                    buf=torch.empty_like(value_region, dtype=torch.bfloat16),
+                    extra={"region": value_region, "scale_region": scale_region},
+                )
+
+            def post(ctx):
+                from nemo_rl.models.generation.vllm.quantization.fp8 import (
+                    quantize_mxfp8_weight,
+                )
+
+                value, scale = quantize_mxfp8_weight(ctx.buf)
+                ctx.extra["region"].copy_(value)
+                ctx.extra["scale_region"].copy_(scale)
+
+            return LocalParamSpec(base=value_param.data, pre=pre, post=post)
+
         # Get dict of vllm_param and merged_slice for each hf_name
         vllm_param_map_and_slices = self._build_hf_to_gen_backend_mapping(refit_info)
         param_info_by_name = {
@@ -1224,6 +1256,25 @@ class VllmInternalWorkerExtension:
         }
         vllm_params = dict(self.model_runner.model.named_parameters())
         vllm_names_by_id = {id(param): name for name, param in vllm_params.items()}
+
+        def _resolve_mxfp8_targets(
+            hf_name: str, value_param: torch.Tensor
+        ) -> tuple[str, str, torch.Tensor]:
+            value_name = vllm_names_by_id.get(id(value_param))
+            if value_name is None:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: resolved vLLM value target for "
+                    f"{hf_name!r} is not a registered model parameter"
+                )
+            scale_name = value_name + "_scale_from_checkpoint"
+            scale_param = vllm_params.get(scale_name)
+            if scale_param is None:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: MXFP8 value target {value_name!r} "
+                    f"for {hf_name!r} has no vLLM scale target {scale_name!r}"
+                )
+            return value_name, scale_name, scale_param
+
         specs = {}
         for hf_name, (vllm_param, merged_slice) in vllm_param_map_and_slices.items():
             param_info = param_info_by_name[hf_name]
@@ -1242,6 +1293,59 @@ class VllmInternalWorkerExtension:
                     )
             component_family = tuple(component.get("role") for component in components)
             if component_family == ("weight",):
+                wire_dtype = _metadata_dtype(
+                    components[0].get("dtype"),
+                    default=vllm_param.dtype,
+                    hf_name=hf_name,
+                    field_name="weight component dtype",
+                )
+                if (
+                    wire_dtype == torch.bfloat16
+                    and vllm_param.dtype == torch.float8_e4m3fn
+                ):
+                    _value_name, scale_name, scale_param = _resolve_mxfp8_targets(
+                        hf_name, vllm_param
+                    )
+                    value_region = (
+                        vllm_param if merged_slice is None else vllm_param[merged_slice]
+                    )
+                    scale_region = (
+                        scale_param
+                        if merged_slice is None
+                        else scale_param[merged_slice]
+                    )
+                    expected_local_shape = _expected_local_shape(
+                        param_info, components[0]
+                    )
+                    if (
+                        expected_local_shape is not None
+                        and tuple(value_region.shape) != expected_local_shape
+                    ):
+                        raise ValueError(
+                            f"build_hf_to_local_param_map: vLLM value slice for "
+                            f"{hf_name!r} has local shape {tuple(value_region.shape)}, "
+                            f"expected {expected_local_shape}"
+                        )
+                    expected_scale_shape = _mxfp8_scale_shape(
+                        value_region.shape, hf_name=hf_name
+                    )
+                    if tuple(scale_region.shape) != expected_scale_shape:
+                        raise ValueError(
+                            f"build_hf_to_local_param_map: MXFP8 scale target "
+                            f"{scale_name!r} for {hf_name!r} has shape "
+                            f"{tuple(scale_region.shape)}, expected "
+                            f"{expected_scale_shape}"
+                        )
+                    if scale_param.dtype != torch.uint8:
+                        raise ValueError(
+                            f"build_hf_to_local_param_map: vLLM scale target "
+                            f"{scale_name!r} has dtype {scale_param.dtype}, "
+                            "expected torch.uint8"
+                        )
+                    specs[hf_name] = _mxfp8_receiver_quant_spec(
+                        vllm_param, scale_param, merged_slice
+                    )
+                    continue
                 _validate_untransformed_destination(
                     hf_name=hf_name,
                     param_info=param_info,
@@ -1261,19 +1365,9 @@ class VllmInternalWorkerExtension:
                     f"{component_family!r} for {hf_name!r}"
                 )
 
-            vllm_name = vllm_names_by_id.get(id(vllm_param))
-            if vllm_name is None:
-                raise ValueError(
-                    f"build_hf_to_local_param_map: resolved vLLM value target for "
-                    f"{hf_name!r} is not a registered model parameter"
-                )
-            scale_name = vllm_name + "_scale_from_checkpoint"
-            scale_param = vllm_params.get(scale_name)
-            if scale_param is None:
-                raise ValueError(
-                    f"build_hf_to_local_param_map: MXFP8 value target {vllm_name!r} "
-                    f"for {hf_name!r} has no vLLM scale target {scale_name!r}"
-                )
+            vllm_name, scale_name, scale_param = _resolve_mxfp8_targets(
+                hf_name, vllm_param
+            )
             _validate_mxfp8_destinations(
                 hf_name=hf_name,
                 param_info=param_info,
