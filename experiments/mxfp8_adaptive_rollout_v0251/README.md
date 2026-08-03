@@ -49,3 +49,12 @@ four GPUs per node, account `coreai_dlalgo_llm`, partition `36x2-a01r`, and
 bash experiments/mxfp8_adaptive_rollout_v0251/submit_ptyche.sh test-only
 bash experiments/mxfp8_adaptive_rollout_v0251/submit_ptyche.sh submit
 ```
+
+## Qwen 32K-cap follow-up
+
+The refit-CUTLASS-referenced shmoo follow-up is documented in
+[`report/qwen3_30ba3b_32k_refit_cutlass_shmoo_2502042_2502477_2502478/RESULTS.md`](report/qwen3_30ba3b_32k_refit_cutlass_shmoo_2502042_2502477_2502478/RESULTS.md).
+Across three matched repeats, the exact tactic table improved generation
+throughput by a paired median of 1.88% over TRTLLM default and 2.43% over the
+refit CUTLASS baseline. The configured 32K output cap produced 4K outputs in
+this workload, so the report does not claim actual 32K-output coverage.

@@ -1,0 +1,46 @@
+{
+  "adaptive_vs_baseline_speedup": 1.0170895899360135,
+  "adaptive_vs_trtllm_default_speedup": 1.0084722321540074,
+  "runs": [
+    {
+      "arm": "baseline",
+      "complete": true,
+      "elapsed_seconds": 1152.1034605503082,
+      "generation_calls": 1,
+      "generation_seconds": 749.8213771339506,
+      "gpu_count": 8,
+      "measurement_scope": "generation_calls",
+      "model_load_seconds": 390.76752853393555,
+      "output_tokens": 2097152,
+      "tokens_per_second": 2796.868779623174,
+      "tokens_per_second_per_gpu": 349.60859745289673
+    },
+    {
+      "arm": "trtllm_default",
+      "complete": true,
+      "elapsed_seconds": 1341.2442741394043,
+      "generation_calls": 1,
+      "generation_seconds": 743.4684666889952,
+      "gpu_count": 8,
+      "measurement_scope": "generation_calls",
+      "model_load_seconds": 585.6912364959717,
+      "output_tokens": 2097152,
+      "tokens_per_second": 2820.7679195051487,
+      "tokens_per_second_per_gpu": 352.5959899381436
+    },
+    {
+      "arm": "adaptive",
+      "complete": true,
+      "elapsed_seconds": 1299.2702236175537,
+      "generation_calls": 1,
+      "generation_seconds": 737.2225461290218,
+      "gpu_count": 8,
+      "measurement_scope": "generation_calls",
+      "model_load_seconds": 550.287341594696,
+      "output_tokens": 2097152,
+      "tokens_per_second": 2844.6661201717725,
+      "tokens_per_second_per_gpu": 355.58326502147156
+    }
+  ],
+  "trtllm_default_vs_baseline_speedup": 1.0085449628728005
+}
