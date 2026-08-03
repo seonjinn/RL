@@ -212,7 +212,13 @@ def _run_runtime_payload(
         "NVTE_CMAKE_BUILD_DIR", str(runtime_stage_root / "te-cmake")
     )
     runtime_environment.setdefault("RUNTIME_STAGE_ROOT", str(runtime_stage_root))
+    runtime_environment.setdefault("ARTIFACT_DIR", str(runtime_stage_root.parent))
+    runtime_environment.setdefault(
+        "RUNTIME_STAGE_MARKER",
+        str(runtime_stage_root.parent / "stage-markers" / "fixture.env"),
+    )
     runtime_environment.setdefault("RUNTIME_STAGE_MARKER_SHA256", "f" * 64)
+    runtime_environment.setdefault("SLURM_JOB_ID", "733")
     runtime_environment.setdefault("RUNTIME_STAGE_CPUS_PER_TASK", "32")
     runtime_environment.setdefault("CMAKE_BUILD_PARALLEL_LEVEL", "32")
     runtime_environment.setdefault("NVTE_CUDA_ARCHS", "100a")
@@ -575,6 +581,7 @@ def test_runtime_probe_distinguishes_te_source_and_version_base() -> None:
                 "EXPECTED_MCORE_SHA": MCORE_COMMIT,
                 "EXPECTED_TE_SHA": TE_COMMIT,
                 "EXPECTED_TE_VERSION_BASE_SHA": TE_COMMIT,
+                "RUNTIME_PHASE": "stage",
                 "SOURCE_PROVENANCE_VERIFIER": str(
                     EXPERIMENT_DIR / "scripts" / "verify_source_provenance.sh"
                 ),
@@ -679,6 +686,9 @@ printf '{"status":"passed"}\n' >"${output}"
             "RUNTIME_STAGE_CPUS_PER_TASK": "32",
             "SLURM_CPUS_PER_TASK": "32",
             "RUNTIME_STAGE_ROOT": str(runtime_stage_root),
+            "RUNTIME_STAGE_MARKER": str(
+                artifact_dir / "stage-markers" / f"{runtime_stage_root.name}.env"
+            ),
             "RUNTIME_STAGE_MARKER_SHA256": "b" * 64,
             "RUNTIME_FEATURE_SET": "te_eval_capability_8",
             "RUNTIME_EXCLUDED_PACKAGES": (
@@ -814,13 +824,277 @@ def test_runtime_wrapper_separates_cpu_stage_from_gpu_attestation() -> None:
     assert '"${runtime_python}" "${source_validator}"' in attestation
 
 
+def test_runtime_stage_publishes_marker_only_after_immutable_symlink_safe_audits() -> (
+    None
+):
+    source = (
+        EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
+    ).read_text()
+    stage = source.split("stage_command='", 1)[1].split("'\n\nattestation_command=", 1)[
+        0
+    ]
+    cleanup = stage.split("cleanup_runtime_workspace() {", 1)[1].split("\n}", 1)[0]
+
+    assert cleanup.index('rm -f -- "${marker}"') < cleanup.index(
+        'chmod -R u+w -- "${runtime_stage_root}"'
+    )
+    assert "${ARTIFACT_DIR%/}/stage-markers/${runtime_stage_key}.env" in source
+    assert 'find "${runtime_stage_root}"' in stage
+    assert r"\( -type f -o -type d \)" in stage
+    assert 'find "${runtime_stage_root}" -type l -print0' in stage
+    assert 'realpath -e -- "${symlink_path}"' in stage
+    assert '"${runtime_stage_root}"/*' in stage
+    assert '"${python_install_dir}"/*' in stage
+    assert '"${SLURM_JOB_ID}" >"${stage_job_record}"' in stage
+
+    cleanup_index = stage.index('rm -rf -- "${uv_cache_dir}" "${te_cmake_dir}"')
+    chmod_index = stage.index('chmod -R a-w -- "${runtime_stage_root}"')
+    writable_audit_index = stage.index('writable_path=$(find "${runtime_stage_root}"')
+    symlink_audit_index = stage.index('while IFS= read -r -d "" symlink_path; do')
+    marker_index = stage.index(
+        'mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"'
+    )
+    assert cleanup_index < chmod_index < writable_audit_index < symlink_audit_index
+    assert symlink_audit_index < marker_index
+
+
+def test_runtime_attestation_submitter_requires_completed_stage_job() -> None:
+    source = (
+        EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
+    ).read_text()
+    submitter = source.split('if [[ -z "${SLURM_JOB_ID:-}" ]]', 1)[1].split(
+        "unset PYTHONHOME", 1
+    )[0]
+
+    assert "RUNTIME_STAGE_JOB_ID" in submitter
+    assert 'sacct -X -j "${RUNTIME_STAGE_JOB_ID}"' in submitter
+    assert '"COMPLETED|0:0"' in submitter
+    completed_gate = submitter.index('"COMPLETED|0:0"')
+    marker_consumption = submitter.index('sha256sum "${RUNTIME_STAGE_MARKER}"')
+    assert completed_gate < marker_consumption
+
+
+def test_runtime_attestation_submitter_does_not_consume_running_stage_marker(
+    tmp_path: Path,
+) -> None:
+    script = EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
+    artifact_dir = tmp_path / "artifacts"
+    container = tmp_path / "runtime.sqsh"
+    container.write_bytes(b"fixture container\n")
+    base_environment = os.environ.copy()
+    base_environment.update(
+        {
+            "CONTAINER": str(container),
+            "CONTAINER_SHA256": "a" * 64,
+            "ARTIFACT_DIR": str(artifact_dir),
+            "PROJECT_ROOT": str(REPO_ROOT),
+            "SOURCE_PROVENANCE_VERIFIER": str(
+                EXPERIMENT_DIR / "scripts" / "verify_source_provenance.sh"
+            ),
+            "EXPECTED_NEMORL_SHA": NEMORL_COMMIT,
+            "EXPECTED_BRIDGE_SHA": BRIDGE_COMMIT,
+            "EXPECTED_MCORE_SHA": MCORE_COMMIT,
+            "EXPECTED_TE_SHA": TE_COMMIT,
+            "EXPECTED_TE_VERSION_BASE_SHA": TE_COMMIT,
+            "RUNTIME_PHASE": "attest",
+            "TEST_ONLY": "1",
+        }
+    )
+    render = subprocess.run(
+        ["bash", str(script)],
+        env=base_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert render.returncode == 0, render.stderr
+    rendered = dict(
+        line.split("=", 1)
+        for line in render.stdout.splitlines()
+        if line.startswith("RUNTIME_STAGE_")
+    )
+    stage_root = Path(rendered["RUNTIME_STAGE_ROOT"])
+    marker = Path(rendered["RUNTIME_STAGE_MARKER"])
+    stage_root.mkdir(parents=True)
+    (stage_root / "stage-job-id").write_text("733\n")
+    marker.parent.mkdir(parents=True)
+    marker.write_text("not consumed\n")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    marker_consumed = tmp_path / "marker-consumed"
+    sbatch_called = tmp_path / "sbatch-called"
+    _write_executable(
+        fake_bin / "sacct",
+        "#!/bin/sh\nprintf 'RUNNING|0:0\\n'\n",
+    )
+    _write_executable(
+        fake_bin / "sha256sum",
+        "#!/bin/bash\n"
+        "set -euo pipefail\n"
+        'for argument in "$@"; do\n'
+        '  if [[ "${argument}" == "${RUNTIME_MARKER_TO_WATCH}" ]]; then\n'
+        '    printf consumed >"${MARKER_CONSUMED}"\n'
+        "  fi\n"
+        "done\n"
+        'exec /usr/bin/shasum -a 256 "$@"\n',
+    )
+    _write_executable(
+        fake_bin / "sbatch",
+        '#!/bin/sh\nprintf called >"${SBATCH_CALLED}"\n',
+    )
+    execution_environment = {
+        **base_environment,
+        "TEST_ONLY": "0",
+        "RUNTIME_STAGE_JOB_ID": "733",
+        "RUNTIME_MARKER_TO_WATCH": str(marker),
+        "MARKER_CONSUMED": str(marker_consumed),
+        "SBATCH_CALLED": str(sbatch_called),
+        "PATH": f"{fake_bin}:{base_environment['PATH']}",
+    }
+
+    result = subprocess.run(
+        ["bash", str(script)],
+        env=execution_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "terminal COMPLETED" in result.stderr
+    assert not marker_consumed.exists()
+    assert not sbatch_called.exists()
+
+
+@pytest.mark.parametrize("symlink_kind", ("broken", "escaped"))
+def test_runtime_stage_audit_failure_never_publishes_marker(
+    tmp_path: Path, symlink_kind: str
+) -> None:
+    source = (
+        EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
+    ).read_text()
+    stage = source.split("stage_command='", 1)[1].split("'\n\nattestation_command=", 1)[
+        0
+    ]
+    tail = stage[stage.index('rm -rf -- "${uv_cache_dir}" "${te_cmake_dir}"') :]
+
+    stage_root = tmp_path / "staged-runtimes" / ("a" * 64)
+    stage_root.mkdir(parents=True)
+    (stage_root / "payload").write_text("immutable\n")
+    python_install_dir = tmp_path / "uv-python-installations"
+    python_install_dir.mkdir()
+    if symlink_kind == "broken":
+        (stage_root / "unsafe-link").symlink_to(tmp_path / "missing")
+        expected_error = "broken symlink"
+    else:
+        escaped_target = tmp_path / "escaped-target"
+        escaped_target.write_text("outside\n")
+        (stage_root / "unsafe-link").symlink_to(escaped_target)
+        expected_error = "escapes trusted roots"
+
+    marker_dir = tmp_path / "stage-markers"
+    marker_dir.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(
+        fake_bin / "realpath",
+        "#!/bin/bash\n"
+        "set -euo pipefail\n"
+        '[[ "${1:-}" == -e ]] && shift\n'
+        '[[ "${1:-}" == -- ]] && shift\n'
+        f'exec "{sys.executable}" -c '
+        "'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "
+        '"$1"\n',
+    )
+    _write_executable(
+        fake_bin / "chmod",
+        "#!/bin/bash\n"
+        "set -euo pipefail\n"
+        "arguments=()\n"
+        'for argument in "$@"; do [[ "${argument}" == -- ]] || '
+        'arguments+=("${argument}"); done\n'
+        'exec /bin/chmod "${arguments[@]}"\n',
+    )
+    marker = marker_dir / f"{stage_root.name}.env"
+    partial_marker = marker_dir / f".{stage_root.name}.733.partial"
+    marker_lines = [
+        "schema=runtime-stage-v1",
+        f"stage_key={stage_root.name}",
+        "container_sha256=" + "a" * 64,
+        "uv_lock_sha256=" + "b" * 64,
+        f"nemo_rl_commit={NEMORL_COMMIT}",
+        f"bridge_commit={BRIDGE_COMMIT}",
+        f"mcore_commit={MCORE_COMMIT}",
+        f"te_source_commit={TE_COMMIT}",
+        f"te_version_base_commit={TE_COMMIT}",
+        f"python_version={PYTHON_VERSION}",
+        f"uv_version={UV_VERSION}",
+        "feature_set=te_eval_capability_8",
+        "excluded_packages=causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm",
+        "torch_cuda_arch_list=10.0a",
+        "cuda_archs=100a",
+        "stage_cpus_per_task=32",
+    ]
+    marker_sha256 = hashlib.sha256(
+        ("\n".join(marker_lines) + "\n").encode()
+    ).hexdigest()
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}:{environment['PATH']}",
+            "uv_cache_dir": str(stage_root / "build-cache"),
+            "te_cmake_dir": str(stage_root / "te-cmake"),
+            "SLURM_JOB_ID": "733",
+            "stage_job_record": str(stage_root / "stage-job-id"),
+            "container_sha256": "a" * 64,
+            "uv_lock_sha256": "b" * 64,
+            "nemo_rl_commit": NEMORL_COMMIT,
+            "bridge_commit": BRIDGE_COMMIT,
+            "mcore_commit": MCORE_COMMIT,
+            "expected_te_commit": TE_COMMIT,
+            "expected_te_version_base_commit": TE_COMMIT,
+            "expected_python_version": PYTHON_VERSION,
+            "expected_uv_version": UV_VERSION,
+            "RUNTIME_FEATURE_SET": "te_eval_capability_8",
+            "RUNTIME_EXCLUDED_PACKAGES": (
+                "causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm"
+            ),
+            "TORCH_CUDA_ARCH_LIST": "10.0a",
+            "NVTE_CUDA_ARCHS": "100a",
+            "RUNTIME_STAGE_CPUS_PER_TASK": "32",
+            "partial_marker": str(partial_marker),
+            "RUNTIME_STAGE_MARKER_SHA256": marker_sha256,
+            "runtime_stage_root": str(stage_root),
+            "python_install_dir": str(python_install_dir),
+            "marker": str(marker),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", tail],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert expected_error in result.stderr
+    assert not marker.exists()
+    subprocess.run(["/bin/chmod", "-R", "u+w", stage_root], check=True)
+
+
 @pytest.mark.parametrize("marker_kind", ("missing", "symlink", "mismatch", "writable"))
 def test_gpu_attestation_rejects_untrusted_runtime_stage(
     tmp_path: Path, marker_kind: str
 ) -> None:
-    stage_root = tmp_path / "stage"
-    stage_root.mkdir()
-    marker = stage_root / "complete.env"
+    stage_root = tmp_path / "staged-runtimes" / ("a" * 64)
+    stage_root.mkdir(parents=True)
+    stage_job_record = stage_root / "stage-job-id"
+    stage_job_record.write_text("733\n")
+    marker = tmp_path / "stage-markers" / f"{stage_root.name}.env"
+    marker.parent.mkdir()
     expected_content = b"schema=runtime-stage-v1\n"
     expected_sha256 = hashlib.sha256(expected_content).hexdigest()
     if marker_kind == "symlink":
@@ -833,6 +1107,7 @@ def test_gpu_attestation_rejects_untrusted_runtime_stage(
         )
     if marker_kind != "writable":
         stage_root.chmod(0o555)
+        stage_job_record.chmod(0o444)
         if marker.exists() and not marker.is_symlink():
             marker.chmod(0o444)
 
@@ -846,7 +1121,10 @@ def test_gpu_attestation_rejects_untrusted_runtime_stage(
     environment.update(
         {
             "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "RUNTIME_STAGE_MARKER": str(marker),
             "RUNTIME_STAGE_MARKER_SHA256": expected_sha256,
+            "RUNTIME_STAGE_JOB_ID": "733",
+            "UV_PYTHON_INSTALL_DIR": str(tmp_path / "uv-python-installations"),
         }
     )
     arguments = [
@@ -883,13 +1161,16 @@ def test_gpu_attestation_rejects_untrusted_runtime_stage(
         text=True,
     )
     stage_root.chmod(0o755)
+    stage_job_record.chmod(0o644)
+    if marker.exists() and not marker.is_symlink():
+        marker.chmod(0o644)
 
     assert result.returncode == 2
     expected_error = {
         "missing": "completion marker is missing or unsafe",
         "symlink": "completion marker is missing or unsafe",
         "mismatch": "marker SHA256 mismatch",
-        "writable": "contains writable state",
+        "writable": "contains writable regular state",
     }[marker_kind]
     assert expected_error in result.stderr
 

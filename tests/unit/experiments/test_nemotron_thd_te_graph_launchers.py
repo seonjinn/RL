@@ -2275,7 +2275,11 @@ printf '{"status":"passed"}\n' >"${output}"
             "EXPECTED_TE_VERSION_BASE_SHA": TE_SHA,
             "SOURCE_PROVENANCE_VERIFIER": str(provenance_verifier),
             "RUNTIME_STAGE_ROOT": str(runtime_stage_root),
+            "RUNTIME_STAGE_MARKER": str(
+                artifacts / "stage-markers" / f"{runtime_stage_root.name}.env"
+            ),
             "RUNTIME_STAGE_MARKER_SHA256": "b" * 64,
+            "RUNTIME_STAGE_JOB_ID": "315",
         }
     )
 

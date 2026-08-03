@@ -133,6 +133,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     "${NVTE_CUDA_ARCHS}" \
     "${RUNTIME_STAGE_CPUS_PER_TASK}" | sha256sum | awk '{print $1}')
   RUNTIME_STAGE_ROOT=${ARTIFACT_DIR%/}/staged-runtimes/${runtime_stage_key}
+  RUNTIME_STAGE_MARKER=${ARTIFACT_DIR%/}/stage-markers/${runtime_stage_key}.env
   stage_marker_content=$(printf '%s\n' \
     'schema=runtime-stage-v1' \
     "stage_key=${runtime_stage_key}" \
@@ -151,6 +152,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     "cuda_archs=${NVTE_CUDA_ARCHS}" \
     "stage_cpus_per_task=${RUNTIME_STAGE_CPUS_PER_TASK}")
   RUNTIME_STAGE_MARKER_SHA256=$(printf '%s\n' "${stage_marker_content}" | sha256sum | awk '{print $1}')
+  RUNTIME_STAGE_JOB_ID=${RUNTIME_STAGE_JOB_ID:-}
   if [[ "${CONTAINER_RUNTIME_VALIDATOR}" != /* || ! -f "${CONTAINER_RUNTIME_VALIDATOR}" ]]; then
     echo "CONTAINER_RUNTIME_VALIDATOR must be an existing absolute path" >&2
     exit 2
@@ -171,14 +173,53 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
       fi
     done
   fi
+  if [[ "${RUNTIME_PHASE}" == "attest" && "${TEST_ONLY}" != "1" ]]; then
+    if [[ ! "${RUNTIME_STAGE_JOB_ID}" =~ ^[1-9][0-9]*$ ]]; then
+      echo "RUNTIME_STAGE_JOB_ID must identify the completed stage job" >&2
+      exit 2
+    fi
+    stage_job_record=${RUNTIME_STAGE_ROOT}/stage-job-id
+    if [[ -L "${RUNTIME_STAGE_ROOT}" || ! -d "${RUNTIME_STAGE_ROOT}" ]]; then
+      echo "Runtime stage root is missing or unsafe" >&2
+      exit 2
+    fi
+    if [[ -L "${stage_job_record}" || ! -f "${stage_job_record}" ]] ||
+       [[ "$(<"${stage_job_record}")" != "${RUNTIME_STAGE_JOB_ID}" ]]; then
+      echo "Runtime stage job record is missing, unsafe, or mismatched" >&2
+      exit 2
+    fi
+    stage_job_status=$(sacct -X -j "${RUNTIME_STAGE_JOB_ID}" \
+      --format=State,ExitCode -n -P | awk 'NF {print; count += 1} END {if (count != 1) exit 2}') || {
+      echo "Unable to resolve one authoritative runtime stage job" >&2
+      exit 2
+    }
+    if [[ "${stage_job_status}" != "COMPLETED|0:0" ]]; then
+      echo "Runtime stage job must be terminal COMPLETED with exit code 0:0" >&2
+      exit 2
+    fi
+    if [[ -L "$(dirname "${RUNTIME_STAGE_MARKER}")" ]]; then
+      echo "Runtime stage marker directory is unsafe" >&2
+      exit 2
+    fi
+    if [[ -L "${RUNTIME_STAGE_MARKER}" || ! -f "${RUNTIME_STAGE_MARKER}" ]]; then
+      echo "Runtime stage completion marker is missing or unsafe" >&2
+      exit 2
+    fi
+    if [[ "$(sha256sum "${RUNTIME_STAGE_MARKER}" | awk '{print $1}')" != \
+          "${RUNTIME_STAGE_MARKER_SHA256}" ]]; then
+      echo "Runtime stage marker SHA256 mismatch" >&2
+      exit 2
+    fi
+  fi
   export ACCOUNT ARTIFACT_DIR CONTAINER CONTAINER_RUNTIME_VALIDATOR
   export CONTAINER_SHA256 PARTITION PROJECT_ROOT SOURCE_PROVENANCE_VERIFIER
   export EXPECTED_NEMORL_SHA EXPECTED_BRIDGE_SHA EXPECTED_MCORE_SHA EXPECTED_TE_SHA
   export EXPECTED_TE_VERSION_BASE_SHA
-  export RUNTIME_PHASE RUNTIME_STAGE_ROOT RUNTIME_STAGE_MARKER_SHA256 NVTE_CUDA_ARCHS
+  export RUNTIME_PHASE RUNTIME_STAGE_ROOT RUNTIME_STAGE_MARKER
+  export RUNTIME_STAGE_MARKER_SHA256 RUNTIME_STAGE_JOB_ID NVTE_CUDA_ARCHS
   export TORCH_CUDA_ARCH_LIST RUNTIME_FEATURE_SET RUNTIME_EXCLUDED_PACKAGES
   export RUNTIME_STAGE_CPUS_PER_TASK
-  export_spec=CONTAINER,CONTAINER_SHA256,ARTIFACT_DIR,CONTAINER_RUNTIME_VALIDATOR,PROJECT_ROOT,SOURCE_PROVENANCE_VERIFIER,EXPECTED_NEMORL_SHA,EXPECTED_BRIDGE_SHA,EXPECTED_MCORE_SHA,EXPECTED_TE_SHA,EXPECTED_TE_VERSION_BASE_SHA,RUNTIME_PHASE,RUNTIME_STAGE_ROOT,RUNTIME_STAGE_MARKER_SHA256,NVTE_CUDA_ARCHS,TORCH_CUDA_ARCH_LIST,RUNTIME_FEATURE_SET,RUNTIME_EXCLUDED_PACKAGES,RUNTIME_STAGE_CPUS_PER_TASK,ACCOUNT,PARTITION,HOME,USER,LOGNAME,SHELL,PATH,LD_LIBRARY_PATH,HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy
+  export_spec=CONTAINER,CONTAINER_SHA256,ARTIFACT_DIR,CONTAINER_RUNTIME_VALIDATOR,PROJECT_ROOT,SOURCE_PROVENANCE_VERIFIER,EXPECTED_NEMORL_SHA,EXPECTED_BRIDGE_SHA,EXPECTED_MCORE_SHA,EXPECTED_TE_SHA,EXPECTED_TE_VERSION_BASE_SHA,RUNTIME_PHASE,RUNTIME_STAGE_ROOT,RUNTIME_STAGE_MARKER,RUNTIME_STAGE_MARKER_SHA256,RUNTIME_STAGE_JOB_ID,NVTE_CUDA_ARCHS,TORCH_CUDA_ARCH_LIST,RUNTIME_FEATURE_SET,RUNTIME_EXCLUDED_PACKAGES,RUNTIME_STAGE_CPUS_PER_TASK,ACCOUNT,PARTITION,HOME,USER,LOGNAME,SHELL,PATH,LD_LIBRARY_PATH,HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy
   submission_flag=--parsable
   if [[ "${SBATCH_TEST_ONLY}" == "1" ]]; then
     submission_flag=--test-only
@@ -202,8 +243,9 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
   printf 'SBATCH:'
   printf ' %q' "${sbatch_command[@]}"
   printf '\n'
-  printf 'RUNTIME_PHASE=%s\nRUNTIME_STAGE_ROOT=%s\nRUNTIME_STAGE_MARKER_SHA256=%s\nRUNTIME_STAGE_CPUS_PER_TASK=%s\n' \
-    "${RUNTIME_PHASE}" "${RUNTIME_STAGE_ROOT}" "${RUNTIME_STAGE_MARKER_SHA256}" \
+  printf 'RUNTIME_PHASE=%s\nRUNTIME_STAGE_ROOT=%s\nRUNTIME_STAGE_MARKER=%s\nRUNTIME_STAGE_MARKER_SHA256=%s\nRUNTIME_STAGE_CPUS_PER_TASK=%s\n' \
+    "${RUNTIME_PHASE}" "${RUNTIME_STAGE_ROOT}" "${RUNTIME_STAGE_MARKER}" \
+    "${RUNTIME_STAGE_MARKER_SHA256}" \
     "${RUNTIME_STAGE_CPUS_PER_TASK}"
   if [[ "${TEST_ONLY}" == "1" ]]; then
     echo "TEST_ONLY: no submission performed (local render only; scheduler not contacted)"
@@ -303,6 +345,10 @@ if [[ ! "${expected_python_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 python_install_dir=${ARTIFACT_DIR%/}/uv-python-installations
+if [[ -L "${python_install_dir}" || ( -e "${python_install_dir}" && ! -d "${python_install_dir}" ) ]]; then
+  echo "Managed Python install directory is unsafe" >&2
+  exit 1
+fi
 mkdir -p "${python_install_dir}"
 expected_uv_version=$(sed -nE 's/^ARG UV_VERSION=([0-9]+\.[0-9]+\.[0-9]+)$/\1/p' "${project_root}/docker/Dockerfile")
 if [[ ! "${expected_uv_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -312,6 +358,13 @@ fi
 runtime_stage_root=${RUNTIME_STAGE_ROOT:?Submission must export RUNTIME_STAGE_ROOT}
 if [[ "${runtime_stage_root}" != "${ARTIFACT_DIR%/}/staged-runtimes/"* ]]; then
   echo "RUNTIME_STAGE_ROOT must be inside ARTIFACT_DIR/staged-runtimes" >&2
+  exit 1
+fi
+runtime_stage_key=$(basename "${runtime_stage_root}")
+runtime_stage_marker=${RUNTIME_STAGE_MARKER:?Submission must export RUNTIME_STAGE_MARKER}
+if [[ "${runtime_stage_marker}" != \
+      "${ARTIFACT_DIR%/}/stage-markers/${runtime_stage_key}.env" ]]; then
+  echo "RUNTIME_STAGE_MARKER must be the keyed marker under ARTIFACT_DIR/stage-markers" >&2
   exit 1
 fi
 if [[ ! "${RUNTIME_STAGE_MARKER_SHA256:?Submission must export RUNTIME_STAGE_MARKER_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
@@ -448,17 +501,33 @@ if [[ -e "${te_cmake_dir}" || -L "${te_cmake_dir}" ]]; then
 fi
 validator_relative_path=${source_validator#"${source_project_root}/"}
 runtime_project_root=${runtime_stage_root}/source
-marker=${runtime_stage_root}/complete.env
-partial_marker=${runtime_stage_root}/.complete.env.partial
+marker=${RUNTIME_STAGE_MARKER:?Runtime stage payload requires RUNTIME_STAGE_MARKER}
+marker_dir=$(dirname "${marker}")
+partial_marker=${marker_dir}/.$(basename "${runtime_stage_root}").${SLURM_JOB_ID}.partial
+stage_job_record=${runtime_stage_root}/stage-job-id
 if [[ -e "${runtime_stage_root}" || -L "${runtime_stage_root}" ]]; then
   echo "Runtime stage destination already exists: ${runtime_stage_root}" >&2
   exit 2
 fi
+if [[ -e "${marker}" || -L "${marker}" ]]; then
+  echo "Runtime stage marker already exists: ${marker}" >&2
+  exit 2
+fi
+if [[ -L "${marker_dir}" || ( -e "${marker_dir}" && ! -d "${marker_dir}" ) ]]; then
+  echo "Runtime stage marker directory is unsafe: ${marker_dir}" >&2
+  exit 2
+fi
 cleanup_runtime_workspace() {
+  rm -f -- "${marker}" "${partial_marker}"
   chmod -R u+w -- "${runtime_stage_root}" 2>/dev/null || true
   rm -rf -- "${runtime_stage_root}"
 }
 trap cleanup_runtime_workspace EXIT
+mkdir -p -m 0700 -- "${marker_dir}"
+if [[ -L "${marker_dir}" || ! -d "${marker_dir}" ]]; then
+  echo "Runtime stage marker directory publication is unsafe: ${marker_dir}" >&2
+  exit 2
+fi
 mkdir -m 0700 -- "${runtime_stage_root}" "${runtime_project_root}" "${uv_cache_dir}" "${te_cmake_dir}"
 cp -a -- "${source_project_root}/." "${runtime_project_root}/"
 project_root=${runtime_project_root}
@@ -573,6 +642,15 @@ if [[ "${UV_PYTHON:?Runtime probe requires an exact Python version}" != "${expec
   exit 2
 fi
 python_install_dir=${UV_PYTHON_INSTALL_DIR:?Runtime probe requires a managed Python install directory}
+if [[ -L "${python_install_dir}" || ( -e "${python_install_dir}" && ! -d "${python_install_dir}" ) ]]; then
+  echo "Managed Python install directory is unsafe" >&2
+  exit 2
+fi
+mkdir -p -- "${python_install_dir}"
+if [[ -L "${python_install_dir}" || ! -d "${python_install_dir}" ]]; then
+  echo "Managed Python install directory publication is unsafe" >&2
+  exit 2
+fi
 "${uv_executable}" python install --managed-python --no-bin "${expected_python_version}"
 export UV_PYTHON_DOWNLOADS=never
 base_python=$("${uv_executable}" python find --managed-python "${expected_python_version}")
@@ -598,6 +676,7 @@ done
 "${environment_root}/bin/python" -c \
   "import megatron.core; import torch; import transformer_engine; import transformer_engine_torch"
 rm -rf -- "${uv_cache_dir}" "${te_cmake_dir}"
+printf "%s\n" "${SLURM_JOB_ID}" >"${stage_job_record}"
 printf "%s\n" \
   "schema=runtime-stage-v1" \
   "stage_key=$(basename "${runtime_stage_root}")" \
@@ -620,10 +699,32 @@ if [[ "${actual_marker_sha256}" != "${RUNTIME_STAGE_MARKER_SHA256}" ]]; then
   echo "Runtime stage marker SHA256 mismatch" >&2
   exit 2
 fi
-mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"
+chmod a-w -- "${partial_marker}"
 chmod -R a-w -- "${runtime_stage_root}"
+writable_path=$(find "${runtime_stage_root}" \
+  \( -type f -o -type d \) \
+  \( -perm -200 -o -perm -020 -o -perm -002 \) -print -quit)
+if [[ -n "${writable_path}" ]]; then
+  echo "Runtime stage contains writable regular state: ${writable_path}" >&2
+  exit 2
+fi
+while IFS= read -r -d "" symlink_path; do
+  resolved_symlink=$(realpath -e -- "${symlink_path}") || {
+    echo "Runtime stage contains a broken symlink: ${symlink_path}" >&2
+    exit 2
+  }
+  case "${resolved_symlink}" in
+    "${runtime_stage_root}"|"${runtime_stage_root}"/*|"${python_install_dir}"|"${python_install_dir}"/*) ;;
+    *)
+      echo "Runtime stage symlink escapes trusted roots: ${symlink_path}" >&2
+      exit 2
+      ;;
+  esac
+done < <(find "${runtime_stage_root}" -type l -print0)
+mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"
 trap - EXIT
-printf "RUNTIME_STAGE_READY=%s\n" "${runtime_stage_root}"'
+printf "RUNTIME_STAGE_READY=%s\nRUNTIME_STAGE_MARKER=%s\nRUNTIME_STAGE_JOB_ID=%s\n" \
+  "${runtime_stage_root}" "${marker}" "${SLURM_JOB_ID}"'
 
 attestation_command='set -euo pipefail
 source_project_root=$1
@@ -649,9 +750,24 @@ if [[ "${output_flag}" != "--output" ]]; then
   echo "Runtime probe payload requires --output" >&2
   exit 2
 fi
-marker=${runtime_stage_root}/complete.env
+marker=${RUNTIME_STAGE_MARKER:?Submission must export RUNTIME_STAGE_MARKER}
+marker_dir=$(dirname "${marker}")
+stage_job_record=${runtime_stage_root}/stage-job-id
+if [[ ! "${RUNTIME_STAGE_JOB_ID:?Submission must export RUNTIME_STAGE_JOB_ID}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "RUNTIME_STAGE_JOB_ID must be a positive integer" >&2
+  exit 2
+fi
+if [[ -L "${stage_job_record}" || ! -f "${stage_job_record}" ]] ||
+   [[ "$(<"${stage_job_record}")" != "${RUNTIME_STAGE_JOB_ID}" ]]; then
+  echo "Runtime stage job record is missing, unsafe, or mismatched" >&2
+  exit 2
+fi
 if [[ -L "${runtime_stage_root}" || ! -d "${runtime_stage_root}" ]]; then
   echo "Runtime stage root must be a regular directory" >&2
+  exit 2
+fi
+if [[ -L "${marker_dir}" || ! -d "${marker_dir}" ]]; then
+  echo "Runtime stage marker directory is missing or unsafe" >&2
   exit 2
 fi
 if [[ -L "${marker}" || ! -f "${marker}" ]]; then
@@ -664,11 +780,26 @@ if [[ "${actual_marker_sha256}" != "${RUNTIME_STAGE_MARKER_SHA256}" ]]; then
   exit 2
 fi
 writable_path=$(find "${runtime_stage_root}" \
+  \( -type f -o -type d \) \
   \( -perm -200 -o -perm -020 -o -perm -002 \) -print -quit)
 if [[ -n "${writable_path}" ]]; then
-  echo "Runtime stage contains writable state: ${writable_path}" >&2
+  echo "Runtime stage contains writable regular state: ${writable_path}" >&2
   exit 2
 fi
+python_install_dir=${UV_PYTHON_INSTALL_DIR:?Runtime probe requires a managed Python install directory}
+while IFS= read -r -d "" symlink_path; do
+  resolved_symlink=$(realpath -e -- "${symlink_path}") || {
+    echo "Runtime stage contains a broken symlink: ${symlink_path}" >&2
+    exit 2
+  }
+  case "${resolved_symlink}" in
+    "${runtime_stage_root}"|"${runtime_stage_root}"/*|"${python_install_dir}"|"${python_install_dir}"/*) ;;
+    *)
+      echo "Runtime stage symlink escapes trusted roots: ${symlink_path}" >&2
+      exit 2
+      ;;
+  esac
+done < <(find "${runtime_stage_root}" -type l -print0)
 project_root=${runtime_stage_root}/source
 source_validator=${project_root}/${source_validator#"${source_project_root}/"}
 source_provenance_verifier=${project_root}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/scripts/verify_source_provenance.sh
