@@ -22,17 +22,36 @@ import json
 import math
 import os
 import re
+import stat
 import tempfile
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from tensorboard.backend.event_processing import (  # pyright: ignore[reportMissingImports]
-    event_accumulator,
-)
-
-
 PLANNED_STEP_COUNTS = frozenset({5, 20, 100})
+IDENTITY_FIELDS = (
+    "model",
+    "dispatcher",
+    "scope",
+    "mode",
+    "cluster",
+    "profile",
+    "phase",
+    "steps",
+    "repeat",
+    "run_group",
+    "job_id",
+    "router_replay",
+)
+INTEGER_IDENTITY_FIELDS = frozenset({"steps", "repeat"})
+METADATA_PROVENANCE_FIELDS = {
+    "nemo_rl_commit": "nemo_rl_commit",
+    "bridge_commit": "bridge_commit",
+    "mcore_commit": "mcore_commit",
+    "transformer_engine_commit": "te_commit",
+    "container_sha256": "container_sha256",
+}
 PROVENANCE_FIELDS = (
     "nemo_rl_commit",
     "bridge_commit",
@@ -148,13 +167,174 @@ CANONICAL_TAG_ALIASES: dict[str, tuple[str, ...]] = {
 GRAPH_CANONICAL_TAGS = frozenset(
     tag for tag in CANONICAL_TAG_ALIASES if tag.startswith("cuda_graph/")
 )
-OPTIONAL_CANONICAL_TAGS = frozenset({"cuda_graph/cache_misses"})
 BASELINE_SCOPES = frozenset({"baseline", "baseline_no_cg"})
 ROUTER_REPLAY_VALUES = frozenset({"off", "on"})
 
 
+@dataclass(frozen=True)
+class RunIdentity:
+    """Canonical launch identity shared by every metric source."""
+
+    model: str
+    dispatcher: str
+    scope: str
+    mode: str
+    cluster: str
+    profile: str
+    phase: str
+    steps: int
+    repeat: int
+    run_group: str
+    job_id: str
+    router_replay: str
+
+
+def _read_run_metadata(path: Path) -> dict[str, str]:
+    """Read literal run metadata without treating it as shell input."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as error:
+        raise ValueError(f"run metadata is not a safe regular file: {path}") from error
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError(f"run metadata is not a regular file: {path}")
+        chunks: list[bytes] = []
+        while chunk := os.read(descriptor, 65536):
+            chunks.append(chunk)
+    finally:
+        os.close(descriptor)
+    try:
+        content = b"".join(chunks).decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError("run metadata must be UTF-8") from error
+    if "\x00" in content or "\r" in content:
+        raise ValueError("run metadata contains forbidden bytes")
+    values: dict[str, str] = {}
+    forbidden = frozenset("\\\"'`$;|&<>")
+    for line_number, line in enumerate(content.splitlines(), start=1):
+        if (
+            not line
+            or any(character.isspace() for character in line)
+            or any(character in forbidden for character in line)
+        ):
+            raise ValueError(f"run metadata line {line_number} is unsafe")
+        if "=" not in line:
+            raise ValueError(f"run metadata line {line_number} is malformed")
+        key, value = line.split("=", 1)
+        if re.fullmatch(r"[a-z][a-z0-9_]*", key) is None:
+            raise ValueError(f"run metadata line {line_number} has invalid key")
+        if key in values:
+            raise ValueError(f"run metadata duplicates {key}")
+        values[key] = value
+    if not values:
+        raise ValueError("run metadata must contain canonical assignments")
+    return values
+
+
+def _metadata_identity(metadata: Mapping[str, str]) -> dict[str, object]:
+    missing = [field for field in IDENTITY_FIELDS if field not in metadata]
+    if missing:
+        raise ValueError("run metadata identity is missing: " + ", ".join(missing))
+    normalized: dict[str, object] = {
+        field: metadata[field] for field in IDENTITY_FIELDS
+    }
+    for field in ("steps", "repeat"):
+        value = str(normalized[field])
+        if re.fullmatch(r"0|[1-9][0-9]*", value) is None:
+            raise ValueError(f"run metadata {field} must be a non-negative integer")
+        normalized[field] = int(value)
+    if normalized["router_replay"] not in ROUTER_REPLAY_VALUES:
+        raise ValueError("run metadata router_replay must be one of off, on")
+    return normalized
+
+
+def _normalize_explicit_integer(field: str, value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{field} must be a non-negative integer")
+    return value
+
+
+def _resolve_identity(
+    *,
+    metadata: Mapping[str, str] | None,
+    model: str | None,
+    dispatcher: str | None,
+    scope: str | None,
+    mode: str | None,
+    cluster: str | None,
+    profile: str | None,
+    phase: str | None,
+    steps: int | None,
+    repeat: int | None,
+    run_group: str | None,
+    job_id: str | None,
+    router_replay: str | None,
+) -> RunIdentity:
+    explicit: dict[str, object | None] = {
+        "model": model,
+        "dispatcher": dispatcher,
+        "scope": scope,
+        "mode": mode,
+        "cluster": cluster,
+        "profile": profile,
+        "phase": phase,
+        "steps": steps,
+        "repeat": repeat,
+        "run_group": run_group,
+        "job_id": job_id,
+        "router_replay": router_replay,
+    }
+    for field in INTEGER_IDENTITY_FIELDS:
+        if explicit[field] is not None:
+            explicit[field] = _normalize_explicit_integer(field, explicit[field])
+
+    resolved = _metadata_identity(metadata) if metadata is not None else {}
+    for field in IDENTITY_FIELDS:
+        value = explicit[field]
+        if value is not None and field in resolved and value != resolved[field]:
+            raise ValueError(f"run metadata {field} disagrees with explicit identity")
+        if value is not None:
+            resolved[field] = value
+
+    missing = [field for field in IDENTITY_FIELDS if field not in resolved]
+    if missing:
+        raise ValueError("launch identity is missing: " + ", ".join(missing))
+    for field in set(IDENTITY_FIELDS) - INTEGER_IDENTITY_FIELDS:
+        if not isinstance(resolved[field], str) or not resolved[field]:
+            raise ValueError(f"{field} must be a non-empty string")
+    if resolved["steps"] not in PLANNED_STEP_COUNTS:
+        raise ValueError("steps must be one of 5, 20, 100")
+    if resolved["mode"] not in {"nemorl", "mcore"}:
+        raise ValueError("mode must be one of nemorl, mcore")
+    if resolved["router_replay"] not in ROUTER_REPLAY_VALUES:
+        raise ValueError("router_replay must be one of off, on")
+    if not str(resolved["profile"]).strip():
+        raise ValueError("profile must not be empty")
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", str(resolved["run_group"])) is None:
+        raise ValueError("run_group must be filesystem-safe")
+    if re.fullmatch(r"[1-9][0-9]*", str(resolved["job_id"])) is None:
+        raise ValueError("job_id must be a positive decimal identifier")
+
+    return RunIdentity(
+        model=str(resolved["model"]),
+        dispatcher=str(resolved["dispatcher"]),
+        scope=str(resolved["scope"]),
+        mode=str(resolved["mode"]),
+        cluster=str(resolved["cluster"]),
+        profile=str(resolved["profile"]),
+        phase=str(resolved["phase"]),
+        steps=int(resolved["steps"]),
+        repeat=int(resolved["repeat"]),
+        run_group=str(resolved["run_group"]),
+        job_id=str(resolved["job_id"]),
+        router_replay=str(resolved["router_replay"]),
+    )
+
+
 def _scalar_events(paths: Sequence[Path]) -> dict[str, dict[int, float]]:
     """Return the latest scalar value per source tag and optimizer step."""
+    from tensorboard.backend.event_processing import event_accumulator  # pyright: ignore[reportMissingImports]
+
     values: dict[str, dict[int, tuple[float, int, int, float]]] = {}
     for source_index, path in enumerate(paths):
         accumulator = event_accumulator.EventAccumulator(
@@ -201,8 +381,6 @@ def _canonical_metrics(
         present_steps = {
             step for step, metrics in rows.items() if canonical_tag in metrics
         }
-        if canonical_tag in OPTIONAL_CANONICAL_TAGS and not present_steps:
-            continue
         missing_steps = sorted(expected_steps - present_steps)
         invalid_steps = sorted(
             step
@@ -219,7 +397,7 @@ def _canonical_metrics(
             errors.append(f"{canonical_tag}: {', '.join(details)}")
 
     if errors:
-        raise ValueError("incomplete TensorBoard metrics: " + "; ".join(errors))
+        raise ValueError("incomplete metrics: " + "; ".join(errors))
     return rows
 
 
@@ -306,75 +484,142 @@ def _read_json_mapping(path: Path, *, label: str) -> Mapping[str, Any]:
     return payload
 
 
+def resolve_export_context(
+    *,
+    model: str | None = None,
+    dispatcher: str | None = None,
+    scope: str | None = None,
+    mode: str | None = None,
+    cluster: str | None = None,
+    profile: str | None = None,
+    phase: str | None = None,
+    steps: int | None = None,
+    repeat: int | None = None,
+    run_group: str | None = None,
+    job_id: str | None = None,
+    router_replay: str | None = None,
+    run_metadata: Path | None = None,
+    provenance: Mapping[str, object],
+    parity: Mapping[str, object] | None,
+) -> tuple[RunIdentity, dict[str, str], dict[str, object]]:
+    """Resolve and cross-check identity before any metric source is read."""
+    metadata = _read_run_metadata(run_metadata) if run_metadata is not None else None
+    identity = _resolve_identity(
+        metadata=metadata,
+        model=model,
+        dispatcher=dispatcher,
+        scope=scope,
+        mode=mode,
+        cluster=cluster,
+        profile=profile,
+        phase=phase,
+        steps=steps,
+        repeat=repeat,
+        run_group=run_group,
+        job_id=job_id,
+        router_replay=router_replay,
+    )
+    normalized_provenance = _validated_provenance(provenance)
+    if metadata is not None:
+        missing = sorted(set(METADATA_PROVENANCE_FIELDS) - set(metadata))
+        if missing:
+            raise ValueError(
+                "run metadata provenance is missing: " + ", ".join(missing)
+            )
+        for metadata_field, provenance_field in METADATA_PROVENANCE_FIELDS.items():
+            if metadata[metadata_field] != normalized_provenance[provenance_field]:
+                raise ValueError(
+                    f"run metadata {metadata_field} disagrees with provenance"
+                )
+    return identity, normalized_provenance, _validated_parity(parity)
+
+
+def export_scalar_values(
+    scalar_values: Mapping[str, Mapping[int, float]],
+    *,
+    identity: RunIdentity,
+    status: str,
+    provenance: Mapping[str, str],
+    parity: Mapping[str, object],
+    output: Path,
+) -> None:
+    """Export one already-resolved scalar source through the canonical schema."""
+    is_baseline = identity.scope in BASELINE_SCOPES
+    metrics_by_step = _canonical_metrics(
+        scalar_values,
+        steps=identity.steps,
+        require_graph_metrics=not is_baseline,
+    )
+    common = {
+        **asdict(identity),
+        "status": status,
+        "graph_telemetry_status": "not_applicable" if is_baseline else "reported",
+        "provenance": dict(provenance),
+        "parity": dict(parity),
+    }
+    _write_jsonl_atomic(
+        (
+            {**common, "step": step, "metrics": metrics_by_step[step]}
+            for step in range(1, identity.steps + 1)
+        ),
+        output,
+    )
+
+
 def export_events(
     event_paths: Sequence[Path],
     *,
-    model: str,
-    dispatcher: str,
-    scope: str,
-    mode: str,
-    cluster: str,
-    profile: str,
-    phase: str,
-    steps: int,
-    repeat: int,
-    run_group: str,
-    job_id: str,
+    model: str | None = None,
+    dispatcher: str | None = None,
+    scope: str | None = None,
+    mode: str | None = None,
+    cluster: str | None = None,
+    profile: str | None = None,
+    phase: str | None = None,
+    steps: int | None = None,
+    repeat: int | None = None,
+    run_group: str | None = None,
+    job_id: str | None = None,
     status: str,
     provenance: Mapping[str, object],
     output: Path,
     parity: Mapping[str, object] | None = None,
-    router_replay: str = "off",
+    router_replay: str | None = None,
+    run_metadata: Path | None = None,
 ) -> None:
     """Export one complete planned run from local TensorBoard event paths."""
-    if steps not in PLANNED_STEP_COUNTS:
-        raise ValueError("steps must be one of 5, 20, 100")
-    if router_replay not in ROUTER_REPLAY_VALUES:
-        raise ValueError("router_replay must be one of off, on")
+    identity, normalized_provenance, normalized_parity = resolve_export_context(
+        model=model,
+        dispatcher=dispatcher,
+        scope=scope,
+        mode=mode,
+        cluster=cluster,
+        profile=profile,
+        phase=phase,
+        steps=steps,
+        repeat=repeat,
+        run_group=run_group,
+        job_id=job_id,
+        router_replay=router_replay,
+        run_metadata=run_metadata,
+        provenance=provenance,
+        parity=parity,
+    )
     if not event_paths:
         raise ValueError("at least one TensorBoard event path is required")
-    if not profile.strip():
-        raise ValueError("profile must not be empty")
-    if repeat < 1:
-        raise ValueError("repeat must be positive")
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", run_group):
-        raise ValueError("run_group must be filesystem-safe")
     missing_paths = [str(path) for path in event_paths if not path.exists()]
     if missing_paths:
         raise FileNotFoundError(
             "missing TensorBoard event paths: " + ", ".join(missing_paths)
         )
 
-    is_baseline = scope in BASELINE_SCOPES
-    metrics_by_step = _canonical_metrics(
+    export_scalar_values(
         _scalar_events(event_paths),
-        steps=steps,
-        require_graph_metrics=not is_baseline,
-    )
-    common = {
-        "model": model,
-        "dispatcher": dispatcher,
-        "scope": scope,
-        "mode": mode,
-        "cluster": cluster,
-        "profile": profile,
-        "phase": phase,
-        "steps": steps,
-        "repeat": repeat,
-        "run_group": run_group,
-        "job_id": job_id,
-        "status": status,
-        "router_replay": router_replay,
-        "graph_telemetry_status": "not_applicable" if is_baseline else "reported",
-        "provenance": _validated_provenance(provenance),
-        "parity": _validated_parity(parity),
-    }
-    _write_jsonl_atomic(
-        (
-            {**common, "step": step, "metrics": metrics_by_step[step]}
-            for step in range(1, steps + 1)
-        ),
-        output,
+        identity=identity,
+        status=status,
+        provenance=normalized_provenance,
+        parity=normalized_parity,
+        output=output,
     )
 
 
@@ -388,21 +633,20 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="TensorBoard event file or directory; repeat for separate sources",
     )
-    parser.add_argument("--model", required=True)
-    parser.add_argument("--dispatcher", required=True)
-    parser.add_argument("--scope", required=True)
-    parser.add_argument("--mode", choices=("nemorl", "mcore"), required=True)
-    parser.add_argument("--cluster", required=True)
-    parser.add_argument("--profile", required=True)
-    parser.add_argument("--phase", required=True)
-    parser.add_argument(
-        "--steps", choices=sorted(PLANNED_STEP_COUNTS), type=int, required=True
-    )
-    parser.add_argument("--job-id", required=True)
-    parser.add_argument("--repeat", type=int, required=True)
-    parser.add_argument("--run-group", required=True)
+    parser.add_argument("--run-metadata", type=Path)
+    parser.add_argument("--model")
+    parser.add_argument("--dispatcher")
+    parser.add_argument("--scope")
+    parser.add_argument("--mode", choices=("nemorl", "mcore"))
+    parser.add_argument("--cluster")
+    parser.add_argument("--profile")
+    parser.add_argument("--phase")
+    parser.add_argument("--steps", choices=sorted(PLANNED_STEP_COUNTS), type=int)
+    parser.add_argument("--job-id")
+    parser.add_argument("--repeat", type=int)
+    parser.add_argument("--run-group")
     parser.add_argument("--status", required=True)
-    parser.add_argument("--router-replay", choices=("off", "on"), default="off")
+    parser.add_argument("--router-replay", choices=("off", "on"))
     parser.add_argument("--provenance", required=True, type=Path)
     parser.add_argument("--parity", type=Path)
     parser.add_argument("--output", required=True, type=Path)
@@ -427,6 +671,7 @@ def main() -> None:
         job_id=args.job_id,
         status=args.status,
         router_replay=args.router_replay,
+        run_metadata=args.run_metadata,
         provenance=_read_json_mapping(args.provenance, label="provenance"),
         parity=(
             _read_json_mapping(args.parity, label="parity")

@@ -86,7 +86,6 @@ def test_exporter_accepts_real_train_graph_tags_and_graph_free_baseline(
 ) -> None:
     exporter = _load_exporter(monkeypatch)
     values = _real_scalar_values(exporter)
-    values.pop("train/cuda_graph/cache_misses")
 
     graph_rows = exporter._canonical_metrics(
         values,
@@ -134,6 +133,7 @@ def test_exporter_embeds_pairing_provenance_and_optional_parity(
         run_group="nano-attn-20260731",
         job_id="2474000",
         status="passed",
+        router_replay="off",
         provenance=PROVENANCE,
         parity=PARITY,
         output=output,
@@ -176,6 +176,7 @@ def test_baseline_export_omits_graph_metrics_and_parity_is_optional(
         run_group="nano-performance",
         job_id="2473999",
         status="passed",
+        router_replay="off",
         provenance=PROVENANCE,
         output=output,
     )
