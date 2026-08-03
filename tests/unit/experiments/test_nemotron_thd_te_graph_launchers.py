@@ -2150,6 +2150,7 @@ def test_oci_container_runtime_smoke_renders_four_gpu_batch_job(
     result = _run_script(
         "scripts/validate_oci_container_runtime.sub",
         TEST_ONLY="1",
+        RUNTIME_STAGE_CAPABILITY="mcore-test-v1",
         CONTAINER="/lustre/example/nemo_rl_nightly.sqsh",
         CONTAINER_SHA256=CONTAINER_SHA256,
         ARTIFACT_DIR=str(tmp_path / "artifacts"),
@@ -2170,6 +2171,7 @@ def test_oci_runtime_staging_renders_cpu_only_job(tmp_path: Path) -> None:
         "scripts/validate_oci_container_runtime.sub",
         TEST_ONLY="1",
         RUNTIME_PHASE="stage",
+        RUNTIME_STAGE_CAPABILITY="mcore-test-v1",
         CONTAINER="/lustre/example/nemo_rl_nightly.sqsh",
         CONTAINER_SHA256=CONTAINER_SHA256,
         ARTIFACT_DIR=str(tmp_path / "artifacts"),
@@ -2191,6 +2193,7 @@ def test_oci_runtime_staging_binds_explicit_single_cpu_request(tmp_path: Path) -
         TEST_ONLY="1",
         RUNTIME_PHASE="stage",
         RUNTIME_STAGE_CPUS_PER_TASK="1",
+        RUNTIME_STAGE_CAPABILITY="mcore-test-v1",
         CONTAINER="/lustre/example/nemo_rl_nightly.sqsh",
         CONTAINER_SHA256=CONTAINER_SHA256,
         ARTIFACT_DIR=str(tmp_path / "artifacts"),
@@ -2210,6 +2213,7 @@ def test_oci_runtime_staging_rejects_invalid_cpu_request(
         TEST_ONLY="1",
         RUNTIME_PHASE="stage",
         RUNTIME_STAGE_CPUS_PER_TASK=cpus_per_task,
+        RUNTIME_STAGE_CAPABILITY="mcore-test-v1",
         CONTAINER="/lustre/example/nemo_rl_nightly.sqsh",
         CONTAINER_SHA256=CONTAINER_SHA256,
         ARTIFACT_DIR=str(tmp_path / "artifacts"),
@@ -2280,6 +2284,7 @@ printf '{"status":"passed"}\n' >"${output}"
             ),
             "RUNTIME_STAGE_MARKER_SHA256": "b" * 64,
             "RUNTIME_STAGE_JOB_ID": "315",
+            "RUNTIME_STAGE_CAPABILITY": "mcore-test-v1",
         }
     )
 

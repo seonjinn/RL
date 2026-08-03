@@ -25,6 +25,11 @@ MCORE_COMMIT = "d" * 40
 TE_COMMIT = "e" * 40
 PYTHON_VERSION = "3.13.13"
 UV_VERSION = "0.11.18"
+RUNTIME_STAGE_CAPABILITY = "mcore-test-v1"
+RUNTIME_TEST_REQUIREMENTS = (
+    "pytest==9.1.1,iniconfig==2.3.0,packaging==26.2,"
+    "pluggy==1.6.0,pygments==2.20.0"
+)
 
 
 @dataclass(frozen=True)
@@ -225,6 +230,12 @@ def _run_runtime_payload(
     runtime_environment.setdefault("NVTE_CUDA_ARCHS", "100a")
     runtime_environment.setdefault("TORCH_CUDA_ARCH_LIST", "10.0a")
     runtime_environment.setdefault("RUNTIME_FEATURE_SET", "te_eval_capability_8")
+    runtime_environment.setdefault(
+        "RUNTIME_STAGE_CAPABILITY", RUNTIME_STAGE_CAPABILITY
+    )
+    runtime_environment.setdefault(
+        "RUNTIME_TEST_REQUIREMENTS", RUNTIME_TEST_REQUIREMENTS
+    )
     runtime_environment.setdefault(
         "RUNTIME_EXCLUDED_PACKAGES",
         "causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm",
@@ -583,6 +594,7 @@ def test_runtime_probe_distinguishes_te_source_and_version_base() -> None:
                 "EXPECTED_TE_SHA": TE_COMMIT,
                 "EXPECTED_TE_VERSION_BASE_SHA": TE_COMMIT,
                 "RUNTIME_PHASE": "stage",
+                "RUNTIME_STAGE_CAPABILITY": RUNTIME_STAGE_CAPABILITY,
                 "SOURCE_PROVENANCE_VERIFIER": str(
                     EXPERIMENT_DIR / "scripts" / "verify_source_provenance.sh"
                 ),
@@ -684,6 +696,8 @@ printf '{"status":"passed"}\n' >"${output}"
             "SOURCE_PROVENANCE_VERIFIER": str(provenance_verifier),
             "PROVENANCE_LOG": str(provenance_log),
             "RUNTIME_PHASE": "stage",
+            "RUNTIME_STAGE_CAPABILITY": RUNTIME_STAGE_CAPABILITY,
+            "RUNTIME_TEST_REQUIREMENTS": RUNTIME_TEST_REQUIREMENTS,
             "RUNTIME_STAGE_CPUS_PER_TASK": "32",
             "SLURM_CPUS_PER_TASK": "32",
             "RUNTIME_STAGE_ROOT": str(runtime_stage_root),
@@ -763,7 +777,7 @@ printf '{"status":"passed"}\n' >"${output}"
         '"${uv_executable}" sync --python "${expected_python_version}" --managed-python'
         in command
     )
-    assert "--locked --extra mcore --no-python-downloads" in command
+    assert "--locked --extra mcore --group test --no-python-downloads" in command
     assert 'sync_command+=(--no-install-package "${excluded_package}")' in command
     assert (
         "RUNTIME_EXCLUDED_PACKAGES=causal-conv1d,deep-ep,"
@@ -808,16 +822,30 @@ def test_runtime_wrapper_separates_cpu_stage_from_gpu_attestation() -> None:
     assert 'if [[ "${RUNTIME_PHASE}" == "stage" ]]' in source
     assert "NVTE_CUDA_ARCHS=100a" in source
     assert "RUNTIME_FEATURE_SET=te_eval_capability_8" in source
+    assert "RUNTIME_STAGE_CAPABILITY=${RUNTIME_STAGE_CAPABILITY:-}" in source
+    assert '"${RUNTIME_STAGE_CAPABILITY}" != "mcore-test-v1"' in source
+    assert (
+        "pytest==9.1.1,iniconfig==2.3.0,"
+        "packaging==26.2,pluggy==1.6.0,pygments==2.20.0" in source
+    )
     assert "TORCH_CUDA_ARCH_LIST=10.0a" in source
     assert (
         "RUNTIME_EXCLUDED_PACKAGES=causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm"
         in source
     )
     assert '"${uv_executable}" sync' in source
+    assert "--group test" in source
     assert "--no-install-package" in source
     assert "runtime-stage-v1" in source
     assert "uv_lock_sha256" in source
     assert "RUNTIME_STAGE_MARKER_SHA256" in source
+    assert '"stage_capability=${RUNTIME_STAGE_CAPABILITY}"' in source
+    assert '"test_requirements=${RUNTIME_TEST_REQUIREMENTS}"' in source
+    assert (
+        '"${environment_root}/bin/python" - "${RUNTIME_TEST_REQUIREMENTS}" '
+        '"${environment_root}" <<"PY"' in source
+    )
+    assert 'importlib.metadata.version(distribution)' in source
     assert 'mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"' in source
     assert '-perm -200 -o -perm -020 -o -perm -002' in source
     assert "attestation_command='" in source
@@ -828,6 +856,19 @@ def test_runtime_wrapper_separates_cpu_stage_from_gpu_attestation() -> None:
     assert "cmake" not in attestation.lower()
     assert 'sha256sum "${marker}"' in attestation
     assert '"${runtime_python}" "${source_validator}"' in attestation
+
+
+def test_runtime_wrapper_requires_explicit_stage_capability(tmp_path: Path) -> None:
+    result = _run_script(
+        "scripts/validate_oci_container_runtime.sub",
+        CONTAINER=str(tmp_path / "runtime.sqsh"),
+        CONTAINER_SHA256="a" * 64,
+        ARTIFACT_DIR=str(tmp_path / "artifacts"),
+        TEST_ONLY="1",
+    )
+
+    assert result.returncode == 2
+    assert "must explicitly select mcore-test-v1" in result.stderr
 
 
 def test_runtime_stage_publishes_marker_only_after_immutable_symlink_safe_audits() -> (
@@ -916,6 +957,8 @@ def test_runtime_attestation_submitter_does_not_consume_running_stage_marker(
             "EXPECTED_TE_SHA": TE_COMMIT,
             "EXPECTED_TE_VERSION_BASE_SHA": TE_COMMIT,
             "RUNTIME_PHASE": "attest",
+            "RUNTIME_STAGE_CAPABILITY": RUNTIME_STAGE_CAPABILITY,
+            "RUNTIME_TEST_REQUIREMENTS": RUNTIME_TEST_REQUIREMENTS,
             "TEST_ONLY": "1",
         }
     )
@@ -1051,6 +1094,8 @@ def test_runtime_stage_audit_failure_never_publishes_marker(
         f"uv_version={UV_VERSION}",
         "feature_set=te_eval_capability_8",
         "excluded_packages=causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm",
+        f"stage_capability={RUNTIME_STAGE_CAPABILITY}",
+        f"test_requirements={RUNTIME_TEST_REQUIREMENTS}",
         "torch_cuda_arch_list=10.0a",
         "cuda_archs=100a",
         "stage_cpus_per_task=32",
@@ -1076,6 +1121,8 @@ def test_runtime_stage_audit_failure_never_publishes_marker(
             "expected_python_version": PYTHON_VERSION,
             "expected_uv_version": UV_VERSION,
             "RUNTIME_FEATURE_SET": "te_eval_capability_8",
+            "RUNTIME_STAGE_CAPABILITY": RUNTIME_STAGE_CAPABILITY,
+            "RUNTIME_TEST_REQUIREMENTS": RUNTIME_TEST_REQUIREMENTS,
             "RUNTIME_EXCLUDED_PACKAGES": (
                 "causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm"
             ),
@@ -1547,6 +1594,8 @@ def test_runtime_job_rejects_mutable_container_symlink(tmp_path: Path) -> None:
                 immutable_container.read_bytes()
             ).hexdigest(),
             "ARTIFACT_DIR": str(tmp_path / "artifacts"),
+            "RUNTIME_STAGE_CAPABILITY": RUNTIME_STAGE_CAPABILITY,
+            "RUNTIME_TEST_REQUIREMENTS": RUNTIME_TEST_REQUIREMENTS,
         }
     )
 
