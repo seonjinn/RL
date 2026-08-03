@@ -388,9 +388,7 @@ def test_load_weights_preserves_prequantized_mxfp8_and_clamps_scales(
     )
 
 
-def test_quantize_mxfp8_weight_preserves_batched_weight_shape(
-    fp8_module, monkeypatch
-):
+def test_quantize_mxfp8_weight_preserves_batched_weight_shape(fp8_module, monkeypatch):
     from vllm.model_executor.layers.quantization.utils import mxfp8_utils
 
     fp8 = fp8_module

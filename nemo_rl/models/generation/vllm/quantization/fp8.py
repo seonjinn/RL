@@ -535,7 +535,11 @@ def quantize_mxfp8_weight(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Ten
         mxfp8_e4m3_quantize,
     )
 
-    value, scale = mxfp8_e4m3_quantize(weight)
+    original_shape = weight.shape
+    quant_input = weight if weight.ndim == 2 else weight.reshape(-1, weight.shape[-1])
+    value, scale = mxfp8_e4m3_quantize(quant_input)
+    value = value.reshape(original_shape)
+    scale = scale.reshape(*original_shape[:-1], original_shape[-1] // 32)
     return value, _clamp_mxfp8_scale(scale)
 
 
