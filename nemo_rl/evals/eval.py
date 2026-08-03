@@ -26,7 +26,7 @@ import torch
 from pydantic import BaseModel
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
 from wandb import Table
 
 from nemo_rl.algorithms.utils import log_generation_metrics_to_wandb, set_seed
@@ -217,6 +217,7 @@ def _validate_nemo_gym_eval_config(master_config: MasterConfig) -> None:
 def setup_nemo_gym_environment(
     vllm_generation: GenerationInterface,
     master_config: MasterConfig,
+    tokenizer: PreTrainedTokenizerBase,
 ) -> Any:
     """Start NeMo Gym against the eval generation server endpoints."""
     _validate_nemo_gym_eval_config(master_config)
@@ -235,6 +236,7 @@ def setup_nemo_gym_environment(
         enable_router_replay=False,
         routed_experts_dtype="int16",
         use_fastokens=False,
+        tokenizer=tokenizer,
     )
 
 
