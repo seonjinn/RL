@@ -225,37 +225,39 @@ and postprocess remain eager.
 
 ## Configuration
 
-Add a typed policy-level config rather than overloading MCore's single
-`cuda_graph_impl` enum:
+Add a Pydantic policy-level config rather than overloading MCore's single
+`cuda_graph_impl` enum. This is a new user-facing config block, so its defaults
+live on the `BaseModel`; the exemplar YAML mirrors them for discoverability.
+Unknown keys fail validation because a misspelled graph-safety option must not
+be silently ignored.
 
 ```python
-class LogprobCudaGraphConfigDisabled(TypedDict):
-    enabled: Literal[False]
-
-
-class LogprobCudaGraphConfig(TypedDict):
-    enabled: Literal[True]
-    implementation: Literal["transformer_engine"]
-    modules: list[str]
-    warmup_steps: int
-    mb_tokens: int
-    max_packed_sequences: int
-    cache_size: int
-    roles: list[Literal["policy", "reference"]]
-    unseen_key_policy: Literal["eager", "error"]
+class LogprobCudaGraphConfig(BaseModel, extra="forbid"):
+    enabled: bool = False
+    implementation: Literal["transformer_engine"] = "transformer_engine"
+    modules: list[str] = Field(default_factory=list)
+    warmup_steps: PositiveInt = 3
+    mb_tokens: PositiveInt | None = None
+    max_packed_sequences: PositiveInt | None = None
+    cache_size: PositiveInt = 2
+    roles: list[Literal["policy", "reference"]] = Field(
+        default_factory=lambda: ["policy", "reference"]
+    )
+    unseen_key_policy: Literal["eager", "error"] = "eager"
 ```
 
-`PolicyConfig` gains:
+`PolicyConfig`, which remains a legacy `TypedDict`, gains only a field that
+references the new v2 model:
 
 ```python
-logprob_cuda_graph: NotRequired[
-    LogprobCudaGraphConfig | LogprobCudaGraphConfigDisabled
-]
+logprob_cuda_graph: NotRequired[LogprobCudaGraphConfig]
 ```
 
-The default is `{"enabled": false}`. Enabling training graphs does not
-implicitly enable logprob graphs, and enabling logprob graphs does not change
-vLLM generation.
+At the single config boundary, an absent legacy field is parsed once as
+`LogprobCudaGraphConfig()`. Consumers receive the validated model and use
+attribute access without call-site defaults. Enabling training graphs does
+not implicitly enable logprob graphs, and enabling logprob graphs does not
+change vLLM generation.
 
 Required setup validation:
 
@@ -264,8 +266,8 @@ Required setup validation:
 - `warmup_steps == 3` for the initial implementation;
 - sequence packing enabled and dynamic batching disabled;
 - fused attention selected;
-- positive fixed `mb_tokens`;
-- `max_packed_sequences >= 2`;
+- non-`None` fixed `mb_tokens` when enabled;
+- non-`None` `max_packed_sequences >= 2` when enabled;
 - non-empty, duplicate-free roles;
 - explicit, valid graph modules;
 - `moe_preprocess` requires `moe_router`;
