@@ -16,6 +16,9 @@ case "$scope" in
   moe)
     config_name=eval_qwen3_235ba22b_moe_token_smoke.yaml
     ;;
+  bf16)
+    config_name=eval_qwen3_235ba22b_bf16_token_smoke.yaml
+    ;;
   *)
     echo "unsupported Qwen235 token smoke scope: $scope" >&2
     exit 2

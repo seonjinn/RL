@@ -4,10 +4,10 @@ set -euo pipefail
 ACTION=${1:-submit}
 SCOPE=${2:-qkvo}
 if [[ "$ACTION" != submit && "$ACTION" != test-only ]]; then
-  echo "usage: submit_qwen235_qkvo_token_smoke_ptyche.sh [submit|test-only] [qkvo|moe]" >&2
+  echo "usage: submit_qwen235_qkvo_token_smoke_ptyche.sh [submit|test-only] [qkvo|moe|bf16]" >&2
   exit 2
 fi
-if [[ "$SCOPE" != qkvo && "$SCOPE" != moe ]]; then
+if [[ "$SCOPE" != qkvo && "$SCOPE" != moe && "$SCOPE" != bf16 ]]; then
   echo "unsupported Qwen235 token smoke scope: $SCOPE" >&2
   exit 2
 fi

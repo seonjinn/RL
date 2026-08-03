@@ -80,4 +80,6 @@ else
     "$RESULT_ROOT/adaptive/run.log" \
     --output "$RESULT_ROOT/summary.json"
 fi
-cat "$RESULT_ROOT/summary.json"
+if [[ "$ACTION" != baseline ]]; then
+  cat "$RESULT_ROOT/summary.json"
+fi

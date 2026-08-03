@@ -633,6 +633,16 @@ def test_run_ab_pair_mode_skips_trtllm_default() -> None:
     assert "trtllm_default" not in pair_branch
 
 
+def test_run_ab_baseline_mode_does_not_require_summary() -> None:
+    launcher = (
+        Path(__file__).parents[3]
+        / "experiments/mxfp8_adaptive_rollout_v0251/run_ab.sh"
+    ).read_text(encoding="utf-8")
+
+    assert 'if [[ "$ACTION" != baseline ]]; then' in launcher
+    assert 'cat "$RESULT_ROOT/summary.json"' in launcher
+
+
 def test_arm_reuses_locked_driver_interpreter_for_ray_actors() -> None:
     root = Path(__file__).parents[3]
     launcher = (root / "experiments/mxfp8_adaptive_rollout_v0251/run_arm.sh").read_text(

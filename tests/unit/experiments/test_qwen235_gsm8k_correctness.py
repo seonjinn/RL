@@ -435,10 +435,12 @@ def test_qwen235_qkvo_gsm8k_gate_uses_matched_scope_and_artifacts() -> None:
 def test_qwen235_qkvo_token_smoke_is_small_and_validity_gated() -> None:
     config_path = EXPERIMENT / "configs/eval_qwen3_235ba22b_qkvo_token_smoke.yaml"
     moe_config_path = EXPERIMENT / "configs/eval_qwen3_235ba22b_moe_token_smoke.yaml"
+    bf16_config_path = EXPERIMENT / "configs/eval_qwen3_235ba22b_bf16_token_smoke.yaml"
     wrapper_path = EXPERIMENT / "run_qwen235_qkvo_token_smoke.sh"
     submitter_path = EXPERIMENT / "submit_qwen235_qkvo_token_smoke_ptyche.sh"
     assert config_path.is_file()
     assert moe_config_path.is_file()
+    assert bf16_config_path.is_file()
     assert wrapper_path.is_file()
     assert submitter_path.is_file()
 
@@ -466,6 +468,15 @@ def test_qwen235_qkvo_token_smoke_is_small_and_validity_gated() -> None:
         "flashinfer_cutedsl"
     )
 
+    bf16_config = yaml.safe_load(bf16_config_path.read_text(encoding="utf-8"))
+    bf16_generation = bf16_config["generation"]
+    assert bf16_generation["vllm_cfg"]["precision"] == "bfloat16"
+    assert bf16_generation["vllm_cfg"]["is_mx"] is False
+    assert bf16_generation["vllm_cfg"]["tensor_parallel_size"] == 8
+    assert bf16_generation["vllm_cfg"]["expert_parallel_size"] == 8
+    assert "quantization_ignored_layer_kws" not in bf16_generation["vllm_cfg"]
+    assert "linear_backend" not in bf16_generation["vllm_kwargs"]
+
     wrapper = wrapper_path.read_text(encoding="utf-8")
     assert 'run_ab.sh" baseline' in wrapper
     assert "response_validity_gate" in wrapper
@@ -479,4 +490,4 @@ def test_qwen235_qkvo_token_smoke_is_small_and_validity_gated() -> None:
     assert "--nodes=2" in submitter
     assert "--segment=2" in submitter
     assert "--dependency=" in submitter
-    assert "[qkvo|moe]" in submitter
+    assert "[qkvo|moe|bf16]" in submitter

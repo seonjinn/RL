@@ -1,0 +1,69 @@
+defaults: "../../../examples/configs/evals/eval.yaml"
+
+eval:
+  metric: pass@k
+  num_tests_per_prompt: 1
+  k_value: 1
+  save_path: ${oc.env:CANARY_OUTPUT_DIR}
+  seed: 42
+
+generation:
+  model_name: Qwen/Qwen3-235B-A22B
+  max_new_tokens: 128
+  temperature: 0.0
+  top_p: 1.0
+  top_k: -1
+  num_prompts_per_step: 64
+  vllm_cfg:
+    async_engine: true
+    precision: bfloat16
+    is_mx: false
+    kv_cache_dtype: auto
+    tensor_parallel_size: 8
+    pipeline_parallel_size: 1
+    expert_parallel_size: 8
+    gpu_memory_utilization: 0.8
+    max_model_len: 8192
+    enforce_eager: false
+    skip_tokenizer_init: false
+    enable_prefix_caching: false
+    env_vars:
+      PYTHONPATH: ${oc.env:PYTHONPATH}
+      VLLM_SUBPROCESS_PYTHONPATH: ${oc.env:VLLM_SUBPROCESS_PYTHONPATH}
+      VLLM_RAY_EXTRA_ENV_VARS_TO_COPY: ${oc.env:VLLM_RAY_EXTRA_ENV_VARS_TO_COPY}
+      VLLM_FLASHINFER_MOE_BACKEND: latency
+  vllm_kwargs:
+    attention_backend: FLASH_ATTN
+    max_num_seqs: 32
+    max_num_batched_tokens: 16384
+    enable_chunked_prefill: true
+  colocated:
+    enabled: false
+    resources:
+      gpus_per_node: 4
+      num_nodes: 2
+
+tokenizer:
+  name: ${generation.model_name}
+  chat_template: default
+  chat_template_kwargs: null
+
+data:
+  max_input_seq_length: 4096
+  dataset_name: ${oc.env:NEMO_RL_REPO_ROOT}/experiments/mxfp8_adaptive_rollout_v0251/data/qwen_trace_math.jsonl
+  prompt_file: null
+  system_prompt_file: null
+  processor: math_hf_data_processor
+  problem_key: input
+  solution_key: output
+  file_format: json
+  split: train
+  repeat: 1
+
+env:
+  math:
+    num_workers: 8
+
+cluster:
+  gpus_per_node: 4
+  num_nodes: 2
