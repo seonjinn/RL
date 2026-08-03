@@ -2173,6 +2173,7 @@ def test_oci_runtime_staging_renders_cpu_only_job(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert "--gres=gpu" not in result.stdout
     assert "--gpus" not in result.stdout
+    assert "--partition=cpu" in result.stdout
     assert "RUNTIME_PHASE=stage" in result.stdout
     assert "TEST_ONLY: no submission performed" in result.stdout
 

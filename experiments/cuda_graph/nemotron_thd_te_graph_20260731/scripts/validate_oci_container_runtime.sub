@@ -32,6 +32,7 @@ TEST_ONLY=${TEST_ONLY:-0}
 SBATCH_TEST_ONLY=${SBATCH_TEST_ONLY:-0}
 RUNTIME_PHASE=${RUNTIME_PHASE:-attest}
 NVTE_CUDA_ARCHS=${NVTE_CUDA_ARCHS:-100a}
+STAGE_PARTITION=${STAGE_PARTITION:-cpu}
 
 if [[ "${CONTAINER}" != /* ]]; then
   echo "CONTAINER must be an absolute path" >&2
@@ -59,6 +60,10 @@ if [[ "${RUNTIME_PHASE}" != "stage" && "${RUNTIME_PHASE}" != "attest" ]]; then
 fi
 if [[ "${NVTE_CUDA_ARCHS}" != "100a" ]]; then
   echo "OCI runtime staging requires NVTE_CUDA_ARCHS=100a" >&2
+  exit 2
+fi
+if [[ "${STAGE_PARTITION}" != "cpu" ]]; then
+  echo "OCI runtime staging requires STAGE_PARTITION=cpu" >&2
   exit 2
 fi
 if [[ "${TEST_ONLY}" == "1" && "${SBATCH_TEST_ONLY}" == "1" ]]; then
@@ -157,6 +162,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     "${script_path}"
   )
   if [[ "${RUNTIME_PHASE}" == "stage" ]]; then
+    sbatch_command[2]="--partition=${STAGE_PARTITION}"
     sbatch_command=("${sbatch_command[@]:0:4}" --gres=none "${sbatch_command[@]:4}")
   else
     sbatch_command=("${sbatch_command[@]:0:4}" --gres=gpu:4 "${sbatch_command[@]:4}")
