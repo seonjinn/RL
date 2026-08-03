@@ -447,6 +447,7 @@ def test_qwen235_qkvo_token_smoke_is_small_and_validity_gated() -> None:
         "lm_head",
     ]
     assert generation["vllm_cfg"]["enforce_eager"] is False
+    assert generation["vllm_kwargs"]["linear_backend"] == "flashinfer_cutedsl"
 
     wrapper = wrapper_path.read_text(encoding="utf-8")
     assert 'run_ab.sh" baseline' in wrapper

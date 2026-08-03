@@ -40,7 +40,7 @@ generation:
     max_num_seqs: 32
     max_num_batched_tokens: 16384
     enable_chunked_prefill: true
-    linear_backend: cutedsl
+    linear_backend: flashinfer_cutedsl
   colocated:
     enabled: false
     resources:
