@@ -5,7 +5,12 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
 import yaml
+
+from experiments.mxfp8_adaptive_rollout_v0251.response_validity_gate import (
+    evaluate_response_validity,
+)
 
 
 ROOT = Path(__file__).parents[3]
@@ -185,6 +190,69 @@ def test_correctness_gate_accepts_matched_non_regressing_results(
     assert report["paired"]["adaptive_losses"] == 0
 
 
+def test_correctness_gate_rejects_degenerate_zero_accuracy(tmp_path: Path) -> None:
+    result = _run_gate(tmp_path, [0.0] * 8, [0.0] * 8)
+
+    assert result.returncode != 0
+    assert "baseline accuracy is below the validity floor" in result.stderr
+    assert not (tmp_path / "report.json").exists()
+
+
+def test_response_validity_gate_rejects_repeated_single_token_outputs(
+    tmp_path: Path,
+) -> None:
+    evaluation = tmp_path / "evaluation_data.json"
+    _write_json(
+        evaluation,
+        {
+            "evaluation_data": [
+                {
+                    "sample_index": index,
+                    "prompt": f"problem-{index}",
+                    "response": "!" * 128,
+                    "reward": 0.0,
+                }
+                for index in range(8)
+            ]
+        },
+    )
+
+    with pytest.raises(ValueError, match="repetitive-response fraction"):
+        evaluate_response_validity(
+            evaluation,
+            expected_rows=8,
+            max_repetitive_fraction=0.1,
+        )
+
+
+def test_response_validity_gate_accepts_diverse_outputs(tmp_path: Path) -> None:
+    evaluation = tmp_path / "evaluation_data.json"
+    _write_json(
+        evaluation,
+        {
+            "evaluation_data": [
+                {
+                    "sample_index": index,
+                    "prompt": f"problem-{index}",
+                    "response": f"The answer to problem {index} is {index + 10}.",
+                    "reward": float(index % 2),
+                }
+                for index in range(8)
+            ]
+        },
+    )
+
+    report = evaluate_response_validity(
+        evaluation,
+        expected_rows=8,
+        max_repetitive_fraction=0.1,
+    )
+
+    assert report["status"] == "pass"
+    assert report["unique_response_count"] == 8
+    assert report["repetitive_response_count"] == 0
+
+
 def test_correctness_gate_rejects_statistically_significant_paired_regression(
     tmp_path: Path,
 ) -> None:
@@ -340,7 +408,8 @@ def test_qwen235_qkvo_gsm8k_gate_uses_matched_scope_and_artifacts() -> None:
     assert generation["model_name"] == "Qwen/Qwen3-235B-A22B"
     assert generation["temperature"] == 0.0
     assert generation["vllm_cfg"]["quantization_ignored_layer_kws"] == [
-        ".mlp.gate"
+        ".mlp.gate",
+        "lm_head",
     ]
     assert generation["vllm_cfg"]["enforce_eager"] is False
     assert config["data"]["dataset_name"] == "${oc.env:GSM8K_JSONL}"
@@ -357,5 +426,36 @@ def test_qwen235_qkvo_gsm8k_gate_uses_matched_scope_and_artifacts() -> None:
     assert "99de9254a1f51ec3f467055086d209511a49005f47bb0a260d24c63147178ef8" in submitter
     assert "--nodes=2" in submitter
     assert "--time=05:00:00" in submitter
+    assert "--segment=2" in submitter
+    assert "--dependency=" in submitter
+
+
+def test_qwen235_qkvo_token_smoke_is_small_and_validity_gated() -> None:
+    config_path = EXPERIMENT / "configs/eval_qwen3_235ba22b_qkvo_token_smoke.yaml"
+    wrapper_path = EXPERIMENT / "run_qwen235_qkvo_token_smoke.sh"
+    submitter_path = EXPERIMENT / "submit_qwen235_qkvo_token_smoke_ptyche.sh"
+    assert config_path.is_file()
+    assert wrapper_path.is_file()
+    assert submitter_path.is_file()
+
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    generation = config["generation"]
+    assert generation["max_new_tokens"] == 128
+    assert generation["num_prompts_per_step"] == 64
+    assert generation["vllm_cfg"]["quantization_ignored_layer_kws"] == [
+        ".mlp.gate",
+        "lm_head",
+    ]
+    assert generation["vllm_cfg"]["enforce_eager"] is False
+
+    wrapper = wrapper_path.read_text(encoding="utf-8")
+    assert 'run_ab.sh" baseline' in wrapper
+    assert "response_validity_gate" in wrapper
+    assert "--expected-rows 64" in wrapper
+
+    submitter = submitter_path.read_text(encoding="utf-8")
+    assert "NEMORL_ENABLE_QWEN235_QKVO_TOKEN_SMOKE=1" in submitter
+    assert "run_qwen235_qkvo_token_smoke.sh" in submitter
+    assert "--nodes=2" in submitter
     assert "--segment=2" in submitter
     assert "--dependency=" in submitter

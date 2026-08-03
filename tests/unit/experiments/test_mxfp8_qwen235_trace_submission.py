@@ -192,7 +192,8 @@ def test_qwen235_qkvo_trace_uses_separate_quantization_scope() -> None:
     assert generation["ignore_eos"] is True
     assert generation["stop_token_ids"] == []
     assert generation["vllm_cfg"]["quantization_ignored_layer_kws"] == [
-        ".mlp.gate"
+        ".mlp.gate",
+        "lm_head",
     ]
     assert generation["vllm_cfg"]["enforce_eager"] is True
     assert generation["vllm_kwargs"]["max_num_batched_tokens"] == 16384
@@ -227,7 +228,8 @@ def test_qwen235_qkvo_performance_uses_cuda_graph_and_qualified_artifacts() -> N
     assert generation["stop_token_ids"] == []
     assert generation["num_prompts_per_step"] == 64
     assert generation["vllm_cfg"]["quantization_ignored_layer_kws"] == [
-        ".mlp.gate"
+        ".mlp.gate",
+        "lm_head",
     ]
     assert generation["vllm_cfg"]["enforce_eager"] is False
     assert generation["vllm_kwargs"]["max_num_seqs"] == 32

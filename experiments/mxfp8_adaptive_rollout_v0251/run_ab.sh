@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ACTION=${1:-run}
-if [[ "$ACTION" != run && "$ACTION" != pair && "$ACTION" != smoke ]]; then
-  echo "usage: run_ab.sh [run|pair|smoke]" >&2
+if [[ "$ACTION" != run && "$ACTION" != pair && "$ACTION" != smoke && "$ACTION" != baseline ]]; then
+  echo "usage: run_ab.sh [run|pair|smoke|baseline]" >&2
   exit 2
 fi
 
@@ -61,7 +61,9 @@ if [[ "$ACTION" == smoke ]]; then
   exit 0
 fi
 
-if [[ "$ACTION" == pair ]]; then
+if [[ "$ACTION" == baseline ]]; then
+  bash "$ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_arm.sh" baseline
+elif [[ "$ACTION" == pair ]]; then
   bash "$ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_arm.sh" baseline
   bash "$ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_arm.sh" adaptive
   python3 -m experiments.mxfp8_adaptive_rollout_v0251.summarize \

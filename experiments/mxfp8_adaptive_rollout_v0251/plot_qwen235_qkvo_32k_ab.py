@@ -180,7 +180,7 @@ def _render_reports(
 <style>body{{font-family:Arial,sans-serif;margin:0;color:#172033}}main{{max-width:980px;margin:auto;padding:30px 24px 50px}}h1{{font-size:28px}}p{{line-height:1.55}}img{{width:100%;height:auto}}table{{border-collapse:collapse;width:100%;margin:20px 0}}th,td{{border-bottom:1px solid #ccd2dc;padding:9px;text-align:right}}th:first-child,td:first-child{{text-align:left}}.decision{{border-left:4px solid #356f3b;background:#f6f7f9;padding:10px 14px}}code{{background:#eef1f5;padding:2px 5px}}pre{{white-space:pre-wrap}}</style>
 </head><body><main>
 <h1>Qwen3-235B QKVO MXFP8 Adaptive Validation</h1>
-<p>vLLM 0.25.1, FlashInfer 0.6.13, CUDA Graph, TP4/EP4 on 8 GB200 GPUs. Both arms quantize QKV and O projections while leaving MoE expert weights outside this QKVO-only quantization scope.</p>
+<p>vLLM 0.25.1, FlashInfer 0.6.13, CUDA Graph, TP4/EP4 on 8 GB200 GPUs. Both arms use MXFP8 for MoE experts and QKVO projections while leaving the router gate and LM head unquantized.</p>
 <img src="qwen235_qkvo_32k_cutedsl_vs_adaptive.png" alt="QKVO CuTeDSL and TRTLLM Adaptive throughput">
 <table><thead><tr><th>QKVO MXFP8 policy</th><th>tokens/sec/GPU</th><th>vs CuTeDSL</th><th>Generation time (s)</th></tr></thead><tbody>{table_rows}</tbody></table>
 <p class="decision"><strong>Result:</strong> QKV TRTLLM Adaptive reached {ratio:.3f}x the matched QKVO CuTeDSL baseline ({delta:+.1f}%, {decision_class}).</p>

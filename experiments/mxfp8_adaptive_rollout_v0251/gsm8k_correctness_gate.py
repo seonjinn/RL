@@ -136,9 +136,12 @@ def evaluate_gate(
     manifest_path: Path,
     expected_rows: int,
     alpha: float,
+    min_baseline_accuracy: float,
 ) -> dict[str, Any]:
     if not 0.0 < alpha < 1.0:
         raise ValueError("alpha must be between zero and one")
+    if not 0.0 <= min_baseline_accuracy <= 1.0:
+        raise ValueError("minimum baseline accuracy must be between zero and one")
     dataset_sha256 = _validate_dataset(dataset_path, manifest_path, expected_rows)
     baseline_config = _validate_config(baseline_dir)
     adaptive_config = _validate_config(adaptive_dir)
@@ -167,12 +170,18 @@ def evaluate_gate(
     )
     baseline_accuracy = sum(baseline_rewards) / expected_rows
     adaptive_accuracy = sum(adaptive_rewards) / expected_rows
+    if baseline_accuracy < min_baseline_accuracy:
+        raise ValueError(
+            "baseline accuracy is below the validity floor: "
+            f"{baseline_accuracy:.6f} < {min_baseline_accuracy:.6f}"
+        )
     p_value = _one_sided_binomial_p_value(losses, gains)
     regression = adaptive_accuracy < baseline_accuracy and p_value <= alpha
     return {
         "status": "fail" if regression else "pass",
         "test": "one-sided exact paired binomial test on discordant rewards",
         "alpha": alpha,
+        "min_baseline_accuracy": min_baseline_accuracy,
         "row_count": expected_rows,
         "dataset_sha256": dataset_sha256,
         "baseline_accuracy": baseline_accuracy,
@@ -204,6 +213,7 @@ def main() -> None:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--expected-rows", type=int, default=1319)
     parser.add_argument("--alpha", type=float, default=0.05)
+    parser.add_argument("--min-baseline-accuracy", type=float, default=0.01)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -215,6 +225,7 @@ def main() -> None:
             manifest_path=args.manifest,
             expected_rows=args.expected_rows,
             alpha=args.alpha,
+            min_baseline_accuracy=args.min_baseline_accuracy,
         )
     except ValueError as error:
         raise SystemExit(f"Qwen235 GSM8K correctness gate failed: {error}") from error

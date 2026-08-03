@@ -90,4 +90,5 @@ PYTHONPATH="$ROOT:$VLLM_RUNTIME_ROOT" "$driver_python" \
   --manifest "$gsm8k_manifest" \
   --expected-rows 1319 \
   --alpha 0.05 \
+  --min-baseline-accuracy 0.01 \
   --output "$RESULT_ROOT/gsm8k_correctness_gate.json"
