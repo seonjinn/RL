@@ -11,8 +11,6 @@ policy:
       fp8_param: true
     optimizer:
       use_precision_aware_optimizer: false
-    env_vars:
-      NVTE_FP8_BLOCK_SCALING_FP32_SCALES: "1"
   generation:
     vllm_cfg:
       precision: fp8
