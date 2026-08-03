@@ -115,8 +115,16 @@ def _runtime_payload() -> str:
     source = (
         EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
     ).read_text()
-    start = source.index("runtime_command='") + len("runtime_command='")
-    return source[start : source.index("'\n\nset +e", start)]
+    start = source.index("stage_command='") + len("stage_command='")
+    return source[start : source.index("'\n\nattestation_command=", start)]
+
+
+def _attestation_payload() -> str:
+    source = (
+        EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
+    ).read_text()
+    start = source.index("attestation_command='") + len("attestation_command='")
+    return source[start : source.index("'\n\npayload=", start)]
 
 
 def _stage_runtime_payload_fixture(
@@ -164,7 +172,8 @@ def _stage_runtime_payload_fixture(
     (source_project_root / ".source-manifest.env").write_text("fixture_manifest=true\n")
     outer_exclude = source_project_root / ".git" / "info" / "exclude"
     outer_exclude.write_text(outer_exclude.read_text() + "\n.source-manifest.env\n")
-    environment_root = tmp_path / "runtime-environment"
+    runtime_stage_root = tmp_path / "runtime-stage"
+    environment_root = runtime_stage_root / "environment"
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     _write_executable(
@@ -182,7 +191,7 @@ def _stage_runtime_payload_fixture(
         source_validator=source_validator,
         source_lock=source_lock,
         environment_root=environment_root,
-        copied_project_root=Path(f"{environment_root}-source"),
+        copied_project_root=runtime_stage_root / "source",
         fake_bin=fake_bin,
         cuda_home=cuda_home,
     )
@@ -197,12 +206,14 @@ def _run_runtime_payload(
     runtime_environment = environment.copy()
     runtime_environment.setdefault("CUDA_HOME", str(fixture.cuda_home))
     runtime_environment.setdefault("CUDACXX", str(fixture.cuda_home / "bin" / "nvcc"))
+    runtime_stage_root = fixture.environment_root.parent
+    runtime_environment.setdefault("UV_CACHE_DIR", str(runtime_stage_root / "build-cache"))
     runtime_environment.setdefault(
-        "UV_CACHE_DIR", f"{fixture.environment_root}-uv-cache"
+        "NVTE_CMAKE_BUILD_DIR", str(runtime_stage_root / "te-cmake")
     )
-    runtime_environment.setdefault(
-        "NVTE_CMAKE_BUILD_DIR", f"{fixture.environment_root}-te-cmake"
-    )
+    runtime_environment.setdefault("RUNTIME_STAGE_ROOT", str(runtime_stage_root))
+    runtime_environment.setdefault("RUNTIME_STAGE_MARKER_SHA256", "f" * 64)
+    runtime_environment.setdefault("NVTE_CUDA_ARCHS", "100a")
     runtime_environment["PATH"] = (
         f"{fixture.cuda_home / 'bin'}:{runtime_environment.get('PATH', '')}"
     )
@@ -233,6 +244,7 @@ def _run_runtime_payload(
             TE_COMMIT,
             "--output",
             str(fixture.source_project_root.parent / "runtime.json"),
+            str(runtime_stage_root),
         ],
         env=runtime_environment,
         check=False,
@@ -583,6 +595,7 @@ printf '{"status":"passed"}\n' >"${output}"
 """,
     )
     environment = os.environ.copy()
+    runtime_stage_root = artifact_dir / "staged-runtimes" / ("a" * 64)
     environment.update(
         {
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
@@ -603,6 +616,9 @@ printf '{"status":"passed"}\n' >"${output}"
             "EXPECTED_TE_VERSION_BASE_SHA": TE_COMMIT,
             "SOURCE_PROVENANCE_VERIFIER": str(provenance_verifier),
             "PROVENANCE_LOG": str(provenance_log),
+            "RUNTIME_PHASE": "stage",
+            "RUNTIME_STAGE_ROOT": str(runtime_stage_root),
+            "RUNTIME_STAGE_MARKER_SHA256": "b" * 64,
         }
     )
 
@@ -626,15 +642,15 @@ printf '{"status":"passed"}\n' >"${output}"
         "PATH=/root/.local/bin:/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin:"
         "/opt/nemo_rl_venv/bin" in command
     )
-    assert "UV_CACHE_DIR=/tmp/nemo-rl-runtime-733-uv-cache" in command
-    assert "NVTE_CMAKE_BUILD_DIR=/tmp/nemo-rl-runtime-733-te-cmake" in command
+    assert f"UV_CACHE_DIR={runtime_stage_root}/build-cache" in command
+    assert f"NVTE_CMAKE_BUILD_DIR={runtime_stage_root}/te-cmake" in command
     assert "/root/.cache/uv" not in command
     assert "CUDA_HOME=/usr/local/cuda" in command
     assert "CUDACXX=/usr/local/cuda/bin/nvcc" in command
     assert "NRL_FORCE_REBUILD_VENVS=true" in command
     assert "NVTE_WITH_NCCL_EP=0" in command
-    assert "UV_PROJECT_ENVIRONMENT=/tmp/nemo-rl-runtime-733" in command
-    expected_uv_executable = artifact_dir / f"uv-{UV_VERSION}-733" / "uv"
+    assert f"UV_PROJECT_ENVIRONMENT={runtime_stage_root}/environment" in command
+    expected_uv_executable = runtime_stage_root / "uv" / "uv"
     assert f"PINNED_UV_VERSION={UV_VERSION}" in command
     assert f"UV_EXECUTABLE={expected_uv_executable}" in command
     assert f"PATH={expected_uv_executable.parent}:" not in command
@@ -663,32 +679,14 @@ printf '{"status":"passed"}\n' >"${output}"
         "--locked --extra mcore --no-python-downloads" in command
     )
     assert "--no-editable" not in command
-    assert '--expected-environment-root "${environment_root}"' in command
-    assert '--expected-project-root "${project_root}"' in command
-    assert '--nemo-rl-commit "${nemo_rl_commit}"' in command
-    assert '--bridge-commit "${bridge_commit}"' in command
-    assert '--mcore-commit "${mcore_commit}"' in command
-    assert '--uv-lock-sha256 "${uv_lock_sha256}"' in command
-    assert '--expected-te-commit "${expected_te_commit}"' in command
-    assert (
-        '--expected-te-version-base-commit '
-        '"${expected_te_version_base_commit}"' in command
-    )
-    assert '--expected-python-version "${expected_python_version}"' in command
-    assert '--expected-python-install-dir "${python_install_dir}"' in command
-    assert '--expected-uv-version "${expected_uv_version}"' in command
-    assert '--expected-uv-executable "${uv_executable}"' in command
-    assert '--expected-nvte-with-nccl-ep "0"' in command
-    assert '--container-device "${container_device}"' in command
-    assert '--container-inode "${container_inode}"' in command
-    assert '--container-size "${container_size}"' in command
-    assert '--container-mtime-seconds "${container_mtime_seconds}"' in command
-    assert '--container-ctime-seconds "${container_ctime_seconds}"' in command
+    assert '"schema=runtime-stage-v1"' in command
+    assert 'mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"' in command
+    assert 'chmod -R a-w -- "${runtime_stage_root}"' in command
     assert NEMORL_COMMIT in command
     assert BRIDGE_COMMIT in command
     assert MCORE_COMMIT in command
     assert TE_COMMIT in command
-    assert "/tmp/nemo-rl-runtime-733" in command
+    assert str(runtime_stage_root) in command
     assert "/ambient/site-packages" not in command
     assert f"{REPO_ROOT}:{REPO_ROOT}:ro" in command
     assert (artifact_dir / "oci-container-runtime-733.diagnostics.log").is_file()
@@ -707,6 +705,108 @@ printf '{"status":"passed"}\n' >"${output}"
         ),
         MCORE_COMMIT,
     ]
+
+
+def test_runtime_wrapper_separates_cpu_stage_from_gpu_attestation() -> None:
+    source = (
+        EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
+    ).read_text()
+
+    assert "RUNTIME_PHASE=${RUNTIME_PHASE:-attest}" in source
+    assert 'if [[ "${RUNTIME_PHASE}" == "stage" ]]' in source
+    assert "NVTE_CUDA_ARCHS=100a" in source
+    assert "runtime-stage-v1" in source
+    assert "uv_lock_sha256" in source
+    assert "RUNTIME_STAGE_MARKER_SHA256" in source
+    assert 'mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"' in source
+    assert '-perm -200 -o -perm -020 -o -perm -002' in source
+    assert "attestation_command='" in source
+    attestation = source.split("attestation_command='", 1)[1].split("'\n\n", 1)[0]
+    assert "uv run" not in attestation
+    assert "python install" not in attestation
+    assert "curl" not in attestation
+    assert "cmake" not in attestation.lower()
+    assert 'sha256sum "${marker}"' in attestation
+    assert '"${runtime_python}" "${source_validator}"' in attestation
+
+
+@pytest.mark.parametrize("marker_kind", ("missing", "symlink", "mismatch", "writable"))
+def test_gpu_attestation_rejects_untrusted_runtime_stage(
+    tmp_path: Path, marker_kind: str
+) -> None:
+    stage_root = tmp_path / "stage"
+    stage_root.mkdir()
+    marker = stage_root / "complete.env"
+    expected_content = b"schema=runtime-stage-v1\n"
+    expected_sha256 = hashlib.sha256(expected_content).hexdigest()
+    if marker_kind == "symlink":
+        target = tmp_path / "marker-target"
+        target.write_bytes(expected_content)
+        marker.symlink_to(target)
+    elif marker_kind != "missing":
+        marker.write_bytes(
+            b"tampered\n" if marker_kind == "mismatch" else expected_content
+        )
+    if marker_kind != "writable":
+        stage_root.chmod(0o555)
+        if marker.exists() and not marker.is_symlink():
+            marker.chmod(0o444)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(
+        fake_bin / "sha256sum",
+        '#!/bin/sh\nexec /usr/bin/shasum -a 256 "$@"\n',
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "RUNTIME_STAGE_MARKER_SHA256": expected_sha256,
+        }
+    )
+    arguments = [
+        "bash",
+        "-c",
+        _attestation_payload(),
+        "bash",
+        str(tmp_path / "source"),
+        str(tmp_path / "source" / "validator.py"),
+        str(stage_root / "environment"),
+        str(tmp_path / "container.sqsh"),
+        "a" * 64,
+        NEMORL_COMMIT,
+        BRIDGE_COMMIT,
+        MCORE_COMMIT,
+        "b" * 64,
+        TE_COMMIT,
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        TE_COMMIT,
+        "--output",
+        str(tmp_path / "runtime.json"),
+        str(stage_root),
+    ]
+
+    result = subprocess.run(
+        arguments,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    expected_error = {
+        "missing": "completion marker is missing or unsafe",
+        "symlink": "completion marker is missing or unsafe",
+        "mismatch": "marker SHA256 mismatch",
+        "writable": "contains writable state",
+    }[marker_kind]
+    assert expected_error in result.stderr
 
 
 def test_runtime_payload_rejects_missing_nvcc_before_staging_uv(
@@ -741,29 +841,20 @@ def test_runtime_payload_rejects_missing_nvcc_before_staging_uv(
     assert not fixture.copied_project_root.exists()
 
 
-@pytest.mark.parametrize(
-    ("environment_variable", "path_suffix"),
-    (
-        ("UV_CACHE_DIR", "uv-cache"),
-        ("NVTE_CMAKE_BUILD_DIR", "te-cmake"),
-    ),
-)
 @pytest.mark.parametrize("path_kind", ("directory", "symlink"))
-def test_runtime_payload_rejects_preexisting_job_local_build_state(
+def test_runtime_payload_rejects_preexisting_keyed_stage_root(
     tmp_path: Path,
-    environment_variable: str,
-    path_suffix: str,
     path_kind: str,
 ) -> None:
     fixture = _stage_runtime_payload_fixture(
         tmp_path,
         verifier_body="#!/bin/sh\nexit 0\n",
     )
-    state_path = Path(f"{fixture.environment_root}-{path_suffix}")
+    state_path = fixture.environment_root.parent
     if path_kind == "directory":
         state_path.mkdir()
     else:
-        symlink_target = tmp_path / f"{path_suffix}-target"
+        symlink_target = tmp_path / "stage-target"
         symlink_target.mkdir()
         state_path.symlink_to(symlink_target, target_is_directory=True)
     environment = os.environ.copy()
@@ -772,14 +863,15 @@ def test_runtime_payload_rejects_preexisting_job_local_build_state(
             "PATH": f"{fixture.fake_bin}:/usr/bin:/bin",
             "PINNED_UV_VERSION": UV_VERSION,
             "UV_EXECUTABLE": str(tmp_path / f"uv-{UV_VERSION}-733" / "uv"),
-            environment_variable: str(state_path),
+            "UV_CACHE_DIR": str(state_path / "build-cache"),
+            "NVTE_CMAKE_BUILD_DIR": str(state_path / "te-cmake"),
         }
     )
 
     result = _run_runtime_payload(fixture, environment=environment)
 
     assert result.returncode == 2
-    assert f"Job-local {environment_variable} must not already exist" in result.stderr
+    assert "Runtime stage destination already exists" in result.stderr
     assert not fixture.copied_project_root.exists()
 
 

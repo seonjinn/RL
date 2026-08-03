@@ -2160,6 +2160,23 @@ def test_oci_container_runtime_smoke_renders_four_gpu_batch_job(
     assert not (tmp_path / "artifacts").exists()
 
 
+def test_oci_runtime_staging_renders_cpu_only_job(tmp_path: Path) -> None:
+    result = _run_script(
+        "scripts/validate_oci_container_runtime.sub",
+        TEST_ONLY="1",
+        RUNTIME_PHASE="stage",
+        CONTAINER="/lustre/example/nemo_rl_nightly.sqsh",
+        CONTAINER_SHA256=CONTAINER_SHA256,
+        ARTIFACT_DIR=str(tmp_path / "artifacts"),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--gres=gpu" not in result.stdout
+    assert "--gpus" not in result.stdout
+    assert "RUNTIME_PHASE=stage" in result.stdout
+    assert "TEST_ONLY: no submission performed" in result.stdout
+
+
 def test_oci_container_runtime_smoke_uses_persistent_probe_when_spooled(
     tmp_path: Path,
 ) -> None:
@@ -2197,6 +2214,7 @@ printf '{"status":"passed"}\n' >"${output}"
 """
     )
     fake_srun.chmod(0o755)
+    runtime_stage_root = artifacts / "staged-runtimes" / ("a" * 64)
     environment = os.environ.copy()
     environment.update(
         {
@@ -2214,6 +2232,8 @@ printf '{"status":"passed"}\n' >"${output}"
             "EXPECTED_TE_SHA": TE_SHA,
             "EXPECTED_TE_VERSION_BASE_SHA": TE_SHA,
             "SOURCE_PROVENANCE_VERIFIER": str(provenance_verifier),
+            "RUNTIME_STAGE_ROOT": str(runtime_stage_root),
+            "RUNTIME_STAGE_MARKER_SHA256": "b" * 64,
         }
     )
 
