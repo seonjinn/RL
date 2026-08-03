@@ -582,6 +582,64 @@ def test_load_mtp_weights_from_disk_loads_only_mtp_layer(tmp_path, monkeypatch):
 
 
 @pytest.mark.vllm
+def test_load_mtp_weights_from_disk_uses_layerwise_reload_for_trtllm(
+    tmp_path, monkeypatch
+):
+    """TRTLLM MTP weights must be reloaded before restoring the runtime layout."""
+    from nemo_rl.models.generation.vllm.quantization import fp8
+
+    model_dir = tmp_path / "ckpt"
+    _write_sharded_checkpoint(
+        model_dir,
+        {
+            "model-00001-of-00001.safetensors": {
+                "model.layers.2.mlp.up_proj.weight": torch.randn(4, 4),
+            }
+        },
+    )
+    ext = _make_extension_with_drafter(mtp_start_layer_idx=2, num_mtp_layers=1)
+    draft_model = ext._get_drafter_model()
+    draft_model_config = object()
+    ext.model_runner.vllm_config = SimpleNamespace(
+        kernel_config=SimpleNamespace(moe_backend="flashinfer_trtllm"),
+        speculative_config=SimpleNamespace(
+            draft_model_config=draft_model_config,
+        ),
+    )
+
+    call_order = []
+    ext._load_draft_weights = lambda weights: call_order.append("load")
+    monkeypatch.setattr(fp8, "is_fp8_model", lambda _: False)
+    monkeypatch.setattr(
+        "vllm.config.set_current_vllm_config", lambda cfg: contextlib.nullcontext()
+    )
+    monkeypatch.setattr(
+        "vllm.model_executor.model_loader.reload.initialize_layerwise_reload",
+        lambda model: call_order.append(("initialize", model)),
+    )
+    monkeypatch.setattr(
+        "vllm.model_executor.model_loader.reload.finalize_layerwise_reload",
+        lambda model, config: call_order.append(("finalize", model, config)),
+    )
+    process_weights = MagicMock()
+    monkeypatch.setattr(
+        "vllm.model_executor.model_loader.utils.process_weights_after_loading",
+        process_weights,
+    )
+    monkeypatch.setattr(torch.accelerator, "synchronize", MagicMock())
+
+    result = ext.load_mtp_weights_from_disk(str(model_dir))
+
+    assert result is True
+    assert call_order == [
+        ("initialize", draft_model),
+        "load",
+        ("finalize", draft_model, draft_model_config),
+    ]
+    process_weights.assert_not_called()
+
+
+@pytest.mark.vllm
 @pytest.mark.parametrize("is_last_rank", [False, True])
 def test_load_mtp_weights_from_disk_without_drafter(
     tmp_path, monkeypatch, is_last_rank

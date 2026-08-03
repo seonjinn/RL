@@ -579,20 +579,36 @@ class VllmInternalWorkerExtension:
                 f"include MTP layer weights to run deepseek_mtp speculative decoding."
             )
 
-        self._load_draft_weights(weights)
-
-        # The MTP block contains MoE experts whose weights need post-load
-        # processing (e.g. grouped-GEMM layout), matching the main-model path.
         from vllm.config import set_current_vllm_config
-        from vllm.model_executor.model_loader.utils import (
-            process_weights_after_loading,
-        )
 
         draft_model_config = (
             self.model_runner.vllm_config.speculative_config.draft_model_config
         )
-        with set_current_vllm_config(self.model_runner.vllm_config):
-            process_weights_after_loading(draft_model, draft_model_config, self.device)
+        if self._uses_unquantized_flashinfer_trtllm():
+            from vllm.model_executor.model_loader.reload import (
+                finalize_layerwise_reload,
+                initialize_layerwise_reload,
+            )
+
+            with set_current_vllm_config(self.model_runner.vllm_config):
+                with torch.device(self.device):
+                    initialize_layerwise_reload(draft_model)
+                    self._load_draft_weights(weights)
+                    finalize_layerwise_reload(draft_model, draft_model_config)
+            torch.accelerator.synchronize()
+        else:
+            self._load_draft_weights(weights)
+
+            # The MTP block contains MoE experts whose weights need post-load
+            # processing (e.g. grouped-GEMM layout), matching the main-model path.
+            from vllm.model_executor.model_loader.utils import (
+                process_weights_after_loading,
+            )
+
+            with set_current_vllm_config(self.model_runner.vllm_config):
+                process_weights_after_loading(
+                    draft_model, draft_model_config, self.device
+                )
         # Mark that the MTP drafter is served from a one-time disk load so refit
         # does not re-load or re-process these static weights.
         self._mtp_drafter_from_disk = True
