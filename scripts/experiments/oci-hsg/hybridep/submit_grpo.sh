@@ -82,6 +82,10 @@ PADDING_LOG_ENABLED=${NEMO_RL_HYBRIDEP_LOG_PACKING:-0}
 PADDING_LOG_MAX_CALLS=${NEMO_RL_HYBRIDEP_LOG_PACKING_MAX_CALLS:-4096}
 PADDING_LOG_RANKS=${NEMO_RL_HYBRIDEP_LOG_PACKING_RANKS:-0}
 PADDING_LOG_REDUCE=${NEMO_RL_HYBRIDEP_LOG_PACKING_REDUCE:-1}
+HYBRIDEP_RANKS_PER_NVLINK_DOMAIN=${HYBRIDEP_RANKS_PER_NVLINK_DOMAIN:-}
+HYBRIDEP_COMBINE_CHUNK_TOKENS=${HYBRIDEP_COMBINE_CHUNK_TOKENS:-}
+HYBRIDEP_NVLINK_DOMAIN_SIZE=${HYBRIDEP_NVLINK_DOMAIN_SIZE:-}
+HYBRIDEP_USE_MNNVL=${HYBRIDEP_USE_MNNVL:-}
 CONTAINER=${CONTAINER:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/qwen30-hybridep-oci-20260727/nemo_rl_nightly.sqsh}
 HF_HOME=${HF_HOME:-/lustre/fsw/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/hf_home}
 HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-"${HF_HOME}/cache"}
@@ -212,6 +216,30 @@ if [[ "${DISPATCHER_MODE}" == "hybridep" ]]; then
     ++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep
     ++policy.megatron_cfg.moe_hybridep_num_sms=32
   )
+  topology_values=(
+    "${HYBRIDEP_RANKS_PER_NVLINK_DOMAIN}"
+    "${HYBRIDEP_COMBINE_CHUNK_TOKENS}"
+    "${HYBRIDEP_NVLINK_DOMAIN_SIZE}"
+    "${HYBRIDEP_USE_MNNVL}"
+  )
+  topology_value_count=0
+  for topology_value in "${topology_values[@]}"; do
+    if [[ -n "${topology_value}" ]]; then
+      topology_value_count=$((topology_value_count + 1))
+    fi
+  done
+  if [[ "${topology_value_count}" -ne 0 && "${topology_value_count}" -ne 4 ]]; then
+    printf 'Set all four HYBRIDEP topology variables or leave all four unset.\n' >&2
+    exit 2
+  fi
+  if [[ "${topology_value_count}" -eq 4 ]]; then
+    driver_args+=(
+      "++policy.megatron_cfg.env_vars.NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN='${HYBRIDEP_RANKS_PER_NVLINK_DOMAIN}'"
+      "++policy.megatron_cfg.env_vars.NUM_OF_TOKENS_PER_CHUNK_COMBINE_API='${HYBRIDEP_COMBINE_CHUNK_TOKENS}'"
+      "++policy.megatron_cfg.env_vars.NVLINK_DOMAIN_SIZE='${HYBRIDEP_NVLINK_DOMAIN_SIZE}'"
+      "++policy.megatron_cfg.env_vars.USE_MNNVL='${HYBRIDEP_USE_MNNVL}'"
+    )
+  fi
   if [[ "${PADDING_LOG_ENABLED}" == "1" ]]; then
     driver_args+=(
       "++policy.megatron_cfg.env_vars.NEMO_RL_HYBRIDEP_LOG_PACKING='${PADDING_LOG_ENABLED}'"
@@ -283,6 +311,10 @@ metadata_path="${RUN_ROOT}/submission.env"
   printf 'padding_log_max_calls=%q\n' "${PADDING_LOG_MAX_CALLS}"
   printf 'padding_log_ranks=%q\n' "${PADDING_LOG_RANKS}"
   printf 'padding_log_reduce=%q\n' "${PADDING_LOG_REDUCE}"
+  printf 'hybridep_ranks_per_nvlink_domain=%q\n' "${HYBRIDEP_RANKS_PER_NVLINK_DOMAIN}"
+  printf 'hybridep_combine_chunk_tokens=%q\n' "${HYBRIDEP_COMBINE_CHUNK_TOKENS}"
+  printf 'hybridep_nvlink_domain_size=%q\n' "${HYBRIDEP_NVLINK_DOMAIN_SIZE}"
+  printf 'hybridep_use_mnnvl=%q\n' "${HYBRIDEP_USE_MNNVL}"
   printf 'nccl_nvls_enable=%q\n' "${NCCL_NVLS_ENABLE:-}"
   printf 'rl_commit=%q\n' "${RL_COMMIT}"
   printf 'bridge_commit=%q\n' "${BRIDGE_COMMIT}"

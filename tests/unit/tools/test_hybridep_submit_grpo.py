@@ -19,6 +19,25 @@ from pathlib import Path
 
 import pytest
 
+HYBRIDEP_COMMIT = "17cfb817bccec3a9c247013360cc550c2bac441e"
+
+
+def test_qwen_profile_uses_locked_hybridep_commit() -> None:
+    project_root = Path(__file__).resolve().parents[3]
+    profile = (
+        project_root
+        / "scripts"
+        / "experiments"
+        / "oci-hsg"
+        / "hybridep"
+        / "models"
+        / "qwen3-30ba3b-4n4g.env"
+    ).read_text()
+    lock = (project_root / "uv.lock").read_text()
+
+    assert f"DEFAULT_DEEPEP_COMMIT={HYBRIDEP_COMMIT}" in profile
+    assert f"rev={HYBRIDEP_COMMIT}#{HYBRIDEP_COMMIT}" in lock
+
 
 def _run_launcher(
     tmp_path: Path,
@@ -103,8 +122,25 @@ def test_recipe_dispatcher_preserves_recipe_default(tmp_path: Path) -> None:
     driver_args = _run_launcher(tmp_path, dispatcher_mode="recipe")
 
     assert "policy.megatron_cfg.moe_token_dispatcher_type=flex" not in driver_args
-    assert "++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep" not in driver_args
+    assert (
+        "++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep" not in driver_args
+    )
     assert "++policy.megatron_cfg.moe_hybridep_num_sms=32" not in driver_args
+
+
+def test_hybridep_dispatcher_sets_qwen_gb200_topology(tmp_path: Path) -> None:
+    driver_args = _run_launcher(tmp_path, dispatcher_mode="hybridep")
+
+    assert (
+        "++policy.megatron_cfg.env_vars."
+        "NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN='16'" in driver_args
+    )
+    assert (
+        "++policy.megatron_cfg.env_vars."
+        "NUM_OF_TOKENS_PER_CHUNK_COMBINE_API='128'" in driver_args
+    )
+    assert "++policy.megatron_cfg.env_vars.NVLINK_DOMAIN_SIZE='72'" in driver_args
+    assert "++policy.megatron_cfg.env_vars.USE_MNNVL='1'" in driver_args
 
 
 def test_unknown_dispatcher_mode_is_rejected(tmp_path: Path) -> None:
@@ -125,8 +161,7 @@ def test_padding_logging_reaches_megatron_worker_environment(tmp_path: Path) -> 
     )
 
     assert (
-        "++policy.megatron_cfg.env_vars.NEMO_RL_HYBRIDEP_LOG_PACKING='1'"
-        in driver_args
+        "++policy.megatron_cfg.env_vars.NEMO_RL_HYBRIDEP_LOG_PACKING='1'" in driver_args
     )
     assert (
         "++policy.megatron_cfg.env_vars.NEMO_RL_HYBRIDEP_LOG_PACKING_MAX_CALLS='4096'"
