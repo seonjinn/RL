@@ -33,3 +33,35 @@
 - OCI-HSG access, both model snapshots, and the nightly image remain available;
   a fresh remote campaign checkout and runtime attestation are still required.
   No campaign job has been submitted from this branch.
+
+## 2026-08-02 18:50:00 PDT
+
+- Completed review remediation through `aed7138f6`: content-bound campaign
+  gates and profiles, self-validating Router Replay attempts, atomic exact run
+  metadata, and identity-safe TensorBoard/W&B export.
+- Final reporting audit found that graph arms required cache-miss telemetry but
+  the worker emitted only hits, captures, replays, and evictions. Added a
+  first-class lookup miss counter rather than incorrectly deriving misses from
+  captures. Warming and captured outcomes are misses; captured outcomes alone
+  increment capture count.
+- Verified 89 lifecycle, 70 policy-worker/packing, and 59 algorithm telemetry
+  tests locally. Qwen30 and Qwen235 smoke matrices also rendered successfully
+  with `TEST_ONLY=1`, which neither created run directories nor contacted
+  Slurm.
+- Started independent final code, launcher, and documentation reviews. No push,
+  OCI checkout mutation, scheduler query, or campaign GPU submission has been
+  made yet.
+- Committed the exact cache-miss telemetry as `f31d46874`. Independent final
+  code review reported `ADDRESSED` with 0 critical findings, 0 warnings, and
+  0 nits; its targeted aggregate was 292 passing tests. The three explicit
+  invalid-input probes all exited 2 without an `SBATCH:` line.
+- Documentation audit found two additional operational blockers: legacy Qwen
+  performance/accuracy wrappers did not honor the campaign contract, and the
+  Qwen235 R3 envelope asserted rather than bound its raw diagnostic execution.
+  The generic wrappers now reject Qwen before launch output. R3 gate validation
+  now rejects every hand-authored envelope until a content-bound Slurm producer
+  exists, leaving Qwen235 A/B runnable and C/E dependency-blocked.
+- Campaign matrix and launcher suites passed 45 and 96 tests respectively.
+  The post-audit independent re-review reported `ADDRESSED` with 0 critical
+  findings, 0 warnings, and 0 nits. Committed the fail-closed remediation as
+  `75ddbef3d`.

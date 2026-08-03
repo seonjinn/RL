@@ -4,7 +4,7 @@
 - Repo: /Users/sna/CudaGraph_PR/RL-thd-cg-hybrid-nemotron-20260731
 - Branch: experiment/thd-cg-hybrid-nemotron-20260731
 - Started: 2026-08-02 12:21:26 PDT
-- Updated: 2026-08-02 15:54:34 PDT
+- Updated: 2026-08-02 19:09:10 PDT
 
 ## Goal
 
@@ -12,9 +12,9 @@ Establish correctness and performance of Transformer Engine partial CUDA Graph s
 
 ## Current Subtask
 
-Document and locally verify the reproducible Qwen3-30B-A3B and
-Qwen3-235B-A22B campaign that separates CUDA Graph effects from
-vLLM-to-Megatron router mismatch.
+Finish the source review and local verification for the reproducible
+Qwen3-30B-A3B and Qwen3-235B-A22B campaign, then push it and create the exact
+OCI-HSG runtime attestation required before the first GPU smoke.
 
 ## Loaded Skills
 
@@ -27,7 +27,20 @@ vLLM-to-Megatron router mismatch.
 
 ## Current Status
 
-The source worktree was clean at `e1c24cd9d` before these session notes were generated. The existing harness supports Qwen3-30B-A3B but not Qwen3-235B-A22B. Qwen3-30B-A3B has both a 4-node performance recipe and an 8-node Router Replay recipe. Latest main is one commit ahead and already contains a validated Qwen3-235B-A22B 16n4g recipe. OCI-HSG job `5794372` completed that 64-GPU recipe for 20 steps, proving the model snapshot and topology are available; it is not a matched CG baseline because it used a separate source branch and W&B project. Current evidence does not prove an eager-versus-CG router defect; the strongest hypothesis is a rare vLLM Triton versus eager Megatron route mismatch. Router Replay plus reusable router CUDA graphs has a separate stale-route-input risk and must not be treated as a safe production comparison until routed expert IDs become explicit graph inputs or persistent buffers.
+Implementation through `75ddbef3d` contains the safe Qwen A/B/C/E launch
+matrix, immutable gate/profile/runtime bindings, self-validating Router Replay
+execution, exact submission metadata, identity-safe TensorBoard/W&B exporters,
+and first-class `cache_miss_count`: warming and capture are misses, hit is not,
+and runtime
+validation enforces `capture_count <= cache_miss_count` plus
+`eviction_count <= capture_count`. Local focused verification is green:
+89 lifecycle, 70 policy-worker/packing, and 59 algorithm telemetry tests.
+Qwen30 and Qwen235 `TEST_ONLY=1` smoke renders pass without scheduler contact.
+No campaign GPU job has been submitted from this branch. OCI-HSG job `5794372`
+is useful prior Qwen235 readiness evidence, but is not a matched CG baseline.
+The final documentation audit also found that the former Qwen235 C/E R3 gate
+was self-attested. R3 gate validation is now disabled until a content-bound
+Slurm diagnostic producer exists; Qwen235 A/B remain runnable.
 
 ## Plan
 
@@ -40,7 +53,14 @@ The source worktree was clean at `e1c24cd9d` before these session notes were gen
   validation condition launchers.
 - [x] Make R3 plus `moe_router`/`moe_preprocess` fail before any scheduler call.
 - [x] Add R3 identity and trace fields to normalized result collection/reporting.
-- [ ] Run the dedicated final source review, then push the reviewed branch.
+- [x] Add identity-safe TensorBoard/W&B export and exact graph telemetry.
+- [x] Render Qwen30 and Qwen235 smoke matrices in offline `TEST_ONLY=1` mode.
+- [x] Complete the dedicated final source review and fail-closed probes; the
+  review verdict is `ADDRESSED` with 0 critical findings, warnings, or nits.
+- [x] Reject Qwen use through legacy generic performance/accuracy wrappers and
+  disable self-attested Qwen235 R3 evidence before scheduler contact.
+- [x] Commit fail-closed unattested-route remediation as `75ddbef3d`.
+- [ ] Commit the final runbook/session ledger and push the reviewed branch.
 - [ ] Create the remote OCI campaign checkout and fresh four-GPU runtime
   attestation.
 - [ ] Dry-run and submit the approved Qwen3-30B-A3B comparison on OCI-HSG.
@@ -57,6 +77,10 @@ The source worktree was clean at `e1c24cd9d` before these session notes were gen
 - The concrete OCI runtime profile must be regenerated for this branch before
   an attested matrix launch.
 - R3 plus `moe_router`/`moe_preprocess` CUDA Graph reuse remains intentionally
-  unsupported because route IDs are not explicit graph replay inputs.
-- A final source review, remote checkout, and fresh runtime attestation are
-  required before any non-TEST_ONLY submission.
+  fail-closed because route IDs are not explicit graph replay inputs. The safe
+  R3 graph comparison is arm E (`attn` only, router eager).
+- Qwen235 C/E additionally require a new producer that binds raw diagnostics,
+  exact argv, exit status, Slurm identity, and runtime provenance. Until then,
+  only Qwen235 A/B may run.
+- A remote checkout and fresh runtime attestation are required before any
+  non-TEST_ONLY submission.
