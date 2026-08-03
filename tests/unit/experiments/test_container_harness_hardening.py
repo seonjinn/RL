@@ -798,6 +798,7 @@ def test_gpu_attestation_rejects_untrusted_runtime_stage(
         capture_output=True,
         text=True,
     )
+    stage_root.chmod(0o755)
 
     assert result.returncode == 2
     expected_error = {
