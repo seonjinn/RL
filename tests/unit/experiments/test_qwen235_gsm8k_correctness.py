@@ -323,3 +323,39 @@ def test_qwen235_gsm8k_submitter_is_pinned_and_dependency_free() -> None:
     assert 'git -C "$NEMO_RL_REPO_ROOT" pull --ff-only' in submitter
     assert 'require_clean_repo "$NEMO_RL_REPO_ROOT"' in submitter
     assert 'require_clean_repo "$CUSTOM_VLLM_SOURCE"' in submitter
+
+
+def test_qwen235_qkvo_gsm8k_gate_uses_matched_scope_and_artifacts() -> None:
+    config_path = (
+        EXPERIMENT / "configs/eval_qwen3_235ba22b_qkvo_gsm8k_correctness.yaml"
+    )
+    wrapper_path = EXPERIMENT / "run_qwen235_qkvo_gsm8k_correctness.sh"
+    submitter_path = EXPERIMENT / "submit_qwen235_qkvo_gsm8k_correctness_ptyche.sh"
+    assert config_path.is_file()
+    assert wrapper_path.is_file()
+    assert submitter_path.is_file()
+
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    generation = config["generation"]
+    assert generation["model_name"] == "Qwen/Qwen3-235B-A22B"
+    assert generation["temperature"] == 0.0
+    assert generation["vllm_cfg"]["quantization_ignored_layer_kws"] == [
+        ".mlp.gate"
+    ]
+    assert generation["vllm_cfg"]["enforce_eager"] is False
+    assert config["data"]["dataset_name"] == "${oc.env:GSM8K_JSONL}"
+
+    wrapper = wrapper_path.read_text(encoding="utf-8")
+    assert "eval_qwen3_235ba22b_qkvo_gsm8k_correctness.yaml" in wrapper
+    assert 'run_arm.sh" baseline' in wrapper
+    assert 'run_arm.sh" adaptive' in wrapper
+    assert "gsm8k_correctness_gate" in wrapper
+
+    submitter = submitter_path.read_text(encoding="utf-8")
+    assert "run_qwen235_qkvo_gsm8k_correctness.sh" in submitter
+    assert "qwen3_235ba22b_qkvo_shmoo_2508282_2508292" in submitter
+    assert "99de9254a1f51ec3f467055086d209511a49005f47bb0a260d24c63147178ef8" in submitter
+    assert "--nodes=2" in submitter
+    assert "--time=05:00:00" in submitter
+    assert "--segment=2" in submitter
+    assert "--dependency=" in submitter
