@@ -22,6 +22,9 @@ BASE_RECIPE = PERF_CONFIG_DIR / "grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml"
 QKVO_RECIPE = (
     PERF_CONFIG_DIR / "grpo-qwen3-30ba3b-4n4g-mxfp8-qkvo-rollout.yaml"
 )
+GCP_NRT_SUBMITTER = (
+    PROJECT_ROOT / "experiments/pr3477_mxfp8_qkvo/submit_gcp_nrt.sh"
+)
 
 
 def _load_yaml(path: Path) -> dict:
@@ -76,3 +79,14 @@ def test_qkvo_recipe_only_changes_quantization_scope() -> None:
     base_config.pop("defaults")
     qkvo_config.pop("defaults")
     assert qkvo_config == base_config
+
+
+def test_gcp_nrt_submitter_exercises_qkvo_nccl_reshard() -> None:
+    submitter = GCP_NRT_SUBMITTER.read_text(encoding="utf-8")
+
+    assert "grpo-qwen3-30ba3b-4n4g-mxfp8-qkvo-rollout.yaml" in submitter
+    assert "policy.generation.colocated.enabled=false" in submitter
+    assert "policy.generation.refit_transport=nccl_reshard" in submitter
+    assert "policy.generation.colocated.resources.num_nodes='${GEN_NODES}'" in submitter
+    assert "--gpus-per-node=\"${GPUS_PER_NODE}\"" in submitter
+    assert "loss_fn.force_on_policy_ratio=false" in submitter
