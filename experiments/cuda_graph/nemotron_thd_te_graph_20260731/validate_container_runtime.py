@@ -24,6 +24,7 @@ import importlib.metadata
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -144,6 +145,38 @@ def _version_pair(version: str) -> tuple[int, int]:
         raise RuntimeError(
             f"unparseable Transformer Engine version: {version!r}"
         ) from error
+
+
+def validate_transformer_engine_identities(
+    *,
+    version: str,
+    source_commit: str,
+    expected_source_commit: str,
+    expected_version_base_commit: str,
+) -> dict[str, str]:
+    """Validate distinct install-source and version-base TE commit identities."""
+    for label, commit in (
+        ("source commit", source_commit),
+        ("expected source commit", expected_source_commit),
+        ("expected version-base commit", expected_version_base_commit),
+    ):
+        if len(commit) != FULL_COMMIT_LENGTH or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+            raise RuntimeError(f"Transformer Engine {label} must be one lowercase full SHA")
+    if source_commit != expected_source_commit:
+        raise RuntimeError(
+            "Transformer Engine source commit mismatch: "
+            f"expected {expected_source_commit}, got {source_commit}"
+        )
+    version_match = re.search(r"\+([0-9a-f]{8})(?:\D|$)", version)
+    if version_match is None or version_match.group(1) != expected_version_base_commit[:8]:
+        raise RuntimeError(
+            "Transformer Engine version-base commit mismatch: "
+            f"expected {expected_version_base_commit[:8]} in {version}"
+        )
+    return {
+        "transformer_engine_source_commit": source_commit,
+        "transformer_engine_version_base_commit": expected_version_base_commit,
+    }
 
 
 def probe_runtime(
@@ -402,6 +435,17 @@ def probe_runtime(
     ]
     torch_version = getattr(torch_module, "version", None)
     return {
+        "all_eval_callables_supported": "not_tested",
+        "mcore_eval_reuse_graph_io": "not_implemented",
+        "raw_te_eval_reuse_graph_io": "not_tested",
+        "candidate_sha": None,
+        "integration_sha": None,
+        "test_row_id": "runtime_preflight",
+        "topology": {
+            "num_nodes": 1,
+            "gpus_per_node": device_count,
+            "world_size": device_count,
+        },
         "cuda_available": cuda_available,
         "device_count": device_count,
         "expected_device_count": expected_device_count,
@@ -476,6 +520,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mcore-commit", required=True)
     parser.add_argument("--uv-lock-sha256", required=True)
     parser.add_argument("--expected-te-commit", required=True)
+    parser.add_argument("--expected-te-version-base-commit", required=True)
     parser.add_argument("--container-device", required=True, type=int)
     parser.add_argument("--container-inode", required=True, type=int)
     parser.add_argument("--container-size", required=True, type=int)
@@ -495,6 +540,7 @@ def main() -> None:
         "mcore_commit": args.mcore_commit,
         "uv_lock_sha256": args.uv_lock_sha256,
         "expected_te_commit": args.expected_te_commit,
+        "expected_te_version_base_commit": args.expected_te_version_base_commit,
         "expected_python_version": args.expected_python_version,
         "expected_uv_version": args.expected_uv_version,
         "expected_nvte_with_nccl_ep": args.expected_nvte_with_nccl_ep,
@@ -521,15 +567,17 @@ def main() -> None:
                 f"runtime requires Transformer Engine >= 2.16, got {te_version}"
             )
         te_commit = _distribution_vcs_commit("transformer-engine")
-        if te_commit != args.expected_te_commit:
-            raise RuntimeError(
-                "Transformer Engine VCS commit mismatch: "
-                f"expected {args.expected_te_commit}, got {te_commit}"
-            )
+        te_identities = validate_transformer_engine_identities(
+            version=te_version,
+            source_commit=te_commit,
+            expected_source_commit=args.expected_te_commit,
+            expected_version_base_commit=args.expected_te_version_base_commit,
+        )
         payload = {
             "status": "passed",
             **context,
             "transformer_engine_vcs_commit": te_commit,
+            **te_identities,
             **runtime,
         }
     except Exception as error:

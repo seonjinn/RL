@@ -230,6 +230,7 @@ def _run_runtime_payload(
             "3",
             "4",
             "5",
+            TE_COMMIT,
             "--output",
             str(fixture.source_project_root.parent / "runtime.json"),
         ],
@@ -466,6 +467,29 @@ def test_runtime_probe_reads_exact_transformer_engine_vcs_commit() -> None:
     )
 
 
+def test_runtime_probe_distinguishes_te_source_and_version_base() -> None:
+    module = _load_runtime_probe()
+    source_commit = "04a76c84423d9a4eb2f2010ef6692e347326cc00"
+    version_base = "bffde8f4a0a4eea9036dc753e28269247e5de69d"
+
+    assert module.validate_transformer_engine_identities(
+        version="2.19.0.dev0+bffde8f4",
+        source_commit=source_commit,
+        expected_source_commit=source_commit,
+        expected_version_base_commit=version_base,
+    ) == {
+        "transformer_engine_source_commit": source_commit,
+        "transformer_engine_version_base_commit": version_base,
+    }
+    with pytest.raises(RuntimeError, match="source commit mismatch"):
+        module.validate_transformer_engine_identities(
+            version="2.19.0.dev0+bffde8f4",
+            source_commit=version_base,
+            expected_source_commit=source_commit,
+            expected_version_base_commit=version_base,
+        )
+
+
 @pytest.mark.parametrize(
     ("relative_path", "environment"),
     (
@@ -479,6 +503,7 @@ def test_runtime_probe_reads_exact_transformer_engine_vcs_commit() -> None:
                 "EXPECTED_BRIDGE_SHA": BRIDGE_COMMIT,
                 "EXPECTED_MCORE_SHA": MCORE_COMMIT,
                 "EXPECTED_TE_SHA": TE_COMMIT,
+                "EXPECTED_TE_VERSION_BASE_SHA": TE_COMMIT,
                 "SOURCE_PROVENANCE_VERIFIER": str(
                     EXPERIMENT_DIR / "scripts" / "verify_source_provenance.sh"
                 ),
@@ -575,6 +600,7 @@ printf '{"status":"passed"}\n' >"${output}"
             "EXPECTED_BRIDGE_SHA": BRIDGE_COMMIT,
             "EXPECTED_MCORE_SHA": MCORE_COMMIT,
             "EXPECTED_TE_SHA": TE_COMMIT,
+            "EXPECTED_TE_VERSION_BASE_SHA": TE_COMMIT,
             "SOURCE_PROVENANCE_VERIFIER": str(provenance_verifier),
             "PROVENANCE_LOG": str(provenance_log),
         }
@@ -644,6 +670,10 @@ printf '{"status":"passed"}\n' >"${output}"
     assert '--mcore-commit "${mcore_commit}"' in command
     assert '--uv-lock-sha256 "${uv_lock_sha256}"' in command
     assert '--expected-te-commit "${expected_te_commit}"' in command
+    assert (
+        '--expected-te-version-base-commit '
+        '"${expected_te_version_base_commit}"' in command
+    )
     assert '--expected-python-version "${expected_python_version}"' in command
     assert '--expected-python-install-dir "${python_install_dir}"' in command
     assert '--expected-uv-version "${expected_uv_version}"' in command

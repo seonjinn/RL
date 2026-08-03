@@ -13,6 +13,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 EXPECTED_TE_COMMIT = "bffde8f4a0a4eea9036dc753e28269247e5de69d"
+EXPECTED_TE_SOURCE_COMMIT = "04a76c84423d9a4eb2f2010ef6692e347326cc00"
 MODULE_PATH = (
     REPO_ROOT
     / "experiments"
@@ -123,8 +124,14 @@ def test_validator_accepts_te_216_descendant_and_writes_machine_readable_output(
     assert result["status"] == "passed"
     assert result["transformer_engine_version"] == "2.16.0.dev0"
     assert result["transformer_engine_commit"] == native_commit
+    assert result["transformer_engine_source_commit"] == native_commit
+    assert result["transformer_engine_version_base_commit"] == native_commit
     assert result["minimum_commit"] == minimum_commit
     assert result["ancestry_verified"] is True
+    assert result["all_eval_callables_supported"] == "not_tested"
+    assert result["mcore_eval_reuse_graph_io"] == "not_implemented"
+    assert result["raw_te_eval_reuse_graph_io"] == "not_tested"
+    assert result["test_row_id"] == "runtime_preflight"
     assert json.loads(output.read_text()) == result
 
 
@@ -232,8 +239,8 @@ def test_outer_project_pins_the_validated_te_runtime_by_full_commit() -> None:
 
     assert (
         "transformer-engine[pytorch,core_cu13] @ "
-        "git+https://github.com/NVIDIA/TransformerEngine.git@"
-        f"{EXPECTED_TE_COMMIT}" in project
+        "git+https://github.com/seonjinn/TransformerEngine.git@"
+        f"{EXPECTED_TE_SOURCE_COMMIT}" in project
     )
     assert "TransformerEngine.git@release_v2.15" not in project
     assert '"nvidia-cudnn-frontend==1.26.0"' in project

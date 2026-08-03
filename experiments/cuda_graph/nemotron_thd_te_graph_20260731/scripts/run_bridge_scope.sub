@@ -1,0 +1,13 @@
+#!/bin/bash
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
+# Licensed under the Apache License, Version 2.0
+#SBATCH --exclusive
+#SBATCH --partition=batch
+#SBATCH --time=04:00:00
+#SBATCH --job-name=bridge_typed_matrix
+
+set -euo pipefail
+[[ -z "${COMMAND:-}" ]] || { echo "Raw command payloads are forbidden" >&2; exit 2; }
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+export EXPECTED_CANDIDATE_KIND=bridge
+exec "${script_dir}/run_mcore_scope.sub"

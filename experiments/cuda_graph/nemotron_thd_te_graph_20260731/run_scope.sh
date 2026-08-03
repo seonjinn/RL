@@ -54,6 +54,28 @@ profile_snapshot_helper=${script_dir}/profile_snapshot.py
 campaign_gate_validator=${script_dir}/validate_campaign_gate.py
 cd "${repo_root}"
 
+if [[ -n "${MCORE_CANDIDATE_SHA:-}" ]]; then
+  [[ "${MCORE_CANDIDATE_SHA}" =~ ^[0-9a-f]{40}$ ]] || \
+    fail "MCORE_CANDIDATE_SHA must be a full lowercase SHA"
+  [[ "${RUN_LOG_ROOT:-}" == /* ]] || \
+    fail "RUN_LOG_ROOT must be absolute when MCORE_CANDIDATE_SHA is set"
+  git -C "${mcore_root}" cat-file -e "${MCORE_CANDIDATE_SHA}^{commit}" || \
+    fail "MCORE_CANDIDATE_SHA is absent from the local object store"
+  remote_matches=$(git -C "${mcore_root}" ls-remote origin | \
+    awk -v sha="${MCORE_CANDIDATE_SHA}" '$1 == sha {count += 1} END {print count + 0}')
+  [[ "${remote_matches}" -gt 0 ]] || \
+    fail "MCORE_CANDIDATE_SHA is absent from the pushed remote"
+  MCORE_CANDIDATE_SOURCE_ROOT=${RUN_LOG_ROOT}/source-snapshots/mcore/${MCORE_CANDIDATE_SHA}
+  if [[ ! -d "${MCORE_CANDIDATE_SOURCE_ROOT}" ]]; then
+    mkdir -p "$(dirname "${MCORE_CANDIDATE_SOURCE_ROOT}")"
+    candidate_tmp=$(mktemp -d "$(dirname "${MCORE_CANDIDATE_SOURCE_ROOT}")/.${MCORE_CANDIDATE_SHA}.XXXXXX")
+    git -C "${mcore_root}" archive "${MCORE_CANDIDATE_SHA}" | tar -x -C "${candidate_tmp}"
+    printf '%s\n' "${MCORE_CANDIDATE_SHA}" >"${candidate_tmp}/.candidate-sha"
+    mv "${candidate_tmp}" "${MCORE_CANDIDATE_SOURCE_ROOT}"
+  fi
+  export MCORE_CANDIDATE_SOURCE_ROOT
+fi
+
 : "${MODEL:?Set MODEL to nano, super, ultra, qwen3_30ba3b, or qwen3_235b}"
 : "${SCOPE:?Set SCOPE through a persistent scope or variant launcher}"
 : "${SCOPE_NAME:?Set SCOPE_NAME through a persistent launcher}"
@@ -157,7 +179,7 @@ profile_snapshot_output=$("${profile_snapshot_command[@]}") || fail "Cluster pro
 PROFILE_SHA256=
 while IFS=$'\t' read -r field value; do
   case "${field}" in
-    PROFILE_SHA256|PROFILE_ID|ACCOUNT|PARTITION|CONTAINER|CONTAINER_SHA256|MOUNTS|SBATCH_GPUS_PER_NODE|SBATCH_GRES|SBATCH_SEGMENT_SIZE|TIME_LIMIT|RUNTIME_ATTESTATION|RUNTIME_PREFLIGHT_JOB_ID|EXPECTED_TE_SHA|EXPECTED_NEMORL_SHA|EXPECTED_BRIDGE_SHA|EXPECTED_MCORE_SHA)
+    PROFILE_SHA256|PROFILE_ID|ACCOUNT|PARTITION|CONTAINER|CONTAINER_SHA256|MOUNTS|SBATCH_GPUS_PER_NODE|SBATCH_GRES|SBATCH_SEGMENT_SIZE|TIME_LIMIT|RUNTIME_ATTESTATION|RUNTIME_PREFLIGHT_JOB_ID|EXPECTED_TE_SHA|EXPECTED_TE_VERSION_BASE_SHA|EXPECTED_NEMORL_SHA|EXPECTED_BRIDGE_SHA|EXPECTED_MCORE_SHA|RUN_LOG_ROOT)
       printf -v "${field}" '%s' "${value}"
       ;;
     *) fail "Cluster profile snapshot returned an unknown field" ;;
@@ -209,6 +231,7 @@ for field in \
   RUNTIME_ATTESTATION \
   RUNTIME_PREFLIGHT_JOB_ID \
   EXPECTED_TE_SHA \
+  EXPECTED_TE_VERSION_BASE_SHA \
   EXPECTED_NEMORL_SHA \
   EXPECTED_BRIDGE_SHA \
   EXPECTED_MCORE_SHA; do
@@ -288,6 +311,13 @@ case "${EXPECTED_TE_SHA:-}" in
   *)
     [[ "${EXPECTED_TE_SHA}" =~ ^[0-9a-f]{40}$ ]] || \
       fail "EXPECTED_TE_SHA must be a full lowercase SHA"
+    ;;
+esac
+case "${EXPECTED_TE_VERSION_BASE_SHA:-}" in
+  ""|__REQUIRED_*__) ;;
+  *)
+    [[ "${EXPECTED_TE_VERSION_BASE_SHA}" =~ ^[0-9a-f]{40}$ ]] || \
+      fail "EXPECTED_TE_VERSION_BASE_SHA must be a full lowercase SHA"
     ;;
 esac
 
@@ -417,6 +447,7 @@ runtime_attestation_command=(
   --mcore-commit "${EXPECTED_MCORE_SHA}"
   --uv-lock "${repo_root}/uv.lock"
   --expected-te-commit "${EXPECTED_TE_SHA}"
+  --expected-te-version-base-commit "${EXPECTED_TE_VERSION_BASE_SHA}"
   --expected-device-count "${MODEL_GPUS_PER_NODE}"
   --expected-python-version "${MANAGED_PYTHON_VERSION}"
   --expected-python-install-dir "${MANAGED_PYTHON_INSTALL_DIR}"
@@ -504,7 +535,8 @@ export REPO_ROOT=${repo_root}
 export MODEL DISPATCHER SCOPE SCOPE_NAME MODE CLUSTER PROFILE_ID PHASE STEPS
 export RUN_GROUP REPEAT_INDEX
 export EXPECTED_NEMORL_SHA EXPECTED_BRIDGE_SHA EXPECTED_MCORE_SHA
-export EXPECTED_TE_SHA RUNTIME_ATTESTATION RUNTIME_PREFLIGHT_JOB_ID
+export EXPECTED_TE_SHA EXPECTED_TE_VERSION_BASE_SHA
+export RUNTIME_ATTESTATION RUNTIME_PREFLIGHT_JOB_ID
 export UV_PYTHON=${MANAGED_PYTHON_VERSION}
 export UV_PYTHON_INSTALL_DIR=${MANAGED_PYTHON_INSTALL_DIR}
 export UV_MANAGED_PYTHON=1

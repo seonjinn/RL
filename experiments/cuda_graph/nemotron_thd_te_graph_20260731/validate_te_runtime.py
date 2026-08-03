@@ -258,10 +258,13 @@ def validate_runtime(
 
     version = provenance.get("transformer_engine_version")
     native_commit = provenance.get("transformer_engine_commit")
+    source_commit = provenance.get("transformer_engine_source_commit", native_commit)
     if not isinstance(version, str):
         raise ValueError("provenance lacks transformer_engine_version")
     if not isinstance(native_commit, str):
         raise ValueError("provenance lacks transformer_engine_commit")
+    if not isinstance(source_commit, str) or FULL_COMMIT.fullmatch(source_commit) is None:
+        raise ValueError("provenance lacks a full transformer_engine_source_commit")
     if _version_pair(version) < MINIMUM_TE_VERSION:
         raise ValueError(f"runtime requires Transformer Engine >= 2.16, got {version}")
     _verify_ancestry(
@@ -286,6 +289,12 @@ def validate_runtime(
     )
     result: dict[str, Any] = {
         "status": "passed",
+        "all_eval_callables_supported": "not_tested",
+        "mcore_eval_reuse_graph_io": "not_implemented",
+        "raw_te_eval_reuse_graph_io": "not_tested",
+        "candidate_sha": None,
+        "integration_sha": None,
+        "test_row_id": "runtime_preflight",
         "container": str(container.resolve()),
         "container_sha256": actual_container_sha256,
         "install_prefix": str(site_packages.parent.resolve()),
@@ -293,6 +302,8 @@ def validate_runtime(
         "source_repository": str(source_repository.resolve()),
         "transformer_engine_version": version,
         "transformer_engine_commit": native_commit,
+        "transformer_engine_source_commit": source_commit,
+        "transformer_engine_version_base_commit": native_commit,
         "minimum_commit": minimum_commit,
         "ancestry_verified": True,
         "imports_validated": validate_imports,

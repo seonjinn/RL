@@ -36,7 +36,9 @@ MOE_AXES = (
 )
 VALID_STEPS = (5, 20, 100)
 MODEL_NAMES = ("nano", "super", "ultra", "qwen3_30ba3b", "qwen3_235b")
-ALLOWED_MCORE_DRIVERS: frozenset[str] = frozenset()
+ALLOWED_MCORE_DRIVERS: frozenset[str] = frozenset(
+    (str(EXPERIMENT_DIR / "scripts" / "run_mcore_training.py"),)
+)
 Status = Literal[
     "runnable",
     "model-incompatible",

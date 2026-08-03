@@ -46,6 +46,23 @@ REQUIRED_PACKAGES = frozenset(
         "cupy",
     )
 )
+MATRIX_ROWS = {
+    "mcore": frozenset(
+        (
+            "te_eval_capability_8",
+            "execution_kind_bank_8",
+            "forward_only_schedule_8",
+            "packed_eval_8",
+            "packed_tp2_cp2_pp2_8",
+            "hybrid_ep16",
+            "hybrid_ep32",
+            "router_replay_8",
+            "router_replay_1f1b_8",
+        )
+    ),
+    "bridge": frozenset(("bridge_forward_only_eval_8",)),
+}
+ROW_ID = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 def _require_nvte_environment(
@@ -117,6 +134,101 @@ def _read_attestation(attestation: Path) -> dict[str, Any]:
     return payload
 
 
+def validate_matrix_results(
+    *,
+    candidate_kind: str,
+    candidate_sha: str,
+    integration_sha: str,
+    expected_container_sha256: str,
+    expected_te_commit: str,
+    expected_te_version_base_commit: str,
+    test_result_dir: Path,
+    required_rows: tuple[str, ...],
+) -> dict[str, dict[str, Any]]:
+    """Require an exact set of passed, candidate-bound matrix artifacts."""
+    if candidate_kind not in MATRIX_ROWS:
+        raise ValueError("candidate kind must be mcore or bridge")
+    for label, commit in (
+        ("candidate SHA", candidate_sha),
+        ("integration SHA", integration_sha),
+        ("Transformer Engine source commit", expected_te_commit),
+        ("Transformer Engine version-base commit", expected_te_version_base_commit),
+    ):
+        _require_full_commit(label, commit)
+    if FULL_SHA256.fullmatch(expected_container_sha256) is None:
+        raise ValueError("expected container SHA256 must be 64 lowercase hexadecimal characters")
+    if not required_rows or len(required_rows) != len(set(required_rows)):
+        raise ValueError("required rows must be non-empty and unique")
+    unknown_rows = set(required_rows).difference(MATRIX_ROWS[candidate_kind])
+    if unknown_rows:
+        raise ValueError(f"unknown required matrix rows: {sorted(unknown_rows)}")
+    if test_result_dir.is_symlink() or not test_result_dir.is_dir():
+        raise ValueError(f"test result directory is missing or unsafe: {test_result_dir}")
+    candidate_dir = test_result_dir / candidate_kind / candidate_sha
+    if candidate_dir.is_symlink() or not candidate_dir.is_dir():
+        raise ValueError(f"candidate result directory is missing or unsafe: {candidate_dir}")
+    actual_files = {path.name for path in candidate_dir.iterdir() if path.is_file()}
+    expected_files = {f"{row_id}.json" for row_id in required_rows}
+    extra_files = actual_files.difference(expected_files)
+    missing_files = expected_files.difference(actual_files)
+    if extra_files:
+        raise ValueError(f"extra matrix result files: {sorted(extra_files)}")
+    if missing_files:
+        raise ValueError(f"missing matrix result files: {sorted(missing_files)}")
+
+    results: dict[str, dict[str, Any]] = {}
+    for row_id in required_rows:
+        result_file = candidate_dir / f"{row_id}.json"
+        payload = _read_attestation(result_file)
+        expected = {
+            "schema_version": 1,
+            "status": "passed",
+            "candidate_kind": candidate_kind,
+            "candidate_sha": candidate_sha,
+            "integration_sha": integration_sha,
+            "container_sha256": expected_container_sha256,
+            "transformer_engine_source_commit": expected_te_commit,
+            "transformer_engine_version_base_commit": (
+                expected_te_version_base_commit
+            ),
+            "test_row_id": row_id,
+        }
+        mismatches = {
+            key: {"expected": value, "actual": payload.get(key)}
+            for key, value in expected.items()
+            if payload.get(key) != value
+        }
+        if mismatches:
+            raise ValueError(
+                "matrix result content binding mismatch: "
+                + json.dumps(mismatches, sort_keys=True)
+            )
+        topology = payload.get("topology")
+        if not isinstance(topology, Mapping):
+            raise ValueError("matrix result topology must be a JSON object")
+        world_size = topology.get("world_size")
+        joined_ranks = topology.get("joined_ranks")
+        if (
+            not isinstance(world_size, int)
+            or isinstance(world_size, bool)
+            or joined_ranks != list(range(world_size))
+        ):
+            raise ValueError("matrix result does not prove every global rank joined")
+        if not isinstance(payload.get("transformer_engine_version"), str):
+            raise ValueError("matrix result lacks Transformer Engine version")
+        if not isinstance(payload.get("all_eval_callables_supported"), bool):
+            raise ValueError("matrix result lacks all-eval callable capability")
+        if not isinstance(payload.get("raw_te_eval_reuse_graph_io"), bool):
+            raise ValueError("matrix result lacks raw TE buffer-reuse behavior")
+        if payload.get("mcore_eval_reuse_graph_io") not in {
+            False,
+            "not_implemented",
+        }:
+            raise ValueError("matrix result has an unsafe MCore eval buffer-reuse policy")
+        results[row_id] = payload
+    return results
+
+
 def validate_attestation(
     *,
     attestation: Path,
@@ -133,6 +245,7 @@ def validate_attestation(
     expected_uv_version: str,
     expected_uv_executable: Path,
     expected_nvte_with_nccl_ep: str = "0",
+    expected_te_version_base_commit: str | None = None,
 ) -> dict[str, Any]:
     """Require exact source, image, TE, GPU, and worker-stack provenance."""
     if FULL_SHA256.fullmatch(expected_container_sha256) is None:
@@ -146,6 +259,11 @@ def validate_attestation(
         ("Transformer Engine commit", expected_te_commit),
     ):
         _require_full_commit(label, commit)
+    if expected_te_version_base_commit is not None:
+        _require_full_commit(
+            "Transformer Engine version-base commit",
+            expected_te_version_base_commit,
+        )
     if expected_device_count <= 0:
         raise ValueError("expected device count must be positive")
     if re.fullmatch(r"\d+\.\d+\.\d+", expected_python_version) is None:
@@ -221,6 +339,15 @@ def validate_attestation(
             REQUIRED_TE_GROUPED_LINEAR_SYMBOLS
         ),
     }
+    if expected_te_version_base_commit is not None:
+        expected_provenance.update(
+            {
+                "transformer_engine_source_commit": expected_te_commit,
+                "transformer_engine_version_base_commit": (
+                    expected_te_version_base_commit
+                ),
+            }
+        )
     mismatches = {
         key: {"expected": expected, "actual": payload.get(key)}
         for key, expected in expected_provenance.items()
@@ -321,27 +448,119 @@ def validate_attestation(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--attestation", required=True, type=Path)
-    parser.add_argument("--container", required=True, type=Path)
-    parser.add_argument("--expected-container-sha256", required=True)
-    parser.add_argument("--nemo-rl-commit", required=True)
-    parser.add_argument("--bridge-commit", required=True)
-    parser.add_argument("--mcore-commit", required=True)
-    parser.add_argument("--uv-lock", required=True, type=Path)
-    parser.add_argument("--expected-te-commit", required=True)
-    parser.add_argument("--expected-device-count", required=True, type=int)
-    parser.add_argument("--expected-python-version", required=True)
-    parser.add_argument("--expected-python-install-dir", required=True, type=Path)
-    parser.add_argument("--expected-uv-version", required=True)
-    parser.add_argument("--expected-uv-executable", required=True, type=Path)
-    parser.add_argument("--expected-nvte-with-nccl-ep", required=True)
+    parser.add_argument("--attestation", type=Path)
+    parser.add_argument("--container", type=Path)
+    parser.add_argument("--expected-container-sha256")
+    parser.add_argument("--nemo-rl-commit")
+    parser.add_argument("--bridge-commit")
+    parser.add_argument("--mcore-commit")
+    parser.add_argument("--uv-lock", type=Path)
+    parser.add_argument("--expected-te-commit")
+    parser.add_argument("--expected-te-version-base-commit")
+    parser.add_argument("--expected-device-count", type=int)
+    parser.add_argument("--expected-python-version")
+    parser.add_argument("--expected-python-install-dir", type=Path)
+    parser.add_argument("--expected-uv-version")
+    parser.add_argument("--expected-uv-executable", type=Path)
+    parser.add_argument("--expected-nvte-with-nccl-ep")
+    parser.add_argument("--profile-file", type=Path)
+    parser.add_argument("--candidate-kind", choices=("mcore", "bridge"))
+    parser.add_argument("--candidate-sha")
+    parser.add_argument("--test-result-dir", type=Path)
+    parser.add_argument("--required-rows")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.profile_file is not None:
+        matrix_required = (
+            args.candidate_kind,
+            args.candidate_sha,
+            args.test_result_dir,
+            args.required_rows,
+        )
+        if any(value is None for value in matrix_required):
+            raise ValueError(
+                "matrix mode requires candidate kind/SHA, test result directory, and required rows"
+            )
+        values: dict[str, str] = {}
+        for number, line in enumerate(args.profile_file.read_text().splitlines(), 1):
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                raise ValueError(f"profile line {number} is not a literal assignment")
+            name, value = line.split("=", 1)
+            if name in values:
+                raise ValueError(f"profile line {number} duplicates {name}")
+            values[name] = value
+        runtime_path = Path(values["RUNTIME_ATTESTATION"])
+        runtime_payload = _read_attestation(runtime_path)
+        _require_nvte_environment(
+            expected_nvte_with_nccl_ep=runtime_payload["expected_nvte_with_nccl_ep"],
+            environment=os.environ,
+        )
+        repository_root = Path(__file__).resolve().parents[3]
+        validate_attestation(
+            attestation=runtime_path,
+            container=Path(values["CONTAINER"]),
+            expected_container_sha256=values["CONTAINER_SHA256"],
+            nemo_rl_commit=values["EXPECTED_NEMORL_SHA"],
+            bridge_commit=values["EXPECTED_BRIDGE_SHA"],
+            mcore_commit=values["EXPECTED_MCORE_SHA"],
+            uv_lock=repository_root / "uv.lock",
+            expected_te_commit=values["EXPECTED_TE_SHA"],
+            expected_te_version_base_commit=values[
+                "EXPECTED_TE_VERSION_BASE_SHA"
+            ],
+            expected_device_count=int(values["SBATCH_GPUS_PER_NODE"]),
+            expected_python_version=runtime_payload["expected_python_version"],
+            expected_python_install_dir=Path(runtime_payload["uv_python_install_dir"]),
+            expected_uv_version=runtime_payload["expected_uv_version"],
+            expected_uv_executable=Path(runtime_payload["uv_executable"]),
+            expected_nvte_with_nccl_ep=runtime_payload["expected_nvte_with_nccl_ep"],
+        )
+        integration_sha = (
+            values["EXPECTED_MCORE_SHA"]
+            if args.candidate_kind == "mcore"
+            else values["EXPECTED_BRIDGE_SHA"]
+        )
+        results = validate_matrix_results(
+            candidate_kind=args.candidate_kind,
+            candidate_sha=args.candidate_sha,
+            integration_sha=integration_sha,
+            expected_container_sha256=values["CONTAINER_SHA256"],
+            expected_te_commit=values["EXPECTED_TE_SHA"],
+            expected_te_version_base_commit=values[
+                "EXPECTED_TE_VERSION_BASE_SHA"
+            ],
+            test_result_dir=args.test_result_dir,
+            required_rows=tuple(args.required_rows.split()),
+        )
+        print(json.dumps(results, sort_keys=True))
+        return
+
+    legacy_required = (
+        args.attestation,
+        args.container,
+        args.expected_container_sha256,
+        args.nemo_rl_commit,
+        args.bridge_commit,
+        args.mcore_commit,
+        args.uv_lock,
+        args.expected_te_commit,
+        args.expected_device_count,
+        args.expected_python_version,
+        args.expected_python_install_dir,
+        args.expected_uv_version,
+        args.expected_uv_executable,
+        args.expected_nvte_with_nccl_ep,
+    )
+    if any(value is None for value in legacy_required):
+        raise ValueError("legacy mode requires every runtime-attestation argument")
     _require_nvte_environment(
         expected_nvte_with_nccl_ep=args.expected_nvte_with_nccl_ep,
+        expected_te_version_base_commit=args.expected_te_version_base_commit,
         environment=os.environ,
     )
     payload = validate_attestation(

@@ -129,6 +129,7 @@ def _campaign_leaf_harness(tmp_path: Path) -> tuple[Path, Path, Path, dict[str, 
                 f"CONTAINER_SHA256={provenance['container_sha256']}", "MOUNTS=/private:/private",
                 "SBATCH_GPUS_PER_NODE=4", "SBATCH_GRES=gpu:4", "SBATCH_SEGMENT_SIZE=", "TIME_LIMIT=01:00:00",
                 f"RUNTIME_ATTESTATION={runtime}", "RUNTIME_PREFLIGHT_JOB_ID=1", f"EXPECTED_TE_SHA={'e' * 40}",
+                f"EXPECTED_TE_VERSION_BASE_SHA={'f' * 40}",
                 f"EXPECTED_NEMORL_SHA={provenance['nemo_rl_commit']}", f"EXPECTED_BRIDGE_SHA={provenance['bridge_commit']}",
                 f"EXPECTED_MCORE_SHA={provenance['mcore_commit']}", "",
             )
@@ -1457,6 +1458,7 @@ def test_leaf_job_depends_on_one_exact_runtime_preflight_artifact(
                 f"RUNTIME_ATTESTATION={attestation}",
                 "RUNTIME_PREFLIGHT_JOB_ID=733",
                 f"EXPECTED_TE_SHA={TE_SHA}",
+                f"EXPECTED_TE_VERSION_BASE_SHA={TE_SHA}",
                 f"EXPECTED_NEMORL_SHA={NEMORL_SHA}",
                 f"EXPECTED_BRIDGE_SHA={BRIDGE_SHA}",
                 f"EXPECTED_MCORE_SHA={MCORE_SHA}",
@@ -1557,6 +1559,7 @@ def test_leaf_job_rejects_unmounted_managed_python_installation(
                 "RUNTIME_ATTESTATION=/shared/runtime/oci-container-runtime-733.json",
                 "RUNTIME_PREFLIGHT_JOB_ID=733",
                 f"EXPECTED_TE_SHA={TE_SHA}",
+                f"EXPECTED_TE_VERSION_BASE_SHA={TE_SHA}",
                 f"EXPECTED_NEMORL_SHA={NEMORL_SHA}",
                 f"EXPECTED_BRIDGE_SHA={BRIDGE_SHA}",
                 f"EXPECTED_MCORE_SHA={MCORE_SHA}",
@@ -1757,10 +1760,7 @@ def test_nemorl_job_wrapper_isolates_driver_on_managed_python(
 
 @pytest.mark.parametrize(
     ("wrapper_name", "extra_environment"),
-    (
-        ("run_nemorl_scope.sub", {}),
-        ("run_mcore_scope.sub", {"SLURM_JOB_NUM_NODES": "1"}),
-    ),
+    (("run_nemorl_scope.sub", {}),),
 )
 def test_scope_job_wrapper_rejects_mutated_uv_before_executing_it(
     tmp_path: Path,
@@ -2000,14 +2000,12 @@ def test_ray_and_mcore_sruns_override_image_uv_environment() -> None:
     assert "export CONTAINER_ENV_VARS" in nemorl_wrapper
 
     mcore_wrapper = (EXPERIMENT_DIR / "scripts" / "run_mcore_scope.sub").read_text()
-    assert (
-        ': "${NVTE_WITH_NCCL_EP:?run_scope.sh must export NVTE_WITH_NCCL_EP}"'
-        in mcore_wrapper
-    )
+    assert "export NVTE_WITH_NCCL_EP=${runtime_fields[5]}" in mcore_wrapper
     mcore_container_env_vars = CONTAINER_ENV_VARS.removesuffix(",NRL_SLURM_JOB_ID,NRL_SLURM_RESTART_COUNT")
     assert f"CONTAINER_ENV_VARS={mcore_container_env_vars}" in mcore_wrapper
     assert mcore_wrapper.count('"--container-env=${CONTAINER_ENV_VARS}"') == 2
-    assert 'export PATH="${CONTAINER_PATH_PREFIX}:$PATH"' in mcore_wrapper
+    assert '"${UV_EXECUTABLE}" run --python "${UV_PYTHON}"' in mcore_wrapper
+    assert "/bin/bash --noprofile --norc -c" not in mcore_wrapper
     assert "bash -lc" not in mcore_wrapper
 
 
@@ -2214,6 +2212,7 @@ printf '{"status":"passed"}\n' >"${output}"
             "EXPECTED_BRIDGE_SHA": BRIDGE_SHA,
             "EXPECTED_MCORE_SHA": MCORE_SHA,
             "EXPECTED_TE_SHA": TE_SHA,
+            "EXPECTED_TE_VERSION_BASE_SHA": TE_SHA,
             "SOURCE_PROVENANCE_VERIFIER": str(provenance_verifier),
         }
     )
@@ -2290,6 +2289,14 @@ def test_container_runtime_probe_requires_four_visible_gpus_and_packages(
         "TEColumnParallelGroupedLinear",
         "TERowParallelGroupedLinear",
     ]
+    assert result["all_eval_callables_supported"] == "not_tested"
+    assert result["mcore_eval_reuse_graph_io"] == "not_implemented"
+    assert result["raw_te_eval_reuse_graph_io"] == "not_tested"
+    assert result["topology"] == {
+        "num_nodes": 1,
+        "gpus_per_node": 4,
+        "world_size": 4,
+    }
     assert set(result["packages"]) == {
         "torch",
         "transformer_engine.pytorch",

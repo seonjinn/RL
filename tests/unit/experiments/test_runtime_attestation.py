@@ -209,6 +209,27 @@ def test_validator_rejects_mutated_container_identity_or_uv_lock(
             expected_uv_executable=uv_executable,
         )
 
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(
+        tmp_path / "hash"
+    )
+    uv_executable.write_text("mutated uv\n")
+    with pytest.raises(ValueError, match="uv executable SHA256 mismatch"):
+        module.validate_attestation(
+            attestation=attestation,
+            container=container,
+            expected_container_sha256=CONTAINER_SHA256,
+            nemo_rl_commit=NEMORL_COMMIT,
+            bridge_commit=BRIDGE_COMMIT,
+            mcore_commit=MCORE_COMMIT,
+            uv_lock=lock,
+            expected_te_commit=TE_COMMIT,
+            expected_device_count=4,
+            expected_python_version=PYTHON_VERSION,
+            expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
+        )
+
     attestation, container, lock, python_install_dir, uv_executable = _fixture(tmp_path)
     lock.write_text("mutated-lock\n")
     with pytest.raises(ValueError, match="uv.lock SHA256 mismatch"):
@@ -451,23 +472,52 @@ def test_validator_rejects_wrong_or_mutated_uv(tmp_path: Path) -> None:
             expected_uv_executable=uv_executable,
         )
 
-    attestation, container, lock, python_install_dir, uv_executable = _fixture(
-        tmp_path / "hash"
+
+def test_matrix_validator_requires_exact_content_bound_rows(tmp_path: Path) -> None:
+    module = _load_module()
+    candidate_sha = "f" * 40
+    candidate_dir = tmp_path / "mcore" / candidate_sha
+    candidate_dir.mkdir(parents=True)
+    payload = {
+        "schema_version": 1,
+        "status": "passed",
+        "candidate_kind": "mcore",
+        "candidate_sha": candidate_sha,
+        "integration_sha": MCORE_COMMIT,
+        "container_sha256": CONTAINER_SHA256,
+        "transformer_engine_version": "2.19.0.dev0",
+        "transformer_engine_source_commit": TE_COMMIT,
+        "transformer_engine_version_base_commit": "e" * 40,
+        "all_eval_callables_supported": True,
+        "mcore_eval_reuse_graph_io": "not_implemented",
+        "raw_te_eval_reuse_graph_io": True,
+        "topology": {"world_size": 8, "joined_ranks": list(range(8))},
+        "test_row_id": "te_eval_capability_8",
+        "node_results": [],
+    }
+    (candidate_dir / "te_eval_capability_8.json").write_text(json.dumps(payload))
+
+    results = module.validate_matrix_results(
+        candidate_kind="mcore",
+        candidate_sha=candidate_sha,
+        integration_sha=MCORE_COMMIT,
+        expected_container_sha256=CONTAINER_SHA256,
+        expected_te_commit=TE_COMMIT,
+        expected_te_version_base_commit="e" * 40,
+        test_result_dir=tmp_path,
+        required_rows=("te_eval_capability_8",),
     )
-    uv_executable.write_text("mutated uv\n")
-    with pytest.raises(ValueError, match="uv executable SHA256 mismatch"):
-        module.validate_attestation(
-            attestation=attestation,
-            container=container,
+
+    assert results["te_eval_capability_8"] == payload
+    (candidate_dir / "extra.json").write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="extra matrix result"):
+        module.validate_matrix_results(
+            candidate_kind="mcore",
+            candidate_sha=candidate_sha,
+            integration_sha=MCORE_COMMIT,
             expected_container_sha256=CONTAINER_SHA256,
-            nemo_rl_commit=NEMORL_COMMIT,
-            bridge_commit=BRIDGE_COMMIT,
-            mcore_commit=MCORE_COMMIT,
-            uv_lock=lock,
             expected_te_commit=TE_COMMIT,
-            expected_device_count=4,
-            expected_python_version=PYTHON_VERSION,
-            expected_python_install_dir=python_install_dir,
-            expected_uv_version=UV_VERSION,
-            expected_uv_executable=uv_executable,
+            expected_te_version_base_commit="e" * 40,
+            test_result_dir=tmp_path,
+            required_rows=("te_eval_capability_8",),
         )
