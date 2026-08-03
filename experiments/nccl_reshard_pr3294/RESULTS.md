@@ -113,6 +113,38 @@ though its relative refit reduction is larger.
 
 The staged nightly image does not contain an importable `nccl.m2n` module or `libnccl_m2n.so`. The NCCL arm therefore uses NeMo-RL's `xferdtensor_python (exact-transfer)` implementation over NCCL communicators. These results validate the transform-aware NCCL-Reshard algorithm and its Python exact-transfer fallback; they are not compiled native-M2N measurements.
 
+## Generic Transform Contract Validation
+
+The generalized transform registry and ordered-component protocol were
+revalidated on GCP-NRT at source
+`fbe22cc3dcb10b9edf26cb4234341a9485cd22d9`.
+
+An initial functional run, job `488544`, exposed a metadata boundary error:
+the already transformed FP8 wire tensor was passed back to the codec as if it
+were the logical BF16 source. The fix keeps the immutable source shape, dtype,
+and format separate from the current wire-component metadata, validates the
+wire value and scale against the codec outputs, and preserves source shapes
+when individual experts are grouped.
+
+Validation results:
+
+| Gate | Job | Result |
+|---|---:|---|
+| Core transform and synchronizer tests | `488631` | 147 passed |
+| Megatron transform handshake tests | `488597` | 6 passed |
+| vLLM mixed-plan agreement test | `488598` | 1 passed |
+| Four-node functional smoke | `488645` | 2/2 steps, `COMPLETED 0:0` |
+
+The functional smoke used Qwen3-30B-A3B on four B200 nodes split into two
+BF16 trainer nodes and two MoE-only MXFP8 generation nodes. It used trainer
+TP1/EP16, generation TP1/EP1, GBS 16, sequence length 512, real importance
+sampling, and checkpointing disabled. The NCCL path transferred `27.84 GiB`
+through exact reshard and `2.87 GiB` through miscellaneous broadcast.
+
+Step 2 completed with `0.62 s` transfer/update, `10.05 s` E2E step time,
+`0.00436` generation KL error, `1.033` token-mult probability error, and no
+NaN/Inf metrics. W&B: <https://wandb.ai/nvidia/sna-pr3294-nccl-mxfp8-prequant/runs/dpsenun7>.
+
 ## Conclusion
 
 The transform-aware exact shard-transfer path reduced steady-state refit time by 83.6% and improved E2E throughput by 4.43% without a measurable reward or generation-KL regression. On top of that path, the remaining receiver-side PR 3294 optimizations reduced refit by another 78.6% and improved E2E throughput by 2.21%. Native M2N must be packaged and measured separately before claiming compiled NCCL-M2N performance.

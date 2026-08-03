@@ -53,6 +53,12 @@ NCCL MXFP8 payload, no NaN/Inf, `train/gen_kl_error < 0.05`, and
 `train/token_mult_prob_error < 2.0`. A Python transport fallback is sufficient
 for functional debugging but not for a reportable performance result.
 
+The generic transform-contract implementation was revalidated at commit
+`fbe22cc3dcb10b9edf26cb4234341a9485cd22d9` on GCP-NRT. Job `488645`
+completed both steps with a `27.84 GiB` MXFP8 reshard payload, `0.00436`
+generation KL error, `1.033` token-mult probability error, and no NaN/Inf.
+The run is available in [W&B](https://wandb.ai/nvidia/sna-pr3294-nccl-mxfp8-prequant/runs/dpsenun7).
+
 With 2 trainer nodes x 8 GPUs and TP1/PP1/CP1, trainer data parallelism is 16;
 the correctness batch must therefore be a multiple of 16.
 
