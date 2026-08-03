@@ -48,6 +48,11 @@ resolve_launcher() {
 
 : "${CLUSTER:?Set CLUSTER to ptyche, oci-hsg, or lyris}"
 : "${MODEL:?Set MODEL to a committed model selector}"
+case "${MODEL}" in
+  qwen3_30ba3b|qwen3_235b)
+    fail "Qwen campaigns must use submit_qwen_router_validation.sh"
+    ;;
+esac
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 run_tag=${RUN_TAG:-$(date -u +%Y%m%dT%H%M%SZ)}
 mode=${MODE:-nemorl}
@@ -64,10 +69,10 @@ else
     super)
       accuracy_script=scopes/32_attn_mlp_mamba_moe_router_preprocess.sh
       ;;
-    qwen3_30ba3b|ultra)
+    ultra)
       accuracy_script=scopes/20_attn_moe_router_preprocess.sh
       ;;
-    *) fail "MODEL must be nano, super, ultra, or qwen3_30ba3b" ;;
+    *) fail "MODEL must be nano, super, or ultra" ;;
   esac
 fi
 [[ "${accuracy_script}" != "${baseline}" ]] || \

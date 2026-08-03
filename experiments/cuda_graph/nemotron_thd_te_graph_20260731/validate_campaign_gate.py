@@ -73,23 +73,6 @@ PROFILE_REQUIRED = frozenset(
         "EXPECTED_MCORE_SHA",
     }
 )
-R3_DIAGNOSTIC = {
-    "model": "Qwen/Qwen3-235B-A22B",
-    "num_prompts": 128,
-    "max_tokens": 256,
-    "max_model_len": 8192,
-    "prompt_repeat": 128,
-    "tensor_parallel_size": 8,
-    "pipeline_parallel_size": 1,
-    "dtype": "bfloat16",
-    "gpu_memory_utilization": 0.4,
-    "enable_prefix_caching": False,
-    "enable_chunked_prefill": False,
-    "enforce_eager": False,
-    "moe_backend": "triton",
-    "num_outputs": 128,
-    "num_failures": 0,
-}
 ARM_FIELDS = frozenset(
     {
         "job_id",
@@ -249,19 +232,11 @@ def _validate_provenance(value: object, expected: dict[str, str]) -> None:
 
 
 def _validate_r3(payload: dict[str, object], expected: dict[str, str]) -> None:
-    gate = _exact_mapping(
-        payload,
-        frozenset({"gate_type", "status", "model", "slurm_job_id", "provenance", "diagnostic"}),
-        "R3 gate",
+    del payload, expected
+    _fail(
+        "R3 campaign validation is disabled until a content-bound Slurm "
+        "diagnostic producer exists"
     )
-    _require(gate["gate_type"], "qwen235_r3_routes", "gate_type")
-    _require(gate["status"], "passed", "status")
-    _require(gate["model"], "qwen3_235b", "model")
-    _positive_job_id(gate["slurm_job_id"], "slurm_job_id")
-    _validate_provenance(gate["provenance"], expected)
-    diagnostic = _exact_mapping(gate["diagnostic"], frozenset(R3_DIAGNOSTIC), "diagnostic")
-    for field, expected_value in R3_DIAGNOSTIC.items():
-        _require(diagnostic[field], expected_value, f"diagnostic.{field}")
 
 
 def _validate_arm(arm: str, value: object) -> None:

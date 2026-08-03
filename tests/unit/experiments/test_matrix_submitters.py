@@ -34,13 +34,6 @@ SUPER_PERFORMANCE_SCOPES = (
     "scopes/04_moe_router_preprocess.sh",
     "scopes/32_attn_mlp_mamba_moe_router_preprocess.sh",
 )
-QWEN_PERFORMANCE_SCOPES = (
-    BASELINE,
-    "scopes/17_attn.sh",
-    "scopes/03_moe_router.sh",
-    "scopes/04_moe_router_preprocess.sh",
-    "scopes/20_attn_moe_router_preprocess.sh",
-)
 QWEN_ROUTER_CONDITIONS = (
     "conditions/qwen_A_baseline_r3off.sh",
     "conditions/qwen_B_moe_router_r3off.sh",
@@ -301,7 +294,7 @@ def test_qwen30_performance_defaults_to_a_and_b(tmp_path: Path) -> None:
     )
 
 
-def test_qwen235_r3_smoke_requires_valid_content_addressed_route_gate(
+def test_qwen235_r3_smoke_rejects_self_attested_route_gate_before_leaf(
     tmp_path: Path,
 ) -> None:
     submitter = "submit_qwen_router_validation.sh"
@@ -326,11 +319,9 @@ def test_qwen235_r3_smoke_requires_valid_content_addressed_route_gate(
         },
     )
 
-    assert result.returncode == 0, result.stderr
-    assert tuple(row[0] for row in _captured_rows(capture_file)) == (
-        "conditions/qwen_C_baseline_r3on.sh",
-        "conditions/qwen_E_attn_r3on.sh",
-    )
+    assert result.returncode == 2
+    assert "content-bound Slurm diagnostic producer" in result.stderr
+    assert _captured_rows(capture_file) == []
 
 
 def test_qwen_performance_requires_valid_promotion_gate_before_any_leaf(
@@ -816,7 +807,6 @@ def test_submitter_rejects_launcher_symlink_escape(
     (
         ("nano", NANO_PERFORMANCE_SCOPES),
         ("super", SUPER_PERFORMANCE_SCOPES),
-        ("qwen3_30ba3b", QWEN_PERFORMANCE_SCOPES),
     ),
 )
 def test_performance_defaults_submit_three_matched_model_compatible_repeats(
@@ -872,7 +862,6 @@ def test_performance_custom_selection_deduplicates_baseline_per_repeat(
     (
         ("nano", "scopes/31_attn_mlp_mamba_moe_router.sh"),
         ("super", "scopes/32_attn_mlp_mamba_moe_router_preprocess.sh"),
-        ("qwen3_30ba3b", "scopes/20_attn_moe_router_preprocess.sh"),
     ),
 )
 def test_accuracy_defaults_pair_baseline_and_best_combined_for_three_repeats(
