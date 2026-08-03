@@ -74,6 +74,8 @@ def test_qwen235_trace_submitter_requires_clean_pinned_provenance() -> None:
     assert "coreai_dlalgo_llm-nemorl.qwen235-mxfp8-32k-trace" in submitter
     assert "HF_HOME=/lustre/fsw/coreai_dlalgo_llm/users/sna/hf" in submitter
     assert 'HF_HUB_CACHE="$HF_HOME/hub"' in submitter
+    assert "HF_DATASETS_CACHE=/home/sna/.cache/hf-datasets-canary" in submitter
+    assert 'mkdir -p "$HF_DATASETS_CACHE"' in submitter
     assert "models--Qwen--Qwen3-235B-A22B" in submitter
 
     expected_commit_default = (

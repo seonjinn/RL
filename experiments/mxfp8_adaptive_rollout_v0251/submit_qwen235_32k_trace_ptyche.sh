@@ -44,6 +44,7 @@ export CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers
 export MOUNTS=${MOUNTS:-/lustre:/lustre,/home/sna:/home/sna}
 export HF_HOME=/lustre/fsw/coreai_dlalgo_llm/users/sna/hf
 export HF_HUB_CACHE="$HF_HOME/hub"
+export HF_DATASETS_CACHE=/home/sna/.cache/hf-datasets-canary
 export GPUS_PER_NODE=4
 export BASE_LOG_DIR="$CANARY_RESULT_ROOT/slurm"
 export COMMAND="bash $NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_qwen235_trace_gate.sh"
@@ -53,6 +54,7 @@ if [[ ! -d "$HF_HUB_CACHE/models--Qwen--Qwen3-235B-A22B" ]]; then
   echo "missing Qwen3-235B Hub cache: $HF_HUB_CACHE/models--Qwen--Qwen3-235B-A22B" >&2
   exit 2
 fi
+mkdir -p "$HF_DATASETS_CACHE"
 
 require_clean_repo "$NEMO_RL_REPO_ROOT"
 git -C "$NEMO_RL_REPO_ROOT" pull --ff-only
