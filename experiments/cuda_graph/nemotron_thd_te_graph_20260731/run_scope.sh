@@ -20,6 +20,29 @@ fail() {
   exit 2
 }
 
+sha256_regular_file() {
+  python3 - "$1" <<'PY'
+import hashlib
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+descriptor = os.open(path, flags)
+try:
+    details = os.fstat(descriptor)
+    if not stat.S_ISREG(details.st_mode):
+        raise ValueError(f"not a regular file: {path}")
+    digest = hashlib.sha256()
+    while chunk := os.read(descriptor, 1024 * 1024):
+        digest.update(chunk)
+finally:
+    os.close(descriptor)
+print(digest.hexdigest())
+PY
+}
+
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 repo_root=$(cd "${script_dir}/../../.." && pwd -P)
 dockerfile=${repo_root}/docker/Dockerfile
@@ -46,8 +69,22 @@ REPEAT_INDEX=${REPEAT_INDEX:-0}
 ROUTER_REPLAY=${ROUTER_REPLAY:-off}
 NVTE_WITH_NCCL_EP=0
 
+case "${TEST_ONLY}" in
+  0|1) ;;
+  *) fail "TEST_ONLY must be 0 or 1" ;;
+esac
+case "${SBATCH_TEST_ONLY}" in
+  0|1) ;;
+  *) fail "SBATCH_TEST_ONLY must be 0 or 1" ;;
+esac
+if [[ "${TEST_ONLY}" == "1" && "${SBATCH_TEST_ONLY}" == "1" ]]; then
+  fail "TEST_ONLY and SBATCH_TEST_ONLY are mutually exclusive"
+fi
+
 [[ "${RUN_GROUP}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || \
   fail "RUN_GROUP must be filesystem-safe"
+[[ "${RUN_TAG}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || \
+  fail "RUN_TAG must be filesystem-safe"
 [[ "${REPEAT_INDEX}" =~ ^(0|[1-9][0-9]*)$ ]] || \
   fail "REPEAT_INDEX must be a non-negative integer"
 
@@ -281,7 +318,12 @@ if [[ "${status}" != "runnable" ]]; then
 fi
 
 run_name=${SCOPE_NAME}-${MODEL}-${MODE}-${CLUSTER}-${STEPS}step-${R3_NAME}-${RUN_TAG}
-run_log_dir=${LOG_ROOT_OVERRIDE:-exp_logs/nemotron_thd_te_graph_20260731}/${run_name}
+log_root=${LOG_ROOT_OVERRIDE:-exp_logs/nemotron_thd_te_graph_20260731}
+if [[ "${log_root}" == /* ]]; then
+  run_log_dir=${log_root}/${run_name}
+else
+  run_log_dir=${repo_root}/${log_root}/${run_name}
+fi
 
 extra_overrides=()
 case "${MOE_SHARED_EXPERT_OVERLAP:-}" in
@@ -320,7 +362,8 @@ if [[ "${MODE}" == "nemorl" ]]; then
       render_args+=(--override "${override}")
     done
   fi
-  COMMAND=$(python3 "${script_dir}/scope_matrix.py" "${render_args[@]}")
+  RENDERED_DRIVER_COMMAND=$(python3 "${script_dir}/scope_matrix.py" "${render_args[@]}")
+  COMMAND=${RENDERED_DRIVER_COMMAND}
   job_script=${script_dir}/scripts/run_nemorl_scope.sub
 else
   scope_modules=${SCOPE}
@@ -333,9 +376,34 @@ else
     --train-iters "${STEPS}"
     --disable-checkpointing
   )
-  printf -v COMMAND '%q ' "${mcore_command[@]}"
-  COMMAND=${COMMAND% }
+  printf -v RENDERED_DRIVER_COMMAND '%q ' "${mcore_command[@]}"
+  RENDERED_DRIVER_COMMAND=${RENDERED_DRIVER_COMMAND% }
+  COMMAND=${RENDERED_DRIVER_COMMAND}
   job_script=${script_dir}/scripts/run_mcore_scope.sub
+fi
+
+R3_DRIVER_COMMAND_FILE=
+R3_DRIVER_COMMAND_SHA256=
+R3_CHECKER_PATH=
+R3_CHECKER_SHA256=
+R3_RECORD_PYTHON=/opt/nemo_rl_venv/bin/python
+R3_VALIDATION_RECORD_PATTERN=
+R3_VALIDATION_RECORD_INITIAL_PATH=
+if [[ "${MODE}" == "nemorl" && "${ROUTER_REPLAY}" == "on" ]]; then
+  r3_wrapper=${script_dir}/scripts/run_r3_validated_command.sh
+  [[ -x "${r3_wrapper}" ]] || fail "R3 validation wrapper is missing or not executable"
+  R3_DRIVER_COMMAND_FILE=${run_log_dir}/r3-driver-command.sh
+  R3_VALIDATION_RECORD_PATTERN=${run_log_dir}/r3-validation-job-{slurm_job_id}-restart-{slurm_restart_count}/r3-validation.json
+  R3_CHECKER_PATH=${repo_root}/tools/check_r3_trace.py
+  R3_DRIVER_COMMAND_SHA256=$(printf '%s' "${RENDERED_DRIVER_COMMAND}" | python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())') || \
+    fail "R3 driver command digest failed"
+  R3_CHECKER_SHA256=$(sha256_regular_file "${R3_CHECKER_PATH}") || \
+    fail "R3 checker is missing, unsafe, or unreadable"
+  [[ "${R3_DRIVER_COMMAND_SHA256}" =~ ^[0-9a-f]{64}$ ]] || fail "R3 driver command digest failed"
+  [[ "${R3_CHECKER_SHA256}" =~ ^[0-9a-f]{64}$ ]] || fail "R3 checker digest failed"
+  wrapper_command=("${r3_wrapper}" "${R3_RECORD_PYTHON}" "${run_log_dir}" "${repo_root}" "${UV_EXECUTABLE}" "${R3_DRIVER_COMMAND_FILE}" "${R3_DRIVER_COMMAND_SHA256}" "${R3_CHECKER_SHA256}")
+  printf -v COMMAND '%q ' "${wrapper_command[@]}"
+  COMMAND=${COMMAND% }
 fi
 
 runtime_attestation_command=(
@@ -423,34 +491,11 @@ fi
   "${repo_root}" "${EXPECTED_NEMORL_SHA}" \
   "${bridge_root}" "${EXPECTED_BRIDGE_SHA}" \
   "${mcore_root}" "${EXPECTED_MCORE_SHA}"
+RUNTIME_ATTESTATION_SHA256=$(sha256_regular_file "${RUNTIME_ATTESTATION}") || \
+  fail "Runtime attestation is missing, unsafe, or unreadable"
+[[ "${RUNTIME_ATTESTATION_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
+  fail "Runtime attestation digest failed"
 
-mkdir -p "${run_log_dir}"
-{
-  printf 'model=%s\n' "${MODEL}"
-  printf 'dispatcher=%s\n' "${DISPATCHER}"
-  printf 'scope=%s\n' "${SCOPE}"
-  printf 'scope_name=%s\n' "${SCOPE_NAME}"
-  printf 'mode=%s\n' "${MODE}"
-  printf 'cluster=%s\n' "${CLUSTER}"
-  printf 'profile=%s\n' "${PROFILE_ID}"
-  printf 'phase=%s\n' "${PHASE}"
-  printf 'steps=%s\n' "${STEPS}"
-  printf 'run_group=%s\n' "${RUN_GROUP}"
-  printf 'repeat=%s\n' "${REPEAT_INDEX}"
-  printf 'router_replay=%s\n' "${ROUTER_REPLAY}"
-  printf 'nemo_rl_commit=%s\n' "${EXPECTED_NEMORL_SHA}"
-  printf 'bridge_commit=%s\n' "${EXPECTED_BRIDGE_SHA}"
-  printf 'mcore_commit=%s\n' "${EXPECTED_MCORE_SHA}"
-  printf 'transformer_engine_commit=%s\n' "${EXPECTED_TE_SHA}"
-  printf 'container_sha256=%s\n' "${CONTAINER_SHA256}"
-  printf 'runtime_preflight_job_id=%s\n' "${RUNTIME_PREFLIGHT_JOB_ID}"
-  printf 'runtime_attestation=%s\n' "${RUNTIME_ATTESTATION}"
-  printf 'managed_python_version=%s\n' "${MANAGED_PYTHON_VERSION}"
-  printf 'managed_python_install_dir=%s\n' "${MANAGED_PYTHON_INSTALL_DIR}"
-  printf 'pinned_uv_version=%s\n' "${PINNED_UV_VERSION}"
-  printf 'uv_executable=%s\n' "${UV_EXECUTABLE}"
-  printf 'nvte_with_nccl_ep=%s\n' "${NVTE_WITH_NCCL_EP}"
-} >"${run_log_dir}/run-metadata.env"
 export COMMAND CONTAINER CONTAINER_SHA256 MOUNTS RUNTIME_ATTESTATION_COMMAND
 export BASE_LOG_DIR=${run_log_dir}
 export GPUS_PER_NODE=${MODEL_GPUS_PER_NODE}
@@ -467,5 +512,127 @@ export UV_PYTHON_DOWNLOADS=never
 export PINNED_UV_VERSION UV_EXECUTABLE
 export NVTE_WITH_NCCL_EP
 export SOURCE_PROVENANCE_VERIFIER=${source_provenance_verifier}
+export R3_DRIVER_COMMAND_FILE
+
+if [[ "${SBATCH_TEST_ONLY}" == "1" ]]; then
+  scheduler_test_output=$("${sbatch_command[@]}")
+  printf 'SBATCH_TEST_ONLY_OUTPUT: %s\n' "${scheduler_test_output}"
+  exit 0
+fi
+
+mkdir -p "${run_log_dir}"
+if [[ -n "${R3_DRIVER_COMMAND_FILE}" ]]; then
+  r3_command_tmp=$(mktemp "${run_log_dir}/.r3-driver-command.XXXXXX")
+  printf '%s' "${RENDERED_DRIVER_COMMAND}" >"${r3_command_tmp}"
+  mv -f "${r3_command_tmp}" "${R3_DRIVER_COMMAND_FILE}"
+  written_r3_driver_sha256=$(sha256_regular_file "${R3_DRIVER_COMMAND_FILE}") || \
+    fail "Written R3 driver command is unsafe or unreadable"
+  [[ "${written_r3_driver_sha256}" == "${R3_DRIVER_COMMAND_SHA256}" ]] || \
+    fail "Written R3 driver command digest mismatch"
+fi
+
 job_id=$("${sbatch_command[@]}")
+[[ "${job_id}" =~ ^[1-9][0-9]*$ ]] || fail "sbatch --parsable returned an invalid job ID"
+if [[ -n "${R3_VALIDATION_RECORD_PATTERN}" ]]; then
+  R3_VALIDATION_RECORD_INITIAL_PATH=${run_log_dir}/r3-validation-job-${job_id}-restart-0/r3-validation.json
+fi
+
+sbatch_argv_json=$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "${sbatch_command[@]}")
+rendered_driver_command_base64=$(printf '%s' "${RENDERED_DRIVER_COMMAND}" | base64 | tr -d '\n')
+effective_command_base64=$(printf '%s' "${COMMAND}" | base64 | tr -d '\n')
+sbatch_argv_json_base64=$(printf '%s' "${sbatch_argv_json}" | base64 | tr -d '\n')
+output_pattern_base64=$(printf '%s' "${run_log_dir}/slurm-%j.log" | base64 | tr -d '\n')
+resolved_output_path_base64=$(printf '%s' "${run_log_dir}/slurm-${job_id}.log" | base64 | tr -d '\n')
+run_log_dir_base64=$(printf '%s' "${run_log_dir}" | base64 | tr -d '\n')
+container_path_base64=$(printf '%s' "${CONTAINER}" | base64 | tr -d '\n')
+runtime_attestation_base64=$(printf '%s' "${RUNTIME_ATTESTATION}" | base64 | tr -d '\n')
+managed_python_install_dir_base64=$(printf '%s' "${MANAGED_PYTHON_INSTALL_DIR}" | base64 | tr -d '\n')
+uv_executable_base64=$(printf '%s' "${UV_EXECUTABLE}" | base64 | tr -d '\n')
+r3_validation_record_pattern_base64=$(printf '%s' "${R3_VALIDATION_RECORD_PATTERN}" | base64 | tr -d '\n')
+r3_validation_record_initial_path_base64=$(printf '%s' "${R3_VALIDATION_RECORD_INITIAL_PATH}" | base64 | tr -d '\n')
+r3_driver_command_file_base64=$(printf '%s' "${R3_DRIVER_COMMAND_FILE}" | base64 | tr -d '\n')
+r3_checker_path_base64=$(printf '%s' "${R3_CHECKER_PATH}" | base64 | tr -d '\n')
+r3_record_python_base64=$(printf '%s' "${R3_RECORD_PYTHON}" | base64 | tr -d '\n')
+metadata_env_tmp=
+metadata_json_tmp=
+cleanup_metadata_temps() {
+  [[ -z "${metadata_env_tmp}" ]] || rm -f -- "${metadata_env_tmp}"
+  [[ -z "${metadata_json_tmp}" ]] || rm -f -- "${metadata_json_tmp}"
+}
+trap cleanup_metadata_temps EXIT
+metadata_env_tmp=$(mktemp "${run_log_dir}/.run-metadata.env.XXXXXX")
+metadata_json_tmp=$(mktemp "${run_log_dir}/.run-metadata.json.XXXXXX")
+{
+  printf 'schema_version=1\n'
+  printf 'job_id=%s\n' "${job_id}"
+  printf 'rendered_driver_command_base64=%s\n' "${rendered_driver_command_base64}"
+  printf 'effective_command_base64=%s\n' "${effective_command_base64}"
+  printf 'sbatch_argv_json_base64=%s\n' "${sbatch_argv_json_base64}"
+  printf 'output_pattern_base64=%s\n' "${output_pattern_base64}"
+  printf 'resolved_output_path_base64=%s\n' "${resolved_output_path_base64}"
+  printf 'run_log_dir_base64=%s\n' "${run_log_dir_base64}"
+  printf 'container_path_base64=%s\n' "${container_path_base64}"
+  printf 'model=%s\n' "${MODEL}"
+  printf 'dispatcher=%s\n' "${DISPATCHER}"
+  printf 'scope=%s\n' "${SCOPE}"
+  printf 'scope_name=%s\n' "${SCOPE_NAME}"
+  printf 'mode=%s\n' "${MODE}"
+  printf 'cluster=%s\n' "${CLUSTER}"
+  printf 'profile=%s\n' "${PROFILE_ID}"
+  printf 'profile_sha256=%s\n' "${PROFILE_SHA256}"
+  printf 'phase=%s\nsteps=%s\nrun_group=%s\nrepeat=%s\nrouter_replay=%s\n' "${PHASE}" "${STEPS}" "${RUN_GROUP}" "${REPEAT_INDEX}" "${ROUTER_REPLAY}"
+  printf 'tensorboard_enabled=%s\n' "${NEMORL_TENSORBOARD_ENABLED}"
+  printf 'num_nodes=%s\ngpus_per_node=%s\n' "${MODEL_NUM_NODES}" "${MODEL_GPUS_PER_NODE}"
+  printf 'nemo_rl_commit=%s\nbridge_commit=%s\nmcore_commit=%s\ntransformer_engine_commit=%s\ncontainer_sha256=%s\n' "${EXPECTED_NEMORL_SHA}" "${EXPECTED_BRIDGE_SHA}" "${EXPECTED_MCORE_SHA}" "${EXPECTED_TE_SHA}" "${CONTAINER_SHA256}"
+  printf 'runtime_preflight_job_id=%s\nruntime_attestation_base64=%s\nruntime_attestation_sha256=%s\nmanaged_python_version=%s\nmanaged_python_install_dir_base64=%s\npinned_uv_version=%s\nuv_executable_base64=%s\n' "${RUNTIME_PREFLIGHT_JOB_ID}" "${runtime_attestation_base64}" "${RUNTIME_ATTESTATION_SHA256}" "${MANAGED_PYTHON_VERSION}" "${managed_python_install_dir_base64}" "${PINNED_UV_VERSION}" "${uv_executable_base64}"
+  printf 'r3_validation_record_pattern_base64=%s\nr3_validation_record_initial_path_base64=%s\nr3_driver_command_file_base64=%s\nr3_driver_command_sha256=%s\nr3_checker_path_base64=%s\nr3_checker_sha256=%s\nr3_record_python_base64=%s\n' "${r3_validation_record_pattern_base64}" "${r3_validation_record_initial_path_base64}" "${r3_driver_command_file_base64}" "${R3_DRIVER_COMMAND_SHA256}" "${r3_checker_path_base64}" "${R3_CHECKER_SHA256}" "${r3_record_python_base64}"
+} >"${metadata_env_tmp}"
+METADATA_JOB_ID=${job_id} METADATA_RENDERED_DRIVER=${RENDERED_DRIVER_COMMAND} METADATA_COMMAND=${COMMAND} METADATA_RUN_LOG_DIR=${run_log_dir} METADATA_SCHEDULER_ARGV_JSON=${sbatch_argv_json} METADATA_OUTPUT_PATTERN=${run_log_dir}/slurm-%j.log METADATA_OUTPUT_PATH=${run_log_dir}/slurm-${job_id}.log METADATA_R3_RECORD_PATTERN=${R3_VALIDATION_RECORD_PATTERN} METADATA_R3_RECORD_INITIAL=${R3_VALIDATION_RECORD_INITIAL_PATH} METADATA_R3_DRIVER_FILE=${R3_DRIVER_COMMAND_FILE} METADATA_R3_DRIVER_SHA=${R3_DRIVER_COMMAND_SHA256} METADATA_R3_CHECKER_PATH=${R3_CHECKER_PATH} METADATA_R3_CHECKER_SHA=${R3_CHECKER_SHA256} METADATA_R3_RECORD_PYTHON=${R3_RECORD_PYTHON} METADATA_MODEL=${MODEL} METADATA_DISPATCHER=${DISPATCHER} METADATA_SCOPE=${SCOPE} METADATA_SCOPE_NAME=${SCOPE_NAME} METADATA_MODE=${MODE} METADATA_CLUSTER=${CLUSTER} METADATA_PROFILE=${PROFILE_ID} METADATA_PROFILE_SHA256=${PROFILE_SHA256} METADATA_PHASE=${PHASE} METADATA_STEPS=${STEPS} METADATA_RUN_GROUP=${RUN_GROUP} METADATA_REPEAT=${REPEAT_INDEX} METADATA_ROUTER_REPLAY=${ROUTER_REPLAY} METADATA_TENSORBOARD=${NEMORL_TENSORBOARD_ENABLED} METADATA_NUM_NODES=${MODEL_NUM_NODES} METADATA_GPUS_PER_NODE=${MODEL_GPUS_PER_NODE} METADATA_NEMORL_SHA=${EXPECTED_NEMORL_SHA} METADATA_BRIDGE_SHA=${EXPECTED_BRIDGE_SHA} METADATA_MCORE_SHA=${EXPECTED_MCORE_SHA} METADATA_TE_SHA=${EXPECTED_TE_SHA} METADATA_CONTAINER_PATH=${CONTAINER} METADATA_CONTAINER_SHA=${CONTAINER_SHA256} METADATA_RUNTIME_ATTESTATION=${RUNTIME_ATTESTATION} METADATA_RUNTIME_ATTESTATION_SHA=${RUNTIME_ATTESTATION_SHA256} METADATA_RUNTIME_PREFLIGHT=${RUNTIME_PREFLIGHT_JOB_ID} METADATA_PYTHON_VERSION=${MANAGED_PYTHON_VERSION} METADATA_PYTHON_DIR=${MANAGED_PYTHON_INSTALL_DIR} METADATA_UV_VERSION=${PINNED_UV_VERSION} METADATA_UV_EXECUTABLE=${UV_EXECUTABLE} python3 - "${metadata_json_tmp}" <<'PY'
+import json
+import os
+import sys
+
+record = {
+    "schema_version": 1, "job_id": int(os.environ["METADATA_JOB_ID"]),
+    "rendered_driver_command": os.environ["METADATA_RENDERED_DRIVER"],
+    "command": os.environ["METADATA_COMMAND"],
+    "sbatch_argv": json.loads(os.environ["METADATA_SCHEDULER_ARGV_JSON"]),
+    "output_pattern": os.environ["METADATA_OUTPUT_PATTERN"],
+    "resolved_output_path": os.environ["METADATA_OUTPUT_PATH"],
+    "run_log_dir": os.environ["METADATA_RUN_LOG_DIR"],
+    "r3_validation_record_pattern": os.environ["METADATA_R3_RECORD_PATTERN"],
+    "r3_validation_record_initial_path": os.environ["METADATA_R3_RECORD_INITIAL"],
+    "r3_driver_command_file": os.environ["METADATA_R3_DRIVER_FILE"],
+    "r3_driver_command_sha256": os.environ["METADATA_R3_DRIVER_SHA"],
+    "r3_checker_path": os.environ["METADATA_R3_CHECKER_PATH"],
+    "r3_checker_sha256": os.environ["METADATA_R3_CHECKER_SHA"],
+    "r3_record_python": os.environ["METADATA_R3_RECORD_PYTHON"],
+    "model": os.environ["METADATA_MODEL"], "dispatcher": os.environ["METADATA_DISPATCHER"],
+    "scope": os.environ["METADATA_SCOPE"], "scope_name": os.environ["METADATA_SCOPE_NAME"],
+    "mode": os.environ["METADATA_MODE"], "cluster": os.environ["METADATA_CLUSTER"],
+    "profile": os.environ["METADATA_PROFILE"], "profile_sha256": os.environ["METADATA_PROFILE_SHA256"],
+    "phase": os.environ["METADATA_PHASE"], "steps": int(os.environ["METADATA_STEPS"]),
+    "run_group": os.environ["METADATA_RUN_GROUP"], "repeat": int(os.environ["METADATA_REPEAT"]),
+    "router_replay": os.environ["METADATA_ROUTER_REPLAY"], "tensorboard_enabled": os.environ["METADATA_TENSORBOARD"] == "true",
+    "topology": {"num_nodes": int(os.environ["METADATA_NUM_NODES"]), "gpus_per_node": int(os.environ["METADATA_GPUS_PER_NODE"])},
+    "nemo_rl_commit": os.environ["METADATA_NEMORL_SHA"], "bridge_commit": os.environ["METADATA_BRIDGE_SHA"],
+    "mcore_commit": os.environ["METADATA_MCORE_SHA"], "transformer_engine_commit": os.environ["METADATA_TE_SHA"],
+    "container_path": os.environ["METADATA_CONTAINER_PATH"], "container_sha256": os.environ["METADATA_CONTAINER_SHA"],
+    "runtime_attestation": os.environ["METADATA_RUNTIME_ATTESTATION"], "runtime_attestation_sha256": os.environ["METADATA_RUNTIME_ATTESTATION_SHA"],
+    "runtime_preflight_job_id": int(os.environ["METADATA_RUNTIME_PREFLIGHT"]), "managed_python_version": os.environ["METADATA_PYTHON_VERSION"],
+    "managed_python_install_dir": os.environ["METADATA_PYTHON_DIR"], "pinned_uv_version": os.environ["METADATA_UV_VERSION"],
+    "uv_executable": os.environ["METADATA_UV_EXECUTABLE"],
+}
+with open(sys.argv[1], "w", encoding="utf-8") as output:
+    json.dump(record, output, sort_keys=True)
+    output.write("\n")
+PY
+mv -f "${metadata_env_tmp}" "${run_log_dir}/run-metadata.env"
+metadata_env_tmp=
+if ! mv -f "${metadata_json_tmp}" "${run_log_dir}/run-metadata.json"; then
+  rm -f -- "${run_log_dir}/run-metadata.env"
+  fail "Failed to publish authoritative run metadata JSON"
+fi
+metadata_json_tmp=
+trap - EXIT
 printf 'SLURM_JOB_ID: %s\n' "${job_id}"

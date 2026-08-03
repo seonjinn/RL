@@ -63,6 +63,7 @@ class ModelSpec:
     name: str
     nemorl_launcher: str
     nemorl_launcher_validated: bool
+    nemorl_tensorboard_enabled: bool
     nemorl_recipe: str
     mcore_recipe: str
     dispatcher: str
@@ -150,6 +151,9 @@ def load_model_spec(model: str) -> ModelSpec:
         nemorl_launcher=_required(values, "NEMORL_LAUNCHER", path),
         nemorl_launcher_validated=_selector_bool(
             values, "NEMORL_LAUNCHER_VALIDATED", path
+        ),
+        nemorl_tensorboard_enabled=_selector_bool(
+            values, "NEMORL_TENSORBOARD_ENABLED", path
         ),
         nemorl_recipe=_required(values, "NEMORL_RECIPE", path),
         mcore_recipe=_required(values, "MCORE_RECIPE", path),
@@ -312,7 +316,8 @@ def render_scope_command(
         f"cluster.gpus_per_node={spec.gpus_per_node}",
         f"logger.log_dir={log_dir or f'exp_logs/nemotron_thd_te_graph_20260731/{run_name}'}",
         "logger.wandb_enabled=true",
-        "logger.tensorboard_enabled=true",
+        "logger.tensorboard_enabled="
+        f"{str(spec.nemorl_tensorboard_enabled).lower()}",
         "logger.wandb.project=sna-cg-study",
         f"logger.wandb.name={run_name}",
         "++policy.router_replay.enabled="
