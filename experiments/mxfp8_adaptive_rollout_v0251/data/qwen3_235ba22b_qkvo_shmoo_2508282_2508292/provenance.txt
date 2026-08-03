@@ -1,0 +1,10 @@
+launch_nemo_rl_commit=443a9759a5aa0b03a5ac0fa6d26da6aa6a3aaf9a
+postprocess_nemo_rl_commit=35cb66051ea17fb405f91d2c0e81119919b4173a
+custom_vllm_commit=658d7b1571a914bee7df48f717c2a428ee7c45ad
+trace_job=2508161
+shmoo_jobs_8x4=2508282,2508284,2508286
+shmoo_jobs_128x4=2508288,2508290,2508292
+shmoo_vllm_benchmark_commit=402493d3fd40ac7ca1357d2bd8754fd1767eb8e9
+vllm_version=0.25.1
+flashinfer_version=0.6.13
+gpu=NVIDIA_GB200

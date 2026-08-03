@@ -1,0 +1,71 @@
+{
+  "observed_shape_count": 14,
+  "qualified_layer_family_count": 1,
+  "qualified_shape_count": 12,
+  "selection_policy": {
+    "max_speedup_cv": 0.03,
+    "min_cosine": 0.999,
+    "min_repeats": 3,
+    "min_speedup": 1.02,
+    "require_complete_layer_family": true,
+    "require_cuda_graph_capture_and_replay": true
+  },
+  "shape_results": [
+    {
+      "reason": "qualified",
+      "shape": "1,2304,4096"
+    },
+    {
+      "reason": "unstable_speedup",
+      "shape": "1,4096,2048"
+    },
+    {
+      "reason": "qualified",
+      "shape": "15,2304,4096"
+    },
+    {
+      "reason": "unstable_speedup",
+      "shape": "15,4096,2048"
+    },
+    {
+      "reason": "qualified",
+      "shape": "16,2304,4096"
+    },
+    {
+      "reason": "qualified",
+      "shape": "16,4096,2048"
+    },
+    {
+      "reason": "qualified",
+      "shape": "32,2304,4096"
+    },
+    {
+      "reason": "qualified",
+      "shape": "32,4096,2048"
+    },
+    {
+      "reason": "qualified",
+      "shape": "508,2304,4096"
+    },
+    {
+      "reason": "qualified",
+      "shape": "508,4096,2048"
+    },
+    {
+      "reason": "qualified",
+      "shape": "520,2304,4096"
+    },
+    {
+      "reason": "qualified",
+      "shape": "520,4096,2048"
+    },
+    {
+      "reason": "qualified",
+      "shape": "16384,2304,4096"
+    },
+    {
+      "reason": "qualified",
+      "shape": "16384,4096,2048"
+    }
+  ]
+}

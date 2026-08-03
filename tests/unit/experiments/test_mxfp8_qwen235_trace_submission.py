@@ -211,6 +211,42 @@ def test_qwen235_qkvo_trace_uses_separate_quantization_scope() -> None:
     assert "args+=(--test-only)" in submitter
 
 
+def test_qwen235_qkvo_performance_uses_cuda_graph_and_qualified_artifacts() -> None:
+    config_path = (
+        EXPERIMENT / "configs/eval_qwen3_235ba22b_qkvo_32k_performance.yaml"
+    )
+    submitter_path = EXPERIMENT / "submit_qwen235_qkvo_32k_ab_ptyche.sh"
+    assert config_path.is_file()
+    assert submitter_path.is_file()
+
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    generation = config["generation"]
+    assert generation["model_name"] == "Qwen/Qwen3-235B-A22B"
+    assert generation["max_new_tokens"] == 32768
+    assert generation["ignore_eos"] is True
+    assert generation["stop_token_ids"] == []
+    assert generation["num_prompts_per_step"] == 64
+    assert generation["vllm_cfg"]["quantization_ignored_layer_kws"] == [
+        ".mlp.gate"
+    ]
+    assert generation["vllm_cfg"]["enforce_eager"] is False
+    assert generation["vllm_kwargs"]["max_num_seqs"] == 32
+    assert generation["vllm_kwargs"]["max_num_batched_tokens"] == 16384
+    assert generation["vllm_kwargs"]["enable_chunked_prefill"] is True
+
+    submitter = submitter_path.read_text(encoding="utf-8")
+    assert "eval_qwen3_235ba22b_qkvo_32k_performance.yaml" in submitter
+    assert "run_ab.sh pair" in submitter
+    assert "qwen3_235ba22b_qkvo_shmoo_2508282_2508292" in submitter
+    assert "CANARY_EXPECTED_REQUESTS=64" in submitter
+    assert "CANARY_EXPECTED_TOKENS_PER_RESPONSE=32768" in submitter
+    assert "--nodes=2" in submitter
+    assert "--time=05:00:00" in submitter
+    assert "--segment=2" in submitter
+    assert "--dependency=" in submitter
+    assert "args+=(--test-only)" in submitter
+
+
 def _run_qkvo_trace_gate(
     tmp_path: Path,
     prefixes: list[str],
