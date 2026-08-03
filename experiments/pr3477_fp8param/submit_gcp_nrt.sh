@@ -83,6 +83,7 @@ export UV_CACHE_DIR=/root/.cache/uv
 export UV_PROJECT_ENVIRONMENT=${CACHE_ROOT}/driver-venv
 export UV_PYTHON_INSTALL_DIR=${CACHE_ROOT}/uv-python
 export UV_LOCK_TIMEOUT=7200
+export VLLM_USE_DEEP_GEMM=0
 ${WANDB_EXPORT}
 printf 'NEMO_RL_SOURCE_COMMIT=%s\n' "\$(git rev-parse HEAD)"
 uv run --frozen examples/run_grpo.py \
