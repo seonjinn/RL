@@ -444,10 +444,15 @@ def _is_fp8_weight(name, model):
 def quantize_mxfp8_weight(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """Quantize a checkpoint-layout weight and sanitize zero E8M0 scales."""
     from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
+        MXFP8_BLOCK_SIZE,
         mxfp8_e4m3_quantize,
     )
 
     value, scale = mxfp8_e4m3_quantize(weight)
+    value = value.reshape(weight.shape)
+    scale = scale.reshape(
+        *weight.shape[:-1], weight.shape[-1] // MXFP8_BLOCK_SIZE
+    )
     scale = torch.where(scale == 0, torch.ones_like(scale), scale)
     return value, scale
 
