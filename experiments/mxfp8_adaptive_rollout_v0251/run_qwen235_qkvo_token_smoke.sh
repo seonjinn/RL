@@ -8,8 +8,20 @@ fi
 
 ROOT=${NEMO_RL_REPO_ROOT:?set NEMO_RL_REPO_ROOT}
 RESULT_ROOT=${CANARY_RESULT_ROOT:?set CANARY_RESULT_ROOT}
-export CANARY_CONFIG="$ROOT/experiments/mxfp8_adaptive_rollout_v0251/configs/eval_qwen3_235ba22b_qkvo_token_smoke.yaml"
-export CANARY_EXPECTED_REQUESTS=64
+scope=${NEMORL_QWEN235_TOKEN_SMOKE_SCOPE:-qkvo}
+case "$scope" in
+  qkvo)
+    config_name=eval_qwen3_235ba22b_qkvo_token_smoke.yaml
+    ;;
+  moe)
+    config_name=eval_qwen3_235ba22b_moe_token_smoke.yaml
+    ;;
+  *)
+    echo "unsupported Qwen235 token smoke scope: $scope" >&2
+    exit 2
+    ;;
+esac
+export CANARY_CONFIG="$ROOT/experiments/mxfp8_adaptive_rollout_v0251/configs/$config_name"
 
 bash "$ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_ab.sh" baseline
 

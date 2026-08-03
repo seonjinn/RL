@@ -378,7 +378,9 @@ def test_qwen235_gsm8k_submitter_is_pinned_and_dependency_free() -> None:
     assert "run_qwen235_gsm8k_correctness.sh" in submitter
     assert "NEMORL_ENABLE_QWEN235_GSM8K_CORRECTNESS=1" in submitter
     assert "qwen235_tp4ep4_8x4_fix3_20260802" in submitter
-    assert "2b8121d1b56ccb44a4ee9bdb10adc5e355f58bf21e79079eadeb2ac7494bf417" in submitter
+    assert (
+        "2b8121d1b56ccb44a4ee9bdb10adc5e355f58bf21e79079eadeb2ac7494bf417" in submitter
+    )
     assert "models--Qwen--Qwen3-235B-A22B" in submitter
     assert "HF_DATASETS_CACHE=/home/sna/.cache/hf-datasets-canary" in submitter
     assert "--nodes=2" in submitter
@@ -394,9 +396,7 @@ def test_qwen235_gsm8k_submitter_is_pinned_and_dependency_free() -> None:
 
 
 def test_qwen235_qkvo_gsm8k_gate_uses_matched_scope_and_artifacts() -> None:
-    config_path = (
-        EXPERIMENT / "configs/eval_qwen3_235ba22b_qkvo_gsm8k_correctness.yaml"
-    )
+    config_path = EXPERIMENT / "configs/eval_qwen3_235ba22b_qkvo_gsm8k_correctness.yaml"
     wrapper_path = EXPERIMENT / "run_qwen235_qkvo_gsm8k_correctness.sh"
     submitter_path = EXPERIMENT / "submit_qwen235_qkvo_gsm8k_correctness_ptyche.sh"
     assert config_path.is_file()
@@ -423,7 +423,9 @@ def test_qwen235_qkvo_gsm8k_gate_uses_matched_scope_and_artifacts() -> None:
     submitter = submitter_path.read_text(encoding="utf-8")
     assert "run_qwen235_qkvo_gsm8k_correctness.sh" in submitter
     assert "qwen3_235ba22b_qkvo_shmoo_2508282_2508292" in submitter
-    assert "99de9254a1f51ec3f467055086d209511a49005f47bb0a260d24c63147178ef8" in submitter
+    assert (
+        "99de9254a1f51ec3f467055086d209511a49005f47bb0a260d24c63147178ef8" in submitter
+    )
     assert "--nodes=2" in submitter
     assert "--time=05:00:00" in submitter
     assert "--segment=2" in submitter
@@ -432,9 +434,11 @@ def test_qwen235_qkvo_gsm8k_gate_uses_matched_scope_and_artifacts() -> None:
 
 def test_qwen235_qkvo_token_smoke_is_small_and_validity_gated() -> None:
     config_path = EXPERIMENT / "configs/eval_qwen3_235ba22b_qkvo_token_smoke.yaml"
+    moe_config_path = EXPERIMENT / "configs/eval_qwen3_235ba22b_moe_token_smoke.yaml"
     wrapper_path = EXPERIMENT / "run_qwen235_qkvo_token_smoke.sh"
     submitter_path = EXPERIMENT / "submit_qwen235_qkvo_token_smoke_ptyche.sh"
     assert config_path.is_file()
+    assert moe_config_path.is_file()
     assert wrapper_path.is_file()
     assert submitter_path.is_file()
 
@@ -449,10 +453,25 @@ def test_qwen235_qkvo_token_smoke_is_small_and_validity_gated() -> None:
     assert generation["vllm_cfg"]["enforce_eager"] is False
     assert generation["vllm_kwargs"]["linear_backend"] == "flashinfer_cutedsl"
 
+    moe_config = yaml.safe_load(moe_config_path.read_text(encoding="utf-8"))
+    assert moe_config["generation"]["vllm_cfg"]["quantization_ignored_layer_kws"] == [
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        ".mlp.gate",
+        "lm_head",
+    ]
+    assert moe_config["generation"]["vllm_kwargs"]["linear_backend"] == (
+        "flashinfer_cutedsl"
+    )
+
     wrapper = wrapper_path.read_text(encoding="utf-8")
     assert 'run_ab.sh" baseline' in wrapper
     assert "response_validity_gate" in wrapper
     assert "--expected-rows 64" in wrapper
+    assert "CANARY_EXPECTED_REQUESTS" not in wrapper
+    assert "NEMORL_QWEN235_TOKEN_SMOKE_SCOPE" in wrapper
 
     submitter = submitter_path.read_text(encoding="utf-8")
     assert "NEMORL_ENABLE_QWEN235_QKVO_TOKEN_SMOKE=1" in submitter
@@ -460,3 +479,4 @@ def test_qwen235_qkvo_token_smoke_is_small_and_validity_gated() -> None:
     assert "--nodes=2" in submitter
     assert "--segment=2" in submitter
     assert "--dependency=" in submitter
+    assert "[qkvo|moe]" in submitter

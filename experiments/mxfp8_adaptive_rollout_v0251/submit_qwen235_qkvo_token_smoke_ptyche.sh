@@ -2,8 +2,13 @@
 set -euo pipefail
 
 ACTION=${1:-submit}
+SCOPE=${2:-qkvo}
 if [[ "$ACTION" != submit && "$ACTION" != test-only ]]; then
-  echo "usage: submit_qwen235_qkvo_token_smoke_ptyche.sh [submit|test-only]" >&2
+  echo "usage: submit_qwen235_qkvo_token_smoke_ptyche.sh [submit|test-only] [qkvo|moe]" >&2
+  exit 2
+fi
+if [[ "$SCOPE" != qkvo && "$SCOPE" != moe ]]; then
+  echo "unsupported Qwen235 token smoke scope: $SCOPE" >&2
   exit 2
 fi
 
@@ -36,7 +41,7 @@ for name in \
 done
 
 timestamp=$(date +%Y%m%d_%H%M%S)
-export CANARY_RESULT_ROOT=${CANARY_RESULT_ROOT:-/home/sna/results/nemorl-qwen235-mxfp8-qkvo-token-smoke/$timestamp}
+export CANARY_RESULT_ROOT=${CANARY_RESULT_ROOT:-/home/sna/results/nemorl-qwen235-mxfp8-$SCOPE-token-smoke/$timestamp}
 export CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh}
 export MOUNTS=${MOUNTS:-/lustre:/lustre,/home/sna:/home/sna}
 export HF_HOME=/lustre/fsw/coreai_dlalgo_llm/users/sna/hf
@@ -45,6 +50,7 @@ export HF_DATASETS_CACHE=/home/sna/.cache/hf-datasets-canary
 export GPUS_PER_NODE=4
 export BASE_LOG_DIR="$CANARY_RESULT_ROOT/slurm"
 export NEMORL_ENABLE_QWEN235_QKVO_TOKEN_SMOKE=1
+export NEMORL_QWEN235_TOKEN_SMOKE_SCOPE=$SCOPE
 export COMMAND="bash $NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_qwen235_qkvo_token_smoke.sh"
 export UV_CACHE_DIR_OVERRIDE=${UV_CACHE_DIR_OVERRIDE:-/home/sna/.cache/uv-canary}
 
@@ -92,7 +98,7 @@ args=(
   --nodes=2
   --time=02:00:00
   --segment=2
-  --job-name=coreai_dlalgo_llm-nemorl.qwen235-mxfp8-qkvo-token-smoke
+  --job-name=coreai_dlalgo_llm-nemorl.qwen235-mxfp8-$SCOPE-token-smoke
   --dependency=
   --export=ALL
 )
