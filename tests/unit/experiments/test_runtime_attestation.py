@@ -27,6 +27,21 @@ PYTHON_VERSION = "3.13.13"
 UV_VERSION = "0.11.18"
 
 
+def _device_bindings(
+    *, num_nodes: int = 2, gpus_per_node: int = 4
+) -> list[dict[str, int]]:
+    return [
+        {
+            "global_rank": node_rank * gpus_per_node + local_rank,
+            "node_rank": node_rank,
+            "local_rank": local_rank,
+            "cuda_device_index": local_rank,
+        }
+        for node_rank in range(num_nodes)
+        for local_rank in range(gpus_per_node)
+    ]
+
+
 def _load_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "verify_runtime_attestation", MODULE_PATH
@@ -562,7 +577,13 @@ def test_matrix_validator_requires_exact_content_bound_rows(tmp_path: Path) -> N
         "all_eval_callables_supported": True,
         "mcore_eval_reuse_graph_io": "not_implemented",
         "raw_te_eval_reuse_graph_io": True,
-        "topology": {"world_size": 8, "joined_ranks": list(range(8))},
+        "topology": {
+            "world_size": 8,
+            "num_nodes": 2,
+            "gpus_per_node": 4,
+            "joined_ranks": list(range(8)),
+            "device_bindings": _device_bindings(),
+        },
         "test_row_id": "te_eval_capability_8",
         "node_results": [],
     }
@@ -591,4 +612,70 @@ def test_matrix_validator_requires_exact_content_bound_rows(tmp_path: Path) -> N
             expected_te_version_base_commit="e" * 40,
             test_result_dir=tmp_path,
             required_rows=("te_eval_capability_8",),
+        )
+
+
+def test_matrix_validator_rejects_duplicate_or_missing_device_slots(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    candidate_sha = "f" * 40
+    candidate_dir = tmp_path / "mcore" / candidate_sha
+    candidate_dir.mkdir(parents=True)
+    bindings = _device_bindings()
+    bindings[1] = {
+        **bindings[1],
+        "local_rank": 0,
+        "cuda_device_index": 0,
+    }
+    payload = {
+        "schema_version": 1,
+        "status": "passed",
+        "candidate_kind": "mcore",
+        "candidate_sha": candidate_sha,
+        "integration_sha": MCORE_COMMIT,
+        "container_sha256": CONTAINER_SHA256,
+        "transformer_engine_version": "2.19.0.dev0",
+        "transformer_engine_source_commit": TE_COMMIT,
+        "transformer_engine_version_base_commit": "e" * 40,
+        "all_eval_callables_supported": True,
+        "mcore_eval_reuse_graph_io": "not_implemented",
+        "raw_te_eval_reuse_graph_io": True,
+        "topology": {
+            "world_size": 8,
+            "num_nodes": 2,
+            "gpus_per_node": 4,
+            "joined_ranks": list(range(8)),
+            "device_bindings": bindings,
+        },
+        "test_row_id": "te_eval_capability_8",
+        "node_results": [],
+    }
+    (candidate_dir / "te_eval_capability_8.json").write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="duplicate or missing"):
+        module.validate_matrix_results(
+            candidate_kind="mcore",
+            candidate_sha=candidate_sha,
+            integration_sha=MCORE_COMMIT,
+            expected_container_sha256=CONTAINER_SHA256,
+            expected_te_commit=TE_COMMIT,
+            expected_te_version_base_commit="e" * 40,
+            test_result_dir=tmp_path,
+            required_rows=("te_eval_capability_8",),
+        )
+
+
+def test_matrix_validator_rejects_global_rank_bound_to_wrong_device_slot() -> None:
+    module = _load_module()
+    bindings = _device_bindings()
+    bindings[0] = {**bindings[0], "global_rank": 4}
+    bindings[4] = {**bindings[4], "global_rank": 0}
+
+    with pytest.raises(ValueError, match="global rank.*device slot"):
+        module._validate_device_bindings(
+            bindings,
+            world_size=8,
+            num_nodes=2,
+            gpus_per_node=4,
         )

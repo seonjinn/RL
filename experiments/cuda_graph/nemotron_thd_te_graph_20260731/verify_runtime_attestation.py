@@ -70,6 +70,21 @@ MATRIX_ROWS = {
     ),
     "bridge": frozenset(("bridge_forward_only_eval_8",)),
 }
+MATRIX_ROW_WORLD_SIZES = {
+    "mcore": {
+        "te_eval_capability_8": 8,
+        "execution_kind_bank_8": 8,
+        "forward_only_schedule_8": 8,
+        "packed_eval_8": 8,
+        "packed_tp2_cp2_pp2_8": 8,
+        "hybrid_ep16": 16,
+        "hybrid_ep32": 32,
+        "router_replay_8": 8,
+        "router_replay_1f1b_8": 8,
+    },
+    "bridge": {"bridge_forward_only_eval_8": 8},
+}
+ALLOWED_ALLOCATIONS = frozenset(((1, 8, 8), (2, 4, 8), (4, 4, 16), (8, 4, 32)))
 ROW_ID = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
@@ -140,6 +155,62 @@ def _read_attestation(attestation: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("runtime attestation must contain a JSON object")
     return payload
+
+
+def _validate_device_bindings(
+    bindings: Any,
+    *,
+    world_size: int,
+    num_nodes: int,
+    gpus_per_node: int,
+) -> None:
+    if (num_nodes, gpus_per_node, world_size) not in ALLOWED_ALLOCATIONS:
+        raise ValueError("matrix result has an unsupported allocation/world size")
+    if not isinstance(bindings, list) or len(bindings) != world_size:
+        raise ValueError("matrix result device bindings must contain every global rank")
+    expected_keys = {"global_rank", "node_rank", "local_rank", "cuda_device_index"}
+    normalized: list[dict[str, int]] = []
+    for binding in bindings:
+        if not isinstance(binding, Mapping) or set(binding) != expected_keys:
+            raise ValueError("matrix result device binding has an invalid schema")
+        if any(
+            not isinstance(binding[key], int) or isinstance(binding[key], bool)
+            for key in expected_keys
+        ):
+            raise ValueError("matrix result device binding values must be integers")
+        global_rank = binding["global_rank"]
+        node_rank = binding["node_rank"]
+        local_rank = binding["local_rank"]
+        cuda_device_index = binding["cuda_device_index"]
+        if global_rank not in range(world_size):
+            raise ValueError("matrix result device binding global rank is out of range")
+        if node_rank not in range(num_nodes):
+            raise ValueError("matrix result device binding node rank is out of range")
+        if local_rank not in range(gpus_per_node):
+            raise ValueError("matrix result device binding local rank is out of range")
+        if cuda_device_index != local_rank:
+            raise ValueError("matrix result CUDA device does not match local rank")
+        normalized.append(dict(binding))
+    if sorted(binding["global_rank"] for binding in normalized) != list(
+        range(world_size)
+    ):
+        raise ValueError("matrix result has duplicate or missing global rank bindings")
+    actual_slots = {
+        (binding["node_rank"], binding["local_rank"]) for binding in normalized
+    }
+    expected_slots = {
+        (node_rank, local_rank)
+        for node_rank in range(num_nodes)
+        for local_rank in range(gpus_per_node)
+    }
+    if actual_slots != expected_slots or len(actual_slots) != world_size:
+        raise ValueError("matrix result has duplicate or missing per-node device slots")
+    if any(
+        binding["global_rank"]
+        != binding["node_rank"] * gpus_per_node + binding["local_rank"]
+        for binding in normalized
+    ):
+        raise ValueError("matrix result global rank does not match its device slot")
 
 
 def validate_matrix_results(
@@ -219,13 +290,26 @@ def validate_matrix_results(
         if not isinstance(topology, Mapping):
             raise ValueError("matrix result topology must be a JSON object")
         world_size = topology.get("world_size")
+        num_nodes = topology.get("num_nodes")
+        gpus_per_node = topology.get("gpus_per_node")
         joined_ranks = topology.get("joined_ranks")
         if (
             not isinstance(world_size, int)
             or isinstance(world_size, bool)
+            or world_size != MATRIX_ROW_WORLD_SIZES[candidate_kind][row_id]
+            or not isinstance(num_nodes, int)
+            or isinstance(num_nodes, bool)
+            or not isinstance(gpus_per_node, int)
+            or isinstance(gpus_per_node, bool)
             or joined_ranks != list(range(world_size))
         ):
             raise ValueError("matrix result does not prove every global rank joined")
+        _validate_device_bindings(
+            topology.get("device_bindings"),
+            world_size=world_size,
+            num_nodes=num_nodes,
+            gpus_per_node=gpus_per_node,
+        )
         if not isinstance(payload.get("transformer_engine_version"), str):
             raise ValueError("matrix result lacks Transformer Engine version")
         if not isinstance(payload.get("all_eval_callables_supported"), bool):

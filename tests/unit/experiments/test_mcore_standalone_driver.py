@@ -31,6 +31,21 @@ def _load_driver() -> ModuleType:
     return module
 
 
+def _device_bindings(
+    *, num_nodes: int = 2, gpus_per_node: int = 4
+) -> tuple[dict[str, int], ...]:
+    return tuple(
+        {
+            "global_rank": node_rank * gpus_per_node + local_rank,
+            "node_rank": node_rank,
+            "local_rank": local_rank,
+            "cuda_device_index": local_rank,
+        }
+        for node_rank in range(num_nodes)
+        for local_rank in range(gpus_per_node)
+    )
+
+
 def test_manifest_selects_exact_te_capability_nodes() -> None:
     module = _load_driver()
 
@@ -133,7 +148,10 @@ def test_atomic_result_records_each_node_and_all_joined_ranks(tmp_path: Path) ->
         integration_sha="b" * 40,
         row_id="te_eval_capability_8",
         world_size=8,
+        num_nodes=2,
+        gpus_per_node=4,
         joined_ranks=tuple(range(8)),
+        device_bindings=_device_bindings(),
         node_results=node_results,
         container_sha256="c" * 64,
         transformer_engine_version="2.19.0.dev0",
@@ -147,7 +165,13 @@ def test_atomic_result_records_each_node_and_all_joined_ranks(tmp_path: Path) ->
 
     assert json.loads(output.read_text()) == payload
     assert payload["status"] == "passed"
-    assert payload["topology"] == {"world_size": 8, "joined_ranks": list(range(8))}
+    assert payload["topology"] == {
+        "world_size": 8,
+        "num_nodes": 2,
+        "gpus_per_node": 4,
+        "joined_ranks": list(range(8)),
+        "device_bindings": list(_device_bindings()),
+    }
     assert [item["node"] for item in payload["node_results"]] == [
         "tests/test_graphs.py::test_one",
         "tests/test_graphs.py::test_two",
@@ -164,7 +188,111 @@ def test_result_fails_when_one_node_or_rank_is_missing() -> None:
             integration_sha="b" * 40,
             row_id="te_eval_capability_8",
             world_size=8,
+            num_nodes=2,
+            gpus_per_node=4,
             joined_ranks=tuple(range(7)),
+            device_bindings=_device_bindings(),
+            node_results=(
+                {"node": "tests/test.py::test_one", "status": "passed", "exit_code": 0},
+            ),
+            container_sha256="c" * 64,
+            transformer_engine_version="2.19.0.dev0",
+            transformer_engine_source_commit="d" * 40,
+            transformer_engine_version_base_commit="e" * 40,
+            all_eval_callables_supported=True,
+            mcore_eval_reuse_graph_io="not_implemented",
+            raw_te_eval_reuse_graph_io=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("local_rank", 4, "local rank"),
+        ("cuda_device_index", 1, "CUDA device"),
+    ),
+)
+def test_result_rejects_out_of_range_or_mismatched_rank_device_binding(
+    field: str, value: int, message: str
+) -> None:
+    module = _load_driver()
+    bindings = list(_device_bindings())
+    bindings[0] = {**bindings[0], field: value}
+
+    with pytest.raises(ValueError, match=message):
+        module.build_result(
+            candidate_kind="mcore",
+            candidate_sha="a" * 40,
+            integration_sha="b" * 40,
+            row_id="te_eval_capability_8",
+            world_size=8,
+            num_nodes=2,
+            gpus_per_node=4,
+            joined_ranks=tuple(range(8)),
+            device_bindings=tuple(bindings),
+            node_results=(
+                {"node": "tests/test.py::test_one", "status": "passed", "exit_code": 0},
+            ),
+            container_sha256="c" * 64,
+            transformer_engine_version="2.19.0.dev0",
+            transformer_engine_source_commit="d" * 40,
+            transformer_engine_version_base_commit="e" * 40,
+            all_eval_callables_supported=True,
+            mcore_eval_reuse_graph_io="not_implemented",
+            raw_te_eval_reuse_graph_io=False,
+        )
+
+
+def test_result_rejects_duplicate_or_missing_per_node_device_slots() -> None:
+    module = _load_driver()
+    bindings = list(_device_bindings())
+    bindings[1] = {
+        **bindings[1],
+        "local_rank": 0,
+        "cuda_device_index": 0,
+    }
+
+    with pytest.raises(ValueError, match="duplicate or missing"):
+        module.build_result(
+            candidate_kind="mcore",
+            candidate_sha="a" * 40,
+            integration_sha="b" * 40,
+            row_id="te_eval_capability_8",
+            world_size=8,
+            num_nodes=2,
+            gpus_per_node=4,
+            joined_ranks=tuple(range(8)),
+            device_bindings=tuple(bindings),
+            node_results=(
+                {"node": "tests/test.py::test_one", "status": "passed", "exit_code": 0},
+            ),
+            container_sha256="c" * 64,
+            transformer_engine_version="2.19.0.dev0",
+            transformer_engine_source_commit="d" * 40,
+            transformer_engine_version_base_commit="e" * 40,
+            all_eval_callables_supported=True,
+            mcore_eval_reuse_graph_io="not_implemented",
+            raw_te_eval_reuse_graph_io=False,
+        )
+
+
+def test_result_rejects_global_rank_bound_to_the_wrong_node_device_slot() -> None:
+    module = _load_driver()
+    bindings = list(_device_bindings())
+    bindings[0] = {**bindings[0], "global_rank": 4}
+    bindings[4] = {**bindings[4], "global_rank": 0}
+
+    with pytest.raises(ValueError, match="global rank.*device slot"):
+        module.build_result(
+            candidate_kind="mcore",
+            candidate_sha="a" * 40,
+            integration_sha="b" * 40,
+            row_id="te_eval_capability_8",
+            world_size=8,
+            num_nodes=2,
+            gpus_per_node=4,
+            joined_ranks=tuple(range(8)),
+            device_bindings=tuple(bindings),
             node_results=(
                 {"node": "tests/test.py::test_one", "status": "passed", "exit_code": 0},
             ),

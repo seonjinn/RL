@@ -72,6 +72,68 @@ def validate_allocation(*, num_nodes: int, gpus_per_node: int, world_size: int) 
     return world_size
 
 
+def validate_device_bindings(
+    bindings: tuple[Mapping[str, Any], ...],
+    *,
+    world_size: int,
+    num_nodes: int,
+    gpus_per_node: int,
+) -> tuple[dict[str, int], ...]:
+    """Require one unique local-rank/CUDA-device slot for every global rank."""
+    validate_allocation(
+        num_nodes=num_nodes,
+        gpus_per_node=gpus_per_node,
+        world_size=world_size,
+    )
+    if len(bindings) != world_size:
+        raise ValueError("device bindings must contain every global rank")
+    normalized: list[dict[str, int]] = []
+    expected_keys = {"global_rank", "node_rank", "local_rank", "cuda_device_index"}
+    for binding in bindings:
+        if not isinstance(binding, Mapping) or set(binding) != expected_keys:
+            raise ValueError("device binding has an invalid schema")
+        if any(
+            not isinstance(binding[key], int) or isinstance(binding[key], bool)
+            for key in expected_keys
+        ):
+            raise ValueError("device binding values must be integers")
+        global_rank = binding["global_rank"]
+        node_rank = binding["node_rank"]
+        local_rank = binding["local_rank"]
+        cuda_device_index = binding["cuda_device_index"]
+        if global_rank not in range(world_size):
+            raise ValueError("device binding global rank is out of range")
+        if node_rank not in range(num_nodes):
+            raise ValueError("device binding node rank is out of range")
+        if local_rank not in range(gpus_per_node):
+            raise ValueError("device binding local rank is out of range")
+        if cuda_device_index != local_rank:
+            raise ValueError("device binding CUDA device does not match local rank")
+        normalized.append(dict(binding))
+    normalized.sort(key=lambda binding: binding["global_rank"])
+    if [binding["global_rank"] for binding in normalized] != list(range(world_size)):
+        raise ValueError("device bindings contain duplicate or missing global ranks")
+    actual_slots = {
+        (binding["node_rank"], binding["local_rank"]) for binding in normalized
+    }
+    expected_slots = {
+        (node_rank, local_rank)
+        for node_rank in range(num_nodes)
+        for local_rank in range(gpus_per_node)
+    }
+    if actual_slots != expected_slots or len(actual_slots) != world_size:
+        raise ValueError(
+            "device bindings contain duplicate or missing per-node device slots"
+        )
+    if any(
+        binding["global_rank"]
+        != binding["node_rank"] * gpus_per_node + binding["local_rank"]
+        for binding in normalized
+    ):
+        raise ValueError("device binding global rank does not match its device slot")
+    return tuple(normalized)
+
+
 def _require_string_list(value: Any, *, label: str) -> tuple[str, ...]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ValueError(f"{label} must be a JSON string list")
@@ -168,7 +230,10 @@ def build_result(
     integration_sha: str,
     row_id: str,
     world_size: int,
+    num_nodes: int,
+    gpus_per_node: int,
     joined_ranks: tuple[int, ...],
+    device_bindings: tuple[Mapping[str, Any], ...],
     node_results: tuple[Mapping[str, Any], ...],
     container_sha256: str,
     transformer_engine_version: str,
@@ -197,6 +262,12 @@ def build_result(
         raise ValueError("container SHA256 must be 64 lowercase hexadecimal characters")
     if joined_ranks != tuple(range(world_size)):
         raise ValueError("joined ranks must contain every global rank exactly once")
+    normalized_bindings = validate_device_bindings(
+        device_bindings,
+        world_size=world_size,
+        num_nodes=num_nodes,
+        gpus_per_node=gpus_per_node,
+    )
     if not node_results:
         raise ValueError("node results must not be empty")
     if any(
@@ -218,7 +289,13 @@ def build_result(
         "all_eval_callables_supported": all_eval_callables_supported,
         "mcore_eval_reuse_graph_io": mcore_eval_reuse_graph_io,
         "raw_te_eval_reuse_graph_io": raw_te_eval_reuse_graph_io,
-        "topology": {"world_size": world_size, "joined_ranks": list(joined_ranks)},
+        "topology": {
+            "world_size": world_size,
+            "num_nodes": num_nodes,
+            "gpus_per_node": gpus_per_node,
+            "joined_ranks": list(joined_ranks),
+            "device_bindings": list(normalized_bindings),
+        },
         "node_results": [dict(result) for result in node_results],
     }
 
@@ -390,13 +467,25 @@ def main() -> int:
             {"node": node, "status": "passed" if passed else "failed", "exit_code": 0 if passed else 1}
         )
     rank_zero_capability = rank_payloads[0]["capability"]
+    device_bindings = tuple(
+        {
+            "global_rank": payload["rank"],
+            "node_rank": payload["capability"].get("node_rank"),
+            "local_rank": payload["capability"].get("local_rank"),
+            "cuda_device_index": payload["capability"].get("cuda_device_index"),
+        }
+        for payload in rank_payloads
+    )
     payload = build_result(
         candidate_kind=args.candidate_kind,
         candidate_sha=args.candidate_sha,
         integration_sha=args.integration_sha,
         row_id=args.row_id,
         world_size=world_size,
+        num_nodes=args.num_nodes,
+        gpus_per_node=args.gpus_per_node,
         joined_ranks=joined_ranks,
+        device_bindings=device_bindings,
         node_results=tuple(combined_results),
         container_sha256=args.container_sha256,
         transformer_engine_version=args.transformer_engine_version,
