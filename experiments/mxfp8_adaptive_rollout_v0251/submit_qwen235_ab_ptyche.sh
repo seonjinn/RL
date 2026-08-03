@@ -35,9 +35,9 @@ for name in \
   unset "$name"
 done
 
-artifact_dir=${TACTIC_ARTIFACT_DIR:-/home/sna/mxfp8-safe-backend/vllm-benchmark-qwen235-shmoo/experiments/sweep/data/microbench/qwen235_tp4ep4_8x4_fix1_20260802}
+artifact_dir=${TACTIC_ARTIFACT_DIR:-/home/sna/mxfp8-safe-backend/vllm-benchmark-qwen235-shmoo/experiments/sweep/data/microbench/qwen235_tp4ep4_8x4_fix3_20260802}
 export TACTIC_FILE="$artifact_dir/exact_tactics.json"
-export TACTIC_SHA256=${TACTIC_SHA256:-bf1630d7327d58b6742ab0359c5993b59dc28c4ec96d9008c9fe0a1e399c189e}
+export TACTIC_SHA256=${TACTIC_SHA256:-2b8121d1b56ccb44a4ee9bdb10adc5e355f58bf21e79079eadeb2ac7494bf417}
 LAYER_ALLOWLIST_FILE="$artifact_dir/layer_allowlist.txt"
 export LAYER_ALLOWLIST_B64
 LAYER_ALLOWLIST_B64=$(base64 < "$LAYER_ALLOWLIST_FILE")

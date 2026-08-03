@@ -127,8 +127,8 @@ def test_qwen235_performance_config_and_submitter_define_matched_three_arm_run()
     submitter = submitter_path.read_text(encoding="utf-8")
     assert "eval_qwen3_235ba22b_performance.yaml" in submitter
     assert "run_ab.sh run" in submitter
-    assert "qwen235_tp4ep4_8x4_fix1_20260802" in submitter
-    assert "bf1630d7327d58b6742ab0359c5993b59dc28c4ec96d9008c9fe0a1e399c189e" in submitter
+    assert "qwen235_tp4ep4_8x4_fix3_20260802" in submitter
+    assert "2b8121d1b56ccb44a4ee9bdb10adc5e355f58bf21e79079eadeb2ac7494bf417" in submitter
     assert "models--Qwen--Qwen3-235B-A22B" in submitter
     assert "HF_DATASETS_CACHE=/home/sna/.cache/hf-datasets-canary" in submitter
     assert "--nodes=2" in submitter
