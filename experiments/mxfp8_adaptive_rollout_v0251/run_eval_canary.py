@@ -36,7 +36,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument(
-        "--arm", choices=("baseline", "trace", "adaptive"), required=True
+        "--arm",
+        choices=("baseline", "trace", "trtllm_default", "adaptive"),
+        required=True,
     )
     args, remaining = parser.parse_known_args()
 

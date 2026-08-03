@@ -6,7 +6,7 @@ import math
 import re
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 
 class RunSummary(TypedDict):
@@ -26,6 +26,8 @@ class RunSummary(TypedDict):
 class SummaryReport(TypedDict):
     runs: list[RunSummary]
     adaptive_vs_baseline_speedup: float | None
+    trtllm_default_vs_baseline_speedup: NotRequired[float | None]
+    adaptive_vs_trtllm_default_speedup: NotRequired[float | None]
 
 
 _MARKER = re.compile(r"^NEMORL_CANARY\s+(?P<fields>.+)$")
@@ -169,8 +171,12 @@ def summarize_log(path: Path, *, gpu_count: int = 8) -> RunSummary:
 def summarize_logs(paths: Sequence[Path], *, gpu_count: int = 8) -> SummaryReport:
     runs = [summarize_log(path, gpu_count=gpu_count) for path in paths]
     speedup: float | None = None
+    report: SummaryReport = {
+        "runs": runs,
+        "adaptive_vs_baseline_speedup": speedup,
+    }
+    runs_by_arm = {run["arm"]: run for run in runs}
     if len(runs) == 2:
-        runs_by_arm = {run["arm"]: run for run in runs}
         if set(runs_by_arm) == {"adaptive", "baseline"}:
             adaptive_throughput = runs_by_arm["adaptive"]["tokens_per_second"]
             baseline_throughput = runs_by_arm["baseline"]["tokens_per_second"]
@@ -180,7 +186,39 @@ def summarize_logs(paths: Sequence[Path], *, gpu_count: int = 8) -> SummaryRepor
                 and baseline_throughput > 0
             ):
                 speedup = adaptive_throughput / baseline_throughput
-    return {"runs": runs, "adaptive_vs_baseline_speedup": speedup}
+                report["adaptive_vs_baseline_speedup"] = speedup
+        return report
+    if len(runs) != 3 or set(runs_by_arm) != {
+        "adaptive",
+        "baseline",
+        "trtllm_default",
+    }:
+        return report
+
+    def speedup_for(numerator_arm: str, denominator_arm: str) -> float | None:
+        numerator_run = runs_by_arm[numerator_arm]
+        denominator_run = runs_by_arm[denominator_arm]
+        numerator = numerator_run["tokens_per_second"]
+        denominator = denominator_run["tokens_per_second"]
+        if (
+            numerator is None
+            or denominator is None
+            or numerator_run["output_tokens"] is None
+            or numerator_run["output_tokens"] != denominator_run["output_tokens"]
+            or numerator <= 0
+            or denominator <= 0
+        ):
+            return None
+        return numerator / denominator
+
+    report["adaptive_vs_baseline_speedup"] = speedup_for("adaptive", "baseline")
+    report["trtllm_default_vs_baseline_speedup"] = speedup_for(
+        "trtllm_default", "baseline"
+    )
+    report["adaptive_vs_trtllm_default_speedup"] = speedup_for(
+        "adaptive", "trtllm_default"
+    )
+    return report
 
 
 def _positive_int(value: str) -> int:

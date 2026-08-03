@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ARM=${1:?usage: run_arm.sh baseline|trace|adaptive}
+ARM=${1:?usage: run_arm.sh baseline|trace|trtllm_default|adaptive}
 ROOT=${NEMO_RL_REPO_ROOT:?set NEMO_RL_REPO_ROOT}
 VLLM_SOURCE=${CUSTOM_VLLM_SOURCE:?set CUSTOM_VLLM_SOURCE}
 VLLM_RUNTIME_ROOT=${CUSTOM_VLLM_RUNTIME_ROOT:?set CUSTOM_VLLM_RUNTIME_ROOT}
@@ -35,6 +35,11 @@ if [[ "$ARM" == adaptive ]]; then
   contract+=(
     --tactic-file "${TACTIC_FILE:?set TACTIC_FILE}"
     --tactic-sha256 "${TACTIC_SHA256:?set TACTIC_SHA256}"
+    --layer-allowlist-b64 "${LAYER_ALLOWLIST_B64:?set LAYER_ALLOWLIST_B64}"
+    --switch-m "${SWITCH_M:-256}"
+  )
+elif [[ "$ARM" == trtllm_default ]]; then
+  contract+=(
     --layer-allowlist-b64 "${LAYER_ALLOWLIST_B64:?set LAYER_ALLOWLIST_B64}"
     --switch-m "${SWITCH_M:-256}"
   )

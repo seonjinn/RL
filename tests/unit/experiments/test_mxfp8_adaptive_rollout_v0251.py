@@ -1,7 +1,10 @@
+import asyncio
 import hashlib
 import json
-import asyncio
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 import yaml
@@ -45,6 +48,44 @@ def test_baseline_uses_same_custom_source_without_adaptive_table(
     assert env["VLLM_SUBPROCESS_PYTHONPATH"] == str(runtime_root)
     assert env["NEMORL_MXFP8_LINEAR_BACKEND"] == "flashinfer_cutedsl"
     assert "VLLM_MXFP8_DENSE_TRTLLM_EXACT_TACTIC_FILE" not in env
+
+
+def test_trtllm_default_cli_uses_adaptive_layout_without_offline_tactic(
+    tmp_path: Path,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    (runtime_root / "vllm").mkdir(parents=True)
+    root = Path(__file__).parents[3]
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "experiments.mxfp8_adaptive_rollout_v0251.contract",
+            "--arm",
+            "trtllm_default",
+            "--runtime-root",
+            str(runtime_root),
+            "--layer-allowlist-b64",
+            "MTI4MCw4MTkyCg==",
+            "--switch-m",
+            "512",
+        ],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        env=os.environ | {"PYTHONPATH": str(root)},
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    env = dict(line.split("=", maxsplit=1) for line in result.stdout.splitlines())
+    assert env["NEMORL_MXFP8_LINEAR_BACKEND"] == "flashinfer_trtllm"
+    assert env["VLLM_MXFP8_DENSE_TRTLLM_LAYOUT"] == "adaptive"
+    assert env["VLLM_MXFP8_DENSE_TRTLLM_SWITCH_M"] == "512"
+    assert env["VLLM_MXFP8_DENSE_TRTLLM_LAYER_ALLOWLIST_B64"] == "MTI4MCw4MTkyCg=="
+    assert "VLLM_MXFP8_DENSE_TRTLLM_EXACT_TACTIC_FILE" not in env
+    assert "VLLM_MXFP8_DENSE_TRTLLM_EXACT_TACTIC_SHA256" not in env
 
 
 def test_adaptive_requires_matching_table_hash(tmp_path: Path) -> None:
@@ -289,6 +330,79 @@ def test_summary_reports_adaptive_speedup_for_matched_pair(tmp_path: Path) -> No
 
     assert [run["arm"] for run in report["runs"]] == ["adaptive", "baseline"]
     assert report["adaptive_vs_baseline_speedup"] == pytest.approx(2.0)
+    assert "trtllm_default_vs_baseline_speedup" not in report
+    assert "adaptive_vs_trtllm_default_speedup" not in report
+
+
+@pytest.mark.parametrize(
+    (
+        "baseline_tokens",
+        "default_tokens",
+        "adaptive_tokens",
+        "adaptive_vs_baseline",
+        "default_vs_baseline",
+        "adaptive_vs_default",
+    ),
+    [
+        (1000, 1000, 1000, 2.0, 1.25, 1.6),
+        (0, 1000, 1000, None, None, 1.6),
+        (900, 1000, 1000, None, None, 1.6),
+        (1000, 900, 1000, 2.0, None, None),
+    ],
+)
+def test_summary_reports_valid_three_arm_speedups(
+    tmp_path: Path,
+    baseline_tokens: int,
+    default_tokens: int,
+    adaptive_tokens: int,
+    adaptive_vs_baseline: float | None,
+    default_vs_baseline: float | None,
+    adaptive_vs_default: float | None,
+) -> None:
+    baseline = tmp_path / "baseline.log"
+    trtllm_default = tmp_path / "trtllm_default.log"
+    adaptive = tmp_path / "adaptive.log"
+    for path, arm, generation_seconds, output_tokens in (
+        (baseline, "baseline", 10.0, baseline_tokens),
+        (trtllm_default, "trtllm_default", 8.0, default_tokens),
+        (adaptive, "adaptive", 5.0, adaptive_tokens),
+    ):
+        path.write_text(
+            "\n".join(
+                [
+                    f"NEMORL_CANARY arm={arm} event=start epoch=0",
+                    "NEMORL_CANARY event=model_ready epoch=1",
+                    (
+                        "NEMORL_CANARY event=generation "
+                        f"seconds={generation_seconds} calls=1"
+                    ),
+                    f"NEMORL_CANARY event=outputs tokens={output_tokens}",
+                    "NEMORL_CANARY event=complete epoch=20",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    report = summarize.summarize_logs([baseline, trtllm_default, adaptive])
+
+    if adaptive_vs_baseline is None:
+        assert report["adaptive_vs_baseline_speedup"] is None
+    else:
+        assert report["adaptive_vs_baseline_speedup"] == pytest.approx(
+            adaptive_vs_baseline
+        )
+    if default_vs_baseline is None:
+        assert report["trtllm_default_vs_baseline_speedup"] is None
+    else:
+        assert report["trtllm_default_vs_baseline_speedup"] == pytest.approx(
+            default_vs_baseline
+        )
+    if adaptive_vs_default is None:
+        assert report["adaptive_vs_trtllm_default_speedup"] is None
+    else:
+        assert report["adaptive_vs_trtllm_default_speedup"] == pytest.approx(
+            adaptive_vs_default
+        )
 
 
 @pytest.mark.parametrize(
@@ -328,6 +442,109 @@ def test_summary_omits_speedup_for_unmatched_or_zero_throughput_pair(
     report = summarize.summarize_logs([first, second])
 
     assert report["adaptive_vs_baseline_speedup"] is None
+
+
+def _write_executable(path: Path, content: str) -> None:
+    path.write_text(content, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def test_run_ab_executes_three_arms_and_reports_three_way_speedups(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).parents[3]
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    run_arms = tmp_path / "run_arms.txt"
+    summary_logs = tmp_path / "summary_logs.txt"
+    result_root = tmp_path / "results"
+    vllm_source = tmp_path / "vllm-source"
+    vllm_source.mkdir()
+    driver_venv = tmp_path / "driver-venv"
+    driver_bin = driver_venv / "bin"
+    driver_bin.mkdir(parents=True)
+
+    _write_executable(
+        fake_bin / "bash",
+        """#!/bin/bash
+if [[ "${1##*/}" == "run_arm.sh" ]]; then
+  printf '%s\\n' "$2" >> "${RUN_ARM_LOG:?}"
+  exit 0
+fi
+exec /bin/bash "$@"
+""",
+    )
+    _write_executable(
+        fake_bin / "git",
+        """#!/bin/bash
+if [[ "$*" == *"rev-parse HEAD"* ]]; then
+  printf '%s\\n' "${EXPECTED_VLLM_COMMIT:?}"
+fi
+""",
+    )
+    _write_executable(
+        fake_bin / "python3",
+        """#!/bin/bash
+if [[ "$1" == "-m" && "$2" == "experiments.mxfp8_adaptive_rollout_v0251.summarize" ]]; then
+  printf '%s\\n' "$3" "$4" "$5" > "${SUMMARY_LOGS:?}"
+  output=""
+  for ((index = 1; index <= $#; index++)); do
+    if [[ "${!index}" == "--output" ]]; then
+      next=$((index + 1))
+      output="${!next}"
+      break
+    fi
+  done
+  exec "${REAL_PYTHON:?}" -c 'import json; import sys; from pathlib import Path; output = Path(sys.argv[1]); output.parent.mkdir(parents=True, exist_ok=True); output.write_text(json.dumps({"runs": [{"arm": "baseline", "tokens_per_second": 100.0}, {"arm": "trtllm_default", "tokens_per_second": 150.0}, {"arm": "adaptive", "tokens_per_second": 200.0}], "adaptive_vs_baseline_speedup": None}) + "\\n")' "$output"
+fi
+exec "${REAL_PYTHON:?}" "$@"
+""",
+    )
+    _write_executable(
+        driver_bin / "python",
+        """#!/bin/bash
+for argument in "$@"; do
+  if [[ "$argument" == *"runtime_overlay.py" ]]; then
+    printf '%s\\n' "${FAKE_RUNTIME_ROOT:?}"
+    break
+  fi
+done
+""",
+    )
+
+    environment = os.environ | {
+        "CANARY_RESULT_ROOT": str(result_root),
+        "CUSTOM_VLLM_RUNTIME_BASE": str(tmp_path / "runtime-base"),
+        "CUSTOM_VLLM_SOURCE": str(vllm_source),
+        "EXPECTED_VLLM_COMMIT": "deadbeef",
+        "FAKE_RUNTIME_ROOT": str(tmp_path / "runtime"),
+        "NEMO_RL_DRIVER_VENV_DIR": str(driver_venv),
+        "NEMO_RL_REPO_ROOT": str(root),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "REAL_PYTHON": sys.executable,
+        "RUN_ARM_LOG": str(run_arms),
+        "SUMMARY_LOGS": str(summary_logs),
+    }
+
+    result = subprocess.run(
+        ["/bin/bash", str(root / "experiments/mxfp8_adaptive_rollout_v0251/run_ab.sh")],
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert run_arms.read_text(encoding="utf-8").splitlines() == [
+        "baseline",
+        "trtllm_default",
+        "adaptive",
+    ]
+    assert summary_logs.read_text(encoding="utf-8").splitlines() == [
+        str(result_root / "baseline/run.log"),
+        str(result_root / "trtllm_default/run.log"),
+        str(result_root / "adaptive/run.log"),
+    ]
 
 
 def test_arm_reuses_locked_driver_interpreter_for_ray_actors() -> None:

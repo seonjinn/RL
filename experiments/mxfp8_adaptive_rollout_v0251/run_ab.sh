@@ -62,9 +62,11 @@ if [[ "$ACTION" == smoke ]]; then
 fi
 
 bash "$ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_arm.sh" baseline
+bash "$ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_arm.sh" trtllm_default
 bash "$ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_arm.sh" adaptive
 python3 -m experiments.mxfp8_adaptive_rollout_v0251.summarize \
   "$RESULT_ROOT/baseline/run.log" \
+  "$RESULT_ROOT/trtllm_default/run.log" \
   "$RESULT_ROOT/adaptive/run.log" \
   --output "$RESULT_ROOT/summary.json"
 cat "$RESULT_ROOT/summary.json"

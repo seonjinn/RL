@@ -8,13 +8,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-Arm = Literal["baseline", "trace", "adaptive"]
+Arm = Literal["baseline", "trace", "trtllm_default", "adaptive"]
 
 
 @dataclass(frozen=True)
 class AdaptiveInputs:
     tactic_file: Path
     tactic_sha256: str
+    layer_allowlist_b64: str
+    switch_m: int = 256
+
+
+@dataclass(frozen=True)
+class TrtllmDefaultInputs:
     layer_allowlist_b64: str
     switch_m: int = 256
 
@@ -43,6 +49,7 @@ def build_arm_environment(
     *,
     runtime_root: Path,
     adaptive: AdaptiveInputs | None = None,
+    trtllm_default: TrtllmDefaultInputs | None = None,
     trace: TraceInputs | None = None,
 ) -> dict[str, str]:
     runtime_root = runtime_root.resolve()
@@ -58,12 +65,14 @@ def build_arm_environment(
         "NEMORL_MXFP8_LINEAR_BACKEND": "flashinfer_cutedsl",
     }
     if arm == "baseline":
-        if adaptive is not None or trace is not None:
-            raise ValueError("baseline arm must not receive adaptive or trace inputs")
+        if adaptive is not None or trtllm_default is not None or trace is not None:
+            raise ValueError(
+                "baseline arm must not receive adaptive, default, or trace inputs"
+            )
         return env
     if arm == "trace":
-        if adaptive is not None:
-            raise ValueError("trace arm must not receive adaptive inputs")
+        if adaptive is not None or trtllm_default is not None:
+            raise ValueError("trace arm must not receive adaptive or default inputs")
         if trace is None:
             raise ValueError("trace arm requires trace inputs")
         if trace.trace_max <= 0:
@@ -72,17 +81,34 @@ def build_arm_environment(
             {
                 "NEMORL_MXFP8_LINEAR_BACKEND": "flashinfer_trtllm",
                 "VLLM_MXFP8_DENSE_SHAPE_TRACE": "1",
-                "VLLM_MXFP8_DENSE_SHAPE_TRACE_DIR": str(
-                    trace.trace_dir.resolve()
-                ),
+                "VLLM_MXFP8_DENSE_SHAPE_TRACE_DIR": str(trace.trace_dir.resolve()),
                 "VLLM_MXFP8_DENSE_SHAPE_TRACE_MAX": str(trace.trace_max),
+            }
+        )
+        return env
+    if arm == "trtllm_default":
+        if adaptive is not None or trace is not None:
+            raise ValueError("default arm must not receive adaptive or trace inputs")
+        if trtllm_default is None:
+            raise ValueError("default arm requires an allowlist")
+        if trtllm_default.switch_m <= 0:
+            raise ValueError("default switch_m must be positive")
+        _validate_base64(trtllm_default.layer_allowlist_b64)
+        env.update(
+            {
+                "NEMORL_MXFP8_LINEAR_BACKEND": "flashinfer_trtllm",
+                "VLLM_MXFP8_DENSE_TRTLLM_LAYOUT": "adaptive",
+                "VLLM_MXFP8_DENSE_TRTLLM_SWITCH_M": str(trtllm_default.switch_m),
+                "VLLM_MXFP8_DENSE_TRTLLM_LAYER_ALLOWLIST_B64": (
+                    trtllm_default.layer_allowlist_b64
+                ),
             }
         )
         return env
     if arm != "adaptive":
         raise ValueError(f"unsupported arm: {arm}")
-    if trace is not None:
-        raise ValueError("adaptive arm must not receive trace inputs")
+    if trtllm_default is not None or trace is not None:
+        raise ValueError("adaptive arm must not receive default or trace inputs")
     if adaptive is None:
         raise ValueError("adaptive arm requires a tactic table and allowlist")
     if adaptive.switch_m <= 0:
@@ -118,7 +144,9 @@ def build_arm_environment(
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--arm", choices=("baseline", "trace", "adaptive"), required=True
+        "--arm",
+        choices=("baseline", "trace", "trtllm_default", "adaptive"),
+        required=True,
     )
     parser.add_argument("--runtime-root", type=Path, required=True)
     parser.add_argument("--tactic-file", type=Path)
@@ -134,15 +162,21 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     adaptive = None
+    trtllm_default = None
     trace = None
     if args.arm == "adaptive":
-        if not all(
-            (args.tactic_file, args.tactic_sha256, args.layer_allowlist_b64)
-        ):
+        if not all((args.tactic_file, args.tactic_sha256, args.layer_allowlist_b64)):
             raise SystemExit("adaptive arm requires tactic file, SHA256, and allowlist")
         adaptive = AdaptiveInputs(
             tactic_file=args.tactic_file,
             tactic_sha256=args.tactic_sha256,
+            layer_allowlist_b64=args.layer_allowlist_b64,
+            switch_m=args.switch_m,
+        )
+    elif args.arm == "trtllm_default":
+        if args.layer_allowlist_b64 is None:
+            raise SystemExit("default arm requires an allowlist")
+        trtllm_default = TrtllmDefaultInputs(
             layer_allowlist_b64=args.layer_allowlist_b64,
             switch_m=args.switch_m,
         )
@@ -154,6 +188,7 @@ def main() -> None:
         args.arm,
         runtime_root=args.runtime_root,
         adaptive=adaptive,
+        trtllm_default=trtllm_default,
         trace=trace,
     )
     for key, value in sorted(env.items()):
