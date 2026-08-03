@@ -3528,7 +3528,7 @@ docs = [
     { name = "sphinx-copybutton" },
 ]
 linting = [
-    { name = "black", specifier = "==24.4.2" },
+    { name = "black", specifier = "==26.3.0" },
     { name = "flake8", specifier = "==7.1.0" },
     { name = "isort", specifier = "==5.13.2" },
     { name = "pylint", specifier = "==3.2.6" },
