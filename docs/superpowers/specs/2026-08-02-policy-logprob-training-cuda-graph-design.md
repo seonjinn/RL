@@ -2,7 +2,7 @@
 
 Date: 2026-08-02
 
-Status: Architecture approved; written specification awaiting review.
+Status: Approved for implementation on 2026-08-03.
 
 ## Objective
 

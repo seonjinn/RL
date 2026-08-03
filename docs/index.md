@@ -361,6 +361,7 @@ design-docs/nemo-gym-integration.md
 design-docs/modelopt-real-quant-architecture.md
 design-docs/nccl-reshard-refit.md
 superpowers/specs/2026-08-02-policy-logprob-training-cuda-graph-design.md
+superpowers/plans/2026-08-03-policy-logprob-training-cuda-graph.md
 ```
 
 ```{toctree}
