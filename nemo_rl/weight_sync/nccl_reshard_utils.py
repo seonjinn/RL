@@ -916,7 +916,7 @@ def check_nccl_reshard_refit_support(master_config: dict) -> None:
                     "policy.megatron_cfg.fp8_cfg.enabled=True and fp8_param=True, or "
                     "is_mx=True for BF16-to-MXFP8 refit."
                 )
-            elif fp8_recipe != "blockwise":
+            elif fp8_param and fp8_recipe != "blockwise":
                 violations.append(
                     "policy.megatron_cfg.fp8_cfg.fp8_recipe must be 'blockwise' "
                     f"when fp8_param=True (got {fp8_recipe!r}); other recipes "
