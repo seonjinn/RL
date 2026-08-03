@@ -872,7 +872,7 @@ def check_nccl_reshard_refit_support(master_config: dict) -> None:
         # Precision compatibility (train ↔ gen).  Supported combinations:
         #   BF16 train  ↔ BF16 gen   (default, tested)
         #   FP8  train  ↔ FP8  gen   (fp8_param=True + blockwise + vllm precision=fp8)
-        #   BF16 storage → MXFP8 gen  (refit_prequantize=True + is_mx=True)
+        #   BF16 storage → MXFP8 gen  (is_mx=True; quantize on either endpoint)
         # FP8→BF16 has no consumer (vLLM doesn't accept FP8 bytes into a BF16 param).
         fp8_cfg = megatron_cfg.get("fp8_cfg", {}) or {}
         fp8_enabled = bool(fp8_cfg.get("enabled", False))
@@ -910,11 +910,11 @@ def check_nccl_reshard_refit_support(master_config: dict) -> None:
                         "requires policy.megatron_cfg.fp8_cfg.fp8_param=False "
                         "(the sender quantizes BF16 storage to MXFP8 exactly once)."
                     )
-            elif not fp8_param:
+            elif not fp8_param and not vllm_cfg.get("is_mx"):
                 violations.append(
                     "policy.generation.vllm_cfg.precision='fp8' requires "
                     "policy.megatron_cfg.fp8_cfg.enabled=True and fp8_param=True, or "
-                    "refit_prequantize=True with is_mx=True."
+                    "is_mx=True for BF16-to-MXFP8 refit."
                 )
             elif fp8_recipe != "blockwise":
                 violations.append(
