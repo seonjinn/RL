@@ -1,4 +1,8 @@
+import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import yaml
 
@@ -65,19 +69,28 @@ def test_qwen235_trace_submitter_requires_clean_pinned_provenance() -> None:
     submitter = submitter_path.read_text(encoding="utf-8")
 
     assert "eval_qwen3_235ba22b_32k_cuda_graph_trace.yaml" in submitter
-    assert "run_trace.sh" in submitter
+    assert "run_qwen235_trace_gate.sh" in submitter
     assert "nemorl-qwen235-mxfp8-32k-shape-trace" in submitter
     assert "coreai_dlalgo_llm-nemorl.qwen235-mxfp8-32k-trace" in submitter
+    assert "HF_HOME=/lustre/fsw/coreai_dlalgo_llm/users/sna/hf" in submitter
+    assert 'HF_HUB_CACHE="$HF_HOME/hub"' in submitter
+    assert "models--Qwen--Qwen3-235B-A22B" in submitter
 
-    assert 'git -C "$NEMO_RL_REPO_ROOT" diff --quiet' in submitter
-    assert 'git -C "$NEMO_RL_REPO_ROOT" diff --cached --quiet' in submitter
+    assert "EXPECTED_NEMO_RL_COMMIT:?set EXPECTED_NEMO_RL_COMMIT" in submitter
+    assert "status --porcelain --untracked-files=all" in submitter
+    assert 'require_clean_repo "$NEMO_RL_REPO_ROOT"' in submitter
+    assert 'require_clean_repo "$CUSTOM_VLLM_SOURCE"' in submitter
     assert 'git -C "$NEMO_RL_REPO_ROOT" pull --ff-only' in submitter
     assert submitter.index('git -C "$NEMO_RL_REPO_ROOT" pull --ff-only') < (
         submitter.index("lock_sha=")
     )
     assert 'git -C "$CUSTOM_VLLM_SOURCE" rev-parse HEAD' in submitter
-    assert 'git -C "$CUSTOM_VLLM_SOURCE" diff --quiet' in submitter
-    assert 'git -C "$CUSTOM_VLLM_SOURCE" diff --cached --quiet' in submitter
+    assert 'actual_nemo_rl_commit=$(git -C "$NEMO_RL_REPO_ROOT" rev-parse HEAD)' in submitter
+    assert '"$actual_nemo_rl_commit" != "$EXPECTED_NEMO_RL_COMMIT"' in submitter
+    assert '"$CANARY_RESULT_ROOT/provenance.txt"' in submitter
+    assert submitter.index("actual_nemo_rl_commit=") < submitter.index(
+        '"$CANARY_RESULT_ROOT/provenance.txt"'
+    ) < submitter.index("sbatch")
 
     assert "--nodes=2" in submitter
     assert "--time=05:00:00" in submitter
@@ -85,3 +98,52 @@ def test_qwen235_trace_submitter_requires_clean_pinned_provenance() -> None:
     assert "--dependency=" in submitter
     assert "args+=(--test-only)" in submitter
     assert "afterok" not in submitter
+
+
+def _run_trace_gate(tmp_path: Path, summary: dict[str, object]) -> subprocess.CompletedProcess[str]:
+    fake_root = tmp_path / "repo"
+    trace_script = fake_root / "experiments/mxfp8_adaptive_rollout_v0251/run_trace.sh"
+    trace_script.parent.mkdir(parents=True)
+    trace_script.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "mkdir -p \"$CANARY_RESULT_ROOT/trace\"\n"
+        "printf '%s\\n' \"$TRACE_SUMMARY\" > \"$CANARY_RESULT_ROOT/trace/shape_summary.json\"\n",
+        encoding="utf-8",
+    )
+    trace_script.chmod(0o755)
+    result_root = tmp_path / "result"
+    gate = EXPERIMENT / "run_qwen235_trace_gate.sh"
+    assert gate.is_file()
+
+    return subprocess.run(
+        ["bash", str(gate)],
+        check=False,
+        capture_output=True,
+        env=os.environ
+        | {
+            "NEMO_RL_REPO_ROOT": str(fake_root),
+            "CANARY_RESULT_ROOT": str(result_root),
+            "TRACE_SUMMARY": json.dumps(summary),
+        },
+        text=True,
+    )
+
+
+def test_qwen235_trace_gate_accepts_eligible_shape_summary(tmp_path: Path) -> None:
+    result = _run_trace_gate(
+        tmp_path,
+        {"eligible": True, "record_count": 1, "unique_signature_count": 1},
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_qwen235_trace_gate_rejects_empty_shape_summary(tmp_path: Path) -> None:
+    result = _run_trace_gate(
+        tmp_path,
+        {"eligible": False, "record_count": 0, "unique_signature_count": 0},
+    )
+
+    assert result.returncode != 0
+    assert "Qwen235 trace gate failed" in result.stderr
