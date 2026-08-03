@@ -177,6 +177,165 @@ def test_qwen235_forced_32k_config_and_submitter_require_exact_outputs() -> None
     assert "afterok" not in submitter
 
 
+def test_qwen235_qkvo_trace_uses_separate_quantization_scope() -> None:
+    config_path = (
+        EXPERIMENT / "configs/eval_qwen3_235ba22b_qkvo_32k_cuda_graph_trace.yaml"
+    )
+    submitter_path = EXPERIMENT / "submit_qwen235_qkvo_32k_trace_ptyche.sh"
+    assert config_path.is_file()
+    assert submitter_path.is_file()
+
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    generation = config["generation"]
+    assert generation["model_name"] == "Qwen/Qwen3-235B-A22B"
+    assert generation["max_new_tokens"] == 32768
+    assert generation["ignore_eos"] is True
+    assert generation["stop_token_ids"] == []
+    assert generation["vllm_cfg"]["quantization_ignored_layer_kws"] == [
+        ".mlp.gate"
+    ]
+    assert generation["vllm_cfg"]["enforce_eager"] is False
+    assert generation["vllm_kwargs"]["max_num_batched_tokens"] == 16384
+
+    submitter = submitter_path.read_text(encoding="utf-8")
+    assert "eval_qwen3_235ba22b_qkvo_32k_cuda_graph_trace.yaml" in submitter
+    assert "run_qwen235_qkvo_trace_gate.sh" in submitter
+    assert "nemorl-qwen235-mxfp8-qkvo-32k-shape-trace" in submitter
+    assert "coreai_dlalgo_llm-nemorl.qwen235-mxfp8-qkvo-32k-trace" in submitter
+    assert "CANARY_EXPECTED_REQUESTS=64" in submitter
+    assert "CANARY_EXPECTED_TOKENS_PER_RESPONSE=32768" in submitter
+    assert "CANARY_EXPECTED_TRACE_WORKERS=8" in submitter
+    assert "--time=05:00:00" in submitter
+    assert "--segment=2" in submitter
+    assert "--dependency=" in submitter
+    assert "args+=(--test-only)" in submitter
+
+
+def _run_qkvo_trace_gate(
+    tmp_path: Path,
+    prefixes: list[str],
+    *,
+    k: int = 4096,
+    n_logical: int = 1536,
+    n_physical: int = 1536,
+    trace_cap: int = 16384,
+) -> subprocess.CompletedProcess[str]:
+    fake_root = tmp_path / "repo"
+    trace_script = fake_root / "experiments/mxfp8_adaptive_rollout_v0251/run_trace.sh"
+    trace_script.parent.mkdir(parents=True)
+    trace_script.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'mkdir -p "$CANARY_RESULT_ROOT/trace" "$SHAPE_TRACE_DIR"\n'
+        'printf \'%s\\n\' "$TRACE_SUMMARY" > '
+        '"$CANARY_RESULT_ROOT/trace/shape_summary.json"\n'
+        'printf \'%s\\n\' "$TRACE_RECORDS" > "$SHAPE_TRACE_DIR/trace.jsonl"\n',
+        encoding="utf-8",
+    )
+    trace_script.chmod(0o755)
+    result_root = tmp_path / "result"
+    trace_dir = result_root / "trace/raw"
+    gate = EXPERIMENT / "run_qwen235_qkvo_trace_gate.sh"
+    records = "\n".join(
+        json.dumps(
+            {
+                "event": "mxfp8_dense_shape",
+                "family": "OtherDense",
+                "hostname": f"node-{worker % 2}",
+                "k": k,
+                "layout": "8x4",
+                "m": 1,
+                "n_logical": n_logical,
+                "n_physical": n_physical,
+                "pid": 100 + worker,
+                "prefix": prefixes[worker % len(prefixes)],
+            }
+        )
+        for worker in range(8)
+    )
+
+    return subprocess.run(
+        ["bash", str(gate)],
+        check=False,
+        capture_output=True,
+        env=os.environ
+        | {
+            "NEMO_RL_REPO_ROOT": str(fake_root),
+            "CANARY_RESULT_ROOT": str(result_root),
+            "SHAPE_TRACE_DIR": str(trace_dir),
+            "TRACE_SUMMARY": json.dumps(
+                {"eligible": True, "record_count": 8, "unique_signature_count": 1}
+            ),
+            "TRACE_RECORDS": records,
+            "SHAPE_TRACE_MAX": str(trace_cap),
+            "CANARY_EXPECTED_TRACE_WORKERS": "8",
+        },
+        text=True,
+    )
+
+
+def test_qwen235_qkvo_trace_gate_requires_fused_qkv_and_o_projection(
+    tmp_path: Path,
+) -> None:
+    result = _run_qkvo_trace_gate(
+        tmp_path,
+        [
+            "model.layers.0.self_attn.qkv_proj",
+            "model.layers.0.self_attn.o_proj",
+        ],
+    )
+
+    assert result.returncode == 0, result.stderr
+    coverage = json.loads(
+        (tmp_path / "result/trace/qkvo_coverage.json").read_text(encoding="utf-8")
+    )
+    assert coverage["qkv_prefix_count"] == 1
+    assert coverage["o_prefix_count"] == 1
+    assert coverage["hostname_count"] == 2
+    assert coverage["worker_count"] == 8
+    assert (tmp_path / "result/trace/qkvo_manifest.json").is_file()
+    assert (tmp_path / "result/trace/shmoo/shapes_8x4.txt").is_file()
+
+
+def test_qwen235_qkvo_trace_gate_rejects_missing_o_projection(tmp_path: Path) -> None:
+    result = _run_qkvo_trace_gate(
+        tmp_path, ["model.layers.0.self_attn.qkv_proj"]
+    )
+
+    assert result.returncode != 0
+    assert "missing MXFP8 trace families: o_proj" in result.stderr
+
+
+def test_qwen235_qkvo_trace_gate_rejects_trace_cap_reached(tmp_path: Path) -> None:
+    result = _run_qkvo_trace_gate(
+        tmp_path,
+        [
+            "model.layers.0.self_attn.qkv_proj",
+            "model.layers.0.self_attn.o_proj",
+        ],
+        trace_cap=8,
+    )
+
+    assert result.returncode != 0
+    assert "trace cap reached (8/8)" in result.stderr
+
+
+def test_qwen235_qkvo_trace_gate_rejects_invalid_physical_signature(
+    tmp_path: Path,
+) -> None:
+    result = _run_qkvo_trace_gate(
+        tmp_path,
+        [
+            "model.layers.0.self_attn.qkv_proj",
+            "model.layers.0.self_attn.o_proj",
+        ],
+        n_physical=1500,
+    )
+
+    assert result.returncode != 0
+    assert "invalid MXFP8 physical signature" in result.stderr
+
+
 def _run_trace_gate(tmp_path: Path, summary: dict[str, object]) -> subprocess.CompletedProcess[str]:
     fake_root = tmp_path / "repo"
     trace_script = fake_root / "experiments/mxfp8_adaptive_rollout_v0251/run_trace.sh"
