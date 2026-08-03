@@ -1,0 +1,24 @@
+defaults: ./grpo-qwen3-30ba3b-4n4g.yaml
+loss_fn:
+  force_on_policy_ratio: false
+  use_importance_sampling_correction: true
+policy:
+  megatron_cfg:
+    fp8_cfg:
+      enabled: true
+      fp8: e4m3
+      fp8_recipe: blockwise
+      fp8_param: true
+    optimizer:
+      use_precision_aware_optimizer: false
+    env_vars:
+      NVTE_FP8_BLOCK_SCALING_FP32_SCALES: "1"
+  generation:
+    vllm_cfg:
+      precision: fp8
+      use_deep_gemm: true
+logger:
+  log_dir: logs/grpo-qwen3-30ba3b-4n4g-blockwise-fp8param
+  wandb:
+    project: sna-pr3477-fp8param
+    name: grpo-qwen3-30ba3b-4n4g-blockwise-fp8param
