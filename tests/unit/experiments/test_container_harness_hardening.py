@@ -213,6 +213,8 @@ def _run_runtime_payload(
     )
     runtime_environment.setdefault("RUNTIME_STAGE_ROOT", str(runtime_stage_root))
     runtime_environment.setdefault("RUNTIME_STAGE_MARKER_SHA256", "f" * 64)
+    runtime_environment.setdefault("RUNTIME_STAGE_CPUS_PER_TASK", "32")
+    runtime_environment.setdefault("CMAKE_BUILD_PARALLEL_LEVEL", "32")
     runtime_environment.setdefault("NVTE_CUDA_ARCHS", "100a")
     runtime_environment.setdefault("TORCH_CUDA_ARCH_LIST", "10.0a")
     runtime_environment.setdefault("RUNTIME_FEATURE_SET", "te_eval_capability_8")
@@ -674,6 +676,8 @@ printf '{"status":"passed"}\n' >"${output}"
             "SOURCE_PROVENANCE_VERIFIER": str(provenance_verifier),
             "PROVENANCE_LOG": str(provenance_log),
             "RUNTIME_PHASE": "stage",
+            "RUNTIME_STAGE_CPUS_PER_TASK": "32",
+            "SLURM_CPUS_PER_TASK": "32",
             "RUNTIME_STAGE_ROOT": str(runtime_stage_root),
             "RUNTIME_STAGE_MARKER_SHA256": "b" * 64,
             "RUNTIME_FEATURE_SET": "te_eval_capability_8",
@@ -707,6 +711,8 @@ printf '{"status":"passed"}\n' >"${output}"
     )
     assert f"UV_CACHE_DIR={runtime_stage_root}/build-cache" in command
     assert f"NVTE_CMAKE_BUILD_DIR={runtime_stage_root}/te-cmake" in command
+    assert "CMAKE_BUILD_PARALLEL_LEVEL=32" in command
+    assert "--cpus-per-task=32" in command
     assert "/root/.cache/uv" not in command
     assert "CUDA_HOME=/usr/local/cuda" in command
     assert "CUDACXX=/usr/local/cuda/bin/nvcc" in command
@@ -751,6 +757,7 @@ printf '{"status":"passed"}\n' >"${output}"
     assert '"schema=runtime-stage-v1"' in command
     assert 'mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"' in command
     assert 'chmod -R a-w -- "${runtime_stage_root}"' in command
+    assert '"stage_cpus_per_task=${RUNTIME_STAGE_CPUS_PER_TASK}"' in command
     assert NEMORL_COMMIT in command
     assert BRIDGE_COMMIT in command
     assert MCORE_COMMIT in command

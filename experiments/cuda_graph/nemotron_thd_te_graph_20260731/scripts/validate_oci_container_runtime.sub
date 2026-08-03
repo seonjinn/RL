@@ -36,6 +36,7 @@ TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-10.0a}
 RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET:-te_eval_capability_8}
 RUNTIME_EXCLUDED_PACKAGES=${RUNTIME_EXCLUDED_PACKAGES:-causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm}
 STAGE_PARTITION=${STAGE_PARTITION:-cpu}
+RUNTIME_STAGE_CPUS_PER_TASK=${RUNTIME_STAGE_CPUS_PER_TASK:-32}
 
 if [[ "${CONTAINER}" != /* ]]; then
   echo "CONTAINER must be an absolute path" >&2
@@ -81,6 +82,11 @@ if [[ "${STAGE_PARTITION}" != "cpu" ]]; then
   echo "OCI runtime staging requires STAGE_PARTITION=cpu" >&2
   exit 2
 fi
+if [[ ! "${RUNTIME_STAGE_CPUS_PER_TASK}" =~ ^[0-9]+$ ]] ||
+   ((RUNTIME_STAGE_CPUS_PER_TASK < 1 || RUNTIME_STAGE_CPUS_PER_TASK > 96)); then
+  echo "RUNTIME_STAGE_CPUS_PER_TASK must be an integer from 1 through 96" >&2
+  exit 2
+fi
 if [[ "${TEST_ONLY}" == "1" && "${SBATCH_TEST_ONLY}" == "1" ]]; then
   echo "TEST_ONLY and SBATCH_TEST_ONLY are mutually exclusive" >&2
   exit 2
@@ -124,7 +130,8 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     "${RUNTIME_FEATURE_SET}" \
     "${RUNTIME_EXCLUDED_PACKAGES}" \
     "${TORCH_CUDA_ARCH_LIST}" \
-    "${NVTE_CUDA_ARCHS}" | sha256sum | awk '{print $1}')
+    "${NVTE_CUDA_ARCHS}" \
+    "${RUNTIME_STAGE_CPUS_PER_TASK}" | sha256sum | awk '{print $1}')
   RUNTIME_STAGE_ROOT=${ARTIFACT_DIR%/}/staged-runtimes/${runtime_stage_key}
   stage_marker_content=$(printf '%s\n' \
     'schema=runtime-stage-v1' \
@@ -141,7 +148,8 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     "feature_set=${RUNTIME_FEATURE_SET}" \
     "excluded_packages=${RUNTIME_EXCLUDED_PACKAGES}" \
     "torch_cuda_arch_list=${TORCH_CUDA_ARCH_LIST}" \
-    "cuda_archs=${NVTE_CUDA_ARCHS}")
+    "cuda_archs=${NVTE_CUDA_ARCHS}" \
+    "stage_cpus_per_task=${RUNTIME_STAGE_CPUS_PER_TASK}")
   RUNTIME_STAGE_MARKER_SHA256=$(printf '%s\n' "${stage_marker_content}" | sha256sum | awk '{print $1}')
   if [[ "${CONTAINER_RUNTIME_VALIDATOR}" != /* || ! -f "${CONTAINER_RUNTIME_VALIDATOR}" ]]; then
     echo "CONTAINER_RUNTIME_VALIDATOR must be an existing absolute path" >&2
@@ -169,7 +177,8 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
   export EXPECTED_TE_VERSION_BASE_SHA
   export RUNTIME_PHASE RUNTIME_STAGE_ROOT RUNTIME_STAGE_MARKER_SHA256 NVTE_CUDA_ARCHS
   export TORCH_CUDA_ARCH_LIST RUNTIME_FEATURE_SET RUNTIME_EXCLUDED_PACKAGES
-  export_spec=CONTAINER,CONTAINER_SHA256,ARTIFACT_DIR,CONTAINER_RUNTIME_VALIDATOR,PROJECT_ROOT,SOURCE_PROVENANCE_VERIFIER,EXPECTED_NEMORL_SHA,EXPECTED_BRIDGE_SHA,EXPECTED_MCORE_SHA,EXPECTED_TE_SHA,EXPECTED_TE_VERSION_BASE_SHA,RUNTIME_PHASE,RUNTIME_STAGE_ROOT,RUNTIME_STAGE_MARKER_SHA256,NVTE_CUDA_ARCHS,TORCH_CUDA_ARCH_LIST,RUNTIME_FEATURE_SET,RUNTIME_EXCLUDED_PACKAGES,ACCOUNT,PARTITION,HOME,USER,LOGNAME,SHELL,PATH,LD_LIBRARY_PATH,HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy
+  export RUNTIME_STAGE_CPUS_PER_TASK
+  export_spec=CONTAINER,CONTAINER_SHA256,ARTIFACT_DIR,CONTAINER_RUNTIME_VALIDATOR,PROJECT_ROOT,SOURCE_PROVENANCE_VERIFIER,EXPECTED_NEMORL_SHA,EXPECTED_BRIDGE_SHA,EXPECTED_MCORE_SHA,EXPECTED_TE_SHA,EXPECTED_TE_VERSION_BASE_SHA,RUNTIME_PHASE,RUNTIME_STAGE_ROOT,RUNTIME_STAGE_MARKER_SHA256,NVTE_CUDA_ARCHS,TORCH_CUDA_ARCH_LIST,RUNTIME_FEATURE_SET,RUNTIME_EXCLUDED_PACKAGES,RUNTIME_STAGE_CPUS_PER_TASK,ACCOUNT,PARTITION,HOME,USER,LOGNAME,SHELL,PATH,LD_LIBRARY_PATH,HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy
   submission_flag=--parsable
   if [[ "${SBATCH_TEST_ONLY}" == "1" ]]; then
     submission_flag=--test-only
@@ -185,15 +194,17 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
   )
   if [[ "${RUNTIME_PHASE}" == "stage" ]]; then
     sbatch_command[2]="--partition=${STAGE_PARTITION}"
-    sbatch_command=("${sbatch_command[@]:0:4}" --gres=none "${sbatch_command[@]:4}")
+    sbatch_command=("${sbatch_command[@]:0:4}" --gres=none \
+      "--cpus-per-task=${RUNTIME_STAGE_CPUS_PER_TASK}" "${sbatch_command[@]:4}")
   else
     sbatch_command=("${sbatch_command[@]:0:4}" --gres=gpu:4 "${sbatch_command[@]:4}")
   fi
   printf 'SBATCH:'
   printf ' %q' "${sbatch_command[@]}"
   printf '\n'
-  printf 'RUNTIME_PHASE=%s\nRUNTIME_STAGE_ROOT=%s\nRUNTIME_STAGE_MARKER_SHA256=%s\n' \
-    "${RUNTIME_PHASE}" "${RUNTIME_STAGE_ROOT}" "${RUNTIME_STAGE_MARKER_SHA256}"
+  printf 'RUNTIME_PHASE=%s\nRUNTIME_STAGE_ROOT=%s\nRUNTIME_STAGE_MARKER_SHA256=%s\nRUNTIME_STAGE_CPUS_PER_TASK=%s\n' \
+    "${RUNTIME_PHASE}" "${RUNTIME_STAGE_ROOT}" "${RUNTIME_STAGE_MARKER_SHA256}" \
+    "${RUNTIME_STAGE_CPUS_PER_TASK}"
   if [[ "${TEST_ONLY}" == "1" ]]; then
     echo "TEST_ONLY: no submission performed (local render only; scheduler not contacted)"
     exit 0
@@ -249,6 +260,11 @@ for commit in "${EXPECTED_NEMORL_SHA}" "${EXPECTED_BRIDGE_SHA}" "${EXPECTED_MCOR
 done
 if [[ "${SOURCE_PROVENANCE_VERIFIER}" != /* || ! -x "${SOURCE_PROVENANCE_VERIFIER}" ]]; then
   echo "SOURCE_PROVENANCE_VERIFIER must be an existing absolute executable" >&2
+  exit 1
+fi
+if [[ "${RUNTIME_PHASE}" == "stage" &&
+      "${SLURM_CPUS_PER_TASK:-}" != "${RUNTIME_STAGE_CPUS_PER_TASK}" ]]; then
+  echo "SLURM_CPUS_PER_TASK does not match RUNTIME_STAGE_CPUS_PER_TASK" >&2
   exit 1
 fi
 bridge_root=${project_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
@@ -349,7 +365,13 @@ runtime_environment=(
   "NVTE_CMAKE_BUILD_DIR=${runtime_te_cmake_dir}"
   "RUNTIME_STAGE_ROOT=${runtime_stage_root}"
   "RUNTIME_STAGE_MARKER_SHA256=${RUNTIME_STAGE_MARKER_SHA256}"
+  "RUNTIME_STAGE_CPUS_PER_TASK=${RUNTIME_STAGE_CPUS_PER_TASK}"
 )
+if [[ "${RUNTIME_PHASE}" == "stage" ]]; then
+  runtime_environment+=(
+    "CMAKE_BUILD_PARALLEL_LEVEL=${RUNTIME_STAGE_CPUS_PER_TASK}"
+  )
+fi
 for proxy_variable in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
   if [[ -n "${!proxy_variable:-}" ]]; then
     runtime_environment+=("${proxy_variable}=${!proxy_variable}")
@@ -377,6 +399,10 @@ output=${18}
 runtime_stage_root=${19}
 if [[ "${output_flag}" != "--output" ]]; then
   echo "Runtime probe payload requires --output" >&2
+  exit 2
+fi
+if [[ "${CMAKE_BUILD_PARALLEL_LEVEL:-}" != "${RUNTIME_STAGE_CPUS_PER_TASK}" ]]; then
+  echo "CMAKE_BUILD_PARALLEL_LEVEL must match the staged CPU allocation" >&2
   exit 2
 fi
 if [[ "${source_validator}" != "${source_project_root}/"* ]]; then
@@ -587,7 +613,8 @@ printf "%s\n" \
   "feature_set=${RUNTIME_FEATURE_SET}" \
   "excluded_packages=${RUNTIME_EXCLUDED_PACKAGES}" \
   "torch_cuda_arch_list=${TORCH_CUDA_ARCH_LIST}" \
-  "cuda_archs=${NVTE_CUDA_ARCHS}" >"${partial_marker}"
+  "cuda_archs=${NVTE_CUDA_ARCHS}" \
+  "stage_cpus_per_task=${RUNTIME_STAGE_CPUS_PER_TASK}" >"${partial_marker}"
 actual_marker_sha256=$(sha256sum "${partial_marker}" | awk "{print \$1}")
 if [[ "${actual_marker_sha256}" != "${RUNTIME_STAGE_MARKER_SHA256}" ]]; then
   echo "Runtime stage marker SHA256 mismatch" >&2
@@ -693,7 +720,7 @@ payload=${attestation_command}
 srun_resources=(--gres=gpu:4)
 if [[ "${RUNTIME_PHASE}" == "stage" ]]; then
   payload=${stage_command}
-  srun_resources=(--gres=none)
+  srun_resources=(--gres=none "--cpus-per-task=${RUNTIME_STAGE_CPUS_PER_TASK}")
 fi
 
 set +e

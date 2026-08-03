@@ -2179,8 +2179,44 @@ def test_oci_runtime_staging_renders_cpu_only_job(tmp_path: Path) -> None:
     assert "--gres=gpu" not in result.stdout
     assert "--gpus" not in result.stdout
     assert "--partition=cpu" in result.stdout
+    assert "--cpus-per-task=32" in result.stdout
+    assert "RUNTIME_STAGE_CPUS_PER_TASK=32" in result.stdout
     assert "RUNTIME_PHASE=stage" in result.stdout
     assert "TEST_ONLY: no submission performed" in result.stdout
+
+
+def test_oci_runtime_staging_binds_explicit_single_cpu_request(tmp_path: Path) -> None:
+    result = _run_script(
+        "scripts/validate_oci_container_runtime.sub",
+        TEST_ONLY="1",
+        RUNTIME_PHASE="stage",
+        RUNTIME_STAGE_CPUS_PER_TASK="1",
+        CONTAINER="/lustre/example/nemo_rl_nightly.sqsh",
+        CONTAINER_SHA256=CONTAINER_SHA256,
+        ARTIFACT_DIR=str(tmp_path / "artifacts"),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--cpus-per-task=1" in result.stdout
+    assert "RUNTIME_STAGE_CPUS_PER_TASK=1" in result.stdout
+
+
+@pytest.mark.parametrize("cpus_per_task", ("0", "97", "1.5", "many"))
+def test_oci_runtime_staging_rejects_invalid_cpu_request(
+    tmp_path: Path, cpus_per_task: str
+) -> None:
+    result = _run_script(
+        "scripts/validate_oci_container_runtime.sub",
+        TEST_ONLY="1",
+        RUNTIME_PHASE="stage",
+        RUNTIME_STAGE_CPUS_PER_TASK=cpus_per_task,
+        CONTAINER="/lustre/example/nemo_rl_nightly.sqsh",
+        CONTAINER_SHA256=CONTAINER_SHA256,
+        ARTIFACT_DIR=str(tmp_path / "artifacts"),
+    )
+
+    assert result.returncode == 2
+    assert "RUNTIME_STAGE_CPUS_PER_TASK must be an integer from 1 through 96" in result.stderr
 
 
 def test_oci_container_runtime_smoke_uses_persistent_probe_when_spooled(
