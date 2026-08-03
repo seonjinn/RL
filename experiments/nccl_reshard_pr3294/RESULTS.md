@@ -178,6 +178,41 @@ near `1.04`.
 The exact run manifest is in `factorial_runs_5152b5e56.csv`, and the canonical
 W&B Steps 3-20 export is in `factorial_results_5152b5e56.csv`.
 
+## Cumulative Prequantization Ablation
+
+The cumulative ablation at source `5c50597f3ec684e455a6d5f64daeb48ed6122e22`
+adds trainer prequantization, batched MoE shuffle, and loader-route caching in
+that order. The first four arms use the legacy collective so the
+prequantization delta keeps transport constant. The fifth arm changes only the
+transport to NCCL-Reshard. A no-prequantization NCCL arm is not valid because
+prequantization is the BF16-to-MXFP8 wire transform required by the current
+NCCL-Reshard contract.
+
+All five two-step correctness gates completed with exit code `0:0` on the same
+four-node B200 topology. Step 2 follows an optimizer update and therefore
+validates a non-initial weight refit.
+
+| Cumulative arm | Job | W&B | Step 2 transfer/update | Generation KL | Reward |
+|---|---:|---|---:|---:|---:|
+| Receiver-quant baseline | `489123` | [ntm29zax](https://wandb.ai/nvidia/sna-pr3294-cumulative-ablation/runs/ntm29zax) | 8.75 s | 0.0044 | 0.25 |
+| + Trainer prequantization | `489124` | [2wmh5qco](https://wandb.ai/nvidia/sna-pr3294-cumulative-ablation/runs/2wmh5qco) | 6.77 s | 0.0044 | 0.25 |
+| + Batched MoE shuffle | `489125` | [dkz8kpwt](https://wandb.ai/nvidia/sna-pr3294-cumulative-ablation/runs/dkz8kpwt) | 4.22 s | 0.0044 | 0.25 |
+| + Loader-route cache | `489126` | [9w3ccpt0](https://wandb.ai/nvidia/sna-pr3294-cumulative-ablation/runs/9w3ccpt0) | 5.93 s | 0.0044 | 0.25 |
+| + NCCL-Reshard | `489127` | [gop80kln](https://wandb.ai/nvidia/sna-pr3294-cumulative-ablation/runs/gop80kln) | 0.65 s | 0.0044 | 0.25 |
+
+These tiny-batch gates establish correctness, not performance. The loader-cache
+row in particular is dominated by short-run variance. The reportable 20-step
+runs use GBS 2048, sequence length 4096, real importance sampling, and compare
+Steps 3-20:
+
+| Cumulative arm | Job | Status at submission |
+|---|---:|---|
+| Receiver-quant baseline | `489157` | Running |
+| + Trainer prequantization | `489158` | Queued |
+| + Batched MoE shuffle | `489159` | Queued |
+| + Loader-route cache | `489160` | Queued |
+| + NCCL-Reshard | `489161` | Queued |
+
 ## Runtime Boundary
 
 The staged nightly image does not contain an importable `nccl.m2n` module or `libnccl_m2n.so`. The NCCL arm therefore uses NeMo-RL's `xferdtensor_python (exact-transfer)` implementation over NCCL communicators. These results validate the transform-aware NCCL-Reshard algorithm and its Python exact-transfer fallback; they are not compiled native-M2N measurements.
