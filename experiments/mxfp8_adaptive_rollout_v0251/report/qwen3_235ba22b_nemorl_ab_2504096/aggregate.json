@@ -1,0 +1,27 @@
+{
+  "matched_gpu_count": 8,
+  "matched_output_tokens": 262144,
+  "rows": [
+    {
+      "arm": "baseline",
+      "generation_seconds": 326.66489664299297,
+      "label": "CuTeDSL",
+      "normalized_throughput": 1.0,
+      "tokens_per_second_per_gpu": 100.31074760938162
+    },
+    {
+      "arm": "trtllm_default",
+      "generation_seconds": 364.8130311979912,
+      "label": "TRTLLM default",
+      "normalized_throughput": 0.8954309980931177,
+      "tokens_per_second_per_gpu": 89.8213528513354
+    },
+    {
+      "arm": "adaptive",
+      "generation_seconds": 352.66236237299745,
+      "label": "Complete-table adaptive",
+      "normalized_throughput": 0.9262822787351831,
+      "tokens_per_second_per_gpu": 92.91606787724783
+    }
+  ]
+}

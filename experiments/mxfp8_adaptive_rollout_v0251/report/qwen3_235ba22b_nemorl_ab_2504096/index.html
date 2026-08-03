@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Qwen3-235B MXFP8 Adaptive Canary</title>
+<style>
+body{font-family:Arial,sans-serif;margin:0;color:#172033;background:#fff}main{max-width:1050px;margin:auto;padding:32px 24px 56px}
+h1{font-size:30px;margin:0 0 8px}p{line-height:1.55}img{width:100%;height:auto;margin:18px 0 24px}
+table{border-collapse:collapse;width:100%;margin:18px 0}th,td{border-bottom:1px solid #ccd2dc;padding:10px;text-align:right}th:first-child,td:first-child{text-align:left}
+.decision{border-left:4px solid #d44;padding:10px 14px;background:#f7f8fa}code{background:#f1f3f6;padding:2px 5px}
+</style></head><body><main>
+<h1>Qwen3-235B MXFP8 Adaptive Canary</h1>
+<p>Ptyche job <code>2504096</code>, vLLM 0.25.1, FlashInfer 0.6.13, CUDA Graph, two TP4/EP4 replicas.</p>
+<img src="qwen235_nemorl_three_arm_throughput.png" alt="Absolute and normalized generation throughput">
+<table><thead><tr><th>Backend policy</th><th>tokens/sec/GPU</th><th>vs CuTeDSL</th><th>Generation time (s)</th></tr></thead><tbody><tr><td>CuTeDSL</td><td>100.31</td><td>1.000x</td><td>326.665</td></tr><tr><td>TRTLLM default</td><td>89.82</td><td>0.895x</td><td>364.813</td></tr><tr><td>Complete-table adaptive</td><td>92.92</td><td>0.926x</td><td>352.662</td></tr></tbody></table>
+<p class="decision"><strong>Decision:</strong> Do not enable the complete-table adaptive policy for this workload.</p>
+<p>The complete offline table covered all five observed GEMM signatures and passed numerical and CUDA Graph microbenchmark gates. Since this matched end-to-end run did not improve on CuTeDSL, GSM8K was not promoted for this candidate.</p>
+</main></body></html>
