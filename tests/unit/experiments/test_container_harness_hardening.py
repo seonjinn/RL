@@ -816,8 +816,9 @@ def test_runtime_payload_rejects_preseeded_uv_without_executing_it(
     assert not uv_marker.exists()
 
 
+@pytest.mark.parametrize("outer_gitfile", (False, True))
 def test_runtime_payload_builds_from_writable_verified_source_copy(
-    tmp_path: Path,
+    tmp_path: Path, outer_gitfile: bool,
 ) -> None:
     provenance_log = tmp_path / "copied-source-provenance.log"
     fixture = _stage_runtime_payload_fixture(
@@ -830,6 +831,12 @@ def test_runtime_payload_builds_from_writable_verified_source_copy(
             "exit 91\n"
         ),
     )
+    if outer_gitfile:
+        external_git_dir = tmp_path / "outer-worktree-gitdir"
+        fixture.source_project_root.joinpath(".git").rename(external_git_dir)
+        fixture.source_project_root.joinpath(".git").write_text(
+            f"gitdir: {external_git_dir}\n"
+        )
     uv_bin_dir = tmp_path / f"uv-{UV_VERSION}-733"
     uv_bin_dir.mkdir()
     _write_executable(

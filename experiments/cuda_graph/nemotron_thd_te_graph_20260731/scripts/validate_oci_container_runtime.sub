@@ -352,7 +352,7 @@ verify_no_ignored_source_paths() {
   local allow_source_manifest=$3
   local index=$4
   local ignored_path
-  local ignored_paths_file=${project_root}/.git/runtime-ignored-paths-${index}
+  local ignored_paths_file=${te_cmake_dir}/runtime-ignored-paths-${index}
   git -C "${repository}" ls-files -z --others --ignored --exclude-standard >"${ignored_paths_file}"
   while IFS= read -r -d "" ignored_path; do
     if [[ "${allow_source_manifest}" == "1" && "${ignored_path}" == ".source-manifest.env" ]]; then
