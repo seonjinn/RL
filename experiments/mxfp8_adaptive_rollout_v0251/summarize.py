@@ -102,6 +102,7 @@ def summarize_log(path: Path, *, gpu_count: int = 8) -> RunSummary:
     model_ready: float | None = None
     complete: float | None = None
     output_tokens: int | None = None
+    generated_output_tokens: int | None = None
     direct_generation_seconds: float | None = None
     generation_calls: int | None = None
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -121,6 +122,13 @@ def summarize_log(path: Path, *, gpu_count: int = 8) -> RunSummary:
             output_tokens = (
                 parsed_tokens if parsed_tokens is not None else output_tokens
             )
+        elif event == "generated_outputs":
+            parsed_tokens = _token_count(fields)
+            generated_output_tokens = (
+                parsed_tokens
+                if parsed_tokens is not None
+                else generated_output_tokens
+            )
         elif event == "generation":
             parsed_seconds = _nonnegative_float(fields.get("seconds"))
             parsed_calls = _positive_count(fields.get("calls"))
@@ -131,6 +139,8 @@ def summarize_log(path: Path, *, gpu_count: int = 8) -> RunSummary:
             parsed_epoch = _epoch(fields)
             complete = parsed_epoch if parsed_epoch is not None else complete
 
+    if generated_output_tokens is not None:
+        output_tokens = generated_output_tokens
     elapsed_seconds = _duration(complete, start)
     model_load_seconds = _duration(model_ready, start)
     rollout_eval_seconds = _duration(complete, model_ready)
@@ -178,11 +188,15 @@ def summarize_logs(paths: Sequence[Path], *, gpu_count: int = 8) -> SummaryRepor
     runs_by_arm = {run["arm"]: run for run in runs}
     if len(runs) == 2:
         if set(runs_by_arm) == {"adaptive", "baseline"}:
+            adaptive_tokens = runs_by_arm["adaptive"]["output_tokens"]
+            baseline_tokens = runs_by_arm["baseline"]["output_tokens"]
             adaptive_throughput = runs_by_arm["adaptive"]["tokens_per_second"]
             baseline_throughput = runs_by_arm["baseline"]["tokens_per_second"]
             if (
                 adaptive_throughput is not None
                 and baseline_throughput is not None
+                and adaptive_tokens is not None
+                and adaptive_tokens == baseline_tokens
                 and baseline_throughput > 0
             ):
                 speedup = adaptive_throughput / baseline_throughput

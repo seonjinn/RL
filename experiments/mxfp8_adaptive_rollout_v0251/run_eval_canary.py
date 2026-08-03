@@ -13,6 +13,7 @@ import nemo_rl.evals.eval as eval_module
 from examples.run_eval import setup_data
 from experiments.mxfp8_adaptive_rollout_v0251.generation_timing import (
     AsyncCallTimer,
+    GenerationLengthAudit,
 )
 from nemo_rl.algorithms.utils import get_tokenizer
 from nemo_rl.data.datasets.eval_datasets import _is_multimodal_dataset
@@ -61,6 +62,18 @@ def main() -> None:
     )
     generation, dataloader, master_config = setup(config, tokenizer, dataset)
     print(f"NEMORL_CANARY event=model_ready epoch={time.time()}", flush=True)
+    generation_length_audit = GenerationLengthAudit()
+    original_generate_text_async = generation.generate_text_async
+
+    async def audited_generate_text_async(data, greedy=False):
+        async for index, result in original_generate_text_async(data, greedy):
+            lengths = result.get("generation_lengths")
+            if lengths is None:
+                raise RuntimeError("async text generation did not report token lengths")
+            generation_length_audit.record(lengths.tolist())
+            yield index, result
+
+    generation.generate_text_async = audited_generate_text_async
     generation_timer = AsyncCallTimer()
     eval_module._generate_texts = generation_timer.wrap(  # noqa: SLF001
         eval_module._generate_texts  # noqa: SLF001
@@ -71,6 +84,26 @@ def main() -> None:
         f"seconds={generation_timer.elapsed_seconds} calls={generation_timer.calls}",
         flush=True,
     )
+    print(
+        "NEMORL_CANARY event=generated_outputs "
+        f"requests={generation_length_audit.request_count} "
+        f"min_tokens={generation_length_audit.min_tokens} "
+        f"max_tokens={generation_length_audit.max_tokens} "
+        f"tokens={generation_length_audit.total_tokens}",
+        flush=True,
+    )
+    expected_requests = os.environ.get("CANARY_EXPECTED_REQUESTS")
+    expected_tokens = os.environ.get("CANARY_EXPECTED_TOKENS_PER_RESPONSE")
+    if (expected_requests is None) != (expected_tokens is None):
+        raise RuntimeError(
+            "CANARY_EXPECTED_REQUESTS and CANARY_EXPECTED_TOKENS_PER_RESPONSE "
+            "must be set together"
+        )
+    if expected_requests is not None and expected_tokens is not None:
+        generation_length_audit.validate(
+            expected_requests=int(expected_requests),
+            expected_tokens_per_response=int(expected_tokens),
+        )
 
     output_dir = Path(os.environ["CANARY_OUTPUT_DIR"])
     output_tokens = _count_output_tokens(output_dir, tokenizer)

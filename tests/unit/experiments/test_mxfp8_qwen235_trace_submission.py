@@ -1,8 +1,7 @@
 import json
 import os
-from pathlib import Path
 import subprocess
-import sys
+from pathlib import Path
 
 import yaml
 
@@ -17,13 +16,15 @@ def test_qwen235_trace_config_defines_two_tp4_ep4_cuda_graph_engines() -> None:
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
     assert config["eval"] == {
-        "num_tests_per_prompt": 8,
+        "num_tests_per_prompt": 1,
         "save_path": "${oc.env:CANARY_OUTPUT_DIR}",
         "seed": 42,
     }
     generation = config["generation"]
     assert generation["model_name"] == "Qwen/Qwen3-235B-A22B"
     assert generation["max_new_tokens"] == 32768
+    assert generation["ignore_eos"] is True
+    assert generation["stop_token_ids"] == []
     assert generation["num_prompts_per_step"] == 64
 
     vllm_cfg = generation["vllm_cfg"]
@@ -77,6 +78,9 @@ def test_qwen235_trace_submitter_requires_clean_pinned_provenance() -> None:
     assert "HF_DATASETS_CACHE=/home/sna/.cache/hf-datasets-canary" in submitter
     assert 'mkdir -p "$HF_DATASETS_CACHE"' in submitter
     assert "models--Qwen--Qwen3-235B-A22B" in submitter
+    assert "CANARY_EXPECTED_REQUESTS=64" in submitter
+    assert "CANARY_EXPECTED_TOKENS_PER_RESPONSE=32768" in submitter
+    assert "NRL_VLLM_ASYNC_TIMEOUT_SECONDS=14400" in submitter
 
     expected_commit_default = (
         'EXPECTED_NEMO_RL_COMMIT=${EXPECTED_NEMO_RL_COMMIT:-$(git -C '
@@ -131,6 +135,40 @@ def test_qwen235_performance_config_and_submitter_define_matched_three_arm_run()
     assert "2b8121d1b56ccb44a4ee9bdb10adc5e355f58bf21e79079eadeb2ac7494bf417" in submitter
     assert "models--Qwen--Qwen3-235B-A22B" in submitter
     assert "HF_DATASETS_CACHE=/home/sna/.cache/hf-datasets-canary" in submitter
+    assert "--nodes=2" in submitter
+    assert "--time=05:00:00" in submitter
+    assert "--segment=2" in submitter
+    assert "--dependency=" in submitter
+    assert "args+=(--test-only)" in submitter
+    assert "afterok" not in submitter
+
+
+def test_qwen235_forced_32k_config_and_submitter_require_exact_outputs() -> None:
+    config_path = EXPERIMENT / "configs/eval_qwen3_235ba22b_forced_32k_performance.yaml"
+    submitter_path = EXPERIMENT / "submit_qwen235_forced_32k_ab_ptyche.sh"
+    assert config_path.is_file()
+    assert submitter_path.is_file()
+
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert config["eval"]["num_tests_per_prompt"] == 1
+    generation = config["generation"]
+    assert generation["max_new_tokens"] == 32768
+    assert generation["ignore_eos"] is True
+    assert generation["stop_token_ids"] == []
+    assert generation["num_prompts_per_step"] == 64
+    assert generation["vllm_cfg"]["max_model_len"] == 36864
+    assert generation["vllm_cfg"]["enforce_eager"] is False
+    assert generation["vllm_kwargs"]["max_num_seqs"] == 32
+    assert generation["vllm_kwargs"]["max_num_batched_tokens"] == 16384
+    assert generation["vllm_kwargs"]["enable_chunked_prefill"] is True
+
+    submitter = submitter_path.read_text(encoding="utf-8")
+    assert "eval_qwen3_235ba22b_forced_32k_performance.yaml" in submitter
+    assert "run_ab.sh pair" in submitter
+    assert "CANARY_EXPECTED_REQUESTS=64" in submitter
+    assert "CANARY_EXPECTED_TOKENS_PER_RESPONSE=32768" in submitter
+    assert "NRL_VLLM_ASYNC_TIMEOUT_SECONDS=14400" in submitter
+    assert "qwen235_tp4ep4_8x4_fix3_20260802" in submitter
     assert "--nodes=2" in submitter
     assert "--time=05:00:00" in submitter
     assert "--segment=2" in submitter

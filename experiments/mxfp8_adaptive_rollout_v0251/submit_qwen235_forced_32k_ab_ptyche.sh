@@ -3,7 +3,7 @@ set -euo pipefail
 
 ACTION=${1:-submit}
 if [[ "$ACTION" != submit && "$ACTION" != test-only ]]; then
-  echo "usage: submit_qwen235_32k_trace_ptyche.sh [submit|test-only]" >&2
+  echo "usage: submit_qwen235_forced_32k_ab_ptyche.sh [submit|test-only]" >&2
   exit 2
 fi
 
@@ -35,11 +35,16 @@ for name in \
   unset "$name"
 done
 
+artifact_dir=${TACTIC_ARTIFACT_DIR:-/home/sna/mxfp8-safe-backend/vllm-benchmark-qwen235-shmoo/experiments/sweep/data/microbench/qwen235_tp4ep4_8x4_fix3_20260802}
+export TACTIC_FILE="$artifact_dir/exact_tactics.json"
+export TACTIC_SHA256=${TACTIC_SHA256:-2b8121d1b56ccb44a4ee9bdb10adc5e355f58bf21e79079eadeb2ac7494bf417}
+LAYER_ALLOWLIST_FILE="$artifact_dir/layer_allowlist.txt"
+export LAYER_ALLOWLIST_B64
+LAYER_ALLOWLIST_B64=$(base64 < "$LAYER_ALLOWLIST_FILE")
+
 timestamp=$(date +%Y%m%d_%H%M%S)
-export CANARY_RESULT_ROOT=${CANARY_RESULT_ROOT:-/home/sna/results/nemorl-qwen235-mxfp8-32k-shape-trace/$timestamp}
-export SHAPE_TRACE_DIR=${SHAPE_TRACE_DIR:-$CANARY_RESULT_ROOT/trace/raw}
-export SHAPE_TRACE_MAX=${SHAPE_TRACE_MAX:-16384}
-export CANARY_CONFIG=${CANARY_CONFIG:-$NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout_v0251/configs/eval_qwen3_235ba22b_32k_cuda_graph_trace.yaml}
+export CANARY_RESULT_ROOT=${CANARY_RESULT_ROOT:-/home/sna/results/nemorl-qwen235-mxfp8-forced-32k-ab/$timestamp}
+export CANARY_CONFIG=${CANARY_CONFIG:-$NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout_v0251/configs/eval_qwen3_235ba22b_forced_32k_performance.yaml}
 export CANARY_EXPECTED_REQUESTS=64
 export CANARY_EXPECTED_TOKENS_PER_RESPONSE=32768
 export NRL_VLLM_ASYNC_TIMEOUT_SECONDS=14400
@@ -50,7 +55,7 @@ export HF_HUB_CACHE="$HF_HOME/hub"
 export HF_DATASETS_CACHE=/home/sna/.cache/hf-datasets-canary
 export GPUS_PER_NODE=4
 export BASE_LOG_DIR="$CANARY_RESULT_ROOT/slurm"
-export COMMAND="bash $NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_qwen235_trace_gate.sh"
+export COMMAND="bash $NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_ab.sh pair"
 export UV_CACHE_DIR_OVERRIDE=${UV_CACHE_DIR_OVERRIDE:-/home/sna/.cache/uv-canary}
 
 if [[ ! -d "$HF_HUB_CACHE/models--Qwen--Qwen3-235B-A22B" ]]; then
@@ -76,9 +81,11 @@ if [[ "$actual_vllm_commit" != "$EXPECTED_VLLM_COMMIT" ]]; then
   exit 2
 fi
 
+sha256sum --check <(printf '%s  %s\n' "$TACTIC_SHA256" "$TACTIC_FILE")
+
 mkdir -p "$CANARY_RESULT_ROOT"
-printf 'nemo_rl_commit=%s\ncustom_vllm_commit=%s\n' \
-  "$actual_nemo_rl_commit" "$actual_vllm_commit" \
+printf 'nemo_rl_commit=%s\ncustom_vllm_commit=%s\ntactic_sha256=%s\n' \
+  "$actual_nemo_rl_commit" "$actual_vllm_commit" "$TACTIC_SHA256" \
   > "$CANARY_RESULT_ROOT/provenance.txt"
 
 lock_sha=$(sha256sum "$NEMO_RL_REPO_ROOT/uv.lock" | awk '{print $1}')
@@ -86,8 +93,8 @@ venv_key=${lock_sha:0:16}-${EXPECTED_VLLM_COMMIT:0:12}
 export NEMO_RL_DRIVER_VENV_DIR=${NEMO_RL_DRIVER_VENV_DIR:-/home/sna/.cache/nemorl-driver-v0251-canary/$venv_key}
 export NEMO_RL_VENV_DIR=${NEMO_RL_VENV_DIR:-/home/sna/.cache/nemorl-venvs-v0251-canary/$venv_key}
 export CUSTOM_VLLM_RUNTIME_BASE=${CUSTOM_VLLM_RUNTIME_BASE:-/home/sna/.cache/vllm-runtime-overlays/$venv_key}
-mkdir -p "$BASE_LOG_DIR" "$SHAPE_TRACE_DIR" "$UV_CACHE_DIR_OVERRIDE" \
-  "$NEMO_RL_DRIVER_VENV_DIR" "$NEMO_RL_VENV_DIR" "$CUSTOM_VLLM_RUNTIME_BASE"
+mkdir -p "$BASE_LOG_DIR" "$UV_CACHE_DIR_OVERRIDE" "$NEMO_RL_DRIVER_VENV_DIR" \
+  "$NEMO_RL_VENV_DIR" "$CUSTOM_VLLM_RUNTIME_BASE"
 test -x "$NEMO_RL_DRIVER_VENV_DIR/bin/ray"
 export RAY_CLI="$NEMO_RL_DRIVER_VENV_DIR/bin/ray"
 
@@ -97,7 +104,7 @@ args=(
   --nodes=2
   --time=05:00:00
   --segment=2
-  --job-name=coreai_dlalgo_llm-nemorl.qwen235-mxfp8-32k-trace
+  --job-name=coreai_dlalgo_llm-nemorl.qwen235-mxfp8-forced-32k-ab
   --dependency=
   --export=ALL
 )

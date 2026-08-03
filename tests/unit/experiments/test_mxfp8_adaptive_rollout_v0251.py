@@ -12,6 +12,7 @@ import yaml
 from experiments.mxfp8_adaptive_rollout_v0251 import summarize
 from experiments.mxfp8_adaptive_rollout_v0251.generation_timing import (
     AsyncCallTimer,
+    GenerationLengthAudit,
 )
 from experiments.mxfp8_adaptive_rollout_v0251.contract import (
     AdaptiveInputs,
@@ -216,6 +217,27 @@ def test_generation_timer_accumulates_only_wrapped_async_calls() -> None:
     assert timer.elapsed_seconds == pytest.approx(4.0)
 
 
+def test_generation_length_audit_requires_exact_forced_output_length() -> None:
+    audit = GenerationLengthAudit()
+    audit.record([32768, 32768])
+    audit.record([32768])
+
+    audit.validate(expected_requests=3, expected_tokens_per_response=32768)
+
+    assert audit.request_count == 3
+    assert audit.total_tokens == 98304
+    assert audit.min_tokens == 32768
+    assert audit.max_tokens == 32768
+
+
+def test_generation_length_audit_rejects_early_stop() -> None:
+    audit = GenerationLengthAudit()
+    audit.record([32768, 512])
+
+    with pytest.raises(RuntimeError, match="forced output length mismatch"):
+        audit.validate(expected_requests=2, expected_tokens_per_response=32768)
+
+
 def test_summary_prefers_generation_call_timing_marker(tmp_path: Path) -> None:
     log = tmp_path / "run.log"
     log.write_text(
@@ -238,6 +260,30 @@ def test_summary_prefers_generation_call_timing_marker(tmp_path: Path) -> None:
     assert summary["measurement_scope"] == "generation_calls"
     assert summary["tokens_per_second"] == 250.0
     assert summary["tokens_per_second_per_gpu"] == 31.25
+
+
+def test_summary_prefers_engine_generated_token_count(tmp_path: Path) -> None:
+    log = tmp_path / "run.log"
+    log.write_text(
+        "\n".join(
+            [
+                "NEMORL_CANARY arm=adaptive event=start epoch=0",
+                "NEMORL_CANARY event=model_ready epoch=1",
+                "NEMORL_CANARY event=generation seconds=4.0 calls=1",
+                "NEMORL_CANARY event=generated_outputs requests=1 "
+                "min_tokens=32768 max_tokens=32768 tokens=32768",
+                "NEMORL_CANARY event=outputs tokens=512",
+                "NEMORL_CANARY event=complete epoch=5",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    summary = summarize_log(log, gpu_count=8)
+
+    assert summary["output_tokens"] == 32768
+    assert summary["tokens_per_second"] == 8192.0
+    assert summary["tokens_per_second_per_gpu"] == 1024.0
 
 
 def test_summary_rejects_non_positive_gpu_count(tmp_path: Path) -> None:
@@ -332,6 +378,32 @@ def test_summary_reports_adaptive_speedup_for_matched_pair(tmp_path: Path) -> No
     assert report["adaptive_vs_baseline_speedup"] == pytest.approx(2.0)
     assert "trtllm_default_vs_baseline_speedup" not in report
     assert "adaptive_vs_trtllm_default_speedup" not in report
+
+
+def test_summary_omits_pair_speedup_when_generated_work_differs(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / "baseline.log"
+    adaptive = tmp_path / "adaptive.log"
+    for path, arm, tokens in (
+        (baseline, "baseline", 32768),
+        (adaptive, "adaptive", 32767),
+    ):
+        path.write_text(
+            "\n".join(
+                [
+                    f"NEMORL_CANARY arm={arm} event=start epoch=0",
+                    "NEMORL_CANARY event=model_ready epoch=1",
+                    f"NEMORL_CANARY event=generated_outputs tokens={tokens}",
+                    "NEMORL_CANARY event=complete epoch=2",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    report = summarize.summarize_logs([baseline, adaptive])
+
+    assert report["adaptive_vs_baseline_speedup"] is None
 
 
 @pytest.mark.parametrize(
@@ -545,6 +617,20 @@ done
         str(result_root / "trtllm_default/run.log"),
         str(result_root / "adaptive/run.log"),
     ]
+
+
+def test_run_ab_pair_mode_skips_trtllm_default() -> None:
+    launcher = (
+        Path(__file__).parents[3]
+        / "experiments/mxfp8_adaptive_rollout_v0251/run_ab.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "run|pair|smoke" in launcher
+    pair_branch = launcher.split('if [[ "$ACTION" == pair ]]', maxsplit=1)[1]
+    pair_branch = pair_branch.split("else", maxsplit=1)[0]
+    assert 'run_arm.sh" baseline' in pair_branch
+    assert 'run_arm.sh" adaptive' in pair_branch
+    assert "trtllm_default" not in pair_branch
 
 
 def test_arm_reuses_locked_driver_interpreter_for_ray_actors() -> None:

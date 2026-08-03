@@ -1233,6 +1233,7 @@ class VllmAsyncGenerationWorkerImpl(
                 stop_token_ids=self.cfg["stop_token_ids"],
                 stop=final_stop_strings,
                 include_stop_str_in_output=True,  # returning stop strings like hf
+                ignore_eos=self.cfg.get("ignore_eos", False),
             )
 
             request_id = str(uuid.uuid4())
@@ -1253,11 +1254,17 @@ class VllmAsyncGenerationWorkerImpl(
                 raise RuntimeError(f"No output received for request {request_id}")
 
             # Extract the generated text
-            generated_text = final_request_output.outputs[0].text
+            generation_details = final_request_output.outputs[0]
+            generated_text = generation_details.text
 
             # Create result in BatchedDataDict format
             result_batch = BatchedDataDict[GenerationOutputSpec](
-                {"texts": [generated_text]}
+                {
+                    "texts": [generated_text],
+                    "generation_lengths": torch.tensor(
+                        [len(generation_details.token_ids)], dtype=torch.long
+                    ),
+                }
             )
 
             return (prompt_idx, result_batch)

@@ -19,6 +19,7 @@ import sys
 import types
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -157,6 +158,50 @@ def test_resolve_enable_prefix_caching_uses_cuda_capability_for_auto(monkeypatch
     monkeypatch.setattr(torch.cuda, "get_device_capability", lambda: (7, 5))
 
     assert _resolve_enable_prefix_caching({}) is False
+
+
+@pytest.mark.asyncio
+async def test_async_text_generation_forces_length_and_reports_generated_tokens():
+    sampling_kwargs = {}
+
+    class SamplingParams:
+        def __init__(self, **kwargs):
+            sampling_kwargs.update(kwargs)
+
+    class AsyncEngine:
+        def generate(self, **kwargs):
+            async def outputs():
+                yield SimpleNamespace(
+                    outputs=[SimpleNamespace(text="generated", token_ids=[1, 2, 3])]
+                )
+
+            return outputs()
+
+    worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
+    worker.cfg = {
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "top_k": -1,
+        "max_new_tokens": 32768,
+        "stop_token_ids": [],
+        "stop_strings": None,
+        "ignore_eos": True,
+        "vllm_cfg": {"async_engine": True},
+    }
+    worker.SamplingParams = SamplingParams
+    worker.llm = AsyncEngine()
+
+    results = [
+        result
+        async for result in worker.generate_text_async(
+            BatchedDataDict({"prompts": ["prompt"]})
+        )
+    ]
+
+    assert sampling_kwargs["max_tokens"] == 32768
+    assert sampling_kwargs["stop_token_ids"] == []
+    assert sampling_kwargs["ignore_eos"] is True
+    assert results[0][1]["generation_lengths"].tolist() == [3]
 
 
 basic_lora_test_config: LoRAConfig = {
