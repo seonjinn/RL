@@ -106,6 +106,39 @@ def test_qwen235_trace_submitter_requires_clean_pinned_provenance() -> None:
     assert "afterok" not in submitter
 
 
+def test_qwen235_performance_config_and_submitter_define_matched_three_arm_run() -> None:
+    config_path = EXPERIMENT / "configs/eval_qwen3_235ba22b_performance.yaml"
+    submitter_path = EXPERIMENT / "submit_qwen235_ab_ptyche.sh"
+    assert config_path.is_file()
+    assert submitter_path.is_file()
+
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    generation = config["generation"]
+    assert generation["model_name"] == "Qwen/Qwen3-235B-A22B"
+    assert generation["max_new_tokens"] == 4096
+    assert generation["num_prompts_per_step"] == 64
+    assert generation["vllm_cfg"]["tensor_parallel_size"] == 4
+    assert generation["vllm_cfg"]["expert_parallel_size"] == 4
+    assert generation["vllm_cfg"]["enforce_eager"] is False
+    assert generation["vllm_kwargs"]["max_num_seqs"] == 32
+    assert generation["vllm_kwargs"]["max_num_batched_tokens"] == 16384
+    assert generation["vllm_kwargs"]["enable_chunked_prefill"] is True
+
+    submitter = submitter_path.read_text(encoding="utf-8")
+    assert "eval_qwen3_235ba22b_performance.yaml" in submitter
+    assert "run_ab.sh run" in submitter
+    assert "qwen235_tp4ep4_8x4_fix1_20260802" in submitter
+    assert "bf1630d7327d58b6742ab0359c5993b59dc28c4ec96d9008c9fe0a1e399c189e" in submitter
+    assert "models--Qwen--Qwen3-235B-A22B" in submitter
+    assert "HF_DATASETS_CACHE=/home/sna/.cache/hf-datasets-canary" in submitter
+    assert "--nodes=2" in submitter
+    assert "--time=05:00:00" in submitter
+    assert "--segment=2" in submitter
+    assert "--dependency=" in submitter
+    assert "args+=(--test-only)" in submitter
+    assert "afterok" not in submitter
+
+
 def _run_trace_gate(tmp_path: Path, summary: dict[str, object]) -> subprocess.CompletedProcess[str]:
     fake_root = tmp_path / "repo"
     trace_script = fake_root / "experiments/mxfp8_adaptive_rollout_v0251/run_trace.sh"
