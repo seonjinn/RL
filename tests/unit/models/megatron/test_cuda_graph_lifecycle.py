@@ -248,7 +248,8 @@ def _metrics_values() -> dict[str, int]:
         "capture_count": 1,
         "replay_count": 2,
         "cache_hit_count": 3,
-        "eviction_count": 4,
+        "cache_miss_count": 2,
+        "eviction_count": 1,
         "fallback_count": 0,
         "graph_calls": 5,
         "eligible_calls": 6,
@@ -296,6 +297,8 @@ def test_step_metrics_reject_noninteger_counts(
 @pytest.mark.parametrize(
     ("overrides", "match"),
     [
+        ({"capture_count": 3, "cache_miss_count": 2}, "capture_count"),
+        ({"capture_count": 1, "eviction_count": 2}, "eviction_count"),
         ({"graph_calls": 7, "eligible_calls": 6}, "graph_calls"),
         ({"logical_tokens": 9, "padded_tokens": 8}, "logical_tokens"),
         ({"padded_tokens": 10, "capacity_tokens": 9}, "padded_tokens"),

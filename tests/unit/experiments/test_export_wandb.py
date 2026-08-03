@@ -120,7 +120,11 @@ def _partial_rows(
         source_tag = (
             "train/cuda_graph/cache_hit_count"
             if tag == "cuda_graph/cache_hits"
-            else tag
+            else (
+                "train/cuda_graph/cache_miss_count"
+                if tag == "cuda_graph/cache_misses"
+                else tag
+            )
         )
         for step in range(1, 6):
             rows.append(

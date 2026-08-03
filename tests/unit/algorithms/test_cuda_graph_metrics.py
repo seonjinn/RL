@@ -94,6 +94,7 @@ def _raw_metrics(**overrides: Any) -> dict[str, Any]:
         "capture_count": 2,
         "replay_count": 5,
         "cache_hit_count": 7,
+        "cache_miss_count": 3,
         "eviction_count": 1,
         "fallback_count": 0,
         "graph_calls": 1,
@@ -133,6 +134,7 @@ def _policy_metrics(**overrides: Any) -> dict[str, Any]:
         "capture_count": 2,
         "replay_count": 5,
         "cache_hit_count": 7,
+        "cache_miss_count": 3,
         "eviction_count": 1,
         "fallback_count": 0,
         "graph_calls": 2,
@@ -168,6 +170,7 @@ def test_aggregate_cuda_graph_metrics_selects_sums_and_recomputes_ratios() -> No
         "capture_count": 2,
         "replay_count": 5,
         "cache_hit_count": 7,
+        "cache_miss_count": 3,
         "eviction_count": 1,
         "fallback_count": 0,
         "graph_calls": 2,
@@ -180,8 +183,8 @@ def test_aggregate_cuda_graph_metrics_selects_sums_and_recomputes_ratios() -> No
         "padding_utilization": 0.5,
     }
     assert result is not None
-    assert all(type(result[key]) is int for key in tuple(result)[:10])
-    assert all(type(result[key]) is float for key in tuple(result)[10:])
+    assert all(type(result[key]) is int for key in tuple(result)[:11])
+    assert all(type(result[key]) is float for key in tuple(result)[11:])
 
 
 def test_aggregate_cuda_graph_metrics_never_averages_worker_ratios() -> None:
@@ -239,6 +242,7 @@ def test_aggregate_cuda_graph_metrics_uses_float_zero_for_zero_denominators() ->
         ("cuda_graph_metrics", "capture_count"),
         ("cuda_graph_metrics", "replay_count"),
         ("cuda_graph_metrics", "cache_hit_count"),
+        ("cuda_graph_metrics", "cache_miss_count"),
         ("cuda_graph_metrics", "eviction_count"),
         ("cuda_graph_metrics", "fallback_count"),
         ("cuda_graph_contract", "normalized_schedule_key"),
@@ -363,6 +367,8 @@ def test_aggregate_cuda_graph_metrics_rejects_non_mapping_payloads(
 @pytest.mark.parametrize(
     "metrics",
     [
+        _raw_metrics(capture_count=4, cache_miss_count=3),
+        _raw_metrics(capture_count=1, eviction_count=2),
         _raw_metrics(graph_calls=2, eligible_calls=1),
         _raw_metrics(logical_tokens=6, padded_tokens=5),
         _raw_metrics(padded_tokens=9, capacity_tokens=8),
@@ -388,6 +394,7 @@ def test_merge_cuda_graph_metrics_prefixes_exact_policy_mapping() -> None:
         "cuda_graph/capture_count": 2,
         "cuda_graph/replay_count": 5,
         "cuda_graph/cache_hit_count": 7,
+        "cuda_graph/cache_miss_count": 3,
         "cuda_graph/eviction_count": 1,
         "cuda_graph/fallback_count": 0,
         "cuda_graph/graph_calls": 2,
@@ -486,11 +493,16 @@ def test_merge_cuda_graph_metrics_rejects_inconsistent_ratio() -> None:
         )
 
 
-def test_merge_cuda_graph_metrics_rejects_collision_without_partial_update() -> None:
-    destination = {"loss": 0.25, "cuda_graph/capture_count": 99}
+@pytest.mark.parametrize(
+    "collision", ("cuda_graph/capture_count", "cuda_graph/cache_miss_count")
+)
+def test_merge_cuda_graph_metrics_rejects_collision_without_partial_update(
+    collision: str,
+) -> None:
+    destination = {"loss": 0.25, collision: 99}
     before = destination.copy()
 
-    with pytest.raises(ValueError, match="cuda_graph/capture_count"):
+    with pytest.raises(ValueError, match=collision):
         merge_cuda_graph_metrics(destination, {"cuda_graph_metrics": _policy_metrics()})
 
     assert destination == before

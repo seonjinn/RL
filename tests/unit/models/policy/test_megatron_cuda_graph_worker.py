@@ -327,6 +327,7 @@ def test_schedule_uses_exact_sample_and_two_entry_lru() -> None:
             capture_count=0,
             replay_count=0,
             cache_hit_count=0,
+            cache_miss_count=0,
             eviction_count=0,
             normalized_schedule_key=None,
         )
@@ -345,6 +346,7 @@ def test_schedule_uses_exact_sample_and_two_entry_lru() -> None:
     ]
     assert sum(state.capture_count for state in call_states) == 3
     assert sum(state.cache_hit_count for state in call_states) == 1
+    assert sum(state.cache_miss_count for state in call_states) == 3
     assert sum(state.eviction_count for state in call_states) == 1
     assert [state.normalized_schedule_key for state in call_states] == [5, 3, 5, 7]
     assert worker._te_cuda_graph_runtime_schedule_count == 7
@@ -397,6 +399,7 @@ def test_exactly_three_successful_updates_precede_first_capture() -> None:
             capture_count=0,
             replay_count=0,
             cache_hit_count=0,
+            cache_miss_count=0,
             eviction_count=0,
             normalized_schedule_key=None,
         )
@@ -408,14 +411,22 @@ def test_exactly_three_successful_updates_precede_first_capture() -> None:
         )
         return state
 
-    assert ensure_once().capture_count == 0
+    state = ensure_once()
+    assert state.capture_count == 0
+    assert state.cache_miss_count == 1
     for _ in range(2):
         worker._record_te_cuda_graph_optimizer_step(True)
-        assert ensure_once().capture_count == 0
+        state = ensure_once()
+        assert state.capture_count == 0
+        assert state.cache_miss_count == 1
     worker._record_te_cuda_graph_optimizer_step(False)
-    assert ensure_once().capture_count == 0
+    state = ensure_once()
+    assert state.capture_count == 0
+    assert state.cache_miss_count == 1
     worker._record_te_cuda_graph_optimizer_step(True)
-    assert ensure_once().capture_count == 1
+    state = ensure_once()
+    assert state.capture_count == 1
+    assert state.cache_miss_count == 1
     assert captures == [first.packed_seq_params]
 
 
@@ -459,6 +470,7 @@ def test_split_schedule_pins_first_key_without_second_transition() -> None:
         capture_count=0,
         replay_count=0,
         cache_hit_count=0,
+        cache_miss_count=0,
         eviction_count=0,
         normalized_schedule_key=None,
     )
@@ -694,6 +706,7 @@ def test_metrics_validate_and_reduce_across_tp_cp_then_pp_for_cp_replicas() -> N
         capture_count=1,
         replay_count=4,
         cache_hit_count=2,
+        cache_miss_count=3,
         eviction_count=1,
         logical_tokens=23,
         padded_tokens=27,
@@ -707,6 +720,7 @@ def test_metrics_validate_and_reduce_across_tp_cp_then_pp_for_cp_replicas() -> N
         "capture_count": 1,
         "replay_count": 4,
         "cache_hit_count": 2,
+        "cache_miss_count": 3,
         "eviction_count": 1,
         "fallback_count": 0,
         "graph_calls": 13,
@@ -724,7 +738,7 @@ def test_metrics_validate_and_reduce_across_tp_cp_then_pp_for_cp_replicas() -> N
         group for op, group in collective_calls if op in {reduce_op.MIN, reduce_op.MAX}
     ]
     sum_groups = [group for op, group in collective_calls if op == reduce_op.SUM]
-    assert validation_groups == ["tp_cp", "tp_cp", "pp", "pp"] * 11
+    assert validation_groups == ["tp_cp", "tp_cp", "pp", "pp"] * 12
     assert sum_groups == ["tp_cp", "pp", "tp_cp", "pp"]
     assert all(group != "mp" for _, group in collective_calls)
 
@@ -773,6 +787,7 @@ def test_metric_mismatch_reaches_pp_collectives_before_raise() -> None:
         capture_count=1,
         replay_count=0,
         cache_hit_count=0,
+        cache_miss_count=1,
         eviction_count=0,
         normalized_schedule_key=1,
     )

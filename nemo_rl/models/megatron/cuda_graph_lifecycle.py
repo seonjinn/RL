@@ -97,6 +97,7 @@ class CudaGraphStepMetrics:
     capture_count: int
     replay_count: int
     cache_hit_count: int
+    cache_miss_count: int
     eviction_count: int
     fallback_count: int
     graph_calls: int
@@ -110,6 +111,7 @@ class CudaGraphStepMetrics:
             "capture_count",
             "replay_count",
             "cache_hit_count",
+            "cache_miss_count",
             "eviction_count",
             "fallback_count",
             "graph_calls",
@@ -122,6 +124,16 @@ class CudaGraphStepMetrics:
 
         if self.fallback_count != 0:
             raise ValueError(f"fallback_count must be zero, got {self.fallback_count}")
+        if self.capture_count > self.cache_miss_count:
+            raise ValueError(
+                "capture_count must not exceed cache_miss_count, got "
+                f"{self.capture_count} > {self.cache_miss_count}"
+            )
+        if self.eviction_count > self.capture_count:
+            raise ValueError(
+                "eviction_count must not exceed capture_count, got "
+                f"{self.eviction_count} > {self.capture_count}"
+            )
         if self.graph_calls > self.eligible_calls:
             raise ValueError(
                 "graph_calls must not exceed eligible_calls, got "

@@ -37,6 +37,7 @@ _CUDA_GRAPH_RAW_METRIC_KEYS: tuple[str, ...] = (
     "capture_count",
     "replay_count",
     "cache_hit_count",
+    "cache_miss_count",
     "eviction_count",
     "fallback_count",
     "graph_calls",
@@ -49,6 +50,7 @@ _CUDA_GRAPH_REPLICATED_METRIC_KEYS: tuple[str, ...] = (
     "capture_count",
     "replay_count",
     "cache_hit_count",
+    "cache_miss_count",
     "eviction_count",
     "fallback_count",
 )
@@ -107,6 +109,14 @@ def _require_plain_nonnegative_integers(
 
 
 def _validate_cuda_graph_counter_order(metrics: Mapping[str, int]) -> None:
+    if metrics["capture_count"] > metrics["cache_miss_count"]:
+        raise ValueError(
+            "cuda_graph_metrics.capture_count must not exceed cache_miss_count."
+        )
+    if metrics["eviction_count"] > metrics["capture_count"]:
+        raise ValueError(
+            "cuda_graph_metrics.eviction_count must not exceed capture_count."
+        )
     if metrics["graph_calls"] > metrics["eligible_calls"]:
         raise ValueError(
             "cuda_graph_metrics.graph_calls must not exceed eligible_calls."
@@ -147,7 +157,7 @@ def aggregate_cuda_graph_metrics(
             ``cuda_graph_contract`` mappings; disabled results carry neither.
 
     Returns:
-        The exact ten counters plus three ratios, or ``None`` when telemetry is
+        The exact eleven counters plus three ratios, or ``None`` when telemetry is
         absent from every result.
 
     Raises:

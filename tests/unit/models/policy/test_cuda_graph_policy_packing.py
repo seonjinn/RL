@@ -216,6 +216,7 @@ _CUDA_GRAPH_METRICS = {
     "capture_count": 1,
     "replay_count": 2,
     "cache_hit_count": 3,
+    "cache_miss_count": 2,
     "eviction_count": 0,
     "fallback_count": 0,
     "graph_calls": 8,

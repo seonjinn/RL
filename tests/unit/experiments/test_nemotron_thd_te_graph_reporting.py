@@ -202,7 +202,7 @@ def _complete_record(
         "train/cuda_graph/capture_count": 1,
         "train/cuda_graph/replay_count": 10,
         "train/cuda_graph/cache_hit_count": 10,
-        "train/cuda_graph/cache_miss_count": 1,
+        "train/cuda_graph/cache_miss_count": 2,
         "train/cuda_graph/eviction_count": 0,
         "train/cuda_graph/fallback_count": 0,
         "train/cuda_graph/graph_calls": 10,
@@ -277,7 +277,7 @@ def test_collector_preserves_runtime_and_correctness_metrics() -> None:
     assert row["capture_count"] == 1
     assert row["replay_count"] == 10
     assert row["cache_hits"] == 10
-    assert row["cache_misses"] == 1
+    assert row["cache_misses"] == 2
     assert row["cache_evictions"] == 0
     assert row["fallback_count"] == 0
     assert row["policy_kl_error"] == 0.03

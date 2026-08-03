@@ -138,6 +138,7 @@ class _TECudaGraphCallState:
     capture_count: int = 0
     replay_count: int = 0
     cache_hit_count: int = 0
+    cache_miss_count: int = 0
     eviction_count: int = 0
     logical_tokens: int = 0
     padded_tokens: int = 0
@@ -932,6 +933,8 @@ class MegatronPolicyWorkerImpl(
         )
         transition_error: Optional[Exception] = None
         try:
+            if result.status != "hit":
+                call_state.cache_miss_count += 1
             if result.status == "warming":
                 manager = self._te_cuda_graph_bank_manager
                 if manager.active_bank is not None:
@@ -1035,6 +1038,7 @@ class MegatronPolicyWorkerImpl(
             "capture_count": call_state.capture_count,
             "replay_count": call_state.replay_count,
             "cache_hit_count": call_state.cache_hit_count,
+            "cache_miss_count": call_state.cache_miss_count,
             "eviction_count": call_state.eviction_count,
             "fallback_count": 0,
         }
@@ -1124,6 +1128,7 @@ class MegatronPolicyWorkerImpl(
             capture_count=lifecycle_values["capture_count"],
             replay_count=lifecycle_values["replay_count"],
             cache_hit_count=lifecycle_values["cache_hit_count"],
+            cache_miss_count=lifecycle_values["cache_miss_count"],
             eviction_count=lifecycle_values["eviction_count"],
             fallback_count=lifecycle_values["fallback_count"],
             graph_calls=int(execution[0].item()),

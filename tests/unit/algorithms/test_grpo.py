@@ -797,8 +797,9 @@ class StubReplayBuffer:
         """Return a mock that reports whether the current step can train."""
         mock = MagicMock()
         mock.remote = MagicMock(
-            side_effect=lambda _target_step, num_prompts_per_step, *_args: self._size
-            >= num_prompts_per_step
+            side_effect=lambda _target_step, num_prompts_per_step, *_args: (
+                self._size >= num_prompts_per_step
+            )
         )
         return mock
 
@@ -2501,6 +2502,7 @@ def test_grpo_trainers_log_exact_cuda_graph_metrics(
         "capture_count": 2,
         "replay_count": 5,
         "cache_hit_count": 7,
+        "cache_miss_count": 3,
         "eviction_count": 1,
         "fallback_count": 0,
         "graph_calls": 2,
@@ -2524,6 +2526,7 @@ def test_grpo_trainers_log_exact_cuda_graph_metrics(
         "cuda_graph/capture_count": 2,
         "cuda_graph/replay_count": 5,
         "cuda_graph/cache_hit_count": 7,
+        "cuda_graph/cache_miss_count": 3,
         "cuda_graph/eviction_count": 1,
         "cuda_graph/fallback_count": 0,
         "cuda_graph/graph_calls": 2,
