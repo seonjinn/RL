@@ -76,14 +76,18 @@ def test_qwen235_trace_submitter_requires_clean_pinned_provenance() -> None:
     assert 'HF_HUB_CACHE="$HF_HOME/hub"' in submitter
     assert "models--Qwen--Qwen3-235B-A22B" in submitter
 
-    assert "EXPECTED_NEMO_RL_COMMIT:?set EXPECTED_NEMO_RL_COMMIT" in submitter
+    expected_commit_default = (
+        'EXPECTED_NEMO_RL_COMMIT=${EXPECTED_NEMO_RL_COMMIT:-$(git -C '
+        '"$NEMO_RL_REPO_ROOT" rev-parse HEAD)}'
+    )
+    assert expected_commit_default in submitter
     assert "status --porcelain --untracked-files=all" in submitter
     assert 'require_clean_repo "$NEMO_RL_REPO_ROOT"' in submitter
     assert 'require_clean_repo "$CUSTOM_VLLM_SOURCE"' in submitter
     assert 'git -C "$NEMO_RL_REPO_ROOT" pull --ff-only' in submitter
-    assert submitter.index('git -C "$NEMO_RL_REPO_ROOT" pull --ff-only') < (
-        submitter.index("lock_sha=")
-    )
+    assert submitter.index(expected_commit_default) < submitter.index(
+        'git -C "$NEMO_RL_REPO_ROOT" pull --ff-only'
+    ) < submitter.index("lock_sha=")
     assert 'git -C "$CUSTOM_VLLM_SOURCE" rev-parse HEAD' in submitter
     assert 'actual_nemo_rl_commit=$(git -C "$NEMO_RL_REPO_ROOT" rev-parse HEAD)' in submitter
     assert '"$actual_nemo_rl_commit" != "$EXPECTED_NEMO_RL_COMMIT"' in submitter

@@ -9,7 +9,7 @@ fi
 
 export NEMO_RL_REPO_ROOT=${NEMO_RL_REPO_ROOT:-/home/sna/nemorl-v0251-mxfp8-safe-adaptive-canary}
 export CUSTOM_VLLM_SOURCE=${CUSTOM_VLLM_SOURCE:-/home/sna/mxfp8-safe-backend/vllm-v0251-safe-backend}
-export EXPECTED_NEMO_RL_COMMIT=${EXPECTED_NEMO_RL_COMMIT:?set EXPECTED_NEMO_RL_COMMIT}
+export EXPECTED_NEMO_RL_COMMIT=${EXPECTED_NEMO_RL_COMMIT:-$(git -C "$NEMO_RL_REPO_ROOT" rev-parse HEAD)}
 export EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-658d7b1571a914bee7df48f717c2a428ee7c45ad}
 
 require_clean_repo() {
