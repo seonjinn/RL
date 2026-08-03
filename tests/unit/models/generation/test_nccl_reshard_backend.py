@@ -493,6 +493,65 @@ def test_build_mxfp8_map_receives_value_and_scale_into_matching_slices():
     )
 
 
+def test_build_mxfp8_receiver_quant_map_stages_bf16_and_loads_value_and_scale(
+    monkeypatch,
+):
+    name = "model.layers.0.mlp.down_proj.weight"
+    refit_info = {
+        "gen_tp_size": 1,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": name,
+                    "global_shape": [32, 64],
+                    "components": _identity_components(
+                        (32, 64), torch.bfloat16
+                    ),
+                }
+            ]
+        },
+    }
+    value = torch.zeros(32, 64, dtype=torch.float8_e4m3fn)
+    scale = torch.full((32, 2), 7, dtype=torch.uint8)
+    ext = _make_ext(
+        {
+            name: value,
+            f"{name}_scale_from_checkpoint": scale,
+        }
+    )
+    quantized = torch.full_like(value, 1.0)
+    quantized_scale = torch.tensor([[0, 9]], dtype=torch.uint8).expand(32, 2).clone()
+    quantize_inputs = []
+
+    def fake_quantize(tensor):
+        quantize_inputs.append(tensor.clone())
+        return quantized, quantized_scale
+
+    monkeypatch.setattr(
+        "vllm.model_executor.layers.quantization.utils.mxfp8_utils.mxfp8_e4m3_quantize",
+        fake_quantize,
+    )
+
+    spec = ext.build_hf_to_local_param_map(refit_info).get(name)
+    assert spec is not None and spec.pre is not None and spec.post is not None
+
+    ctx = spec.pre(spec.base)
+    assert ctx.tensors_for_transfer() == (ctx.buf,)
+    assert ctx.buf.shape == (32, 64)
+    assert ctx.buf.dtype == torch.bfloat16
+    ctx.buf.fill_(3.0)
+    spec.post(ctx)
+
+    assert len(quantize_inputs) == 1
+    assert torch.equal(quantize_inputs[0], torch.full_like(ctx.buf, 3.0))
+    assert torch.equal(value, quantized)
+    assert torch.equal(
+        scale,
+        torch.tensor([[1, 9]], dtype=torch.uint8).expand(32, 2),
+    )
+
+
 def test_build_mxfp8_moe_map_uses_matching_w13_and_w2_scale_slices():
     E, H, P = 2, 32, 64
     refit_info = {

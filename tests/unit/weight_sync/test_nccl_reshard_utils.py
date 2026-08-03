@@ -102,6 +102,33 @@ def test_check_nccl_reshard_refit_support_accepts_mxfp8_refit_prequantize() -> N
     check_nccl_reshard_refit_support(config)
 
 
+def test_check_nccl_reshard_refit_support_accepts_mxfp8_receiver_quantize() -> None:
+    config = _valid_nccl_reshard_config()
+    config.policy["generation"]["vllm_cfg"].update(
+        {
+            "precision": "fp8",
+            "is_mx": True,
+            "refit_prequantize": False,
+        }
+    )
+
+    check_nccl_reshard_refit_support(config)
+
+
+def test_check_nccl_reshard_refit_support_rejects_non_mx_receiver_quantize() -> None:
+    config = _valid_nccl_reshard_config()
+    config.policy["generation"]["vllm_cfg"].update(
+        {
+            "precision": "fp8",
+            "is_mx": False,
+            "refit_prequantize": False,
+        }
+    )
+
+    with pytest.raises(ValueError, match="is_mx=True"):
+        check_nccl_reshard_refit_support(config)
+
+
 def test_check_nccl_reshard_refit_support_rejects_non_mx_prequantize() -> None:
     config = _valid_nccl_reshard_config()
     config.policy["generation"]["vllm_cfg"].update(
