@@ -1,0 +1,20 @@
+{
+  "matched_gpu_count": 8,
+  "matched_output_tokens": 2097152,
+  "rows": [
+    {
+      "arm": "baseline",
+      "generation_seconds": 422.31761919299606,
+      "label": "CuTeDSL baseline",
+      "normalized_throughput": 1.0,
+      "tokens_per_second_per_gpu": 620.7271212149027
+    },
+    {
+      "arm": "adaptive",
+      "generation_seconds": 458.5427873680019,
+      "label": "TRTLLM Adaptive",
+      "normalized_throughput": 0.9209993719824158,
+      "tokens_per_second_per_gpu": 571.6892888113782
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Qwen3-235B Forced 32K MXFP8 Backend Comparison</title>
+<style>body{font-family:Arial,sans-serif;margin:0;color:#172033}main{max-width:980px;margin:auto;padding:30px 24px 50px}h1{font-size:28px}p{line-height:1.55}img{width:100%;height:auto}table{border-collapse:collapse;width:100%;margin:20px 0}th,td{border-bottom:1px solid #ccd2dc;padding:9px;text-align:right}th:first-child,td:first-child{text-align:left}.decision{border-left:4px solid #c33;background:#f6f7f9;padding:10px 14px}code{background:#eef1f5;padding:2px 5px}</style>
+</head><body><main>
+<h1>Qwen3-235B Forced 32K MXFP8 Backend Comparison</h1>
+<p>Ptyche jobs <code>2506677</code> and <code>2506829</code>; vLLM 0.25.1, FlashInfer 0.6.13, CUDA Graph, two TP4/EP4 replicas on 8 GB200 GPUs.</p>
+<img src="qwen235_forced_32k_cutedsl_vs_adaptive.png" alt="CuTeDSL and TRTLLM Adaptive throughput">
+<table><thead><tr><th>Dense MXFP8 policy</th><th>tokens/sec/GPU</th><th>vs CuTeDSL</th><th>Generation time (s)</th></tr></thead><tbody><tr><td>CuTeDSL baseline</td><td>620.73</td><td>1.000x</td><td>422.32</td></tr><tr><td>TRTLLM Adaptive</td><td>571.69</td><td>0.921x</td><td>458.54</td></tr></tbody></table>
+<p class="decision"><strong>Result:</strong> TRTLLM Adaptive reached 0.921x CuTeDSL throughput, a 7.9% regression. Increasing OSL to a true 32K did not recover an Adaptive advantage.</p>
+<h2>Matched methodology</h2>
+<p>Each arm processed 64 requests with exactly 32,768 generated tokens per request (2,097,152 total engine tokens). The configuration used <code>ignore_eos=true</code>, an empty stop-token list, aggregate concurrency 64, <code>max_num_seqs=32</code> per replica, and <code>max_num_batched_tokens=16384</code>.</p>
+<h2>Lookup coverage</h2>
+<p>The forced-32K trace observed 5 unique dense GEMM signatures across 40 records. All five signatures matched the qualified lookup table, so this result is not explained by unseen-shape fallback.</p>
+<h2>Interpretation</h2>
+<p>The dense TRTLLM path is active and exact tactics are available, but end-to-end generation remains dominated by work outside the optimized dense LM-head GEMM. Backend conversion and dispatch costs, plus MoE and attention execution, outweigh the isolated tactic benefit for this workload.</p>
+<h2>Provenance</h2><pre>nemo_rl_commit=85bba26a25807af34fe48014290ee04dbdd2c42c
+custom_vllm_commit=658d7b1571a914bee7df48f717c2a428ee7c45ad
+tactic_sha256=2b8121d1b56ccb44a4ee9bdb10adc5e355f58bf21e79079eadeb2ac7494bf417</pre>
+</main></body></html>

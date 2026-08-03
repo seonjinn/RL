@@ -1,0 +1,42 @@
+{
+  "eligible": true,
+  "record_count": 40,
+  "signatures": [
+    {
+      "k": 4096,
+      "layout": "8x4",
+      "m": 1,
+      "n_logical": 37984,
+      "n_physical": 38016
+    },
+    {
+      "k": 4096,
+      "layout": "8x4",
+      "m": 2,
+      "n_logical": 37984,
+      "n_physical": 38016
+    },
+    {
+      "k": 4096,
+      "layout": "8x4",
+      "m": 30,
+      "n_logical": 37984,
+      "n_physical": 38016
+    },
+    {
+      "k": 4096,
+      "layout": "8x4",
+      "m": 31,
+      "n_logical": 37984,
+      "n_physical": 38016
+    },
+    {
+      "k": 4096,
+      "layout": "8x4",
+      "m": 32,
+      "n_logical": 37984,
+      "n_physical": 38016
+    }
+  ],
+  "unique_signature_count": 5
+}
