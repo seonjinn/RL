@@ -394,3 +394,94 @@ def test_mxfp8_moe_initializes_kernel_once(fp8_module, monkeypatch):
             "layer": layer,
         }
     ]
+
+
+def test_mxfp8_moe_refit_uses_vllm_backend_conversion_and_preserves_raw_scales(
+    fp8_module, monkeypatch
+):
+    import torch
+    from vllm.model_executor.layers.quantization import fp8 as vllm_fp8
+    from vllm.model_executor import parameter as vllm_parameter
+
+    fp8 = fp8_module
+    calls = []
+
+    def model_weight_parameter(*, data, **kwargs):
+        parameter = torch.nn.Parameter(data, requires_grad=False)
+        parameter.weight_loader = kwargs.get("weight_loader")
+        return parameter
+
+    def convert(**kwargs):
+        calls.append(kwargs)
+        return (
+            kwargs["w13"] + 10,
+            kwargs["w2"] + 11,
+            kwargs["w13_scale"] + 20,
+            kwargs["w2_scale"] + 21,
+        )
+
+    monkeypatch.setattr(vllm_parameter, "ModelWeightParameter", model_weight_parameter)
+    monkeypatch.setattr(vllm_fp8, "convert_to_fp8_moe_kernel_format", convert)
+    monkeypatch.setattr(fp8, "_initialize_mxfp8_moe_kernel", lambda *_args: None)
+
+    layer = torch.nn.Module()
+    layer.w13_weight = torch.nn.Parameter(torch.ones((2, 2)), requires_grad=False)
+    layer.w2_weight = torch.nn.Parameter(torch.full((2, 2), 2.0), requires_grad=False)
+    layer.w13_weight_scale = torch.nn.Parameter(
+        torch.ones((2, 1), dtype=torch.uint8), requires_grad=False
+    )
+    layer.w2_weight_scale = torch.nn.Parameter(
+        torch.full((2, 1), 2, dtype=torch.uint8), requires_grad=False
+    )
+    layer.w13_weight_scale.weight_loader = object()
+    layer.w2_weight_scale.weight_loader = object()
+    method = types.SimpleNamespace(
+        mxfp8_backend="flashinfer-trtllm",
+        weight_block_size=[1, 32],
+    )
+
+    w13_parameter = layer.w13_weight
+    w2_parameter = layer.w2_weight
+    fp8.process_weights_after_loading_mxfp8_moe(method, layer)
+
+    assert layer.weight_block_size == [1, 32]
+    assert layer.w13_weight is w13_parameter
+    assert layer.w2_weight is w2_parameter
+    assert torch.equal(layer.w13_weight, torch.full((2, 2), 11.0))
+    assert torch.equal(layer.w2_weight, torch.full((2, 2), 13.0))
+    assert torch.equal(
+        layer.w13_weight_scale_from_checkpoint,
+        torch.ones((2, 1), dtype=torch.uint8),
+    )
+    assert torch.equal(
+        layer.w2_weight_scale_from_checkpoint,
+        torch.full((2, 1), 2, dtype=torch.uint8),
+    )
+    prepared_w13_scale = layer.w13_weight_scale
+    prepared_w2_scale = layer.w2_weight_scale
+
+    with torch.no_grad():
+        layer.w13_weight.fill_(3)
+        layer.w2_weight.fill_(4)
+        layer.w13_weight_scale_from_checkpoint.fill_(5)
+        layer.w2_weight_scale_from_checkpoint.fill_(6)
+    fp8.process_weights_after_loading_mxfp8_moe(method, layer)
+
+    assert layer.w13_weight is w13_parameter
+    assert layer.w2_weight is w2_parameter
+    assert layer.w13_weight_scale is prepared_w13_scale
+    assert layer.w2_weight_scale is prepared_w2_scale
+    assert torch.equal(layer.w13_weight, torch.full((2, 2), 13.0))
+    assert torch.equal(layer.w2_weight, torch.full((2, 2), 15.0))
+    assert torch.equal(
+        layer.w13_weight_scale_from_checkpoint,
+        torch.full((2, 1), 5, dtype=torch.uint8),
+    )
+    assert torch.equal(
+        layer.w2_weight_scale_from_checkpoint,
+        torch.full((2, 1), 6, dtype=torch.uint8),
+    )
+    assert len(calls) == 2
+    assert all(call["fp8_backend"] == "flashinfer-trtllm" for call in calls)
+    assert all(call["w13_input_scale"] is None for call in calls)
+    assert all(call["w2_input_scale"] is None for call in calls)

@@ -28,10 +28,6 @@ from vllm.triton_utils import tl, triton
 from vllm.v1.engine.core import EngineCoreProc
 from vllm.v1.engine.utils import CoreEngineProcManager
 
-from nemo_rl.models.generation.vllm.quantization.mxfp8_utils import (
-    pad_flashinfer_scale_k,
-)
-
 logger = init_logger(__name__)
 
 FP8_BLOCK_QUANT_KWARGS = {
@@ -980,87 +976,16 @@ def _initialize_mxfp8_moe_kernel(self, layer) -> None:
 
 
 def process_weights_after_loading_mxfp8_moe(self, layer) -> None:
-    """Shuffle weights and scales into FlashInfer TRTLLM MXFP8 layout."""
-    from flashinfer import (
-        reorder_rows_for_gated_act_gemm,
-        shuffle_matrix_a,
-        shuffle_matrix_sf_a,
-    )
+    """Convert refit weights with vLLM's selected MXFP8 MoE backend."""
     from vllm.model_executor.layers.fused_moe import FusedMoeWeightScaleSupported
-    from vllm.model_executor.layers.quantization.utils.flashinfer_utils import (
-        swap_w13_to_w31,
-    )
-    from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
-        MXFP8_SCALE_DTYPE,
-        MXFP8_VALUE_DTYPE,
+    from vllm.model_executor.layers.quantization.fp8 import (
+        convert_to_fp8_moe_kernel_format,
     )
     from vllm.model_executor.parameter import ModelWeightParameter
     from vllm.model_executor.utils import set_weight_attrs
 
-    epilogue_tile_m = 128
-    num_experts = layer.w13_weight.shape[0]
-    is_gated = self.moe.is_act_and_mul
-    intermediate_size_factor = 2 if is_gated else 1
-
-    w13_weight = layer.w13_weight.data
-    if not hasattr(layer, "w13_weight_scale_from_checkpoint"):
-        w13_scale = layer.w13_weight_scale.data
-    else:
-        w13_scale = layer.w13_weight_scale_from_checkpoint.data
-    if is_gated:
-        # FI TRTLLM gated kernels use W31 ordering. Model checkpoints store
-        # gated projection as W13, so convert once before shuffling.
-        w13_weight = swap_w13_to_w31(w13_weight)
-        w13_scale = swap_w13_to_w31(w13_scale)
-    w2_weight = layer.w2_weight.data
-    if not hasattr(layer, "w2_weight_scale_from_checkpoint"):
-        w2_scale = layer.w2_weight_scale.data
-    else:
-        w2_scale = layer.w2_weight_scale_from_checkpoint.data
-
-    w13_weight_shuffled = []
-    w2_weight_shuffled = []
-    w13_scale_shuffled = []
-    w2_scale_shuffled = []
-    for i in range(num_experts):
-        w13_i = w13_weight[i].reshape(
-            intermediate_size_factor * layer.intermediate_size_per_partition, -1
-        )
-        w13_sf_i = w13_scale[i].reshape(
-            intermediate_size_factor * layer.intermediate_size_per_partition, -1
-        )
-        if is_gated:
-            # Reorder rows for gated activation layout expected by TRTLLM.
-            w13_i = reorder_rows_for_gated_act_gemm(w13_i.clone())
-            w13_sf_i = reorder_rows_for_gated_act_gemm(w13_sf_i.clone())
-
-        w13_shuffled_i = shuffle_matrix_a(w13_i.view(torch.uint8), epilogue_tile_m)
-        w2_shuffled_i = shuffle_matrix_a(
-            w2_weight[i].view(torch.uint8), epilogue_tile_m
-        )
-        w13_weight_shuffled.append(w13_shuffled_i.contiguous().view(MXFP8_VALUE_DTYPE))
-        w2_weight_shuffled.append(w2_shuffled_i.contiguous().view(MXFP8_VALUE_DTYPE))
-        w13_sf_shuffled_i = shuffle_matrix_sf_a(
-            pad_flashinfer_scale_k(
-                w13_sf_i.view(torch.uint8).reshape(
-                    intermediate_size_factor * layer.intermediate_size_per_partition,
-                    -1,
-                )
-            ),
-            epilogue_tile_m,
-        )
-        w2_sf_shuffled_i = shuffle_matrix_sf_a(
-            pad_flashinfer_scale_k(
-                w2_scale[i].view(torch.uint8).reshape(layer.hidden_size, -1)
-            ),
-            epilogue_tile_m,
-        )
-        w13_scale_shuffled.append(
-            w13_sf_shuffled_i.contiguous().view(MXFP8_SCALE_DTYPE)
-        )
-        w2_scale_shuffled.append(w2_sf_shuffled_i.contiguous().view(MXFP8_SCALE_DTYPE))
-
-    if not hasattr(layer, "w13_weight_scale_from_checkpoint"):
+    initial_load = not hasattr(layer, "w13_weight_scale_from_checkpoint")
+    if initial_load:
         layer.w13_weight_scale_from_checkpoint = ModelWeightParameter(
             data=layer.w13_weight_scale.data,
             input_dim=2,
@@ -1093,17 +1018,31 @@ def process_weights_after_loading_mxfp8_moe(self, layer) -> None:
             layer.w2_weight_scale_from_checkpoint,
             {"quant_method": FusedMoeWeightScaleSupported.BLOCK.value},
         )
+
+    layer.weight_block_size = self.weight_block_size
+    w13, w2, w13_scale, w2_scale = convert_to_fp8_moe_kernel_format(
+        fp8_backend=self.mxfp8_backend,
+        layer=layer,
+        w13=layer.w13_weight.data,
+        w2=layer.w2_weight.data,
+        w13_scale=layer.w13_weight_scale_from_checkpoint.data,
+        w2_scale=layer.w2_weight_scale_from_checkpoint.data,
+        w13_input_scale=None,
+        w2_input_scale=None,
+    )
+
+    layer.w13_weight.copy_(w13)
+    layer.w2_weight.copy_(w2)
+    if initial_load:
         layer.w13_weight_scale = torch.nn.Parameter(
-            torch.stack(w13_scale_shuffled).contiguous(), requires_grad=False
+            w13_scale.contiguous(), requires_grad=False
         )
         layer.w2_weight_scale = torch.nn.Parameter(
-            torch.stack(w2_scale_shuffled).contiguous(), requires_grad=False
+            w2_scale.contiguous(), requires_grad=False
         )
     else:
-        layer.w13_weight_scale.copy_(torch.stack(w13_scale_shuffled).contiguous())
-        layer.w2_weight_scale.copy_(torch.stack(w2_scale_shuffled).contiguous())
-    layer.w13_weight.copy_(torch.stack(w13_weight_shuffled).contiguous())
-    layer.w2_weight.copy_(torch.stack(w2_weight_shuffled).contiguous())
+        layer.w13_weight_scale.copy_(w13_scale)
+        layer.w2_weight_scale.copy_(w2_scale)
     _initialize_mxfp8_moe_kernel(self, layer)
 
 
