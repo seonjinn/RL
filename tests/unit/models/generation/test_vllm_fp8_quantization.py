@@ -271,3 +271,26 @@ def test_initialize_mxfp8_moe_kernel_once(fp8_module, monkeypatch):
             "layer": layer,
         }
     ]
+
+
+def test_quantize_mxfp8_weight_restores_3d_logical_shape(fp8_module, monkeypatch):
+    import torch
+    from vllm.model_executor.layers.quantization.utils import mxfp8_utils
+
+    fp8 = fp8_module
+    weight = torch.empty(2, 3, 64, dtype=torch.bfloat16)
+
+    def fake_quantize(tensor):
+        assert tensor is weight
+        return (
+            torch.zeros(6, 64, dtype=torch.float8_e4m3fn),
+            torch.zeros(6, 2, dtype=torch.uint8),
+        )
+
+    monkeypatch.setattr(mxfp8_utils, "mxfp8_e4m3_quantize", fake_quantize)
+
+    value, scale = fp8.quantize_mxfp8_weight(weight)
+
+    assert value.shape == (2, 3, 64)
+    assert scale.shape == (2, 3, 2)
+    assert torch.all(scale == 1)
