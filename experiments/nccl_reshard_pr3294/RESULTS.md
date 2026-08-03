@@ -109,6 +109,75 @@ receiver optimization saves `3.25 s/step`, compared with `6.69 s/step` in the
 historical pre-NCCL measurement. Consequently, its E2E impact is smaller even
 though its relative refit reduction is larger.
 
+## vLLM 0.25 Component Factorial Ablation
+
+The receiver-side result was repeated as a full 2x2 factorial ablation at
+source `5152b5e569ef2cf4dc242aa66be4e50303d29c3d`. All four arms used
+trainer-side prequantization and NCCL-Reshard; only batched MoE shuffle and
+loader-route caching changed. The setup otherwise matched the performance A/B:
+Qwen3-30B-A3B, 4 B200 nodes split into 2 training and 2 generation nodes,
+MoE-only MXFP8 rollout, GBS 2048, sequence length 4096, real importance
+sampling, and checkpointing disabled. vLLM was `0.25.1`.
+
+| Arm | Shuffle | Cache | Job | W&B | Status |
+|---|---:|---:|---:|---|---|
+| Baseline | Off | Off | `488867` | [aszejvw3](https://wandb.ai/nvidia/sna-pr3294-nccl-reshard-ablation/runs/aszejvw3) | 20/20, `0:0` |
+| Batched shuffle | On | Off | `488868` | [xumk6oxd](https://wandb.ai/nvidia/sna-pr3294-nccl-reshard-ablation/runs/xumk6oxd) | 20/20, `0:0` |
+| Loader cache | Off | On | `488869` | [5q5kvr8h](https://wandb.ai/nvidia/sna-pr3294-nccl-reshard-ablation/runs/5q5kvr8h) | 20/20, `0:0` |
+| Optimized | On | On | `488870` | [z8tu865o](https://wandb.ai/nvidia/sna-pr3294-nccl-reshard-ablation/runs/z8tu865o) | 20/20, `0:0` |
+
+Results are arithmetic means over Steps 3-20. Every metric has 18 valid
+observations and no missing steps.
+
+| Metric | Baseline | Shuffle only | Cache only | Both |
+|---|---:|---:|---:|---:|
+| Transfer/update | 3.772 s | 0.727 s | 3.988 s | 0.734 s |
+| Total refit | 3.772 s | 0.727 s | 3.988 s | 0.734 s |
+| E2E step time | 168.939 s | 169.538 s | 171.192 s | 169.860 s |
+| E2E throughput | 1228.4 tok/s/GPU | 1222.4 | 1211.2 | 1219.5 |
+| Generation | 48.377 s | 48.807 s | 48.487 s | 48.514 s |
+| Policy training | 80.357 s | 83.232 s | 82.196 s | 83.389 s |
+| Policy/reference logprobs | 34.576 s | 34.829 s | 34.789 s | 35.391 s |
+
+| Component contrast | Refit delta | Interpretation |
+|---|---:|---|
+| Add shuffle without cache | -3.045 s (-80.7%, 5.19x faster) | Dominant refit optimization |
+| Add shuffle with cache | -3.254 s (-81.6%) | Same benefit when cache is enabled |
+| Add cache without shuffle | +0.216 s (+5.7%) | No refit benefit in this path |
+| Add cache with shuffle | +0.007 s (+1.0%) | Effect is negligible |
+
+The shuffle-only paired refit delta versus baseline was `-3.045 s/step`, with
+a 95% confidence interval of `[-3.145, -2.946] s`. The optimized paired delta
+was `-3.038 s/step`, with a 95% confidence interval of
+`[-3.121, -2.955] s`. Batched MoE shuffle therefore accounts for effectively
+all measured receiver-side refit improvement on this NCCL-Reshard/vLLM 0.25
+path; loader-route caching adds no measurable benefit.
+
+E2E time did not improve in this four-job run even though refit fell by about
+3 seconds. Policy training was 2.9-3.0 seconds slower on the shuffle-enabled
+node allocations, an unrelated component that offsets the direct refit gain.
+The shuffle-only E2E delta was `+0.600 s`, with a 95% confidence interval of
+`[-0.959, +2.158] s`; it is not distinguishable from zero. The direct refit
+timer is the causal metric for this component ablation. A prior two-arm run on
+different nodes measured a 2.21% E2E throughput gain, so E2E impact should be
+repeated or controlled on identical nodes before making a headline claim.
+
+Correctness indicators remained aligned:
+
+| Metric | Baseline | Shuffle only | Cache only | Both |
+|---|---:|---:|---:|---:|
+| Mean rollout reward | 0.52889 | 0.52995 | 0.52851 | 0.52827 |
+| Generation KL error | 0.003984 | 0.003988 | 0.003983 | 0.003983 |
+| Median token-mult probability error | 1.0374 | 1.0610 | 1.0375 | 1.0388 |
+
+Paired reward and generation-KL confidence intervals versus baseline included
+zero for every arm. Token-mult probability error had sparse, large outliers in
+all arms, so its arithmetic mean is not representative; the medians remained
+near `1.04`.
+
+The exact run manifest is in `factorial_runs_5152b5e56.csv`, and the canonical
+W&B Steps 3-20 export is in `factorial_results_5152b5e56.csv`.
+
 ## Runtime Boundary
 
 The staged nightly image does not contain an importable `nccl.m2n` module or `libnccl_m2n.so`. The NCCL arm therefore uses NeMo-RL's `xferdtensor_python (exact-transfer)` implementation over NCCL communicators. These results validate the transform-aware NCCL-Reshard algorithm and its Python exact-transfer fallback; they are not compiled native-M2N measurements.
@@ -145,6 +214,20 @@ Step 2 completed with `0.62 s` transfer/update, `10.05 s` E2E step time,
 `0.00436` generation KL error, `1.033` token-mult probability error, and no
 NaN/Inf metrics. W&B: <https://wandb.ai/nvidia/sna-pr3294-nccl-mxfp8-prequant/runs/dpsenun7>.
 
+The full-batch follow-up, job `488732`, completed 20/20 steps with exit code
+`0:0` and no traceback. Over Steps 3-20 it averaged `0.730 s` total refit,
+`167.74 s` E2E step time, and `1236.0 tokens/s/GPU`. The run used GBS 2048,
+sequence length 4096, and real importance sampling. W&B:
+<https://wandb.ai/nvidia/sna-pr3294-nccl-mxfp8-prequant/runs/ongveks5>.
+
 ## Conclusion
 
-The transform-aware exact shard-transfer path reduced steady-state refit time by 83.6% and improved E2E throughput by 4.43% without a measurable reward or generation-KL regression. On top of that path, the remaining receiver-side PR 3294 optimizations reduced refit by another 78.6% and improved E2E throughput by 2.21%. Native M2N must be packaged and measured separately before claiming compiled NCCL-M2N performance.
+The transform-aware exact shard-transfer path reduced steady-state refit time
+by 83.6% and improved E2E throughput by 4.43% without a measurable reward or
+generation-KL regression. On top of that path, the component factorial shows
+that batched MoE shuffle accounts for the receiver-side refit gain: it reduced
+refit by 80.7%, while loader-route caching added no benefit. The earlier
+two-arm run measured a 2.21% E2E throughput gain, but the four-arm run did not
+reproduce that E2E result because unrelated policy-training time differed by
+node allocation. Native M2N and a topology-controlled E2E repeat remain before
+making broader performance claims.

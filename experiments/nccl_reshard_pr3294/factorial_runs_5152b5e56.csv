@@ -1,0 +1,5 @@
+Exp,Job,Batched MoE shuffle,Loader-route cache,Wandb link
+baseline,488867,false,false,https://wandb.ai/nvidia/sna-pr3294-nccl-reshard-ablation/runs/aszejvw3
+batched-shuffle,488868,true,false,https://wandb.ai/nvidia/sna-pr3294-nccl-reshard-ablation/runs/xumk6oxd
+loader-cache,488869,false,true,https://wandb.ai/nvidia/sna-pr3294-nccl-reshard-ablation/runs/5q5kvr8h
+optimized,488870,true,true,https://wandb.ai/nvidia/sna-pr3294-nccl-reshard-ablation/runs/z8tu865o
