@@ -140,7 +140,7 @@ def run_eval(config: MasterConfig) -> EvalRunResult:
     ) = setup(config, tokenizer, dataset)
 
     if should_use_nemo_gym(master_config):
-        env = setup_nemo_gym_environment(vllm_generation, master_config)
+        env = setup_nemo_gym_environment(vllm_generation, master_config, tokenizer)
 
     logger = Logger(master_config.logger) if master_config.logger is not None else None
     if logger is not None:

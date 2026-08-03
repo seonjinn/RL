@@ -242,8 +242,9 @@ def test_setup_nemo_gym_environment_uses_rollout_engine_endpoints(monkeypatch) -
     config.env["nemo_gym"] = MagicMock()
     config.env["nemo_gym"].model_dump.return_value = {}
     generation = SimpleNamespace(dp_openai_server_base_urls=["http://worker-0:8000/v1"])
+    tokenizer = MagicMock()
 
-    result = setup_nemo_gym_environment(generation, config)
+    result = setup_nemo_gym_environment(generation, config, tokenizer)
 
     assert result is spinup_actor.return_value
     spinup_actor.assert_called_once_with(
@@ -253,6 +254,7 @@ def test_setup_nemo_gym_environment_uses_rollout_engine_endpoints(monkeypatch) -
         enable_router_replay=False,
         routed_experts_dtype="int16",
         use_fastokens=False,
+        tokenizer=tokenizer,
     )
 
 

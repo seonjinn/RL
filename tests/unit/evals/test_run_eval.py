@@ -77,7 +77,7 @@ def test_main_wires_nemo_gym_rollout_only_eval(monkeypatch) -> None:
     assert config.generation["vllm_cfg"]["enable_vllm_metrics_logger"] is True
     assert config.generation["stop_strings"] is None
     assert config.generation["stop_token_ids"] is None
-    setup_nemo_gym.assert_called_once_with(generation, config)
+    setup_nemo_gym.assert_called_once_with(generation, config, tokenizer)
     logger_class.assert_called_once_with(config.logger)
     logger.log_hyperparams.assert_called_once_with(config.model_dump())
     run_env_eval.assert_called_once_with(
