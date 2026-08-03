@@ -4,7 +4,7 @@
 - Repo: /Users/sna/CudaGraph_PR/RL-thd-cg-hybrid-nemotron-20260731
 - Branch: experiment/thd-cg-hybrid-nemotron-20260731
 - Started: 2026-08-02 12:21:26 PDT
-- Updated: 2026-08-02 19:09:10 PDT
+- Updated: 2026-08-02 19:13:37 PDT
 
 ## Goal
 
@@ -41,6 +41,10 @@ is useful prior Qwen235 readiness evidence, but is not a matched CG baseline.
 The final documentation audit also found that the former Qwen235 C/E R3 gate
 was self-attested. R3 gate validation is now disabled until a content-bound
 Slurm diagnostic producer exists; Qwen235 A/B remain runnable.
+The reviewed branch was pushed through `f9673c5a0`. OCI setup is currently
+paused before any remote mutation because GlobalProtect is disconnected and
+the internal cluster host does not resolve. The agents were reloaded and the
+GlobalProtect UI opened; fresh Connect/SAML/MFA completion is required.
 
 ## Plan
 
@@ -60,7 +64,8 @@ Slurm diagnostic producer exists; Qwen235 A/B remain runnable.
 - [x] Reject Qwen use through legacy generic performance/accuracy wrappers and
   disable self-attested Qwen235 R3 evidence before scheduler contact.
 - [x] Commit fail-closed unattested-route remediation as `75ddbef3d`.
-- [ ] Commit the final runbook/session ledger and push the reviewed branch.
+- [x] Commit the final runbook/session ledger and push the reviewed branch
+  through `f9673c5a0`.
 - [ ] Create the remote OCI campaign checkout and fresh four-GPU runtime
   attestation.
 - [ ] Dry-run and submit the approved Qwen3-30B-A3B comparison on OCI-HSG.
@@ -84,3 +89,5 @@ Slurm diagnostic producer exists; Qwen235 A/B remain runnable.
   only Qwen235 A/B may run.
 - A remote checkout and fresh runtime attestation are required before any
   non-TEST_ONLY submission.
+- OCI internal DNS is unavailable until the user completes a fresh
+  GlobalProtect Connect/SAML/MFA flow. No GPU is allocated while blocked.

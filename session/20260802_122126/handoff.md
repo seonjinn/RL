@@ -11,14 +11,13 @@ launcher rejects this before Slurm. No campaign GPU job has been submitted
 from this branch. Qwen235 C/E are also dependency-blocked because the former
 R3 preflight envelope was not bound to raw diagnostic execution; only A/B may
 run until a content-bound Slurm producer is implemented.
+The branch is pushed through `f9673c5a0`. GlobalProtect agents were reloaded,
+but OCI internal DNS is still absent pending a fresh user Connect/SAML/MFA.
 
 ## Next Actions
 
-- Finish the focused tests/re-review for the legacy-launcher and self-attested
-  R3 fail-closed remediation.
-- Commit the final gate/runbook/session ledger, then push the reviewed
-  experiment branch. Exact cache-miss telemetry is committed as `f31d46874`
-  and unattested-route remediation as `75ddbef3d`.
+- Complete GlobalProtect Connect/SAML/MFA and verify
+  `oci-hsg-cs-001-vscode-02` resolves before any remote command.
 - Create a clean remote OCI campaign checkout, then run a new four-GPU runtime
   attestation with the exact source, nested revisions, lockfile, nightly image
   digest, and mounted managed Python/uv paths.

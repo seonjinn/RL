@@ -65,3 +65,9 @@
   The post-audit independent re-review reported `ADDRESSED` with 0 critical
   findings, 0 warnings, and 0 nits. Committed the fail-closed remediation as
   `75ddbef3d`.
+- Committed the final runbook as `f9673c5a0` and pushed the reviewed branch to
+  the seonjinn fork. The initial OCI read-only query could not resolve the
+  cluster hostname. Public GlobalProtect portal resolution and HTTP were
+  healthy, but macOS had no NVIDIA internal DNS resolver. Reloaded both
+  GlobalProtect agents and opened the UI; fresh Connect/SAML/MFA is now the
+  only blocker. No remote files, scheduler state, or GPUs were touched.
