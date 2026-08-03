@@ -24,6 +24,7 @@ CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/mopd_nano_fast/.cache/pr3477-qkvo-vllm025}
 EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${WORK_ROOT}/experiments/pr3477-mxfp8-qkvo/results/qkvo-${MAX_STEPS}step-${RUN_SUFFIX}}
 WANDB_PROJECT=${WANDB_PROJECT:-sna-pr3477-mxfp8-qkvo}
 WANDB_NAME=${WANDB_NAME:-qkvo-${MAX_STEPS}step-${RUN_SUFFIX}}
+WANDB_ENTITY=${WANDB_ENTITY:-nvidia}
 CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-qkvo-rollout.yaml
 
 case "${ACTION}" in
@@ -102,6 +103,7 @@ uv run --frozen examples/run_grpo.py \
   checkpointing.enabled=false \
   logger.log_dir='${EXPERIMENT_ROOT}/logs' \
   logger.wandb_enabled=true \
+  ++logger.wandb.entity='${WANDB_ENTITY}' \
   logger.wandb.project='${WANDB_PROJECT}' \
   logger.wandb.name='${WANDB_NAME}'
 EOF

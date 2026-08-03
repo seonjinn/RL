@@ -90,3 +90,4 @@ def test_gcp_nrt_submitter_exercises_qkvo_nccl_reshard() -> None:
     assert "policy.generation.colocated.resources.num_nodes='${GEN_NODES}'" in submitter
     assert "--gpus-per-node=\"${GPUS_PER_NODE}\"" in submitter
     assert "loss_fn.force_on_policy_ratio=false" in submitter
+    assert "++logger.wandb.entity='${WANDB_ENTITY}'" in submitter
