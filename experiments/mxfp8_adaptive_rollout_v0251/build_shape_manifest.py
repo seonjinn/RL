@@ -174,8 +174,11 @@ def _validated_paths(trace_paths: Iterable[Path]) -> tuple[Path, ...]:
     return paths
 
 
-def build_shape_manifest(trace_paths: Iterable[Path]) -> ShapeManifest:
+def build_shape_manifest(
+    trace_paths: Iterable[Path], *, families: Iterable[str] | None = None
+) -> ShapeManifest:
     paths = _validated_paths(trace_paths)
+    family_filter = set(families) if families is not None else None
     source_labels = _source_labels(paths)
     signature_counts: Counter[_Signature] = Counter()
     signature_prefixes: defaultdict[_Signature, set[str]] = defaultdict(set)
@@ -201,6 +204,8 @@ def build_shape_manifest(trace_paths: Iterable[Path]) -> ShapeManifest:
             parsed = _parse_record(value, source_file, location)
             signature = parsed.signature
             provenance = parsed.provenance
+            if family_filter is not None and provenance.family not in family_filter:
+                continue
 
             metadata = (
                 provenance.family,
@@ -300,12 +305,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("trace_files", nargs="+", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--shmoo-dir", required=True, type=Path)
+    parser.add_argument(
+        "--family",
+        action="append",
+        dest="families",
+        help="include only this trace family; repeat for multiple families",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    manifest = build_shape_manifest(args.trace_files)
+    manifest = build_shape_manifest(args.trace_files, families=args.families)
     write_shape_outputs(manifest, args.output, args.shmoo_dir)
     return 0
 

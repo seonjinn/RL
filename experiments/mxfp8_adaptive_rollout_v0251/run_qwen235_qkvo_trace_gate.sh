@@ -131,4 +131,6 @@ PYTHONPATH="$ROOT" python3 \
   -m experiments.mxfp8_adaptive_rollout_v0251.build_shape_manifest \
   "${trace_files[@]}" \
   --output "$RESULT_ROOT/trace/qkvo_manifest.json" \
-  --shmoo-dir "$RESULT_ROOT/trace/shmoo"
+  --shmoo-dir "$RESULT_ROOT/trace/shmoo" \
+  --family QKV \
+  --family O

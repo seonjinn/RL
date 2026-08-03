@@ -200,3 +200,43 @@ def test_cli_writes_manifest_and_layout_files(tmp_path: Path) -> None:
 
     assert json.loads(output.read_text())["unique_signature_count"] == 1
     assert (shmoo_dir / "shapes_8x4.txt").read_text() == "8,8832,8192\n"
+
+
+def test_cli_filters_manifest_to_requested_families(tmp_path: Path) -> None:
+    trace = tmp_path / "rank0.jsonl"
+    output = tmp_path / "artifacts" / "manifest.json"
+    shmoo_dir = tmp_path / "artifacts" / "shmoo"
+    _write_jsonl(
+        trace,
+        [
+            _record(family="QKV", prefix="model.layers.0.self_attn.qkv_proj"),
+            _record(family="O", prefix="model.layers.0.self_attn.o_proj", m=32),
+            _record(family="OtherDense", prefix="unknown", m=1),
+        ],
+    )
+
+    assert (
+        main(
+            [
+                str(trace),
+                "--output",
+                str(output),
+                "--shmoo-dir",
+                str(shmoo_dir),
+                "--family",
+                "QKV",
+                "--family",
+                "O",
+            ]
+        )
+        == 0
+    )
+
+    manifest = json.loads(output.read_text())
+    assert manifest["record_count"] == 2
+    assert manifest["unique_signature_count"] == 2
+    assert {
+        provenance["family"]
+        for signature in manifest["signatures"]
+        for provenance in signature["provenance"]
+    } == {"QKV", "O"}

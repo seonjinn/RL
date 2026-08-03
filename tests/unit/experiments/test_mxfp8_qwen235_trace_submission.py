@@ -240,7 +240,13 @@ def _run_qkvo_trace_gate(
         json.dumps(
             {
                 "event": "mxfp8_dense_shape",
-                "family": "OtherDense",
+                "family": (
+                    "QKV"
+                    if ".qkv_proj" in prefixes[worker % len(prefixes)]
+                    else "O"
+                    if ".o_proj" in prefixes[worker % len(prefixes)]
+                    else "OtherDense"
+                ),
                 "hostname": f"node-{worker % 2}",
                 "k": k,
                 "layout": "8x4",
