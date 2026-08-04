@@ -654,15 +654,20 @@ def process_weights_after_loading(self, layer) -> None:
 
 
 def process_weights_after_loading_mxfp8_linear(self, layer) -> None:
-    from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
-        swizzle_mxfp8_scale,
-    )
-    from vllm.model_executor.parameter import ModelWeightParameter
-
     if layer.weight.ndim != 2:
         raise ValueError(
             f"MXFP8 linear layer weight must be 2D, but got {layer.weight.ndim}D"
         )
+
+    kernel = getattr(self, "kernel", None)
+    if getattr(kernel, "preserves_checkpoint_weight_scale_for_refit", False):
+        kernel.process_weights_after_loading(layer)
+        return
+
+    from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
+        swizzle_mxfp8_scale,
+    )
+    from vllm.model_executor.parameter import ModelWeightParameter
 
     backend = getattr(self, "backend", None)
     if backend is not None:
@@ -678,34 +683,13 @@ def process_weights_after_loading_mxfp8_linear(self, layer) -> None:
         else:
             assert backend == Mxfp8LinearBackend.FLASHINFER_CUTLASS
     else:
-        kernel = getattr(self, "kernel", None)
         kernel_name = type(kernel).__name__ if kernel is not None else None
-        if kernel_name == "FlashInferCutedslMxfp8LinearKernel":
-            # vLLM 0.25 prefers the CuTe-DSL kernel, but it stores the weight
-            # column-major [K, N] while this refit-friendly override (and the
-            # MXFP8 refit loader) keeps the canonical [N, K] layout. The
-            # CUTLASS kernel consumes [N, K] and is supported wherever
-            # CuTe-DSL is (both require SM100), so swap it in.
-            from vllm.model_executor.kernels.linear.mxfp8.flashinfer import (
-                FlashInferCutlassMxfp8LinearKernel,
-            )
-
-            kernel = FlashInferCutlassMxfp8LinearKernel(kernel.config)
-            self.kernel = kernel
-            kernel_name = type(kernel).__name__
-            # Record it: this demotes vLLM's first-choice MXFP8 linear kernel
-            # on every such layer, so anyone comparing NeMo-RL rollout
-            # throughput against a plain vLLM MXFP8 serve has an explanation
-            # in the log rather than only in this comment.
-            logger.warning_once(
-                "NeMo-RL MXFP8 refit requires the [N, K] weight layout; "
-                "replacing vLLM's preferred FlashInferCutedslMxfp8LinearKernel "
-                "with FlashInferCutlassMxfp8LinearKernel. Expect a rollout "
-                "throughput difference vs. plain vLLM serving."
-            )
         if kernel_name != "FlashInferCutlassMxfp8LinearKernel":
-            raise AssertionError(
-                f"Unsupported MXFP8 linear kernel for refit: {kernel_name}"
+            raise RuntimeError(
+                "Unsupported MXFP8 linear kernel for refit: "
+                f"{kernel_name}. Non-CUTLASS kernels must declare "
+                "preserves_checkpoint_weight_scale_for_refit=True and implement "
+                "process_weights_after_loading(layer)."
             )
 
     weight = layer.weight.data  # [N, K]
