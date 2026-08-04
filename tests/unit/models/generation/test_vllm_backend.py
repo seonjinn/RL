@@ -19,7 +19,7 @@
 import contextlib
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 import torch
@@ -597,6 +597,105 @@ def test_update_weights_via_ipc_emits_opt_in_refit_profile(monkeypatch):
     emit_profile.assert_called_once_with(rank=-1, metrics={"received_batch_count": 1})
     assert ext._nrl_refit_phase_profiler is None
     assert ext.zmq_socket.sent == [IPCProtocol.ACK.value.encode()] * 2
+
+
+@pytest.mark.vllm
+def test_update_weights_via_ipc_bypasses_profile_batch_when_disabled(monkeypatch):
+    from nemo_rl.models.generation.vllm import vllm_backend
+    from nemo_rl.models.policy.utils import IPCProtocol
+
+    used_bytes = vllm_backend.calculate_aligned_size(torch.float32.itemsize)
+    payloads = iter(
+        [
+            (object(), ["model.weight"], used_bytes),
+            IPCProtocol.COMPLETE,
+        ]
+    )
+    ext = vllm_backend.VllmInternalWorkerExtension.__new__(
+        vllm_backend.VllmInternalWorkerExtension
+    )
+    ext.state_dict_info = {"model.weight": (torch.Size([1]), torch.float32)}
+    ext.device = torch.device("cpu")
+    ext.zmq_socket = SimpleNamespace(
+        recv_pyobj=lambda: next(payloads),
+        send=MagicMock(),
+    )
+    ext.maybe_init_zmq = MagicMock()
+    ext._load_weights = MagicMock()
+    ext._synchronize_before_ipc_data_ack = MagicMock()
+    ext._weight_update_errors_are_fatal = lambda: False
+
+    @contextlib.contextmanager
+    def lifecycle(_transport):
+        yield MagicMock()
+
+    ext._weight_update_lifecycle = lifecycle
+    profiler = MagicMock(enabled=False)
+    profiler.wall_phase.side_effect = lambda _name: contextlib.nullcontext()
+    profiler.finish.return_value = {}
+    profile_batch = MagicMock()
+    monkeypatch.delenv("NRL_PROFILE_REFIT_PHASES", raising=False)
+    monkeypatch.setattr(vllm_backend, "RefitPhaseProfiler", lambda enabled: profiler)
+    monkeypatch.setattr(
+        vllm_backend, "profile_vllm_layerwise_kernels", lambda _: contextlib.nullcontext()
+    )
+    monkeypatch.setattr(vllm_backend, "profile_weight_batch", profile_batch)
+    monkeypatch.setattr(
+        vllm_backend,
+        "rebuild_cuda_tensor_from_ipc",
+        lambda _handle, _device_index: torch.zeros(used_bytes, dtype=torch.uint8),
+    )
+    monkeypatch.setattr(vllm_backend.gc, "collect", MagicMock())
+    monkeypatch.setattr(vllm_backend.torch.cuda, "empty_cache", MagicMock())
+
+    assert ext.update_weights_via_ipc_zmq() is True
+
+    profile_batch.assert_not_called()
+    ext._load_weights.assert_called_once()
+
+
+@pytest.mark.vllm
+def test_update_weights_via_ipc_ignores_profile_emission_failure(monkeypatch):
+    from nemo_rl.models.generation.vllm import vllm_backend
+    from nemo_rl.models.policy.utils import IPCProtocol
+
+    ext = vllm_backend.VllmInternalWorkerExtension.__new__(
+        vllm_backend.VllmInternalWorkerExtension
+    )
+    ext.state_dict_info = {}
+    ext.zmq_socket = SimpleNamespace(
+        recv_pyobj=MagicMock(return_value=IPCProtocol.COMPLETE),
+        send=MagicMock(),
+    )
+    ext.maybe_init_zmq = MagicMock()
+    ext._weight_update_errors_are_fatal = lambda: True
+
+    @contextlib.contextmanager
+    def lifecycle(_transport):
+        yield MagicMock()
+
+    ext._weight_update_lifecycle = lifecycle
+    profiler = MagicMock(enabled=True)
+    profiler.wall_phase.side_effect = lambda _name: contextlib.nullcontext()
+    profiler.finish.return_value = {"received_batch_count": 0}
+    monkeypatch.setenv("NRL_PROFILE_REFIT_PHASES", "1")
+    monkeypatch.setattr(vllm_backend, "RefitPhaseProfiler", lambda enabled: profiler)
+    monkeypatch.setattr(
+        vllm_backend, "profile_vllm_layerwise_kernels", lambda _: contextlib.nullcontext()
+    )
+    monkeypatch.setattr(vllm_backend.gc, "collect", MagicMock())
+    monkeypatch.setattr(vllm_backend.torch.cuda, "empty_cache", MagicMock())
+    monkeypatch.setattr(vllm_backend.torch.distributed, "is_available", lambda: False)
+    monkeypatch.setattr(
+        vllm_backend,
+        "emit_refit_profile",
+        MagicMock(side_effect=OSError("profile output unavailable")),
+    )
+
+    assert ext.update_weights_via_ipc_zmq() is True
+    assert ext.zmq_socket.send.call_args_list == [
+        call(IPCProtocol.ACK.value.encode())
+    ]
 
 
 @pytest.mark.vllm
