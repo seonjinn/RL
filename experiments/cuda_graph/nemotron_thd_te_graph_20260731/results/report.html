@@ -27,9 +27,9 @@ a { color: #075985; }
 </head>
 <body>
 <h1>Nemotron packed-THD Transformer Engine CUDA Graph study</h1>
-<p>Generated 2026-08-04 08:18:13 UTC from versioned report context; no normalized result rows are present.</p>
+<p>Generated 2026-08-04 08:28:15 UTC from versioned report context; no normalized result rows are present.</p>
 <h2>Current status</h2>
-<ul><li><a href="../../../../docs/superpowers/plans/2026-08-03-policy-logprob-training-cuda-graph.md">Task 2 code review is approved at NeMo-RL d9fa50e868f3 and MCore 32d79616a309; the Linux and GB200 gates remain pending.</a></li><li>Host validation passed 263 integration tests plus 55 focused topology tests; production logprob and training graph paths remain disabled.</li><li><a href="paired_20step_summary.json">The last published Nano 20-step evidence remains available; the normalized ledger has no new rows yet.</a></li></ul>
+<ul><li><a href="../../../../docs/superpowers/plans/2026-08-03-policy-logprob-training-cuda-graph.md">Task 2 code review is approved at NeMo-RL d9fa50e868f3 and MCore 32d79616a309; the Linux and GB200 gates remain pending.</a></li><li>Host validation passed 263 integration tests plus 55 focused topology tests; production logprob and training graph paths remain disabled.</li><li>OCI-HSG CPU stage job 5852837 is running on cpu-0040; source provenance passed and no GPUs are allocated.</li><li><a href="paired_20step_summary.json">The last published Nano 20-step evidence remains available; the normalized ledger has no new rows yet.</a></li></ul>
 <div class="counts">
   <span class="count"><strong>0</strong> normalized runs</span>
   <span class="count"><strong>0</strong> matched comparisons</span>
@@ -51,6 +51,6 @@ a { color: #075985; }
 
 
 <h2>Next steps</h2>
-<ul><li>Sync the reviewed SHAs into the clean OCI-HSG checkout and stage the exact Linux runtime.</li><li>Run the eight-rank GB200 capability gate and require unanimous topology, replay, eager-parity, and no-gradient evidence.</li><li>After the gate passes, add policy/logprob graph banks and run 5, 20, then 100-step performance and correctness gates.</li></ul>
+<ul><li>Require CPU stage job 5852837 to pass the six-module Linux suite and publish its immutable marker.</li><li>Run the eight-rank GB200 capability gate and require unanimous topology, replay, eager-parity, and no-gradient evidence.</li><li>After the gate passes, add policy/logprob graph banks and run 5, 20, then 100-step performance and correctness gates.</li></ul>
 </body>
 </html>

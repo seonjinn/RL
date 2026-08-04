@@ -9,6 +9,9 @@
       "text": "Host validation passed 263 integration tests plus 55 focused topology tests; production logprob and training graph paths remain disabled."
     },
     {
+      "text": "OCI-HSG CPU stage job 5852837 is running on cpu-0040; source provenance passed and no GPUs are allocated."
+    },
+    {
       "text": "The last published Nano 20-step evidence remains available; the normalized ledger has no new rows yet.",
       "href": "results/paired_20step_summary.json"
     }
@@ -28,7 +31,7 @@
   ],
   "next_steps": [
     {
-      "text": "Sync the reviewed SHAs into the clean OCI-HSG checkout and stage the exact Linux runtime."
+      "text": "Require CPU stage job 5852837 to pass the six-module Linux suite and publish its immutable marker."
     },
     {
       "text": "Run the eight-rank GB200 capability gate and require unanimous topology, replay, eager-parity, and no-gradient evidence."
