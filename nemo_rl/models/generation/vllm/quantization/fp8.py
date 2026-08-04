@@ -447,13 +447,6 @@ def _is_fp8_weight(name, model):
     return name in fp8_state.fp8_param_names
 
 
-def _uses_cutedsl_mxfp8_linear(name: str, model: Any) -> bool:
-    module = _get_module_from_param_name(model, name)
-    quant_method = getattr(module, "quant_method", None)
-    kernel = getattr(quant_method, "kernel", None)
-    return type(kernel).__name__ == "FlashInferCutedslMxfp8LinearKernel"
-
-
 def load_weights(weights, model_runner):
     global global_fp8_config
     weights_quantized = []
@@ -477,12 +470,7 @@ def load_weights(weights, model_runner):
             )
         param_scale = torch.squeeze(param_scale, dim=-1)
         if global_fp8_config.is_mx:
-            weight_name = (
-                k + "_from_checkpoint"
-                if _uses_cutedsl_mxfp8_linear(k, model)
-                else k
-            )
-            weights_quantized.append([weight_name, param_lp])
+            weights_quantized.append([k, param_lp])
             weights_quantized.append([k + "_scale_from_checkpoint", param_scale])
         else:
             weights_quantized.append([k, param_lp])
@@ -712,9 +700,23 @@ def process_weights_after_loading_mxfp8_linear(self, layer) -> None:
                     f"contiguous={canonical_weight.is_contiguous()}"
                 )
             layer.register_parameter("weight_from_checkpoint", canonical_weight)
-            layer.weight = torch.nn.Parameter(
+            runtime_weight = torch.nn.Parameter(
                 canonical_weight.data.t(), requires_grad=False
             )
+            canonical_weight_loader = canonical_weight.weight_loader
+
+            def load_canonical_weight(
+                _runtime_weight: torch.nn.Parameter,
+                loaded_weight: torch.Tensor,
+                *args: Any,
+                **kwargs: Any,
+            ) -> None:
+                canonical_weight_loader(
+                    canonical_weight, loaded_weight, *args, **kwargs
+                )
+
+            runtime_weight.weight_loader = load_canonical_weight
+            layer.weight = runtime_weight
         canonical_weight = layer.weight_from_checkpoint
         if layer.weight.data.data_ptr() != canonical_weight.data.data_ptr():
             raise RuntimeError(

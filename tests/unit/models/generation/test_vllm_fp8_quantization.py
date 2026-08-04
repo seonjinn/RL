@@ -335,7 +335,10 @@ def test_mxfp8_cutedsl_linear_keeps_refit_storage_in_canonical_layout(
     layer = torch.nn.Module()
     canonical_weight = torch.arange(4 * 32, dtype=torch.float32).reshape(4, 32)
 
-    def weight_loader(param, value):
+    loaded_shards = []
+
+    def weight_loader(param, value, shard_id=None):
+        loaded_shards.append(shard_id)
         param.data.copy_(value)
 
     layer.weight = ModelWeightParameter(
@@ -361,17 +364,18 @@ def test_mxfp8_cutedsl_linear_keeps_refit_storage_in_canonical_layout(
 
     updated_weight = canonical_weight.add(1000)
     runtime_weight_ptr = layer.weight.data.data_ptr()
-    layer.weight_from_checkpoint.data.copy_(updated_weight)
+    layer.weight.weight_loader(layer.weight, updated_weight, "q")
     fp8.process_weights_after_loading_mxfp8_linear(method, layer)
 
     assert layer.weight.data.data_ptr() == runtime_weight_ptr
     torch.testing.assert_close(layer.weight, updated_weight.t())
+    assert loaded_shards == ["q"]
 
 
 @pytest.mark.parametrize(
     ("kernel_name", "expected_weight_name"),
     [
-        ("FlashInferCutedslMxfp8LinearKernel", "layer.weight_from_checkpoint"),
+        ("FlashInferCutedslMxfp8LinearKernel", "layer.weight"),
         ("FlashInferCutlassMxfp8LinearKernel", "layer.weight"),
     ],
 )
@@ -390,9 +394,7 @@ def test_load_weights_targets_canonical_storage_for_cutedsl_linear(
     model_runner = types.SimpleNamespace(model=model)
 
     monkeypatch.setattr(fp8, "_is_fp8_weight", lambda _name, _model: True)
-    monkeypatch.setattr(
-        fp8, "_get_module_from_param_name", lambda _model, _name: layer
-    )
+    monkeypatch.setattr(fp8, "_get_module_from_param_name", lambda _model, _name: layer)
     monkeypatch.setattr(
         mxfp8_utils,
         "mxfp8_e4m3_quantize",
