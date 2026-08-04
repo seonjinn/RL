@@ -713,6 +713,16 @@ CLUSTER="$CLUSTER" PROFILE_FILE="$PROFILE_FILE" \
 
 ### Task 5: Validate Packed THD, Mamba, and Partial-MoE Eval Scopes
 
+**Capacity-policy supersession (2026-08-04):** The fixed-capacity requirement
+for production Flex/HybridEP `moe_router+moe_preprocess` in this task is
+superseded by
+`docs/superpowers/plans/2026-08-04-dropless-partial-moe-capacity-policy.md`.
+That focused plan requires a candidate-SHA-bound distributed changed-route
+gate before NeMo-RL permits dropless partial HybridEP. Whole-MoE and
+whole-layer capture still require validated fixed capacity and zero-drop
+telemetry. Follow the focused plan first, then resume the forward-only logprob
+tasks here.
+
 **Files:**
 - Modify: `3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/packed_seq_params.py`
 - Modify: `3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/transformer_layer.py`
