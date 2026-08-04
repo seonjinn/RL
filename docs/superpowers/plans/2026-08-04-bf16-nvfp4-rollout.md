@@ -209,6 +209,11 @@ Add tests proving:
 - completion calls the real-quant layerwise finalizer once;
 - a second refit preserves runtime parameter and kernel identity;
 - ignored tensors pass through unchanged.
+- receiver target discovery includes the separate W4A16 linear method, fused
+  routed experts, and HF-to-vLLM fused-name mappings (`qkv_proj` and
+  `gate_up_proj`);
+- 1-D layernorms, 2-D embeddings, and unquantized linear modules remain
+  pass-through and do not affect source classification.
 
 - [ ] **Step 2: Verify RED**
 
@@ -217,6 +222,13 @@ Run the exact new test names. Expected: the backend still treats every real-quan
 - [ ] **Step 3: Implement BF16 manifest handling**
 
 In `prepare_refit_info()`, record `self._nrl_real_quant_source` and initialize an empty owned staging map for BF16 mode. In `_load_weights()`, filter ignored tensors, clone incomplete group members before the transport can reuse its buffer, serialize each complete group, and delegate the emitted checkpoint-layout family to `super()._load_weights()`. Before the lifecycle finalizer runs, reject any incomplete groups with their missing names.
+
+Build the quantization target set from actual receiver modules, not tensor rank
+or the policy-side quant recipe. Include both W4A4 and the separate W4A16
+linear method through their ModelOpt quant config, include routed-expert
+modules, and apply the receiver model's `hf_to_vllm_mapper` before matching
+dense/shared-expert source names. Classify only tensors mapped to those targets;
+unrelated BF16 and scale tensors cannot create a mixed-source failure.
 
 Keep `_batch_fused_modelopt_moe_weights()` only for prepacked QARL payloads. Receiver-generated per-expert names must flow directly through vLLM's standard expert weight loader.
 
