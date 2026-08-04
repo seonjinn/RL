@@ -42,7 +42,7 @@ case "${MODEL}" in
       policy.generation.colocated.enabled=false
       policy.generation.colocated.resources.num_nodes=2
       policy.generation.colocated.resources.gpus_per_node="${GPUS_PER_NODE}"
-      policy.generation.refit_transport=nccl_reshard
+      policy.generation.refit_transport=null
       policy.megatron_cfg.expert_tensor_parallel_size=1
       policy.generation.vllm_cfg.tensor_parallel_size=1
       policy.generation.vllm_cfg.pipeline_parallel_size=1
@@ -56,7 +56,7 @@ case "${MODEL}" in
     MODEL_OVERRIDES=(
       cluster.segment_size="${TOTAL_NODES}"
       policy.generation.colocated.enabled=true
-      policy.generation.refit_transport=nccl_reshard
+      policy.generation.refit_transport=null
       policy.megatron_cfg.moe_token_dispatcher_type=alltoall
       policy.megatron_cfg.moe_flex_dispatcher_backend=deepep
     )

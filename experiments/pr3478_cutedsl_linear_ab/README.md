@@ -20,6 +20,11 @@ Each model runs two otherwise matched arms:
 The MoE backend remains vLLM's MXFP8 auto selection, FlashInfer TRTLLM on
 B200. Only `policy.generation.vllm_kwargs.linear_backend` changes.
 
+The trainer remains BF16 (`fp8_param=false`), so these runs use the legacy
+refit transport (`refit_transport=null`). Current NCCL Reshard validates only
+matching BF16 or blockwise-FP8 trainer and rollout storage and rejects
+BF16-to-MXFP8 conversion.
+
 ## Submit
 
 Run scheduling validation first:
