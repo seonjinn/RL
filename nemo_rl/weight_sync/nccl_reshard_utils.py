@@ -36,6 +36,7 @@ from torch.distributed._tensor import Shard
 from torch.distributed.tensor.placement_types import Replicate
 
 from nemo_rl.weight_sync.refit_transforms import (
+    DestinationComponentSpec,
     REFIT_PLAN_PROTOCOL_VERSION,
     RefitTransformPlan,
     TransformComponentSpec,
@@ -74,22 +75,42 @@ class MeshInfo:
 class RefitCtx:
     """Handoff between a param's ``pre`` and ``post`` refit hooks.
 
-    ``buf`` remains the primary tensor for existing pre/post hooks.
-    ``transfer_tensors`` carries the ordered component payload when one logical
-    parameter has multiple transfer tensors. ``extra`` is provided for
-    backend-specific state that is not transferred.
+    ``transfer_tensors`` carries the ordered component payload. ``extra`` is
+    provided for backend-specific state that is not transferred.
 
     Use case:
     - vLLM merged params tracks the merged param slice in ``extra["region"]``
     """
 
-    buf: torch.Tensor
-    transfer_tensors: tuple[torch.Tensor, ...] | None = None
+    transfer_tensors: tuple[torch.Tensor, ...]
     extra: dict[str, Any] = field(default_factory=dict)
 
+    def __init__(
+        self,
+        transfer_tensors: tuple[torch.Tensor, ...] | None = None,
+        extra: dict[str, Any] | None = None,
+        *,
+        buf: torch.Tensor | None = None,
+    ) -> None:
+        """Create a transfer context, accepting the legacy ``buf`` shorthand."""
+        if transfer_tensors is None:
+            if buf is None:
+                raise ValueError("RefitCtx requires transfer_tensors or buf.")
+            transfer_tensors = (buf,)
+        elif buf is not None and transfer_tensors and transfer_tensors[0] is not buf:
+            raise ValueError("RefitCtx buf must match the first transfer tensor.")
+        self.transfer_tensors = transfer_tensors
+        self.extra = {} if extra is None else extra
+
+    @property
+    def buf(self) -> torch.Tensor:
+        """Return the first transfer tensor for legacy pre/post hooks."""
+        if not self.transfer_tensors:
+            raise ValueError("RefitCtx has no primary transfer tensor.")
+        return self.transfer_tensors[0]
+
     def tensors_for_transfer(self) -> tuple[torch.Tensor, ...]:
-        if self.transfer_tensors is None:
-            return (self.buf,)
+        """Return tensors in their NCCL transfer order."""
         return self.transfer_tensors
 
 
@@ -234,6 +255,7 @@ _STR_TO_DTYPE = {
     "torch.float32": torch.float32,
     "torch.float8_e4m3fn": torch.float8_e4m3fn,
     "torch.float8_e5m2": torch.float8_e5m2,
+    "torch.uint8": torch.uint8,
     "bfloat16": torch.bfloat16,
     "float16": torch.float16,
     "float32": torch.float32,
@@ -308,7 +330,10 @@ def restore_refit_info_placements(refit_info: dict) -> dict:
             param_info["dst_placements"] = [
                 _restore_placement(p) for p in param_info["dst_placements"]
             ]
-            for component in param_info.get("components", []):
+            wire_components = param_info.get(
+                "wire_components", param_info.get("components", [])
+            )
+            for component in wire_components:
                 component["dtype"] = _restore_dtype(
                     component["dtype"],
                     param_name=param_name,
@@ -317,6 +342,15 @@ def restore_refit_info_placements(refit_info: dict) -> dict:
                 component["src_placements"] = [
                     _restore_placement(p) for p in component["src_placements"]
                 ]
+                component["dst_placements"] = [
+                    _restore_placement(p) for p in component["dst_placements"]
+                ]
+            for component in param_info.get("destination_components", []):
+                component["dtype"] = _restore_dtype(
+                    component["dtype"],
+                    param_name=param_name,
+                    field_name=f"destination {component['role']} component dtype",
+                )
                 component["dst_placements"] = [
                     _restore_placement(p) for p in component["dst_placements"]
                 ]
@@ -457,7 +491,7 @@ def _build_component_metadata(
     src_dim_map: dict[str, int],
     dst_dim_map: dict[str, int],
 ) -> RefitTransformPlan:
-    """Describe transfer components and attach topology-specific placements."""
+    """Describe wire and destination components with their placements."""
     wire_shape = tuple(int(size) for size in meta["shape"])
     wire_dtype = _restore_dtype(
         meta["dtype"],
@@ -474,8 +508,11 @@ def _build_component_metadata(
                 f"nccl_reshard: {param_name!r} identity refit requires storage dtype "
                 f"torch.bfloat16; got {meta['dtype']!r}. An explicit transform codec is required."
             )
-        component_specs = (
+        wire_component_specs = (
             TransformComponentSpec("weight", global_shape, str(input_dtype)),
+        )
+        destination_component_specs = (
+            DestinationComponentSpec("weight", global_shape, str(input_dtype), "codec"),
         )
         transform_id = "identity"
     else:
@@ -503,7 +540,10 @@ def _build_component_metadata(
                     f"{transform!r}."
                 ) from error
         codec = resolve_transform(source_format, target_format)
-        component_specs = codec.describe_outputs(global_shape, str(input_dtype))
+        wire_component_specs = codec.describe_outputs(global_shape, str(input_dtype))
+        destination_component_specs = codec.describe_destination(
+            global_shape, str(input_dtype)
+        )
         transform_id = codec.transform_id
 
         if isinstance(transform, dict):
@@ -529,7 +569,7 @@ def _build_component_metadata(
                     ) from error
             expected_components = {
                 component.role: (component.global_shape, component.dtype_name)
-                for component in component_specs
+                for component in wire_component_specs
             }
             if actual_components != expected_components:
                 raise ValueError(
@@ -540,7 +580,7 @@ def _build_component_metadata(
 
         info["global_shape"] = global_shape
 
-    components = [
+    wire_components: list[dict[str, Any]] = [
         {
             "role": component.role,
             "global_shape": component.global_shape,
@@ -552,15 +592,37 @@ def _build_component_metadata(
                 param_name, dst_dim_map, len(component.global_shape)
             ),
         }
-        for component in component_specs
+        for component in wire_component_specs
     ]
-    info["components"] = components
+    destination_components: list[dict[str, Any]] = [
+        {
+            "role": component.role,
+            "global_shape": component.global_shape,
+            "dtype": component.dtype_name,
+            "source": component.source,
+            "dst_placements": (
+                [Replicate() for _ in info["dst_placements"]]
+                if component.role in {"weight_scale_2", "input_scale"}
+                else get_placements(
+                    param_name, dst_dim_map, len(component.global_shape)
+                )
+            ),
+        }
+        for component in destination_component_specs
+    ]
+    info["wire_components"] = wire_components
+    info["destination_components"] = destination_components
+    info["components"] = wire_components
     info["transform_id"] = transform_id
-    info["finalize_scope"] = "parameter"
+    is_nvfp4 = target_format in {"nvfp4_w4a16", "nvfp4_w4a4"}
+    info["completion_key"] = (
+        _nvfp4_completion_key(param_name) if is_nvfp4 else param_name
+    )
+    info["finalize_scope"] = "model" if is_nvfp4 else "parameter"
 
     if target_format == "mxfp8_e4m3_e8m0":
         weight_component = next(
-            component for component in components if component["role"] == "weight"
+            component for component in wire_components if component["role"] == "weight"
         )
         _validate_k_shard_alignment(
             param_name=param_name,
@@ -579,8 +641,10 @@ def _build_component_metadata(
 
     return RefitTransformPlan(
         transform_id=transform_id,
-        components=component_specs,
-        finalize_scope="parameter",
+        wire_components=wire_component_specs,
+        destination_components=destination_component_specs,
+        completion_key=info["completion_key"],
+        finalize_scope=info["finalize_scope"],
     )
 
 
@@ -595,6 +659,37 @@ def _build_component_metadata(
 _INDIVIDUAL_EXPERT_RE = re.compile(
     r"(.+\.experts)\.(\d+)\.(gate_proj|up_proj|down_proj)\.weight$"
 )
+
+
+_NVFP4_GROUPED_EXPERT_RE = re.compile(
+    r"^(?P<prefix>.+\.experts)(?:\.\d+)?\.(?P<projection>gate|up|down)_proj\.weight$"
+)
+
+
+def _nvfp4_completion_key(param_name: str) -> str:
+    """Return the logical NVFP4 completion key for a projection parameter."""
+    match = _NVFP4_GROUPED_EXPERT_RE.fullmatch(param_name)
+    if match is None:
+        return param_name
+    suffix = "w2" if match.group("projection") == "down" else "w13"
+    return f"{match.group('prefix')}.{suffix}"
+
+
+def _copy_grouped_transform_metadata(
+    meta: dict[str, Any], *, shape: list[int]
+) -> dict[str, Any]:
+    """Copy transform intent while replacing projection-dependent shapes."""
+    grouped_meta = {
+        key: value
+        for key, value in meta.items()
+        if key not in {"shape", "scale_shape", "source_shape", "grouped_expert_proj"}
+    }
+    grouped_meta["shape"] = shape
+    if "scale_shape" in meta:
+        grouped_meta["scale_shape"] = meta["scale_shape"]
+    if "source_shape" in meta:
+        grouped_meta["source_shape"] = meta["source_shape"]
+    return grouped_meta
 
 
 def group_expert_params_in_metadata(
@@ -638,11 +733,10 @@ def group_expert_params_in_metadata(
             prefix = name[: -len(".gate_up_proj")]  # ".../experts"
             e_global, inter, hidden = meta["shape"]
             for role in ("gate_proj", "up_proj"):
-                role_meta = {
-                    "shape": [e_global, inter // 2, hidden],
-                    "dtype": meta["dtype"],
-                    "grouped_expert_proj": role,
-                }
+                role_meta = _copy_grouped_transform_metadata(
+                    meta, shape=[e_global, inter // 2, hidden]
+                )
+                role_meta["grouped_expert_proj"] = role
                 if "scale_shape" in meta:
                     e_scale, inter_scale, hidden_scale = meta["scale_shape"]
                     role_meta["scale_shape"] = [
@@ -681,11 +775,10 @@ def group_expert_params_in_metadata(
         num_experts_global = len(entries)
         first_meta = entries[0][1]
         per_expert_shape = list(first_meta["shape"])
-        grouped_meta = {
-            "shape": [num_experts_global, *per_expert_shape],
-            "dtype": first_meta["dtype"],
-            "grouped_expert_proj": proj,
-        }
+        grouped_meta = _copy_grouped_transform_metadata(
+            first_meta, shape=[num_experts_global, *per_expert_shape]
+        )
+        grouped_meta["grouped_expert_proj"] = proj
         if "scale_shape" in first_meta:
             grouped_meta["scale_shape"] = [
                 num_experts_global,

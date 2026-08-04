@@ -1833,7 +1833,7 @@ class MegatronPolicyWorkerImpl(
             requests: Structured transform requests reported by generation.
 
         Returns:
-            Updated refit metadata containing transformed value and scale entries.
+            Updated source metadata for the requested destination transforms.
         """
         from nemo_rl.weight_sync.refit_transforms import resolve_transform
 
@@ -1866,7 +1866,11 @@ class MegatronPolicyWorkerImpl(
                 requested_names.add(name)
                 requests_by_name[name] = request
 
-        self._refit_prequant_names = requested_names
+        self._refit_prequant_names = {
+            name
+            for name, request in requests_by_name.items()
+            if request.target_format == "mxfp8_e4m3_e8m0"
+        }
         self._refit_transform_requests_by_name = requests_by_name
 
         refit_param_info_hf = {}
@@ -2596,10 +2600,10 @@ class MegatronPolicyWorkerImpl(
             scale = scale.reshape(
                 *source.shape[:-1], source.shape[-1] // MXFP8_BLOCK_SIZE
             )
-            return RefitCtx(buf=value, transfer_tensors=(value, scale))
+            return RefitCtx(transfer_tensors=(value, scale))
 
         def _component_family(param_info: dict[str, Any]) -> tuple[str, ...]:
-            components = param_info.get("components")
+            components = param_info.get("wire_components", param_info.get("components"))
             if not components:
                 raise ValueError(
                     f"build_hf_to_local_param_map: {param_info['name']!r} must "
@@ -2619,7 +2623,9 @@ class MegatronPolicyWorkerImpl(
             def pre(_base: Any) -> RefitCtx:
                 source = self._group_experts(proj, grouped_name, expert_groups)
                 return (
-                    _mxfp8_ctx(source) if transform_to_mxfp8 else RefitCtx(buf=source)
+                    _mxfp8_ctx(source)
+                    if transform_to_mxfp8
+                    else RefitCtx(transfer_tensors=(source,))
                 )
 
             return LocalParamSpec(base=None, pre=pre)
@@ -2629,7 +2635,7 @@ class MegatronPolicyWorkerImpl(
             for p in refit_info["per_layer_params"][layer_name]:
                 name = p["name"]
                 component_family = _component_family(p)
-                transform_to_mxfp8 = component_family == ("weight", "weight_scale")
+                transform_to_mxfp8 = p.get("transform_id") == "bf16_to_mxfp8_e4m3_e8m0"
                 if p.get("grouped_expert_proj"):
                     mapping[name] = _expert_spec(
                         p["grouped_expert_proj"],
@@ -2684,12 +2690,16 @@ class MegatronPolicyWorkerImpl(
                 ctx = (
                     spec.pre(spec.base)  # stack grouped MoE experts
                     if spec.pre is not None
-                    else RefitCtx(buf=spec.base)  # send local shard as-is
+                    else RefitCtx(
+                        transfer_tensors=(spec.base,)
+                    )  # send local shard as-is
                 )
-                assert ctx.buf is not None, (
+                assert ctx.tensors_for_transfer(), (
                     f"no local tensor for {param_info['name']!r}"
                 )
-                components = param_info.get("components")
+                components = param_info.get(
+                    "wire_components", param_info.get("components")
+                )
                 if not components:
                     raise ValueError(
                         f"nccl_reshard_refit: {param_info['name']!r} must provide "

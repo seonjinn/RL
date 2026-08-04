@@ -35,7 +35,7 @@ class RefitTransformRequest:
 
 @dataclass(frozen=True)
 class TransformComponentSpec:
-    """One ordered tensor component produced by a refit transform."""
+    """One ordered tensor component carried by the refit transport."""
 
     role: str
     global_shape: tuple[int, ...]
@@ -43,12 +43,74 @@ class TransformComponentSpec:
 
 
 @dataclass(frozen=True)
+class DestinationComponentSpec:
+    """One checkpoint-layout component materialized after the transfer."""
+
+    role: str
+    global_shape: tuple[int, ...]
+    dtype_name: str
+    source: Literal["codec", "calibration"]
+
+
+@dataclass(frozen=True, init=False)
 class RefitTransformPlan:
-    """Ordered components and completion scope for one logical parameter."""
+    """Transport and destination contracts for one logical parameter.
+
+    ``components`` remains a compatibility view of ``wire_components`` for
+    identity and existing MXFP8 callers.
+    """
 
     transform_id: str
-    components: tuple[TransformComponentSpec, ...]
-    finalize_scope: Literal["parameter", "layer", "model"]
+    wire_components: tuple[TransformComponentSpec, ...]
+    destination_components: tuple[DestinationComponentSpec, ...]
+    completion_key: str
+    finalize_scope: Literal["parameter", "model"]
+
+    def __init__(
+        self,
+        *,
+        transform_id: str,
+        wire_components: tuple[TransformComponentSpec, ...] | None = None,
+        destination_components: tuple[DestinationComponentSpec, ...] | None = None,
+        completion_key: str = "",
+        finalize_scope: Literal["parameter", "model"] = "parameter",
+        components: tuple[TransformComponentSpec, ...] | None = None,
+    ) -> None:
+        """Create a plan, accepting legacy wire-only component construction."""
+        if wire_components is None:
+            if components is None:
+                raise ValueError("RefitTransformPlan requires wire_components.")
+            wire_components = components
+        elif components is not None:
+            raise ValueError(
+                "RefitTransformPlan cannot receive both wire_components and components."
+            )
+        if not wire_components:
+            raise ValueError("RefitTransformPlan requires at least one wire component.")
+        if destination_components is None:
+            destination_components = tuple(
+                DestinationComponentSpec(
+                    role=component.role,
+                    global_shape=component.global_shape,
+                    dtype_name=component.dtype_name,
+                    source="codec",
+                )
+                for component in wire_components
+            )
+        if not destination_components:
+            raise ValueError(
+                "RefitTransformPlan requires at least one destination component."
+            )
+        object.__setattr__(self, "transform_id", transform_id)
+        object.__setattr__(self, "wire_components", wire_components)
+        object.__setattr__(self, "destination_components", destination_components)
+        object.__setattr__(self, "completion_key", completion_key)
+        object.__setattr__(self, "finalize_scope", finalize_scope)
+
+    @property
+    def components(self) -> tuple[TransformComponentSpec, ...]:
+        """Return wire components for compatibility with legacy callers."""
+        return self.wire_components
 
 
 class RefitPlanAgreement(TypedDict):
@@ -60,7 +122,7 @@ class RefitPlanAgreement(TypedDict):
 
 
 class RefitTransformCodec(Protocol):
-    """Describes the tensors a source adapter must produce for a target format."""
+    """Describes transport and destination tensors for a target format."""
 
     transform_id: str
 
@@ -69,7 +131,15 @@ class RefitTransformCodec(Protocol):
         global_shape: tuple[int, ...],
         input_dtype_name: str,
     ) -> tuple[TransformComponentSpec, ...]:
-        """Return output components in transfer order."""
+        """Return wire components in transfer order."""
+        ...
+
+    def describe_destination(
+        self,
+        global_shape: tuple[int, ...],
+        input_dtype_name: str,
+    ) -> tuple[DestinationComponentSpec, ...]:
+        """Return destination checkpoint components in materialization order."""
         ...
 
 
@@ -104,9 +174,89 @@ class _BF16ToMXFP8Codec:
             ),
         )
 
+    def describe_destination(
+        self,
+        global_shape: tuple[int, ...],
+        input_dtype_name: str,
+    ) -> tuple[DestinationComponentSpec, ...]:
+        """Return destination components matching the legacy transfer layout."""
+        return tuple(
+            DestinationComponentSpec(
+                role=component.role,
+                global_shape=component.global_shape,
+                dtype_name=component.dtype_name,
+                source="codec",
+            )
+            for component in self.describe_outputs(global_shape, input_dtype_name)
+        )
+
+
+class _BF16ToNVFP4Codec:
+    """Describe BF16 transport and receiver-owned NVFP4 checkpoint state."""
+
+    def __init__(self, *, mode: Literal["w4a16", "w4a4"]) -> None:
+        self._mode = mode
+        self.transform_id = f"bf16_to_nvfp4_{mode}"
+
+    def _validate_input(
+        self, global_shape: tuple[int, ...], input_dtype_name: str
+    ) -> None:
+        if input_dtype_name != "torch.bfloat16":
+            raise ValueError(
+                "BF16-to-NVFP4 refit requires input dtype torch.bfloat16; "
+                f"got {input_dtype_name}."
+            )
+        if not global_shape or global_shape[-1] % 16:
+            raise ValueError(
+                "BF16-to-NVFP4 refit requires K to be divisible by 16; "
+                f"got global shape {global_shape}."
+            )
+
+    def describe_outputs(
+        self,
+        global_shape: tuple[int, ...],
+        input_dtype_name: str,
+    ) -> tuple[TransformComponentSpec, ...]:
+        """Return the unmodified BF16 payload transferred to the receiver."""
+        self._validate_input(global_shape, input_dtype_name)
+        return (TransformComponentSpec("weight", global_shape, input_dtype_name),)
+
+    def describe_destination(
+        self,
+        global_shape: tuple[int, ...],
+        input_dtype_name: str,
+    ) -> tuple[DestinationComponentSpec, ...]:
+        """Return the NVFP4 family generated from the received BF16 tensor."""
+        self._validate_input(global_shape, input_dtype_name)
+        components = (
+            DestinationComponentSpec(
+                "weight",
+                (*global_shape[:-1], global_shape[-1] // 2),
+                "torch.uint8",
+                "codec",
+            ),
+            DestinationComponentSpec(
+                "weight_scale",
+                (*global_shape[:-1], global_shape[-1] // 16),
+                "torch.float8_e4m3fn",
+                "codec",
+            ),
+            DestinationComponentSpec("weight_scale_2", (), "torch.float32", "codec"),
+        )
+        if self._mode == "w4a4":
+            return (
+                *components,
+                DestinationComponentSpec(
+                    "input_scale", (), "torch.float32", "calibration"
+                ),
+            )
+        return components
+
 
 _TRANSFORM_CODECS: dict[tuple[str, str], RefitTransformCodec] = {
     ("bf16", "mxfp8_e4m3_e8m0"): _BF16ToMXFP8Codec(),
+    ("bf16", "nvfp4_w4a16"): _BF16ToNVFP4Codec(mode="w4a16"),
+    ("bf16", "nvfp4_w4a4"): _BF16ToNVFP4Codec(mode="w4a4"),
 }
 
 
@@ -127,14 +277,24 @@ def plan_signature(plans: Mapping[str, RefitTransformPlan]) -> str:
         {
             "parameter_name": parameter_name,
             "transform_id": plan.transform_id,
-            "components": [
+            "wire_components": [
                 {
                     "role": component.role,
                     "global_shape": component.global_shape,
                     "dtype_name": component.dtype_name,
                 }
-                for component in plan.components
+                for component in plan.wire_components
             ],
+            "destination_components": [
+                {
+                    "role": component.role,
+                    "global_shape": component.global_shape,
+                    "dtype_name": component.dtype_name,
+                    "source": component.source,
+                }
+                for component in plan.destination_components
+            ],
+            "completion_key": plan.completion_key or parameter_name,
             "finalize_scope": plan.finalize_scope,
         }
         for parameter_name, plan in sorted(plans.items())
@@ -149,7 +309,7 @@ def build_plan_agreement(
     """Build the compact protocol agreement for a set of parameter plans."""
     return {
         "protocol_version": REFIT_PLAN_PROTOCOL_VERSION,
-        "component_count": sum(len(plan.components) for plan in plans.values()),
+        "component_count": sum(len(plan.wire_components) for plan in plans.values()),
         "plan_signature": plan_signature(plans),
     }
 
@@ -164,28 +324,57 @@ def plans_from_serialized_metadata(
             name = str(param["name"])
             if name in plans:
                 raise ValueError(f"Duplicate refit parameter metadata for {name!r}.")
-            components = tuple(
+            serialized_wire_components = param.get("wire_components")
+            if serialized_wire_components is None:
+                serialized_wire_components = param["components"]
+            wire_components = tuple(
                 TransformComponentSpec(
                     role=str(component["role"]),
                     global_shape=tuple(int(size) for size in component["global_shape"]),
                     dtype_name=str(component["dtype"]),
                 )
-                for component in param["components"]
+                for component in serialized_wire_components
             )
-            if not components:
+            if not wire_components:
                 raise ValueError(f"Refit parameter {name!r} has no components.")
+            destination_components = tuple(
+                DestinationComponentSpec(
+                    role=str(component["role"]),
+                    global_shape=tuple(int(size) for size in component["global_shape"]),
+                    dtype_name=str(component["dtype"]),
+                    source=cast(Literal["codec", "calibration"], component["source"]),
+                )
+                for component in param.get("destination_components", [])
+            )
+            if any(
+                component.source not in {"codec", "calibration"}
+                for component in destination_components
+            ):
+                raise ValueError(
+                    f"Refit parameter {name!r} has an invalid destination source."
+                )
+            if not destination_components:
+                destination_components = tuple(
+                    DestinationComponentSpec(
+                        role=component.role,
+                        global_shape=component.global_shape,
+                        dtype_name=component.dtype_name,
+                        source="codec",
+                    )
+                    for component in wire_components
+                )
             finalize_scope = str(param["finalize_scope"])
-            if finalize_scope not in {"parameter", "layer", "model"}:
+            if finalize_scope not in {"parameter", "model"}:
                 raise ValueError(
                     f"Refit parameter {name!r} has invalid finalize scope "
                     f"{finalize_scope!r}."
                 )
             plans[name] = RefitTransformPlan(
                 transform_id=str(param["transform_id"]),
-                components=components,
-                finalize_scope=cast(
-                    Literal["parameter", "layer", "model"], finalize_scope
-                ),
+                wire_components=wire_components,
+                destination_components=destination_components,
+                completion_key=str(param.get("completion_key", name)),
+                finalize_scope=cast(Literal["parameter", "model"], finalize_scope),
             )
     return plans
 

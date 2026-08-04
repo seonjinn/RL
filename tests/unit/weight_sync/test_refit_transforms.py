@@ -4,6 +4,7 @@ import pytest
 
 from nemo_rl.weight_sync import refit_transforms
 from nemo_rl.weight_sync.refit_transforms import (
+    DestinationComponentSpec,
     REFIT_PLAN_PROTOCOL_VERSION,
     RefitTransformPlan,
     RefitTransformRequest,
@@ -14,6 +15,101 @@ from nemo_rl.weight_sync.refit_transforms import (
     resolve_transform,
     validate_serialized_plan_agreement,
 )
+
+
+def test_bf16_to_nvfp4_w4a4_distinguishes_wire_from_destination_components() -> None:
+    """Receiver conversion transfers BF16 while calibration stays at the destination."""
+    codec = resolve_transform("bf16", "nvfp4_w4a4")
+
+    assert codec.describe_outputs((64, 128), "torch.bfloat16") == (
+        TransformComponentSpec("weight", (64, 128), "torch.bfloat16"),
+    )
+    assert codec.describe_destination((64, 128), "torch.bfloat16") == (
+        DestinationComponentSpec("weight", (64, 64), "torch.uint8", "codec"),
+        DestinationComponentSpec(
+            "weight_scale", (64, 8), "torch.float8_e4m3fn", "codec"
+        ),
+        DestinationComponentSpec("weight_scale_2", (), "torch.float32", "codec"),
+        DestinationComponentSpec("input_scale", (), "torch.float32", "calibration"),
+    )
+
+
+def test_plan_signature_includes_destination_source_and_completion_scope() -> None:
+    """Agreement rejects plans that differ after the identical BF16 transfer."""
+    wire = (TransformComponentSpec("weight", (64, 128), "torch.bfloat16"),)
+    destination = (
+        DestinationComponentSpec("weight", (64, 64), "torch.uint8", "codec"),
+        DestinationComponentSpec(
+            "weight_scale", (64, 8), "torch.float8_e4m3fn", "codec"
+        ),
+        DestinationComponentSpec("weight_scale_2", (), "torch.float32", "codec"),
+        DestinationComponentSpec("input_scale", (), "torch.float32", "calibration"),
+    )
+    first = RefitTransformPlan(
+        transform_id="bf16_to_nvfp4_w4a4",
+        wire_components=wire,
+        destination_components=destination,
+        completion_key="model.layers.0.mlp.experts.w13",
+        finalize_scope="model",
+    )
+    changed_completion = RefitTransformPlan(
+        transform_id="bf16_to_nvfp4_w4a4",
+        wire_components=wire,
+        destination_components=destination,
+        completion_key="model.layers.0.mlp.experts.w2",
+        finalize_scope="model",
+    )
+    changed_source = RefitTransformPlan(
+        transform_id="bf16_to_nvfp4_w4a4",
+        wire_components=wire,
+        destination_components=(
+            *destination[:-1],
+            DestinationComponentSpec("input_scale", (), "torch.float32", "codec"),
+        ),
+        completion_key="model.layers.0.mlp.experts.w13",
+        finalize_scope="model",
+    )
+    metadata = {
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": "model.layers.0.mlp.experts.gate_proj.weight",
+                    "transform_id": first.transform_id,
+                    "wire_components": [
+                        {
+                            "role": component.role,
+                            "global_shape": component.global_shape,
+                            "dtype": component.dtype_name,
+                        }
+                        for component in first.wire_components
+                    ],
+                    "destination_components": [
+                        {
+                            "role": component.role,
+                            "global_shape": component.global_shape,
+                            "dtype": component.dtype_name,
+                            "source": component.source,
+                        }
+                        for component in first.destination_components
+                    ],
+                    "completion_key": first.completion_key,
+                    "finalize_scope": first.finalize_scope,
+                }
+            ]
+        }
+    }
+
+    assert plans_from_serialized_metadata(metadata) == {
+        "model.layers.0.mlp.experts.gate_proj.weight": first
+    }
+    assert plan_signature(
+        {"model.layers.0.mlp.experts.gate_proj.weight": first}
+    ) != plan_signature(
+        {"model.layers.0.mlp.experts.gate_proj.weight": changed_completion}
+    )
+    assert plan_signature(
+        {"model.layers.0.mlp.experts.gate_proj.weight": first}
+    ) != plan_signature({"model.layers.0.mlp.experts.gate_proj.weight": changed_source})
 
 
 def _mixed_serialized_metadata() -> tuple[dict, dict]:
@@ -244,7 +340,7 @@ def test_registry_preserves_test_codec_component_order(
     plan = RefitTransformPlan(
         transform_id=codec.transform_id,
         components=codec.describe_outputs((64, 128), "torch.bfloat16"),
-        finalize_scope="layer",
+        finalize_scope="parameter",
     )
 
     assert [component.role for component in plan.components] == [
