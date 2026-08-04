@@ -17,7 +17,7 @@ import re
 import socket
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 import torch
 import zmq
@@ -38,8 +38,10 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
     HFToLocalParamMap,
     LocalParamSpec,
     RefitCtx,
+    _STR_TO_DTYPE,
     _extract_layer_prefix,
 )
+from nemo_rl.weight_sync.refit_transforms import RefitPlanAgreement
 
 logger = logging.getLogger(__name__)
 
@@ -789,7 +791,7 @@ class VllmInternalWorkerExtension:
     def finish_sparse_delta_refit(self) -> dict[str, Any]:
         return self._get_sparse_delta_applier().finish_sparse_delta_refit()
 
-    def prepare_nccl_reshard_refit_info(self, refit_info: dict) -> None:
+    def prepare_nccl_reshard_refit_info(self, refit_info: dict) -> RefitPlanAgreement:
         """Restore per-layer param metadata and build the HF→vLLM mapping.
 
         Done once ahead of refit; the cached mapping is reused by every
@@ -806,6 +808,11 @@ class VllmInternalWorkerExtension:
         self.hf_to_local_param_map = self.build_hf_to_local_param_map(  # pyrefly: ignore[implicitly-defined-attribute]
             self.nccl_reshard_refit_info
         )
+        from nemo_rl.weight_sync.refit_transforms import (
+            agreement_from_serialized_metadata,
+        )
+
+        return agreement_from_serialized_metadata(self.nccl_reshard_refit_info)
 
     def build_hf_to_local_param_map(self, refit_info: dict) -> HFToLocalParamMap:
         """Build the vLLM-backend ``hf_to_local_param_map`` (HFToLocalParamMap).
@@ -828,21 +835,302 @@ class VllmInternalWorkerExtension:
 
             return LocalParamSpec(base=vllm_param, pre=pre, post=post)
 
+        def _metadata_dtype(
+            value: Any, *, default: torch.dtype, hf_name: str, field_name: str
+        ) -> torch.dtype:
+            if value is None:
+                return default
+            if isinstance(value, torch.dtype):
+                return value
+            if value in _STR_TO_DTYPE:
+                return _STR_TO_DTYPE[value]
+            raise ValueError(
+                f"build_hf_to_local_param_map: {hf_name!r} has unsupported "
+                f"{field_name} {value!r}"
+            )
+
+        def _mxfp8_scale_shape(
+            value_shape: Sequence[int], *, hf_name: str
+        ) -> tuple[int, ...]:
+            if not value_shape or value_shape[-1] % 32 != 0:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: MXFP8 target for {hf_name!r} "
+                    f"must have a K dimension divisible by 32, got {tuple(value_shape)}"
+                )
+            return (*value_shape[:-1], value_shape[-1] // 32)
+
+        def _expected_local_shape(
+            param_info: dict[str, Any], component: dict[str, Any]
+        ) -> Optional[tuple[int, ...]]:
+            mesh = param_info.get("dst_mesh_info")
+            mesh_tensor = getattr(mesh, "mesh", None)
+            placements = component.get("dst_placements")
+            if mesh_tensor is None or placements is None:
+                return None
+            if len(placements) != mesh_tensor.ndim:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: {param_info['name']!r} has "
+                    f"{len(placements)} destination placement entries for a "
+                    f"{mesh_tensor.ndim}D destination mesh"
+                )
+
+            local_shape = list(component["global_shape"])
+            for mesh_dim, placement in enumerate(placements):
+                shard_dim = getattr(placement, "dim", None)
+                if shard_dim is None:
+                    continue
+                shard_count = mesh_tensor.shape[mesh_dim]
+                if local_shape[shard_dim] % shard_count != 0:
+                    return None
+                local_shape[shard_dim] //= shard_count
+            return tuple(local_shape)
+
+        def _validate_mxfp8_destinations(
+            *,
+            hf_name: str,
+            param_info: dict[str, Any],
+            value_component: dict[str, Any],
+            scale_component: dict[str, Any],
+            value_name: str,
+            value_param: torch.Tensor,
+            scale_name: str,
+            scale_param: torch.Tensor,
+            merged_slice: Optional[tuple[slice, ...]],
+        ) -> None:
+            value_global_shape = tuple(value_component["global_shape"])
+            scale_global_shape = tuple(scale_component["global_shape"])
+            expected_scale_global_shape = _mxfp8_scale_shape(
+                value_global_shape, hf_name=hf_name
+            )
+            if scale_global_shape != expected_scale_global_shape:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: {hf_name!r} has "
+                    f"scale_global_shape {scale_global_shape}, expected "
+                    f"{expected_scale_global_shape}"
+                )
+
+            expected_value_dtype = _metadata_dtype(
+                value_component.get("dtype"),
+                default=torch.float8_e4m3fn,
+                hf_name=hf_name,
+                field_name="weight component dtype",
+            )
+            expected_scale_dtype = _metadata_dtype(
+                scale_component.get("dtype"),
+                default=torch.uint8,
+                hf_name=hf_name,
+                field_name="weight_scale component dtype",
+            )
+            if value_param.dtype != expected_value_dtype:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: vLLM value target {value_name!r} "
+                    f"has dtype {value_param.dtype}, expected {expected_value_dtype}"
+                )
+            if scale_param.dtype != expected_scale_dtype:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: vLLM scale target {scale_name!r} "
+                    f"has dtype {scale_param.dtype}, expected {expected_scale_dtype}"
+                )
+
+            expected_full_scale_shape = _mxfp8_scale_shape(
+                value_param.shape, hf_name=hf_name
+            )
+            if tuple(scale_param.shape) != expected_full_scale_shape:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: vLLM scale target {scale_name!r} "
+                    f"has shape {tuple(scale_param.shape)}, expected "
+                    f"{expected_full_scale_shape} for value target {value_name!r}"
+                )
+
+            value_region = (
+                value_param if merged_slice is None else value_param[merged_slice]
+            )
+            scale_region = (
+                scale_param if merged_slice is None else scale_param[merged_slice]
+            )
+            expected_scale_region_shape = _mxfp8_scale_shape(
+                value_region.shape, hf_name=hf_name
+            )
+            if tuple(scale_region.shape) != expected_scale_region_shape:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: MXFP8 slice for {hf_name!r} "
+                    f"selects value shape {tuple(value_region.shape)} but scale shape "
+                    f"{tuple(scale_region.shape)}; expected "
+                    f"{expected_scale_region_shape}"
+                )
+
+            expected_value_local_shape = _expected_local_shape(
+                param_info, value_component
+            )
+            if (
+                expected_value_local_shape is not None
+                and tuple(value_region.shape) != expected_value_local_shape
+            ):
+                raise ValueError(
+                    f"build_hf_to_local_param_map: vLLM value slice for {hf_name!r} "
+                    f"has local shape {tuple(value_region.shape)}, expected "
+                    f"{expected_value_local_shape}"
+                )
+            expected_scale_local_shape = _expected_local_shape(
+                param_info, scale_component
+            )
+            if (
+                expected_scale_local_shape is not None
+                and tuple(scale_region.shape) != expected_scale_local_shape
+            ):
+                raise ValueError(
+                    f"build_hf_to_local_param_map: vLLM scale slice for {hf_name!r} "
+                    f"has local shape {tuple(scale_region.shape)}, expected "
+                    f"{expected_scale_local_shape}"
+                )
+
+        def _validate_untransformed_destination(
+            *,
+            hf_name: str,
+            param_info: dict[str, Any],
+            component: dict[str, Any],
+            value_param: torch.Tensor,
+            merged_slice: Optional[tuple[slice, ...]],
+        ) -> None:
+            value_region = (
+                value_param if merged_slice is None else value_param[merged_slice]
+            )
+            expected_dtype = _metadata_dtype(
+                component.get("dtype"),
+                default=value_region.dtype,
+                hf_name=hf_name,
+                field_name="weight component dtype",
+            )
+            if value_region.dtype != expected_dtype:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: untransformed vLLM target "
+                    f"for {hf_name!r} has dtype {value_region.dtype}, expected "
+                    f"{expected_dtype}"
+                )
+
+            expected_local_shape = _expected_local_shape(param_info, component)
+            if (
+                expected_local_shape is not None
+                and tuple(value_region.shape) != expected_local_shape
+            ):
+                raise ValueError(
+                    f"build_hf_to_local_param_map: untransformed vLLM target "
+                    f"for {hf_name!r} has local shape {tuple(value_region.shape)}, "
+                    f"expected {expected_local_shape}"
+                )
+
+        def _mxfp8_param_spec(
+            value_param: torch.Tensor,
+            scale_param: torch.Tensor,
+            merged_slice: Optional[tuple[slice, ...]],
+        ) -> LocalParamSpec:
+            def pre(_base):
+                value_region = (
+                    value_param.data
+                    if merged_slice is None
+                    else value_param.data[merged_slice]
+                )
+                scale_region = (
+                    scale_param.data
+                    if merged_slice is None
+                    else scale_param.data[merged_slice]
+                )
+                if merged_slice is None:
+                    return RefitCtx(
+                        buf=value_region,
+                        transfer_tensors=(value_region, scale_region),
+                    )
+                value_buffer = torch.empty_like(value_region)
+                scale_buffer = torch.empty_like(scale_region)
+                return RefitCtx(
+                    buf=value_buffer,
+                    transfer_tensors=(value_buffer, scale_buffer),
+                    extra={
+                        "region": value_region,
+                        "scale_region": scale_region,
+                    },
+                )
+
+            def post(ctx):
+                if merged_slice is not None:
+                    value_buffer, scale_buffer = ctx.tensors_for_transfer()
+                    ctx.extra["region"].copy_(value_buffer)
+                    ctx.extra["scale_region"].copy_(scale_buffer)
+
+            return LocalParamSpec(base=value_param.data, pre=pre, post=post)
+
         # Get dict of vllm_param and merged_slice for each hf_name
         vllm_param_map_and_slices = self._build_hf_to_gen_backend_mapping(refit_info)
-        return HFToLocalParamMap(
-            specs={
-                hf_name: (
+        param_info_by_name = {
+            param_info["name"]: param_info
+            for layer_name in refit_info["layer_names"]
+            for param_info in refit_info["per_layer_params"][layer_name]
+        }
+        vllm_params = dict(self.model_runner.model.named_parameters())
+        vllm_names_by_id = {id(param): name for name, param in vllm_params.items()}
+        specs = {}
+        for hf_name, (vllm_param, merged_slice) in vllm_param_map_and_slices.items():
+            param_info = param_info_by_name[hf_name]
+            components = param_info.get("components")
+            if not components:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: {hf_name!r} must provide a "
+                    "nonempty component list"
+                )
+            for component in components:
+                missing_fields = {"role", "global_shape", "dtype"} - component.keys()
+                if missing_fields:
+                    raise ValueError(
+                        f"build_hf_to_local_param_map: component metadata for "
+                        f"{hf_name!r} is missing {sorted(missing_fields)!r}"
+                    )
+            component_family = tuple(component.get("role") for component in components)
+            if component_family == ("weight",):
+                _validate_untransformed_destination(
+                    hf_name=hf_name,
+                    param_info=param_info,
+                    component=components[0],
+                    value_param=vllm_param,
+                    merged_slice=merged_slice,
+                )
+                specs[hf_name] = (
                     LocalParamSpec(base=vllm_param.data)
                     if merged_slice is None
                     else _merged_param_spec(vllm_param, merged_slice)
                 )
-                for hf_name, (
-                    vllm_param,
-                    merged_slice,
-                ) in vllm_param_map_and_slices.items()
-            }
-        )
+                continue
+            if component_family != ("weight", "weight_scale"):
+                raise ValueError(
+                    f"build_hf_to_local_param_map: unsupported component family "
+                    f"{component_family!r} for {hf_name!r}"
+                )
+
+            vllm_name = vllm_names_by_id.get(id(vllm_param))
+            if vllm_name is None:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: resolved vLLM value target for "
+                    f"{hf_name!r} is not a registered model parameter"
+                )
+            scale_name = vllm_name + "_scale_from_checkpoint"
+            scale_param = vllm_params.get(scale_name)
+            if scale_param is None:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: MXFP8 value target {vllm_name!r} "
+                    f"for {hf_name!r} has no vLLM scale target {scale_name!r}"
+                )
+            _validate_mxfp8_destinations(
+                hf_name=hf_name,
+                param_info=param_info,
+                value_component=components[0],
+                scale_component=components[1],
+                value_name=vllm_name,
+                value_param=vllm_param,
+                scale_name=scale_name,
+                scale_param=scale_param,
+                merged_slice=merged_slice,
+            )
+            specs[hf_name] = _mxfp8_param_spec(vllm_param, scale_param, merged_slice)
+        return HFToLocalParamMap(specs=specs)
 
     def _build_hf_to_gen_backend_mapping(self, refit_info):
         """Map each FFN HF param name to its gen-backend param and slice.
@@ -1017,17 +1305,31 @@ class VllmInternalWorkerExtension:
             ctx = (
                 spec.pre(spec.base) if spec.pre is not None else RefitCtx(buf=spec.base)
             )
-            dst_tensor = DTensorRef(ctx.buf, param_info["global_shape"])
-            xferdtensor(
-                None,
-                param_info["src_mesh_info"],
-                param_info["src_placements"],
-                dst_tensor,
-                param_info["dst_mesh_info"],
-                param_info["dst_placements"],
-                group,
-                stream,
-            )
+            components = param_info.get("components")
+            if not components:
+                raise ValueError(
+                    f"nccl_reshard_refit: {param_info['name']!r} must provide a "
+                    "nonempty component list"
+                )
+            transfer_tensors = ctx.tensors_for_transfer()
+            if len(transfer_tensors) != len(components):
+                raise ValueError(
+                    f"nccl_reshard_refit: component count mismatch for "
+                    f"{param_info['name']!r}: context has {len(transfer_tensors)}, "
+                    f"metadata has {len(components)}"
+                )
+            for tensor, component in zip(transfer_tensors, components):
+                dst_tensor = DTensorRef(tensor, component["global_shape"])
+                xferdtensor(
+                    None,
+                    param_info["src_mesh_info"],
+                    component["src_placements"],
+                    dst_tensor,
+                    param_info["dst_mesh_info"],
+                    component["dst_placements"],
+                    group,
+                    stream,
+                )
             if spec.post is not None:
                 spec.post(ctx)
 

@@ -60,6 +60,7 @@ from nemo_rl.utils.nvml import log_gpu_memory_diagnostics
 from nemo_rl.weight_sync.checkpoint_engine_config import (
     checkpoint_engine_refit_config,
 )
+from nemo_rl.weight_sync.refit_transforms import RefitPlanAgreement
 
 logger = logging.getLogger(__name__)
 
@@ -1177,9 +1178,16 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
             ),
         )
 
-    def prepare_nccl_reshard_refit_info(self, refit_info: dict) -> None:
+    def prepare_nccl_reshard_refit_info(self, refit_info: dict) -> RefitPlanAgreement:
         """Forward refit info to vLLM backend workers."""
-        self.llm.collective_rpc("prepare_nccl_reshard_refit_info", args=(refit_info,))
+        results = self.llm.collective_rpc(
+            "prepare_nccl_reshard_refit_info", args=(refit_info,)
+        )
+        from nemo_rl.weight_sync.refit_transforms import require_matching_agreements
+
+        return require_matching_agreements(
+            results, participants="internal synchronous vLLM workers"
+        )
 
     def nccl_reshard_refit(self) -> bool:
         """Receive weights from training workers via nccl_reshard (xferdtensor)."""

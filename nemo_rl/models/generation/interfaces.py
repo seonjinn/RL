@@ -12,12 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from abc import ABC, abstractmethod
-from typing import Any, NotRequired, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, Any, NotRequired, Optional, TypedDict, Union
 
 import ray
 import torch
 
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+
+if TYPE_CHECKING:
+    from nemo_rl.weight_sync.refit_transforms import (
+        RefitPlanAgreement,
+        RefitTransformRequest,
+    )
 
 # Routed-expert index tensors ([seq, layers, topk]) are carried in the narrowest
 # signed dtype that fits ids 0..num_experts-1 plus the -1 missing-route sentinel:
@@ -335,8 +341,15 @@ class GenerationInterface(ABC):
         """Whether the generation backend requires KV cache scales synchronization."""
         return False
 
-    def prepare_refit_info(self, state_dict_info: dict[str, Any]) -> None:
-        """Prepare the info for refit."""
+    def prepare_refit_info(
+        self, state_dict_info: Optional[dict[str, Any]]
+    ) -> Optional[list["RefitTransformRequest"]]:
+        """Prepare the info for refit.
+
+        Returns:
+            Structured source-to-target transform requests, or None when no
+            trainer-side transform is requested.
+        """
         raise NotImplementedError
 
     def update_weights_via_ipc_zmq(self) -> list[ray.ObjectRef]:
@@ -347,8 +360,8 @@ class GenerationInterface(ABC):
         """Update the model weights from collective communication."""
         raise NotImplementedError
 
-    def prepare_nccl_reshard_refit_info(self, refit_info: dict) -> None:
-        """Prepare per-layer param metadata for nccl_reshard-based refit."""
+    def prepare_nccl_reshard_refit_info(self, refit_info: dict) -> "RefitPlanAgreement":
+        """Validate destination metadata and return its independently built agreement."""
         raise NotImplementedError
 
     def nccl_reshard_refit(self) -> list[ray.ObjectRef]:
