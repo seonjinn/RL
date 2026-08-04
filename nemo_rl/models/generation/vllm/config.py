@@ -38,6 +38,8 @@ class VllmSpecificArgs(TypedDict):
     is_mx: NotRequired[bool]
     # Batch MXFP8 MoE layout transforms across experts during refit.
     refit_batched_moe_shuffle: NotRequired[bool]
+    # Emit per-refit dense MXFP8 scale-swizzle timing for performance analysis.
+    refit_profile_dense_linear: NotRequired[bool]
     kv_cache_dtype: Literal["auto", "fp8", "fp8_e4m3"]
     enforce_eager: NotRequired[bool]
     enable_return_routed_experts: NotRequired[bool]

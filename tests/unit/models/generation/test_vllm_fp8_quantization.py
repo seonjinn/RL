@@ -65,6 +65,7 @@ def test_init_fp8_uses_mxfp8_quantization_config(fp8_module, monkeypatch):
             "async_engine": False,
             "is_mx": True,
             "refit_batched_moe_shuffle": False,
+            "refit_profile_dense_linear": True,
             "use_deep_gemm": True,
         },
         "dummy-model",
@@ -79,6 +80,7 @@ def test_init_fp8_uses_mxfp8_quantization_config(fp8_module, monkeypatch):
     assert applied_configs == [fp8.global_fp8_config]
     assert fp8.global_fp8_config.is_mx is True
     assert fp8.global_fp8_config.refit_batched_moe_shuffle is False
+    assert fp8.global_fp8_config.refit_profile_dense_linear is True
     assert "VLLM_USE_DEEP_GEMM" not in fp8.os.environ
     assert "VLLM_USE_DEEP_GEMM_E8M0" not in fp8.os.environ
 
@@ -104,6 +106,7 @@ def test_init_fp8_defaults_to_batched_moe_shuffle(fp8_module, monkeypatch):
     )
 
     assert fp8.global_fp8_config.refit_batched_moe_shuffle is True
+    assert fp8.global_fp8_config.refit_profile_dense_linear is False
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")

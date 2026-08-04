@@ -6,12 +6,13 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel)
 
 ACTION=${ACTION:-test-only}
+MODE=${MODE:-moe-only}
 ACCOUNT=${SLURM_ACCOUNT:-coreai_chef_posttrain}
 PARTITION=${PARTITION:-batch}
 TOTAL_NODES=${TOTAL_NODES:-4}
 GPUS_PER_NODE=${GPUS_PER_NODE:-8}
 GEN_NODES=${GEN_NODES:-2}
-MAX_STEPS=${MAX_STEPS:-2}
+MAX_STEPS=${MAX_STEPS:-5}
 WALLTIME=${WALLTIME:-04:00:00}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
 
@@ -20,13 +21,22 @@ RUNTIME_ROOT=${RUNTIME_ROOT:-${WORK_ROOT}/containers/nemo-rl-nightly-refresh}
 CONTAINER=${CONTAINER:-${RUNTIME_ROOT}/nemo_rl_nightly_20260730_483099.sqsh}
 PYTHON_OVERLAY=${PYTHON_OVERLAY:-${RUNTIME_ROOT}/python-overlay-483099}
 ROOT_CACHE_OVERLAY=${ROOT_CACHE_OVERLAY:-${RUNTIME_ROOT}/root-cache-overlay-483099}
-CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/mopd_nano_fast/.cache/pr3477-qkvo-vllm025}
-EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${WORK_ROOT}/experiments/pr3477-mxfp8-qkvo/results/qkvo-${MAX_STEPS}step-${RUN_SUFFIX}}
-WANDB_PROJECT=${WANDB_PROJECT:-sna-pr3477-mxfp8-qkvo}
-WANDB_NAME=${WANDB_NAME:-qkvo-${MAX_STEPS}step-${RUN_SUFFIX}}
+CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/mopd_nano_fast/.cache/pr3478-qkvo-analysis-vllm025}
+EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${WORK_ROOT}/experiments/pr3478-qkvo-analysis/results/${MODE}-${MAX_STEPS}step-${RUN_SUFFIX}}
+WANDB_PROJECT=${WANDB_PROJECT:-sna-pr3478-mxfp8-qkvo-analysis}
+WANDB_NAME=${WANDB_NAME:-${MODE}-${MAX_STEPS}step-${RUN_SUFFIX}}
 WANDB_ENTITY=${WANDB_ENTITY:-nvidia}
-WANDB_ENABLED=${WANDB_ENABLED:-true}
-CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-qkvo-rollout.yaml
+WANDB_ENABLED=${WANDB_ENABLED:-false}
+
+case "${MODE}" in
+  moe-only)
+    CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
+    ;;
+  moe-qkvo)
+    CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-qkvo-rollout.yaml
+    ;;
+  *) echo "MODE must be moe-only or moe-qkvo" >&2; exit 2 ;;
+esac
 
 case "${ACTION}" in
   submit) SBATCH_ACTION=() ;;
@@ -99,6 +109,7 @@ uv run --frozen examples/run_grpo.py \
   policy.generation.vllm_cfg.pipeline_parallel_size=1 \
   policy.generation.vllm_cfg.expert_parallel_size=1 \
   policy.generation.vllm_cfg.use_tqdm=false \
+  +policy.generation.vllm_cfg.refit_profile_dense_linear=true \
   policy.train_global_batch_size=2048 \
   loss_fn.force_on_policy_ratio=false \
   loss_fn.use_importance_sampling_correction=true \
@@ -128,7 +139,7 @@ SBATCH_ARGS=(
   --account="${ACCOUNT}"
   --partition="${PARTITION}"
   --time="${WALLTIME}"
-  --job-name="sna-p3477-qkvo-${MAX_STEPS}s"
+  --job-name="sna-p3478-${MODE}-${MAX_STEPS}s"
   --output="${EXPERIMENT_ROOT}/slurm-%j.out"
   --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"model_loading","description":"environment and Qwen3-30B initialization"}}'
 )

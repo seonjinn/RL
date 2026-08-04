@@ -1164,12 +1164,31 @@ class VllmInternalWorkerExtension:
             process_weights_after_loading,
         )
 
+        from nemo_rl.models.generation.vllm.quantization.fp8 import (
+            begin_dense_linear_refit_profile,
+            finish_dense_linear_refit_profile,
+        )
+
         # Finalize post-load weight processing: dense Linear + attention/MLA, and
         # crucially the per-MoE-backend w13 layout (FlashInfer CUTLASS/TRTLLM) that
         # the canonical [gate; up] bulk write above defers to here.
+        begin_dense_linear_refit_profile()
+        post_load_t0 = time.perf_counter()
         with set_current_vllm_config(self.model_runner.vllm_config):
             process_weights_after_loading(
                 self.model_runner.model, self.model_config, self.device
+            )
+        dense_profile = finish_dense_linear_refit_profile()
+        if dense_profile is not None and torch.distributed.get_rank() == 0:
+            print(
+                "[mxfp8-dense-refit] "
+                f"modules={dense_profile.modules} "
+                f"gpu_ms={dense_profile.gpu_ms:.2f} "
+                f"cpu_submit_ms={dense_profile.cpu_submit_ms:.2f} "
+                f"raw_scale_mib={dense_profile.scale_mib:.2f} "
+                f"post_load_s={time.perf_counter() - post_load_t0:.2f} "
+                f"shapes={dense_profile.shapes}",
+                flush=True,
             )
 
         torch.cuda.empty_cache()

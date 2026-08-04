@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import os
+import time
+from collections import Counter
 from dataclasses import dataclass, field
 from unittest.mock import patch
 
@@ -58,6 +60,16 @@ class FP8Config:
     use_fp8_weights: bool = True  # Whether model weights are quantized to FP8
     is_mx: bool = False
     refit_batched_moe_shuffle: bool = True
+    refit_profile_dense_linear: bool = False
+
+
+@dataclass(frozen=True)
+class DenseLinearRefitProfile:
+    modules: int
+    gpu_ms: float
+    cpu_submit_ms: float
+    scale_mib: float
+    shapes: dict[tuple[int, int], int]
 
 
 @dataclass()
@@ -77,8 +89,86 @@ fp8_state: FP8State = FP8State()
 
 fp8_patches_applied = False
 
+_dense_profile_active = False
+_dense_profile_cpu_seconds = 0.0
+_dense_profile_scale_bytes = 0
+_dense_profile_events: list[tuple[torch.cuda.Event, torch.cuda.Event]] = []
+_dense_profile_shapes: Counter[tuple[int, int]] = Counter()
+
 original_run_engine_core = EngineCoreProc.run_engine_core
 original_init = CoreEngineProcManager.__init__
+
+
+def begin_dense_linear_refit_profile() -> None:
+    """Start opt-in timing of dense MXFP8 post-load processing."""
+    global _dense_profile_active
+    global _dense_profile_cpu_seconds
+    global _dense_profile_scale_bytes
+    global _dense_profile_events
+    global _dense_profile_shapes
+
+    enabled = bool(
+        global_fp8_config
+        and global_fp8_config.is_mx
+        and global_fp8_config.refit_profile_dense_linear
+    )
+    _dense_profile_active = enabled
+    _dense_profile_cpu_seconds = 0.0
+    _dense_profile_scale_bytes = 0
+    _dense_profile_events = []
+    _dense_profile_shapes = Counter()
+
+
+def finish_dense_linear_refit_profile() -> DenseLinearRefitProfile | None:
+    """Finish dense MXFP8 timing and return aggregate measurements."""
+    global _dense_profile_active
+    global _dense_profile_events
+
+    if not _dense_profile_active:
+        return None
+
+    torch.cuda.synchronize()
+    gpu_ms = sum(start.elapsed_time(end) for start, end in _dense_profile_events)
+    result = DenseLinearRefitProfile(
+        modules=len(_dense_profile_events),
+        gpu_ms=gpu_ms,
+        cpu_submit_ms=_dense_profile_cpu_seconds * 1_000,
+        scale_mib=_dense_profile_scale_bytes / 1024**2,
+        shapes=dict(_dense_profile_shapes),
+    )
+    _dense_profile_active = False
+    _dense_profile_events = []
+    return result
+
+
+def _begin_dense_linear_module_profile() -> tuple[float, torch.cuda.Event] | None:
+    if not _dense_profile_active:
+        return None
+
+    start = torch.cuda.Event(enable_timing=True)
+    start.record()
+    return time.perf_counter(), start
+
+
+def _finish_dense_linear_module_profile(
+    profile: tuple[float, torch.cuda.Event] | None,
+    *,
+    shape: tuple[int, int],
+    scale_bytes: int,
+) -> None:
+    global _dense_profile_cpu_seconds
+    global _dense_profile_scale_bytes
+
+    if profile is None:
+        return
+
+    cpu_start, gpu_start = profile
+    gpu_end = torch.cuda.Event(enable_timing=True)
+    gpu_end.record()
+    _dense_profile_events.append((gpu_start, gpu_end))
+    _dense_profile_cpu_seconds += time.perf_counter() - cpu_start
+    _dense_profile_scale_bytes += scale_bytes
+    _dense_profile_shapes[shape] += 1
 
 
 def my_init(*args, **kwargs):
@@ -217,6 +307,7 @@ def init_fp8(vllm_cfg, model_name, model_parallel_size):
         "model_parallel_size": model_parallel_size,
         "kv_cache_dtype": kv_cache_dtype,
         "use_fp8_weights": use_fp8_weights,
+        "refit_profile_dense_linear": vllm_cfg.get("refit_profile_dense_linear", False),
     }
     if is_mx:
         fp8_config_kwargs["is_mx"] = True
@@ -455,9 +546,7 @@ def quantize_mxfp8_weight(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Ten
 
     value, scale = mxfp8_e4m3_quantize(weight)
     value = value.reshape(weight.shape)
-    scale = scale.reshape(
-        *weight.shape[:-1], weight.shape[-1] // MXFP8_BLOCK_SIZE
-    )
+    scale = scale.reshape(*weight.shape[:-1], weight.shape[-1] // MXFP8_BLOCK_SIZE)
     scale = torch.where(scale == 0, torch.ones_like(scale), scale)
     return value, scale
 
@@ -727,6 +816,7 @@ def process_weights_after_loading_mxfp8_linear(self, layer) -> None:
 
     weight = layer.weight.data  # [N, K]
     N, K = weight.shape
+    profile = _begin_dense_linear_module_profile()
 
     if not hasattr(layer, "weight_scale_from_checkpoint"):
         layer.weight_scale_from_checkpoint = ModelWeightParameter(
@@ -753,6 +843,12 @@ def process_weights_after_loading_mxfp8_linear(self, layer) -> None:
         weight_scale_2d = weight_scale[:N, :scale_k].contiguous()
         weight_scale_swizzled = swizzle_mxfp8_scale(weight_scale_2d, M=N, K=K)
         layer.weight_scale.copy_(weight_scale_swizzled.contiguous())
+
+    _finish_dense_linear_module_profile(
+        profile,
+        shape=(N, K),
+        scale_bytes=weight_scale_2d.numel() * weight_scale_2d.element_size(),
+    )
 
 
 def create_weights_mxfp8_moe(
@@ -935,6 +1031,8 @@ def initialize_mxfp8_moe_kernel(self, layer) -> None:
             routing_tables=layer._expert_routing_tables(),
             layer=layer,
         )
+
+
 _mxfp8_shuffle_scratch_buffers: dict[
     tuple[str, tuple[int, ...], torch.device], torch.Tensor
 ] = {}
