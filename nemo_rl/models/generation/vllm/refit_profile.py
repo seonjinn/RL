@@ -16,7 +16,7 @@ import json
 import os
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import wraps
 from typing import Any
@@ -107,6 +107,22 @@ class RefitPhaseProfiler:
             metrics[f"{name}_gpu_sum_s"] = elapsed_seconds
         metrics.update(self._counters)
         return metrics
+
+
+def profile_weight_batch(
+    profiler: RefitPhaseProfiler,
+    weights: list[tuple[str, torch.Tensor]],
+    load_weights: Callable[[list[tuple[str, torch.Tensor]]], None],
+) -> None:
+    """Record one transport batch and the GPU work used to load it."""
+    profiler.increment("received_batch_count")
+    profiler.increment("received_tensor_count", len(weights))
+    profiler.increment(
+        "received_weight_bytes",
+        sum(tensor.numel() * tensor.element_size() for _, tensor in weights),
+    )
+    with profiler.cuda_phase("load_weights"):
+        load_weights(weights)
 
 
 @contextmanager

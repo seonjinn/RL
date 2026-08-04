@@ -20,6 +20,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+import torch
 
 
 def test_refit_phase_profiler_accumulates_wall_cuda_and_counter_metrics(
@@ -92,6 +93,35 @@ def test_refit_phase_profiler_is_noop_when_disabled(monkeypatch):
     assert profiler.finish() == {}
     synchronize.assert_not_called()
     event.assert_not_called()
+
+
+def test_profile_weight_batch_records_payload_and_load_phase(monkeypatch):
+    module_path = (
+        Path(__file__).parents[4] / "nemo_rl/models/generation/vllm/refit_profile.py"
+    )
+    spec = importlib.util.spec_from_file_location("refit_profile", module_path)
+    assert spec is not None and spec.loader is not None
+    refit_profile = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(refit_profile)
+
+    profiler = MagicMock()
+    profiler.cuda_phase.return_value = MagicMock(
+        __enter__=MagicMock(return_value=None),
+        __exit__=MagicMock(return_value=False),
+    )
+    weights = [
+        ("model.a", torch.zeros(3, dtype=torch.float32)),
+        ("model.b", torch.zeros(5, dtype=torch.bfloat16)),
+    ]
+    load_weights = MagicMock()
+
+    refit_profile.profile_weight_batch(profiler, weights, load_weights)
+
+    profiler.increment.assert_any_call("received_batch_count")
+    profiler.increment.assert_any_call("received_tensor_count", 2)
+    profiler.increment.assert_any_call("received_weight_bytes", 22)
+    profiler.cuda_phase.assert_called_once_with("load_weights")
+    load_weights.assert_called_once_with(weights)
 
 
 def test_emit_refit_profile_writes_parseable_stdout(monkeypatch):

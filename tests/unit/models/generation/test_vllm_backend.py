@@ -517,6 +517,89 @@ def test_update_weights_via_ipc_acks_manifest_error_and_returns_false(monkeypatc
 
 
 @pytest.mark.vllm
+def test_update_weights_via_ipc_emits_opt_in_refit_profile(monkeypatch):
+    from nemo_rl.models.generation.vllm import vllm_backend
+    from nemo_rl.models.policy.utils import IPCProtocol
+
+    used_bytes = vllm_backend.calculate_aligned_size(torch.float32.itemsize)
+    payloads = iter(
+        [
+            (object(), ["model.weight"], used_bytes),
+            IPCProtocol.COMPLETE,
+        ]
+    )
+
+    class FakeSocket:
+        def __init__(self):
+            self.sent = []
+
+        def recv_pyobj(self):
+            return next(payloads)
+
+        def send(self, payload):
+            self.sent.append(payload)
+
+    ext = vllm_backend.VllmInternalWorkerExtension.__new__(
+        vllm_backend.VllmInternalWorkerExtension
+    )
+    ext.state_dict_info = {"model.weight": (torch.Size([1]), torch.float32)}
+    ext.device = torch.device("cpu")
+    ext.zmq_socket = FakeSocket()
+    ext.maybe_init_zmq = MagicMock()
+    ext._load_weights = MagicMock()
+    ext._synchronize_before_ipc_data_ack = MagicMock()
+    ext._weight_update_errors_are_fatal = lambda: False
+
+    finalize = MagicMock()
+
+    @contextlib.contextmanager
+    def lifecycle(transport):
+        assert transport == "ipc"
+        yield finalize
+
+    ext._weight_update_lifecycle = lifecycle
+
+    profiler = MagicMock(enabled=True)
+    profiler.wall_phase.side_effect = lambda _name: contextlib.nullcontext()
+    profiler.finish.return_value = {"received_batch_count": 1}
+    monkeypatch.setenv("NRL_PROFILE_REFIT_PHASES", "1")
+    monkeypatch.setattr(vllm_backend, "RefitPhaseProfiler", lambda enabled: profiler)
+
+    profile_kernels = MagicMock(return_value=contextlib.nullcontext())
+    profile_batch = MagicMock(
+        side_effect=lambda _profiler, weights, load_weights: load_weights(weights)
+    )
+    emit_profile = MagicMock()
+    monkeypatch.setattr(vllm_backend, "profile_vllm_layerwise_kernels", profile_kernels)
+    monkeypatch.setattr(vllm_backend, "profile_weight_batch", profile_batch)
+    monkeypatch.setattr(vllm_backend, "emit_refit_profile", emit_profile)
+    monkeypatch.setattr(
+        vllm_backend,
+        "rebuild_cuda_tensor_from_ipc",
+        lambda _handle, _device_index: torch.zeros(used_bytes, dtype=torch.uint8),
+    )
+    monkeypatch.setattr(vllm_backend.gc, "collect", MagicMock())
+    monkeypatch.setattr(vllm_backend.torch.cuda, "empty_cache", MagicMock())
+    monkeypatch.setattr(vllm_backend.torch.distributed, "is_available", lambda: False)
+
+    assert ext.update_weights_via_ipc_zmq() is True
+
+    profile_kernels.assert_called_once_with(profiler)
+    profile_batch.assert_called_once()
+    profiled_weights = profile_batch.call_args.args[1]
+    assert [name for name, _ in profiled_weights] == ["model.weight"]
+    ext._load_weights.assert_called_once_with(profiled_weights)
+    finalize.assert_called_once()
+    assert [call.args for call in profiler.wall_phase.call_args_list] == [
+        ("ipc_receive_load_and_finalize",),
+        ("cleanup",),
+    ]
+    emit_profile.assert_called_once_with(rank=-1, metrics={"received_batch_count": 1})
+    assert ext._nrl_refit_phase_profiler is None
+    assert ext.zmq_socket.sent == [IPCProtocol.ACK.value.encode()] * 2
+
+
+@pytest.mark.vllm
 def test_read_mtp_layer_weights_from_checkpoint_filters_and_reads(tmp_path):
     """Only the requested MTP layer tensors are read, across the shards holding them."""
     from nemo_rl.models.generation.vllm.vllm_backend import (

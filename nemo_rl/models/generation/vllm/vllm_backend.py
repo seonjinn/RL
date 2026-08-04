@@ -30,6 +30,7 @@ from nemo_rl.models.generation.vllm.checkpoint_engine import (
 from nemo_rl.models.generation.vllm.refit_profile import (
     RefitPhaseProfiler,
     emit_refit_profile,
+    profile_weight_batch,
     profile_vllm_layerwise_kernels,
 )
 from nemo_rl.models.policy.utils import (
@@ -791,14 +792,25 @@ class VllmInternalWorkerExtension:
         Returns:
             bool: True if weights were successfully updated.
         """
+        import os
+
         buffer = None
         weight = None
         weights = None
 
+        profiler = RefitPhaseProfiler(
+            enabled=os.environ.get("NRL_PROFILE_REFIT_PHASES") == "1"
+        )
+        self._nrl_refit_phase_profiler = profiler
+
         try:
             self.maybe_init_zmq()
             manifest = _IPCWeightManifest(self.state_dict_info)
-            with self._weight_update_lifecycle("ipc") as finalize:
+            with (
+                profile_vllm_layerwise_kernels(profiler),
+                self._weight_update_lifecycle("ipc") as finalize,
+                profiler.wall_phase("ipc_receive_load_and_finalize"),
+            ):
                 while True:
                     # Blocking receive with timeout (this is the main operation)
                     payload = self.zmq_socket.recv_pyobj()
@@ -845,7 +857,7 @@ class VllmInternalWorkerExtension:
                             "inaccurate info like keys or cached dtype in "
                             "state_dict_info"
                         )
-                        self._load_weights(weights)
+                        profile_weight_batch(profiler, weights, self._load_weights)
                     except Exception as error:
                         batch_error = error
                         # The manifest only keeps the exception message; log
@@ -880,9 +892,6 @@ class VllmInternalWorkerExtension:
                         buffer = None
                         self.zmq_socket.send(IPCProtocol.ACK.value.encode())
 
-            gc.collect()
-            torch.cuda.empty_cache()
-            return True
         except Exception as e:
             if self._weight_update_errors_are_fatal():
                 raise
@@ -891,6 +900,22 @@ class VllmInternalWorkerExtension:
                 e,
             )
             return False
+        finally:
+            self._nrl_refit_phase_profiler = None
+
+        with profiler.wall_phase("cleanup"):
+            gc.collect()
+            torch.cuda.empty_cache()
+        metrics = profiler.finish()
+        if metrics:
+            rank = (
+                torch.distributed.get_rank()
+                if torch.distributed.is_available()
+                and torch.distributed.is_initialized()
+                else -1
+            )
+            emit_refit_profile(rank=rank, metrics=metrics)
+        return True
 
     @wrap_with_nvtx_name(
         "vllm_internal_worker_extension/update_weights_from_collective"
@@ -910,14 +935,7 @@ class VllmInternalWorkerExtension:
         self._nrl_refit_phase_profiler = profiler
 
         def profiled_load_weights(weights: list[tuple[str, torch.Tensor]]) -> None:
-            profiler.increment("received_batch_count")
-            profiler.increment("received_tensor_count", len(weights))
-            profiler.increment(
-                "received_weight_bytes",
-                sum(tensor.numel() * tensor.element_size() for _, tensor in weights),
-            )
-            with profiler.cuda_phase("load_weights"):
-                self._load_weights(weights)
+            profile_weight_batch(profiler, weights, self._load_weights)
 
         post_unpack_func = (
             profiled_load_weights if profiler.enabled else self._load_weights
