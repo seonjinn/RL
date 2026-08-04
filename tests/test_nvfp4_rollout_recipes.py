@@ -68,6 +68,8 @@ def test_nvfp4_rollout_recipe_contract(
     assert config["loss_fn"]["use_importance_sampling_correction"] is True
     assert generation["real_quant"] is True
     assert generation["quant_cfg"] == expected_quant_cfg
+    assert "*.shared_expert.*" in generation["real_quant_ignore"]
+    assert "*.shared_experts.*" in generation["real_quant_ignore"]
     assert config["cluster"]["num_nodes"] == 4
     assert config["cluster"]["gpus_per_node"] == 4
 
