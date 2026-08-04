@@ -11,11 +11,11 @@ LINEAR_BACKEND=${LINEAR_BACKEND:-flashinfer_cutlass}
 ACCOUNT=${SLURM_ACCOUNT:-coreai_chef_posttrain}
 PARTITION=${PARTITION:-batch}
 GPUS_PER_NODE=${GPUS_PER_NODE:-8}
-CLUSTER_GPUS_PER_NODE=${CLUSTER_GPUS_PER_NODE:-${GPUS_PER_NODE}}
 MAX_STEPS=${MAX_STEPS:-5}
 WALLTIME=${WALLTIME:-04:00:00}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
 DISABLE_CUSTOM_ALL_REDUCE=${DISABLE_CUSTOM_ALL_REDUCE:-false}
+VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM:-0}
 
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna}
 RUNTIME_ROOT=${RUNTIME_ROOT:-${WORK_ROOT}/containers/nemo-rl-nightly-refresh}
@@ -43,7 +43,7 @@ case "${MODEL}" in
       cluster.segment_size=1
       policy.generation.colocated.enabled=false
       policy.generation.colocated.resources.num_nodes=2
-      policy.generation.colocated.resources.gpus_per_node="${CLUSTER_GPUS_PER_NODE}"
+      policy.generation.colocated.resources.gpus_per_node="${GPUS_PER_NODE}"
       policy.generation.refit_transport=null
       policy.megatron_cfg.expert_tensor_parallel_size=1
       policy.generation.vllm_cfg.tensor_parallel_size=1
@@ -84,13 +84,8 @@ if [[ "${GPUS_PER_NODE}" != 8 ]]; then
   exit 2
 fi
 
-if [[ "${CLUSTER_GPUS_PER_NODE}" != 4 && "${CLUSTER_GPUS_PER_NODE}" != 8 ]]; then
-  echo "CLUSTER_GPUS_PER_NODE must be 4 or 8" >&2
-  exit 2
-fi
-
-if [[ "${MODEL}" == qwen30b && "${CLUSTER_GPUS_PER_NODE}" != 8 ]]; then
-  echo "The validated qwen30b topology requires CLUSTER_GPUS_PER_NODE=8" >&2
+if [[ "${VLLM_ALLREDUCE_USE_SYMM_MEM}" != 0 && "${VLLM_ALLREDUCE_USE_SYMM_MEM}" != 1 ]]; then
+  echo "VLLM_ALLREDUCE_USE_SYMM_MEM must be 0 or 1" >&2
   exit 2
 fi
 
@@ -156,6 +151,7 @@ export NEMO_RL_VENV_DIR=/tmp/nemo-rl-pr3478-cutedsl-${ARM}-workers
 export NVTE_CUDA_ARCHS=100
 export PYTHONPATH=${REPO}
 export TORCH_CUDA_ARCH_LIST=10.0
+export VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM}
 export UV_CACHE_DIR=/root/.cache/uv
 export UV_PROJECT_ENVIRONMENT=${CACHE_ROOT}/driver-venv
 export UV_PYTHON_INSTALL_DIR=${CACHE_ROOT}/uv-python
@@ -165,7 +161,7 @@ printf 'NEMO_RL_SOURCE_COMMIT=%s\n' "\$(git rev-parse HEAD)"
 uv run --frozen examples/run_grpo.py \
   --config ${CONFIG} \
   cluster.num_nodes=${TOTAL_NODES} \
-  cluster.gpus_per_node=${CLUSTER_GPUS_PER_NODE} \
+  cluster.gpus_per_node=${GPUS_PER_NODE} \
   ${MODEL_OVERRIDES[*]} \
   ++policy.generation.vllm_kwargs.linear_backend=${LINEAR_BACKEND} \
   policy.generation.vllm_cfg.use_tqdm=false \
