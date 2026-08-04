@@ -27,6 +27,10 @@ from nemo_rl.models.generation.vllm.checkpoint_engine import (
     preinit_nixl_from_vllm_config,
     resolve_rollout_rank,
 )
+from nemo_rl.models.generation.vllm.refit_profile import (
+    RefitPhaseProfiler,
+    profile_vllm_layerwise_kernels,
+)
 from nemo_rl.models.policy.utils import (
     IPCProtocol,
     calculate_aligned_size,
@@ -73,13 +77,15 @@ class IPCWeightManifestError(RuntimeError):
 
 def _detach_pending_layerwise_weights(
     model: torch.nn.Module, source_storage_ptrs: set[int]
-) -> None:
+) -> tuple[int, int]:
     """Detach deferred reload weights from a reusable transport buffer."""
     if not source_storage_ptrs:
-        return
+        return 0, 0
 
     from vllm.model_executor.model_loader.reload.layerwise import get_layerwise_info
 
+    clone_count = 0
+    clone_bytes = 0
     for module in model.modules():
         info = get_layerwise_info(module)
         for _, arguments in info.loaded_weights:
@@ -88,6 +94,9 @@ def _detach_pending_layerwise_weights(
                 continue
             if loaded_weight.untyped_storage().data_ptr() in source_storage_ptrs:
                 arguments.arguments["loaded_weight"] = loaded_weight.clone()
+                clone_count += 1
+                clone_bytes += loaded_weight.numel() * loaded_weight.element_size()
+    return clone_count, clone_bytes
 
 
 class _IPCWeightManifest:
@@ -204,6 +213,7 @@ class VllmInternalWorkerExtension:
     _sparse_delta_applier: Any = None
     _nrl_named_parameters: dict[str, torch.nn.Parameter]
     _nrl_layerwise_reload_active: bool = False
+    _nrl_refit_phase_profiler: RefitPhaseProfiler | None = None
 
     def _get_named_parameters(self) -> dict[str, torch.nn.Parameter]:
         params = getattr(self, "_nrl_named_parameters", None)
@@ -225,9 +235,20 @@ class VllmInternalWorkerExtension:
         try:
             self.model_runner.model.load_weights(weights=policy_weights)
         finally:
-            _detach_pending_layerwise_weights(
-                self.model_runner.model, source_storage_ptrs
-            )
+            profiler = self._nrl_refit_phase_profiler
+            if profiler is not None and not profiler.enabled:
+                profiler = None
+            if profiler is None:
+                clone_count, clone_bytes = _detach_pending_layerwise_weights(
+                    self.model_runner.model, source_storage_ptrs
+                )
+            else:
+                with profiler.cuda_phase("transport_buffer_clone"):
+                    clone_count, clone_bytes = _detach_pending_layerwise_weights(
+                        self.model_runner.model, source_storage_ptrs
+                    )
+                profiler.increment("transport_clone_count", clone_count)
+                profiler.increment("transport_clone_bytes", clone_bytes)
 
     def _load_hf_weights(self, policy_weights: list[tuple[str, torch.Tensor]]) -> None:
         from nemo_rl.models.generation.vllm.quantization import fp8
@@ -702,17 +723,31 @@ class VllmInternalWorkerExtension:
             )
 
             model = self.model_runner.model
+            profiler = self._nrl_refit_phase_profiler
+            if profiler is not None and not profiler.enabled:
+                profiler = None
 
             def finalize() -> None:
-                with torch.device(self.device):
-                    finalize_layerwise_reload(model, self.model_config)
-                    self._maybe_process_mtp_drafter_after_loading()
-                torch.accelerator.synchronize()
+                if profiler is None:
+                    with torch.device(self.device):
+                        finalize_layerwise_reload(model, self.model_config)
+                        self._maybe_process_mtp_drafter_after_loading()
+                    torch.accelerator.synchronize()
+                else:
+                    with profiler.wall_phase("layerwise_finalize"):
+                        with torch.device(self.device):
+                            finalize_layerwise_reload(model, self.model_config)
+                            self._maybe_process_mtp_drafter_after_loading()
 
             try:
                 with set_current_vllm_config(self.model_runner.vllm_config):
-                    with torch.device(self.device):
-                        initialize_layerwise_reload(model)
+                    if profiler is None:
+                        with torch.device(self.device):
+                            initialize_layerwise_reload(model)
+                    else:
+                        with profiler.wall_phase("layerwise_initialize"):
+                            with torch.device(self.device):
+                                initialize_layerwise_reload(model)
                     self._nrl_layerwise_reload_active = True
                     yield finalize
             except Exception as error:
@@ -861,20 +896,40 @@ class VllmInternalWorkerExtension:
     )
     def update_weights_from_collective(self) -> bool:
         """Update the model weights from collective communication."""
+        import json
+        import os
+
         assert self.state_dict_info is not None, (
             "state_dict_info is not prepared. "
             "Please call prepare_refit_info when initializing the worker."
         )
 
+        profiler = RefitPhaseProfiler(
+            enabled=os.environ.get("NRL_PROFILE_REFIT_PHASES") == "1"
+        )
+        self._nrl_refit_phase_profiler = profiler
+
+        def profiled_load_weights(weights: list[tuple[str, torch.Tensor]]) -> None:
+            profiler.increment("received_batch_count")
+            profiler.increment("received_tensor_count", len(weights))
+            profiler.increment(
+                "received_weight_bytes",
+                sum(tensor.numel() * tensor.element_size() for _, tensor in weights),
+            )
+            with profiler.cuda_phase("load_weights"):
+                self._load_weights(weights)
+
         try:
-            with self._weight_update_lifecycle("collective") as finalize:
-                packed_broadcast_consumer(
-                    iterator=iter(self.state_dict_info.items()),
-                    group=self.model_update_group,
-                    src=0,
-                    post_unpack_func=self._load_weights,
-                )
-                finalize()
+            with profile_vllm_layerwise_kernels(profiler):
+                with self._weight_update_lifecycle("collective") as finalize:
+                    with profiler.wall_phase("receive_and_load"):
+                        packed_broadcast_consumer(
+                            iterator=iter(self.state_dict_info.items()),
+                            group=self.model_update_group,
+                            src=0,
+                            post_unpack_func=profiled_load_weights,
+                        )
+                    finalize()
 
         except Exception as e:
             if self._weight_update_errors_are_fatal():
@@ -884,9 +939,24 @@ class VllmInternalWorkerExtension:
                 e,
             )
             return False
+        finally:
+            self._nrl_refit_phase_profiler = None
 
-        gc.collect()
-        torch.cuda.empty_cache()
+        with profiler.wall_phase("cleanup"):
+            gc.collect()
+            torch.cuda.empty_cache()
+        metrics = profiler.finish()
+        if metrics:
+            rank = (
+                torch.distributed.get_rank()
+                if torch.distributed.is_available()
+                and torch.distributed.is_initialized()
+                else -1
+            )
+            logger.info(
+                "[NRL_REFIT_PROFILE] %s",
+                json.dumps({"rank": rank, **metrics}, sort_keys=True),
+            )
         return True
 
     def update_weights_from_decoded_sparse_payload(

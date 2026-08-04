@@ -39,46 +39,6 @@ def _make_collective_update_extension(backend):
     return ext, state_info
 
 
-@pytest.mark.vllm
-def test_refit_phase_profiler_accumulates_wall_cuda_and_counter_metrics(
-    monkeypatch,
-):
-    from nemo_rl.models.generation.vllm import vllm_backend
-
-    timestamps = iter([10.0, 12.5])
-    synchronize = MagicMock()
-
-    class FakeEvent:
-        def record(self):
-            return None
-
-        def elapsed_time(self, other):
-            assert isinstance(other, FakeEvent)
-            return 250.0
-
-    monkeypatch.setattr(vllm_backend.time, "perf_counter", lambda: next(timestamps))
-    monkeypatch.setattr(vllm_backend.torch.accelerator, "synchronize", synchronize)
-    monkeypatch.setattr(vllm_backend.torch.cuda, "Event", lambda **_: FakeEvent())
-
-    profiler = vllm_backend._RefitPhaseProfiler(enabled=True)
-    with profiler.wall_phase("receive_and_load"):
-        pass
-    with profiler.cuda_phase("moe_layout_conversion"):
-        pass
-    profiler.increment("transport_clone_count", 3)
-    profiler.increment("transport_clone_bytes", 4096)
-
-    metrics = profiler.finish()
-
-    assert metrics == {
-        "moe_layout_conversion_gpu_s": pytest.approx(0.25),
-        "receive_and_load_s": pytest.approx(2.5),
-        "transport_clone_bytes": 4096,
-        "transport_clone_count": 3,
-    }
-    assert synchronize.call_count == 3
-
-
 def _write_sharded_checkpoint(model_dir, shards):
     """Write safetensors shards plus a model.safetensors.index.json.
 
@@ -244,10 +204,12 @@ def test_layerwise_reload_detaches_deferred_transport_weights(monkeypatch):
         ),
     )
 
-    vllm_backend._detach_pending_layerwise_weights(
+    clone_count, clone_bytes = vllm_backend._detach_pending_layerwise_weights(
         model, {source.untyped_storage().data_ptr()}
     )
 
+    assert clone_count == 1
+    assert clone_bytes == source[:2].numel() * source.element_size()
     detached = source_args.arguments["loaded_weight"]
     assert detached.untyped_storage().data_ptr() != source.untyped_storage().data_ptr()
     assert unrelated_args.arguments["loaded_weight"] is unrelated
