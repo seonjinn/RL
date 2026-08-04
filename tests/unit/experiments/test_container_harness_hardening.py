@@ -99,6 +99,7 @@ def _run_script(
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.pop("SLURM_JOB_ID", None)
+    env.pop("RUNTIME_STAGE_CAPABILITY", None)
     env.update(environment)
     return subprocess.run(
         ["bash", str(EXPERIMENT_DIR / relative_path)],
