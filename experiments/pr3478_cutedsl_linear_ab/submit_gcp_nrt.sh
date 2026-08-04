@@ -11,6 +11,7 @@ LINEAR_BACKEND=${LINEAR_BACKEND:-flashinfer_cutlass}
 ACCOUNT=${SLURM_ACCOUNT:-coreai_chef_posttrain}
 PARTITION=${PARTITION:-batch}
 GPUS_PER_NODE=${GPUS_PER_NODE:-8}
+CLUSTER_GPUS_PER_NODE=${CLUSTER_GPUS_PER_NODE:-${GPUS_PER_NODE}}
 MAX_STEPS=${MAX_STEPS:-5}
 WALLTIME=${WALLTIME:-04:00:00}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
@@ -42,7 +43,7 @@ case "${MODEL}" in
       cluster.segment_size=1
       policy.generation.colocated.enabled=false
       policy.generation.colocated.resources.num_nodes=2
-      policy.generation.colocated.resources.gpus_per_node="${GPUS_PER_NODE}"
+      policy.generation.colocated.resources.gpus_per_node="${CLUSTER_GPUS_PER_NODE}"
       policy.generation.refit_transport=null
       policy.megatron_cfg.expert_tensor_parallel_size=1
       policy.generation.vllm_cfg.tensor_parallel_size=1
@@ -78,13 +79,18 @@ case "${ACTION}" in
     ;;
 esac
 
-if [[ "${GPUS_PER_NODE}" != 4 && "${GPUS_PER_NODE}" != 8 ]]; then
-  echo "GCP-NRT B200 experiments require GPUS_PER_NODE=4 or 8" >&2
+if [[ "${GPUS_PER_NODE}" != 8 ]]; then
+  echo "GCP-NRT ray.sub requires GPUS_PER_NODE=8 to claim the full B200 node" >&2
   exit 2
 fi
 
-if [[ "${MODEL}" == qwen30b && "${GPUS_PER_NODE}" != 8 ]]; then
-  echo "The validated qwen30b topology requires GPUS_PER_NODE=8" >&2
+if [[ "${CLUSTER_GPUS_PER_NODE}" != 4 && "${CLUSTER_GPUS_PER_NODE}" != 8 ]]; then
+  echo "CLUSTER_GPUS_PER_NODE must be 4 or 8" >&2
+  exit 2
+fi
+
+if [[ "${MODEL}" == qwen30b && "${CLUSTER_GPUS_PER_NODE}" != 8 ]]; then
+  echo "The validated qwen30b topology requires CLUSTER_GPUS_PER_NODE=8" >&2
   exit 2
 fi
 
@@ -159,7 +165,7 @@ printf 'NEMO_RL_SOURCE_COMMIT=%s\n' "\$(git rev-parse HEAD)"
 uv run --frozen examples/run_grpo.py \
   --config ${CONFIG} \
   cluster.num_nodes=${TOTAL_NODES} \
-  cluster.gpus_per_node=${GPUS_PER_NODE} \
+  cluster.gpus_per_node=${CLUSTER_GPUS_PER_NODE} \
   ${MODEL_OVERRIDES[*]} \
   ++policy.generation.vllm_kwargs.linear_backend=${LINEAR_BACKEND} \
   policy.generation.vllm_cfg.use_tqdm=false \
