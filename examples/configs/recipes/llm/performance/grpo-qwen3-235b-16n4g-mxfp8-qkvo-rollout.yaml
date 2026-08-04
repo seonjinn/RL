@@ -4,3 +4,4 @@ policy:
     vllm_cfg:
       quantization_ignored_layer_kws:
         - lm_head
+        - mlp.gate

@@ -194,3 +194,16 @@ def test_qwen3_235b_mxfp8_recipes_keep_baseline_runtime_knobs() -> None:
         assert "max_num_steps" not in grpo_config
         assert "val_batch_size" not in grpo_config
         assert "max_val_samples" not in grpo_config
+
+
+def test_qkvo_mxfp8_recipes_keep_router_and_lm_head_in_bf16() -> None:
+    for case_name in (
+        "grpo-qwen3-30ba3b-4n4g-mxfp8-qkvo-rollout",
+        "grpo-qwen3-235b-16n4g-mxfp8-qkvo-rollout",
+    ):
+        recipe = _load_yaml(PERF_CONFIG_DIR / f"{case_name}.yaml")
+        ignored = recipe["policy"]["generation"]["vllm_cfg"][
+            "quantization_ignored_layer_kws"
+        ]
+
+        assert ignored == ["lm_head", "mlp.gate"]
