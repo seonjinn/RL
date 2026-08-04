@@ -394,17 +394,14 @@ def test_load_weights_targets_canonical_storage_for_cutedsl_linear(
     model_runner = types.SimpleNamespace(model=model)
 
     monkeypatch.setattr(fp8, "_is_fp8_weight", lambda _name, _model: True)
+    monkeypatch.setattr(fp8, "_is_mxfp8_weight", lambda _name, _model: True)
     monkeypatch.setattr(fp8, "_get_module_from_param_name", lambda _model, _name: layer)
     monkeypatch.setattr(
         mxfp8_utils,
         "mxfp8_e4m3_quantize",
         lambda value: (value, torch.ones(*value.shape[:-1], 1)),
     )
-    fp8.global_fp8_config = fp8.FP8Config(
-        use_fp8_weights=True,
-        model_parallel_size=1,
-        is_mx=True,
-    )
+    fp8.global_fp8_config = None
 
     fp8.load_weights([("layer.weight", torch.ones(4, 32))], model_runner)
 

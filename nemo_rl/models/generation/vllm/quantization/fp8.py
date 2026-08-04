@@ -447,8 +447,16 @@ def _is_fp8_weight(name, model):
     return name in fp8_state.fp8_param_names
 
 
+def _is_mxfp8_weight(name: str, model: Any) -> bool:
+    module = _get_module_from_param_name(model, name)
+    quant_method = getattr(module, "quant_method", None)
+    return type(quant_method).__name__ in {
+        "ModelOptMxFp8FusedMoE",
+        "ModelOptMxFp8LinearMethod",
+    }
+
+
 def load_weights(weights, model_runner):
-    global global_fp8_config
     weights_quantized = []
     model = model_runner.model
 
@@ -457,7 +465,8 @@ def load_weights(weights, model_runner):
             weights_quantized.append((k, v))
             continue
         # Cast the weight into fp8 and its scale factor
-        if global_fp8_config.is_mx:
+        is_mx = _is_mxfp8_weight(k, model)
+        if is_mx:
             from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
                 mxfp8_e4m3_quantize,
             )
@@ -469,7 +478,7 @@ def load_weights(weights, model_runner):
                 weight_block_size=FP8_BLOCK_QUANT_KWARGS["weight_block_size"],
             )
         param_scale = torch.squeeze(param_scale, dim=-1)
-        if global_fp8_config.is_mx:
+        if is_mx:
             weights_quantized.append([k, param_lp])
             weights_quantized.append([k + "_scale_from_checkpoint", param_scale])
         else:
