@@ -102,21 +102,27 @@ WANDB_KEY_FILE=${CACHE_ROOT}/.wandb_key
 mkdir -p "${EXPERIMENT_ROOT}" "${CACHE_ROOT}" "${WORK_ROOT}/.cache/huggingface"
 WANDB_EXPORT=
 if [[ "${WANDB_ENABLED}" == true ]]; then
-  if [[ -z "${WANDB_API_KEY:-}" && -f "${HOME}/.bashrc" ]]; then
-    WANDB_API_KEY=$(bash -lc \
-      'source ~/.bashrc >/dev/null 2>&1 || true; printf %s "${WANDB_API_KEY:-}"')
-  fi
   if [[ -n "${WANDB_API_KEY:-}" ]]; then
     (umask 077; printf '%s\n' "${WANDB_API_KEY}" >"${WANDB_KEY_FILE}")
-  elif [[ -f "${HOME}/.netrc" ]]; then
-    (umask 077; awk '
-      {
-        for (i = 1; i <= NF; i++) {
-          if ($i == "machine" && $(i + 1) == "api.wandb.ai") found = 1
-          if (found && $i == "password") { print $(i + 1); exit }
+  elif [[ -s "${WANDB_KEY_FILE}" && $(wc -c <"${WANDB_KEY_FILE}") -ge 20 ]]; then
+    :
+  else
+    if [[ -f "${HOME}/.bashrc" ]]; then
+      WANDB_API_KEY=$(bash -lc \
+        'source ~/.bashrc >/dev/null 2>&1 || true; printf %s "${WANDB_API_KEY:-}"')
+    fi
+    if [[ -n "${WANDB_API_KEY:-}" ]]; then
+      (umask 077; printf '%s\n' "${WANDB_API_KEY}" >"${WANDB_KEY_FILE}")
+    elif [[ -f "${HOME}/.netrc" ]]; then
+      (umask 077; awk '
+        {
+          for (i = 1; i <= NF; i++) {
+            if ($i == "machine" && $(i + 1) == "api.wandb.ai") found = 1
+            if (found && $i == "password") { print $(i + 1); exit }
+          }
         }
-      }
-    ' "${HOME}/.netrc" >"${WANDB_KEY_FILE}")
+      ' "${HOME}/.netrc" >"${WANDB_KEY_FILE}")
+    fi
   fi
   if [[ ! -s "${WANDB_KEY_FILE}" || $(wc -c <"${WANDB_KEY_FILE}") -lt 20 ]]; then
     echo "A valid W&B API key was not found in the environment, .bashrc, or .netrc" >&2
