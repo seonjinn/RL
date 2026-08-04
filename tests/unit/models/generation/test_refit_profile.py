@@ -56,7 +56,8 @@ def test_refit_phase_profiler_accumulates_wall_cuda_and_counter_metrics(
     metrics = profiler.finish()
 
     assert metrics == {
-        "moe_layout_conversion_gpu_s": pytest.approx(0.25),
+        "moe_layout_conversion_event_count": 1,
+        "moe_layout_conversion_gpu_sum_s": pytest.approx(0.25),
         "receive_and_load_s": pytest.approx(2.5),
         "transport_clone_bytes": 4096,
         "transport_clone_count": 3,
@@ -88,3 +89,21 @@ def test_refit_phase_profiler_is_noop_when_disabled(monkeypatch):
     assert profiler.finish() == {}
     synchronize.assert_not_called()
     event.assert_not_called()
+
+
+def test_refit_phase_profiler_does_not_mask_profiled_body_error(monkeypatch):
+    module_path = (
+        Path(__file__).parents[4] / "nemo_rl/models/generation/vllm/refit_profile.py"
+    )
+    spec = importlib.util.spec_from_file_location("refit_profile", module_path)
+    assert spec is not None and spec.loader is not None
+    refit_profile = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(refit_profile)
+
+    synchronize = MagicMock(side_effect=[None, RuntimeError("sync failed")])
+    monkeypatch.setattr(refit_profile.torch.accelerator, "synchronize", synchronize)
+
+    profiler = refit_profile.RefitPhaseProfiler(enabled=True)
+    with pytest.raises(ValueError, match="body failed"):
+        with profiler.wall_phase("receive_and_load"):
+            raise ValueError("body failed")

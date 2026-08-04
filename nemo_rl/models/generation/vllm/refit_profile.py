@@ -13,12 +13,16 @@
 # limitations under the License.
 
 import time
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from functools import wraps
 from typing import Any
 
 import torch
+
+
+_VLLM_PATCH_LOCK = threading.RLock()
 
 
 class RefitPhaseProfiler:
@@ -40,7 +44,13 @@ class RefitPhaseProfiler:
         started_at = time.perf_counter()
         try:
             yield
-        finally:
+        except BaseException:
+            try:
+                torch.accelerator.synchronize()
+            except Exception:
+                pass
+            raise
+        else:
             torch.accelerator.synchronize()
             elapsed = time.perf_counter() - started_at
             self._wall_seconds[name] = self._wall_seconds.get(name, 0.0) + elapsed
@@ -56,7 +66,13 @@ class RefitPhaseProfiler:
         start.record()
         try:
             yield
-        finally:
+        except BaseException:
+            try:
+                end.record()
+            except Exception:
+                pass
+            raise
+        else:
             end.record()
             self._cuda_events.setdefault(name, []).append((start, end))
 
@@ -76,7 +92,8 @@ class RefitPhaseProfiler:
             elapsed_seconds = (
                 sum(start.elapsed_time(end) for start, end in event_pairs) / 1000.0
             )
-            metrics[f"{name}_gpu_s"] = elapsed_seconds
+            metrics[f"{name}_event_count"] = len(event_pairs)
+            metrics[f"{name}_gpu_sum_s"] = elapsed_seconds
         metrics.update(self._counters)
         return metrics
 
@@ -90,32 +107,33 @@ def profile_vllm_layerwise_kernels(
         yield
         return
 
-    from vllm.model_executor.layers.fused_moe.oracle import unquantized
-    from vllm.model_executor.model_loader.reload import layerwise
+    with _VLLM_PATCH_LOCK:
+        from vllm.model_executor.layers.fused_moe.oracle import unquantized
+        from vllm.model_executor.model_loader.reload import layerwise
 
-    original_layout_conversion = (
-        unquantized.convert_moe_weights_to_flashinfer_trtllm_block_layout
-    )
-    original_kernel_copy = layerwise._copy_and_restore_kernel_tensors
-
-    @wraps(original_layout_conversion)
-    def profiled_layout_conversion(*args: Any, **kwargs: Any) -> Any:
-        with profiler.cuda_phase("moe_layout_conversion"):
-            return original_layout_conversion(*args, **kwargs)
-
-    @wraps(original_kernel_copy)
-    def profiled_kernel_copy(*args: Any, **kwargs: Any) -> Any:
-        with profiler.cuda_phase("kernel_storage_copy"):
-            return original_kernel_copy(*args, **kwargs)
-
-    unquantized.convert_moe_weights_to_flashinfer_trtllm_block_layout = (
-        profiled_layout_conversion
-    )
-    layerwise._copy_and_restore_kernel_tensors = profiled_kernel_copy
-    try:
-        yield
-    finally:
-        unquantized.convert_moe_weights_to_flashinfer_trtllm_block_layout = (
-            original_layout_conversion
+        original_layout_conversion = (
+            unquantized.convert_moe_weights_to_flashinfer_trtllm_block_layout
         )
-        layerwise._copy_and_restore_kernel_tensors = original_kernel_copy
+        original_kernel_copy = layerwise._copy_and_restore_kernel_tensors
+
+        @wraps(original_layout_conversion)
+        def profiled_layout_conversion(*args: Any, **kwargs: Any) -> Any:
+            with profiler.cuda_phase("moe_layout_conversion"):
+                return original_layout_conversion(*args, **kwargs)
+
+        @wraps(original_kernel_copy)
+        def profiled_kernel_copy(*args: Any, **kwargs: Any) -> Any:
+            with profiler.cuda_phase("kernel_storage_copy"):
+                return original_kernel_copy(*args, **kwargs)
+
+        unquantized.convert_moe_weights_to_flashinfer_trtllm_block_layout = (
+            profiled_layout_conversion
+        )
+        layerwise._copy_and_restore_kernel_tensors = profiled_kernel_copy
+        try:
+            yield
+        finally:
+            unquantized.convert_moe_weights_to_flashinfer_trtllm_block_layout = (
+                original_layout_conversion
+            )
+            layerwise._copy_and_restore_kernel_tensors = original_kernel_copy

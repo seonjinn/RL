@@ -919,6 +919,10 @@ class VllmInternalWorkerExtension:
             with profiler.cuda_phase("load_weights"):
                 self._load_weights(weights)
 
+        post_unpack_func = (
+            profiled_load_weights if profiler.enabled else self._load_weights
+        )
+
         try:
             with profile_vllm_layerwise_kernels(profiler):
                 with self._weight_update_lifecycle("collective") as finalize:
@@ -927,7 +931,7 @@ class VllmInternalWorkerExtension:
                             iterator=iter(self.state_dict_info.items()),
                             group=self.model_update_group,
                             src=0,
-                            post_unpack_func=profiled_load_weights,
+                            post_unpack_func=post_unpack_func,
                         )
                     finalize()
 

@@ -405,6 +405,7 @@ def test_update_weights_from_collective_processes_weights_after_loading(
         assert list(iterator) == [("model.weight", expected_state_info)]
         assert group is ext.model_update_group
         assert src == 0
+        assert post_unpack_func is load_weights
         post_unpack_func([("model.weight", "weight-value")])
 
     ext._load_weights = load_weights
