@@ -27,6 +27,16 @@ REUSE_NODE = (
     "tests/unit_tests/transformer/test_cuda_graphs.py::"
     "test_te_eval_graph_input_output_buffer_reuse_capability"
 )
+PARTIAL_MOE_TEST = (
+    "tests/unit_tests/transformer/test_partial_moe_cuda_graph_distributed.py::"
+    "test_dropless_partial_moe_cuda_graph_distributed"
+)
+PARTIAL_MOE_ROWS = {
+    "dropless_hybridep_nano16": (16, 4, 4),
+    "dropless_alltoall_qwen30_16": (16, 4, 4),
+    "dropless_alltoall_super32": (32, 8, 4),
+    "dropless_hybridep_qwen235_64": (64, 16, 4),
+}
 
 
 def _load_driver() -> ModuleType:
@@ -172,12 +182,9 @@ def test_manifest_selects_exact_te_capability_nodes() -> None:
         "te_eval_capability_8",
         "execution_kind_bank_8",
         "forward_only_schedule_8",
-        "packed_eval_8",
-        "packed_tp2_cp2_pp2_8",
-        "hybrid_ep16",
-        "hybrid_ep32",
         "router_replay_8",
         "router_replay_1f1b_8",
+        *PARTIAL_MOE_ROWS,
     )
     assert rows["te_eval_capability_8"].pytest_nodes == (
         "tests/unit_tests/transformer/test_cuda_graphs.py::"
@@ -185,6 +192,12 @@ def test_manifest_selects_exact_te_capability_nodes() -> None:
         "tests/unit_tests/transformer/test_cuda_graphs.py::"
         "test_te_eval_graph_input_output_buffer_reuse_capability",
     )
+    for row_id, (world_size, num_nodes, gpus_per_node) in PARTIAL_MOE_ROWS.items():
+        row = rows[row_id]
+        assert row.world_size == world_size
+        assert row.allocations == ((num_nodes, gpus_per_node),)
+        assert row.pytest_filters == ()
+        assert row.pytest_nodes == (f"{PARTIAL_MOE_TEST}[{row_id}]",)
 
 
 def test_submission_preparation_creates_fresh_verified_immutable_snapshots(
@@ -468,7 +481,7 @@ def test_rank_aggregation_rejects_measured_binding_for_another_rank() -> None:
 
 @pytest.mark.parametrize(
     ("num_nodes", "gpus_per_node", "world_size"),
-    ((1, 8, 8), (2, 4, 8), (4, 4, 16), (8, 4, 32)),
+    ((1, 8, 8), (2, 4, 8), (4, 4, 16), (8, 4, 32), (16, 4, 64)),
 )
 def test_allocation_validator_accepts_typed_layouts(
     num_nodes: int, gpus_per_node: int, world_size: int
@@ -487,7 +500,14 @@ def test_allocation_validator_accepts_typed_layouts(
 
 @pytest.mark.parametrize(
     ("num_nodes", "gpus_per_node", "world_size"),
-    ((1, 4, 8), (2, 8, 16), (3, 4, 12), (8, 4, 16)),
+    (
+        (1, 4, 8),
+        (2, 8, 16),
+        (3, 4, 12),
+        (8, 4, 16),
+        (8, 8, 64),
+        (32, 2, 64),
+    ),
 )
 def test_allocation_validator_rejects_mismatch_or_unknown_layout(
     num_nodes: int, gpus_per_node: int, world_size: int

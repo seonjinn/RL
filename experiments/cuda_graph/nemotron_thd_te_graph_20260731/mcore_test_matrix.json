@@ -39,40 +39,6 @@
       ],
       "world_size": 8
     },
-    "packed_eval_8": {
-      "allocations": [{"gpus_per_node": 4, "num_nodes": 2}],
-      "pytest_filters": [],
-      "pytest_nodes": [
-        "tests/unit_tests/transformer/test_cuda_graphs.py::test_packed_eval_partial_scopes_replay_changed_values",
-        "tests/unit_tests/transformer/test_cuda_graphs.py::test_packed_eval_shared_expert_scope_contract"
-      ],
-      "world_size": 8
-    },
-    "packed_tp2_cp2_pp2_8": {
-      "allocations": [{"gpus_per_node": 4, "num_nodes": 2}],
-      "pytest_filters": [],
-      "pytest_nodes": [
-        "tests/unit_tests/transformer/test_cuda_graphs.py::test_packed_eval_partial_scopes_match_eager_across_parallel_topologies",
-        "tests/unit_tests/transformer/test_cuda_graphs.py::test_training_eval_bank_switch_preserves_scope_and_overlap"
-      ],
-      "world_size": 8
-    },
-    "hybrid_ep16": {
-      "allocations": [{"gpus_per_node": 4, "num_nodes": 4}],
-      "pytest_filters": [],
-      "pytest_nodes": [
-        "tests/unit_tests/transformer/test_cuda_graphs.py::test_hybrid_ep_fixed_capacity_eval_scope[ep16]"
-      ],
-      "world_size": 16
-    },
-    "hybrid_ep32": {
-      "allocations": [{"gpus_per_node": 4, "num_nodes": 8}],
-      "pytest_filters": [],
-      "pytest_nodes": [
-        "tests/unit_tests/transformer/test_cuda_graphs.py::test_hybrid_ep_fixed_capacity_eval_scope[ep32]"
-      ],
-      "world_size": 32
-    },
     "router_replay_8": {
       "allocations": [{"gpus_per_node": 4, "num_nodes": 2}],
       "pytest_filters": [],
@@ -94,6 +60,38 @@
         "tests/unit_tests/transformer/test_te_cuda_graph_bank.py::test_training_1f1b_preserves_routes_for_multiple_outstanding_microbatches"
       ],
       "world_size": 8
+    },
+    "dropless_hybridep_nano16": {
+      "allocations": [{"gpus_per_node": 4, "num_nodes": 4}],
+      "pytest_filters": [],
+      "pytest_nodes": [
+        "tests/unit_tests/transformer/test_partial_moe_cuda_graph_distributed.py::test_dropless_partial_moe_cuda_graph_distributed[dropless_hybridep_nano16]"
+      ],
+      "world_size": 16
+    },
+    "dropless_alltoall_qwen30_16": {
+      "allocations": [{"gpus_per_node": 4, "num_nodes": 4}],
+      "pytest_filters": [],
+      "pytest_nodes": [
+        "tests/unit_tests/transformer/test_partial_moe_cuda_graph_distributed.py::test_dropless_partial_moe_cuda_graph_distributed[dropless_alltoall_qwen30_16]"
+      ],
+      "world_size": 16
+    },
+    "dropless_alltoall_super32": {
+      "allocations": [{"gpus_per_node": 4, "num_nodes": 8}],
+      "pytest_filters": [],
+      "pytest_nodes": [
+        "tests/unit_tests/transformer/test_partial_moe_cuda_graph_distributed.py::test_dropless_partial_moe_cuda_graph_distributed[dropless_alltoall_super32]"
+      ],
+      "world_size": 32
+    },
+    "dropless_hybridep_qwen235_64": {
+      "allocations": [{"gpus_per_node": 4, "num_nodes": 16}],
+      "pytest_filters": [],
+      "pytest_nodes": [
+        "tests/unit_tests/transformer/test_partial_moe_cuda_graph_distributed.py::test_dropless_partial_moe_cuda_graph_distributed[dropless_hybridep_qwen235_64]"
+      ],
+      "world_size": 64
     }
   },
   "schema_version": 1

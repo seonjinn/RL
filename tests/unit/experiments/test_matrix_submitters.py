@@ -16,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 EXPERIMENT_DIR = (
     REPO_ROOT / "experiments" / "cuda_graph" / "nemotron_thd_te_graph_20260731"
 )
+MCORE_DRIVER_PATH = EXPERIMENT_DIR / "scripts" / "run_mcore_training.py"
 BASELINE = "scopes/00_baseline_no_cg.sh"
 NANO_PERFORMANCE_SCOPES = (
     BASELINE,
@@ -161,6 +162,74 @@ def _load_gate_validator():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _load_mcore_driver():
+    spec = importlib.util.spec_from_file_location(
+        "run_mcore_training_for_matrix_test", MCORE_DRIVER_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(spec.name, None)
+    return module
+
+
+def test_mcore_candidate_archive_collection_resolves_every_literal_manifest_node(
+    tmp_path: Path,
+) -> None:
+    module = _load_mcore_driver()
+    source_root = tmp_path / "candidate"
+    test_path = source_root / "tests" / "test_candidate.py"
+    test_path.parent.mkdir(parents=True)
+    test_path.write_text(
+        "import pytest\n\n"
+        "@pytest.mark.parametrize('case', ('alpha', 'beta'), ids=('alpha', 'beta'))\n"
+        "def test_replay(case):\n"
+        "    pass\n"
+    )
+    row = module.MatrixRow(
+        row_id="candidate_row",
+        world_size=8,
+        allocations=((2, 4),),
+        pytest_nodes=("tests/test_candidate.py::test_replay[beta]",),
+        pytest_filters=(),
+    )
+
+    assert module.validate_pytest_node_collection(
+        source_root=source_root,
+        rows={row.row_id: row},
+        python_executable=Path(sys.executable),
+    ) == ("tests/test_candidate.py::test_replay[beta]",)
+
+    missing = module.MatrixRow(
+        row_id="missing_row",
+        world_size=8,
+        allocations=((2, 4),),
+        pytest_nodes=("tests/test_candidate.py::test_replay[absent]",),
+        pytest_filters=(),
+    )
+    with pytest.raises(ValueError, match="missing_row.*absent"):
+        module.validate_pytest_node_collection(
+            source_root=source_root,
+            rows={row.row_id: row, missing.row_id: missing},
+            python_executable=Path(sys.executable),
+        )
+
+
+def test_mcore_worker_validates_entire_candidate_matrix_before_execution() -> None:
+    source = MCORE_DRIVER_PATH.read_text()
+
+    validation = source.index("validate_pytest_node_collection(", source.index("def main"))
+    execution = source.index("for node, command in zip(", source.index("def main"))
+    validation_call = source[validation:execution]
+
+    assert validation < execution
+    assert "rows=rows" in validation_call
+    assert "rows={row.row_id: row}" not in validation_call
 
 
 def _run_submitter(

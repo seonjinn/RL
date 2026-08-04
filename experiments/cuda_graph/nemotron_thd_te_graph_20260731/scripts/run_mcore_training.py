@@ -35,7 +35,9 @@ SCHEDULER_JOB_ID = re.compile(r"^[1-9][0-9]*$")
 RUN_IDENTITY = re.compile(r"^slurm-[1-9][0-9]*-[0-9]+-[0-9a-f]{64}$")
 ROW_ID = re.compile(r"^[a-z][a-z0-9_]*$")
 PYTEST_NODE = re.compile(r"^tests/[A-Za-z0-9_./-]+\.py::[A-Za-z0-9_\[\].-]+$")
-ALLOWED_ALLOCATIONS = frozenset(((1, 8, 8), (2, 4, 8), (4, 4, 16), (8, 4, 32)))
+ALLOWED_ALLOCATIONS = frozenset(
+    ((1, 8, 8), (2, 4, 8), (4, 4, 16), (8, 4, 32), (16, 4, 64))
+)
 CAPABILITY_DEVICE_FIELDS = frozenset(
     ("global_rank", "node_rank", "local_rank", "cuda_device_index")
 )
@@ -289,6 +291,55 @@ def pytest_commands(
         )
         for node in row.pytest_nodes
     )
+
+
+def validate_pytest_node_collection(
+    *,
+    source_root: Path,
+    rows: Mapping[str, MatrixRow],
+    python_executable: Path,
+) -> tuple[str, ...]:
+    """Require every literal node to collect from the exact candidate source tree."""
+    expected_nodes = tuple(
+        dict.fromkeys(node for row in rows.values() for node in row.pytest_nodes)
+    )
+    if not expected_nodes:
+        raise ValueError("candidate collection requires at least one literal pytest node")
+    environment = os.environ.copy()
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    completed = subprocess.run(
+        (
+            str(python_executable),
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            *expected_nodes,
+        ),
+        cwd=source_root,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    collected = frozenset(
+        line.strip()
+        for line in completed.stdout.splitlines()
+        if line.strip().startswith("tests/") and "::" in line
+    )
+    missing = tuple(node for node in expected_nodes if node not in collected)
+    if completed.returncode != 0 or missing:
+        owners = tuple(
+            f"{row.row_id}: {node}"
+            for row in rows.values()
+            for node in row.pytest_nodes
+            if node in missing
+        )
+        detail = "; ".join(owners) or completed.stderr.strip() or "collection failed"
+        raise ValueError(f"candidate archive is missing literal pytest nodes: {detail}")
+    return expected_nodes
 
 
 def validate_allocation(*, num_nodes: int, gpus_per_node: int, world_size: int) -> int:
@@ -928,6 +979,11 @@ def main() -> int:
         source_root=args.source_root,
         candidate_sha=args.candidate_sha,
         expected_sha256=args.snapshot_sha256,
+    )
+    validate_pytest_node_collection(
+        source_root=args.source_root,
+        rows=rows,
+        python_executable=Path(sys.executable),
     )
 
     node_results: list[dict[str, Any]] = []
