@@ -33,6 +33,7 @@ from nemo_rl.weight_sync.checkpoint_engine_config import (
 _EXTRA_ENV_VARS = (
     "VLLM_QUANT_CFG",
     "VLLM_MODELOPT_REAL_QUANT",
+    "VLLM_MODELOPT_CALIBRATION_PATH",
     "PYTHONPATH",
 )
 
@@ -56,6 +57,7 @@ def _configure_quant_engine_kwargs(
     )
     real_quant = bool(cfg.get("real_quant"))
     if real_quant:
+        # ModelOpt is optional outside quantized generation workers.
         from nemo_rl.modelopt.models.generation.vllm_modelopt import (
             quantization_method_for_mode,
             register_nemo_modelopt_nvfp4,
@@ -72,6 +74,16 @@ def _configure_quant_engine_kwargs(
         register_nemo_modelopt_nvfp4()
         os.environ.pop("VLLM_QUANT_CFG", None)
         os.environ["VLLM_MODELOPT_REAL_QUANT"] = "1"
+        os.environ.pop("VLLM_MODELOPT_CALIBRATION_PATH", None)
+        calibration_path = cfg.get("real_quant_calibration_path")
+        if mode == "w4a4" and calibration_path is not None:
+            if not isinstance(calibration_path, str) or not calibration_path:
+                raise ValueError(
+                    "real_quant_calibration_path must be a non-empty path or null."
+                )
+            os.environ["VLLM_MODELOPT_CALIBRATION_PATH"] = os.path.abspath(
+                os.path.expanduser(calibration_path)
+            )
 
         hf_overrides = llm_kwargs.setdefault("hf_overrides", {})
         hf_overrides["quantization_config"] = build_vllm_modelopt_nvfp4_config(
@@ -86,6 +98,7 @@ def _configure_quant_engine_kwargs(
         # Expert fakequant needs a decomposed MoE path; explicit user config still wins.
         llm_kwargs.setdefault("moe_backend", "triton")
         os.environ.pop("VLLM_MODELOPT_REAL_QUANT", None)
+        os.environ.pop("VLLM_MODELOPT_CALIBRATION_PATH", None)
         os.environ.pop("VLLM_QUANT_CFG", None)
         if cfg["quant_cfg"]:
             os.environ["VLLM_QUANT_CFG"] = _quant_cfg_for_worker_env(cfg["quant_cfg"])
