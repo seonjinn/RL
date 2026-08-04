@@ -78,6 +78,12 @@ weight and scale buffers after every refit. A stock kernel without this contract
 fails during model preparation; NeMo-RL does not silently replace the requested
 backend.
 
+For example, an incompatible stock CuTeDSL kernel fails at startup with:
+
+```text
+RuntimeError: Unsupported MXFP8 linear backend for refit: backend='FLASHINFER_CUTEDSL', kernel=None. A non-CUTLASS kernel must declare preserves_checkpoint_weight_scale_for_refit=True and implement process_weights_after_loading(layer).
+```
+
 An exact TRTLLM tactic-table miss is not a refit error. The TRTLLM kernel stays
 selected and uses its default tactic (`tactic=-1`). Backend or layer-family
 fallback remains a vLLM policy decision.

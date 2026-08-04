@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib.util
+import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -38,6 +41,131 @@ def fp8_module():
         fp8.global_fp8_config = old_config
         fp8.fp8_state = old_state
         fp8.fp8_patches_applied = old_patches_applied
+
+
+@pytest.fixture()
+def mxfp8_linear_module(monkeypatch):
+    """Load the MXFP8 helper with only its vLLM import boundary stubbed."""
+
+    class Tensor:
+        def __init__(self, shape, value):
+            self.shape = tuple(shape)
+            self.value = value
+            self.ndim = len(shape)
+
+        @property
+        def data(self):
+            return self
+
+        def __getitem__(self, _index):
+            return self
+
+        def __add__(self, value):
+            return Tensor(self.shape, self.value + value)
+
+        def clone(self):
+            return Tensor(self.shape, self.value)
+
+        def contiguous(self):
+            return self
+
+        def copy_(self, source):
+            self.value = source.value
+            return self
+
+    class Parameter:
+        def __init__(self, data, **_kwargs):
+            self.data = data
+
+        @property
+        def ndim(self):
+            return self.data.ndim
+
+        def copy_(self, source):
+            self.data.copy_(source.data)
+            return self
+
+    torch = types.SimpleNamespace(
+        nn=types.SimpleNamespace(Parameter=Parameter),
+        zeros=lambda *shape: Tensor(shape, 0.0),
+        ones=lambda *shape: Tensor(shape, 1.0),
+    )
+
+    def add_module(name, **attributes):
+        module = types.ModuleType(name)
+        module.__path__ = []
+        for attribute, value in attributes.items():
+            setattr(module, attribute, value)
+        monkeypatch.setitem(sys.modules, name, module)
+        return module
+
+    class ModelWeightParameter(Parameter):
+        pass
+
+    add_module("ray")
+    add_module("torch", nn=torch.nn)
+    add_module("accelerate", init_empty_weights=lambda: None)
+    add_module("transformers", AutoConfig=object, AutoModel=object)
+    add_module("nemo_rl")
+    add_module("nemo_rl.models")
+    add_module("nemo_rl.models.generation")
+    add_module("nemo_rl.models.generation.vllm")
+    add_module("nemo_rl.models.generation.vllm.quantization")
+    add_module(
+        "nemo_rl.models.generation.vllm.quantization.mxfp8_utils",
+        pad_flashinfer_scale_k=lambda input_tensor: input_tensor,
+    )
+    add_module("vllm")
+    add_module("vllm.logger", init_logger=lambda _name: object())
+    add_module("vllm.model_executor")
+    add_module("vllm.model_executor.layers")
+    add_module("vllm.model_executor.layers.fused_moe")
+    add_module(
+        "vllm.model_executor.layers.fused_moe.routed_experts", RoutedExperts=object
+    )
+    add_module("vllm.model_executor.layers.fused_moe.runner")
+    add_module(
+        "vllm.model_executor.layers.fused_moe.runner.moe_runner", MoERunner=object
+    )
+    add_module("vllm.model_executor.layers.linear", LinearBase=object)
+    add_module("vllm.model_executor.layers.quantization")
+    mxfp8_linear_backend = types.SimpleNamespace(
+        FLASHINFER_CUTLASS="FLASHINFER_CUTLASS",
+        FLASHINFER_CUTEDSL="FLASHINFER_CUTEDSL",
+    )
+    mxfp8_utils = add_module(
+        "vllm.model_executor.layers.quantization.utils.mxfp8_utils",
+        Mxfp8LinearBackend=mxfp8_linear_backend,
+        swizzle_mxfp8_scale=lambda weight_scale, **_kwargs: weight_scale,
+    )
+    add_module("vllm.model_executor.layers.quantization.utils")
+    add_module(
+        "vllm.model_executor.parameter", ModelWeightParameter=ModelWeightParameter
+    )
+    add_module(
+        "vllm.triton_utils",
+        tl=types.SimpleNamespace(constexpr=object),
+        triton=types.SimpleNamespace(jit=lambda function: function),
+    )
+    add_module("vllm.v1")
+    add_module(
+        "vllm.v1.engine.core",
+        EngineCoreProc=type("EngineCoreProc", (), {"run_engine_core": None}),
+    )
+    add_module(
+        "vllm.v1.engine.utils",
+        CoreEngineProcManager=type("CoreEngineProcManager", (), {"__init__": None}),
+    )
+
+    module_name = "fp8_under_test"
+    source_path = (
+        Path(__file__).parents[4] / "nemo_rl/models/generation/vllm/quantization/fp8.py"
+    )
+    spec = importlib.util.spec_from_file_location(module_name, source_path)
+    fp8 = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, module_name, fp8)
+    spec.loader.exec_module(fp8)
+    return fp8, mxfp8_utils, torch, Tensor
 
 
 def test_init_fp8_uses_mxfp8_quantization_config(fp8_module, monkeypatch):
@@ -272,3 +400,83 @@ def test_mxfp8_linear_rejects_refit_unsafe_cutedsl_kernel(fp8_module):
         fp8_module.process_weights_after_loading_mxfp8_linear(method, layer)
 
     assert method.kernel.__class__.__name__ == "FlashInferCutedslMxfp8LinearKernel"
+
+
+def test_mxfp8_linear_legacy_cutlass_prepares_scales_on_refit(
+    mxfp8_linear_module,
+):
+    fp8, mxfp8_utils, torch, _ = mxfp8_linear_module
+    swizzle_inputs = []
+
+    def swizzle_mxfp8_scale(weight_scale, *, M, K):
+        swizzle_inputs.append((weight_scale.clone(), M, K))
+        return weight_scale + len(swizzle_inputs)
+
+    mxfp8_utils.swizzle_mxfp8_scale = swizzle_mxfp8_scale
+
+    class Layer:
+        def __init__(self):
+            self.weight = torch.nn.Parameter(torch.zeros(2, 32), requires_grad=False)
+            self.weight_scale = torch.nn.Parameter(
+                torch.ones(2, 1), requires_grad=False
+            )
+            self.weight_scale.weight_loader = object()
+
+        def register_parameter(self, name, parameter):
+            setattr(self, name, parameter)
+
+    layer = Layer()
+    method = types.SimpleNamespace(
+        backend=mxfp8_utils.Mxfp8LinearBackend.FLASHINFER_CUTLASS
+    )
+
+    fp8.process_weights_after_loading_mxfp8_linear(method, layer)
+    assert layer.weight_scale.data.value == 2.0
+
+    fp8.process_weights_after_loading_mxfp8_linear(method, layer)
+
+    assert layer.weight_scale.data.value == 3.0
+    assert layer.weight_scale_from_checkpoint.data.value == 1.0
+    assert [(M, K) for _, M, K in swizzle_inputs] == [(2, 32), (2, 32)]
+    assert all(
+        weight_scale.shape == (2, 1) and weight_scale.value == 1.0
+        for weight_scale, _, _ in swizzle_inputs
+    )
+
+
+def test_mxfp8_linear_rejects_legacy_non_cutlass_backend(mxfp8_linear_module):
+    fp8, mxfp8_utils, torch, _ = mxfp8_linear_module
+    layer = types.SimpleNamespace(
+        weight=torch.nn.Parameter(torch.zeros(2, 32), requires_grad=False)
+    )
+    method = types.SimpleNamespace(
+        backend=mxfp8_utils.Mxfp8LinearBackend.FLASHINFER_CUTEDSL
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "FLASHINFER_CUTEDSL.*None.*"
+            "preserves_checkpoint_weight_scale_for_refit=True.*"
+            "process_weights_after_loading\\(layer\\)"
+        ),
+    ):
+        fp8.process_weights_after_loading_mxfp8_linear(method, layer)
+
+
+def test_mxfp8_linear_rejects_non_2d_weight_before_backend_dispatch(
+    mxfp8_linear_module,
+):
+    fp8, _, torch, _ = mxfp8_linear_module
+
+    class Method:
+        @property
+        def backend(self):
+            raise AssertionError("backend dispatch must not run for non-2D weights")
+
+    layer = types.SimpleNamespace(
+        weight=torch.nn.Parameter(torch.zeros(2, 2, 2), requires_grad=False)
+    )
+
+    with pytest.raises(ValueError, match="must be 2D, but got 3D"):
+        fp8.process_weights_after_loading_mxfp8_linear(Method(), layer)

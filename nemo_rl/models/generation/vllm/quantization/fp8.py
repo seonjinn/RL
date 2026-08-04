@@ -670,20 +670,25 @@ def process_weights_after_loading_mxfp8_linear(self, layer) -> None:
     from vllm.model_executor.parameter import ModelWeightParameter
 
     backend = getattr(self, "backend", None)
+    kernel_name = type(kernel).__name__ if kernel is not None else None
     if backend is not None:
         try:
             from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
                 Mxfp8LinearBackend,
             )
         except ImportError:
-            if "FLASHINFER_CUTLASS" not in str(backend):
-                raise AssertionError(
-                    f"Unsupported MXFP8 linear backend for refit: {backend}"
-                )
+            is_legacy_cutlass_backend = "FLASHINFER_CUTLASS" in str(backend)
         else:
-            assert backend == Mxfp8LinearBackend.FLASHINFER_CUTLASS
+            is_legacy_cutlass_backend = backend == Mxfp8LinearBackend.FLASHINFER_CUTLASS
+        if not is_legacy_cutlass_backend:
+            raise RuntimeError(
+                "Unsupported MXFP8 linear backend for refit: "
+                f"backend={backend!r}, kernel={kernel_name!r}. "
+                "A non-CUTLASS kernel must declare "
+                "preserves_checkpoint_weight_scale_for_refit=True and implement "
+                "process_weights_after_loading(layer)."
+            )
     else:
-        kernel_name = type(kernel).__name__ if kernel is not None else None
         if kernel_name != "FlashInferCutlassMxfp8LinearKernel":
             raise RuntimeError(
                 "Unsupported MXFP8 linear kernel for refit: "
