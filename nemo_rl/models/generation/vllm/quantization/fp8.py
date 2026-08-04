@@ -459,14 +459,19 @@ def _is_mxfp8_weight(name: str, model: Any) -> bool:
     }
 
 
-def _restore_vocab_parallel_weight_loader(name: str, model: Any) -> None:
+def _restore_vocab_parallel_weight_attrs(name: str, model: Any) -> None:
     if not name.endswith(".weight"):
         return
 
     module = _get_module_from_param_name(model, name)
-    if isinstance(module, VocabParallelEmbedding) and not hasattr(
-        module.weight, "weight_loader"
-    ):
+    if not isinstance(module, VocabParallelEmbedding):
+        return
+
+    if not hasattr(module.weight, "input_dim"):
+        module.weight.input_dim = 1
+    if not hasattr(module.weight, "output_dim"):
+        module.weight.output_dim = 0
+    if not hasattr(module.weight, "weight_loader"):
         module.weight.weight_loader = module.weight_loader
 
 
@@ -475,7 +480,7 @@ def load_weights(weights, model_runner):
     model = model_runner.model
 
     for k, v in weights:
-        _restore_vocab_parallel_weight_loader(k, model)
+        _restore_vocab_parallel_weight_attrs(k, model)
         if not _is_fp8_weight(k, model):
             weights_quantized.append((k, v))
             continue
