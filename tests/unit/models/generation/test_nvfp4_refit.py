@@ -393,6 +393,10 @@ def test_w4a4_calibration_path_is_absolute_and_forwarded_to_workers(
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("VLLM_MODELOPT_CALIBRATION_PATH", raising=False)
+    monkeypatch.delenv(
+        "VLLM_MODELOPT_CALIBRATION_QUANT_CFG",
+        raising=False,
+    )
     monkeypatch.setattr(vllm_modelopt, "register_nemo_modelopt_nvfp4", lambda: None)
     monkeypatch.setattr(
         vllm_modelopt, "quantization_method_for_mode", lambda mode: f"quant-{mode}"
@@ -406,10 +410,13 @@ def test_w4a4_calibration_path_is_absolute_and_forwarded_to_workers(
         lambda **kwargs: kwargs,
     )
     calibration_path = Path("artifacts/calibration.safetensors")
+    quant_cfg_path = Path("configs/nvfp4.yaml")
+    quant_cfg_path.parent.mkdir()
+    quant_cfg_path.write_text("quant_cfg: nvfp4\n")
 
     vllm_quant_worker._configure_quant_engine_kwargs(
         {
-            "quant_cfg": "NVFP4_DEFAULT_CFG",
+            "quant_cfg": str(quant_cfg_path),
             "real_quant": True,
             "real_quant_calibration_path": str(calibration_path),
         },
@@ -419,7 +426,11 @@ def test_w4a4_calibration_path_is_absolute_and_forwarded_to_workers(
     assert os.environ["VLLM_MODELOPT_CALIBRATION_PATH"] == str(
         calibration_path.resolve()
     )
+    assert os.environ["VLLM_MODELOPT_CALIBRATION_QUANT_CFG"] == str(
+        quant_cfg_path.resolve()
+    )
     assert "VLLM_MODELOPT_CALIBRATION_PATH" in vllm_quant_worker._EXTRA_ENV_VARS
+    assert "VLLM_MODELOPT_CALIBRATION_QUANT_CFG" in vllm_quant_worker._EXTRA_ENV_VARS
 
 
 def test_w4a16_ignores_and_clears_calibration_path(
@@ -430,6 +441,10 @@ def test_w4a16_ignores_and_clears_calibration_path(
     from nemo_rl.modelopt.models.generation import vllm_quant_worker
 
     monkeypatch.setenv("VLLM_MODELOPT_CALIBRATION_PATH", "/stale/calibration")
+    monkeypatch.setenv(
+        "VLLM_MODELOPT_CALIBRATION_QUANT_CFG",
+        "/stale/quant-cfg.yaml",
+    )
     monkeypatch.setattr(vllm_modelopt, "register_nemo_modelopt_nvfp4", lambda: None)
     monkeypatch.setattr(
         vllm_modelopt, "quantization_method_for_mode", lambda mode: f"quant-{mode}"
@@ -453,6 +468,28 @@ def test_w4a16_ignores_and_clears_calibration_path(
     )
 
     assert "VLLM_MODELOPT_CALIBRATION_PATH" not in os.environ
+    assert "VLLM_MODELOPT_CALIBRATION_QUANT_CFG" not in os.environ
+
+
+def test_fake_quant_clears_calibration_quant_cfg_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nemo_rl.modelopt.models.generation import vllm_quant_worker
+
+    monkeypatch.setenv(
+        "VLLM_MODELOPT_CALIBRATION_QUANT_CFG",
+        "/stale/quant-cfg.yaml",
+    )
+
+    vllm_quant_worker._configure_quant_engine_kwargs(
+        {
+            "quant_cfg": "NVFP4_DEFAULT_CFG",
+            "real_quant": False,
+        },
+        {},
+    )
+
+    assert "VLLM_MODELOPT_CALIBRATION_QUANT_CFG" not in os.environ
 
 
 def test_serializer_delegates_through_pinned_modelopt_utils_module(

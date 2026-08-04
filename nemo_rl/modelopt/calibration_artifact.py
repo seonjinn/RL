@@ -38,6 +38,14 @@ _REQUIRED_METADATA_KEYS = frozenset(
 _INPUT_AMAX_SUFFIX = ".input_quantizer._amax"
 
 
+def normalize_quant_cfg_identity(quant_cfg: str) -> str:
+    """Resolve an existing config path while preserving symbolic config names."""
+    config_path = Path(quant_cfg).expanduser()
+    if config_path.is_file():
+        return str(config_path.resolve())
+    return quant_cfg
+
+
 def save_nvfp4_calibration(
     path: str | Path,
     input_amax: Mapping[str, torch.Tensor],

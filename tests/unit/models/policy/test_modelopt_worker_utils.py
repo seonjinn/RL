@@ -88,6 +88,13 @@ def _install_optional_dependency_stubs():
     parallel_state = _ensure_module("megatron.core.parallel_state")
     parallel_state.get_context_parallel_world_size = lambda: 1
 
+    algorithms_utils = _ensure_module("nemo_rl.algorithms.utils")
+    algorithms_utils.get_tokenizer = lambda config: types.SimpleNamespace(
+        pad_token="<pad>",
+        padding_side="right",
+        model_max_length=0,
+    )
+
 
 class _SimpleDataset(torch.utils.data.Dataset):
     def __init__(self, data):
@@ -121,6 +128,44 @@ def test_get_tokenizer_applies_modelopt_calibration_defaults(monkeypatch):
     assert result is tokenizer
     assert tokenizer.padding_side == "left"
     assert tokenizer.model_max_length == 128
+
+
+def test_get_tokenizer_forwards_model_revision(monkeypatch):
+    tokenizer = types.SimpleNamespace(
+        pad_token=None,
+        eos_token="<eos>",
+        padding_side="right",
+        model_max_length=0,
+    )
+    seen = []
+
+    def fake_from_pretrained(model_name, **kwargs):
+        seen.append((model_name, kwargs))
+        return tokenizer
+
+    monkeypatch.setattr(
+        worker_utils.AutoTokenizer,
+        "from_pretrained",
+        fake_from_pretrained,
+    )
+
+    result = worker_utils.get_tokenizer(
+        "checkpoint-path",
+        max_seq_len=128,
+        revision="0123456789abcdef",
+    )
+
+    assert result is tokenizer
+    assert seen == [
+        (
+            "checkpoint-path",
+            {
+                "trust_remote_code": True,
+                "revision": "0123456789abcdef",
+            },
+        )
+    ]
+    assert tokenizer.pad_token == "<eos>"
 
 
 def test_get_forward_loop_func_prefills_random_megatron_data(monkeypatch):

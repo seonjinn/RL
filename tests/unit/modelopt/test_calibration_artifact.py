@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -8,9 +10,11 @@ import torch
 from safetensors import safe_open
 from safetensors.torch import save_file
 
+from examples.modelopt import export_nvfp4_calibration
 from examples.modelopt.export_nvfp4_calibration import collect_nvfp4_input_amax
 from nemo_rl.modelopt.calibration_artifact import (
     load_nvfp4_calibration,
+    normalize_quant_cfg_identity,
     save_nvfp4_calibration,
 )
 from nemo_rl.modelopt.models.generation.nvfp4_refit import NVFP4Calibration
@@ -48,6 +52,46 @@ def _load(
     )
 
 
+class _FakeQuantizer(torch.nn.Module):
+    def __init__(self, value: float, *, enabled: bool = True) -> None:
+        super().__init__()
+        self.is_enabled = enabled
+        self._amax = torch.tensor(value)
+
+
+class _FakeFusedExperts(torch.nn.Module):
+    def __init__(self, *, num_experts: int = 2) -> None:
+        super().__init__()
+        self.num_experts = num_experts
+        self.intermediate_dim = 3
+        self.gate_up_proj = torch.nn.Parameter(torch.ones((num_experts, 6, 4)))
+        self.down_proj = torch.nn.Parameter(torch.ones((num_experts, 4, 3)))
+        self.act_fn = torch.nn.SiLU()
+        self.gate_up_proj_input_quantizer = _FakeQuantizer(12.0)
+        self.down_proj_input_quantizer = _FakeQuantizer(24.0)
+
+
+def _model_with_fused_experts(experts: torch.nn.Module) -> torch.nn.Module:
+    model = torch.nn.Module()
+    model.layers = torch.nn.ModuleList([torch.nn.Module()])
+    model.layers[0].mlp = torch.nn.Module()
+    model.layers[0].mlp.experts = experts
+    return model
+
+
+def test_normalize_quant_cfg_identity_resolves_paths_and_preserves_symbolic_names(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_path = Path("configs/nvfp4.yaml")
+    config_path.parent.mkdir()
+    config_path.write_text("quant_cfg: nvfp4\n")
+
+    assert normalize_quant_cfg_identity(str(config_path)) == str(config_path.resolve())
+    assert normalize_quant_cfg_identity("NVFP4_DEFAULT_CFG") == "NVFP4_DEFAULT_CFG"
+
+
 def test_collect_input_amax_uses_enabled_hf_projection_names() -> None:
     class FakeQuantizer:
         def __init__(self, value: float, *, enabled: bool) -> None:
@@ -71,6 +115,158 @@ def test_collect_input_amax_uses_enabled_hf_projection_names() -> None:
     assert torch.equal(input_amax["gate_proj.weight"], torch.tensor(12.0))
     assert torch.equal(input_amax["up_proj.weight"], torch.tensor(24.0))
     assert all(not value.requires_grad for value in input_amax.values())
+
+
+def test_collect_input_amax_expands_fused_experts_to_exact_hf_names() -> None:
+    input_amax = collect_nvfp4_input_amax(
+        _model_with_fused_experts(_FakeFusedExperts())
+    )
+
+    assert list(input_amax) == [
+        "layers.0.mlp.experts.0.gate_proj.weight",
+        "layers.0.mlp.experts.0.up_proj.weight",
+        "layers.0.mlp.experts.0.down_proj.weight",
+        "layers.0.mlp.experts.1.gate_proj.weight",
+        "layers.0.mlp.experts.1.up_proj.weight",
+        "layers.0.mlp.experts.1.down_proj.weight",
+    ]
+    for expert_idx in range(2):
+        prefix = f"layers.0.mlp.experts.{expert_idx}"
+        assert torch.equal(input_amax[f"{prefix}.gate_proj.weight"], torch.tensor(12.0))
+        assert torch.equal(input_amax[f"{prefix}.up_proj.weight"], torch.tensor(12.0))
+        assert torch.equal(input_amax[f"{prefix}.down_proj.weight"], torch.tensor(24.0))
+
+
+def test_collect_input_amax_rejects_inconsistent_fused_expert_shapes() -> None:
+    experts = _FakeFusedExperts()
+    experts.down_proj = torch.nn.Parameter(torch.ones((3, 4, 3)))
+
+    with pytest.raises(RuntimeError, match="num_experts.*shape"):
+        collect_nvfp4_input_amax(_model_with_fused_experts(experts))
+
+
+def test_collect_input_amax_rejects_missing_fused_expert_quantizer() -> None:
+    experts = _FakeFusedExperts()
+    del experts.down_proj_input_quantizer
+
+    with pytest.raises(RuntimeError, match="down_proj_input_quantizer"):
+        collect_nvfp4_input_amax(_model_with_fused_experts(experts))
+
+
+@pytest.mark.parametrize(
+    ("enabled", "amax"),
+    [
+        (False, torch.tensor(24.0)),
+        (True, torch.tensor([24.0])),
+        (True, torch.tensor(float("nan"))),
+    ],
+    ids=("disabled", "non-scalar", "nonfinite"),
+)
+def test_collect_input_amax_rejects_invalid_fused_expert_quantizer(
+    enabled: bool,
+    amax: torch.Tensor,
+) -> None:
+    experts = _FakeFusedExperts()
+    experts.down_proj_input_quantizer.is_enabled = enabled
+    experts.down_proj_input_quantizer._amax = amax
+
+    with pytest.raises(RuntimeError, match="down_proj_input_quantizer"):
+        collect_nvfp4_input_amax(_model_with_fused_experts(experts))
+
+
+def test_exporter_pins_model_and_tokenizer_to_same_revision(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    revision = "0123456789abcdef"
+    seen: dict[str, str | None] = {}
+
+    class FakeProjection(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones((2, 2)))
+            self.input_quantizer = _FakeQuantizer(12.0)
+
+    class FakeModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.up_proj = FakeProjection()
+
+    class FakeAutoModelForCausalLM:
+        @staticmethod
+        def from_pretrained(
+            model_id: str,
+            *,
+            revision: str,
+            dtype: torch.dtype,
+            device_map: str,
+        ) -> torch.nn.Module:
+            del model_id, dtype, device_map
+            seen["model_revision"] = revision
+            return FakeModel()
+
+    transformers = types.ModuleType("transformers")
+    transformers.AutoModelForCausalLM = FakeAutoModelForCausalLM
+    algorithms_utils = types.ModuleType("nemo_rl.algorithms.utils")
+    algorithms_utils.set_seed = lambda seed: None
+    worker_utils = types.ModuleType("nemo_rl.modelopt.models.policy.workers.utils")
+
+    def fake_get_tokenizer(
+        model_id: str,
+        *,
+        max_seq_len: int,
+        revision: str | None = None,
+    ) -> object:
+        del model_id, max_seq_len
+        seen["tokenizer_revision"] = revision
+        return object()
+
+    worker_utils.get_tokenizer = fake_get_tokenizer
+    worker_utils.quantize_model = lambda **kwargs: None
+    modelopt_utils = types.ModuleType("nemo_rl.modelopt.utils")
+    modelopt_utils.resolve_nvfp4_real_quant_mode = lambda quant_cfg: "w4a4"
+    monkeypatch.setitem(sys.modules, "transformers", transformers)
+    monkeypatch.setitem(sys.modules, "nemo_rl.algorithms.utils", algorithms_utils)
+    monkeypatch.setitem(
+        sys.modules,
+        "nemo_rl.modelopt.models.policy.workers.utils",
+        worker_utils,
+    )
+    monkeypatch.setitem(sys.modules, "nemo_rl.modelopt.utils", modelopt_utils)
+    monkeypatch.chdir(tmp_path)
+    quant_cfg_path = Path("nvfp4.yaml")
+    quant_cfg_path.write_text("quant_cfg: nvfp4\n")
+    output_path = tmp_path / "calibration.safetensors"
+
+    export_nvfp4_calibration.main(
+        [
+            "--model",
+            "org/model",
+            "--model-revision",
+            revision,
+            "--quant-cfg",
+            str(quant_cfg_path),
+            "--dataset",
+            "cnn_dailymail",
+            "--sample-count",
+            "1",
+            "--sequence-length",
+            "16",
+            "--seed",
+            "1234",
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert seen == {
+        "model_revision": revision,
+        "tokenizer_revision": revision,
+    }
+    with safe_open(output_path, framework="pt", device="cpu") as artifact:
+        assert artifact.metadata()["quant_cfg"] == json.dumps(
+            str(quant_cfg_path.resolve())
+        )
 
 
 def test_round_trip_preserves_exact_hf_projection_names_and_metadata(
