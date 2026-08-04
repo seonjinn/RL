@@ -47,6 +47,7 @@ from nemo_rl.weight_sync.interfaces import WeightSynchronizer
 from nemo_rl.weight_sync.refit_transforms import (
     RefitPlanAgreement,
     RefitTransformRequest,
+    merge_refit_transform_requests,
     require_matching_agreements,
 )
 
@@ -948,21 +949,8 @@ class VllmGeneration(GenerationInterface):
             run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
         )
 
-        # Union the fp8-eligible parameter names across workers: replicas are
-        # equivalent, but with pipeline parallelism each worker only reports
-        # the parameters of its local shard.
-        names = tuple(
-            sorted({name for result in ray.get(futures) if result for name in result})
-        )
-        if not names:
-            return None
-        return [
-            RefitTransformRequest(
-                parameter_names=names,
-                source_format="bf16",
-                target_format="mxfp8_e4m3_e8m0",
-            )
-        ]
+        requests = merge_refit_transform_requests(ray.get(futures))
+        return requests or None
 
     def update_weights_via_ipc_zmq(self) -> list[ray.ObjectRef]:
         """Update weights of the policy using IPC handles via ZMQ socket."""

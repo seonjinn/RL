@@ -174,6 +174,7 @@ def test_sync_prepare_refit_info_unions_worker_names(monkeypatch):
     from nemo_rl.models.generation.vllm.vllm_worker import (
         VllmGenerationWorkerImpl,
     )
+    from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
 
     worker = VllmGenerationWorkerImpl.__new__(VllmGenerationWorkerImpl)
     state_dict_info = {"model.weight": ((2, 2), torch.bfloat16)}
@@ -190,8 +191,11 @@ def test_sync_prepare_refit_info_unions_worker_names(monkeypatch):
     )
 
     assert worker.prepare_refit_info(state_dict_info) == [
-        "model.a.weight",
-        "model.b.weight",
+        RefitTransformRequest(
+            parameter_names=("model.a.weight", "model.b.weight"),
+            source_format="bf16",
+            target_format="mxfp8_e4m3_e8m0",
+        )
     ]
     worker.llm.collective_rpc.assert_called_once_with(
         "prepare_refit_info",
@@ -206,6 +210,7 @@ async def test_async_prepare_refit_info_unions_worker_names(monkeypatch):
     from nemo_rl.models.generation.vllm.vllm_worker_async import (
         VllmAsyncGenerationWorkerImpl,
     )
+    from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
 
     worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
     state_dict_info = {"model.weight": ((2, 2), torch.bfloat16)}
@@ -218,13 +223,63 @@ async def test_async_prepare_refit_info_unions_worker_names(monkeypatch):
     )
 
     assert await worker.prepare_refit_info_async(state_dict_info) == [
-        "model.a.weight",
-        "model.b.weight",
+        RefitTransformRequest(
+            parameter_names=("model.a.weight", "model.b.weight"),
+            source_format="bf16",
+            target_format="mxfp8_e4m3_e8m0",
+        )
     ]
     worker.llm.collective_rpc.assert_awaited_once_with(
         "prepare_refit_info",
         args=(state_dict_info, serialized_config),
     )
+
+
+@pytest.mark.vllm
+@pytest.mark.parametrize("async_worker", [False, True])
+@pytest.mark.parametrize("target_format", ["nvfp4_w4a16", "nvfp4_w4a4"])
+@pytest.mark.asyncio
+async def test_prepare_refit_info_forwards_nvfp4_requests(
+    monkeypatch, async_worker, target_format
+):
+    from nemo_rl.models.generation.vllm.quantization import fp8
+    from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
+
+    request = RefitTransformRequest(
+        parameter_names=("model.q_proj.weight",),
+        source_format="bf16",
+        target_format=target_format,
+    )
+    state_dict_info = {"model.q_proj.weight": ((32, 16), torch.bfloat16)}
+    serialized_config = {"is_mx": False}
+    monkeypatch.setattr(fp8, "serialize_fp8_config", lambda: serialized_config)
+
+    if async_worker:
+        from nemo_rl.models.generation.vllm.vllm_worker_async import (
+            VllmAsyncGenerationWorkerImpl,
+        )
+
+        worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
+        rpc = AsyncMock(return_value=[None, [request]])
+        worker.llm = SimpleNamespace(collective_rpc=rpc)
+        result = await worker.prepare_refit_info_async(state_dict_info)
+        rpc.assert_awaited_once_with(
+            "prepare_refit_info", args=(state_dict_info, serialized_config)
+        )
+    else:
+        from nemo_rl.models.generation.vllm.vllm_worker import (
+            VllmGenerationWorkerImpl,
+        )
+
+        worker = VllmGenerationWorkerImpl.__new__(VllmGenerationWorkerImpl)
+        rpc = MagicMock(return_value=[None, [request]])
+        worker.llm = SimpleNamespace(collective_rpc=rpc)
+        result = worker.prepare_refit_info(state_dict_info)
+        rpc.assert_called_once_with(
+            "prepare_refit_info", args=(state_dict_info, serialized_config)
+        )
+
+    assert result == [request]
 
 
 @pytest.mark.vllm

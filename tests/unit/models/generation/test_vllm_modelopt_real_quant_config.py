@@ -275,9 +275,10 @@ def _install_fake_vllm_reload(monkeypatch):
                         return None
                     key = key.replace(substring, replacement, 1)
             shard_id = None
-            for substring, (replacement, mapped_shard_id) in (
-                self.orig_to_new_stacked.items()
-            ):
+            for substring, (
+                replacement,
+                mapped_shard_id,
+            ) in self.orig_to_new_stacked.items():
                 if substring in key:
                     key = key.replace(substring, replacement, 1)
                     shard_id = mapped_shard_id
@@ -882,9 +883,7 @@ def test_real_quant_target_resolver_handles_fused_linear_mapper_variants(monkeyp
         model=model,
     )
     mapped_inputs = {
-        name
-        for call in model.hf_to_vllm_mapper.apply_list_calls
-        for name in call
+        name for call in model.hf_to_vllm_mapper.apply_list_calls for name in call
     }
     assert "decoder.layers.0.self_attn.q_proj.weight" in mapped_inputs
     assert "model.layers.0.mlp.gate_proj.weight" in mapped_inputs
@@ -1490,7 +1489,7 @@ def test_real_quant_prepare_refit_classifies_bf16_manifest(monkeypatch):
     )
     _patch_real_quant_load(monkeypatch, backend)
 
-    extension.prepare_refit_info(
+    requests = extension.prepare_refit_info(
         _bf16_weight_info(
             "q_proj.weight",
         )
@@ -1498,6 +1497,10 @@ def test_real_quant_prepare_refit_classifies_bf16_manifest(monkeypatch):
 
     assert extension._nrl_real_quant_source == "bf16"
     assert extension._nrl_bf16_staging == {}
+    assert len(requests) == 1
+    assert requests[0].parameter_names == ("q_proj.weight",)
+    assert requests[0].source_format == "bf16"
+    assert requests[0].target_format == "nvfp4_w4a16"
 
 
 def test_real_quant_bf16_w4a4_prepare_requires_calibration_path(monkeypatch):
@@ -1988,9 +1991,7 @@ def test_real_quant_prepare_refit_rejects_incomplete_packed_weight_family(
         RuntimeError,
         match=r"Incomplete ModelOpt weight family for q_proj: missing.*weight_scale",
     ):
-        extension.prepare_refit_info(
-            {"q_proj.weight": ((32, 8), torch.uint8)}
-        )
+        extension.prepare_refit_info({"q_proj.weight": ((32, 8), torch.uint8)})
 
 
 def test_real_quant_prepare_refit_derives_w13_metadata_once_from_receiver_targets(
@@ -2113,9 +2114,7 @@ def test_real_quant_bf16_split_group_stages_owned_weights_and_forwards_directly(
     )
     source_gate = torch.ones((32, 16), dtype=torch.bfloat16)
     assert extension._load_weights([(gate, source_gate)]) is None
-    staged_gate = extension._nrl_bf16_staging["model.layers.0.mlp.experts.0.w13"][
-        gate
-    ]
+    staged_gate = extension._nrl_bf16_staging["model.layers.0.mlp.experts.0.w13"][gate]
     assert staged_gate is not source_gate
     assert (
         staged_gate.untyped_storage().data_ptr()
@@ -2239,7 +2238,11 @@ def test_real_quant_bf16_w4a4_two_refits_open_artifact_once_and_replay_fixed_sca
         load_calibration,
         raising=False,
     )
-    extension.prepare_refit_info(_bf16_weight_info(name))
+    requests = extension.prepare_refit_info(_bf16_weight_info(name))
+    assert len(requests) == 1
+    assert requests[0].parameter_names == (name,)
+    assert requests[0].source_format == "bf16"
+    assert requests[0].target_format == "nvfp4_w4a4"
 
     serializer_scales = iter((0.25, 0.75))
     serializer_calls = []
@@ -3217,6 +3220,302 @@ def test_real_quant_collective_reload_uses_vllm_layerwise_lifecycle(monkeypatch)
         ("consume", "_load_weights"),
         ("finalize", model, model_config),
         "sync",
+    ]
+
+
+@pytest.mark.parametrize("mode", ["w4a16", "w4a4"])
+def test_real_quant_nccl_receiver_uses_owned_grouped_bf16_scratch(
+    monkeypatch,
+    mode,
+):
+    from torch.distributed.tensor.placement_types import Replicate
+
+    backend = _import_vllm_quant_backend(monkeypatch)
+    prefix = "model.layers.0.mlp.experts"
+    gate_name = f"{prefix}.gate_proj.weight"
+    up_name = f"{prefix}.up_proj.weight"
+    down_name = f"{prefix}.down_proj.weight"
+    per_expert_names = {
+        f"{prefix}.{expert_id}.{projection}_proj.weight"
+        for expert_id in range(2)
+        for projection in ("gate", "up", "down")
+    }
+    w13_runtime = torch.full((2, 128, 16), 255, dtype=torch.uint8)
+    w2_runtime = torch.full((2, 64, 16), 127, dtype=torch.uint8)
+    model = torch.nn.Module()
+    extension = _make_real_quant_extension(
+        backend,
+        model,
+        [],
+        quant_algo="NVFP4" if mode == "w4a4" else "W4A16_NVFP4",
+    )
+    _patch_real_quant_load(monkeypatch, backend)
+    extension._nrl_real_quant_source = "bf16"
+    extension._nrl_bf16_mode = mode
+    extension._nrl_bf16_calibration = (
+        NVFP4Calibration(
+            input_amax={name: torch.tensor(12.0) for name in per_expert_names}
+        )
+        if mode == "w4a4"
+        else None
+    )
+    extension._nrl_bf16_quantizable_names = set(per_expert_names)
+    extension._nrl_bf16_staging = {}
+    extension._nrl_bf16_input_scale_cache = {}
+    extension._nrl_bf16_expected_input_scale_names = (
+        {name.removesuffix(".weight") + ".input_scale" for name in per_expert_names}
+        if mode == "w4a4"
+        else set()
+    )
+    extension._nrl_modelopt_reload_roots = ()
+
+    wire_component = {
+        "role": "weight",
+        "global_shape": (2, 64, 32),
+        "dtype": "torch.bfloat16",
+        "src_placements": [Replicate()],
+        "dst_placements": [Replicate()],
+    }
+    destination_components = [
+        {
+            "role": "weight",
+            "global_shape": (2, 64, 16),
+            "dtype": "torch.uint8",
+            "source": "codec",
+            "dst_placements": [Replicate()],
+        },
+        {
+            "role": "weight_scale",
+            "global_shape": (2, 64, 2),
+            "dtype": "torch.float8_e4m3fn",
+            "source": "codec",
+            "dst_placements": [Replicate()],
+        },
+        {
+            "role": "weight_scale_2",
+            "global_shape": (2,),
+            "dtype": "torch.float32",
+            "source": "codec",
+            "dst_placements": [Replicate()],
+        },
+    ]
+    if mode == "w4a4":
+        destination_components.append(
+            {
+                "role": "input_scale",
+                "global_shape": (2,),
+                "dtype": "torch.float32",
+                "source": "calibration",
+                "dst_placements": [Replicate()],
+            }
+        )
+    mesh = types.SimpleNamespace(mesh=torch.arange(1))
+    params = [
+        {
+            "name": name,
+            "global_shape": (2, 64, 32),
+            "grouped_expert_proj": projection,
+            "transform_id": f"bf16_to_nvfp4_{mode}",
+            "wire_components": [wire_component],
+            "components": [wire_component],
+            "destination_components": destination_components,
+            "completion_key": f"{prefix}.w13",
+            "finalize_scope": "model",
+            "dst_mesh_info": mesh,
+        }
+        for name, projection in (
+            (gate_name, "gate_proj"),
+            (up_name, "up_proj"),
+        )
+    ]
+    params.append(
+        {
+            "name": down_name,
+            "global_shape": (2, 64, 32),
+            "grouped_expert_proj": "down_proj",
+            "transform_id": f"bf16_to_nvfp4_{mode}",
+            "wire_components": [wire_component],
+            "components": [wire_component],
+            "destination_components": destination_components,
+            "completion_key": f"{prefix}.w2",
+            "finalize_scope": "model",
+            "dst_mesh_info": mesh,
+        }
+    )
+    refit_info = {
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {"model.layers.0": params},
+    }
+    extension._build_hf_to_gen_backend_mapping = lambda _info: {
+        gate_name: (w13_runtime, (slice(None), slice(0, 64), slice(None))),
+        up_name: (w13_runtime, (slice(None), slice(64, 128), slice(None))),
+        down_name: (w2_runtime, None),
+    }
+
+    serializer_calls = []
+    serializer_refit = 0
+
+    def serialize(tensors, *, mode, calibration):
+        nonlocal serializer_refit
+        serializer_calls.append((dict(tensors), mode, calibration))
+        if len(serializer_calls) % 4 == 1:
+            serializer_refit += 1
+        serialized = []
+        for name, tensor in tensors.items():
+            serialized.append((name, tensor.to(torch.uint8)))
+            if mode == "w4a4":
+                serialized.append(
+                    (
+                        name.removesuffix(".weight") + ".input_scale",
+                        torch.tensor(0.25 if serializer_refit == 1 else 0.75),
+                    )
+                )
+        return serialized
+
+    loaded_batches = []
+    monkeypatch.setattr(backend, "serialize_bf16_nvfp4_group", serialize)
+    monkeypatch.setattr(
+        backend.VllmInternalWorkerExtension,
+        "_load_weights",
+        lambda _self, weights: loaded_batches.append(list(weights)) or "loaded",
+    )
+    monkeypatch.setattr(
+        backend,
+        "_detach_pending_layerwise_weights",
+        lambda *_args: None,
+    )
+
+    param_map = extension.build_hf_to_local_param_map(refit_info)
+    gate_spec = param_map.get(gate_name)
+    up_spec = param_map.get(up_name)
+    down_spec = param_map.get(down_name)
+    assert gate_spec is not None and gate_spec.pre is not None and gate_spec.post
+    assert up_spec is not None and up_spec.pre is not None and up_spec.post
+    assert down_spec is not None and down_spec.pre is not None and down_spec.post
+
+    for refit_value in (1.0, 2.0):
+        up_ctx = up_spec.pre(up_spec.base)
+        assert up_ctx.buf.shape == (2, 64, 32)
+        assert up_ctx.buf.dtype == torch.bfloat16
+        assert (
+            up_ctx.buf.untyped_storage().data_ptr()
+            != w13_runtime.untyped_storage().data_ptr()
+        )
+        up_ctx.buf.fill_(refit_value + 1)
+        up_spec.post(up_ctx)
+        with pytest.raises(RuntimeError, match="collective group.*missing.*gate_proj"):
+            extension._require_complete_bf16_refit_groups()
+
+        gate_ctx = gate_spec.pre(gate_spec.base)
+        gate_ctx.buf.fill_(refit_value)
+        gate_spec.post(gate_ctx)
+
+        down_ctx = down_spec.pre(down_spec.base)
+        down_ctx.buf.fill_(refit_value + 2)
+        down_spec.post(down_ctx)
+        extension._require_complete_bf16_refit_groups()
+
+    assert len(serializer_calls) == 8
+    for tensors, actual_mode, calibration in serializer_calls:
+        assert actual_mode == mode
+        assert calibration is extension._nrl_bf16_calibration
+        assert len(tensors) in {1, 2}
+        assert {tensor.ndim for tensor in tensors.values()} == {2}
+        assert {name.rsplit(".", 3)[-3] for name in tensors} == {"0"} or {
+            name.rsplit(".", 3)[-3] for name in tensors
+        } == {"1"}
+        projections = {name.rsplit(".", 2)[-2] for name in tensors}
+        assert projections in ({"gate_proj", "up_proj"}, {"down_proj"})
+    assert torch.equal(w13_runtime, torch.full_like(w13_runtime, 255))
+    assert torch.equal(w2_runtime, torch.full_like(w2_runtime, 127))
+    if mode == "w4a4":
+        loaded_scales = [
+            tensor
+            for batch in loaded_batches
+            for name, tensor in batch
+            if name.endswith(".input_scale")
+        ]
+        assert len(loaded_scales) == 12
+        assert all(scale.item() == pytest.approx(0.25) for scale in loaded_scales)
+
+
+def test_nccl_reshard_wraps_bulk_and_misc_in_one_collective_lifecycle(monkeypatch):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    from nemo_rl.weight_sync import xferdtensor as xferdtensor_module
+    from nemo_rl.weight_sync.nccl_reshard_utils import (
+        HFToLocalParamMap,
+        LocalParamSpec,
+    )
+
+    name = "model.layers.0.mlp.down_proj.weight"
+    buffer = torch.zeros((2, 2))
+    extension = object.__new__(backend.VllmQuantInternalWorkerExtension)
+    extension.nccl_reshard_refit_info = {
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": name,
+                    "src_mesh_info": object(),
+                    "dst_mesh_info": object(),
+                    "components": [
+                        {
+                            "role": "weight",
+                            "global_shape": (2, 2),
+                            "dtype": "torch.float32",
+                            "src_placements": [object()],
+                            "dst_placements": [object()],
+                        }
+                    ],
+                }
+            ]
+        },
+    }
+    extension.hf_to_local_param_map = HFToLocalParamMap(
+        specs={name: LocalParamSpec(base=buffer)}
+    )
+    extension.pp_comm_groups = {0: object()}
+    calls = []
+
+    @contextmanager
+    def lifecycle(transport):
+        calls.append(("enter", transport))
+
+        def finalize():
+            calls.append("finalize")
+
+        yield finalize
+        calls.append("exit")
+
+    extension._weight_update_lifecycle = lifecycle
+    extension._receive_and_load_misc_params = lambda: calls.append("misc")
+    monkeypatch.setattr(
+        xferdtensor_module,
+        "xferdtensor",
+        lambda *_args, **_kwargs: calls.append("bulk"),
+    )
+    monkeypatch.setattr(backend.torch.cuda, "Stream", lambda: object())
+    monkeypatch.setattr(backend.torch.cuda, "stream", lambda _stream: nullcontext())
+
+    class FakeEvent:
+        def record(self):
+            return None
+
+    monkeypatch.setattr(backend.torch.cuda, "Event", FakeEvent)
+    monkeypatch.setattr(backend.torch.cuda, "synchronize", lambda: calls.append("sync"))
+    monkeypatch.setattr(backend.torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(backend.torch.distributed, "get_rank", lambda: 1)
+
+    assert extension.nccl_reshard_refit() is True
+    assert calls == [
+        ("enter", "collective"),
+        "bulk",
+        "sync",
+        "misc",
+        "sync",
+        "finalize",
+        "sync",
+        "exit",
     ]
 
 

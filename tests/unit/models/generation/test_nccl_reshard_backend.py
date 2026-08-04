@@ -792,6 +792,8 @@ def test_mxfp8_receive_transfers_value_then_scale_before_merged_post(
             call_order.append("stage-barrier")
         elif call_order[-1] == "misc":
             call_order.append("misc-barrier")
+        elif call_order[-1] == "process":
+            call_order.append("final-barrier")
         else:
             raise AssertionError(f"unexpected synchronize after {call_order!r}")
 
@@ -816,6 +818,7 @@ def test_mxfp8_receive_transfers_value_then_scale_before_merged_post(
         "misc",
         "misc-barrier",
         "process",
+        "final-barrier",
     ]
     assert torch.equal(gate_up[:64], torch.ones_like(gate_up[:64]))
     assert torch.equal(

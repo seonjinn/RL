@@ -16,7 +16,7 @@
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, TypedDict, cast
 
@@ -31,6 +31,61 @@ class RefitTransformRequest:
     parameter_names: tuple[str, ...]
     source_format: str
     target_format: str
+
+
+RefitTransformResponse = list[str] | list[RefitTransformRequest] | None
+
+
+def merge_refit_transform_requests(
+    responses: Iterable[RefitTransformResponse],
+) -> list[RefitTransformRequest]:
+    """Merge worker transform responses into deterministic typed requests.
+
+    A list of parameter names is the legacy MXFP8 response. New workers return
+    ``RefitTransformRequest`` instances so the requested target format survives
+    both internal vLLM and outer Ray RPC boundaries.
+    """
+    names_by_format: dict[tuple[str, str], set[str]] = {}
+    format_by_name: dict[str, tuple[str, str]] = {}
+    for response in responses:
+        if not response:
+            continue
+        for item in response:
+            if isinstance(item, str):
+                source_format = "bf16"
+                target_format = "mxfp8_e4m3_e8m0"
+                parameter_names = (item,)
+            elif isinstance(item, RefitTransformRequest):
+                source_format = item.source_format
+                target_format = item.target_format
+                parameter_names = item.parameter_names
+            else:
+                raise TypeError(
+                    "Refit transform response entries must be parameter names or "
+                    f"RefitTransformRequest instances, got {type(item).__name__}."
+                )
+
+            format_key = (source_format, target_format)
+            requested_names = names_by_format.setdefault(format_key, set())
+            for name in parameter_names:
+                previous_format = format_by_name.setdefault(name, format_key)
+                if previous_format != format_key:
+                    raise ValueError(
+                        f"Refit parameter {name!r} was requested with conflicting "
+                        f"formats {previous_format!r} and {format_key!r}."
+                    )
+                requested_names.add(name)
+
+    return [
+        RefitTransformRequest(
+            parameter_names=tuple(sorted(parameter_names)),
+            source_format=source_format,
+            target_format=target_format,
+        )
+        for (source_format, target_format), parameter_names in sorted(
+            names_by_format.items()
+        )
+    ]
 
 
 @dataclass(frozen=True)

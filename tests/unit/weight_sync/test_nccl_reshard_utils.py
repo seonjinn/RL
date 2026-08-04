@@ -50,6 +50,8 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
 def _valid_nccl_reshard_config() -> SimpleNamespace:
     return SimpleNamespace(
         policy={
+            "quant_cfg": None,
+            "precision": "bfloat16",
             "generation": {
                 "backend": "vllm",
                 "colocated": {"enabled": False},
@@ -61,8 +63,120 @@ def _valid_nccl_reshard_config() -> SimpleNamespace:
     )
 
 
+def _valid_nvfp4_nccl_reshard_config(*, mode: str = "w4a16") -> SimpleNamespace:
+    config = _valid_nccl_reshard_config()
+    config.policy["generation"].update(
+        {
+            "real_quant": True,
+            "quant_cfg": f"NVFP4_{mode.upper()}",
+            "real_quant_calibration_path": (
+                "/artifacts/calibration.safetensors" if mode == "w4a4" else None
+            ),
+        }
+    )
+    config.policy["generation"]["vllm_cfg"] = {
+        "precision": "bfloat16",
+        "tensor_parallel_size": 2,
+        "expert_parallel_size": 1,
+        "pipeline_parallel_size": 1,
+    }
+    return config
+
+
 def test_check_nccl_reshard_refit_support_accepts_valid_config() -> None:
     check_nccl_reshard_refit_support(_valid_nccl_reshard_config())
+
+
+@pytest.mark.parametrize("mode", ["w4a16", "w4a4"])
+def test_check_nccl_reshard_refit_support_accepts_plain_bf16_to_real_nvfp4(
+    monkeypatch, mode: str
+) -> None:
+    monkeypatch.setattr(
+        "nemo_rl.modelopt.utils.resolve_nvfp4_real_quant_mode",
+        lambda _quant_cfg: mode,
+    )
+
+    check_nccl_reshard_refit_support(_valid_nvfp4_nccl_reshard_config(mode=mode))
+
+
+@pytest.mark.parametrize(
+    ("update", "expected_violation"),
+    [
+        ({"policy_quant_cfg": "NVFP4_DEFAULT_CFG"}, "policy.quant_cfg must be null"),
+        (
+            {"fp8_param": True},
+            "plain BF16 Megatron storage",
+        ),
+        (
+            {"policy_precision": "float32"},
+            "policy.precision must be 'bf16' or 'bfloat16'",
+        ),
+        (
+            {"expert_parallel_size": 2},
+            "expert_parallel_size must be 1 for real NVFP4",
+        ),
+        (
+            {"quant_cfg": None},
+            "real NVFP4 requires a non-empty policy.generation.quant_cfg",
+        ),
+    ],
+)
+def test_check_nccl_reshard_refit_support_rejects_unsupported_real_nvfp4_source(
+    monkeypatch,
+    update: dict[str, object],
+    expected_violation: str,
+) -> None:
+    monkeypatch.setattr(
+        "nemo_rl.modelopt.utils.resolve_nvfp4_real_quant_mode",
+        lambda _quant_cfg: "w4a16",
+    )
+    config = _valid_nvfp4_nccl_reshard_config()
+    policy_quant_cfg = update.get("policy_quant_cfg")
+    if policy_quant_cfg is not None:
+        config.policy["quant_cfg"] = policy_quant_cfg
+    if "fp8_param" in update:
+        config.policy["megatron_cfg"]["fp8_cfg"] = {
+            "fp8_param": update["fp8_param"],
+            "fp8_recipe": "blockwise",
+        }
+    if "policy_precision" in update:
+        config.policy["precision"] = update["policy_precision"]
+    if "expert_parallel_size" in update:
+        config.policy["generation"]["vllm_cfg"]["expert_parallel_size"] = update[
+            "expert_parallel_size"
+        ]
+    if "quant_cfg" in update:
+        config.policy["generation"]["quant_cfg"] = update["quant_cfg"]
+
+    with pytest.raises(ValueError, match=expected_violation):
+        check_nccl_reshard_refit_support(config)
+
+
+@pytest.mark.parametrize("calibration_path", [None, "", "   "])
+def test_check_nccl_reshard_refit_support_requires_w4a4_calibration_path(
+    monkeypatch, calibration_path: str | None
+) -> None:
+    monkeypatch.setattr(
+        "nemo_rl.modelopt.utils.resolve_nvfp4_real_quant_mode",
+        lambda _quant_cfg: "w4a4",
+    )
+    config = _valid_nvfp4_nccl_reshard_config(mode="w4a4")
+    config.policy["generation"]["real_quant_calibration_path"] = calibration_path
+
+    with pytest.raises(ValueError, match="non-empty.*real_quant_calibration_path"):
+        check_nccl_reshard_refit_support(config)
+
+
+def test_check_nccl_reshard_refit_support_rejects_unsupported_real_quant_mode(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "nemo_rl.modelopt.utils.resolve_nvfp4_real_quant_mode",
+        lambda _quant_cfg: "w4a8",
+    )
+
+    with pytest.raises(ValueError, match="effective NVFP4 mode.*w4a16.*w4a4"):
+        check_nccl_reshard_refit_support(_valid_nvfp4_nccl_reshard_config())
 
 
 @pytest.mark.parametrize(

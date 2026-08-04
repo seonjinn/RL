@@ -183,6 +183,48 @@ def test_prepare_refit_info_builds_one_deterministic_transform_request(
 
 
 @pytest.mark.vllm
+@pytest.mark.parametrize("target_format", ["nvfp4_w4a16", "nvfp4_w4a4"])
+def test_prepare_refit_info_preserves_worker_requested_target_format(
+    monkeypatch,
+    target_format,
+):
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {"vllm_cfg": {"async_engine": False}}
+    generation.worker_group = MagicMock()
+    futures = [object(), object()]
+    generation.worker_group.run_all_workers_single_data.return_value = futures
+    monkeypatch.setattr(
+        "nemo_rl.models.generation.vllm.vllm_generation.ray.get",
+        lambda refs: [
+            [
+                RefitTransformRequest(
+                    parameter_names=("model.b.weight", "model.a.weight"),
+                    source_format="bf16",
+                    target_format=target_format,
+                )
+            ],
+            [
+                RefitTransformRequest(
+                    parameter_names=("model.a.weight",),
+                    source_format="bf16",
+                    target_format=target_format,
+                )
+            ],
+        ],
+    )
+
+    result = generation.prepare_refit_info({"model.a.weight": object()})
+
+    assert result == [
+        RefitTransformRequest(
+            parameter_names=("model.a.weight", "model.b.weight"),
+            source_format="bf16",
+            target_format=target_format,
+        )
+    ]
+
+
+@pytest.mark.vllm
 def test_prepare_nccl_refit_info_rejects_generation_actor_disagreement(monkeypatch):
     generation = VllmGeneration.__new__(VllmGeneration)
     generation.cfg = {"vllm_cfg": {"async_engine": False}}

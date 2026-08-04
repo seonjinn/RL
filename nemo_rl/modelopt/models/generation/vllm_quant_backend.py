@@ -44,6 +44,15 @@ from nemo_rl.models.generation.vllm.vllm_backend import (
     WeightUpdateFinalizer,
     WeightUpdateTransport,
 )
+from nemo_rl.weight_sync.nccl_reshard_utils import (
+    HFToLocalParamMap,
+    LocalParamSpec,
+    RefitCtx,
+)
+from nemo_rl.weight_sync.refit_transforms import (
+    RefitTransformRequest,
+    RefitTransformResponse,
+)
 
 _FUSED_MODELOPT_MOE_SUFFIXES = {
     ".experts.w13_weight": "w13_weight",
@@ -752,6 +761,9 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
     _nrl_bf16_calibration: NVFP4Calibration | None = None
     _nrl_bf16_expected_input_scale_names: set[str] = set()
     _nrl_bf16_input_scale_cache: dict[str, torch.Tensor] = {}
+    _nrl_collective_group_members: dict[str, tuple[str, ...]] = {}
+    _nrl_collective_grouped_projections: dict[str, str] = {}
+    _nrl_collective_bf16_staging: dict[str, dict[str, torch.Tensor]] = {}
     _nrl_modelopt_reload_roots: tuple[torch.nn.Module, ...] | None = None
 
     def maybe_init_zmq(self) -> None:
@@ -847,6 +859,11 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
             return
 
         incomplete = []
+        for group_name, tensors in sorted(self._nrl_collective_bf16_staging.items()):
+            expected = set(self._nrl_collective_group_members[group_name])
+            missing = sorted(expected - set(tensors))
+            if missing:
+                incomplete.append(f"collective group {group_name}: missing {missing}")
         for group_name, tensors in sorted(self._nrl_bf16_staging.items()):
             expected = nvfp4_refit_group(next(iter(tensors)))[1]
             missing = sorted(set(expected) - set(tensors))
@@ -863,10 +880,14 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
                 "BF16 NVFP4 refit is incomplete: " + "; ".join(incomplete)
             )
 
-    def prepare_refit_info(self, state_dict_info: dict[str, Any]) -> None:
-        super().prepare_refit_info(state_dict_info)
+    def prepare_refit_info(
+        self,
+        state_dict_info: dict[str, Any],
+        serialized_fp8_config: dict[str, Any] | None = None,
+    ) -> RefitTransformResponse:
         if not self._is_real_quant_model():
-            return
+            return super().prepare_refit_info(state_dict_info, serialized_fp8_config)
+        self.state_dict_info = state_dict_info
         quant_config = (
             self.model_runner.vllm_config.model_config.hf_config.quantization_config
         )
@@ -887,6 +908,9 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
         self._nrl_bf16_calibration = None
         self._nrl_bf16_expected_input_scale_names = set()
         self._nrl_bf16_input_scale_cache = {}
+        self._nrl_collective_group_members = {}
+        self._nrl_collective_grouped_projections = {}
+        self._nrl_collective_bf16_staging = {}
         if self._nrl_real_quant_source == "bf16" and self._nrl_bf16_mode == "w4a4":
             calibration_path = os.environ.get("VLLM_MODELOPT_CALIBRATION_PATH")
             if not calibration_path:
@@ -921,6 +945,224 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
                 "Fused ModelOpt MoE refits require all experts local; "
                 "vLLM expert parallelism is unsupported"
             )
+        if self._nrl_real_quant_source == "bf16":
+            return [
+                RefitTransformRequest(
+                    parameter_names=tuple(sorted(self._nrl_bf16_quantizable_names)),
+                    source_format="bf16",
+                    target_format=f"nvfp4_{self._nrl_bf16_mode}",
+                )
+            ]
+        return None
+
+    def build_hf_to_local_param_map(self, refit_info: dict) -> HFToLocalParamMap:
+        """Prepare NVFP4 completion groups before building receive specs."""
+        group_members: dict[str, list[str]] = {}
+        grouped_projections: dict[str, str] = {}
+        for layer_name in refit_info["layer_names"]:
+            for param_info in refit_info["per_layer_params"][layer_name]:
+                if not str(param_info.get("transform_id", "")).startswith(
+                    "bf16_to_nvfp4_"
+                ):
+                    continue
+                name = str(param_info["name"])
+                completion_key = str(param_info.get("completion_key", name))
+                group_members.setdefault(completion_key, []).append(name)
+                grouped_projection = param_info.get("grouped_expert_proj")
+                if grouped_projection:
+                    grouped_projections[name] = str(grouped_projection)
+
+        self._nrl_collective_group_members = {
+            key: tuple(names) for key, names in group_members.items()
+        }
+        self._nrl_collective_grouped_projections = grouped_projections
+        self._nrl_collective_bf16_staging = {}
+        return super().build_hf_to_local_param_map(refit_info)
+
+    def _build_receiver_transform_param_spec(
+        self,
+        *,
+        hf_name: str,
+        param_info: dict[str, Any],
+        value_param: torch.Tensor,
+        merged_slice: tuple[slice, ...] | None,
+        wire_local_shape: tuple[int, ...] | None,
+        wire_dtype: torch.dtype,
+    ) -> LocalParamSpec | None:
+        """Build destination-local BF16 scratch for NVFP4 NCCL conversion."""
+        del merged_slice
+        transform_id = str(param_info.get("transform_id", ""))
+        if not transform_id.startswith("bf16_to_nvfp4_"):
+            return None
+        expected_transform = f"bf16_to_nvfp4_{self._nrl_bf16_mode}"
+        if transform_id != expected_transform:
+            raise ValueError(
+                f"NVFP4 receiver for {hf_name!r} expected transform "
+                f"{expected_transform!r}, got {transform_id!r}."
+            )
+        if param_info.get("finalize_scope") != "model":
+            raise ValueError(
+                f"NVFP4 receiver for {hf_name!r} requires finalize_scope='model'."
+            )
+        if wire_dtype != torch.bfloat16:
+            raise ValueError(
+                f"NVFP4 receiver for {hf_name!r} requires a BF16 wire tensor, "
+                f"got {wire_dtype}."
+            )
+        if wire_local_shape is None:
+            raise ValueError(
+                f"NVFP4 receiver for {hf_name!r} cannot derive its destination-local "
+                "BF16 scratch shape from placement metadata."
+            )
+        if len(wire_local_shape) not in {2, 3} or wire_local_shape[-1] % 16:
+            raise ValueError(
+                f"NVFP4 receiver for {hf_name!r} requires a 2-D projection or "
+                f"grouped 3-D expert tensor with local K divisible by 16, got "
+                f"{wire_local_shape}."
+            )
+
+        wire_components = param_info.get(
+            "wire_components", param_info.get("components", [])
+        )
+        wire_global_shape = tuple(param_info.get("global_shape", ()))
+        actual_wire = [
+            (
+                component.get("role"),
+                tuple(component.get("global_shape", ())),
+                str(component.get("dtype")),
+            )
+            for component in wire_components
+        ]
+        expected_wire = [("weight", wire_global_shape, "torch.bfloat16")]
+        if actual_wire != expected_wire:
+            raise ValueError(
+                f"NVFP4 receiver for {hf_name!r} has wire family "
+                f"{actual_wire!r}, expected {expected_wire!r}."
+            )
+
+        destination_components = param_info.get("destination_components", [])
+        expected_destination = [
+            (
+                "weight",
+                (*wire_global_shape[:-1], wire_global_shape[-1] // 2),
+                "torch.uint8",
+                "codec",
+            ),
+            (
+                "weight_scale",
+                (*wire_global_shape[:-1], wire_global_shape[-1] // 16),
+                "torch.float8_e4m3fn",
+                "codec",
+            ),
+            (
+                "weight_scale_2",
+                wire_global_shape[:-2],
+                "torch.float32",
+                "codec",
+            ),
+        ]
+        if self._nrl_bf16_mode == "w4a4":
+            expected_destination.append(
+                (
+                    "input_scale",
+                    wire_global_shape[:-2],
+                    "torch.float32",
+                    "calibration",
+                )
+            )
+        actual_destination = [
+            (
+                component.get("role"),
+                tuple(component.get("global_shape", ())),
+                str(component.get("dtype")),
+                component.get("source"),
+            )
+            for component in destination_components
+        ]
+        if actual_destination != expected_destination:
+            raise ValueError(
+                f"NVFP4 receiver for {hf_name!r} has destination family "
+                f"{actual_destination!r}, expected {expected_destination!r}."
+            )
+
+        completion_key = str(param_info.get("completion_key", hf_name))
+
+        def pre(_base: torch.Tensor) -> RefitCtx:
+            return RefitCtx(
+                buf=torch.empty(
+                    wire_local_shape,
+                    dtype=torch.bfloat16,
+                    device=self.device,
+                )
+            )
+
+        def post(ctx: RefitCtx) -> None:
+            self._stage_collective_bf16_weight(
+                completion_key=completion_key,
+                hf_name=hf_name,
+                weight=ctx.buf,
+            )
+
+        return LocalParamSpec(base=value_param, pre=pre, post=post)
+
+    def _stage_collective_bf16_weight(
+        self,
+        *,
+        completion_key: str,
+        hf_name: str,
+        weight: torch.Tensor,
+    ) -> None:
+        """Load one completed collective group through canonical NVFP4 serialization."""
+        expected_names = self._nrl_collective_group_members.get(completion_key)
+        if expected_names is None or hf_name not in expected_names:
+            raise RuntimeError(
+                f"Unknown NVFP4 collective completion group {completion_key!r} "
+                f"for {hf_name!r}."
+            )
+        staged = self._nrl_collective_bf16_staging.setdefault(completion_key, {})
+        if hf_name in staged:
+            raise RuntimeError(
+                f"Duplicate NVFP4 collective tensor {hf_name!r} in "
+                f"completion group {completion_key!r}."
+            )
+        staged[hf_name] = weight
+        if set(staged) != set(expected_names):
+            return
+
+        expanded_weights: list[tuple[str, torch.Tensor]] = []
+        for name in expected_names:
+            tensor = staged[name]
+            grouped_projection = self._nrl_collective_grouped_projections.get(name)
+            if grouped_projection is None:
+                expanded_weights.append((name, tensor))
+                continue
+            if tensor.ndim != 3:
+                raise ValueError(
+                    f"Grouped NVFP4 collective tensor {name!r} must be [E, M, K], "
+                    f"got {tuple(tensor.shape)}."
+                )
+            suffix = f".experts.{grouped_projection}.weight"
+            if not name.endswith(suffix):
+                raise ValueError(
+                    f"Grouped NVFP4 collective tensor {name!r} does not match "
+                    f"projection {grouped_projection!r}."
+                )
+            prefix = name.removesuffix(suffix)
+            expanded_weights.extend(
+                (
+                    f"{prefix}.experts.{expert_id}.{grouped_projection}.weight",
+                    expert_weight,
+                )
+                for expert_id, expert_weight in enumerate(tensor.unbind(0))
+            )
+
+        self._nrl_collective_bf16_staging.pop(completion_key)
+        self._nrl_bf16_quantizable_names.update(name for name, _ in expanded_weights)
+        if self._nrl_bf16_mode == "w4a4":
+            self._nrl_bf16_expected_input_scale_names.update(
+                _input_scale_name(name) for name, _ in expanded_weights
+            )
+        self._load_weights(expanded_weights)
 
     @contextmanager
     def _patch_named_parameters_to_include_buffers(self, model):

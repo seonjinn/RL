@@ -41,7 +41,10 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
     _STR_TO_DTYPE,
     _extract_layer_prefix,
 )
-from nemo_rl.weight_sync.refit_transforms import RefitPlanAgreement
+from nemo_rl.weight_sync.refit_transforms import (
+    RefitPlanAgreement,
+    RefitTransformResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -315,7 +318,11 @@ class VllmInternalWorkerExtension:
             self.zmq_socket.setsockopt(zmq.LINGER, 0)
             self.zmq_socket.connect(self.get_zmq_address())
 
-    def prepare_refit_info(self, state_dict_info: dict[str, Any]) -> None:
+    def prepare_refit_info(
+        self,
+        state_dict_info: dict[str, Any],
+        serialized_fp8_config: Optional[dict[str, Any]] = None,
+    ) -> RefitTransformResponse:
         """Prepare state dict metadata for weight refitting and IPC streaming.
 
         Args:
@@ -323,6 +330,25 @@ class VllmInternalWorkerExtension:
                 e.g. {tensor_name: (shape, dtype)}
         """
         self.state_dict_info = state_dict_info  # pyrefly: ignore[implicitly-defined-attribute]  This class does not define __init__ so assignments like this should be ignored
+
+        if serialized_fp8_config is None:
+            return None
+
+        from nemo_rl.models.generation.vllm.quantization import fp8
+
+        fp8.install_fp8_config(serialized_fp8_config)
+        if not (
+            fp8.global_fp8_config is not None
+            and fp8.global_fp8_config.is_mx
+            and fp8.global_fp8_config.refit_prequantize
+            and fp8.is_fp8_model(self.model_runner.vllm_config)
+        ):
+            return None
+        return [
+            name
+            for name in state_dict_info
+            if fp8._is_fp8_weight(name, self.model_runner.model)
+        ]
 
     def prepare_sparse_delta_refit_info(
         self, state_dict_info: dict[str, tuple[tuple[int, ...], torch.dtype]]
@@ -814,6 +840,27 @@ class VllmInternalWorkerExtension:
 
         return agreement_from_serialized_metadata(self.nccl_reshard_refit_info)
 
+    def _build_receiver_transform_param_spec(
+        self,
+        *,
+        hf_name: str,
+        param_info: dict[str, Any],
+        value_param: torch.Tensor,
+        merged_slice: Optional[tuple[slice, ...]],
+        wire_local_shape: Optional[tuple[int, ...]],
+        wire_dtype: torch.dtype,
+    ) -> Optional[LocalParamSpec]:
+        """Return destination-owned receive state for a backend transform."""
+        del (
+            hf_name,
+            param_info,
+            value_param,
+            merged_slice,
+            wire_local_shape,
+            wire_dtype,
+        )
+        return None
+
     def build_hf_to_local_param_map(self, refit_info: dict) -> HFToLocalParamMap:
         """Build the vLLM-backend ``hf_to_local_param_map`` (HFToLocalParamMap).
 
@@ -1084,6 +1131,23 @@ class VllmInternalWorkerExtension:
                         f"build_hf_to_local_param_map: component metadata for "
                         f"{hf_name!r} is missing {sorted(missing_fields)!r}"
                     )
+            wire_component = components[0]
+            transform_spec = self._build_receiver_transform_param_spec(
+                hf_name=hf_name,
+                param_info=param_info,
+                value_param=vllm_param,
+                merged_slice=merged_slice,
+                wire_local_shape=_expected_local_shape(param_info, wire_component),
+                wire_dtype=_metadata_dtype(
+                    wire_component.get("dtype"),
+                    default=vllm_param.dtype,
+                    hf_name=hf_name,
+                    field_name="wire component dtype",
+                ),
+            )
+            if transform_spec is not None:
+                specs[hf_name] = transform_spec
+                continue
             component_family = tuple(component.get("role") for component in components)
             if component_family == ("weight",):
                 _validate_untransformed_destination(
@@ -1346,53 +1410,41 @@ class VllmInternalWorkerExtension:
             min(int(os.environ.get("NRL_REFIT_NUM_STREAMS", "2")), len(stage_params)),
         )
 
-        streams = [torch.cuda.Stream() for _ in range(num_streams)]
-        events = {}
-        for idx, (stage, params) in enumerate(stage_params.items()):
-            # synchronize the last run in the same stream
-            if (idx - num_streams) in events:
-                events[idx - num_streams].synchronize()
-            stage_stream = streams[idx % num_streams]
-            with torch.cuda.stream(stage_stream):
-                group = self.pp_comm_groups[stage]
-                for p in params:
-                    _recv_one_param(p, group, stage_stream)
-                ev = torch.cuda.Event()
-                ev.record()
-                events[idx] = ev
+        with self._weight_update_lifecycle("collective") as finalize:
+            streams = [torch.cuda.Stream() for _ in range(num_streams)]
+            events = {}
+            for idx, (stage, params) in enumerate(stage_params.items()):
+                # synchronize the last run in the same stream
+                if (idx - num_streams) in events:
+                    events[idx - num_streams].synchronize()
+                stage_stream = streams[idx % num_streams]
+                with torch.cuda.stream(stage_stream):
+                    group = self.pp_comm_groups[stage]
+                    for p in params:
+                        _recv_one_param(p, group, stage_stream)
+                    ev = torch.cuda.Event()
+                    ev.record()
+                    events[idx] = ev
 
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
 
-        import time
+            import time
 
-        misc_t0 = time.perf_counter()
-        self._receive_and_load_misc_params()
-        torch.cuda.synchronize()
-        if torch.distributed.get_rank() == 0:
-            print(
-                f"[nccl_reshard_refit] misc recv+load (gen side): "
-                f"{time.perf_counter() - misc_t0:.2f}s",
-                flush=True,
-            )
-        torch.cuda.empty_cache()
-        from vllm.config import set_current_vllm_config
-        from vllm.model_executor.model_loader.utils import (
-            process_weights_after_loading,
-        )
-
-        # Finalize post-load weight processing: dense Linear + attention/MLA, and
-        # crucially the per-MoE-backend w13 layout (FlashInfer CUTLASS/TRTLLM) that
-        # the canonical [gate; up] bulk write above defers to here.
-        with set_current_vllm_config(self.model_runner.vllm_config):
-            process_weights_after_loading(
-                self.model_runner.model, self.model_config, self.device
-            )
+            misc_t0 = time.perf_counter()
+            self._receive_and_load_misc_params()
+            torch.cuda.synchronize()
+            if torch.distributed.get_rank() == 0:
+                print(
+                    f"[nccl_reshard_refit] misc recv+load (gen side): "
+                    f"{time.perf_counter() - misc_t0:.2f}s",
+                    flush=True,
+                )
+            torch.cuda.empty_cache()
+            finalize()
+            torch.cuda.synchronize()
 
         torch.cuda.empty_cache()
-
-        # Finalize FP8 KV-cache per-layer k/v scales after the misc broadcast.
-        self._maybe_process_fp8_kv_cache()
         return True
 
     def _receive_and_load_misc_params(self) -> None:
