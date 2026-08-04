@@ -206,7 +206,7 @@ class _BF16ToNVFP4Codec:
                 "BF16-to-NVFP4 refit requires input dtype torch.bfloat16; "
                 f"got {input_dtype_name}."
             )
-        if not global_shape or global_shape[-1] % 16:
+        if len(global_shape) < 2 or global_shape[-1] % 16:
             raise ValueError(
                 "BF16-to-NVFP4 refit requires K to be divisible by 16; "
                 f"got global shape {global_shape}."
@@ -241,13 +241,18 @@ class _BF16ToNVFP4Codec:
                 "torch.float8_e4m3fn",
                 "codec",
             ),
-            DestinationComponentSpec("weight_scale_2", (), "torch.float32", "codec"),
+            DestinationComponentSpec(
+                "weight_scale_2", global_shape[:-2], "torch.float32", "codec"
+            ),
         )
         if self._mode == "w4a4":
             return (
                 *components,
                 DestinationComponentSpec(
-                    "input_scale", (), "torch.float32", "calibration"
+                    "input_scale",
+                    global_shape[:-2],
+                    "torch.float32",
+                    "calibration",
                 ),
             )
         return components

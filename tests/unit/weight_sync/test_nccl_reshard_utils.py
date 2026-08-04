@@ -586,12 +586,21 @@ def test_build_refit_info_describes_bf16_wire_and_nvfp4_destination_state(
     assert param["finalize_scope"] == "model"
 
 
-def test_nvfp4_grouped_experts_share_w13_completion_key() -> None:
+@pytest.mark.parametrize(
+    ("mode", "scalar_roles"),
+    [
+        ("w4a16", ["weight_scale_2"]),
+        ("w4a4", ["weight_scale_2", "input_scale"]),
+    ],
+)
+def test_nvfp4_grouped_experts_preserve_source_shape_and_scale_families(
+    mode: str, scalar_roles: list[str]
+) -> None:
     metadata = _moe_metadata(num_experts=2, inter=64, hidden=32)
     for name, meta in metadata.items():
         if ".experts." not in name:
             continue
-        meta.update(_nvfp4_metadata(mode="w4a16"))
+        meta.update(_nvfp4_metadata(mode=mode))
         meta["shape"] = [64, 32]
         meta["source_shape"] = [64, 32]
 
@@ -610,6 +619,20 @@ def test_nvfp4_grouped_experts_share_w13_completion_key() -> None:
     assert gate["completion_key"] == up["completion_key"]
     assert gate["completion_key"] == "model.layers.0.mlp.experts.w13"
     assert down["completion_key"] == "model.layers.0.mlp.experts.w2"
+    assert gate["global_shape"] == (2, 64, 32)
+    assert gate["wire_components"][0]["global_shape"] == (2, 64, 32)
+    assert [
+        component["global_shape"] for component in gate["destination_components"]
+    ] == [
+        (2, 64, 16),
+        (2, 64, 2),
+        *((2,) for _ in scalar_roles),
+    ]
+    assert [component["role"] for component in gate["destination_components"]] == [
+        "weight",
+        "weight_scale",
+        *scalar_roles,
+    ]
 
 
 def test_build_refit_info_top_level_and_param_fields():

@@ -676,19 +676,17 @@ def _nvfp4_completion_key(param_name: str) -> str:
 
 
 def _copy_grouped_transform_metadata(
-    meta: dict[str, Any], *, shape: list[int]
+    meta: dict[str, Any], *, shape: list[int], source_shape: list[int] | None
 ) -> dict[str, Any]:
-    """Copy transform intent while replacing projection-dependent shapes."""
+    """Copy transform intent with explicit grouped source and wire shapes."""
     grouped_meta = {
         key: value
         for key, value in meta.items()
         if key not in {"shape", "scale_shape", "source_shape", "grouped_expert_proj"}
     }
     grouped_meta["shape"] = shape
-    if "scale_shape" in meta:
-        grouped_meta["scale_shape"] = meta["scale_shape"]
-    if "source_shape" in meta:
-        grouped_meta["source_shape"] = meta["source_shape"]
+    if source_shape is not None:
+        grouped_meta["source_shape"] = source_shape
     return grouped_meta
 
 
@@ -733,8 +731,14 @@ def group_expert_params_in_metadata(
             prefix = name[: -len(".gate_up_proj")]  # ".../experts"
             e_global, inter, hidden = meta["shape"]
             for role in ("gate_proj", "up_proj"):
+                source_shape = None
+                if "source_shape" in meta:
+                    e_source, inter_source, hidden_source = meta["source_shape"]
+                    source_shape = [e_source, inter_source // 2, hidden_source]
                 role_meta = _copy_grouped_transform_metadata(
-                    meta, shape=[e_global, inter // 2, hidden]
+                    meta,
+                    shape=[e_global, inter // 2, hidden],
+                    source_shape=source_shape,
                 )
                 role_meta["grouped_expert_proj"] = role
                 if "scale_shape" in meta:
@@ -743,13 +747,6 @@ def group_expert_params_in_metadata(
                         e_scale,
                         inter_scale // 2,
                         hidden_scale,
-                    ]
-                if "source_shape" in meta:
-                    e_source, inter_source, hidden_source = meta["source_shape"]
-                    role_meta["source_shape"] = [
-                        e_source,
-                        inter_source // 2,
-                        hidden_source,
                     ]
                 grouped_metadata[f"{prefix}.{role}.weight"] = role_meta
             pre_grouped_experts = True
@@ -775,19 +772,21 @@ def group_expert_params_in_metadata(
         num_experts_global = len(entries)
         first_meta = entries[0][1]
         per_expert_shape = list(first_meta["shape"])
+        source_shape = (
+            [num_experts_global, *first_meta["source_shape"]]
+            if "source_shape" in first_meta
+            else None
+        )
         grouped_meta = _copy_grouped_transform_metadata(
-            first_meta, shape=[num_experts_global, *per_expert_shape]
+            first_meta,
+            shape=[num_experts_global, *per_expert_shape],
+            source_shape=source_shape,
         )
         grouped_meta["grouped_expert_proj"] = proj
         if "scale_shape" in first_meta:
             grouped_meta["scale_shape"] = [
                 num_experts_global,
                 *first_meta["scale_shape"],
-            ]
-        if "source_shape" in first_meta:
-            grouped_meta["source_shape"] = [
-                num_experts_global,
-                *first_meta["source_shape"],
             ]
         grouped_metadata[f"{prefix}.{proj}.weight"] = grouped_meta
 
