@@ -3,7 +3,7 @@
 This experiment compares FlashInfer CUTLASS and CuTeDSL MXFP8 dense linear
 GEMMs during NeMo-RL rollout. Training remains BF16. The MXFP8 scope includes
 the MoE experts and Q/K/V/O projections so the selected dense linear backend
-is exercised by generation.
+is exercised by generation. The vocabulary-parallel `lm_head` remains BF16.
 
 ## Matrix
 
@@ -38,8 +38,20 @@ setup times were similar: 264.2 s for CUTLASS and 266.8 s for CuTeDSL.
 
 ### Qwen3-235B-A22B
 
-The matched runs are in progress. Final job IDs and W&B links will be added
-after both arms complete.
+Jobs `493496` and `493497` passed the earlier vLLM startup failure after
+disabling the common FlashInfer fused all-reduce/RMS path. The CUTLASS arm then
+exposed an independent first-refit issue: the QKVO overlay had cleared every
+quantization exclusion and unintentionally included the vocabulary-parallel
+`lm_head`. Its full `[151936, 4096]` HF weight was sent to a TP4-local
+`[37984, 4096]` parameter. The CuTeDSL arm was cancelled because it used the
+same common loader path.
+
+The corrected QKVO recipes exclude `lm_head` while continuing to quantize MoE
+experts and Q/K/V/O projections. Replacement job IDs are recorded after
+submission. Failed-run references:
+
+- CUTLASS: job `493496`, [W&B run](https://wandb.ai/nvidia/sna-pr3478-cutedsl-linear-ab/runs/bo9eflyp)
+- CuTeDSL: job `493497`, [W&B run](https://wandb.ai/nvidia/sna-pr3478-cutedsl-linear-ab/runs/e3u8i38o)
 
 Each model runs two otherwise matched arms:
 
@@ -56,10 +68,32 @@ BF16-to-MXFP8 conversion.
 
 vLLM 0.25.1 enables PyTorch symmetric-memory all-reduce by default. On the
 GCP-NRT B200 nodes used here, its multicast allocation failed during KV-cache
-profiling and terminated an engine. Both arms explicitly set
-`VLLM_ALLREDUCE_USE_SYMM_MEM=0` and `DISABLE_CUSTOM_ALL_REDUCE=true`, selecting
-the NCCL fallback for the common all-reduce path. The dense linear GEMM backend
-remains the only A/B difference.
+profiling and terminated an engine. Both arms set
+`VLLM_ALLREDUCE_USE_SYMM_MEM=0` and
+`compilation_config.pass_config.fuse_allreduce_rms=false`. Custom all-reduce
+remains enabled. The dense linear GEMM backend remains the only A/B difference.
+
+## Async Non-Colocated Refit Support
+
+The current branch contains PR 3478's batched MXFP8 MoE post-load shuffle but
+does not contain PR 3477's BF16-to-MXFP8 NCCL Reshard conversion. Therefore the
+support boundary is:
+
+| Component | Async non-colocated legacy transport | Async non-colocated NCCL Reshard |
+|---|---|---|
+| BF16 trainer to MXFP8 rollout | Supported | Requires PR 3477 |
+| Batched MXFP8 MoE shuffle | Supported | Runs after load when PRs 3477 and 3478 are combined |
+| Trainer-side prequantization | Legacy PR 3294 path only | Not used; PR 3477 quantizes on receiver |
+| Persistent CUDA IPC buffers | Not used across nodes | Not applicable |
+| Loader metadata reuse | Legacy loader cache | NCCL Reshard builds its parameter map during initialization |
+
+The stock Async 1-off MXFP8 recipes leave `refit_transport=null`; being async
+and non-colocated does not select NCCL Reshard automatically. The exact
+combination must explicitly set `policy.generation.refit_transport=nccl_reshard`
+and run on a branch containing both PRs 3477 and 3478. That exact asynchronous
+combination does not yet have an end-to-end test result. A patched synchronous
+BF16-to-MXFP8 NCCL Reshard smoke reached two training steps, which validates the
+receiver conversion path but not Async GRPO scheduling.
 
 ## Submit
 
@@ -80,11 +114,11 @@ The matched 235B submissions use:
 ```bash
 MODEL=qwen235b TOTAL_NODES=8 GPUS_PER_NODE=8 \
   VLLM_ALLREDUCE_USE_SYMM_MEM=0 \
-  DISABLE_CUSTOM_ALL_REDUCE=true LINEAR_BACKEND=flashinfer_cutlass \
+  VLLM_FUSE_ALLREDUCE_RMS=false LINEAR_BACKEND=flashinfer_cutlass \
   ACTION=submit experiments/pr3478_cutedsl_linear_ab/submit_gcp_nrt.sh
 MODEL=qwen235b TOTAL_NODES=8 GPUS_PER_NODE=8 \
   VLLM_ALLREDUCE_USE_SYMM_MEM=0 \
-  DISABLE_CUSTOM_ALL_REDUCE=true LINEAR_BACKEND=flashinfer_cutedsl \
+  VLLM_FUSE_ALLREDUCE_RMS=false LINEAR_BACKEND=flashinfer_cutedsl \
   ACTION=submit experiments/pr3478_cutedsl_linear_ab/submit_gcp_nrt.sh
 ```
 
