@@ -20,14 +20,14 @@ export CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers
 export MOUNTS=${MOUNTS:-/lustre:/lustre,/home/sna:/home/sna}
 export HF_HOME=/lustre/fsw/coreai_dlalgo_llm/users/sna/hf
 export HF_HUB_CACHE="$HF_HOME/hub"
-export HF_DATASETS_CACHE=/lustre/fsw/coreai_dlalgo_llm/users/sna/cache/hf-datasets-refit-canary
-export UV_CACHE_DIR_OVERRIDE=/lustre/fsw/coreai_dlalgo_llm/users/sna/cache/uv-refit-canary
+export HF_DATASETS_CACHE=/home/sna/.cache/hf-datasets-refit-canary
+export UV_CACHE_DIR_OVERRIDE=/home/sna/.cache/uv-refit-canary
 export NEMORL_QWEN235_REFIT_SCOPE=$scope
 export NEMORL_MXFP8_MOE_BACKEND=${NEMORL_MXFP8_MOE_BACKEND:-flashinfer_trtllm}
 export GPUS_PER_NODE=4
 
 timestamp=$(date +%Y%m%d_%H%M%S)
-export CANARY_RESULT_ROOT=${CANARY_RESULT_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna/results/nemorl-qwen235-mxfp8-$scope-refit-token-smoke/$timestamp}
+export CANARY_RESULT_ROOT=${CANARY_RESULT_ROOT:-/home/sna/results/nemorl-qwen235-mxfp8-$scope-refit-token-smoke/$timestamp}
 export BASE_LOG_DIR="$CANARY_RESULT_ROOT/slurm"
 export COMMAND="bash $NEMO_RL_REPO_ROOT/experiments/mxfp8_adaptive_rollout_v0251/run_qwen235_refit_token_smoke.sh"
 
