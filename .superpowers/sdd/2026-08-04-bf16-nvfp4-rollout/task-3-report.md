@@ -78,6 +78,94 @@ Changed files in the feature commit:
 - `tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py`
 
 This report is the only additional Task 3 artifact. No implementation blocker
-remains. Full-file execution still has unrelated optional dependency skips and
-an absent async pytest plugin in the macOS environment; the required focused
-receiver and serializer suites pass.
+remains. The initial-run environment limitations above are superseded by the
+fresh follow-up results below.
+
+## Independent Review Follow-Up
+
+Resolved the independent review against vLLM 0.25.1 semantics:
+
+- Receiver target discovery now calls `WeightsMapper.apply_list()` on complete
+  weight-name variants, including Qwen3-MoE stacked q/k/v, dense MLP gate/up,
+  and shared-expert gate/up mappings. The compatibility fallback uses only
+  `packed_modules_mapping`; tests no longer invent a Qwen gate/up entry there.
+- Receiver-owned non-BF16 `.weight` entries participate in packed-family
+  classification, so an incomplete uint8 family fails with missing scales.
+- Empty and all-ignored manifests fail with the no-receiver-target error.
+- Receiver-owned QARL families are validated once, and that filtered pass
+  produces the w13 shard metadata used during loading.
+- The second-refit identity test now uses a fake layerwise lifecycle that
+  replaces both the parameter and kernel during each load, restores the
+  original runtime identities at finalization, and verifies loaded values over
+  two refits.
+
+### Follow-Up RED
+
+The new mapper regression first failed resolving the complete stacked q-proj
+name:
+
+```text
+PYTHONPATH=. .venv/bin/pytest --confcutdir=tests/unit/models/generation \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py -q \
+  -k 'target_resolver_handles_fused_linear_mapper_variants or empty_or_all_ignored or incomplete_packed_weight_family or derives_w13_metadata_once or complete_group_finalizes_once'
+1 failed, 89 deselected, 1 warning
+```
+
+The remaining manifest regressions then produced the expected failures:
+
+```text
+PYTHONPATH=. .venv/bin/pytest --confcutdir=tests/unit/models/generation \
+  --maxfail=0 tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py \
+  -q -k 'empty_or_all_ignored or incomplete_packed_weight_family or derives_w13_metadata_once or complete_group_finalizes_once'
+4 failed, 1 passed, 90 deselected, 1 warning
+```
+
+The meaningful replacement/restoration identity test was the one passing case;
+it strengthened coverage without requiring a production change.
+
+### Follow-Up GREEN
+
+Exact requested receiver suite:
+
+```text
+PYTHONPATH=. uv run --no-sync pytest --confcutdir=tests/unit/models/generation \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py -q
+94 passed, 1 skipped, 16 warnings
+```
+
+The skip is the pre-existing optional `modelopt.torch.quantization.calib`
+import. The warnings are macOS temporary-directory cleanup warnings.
+
+Exact requested serializer suite, including concurrent Task 2 additions:
+
+```text
+PYTHONPATH=. uv run --no-sync pytest --confcutdir=tests/unit/models/generation \
+  tests/unit/models/generation/test_nvfp4_refit.py -q
+23 passed, 16 warnings
+```
+
+Static checks:
+
+```text
+.venv/bin/ruff check nemo_rl/modelopt/models/generation/vllm_quant_backend.py \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py
+All checks passed!
+
+PYTHONPATH=. .venv/bin/python -m py_compile \
+  nemo_rl/modelopt/models/generation/vllm_quant_backend.py \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py
+passed
+
+git diff --check -- nemo_rl/modelopt/models/generation/vllm_quant_backend.py \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py \
+  .superpowers/sdd/2026-08-04-bf16-nvfp4-rollout/task-3-report.md
+passed
+```
+
+No generated `unit_results.json` or `unit_results/` artifacts remained after
+the runs. Unrelated concurrent worktree edits were not staged or modified.
+
+Follow-up implementation commit: `3b09ad94a`
+(`fix(modelopt): honor vLLM weight mapping for BF16 refits`), DCO-signed.
+
+No Task 3 implementation blocker remains.
