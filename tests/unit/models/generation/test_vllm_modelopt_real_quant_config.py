@@ -3170,6 +3170,53 @@ def test_real_quant_reload_keeps_vllm_config_active_during_layerwise_processing(
     ]
 
 
+def test_real_quant_nccl_reshard_leaves_completion_fence_to_transport(monkeypatch):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    reload_mod = sys.modules["vllm.model_executor.model_loader.reload"]
+
+    model = _mark_as_modelopt_layer(torch.nn.Linear(1, 1))
+    extension = object.__new__(backend.VllmQuantInternalWorkerExtension)
+    extension.model_runner = types.SimpleNamespace(
+        model=model,
+        vllm_config=object(),
+    )
+    extension.model_config = object()
+    extension.device = torch.device("cpu")
+    extension._nrl_modelopt_reload_roots = (model,)
+    calls = []
+
+    monkeypatch.setattr(
+        backend.VllmQuantInternalWorkerExtension,
+        "_is_real_quant_model",
+        lambda self: True,
+    )
+    monkeypatch.setattr(
+        reload_mod,
+        "initialize_layerwise_reload",
+        lambda root: calls.append(("initialize", root)),
+    )
+    monkeypatch.setattr(
+        reload_mod,
+        "finalize_layerwise_reload",
+        lambda root, config: calls.append(("finalize", root, config)),
+    )
+    monkeypatch.setattr(
+        backend.torch.accelerator,
+        "synchronize",
+        lambda: calls.append("lifecycle-sync"),
+    )
+
+    with extension._weight_update_lifecycle("nccl_reshard") as finish:
+        calls.append("load")
+        finish()
+
+    assert calls == [
+        ("initialize", model),
+        "load",
+        ("finalize", model, extension.model_config),
+    ]
+
+
 def test_real_quant_collective_reload_uses_vllm_layerwise_lifecycle(monkeypatch):
     backend = _import_vllm_quant_backend(monkeypatch)
     base_backend = _base_vllm_backend()
@@ -3508,7 +3555,7 @@ def test_nccl_reshard_wraps_bulk_and_misc_in_one_collective_lifecycle(monkeypatc
 
     assert extension.nccl_reshard_refit() is True
     assert calls == [
-        ("enter", "collective"),
+        ("enter", "nccl_reshard"),
         "bulk",
         "sync",
         "misc",

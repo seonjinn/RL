@@ -61,7 +61,7 @@ except ImportError:
     )
 
 
-WeightUpdateTransport = Literal["ipc", "collective"]
+WeightUpdateTransport = Literal["ipc", "collective", "nccl_reshard"]
 WeightUpdateFinalizer = Callable[[], None]
 
 
@@ -1410,7 +1410,7 @@ class VllmInternalWorkerExtension:
             min(int(os.environ.get("NRL_REFIT_NUM_STREAMS", "2")), len(stage_params)),
         )
 
-        with self._weight_update_lifecycle("collective") as finalize:
+        with self._weight_update_lifecycle("nccl_reshard") as finalize:
             streams = [torch.cuda.Stream() for _ in range(num_streams)]
             events = {}
             for idx, (stage, params) in enumerate(stage_params.items()):

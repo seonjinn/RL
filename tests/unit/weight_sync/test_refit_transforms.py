@@ -10,11 +10,30 @@ from nemo_rl.weight_sync.refit_transforms import (
     RefitTransformRequest,
     TransformComponentSpec,
     build_plan_agreement,
+    merge_refit_transform_requests,
     plan_signature,
     plans_from_serialized_metadata,
     resolve_transform,
     validate_serialized_plan_agreement,
 )
+
+
+def test_merge_refit_transform_requests_rejects_conflicting_targets() -> None:
+    parameter_name = "model.layers.0.mlp.down_proj.weight"
+
+    with pytest.raises(ValueError, match="conflicting formats"):
+        merge_refit_transform_requests(
+            [
+                [parameter_name],
+                [
+                    RefitTransformRequest(
+                        parameter_names=(parameter_name,),
+                        source_format="bf16",
+                        target_format="nvfp4_w4a16",
+                    )
+                ],
+            ]
+        )
 
 
 def test_bf16_to_nvfp4_w4a4_distinguishes_wire_from_destination_components() -> None:

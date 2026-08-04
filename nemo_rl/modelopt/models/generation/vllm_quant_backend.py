@@ -813,9 +813,10 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
                     _require_complete_modelopt_layerwise_reload(model)
                     for reload_root in reload_roots:
                         finalize_layerwise_reload(reload_root, self.model_config)
-                # Fence completion for both collective return and the IPC
-                # COMPLETE acknowledgment. Data-batch ACKs use the hook below.
-                torch.accelerator.synchronize()
+                # NCCL-Reshard owns its completion fence after this finalizer.
+                # Legacy collective return and IPC COMPLETE acknowledgment do not.
+                if transport != "nccl_reshard":
+                    torch.accelerator.synchronize()
             except Exception as error:
                 if transport == "ipc":
                     raise RuntimeError(
