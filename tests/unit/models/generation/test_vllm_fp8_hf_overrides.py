@@ -21,6 +21,8 @@ silently reverted (#2188), and re-fixed (#2904). These tests pin the merge
 behavior so it cannot regress a third time.
 """
 
+import pytest
+
 from nemo_rl.models.generation.vllm.vllm_worker import _merge_fp8_kwargs
 
 
@@ -98,3 +100,29 @@ def test_source_fp8_kwargs_not_mutated():
     _merge_fp8_kwargs(vllm_kwargs, fp8_kwargs)
 
     assert "hf_overrides" in fp8_kwargs
+
+
+@pytest.mark.parametrize(
+    "linear_backend",
+    [
+        "flashinfer_cutlass",
+        "flashinfer_cutedsl",
+        "flashinfer_trtllm",
+    ],
+)
+def test_fp8_merge_preserves_linear_backend(linear_backend):
+    vllm_kwargs = {
+        "linear_backend": linear_backend,
+        "hf_overrides": {"max_position_embeddings": 8192},
+    }
+    fp8_kwargs = {
+        "quantization": "fp8",
+        "hf_overrides": {
+            "quantization_config": {"weight_block_size": [32, 16]}
+        },
+    }
+
+    _merge_fp8_kwargs(vllm_kwargs, fp8_kwargs)
+
+    assert vllm_kwargs["linear_backend"] == linear_backend
+    assert vllm_kwargs["quantization"] == "fp8"
