@@ -16,6 +16,7 @@ WALLTIME=${WALLTIME:-04:00:00}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
 DISABLE_CUSTOM_ALL_REDUCE=${DISABLE_CUSTOM_ALL_REDUCE:-false}
 VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM:-0}
+VLLM_FUSE_ALLREDUCE_RMS=${VLLM_FUSE_ALLREDUCE_RMS:-false}
 
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna}
 RUNTIME_ROOT=${RUNTIME_ROOT:-${WORK_ROOT}/containers/nemo-rl-nightly-refresh}
@@ -62,6 +63,7 @@ case "${MODEL}" in
       policy.megatron_cfg.moe_token_dispatcher_type=alltoall
       policy.megatron_cfg.moe_flex_dispatcher_backend=deepep
       ++policy.generation.vllm_kwargs.disable_custom_all_reduce="${DISABLE_CUSTOM_ALL_REDUCE}"
+      ++policy.generation.vllm_kwargs.compilation_config.pass_config.fuse_allreduce_rms="${VLLM_FUSE_ALLREDUCE_RMS}"
     )
     ;;
   *)
@@ -86,6 +88,11 @@ fi
 
 if [[ "${VLLM_ALLREDUCE_USE_SYMM_MEM}" != 0 && "${VLLM_ALLREDUCE_USE_SYMM_MEM}" != 1 ]]; then
   echo "VLLM_ALLREDUCE_USE_SYMM_MEM must be 0 or 1" >&2
+  exit 2
+fi
+
+if [[ "${VLLM_FUSE_ALLREDUCE_RMS}" != true && "${VLLM_FUSE_ALLREDUCE_RMS}" != false ]]; then
+  echo "VLLM_FUSE_ALLREDUCE_RMS must be true or false" >&2
   exit 2
 fi
 
