@@ -2,6 +2,8 @@
 
 Date: 2026-07-31
 
+Capacity policy approved: 2026-08-04
+
 ## Objective
 
 Implement correctness-preserving Transformer Engine partial CUDA Graph training
@@ -264,15 +266,56 @@ State requirements:
 | Flex/DeepEP | Fail closed: eager dispatch owns dynamic handles and narrows expert input from host token counts |
 | Flex/NCCL-EP | Fail closed, including static mode, until graph-bank activation owns external-buffer bootstrap/reset |
 
-AlltoAll and fixed-capacity HybridEP are the required packed production paths
-for this design. AllGather, DeepEP, and NCCL-EP receive explicit capability
-tests and remain fail-closed for packed partial TE graphs until a test proves
-fixed expert-input geometry and, where applicable, graph-bank ownership of
-external runtime state.
+AlltoAll and dispatcher-owned HybridEP are the required packed partial-graph
+production paths. HybridEP may remain dropless when only `moe_router` and
+`moe_preprocess` are captured and dispatch, expert compute, combine, and
+postprocessing remain eager. AllGather, DeepEP, and NCCL-EP receive explicit
+capability tests and remain fail-closed for packed partial TE graphs until a
+test proves safe continuation geometry and, where applicable, graph-bank
+ownership of external runtime state.
 
 After eager expert/combine, output shape, dtype, device, layout, and stride
 must exactly equal residual capacity. The output is never padded, truncated,
 or narrowed at this point.
+
+### MoE capacity policy
+
+The production default is dropless partial capture. `moe_router` and supported
+`moe_preprocess` work run in the graph, while routing-dependent communication,
+expert compute, combine, and postprocessing stay eager. This boundary is the
+correct architecture for dynamic MoE; it is not a temporary fallback. For
+Flex/HybridEP, the graph bank restores dispatcher-owned physical input and
+continuation state before the eager tail. Route counts and eager allocation
+sizes may change, but the final continuation must return the unchanged
+physical THD capacity.
+
+NeMo-RL may remove the fixed-expert-capacity requirement for this exact
+dropless partial scope only after a distributed MCore gate proves nonzero graph
+replay, changed-route eager parity, and exact continuation geometry. The gate
+remains fail-closed for an unverified model, dispatcher, or topology.
+
+Whole-MoE and whole-layer capture on a model containing MoE are separate,
+explicit experimental modes. They require fixed expert geometry configured by:
+
+- `moe_expert_capacity_factor` and
+  `moe_pad_expert_input_to_capacity`; or
+- `moe_expert_rank_capacity_factor` for a dispatcher with a verified static
+  rank-capacity contract.
+
+NeMo-RL forwards these optional fields to the model provider before canonical
+post-init validation. A dedicated eager calibration run selects each
+model/topology capacity from the target packed-token geometry. The matched
+eager baseline and graph arm use exactly the same capacity settings. Any
+expert or rank overflow, or any valid-token drop, fails collectively before an
+optimizer update. The experiment also compares against the original dropless
+recipe so a semantics change cannot be mistaken for a CUDA Graph effect.
+
+Do not build a routing-value graph bank or silently increase capacity during a
+step. A true dynamic whole-MoE graph would require graph-bank ownership of
+communication buffers, device-side ragged offsets/counts, graph-safe grouped
+GEMM, and bounded allocation geometry. Defer that redesign unless profiling
+shows the eager MoE tail dominates after the production partial path passes
+correctness and performance gates.
 
 ### Shared expert and delayed weight gradients
 
@@ -365,9 +408,9 @@ loss path eager while claiming full scope coverage.
 
 | Architecture | Required path |
 |---|---|
-| Nano | attention + Mamba + MoE hybrid; packed TP2/PP2/CP2/EP8; validate the current NeMo-RL recipe backend and a Bridge Flex/HybridEP override as separate rows |
+| Nano | attention + Mamba + MoE hybrid; packed TP2/PP2/CP2/EP8; validate the current NeMo-RL recipe backend and dropless Bridge Flex/HybridEP partial capture as separate rows |
 | Super | attention + Mamba + latent MoE + MTP; AlltoAll router/preprocess; non-overlapped shared expert |
-| Ultra | same `HybridModel` provider family; Flex/HybridEP MoE and large CP/EP topology; first validate with Bridge standalone, then NeMo-RL when a concrete model path and launch profile are available |
+| Ultra | same `HybridModel` provider family; dropless Flex/HybridEP partial MoE and large CP/EP topology; first validate with Bridge standalone, then NeMo-RL when a concrete model path and launch profile are available |
 
 Do not invent a fake Ultra GRPO recipe. The repository's Ultra launch configs
 receive their model path externally. Until a real checkpoint/profile is
@@ -389,9 +432,10 @@ baseline is a separate row.
 Preflight classifies every theoretical row:
 
 - runnable for the selected topology;
-- unsupported because the model has no matching layer;
-- unsupported because full `moe` lacks static drop-and-pad capacity;
-- dependency-blocked;
+- model-incompatible because the model has no matching layer;
+- capacity-blocked because whole `moe` lacks verified static expert capacity;
+- dependency-blocked because runtime, profile, external inputs, or distributed
+  partial-replay evidence is unresolved;
 - submitted.
 
 Full `moe` is tested only when expert input is statically capacity-padded and
@@ -416,6 +460,11 @@ Required NeMo-RL responsibilities:
 9. Activate/capture a graph bank before the forward/backward schedule.
 10. Expose capture, replay, hit, eviction, fallback, and capacity-utilization
     telemetry in worker results and W&B/TensorBoard.
+11. Forward explicit expert and rank capacity fields before model post-init for
+    experimental fixed-capacity rows only.
+12. Collectively reject expert/rank overflow and valid-token drops before an
+    optimizer update.
+13. Keep dropless partial HybridEP independent from whole-MoE capacity knobs.
 
 `fallback_count` remains zero by construction. Failures raise; they do not
 increment a counter and continue eagerly.
@@ -431,6 +480,8 @@ Fail at setup when:
 - the runtime TE commit lacks required correctness fixes;
 - a requested dispatcher lacks a verified replay-state implementation;
 - full `moe` lacks static expert capacity;
+- a dropless partial HybridEP model/topology lacks the required distributed
+  capability evidence;
 - a graph bank belongs to a different model, topology, scope, dispatcher
   schema, or packed signature;
 - MTP children requested by the scope cannot be discovered.
@@ -443,6 +494,10 @@ the graph outputs.
 Fail after combine and before BDA when MoE output does not exactly match
 capacity. Never repair it with output padding.
 
+Fail collectively before the optimizer update when a fixed-capacity row
+reports expert/rank overflow or a valid-token drop. Capacity calibration and
+automatic retries occur in separate jobs, never inside a training step.
+
 ## Testing Strategy
 
 ### TDD contract tests
@@ -452,6 +507,8 @@ Write and observe failures before production changes for:
 - packed AllGather fail-closed capability gate;
 - alltoall state snapshot/restore;
 - HybridEP state snapshot/restore;
+- dropless HybridEP partial replay with changed route counts and unchanged
+  physical continuation geometry;
 - DeepEP/NCCL-EP fail-closed gates;
 - exact hidden/input/output replay signatures;
 - logical 12 / capacity 16 with internal per-sequence padding;
@@ -460,7 +517,8 @@ Write and observe failures before production changes for:
 - shared expert overlap state and delayed-wgrad ownership;
 - MTP nested `HybridStack` discovery;
 - graph-bank dispatcher-state activation and reset;
-- NeMo telemetry propagation.
+- NeMo telemetry propagation;
+- explicit capacity config forwarding and overflow fail-closed behavior.
 
 Use real dispatcher implementations. Small unit tests may stub collectives,
 but must exercise actual permutation/unpermutation mappings rather than a
@@ -488,7 +546,8 @@ Compare:
 - router top-k indices exactly;
 - all parameter gradients;
 - optimizer-updated parameters;
-- padding-row gradients and expert-capacity accounting.
+- padding-row gradients and expert-capacity accounting;
+- zero expert/rank overflow for every fixed-capacity correctness row.
 
 Use three warmup steps, alternating fixed-signature occupancies after capture,
 and at least 8-20 replay steps. Run a 100-step attention and combined hybrid
@@ -561,6 +620,10 @@ The work is complete only when:
 - Nano and Super complete their model-compatible five-step scope matrices;
 - Nano and Super complete paired 20-step performance/accuracy comparisons;
 - combined `attn,mamba,moe_router,moe_preprocess` runs with zero fallback;
+- dropless HybridEP partial capture preserves changed-route eager parity and
+  never requires expert-capacity knobs;
+- any reported whole-MoE result is labeled experimental, uses a matched
+  fixed-capacity baseline, and records zero overflow and zero valid-token drop;
 - Super MTP coverage is explicit and verified;
 - Ultra Flex/HybridEP passes Bridge/MCore correctness, and NeMo-RL Ultra is
   either run with a real resolved profile or reported as externally blocked;
