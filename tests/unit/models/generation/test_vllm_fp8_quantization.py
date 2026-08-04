@@ -106,6 +106,49 @@ def test_init_fp8_defaults_to_batched_moe_shuffle(fp8_module, monkeypatch):
     assert fp8.global_fp8_config.refit_batched_moe_shuffle is True
 
 
+def test_load_weights_restores_vocab_parallel_loader(fp8_module, monkeypatch):
+    fp8 = fp8_module
+    loaded_shapes = []
+
+    class FakeVocabParallelEmbedding:
+        def __init__(self):
+            self.weight = torch.nn.Parameter(torch.zeros(2, 3), requires_grad=False)
+
+        def weight_loader(self, param, loaded_weight):
+            loaded_shapes.append(tuple(loaded_weight.shape))
+            param.copy_(loaded_weight[: param.shape[0]])
+
+    class FakeModel:
+        packed_modules_mapping = {}
+
+        def __init__(self):
+            self.model = types.SimpleNamespace(
+                embed_tokens=FakeVocabParallelEmbedding()
+            )
+
+        def load_weights(self, weights):
+            for name, loaded_weight in weights:
+                assert name == "model.embed_tokens.weight"
+                param = self.model.embed_tokens.weight
+                loader = getattr(param, "weight_loader", None)
+                assert loader is not None, "vocab-parallel TP loader was not restored"
+                loader(param, loaded_weight)
+
+    monkeypatch.setattr(
+        fp8, "VocabParallelEmbedding", FakeVocabParallelEmbedding, raising=False
+    )
+    model = FakeModel()
+    source = torch.arange(12, dtype=torch.float32).reshape(4, 3)
+
+    fp8.load_weights(
+        [("model.embed_tokens.weight", source)],
+        types.SimpleNamespace(model=model),
+    )
+
+    assert loaded_shapes == [(4, 3)]
+    assert torch.equal(model.model.embed_tokens.weight, source[:2])
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 @pytest.mark.parametrize(
     ("is_gated", "intermediate_size", "hidden_size"),
