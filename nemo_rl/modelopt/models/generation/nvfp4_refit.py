@@ -1,0 +1,246 @@
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import annotations
+
+import re
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
+from typing import Any, Literal, Protocol
+
+import torch
+
+NVFP4RefitMode = Literal["w4a16", "w4a4"]
+
+_BLOCK_SIZE = 16
+_EXPERT_PROJECTION = re.compile(
+    r"^(?P<prefix>.+\.experts\.\d+)\.(?P<projection>gate|up|down)_proj\.weight$"
+)
+_IGNORED_NAME_MARKERS = (
+    ".lm_head",
+    ".output_layer",
+    ".mlp.gate",
+    ".router",
+    ".self_attention",
+    ".self_attn",
+)
+
+
+class _QuantMeta(Protocol):
+    qformat: str
+    block_size: int
+    weight_amax: torch.Tensor
+    input_amax: torch.Tensor | None
+
+
+_NVFP4Exporter = Callable[
+    [str, torch.Tensor, _QuantMeta], Iterable[tuple[str, torch.Tensor]]
+]
+
+
+@dataclass(frozen=True)
+class NVFP4Calibration:
+    """Static input-activation amax values for W4A4 refit."""
+
+    input_amax: Mapping[str, torch.Tensor]
+
+
+def compute_nvfp4_input_scale(input_amax: torch.Tensor | None) -> torch.Tensor:
+    """Delegate input-scale conversion to the pinned Megatron-Bridge helper."""
+    from megatron.bridge.models.conversion.modelopt_utils import (
+        compute_nvfp4_input_scale as canonical_compute_nvfp4_input_scale,
+    )
+
+    return canonical_compute_nvfp4_input_scale(input_amax)
+
+
+def get_modelopt_quant_exporter(quant_mode: str) -> tuple[str, object]:
+    """Delegate exporter lookup to the pinned Megatron-Bridge helper."""
+    from megatron.bridge.models.conversion.modelopt_utils import (
+        get_modelopt_quant_exporter as canonical_get_modelopt_quant_exporter,
+    )
+
+    return canonical_get_modelopt_quant_exporter(quant_mode)
+
+
+def nvfp4_refit_group(name: str) -> tuple[str, tuple[str, ...]]:
+    """Return a staging key and complete member names for an HF weight.
+
+    The returned ``w13`` and ``w2`` suffixes are completeness keys only. They
+    are never emitted as checkpoint names; serialization keeps each original
+    per-expert projection name and its separate canonical output family.
+    """
+    match = _EXPERT_PROJECTION.fullmatch(name)
+    if match is None:
+        return name, (name,)
+
+    prefix = match.group("prefix")
+    projection = match.group("projection")
+    if projection == "down":
+        return f"{prefix}.w2", (name,)
+
+    gate_name = f"{prefix}.gate_proj.weight"
+    up_name = f"{prefix}.up_proj.weight"
+    return f"{prefix}.w13", (gate_name, up_name)
+
+
+def serialize_bf16_nvfp4_group(
+    tensors: Mapping[str, torch.Tensor],
+    *,
+    mode: NVFP4RefitMode,
+    calibration: NVFP4Calibration | None,
+) -> list[tuple[str, torch.Tensor]]:
+    """Serialize one complete BF16 NVFP4 refit group with ModelOpt.
+
+    Args:
+        tensors: Logical BF16 HF weights belonging to one refit group.
+        mode: ``w4a16`` for weight-only NVFP4 or ``w4a4`` for calibrated NVFP4.
+        calibration: Named input amax values required by W4A4.
+
+    Returns:
+        ModelOpt checkpoint-layout tensors in exporter order.
+
+    Raises:
+        ValueError: If the mode, group, shape, amax, or calibration is invalid.
+    """
+    if mode not in {"w4a16", "w4a4"}:
+        raise ValueError(f"Unsupported NVFP4 refit mode: {mode}")
+
+    eligible_tensors = {
+        name: tensor
+        for name, tensor in tensors.items()
+        if name.endswith(".weight") and not _is_ignored_name(name)
+    }
+    if not eligible_tensors:
+        return []
+
+    _, expected_names = _validate_group_members(eligible_tensors)
+    weights = [eligible_tensors[name] for name in expected_names]
+    _validate_weight_shapes(expected_names, weights)
+    shared_amax = _shared_weight_amax(expected_names, weights)
+    input_amaxes = {
+        name: _input_amax_for_weight(name, mode, calibration) for name in expected_names
+    }
+
+    quant_mode = "w4a16_nvfp4" if mode == "w4a16" else "nvfp4"
+    qformat, exporter = get_modelopt_quant_exporter(quant_mode)
+    canonical_exporter = _as_nvfp4_exporter(exporter)
+
+    serialized: list[tuple[str, torch.Tensor]] = []
+    for name, weight in zip(expected_names, weights, strict=True):
+        meta = _load_quant_meta()(
+            qformat=qformat,
+            block_size=_BLOCK_SIZE,
+            weight_amax=shared_amax,
+            input_amax=input_amaxes[name],
+        )
+        serialized.extend(canonical_exporter(name, weight, meta))
+    return serialized
+
+
+def _load_quant_meta() -> type[Any]:
+    from megatron.bridge.models.conversion.modelopt_utils import QuantMeta
+
+    return QuantMeta
+
+
+def _as_nvfp4_exporter(exporter: object) -> _NVFP4Exporter:
+    if not callable(exporter):
+        raise TypeError("Megatron-Bridge returned a non-callable NVFP4 exporter")
+    return exporter
+
+
+def _is_ignored_name(name: str) -> bool:
+    return any(marker in name for marker in _IGNORED_NAME_MARKERS)
+
+
+def _validate_group_members(
+    tensors: Mapping[str, torch.Tensor],
+) -> tuple[str, tuple[str, ...]]:
+    groups = {nvfp4_refit_group(name)[0] for name in tensors}
+    if len(groups) != 1:
+        raise ValueError(f"Expected one complete NVFP4 group, got {sorted(groups)}")
+
+    group_name = next(iter(groups))
+    expected_names = nvfp4_refit_group(next(iter(tensors)))[1]
+    if set(tensors) != set(expected_names):
+        missing = sorted(set(expected_names).difference(tensors))
+        extra = sorted(set(tensors).difference(expected_names))
+        detail = f"missing {missing}" if missing else f"unexpected {extra}"
+        raise ValueError(f"NVFP4 group {group_name} is not complete: {detail}")
+    return group_name, expected_names
+
+
+def _validate_weight_shapes(
+    names: tuple[str, ...], weights: list[torch.Tensor]
+) -> None:
+    for name, weight in zip(names, weights, strict=True):
+        if not isinstance(weight, torch.Tensor) or weight.ndim != 2:
+            raise ValueError(f"NVFP4 weight must be 2-D for {name}")
+        if weight.shape[-1] % _BLOCK_SIZE != 0:
+            raise ValueError(
+                f"NVFP4 weight K dimension must be divisible by {_BLOCK_SIZE} for {name}; "
+                f"got {tuple(weight.shape)}"
+            )
+    if len(weights) == 2 and weights[0].shape[-1] != weights[1].shape[-1]:
+        raise ValueError(
+            "NVFP4 gate/up group must use the same K dimension; "
+            f"got {tuple(weights[0].shape)} and {tuple(weights[1].shape)}"
+        )
+
+
+def _shared_weight_amax(
+    names: tuple[str, ...], weights: list[torch.Tensor]
+) -> torch.Tensor:
+    maxima = []
+    for name, weight in zip(names, weights, strict=True):
+        if weight.numel() == 0:
+            raise ValueError(f"NVFP4 weight must be non-empty for {name}")
+        maxima.append(weight.detach().float().abs().amax())
+    shared_amax = torch.stack(maxima).amax().reshape(())
+    if not torch.isfinite(shared_amax) or not torch.all(shared_amax > 0):
+        raise ValueError(
+            f"NVFP4 shared weight amax must be finite and positive: {shared_amax}"
+        )
+    return shared_amax
+
+
+def _input_amax_for_weight(
+    name: str,
+    mode: NVFP4RefitMode,
+    calibration: NVFP4Calibration | None,
+) -> torch.Tensor | None:
+    if mode == "w4a16":
+        return None
+    if calibration is None or name not in calibration.input_amax:
+        raise ValueError(f"Missing input amax for NVFP4 W4A4 weight {name}")
+    input_amax = calibration.input_amax[name]
+    if not isinstance(input_amax, torch.Tensor):
+        raise ValueError(
+            f"Invalid input amax for NVFP4 W4A4 weight {name}: {input_amax}"
+        )
+    input_amax_float = input_amax.detach().float()
+    if (
+        input_amax_float.numel() == 0
+        or not torch.isfinite(input_amax_float).all()
+        or not torch.all(input_amax_float > 0)
+    ):
+        raise ValueError(
+            f"Invalid input amax for NVFP4 W4A4 weight {name}: {input_amax}"
+        )
+    try:
+        compute_nvfp4_input_scale(input_amax)
+    except (RuntimeError, ValueError) as error:
+        raise ValueError(f"Invalid input amax for NVFP4 W4A4 weight {name}") from error
+    return input_amax
