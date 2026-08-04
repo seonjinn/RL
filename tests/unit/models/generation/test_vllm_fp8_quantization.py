@@ -106,7 +106,7 @@ def test_init_fp8_defaults_to_batched_moe_shuffle(fp8_module, monkeypatch):
     assert fp8.global_fp8_config.refit_batched_moe_shuffle is True
 
 
-def test_load_weights_restores_vocab_parallel_loader(fp8_module, monkeypatch):
+def test_load_weights_restores_vocab_parallel_weight_attrs(fp8_module, monkeypatch):
     fp8 = fp8_module
     loaded_shapes = []
 
@@ -116,7 +116,10 @@ def test_load_weights_restores_vocab_parallel_loader(fp8_module, monkeypatch):
 
         def weight_loader(self, param, loaded_weight):
             loaded_shapes.append(tuple(loaded_weight.shape))
-            param.copy_(loaded_weight[: param.shape[0]])
+            output_dim = getattr(param, "output_dim", None)
+            assert output_dim == 0, "vocab-parallel output_dim was not restored"
+            shard = loaded_weight.narrow(output_dim, 0, param.shape[output_dim])
+            param.copy_(shard)
 
     class FakeModel:
         packed_modules_mapping = {}
@@ -146,6 +149,8 @@ def test_load_weights_restores_vocab_parallel_loader(fp8_module, monkeypatch):
     )
 
     assert loaded_shapes == [(4, 3)]
+    assert model.model.embed_tokens.weight.input_dim == 1
+    assert model.model.embed_tokens.weight.output_dim == 0
     assert torch.equal(model.model.embed_tokens.weight, source[:2])
 
 
