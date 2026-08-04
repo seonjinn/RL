@@ -1,5 +1,8 @@
 defaults: "../../../examples/configs/evals/eval.yaml"
 
+canary:
+  requires_policy_refit: true
+
 eval:
   metric: pass@k
   num_tests_per_prompt: 1

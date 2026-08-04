@@ -444,6 +444,12 @@ def _is_fp8_weight(name, model):
 
 def load_weights(weights, model_runner):
     global global_fp8_config
+    if os.environ.get("NEMORL_MXFP8_REFIT_AUDIT") == "1":
+        print(
+            "NEMORL_MXFP8_REFIT event=load_weights "
+            f"tensor_count={len(weights) if hasattr(weights, '__len__') else 'unknown'}",
+            flush=True,
+        )
     weights_quantized = []
     model = model_runner.model
 

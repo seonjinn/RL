@@ -1,0 +1,78 @@
+defaults: "../../../examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g-mxfp8-rollout.yaml"
+
+grpo:
+  num_prompts_per_step: 1
+  num_generations_per_prompt: 1
+  max_num_epochs: 1
+  max_num_steps: 0
+  val_period: 0
+  val_at_start: true
+  val_at_end: false
+  max_val_samples: 64
+  val_batch_size: 64
+
+checkpointing:
+  enabled: false
+
+policy:
+  train_global_batch_size: 1
+  max_total_sequence_length: 8192
+  generation:
+    max_new_tokens: 128
+    temperature: 0.0
+    top_p: 1.0
+    top_k: -1
+    vllm_cfg:
+      async_engine: true
+      precision: fp8
+      is_mx: true
+      kv_cache_dtype: auto
+      tensor_parallel_size: 4
+      expert_parallel_size: 4
+      gpu_memory_utilization: 0.4
+      max_model_len: 8192
+      enforce_eager: false
+      quantization_ignored_layer_kws:
+        - q_proj
+        - k_proj
+        - v_proj
+        - o_proj
+        - .mlp.gate
+        - lm_head
+    vllm_kwargs:
+      attention_backend: FLASH_ATTN
+      moe_backend: ${oc.env:NEMORL_MXFP8_MOE_BACKEND,flashinfer_trtllm}
+      linear_backend: flashinfer_cutedsl
+      max_num_seqs: 64
+      max_num_batched_tokens: 16384
+      enable_chunked_prefill: true
+    colocated:
+      enabled: true
+
+data:
+  max_input_seq_length: 4096
+  shuffle: false
+  train:
+    data_path: ${oc.env:NEMO_RL_REPO_ROOT}/experiments/mxfp8_adaptive_rollout_v0251/data/qwen_trace_math.jsonl
+  validation:
+    data_path: ${oc.env:NEMO_RL_REPO_ROOT}/experiments/mxfp8_adaptive_rollout_v0251/data/qwen_trace_math.jsonl
+  default:
+    dataset_name: ResponseDataset
+    input_key: input
+    output_key: output
+    prompt_file: null
+    system_prompt_file: null
+    processor: math_hf_data_processor
+    env_name: math
+
+logger:
+  log_dir: ${oc.env:CANARY_RESULT_ROOT}/validation
+  num_val_samples_to_print: 0
+  wandb_enabled: false
+  tensorboard_enabled: false
+  monitor_gpus: true
+
+cluster:
+  gpus_per_node: 4
+  num_nodes: 16
+  segment_size: 16

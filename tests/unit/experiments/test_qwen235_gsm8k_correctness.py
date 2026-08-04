@@ -11,6 +11,12 @@ import yaml
 from experiments.mxfp8_adaptive_rollout_v0251.response_validity_gate import (
     evaluate_response_validity,
 )
+from experiments.mxfp8_adaptive_rollout_v0251.refit_validation_gate import (
+    evaluate_refit_validation,
+)
+from experiments.mxfp8_adaptive_rollout_v0251.weight_source_guard import (
+    require_valid_eval_weight_source,
+)
 
 
 ROOT = Path(__file__).parents[3]
@@ -251,6 +257,91 @@ def test_response_validity_gate_accepts_diverse_outputs(tmp_path: Path) -> None:
     assert report["status"] == "pass"
     assert report["unique_response_count"] == 8
     assert report["repetitive_response_count"] == 0
+
+
+def test_eval_canary_rejects_dynamic_mxfp8_without_policy_refit() -> None:
+    with pytest.raises(RuntimeError, match="policy-to-generation refit"):
+        require_valid_eval_weight_source(
+            {
+                "canary": {"requires_policy_refit": True},
+                "generation": {
+                    "model_name": "Qwen/Qwen3-235B-A22B",
+                    "vllm_cfg": {"precision": "fp8", "is_mx": True},
+                },
+            }
+        )
+
+
+def test_qwen235_refit_canary_uses_real_mxfp8_refit() -> None:
+    config = yaml.safe_load(
+        (
+            EXPERIMENT / "configs/grpo_qwen3_235ba22b_moe_refit_token_smoke.yaml"
+        ).read_text()
+    )
+
+    assert config["grpo"]["max_num_steps"] == 0
+    assert config["grpo"]["val_at_start"] is True
+    assert config["grpo"]["max_val_samples"] == 64
+    assert config["policy"]["generation"]["vllm_cfg"]["precision"] == "fp8"
+    assert config["policy"]["generation"]["vllm_cfg"]["is_mx"] is True
+    assert config["policy"]["generation"]["vllm_cfg"]["enforce_eager"] is False
+    assert set(
+        config["policy"]["generation"]["vllm_cfg"]["quantization_ignored_layer_kws"]
+    ) == {"q_proj", "k_proj", "v_proj", "o_proj", ".mlp.gate", "lm_head"}
+    assert config["policy"]["generation"]["colocated"]["enabled"] is True
+    assert config["cluster"] == {
+        "gpus_per_node": 4,
+        "num_nodes": 16,
+        "segment_size": 16,
+    }
+
+
+def test_qwen235_qkvo_refit_canary_quantizes_qkvo() -> None:
+    config = yaml.safe_load(
+        (
+            EXPERIMENT / "configs/grpo_qwen3_235ba22b_qkvo_refit_token_smoke.yaml"
+        ).read_text()
+    )
+
+    assert config["defaults"].endswith("moe_refit_token_smoke.yaml")
+    assert config["policy"]["generation"]["vllm_cfg"][
+        "quantization_ignored_layer_kws"
+    ] == [".mlp.gate", "lm_head"]
+
+
+def test_refit_validation_gate_accepts_diverse_assistant_outputs(
+    tmp_path: Path,
+) -> None:
+    validation = tmp_path / "val_data_step0.jsonl"
+    validation.write_text(
+        "".join(
+            json.dumps(
+                {
+                    "content": [
+                        {"role": "user", "content": f"problem-{index}"},
+                        {
+                            "role": "assistant",
+                            "content": f"The answer is {index + 10}.",
+                        },
+                    ],
+                    "rewards": [float(index % 2)],
+                    "idx": index,
+                }
+            )
+            + "\n"
+            for index in range(8)
+        ),
+        encoding="utf-8",
+    )
+
+    report = evaluate_refit_validation(
+        validation,
+        expected_rows=8,
+        max_repetitive_fraction=0.1,
+    )
+
+    assert report["status"] == "pass"
+    assert report["unique_response_count"] == 8
 
 
 def test_correctness_gate_rejects_statistically_significant_paired_regression(

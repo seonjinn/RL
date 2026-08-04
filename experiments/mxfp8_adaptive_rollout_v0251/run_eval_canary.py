@@ -15,6 +15,9 @@ from experiments.mxfp8_adaptive_rollout_v0251.generation_timing import (
     AsyncCallTimer,
     GenerationLengthAudit,
 )
+from experiments.mxfp8_adaptive_rollout_v0251.weight_source_guard import (
+    require_valid_eval_weight_source,
+)
 from nemo_rl.algorithms.utils import get_tokenizer
 from nemo_rl.data.datasets.eval_datasets import _is_multimodal_dataset
 from nemo_rl.distributed.virtual_cluster import init_ray
@@ -48,7 +51,9 @@ def main() -> None:
     config = load_config(str(args.config))
     if remaining:
         config = OmegaConf.merge(config, OmegaConf.from_dotlist(remaining))
-    config = MasterConfig(**OmegaConf.to_container(config, resolve=True))
+    resolved_config = OmegaConf.to_container(config, resolve=True)
+    require_valid_eval_weight_source(resolved_config)
+    config = MasterConfig(**resolved_config)
     pprint.pprint(config)
 
     init_ray()
