@@ -16,7 +16,7 @@ import os
 import types
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
-from typing import Any
+from typing import Any, Literal
 
 import torch
 import vllm  # noqa: F401
@@ -26,6 +26,10 @@ from modelopt.torch.quantization.nn.modules.tensor_quantizer import TensorQuanti
 from nemo_rl.modelopt.utils import (
     MODELOPT_REAL_QUANT_ZMQ_TIMEOUT_MS,
     matches_quant_ignore_pattern,
+)
+from nemo_rl.modelopt.models.generation.nvfp4_refit import (
+    nvfp4_refit_group,
+    serialize_bf16_nvfp4_group,
 )
 from nemo_rl.models.generation.vllm.checkpoint_engine import VllmCheckpointEngineMixin
 from nemo_rl.models.generation.vllm.vllm_backend import (
@@ -45,6 +49,13 @@ _FUSED_MODELOPT_MOE_SUFFIXES = {
     ".experts.w13_input_scale": "w13_input_scale",
     ".experts.w2_input_scale": "w2_input_scale",
 }
+_MODELOPT_COMPONENT_SUFFIXES = (
+    ".weight_scale_2",
+    ".weight_scale",
+    ".input_scale",
+    ".weight",
+)
+_RealQuantSource = Literal["bf16", "modelopt"]
 
 
 def _match_fused_modelopt_moe_weight(name: str) -> tuple[str, str] | None:
@@ -55,6 +66,299 @@ def _match_fused_modelopt_moe_weight(name: str) -> tuple[str, str] | None:
             if name.endswith(suffix)
         ),
         None,
+    )
+
+
+def _is_ignored_real_quant_tensor(name: str, ignore_patterns: list[str]) -> bool:
+    """Return whether a real-quant manifest tensor matches an ignore rule."""
+    return matches_quant_ignore_pattern(name, ignore_patterns)
+
+
+def _model_prefix_variants(name: str) -> set[str]:
+    """Return vLLM/HF name variants with or without the leading model scope."""
+    variants = {name}
+    if name.startswith("model."):
+        variants.add(name.removeprefix("model."))
+    else:
+        variants.add(f"model.{name}")
+    return variants
+
+
+def _modelopt_target_kind(module: torch.nn.Module) -> Literal["linear", "moe"] | None:
+    """Classify a receiver module that owns an NVFP4 quantized destination."""
+    quant_method = getattr(module, "quant_method", None)
+    if quant_method is None:
+        return None
+
+    try:
+        from vllm.model_executor.layers.fused_moe.routed_experts import (
+            RoutedExperts,
+        )
+        from vllm.model_executor.layers.linear import LinearBase
+        from vllm.model_executor.layers.quantization.modelopt import (
+            ModelOptNvFp4Config,
+        )
+    except ImportError:
+        return None
+    try:
+        from vllm.model_executor.layers.vocab_parallel_embedding import (
+            ParallelLMHead,
+        )
+    except ImportError:
+        ParallelLMHead = LinearBase
+
+    quant_config = getattr(quant_method, "quant_config", None)
+    if not isinstance(quant_config, ModelOptNvFp4Config):
+        return None
+    if isinstance(module, RoutedExperts):
+        return "moe"
+    if isinstance(module, (LinearBase, ParallelLMHead)):
+        return "linear"
+    return None
+
+
+def _hf_to_vllm_module_prefix_variants(
+    model: torch.nn.Module,
+    prefix: str,
+) -> set[str]:
+    """Map an HF module prefix through vLLM name and fusion mappings."""
+    mapper = getattr(model, "hf_to_vllm_mapper", None)
+    prefix_map = getattr(mapper, "orig_to_new_prefix", {})
+    substring_map = getattr(mapper, "orig_to_new_substr", {})
+    packed_mapping = getattr(model, "packed_modules_mapping", {})
+    packed_reverse = {
+        original: fused
+        for fused, originals in packed_mapping.items()
+        for original in originals
+    }
+
+    variants = _model_prefix_variants(prefix)
+    changed = True
+    while changed:
+        changed = False
+        for variant in tuple(variants):
+            mapped_full = prefix_map.get(variant)
+            if mapped_full is not None and mapped_full not in variants:
+                variants.add(mapped_full)
+                changed = True
+            parts = variant.split(".")
+            if parts and parts[0] in prefix_map:
+                mapped = ".".join([prefix_map[parts[0]], *parts[1:]])
+                if mapped not in variants:
+                    variants.add(mapped)
+                    changed = True
+            for index, part in enumerate(parts):
+                mapped_part = substring_map.get(part)
+                if mapped_part is None:
+                    continue
+                mapped = ".".join([*parts[:index], mapped_part, *parts[index + 1 :]])
+                if mapped not in variants:
+                    variants.add(mapped)
+                    changed = True
+            if parts and parts[-1] in packed_reverse:
+                mapped = ".".join([*parts[:-1], packed_reverse[parts[-1]]])
+                if mapped not in variants:
+                    variants.add(mapped)
+                    changed = True
+    return variants
+
+
+def _resolve_hf_quant_target_module(
+    model: torch.nn.Module,
+    name: str,
+) -> torch.nn.Module | None:
+    """Resolve an HF parameter to its vLLM receiver module.
+
+    vLLM's FP8 loader owns this mapping logic, including packed projections,
+    mapper prefix/substrings, ModuleLists, and the MoERunner-to-RoutedExperts
+    transition. Reuse it when available; the small fallback keeps unit stubs
+    independent of the heavy FP8 patch module.
+    """
+    if hasattr(model, "packed_modules_mapping"):
+        try:
+            from nemo_rl.models.generation.vllm.quantization.fp8 import (
+                _get_module_from_param_name,
+            )
+
+            return _get_module_from_param_name(model, name)
+        except (
+            AssertionError,
+            ImportError,
+            AttributeError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ):
+            pass
+
+    module_path = name.split(".")[:-1]
+    path_variants = {
+        tuple(variant.split("."))
+        for variant in _hf_to_vllm_module_prefix_variants(model, ".".join(module_path))
+    }
+    for candidate_path in path_variants:
+        current_module = model
+        try:
+            for part in candidate_path:
+                if isinstance(current_module, torch.nn.ModuleList):
+                    current_module = current_module[int(part)]
+                else:
+                    current_module = getattr(current_module, part)
+        except (AttributeError, IndexError, ValueError):
+            continue
+        return current_module
+
+    if len(module_path) >= 3 and module_path[-2].isdigit():
+        scope = ".".join(module_path[:-2])
+        for candidate_scope in _hf_to_vllm_module_prefix_variants(model, scope):
+            current_module = model
+            try:
+                for part in candidate_scope.split("."):
+                    if isinstance(current_module, torch.nn.ModuleList):
+                        current_module = current_module[int(part)]
+                    else:
+                        current_module = getattr(current_module, part)
+            except (AttributeError, IndexError, ValueError):
+                continue
+            return current_module
+    return None
+
+
+def _is_bf16_quantization_candidate(
+    name: str,
+    shape: tuple[int, ...] | list[int] | torch.Size,
+    *,
+    model: torch.nn.Module,
+) -> bool:
+    """Return whether a BF16 tensor belongs to a ModelOpt-owned destination."""
+    if not name.endswith(".weight") or len(shape) != 2:
+        return False
+    target_module = _resolve_hf_quant_target_module(model, name)
+    return _modelopt_target_kind(target_module) is not None if target_module else False
+
+
+def _is_modelopt_component_name(name: str) -> bool:
+    """Return whether a manifest name belongs to a packed ModelOpt family."""
+    return _match_fused_modelopt_moe_weight(name) is not None or any(
+        name.endswith(suffix)
+        for suffix in _MODELOPT_COMPONENT_SUFFIXES
+        if suffix != ".weight"
+    )
+
+
+def _is_receiver_modelopt_component(model: torch.nn.Module, name: str) -> bool:
+    """Return whether a packed component belongs to a quantized receiver."""
+    target_module = _resolve_hf_quant_target_module(model, name)
+    return _modelopt_target_kind(target_module) is not None if target_module else False
+
+
+def _validate_modelopt_manifest(
+    state_dict_info: dict[str, Any],
+    names: set[str],
+    *,
+    require_input_scales: bool,
+) -> None:
+    """Validate complete prepacked ModelOpt component families."""
+    fused_names = {
+        name for name in names if _match_fused_modelopt_moe_weight(name) is not None
+    }
+    if fused_names:
+        _w13_num_shards_from_state_dict_info(
+            {name: state_dict_info[name] for name in fused_names},
+            require_input_scales=require_input_scales,
+        )
+
+    ordinary_names = names - fused_names
+    if not ordinary_names:
+        return
+
+    families: dict[str, set[str]] = {}
+    for name in ordinary_names:
+        suffix = next(
+            (
+                component_suffix
+                for component_suffix in _MODELOPT_COMPONENT_SUFFIXES
+                if name.endswith(component_suffix)
+            ),
+            None,
+        )
+        if suffix is None:
+            raise ValueError(f"Unsupported ModelOpt real-quant tensor name: {name}")
+        prefix = name[: -len(suffix)]
+        families.setdefault(prefix, set()).add(suffix)
+
+    required_suffixes = {".weight", ".weight_scale", ".weight_scale_2"}
+    if require_input_scales:
+        required_suffixes.add(".input_scale")
+    for prefix, suffixes in families.items():
+        missing = required_suffixes - suffixes
+        if missing:
+            raise RuntimeError(
+                f"Incomplete ModelOpt weight family for {prefix}: "
+                f"missing {sorted(missing)}"
+            )
+
+
+def _classify_real_quant_source(
+    state_dict_info: dict[str, Any],
+    *,
+    model: torch.nn.Module,
+    ignore_patterns: list[str],
+    require_input_scales: bool,
+) -> _RealQuantSource:
+    """Classify a real-quant refit manifest before receiving any payload."""
+    eligible = {
+        name: info
+        for name, info in state_dict_info.items()
+        if not _is_ignored_real_quant_tensor(name, ignore_patterns)
+    }
+    if not eligible:
+        return "modelopt"
+    packed_names = {
+        name
+        for name in eligible
+        if _is_modelopt_component_name(name)
+        and _is_receiver_modelopt_component(model, name)
+    }
+    bf16_names = {
+        name
+        for name, (shape, dtype) in eligible.items()
+        if dtype == torch.bfloat16
+        and _is_bf16_quantization_candidate(
+            name,
+            shape,
+            model=model,
+        )
+    }
+    if bf16_names and packed_names:
+        raise ValueError(
+            "mixed BF16 and ModelOpt real-quant manifest entries in "
+            "quantizable destinations: "
+            f"BF16={sorted(bf16_names)}, ModelOpt={sorted(packed_names)}"
+        )
+    if bf16_names:
+        return "bf16"
+
+    if packed_names:
+        family_names = {
+            name
+            for name in eligible
+            if name in packed_names
+            or name.endswith(".weight")
+            and any(
+                name.removesuffix(".weight") == component_name.rsplit(".", 1)[0]
+                for component_name in packed_names
+            )
+        }
+        _validate_modelopt_manifest(
+            state_dict_info,
+            family_names,
+            require_input_scales=require_input_scales,
+        )
+        return "modelopt"
+
+    raise ValueError(
+        "no receiver ModelOpt quantization targets found in real-quant manifest"
     )
 
 
@@ -333,16 +637,10 @@ def _iter_modelopt_quant_modules(
     model: torch.nn.Module,
 ) -> list[tuple[str, torch.nn.Module]]:
     """Return modules whose runtime layout is owned by vLLM ModelOpt methods."""
-    from vllm.model_executor.layers.quantization.modelopt import (
-        ModelOptNvFp4FusedMoE,
-        ModelOptNvFp4LinearMethod,
-    )
-
-    method_types = (ModelOptNvFp4FusedMoE, ModelOptNvFp4LinearMethod)
     return [
         (module_name, module)
         for module_name, module in model.named_modules()
-        if isinstance(getattr(module, "quant_method", None), method_types)
+        if _modelopt_target_kind(module) is not None
     ]
 
 
@@ -435,6 +733,9 @@ if os.environ.get("VLLM_MODELOPT_REAL_QUANT", "0") == "1":
 
 class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
     _nrl_w13_num_shards_by_prefix: dict[str, int]
+    _nrl_real_quant_source: _RealQuantSource = "modelopt"
+    _nrl_bf16_staging: dict[str, dict[str, torch.Tensor]] = {}
+    _nrl_bf16_quantizable_names: set[str] = set()
     _nrl_modelopt_reload_roots: tuple[torch.nn.Module, ...] | None = None
 
     def maybe_init_zmq(self) -> None:
@@ -479,6 +780,7 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
 
         def finalize() -> None:
             try:
+                self._require_complete_bf16_refit_groups()
                 with torch.device(self.device):
                     _require_complete_modelopt_layerwise_reload(model)
                     for reload_root in reload_roots:
@@ -523,19 +825,61 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
             return
         super()._synchronize_before_ipc_data_ack()
 
+    def _require_complete_bf16_refit_groups(self) -> None:
+        """Reject logical BF16 groups that never received all members."""
+        if self._nrl_real_quant_source != "bf16" or not self._nrl_bf16_staging:
+            return
+
+        incomplete = []
+        for group_name, tensors in sorted(self._nrl_bf16_staging.items()):
+            expected = nvfp4_refit_group(next(iter(tensors)))[1]
+            missing = sorted(set(expected) - set(tensors))
+            if missing:
+                incomplete.append(f"{group_name}: missing {missing}")
+        if incomplete:
+            raise RuntimeError(
+                "BF16 NVFP4 refit is incomplete: " + "; ".join(incomplete)
+            )
+
     def prepare_refit_info(self, state_dict_info: dict[str, Any]) -> None:
         super().prepare_refit_info(state_dict_info)
         if not self._is_real_quant_model():
             return
-        self._get_modelopt_reload_roots()
         quant_config = (
             self.model_runner.vllm_config.model_config.hf_config.quantization_config
         )
+        ignore_patterns = quant_config.get("ignore", []) or []
+        require_input_scales = (
+            str(quant_config.get("quant_algo", "")).upper() == "NVFP4"
+        )
+        self._nrl_real_quant_source = _classify_real_quant_source(
+            state_dict_info,
+            model=self.model_runner.model,
+            ignore_patterns=ignore_patterns,
+            require_input_scales=require_input_scales,
+        )
+        self._nrl_bf16_quantizable_names = {
+            name
+            for name, (shape, dtype) in state_dict_info.items()
+            if dtype == torch.bfloat16
+            and not _is_ignored_real_quant_tensor(name, ignore_patterns)
+            and _is_bf16_quantization_candidate(
+                name,
+                shape,
+                model=self.model_runner.model,
+            )
+        }
+        self._nrl_bf16_staging = {}
+        if self._nrl_real_quant_source == "bf16" and require_input_scales:
+            raise ValueError(
+                "BF16 receiver refit currently supports W4A16 NVFP4 only; "
+                "W4A4 calibration is not available"
+            )
+
+        self._get_modelopt_reload_roots()
         self._nrl_w13_num_shards_by_prefix = _w13_num_shards_from_state_dict_info(
             state_dict_info,
-            require_input_scales=(
-                str(quant_config.get("quant_algo", "")).upper() == "NVFP4"
-            ),
+            require_input_scales=require_input_scales,
         )
         if (
             self._nrl_w13_num_shards_by_prefix
@@ -609,6 +953,56 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
             for buf in attached:
                 del buf.weight_loader
 
+    def _load_bf16_weights(
+        self,
+        weights: list[tuple[str, torch.Tensor]],
+        *,
+        ignore_patterns: list[str],
+    ) -> list[tuple[str, torch.Tensor]]:
+        """Serialize complete BF16 groups and return direct-load tensors."""
+        direct_weights: list[tuple[str, torch.Tensor]] = []
+        incoming_groups: dict[str, dict[str, torch.Tensor]] = {}
+        incoming_names: set[str] = set()
+        for name, weight in weights:
+            ignored = _is_ignored_real_quant_tensor(name, ignore_patterns)
+            suffix = name.rsplit(".", 1)[-1]
+            if ignored and suffix in {
+                "weight_scale",
+                "weight_scale_2",
+                "input_scale",
+            }:
+                continue
+            if ignored or name not in self._nrl_bf16_quantizable_names:
+                direct_weights.append((name, weight))
+                continue
+
+            group_name, _expected_names = nvfp4_refit_group(name)
+            incoming_groups.setdefault(group_name, {})[name] = weight
+            incoming_names.add(name)
+
+        serialized_weights: list[tuple[str, torch.Tensor]] = []
+        for group_name, incoming in incoming_groups.items():
+            group_tensors = dict(self._nrl_bf16_staging.get(group_name, {}))
+            group_tensors.update(incoming)
+            expected_names = nvfp4_refit_group(next(iter(group_tensors)))[1]
+            if set(group_tensors) != set(expected_names):
+                self._nrl_bf16_staging[group_name] = {
+                    name: tensor.detach().clone() if name in incoming_names else tensor
+                    for name, tensor in group_tensors.items()
+                }
+                continue
+
+            serialized_weights.extend(
+                serialize_bf16_nvfp4_group(
+                    group_tensors,
+                    mode="w4a16",
+                    calibration=None,
+                )
+            )
+            self._nrl_bf16_staging.pop(group_name, None)
+
+        return direct_weights + serialized_weights
+
     def _load_weights(self, weights):
         """Load pre-folded weights and input_quantizer amax buffers.
 
@@ -624,6 +1018,24 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
                 self.model_runner.vllm_config.model_config.hf_config.quantization_config
             )
             ignore_patterns = quant_config.get("ignore", []) or []
+            if self._nrl_real_quant_source == "bf16":
+                source_weights = list(weights)
+                weights = self._load_bf16_weights(
+                    source_weights,
+                    ignore_patterns=ignore_patterns,
+                )
+                if not weights:
+                    return None
+                try:
+                    with torch.device(self.device):
+                        return super()._load_weights(weights)
+                finally:
+                    with torch.device(self.device):
+                        _detach_pending_layerwise_weights(
+                            self._get_modelopt_reload_roots(),
+                            source_storage_ptrs,
+                        )
+
             filtered = []
             for name, weight in weights:
                 suffix = name.rsplit(".", 1)[-1]
