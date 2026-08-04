@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import time
+import json
+import os
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from functools import wraps
@@ -23,6 +25,15 @@ import torch
 
 
 _VLLM_PATCH_LOCK = threading.RLock()
+
+
+def emit_refit_profile(rank: int, metrics: dict[str, float | int]) -> None:
+    """Emit one refit profile record without relying on actor logger levels."""
+    record = "[NRL_REFIT_PROFILE] " + json.dumps(
+        {"rank": rank, **metrics}, sort_keys=True
+    )
+    encoded_line = (record + "\n").encode()
+    os.write(1, encoded_line)
 
 
 class RefitPhaseProfiler:

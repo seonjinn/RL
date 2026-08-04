@@ -29,6 +29,7 @@ from nemo_rl.models.generation.vllm.checkpoint_engine import (
 )
 from nemo_rl.models.generation.vllm.refit_profile import (
     RefitPhaseProfiler,
+    emit_refit_profile,
     profile_vllm_layerwise_kernels,
 )
 from nemo_rl.models.policy.utils import (
@@ -896,7 +897,6 @@ class VllmInternalWorkerExtension:
     )
     def update_weights_from_collective(self) -> bool:
         """Update the model weights from collective communication."""
-        import json
         import os
 
         assert self.state_dict_info is not None, (
@@ -957,10 +957,7 @@ class VllmInternalWorkerExtension:
                 and torch.distributed.is_initialized()
                 else -1
             )
-            logger.info(
-                "[NRL_REFIT_PROFILE] %s",
-                json.dumps({"rank": rank, **metrics}, sort_keys=True),
-            )
+            emit_refit_profile(rank=rank, metrics=metrics)
         return True
 
     def update_weights_from_decoded_sparse_payload(

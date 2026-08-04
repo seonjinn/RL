@@ -13,6 +13,9 @@
 # limitations under the License.
 
 import importlib.util
+import json
+import sys
+import types
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -89,6 +92,36 @@ def test_refit_phase_profiler_is_noop_when_disabled(monkeypatch):
     assert profiler.finish() == {}
     synchronize.assert_not_called()
     event.assert_not_called()
+
+
+def test_emit_refit_profile_writes_parseable_stdout(monkeypatch):
+    monkeypatch.setitem(sys.modules, "torch", types.ModuleType("torch"))
+    module_path = (
+        Path(__file__).parents[4] / "nemo_rl/models/generation/vllm/refit_profile.py"
+    )
+    spec = importlib.util.spec_from_file_location("refit_profile", module_path)
+    assert spec is not None and spec.loader is not None
+    refit_profile = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(refit_profile)
+    write = MagicMock()
+    monkeypatch.setattr(refit_profile.os, "write", write)
+
+    refit_profile.emit_refit_profile(
+        rank=7,
+        metrics={"receive_and_load_s": 1.25, "received_tensor_count": 3},
+    )
+
+    write.assert_called_once()
+    fd, encoded_line = write.call_args.args
+    assert fd == 1
+    assert encoded_line.endswith(b"\n")
+    prefix = b"[NRL_REFIT_PROFILE] "
+    assert encoded_line.startswith(prefix)
+    assert json.loads(encoded_line.removeprefix(prefix)) == {
+        "rank": 7,
+        "receive_and_load_s": 1.25,
+        "received_tensor_count": 3,
+    }
 
 
 def test_refit_phase_profiler_does_not_mask_profiled_body_error(monkeypatch):
