@@ -117,9 +117,7 @@ def test_fp8_merge_preserves_linear_backend(linear_backend):
     }
     fp8_kwargs = {
         "quantization": "fp8",
-        "hf_overrides": {
-            "quantization_config": {"weight_block_size": [32, 16]}
-        },
+        "hf_overrides": {"quantization_config": {"weight_block_size": [32, 16]}},
     }
 
     _merge_fp8_kwargs(vllm_kwargs, fp8_kwargs)
