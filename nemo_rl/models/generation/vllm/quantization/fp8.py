@@ -25,6 +25,9 @@ from vllm.logger import init_logger
 from vllm.model_executor.layers.fused_moe.routed_experts import RoutedExperts
 from vllm.model_executor.layers.fused_moe.runner.moe_runner import MoERunner
 from vllm.model_executor.layers.linear import LinearBase
+from vllm.model_executor.layers.vocab_parallel_embedding import (
+    VocabParallelEmbedding,
+)
 from vllm.triton_utils import tl, triton
 from vllm.v1.engine.core import EngineCoreProc
 from vllm.v1.engine.utils import CoreEngineProcManager
@@ -456,11 +459,23 @@ def _is_mxfp8_weight(name: str, model: Any) -> bool:
     }
 
 
+def _restore_vocab_parallel_weight_loader(name: str, model: Any) -> None:
+    if not name.endswith(".weight"):
+        return
+
+    module = _get_module_from_param_name(model, name)
+    if isinstance(module, VocabParallelEmbedding) and not hasattr(
+        module.weight, "weight_loader"
+    ):
+        module.weight.weight_loader = module.weight_loader
+
+
 def load_weights(weights, model_runner):
     weights_quantized = []
     model = model_runner.model
 
     for k, v in weights:
+        _restore_vocab_parallel_weight_loader(k, model)
         if not _is_fp8_weight(k, model):
             weights_quantized.append((k, v))
             continue
