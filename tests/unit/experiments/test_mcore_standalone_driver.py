@@ -791,6 +791,15 @@ def test_distributed_wrappers_reject_raw_command_payload(wrapper: str) -> None:
     assert "raw command" in result.stderr.lower()
 
 
+def test_worker_rehashes_exact_intent_bytes_used_by_runtime_contract() -> None:
+    source = (EXPERIMENT_DIR / "scripts" / "run_mcore_scope.sub").read_text()
+
+    assert "\"${SUBMISSION_INTENT_SHA256}\" <<'PY'" in source
+    assert "serialized_intent = intent_path.read_bytes()" in source
+    assert "hashlib.sha256(serialized_intent).hexdigest() != sys.argv[11]" in source
+    assert "intent = json.loads(serialized_intent)" in source
+
+
 def test_scope_classifier_accepts_only_the_committed_mcore_driver() -> None:
     scope_path = EXPERIMENT_DIR / "scope_matrix.py"
     spec = importlib.util.spec_from_file_location("scope_matrix", scope_path)

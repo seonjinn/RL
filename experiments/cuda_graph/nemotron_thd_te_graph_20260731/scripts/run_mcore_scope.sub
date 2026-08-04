@@ -74,13 +74,24 @@ mcore_root=${bridge_root}/3rdparty/Megatron-LM
 mapfile -t runtime_fields < <(python3 - "${RUNTIME_ATTESTATION}" "${SUBMISSION_INTENT}" \
   "${CONTAINER_SHA256}" "${EXPECTED_TE_SHA}" "${EXPECTED_TE_VERSION_BASE_SHA}" \
   "${TEST_ROW_ID}" "${RUNTIME_FEATURE_SET}" "${RUNTIME_EXCLUDED_PACKAGES}" \
-  "${TORCH_CUDA_ARCH_LIST}" "${NVTE_CUDA_ARCHS}" <<'PY'
+  "${TORCH_CUDA_ARCH_LIST}" "${NVTE_CUDA_ARCHS}" \
+  "${SUBMISSION_INTENT_SHA256}" <<'PY'
+import hashlib
 import json
+import stat
 import sys
 from pathlib import Path
 
 payload = json.loads(Path(sys.argv[1]).read_text())
-intent = json.loads(Path(sys.argv[2]).read_text())
+intent_path = Path(sys.argv[2])
+if intent_path.is_symlink() or not intent_path.is_file():
+    raise SystemExit("submission intent is not a regular file")
+if stat.S_IMODE(intent_path.stat().st_mode) & 0o222:
+    raise SystemExit("submission intent is writable")
+serialized_intent = intent_path.read_bytes()
+if hashlib.sha256(serialized_intent).hexdigest() != sys.argv[11]:
+    raise SystemExit("submission intent literal SHA256 mismatch")
+intent = json.loads(serialized_intent)
 if payload.get("status") != "passed":
     raise SystemExit("runtime attestation is not passed")
 if payload.get("container_sha256") != sys.argv[3]:
