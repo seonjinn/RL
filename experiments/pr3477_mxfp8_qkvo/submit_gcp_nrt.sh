@@ -21,7 +21,7 @@ RUNTIME_ROOT=${RUNTIME_ROOT:-${WORK_ROOT}/containers/nemo-rl-nightly-refresh}
 CONTAINER=${CONTAINER:-${RUNTIME_ROOT}/nemo_rl_nightly_20260730_483099.sqsh}
 PYTHON_OVERLAY=${PYTHON_OVERLAY:-${RUNTIME_ROOT}/python-overlay-483099}
 ROOT_CACHE_OVERLAY=${ROOT_CACHE_OVERLAY:-${RUNTIME_ROOT}/root-cache-overlay-483099}
-CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/mopd_nano_fast/.cache/pr3478-qkvo-analysis-vllm025}
+CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/mopd_nano_fast/.cache/pr3478-qkvo-analysis-vllm025/${MODE}}
 EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${WORK_ROOT}/experiments/pr3478-qkvo-analysis/results/${MODE}-${MAX_STEPS}step-${RUN_SUFFIX}}
 WANDB_PROJECT=${WANDB_PROJECT:-sna-pr3478-mxfp8-qkvo-analysis}
 WANDB_NAME=${WANDB_NAME:-${MODE}-${MAX_STEPS}step-${RUN_SUFFIX}}
@@ -85,7 +85,7 @@ set -euo pipefail
 cd ${REPO}
 export HF_HOME=${WORK_ROOT}/.cache/huggingface
 export NRL_FORCE_REBUILD_VENVS=false
-export NEMO_RL_VENV_DIR=/tmp/nemo-rl-pr3477-qkvo-workers
+export NEMO_RL_VENV_DIR=/tmp/nemo-rl-pr3478-${MODE}-workers
 export NVTE_CUDA_ARCHS=100
 export PYTHONPATH=${REPO}
 export TORCH_CUDA_ARCH_LIST=10.0
