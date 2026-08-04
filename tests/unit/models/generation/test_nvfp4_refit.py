@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -18,7 +20,7 @@ class _FakeQuantMeta:
     input_amax: torch.Tensor | None
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def _fake_pinned_quant_meta(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(nvfp4_refit, "_load_quant_meta", lambda: _FakeQuantMeta)
 
@@ -81,6 +83,7 @@ def test_nvfp4_refit_group_names() -> None:
 
 def test_serialize_singleton_down_projection_uses_exact_canonical_family(
     monkeypatch: pytest.MonkeyPatch,
+    _fake_pinned_quant_meta: None,
 ) -> None:
     calls: list[tuple[str, torch.Tensor, object]] = []
     requested_modes: list[str] = []
@@ -125,6 +128,7 @@ def test_serialize_singleton_down_projection_uses_exact_canonical_family(
 
 def test_serialize_gate_up_is_one_group_with_shared_weight_amax(
     monkeypatch: pytest.MonkeyPatch,
+    _fake_pinned_quant_meta: None,
 ) -> None:
     calls: list[tuple[str, torch.Tensor, object]] = []
     monkeypatch.setattr(
@@ -163,6 +167,7 @@ def test_serialize_gate_up_is_one_group_with_shared_weight_amax(
 
 def test_serialize_w4a4_requires_named_calibration_and_emits_input_scale(
     monkeypatch: pytest.MonkeyPatch,
+    _fake_pinned_quant_meta: None,
 ) -> None:
     calls: list[tuple[str, torch.Tensor, object]] = []
     input_scale_calls: list[torch.Tensor] = []
@@ -195,6 +200,7 @@ def test_serialize_w4a4_requires_named_calibration_and_emits_input_scale(
 
 def test_serialize_w4a4_preserves_distinct_gate_up_calibration_names(
     monkeypatch: pytest.MonkeyPatch,
+    _fake_pinned_quant_meta: None,
 ) -> None:
     calls: list[tuple[str, torch.Tensor, object]] = []
     input_scale_calls: list[torch.Tensor] = []
@@ -296,8 +302,45 @@ def test_serialize_w4a4_rejects_missing_or_invalid_named_calibration(
         )
 
 
-def test_ignored_names_are_not_passed_through_to_the_serializer(
+@pytest.mark.parametrize(
+    "input_amax",
+    [torch.tensor([1.0, 2.0]), torch.ones((2, 2))],
+    ids=("vector", "matrix"),
+)
+def test_serialize_w4a4_rejects_non_scalar_input_amax(
+    input_amax: torch.Tensor,
     monkeypatch: pytest.MonkeyPatch,
+    _fake_pinned_quant_meta: None,
+) -> None:
+    calls: list[tuple[str, torch.Tensor, object]] = []
+    monkeypatch.setattr(
+        nvfp4_refit,
+        "get_modelopt_quant_exporter",
+        lambda mode: (
+            "modelopt_nvfp4",
+            _fake_exporter(calls, with_input_scale=True),
+        ),
+    )
+    monkeypatch.setattr(
+        nvfp4_refit,
+        "compute_nvfp4_input_scale",
+        lambda value: torch.tensor(0.25),
+    )
+    name = "model.layers.0.mlp.up_proj.weight"
+
+    with pytest.raises(ValueError, match="scalar input amax"):
+        nvfp4_refit.serialize_bf16_nvfp4_group(
+            {name: torch.ones((32, 16))},
+            mode="w4a4",
+            calibration=nvfp4_refit.NVFP4Calibration({name: input_amax}),
+        )
+
+    assert calls == []
+
+
+def test_serializer_does_not_apply_caller_ignore_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    _fake_pinned_quant_meta: None,
 ) -> None:
     calls: list[tuple[str, torch.Tensor, object]] = []
     monkeypatch.setattr(
@@ -315,5 +358,106 @@ def test_ignored_names_are_not_passed_through_to_the_serializer(
             mode="w4a16",
             calibration=None,
         )
-        assert result == []
-    assert calls == []
+        assert result[0][0] == name
+    assert [name for name, _, _ in calls] == [
+        "model.lm_head.weight",
+        "model.layers.0.mlp.gate_proj.weight",
+    ]
+
+
+def test_non_weight_only_input_emits_nothing() -> None:
+    assert (
+        nvfp4_refit.serialize_bf16_nvfp4_group(
+            {"model.layers.0.mlp.up_proj.bias": torch.ones(32)},
+            mode="w4a16",
+            calibration=None,
+        )
+        == []
+    )
+
+
+def test_serializer_delegates_through_pinned_modelopt_utils_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_modes: list[str] = []
+    input_scale_amaxes: list[torch.Tensor] = []
+    quantized: list[tuple[str, torch.Tensor, object]] = []
+    created_meta: list[object] = []
+
+    @dataclass(frozen=True)
+    class PinnedQuantMeta:
+        qformat: str
+        block_size: int
+        weight_amax: torch.Tensor
+        input_amax: torch.Tensor | None
+
+        def __post_init__(self) -> None:
+            created_meta.append(self)
+
+    def compute_nvfp4_input_scale(input_amax: torch.Tensor | None) -> torch.Tensor:
+        assert input_amax is not None
+        input_scale_amaxes.append(input_amax)
+        return torch.tensor(0.25)
+
+    def quantize_nvfp4_weight(
+        name: str,
+        weight: torch.Tensor,
+        meta: PinnedQuantMeta,
+    ) -> Iterator[tuple[str, torch.Tensor]]:
+        quantized.append((name, weight, meta))
+        yield (
+            name,
+            torch.zeros((weight.shape[0], weight.shape[1] // 2), dtype=torch.uint8),
+        )
+
+    def get_modelopt_quant_exporter(
+        quant_mode: str,
+    ) -> tuple[
+        str,
+        Callable[
+            [str, torch.Tensor, PinnedQuantMeta],
+            Iterator[tuple[str, torch.Tensor]],
+        ],
+    ]:
+        requested_modes.append(quant_mode)
+        return "pinned_nvfp4", quantize_nvfp4_weight
+
+    packages = {
+        name: ModuleType(name)
+        for name in (
+            "megatron",
+            "megatron.bridge",
+            "megatron.bridge.models",
+            "megatron.bridge.models.conversion",
+        )
+    }
+    for name, package in packages.items():
+        package.__path__ = []
+        monkeypatch.setitem(sys.modules, name, package)
+    modelopt_utils = ModuleType("megatron.bridge.models.conversion.modelopt_utils")
+    modelopt_utils.QuantMeta = PinnedQuantMeta
+    modelopt_utils.compute_nvfp4_input_scale = compute_nvfp4_input_scale
+    modelopt_utils.get_modelopt_quant_exporter = get_modelopt_quant_exporter
+    modelopt_utils.quantize_nvfp4_weight = quantize_nvfp4_weight
+    monkeypatch.setitem(sys.modules, modelopt_utils.__name__, modelopt_utils)
+
+    name = "model.layers.0.mlp.up_proj.weight"
+    input_amax = torch.tensor(12.0)
+    result = nvfp4_refit.serialize_bf16_nvfp4_group(
+        {name: torch.ones((32, 16), dtype=torch.bfloat16)},
+        mode="w4a4",
+        calibration=nvfp4_refit.NVFP4Calibration({name: input_amax}),
+    )
+
+    assert requested_modes == ["nvfp4"]
+    assert input_scale_amaxes == [input_amax]
+    assert len(created_meta) == 1
+    assert isinstance(created_meta[0], PinnedQuantMeta)
+    assert created_meta[0].qformat == "pinned_nvfp4"
+    assert created_meta[0].block_size == 16
+    assert created_meta[0].input_amax is input_amax
+    assert [(exported_name, meta) for exported_name, _, meta in quantized] == [
+        (name, created_meta[0])
+    ]
+    assert result[0][0] == name
+    assert result[0][1].dtype == torch.uint8

@@ -27,14 +27,6 @@ _BLOCK_SIZE = 16
 _EXPERT_PROJECTION = re.compile(
     r"^(?P<prefix>.+\.experts\.\d+)\.(?P<projection>gate|up|down)_proj\.weight$"
 )
-_IGNORED_NAME_MARKERS = (
-    ".lm_head",
-    ".output_layer",
-    ".mlp.gate",
-    ".router",
-    ".self_attention",
-    ".self_attn",
-)
 
 
 class _QuantMeta(Protocol):
@@ -118,9 +110,7 @@ def serialize_bf16_nvfp4_group(
         raise ValueError(f"Unsupported NVFP4 refit mode: {mode}")
 
     eligible_tensors = {
-        name: tensor
-        for name, tensor in tensors.items()
-        if name.endswith(".weight") and not _is_ignored_name(name)
+        name: tensor for name, tensor in tensors.items() if name.endswith(".weight")
     }
     if not eligible_tensors:
         return []
@@ -159,10 +149,6 @@ def _as_nvfp4_exporter(exporter: object) -> _NVFP4Exporter:
     if not callable(exporter):
         raise TypeError("Megatron-Bridge returned a non-callable NVFP4 exporter")
     return exporter
-
-
-def _is_ignored_name(name: str) -> bool:
-    return any(marker in name for marker in _IGNORED_NAME_MARKERS)
 
 
 def _validate_group_members(
@@ -232,12 +218,12 @@ def _input_amax_for_weight(
         )
     input_amax_float = input_amax.detach().float()
     if (
-        input_amax_float.numel() == 0
+        input_amax_float.numel() != 1
         or not torch.isfinite(input_amax_float).all()
         or not torch.all(input_amax_float > 0)
     ):
         raise ValueError(
-            f"Invalid input amax for NVFP4 W4A4 weight {name}: {input_amax}"
+            f"Invalid scalar input amax for NVFP4 W4A4 weight {name}: {input_amax}"
         )
     try:
         compute_nvfp4_input_scale(input_amax)
