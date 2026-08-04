@@ -169,3 +169,87 @@ Follow-up implementation commit: `3b09ad94a`
 (`fix(modelopt): honor vLLM weight mapping for BF16 refits`), DCO-signed.
 
 No Task 3 implementation blocker remains.
+
+## Mapper Drop Follow-Up
+
+`WeightsMapper.apply_list([original_name])` now has authoritative drop
+semantics. If vLLM drops the complete original name, synthetic `model.` prefix
+variants are not considered. When the original name maps successfully, the
+existing prefix normalization remains active.
+
+### Mapper Drop RED
+
+The regression models a vLLM mapper that drops the original `layers.` name but
+would accept the synthetic `model.layers.` variant. Before the fix, the
+synthetic variant incorrectly resolved to a receiver target:
+
+```text
+PYTHONPATH=. uv run --no-sync pytest --confcutdir=tests/unit/models/generation \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py::test_real_quant_mapper_drop_on_original_name_is_authoritative -q
+1 failed in 42.28s
+
+AssertionError: assert {'model.layers.0.self_attn.qkv_proj.weight'} == set()
+```
+
+### Mapper Drop GREEN
+
+Focused drop and valid-prefix mapper tests:
+
+```text
+PYTHONPATH=. uv run --no-sync pytest --confcutdir=tests/unit/models/generation \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py::test_real_quant_mapper_drop_on_original_name_is_authoritative \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py::test_real_quant_target_resolver_handles_fused_linear_mapper_variants -q
+2 passed in 5.64s
+```
+
+Focused mapper and source-classification tests:
+
+```text
+PYTHONPATH=. uv run --no-sync pytest --confcutdir=tests/unit/models/generation \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py -q \
+  -k 'mapper or prepare_refit'
+10 passed, 86 deselected in 2.80s
+```
+
+Full receiver suite:
+
+```text
+PYTHONPATH=. uv run --no-sync pytest --confcutdir=tests/unit/models/generation \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py -q
+95 passed, 1 skipped, 16 warnings in 12.01s
+```
+
+Serializer regression suite:
+
+```text
+PYTHONPATH=. uv run --no-sync pytest --confcutdir=tests/unit/models/generation \
+  tests/unit/models/generation/test_nvfp4_refit.py -q
+23 passed, 16 warnings in 11.87s
+```
+
+Static and artifact checks:
+
+```text
+.venv/bin/ruff check nemo_rl/modelopt/models/generation/vllm_quant_backend.py \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py
+All checks passed!
+
+PYTHONPATH=. .venv/bin/python -m py_compile \
+  nemo_rl/modelopt/models/generation/vllm_quant_backend.py \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py
+passed
+
+git diff --check -- nemo_rl/modelopt/models/generation/vllm_quant_backend.py \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py
+passed
+
+find tests/unit -maxdepth 2 \
+  \( -name unit_results.json -o -name unit_results \) -print
+no artifacts found
+```
+
+The skip and warnings have the same causes recorded above. Mapper-drop
+implementation commit: `f3633a243`
+(`fix(modelopt): honor explicit vLLM mapper drops`), DCO-signed. The code
+commit changed only the backend and its owned receiver test. No blocker
+remains.
