@@ -264,6 +264,17 @@ _STR_TO_DTYPE = {
 }
 
 _MXFP8_BLOCK_SIZE = 32
+
+
+def _uses_mxfp8_source_transform(
+    param_info: dict[str, Any], component_family: tuple[str, ...]
+) -> bool:
+    """Identify MXFP8 wire transforms, including legacy component-only metadata."""
+    if "transform_id" in param_info:
+        return param_info["transform_id"] == "bf16_to_mxfp8_e4m3_e8m0"
+    return component_family == ("weight", "weight_scale")
+
+
 _LEGACY_TRANSFORM_FORMATS = {
     "mxfp8": ("bf16", "mxfp8_e4m3_e8m0"),
 }
@@ -330,21 +341,30 @@ def restore_refit_info_placements(refit_info: dict) -> dict:
             param_info["dst_placements"] = [
                 _restore_placement(p) for p in param_info["dst_placements"]
             ]
-            wire_components = param_info.get(
-                "wire_components", param_info.get("components", [])
-            )
-            for component in wire_components:
-                component["dtype"] = _restore_dtype(
-                    component["dtype"],
-                    param_name=param_name,
-                    field_name=f"{component['role']} component dtype",
-                )
-                component["src_placements"] = [
-                    _restore_placement(p) for p in component["src_placements"]
-                ]
-                component["dst_placements"] = [
-                    _restore_placement(p) for p in component["dst_placements"]
-                ]
+            wire_components = param_info.get("wire_components")
+            legacy_components = param_info.get("components")
+            component_lists = [
+                components
+                for components in (wire_components, legacy_components)
+                if components is not None
+            ]
+            for components in component_lists:
+                for component in components:
+                    component["dtype"] = _restore_dtype(
+                        component["dtype"],
+                        param_name=param_name,
+                        field_name=f"{component['role']} component dtype",
+                    )
+                    component["src_placements"] = [
+                        _restore_placement(p) for p in component["src_placements"]
+                    ]
+                    component["dst_placements"] = [
+                        _restore_placement(p) for p in component["dst_placements"]
+                    ]
+            if wire_components is not None:
+                param_info["components"] = wire_components
+            elif legacy_components is not None:
+                param_info["wire_components"] = legacy_components
             for component in param_info.get("destination_components", []):
                 component["dtype"] = _restore_dtype(
                     component["dtype"],
@@ -462,8 +482,9 @@ def _validate_k_shard_alignment(
     mesh_info: MeshInfo,
     placements: list[Any],
     side: str,
+    block_size: int = _MXFP8_BLOCK_SIZE,
 ) -> None:
-    """Require every local K interval to contain whole MXFP8 blocks."""
+    """Require every local K interval to contain whole quantization blocks."""
     k_axis = len(global_shape) - 1
     shard_count = 1
     mesh_shape = tuple(int(size) for size in mesh_info.mesh.shape)
@@ -476,11 +497,11 @@ def _validate_k_shard_alignment(
     local_widths = {base_width}
     if remainder:
         local_widths.add(base_width + 1)
-    if any(width % _MXFP8_BLOCK_SIZE for width in local_widths):
+    if any(width % block_size for width in local_widths):
         raise ValueError(
             f"nccl_reshard: {param_name!r} has an unaligned {side} K-axis shard; "
             f"global K={global_k}, shard count={shard_count}, "
-            f"local widths={sorted(local_widths)}, block size={_MXFP8_BLOCK_SIZE}."
+            f"local widths={sorted(local_widths)}, block size={block_size}."
         )
 
 
@@ -637,6 +658,18 @@ def _build_component_metadata(
             mesh_info=info["dst_mesh_info"],
             placements=weight_component["dst_placements"],
             side="destination",
+        )
+    elif target_format in {"nvfp4_w4a16", "nvfp4_w4a4"}:
+        weight_component = next(
+            component for component in wire_components if component["role"] == "weight"
+        )
+        _validate_k_shard_alignment(
+            param_name=param_name,
+            global_shape=global_shape,
+            mesh_info=info["dst_mesh_info"],
+            placements=weight_component["dst_placements"],
+            side="destination",
+            block_size=16,
         )
 
     return RefitTransformPlan(

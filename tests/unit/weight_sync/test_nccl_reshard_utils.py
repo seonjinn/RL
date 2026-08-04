@@ -21,12 +21,14 @@ mesh construction, placement rules, expert grouping, and the top-level
 torch.distributed, no model object — so this module runs on CPU with no extras.
 """
 
+import json
 from types import SimpleNamespace
 
 import pytest
 import torch
 from torch.distributed.tensor.placement_types import Replicate, Shard
 
+import nemo_rl.weight_sync.nccl_reshard_utils as nccl_reshard_utils
 from nemo_rl.weight_sync.nccl_reshard_utils import (
     MeshInfo,
     _extract_layer_name,
@@ -337,6 +339,42 @@ def test_restore_refit_info_restores_component_dtypes_and_placements():
     ]
 
 
+def test_restore_refit_info_rebinds_component_alias_after_serialization_round_trip():
+    info = _build_single_mxfp8_param(_mxfp8_metadata())
+    original = _find(info, "model.layers.0.mlp.down_proj.weight")
+    assert original["components"] is original["wire_components"]
+
+    def _encode_refit_value(value: object) -> object:
+        if isinstance(value, MeshInfo):
+            return {"mesh": value.mesh.tolist()}
+        if isinstance(value, Shard):
+            return {"dim": value.dim}
+        if isinstance(value, Replicate):
+            return {}
+        raise TypeError(f"unsupported refit metadata value: {value!r}")
+
+    serialized = json.loads(json.dumps(info, default=_encode_refit_value))
+    serialized_param = _find(serialized, "model.layers.0.mlp.down_proj.weight")
+    assert serialized_param["components"] is not serialized_param["wire_components"]
+
+    restored = restore_refit_info_placements(serialized)
+    param = _find(restored, "model.layers.0.mlp.down_proj.weight")
+
+    assert param["components"] is param["wire_components"]
+    assert [component["dtype"] for component in param["components"]] == [
+        torch.float8_e4m3fn,
+        torch.uint8,
+    ]
+    assert [component["src_placements"] for component in param["components"]] == [
+        [Shard(1)],
+        [Shard(1)],
+    ]
+    assert [component["dst_placements"] for component in param["components"]] == [
+        [Shard(1)],
+        [Shard(1)],
+    ]
+
+
 # --------------------------------------------------------------------------
 # group_expert_params_in_metadata
 # --------------------------------------------------------------------------
@@ -503,15 +541,16 @@ def _build_single_mxfp8_param(
     )
 
 
-def _nvfp4_metadata(*, mode: str) -> dict[str, object]:
+def _nvfp4_metadata(*, mode: str, shape: list[int] | None = None) -> dict[str, object]:
+    value_shape = shape or [64, 128]
     return {
-        "shape": [64, 128],
+        "shape": value_shape,
         "dtype": "torch.bfloat16",
         "refit_transform": {
             "source_format": "bf16",
             "target_format": f"nvfp4_{mode}",
         },
-        "source_shape": [64, 128],
+        "source_shape": value_shape,
         "source_dtype": "torch.bfloat16",
     }
 
@@ -633,6 +672,46 @@ def test_nvfp4_grouped_experts_preserve_source_shape_and_scale_families(
         "weight_scale",
         *scalar_roles,
     ]
+
+
+def test_nvfp4_pre_grouped_gate_up_preserves_split_source_and_destination_shapes():
+    prefix = "model.layers.0.mlp.experts"
+    gate_up_meta = _nvfp4_metadata(mode="w4a4", shape=[2, 128, 32])
+    down_meta = _nvfp4_metadata(mode="w4a4", shape=[2, 32, 64])
+
+    info = build_nccl_reshard_refit_info(
+        {
+            f"{prefix}.gate_up_proj": gate_up_meta,
+            f"{prefix}.down_proj": down_meta,
+        },
+        train_parallelism={"tp_size": 1, "ep_size": 2, "pp_size": 1},
+        gen_parallelism={"tp_size": 1, "ep_size": 2, "pp_size": 1},
+        train_world_size=2,
+        gen_world_size=2,
+    )
+
+    gate = _find(info, f"{prefix}.gate_proj.weight")
+    up = _find(info, f"{prefix}.up_proj.weight")
+
+    for param in (gate, up):
+        assert param["global_shape"] == (2, 64, 32)
+        assert param["grouped_expert_proj"] in {"gate_proj", "up_proj"}
+        assert param["wire_components"][0]["global_shape"] == (2, 64, 32)
+        assert [
+            component["global_shape"] for component in param["destination_components"]
+        ] == [(2, 64, 16), (2, 64, 2), (2,), (2,)]
+
+
+def test_mxfp8_source_selection_preserves_legacy_component_family_fallback():
+    assert nccl_reshard_utils._uses_mxfp8_source_transform(
+        {}, ("weight", "weight_scale")
+    )
+    assert not nccl_reshard_utils._uses_mxfp8_source_transform(
+        {"transform_id": "bf16_to_nvfp4_w4a16"}, ("weight",)
+    )
+    assert not nccl_reshard_utils._uses_mxfp8_source_transform(
+        {"transform_id": "identity"}, ("weight", "weight_scale")
+    )
 
 
 def test_build_refit_info_top_level_and_param_fields():
@@ -948,3 +1027,30 @@ def test_build_refit_info_rejects_unaligned_mxfp8_k_shards(
             train_tp=train_tp,
             gen_tp=gen_tp,
         )
+
+
+def test_build_refit_info_rejects_unaligned_nvfp4_destination_k_shards() -> None:
+    name = "model.layers.0.mlp.down_proj.weight"
+
+    with pytest.raises(ValueError, match="destination K-axis shard"):
+        build_nccl_reshard_refit_info(
+            {name: _nvfp4_metadata(mode="w4a16", shape=[64, 48])},
+            train_parallelism={"tp_size": 1, "ep_size": 1, "pp_size": 1},
+            gen_parallelism={"tp_size": 2, "ep_size": 1, "pp_size": 1},
+            train_world_size=1,
+            gen_world_size=2,
+        )
+
+
+def test_build_refit_info_allows_unaligned_nvfp4_source_k_shards() -> None:
+    name = "model.layers.0.mlp.down_proj.weight"
+
+    info = build_nccl_reshard_refit_info(
+        {name: _nvfp4_metadata(mode="w4a16", shape=[64, 64])},
+        train_parallelism={"tp_size": 8, "ep_size": 1, "pp_size": 1},
+        gen_parallelism={"tp_size": 2, "ep_size": 1, "pp_size": 1},
+        train_world_size=8,
+        gen_world_size=2,
+    )
+
+    assert _find(info, name)["wire_components"][0]["src_placements"] == [Shard(1)]

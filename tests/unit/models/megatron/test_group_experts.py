@@ -177,6 +177,62 @@ def test_build_mxfp8_source_specs_quantize_direct_and_grouped_once():
     assert grouped_ctx.tensors_for_transfer()[1].dtype == torch.uint8
 
 
+def test_build_nvfp4_pre_grouped_gate_up_source_emits_raw_bf16_weight_only():
+    from nemo_rl.weight_sync.nccl_reshard_utils import (
+        build_nccl_reshard_refit_info,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    prefix = "model.layers.0.mlp.experts"
+    gate0 = torch.full((64, 32), 1, dtype=torch.bfloat16)
+    gate1 = torch.full((64, 32), 2, dtype=torch.bfloat16)
+    up0 = torch.full((64, 32), 3, dtype=torch.bfloat16)
+    up1 = torch.full((64, 32), 4, dtype=torch.bfloat16)
+    worker._iter_local_hf_param_shards = lambda: [
+        (f"{prefix}.0.gate_proj.weight", gate0),
+        (f"{prefix}.1.gate_proj.weight", gate1),
+        (f"{prefix}.0.up_proj.weight", up0),
+        (f"{prefix}.1.up_proj.weight", up1),
+    ]
+    refit_info = build_nccl_reshard_refit_info(
+        {
+            f"{prefix}.gate_up_proj": {
+                "shape": [2, 128, 32],
+                "dtype": "torch.bfloat16",
+                "refit_transform": {
+                    "source_format": "bf16",
+                    "target_format": "nvfp4_w4a16",
+                },
+                "source_shape": [2, 128, 32],
+                "source_dtype": "torch.bfloat16",
+            }
+        },
+        train_parallelism={"tp_size": 1, "ep_size": 2, "pp_size": 1},
+        gen_parallelism={"tp_size": 1, "ep_size": 2, "pp_size": 1},
+        train_world_size=2,
+        gen_world_size=2,
+    )
+
+    gate_info = refit_info["per_layer_params"]["model.layers.0"][0]
+    assert [component["role"] for component in gate_info["wire_components"]] == [
+        "weight"
+    ]
+    assert gate_info["wire_components"][0]["dtype"] == "torch.bfloat16"
+    assert [
+        component["global_shape"] for component in gate_info["destination_components"]
+    ] == [(2, 64, 16), (2, 64, 2), (2,)]
+
+    source = worker.build_hf_to_local_param_map(refit_info).get(gate_info["name"])
+    assert source.pre is not None
+    ctx = source.pre(source.base)
+
+    assert ctx.buf.dtype == torch.bfloat16
+    assert torch.equal(ctx.buf, torch.stack((gate0, gate1)))
+    transfer_tensors = ctx.tensors_for_transfer()
+    assert len(transfer_tensors) == 1
+    assert transfer_tensors[0] is ctx.buf
+
+
 def test_refit_ctx_distinguishes_default_from_explicit_empty_transfer_tuple():
     from nemo_rl.weight_sync.nccl_reshard_utils import RefitCtx
 

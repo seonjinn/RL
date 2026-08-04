@@ -112,6 +112,7 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
     HFToLocalParamMap,
     LocalParamSpec,
     RefitCtx,
+    _uses_mxfp8_source_transform,
 )
 
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
@@ -2635,7 +2636,7 @@ class MegatronPolicyWorkerImpl(
             for p in refit_info["per_layer_params"][layer_name]:
                 name = p["name"]
                 component_family = _component_family(p)
-                transform_to_mxfp8 = p.get("transform_id") == "bf16_to_mxfp8_e4m3_e8m0"
+                transform_to_mxfp8 = _uses_mxfp8_source_transform(p, component_family)
                 if p.get("grouped_expert_proj"):
                     mapping[name] = _expert_spec(
                         p["grouped_expert_proj"],
