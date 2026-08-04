@@ -40,6 +40,14 @@ from nemo_rl.modelopt.utils import (
 
 
 @pytest.fixture(autouse=True)
+def _disable_nvtx_without_cuda(monkeypatch):
+    if torch.cuda.is_available():
+        return
+    monkeypatch.setattr(torch.cuda.nvtx, "range_push", lambda _name: None)
+    monkeypatch.setattr(torch.cuda.nvtx, "range_pop", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def _install_optional_modelopt_config_api(monkeypatch):
     """Provide ModelOpt's config APIs when the optional dependency is absent."""
     try:
@@ -191,6 +199,7 @@ def _install_fake_vllm_reload(monkeypatch):
         "vllm.model_executor.layers.fused_moe",
         "vllm.model_executor.layers.quantization",
         "vllm.model_executor.model_loader",
+        "vllm.model_executor.models",
     )
     for module_name in module_names:
         module = types.ModuleType(module_name)
@@ -239,6 +248,59 @@ def _install_fake_vllm_reload(monkeypatch):
         sys.modules,
         "vllm.model_executor.model_loader.reload.layerwise",
         layerwise_module,
+    )
+    model_utils_module = types.ModuleType("vllm.model_executor.models.utils")
+
+    class FakeWeightsMapper:
+        def __init__(
+            self,
+            *,
+            orig_to_new_substr=None,
+            orig_to_new_stacked=None,
+            orig_to_new_prefix=None,
+        ):
+            self.orig_to_new_substr = orig_to_new_substr or {}
+            self.orig_to_new_stacked = orig_to_new_stacked or {}
+            self.orig_to_new_prefix = orig_to_new_prefix or {}
+            self.apply_list_calls = []
+
+        def _map_name_with_shard(self, key):
+            for substring, replacement in self.orig_to_new_substr.items():
+                if substring in key:
+                    if replacement is None:
+                        return None
+                    key = key.replace(substring, replacement, 1)
+            shard_id = None
+            for substring, (replacement, mapped_shard_id) in (
+                self.orig_to_new_stacked.items()
+            ):
+                if substring in key:
+                    key = key.replace(substring, replacement, 1)
+                    shard_id = mapped_shard_id
+            for prefix, replacement in self.orig_to_new_prefix.items():
+                if key.startswith(prefix):
+                    if replacement is None:
+                        return None
+                    key = key.replace(prefix, replacement, 1)
+            return key, shard_id
+
+        def _map_name(self, key):
+            result = self._map_name_with_shard(key)
+            return result[0] if result is not None else None
+
+        def apply_list(self, values):
+            self.apply_list_calls.append(list(values))
+            return [
+                mapped
+                for value in values
+                if (mapped := self._map_name(value)) is not None
+            ]
+
+    model_utils_module.WeightsMapper = FakeWeightsMapper
+    monkeypatch.setitem(
+        sys.modules,
+        "vllm.model_executor.models.utils",
+        model_utils_module,
     )
     linear_module = types.ModuleType("vllm.model_executor.layers.linear")
     linear_module.LinearBase = torch.nn.Linear
@@ -671,6 +733,19 @@ def _packed_weight_info(
     }
 
 
+def _packed_moe_info(
+    prefix: str,
+) -> dict[str, tuple[tuple[int, ...], torch.dtype]]:
+    return {
+        f"{prefix}.experts.w13_weight": ((2, 4, 3), torch.uint8),
+        f"{prefix}.experts.w13_weight_scale": ((2, 4, 1), torch.uint8),
+        f"{prefix}.experts.w13_weight_scale_2": ((2, 2), torch.float32),
+        f"{prefix}.experts.w2_weight": ((2, 3, 2), torch.uint8),
+        f"{prefix}.experts.w2_weight_scale": ((2, 3, 1), torch.uint8),
+        f"{prefix}.experts.w2_weight_scale_2": ((2,), torch.float32),
+    }
+
+
 def _mark_as_modelopt_layer(model):
     modelopt_module = sys.modules["vllm.model_executor.layers.quantization.modelopt"]
     model.quant_method = modelopt_module.ModelOptNvFp4LinearMethod()
@@ -710,13 +785,19 @@ def test_real_quant_target_resolver_handles_fused_linear_mapper_variants(monkeyp
     backend = _import_vllm_quant_backend(monkeypatch)
     modelopt_module = sys.modules["vllm.model_executor.layers.quantization.modelopt"]
     linear_base = sys.modules["vllm.model_executor.layers.linear"].LinearBase
+    weights_mapper = sys.modules["vllm.model_executor.models.utils"].WeightsMapper
 
     model = torch.nn.Module()
     model.model = torch.nn.Module()
     model.model.layers = torch.nn.ModuleList([torch.nn.Module()])
+    model.model.layers[0].self_attn = torch.nn.Module()
+    model.model.layers[0].self_attn.qkv_proj = linear_base(16, 32, bias=False)
+    model.model.layers[0].self_attn.qkv_proj.quant_method = types.SimpleNamespace(
+        quant_config=modelopt_module.ModelOptNvFp4Config()
+    )
     model.model.layers[0].mlp = torch.nn.Module()
-    model.model.layers[0].mlp.qkv_proj = linear_base(16, 32, bias=False)
-    model.model.layers[0].mlp.qkv_proj.quant_method = types.SimpleNamespace(
+    model.model.layers[0].mlp.gate_up_proj = linear_base(16, 32, bias=False)
+    model.model.layers[0].mlp.gate_up_proj.quant_method = types.SimpleNamespace(
         quant_config=modelopt_module.ModelOptNvFp4Config()
     )
     model.model.layers[0].mlp.shared_expert = torch.nn.Module()
@@ -730,15 +811,27 @@ def test_real_quant_target_resolver_handles_fused_linear_mapper_variants(monkeyp
     )
     model.packed_modules_mapping = {
         "qkv_proj": ["q_proj", "k_proj", "v_proj"],
-        "gate_up_proj": ["gate_proj", "up_proj"],
     }
-    model.hf_to_vllm_mapper = types.SimpleNamespace(
-        orig_to_new_prefix={"decoder": "model"},
-        orig_to_new_substr={},
+    model.hf_to_vllm_mapper = weights_mapper(
+        orig_to_new_stacked={
+            ".q_proj": (".qkv_proj", "q"),
+            ".k_proj": (".qkv_proj", "k"),
+            ".v_proj": (".qkv_proj", "v"),
+            ".mlp.gate_proj": (".mlp.gate_up_proj", 0),
+            ".mlp.up_proj": (".mlp.gate_up_proj", 1),
+            ".shared_expert.gate_proj": (".shared_expert.gate_up_proj", 0),
+            ".shared_expert.up_proj": (".shared_expert.gate_up_proj", 1),
+        },
+        orig_to_new_prefix={"decoder.": "model."},
     )
 
     assert backend._is_bf16_quantization_candidate(
-        "decoder.layers.0.mlp.q_proj.weight",
+        "decoder.layers.0.self_attn.q_proj.weight",
+        (32, 16),
+        model=model,
+    )
+    assert backend._is_bf16_quantization_candidate(
+        "model.layers.0.mlp.gate_proj.weight",
         (32, 16),
         model=model,
     )
@@ -747,8 +840,20 @@ def test_real_quant_target_resolver_handles_fused_linear_mapper_variants(monkeyp
         (32, 16),
         model=model,
     )
+    mapped_inputs = {
+        name
+        for call in model.hf_to_vllm_mapper.apply_list_calls
+        for name in call
+    }
+    assert "decoder.layers.0.self_attn.q_proj.weight" in mapped_inputs
+    assert "model.layers.0.mlp.gate_proj.weight" in mapped_inputs
+    assert "model.layers.0.mlp.shared_expert.up_proj.weight" in mapped_inputs
     assert backend._iter_modelopt_quant_modules(model) == [
-        ("model.layers.0.mlp.qkv_proj", model.model.layers[0].mlp.qkv_proj),
+        (
+            "model.layers.0.self_attn.qkv_proj",
+            model.model.layers[0].self_attn.qkv_proj,
+        ),
+        ("model.layers.0.mlp.gate_up_proj", model.model.layers[0].mlp.gate_up_proj),
         (
             "model.layers.0.mlp.shared_expert.gate_up_proj",
             model.model.layers[0].mlp.shared_expert.gate_up_proj,
@@ -1337,6 +1442,31 @@ def test_real_quant_prepare_refit_rejects_manifest_without_receiver_targets(
         )
 
 
+@pytest.mark.parametrize(
+    ("state_dict_info", "ignore_patterns"),
+    [
+        ({}, []),
+        (_bf16_weight_info("q_proj.weight"), ["q_proj"]),
+    ],
+)
+def test_real_quant_prepare_refit_rejects_empty_or_all_ignored_manifest(
+    monkeypatch,
+    state_dict_info,
+    ignore_patterns,
+):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    model = torch.nn.Module()
+    model.q_proj = _mark_as_modelopt_layer(torch.nn.Linear(16, 32, bias=False))
+    extension = _make_real_quant_extension(backend, model, ignore_patterns)
+    _patch_real_quant_load(monkeypatch, backend)
+
+    with pytest.raises(
+        ValueError,
+        match="no receiver ModelOpt quantization targets found",
+    ):
+        extension.prepare_refit_info(state_dict_info)
+
+
 def test_real_quant_bf16_manifest_passes_through_layernorm_and_bias(monkeypatch):
     backend = _import_vllm_quant_backend(monkeypatch)
     kept = "q_proj.weight"
@@ -1397,6 +1527,61 @@ def test_real_quant_prepare_refit_classifies_complete_modelopt_manifest(monkeypa
     extension.prepare_refit_info(_packed_weight_info("q_proj"))
 
     assert extension._nrl_real_quant_source == "modelopt"
+
+
+def test_real_quant_prepare_refit_rejects_incomplete_packed_weight_family(
+    monkeypatch,
+):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    model = torch.nn.Module()
+    model.q_proj = _mark_as_modelopt_layer(torch.nn.Linear(16, 32, bias=False))
+    extension = _make_real_quant_extension(backend, model, [])
+    _patch_real_quant_load(monkeypatch, backend)
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"Incomplete ModelOpt weight family for q_proj: missing.*weight_scale",
+    ):
+        extension.prepare_refit_info(
+            {"q_proj.weight": ((32, 8), torch.uint8)}
+        )
+
+
+def test_real_quant_prepare_refit_derives_w13_metadata_once_from_receiver_targets(
+    monkeypatch,
+):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    prefix = "model.layers.0.mlp"
+    model = torch.nn.Module()
+    model.model = torch.nn.Module()
+    model.model.layers = torch.nn.ModuleList([torch.nn.Module()])
+    model.model.layers[0].mlp = torch.nn.Module()
+    model.model.layers[0].mlp.experts = _new_modelopt_moe()
+    extension = _make_real_quant_extension(backend, model, [])
+    _patch_real_quant_load(monkeypatch, backend)
+    state_dict_info = _packed_moe_info(prefix)
+    unrelated = "unrelated.layers.0.mlp.experts.w13_weight_scale_2"
+    state_dict_info[unrelated] = ((2, 3), torch.float32)
+    original = backend._w13_num_shards_from_state_dict_info
+    calls = []
+
+    def track_w13_info(filtered_info, *, require_input_scales=False):
+        calls.append(set(filtered_info))
+        return original(
+            filtered_info,
+            require_input_scales=require_input_scales,
+        )
+
+    monkeypatch.setattr(
+        backend,
+        "_w13_num_shards_from_state_dict_info",
+        track_w13_info,
+    )
+
+    extension.prepare_refit_info(state_dict_info)
+
+    assert calls == [set(_packed_moe_info(prefix))]
+    assert extension._nrl_w13_num_shards_by_prefix == {prefix: 2}
 
 
 def test_real_quant_modelopt_manifest_allows_bf16_layernorm_passthrough(monkeypatch):
@@ -1593,30 +1778,62 @@ def test_real_quant_bf16_complete_group_finalizes_once_and_preserves_identity(
         "serialize_bf16_nvfp4_group",
         lambda tensors, *, mode, calibration: [(name, tensors[name].clone())],
     )
+    reload_mod = sys.modules["vllm.model_executor.model_loader.reload"]
+    active_runtime = {}
+    replacement_identities = []
+    finalizations = []
+
+    def initialize(root):
+        active_runtime[root] = (root.weight, root.quant_method)
+
+    def load_weights(_self, weights):
+        loaded_weights = dict(weights)
+        replacement_weight = torch.nn.Parameter(loaded_weights[name].clone())
+        replacement_kernel = object()
+        model.q_proj.weight = replacement_weight
+        model.q_proj.quant_method = replacement_kernel
+        replacement_identities.append((replacement_weight, replacement_kernel))
+        return "loaded"
+
+    def finalize(root, config):
+        original_weight, original_kernel = active_runtime.pop(root)
+        original_weight.data.copy_(root.weight.data)
+        root.weight = original_weight
+        root.quant_method = original_kernel
+        finalizations.append((root, config))
+
     monkeypatch.setattr(
         backend.VllmInternalWorkerExtension,
         "_load_weights",
-        lambda _self, _weights: "loaded",
+        load_weights,
     )
-    reload_mod = sys.modules["vllm.model_executor.model_loader.reload"]
-    finalizations = []
+    monkeypatch.setattr(reload_mod, "initialize_layerwise_reload", initialize)
     monkeypatch.setattr(
         reload_mod,
         "finalize_layerwise_reload",
-        lambda root, config: finalizations.append((root, config)),
+        finalize,
     )
     monkeypatch.setattr(backend.torch.accelerator, "synchronize", lambda: None)
 
-    for _ in range(2):
+    for value in (1.0, 2.0):
         with extension._weight_update_lifecycle("ipc") as finish:
             extension._load_weights(
-                [(name, torch.ones((32, 16), dtype=torch.bfloat16))]
+                [(name, torch.full((32, 16), value, dtype=torch.bfloat16))]
             )
+            assert model.q_proj.weight is replacement_identities[-1][0]
+            assert model.q_proj.quant_method is replacement_identities[-1][1]
             finish()
+        assert model.q_proj.weight is weight_identity
+        assert model.q_proj.quant_method is kernel_identity
+        torch.testing.assert_close(
+            model.q_proj.weight,
+            torch.full_like(model.q_proj.weight, value),
+        )
 
     assert len(finalizations) == 2
-    assert model.q_proj.weight is weight_identity
-    assert model.q_proj.quant_method is kernel_identity
+    assert len(replacement_identities) == 2
+    assert replacement_identities[0][0] is not replacement_identities[1][0]
+    assert replacement_identities[0][1] is not replacement_identities[1][1]
 
 
 def test_real_quant_load_weights_batches_full_experts_and_expands_global_scales(
