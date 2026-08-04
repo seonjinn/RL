@@ -410,3 +410,48 @@ def test_load_weights_targets_canonical_storage_for_cutedsl_linear(
         expected_weight_name,
         "layer.weight_scale_from_checkpoint",
     ]
+
+
+def test_initialize_mxfp8_moe_kernel_once(fp8_module, monkeypatch):
+    from vllm.model_executor.layers.quantization import fp8 as vllm_fp8
+
+    fp8 = fp8_module
+    kernel = object()
+    calls: list[dict[str, object]] = []
+
+    def make_fp8_moe_kernel(**kwargs: object) -> object:
+        calls.append(kwargs)
+        return kernel
+
+    monkeypatch.setattr(vllm_fp8, "make_fp8_moe_kernel", make_fp8_moe_kernel)
+
+    quant_config = object()
+    experts_cls = object()
+    routing_tables = object()
+    layer = types.SimpleNamespace(_expert_routing_tables=lambda: routing_tables)
+    method = types.SimpleNamespace(
+        moe_quant_config=None,
+        moe_kernel=None,
+        experts_cls=experts_cls,
+        mxfp8_backend="flashinfer_trtllm",
+        moe="moe-config",
+        get_fused_moe_quant_config=lambda candidate: (
+            quant_config if candidate is layer else None
+        ),
+    )
+
+    fp8.initialize_mxfp8_moe_kernel(method, layer)
+    fp8.initialize_mxfp8_moe_kernel(method, layer)
+
+    assert method.moe_quant_config is quant_config
+    assert method.moe_kernel is kernel
+    assert calls == [
+        {
+            "moe_quant_config": quant_config,
+            "moe_config": "moe-config",
+            "fp8_backend": "flashinfer_trtllm",
+            "experts_cls": experts_cls,
+            "routing_tables": routing_tables,
+            "layer": layer,
+        }
+    ]
