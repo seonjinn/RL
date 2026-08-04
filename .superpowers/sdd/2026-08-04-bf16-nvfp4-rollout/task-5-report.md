@@ -149,11 +149,124 @@ passed
 No `tests/unit/unit_results.json` or `tests/unit/unit_results/` artifacts were
 generated.
 
+## Provenance Follow-up
+
+Independent review identified that the exporter stored the user-supplied
+`--model-revision` tag or branch while the receiver correctly preferred
+vLLM's resolved `hf_config._commit_hash`. A calibration exported from a tag
+could therefore be rejected by a receiver loading the same model revision.
+
+The exporter now loads the model first and requires
+`model.config._commit_hash` to be a 40-character lowercase hexadecimal commit
+SHA. It loads the tokenizer at that resolved SHA and checks tokenizer
+`_commit_hash`, `init_kwargs["_commit_hash"]`, or `config._commit_hash` when
+those metadata surfaces are present. Missing or mutable model provenance and
+malformed or mismatched tokenizer provenance fail before calibration. The
+resolved model SHA is stored in the artifact and used by the exporter's
+load-after-save validation. Runtime preference for vLLM's resolved commit is
+unchanged.
+
+Round-trip RED, using `--model-revision release-tag` with model and tokenizer
+resolved to the same immutable SHA:
+
+```text
+PYTHONPATH=. uv run --no-sync pytest \
+  --confcutdir=tests/unit/models/generation \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py::test_exported_tag_revision_round_trips_with_resolved_vllm_commit \
+  -q
+
+1 failed, 16 warnings in 4.44s
+ValueError: NVFP4 calibration model_revision 'release-tag' does not match
+expected '0123456789abcdef0123456789abcdef01234567'
+```
+
+Exporter provenance RED:
+
+```text
+PYTHONPATH=. uv run --no-sync pytest --confcutdir=tests/unit/modelopt \
+  tests/unit/modelopt/test_calibration_artifact.py -q -k 'exporter_' \
+  --maxfail=0
+
+7 failed, 22 deselected, 16 warnings in 1.23s
+```
+
+Focused GREEN:
+
+```text
+PYTHONPATH=. uv run --no-sync pytest --confcutdir=tests/unit/modelopt \
+  tests/unit/modelopt/test_calibration_artifact.py -q -k 'exporter_' \
+  --maxfail=0
+
+7 passed, 22 deselected, 16 warnings in 1.17s
+
+PYTHONPATH=. uv run --no-sync pytest \
+  --confcutdir=tests/unit/models/generation \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py::test_exported_tag_revision_round_trips_with_resolved_vllm_commit \
+  -q --disable-warnings
+
+1 passed, 16 warnings in 4.40s
+```
+
+Affected suites after the provenance fix:
+
+```text
+PYTHONPATH=. uv run --no-sync pytest --confcutdir=tests/unit/modelopt \
+  tests/unit/modelopt/test_calibration_artifact.py -q --disable-warnings
+
+29 passed, 16 warnings in 1.55s
+
+PYTHONPATH=. uv run --no-sync pytest \
+  --confcutdir=tests/unit/models/generation \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py \
+  -q --disable-warnings
+
+111 passed, 1 skipped, 16 warnings in 4.39s
+```
+
+Follow-up static verification:
+
+```text
+.venv/bin/ruff check \
+  examples/modelopt/export_nvfp4_calibration.py \
+  tests/unit/modelopt/test_calibration_artifact.py \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py \
+  nemo_rl/modelopt/models/generation/vllm_quant_backend.py
+All checks passed!
+
+.venv/bin/ruff format --check \
+  examples/modelopt/export_nvfp4_calibration.py \
+  tests/unit/modelopt/test_calibration_artifact.py
+2 files already formatted
+
+uvx --from pyrefly==0.24.2 pyrefly check \
+  examples/modelopt/export_nvfp4_calibration.py \
+  nemo_rl/modelopt/models/generation/vllm_quant_backend.py
+errors shown: 0, errors ignored: 23, modules: 2
+
+PYTHONPATH=. .venv/bin/python -m py_compile \
+  examples/modelopt/export_nvfp4_calibration.py \
+  tests/unit/modelopt/test_calibration_artifact.py \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py \
+  nemo_rl/modelopt/models/generation/vllm_quant_backend.py
+passed
+
+git diff --check -- \
+  examples/modelopt/export_nvfp4_calibration.py \
+  tests/unit/modelopt/test_calibration_artifact.py \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py \
+  nemo_rl/modelopt/models/generation/vllm_quant_backend.py \
+  .superpowers/sdd/2026-08-04-bf16-nvfp4-rollout/task-5-report.md
+passed
+```
+
 ## Changed Files
 
+- `examples/modelopt/export_nvfp4_calibration.py`
 - `nemo_rl/modelopt/models/generation/vllm_quant_backend.py`
+- `tests/unit/modelopt/test_calibration_artifact.py`
 - `tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py`
 - `.superpowers/sdd/2026-08-04-bf16-nvfp4-rollout/task-5-report.md`
 
-No Task 4 artifact, exporter, worker, or helper file was modified. The
-pre-existing untracked `session/` directory was preserved.
+The Task 4 exporter and its artifact tests were updated for the provenance
+follow-up. The artifact library, worker, and helper files remain unchanged.
+The pre-existing untracked `session/` directory was preserved.

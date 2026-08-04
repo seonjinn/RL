@@ -15,7 +15,8 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Sequence
+import re
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import torch
@@ -26,6 +27,8 @@ from nemo_rl.modelopt.calibration_artifact import (
     normalize_quant_cfg_identity,
     save_nvfp4_calibration,
 )
+
+_COMMIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 
 
 def _quantizer_amax(quantizer: object, quantizer_name: str) -> torch.Tensor:
@@ -180,6 +183,48 @@ def collect_nvfp4_input_amax(model: nn.Module) -> dict[str, torch.Tensor]:
     return input_amax
 
 
+def _require_commit_sha(value: object, *, source: str) -> str:
+    if not isinstance(value, str) or _COMMIT_SHA_PATTERN.fullmatch(value) is None:
+        raise RuntimeError(
+            f"{source} did not provide a resolved immutable commit SHA "
+            "(expected 40 lowercase hexadecimal characters)"
+        )
+    return value
+
+
+def _resolved_model_commit(model: nn.Module) -> str:
+    config = getattr(model, "config", None)
+    return _require_commit_sha(
+        getattr(config, "_commit_hash", None),
+        source="Loaded model config",
+    )
+
+
+def _validate_tokenizer_commit(tokenizer: object, model_commit: str) -> None:
+    candidates = {
+        "tokenizer": getattr(tokenizer, "_commit_hash", None),
+        "tokenizer init kwargs": (
+            init_kwargs.get("_commit_hash")
+            if isinstance(
+                init_kwargs := getattr(tokenizer, "init_kwargs", None), Mapping
+            )
+            else None
+        ),
+        "tokenizer config": getattr(
+            getattr(tokenizer, "config", None), "_commit_hash", None
+        ),
+    }
+    for source, candidate in candidates.items():
+        if candidate is None:
+            continue
+        tokenizer_commit = _require_commit_sha(candidate, source=source)
+        if tokenizer_commit != model_commit:
+            raise RuntimeError(
+                f"Resolved tokenizer commit {tokenizer_commit!r} does not match "
+                f"loaded model commit {model_commit!r}"
+            )
+
+
 def _positive_int(value: str) -> int:
     parsed = int(value)
     if parsed <= 0:
@@ -222,17 +267,19 @@ def main(argv: Sequence[str] | None = None) -> None:
     quant_cfg_identity = normalize_quant_cfg_identity(args.quant_cfg)
 
     set_seed(args.seed)
-    tokenizer = get_tokenizer(
-        args.model,
-        max_seq_len=args.sequence_length,
-        revision=args.model_revision,
-    )
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
         revision=args.model_revision,
         dtype=torch.bfloat16,
         device_map="auto",
     )
+    model_revision = _resolved_model_commit(model)
+    tokenizer = get_tokenizer(
+        args.model,
+        max_seq_len=args.sequence_length,
+        revision=model_revision,
+    )
+    _validate_tokenizer_commit(tokenizer, model_revision)
     model.eval()
     quantize_model(
         model=model,
@@ -248,7 +295,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.output,
         input_amax,
         model_id=args.model,
-        model_revision=args.model_revision,
+        model_revision=model_revision,
         quant_cfg=quant_cfg_identity,
         dataset=args.dataset,
         sample_count=args.sample_count,
@@ -258,7 +305,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     load_nvfp4_calibration(
         args.output,
         model_id=args.model,
-        model_revision=args.model_revision,
+        model_revision=model_revision,
         quant_cfg=quant_cfg_identity,
         expected_projection_names=set(input_amax),
     )

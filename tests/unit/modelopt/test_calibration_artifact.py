@@ -79,6 +79,105 @@ def _model_with_fused_experts(experts: torch.nn.Module) -> torch.nn.Module:
     return model
 
 
+_MISSING_COMMIT = object()
+
+
+def _install_fake_exporter_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    model_commit: object,
+    tokenizer_commit: object,
+) -> dict[str, str | None]:
+    seen: dict[str, str | None] = {}
+
+    class FakeProjection(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones((2, 2)))
+            self.input_quantizer = _FakeQuantizer(12.0)
+
+    class FakeModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.config = types.SimpleNamespace()
+            if model_commit is not _MISSING_COMMIT:
+                self.config._commit_hash = model_commit
+            self.up_proj = FakeProjection()
+
+    class FakeAutoModelForCausalLM:
+        @staticmethod
+        def from_pretrained(
+            model_id: str,
+            *,
+            revision: str,
+            dtype: torch.dtype,
+            device_map: str,
+        ) -> torch.nn.Module:
+            del model_id, dtype, device_map
+            seen["model_revision"] = revision
+            return FakeModel()
+
+    transformers = types.ModuleType("transformers")
+    transformers.AutoModelForCausalLM = FakeAutoModelForCausalLM
+    algorithms_utils = types.ModuleType("nemo_rl.algorithms.utils")
+    algorithms_utils.set_seed = lambda seed: None
+    worker_utils = types.ModuleType("nemo_rl.modelopt.models.policy.workers.utils")
+
+    def fake_get_tokenizer(
+        model_id: str,
+        *,
+        max_seq_len: int,
+        revision: str | None = None,
+    ) -> object:
+        del model_id, max_seq_len
+        seen["tokenizer_revision"] = revision
+        init_kwargs = {}
+        if tokenizer_commit is not _MISSING_COMMIT:
+            init_kwargs["_commit_hash"] = tokenizer_commit
+        return types.SimpleNamespace(init_kwargs=init_kwargs)
+
+    worker_utils.get_tokenizer = fake_get_tokenizer
+    worker_utils.quantize_model = lambda **kwargs: None
+    modelopt_utils = types.ModuleType("nemo_rl.modelopt.utils")
+    modelopt_utils.resolve_nvfp4_real_quant_mode = lambda quant_cfg: "w4a4"
+    monkeypatch.setitem(sys.modules, "transformers", transformers)
+    monkeypatch.setitem(sys.modules, "nemo_rl.algorithms.utils", algorithms_utils)
+    monkeypatch.setitem(
+        sys.modules,
+        "nemo_rl.modelopt.models.policy.workers.utils",
+        worker_utils,
+    )
+    monkeypatch.setitem(sys.modules, "nemo_rl.modelopt.utils", modelopt_utils)
+    return seen
+
+
+def _run_fake_exporter(tmp_path: Path, *, revision: str = "release-tag") -> Path:
+    quant_cfg_path = tmp_path / "nvfp4.yaml"
+    quant_cfg_path.write_text("quant_cfg: nvfp4\n")
+    output_path = tmp_path / "calibration.safetensors"
+    export_nvfp4_calibration.main(
+        [
+            "--model",
+            "org/model",
+            "--model-revision",
+            revision,
+            "--quant-cfg",
+            str(quant_cfg_path),
+            "--dataset",
+            "cnn_dailymail",
+            "--sample-count",
+            "1",
+            "--sequence-length",
+            "16",
+            "--seed",
+            "1234",
+            "--output",
+            str(output_path),
+        ]
+    )
+    return output_path
+
+
 def test_normalize_quant_cfg_identity_resolves_paths_and_preserves_symbolic_names(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -174,99 +273,79 @@ def test_collect_input_amax_rejects_invalid_fused_expert_quantizer(
         collect_nvfp4_input_amax(_model_with_fused_experts(experts))
 
 
-def test_exporter_pins_model_and_tokenizer_to_same_revision(
+def test_exporter_resolves_model_commit_and_pins_tokenizer(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    revision = "0123456789abcdef"
-    seen: dict[str, str | None] = {}
-
-    class FakeProjection(torch.nn.Module):
-        def __init__(self) -> None:
-            super().__init__()
-            self.weight = torch.nn.Parameter(torch.ones((2, 2)))
-            self.input_quantizer = _FakeQuantizer(12.0)
-
-    class FakeModel(torch.nn.Module):
-        def __init__(self) -> None:
-            super().__init__()
-            self.up_proj = FakeProjection()
-
-    class FakeAutoModelForCausalLM:
-        @staticmethod
-        def from_pretrained(
-            model_id: str,
-            *,
-            revision: str,
-            dtype: torch.dtype,
-            device_map: str,
-        ) -> torch.nn.Module:
-            del model_id, dtype, device_map
-            seen["model_revision"] = revision
-            return FakeModel()
-
-    transformers = types.ModuleType("transformers")
-    transformers.AutoModelForCausalLM = FakeAutoModelForCausalLM
-    algorithms_utils = types.ModuleType("nemo_rl.algorithms.utils")
-    algorithms_utils.set_seed = lambda seed: None
-    worker_utils = types.ModuleType("nemo_rl.modelopt.models.policy.workers.utils")
-
-    def fake_get_tokenizer(
-        model_id: str,
-        *,
-        max_seq_len: int,
-        revision: str | None = None,
-    ) -> object:
-        del model_id, max_seq_len
-        seen["tokenizer_revision"] = revision
-        return object()
-
-    worker_utils.get_tokenizer = fake_get_tokenizer
-    worker_utils.quantize_model = lambda **kwargs: None
-    modelopt_utils = types.ModuleType("nemo_rl.modelopt.utils")
-    modelopt_utils.resolve_nvfp4_real_quant_mode = lambda quant_cfg: "w4a4"
-    monkeypatch.setitem(sys.modules, "transformers", transformers)
-    monkeypatch.setitem(sys.modules, "nemo_rl.algorithms.utils", algorithms_utils)
-    monkeypatch.setitem(
-        sys.modules,
-        "nemo_rl.modelopt.models.policy.workers.utils",
-        worker_utils,
+    resolved_revision = "0123456789abcdef0123456789abcdef01234567"
+    seen = _install_fake_exporter_dependencies(
+        monkeypatch,
+        model_commit=resolved_revision,
+        tokenizer_commit=resolved_revision,
     )
-    monkeypatch.setitem(sys.modules, "nemo_rl.modelopt.utils", modelopt_utils)
     monkeypatch.chdir(tmp_path)
-    quant_cfg_path = Path("nvfp4.yaml")
-    quant_cfg_path.write_text("quant_cfg: nvfp4\n")
-    output_path = tmp_path / "calibration.safetensors"
-
-    export_nvfp4_calibration.main(
-        [
-            "--model",
-            "org/model",
-            "--model-revision",
-            revision,
-            "--quant-cfg",
-            str(quant_cfg_path),
-            "--dataset",
-            "cnn_dailymail",
-            "--sample-count",
-            "1",
-            "--sequence-length",
-            "16",
-            "--seed",
-            "1234",
-            "--output",
-            str(output_path),
-        ]
-    )
+    output_path = _run_fake_exporter(tmp_path)
 
     assert seen == {
-        "model_revision": revision,
-        "tokenizer_revision": revision,
+        "model_revision": "release-tag",
+        "tokenizer_revision": resolved_revision,
     }
     with safe_open(output_path, framework="pt", device="cpu") as artifact:
+        assert artifact.metadata()["model_revision"] == json.dumps(resolved_revision)
         assert artifact.metadata()["quant_cfg"] == json.dumps(
-            str(quant_cfg_path.resolve())
+            str((tmp_path / "nvfp4.yaml").resolve())
         )
+
+
+@pytest.mark.parametrize(
+    "model_commit",
+    [_MISSING_COMMIT, None, "release-tag", "0123456789abcdef"],
+    ids=("missing", "none", "mutable", "short"),
+)
+def test_exporter_rejects_missing_or_nonimmutable_model_commit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    model_commit: object,
+) -> None:
+    _install_fake_exporter_dependencies(
+        monkeypatch,
+        model_commit=model_commit,
+        tokenizer_commit=_MISSING_COMMIT,
+    )
+
+    with pytest.raises(RuntimeError, match="resolved immutable commit SHA"):
+        _run_fake_exporter(tmp_path)
+
+
+def test_exporter_rejects_mismatched_tokenizer_commit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_fake_exporter_dependencies(
+        monkeypatch,
+        model_commit="0123456789abcdef0123456789abcdef01234567",
+        tokenizer_commit="89abcdef0123456789abcdef0123456789abcdef",
+    )
+
+    with pytest.raises(RuntimeError, match="tokenizer.*commit.*does not match"):
+        _run_fake_exporter(tmp_path)
+
+
+def test_exporter_accepts_tokenizer_without_resolved_commit_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    resolved_revision = "0123456789abcdef0123456789abcdef01234567"
+    _install_fake_exporter_dependencies(
+        monkeypatch,
+        model_commit=resolved_revision,
+        tokenizer_commit=_MISSING_COMMIT,
+    )
+
+    output_path = _run_fake_exporter(tmp_path)
+
+    with safe_open(output_path, framework="pt", device="cpu") as artifact:
+        assert artifact.metadata()["model_revision"] == json.dumps(resolved_revision)
 
 
 def test_round_trip_preserves_exact_hf_projection_names_and_metadata(

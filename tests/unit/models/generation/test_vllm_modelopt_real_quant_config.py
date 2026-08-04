@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 import torch
 
+from examples.modelopt import export_nvfp4_calibration
 import nemo_rl.modelopt.models.generation.vllm_modelopt as vllm_modelopt
 import nemo_rl.modelopt.utils as modelopt_utils
 from nemo_rl.modelopt.calibration_artifact import save_nvfp4_calibration
@@ -1726,6 +1727,103 @@ def test_real_quant_bf16_w4a4_prepare_uses_resolved_vllm_provenance_once(
         )
     ]
     assert extension._nrl_bf16_calibration is calibration
+
+
+def test_exported_tag_revision_round_trips_with_resolved_vllm_commit(
+    monkeypatch,
+    tmp_path,
+):
+    resolved_revision = "0123456789abcdef0123456789abcdef01234567"
+    real_transformers = importlib.import_module("transformers")
+
+    class FakeProjection(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones((32, 16)))
+            self.input_quantizer = types.SimpleNamespace(
+                is_enabled=True,
+                _amax=torch.tensor(12.0),
+            )
+
+    class FakeModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.config = types.SimpleNamespace(_commit_hash=resolved_revision)
+            self.q_proj = FakeProjection()
+
+    class FakeAutoModelForCausalLM:
+        @staticmethod
+        def from_pretrained(*_args, **_kwargs):
+            return FakeModel()
+
+    transformers = types.ModuleType("transformers")
+    transformers.AutoModelForCausalLM = FakeAutoModelForCausalLM
+    algorithms_utils = types.ModuleType("nemo_rl.algorithms.utils")
+    algorithms_utils.set_seed = lambda _seed: None
+    worker_utils = types.ModuleType("nemo_rl.modelopt.models.policy.workers.utils")
+    worker_utils.get_tokenizer = lambda *_args, **_kwargs: types.SimpleNamespace(
+        init_kwargs={"_commit_hash": resolved_revision}
+    )
+    worker_utils.quantize_model = lambda **_kwargs: None
+    exporter_modelopt_utils = types.ModuleType("nemo_rl.modelopt.utils")
+    exporter_modelopt_utils.resolve_nvfp4_real_quant_mode = lambda _cfg: "w4a4"
+    monkeypatch.setitem(sys.modules, "transformers", transformers)
+    monkeypatch.setitem(sys.modules, "nemo_rl.algorithms.utils", algorithms_utils)
+    monkeypatch.setitem(
+        sys.modules,
+        "nemo_rl.modelopt.models.policy.workers.utils",
+        worker_utils,
+    )
+    monkeypatch.setitem(sys.modules, "nemo_rl.modelopt.utils", exporter_modelopt_utils)
+    quant_cfg_path = tmp_path / "nvfp4.yaml"
+    quant_cfg_path.write_text("quant_cfg: nvfp4\n")
+    artifact_path = tmp_path / "calibration.safetensors"
+
+    export_nvfp4_calibration.main(
+        [
+            "--model",
+            "org/model",
+            "--model-revision",
+            "release-tag",
+            "--quant-cfg",
+            str(quant_cfg_path),
+            "--dataset",
+            "cnn_dailymail",
+            "--sample-count",
+            "1",
+            "--sequence-length",
+            "16",
+            "--seed",
+            "1234",
+            "--output",
+            str(artifact_path),
+        ]
+    )
+
+    monkeypatch.setitem(sys.modules, "transformers", real_transformers)
+    monkeypatch.setitem(sys.modules, "nemo_rl.modelopt.utils", modelopt_utils)
+    backend = _import_vllm_quant_backend(monkeypatch)
+    model = torch.nn.Module()
+    model.q_proj = _mark_as_modelopt_layer(torch.nn.Linear(16, 32, bias=False))
+    extension = _make_real_quant_extension(
+        backend,
+        model,
+        [],
+        quant_algo="NVFP4",
+        model_revision="release-tag",
+        resolved_revision=resolved_revision,
+    )
+    _patch_real_quant_load(monkeypatch, backend)
+    monkeypatch.setenv("VLLM_MODELOPT_CALIBRATION_PATH", str(artifact_path))
+    monkeypatch.setenv(
+        "VLLM_MODELOPT_CALIBRATION_QUANT_CFG",
+        str(quant_cfg_path.resolve()),
+    )
+
+    extension.prepare_refit_info(_bf16_weight_info("q_proj.weight"))
+
+    assert extension._nrl_bf16_calibration is not None
+    assert set(extension._nrl_bf16_calibration.input_amax) == {"q_proj.weight"}
 
 
 def test_real_quant_prepacked_w4a4_keeps_actor_scales_without_artifact(monkeypatch):
