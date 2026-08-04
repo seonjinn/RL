@@ -44,6 +44,8 @@ REQUIRED_MODULE_DISTRIBUTIONS: dict[str, tuple[str, ...]] = {
     "cupy": ("cupy-cuda13x", "cupy-cuda12x", "cupy"),
 }
 TE_EVAL_FEATURE_SET = "te_eval_capability_8"
+BRIDGE_EVAL_FEATURE_SET = "bridge_forward_only_eval_8"
+NARROW_EVAL_FEATURE_SETS = frozenset((TE_EVAL_FEATURE_SET, BRIDGE_EVAL_FEATURE_SET))
 TE_EVAL_EXCLUDED_PACKAGES = (
     "causal-conv1d",
     "deep-ep",
@@ -220,7 +222,7 @@ def probe_runtime(
 ) -> dict[str, Any]:
     """Import the training stack and require exactly the allocated GPUs."""
     if expected_runtime_feature_set is not None:
-        if expected_runtime_feature_set != TE_EVAL_FEATURE_SET:
+        if expected_runtime_feature_set not in NARROW_EVAL_FEATURE_SETS:
             raise RuntimeError("unsupported runtime feature set")
         if expected_excluded_packages != TE_EVAL_EXCLUDED_PACKAGES:
             raise RuntimeError("runtime exclusions do not match the typed feature set")
@@ -413,7 +415,7 @@ def probe_runtime(
 
     modules = {"torch": torch_module}
     required_module_distributions = dict(REQUIRED_MODULE_DISTRIBUTIONS)
-    if expected_runtime_feature_set == TE_EVAL_FEATURE_SET:
+    if expected_runtime_feature_set in NARROW_EVAL_FEATURE_SETS:
         required_module_distributions = {
             name: distributions
             for name, distributions in required_module_distributions.items()

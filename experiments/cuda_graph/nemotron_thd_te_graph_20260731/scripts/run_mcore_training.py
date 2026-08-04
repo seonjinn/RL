@@ -12,13 +12,17 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
+import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +39,14 @@ ALLOWED_ALLOCATIONS = frozenset(((1, 8, 8), (2, 4, 8), (4, 4, 16), (8, 4, 32)))
 CAPABILITY_DEVICE_FIELDS = frozenset(
     ("global_rank", "node_rank", "local_rank", "cuda_device_index")
 )
+PRIMARY_CAPABILITY_NODE = (
+    "tests/unit_tests/transformer/test_cuda_graphs.py::"
+    "test_te_make_graphed_callables_supports_eval_no_grad"
+)
+REUSE_CAPABILITY_NODE = (
+    "tests/unit_tests/transformer/test_cuda_graphs.py::"
+    "test_te_eval_graph_input_output_buffer_reuse_capability"
+)
 
 
 @dataclass(frozen=True)
@@ -46,6 +58,220 @@ class MatrixRow:
     allocations: tuple[tuple[int, int], ...]
     pytest_nodes: tuple[str, ...]
     pytest_filters: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SubmissionArtifacts:
+    """Fresh immutable source and intent artifacts for one submission."""
+
+    snapshot_root: Path
+    snapshot_sha256: str
+    intent_path: Path
+    intent_sha256: str
+
+
+def _directory_sha256(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(
+        root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()
+    ):
+        relative = path.relative_to(root).as_posix()
+        if relative == ".snapshot-sha256":
+            continue
+        metadata = path.lstat()
+        digest.update(relative.encode())
+        digest.update(b"\0")
+        digest.update(f"exec={stat.S_IMODE(metadata.st_mode) & 0o111:o}".encode())
+        digest.update(b"\0")
+        if stat.S_ISREG(metadata.st_mode):
+            digest.update(b"file\0")
+            with path.open("rb") as source:
+                for block in iter(lambda: source.read(1024 * 1024), b""):
+                    digest.update(block)
+        elif stat.S_ISDIR(metadata.st_mode):
+            digest.update(b"directory\0")
+        elif stat.S_ISLNK(metadata.st_mode):
+            target = os.readlink(path)
+            resolved = (path.parent / target).resolve()
+            if not resolved.is_relative_to(root.resolve()):
+                raise ValueError(f"snapshot contains an escaping symlink: {relative}")
+            digest.update(b"symlink\0")
+            digest.update(target.encode())
+        else:
+            raise ValueError(f"snapshot contains an unsupported file type: {relative}")
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _make_tree_read_only(root: Path) -> None:
+    for path in sorted(root.rglob("*"), reverse=True):
+        if path.is_symlink():
+            continue
+        mode = stat.S_IMODE(path.stat().st_mode)
+        path.chmod(mode & ~0o222)
+    root.chmod(stat.S_IMODE(root.stat().st_mode) & ~0o222)
+
+
+def verify_source_snapshot(
+    *, source_root: Path, candidate_sha: str, expected_sha256: str
+) -> None:
+    """Reject mutable, unsafe, or content-mismatched submission snapshots."""
+    if FULL_COMMIT.fullmatch(candidate_sha) is None:
+        raise ValueError("candidate SHA must be a full lowercase 40-character SHA")
+    if FULL_SHA256.fullmatch(expected_sha256) is None:
+        raise ValueError("snapshot SHA256 must be lowercase hexadecimal")
+    if source_root.is_symlink() or not source_root.is_dir():
+        raise ValueError("candidate source root is missing or unsafe")
+    for path in (source_root, *source_root.rglob("*")):
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode):
+            continue
+        if metadata.st_mode & 0o222:
+            raise ValueError(f"snapshot contains a writable path: {path}")
+    marker = source_root / ".candidate-sha"
+    digest_marker = source_root / ".snapshot-sha256"
+    if not marker.is_file() or marker.read_text().strip() != candidate_sha:
+        raise ValueError("candidate source snapshot does not match candidate SHA")
+    if (
+        not digest_marker.is_file()
+        or digest_marker.read_text().strip() != expected_sha256
+    ):
+        raise ValueError("snapshot SHA256 marker mismatch")
+    if _directory_sha256(source_root) != expected_sha256:
+        raise ValueError("snapshot SHA256 does not match snapshot contents")
+
+
+def load_submission_intent(path: Path, *, expected_sha256: str) -> dict[str, Any]:
+    """Load one immutable intent only when its literal submit-time digest matches."""
+    if FULL_SHA256.fullmatch(expected_sha256) is None:
+        raise ValueError("submission intent SHA256 must be lowercase hexadecimal")
+    if path.is_symlink() or not path.is_file() or path.stat().st_mode & 0o222:
+        raise ValueError("submission intent must be a non-writable regular file")
+    serialized = path.read_bytes()
+    if hashlib.sha256(serialized).hexdigest() != expected_sha256:
+        raise ValueError("submission intent SHA256 does not match intent contents")
+    try:
+        payload = json.loads(serialized)
+    except json.JSONDecodeError as error:
+        raise ValueError("submission intent is invalid JSON") from error
+    if not isinstance(payload, dict):
+        raise ValueError("submission intent must be a JSON object")
+    return payload
+
+
+def _archive_commit(repository: Path, commit: str, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    archive = subprocess.Popen(
+        ["git", "-C", str(repository), "archive", "--format=tar", commit],
+        stdout=subprocess.PIPE,
+    )
+    assert archive.stdout is not None
+    try:
+        extracted = subprocess.run(
+            ["tar", "-xf", "-", "-C", str(destination)],
+            stdin=archive.stdout,
+            check=False,
+        )
+    finally:
+        archive.stdout.close()
+    archive_status = archive.wait()
+    if archive_status != 0 or extracted.returncode != 0:
+        raise RuntimeError(f"failed to archive {repository} at {commit}")
+
+
+def prepare_candidate_submission(
+    *,
+    archive_sources: tuple[tuple[Path, str, Path], ...],
+    run_log_root: Path,
+    candidate_kind: str,
+    candidate_sha: str,
+    intent_payload: Mapping[str, Any],
+) -> SubmissionArtifacts:
+    """Publish a fresh, content-bound snapshot and exclusive immutable intent."""
+    if not run_log_root.is_absolute():
+        raise ValueError("RUN_LOG_ROOT must be absolute")
+    if candidate_kind not in {"mcore", "bridge"}:
+        raise ValueError("candidate kind must be mcore or bridge")
+    if FULL_COMMIT.fullmatch(candidate_sha) is None:
+        raise ValueError("candidate SHA must be a full lowercase 40-character SHA")
+    if not archive_sources:
+        raise ValueError("at least one archive source is required")
+    submission_id = f"{time.time_ns()}-{os.getpid()}-{uuid.uuid4().hex}"
+    snapshot_parent = run_log_root / "source-snapshots" / candidate_kind / candidate_sha
+    snapshot_parent.mkdir(parents=True, exist_ok=True)
+    temporary_root = snapshot_parent / f".{submission_id}.tmp"
+    final_root = snapshot_parent / submission_id
+    temporary_root.mkdir(mode=0o700)
+    try:
+        for repository, commit, relative_destination in archive_sources:
+            if relative_destination.is_absolute() or ".." in relative_destination.parts:
+                raise ValueError("archive destination must stay inside the snapshot")
+            destination = temporary_root / relative_destination
+            _archive_commit(repository, commit, destination)
+        candidate_marker = temporary_root / ".candidate-sha"
+        digest_marker = temporary_root / ".snapshot-sha256"
+        if candidate_marker.exists() or candidate_marker.is_symlink():
+            raise ValueError("candidate archive contains a reserved snapshot marker")
+        if digest_marker.exists() or digest_marker.is_symlink():
+            raise ValueError("candidate archive contains a reserved digest marker")
+        candidate_marker.write_text(f"{candidate_sha}\n")
+        snapshot_sha256 = _directory_sha256(temporary_root)
+        digest_marker.write_text(f"{snapshot_sha256}\n")
+        _make_tree_read_only(temporary_root)
+        os.replace(temporary_root, final_root)
+        directory_fd = os.open(snapshot_parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except BaseException:
+        if temporary_root.exists():
+            _make_tree_read_only(temporary_root)
+            for path in sorted(temporary_root.rglob("*"), reverse=True):
+                if not path.is_symlink():
+                    path.chmod(stat.S_IMODE(path.stat().st_mode) | 0o200)
+            temporary_root.chmod(0o700)
+            shutil.rmtree(temporary_root)
+        raise
+    verify_source_snapshot(
+        source_root=final_root,
+        candidate_sha=candidate_sha,
+        expected_sha256=snapshot_sha256,
+    )
+
+    payload = dict(intent_payload)
+    payload["snapshot_path"] = str(final_root)
+    payload["snapshot_sha256"] = snapshot_sha256
+    serialized = (
+        json.dumps(payload, allow_nan=False, indent=2, sort_keys=True) + "\n"
+    ).encode()
+    intent_sha256 = hashlib.sha256(serialized).hexdigest()
+    intent_parent = run_log_root / "submission-intents" / candidate_kind / candidate_sha
+    intent_parent.mkdir(parents=True, exist_ok=True)
+    intent_path = intent_parent / f"{submission_id}.json"
+    temporary_intent = intent_parent / f".{submission_id}.tmp"
+    descriptor = os.open(temporary_intent, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb", closefd=True) as output:
+            output.write(serialized)
+            output.flush()
+            os.fsync(output.fileno())
+        temporary_intent.chmod(0o444)
+        read_descriptor = os.open(temporary_intent, os.O_RDONLY)
+        try:
+            os.fsync(read_descriptor)
+        finally:
+            os.close(read_descriptor)
+        os.link(temporary_intent, intent_path)
+        directory_fd = os.open(intent_parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary_intent.unlink(missing_ok=True)
+    load_submission_intent(intent_path, expected_sha256=intent_sha256)
+    return SubmissionArtifacts(final_root, snapshot_sha256, intent_path, intent_sha256)
 
 
 def pytest_commands(
@@ -198,7 +424,9 @@ def load_matrix(path: Path, *, candidate_kind: str) -> dict[str, MatrixRow]:
         pytest_nodes = _require_string_list(
             raw_row.get("pytest_nodes"), label=f"test row {row_id} pytest_nodes"
         )
-        if not pytest_nodes or any(PYTEST_NODE.fullmatch(node) is None for node in pytest_nodes):
+        if not pytest_nodes or any(
+            PYTEST_NODE.fullmatch(node) is None for node in pytest_nodes
+        ):
             raise ValueError(f"test row {row_id} contains a nonliteral pytest node")
         pytest_filters = _require_string_list(
             raw_row.get("pytest_filters"), label=f"test row {row_id} pytest_filters"
@@ -225,7 +453,13 @@ def result_path(
         raise ValueError("candidate SHA must be a full lowercase 40-character SHA")
     if ROW_ID.fullmatch(row_id) is None:
         raise ValueError("row ID must be filesystem-safe")
-    return run_log_root / "attestations" / candidate_kind / candidate_sha / f"{row_id}.json"
+    return (
+        run_log_root
+        / "attestations"
+        / candidate_kind
+        / candidate_sha
+        / f"{row_id}.json"
+    )
 
 
 def derive_run_identity(
@@ -242,8 +476,7 @@ def derive_run_identity(
     if FULL_SHA256.fullmatch(submission_intent_sha256) is None:
         raise ValueError("submission intent SHA256 must be lowercase hexadecimal")
     return (
-        f"slurm-{scheduler_job_id}-{scheduler_restart_count}-"
-        f"{submission_intent_sha256}"
+        f"slurm-{scheduler_job_id}-{scheduler_restart_count}-{submission_intent_sha256}"
     )
 
 
@@ -376,6 +609,7 @@ def build_result(
     all_eval_callables_supported: bool,
     mcore_eval_reuse_graph_io: bool | str,
     raw_te_eval_reuse_graph_io: bool,
+    capability_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one passed result only after every rank and node has passed."""
     if RUN_IDENTITY.fullmatch(run_identity) is None:
@@ -390,7 +624,10 @@ def build_result(
         raise ValueError("integration SHA must be a full lowercase 40-character SHA")
     for label, commit in (
         ("Transformer Engine source commit", transformer_engine_source_commit),
-        ("Transformer Engine version-base commit", transformer_engine_version_base_commit),
+        (
+            "Transformer Engine version-base commit",
+            transformer_engine_version_base_commit,
+        ),
     ):
         if FULL_COMMIT.fullmatch(commit) is None:
             raise ValueError(f"{label} must be a full lowercase SHA")
@@ -426,6 +663,7 @@ def build_result(
         "all_eval_callables_supported": all_eval_callables_supported,
         "mcore_eval_reuse_graph_io": mcore_eval_reuse_graph_io,
         "raw_te_eval_reuse_graph_io": raw_te_eval_reuse_graph_io,
+        "capability_evidence": dict(capability_evidence or {}),
         "topology": {
             "world_size": world_size,
             "num_nodes": num_nodes,
@@ -465,8 +703,8 @@ def write_json_atomic(payload: Mapping[str, Any], output: Path) -> None:
         raise
 
 
-def _capability_from_output(output: str) -> dict[str, Any]:
-    capability: dict[str, Any] = {}
+def _capability_from_output(output: str) -> tuple[dict[str, Any], ...]:
+    capabilities: list[dict[str, Any]] = []
     for line in output.splitlines():
         if not line.startswith("TE_CAPABILITY_JSON="):
             continue
@@ -476,8 +714,118 @@ def _capability_from_output(output: str) -> dict[str, Any]:
             raise ValueError("TE capability output is invalid JSON") from error
         if not isinstance(parsed, Mapping):
             raise ValueError("TE capability output must be a JSON object")
-        capability.update(parsed)
-    return capability
+        capabilities.append(dict(parsed))
+    return tuple(capabilities)
+
+
+def _exact_capability_marker(
+    node_capabilities: Mapping[str, tuple[dict[str, Any], ...]],
+    *,
+    node: str,
+    expected_keys: frozenset[str],
+) -> dict[str, Any]:
+    markers = node_capabilities.get(node)
+    if not isinstance(markers, (tuple, list)) or len(markers) != 1:
+        raise ValueError(
+            f"TE capability evidence requires exactly one marker for {node}"
+        )
+    marker = markers[0]
+    if not isinstance(marker, Mapping) or set(marker) != expected_keys:
+        raise ValueError(f"TE capability evidence has an invalid schema for {node}")
+    return dict(marker)
+
+
+def validate_row_capability(
+    *, row_id: str, node_capabilities: Mapping[str, tuple[dict[str, Any], ...]]
+) -> dict[str, Any]:
+    """Require exact, affirmative evidence from both TE capability tests."""
+    if row_id != "te_eval_capability_8":
+        return {}
+    device_keys = frozenset(("node_rank", "local_rank", "cuda_device_index"))
+    primary = _exact_capability_marker(
+        node_capabilities,
+        node=PRIMARY_CAPABILITY_NODE,
+        expected_keys=device_keys
+        | frozenset(
+            (
+                "all_eval_callables_supported",
+                "backward_executed",
+                "fallback_forward_counter_increment",
+                "forward_invocations_after_capture",
+                "no_parameter_grads",
+                "outputs_changed",
+                "replay_forward_counter_increment",
+            )
+        ),
+    )
+    reuse = _exact_capability_marker(
+        node_capabilities,
+        node=REUSE_CAPABILITY_NODE,
+        expected_keys=device_keys
+        | frozenset(
+            (
+                "mcore_eval_reuse_graph_io",
+                "raw_te_eval_reuse_graph_io",
+                "raw_te_eval_reuse_rejection",
+                "raw_te_eval_reuse_eager_parity",
+                "raw_te_eval_reuse_fallback_forward_counter_increment",
+                "raw_te_eval_reuse_no_parameter_grads",
+                "raw_te_eval_reuse_outputs_changed",
+                "raw_te_eval_reuse_replay_forward_counter_increment",
+            )
+        ),
+    )
+    if any(primary[key] != reuse[key] for key in device_keys):
+        raise ValueError("TE capability evidence reports inconsistent device bindings")
+    required_primary = {
+        "all_eval_callables_supported": True,
+        "backward_executed": False,
+        "fallback_forward_counter_increment": 1,
+        "no_parameter_grads": True,
+        "outputs_changed": True,
+        "replay_forward_counter_increment": 0,
+    }
+    if any(primary.get(key) != value for key, value in required_primary.items()):
+        raise ValueError("TE capability evidence does not prove safe eval replay")
+    forward_count = primary.get("forward_invocations_after_capture")
+    if (
+        not isinstance(forward_count, int)
+        or isinstance(forward_count, bool)
+        or forward_count <= 0
+    ):
+        raise ValueError("TE capability evidence has an invalid forward counter")
+    if reuse.get("mcore_eval_reuse_graph_io") != "not_implemented":
+        raise ValueError("TE capability evidence has an invalid MCore reuse status")
+    if reuse.get("raw_te_eval_reuse_no_parameter_grads") is not True:
+        raise ValueError("TE capability evidence does not prove reuse is no-grad")
+    raw_reuse = reuse.get("raw_te_eval_reuse_graph_io")
+    if not isinstance(raw_reuse, bool):
+        raise ValueError("TE capability evidence has an invalid raw TE reuse status")
+    if raw_reuse:
+        accepted = {
+            "raw_te_eval_reuse_rejection": None,
+            "raw_te_eval_reuse_eager_parity": True,
+            "raw_te_eval_reuse_fallback_forward_counter_increment": 1,
+            "raw_te_eval_reuse_outputs_changed": True,
+            "raw_te_eval_reuse_replay_forward_counter_increment": 0,
+        }
+        if any(reuse.get(key) != value for key, value in accepted.items()):
+            raise ValueError("TE capability evidence does not prove safe reuse replay")
+    else:
+        rejection = reuse.get("raw_te_eval_reuse_rejection")
+        if not isinstance(rejection, str) or not rejection.strip():
+            raise ValueError("TE capability evidence lacks the raw TE reuse rejection")
+        unavailable = (
+            "raw_te_eval_reuse_eager_parity",
+            "raw_te_eval_reuse_fallback_forward_counter_increment",
+            "raw_te_eval_reuse_outputs_changed",
+            "raw_te_eval_reuse_replay_forward_counter_increment",
+        )
+        if any(reuse.get(key) is not None for key in unavailable):
+            raise ValueError(
+                "TE capability evidence reports inconsistent rejected reuse"
+            )
+    return {**primary, **reuse}
 
 
 def _parse_args() -> argparse.Namespace:
@@ -488,6 +836,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-sha", required=True)
     parser.add_argument("--integration-sha", required=True)
     parser.add_argument("--source-root", required=True, type=Path)
+    parser.add_argument("--snapshot-sha256", required=True)
     parser.add_argument("--run-log-root", required=True, type=Path)
     parser.add_argument("--num-nodes", required=True, type=int)
     parser.add_argument("--gpus-per-node", required=True, type=int)
@@ -506,7 +855,9 @@ def _launch_torchrun_agent(args: argparse.Namespace) -> None:
     node_rank = int(os.environ.get("SLURM_NODEID", "-1"))
     if node_rank not in range(args.num_nodes):
         raise ValueError("SLURM_NODEID does not match the typed node allocation")
-    child_arguments = [argument for argument in sys.argv[1:] if argument != "--launch-agent"]
+    child_arguments = [
+        argument for argument in sys.argv[1:] if argument != "--launch-agent"
+    ]
     command = [
         sys.executable,
         "-m",
@@ -546,14 +897,14 @@ def main() -> int:
     world_size = int(os.environ.get("WORLD_SIZE", "-1"))
     if world_size != row.world_size or rank not in range(world_size):
         raise ValueError("torchrun rank environment does not match the typed row")
-    if args.source_root.is_symlink() or not args.source_root.is_dir():
-        raise ValueError("candidate source root is missing or unsafe")
-    marker = args.source_root / ".candidate-sha"
-    if not marker.is_file() or marker.read_text().strip() != args.candidate_sha:
-        raise ValueError("candidate source snapshot does not match candidate SHA")
+    verify_source_snapshot(
+        source_root=args.source_root,
+        candidate_sha=args.candidate_sha,
+        expected_sha256=args.snapshot_sha256,
+    )
 
     node_results: list[dict[str, Any]] = []
-    capability: dict[str, Any] = {}
+    node_capabilities: dict[str, tuple[dict[str, Any], ...]] = {}
     for node, command in zip(
         row.pytest_nodes,
         pytest_commands(row, python_executable=Path(sys.executable)),
@@ -568,7 +919,7 @@ def main() -> int:
         )
         output = completed.stdout + completed.stderr
         sys.stdout.write(output)
-        capability.update(_capability_from_output(output))
+        node_capabilities[node] = _capability_from_output(output)
         node_results.append(
             {
                 "node": node,
@@ -583,6 +934,18 @@ def main() -> int:
         candidate_sha=args.candidate_sha,
         row_id=args.row_id,
         run_identity=run_identity,
+    )
+    capability = validate_row_capability(
+        row_id=args.row_id,
+        node_capabilities=node_capabilities,
+    )
+    capability.update(
+        {
+            "global_rank": rank,
+            "node_rank": rank // args.gpus_per_node,
+            "local_rank": rank % args.gpus_per_node,
+            "cuda_device_index": rank % args.gpus_per_node,
+        }
     )
     rank_payload = {
         "run_identity": run_identity,
@@ -600,7 +963,9 @@ def main() -> int:
     if rank != 0:
         return 0 if all(item["exit_code"] == 0 for item in node_results) else 1
 
-    deadline = time.monotonic() + float(os.environ.get("RUNNER_JOIN_TIMEOUT_SECONDS", "300"))
+    deadline = time.monotonic() + float(
+        os.environ.get("RUNNER_JOIN_TIMEOUT_SECONDS", "300")
+    )
     rank_files = [rank_dir / f"rank-{item}.json" for item in range(world_size)]
     while not all(path.is_file() for path in rank_files):
         if time.monotonic() >= deadline:
@@ -621,9 +986,15 @@ def main() -> int:
     combined_results: list[dict[str, Any]] = []
     for node_index, node in enumerate(row.pytest_nodes):
         per_rank = [payload["node_results"][node_index] for payload in rank_payloads]
-        passed = all(item["status"] == "passed" and item["exit_code"] == 0 for item in per_rank)
+        passed = all(
+            item["status"] == "passed" and item["exit_code"] == 0 for item in per_rank
+        )
         combined_results.append(
-            {"node": node, "status": "passed" if passed else "failed", "exit_code": 0 if passed else 1}
+            {
+                "node": node,
+                "status": "passed" if passed else "failed",
+                "exit_code": 0 if passed else 1,
+            }
         )
     rank_zero_capability = rank_payloads[0]["capability"]
     device_bindings = tuple(
@@ -662,6 +1033,11 @@ def main() -> int:
         raw_te_eval_reuse_graph_io=bool(
             rank_zero_capability.get("raw_te_eval_reuse_graph_io", False)
         ),
+        capability_evidence={
+            key: value
+            for key, value in rank_zero_capability.items()
+            if key not in CAPABILITY_DEVICE_FIELDS
+        },
     )
     write_json_atomic(
         payload,

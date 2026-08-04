@@ -12,6 +12,7 @@ fail() { echo "$*" >&2; exit 2; }
 [[ -z "${COMMAND:-}" ]] || fail "Raw command payloads are forbidden"
 for name in TEST_ROW_ID TEST_WORLD_SIZE TEST_NUM_NODES TEST_GPUS_PER_NODE \
   CANDIDATE_KIND CANDIDATE_SHA INTEGRATION_SHA CANDIDATE_SOURCE_ROOT \
+  CANDIDATE_SNAPSHOT_SHA256 SUBMISSION_INTENT_SHA256 \
   RUN_LOG_ROOT TEST_MATRIX RUNNER_PATH CONTAINER CONTAINER_SHA256 MOUNTS EXPECTED_TE_SHA \
   EXPECTED_TE_VERSION_BASE_SHA RUNTIME_ATTESTATION SUBMISSION_INTENT REPO_ROOT \
   EXPECTED_NEMORL_SHA EXPECTED_BRIDGE_SHA EXPECTED_MCORE_SHA \
@@ -32,9 +33,36 @@ expected_candidate_kind=${EXPECTED_CANDIDATE_KIND:-mcore}
 [[ "${SLURM_JOB_ID:-}" =~ ^[1-9][0-9]*$ ]] || fail "SLURM job ID is invalid"
 scheduler_restart_count=${SLURM_RESTART_COUNT:-0}
 [[ "${scheduler_restart_count}" =~ ^[0-9]+$ ]] || fail "SLURM restart count is invalid"
-submission_intent_sha256=$(sha256sum "${SUBMISSION_INTENT}" | awk '{print $1}')
-[[ "${submission_intent_sha256}" =~ ^[0-9a-f]{64}$ ]] || \
+[[ "${SUBMISSION_INTENT_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
   fail "submission intent SHA256 is invalid"
+[[ "${CANDIDATE_SNAPSHOT_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
+  fail "candidate snapshot SHA256 is invalid"
+python3 - "${RUNNER_PATH}" "${SUBMISSION_INTENT}" "${SUBMISSION_INTENT_SHA256}" \
+  "${CANDIDATE_SOURCE_ROOT}" "${CANDIDATE_SHA}" "${CANDIDATE_SNAPSHOT_SHA256}" <<'PY' || \
+  fail "Submission artifacts failed literal digest verification"
+import importlib.util
+import sys
+from pathlib import Path
+
+driver_path, intent_path, intent_sha256, source_root, candidate_sha, snapshot_sha256 = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("run_mcore_training", driver_path)
+if spec is None or spec.loader is None:
+    raise SystemExit("unable to load typed MCore driver")
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+intent = module.load_submission_intent(Path(intent_path), expected_sha256=intent_sha256)
+module.verify_source_snapshot(
+    source_root=Path(source_root),
+    candidate_sha=candidate_sha,
+    expected_sha256=snapshot_sha256,
+)
+if intent.get("candidate_sha") != candidate_sha:
+    raise SystemExit("submission intent candidate mismatch")
+if intent.get("snapshot_path") != source_root or intent.get("snapshot_sha256") != snapshot_sha256:
+    raise SystemExit("submission intent snapshot mismatch")
+PY
+submission_intent_sha256=${SUBMISSION_INTENT_SHA256}
 
 bridge_root=${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
 mcore_root=${bridge_root}/3rdparty/Megatron-LM
@@ -166,6 +194,7 @@ exec "${environment_root}/bin/python" "$@"
   --matrix "${TEST_MATRIX}" --row-id "${TEST_ROW_ID}" \
   --candidate-kind "${CANDIDATE_KIND}" --candidate-sha "${CANDIDATE_SHA}" \
   --integration-sha "${INTEGRATION_SHA}" --source-root "${CANDIDATE_SOURCE_ROOT}" \
+  --snapshot-sha256 "${CANDIDATE_SNAPSHOT_SHA256}" \
   --run-log-root "${RUN_LOG_ROOT}" --num-nodes "${TEST_NUM_NODES}" \
   --gpus-per-node "${TEST_GPUS_PER_NODE}" --container-sha256 "${CONTAINER_SHA256}" \
   --transformer-engine-version "${TE_VERSION}" \

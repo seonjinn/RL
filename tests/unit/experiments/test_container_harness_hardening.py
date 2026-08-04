@@ -27,8 +27,7 @@ PYTHON_VERSION = "3.13.13"
 UV_VERSION = "0.11.18"
 RUNTIME_STAGE_CAPABILITY = "mcore-test-v1"
 RUNTIME_TEST_REQUIREMENTS = (
-    "pytest==9.1.1,iniconfig==2.3.0,packaging==26.2,"
-    "pluggy==1.6.0,pygments==2.20.0"
+    "pytest==9.1.1,iniconfig==2.3.0,packaging==26.2,pluggy==1.6.0,pygments==2.20.0"
 )
 
 
@@ -212,7 +211,9 @@ def _run_runtime_payload(
     runtime_environment.setdefault("CUDA_HOME", str(fixture.cuda_home))
     runtime_environment.setdefault("CUDACXX", str(fixture.cuda_home / "bin" / "nvcc"))
     runtime_stage_root = fixture.environment_root.parent
-    runtime_environment.setdefault("UV_CACHE_DIR", str(runtime_stage_root / "build-cache"))
+    runtime_environment.setdefault(
+        "UV_CACHE_DIR", str(runtime_stage_root / "build-cache")
+    )
     runtime_environment.setdefault(
         "NVTE_CMAKE_BUILD_DIR", str(runtime_stage_root / "te-cmake")
     )
@@ -230,9 +231,7 @@ def _run_runtime_payload(
     runtime_environment.setdefault("NVTE_CUDA_ARCHS", "100a")
     runtime_environment.setdefault("TORCH_CUDA_ARCH_LIST", "10.0a")
     runtime_environment.setdefault("RUNTIME_FEATURE_SET", "te_eval_capability_8")
-    runtime_environment.setdefault(
-        "RUNTIME_STAGE_CAPABILITY", RUNTIME_STAGE_CAPABILITY
-    )
+    runtime_environment.setdefault("RUNTIME_STAGE_CAPABILITY", RUNTIME_STAGE_CAPABILITY)
     runtime_environment.setdefault(
         "RUNTIME_TEST_REQUIREMENTS", RUNTIME_TEST_REQUIREMENTS
     )
@@ -370,7 +369,12 @@ def test_runtime_probe_allows_only_megatron_editables_from_project_root(
     assert result["expected_project_root"] == str(project_root)
 
 
-def test_runtime_probe_binds_narrow_te_eval_feature_set(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "feature_set", ("te_eval_capability_8", "bridge_forward_only_eval_8")
+)
+def test_runtime_probe_binds_narrow_te_eval_feature_set(
+    tmp_path: Path, feature_set: str
+) -> None:
     module = _load_runtime_probe()
     environment_root = tmp_path / "runtime-venv"
     project_root = tmp_path / "project"
@@ -385,7 +389,7 @@ def test_runtime_probe_binds_narrow_te_eval_feature_set(tmp_path: Path) -> None:
     )
     environment = {
         "UV_PROJECT_ENVIRONMENT": str(environment_root),
-        "RUNTIME_FEATURE_SET": "te_eval_capability_8",
+        "RUNTIME_FEATURE_SET": feature_set,
         "RUNTIME_EXCLUDED_PACKAGES": ",".join(exclusions),
         "TORCH_CUDA_ARCH_LIST": "10.0a",
         "NVTE_CUDA_ARCHS": "100a",
@@ -395,7 +399,7 @@ def test_runtime_probe_binds_narrow_te_eval_feature_set(tmp_path: Path) -> None:
         expected_device_count=4,
         expected_environment_root=environment_root,
         expected_project_root=project_root,
-        expected_runtime_feature_set="te_eval_capability_8",
+        expected_runtime_feature_set=feature_set,
         expected_excluded_packages=exclusions,
         expected_torch_cuda_arch_list="10.0a",
         expected_nvte_cuda_archs="100a",
@@ -406,14 +410,14 @@ def test_runtime_probe_binds_narrow_te_eval_feature_set(tmp_path: Path) -> None:
         environment=environment,
     )
 
-    assert result["runtime_feature_set"] == "te_eval_capability_8"
+    assert result["runtime_feature_set"] == feature_set
     assert result["excluded_packages"] == list(exclusions)
     assert "mamba_ssm" not in result["packages"]
     assert "causal_conv1d" not in result["packages"]
     with pytest.raises(RuntimeError, match="TORCH_CUDA_ARCH_LIST mismatch"):
         module.probe_runtime(
             expected_device_count=4,
-            expected_runtime_feature_set="te_eval_capability_8",
+            expected_runtime_feature_set=feature_set,
             expected_excluded_packages=exclusions,
             expected_torch_cuda_arch_list="10.0a",
             expected_nvte_cuda_archs="100a",
@@ -785,7 +789,10 @@ printf '{"status":"passed"}\n' >"${output}"
     )
     assert "--no-editable" not in command
     assert '"schema=runtime-stage-v1"' in command
-    assert 'mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"' in command
+    assert (
+        'mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"'
+        in command
+    )
     assert 'chmod -R a-w -- "${runtime_stage_root}"' in command
     assert '"stage_cpus_per_task=${RUNTIME_STAGE_CPUS_PER_TASK}"' in command
     assert NEMORL_COMMIT in command
@@ -821,7 +828,9 @@ def test_runtime_wrapper_separates_cpu_stage_from_gpu_attestation() -> None:
     assert "RUNTIME_PHASE=${RUNTIME_PHASE:-attest}" in source
     assert 'if [[ "${RUNTIME_PHASE}" == "stage" ]]' in source
     assert "NVTE_CUDA_ARCHS=100a" in source
-    assert "RUNTIME_FEATURE_SET=te_eval_capability_8" in source
+    assert "RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET:-te_eval_capability_8}" in source
+    assert '"RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET}"' in source
+    assert "bridge_forward_only_eval_8" in source
     assert "RUNTIME_STAGE_CAPABILITY=${RUNTIME_STAGE_CAPABILITY:-}" in source
     assert '"${RUNTIME_STAGE_CAPABILITY}" != "mcore-test-v1"' in source
     assert (
@@ -845,9 +854,12 @@ def test_runtime_wrapper_separates_cpu_stage_from_gpu_attestation() -> None:
         '"${environment_root}/bin/python" - "${RUNTIME_TEST_REQUIREMENTS}" '
         '"${environment_root}" <<"PY"' in source
     )
-    assert 'importlib.metadata.version(distribution)' in source
-    assert 'mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"' in source
-    assert '-perm -200 -o -perm -020 -o -perm -002' in source
+    assert "importlib.metadata.version(distribution)" in source
+    assert (
+        'mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"'
+        in source
+    )
+    assert "-perm -200 -o -perm -020 -o -perm -002" in source
     assert "attestation_command='" in source
     attestation = source.split("attestation_command='", 1)[1].split("'\n\n", 1)[0]
     assert "uv run" not in attestation
@@ -866,8 +878,7 @@ def test_runtime_stage_runs_exact_task2_root_suite_before_marker_publication(
     fake_python = tmp_path / "python"
     argument_log = tmp_path / "arguments.txt"
     fake_python.write_text(
-        "#!/bin/bash\n"
-        "printf '%s\\n' \"$@\" >\"${TASK2_TEST_ARGUMENT_LOG:?}\"\n"
+        '#!/bin/bash\nprintf \'%s\\n\' "$@" >"${TASK2_TEST_ARGUMENT_LOG:?}"\n'
     )
     fake_python.chmod(0o755)
     result_root = tmp_path / "results"
@@ -899,9 +910,9 @@ def test_runtime_stage_runs_exact_task2_root_suite_before_marker_publication(
     source = (
         EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
     ).read_text()
-    stage = source.split("stage_command='", 1)[1].split(
-        "'\n\nattestation_command=", 1
-    )[0]
+    stage = source.split("stage_command='", 1)[1].split("'\n\nattestation_command=", 1)[
+        0
+    ]
     test_index = stage.index('"${task2_root_test_runner}"')
     marker_index = stage.index(
         'mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"'
@@ -938,12 +949,12 @@ def test_runtime_stage_publishes_marker_only_after_immutable_symlink_safe_audits
     assert cleanup.index('rm -f -- "${marker}"') < cleanup.index(
         'chmod -R u+w -- "${runtime_stage_root}"'
     )
-    assert runtime_environment.count(
-        '"RUNTIME_STAGE_MARKER=${runtime_stage_marker}"'
-    ) == 1
-    assert runtime_environment.count(
-        '"RUNTIME_STAGE_JOB_ID=${runtime_stage_job_id}"'
-    ) == 1
+    assert (
+        runtime_environment.count('"RUNTIME_STAGE_MARKER=${runtime_stage_marker}"') == 1
+    )
+    assert (
+        runtime_environment.count('"RUNTIME_STAGE_JOB_ID=${runtime_stage_job_id}"') == 1
+    )
     assert 'if [[ ! "${runtime_stage_job_id}" =~ ^[1-9][0-9]*$ ]]' in source
     assert "${ARTIFACT_DIR%/}/stage-markers/${runtime_stage_key}.env" in source
     assert 'find "${runtime_stage_root}"' in stage
@@ -952,11 +963,23 @@ def test_runtime_stage_publishes_marker_only_after_immutable_symlink_safe_audits
     assert 'realpath -e -- "${symlink_path}"' in stage
     assert '"${runtime_stage_root}"/*' in stage
     assert '"${python_install_dir}"/*' in stage
-    assert ': "${RUNTIME_STAGE_MARKER:?Runtime stage payload requires RUNTIME_STAGE_MARKER}"' in stage
-    assert ': "${RUNTIME_STAGE_JOB_ID:?Runtime stage payload requires RUNTIME_STAGE_JOB_ID}"' in stage
+    assert (
+        ': "${RUNTIME_STAGE_MARKER:?Runtime stage payload requires RUNTIME_STAGE_MARKER}"'
+        in stage
+    )
+    assert (
+        ': "${RUNTIME_STAGE_JOB_ID:?Runtime stage payload requires RUNTIME_STAGE_JOB_ID}"'
+        in stage
+    )
     assert '"${RUNTIME_STAGE_JOB_ID}" >"${stage_job_record}"' in stage
-    assert ': "${RUNTIME_STAGE_MARKER:?Runtime attestation requires RUNTIME_STAGE_MARKER}"' in attestation
-    assert ': "${RUNTIME_STAGE_JOB_ID:?Runtime attestation requires RUNTIME_STAGE_JOB_ID}"' in attestation
+    assert (
+        ': "${RUNTIME_STAGE_MARKER:?Runtime attestation requires RUNTIME_STAGE_MARKER}"'
+        in attestation
+    )
+    assert (
+        ': "${RUNTIME_STAGE_JOB_ID:?Runtime attestation requires RUNTIME_STAGE_JOB_ID}"'
+        in attestation
+    )
 
     cleanup_index = stage.index('rm -rf -- "${uv_cache_dir}" "${te_cmake_dir}"')
     chmod_index = stage.index('chmod -R a-w -- "${runtime_stage_root}"')
@@ -1393,7 +1416,8 @@ def test_runtime_payload_rejects_preseeded_uv_without_executing_it(
 
 @pytest.mark.parametrize("outer_gitfile", (False, True))
 def test_runtime_payload_builds_from_writable_verified_source_copy(
-    tmp_path: Path, outer_gitfile: bool,
+    tmp_path: Path,
+    outer_gitfile: bool,
 ) -> None:
     provenance_log = tmp_path / "copied-source-provenance.log"
     fixture = _stage_runtime_payload_fixture(

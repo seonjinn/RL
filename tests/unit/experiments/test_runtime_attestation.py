@@ -42,6 +42,26 @@ def _device_bindings(
     ]
 
 
+def _te_capability_evidence() -> dict[str, object]:
+    return {
+        "all_eval_callables_supported": True,
+        "backward_executed": False,
+        "fallback_forward_counter_increment": 1,
+        "forward_invocations_after_capture": 3,
+        "no_parameter_grads": True,
+        "outputs_changed": True,
+        "replay_forward_counter_increment": 0,
+        "mcore_eval_reuse_graph_io": "not_implemented",
+        "raw_te_eval_reuse_graph_io": True,
+        "raw_te_eval_reuse_rejection": None,
+        "raw_te_eval_reuse_eager_parity": True,
+        "raw_te_eval_reuse_fallback_forward_counter_increment": 1,
+        "raw_te_eval_reuse_no_parameter_grads": True,
+        "raw_te_eval_reuse_outputs_changed": True,
+        "raw_te_eval_reuse_replay_forward_counter_increment": 0,
+    }
+
+
 def _load_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "verify_runtime_attestation", MODULE_PATH
@@ -358,13 +378,18 @@ def test_validator_requires_complete_worker_stack_and_te_216_or_newer(
         )
 
 
-def test_validator_binds_typed_te_eval_runtime_contract(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "feature_set", ("te_eval_capability_8", "bridge_forward_only_eval_8")
+)
+def test_validator_binds_typed_te_eval_runtime_contract(
+    tmp_path: Path, feature_set: str
+) -> None:
     module = _load_module()
     attestation, container, lock, python_install_dir, uv_executable = _fixture(tmp_path)
     payload = json.loads(attestation.read_text())
     payload.update(
         {
-            "runtime_feature_set": "te_eval_capability_8",
+            "runtime_feature_set": feature_set,
             "excluded_packages": [
                 "causal-conv1d",
                 "deep-ep",
@@ -379,7 +404,7 @@ def test_validator_binds_typed_te_eval_runtime_contract(tmp_path: Path) -> None:
     del payload["packages"]["causal_conv1d"]
     attestation.write_text(json.dumps(payload))
     contract = {
-        "expected_runtime_feature_set": "te_eval_capability_8",
+        "expected_runtime_feature_set": feature_set,
         "expected_excluded_packages": (
             "causal-conv1d",
             "deep-ep",
@@ -407,7 +432,7 @@ def test_validator_binds_typed_te_eval_runtime_contract(tmp_path: Path) -> None:
         **contract,
     )
 
-    assert result["runtime_feature_set"] == "te_eval_capability_8"
+    assert result["runtime_feature_set"] == feature_set
     payload["torch_cuda_arch_list"] = "10.0"
     attestation.write_text(json.dumps(payload))
     with pytest.raises(ValueError, match="feature contract mismatch"):
@@ -577,6 +602,7 @@ def test_matrix_validator_requires_exact_content_bound_rows(tmp_path: Path) -> N
         "all_eval_callables_supported": True,
         "mcore_eval_reuse_graph_io": "not_implemented",
         "raw_te_eval_reuse_graph_io": True,
+        "capability_evidence": _te_capability_evidence(),
         "topology": {
             "world_size": 8,
             "num_nodes": 2,
@@ -615,6 +641,109 @@ def test_matrix_validator_requires_exact_content_bound_rows(tmp_path: Path) -> N
         )
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("all_eval_callables_supported", False),
+        ("outputs_changed", False),
+        ("no_parameter_grads", False),
+        ("replay_forward_counter_increment", 1),
+        ("raw_te_eval_reuse_eager_parity", False),
+        ("raw_te_eval_reuse_replay_forward_counter_increment", 1),
+    ),
+)
+def test_matrix_validator_rejects_false_te_capability_evidence(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    module = _load_module()
+    candidate_sha = "f" * 40
+    candidate_dir = tmp_path / "mcore" / candidate_sha
+    candidate_dir.mkdir(parents=True)
+    evidence = {**_te_capability_evidence(), field: value}
+    payload = {
+        "schema_version": 1,
+        "status": "passed",
+        "candidate_kind": "mcore",
+        "candidate_sha": candidate_sha,
+        "integration_sha": MCORE_COMMIT,
+        "container_sha256": CONTAINER_SHA256,
+        "transformer_engine_version": "2.19.0.dev0",
+        "transformer_engine_source_commit": TE_COMMIT,
+        "transformer_engine_version_base_commit": "e" * 40,
+        "all_eval_callables_supported": True,
+        "mcore_eval_reuse_graph_io": "not_implemented",
+        "raw_te_eval_reuse_graph_io": True,
+        "capability_evidence": evidence,
+        "topology": {
+            "world_size": 8,
+            "num_nodes": 2,
+            "gpus_per_node": 4,
+            "joined_ranks": list(range(8)),
+            "device_bindings": _device_bindings(),
+        },
+        "test_row_id": "te_eval_capability_8",
+        "node_results": [],
+    }
+    (candidate_dir / "te_eval_capability_8.json").write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="capability evidence"):
+        module.validate_matrix_results(
+            candidate_kind="mcore",
+            candidate_sha=candidate_sha,
+            integration_sha=MCORE_COMMIT,
+            expected_container_sha256=CONTAINER_SHA256,
+            expected_te_commit=TE_COMMIT,
+            expected_te_version_base_commit="e" * 40,
+            test_result_dir=tmp_path,
+            required_rows=("te_eval_capability_8",),
+        )
+
+
+def test_matrix_validator_rejects_missing_te_capability_evidence(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    candidate_sha = "f" * 40
+    candidate_dir = tmp_path / "mcore" / candidate_sha
+    candidate_dir.mkdir(parents=True)
+    payload = {
+        "schema_version": 1,
+        "status": "passed",
+        "candidate_kind": "mcore",
+        "candidate_sha": candidate_sha,
+        "integration_sha": MCORE_COMMIT,
+        "container_sha256": CONTAINER_SHA256,
+        "transformer_engine_version": "2.19.0.dev0",
+        "transformer_engine_source_commit": TE_COMMIT,
+        "transformer_engine_version_base_commit": "e" * 40,
+        "all_eval_callables_supported": True,
+        "mcore_eval_reuse_graph_io": "not_implemented",
+        "raw_te_eval_reuse_graph_io": True,
+        "topology": {
+            "world_size": 8,
+            "num_nodes": 2,
+            "gpus_per_node": 4,
+            "joined_ranks": list(range(8)),
+            "device_bindings": _device_bindings(),
+        },
+        "test_row_id": "te_eval_capability_8",
+        "node_results": [],
+    }
+    (candidate_dir / "te_eval_capability_8.json").write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="capability evidence"):
+        module.validate_matrix_results(
+            candidate_kind="mcore",
+            candidate_sha=candidate_sha,
+            integration_sha=MCORE_COMMIT,
+            expected_container_sha256=CONTAINER_SHA256,
+            expected_te_commit=TE_COMMIT,
+            expected_te_version_base_commit="e" * 40,
+            test_result_dir=tmp_path,
+            required_rows=("te_eval_capability_8",),
+        )
+
+
 def test_matrix_validator_rejects_duplicate_or_missing_device_slots(
     tmp_path: Path,
 ) -> None:
@@ -641,6 +770,7 @@ def test_matrix_validator_rejects_duplicate_or_missing_device_slots(
         "all_eval_callables_supported": True,
         "mcore_eval_reuse_graph_io": "not_implemented",
         "raw_te_eval_reuse_graph_io": True,
+        "capability_evidence": _te_capability_evidence(),
         "topology": {
             "world_size": 8,
             "num_nodes": 2,

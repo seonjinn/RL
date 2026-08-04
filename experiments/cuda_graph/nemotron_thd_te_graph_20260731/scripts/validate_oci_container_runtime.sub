@@ -72,8 +72,9 @@ if [[ "${TORCH_CUDA_ARCH_LIST}" != "10.0a" ]]; then
   echo "OCI runtime staging requires TORCH_CUDA_ARCH_LIST=10.0a" >&2
   exit 2
 fi
-if [[ "${RUNTIME_FEATURE_SET}" != "te_eval_capability_8" ]]; then
-  echo "RUNTIME_FEATURE_SET must be te_eval_capability_8" >&2
+if [[ "${RUNTIME_FEATURE_SET}" != "te_eval_capability_8" && \
+      "${RUNTIME_FEATURE_SET}" != "bridge_forward_only_eval_8" ]]; then
+  echo "RUNTIME_FEATURE_SET must select one narrow eval row" >&2
   exit 2
 fi
 if [[ "${RUNTIME_EXCLUDED_PACKAGES}" != "causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm" ]]; then
@@ -427,7 +428,7 @@ runtime_environment=(
   NVTE_WITH_NCCL_EP=0
   NVTE_CUDA_ARCHS=100a
   TORCH_CUDA_ARCH_LIST=10.0a
-  RUNTIME_FEATURE_SET=te_eval_capability_8
+  "RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET}"
   RUNTIME_EXCLUDED_PACKAGES=causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm
   "RUNTIME_STAGE_CAPABILITY=${RUNTIME_STAGE_CAPABILITY}"
   "RUNTIME_TEST_REQUIREMENTS=${RUNTIME_TEST_REQUIREMENTS}"

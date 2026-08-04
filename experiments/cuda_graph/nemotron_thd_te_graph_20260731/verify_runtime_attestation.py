@@ -47,6 +47,8 @@ REQUIRED_PACKAGES = frozenset(
     )
 )
 TE_EVAL_FEATURE_SET = "te_eval_capability_8"
+BRIDGE_EVAL_FEATURE_SET = "bridge_forward_only_eval_8"
+NARROW_EVAL_FEATURE_SETS = frozenset((TE_EVAL_FEATURE_SET, BRIDGE_EVAL_FEATURE_SET))
 TE_EVAL_EXCLUDED_PACKAGES = (
     "causal-conv1d",
     "deep-ep",
@@ -213,6 +215,90 @@ def _validate_device_bindings(
         raise ValueError("matrix result global rank does not match its device slot")
 
 
+def _validate_te_capability_evidence(payload: Mapping[str, Any]) -> None:
+    evidence = payload.get("capability_evidence")
+    expected_keys = {
+        "all_eval_callables_supported",
+        "backward_executed",
+        "fallback_forward_counter_increment",
+        "forward_invocations_after_capture",
+        "no_parameter_grads",
+        "outputs_changed",
+        "replay_forward_counter_increment",
+        "mcore_eval_reuse_graph_io",
+        "raw_te_eval_reuse_graph_io",
+        "raw_te_eval_reuse_rejection",
+        "raw_te_eval_reuse_eager_parity",
+        "raw_te_eval_reuse_fallback_forward_counter_increment",
+        "raw_te_eval_reuse_no_parameter_grads",
+        "raw_te_eval_reuse_outputs_changed",
+        "raw_te_eval_reuse_replay_forward_counter_increment",
+    }
+    if not isinstance(evidence, Mapping) or set(evidence) != expected_keys:
+        raise ValueError("matrix result capability evidence has an invalid schema")
+    required = {
+        "all_eval_callables_supported": True,
+        "backward_executed": False,
+        "fallback_forward_counter_increment": 1,
+        "no_parameter_grads": True,
+        "outputs_changed": True,
+        "replay_forward_counter_increment": 0,
+        "mcore_eval_reuse_graph_io": "not_implemented",
+        "raw_te_eval_reuse_no_parameter_grads": True,
+    }
+    if any(evidence.get(key) != value for key, value in required.items()):
+        raise ValueError(
+            "matrix result capability evidence does not prove safe eval replay"
+        )
+    forward_count = evidence.get("forward_invocations_after_capture")
+    if (
+        not isinstance(forward_count, int)
+        or isinstance(forward_count, bool)
+        or forward_count <= 0
+    ):
+        raise ValueError("matrix result capability evidence has an invalid counter")
+    raw_reuse = evidence.get("raw_te_eval_reuse_graph_io")
+    if not isinstance(raw_reuse, bool):
+        raise ValueError(
+            "matrix result capability evidence has an invalid reuse status"
+        )
+    if raw_reuse:
+        accepted = {
+            "raw_te_eval_reuse_rejection": None,
+            "raw_te_eval_reuse_eager_parity": True,
+            "raw_te_eval_reuse_fallback_forward_counter_increment": 1,
+            "raw_te_eval_reuse_outputs_changed": True,
+            "raw_te_eval_reuse_replay_forward_counter_increment": 0,
+        }
+        if any(evidence.get(key) != value for key, value in accepted.items()):
+            raise ValueError(
+                "matrix result capability evidence does not prove safe reuse"
+            )
+    else:
+        rejection = evidence.get("raw_te_eval_reuse_rejection")
+        unavailable = (
+            "raw_te_eval_reuse_eager_parity",
+            "raw_te_eval_reuse_fallback_forward_counter_increment",
+            "raw_te_eval_reuse_outputs_changed",
+            "raw_te_eval_reuse_replay_forward_counter_increment",
+        )
+        if (
+            not isinstance(rejection, str)
+            or not rejection.strip()
+            or any(evidence.get(key) is not None for key in unavailable)
+        ):
+            raise ValueError(
+                "matrix result capability evidence has inconsistent reuse rejection"
+            )
+    summaries = {
+        "all_eval_callables_supported": evidence["all_eval_callables_supported"],
+        "mcore_eval_reuse_graph_io": evidence["mcore_eval_reuse_graph_io"],
+        "raw_te_eval_reuse_graph_io": raw_reuse,
+    }
+    if any(payload.get(key) != value for key, value in summaries.items()):
+        raise ValueError("matrix result capability evidence disagrees with its summary")
+
+
 def validate_matrix_results(
     *,
     candidate_kind: str,
@@ -312,17 +398,8 @@ def validate_matrix_results(
         )
         if not isinstance(payload.get("transformer_engine_version"), str):
             raise ValueError("matrix result lacks Transformer Engine version")
-        if not isinstance(payload.get("all_eval_callables_supported"), bool):
-            raise ValueError("matrix result lacks all-eval callable capability")
-        if not isinstance(payload.get("raw_te_eval_reuse_graph_io"), bool):
-            raise ValueError("matrix result lacks raw TE buffer-reuse behavior")
-        if payload.get("mcore_eval_reuse_graph_io") not in {
-            False,
-            "not_implemented",
-        }:
-            raise ValueError(
-                "matrix result has an unsafe MCore eval buffer-reuse policy"
-            )
+        if row_id == "te_eval_capability_8":
+            _validate_te_capability_evidence(payload)
         results[row_id] = payload
     return results
 
@@ -409,14 +486,14 @@ def validate_attestation(
         expected_nvte_cuda_archs,
     )
     if any(value is not None for value in runtime_contract):
-        expected_contract = (
-            TE_EVAL_FEATURE_SET,
-            TE_EVAL_EXCLUDED_PACKAGES,
-            "10.0a",
-            "100a",
-        )
-        if runtime_contract != expected_contract:
+        if (
+            expected_runtime_feature_set not in NARROW_EVAL_FEATURE_SETS
+            or expected_excluded_packages != TE_EVAL_EXCLUDED_PACKAGES
+            or expected_torch_cuda_arch_list != "10.0a"
+            or expected_nvte_cuda_archs != "100a"
+        ):
             raise ValueError("unsupported runtime feature contract")
+        expected_contract = runtime_contract
         actual_contract = (
             payload.get("runtime_feature_set"),
             tuple(payload.get("excluded_packages", ())),
@@ -553,7 +630,7 @@ def validate_attestation(
     if not isinstance(packages, Mapping):
         raise ValueError("runtime attestation packages must be a JSON object")
     required_packages = REQUIRED_PACKAGES
-    if expected_runtime_feature_set == TE_EVAL_FEATURE_SET:
+    if expected_runtime_feature_set in NARROW_EVAL_FEATURE_SETS:
         required_packages = required_packages.difference(TE_EVAL_OPTIONAL_PACKAGES)
     missing_packages = sorted(required_packages.difference(packages))
     if missing_packages:
@@ -649,7 +726,11 @@ def main() -> None:
             expected_uv_version=runtime_payload["expected_uv_version"],
             expected_uv_executable=Path(runtime_payload["uv_executable"]),
             expected_nvte_with_nccl_ep=runtime_payload["expected_nvte_with_nccl_ep"],
-            expected_runtime_feature_set=TE_EVAL_FEATURE_SET,
+            expected_runtime_feature_set=(
+                TE_EVAL_FEATURE_SET
+                if args.candidate_kind == "mcore"
+                else BRIDGE_EVAL_FEATURE_SET
+            ),
             expected_excluded_packages=TE_EVAL_EXCLUDED_PACKAGES,
             expected_torch_cuda_arch_list="10.0a",
             expected_nvte_cuda_archs="100a",

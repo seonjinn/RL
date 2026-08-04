@@ -40,6 +40,27 @@ for field in ACCOUNT CONTAINER CONTAINER_SHA256 MOUNTS RUNTIME_ATTESTATION EXPEC
   [[ -n "${value}" && "${value}" != *"__REQUIRED"* ]] || fail "Profile field ${field} is unresolved"
 done
 
+runtime_contract=$(python3 - "${RUNTIME_ATTESTATION}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text())
+excluded = payload.get("excluded_packages")
+expected_excluded = [
+    "causal-conv1d", "deep-ep", "fast-hadamard-transform", "mamba-ssm",
+]
+if payload.get("runtime_feature_set") != "bridge_forward_only_eval_8":
+    raise SystemExit("runtime attestation does not authorize the Bridge row")
+if excluded != expected_excluded or payload.get("torch_cuda_arch_list") != "10.0a" or payload.get("nvte_cuda_archs") != "100a":
+    raise SystemExit("runtime attestation feature contract mismatch")
+print("\t".join(("bridge_forward_only_eval_8", ",".join(excluded), "10.0a", "100a")))
+PY
+) || fail "Runtime feature contract rejected"
+IFS=$'\t' read -r RUNTIME_FEATURE_SET RUNTIME_EXCLUDED_PACKAGES \
+  TORCH_CUDA_ARCH_LIST NVTE_CUDA_ARCHS <<<"${runtime_contract}"
+[[ -n "${NVTE_CUDA_ARCHS}" ]] || fail "Runtime feature contract is incomplete"
+
 remote_sha=$(git -C "${bridge_root}" ls-remote origin refs/heads/sna/thd-cg-hybrid-nemotron-20260731 | awk 'NF == 2 {print $1}')
 [[ "${remote_sha}" =~ ^[0-9a-f]{40}$ ]] || fail "Bridge branch did not resolve to exactly one pushed SHA"
 [[ "${remote_sha}" == "${BRIDGE_CANDIDATE_SHA}" ]] || fail "Bridge candidate is absent from the pushed remote branch"
@@ -65,38 +86,44 @@ integration_sha=${EXPECTED_BRIDGE_SHA}
 source_provenance_verifier=${script_dir}/scripts/verify_source_provenance.sh
 runtime_attestation_command=${script_dir}/verify_runtime_attestation.py
 
-snapshot=${RUN_LOG_ROOT}/source-snapshots/bridge/${BRIDGE_CANDIDATE_SHA}
-mkdir -p "$(dirname "${snapshot}")"
-if [[ ! -d "${snapshot}" ]]; then
-  temporary_snapshot=$(mktemp -d "$(dirname "${snapshot}")/.${BRIDGE_CANDIDATE_SHA}.XXXXXX")
-  git -C "${bridge_root}" archive "${BRIDGE_CANDIDATE_SHA}" | tar -x -C "${temporary_snapshot}"
-  mkdir -p "${temporary_snapshot}/3rdparty/Megatron-LM"
-  git -C "${mcore_root}" archive "${candidate_mcore_sha}" | \
-    tar -x -C "${temporary_snapshot}/3rdparty/Megatron-LM"
-  printf '%s\n' "${BRIDGE_CANDIDATE_SHA}" >"${temporary_snapshot}/.candidate-sha"
-  printf '%s\n' "${candidate_mcore_sha}" >"${temporary_snapshot}/.candidate-mcore-sha"
-  mv "${temporary_snapshot}" "${snapshot}"
-fi
-
-intent_dir=${RUN_LOG_ROOT}/submission-intents/bridge/${BRIDGE_CANDIDATE_SHA}
-mkdir -p "${intent_dir}"
-intent=${intent_dir}/$(date -u +%Y%m%dT%H%M%SZ)-$$.json
-python3 - "${intent}" "${BRIDGE_CANDIDATE_SHA}" "${integration_sha}" "${candidate_mcore_sha}" "${PROFILE_SHA256}" <<'PY'
-import json
+artifacts=$(python3 - "${driver}" "${bridge_root}" "${mcore_root}" \
+  "${RUN_LOG_ROOT}" "${BRIDGE_CANDIDATE_SHA}" "${integration_sha}" \
+  "${candidate_mcore_sha}" "${PROFILE_SHA256}" "${RUNTIME_FEATURE_SET}" \
+  "${RUNTIME_EXCLUDED_PACKAGES}" "${TORCH_CUDA_ARCH_LIST}" "${NVTE_CUDA_ARCHS}" <<'PY'
+import importlib.util
 import sys
 from pathlib import Path
 
-path = Path(sys.argv[1])
-temporary = path.with_name(f".{path.name}.tmp")
-temporary.write_text(json.dumps({
-    "schema_version": 1, "candidate_kind": "bridge", "candidate_sha": sys.argv[2],
-    "integration_sha": sys.argv[3], "candidate_mcore_sha": sys.argv[4],
-    "profile_sha256": sys.argv[5], "rows": ["bridge_forward_only_eval_8"],
-}, sort_keys=True) + "\n")
-temporary.replace(path)
+driver_path, bridge_root, mcore_root, run_log_root, candidate_sha, integration_sha, candidate_mcore_sha, profile_sha256, feature_set, excluded, torch_arch, nvte_arch = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("run_mcore_training", driver_path)
+if spec is None or spec.loader is None:
+    raise SystemExit("unable to load typed MCore driver")
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+payload = {
+    "schema_version": 1, "candidate_kind": "bridge", "candidate_sha": candidate_sha,
+    "integration_sha": integration_sha, "candidate_mcore_sha": candidate_mcore_sha,
+    "profile_sha256": profile_sha256, "runtime_feature_set": feature_set,
+    "excluded_packages": excluded.split(","), "torch_cuda_arch_list": torch_arch,
+    "nvte_cuda_archs": nvte_arch, "rows": ["bridge_forward_only_eval_8"],
+}
+artifacts = module.prepare_candidate_submission(
+    archive_sources=(
+        (Path(bridge_root), candidate_sha, Path(".")),
+        (Path(mcore_root), candidate_mcore_sha, Path("3rdparty/Megatron-LM")),
+    ),
+    run_log_root=Path(run_log_root), candidate_kind="bridge",
+    candidate_sha=candidate_sha, intent_payload=payload,
+)
+print("\t".join((str(artifacts.snapshot_root), artifacts.snapshot_sha256, str(artifacts.intent_path), artifacts.intent_sha256)))
 PY
+ ) || fail "Failed to publish immutable submission artifacts"
+IFS=$'\t' read -r snapshot snapshot_sha256 intent intent_sha256 <<<"${artifacts}"
+[[ "${snapshot_sha256}" =~ ^[0-9a-f]{64}$ && "${intent_sha256}" =~ ^[0-9a-f]{64}$ ]] || \
+  fail "Submission artifact digests are invalid"
 
-exports="ALL,TEST_ROW_ID=bridge_forward_only_eval_8,TEST_WORLD_SIZE=8,TEST_NUM_NODES=2,TEST_GPUS_PER_NODE=4,CANDIDATE_KIND=bridge,CANDIDATE_SHA=${BRIDGE_CANDIDATE_SHA},INTEGRATION_SHA=${integration_sha},CANDIDATE_SOURCE_ROOT=${snapshot},RUN_LOG_ROOT=${RUN_LOG_ROOT},TEST_MATRIX=${matrix},RUNNER_PATH=${driver},CONTAINER=${CONTAINER},CONTAINER_SHA256=${CONTAINER_SHA256},MOUNTS=${MOUNTS},EXPECTED_TE_SHA=${EXPECTED_TE_SHA},EXPECTED_TE_VERSION_BASE_SHA=${EXPECTED_TE_VERSION_BASE_SHA},RUNTIME_ATTESTATION=${RUNTIME_ATTESTATION},SUBMISSION_INTENT=${intent},REPO_ROOT=${repo_root},EXPECTED_NEMORL_SHA=${EXPECTED_NEMORL_SHA},EXPECTED_BRIDGE_SHA=${EXPECTED_BRIDGE_SHA},EXPECTED_MCORE_SHA=${EXPECTED_MCORE_SHA},SOURCE_PROVENANCE_VERIFIER=${source_provenance_verifier},RUNTIME_ATTESTATION_COMMAND=${runtime_attestation_command}"
+exports="ALL,TEST_ROW_ID=bridge_forward_only_eval_8,TEST_WORLD_SIZE=8,TEST_NUM_NODES=2,TEST_GPUS_PER_NODE=4,CANDIDATE_KIND=bridge,CANDIDATE_SHA=${BRIDGE_CANDIDATE_SHA},INTEGRATION_SHA=${integration_sha},CANDIDATE_SOURCE_ROOT=${snapshot},CANDIDATE_SNAPSHOT_SHA256=${snapshot_sha256},RUN_LOG_ROOT=${RUN_LOG_ROOT},TEST_MATRIX=${matrix},RUNNER_PATH=${driver},CONTAINER=${CONTAINER},CONTAINER_SHA256=${CONTAINER_SHA256},MOUNTS=${MOUNTS},EXPECTED_TE_SHA=${EXPECTED_TE_SHA},EXPECTED_TE_VERSION_BASE_SHA=${EXPECTED_TE_VERSION_BASE_SHA},RUNTIME_ATTESTATION=${RUNTIME_ATTESTATION},SUBMISSION_INTENT=${intent},SUBMISSION_INTENT_SHA256=${intent_sha256},REPO_ROOT=${repo_root},EXPECTED_NEMORL_SHA=${EXPECTED_NEMORL_SHA},EXPECTED_BRIDGE_SHA=${EXPECTED_BRIDGE_SHA},EXPECTED_MCORE_SHA=${EXPECTED_MCORE_SHA},SOURCE_PROVENANCE_VERIFIER=${source_provenance_verifier},RUNTIME_ATTESTATION_COMMAND=${runtime_attestation_command},RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET},RUNTIME_EXCLUDED_PACKAGES=${RUNTIME_EXCLUDED_PACKAGES},TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST},NVTE_CUDA_ARCHS=${NVTE_CUDA_ARCHS}"
 command=(sbatch --parsable --nodes=2 "--account=${ACCOUNT}" "--partition=${PARTITION}" "--time=${TIME_LIMIT}" --job-name=bridge-forward-only-eval "--output=${RUN_LOG_ROOT}/slurm/bridge-forward-only-eval-%j.log" "--export=${exports}")
 [[ "${SBATCH_GRES}" == none ]] || command+=("--gres=${SBATCH_GRES}")
 [[ -z "${SBATCH_SEGMENT_SIZE}" ]] || command+=("--segment=${SBATCH_SEGMENT_SIZE}")
