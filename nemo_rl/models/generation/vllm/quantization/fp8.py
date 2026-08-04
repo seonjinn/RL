@@ -14,6 +14,7 @@
 
 import os
 from dataclasses import dataclass, field
+from typing import Any
 from unittest.mock import patch
 
 import ray
@@ -446,6 +447,13 @@ def _is_fp8_weight(name, model):
     return name in fp8_state.fp8_param_names
 
 
+def _uses_cutedsl_mxfp8_linear(name: str, model: Any) -> bool:
+    module = _get_module_from_param_name(model, name)
+    quant_method = getattr(module, "quant_method", None)
+    kernel = getattr(quant_method, "kernel", None)
+    return type(kernel).__name__ == "FlashInferCutedslMxfp8LinearKernel"
+
+
 def load_weights(weights, model_runner):
     global global_fp8_config
     weights_quantized = []
@@ -469,7 +477,12 @@ def load_weights(weights, model_runner):
             )
         param_scale = torch.squeeze(param_scale, dim=-1)
         if global_fp8_config.is_mx:
-            weights_quantized.append([k, param_lp])
+            weight_name = (
+                k + "_from_checkpoint"
+                if _uses_cutedsl_mxfp8_linear(k, model)
+                else k
+            )
+            weights_quantized.append([weight_name, param_lp])
             weights_quantized.append([k + "_scale_from_checkpoint", param_scale])
         else:
             weights_quantized.append([k, param_lp])
@@ -664,12 +677,8 @@ def process_weights_after_loading_mxfp8_linear(self, layer) -> None:
     )
     from vllm.model_executor.parameter import ModelWeightParameter
 
-    if layer.weight.ndim != 2:
-        raise ValueError(
-            f"MXFP8 linear layer weight must be 2D, but got {layer.weight.ndim}D"
-        )
-
     backend = getattr(self, "backend", None)
+    kernel_name = None
     if backend is not None:
         try:
             from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
@@ -685,36 +694,42 @@ def process_weights_after_loading_mxfp8_linear(self, layer) -> None:
     else:
         kernel = getattr(self, "kernel", None)
         kernel_name = type(kernel).__name__ if kernel is not None else None
-        if kernel_name == "FlashInferCutedslMxfp8LinearKernel":
-            # vLLM 0.25 prefers the CuTe-DSL kernel, but it stores the weight
-            # column-major [K, N] while this refit-friendly override (and the
-            # MXFP8 refit loader) keeps the canonical [N, K] layout. The
-            # CUTLASS kernel consumes [N, K] and is supported wherever
-            # CuTe-DSL is (both require SM100), so swap it in.
-            from vllm.model_executor.kernels.linear.mxfp8.flashinfer import (
-                FlashInferCutlassMxfp8LinearKernel,
-            )
-
-            kernel = FlashInferCutlassMxfp8LinearKernel(kernel.config)
-            self.kernel = kernel
-            kernel_name = type(kernel).__name__
-            # Record it: this demotes vLLM's first-choice MXFP8 linear kernel
-            # on every such layer, so anyone comparing NeMo-RL rollout
-            # throughput against a plain vLLM MXFP8 serve has an explanation
-            # in the log rather than only in this comment.
-            logger.warning_once(
-                "NeMo-RL MXFP8 refit requires the [N, K] weight layout; "
-                "replacing vLLM's preferred FlashInferCutedslMxfp8LinearKernel "
-                "with FlashInferCutlassMxfp8LinearKernel. Expect a rollout "
-                "throughput difference vs. plain vLLM serving."
-            )
-        if kernel_name != "FlashInferCutlassMxfp8LinearKernel":
+        if kernel_name not in {
+            "FlashInferCutedslMxfp8LinearKernel",
+            "FlashInferCutlassMxfp8LinearKernel",
+        }:
             raise AssertionError(
                 f"Unsupported MXFP8 linear kernel for refit: {kernel_name}"
             )
 
-    weight = layer.weight.data  # [N, K]
-    N, K = weight.shape
+    if kernel_name == "FlashInferCutedslMxfp8LinearKernel":
+        if not hasattr(layer, "weight_from_checkpoint"):
+            canonical_weight = layer.weight
+            if canonical_weight.ndim != 2 or not canonical_weight.is_contiguous():
+                raise ValueError(
+                    "CuTeDSL MXFP8 refit requires a contiguous 2D canonical weight, "
+                    f"but got shape={tuple(canonical_weight.shape)}, "
+                    f"contiguous={canonical_weight.is_contiguous()}"
+                )
+            layer.register_parameter("weight_from_checkpoint", canonical_weight)
+            layer.weight = torch.nn.Parameter(
+                canonical_weight.data.t(), requires_grad=False
+            )
+        canonical_weight = layer.weight_from_checkpoint
+        if layer.weight.data.data_ptr() != canonical_weight.data.data_ptr():
+            raise RuntimeError(
+                "CuTeDSL MXFP8 runtime and canonical refit weights no longer share "
+                "storage"
+            )
+    else:
+        canonical_weight = layer.weight
+
+    if canonical_weight.ndim != 2:
+        raise ValueError(
+            "MXFP8 linear layer canonical weight must be 2D, but got "
+            f"{canonical_weight.ndim}D"
+        )
+    N, K = canonical_weight.shape
 
     if not hasattr(layer, "weight_scale_from_checkpoint"):
         layer.weight_scale_from_checkpoint = ModelWeightParameter(
