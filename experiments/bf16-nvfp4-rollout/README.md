@@ -26,23 +26,46 @@ segment size 1 for the one-node training cluster.
 
 - `HF_HOME` and `HF_DATASETS_CACHE`: cluster-visible Hugging Face caches.
 - `CONTAINER`, `ACCOUNT`, and `PARTITION=batch`: standard `tools/launch` inputs.
+- `MOUNTS=/lustre:/lustre`: required so model caches and calibration artifacts
+  remain visible after `ray.sub` disables the container home mount.
+- `WANDB_API_KEY`: required because the smoke scripts force W&B online.
+- `CODE_SNAPSHOT_DIRNAME`: set to a new commit/run-specific directory for each
+  campaign. Reusing a snapshot can reuse stale code and completed metrics.
 - `WANDB_PROJECT_OVERRIDE`: optional; defaults to `sna-bf16-nvfp4-rollout`.
 - `NVFP4_CALIBRATION_ARTIFACT`: required by every W4A4 run. The path must be
   visible inside the container and point to a provenance-validated safetensors
   artifact.
 
-Generate the W4A4 artifact with the standalone exporter before launching W4A4:
+First create a fresh W4A4 snapshot with `DRYRUN=2`. Generate the artifact from
+that exact snapshot because its metadata records the resolved absolute quant
+config path, which the rollout validates.
 
 ```bash
+export QWEN_REV=ad44e777bcd18fa416d9da3bd8f70d33ebb85d39
+export CAMPAIGN="$(git rev-parse --short HEAD)-$(date +%Y%m%d-%H%M%S)"
+export CODE_SNAPSHOT_DIRNAME="code_snapshots_nvfp4/${CAMPAIGN}"
+
+DRYRUN=2 MOUNTS=/lustre:/lustre \
+  tools/launch \
+  tests/test_suites/llm/performance/grpo-qwen3-30ba3b-4n4g-nvfp4-w4a4-rollout.sh
+
+export W4A4_SNAPSHOT="$PWD/$CODE_SNAPSHOT_DIRNAME/grpo-qwen3-30ba3b-4n4g-nvfp4-w4a4-rollout"
+export NVFP4_CALIBRATION_ARTIFACT="$W4A4_SNAPSHOT/artifacts/qwen3-30ba3b-w4a4.safetensors"
+mkdir -p "$(dirname "$NVFP4_CALIBRATION_ARTIFACT")"
+
+cd "$W4A4_SNAPSHOT"
 uv run --no-sync examples/modelopt/export_nvfp4_calibration.py \
   --model Qwen/Qwen3-30B-A3B \
-  --model-revision <immutable-model-revision> \
-  --quant-cfg examples/modelopt/quant_configs/nvfp4_experts.yaml \
-  --dataset <calibration-dataset> \
-  --sample-count <sample-count> \
-  --sequence-length <sequence-length> \
-  --seed <seed> \
-  --output <cluster-visible-path>/qwen3-30ba3b-nvfp4-calibration.safetensors
+  --model-revision "$QWEN_REV" \
+  --quant-cfg "$W4A4_SNAPSHOT/examples/modelopt/quant_configs/nvfp4_experts.yaml" \
+  --dataset cnn_dailymail \
+  --sample-count 16 \
+  --sequence-length 512 \
+  --seed 42 \
+  --output "$NVFP4_CALIBRATION_ARTIFACT"
+
+stat -c '%n %s bytes' "$NVFP4_CALIBRATION_ARTIFACT"
+sha256sum "$NVFP4_CALIBRATION_ARTIFACT"
 ```
 
 Record the exact command, model revision, dataset parameters, file size, and
@@ -50,29 +73,42 @@ SHA256 in the future `report.md`. Do not substitute a dummy artifact.
 
 ## Launch commands
 
-Run only from a committed revision. `tools/launch` creates the code snapshot
-used by the job. The W4A4 examples include the artifact in `EXTRA_ENV` so the
-snapshot continuation command remains reproducible.
+Run only from a committed revision. Export the common launch inputs and a fresh
+campaign snapshot first:
+
+```bash
+export HF_HOME=<cluster-visible-hf-cache>
+export HF_DATASETS_CACHE="$HF_HOME/datasets"
+export CONTAINER=<nemo-rl-sqsh>
+export ACCOUNT=<slurm-account>
+export PARTITION=batch
+export MOUNTS=/lustre:/lustre
+export WANDB_API_KEY=<key>
+export CODE_SNAPSHOT_DIRNAME="code_snapshots_nvfp4/$(git rev-parse --short HEAD)-$(date +%Y%m%d-%H%M%S)"
+```
+
+Use `DRYRUN=2` first and inspect the generated `continue.sh`. The W4A4 run must
+reuse the same snapshot in which its artifact was generated.
 
 ```bash
 # W4A16 legacy
-EXTRA_ENV="REFIT_TRANSPORT=null" \
-CONTAINER="$CONTAINER" ACCOUNT="$ACCOUNT" PARTITION=batch \
+SCHEDULER_SEGMENT_SIZE=2 \
+EXTRA_ENV="REFIT_TRANSPORT=null SCHEDULER_SEGMENT_SIZE=2" \
 tools/launch tests/test_suites/llm/performance/grpo-qwen3-30ba3b-4n4g-nvfp4-w4a16-rollout.sh
 
 # W4A16 NCCL-Reshard
-EXTRA_ENV="REFIT_TRANSPORT=nccl_reshard" \
-CONTAINER="$CONTAINER" ACCOUNT="$ACCOUNT" PARTITION=batch \
+SCHEDULER_SEGMENT_SIZE=1 \
+EXTRA_ENV="REFIT_TRANSPORT=nccl_reshard SCHEDULER_SEGMENT_SIZE=1" \
 tools/launch tests/test_suites/llm/performance/grpo-qwen3-30ba3b-4n4g-nvfp4-w4a16-rollout.sh
 
 # W4A4 legacy
-EXTRA_ENV="REFIT_TRANSPORT=null NVFP4_CALIBRATION_ARTIFACT=$NVFP4_CALIBRATION_ARTIFACT" \
-CONTAINER="$CONTAINER" ACCOUNT="$ACCOUNT" PARTITION=batch \
+SCHEDULER_SEGMENT_SIZE=2 \
+EXTRA_ENV="REFIT_TRANSPORT=null SCHEDULER_SEGMENT_SIZE=2 NVFP4_CALIBRATION_ARTIFACT=$NVFP4_CALIBRATION_ARTIFACT" \
 tools/launch tests/test_suites/llm/performance/grpo-qwen3-30ba3b-4n4g-nvfp4-w4a4-rollout.sh
 
 # W4A4 NCCL-Reshard
-EXTRA_ENV="REFIT_TRANSPORT=nccl_reshard NVFP4_CALIBRATION_ARTIFACT=$NVFP4_CALIBRATION_ARTIFACT" \
-CONTAINER="$CONTAINER" ACCOUNT="$ACCOUNT" PARTITION=batch \
+SCHEDULER_SEGMENT_SIZE=1 \
+EXTRA_ENV="REFIT_TRANSPORT=nccl_reshard SCHEDULER_SEGMENT_SIZE=1 NVFP4_CALIBRATION_ARTIFACT=$NVFP4_CALIBRATION_ARTIFACT" \
 tools/launch tests/test_suites/llm/performance/grpo-qwen3-30ba3b-4n4g-nvfp4-w4a4-rollout.sh
 ```
 

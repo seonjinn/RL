@@ -9,6 +9,8 @@ policy:
   generation:
     quant_cfg: examples/modelopt/quant_configs/nvfp4_experts_weightonly.yaml
     real_quant: true
+    vllm_kwargs:
+      revision: ad44e777bcd18fa416d9da3bd8f70d33ebb85d39
     real_quant_ignore: &nvfp4_rollout_ignore
       - lm_head
       - '*output_layer*'

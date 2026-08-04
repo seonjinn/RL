@@ -2,9 +2,9 @@
 
 ## Scope
 
-Implemented only the static Task 8 smoke definitions and experiment planning
-artifacts. No production code, recipe YAML, test-list file, or runtime report was
-modified. No jobs were submitted.
+Implemented the Task 8 smoke definitions, immutable model-revision recipe pins,
+and experiment planning artifacts. No production Python code or runtime report
+was modified. No GRPO job was submitted.
 
 ## Artifacts
 
@@ -23,6 +23,11 @@ modified. No jobs were submitted.
   Megatron EP8 keeps the eight-GPU training world valid.
 - W4A4 fails before launch unless `NVFP4_CALIBRATION_ARTIFACT` names an existing
   file.
+- Both recipes pin the Qwen3-30B-A3B revision used by W4A4 calibration.
+- Legacy submission requires scheduler/application segment size 2; NCCL requires
+  both to be 1.
+- The scripts require `WANDB_API_KEY`. The documented launch mounts `/lustre`
+  and uses a fresh commit/run-specific snapshot for every campaign.
 - Default log directories and W&B names include the quant mode and transport;
   the W&B project defaults to `sna-bf16-nvfp4-rollout` and supports an explicit
   override.
@@ -37,7 +42,8 @@ Passed:
 
 - `bash -n` on both smoke scripts.
 - `git diff --check` before staging.
-- Recipe composition and worker-resolution tests: `2 passed in 2.66s`.
+- Recipe composition, revision, and worker-resolution tests passed before the
+  final documentation hardening.
 - Static script contract checks for executable mode, two-step defaults,
   checkpoint disablement, both transport values, forced NCCL non-colocation,
   unique W&B/log controls, two refit/step assertions, and all required failure
@@ -59,6 +65,10 @@ Local limitations:
   an existing performance script. Equivalent extraction confirmed both new
   CONFIG blocks, and the launch dry-run remains a Linux/container gate.
 - `shellcheck` is not installed locally.
+- A later focused pytest rerun stalled while importing the existing worker
+  resolution stack in the reused macOS environment. `py_compile`, Ruff, direct
+  config composition, and shell syntax validation passed; the full focused test
+  remains a target-container gate.
 
 ## Runtime status
 

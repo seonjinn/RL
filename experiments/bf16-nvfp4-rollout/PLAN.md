@@ -16,6 +16,8 @@ legacy IPC and NCCL-Reshard without changing the trainer's storage format.
 - Use the real ModelOpt generation worker and the expected W4A16 or W4A4 method.
 - Require a provenance-checked W4A4 calibration artifact.
 - Use a `batch` allocation with a four-hour limit and unique log/W&B names.
+- Mount `/lustre`, export `WANDB_API_KEY`, and use a fresh
+  `CODE_SNAPSHOT_DIRNAME` for every campaign.
 
 ## Pre-run gates
 
@@ -23,21 +25,22 @@ legacy IPC and NCCL-Reshard without changing the trainer's storage format.
    container.
 2. Run `bash -n` and static contract checks on both smoke scripts.
 3. Run `git diff --check`, commit with DCO, push, and record the full commit SHA.
-4. Generate and reopen the W4A4 artifact. Record its immutable model revision,
-   quant config, dataset, sample count, sequence length, seed, path, size, and
-   SHA256.
-5. Run `tools/launch` with `DRYRUN=1` for each matrix entry and inspect the node,
-   GPU, time, script, and environment values. Do not submit from a dry-run
-   snapshot with uncommitted code.
+4. Run `tools/launch` with `DRYRUN=2` under a fresh campaign snapshot and
+   inspect each generated `continue.sh` without executing it.
+5. Generate and reopen the W4A4 artifact from the exact W4A4 snapshot. Record
+   revision, quant config, dataset, sample count, sequence length, seed, path,
+   size, and SHA256.
+6. Confirm scheduler and application segment sizes are both 2 for legacy and
+   both 1 for NCCL-Reshard before submitting committed code.
 
 ## Run matrix
 
 | ID | Quant mode | Transport | Required environment | Expected topology |
 | --- | --- | --- | --- | --- |
-| `w4a16-legacy` | W4A16 | `null` | none beyond common launch inputs | 2 B200 nodes x 8 GPUs, colocated, Megatron EP16 |
-| `w4a4-legacy` | W4A4 | `null` | `NVFP4_CALIBRATION_ARTIFACT` | 2 B200 nodes x 8 GPUs, colocated, Megatron EP16 |
-| `w4a16-nccl` | W4A16 | `nccl_reshard` | none beyond common launch inputs | 1 B200 train node + 1 B200 generation node, Megatron EP8 |
-| `w4a4-nccl` | W4A4 | `nccl_reshard` | `NVFP4_CALIBRATION_ARTIFACT` | 1 B200 train node + 1 B200 generation node, Megatron EP8 |
+| `w4a16-legacy` | W4A16 | `null` | `SCHEDULER_SEGMENT_SIZE=2` | 2 B200 nodes x 8 GPUs, colocated, Megatron EP16 |
+| `w4a4-legacy` | W4A4 | `null` | segment 2 and calibration artifact | 2 B200 nodes x 8 GPUs, colocated, Megatron EP16 |
+| `w4a16-nccl` | W4A16 | `nccl_reshard` | `SCHEDULER_SEGMENT_SIZE=1` | 1 B200 train node + 1 B200 generation node, Megatron EP8 |
+| `w4a4-nccl` | W4A4 | `nccl_reshard` | segment 1 and calibration artifact | 1 B200 train node + 1 B200 generation node, Megatron EP8 |
 
 Use the exact launch commands in `README.md`. Submit one matrix entry per job so
 job identity, logs, and W&B metadata remain unambiguous.

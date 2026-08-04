@@ -5,7 +5,7 @@ source "$SCRIPT_DIR/common.env"
 # ===== BEGIN CONFIG =====
 NUM_NODES=2
 GPUS_PER_NODE=8
-SEGMENT_SIZE=2
+SEGMENT_SIZE=${SCHEDULER_SEGMENT_SIZE:-2}
 STEPS_PER_RUN=2
 MAX_STEPS=2
 NUM_RUNS=$(( (MAX_STEPS + STEPS_PER_RUN - 1) / STEPS_PER_RUN ))
@@ -13,13 +13,26 @@ NUM_MINUTES=240
 SNAPSHOT_MEGATRON_BRIDGE=1
 # ===== END CONFIG =====
 
+if [[ -z "${WANDB_API_KEY:-}" ]]; then
+  echo "[ERROR] WANDB_API_KEY must be exported for this smoke run"
+  exit 2
+fi
+
 REFIT_TRANSPORT=${REFIT_TRANSPORT:-null}
 case "$REFIT_TRANSPORT" in
   null)
+    if [[ "$SEGMENT_SIZE" -ne 2 ]]; then
+      echo "[ERROR] Legacy refit requires SCHEDULER_SEGMENT_SIZE=2"
+      exit 2
+    fi
     TRANSPORT_TAG=legacy
     TRANSPORT_OVERRIDES=("policy.generation.refit_transport=null")
     ;;
   nccl_reshard)
+    if [[ "$SEGMENT_SIZE" -ne 1 ]]; then
+      echo "[ERROR] NCCL-Reshard requires SCHEDULER_SEGMENT_SIZE=1"
+      exit 2
+    fi
     TRANSPORT_TAG=nccl-reshard
     TRANSPORT_OVERRIDES=(
       "policy.generation.refit_transport=nccl_reshard"
