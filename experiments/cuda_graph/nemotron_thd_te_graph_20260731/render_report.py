@@ -29,13 +29,56 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NotRequired, TypedDict
+from urllib.parse import urlsplit, urlunsplit
+
+try:
+    from experiments.cuda_graph.nemotron_thd_te_graph_20260731.scope_matrix import (
+        MODEL_NAMES,
+        classify_scope,
+        find_scope_row,
+    )
+except ModuleNotFoundError as error:
+    if error.name != "experiments":
+        raise
+    from scope_matrix import MODEL_NAMES, classify_scope, find_scope_row
 
 
 EXPERIMENT_DIR = Path(__file__).resolve().parent
 DEFAULT_INPUT = EXPERIMENT_DIR / "results" / "results.json"
 DEFAULT_NSYS = EXPERIMENT_DIR / "results" / "nsys_cuda_graph_calls.json"
 DEFAULT_OUTPUT = EXPERIMENT_DIR / "results" / "report.html"
+DEFAULT_CONTEXT = EXPERIMENT_DIR / "report_context.json"
+
+SUPPORT_SCOPES = (
+    ("baseline", "Baseline"),
+    ("attn", "Attn"),
+    ("mlp", "MLP"),
+    ("mamba", "Mamba"),
+    ("moe_router", "Router"),
+    ("moe_router,moe_preprocess", "Router + preprocess"),
+    (
+        "attn,mamba,moe_router,moe_preprocess",
+        "Attn + Mamba + router + preprocess",
+    ),
+)
+
+
+class ReportItem(TypedDict):
+    """One concise editorial report item."""
+
+    text: str
+    href: NotRequired[str]
+
+
+class ReportContext(TypedDict):
+    """Versioned editorial context; measured status stays derived from results."""
+
+    schema_version: int
+    current_status: list[ReportItem]
+    changes: list[ReportItem]
+    next_steps: list[ReportItem]
+
 
 IDENTITY_FIELDS = (
     "model",
@@ -375,9 +418,7 @@ def summarize_runs(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         ordered = sorted(group_rows, key=_step)
         measurement_rows = [row for row in ordered if _step(row) >= 6]
         summary = {
-            field: ordered[-1].get(
-                field, "off" if field == "router_replay" else ""
-            )
+            field: ordered[-1].get(field, "off" if field == "router_replay" else "")
             for field in IDENTITY_FIELDS
         }
         summary["sample_count"] = len(measurement_rows)
@@ -467,6 +508,7 @@ def build_matched_comparisons(
 
     paired: dict[tuple[str, ...], list[dict[str, float]]] = {}
     identities: dict[tuple[str, ...], dict[str, Any]] = {}
+    evidence_pairs: dict[tuple[str, ...], list[str]] = {}
     for variant in eligible:
         scope = str(variant.get("scope", ""))
         if scope in BASELINE_SCOPES:
@@ -495,13 +537,20 @@ def build_matched_comparisons(
                 *_provenance_key(variant),
             )
             paired.setdefault(group_key, []).append(values)
+            evidence_pairs.setdefault(group_key, []).append(
+                f"{baseline.get('job_id', '')} -> {variant.get('job_id', '')}"
+            )
             identities[group_key] = {
                 field: variant.get(field, "") for field in COMPARISON_GROUP_FIELDS
             } | {"scope": scope}
 
     comparisons: list[dict[str, Any]] = []
     for key, repeats in paired.items():
-        comparison = {**identities[key], "repeat_count": len(repeats)}
+        comparison = {
+            **identities[key],
+            "repeat_count": len(repeats),
+            "evidence_pairs": "; ".join(sorted(evidence_pairs[key])),
+        }
         for field in PERFORMANCE_FIELDS:
             deltas = [repeat[field] for repeat in repeats]
             comparison[f"{field}_delta_pct_median"] = statistics.median(deltas)
@@ -576,12 +625,151 @@ def _nsys_rows(
     return rows
 
 
+def normalize_report_context(payload: object) -> ReportContext:
+    """Validate editorial context at both file and rendering boundaries."""
+    if not isinstance(payload, dict):
+        raise ValueError("report context must be an object")
+    if payload.get("schema_version") != 1:
+        raise ValueError("report context schema_version must be 1")
+    allowed_fields = {"schema_version", "current_status", "changes", "next_steps"}
+    unknown_fields = sorted(set(payload) - allowed_fields)
+    if unknown_fields:
+        raise ValueError(
+            f"report context has unknown fields: {', '.join(unknown_fields)}"
+        )
+
+    context: ReportContext = {
+        "schema_version": 1,
+        "current_status": [],
+        "changes": [],
+        "next_steps": [],
+    }
+    for field in ("current_status", "changes", "next_steps"):
+        items = payload.get(field, [])
+        if not isinstance(items, list):
+            raise ValueError(f"report context {field} must be an array")
+        normalized_items: list[ReportItem] = []
+        for index, item in enumerate(items):
+            if not isinstance(item, dict) or set(item) - {"text", "href"}:
+                raise ValueError(
+                    f"report context {field}[{index}] must contain text and optional href"
+                )
+            text = item.get("text")
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError(
+                    f"report context {field}[{index}].text must be non-empty"
+                )
+            normalized_item: ReportItem = {"text": text.strip()}
+            href = item.get("href")
+            if href is not None:
+                if not isinstance(href, str) or not href.strip():
+                    raise ValueError(
+                        f"report context {field}[{index}].href must be non-empty"
+                    )
+                href = href.strip()
+                parsed = urlsplit(href)
+                if (
+                    parsed.scheme not in {"", "https"}
+                    or (not parsed.scheme and parsed.netloc)
+                    or (not parsed.scheme and parsed.path.startswith("/"))
+                ):
+                    raise ValueError(
+                        f"report context {field}[{index}] has unsupported href"
+                    )
+                normalized_item["href"] = href
+            normalized_items.append(normalized_item)
+        context[field] = normalized_items
+    return context
+
+
+def rebase_report_context_links(
+    context: Mapping[str, Any],
+    *,
+    context_path: Path,
+    output_path: Path,
+) -> ReportContext:
+    """Rebase context-relative artifact links for the selected output path."""
+    normalized = normalize_report_context(context)
+    rebased: ReportContext = {
+        "schema_version": 1,
+        "current_status": [],
+        "changes": [],
+        "next_steps": [],
+    }
+    for field in ("current_status", "changes", "next_steps"):
+        rebased_items: list[ReportItem] = []
+        for item in normalized[field]:
+            rebased_item: ReportItem = {"text": item["text"]}
+            href = item.get("href")
+            if href:
+                parsed = urlsplit(href)
+                if parsed.scheme == "https" or (not parsed.path and parsed.fragment):
+                    rebased_item["href"] = href
+                else:
+                    target = (context_path.parent / parsed.path).resolve()
+                    relative = os.path.relpath(
+                        target,
+                        start=output_path.parent.resolve(),
+                    )
+                    rebased_item["href"] = urlunsplit(
+                        ("", "", relative, parsed.query, parsed.fragment)
+                    )
+            rebased_items.append(rebased_item)
+        rebased[field] = rebased_items
+    return rebased
+
+
+def _items(items: Sequence[ReportItem], *, empty_message: str) -> str:
+    if not items:
+        return f'<p class="pending">{escape(empty_message)}</p>'
+    rendered = []
+    for item in items:
+        text = escape(item["text"])
+        href = item.get("href", "")
+        if href:
+            text = f'<a href="{escape(href)}">{text}</a>'
+        rendered.append(f"<li>{text}</li>")
+    return "<ul>" + "".join(rendered) + "</ul>"
+
+
+def _support_matrix() -> str:
+    status_labels = {
+        "runnable": "runnable",
+        "model-incompatible": "model-incompatible",
+        "capacity-blocked": "capacity-blocked",
+        "dependency-blocked": "dependency-blocked",
+        "submitted": "submitted",
+    }
+    headers = "<th>Model</th>" + "".join(
+        f"<th>{escape(label)}</th>" for _, label in SUPPORT_SCOPES
+    )
+    body = []
+    for model in MODEL_NAMES:
+        cells = [f"<td>{escape(model)}</td>"]
+        for scope, _ in SUPPORT_SCOPES:
+            classification = classify_scope(find_scope_row(scope), model=model)
+            label = status_labels[classification.status]
+            cells.append(
+                f'<td class="status {escape(classification.status)}" '
+                f'title="{escape(classification.reason)}">{escape(label)}</td>'
+            )
+        body.append("<tr>" + "".join(cells) + "</tr>")
+    return (
+        '<div class="table-wrap"><table><thead><tr>'
+        + headers
+        + "</tr></thead><tbody>"
+        + "".join(body)
+        + "</tbody></table></div>"
+    )
+
+
 def render_html(
     rows: Sequence[Mapping[str, Any]],
     *,
     nsys_coverage: Mapping[str, Mapping[str, Any]] | None = None,
+    report_context: Mapping[str, Any] | None = None,
 ) -> str:
-    """Build a self-contained, escaped report for every model and dispatcher."""
+    """Build a concise, self-contained report from canonical experiment data."""
     summaries = summarize_runs(rows)
     comparisons = build_matched_comparisons(summaries)
     provisional = [
@@ -594,79 +782,19 @@ def render_html(
         for row in rows
         if _is_failure(row)
     ]
+    context = normalize_report_context(
+        report_context if report_context is not None else {"schema_version": 1}
+    )
+    current_status = context["current_status"]
+    changes = context["changes"]
+    next_steps = context["next_steps"]
     generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    source_description = (
+        "normalized result artifacts and versioned report context"
+        if rows
+        else "versioned report context; no normalized result rows are present"
+    )
 
-    identity_columns = (
-        ("model", "Model"),
-        ("dispatcher", "Dispatcher"),
-        ("scope", "Scope"),
-        ("router_replay", "Router replay"),
-        ("mode", "Mode"),
-        ("cluster", "Cluster"),
-        ("profile", "Profile"),
-        ("phase", "Phase"),
-        ("steps", "Steps"),
-        ("repeat", "Repeat"),
-        ("run_group", "Run group"),
-        ("sample_count", "Steady samples"),
-        ("comparison_status", "Comparison status"),
-        ("status", "Status"),
-        ("job_id", "Job ID"),
-    )
-    compact_identity_columns = (
-        ("model", "Model"),
-        ("dispatcher", "Dispatcher"),
-        ("scope", "Scope"),
-        ("router_replay", "Router replay"),
-        ("phase", "Phase"),
-        ("steps", "Steps"),
-        ("repeat", "Repeat"),
-        ("run_group", "Run group"),
-        ("job_id", "Job ID"),
-        ("comparison_status", "Comparison status"),
-    )
-    performance_columns = compact_identity_columns + tuple(
-        (field, label)
-        for field, label in (
-            ("e2e_step_time", "E2E step time"),
-            ("e2e_tokens_per_sec_per_gpu", "E2E tokens/s/GPU"),
-            ("generation_time", "Generation time"),
-            ("generation_tokens_per_sec_per_gpu", "Generation tokens/s/GPU"),
-            ("policy_training_time", "Policy-training time"),
-            (
-                "policy_training_tokens_per_sec_per_gpu",
-                "Policy-training tokens/s/GPU",
-            ),
-            ("logprob_time", "Logprob time"),
-            ("logprob_tokens_per_sec_per_gpu", "Logprob tokens/s/GPU"),
-        )
-    )
-    graph_columns = compact_identity_columns + tuple(
-        (field, label)
-        for field, label in (
-            ("graph_telemetry_status", "Graph telemetry"),
-            ("capture_count", "Captures"),
-            ("replay_count", "Replays"),
-            ("cache_hits", "Cache hits"),
-            ("cache_misses", "Cache misses"),
-            ("cache_evictions", "Cache evictions"),
-            ("fallback_count", "Fallbacks"),
-            ("graph_calls", "Graph calls"),
-            ("eligible_calls", "Eligible calls"),
-            ("graph_coverage", "Runtime graph coverage"),
-            ("logical_tokens", "Logical tokens"),
-            ("padded_tokens", "Padded tokens"),
-            ("capacity_tokens", "Capacity tokens"),
-            ("capacity_utilization", "Capacity utilization"),
-            ("padding_utilization", "Padding utilization"),
-        )
-    )
-    correctness_columns = compact_identity_columns + tuple(
-        (field, field.replace("_", " ").title()) for field in CORRECTNESS_FIELDS
-    )
-    provenance_columns = compact_identity_columns + tuple(
-        (field, field.replace("_", " ").title()) for field in PROVENANCE_FIELDS
-    )
     failure_columns = (
         ("model", "Model"),
         ("scope", "Scope"),
@@ -685,47 +813,71 @@ def render_html(
     )
     comparison_columns: tuple[tuple[str, str], ...] = (
         ("model", "Model"),
-        ("dispatcher", "Dispatcher"),
         ("scope", "Scope"),
         ("router_replay", "Router replay"),
+        ("steps", "Steps"),
+        ("cluster", "Cluster"),
         ("profile", "Profile"),
         ("phase", "Phase"),
-        ("steps", "Steps"),
         ("run_group", "Run group"),
         ("repeat_count", "Matched repeats"),
-    ) + tuple(
-        column
-        for field, label in (
-            ("e2e_step_time", "E2E step time"),
-            ("e2e_tokens_per_sec_per_gpu", "E2E tokens/s/GPU"),
-            ("generation_time", "Generation time"),
-            ("generation_tokens_per_sec_per_gpu", "Generation tokens/s/GPU"),
-            ("policy_training_time", "Policy-training time"),
-            (
-                "policy_training_tokens_per_sec_per_gpu",
-                "Policy-training tokens/s/GPU",
-            ),
-            ("logprob_time", "Logprob time"),
-            ("logprob_tokens_per_sec_per_gpu", "Logprob tokens/s/GPU"),
-        )
-        for column in (
-            (f"{field}_delta_pct_median", f"{label} delta median (%)"),
-            (f"{field}_delta_pct_variance", f"{label} repeat variance"),
-            (f"{field}_delta_pct_p95", f"{label} delta p95 (%)"),
-        )
+        ("evidence_pairs", "Baseline -> graph jobs"),
+        ("e2e_step_time_delta_pct_median", "E2E step time delta (%)"),
+        (
+            "e2e_tokens_per_sec_per_gpu_delta_pct_median",
+            "E2E tokens/s/GPU delta (%)",
+        ),
+        ("generation_time_delta_pct_median", "Generation time delta (%)"),
+        (
+            "generation_tokens_per_sec_per_gpu_delta_pct_median",
+            "Generation tokens/s/GPU delta (%)",
+        ),
+        ("policy_training_time_delta_pct_median", "Policy time delta (%)"),
+        (
+            "policy_training_tokens_per_sec_per_gpu_delta_pct_median",
+            "Policy tokens/s/GPU delta (%)",
+        ),
+        ("logprob_time_delta_pct_median", "Logprob time delta (%)"),
+        (
+            "logprob_tokens_per_sec_per_gpu_delta_pct_median",
+            "Logprob tokens/s/GPU delta (%)",
+        ),
+    )
+    validation_columns = (
+        ("model", "Model"),
+        ("scope", "Scope"),
+        ("router_replay", "Router replay"),
+        ("steps", "Steps"),
+        ("graph_coverage", "Runtime graph coverage"),
+        ("fallback_count", "Fallbacks"),
+        ("router_topk_parity", "Router parity"),
+        ("expert_count_parity", "Expert parity"),
+        ("parameter_delta_parity", "Update parity"),
+        ("nan_inf_status", "NaN/Inf"),
+        ("comparison_status", "Validation"),
+        ("job_id", "Job ID"),
     )
     provisional_columns = (
         ("model", "Model"),
-        ("dispatcher", "Dispatcher"),
         ("scope", "Scope"),
         ("router_replay", "Router replay"),
-        ("profile", "Profile"),
-        ("phase", "Phase"),
         ("steps", "Steps"),
-        ("repeat", "Repeat"),
+        ("job_id", "Job ID"),
+        ("comparison_issues", "Blocked by"),
+    )
+    provenance_columns = (
+        ("model", "Model"),
+        ("scope", "Scope"),
         ("run_group", "Run group"),
         ("job_id", "Job ID"),
-        ("comparison_issues", "Why comparison is blocked"),
+        ("cluster", "Cluster"),
+        ("profile", "Profile"),
+        ("phase", "Phase"),
+        ("nemo_rl_commit", "NeMo-RL commit"),
+        ("bridge_commit", "Bridge commit"),
+        ("mcore_commit", "MCore commit"),
+        ("te_commit", "TE commit"),
+        ("container_sha256", "Container SHA256"),
     )
 
     return f"""<!doctype html>
@@ -735,39 +887,53 @@ def render_html(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Nemotron THD Transformer Engine CUDA Graph Report</title>
 <style>
-body {{ font-family: system-ui, sans-serif; margin: 2rem; color: #202124; }}
-h1, h2 {{ color: #17365d; }}
-.table-wrap {{ overflow-x: auto; margin-bottom: 1.5rem; }}
+body {{ font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 1500px; padding: 0 1rem; color: #202124; }}
+h1, h2, h3 {{ color: #17365d; }}
+h1 {{ margin-bottom: 0.25rem; }}
+h2 {{ border-bottom: 1px solid #d8dee4; padding-bottom: 0.35rem; }}
+.table-wrap {{ overflow-x: auto; margin-bottom: 1rem; }}
 table {{ border-collapse: collapse; width: 100%; font-size: 0.88rem; }}
 th, td {{ border: 1px solid #c8ccd0; padding: 0.4rem 0.55rem; text-align: left; white-space: nowrap; }}
 th {{ background: #edf2f7; }}
+a {{ color: #075985; }}
+.counts {{ display: flex; flex-wrap: wrap; gap: 0.6rem; margin: 0.8rem 0 1rem; }}
+.count {{ background: #f6f8fa; border: 1px solid #d8dee4; border-radius: 0.35rem; padding: 0.55rem 0.75rem; }}
 .pending {{ color: #6b7280; font-style: italic; }}
 .definition {{ background: #f6f8fa; border-left: 4px solid #4f78a8; padding: 0.75rem; }}
+.status {{ font-size: 0.78rem; }}
+.runnable {{ background: #dcfce7; }}
+.model-incompatible {{ background: #f3f4f6; color: #6b7280; }}
+.capacity-blocked, .dependency-blocked {{ background: #fef3c7; }}
+.submitted {{ background: #dbeafe; }}
 </style>
 </head>
 <body>
 <h1>Nemotron packed-THD Transformer Engine CUDA Graph study</h1>
-<p>Generated {escape(generated_at)} from local normalized artifacts.</p>
-<h2>Run inventory</h2>
-{_table(summaries, identity_columns, empty_message="No collected runs yet.")}
-<h2>Matched baseline comparisons</h2>
+<p>Generated {escape(generated_at)} from {escape(source_description)}.</p>
+<h2>Current status</h2>
+{_items(current_status, empty_message="No editorial status update.")}
+<div class="counts">
+  <span class="count"><strong>{len(summaries)}</strong> normalized runs</span>
+  <span class="count"><strong>{len(comparisons)}</strong> matched comparisons</span>
+  <span class="count"><strong>{len(provisional)}</strong> provisional runs</span>
+  <span class="count"><strong>{len(failures)}</strong> failures</span>
+</div>
+<h3>Static preflight support</h3>
+<p class="definition">This table is derived from the canonical model selectors and scope classifier. Runnable means submission preflight passed; it is not runtime or correctness proof. Hover for the reason.</p>
+{_support_matrix()}
+<h2>Changes</h2>
+{_items(changes, empty_message="No changes recorded.")}
+<h2>Validation</h2>
+<h3>Matched performance</h3>
 {_table(comparisons, comparison_columns, empty_message="No comparison-eligible matched baseline pairs.")}
-<h2>Provisional / incomplete runs</h2>
-{_table(provisional, provisional_columns, empty_message="No provisional runs.")}
-<h2>Performance</h2>
-{_table(summaries, performance_columns, empty_message="No performance rows yet.")}
-<h2>Runtime graph coverage (graph_calls / eligible_calls)</h2>
-<p class="definition">This percentage measures eligible model-module calls replayed by the NeMo-RL runtime.</p>
-{_table(summaries, graph_columns, empty_message="No runtime graph telemetry yet.")}
-<h2>Nsight CUDA API launch share</h2>
-<p class="definition">This percentage uses all CUDA runtime and driver API calls as the denominator. It is not runtime eligible-call coverage.</p>
-{_table(nsys_rows, nsys_columns, empty_message="No Nsight profiles collected yet.")}
-<h2>Correctness</h2>
-{_table(summaries, correctness_columns, empty_message="No correctness rows yet.")}
-<h2>Provenance</h2>
-{_table(summaries, provenance_columns, empty_message="No provenance rows yet.")}
-<h2>Raw failures</h2>
-{_table(failures, failure_columns, empty_message="No failures recorded.")}
+<h3>Runtime coverage and correctness</h3>
+{_table(summaries, validation_columns, empty_message="No normalized validation rows yet.")}
+{("<h3>Provisional / incomplete runs</h3>" + _table(provisional, provisional_columns, empty_message="No provisional runs.")) if provisional else ""}
+{("<h3>Failures</h3>" + _table(failures, failure_columns, empty_message="No failures recorded.")) if failures else ""}
+{("<h3>Nsight CUDA API launch share</h3>" + _table(nsys_rows, nsys_columns, empty_message="No Nsight profiles collected yet.")) if nsys_rows else ""}
+{("<details><summary>Evidence and provenance</summary>" + _table(summaries, provenance_columns, empty_message="No provenance rows yet.") + "</details>") if summaries else ""}
+<h2>Next steps</h2>
+{_items(next_steps, empty_message="No next steps recorded.")}
 </body>
 </html>
 """
@@ -787,6 +953,20 @@ def read_rows(path: Path) -> list[dict[str, Any]]:
     ):
         raise ValueError("normalized report input must contain a rows array")
     return payload
+
+
+def read_report_rows(path: Path) -> list[dict[str, Any]]:
+    """Read normalized rows, allowing the ignored default ledger to be absent."""
+    if path == DEFAULT_INPUT and not path.exists():
+        return []
+    return read_rows(path)
+
+
+def read_report_context(path: Path) -> ReportContext:
+    """Read concise editorial context and reject stale or unsafe schemas."""
+    if not path.is_file():
+        raise FileNotFoundError(f"report context is missing: {path}")
+    return normalize_report_context(json.loads(path.read_text()))
 
 
 def read_nsys(path: Path) -> dict[str, dict[str, Any]]:
@@ -828,16 +1008,28 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
     parser.add_argument("--nsys", type=Path, default=DEFAULT_NSYS)
+    parser.add_argument("--context", type=Path, default=DEFAULT_CONTEXT)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    rows = read_rows(args.input)
-    if not rows:
-        raise SystemExit("refusing to overwrite the report with no result rows")
-    report = render_html(rows, nsys_coverage=read_nsys(args.nsys))
+    rows = read_report_rows(args.input)
+    context = rebase_report_context_links(
+        read_report_context(args.context),
+        context_path=args.context,
+        output_path=args.output,
+    )
+    if not rows and not any(
+        context[field] for field in ("current_status", "changes", "next_steps")
+    ):
+        raise SystemExit("refusing to overwrite the report with no results or context")
+    report = render_html(
+        rows,
+        nsys_coverage=read_nsys(args.nsys),
+        report_context=context,
+    )
     write_report(report, args.output)
     print(
         json.dumps({"row_count": len(rows), "output": str(args.output)}, sort_keys=True)

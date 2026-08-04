@@ -345,6 +345,9 @@ def test_report_matches_exact_provenance_and_aggregates_repeat_deltas() -> None:
     comparison = comparisons[0]
     assert comparison["scope"] == "attn"
     assert comparison["repeat_count"] == 2
+    assert comparison["evidence_pairs"] == (
+        "baseline-1 -> graph-1; baseline-2 -> graph-2"
+    )
     assert comparison["e2e_step_time_delta_pct_median"] == pytest.approx(-22.5)
     assert comparison["e2e_step_time_delta_pct_variance"] == pytest.approx(6.25)
     assert comparison["e2e_step_time_delta_pct_p95"] == pytest.approx(-20.25)
@@ -413,6 +416,115 @@ def test_router_replay_is_an_identity_and_pairing_field() -> None:
     assert "Router replay" in report
     assert "A-baseline-off" in report
     assert "C-baseline-on" in report
+
+
+def test_report_renders_only_concise_status_blocks_from_canonical_sources() -> None:
+    collector = _load_module("collect_results")
+    renderer = _load_module("render_report")
+    records = [
+        *_complete_run(
+            scope="baseline",
+            repeat=1,
+            job_id="baseline-1",
+            e2e_step_time=10.0,
+            throughput=100.0,
+        ),
+        *_complete_run(
+            scope="attn",
+            repeat=1,
+            job_id="graph-1",
+            e2e_step_time=8.0,
+            throughput=125.0,
+        ),
+    ]
+    rows = [collector.normalize_record(record) for record in records]
+    context = {
+        "schema_version": 1,
+        "current_status": [
+            {"text": "Task 2 capability gate is in fix review.", "href": "#task-2"}
+        ],
+        "changes": [
+            {
+                "text": "Harden immutable candidate snapshots.",
+                "href": "../scripts/submit_mcore_matrix.sh",
+            }
+        ],
+        "next_steps": [{"text": "Run the eight-rank GB200 capability row."}],
+    }
+
+    report = renderer.render_html(rows, report_context=context)
+
+    assert report.count("<h2>") == 4
+    assert "<h2>Current status</h2>" in report
+    assert "<h2>Changes</h2>" in report
+    assert "<h2>Validation</h2>" in report
+    assert "<h2>Next steps</h2>" in report
+    assert "Task 2 capability gate is in fix review." in report
+    assert "Harden immutable candidate snapshots." in report
+    assert "Run the eight-rank GB200 capability row." in report
+    assert "Static preflight support" in report
+    assert "capacity-blocked" in report
+    assert "E2E step time delta (%)" in report
+    assert "baseline-1 -&gt; graph-1" in report
+    assert "Runtime graph coverage" in report
+    assert "Evidence and provenance" in report
+    assert PROVENANCE["container_sha256"] in report
+    assert "Run inventory" not in report
+    assert "Raw failures" not in report
+
+
+def test_report_context_rejects_unknown_schema_and_unsafe_links(
+    tmp_path: Path,
+) -> None:
+    renderer = _load_module("render_report")
+    context_path = tmp_path / "report_context.json"
+    context_path.write_text(json.dumps({"schema_version": 2}))
+
+    with pytest.raises(ValueError, match="schema_version must be 1"):
+        renderer.read_report_context(context_path)
+
+    context_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "changes": [{"text": "Unsafe link", "href": "javascript:alert(1)"}],
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="unsupported href"):
+        renderer.read_report_context(context_path)
+
+    with pytest.raises(ValueError, match="unsupported href"):
+        renderer.render_html(
+            [],
+            report_context={
+                "schema_version": 1,
+                "changes": [{"text": "Unsafe link", "href": "javascript:alert(1)"}],
+            },
+        )
+
+
+def test_report_context_links_follow_the_selected_output_path(tmp_path: Path) -> None:
+    renderer = _load_module("render_report")
+    context_path = tmp_path / "experiment" / "report_context.json"
+    output_path = tmp_path / "public" / "status" / "index.html"
+    context = {
+        "schema_version": 1,
+        "changes": [
+            {"text": "Evidence", "href": "results/evidence.json"},
+            {"text": "Upstream", "href": "https://example.com/evidence"},
+        ],
+    }
+
+    rebased = renderer.rebase_report_context_links(
+        context,
+        context_path=context_path,
+        output_path=output_path,
+    )
+
+    assert rebased["changes"][0]["href"] == "../../experiment/results/evidence.json"
+    assert rebased["changes"][1]["href"] == "https://example.com/evidence"
 
 
 def test_partial_passed_run_is_not_comparison_eligible() -> None:
@@ -527,6 +639,7 @@ def test_report_defaults_legacy_failure_router_replay_without_mutating_input() -
 
     assert "router_replay" not in legacy_failure
     assert "Router replay" in report
+    assert "<h3>Failures</h3>" in report
     assert "<td>nano</td><td>attn</td><td>off</td><td>failed</td>" in report
 
 
@@ -561,3 +674,20 @@ def test_missing_report_input_fails_closed(tmp_path: Path) -> None:
 
     with pytest.raises(FileNotFoundError, match="normalized report input is missing"):
         renderer.read_rows(tmp_path / "missing.json")
+
+
+def test_default_report_can_render_before_ignored_results_exist(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    renderer = _load_module("render_report")
+    default_input = tmp_path / "results.json"
+    monkeypatch.setattr(renderer, "DEFAULT_INPUT", default_input)
+
+    assert renderer.read_report_rows(default_input) == []
+    with pytest.raises(FileNotFoundError, match="normalized report input is missing"):
+        renderer.read_report_rows(tmp_path / "explicit-missing.json")
+
+    report = renderer.render_html([], report_context={"schema_version": 1})
+    assert "no normalized result rows are present" in report
+    assert "from local normalized artifacts" not in report

@@ -2632,11 +2632,12 @@ def test_report_is_multi_model_escaped_and_separates_coverage_definitions() -> N
 
     assert "nano" in report
     assert "super" in report
-    assert "Runtime graph coverage (graph_calls / eligible_calls)" in report
+    assert report.count("<h2>") == 4
+    assert "Runtime coverage and correctness" in report
     assert "75.00%" in report
     assert "Nsight CUDA API launch share" in report
     assert "12.50%" in report
-    assert "Raw failures" in report
+    assert "Failure" in report
     assert "OOM &lt;node&gt;" in report
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in report
     assert "<script>alert(1)</script>" not in report
