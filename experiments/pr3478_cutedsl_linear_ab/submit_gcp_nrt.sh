@@ -23,6 +23,7 @@ ROOT_CACHE_OVERLAY=${ROOT_CACHE_OVERLAY:-${RUNTIME_ROOT}/root-cache-overlay-4830
 WANDB_PROJECT=${WANDB_PROJECT:-sna-pr3478-cutedsl-linear-ab}
 WANDB_ENTITY=${WANDB_ENTITY:-nvidia}
 WANDB_ENABLED=${WANDB_ENABLED:-true}
+REFRESH_WANDB_KEY=${REFRESH_WANDB_KEY:-false}
 
 case "${LINEAR_BACKEND}" in
   flashinfer_cutlass|flashinfer_cutedsl) ;;
@@ -102,10 +103,12 @@ WANDB_KEY_FILE=${CACHE_ROOT}/.wandb_key
 mkdir -p "${EXPERIMENT_ROOT}" "${CACHE_ROOT}" "${WORK_ROOT}/.cache/huggingface"
 WANDB_EXPORT=
 if [[ "${WANDB_ENABLED}" == true ]]; then
-  if [[ -n "${WANDB_API_KEY:-}" ]]; then
-    (umask 077; printf '%s\n' "${WANDB_API_KEY}" >"${WANDB_KEY_FILE}")
-  elif [[ -s "${WANDB_KEY_FILE}" && $(wc -c <"${WANDB_KEY_FILE}") -ge 20 ]]; then
+  if [[ "${REFRESH_WANDB_KEY}" != true \
+    && -s "${WANDB_KEY_FILE}" \
+    && $(wc -c <"${WANDB_KEY_FILE}") -ge 20 ]]; then
     :
+  elif [[ -n "${WANDB_API_KEY:-}" ]]; then
+    (umask 077; printf '%s\n' "${WANDB_API_KEY}" >"${WANDB_KEY_FILE}")
   else
     if [[ -f "${HOME}/.bashrc" ]]; then
       WANDB_API_KEY=$(bash -lc \
