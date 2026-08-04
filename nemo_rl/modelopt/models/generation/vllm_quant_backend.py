@@ -14,23 +14,28 @@
 
 import os
 import types
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import torch
 import vllm  # noqa: F401
 import zmq
-from modelopt.torch.quantization.nn.modules.tensor_quantizer import TensorQuantizer
+from modelopt.torch.quantization.nn.modules.tensor_quantizer import (  # pyrefly: ignore[import-error]
+    TensorQuantizer,
+)
 
+from nemo_rl.modelopt.calibration_artifact import load_nvfp4_calibration
+from nemo_rl.modelopt.models.generation.nvfp4_refit import (
+    NVFP4Calibration,
+    NVFP4RefitMode,
+    nvfp4_refit_group,
+    serialize_bf16_nvfp4_group,
+)
 from nemo_rl.modelopt.utils import (
     MODELOPT_REAL_QUANT_ZMQ_TIMEOUT_MS,
     matches_quant_ignore_pattern,
-)
-from nemo_rl.modelopt.models.generation.nvfp4_refit import (
-    nvfp4_refit_group,
-    serialize_bf16_nvfp4_group,
 )
 from nemo_rl.models.generation.vllm.checkpoint_engine import VllmCheckpointEngineMixin
 from nemo_rl.models.generation.vllm.vllm_backend import (
@@ -64,6 +69,31 @@ class _RealQuantSourceInfo:
     source: _RealQuantSource
     bf16_names: frozenset[str]
     w13_num_shards_by_prefix: dict[str, int]
+
+
+def _input_scale_name(weight_name: str) -> str:
+    if not weight_name.endswith(".weight"):
+        raise ValueError(f"Expected an HF projection weight name, got {weight_name!r}")
+    return weight_name.removesuffix(".weight") + ".input_scale"
+
+
+def _vllm_calibration_provenance(model_config: Any) -> tuple[str, str]:
+    """Return the explicit HF model identity held by vLLM 0.25 ModelConfig."""
+    model_id = model_config.model
+    if not isinstance(model_id, str) or not model_id:
+        raise ValueError("vLLM model config requires a non-empty model id")
+
+    configured_revision = model_config.revision
+    if not isinstance(configured_revision, str) or not configured_revision:
+        raise ValueError(
+            "BF16 W4A4 calibration requires an explicit model revision in "
+            "the vLLM model config"
+        )
+
+    resolved_revision = getattr(model_config.hf_config, "_commit_hash", None)
+    if isinstance(resolved_revision, str) and resolved_revision:
+        return model_id, resolved_revision
+    return model_id, configured_revision
 
 
 def _match_fused_modelopt_moe_weight(name: str) -> tuple[str, str] | None:
@@ -133,6 +163,7 @@ def _mapped_weight_name_variants(model: torch.nn.Module, name: str) -> set[str]:
         apply_list = getattr(mapper, "apply_list", None)
         if not callable(apply_list):
             raise TypeError("vLLM hf_to_vllm_mapper must provide apply_list()")
+        apply_list = cast(Callable[[list[str]], list[str]], apply_list)
         mapped_names = set(apply_list([name]))
         if not mapped_names:
             return set()
@@ -717,6 +748,10 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
     _nrl_real_quant_source: _RealQuantSource = "modelopt"
     _nrl_bf16_staging: dict[str, dict[str, torch.Tensor]] = {}
     _nrl_bf16_quantizable_names: set[str] = set()
+    _nrl_bf16_mode: NVFP4RefitMode = "w4a16"
+    _nrl_bf16_calibration: NVFP4Calibration | None = None
+    _nrl_bf16_expected_input_scale_names: set[str] = set()
+    _nrl_bf16_input_scale_cache: dict[str, torch.Tensor] = {}
     _nrl_modelopt_reload_roots: tuple[torch.nn.Module, ...] | None = None
 
     def maybe_init_zmq(self) -> None:
@@ -808,7 +843,7 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
 
     def _require_complete_bf16_refit_groups(self) -> None:
         """Reject logical BF16 groups that never received all members."""
-        if self._nrl_real_quant_source != "bf16" or not self._nrl_bf16_staging:
+        if self._nrl_real_quant_source != "bf16":
             return
 
         incomplete = []
@@ -817,6 +852,12 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
             missing = sorted(set(expected) - set(tensors))
             if missing:
                 incomplete.append(f"{group_name}: missing {missing}")
+        missing_input_scales = sorted(
+            self._nrl_bf16_expected_input_scale_names
+            - self._nrl_bf16_input_scale_cache.keys()
+        )
+        if missing_input_scales:
+            incomplete.append(f"static input scales: missing {missing_input_scales}")
         if incomplete:
             raise RuntimeError(
                 "BF16 NVFP4 refit is incomplete: " + "; ".join(incomplete)
@@ -842,11 +883,33 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
         self._nrl_real_quant_source = source_info.source
         self._nrl_bf16_quantizable_names = set(source_info.bf16_names)
         self._nrl_bf16_staging = {}
-        if self._nrl_real_quant_source == "bf16" and require_input_scales:
-            raise ValueError(
-                "BF16 receiver refit currently supports W4A16 NVFP4 only; "
-                "W4A4 calibration is not available"
+        self._nrl_bf16_mode = "w4a4" if require_input_scales else "w4a16"
+        self._nrl_bf16_calibration = None
+        self._nrl_bf16_expected_input_scale_names = set()
+        self._nrl_bf16_input_scale_cache = {}
+        if self._nrl_real_quant_source == "bf16" and self._nrl_bf16_mode == "w4a4":
+            calibration_path = os.environ.get("VLLM_MODELOPT_CALIBRATION_PATH")
+            if not calibration_path:
+                raise ValueError(
+                    "BF16 W4A4 refit requires VLLM_MODELOPT_CALIBRATION_PATH"
+                )
+            quant_cfg = os.environ.get("VLLM_MODELOPT_CALIBRATION_QUANT_CFG")
+            if not quant_cfg:
+                raise ValueError(
+                    "BF16 W4A4 refit requires VLLM_MODELOPT_CALIBRATION_QUANT_CFG"
+                )
+            model_config = self.model_runner.vllm_config.model_config
+            model_id, model_revision = _vllm_calibration_provenance(model_config)
+            self._nrl_bf16_calibration = load_nvfp4_calibration(
+                calibration_path,
+                model_id=model_id,
+                model_revision=model_revision,
+                quant_cfg=quant_cfg,
+                expected_projection_names=self._nrl_bf16_quantizable_names,
             )
+            self._nrl_bf16_expected_input_scale_names = {
+                _input_scale_name(name) for name in self._nrl_bf16_quantizable_names
+            }
 
         self._get_modelopt_reload_roots()
         self._nrl_w13_num_shards_by_prefix = source_info.w13_num_shards_by_prefix
@@ -927,8 +990,11 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
         weights: list[tuple[str, torch.Tensor]],
         *,
         ignore_patterns: list[str],
-    ) -> list[tuple[str, torch.Tensor]]:
-        """Serialize complete BF16 groups and return direct-load tensors."""
+    ) -> tuple[
+        list[tuple[str, torch.Tensor]],
+        dict[str, torch.Tensor],
+    ]:
+        """Serialize complete BF16 groups and return static-scale replay state."""
         direct_weights: list[tuple[str, torch.Tensor]] = []
         incoming_groups: dict[str, dict[str, torch.Tensor]] = {}
         incoming_names: set[str] = set()
@@ -950,6 +1016,7 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
             incoming_names.add(name)
 
         serialized_weights: list[tuple[str, torch.Tensor]] = []
+        replayed_input_scales: dict[str, torch.Tensor] = {}
         for group_name, incoming in incoming_groups.items():
             group_tensors = dict(self._nrl_bf16_staging.get(group_name, {}))
             group_tensors.update(incoming)
@@ -961,16 +1028,45 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
                 }
                 continue
 
-            serialized_weights.extend(
-                serialize_bf16_nvfp4_group(
-                    group_tensors,
-                    mode="w4a16",
-                    calibration=None,
-                )
+            group_weights = serialize_bf16_nvfp4_group(
+                group_tensors,
+                mode=self._nrl_bf16_mode,
+                calibration=self._nrl_bf16_calibration,
             )
+            if self._nrl_bf16_mode == "w4a4":
+                expected_input_scales = {
+                    _input_scale_name(name) for name in expected_names
+                }
+                actual_input_scales = {
+                    name for name, _ in group_weights if name.endswith(".input_scale")
+                }
+                if actual_input_scales != expected_input_scales:
+                    missing = sorted(expected_input_scales - actual_input_scales)
+                    unexpected = sorted(actual_input_scales - expected_input_scales)
+                    raise RuntimeError(
+                        "BF16 W4A4 serialization produced an invalid input-scale "
+                        f"family for {group_name}: missing {missing}; "
+                        f"unexpected {unexpected}"
+                    )
+
+                fixed_group_weights = []
+                for name, serialized_tensor in group_weights:
+                    fixed_tensor = serialized_tensor
+                    if name in expected_input_scales:
+                        if name in self._nrl_bf16_input_scale_cache:
+                            fixed_tensor = self._nrl_bf16_input_scale_cache[name]
+                        if name in replayed_input_scales:
+                            raise RuntimeError(
+                                f"Duplicate BF16 W4A4 input scale {name!r}"
+                            )
+                        replayed_input_scales[name] = fixed_tensor
+                    fixed_group_weights.append((name, fixed_tensor))
+                group_weights = fixed_group_weights
+
+            serialized_weights.extend(group_weights)
             self._nrl_bf16_staging.pop(group_name, None)
 
-        return direct_weights + serialized_weights
+        return direct_weights + serialized_weights, replayed_input_scales
 
     def _load_weights(self, weights):
         """Load pre-folded weights and input_quantizer amax buffers.
@@ -989,7 +1085,7 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
             ignore_patterns = quant_config.get("ignore", []) or []
             if self._nrl_real_quant_source == "bf16":
                 source_weights = list(weights)
-                weights = self._load_bf16_weights(
+                weights, replayed_input_scales = self._load_bf16_weights(
                     source_weights,
                     ignore_patterns=ignore_patterns,
                 )
@@ -997,7 +1093,13 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
                     return None
                 try:
                     with torch.device(self.device):
-                        return super()._load_weights(weights)
+                        result = super()._load_weights(weights)
+                    for name, tensor in replayed_input_scales.items():
+                        self._nrl_bf16_input_scale_cache.setdefault(
+                            name,
+                            tensor.detach().clone(),
+                        )
+                    return result
                 finally:
                     with torch.device(self.device):
                         _detach_pending_layerwise_weights(

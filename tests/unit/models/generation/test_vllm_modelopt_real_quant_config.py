@@ -18,12 +18,15 @@ import sys
 import types
 import weakref
 from contextlib import contextmanager, nullcontext
+from pathlib import Path
 
 import pytest
 import torch
 
 import nemo_rl.modelopt.models.generation.vllm_modelopt as vllm_modelopt
 import nemo_rl.modelopt.utils as modelopt_utils
+from nemo_rl.modelopt.calibration_artifact import save_nvfp4_calibration
+from nemo_rl.modelopt.models.generation.nvfp4_refit import NVFP4Calibration
 from nemo_rl.modelopt.models.generation.vllm_modelopt import (
     NEMO_MODELOPT_W4A4,
     NEMO_MODELOPT_W4A16,
@@ -688,18 +691,34 @@ def _install_fake_modelopt_tensor_quantizer(monkeypatch):
     ].tensor_quantizer = tensor_quantizer_module
 
 
-def _make_real_quant_extension(backend, model, ignore):
+def _make_real_quant_extension(
+    backend,
+    model,
+    ignore,
+    *,
+    quant_algo="W4A16_NVFP4",
+    model_id="org/model",
+    model_revision="0123456789abcdef",
+    resolved_revision="0123456789abcdef",
+):
     extension = object.__new__(backend.VllmQuantInternalWorkerExtension)
     extension.device = torch.device("cpu")
-    extension.model_config = types.SimpleNamespace()
     extension._nrl_w13_num_shards_by_prefix = {}
+    hf_config = types.SimpleNamespace(
+        quantization_config={"ignore": ignore, "quant_algo": quant_algo},
+        _commit_hash=resolved_revision,
+    )
+    model_config = types.SimpleNamespace(
+        model=model_id,
+        revision=model_revision,
+        hf_config=hf_config,
+    )
+    extension.model_config = model_config
     extension.model_runner = types.SimpleNamespace(
         model=model,
         vllm_config=types.SimpleNamespace(
             parallel_config=types.SimpleNamespace(enable_expert_parallel=False),
-            model_config=types.SimpleNamespace(
-                hf_config=types.SimpleNamespace(quantization_config={"ignore": ignore})
-            ),
+            model_config=model_config,
         ),
     )
     return extension
@@ -721,6 +740,27 @@ def _patch_real_quant_load(monkeypatch, backend, forwarded=None):
 
 def _bf16_weight_info(*names: str) -> dict[str, tuple[tuple[int, ...], torch.dtype]]:
     return {name: ((32, 16), torch.bfloat16) for name in names}
+
+
+def _write_calibration_artifact(
+    path: Path,
+    projection_amax: dict[str, float],
+    *,
+    model_id: str = "org/model",
+    model_revision: str = "0123456789abcdef",
+    quant_cfg: str = "NVFP4_DEFAULT_CFG",
+) -> None:
+    save_nvfp4_calibration(
+        path,
+        {name: torch.tensor(amax) for name, amax in projection_amax.items()},
+        model_id=model_id,
+        model_revision=model_revision,
+        quant_cfg=quant_cfg,
+        dataset="cnn_dailymail",
+        sample_count=16,
+        sequence_length=1024,
+        seed=1234,
+    )
 
 
 def _packed_weight_info(
@@ -1459,6 +1499,281 @@ def test_real_quant_prepare_refit_classifies_bf16_manifest(monkeypatch):
     assert extension._nrl_bf16_staging == {}
 
 
+def test_real_quant_bf16_w4a4_prepare_requires_calibration_path(monkeypatch):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    model = torch.nn.Module()
+    model.q_proj = _mark_as_modelopt_layer(torch.nn.Linear(16, 32, bias=False))
+    extension = _make_real_quant_extension(
+        backend,
+        model,
+        [],
+        quant_algo="NVFP4",
+    )
+    _patch_real_quant_load(monkeypatch, backend)
+    monkeypatch.delenv("VLLM_MODELOPT_CALIBRATION_PATH", raising=False)
+    monkeypatch.setenv(
+        "VLLM_MODELOPT_CALIBRATION_QUANT_CFG",
+        "NVFP4_DEFAULT_CFG",
+    )
+
+    with pytest.raises(ValueError, match="VLLM_MODELOPT_CALIBRATION_PATH"):
+        extension.prepare_refit_info(_bf16_weight_info("q_proj.weight"))
+
+
+def test_real_quant_bf16_w4a4_prepare_requires_calibration_quant_cfg(monkeypatch):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    model = torch.nn.Module()
+    model.q_proj = _mark_as_modelopt_layer(torch.nn.Linear(16, 32, bias=False))
+    extension = _make_real_quant_extension(
+        backend,
+        model,
+        [],
+        quant_algo="NVFP4",
+    )
+    _patch_real_quant_load(monkeypatch, backend)
+    monkeypatch.setenv(
+        "VLLM_MODELOPT_CALIBRATION_PATH",
+        "/worker/calibration.safetensors",
+    )
+    monkeypatch.delenv("VLLM_MODELOPT_CALIBRATION_QUANT_CFG", raising=False)
+
+    with pytest.raises(ValueError, match="VLLM_MODELOPT_CALIBRATION_QUANT_CFG"):
+        extension.prepare_refit_info(_bf16_weight_info("q_proj.weight"))
+
+
+def test_real_quant_bf16_w4a4_prepare_rejects_missing_calibration_file(
+    monkeypatch,
+    tmp_path,
+):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    model = torch.nn.Module()
+    model.q_proj = _mark_as_modelopt_layer(torch.nn.Linear(16, 32, bias=False))
+    extension = _make_real_quant_extension(
+        backend,
+        model,
+        [],
+        quant_algo="NVFP4",
+    )
+    _patch_real_quant_load(monkeypatch, backend)
+    missing_path = tmp_path / "missing.safetensors"
+    monkeypatch.setenv("VLLM_MODELOPT_CALIBRATION_PATH", str(missing_path))
+    monkeypatch.setenv(
+        "VLLM_MODELOPT_CALIBRATION_QUANT_CFG",
+        "NVFP4_DEFAULT_CFG",
+    )
+
+    with pytest.raises(FileNotFoundError, match="missing.safetensors"):
+        extension.prepare_refit_info(_bf16_weight_info("q_proj.weight"))
+
+
+@pytest.mark.parametrize(
+    ("projection_amax", "expected_error"),
+    [
+        ({}, "missing.*q_proj.weight"),
+        (
+            {"q_proj.weight": 12.0, "k_proj.weight": 24.0},
+            "unexpected.*k_proj.weight",
+        ),
+    ],
+    ids=("missing-projection", "unexpected-projection"),
+)
+def test_real_quant_bf16_w4a4_prepare_requires_exact_calibration_targets(
+    monkeypatch,
+    tmp_path,
+    projection_amax,
+    expected_error,
+):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    model = torch.nn.Module()
+    model.q_proj = _mark_as_modelopt_layer(torch.nn.Linear(16, 32, bias=False))
+    extension = _make_real_quant_extension(
+        backend,
+        model,
+        [],
+        quant_algo="NVFP4",
+    )
+    _patch_real_quant_load(monkeypatch, backend)
+    artifact_path = tmp_path / "calibration.safetensors"
+    artifact_values = projection_amax or {"k_proj.weight": 24.0}
+    _write_calibration_artifact(artifact_path, artifact_values)
+    monkeypatch.setenv("VLLM_MODELOPT_CALIBRATION_PATH", str(artifact_path))
+    monkeypatch.setenv(
+        "VLLM_MODELOPT_CALIBRATION_QUANT_CFG",
+        "NVFP4_DEFAULT_CFG",
+    )
+
+    with pytest.raises(ValueError, match=expected_error):
+        extension.prepare_refit_info(_bf16_weight_info("q_proj.weight"))
+
+
+@pytest.mark.parametrize(
+    ("artifact_identity", "expected_error"),
+    [
+        ({"model_id": "other/model"}, "model_id"),
+        ({"model_revision": "other-revision"}, "model_revision"),
+        ({"quant_cfg": "OTHER_CFG"}, "quant_cfg"),
+    ],
+    ids=("model", "revision", "quant-config"),
+)
+def test_real_quant_bf16_w4a4_prepare_rejects_calibration_identity_mismatch(
+    monkeypatch,
+    tmp_path,
+    artifact_identity,
+    expected_error,
+):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    model = torch.nn.Module()
+    model.q_proj = _mark_as_modelopt_layer(torch.nn.Linear(16, 32, bias=False))
+    extension = _make_real_quant_extension(
+        backend,
+        model,
+        [],
+        quant_algo="NVFP4",
+    )
+    _patch_real_quant_load(monkeypatch, backend)
+    artifact_path = tmp_path / "calibration.safetensors"
+    _write_calibration_artifact(
+        artifact_path,
+        {"q_proj.weight": 12.0},
+        **artifact_identity,
+    )
+    monkeypatch.setenv("VLLM_MODELOPT_CALIBRATION_PATH", str(artifact_path))
+    monkeypatch.setenv(
+        "VLLM_MODELOPT_CALIBRATION_QUANT_CFG",
+        "NVFP4_DEFAULT_CFG",
+    )
+
+    with pytest.raises(ValueError, match=expected_error):
+        extension.prepare_refit_info(_bf16_weight_info("q_proj.weight"))
+
+
+def test_real_quant_bf16_w4a4_prepare_requires_explicit_model_revision(
+    monkeypatch,
+    tmp_path,
+):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    model = torch.nn.Module()
+    model.q_proj = _mark_as_modelopt_layer(torch.nn.Linear(16, 32, bias=False))
+    extension = _make_real_quant_extension(
+        backend,
+        model,
+        [],
+        quant_algo="NVFP4",
+        model_revision=None,
+        resolved_revision="0123456789abcdef",
+    )
+    _patch_real_quant_load(monkeypatch, backend)
+    artifact_path = tmp_path / "calibration.safetensors"
+    _write_calibration_artifact(artifact_path, {"q_proj.weight": 12.0})
+    monkeypatch.setenv("VLLM_MODELOPT_CALIBRATION_PATH", str(artifact_path))
+    monkeypatch.setenv(
+        "VLLM_MODELOPT_CALIBRATION_QUANT_CFG",
+        "NVFP4_DEFAULT_CFG",
+    )
+
+    with pytest.raises(ValueError, match="explicit model revision"):
+        extension.prepare_refit_info(_bf16_weight_info("q_proj.weight"))
+
+
+def test_real_quant_bf16_w4a4_prepare_uses_resolved_vllm_provenance_once(
+    monkeypatch,
+):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    model = torch.nn.Module()
+    model.q_proj = _mark_as_modelopt_layer(torch.nn.Linear(16, 32, bias=False))
+    extension = _make_real_quant_extension(
+        backend,
+        model,
+        [],
+        quant_algo="NVFP4",
+        model_revision="release-tag",
+        resolved_revision="0123456789abcdef",
+    )
+    _patch_real_quant_load(monkeypatch, backend)
+    monkeypatch.setenv(
+        "VLLM_MODELOPT_CALIBRATION_PATH",
+        "/worker/calibration.safetensors",
+    )
+    monkeypatch.setenv(
+        "VLLM_MODELOPT_CALIBRATION_QUANT_CFG",
+        "NVFP4_DEFAULT_CFG",
+    )
+    calibration = NVFP4Calibration(input_amax={"q_proj.weight": torch.tensor(12.0)})
+    calls = []
+
+    def load_calibration(path, **kwargs):
+        calls.append((path, kwargs))
+        return calibration
+
+    monkeypatch.setattr(
+        backend,
+        "load_nvfp4_calibration",
+        load_calibration,
+        raising=False,
+    )
+
+    extension.prepare_refit_info(_bf16_weight_info("q_proj.weight"))
+
+    assert calls == [
+        (
+            "/worker/calibration.safetensors",
+            {
+                "model_id": "org/model",
+                "model_revision": "0123456789abcdef",
+                "quant_cfg": "NVFP4_DEFAULT_CFG",
+                "expected_projection_names": {"q_proj.weight"},
+            },
+        )
+    ]
+    assert extension._nrl_bf16_calibration is calibration
+
+
+def test_real_quant_prepacked_w4a4_keeps_actor_scales_without_artifact(monkeypatch):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    model = torch.nn.Module()
+    model.q_proj = _mark_as_modelopt_layer(torch.nn.Linear(16, 32, bias=False))
+    extension = _make_real_quant_extension(
+        backend,
+        model,
+        [],
+        quant_algo="NVFP4",
+    )
+    _patch_real_quant_load(monkeypatch, backend)
+    monkeypatch.delenv("VLLM_MODELOPT_CALIBRATION_PATH", raising=False)
+    monkeypatch.delenv("VLLM_MODELOPT_CALIBRATION_QUANT_CFG", raising=False)
+    monkeypatch.setattr(
+        backend,
+        "load_nvfp4_calibration",
+        lambda *_args, **_kwargs: pytest.fail(
+            "prepacked W4A4 must not load BF16 calibration"
+        ),
+        raising=False,
+    )
+    state_dict_info = _packed_weight_info("q_proj")
+    state_dict_info["q_proj.input_scale"] = ((), torch.float32)
+
+    extension.prepare_refit_info(state_dict_info)
+
+    forwarded = []
+    monkeypatch.setattr(
+        backend.VllmInternalWorkerExtension,
+        "_load_weights",
+        lambda _self, weights: forwarded.extend(weights) or "loaded",
+    )
+    for value in (0.25, 0.5):
+        extension._load_weights(
+            [("q_proj.input_scale", torch.tensor(value, dtype=torch.float32))]
+        )
+
+    assert extension._nrl_real_quant_source == "modelopt"
+    assert [name for name, _ in forwarded] == [
+        "q_proj.input_scale",
+        "q_proj.input_scale",
+    ]
+    torch.testing.assert_close(forwarded[0][1], torch.tensor(0.25))
+    torch.testing.assert_close(forwarded[1][1], torch.tensor(0.5))
+
+
 def test_real_quant_prepare_refit_rejects_manifest_without_receiver_targets(
     monkeypatch,
 ):
@@ -1787,6 +2102,322 @@ def test_real_quant_bf16_incomplete_group_fails_before_lifecycle_finalization(
         extension._load_weights([(gate, torch.ones((32, 16), dtype=torch.bfloat16))])
         with pytest.raises(RuntimeError, match="missing.*up_proj.weight"):
             finish()
+
+
+def test_real_quant_bf16_w4a4_two_refits_open_artifact_once_and_replay_fixed_scale(
+    monkeypatch,
+):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    model = torch.nn.Module()
+    model.q_proj = _mark_as_modelopt_layer(torch.nn.Linear(16, 32, bias=False))
+    model.q_proj.input_scale = torch.nn.Parameter(torch.tensor(1.0))
+    extension = _make_real_quant_extension(
+        backend,
+        model,
+        [],
+        quant_algo="NVFP4",
+    )
+    _patch_real_quant_load(monkeypatch, backend)
+    monkeypatch.setenv(
+        "VLLM_MODELOPT_CALIBRATION_PATH",
+        "/worker/calibration.safetensors",
+    )
+    monkeypatch.setenv(
+        "VLLM_MODELOPT_CALIBRATION_QUANT_CFG",
+        "NVFP4_DEFAULT_CFG",
+    )
+    name = "q_proj.weight"
+    input_scale_name = "q_proj.input_scale"
+    calibration = NVFP4Calibration(input_amax={name: torch.tensor(12.0)})
+    artifact_loads = []
+
+    def load_calibration(path, **kwargs):
+        artifact_loads.append((path, kwargs))
+        return calibration
+
+    monkeypatch.setattr(
+        backend,
+        "load_nvfp4_calibration",
+        load_calibration,
+        raising=False,
+    )
+    extension.prepare_refit_info(_bf16_weight_info(name))
+
+    serializer_scales = iter((0.25, 0.75))
+    serializer_calls = []
+
+    def serialize(tensors, *, mode, calibration):
+        serializer_calls.append((mode, calibration))
+        return [
+            (name, tensors[name].clone()),
+            (input_scale_name, torch.tensor(next(serializer_scales))),
+        ]
+
+    monkeypatch.setattr(backend, "serialize_bf16_nvfp4_group", serialize)
+    reload_mod = sys.modules["vllm.model_executor.model_loader.reload"]
+    active_runtime = {}
+    forwarded_names = []
+    replayed_scales = []
+    finalizations = []
+
+    def initialize(root):
+        active_runtime[root] = (
+            root.weight,
+            root.input_scale,
+            root.quant_method,
+        )
+
+    def load_weights(_self, weights):
+        loaded_weights = dict(weights)
+        forwarded_names.append(list(loaded_weights))
+        replayed_scales.append(loaded_weights[input_scale_name].clone())
+        model.q_proj.weight = torch.nn.Parameter(loaded_weights[name].clone())
+        model.q_proj.input_scale = torch.nn.Parameter(
+            loaded_weights[input_scale_name].clone()
+        )
+        model.q_proj.quant_method = object()
+        return "loaded"
+
+    def finalize(root, config):
+        original_weight, original_input_scale, original_kernel = active_runtime.pop(
+            root
+        )
+        original_weight.data.copy_(root.weight.data)
+        original_input_scale.data.copy_(root.input_scale.data)
+        root.weight = original_weight
+        root.input_scale = original_input_scale
+        root.quant_method = original_kernel
+        finalizations.append((root, config))
+
+    monkeypatch.setattr(
+        backend.VllmInternalWorkerExtension,
+        "_load_weights",
+        load_weights,
+    )
+    monkeypatch.setattr(reload_mod, "initialize_layerwise_reload", initialize)
+    monkeypatch.setattr(reload_mod, "finalize_layerwise_reload", finalize)
+    monkeypatch.setattr(backend.torch.accelerator, "synchronize", lambda: None)
+    weight_identity = model.q_proj.weight
+    input_scale_identity = model.q_proj.input_scale
+    kernel_identity = model.q_proj.quant_method
+
+    for value in (1.0, 2.0):
+        transport_weights = [(name, torch.full((32, 16), value, dtype=torch.bfloat16))]
+        assert [transport_name for transport_name, _ in transport_weights] == [name]
+        with extension._weight_update_lifecycle("ipc") as finish:
+            assert extension._load_weights(transport_weights) == "loaded"
+            finish()
+        assert model.q_proj.weight is weight_identity
+        assert model.q_proj.input_scale is input_scale_identity
+        assert model.q_proj.quant_method is kernel_identity
+        torch.testing.assert_close(model.q_proj.input_scale, torch.tensor(0.25))
+
+    assert len(artifact_loads) == 1
+    assert serializer_calls == [
+        ("w4a4", calibration),
+        ("w4a4", calibration),
+    ]
+    assert forwarded_names == [
+        [name, input_scale_name],
+        [name, input_scale_name],
+    ]
+    torch.testing.assert_close(replayed_scales[0], torch.tensor(0.25))
+    torch.testing.assert_close(replayed_scales[1], torch.tensor(0.25))
+    assert len(finalizations) == 2
+
+
+def test_real_quant_bf16_w4a4_does_not_cache_scale_when_base_load_fails(
+    monkeypatch,
+):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    model = torch.nn.Module()
+    model.q_proj = _mark_as_modelopt_layer(torch.nn.Linear(16, 32, bias=False))
+    extension = _make_real_quant_extension(
+        backend,
+        model,
+        [],
+        quant_algo="NVFP4",
+    )
+    _patch_real_quant_load(monkeypatch, backend)
+    monkeypatch.setenv(
+        "VLLM_MODELOPT_CALIBRATION_PATH",
+        "/worker/calibration.safetensors",
+    )
+    monkeypatch.setenv(
+        "VLLM_MODELOPT_CALIBRATION_QUANT_CFG",
+        "NVFP4_DEFAULT_CFG",
+    )
+    name = "q_proj.weight"
+    calibration = NVFP4Calibration(input_amax={name: torch.tensor(12.0)})
+    monkeypatch.setattr(
+        backend,
+        "load_nvfp4_calibration",
+        lambda *_args, **_kwargs: calibration,
+        raising=False,
+    )
+    extension.prepare_refit_info(_bf16_weight_info(name))
+    monkeypatch.setattr(
+        backend,
+        "serialize_bf16_nvfp4_group",
+        lambda tensors, *, mode, calibration: [
+            (name, tensors[name].clone()),
+            ("q_proj.input_scale", torch.tensor(0.25)),
+        ],
+    )
+    monkeypatch.setattr(
+        backend.VllmInternalWorkerExtension,
+        "_load_weights",
+        lambda _self, _weights: (_ for _ in ()).throw(RuntimeError("load failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="load failed"):
+        extension._load_weights([(name, torch.ones((32, 16), dtype=torch.bfloat16))])
+
+    assert extension._nrl_bf16_input_scale_cache == {}
+
+
+def test_real_quant_bf16_w4a4_incomplete_gate_up_fails_before_finalizer(
+    monkeypatch,
+):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    gate = "model.layers.0.mlp.experts.0.gate_proj.weight"
+    up = "model.layers.0.mlp.experts.0.up_proj.weight"
+    model = torch.nn.Module()
+    model.model = torch.nn.Module()
+    model.model.layers = torch.nn.ModuleList([torch.nn.Module()])
+    model.model.layers[0].mlp = torch.nn.Module()
+    model.model.layers[0].mlp.experts = _new_modelopt_moe()
+    extension = _make_real_quant_extension(
+        backend,
+        model,
+        [],
+        quant_algo="NVFP4",
+    )
+    _patch_real_quant_load(monkeypatch, backend)
+    monkeypatch.setenv(
+        "VLLM_MODELOPT_CALIBRATION_PATH",
+        "/worker/calibration.safetensors",
+    )
+    monkeypatch.setenv(
+        "VLLM_MODELOPT_CALIBRATION_QUANT_CFG",
+        "NVFP4_DEFAULT_CFG",
+    )
+    calibration = NVFP4Calibration(
+        input_amax={gate: torch.tensor(12.0), up: torch.tensor(12.0)}
+    )
+    monkeypatch.setattr(
+        backend,
+        "load_nvfp4_calibration",
+        lambda *_args, **_kwargs: calibration,
+        raising=False,
+    )
+    extension.prepare_refit_info(_bf16_weight_info(gate, up))
+    native_finalizations = []
+    reload_mod = sys.modules["vllm.model_executor.model_loader.reload"]
+    monkeypatch.setattr(
+        reload_mod,
+        "finalize_layerwise_reload",
+        lambda *_args: native_finalizations.append("finalized"),
+    )
+    monkeypatch.setattr(backend.torch.accelerator, "synchronize", lambda: None)
+
+    with extension._weight_update_lifecycle("ipc") as finish:
+        assert (
+            extension._load_weights(
+                [(gate, torch.ones((32, 16), dtype=torch.bfloat16))]
+            )
+            is None
+        )
+        with pytest.raises(RuntimeError, match="missing.*up_proj.weight"):
+            finish()
+
+    assert native_finalizations == []
+
+
+def test_real_quant_bf16_w4a4_experts_emit_only_canonical_projection_families(
+    monkeypatch,
+):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    prefix = "model.layers.0.mlp.experts.0"
+    gate = f"{prefix}.gate_proj.weight"
+    up = f"{prefix}.up_proj.weight"
+    down = f"{prefix}.down_proj.weight"
+    model = torch.nn.Module()
+    model.model = torch.nn.Module()
+    model.model.layers = torch.nn.ModuleList([torch.nn.Module()])
+    model.model.layers[0].mlp = torch.nn.Module()
+    model.model.layers[0].mlp.experts = _new_modelopt_moe()
+    extension = _make_real_quant_extension(
+        backend,
+        model,
+        [],
+        quant_algo="NVFP4",
+    )
+    _patch_real_quant_load(monkeypatch, backend)
+    monkeypatch.setenv(
+        "VLLM_MODELOPT_CALIBRATION_PATH",
+        "/worker/calibration.safetensors",
+    )
+    monkeypatch.setenv(
+        "VLLM_MODELOPT_CALIBRATION_QUANT_CFG",
+        "NVFP4_DEFAULT_CFG",
+    )
+    calibration = NVFP4Calibration(
+        input_amax={
+            gate: torch.tensor(12.0),
+            up: torch.tensor(12.0),
+            down: torch.tensor(24.0),
+        }
+    )
+    monkeypatch.setattr(
+        backend,
+        "load_nvfp4_calibration",
+        lambda *_args, **_kwargs: calibration,
+        raising=False,
+    )
+    extension.prepare_refit_info(_bf16_weight_info(gate, up, down))
+
+    def serialize(tensors, *, mode, calibration):
+        assert mode == "w4a4"
+        serialized = []
+        for weight_name, weight in tensors.items():
+            projection = weight_name.removesuffix(".weight")
+            serialized.extend(
+                [
+                    (weight_name, weight.clone()),
+                    (f"{projection}.weight_scale", torch.ones(1)),
+                    (f"{projection}.weight_scale_2", torch.ones(())),
+                    (f"{projection}.input_scale", torch.full((), 0.25)),
+                ]
+            )
+        return serialized
+
+    forwarded = []
+    monkeypatch.setattr(backend, "serialize_bf16_nvfp4_group", serialize)
+    monkeypatch.setattr(
+        backend.VllmInternalWorkerExtension,
+        "_load_weights",
+        lambda _self, weights: forwarded.extend(weights) or "loaded",
+    )
+
+    assert (
+        extension._load_weights(
+            [
+                (gate, torch.ones((32, 16), dtype=torch.bfloat16)),
+                (up, torch.full((32, 16), 2, dtype=torch.bfloat16)),
+                (down, torch.full((32, 16), 3, dtype=torch.bfloat16)),
+            ]
+        )
+        == "loaded"
+    )
+
+    forwarded_names = [name for name, _ in forwarded]
+    assert [name for name in forwarded_names if name.endswith(".input_scale")] == [
+        f"{prefix}.gate_proj.input_scale",
+        f"{prefix}.up_proj.input_scale",
+        f"{prefix}.down_proj.input_scale",
+    ]
+    assert not any(".w13" in name or ".w2" in name for name in forwarded_names)
 
 
 def test_real_quant_bf16_complete_group_finalizes_once_and_preserves_identity(
