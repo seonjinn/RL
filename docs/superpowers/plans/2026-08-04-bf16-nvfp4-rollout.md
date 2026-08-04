@@ -169,6 +169,14 @@ The group function returns:
 other eligible 2-D weight                -> (name, (name,))
 ```
 
+The `w13`/`w2` value above is an internal staging and completeness key, not an
+emitted checkpoint tensor name. Serialization calls the canonical exporter for
+each original logical HF name and emits complete per-expert
+`gate_proj`/`up_proj`/`down_proj` families. Task 3 sends those receiver-generated
+names directly to vLLM's standard expert loader; only the existing prepacked
+QARL path uses fused `w13_weight`/`w2_weight` tensors and
+`_batch_fused_modelopt_moe_weights()`.
+
 - [ ] **Step 4: Verify GREEN and parity**
 
 Run the new tests plus Megatron-Bridge's ModelOpt conversion tests that exercise `quantize_nvfp4_weight`. Expected: all pass.
