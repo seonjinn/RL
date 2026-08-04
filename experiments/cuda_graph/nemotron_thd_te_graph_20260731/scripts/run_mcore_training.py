@@ -27,9 +27,14 @@ from typing import Any
 
 FULL_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 FULL_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+SCHEDULER_JOB_ID = re.compile(r"^[1-9][0-9]*$")
+RUN_IDENTITY = re.compile(r"^slurm-[1-9][0-9]*-[0-9]+-[0-9a-f]{64}$")
 ROW_ID = re.compile(r"^[a-z][a-z0-9_]*$")
 PYTEST_NODE = re.compile(r"^tests/[A-Za-z0-9_./-]+\.py::[A-Za-z0-9_\[\].-]+$")
 ALLOWED_ALLOCATIONS = frozenset(((1, 8, 8), (2, 4, 8), (4, 4, 16), (8, 4, 32)))
+CAPABILITY_DEVICE_FIELDS = frozenset(
+    ("global_rank", "node_rank", "local_rank", "cuda_device_index")
+)
 
 
 @dataclass(frozen=True)
@@ -223,8 +228,137 @@ def result_path(
     return run_log_root / "attestations" / candidate_kind / candidate_sha / f"{row_id}.json"
 
 
+def derive_run_identity(
+    *,
+    scheduler_job_id: str,
+    scheduler_restart_count: int,
+    submission_intent_sha256: str,
+) -> str:
+    """Bind rank exchange to one scheduler attempt and immutable intent."""
+    if SCHEDULER_JOB_ID.fullmatch(scheduler_job_id) is None:
+        raise ValueError("scheduler job ID must be a positive decimal integer")
+    if scheduler_restart_count < 0:
+        raise ValueError("scheduler restart count must be non-negative")
+    if FULL_SHA256.fullmatch(submission_intent_sha256) is None:
+        raise ValueError("submission intent SHA256 must be lowercase hexadecimal")
+    return (
+        f"slurm-{scheduler_job_id}-{scheduler_restart_count}-"
+        f"{submission_intent_sha256}"
+    )
+
+
+def rank_result_dir(
+    *,
+    run_log_root: Path,
+    candidate_kind: str,
+    candidate_sha: str,
+    row_id: str,
+    run_identity: str,
+) -> Path:
+    """Return a run-unique rank-exchange directory."""
+    result_path(
+        run_log_root=run_log_root,
+        candidate_kind=candidate_kind,
+        candidate_sha=candidate_sha,
+        row_id=row_id,
+    )
+    if RUN_IDENTITY.fullmatch(run_identity) is None:
+        raise ValueError("run identity is invalid")
+    return (
+        run_log_root
+        / "rank-results"
+        / candidate_kind
+        / candidate_sha
+        / row_id
+        / run_identity
+    )
+
+
+def validate_rank_payloads(
+    payloads: tuple[Mapping[str, Any], ...],
+    *,
+    run_identity: str,
+    candidate_kind: str,
+    candidate_sha: str,
+    row_id: str,
+    world_size: int,
+    num_nodes: int,
+    gpus_per_node: int,
+    pytest_nodes: tuple[str, ...],
+) -> tuple[dict[str, Any], ...]:
+    """Validate rank identity, topology, node results, and capability consensus."""
+    validate_allocation(
+        num_nodes=num_nodes,
+        gpus_per_node=gpus_per_node,
+        world_size=world_size,
+    )
+    if RUN_IDENTITY.fullmatch(run_identity) is None:
+        raise ValueError("run identity is invalid")
+    if len(payloads) != world_size:
+        raise ValueError("rank payloads must contain every global rank")
+    expected_keys = {
+        "run_identity",
+        "rank",
+        "world_size",
+        "num_nodes",
+        "gpus_per_node",
+        "candidate_kind",
+        "candidate_sha",
+        "test_row_id",
+        "node_results",
+        "capability",
+    }
+    normalized: list[dict[str, Any]] = []
+    semantic_capability: dict[str, Any] | None = None
+    for expected_rank, payload in enumerate(payloads):
+        if not isinstance(payload, Mapping) or set(payload) != expected_keys:
+            raise ValueError("rank payload has an invalid schema")
+        expected_values = {
+            "run_identity": run_identity,
+            "rank": expected_rank,
+            "world_size": world_size,
+            "num_nodes": num_nodes,
+            "gpus_per_node": gpus_per_node,
+            "candidate_kind": candidate_kind,
+            "candidate_sha": candidate_sha,
+            "test_row_id": row_id,
+        }
+        for field, expected in expected_values.items():
+            if payload.get(field) != expected:
+                label = field.replace("_", " ")
+                raise ValueError(f"rank payload {label} mismatch")
+        node_results = payload.get("node_results")
+        if not isinstance(node_results, list) or len(node_results) != len(pytest_nodes):
+            raise ValueError("rank payload node results mismatch")
+        for expected_node, node_result in zip(pytest_nodes, node_results, strict=True):
+            if (
+                not isinstance(node_result, Mapping)
+                or set(node_result) != {"node", "status", "exit_code"}
+                or node_result.get("node") != expected_node
+                or node_result.get("status") not in {"passed", "failed"}
+                or not isinstance(node_result.get("exit_code"), int)
+                or isinstance(node_result.get("exit_code"), bool)
+            ):
+                raise ValueError("rank payload node result has an invalid schema")
+        capability = payload.get("capability")
+        if not isinstance(capability, Mapping):
+            raise ValueError("rank payload capability must be a JSON object")
+        current_semantic_capability = {
+            key: value
+            for key, value in capability.items()
+            if key not in CAPABILITY_DEVICE_FIELDS
+        }
+        if semantic_capability is None:
+            semantic_capability = current_semantic_capability
+        elif current_semantic_capability != semantic_capability:
+            raise ValueError("semantic capability metadata differs across ranks")
+        normalized.append(dict(payload))
+    return tuple(normalized)
+
+
 def build_result(
     *,
+    run_identity: str,
     candidate_kind: str,
     candidate_sha: str,
     integration_sha: str,
@@ -244,6 +378,8 @@ def build_result(
     raw_te_eval_reuse_graph_io: bool,
 ) -> dict[str, Any]:
     """Build one passed result only after every rank and node has passed."""
+    if RUN_IDENTITY.fullmatch(run_identity) is None:
+        raise ValueError("run identity is invalid")
     result_path(
         run_log_root=Path("/attestation-validation"),
         candidate_kind=candidate_kind,
@@ -278,6 +414,7 @@ def build_result(
     return {
         "schema_version": 1,
         "status": "passed",
+        "run_identity": run_identity,
         "candidate_kind": candidate_kind,
         "candidate_sha": candidate_sha,
         "integration_sha": integration_sha,
@@ -358,6 +495,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--transformer-engine-version", required=True)
     parser.add_argument("--transformer-engine-source-commit", required=True)
     parser.add_argument("--transformer-engine-version-base-commit", required=True)
+    parser.add_argument("--scheduler-job-id", required=True)
+    parser.add_argument("--scheduler-restart-count", required=True, type=int)
+    parser.add_argument("--submission-intent-sha256", required=True)
     parser.add_argument("--launch-agent", action="store_true")
     return parser.parse_args()
 
@@ -387,6 +527,11 @@ def main() -> int:
     if args.launch_agent:
         _launch_torchrun_agent(args)
         raise AssertionError("torchrun agent exec unexpectedly returned")
+    run_identity = derive_run_identity(
+        scheduler_job_id=args.scheduler_job_id,
+        scheduler_restart_count=args.scheduler_restart_count,
+        submission_intent_sha256=args.submission_intent_sha256,
+    )
     rows = load_matrix(args.matrix, candidate_kind=args.candidate_kind)
     try:
         row = rows[args.row_id]
@@ -432,16 +577,20 @@ def main() -> int:
             }
         )
 
-    rank_dir = (
-        args.run_log_root
-        / "rank-results"
-        / args.candidate_kind
-        / args.candidate_sha
-        / args.row_id
+    rank_dir = rank_result_dir(
+        run_log_root=args.run_log_root,
+        candidate_kind=args.candidate_kind,
+        candidate_sha=args.candidate_sha,
+        row_id=args.row_id,
+        run_identity=run_identity,
     )
     rank_payload = {
+        "run_identity": run_identity,
         "rank": rank,
         "world_size": world_size,
+        "num_nodes": args.num_nodes,
+        "gpus_per_node": args.gpus_per_node,
+        "candidate_kind": args.candidate_kind,
         "candidate_sha": args.candidate_sha,
         "test_row_id": args.row_id,
         "node_results": node_results,
@@ -457,7 +606,17 @@ def main() -> int:
         if time.monotonic() >= deadline:
             raise RuntimeError("timed out waiting for every global rank to join")
         time.sleep(0.25)
-    rank_payloads = [json.loads(path.read_text()) for path in rank_files]
+    rank_payloads = validate_rank_payloads(
+        tuple(json.loads(path.read_text()) for path in rank_files),
+        run_identity=run_identity,
+        candidate_kind=args.candidate_kind,
+        candidate_sha=args.candidate_sha,
+        row_id=args.row_id,
+        world_size=world_size,
+        num_nodes=args.num_nodes,
+        gpus_per_node=args.gpus_per_node,
+        pytest_nodes=row.pytest_nodes,
+    )
     joined_ranks = tuple(sorted(payload["rank"] for payload in rank_payloads))
     combined_results: list[dict[str, Any]] = []
     for node_index, node in enumerate(row.pytest_nodes):
@@ -477,6 +636,7 @@ def main() -> int:
         for payload in rank_payloads
     )
     payload = build_result(
+        run_identity=run_identity,
         candidate_kind=args.candidate_kind,
         candidate_sha=args.candidate_sha,
         integration_sha=args.integration_sha,

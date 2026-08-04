@@ -727,6 +727,13 @@ for distribution, version in expected.items():
     if not module_path.is_relative_to(site_packages):
         raise SystemExit(f"test dependency escaped staged site-packages: {module_path}")
 PY
+task2_root_test_runner=${project_root}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/scripts/run_task2_root_tests.sh
+if [[ ! -x "${task2_root_test_runner}" ]]; then
+  echo "Committed Task 2 root test runner is missing or not executable" >&2
+  exit 2
+fi
+"${task2_root_test_runner}" \
+  "${environment_root}/bin/python" "${runtime_stage_root}/test-results"
 rm -rf -- "${uv_cache_dir}" "${te_cmake_dir}"
 printf "%s\n" "${RUNTIME_STAGE_JOB_ID}" >"${stage_job_record}"
 printf "%s\n" \

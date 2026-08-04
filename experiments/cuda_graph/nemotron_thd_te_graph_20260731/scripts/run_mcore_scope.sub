@@ -28,6 +28,13 @@ expected_candidate_kind=${EXPECTED_CANDIDATE_KIND:-mcore}
   fail "runner paths must be absolute"
 [[ -f "${SUBMISSION_INTENT}" && -f "${RUNTIME_ATTESTATION}" ]] || \
   fail "submission intent and runtime attestation must exist"
+[[ ! -L "${SUBMISSION_INTENT}" ]] || fail "submission intent must not be a symlink"
+[[ "${SLURM_JOB_ID:-}" =~ ^[1-9][0-9]*$ ]] || fail "SLURM job ID is invalid"
+scheduler_restart_count=${SLURM_RESTART_COUNT:-0}
+[[ "${scheduler_restart_count}" =~ ^[0-9]+$ ]] || fail "SLURM restart count is invalid"
+submission_intent_sha256=$(sha256sum "${SUBMISSION_INTENT}" | awk '{print $1}')
+[[ "${submission_intent_sha256}" =~ ^[0-9a-f]{64}$ ]] || \
+  fail "submission intent SHA256 is invalid"
 
 bridge_root=${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
 mcore_root=${bridge_root}/3rdparty/Megatron-LM
@@ -163,4 +170,7 @@ exec "${environment_root}/bin/python" "$@"
   --gpus-per-node "${TEST_GPUS_PER_NODE}" --container-sha256 "${CONTAINER_SHA256}" \
   --transformer-engine-version "${TE_VERSION}" \
   --transformer-engine-source-commit "${EXPECTED_TE_SHA}" \
-  --transformer-engine-version-base-commit "${EXPECTED_TE_VERSION_BASE_SHA}"
+  --transformer-engine-version-base-commit "${EXPECTED_TE_VERSION_BASE_SHA}" \
+  --scheduler-job-id "${SLURM_JOB_ID}" \
+  --scheduler-restart-count "${scheduler_restart_count}" \
+  --submission-intent-sha256 "${submission_intent_sha256}"

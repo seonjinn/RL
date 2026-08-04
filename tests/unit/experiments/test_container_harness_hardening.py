@@ -858,6 +858,57 @@ def test_runtime_wrapper_separates_cpu_stage_from_gpu_attestation() -> None:
     assert '"${runtime_python}" "${source_validator}"' in attestation
 
 
+def test_runtime_stage_runs_exact_task2_root_suite_before_marker_publication(
+    tmp_path: Path,
+) -> None:
+    runner = EXPERIMENT_DIR / "scripts" / "run_task2_root_tests.sh"
+    assert runner.is_file()
+    fake_python = tmp_path / "python"
+    argument_log = tmp_path / "arguments.txt"
+    fake_python.write_text(
+        "#!/bin/bash\n"
+        "printf '%s\\n' \"$@\" >\"${TASK2_TEST_ARGUMENT_LOG:?}\"\n"
+    )
+    fake_python.chmod(0o755)
+    result_root = tmp_path / "results"
+
+    result = subprocess.run(
+        ["bash", str(runner), str(fake_python), str(result_root)],
+        env={**os.environ, "TASK2_TEST_ARGUMENT_LOG": str(argument_log)},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert argument_log.read_text().splitlines() == [
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        f"--basetemp={result_root}/tmp",
+        f"--junitxml={result_root}/task-2-root.xml",
+        "tests/unit/experiments/test_validate_te_runtime.py",
+        "tests/unit/experiments/test_runtime_attestation.py",
+        "tests/unit/experiments/test_container_harness_hardening.py",
+        "tests/unit/experiments/test_mcore_standalone_driver.py",
+        "tests/unit/experiments/test_matrix_submitters.py",
+        "tests/unit/experiments/test_nemotron_thd_te_graph_launchers.py",
+    ]
+    source = (
+        EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
+    ).read_text()
+    stage = source.split("stage_command='", 1)[1].split(
+        "'\n\nattestation_command=", 1
+    )[0]
+    test_index = stage.index('"${task2_root_test_runner}"')
+    marker_index = stage.index(
+        'mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"'
+    )
+    assert test_index < marker_index
+
+
 def test_runtime_wrapper_requires_explicit_stage_capability(tmp_path: Path) -> None:
     result = _run_script(
         "scripts/validate_oci_container_runtime.sub",

@@ -46,6 +46,46 @@ def _device_bindings(
     )
 
 
+def _rank_payloads(
+    *,
+    run_identity: str,
+    num_nodes: int = 2,
+    gpus_per_node: int = 4,
+) -> tuple[dict[str, object], ...]:
+    world_size = num_nodes * gpus_per_node
+    return tuple(
+        {
+            "run_identity": run_identity,
+            "rank": rank,
+            "world_size": world_size,
+            "num_nodes": num_nodes,
+            "gpus_per_node": gpus_per_node,
+            "candidate_kind": "mcore",
+            "candidate_sha": "a" * 40,
+            "test_row_id": "te_eval_capability_8",
+            "node_results": [
+                {
+                    "node": "tests/test_graphs.py::test_one",
+                    "status": "passed",
+                    "exit_code": 0,
+                }
+            ],
+            "capability": {
+                "global_rank": rank,
+                "node_rank": rank // gpus_per_node,
+                "local_rank": rank % gpus_per_node,
+                "cuda_device_index": rank % gpus_per_node,
+                "all_eval_callables_supported": True,
+                "backward_executed": False,
+                "no_parameter_grads": True,
+                "outputs_changed": True,
+                "raw_te_eval_reuse_graph_io": False,
+            },
+        }
+        for rank in range(world_size)
+    )
+
+
 def test_manifest_selects_exact_te_capability_nodes() -> None:
     module = _load_driver()
 
@@ -68,6 +108,90 @@ def test_manifest_selects_exact_te_capability_nodes() -> None:
         "tests/unit_tests/transformer/test_cuda_graphs.py::"
         "test_te_eval_graph_input_output_buffer_reuse_capability",
     )
+
+
+def test_rank_aggregation_rejects_result_from_an_earlier_scheduler_run(
+    tmp_path: Path,
+) -> None:
+    module = _load_driver()
+    intent_sha256 = "f" * 64
+    previous_run = module.derive_run_identity(
+        scheduler_job_id="41",
+        scheduler_restart_count=0,
+        submission_intent_sha256=intent_sha256,
+    )
+    current_run = module.derive_run_identity(
+        scheduler_job_id="42",
+        scheduler_restart_count=0,
+        submission_intent_sha256=intent_sha256,
+    )
+    assert module.rank_result_dir(
+        run_log_root=tmp_path,
+        candidate_kind="mcore",
+        candidate_sha="a" * 40,
+        row_id="te_eval_capability_8",
+        run_identity=previous_run,
+    ) != module.rank_result_dir(
+        run_log_root=tmp_path,
+        candidate_kind="mcore",
+        candidate_sha="a" * 40,
+        row_id="te_eval_capability_8",
+        run_identity=current_run,
+    )
+    payloads = list(_rank_payloads(run_identity=current_run))
+    payloads[3] = {**payloads[3], "run_identity": previous_run}
+
+    with pytest.raises(ValueError, match="run identity"):
+        module.validate_rank_payloads(
+            tuple(payloads),
+            run_identity=current_run,
+            candidate_kind="mcore",
+            candidate_sha="a" * 40,
+            row_id="te_eval_capability_8",
+            world_size=8,
+            num_nodes=2,
+            gpus_per_node=4,
+            pytest_nodes=("tests/test_graphs.py::test_one",),
+        )
+
+
+def test_rank_aggregation_requires_semantic_capability_consensus() -> None:
+    module = _load_driver()
+    run_identity = module.derive_run_identity(
+        scheduler_job_id="42",
+        scheduler_restart_count=0,
+        submission_intent_sha256="f" * 64,
+    )
+    payloads = list(_rank_payloads(run_identity=run_identity))
+
+    module.validate_rank_payloads(
+        tuple(payloads),
+        run_identity=run_identity,
+        candidate_kind="mcore",
+        candidate_sha="a" * 40,
+        row_id="te_eval_capability_8",
+        world_size=8,
+        num_nodes=2,
+        gpus_per_node=4,
+        pytest_nodes=("tests/test_graphs.py::test_one",),
+    )
+    payloads[5] = {
+        **payloads[5],
+        "capability": {**payloads[5]["capability"], "outputs_changed": False},
+    }
+
+    with pytest.raises(ValueError, match="semantic capability"):
+        module.validate_rank_payloads(
+            tuple(payloads),
+            run_identity=run_identity,
+            candidate_kind="mcore",
+            candidate_sha="a" * 40,
+            row_id="te_eval_capability_8",
+            world_size=8,
+            num_nodes=2,
+            gpus_per_node=4,
+            pytest_nodes=("tests/test_graphs.py::test_one",),
+        )
 
 
 @pytest.mark.parametrize(
@@ -143,6 +267,7 @@ def test_atomic_result_records_each_node_and_all_joined_ranks(tmp_path: Path) ->
     )
 
     payload = module.build_result(
+        run_identity=f"slurm-42-0-{'f' * 64}",
         candidate_kind="mcore",
         candidate_sha="a" * 40,
         integration_sha="b" * 40,
@@ -165,6 +290,7 @@ def test_atomic_result_records_each_node_and_all_joined_ranks(tmp_path: Path) ->
 
     assert json.loads(output.read_text()) == payload
     assert payload["status"] == "passed"
+    assert payload["run_identity"] == f"slurm-42-0-{'f' * 64}"
     assert payload["topology"] == {
         "world_size": 8,
         "num_nodes": 2,
@@ -183,6 +309,7 @@ def test_result_fails_when_one_node_or_rank_is_missing() -> None:
 
     with pytest.raises(ValueError, match="joined ranks"):
         module.build_result(
+            run_identity=f"slurm-42-0-{'f' * 64}",
             candidate_kind="mcore",
             candidate_sha="a" * 40,
             integration_sha="b" * 40,
@@ -221,6 +348,7 @@ def test_result_rejects_out_of_range_or_mismatched_rank_device_binding(
 
     with pytest.raises(ValueError, match=message):
         module.build_result(
+            run_identity=f"slurm-42-0-{'f' * 64}",
             candidate_kind="mcore",
             candidate_sha="a" * 40,
             integration_sha="b" * 40,
@@ -254,6 +382,7 @@ def test_result_rejects_duplicate_or_missing_per_node_device_slots() -> None:
 
     with pytest.raises(ValueError, match="duplicate or missing"):
         module.build_result(
+            run_identity=f"slurm-42-0-{'f' * 64}",
             candidate_kind="mcore",
             candidate_sha="a" * 40,
             integration_sha="b" * 40,
@@ -284,6 +413,7 @@ def test_result_rejects_global_rank_bound_to_the_wrong_node_device_slot() -> Non
 
     with pytest.raises(ValueError, match="global rank.*device slot"):
         module.build_result(
+            run_identity=f"slurm-42-0-{'f' * 64}",
             candidate_kind="mcore",
             candidate_sha="a" * 40,
             integration_sha="b" * 40,
