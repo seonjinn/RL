@@ -23,6 +23,8 @@ no GPU).
 skipped where vllm is unavailable.
 """
 
+import contextlib
+
 from types import SimpleNamespace
 
 import pytest

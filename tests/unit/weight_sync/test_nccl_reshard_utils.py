@@ -38,6 +38,7 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
     group_expert_params_in_metadata,
     is_expert_param,
     is_nccl_reshard_param,
+    restore_refit_info_placements,
 )
 
 

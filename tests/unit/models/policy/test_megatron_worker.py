@@ -17,7 +17,8 @@ import tempfile
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional
+from typing import Any, Optional
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest

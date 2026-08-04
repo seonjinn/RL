@@ -14,7 +14,7 @@
 
 """Tests for checkpoint-engine weight synchronization and factory routing."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 

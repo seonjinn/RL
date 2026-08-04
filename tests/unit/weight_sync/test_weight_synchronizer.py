@@ -14,7 +14,7 @@
 
 """Unit tests for the WeightSynchronizer abstraction and its implementations."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -30,7 +30,7 @@ from nemo_rl.weight_sync.factory import create_weight_synchronizer
 from nemo_rl.weight_sync.http_weight_synchronizer import (
     HTTPWeightSynchronizer,
 )
-from nemo_rl.weight_sync.interfaces import WeightSynchronizer
+from nemo_rl.weight_sync.interfaces import WeightSynchronizer, initialize_refit_metadata
 from nemo_rl.weight_sync.ipc_weight_synchronizer import (
     IPCWeightSynchronizer,
 )

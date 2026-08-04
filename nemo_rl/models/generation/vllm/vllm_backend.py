@@ -17,7 +17,7 @@ import re
 import socket
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 import torch
 import zmq
@@ -38,6 +38,7 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
     HFToLocalParamMap,
     LocalParamSpec,
     RefitCtx,
+    _STR_TO_DTYPE,
     _extract_layer_prefix,
 )
 from nemo_rl.weight_sync.refit_transforms import RefitPlanAgreement

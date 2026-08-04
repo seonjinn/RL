@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from abc import ABC, abstractmethod
-from typing import Any, Optional, TypedDict
+from typing import TYPE_CHECKING, Any, Optional, TypedDict
 
 import ray
 import torch
@@ -23,7 +23,6 @@ from nemo_rl.models.generation.interfaces import GenerationDatumSpec
 from nemo_rl.utils.timer import Timer
 
 if TYPE_CHECKING:
-    from nemo_rl.models.policy import PolicyConfig
     from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
 
 

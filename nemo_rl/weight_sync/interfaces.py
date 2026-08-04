@@ -38,7 +38,7 @@ at the synchronizer level.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from nemo_rl.utils.timer import Timer
 
