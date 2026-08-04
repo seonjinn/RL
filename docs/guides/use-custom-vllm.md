@@ -59,6 +59,29 @@ Then run your application:
 uv run examples/run_grpo.py
 ```
 
+## Selecting an MXFP8 Linear Backend
+
+MXFP8 rollout recipes can pass vLLM's linear backend option directly:
+
+```yaml
+policy:
+  generation:
+    vllm_kwargs:
+      linear_backend: flashinfer_trtllm
+```
+
+The supported FlashInfer values are `flashinfer_cutlass`,
+`flashinfer_cutedsl`, and `flashinfer_trtllm`. CUTLASS retains NeMo-RL's
+legacy refit path. CuTeDSL and TRTLLM require a custom vLLM kernel that declares
+`preserves_checkpoint_weight_scale_for_refit = True` and refreshes its prepared
+weight and scale buffers after every refit. A stock kernel without this contract
+fails during model preparation; NeMo-RL does not silently replace the requested
+backend.
+
+An exact TRTLLM tactic-table miss is not a refit error. The TRTLLM kernel stays
+selected and uses its default tactic (`tactic=-1`). Backend or layer-family
+fallback remains a vLLM policy decision.
+
 ## Re-building the NeMo RL Docker Image
 
 Using a custom vllm may require you to rebuild the docker image. The two most common reasons are:
