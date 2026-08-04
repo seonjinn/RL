@@ -14,6 +14,7 @@ GPUS_PER_NODE=${GPUS_PER_NODE:-8}
 MAX_STEPS=${MAX_STEPS:-5}
 WALLTIME=${WALLTIME:-04:00:00}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
+DISABLE_CUSTOM_ALL_REDUCE=${DISABLE_CUSTOM_ALL_REDUCE:-false}
 
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna}
 RUNTIME_ROOT=${RUNTIME_ROOT:-${WORK_ROOT}/containers/nemo-rl-nightly-refresh}
@@ -59,6 +60,7 @@ case "${MODEL}" in
       policy.generation.refit_transport=null
       policy.megatron_cfg.moe_token_dispatcher_type=alltoall
       policy.megatron_cfg.moe_flex_dispatcher_backend=deepep
+      ++policy.generation.vllm_kwargs.disable_custom_all_reduce="${DISABLE_CUSTOM_ALL_REDUCE}"
     )
     ;;
   *)

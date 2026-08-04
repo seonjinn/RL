@@ -25,6 +25,10 @@ refit transport (`refit_transport=null`). Current NCCL Reshard validates only
 matching BF16 or blockwise-FP8 trainer and rollout storage and rejects
 BF16-to-MXFP8 conversion.
 
+Set `DISABLE_CUSTOM_ALL_REDUCE=true` for the matched 235B arms when B200
+symmetric-memory initialization exhausts its multicast allocation. This keeps
+the linear GEMM backend as the only CUTLASS/CuTeDSL difference.
+
 ## Submit
 
 Run scheduling validation first:
