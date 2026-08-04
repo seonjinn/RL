@@ -133,11 +133,12 @@ def _mapped_weight_name_variants(model: torch.nn.Module, name: str) -> set[str]:
         apply_list = getattr(mapper, "apply_list", None)
         if not callable(apply_list):
             raise TypeError("vLLM hf_to_vllm_mapper must provide apply_list()")
-        return {
-            mapped_name
-            for source_name in sorted(source_variants)
-            for mapped_name in apply_list([source_name])
-        }
+        mapped_names = set(apply_list([name]))
+        if not mapped_names:
+            return set()
+        for source_name in sorted(source_variants - {name}):
+            mapped_names.update(apply_list([source_name]))
+        return mapped_names
 
     # Older model implementations expose only packed_modules_mapping. Keep
     # this compatibility path separate from WeightsMapper's complete-name API.

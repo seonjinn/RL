@@ -861,6 +861,39 @@ def test_real_quant_target_resolver_handles_fused_linear_mapper_variants(monkeyp
     ]
 
 
+def test_real_quant_mapper_drop_on_original_name_is_authoritative(monkeypatch):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    modelopt_module = sys.modules["vllm.model_executor.layers.quantization.modelopt"]
+    linear_base = sys.modules["vllm.model_executor.layers.linear"].LinearBase
+    weights_mapper = sys.modules["vllm.model_executor.models.utils"].WeightsMapper
+
+    model = torch.nn.Module()
+    model.model = torch.nn.Module()
+    model.model.layers = torch.nn.ModuleList([torch.nn.Module()])
+    model.model.layers[0].self_attn = torch.nn.Module()
+    model.model.layers[0].self_attn.qkv_proj = linear_base(16, 32, bias=False)
+    model.model.layers[0].self_attn.qkv_proj.quant_method = types.SimpleNamespace(
+        quant_config=modelopt_module.ModelOptNvFp4Config()
+    )
+    model.hf_to_vllm_mapper = weights_mapper(
+        orig_to_new_stacked={".q_proj": (".qkv_proj", "q")},
+        orig_to_new_prefix={"layers.": None},
+    )
+    original_name = "layers.0.self_attn.q_proj.weight"
+    prefixed_name = f"model.{original_name}"
+
+    assert model.hf_to_vllm_mapper.apply_list([original_name]) == []
+    assert model.hf_to_vllm_mapper.apply_list([prefixed_name]) == [
+        "model.layers.0.self_attn.qkv_proj.weight"
+    ]
+    assert backend._mapped_weight_name_variants(model, original_name) == set()
+    assert not backend._is_bf16_quantization_candidate(
+        original_name,
+        (32, 16),
+        model=model,
+    )
+
+
 def test_real_quant_target_resolver_handles_routed_experts_and_passthrough_embedding(
     monkeypatch,
 ):
