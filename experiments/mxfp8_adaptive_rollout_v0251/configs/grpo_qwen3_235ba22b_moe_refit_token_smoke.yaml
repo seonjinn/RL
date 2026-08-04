@@ -53,8 +53,12 @@ data:
   max_input_seq_length: 4096
   shuffle: false
   train:
+    dataset_name: ResponseDataset
     data_path: ${oc.env:NEMO_RL_REPO_ROOT}/experiments/mxfp8_adaptive_rollout_v0251/data/qwen_trace_math.jsonl
+    split: null
+    split_validation_size: 0
   validation:
+    dataset_name: ResponseDataset
     data_path: ${oc.env:NEMO_RL_REPO_ROOT}/experiments/mxfp8_adaptive_rollout_v0251/data/qwen_trace_math.jsonl
   default:
     dataset_name: ResponseDataset

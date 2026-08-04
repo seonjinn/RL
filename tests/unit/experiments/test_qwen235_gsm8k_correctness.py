@@ -289,6 +289,9 @@ def test_qwen235_refit_canary_uses_real_mxfp8_refit() -> None:
         config["policy"]["generation"]["vllm_cfg"]["quantization_ignored_layer_kws"]
     ) == {"q_proj", "k_proj", "v_proj", "o_proj", ".mlp.gate", "lm_head"}
     assert config["policy"]["generation"]["colocated"]["enabled"] is True
+    assert config["data"]["train"]["dataset_name"] == "ResponseDataset"
+    assert config["data"]["train"]["split_validation_size"] == 0
+    assert config["data"]["validation"]["dataset_name"] == "ResponseDataset"
     assert config["cluster"] == {
         "gpus_per_node": 4,
         "num_nodes": 16,
