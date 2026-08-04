@@ -6,9 +6,11 @@ from pathlib import Path
 from typing import Any
 
 
-def _assistant_response(messages: list[dict[str, Any]]) -> str:
+def _assistant_response(messages: list[Any]) -> str:
+    if len(messages) == 1 and isinstance(messages[0], list):
+        messages = messages[0]
     for message in reversed(messages):
-        if message.get("role") == "assistant":
+        if isinstance(message, dict) and message.get("role") == "assistant":
             return str(message.get("content", ""))
     return ""
 

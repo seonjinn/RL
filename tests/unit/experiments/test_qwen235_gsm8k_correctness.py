@@ -318,11 +318,13 @@ def test_refit_validation_gate_accepts_diverse_assistant_outputs(
             json.dumps(
                 {
                     "content": [
-                        {"role": "user", "content": f"problem-{index}"},
-                        {
-                            "role": "assistant",
-                            "content": f"The answer is {index + 10}.",
-                        },
+                        [
+                            {"role": "user", "content": f"problem-{index}"},
+                            {
+                                "role": "assistant",
+                                "content": f"The answer is {index + 10}.",
+                            },
+                        ]
                     ],
                     "rewards": [float(index % 2)],
                     "idx": index,

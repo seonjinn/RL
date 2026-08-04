@@ -42,6 +42,15 @@ if [[ "$actual_nemo_rl_commit" != "$EXPECTED_NEMO_RL_COMMIT" ]]; then
   echo "NeMo-RL commit mismatch: expected $EXPECTED_NEMO_RL_COMMIT, got $actual_nemo_rl_commit" >&2
   exit 2
 fi
+if [[ -n "$(git -C "$CUSTOM_VLLM_SOURCE" status --porcelain --untracked-files=all)" ]]; then
+  echo "custom vLLM repository is not clean: $CUSTOM_VLLM_SOURCE" >&2
+  exit 2
+fi
+actual_vllm_commit=$(git -C "$CUSTOM_VLLM_SOURCE" rev-parse HEAD)
+if [[ "$actual_vllm_commit" != "$EXPECTED_VLLM_COMMIT" ]]; then
+  echo "custom vLLM commit mismatch: expected $EXPECTED_VLLM_COMMIT, got $actual_vllm_commit" >&2
+  exit 2
+fi
 
 lock_sha=$(sha256sum "$NEMO_RL_REPO_ROOT/uv.lock" | awk '{print $1}')
 venv_key=${lock_sha:0:16}-${EXPECTED_VLLM_COMMIT:0:12}
@@ -51,7 +60,7 @@ export CUSTOM_VLLM_RUNTIME_BASE=${CUSTOM_VLLM_RUNTIME_BASE:-/home/sna/.cache/vll
 export RAY_CLI="$NEMO_RL_DRIVER_VENV_DIR/bin/ray"
 mkdir -p "$CANARY_RESULT_ROOT" "$BASE_LOG_DIR" "$HF_DATASETS_CACHE" "$UV_CACHE_DIR_OVERRIDE"
 printf 'nemo_rl_commit=%s\ncustom_vllm_commit=%s\nscope=%s\n' \
-  "$actual_nemo_rl_commit" "$EXPECTED_VLLM_COMMIT" "$scope" \
+  "$actual_nemo_rl_commit" "$actual_vllm_commit" "$scope" \
   > "$CANARY_RESULT_ROOT/provenance.txt"
 
 args=(

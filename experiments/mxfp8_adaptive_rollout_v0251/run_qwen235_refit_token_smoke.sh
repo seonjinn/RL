@@ -20,13 +20,25 @@ result_root=${CANARY_RESULT_ROOT:?set CANARY_RESULT_ROOT}
 vllm_source=${CUSTOM_VLLM_SOURCE:?set CUSTOM_VLLM_SOURCE}
 driver_python=${NEMO_RL_DRIVER_VENV_DIR:?set NEMO_RL_DRIVER_VENV_DIR}/bin/python
 
+actual_nemo_rl_commit=$(git -C "$root" rev-parse HEAD)
+if [[ "$actual_nemo_rl_commit" != "${EXPECTED_NEMO_RL_COMMIT:?set EXPECTED_NEMO_RL_COMMIT}" ]]; then
+  echo "NeMo-RL commit mismatch: expected $EXPECTED_NEMO_RL_COMMIT, got $actual_nemo_rl_commit" >&2
+  exit 2
+fi
+if [[ -n "$(git -C "$root" status --porcelain --untracked-files=all)" ]]; then
+  echo "NeMo-RL repository is not clean: $root" >&2
+  exit 2
+fi
+
 actual_vllm_commit=$(git -C "$vllm_source" rev-parse HEAD)
 if [[ "$actual_vllm_commit" != "${EXPECTED_VLLM_COMMIT:?set EXPECTED_VLLM_COMMIT}" ]]; then
   echo "custom vLLM commit mismatch: expected $EXPECTED_VLLM_COMMIT, got $actual_vllm_commit" >&2
   exit 2
 fi
-git -C "$vllm_source" diff --quiet
-git -C "$vllm_source" diff --cached --quiet
+if [[ -n "$(git -C "$vllm_source" status --porcelain --untracked-files=all)" ]]; then
+  echo "custom vLLM repository is not clean: $vllm_source" >&2
+  exit 2
+fi
 
 runtime_root=$(env -u PYTHONPATH -u VLLM_SUBPROCESS_PYTHONPATH "$driver_python" \
   "$root/experiments/mxfp8_adaptive_rollout_v0251/runtime_overlay.py" \
