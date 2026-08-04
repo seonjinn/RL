@@ -78,8 +78,13 @@ case "${ACTION}" in
     ;;
 esac
 
-if [[ "${GPUS_PER_NODE}" != 8 ]]; then
-  echo "GCP-NRT B200 experiments require GPUS_PER_NODE=8" >&2
+if [[ "${GPUS_PER_NODE}" != 4 && "${GPUS_PER_NODE}" != 8 ]]; then
+  echo "GCP-NRT B200 experiments require GPUS_PER_NODE=4 or 8" >&2
+  exit 2
+fi
+
+if [[ "${MODEL}" == qwen30b && "${GPUS_PER_NODE}" != 8 ]]; then
+  echo "The validated qwen30b topology requires GPUS_PER_NODE=8" >&2
   exit 2
 fi
 
