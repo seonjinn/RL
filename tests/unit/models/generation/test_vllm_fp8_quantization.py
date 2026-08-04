@@ -304,3 +304,104 @@ def test_process_weights_after_loading_copies_in_place_on_refit(monkeypatch):
     assert layer.weight_scale_inv is scale_param
     # The processed values must actually land.
     assert torch.equal(layer.weight.data, torch.ones(4, 4))
+
+
+def test_mxfp8_cutedsl_linear_keeps_refit_storage_in_canonical_layout(
+    fp8_module, monkeypatch
+):
+    from vllm.model_executor.layers.quantization.utils import mxfp8_utils
+    from vllm.model_executor.parameter import ModelWeightParameter
+
+    fp8 = fp8_module
+    monkeypatch.setattr(
+        mxfp8_utils,
+        "swizzle_mxfp8_scale",
+        lambda scale, *, M, K: scale.clone(),
+    )
+
+    kernel_type = type(
+        "FlashInferCutedslMxfp8LinearKernel",
+        (),
+        {"config": types.SimpleNamespace()},
+    )
+    kernel = kernel_type()
+    method = types.SimpleNamespace(kernel=kernel)
+
+    layer = torch.nn.Module()
+    canonical_weight = torch.arange(4 * 32, dtype=torch.float32).reshape(4, 32)
+
+    def weight_loader(param, value):
+        param.data.copy_(value)
+
+    layer.weight = ModelWeightParameter(
+        data=canonical_weight.clone(),
+        input_dim=1,
+        output_dim=0,
+        weight_loader=weight_loader,
+    )
+    layer.weight_scale = ModelWeightParameter(
+        data=torch.ones(4, 1),
+        input_dim=1,
+        output_dim=0,
+        weight_loader=weight_loader,
+    )
+
+    fp8.process_weights_after_loading_mxfp8_linear(method, layer)
+
+    assert method.kernel is kernel
+    assert layer.weight.shape == (32, 4)
+    assert layer.weight_from_checkpoint.shape == (4, 32)
+    assert layer.weight.data.data_ptr() == layer.weight_from_checkpoint.data.data_ptr()
+    torch.testing.assert_close(layer.weight, canonical_weight.t())
+
+    updated_weight = canonical_weight.add(1000)
+    runtime_weight_ptr = layer.weight.data.data_ptr()
+    layer.weight_from_checkpoint.data.copy_(updated_weight)
+    fp8.process_weights_after_loading_mxfp8_linear(method, layer)
+
+    assert layer.weight.data.data_ptr() == runtime_weight_ptr
+    torch.testing.assert_close(layer.weight, updated_weight.t())
+
+
+@pytest.mark.parametrize(
+    ("kernel_name", "expected_weight_name"),
+    [
+        ("FlashInferCutedslMxfp8LinearKernel", "layer.weight_from_checkpoint"),
+        ("FlashInferCutlassMxfp8LinearKernel", "layer.weight"),
+    ],
+)
+def test_load_weights_targets_canonical_storage_for_cutedsl_linear(
+    fp8_module, monkeypatch, kernel_name, expected_weight_name
+):
+    from vllm.model_executor.layers.quantization.utils import mxfp8_utils
+
+    fp8 = fp8_module
+    kernel = type(kernel_name, (), {})()
+    layer = types.SimpleNamespace(quant_method=types.SimpleNamespace(kernel=kernel))
+    loaded_weights = []
+    model = types.SimpleNamespace(
+        load_weights=lambda weights: loaded_weights.extend(weights)
+    )
+    model_runner = types.SimpleNamespace(model=model)
+
+    monkeypatch.setattr(fp8, "_is_fp8_weight", lambda _name, _model: True)
+    monkeypatch.setattr(
+        fp8, "_get_module_from_param_name", lambda _model, _name: layer
+    )
+    monkeypatch.setattr(
+        mxfp8_utils,
+        "mxfp8_e4m3_quantize",
+        lambda value: (value, torch.ones(*value.shape[:-1], 1)),
+    )
+    fp8.global_fp8_config = fp8.FP8Config(
+        use_fp8_weights=True,
+        model_parallel_size=1,
+        is_mx=True,
+    )
+
+    fp8.load_weights([("layer.weight", torch.ones(4, 32))], model_runner)
+
+    assert [name for name, _ in loaded_weights] == [
+        expected_weight_name,
+        "layer.weight_scale_from_checkpoint",
+    ]
