@@ -34,10 +34,10 @@ legacy IPC and NCCL-Reshard without changing the trainer's storage format.
 
 | ID | Quant mode | Transport | Required environment | Expected topology |
 | --- | --- | --- | --- | --- |
-| `w4a16-legacy` | W4A16 | `null` | none beyond common launch inputs | 4 nodes colocated, Megatron EP16 |
-| `w4a4-legacy` | W4A4 | `null` | `NVFP4_CALIBRATION_ARTIFACT` | 4 nodes colocated, Megatron EP16 |
-| `w4a16-nccl` | W4A16 | `nccl_reshard` | none beyond common launch inputs | 2 train + 2 generation nodes, Megatron EP8 |
-| `w4a4-nccl` | W4A4 | `nccl_reshard` | `NVFP4_CALIBRATION_ARTIFACT` | 2 train + 2 generation nodes, Megatron EP8 |
+| `w4a16-legacy` | W4A16 | `null` | none beyond common launch inputs | 2 B200 nodes x 8 GPUs, colocated, Megatron EP16 |
+| `w4a4-legacy` | W4A4 | `null` | `NVFP4_CALIBRATION_ARTIFACT` | 2 B200 nodes x 8 GPUs, colocated, Megatron EP16 |
+| `w4a16-nccl` | W4A16 | `nccl_reshard` | none beyond common launch inputs | 1 B200 train node + 1 B200 generation node, Megatron EP8 |
+| `w4a4-nccl` | W4A4 | `nccl_reshard` | `NVFP4_CALIBRATION_ARTIFACT` | 1 B200 train node + 1 B200 generation node, Megatron EP8 |
 
 Use the exact launch commands in `README.md`. Submit one matrix entry per job so
 job identity, logs, and W&B metadata remain unambiguous.

@@ -3,9 +3,9 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd)
 source "$SCRIPT_DIR/common.env"
 
 # ===== BEGIN CONFIG =====
-NUM_NODES=4
-GPUS_PER_NODE=4
-SEGMENT_SIZE=4
+NUM_NODES=2
+GPUS_PER_NODE=8
+SEGMENT_SIZE=2
 STEPS_PER_RUN=2
 MAX_STEPS=2
 NUM_RUNS=$(( (MAX_STEPS + STEPS_PER_RUN - 1) / STEPS_PER_RUN ))
@@ -23,8 +23,9 @@ case "$REFIT_TRANSPORT" in
     TRANSPORT_TAG=nccl-reshard
     TRANSPORT_OVERRIDES=(
       "policy.generation.refit_transport=nccl_reshard"
+      "cluster.segment_size=1"
       "policy.generation.colocated.enabled=false"
-      "policy.generation.colocated.resources.num_nodes=2"
+      "policy.generation.colocated.resources.num_nodes=1"
       "policy.generation.colocated.resources.gpus_per_node=$GPUS_PER_NODE"
       "policy.megatron_cfg.expert_model_parallel_size=8"
     )
@@ -72,6 +73,7 @@ uv run --no-sync examples/run_grpo.py \
     grpo.max_num_steps=$MAX_STEPS \
     cluster.num_nodes=$NUM_NODES \
     cluster.gpus_per_node=$GPUS_PER_NODE \
+    cluster.segment_size=$SEGMENT_SIZE \
     logger.log_dir="$LOG_DIR" \
     logger.wandb_enabled=True \
     logger.wandb.project="$WANDB_PROJECT_OVERRIDE" \

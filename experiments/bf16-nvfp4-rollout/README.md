@@ -11,14 +11,16 @@ jobs have been submitted and no runtime result is claimed here.
 
 | Mode | `REFIT_TRANSPORT` | Placement | W&B name suffix |
 | --- | --- | --- | --- |
-| W4A16 | `null` | Four colocated 4-GPU nodes | `-legacy` |
-| W4A4 | `null` | Four colocated 4-GPU nodes | `-legacy` |
-| W4A16 | `nccl_reshard` | Two 4-GPU train nodes and two 4-GPU generation nodes | `-nccl-reshard` |
-| W4A4 | `nccl_reshard` | Two 4-GPU train nodes and two 4-GPU generation nodes | `-nccl-reshard` |
+| W4A16 | `null` | Two colocated 8-GPU B200 nodes | `-legacy` |
+| W4A4 | `null` | Two colocated 8-GPU B200 nodes | `-legacy` |
+| W4A16 | `nccl_reshard` | One 8-GPU train node and one 8-GPU generation node | `-nccl-reshard` |
+| W4A4 | `nccl_reshard` | One 8-GPU train node and one 8-GPU generation node | `-nccl-reshard` |
 
-The NCCL variant keeps the four-node allocation and overrides Megatron expert
-parallelism from 16 to 8 so the two-node training world remains valid. It
-always sets `policy.generation.colocated.enabled=false`.
+The B200 launch maps the recipe's 16-GPU world from 4x4 to 2x8. The NCCL
+variant splits that allocation into one 8-GPU training node and one 8-GPU
+generation node, then overrides Megatron expert parallelism from 16 to 8. It
+always sets `policy.generation.colocated.enabled=false` and uses application
+segment size 1 for the one-node training cluster.
 
 ## Required environment
 

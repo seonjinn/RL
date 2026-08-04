@@ -18,8 +18,9 @@ modified. No jobs were submitted.
 - Two GRPO steps by default; checkpointing is forced off.
 - `REFIT_TRANSPORT=null` selects legacy refit and
   `REFIT_TRANSPORT=nccl_reshard` selects NCCL-Reshard.
-- NCCL forces non-colocated generation and uses a two-node train/two-node
-  generation split. Megatron EP8 keeps the four-node B200 allocation valid.
+- GCP-NRT maps the recipe's 16-GPU world to two 8-GPU B200 nodes. NCCL forces
+  non-colocated generation and uses a one-node train/one-node generation split;
+  Megatron EP8 keeps the eight-GPU training world valid.
 - W4A4 fails before launch unless `NVFP4_CALIBRATION_ARTIFACT` names an existing
   file.
 - Default log directories and W&B names include the quant mode and transport;
