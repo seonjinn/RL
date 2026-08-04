@@ -309,10 +309,15 @@ def test_process_weights_after_loading_copies_in_place_on_refit(monkeypatch):
 def test_mxfp8_cutedsl_linear_keeps_refit_storage_in_canonical_layout(
     fp8_module, monkeypatch
 ):
+    import vllm.model_executor.parameter as vllm_parameter
     from vllm.model_executor.layers.quantization.utils import mxfp8_utils
     from vllm.model_executor.parameter import ModelWeightParameter
 
     fp8 = fp8_module
+    monkeypatch.setattr(vllm_parameter, "get_tensor_model_parallel_rank", lambda: 0)
+    monkeypatch.setattr(
+        vllm_parameter, "get_tensor_model_parallel_world_size", lambda: 1
+    )
     monkeypatch.setattr(
         mxfp8_utils,
         "swizzle_mxfp8_scale",
