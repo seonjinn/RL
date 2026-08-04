@@ -247,7 +247,7 @@ git commit -s -m "feat(modelopt): load BF16 refits into W4A16 rollout"
 
 - [ ] **Step 1: Write failing artifact tests**
 
-Use temporary safetensors files to assert exact round-trip tensor names and metadata. Reject missing metadata, duplicate normalized names, unexpected model/config identity, empty tensors, and nonpositive/nonfinite `amax`. Add config validation tests: W4A4 rollout-only requires a readable artifact; W4A16 ignores the field; prepacked QARL W4A4 does not require the external artifact.
+Use temporary safetensors files to assert exact round-trip tensor names and metadata. Reject missing metadata, duplicate normalized names, unexpected model/config identity, empty tensors, and nonpositive/nonfinite `amax`. Add config propagation tests proving a configured artifact becomes an absolute worker-visible path and W4A16 ignores it. Source-aware enforcement is deferred to Task 5 because only `prepare_refit_info()` can distinguish a BF16 manifest from prepacked QARL W4A4.
 
 - [ ] **Step 2: Verify RED**
 
@@ -255,7 +255,7 @@ Run the new artifact tests. Expected: missing module and config key.
 
 - [ ] **Step 3: Implement artifact I/O and validation**
 
-Keep safetensors parsing in `calibration_artifact.py`. Return the Task 2 `NVFP4Calibration` object only after model id, revision, and quant config match. Thread the resolved artifact path through `_configure_quant_engine_kwargs()` as an absolute worker environment value, and load it once in the vLLM extension during `prepare_refit_info()`.
+Keep safetensors parsing in `calibration_artifact.py`. Return the Task 2 `NVFP4Calibration` object only after model id, revision, and quant config match. Thread the resolved artifact path through `_configure_quant_engine_kwargs()` as an absolute worker environment value. Task 5 loads it once in the vLLM extension after `prepare_refit_info()` classifies the source manifest, requires it only for BF16-source W4A4, and leaves prepacked QARL W4A4 unchanged.
 
 - [ ] **Step 4: Implement the standalone exporter**
 
