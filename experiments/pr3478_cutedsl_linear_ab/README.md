@@ -40,15 +40,36 @@ setup times were similar: 264.2 s for CUTLASS and 266.8 s for CuTeDSL.
 
 Jobs `493496` and `493497` passed the earlier vLLM startup failure after
 disabling the common FlashInfer fused all-reduce/RMS path. The CUTLASS arm then
-exposed an independent first-refit issue: the QKVO overlay had cleared every
-quantization exclusion and unintentionally included the vocabulary-parallel
-`lm_head`. Its full `[151936, 4096]` HF weight was sent to a TP4-local
-`[37984, 4096]` parameter. The CuTeDSL arm was cancelled because it used the
-same common loader path.
+exposed an independent first-refit issue. Excluding the vocabulary-parallel
+`lm_head` correctly narrowed the QKVO quantization scope, but jobs `493608` and
+`493609` reproduced the same shape mismatch on the BF16
+`model.embed_tokens.weight`: its full `[151936, 4096]` HF tensor reached a
+TP4-local `[37984, 4096]` parameter through vLLM's default loader. TP1 had
+masked the issue because its full and local vocab shapes are equal.
 
-The corrected QKVO recipes exclude `lm_head` while continuing to quantize MoE
-experts and Q/K/V/O projections. Replacement job IDs are recorded after
-submission. Failed-run references:
+The refit loader now restores vLLM's TP-aware
+`VocabParallelEmbedding.weight_loader` plus its `input_dim=1` and
+`output_dim=0` sharding metadata when parameter post-processing has removed
+them. The strengthened targeted test passed in job `493867`, and the complete
+FP8 quantization unit file passed `14/14` tests in job `493889`.
+
+CUTLASS job `493935` then passed the former vocab shape assertion and reached
+Step 1. It exposed a separate recipe-scope issue: the QKVO overlay had also
+quantized the MoE router `mlp.gate`. That `ReplicatedLinear` keeps its scale in
+`weight_scale`, while the generic MXFP8 refit path attempted to load
+`weight_scale_from_checkpoint`. The QKVO overlays now keep both `lm_head` and
+`mlp.gate` in BF16, preserving the intended MXFP8 scope of MoE experts plus
+Q/K/V/O projections. A recipe regression test covers both model overlays.
+
+Replacement CUTLASS job `494003` is pending GCP-NRT resources. Latest run
+references:
+
+- CUTLASS: job `493935`, [W&B run](https://wandb.ai/nvidia/sna-pr3478-cutedsl-linear-ab/runs/gmm2z6ia)
+- Replacement CUTLASS: job `494003`, W&B link available after startup
+- Earlier CUTLASS: job `493743`, [W&B run](https://wandb.ai/nvidia/sna-pr3478-cutedsl-linear-ab/runs/ddut411d)
+- Earlier CuTeDSL: job `493745`, [W&B run](https://wandb.ai/nvidia/sna-pr3478-cutedsl-linear-ab/runs/6l1emf1q)
+
+Earlier failed-run references:
 
 - CUTLASS: job `493496`, [W&B run](https://wandb.ai/nvidia/sna-pr3478-cutedsl-linear-ab/runs/bo9eflyp)
 - CuTeDSL: job `493497`, [W&B run](https://wandb.ai/nvidia/sna-pr3478-cutedsl-linear-ab/runs/e3u8i38o)
@@ -94,6 +115,11 @@ and run on a branch containing both PRs 3477 and 3478. That exact asynchronous
 combination does not yet have an end-to-end test result. A patched synchronous
 BF16-to-MXFP8 NCCL Reshard smoke reached two training steps, which validates the
 receiver conversion path but not Async GRPO scheduling.
+
+`policy.generation.vllm_cfg.async_engine=true` only selects vLLM's asynchronous
+engine process. It is not an Async GRPO 1-off result unless
+`grpo.async_grpo.enabled=true` as well. The 235B backend A/B above uses the
+asynchronous vLLM engine but synchronous GRPO and colocated resources.
 
 ## Submit
 
