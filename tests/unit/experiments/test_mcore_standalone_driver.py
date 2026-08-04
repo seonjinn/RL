@@ -288,9 +288,16 @@ def test_snapshot_and_intent_verification_rejects_tampering_or_writable_state(
 def test_te_capability_row_requires_one_exact_marker_from_each_node() -> None:
     module = _load_driver()
     markers = _capability_markers()
+    expected_device_binding = {
+        "node_rank": 0,
+        "local_rank": 0,
+        "cuda_device_index": 0,
+    }
 
     evidence = module.validate_row_capability(
-        row_id="te_eval_capability_8", node_capabilities=markers
+        row_id="te_eval_capability_8",
+        node_capabilities=markers,
+        expected_device_binding=expected_device_binding,
     )
 
     assert evidence["all_eval_callables_supported"] is True
@@ -316,10 +323,30 @@ def test_te_capability_row_requires_one_exact_marker_from_each_node() -> None:
                 {**markers[REUSE_NODE][0], "raw_te_eval_reuse_eager_parity": False},
             ),
         },
+        {
+            PRIMARY_NODE: (
+                {
+                    **markers[PRIMARY_NODE][0],
+                    "node_rank": 1,
+                    "local_rank": 3,
+                    "cuda_device_index": 3,
+                },
+            ),
+            REUSE_NODE: (
+                {
+                    **markers[REUSE_NODE][0],
+                    "node_rank": 1,
+                    "local_rank": 3,
+                    "cuda_device_index": 3,
+                },
+            ),
+        },
     ):
         with pytest.raises(ValueError, match="capability"):
             module.validate_row_capability(
-                row_id="te_eval_capability_8", node_capabilities=invalid
+                row_id="te_eval_capability_8",
+                node_capabilities=invalid,
+                expected_device_binding=expected_device_binding,
             )
 
 
@@ -394,6 +421,38 @@ def test_rank_aggregation_requires_semantic_capability_consensus() -> None:
     }
 
     with pytest.raises(ValueError, match="semantic capability"):
+        module.validate_rank_payloads(
+            tuple(payloads),
+            run_identity=run_identity,
+            candidate_kind="mcore",
+            candidate_sha="a" * 40,
+            row_id="te_eval_capability_8",
+            world_size=8,
+            num_nodes=2,
+            gpus_per_node=4,
+            pytest_nodes=("tests/test_graphs.py::test_one",),
+        )
+
+
+def test_rank_aggregation_rejects_measured_binding_for_another_rank() -> None:
+    module = _load_driver()
+    run_identity = module.derive_run_identity(
+        scheduler_job_id="42",
+        scheduler_restart_count=0,
+        submission_intent_sha256="f" * 64,
+    )
+    payloads = list(_rank_payloads(run_identity=run_identity))
+    payloads[0] = {
+        **payloads[0],
+        "capability": {
+            **payloads[0]["capability"],
+            "node_rank": 1,
+            "local_rank": 3,
+            "cuda_device_index": 3,
+        },
+    }
+
+    with pytest.raises(ValueError, match="rank payload device binding"):
         module.validate_rank_payloads(
             tuple(payloads),
             run_identity=run_identity,

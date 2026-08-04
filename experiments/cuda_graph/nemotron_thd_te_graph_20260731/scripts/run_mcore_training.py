@@ -576,6 +576,17 @@ def validate_rank_payloads(
         capability = payload.get("capability")
         if not isinstance(capability, Mapping):
             raise ValueError("rank payload capability must be a JSON object")
+        expected_device_binding = {
+            "global_rank": expected_rank,
+            "node_rank": expected_rank // gpus_per_node,
+            "local_rank": expected_rank % gpus_per_node,
+            "cuda_device_index": expected_rank % gpus_per_node,
+        }
+        if any(
+            capability.get(key) != value
+            for key, value in expected_device_binding.items()
+        ):
+            raise ValueError("rank payload device binding mismatch")
         current_semantic_capability = {
             key: value
             for key, value in capability.items()
@@ -736,12 +747,25 @@ def _exact_capability_marker(
 
 
 def validate_row_capability(
-    *, row_id: str, node_capabilities: Mapping[str, tuple[dict[str, Any], ...]]
+    *,
+    row_id: str,
+    node_capabilities: Mapping[str, tuple[dict[str, Any], ...]],
+    expected_device_binding: Mapping[str, int],
 ) -> dict[str, Any]:
     """Require exact, affirmative evidence from both TE capability tests."""
-    if row_id != "te_eval_capability_8":
-        return {}
     device_keys = frozenset(("node_rank", "local_rank", "cuda_device_index"))
+    if (
+        not isinstance(expected_device_binding, Mapping)
+        or set(expected_device_binding) != device_keys
+        or any(
+            not isinstance(expected_device_binding[key], int)
+            or isinstance(expected_device_binding[key], bool)
+            for key in device_keys
+        )
+    ):
+        raise ValueError("expected capability device binding has an invalid schema")
+    if row_id != "te_eval_capability_8":
+        return dict(expected_device_binding)
     primary = _exact_capability_marker(
         node_capabilities,
         node=PRIMARY_CAPABILITY_NODE,
@@ -775,8 +799,11 @@ def validate_row_capability(
             )
         ),
     )
-    if any(primary[key] != reuse[key] for key in device_keys):
-        raise ValueError("TE capability evidence reports inconsistent device bindings")
+    for marker in (primary, reuse):
+        if any(marker[key] != expected_device_binding[key] for key in device_keys):
+            raise ValueError(
+                "TE capability evidence reports an unexpected measured device binding"
+            )
     required_primary = {
         "all_eval_callables_supported": True,
         "backward_executed": False,
@@ -938,15 +965,13 @@ def main() -> int:
     capability = validate_row_capability(
         row_id=args.row_id,
         node_capabilities=node_capabilities,
-    )
-    capability.update(
-        {
-            "global_rank": rank,
+        expected_device_binding={
             "node_rank": rank // args.gpus_per_node,
             "local_rank": rank % args.gpus_per_node,
             "cuda_device_index": rank % args.gpus_per_node,
-        }
+        },
     )
+    capability["global_rank"] = rank
     rank_payload = {
         "run_identity": run_identity,
         "rank": rank,
