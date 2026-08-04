@@ -395,6 +395,12 @@ class MegatronConfig(TypedDict):
     # When True, each expert sees a fixed number of tokens for cuda-graph capture.
     # Required when cuda_graph_impl= 'local' with transformer_impl != 'inference_optimized'.
     moe_pad_experts_for_cuda_graph_inference: NotRequired[bool]
+    # Optional expert capacity factor. Omit to preserve the MCore provider default.
+    moe_expert_capacity_factor: NotRequired[float | None]
+    # When True, pad each expert input to its configured capacity.
+    moe_pad_expert_input_to_capacity: NotRequired[bool]
+    # Optional per-rank capacity factor. Omit to preserve the MCore provider default.
+    moe_expert_rank_capacity_factor: NotRequired[float | None]
     # Can be used only with 'alltoall' token dispatcher
     moe_shared_expert_overlap: bool
     # Create gloo process groups during Megatron distributed init.

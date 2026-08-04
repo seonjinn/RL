@@ -689,6 +689,79 @@ class TestApplyMoeConfig:
 
         assert not hasattr(model_cfg, "moe_grouped_gemm")
 
+    def test_capacity_fields_are_optional_typed_megatron_config_keys(self) -> None:
+        """Capacity overrides must remain optional so omission keeps provider defaults."""
+        from typing import NotRequired
+
+        from nemo_rl.models.policy import MegatronConfig
+
+        assert (
+            MegatronConfig.__annotations__["moe_expert_capacity_factor"]
+            == NotRequired[float | None]
+        )
+        assert (
+            MegatronConfig.__annotations__["moe_pad_expert_input_to_capacity"]
+            == NotRequired[bool]
+        )
+        assert (
+            MegatronConfig.__annotations__["moe_expert_rank_capacity_factor"]
+            == NotRequired[float | None]
+        )
+
+    @pytest.mark.parametrize(
+        "name,value",
+        [
+            ("moe_expert_capacity_factor", 1.25),
+            ("moe_pad_expert_input_to_capacity", True),
+            ("moe_expert_rank_capacity_factor", 1.5),
+        ],
+    )
+    def test_capacity_field_forwards_explicit_value(
+        self, name: str, value: float | bool
+    ) -> None:
+        """A configured capacity override must reach MCore unchanged."""
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        model_cfg = SimpleNamespace()
+        config = self._base_moe_cfg(**{name: value})
+
+        _apply_moe_config(model_cfg, config)
+
+        assert getattr(model_cfg, name) == value
+
+    def test_capacity_fields_forward_together_including_explicit_none(self) -> None:
+        """Explicit None is an override, not an omitted capacity setting."""
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        model_cfg = SimpleNamespace()
+        config = self._base_moe_cfg(
+            moe_expert_capacity_factor=None,
+            moe_pad_expert_input_to_capacity=False,
+            moe_expert_rank_capacity_factor=None,
+        )
+
+        _apply_moe_config(model_cfg, config)
+
+        assert model_cfg.moe_expert_capacity_factor is None
+        assert model_cfg.moe_pad_expert_input_to_capacity is False
+        assert model_cfg.moe_expert_rank_capacity_factor is None
+
+    def test_omitted_capacity_fields_preserve_provider_defaults(self) -> None:
+        """Omitting a capacity field must not overwrite a provider-supplied default."""
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        model_cfg = SimpleNamespace(
+            moe_expert_capacity_factor=3.0,
+            moe_pad_expert_input_to_capacity=True,
+            moe_expert_rank_capacity_factor=2.0,
+        )
+
+        _apply_moe_config(model_cfg, self._base_moe_cfg())
+
+        assert model_cfg.moe_expert_capacity_factor == 3.0
+        assert model_cfg.moe_pad_expert_input_to_capacity is True
+        assert model_cfg.moe_expert_rank_capacity_factor == 2.0
+
     def test_hybridep_env_vars_auto_set_with_warning(self, monkeypatch):
         """HybridEP backend with no env config: auto-set env vars and emit warnings."""
         from nemo_rl.models.megatron.setup import _apply_moe_config
@@ -1113,24 +1186,9 @@ class TestApplyPerformanceConfig:
             ),
             (
                 {
-                    "moe_token_dispatcher_type": "flex",
-                    "moe_flex_dispatcher_backend": "hybridep",
-                },
-                "fixed capacity",
-            ),
-            (
-                {
                     "moe_pad_expert_input_to_capacity": True,
                 },
                 "positive moe_expert_capacity_factor",
-            ),
-            (
-                {
-                    "moe_token_dispatcher_type": "flex",
-                    "moe_flex_dispatcher_backend": "hybridep",
-                    "moe_expert_rank_capacity_factor": 0,
-                },
-                "fixed capacity",
             ),
             (
                 {
@@ -1164,11 +1222,111 @@ class TestApplyPerformanceConfig:
         with pytest.raises(ValueError, match=error):
             _apply_performance_config(model_cfg, config)
 
-    def test_full_moe_scope_requires_drop_and_pad_capacity(self) -> None:
+    @pytest.mark.parametrize(
+        "dispatcher,backend",
+        [
+            ("alltoall", None),
+            ("flex", "hybridep"),
+        ],
+    )
+    def test_moe_preprocess_scope_allows_supported_dropless_dispatchers(
+        self, dispatcher: str, backend: str | None
+    ) -> None:
+        """Proven dropless partial routes must reach MCore post-init validation."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request(
+            modules=["moe_router", "moe_preprocess"]
+        )
+        model_cfg.moe_token_dispatcher_type = dispatcher
+        model_cfg.moe_flex_dispatcher_backend = backend
+        config["megatron_cfg"]["moe_token_dispatcher_type"] = dispatcher
+        if backend is not None:
+            config["megatron_cfg"]["moe_flex_dispatcher_backend"] = backend
+
+        with patch(
+            "nemo_rl.models.megatron.setup.is_te_min_version", return_value=True
+        ):
+            _apply_performance_config(model_cfg, config)
+
+    @pytest.mark.parametrize(
+        "modules,dispatcher,backend",
+        [
+            (["moe_router"], "alltoall", None),
+            (["moe_router"], "flex", "hybridep"),
+        ],
+    )
+    def test_moe_router_scope_allows_supported_dropless_dispatchers(
+        self, modules: list[str], dispatcher: str, backend: str | None
+    ) -> None:
+        """Router-only graphs do not require a fixed expert capacity."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request(modules=modules)
+        model_cfg.moe_token_dispatcher_type = dispatcher
+        model_cfg.moe_flex_dispatcher_backend = backend
+        config["megatron_cfg"]["moe_token_dispatcher_type"] = dispatcher
+        if backend is not None:
+            config["megatron_cfg"]["moe_flex_dispatcher_backend"] = backend
+
+        with patch(
+            "nemo_rl.models.megatron.setup.is_te_min_version", return_value=True
+        ):
+            _apply_performance_config(model_cfg, config)
+
+    @pytest.mark.parametrize(
+        "model_overrides,error",
+        [
+            (
+                {
+                    "moe_token_dispatcher_type": "flex",
+                    "moe_flex_dispatcher_backend": "ncclep",
+                },
+                "Flex/NCCL-EP",
+            ),
+            (
+                {
+                    "moe_token_dispatcher_type": "flex",
+                    "moe_flex_dispatcher_backend": "hybridep",
+                    "moe_hybridep_pad_uneven_dispatch_inputs": True,
+                },
+                "uneven-input padding",
+            ),
+        ],
+    )
+    def test_moe_preprocess_scope_rejects_remaining_unsafe_dropless_routes(
+        self,
+        model_overrides: dict[str, object],
+        error: str,
+    ) -> None:
+        """Partial capture must still reject unsupported dropless routing paths."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request(
+            modules=["moe_router", "moe_preprocess"]
+        )
+        for name, value in model_overrides.items():
+            setattr(model_cfg, name, value)
+        config["megatron_cfg"]["moe_token_dispatcher_type"] = (
+            model_cfg.moe_token_dispatcher_type
+        )
+        config["megatron_cfg"]["moe_flex_dispatcher_backend"] = (
+            model_cfg.moe_flex_dispatcher_backend
+        )
+
+        with pytest.raises(ValueError, match=error):
+            _apply_performance_config(model_cfg, config)
+
+    @pytest.mark.parametrize("capacity", [None, False, True, 0, -1.0])
+    def test_full_moe_scope_requires_positive_drop_and_pad_capacity(
+        self, capacity: float | bool | None
+    ) -> None:
         """A dynamic expert shape cannot be captured as a whole MoE graph."""
         from nemo_rl.models.megatron.setup import _apply_performance_config
 
         model_cfg, config = self._fixed_te_graph_request(modules=["moe"])
+        model_cfg.moe_pad_expert_input_to_capacity = True
+        model_cfg.moe_expert_capacity_factor = capacity
 
         with pytest.raises(ValueError, match="fixed drop-and-pad expert capacity"):
             _apply_performance_config(model_cfg, config)
@@ -2215,7 +2373,7 @@ class TestMakePolicyLikeConfig:
 
 @pytest.mark.mcore
 class TestSetupModelConfig:
-    """Tests for setup_model_config — hf_config_overrides handling."""
+    """Tests for setup_model_config behavior."""
 
     _HELPER_PATCHES = [
         "nemo_rl.models.megatron.setup._create_megatron_config",
@@ -2247,6 +2405,65 @@ class TestSetupModelConfig:
         model_cfg = MagicMock()
         model_cfg.__post_init__ = MagicMock()
         return model_cfg
+
+    def test_capacity_fields_are_applied_before_model_post_init(
+        self, tmp_path, request
+    ) -> None:
+        """MCore post-init must normalize the capacity overrides, not stale defaults."""
+        from nemo_rl.models.megatron.setup import setup_model_config
+
+        for target in self._HELPER_PATCHES:
+            if target.endswith("._apply_moe_config"):
+                continue
+            patcher = patch(target)
+            patcher.start()
+            request.addfinalizer(patcher.stop)
+        patcher = patch(
+            "nemo_rl.models.megatron.setup._patch_hf_config_double_instantiation"
+        )
+        patcher.start()
+        request.addfinalizer(patcher.stop)
+
+        class Provider:
+            moe_expert_capacity_factor = 7.0
+            moe_pad_expert_input_to_capacity = True
+            moe_expert_rank_capacity_factor = 9.0
+
+            def __post_init__(self) -> None:
+                self.post_init_capacity_values = (
+                    self.moe_expert_capacity_factor,
+                    self.moe_pad_expert_input_to_capacity,
+                    self.moe_expert_rank_capacity_factor,
+                )
+
+        provider = Provider()
+        (tmp_path / "run_config.yaml").touch()
+        config = {
+            "pretrained_checkpoint": {
+                "format": "megatron_bridge",
+                "path": str(tmp_path),
+            },
+            "megatron_cfg": TestApplyMoeConfig._base_moe_megatron_cfg()
+            | {
+                "moe_expert_capacity_factor": None,
+                "moe_pad_expert_input_to_capacity": False,
+                "moe_expert_rank_capacity_factor": 1.75,
+            },
+        }
+
+        with patch(
+            "nemo_rl.models.megatron.setup.load_model_config",
+            return_value=(provider, None),
+        ):
+            setup_model_config(
+                config,
+                rank=0,
+                dtype=torch.bfloat16,
+                hf_model_name="test-model",
+                pretrained_path=str(tmp_path),
+            )
+
+        assert provider.post_init_capacity_values == (None, False, 1.75)
 
     def test_megatron_lm_passes_hf_config_overrides_to_autoconfig(self, request):
         """hf_config_overrides must be forwarded to AutoConfig.from_pretrained for megatron_lm."""

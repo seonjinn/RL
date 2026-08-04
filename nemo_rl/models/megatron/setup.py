@@ -785,6 +785,13 @@ def _apply_moe_config(model_cfg: Any, config: PolicyConfig) -> None:
         model_cfg.moe_pad_experts_for_cuda_graph_inference = config["megatron_cfg"][
             "moe_pad_experts_for_cuda_graph_inference"
         ]
+    for name in (
+        "moe_expert_capacity_factor",
+        "moe_pad_expert_input_to_capacity",
+        "moe_expert_rank_capacity_factor",
+    ):
+        if name in config["megatron_cfg"]:
+            setattr(model_cfg, name, config["megatron_cfg"][name])
     model_cfg.moe_shared_expert_overlap = config["megatron_cfg"][
         "moe_shared_expert_overlap"
     ]
@@ -1046,15 +1053,6 @@ def _validate_te_moe_graph_request(
         raise ValueError(
             "moe_preprocess CUDA graphs require Flex/HybridEP, got backend "
             f"{backend!r}."
-        )
-    fixed_capacity = (
-        drop_and_pad and is_positive_capacity(expert_capacity_factor)
-    ) or is_positive_capacity(
-        getattr(model_cfg, "moe_expert_rank_capacity_factor", None)
-    )
-    if not fixed_capacity:
-        raise ValueError(
-            "Flex/HybridEP moe_preprocess CUDA graphs require a strictly fixed capacity."
         )
     if getattr(model_cfg, "moe_hybridep_pad_uneven_dispatch_inputs", False):
         raise ValueError(
