@@ -290,6 +290,7 @@ def test_qwen235_refit_canary_uses_real_mxfp8_refit() -> None:
     ) == {"q_proj", "k_proj", "v_proj", "o_proj", ".mlp.gate", "lm_head"}
     assert config["policy"]["generation"]["colocated"]["enabled"] is True
     assert config["data"]["train"]["dataset_name"] == "ResponseDataset"
+    assert "split" not in config["data"]["train"]
     assert config["data"]["train"]["split_validation_size"] == 0
     assert config["data"]["validation"]["dataset_name"] == "ResponseDataset"
     assert config["cluster"] == {
