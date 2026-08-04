@@ -1003,3 +1003,51 @@ def test_process_weights_after_loading_copies_in_place_on_refit(monkeypatch):
     assert layer.weight_scale_inv is scale_param
     # The processed values must actually land.
     assert torch.equal(layer.weight.data, torch.ones(4, 4))
+
+
+@pytest.mark.parametrize(
+    "kernel_name",
+    [
+        "FlashInferCutedslMxfp8LinearKernel",
+        "FlashInferTrtllmMxfp8LinearKernel",
+    ],
+)
+def test_mxfp8_linear_delegates_to_refit_safe_native_kernel(fp8_module, kernel_name):
+    calls = []
+
+    def process_weights_after_loading(self, layer):
+        calls.append(layer)
+
+    kernel_type = type(
+        kernel_name,
+        (),
+        {
+            "preserves_checkpoint_weight_scale_for_refit": True,
+            "process_weights_after_loading": process_weights_after_loading,
+        },
+    )
+    layer = types.SimpleNamespace(weight=types.SimpleNamespace(ndim=2))
+    method = types.SimpleNamespace(kernel=kernel_type())
+
+    fp8_module.process_weights_after_loading_mxfp8_linear(method, layer)
+
+    assert calls == [layer]
+    assert method.kernel.__class__.__name__ == kernel_name
+    assert not hasattr(layer, "weight_scale_from_checkpoint")
+
+
+def test_mxfp8_linear_rejects_refit_unsafe_cutedsl_kernel(fp8_module):
+    kernel_type = type("FlashInferCutedslMxfp8LinearKernel", (), {})
+    layer = types.SimpleNamespace(weight=types.SimpleNamespace(ndim=2))
+    method = types.SimpleNamespace(kernel=kernel_type())
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "FlashInferCutedslMxfp8LinearKernel.*"
+            "preserves_checkpoint_weight_scale_for_refit"
+        ),
+    ):
+        fp8_module.process_weights_after_loading_mxfp8_linear(method, layer)
+
+    assert method.kernel.__class__.__name__ == "FlashInferCutedslMxfp8LinearKernel"
