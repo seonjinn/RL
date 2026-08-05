@@ -4,8 +4,9 @@ This experiment validates a plain BF16 Qwen3-30B-A3B Megatron policy with real
 ModelOpt NVFP4 generation. It covers W4A16 and calibrated W4A4 through both the
 legacy colocated IPC refit and non-colocated NCCL-Reshard refit paths.
 
-The checked-in artifacts are static launch and validation definitions. No GPU
-jobs have been submitted and no runtime result is claimed here.
+The W4A16 and calibrated W4A4 legacy and NCCL-Reshard two-step smokes completed
+on GCP-NRT. See `REPORT.md` for job IDs, W&B links, metrics, and artifact
+provenance.
 
 For GCP-NRT, use `submit_gcp_nrt.sh`. It creates a unique committed code
 snapshot, uses `--gpus-per-node=8`, and supports scheduler preflight with
