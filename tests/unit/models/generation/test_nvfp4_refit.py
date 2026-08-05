@@ -572,3 +572,51 @@ def test_serializer_uses_modelopt_without_megatron_bridge(
     assert block_size == 16
     assert result[0][0] == name
     assert result[0][1].dtype == torch.uint8
+
+
+@pytest.mark.parametrize(
+    ("quant_mode", "input_amax"),
+    [
+        ("w4a16_nvfp4", None),
+        ("nvfp4", torch.tensor(12.0)),
+    ],
+)
+def test_dependency_light_exporter_matches_megatron_bridge(
+    quant_mode: str,
+    input_amax: torch.Tensor | None,
+) -> None:
+    modelopt_utils = pytest.importorskip(
+        "megatron.bridge.models.conversion.modelopt_utils"
+    )
+    torch.manual_seed(42)
+    name = "model.layers.0.mlp.up_proj.weight"
+    weight = torch.randn((32, 32), dtype=torch.bfloat16)
+    weight_amax = weight.float().abs().amax().reshape(())
+
+    local_qformat, local_exporter = nvfp4_refit.get_modelopt_quant_exporter(quant_mode)
+    local_meta = nvfp4_refit._QuantMeta(
+        qformat=local_qformat,
+        block_size=16,
+        weight_amax=weight_amax,
+        input_amax=input_amax,
+    )
+    local_outputs = list(local_exporter(name, weight, local_meta))
+
+    bridge_qformat, bridge_exporter = modelopt_utils.get_modelopt_quant_exporter(
+        quant_mode
+    )
+    bridge_meta = modelopt_utils.QuantMeta(
+        qformat=bridge_qformat,
+        block_size=16,
+        weight_amax=weight_amax,
+        input_amax=input_amax,
+    )
+    bridge_outputs = list(bridge_exporter(name, weight, bridge_meta))
+
+    assert [name for name, _ in local_outputs] == [name for name, _ in bridge_outputs]
+    for (_, local_tensor), (_, bridge_tensor) in zip(
+        local_outputs, bridge_outputs, strict=True
+    ):
+        assert local_tensor.dtype == bridge_tensor.dtype
+        assert local_tensor.shape == bridge_tensor.shape
+        assert torch.equal(local_tensor, bridge_tensor)
