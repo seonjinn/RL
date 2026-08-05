@@ -28,6 +28,7 @@ CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rol
 
 ACCOUNT=${SLURM_ACCOUNT:-coreai_dlalgo_llm}
 PARTITION=${PARTITION:-batch}
+QOS=${QOS:-}
 WALLTIME=${WALLTIME:-05:00:00}
 NUM_NODES=${NUM_NODES:-4}
 GPUS_PER_NODE=${GPUS_PER_NODE:-4}
@@ -121,6 +122,9 @@ SBATCH_ARGS=(
     --job-name="q30-mx-${BACKEND#flashinfer_}-${RUN_ID}"
     --output="${EXPERIMENT_ROOT}/slurm-%j.out"
 )
+if [[ -n "${QOS}" ]]; then
+    SBATCH_ARGS+=(--qos="${QOS}")
+fi
 
 printf 'backend=%s\n' "${BACKEND}"
 printf 'experiment_root=%s\n' "${EXPERIMENT_ROOT}"

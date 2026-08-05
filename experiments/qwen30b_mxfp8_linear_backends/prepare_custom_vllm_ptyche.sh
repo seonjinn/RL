@@ -16,6 +16,7 @@ VLLM_WHEEL=${VLLM_WHEEL:-https://github.com/vllm-project/vllm/releases/download/
 
 ACCOUNT=${SLURM_ACCOUNT:-coreai_dlalgo_llm}
 PARTITION=${PARTITION:-batch}
+QOS=${QOS:-}
 WALLTIME=${WALLTIME:-02:00:00}
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}
 CONTAINER=${CONTAINER:-${WORK_ROOT}/containers/nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh}
@@ -91,6 +92,9 @@ SBATCH_ARGS=(
     --job-name=q30-mx-vllm-prep
     --output="${PREP_ROOT}/slurm-%j.out"
 )
+if [[ -n "${QOS}" ]]; then
+    SBATCH_ARGS+=(--qos="${QOS}")
+fi
 
 printf 'sbatch_args='; printf ' %q' "${SBATCH_ARGS[@]}"; printf '\n'
 printf '%s\n' "${COMMAND}"

@@ -29,6 +29,7 @@ def _dry_run(tmp_path: Path, backend: str) -> str:
         "CONTAINER": str(container),
         "CUSTOM_VLLM_ROOT": str(custom_vllm),
         "EXPERIMENT_ROOT": str(tmp_path / backend),
+        "QOS": "interactive",
         "WANDB_MODE": "disabled",
         "WORK_ROOT": str(tmp_path),
     }
@@ -63,6 +64,7 @@ def test_dry_run_changes_only_backend(tmp_path: Path) -> None:
         assert "cluster.gpus_per_node=4" in output
         assert "cluster.segment_size=4" in output
         assert "grpo.max_num_steps=8" in output
+        assert "--qos=interactive" in output
 
 
 def test_rejects_unknown_backend(tmp_path: Path) -> None:
@@ -97,6 +99,7 @@ def test_custom_vllm_build_is_recoverable() -> None:
     assert "setuptools_rust" in build_text
     assert "existing_vllm_valid=false" in prepare_text
     assert "3rdparty/vllm/.venv/bin/python -c 'import vllm'" in prepare_text
+    assert 'SBATCH_ARGS+=(--qos="${QOS}")' in prepare_text
     assert 'TORCH_REQUIREMENT=$(sed -nE' in build_text
     assert 'VLLM_TORCH_BACKEND:-cu130' in build_text
     assert "torch==2.10.0" not in build_text
