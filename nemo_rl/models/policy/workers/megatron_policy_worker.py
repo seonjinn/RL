@@ -3833,6 +3833,10 @@ class MegatronPolicyWorkerImpl(
 
     def finish_inference(self) -> None:
         """Offload model params to CPU after inference. Only used in PPO."""
+        if self._te_cuda_graph_lifecycle is not None:
+            self.model.eval()
+            return
+
         self.model = self.move_model(
             self.model, "cpu", move_params=True, move_grads=False
         )

@@ -1099,6 +1099,28 @@ def test_prepare_for_lp_inference_preserves_graph_owned_storage() -> None:
     assert events == ["eval"]
 
 
+def test_finish_inference_preserves_graph_owned_storage() -> None:
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(empty_cache=lambda: events.append("empty_cache"))
+    )
+    fake_gc = SimpleNamespace(collect=lambda: events.append("gc"))
+    worker_type = _extract_worker_methods(
+        {"finish_inference"},
+        {"torch": fake_torch, "gc": fake_gc},
+    )
+    worker = worker_type()
+    events: list[Any] = []
+    worker._te_cuda_graph_lifecycle = object()
+    worker.model = SimpleNamespace(eval=lambda: events.append("eval"))
+    worker.move_model = lambda model, device, **kwargs: (
+        events.append(("move_model", device, kwargs)) or model
+    )
+
+    worker.finish_inference()
+
+    assert events == ["eval"]
+
+
 @pytest.mark.parametrize("method_name", ("offload_before_refit", "offload_after_refit"))
 def test_refit_offload_is_rejected_before_persistent_graph_storage_moves(
     method_name: str,
