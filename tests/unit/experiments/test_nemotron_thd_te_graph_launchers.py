@@ -877,7 +877,7 @@ fi
         CONTAINER=str(tmp_path / "hybridep.sqsh"),
         MOE_TOKEN_DISPATCHER_TYPE="flex",
         MOE_FLEX_DISPATCHER_BACKEND="hybridep",
-        HYBRID_EP_RANKS_PER_NVLINK_DOMAIN="16",
+        HYBRID_EP_RANKS_PER_NVLINK_DOMAIN="8",
         CUDA_GRAPH_MODULES=modules,
         TIME_LIMIT="04:00:00",
         EXCLUDE=exclusion,
@@ -891,8 +891,13 @@ fi
     assert submissions.count("ARGS=") == 2
     assert submissions.count(f"ARG=--exclude={exclusion}") == 2
     assert submissions.count("ARG=--time=04:00:00") == 2
-    assert "USE_MNNVL=1" in submissions
-    assert "NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN=16" in submissions
+    assert "++policy.megatron_cfg.hybridep_use_mnnvl=true" in submissions
+    assert "USE_MNNVL=1" not in submissions
+    assert "NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN" not in submissions
+    assert (
+        "++policy.megatron_cfg.hybridep_num_ranks_per_nvlink_domain=8"
+        in submissions
+    )
     assert "policy.megatron_cfg.moe_token_dispatcher_type=flex" in submissions
     assert "++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep" in submissions
     assert (
@@ -905,6 +910,30 @@ fi
         f"{unexpected_padding}"
     ) not in submissions
     assert "policy.megatron_cfg.moe_token_dispatcher_type=alltoall" not in submissions
+
+
+def test_direct_oci_launcher_rejects_hybridep_domain_larger_than_nano_ep(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_sbatch = fake_bin / "sbatch"
+    fake_sbatch.write_text("#!/bin/bash\nexit 99\n")
+    fake_sbatch.chmod(0o755)
+
+    result = _run_script(
+        "scripts/submit_oci_nano_direct.sh",
+        PATH=f"{fake_bin}:{os.environ['PATH']}",
+        SOURCE_ROOT=str(REPO_ROOT),
+        EXPERIMENT_ROOT=str(tmp_path / "runs"),
+        MOE_TOKEN_DISPATCHER_TYPE="flex",
+        MOE_FLEX_DISPATCHER_BACKEND="hybridep",
+        HYBRID_EP_RANKS_PER_NVLINK_DOMAIN="16",
+        RUN_TAG="unit",
+    )
+
+    assert result.returncode == 2
+    assert "must divide Nano expert_model_parallel_size=8" in result.stderr
 
 
 def test_direct_oci_launcher_rejects_preprocess_without_router(tmp_path: Path) -> None:

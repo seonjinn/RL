@@ -28,6 +28,7 @@ NVTE_DEBUG=${NVTE_DEBUG:-0}
 NVTE_DEBUG_LEVEL=${NVTE_DEBUG_LEVEL:-0}
 MOE_TOKEN_DISPATCHER_TYPE=${MOE_TOKEN_DISPATCHER_TYPE:-alltoall}
 MOE_FLEX_DISPATCHER_BACKEND=${MOE_FLEX_DISPATCHER_BACKEND:-}
+EXPERT_MODEL_PARALLEL_SIZE=${EXPERT_MODEL_PARALLEL_SIZE:-8}
 HYBRID_EP_RANKS_PER_NVLINK_DOMAIN=${HYBRID_EP_RANKS_PER_NVLINK_DOMAIN:-}
 EXCLUDE=${EXCLUDE:-}
 RUN_TAG=${RUN_TAG:-$(date -u +%Y%m%dT%H%M%SZ)}
@@ -80,13 +81,21 @@ case "${MOE_TOKEN_DISPATCHER_TYPE}" in
       echo "HYBRID_EP_RANKS_PER_NVLINK_DOMAIN must be a positive integer" >&2
       exit 2
     }
+    [[ "${EXPERT_MODEL_PARALLEL_SIZE}" =~ ^[1-9][0-9]*$ ]] || {
+      echo "EXPERT_MODEL_PARALLEL_SIZE must be a positive integer" >&2
+      exit 2
+    }
+    (( EXPERT_MODEL_PARALLEL_SIZE % HYBRID_EP_RANKS_PER_NVLINK_DOMAIN == 0 )) || {
+      echo "HYBRID_EP_RANKS_PER_NVLINK_DOMAIN=${HYBRID_EP_RANKS_PER_NVLINK_DOMAIN} must divide Nano expert_model_parallel_size=${EXPERT_MODEL_PARALLEL_SIZE}" >&2
+      exit 2
+    }
     dispatcher_name=hybridep
-    dispatcher_env="USE_MNNVL=1 NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN=${HYBRID_EP_RANKS_PER_NVLINK_DOMAIN}"
+    dispatcher_env=""
     hybridep_pad_uneven_dispatch_inputs=true
     if [[ "${moe_preprocess_enabled}" == "true" ]]; then
       hybridep_pad_uneven_dispatch_inputs=false
     fi
-    dispatcher_overrides="policy.megatron_cfg.moe_token_dispatcher_type=flex ++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep ++policy.megatron_cfg.moe_hybridep_pad_uneven_dispatch_inputs=${hybridep_pad_uneven_dispatch_inputs}"
+    dispatcher_overrides="policy.megatron_cfg.expert_model_parallel_size=${EXPERT_MODEL_PARALLEL_SIZE} policy.megatron_cfg.moe_token_dispatcher_type=flex ++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep ++policy.megatron_cfg.moe_hybridep_pad_uneven_dispatch_inputs=${hybridep_pad_uneven_dispatch_inputs} ++policy.megatron_cfg.hybridep_num_ranks_per_nvlink_domain=${HYBRID_EP_RANKS_PER_NVLINK_DOMAIN} ++policy.megatron_cfg.hybridep_use_mnnvl=true"
     ;;
   *)
     echo "MOE_TOKEN_DISPATCHER_TYPE must be alltoall or flex" >&2
