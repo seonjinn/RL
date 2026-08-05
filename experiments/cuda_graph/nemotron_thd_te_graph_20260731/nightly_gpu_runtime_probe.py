@@ -33,6 +33,13 @@ def _package_version(distribution: str) -> str:
         return "unknown"
 
 
+def _parse_uv_version(output: str) -> str:
+    fields = output.split()
+    if len(fields) < 2 or fields[0] != "uv":
+        raise RuntimeError(f"Unexpected uv version output: {output}")
+    return fields[1]
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--expected-device-count", type=int, required=True)
@@ -61,15 +68,16 @@ def _capture_cuda_graph(torch: Any, device_index: int) -> float:
 def main() -> None:
     args = _parse_args()
     uv_executable = "/root/.local/bin/uv"
-    uv_version = subprocess.run(
+    uv_version_output = subprocess.run(
         [uv_executable, "--version"],
         check=True,
         capture_output=True,
         text=True,
     ).stdout.strip()
-    if uv_version != f"uv {args.expected_uv_version}":
+    uv_version = _parse_uv_version(uv_version_output)
+    if uv_version != args.expected_uv_version:
         raise RuntimeError(
-            f"uv version mismatch: expected uv {args.expected_uv_version}, got {uv_version}"
+            f"uv version mismatch: expected {args.expected_uv_version}, got {uv_version}"
         )
 
     managed_python = subprocess.run(
@@ -153,7 +161,7 @@ def main() -> None:
             "executable": managed_python,
             "version": managed_python_version,
         },
-        "uv": uv_version,
+        "uv": uv_version_output,
         "nemo_rl_commit": image_source_commit,
         "versions": {
             "causal_conv1d": _package_version("causal-conv1d"),
