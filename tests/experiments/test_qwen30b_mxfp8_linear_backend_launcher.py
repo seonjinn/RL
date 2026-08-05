@@ -66,6 +66,9 @@ def test_dry_run_changes_only_backend(tmp_path: Path) -> None:
         assert "grpo.max_num_steps=8" in output
         assert "--qos=interactive" in output
         assert output.count("uv run --frozen --extra vllm") == 2
+        assert f"uv venv {tmp_path}" in output
+        assert "uv pip install --python" in output
+        assert "setuptools_rust" in output
 
 
 def test_rejects_unknown_backend(tmp_path: Path) -> None:
