@@ -23,3 +23,9 @@
 - Cherry-picked `553b985aa` and `c12c0eb7a`, which initialize the modular MoE
   kernel and restore the quantized value/scale tensor shapes.
 - Python compilation and `git diff --check` passed for both fixes.
+
+## 2026-08-04 17:54 PDT
+
+- Jobs `496495` and `496496` failed while force-rebuilding the existing shared
+  Lustre worker environments with `OSError: [Errno 116] Stale file handle`.
+- Switched to a new versioned cache root and disabled in-place force rebuilds.
