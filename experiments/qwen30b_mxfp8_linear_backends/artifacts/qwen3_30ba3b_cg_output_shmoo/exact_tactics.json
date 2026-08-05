@@ -907,7 +907,7 @@
       "cuda_version": "13.0",
       "device_name": "NVIDIA GB200",
       "flashinfer_version": "0.6.13",
-      "vllm_version": "0.25.1"
+      "vllm_version": "0.25.1+precompiled"
     },
     "selection_policy": {
       "max_speedup_cv": 0.03,

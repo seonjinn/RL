@@ -53,7 +53,7 @@ if [[ "${BACKEND}" == "flashinfer_trtllm_adaptive" ]]; then
     EFFECTIVE_BACKEND=flashinfer_trtllm
     TACTIC_ARTIFACT_DIR=${TACTIC_ARTIFACT_DIR:-${SCRIPT_DIR}/artifacts/qwen3_30ba3b_cg_output_shmoo}
     TACTIC_FILE=${TACTIC_FILE:-${TACTIC_ARTIFACT_DIR}/exact_tactics.json}
-    TACTIC_SHA256=${TACTIC_SHA256:-88ea9238c8ce06d3b174b9cae928e4dbfc0d0a5ed4e9d2086c9d0f79ef4d3211}
+    TACTIC_SHA256=${TACTIC_SHA256:-79bc8b3614cc93eeca6c88c8271aa6d5f53a16fe59dceffa05fd27879d7281b5}
     LAYER_ALLOWLIST_FILE=${LAYER_ALLOWLIST_FILE:-${TACTIC_ARTIFACT_DIR}/layer_allowlist.txt}
     [[ -f "${TACTIC_FILE}" ]] || { echo "Missing tactic table: ${TACTIC_FILE}" >&2; exit 1; }
     [[ -f "${LAYER_ALLOWLIST_FILE}" ]] || {

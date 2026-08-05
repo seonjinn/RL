@@ -1,10 +1,10 @@
 {
-  "description": "Qwen3-30B-A3B CUDA Graph output-projection MXFP8 tactic qualification",
+  "description": "Qwen3-30B-A3B CUDA Graph output-projection MXFP8 tactic qualification for the NeMo-RL precompiled vLLM worker build",
   "runtime_fingerprint": {
     "cuda_version": "13.0",
     "device_name": "NVIDIA GB200",
     "flashinfer_version": "0.6.13",
-    "vllm_version": "0.25.1"
+    "vllm_version": "0.25.1+precompiled"
   },
   "selection_policy": {
     "max_speedup_cv": 0.03,
@@ -20,5 +20,5 @@
     2501236,
     2501238
   ],
-  "table_sha256": "88ea9238c8ce06d3b174b9cae928e4dbfc0d0a5ed4e9d2086c9d0f79ef4d3211"
+  "table_sha256": "79bc8b3614cc93eeca6c88c8271aa6d5f53a16fe59dceffa05fd27879d7281b5"
 }

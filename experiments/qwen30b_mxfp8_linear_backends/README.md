@@ -11,7 +11,7 @@ All arms use the shipped four-node performance recipe, 4 GPUs per node, a global
 
 The stock recipe leaves Q/K/V/O projections in BF16. This comparison removes those four exclusions so the selected dense MXFP8 backend is exercised by the projection layers. `lm_head` and `mlp.gate` remain unquantized.
 
-The plain TRTLLM arm uses the custom vLLM implementation at commit `a76062edee3a3ac23d47a93c7ce466f06a19111f` without tactic hints. The Adaptive arm uses the same TRTLLM path, but pins a previously qualified exact-shape table for the Qwen3-30B output projection and routes unqualified layer families to CuTeDSL. An exact-shape miss uses TRTLLM's default tactic and is not an error. The table is loaded before CUDA Graph capture; no shmoo runs in the rollout request path.
+The plain TRTLLM arm uses the custom vLLM implementation at commit `a76062edee3a3ac23d47a93c7ce466f06a19111f` without tactic hints. The Adaptive arm uses the same TRTLLM path, but pins a previously qualified exact-shape table for the Qwen3-30B output projection and routes unqualified layer families to CuTeDSL. An exact-shape miss uses TRTLLM's default tactic and is not an error. The table is loaded before CUDA Graph capture; no shmoo runs in the rollout request path. The table fingerprints the NeMo-RL worker package version `0.25.1+precompiled`, which is built from the same pinned custom vLLM commit, and retains strict SHA256 validation.
 
 ## Workflow
 
