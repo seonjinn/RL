@@ -1,6 +1,6 @@
 ---
 cluster: cw-dfw-cs-001
-ssh_host: cw-dfw
+ssh_host: cw-dfw-cs-001-login-01.nvidia.com
 user: sna
 remote_cwd: /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-pr2964-upstream-h100-20260805
 partition: batch
