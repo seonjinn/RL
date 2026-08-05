@@ -106,6 +106,30 @@ def test_init_fp8_defaults_to_batched_moe_shuffle(fp8_module, monkeypatch):
     assert fp8.global_fp8_config.refit_batched_moe_shuffle is True
 
 
+def test_quantize_mxfp8_weight_restores_grouped_expert_shape(fp8_module, monkeypatch):
+    fp8 = fp8_module
+    weight = torch.zeros(2, 3, 32, dtype=torch.bfloat16)
+
+    from vllm.model_executor.layers.quantization.utils import mxfp8_utils
+
+    def flattened_quantize(
+        tensor: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        rows = tensor.numel() // tensor.shape[-1]
+        return (
+            torch.zeros(rows, tensor.shape[-1], dtype=torch.float8_e4m3fn),
+            torch.zeros(rows * tensor.shape[-1] // 32, dtype=torch.uint8),
+        )
+
+    monkeypatch.setattr(mxfp8_utils, "mxfp8_e4m3_quantize", flattened_quantize)
+
+    value, scale = fp8.quantize_mxfp8_weight(weight)
+
+    assert value.shape == weight.shape
+    assert scale.shape == (2, 3, 1)
+    assert torch.all(scale == 1)
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 @pytest.mark.parametrize(
     ("is_gated", "intermediate_size", "hidden_size"),
