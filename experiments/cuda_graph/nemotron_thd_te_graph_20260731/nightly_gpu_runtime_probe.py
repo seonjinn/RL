@@ -19,7 +19,6 @@ import argparse
 import importlib
 import json
 import os
-import platform
 import subprocess
 import sys
 from importlib import metadata
@@ -61,13 +60,6 @@ def _capture_cuda_graph(torch: Any, device_index: int) -> float:
 
 def main() -> None:
     args = _parse_args()
-    actual_python_version = platform.python_version()
-    if actual_python_version != args.expected_python_version:
-        raise RuntimeError(
-            f"Python version mismatch: expected {args.expected_python_version}, "
-            f"got {actual_python_version}"
-        )
-
     uv_executable = "/opt/nemo_rl_venv/bin/uv"
     uv_version = subprocess.run(
         [uv_executable, "--version"],
@@ -78,6 +70,34 @@ def main() -> None:
     if uv_version != f"uv {args.expected_uv_version}":
         raise RuntimeError(
             f"uv version mismatch: expected uv {args.expected_uv_version}, got {uv_version}"
+        )
+
+    managed_python = subprocess.run(
+        [
+            uv_executable,
+            "python",
+            "find",
+            args.expected_python_version,
+            "--no-python-downloads",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    managed_python_version = subprocess.run(
+        [
+            managed_python,
+            "-c",
+            "import platform; print(platform.python_version())",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if managed_python_version != args.expected_python_version:
+        raise RuntimeError(
+            f"Managed Python version mismatch: expected {args.expected_python_version}, "
+            f"got {managed_python_version}"
         )
 
     image_source_commit = os.environ.get("NEMO_RL_COMMIT", "")
@@ -128,7 +148,11 @@ def main() -> None:
     result = {
         "schema": "nemo-rl-nightly-gpu-runtime-smoke-v1",
         "status": "passed",
-        "python": sys.version,
+        "bootstrap_python": sys.version,
+        "managed_python": {
+            "executable": managed_python,
+            "version": managed_python_version,
+        },
         "uv": uv_version,
         "nemo_rl_commit": image_source_commit,
         "versions": {
