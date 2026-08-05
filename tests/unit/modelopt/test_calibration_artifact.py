@@ -623,6 +623,21 @@ def test_save_rejects_file_backed_quant_cfg_hash_failure(
         )
 
 
+def test_save_rejects_missing_file_backed_quant_cfg(
+    tmp_path: Path,
+    metadata: dict[str, str | int],
+) -> None:
+    artifact_metadata = dict(metadata)
+    artifact_metadata["quant_cfg"] = str((tmp_path / "missing.yaml").resolve())
+
+    with pytest.raises(ValueError, match="Could not resolve.*quantization config"):
+        save_nvfp4_calibration(
+            tmp_path / "calibration.safetensors",
+            {"model.layers.0.mlp.up_proj.weight": torch.tensor(1.0)},
+            **artifact_metadata,
+        )
+
+
 @pytest.mark.parametrize(
     "invalid_amax",
     [

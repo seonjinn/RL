@@ -72,6 +72,8 @@ def save_nvfp4_calibration(
         "seed": seed,
     }
     quant_cfg_path = _resolve_quant_cfg_path(quant_cfg)
+    if quant_cfg_path is None and _is_file_backed_quant_cfg(quant_cfg):
+        raise ValueError(f"Could not resolve NVFP4 quantization config {quant_cfg!r}")
     if quant_cfg_path is not None:
         quant_cfg_sha256 = _file_sha256(quant_cfg_path)
         if quant_cfg_sha256 is None:
@@ -268,6 +270,16 @@ def _resolve_quant_cfg_path(path: object) -> Path | None:
     if project_config_path.is_file():
         return project_config_path
     return None
+
+
+def _is_file_backed_quant_cfg(quant_cfg: str) -> bool:
+    config_path = Path(quant_cfg).expanduser()
+    return config_path.is_absolute() or config_path.suffix.lower() in {
+        ".json",
+        ".toml",
+        ".yaml",
+        ".yml",
+    }
 
 
 def _validate_artifact_names(raw_names: list[str]) -> list[str]:
