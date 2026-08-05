@@ -134,6 +134,7 @@ export REFIT_TRANSPORT=${REFIT_TRANSPORT}
 export SCHEDULER_SEGMENT_SIZE=${SEGMENT_SIZE}
 ${CALIBRATION_EXPORT}
 printf 'NEMO_RL_SOURCE_COMMIT=%s\n' '${REPO_SHA}'
+uv run --frozen pytest -q tests/test_nvfp4_rollout_recipes.py
 uv run --frozen bash ${TEST_SCRIPT} \
   ++git_meta=${REPO_SHA:0:9} \
   ++container=${CONTAINER} \

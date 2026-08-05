@@ -20,3 +20,5 @@
 - Cloned commit `441dc40df` recursively to GCP-NRT.
 - Added and syntax-checked `submit_gcp_nrt.sh` with unique code snapshots,
   commit-versioned caches, `--gpus-per-node=8`, and `sbatch --test-only`.
+- The submitted command runs `tests/test_nvfp4_rollout_recipes.py` in the target
+  container before starting the GPU smoke.
