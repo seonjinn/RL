@@ -130,6 +130,7 @@ def test_long_context_overrides_are_forwarded(tmp_path: Path) -> None:
             "SEQUENCE_PACKING": "false",
             "LOGPROB_BATCH_SIZE": "1",
             "LOGPROB_CHUNK_SIZE": "2048",
+            "DEFER_FP32_LOGITS": "true",
         },
     )
 
@@ -145,6 +146,7 @@ def test_long_context_overrides_are_forwarded(tmp_path: Path) -> None:
     assert "policy.sequence_packing.enabled=false" in output
     assert "policy.logprob_batch_size=1" in output
     assert "policy.logprob_chunk_size=2048" in output
+    assert "policy.megatron_cfg.defer_fp32_logits=true" in output
 
 
 def test_custom_vllm_build_is_recoverable() -> None:

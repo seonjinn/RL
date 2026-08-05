@@ -48,7 +48,7 @@ Report the mean of steps 3-8. Primary metrics are rollout generation time and ge
 - measured training steps: 20
 - CUDA Graphs: enabled
 
-The smaller rollout count keeps the maximum token volume per step near the original 2,048-sample x 4K experiment while allowing individual responses to reach 32K. Activation checkpointing is enabled, sequence packing is disabled, and log-probability execution uses batch size one with 2,048-token chunks to reduce long-sequence training memory pressure.
+The smaller rollout count keeps the maximum token volume per step near the original 2,048-sample x 4K experiment while allowing individual responses to reach 32K. Activation checkpointing is enabled, sequence packing is disabled, and log-probability execution uses batch size one with 2,048-token chunks and deferred FP32 logits to reduce long-sequence training memory pressure.
 
 Run a two-step scheduling and runtime smoke first:
 

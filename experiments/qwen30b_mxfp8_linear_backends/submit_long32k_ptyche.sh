@@ -16,6 +16,7 @@ export ACTIVATION_CHECKPOINTING=${ACTIVATION_CHECKPOINTING:-true}
 export SEQUENCE_PACKING=${SEQUENCE_PACKING:-false}
 export LOGPROB_BATCH_SIZE=${LOGPROB_BATCH_SIZE:-1}
 export LOGPROB_CHUNK_SIZE=${LOGPROB_CHUNK_SIZE:-2048}
+export DEFER_FP32_LOGITS=${DEFER_FP32_LOGITS:-true}
 export RUN_ID
 
 for backend in flashinfer_cutedsl flashinfer_trtllm_adaptive; do

@@ -44,6 +44,7 @@ ACTIVATION_CHECKPOINTING=${ACTIVATION_CHECKPOINTING:-false}
 SEQUENCE_PACKING=${SEQUENCE_PACKING:-true}
 LOGPROB_BATCH_SIZE=${LOGPROB_BATCH_SIZE:-2}
 LOGPROB_CHUNK_SIZE=${LOGPROB_CHUNK_SIZE:-null}
+DEFER_FP32_LOGITS=${DEFER_FP32_LOGITS:-false}
 RUN_ID=${RUN_ID:-$(date +%Y%m%d-%H%M%S)}
 
 EFFECTIVE_BACKEND=${BACKEND}
@@ -155,6 +156,7 @@ uv run --frozen --extra vllm examples/run_grpo.py \
   policy.logprob_batch_size=${LOGPROB_BATCH_SIZE} \
   policy.logprob_chunk_size=${LOGPROB_CHUNK_SIZE} \
   policy.megatron_cfg.activation_checkpointing=${ACTIVATION_CHECKPOINTING} \
+  policy.megatron_cfg.defer_fp32_logits=${DEFER_FP32_LOGITS} \
   policy.sequence_packing.enabled=${SEQUENCE_PACKING} \
   policy.generation.max_new_tokens=${MAX_NEW_TOKENS} \
   policy.generation.vllm_cfg.max_model_len=${MAX_TOTAL_SEQUENCE_LENGTH} \
