@@ -74,6 +74,7 @@ export HF_HOME=${HF_HOME}
 export NRL_FORCE_REBUILD_VENVS=true
 export NEMO_RL_VENV_DIR=${WORKER_VENV}
 export NRL_VENV_BOOTSTRAP_PACKAGES='--torch-backend cu130 torch==2.11.0 numpy setuptools setuptools-rust setuptools-scm'
+export NRL_VENV_NO_BUILD_ISOLATION_PACKAGES=vllm
 export NVTE_CUDA_ARCHS=100
 export SETUPTOOLS_SCM_PRETEND_VERSION=0.25.1
 export TORCH_CUDA_ARCH_LIST=10.0

@@ -56,6 +56,7 @@ def test_create_local_venv_installs_bootstrap_packages_before_sync(tmp_path):
     env = {
         "NEMO_RL_VENV_DIR": str(tmp_path),
         "NRL_VENV_BOOTSTRAP_PACKAGES": "setuptools setuptools-rust",
+        "NRL_VENV_NO_BUILD_ISOLATION_PACKAGES": "vllm",
     }
 
     with patch.dict(os.environ, env, clear=False), patch(
@@ -79,5 +80,13 @@ def test_create_local_venv_installs_bootstrap_packages_before_sync(tmp_path):
         "setuptools",
         "setuptools-rust",
     ]
-    assert run.call_args_list[2].args[0][:2] == ["uv", "sync"]
+    assert run.call_args_list[2].args[0][-1] == "--inexact"
+    assert run.call_args_list[3].args[0][:6] == [
+        "uv",
+        "run",
+        "--no-build-isolation-package",
+        "vllm",
+        "--inexact",
+        "--group",
+    ]
     create_local_venv.cache_clear()

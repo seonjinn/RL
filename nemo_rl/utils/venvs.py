@@ -91,6 +91,9 @@ def create_local_venv(
     bootstrap_packages = shlex.split(
         os.environ.get("NRL_VENV_BOOTSTRAP_PACKAGES", "")
     )
+    no_build_isolation_packages = shlex.split(
+        os.environ.get("NRL_VENV_NO_BUILD_ISOLATION_PACKAGES", "")
+    )
     if bootstrap_packages:
         subprocess.run(
             [
@@ -107,11 +110,19 @@ def create_local_venv(
 
     # Split the py_executable into command and arguments
     exec_cmd = shlex.split(py_executable)
+    if exec_cmd[:2] == ["uv", "run"]:
+        if bootstrap_packages:
+            exec_cmd.insert(2, "--inexact")
+        for package in reversed(no_build_isolation_packages):
+            exec_cmd[2:2] = ["--no-build-isolation-package", package]
     # Command doesn't matter, since `uv` syncs the environment no matter the command.
     exec_cmd.extend(["echo", f"Finished creating venv {venv_path}"])
 
     # Always run uv sync first to ensure the build requirements are set (for --no-build-isolation packages)
-    subprocess.run(["uv", "sync", "--directory", git_root], env=env, check=True)
+    sync_cmd = ["uv", "sync", "--directory", git_root]
+    if bootstrap_packages:
+        sync_cmd.append("--inexact")
+    subprocess.run(sync_cmd, env=env, check=True)
     subprocess.run(exec_cmd, env=env, check=True)
 
     # Return the path to the python executable in the virtual environment
