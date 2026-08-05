@@ -54,7 +54,7 @@ else
 fi
 source 3rdparty/vllm/nemo-rl.env
 export NRL_FORCE_REBUILD_VENVS=true
-uv lock
+UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv uv lock
 3rdparty/vllm/.venv/bin/python - <<'PY'
 import flashinfer
 import vllm
