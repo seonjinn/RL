@@ -1,0 +1,18 @@
+---
+cluster: cw-dfw-cs-001
+ssh_host: cw-dfw
+user: sna
+remote_cwd: /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/nemo-rl-pr2964-upstream-h100-20260805
+partition: batch
+account: coreai_dlalgo_nemorl
+container_image: /lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/containers/qwen30-hybridep-oci-20260727/nemo_rl_nightly.sqsh
+mounts: /lustre:/lustre
+gpus_per_node: 8
+subproject: pr2964-upstream-h100
+---
+
+# Validation scope
+
+- NeMo-RL branch: `sna/pr2964-upstream-h100-validation-20260805`
+- Workload: Qwen3-30B-A3B, 4 nodes x 8 H100, EP8, HybridEP, THD sequence packing
+- Dependency policy: NVIDIA upstream Megatron-Bridge and Megatron-LM only
