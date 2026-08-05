@@ -55,14 +55,15 @@ def _style_axis(ax: plt.Axes, ylabel: str) -> None:
 
 
 def _draw_bar(ax: plt.Axes, data: pd.DataFrame, metric: str, ylabel: str) -> None:
+    order = [backend for backend in BACKEND_ORDER if backend in set(data["Backend"])]
     sns.barplot(
         data=data,
         x="Backend",
         y=metric,
-        order=BACKEND_ORDER,
+        order=order,
         hue="Backend",
-        hue_order=BACKEND_ORDER,
-        palette=sns.color_palette("Paired", n_colors=len(BACKEND_ORDER)),
+        hue_order=order,
+        palette=sns.color_palette("Paired", n_colors=len(order)),
         edgecolor=EDGE_COLOR,
         linewidth=2.0,
         legend=False,
