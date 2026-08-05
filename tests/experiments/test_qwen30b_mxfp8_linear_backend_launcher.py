@@ -109,6 +109,7 @@ def test_custom_vllm_build_is_recoverable() -> None:
     assert "SETUPTOOLS_SCM_PRETEND_VERSION=0.25.1" in prepare_text
     assert "setuptools_rust" in build_text
     assert "existing_vllm_valid=false" in prepare_text
+    assert "Replacing custom vLLM commit" in prepare_text
     assert "3rdparty/vllm/.venv/bin/python -c 'import vllm'" in prepare_text
     assert 'SBATCH_ARGS+=(--qos="${QOS}")' in prepare_text
     assert 'TORCH_REQUIREMENT=$(sed -nE' in build_text

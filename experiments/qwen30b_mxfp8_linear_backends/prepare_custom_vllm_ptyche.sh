@@ -32,11 +32,9 @@ git submodule update --init --recursive --depth 1
 existing_vllm_valid=false
 if [[ -d 3rdparty/vllm/.git ]]; then
   actual=\$(git -C 3rdparty/vllm rev-parse HEAD)
-  [[ "\${actual}" == "${VLLM_GIT_REF}" ]] || {
-    echo "Existing custom vLLM commit is \${actual}" >&2
-    exit 1
-  }
-  if [[ -x 3rdparty/vllm/.venv/bin/python ]] && \
+  if [[ "\${actual}" != "${VLLM_GIT_REF}" ]]; then
+    echo "Replacing custom vLLM commit \${actual} with ${VLLM_GIT_REF}"
+  elif [[ -x 3rdparty/vllm/.venv/bin/python ]] && \
       3rdparty/vllm/.venv/bin/python -c 'import vllm'; then
     existing_vllm_valid=true
   fi
