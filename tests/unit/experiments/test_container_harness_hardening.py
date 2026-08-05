@@ -227,33 +227,29 @@ def _run_runtime_payload(
     runtime_environment["CUDA_HOME"] = str(effective_cuda_home)
     runtime_environment["CUDACXX"] = str(effective_cuda_compiler)
     runtime_stage_root = fixture.environment_root.parent
-    runtime_environment.setdefault(
-        "UV_CACHE_DIR", str(runtime_stage_root / "build-cache")
-    )
-    runtime_environment.setdefault(
-        "NVTE_CMAKE_BUILD_DIR", str(runtime_stage_root / "te-cmake")
-    )
-    runtime_environment.setdefault("RUNTIME_STAGE_ROOT", str(runtime_stage_root))
-    runtime_environment.setdefault("ARTIFACT_DIR", str(runtime_stage_root.parent))
-    runtime_environment.setdefault(
-        "RUNTIME_STAGE_MARKER",
-        str(runtime_stage_root.parent / "stage-markers" / "fixture.env"),
-    )
-    runtime_environment.setdefault("RUNTIME_STAGE_MARKER_SHA256", "f" * 64)
-    runtime_environment.setdefault("SLURM_JOB_ID", "733")
-    runtime_environment.setdefault("RUNTIME_STAGE_JOB_ID", "733")
-    runtime_environment.setdefault("RUNTIME_STAGE_CPUS_PER_TASK", "32")
-    runtime_environment.setdefault("CMAKE_BUILD_PARALLEL_LEVEL", "32")
-    runtime_environment.setdefault("NVTE_CUDA_ARCHS", "100a")
-    runtime_environment.setdefault("TORCH_CUDA_ARCH_LIST", "10.0a")
-    runtime_environment.setdefault("RUNTIME_FEATURE_SET", "te_eval_capability_8")
-    runtime_environment.setdefault("RUNTIME_STAGE_CAPABILITY", RUNTIME_STAGE_CAPABILITY)
-    runtime_environment.setdefault(
-        "RUNTIME_TEST_REQUIREMENTS", RUNTIME_TEST_REQUIREMENTS
-    )
-    runtime_environment.setdefault(
-        "RUNTIME_EXCLUDED_PACKAGES",
-        "causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm",
+    runtime_environment.update(
+        {
+            "UV_CACHE_DIR": str(runtime_stage_root / "build-cache"),
+            "NVTE_CMAKE_BUILD_DIR": str(runtime_stage_root / "te-cmake"),
+            "RUNTIME_STAGE_ROOT": str(runtime_stage_root),
+            "ARTIFACT_DIR": str(runtime_stage_root.parent),
+            "RUNTIME_STAGE_MARKER": str(
+                runtime_stage_root.parent / "stage-markers" / "fixture.env"
+            ),
+            "RUNTIME_STAGE_MARKER_SHA256": "f" * 64,
+            "SLURM_JOB_ID": "733",
+            "RUNTIME_STAGE_JOB_ID": "733",
+            "RUNTIME_STAGE_CPUS_PER_TASK": "32",
+            "CMAKE_BUILD_PARALLEL_LEVEL": "32",
+            "NVTE_CUDA_ARCHS": "100a",
+            "TORCH_CUDA_ARCH_LIST": "10.0a",
+            "RUNTIME_FEATURE_SET": "te_eval_capability_8",
+            "RUNTIME_STAGE_CAPABILITY": RUNTIME_STAGE_CAPABILITY,
+            "RUNTIME_TEST_REQUIREMENTS": RUNTIME_TEST_REQUIREMENTS,
+            "RUNTIME_EXCLUDED_PACKAGES": (
+                "causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm"
+            ),
+        }
     )
     runtime_environment["PATH"] = (
         f"{effective_cuda_home / 'bin'}:{runtime_environment.get('PATH', '')}"
@@ -1426,6 +1422,8 @@ def test_runtime_payload_rejects_preseeded_uv_without_executing_it(
             "PINNED_UV_VERSION": UV_VERSION,
             "UV_EXECUTABLE": str(uv_bin_dir / "uv"),
             "UV_MARKER": str(uv_marker),
+            "UV_CACHE_DIR": "/ambient/runtime/build-cache",
+            "NVTE_CMAKE_BUILD_DIR": "/ambient/runtime/te-cmake",
         }
     )
     result = _run_runtime_payload(fixture, environment=environment)
