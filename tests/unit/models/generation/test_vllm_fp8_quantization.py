@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import gc
 import types
-import weakref
 
 import pytest
 import torch
@@ -142,7 +140,7 @@ def test_quantize_mxfp8_weight_restores_grouped_expert_shape(fp8_module, monkeyp
     ],
 )
 def test_batched_moe_shuffle_matches_per_expert(
-    fp8_module, is_gated, intermediate_size, hidden_size
+    fp8_module, monkeypatch, is_gated, intermediate_size, hidden_size
 ):
     pytest.importorskip("flashinfer")
     fp8 = fp8_module
@@ -162,6 +160,14 @@ def test_batched_moe_shuffle_matches_per_expert(
     w13_scale = rand_bytes(num_experts, w13_rows, hidden_size // 32)
     w2_scale = rand_bytes(num_experts, hidden_size, intermediate_size // 32)
 
+    original_index_select = torch.index_select
+    index_select_out_tensors = []
+
+    def track_index_select(*args, **kwargs):
+        index_select_out_tensors.append(kwargs.get("out"))
+        return original_index_select(*args, **kwargs)
+
+    monkeypatch.setattr(torch, "index_select", track_index_select)
     batched = fp8._shuffle_mxfp8_moe_batched(
         types.SimpleNamespace(),
         w13_weight,
@@ -171,6 +177,11 @@ def test_batched_moe_shuffle_matches_per_expert(
         is_gated,
         128,
     )
+    monkeypatch.setattr(torch, "index_select", original_index_select)
+
+    assert len(index_select_out_tensors) == 4
+    assert all(tensor is None for tensor in index_select_out_tensors)
+
     reference = fp8._shuffle_mxfp8_moe_per_expert(
         w13_weight,
         w2_weight,
@@ -184,16 +195,6 @@ def test_batched_moe_shuffle_matches_per_expert(
         assert actual.shape == expected.shape
         assert actual.dtype == expected.dtype
         assert torch.equal(actual.view(torch.uint8), expected.view(torch.uint8))
-
-    value_storage_owners = []
-    for tensor in batched[:2]:
-        while tensor._base is not None:
-            tensor = tensor._base
-        value_storage_owners.append(tensor)
-    value_storage_refs = [weakref.ref(tensor) for tensor in value_storage_owners]
-    del batched, value_storage_owners, tensor
-    gc.collect()
-    assert all(ref() is None for ref in value_storage_refs)
 
 
 @pytest.mark.parametrize("use_batched", [True, False])
