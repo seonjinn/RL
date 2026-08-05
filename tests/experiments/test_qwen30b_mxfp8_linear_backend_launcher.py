@@ -7,10 +7,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = (
-    REPO_ROOT
-    / "experiments"
-    / "qwen30b_mxfp8_linear_backends"
-    / "submit_ptyche.sh"
+    REPO_ROOT / "experiments" / "qwen30b_mxfp8_linear_backends" / "submit_ptyche.sh"
 )
 PREPARE_SCRIPT = LAUNCHER.with_name("prepare_custom_vllm_ptyche.sh")
 BUILD_CUSTOM_VLLM_SCRIPT = REPO_ROOT / "tools" / "build-custom-vllm.sh"
@@ -51,11 +48,15 @@ def test_dry_run_changes_only_backend(tmp_path: Path) -> None:
             "flashinfer_cutedsl",
             "flashinfer_cutlass",
             "flashinfer_trtllm",
+            "flashinfer_trtllm_adaptive",
         )
     }
 
     for backend, output in outputs.items():
-        assert f"linear_backend={backend}" in output
+        effective_backend = (
+            "flashinfer_trtllm" if backend == "flashinfer_trtllm_adaptive" else backend
+        )
+        assert f"linear_backend={effective_backend}" in output
         assert "policy.train_global_batch_size=2048" in output
         assert "policy.generation.vllm_cfg.enforce_eager=false" in output
         assert "quantization_ignored_layer_kws=[lm_head,mlp.gate]" in output
@@ -74,6 +75,21 @@ def test_dry_run_changes_only_backend(tmp_path: Path) -> None:
         assert f"uv venv {tmp_path}" in output
         assert "uv pip install --python" in output
         assert "setuptools_rust" in output
+
+    adaptive_output = outputs["flashinfer_trtllm_adaptive"]
+    assert "VLLM_MXFP8_DENSE_TRTLLM_ALLOW_CUTEDSL_FALLBACK=1" in adaptive_output
+    assert "VLLM_MXFP8_DENSE_TRTLLM_LAYOUT=adaptive" in adaptive_output
+    assert "VLLM_MXFP8_DENSE_TRTLLM_SWITCH_M=256" in adaptive_output
+    assert "VLLM_MXFP8_DENSE_TRTLLM_EXACT_TACTIC_FILE=" in adaptive_output
+    assert "VLLM_MXFP8_DENSE_TRTLLM_EXACT_TACTIC_SHA256=" in adaptive_output
+    assert "VLLM_MXFP8_DENSE_TRTLLM_LAYER_ALLOWLIST_B64=" in adaptive_output
+
+    for backend in (
+        "flashinfer_cutedsl",
+        "flashinfer_cutlass",
+        "flashinfer_trtllm",
+    ):
+        assert "VLLM_MXFP8_DENSE_TRTLLM_EXACT_TACTIC_FILE=" not in outputs[backend]
 
 
 def test_rejects_unknown_backend(tmp_path: Path) -> None:
@@ -112,7 +128,7 @@ def test_custom_vllm_build_is_recoverable() -> None:
     assert "Replacing custom vLLM commit" in prepare_text
     assert "3rdparty/vllm/.venv/bin/python -c 'import vllm'" in prepare_text
     assert 'SBATCH_ARGS+=(--qos="${QOS}")' in prepare_text
-    assert 'TORCH_REQUIREMENT=$(sed -nE' in build_text
-    assert 'VLLM_TORCH_BACKEND:-cu130' in build_text
+    assert "TORCH_REQUIREMENT=$(sed -nE" in build_text
+    assert "VLLM_TORCH_BACKEND:-cu130" in build_text
     assert "torch==2.10.0" not in build_text
     assert 'vllm = ["setuptools", "setuptools-rust"]' in pyproject_text

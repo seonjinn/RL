@@ -8,7 +8,7 @@ REPO_DIR=${REPO_DIR_OVERRIDE:-$(realpath "${SCRIPT_DIR}/../..")}
 BACKEND=${BACKEND:-flashinfer_cutedsl}
 ACTION=${ACTION:-dry-run}
 case "${BACKEND}" in
-    flashinfer_cutedsl|flashinfer_cutlass|flashinfer_trtllm) ;;
+    flashinfer_cutedsl|flashinfer_cutlass|flashinfer_trtllm|flashinfer_trtllm_adaptive) ;;
     *)
         echo "Unsupported BACKEND: ${BACKEND}" >&2
         exit 2
@@ -36,6 +36,50 @@ SEGMENT_SIZE=${SEGMENT_SIZE:-4}
 MAX_STEPS=${MAX_STEPS:-8}
 TRAIN_GLOBAL_BATCH_SIZE=${TRAIN_GLOBAL_BATCH_SIZE:-2048}
 RUN_ID=${RUN_ID:-$(date +%Y%m%d-%H%M%S)}
+
+EFFECTIVE_BACKEND=${BACKEND}
+ADAPTIVE_ENV_SETUP=$(cat <<'EOF'
+unset VLLM_MXFP8_DENSE_TRTLLM_ALLOW_CUTEDSL_FALLBACK
+unset VLLM_MXFP8_DENSE_TRTLLM_LAYOUT
+unset VLLM_MXFP8_DENSE_TRTLLM_SWITCH_M
+unset VLLM_MXFP8_DENSE_TRTLLM_EXACT_TACTIC_FILE
+unset VLLM_MXFP8_DENSE_TRTLLM_EXACT_TACTIC_SHA256
+unset VLLM_MXFP8_DENSE_TRTLLM_LAYER_ALLOWLIST
+unset VLLM_MXFP8_DENSE_TRTLLM_LAYER_ALLOWLIST_B64
+EOF
+)
+
+if [[ "${BACKEND}" == "flashinfer_trtllm_adaptive" ]]; then
+    EFFECTIVE_BACKEND=flashinfer_trtllm
+    TACTIC_ARTIFACT_DIR=${TACTIC_ARTIFACT_DIR:-${SCRIPT_DIR}/artifacts/qwen3_30ba3b_cg_output_shmoo}
+    TACTIC_FILE=${TACTIC_FILE:-${TACTIC_ARTIFACT_DIR}/exact_tactics.json}
+    TACTIC_SHA256=${TACTIC_SHA256:-88ea9238c8ce06d3b174b9cae928e4dbfc0d0a5ed4e9d2086c9d0f79ef4d3211}
+    LAYER_ALLOWLIST_FILE=${LAYER_ALLOWLIST_FILE:-${TACTIC_ARTIFACT_DIR}/layer_allowlist.txt}
+    [[ -f "${TACTIC_FILE}" ]] || { echo "Missing tactic table: ${TACTIC_FILE}" >&2; exit 1; }
+    [[ -f "${LAYER_ALLOWLIST_FILE}" ]] || {
+        echo "Missing layer allowlist: ${LAYER_ALLOWLIST_FILE}" >&2
+        exit 1
+    }
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual_tactic_sha=$(sha256sum "${TACTIC_FILE}" | awk '{print $1}')
+    else
+        actual_tactic_sha=$(shasum -a 256 "${TACTIC_FILE}" | awk '{print $1}')
+    fi
+    [[ "${actual_tactic_sha}" == "${TACTIC_SHA256}" ]] || {
+        echo "Tactic table SHA256 mismatch: ${actual_tactic_sha}" >&2
+        exit 1
+    }
+    LAYER_ALLOWLIST_B64=$(base64 < "${LAYER_ALLOWLIST_FILE}" | tr -d '\n')
+    ADAPTIVE_ENV_SETUP=$(cat <<EOF
+export VLLM_MXFP8_DENSE_TRTLLM_ALLOW_CUTEDSL_FALLBACK=1
+export VLLM_MXFP8_DENSE_TRTLLM_LAYOUT=adaptive
+export VLLM_MXFP8_DENSE_TRTLLM_SWITCH_M=256
+export VLLM_MXFP8_DENSE_TRTLLM_EXACT_TACTIC_FILE=${TACTIC_FILE}
+export VLLM_MXFP8_DENSE_TRTLLM_EXACT_TACTIC_SHA256=${TACTIC_SHA256}
+export VLLM_MXFP8_DENSE_TRTLLM_LAYER_ALLOWLIST_B64=${LAYER_ALLOWLIST_B64}
+EOF
+)
+fi
 
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}
 CONTAINER=${CONTAINER:-${WORK_ROOT}/containers/nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh}
@@ -82,10 +126,7 @@ export UV_PROJECT_ENVIRONMENT=${DRIVER_VENV}
 export UV_LOCK_TIMEOUT=7200
 export WANDB_MODE=${WANDB_MODE}
 export VLLM_PRECOMPILED_WHEEL_LOCATION=https://github.com/vllm-project/vllm/releases/download/v0.25.1/vllm-0.25.1-cp38-abi3-manylinux_2_28_aarch64.whl
-unset VLLM_MXFP8_DENSE_TRTLLM_ALLOW_CUTEDSL_FALLBACK
-unset VLLM_MXFP8_DENSE_TRTLLM_LAYER_ALLOWLIST
-unset VLLM_MXFP8_DENSE_TRTLLM_LAYER_ALLOWLIST_B64
-unset VLLM_MXFP8_DENSE_TRTLLM_TACTIC_HINTS
+${ADAPTIVE_ENV_SETUP}
 printf 'NEMO_RL_COMMIT=%s\n' "\$(git rev-parse HEAD)"
 printf 'VLLM_COMMIT=%s\n' "\$(git -C ${CUSTOM_VLLM_ROOT} rev-parse HEAD)"
 if [[ ! -x ${DRIVER_VENV}/bin/python ]]; then
@@ -102,7 +143,7 @@ uv run --frozen --extra vllm examples/run_grpo.py \
   policy.generation.vllm_cfg.enforce_eager=false \
   "policy.generation.vllm_cfg.quantization_ignored_layer_kws=[lm_head,mlp.gate]" \
   ++policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm \
-  ++policy.generation.vllm_kwargs.linear_backend=${BACKEND} \
+  ++policy.generation.vllm_kwargs.linear_backend=${EFFECTIVE_BACKEND} \
   grpo.max_num_steps=${MAX_STEPS} \
   grpo.val_at_start=false \
   checkpointing.enabled=false \

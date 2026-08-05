@@ -15,6 +15,7 @@ BACKENDS = (
     "flashinfer_cutedsl",
     "flashinfer_cutlass",
     "flashinfer_trtllm",
+    "flashinfer_trtllm_adaptive",
 )
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 TOTAL_STEP_PATTERN = re.compile(r"Total step time:\s*([0-9.]+)s")
