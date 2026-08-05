@@ -13,3 +13,5 @@
 - Verified the launcher wrote a 41-byte hostname from a one-line `.netrc`
   entry instead of the 86-byte password field.
 - Reproduced the parser failure with a synthetic one-line entry before fixing it.
+- API verification showed the exported 40-character key is invalid while the
+  86-character `.netrc` token is valid; the launcher now prefers `.netrc`.
