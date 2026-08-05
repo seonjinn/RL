@@ -8,7 +8,14 @@
 
 set -euo pipefail
 
-python3 - <<'PY'
+: "${CONTAINER:?Set CONTAINER to the immutable .sqsh path}"
+
+srun \
+  --nodes=1 \
+  --ntasks=1 \
+  --container-image="${CONTAINER}" \
+  --container-mounts=/lustre:/lustre \
+  python3 - <<'PY'
 import importlib.util
 import platform
 
