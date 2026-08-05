@@ -50,7 +50,7 @@ fi
 source 3rdparty/vllm/nemo-rl.env
 uv lock
 export NRL_FORCE_REBUILD_VENVS=true
-uv run --frozen python - <<'PY'
+3rdparty/vllm/.venv/bin/python - <<'PY'
 import flashinfer
 import vllm
 from vllm.model_executor.kernels.linear import (
