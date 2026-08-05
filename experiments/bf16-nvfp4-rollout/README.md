@@ -7,6 +7,10 @@ legacy colocated IPC refit and non-colocated NCCL-Reshard refit paths.
 The checked-in artifacts are static launch and validation definitions. No GPU
 jobs have been submitted and no runtime result is claimed here.
 
+For GCP-NRT, use `submit_gcp_nrt.sh`. It creates a unique committed code
+snapshot, uses `--gpus-per-node=8`, and supports scheduler preflight with
+`ACTION=test-only` before `ACTION=submit`.
+
 ## Smoke matrix
 
 | Mode | `REFIT_TRANSPORT` | Placement | W&B name suffix |

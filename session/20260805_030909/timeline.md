@@ -14,3 +14,9 @@
 - Local pytest stopped before collection because the Gym workspace submodule is
   not initialized in the local worktree. Deferred the focused pytest to the
   recursive-submodule GCP clone and target container.
+
+## 2026-08-05 03:19 PDT
+
+- Cloned commit `441dc40df` recursively to GCP-NRT.
+- Added and syntax-checked `submit_gcp_nrt.sh` with unique code snapshots,
+  commit-versioned caches, `--gpus-per-node=8`, and `sbatch --test-only`.

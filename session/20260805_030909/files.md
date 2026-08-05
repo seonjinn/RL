@@ -9,7 +9,9 @@
 
 ## Changed
 
-- None.
+- `experiments/bf16-nvfp4-rollout/submit_gcp_nrt.sh` - reproducible GCP-NRT
+  preflight and submission wrapper.
+- `experiments/bf16-nvfp4-rollout/README.md` - documents the GCP wrapper.
 
 ## Generated
 
