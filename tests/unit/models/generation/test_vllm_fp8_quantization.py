@@ -227,6 +227,34 @@ def test_load_weights_uses_explicit_config_when_module_global_is_missing(
     ]
 
 
+def test_load_weights_derives_mxfp8_from_model_runner_when_global_is_missing(
+    mxfp8_linear_module, monkeypatch
+):
+    fp8, _, _, Tensor = mxfp8_linear_module
+    loaded_weights = []
+    kernel = types.SimpleNamespace(preserves_checkpoint_weight_scale_for_refit=True)
+    layer = types.SimpleNamespace(quant_method=types.SimpleNamespace(kernel=kernel))
+    model = types.SimpleNamespace(
+        load_weights=lambda weights: loaded_weights.extend(weights)
+    )
+    vllm_config = object()
+
+    monkeypatch.setattr(fp8, "_is_fp8_weight", lambda _name, _model: True)
+    monkeypatch.setattr(fp8, "_get_module_from_param_name", lambda _model, _name: layer)
+    monkeypatch.setattr(fp8, "is_mxfp8_model", lambda config: config is vllm_config)
+    fp8.global_fp8_config = None
+
+    fp8.load_weights(
+        [("layers.0.self_attn.o_proj.weight", Tensor((64, 32), 1.0))],
+        types.SimpleNamespace(model=model, vllm_config=vllm_config),
+    )
+
+    assert [name for name, _ in loaded_weights] == [
+        "layers.0.self_attn.o_proj.weight",
+        "layers.0.self_attn.o_proj.weight_scale",
+    ]
+
+
 def test_load_weights_preserves_legacy_mxfp8_checkpoint_scale_name(
     mxfp8_linear_module, monkeypatch
 ):

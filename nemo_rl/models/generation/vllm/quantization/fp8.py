@@ -337,6 +337,19 @@ def is_fp8_model(vllm_config):
     return False
 
 
+def is_mxfp8_model(vllm_config):
+    try:
+        from vllm.model_executor.layers.quantization.modelopt import (
+            ModelOptMxFp8Config,
+        )
+    except ImportError:
+        return False
+
+    return hasattr(vllm_config, "quant_config") and isinstance(
+        vllm_config.quant_config, ModelOptMxFp8Config
+    )
+
+
 def _get_params_in_layers(param_names, layers):
     layer_templates = []
     for i in layers:
@@ -447,8 +460,11 @@ def _is_fp8_weight(name, model):
 def load_weights(weights, model_runner, fp8_config=None):
     global global_fp8_config
     fp8_config = fp8_config or global_fp8_config
-    if fp8_config is None:
-        raise RuntimeError("FP8 refit config was not initialized on this vLLM worker")
+    is_mx = (
+        fp8_config.is_mx
+        if fp8_config is not None
+        else is_mxfp8_model(model_runner.vllm_config)
+    )
 
     weights_quantized = []
     model = model_runner.model
@@ -458,7 +474,7 @@ def load_weights(weights, model_runner, fp8_config=None):
             weights_quantized.append((k, v))
             continue
         # Cast the weight into fp8 and its scale factor
-        if fp8_config.is_mx:
+        if is_mx:
             from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
                 mxfp8_e4m3_quantize,
             )
@@ -470,7 +486,7 @@ def load_weights(weights, model_runner, fp8_config=None):
                 weight_block_size=FP8_BLOCK_QUANT_KWARGS["weight_block_size"],
             )
         param_scale = torch.squeeze(param_scale, dim=-1)
-        if fp8_config.is_mx:
+        if is_mx:
             module = _get_module_from_param_name(model, k)
             quant_method = getattr(module, "quant_method", None)
             kernel = getattr(quant_method, "kernel", None)
