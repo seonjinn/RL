@@ -3561,7 +3561,7 @@ def test_real_quant_nccl_receiver_uses_owned_grouped_bf16_scratch(
             gate_ctx.buf.fill_(refit_value)
             gate_spec.post(gate_ctx)
         else:
-            extension._require_complete_bf16_refit_groups()
+            assert f"{prefix}.w13" not in extension._nrl_collective_bf16_staging
 
         down_ctx = down_spec.pre(down_spec.base)
         down_ctx.buf.fill_(refit_value + 2)
