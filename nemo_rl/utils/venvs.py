@@ -78,7 +78,8 @@ def create_local_venv(
     logger.info(f"Creating new venv at {venv_path}")
 
     # Create the virtual environment
-    uv_venv_cmd = ["uv", "venv", "--allow-existing", venv_path]
+    uv_bin = os.environ.get("UV_BIN", "uv")
+    uv_venv_cmd = [uv_bin, "venv", "--allow-existing", venv_path]
     subprocess.run(uv_venv_cmd, check=True)
 
     # Execute the command with the virtual environment
@@ -91,11 +92,13 @@ def create_local_venv(
 
     # Split the py_executable into command and arguments
     exec_cmd = shlex.split(py_executable)
+    if exec_cmd[0] == "uv":
+        exec_cmd[0] = uv_bin
     # Command doesn't matter, since `uv` syncs the environment no matter the command.
     exec_cmd.extend(["echo", f"Finished creating venv {venv_path}"])
 
     # Always run uv sync first to ensure the build requirements are set (for --no-build-isolation packages)
-    subprocess.run(["uv", "sync", "--directory", git_root], env=env, check=True)
+    subprocess.run([uv_bin, "sync", "--directory", git_root], env=env, check=True)
     subprocess.run(exec_cmd, env=env, check=True)
 
     # Return the path to the python executable in the virtual environment

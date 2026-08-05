@@ -14,10 +14,53 @@
 import os
 import subprocess
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import call, patch
 
-from nemo_rl.utils.venvs import create_local_venv
+from nemo_rl.utils.venvs import create_local_venv, git_root
 from tests.unit.conftest import TEST_ASSETS_DIR
+
+
+def test_create_local_venv_uses_configured_uv_binary(tmp_path) -> None:
+    create_local_venv.cache_clear()
+    uv_bin = "/opt/tools/uv"
+    with (
+        patch.dict(
+            os.environ,
+            {"NEMO_RL_VENV_DIR": str(tmp_path), "UV_BIN": uv_bin},
+        ),
+        patch("nemo_rl.utils.venvs.subprocess.run") as run,
+    ):
+        venv_python = create_local_venv(
+            py_executable="uv run --locked --extra vllm",
+            venv_name="worker",
+        )
+        expected_env = os.environ.copy()
+
+    venv_path = tmp_path / "worker"
+    expected_env["UV_PROJECT_ENVIRONMENT"] = str(venv_path)
+    assert run.call_args_list == [
+        call([uv_bin, "venv", "--allow-existing", str(venv_path)], check=True),
+        call(
+            [uv_bin, "sync", "--directory", git_root],
+            env=expected_env,
+            check=True,
+        ),
+        call(
+            [
+                uv_bin,
+                "run",
+                "--locked",
+                "--extra",
+                "vllm",
+                "echo",
+                f"Finished creating venv {venv_path}",
+            ],
+            env=expected_env,
+            check=True,
+        ),
+    ]
+    assert venv_python == f"{venv_path}/bin/python"
+    create_local_venv.cache_clear()
 
 
 def test_create_local_venv():
