@@ -93,5 +93,5 @@ def test_custom_vllm_build_is_recoverable() -> None:
     assert "3rdparty/vllm/.venv/bin/python -c 'import vllm'" in prepare_text
     assert "3rdparty/vllm/.venv/bin/python - <<'PY'" in prepare_text
     assert "uv run --frozen python - <<'PY'" not in prepare_text
-    assert "uv lock" in prepare_text
+    assert "\nuv lock\n" not in prepare_text
     assert "setuptools_rust" in build_text

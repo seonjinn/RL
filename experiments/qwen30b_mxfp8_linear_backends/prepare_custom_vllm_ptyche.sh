@@ -48,7 +48,6 @@ else
   bash tools/build-custom-vllm.sh ${VLLM_GIT_URL} ${VLLM_GIT_REF} ${VLLM_WHEEL}
 fi
 source 3rdparty/vllm/nemo-rl.env
-uv lock
 export NRL_FORCE_REBUILD_VENVS=true
 3rdparty/vllm/.venv/bin/python - <<'PY'
 import flashinfer
