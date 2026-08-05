@@ -6,7 +6,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel)
 
 ACTION=${ACTION:-test-only}
-QUANT_MODE=${QUANT_MODE:?QUANT_MODE is required: w4a16 or w4a4}
+QUANT_MODE=${QUANT_MODE:?QUANT_MODE is required: bf16, w4a16, or w4a4}
 TRANSPORT=${TRANSPORT:?TRANSPORT is required: legacy or nccl}
 ACCOUNT=${SLURM_ACCOUNT:-coreai_chef_posttrain}
 PARTITION=${PARTITION:-batch}
@@ -32,6 +32,9 @@ case "${ACTION}" in
 esac
 
 case "${QUANT_MODE}" in
+  bf16)
+    TEST_SCRIPT=tests/test_suites/llm/performance/grpo-qwen3-30ba3b-4n4g-bf16-control.sh
+    ;;
   w4a16)
     TEST_SCRIPT=tests/test_suites/llm/performance/grpo-qwen3-30ba3b-4n4g-nvfp4-w4a16-rollout.sh
     ;;
@@ -40,8 +43,13 @@ case "${QUANT_MODE}" in
     : "${NVFP4_CALIBRATION_ARTIFACT:?NVFP4_CALIBRATION_ARTIFACT is required for w4a4}"
     test -f "${NVFP4_CALIBRATION_ARTIFACT}"
     ;;
-  *) echo "QUANT_MODE must be w4a16 or w4a4" >&2; exit 2 ;;
+  *) echo "QUANT_MODE must be bf16, w4a16, or w4a4" >&2; exit 2 ;;
 esac
+
+if [[ "${QUANT_MODE}" == bf16 && "${TRANSPORT}" != legacy ]]; then
+  echo "The matched BF16 control currently supports TRANSPORT=legacy only" >&2
+  exit 2
+fi
 
 case "${TRANSPORT}" in
   legacy)
@@ -135,6 +143,7 @@ export SCHEDULER_SEGMENT_SIZE=${SEGMENT_SIZE}
 ${CALIBRATION_EXPORT}
 printf 'NEMO_RL_SOURCE_COMMIT=%s\n' '${REPO_SHA}'
 uv run --frozen pytest -q \
+  tests/test_bf16_nvfp4_experiment_contract.py \
   tests/test_nvfp4_rollout_recipes.py \
   tests/unit/modelopt/test_calibration_artifact.py::test_normalize_quant_cfg_identity_resolves_project_relative_path \
   tests/unit/models/generation/test_nvfp4_refit.py::test_serializer_uses_modelopt_without_megatron_bridge \
@@ -163,7 +172,7 @@ SBATCH_ARGS=(
   --time="${WALLTIME}"
   --job-name="sna-nvfp4-${QUANT_MODE}-${TRANSPORT}"
   --output="${EXPERIMENT_ROOT}/slurm-%j.out"
-  --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"model_loading","description":"environment and Qwen3-30B NVFP4 initialization"}}'
+  --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"model_loading","description":"environment and Qwen3-30B precision-control initialization"}}'
 )
 
 printf 'mode=%s\ntransport=%s\nsha=%s\nsnapshot=%s\nresult=%s\n' \
