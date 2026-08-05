@@ -43,6 +43,16 @@ else
   MOUNTS=${MOUNTS:-/lustre:/lustre}
 fi
 
+moe_preprocess_enabled=false
+if [[ "${CUDA_GRAPH_IMPL}" != "none" && \
+      ",${CUDA_GRAPH_MODULES}," == *",moe_preprocess,"* ]]; then
+  if [[ ",${CUDA_GRAPH_MODULES}," != *",moe_router,"* ]]; then
+    echo "CUDA_GRAPH_MODULES moe_preprocess requires moe_router" >&2
+    exit 2
+  fi
+  moe_preprocess_enabled=true
+fi
+
 if [[ "${CUDA_GRAPH_IMPL}" == "none" ]]; then
   scope_name=baseline
   cuda_graph_overrides="++policy.megatron_cfg.cuda_graph_impl=none ++policy.megatron_cfg.attention_backend=fused"
@@ -72,7 +82,11 @@ case "${MOE_TOKEN_DISPATCHER_TYPE}" in
     }
     dispatcher_name=hybridep
     dispatcher_env="USE_MNNVL=1 NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN=${HYBRID_EP_RANKS_PER_NVLINK_DOMAIN}"
-    dispatcher_overrides="policy.megatron_cfg.moe_token_dispatcher_type=flex ++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep ++policy.megatron_cfg.moe_hybridep_pad_uneven_dispatch_inputs=true"
+    hybridep_pad_uneven_dispatch_inputs=true
+    if [[ "${moe_preprocess_enabled}" == "true" ]]; then
+      hybridep_pad_uneven_dispatch_inputs=false
+    fi
+    dispatcher_overrides="policy.megatron_cfg.moe_token_dispatcher_type=flex ++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep ++policy.megatron_cfg.moe_hybridep_pad_uneven_dispatch_inputs=${hybridep_pad_uneven_dispatch_inputs}"
     ;;
   *)
     echo "MOE_TOKEN_DISPATCHER_TYPE must be alltoall or flex" >&2

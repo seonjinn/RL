@@ -802,6 +802,10 @@ def _apply_moe_config(model_cfg: Any, config: PolicyConfig) -> None:
         model_cfg.moe_flex_dispatcher_backend = config["megatron_cfg"][
             "moe_flex_dispatcher_backend"
         ]
+    if "moe_hybridep_pad_uneven_dispatch_inputs" in config["megatron_cfg"]:
+        model_cfg.moe_hybridep_pad_uneven_dispatch_inputs = config["megatron_cfg"][
+            "moe_hybridep_pad_uneven_dispatch_inputs"
+        ]
     if "moe_hybridep_num_sms" in config["megatron_cfg"]:
         num_sms = config["megatron_cfg"]["moe_hybridep_num_sms"]
         if hasattr(TransformerConfig, "moe_flex_dispatcher_num_sms"):

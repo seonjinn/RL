@@ -708,6 +708,47 @@ class TestApplyMoeConfig:
             == NotRequired[float | None]
         )
 
+    def test_hybridep_padding_is_an_optional_typed_megatron_config_key(
+        self,
+    ) -> None:
+        """Omission must preserve the provider value loaded from the checkpoint."""
+        from typing import NotRequired
+
+        from nemo_rl.models.policy import MegatronConfig
+
+        assert (
+            MegatronConfig.__annotations__[
+                "moe_hybridep_pad_uneven_dispatch_inputs"
+            ]
+            == NotRequired[bool]
+        )
+
+    @pytest.mark.parametrize("value", [True, False])
+    def test_hybridep_padding_forwards_explicit_value(self, value: bool) -> None:
+        """The effective MCore config must use the explicitly requested value."""
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        model_cfg = SimpleNamespace(
+            moe_hybridep_pad_uneven_dispatch_inputs=not value
+        )
+        config = self._base_moe_cfg(
+            moe_hybridep_pad_uneven_dispatch_inputs=value
+        )
+
+        _apply_moe_config(model_cfg, config)
+
+        assert model_cfg.moe_hybridep_pad_uneven_dispatch_inputs is value
+
+    def test_omitted_hybridep_padding_preserves_provider_default(self) -> None:
+        """Checkpoint and Bridge defaults must survive when YAML omits the key."""
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        model_cfg = SimpleNamespace(moe_hybridep_pad_uneven_dispatch_inputs=True)
+
+        _apply_moe_config(model_cfg, self._base_moe_cfg())
+
+        assert model_cfg.moe_hybridep_pad_uneven_dispatch_inputs is True
+
     @pytest.mark.parametrize(
         "name,value",
         [
