@@ -20,7 +20,8 @@ if [[ "${result_root}" != /* || -e "${result_root}" || -L "${result_root}" ]]; t
 fi
 mkdir -m 0700 -- "${result_root}"
 
-exec env PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+pytest_status=0
+env PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
   "${runtime_python}" -m pytest -q -p no:cacheprovider \
   "--basetemp=${result_root}/tmp" \
   "--junitxml=${result_root}/task-2-root.xml" \
@@ -29,4 +30,8 @@ exec env PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
   tests/unit/experiments/test_container_harness_hardening.py \
   tests/unit/experiments/test_mcore_standalone_driver.py \
   tests/unit/experiments/test_matrix_submitters.py \
-  tests/unit/experiments/test_nemotron_thd_te_graph_launchers.py
+  tests/unit/experiments/test_nemotron_thd_te_graph_launchers.py || pytest_status=$?
+if ((pytest_status != 0)); then
+  exit "${pytest_status}"
+fi
+rm -rf -- "${result_root}/tmp"

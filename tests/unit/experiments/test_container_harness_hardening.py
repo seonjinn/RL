@@ -932,6 +932,36 @@ def test_runtime_stage_runs_exact_task2_root_suite_before_marker_publication(
     assert test_index < marker_index
 
 
+def test_task2_root_runner_removes_passing_pytest_basetemp(tmp_path: Path) -> None:
+    runner = EXPERIMENT_DIR / "scripts" / "run_task2_root_tests.sh"
+    fake_python = tmp_path / "python"
+    fake_python.write_text(
+        "#!/bin/bash\n"
+        "set -euo pipefail\n"
+        "for argument in \"$@\"; do\n"
+        "  case \"${argument}\" in\n"
+        "    --basetemp=*) basetemp=${argument#*=} ;;\n"
+        "  esac\n"
+        "done\n"
+        ': "${basetemp:?}"\n'
+        'mkdir -p -- "${basetemp}"\n'
+        'ln -s -- "${basetemp}/missing" "${basetemp}/broken-link"\n'
+    )
+    fake_python.chmod(0o755)
+    result_root = tmp_path / "results"
+
+    result = subprocess.run(
+        ["bash", str(runner), str(fake_python), str(result_root)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result_root.is_dir()
+    assert not (result_root / "tmp").exists()
+
+
 def test_runtime_wrapper_requires_explicit_stage_capability(tmp_path: Path) -> None:
     result = _run_script(
         "scripts/validate_oci_container_runtime.sub",
