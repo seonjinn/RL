@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Collection, Mapping
 from pathlib import Path
@@ -36,6 +37,7 @@ _REQUIRED_METADATA_KEYS = frozenset(
     }
 )
 _INPUT_AMAX_SUFFIX = ".input_quantizer._amax"
+_QUANT_CFG_SHA256_KEY = "quant_cfg_sha256"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -72,6 +74,9 @@ def save_nvfp4_calibration(
         "sequence_length": sequence_length,
         "seed": seed,
     }
+    quant_cfg_sha256 = _file_sha256(quant_cfg)
+    if quant_cfg_sha256 is not None:
+        metadata[_QUANT_CFG_SHA256_KEY] = quant_cfg_sha256
     _validate_metadata(metadata)
     tensors = _normalize_input_amax(input_amax)
     output_path = Path(path).expanduser()
@@ -171,7 +176,10 @@ def _decode_metadata(raw_metadata: dict[str, str] | None) -> dict[str, object]:
         )
 
     decoded: dict[str, object] = {}
-    for key in _REQUIRED_METADATA_KEYS:
+    metadata_keys = set(_REQUIRED_METADATA_KEYS)
+    if _QUANT_CFG_SHA256_KEY in metadata:
+        metadata_keys.add(_QUANT_CFG_SHA256_KEY)
+    for key in metadata_keys:
         try:
             decoded[key] = json.loads(metadata[key])
         except json.JSONDecodeError as error:
@@ -198,6 +206,16 @@ def _validate_metadata(metadata: Mapping[str, object]) -> None:
     seed = metadata.get("seed")
     if not isinstance(seed, int) or isinstance(seed, bool):
         raise ValueError("NVFP4 calibration metadata 'seed' must be an integer")
+    quant_cfg_sha256 = metadata.get(_QUANT_CFG_SHA256_KEY)
+    if quant_cfg_sha256 is not None and (
+        not isinstance(quant_cfg_sha256, str)
+        or len(quant_cfg_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in quant_cfg_sha256)
+    ):
+        raise ValueError(
+            "NVFP4 calibration metadata 'quant_cfg_sha256' must be a lowercase "
+            "SHA-256 digest"
+        )
 
 
 def _validate_identity(
@@ -214,9 +232,11 @@ def _validate_identity(
     }
     for key, expected_value in expected.items():
         actual_value = metadata[key]
-        matches = actual_value == expected_value
-        if key == "quant_cfg" and not matches:
-            matches = _quant_cfg_contents_match(actual_value, expected_value)
+        if key == "quant_cfg" and isinstance(metadata.get(_QUANT_CFG_SHA256_KEY), str):
+            quant_cfg_sha256 = metadata.get(_QUANT_CFG_SHA256_KEY)
+            matches = quant_cfg_sha256 == _file_sha256(expected_value)
+        else:
+            matches = actual_value == expected_value
         if not matches:
             raise ValueError(
                 f"NVFP4 calibration {key} {actual_value!r} does not match "
@@ -224,14 +244,17 @@ def _validate_identity(
             )
 
 
-def _quant_cfg_contents_match(actual: object, expected: object) -> bool:
-    if not isinstance(actual, str) or not isinstance(expected, str):
-        return False
-    actual_path = Path(actual).expanduser()
-    expected_path = Path(expected).expanduser()
-    if not actual_path.is_file() or not expected_path.is_file():
-        return False
-    return actual_path.read_bytes() == expected_path.read_bytes()
+def _file_sha256(path: object) -> str | None:
+    if not isinstance(path, str):
+        return None
+    digest = hashlib.sha256()
+    try:
+        with Path(path).expanduser().open("rb") as config_file:
+            for chunk in iter(lambda: config_file.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
 
 
 def _validate_artifact_names(raw_names: list[str]) -> list[str]:

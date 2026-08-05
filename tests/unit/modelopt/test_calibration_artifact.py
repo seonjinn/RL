@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import types
@@ -384,7 +385,14 @@ def test_round_trip_preserves_exact_hf_projection_names_and_metadata(
             "model.layers.0.mlp.gate_proj.weight",
             "model.layers.0.mlp.up_proj.weight",
         ]
-        assert artifact.metadata() == _json_metadata(metadata)
+        artifact_metadata = artifact.metadata()
+        assert {key: artifact_metadata[key] for key in metadata} == _json_metadata(
+            metadata
+        )
+        quant_cfg_path = Path(str(metadata["quant_cfg"]))
+        assert artifact_metadata["quant_cfg_sha256"] == json.dumps(
+            hashlib.sha256(quant_cfg_path.read_bytes()).hexdigest()
+        )
 
     calibration = _load(path, metadata)
     assert list(calibration.input_amax) == [
@@ -545,6 +553,53 @@ def test_load_rejects_different_quant_cfg_contents_at_different_paths(
 
     with pytest.raises(ValueError, match="quant_cfg.*does not match"):
         _load(path, expected_metadata)
+
+
+def test_load_rejects_quant_cfg_mutated_after_artifact_creation(
+    tmp_path: Path,
+    metadata: dict[str, str | int],
+) -> None:
+    artifact_quant_cfg = tmp_path / "artifact-snapshot/nvfp4.yaml"
+    expected_quant_cfg = tmp_path / "runtime-snapshot/nvfp4.yaml"
+    artifact_quant_cfg.parent.mkdir()
+    expected_quant_cfg.parent.mkdir()
+    artifact_quant_cfg.write_text("quant_cfg: w4a4\n")
+    expected_quant_cfg.write_text("quant_cfg: w4a16\n")
+
+    artifact_metadata = dict(metadata)
+    artifact_metadata["quant_cfg"] = str(artifact_quant_cfg.resolve())
+    expected_metadata = dict(metadata)
+    expected_metadata["quant_cfg"] = str(expected_quant_cfg.resolve())
+    path = tmp_path / "calibration.safetensors"
+    save_nvfp4_calibration(
+        path,
+        {"model.layers.0.mlp.up_proj.weight": torch.tensor(1.0)},
+        **artifact_metadata,
+    )
+    artifact_quant_cfg.write_text("quant_cfg: w4a16\n")
+
+    with pytest.raises(ValueError, match="quant_cfg.*does not match"):
+        _load(path, expected_metadata)
+
+
+def test_load_rejects_same_quant_cfg_path_mutated_after_artifact_creation(
+    tmp_path: Path,
+    metadata: dict[str, str | int],
+) -> None:
+    quant_cfg = tmp_path / "nvfp4.yaml"
+    quant_cfg.write_text("quant_cfg: w4a4\n")
+    artifact_metadata = dict(metadata)
+    artifact_metadata["quant_cfg"] = str(quant_cfg.resolve())
+    path = tmp_path / "calibration.safetensors"
+    save_nvfp4_calibration(
+        path,
+        {"model.layers.0.mlp.up_proj.weight": torch.tensor(1.0)},
+        **artifact_metadata,
+    )
+    quant_cfg.write_text("quant_cfg: w4a16\n")
+
+    with pytest.raises(ValueError, match="quant_cfg.*does not match"):
+        _load(path, artifact_metadata)
 
 
 @pytest.mark.parametrize(
