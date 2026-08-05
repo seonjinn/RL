@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -23,8 +24,14 @@ NEMORL_COMMIT = "b" * 40
 BRIDGE_COMMIT = "c" * 40
 MCORE_COMMIT = "d" * 40
 TE_COMMIT = "e" * 40
-PYTHON_VERSION = "3.13.13"
-UV_VERSION = "0.11.18"
+PYTHON_VERSION = (REPO_ROOT / ".python-version").read_text().strip()
+UV_VERSION_MATCH = re.search(
+    r"^ARG UV_VERSION=([0-9]+\.[0-9]+\.[0-9]+)$",
+    (REPO_ROOT / "docker" / "Dockerfile").read_text(),
+    re.MULTILINE,
+)
+assert UV_VERSION_MATCH is not None
+UV_VERSION = UV_VERSION_MATCH.group(1)
 RUNTIME_STAGE_CAPABILITY = "mcore-test-v1"
 RUNTIME_TEST_REQUIREMENTS = (
     "pytest==9.1.1,iniconfig==2.3.0,packaging==26.2,pluggy==1.6.0,pygments==2.20.0"
