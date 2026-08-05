@@ -17,23 +17,38 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from typing import Literal
 
 import torch
 
 NVFP4RefitMode = Literal["w4a16", "w4a4"]
 
 _BLOCK_SIZE = 16
+_NVFP4_AMAX_DENOMINATOR = 6.0 * 448.0
+_NVFP4_MAXBOUND = 6.0
+_FP8_E4M3_MIN = 2**-9
+_FP8_E4M3_MAX = 448.0
 _EXPERT_PROJECTION = re.compile(
     r"^(?P<prefix>.+\.experts\.\d+)\.(?P<projection>gate|up|down)_proj\.weight$"
 )
 
 
-class _QuantMeta(Protocol):
+@dataclass(frozen=True)
+class _QuantMeta:
     qformat: str
     block_size: int
     weight_amax: torch.Tensor
     input_amax: torch.Tensor | None
+
+
+@dataclass(frozen=True)
+class _Nvfp4InputQuantizerView:
+    input_amax: torch.Tensor
+    is_enabled: bool = True
+    maxbound: float = _NVFP4_MAXBOUND
+
+    def export_amax(self) -> torch.Tensor:
+        return self.input_amax
 
 
 _NVFP4Exporter = Callable[
@@ -49,21 +64,57 @@ class NVFP4Calibration:
 
 
 def compute_nvfp4_input_scale(input_amax: torch.Tensor | None) -> torch.Tensor:
-    """Delegate input-scale conversion to the pinned Megatron-Bridge helper."""
-    from megatron.bridge.models.conversion.modelopt_utils import (
-        compute_nvfp4_input_scale as canonical_compute_nvfp4_input_scale,
-    )
+    """Compute the canonical static NVFP4 activation scale with ModelOpt."""
+    if input_amax is None:
+        raise RuntimeError("Missing ModelOpt input amax for NVFP4 W4A4 export")
 
-    return canonical_compute_nvfp4_input_scale(input_amax)
+    input_amax = input_amax.detach().float()
+    if (
+        input_amax.numel() == 0
+        or not torch.isfinite(input_amax).all()
+        or not torch.all(input_amax > 0)
+    ):
+        raise RuntimeError(
+            f"Invalid ModelOpt input amax for NVFP4 W4A4 export: {input_amax}"
+        )
+
+    from modelopt.torch.quantization.qtensor.nvfp4_tensor import NVFP4QTensor
+
+    canonical_export = getattr(NVFP4QTensor, "get_activation_scaling_factor", None)
+    if callable(canonical_export):
+        input_scale = canonical_export(_Nvfp4InputQuantizerView(input_amax))
+    else:
+        input_scale = input_amax / _NVFP4_AMAX_DENOMINATOR
+    if (
+        input_scale is None
+        or input_scale.numel() == 0
+        or not torch.isfinite(input_scale).all()
+        or not torch.all(input_scale > 0)
+    ):
+        raise RuntimeError(
+            f"Invalid ModelOpt input scale for NVFP4 W4A4 export: {input_scale}"
+        )
+    return input_scale.detach().float()
 
 
 def get_modelopt_quant_exporter(quant_mode: str) -> tuple[str, object]:
-    """Delegate exporter lookup to the pinned Megatron-Bridge helper."""
-    from megatron.bridge.models.conversion.modelopt_utils import (
-        get_modelopt_quant_exporter as canonical_get_modelopt_quant_exporter,
-    )
+    """Return the ModelOpt NVFP4 format and dependency-light exporter."""
+    from modelopt.torch.export import quant_utils
 
-    return canonical_get_modelopt_quant_exporter(quant_mode)
+    normalized_mode = quant_mode.lower()
+    if normalized_mode == "nvfp4":
+        qformat = quant_utils.QUANTIZATION_NVFP4
+    elif normalized_mode == "w4a16_nvfp4":
+        qformat = getattr(quant_utils, "QUANTIZATION_W4A16_NVFP4", None)
+        if qformat is None:
+            raise RuntimeError(
+                "The installed nvidia-modelopt version does not support W4A16 "
+                "NVFP4 export; install a version that exposes "
+                "QUANTIZATION_W4A16_NVFP4."
+            )
+    else:
+        raise ValueError(f"Unsupported ModelOpt quant_mode: {quant_mode}")
+    return qformat, _quantize_nvfp4_weight
 
 
 def nvfp4_refit_group(name: str) -> tuple[str, tuple[str, ...]]:
@@ -139,16 +190,74 @@ def serialize_bf16_nvfp4_group(
     return serialized
 
 
-def _load_quant_meta() -> type[Any]:
-    from megatron.bridge.models.conversion.modelopt_utils import QuantMeta
-
-    return QuantMeta
+def _load_quant_meta() -> type[_QuantMeta]:
+    return _QuantMeta
 
 
 def _as_nvfp4_exporter(exporter: object) -> _NVFP4Exporter:
     if not callable(exporter):
-        raise TypeError("Megatron-Bridge returned a non-callable NVFP4 exporter")
+        raise TypeError("ModelOpt returned a non-callable NVFP4 exporter")
     return exporter
+
+
+def _compute_nvfp4_weight_scale(
+    weight: torch.Tensor,
+    meta: _QuantMeta,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    from modelopt.torch.quantization.qtensor.nvfp4_tensor import NVFP4QTensor
+
+    weight_scale_2 = (
+        meta.weight_amax.to(weight.device).float().abs() / _NVFP4_AMAX_DENOMINATOR
+    )
+    weight_scale = NVFP4QTensor.get_weights_scaling_factor(
+        weight,
+        meta.block_size,
+        weights_scaling_factor_2=weight_scale_2.reshape(()),
+        keep_high_precision=False,
+    )[0]
+    weight_scale_float = weight_scale.float()
+    if not torch.isfinite(weight_scale_float).all():
+        raise RuntimeError(
+            f"Invalid ModelOpt NVFP4 per-block weight scale: {weight_scale_float}"
+        )
+    weight_scale = (
+        weight_scale_float.abs()
+        .clamp(min=_FP8_E4M3_MIN, max=_FP8_E4M3_MAX)
+        .to(torch.float8_e4m3fn)
+    )
+    return weight_scale, weight_scale_2
+
+
+def _quantize_nvfp4_weight(
+    name: str,
+    weight: torch.Tensor,
+    meta: _QuantMeta,
+) -> Iterable[tuple[str, torch.Tensor]]:
+    from modelopt.torch.export.quant_utils import (
+        QUANTIZATION_NVFP4,
+        to_quantized_weight,
+    )
+
+    if not name.endswith(".weight"):
+        raise ValueError(f"Expected an NVFP4 HF weight name, got {name!r}")
+    base_name = name.removesuffix(".weight")
+    weight_scale, weight_scale_2 = _compute_nvfp4_weight_scale(weight, meta)
+    quantized = to_quantized_weight(
+        weight,
+        weight_scale,
+        meta.qformat,
+        weight_scale_2.reshape(()),
+        meta.block_size,
+    )
+
+    yield name, quantized.detach()
+    yield f"{base_name}.weight_scale", weight_scale.detach()
+    yield f"{base_name}.weight_scale_2", weight_scale_2.detach()
+    if meta.qformat == QUANTIZATION_NVFP4:
+        yield (
+            f"{base_name}.input_scale",
+            compute_nvfp4_input_scale(meta.input_amax).to(weight.device),
+        )
 
 
 def _validate_group_members(
