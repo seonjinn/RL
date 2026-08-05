@@ -13,6 +13,29 @@ ModelOpt NVFP4 rollout. It is not a QARL or QAT run.
 - Container: `nemo_rl_nightly_20260730_483099.sqsh`
 - Smoke length: two GRPO steps; checkpointing disabled
 
+## PR 3477 Stacked Validation
+
+The BF16-to-NVFP4 implementation was also stacked on PR 3477 in the isolated
+branch `sna/pr3477-bf16-nvfp4-stacked`. The validated code commit is
+`fa9dd78ddbf47e91dde5959eee9aad5b546dc46d`, based on PR 3477 commit
+`6f57c1b79504245fc8211028e504465045315f34`.
+
+| Mode | Job | Source | Outcome |
+| --- | ---: | --- | --- |
+| BF16 train + W4A16 rollout | 498118 | `743c18d8f` | Two NCCL-Reshard refits and two GRPO steps passed |
+| BF16 train + W4A4 rollout | 498209 | `fa9dd78dd` | Two NCCL-Reshard refits and two GRPO steps passed |
+
+Commits after `743c18d8f` only harden W4A4 calibration-config provenance. The
+final calibration test run passed 37 tests in job 498206; the broader stacked
+refit test group passed 276 tests with four dependency-based skips in job
+498194.
+
+Logs:
+
+- W4A16: `/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna/experiments/bf16-nvfp4-rollout/results/pr3477-stacked-final4-w4a16-743c18d8f`
+- W4A4: `/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna/experiments/bf16-nvfp4-rollout/results/pr3477-stacked-final6-w4a4-fa9dd78dd`
+- Final calibration tests: `/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna/experiments/bf16-nvfp4-rollout/results/pr3477-stacked-calibration-fa9dd78dd`
+
 ## W4A16
 
 Both paths completed two GRPO steps and passed the post-run checks for two
