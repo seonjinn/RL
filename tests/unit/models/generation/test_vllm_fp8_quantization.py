@@ -466,7 +466,13 @@ def test_process_mxfp8_moe_triton_preserves_canonical_layout(fp8_module, monkeyp
     monkeypatch.setattr(fp8, "_shuffle_mxfp8_moe_batched", unexpected_shuffle)
     monkeypatch.setattr(fp8, "_shuffle_mxfp8_moe_per_expert", unexpected_shuffle)
 
+    from vllm.model_executor import parameter as vllm_parameter
     from vllm.model_executor.layers.quantization import fp8 as vllm_fp8
+
+    monkeypatch.setattr(vllm_parameter, "get_tensor_model_parallel_rank", lambda: 0)
+    monkeypatch.setattr(
+        vllm_parameter, "get_tensor_model_parallel_world_size", lambda: 1
+    )
 
     kernel = object()
     kernel_calls = []
