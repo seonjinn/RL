@@ -28,17 +28,21 @@ set -euo pipefail
 cd ${REPO_DIR}
 export UV_PROJECT_ENVIRONMENT=
 git submodule update --init --recursive --depth 1
-if [[ -d 3rdparty/vllm/.git && ! -f 3rdparty/vllm/nemo-rl.env ]]; then
+existing_vllm_valid=false
+if [[ -d 3rdparty/vllm/.git ]]; then
   actual=\$(git -C 3rdparty/vllm rev-parse HEAD)
-  if [[ "\${actual}" == "${VLLM_GIT_REF}" ]] && \
+  [[ "\${actual}" == "${VLLM_GIT_REF}" ]] || {
+    echo "Existing custom vLLM commit is \${actual}" >&2
+    exit 1
+  }
+  if [[ -x 3rdparty/vllm/.venv/bin/python ]] && \
       3rdparty/vllm/.venv/bin/python -c 'import vllm'; then
-    printf 'export VLLM_GIT_REF=%s\nexport VLLM_PRECOMPILED_WHEEL_LOCATION=%s\n' \
-      '${VLLM_GIT_REF}' '${VLLM_WHEEL}' > 3rdparty/vllm/nemo-rl.env
+    existing_vllm_valid=true
   fi
 fi
-if [[ -d 3rdparty/vllm/.git && -f 3rdparty/vllm/nemo-rl.env ]]; then
-  actual=\$(git -C 3rdparty/vllm rev-parse HEAD)
-  [[ "\${actual}" == "${VLLM_GIT_REF}" ]] || { echo "Existing custom vLLM commit is \${actual}" >&2; exit 1; }
+if [[ "\${existing_vllm_valid}" == true ]]; then
+  printf 'export VLLM_GIT_REF=%s\nexport VLLM_PRECOMPILED_WHEEL_LOCATION=%s\n' \
+    '${VLLM_GIT_REF}' '${VLLM_WHEEL}' > 3rdparty/vllm/nemo-rl.env
 else
   if [[ -e 3rdparty/vllm ]]; then
     incomplete=3rdparty/vllm.incomplete.\${SLURM_JOB_ID:-\$\$}

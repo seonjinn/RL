@@ -54,6 +54,16 @@ GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
 cd "$BUILD_DIR"
 git checkout "$GIT_REF"
 
+TORCH_REQUIREMENT=$(sed -nE \
+  's/^[[:space:]]*(torch[[:space:]]*==[[:space:]]*[^[:space:]#;]+).*/\1/p' \
+  requirements/cuda.txt | head -n 1 | tr -d ' ')
+if [[ -z "$TORCH_REQUIREMENT" ]]; then
+  echo "[ERROR] Unable to determine the PyTorch pin from requirements/cuda.txt."
+  exit 1
+fi
+VLLM_TORCH_BACKEND=${VLLM_TORCH_BACKEND:-cu130}
+echo "Using vLLM PyTorch requirement: $TORCH_REQUIREMENT ($VLLM_TORCH_BACKEND)"
+
 # Create a new Python environment using uv
 echo "Creating Python environment..."
 # Pop the project environment set by user to not interfere with the one we create for the vllm repo
@@ -75,7 +85,7 @@ uv run --no-project use_existing_torch.py
 echo "Installing dependencies..."
 uv pip install --upgrade pip
 uv pip install numpy setuptools setuptools_rust setuptools_scm
-uv pip install torch==2.10.0 --torch-backend=cu129
+uv pip install "$TORCH_REQUIREMENT" --torch-backend="$VLLM_TORCH_BACKEND"
 
 # Install vLLM using precompiled wheel
 echo "Installing vLLM with precompiled wheel..."

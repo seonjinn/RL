@@ -95,3 +95,8 @@ def test_custom_vllm_build_is_recoverable() -> None:
     assert "uv run --frozen python - <<'PY'" not in prepare_text
     assert "\nuv lock\n" not in prepare_text
     assert "setuptools_rust" in build_text
+    assert "existing_vllm_valid=false" in prepare_text
+    assert "3rdparty/vllm/.venv/bin/python -c 'import vllm'" in prepare_text
+    assert 'TORCH_REQUIREMENT=$(sed -nE' in build_text
+    assert 'VLLM_TORCH_BACKEND:-cu130' in build_text
+    assert "torch==2.10.0" not in build_text
