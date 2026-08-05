@@ -16,7 +16,7 @@ BACKEND_LABELS = {
     "flashinfer_cutedsl": "CuTeDSL",
     "flashinfer_cutlass": "CUTLASS",
     "flashinfer_trtllm": "TRTLLM",
-    "flashinfer_trtllm_adaptive": "TRTLLM Adaptive",
+    "flashinfer_trtllm_adaptive": "TRTLLM\nAdaptive",
 }
 BACKEND_ORDER = list(BACKEND_LABELS.values())
 EDGE_COLOR = "#192133"
