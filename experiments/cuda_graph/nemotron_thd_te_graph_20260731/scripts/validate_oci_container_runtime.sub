@@ -735,6 +735,10 @@ if [[ ! -x "${task2_root_test_runner}" ]]; then
 fi
 "${task2_root_test_runner}" \
   "${environment_root}/bin/python" "${runtime_stage_root}/test-results"
+"${source_provenance_verifier}" \
+  "${project_root}" "${nemo_rl_commit}" \
+  "${bridge_root}" "${bridge_commit}" \
+  "${mcore_root}" "${mcore_commit}"
 rm -rf -- "${uv_cache_dir}" "${te_cmake_dir}"
 printf "%s\n" "${RUNTIME_STAGE_JOB_ID}" >"${stage_job_record}"
 printf "%s\n" \

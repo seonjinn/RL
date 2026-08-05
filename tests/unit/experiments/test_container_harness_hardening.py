@@ -897,6 +897,7 @@ def test_runtime_stage_runs_exact_task2_root_suite_before_marker_publication(
 
     result = subprocess.run(
         ["bash", str(runner), str(fake_python), str(result_root)],
+        cwd=tmp_path,
         env={**os.environ, "TASK2_TEST_ARGUMENT_LOG": str(argument_log)},
         check=False,
         capture_output=True,
@@ -926,10 +927,13 @@ def test_runtime_stage_runs_exact_task2_root_suite_before_marker_publication(
         0
     ]
     test_index = stage.index('"${task2_root_test_runner}"')
+    post_test_provenance_index = stage.index(
+        '"${source_provenance_verifier}"', test_index
+    )
     marker_index = stage.index(
         'mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"'
     )
-    assert test_index < marker_index
+    assert test_index < post_test_provenance_index < marker_index
 
 
 def test_task2_root_runner_removes_passing_pytest_basetemp(tmp_path: Path) -> None:
@@ -946,12 +950,16 @@ def test_task2_root_runner_removes_passing_pytest_basetemp(tmp_path: Path) -> No
         ': "${basetemp:?}"\n'
         'mkdir -p -- "${basetemp}"\n'
         'ln -s -- "${basetemp}/missing" "${basetemp}/broken-link"\n'
+        'mkdir -p -- tests/unit/unit_results\n'
+        'printf generated >tests/unit/unit_results.json\n'
+        'printf generated >tests/unit/unit_results/result.json\n'
     )
     fake_python.chmod(0o755)
     result_root = tmp_path / "results"
 
     result = subprocess.run(
         ["bash", str(runner), str(fake_python), str(result_root)],
+        cwd=tmp_path,
         check=False,
         capture_output=True,
         text=True,
@@ -960,6 +968,8 @@ def test_task2_root_runner_removes_passing_pytest_basetemp(tmp_path: Path) -> No
     assert result.returncode == 0, result.stderr
     assert result_root.is_dir()
     assert not (result_root / "tmp").exists()
+    assert not (tmp_path / "tests/unit/unit_results.json").exists()
+    assert not (tmp_path / "tests/unit/unit_results").exists()
 
 
 def test_runtime_wrapper_requires_explicit_stage_capability(tmp_path: Path) -> None:

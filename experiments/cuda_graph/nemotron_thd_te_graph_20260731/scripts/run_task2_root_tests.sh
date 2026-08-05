@@ -18,6 +18,14 @@ if [[ "${result_root}" != /* || -e "${result_root}" || -L "${result_root}" ]]; t
   echo "Task 2 result root must be a new absolute path" >&2
   exit 2
 fi
+unit_result_file=tests/unit/unit_results.json
+unit_result_dir=tests/unit/unit_results
+for generated_path in "${unit_result_file}" "${unit_result_dir}"; do
+  if [[ -e "${generated_path}" || -L "${generated_path}" ]]; then
+    echo "Task 2 generated result path must not preexist: ${generated_path}" >&2
+    exit 2
+  fi
+done
 mkdir -m 0700 -- "${result_root}"
 
 pytest_status=0
@@ -35,3 +43,5 @@ if ((pytest_status != 0)); then
   exit "${pytest_status}"
 fi
 rm -rf -- "${result_root}/tmp"
+rm -f -- "${unit_result_file}"
+rm -rf -- "${unit_result_dir}"
