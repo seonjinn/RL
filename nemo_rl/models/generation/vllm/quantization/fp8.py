@@ -1055,10 +1055,11 @@ def _shuffle_mxfp8_moe_per_expert(
 
 
 def process_weights_after_loading_mxfp8_moe(self, layer) -> None:
-    """Shuffle weights and scales into FlashInfer TRTLLM MXFP8 layout."""
+    """Prepare MXFP8 MoE weights for the selected backend and retain refit scales."""
     from vllm.model_executor.layers.fused_moe import FusedMoeWeightScaleSupported
-    from vllm.model_executor.layers.quantization.utils.flashinfer_utils import (
-        swap_w13_to_w31,
+    from vllm.model_executor.layers.fused_moe.oracle.fp8 import Fp8MoeBackend
+    from vllm.model_executor.layers.quantization.fp8 import (
+        convert_to_fp8_moe_kernel_format,
     )
     from vllm.model_executor.parameter import ModelWeightParameter
     from vllm.model_executor.utils import set_weight_attrs
@@ -1070,43 +1071,56 @@ def process_weights_after_loading_mxfp8_moe(self, layer) -> None:
         w13_scale = layer.w13_weight_scale.data
     else:
         w13_scale = layer.w13_weight_scale_from_checkpoint.data
-    if is_gated:
-        # FI TRTLLM gated kernels use W31 ordering. Model checkpoints store
-        # gated projection as W13, so convert once before shuffling.
-        w13_weight = swap_w13_to_w31(w13_weight)
-        w13_scale = swap_w13_to_w31(w13_scale)
     w2_weight = layer.w2_weight.data
     if not hasattr(layer, "w2_weight_scale_from_checkpoint"):
         w2_scale = layer.w2_weight_scale.data
     else:
         w2_scale = layer.w2_weight_scale_from_checkpoint.data
 
-    assert global_fp8_config is not None
-    if global_fp8_config.refit_batched_moe_shuffle:
-        shuffled = _shuffle_mxfp8_moe_batched(
-            layer,
-            w13_weight,
-            w2_weight,
-            w13_scale,
-            w2_scale,
+    if self.mxfp8_backend == Fp8MoeBackend.FLASHINFER_TRTLLM:
+        from vllm.model_executor.layers.quantization.utils.flashinfer_utils import (
+            swap_w13_to_w31,
+        )
+
+        if is_gated:
+            # FI TRTLLM gated kernels use W31 ordering. Model checkpoints store
+            # gated projection as W13, so convert once before shuffling.
+            w13_weight = swap_w13_to_w31(w13_weight)
+            w13_scale = swap_w13_to_w31(w13_scale)
+
+        assert global_fp8_config is not None
+        shuffle = (
+            _shuffle_mxfp8_moe_batched
+            if global_fp8_config.refit_batched_moe_shuffle
+            else _shuffle_mxfp8_moe_per_expert
+        )
+        shuffle_args = (
+            (layer, w13_weight, w2_weight, w13_scale, w2_scale)
+            if global_fp8_config.refit_batched_moe_shuffle
+            else (w13_weight, w2_weight, w13_scale, w2_scale)
+        )
+        processed = shuffle(
+            *shuffle_args,
             is_gated,
             epilogue_tile_m,
         )
     else:
-        shuffled = _shuffle_mxfp8_moe_per_expert(
-            w13_weight,
-            w2_weight,
-            w13_scale,
-            w2_scale,
-            is_gated,
-            epilogue_tile_m,
+        processed = convert_to_fp8_moe_kernel_format(
+            fp8_backend=self.mxfp8_backend,
+            layer=layer,
+            w13=w13_weight,
+            w2=w2_weight,
+            w13_scale=w13_scale,
+            w2_scale=w2_scale,
+            w13_input_scale=None,
+            w2_input_scale=None,
         )
     (
-        w13_weight_shuffled,
-        w2_weight_shuffled,
-        w13_scale_shuffled,
-        w2_scale_shuffled,
-    ) = shuffled
+        w13_weight_processed,
+        w2_weight_processed,
+        w13_scale_processed,
+        w2_scale_processed,
+    ) = processed
 
     if not hasattr(layer, "w13_weight_scale_from_checkpoint"):
         layer.w13_weight_scale_from_checkpoint = ModelWeightParameter(
@@ -1141,17 +1155,27 @@ def process_weights_after_loading_mxfp8_moe(self, layer) -> None:
             layer.w2_weight_scale_from_checkpoint,
             {"quant_method": FusedMoeWeightScaleSupported.BLOCK.value},
         )
+        if (
+            w13_scale_processed.data_ptr()
+            == layer.w13_weight_scale_from_checkpoint.data_ptr()
+        ):
+            w13_scale_processed = w13_scale_processed.clone()
+        if (
+            w2_scale_processed.data_ptr()
+            == layer.w2_weight_scale_from_checkpoint.data_ptr()
+        ):
+            w2_scale_processed = w2_scale_processed.clone()
         layer.w13_weight_scale = torch.nn.Parameter(
-            w13_scale_shuffled, requires_grad=False
+            w13_scale_processed, requires_grad=False
         )
         layer.w2_weight_scale = torch.nn.Parameter(
-            w2_scale_shuffled, requires_grad=False
+            w2_scale_processed, requires_grad=False
         )
     else:
-        layer.w13_weight_scale.copy_(w13_scale_shuffled)
-        layer.w2_weight_scale.copy_(w2_scale_shuffled)
-    layer.w13_weight.copy_(w13_weight_shuffled)
-    layer.w2_weight.copy_(w2_weight_shuffled)
+        layer.w13_weight_scale.copy_(w13_scale_processed)
+        layer.w2_weight_scale.copy_(w2_scale_processed)
+    layer.w13_weight.copy_(w13_weight_processed)
+    layer.w2_weight.copy_(w2_weight_processed)
 
     if self.moe_kernel is None:
         from vllm.model_executor.layers.quantization.fp8 import make_fp8_moe_kernel

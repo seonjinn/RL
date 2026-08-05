@@ -230,10 +230,13 @@ def test_process_mxfp8_moe_refit_uses_configured_shuffle(
     )
     moe_kernel = object()
     moe_quant_config = object()
+    from vllm.model_executor.layers.fused_moe.oracle.fp8 import Fp8MoeBackend
+
     quant_method = types.SimpleNamespace(
         moe=types.SimpleNamespace(is_act_and_mul=is_gated),
         moe_kernel=moe_kernel,
         moe_quant_config=moe_quant_config,
+        mxfp8_backend=Fp8MoeBackend.FLASHINFER_TRTLLM,
     )
     shuffled = (
         torch.full_like(w13_weight, 1),
@@ -349,10 +352,12 @@ def test_process_mxfp8_moe_initializes_kernel_once(fp8_module, monkeypatch):
         quant_config_calls.append(_layer)
         return quant_config
 
+    from vllm.model_executor.layers.fused_moe.oracle.fp8 import Fp8MoeBackend
+
     quant_method = types.SimpleNamespace(
         moe=moe_config,
         moe_kernel=None,
-        mxfp8_backend="flashinfer_trtllm",
+        mxfp8_backend=Fp8MoeBackend.FLASHINFER_TRTLLM,
         experts_cls=experts_cls,
         get_fused_moe_quant_config=get_quant_config,
     )
@@ -413,16 +418,14 @@ def test_process_mxfp8_moe_initializes_kernel_once(fp8_module, monkeypatch):
     assert kernel_calls[0] == {
         "moe_quant_config": quant_config,
         "moe_config": moe_config,
-        "fp8_backend": "flashinfer_trtllm",
+        "fp8_backend": Fp8MoeBackend.FLASHINFER_TRTLLM,
         "experts_cls": experts_cls,
         "routing_tables": (None, None, None),
         "layer": layer,
     }
 
 
-def test_process_mxfp8_moe_triton_preserves_canonical_layout(
-    fp8_module, monkeypatch
-):
+def test_process_mxfp8_moe_triton_preserves_canonical_layout(fp8_module, monkeypatch):
     fp8 = fp8_module
     fp8.global_fp8_config = fp8.FP8Config(
         use_fp8_weights=True,
