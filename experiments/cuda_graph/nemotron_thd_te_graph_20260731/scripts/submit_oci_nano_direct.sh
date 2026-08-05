@@ -20,6 +20,7 @@ PARTITION=${PARTITION:-batch}
 NUM_NODES=${NUM_NODES:-4}
 GPUS_PER_NODE=${GPUS_PER_NODE:-4}
 SEGMENT_SIZE=${SEGMENT_SIZE:-}
+TIME_LIMIT=${TIME_LIMIT:-04:00:00}
 STEPS=${STEPS:-5}
 CUDA_GRAPH_MODULES=${CUDA_GRAPH_MODULES:-attn,mamba,moe_router}
 CUDA_GRAPH_IMPL=${CUDA_GRAPH_IMPL:-transformer_engine}
@@ -120,7 +121,7 @@ sbatch_args=(
   --account="${ACCOUNT}"
   --job-name="cg-${RUN_NAME}"
   --partition="${PARTITION}"
-  --time=01:00:00
+  --time="${TIME_LIMIT}"
   --gres="gpu:${GPUS_PER_NODE}"
   --output="${RUN_DIR}/slurm-%j.log"
 )

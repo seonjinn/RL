@@ -872,6 +872,7 @@ fi
         MOE_FLEX_DISPATCHER_BACKEND="hybridep",
         HYBRID_EP_RANKS_PER_NVLINK_DOMAIN="16",
         CUDA_GRAPH_MODULES="attn,mamba",
+        TIME_LIMIT="04:00:00",
         EXCLUDE=exclusion,
         RUN_TAG="unit",
     )
@@ -881,12 +882,36 @@ fi
     submissions = sbatch_log.read_text()
     assert submissions.count("ARGS=") == 2
     assert submissions.count(f"ARG=--exclude={exclusion}") == 2
+    assert submissions.count("ARG=--time=04:00:00") == 2
     assert "USE_MNNVL=1" in submissions
     assert "NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN=16" in submissions
     assert "policy.megatron_cfg.moe_token_dispatcher_type=flex" in submissions
     assert "++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep" in submissions
     assert "++policy.megatron_cfg.moe_hybridep_pad_uneven_dispatch_inputs=true" in submissions
     assert "policy.megatron_cfg.moe_token_dispatcher_type=alltoall" not in submissions
+
+
+def test_baseline_and_mamba_render_use_the_same_fused_attention_backend() -> None:
+    module = _load_experiment_module("scope_matrix")
+
+    commands = (
+        module.render_scope_command(
+            model="nano",
+            scope=(),
+            steps=20,
+            run_name="nano-baseline-fused",
+            cuda_graph_enabled=False,
+        ),
+        module.render_scope_command(
+            model="nano",
+            scope=("mamba",),
+            steps=20,
+            run_name="nano-mamba-fused",
+        ),
+    )
+
+    for command in commands:
+        assert "++policy.megatron_cfg.attention_backend=fused" in shlex.split(command)
 
 
 def test_rendered_command_shell_quotes_log_paths_without_changing_arguments() -> None:

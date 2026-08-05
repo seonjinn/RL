@@ -314,6 +314,7 @@ def render_scope_command(
         "checkpointing.enabled=false",
         "policy.sequence_packing.enabled=true",
         "policy.dynamic_batching.enabled=false",
+        "++policy.megatron_cfg.attention_backend=fused",
         f"cluster.num_nodes={spec.num_nodes}",
         f"cluster.gpus_per_node={spec.gpus_per_node}",
         f"logger.log_dir={log_dir or f'exp_logs/nemotron_thd_te_graph_20260731/{run_name}'}",
