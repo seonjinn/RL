@@ -35,9 +35,11 @@ SBATCH_TEST_ONLY=${SBATCH_TEST_ONLY:-0}
 EXPECTED_DEVICE_COUNT=${EXPECTED_DEVICE_COUNT:-4}
 EXPECTED_PYTHON_VERSION=${EXPECTED_PYTHON_VERSION:-3.13.14}
 EXPECTED_UV_VERSION=${EXPECTED_UV_VERSION:-0.11.28}
+MCORE_PROJECT_ROOT=${MCORE_PROJECT_ROOT:-${PROJECT_ROOT}}
 
-if [[ "${CONTAINER}" != /* || "${PROJECT_ROOT}" != /* || "${ARTIFACT_DIR}" != /* ]]; then
-  echo "CONTAINER, PROJECT_ROOT, and ARTIFACT_DIR must be absolute paths" >&2
+if [[ "${CONTAINER}" != /* || "${PROJECT_ROOT}" != /* || \
+      "${MCORE_PROJECT_ROOT}" != /* || "${ARTIFACT_DIR}" != /* ]]; then
+  echo "CONTAINER, PROJECT_ROOT, MCORE_PROJECT_ROOT, and ARTIFACT_DIR must be absolute paths" >&2
   exit 2
 fi
 if [[ ! "${CONTAINER_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
@@ -73,9 +75,15 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     echo "Runtime probe is missing: ${probe}" >&2
     exit 2
   fi
+  if [[ ! -f "${MCORE_PROJECT_ROOT}/pyproject.toml" || \
+        ! -f "${MCORE_PROJECT_ROOT}/uv.lock" || \
+        ! -f "${MCORE_PROJECT_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/pyproject.toml" ]]; then
+    echo "MCORE_PROJECT_ROOT must be a full recursive NeMo-RL checkout" >&2
+    exit 2
+  fi
   export ACCOUNT ARTIFACT_DIR CONTAINER CONTAINER_SHA256 EXPECTED_DEVICE_COUNT
   export EXPECTED_PYTHON_VERSION EXPECTED_SOURCE_COMMIT EXPECTED_UV_VERSION PARTITION
-  export PROJECT_ROOT
+  export MCORE_PROJECT_ROOT PROJECT_ROOT
   submission_flag=--parsable
   if [[ "${SBATCH_TEST_ONLY}" == "1" ]]; then
     submission_flag=--test-only
@@ -87,7 +95,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     "--account=${ACCOUNT}"
     "--gres=gpu:${EXPECTED_DEVICE_COUNT}"
     "--output=${ARTIFACT_DIR}/nightly-gpu-runtime-%j.log"
-    --export=CONTAINER,CONTAINER_SHA256,EXPECTED_SOURCE_COMMIT,PROJECT_ROOT,ARTIFACT_DIR,ACCOUNT,PARTITION,EXPECTED_DEVICE_COUNT,EXPECTED_PYTHON_VERSION,EXPECTED_UV_VERSION,HOME,USER,LOGNAME,SHELL,PATH,LD_LIBRARY_PATH,HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy
+    --export=CONTAINER,CONTAINER_SHA256,EXPECTED_SOURCE_COMMIT,PROJECT_ROOT,MCORE_PROJECT_ROOT,ARTIFACT_DIR,ACCOUNT,PARTITION,EXPECTED_DEVICE_COUNT,EXPECTED_PYTHON_VERSION,EXPECTED_UV_VERSION,HOME,USER,LOGNAME,SHELL,PATH,LD_LIBRARY_PATH,HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy
     "${script_path}"
   )
   printf 'SBATCH:'
@@ -112,6 +120,12 @@ if [[ ! -f "${probe}" ]]; then
   echo "Runtime probe is missing: ${probe}" >&2
   exit 1
 fi
+if [[ ! -f "${MCORE_PROJECT_ROOT}/pyproject.toml" || \
+      ! -f "${MCORE_PROJECT_ROOT}/uv.lock" || \
+      ! -f "${MCORE_PROJECT_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/pyproject.toml" ]]; then
+  echo "MCORE_PROJECT_ROOT must be a full recursive NeMo-RL checkout" >&2
+  exit 1
+fi
 
 result=${ARTIFACT_DIR}/nightly-gpu-runtime-${SLURM_JOB_ID}.json
 partial_result=${result}.partial
@@ -123,16 +137,82 @@ fi
 mkdir -p "${ARTIFACT_DIR}"
 trap 'rm -f "${partial_result}"' EXIT
 unset PYTHONHOME PYTHONPATH VIRTUAL_ENV UV_PROJECT_ENVIRONMENT
+container_mounts="${PROJECT_ROOT}:${PROJECT_ROOT}:ro,${ARTIFACT_DIR}:${ARTIFACT_DIR}"
+if [[ "${MCORE_PROJECT_ROOT}" != "${PROJECT_ROOT}" ]]; then
+  container_mounts+=",${MCORE_PROJECT_ROOT}:${MCORE_PROJECT_ROOT}:ro"
+fi
+runtime_stage_root="/tmp/nemo-rl-nightly-mcore-smoke-${SLURM_JOB_ID}"
+runtime_project_root="${runtime_stage_root}/source"
+runtime_environment_root="${runtime_stage_root}/environment"
+runtime_payload='set -euo pipefail
+source_project_root=$1
+runtime_stage_root=$2
+runtime_project_root=$3
+shift 3
+if [[ -e "${runtime_stage_root}" || -L "${runtime_stage_root}" ]]; then
+  echo "Job-local runtime stage already exists: ${runtime_stage_root}" >&2
+  exit 2
+fi
+cleanup_runtime_stage() {
+  chmod -R u+w -- "${runtime_stage_root}" 2>/dev/null || true
+  rm -rf -- "${runtime_stage_root}"
+}
+trap cleanup_runtime_stage EXIT
+mkdir -m 0700 -- "${runtime_stage_root}"
+mkdir -m 0700 -- "${runtime_project_root}" "${UV_PROJECT_ENVIRONMENT}" \
+  "${HOME}" "${TMPDIR}"
+mkdir -p -- "${UV_CACHE_DIR}"
+cp -a -- "${source_project_root}/." "${runtime_project_root}/"
+if [[ ! -f "${runtime_project_root}/pyproject.toml" || \
+      ! -f "${runtime_project_root}/uv.lock" || \
+      ! -f "${runtime_project_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/pyproject.toml" ]]; then
+  echo "Job-local MCore source copy is incomplete" >&2
+  exit 2
+fi
+/root/.local/bin/uv run \
+  --locked \
+  --extra mcore \
+  --no-python-downloads \
+  --directory "${runtime_project_root}" \
+  "$@"'
+runtime_environment=(
+  /usr/bin/env
+  "HOME=${runtime_stage_root}/home"
+  CUDA_HOME=/usr/local/cuda
+  CUDACXX=/usr/local/cuda/bin/nvcc
+  CPLUS_INCLUDE_PATH=/usr/local/cuda/include/cccl
+  NVTE_CUDA_ARCHS=100a
+  NVTE_WITH_NCCL_EP=0
+  "TMPDIR=${runtime_stage_root}/tmp"
+  TORCH_CUDA_ARCH_LIST=10.0a
+  UV_CACHE_DIR=/root/.cache/uv
+  UV_LINK_MODE=copy
+  UV_MANAGED_PYTHON=1
+  "UV_PROJECT_ENVIRONMENT=${runtime_environment_root}"
+  "UV_PYTHON=${EXPECTED_PYTHON_VERSION}"
+  UV_PYTHON_DOWNLOADS=never
+  UV_PYTHON_INSTALL_DIR=/root/.local/share/uv/python
+)
+for proxy_variable in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
+  if [[ -n "${!proxy_variable:-}" ]]; then
+    runtime_environment+=("${proxy_variable}=${!proxy_variable}")
+  fi
+done
 srun \
   --nodes=1 \
   --ntasks=1 \
   "--gres=gpu:${EXPECTED_DEVICE_COUNT}" \
   --no-container-mount-home \
+  --container-writable \
   --container-image="${CONTAINER}" \
-  --container-mounts="${PROJECT_ROOT}:${PROJECT_ROOT}:ro,${ARTIFACT_DIR}:${ARTIFACT_DIR}" \
+  --container-mounts="${container_mounts}" \
   --export=NIL \
-  /usr/bin/env HOME=/root \
-  /opt/nemo_rl_venv/bin/python "${probe}" \
+  "${runtime_environment[@]}" \
+  /bin/bash -c "${runtime_payload}" bash \
+    "${MCORE_PROJECT_ROOT}" \
+    "${runtime_stage_root}" \
+    "${runtime_project_root}" \
+    python "${probe}" \
     --expected-device-count "${EXPECTED_DEVICE_COUNT}" \
     --expected-python-version "${EXPECTED_PYTHON_VERSION}" \
     --expected-source-commit "${EXPECTED_SOURCE_COMMIT}" \

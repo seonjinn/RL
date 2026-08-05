@@ -28,3 +28,20 @@ def test_uv_version_parser_accepts_platform_suffix() -> None:
     assert callable(parser), "runtime probe must expose a semantic uv version parser"
     parse_uv_version = cast(Callable[[str], str], parser)
     assert parse_uv_version("uv 0.11.28 (aarch64-unknown-linux-gnu)") == "0.11.28"
+
+
+def test_launcher_stages_mcore_environment_in_writable_job_local_storage() -> None:
+    launcher = (
+        Path(__file__).parent / "scripts" / "validate_oci_nightly_gpu_runtime.sub"
+    ).read_text()
+
+    assert (
+        'runtime_stage_root="/tmp/nemo-rl-nightly-mcore-smoke-${SLURM_JOB_ID}"'
+        in launcher
+    )
+    assert 'cp -a -- "${source_project_root}/." "${runtime_project_root}/"' in launcher
+    assert "--container-writable" in launcher
+    assert "UV_CACHE_DIR=/root/.cache/uv" in launcher
+    assert "for proxy_variable in HTTP_PROXY HTTPS_PROXY NO_PROXY" in launcher
+    assert 'runtime_environment+=("${proxy_variable}=${!proxy_variable}")' in launcher
+    assert '--directory "${runtime_project_root}"' in launcher
