@@ -36,6 +36,7 @@ _REQUIRED_METADATA_KEYS = frozenset(
     }
 )
 _INPUT_AMAX_SUFFIX = ".input_quantizer._amax"
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def normalize_quant_cfg_identity(quant_cfg: str) -> str:
@@ -43,6 +44,9 @@ def normalize_quant_cfg_identity(quant_cfg: str) -> str:
     config_path = Path(quant_cfg).expanduser()
     if config_path.is_file():
         return str(config_path.resolve())
+    project_config_path = _PROJECT_ROOT / config_path
+    if project_config_path.is_file():
+        return str(project_config_path.resolve())
     return quant_cfg
 
 

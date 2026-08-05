@@ -22,3 +22,13 @@
   commit-versioned caches, `--gpus-per-node=8`, and `sbatch --test-only`.
 - The submitted command runs `tests/test_nvfp4_rollout_recipes.py` in the target
   container before starting the GPU smoke.
+
+## 2026-08-05 04:00 PDT
+
+- Submitted W4A16 legacy job `497394` and NCCL-Reshard job `497395` on GCP-NRT.
+- Both target-container recipe gates passed (`4 passed`) and both jobs failed
+  during vLLM actor initialization before step 1.
+- Root cause: the Ray actor could not resolve the repo-relative
+  `examples/modelopt/quant_configs/nvfp4_experts_weightonly.yaml` path.
+- Added project-relative quant-config normalization before real-NVFP4 mode
+  resolution, with focused tests for Ray-like non-repository working directories.

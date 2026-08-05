@@ -12,6 +12,7 @@ from safetensors.torch import save_file
 
 from examples.modelopt import export_nvfp4_calibration
 from examples.modelopt.export_nvfp4_calibration import collect_nvfp4_input_amax
+from nemo_rl.modelopt import calibration_artifact
 from nemo_rl.modelopt.calibration_artifact import (
     load_nvfp4_calibration,
     normalize_quant_cfg_identity,
@@ -189,6 +190,24 @@ def test_normalize_quant_cfg_identity_resolves_paths_and_preserves_symbolic_name
 
     assert normalize_quant_cfg_identity(str(config_path)) == str(config_path.resolve())
     assert normalize_quant_cfg_identity("NVFP4_DEFAULT_CFG") == "NVFP4_DEFAULT_CFG"
+
+
+def test_normalize_quant_cfg_identity_resolves_project_relative_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "repo"
+    config_path = project_root / "examples/modelopt/quant_configs/nvfp4.yaml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("quant_cfg: nvfp4\n")
+    worker_dir = tmp_path / "ray-worker"
+    worker_dir.mkdir()
+    monkeypatch.chdir(worker_dir)
+    monkeypatch.setattr(calibration_artifact, "_PROJECT_ROOT", project_root)
+
+    assert normalize_quant_cfg_identity(
+        "examples/modelopt/quant_configs/nvfp4.yaml"
+    ) == str(config_path.resolve())
 
 
 def test_collect_input_amax_uses_enabled_hf_projection_names() -> None:

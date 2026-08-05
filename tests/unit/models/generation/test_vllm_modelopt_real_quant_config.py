@@ -1169,7 +1169,9 @@ def test_fake_quant_worker_inherits_nixl_worker():
     assert issubclass(patch_mod.FakeQuantWorker, NixlVllmWorker)
 
 
-def test_configure_quant_engine_kwargs_for_real_quant(monkeypatch):
+def test_configure_quant_engine_kwargs_for_real_quant(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     worker_mod = pytest.importorskip(
         "nemo_rl.modelopt.models.generation.vllm_quant_worker"
     )
@@ -1181,9 +1183,14 @@ def test_configure_quant_engine_kwargs_for_real_quant(monkeypatch):
         "register_nemo_modelopt_nvfp4",
         lambda: registration_calls.append(True),
     )
-    monkeypatch.setattr(
-        modelopt_utils, "resolve_nvfp4_real_quant_mode", lambda _: "w4a16"
-    )
+    resolved_quant_cfg: list[str] = []
+
+    def resolve_mode(quant_cfg: str) -> str:
+        resolved_quant_cfg.append(quant_cfg)
+        return "w4a16"
+
+    monkeypatch.setattr(modelopt_utils, "resolve_nvfp4_real_quant_mode", resolve_mode)
+    monkeypatch.chdir(tmp_path)
 
     llm_kwargs = {}
     worker_mod._configure_quant_engine_kwargs(
@@ -1196,6 +1203,14 @@ def test_configure_quant_engine_kwargs_for_real_quant(monkeypatch):
     )
 
     assert registration_calls == [True]
+    assert resolved_quant_cfg == [
+        str(
+            (
+                Path(worker_mod.__file__).resolve().parents[4]
+                / "examples/modelopt/quant_configs/nvfp4_a16_mlp_only.yaml"
+            ).resolve()
+        )
+    ]
     assert os.environ["VLLM_MODELOPT_REAL_QUANT"] == "1"
     assert "VLLM_QUANT_CFG" not in os.environ
     assert "worker_cls" not in llm_kwargs

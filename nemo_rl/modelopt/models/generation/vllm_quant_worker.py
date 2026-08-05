@@ -69,6 +69,7 @@ def _configure_quant_engine_kwargs(
         quant_cfg = cfg.get("quant_cfg")
         if not quant_cfg:
             raise ValueError("NVFP4 real quantization requires a non-empty quant_cfg.")
+        quant_cfg = _quant_cfg_for_worker_env(quant_cfg)
         mode = resolve_nvfp4_real_quant_mode(quant_cfg)
         register_nemo_modelopt_nvfp4()
         os.environ.pop("VLLM_QUANT_CFG", None)

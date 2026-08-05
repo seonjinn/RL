@@ -12,6 +12,14 @@
 - `experiments/bf16-nvfp4-rollout/submit_gcp_nrt.sh` - reproducible GCP-NRT
   preflight and submission wrapper.
 - `experiments/bf16-nvfp4-rollout/README.md` - documents the GCP wrapper.
+- `nemo_rl/modelopt/calibration_artifact.py` - resolves repository-relative
+  quantization recipes independently of actor working directory.
+- `nemo_rl/modelopt/models/generation/vllm_quant_worker.py` - normalizes the
+  real-NVFP4 recipe before mode resolution.
+- `tests/unit/modelopt/test_calibration_artifact.py` - project-relative path
+  regression test.
+- `tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py` -
+  verifies normalized path reaches real-NVFP4 mode resolution.
 
 ## Generated
 
