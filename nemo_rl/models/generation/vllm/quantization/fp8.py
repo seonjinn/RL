@@ -126,6 +126,9 @@ def apply_fp8_patches(self, fp8_config):
     assert not fp8_patches_applied
 
     global_fp8_config = fp8_config
+    if self is not None:
+        worker = vars(self).get("worker", self)
+        worker._nrl_fp8_config = fp8_config
 
     # Apply patches conditionally based on configuration
     # Only apply weight patches if using FP8 weights
@@ -441,8 +444,12 @@ def _is_fp8_weight(name, model):
     return name in fp8_state.fp8_param_names
 
 
-def load_weights(weights, model_runner):
+def load_weights(weights, model_runner, fp8_config=None):
     global global_fp8_config
+    fp8_config = fp8_config or global_fp8_config
+    if fp8_config is None:
+        raise RuntimeError("FP8 refit config was not initialized on this vLLM worker")
+
     weights_quantized = []
     model = model_runner.model
 
@@ -451,7 +458,7 @@ def load_weights(weights, model_runner):
             weights_quantized.append((k, v))
             continue
         # Cast the weight into fp8 and its scale factor
-        if global_fp8_config.is_mx:
+        if fp8_config.is_mx:
             from vllm.model_executor.layers.quantization.utils.mxfp8_utils import (
                 mxfp8_e4m3_quantize,
             )
@@ -463,7 +470,7 @@ def load_weights(weights, model_runner):
                 weight_block_size=FP8_BLOCK_QUANT_KWARGS["weight_block_size"],
             )
         param_scale = torch.squeeze(param_scale, dim=-1)
-        if global_fp8_config.is_mx:
+        if fp8_config.is_mx:
             module = _get_module_from_param_name(model, k)
             quant_method = getattr(module, "quant_method", None)
             kernel = getattr(quant_method, "kernel", None)

@@ -182,6 +182,7 @@ class VllmInternalWorkerExtension:
     # True once the MTP drafter has been served by a one-time disk load (see
     # load_mtp_weights_from_disk); refit then leaves those static weights alone.
     _mtp_drafter_from_disk: bool = False
+    _nrl_fp8_config: Any = None
     _sparse_delta_applier: Any = None
     _nrl_named_parameters: dict[str, torch.nn.Parameter]
 
@@ -201,7 +202,11 @@ class VllmInternalWorkerExtension:
         from nemo_rl.models.generation.vllm.quantization import fp8
 
         if fp8.is_fp8_model(self.model_runner.vllm_config):
-            fp8.load_weights(policy_weights, self.model_runner)
+            fp8.load_weights(
+                policy_weights,
+                self.model_runner,
+                fp8_config=self._nrl_fp8_config,
+            )
             return
         self._load_full_hf_weights(policy_weights)
 

@@ -39,6 +39,32 @@ def _make_collective_update_extension(backend):
     return ext, state_info
 
 
+@pytest.mark.vllm
+def test_load_hf_weights_passes_worker_local_fp8_config(monkeypatch):
+    from nemo_rl.models.generation.vllm import vllm_backend
+    from nemo_rl.models.generation.vllm.quantization import fp8
+
+    config = object()
+    model_runner = SimpleNamespace(vllm_config=object())
+    ext = vllm_backend.VllmInternalWorkerExtension.__new__(
+        vllm_backend.VllmInternalWorkerExtension
+    )
+    ext.model_runner = model_runner
+    ext._nrl_fp8_config = config
+    load_weights = MagicMock()
+    monkeypatch.setattr(fp8, "is_fp8_model", lambda _config: True)
+    monkeypatch.setattr(fp8, "load_weights", load_weights)
+    weights = [("model.weight", torch.ones(1))]
+
+    ext._load_hf_weights(weights)
+
+    load_weights.assert_called_once_with(
+        weights,
+        model_runner,
+        fp8_config=config,
+    )
+
+
 def _write_sharded_checkpoint(model_dir, shards):
     """Write safetensors shards plus a model.safetensors.index.json.
 

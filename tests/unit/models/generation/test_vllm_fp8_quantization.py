@@ -200,6 +200,33 @@ def test_load_weights_targets_native_mxfp8_checkpoint_scale(
     ]
 
 
+def test_load_weights_uses_explicit_config_when_module_global_is_missing(
+    mxfp8_linear_module, monkeypatch
+):
+    fp8, _, _, Tensor = mxfp8_linear_module
+    loaded_weights = []
+    kernel = types.SimpleNamespace(preserves_checkpoint_weight_scale_for_refit=True)
+    layer = types.SimpleNamespace(quant_method=types.SimpleNamespace(kernel=kernel))
+    model = types.SimpleNamespace(
+        load_weights=lambda weights: loaded_weights.extend(weights)
+    )
+
+    monkeypatch.setattr(fp8, "_is_fp8_weight", lambda _name, _model: True)
+    monkeypatch.setattr(fp8, "_get_module_from_param_name", lambda _model, _name: layer)
+    fp8.global_fp8_config = None
+
+    fp8.load_weights(
+        [("layers.0.self_attn.o_proj.weight", Tensor((64, 32), 1.0))],
+        types.SimpleNamespace(model=model),
+        fp8_config=types.SimpleNamespace(is_mx=True),
+    )
+
+    assert [name for name, _ in loaded_weights] == [
+        "layers.0.self_attn.o_proj.weight",
+        "layers.0.self_attn.o_proj.weight_scale",
+    ]
+
+
 def test_load_weights_preserves_legacy_mxfp8_checkpoint_scale_name(
     mxfp8_linear_module, monkeypatch
 ):
@@ -353,6 +380,21 @@ def test_apply_fp8_patches_registers_modelopt_patches_only_for_mxfp8(
         "ModelOptMxFp8FusedMoE.process_weights_after_loading" in path
         for path in patched_paths
     )
+
+
+def test_apply_fp8_patches_stores_config_on_wrapped_worker(mxfp8_linear_module):
+    fp8, _, _, _ = mxfp8_linear_module
+    worker = types.SimpleNamespace()
+    wrapper = types.SimpleNamespace(worker=worker)
+    config = types.SimpleNamespace(
+        use_fp8_weights=False,
+        model_parallel_size=2,
+        is_mx=True,
+    )
+
+    fp8.apply_fp8_patches(wrapper, config)
+
+    assert worker._nrl_fp8_config is config
     assert all(patcher.started for patcher in fp8.fp8_state.vllm_patches)
 
 
