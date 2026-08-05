@@ -420,6 +420,89 @@ def test_process_mxfp8_moe_initializes_kernel_once(fp8_module, monkeypatch):
     }
 
 
+def test_process_mxfp8_moe_triton_preserves_canonical_layout(
+    fp8_module, monkeypatch
+):
+    fp8 = fp8_module
+    fp8.global_fp8_config = fp8.FP8Config(
+        use_fp8_weights=True,
+        model_parallel_size=1,
+        is_mx=True,
+        refit_batched_moe_shuffle=True,
+    )
+
+    layer = torch.nn.Module()
+    layer.w13_weight = torch.nn.Parameter(torch.zeros(2, 6, 64), requires_grad=False)
+    layer.w2_weight = torch.nn.Parameter(torch.zeros(2, 64, 32), requires_grad=False)
+    layer.w13_weight_scale = torch.nn.Parameter(
+        torch.ones(2, 6, 2), requires_grad=False
+    )
+    layer.w2_weight_scale = torch.nn.Parameter(
+        torch.ones(2, 64, 1), requires_grad=False
+    )
+    layer.w13_weight_scale.weight_loader = object()
+    layer.w2_weight_scale.weight_loader = object()
+    layer._expert_routing_tables = lambda: (None, None, None)
+
+    from vllm.model_executor.layers.fused_moe.oracle.fp8 import Fp8MoeBackend
+
+    quant_method = types.SimpleNamespace(
+        moe=types.SimpleNamespace(is_act_and_mul=False),
+        moe_kernel=None,
+        mxfp8_backend=Fp8MoeBackend.TRITON_MXFP8,
+        experts_cls=object(),
+        get_fused_moe_quant_config=lambda _layer: object(),
+    )
+
+    def unexpected_shuffle(*_args):
+        pytest.fail("Triton MXFP8 must not use the FlashInfer TRTLLM layout")
+
+    monkeypatch.setattr(fp8, "_shuffle_mxfp8_moe_batched", unexpected_shuffle)
+    monkeypatch.setattr(fp8, "_shuffle_mxfp8_moe_per_expert", unexpected_shuffle)
+
+    from vllm.model_executor.layers.quantization import fp8 as vllm_fp8
+
+    kernel = object()
+    kernel_calls = []
+
+    def make_kernel(**kwargs):
+        kernel_calls.append(kwargs)
+        return kernel
+
+    monkeypatch.setattr(vllm_fp8, "make_fp8_moe_kernel", make_kernel)
+
+    fp8.process_weights_after_loading_mxfp8_moe(quant_method, layer)
+
+    assert layer.w13_weight.shape == (2, 6, 64)
+    assert layer.w2_weight.shape == (2, 64, 32)
+    assert layer.w13_weight_scale.shape == (2, 6, 2)
+    assert layer.w2_weight_scale.shape == (2, 64, 1)
+    assert quant_method.moe_kernel is kernel
+    assert len(kernel_calls) == 1
+
+    runtime_scale_ids = (
+        id(layer.w13_weight_scale),
+        id(layer.w2_weight_scale),
+    )
+    runtime_scale_ptrs = (
+        layer.w13_weight_scale.data_ptr(),
+        layer.w2_weight_scale.data_ptr(),
+    )
+    layer.w13_weight_scale_from_checkpoint.data.fill_(2)
+    layer.w2_weight_scale_from_checkpoint.data.fill_(3)
+
+    fp8.process_weights_after_loading_mxfp8_moe(quant_method, layer)
+
+    assert (id(layer.w13_weight_scale), id(layer.w2_weight_scale)) == runtime_scale_ids
+    assert (
+        layer.w13_weight_scale.data_ptr(),
+        layer.w2_weight_scale.data_ptr(),
+    ) == runtime_scale_ptrs
+    assert torch.all(layer.w13_weight_scale == 2)
+    assert torch.all(layer.w2_weight_scale == 3)
+    assert len(kernel_calls) == 1
+
+
 @pytest.mark.parametrize(
     ("field", "error"),
     [
