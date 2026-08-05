@@ -32,6 +32,7 @@ ACTION=test-only ./experiments/pr3477_refit_ab/submit_pair.sh
 ACTION=submit ./experiments/pr3477_refit_ab/submit_pair.sh
 ```
 
-The primary metric is `timing/step/refit/transfer_and_update_weights`. Also
+The primary metric is
+`timing/train/prepare_for_generation/transfer_and_update_weights`. Also
 report total refit, E2E step time, E2E throughput, mean rollout reward, and
 generation KL over the same step window.

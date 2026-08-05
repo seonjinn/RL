@@ -2,15 +2,15 @@
 
 ## Resume From Here
 
-The credential issue is fixed. Jobs `496459` and `496460` then exposed a vLLM
-0.25 runtime assertion because the modular MXFP8 MoE kernel was uninitialized.
-The two existing smoke-tested fixes are cherry-picked as `bf3005a7a` and
-`29ac96193`; push, pull, and rerun with warm driver and worker environments.
+The matched PR 3477 A/B is complete. Results and interpretation boundaries are
+recorded in `experiments/pr3477_refit_ab/RESULTS.md`.
 
 ## Next Actions
 
-- Push the two vLLM runtime fixes and updated session notes.
-- Pull on GCP-NRT, resubmit `submit_pair.sh`, and monitor through step 2.
+- Decide whether the two required vLLM 0.25 runtime fixes should be added to the
+  PR 3477 branch.
+- Investigate the non-blocking Ray interpreter-shutdown failure if clean SLURM
+  completion is required for future NCCL runs.
 
 ## Watch Outs
 

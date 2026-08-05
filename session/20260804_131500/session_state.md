@@ -4,7 +4,7 @@
 - Repo: `/Users/sna/MXFP8_generation/.worktrees/nemorl-pr3477-perf-ab`
 - Branch: `sna/pr3477-perf-ab`
 - Started: 2026-08-04 13:15 PDT
-- Updated: 2026-08-04 17:27 PDT
+- Updated: 2026-08-04 20:10 PDT
 
 ## Goal
 
@@ -23,23 +23,22 @@ Run a matched current-head PR 3477 legacy versus NCCL-Reshard A/B on GCP-NRT.
 
 ## Current Status
 
-The credential-fixed jobs reached vLLM initialization, then both arms failed in
-`modelopt.py:2227` because `moe_kernel` was still `None`. The failure exactly
-matches two already-tested follow-up fixes from the QKVO smoke branch:
-initialize the vLLM 0.25 modular MoE kernel and preserve MXFP8 tensor shapes.
-Those fixes are now cherry-picked onto the isolated performance branch.
+Jobs `496508` and `496509` recorded all 20 steps. Legacy completed with exit 0.
+The NCCL arm completed the measured workload and W&B finalization, then exited
+1 in Ray interpreter shutdown because the core worker was already initialized.
+All requested W&B metrics are present for steps 3-20.
 
 ## Plan
 
 - [x] Validate the two-arm launcher with `sbatch --test-only`.
-- [ ] Submit and monitor both 20-step arms.
-- [ ] Extract steps 3-20 and write the team summary.
+- [x] Submit both 20-step arms.
+- [x] Monitor both arms through step 20.
+- [x] Extract steps 3-20 and write the team summary.
 
 ## Assumptions
 
-- Measurements will be labeled PR 3477 plus the required vLLM 0.25 runtime
-  fixes until those commits are added to the PR branch itself.
+- Measurements are labeled PR 3477 plus the required vLLM 0.25 runtime fixes.
 
 ## Blockers
 
-- None known.
+- None.
