@@ -43,12 +43,9 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 def normalize_quant_cfg_identity(quant_cfg: str) -> str:
     """Resolve an existing config path while preserving symbolic config names."""
-    config_path = Path(quant_cfg).expanduser()
-    if config_path.is_file():
+    config_path = _resolve_quant_cfg_path(quant_cfg)
+    if config_path is not None:
         return str(config_path.resolve())
-    project_config_path = _PROJECT_ROOT / config_path
-    if project_config_path.is_file():
-        return str(project_config_path.resolve())
     return quant_cfg
 
 
@@ -74,8 +71,11 @@ def save_nvfp4_calibration(
         "sequence_length": sequence_length,
         "seed": seed,
     }
-    quant_cfg_sha256 = _file_sha256(quant_cfg)
-    if quant_cfg_sha256 is not None:
+    quant_cfg_path = _resolve_quant_cfg_path(quant_cfg)
+    if quant_cfg_path is not None:
+        quant_cfg_sha256 = _file_sha256(quant_cfg_path)
+        if quant_cfg_sha256 is None:
+            raise ValueError(f"Could not hash NVFP4 quantization config {quant_cfg!r}")
         metadata[_QUANT_CFG_SHA256_KEY] = quant_cfg_sha256
     _validate_metadata(metadata)
     tensors = _normalize_input_amax(input_amax)
@@ -245,16 +245,29 @@ def _validate_identity(
 
 
 def _file_sha256(path: object) -> str | None:
-    if not isinstance(path, str):
+    config_path = _resolve_quant_cfg_path(path)
+    if config_path is None:
         return None
     digest = hashlib.sha256()
     try:
-        with Path(path).expanduser().open("rb") as config_file:
+        with config_path.open("rb") as config_file:
             for chunk in iter(lambda: config_file.read(1024 * 1024), b""):
                 digest.update(chunk)
     except OSError:
         return None
     return digest.hexdigest()
+
+
+def _resolve_quant_cfg_path(path: object) -> Path | None:
+    if not isinstance(path, (str, Path)):
+        return None
+    config_path = Path(path).expanduser()
+    if config_path.is_file():
+        return config_path
+    project_config_path = _PROJECT_ROOT / config_path
+    if project_config_path.is_file():
+        return project_config_path
+    return None
 
 
 def _validate_artifact_names(raw_names: list[str]) -> list[str]:

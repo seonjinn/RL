@@ -5,6 +5,7 @@ import json
 import sys
 import types
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -600,6 +601,26 @@ def test_load_rejects_same_quant_cfg_path_mutated_after_artifact_creation(
 
     with pytest.raises(ValueError, match="quant_cfg.*does not match"):
         _load(path, artifact_metadata)
+
+
+def test_save_rejects_file_backed_quant_cfg_hash_failure(
+    tmp_path: Path,
+    metadata: dict[str, str | int],
+) -> None:
+    quant_cfg = tmp_path / "nvfp4.yaml"
+    quant_cfg.write_text("quant_cfg: w4a4\n")
+    artifact_metadata = dict(metadata)
+    artifact_metadata["quant_cfg"] = str(quant_cfg.resolve())
+
+    with (
+        patch.object(Path, "open", side_effect=OSError("injected read failure")),
+        pytest.raises(ValueError, match="Could not hash.*quantization config"),
+    ):
+        save_nvfp4_calibration(
+            tmp_path / "calibration.safetensors",
+            {"model.layers.0.mlp.up_proj.weight": torch.tensor(1.0)},
+            **artifact_metadata,
+        )
 
 
 @pytest.mark.parametrize(
