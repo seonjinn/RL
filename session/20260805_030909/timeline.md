@@ -48,3 +48,13 @@
   parametrized tuple omitted the newly added backend value.
 - Corrected the test tuple before model initialization; no training result was
   produced by this retry.
+
+## 2026-08-05 04:46 PDT
+
+- W4A16 Marlin initialized successfully in legacy and NCCL jobs `497470` and
+  `497471`; vLLM loaded the real-NVFP4 model and completed CUDA-graph capture.
+- The NCCL arm then stopped in its driver-side config validator because the
+  driver venv lacked the optional `modelopt.torch` dependency used to resolve
+  the custom NVFP4 recipe. The worker venv already had ModelOpt.
+- Updated the experiment wrapper to launch the driver with the official
+  `modelopt` extra. The legacy arm remains active.
