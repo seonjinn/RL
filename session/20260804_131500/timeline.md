@@ -15,3 +15,11 @@
 - Reproduced the parser failure with a synthetic one-line entry before fixing it.
 - API verification showed the exported 40-character key is invalid while the
   86-character `.netrc` token is valid; the launcher now prefers `.netrc`.
+
+## 2026-08-04 17:45 PDT
+
+- Jobs `496459` and `496460` passed W&B and reached vLLM model initialization.
+- Both failed at `assert self.moe_kernel is not None` in vLLM 0.25 ModelOpt.
+- Cherry-picked `553b985aa` and `c12c0eb7a`, which initialize the modular MoE
+  kernel and restore the quantized value/scale tensor shapes.
+- Python compilation and `git diff --check` passed for both fixes.

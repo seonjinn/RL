@@ -23,10 +23,11 @@ Run a matched current-head PR 3477 legacy versus NCCL-Reshard A/B on GCP-NRT.
 
 ## Current Status
 
-The first paired jobs reached the driver but failed before model initialization
-because the launcher parsed the one-line `.netrc` entry as `api.wandb.ai`
-instead of selecting the field after `password`. The parser is being fixed;
-the dependency caches are now warm for the rerun.
+The credential-fixed jobs reached vLLM initialization, then both arms failed in
+`modelopt.py:2227` because `moe_kernel` was still `None`. The failure exactly
+matches two already-tested follow-up fixes from the QKVO smoke branch:
+initialize the vLLM 0.25 modular MoE kernel and preserve MXFP8 tensor shapes.
+Those fixes are now cherry-picked onto the isolated performance branch.
 
 ## Plan
 
@@ -36,7 +37,8 @@ the dependency caches are now warm for the rerun.
 
 ## Assumptions
 
-- The staged vLLM 0.25.1 nightly and shared GCP-NRT caches remain valid.
+- Measurements will be labeled PR 3477 plus the required vLLM 0.25 runtime
+  fixes until those commits are added to the PR branch itself.
 
 ## Blockers
 

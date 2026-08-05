@@ -2,14 +2,15 @@
 
 ## Resume From Here
 
-The first jobs `496441` and `496442` failed before model initialization because
-the launcher selected field 2 from a one-line `.netrc` entry. Commit and pull
-the corrected field-aware parser, then rerun with the now-warm caches.
+The credential issue is fixed. Jobs `496459` and `496460` then exposed a vLLM
+0.25 runtime assertion because the modular MXFP8 MoE kernel was uninitialized.
+The two existing smoke-tested fixes are cherry-picked as `bf3005a7a` and
+`29ac96193`; push, pull, and rerun with warm driver and worker environments.
 
 ## Next Actions
 
-- Commit and push the W&B parser fix.
-- Pull on GCP-NRT, resubmit `submit_pair.sh`, and monitor five minutes.
+- Push the two vLLM runtime fixes and updated session notes.
+- Pull on GCP-NRT, resubmit `submit_pair.sh`, and monitor through step 2.
 
 ## Watch Outs
 
