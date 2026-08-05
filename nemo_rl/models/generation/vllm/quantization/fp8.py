@@ -1018,6 +1018,28 @@ def process_weights_after_loading_mxfp8_moe(self, layer) -> None:
     layer.w13_weight.copy_(torch.stack(w13_weight_shuffled).contiguous())
     layer.w2_weight.copy_(torch.stack(w2_weight_shuffled).contiguous())
 
+    _initialize_mxfp8_moe_kernel(self, layer)
+
+
+def _initialize_mxfp8_moe_kernel(method, layer) -> None:
+    """Initialize vLLM 0.25's modular MoE kernel after layout conversion."""
+    if method.moe_kernel is not None:
+        return
+
+    from vllm.model_executor.layers.fused_moe.oracle.fp8 import make_fp8_moe_kernel
+
+    method.moe_quant_config = method.get_fused_moe_quant_config(layer)
+    assert method.moe_quant_config is not None
+    assert method.experts_cls is not None
+    method.moe_kernel = make_fp8_moe_kernel(
+        moe_quant_config=method.moe_quant_config,
+        moe_config=method.moe,
+        fp8_backend=method.mxfp8_backend,
+        experts_cls=method.experts_cls,
+        routing_tables=layer._expert_routing_tables(),
+        layer=layer,
+    )
+
 
 def process_weights_after_loading_kv(self, layer) -> None:
     """Modified version of BaseKVCacheMethod.process_weights_after_loading.

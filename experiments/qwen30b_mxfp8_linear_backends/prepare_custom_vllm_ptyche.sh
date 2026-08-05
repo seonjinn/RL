@@ -11,7 +11,7 @@ case "${ACTION}" in
 esac
 
 VLLM_GIT_URL=${VLLM_GIT_URL:-https://github.com/seonjinn/vllm.git}
-VLLM_GIT_REF=${VLLM_GIT_REF:-66e34298216022055d67afa9b45a1bd477b5c2d2}
+VLLM_GIT_REF=${VLLM_GIT_REF:-a76062edee3a3ac23d47a93c7ce466f06a19111f}
 VLLM_WHEEL=${VLLM_WHEEL:-https://github.com/vllm-project/vllm/releases/download/v0.25.1/vllm-0.25.1-cp38-abi3-manylinux_2_28_aarch64.whl}
 
 ACCOUNT=${SLURM_ACCOUNT:-coreai_dlalgo_llm}

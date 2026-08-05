@@ -10,7 +10,7 @@ All arms use the shipped four-node performance recipe, 4 GPUs per node, a global
 
 The stock recipe leaves Q/K/V/O projections in BF16. This comparison removes those four exclusions so the selected dense MXFP8 backend is exercised by the projection layers. `lm_head` and `mlp.gate` remain unquantized.
 
-The TRTLLM arm uses the custom vLLM implementation at commit `66e34298216022055d67afa9b45a1bd477b5c2d2`. Exact tactic hints are intentionally omitted from this first backend comparison, so TRTLLM uses its backend-default tactic. Backend allowlists and CuTeDSL fallback are disabled; a layer that cannot use the requested backend fails the smoke gate instead of silently changing the experiment arm.
+The TRTLLM arm uses the custom vLLM implementation at commit `a76062edee3a3ac23d47a93c7ce466f06a19111f`. Exact tactic hints are intentionally omitted from this first backend comparison, so TRTLLM uses its backend-default tactic. Backend allowlists and CuTeDSL fallback are disabled; a layer that cannot use the requested backend fails the smoke gate instead of silently changing the experiment arm.
 
 ## Workflow
 

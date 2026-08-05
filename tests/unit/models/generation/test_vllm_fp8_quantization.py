@@ -480,3 +480,43 @@ def test_mxfp8_linear_rejects_non_2d_weight_before_backend_dispatch(
 
     with pytest.raises(ValueError, match="must be 2D, but got 3D"):
         fp8.process_weights_after_loading_mxfp8_linear(Method(), layer)
+
+
+def test_initialize_mxfp8_moe_kernel_is_idempotent(fp8_module, monkeypatch):
+    fp8 = fp8_module
+    created_kernel = object()
+    calls = []
+
+    def make_fp8_moe_kernel(**kwargs):
+        calls.append(kwargs)
+        return created_kernel
+
+    from vllm.model_executor.layers.fused_moe.oracle import fp8 as fp8_oracle
+
+    monkeypatch.setattr(fp8_oracle, "make_fp8_moe_kernel", make_fp8_moe_kernel)
+
+    quant_config = object()
+    experts_cls = object()
+    routing_tables = object()
+    layer = types.SimpleNamespace(
+        _expert_routing_tables=lambda: routing_tables,
+    )
+    method = types.SimpleNamespace(
+        moe_kernel=None,
+        moe_quant_config=None,
+        moe=object(),
+        mxfp8_backend=object(),
+        experts_cls=experts_cls,
+        get_fused_moe_quant_config=lambda _layer: quant_config,
+    )
+
+    fp8._initialize_mxfp8_moe_kernel(method, layer)
+    fp8._initialize_mxfp8_moe_kernel(method, layer)
+
+    assert method.moe_kernel is created_kernel
+    assert method.moe_quant_config is quant_config
+    assert len(calls) == 1
+    assert calls[0]["moe_quant_config"] is quant_config
+    assert calls[0]["experts_cls"] is experts_cls
+    assert calls[0]["routing_tables"] is routing_tables
+    assert calls[0]["layer"] is layer
