@@ -66,9 +66,15 @@ mkdir -p "${EXPERIMENT_ROOT}" "${CACHE_ROOT}" "${WORK_ROOT}/.cache/huggingface"
 WANDB_KEY_FILE=${CACHE_ROOT}/.wandb_key
 if [[ -n "${WANDB_API_KEY:-}" ]]; then
   (umask 077; printf '%s\n' "${WANDB_API_KEY}" >"${WANDB_KEY_FILE}")
-elif [[ ! -s "${WANDB_KEY_FILE}" && -f "${HOME}/.netrc" ]]; then
-  (umask 077; awk '/api.wandb.ai/{f=1} f&&/password/{print $2; exit}' \
-    "${HOME}/.netrc" >"${WANDB_KEY_FILE}")
+elif [[ -f "${HOME}/.netrc" ]]; then
+  (umask 077; awk '
+    {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "machine" && $(i + 1) == "api.wandb.ai") found = 1
+        if (found && $i == "password") { print $(i + 1); exit }
+      }
+    }
+  ' "${HOME}/.netrc" >"${WANDB_KEY_FILE}")
 fi
 test -s "${WANDB_KEY_FILE}"
 

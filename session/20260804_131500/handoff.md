@@ -2,13 +2,14 @@
 
 ## Resume From Here
 
-Run the GCP-NRT test-only gate, submit the paired PR 3477 20-step jobs, monitor
-startup for five minutes, then summarize W&B steps 3-20.
+The first jobs `496441` and `496442` failed before model initialization because
+the launcher selected field 2 from a one-line `.netrc` entry. Commit and pull
+the corrected field-aware parser, then rerun with the now-warm caches.
 
 ## Next Actions
 
-- Commit and push `sna/pr3477-perf-ab`.
-- Clone or pull the branch on GCP-NRT and submit `submit_pair.sh`.
+- Commit and push the W&B parser fix.
+- Pull on GCP-NRT, resubmit `submit_pair.sh`, and monitor five minutes.
 
 ## Watch Outs
 
