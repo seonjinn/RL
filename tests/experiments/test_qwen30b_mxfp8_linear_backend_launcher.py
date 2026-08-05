@@ -64,6 +64,7 @@ def test_dry_run_changes_only_backend(tmp_path: Path) -> None:
         assert "cluster.gpus_per_node=4" in output
         assert "cluster.segment_size=4" in output
         assert "grpo.max_num_steps=8" in output
+        assert "SETUPTOOLS_SCM_PRETEND_VERSION=0.25.1" in output
         assert "--qos=interactive" in output
         assert output.count("uv run --frozen --extra vllm") == 2
         assert f"uv venv {tmp_path}" in output
@@ -101,6 +102,7 @@ def test_custom_vllm_build_is_recoverable() -> None:
     assert "3rdparty/vllm/.venv/bin/python - <<'PY'" in prepare_text
     assert "uv run --frozen python - <<'PY'" not in prepare_text
     assert "3rdparty/vllm/.venv uv lock" in prepare_text
+    assert "SETUPTOOLS_SCM_PRETEND_VERSION=0.25.1" in prepare_text
     assert "setuptools_rust" in build_text
     assert "existing_vllm_valid=false" in prepare_text
     assert "3rdparty/vllm/.venv/bin/python -c 'import vllm'" in prepare_text
