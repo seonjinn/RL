@@ -40,6 +40,31 @@ def _parse_uv_version(output: str) -> str:
     return fields[1]
 
 
+def _validate_cuda_graph_checksums(
+    captured: float,
+    first_replay: float,
+    second_replay: float,
+    expected_captured: float,
+    expected_first_replay: float,
+    expected_second_replay: float,
+) -> None:
+    if captured != expected_captured:
+        raise RuntimeError(
+            "CUDA graph capture checksum mismatch: "
+            f"expected {expected_captured}, got {captured}"
+        )
+    if first_replay != expected_first_replay:
+        raise RuntimeError(
+            "CUDA graph first replay checksum mismatch: "
+            f"expected {expected_first_replay}, got {first_replay}"
+        )
+    if second_replay != expected_second_replay:
+        raise RuntimeError(
+            "CUDA graph second replay checksum mismatch: "
+            f"expected {expected_second_replay}, got {second_replay}"
+        )
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--expected-device-count", type=int, required=True)
@@ -50,19 +75,45 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _capture_cuda_graph(torch: Any, device_index: int) -> float:
+def _capture_cuda_graph(torch: Any, device_index: int) -> tuple[float, float, float]:
     with torch.cuda.device(device_index):
         tensor = torch.ones((64, 64), device="cuda", dtype=torch.float32)
-        for _ in range(3):
-            tensor.add_(1.0)
-        torch.cuda.synchronize()
+        current_stream = torch.cuda.current_stream(device_index)
+        warmup_stream = torch.cuda.Stream(device=device_index)
+        warmup_stream.wait_stream(current_stream)
+        with torch.cuda.stream(warmup_stream):
+            for _ in range(3):
+                tensor.mul_(2.0)
+                tensor.fill_(1.0)
+        current_stream.wait_stream(warmup_stream)
+        torch.cuda.synchronize(device_index)
 
         graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
+        capture_stream = torch.cuda.Stream(device=device_index)
+        capture_stream.wait_stream(current_stream)
+        with torch.cuda.graph(graph, stream=capture_stream):
             tensor.mul_(2.0)
+        current_stream.wait_stream(capture_stream)
+        torch.cuda.synchronize(device_index)
+        captured_checksum = float(tensor.sum().item())
+
         graph.replay()
-        torch.cuda.synchronize()
-        return float(tensor.sum().item())
+        torch.cuda.synchronize(device_index)
+        first_replay_checksum = float(tensor.sum().item())
+
+        graph.replay()
+        torch.cuda.synchronize(device_index)
+        second_replay_checksum = float(tensor.sum().item())
+        elements = float(tensor.numel())
+        _validate_cuda_graph_checksums(
+            captured_checksum,
+            first_replay_checksum,
+            second_replay_checksum,
+            expected_captured=elements,
+            expected_first_replay=elements * 2.0,
+            expected_second_replay=elements * 4.0,
+        )
+        return captured_checksum, first_replay_checksum, second_replay_checksum
 
 
 def main() -> None:
@@ -139,7 +190,11 @@ def main() -> None:
 
     devices: list[dict[str, Any]] = []
     for device_index in range(device_count):
-        graph_checksum = _capture_cuda_graph(torch, device_index)
+        (
+            captured_checksum,
+            first_replay_checksum,
+            second_replay_checksum,
+        ) = _capture_cuda_graph(torch, device_index)
         with cupy.cuda.Device(device_index):
             cupy_array = cupy.arange(32, dtype=cupy.float32)
             cupy_checksum = float(cupy_array.sum().get())
@@ -148,13 +203,15 @@ def main() -> None:
                 "index": device_index,
                 "name": torch.cuda.get_device_name(device_index),
                 "capability": list(torch.cuda.get_device_capability(device_index)),
-                "torch_cuda_graph_checksum": graph_checksum,
+                "torch_cuda_graph_capture_checksum": captured_checksum,
+                "torch_cuda_graph_first_replay_checksum": first_replay_checksum,
+                "torch_cuda_graph_checksum": second_replay_checksum,
                 "cupy_checksum": cupy_checksum,
             }
         )
 
     result = {
-        "schema": "nemo-rl-nightly-gpu-runtime-smoke-v1",
+        "schema": "nemo-rl-nightly-gpu-runtime-smoke-v2",
         "status": "passed",
         "bootstrap_python": sys.version,
         "managed_python": {

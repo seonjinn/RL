@@ -19,6 +19,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 
 def test_uv_version_parser_accepts_platform_suffix() -> None:
     probe = Path(__file__).with_name("nightly_gpu_runtime_probe.py")
@@ -28,6 +30,20 @@ def test_uv_version_parser_accepts_platform_suffix() -> None:
     assert callable(parser), "runtime probe must expose a semantic uv version parser"
     parse_uv_version = cast(Callable[[str], str], parser)
     assert parse_uv_version("uv 0.11.28 (aarch64-unknown-linux-gnu)") == "0.11.28"
+
+
+def test_cuda_graph_checksum_validation_rejects_empty_replay() -> None:
+    probe = Path(__file__).with_name("nightly_gpu_runtime_probe.py")
+    namespace = runpy.run_path(str(probe))
+    validator = namespace.get("_validate_cuda_graph_checksums")
+
+    assert callable(validator), "runtime probe must validate capture and replay effects"
+    validate = cast(
+        Callable[[float, float, float, float, float, float], None], validator
+    )
+    validate(4096.0, 8192.0, 16384.0, 4096.0, 8192.0, 16384.0)
+    with pytest.raises(RuntimeError, match="first replay checksum mismatch"):
+        validate(4096.0, 4096.0, 4096.0, 4096.0, 8192.0, 16384.0)
 
 
 def test_launcher_stages_mcore_environment_in_writable_job_local_storage() -> None:
