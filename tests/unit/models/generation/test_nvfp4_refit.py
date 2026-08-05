@@ -129,6 +129,46 @@ def test_serialize_singleton_down_projection_uses_exact_canonical_family(
     assert requested_modes == ["w4a16_nvfp4"]
 
 
+@pytest.mark.parametrize("mode", ["w4a16", "w4a4"])
+def test_serialize_non_gated_expert_up_uses_explicit_group_membership(
+    monkeypatch: pytest.MonkeyPatch,
+    _fake_pinned_quant_meta: None,
+    mode: str,
+) -> None:
+    calls: list[tuple[str, torch.Tensor, object]] = []
+    monkeypatch.setattr(
+        nvfp4_refit,
+        "get_modelopt_quant_exporter",
+        lambda quant_mode: (
+            "modelopt_w4a16_nvfp4" if mode == "w4a16" else "modelopt_nvfp4",
+            _fake_exporter(calls, with_input_scale=mode == "w4a4"),
+        ),
+    )
+    if mode == "w4a4":
+        monkeypatch.setattr(
+            nvfp4_refit,
+            "compute_nvfp4_input_scale",
+            lambda _value: torch.tensor(0.25),
+        )
+    name = "model.layers.0.mlp.experts.3.up_proj.weight"
+    calibration = (
+        nvfp4_refit.NVFP4Calibration({name: torch.tensor(12.0)})
+        if mode == "w4a4"
+        else None
+    )
+
+    result = nvfp4_refit.serialize_bf16_nvfp4_group(
+        {name: torch.ones((32, 16), dtype=torch.bfloat16)},
+        mode=mode,
+        calibration=calibration,
+        expected_names=(name,),
+    )
+
+    assert result[0][0] == name
+    assert calls[0][0] == name
+    assert len(result) == (4 if mode == "w4a4" else 3)
+
+
 def test_serialize_gate_up_is_one_group_with_shared_weight_amax(
     monkeypatch: pytest.MonkeyPatch,
     _fake_pinned_quant_meta: None,

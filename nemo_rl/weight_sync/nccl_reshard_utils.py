@@ -524,11 +524,6 @@ def _build_component_metadata(
     transform = meta.get("refit_transform")
     target_format = None
     if transform is None:
-        if input_dtype is not torch.bfloat16:
-            raise ValueError(
-                f"nccl_reshard: {param_name!r} identity refit requires storage dtype "
-                f"torch.bfloat16; got {meta['dtype']!r}. An explicit transform codec is required."
-            )
         wire_component_specs = (
             TransformComponentSpec("weight", global_shape, str(input_dtype)),
         )

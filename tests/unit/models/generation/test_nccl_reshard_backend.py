@@ -475,6 +475,34 @@ def test_build_hf_to_local_param_map_rejects_invalid_receiver_mxfp8_scale_shape(
         ext.build_hf_to_local_param_map(refit_info)
 
 
+def test_build_hf_to_local_param_map_keeps_matching_blockwise_fp8_storage():
+    H, E, P = 32, 2, 64
+    name = "model.layers.0.mlp.experts.down_proj.weight"
+    refit_info = {
+        "gen_tp_size": 1,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": name,
+                    "global_shape": [E, H, P],
+                    "transform_id": "identity",
+                    "grouped_expert_proj": "down_proj",
+                    "components": _identity_components((E, H, P), torch.float8_e4m3fn),
+                }
+            ]
+        },
+    }
+    w2 = torch.empty(E, H, P, dtype=torch.float8_e4m3fn)
+    ext = _make_ext({"model.layers.0.mlp.experts.w2_weight": w2})
+
+    spec = ext.build_hf_to_local_param_map(refit_info).get(name)
+
+    assert spec is not None
+    assert spec.base.data_ptr() == w2.data_ptr()
+    assert spec.pre is None and spec.post is None
+
+
 @pytest.mark.parametrize(
     ("dtype", "shape", "error"),
     [

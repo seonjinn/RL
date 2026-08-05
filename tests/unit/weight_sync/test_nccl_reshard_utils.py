@@ -938,17 +938,29 @@ def test_build_refit_info_describes_identity_bf16_as_one_weight_component():
     ]
 
 
-def test_build_refit_info_rejects_fp8_identity_without_explicit_codec():
+def test_build_refit_info_preserves_fp8_identity_storage():
     name = "model.layers.0.mlp.down_proj.weight"
+    info = build_nccl_reshard_refit_info(
+        {name: {"shape": [64, 128], "dtype": "torch.float8_e4m3fn"}},
+        train_parallelism={"tp_size": 2, "ep_size": 1, "pp_size": 1},
+        gen_parallelism={"tp_size": 2, "ep_size": 1, "pp_size": 1},
+        train_world_size=2,
+        gen_world_size=2,
+    )
 
-    with pytest.raises(ValueError, match="identity refit requires storage dtype"):
-        build_nccl_reshard_refit_info(
-            {name: {"shape": [64, 128], "dtype": "torch.float8_e4m3fn"}},
-            train_parallelism={"tp_size": 2, "ep_size": 1, "pp_size": 1},
-            gen_parallelism={"tp_size": 2, "ep_size": 1, "pp_size": 1},
-            train_world_size=2,
-            gen_world_size=2,
-        )
+    param = _find(info, name)
+    expected_component = {
+        "role": "weight",
+        "global_shape": (64, 128),
+        "dtype": "torch.float8_e4m3fn",
+        "src_placements": [Shard(1)],
+        "dst_placements": [Shard(1)],
+    }
+    assert param["transform_id"] == "identity"
+    assert param["wire_components"] == [expected_component]
+    assert param["destination_components"] == [
+        {**expected_component, "source": "codec"}
+    ]
 
 
 def test_build_refit_info_canonicalizes_component_plan_signature():

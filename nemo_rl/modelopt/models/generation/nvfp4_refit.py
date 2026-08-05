@@ -143,6 +143,7 @@ def serialize_bf16_nvfp4_group(
     *,
     mode: NVFP4RefitMode,
     calibration: NVFP4Calibration | None,
+    expected_names: tuple[str, ...] | None = None,
 ) -> list[tuple[str, torch.Tensor]]:
     """Serialize one complete BF16 NVFP4 refit group with ModelOpt.
 
@@ -150,6 +151,8 @@ def serialize_bf16_nvfp4_group(
         tensors: Logical BF16 HF weights belonging to one refit group.
         mode: ``w4a16`` for weight-only NVFP4 or ``w4a4`` for calibrated NVFP4.
         calibration: Named input amax values required by W4A4.
+        expected_names: Optional metadata-defined group membership. This is
+            required for expert layouts whose up projection has no gate peer.
 
     Returns:
         ModelOpt checkpoint-layout tensors in exporter order.
@@ -166,12 +169,12 @@ def serialize_bf16_nvfp4_group(
     if not eligible_tensors:
         return []
 
-    _, expected_names = _validate_group_members(eligible_tensors)
-    weights = [eligible_tensors[name] for name in expected_names]
-    _validate_weight_shapes(expected_names, weights)
-    shared_amax = _shared_weight_amax(expected_names, weights)
+    _, resolved_names = _validate_group_members(eligible_tensors, expected_names)
+    weights = [eligible_tensors[name] for name in resolved_names]
+    _validate_weight_shapes(resolved_names, weights)
+    shared_amax = _shared_weight_amax(resolved_names, weights)
     input_amaxes = {
-        name: _input_amax_for_weight(name, mode, calibration) for name in expected_names
+        name: _input_amax_for_weight(name, mode, calibration) for name in resolved_names
     }
 
     quant_mode = "w4a16_nvfp4" if mode == "w4a16" else "nvfp4"
@@ -179,7 +182,7 @@ def serialize_bf16_nvfp4_group(
     canonical_exporter = _as_nvfp4_exporter(exporter)
 
     serialized: list[tuple[str, torch.Tensor]] = []
-    for name, weight in zip(expected_names, weights, strict=True):
+    for name, weight in zip(resolved_names, weights, strict=True):
         meta = _load_quant_meta()(
             qformat=qformat,
             block_size=_BLOCK_SIZE,
@@ -262,19 +265,32 @@ def _quantize_nvfp4_weight(
 
 def _validate_group_members(
     tensors: Mapping[str, torch.Tensor],
+    expected_names: tuple[str, ...] | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     groups = {nvfp4_refit_group(name)[0] for name in tensors}
     if len(groups) != 1:
         raise ValueError(f"Expected one complete NVFP4 group, got {sorted(groups)}")
 
     group_name = next(iter(groups))
-    expected_names = nvfp4_refit_group(next(iter(tensors)))[1]
-    if set(tensors) != set(expected_names):
-        missing = sorted(set(expected_names).difference(tensors))
-        extra = sorted(set(tensors).difference(expected_names))
+    resolved_names = (
+        nvfp4_refit_group(next(iter(tensors)))[1]
+        if expected_names is None
+        else expected_names
+    )
+    if not resolved_names:
+        raise ValueError(f"NVFP4 group {group_name} has no expected members")
+    expected_groups = {nvfp4_refit_group(name)[0] for name in resolved_names}
+    if expected_groups != {group_name}:
+        raise ValueError(
+            f"NVFP4 group {group_name} has members from different groups: "
+            f"{sorted(expected_groups)}"
+        )
+    if set(tensors) != set(resolved_names):
+        missing = sorted(set(resolved_names).difference(tensors))
+        extra = sorted(set(tensors).difference(resolved_names))
         detail = f"missing {missing}" if missing else f"unexpected {extra}"
         raise ValueError(f"NVFP4 group {group_name} is not complete: {detail}")
-    return group_name, expected_names
+    return group_name, resolved_names
 
 
 def _validate_weight_shapes(

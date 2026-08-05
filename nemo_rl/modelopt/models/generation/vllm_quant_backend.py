@@ -761,6 +761,7 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
     _nrl_bf16_calibration: NVFP4Calibration | None = None
     _nrl_bf16_expected_input_scale_names: set[str] = set()
     _nrl_bf16_input_scale_cache: dict[str, torch.Tensor] = {}
+    _nrl_bf16_group_members: dict[str, tuple[str, ...]] = {}
     _nrl_collective_group_members: dict[str, tuple[str, ...]] = {}
     _nrl_collective_grouped_projections: dict[str, str] = {}
     _nrl_collective_bf16_staging: dict[str, dict[str, torch.Tensor]] = {}
@@ -866,7 +867,9 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
             if missing:
                 incomplete.append(f"collective group {group_name}: missing {missing}")
         for group_name, tensors in sorted(self._nrl_bf16_staging.items()):
-            expected = nvfp4_refit_group(next(iter(tensors)))[1]
+            expected = self._nrl_bf16_group_members.get(
+                group_name, nvfp4_refit_group(next(iter(tensors)))[1]
+            )
             missing = sorted(set(expected) - set(tensors))
             if missing:
                 incomplete.append(f"{group_name}: missing {missing}")
@@ -909,6 +912,13 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
         self._nrl_bf16_calibration = None
         self._nrl_bf16_expected_input_scale_names = set()
         self._nrl_bf16_input_scale_cache = {}
+        grouped_members: dict[str, list[str]] = {}
+        for name in sorted(self._nrl_bf16_quantizable_names):
+            group_name, _ = nvfp4_refit_group(name)
+            grouped_members.setdefault(group_name, []).append(name)
+        self._nrl_bf16_group_members = {
+            group_name: tuple(names) for group_name, names in grouped_members.items()
+        }
         self._nrl_collective_group_members = {}
         self._nrl_collective_grouped_projections = {}
         self._nrl_collective_bf16_staging = {}
@@ -1254,7 +1264,7 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
                 direct_weights.append((name, weight))
                 continue
 
-            group_name, _expected_names = nvfp4_refit_group(name)
+            group_name, _ = nvfp4_refit_group(name)
             incoming_groups.setdefault(group_name, {})[name] = weight
             incoming_names.add(name)
 
@@ -1263,7 +1273,10 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
         for group_name, incoming in incoming_groups.items():
             group_tensors = dict(self._nrl_bf16_staging.get(group_name, {}))
             group_tensors.update(incoming)
-            expected_names = nvfp4_refit_group(next(iter(group_tensors)))[1]
+            inferred_names = nvfp4_refit_group(next(iter(group_tensors)))[1]
+            expected_names = self._nrl_bf16_group_members.get(
+                group_name, inferred_names
+            )
             if set(group_tensors) != set(expected_names):
                 self._nrl_bf16_staging[group_name] = {
                     name: tensor.detach().clone() if name in incoming_names else tensor
@@ -1271,11 +1284,19 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
                 }
                 continue
 
-            group_weights = serialize_bf16_nvfp4_group(
-                group_tensors,
-                mode=self._nrl_bf16_mode,
-                calibration=self._nrl_bf16_calibration,
-            )
+            if expected_names != inferred_names:
+                group_weights = serialize_bf16_nvfp4_group(
+                    group_tensors,
+                    mode=self._nrl_bf16_mode,
+                    calibration=self._nrl_bf16_calibration,
+                    expected_names=expected_names,
+                )
+            else:
+                group_weights = serialize_bf16_nvfp4_group(
+                    group_tensors,
+                    mode=self._nrl_bf16_mode,
+                    calibration=self._nrl_bf16_calibration,
+                )
             if self._nrl_bf16_mode == "w4a4":
                 expected_input_scales = {
                     _input_scale_name(name) for name in expected_names

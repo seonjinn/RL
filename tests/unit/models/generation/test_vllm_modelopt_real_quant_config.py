@@ -2146,6 +2146,59 @@ def test_real_quant_bf16_split_group_stages_owned_weights_and_forwards_directly(
     assert [name for name, _ in forwarded] == [gate, up]
 
 
+@pytest.mark.parametrize("mode", ["w4a16", "w4a4"])
+def test_real_quant_bf16_non_gated_up_uses_manifest_group_membership(
+    monkeypatch,
+    mode,
+):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    up = "model.layers.0.mlp.experts.0.up_proj.weight"
+    group_name = "model.layers.0.mlp.experts.0.w13"
+    input_scale_name = up.removesuffix(".weight") + ".input_scale"
+    model = torch.nn.Module()
+    model.model = torch.nn.Module()
+    model.model.layers = torch.nn.ModuleList([torch.nn.Module()])
+    model.model.layers[0].mlp = torch.nn.Module()
+    model.model.layers[0].mlp.experts = _new_modelopt_moe()
+    extension = _make_real_quant_extension(backend, model, [])
+    _patch_real_quant_load(monkeypatch, backend)
+    extension.prepare_refit_info(_bf16_weight_info(up))
+    extension._nrl_bf16_mode = mode
+    extension._nrl_bf16_calibration = (
+        NVFP4Calibration({up: torch.tensor(12.0)}) if mode == "w4a4" else None
+    )
+    if mode == "w4a4":
+        extension._nrl_bf16_expected_input_scale_names = {input_scale_name}
+
+    serialized_calls = []
+    forwarded = []
+
+    def serialize(tensors, *, mode, calibration, expected_names=None):
+        serialized_calls.append((dict(tensors), mode, calibration, expected_names))
+        outputs = [(up, tensors[up].clone())]
+        if mode == "w4a4":
+            outputs.append((input_scale_name, torch.tensor(0.25)))
+        return outputs
+
+    monkeypatch.setattr(backend, "serialize_bf16_nvfp4_group", serialize)
+    monkeypatch.setattr(
+        backend.VllmInternalWorkerExtension,
+        "_load_weights",
+        lambda _self, weights: forwarded.extend(weights) or "loaded",
+    )
+
+    assert extension._nrl_bf16_group_members == {group_name: (up,)}
+    assert (
+        extension._load_weights([(up, torch.ones((32, 16), dtype=torch.bfloat16))])
+        == "loaded"
+    )
+    assert serialized_calls[0][3] == (up,)
+    assert [name for name, _ in forwarded] == [
+        up,
+        *([input_scale_name] if mode == "w4a4" else []),
+    ]
+
+
 def test_real_quant_bf16_ignored_weight_passes_through_and_scales_stay_filtered(
     monkeypatch,
 ):
