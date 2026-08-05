@@ -17,7 +17,6 @@ if [[ -z "${WANDB_API_KEY:-}" ]]; then
   exit 2
 fi
 
-CONFIG_PATH="$PROJECT_ROOT/examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml"
 EXP_DIR="$SCRIPT_DIR/$EXP_NAME"
 LOG_DIR="$EXP_DIR/logs"
 JSON_METRICS="$EXP_DIR/metrics.json"
@@ -56,10 +55,7 @@ uv run --no-sync examples/run_grpo.py \
   cluster.num_nodes=$NUM_NODES \
   cluster.gpus_per_node=$GPUS_PER_NODE \
   cluster.segment_size=$SEGMENT_SIZE \
-  loss_fn.force_on_policy_ratio=false \
-  loss_fn.use_importance_sampling_correction=true \
   policy.generation.refit_transport=null \
-  policy.generation.vllm_kwargs.revision=ad44e777bcd18fa416d9da3bd8f70d33ebb85d39 \
   logger.log_dir="$LOG_DIR" \
   logger.wandb_enabled=True \
   logger.wandb.project="$WANDB_PROJECT_OVERRIDE" \

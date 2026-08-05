@@ -1,0 +1,18 @@
+defaults: ./grpo-qwen3-30ba3b-4n4g.yaml
+loss_fn:
+  force_on_policy_ratio: false
+  use_importance_sampling_correction: true
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-30ba3b-4n4g-bf16-control
+policy:
+  quant_cfg: null
+  generation:
+    quant_cfg: null
+    real_quant: false
+    vllm_kwargs:
+      revision: ad44e777bcd18fa416d9da3bd8f70d33ebb85d39
+logger:
+  log_dir: logs/grpo-qwen3-30ba3b-4n4g-bf16-control
+  wandb:
+    project: nemo-rl
+    name: grpo-qwen3-30ba3b-4n4g-bf16-control
