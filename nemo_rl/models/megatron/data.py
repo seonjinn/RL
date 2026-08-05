@@ -659,6 +659,48 @@ def process_microbatch(
                 )
                 cp_rank = get_context_parallel_rank()
                 cp_size = get_context_parallel_world_size()
+                if pad_packed_seq_for_hybridep:
+                    assert not model_slices_context_parallel_inputs, (
+                        "HybridEP packed padding is not supported when the model "
+                        "owns context-parallel input slicing."
+                    )
+                    assert cu_seqlens is not None
+                    (
+                        input_ids,
+                        local_input_ids,
+                        packed_seq_params,
+                        cu_seqlens_padded,
+                    ) = _pad_packed_seq_for_hybridep(
+                        input_ids=input_ids,
+                        input_ids_cp_sharded=local_input_ids,
+                        packed_seq_params=packed_seq_params,
+                        cu_seqlens_padded=cu_seqlens_padded,
+                        pad_packed_seq_to_multiple_of=pad_packed_seq_to_multiple_of,
+                        cp_rank=cp_rank,
+                        cp_size=cp_size,
+                    )
+                    packed_boundaries = _get_packed_seq_boundaries(cu_seqlens_padded)
+                    valid_seq_lengths = _get_valid_seq_lengths(cu_seqlens)
+                    full_padding_mask = _get_packed_seq_padding_mask(
+                        cu_seqlens=cu_seqlens,
+                        cu_seqlens_padded=cu_seqlens_padded,
+                        total_tokens=input_ids.shape[1],
+                        packed_boundaries=packed_boundaries,
+                        valid_seq_lengths=valid_seq_lengths,
+                    )
+                    padding_mask = _shard_packed_seq_on_this_cp_rank(
+                        full_padding_mask,
+                        cu_seqlens_padded,
+                        cp_rank=cp_rank,
+                        cp_size=cp_size,
+                        seq_dim=1,
+                        packed_boundaries=packed_boundaries,
+                    )
+                    assert padding_mask.shape == local_input_ids.shape, (
+                        f"padding_mask shape {padding_mask.shape} must match "
+                        f"model input shape {local_input_ids.shape}"
+                    )
+
                 if model_slices_context_parallel_inputs:
                     packed_seq_params = PackedSeqParams(
                         cu_seqlens_q=cu_seqlens,
@@ -688,48 +730,6 @@ def process_microbatch(
                     input_ids_cp_sharded = input_ids
                 else:
                     input_ids_cp_sharded = local_input_ids
-
-                if pad_packed_seq_for_hybridep:
-                    assert not model_slices_context_parallel_inputs, (
-                        "HybridEP packed padding is not supported when the model "
-                        "owns context-parallel input slicing."
-                    )
-                    assert cu_seqlens is not None
-                    (
-                        input_ids,
-                        input_ids_cp_sharded,
-                        packed_seq_params,
-                        cu_seqlens_padded,
-                    ) = _pad_packed_seq_for_hybridep(
-                        input_ids=input_ids,
-                        input_ids_cp_sharded=input_ids_cp_sharded,
-                        packed_seq_params=packed_seq_params,
-                        cu_seqlens_padded=cu_seqlens_padded,
-                        pad_packed_seq_to_multiple_of=pad_packed_seq_to_multiple_of,
-                        cp_rank=cp_rank,
-                        cp_size=cp_size,
-                    )
-                    packed_boundaries = _get_packed_seq_boundaries(cu_seqlens_padded)
-                    valid_seq_lengths = _get_valid_seq_lengths(cu_seqlens)
-                    full_padding_mask = _get_packed_seq_padding_mask(
-                        cu_seqlens=cu_seqlens,
-                        cu_seqlens_padded=cu_seqlens_padded,
-                        total_tokens=input_ids.shape[1],
-                        packed_boundaries=packed_boundaries,
-                        valid_seq_lengths=valid_seq_lengths,
-                    )
-                    padding_mask = _shard_packed_seq_on_this_cp_rank(
-                        full_padding_mask,
-                        cu_seqlens_padded,
-                        cp_rank=cp_rank,
-                        cp_size=cp_size,
-                        seq_dim=1,
-                        packed_boundaries=packed_boundaries,
-                    )
-                    assert padding_mask.shape == input_ids_cp_sharded.shape, (
-                        f"padding_mask shape {padding_mask.shape} must match "
-                        f"model input shape {input_ids_cp_sharded.shape}"
-                    )
                 # routed_experts and the R3 trace token identity ride the SAME
                 # per-seq zigzag CP sharding as input_ids, re-derived from
                 # cu_seqlens_padded.
