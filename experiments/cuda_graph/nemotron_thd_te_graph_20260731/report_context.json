@@ -2,45 +2,40 @@
   "schema_version": 1,
   "current_status": [
     {
-      "text": "Task 2 code review is approved at NeMo-RL d9fa50e868f3 and MCore 32d79616a309; the Linux and GB200 gates remain pending.",
-      "href": "../../../docs/superpowers/plans/2026-08-03-policy-logprob-training-cuda-graph.md"
+      "text": "The strict nightly GB200 runtime gate passed in OCI-HSG job 5891865 with non-empty capture and replay on all four GPUs."
     },
     {
-      "text": "Host validation now passes the exact six-module stage suite: 245 tests with the stage capability present in the ambient environment."
+      "text": "The first five 20-step jobs failed at their first HybridEP dispatch because the launcher forced a 16-rank NVLink domain for an 8-rank expert group; this was a common topology error, not a scope-specific CUDA Graph failure."
     },
     {
-      "text": "OCI-HSG CPU stage job 5852837 failed after 40 passes because one subprocess test inherited the stage capability; no marker or GPU job was produced."
+      "text": "Corrected jobs 5893771, 5893773, 5893775, 5893777, and 5893778 are running with EP=8, NVLink-domain ranks=8, sequence packing, warmup=3, and checkpoints disabled."
     },
     {
-      "text": "The last published Nano 20-step evidence remains available; the normalized ledger has no new rows yet.",
+      "text": "The previously published Nano 20-step evidence remains available while the corrected comparison window is collected.",
       "href": "results/paired_20step_summary.json"
     }
   ],
   "changes": [
     {
-      "text": "Harden candidate snapshots, submission intents, rank consensus, and exact capability evidence.",
-      "href": "submit_mcore_matrix.sh"
+      "text": "Forward HybridEP topology through the canonical NeMo-RL megatron_cfg path instead of overriding DeepEP environment variables directly.",
+      "href": "scripts/submit_oci_nano_direct.sh"
     },
     {
-      "text": "Derive model and scope preflight status from the canonical classifier.",
-      "href": "scope_matrix.py"
+      "text": "Reject incompatible expert-parallel and NVLink-domain sizes before sbatch; Nano EP=8 with domain=16 now fails fast."
     },
     {
-      "text": "Reject capability markers whose measured GPU binding differs from the expected rank topology."
-    },
-    {
-      "text": "Isolate subprocess tests from an ambient RUNTIME_STAGE_CAPABILITY while preserving explicitly supplied values."
+      "text": "Keep baseline, mamba, attn, router, and router-plus-preprocess in separate persistent checkouts and W&B runs."
     }
   ],
   "next_steps": [
     {
-      "text": "Commit and sync the hermetic-test fix, then resubmit the CPU-only stage and require its immutable marker."
+      "text": "Require all five corrected jobs to pass the first policy-training dispatch and complete 20 steps."
     },
     {
-      "text": "Run four-GPU runtime attestation, then the eight-rank GB200 capability gate with topology, replay, eager-parity, and no-gradient checks."
+      "text": "Then run attn+mamba+moe_router and attn+mamba+moe_router+moe_preprocess under the same settings."
     },
     {
-      "text": "After the gate passes, add policy/logprob graph banks and run 5, 20, then 100-step performance and correctness gates."
+      "text": "Compare steps 11-19 for E2E, generation, logprob, policy training, correctness, and measured CUDA Graph coverage."
     }
   ]
 }
