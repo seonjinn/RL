@@ -66,7 +66,7 @@ def test_dry_run_changes_only_backend(tmp_path: Path) -> None:
         assert "grpo.max_num_steps=8" in output
         assert (
             "NRL_VENV_BOOTSTRAP_PACKAGES='--torch-backend cu130 "
-            "torch==2.11.0 setuptools setuptools-rust'" in output
+            "torch==2.11.0 numpy setuptools setuptools-rust setuptools-scm'" in output
         )
         assert "SETUPTOOLS_SCM_PRETEND_VERSION=0.25.1" in output
         assert "--qos=interactive" in output
