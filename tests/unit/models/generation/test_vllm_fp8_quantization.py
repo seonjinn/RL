@@ -87,6 +87,7 @@ def mxfp8_linear_module(monkeypatch):
 
     torch = types.SimpleNamespace(
         nn=types.SimpleNamespace(Parameter=Parameter),
+        squeeze=lambda tensor, **_kwargs: tensor,
         zeros=lambda *shape: Tensor(shape, 0.0),
         ones=lambda *shape: Tensor(shape, 1.0),
     )
@@ -103,7 +104,7 @@ def mxfp8_linear_module(monkeypatch):
         pass
 
     add_module("ray")
-    add_module("torch", nn=torch.nn)
+    add_module("torch", nn=torch.nn, squeeze=torch.squeeze)
     add_module("accelerate", init_empty_weights=lambda: None)
     add_module("transformers", AutoConfig=object, AutoModel=object)
     add_module("nemo_rl")
@@ -136,6 +137,10 @@ def mxfp8_linear_module(monkeypatch):
     mxfp8_utils = add_module(
         "vllm.model_executor.layers.quantization.utils.mxfp8_utils",
         Mxfp8LinearBackend=mxfp8_linear_backend,
+        mxfp8_e4m3_quantize=lambda tensor: (
+            Tensor(tensor.shape, 2.0),
+            Tensor((tensor.shape[0], tensor.shape[1] // 32), 3.0),
+        ),
         swizzle_mxfp8_scale=lambda weight_scale, **_kwargs: weight_scale,
     )
     add_module("vllm.model_executor.layers.quantization.utils")
@@ -166,6 +171,58 @@ def mxfp8_linear_module(monkeypatch):
     monkeypatch.setitem(sys.modules, module_name, fp8)
     spec.loader.exec_module(fp8)
     return fp8, mxfp8_utils, torch, Tensor
+
+
+def test_load_weights_targets_native_mxfp8_checkpoint_scale(
+    mxfp8_linear_module, monkeypatch
+):
+    fp8, _, _, Tensor = mxfp8_linear_module
+    loaded_weights = []
+    kernel = types.SimpleNamespace(preserves_checkpoint_weight_scale_for_refit=True)
+    layer = types.SimpleNamespace(quant_method=types.SimpleNamespace(kernel=kernel))
+    model = types.SimpleNamespace(
+        load_weights=lambda weights: loaded_weights.extend(weights)
+    )
+    model_runner = types.SimpleNamespace(model=model)
+
+    monkeypatch.setattr(fp8, "_is_fp8_weight", lambda _name, _model: True)
+    monkeypatch.setattr(fp8, "_get_module_from_param_name", lambda _model, _name: layer)
+    fp8.global_fp8_config = types.SimpleNamespace(is_mx=True)
+
+    fp8.load_weights(
+        [("layers.0.self_attn.o_proj.weight", Tensor((64, 32), 1.0))],
+        model_runner,
+    )
+
+    assert [name for name, _ in loaded_weights] == [
+        "layers.0.self_attn.o_proj.weight",
+        "layers.0.self_attn.o_proj.weight_scale",
+    ]
+
+
+def test_load_weights_preserves_legacy_mxfp8_checkpoint_scale_name(
+    mxfp8_linear_module, monkeypatch
+):
+    fp8, _, _, Tensor = mxfp8_linear_module
+    loaded_weights = []
+    layer = types.SimpleNamespace(quant_method=types.SimpleNamespace(kernel=object()))
+    model = types.SimpleNamespace(
+        load_weights=lambda weights: loaded_weights.extend(weights)
+    )
+
+    monkeypatch.setattr(fp8, "_is_fp8_weight", lambda _name, _model: True)
+    monkeypatch.setattr(fp8, "_get_module_from_param_name", lambda _model, _name: layer)
+    fp8.global_fp8_config = types.SimpleNamespace(is_mx=True)
+
+    fp8.load_weights(
+        [("layers.0.self_attn.o_proj.weight", Tensor((64, 32), 1.0))],
+        types.SimpleNamespace(model=model),
+    )
+
+    assert [name for name, _ in loaded_weights] == [
+        "layers.0.self_attn.o_proj.weight",
+        "layers.0.self_attn.o_proj.weight_scale_from_checkpoint",
+    ]
 
 
 def test_init_fp8_uses_mxfp8_quantization_config(fp8_module, monkeypatch):

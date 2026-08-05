@@ -464,8 +464,16 @@ def load_weights(weights, model_runner):
             )
         param_scale = torch.squeeze(param_scale, dim=-1)
         if global_fp8_config.is_mx:
+            module = _get_module_from_param_name(model, k)
+            quant_method = getattr(module, "quant_method", None)
+            kernel = getattr(quant_method, "kernel", None)
+            scale_suffix = (
+                "_scale"
+                if getattr(kernel, "preserves_checkpoint_weight_scale_for_refit", False)
+                else "_scale_from_checkpoint"
+            )
             weights_quantized.append([k, param_lp])
-            weights_quantized.append([k + "_scale_from_checkpoint", param_scale])
+            weights_quantized.append([k + scale_suffix, param_scale])
         else:
             weights_quantized.append([k, param_lp])
             weights_quantized.append([k + "_scale_inv", param_scale])
