@@ -37,26 +37,37 @@ NVFP4_ROLLOUT_CASES = {
     "grpo-qwen3-30ba3b-4n4g-nvfp4-w4a16-rollout": (
         "examples/modelopt/quant_configs/nvfp4_experts_weightonly.yaml",
         False,
+        "marlin",
     ),
     "grpo-qwen3-30ba3b-4n4g-nvfp4-w4a4-rollout": (
         "examples/modelopt/quant_configs/nvfp4_experts.yaml",
         True,
+        "flashinfer_trtllm",
     ),
 }
 
 
 @pytest.mark.parametrize(
-    ("recipe_name", "expected_quant_cfg", "has_calibration_path"),
+    (
+        "recipe_name",
+        "expected_quant_cfg",
+        "has_calibration_path",
+        "expected_moe_backend",
+    ),
     [
         (recipe_name, expected_quant_cfg, has_calibration_path)
         for recipe_name, (
             expected_quant_cfg,
             has_calibration_path,
+            expected_moe_backend,
         ) in NVFP4_ROLLOUT_CASES.items()
     ],
 )
 def test_nvfp4_rollout_recipe_contract(
-    recipe_name: str, expected_quant_cfg: str, has_calibration_path: bool
+    recipe_name: str,
+    expected_quant_cfg: str,
+    has_calibration_path: bool,
+    expected_moe_backend: str,
 ) -> None:
     config = load_config(PERF_CONFIG_DIR / f"{recipe_name}.yaml")
     policy = config["policy"]
@@ -70,6 +81,7 @@ def test_nvfp4_rollout_recipe_contract(
     assert config["loss_fn"]["use_importance_sampling_correction"] is True
     assert generation["real_quant"] is True
     assert generation["quant_cfg"] == expected_quant_cfg
+    assert generation["vllm_kwargs"]["moe_backend"] == expected_moe_backend
     assert generation["vllm_kwargs"]["revision"] == QWEN3_30BA3B_REVISION
     assert "*.shared_expert.*" in generation["real_quant_ignore"]
     assert "*.shared_experts.*" in generation["real_quant_ignore"]

@@ -32,3 +32,12 @@
   `examples/modelopt/quant_configs/nvfp4_experts_weightonly.yaml` path.
 - Added project-relative quant-config normalization before real-NVFP4 mode
   resolution, with focused tests for Ray-like non-repository working directories.
+
+## 2026-08-05 04:06 PDT
+
+- W4A16 retry jobs `497435` and `497436` passed all six container gates and
+  resolved the custom quantization recipe correctly.
+- Both then failed vLLM backend validation because the BF16 base recipe's
+  `moe_backend: triton` was inherited by the real-NVFP4 overlay.
+- Pinned W4A16 to Marlin and W4A4 to FlashInfer TRT-LLM, and extended the
+  recipe contract to reject accidental backend inheritance.
