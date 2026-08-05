@@ -92,6 +92,7 @@ def test_rejects_unknown_backend(tmp_path: Path) -> None:
 def test_custom_vllm_build_is_recoverable() -> None:
     prepare_text = PREPARE_SCRIPT.read_text()
     build_text = BUILD_CUSTOM_VLLM_SCRIPT.read_text()
+    pyproject_text = (REPO_ROOT / "pyproject.toml").read_text()
 
     assert "3rdparty/vllm/nemo-rl.env" in prepare_text
     assert "vllm.incomplete" in prepare_text
@@ -107,3 +108,4 @@ def test_custom_vllm_build_is_recoverable() -> None:
     assert 'TORCH_REQUIREMENT=$(sed -nE' in build_text
     assert 'VLLM_TORCH_BACKEND:-cu130' in build_text
     assert "torch==2.10.0" not in build_text
+    assert 'vllm = ["setuptools", "setuptools-rust"]' in pyproject_text
