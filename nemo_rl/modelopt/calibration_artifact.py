@@ -273,13 +273,7 @@ def _resolve_quant_cfg_path(path: object) -> Path | None:
 
 
 def _is_file_backed_quant_cfg(quant_cfg: str) -> bool:
-    config_path = Path(quant_cfg).expanduser()
-    return config_path.is_absolute() or config_path.suffix.lower() in {
-        ".json",
-        ".toml",
-        ".yaml",
-        ".yml",
-    }
+    return Path(quant_cfg).expanduser().is_absolute()
 
 
 def _validate_artifact_names(raw_names: list[str]) -> list[str]:

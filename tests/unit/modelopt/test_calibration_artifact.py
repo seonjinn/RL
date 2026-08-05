@@ -638,6 +638,26 @@ def test_save_rejects_missing_file_backed_quant_cfg(
         )
 
 
+def test_save_accepts_symbolic_quant_cfg_with_yaml_suffix(
+    tmp_path: Path,
+    metadata: dict[str, str | int],
+) -> None:
+    symbolic_quant_cfg = "general/ptq/nvfp4_default-fp8_kv.yaml"
+    artifact_metadata = dict(metadata)
+    artifact_metadata["quant_cfg"] = symbolic_quant_cfg
+    path = tmp_path / "calibration.safetensors"
+
+    save_nvfp4_calibration(
+        path,
+        {"model.layers.0.mlp.up_proj.weight": torch.tensor(1.0)},
+        **artifact_metadata,
+    )
+
+    with safe_open(path, framework="pt", device="cpu") as artifact:
+        assert "quant_cfg_sha256" not in artifact.metadata()
+    _load(path, artifact_metadata)
+
+
 @pytest.mark.parametrize(
     "invalid_amax",
     [
