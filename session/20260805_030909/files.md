@@ -10,7 +10,7 @@
 ## Changed
 
 - `experiments/bf16-nvfp4-rollout/submit_gcp_nrt.sh` - reproducible GCP-NRT
-  preflight and submission wrapper.
+  preflight and submission wrapper with focused actor-path regression gates.
 - `experiments/bf16-nvfp4-rollout/README.md` - documents the GCP wrapper.
 - `nemo_rl/modelopt/calibration_artifact.py` - resolves repository-relative
   quantization recipes independently of actor working directory.
