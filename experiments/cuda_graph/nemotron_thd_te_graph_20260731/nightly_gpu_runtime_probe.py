@@ -60,7 +60,7 @@ def _capture_cuda_graph(torch: Any, device_index: int) -> float:
 
 def main() -> None:
     args = _parse_args()
-    uv_executable = "/opt/nemo_rl_venv/bin/uv"
+    uv_executable = "/root/.local/bin/uv"
     uv_version = subprocess.run(
         [uv_executable, "--version"],
         check=True,

@@ -123,14 +123,15 @@ fi
 mkdir -p "${ARTIFACT_DIR}"
 trap 'rm -f "${partial_result}"' EXIT
 unset PYTHONHOME PYTHONPATH VIRTUAL_ENV UV_PROJECT_ENVIRONMENT
-export SLURM_EXPORT_ENV=ALL
 srun \
   --nodes=1 \
   --ntasks=1 \
   "--gres=gpu:${EXPECTED_DEVICE_COUNT}" \
+  --no-container-mount-home \
   --container-image="${CONTAINER}" \
   --container-mounts="${PROJECT_ROOT}:${PROJECT_ROOT}:ro,${ARTIFACT_DIR}:${ARTIFACT_DIR}" \
-  --export=ALL \
+  --export=NIL \
+  /usr/bin/env HOME=/root \
   /opt/nemo_rl_venv/bin/python "${probe}" \
     --expected-device-count "${EXPECTED_DEVICE_COUNT}" \
     --expected-python-version "${EXPECTED_PYTHON_VERSION}" \
