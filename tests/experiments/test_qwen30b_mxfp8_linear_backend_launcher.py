@@ -89,4 +89,7 @@ def test_custom_vllm_build_is_recoverable() -> None:
 
     assert "3rdparty/vllm/nemo-rl.env" in prepare_text
     assert "vllm.incomplete" in prepare_text
+    assert "git submodule update --init --recursive --depth 1" in prepare_text
+    assert "3rdparty/vllm/.venv/bin/python -c 'import vllm'" in prepare_text
+    assert "uv lock" in prepare_text
     assert "setuptools_rust" in build_text

@@ -27,6 +27,15 @@ COMMAND=$(cat <<EOF
 set -euo pipefail
 cd ${REPO_DIR}
 export UV_PROJECT_ENVIRONMENT=
+git submodule update --init --recursive --depth 1
+if [[ -d 3rdparty/vllm/.git && ! -f 3rdparty/vllm/nemo-rl.env ]]; then
+  actual=\$(git -C 3rdparty/vllm rev-parse HEAD)
+  if [[ "\${actual}" == "${VLLM_GIT_REF}" ]] && \
+      3rdparty/vllm/.venv/bin/python -c 'import vllm'; then
+    printf 'export VLLM_GIT_REF=%s\nexport VLLM_PRECOMPILED_WHEEL_LOCATION=%s\n' \
+      '${VLLM_GIT_REF}' '${VLLM_WHEEL}' > 3rdparty/vllm/nemo-rl.env
+  fi
+fi
 if [[ -d 3rdparty/vllm/.git && -f 3rdparty/vllm/nemo-rl.env ]]; then
   actual=\$(git -C 3rdparty/vllm rev-parse HEAD)
   [[ "\${actual}" == "${VLLM_GIT_REF}" ]] || { echo "Existing custom vLLM commit is \${actual}" >&2; exit 1; }
@@ -39,6 +48,7 @@ else
   bash tools/build-custom-vllm.sh ${VLLM_GIT_URL} ${VLLM_GIT_REF} ${VLLM_WHEEL}
 fi
 source 3rdparty/vllm/nemo-rl.env
+uv lock
 export NRL_FORCE_REBUILD_VENVS=true
 uv run --frozen python - <<'PY'
 import flashinfer
