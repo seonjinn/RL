@@ -85,8 +85,8 @@ unset VLLM_MXFP8_DENSE_TRTLLM_LAYER_ALLOWLIST_B64
 unset VLLM_MXFP8_DENSE_TRTLLM_TACTIC_HINTS
 printf 'NEMO_RL_COMMIT=%s\n' "\$(git rev-parse HEAD)"
 printf 'VLLM_COMMIT=%s\n' "\$(git -C ${CUSTOM_VLLM_ROOT} rev-parse HEAD)"
-uv run --frozen python -c 'import flashinfer, vllm; print("vLLM=" + vllm.__version__); print("FlashInfer=" + flashinfer.__version__)'
-uv run --frozen examples/run_grpo.py \
+uv run --frozen --extra vllm python -c 'import flashinfer, vllm; print("vLLM=" + vllm.__version__); print("FlashInfer=" + flashinfer.__version__)'
+uv run --frozen --extra vllm examples/run_grpo.py \
   --config ${CONFIG} \
   cluster.num_nodes=${NUM_NODES} \
   cluster.gpus_per_node=${GPUS_PER_NODE} \

@@ -65,6 +65,7 @@ def test_dry_run_changes_only_backend(tmp_path: Path) -> None:
         assert "cluster.segment_size=4" in output
         assert "grpo.max_num_steps=8" in output
         assert "--qos=interactive" in output
+        assert output.count("uv run --frozen --extra vllm") == 2
 
 
 def test_rejects_unknown_backend(tmp_path: Path) -> None:
