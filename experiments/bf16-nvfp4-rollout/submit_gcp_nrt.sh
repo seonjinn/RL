@@ -137,6 +137,7 @@ printf 'NEMO_RL_SOURCE_COMMIT=%s\n' '${REPO_SHA}'
 uv run --frozen pytest -q \
   tests/test_nvfp4_rollout_recipes.py \
   tests/unit/modelopt/test_calibration_artifact.py::test_normalize_quant_cfg_identity_resolves_project_relative_path \
+  tests/unit/models/generation/test_nvfp4_refit.py::test_serializer_uses_modelopt_without_megatron_bridge \
   tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py::test_configure_quant_engine_kwargs_for_real_quant
 uv run --frozen --extra modelopt bash ${TEST_SCRIPT} \
   ++git_meta=${REPO_SHA:0:9} \
