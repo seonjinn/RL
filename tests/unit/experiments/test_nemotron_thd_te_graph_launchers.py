@@ -774,6 +774,11 @@ def test_rendered_nemorl_command_uses_only_current_graph_fields() -> None:
     assert "policy.megatron_cfg.cuda_graph_warmup_steps=3" in command
     assert "policy.megatron_cfg.cuda_graph_modules=[attn]" in command
     assert "policy.megatron_cfg.thd_max_packed_sequences=16" in command
+    assert "cluster.num_nodes=6" in command
+    assert "policy.generation.colocated.enabled=false" in command
+    assert "policy.generation.colocated.resources.num_nodes=2" in command
+    assert "policy.generation.colocated.resources.gpus_per_node=4" in command
+    assert "policy.offload_optimizer_for_logprob=false" in command
     assert "logger.wandb.project=sna-cg-study" in shlex.split(command)
     assert "NRL_FORCE_REBUILD_VENVS=true" in command
     assert "++policy.router_replay.enabled=false" in command
@@ -891,6 +896,12 @@ fi
     assert submissions.count("ARGS=") == 2
     assert submissions.count(f"ARG=--exclude={exclusion}") == 2
     assert submissions.count("ARG=--time=04:00:00") == 2
+    assert submissions.count("ARG=--nodes=6") == 2
+    assert "cluster.num_nodes=6" in submissions
+    assert "policy.generation.colocated.enabled=false" in submissions
+    assert "policy.generation.colocated.resources.num_nodes=2" in submissions
+    assert "policy.generation.colocated.resources.gpus_per_node=4" in submissions
+    assert "policy.offload_optimizer_for_logprob=false" in submissions
     assert "++policy.megatron_cfg.hybridep_use_mnnvl=true" in submissions
     assert "USE_MNNVL=1" not in submissions
     assert "NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN" not in submissions
@@ -954,6 +965,27 @@ def test_direct_oci_launcher_rejects_preprocess_without_router(tmp_path: Path) -
 
     assert result.returncode == 2
     assert "moe_preprocess requires moe_router" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    (("POLICY_NUM_NODES", "0"), ("GENERATION_NUM_NODES", "1.5")),
+)
+def test_direct_oci_launcher_rejects_invalid_role_node_counts(
+    tmp_path: Path,
+    name: str,
+    value: str,
+) -> None:
+    result = _run_script(
+        "scripts/submit_oci_nano_direct.sh",
+        SOURCE_ROOT=str(REPO_ROOT),
+        EXPERIMENT_ROOT=str(tmp_path / "runs"),
+        **{name: value},
+    )
+
+    assert result.returncode == 2
+    assert f"{name} must be a positive integer" in result.stderr
+    assert "SUBMITTED_JOB_ID" not in result.stdout
 
 
 def test_baseline_and_mamba_render_use_the_same_fused_attention_backend() -> None:
@@ -1051,7 +1083,15 @@ def test_qwen3_235b_selector_enables_router_graphs_but_blocks_preprocess() -> No
     spec = module.load_model_spec("qwen3_235b")
 
     assert spec.nemorl_recipe.endswith("grpo-qwen3-235b-16n4g.yaml")
-    assert (spec.num_nodes, spec.gpus_per_node) == (16, 4)
+    assert (
+        spec.nemorl_cluster_num_nodes,
+        spec.nemorl_generation_num_nodes,
+        spec.gpus_per_node,
+    ) == (
+        18,
+        2,
+        4,
+    )
     assert spec.dispatcher == "hybridep"
     assert spec.nemorl_tensorboard_enabled is False
     assert spec.moe_preprocess_graph_ready is False
@@ -1067,6 +1107,36 @@ def test_qwen3_235b_selector_enables_router_graphs_but_blocks_preprocess() -> No
         ).status
         == "capacity-blocked"
     )
+
+
+@pytest.mark.parametrize(
+    ("model", "allocation", "actor", "policy", "generation", "nemo_gym"),
+    (
+        ("nano", 6, 6, 4, 2, 0),
+        ("super", 8, 8, 4, 4, 0),
+        ("qwen3_30ba3b", 5, 5, 4, 1, 0),
+        ("qwen3_235b", 18, 18, 16, 2, 0),
+        ("ultra", 256, 236, 64, 172, 20),
+    ),
+)
+def test_model_selectors_account_for_actor_and_external_nodes_separately(
+    model: str,
+    allocation: int,
+    actor: int,
+    policy: int,
+    generation: int,
+    nemo_gym: int,
+) -> None:
+    module = _load_experiment_module("scope_matrix")
+
+    spec = module.load_model_spec(model)
+
+    assert spec.nemorl_allocation_num_nodes == allocation
+    assert spec.nemorl_cluster_num_nodes == actor
+    assert spec.policy_num_nodes == policy
+    assert spec.nemorl_generation_num_nodes == generation
+    assert spec.nemorl_gym_num_nodes == nemo_gym
+    assert spec.mcore_num_nodes == policy
 
 
 def test_selector_tensorboard_policy_is_rendered_verbatim() -> None:
@@ -1344,6 +1414,30 @@ def test_fake_sbatch_submission_writes_strict_complete_metadata(
     assert decoded["uv_executable"] == record["uv_executable"]
     assert decoded["r3_record_python"] == record["r3_record_python"]
     assert env["scope_name"] == record["scope_name"] == "baseline_no_cg"
+    expected_topology = (
+        {
+            "num_nodes": 5,
+            "gpus_per_node": 4,
+            "nemorl_allocation_num_nodes": 5,
+            "nemorl_cluster_num_nodes": 5,
+            "policy_num_nodes": 4,
+            "nemorl_generation_num_nodes": 1,
+            "nemorl_gym_num_nodes": 0,
+            "mcore_num_nodes": 4,
+        }
+        if router_replay == "on"
+        else {
+            "num_nodes": 6,
+            "gpus_per_node": 4,
+            "nemorl_allocation_num_nodes": 6,
+            "nemorl_cluster_num_nodes": 6,
+            "policy_num_nodes": 4,
+            "nemorl_generation_num_nodes": 2,
+            "nemorl_gym_num_nodes": 0,
+            "mcore_num_nodes": 4,
+        }
+    )
+    assert record["topology"] == expected_topology
     if router_replay == "on":
         assert decoded["r3_validation_record_pattern"]
         assert decoded["r3_validation_record_initial_path"].endswith("/r3-validation-job-321-restart-0/r3-validation.json")
@@ -2185,6 +2279,24 @@ def test_mcore_launcher_rejects_successful_noop_as_a_driver() -> None:
     assert "committed standalone driver" in result.stdout
     assert "COMMAND:" not in result.stdout
     assert "SBATCH:" not in result.stdout
+
+
+def test_mcore_launcher_allocates_policy_nodes_not_nemorl_total() -> None:
+    result = _run_script(
+        "scopes/17_attn.sh",
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="mcore",
+        MCORE_DRIVER=str(EXPERIMENT_DIR / "scripts" / "run_mcore_training.py"),
+        STEPS="20",
+        TEST_ONLY="1",
+        RUN_TAG="unit",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "STATUS: runnable" in result.stdout
+    assert "--nodes=4" in result.stdout
+    assert "--nodes=6" not in result.stdout
 
 
 def test_submitters_pin_smoke_performance_and_accuracy_steps() -> None:

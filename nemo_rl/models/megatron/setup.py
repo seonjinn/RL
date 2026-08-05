@@ -70,6 +70,9 @@ from megatron.core.utils import is_te_min_version
 from transformers import PreTrainedTokenizerBase
 
 from nemo_rl.distributed.model_utils import patch_gpt_model_forward_for_linear_ce_fusion
+from nemo_rl.models.megatron.cuda_graph_storage import (
+    validate_training_graph_storage_lifecycle,
+)
 
 _HF_CONFIG_PATCHED = False
 
@@ -321,9 +324,11 @@ def validate_and_set_config(
 ):
     # Handle generation configuration
     is_generation_colocated = None
+    generation_backend = None
     sampling_params = None
     if "generation" in config and config["generation"] is not None:
         generation_cfg = config["generation"]
+        generation_backend = generation_cfg.get("backend")
         # set generation colocated
         is_generation_colocated = generation_cfg["colocated"]["enabled"]
         # set sampling params
@@ -385,6 +390,20 @@ def validate_and_set_config(
         pretrained_path,
         weights_path,
         optimizer_path,
+    )
+    validate_training_graph_storage_lifecycle(
+        cuda_graph_impl=str(getattr(megatron_cfg.model, "cuda_graph_impl", "none")),
+        generation_colocated=is_generation_colocated,
+        generation_backend=generation_backend,
+        fp8_enabled=bool(
+            (config["megatron_cfg"].get("fp8_cfg") or {}).get("enabled", False)
+        ),
+        use_custom_fsdp=bool(
+            config["megatron_cfg"]
+            .get("distributed_data_parallel_config", {})
+            .get("use_custom_fsdp", False)
+        ),
+        offload_optimizer_for_logprob=offload_optimizer_for_logprob,
     )
 
     final_padded_vocab_size = calculate_padded_vocab_size(

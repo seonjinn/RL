@@ -66,6 +66,12 @@ from nemo_rl.models.megatron.cuda_graph_lifecycle import (
     TECudaGraphLifecycle,
     TECudaGraphScheduleKey,
 )
+from nemo_rl.models.megatron.cuda_graph_storage import (
+    GraphStorageFingerprint,
+    StorageChange,
+    classify_storage_change,
+    fingerprint_named_tensors,
+)
 from nemo_rl.models.megatron.data import (
     ProcessedMicrobatch,
     get_microbatch_iterator,
@@ -541,6 +547,9 @@ class MegatronPolicyWorkerImpl(
         self._te_cuda_graph_installed_key: Optional[TECudaGraphScheduleKey] = None
         self._te_cuda_graph_capture_helper: Any = None
         self._te_cuda_graph_capture_sample_packed_seq_params: Any = None
+        self._te_cuda_graph_storage_fingerprint: Optional[GraphStorageFingerprint] = (
+            None
+        )
         self._te_cuda_graph_reset_required = False
         if (
             init_optimizer
@@ -678,6 +687,98 @@ class MegatronPolicyWorkerImpl(
     def _te_cuda_graph_device(self) -> torch.device:
         return next(self.model.parameters()).device
 
+    def _capture_te_cuda_graph_storage(self) -> GraphStorageFingerprint:
+        """Fingerprint model and gradient storage owned by training graphs."""
+        model_tensors: list[tuple[str, Any]] = []
+        grad_tensors: list[tuple[str, Any]] = []
+
+        for name, parameter in self.model.named_parameters():
+            model_tensors.append((f"parameter:{name}", parameter))
+            for attribute in (
+                "grad",
+                "main_grad",
+                "main_grad_copy_in_grad_buffer",
+            ):
+                tensor = getattr(parameter, attribute, None)
+                if torch.is_tensor(tensor):
+                    grad_tensors.append((f"parameter:{name}.{attribute}", tensor))
+
+        for name, buffer in self.model.named_buffers():
+            model_tensors.append((f"buffer:{name}", buffer))
+
+        for collection_name in ("buffers", "expert_parallel_buffers"):
+            buffer_collection = getattr(self.model, collection_name, ())
+            if callable(buffer_collection):
+                continue
+            for index, param_and_grad_buffer in enumerate(buffer_collection):
+                param_data = getattr(param_and_grad_buffer, "param_data", None)
+                if torch.is_tensor(param_data):
+                    model_tensors.append(
+                        (f"{collection_name}:{index}.param_data", param_data)
+                    )
+                grad_data = getattr(param_and_grad_buffer, "grad_data", None)
+                if torch.is_tensor(grad_data):
+                    grad_tensors.append(
+                        (f"{collection_name}:{index}.grad_data", grad_data)
+                    )
+
+        fsdp_buffer = getattr(self.model, "param_and_grad_buffer", None)
+        if fsdp_buffer is not None:
+            param_data = getattr(fsdp_buffer, "param_data", None)
+            if torch.is_tensor(param_data):
+                model_tensors.append(("fsdp.param_data", param_data))
+            grad_data = getattr(fsdp_buffer, "grad_data", None)
+            if torch.is_tensor(grad_data):
+                grad_tensors.append(("fsdp.grad_data", grad_data))
+
+        return GraphStorageFingerprint(
+            model=fingerprint_named_tensors(model_tensors),
+            grads=fingerprint_named_tensors(grad_tensors),
+        )
+
+    def _validate_te_cuda_graph_storage_before_replay(self) -> None:
+        """Fail closed before replay when a captured Tensor address changed."""
+        expected = self._te_cuda_graph_storage_fingerprint
+        if expected is None:
+            return
+        current = self._capture_te_cuda_graph_storage()
+        change = classify_storage_change(expected, current)
+        if change == StorageChange.NONE:
+            return
+        raise RuntimeError(
+            "TE CUDA Graph storage changed after capture "
+            f"(change={change.name})."
+        )
+
+    def _collectively_validate_te_cuda_graph_storage_before_replay(
+        self,
+        *,
+        operation: str,
+    ) -> None:
+        """Validate graph-owned storage and clean up symmetrically on failure."""
+        local_error: Optional[Exception] = None
+        try:
+            self._validate_te_cuda_graph_storage_before_replay()
+        except Exception as error:
+            local_error = error
+        self._collectively_raise_te_cuda_graph_failure(
+            local_error,
+            operation=operation,
+        )
+
+    def _bind_te_cuda_graph_storage_after_capture(self) -> None:
+        """Bind cached banks to the exact live model and gradient storage."""
+        current = self._capture_te_cuda_graph_storage()
+        expected = self._te_cuda_graph_storage_fingerprint
+        if expected is not None:
+            change = classify_storage_change(expected, current)
+            if change != StorageChange.NONE:
+                raise RuntimeError(
+                    "TE CUDA Graph storage changed while capturing another bank "
+                    f"(change={change.name})."
+                )
+        self._te_cuda_graph_storage_fingerprint = current
+
     def _te_cuda_graph_pipeline_parallel_size(self) -> int:
         return int(get_pg_collection(self.model).pp.size())
 
@@ -724,6 +825,7 @@ class MegatronPolicyWorkerImpl(
         self._te_cuda_graph_installed_key = None
         self._te_cuda_graph_capture_helper = None
         self._te_cuda_graph_capture_sample_packed_seq_params = None
+        self._te_cuda_graph_storage_fingerprint = None
 
     def _collectively_raise_te_cuda_graph_failure(
         self,
@@ -900,6 +1002,9 @@ class MegatronPolicyWorkerImpl(
                 "TE CUDA Graph capture requires the actual first packed metadata."
             )
 
+        self._collectively_validate_te_cuda_graph_storage_before_replay(
+            operation="pre-activation storage validation"
+        )
         result = None
         local_error: Optional[Exception] = None
         try:
@@ -946,6 +1051,7 @@ class MegatronPolicyWorkerImpl(
             else:
                 call_state.capture_count += 1
                 self._te_cuda_graph_installed_key = key
+                self._bind_te_cuda_graph_storage_after_capture()
                 self._install_te_cuda_graph_manual_hooks()
             if result.evicted_key is not None:
                 call_state.eviction_count += 1
@@ -1203,7 +1309,7 @@ class MegatronPolicyWorkerImpl(
         lifecycle.record_optimizer_step(successful=globally_successful)
 
     def _reset_te_cuda_graph_banks_for_storage_relocation(self) -> None:
-        """Reset address-owning banks before model or optimizer storage moves."""
+        """Reset address-owning banks before model or gradient storage moves."""
         lifecycle = getattr(self, "_te_cuda_graph_lifecycle", None)
         if lifecycle is None:
             return
@@ -1216,6 +1322,7 @@ class MegatronPolicyWorkerImpl(
         self._te_cuda_graph_installed_key = None
         self._te_cuda_graph_capture_helper = None
         self._te_cuda_graph_capture_sample_packed_seq_params = None
+        self._te_cuda_graph_storage_fingerprint = None
 
     def _deactivate_te_cuda_graphs_for_eager_path(self) -> None:
         """Uninstall replay surfaces before an eager-only model path."""
@@ -2501,10 +2608,7 @@ class MegatronPolicyWorkerImpl(
                 from source_state_dict; if False, skip such keys.
         """
         for state_dict_key, param_or_buf in self.model.state_dict().items():
-            if (
-                not isinstance(param_or_buf, torch.Tensor)
-                or "draft_model." in state_dict_key
-            ):
+            if "draft_model." in state_dict_key:
                 continue
             if state_dict_key not in source_state_dict:
                 if raise_if_key_missing:
@@ -2514,7 +2618,34 @@ class MegatronPolicyWorkerImpl(
                 continue
             source_value = source_state_dict[state_dict_key]
 
-            # Case 1: Same shape → in-place copy (parameters / buffers)
+            # TE extra state must go through the owning module even when the
+            # serialized carrier Tensor happens to have the same shape.
+            if "._extra_state" in state_dict_key:
+                if param_or_buf is None and source_value is None:
+                    # MCore compatibility shims publish None and ignore it.
+                    continue
+                if (
+                    isinstance(param_or_buf, torch.Tensor)
+                    and isinstance(source_value, torch.Tensor)
+                    and param_or_buf.numel() == 0
+                    and source_value.numel() == 0
+                ):
+                    # TE uses an empty uint8 carrier for stateless BF16 modules;
+                    # its setter is also an explicit no-op for this value.
+                    continue
+                submodule_path = state_dict_key.rsplit("._extra_state", 1)[0]
+                base_module = getattr(self.model, "module", self.model)
+                top_level_name = submodule_path.split(".", 1)[0]
+                if not hasattr(base_module, top_level_name):
+                    base_module = getattr(base_module, "module", base_module)
+                target_module = base_module.get_submodule(submodule_path)
+                target_module.set_extra_state(source_value)
+                continue
+
+            if not isinstance(param_or_buf, torch.Tensor):
+                continue
+
+            # Matching parameters and buffers retain their destination storage.
             if (
                 isinstance(source_value, torch.Tensor)
                 and param_or_buf.shape == source_value.shape
@@ -2522,92 +2653,138 @@ class MegatronPolicyWorkerImpl(
                 param_or_buf.copy_(source_value)
                 continue
 
-            # Case 2: _extra_state (shape mismatch or non-Tensor) → set_extra_state()
-            assert "extra_state" in state_dict_key, (
-                f"the {state_dict_key} is not an extra_state, but the param_or_buf is mismatched with the reference_state_dict {source_value.shape} != {param_or_buf.shape}."
+            raise AssertionError(
+                f"{state_dict_key} has incompatible source and destination "
+                "Tensor shapes."
             )
 
-            submodule_path = state_dict_key.rsplit("._extra_state", 1)[0]
-            base_module = getattr(self.model, "module", self.model)
-            # Unwrap Float16Module/MoEFloat16Module: state_dict keys are relative to inner .module
-            top_level_name = submodule_path.split(".", 1)[0]
-            if not hasattr(base_module, top_level_name):
-                base_module = getattr(base_module, "module", base_module)
-            target_module = base_module.get_submodule(submodule_path)
-            target_module.set_extra_state(source_value)
+    def _reference_state_dict_preserves_storage(
+        self,
+        source_state_dict: dict[str, Any],
+    ) -> bool:
+        """Return whether applying a state dict uses Tensor copies only."""
+        fp8_cfg = getattr(self, "fp8_cfg", None)
+        if fp8_cfg and fp8_cfg.get("enabled", False):
+            return False
+        model_config = getattr(getattr(self, "megatron_cfg", None), "model", None)
+        if getattr(model_config, "fp8", None) is not None:
+            return False
+        for state_dict_key, destination in self.model.state_dict().items():
+            source = source_state_dict.get(state_dict_key)
+            if "._extra_state" in state_dict_key:
+                if destination is None and source is None:
+                    continue
+                if (
+                    isinstance(destination, torch.Tensor)
+                    and isinstance(source, torch.Tensor)
+                    and destination.numel() == 0
+                    and source.numel() == 0
+                ):
+                    continue
+                return False
+            if (
+                not isinstance(destination, torch.Tensor)
+                or "draft_model." in state_dict_key
+            ):
+                continue
+            if (
+                not isinstance(source, torch.Tensor)
+                or source.shape != destination.shape
+            ):
+                return False
+        return True
 
     @contextmanager
     def use_reference_model(self):
-        """Context manager that temporarily swaps the reference model and active model.
-
-        On entry: Moves model to CPU, moves reference_model to CUDA. Swaps the references.
-                  Also disables top-k/top-p filtering since the reference policy's distribution
-                  is different from the current policy, making filtered logprobs incompatible.
-        On exit: Restores original references and re-flips cuda/cpu, restores sampling_params.
-        """
+        """Temporarily copy reference values into the active model storage."""
         self._deactivate_te_cuda_graphs_for_eager_path()
-        # Reference FP8 extra-state restoration can replace TE-owned storage even
-        # though ordinary parameter tensors are copied in place. Drop cached
-        # address-owning banks while preserving completed warmup and counters.
-        self._reset_te_cuda_graph_banks_for_storage_relocation()
-        ## disable overlap param gather when swapping weights
-        if self.should_disable_forward_pre_hook:
+        preserve_graph_banks = False
+        if self._te_cuda_graph_lifecycle is not None:
+            local_preserve = False
+            local_error: Optional[Exception] = None
+            try:
+                local_preserve = self._reference_state_dict_preserves_storage(
+                    self.reference_state_dict
+                )
+            except Exception as error:
+                local_error = error
+            self._collectively_raise_te_cuda_graph_failure(
+                local_error,
+                operation="reference storage preservation preflight",
+            )
+            preserve_graph_banks = bool(
+                self._collectively_validate_te_cuda_graph_integer(
+                    int(local_preserve),
+                    name="reference storage preservation decision",
+                )
+            )
+        if self._te_cuda_graph_lifecycle is not None and not preserve_graph_banks:
+            self._reset_te_cuda_graph_banks_for_storage_relocation()
+
+        disable_forward_pre_hook = self.should_disable_forward_pre_hook
+        if disable_forward_pre_hook:
             self.disable_forward_pre_hook()
 
-        with torch.no_grad():
-            # Save original references
-            model_state_dict = {}
-            for name, item in self.model.state_dict().items():
-                if isinstance(item, torch.Tensor):
-                    item = item.detach().to(device="cpu", non_blocking=True, copy=True)
-                model_state_dict[name] = item
+        try:
+            with torch.no_grad():
+                model_state_dict = {}
+                for name, item in self.model.state_dict().items():
+                    if isinstance(item, torch.Tensor):
+                        item = item.detach().to(
+                            device="cpu",
+                            non_blocking=True,
+                            copy=True,
+                        )
+                    model_state_dict[name] = item
 
-            # Swap reference state into self.model. Use _apply_state_dict_to_model
-            # (rather than load_state_dict) so FP8 _extra_state with mismatched shape
-            # is routed through set_extra_state() correctly.
-            self._apply_state_dict_to_model(
-                self.reference_state_dict,
-                raise_if_key_missing=True,
-            )
+                saved_sampling_params = self.sampling_params
+                try:
+                    # Shape-matched Tensors are copied in place. Extra state that
+                    # requires set_extra_state() took the reset path above.
+                    self._apply_state_dict_to_model(
+                        self.reference_state_dict,
+                        raise_if_key_missing=True,
+                    )
 
-            if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
-                gc.collect()
-                torch.cuda.empty_cache()
+                    if (
+                        not preserve_graph_banks
+                        and self.cfg["megatron_cfg"]["empty_unused_memory_level"]
+                        >= 1
+                    ):
+                        gc.collect()
+                        torch.cuda.empty_cache()
 
-            # Temporarily disable top-k/top-p filtering for reference policy logprobs.
-            # The reference policy has different weights, so its top-k/top-p set is
-            # inherently different from the current policy. Using filtered logprobs
-            # would cause -inf mismatches that cannot be resolved by masking.
-            # Note: We keep temperature scaling since it was applied to prev_logprobs.
-            saved_sampling_params = self.sampling_params
-            if saved_sampling_params is not None:
-                self.sampling_params = TrainingSamplingParams(
-                    top_k=None,
-                    top_p=1.0,
-                    temperature=saved_sampling_params.temperature,
-                )
-            else:
-                self.sampling_params = None
+                    if saved_sampling_params is not None:
+                        self.sampling_params = TrainingSamplingParams(
+                            top_k=None,
+                            top_p=1.0,
+                            temperature=saved_sampling_params.temperature,
+                        )
+                    else:
+                        self.sampling_params = None
 
-            # - self.model is the original reference_model, now on CUDA
-            # - self.reference_model is the original model, now on CPU
-            yield
+                    yield
+                finally:
+                    self.sampling_params = saved_sampling_params
+                    try:
+                        self._apply_state_dict_to_model(
+                            model_state_dict,
+                            raise_if_key_missing=True,
+                        )
+                    except BaseException:
+                        if self._te_cuda_graph_lifecycle is not None:
+                            self._reset_te_cuda_graph_banks_for_storage_relocation()
+                        raise
 
-            # Restore sampling_params
-            self.sampling_params = saved_sampling_params
-
-            # Restore original policy state (weights + FP8 extra_state) from saved model_state_dict
-            self._apply_state_dict_to_model(
-                model_state_dict,
-                raise_if_key_missing=True,
-            )
-
-            if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
-                gc.collect()
-                torch.cuda.empty_cache()
-
-            ## re-enable overlap param gather after weight swap
-            if self.should_disable_forward_pre_hook:
+                    if (
+                        not preserve_graph_banks
+                        and self.cfg["megatron_cfg"]["empty_unused_memory_level"]
+                        >= 1
+                    ):
+                        gc.collect()
+                        torch.cuda.empty_cache()
+        finally:
+            if disable_forward_pre_hook:
                 self.enable_forward_pre_hook()
 
     @wrap_with_nvtx_name("megatron_policy_worker/get_topk_logits")
@@ -3523,6 +3700,10 @@ class MegatronPolicyWorkerImpl(
         return base_result
 
     def prepare_for_lp_inference(self):
+        if self._te_cuda_graph_lifecycle is not None:
+            self.model.eval()
+            return
+
         self.model = self.move_model(self.model, "cuda", move_grads=False)
         self.model.eval()
 
@@ -3545,6 +3726,10 @@ class MegatronPolicyWorkerImpl(
         torch.cuda.empty_cache()
 
     def prepare_for_training(self, *args, **kwargs):
+        if self._te_cuda_graph_lifecycle is not None:
+            self.model.train()
+            return
+
         # onload models and optimizer state to cuda
         self.model = self.move_model(
             self.model, "cuda", move_grads=True, move_params=True
@@ -3600,6 +3785,12 @@ class MegatronPolicyWorkerImpl(
     @wrap_with_nvtx_name("megatron_policy_worker/offload_before_refit")
     def offload_before_refit(self):
         """Offload the optimizer and buffers to the CPU."""
+        if self._te_cuda_graph_lifecycle is not None:
+            raise RuntimeError(
+                "Transformer Engine training CUDA Graph reuse requires a "
+                "non-offloading refit path; offload_before_refit would relocate "
+                "captured model and gradient storage."
+            )
         # An in-flight async checkpoint keeps references to the CUDA tensors in
         # its sharded state dict until the write is finalized. Offloading swaps
         # those tensors for CPU storage, so the checkpoint references would keep
@@ -3697,6 +3888,12 @@ class MegatronPolicyWorkerImpl(
     @wrap_with_nvtx_name("megatron_policy_worker/offload_after_refit")
     def offload_after_refit(self):
         """Offload as much as possible on the CPU."""
+        if self._te_cuda_graph_lifecycle is not None:
+            raise RuntimeError(
+                "Transformer Engine training CUDA Graph reuse requires a "
+                "non-offloading refit path; offload_after_refit would relocate "
+                "captured model and gradient storage."
+            )
         # Finalize before replacing model-buffer storage. With cached NVRx async
         # saves, the persistent writer otherwise retains CUDA IPC handles to the
         # old storage after the model is moved to CPU.
@@ -3760,7 +3957,6 @@ class MegatronPolicyWorkerImpl(
         return model
 
     def move_optimizer(self, device: str):
-        self._reset_te_cuda_graph_banks_for_storage_relocation()
         # Iterate through the state dictionaries for each parameter group
         if isinstance(self.optimizer, ChainedOptimizer):
             optimizer_state = self.optimizer.state
@@ -3935,7 +4131,6 @@ class MegatronPolicyWorkerImpl(
             optimizer_path: If not None, attempts to load optimizer and scheduler states
                             if self.optimizer and self.scheduler are initialized.
         """
-        self._reset_te_cuda_graph_banks_for_storage_relocation()
         raise NotImplementedError(
             "Loading checkpoints outside of the init function is not yet implemented for Megatron policy."
         )

@@ -17,7 +17,15 @@ set -euo pipefail
 
 ACCOUNT=${ACCOUNT:-nemotron_n3_post}
 PARTITION=${PARTITION:-batch}
-NUM_NODES=${NUM_NODES:-4}
+POLICY_NUM_NODES=${POLICY_NUM_NODES:-4}
+GENERATION_NUM_NODES=${GENERATION_NUM_NODES:-2}
+for role in POLICY_NUM_NODES GENERATION_NUM_NODES; do
+  if [[ ! "${!role}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "${role} must be a positive integer" >&2
+    exit 2
+  fi
+done
+NUM_NODES=${NUM_NODES:-$((POLICY_NUM_NODES + GENERATION_NUM_NODES))}
 GPUS_PER_NODE=${GPUS_PER_NODE:-4}
 SEGMENT_SIZE=${SEGMENT_SIZE:-}
 TIME_LIMIT=${TIME_LIMIT:-04:00:00}
@@ -32,6 +40,15 @@ EXPERT_MODEL_PARALLEL_SIZE=${EXPERT_MODEL_PARALLEL_SIZE:-8}
 HYBRID_EP_RANKS_PER_NVLINK_DOMAIN=${HYBRID_EP_RANKS_PER_NVLINK_DOMAIN:-}
 EXCLUDE=${EXCLUDE:-}
 RUN_TAG=${RUN_TAG:-$(date -u +%Y%m%dT%H%M%SZ)}
+
+if [[ ! "${NUM_NODES}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "NUM_NODES must be a positive integer" >&2
+  exit 2
+fi
+if (( NUM_NODES != POLICY_NUM_NODES + GENERATION_NUM_NODES )); then
+  echo "NUM_NODES must equal POLICY_NUM_NODES + GENERATION_NUM_NODES" >&2
+  exit 2
+fi
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 repository_root=$(cd "${script_dir}/../../../.." && pwd -P)
@@ -123,6 +140,10 @@ COMMAND="env NRL_FORCE_REBUILD_VENVS=true NVTE_WITH_NCCL_EP=0 NVTE_CUDA_ARCHS=10
   checkpointing.enabled=false \
   policy.sequence_packing.enabled=true \
   policy.dynamic_batching.enabled=false \
+  policy.offload_optimizer_for_logprob=false \
+  policy.generation.colocated.enabled=false \
+  policy.generation.colocated.resources.num_nodes=${GENERATION_NUM_NODES} \
+  policy.generation.colocated.resources.gpus_per_node=${GPUS_PER_NODE} \
   cluster.num_nodes=${NUM_NODES} \
   cluster.gpus_per_node=${GPUS_PER_NODE} \
   logger.log_dir=${LOG_DIR} \

@@ -73,7 +73,12 @@ class ModelSpec:
     whole_moe_capacity_ready: bool
     moe_preprocess_graph_ready: bool
     requires_ultra_externals: bool
-    num_nodes: int
+    nemorl_allocation_num_nodes: int
+    nemorl_cluster_num_nodes: int
+    policy_num_nodes: int
+    nemorl_generation_num_nodes: int
+    nemorl_gym_num_nodes: int
+    mcore_num_nodes: int
     gpus_per_node: int
     thd_max_packed_sequences: int
 
@@ -148,6 +153,39 @@ def load_model_spec(model: str) -> ModelSpec:
     supported_modules = frozenset(
         item for item in _required(values, "SUPPORTED_MODULES", path).split(",") if item
     )
+    nemorl_allocation_num_nodes = int(
+        _required(values, "NEMORL_ALLOCATION_NUM_NODES", path)
+    )
+    nemorl_cluster_num_nodes = int(
+        _required(values, "NEMORL_CLUSTER_NUM_NODES", path)
+    )
+    policy_num_nodes = int(_required(values, "POLICY_NUM_NODES", path))
+    nemorl_generation_num_nodes = int(
+        _required(values, "NEMORL_GENERATION_NUM_NODES", path)
+    )
+    nemorl_gym_num_nodes = int(_required(values, "NEMORL_GYM_NUM_NODES", path))
+    mcore_num_nodes = int(_required(values, "MCORE_NUM_NODES", path))
+    if policy_num_nodes < 1 or nemorl_generation_num_nodes < 1:
+        raise ValueError(
+            f"{path}: POLICY_NUM_NODES and NEMORL_GENERATION_NUM_NODES must be positive"
+        )
+    if nemorl_gym_num_nodes < 0:
+        raise ValueError(f"{path}: NEMORL_GYM_NUM_NODES must not be negative")
+    if mcore_num_nodes < 1:
+        raise ValueError(f"{path}: MCORE_NUM_NODES must be positive")
+    if nemorl_cluster_num_nodes != policy_num_nodes + nemorl_generation_num_nodes:
+        raise ValueError(
+            f"{path}: NEMORL_CLUSTER_NUM_NODES must equal POLICY_NUM_NODES + "
+            "NEMORL_GENERATION_NUM_NODES"
+        )
+    if (
+        nemorl_allocation_num_nodes
+        != nemorl_cluster_num_nodes + nemorl_gym_num_nodes
+    ):
+        raise ValueError(
+            f"{path}: NEMORL_ALLOCATION_NUM_NODES must equal "
+            "NEMORL_CLUSTER_NUM_NODES + NEMORL_GYM_NUM_NODES"
+        )
     return ModelSpec(
         name=model,
         nemorl_launcher=_required(values, "NEMORL_LAUNCHER", path),
@@ -170,7 +208,12 @@ def load_model_spec(model: str) -> ModelSpec:
         requires_ultra_externals=_selector_bool(
             values, "REQUIRES_ULTRA_EXTERNALS", path
         ),
-        num_nodes=int(_required(values, "NUM_NODES", path)),
+        nemorl_allocation_num_nodes=nemorl_allocation_num_nodes,
+        nemorl_cluster_num_nodes=nemorl_cluster_num_nodes,
+        policy_num_nodes=policy_num_nodes,
+        nemorl_generation_num_nodes=nemorl_generation_num_nodes,
+        nemorl_gym_num_nodes=nemorl_gym_num_nodes,
+        mcore_num_nodes=mcore_num_nodes,
         gpus_per_node=int(_required(values, "GPUS_PER_NODE", path)),
         thd_max_packed_sequences=int(
             _required(values, "THD_MAX_PACKED_SEQUENCES", path)
@@ -314,8 +357,13 @@ def render_scope_command(
         "checkpointing.enabled=false",
         "policy.sequence_packing.enabled=true",
         "policy.dynamic_batching.enabled=false",
+        "policy.offload_optimizer_for_logprob=false",
+        "policy.generation.colocated.enabled=false",
+        "policy.generation.colocated.resources.num_nodes="
+        f"{spec.nemorl_generation_num_nodes}",
+        f"policy.generation.colocated.resources.gpus_per_node={spec.gpus_per_node}",
         "++policy.megatron_cfg.attention_backend=fused",
-        f"cluster.num_nodes={spec.num_nodes}",
+        f"cluster.num_nodes={spec.nemorl_cluster_num_nodes}",
         f"cluster.gpus_per_node={spec.gpus_per_node}",
         f"logger.log_dir={log_dir or f'exp_logs/nemotron_thd_te_graph_20260731/{run_name}'}",
         "logger.wandb_enabled=true",

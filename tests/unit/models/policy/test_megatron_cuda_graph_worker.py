@@ -28,6 +28,10 @@ from nemo_rl.models.megatron.cuda_graph_lifecycle import (
     TECudaGraphLifecycle,
     TECudaGraphScheduleKey,
 )
+from nemo_rl.models.megatron.cuda_graph_storage import (
+    GraphStorageFingerprint,
+    StorageChange,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _WORKER_PATH = _REPO_ROOT / "nemo_rl/models/policy/workers/megatron_policy_worker.py"
@@ -296,6 +300,10 @@ def test_schedule_uses_exact_sample_and_two_entry_lru() -> None:
         lambda value, *, name, group=None: value
     )
     worker._collectively_raise_te_cuda_graph_failure = lambda error, *, operation: None
+    worker._collectively_validate_te_cuda_graph_storage_before_replay = (
+        lambda *, operation: None
+    )
+    worker._bind_te_cuda_graph_storage_after_capture = lambda: None
     manager = SimpleNamespace(active_bank=None, uninstall=lambda: None)
     worker._te_cuda_graph_bank_manager = manager
     captures: list[tuple[TECudaGraphScheduleKey, Any]] = []
@@ -353,6 +361,45 @@ def test_schedule_uses_exact_sample_and_two_entry_lru() -> None:
     assert worker._te_cuda_graph_installed_key == TECudaGraphScheduleKey(7)
 
 
+def test_remote_storage_drift_stops_every_rank_before_graph_activation() -> None:
+    worker_type = _extract_worker_methods({"_ensure_te_cuda_graph_schedule"})
+    worker = worker_type()
+    events: list[str] = []
+    worker._te_cuda_graph_lifecycle = SimpleNamespace(
+        ensure_active=lambda *_args: events.append("activate")
+    )
+    worker._te_cuda_graph_runtime_schedule_count = 1
+    worker._te_cuda_graph_installed_key = None
+    worker.megatron_cfg = SimpleNamespace(
+        model=SimpleNamespace(overlap_moe_expert_parallel_comm=False)
+    )
+    worker._te_cuda_graph_pipeline_parallel_size = lambda: 1
+    worker._assert_te_cuda_graph_model_drained = lambda: True
+    worker._collectively_validate_te_cuda_graph_integer = (
+        lambda value, *, name, group=None: value
+    )
+
+    def reject_before_activation(*, operation: str) -> None:
+        events.append(operation)
+        raise RuntimeError("storage drift on another rank")
+
+    worker._collectively_validate_te_cuda_graph_storage_before_replay = (
+        reject_before_activation
+    )
+    call_state = SimpleNamespace(normalized_schedule_key=None)
+    first = SimpleNamespace(packed_seq_params=object())
+
+    with pytest.raises(RuntimeError, match="another rank"):
+        worker._ensure_te_cuda_graph_schedule(
+            num_microbatches=1,
+            first_microbatch=first,
+            call_state=call_state,
+            ensure_active=True,
+        )
+
+    assert events == ["pre-activation storage validation"]
+
+
 def test_exactly_three_successful_updates_precede_first_capture() -> None:
     worker_type = _extract_worker_methods(
         {
@@ -373,6 +420,10 @@ def test_exactly_three_successful_updates_precede_first_capture() -> None:
         lambda value, *, name, group=None: value
     )
     worker._collectively_raise_te_cuda_graph_failure = lambda error, *, operation: None
+    worker._collectively_validate_te_cuda_graph_storage_before_replay = (
+        lambda *, operation: None
+    )
+    worker._bind_te_cuda_graph_storage_after_capture = lambda: None
     worker._assert_te_cuda_graph_model_drained = lambda: True
     worker._global_te_cuda_graph_optimizer_success = lambda successful: successful
     manager = SimpleNamespace(active_bank=None, uninstall=lambda: None)
@@ -462,6 +513,10 @@ def test_split_schedule_pins_first_key_without_second_transition() -> None:
         lambda value, *, name, group=None: value
     )
     worker._collectively_raise_te_cuda_graph_failure = lambda error, *, operation: None
+    worker._collectively_validate_te_cuda_graph_storage_before_replay = (
+        lambda *, operation: None
+    )
+    worker._bind_te_cuda_graph_storage_after_capture = lambda: None
     worker._assert_te_cuda_graph_model_drained = lambda: True
     worker._capture_te_cuda_graph_bank = lambda key, sample: Bank()
     worker._install_te_cuda_graph_manual_hooks = lambda: None
@@ -592,36 +647,6 @@ def test_iterator_modes_eager_isolation_and_relocation_order_are_explicit() -> N
             and isinstance(call.func, ast.Attribute)
             and call.func.attr == "_deactivate_te_cuda_graphs_for_eager_path"
             for call in ast.walk(methods[method_name])
-        )
-
-    reference_calls = [
-        statement.value.func.attr
-        for statement in methods["use_reference_model"].body
-        if isinstance(statement, ast.Expr)
-        and isinstance(statement.value, ast.Call)
-        and isinstance(statement.value.func, ast.Attribute)
-    ]
-    assert reference_calls[:2] == [
-        "_deactivate_te_cuda_graphs_for_eager_path",
-        "_reset_te_cuda_graph_banks_for_storage_relocation",
-    ]
-
-    for method_name in ("move_model", "move_optimizer", "load_checkpoint"):
-        first_statement = next(
-            statement
-            for statement in methods[method_name].body
-            if not (
-                isinstance(statement, ast.Expr)
-                and isinstance(statement.value, ast.Constant)
-                and isinstance(statement.value.value, str)
-            )
-        )
-        assert isinstance(first_statement, ast.Expr)
-        assert isinstance(first_statement.value, ast.Call)
-        assert isinstance(first_statement.value.func, ast.Attribute)
-        assert (
-            first_statement.value.func.attr
-            == "_reset_te_cuda_graph_banks_for_storage_relocation"
         )
 
 
@@ -1037,6 +1062,518 @@ def test_eval_extra_state_restore_resets_graph_banks_before_storage_load() -> No
 
     worker._restore_model_extra_state_dict(extra_state)
     assert events == ["reset", ("load", extra_state, False)]
+
+
+def test_prepare_for_lp_inference_preserves_graph_owned_storage() -> None:
+    class FakeCuda:
+        @staticmethod
+        def empty_cache() -> None:
+            events.append("empty_cache")
+
+    class FakeWakeupTensor:
+        def cuda(self) -> None:
+            events.append("allocator_wakeup")
+
+    fake_torch = SimpleNamespace(
+        cuda=FakeCuda(),
+        randn=lambda _size: FakeWakeupTensor(),
+    )
+    fake_gc = SimpleNamespace(collect=lambda: events.append("gc"))
+    worker_type = _extract_worker_methods(
+        {"prepare_for_lp_inference"},
+        {"torch": fake_torch, "gc": fake_gc},
+    )
+    worker = worker_type()
+    events: list[Any] = []
+    worker._te_cuda_graph_lifecycle = object()
+    worker.model = SimpleNamespace(eval=lambda: events.append("eval"))
+    worker.move_model = lambda model, device, **kwargs: (
+        events.append(("move_model", device, kwargs)) or model
+    )
+    worker.optimizer = None
+    worker.optimizer_cpu_offload = False
+    worker.offload_optimizer_for_logprob = False
+
+    worker.prepare_for_lp_inference()
+
+    assert events == ["eval"]
+
+
+@pytest.mark.parametrize("method_name", ("offload_before_refit", "offload_after_refit"))
+def test_refit_offload_is_rejected_before_persistent_graph_storage_moves(
+    method_name: str,
+) -> None:
+    worker_type = _extract_worker_methods({method_name})
+    worker = worker_type()
+    worker._te_cuda_graph_lifecycle = object()
+    events: list[str] = []
+    worker.finalize_async_save = lambda: events.append("finalize")
+    worker.move_model = lambda *_args, **_kwargs: events.append("move_model")
+
+    with pytest.raises(RuntimeError, match="non-offloading refit"):
+        getattr(worker, method_name)()
+
+    assert events == []
+
+
+def test_optimizer_state_move_preserves_training_graph_bank() -> None:
+    class FakeTensor:
+        is_cuda = True
+
+    fake_tensor = FakeTensor()
+    fake_torch = SimpleNamespace(is_tensor=lambda value: value is fake_tensor)
+    fake_chained_optimizer = type("FakeChainedOptimizer", (), {})
+    worker_type = _extract_worker_methods(
+        {"move_optimizer"},
+        {
+            "torch": fake_torch,
+            "ChainedOptimizer": fake_chained_optimizer,
+        },
+    )
+    worker = worker_type()
+    events: list[str] = []
+    worker._reset_te_cuda_graph_banks_for_storage_relocation = lambda: events.append(
+        "reset"
+    )
+    worker.optimizer = SimpleNamespace(_get_state=lambda: {0: {"exp_avg": fake_tensor}})
+
+    worker.move_optimizer("cuda")
+
+    assert events == []
+
+
+def test_unimplemented_checkpoint_load_preserves_training_graph_bank() -> None:
+    worker_type = _extract_worker_methods({"load_checkpoint"})
+    worker = worker_type()
+    resets: list[str] = []
+    worker._reset_te_cuda_graph_banks_for_storage_relocation = lambda: resets.append(
+        "reset"
+    )
+
+    with pytest.raises(NotImplementedError, match="outside of the init function"):
+        worker.load_checkpoint("/tmp/checkpoint")
+
+    assert resets == []
+
+
+def test_prepare_for_training_reuses_resident_graph_storage() -> None:
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(empty_cache=lambda: events.append("empty_cache"))
+    )
+    worker_type = _extract_worker_methods(
+        {"prepare_for_training"},
+        {"torch": fake_torch},
+    )
+    worker = worker_type()
+    events: list[Any] = []
+    worker._te_cuda_graph_lifecycle = object()
+    worker.model = SimpleNamespace(train=lambda: events.append("train"))
+    worker.move_model = lambda model, device, **kwargs: (
+        events.append(("move_model", device, kwargs)) or model
+    )
+    worker.move_optimizer = lambda device: events.append(("move_optimizer", device))
+    worker.optimizer = object()
+    worker.optimizer_cpu_offload = False
+    worker.cfg = {"megatron_cfg": {"empty_unused_memory_level": 2}}
+
+    worker.prepare_for_training()
+
+    assert events == ["train"]
+
+
+def test_unexpected_storage_drift_invalidates_before_replay() -> None:
+    worker_type = _extract_worker_methods(
+        {"_validate_te_cuda_graph_storage_before_replay"},
+        {
+            "StorageChange": StorageChange,
+            "classify_storage_change": lambda before, after: (
+                StorageChange.NONE if before == after else StorageChange.MODEL
+            ),
+        },
+    )
+    worker = worker_type()
+    expected = GraphStorageFingerprint(model=(), grads=())
+    changed = GraphStorageFingerprint(
+        model=(),
+        grads=(),
+    )
+    worker._te_cuda_graph_storage_fingerprint = expected
+    worker._capture_te_cuda_graph_storage = lambda: expected
+    resets: list[str] = []
+    worker._reset_te_cuda_graph_banks_for_storage_relocation = lambda: resets.append(
+        "reset"
+    )
+
+    worker._validate_te_cuda_graph_storage_before_replay()
+    assert resets == []
+
+    worker._capture_te_cuda_graph_storage = lambda: changed
+    worker._te_cuda_graph_storage_fingerprint = GraphStorageFingerprint(
+        model=(),
+        grads=(object(),),  # type: ignore[arg-type]
+    )
+    with pytest.raises(RuntimeError, match="storage changed"):
+        worker._validate_te_cuda_graph_storage_before_replay()
+    assert resets == []
+
+
+def test_storage_validation_converts_remote_drift_to_collective_failure() -> None:
+    worker_type = _extract_worker_methods(
+        {"_collectively_validate_te_cuda_graph_storage_before_replay"}
+    )
+    worker = worker_type()
+    events: list[tuple[Any, str]] = []
+    worker._validate_te_cuda_graph_storage_before_replay = lambda: None
+
+    def raise_collectively(error: Any, *, operation: str) -> None:
+        events.append((error, operation))
+        raise RuntimeError("failed on another rank")
+
+    worker._collectively_raise_te_cuda_graph_failure = raise_collectively
+
+    with pytest.raises(RuntimeError, match="another rank"):
+        worker._collectively_validate_te_cuda_graph_storage_before_replay(
+            operation="pre-training storage validation"
+        )
+
+    assert events == [(None, "pre-training storage validation")]
+
+
+def test_storage_validation_routes_local_drift_through_collective_cleanup() -> None:
+    worker_type = _extract_worker_methods(
+        {"_collectively_validate_te_cuda_graph_storage_before_replay"}
+    )
+    worker = worker_type()
+    local_error = RuntimeError("local storage drift")
+    events: list[tuple[Any, str]] = []
+
+    def validate() -> None:
+        raise local_error
+
+    worker._validate_te_cuda_graph_storage_before_replay = validate
+    worker._collectively_raise_te_cuda_graph_failure = (
+        lambda error, *, operation: events.append((error, operation))
+    )
+
+    worker._collectively_validate_te_cuda_graph_storage_before_replay(
+        operation="reference restore storage validation"
+    )
+
+    assert events == [(local_error, "reference restore storage validation")]
+
+
+def test_same_shape_extra_state_uses_module_setter_not_tensor_copy() -> None:
+    class FakeTensor:
+        shape = (4,)
+
+        def numel(self) -> int:
+            return 4
+
+        def copy_(self, _source: Any) -> None:
+            events.append("copy")
+
+    target_module = SimpleNamespace(
+        set_extra_state=lambda value: events.append(("set_extra_state", value))
+    )
+    model = SimpleNamespace(
+        state_dict=lambda: {"layer._extra_state": FakeTensor()},
+        get_submodule=lambda path: target_module,
+    )
+    worker_type = _extract_worker_methods(
+        {"_apply_state_dict_to_model"},
+        {"torch": SimpleNamespace(Tensor=FakeTensor)},
+    )
+    worker = worker_type()
+    worker.model = model
+    events: list[Any] = []
+    source = FakeTensor()
+
+    worker._apply_state_dict_to_model(
+        {"layer._extra_state": source},
+        raise_if_key_missing=True,
+    )
+
+    assert events == [("set_extra_state", source)]
+
+
+def test_empty_te_extra_state_is_a_storage_preserving_noop() -> None:
+    class EmptyTensor:
+        shape = (0,)
+
+        def numel(self) -> int:
+            return 0
+
+    destination = EmptyTensor()
+    source = EmptyTensor()
+    model = SimpleNamespace(
+        state_dict=lambda: {"layer._extra_state": destination},
+        get_submodule=lambda _path: SimpleNamespace(
+            set_extra_state=lambda _value: events.append("set_extra_state")
+        ),
+    )
+    fake_torch = SimpleNamespace(Tensor=EmptyTensor)
+    worker_type = _extract_worker_methods(
+        {
+            "_apply_state_dict_to_model",
+            "_reference_state_dict_preserves_storage",
+        },
+        {"torch": fake_torch},
+    )
+    worker = worker_type()
+    worker.model = model
+    worker.fp8_cfg = {"enabled": False}
+    worker.megatron_cfg = SimpleNamespace(model=SimpleNamespace(fp8=None))
+    events: list[str] = []
+
+    assert worker._reference_state_dict_preserves_storage(
+        {"layer._extra_state": source}
+    )
+    worker._apply_state_dict_to_model(
+        {"layer._extra_state": source},
+        raise_if_key_missing=True,
+    )
+
+    assert events == []
+
+
+def test_none_mcore_extra_state_is_a_storage_preserving_noop() -> None:
+    class FakeTensor:
+        pass
+
+    model = SimpleNamespace(
+        state_dict=lambda: {"layer._extra_state": None},
+        get_submodule=lambda _path: SimpleNamespace(
+            set_extra_state=lambda _value: events.append("set_extra_state")
+        ),
+    )
+    fake_torch = SimpleNamespace(Tensor=FakeTensor)
+    worker_type = _extract_worker_methods(
+        {
+            "_apply_state_dict_to_model",
+            "_reference_state_dict_preserves_storage",
+        },
+        {"torch": fake_torch},
+    )
+    worker = worker_type()
+    worker.model = model
+    worker.fp8_cfg = {"enabled": False}
+    worker.megatron_cfg = SimpleNamespace(model=SimpleNamespace(fp8=None))
+    events: list[str] = []
+
+    assert worker._reference_state_dict_preserves_storage(
+        {"layer._extra_state": None}
+    )
+    worker._apply_state_dict_to_model(
+        {"layer._extra_state": None},
+        raise_if_key_missing=True,
+    )
+
+    assert events == []
+
+
+@pytest.mark.parametrize(
+    ("raw_fp8", "effective_fp8", "state_key", "expected"),
+    (
+        (False, None, "weight", True),
+        (True, None, "weight", False),
+        (False, "e4m3", "weight", False),
+        (False, None, "layer._extra_state", False),
+    ),
+)
+def test_reference_storage_preservation_is_bf16_plain_tensor_only(
+    raw_fp8: bool,
+    effective_fp8: Any,
+    state_key: str,
+    expected: bool,
+) -> None:
+    class FakeTensor:
+        shape = (2, 4)
+
+        def numel(self) -> int:
+            return 8
+
+    tensor = FakeTensor()
+    worker_type = _extract_worker_methods(
+        {"_reference_state_dict_preserves_storage"},
+        {"torch": SimpleNamespace(Tensor=FakeTensor)},
+    )
+    worker = worker_type()
+    worker.fp8_cfg = {"enabled": raw_fp8}
+    worker.megatron_cfg = SimpleNamespace(model=SimpleNamespace(fp8=effective_fp8))
+    worker.model = SimpleNamespace(state_dict=lambda: {state_key: tensor})
+
+    assert worker._reference_state_dict_preserves_storage({state_key: tensor}) is expected
+
+
+def test_bf16_reference_swap_preserves_training_bank() -> None:
+    class FakeTensor:
+        def detach(self) -> FakeTensor:
+            return self
+
+        def to(self, **_kwargs: Any) -> FakeTensor:
+            return self
+
+    class FakeNoGrad:
+        def __enter__(self) -> None:
+            return None
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+    fake_torch = SimpleNamespace(
+        Tensor=FakeTensor,
+        no_grad=lambda: FakeNoGrad(),
+        cuda=SimpleNamespace(empty_cache=lambda: events.append("empty_cache")),
+    )
+    worker_type = _extract_worker_methods(
+        {"use_reference_model"},
+        {
+            "torch": fake_torch,
+            "gc": SimpleNamespace(collect=lambda: events.append("gc")),
+            "TrainingSamplingParams": object,
+        },
+    )
+    worker = worker_type()
+    events: list[str] = []
+    policy_tensor = FakeTensor()
+    reference_state = {"weight": FakeTensor()}
+    worker.model = SimpleNamespace(state_dict=lambda: {"weight": policy_tensor})
+    worker.reference_state_dict = reference_state
+    worker._te_cuda_graph_lifecycle = object()
+    worker._deactivate_te_cuda_graphs_for_eager_path = lambda: events.append(
+        "deactivate"
+    )
+    worker._reset_te_cuda_graph_banks_for_storage_relocation = lambda: events.append(
+        "reset"
+    )
+    worker._reference_state_dict_preserves_storage = lambda _state: True
+    worker._collectively_raise_te_cuda_graph_failure = (
+        lambda error, *, operation: None
+    )
+    worker._collectively_validate_te_cuda_graph_integer = (
+        lambda value, *, name: value
+    )
+    worker._apply_state_dict_to_model = (
+        lambda state, *, raise_if_key_missing: events.append(
+            "apply_reference" if state is reference_state else "restore_policy"
+        )
+    )
+    worker.should_disable_forward_pre_hook = False
+    worker.sampling_params = None
+    worker.cfg = {"megatron_cfg": {"empty_unused_memory_level": 1}}
+
+    generator = worker.use_reference_model()
+    next(generator)
+    events.append("body")
+    with pytest.raises(StopIteration):
+        next(generator)
+
+    assert events == [
+        "deactivate",
+        "apply_reference",
+        "body",
+        "restore_policy",
+    ]
+
+
+def test_reference_body_exception_restores_policy_and_bank() -> None:
+    class BodyError(RuntimeError):
+        pass
+
+    class FakeTensor:
+        def detach(self) -> FakeTensor:
+            return self
+
+        def to(self, **_kwargs: Any) -> FakeTensor:
+            return self
+
+    class FakeNoGrad:
+        def __enter__(self) -> None:
+            return None
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+    fake_torch = SimpleNamespace(Tensor=FakeTensor, no_grad=lambda: FakeNoGrad())
+    worker_type = _extract_worker_methods(
+        {"use_reference_model"},
+        {
+            "torch": fake_torch,
+            "TrainingSamplingParams": object,
+        },
+    )
+    worker = worker_type()
+    events: list[str] = []
+    policy_tensor = FakeTensor()
+    reference_state = {"weight": FakeTensor()}
+    worker.model = SimpleNamespace(state_dict=lambda: {"weight": policy_tensor})
+    worker.reference_state_dict = reference_state
+    worker._te_cuda_graph_lifecycle = object()
+    worker._deactivate_te_cuda_graphs_for_eager_path = lambda: None
+    worker._reset_te_cuda_graph_banks_for_storage_relocation = lambda: events.append(
+        "reset"
+    )
+    worker._reference_state_dict_preserves_storage = lambda _state: True
+    worker._collectively_raise_te_cuda_graph_failure = (
+        lambda error, *, operation: None
+    )
+    worker._collectively_validate_te_cuda_graph_integer = (
+        lambda value, *, name: value
+    )
+    worker._apply_state_dict_to_model = (
+        lambda state, *, raise_if_key_missing: events.append(
+            "apply_reference" if state is reference_state else "restore_policy"
+        )
+    )
+    worker.should_disable_forward_pre_hook = False
+    worker.sampling_params = None
+    worker.cfg = {"megatron_cfg": {"empty_unused_memory_level": 0}}
+
+    generator = worker.use_reference_model()
+    next(generator)
+    with pytest.raises(BodyError):
+        generator.throw(BodyError("reference logprob failed"))
+
+    assert events == ["apply_reference", "restore_policy"]
+
+
+def test_reference_snapshot_failure_restores_forward_pre_hook() -> None:
+    class SnapshotError(RuntimeError):
+        pass
+
+    class FakeTensor:
+        def detach(self) -> FakeTensor:
+            return self
+
+        def to(self, **_kwargs: Any) -> FakeTensor:
+            raise SnapshotError("D2H snapshot failed")
+
+    class FakeNoGrad:
+        def __enter__(self) -> None:
+            return None
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+    worker_type = _extract_worker_methods(
+        {"use_reference_model"},
+        {"torch": SimpleNamespace(Tensor=FakeTensor, no_grad=lambda: FakeNoGrad())},
+    )
+    worker = worker_type()
+    worker.model = SimpleNamespace(state_dict=lambda: {"weight": FakeTensor()})
+    worker.reference_state_dict = {"weight": FakeTensor()}
+    worker._te_cuda_graph_lifecycle = None
+    worker._deactivate_te_cuda_graphs_for_eager_path = lambda: None
+    worker.should_disable_forward_pre_hook = True
+    events: list[str] = []
+    worker.disable_forward_pre_hook = lambda: events.append("disable")
+    worker.enable_forward_pre_hook = lambda: events.append("enable")
+
+    generator = worker.use_reference_model()
+    with pytest.raises(SnapshotError, match="D2H snapshot failed"):
+        next(generator)
+
+    assert events == ["disable", "enable"]
 
 
 def test_eager_uninstall_requires_idle_and_clears_only_installed_bank() -> None:

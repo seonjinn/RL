@@ -2266,6 +2266,62 @@ class TestValidateAndSetConfig:
 
                 assert runtime_config.is_generation_colocated is True
 
+    @pytest.mark.parametrize(
+        (
+            "generation_colocated",
+            "generation_backend",
+            "offload_optimizer_for_logprob",
+            "message",
+        ),
+        (
+            (True, "vllm", False, "non-colocated generation"),
+            (False, "vllm", True, "offload_optimizer_for_logprob=false"),
+            (False, "megatron", False, "Megatron generation backend"),
+        ),
+    )
+    def test_te_training_graph_rejects_storage_relocation_runtime_options(
+        self,
+        generation_colocated: bool,
+        generation_backend: str,
+        offload_optimizer_for_logprob: bool,
+        message: str,
+    ) -> None:
+        from nemo_rl.models.megatron.setup import validate_and_set_config
+
+        config = {
+            "generation": {
+                "backend": generation_backend,
+                "temperature": 1.0,
+                "top_p": 1.0,
+                "top_k": None,
+                "colocated": {"enabled": generation_colocated},
+            },
+            "precision": "bfloat16",
+            "megatron_cfg": {
+                "optimizer": {"optimizer_cpu_offload": False},
+                "tensor_model_parallel_size": 2,
+            },
+            "offload_optimizer_for_logprob": offload_optimizer_for_logprob,
+        }
+        mock_megatron_cfg = MagicMock()
+        mock_megatron_cfg.model.cuda_graph_impl = "transformer_engine"
+
+        with (
+            patch(
+                "nemo_rl.models.megatron.setup.setup_model_config",
+                return_value=(mock_megatron_cfg, MagicMock()),
+            ),
+            pytest.raises(ValueError, match=message),
+        ):
+            validate_and_set_config(
+                config=config,
+                rank=0,
+                hf_model_name="test-model",
+                pretrained_path="/path/to/model",
+                weights_path=None,
+                optimizer_path=None,
+            )
+
 
 @pytest.mark.mcore
 class TestRuntimeConfigNamedTuple:
