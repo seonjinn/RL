@@ -1,0 +1,8 @@
+Exp,Wandb link,Job ID,Scope
+baseline,https://wandb.ai/nvidia/sna-cg-study/runs/8nj7cpvn,5893771,baseline
+mamba,https://wandb.ai/nvidia/sna-cg-study/runs/ja94s6wo,5893773,mamba
+attn,https://wandb.ai/nvidia/sna-cg-study/runs/1lqfcug8,5893775,attn
+moe_router,https://wandb.ai/nvidia/sna-cg-study/runs/culsp02f,5893777,moe_router
+moe_router_preprocess,https://wandb.ai/nvidia/sna-cg-study/runs/dmf5ln7l,5893778,"moe_router,moe_preprocess"
+attn_mamba_moe_router_preprocess,https://wandb.ai/nvidia/sna-cg-study/runs/lnxo7657,5894286,"attn,mamba,moe_router,moe_preprocess"
+attn_mamba_moe_router,https://wandb.ai/nvidia/sna-cg-study/runs/l6o2evx6,5894434,"attn,mamba,moe_router"

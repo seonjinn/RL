@@ -1,0 +1,8 @@
+{
+  "nemo_rl_commit": "2bc7389cb4834c556f4418d12ad2e6e86da0f46a",
+  "bridge_commit": "0142aebf95c49d9137de52a9e7a4fc098a0a6a56",
+  "mcore_commit": "2812006062d10e04141180a4291b663ef2edff7e",
+  "te_commit": "04a76c84423d9a4eb2f2010ef6692e347326cc00",
+  "te_version": "2.19.0.dev0+04a76c84",
+  "container_sha256": "0f82ea5319d53ec37fca894a6efb5549c2990c1efa62415dff5578929a86ccc0"
+}

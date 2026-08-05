@@ -8,11 +8,21 @@
       "text": "The first five 20-step jobs failed at their first HybridEP dispatch because the launcher forced a 16-rank NVLink domain for an 8-rank expert group; this was a common topology error, not a scope-specific CUDA Graph failure."
     },
     {
-      "text": "Corrected jobs 5893771, 5893773, 5893775, 5893777, and 5893778 are running with EP=8, NVLink-domain ranks=8, sequence packing, warmup=3, and checkpoints disabled."
+      "text": "Corrected jobs 5893771, 5893773, 5893775, 5893777, and 5893778 completed 20/20 steps with EP=8, NVLink-domain ranks=8, sequence packing, warmup=3, checkpoints disabled, and no runtime errors."
     },
     {
-      "text": "The previously published Nano 20-step evidence remains available while the corrected comparison window is collected.",
-      "href": "results/paired_20step_summary.json"
+      "text": "Steps 11-19 report 100% eligible-call coverage and zero fallbacks for every CG arm, but one cache miss and graph capture per optimizer step with zero cache hits.",
+      "href": "results/nano_ep8_results.json"
+    },
+    {
+      "text": "Provisional E2E TPS deltas versus baseline are mamba +1.0%, attn -6.0%, router -6.3%, router-plus-preprocess -2.1%, attn-plus-mamba-plus-router -16.9%, and the four-way scope -13.0%; policy-training TPS regresses 33-56% across CG arms.",
+      "href": "results/nano_ep8_steps11_19.csv"
+    },
+    {
+      "text": "Correctness is not cleared: router-only reaches token_mult_prob_error=6751 and policy_kl_error=6750 at step 16, attn has a smaller step-18 spike, and explicit router/expert/update parity is not logged."
+    },
+    {
+      "text": "Combination jobs 5894286 and 5894434 completed 20/20 steps with no runtime errors. The three-way arm has token_mult_prob_error max 1.059 and policy_kl_error max 0.0247 over steps 11-19; the four-way arm reaches 1.312 and 0.273 respectively, so neither is correctness-cleared without explicit parity."
     }
   ],
   "changes": [
@@ -29,13 +39,10 @@
   ],
   "next_steps": [
     {
-      "text": "Require all five corrected jobs to pass the first policy-training dispatch and complete 20 steps."
+      "text": "Isolate the router-only correctness spike with a padding=false comparator and fixed-batch eager-versus-graph router/expert parity."
     },
     {
-      "text": "Then run attn+mamba+moe_router and attn+mamba+moe_router+moe_preprocess under the same settings."
-    },
-    {
-      "text": "Compare steps 11-19 for E2E, generation, logprob, policy training, correctness, and measured CUDA Graph coverage."
+      "text": "Remove the per-step graph-bank reset and recapture before making a positive performance claim."
     }
   ]
 }
