@@ -214,10 +214,18 @@ def _run_runtime_payload(
     *,
     environment: dict[str, str],
     uv_lock_sha256: str | None = None,
+    cuda_home: Path | None = None,
+    cuda_compiler: Path | str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     runtime_environment = environment.copy()
-    runtime_environment.setdefault("CUDA_HOME", str(fixture.cuda_home))
-    runtime_environment.setdefault("CUDACXX", str(fixture.cuda_home / "bin" / "nvcc"))
+    effective_cuda_home = cuda_home or fixture.cuda_home
+    effective_cuda_compiler = (
+        cuda_compiler
+        if cuda_compiler is not None
+        else effective_cuda_home / "bin" / "nvcc"
+    )
+    runtime_environment["CUDA_HOME"] = str(effective_cuda_home)
+    runtime_environment["CUDACXX"] = str(effective_cuda_compiler)
     runtime_stage_root = fixture.environment_root.parent
     runtime_environment.setdefault(
         "UV_CACHE_DIR", str(runtime_stage_root / "build-cache")
@@ -248,7 +256,7 @@ def _run_runtime_payload(
         "causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm",
     )
     runtime_environment["PATH"] = (
-        f"{fixture.cuda_home / 'bin'}:{runtime_environment.get('PATH', '')}"
+        f"{effective_cuda_home / 'bin'}:{runtime_environment.get('PATH', '')}"
     )
     expected_uv_lock_sha256 = (
         uv_lock_sha256 or hashlib.sha256(fixture.source_lock.read_bytes()).hexdigest()
@@ -1339,15 +1347,18 @@ def test_runtime_payload_rejects_missing_nvcc_before_staging_uv(
     environment.update(
         {
             "PATH": f"{fixture.fake_bin}:/usr/bin:/bin",
-            "CUDA_HOME": str(tmp_path / "missing-cuda"),
-            "CUDACXX": "",
             "UV_STAGE_MARKER": str(uv_stage_marker),
             "PINNED_UV_VERSION": UV_VERSION,
             "UV_EXECUTABLE": str(tmp_path / f"uv-{UV_VERSION}-733" / "uv"),
         }
     )
 
-    result = _run_runtime_payload(fixture, environment=environment)
+    result = _run_runtime_payload(
+        fixture,
+        environment=environment,
+        cuda_home=tmp_path / "missing-cuda",
+        cuda_compiler="",
+    )
 
     assert result.returncode == 2
     assert "nvcc" in result.stderr.lower()
@@ -1375,6 +1386,8 @@ def test_runtime_payload_rejects_preexisting_keyed_stage_root(
     environment.update(
         {
             "PATH": f"{fixture.fake_bin}:/usr/bin:/bin",
+            "CUDA_HOME": "/ambient/cuda",
+            "CUDACXX": "/ambient/cuda/bin/nvcc",
             "PINNED_UV_VERSION": UV_VERSION,
             "UV_EXECUTABLE": str(tmp_path / f"uv-{UV_VERSION}-733" / "uv"),
             "UV_CACHE_DIR": str(state_path / "build-cache"),
