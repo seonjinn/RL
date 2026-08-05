@@ -495,6 +495,58 @@ def test_load_rejects_unexpected_artifact_identity(
         _load(path, metadata)
 
 
+def test_load_accepts_identical_quant_cfg_at_different_paths(
+    tmp_path: Path,
+    metadata: dict[str, str | int],
+) -> None:
+    artifact_quant_cfg = tmp_path / "artifact-snapshot/nvfp4.yaml"
+    expected_quant_cfg = tmp_path / "runtime-snapshot/nvfp4.yaml"
+    for quant_cfg in (artifact_quant_cfg, expected_quant_cfg):
+        quant_cfg.parent.mkdir()
+        quant_cfg.write_text("quant_cfg: nvfp4\n")
+
+    artifact_metadata = dict(metadata)
+    artifact_metadata["quant_cfg"] = str(artifact_quant_cfg.resolve())
+    expected_metadata = dict(metadata)
+    expected_metadata["quant_cfg"] = str(expected_quant_cfg.resolve())
+    path = tmp_path / "calibration.safetensors"
+    save_nvfp4_calibration(
+        path,
+        {"model.layers.0.mlp.up_proj.weight": torch.tensor(1.0)},
+        **artifact_metadata,
+    )
+
+    calibration = _load(path, expected_metadata)
+
+    assert list(calibration.input_amax) == ["model.layers.0.mlp.up_proj.weight"]
+
+
+def test_load_rejects_different_quant_cfg_contents_at_different_paths(
+    tmp_path: Path,
+    metadata: dict[str, str | int],
+) -> None:
+    artifact_quant_cfg = tmp_path / "artifact-snapshot/nvfp4.yaml"
+    expected_quant_cfg = tmp_path / "runtime-snapshot/nvfp4.yaml"
+    artifact_quant_cfg.parent.mkdir()
+    expected_quant_cfg.parent.mkdir()
+    artifact_quant_cfg.write_text("quant_cfg: w4a4\n")
+    expected_quant_cfg.write_text("quant_cfg: w4a16\n")
+
+    artifact_metadata = dict(metadata)
+    artifact_metadata["quant_cfg"] = str(artifact_quant_cfg.resolve())
+    expected_metadata = dict(metadata)
+    expected_metadata["quant_cfg"] = str(expected_quant_cfg.resolve())
+    path = tmp_path / "calibration.safetensors"
+    save_nvfp4_calibration(
+        path,
+        {"model.layers.0.mlp.up_proj.weight": torch.tensor(1.0)},
+        **artifact_metadata,
+    )
+
+    with pytest.raises(ValueError, match="quant_cfg.*does not match"):
+        _load(path, expected_metadata)
+
+
 @pytest.mark.parametrize(
     "invalid_amax",
     [

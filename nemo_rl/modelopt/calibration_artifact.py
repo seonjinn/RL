@@ -214,11 +214,24 @@ def _validate_identity(
     }
     for key, expected_value in expected.items():
         actual_value = metadata[key]
-        if actual_value != expected_value:
+        matches = actual_value == expected_value
+        if key == "quant_cfg" and not matches:
+            matches = _quant_cfg_contents_match(actual_value, expected_value)
+        if not matches:
             raise ValueError(
                 f"NVFP4 calibration {key} {actual_value!r} does not match "
                 f"expected {expected_value!r}"
             )
+
+
+def _quant_cfg_contents_match(actual: object, expected: object) -> bool:
+    if not isinstance(actual, str) or not isinstance(expected, str):
+        return False
+    actual_path = Path(actual).expanduser()
+    expected_path = Path(expected).expanduser()
+    if not actual_path.is_file() or not expected_path.is_file():
+        return False
+    return actual_path.read_bytes() == expected_path.read_bytes()
 
 
 def _validate_artifact_names(raw_names: list[str]) -> list[str]:
