@@ -40,3 +40,13 @@ def test_gcp_nrt_submitter_supports_bf16_control() -> None:
 
     assert "bf16)" in submitter
     assert "grpo-qwen3-30ba3b-4n4g-bf16-control.sh" in submitter
+
+
+def test_gcp_nrt_submitter_forwards_max_steps() -> None:
+    submitter = (
+        PROJECT_ROOT / "experiments/bf16-nvfp4-rollout/submit_gcp_nrt.sh"
+    ).read_text()
+
+    assert "MAX_STEPS=${MAX_STEPS:-2}" in submitter
+    assert "export MAX_STEPS=${MAX_STEPS}" in submitter
+    assert "max_steps=${MAX_STEPS}" in submitter

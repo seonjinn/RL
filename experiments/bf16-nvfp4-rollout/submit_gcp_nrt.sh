@@ -12,6 +12,12 @@ ACCOUNT=${SLURM_ACCOUNT:-coreai_chef_posttrain}
 PARTITION=${PARTITION:-batch}
 WALLTIME=${WALLTIME:-04:00:00}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
+MAX_STEPS=${MAX_STEPS:-2}
+
+if [[ ! "${MAX_STEPS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "MAX_STEPS must be a positive integer, got '${MAX_STEPS}'" >&2
+  exit 2
+fi
 
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna}
 RUNTIME_ROOT=${RUNTIME_ROOT:-${WORK_ROOT}/containers/nemo-rl-nightly-refresh}
@@ -118,6 +124,7 @@ test_script=${TEST_SCRIPT}
 container=${CONTAINER}
 wandb_project=${WANDB_PROJECT}
 wandb_name=${WANDB_NAME}
+max_steps=${MAX_STEPS}
 calibration_artifact=${NVFP4_CALIBRATION_ARTIFACT:-}
 EOF
 
@@ -140,6 +147,7 @@ export WANDB_PROJECT_OVERRIDE=${WANDB_PROJECT}
 export WANDB_NAME_OVERRIDE=${WANDB_NAME}
 export REFIT_TRANSPORT=${REFIT_TRANSPORT}
 export SCHEDULER_SEGMENT_SIZE=${SEGMENT_SIZE}
+export MAX_STEPS=${MAX_STEPS}
 ${CALIBRATION_EXPORT}
 printf 'NEMO_RL_SOURCE_COMMIT=%s\n' '${REPO_SHA}'
 uv run --frozen pytest -q \

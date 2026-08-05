@@ -6,9 +6,13 @@ source "$SCRIPT_DIR/common.env"
 NUM_NODES=2
 GPUS_PER_NODE=8
 SEGMENT_SIZE=${SCHEDULER_SEGMENT_SIZE:-2}
-STEPS_PER_RUN=2
-MAX_STEPS=2
-NUM_RUNS=$(( (MAX_STEPS + STEPS_PER_RUN - 1) / STEPS_PER_RUN ))
+MAX_STEPS=${MAX_STEPS:-2}
+if [[ ! "$MAX_STEPS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[ERROR] MAX_STEPS must be a positive integer, got '$MAX_STEPS'"
+  exit 2
+fi
+STEPS_PER_RUN=$MAX_STEPS
+NUM_RUNS=1
 NUM_MINUTES=240
 SNAPSHOT_MEGATRON_BRIDGE=1
 # ===== END CONFIG =====
@@ -134,10 +138,10 @@ assert_not_grep "Traceback \(most recent call last\)|Policy generation refit fai
   "Weight refit raised an exception"
 
 uv run --no-sync tests/check_metrics.py "$JSON_METRICS" \
-    'len(data["train/loss"]) == 2' \
-    'len(data["timing/train/prepare_for_generation/transfer_and_update_weights"]) == 2'
+    "len(data[\"train/loss\"]) == $MAX_STEPS" \
+    "len(data[\"timing/train/prepare_for_generation/transfer_and_update_weights\"]) == $MAX_STEPS"
 
 assert_not_grep "(^|[^[:alnum:]_])(nan|[-+]?inf(inity)?)([^[:alnum:]_]|$)" "$JSON_METRICS" \
   "Metrics contain a NaN or infinity"
 
-echo "[PASS] BF16 to NVFP4 W4A4 $TRANSPORT_TAG smoke completed two refits and two GRPO steps"
+echo "[PASS] BF16 to NVFP4 W4A4 $TRANSPORT_TAG run completed $MAX_STEPS refits and GRPO steps"

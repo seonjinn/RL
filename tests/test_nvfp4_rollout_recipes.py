@@ -119,14 +119,15 @@ def test_nvfp4_rollout_smoke_script_contract(recipe_name: str) -> None:
 
     assert "NUM_NODES=2" in script
     assert "GPUS_PER_NODE=8" in script
+    assert "MAX_STEPS=${MAX_STEPS:-2}" in script
     assert "SEGMENT_SIZE=${SCHEDULER_SEGMENT_SIZE:-2}" in script
     assert "Legacy refit requires SCHEDULER_SEGMENT_SIZE=2" in script
     assert "NCCL-Reshard requires SCHEDULER_SEGMENT_SIZE=1" in script
     assert "WANDB_API_KEY must be exported" in script
     assert "grpo.max_num_steps=$MAX_STEPS" in script
     assert "checkpointing.enabled=false" in script
-    assert 'len(data["train/loss"]) == 2' in script
+    assert 'len(data[\\"train/loss\\"]) == $MAX_STEPS' in script
     assert (
-        'len(data["timing/train/prepare_for_generation/transfer_and_update_weights"]) == 2'
+        'len(data[\\"timing/train/prepare_for_generation/transfer_and_update_weights\\"]) == $MAX_STEPS'
         in script
     )
