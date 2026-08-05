@@ -88,6 +88,23 @@ def create_local_venv(
     #  https://docs.astral.sh/uv/concepts/projects/config/#project-environment-path
     env["UV_PROJECT_ENVIRONMENT"] = venv_path
 
+    bootstrap_packages = shlex.split(
+        os.environ.get("NRL_VENV_BOOTSTRAP_PACKAGES", "")
+    )
+    if bootstrap_packages:
+        subprocess.run(
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                os.path.join(venv_path, "bin", "python"),
+                *bootstrap_packages,
+            ],
+            env=env,
+            check=True,
+        )
+
     # Split the py_executable into command and arguments
     exec_cmd = shlex.split(py_executable)
     # Command doesn't matter, since `uv` syncs the environment no matter the command.

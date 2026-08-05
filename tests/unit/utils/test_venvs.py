@@ -48,3 +48,36 @@ def test_create_local_venv():
             # Verify the command executed successfully (return code 0)
             assert result.returncode == 0, f"Failed to import sphinx: {result.stderr}"
             assert "Sphinx package is installed" in result.stdout
+
+
+def test_create_local_venv_installs_bootstrap_packages_before_sync(tmp_path):
+    create_local_venv.cache_clear()
+    venv_path = tmp_path / "test_venv"
+    env = {
+        "NEMO_RL_VENV_DIR": str(tmp_path),
+        "NRL_VENV_BOOTSTRAP_PACKAGES": "setuptools setuptools-rust",
+    }
+
+    with patch.dict(os.environ, env, clear=False), patch(
+        "nemo_rl.utils.venvs.subprocess.run"
+    ) as run:
+        python_path = create_local_venv("uv run --group docs", "test_venv")
+
+    assert python_path == str(venv_path / "bin" / "python")
+    assert run.call_args_list[0].args[0] == [
+        "uv",
+        "venv",
+        "--allow-existing",
+        str(venv_path),
+    ]
+    assert run.call_args_list[1].args[0] == [
+        "uv",
+        "pip",
+        "install",
+        "--python",
+        str(venv_path / "bin" / "python"),
+        "setuptools",
+        "setuptools-rust",
+    ]
+    assert run.call_args_list[2].args[0][:2] == ["uv", "sync"]
+    create_local_venv.cache_clear()

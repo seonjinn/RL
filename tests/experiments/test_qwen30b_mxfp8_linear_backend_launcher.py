@@ -64,6 +64,7 @@ def test_dry_run_changes_only_backend(tmp_path: Path) -> None:
         assert "cluster.gpus_per_node=4" in output
         assert "cluster.segment_size=4" in output
         assert "grpo.max_num_steps=8" in output
+        assert "NRL_VENV_BOOTSTRAP_PACKAGES='setuptools setuptools-rust'" in output
         assert "SETUPTOOLS_SCM_PRETEND_VERSION=0.25.1" in output
         assert "--qos=interactive" in output
         assert output.count("uv run --frozen --extra vllm") == 2
