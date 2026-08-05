@@ -132,7 +132,8 @@ def _campaign_leaf_harness(tmp_path: Path) -> tuple[Path, Path, Path, dict[str, 
         "\n".join(
             (
                 "PROFILE_ID=unit", "ACCOUNT=unit", "PARTITION=batch", "CONTAINER=/tmp/container.sqsh",
-                f"CONTAINER_SHA256={provenance['container_sha256']}", "MOUNTS=/private:/private",
+                f"CONTAINER_SHA256={provenance['container_sha256']}",
+                f"MOUNTS={tmp_path}:{tmp_path}",
                 "SBATCH_GPUS_PER_NODE=4", "SBATCH_GRES=gpu:4", "SBATCH_SEGMENT_SIZE=", "TIME_LIMIT=01:00:00",
                 f"RUNTIME_ATTESTATION={runtime}", "RUNTIME_PREFLIGHT_JOB_ID=1", f"EXPECTED_TE_SHA={'e' * 40}",
                 f"EXPECTED_TE_VERSION_BASE_SHA={'f' * 40}",
