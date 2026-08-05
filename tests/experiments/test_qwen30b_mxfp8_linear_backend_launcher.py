@@ -12,6 +12,8 @@ LAUNCHER = (
     / "qwen30b_mxfp8_linear_backends"
     / "submit_ptyche.sh"
 )
+PREPARE_SCRIPT = LAUNCHER.with_name("prepare_custom_vllm_ptyche.sh")
+BUILD_CUSTOM_VLLM_SCRIPT = REPO_ROOT / "tools" / "build-custom-vllm.sh"
 
 
 def _dry_run(tmp_path: Path, backend: str) -> str:
@@ -79,3 +81,12 @@ def test_rejects_unknown_backend(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert "Unsupported BACKEND" in result.stderr
+
+
+def test_custom_vllm_build_is_recoverable() -> None:
+    prepare_text = PREPARE_SCRIPT.read_text()
+    build_text = BUILD_CUSTOM_VLLM_SCRIPT.read_text()
+
+    assert "3rdparty/vllm/nemo-rl.env" in prepare_text
+    assert "vllm.incomplete" in prepare_text
+    assert "setuptools_rust" in build_text

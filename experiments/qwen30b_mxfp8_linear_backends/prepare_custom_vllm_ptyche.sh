@@ -27,10 +27,15 @@ COMMAND=$(cat <<EOF
 set -euo pipefail
 cd ${REPO_DIR}
 export UV_PROJECT_ENVIRONMENT=
-if [[ -d 3rdparty/vllm/.git ]]; then
+if [[ -d 3rdparty/vllm/.git && -f 3rdparty/vllm/nemo-rl.env ]]; then
   actual=\$(git -C 3rdparty/vllm rev-parse HEAD)
   [[ "\${actual}" == "${VLLM_GIT_REF}" ]] || { echo "Existing custom vLLM commit is \${actual}" >&2; exit 1; }
 else
+  if [[ -e 3rdparty/vllm ]]; then
+    incomplete=3rdparty/vllm.incomplete.\${SLURM_JOB_ID:-\$\$}
+    echo "Moving incomplete custom vLLM build to \${incomplete}"
+    mv 3rdparty/vllm "\${incomplete}"
+  fi
   bash tools/build-custom-vllm.sh ${VLLM_GIT_URL} ${VLLM_GIT_REF} ${VLLM_WHEEL}
 fi
 source 3rdparty/vllm/nemo-rl.env
