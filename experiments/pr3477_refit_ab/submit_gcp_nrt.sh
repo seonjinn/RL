@@ -15,6 +15,7 @@ GEN_NODES=${GEN_NODES:-2}
 MAX_STEPS=${MAX_STEPS:-20}
 WALLTIME=${WALLTIME:-04:00:00}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
+NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-false}
 
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna}
 RUNTIME_ROOT=${RUNTIME_ROOT:-${WORK_ROOT}/containers/nemo-rl-nightly-refresh}
@@ -87,6 +88,7 @@ total_nodes=${TOTAL_NODES}
 gpus_per_node=${GPUS_PER_NODE}
 generation_nodes=${GEN_NODES}
 max_steps=${MAX_STEPS}
+force_rebuild_venvs=${NRL_FORCE_REBUILD_VENVS}
 container=${CONTAINER}
 wandb_project=${WANDB_PROJECT}
 wandb_name=${WANDB_NAME}
@@ -96,7 +98,7 @@ COMMAND=$(cat <<EOF
 set -euo pipefail
 cd ${REPO}
 export HF_HOME=${WORK_ROOT}/.cache/huggingface
-export NRL_FORCE_REBUILD_VENVS=false
+export NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS}
 export NEMO_RL_VENV_DIR=${CACHE_ROOT}/worker-venvs
 export NVTE_CUDA_ARCHS=100
 export PYTHONPATH=${REPO}
