@@ -20,9 +20,12 @@ import time
 import warnings
 from collections import OrderedDict, defaultdict
 from contextlib import AbstractContextManager, contextmanager, nullcontext
-from typing import Any, Iterable, Iterator, Optional, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Iterable, Iterator, Optional, TypeVar, cast
 
 log = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
 
 import ray
 import torch
@@ -109,6 +112,7 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
     HFToLocalParamMap,
     LocalParamSpec,
     RefitCtx,
+    _uses_mxfp8_source_transform,
 )
 
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
@@ -348,6 +352,10 @@ class MegatronPolicyWorkerImpl(
 
         self.cfg = config
         self._router_replay_enabled = router_replay_enabled(config)
+        # HF param names to MXFP8-quantize on the trainer during refit; set by
+        # the structured transform handshake when refit prequantization is on.
+        self._refit_prequant_names: set[str] = set()
+        self._refit_transform_requests_by_name: dict[str, "RefitTransformRequest"] = {}
         self._nixl_preinit_agent = maybe_preinit_nixl_checkpoint_engine(config)
 
         # Set rank for non-collocated to check which ranks to broadcast from
@@ -1805,7 +1813,7 @@ class MegatronPolicyWorkerImpl(
 
     @torch.no_grad()
     @wrap_with_nvtx_name("megatron_policy_worker/prepare_refit_info")
-    def prepare_refit_info(self) -> None:
+    def prepare_refit_info(self) -> dict[str, Any]:
         """Prepare state dict metadata for weight refitting and IPC streaming."""
         self.refit_param_info_mcore = self._calculate_refit_param_info()
 
@@ -1814,7 +1822,82 @@ class MegatronPolicyWorkerImpl(
         for name, tensor in self._iter_params_with_optional_kv_scales():
             refit_param_info_hf[name] = (tensor.shape, tensor.dtype)
 
+        self._last_refit_param_info_hf = refit_param_info_hf
         return refit_param_info_hf
+
+    def enable_refit_transforms(
+        self, requests: list["RefitTransformRequest"]
+    ) -> dict[str, Any]:
+        """Validate and install source transforms before any refit state changes.
+
+        Args:
+            requests: Structured transform requests reported by generation.
+
+        Returns:
+            Updated source metadata for the requested destination transforms.
+        """
+        from nemo_rl.weight_sync.refit_transforms import resolve_transform
+
+        source_info = getattr(self, "_last_refit_param_info_hf", None)
+        if source_info is None:
+            source_info = self.prepare_refit_info()
+
+        requested_names: set[str] = set()
+        requests_by_name: dict[str, RefitTransformRequest] = {}
+        for request in requests:
+            canonical_names = tuple(sorted(set(request.parameter_names)))
+            if request.parameter_names != canonical_names:
+                raise ValueError(
+                    "Refit transform parameter names must be sorted and unique; "
+                    f"got {request.parameter_names!r}."
+                )
+            codec = resolve_transform(request.source_format, request.target_format)
+            for name in request.parameter_names:
+                if name in requested_names:
+                    raise ValueError(f"Duplicate refit transform request for {name!r}.")
+                if name not in source_info:
+                    raise ValueError(f"Unknown refit transform parameter {name!r}.")
+                shape, dtype = source_info[name]
+                if request.source_format == "bf16" and dtype is not torch.bfloat16:
+                    raise ValueError(
+                        f"Refit transform for {name!r} requires BF16 parameter "
+                        f"storage; got {dtype}."
+                    )
+                codec.describe_outputs(tuple(shape), str(dtype))
+                requested_names.add(name)
+                requests_by_name[name] = request
+
+        self._refit_prequant_names = {
+            name
+            for name, request in requests_by_name.items()
+            if request.target_format == "mxfp8_e4m3_e8m0"
+        }
+        self._refit_transform_requests_by_name = requests_by_name
+
+        refit_param_info_hf = {}
+        for name, tensor in self._iter_params_with_optional_kv_scales():
+            refit_param_info_hf[name] = (tensor.shape, tensor.dtype)
+        return refit_param_info_hf
+
+    def _maybe_prequantize_param(
+        self, name: str, tensor: torch.Tensor
+    ) -> Iterator[tuple[str, torch.Tensor]]:
+        if (
+            name not in self._refit_prequant_names
+            or tensor.dtype == torch.float8_e4m3fn
+        ):
+            yield name, tensor
+            return
+
+        # Deferred: pulls in the heavy nemo_rl...generation.vllm package init,
+        # which trainer workers only need when prequantized refit is enabled.
+        from nemo_rl.models.generation.vllm.quantization.fp8_train_utils import (
+            mxfp8_e4m3_quantize_for_refit,
+        )
+
+        param_lp, param_scale = mxfp8_e4m3_quantize_for_refit(tensor)
+        yield name, param_lp
+        yield name + "_scale_from_checkpoint", param_scale
 
     def _collect_mtp_metrics(
         self,
@@ -2315,6 +2398,9 @@ class MegatronPolicyWorkerImpl(
         from nemo_rl.weight_sync.nccl_reshard_utils import _extract_layer_prefix
 
         layer_prefix = None
+        prequant_scale_suffix = "_scale_from_checkpoint"
+        source_info = getattr(self, "_last_refit_param_info_hf", {})
+        transform_requests = getattr(self, "_refit_transform_requests_by_name", {})
         with _meta_tensor_alloc_context():
             for name, tensor in self._iter_params_with_optional_kv_scales():
                 meta = {
@@ -2322,6 +2408,37 @@ class MegatronPolicyWorkerImpl(
                     "dtype": str(tensor.dtype),
                 }
                 _nbytes = tensor.numel() * tensor.element_size()
+                if name.endswith(prequant_scale_suffix):
+                    parent_name = name[: -len(prequant_scale_suffix)]
+                    parent_meta = state_dict_metadata.get(parent_name)
+                    if parent_meta is not None:
+                        scale_shape = meta["shape"]
+                        if len(scale_shape) == len(parent_meta["shape"]) - 1:
+                            scale_shape = [*scale_shape, 1]
+                        parent_meta.update(
+                            {
+                                "scale_shape": scale_shape,
+                                "scale_dtype": meta["dtype"],
+                            }
+                        )
+                        _xfer_bytes += _nbytes
+                    else:
+                        misc_meta[name] = meta
+                        _bcast_bytes += _nbytes
+                    continue
+                request = transform_requests.get(name)
+                if request is not None:
+                    source_shape, source_dtype = source_info[name]
+                    meta.update(
+                        {
+                            "refit_transform": {
+                                "source_format": request.source_format,
+                                "target_format": request.target_format,
+                            },
+                            "source_shape": list(source_shape),
+                            "source_dtype": str(source_dtype),
+                        }
+                    )
                 # Downsized whitelist: only FFN gate/up/down weights take the bulk
                 # nccl-reshard path; everything else -> misc (packed_broadcast).
                 if is_nccl_reshard_param(name):
@@ -2472,10 +2589,44 @@ class MegatronPolicyWorkerImpl(
         param_map = dict(self._iter_local_hf_param_shards())
         expert_groups = self._build_expert_groups(param_map)
 
-        def _expert_spec(proj, grouped_name):
-            def pre(_base):
-                return RefitCtx(
-                    buf=self._group_experts(proj, grouped_name, expert_groups)
+        def _mxfp8_ctx(source: torch.Tensor) -> RefitCtx:
+            # Deferred because trainer workers only need vLLM quantization helpers
+            # when prequantized refit is enabled.
+            from nemo_rl.models.generation.vllm.quantization.fp8_train_utils import (
+                MXFP8_BLOCK_SIZE,
+                mxfp8_e4m3_quantize_for_refit,
+            )
+
+            value, scale = mxfp8_e4m3_quantize_for_refit(source)
+            scale = scale.reshape(
+                *source.shape[:-1], source.shape[-1] // MXFP8_BLOCK_SIZE
+            )
+            return RefitCtx(transfer_tensors=(value, scale))
+
+        def _component_family(param_info: dict[str, Any]) -> tuple[str, ...]:
+            components = param_info.get("wire_components", param_info.get("components"))
+            if not components:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: {param_info['name']!r} must "
+                    "provide a nonempty component list"
+                )
+            family = tuple(component.get("role") for component in components)
+            if family not in {("weight",), ("weight", "weight_scale")}:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: unsupported component family "
+                    f"{family!r} for {param_info['name']!r}"
+                )
+            return family
+
+        def _expert_spec(
+            proj: str, grouped_name: str, *, transform_to_mxfp8: bool
+        ) -> LocalParamSpec:
+            def pre(_base: Any) -> RefitCtx:
+                source = self._group_experts(proj, grouped_name, expert_groups)
+                return (
+                    _mxfp8_ctx(source)
+                    if transform_to_mxfp8
+                    else RefitCtx(transfer_tensors=(source,))
                 )
 
             return LocalParamSpec(base=None, pre=pre)
@@ -2484,10 +2635,20 @@ class MegatronPolicyWorkerImpl(
         for layer_name in refit_info["layer_names"]:
             for p in refit_info["per_layer_params"][layer_name]:
                 name = p["name"]
+                component_family = _component_family(p)
+                transform_to_mxfp8 = _uses_mxfp8_source_transform(p, component_family)
                 if p.get("grouped_expert_proj"):
-                    mapping[name] = _expert_spec(p["grouped_expert_proj"], name)
+                    mapping[name] = _expert_spec(
+                        p["grouped_expert_proj"],
+                        name,
+                        transform_to_mxfp8=transform_to_mxfp8,
+                    )
                 else:
-                    mapping[name] = LocalParamSpec(base=param_map.get(name))
+                    base = param_map.get(name)
+                    mapping[name] = LocalParamSpec(
+                        base=base,
+                        pre=_mxfp8_ctx if transform_to_mxfp8 else None,
+                    )
         return HFToLocalParamMap(specs=mapping)
 
     @torch.no_grad()
@@ -2530,29 +2691,52 @@ class MegatronPolicyWorkerImpl(
                 ctx = (
                     spec.pre(spec.base)  # stack grouped MoE experts
                     if spec.pre is not None
-                    else RefitCtx(buf=spec.base)  # send local shard as-is
+                    else RefitCtx(
+                        transfer_tensors=(spec.base,)
+                    )  # send local shard as-is
                 )
-                assert ctx.buf is not None, (
+                assert ctx.tensors_for_transfer(), (
                     f"no local tensor for {param_info['name']!r}"
                 )
-                src_tensor = DTensorRef(
-                    local_tensor=ctx.buf, global_shape=param_info["global_shape"]
+                components = param_info.get(
+                    "wire_components", param_info.get("components")
                 )
-                xferdtensor(
-                    src_tensor,
-                    param_info["src_mesh_info"],
-                    param_info["src_placements"],
-                    None,
-                    param_info["dst_mesh_info"],
-                    param_info["dst_placements"],
-                    group,
-                    nccl_reshard_stream,
-                )
+                if not components:
+                    raise ValueError(
+                        f"nccl_reshard_refit: {param_info['name']!r} must provide "
+                        "a nonempty component list"
+                    )
+                transfer_tensors = ctx.tensors_for_transfer()
+                if len(transfer_tensors) != len(components):
+                    raise ValueError(
+                        f"nccl_reshard_refit: component count mismatch for "
+                        f"{param_info['name']!r}: context has {len(transfer_tensors)}, "
+                        f"metadata has {len(components)}"
+                    )
+                for tensor, component in zip(transfer_tensors, components):
+                    src_tensor = DTensorRef(
+                        local_tensor=tensor,
+                        global_shape=component["global_shape"],
+                    )
+                    xferdtensor(
+                        src_tensor,
+                        param_info["src_mesh_info"],
+                        component["src_placements"],
+                        None,
+                        param_info["dst_mesh_info"],
+                        component["dst_placements"],
+                        group,
+                        nccl_reshard_stream,
+                    )
                 if spec.post is not None:
                     spec.post(ctx)
-                # Drop refs to the per-iteration grouped MoE tensor so its CUDA
-                # memory returns to the caching allocator
-                del ctx, src_tensor
+                if spec.pre is not None:
+                    for tensor in transfer_tensors:
+                        if tensor.is_cuda:
+                            tensor.record_stream(nccl_reshard_stream)
+                # Drop refs to per-iteration transformed/grouped tensors. The
+                # caching allocator retains them until their stream work completes.
+                del ctx, transfer_tensors
 
         torch.cuda.synchronize()
         torch.cuda.empty_cache()

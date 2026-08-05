@@ -37,6 +37,7 @@ from modelopt.torch.utils.plugins import (
     megatron_prefill,
 )
 from torch.utils.data import DataLoader, Dataset
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from nemo_rl.algorithms.utils import get_tokenizer as _base_get_tokenizer
 from nemo_rl.modelopt.utils import resolve_quant_cfg
@@ -59,7 +60,11 @@ def symlink_pre_quantized_model(src: str, pretrained_path: str) -> None:
     print(f"Using pre-quantized model at: {absolute_src}")
 
 
-def get_tokenizer(ckpt_path, max_seq_len=MAX_SEQ_LEN):
+def get_tokenizer(
+    ckpt_path: str,
+    max_seq_len: int = MAX_SEQ_LEN,
+    revision: str | None = None,
+) -> PreTrainedTokenizerBase:
     """Returns a tokenizer configured for ModelOpt calibration.
 
     Wraps :func:`nemo_rl.algorithms.utils.get_tokenizer` and applies the
@@ -67,7 +72,16 @@ def get_tokenizer(ckpt_path, max_seq_len=MAX_SEQ_LEN):
     ``padding_side="left"`` and ``model_max_length`` truncation.
     """
     print(f"Initializing tokenizer from {ckpt_path}")
-    tokenizer = _base_get_tokenizer({"name": ckpt_path})
+    if revision is None:
+        tokenizer = _base_get_tokenizer({"name": ckpt_path})
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(
+            ckpt_path,
+            trust_remote_code=True,
+            revision=revision,
+        )
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
     tokenizer.model_max_length = max_seq_len
     return tokenizer

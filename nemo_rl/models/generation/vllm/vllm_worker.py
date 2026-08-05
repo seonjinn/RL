@@ -60,6 +60,11 @@ from nemo_rl.utils.nvml import log_gpu_memory_diagnostics
 from nemo_rl.weight_sync.checkpoint_engine_config import (
     checkpoint_engine_refit_config,
 )
+from nemo_rl.weight_sync.refit_transforms import (
+    RefitPlanAgreement,
+    RefitTransformRequest,
+    merge_refit_transform_requests,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1088,9 +1093,17 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
         )
         return cast(list[str], list_of_worker_results)
 
-    def prepare_refit_info(self, state_dict_info: dict[str, Any]) -> None:
+    def prepare_refit_info(
+        self, state_dict_info: dict[str, Any]
+    ) -> Optional[list[RefitTransformRequest]]:
         """Prepare the info for refit."""
-        self.llm.collective_rpc("prepare_refit_info", args=(state_dict_info,))
+        from nemo_rl.models.generation.vllm.quantization import fp8
+
+        results = self.llm.collective_rpc(
+            "prepare_refit_info",
+            args=(state_dict_info, fp8.serialize_fp8_config()),
+        )
+        return merge_refit_transform_requests(results) or None
 
     @wrap_with_nvtx_name("vllm_genertion_worker/update_weights_via_ipc_zmq")
     def update_weights_via_ipc_zmq(self) -> bool:
@@ -1177,9 +1190,16 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
             ),
         )
 
-    def prepare_nccl_reshard_refit_info(self, refit_info: dict) -> None:
+    def prepare_nccl_reshard_refit_info(self, refit_info: dict) -> RefitPlanAgreement:
         """Forward refit info to vLLM backend workers."""
-        self.llm.collective_rpc("prepare_nccl_reshard_refit_info", args=(refit_info,))
+        results = self.llm.collective_rpc(
+            "prepare_nccl_reshard_refit_info", args=(refit_info,)
+        )
+        from nemo_rl.weight_sync.refit_transforms import require_matching_agreements
+
+        return require_matching_agreements(
+            results, participants="internal synchronous vLLM workers"
+        )
 
     def nccl_reshard_refit(self) -> bool:
         """Receive weights from training workers via nccl_reshard (xferdtensor)."""

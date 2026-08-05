@@ -13,7 +13,8 @@
 # limitations under the License.
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from typing import Any
 from unittest.mock import patch
 
 import ray
@@ -57,6 +58,7 @@ class FP8Config:
     kv_cache_dtype: str = "auto"
     use_fp8_weights: bool = True  # Whether model weights are quantized to FP8
     is_mx: bool = False
+    refit_prequantize: bool = False
 
 
 @dataclass()
@@ -70,7 +72,7 @@ class FP8State:
 
 # Global FP8 config that can be accessed by patched vLLM functions
 # initialized by 'init_fp8_cfg()'
-global_fp8_config: FP8Config = None
+global_fp8_config: FP8Config | None = None
 # Global FP8 state that holds runtime fp8 objects
 fp8_state: FP8State = FP8State()
 
@@ -90,6 +92,21 @@ def my_run_engine_core(*args, **kwargs):
     del kwargs["vllm_config"].nrl_fp8_cfg
     monkey_patch_vllm_ray_executor(fp8_cfg)
     return original_run_engine_core(*args, **kwargs)
+
+
+def serialize_fp8_config() -> dict[str, Any] | None:
+    """Return the process-local FP8 config in an RPC-safe form."""
+    if global_fp8_config is None:
+        return None
+    return asdict(global_fp8_config)
+
+
+def install_fp8_config(config: dict[str, Any] | None) -> None:
+    """Install an FP8 config forwarded from the outer generation worker."""
+    if config is None:
+        return
+    global global_fp8_config
+    global_fp8_config = FP8Config(**config)
 
 
 def monkey_patch_vllm_ray_executor(fp8_config):
@@ -219,6 +236,7 @@ def init_fp8(vllm_cfg, model_name, model_parallel_size):
     }
     if is_mx:
         fp8_config_kwargs["is_mx"] = True
+        fp8_config_kwargs["refit_prequantize"] = bool(vllm_cfg.get("refit_prequantize"))
         if vllm_cfg.get("pow2_weight_scaling_factors") is False:
             raise ValueError("only pow2 weight scaling factors are supported for MXFP8")
         if vllm_cfg.get("pow2_activation_scaling_factors") is False:

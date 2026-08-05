@@ -43,6 +43,7 @@ from nemo_rl.models.generation.vllm.vllm_worker import (
 from nemo_rl.models.generation.vllm.vllm_worker_async import (
     VllmAsyncGenerationWorkerImpl,
 )
+from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
 from nemo_rl.models.policy import LoRAConfig, PolicyConfig
 from nemo_rl.models.policy.lm_policy import Policy
 
@@ -136,6 +137,142 @@ basic_dtensor_test_config: PolicyConfig = {
     "make_sequence_length_divisible_by": 1,
     "generation": deepcopy(basic_vllm_test_config),
 }
+
+
+@pytest.mark.vllm
+def test_prepare_refit_info_skips_missing_metadata():
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.worker_group = MagicMock()
+
+    assert generation.prepare_refit_info(None) is None
+    generation.worker_group.run_all_workers_single_data.assert_not_called()
+
+
+@pytest.mark.vllm
+def test_prepare_refit_info_builds_one_deterministic_transform_request(
+    monkeypatch,
+):
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {"vllm_cfg": {"async_engine": False}}
+    generation.worker_group = MagicMock()
+    futures = [object(), object()]
+    generation.worker_group.run_all_workers_single_data.return_value = futures
+    monkeypatch.setattr(
+        "nemo_rl.models.generation.vllm.vllm_generation.ray.get",
+        lambda refs: [
+            ["model.b.weight", "model.a.weight"],
+            ["model.a.weight", "model.a.weight"],
+        ],
+    )
+
+    state_dict_info = {"model.a.weight": object()}
+    result = generation.prepare_refit_info(state_dict_info)
+
+    assert result == [
+        RefitTransformRequest(
+            parameter_names=("model.a.weight", "model.b.weight"),
+            source_format="bf16",
+            target_format="mxfp8_e4m3_e8m0",
+        )
+    ]
+    generation.worker_group.run_all_workers_single_data.assert_called_once_with(
+        "prepare_refit_info",
+        state_dict_info=state_dict_info,
+        run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+    )
+
+
+@pytest.mark.vllm
+@pytest.mark.parametrize("target_format", ["nvfp4_w4a16", "nvfp4_w4a4"])
+def test_prepare_refit_info_preserves_worker_requested_target_format(
+    monkeypatch,
+    target_format,
+):
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {"vllm_cfg": {"async_engine": False}}
+    generation.worker_group = MagicMock()
+    futures = [object(), object()]
+    generation.worker_group.run_all_workers_single_data.return_value = futures
+    monkeypatch.setattr(
+        "nemo_rl.models.generation.vllm.vllm_generation.ray.get",
+        lambda refs: [
+            [
+                RefitTransformRequest(
+                    parameter_names=("model.b.weight", "model.a.weight"),
+                    source_format="bf16",
+                    target_format=target_format,
+                )
+            ],
+            [
+                RefitTransformRequest(
+                    parameter_names=("model.a.weight",),
+                    source_format="bf16",
+                    target_format=target_format,
+                )
+            ],
+        ],
+    )
+
+    result = generation.prepare_refit_info({"model.a.weight": object()})
+
+    assert result == [
+        RefitTransformRequest(
+            parameter_names=("model.a.weight", "model.b.weight"),
+            source_format="bf16",
+            target_format=target_format,
+        )
+    ]
+
+
+@pytest.mark.vllm
+def test_prepare_nccl_refit_info_rejects_generation_actor_disagreement(monkeypatch):
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {"vllm_cfg": {"async_engine": False}}
+    generation.worker_group = MagicMock()
+    generation.worker_group.run_all_workers_single_data.return_value = [
+        object(),
+        object(),
+    ]
+    agreement = {
+        "protocol_version": 1,
+        "component_count": 2,
+        "plan_signature": "source",
+    }
+    monkeypatch.setattr(
+        "nemo_rl.models.generation.vllm.vllm_generation.ray.get",
+        lambda _refs: [agreement, {**agreement, "plan_signature": "other"}],
+    )
+
+    with pytest.raises(ValueError, match="agreement mismatch"):
+        generation.prepare_nccl_reshard_refit_info({})
+
+
+@pytest.mark.vllm
+def test_prepare_nccl_refit_info_routes_async_and_collapses_matching_dp_agreement(
+    monkeypatch,
+):
+    generation = VllmGeneration.__new__(VllmGeneration)
+    generation.cfg = {"vllm_cfg": {"async_engine": True}}
+    generation.worker_group = MagicMock()
+    futures = [object(), object()]
+    generation.worker_group.run_all_workers_single_data.return_value = futures
+    agreement = {
+        "protocol_version": 1,
+        "component_count": 2,
+        "plan_signature": "matching",
+    }
+    monkeypatch.setattr(
+        "nemo_rl.models.generation.vllm.vllm_generation.ray.get",
+        lambda refs: [agreement, dict(agreement)],
+    )
+    refit_info = {"per_layer_params": {}}
+
+    assert generation.prepare_nccl_reshard_refit_info(refit_info) == agreement
+    generation.worker_group.run_all_workers_single_data.assert_called_once_with(
+        "prepare_nccl_reshard_refit_info_async",
+        refit_info=refit_info,
+        run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
+    )
 
 
 def test_resolve_enable_prefix_caching_respects_explicit_config(monkeypatch):

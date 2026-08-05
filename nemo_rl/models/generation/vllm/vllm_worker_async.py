@@ -53,6 +53,11 @@ from nemo_rl.models.generation.vllm.vllm_worker import BaseVllmGenerationWorker
 from nemo_rl.models.generation.openai_server_utils import (
     replace_prefix_tokens,
 )
+from nemo_rl.weight_sync.refit_transforms import (
+    RefitPlanAgreement,
+    RefitTransformRequest,
+    merge_refit_transform_requests,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -1300,9 +1305,17 @@ class VllmAsyncGenerationWorkerImpl(
 
         return cast(list[str], list_of_worker_results)
 
-    async def prepare_refit_info_async(self, state_dict_info: dict[str, Any]) -> None:
+    async def prepare_refit_info_async(
+        self, state_dict_info: dict[str, Any]
+    ) -> Optional[list[RefitTransformRequest]]:
         """Async version of prepare_refit_info."""
-        await self.llm.collective_rpc("prepare_refit_info", args=(state_dict_info,))
+        from nemo_rl.models.generation.vllm.quantization import fp8
+
+        results = await self.llm.collective_rpc(
+            "prepare_refit_info",
+            args=(state_dict_info, fp8.serialize_fp8_config()),
+        )
+        return merge_refit_transform_requests(results) or None
 
     async def update_weights_via_ipc_zmq_async(
         self,
@@ -1401,10 +1414,17 @@ class VllmAsyncGenerationWorkerImpl(
             ),
         )
 
-    async def prepare_nccl_reshard_refit_info_async(self, refit_info: dict) -> None:
+    async def prepare_nccl_reshard_refit_info_async(
+        self, refit_info: dict
+    ) -> RefitPlanAgreement:
         """Async version of prepare_nccl_reshard_refit_info."""
-        await self.llm.collective_rpc(
+        results = await self.llm.collective_rpc(
             "prepare_nccl_reshard_refit_info", args=(refit_info,)
+        )
+        from nemo_rl.weight_sync.refit_transforms import require_matching_agreements
+
+        return require_matching_agreements(
+            results, participants="internal asynchronous vLLM workers"
         )
 
     async def nccl_reshard_refit_async(self) -> bool:

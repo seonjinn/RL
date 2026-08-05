@@ -120,6 +120,222 @@ def _make_mtp_refit_extension(
 
 
 @pytest.mark.vllm
+@pytest.mark.parametrize("enabled", [False, True])
+def test_prepare_refit_info_reports_only_fp8_weights(monkeypatch, enabled):
+    from nemo_rl.models.generation.vllm import vllm_backend
+    from nemo_rl.models.generation.vllm.quantization import fp8
+
+    ext = vllm_backend.VllmInternalWorkerExtension.__new__(
+        vllm_backend.VllmInternalWorkerExtension
+    )
+    model = object()
+    config = object()
+    ext.model_runner = SimpleNamespace(model=model, vllm_config=config)
+    state_dict_info = {
+        "model.linear.weight": ((2, 2), torch.bfloat16),
+        "model.norm.weight": ((2,), torch.bfloat16),
+    }
+    is_fp8_model = MagicMock(return_value=True)
+    checked_names = []
+
+    def is_fp8_weight(name, candidate_model):
+        assert candidate_model is model
+        checked_names.append(name)
+        return name == "model.linear.weight"
+
+    source_config = fp8.FP8Config(
+        is_mx=True,
+        refit_prequantize=enabled,
+        use_fp8_weights=True,
+    )
+    monkeypatch.setattr(fp8, "global_fp8_config", source_config)
+    serialized_config = fp8.serialize_fp8_config()
+    monkeypatch.setattr(fp8, "global_fp8_config", None)
+    monkeypatch.setattr(fp8, "is_fp8_model", is_fp8_model)
+    monkeypatch.setattr(fp8, "_is_fp8_weight", is_fp8_weight)
+
+    result = ext.prepare_refit_info(state_dict_info, serialized_config)
+
+    assert ext.state_dict_info is state_dict_info
+    assert fp8.global_fp8_config == source_config
+    if enabled:
+        assert result == ["model.linear.weight"]
+        is_fp8_model.assert_called_once_with(config)
+        assert checked_names == list(state_dict_info)
+    else:
+        assert result is None
+        is_fp8_model.assert_not_called()
+        assert checked_names == []
+
+
+@pytest.mark.vllm
+def test_sync_prepare_refit_info_unions_worker_names(monkeypatch):
+    from nemo_rl.models.generation.vllm.quantization import fp8
+    from nemo_rl.models.generation.vllm.vllm_worker import (
+        VllmGenerationWorkerImpl,
+    )
+    from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
+
+    worker = VllmGenerationWorkerImpl.__new__(VllmGenerationWorkerImpl)
+    state_dict_info = {"model.weight": ((2, 2), torch.bfloat16)}
+    serialized_config = {"is_mx": True, "refit_prequantize": True}
+    monkeypatch.setattr(fp8, "serialize_fp8_config", lambda: serialized_config)
+    worker.llm = SimpleNamespace(
+        collective_rpc=MagicMock(
+            return_value=[
+                None,
+                ["model.b.weight", "model.a.weight"],
+                ["model.a.weight"],
+            ]
+        )
+    )
+
+    assert worker.prepare_refit_info(state_dict_info) == [
+        RefitTransformRequest(
+            parameter_names=("model.a.weight", "model.b.weight"),
+            source_format="bf16",
+            target_format="mxfp8_e4m3_e8m0",
+        )
+    ]
+    worker.llm.collective_rpc.assert_called_once_with(
+        "prepare_refit_info",
+        args=(state_dict_info, serialized_config),
+    )
+
+
+@pytest.mark.vllm
+@pytest.mark.asyncio
+async def test_async_prepare_refit_info_unions_worker_names(monkeypatch):
+    from nemo_rl.models.generation.vllm.quantization import fp8
+    from nemo_rl.models.generation.vllm.vllm_worker_async import (
+        VllmAsyncGenerationWorkerImpl,
+    )
+    from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
+
+    worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
+    state_dict_info = {"model.weight": ((2, 2), torch.bfloat16)}
+    serialized_config = {"is_mx": True, "refit_prequantize": True}
+    monkeypatch.setattr(fp8, "serialize_fp8_config", lambda: serialized_config)
+    worker.llm = SimpleNamespace(
+        collective_rpc=AsyncMock(
+            return_value=[None, ["model.b.weight"], ["model.a.weight"]]
+        )
+    )
+
+    assert await worker.prepare_refit_info_async(state_dict_info) == [
+        RefitTransformRequest(
+            parameter_names=("model.a.weight", "model.b.weight"),
+            source_format="bf16",
+            target_format="mxfp8_e4m3_e8m0",
+        )
+    ]
+    worker.llm.collective_rpc.assert_awaited_once_with(
+        "prepare_refit_info",
+        args=(state_dict_info, serialized_config),
+    )
+
+
+@pytest.mark.vllm
+@pytest.mark.parametrize("async_worker", [False, True])
+@pytest.mark.parametrize("target_format", ["nvfp4_w4a16", "nvfp4_w4a4"])
+@pytest.mark.asyncio
+async def test_prepare_refit_info_forwards_nvfp4_requests(
+    monkeypatch, async_worker, target_format
+):
+    from nemo_rl.models.generation.vllm.quantization import fp8
+    from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
+
+    request = RefitTransformRequest(
+        parameter_names=("model.q_proj.weight",),
+        source_format="bf16",
+        target_format=target_format,
+    )
+    state_dict_info = {"model.q_proj.weight": ((32, 16), torch.bfloat16)}
+    serialized_config = {"is_mx": False}
+    monkeypatch.setattr(fp8, "serialize_fp8_config", lambda: serialized_config)
+
+    if async_worker:
+        from nemo_rl.models.generation.vllm.vllm_worker_async import (
+            VllmAsyncGenerationWorkerImpl,
+        )
+
+        worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
+        rpc = AsyncMock(return_value=[None, [request]])
+        worker.llm = SimpleNamespace(collective_rpc=rpc)
+        result = await worker.prepare_refit_info_async(state_dict_info)
+        rpc.assert_awaited_once_with(
+            "prepare_refit_info", args=(state_dict_info, serialized_config)
+        )
+    else:
+        from nemo_rl.models.generation.vllm.vllm_worker import (
+            VllmGenerationWorkerImpl,
+        )
+
+        worker = VllmGenerationWorkerImpl.__new__(VllmGenerationWorkerImpl)
+        rpc = MagicMock(return_value=[None, [request]])
+        worker.llm = SimpleNamespace(collective_rpc=rpc)
+        result = worker.prepare_refit_info(state_dict_info)
+        rpc.assert_called_once_with(
+            "prepare_refit_info", args=(state_dict_info, serialized_config)
+        )
+
+    assert result == [request]
+
+
+@pytest.mark.vllm
+def test_sync_nccl_refit_agreement_propagates_and_rejects_rank_mismatch():
+    from nemo_rl.models.generation.vllm.vllm_worker import (
+        VllmGenerationWorkerImpl,
+    )
+
+    agreement = {
+        "protocol_version": 1,
+        "component_count": 2,
+        "plan_signature": "same",
+    }
+    worker = VllmGenerationWorkerImpl.__new__(VllmGenerationWorkerImpl)
+    worker.llm = SimpleNamespace(
+        collective_rpc=MagicMock(return_value=[agreement, agreement.copy()])
+    )
+
+    assert worker.prepare_nccl_reshard_refit_info({}) == agreement
+
+    worker.llm.collective_rpc.return_value = [
+        agreement,
+        {**agreement, "plan_signature": "different"},
+    ]
+    with pytest.raises(ValueError, match="agreement mismatch"):
+        worker.prepare_nccl_reshard_refit_info({})
+
+
+@pytest.mark.vllm
+@pytest.mark.asyncio
+async def test_async_nccl_refit_agreement_propagates_and_rejects_rank_mismatch():
+    from nemo_rl.models.generation.vllm.vllm_worker_async import (
+        VllmAsyncGenerationWorkerImpl,
+    )
+
+    agreement = {
+        "protocol_version": 1,
+        "component_count": 2,
+        "plan_signature": "same",
+    }
+    worker = VllmAsyncGenerationWorkerImpl.__new__(VllmAsyncGenerationWorkerImpl)
+    worker.llm = SimpleNamespace(
+        collective_rpc=AsyncMock(return_value=[agreement, agreement.copy()])
+    )
+
+    assert await worker.prepare_nccl_reshard_refit_info_async({}) == agreement
+
+    worker.llm.collective_rpc.return_value = [
+        agreement,
+        {**agreement, "component_count": 3},
+    ]
+    with pytest.raises(ValueError, match="agreement mismatch"):
+        await worker.prepare_nccl_reshard_refit_info_async({})
+
+
+@pytest.mark.vllm
 @pytest.mark.parametrize("with_mtp", [False, True])
 def test_update_weights_from_collective_processes_weights_after_loading(
     monkeypatch, with_mtp

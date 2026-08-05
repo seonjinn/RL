@@ -44,6 +44,12 @@ from nemo_rl.models.generation.vllm.utils import (
     resolve_generation_worker_cls,
 )
 from nemo_rl.weight_sync.interfaces import WeightSynchronizer
+from nemo_rl.weight_sync.refit_transforms import (
+    RefitPlanAgreement,
+    RefitTransformRequest,
+    merge_refit_transform_requests,
+    require_matching_agreements,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -916,8 +922,19 @@ class VllmGeneration(GenerationInterface):
             print(f"Error during policy shutdown: {e}")
             return False
 
-    def prepare_refit_info(self, state_dict_info: dict[str, Any]) -> None:
-        """Prepare the info for refit."""
+    def prepare_refit_info(
+        self, state_dict_info: Optional[dict[str, Any]]
+    ) -> Optional[list[RefitTransformRequest]]:
+        """Prepare the info for refit.
+
+        Returns:
+            When MXFP8 trainer-side pre-quantization is enabled
+            (vllm_cfg.refit_prequantize), the parameter names the engine wants
+            quantized on the trainer before streaming. None otherwise.
+        """
+        if state_dict_info is None:
+            return None
+
         # Choose the appropriate method based on async_engine setting
         method_name = (
             "prepare_refit_info_async"
@@ -932,8 +949,8 @@ class VllmGeneration(GenerationInterface):
             run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
         )
 
-        # Wait for all futures to complete
-        ray.get(futures)
+        requests = merge_refit_transform_requests(ray.get(futures))
+        return requests or None
 
     def update_weights_via_ipc_zmq(self) -> list[ray.ObjectRef]:
         """Update weights of the policy using IPC handles via ZMQ socket."""
@@ -1017,7 +1034,7 @@ class VllmGeneration(GenerationInterface):
         # co-works with lm_policy; wait for all futures to complete outside
         return futures
 
-    def prepare_nccl_reshard_refit_info(self, refit_info: dict) -> None:
+    def prepare_nccl_reshard_refit_info(self, refit_info: dict) -> RefitPlanAgreement:
         """Forward per-layer param metadata to vLLM workers for nccl_reshard refit."""
         method_name = (
             "prepare_nccl_reshard_refit_info_async"
@@ -1029,7 +1046,9 @@ class VllmGeneration(GenerationInterface):
             refit_info=refit_info,
             run_rank_0_only_axes=["tensor_parallel", "pipeline_parallel"],
         )
-        ray.get(futures)
+        return require_matching_agreements(
+            ray.get(futures), participants="vLLM generation actors"
+        )
 
     def nccl_reshard_refit(self) -> list[ray.ObjectRef]:
         """Receive weights from training workers via nccl_reshard (xferdtensor)."""
