@@ -35,6 +35,7 @@ GPUS_PER_NODE=${GPUS_PER_NODE:-4}
 SEGMENT_SIZE=${SEGMENT_SIZE:-16}
 MAX_STEPS=${MAX_STEPS:-8}
 RUN_ID=${RUN_ID:-$(date +%Y%m%d-%H%M%S)}
+DEPENDENCY_JOB_ID=${DEPENDENCY_JOB_ID:-}
 
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}
 CONTAINER=${CONTAINER:-${WORK_ROOT}/containers/nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh}
@@ -129,6 +130,9 @@ SBATCH_ARGS=(
 )
 if [[ -n "${QOS}" ]]; then
     SBATCH_ARGS+=(--qos="${QOS}")
+fi
+if [[ -n "${DEPENDENCY_JOB_ID}" ]]; then
+    SBATCH_ARGS+=(--dependency="afterok:${DEPENDENCY_JOB_ID}")
 fi
 
 printf 'backend=%s\n' "${BACKEND}"

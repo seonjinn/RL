@@ -11,7 +11,7 @@ LAUNCHER = (
 )
 
 
-def _dry_run(tmp_path: Path, backend: str) -> str:
+def _dry_run(tmp_path: Path, backend: str, dependency_job_id: str = "") -> str:
     container = tmp_path / "nemo-rl.sqsh"
     container.touch()
     custom_vllm = tmp_path / "vllm"
@@ -25,6 +25,7 @@ def _dry_run(tmp_path: Path, backend: str) -> str:
         "CUSTOM_VLLM_ROOT": str(custom_vllm),
         "EXPERIMENT_ROOT": str(tmp_path / backend),
         "WORK_ROOT": str(tmp_path),
+        "DEPENDENCY_JOB_ID": dependency_job_id,
     }
     result = subprocess.run(
         ["bash", str(LAUNCHER)],
@@ -79,3 +80,9 @@ def test_rejects_non_baseline_backend(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert "Unsupported BACKEND" in result.stderr
+
+
+def test_adds_afterok_dependency_when_requested(tmp_path: Path) -> None:
+    output = _dry_run(tmp_path, "flashinfer_cutedsl", dependency_job_id="12345")
+
+    assert "--dependency=afterok:12345" in output
