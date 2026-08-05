@@ -1105,6 +1105,7 @@ def process_weights_after_loading_mxfp8_moe(self, layer) -> None:
             epilogue_tile_m,
         )
     else:
+        layer.weight_block_size = self.weight_block_size
         processed = convert_to_fp8_moe_kernel_format(
             fp8_backend=self.mxfp8_backend,
             layer=layer,

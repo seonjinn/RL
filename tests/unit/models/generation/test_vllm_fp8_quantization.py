@@ -237,6 +237,7 @@ def test_process_mxfp8_moe_refit_uses_configured_shuffle(
         moe_kernel=moe_kernel,
         moe_quant_config=moe_quant_config,
         mxfp8_backend=Fp8MoeBackend.FLASHINFER_TRTLLM,
+        weight_block_size=[1, 32],
     )
     shuffled = (
         torch.full_like(w13_weight, 1),
@@ -358,6 +359,7 @@ def test_process_mxfp8_moe_initializes_kernel_once(fp8_module, monkeypatch):
         moe=moe_config,
         moe_kernel=None,
         mxfp8_backend=Fp8MoeBackend.FLASHINFER_TRTLLM,
+        weight_block_size=[1, 32],
         experts_cls=experts_cls,
         get_fused_moe_quant_config=get_quant_config,
     )
@@ -453,6 +455,7 @@ def test_process_mxfp8_moe_triton_preserves_canonical_layout(fp8_module, monkeyp
         moe=types.SimpleNamespace(is_act_and_mul=False),
         moe_kernel=None,
         mxfp8_backend=Fp8MoeBackend.TRITON_MXFP8,
+        weight_block_size=[1, 32],
         experts_cls=object(),
         get_fused_moe_quant_config=lambda _layer: object(),
     )
@@ -480,6 +483,7 @@ def test_process_mxfp8_moe_triton_preserves_canonical_layout(fp8_module, monkeyp
     assert layer.w2_weight.shape == (2, 64, 32)
     assert layer.w13_weight_scale.shape == (2, 6, 2)
     assert layer.w2_weight_scale.shape == (2, 64, 1)
+    assert layer.weight_block_size == [1, 32]
     assert quant_method.moe_kernel is kernel
     assert len(kernel_calls) == 1
 
