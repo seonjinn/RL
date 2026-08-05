@@ -152,6 +152,7 @@ CONTAINER_ENV_VARS=CONTAINER_PATH_PREFIX,UV_PROJECT_ENVIRONMENT,UV_LINK_MODE,UV_
 export CONTAINER_ENV_VARS
 
 srun --nodes=1 --ntasks=1 \
+  --no-container-mount-home \
   --container-image="${CONTAINER}" --container-mounts="${MOUNTS}" \
   --container-workdir="${REPO_ROOT}" "--container-env=${CONTAINER_ENV_VARS}" \
   --export=ALL "${RUNTIME_ATTESTATION_COMMAND}" \
@@ -184,6 +185,7 @@ export PYTHONPATH=${CANDIDATE_SOURCE_ROOT}
 export PYTHONNOUSERSITE=1
 
 srun --nodes="${TEST_NUM_NODES}" --ntasks="${TEST_NUM_NODES}" --ntasks-per-node=1 \
+  --no-container-mount-home \
   --container-image="${CONTAINER}" --container-mounts="${MOUNTS}" \
   --container-workdir="${REPO_ROOT}" "--container-env=${CONTAINER_ENV_VARS}" \
   --export=ALL /bin/bash --noprofile --norc -c '

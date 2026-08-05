@@ -117,6 +117,7 @@ export SLURM_EXPORT_ENV=ALL
 srun \
   --nodes=1 \
   --ntasks=1 \
+  --no-container-mount-home \
   --container-image="${CONTAINER}" \
   --container-mounts="${MOUNTS}" \
   --container-workdir="${REPO_ROOT}" \

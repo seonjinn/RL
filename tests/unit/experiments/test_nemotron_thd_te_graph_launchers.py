@@ -1630,6 +1630,18 @@ def test_scope_job_wrappers_revalidate_source_before_container_execution() -> No
         assert 'sha256sum "${CONTAINER}"' not in source
 
 
+@pytest.mark.parametrize(
+    ("wrapper_name", "expected_srun_count"),
+    (("run_nemorl_scope.sub", 1), ("run_mcore_scope.sub", 2)),
+)
+def test_scope_job_wrappers_never_mount_host_home(
+    wrapper_name: str, expected_srun_count: int
+) -> None:
+    source = (EXPERIMENT_DIR / "scripts" / wrapper_name).read_text()
+
+    assert source.count("--no-container-mount-home") == expected_srun_count
+
+
 def test_nemorl_job_wrapper_requires_managed_python_contract(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
