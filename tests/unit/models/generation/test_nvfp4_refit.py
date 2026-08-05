@@ -133,7 +133,7 @@ def test_serialize_singleton_down_projection_uses_exact_canonical_family(
 def test_serialize_non_gated_expert_up_uses_explicit_group_membership(
     monkeypatch: pytest.MonkeyPatch,
     _fake_pinned_quant_meta: None,
-    mode: str,
+    mode: nvfp4_refit.NVFP4RefitMode,
 ) -> None:
     calls: list[tuple[str, torch.Tensor, object]] = []
     monkeypatch.setattr(

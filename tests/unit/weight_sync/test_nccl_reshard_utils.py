@@ -959,7 +959,13 @@ def test_build_refit_info_preserves_fp8_identity_storage():
     assert param["transform_id"] == "identity"
     assert param["wire_components"] == [expected_component]
     assert param["destination_components"] == [
-        {**expected_component, "source": "codec"}
+        {
+            "role": "weight",
+            "global_shape": (64, 128),
+            "dtype": "torch.float8_e4m3fn",
+            "source": "codec",
+            "dst_placements": [Shard(1)],
+        }
     ]
 
 

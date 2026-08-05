@@ -131,6 +131,28 @@ def _model_prefix_variants(name: str) -> set[str]:
     return variants
 
 
+def _nvfp4_manifest_group_members(names: set[str]) -> dict[str, tuple[str, ...]]:
+    """Group quantized weights using the complete source manifest."""
+    grouped_members: dict[str, list[str]] = {}
+    for name in sorted(names):
+        group_name, _ = nvfp4_refit_group(name)
+        grouped_members.setdefault(group_name, []).append(name)
+
+    resolved = {
+        group_name: tuple(members) for group_name, members in grouped_members.items()
+    }
+    for group_name, members in resolved.items():
+        if not group_name.endswith(".w13"):
+            continue
+        projections = {name.rsplit(".", 2)[-2] for name in members}
+        if projections == {"gate_proj"}:
+            raise ValueError(
+                f"NVFP4 expert group {group_name!r} has a gate projection without "
+                "its up projection"
+            )
+    return resolved
+
+
 def _modelopt_target_kind(module: torch.nn.Module) -> Literal["linear", "moe"] | None:
     """Classify a receiver module that owns an NVFP4 quantized destination."""
     quant_method = getattr(module, "quant_method", None)
@@ -912,13 +934,9 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
         self._nrl_bf16_calibration = None
         self._nrl_bf16_expected_input_scale_names = set()
         self._nrl_bf16_input_scale_cache = {}
-        grouped_members: dict[str, list[str]] = {}
-        for name in sorted(self._nrl_bf16_quantizable_names):
-            group_name, _ = nvfp4_refit_group(name)
-            grouped_members.setdefault(group_name, []).append(name)
-        self._nrl_bf16_group_members = {
-            group_name: tuple(names) for group_name, names in grouped_members.items()
-        }
+        self._nrl_bf16_group_members = _nvfp4_manifest_group_members(
+            self._nrl_bf16_quantizable_names
+        )
         self._nrl_collective_group_members = {}
         self._nrl_collective_grouped_projections = {}
         self._nrl_collective_bf16_staging = {}

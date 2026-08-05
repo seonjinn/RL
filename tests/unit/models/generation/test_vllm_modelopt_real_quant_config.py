@@ -2199,6 +2199,14 @@ def test_real_quant_bf16_non_gated_up_uses_manifest_group_membership(
     ]
 
 
+def test_real_quant_bf16_manifest_rejects_gate_only_expert_group(monkeypatch):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    gate = "model.layers.0.mlp.experts.0.gate_proj.weight"
+
+    with pytest.raises(ValueError, match="gate projection without its up projection"):
+        backend._nvfp4_manifest_group_members({gate})
+
+
 def test_real_quant_bf16_ignored_weight_passes_through_and_scales_stay_filtered(
     monkeypatch,
 ):
@@ -3339,9 +3347,11 @@ def test_real_quant_collective_reload_uses_vllm_layerwise_lifecycle(monkeypatch)
 
 
 @pytest.mark.parametrize("mode", ["w4a16", "w4a4"])
+@pytest.mark.parametrize("gated", [True, False], ids=["gated", "non_gated"])
 def test_real_quant_nccl_receiver_uses_owned_grouped_bf16_scratch(
     monkeypatch,
     mode,
+    gated,
 ):
     from torch.distributed.tensor.placement_types import Replicate
 
@@ -3350,12 +3360,13 @@ def test_real_quant_nccl_receiver_uses_owned_grouped_bf16_scratch(
     gate_name = f"{prefix}.gate_proj.weight"
     up_name = f"{prefix}.up_proj.weight"
     down_name = f"{prefix}.down_proj.weight"
+    expert_projections = ("gate", "up", "down") if gated else ("up", "down")
     per_expert_names = {
         f"{prefix}.{expert_id}.{projection}_proj.weight"
         for expert_id in range(2)
-        for projection in ("gate", "up", "down")
+        for projection in expert_projections
     }
-    w13_runtime = torch.full((2, 128, 16), 255, dtype=torch.uint8)
+    w13_runtime = torch.full((2, 128 if gated else 64, 16), 255, dtype=torch.uint8)
     w2_runtime = torch.full((2, 64, 16), 127, dtype=torch.uint8)
     model = torch.nn.Module()
     extension = _make_real_quant_extension(
@@ -3375,6 +3386,9 @@ def test_real_quant_nccl_receiver_uses_owned_grouped_bf16_scratch(
         else None
     )
     extension._nrl_bf16_quantizable_names = set(per_expert_names)
+    extension._nrl_bf16_group_members = backend._nvfp4_manifest_group_members(
+        set(per_expert_names)
+    )
     extension._nrl_bf16_staging = {}
     extension._nrl_bf16_input_scale_cache = {}
     extension._nrl_bf16_expected_input_scale_names = (
@@ -3425,6 +3439,11 @@ def test_real_quant_nccl_receiver_uses_owned_grouped_bf16_scratch(
             }
         )
     mesh = types.SimpleNamespace(mesh=torch.arange(1))
+    w13_params = (
+        ((gate_name, "gate_proj"), (up_name, "up_proj"))
+        if gated
+        else ((up_name, "up_proj"),)
+    )
     params = [
         {
             "name": name,
@@ -3438,10 +3457,7 @@ def test_real_quant_nccl_receiver_uses_owned_grouped_bf16_scratch(
             "finalize_scope": "model",
             "dst_mesh_info": mesh,
         }
-        for name, projection in (
-            (gate_name, "gate_proj"),
-            (up_name, "up_proj"),
-        )
+        for name, projection in w13_params
     ]
     params.append(
         {
@@ -3462,17 +3478,29 @@ def test_real_quant_nccl_receiver_uses_owned_grouped_bf16_scratch(
         "per_layer_params": {"model.layers.0": params},
     }
     extension._build_hf_to_gen_backend_mapping = lambda _info: {
-        gate_name: (w13_runtime, (slice(None), slice(0, 64), slice(None))),
-        up_name: (w13_runtime, (slice(None), slice(64, 128), slice(None))),
+        **(
+            {
+                gate_name: (
+                    w13_runtime,
+                    (slice(None), slice(0, 64), slice(None)),
+                ),
+                up_name: (
+                    w13_runtime,
+                    (slice(None), slice(64, 128), slice(None)),
+                ),
+            }
+            if gated
+            else {up_name: (w13_runtime, None)}
+        ),
         down_name: (w2_runtime, None),
     }
 
     serializer_calls = []
     serializer_refit = 0
 
-    def serialize(tensors, *, mode, calibration):
+    def serialize(tensors, *, mode, calibration, expected_names=None):
         nonlocal serializer_refit
-        serializer_calls.append((dict(tensors), mode, calibration))
+        serializer_calls.append((dict(tensors), mode, calibration, expected_names))
         if len(serializer_calls) % 4 == 1:
             serializer_refit += 1
         serialized = []
@@ -3504,7 +3532,10 @@ def test_real_quant_nccl_receiver_uses_owned_grouped_bf16_scratch(
     gate_spec = param_map.get(gate_name)
     up_spec = param_map.get(up_name)
     down_spec = param_map.get(down_name)
-    assert gate_spec is not None and gate_spec.pre is not None and gate_spec.post
+    if gated:
+        assert gate_spec is not None and gate_spec.pre is not None and gate_spec.post
+    else:
+        assert gate_spec is None
     assert up_spec is not None and up_spec.pre is not None and up_spec.post
     assert down_spec is not None and down_spec.pre is not None and down_spec.post
 
@@ -3518,12 +3549,19 @@ def test_real_quant_nccl_receiver_uses_owned_grouped_bf16_scratch(
         )
         up_ctx.buf.fill_(refit_value + 1)
         up_spec.post(up_ctx)
-        with pytest.raises(RuntimeError, match="collective group.*missing.*gate_proj"):
-            extension._require_complete_bf16_refit_groups()
+        if gated:
+            with pytest.raises(
+                RuntimeError, match="collective group.*missing.*gate_proj"
+            ):
+                extension._require_complete_bf16_refit_groups()
 
-        gate_ctx = gate_spec.pre(gate_spec.base)
-        gate_ctx.buf.fill_(refit_value)
-        gate_spec.post(gate_ctx)
+            assert gate_spec is not None and gate_spec.pre is not None
+            assert gate_spec.post is not None
+            gate_ctx = gate_spec.pre(gate_spec.base)
+            gate_ctx.buf.fill_(refit_value)
+            gate_spec.post(gate_ctx)
+        else:
+            extension._require_complete_bf16_refit_groups()
 
         down_ctx = down_spec.pre(down_spec.base)
         down_ctx.buf.fill_(refit_value + 2)
@@ -3531,7 +3569,7 @@ def test_real_quant_nccl_receiver_uses_owned_grouped_bf16_scratch(
         extension._require_complete_bf16_refit_groups()
 
     assert len(serializer_calls) == 8
-    for tensors, actual_mode, calibration in serializer_calls:
+    for tensors, actual_mode, calibration, expected_names in serializer_calls:
         assert actual_mode == mode
         assert calibration is extension._nrl_bf16_calibration
         assert len(tensors) in {1, 2}
@@ -3540,7 +3578,16 @@ def test_real_quant_nccl_receiver_uses_owned_grouped_bf16_scratch(
             name.rsplit(".", 3)[-3] for name in tensors
         } == {"1"}
         projections = {name.rsplit(".", 2)[-2] for name in tensors}
-        assert projections in ({"gate_proj", "up_proj"}, {"down_proj"})
+        allowed_projections = (
+            ({"gate_proj", "up_proj"}, {"down_proj"})
+            if gated
+            else ({"up_proj"}, {"down_proj"})
+        )
+        assert projections in allowed_projections
+        if not gated and projections == {"up_proj"}:
+            assert expected_names == tuple(tensors)
+        else:
+            assert expected_names is None
     assert torch.equal(w13_runtime, torch.full_like(w13_runtime, 255))
     assert torch.equal(w2_runtime, torch.full_like(w2_runtime, 127))
     if mode == "w4a4":
@@ -3550,7 +3597,7 @@ def test_real_quant_nccl_receiver_uses_owned_grouped_bf16_scratch(
             for name, tensor in batch
             if name.endswith(".input_scale")
         ]
-        assert len(loaded_scales) == 12
+        assert len(loaded_scales) == len(per_expert_names) * 2
         assert all(scale.item() == pytest.approx(0.25) for scale in loaded_scales)
 
 
