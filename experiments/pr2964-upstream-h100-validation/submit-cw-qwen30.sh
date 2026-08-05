@@ -96,7 +96,7 @@ export LD_LIBRARY_PATH=${OVERLAY}/nvidia/nccl/lib:\${LD_LIBRARY_PATH:-}
 export UV_NO_SYNC=1
 export NRL_FORCE_REBUILD_VENVS=true
 export NEMO_RL_VENV_DIR=${ACTOR_VENV_ROOT}
-${DRIVER_VENV}/bin/python -c "import nemo_rl, megatron.bridge, megatron.core; print('UPSTREAM_ONLY_STACK_IMPORT_OK', nemo_rl.__file__, megatron.bridge.__file__, megatron.core.__file__)"
+${DRIVER_VENV}/bin/python -c "import importlib.util as u; names=('nemo_rl','megatron.bridge','megatron.core'); specs=[u.find_spec(name) for name in names]; assert all(specs); print('UPSTREAM_ONLY_STACK_SPECS_OK', *(spec.origin for spec in specs))"
 if ${DRIVER_VENV}/bin/python -c 'import pytest' >/dev/null 2>&1; then
   ${DRIVER_VENV}/bin/python -m pytest -q tests/unit/models/megatron/test_megatron_data.py
 else
