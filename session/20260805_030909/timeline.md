@@ -41,3 +41,10 @@
   `moe_backend: triton` was inherited by the real-NVFP4 overlay.
 - Pinned W4A16 to Marlin and W4A4 to FlashInfer TRT-LLM, and extended the
   recipe contract to reject accidental backend inheritance.
+
+## 2026-08-05 04:16 PDT
+
+- The first backend-pinned retry stopped at the expanded recipe contract: its
+  parametrized tuple omitted the newly added backend value.
+- Corrected the test tuple before model initialization; no training result was
+  produced by this retry.

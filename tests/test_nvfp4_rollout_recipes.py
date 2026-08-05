@@ -55,7 +55,12 @@ NVFP4_ROLLOUT_CASES = {
         "expected_moe_backend",
     ),
     [
-        (recipe_name, expected_quant_cfg, has_calibration_path)
+        (
+            recipe_name,
+            expected_quant_cfg,
+            has_calibration_path,
+            expected_moe_backend,
+        )
         for recipe_name, (
             expected_quant_cfg,
             has_calibration_path,
