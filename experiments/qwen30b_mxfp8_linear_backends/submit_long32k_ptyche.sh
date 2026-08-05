@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+RUN_ID=${RUN_ID:-long32k-$(date +%Y%m%d-%H%M%S)}
+
+export MAX_STEPS=${MAX_STEPS:-20}
+export MAX_TOTAL_SEQUENCE_LENGTH=${MAX_TOTAL_SEQUENCE_LENGTH:-34816}
+export MAX_NEW_TOKENS=${MAX_NEW_TOKENS:-32768}
+export MAX_INPUT_SEQUENCE_LENGTH=${MAX_INPUT_SEQUENCE_LENGTH:-2048}
+export NUM_PROMPTS_PER_STEP=${NUM_PROMPTS_PER_STEP:-64}
+export NUM_GENERATIONS_PER_PROMPT=${NUM_GENERATIONS_PER_PROMPT:-4}
+export TRAIN_GLOBAL_BATCH_SIZE=${TRAIN_GLOBAL_BATCH_SIZE:-256}
+export ACTIVATION_CHECKPOINTING=${ACTIVATION_CHECKPOINTING:-true}
+export SEQUENCE_PACKING=${SEQUENCE_PACKING:-false}
+export LOGPROB_BATCH_SIZE=${LOGPROB_BATCH_SIZE:-1}
+export LOGPROB_CHUNK_SIZE=${LOGPROB_CHUNK_SIZE:-2048}
+export RUN_ID
+
+for backend in flashinfer_cutedsl flashinfer_trtllm_adaptive; do
+    BACKEND=${backend} "${SCRIPT_DIR}/submit_ptyche.sh"
+done

@@ -13,7 +13,9 @@ PREPARE_SCRIPT = LAUNCHER.with_name("prepare_custom_vllm_ptyche.sh")
 BUILD_CUSTOM_VLLM_SCRIPT = REPO_ROOT / "tools" / "build-custom-vllm.sh"
 
 
-def _dry_run(tmp_path: Path, backend: str) -> str:
+def _dry_run(
+    tmp_path: Path, backend: str, extra_env: dict[str, str] | None = None
+) -> str:
     container = tmp_path / "nemo-rl.sqsh"
     container.touch()
     custom_vllm = tmp_path / "vllm"
@@ -30,6 +32,8 @@ def _dry_run(tmp_path: Path, backend: str) -> str:
         "WANDB_MODE": "disabled",
         "WORK_ROOT": str(tmp_path),
     }
+    if extra_env is not None:
+        env.update(extra_env)
     result = subprocess.run(
         ["bash", str(LAUNCHER)],
         check=True,
@@ -108,6 +112,39 @@ def test_rejects_unknown_backend(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert "Unsupported BACKEND" in result.stderr
+
+
+def test_long_context_overrides_are_forwarded(tmp_path: Path) -> None:
+    output = _dry_run(
+        tmp_path,
+        "flashinfer_trtllm_adaptive",
+        {
+            "MAX_STEPS": "20",
+            "MAX_TOTAL_SEQUENCE_LENGTH": "34816",
+            "MAX_NEW_TOKENS": "32768",
+            "MAX_INPUT_SEQUENCE_LENGTH": "2048",
+            "NUM_PROMPTS_PER_STEP": "64",
+            "NUM_GENERATIONS_PER_PROMPT": "4",
+            "TRAIN_GLOBAL_BATCH_SIZE": "256",
+            "ACTIVATION_CHECKPOINTING": "true",
+            "SEQUENCE_PACKING": "false",
+            "LOGPROB_BATCH_SIZE": "1",
+            "LOGPROB_CHUNK_SIZE": "2048",
+        },
+    )
+
+    assert "grpo.max_num_steps=20" in output
+    assert "policy.max_total_sequence_length=34816" in output
+    assert "policy.generation.max_new_tokens=32768" in output
+    assert "policy.generation.vllm_cfg.max_model_len=34816" in output
+    assert "data.max_input_seq_length=2048" in output
+    assert "grpo.num_prompts_per_step=64" in output
+    assert "grpo.num_generations_per_prompt=4" in output
+    assert "policy.train_global_batch_size=256" in output
+    assert "policy.megatron_cfg.activation_checkpointing=true" in output
+    assert "policy.sequence_packing.enabled=false" in output
+    assert "policy.logprob_batch_size=1" in output
+    assert "policy.logprob_chunk_size=2048" in output
 
 
 def test_custom_vllm_build_is_recoverable() -> None:

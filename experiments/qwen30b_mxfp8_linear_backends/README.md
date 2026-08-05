@@ -36,3 +36,36 @@ ACTION=submit MAX_STEPS=8 ./experiments/qwen30b_mxfp8_linear_backends/submit_mat
 ```
 
 Report the mean of steps 3-8. Primary metrics are rollout generation time and generated tokens/s/GPU. Secondary metrics are total step time, refit time, log-probability time, and training time.
+
+## 32K Output-Length Study
+
+`DAPO` is an RL recipe family, not a fixed context length. The repository's DAPO recipes use different limits, including 16K, 30K, and 49K total contexts. This experiment defines a 32K output cap explicitly:
+
+- maximum input length: 2,048 tokens
+- maximum generated length: 32,768 tokens
+- vLLM and policy context limit: 34,816 tokens
+- rollouts per step: 64 prompts x 4 generations = 256
+- measured training steps: 20
+- CUDA Graphs: enabled
+
+The smaller rollout count keeps the maximum token volume per step near the original 2,048-sample x 4K experiment while allowing individual responses to reach 32K. Activation checkpointing is enabled, sequence packing is disabled, and log-probability execution uses batch size one with 2,048-token chunks to reduce long-sequence training memory pressure.
+
+Run a two-step scheduling and runtime smoke first:
+
+```bash
+ACTION=test-only MAX_STEPS=2 RUN_ID=q30-long32k-smoke \
+  ./experiments/qwen30b_mxfp8_linear_backends/submit_long32k_ptyche.sh
+ACTION=submit MAX_STEPS=2 RUN_ID=q30-long32k-smoke \
+  ./experiments/qwen30b_mxfp8_linear_backends/submit_long32k_ptyche.sh
+```
+
+After both backends complete CUDA Graph capture, generation, refit, log-probability inference, and one training update, submit the 20-step comparison without dependencies:
+
+```bash
+ACTION=test-only RUN_ID=q30-long32k-20step \
+  ./experiments/qwen30b_mxfp8_linear_backends/submit_long32k_ptyche.sh
+ACTION=submit RUN_ID=q30-long32k-20step \
+  ./experiments/qwen30b_mxfp8_linear_backends/submit_long32k_ptyche.sh
+```
+
+Report steady-state steps 3-20. This is a long-output-cap experiment: the realized response length still depends on model EOS behavior and must be reported from the run rather than assumed to be 32K.
