@@ -1,5 +1,13 @@
 # Timeline
 
+## 2026-08-05 23:21:25 PDT
+
+- User approved rerunning Nano as individual and combined CUDA Graph scopes over `attn`, `mamba`, `moe_router`, and `moe_preprocess`.
+- Verified that `moe_preprocess` requires `moe_router`, yielding 12 valid rows including baseline.
+- Confirmed OCI-HSG 100-step jobs `5908997` and `5909007` completed with exit code zero from the persistent graph-bank checkout.
+- Fast-forwarded the isolated local worktree to merged latest-main commit `4ed047b48`.
+- Decided to reuse the committed persistent scope leaves and direct Nano submission path instead of adding another launcher abstraction.
+
 ## 2026-08-02 12:21:26 PDT
 
 - User asked for current status and proposed Qwen3-30B-A3B and Qwen3-235B experiments.

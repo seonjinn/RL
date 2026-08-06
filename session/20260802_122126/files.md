@@ -1,5 +1,21 @@
 # Files
 
+## 2026-08-05 Campaign Refresh
+
+### Inspected
+
+- `experiments/cuda_graph/nemotron_thd_te_graph_20260731/submit_performance_matrix.sh` - existing repeated matrix orchestration.
+- `experiments/cuda_graph/nemotron_thd_te_graph_20260731/scripts/submit_oci_nano_direct.sh` - exact OCI Nano performance command and scheduler contract used by recent successful jobs.
+- `experiments/cuda_graph/nemotron_thd_te_graph_20260731/scopes/*.sh` - persistent leaves covering every valid four-axis scope subset.
+- `experiments/cuda_graph/nemotron_thd_te_graph_20260731/results/persistent_bank_scope_sweep_*.csv` - prior performance, cache, coverage, and correctness evidence.
+
+### Changed
+
+- `session/20260802_122126/session_state.md` - refreshed the active objective, verified status, and launch plan.
+- `session/20260802_122126/timeline.md` - recorded the Nano four-axis campaign decision.
+- `session/20260802_122126/files.md` - recorded newly inspected campaign artifacts.
+- `session/20260802_122126/handoff.md` - replaced stale Qwen-only resume instructions with the Nano matrix handoff.
+
 ## Inspected
 
 - `experiments/cuda_graph/nemotron_thd_te_graph_20260731/README.md` - experiment gates, current Nano result, supported models, and reporting workflow.
