@@ -21,11 +21,14 @@ ACTION=submit ./experiments/qwen30b_mxfp8_linear_backends/prepare_custom_vllm_pt
 
 The launcher sources `3rdparty/vllm/nemo-rl.env` and fails before GRPO starts
 unless the runtime `vllm.__file__` resolves under that custom checkout.
-Tracked and staged vLLM changes are rejected at submission and job start;
-untracked build artifacts may remain. Submission rejects all NeMo-RL changes
-except preparation-owned changes to root `pyproject.toml`, root `uv.lock`, and
-`3rdparty/vllm`. The launcher captures exact commits plus dependency, recipe,
-and clean vLLM source fingerprints and rechecks them when the job starts.
+Tracked and staged vLLM changes are rejected at submission and job start unless
+they are the intentional `requirements/*.txt` compatibility rewrites. A
+dependency-state SHA256 records those rewrites separately from the pristine
+`HEAD` source SHA256; untracked build artifacts may remain. Submission rejects
+all NeMo-RL changes except preparation-owned changes to root `pyproject.toml`,
+root `uv.lock`, and `3rdparty/vllm`. The launcher also records explicit
+log-probability batching, activation checkpointing, deferred FP32 logits, and
+sequence packing and rechecks all provenance when the job starts.
 
 Run a two-step scheduler and CUDA Graph/refit smoke validation first:
 

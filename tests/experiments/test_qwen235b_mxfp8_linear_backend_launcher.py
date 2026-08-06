@@ -236,6 +236,11 @@ def test_qkvo_scope_changes_only_linear_backend(tmp_path: Path) -> None:
         assert "policy.generation.vllm_cfg.enforce_eager=false" in output
         assert "policy.generation.vllm_cfg.precision=fp8" in output
         assert "policy.generation.vllm_cfg.is_mx=true" in output
+        assert "policy.logprob_batch_size=1" in output
+        assert "policy.logprob_chunk_size=null" in output
+        assert "policy.megatron_cfg.activation_checkpointing=true" in output
+        assert "policy.megatron_cfg.defer_fp32_logits=true" in output
+        assert "policy.sequence_packing.enabled=true" in output
         assert "quantization_ignored_layer_kws=[lm_head,mlp.gate]" in output
         assert "moe_backend=flashinfer_trtllm" in output
         assert "cluster.num_nodes=16" in output
@@ -288,6 +293,11 @@ def test_dry_run_captures_runtime_provenance_and_manifest(tmp_path: Path) -> Non
     assert '"generation_tensor_parallel_size": 4' in output
     assert '"max_steps": 8' in output
     assert '"gpu_memory_utilization": 0.4' in output
+    assert '"logprob_batch_size": 1' in output
+    assert '"logprob_chunk_size": None' in output
+    assert '"activation_checkpointing": True' in output
+    assert '"defer_fp32_logits": True' in output
+    assert '"sequence_packing": True' in output
     assert '"linear_backend": "flashinfer_cutedsl"' in output
 
 

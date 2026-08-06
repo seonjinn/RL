@@ -33,6 +33,7 @@ MANIFEST_FIELDS = {
     "dependency_state_sha256",
     "vllm_commit",
     "vllm_source_sha256",
+    "vllm_dependency_state_sha256",
     "vllm_tracked_files_clean",
     "container",
     "recipe",
@@ -55,6 +56,11 @@ MANIFEST_FIELDS = {
     "generation_tensor_parallel_size",
     "max_steps",
     "gpu_memory_utilization",
+    "logprob_batch_size",
+    "logprob_chunk_size",
+    "activation_checkpointing",
+    "defer_fp32_logits",
+    "sequence_packing",
     "linear_backend",
 }
 
@@ -128,6 +134,7 @@ def _write_driver_log(
         "dependency_state_sha256": "3" * 64,
         "vllm_commit": VLLM_COMMIT,
         "vllm_source_sha256": "4" * 64,
+        "vllm_dependency_state_sha256": "6" * 64,
         "vllm_tracked_files_clean": True,
         "container": "/containers/nemo-rl.sqsh",
         "recipe": f"recipes/{run_root.name}.yaml",
@@ -150,6 +157,11 @@ def _write_driver_log(
         "generation_tensor_parallel_size": 1,
         "max_steps": 8,
         "gpu_memory_utilization": 0.6,
+        "logprob_batch_size": 2,
+        "logprob_chunk_size": None,
+        "activation_checkpointing": False,
+        "defer_fp32_logits": False,
+        "sequence_packing": True,
         "linear_backend": backend,
     }
     (run_root / backend / "run_manifest.json").write_text(json.dumps(manifest) + "\n")
@@ -271,6 +283,7 @@ def test_write_results_requires_clean_custom_vllm_attestation(tmp_path: Path) ->
         ("vllm_commit", "4" * 40),
         ("dependency_state_sha256", "6" * 64),
         ("vllm_source_sha256", "7" * 64),
+        ("vllm_dependency_state_sha256", "9" * 64),
         ("container", "/containers/different.sqsh"),
         ("recipe", "recipes/different.yaml"),
         ("recipe_sha256", "8" * 64),
@@ -292,6 +305,11 @@ def test_write_results_requires_clean_custom_vllm_attestation(tmp_path: Path) ->
         ("generation_tensor_parallel_size", 4),
         ("max_steps", 2),
         ("gpu_memory_utilization", 0.7),
+        ("logprob_batch_size", 1),
+        ("logprob_chunk_size", 2_048),
+        ("activation_checkpointing", True),
+        ("defer_fp32_logits", True),
+        ("sequence_packing", False),
     ),
 )
 def test_write_results_rejects_mismatched_invariant_manifest(

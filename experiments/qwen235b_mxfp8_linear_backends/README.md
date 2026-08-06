@@ -17,8 +17,10 @@ git -C ../../3rdparty/vllm rev-parse HEAD
 The command must print `a76062edee3a3ac23d47a93c7ce466f06a19111f`.
 The checkout must include `nemo-rl.env`; the launcher sources it and rejects a
 runtime `vllm.__file__` outside the custom checkout. Tracked and staged vLLM
-changes are rejected at submission and job start; untracked build artifacts
-may remain.
+changes are rejected at submission and job start unless they are the
+intentional `requirements/*.txt` compatibility rewrites. Those rewrites have
+a separate dependency-state SHA256 from the pristine `HEAD` source SHA256.
+Untracked build artifacts may remain.
 
 Run the two-step smoke validation before measurement:
 
@@ -41,8 +43,10 @@ through 8.
 
 Submission rejects all NeMo-RL changes except preparation-owned changes to
 root `pyproject.toml`, root `uv.lock`, and `3rdparty/vllm`. It captures the
-exact NeMo-RL commit and deterministic dependency, recipe, and clean vLLM
-source fingerprints, then rechecks them when the queued job starts. An
+exact NeMo-RL commit and deterministic dependency, recipe, and vLLM
+source/dependency fingerprints, then rechecks them when the queued job starts.
+Log-probability batching, activation checkpointing, deferred FP32 logits, and
+sequence packing are explicit launcher controls included in the manifest. An
 explicit `EXPERIMENT_ROOT` is treated as the shared run root, and the matrix
 appends the backend name for each arm. Each arm preserves its complete
 validated launcher configuration in `run_manifest.json` under that root.

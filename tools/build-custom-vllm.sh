@@ -94,11 +94,21 @@ uv pip install --no-build-isolation -e .
 echo "Build completed successfully!"
 echo "The built vLLM is available in: $BUILD_DIR"
 
-git restore --source="$GIT_REF" --worktree -- .
-if ! git diff --quiet -- || ! git diff --cached --quiet --; then
-  echo "[ERROR] Custom vLLM tracked files are dirty after build."
-  exit 1
-fi
+while IFS= read -r changed_path; do
+  [[ -z "$changed_path" ]] && continue
+  case "$changed_path" in
+    requirements/*.txt) ;;
+    *)
+      echo "[ERROR] Disallowed tracked vLLM changes after build: $changed_path"
+      exit 1
+      ;;
+  esac
+done < <(
+  {
+    git diff --name-only --no-ext-diff --
+    git diff --cached --name-only --no-ext-diff --
+  } | sort -u
+)
 
 echo "Updating repo pyproject.toml to point vLLM to local clone..."
 

@@ -40,8 +40,29 @@ mxfp8_vllm_source_sha256() {
     git -C "${vllm_root}" archive --format=tar HEAD | mxfp8_sha256_stream
 }
 
-mxfp8_assert_vllm_tracked_clean() {
+mxfp8_assert_vllm_tracked_state() {
     local vllm_root=$1
-    git -C "${vllm_root}" diff --quiet -- &&
-        git -C "${vllm_root}" diff --cached --quiet --
+    local changed_path
+    while IFS= read -r changed_path; do
+        [[ -z "${changed_path}" ]] && continue
+        case "${changed_path}" in
+            requirements/*.txt) ;;
+            *)
+                echo "Disallowed tracked vLLM change: ${changed_path}" >&2
+                return 1
+                ;;
+        esac
+    done < <(
+        {
+            git -C "${vllm_root}" diff --name-only --no-ext-diff --
+            git -C "${vllm_root}" diff --cached --name-only --no-ext-diff --
+        } | sort -u
+    )
+}
+
+mxfp8_vllm_dependency_state_sha256() {
+    local vllm_root=$1
+    git -C "${vllm_root}" diff --binary --full-index --no-ext-diff \
+        --no-renames --diff-algorithm=myers --src-prefix=a/ --dst-prefix=b/ \
+        HEAD -- requirements/ | mxfp8_sha256_stream
 }

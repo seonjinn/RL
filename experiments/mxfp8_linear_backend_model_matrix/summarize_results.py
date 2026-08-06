@@ -67,6 +67,7 @@ class RunManifest(TypedDict):
     dependency_state_sha256: str
     vllm_commit: str
     vllm_source_sha256: str
+    vllm_dependency_state_sha256: str
     vllm_tracked_files_clean: bool
     container: str
     recipe: str
@@ -89,6 +90,11 @@ class RunManifest(TypedDict):
     generation_tensor_parallel_size: int
     max_steps: int
     gpu_memory_utilization: float
+    logprob_batch_size: int
+    logprob_chunk_size: int | None
+    activation_checkpointing: bool
+    defer_fp32_logits: bool
+    sequence_packing: bool
     linear_backend: str
 
 
@@ -192,6 +198,7 @@ def _load_run_manifest(model: str, run_root: Path, backend: str) -> RunManifest:
         "dependency_state_sha256",
         "vllm_commit",
         "vllm_source_sha256",
+        "vllm_dependency_state_sha256",
         "container",
         "recipe",
         "recipe_sha256",
@@ -204,7 +211,14 @@ def _load_run_manifest(model: str, run_root: Path, backend: str) -> RunManifest:
             raise ValueError(
                 f"Invalid run manifest field for {model}/{backend}: {field}"
             )
-    for field in ("vllm_tracked_files_clean", "cuda_graph", "is_mx"):
+    for field in (
+        "vllm_tracked_files_clean",
+        "cuda_graph",
+        "is_mx",
+        "activation_checkpointing",
+        "defer_fp32_logits",
+        "sequence_packing",
+    ):
         if not isinstance(manifest[field], bool):
             raise ValueError(
                 f"Invalid run manifest field for {model}/{backend}: {field}"
@@ -234,6 +248,7 @@ def _load_run_manifest(model: str, run_root: Path, backend: str) -> RunManifest:
         "max_model_len",
         "generation_tensor_parallel_size",
         "max_steps",
+        "logprob_batch_size",
     )
     for field in integer_fields:
         value = manifest[field]
@@ -241,6 +256,15 @@ def _load_run_manifest(model: str, run_root: Path, backend: str) -> RunManifest:
             raise ValueError(
                 f"Invalid run manifest field for {model}/{backend}: {field}"
             )
+    logprob_chunk_size = manifest["logprob_chunk_size"]
+    if logprob_chunk_size is not None and (
+        isinstance(logprob_chunk_size, bool)
+        or not isinstance(logprob_chunk_size, int)
+        or logprob_chunk_size <= 0
+    ):
+        raise ValueError(
+            f"Invalid run manifest field for {model}/{backend}: logprob_chunk_size"
+        )
     gpu_memory_utilization = manifest["gpu_memory_utilization"]
     if (
         isinstance(gpu_memory_utilization, bool)
@@ -260,6 +284,7 @@ def _load_run_manifest(model: str, run_root: Path, backend: str) -> RunManifest:
     for sha256_field in (
         "dependency_state_sha256",
         "vllm_source_sha256",
+        "vllm_dependency_state_sha256",
         "recipe_sha256",
     ):
         sha256 = cast(str, manifest[sha256_field])

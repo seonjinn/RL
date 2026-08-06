@@ -66,8 +66,11 @@ def _initialize_custom_vllm(custom_vllm: Path) -> str:
     subprocess.run(["git", "init", "-q", str(custom_vllm)], check=True)
     (custom_vllm / "kernel.py").write_text("BACKEND = 'mxfp8'\n")
     (custom_vllm / "nemo-rl.env").write_text("# test environment\n")
+    requirements = custom_vllm / "requirements"
+    requirements.mkdir()
+    (requirements / "cuda.txt").write_text("torch==2.11.0\nxformers==0.0.30\n")
     subprocess.run(
-        ["git", "-C", str(custom_vllm), "add", "kernel.py", "nemo-rl.env"],
+        ["git", "-C", str(custom_vllm), "add", "."],
         check=True,
     )
     subprocess.run(
@@ -107,6 +110,28 @@ def _vllm_source_sha256(custom_vllm: Path) -> str:
         ["git", "-C", str(custom_vllm), "archive", "--format=tar", "HEAD"]
     )
     return hashlib.sha256(archive).hexdigest()
+
+
+def _vllm_dependency_state_sha256(custom_vllm: Path) -> str:
+    dependency_diff = subprocess.check_output(
+        [
+            "git",
+            "-C",
+            str(custom_vllm),
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-ext-diff",
+            "--no-renames",
+            "--diff-algorithm=myers",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "HEAD",
+            "--",
+            "requirements/",
+        ]
+    )
+    return hashlib.sha256(dependency_diff).hexdigest()
 
 
 def _dry_run(tmp_path: Path, backend: str) -> str:
@@ -171,6 +196,11 @@ def test_mxfp8_cuda_graph_arms_differ_only_by_linear_backend(tmp_path: Path) -> 
         assert "policy.generation.vllm_cfg.enforce_eager=false" in output
         assert "policy.generation.vllm_cfg.precision=fp8" in output
         assert "policy.generation.vllm_cfg.is_mx=true" in output
+        assert "policy.logprob_batch_size=1" in output
+        assert "policy.logprob_chunk_size=2048" in output
+        assert "policy.megatron_cfg.activation_checkpointing=true" in output
+        assert "policy.megatron_cfg.defer_fp32_logits=true" in output
+        assert "policy.sequence_packing.enabled=true" in output
         assert "quantization_ignored_layer_kws=[lm_head,mlp.gate]" in output
         assert "moe_backend=flashinfer_trtllm" in output
         assert "logger.wandb_enabled=false" in output
@@ -226,6 +256,7 @@ def test_dry_run_validates_custom_vllm_runtime_provenance(tmp_path: Path) -> Non
     assert '"model": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16"' in output
     assert '"dependency_state_sha256"' in output
     assert '"vllm_source_sha256"' in output
+    assert '"vllm_dependency_state_sha256"' in output
     assert '"vllm_tracked_files_clean": True' in output
     assert '"recipe_sha256"' in output
     assert '"precision": "fp8"' in output
@@ -243,6 +274,11 @@ def test_dry_run_validates_custom_vllm_runtime_provenance(tmp_path: Path) -> Non
     assert '"generation_tensor_parallel_size": 4' in output
     assert '"max_steps": 8' in output
     assert '"gpu_memory_utilization": 0.7' in output
+    assert '"logprob_batch_size": 1' in output
+    assert '"logprob_chunk_size": 2048' in output
+    assert '"activation_checkpointing": True' in output
+    assert '"defer_fp32_logits": True' in output
+    assert '"sequence_packing": True' in output
     assert '"linear_backend": "flashinfer_cutedsl"' in output
 
 
@@ -442,6 +478,56 @@ def test_submit_accepts_only_preparation_dependency_mutations(
     assert "runtime_dependency_state_sha256=" in result.stdout
     assert "runtime_vllm_source_sha256=" in result.stdout
     assert '"vllm_tracked_files_clean": True' in result.stdout
+
+
+@pytest.mark.parametrize("launcher", ALL_LAUNCHERS)
+@pytest.mark.parametrize("staged", (False, True))
+def test_submit_allows_fingerprinted_vllm_requirements_rewrites(
+    tmp_path: Path, launcher: Path, staged: bool
+) -> None:
+    source_root = tmp_path / "nemo-rl"
+    _initialize_source_repo(source_root)
+    custom_vllm = source_root / "3rdparty" / "vllm"
+    vllm_commit = _initialize_custom_vllm(custom_vllm)
+    requirements_path = custom_vllm / "requirements/cuda.txt"
+    requirements_path.write_text("torch==2.11.0\nxformers==0.0.32.post1\n")
+    if staged:
+        subprocess.run(
+            ["git", "-C", str(custom_vllm), "add", "requirements/cuda.txt"],
+            check=True,
+        )
+    expected_dependency_sha = _vllm_dependency_state_sha256(custom_vllm)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_sbatch = fake_bin / "sbatch"
+    fake_sbatch.write_text("#!/usr/bin/env bash\nexit 0\n")
+    fake_sbatch.chmod(0o755)
+    container = tmp_path / "nemo-rl.sqsh"
+    container.touch()
+
+    env = os.environ | {
+        "ACTION": "test-only",
+        "BACKEND": "flashinfer_cutedsl",
+        "CONTAINER": str(container),
+        "CUSTOM_VLLM_ROOT": str(custom_vllm),
+        "EXPECTED_VLLM_COMMIT": vllm_commit,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "REPO_DIR_OVERRIDE": str(source_root),
+        "WORK_ROOT": str(tmp_path),
+    }
+    result = subprocess.run(
+        ["bash", str(launcher)],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert expected_dependency_sha in result.stdout
+    assert requirements_path.read_text().endswith("xformers==0.0.32.post1\n")
+    assert "runtime_vllm_dependency_state_sha256=" in result.stdout
 
 
 @pytest.mark.parametrize("launcher", ALL_LAUNCHERS)

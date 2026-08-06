@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -155,6 +156,11 @@ def test_long_context_overrides_are_forwarded(tmp_path: Path) -> None:
     assert "policy.logprob_chunk_size=2048" in output
     assert "policy.megatron_cfg.defer_fp32_logits=true" in output
     assert "policy.generation.vllm_cfg.gpu_memory_utilization=0.5" in output
+    assert '"logprob_batch_size": 1' in output
+    assert '"logprob_chunk_size": 2048' in output
+    assert '"activation_checkpointing": True' in output
+    assert '"defer_fp32_logits": True' in output
+    assert '"sequence_packing": False' in output
 
 
 def test_dry_run_captures_runtime_provenance_and_manifest(tmp_path: Path) -> None:
@@ -178,6 +184,7 @@ def test_dry_run_captures_runtime_provenance_and_manifest(tmp_path: Path) -> Non
     assert '"dependency_state_sha256"' in output
     assert '"vllm_commit"' in output
     assert '"vllm_source_sha256"' in output
+    assert '"vllm_dependency_state_sha256"' in output
     assert '"vllm_tracked_files_clean": True' in output
     assert '"container"' in output
     assert '"recipe"' in output
@@ -200,6 +207,11 @@ def test_dry_run_captures_runtime_provenance_and_manifest(tmp_path: Path) -> Non
     assert '"generation_tensor_parallel_size": 1' in output
     assert '"max_steps": 8' in output
     assert '"gpu_memory_utilization": 0.6' in output
+    assert '"logprob_batch_size": 2' in output
+    assert '"logprob_chunk_size": None' in output
+    assert '"activation_checkpointing": False' in output
+    assert '"defer_fp32_logits": False' in output
+    assert '"sequence_packing": True' in output
     assert '"linear_backend": "flashinfer_cutedsl"' in output
 
 
@@ -264,10 +276,114 @@ def test_custom_vllm_build_is_recoverable() -> None:
     assert "TORCH_REQUIREMENT=$(sed -nE" in build_text
     assert "VLLM_TORCH_BACKEND:-cu130" in build_text
     assert "torch==2.10.0" not in build_text
-    assert 'git restore --source="$GIT_REF" --worktree -- .' in build_text
-    assert "git diff --quiet" in build_text
-    assert "git diff --cached --quiet" in build_text
+    assert 'git restore --source="$GIT_REF" --worktree -- .' not in build_text
+    assert "requirements/*.txt" in build_text
+    assert "Disallowed tracked vLLM changes after build" in build_text
     assert 'vllm = ["setuptools", "setuptools-rust"]' in pyproject_text
+
+
+def test_custom_vllm_build_preserves_compatibility_requirements_for_lock(
+    tmp_path: Path,
+) -> None:
+    origin = tmp_path / "vllm-origin"
+    subprocess.run(["git", "init", "-q", str(origin)], check=True)
+    requirements = origin / "requirements"
+    requirements.mkdir()
+    (requirements / "cuda.txt").write_text(
+        "torch==2.11.0 # build torch\nxformers==0.0.30; platform_system == 'Linux'\n"
+    )
+    (origin / "use_existing_torch.py").write_text("# fixture\n")
+    subprocess.run(["git", "-C", str(origin), "add", "."], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(origin),
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "fixture",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    git_ref = subprocess.check_output(
+        ["git", "-C", str(origin), "rev-parse", "HEAD"], text=True
+    ).strip()
+
+    repo = tmp_path / "nemo-rl"
+    tools_dir = repo / "tools"
+    tools_dir.mkdir(parents=True)
+    (repo / "3rdparty").mkdir()
+    shutil.copy2(BUILD_CUSTOM_VLLM_SCRIPT, tools_dir / BUILD_CUSTOM_VLLM_SCRIPT.name)
+    (repo / "pyproject.toml").write_text("[project]\nname = 'nemo-rl'\n")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'if [[ "${1:-}" == lock ]]; then\n'
+        "  cp 3rdparty/vllm/requirements/cuda.txt uv.lock\n"
+        "elif [[ \"$*\" == *'python -'* ]]; then\n"
+        "  cat >/dev/null\n"
+        "fi\n"
+    )
+    fake_uv.chmod(0o755)
+    fake_find = fake_bin / "find"
+    fake_find.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "for file in requirements/*.txt; do\n"
+        "  perl -0pi -e 's/#.*$//mg; s/^[ \\t]*\\n//mg; "
+        's/^(xformers)==[^;\\s]*/$1==0.0.32.post1/mg\' "$file"\n'
+        "done\n"
+    )
+    fake_find.chmod(0o755)
+    fake_realpath = fake_bin / "realpath"
+    fake_realpath.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "target=$1\n"
+        'cd "$(dirname "$target")"\n'
+        'printf \'%s/%s\\n\' "$PWD" "$(basename "$target")"\n'
+    )
+    fake_realpath.chmod(0o755)
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(tools_dir / BUILD_CUSTOM_VLLM_SCRIPT.name),
+            str(origin),
+            git_ref,
+            "https://example.invalid/vllm.whl",
+        ],
+        cwd=repo,
+        env=os.environ
+        | {
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "UV_PROJECT_ENVIRONMENT": "",
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+    built_requirements = repo / "3rdparty/vllm/requirements/cuda.txt"
+    requirement_text = built_requirements.read_text()
+    assert "# build torch" not in requirement_text
+    assert "xformers==0.0.32.post1" in requirement_text
+    assert (repo / "uv.lock").read_text() == requirement_text
+    changed_paths = subprocess.check_output(
+        ["git", "-C", str(repo / "3rdparty/vllm"), "diff", "--name-only"],
+        text=True,
+    ).splitlines()
+    assert changed_paths == ["requirements/cuda.txt"]
 
 
 def test_prepare_emits_valid_scoped_job_command(tmp_path: Path) -> None:

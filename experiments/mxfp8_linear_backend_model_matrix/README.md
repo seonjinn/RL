@@ -31,13 +31,15 @@ faster backend.
 
 The tool rejects a row before writing a result unless exactly one driver log is
 present per backend and each manifest has exactly the closed schema expected by
-the tool. Unknown fields are rejected. The model, exact NeMo-RL commit,
-dependency fingerprint, vLLM commit/source fingerprint and clean assertion,
-container, recipe/content fingerprint, CUDA Graph mode, precision, MX mode,
-quantization scope, MoE backend, topology, batching, sequence limits,
-generation TP, max steps, and GPU memory utilization must match across the two
-arms. `linear_backend` is the only permitted difference and must declare the
-arm being read. Every requested measured step must also be complete, and paired
-measured steps must have identical mean generation lengths. These checks run
-before speedups are calculated; `summary.json` preserves each complete
-validated manifest.
+the tool. Unknown fields are rejected. The model, exact NeMo-RL commit, root
+dependency fingerprint, vLLM commit, pristine source fingerprint, requirements
+dependency-state fingerprint and scoped clean assertion, container,
+recipe/content fingerprint, CUDA Graph mode, precision, MX mode, quantization
+scope, MoE backend, topology, rollout batching, training batch size, sequence
+limits, generation TP, max steps, GPU memory utilization, log-probability
+batch/chunk sizes, activation checkpointing, deferred FP32 logits, and sequence
+packing must match across the two arms. `linear_backend` is the only permitted
+difference and must declare the arm being read. Every requested measured step
+must also be complete, and paired measured steps must have identical mean
+generation lengths. These checks run before speedups are calculated;
+`summary.json` preserves each complete validated manifest.

@@ -28,6 +28,7 @@ COMMAND=$(cat <<EOF
 set -euo pipefail
 cd ${REPO_DIR}
 export UV_PROJECT_ENVIRONMENT=
+source ${REPO_DIR}/experiments/mxfp8_linear_backend_model_matrix/provenance.sh
 assert_preparation_scope_clean() {
   if [[ -n "\$(git status --porcelain --untracked-files=all -- . \
       ":(exclude)pyproject.toml" ":(exclude)uv.lock" \
@@ -42,9 +43,9 @@ if [[ -d 3rdparty/vllm/.git ]]; then
   actual=\$(git -C 3rdparty/vllm rev-parse HEAD)
   if [[ "\${actual}" != "${VLLM_GIT_REF}" ]]; then
     echo "Replacing custom vLLM commit \${actual} with ${VLLM_GIT_REF}"
-  elif ! git -C 3rdparty/vllm diff --quiet -- || \
-      ! git -C 3rdparty/vllm diff --cached --quiet --; then
-    echo "Replacing custom vLLM checkout with dirty tracked files"
+  elif ! mxfp8_assert_vllm_tracked_state 3rdparty/vllm; then
+    echo "Custom vLLM has disallowed tracked changes" >&2
+    exit 1
   elif [[ -x 3rdparty/vllm/.venv/bin/python ]] && \
       3rdparty/vllm/.venv/bin/python -c 'import vllm'; then
     existing_vllm_valid=true
@@ -83,6 +84,7 @@ print(
     FlashInferTrtllmMxfp8LinearKernel.__name__,
 )
 PY
+mxfp8_assert_vllm_tracked_state 3rdparty/vllm
 assert_preparation_scope_clean
 EOF
 )

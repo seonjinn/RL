@@ -57,10 +57,14 @@ Report the mean of steps 3-8. Primary metrics are rollout generation time and ge
 `ACTION=test-only` and `ACTION=submit` reject all NeMo-RL source changes except
 the preparation-owned `pyproject.toml`, `uv.lock`, and `3rdparty/vllm` state.
 The launcher fingerprints the two dependency files, the recipe content, and
-the clean tracked vLLM source at submission, then rechecks them with the exact
-NeMo-RL and vLLM commits when the job starts. Untracked vLLM build artifacts
-may remain, but tracked and staged vLLM changes are rejected. Each backend
-writes the complete validated configuration to
+the vLLM source and dependency states at submission, then rechecks them with
+the exact NeMo-RL and vLLM commits when the job starts. The source SHA256
+identifies pristine `HEAD`; a separate dependency SHA256 identifies the
+intentional tracked `requirements/*.txt` compatibility rewrites preserved by
+the build. Other staged or unstaged tracked vLLM changes are rejected, while
+untracked build artifacts may remain. Each backend writes the complete
+validated configuration, including log-probability batching, activation
+checkpointing, deferred FP32 logits, and sequence packing, to
 `<run-root>/<backend>/run_manifest.json`.
 
 ## 32K Output-Length Study

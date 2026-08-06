@@ -47,10 +47,26 @@ GENERATION_TENSOR_PARALLEL_SIZE=${GENERATION_TENSOR_PARALLEL_SIZE:-4}
 GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.7}
 PRECISION=${PRECISION:-fp8}
 IS_MX=${IS_MX:-true}
-case "${IS_MX}" in
-    true) IS_MX_PYTHON=True ;;
-    false) IS_MX_PYTHON=False ;;
-    *) echo "IS_MX must be true or false" >&2; exit 2 ;;
+LOGPROB_BATCH_SIZE=${LOGPROB_BATCH_SIZE:-1}
+LOGPROB_CHUNK_SIZE=${LOGPROB_CHUNK_SIZE:-2048}
+ACTIVATION_CHECKPOINTING=${ACTIVATION_CHECKPOINTING:-true}
+DEFER_FP32_LOGITS=${DEFER_FP32_LOGITS:-true}
+SEQUENCE_PACKING=${SEQUENCE_PACKING:-true}
+case "${LOGPROB_BATCH_SIZE}" in
+    ''|*[!0-9]*|0|0*) echo "LOGPROB_BATCH_SIZE must be a positive integer" >&2; exit 2 ;;
+esac
+for boolean_name in IS_MX ACTIVATION_CHECKPOINTING SEQUENCE_PACKING DEFER_FP32_LOGITS; do
+    boolean_value=${!boolean_name}
+    case "${boolean_value}" in
+        true) printf -v "${boolean_name}_PYTHON" '%s' True ;;
+        false) printf -v "${boolean_name}_PYTHON" '%s' False ;;
+        *) echo "${boolean_name} must be true or false" >&2; exit 2 ;;
+    esac
+done
+case "${LOGPROB_CHUNK_SIZE}" in
+    null) LOGPROB_CHUNK_SIZE_PYTHON=None ;;
+    ''|*[!0-9]*|0|0*) echo "LOGPROB_CHUNK_SIZE must be null or a positive integer" >&2; exit 2 ;;
+    *) LOGPROB_CHUNK_SIZE_PYTHON=${LOGPROB_CHUNK_SIZE} ;;
 esac
 RUN_ID=${RUN_ID:-$(date +%Y%m%d-%H%M%S)}
 
@@ -75,6 +91,7 @@ SUBMIT_DEPENDENCY_STATE_SHA256=
 SUBMIT_RECIPE_SHA256=
 SUBMIT_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT}
 SUBMIT_VLLM_SOURCE_SHA256=dry-run-not-validated
+SUBMIT_VLLM_DEPENDENCY_STATE_SHA256=dry-run-not-validated
 
 if [[ "${ACTION}" == "dry-run" ]]; then
     SUBMIT_DEPENDENCY_STATE_SHA256=$(mxfp8_dependency_state_sha256 "${REPO_DIR}")
@@ -95,7 +112,7 @@ else
     fi
     SUBMIT_DEPENDENCY_STATE_SHA256=$(mxfp8_dependency_state_sha256 "${REPO_DIR}")
     SUBMIT_RECIPE_SHA256=$(mxfp8_file_sha256 "${REPO_DIR}/${CONFIG}")
-    mxfp8_assert_vllm_tracked_clean "${CUSTOM_VLLM_ROOT}" || {
+    mxfp8_assert_vllm_tracked_state "${CUSTOM_VLLM_ROOT}" || {
         echo "Custom vLLM tracked files are not clean at ${CUSTOM_VLLM_ROOT}" >&2
         exit 1
     }
@@ -105,6 +122,7 @@ else
         exit 1
     }
     SUBMIT_VLLM_SOURCE_SHA256=$(mxfp8_vllm_source_sha256 "${CUSTOM_VLLM_ROOT}")
+    SUBMIT_VLLM_DEPENDENCY_STATE_SHA256=$(mxfp8_vllm_dependency_state_sha256 "${CUSTOM_VLLM_ROOT}")
 fi
 
 mkdir -p "${EXPERIMENT_ROOT}" "${CACHE_ROOT}" "${HF_HOME}"
@@ -132,7 +150,7 @@ runtime_recipe_sha256=\$(mxfp8_file_sha256 ${REPO_DIR}/${CONFIG})
   echo "Recipe content mismatch: expected ${SUBMIT_RECIPE_SHA256}, found \${runtime_recipe_sha256}" >&2
   exit 1
 }
-mxfp8_assert_vllm_tracked_clean ${CUSTOM_VLLM_ROOT} || {
+mxfp8_assert_vllm_tracked_state ${CUSTOM_VLLM_ROOT} || {
   echo "Custom vLLM tracked files are not clean at job start: ${CUSTOM_VLLM_ROOT}" >&2
   exit 1
 }
@@ -144,6 +162,11 @@ runtime_vllm_commit=\$(git -C ${CUSTOM_VLLM_ROOT} rev-parse HEAD)
 runtime_vllm_source_sha256=\$(mxfp8_vllm_source_sha256 ${CUSTOM_VLLM_ROOT})
 [[ "\${runtime_vllm_source_sha256}" == "${SUBMIT_VLLM_SOURCE_SHA256}" ]] || {
   echo "vLLM source fingerprint mismatch: expected ${SUBMIT_VLLM_SOURCE_SHA256}, found \${runtime_vllm_source_sha256}" >&2
+  exit 1
+}
+runtime_vllm_dependency_state_sha256=\$(mxfp8_vllm_dependency_state_sha256 ${CUSTOM_VLLM_ROOT})
+[[ "\${runtime_vllm_dependency_state_sha256}" == "${SUBMIT_VLLM_DEPENDENCY_STATE_SHA256}" ]] || {
+  echo "vLLM dependency state mismatch: expected ${SUBMIT_VLLM_DEPENDENCY_STATE_SHA256}, found \${runtime_vllm_dependency_state_sha256}" >&2
   exit 1
 }
 rm -f ${EXPERIMENT_ROOT}/run_manifest.json
@@ -187,6 +210,7 @@ export MXFP8_NEMO_RL_COMMIT="\${runtime_nemo_rl_commit}"
 export MXFP8_DEPENDENCY_STATE_SHA256="\${runtime_dependency_state_sha256}"
 export MXFP8_VLLM_COMMIT="\${runtime_vllm_commit}"
 export MXFP8_VLLM_SOURCE_SHA256="\${runtime_vllm_source_sha256}"
+export MXFP8_VLLM_DEPENDENCY_STATE_SHA256="\${runtime_vllm_dependency_state_sha256}"
 ${DRIVER_VENV}/bin/python - <<'PY'
 import json
 import os
@@ -198,6 +222,7 @@ manifest = {
     "dependency_state_sha256": os.environ["MXFP8_DEPENDENCY_STATE_SHA256"],
     "vllm_commit": os.environ["MXFP8_VLLM_COMMIT"],
     "vllm_source_sha256": os.environ["MXFP8_VLLM_SOURCE_SHA256"],
+    "vllm_dependency_state_sha256": os.environ["MXFP8_VLLM_DEPENDENCY_STATE_SHA256"],
     "vllm_tracked_files_clean": True,
     "container": "${CONTAINER}",
     "recipe": "${CONFIG}",
@@ -220,6 +245,11 @@ manifest = {
     "generation_tensor_parallel_size": ${GENERATION_TENSOR_PARALLEL_SIZE},
     "max_steps": ${MAX_STEPS},
     "gpu_memory_utilization": ${GPU_MEMORY_UTILIZATION},
+    "logprob_batch_size": ${LOGPROB_BATCH_SIZE},
+    "logprob_chunk_size": ${LOGPROB_CHUNK_SIZE_PYTHON},
+    "activation_checkpointing": ${ACTIVATION_CHECKPOINTING_PYTHON},
+    "defer_fp32_logits": ${DEFER_FP32_LOGITS_PYTHON},
+    "sequence_packing": ${SEQUENCE_PACKING_PYTHON},
     "linear_backend": "${BACKEND}",
 }
 manifest_path = Path("${EXPERIMENT_ROOT}/run_manifest.json")
@@ -242,6 +272,11 @@ uv run --frozen --extra vllm examples/run_grpo.py \
   policy.generation.vllm_cfg.enforce_eager=false \
   policy.generation.vllm_cfg.precision=${PRECISION} \
   ++policy.generation.vllm_cfg.is_mx=${IS_MX} \
+  policy.logprob_batch_size=${LOGPROB_BATCH_SIZE} \
+  policy.logprob_chunk_size=${LOGPROB_CHUNK_SIZE} \
+  policy.megatron_cfg.activation_checkpointing=${ACTIVATION_CHECKPOINTING} \
+  policy.megatron_cfg.defer_fp32_logits=${DEFER_FP32_LOGITS} \
+  policy.sequence_packing.enabled=${SEQUENCE_PACKING} \
   "++policy.generation.vllm_cfg.quantization_ignored_layer_kws=[lm_head,mlp.gate]" \
   ++policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm \
   ++policy.generation.vllm_kwargs.linear_backend=${BACKEND} \
