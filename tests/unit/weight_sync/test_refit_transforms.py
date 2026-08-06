@@ -1,7 +1,9 @@
 """Unit tests for cross-precision NCCL-Reshard transform contracts."""
 
 import pytest
+import torch
 
+from nemo_rl.modelopt.models.generation import nvfp4_refit
 from nemo_rl.weight_sync import refit_transforms
 from nemo_rl.weight_sync.refit_transforms import (
     DestinationComponentSpec,
@@ -10,10 +12,12 @@ from nemo_rl.weight_sync.refit_transforms import (
     RefitTransformRequest,
     TransformComponentSpec,
     build_plan_agreement,
+    describe_refit_wire_metadata,
     merge_refit_transform_requests,
     plan_signature,
     plans_from_serialized_metadata,
     resolve_transform,
+    transform_component_name,
     validate_serialized_plan_agreement,
 )
 
@@ -36,6 +40,119 @@ def test_merge_refit_transform_requests_rejects_conflicting_targets() -> None:
         )
 
 
+def test_merge_refit_transform_requests_rejects_conflicting_locations() -> None:
+    parameter_name = "model.layers.0.mlp.down_proj.weight"
+
+    with pytest.raises(ValueError, match="conflicting formats"):
+        merge_refit_transform_requests(
+            [
+                [
+                    RefitTransformRequest(
+                        parameter_names=(parameter_name,),
+                        source_format="bf16",
+                        target_format="nvfp4_w4a16",
+                        transform_location="source",
+                    )
+                ],
+                [
+                    RefitTransformRequest(
+                        parameter_names=(parameter_name,),
+                        source_format="bf16",
+                        target_format="nvfp4_w4a16",
+                        transform_location="destination",
+                    )
+                ],
+            ]
+        )
+
+
+@pytest.mark.parametrize("target_format", ["nvfp4_w4a16", "nvfp4_w4a4"])
+def test_nvfp4_wire_contract_depends_on_transform_location(
+    target_format: str,
+) -> None:
+    codec = resolve_transform("bf16", target_format)
+
+    destination_wire = codec.describe_outputs(
+        (64, 128), "torch.bfloat16", transform_location="destination"
+    )
+    source_wire = codec.describe_outputs(
+        (64, 128), "torch.bfloat16", transform_location="source"
+    )
+
+    assert destination_wire == (
+        TransformComponentSpec("weight", (64, 128), "torch.bfloat16"),
+    )
+    assert source_wire[:3] == (
+        TransformComponentSpec("weight", (64, 64), "torch.uint8"),
+        TransformComponentSpec("weight_scale", (64, 8), "torch.float8_e4m3fn"),
+        TransformComponentSpec("weight_scale_2", (), "torch.float32"),
+    )
+    expected_roles = ["weight", "weight_scale", "weight_scale_2"]
+    if target_format == "nvfp4_w4a4":
+        expected_roles.append("input_scale")
+    assert [component.role for component in source_wire] == expected_roles
+
+
+def test_transform_component_name_preserves_existing_checkpoint_conventions() -> None:
+    name = "model.layers.0.mlp.down_proj.weight"
+    base = "model.layers.0.mlp.down_proj"
+
+    assert transform_component_name(name, "mxfp8_e4m3_e8m0", "weight") == name
+    assert (
+        transform_component_name(name, "mxfp8_e4m3_e8m0", "weight_scale")
+        == name + "_scale_from_checkpoint"
+    )
+    assert (
+        transform_component_name(name, "nvfp4_w4a16", "weight_scale")
+        == base + ".weight_scale"
+    )
+    assert (
+        transform_component_name(name, "nvfp4_w4a4", "input_scale")
+        == base + ".input_scale"
+    )
+
+
+def test_describe_refit_wire_metadata_is_descriptor_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_if_quantized(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("Metadata description must not quantize weights.")
+
+    monkeypatch.setattr(nvfp4_refit, "serialize_bf16_nvfp4_group", raise_if_quantized)
+    source_name = "model.layers.0.mlp.gate_proj.weight"
+    destination_name = "model.layers.0.mlp.down_proj.weight"
+    source_base = "model.layers.0.mlp.gate_proj"
+    source_info = {
+        source_name: ((64, 128), torch.bfloat16),
+        destination_name: ((64, 128), torch.bfloat16),
+        "model.layers.0.input_layernorm.weight": ((64,), torch.float32),
+    }
+    requests = [
+        RefitTransformRequest(
+            parameter_names=(source_name,),
+            source_format="bf16",
+            target_format="nvfp4_w4a4",
+            transform_location="source",
+        ),
+        RefitTransformRequest(
+            parameter_names=(destination_name,),
+            source_format="bf16",
+            target_format="nvfp4_w4a16",
+            transform_location="destination",
+        ),
+    ]
+
+    assert describe_refit_wire_metadata(source_info, requests) == {
+        source_name: ((64, 64), torch.uint8),
+        source_base + ".weight_scale": ((64, 8), torch.float8_e4m3fn),
+        source_base + ".weight_scale_2": ((), torch.float32),
+        source_base + ".input_scale": ((), torch.float32),
+        destination_name: ((64, 128), torch.bfloat16),
+        "model.layers.0.input_layernorm.weight": ((64,), torch.float32),
+    }
+
+
 def test_bf16_to_nvfp4_w4a4_distinguishes_wire_from_destination_components() -> None:
     """Receiver conversion transfers BF16 while calibration stays at the destination."""
     codec = resolve_transform("bf16", "nvfp4_w4a4")
@@ -51,6 +168,9 @@ def test_bf16_to_nvfp4_w4a4_distinguishes_wire_from_destination_components() -> 
         DestinationComponentSpec("weight_scale_2", (), "torch.float32", "codec"),
         DestinationComponentSpec("input_scale", (), "torch.float32", "calibration"),
     )
+    assert codec.describe_destination(
+        (64, 128), "torch.bfloat16", transform_location="source"
+    )[-1] == DestinationComponentSpec("input_scale", (), "torch.float32", "codec")
 
 
 def test_plan_signature_includes_destination_source_and_completion_scope() -> None:
@@ -187,7 +307,9 @@ def test_bf16_to_mxfp8_codec_describes_weight_and_scale_outputs() -> None:
     )
 
     codec = resolve_transform(request.source_format, request.target_format)
-    components = codec.describe_outputs((64, 128), "torch.bfloat16")
+    components = codec.describe_outputs(
+        (64, 128), "torch.bfloat16", transform_location="source"
+    )
 
     assert [(item.role, item.global_shape, item.dtype_name) for item in components] == [
         ("weight", (64, 128), "torch.float8_e4m3fn"),
@@ -200,10 +322,10 @@ def test_bf16_to_mxfp8_codec_rejects_invalid_input_contracts() -> None:
     codec = resolve_transform("bf16", "mxfp8_e4m3_e8m0")
 
     with pytest.raises(ValueError, match="torch.bfloat16"):
-        codec.describe_outputs((64, 128), "torch.float16")
+        codec.describe_outputs((64, 128), "torch.float16", transform_location="source")
 
     with pytest.raises(ValueError, match="divisible by 32"):
-        codec.describe_outputs((64, 127), "torch.bfloat16")
+        codec.describe_outputs((64, 127), "torch.bfloat16", transform_location="source")
 
 
 def test_resolve_transform_reports_both_unknown_formats() -> None:

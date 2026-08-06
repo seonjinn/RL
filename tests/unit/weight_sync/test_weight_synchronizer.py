@@ -79,6 +79,10 @@ def _transform_request(*names: str) -> RefitTransformRequest:
     )
 
 
+def test_legacy_mxfp8_request_defaults_to_source_transform() -> None:
+    assert _transform_request("layer_0").transform_location == "source"
+
+
 def _mock_cluster(world_size=4, ip="127.0.0.1", port=29500):
     cluster = MagicMock()
     cluster.world_size.return_value = world_size

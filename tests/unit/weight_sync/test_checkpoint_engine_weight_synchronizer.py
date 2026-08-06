@@ -154,6 +154,15 @@ def _checkpoint_sync(
 
 
 class TestCheckpointEngineWeightSynchronizer:
+    def test_mxfp8_request_defaults_to_source_transform(self) -> None:
+        request = RefitTransformRequest(
+            parameter_names=("layer_0",),
+            source_format="bf16",
+            target_format="mxfp8_e4m3_e8m0",
+        )
+
+        assert request.transform_location == "source"
+
     def test_init_communicator_completes_prequant_handshake(self):
         sync = _checkpoint_sync(MagicMock())
         sync._ensure_checkpoint_engine_ready = MagicMock()

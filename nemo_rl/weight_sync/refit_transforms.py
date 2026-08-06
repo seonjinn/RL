@@ -20,8 +20,18 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, TypedDict, cast
 
+import torch
+
 
 REFIT_PLAN_PROTOCOL_VERSION = 1
+RefitTransformLocation = Literal["source", "destination"]
+
+_TORCH_DTYPES_BY_NAME: dict[str, torch.dtype] = {
+    "torch.bfloat16": torch.bfloat16,
+    "torch.float8_e4m3fn": torch.float8_e4m3fn,
+    "torch.float32": torch.float32,
+    "torch.uint8": torch.uint8,
+}
 
 
 @dataclass(frozen=True)
@@ -31,6 +41,7 @@ class RefitTransformRequest:
     parameter_names: tuple[str, ...]
     source_format: str
     target_format: str
+    transform_location: RefitTransformLocation = "source"
 
 
 RefitTransformResponse = list[str] | list[RefitTransformRequest] | None
@@ -45,8 +56,8 @@ def merge_refit_transform_requests(
     ``RefitTransformRequest`` instances so the requested target format survives
     both internal vLLM and outer Ray RPC boundaries.
     """
-    names_by_format: dict[tuple[str, str], set[str]] = {}
-    format_by_name: dict[str, tuple[str, str]] = {}
+    names_by_format: dict[tuple[str, str, RefitTransformLocation], set[str]] = {}
+    format_by_name: dict[str, tuple[str, str, RefitTransformLocation]] = {}
     for response in responses:
         if not response:
             continue
@@ -54,10 +65,12 @@ def merge_refit_transform_requests(
             if isinstance(item, str):
                 source_format = "bf16"
                 target_format = "mxfp8_e4m3_e8m0"
+                transform_location: RefitTransformLocation = "source"
                 parameter_names = (item,)
             elif isinstance(item, RefitTransformRequest):
                 source_format = item.source_format
                 target_format = item.target_format
+                transform_location = item.transform_location
                 parameter_names = item.parameter_names
             else:
                 raise TypeError(
@@ -65,7 +78,7 @@ def merge_refit_transform_requests(
                     f"RefitTransformRequest instances, got {type(item).__name__}."
                 )
 
-            format_key = (source_format, target_format)
+            format_key = (source_format, target_format, transform_location)
             requested_names = names_by_format.setdefault(format_key, set())
             for name in parameter_names:
                 previous_format = format_by_name.setdefault(name, format_key)
@@ -81,10 +94,13 @@ def merge_refit_transform_requests(
             parameter_names=tuple(sorted(parameter_names)),
             source_format=source_format,
             target_format=target_format,
+            transform_location=transform_location,
         )
-        for (source_format, target_format), parameter_names in sorted(
-            names_by_format.items()
-        )
+        for (
+            source_format,
+            target_format,
+            transform_location,
+        ), parameter_names in sorted(names_by_format.items())
     ]
 
 
@@ -185,6 +201,8 @@ class RefitTransformCodec(Protocol):
         self,
         global_shape: tuple[int, ...],
         input_dtype_name: str,
+        *,
+        transform_location: RefitTransformLocation = "destination",
     ) -> tuple[TransformComponentSpec, ...]:
         """Return wire components in transfer order."""
         ...
@@ -193,6 +211,8 @@ class RefitTransformCodec(Protocol):
         self,
         global_shape: tuple[int, ...],
         input_dtype_name: str,
+        *,
+        transform_location: RefitTransformLocation = "destination",
     ) -> tuple[DestinationComponentSpec, ...]:
         """Return destination checkpoint components in materialization order."""
         ...
@@ -207,8 +227,15 @@ class _BF16ToMXFP8Codec:
         self,
         global_shape: tuple[int, ...],
         input_dtype_name: str,
+        *,
+        transform_location: RefitTransformLocation = "destination",
     ) -> tuple[TransformComponentSpec, ...]:
         """Return MXFP8 value and block-scale specifications for one tensor."""
+        if transform_location != "source":
+            raise ValueError(
+                "BF16-to-MXFP8 refit supports only source transforms; "
+                f"got {transform_location!r}."
+            )
         if input_dtype_name != "torch.bfloat16":
             raise ValueError(
                 "BF16-to-MXFP8 refit requires input dtype torch.bfloat16; "
@@ -233,8 +260,15 @@ class _BF16ToMXFP8Codec:
         self,
         global_shape: tuple[int, ...],
         input_dtype_name: str,
+        *,
+        transform_location: RefitTransformLocation = "destination",
     ) -> tuple[DestinationComponentSpec, ...]:
         """Return destination components matching the legacy transfer layout."""
+        if transform_location != "source":
+            raise ValueError(
+                "BF16-to-MXFP8 refit supports only source transforms; "
+                f"got {transform_location!r}."
+            )
         return tuple(
             DestinationComponentSpec(
                 role=component.role,
@@ -242,7 +276,11 @@ class _BF16ToMXFP8Codec:
                 dtype_name=component.dtype_name,
                 source="codec",
             )
-            for component in self.describe_outputs(global_shape, input_dtype_name)
+            for component in self.describe_outputs(
+                global_shape,
+                input_dtype_name,
+                transform_location=transform_location,
+            )
         )
 
 
@@ -271,18 +309,54 @@ class _BF16ToNVFP4Codec:
         self,
         global_shape: tuple[int, ...],
         input_dtype_name: str,
+        *,
+        transform_location: RefitTransformLocation = "destination",
     ) -> tuple[TransformComponentSpec, ...]:
-        """Return the unmodified BF16 payload transferred to the receiver."""
+        """Return transport components for the transform owner."""
         self._validate_input(global_shape, input_dtype_name)
-        return (TransformComponentSpec("weight", global_shape, input_dtype_name),)
+        if transform_location == "destination":
+            return (TransformComponentSpec("weight", global_shape, input_dtype_name),)
+        if transform_location != "source":
+            raise ValueError(
+                "BF16-to-NVFP4 refit transform location must be 'source' or "
+                f"'destination'; got {transform_location!r}."
+            )
+        components = (
+            TransformComponentSpec(
+                "weight", (*global_shape[:-1], global_shape[-1] // 2), "torch.uint8"
+            ),
+            TransformComponentSpec(
+                "weight_scale",
+                (*global_shape[:-1], global_shape[-1] // 16),
+                "torch.float8_e4m3fn",
+            ),
+            TransformComponentSpec(
+                "weight_scale_2", global_shape[:-2], "torch.float32"
+            ),
+        )
+        if self._mode == "w4a4":
+            return (
+                *components,
+                TransformComponentSpec(
+                    "input_scale", global_shape[:-2], "torch.float32"
+                ),
+            )
+        return components
 
     def describe_destination(
         self,
         global_shape: tuple[int, ...],
         input_dtype_name: str,
+        *,
+        transform_location: RefitTransformLocation = "destination",
     ) -> tuple[DestinationComponentSpec, ...]:
         """Return the NVFP4 family generated from the received BF16 tensor."""
         self._validate_input(global_shape, input_dtype_name)
+        if transform_location not in {"source", "destination"}:
+            raise ValueError(
+                "BF16-to-NVFP4 refit transform location must be 'source' or "
+                f"'destination'; got {transform_location!r}."
+            )
         components = (
             DestinationComponentSpec(
                 "weight",
@@ -307,7 +381,7 @@ class _BF16ToNVFP4Codec:
                     "input_scale",
                     global_shape[:-2],
                     "torch.float32",
-                    "calibration",
+                    "codec" if transform_location == "source" else "calibration",
                 ),
             )
         return components
@@ -329,6 +403,78 @@ def resolve_transform(source_format: str, target_format: str) -> RefitTransformC
             "No refit transform registered for source format "
             f"{source_format!r} and target format {target_format!r}."
         ) from error
+
+
+def transform_component_name(parameter_name: str, target_format: str, role: str) -> str:
+    """Return the checkpoint parameter name for one transformed component."""
+    if target_format == "mxfp8_e4m3_e8m0":
+        if role == "weight":
+            return parameter_name
+        if role == "weight_scale":
+            return parameter_name + "_scale_from_checkpoint"
+    elif target_format in {"nvfp4_w4a16", "nvfp4_w4a4"}:
+        if not parameter_name.endswith(".weight"):
+            raise ValueError(
+                "NVFP4 refit transform parameter names must end in '.weight'; "
+                f"got {parameter_name!r}."
+            )
+        return parameter_name.removesuffix(".weight") + f".{role}"
+    raise ValueError(
+        "No checkpoint component naming convention for target format "
+        f"{target_format!r} and role {role!r}."
+    )
+
+
+def describe_refit_wire_metadata(
+    source_info: Mapping[str, tuple[tuple[int, ...], torch.dtype]],
+    requests: Iterable[RefitTransformRequest],
+) -> dict[str, tuple[tuple[int, ...], torch.dtype]]:
+    """Describe source metadata after source-owned refit transforms."""
+    request_by_name: dict[str, RefitTransformRequest] = {}
+    for request in requests:
+        for parameter_name in request.parameter_names:
+            if parameter_name not in source_info:
+                raise ValueError(
+                    f"Unknown refit transform parameter {parameter_name!r}."
+                )
+            if parameter_name in request_by_name:
+                raise ValueError(
+                    f"Duplicate refit transform request for {parameter_name!r}."
+                )
+            request_by_name[parameter_name] = request
+
+    metadata: dict[str, tuple[tuple[int, ...], torch.dtype]] = {}
+    for parameter_name in sorted(source_info):
+        source_shape, input_dtype = source_info[parameter_name]
+        global_shape = tuple(int(size) for size in source_shape)
+        request = request_by_name.get(parameter_name)
+        if request is None or request.transform_location == "destination":
+            metadata[parameter_name] = (global_shape, input_dtype)
+            continue
+
+        codec = resolve_transform(request.source_format, request.target_format)
+        components = codec.describe_outputs(
+            global_shape,
+            str(input_dtype),
+            transform_location=request.transform_location,
+        )
+        for component in components:
+            component_name = transform_component_name(
+                parameter_name, request.target_format, component.role
+            )
+            if component_name in metadata:
+                raise ValueError(
+                    f"Duplicate refit wire metadata output name {component_name!r}."
+                )
+            try:
+                component_dtype = _TORCH_DTYPES_BY_NAME[component.dtype_name]
+            except KeyError as error:
+                raise ValueError(
+                    f"Unsupported refit wire metadata dtype {component.dtype_name!r}."
+                ) from error
+            metadata[component_name] = (component.global_shape, component_dtype)
+
+    return metadata
 
 
 def plan_signature(plans: Mapping[str, RefitTransformPlan]) -> str:

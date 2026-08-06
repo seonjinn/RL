@@ -30,6 +30,17 @@ from nemo_rl.weight_sync.refit_transforms import (
 _PARAM_NAME = "model.layers.0.mlp.down_proj.weight"
 
 
+def test_nvfp4_nccl_request_is_explicitly_destination_owned() -> None:
+    request = RefitTransformRequest(
+        parameter_names=(_PARAM_NAME,),
+        source_format="bf16",
+        target_format="nvfp4_w4a16",
+        transform_location="destination",
+    )
+
+    assert request.transform_location == "destination"
+
+
 def _refit_info() -> dict[str, object]:
     plan = RefitTransformPlan(
         transform_id="bf16_to_mxfp8_e4m3_e8m0",
