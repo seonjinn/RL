@@ -1884,10 +1884,7 @@ class MegatronPolicyWorkerImpl(
         Returns:
             Updated source metadata for the requested destination transforms.
         """
-        from nemo_rl.weight_sync.refit_transforms import (
-            describe_refit_wire_metadata,
-            resolve_transform,
-        )
+        from nemo_rl.weight_sync.refit_transforms import resolve_transform
 
         source_info = getattr(self, "_last_refit_param_info_hf", None)
         if source_info is None:
@@ -1909,6 +1906,11 @@ class MegatronPolicyWorkerImpl(
                     raise ValueError(f"Duplicate refit transform request for {name!r}.")
                 if name not in source_info:
                     raise ValueError(f"Unknown refit transform parameter {name!r}.")
+                if self._is_auxiliary_refit_record(name):
+                    raise ValueError(
+                        f"Refit transforms for auxiliary record {name!r} are not "
+                        "supported."
+                    )
                 shape, dtype = source_info[name]
                 if request.source_format == "bf16" and dtype is not torch.bfloat16:
                     raise ValueError(
@@ -1931,7 +1933,10 @@ class MegatronPolicyWorkerImpl(
                 f"per transfer; got {sorted(source_target_formats)}."
             )
 
-        refit_param_info_hf = describe_refit_wire_metadata(source_info, requests)
+        self._validate_complete_source_nvfp4_groups(requests_by_name)
+        refit_param_info_hf = self._describe_refit_wire_metadata_in_payload_order(
+            source_info, requests, requests_by_name
+        )
         nvfp4_mode_by_format: dict[str, NVFP4RefitMode] = {
             "nvfp4_w4a16": "w4a16",
             "nvfp4_w4a4": "w4a4",
@@ -1953,6 +1958,120 @@ class MegatronPolicyWorkerImpl(
         self._refit_transform_requests_by_name = requests_by_name
         self._nvfp4_refit_calibration = nvfp4_calibration
         return refit_param_info_hf
+
+    @staticmethod
+    def _is_auxiliary_refit_record(name: str) -> bool:
+        """Return whether a metadata record is appended after Bridge export."""
+        return name.startswith("draft.") or name.endswith(
+            (
+                ".self_attn.attn.q_scale",
+                ".self_attn.k_scale",
+                ".self_attn.v_scale",
+            )
+        )
+
+    @staticmethod
+    def _validate_complete_source_nvfp4_groups(
+        requests_by_name: dict[str, "RefitTransformRequest"],
+    ) -> None:
+        """Reject source-owned NVFP4 groups that cannot complete during export."""
+        source_names = {
+            name
+            for name, request in requests_by_name.items()
+            if request.transform_location == "source"
+            and request.target_format in {"nvfp4_w4a16", "nvfp4_w4a4"}
+        }
+        if not source_names:
+            return
+
+        # Group naming is dependency-light and needed only for source-owned NVFP4.
+        from nemo_rl.modelopt.models.generation.nvfp4_refit import nvfp4_refit_group
+
+        incomplete_groups: dict[str, list[str]] = {}
+        for name in sorted(source_names):
+            group_name, expected_names = nvfp4_refit_group(name)
+            missing = sorted(set(expected_names).difference(source_names))
+            if missing:
+                incomplete_groups[group_name] = missing
+        if incomplete_groups:
+            details = "; ".join(
+                f"{group_name}: missing {missing}"
+                for group_name, missing in sorted(incomplete_groups.items())
+            )
+            raise ValueError(
+                "Source-owned NVFP4 refit requests contain incomplete groups: "
+                + details
+            )
+
+    @staticmethod
+    def _describe_refit_wire_metadata_in_payload_order(
+        source_info: dict[str, Any],
+        requests: list["RefitTransformRequest"],
+        requests_by_name: dict[str, "RefitTransformRequest"],
+    ) -> dict[str, Any]:
+        """Describe wire tensors in the exact order the export iterator emits."""
+        from nemo_rl.weight_sync.refit_transforms import (
+            describe_refit_wire_metadata,
+            resolve_transform,
+            transform_component_name,
+        )
+
+        metadata = describe_refit_wire_metadata(source_info, requests)
+
+        def output_names(parameter_name: str) -> tuple[str, ...]:
+            request = requests_by_name.get(parameter_name)
+            if request is None or request.transform_location == "destination":
+                return (parameter_name,)
+            source_shape, source_dtype = source_info[parameter_name]
+            components = resolve_transform(
+                request.source_format, request.target_format
+            ).describe_outputs(
+                tuple(source_shape),
+                str(source_dtype),
+                transform_location=request.transform_location,
+            )
+            return tuple(
+                transform_component_name(
+                    parameter_name, request.target_format, component.role
+                )
+                for component in components
+            )
+
+        source_nvfp4_names = {
+            name
+            for name, request in requests_by_name.items()
+            if request.transform_location == "source"
+            and request.target_format in {"nvfp4_w4a16", "nvfp4_w4a4"}
+        }
+        pending_by_group: dict[str, set[str]] = {}
+        wire_names: list[str] = []
+        if source_nvfp4_names:
+            # This mirrors iter_bf16_nvfp4_refit_weights without touching tensors.
+            from nemo_rl.modelopt.models.generation.nvfp4_refit import (
+                nvfp4_refit_group,
+            )
+
+            for name in source_info:
+                if name not in source_nvfp4_names:
+                    wire_names.extend(output_names(name))
+                    continue
+                group_name, expected_names = nvfp4_refit_group(name)
+                group_names = pending_by_group.setdefault(group_name, set())
+                group_names.add(name)
+                if group_names == set(expected_names):
+                    for expected_name in expected_names:
+                        wire_names.extend(output_names(expected_name))
+                    del pending_by_group[group_name]
+        else:
+            for name in source_info:
+                wire_names.extend(output_names(name))
+
+        if pending_by_group:
+            raise AssertionError(
+                "Validated NVFP4 groups did not complete during metadata ordering: "
+                f"{sorted(pending_by_group)}"
+            )
+        return {name: metadata[name] for name in wire_names}
 
     def _load_nvfp4_refit_calibration(
         self, mode: "NVFP4RefitMode", selected_names: set[str]
