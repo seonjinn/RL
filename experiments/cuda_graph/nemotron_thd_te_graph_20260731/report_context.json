@@ -2,47 +2,35 @@
   "schema_version": 1,
   "current_status": [
     {
-      "text": "The strict nightly GB200 runtime gate passed in OCI-HSG job 5891865 with non-empty capture and replay on all four GPUs."
+      "text": "OCI-HSG jobs 5906622, 5907665, 5907667, and 5906624 completed 20/20 steps with the same 24-GPU Nano recipe, nightly image, alltoall dispatcher, sequence packing, warmup=3, and checkpoints disabled."
     },
     {
-      "text": "The first five 20-step jobs failed at their first HybridEP dispatch because the launcher forced a 16-rank NVLink domain for an 8-rank expert group; this was a common topology error, not a scope-specific CUDA Graph failure."
+      "text": "Steps 11-19: attn improves E2E TPS/GPU by 18.7% and policy-training TPS/GPU by 31.8%; attn+mamba improves them by 13.8% and 33.3%; adding moe_router improves them by 13.0% and 18.3% versus baseline.",
+      "href": "results/persistent_bank_scope_sweep_steps11_19.csv"
     },
     {
-      "text": "Corrected jobs 5893771, 5893773, 5893775, 5893777, and 5893778 completed 20/20 steps with EP=8, NVLink-domain ranks=8, sequence packing, warmup=3, checkpoints disabled, and no runtime errors."
+      "text": "All CG arms have 100% eligible-call coverage and zero fallbacks. The capacity-2 bank hit rate is 100% for attn, 55.6% for attn+mamba, and 33.3% after adding moe_router in steps 11-19.",
+      "href": "results/persistent_bank_scope_sweep_telemetry_steps11_19.csv"
     },
     {
-      "text": "Steps 11-19 report 100% eligible-call coverage and zero fallbacks for every CG arm, but one cache miss and graph capture per optimizer step with zero cache hits.",
-      "href": "results/nano_ep8_results.json"
-    },
-    {
-      "text": "Provisional E2E TPS deltas versus baseline are mamba +1.0%, attn -6.0%, router -6.3%, router-plus-preprocess -2.1%, attn-plus-mamba-plus-router -16.9%, and the four-way scope -13.0%; policy-training TPS regresses 33-56% across CG arms.",
-      "href": "results/nano_ep8_steps11_19.csv"
-    },
-    {
-      "text": "Correctness is not cleared: router-only reaches token_mult_prob_error=6751 and policy_kl_error=6750 at step 16, attn has a smaller step-18 spike, and explicit router/expert/update parity is not logged."
-    },
-    {
-      "text": "Combination jobs 5894286 and 5894434 completed 20/20 steps with no runtime errors. The three-way arm has token_mult_prob_error max 1.059 and policy_kl_error max 0.0247 over steps 11-19; the four-way arm reaches 1.312 and 0.273 respectively, so neither is correctness-cleared without explicit parity."
+      "text": "The 20-step correctness smoke has no NaN/Inf, no masked sequences, and no CG fallback. Aggregate validation accuracy varies across stochastic trajectories, so a matched 100-step baseline-versus-attn soak is still required.",
+      "href": "results/persistent_bank_scope_sweep_correctness_steps11_19.csv"
     }
   ],
   "changes": [
     {
-      "text": "Forward HybridEP topology through the canonical NeMo-RL megatron_cfg path instead of overriding DeepEP environment variables directly.",
-      "href": "scripts/submit_oci_nano_direct.sh"
+      "text": "Keep captured TE graph schedules and storage resident across PPO inference and policy-training calls instead of resetting the bank between phases."
     },
     {
-      "text": "Reject incompatible expert-parallel and NVLink-domain sizes before sbatch; Nano EP=8 with domain=16 now fails fast."
-    },
-    {
-      "text": "Keep baseline, mamba, attn, router, and router-plus-preprocess in separate persistent checkouts and W&B runs."
+      "text": "Record graph calls, eligible coverage, captures, replays, cache hits and misses, evictions, fallbacks, and packed-token utilization in W&B."
     }
   ],
   "next_steps": [
     {
-      "text": "Isolate the router-only correctness spike with a padding=false comparator and fixed-batch eager-versus-graph router/expert parity."
+      "text": "Run a 100-step matched baseline-versus-attn soak before making a correctness claim."
     },
     {
-      "text": "Remove the per-step graph-bank reset and recapture before making a positive performance claim."
+      "text": "Evaluate capacity=4 or deterministic capacity bucketing for attn+mamba and router scopes; capacity=2 evicts when four token-capacity schedules appear."
     }
   ]
 }

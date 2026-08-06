@@ -1,0 +1,5 @@
+Exp,Wandb link,Job ID,Scope
+baseline,https://wandb.ai/nvidia/sna-cg-study/runs/spdgbbw3,5906622,baseline
+attn,https://wandb.ai/nvidia/sna-cg-study/runs/3hfic86a,5907665,attn
+attn_mamba,https://wandb.ai/nvidia/sna-cg-study/runs/q7ofxrql,5907667,"attn,mamba"
+attn_mamba_moe_router,https://wandb.ai/nvidia/sna-cg-study/runs/qo9zd8fw,5906624,"attn,mamba,moe_router"
