@@ -45,6 +45,7 @@ SEQUENCE_PACKING=${SEQUENCE_PACKING:-true}
 LOGPROB_BATCH_SIZE=${LOGPROB_BATCH_SIZE:-2}
 LOGPROB_CHUNK_SIZE=${LOGPROB_CHUNK_SIZE:-null}
 DEFER_FP32_LOGITS=${DEFER_FP32_LOGITS:-false}
+GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.6}
 RUN_ID=${RUN_ID:-$(date +%Y%m%d-%H%M%S)}
 
 EFFECTIVE_BACKEND=${BACKEND}
@@ -160,6 +161,7 @@ uv run --frozen --extra vllm examples/run_grpo.py \
   policy.sequence_packing.enabled=${SEQUENCE_PACKING} \
   policy.generation.max_new_tokens=${MAX_NEW_TOKENS} \
   policy.generation.vllm_cfg.max_model_len=${MAX_TOTAL_SEQUENCE_LENGTH} \
+  policy.generation.vllm_cfg.gpu_memory_utilization=${GPU_MEMORY_UTILIZATION} \
   data.max_input_seq_length=${MAX_INPUT_SEQUENCE_LENGTH} \
   policy.generation.vllm_cfg.enforce_eager=false \
   "policy.generation.vllm_cfg.quantization_ignored_layer_kws=[lm_head,mlp.gate]" \
