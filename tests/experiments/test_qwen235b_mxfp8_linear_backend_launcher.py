@@ -9,9 +9,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = (
     REPO_ROOT / "experiments" / "qwen235b_mxfp8_linear_backends" / "submit_cluster.sh"
 )
+MATRIX_LAUNCHER = LAUNCHER.with_name("submit_matrix.sh")
 
 
-def _dry_run(tmp_path: Path, backend: str, dependency_job_id: str = "") -> str:
+def _dry_run(
+    tmp_path: Path,
+    backend: str,
+    dependency_job_id: str = "",
+    extra_env: dict[str, str] | None = None,
+) -> str:
     container = tmp_path / "nemo-rl.sqsh"
     container.touch()
     custom_vllm = tmp_path / "vllm"
@@ -26,7 +32,10 @@ def _dry_run(tmp_path: Path, backend: str, dependency_job_id: str = "") -> str:
         "EXPERIMENT_ROOT": str(tmp_path / backend),
         "WORK_ROOT": str(tmp_path),
         "DEPENDENCY_JOB_ID": dependency_job_id,
+        "RUN_ID": "test-run",
     }
+    if extra_env is not None:
+        env.update(extra_env)
     result = subprocess.run(
         ["bash", str(LAUNCHER)],
         check=True,
@@ -36,6 +45,66 @@ def _dry_run(tmp_path: Path, backend: str, dependency_job_id: str = "") -> str:
         text=True,
     )
     return result.stdout
+
+
+def _matrix_dry_run(tmp_path: Path, max_steps: str = "8") -> str:
+    container = tmp_path / "nemo-rl.sqsh"
+    container.touch()
+    custom_vllm = tmp_path / "vllm"
+    custom_vllm.mkdir(exist_ok=True)
+    (custom_vllm / ".git").mkdir(exist_ok=True)
+
+    env = os.environ | {
+        "ACTION": "dry-run",
+        "CONTAINER": str(container),
+        "CUSTOM_VLLM_ROOT": str(custom_vllm),
+        "DEPENDENCY_JOB_ID": "12345",
+        "MAX_STEPS": max_steps,
+        "RUN_ID": "test-run",
+        "WORK_ROOT": str(tmp_path),
+    }
+    result = subprocess.run(
+        ["bash", str(MATRIX_LAUNCHER)],
+        check=True,
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout
+
+
+def test_uses_ptyche_account_by_default(tmp_path: Path) -> None:
+    output = _dry_run(tmp_path, "flashinfer_cutedsl")
+
+    assert "--account=coreai_dlalgo_llm" in output
+
+
+def test_matrix_submits_each_backend_without_afterok(tmp_path: Path) -> None:
+    output = _matrix_dry_run(tmp_path)
+
+    assert output.splitlines().count("backend=flashinfer_cutedsl") == 1
+    assert output.splitlines().count("backend=flashinfer_cutlass") == 1
+    assert "--dependency=afterok:" not in output
+
+
+def test_max_steps_changes_only_the_requested_run_length(tmp_path: Path) -> None:
+    smoke = _dry_run(
+        tmp_path,
+        "flashinfer_cutedsl",
+        extra_env={"MAX_STEPS": "2"},
+    )
+    measurement = _dry_run(
+        tmp_path,
+        "flashinfer_cutedsl",
+        extra_env={"MAX_STEPS": "8"},
+    )
+
+    assert "grpo.max_num_steps=2" in smoke
+    assert "grpo.max_num_steps=8" in measurement
+    assert smoke.replace("grpo.max_num_steps=2", "grpo.max_num_steps=STEPS") == (
+        measurement.replace("grpo.max_num_steps=8", "grpo.max_num_steps=STEPS")
+    )
 
 
 def test_qkvo_scope_changes_only_linear_backend(tmp_path: Path) -> None:
