@@ -79,7 +79,7 @@ export SETUPTOOLS_SCM_PRETEND_VERSION=0.25.1
 CONTAINER_RAY_VERSION=\$(python3 -c 'import ray; print(ray.__version__)')
 echo "Pinning NeMo-RL driver Ray to container version \${CONTAINER_RAY_VERSION}"
 UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv \
-  uv add --no-sync --bounds exact "ray[default]==\${CONTAINER_RAY_VERSION}"
+  uv add --frozen --bounds exact "ray[default]==\${CONTAINER_RAY_VERSION}"
 UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv uv lock
 python3 - "\${CONTAINER_RAY_VERSION}" <<'PY'
 import sys

@@ -299,7 +299,7 @@ def test_preparation_pins_ray_to_the_container_version() -> None:
     prepare_text = PREPARE_SCRIPT.read_text()
 
     detect = "CONTAINER_RAY_VERSION=\\$(python3 -c 'import ray; print(ray.__version__)')"
-    pin = 'uv add --no-sync --bounds exact "ray[default]==\\${CONTAINER_RAY_VERSION}"'
+    pin = 'uv add --frozen --bounds exact "ray[default]==\\${CONTAINER_RAY_VERSION}"'
     lock = "UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv uv lock"
 
     assert detect in prepare_text
