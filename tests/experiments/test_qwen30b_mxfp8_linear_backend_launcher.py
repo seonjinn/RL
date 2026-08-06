@@ -278,6 +278,11 @@ def test_custom_vllm_build_is_recoverable() -> None:
     assert "setuptools_rust" in build_text
     assert "existing_vllm_valid=false" in prepare_text
     assert "mxfp8_vllm_reuse_state_valid" in prepare_text
+    assert "Preserving polluted custom vLLM checkout" in prepare_text
+    polluted_branch = prepare_text.split(
+        "elif ! mxfp8_assert_vllm_tracked_state 3rdparty/vllm; then", 1
+    )[1].split("else", 1)[0]
+    assert "exit 1" not in polluted_branch
     assert VLLM_BUILD_STATE_MARKER in build_text
     assert build_text.index("cat <<EOF >$BUILD_DIR/nemo-rl.env") < build_text.index(
         'echo "Updating repo pyproject.toml to point vLLM to local clone..."'

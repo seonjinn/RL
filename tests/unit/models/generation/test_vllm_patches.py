@@ -163,3 +163,25 @@ def test_init_workers_ray_reports_success_and_is_idempotent(monkeypatch, tmp_pat
 
     assert patches._patch_vllm_init_workers_ray("py-exec", None) is True
     assert ray_executor.read_text() == once
+
+
+def test_init_workers_ray_does_not_mutate_v1_source_for_ray_v2(
+    monkeypatch, tmp_path
+):
+    """RayExecutorV2 inherits the actor interpreter without a source rewrite."""
+    ray_executor = tmp_path / "ray_executor.py"
+    original = "self._init_workers_ray(placement_group)\n"
+    ray_executor.write_text(original)
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _r: str(ray_executor))
+    monkeypatch.delenv("VLLM_RAY_EXTRA_ENV_VARS_TO_COPY", raising=False)
+
+    assert (
+        patches._patch_vllm_init_workers_ray(
+            "run-specific-python", None, patch_source=False
+        )
+        is False
+    )
+    assert ray_executor.read_text() == original
+    assert os.environ["VLLM_RAY_EXTRA_ENV_VARS_TO_COPY"] == (
+        "RAY_ENABLE_UV_RUN_RUNTIME_ENV"
+    )

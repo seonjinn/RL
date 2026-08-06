@@ -45,8 +45,7 @@ if [[ -d 3rdparty/vllm/.git ]]; then
   if [[ "\${actual}" != "${VLLM_GIT_REF}" ]]; then
     echo "Replacing custom vLLM commit \${actual} with ${VLLM_GIT_REF}"
   elif ! mxfp8_assert_vllm_tracked_state 3rdparty/vllm; then
-    echo "Custom vLLM has disallowed tracked changes" >&2
-    exit 1
+    echo "Preserving polluted custom vLLM checkout before rebuilding" >&2
   else
     if mxfp8_vllm_build_state_matches 3rdparty/vllm && \
         [[ -x 3rdparty/vllm/.venv/bin/python ]] && \
