@@ -16,6 +16,10 @@
 - `session/20260802_122126/files.md` - recorded newly inspected campaign artifacts.
 - `session/20260802_122126/handoff.md` - replaced stale Qwen-only resume instructions with the Nano matrix handoff.
 
+### Generated
+
+- `session/20260802_122126/experiments.tsv` - untracked campaign ledger containing failed stale-container attempts and corrected job IDs.
+
 ## Inspected
 
 - `experiments/cuda_graph/nemotron_thd_te_graph_20260731/README.md` - experiment gates, current Nano result, supported models, and reporting workflow.

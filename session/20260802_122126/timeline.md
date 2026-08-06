@@ -1,5 +1,24 @@
 # Timeline
 
+## 2026-08-05 23:54:00 PDT
+
+- All 12 corrected jobs were running after five minutes.
+- Every row resolved Python 3.13.14, loaded the NeMo-RL config, and initialized all eight vLLM workers without a fatal marker.
+- Generation-side vLLM CUDA Graph capture was active; policy-worker and TE partial-graph initialization remained the next gate.
+
+## 2026-08-05 23:44:30 PDT
+
+- The first matrix reached Ray but all 12 drivers exited before NeMo-RL with `No interpreter found for Python 3.13.14`.
+- Compared successful and failed Slurm logs: successful 100-step jobs used the 2026-08-05 nightly ending in runtime job `5884993`; failed jobs used the direct launcher's stale 2026-08-01 default image.
+- Resubmitted baseline as `5913139` and the other 11 rows as `5913180` through `5913200`, explicitly pinning the known-good `5884993` image.
+
+## 2026-08-05 23:35:00 PDT
+
+- Pushed exact campaign source `e95e40325` to `experiment/nano-cg-4axis-matrix-20260805`.
+- Created fresh recursive OCI-HSG worktree with Bridge `0142aebf` and MCore `281200606`; the six-node scheduler preflight passed.
+- Submitted baseline plus 11 valid four-axis scope rows as 12 independent 20-step jobs under `nemotron_n3_post` with 24 GPUs each, all-to-all dispatch, warmup 3, and checkpoints disabled.
+- After five minutes all 12 jobs were running, seven had launched their Python driver, and no real error marker was present.
+
 ## 2026-08-05 23:21:25 PDT
 
 - User approved rerunning Nano as individual and combined CUDA Graph scopes over `attn`, `mamba`, `moe_router`, and `moe_preprocess`.

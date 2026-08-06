@@ -2,17 +2,19 @@
 
 ## Resume From Here
 
-The active worktree and local `main` are both at `4ed047b48`, which merges
-latest NeMo-RL main with the persistent CUDA Graph bank implementation. The
-next campaign is a matched Nano 20-step four-axis matrix on OCI-HSG. Existing
-scope leaves are sufficient; do not add an ad-hoc launcher.
+The corrected Nano 20-step four-axis matrix is submitted on OCI-HSG from exact
+source `e95e40325`. The campaign manifest is under
+`/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna/experiments/sna-cg-study/nemotron-thd-te-graph-20260805/runs/nano-4axis-matrix/`.
+The original 12 jobs failed before NeMo-RL because the stale 2026-08-01 image
+could not supply Python 3.13.14. The corrected jobs explicitly use the known-good
+2026-08-05 nightly ending in runtime job `5884993`. All corrected rows loaded
+the config and initialized generation workers without fatal errors.
 
 ## Next Actions
 
-- Push the exact source as `experiment/nano-cg-4axis-matrix-20260805`.
-- Create or refresh a clean OCI-HSG checkout recursively at that pushed SHA.
-- Dry-run, then submit baseline plus the 11 valid CUDA Graph scope subsets.
-- Monitor for at least five minutes and record job IDs in `experiments.tsv`.
+- Monitor corrected jobs `5913139`, `5913180`, `5913182`, `5913184`, `5913186`,
+  `5913188`, `5913190`, `5913192`, `5913194`, `5913196`, `5913198`, and
+  `5913200` through policy initialization, first optimizer step, and completion.
 - Collect W&B, CUDA Graph telemetry, peak memory, and correctness metrics into the HTML report.
 
 ## Watch Outs
@@ -23,3 +25,4 @@ scope leaves are sufficient; do not add an ad-hoc launcher.
 - `moe_preprocess` alone is invalid; it must be paired with `moe_router`.
 - Do not assume all-enabled is fastest. Require high cache-hit rate, no bank resets, and correctness parity.
 - Do not compare stochastic reward alone as correctness evidence; include fixed-input graph/eager parity and logprob/KL diagnostics.
+- Do not use the direct launcher's stale default container; pass the `5884993` nightly explicitly.
