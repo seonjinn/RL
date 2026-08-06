@@ -11,7 +11,7 @@ Prepare the custom vLLM checkout at commit
 `ACTION=submit`:
 
 ```bash
-git -C 3rdparty/vllm rev-parse HEAD
+git -C ../../3rdparty/vllm rev-parse HEAD
 ```
 
 The command must print `a76062edee3a3ac23d47a93c7ce466f06a19111f`.

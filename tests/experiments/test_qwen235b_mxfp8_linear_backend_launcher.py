@@ -88,6 +88,80 @@ def test_matrix_submits_each_backend_without_afterok(tmp_path: Path) -> None:
     assert "--dependency=afterok:" not in output
 
 
+def test_matrix_submit_invokes_two_independent_sbatch_jobs(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    sbatch_log = tmp_path / "sbatch.log"
+    fake_sbatch = fake_bin / "sbatch"
+    fake_sbatch.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%q ' \"$@\" >> \"${SBATCH_LOG}\"\n"
+        "printf '\\n' >> \"${SBATCH_LOG}\"\n"
+    )
+    fake_sbatch.chmod(0o755)
+
+    container = tmp_path / "nemo-rl.sqsh"
+    container.touch()
+    custom_vllm = tmp_path / "vllm"
+    subprocess.run(["git", "init", "-q", str(custom_vllm)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(custom_vllm),
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "test",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    expected_vllm_commit = subprocess.check_output(
+        ["git", "-C", str(custom_vllm), "rev-parse", "HEAD"],
+        text=True,
+    ).strip()
+    expected_nemo_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        text=True,
+    ).strip()
+
+    env = os.environ | {
+        "ACTION": "submit",
+        "CONTAINER": str(container),
+        "CUSTOM_VLLM_ROOT": str(custom_vllm),
+        "EXPECTED_NEMO_RL_BASE_COMMIT": expected_nemo_commit,
+        "EXPECTED_VLLM_COMMIT": expected_vllm_commit,
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "RUN_ID": "test-run",
+        "SBATCH_LOG": str(sbatch_log),
+        "WORK_ROOT": str(tmp_path),
+    }
+    env.pop("SLURM_ACCOUNT", None)
+    result = subprocess.run(
+        ["bash", str(MATRIX_LAUNCHER)],
+        check=True,
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    submissions = sbatch_log.read_text().splitlines()
+    assert len(submissions) == 2
+    assert any("--job-name=q235-mx-cutedsl-test-run" in line for line in submissions)
+    assert any("--job-name=q235-mx-cutlass-test-run" in line for line in submissions)
+    assert all("--dependency=" not in line for line in submissions)
+    assert all("afterok" not in line for line in submissions)
+
+
 def test_max_steps_changes_only_the_requested_run_length(tmp_path: Path) -> None:
     smoke = _dry_run(
         tmp_path,
