@@ -80,7 +80,7 @@ CONTAINER_RAY_VERSION=\$(python3 -c 'import ray; print(ray.__version__)')
 echo "Pinning NeMo-RL driver Ray to container version \${CONTAINER_RAY_VERSION}"
 UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv \
   uv add --frozen --bounds exact "ray[default]==\${CONTAINER_RAY_VERSION}"
-uv pip install --python 3rdparty/vllm/.venv/bin/python poetry-dynamic-versioning poetry
+uv pip install --python 3rdparty/vllm/.venv/bin/python poetry-dynamic-versioning poetry pybind11
 UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv uv lock --offline --no-build-isolation
 python3 - "\${CONTAINER_RAY_VERSION}" <<'PY'
 import sys
