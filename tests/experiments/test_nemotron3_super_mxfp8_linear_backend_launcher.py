@@ -172,7 +172,7 @@ def _grpo_overrides(output: str) -> list[str]:
     command_lines: list[str] = []
     collecting = False
     for line in output.splitlines():
-        if line.startswith("uv run --frozen --extra vllm examples/run_grpo.py"):
+        if line.endswith("/bin/python examples/run_grpo.py \\"):
             collecting = True
         if collecting:
             command_lines.append(line)

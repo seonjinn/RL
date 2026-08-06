@@ -83,8 +83,10 @@ fi
 EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${WORK_ROOT}/experiments/nemotron3-super-mxfp8-linear-backends/${RUN_ID}/${BACKEND}}
 CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/.cache/nemotron3-super-mxfp8-linear-backends/${BACKEND}}
 HF_HOME=${HF_HOME:-${WORK_ROOT}/.cache/huggingface}
-DRIVER_VENV=${DRIVER_VENV:-${CACHE_ROOT}/driver-venv}
-WORKER_VENV=${WORKER_VENV:-${WORK_ROOT}/.cache/nemo-rl-vllm0251-worker-venvs}
+SHARED_VENV_ROOT=${SHARED_VENV_ROOT:-${WORK_ROOT}/.cache/nemo-rl-vllm0251-worker-venvs}
+PREBUILT_VLLM_VENV=${PREBUILT_VLLM_VENV:-${SHARED_VENV_ROOT}/nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker}
+DRIVER_VENV=${DRIVER_VENV:-${PREBUILT_VLLM_VENV}}
+WORKER_VENV_ROOT=${WORKER_VENV_ROOT:-${SHARED_VENV_ROOT}}
 WANDB_MODE=${WANDB_MODE:-disabled}
 SUBMIT_NEMO_RL_COMMIT=$(git -C "${REPO_DIR}" rev-parse HEAD)
 SUBMIT_DEPENDENCY_STATE_SHA256=
@@ -174,7 +176,7 @@ export HF_HOME=${HF_HOME}
 export NCCL_NVLS_ENABLE=0
 export RAY_CGRAPH_get_timeout=2400
 export NRL_FORCE_REBUILD_VENVS=false
-export NEMO_RL_VENV_DIR=${WORKER_VENV}
+export NEMO_RL_VENV_DIR=${WORKER_VENV_ROOT}
 export NRL_VENV_BOOTSTRAP_PACKAGES='--torch-backend cu130 torch==2.11.0 numpy setuptools setuptools-rust setuptools-scm'
 export NRL_VENV_NO_BUILD_ISOLATION_PACKAGES=vllm
 export NVTE_CUDA_ARCHS=100
@@ -186,12 +188,13 @@ export WANDB_MODE=${WANDB_MODE}
 source ${CUSTOM_VLLM_ROOT}/nemo-rl.env
 printf 'NEMO_RL_COMMIT=%s\n' "\${runtime_nemo_rl_commit}"
 printf 'VLLM_COMMIT=%s\n' "\${runtime_vllm_commit}"
-if [[ ! -x ${DRIVER_VENV}/bin/python ]]; then
-  uv venv ${DRIVER_VENV}
-fi
-uv pip install --python ${DRIVER_VENV}/bin/python setuptools_rust
+[[ -x ${DRIVER_VENV}/bin/python ]] || {
+  echo "Prepared vLLM environment is missing: ${DRIVER_VENV}" >&2
+  exit 1
+}
+export VIRTUAL_ENV=${DRIVER_VENV}
 export MXFP8_CONTAINER_RAY_VERSION=\$(python3 -c 'import ray; print(ray.__version__)')
-uv run --frozen --extra vllm python - <<'PY'
+${DRIVER_VENV}/bin/python - <<'PY'
 import os
 from pathlib import Path
 
@@ -265,7 +268,7 @@ manifest = {
 manifest_path = Path("${EXPERIMENT_ROOT}/run_manifest.json")
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-uv run --frozen --extra vllm examples/run_grpo.py \
+${DRIVER_VENV}/bin/python examples/run_grpo.py \
   --config ${CONFIG} \
   cluster.num_nodes=${NUM_NODES} \
   cluster.gpus_per_node=${GPUS_PER_NODE} \

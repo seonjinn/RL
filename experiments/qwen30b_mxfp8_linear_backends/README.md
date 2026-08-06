@@ -41,7 +41,9 @@ builder writes `nemo-rl-build-state.sha256` after applying the compatibility
 requirements rewrites. Preparation reuses a checkout only when its commit,
 environment pins, import smoke test, and marker all match the current
 requirements diff; a missing or stale marker forces the checkout to be moved
-aside and rebuilt.
+aside and rebuilt. Preparation also builds the vLLM Python environment once on
+shared Lustre storage. Experiment drivers and Ray workers reuse that environment
+without running `uv sync` or rebuilding the editable vLLM checkout.
 
 Then validate scheduling and submit a short smoke matrix:
 

@@ -86,10 +86,10 @@ def test_dry_run_changes_only_backend(tmp_path: Path) -> None:
         )
         assert "SETUPTOOLS_SCM_PRETEND_VERSION=0.25.1" in output
         assert "--qos=interactive" in output
-        assert output.count("uv run --frozen --extra vllm") == 2
-        assert f"uv venv {tmp_path}" in output
-        assert "uv pip install --python" in output
-        assert "setuptools_rust" in output
+        assert "uv run --frozen --extra vllm" not in output
+        assert "uv venv" not in output
+        assert "uv pip install --python" not in output
+        assert output.count("/bin/python") >= 3
         assert "/.cache/nemo-rl-vllm0251-worker-venvs" in output
         assert "export NRL_FORCE_REBUILD_VENVS=false" in output
 
@@ -353,6 +353,27 @@ def test_launchers_reject_ray_version_drift_before_the_workload() -> None:
         text = launcher.read_text()
         assert "MXFP8_CONTAINER_RAY_VERSION" in text
         assert "Ray version mismatch before workload launch" in text
+
+
+def test_launchers_reuse_prebuilt_vllm_environment_without_syncing() -> None:
+    launchers = (
+        LAUNCHER,
+        REPO_ROOT
+        / "experiments/qwen235b_mxfp8_linear_backends/submit_cluster.sh",
+        REPO_ROOT
+        / "experiments/nemotron3_super_mxfp8_linear_backends/submit_ptyche.sh",
+    )
+
+    for launcher in launchers:
+        text = launcher.read_text()
+        assert "PREBUILT_VLLM_VENV" in text
+        assert "DRIVER_VENV=${DRIVER_VENV:-${PREBUILT_VLLM_VENV}}" in text
+        assert "WORKER_VENV_ROOT=${WORKER_VENV_ROOT:-${SHARED_VENV_ROOT}}" in text
+        assert "uv venv ${DRIVER_VENV}" not in text
+        assert "uv pip install --python ${DRIVER_VENV}" not in text
+        assert "uv run --frozen --extra vllm python" not in text
+        assert "uv run --frozen --extra vllm examples/run_grpo.py" not in text
+        assert "${DRIVER_VENV}/bin/python examples/run_grpo.py" in text
 
 
 def test_preparation_builds_shared_worker_venv_once() -> None:
