@@ -308,6 +308,10 @@ def test_preparation_pins_ray_to_the_container_version() -> None:
         'uv pip install --python 3rdparty/vllm/.venv/bin/python '
         '"ray[default]==\\${CONTAINER_RAY_VERSION}"'
     )
+    limit_lock_environment = (
+        'uv_config["environments"] = ["python_version == \'3.13\' and '
+        'sys_platform == \'linux\' and platform_machine == \'aarch64\'"]'
+    )
     lock = (
         "UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv "
         "uv lock --offline --no-build-isolation"
@@ -317,12 +321,14 @@ def test_preparation_pins_ray_to_the_container_version() -> None:
     assert pin in prepare_text
     assert build_dependency in prepare_text
     assert cache_ray in prepare_text
+    assert limit_lock_environment in prepare_text
     assert "Ray lock mismatch" in prepare_text
     assert (
         prepare_text.index(detect)
         < prepare_text.index(pin)
         < prepare_text.index(build_dependency)
         < prepare_text.index(cache_ray)
+        < prepare_text.index(limit_lock_environment)
         < prepare_text.index(lock)
     )
 

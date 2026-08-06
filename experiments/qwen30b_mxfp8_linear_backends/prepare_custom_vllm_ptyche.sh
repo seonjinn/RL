@@ -82,6 +82,18 @@ UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv \
   uv add --frozen --bounds exact "ray[default]==\${CONTAINER_RAY_VERSION}"
 uv pip install --python 3rdparty/vllm/.venv/bin/python poetry-dynamic-versioning poetry pybind11
 uv pip install --python 3rdparty/vllm/.venv/bin/python "ray[default]==\${CONTAINER_RAY_VERSION}"
+3rdparty/vllm/.venv/bin/python - <<'PY'
+from pathlib import Path
+
+import tomlkit
+
+
+pyproject_path = Path("pyproject.toml")
+document = tomlkit.parse(pyproject_path.read_text())
+uv_config = document["tool"]["uv"]
+uv_config["environments"] = ["python_version == '3.13' and sys_platform == 'linux' and platform_machine == 'aarch64'"]
+pyproject_path.write_text(tomlkit.dumps(document))
+PY
 UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv uv lock --offline --no-build-isolation
 python3 - "\${CONTAINER_RAY_VERSION}" <<'PY'
 import sys
