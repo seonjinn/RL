@@ -74,6 +74,24 @@ def test_refit_prequantize_rejects_non_mxfp8_non_real_quant_rollout():
         )
 
 
+def test_refit_prequantize_rejects_ambiguous_mxfp8_real_quant_rollout():
+    config = _config(refit_prequantize=True)
+    config["real_quant"] = True
+
+    with pytest.raises(
+        ValueError,
+        match="cannot combine real_quant=true with precision='fp8' and is_mx=true",
+    ):
+        validate_vllm_quantization_config(config)
+
+
+def test_refit_prequantize_accepts_mxfp8_with_real_quant_false():
+    config = _config(refit_prequantize=True)
+    config["real_quant"] = False
+
+    validate_vllm_quantization_config(config)
+
+
 def test_refit_prequantize_accepts_colocated_nvfp4_w4a16(monkeypatch):
     monkeypatch.setattr(
         "nemo_rl.modelopt.utils.resolve_nvfp4_real_quant_mode",

@@ -173,6 +173,12 @@ def validate_vllm_quantization_config(config: VllmConfig) -> None:
             "policy.generation.vllm_cfg.refit_prequantize must be a boolean."
         )
     is_mxfp8 = vllm_cfg.get("precision") == "fp8" and vllm_cfg.get("is_mx") is True
+    if refit_prequantize and is_mxfp8 and config.get("real_quant") is True:
+        raise ValueError(
+            "policy.generation.vllm_cfg.refit_prequantize cannot combine "
+            "real_quant=true with precision='fp8' and is_mx=true; choose either "
+            "MXFP8 or real-quant NVFP4."
+        )
     if refit_prequantize and not is_mxfp8:
         if config.get("real_quant") is not True:
             raise ValueError(
