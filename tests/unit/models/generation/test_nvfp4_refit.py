@@ -84,6 +84,220 @@ def test_nvfp4_refit_group_names() -> None:
     )
 
 
+def test_iter_nvfp4_refit_weights_emits_passthrough_and_complete_w13_group(
+    monkeypatch: pytest.MonkeyPatch,
+    _fake_pinned_quant_meta: None,
+) -> None:
+    calls: list[tuple[str, torch.Tensor, object]] = []
+    monkeypatch.setattr(
+        nvfp4_refit,
+        "get_modelopt_quant_exporter",
+        lambda mode: (
+            "modelopt_w4a16_nvfp4",
+            _fake_exporter(calls, with_input_scale=False),
+        ),
+    )
+    norm = "model.layers.0.input_layernorm.weight"
+    gate = "model.layers.0.mlp.experts.3.gate_proj.weight"
+    up = "model.layers.0.mlp.experts.3.up_proj.weight"
+    norm_tensor = torch.ones(32, dtype=torch.bfloat16)
+    gate_tensor = torch.full((32, 16), 2.0, dtype=torch.bfloat16)
+    up_tensor = torch.full((32, 16), 3.0, dtype=torch.bfloat16)
+
+    output = list(
+        nvfp4_refit.iter_bf16_nvfp4_refit_weights(
+            iter([(norm, norm_tensor), (gate, gate_tensor), (up, up_tensor)]),
+            selected_names={gate, up},
+            mode="w4a16",
+            calibration=None,
+        )
+    )
+
+    assert output[0][0] == norm
+    assert output[0][1] is norm_tensor
+    assert [name for name, _ in output[1:]] == [
+        gate,
+        "model.layers.0.mlp.experts.3.gate_proj.weight_scale",
+        "model.layers.0.mlp.experts.3.gate_proj.weight_scale_2",
+        up,
+        "model.layers.0.mlp.experts.3.up_proj.weight_scale",
+        "model.layers.0.mlp.experts.3.up_proj.weight_scale_2",
+    ]
+    assert calls[0][1] is gate_tensor
+    assert calls[1][1] is up_tensor
+
+
+def test_iter_nvfp4_refit_weights_matches_direct_canonical_serialization(
+    monkeypatch: pytest.MonkeyPatch,
+    _fake_pinned_quant_meta: None,
+) -> None:
+    calls: list[tuple[str, torch.Tensor, object]] = []
+    monkeypatch.setattr(
+        nvfp4_refit,
+        "get_modelopt_quant_exporter",
+        lambda mode: (
+            "modelopt_w4a16_nvfp4",
+            _fake_exporter(calls, with_input_scale=False),
+        ),
+    )
+    gate = "model.layers.0.mlp.experts.3.gate_proj.weight"
+    up = "model.layers.0.mlp.experts.3.up_proj.weight"
+    tensors = {
+        gate: torch.full((32, 16), 2.0, dtype=torch.bfloat16),
+        up: torch.full((32, 16), 3.0, dtype=torch.bfloat16),
+    }
+
+    expected = nvfp4_refit.serialize_bf16_nvfp4_group(
+        tensors,
+        mode="w4a16",
+        calibration=None,
+    )
+    actual = list(
+        nvfp4_refit.iter_bf16_nvfp4_refit_weights(
+            tensors.items(),
+            selected_names={gate, up},
+            mode="w4a16",
+            calibration=None,
+        )
+    )
+
+    assert [name for name, _ in actual] == [name for name, _ in expected]
+    for (_, actual_tensor), (_, expected_tensor) in zip(actual, expected, strict=True):
+        assert torch.equal(actual_tensor, expected_tensor)
+
+
+def test_iter_nvfp4_refit_weights_uses_frozen_w4a4_calibration(
+    monkeypatch: pytest.MonkeyPatch,
+    _fake_pinned_quant_meta: None,
+) -> None:
+    calls: list[tuple[str, torch.Tensor, object]] = []
+    monkeypatch.setattr(
+        nvfp4_refit,
+        "get_modelopt_quant_exporter",
+        lambda mode: ("modelopt_nvfp4", _fake_exporter(calls, with_input_scale=True)),
+    )
+    monkeypatch.setattr(
+        nvfp4_refit,
+        "compute_nvfp4_input_scale",
+        lambda value: torch.tensor(0.25),
+    )
+    gate = "model.layers.0.mlp.experts.3.gate_proj.weight"
+    up = "model.layers.0.mlp.experts.3.up_proj.weight"
+    gate_amax = torch.tensor(10.0)
+    up_amax = torch.tensor(20.0)
+
+    output = list(
+        nvfp4_refit.iter_bf16_nvfp4_refit_weights(
+            [
+                (gate, torch.ones((32, 16), dtype=torch.bfloat16)),
+                (up, torch.ones((32, 16), dtype=torch.bfloat16)),
+            ],
+            selected_names={gate, up},
+            mode="w4a4",
+            calibration=nvfp4_refit.NVFP4Calibration({gate: gate_amax, up: up_amax}),
+        )
+    )
+
+    assert [name for name, _ in output] == [
+        gate,
+        "model.layers.0.mlp.experts.3.gate_proj.weight_scale",
+        "model.layers.0.mlp.experts.3.gate_proj.weight_scale_2",
+        "model.layers.0.mlp.experts.3.gate_proj.input_scale",
+        up,
+        "model.layers.0.mlp.experts.3.up_proj.weight_scale",
+        "model.layers.0.mlp.experts.3.up_proj.weight_scale_2",
+        "model.layers.0.mlp.experts.3.up_proj.input_scale",
+    ]
+    assert calls[0][2].input_amax is gate_amax
+    assert calls[1][2].input_amax is up_amax
+
+
+def test_iter_nvfp4_refit_weights_rejects_duplicate_selected_weight() -> None:
+    name = "model.layers.0.mlp.experts.3.gate_proj.weight"
+    paired_name = "model.layers.0.mlp.experts.3.up_proj.weight"
+    tensor = torch.ones((32, 16), dtype=torch.bfloat16)
+
+    with pytest.raises(ValueError, match="duplicate requested weight"):
+        list(
+            nvfp4_refit.iter_bf16_nvfp4_refit_weights(
+                [(name, tensor), (name, tensor)],
+                selected_names={name, paired_name},
+                mode="w4a16",
+                calibration=None,
+            )
+        )
+
+
+def test_iter_nvfp4_refit_weights_rejects_requested_weight_missing_from_export() -> (
+    None
+):
+    selected = "model.layers.0.mlp.down_proj.weight"
+    norm = "model.layers.0.input_layernorm.weight"
+
+    with pytest.raises(ValueError, match="did not export requested weights"):
+        list(
+            nvfp4_refit.iter_bf16_nvfp4_refit_weights(
+                [(norm, torch.ones(32, dtype=torch.bfloat16))],
+                selected_names={selected},
+                mode="w4a16",
+                calibration=None,
+            )
+        )
+
+
+def test_iter_nvfp4_refit_weights_rejects_incomplete_selected_gate_up_group() -> None:
+    gate = "model.layers.0.mlp.experts.3.gate_proj.weight"
+
+    with pytest.raises(ValueError, match="ended with incomplete groups"):
+        list(
+            nvfp4_refit.iter_bf16_nvfp4_refit_weights(
+                [(gate, torch.ones((32, 16), dtype=torch.bfloat16))],
+                selected_names={gate},
+                mode="w4a16",
+                calibration=None,
+            )
+        )
+
+
+def test_iter_nvfp4_refit_weights_rejects_non_bf16_selected_tensor() -> None:
+    name = "model.layers.0.mlp.down_proj.weight"
+
+    with pytest.raises(ValueError, match="expected BF16 tensor"):
+        list(
+            nvfp4_refit.iter_bf16_nvfp4_refit_weights(
+                [(name, torch.ones((32, 16)))],
+                selected_names={name},
+                mode="w4a16",
+                calibration=None,
+            )
+        )
+
+
+def test_iter_nvfp4_refit_weights_skips_serializer_for_empty_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_serializer(
+        *args: object, **kwargs: object
+    ) -> list[tuple[str, torch.Tensor]]:
+        raise AssertionError("serializer must not run for an empty selection")
+
+    monkeypatch.setattr(nvfp4_refit, "serialize_bf16_nvfp4_group", fail_serializer)
+    name = "model.layers.0.mlp.down_proj.weight"
+    tensor = torch.ones((32, 16), dtype=torch.bfloat16)
+
+    output = list(
+        nvfp4_refit.iter_bf16_nvfp4_refit_weights(
+            [(name, tensor)],
+            selected_names=set(),
+            mode="w4a16",
+            calibration=None,
+        )
+    )
+
+    assert output[0][0] == name
+    assert output[0][1] is tensor
+
+
 def test_serialize_singleton_down_projection_uses_exact_canonical_family(
     monkeypatch: pytest.MonkeyPatch,
     _fake_pinned_quant_meta: None,

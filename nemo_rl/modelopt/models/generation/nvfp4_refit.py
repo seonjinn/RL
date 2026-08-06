@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -136,6 +136,63 @@ def nvfp4_refit_group(name: str) -> tuple[str, tuple[str, ...]]:
     gate_name = f"{prefix}.gate_proj.weight"
     up_name = f"{prefix}.up_proj.weight"
     return f"{prefix}.w13", (gate_name, up_name)
+
+
+def iter_bf16_nvfp4_refit_weights(
+    weights: Iterable[tuple[str, torch.Tensor]],
+    *,
+    selected_names: Collection[str],
+    mode: NVFP4RefitMode,
+    calibration: NVFP4Calibration | None,
+) -> Iterator[tuple[str, torch.Tensor]]:
+    """Serialize selected BF16 weights as complete canonical NVFP4 groups.
+
+    Unselected weights are yielded unchanged. Selected weights are retained only
+    until all logical members of their refit group have arrived, then emitted in
+    the canonical ModelOpt serialization order.
+    """
+    pending_by_group: dict[str, dict[str, torch.Tensor]] = {}
+    seen_selected: set[str] = set()
+    remaining_selected = set(selected_names)
+
+    for name, tensor in weights:
+        if name in seen_selected:
+            raise ValueError(
+                "NVFP4 refit source iterator received duplicate requested weight: "
+                f"{name!r}"
+            )
+        if name not in remaining_selected:
+            yield name, tensor
+            continue
+        if tensor.dtype != torch.bfloat16:
+            raise ValueError(
+                "NVFP4 refit source iterator expected BF16 tensor for selected "
+                f"weight {name!r}, got {tensor.dtype}"
+            )
+
+        seen_selected.add(name)
+        remaining_selected.remove(name)
+        group_name, expected_names = nvfp4_refit_group(name)
+        group_tensors = pending_by_group.setdefault(group_name, {})
+        group_tensors[name] = tensor
+        if set(group_tensors) == set(expected_names):
+            yield from serialize_bf16_nvfp4_group(
+                group_tensors,
+                mode=mode,
+                calibration=calibration,
+            )
+            del pending_by_group[group_name]
+
+    missing = sorted(remaining_selected)
+    if missing:
+        raise ValueError(
+            f"NVFP4 refit source iterator did not export requested weights: {missing}"
+        )
+    if pending_by_group:
+        details = _format_incomplete_groups(pending_by_group)
+        raise ValueError(
+            f"NVFP4 refit source iterator ended with incomplete groups: {details}"
+        )
 
 
 def serialize_bf16_nvfp4_group(
@@ -275,6 +332,17 @@ def _validate_group_members(
         detail = f"missing {missing}" if missing else f"unexpected {extra}"
         raise ValueError(f"NVFP4 group {group_name} is not complete: {detail}")
     return group_name, expected_names
+
+
+def _format_incomplete_groups(
+    pending_by_group: Mapping[str, Mapping[str, torch.Tensor]],
+) -> str:
+    details: list[str] = []
+    for group_name, tensors in sorted(pending_by_group.items()):
+        expected_names = nvfp4_refit_group(next(iter(tensors)))[1]
+        missing = sorted(set(expected_names).difference(tensors))
+        details.append(f"{group_name}: missing {missing}")
+    return "; ".join(details)
 
 
 def _validate_weight_shapes(
