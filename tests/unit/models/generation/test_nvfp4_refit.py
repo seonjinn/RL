@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import gc
 import os
 import sys
+import weakref
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -125,6 +127,50 @@ def test_iter_nvfp4_refit_weights_emits_passthrough_and_complete_w13_group(
     ]
     assert calls[0][1] is gate_tensor
     assert calls[1][1] is up_tensor
+
+
+def test_iter_nvfp4_refit_weights_releases_completed_source_group_before_yield(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gate = "model.layers.0.mlp.experts.3.gate_proj.weight"
+    up = "model.layers.0.mlp.experts.3.up_proj.weight"
+
+    class PoppingWeights:
+        def __init__(self) -> None:
+            gate_tensor = torch.ones((32, 16), dtype=torch.bfloat16)
+            up_tensor = torch.ones((32, 16), dtype=torch.bfloat16)
+            self.references = (weakref.ref(gate_tensor), weakref.ref(up_tensor))
+            self.entries: list[tuple[str, torch.Tensor]] = [
+                (gate, gate_tensor),
+                (up, up_tensor),
+            ]
+
+        def __iter__(self) -> PoppingWeights:
+            return self
+
+        def __next__(self) -> tuple[str, torch.Tensor]:
+            if not self.entries:
+                raise StopIteration
+            return self.entries.pop(0)
+
+    monkeypatch.setattr(
+        nvfp4_refit,
+        "serialize_bf16_nvfp4_group",
+        lambda tensors, *, mode, calibration: [
+            ("model.layers.0.mlp.experts.3.gate_proj.weight", torch.zeros(1))
+        ],
+    )
+    weights = PoppingWeights()
+    iterator = nvfp4_refit.iter_bf16_nvfp4_refit_weights(
+        weights,
+        selected_names={gate, up},
+        mode="w4a16",
+        calibration=None,
+    )
+
+    assert next(iterator)[0] == gate
+    gc.collect()
+    assert all(reference() is None for reference in weights.references)
 
 
 def test_iter_nvfp4_refit_weights_matches_direct_canonical_serialization(

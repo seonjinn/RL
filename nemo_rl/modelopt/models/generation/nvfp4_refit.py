@@ -176,12 +176,15 @@ def iter_bf16_nvfp4_refit_weights(
         group_tensors = pending_by_group.setdefault(group_name, {})
         group_tensors[name] = tensor
         if set(group_tensors) == set(expected_names):
-            yield from serialize_bf16_nvfp4_group(
+            serialized = serialize_bf16_nvfp4_group(
                 group_tensors,
                 mode=mode,
                 calibration=calibration,
             )
             del pending_by_group[group_name]
+            del group_tensors
+            del tensor
+            yield from serialized
 
     missing = sorted(remaining_selected)
     if missing:
