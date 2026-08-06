@@ -302,7 +302,7 @@ def test_preparation_pins_ray_to_the_container_version() -> None:
     pin = 'uv add --frozen --bounds exact "ray[default]==\\${CONTAINER_RAY_VERSION}"'
     build_dependency = (
         "uv pip install --python 3rdparty/vllm/.venv/bin/python "
-        "poetry-dynamic-versioning"
+        "poetry-dynamic-versioning poetry"
     )
     lock = (
         "UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv "
