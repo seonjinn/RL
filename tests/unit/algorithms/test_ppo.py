@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from unittest.mock import MagicMock
+
+from omegaconf import OmegaConf
 import pytest
 import torch
 
@@ -25,6 +28,126 @@ from nemo_rl.algorithms.loss.loss_functions import (
     MseValueLossFn,
 )
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+from nemo_rl.utils.config import load_config, register_omegaconf_resolvers
+
+
+def test_setup_refreshes_generation_metadata_after_source_transform(monkeypatch):
+    from nemo_rl.algorithms import ppo as ppo_mod
+
+    register_omegaconf_resolvers()
+    raw_config = load_config("examples/configs/ppo_math_1B_megatron.yaml")
+    master_config = ppo_mod.MasterConfig(
+        **OmegaConf.to_container(raw_config, resolve=True)
+    )
+    master_config.ppo["val_period"] = 0
+    master_config.ppo["val_at_start"] = False
+    master_config.ppo["val_at_end"] = False
+    master_config.checkpointing["enabled"] = False
+    master_config.data["shuffle"] = False
+    master_config.data["num_workers"] = 0
+
+    initial_info = {"model.weight": ((32, 16), torch.bfloat16)}
+    packed_info = {"model.weight": ((32, 8), torch.uint8)}
+    transform_request = object()
+    created_policies = []
+    created_generations = []
+
+    class DummyLogger:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def log_hyperparams(self, *_args, **_kwargs):
+            pass
+
+        def log_metrics(self, *_args, **_kwargs):
+            pass
+
+    class DummyCheckpointer:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def get_latest_checkpoint_path(self):
+            return None
+
+        def load_training_info(self, _path):
+            return None
+
+        def get_resume_paths(self, _path, **_kwargs):
+            return None, None
+
+    class DummyLoader:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def __len__(self):
+            return 1
+
+    class DummyCluster:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+    class DummyPolicy:
+        def __init__(self, *args, **kwargs):
+            self.cfg = kwargs["config"]
+            self.enabled_requests = []
+            created_policies.append(self)
+
+        def offload_to_cpu(self):
+            pass
+
+        def print_node_ip_and_gpu_id(self):
+            pass
+
+        def prepare_for_training(self):
+            pass
+
+        def prepare_refit_info(self):
+            return initial_info
+
+        def enable_refit_transforms(self, *, requests):
+            self.enabled_requests.append(requests)
+            return packed_info
+
+    class DummyValue:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def finish_training(self):
+            pass
+
+    class DummyGeneration:
+        def __init__(self, *args, **kwargs):
+            self.prepare_refit_info_calls = []
+            created_generations.append(self)
+
+        def finish_generation(self):
+            pass
+
+        def prepare_refit_info(self, state_dict_info):
+            self.prepare_refit_info_calls.append(state_dict_info)
+            if len(self.prepare_refit_info_calls) == 1:
+                return [transform_request]
+            return None
+
+    monkeypatch.setattr(ppo_mod, "Logger", DummyLogger)
+    monkeypatch.setattr(ppo_mod, "CheckpointManager", DummyCheckpointer)
+    monkeypatch.setattr(ppo_mod, "StatefulDataLoader", DummyLoader)
+    monkeypatch.setattr(ppo_mod, "RayVirtualCluster", DummyCluster)
+    monkeypatch.setattr(ppo_mod, "Policy", DummyPolicy)
+    monkeypatch.setattr(ppo_mod, "Value", DummyValue)
+    monkeypatch.setattr(ppo_mod, "VllmGeneration", DummyGeneration)
+    monkeypatch.setattr(ppo_mod, "ClippedPGLossFn", MagicMock)
+    monkeypatch.setattr(ppo_mod, "MseValueLossFn", MagicMock)
+
+    dataset = MagicMock()
+    dataset.__len__.return_value = 1
+    ppo_mod.setup(master_config, MagicMock(), dataset, None)
+
+    assert created_policies[0].enabled_requests == [[transform_request]]
+    assert created_generations[0].prepare_refit_info_calls == [
+        initial_info,
+        packed_info,
+    ]
 
 
 def _make_loss_config(

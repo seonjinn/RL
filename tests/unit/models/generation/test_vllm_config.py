@@ -35,6 +35,25 @@ def _config(**vllm_overrides: object) -> VllmConfig:
     )
 
 
+def _nvfp4_config(**overrides: object) -> VllmConfig:
+    return cast(
+        VllmConfig,
+        {
+            "vllm_cfg": {
+                "precision": "bfloat16",
+                "refit_prequantize": True,
+            },
+            "quant_cfg": (
+                "examples/modelopt/quant_configs/nvfp4_experts_weightonly.yaml"
+            ),
+            "real_quant": True,
+            "refit_transport": None,
+            "colocated": {"enabled": True, "resources": {}},
+            **overrides,
+        },
+    )
+
+
 @pytest.mark.parametrize(
     "field",
     [
@@ -48,11 +67,102 @@ def test_refit_optimization_flags_require_boolean(field):
         validate_vllm_quantization_config(_config(**{field: "yes"}))
 
 
-def test_refit_prequantize_requires_mxfp8_rollout():
-    with pytest.raises(ValueError, match="requires precision='fp8' and is_mx=true"):
+def test_refit_prequantize_rejects_non_mxfp8_non_real_quant_rollout():
+    with pytest.raises(ValueError, match="real_quant=true"):
         validate_vllm_quantization_config(
             _config(precision="bf16", is_mx=False, refit_prequantize=True)
         )
+
+
+def test_refit_prequantize_accepts_colocated_nvfp4_w4a16(monkeypatch):
+    monkeypatch.setattr(
+        "nemo_rl.modelopt.utils.resolve_nvfp4_real_quant_mode",
+        lambda _quant_cfg: "w4a16",
+    )
+
+    validate_vllm_quantization_config(_nvfp4_config())
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error_match"),
+    [
+        ({"real_quant": False}, "real_quant=true"),
+        ({"quant_cfg": None}, "non-empty quant_cfg"),
+        (
+            {"colocated": {"enabled": False, "resources": {}}},
+            "colocated.enabled=true",
+        ),
+        ({"refit_transport": "nccl_reshard"}, "refit_transport=null"),
+    ],
+    ids=("fake-quant", "missing-quant-config", "non-colocated", "nccl-reshard"),
+)
+def test_refit_prequantize_rejects_unsupported_nvfp4_topology(
+    monkeypatch, overrides, error_match
+):
+    monkeypatch.setattr(
+        "nemo_rl.modelopt.utils.resolve_nvfp4_real_quant_mode",
+        lambda _quant_cfg: "w4a16",
+    )
+
+    with pytest.raises(ValueError, match=error_match):
+        validate_vllm_quantization_config(_nvfp4_config(**overrides))
+
+
+def test_refit_prequantize_rejects_non_nvfp4_quant_config(monkeypatch):
+    def reject_quant_config(_quant_cfg):
+        raise ValueError("supports only block-16 NVFP4 weights")
+
+    monkeypatch.setattr(
+        "nemo_rl.modelopt.utils.resolve_nvfp4_real_quant_mode",
+        reject_quant_config,
+    )
+
+    with pytest.raises(ValueError, match="supports only block-16 NVFP4"):
+        validate_vllm_quantization_config(_nvfp4_config())
+
+
+def test_refit_prequantize_accepts_w4a4_with_frozen_artifact_provenance(monkeypatch):
+    monkeypatch.setattr(
+        "nemo_rl.modelopt.utils.resolve_nvfp4_real_quant_mode",
+        lambda _quant_cfg: "w4a4",
+    )
+
+    validate_vllm_quantization_config(
+        _nvfp4_config(
+            quant_cfg="examples/modelopt/quant_configs/nvfp4_experts.yaml",
+            model_name="org/model",
+            vllm_kwargs={"revision": "0123456789abcdef"},
+            real_quant_calibration_path="/artifacts/calibration.safetensors",
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "missing_field"),
+    [
+        ({"model_name": ""}, "model_name"),
+        ({"vllm_kwargs": {}}, "vllm_kwargs.revision"),
+        ({"real_quant_calibration_path": ""}, "real_quant_calibration_path"),
+    ],
+    ids=("model", "revision", "artifact"),
+)
+def test_refit_prequantize_w4a4_requires_frozen_artifact_provenance(
+    monkeypatch, overrides, missing_field
+):
+    monkeypatch.setattr(
+        "nemo_rl.modelopt.utils.resolve_nvfp4_real_quant_mode",
+        lambda _quant_cfg: "w4a4",
+    )
+    config = _nvfp4_config(
+        quant_cfg="examples/modelopt/quant_configs/nvfp4_experts.yaml",
+        model_name="org/model",
+        vllm_kwargs={"revision": "0123456789abcdef"},
+        real_quant_calibration_path="/artifacts/calibration.safetensors",
+    )
+    config.update(cast(VllmConfig, overrides))
+
+    with pytest.raises(ValueError, match=missing_field):
+        validate_vllm_quantization_config(config)
 
 
 def test_valid_refit_optimization_flags():

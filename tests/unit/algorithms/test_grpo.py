@@ -1947,6 +1947,12 @@ def test_setup_auto_enables_skip_reference_policy_logprobs_when_kl_penalty_zero(
 ):
     from nemo_rl.algorithms import grpo as grpo_mod
 
+    initial_info = {"model.weight": ((32, 16), torch.bfloat16)}
+    packed_info = {"model.weight": ((32, 8), torch.uint8)}
+    transform_request = object()
+    created_policies = []
+    created_generations = []
+
     class DummyLogger:
         def log_hyperparams(self, *_args, **_kwargs):
             pass
@@ -1985,6 +1991,11 @@ def test_setup_auto_enables_skip_reference_policy_logprobs_when_kl_penalty_zero(
             return "127.0.0.1", 1234
 
     class DummyPolicy:
+        def __init__(self):
+            self.cfg = {"megatron_cfg": {"enabled": True}}
+            self.enabled_requests = []
+            created_policies.append(self)
+
         def print_node_ip_and_gpu_id(self):
             pass
 
@@ -1992,7 +2003,11 @@ def test_setup_auto_enables_skip_reference_policy_logprobs_when_kl_penalty_zero(
             return []
 
         def prepare_refit_info(self):
-            return {}
+            return initial_info
+
+        def enable_refit_transforms(self, *, requests):
+            self.enabled_requests.append(requests)
+            return packed_info
 
         def set_rollout_num_gpus_per_engine(self, _num_gpus_per_engine):
             pass
@@ -2000,11 +2015,18 @@ def test_setup_auto_enables_skip_reference_policy_logprobs_when_kl_penalty_zero(
     class DummySGLangGeneration:
         num_gpus_per_engine = 1
 
+        def __init__(self):
+            self.prepare_refit_info_calls = []
+            created_generations.append(self)
+
         def finish_generation(self):
             pass
 
-        def prepare_refit_info(self, _state):
-            pass
+        def prepare_refit_info(self, state):
+            self.prepare_refit_info_calls.append(state)
+            if len(self.prepare_refit_info_calls) == 1:
+                return [transform_request]
+            return None
 
         def init_collective(self, *_args, **_kwargs):
             return []
@@ -2062,6 +2084,11 @@ def test_setup_auto_enables_skip_reference_policy_logprobs_when_kl_penalty_zero(
     grpo_mod.setup(master_config, tokenizer, dataset, None)
 
     assert master_config.grpo.skip_reference_policy_logprobs_calculation is True
+    assert created_policies[0].enabled_requests == [[transform_request]]
+    assert created_generations[0].prepare_refit_info_calls == [
+        initial_info,
+        packed_info,
+    ]
 
 
 def test_grpo_train_collects_generation_logger_and_seq_metrics(

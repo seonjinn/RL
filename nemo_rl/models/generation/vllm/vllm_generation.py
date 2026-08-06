@@ -928,9 +928,9 @@ class VllmGeneration(GenerationInterface):
         """Prepare the info for refit.
 
         Returns:
-            When MXFP8 trainer-side pre-quantization is enabled
-            (vllm_cfg.refit_prequantize), the parameter names the engine wants
-            quantized on the trainer before streaming. None otherwise.
+            When trainer-side MXFP8 or NVFP4 prequantization is enabled through
+            ``vllm_cfg.refit_prequantize``, the transform requests required by
+            generation. None otherwise.
         """
         if state_dict_info is None:
             return None

@@ -885,9 +885,14 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
         self,
         state_dict_info: dict[str, Any],
         serialized_fp8_config: dict[str, Any] | None = None,
+        refit_prequantize: bool = False,
     ) -> RefitTransformResponse:
         if not self._is_real_quant_model():
-            return super().prepare_refit_info(state_dict_info, serialized_fp8_config)
+            return super().prepare_refit_info(
+                state_dict_info,
+                serialized_fp8_config,
+                refit_prequantize,
+            )
         self.state_dict_info = state_dict_info
         quant_config = (
             self.model_runner.vllm_config.model_config.hf_config.quantization_config
@@ -912,7 +917,11 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
         self._nrl_collective_group_members = {}
         self._nrl_collective_grouped_projections = {}
         self._nrl_collective_bf16_staging = {}
-        if self._nrl_real_quant_source == "bf16" and self._nrl_bf16_mode == "w4a4":
+        if (
+            self._nrl_real_quant_source == "bf16"
+            and self._nrl_bf16_mode == "w4a4"
+            and not refit_prequantize
+        ):
             calibration_path = os.environ.get("VLLM_MODELOPT_CALIBRATION_PATH")
             if not calibration_path:
                 raise ValueError(
@@ -952,7 +961,9 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
                     parameter_names=tuple(sorted(self._nrl_bf16_quantizable_names)),
                     source_format="bf16",
                     target_format=f"nvfp4_{self._nrl_bf16_mode}",
-                    transform_location="destination",
+                    transform_location=(
+                        "source" if refit_prequantize else "destination"
+                    ),
                 )
             ]
         return None

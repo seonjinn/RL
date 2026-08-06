@@ -463,12 +463,17 @@ class VllmInternalWorkerExtension:
         self,
         state_dict_info: dict[str, Any],
         serialized_fp8_config: Optional[dict[str, Any]] = None,
+        refit_prequantize: bool = False,
     ) -> RefitTransformResponse:
         """Prepare state dict metadata for weight refitting and IPC streaming.
 
         Args:
             state_dict_info (dict): A dictionary containing the info for refit.
                 e.g. {tensor_name: (shape, dtype)}
+            serialized_fp8_config: Serialized MXFP8 configuration, when present.
+            refit_prequantize: Whether the validated generation configuration
+                requests source-owned prequantization. Base workers accept but
+                do not otherwise consume this real-quant negotiation flag.
         """
         self.state_dict_info = state_dict_info  # pyrefly: ignore[implicitly-defined-attribute]  This class does not define __init__ so assignments like this should be ignored
 

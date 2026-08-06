@@ -1507,7 +1507,8 @@ def test_real_quant_prepare_refit_classifies_bf16_manifest(monkeypatch):
     requests = extension.prepare_refit_info(
         _bf16_weight_info(
             "q_proj.weight",
-        )
+        ),
+        refit_prequantize=False,
     )
 
     assert extension._nrl_real_quant_source == "bf16"
@@ -1517,6 +1518,95 @@ def test_real_quant_prepare_refit_classifies_bf16_manifest(monkeypatch):
     assert requests[0].source_format == "bf16"
     assert requests[0].target_format == "nvfp4_w4a16"
     assert requests[0].transform_location == "destination"
+
+
+@pytest.mark.parametrize(
+    ("quant_algo", "target_format", "include_input_scale"),
+    [
+        ("W4A16_NVFP4", "nvfp4_w4a16", False),
+        ("NVFP4", "nvfp4_w4a4", True),
+    ],
+    ids=("w4a16", "w4a4"),
+)
+def test_real_quant_prepacked_two_stage_handshake_uses_source_direct_load(
+    monkeypatch,
+    quant_algo,
+    target_format,
+    include_input_scale,
+):
+    backend = _import_vllm_quant_backend(monkeypatch)
+    model = torch.nn.Module()
+    model.q_proj = _mark_as_modelopt_layer(torch.nn.Linear(16, 32, bias=False))
+    extension = _make_real_quant_extension(
+        backend,
+        model,
+        [],
+        quant_algo=quant_algo,
+    )
+    _patch_real_quant_load(monkeypatch, backend)
+    monkeypatch.setattr(
+        backend,
+        "load_nvfp4_calibration",
+        lambda *_args, **_kwargs: pytest.fail(
+            "source-owned NVFP4 must not load receiver-side BF16 calibration"
+        ),
+        raising=False,
+    )
+
+    requests = extension.prepare_refit_info(
+        _bf16_weight_info("q_proj.weight"),
+        serialized_fp8_config=None,
+        refit_prequantize=True,
+    )
+
+    assert requests == [
+        backend.RefitTransformRequest(
+            parameter_names=("q_proj.weight",),
+            source_format="bf16",
+            target_format=target_format,
+            transform_location="source",
+        )
+    ]
+
+    packed_info = _packed_weight_info("q_proj")
+    packed_weights = [
+        ("q_proj.weight", torch.ones((32, 8), dtype=torch.uint8)),
+        (
+            "q_proj.weight_scale",
+            torch.ones((32, 1), dtype=torch.float8_e4m3fn),
+        ),
+        ("q_proj.weight_scale_2", torch.tensor(1.0)),
+    ]
+    if include_input_scale:
+        packed_info["q_proj.input_scale"] = ((), torch.float32)
+        packed_weights.append(("q_proj.input_scale", torch.tensor(0.5)))
+
+    assert (
+        extension.prepare_refit_info(
+            packed_info,
+            serialized_fp8_config=None,
+            refit_prequantize=True,
+        )
+        is None
+    )
+    assert extension._nrl_real_quant_source == "modelopt"
+
+    monkeypatch.setattr(
+        extension,
+        "_load_bf16_weights",
+        lambda *_args, **_kwargs: pytest.fail(
+            "prepacked ModelOpt weights must bypass BF16 quantization"
+        ),
+    )
+    forwarded = []
+    monkeypatch.setattr(
+        backend.VllmInternalWorkerExtension,
+        "_load_weights",
+        lambda _self, weights: forwarded.extend(weights) or "loaded",
+    )
+
+    assert extension._load_weights(packed_weights) == "loaded"
+    assert [name for name, _ in forwarded] == [name for name, _ in packed_weights]
 
 
 def test_real_quant_bf16_w4a4_prepare_requires_calibration_path(monkeypatch):

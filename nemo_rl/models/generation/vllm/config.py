@@ -36,7 +36,7 @@ class VllmSpecificArgs(TypedDict):
     precision: NotRequired[str]
     # Use ModelOpt MXFP8 quantization when precision is fp8.
     is_mx: NotRequired[bool]
-    # Quantize eligible weights on the trainer before MXFP8 refit transfer.
+    # Quantize eligible weights on the trainer before MXFP8 or NVFP4 refit.
     refit_prequantize: NotRequired[bool]
     # Batch MXFP8 MoE layout transforms across experts during refit.
     refit_batched_moe_shuffle: NotRequired[bool]
@@ -172,13 +172,65 @@ def validate_vllm_quantization_config(config: VllmConfig) -> None:
         raise ValueError(
             "policy.generation.vllm_cfg.refit_prequantize must be a boolean."
         )
-    if refit_prequantize and not (
-        vllm_cfg.get("precision") == "fp8" and vllm_cfg.get("is_mx") is True
-    ):
-        raise ValueError(
-            "policy.generation.vllm_cfg.refit_prequantize requires "
-            "precision='fp8' and is_mx=true."
-        )
+    is_mxfp8 = vllm_cfg.get("precision") == "fp8" and vllm_cfg.get("is_mx") is True
+    if refit_prequantize and not is_mxfp8:
+        if config.get("real_quant") is not True:
+            raise ValueError(
+                "policy.generation.vllm_cfg.refit_prequantize for NVFP4 requires "
+                "policy.generation.real_quant=true; supported settings are MXFP8 "
+                "or colocated real-quant NVFP4 over CUDA IPC."
+            )
+
+        quant_cfg = config.get("quant_cfg")
+        if not isinstance(quant_cfg, str) or not quant_cfg:
+            raise ValueError(
+                "policy.generation.vllm_cfg.refit_prequantize for NVFP4 requires "
+                "a non-empty quant_cfg."
+            )
+
+        colocated = config.get("colocated")
+        if colocated is None or colocated.get("enabled") is not True:
+            raise ValueError(
+                "policy.generation.vllm_cfg.refit_prequantize for NVFP4 requires "
+                "policy.generation.colocated.enabled=true."
+            )
+        if config.get("refit_transport") is not None:
+            raise ValueError(
+                "policy.generation.vllm_cfg.refit_prequantize for NVFP4 requires "
+                "policy.generation.refit_transport=null for colocated CUDA IPC."
+            )
+
+        from nemo_rl.modelopt.utils import resolve_nvfp4_real_quant_mode
+
+        try:
+            mode = resolve_nvfp4_real_quant_mode(quant_cfg)
+        except ValueError as error:
+            raise ValueError(
+                "policy.generation.quant_cfg must resolve to real-quant NVFP4 "
+                "W4A16 or W4A4 when vllm_cfg.refit_prequantize=true: "
+                f"{error}"
+            ) from error
+
+        if mode == "w4a4":
+            vllm_kwargs = config.get("vllm_kwargs") or {}
+            provenance = (
+                ("model_name", config.get("model_name")),
+                ("vllm_kwargs.revision", vllm_kwargs.get("revision")),
+                (
+                    "real_quant_calibration_path",
+                    config.get("real_quant_calibration_path"),
+                ),
+            )
+            missing = [
+                name
+                for name, value in provenance
+                if not isinstance(value, str) or not value
+            ]
+            if missing:
+                raise ValueError(
+                    "policy.generation.vllm_cfg.refit_prequantize for NVFP4 W4A4 "
+                    "requires frozen artifact provenance fields: " + ", ".join(missing)
+                )
     for field in ("refit_batched_moe_shuffle", "refit_cache_loader_routes"):
         value = vllm_cfg.get(field)
         if value is not None and not isinstance(value, bool):

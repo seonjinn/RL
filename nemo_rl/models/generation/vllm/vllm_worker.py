@@ -1101,9 +1101,14 @@ class VllmGenerationWorkerImpl(VllmCheckpointEngineRpcMixin, BaseVllmGenerationW
         """Prepare the info for refit."""
         from nemo_rl.models.generation.vllm.quantization import fp8
 
+        refit_prequantize = bool(self.cfg["vllm_cfg"].get("refit_prequantize", False))
         results = self.llm.collective_rpc(
             "prepare_refit_info",
-            args=(state_dict_info, fp8.serialize_fp8_config()),
+            args=(
+                state_dict_info,
+                fp8.serialize_fp8_config(),
+                refit_prequantize,
+            ),
         )
         return merge_refit_transform_requests(results) or None
 

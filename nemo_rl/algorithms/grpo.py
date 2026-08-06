@@ -131,6 +131,7 @@ from nemo_rl.weight_sync.checkpoint_engine_config import (
     checkpoint_engine_refit_config,
 )
 from nemo_rl.weight_sync.factory import create_weight_synchronizer
+from nemo_rl.weight_sync.interfaces import initialize_refit_metadata
 
 # ===============================================================================
 # Configuration
@@ -395,6 +396,7 @@ def setup(
     assert generation_config is not None, (
         "A generation config in the PolicyConfig is required for GRPO"
     )
+    generation_config["model_name"] = policy_config["model_name"]
     if generation_config["backend"] == "vllm":
         normalize_vllm_refit_config(cast(VllmConfig, generation_config))
 
@@ -937,7 +939,6 @@ def setup(
 
     # vllm model loading prefers clean environment, initialize policy_generation before policy in colocated mode
     backend = generation_config["backend"]
-    generation_config["model_name"] = policy_config["model_name"]  # Needed for vLLM
     remote_transport = None
     remote_synchronizer_cls = None
     remote_baseline_init_refs: list[Any] = []
@@ -1439,9 +1440,10 @@ def setup(
         )
     else:
         if not (nccl_reshard_refit_enabled and not colocated_inference):
-            state_dict_info = policy.prepare_refit_info()
-            if policy_generation is not None:
-                policy_generation.prepare_refit_info(state_dict_info)
+            if policy_generation is None:
+                policy.prepare_refit_info()
+            else:
+                initialize_refit_metadata(policy, policy_generation)
 
     # Spin up non-colocated OPD teacher worker groups AFTER policy / vLLM are
     # ready. Parallelizing with policy init races on Megatron-Bridge's HF->mcore

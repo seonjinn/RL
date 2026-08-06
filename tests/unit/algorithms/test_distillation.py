@@ -1162,6 +1162,10 @@ def test_distillation_setup_nemo_gym_uses_deferred_vllm(
     monkeypatch.setenv("NRL_SKIP_DISTILLATION_TOKENIZER_CHECK", "1")
     nemo_gym_env_before = copy.deepcopy(master_config.env["nemo_gym"])
 
+    initial_info = {"model.weight": ((32, 16), torch.bfloat16)}
+    packed_info = {"model.weight": ((32, 8), torch.uint8)}
+    transform_request = object()
+    created_policies = []
     created_vllm = []
 
     class DummyCluster:
@@ -1170,13 +1174,19 @@ def test_distillation_setup_nemo_gym_uses_deferred_vllm(
 
     class DummyPolicy:
         def __init__(self, *args, **kwargs):
-            pass
+            self.cfg = kwargs["config"]
+            self.enabled_requests = []
+            created_policies.append(self)
 
         def offload_after_refit(self):
             return None
 
         def prepare_refit_info(self):
-            return {}
+            return initial_info
+
+        def enable_refit_transforms(self, *, requests):
+            self.enabled_requests.append(requests)
+            return packed_info
 
     class DummyVllmGeneration:
         def __init__(self, cluster, config, defer_model_load=False):
@@ -1185,7 +1195,7 @@ def test_distillation_setup_nemo_gym_uses_deferred_vllm(
             self.dp_openai_server_base_urls = ["http://reserved-vllm"]
             self.load_and_start_called = False
             self.finish_generation_called = False
-            self.prepare_refit_info_called = False
+            self.prepare_refit_info_calls = []
             created_vllm.append(self)
 
         def load_and_start(self):
@@ -1194,8 +1204,11 @@ def test_distillation_setup_nemo_gym_uses_deferred_vllm(
         def finish_generation(self):
             self.finish_generation_called = True
 
-        def prepare_refit_info(self, *args, **kwargs):
-            self.prepare_refit_info_called = True
+        def prepare_refit_info(self, state_dict_info):
+            self.prepare_refit_info_calls.append(state_dict_info)
+            if len(self.prepare_refit_info_calls) == 1:
+                return [transform_request]
+            return None
 
     nemo_gym_actor = MagicMock()
     nemo_gym_actor._spinup.remote.return_value = "spinup-ref"
@@ -1245,7 +1258,8 @@ def test_distillation_setup_nemo_gym_uses_deferred_vllm(
     assert created_vllm[0].defer_model_load is True
     assert created_vllm[0].load_and_start_called
     assert created_vllm[0].finish_generation_called
-    assert created_vllm[0].prepare_refit_info_called
+    assert created_policies[-1].enabled_requests == [[transform_request]]
+    assert created_vllm[0].prepare_refit_info_calls == [initial_info, packed_info]
     assert result[2] is created_vllm[0]
     assert result[3] is nemo_gym_actor
 
