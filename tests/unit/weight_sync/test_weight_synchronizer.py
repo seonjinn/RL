@@ -114,6 +114,27 @@ class TestWeightSynchronizerABC:
 
 
 class TestInitializeRefitMetadata:
+    def test_destination_owned_requests_do_not_require_megatron_or_refresh(self):
+        policy = _mock_policy()
+        policy.cfg = {
+            "dtensor_cfg": {"enabled": True},
+            "megatron_cfg": {"enabled": False},
+        }
+        generation = _mock_generation()
+        state_dict_info = policy.prepare_refit_info.return_value
+        request = RefitTransformRequest(
+            parameter_names=("layer_0",),
+            source_format="bf16",
+            target_format="nvfp4_w4a16",
+            transform_location="destination",
+        )
+        generation.prepare_refit_info.return_value = [request]
+
+        initialize_refit_metadata(policy, generation)
+
+        generation.prepare_refit_info.assert_called_once_with(state_dict_info)
+        policy.enable_refit_transforms.assert_not_called()
+
     def test_forwards_structured_transform_requests_and_refreshes_metadata(self):
         policy = _mock_policy()
         policy.cfg = {"megatron_cfg": {"enabled": True}}
@@ -136,6 +157,36 @@ class TestInitializeRefitMetadata:
             call(updated_info),
         ]
 
+    def test_mixed_requests_pass_full_set_to_source_transform(self):
+        policy = _mock_policy()
+        policy.cfg = {"megatron_cfg": {"enabled": True}}
+        generation = _mock_generation()
+        updated_info = {"layer_0": {"dtype": "torch.uint8"}}
+        requests = [
+            RefitTransformRequest(
+                parameter_names=("layer_0",),
+                source_format="bf16",
+                target_format="nvfp4_w4a16",
+                transform_location="source",
+            ),
+            RefitTransformRequest(
+                parameter_names=("layer_1",),
+                source_format="bf16",
+                target_format="nvfp4_w4a16",
+                transform_location="destination",
+            ),
+        ]
+        generation.prepare_refit_info.side_effect = [requests, None]
+        policy.enable_refit_transforms.return_value = updated_info
+
+        initialize_refit_metadata(policy, generation)
+
+        policy.enable_refit_transforms.assert_called_once_with(requests=requests)
+        assert generation.prepare_refit_info.call_args_list == [
+            call(policy.prepare_refit_info.return_value),
+            call(updated_info),
+        ]
+
     def test_structured_transform_request_uses_consistent_non_megatron_error(self):
         policy = _mock_policy()
         policy.cfg = {"megatron_cfg": {"enabled": False}}
@@ -145,10 +196,24 @@ class TestInitializeRefitMetadata:
                 parameter_names=("layer_0",),
                 source_format="bf16",
                 target_format="mxfp8_e4m3_e8m0",
+                transform_location="source",
             )
         ]
 
         with pytest.raises(ValueError, match="requires the Megatron policy backend"):
+            initialize_refit_metadata(policy, generation)
+
+        policy.enable_refit_transforms.assert_not_called()
+
+    def test_rejects_malformed_generation_transform_response(self):
+        policy = _mock_policy()
+        generation = _mock_generation()
+        generation.prepare_refit_info.return_value = [object()]
+
+        with pytest.raises(
+            TypeError,
+            match="must be RefitTransformRequest instances",
+        ):
             initialize_refit_metadata(policy, generation)
 
         policy.enable_refit_transforms.assert_not_called()

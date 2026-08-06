@@ -29,6 +29,7 @@ from nemo_rl.algorithms.loss.loss_functions import (
 )
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.utils.config import load_config, register_omegaconf_resolvers
+from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
 
 
 def test_setup_refreshes_generation_metadata_after_source_transform(monkeypatch):
@@ -48,7 +49,12 @@ def test_setup_refreshes_generation_metadata_after_source_transform(monkeypatch)
 
     initial_info = {"model.weight": ((32, 16), torch.bfloat16)}
     packed_info = {"model.weight": ((32, 8), torch.uint8)}
-    transform_request = object()
+    transform_request = RefitTransformRequest(
+        parameter_names=("model.weight",),
+        source_format="bf16",
+        target_format="nvfp4_w4a16",
+        transform_location="source",
+    )
     created_policies = []
     created_generations = []
 

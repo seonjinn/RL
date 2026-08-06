@@ -928,9 +928,8 @@ class VllmGeneration(GenerationInterface):
         """Prepare the info for refit.
 
         Returns:
-            When trainer-side MXFP8 or NVFP4 prequantization is enabled through
-            ``vllm_cfg.refit_prequantize``, the transform requests required by
-            generation. None otherwise.
+            Structured source- or destination-owned transform requests required
+            by generation. None when direct refit metadata needs no transform.
         """
         if state_dict_info is None:
             return None

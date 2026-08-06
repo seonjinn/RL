@@ -33,6 +33,7 @@ from nemo_rl.algorithms.distillation import (
 from nemo_rl.algorithms.loss import DistillationLossConfig, DistillationLossFn
 from nemo_rl.data.interfaces import DatumSpec
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
 
 
 @pytest.fixture
@@ -1123,6 +1124,9 @@ def test_distillation_setup_nemo_gym_uses_deferred_vllm(
                 "dtensor_cfg": {
                     "enabled": False,
                 },
+                "megatron_cfg": {
+                    "enabled": True,
+                },
             },
             "teacher": {
                 "model_name": "test-teacher",
@@ -1164,7 +1168,12 @@ def test_distillation_setup_nemo_gym_uses_deferred_vllm(
 
     initial_info = {"model.weight": ((32, 16), torch.bfloat16)}
     packed_info = {"model.weight": ((32, 8), torch.uint8)}
-    transform_request = object()
+    transform_request = RefitTransformRequest(
+        parameter_names=("model.weight",),
+        source_format="bf16",
+        target_format="nvfp4_w4a16",
+        transform_location="source",
+    )
     created_policies = []
     created_vllm = []
 

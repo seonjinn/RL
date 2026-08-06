@@ -347,8 +347,8 @@ class GenerationInterface(ABC):
         """Prepare the info for refit.
 
         Returns:
-            Structured source-to-target transform requests, or None when no
-            trainer-side transform is requested.
+            Structured source- or destination-owned transform requests, or None
+            when generation does not require transformed refit handling.
         """
         raise NotImplementedError
 

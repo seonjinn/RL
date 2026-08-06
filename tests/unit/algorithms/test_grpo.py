@@ -69,6 +69,7 @@ from nemo_rl.experience.interfaces import NEXT_NEMO_GYM_TASK_INDEX_KEY
 from nemo_rl.experience.rollouts import calculate_rewards
 from nemo_rl.models.generation.megatron import MegatronGeneration
 from nemo_rl.utils.timer import Timer
+from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
 from tests.unit.algorithms.utils import (
     create_mock_batch,
 )
@@ -1949,7 +1950,12 @@ def test_setup_auto_enables_skip_reference_policy_logprobs_when_kl_penalty_zero(
 
     initial_info = {"model.weight": ((32, 16), torch.bfloat16)}
     packed_info = {"model.weight": ((32, 8), torch.uint8)}
-    transform_request = object()
+    transform_request = RefitTransformRequest(
+        parameter_names=("model.weight",),
+        source_format="bf16",
+        target_format="nvfp4_w4a16",
+        transform_location="source",
+    )
     created_policies = []
     created_generations = []
 
