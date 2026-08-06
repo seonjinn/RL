@@ -106,7 +106,7 @@ echo "The built vLLM is available in: $BUILD_DIR"
 while IFS= read -r changed_path; do
   [[ -z "$changed_path" ]] && continue
   case "$changed_path" in
-    requirements/*.txt) ;;
+    pyproject.toml|requirements/*.txt) ;;
     *)
       echo "[ERROR] Disallowed tracked vLLM changes after build: $changed_path"
       exit 1
@@ -122,7 +122,7 @@ done < <(
 VLLM_DEPENDENCY_STATE_SHA256=$(
   git diff --binary --full-index --no-ext-diff \
     --no-renames --diff-algorithm=myers --src-prefix=a/ --dst-prefix=b/ \
-    HEAD -- requirements/ | sha256_stream
+    HEAD -- pyproject.toml requirements/ | sha256_stream
 )
 printf '%s\n' "$VLLM_DEPENDENCY_STATE_SHA256" > \
   "$BUILD_DIR/$VLLM_BUILD_STATE_MARKER"

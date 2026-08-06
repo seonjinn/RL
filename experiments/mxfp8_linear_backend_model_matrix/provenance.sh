@@ -46,7 +46,7 @@ mxfp8_assert_vllm_tracked_state() {
     while IFS= read -r changed_path; do
         [[ -z "${changed_path}" ]] && continue
         case "${changed_path}" in
-            requirements/*.txt) ;;
+            pyproject.toml|requirements/*.txt) ;;
             *)
                 echo "Disallowed tracked vLLM change: ${changed_path}" >&2
                 return 1
@@ -64,7 +64,7 @@ mxfp8_vllm_dependency_state_sha256() {
     local vllm_root=$1
     git -C "${vllm_root}" diff --binary --full-index --no-ext-diff \
         --no-renames --diff-algorithm=myers --src-prefix=a/ --dst-prefix=b/ \
-        HEAD -- requirements/ | mxfp8_sha256_stream
+        HEAD -- pyproject.toml requirements/ | mxfp8_sha256_stream
 }
 
 mxfp8_vllm_build_state_matches() {

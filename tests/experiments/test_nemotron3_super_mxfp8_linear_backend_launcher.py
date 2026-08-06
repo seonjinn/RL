@@ -142,6 +142,7 @@ def _vllm_dependency_state_sha256(custom_vllm: Path) -> str:
             "--dst-prefix=b/",
             "HEAD",
             "--",
+            "pyproject.toml",
             "requirements/",
         ]
     )
