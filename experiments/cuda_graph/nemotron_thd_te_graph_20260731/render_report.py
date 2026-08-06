@@ -910,6 +910,7 @@ a {{ color: #075985; }}
 <body>
 <h1>Nemotron packed-THD Transformer Engine CUDA Graph study</h1>
 <p>Generated {escape(generated_at)} from {escape(source_description)}.</p>
+<p><a href="cudagraph_implementation_explainer.html">Open the implementation explainer</a></p>
 <h2>Current status</h2>
 {_items(current_status, empty_message="No editorial status update.")}
 <div class="counts">

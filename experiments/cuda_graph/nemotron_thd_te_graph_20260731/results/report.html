@@ -27,7 +27,8 @@ a { color: #075985; }
 </head>
 <body>
 <h1>Nemotron packed-THD Transformer Engine CUDA Graph study</h1>
-<p>Generated 2026-08-06 04:00:05 UTC from normalized result artifacts and versioned report context.</p>
+<p>Generated 2026-08-06 04:55:55 UTC from normalized result artifacts and versioned report context.</p>
+<p><a href="cudagraph_implementation_explainer.html">Open the implementation explainer</a></p>
 <h2>Current status</h2>
 <ul><li>OCI-HSG jobs 5906622, 5907665, 5907667, and 5906624 completed 20/20 steps with the same 24-GPU Nano recipe, nightly image, alltoall dispatcher, sequence packing, warmup=3, and checkpoints disabled.</li><li><a href="persistent_bank_scope_sweep_steps11_19.csv">Steps 11-19: attn improves E2E TPS/GPU by 18.7% and policy-training TPS/GPU by 31.8%; attn+mamba improves them by 13.8% and 33.3%; adding moe_router improves them by 13.0% and 18.3% versus baseline.</a></li><li><a href="persistent_bank_scope_sweep_telemetry_steps11_19.csv">All CG arms have 100% eligible-call coverage and zero fallbacks. The capacity-2 bank hit rate is 100% for attn, 55.6% for attn+mamba, and 33.3% after adding moe_router in steps 11-19.</a></li><li><a href="persistent_bank_scope_sweep_correctness_steps11_19.csv">The 20-step correctness smoke has no NaN/Inf, no masked sequences, and no CG fallback. Aggregate validation accuracy varies across stochastic trajectories, so a matched 100-step baseline-versus-attn soak is still required.</a></li></ul>
 <div class="counts">

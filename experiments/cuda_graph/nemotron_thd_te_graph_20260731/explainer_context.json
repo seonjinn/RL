@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "title": "Packed THD + Partial CUDA Graph, 쉽게 이해하기",
+  "subtitle": "NeMo-RL에서 Megatron-Core와 Transformer Engine을 연결해 Attention, Mamba, MoE router를 안전하게 capture·replay하기 위해 무엇을 바꿨는지 설명합니다.",
+  "updated": "2026-08-05 21:45 PDT",
+  "status": [
+    "Nano 20-step baseline, attention, attention+Mamba, attention+Mamba+router 네 run이 모두 20/20 step을 완료했습니다.",
+    "세 CUDA Graph scope 모두 eligible call coverage 100%, fallback 0을 기록했습니다.",
+    "Logprob phase를 지나도 graph bank와 graph-owned storage를 유지하도록 lifecycle reset 문제를 수정했습니다.",
+    "Matched 100-step correctness soak는 OCI-HSG job 5908997(baseline)과 5909007(attention)에서 실행 중이며, 2026-08-05 21:45 PDT 기준 두 작업 모두 RUNNING입니다."
+  ],
+  "beginner_background": [
+    "일반적인 PyTorch eager 실행은 매 iteration마다 CPU가 많은 GPU kernel을 하나씩 launch합니다. Kernel 자체가 짧거나 module 경계가 잘게 나뉘면 이 CPU launch overhead가 GPU 계산 사이의 빈 공간으로 나타납니다.",
+    "CUDA Graph는 한 번 실행한 GPU 작업의 launch 순서와 dependency를 기록한 뒤, 이후에는 graph 하나를 replay합니다. 하지만 replay는 같은 tensor 주소와 호환되는 shape 및 control flow를 요구합니다. 입력 storage가 이동하거나 동적인 분기가 달라지면 이전 capture를 그대로 사용할 수 없습니다.",
+    "Transformer Engine partial CUDA Graph는 model 전체가 아니라 attention, MLP, Mamba, MoE router 같은 선택된 submodule만 graph로 감쌉니다. Sequence packing이나 RL phase 전환처럼 동적인 바깥 부분은 eager로 유지하면서 반복적인 model 계산의 launch overhead만 줄이는 방식입니다.",
+    "THD format은 여러 가변 길이 sequence의 token을 한 줄로 이어 붙이고 cu_seqlens로 경계를 표현합니다. Token 수와 sequence 수가 매 batch마다 달라질 수 있기 때문에, graph replay를 위해서는 token capacity뿐 아니라 cu_seqlens entry 수와 관련 metadata에도 고정된 upper bound가 필요합니다."
+  ],
+  "relevant_background": [
+    "NeMo-RL은 rollout generation, policy/reference logprob, policy training, weight refit을 하나의 RL step에서 번갈아 실행합니다. TE partial graph는 현재 policy-training 경로에서 직접 capture되며, phase 전환 중 model·gradient storage 주소가 유지되어야 다음 training call에서 같은 bank를 재사용할 수 있습니다.",
+    "Packed batch마다 실제 logical token 수는 달라도 physical storage는 token capacity와 thd_max_packed_sequences에 맞춰 padding합니다. 첫 실제 microbatch의 PackedSeqParams를 capture 입력으로 사용하고, 모든 model-parallel rank가 schedule key와 geometry에 동의한 뒤 capture를 시작합니다.",
+    "Schedule별 graph bank는 bounded LRU에 저장됩니다. 현재 capacity는 2입니다. Attention만 사용한 run에는 충분했지만, 더 넓은 scope에서 네 종류의 token-capacity schedule이 번갈아 나타나면 eviction과 recapture가 발생합니다."
+  ],
+  "code_groups": [
+    {
+      "title": "설정을 정규화하고 위험한 조합을 시작 전에 거부합니다",
+      "purpose": "NeMo-RL의 megatron_cfg를 MCore enum으로 변환하고, moe와 moe_router 중복, router 없는 moe_preprocess, 고정 expert capacity가 없는 whole-MoE capture 같은 잘못된 요청을 fail-closed로 막습니다. Warmup은 성공한 optimizer step 3회로 고정하며 packed replay capacity도 검증합니다.",
+      "files": [
+        "nemo_rl/models/megatron/setup.py",
+        "nemo_rl/models/policy/lm_policy.py"
+      ],
+      "excerpt": "modules = _normalize_cuda_graph_modules(megatron_cfg[\"cuda_graph_modules\"])\n_validate_te_moe_graph_request(model_cfg, modules)\n_configure_fixed_te_graph_geometry(model_cfg, config, modules)"
+    },
+    {
+      "title": "Packed THD 입력을 고정 capacity ABI로 만듭니다",
+      "purpose": "Logical token, label, loss mask, position ID, cu_seqlens, max_seqlen, sequence ownership을 같은 capacity contract로 padding합니다. MCore PackedSeqParams는 optional KV metadata까지 canonicalize하여 capture와 replay의 tensor signature가 같도록 유지합니다.",
+      "files": [
+        "nemo_rl/models/megatron/data.py",
+        "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/packed_seq_params.py"
+      ],
+      "excerpt": "logical geometry  → pack real sequences\ntoken capacity     → pad tokens, labels, masks, positions\nsequence capacity  → pad cu_seqlens and ownership metadata"
+    },
+    {
+      "title": "Worker가 warmup, capture, hit, eviction을 하나의 lifecycle로 관리합니다",
+      "purpose": "세 번의 성공한 optimizer step 이후 첫 schedule miss에서 bank를 capture합니다. 같은 key는 activate하여 replay하고, capacity를 넘으면 가장 오래 사용하지 않은 bank만 reset합니다. Rank마다 다른 상태로 진행하지 않도록 schedule key와 transition 결과를 collective로 검증합니다.",
+      "files": [
+        "nemo_rl/models/megatron/cuda_graph_lifecycle.py",
+        "nemo_rl/models/policy/workers/megatron_policy_worker.py"
+      ],
+      "excerpt": "result = lifecycle.ensure_active(\n    key,\n    lambda: self._capture_te_cuda_graph_bank(key, packed_seq_params),\n)\n# result.status: warming | captured | hit"
+    },
+    {
+      "title": "Graph가 참조하는 model·gradient storage 주소를 지킵니다",
+      "purpose": "Capture 시 tensor storage pointer, offset, shape, stride, dtype, device를 fingerprint로 저장합니다. Replay 전에 주소 변화가 없는지 확인하고, 실제 storage relocation이 필요한 순간에만 bank를 reset합니다. Eager logprob로 전환할 때는 graph hook을 uninstall하지만 bank와 storage는 유지합니다.",
+      "files": [
+        "nemo_rl/models/megatron/cuda_graph_storage.py",
+        "nemo_rl/models/policy/workers/megatron_policy_worker.py"
+      ],
+      "excerpt": "before = fingerprint_training_graph_storage(model)\n# eager logprob runs without moving graph-owned storage\nafter = fingerprint_training_graph_storage(model)\nassert classify_storage_change(before, after) is StorageChange.NONE"
+    },
+    {
+      "title": "PR 5672의 THD partial graph 경로를 hybrid model scope로 확장합니다",
+      "purpose": "MCore transformer layer와 TE graph bank가 PackedSeqParams를 잃지 않도록 연결하고, attention뿐 아니라 Mamba, moe_router, moe_preprocess의 module boundary와 output ABI를 처리합니다. moe_preprocess는 router와 함께 사용해야 하며 dropless token dispatcher의 metadata 수명도 replay 범위에 맞춥니다.",
+      "files": [
+        "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/transformer_layer.py",
+        "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/te_cuda_graph_bank.py",
+        "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/moe/cuda_graph_replay.py",
+        "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/moe/token_dispatcher.py"
+      ],
+      "excerpt": "cuda_graph_modules = [\n    CudaGraphModule.attn,\n    CudaGraphModule.mamba,\n    CudaGraphModule.moe_router,\n    # CudaGraphModule.moe_preprocess requires moe_router\n]"
+    },
+    {
+      "title": "Graph를 켰다는 설정 대신 실제 replay 증거를 기록합니다",
+      "purpose": "매 policy-training call에서 eligible call, graph call, capture, replay, cache hit/miss, eviction, fallback과 logical·padded·capacity token을 수집합니다. 이 counter는 rank 간 합의와 invariant 검증을 거친 뒤 W&B와 결과 CSV로 전달됩니다.",
+      "files": [
+        "nemo_rl/models/policy/workers/megatron_policy_worker.py",
+        "nemo_rl/algorithms/utils.py",
+        "experiments/cuda_graph/nemotron_thd_te_graph_20260731/analyze_cuda_graph_calls.py"
+      ],
+      "excerpt": "CudaGraphStepMetrics(\n    graph_calls=graph_calls, eligible_calls=eligible_calls,\n    cache_hit_count=hits, cache_miss_count=misses,\n    eviction_count=evictions, fallback_count=fallbacks,\n)"
+    }
+  ],
+  "problems": [
+    {
+      "severity": "confirmed",
+      "title": "넓은 scope에서 capacity-2 bank가 thrash합니다",
+      "detail": "Attention은 step 11–19에서 hit rate 100%였지만 attention+Mamba는 55.6%, router까지 추가하면 33.3%로 내려갑니다. 네 token-capacity schedule이 두 bank slot을 번갈아 밀어내기 때문에 recapture 비용이 생깁니다.",
+      "next": "동일 workload에서 bank capacity 2와 4, deterministic capacity bucketing을 GPU memory peak와 함께 비교합니다."
+    },
+    {
+      "severity": "risk",
+      "title": "20 step은 convergence correctness를 증명하지 못합니다",
+      "detail": "NaN/Inf, masked sequence, fallback은 없었지만 각 run이 독립적인 stochastic trajectory를 사용했습니다. Reward와 validation accuracy 차이를 CUDA Graph의 numerical impact라고 분리할 수 없습니다.",
+      "next": "현재 실행 중인 matched 100-step baseline/attention soak를 완료하고 step window와 seed, input 분포를 함께 비교합니다."
+    },
+    {
+      "severity": "measure",
+      "title": "Logprob 성능 향상의 원인을 아직 분리하지 못했습니다",
+      "detail": "현재 TE partial graph capture는 policy-training 경로에서 수행됩니다. Logprob throughput 향상은 storage 유지, cache 상태, workload 차이에서 간접적으로 올 수 있으며, phase-specific graph counter가 없으면 TE replay 효과라고 말할 수 없습니다.",
+      "next": "Policy training과 logprob phase를 구분하는 graph-call telemetry를 추가하거나 고정 input microbenchmark로 직접 attribution합니다."
+    },
+    {
+      "severity": "measure",
+      "title": "Bank capacity를 늘리면 memory가 함께 늘어납니다",
+      "detail": "각 schedule bank는 CUDA Graph executable과 static input/output storage를 유지합니다. Capacity 4는 eviction을 줄일 가능성이 있지만 Nano보다 큰 Super·Ultra와 MoE scope에서 OOM 위험을 키울 수 있습니다.",
+      "next": "Capture 전후 allocated/reserved memory와 bank별 retained bytes를 기록하고 model·scope별 안전한 capacity를 정합니다."
+    },
+    {
+      "severity": "risk",
+      "title": "Mamba와 MoE는 attention보다 더 많은 runtime invariant를 가집니다",
+      "detail": "Mamba는 hybrid layer pattern과 CP metadata가 맞아야 하며, MoE router/preprocess는 token routing, auxiliary-loss ownership, dropless dispatcher metadata가 replay에서도 동일한 의미를 가져야 합니다. 100% coverage만으로 output·gradient parity가 보장되지는 않습니다.",
+      "next": "고정 packed input에 대해 eager 대 graph output, router top-k, expert count, aux loss, gradient, parameter delta parity gate를 scope별로 실행합니다."
+    },
+    {
+      "severity": "measure",
+      "title": "Upstream main과 nested dependency가 계속 이동합니다",
+      "detail": "현재 branch는 PR 5672 계열의 THD partial graph 수정과 이후 Megatron main 변경을 함께 포함합니다. NeMo-RL main과 nested Bridge/MCore가 갱신되면 API와 이미 merge된 수정이 겹치는지 다시 확인해야 합니다.",
+      "next": "Upstream merge 전에 NeMo-RL, Bridge, MCore의 exact commit과 diff provenance를 다시 고정하고 중복 patch 및 regression test를 audit합니다."
+    }
+  ],
+  "quiz": [
+    {
+      "question": "Packed THD CUDA Graph replay에서 token tensor만 고정 capacity로 만들면 충분하지 않은 이유는 무엇인가요?",
+      "options": [
+        "CUDA Graph는 token 값이 항상 같아야 하기 때문입니다.",
+        "cu_seqlens와 sequence ownership 같은 metadata의 shape와 주소도 capture ABI의 일부이기 때문입니다.",
+        "Transformer Engine은 padding token을 지원하지 않기 때문입니다.",
+        "vLLM generation이 동일한 cu_seqlens를 사용하기 때문입니다."
+      ],
+      "answer": 1,
+      "feedback": "Token 값은 바뀔 수 있지만 replay가 참조하는 tensor storage와 호환 shape는 안정적이어야 합니다. THD에서는 sequence boundary metadata도 그 contract에 포함됩니다."
+    },
+    {
+      "question": "Warmup 3회는 정확히 무엇을 의미하나요?",
+      "options": [
+        "Process 시작 후 forward call 세 번",
+        "각 CUDA kernel을 세 번 capture",
+        "성공한 optimizer step 세 번을 eager로 완료한 뒤 capture 허용",
+        "각 graph bank를 세 번 replay한 뒤 metric 기록"
+      ],
+      "answer": 2,
+      "feedback": "실패하거나 skip된 update가 warmup을 진행시키지 않도록 successful optimizer step을 전 rank에서 합의해 셉니다."
+    },
+    {
+      "question": "Graph-call coverage가 100%인데 bank hit rate가 33.3%일 수 있는 이유는 무엇인가요?",
+      "options": [
+        "Coverage는 generation만 측정하고 hit rate는 training만 측정하기 때문입니다.",
+        "Miss에서 새 bank를 capture한 뒤 해당 eligible call을 graph로 실행할 수 있기 때문입니다.",
+        "Fallback을 graph call로 잘못 세기 때문입니다.",
+        "Hit rate는 GPU utilization과 같은 metric이기 때문입니다."
+      ],
+      "answer": 1,
+      "feedback": "Coverage는 실제 module call이 graph로 실행됐는지를, hit rate는 필요한 schedule bank가 이미 cache에 있었는지를 측정합니다."
+    },
+    {
+      "question": "Eager logprob phase에 들어갈 때 graph bank 전체를 reset하지 않는 이유는 무엇인가요?",
+      "options": [
+        "Logprob에서도 자동으로 같은 TE graph를 replay하기 위해서",
+        "CUDA Graph memory는 reset할 수 없기 때문에",
+        "Model·gradient storage가 이동하지 않는 한 다음 policy-training call에서 capture를 재사용하기 위해서",
+        "vLLM과 Transformer Engine이 graph bank를 공유하기 때문에"
+      ],
+      "answer": 2,
+      "feedback": "Eager path에서는 replay hook만 제거할 수 있습니다. Graph-owned storage 주소가 그대로라면 bank를 유지하는 것이 안전하며 recapture를 피합니다."
+    },
+    {
+      "question": "현재 20-step accuracy 결과로 말할 수 있는 가장 강한 결론은 무엇인가요?",
+      "options": [
+        "CUDA Graph가 baseline과 완전히 동일하게 수렴합니다.",
+        "Router scope가 attention보다 정확도가 높습니다.",
+        "측정된 smoke window에서 NaN/Inf, masked sequence, fallback이 없었지만 convergence parity는 아직 미확정입니다.",
+        "Validation accuracy 차이는 모두 CUDA Graph numerical error입니다."
+      ],
+      "answer": 2,
+      "feedback": "독립 stochastic trajectory의 aggregate accuracy는 원인 분리에 부족합니다. Matched 100-step soak와 더 직접적인 parity gate가 필요합니다."
+    }
+  ]
+}

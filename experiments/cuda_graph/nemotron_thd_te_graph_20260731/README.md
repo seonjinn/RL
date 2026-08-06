@@ -12,6 +12,23 @@ fields.
 No file here contains credentials. Profile files with real cluster paths and
 source revisions remain local under `profiles/*.env`.
 
+## Implementation explainer
+
+`results/cudagraph_implementation_explainer.html` explains the NeMo-RL,
+Megatron-Core, and Transformer Engine changes with diagrams, measured
+performance and graph coverage, current problems, and an interactive quiz.
+Its editorial content lives in `explainer_context.json`; performance,
+telemetry, and correctness values are derived from the canonical persistent-bank
+CSV files. Regenerate it after either code context or evidence changes:
+
+```bash
+python3 experiments/cuda_graph/nemotron_thd_te_graph_20260731/render_explainer.py
+```
+
+The explainer and `results/report.html` link to one another. Commit the context,
+measured CSV changes, and regenerated HTML together so the explanation stays
+reviewable.
+
 ## Current status
 
 The completed Nano evidence below used outer NeMo-RL revision

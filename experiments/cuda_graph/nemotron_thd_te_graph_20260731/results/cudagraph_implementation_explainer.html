@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="NeMo-RL packed-THD Transformer Engine partial CUDA Graph 지원을 코드와 측정 결과로 설명합니다.">
+<title>Packed THD + Partial CUDA Graph, 쉽게 이해하기</title>
+<style>
+:root {
+  --ink: #17233b;
+  --muted: #62708a;
+  --paper: #f7f6f1;
+  --card: #ffffff;
+  --line: #d9dfeb;
+  --blue: #2457d6;
+  --blue-soft: #eaf0ff;
+  --green: #167d5a;
+  --green-soft: #e6f5ee;
+  --amber: #a76000;
+  --amber-soft: #fff2d8;
+  --red: #ae3d45;
+  --red-soft: #fdebed;
+  --shadow: 0 18px 50px rgba(23, 35, 59, 0.08);
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--paper); color: var(--ink); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.65; }
+a { color: var(--blue); text-underline-offset: 0.16em; }
+a:hover { text-decoration-thickness: 2px; }
+button, input { font: inherit; }
+.hero { position: relative; overflow: hidden; padding: 5.5rem max(1.25rem, calc((100vw - 1180px) / 2)) 4.5rem; background: #13213b; color: white; }
+.hero::after { content: ""; position: absolute; width: 34rem; height: 34rem; right: -10rem; top: -18rem; border-radius: 50%; background: radial-gradient(circle, rgba(87, 145, 255, .46), rgba(87, 145, 255, 0)); }
+.kicker, .eyebrow { display: inline-block; color: #9dbbff; font-size: .73rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.hero h1 { position: relative; max-width: 900px; margin: .7rem 0 1rem; font-family: Georgia, "Times New Roman", serif; font-size: clamp(2.6rem, 7vw, 5.7rem); line-height: .98; letter-spacing: -.05em; }
+.hero p { position: relative; max-width: 760px; margin: 0; color: #d7e2f8; font-size: clamp(1.05rem, 2vw, 1.3rem); }
+.hero-meta { position: relative; display: flex; flex-wrap: wrap; gap: .7rem; margin-top: 2rem; }
+.hero-meta span, .hero-meta a { padding: .42rem .72rem; border: 1px solid rgba(255,255,255,.24); border-radius: 999px; color: #e9f0ff; text-decoration: none; font-size: .83rem; }
+.layout { width: min(1180px, calc(100% - 2rem)); margin: 0 auto; display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 3rem; align-items: start; }
+.toc { position: sticky; top: 1rem; margin-top: 2rem; padding: 1.1rem; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,.82); backdrop-filter: blur(14px); }
+.toc strong { display: block; margin-bottom: .55rem; font-size: .77rem; text-transform: uppercase; letter-spacing: .08em; }
+.toc a { display: block; padding: .3rem 0; color: var(--muted); text-decoration: none; font-size: .88rem; }
+.toc a:hover { color: var(--blue); }
+main { min-width: 0; padding: 2rem 0 6rem; }
+section { scroll-margin-top: 1rem; padding: 3.4rem 0; border-bottom: 1px solid var(--line); }
+section:last-child { border-bottom: 0; }
+.section-label { margin: 0 0 .6rem; color: var(--blue); font-size: .72rem; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+h2 { margin: 0 0 1rem; font-family: Georgia, "Times New Roman", serif; font-size: clamp(2rem, 4vw, 3.5rem); line-height: 1.08; letter-spacing: -.035em; }
+h3 { margin: 0 0 .45rem; font-size: 1.08rem; line-height: 1.35; }
+.lede { max-width: 760px; color: var(--muted); font-size: 1.08rem; }
+.status-panel { display: grid; grid-template-columns: 1fr auto; gap: 2rem; margin-top: 2rem; padding: 1.35rem; border: 1px solid #b9d9cc; border-radius: 18px; background: var(--green-soft); }
+.status-panel ul { display: grid; gap: .65rem; margin: 0; padding: 0; list-style: none; }
+.status-panel li { display: flex; gap: .6rem; align-items: baseline; }
+.status-dot { flex: 0 0 .48rem; width: .48rem; height: .48rem; border-radius: 50%; background: var(--green); }
+.status-badge { align-self: start; padding: .45rem .75rem; border-radius: 999px; background: var(--green); color: white; font-size: .75rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+details.background-deep { margin-top: 1.6rem; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+details.background-deep summary { cursor: pointer; padding: 1rem 1.15rem; font-weight: 750; }
+details.background-deep .details-body { padding: 0 1.15rem 1rem; color: #3f4c63; }
+.callout { margin: 1.5rem 0; padding: 1rem 1.15rem; border-left: 4px solid var(--blue); border-radius: 0 12px 12px 0; background: var(--blue-soft); }
+.callout strong { display: block; margin-bottom: .25rem; color: #183f9f; }
+.flow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; margin: 2rem 0; }
+.flow-node { position: relative; padding: 1rem; min-height: 132px; border: 1px solid var(--line); border-radius: 15px; background: var(--card); box-shadow: var(--shadow); }
+.flow-node:not(:last-child)::after { content: "→"; position: absolute; right: -.64rem; top: 48%; z-index: 2; display: grid; place-items: center; width: 1.28rem; height: 1.28rem; border-radius: 50%; background: var(--blue); color: white; font-weight: 800; }
+.flow-node small { display: block; margin-bottom: .45rem; color: var(--blue); font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+.flow-node code { display: block; margin-top: .55rem; color: var(--muted); font-size: .76rem; overflow-wrap: anywhere; }
+.packing-demo { display: grid; grid-template-columns: 1fr 1.2fr; gap: 1.2rem; margin: 2rem 0; }
+.diagram-card { padding: 1.2rem; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
+.sequence-list { display: grid; gap: .55rem; margin-top: 1rem; }
+.sequence { height: 34px; border-radius: 8px; display: flex; align-items: center; padding: 0 .7rem; color: white; font-size: .78rem; font-weight: 700; }
+.sequence.one { width: 68%; background: #2457d6; }
+.sequence.two { width: 43%; background: #16806b; }
+.sequence.three { width: 25%; background: #8b5db7; }
+.packed-row { display: flex; height: 48px; margin-top: 1rem; overflow: hidden; border: 2px solid #243a63; border-radius: 9px; }
+.packed-row span { display: grid; place-items: center; color: white; font-size: .72rem; font-weight: 800; }
+.packed-row .p1 { flex: 7; background: #2457d6; }
+.packed-row .p2 { flex: 4; background: #16806b; }
+.packed-row .p3 { flex: 3; background: #8b5db7; }
+.packed-row .pad { flex: 2; background: repeating-linear-gradient(135deg, #c9cfdb, #c9cfdb 7px, #e7eaf0 7px, #e7eaf0 14px); color: #374151; }
+.timeline { display: grid; grid-template-columns: repeat(6, 1fr); gap: .5rem; margin: 2rem 0; }
+.timeline-step { padding: .85rem .45rem; border-radius: 12px; background: var(--card); border: 1px solid var(--line); text-align: center; font-size: .78rem; }
+.timeline-step strong { display: block; font-size: .9rem; }
+.timeline-step.warm { background: var(--amber-soft); border-color: #e4bd75; }
+.timeline-step.capture { background: var(--blue-soft); border-color: #9eb8f3; }
+.timeline-step.replay { background: var(--green-soft); border-color: #9bcab8; }
+.code-groups { display: grid; gap: 1rem; margin-top: 2rem; }
+.code-group { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 1rem; padding: 1.25rem; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
+.step-number { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 12px; background: var(--ink); color: white; font-weight: 850; }
+.file-list { display: flex; flex-wrap: wrap; gap: .4rem; margin: .8rem 0; }
+.file-chip { padding: .25rem .52rem; border-radius: 7px; background: var(--blue-soft); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .7rem; text-decoration: none; overflow-wrap: anywhere; }
+pre { margin: .85rem 0 0; padding: 1rem; overflow-x: auto; border-radius: 12px; background: #111a2c; color: #e5edff; font: .78rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; }
+.problem-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-top: 2rem; }
+.problem-card { padding: 1.25rem; border: 1px solid var(--line); border-top: 5px solid var(--amber); border-radius: 14px; background: var(--card); }
+.problem-card .eyebrow { color: var(--amber); }
+.problem-card.confirmed { border-top-color: var(--blue); }
+.problem-card.confirmed .eyebrow { color: var(--blue); }
+.problem-card.risk { border-top-color: var(--red); }
+.problem-card.risk .eyebrow { color: var(--red); }
+.next-action { display: grid; gap: .15rem; margin-top: 1rem; padding-top: .8rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .88rem; }
+.evidence-note { display: flex; gap: .8rem; align-items: flex-start; margin: 1.5rem 0; padding: 1rem; border-radius: 12px; background: var(--amber-soft); color: #6e4309; }
+.table-wrap { overflow-x: auto; margin: 1rem 0 2rem; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+th, td { padding: .75rem .7rem; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+thead th { background: #e9edf4; color: #415069; font-size: .69rem; letter-spacing: .04em; text-transform: uppercase; }
+tbody th, thead th:first-child { text-align: left; }
+tbody tr:last-child th, tbody tr:last-child td { border-bottom: 0; }
+td small, th small { display: block; color: var(--muted); font-size: .68rem; font-weight: 500; }
+.delta { display: inline-block; margin-left: .2rem; color: var(--green); font-size: .68rem; font-weight: 800; }
+.bars { display: grid; gap: .75rem; margin: 1.2rem 0 2.3rem; }
+.bar-row { display: grid; grid-template-columns: 220px minmax(120px, 1fr) 74px; gap: .8rem; align-items: center; }
+.bar-label { display: grid; }
+.bar-label span { color: var(--muted); font-size: .72rem; }
+.bar-track { height: 14px; overflow: hidden; border-radius: 999px; background: #dfe4ec; }
+.bar-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #2457d6, #16806b); }
+.bar-value { color: var(--green); font-size: .78rem; font-weight: 800; text-align: right; }
+.quiz-list { display: grid; gap: 1rem; margin-top: 2rem; }
+.quiz-question { margin: 0; padding: 1.25rem; border: 1px solid var(--line); border-radius: 16px; background: var(--card); }
+.quiz-question legend { padding: 0 .25rem; font-weight: 760; }
+.quiz-question legend span { display: inline-grid; place-items: center; width: 32px; height: 32px; margin-right: .6rem; border-radius: 9px; background: var(--ink); color: white; font-size: .72rem; }
+.quiz-options { display: grid; gap: .55rem; margin: 1rem 0; }
+.quiz-option { display: flex; gap: .65rem; align-items: flex-start; padding: .7rem .8rem; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.quiz-option:hover { border-color: #91a8dc; background: #f5f8ff; }
+.check-answer { padding: .55rem .85rem; border: 0; border-radius: 9px; background: var(--blue); color: white; cursor: pointer; font-weight: 750; }
+.check-answer:focus-visible, a:focus-visible, summary:focus-visible, input:focus-visible { outline: 3px solid #fdc35b; outline-offset: 3px; }
+.quiz-feedback { min-height: 1.5em; margin: .75rem 0 0; font-size: .9rem; }
+.quiz-feedback.correct { color: var(--green); }
+.quiz-feedback.incorrect { color: var(--red); }
+.muted { color: var(--muted); }
+.footer { padding: 2rem 1rem 4rem; color: var(--muted); text-align: center; font-size: .82rem; }
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .toc { position: static; display: flex; gap: .7rem 1rem; flex-wrap: wrap; margin-bottom: 0; }
+  .toc strong { width: 100%; margin: 0; }
+  .flow { grid-template-columns: 1fr 1fr; }
+  .flow-node:nth-child(2)::after { display: none; }
+  .packing-demo, .problem-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 620px) {
+  .hero { padding-top: 4rem; }
+  .layout { width: min(100% - 1.25rem, 1180px); }
+  section { padding: 2.6rem 0; }
+  .status-panel { grid-template-columns: 1fr; }
+  .status-badge { justify-self: start; }
+  .flow { grid-template-columns: 1fr; }
+  .flow-node:not(:last-child)::after { content: "↓"; right: auto; left: 50%; top: auto; bottom: -.66rem; }
+  .timeline { grid-template-columns: repeat(3, 1fr); }
+  .code-group { grid-template-columns: 1fr; }
+  .bar-row { grid-template-columns: 1fr 58px; }
+  .bar-track { grid-column: 1 / -1; grid-row: 2; }
+}
+</style>
+</head>
+<body>
+<header class="hero">
+  <span class="kicker">Implementation explainer · 코드와 측정으로 확인</span>
+  <h1>Packed THD + Partial CUDA Graph, 쉽게 이해하기</h1>
+  <p>NeMo-RL에서 Megatron-Core와 Transformer Engine을 연결해 Attention, Mamba, MoE router를 안전하게 capture·replay하기 위해 무엇을 바꿨는지 설명합니다.</p>
+  <div class="hero-meta">
+    <span>업데이트 2026-08-05 21:45 PDT</span>
+    <span>Warmup: 성공한 optimizer step 3회</span>
+    <a href="report.html">전체 실험 ledger 열기</a>
+  </div>
+</header>
+<div class="layout">
+  <nav class="toc" aria-label="목차">
+    <strong>이 페이지의 내용</strong>
+    <a href="#background">배경</a>
+    <a href="#intuition">핵심 직관</a>
+    <a href="#code">코드 변경</a>
+    <a href="#problems">현재 문제</a>
+    <a href="#evidence">측정 결과</a>
+    <a href="#quiz">퀴즈</a>
+  </nav>
+  <main>
+    <section id="background">
+      <p class="section-label">01 · 배경</p>
+      <h2>무엇을 다시 재생할 수 있게 만드는가?</h2>
+      <p class="lede">CUDA Graph는 안정적인 GPU 실행 경로를 한 번 기록하고 재생하여 반복되는 CPU launch 작업을 줄입니다. 대신 tensor 주소와 shape, 제어 흐름, 분산 schedule geometry가 capture 당시와 호환되어야 합니다.</p>
+      <div class="status-panel">
+        <ul><li><span class="status-dot" aria-hidden="true"></span>Nano 20-step baseline, attention, attention+Mamba, attention+Mamba+router 네 run이 모두 20/20 step을 완료했습니다.</li><li><span class="status-dot" aria-hidden="true"></span>세 CUDA Graph scope 모두 eligible call coverage 100%, fallback 0을 기록했습니다.</li><li><span class="status-dot" aria-hidden="true"></span>Logprob phase를 지나도 graph bank와 graph-owned storage를 유지하도록 lifecycle reset 문제를 수정했습니다.</li><li><span class="status-dot" aria-hidden="true"></span>Matched 100-step correctness soak는 OCI-HSG job 5908997(baseline)과 5909007(attention)에서 실행 중이며, 2026-08-05 21:45 PDT 기준 두 작업 모두 RUNNING입니다.</li></ul>
+        <span class="status-badge">20-step smoke 동작 확인</span>
+      </div>
+      <details class="background-deep">
+        <summary>기초 배경: CUDA Graph, partial graph, THD packing</summary>
+        <div class="details-body"><p>일반적인 PyTorch eager 실행은 매 iteration마다 CPU가 많은 GPU kernel을 하나씩 launch합니다. Kernel 자체가 짧거나 module 경계가 잘게 나뉘면 이 CPU launch overhead가 GPU 계산 사이의 빈 공간으로 나타납니다.</p><p>CUDA Graph는 한 번 실행한 GPU 작업의 launch 순서와 dependency를 기록한 뒤, 이후에는 graph 하나를 replay합니다. 하지만 replay는 같은 tensor 주소와 호환되는 shape 및 control flow를 요구합니다. 입력 storage가 이동하거나 동적인 분기가 달라지면 이전 capture를 그대로 사용할 수 없습니다.</p><p>Transformer Engine partial CUDA Graph는 model 전체가 아니라 attention, MLP, Mamba, MoE router 같은 선택된 submodule만 graph로 감쌉니다. Sequence packing이나 RL phase 전환처럼 동적인 바깥 부분은 eager로 유지하면서 반복적인 model 계산의 launch overhead만 줄이는 방식입니다.</p><p>THD format은 여러 가변 길이 sequence의 token을 한 줄로 이어 붙이고 cu_seqlens로 경계를 표현합니다. Token 수와 sequence 수가 매 batch마다 달라질 수 있기 때문에, graph replay를 위해서는 token capacity뿐 아니라 cu_seqlens entry 수와 관련 metadata에도 고정된 upper bound가 필요합니다.</p></div>
+      </details>
+      <div class="flow" role="img" aria-label="NeMo-RL policy training이 Megatron-Core를 거쳐 Transformer Engine partial CUDA Graph로 재생되는 흐름">
+        <div class="flow-node"><small>Orchestration</small><strong>NeMo-RL</strong><p>Policy phase를 고르고 sample을 pack하며 metric을 기록합니다.</p><code>policy.train()</code></div>
+        <div class="flow-node"><small>Schedule</small><strong>Megatron worker</strong><p>THD geometry를 사전 검증하고 graph bank를 선택합니다.</p><code>ensure_active(schedule_key)</code></div>
+        <div class="flow-node"><small>Model</small><strong>Megatron-Core</strong><p>고정된 schedule에서 attention, Mamba, MoE module을 실행합니다.</p><code>forward_backward_func</code></div>
+        <div class="flow-node"><small>Replay</small><strong>Transformer Engine</strong><p>선택한 partial module scope를 capture하거나 replay합니다.</p><code>make_graphed_callables</code></div>
+      </div>
+      <div class="callout"><strong>구분해야 할 경계</strong>Generation에는 vLLM의 별도 CUDA Graph가 있습니다. 이 페이지에서 다루는 것은 Megatron policy-training 경로의 Transformer Engine partial graph입니다. Logprob 시간이 빨라졌다는 사실만으로 logprob 자체가 TE graph를 replay했다고 결론 내릴 수 없습니다.</div>
+      <div class="narrow-background"><p>NeMo-RL은 rollout generation, policy/reference logprob, policy training, weight refit을 하나의 RL step에서 번갈아 실행합니다. TE partial graph는 현재 policy-training 경로에서 직접 capture되며, phase 전환 중 model·gradient storage 주소가 유지되어야 다음 training call에서 같은 bank를 재사용할 수 있습니다.</p><p>Packed batch마다 실제 logical token 수는 달라도 physical storage는 token capacity와 thd_max_packed_sequences에 맞춰 padding합니다. 첫 실제 microbatch의 PackedSeqParams를 capture 입력으로 사용하고, 모든 model-parallel rank가 schedule key와 geometry에 동의한 뒤 capture를 시작합니다.</p><p>Schedule별 graph bank는 bounded LRU에 저장됩니다. 현재 capacity는 2입니다. Attention만 사용한 run에는 충분했지만, 더 넓은 scope에서 네 종류의 token-capacity schedule이 번갈아 나타나면 eviction과 recapture가 발생합니다.</p></div>
+    </section>
+
+    <section id="intuition">
+      <p class="section-label">02 · 핵심 직관</p>
+      <h2>동적인 packed batch를 소수의 안정적인 schedule로 바꿉니다.</h2>
+      <p class="lede">Sequence packing은 논리적으로 동적이지만, replay에는 물리 tensor가 합의된 capacity에 맞으면 됩니다. 구현은 token storage와 THD metadata를 고정된 한도까지 padding하고 schedule key별 graph bank를 cache합니다.</p>
+      <div class="packing-demo">
+        <div class="diagram-card">
+          <h3>논리 sample</h3>
+          <p class="muted">세 sequence의 길이가 서로 다릅니다.</p>
+          <div class="sequence-list">
+            <div class="sequence one">S1 · 7 tokens</div>
+            <div class="sequence two">S2 · 4 tokens</div>
+            <div class="sequence three">S3 · 3 tokens</div>
+          </div>
+        </div>
+        <div class="diagram-card">
+          <h3>고정된 replay storage</h3>
+          <p class="muted">논리 token 14개가 capacity 16칸을 사용하며, cu_seqlens와 sequence slot도 같은 규칙으로 padding됩니다.</p>
+          <div class="packed-row"><span class="p1">S1</span><span class="p2">S2</span><span class="p3">S3</span><span class="pad">pad</span></div>
+          <p><code>cu_seqlens = [0, 7, 11, 14, 16]</code></p>
+        </div>
+      </div>
+      <div class="timeline" aria-label="세 번의 warmup 이후 capture와 replay가 이어지는 과정">
+        <div class="timeline-step warm"><strong>Step 1</strong>eager warmup</div>
+        <div class="timeline-step warm"><strong>Step 2</strong>eager warmup</div>
+        <div class="timeline-step warm"><strong>Step 3</strong>eager warmup</div>
+        <div class="timeline-step capture"><strong>Step 4</strong>capture miss</div>
+        <div class="timeline-step replay"><strong>Logprob</strong>bank 유지</div>
+        <div class="timeline-step replay"><strong>Step 5</strong>replay hit</div>
+      </div>
+      <div class="callout"><strong>Coverage와 hit rate는 다릅니다.</strong>Graph-call coverage 100%는 graph 대상이었던 module call이 모두 graph를 사용했다는 뜻입니다. 필요한 schedule을 매번 새로 capture한 뒤 그 step 안에서 graph를 사용하면, coverage는 100%이면서 bank hit rate는 낮을 수 있습니다.</div>
+    </section>
+
+    <section id="code">
+      <p class="section-label">03 · 코드</p>
+      <h2>이번 변화는 단일 flag가 아니라 lifecycle입니다.</h2>
+      <p class="lede">구현 범위는 configuration, packed data geometry, 분산 worker state, Transformer Engine storage, nested Megatron scope 지원, observability까지 이어집니다. 이 순서로 보면 각 계층이 다음 계층에 어떤 invariant를 전달하는지 알 수 있습니다.</p>
+      <div class="code-groups">
+            <article class="code-group">
+              <div class="step-number">01</div>
+              <div class="code-copy">
+                <h3>설정을 정규화하고 위험한 조합을 시작 전에 거부합니다</h3>
+                <p>NeMo-RL의 megatron_cfg를 MCore enum으로 변환하고, moe와 moe_router 중복, router 없는 moe_preprocess, 고정 expert capacity가 없는 whole-MoE capture 같은 잘못된 요청을 fail-closed로 막습니다. Warmup은 성공한 optimizer step 3회로 고정하며 packed replay capacity도 검증합니다.</p>
+                <div class="file-list"><a class="file-chip" href="../../../../nemo_rl/models/megatron/setup.py">nemo_rl/models/megatron/setup.py</a><a class="file-chip" href="../../../../nemo_rl/models/policy/lm_policy.py">nemo_rl/models/policy/lm_policy.py</a></div>
+                <pre><code>modules = _normalize_cuda_graph_modules(megatron_cfg[&quot;cuda_graph_modules&quot;])
+_validate_te_moe_graph_request(model_cfg, modules)
+_configure_fixed_te_graph_geometry(model_cfg, config, modules)</code></pre>
+              </div>
+            </article>
+
+            <article class="code-group">
+              <div class="step-number">02</div>
+              <div class="code-copy">
+                <h3>Packed THD 입력을 고정 capacity ABI로 만듭니다</h3>
+                <p>Logical token, label, loss mask, position ID, cu_seqlens, max_seqlen, sequence ownership을 같은 capacity contract로 padding합니다. MCore PackedSeqParams는 optional KV metadata까지 canonicalize하여 capture와 replay의 tensor signature가 같도록 유지합니다.</p>
+                <div class="file-list"><a class="file-chip" href="../../../../nemo_rl/models/megatron/data.py">nemo_rl/models/megatron/data.py</a><a class="file-chip" href="../../../../3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/packed_seq_params.py">3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/packed_seq_params.py</a></div>
+                <pre><code>logical geometry  → pack real sequences
+token capacity     → pad tokens, labels, masks, positions
+sequence capacity  → pad cu_seqlens and ownership metadata</code></pre>
+              </div>
+            </article>
+
+            <article class="code-group">
+              <div class="step-number">03</div>
+              <div class="code-copy">
+                <h3>Worker가 warmup, capture, hit, eviction을 하나의 lifecycle로 관리합니다</h3>
+                <p>세 번의 성공한 optimizer step 이후 첫 schedule miss에서 bank를 capture합니다. 같은 key는 activate하여 replay하고, capacity를 넘으면 가장 오래 사용하지 않은 bank만 reset합니다. Rank마다 다른 상태로 진행하지 않도록 schedule key와 transition 결과를 collective로 검증합니다.</p>
+                <div class="file-list"><a class="file-chip" href="../../../../nemo_rl/models/megatron/cuda_graph_lifecycle.py">nemo_rl/models/megatron/cuda_graph_lifecycle.py</a><a class="file-chip" href="../../../../nemo_rl/models/policy/workers/megatron_policy_worker.py">nemo_rl/models/policy/workers/megatron_policy_worker.py</a></div>
+                <pre><code>result = lifecycle.ensure_active(
+    key,
+    lambda: self._capture_te_cuda_graph_bank(key, packed_seq_params),
+)
+# result.status: warming | captured | hit</code></pre>
+              </div>
+            </article>
+
+            <article class="code-group">
+              <div class="step-number">04</div>
+              <div class="code-copy">
+                <h3>Graph가 참조하는 model·gradient storage 주소를 지킵니다</h3>
+                <p>Capture 시 tensor storage pointer, offset, shape, stride, dtype, device를 fingerprint로 저장합니다. Replay 전에 주소 변화가 없는지 확인하고, 실제 storage relocation이 필요한 순간에만 bank를 reset합니다. Eager logprob로 전환할 때는 graph hook을 uninstall하지만 bank와 storage는 유지합니다.</p>
+                <div class="file-list"><a class="file-chip" href="../../../../nemo_rl/models/megatron/cuda_graph_storage.py">nemo_rl/models/megatron/cuda_graph_storage.py</a><a class="file-chip" href="../../../../nemo_rl/models/policy/workers/megatron_policy_worker.py">nemo_rl/models/policy/workers/megatron_policy_worker.py</a></div>
+                <pre><code>before = fingerprint_training_graph_storage(model)
+# eager logprob runs without moving graph-owned storage
+after = fingerprint_training_graph_storage(model)
+assert classify_storage_change(before, after) is StorageChange.NONE</code></pre>
+              </div>
+            </article>
+
+            <article class="code-group">
+              <div class="step-number">05</div>
+              <div class="code-copy">
+                <h3>PR 5672의 THD partial graph 경로를 hybrid model scope로 확장합니다</h3>
+                <p>MCore transformer layer와 TE graph bank가 PackedSeqParams를 잃지 않도록 연결하고, attention뿐 아니라 Mamba, moe_router, moe_preprocess의 module boundary와 output ABI를 처리합니다. moe_preprocess는 router와 함께 사용해야 하며 dropless token dispatcher의 metadata 수명도 replay 범위에 맞춥니다.</p>
+                <div class="file-list"><a class="file-chip" href="../../../../3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/transformer_layer.py">3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/transformer_layer.py</a><a class="file-chip" href="../../../../3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/te_cuda_graph_bank.py">3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/te_cuda_graph_bank.py</a><a class="file-chip" href="../../../../3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/moe/cuda_graph_replay.py">3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/moe/cuda_graph_replay.py</a><a class="file-chip" href="../../../../3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/moe/token_dispatcher.py">3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/moe/token_dispatcher.py</a></div>
+                <pre><code>cuda_graph_modules = [
+    CudaGraphModule.attn,
+    CudaGraphModule.mamba,
+    CudaGraphModule.moe_router,
+    # CudaGraphModule.moe_preprocess requires moe_router
+]</code></pre>
+              </div>
+            </article>
+
+            <article class="code-group">
+              <div class="step-number">06</div>
+              <div class="code-copy">
+                <h3>Graph를 켰다는 설정 대신 실제 replay 증거를 기록합니다</h3>
+                <p>매 policy-training call에서 eligible call, graph call, capture, replay, cache hit/miss, eviction, fallback과 logical·padded·capacity token을 수집합니다. 이 counter는 rank 간 합의와 invariant 검증을 거친 뒤 W&amp;B와 결과 CSV로 전달됩니다.</p>
+                <div class="file-list"><a class="file-chip" href="../../../../nemo_rl/models/policy/workers/megatron_policy_worker.py">nemo_rl/models/policy/workers/megatron_policy_worker.py</a><a class="file-chip" href="../../../../nemo_rl/algorithms/utils.py">nemo_rl/algorithms/utils.py</a><a class="file-chip" href="../../../../experiments/cuda_graph/nemotron_thd_te_graph_20260731/analyze_cuda_graph_calls.py">experiments/cuda_graph/nemotron_thd_te_graph_20260731/analyze_cuda_graph_calls.py</a></div>
+                <pre><code>CudaGraphStepMetrics(
+    graph_calls=graph_calls, eligible_calls=eligible_calls,
+    cache_hit_count=hits, cache_miss_count=misses,
+    eviction_count=evictions, fallback_count=fallbacks,
+)</code></pre>
+              </div>
+            </article>
+            </div>
+    </section>
+
+    <section id="problems">
+      <p class="section-label">04 · 현재 문제</p>
+      <h2>기능적으로 동작하는 것과 완성된 것은 다릅니다.</h2>
+      <p class="lede">최신 smoke run에서는 선택한 scope들이 fatal error 없이 capture와 replay를 수행했습니다. 이제 남은 질문은 cache 효율, memory 비용, phase별 성능 귀속, convergence 수준의 correctness입니다.</p>
+      <div class="problem-grid">
+            <article class="problem-card confirmed">
+              <span class="eyebrow">확인된 문제</span>
+              <h3>넓은 scope에서 capacity-2 bank가 thrash합니다</h3>
+              <p>Attention은 step 11–19에서 hit rate 100%였지만 attention+Mamba는 55.6%, router까지 추가하면 33.3%로 내려갑니다. 네 token-capacity schedule이 두 bank slot을 번갈아 밀어내기 때문에 recapture 비용이 생깁니다.</p>
+              <div class="next-action"><strong>다음 검증</strong>동일 workload에서 bank capacity 2와 4, deterministic capacity bucketing을 GPU memory peak와 함께 비교합니다.</div>
+            </article>
+
+            <article class="problem-card risk">
+              <span class="eyebrow">Correctness 위험</span>
+              <h3>20 step은 convergence correctness를 증명하지 못합니다</h3>
+              <p>NaN/Inf, masked sequence, fallback은 없었지만 각 run이 독립적인 stochastic trajectory를 사용했습니다. Reward와 validation accuracy 차이를 CUDA Graph의 numerical impact라고 분리할 수 없습니다.</p>
+              <div class="next-action"><strong>다음 검증</strong>현재 실행 중인 matched 100-step baseline/attention soak를 완료하고 step window와 seed, input 분포를 함께 비교합니다.</div>
+            </article>
+
+            <article class="problem-card measure">
+              <span class="eyebrow">추가 측정 필요</span>
+              <h3>Logprob 성능 향상의 원인을 아직 분리하지 못했습니다</h3>
+              <p>현재 TE partial graph capture는 policy-training 경로에서 수행됩니다. Logprob throughput 향상은 storage 유지, cache 상태, workload 차이에서 간접적으로 올 수 있으며, phase-specific graph counter가 없으면 TE replay 효과라고 말할 수 없습니다.</p>
+              <div class="next-action"><strong>다음 검증</strong>Policy training과 logprob phase를 구분하는 graph-call telemetry를 추가하거나 고정 input microbenchmark로 직접 attribution합니다.</div>
+            </article>
+
+            <article class="problem-card measure">
+              <span class="eyebrow">추가 측정 필요</span>
+              <h3>Bank capacity를 늘리면 memory가 함께 늘어납니다</h3>
+              <p>각 schedule bank는 CUDA Graph executable과 static input/output storage를 유지합니다. Capacity 4는 eviction을 줄일 가능성이 있지만 Nano보다 큰 Super·Ultra와 MoE scope에서 OOM 위험을 키울 수 있습니다.</p>
+              <div class="next-action"><strong>다음 검증</strong>Capture 전후 allocated/reserved memory와 bank별 retained bytes를 기록하고 model·scope별 안전한 capacity를 정합니다.</div>
+            </article>
+
+            <article class="problem-card risk">
+              <span class="eyebrow">Correctness 위험</span>
+              <h3>Mamba와 MoE는 attention보다 더 많은 runtime invariant를 가집니다</h3>
+              <p>Mamba는 hybrid layer pattern과 CP metadata가 맞아야 하며, MoE router/preprocess는 token routing, auxiliary-loss ownership, dropless dispatcher metadata가 replay에서도 동일한 의미를 가져야 합니다. 100% coverage만으로 output·gradient parity가 보장되지는 않습니다.</p>
+              <div class="next-action"><strong>다음 검증</strong>고정 packed input에 대해 eager 대 graph output, router top-k, expert count, aux loss, gradient, parameter delta parity gate를 scope별로 실행합니다.</div>
+            </article>
+
+            <article class="problem-card measure">
+              <span class="eyebrow">추가 측정 필요</span>
+              <h3>Upstream main과 nested dependency가 계속 이동합니다</h3>
+              <p>현재 branch는 PR 5672 계열의 THD partial graph 수정과 이후 Megatron main 변경을 함께 포함합니다. NeMo-RL main과 nested Bridge/MCore가 갱신되면 API와 이미 merge된 수정이 겹치는지 다시 확인해야 합니다.</p>
+              <div class="next-action"><strong>다음 검증</strong>Upstream merge 전에 NeMo-RL, Bridge, MCore의 exact commit과 diff provenance를 다시 고정하고 중복 patch 및 regression test를 audit합니다.</div>
+            </article>
+            </div>
+    </section>
+
+    <section id="evidence">
+      <p class="section-label">05 · 측정 결과</p>
+      <h2>Nano의 step 11–19 측정 결과입니다.</h2>
+      <p class="lede">모든 row는 같은 24-GPU performance recipe, nightly image, all-to-all dispatcher, sequence packing, warmup 3회, checkpoint 비활성화를 사용합니다. 아래 값은 HTML 생성 시 canonical CSV에서 계산됩니다.</p>
+      <div class="evidence-note"><strong>비교 시 주의점</strong><span>Scope마다 sample당 평균 token 수가 다릅니다. 따라서 throughput을 우선 비교해야 하며, total step time만 보면 구현 비용과 실제 처리량 차이가 섞입니다.</span></div>
+      <h3>Policy-training throughput</h3>
+      <div class="bars">
+        <div class="bar-row">
+          <div class="bar-label"><strong>CG 없는 baseline</strong><span>941 train tok/s/GPU</span></div>
+          <div class="bar-track"><span style="width:75.01%"></span></div>
+          <div class="bar-value">baseline</div>
+        </div>
+
+        <div class="bar-row">
+          <div class="bar-label"><strong>Attention</strong><span>1,240 train tok/s/GPU</span></div>
+          <div class="bar-track"><span style="width:98.87%"></span></div>
+          <div class="bar-value">+31.8%</div>
+        </div>
+
+        <div class="bar-row">
+          <div class="bar-label"><strong>attn_mamba</strong><span>1,254 train tok/s/GPU</span></div>
+          <div class="bar-track"><span style="width:100.00%"></span></div>
+          <div class="bar-value">+33.3%</div>
+        </div>
+
+        <div class="bar-row">
+          <div class="bar-label"><strong>attn_mamba_moe_router</strong><span>1,113 train tok/s/GPU</span></div>
+          <div class="bar-track"><span style="width:88.75%"></span></div>
+          <div class="bar-value">+18.3%</div>
+        </div>
+        </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Scope</th><th>평균 token / sample</th><th>E2E tok/s/GPU</th><th>Train tok/s/GPU</th><th>Generation tok/s/GPU</th><th>Logprob tok/s/GPU</th><th>CG coverage</th><th>Bank hit rate</th><th>Eviction</th><th>Fallback</th></tr></thead>
+          <tbody>
+            <tr>
+              <th scope="row">CG 없는 baseline<small>job 5906622</small></th>
+              <td>2,349</td>
+              <td>57.5 <span class="delta">baseline</span></td>
+              <td>940.5 <span class="delta">baseline</span></td>
+              <td>265.1</td>
+              <td>727.8</td>
+              <td>—<small>0/0 calls</small></td>
+              <td>—<small>0 hit / 0 miss</small></td>
+              <td>0</td>
+              <td>0</td>
+            </tr>
+
+            <tr>
+              <th scope="row">Attention<small>job 5907665</small></th>
+              <td>2,570</td>
+              <td>68.2 <span class="delta">+18.7%</span></td>
+              <td>1,239.7 <span class="delta">+31.8%</span></td>
+              <td>262.2</td>
+              <td>1,589.9</td>
+              <td>100.0%<small>348/348 calls</small></td>
+              <td>100.0%<small>9 hit / 0 miss</small></td>
+              <td>0</td>
+              <td>0</td>
+            </tr>
+
+            <tr>
+              <th scope="row">attn_mamba<small>job 5907667</small></th>
+              <td>3,056</td>
+              <td>65.4 <span class="delta">+13.8%</span></td>
+              <td>1,253.9 <span class="delta">+33.3%</span></td>
+              <td>249.0</td>
+              <td>1,685.0</td>
+              <td>100.0%<small>1,914/1,914 calls</small></td>
+              <td>55.6%<small>5 hit / 4 miss</small></td>
+              <td>4</td>
+              <td>0</td>
+            </tr>
+
+            <tr>
+              <th scope="row">attn_mamba_moe_router<small>job 5906624</small></th>
+              <td>3,343</td>
+              <td>64.9 <span class="delta">+13.0%</span></td>
+              <td>1,112.8 <span class="delta">+18.3%</span></td>
+              <td>257.4</td>
+              <td>1,659.8</td>
+              <td>100.0%<small>3,640/3,640 calls</small></td>
+              <td>33.3%<small>3 hit / 6 miss</small></td>
+              <td>6</td>
+              <td>0</td>
+            </tr>
+            </tbody>
+        </table>
+      </div>
+      <h3>20-step correctness smoke</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Scope</th><th>Reward 평균</th><th>Gen KL 평균</th><th>Policy KL 평균</th><th>Masked seq 최대</th><th>Nonfinite</th><th>Validation accuracy · step 20</th></tr></thead>
+          <tbody>
+        <tr>
+          <th scope="row">CG 없는 baseline</th>
+          <td>0.062500</td>
+          <td>0.058910</td>
+          <td>0.363889</td>
+          <td>0</td>
+          <td>0</td>
+          <td>0.117188</td>
+        </tr>
+
+        <tr>
+          <th scope="row">Attention</th>
+          <td>0.055556</td>
+          <td>0.003605</td>
+          <td>0.162452</td>
+          <td>0</td>
+          <td>0</td>
+          <td>0.058594</td>
+        </tr>
+
+        <tr>
+          <th scope="row">attn_mamba</th>
+          <td>0.034722</td>
+          <td>0.003505</td>
+          <td>0.038750</td>
+          <td>0</td>
+          <td>0</td>
+          <td>0.066406</td>
+        </tr>
+
+        <tr>
+          <th scope="row">attn_mamba_moe_router</th>
+          <td>0.069444</td>
+          <td>0.004884</td>
+          <td>0.011252</td>
+          <td>0</td>
+          <td>0</td>
+          <td>0.101562</td>
+        </tr>
+        </tbody>
+        </table>
+      </div>
+      <div class="callout"><strong>현재까지 확인된 범위</strong>20-step run에서 NaN/Inf, masked sequence, graph fallback은 관찰되지 않았습니다. 다만 trajectory가 sample 단위로 pair되지 않았으므로 accuracy 차이를 CUDA Graph 영향이라고 결론 내릴 수 없습니다. Matched 100-step soak가 다음 correctness gate입니다.</div>
+    </section>
+
+    <section id="quiz">
+      <p class="section-label">06 · 퀴즈</p>
+      <h2>이해한 내용을 확인합니다.</h2>
+      <p class="lede">Graph coverage, cache 동작, packed geometry, correctness evidence의 차이를 묻습니다. 답을 고른 뒤 바로 설명을 확인할 수 있습니다.</p>
+      <div class="quiz-list">
+            <fieldset class="quiz-question" data-answer="1" data-feedback="Token 값은 바뀔 수 있지만 replay가 참조하는 tensor storage와 호환 shape는 안정적이어야 합니다. THD에서는 sequence boundary metadata도 그 contract에 포함됩니다.">
+              <legend><span>01</span>Packed THD CUDA Graph replay에서 token tensor만 고정 capacity로 만들면 충분하지 않은 이유는 무엇인가요?</legend>
+              <div class="quiz-options">
+            <label class="quiz-option">
+              <input type="radio" name="quiz-1" value="0">
+              <span>CUDA Graph는 token 값이 항상 같아야 하기 때문입니다.</span>
+            </label>
+
+            <label class="quiz-option">
+              <input type="radio" name="quiz-1" value="1">
+              <span>cu_seqlens와 sequence ownership 같은 metadata의 shape와 주소도 capture ABI의 일부이기 때문입니다.</span>
+            </label>
+
+            <label class="quiz-option">
+              <input type="radio" name="quiz-1" value="2">
+              <span>Transformer Engine은 padding token을 지원하지 않기 때문입니다.</span>
+            </label>
+
+            <label class="quiz-option">
+              <input type="radio" name="quiz-1" value="3">
+              <span>vLLM generation이 동일한 cu_seqlens를 사용하기 때문입니다.</span>
+            </label>
+            </div>
+              <button type="button" class="check-answer">Check answer</button>
+              <p class="quiz-feedback" aria-live="polite"></p>
+            </fieldset>
+
+            <fieldset class="quiz-question" data-answer="2" data-feedback="실패하거나 skip된 update가 warmup을 진행시키지 않도록 successful optimizer step을 전 rank에서 합의해 셉니다.">
+              <legend><span>02</span>Warmup 3회는 정확히 무엇을 의미하나요?</legend>
+              <div class="quiz-options">
+            <label class="quiz-option">
+              <input type="radio" name="quiz-2" value="0">
+              <span>Process 시작 후 forward call 세 번</span>
+            </label>
+
+            <label class="quiz-option">
+              <input type="radio" name="quiz-2" value="1">
+              <span>각 CUDA kernel을 세 번 capture</span>
+            </label>
+
+            <label class="quiz-option">
+              <input type="radio" name="quiz-2" value="2">
+              <span>성공한 optimizer step 세 번을 eager로 완료한 뒤 capture 허용</span>
+            </label>
+
+            <label class="quiz-option">
+              <input type="radio" name="quiz-2" value="3">
+              <span>각 graph bank를 세 번 replay한 뒤 metric 기록</span>
+            </label>
+            </div>
+              <button type="button" class="check-answer">Check answer</button>
+              <p class="quiz-feedback" aria-live="polite"></p>
+            </fieldset>
+
+            <fieldset class="quiz-question" data-answer="1" data-feedback="Coverage는 실제 module call이 graph로 실행됐는지를, hit rate는 필요한 schedule bank가 이미 cache에 있었는지를 측정합니다.">
+              <legend><span>03</span>Graph-call coverage가 100%인데 bank hit rate가 33.3%일 수 있는 이유는 무엇인가요?</legend>
+              <div class="quiz-options">
+            <label class="quiz-option">
+              <input type="radio" name="quiz-3" value="0">
+              <span>Coverage는 generation만 측정하고 hit rate는 training만 측정하기 때문입니다.</span>
+            </label>
+
+            <label class="quiz-option">
+              <input type="radio" name="quiz-3" value="1">
+              <span>Miss에서 새 bank를 capture한 뒤 해당 eligible call을 graph로 실행할 수 있기 때문입니다.</span>
+            </label>
+
+            <label class="quiz-option">
+              <input type="radio" name="quiz-3" value="2">
+              <span>Fallback을 graph call로 잘못 세기 때문입니다.</span>
+            </label>
+
+            <label class="quiz-option">
+              <input type="radio" name="quiz-3" value="3">
+              <span>Hit rate는 GPU utilization과 같은 metric이기 때문입니다.</span>
+            </label>
+            </div>
+              <button type="button" class="check-answer">Check answer</button>
+              <p class="quiz-feedback" aria-live="polite"></p>
+            </fieldset>
+
+            <fieldset class="quiz-question" data-answer="2" data-feedback="Eager path에서는 replay hook만 제거할 수 있습니다. Graph-owned storage 주소가 그대로라면 bank를 유지하는 것이 안전하며 recapture를 피합니다.">
+              <legend><span>04</span>Eager logprob phase에 들어갈 때 graph bank 전체를 reset하지 않는 이유는 무엇인가요?</legend>
+              <div class="quiz-options">
+            <label class="quiz-option">
+              <input type="radio" name="quiz-4" value="0">
+              <span>Logprob에서도 자동으로 같은 TE graph를 replay하기 위해서</span>
+            </label>
+
+            <label class="quiz-option">
+              <input type="radio" name="quiz-4" value="1">
+              <span>CUDA Graph memory는 reset할 수 없기 때문에</span>
+            </label>
+
+            <label class="quiz-option">
+              <input type="radio" name="quiz-4" value="2">
+              <span>Model·gradient storage가 이동하지 않는 한 다음 policy-training call에서 capture를 재사용하기 위해서</span>
+            </label>
+
+            <label class="quiz-option">
+              <input type="radio" name="quiz-4" value="3">
+              <span>vLLM과 Transformer Engine이 graph bank를 공유하기 때문에</span>
+            </label>
+            </div>
+              <button type="button" class="check-answer">Check answer</button>
+              <p class="quiz-feedback" aria-live="polite"></p>
+            </fieldset>
+
+            <fieldset class="quiz-question" data-answer="2" data-feedback="독립 stochastic trajectory의 aggregate accuracy는 원인 분리에 부족합니다. Matched 100-step soak와 더 직접적인 parity gate가 필요합니다.">
+              <legend><span>05</span>현재 20-step accuracy 결과로 말할 수 있는 가장 강한 결론은 무엇인가요?</legend>
+              <div class="quiz-options">
+            <label class="quiz-option">
+              <input type="radio" name="quiz-5" value="0">
+              <span>CUDA Graph가 baseline과 완전히 동일하게 수렴합니다.</span>
+            </label>
+
+            <label class="quiz-option">
+              <input type="radio" name="quiz-5" value="1">
+              <span>Router scope가 attention보다 정확도가 높습니다.</span>
+            </label>
+
+            <label class="quiz-option">
+              <input type="radio" name="quiz-5" value="2">
+              <span>측정된 smoke window에서 NaN/Inf, masked sequence, fallback이 없었지만 convergence parity는 아직 미확정입니다.</span>
+            </label>
+
+            <label class="quiz-option">
+              <input type="radio" name="quiz-5" value="3">
+              <span>Validation accuracy 차이는 모두 CUDA Graph numerical error입니다.</span>
+            </label>
+            </div>
+              <button type="button" class="check-answer">Check answer</button>
+              <p class="quiz-feedback" aria-live="polite"></p>
+            </fieldset>
+            </div>
+    </section>
+  </main>
+</div>
+<footer class="footer">Versioned explanation context와 측정 CSV에서 생성했습니다. 코드나 결과가 바뀌면 입력을 갱신하고 renderer를 다시 실행합니다.</footer>
+<script>
+document.querySelectorAll('.quiz-question').forEach((question) => {
+  const button = question.querySelector('.check-answer');
+  const feedback = question.querySelector('.quiz-feedback');
+  button.addEventListener('click', () => {
+    const selected = question.querySelector('input:checked');
+    feedback.classList.remove('correct', 'incorrect');
+    if (!selected) {
+      feedback.textContent = '먼저 답을 선택하세요.';
+      feedback.classList.add('incorrect');
+      return;
+    }
+    const correct = Number(selected.value) === Number(question.dataset.answer);
+    feedback.textContent = (correct ? '정답입니다. ' : '다시 생각해 보세요. ') + question.dataset.feedback;
+    feedback.classList.add(correct ? 'correct' : 'incorrect');
+  });
+});
+</script>
+</body>
+</html>
