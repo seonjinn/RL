@@ -123,9 +123,9 @@ def test_long_context_overrides_are_forwarded(tmp_path: Path) -> None:
             "MAX_TOTAL_SEQUENCE_LENGTH": "34816",
             "MAX_NEW_TOKENS": "32768",
             "MAX_INPUT_SEQUENCE_LENGTH": "2048",
-            "NUM_PROMPTS_PER_STEP": "64",
+            "NUM_PROMPTS_PER_STEP": "48",
             "NUM_GENERATIONS_PER_PROMPT": "4",
-            "TRAIN_GLOBAL_BATCH_SIZE": "256",
+            "TRAIN_GLOBAL_BATCH_SIZE": "192",
             "ACTIVATION_CHECKPOINTING": "true",
             "SEQUENCE_PACKING": "false",
             "LOGPROB_BATCH_SIZE": "1",
@@ -139,9 +139,9 @@ def test_long_context_overrides_are_forwarded(tmp_path: Path) -> None:
     assert "policy.generation.max_new_tokens=32768" in output
     assert "policy.generation.vllm_cfg.max_model_len=34816" in output
     assert "data.max_input_seq_length=2048" in output
-    assert "grpo.num_prompts_per_step=64" in output
+    assert "grpo.num_prompts_per_step=48" in output
     assert "grpo.num_generations_per_prompt=4" in output
-    assert "policy.train_global_batch_size=256" in output
+    assert "policy.train_global_batch_size=192" in output
     assert "policy.megatron_cfg.activation_checkpointing=true" in output
     assert "policy.sequence_packing.enabled=false" in output
     assert "policy.logprob_batch_size=1" in output
