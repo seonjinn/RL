@@ -7,9 +7,12 @@ ACTION=${ACTION:-dry-run}
 RUN_ID=${RUN_ID:-$(date +%Y%m%d-%H%M%S)}
 
 for backend in flashinfer_cutedsl flashinfer_cutlass; do
-    ACTION="${ACTION}" \
-        BACKEND="${backend}" \
-        DEPENDENCY_JOB_ID= \
-        RUN_ID="${RUN_ID}" \
-        "${SCRIPT_DIR}/submit_cluster.sh"
+    if [[ -n "${EXPERIMENT_ROOT:-}" ]]; then
+        env EXPERIMENT_ROOT="${EXPERIMENT_ROOT%/}/${backend}" ACTION="${ACTION}" \
+            BACKEND="${backend}" DEPENDENCY_JOB_ID= RUN_ID="${RUN_ID}" \
+            "${SCRIPT_DIR}/submit_cluster.sh"
+    else
+        env ACTION="${ACTION}" BACKEND="${backend}" DEPENDENCY_JOB_ID= \
+            RUN_ID="${RUN_ID}" "${SCRIPT_DIR}/submit_cluster.sh"
+    fi
 done

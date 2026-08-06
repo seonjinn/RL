@@ -4,6 +4,8 @@ import csv
 import importlib.util
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,6 +20,8 @@ SUMMARY_SCRIPT = (
 )
 BACKENDS = ("flashinfer_cutlass", "flashinfer_cutedsl")
 MODELS = ("qwen3-30b", "qwen3-235b", "nemotron3-super")
+NEMO_RL_COMMIT = "1" * 40
+VLLM_COMMIT = "2" * 40
 
 
 def _load_summary_module():
@@ -83,6 +87,18 @@ def _write_driver_log(
     log_dir = run_root / backend / "123-logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     (log_dir / "ray-driver.log").write_text("".join(blocks))
+    manifest = {
+        "model": run_root.name,
+        "nemo_rl_commit": NEMO_RL_COMMIT,
+        "vllm_commit": VLLM_COMMIT,
+        "container": "/containers/nemo-rl.sqsh",
+        "recipe": f"recipes/{run_root.name}.yaml",
+        "cuda_graph": True,
+        "quantization_ignored_layer_kws": ["lm_head", "mlp.gate"],
+        "moe_backend": "flashinfer_trtllm",
+        "linear_backend": backend,
+    }
+    (run_root / backend / "run_manifest.json").write_text(json.dumps(manifest) + "\n")
 
 
 def _set_metric_to_zero(log_path: Path, metric_label: str) -> None:
@@ -124,9 +140,10 @@ def test_write_results_summarizes_paired_steps_and_normalizes_to_cutlass(
         assert cutlass["first_step"] == 3
         assert cutlass["last_step"] == 8
         assert cutlass["num_steps"] == 6
-        assert cutlass["mean_generation_length_mean"] == cutedsl[
-            "mean_generation_length_mean"
-        ]
+        assert (
+            cutlass["mean_generation_length_mean"]
+            == cutedsl["mean_generation_length_mean"]
+        )
         assert cutlass["generation_tokens_per_sec_per_gpu_cutlass_normalized"] == 1.0
         assert cutlass["e2e_tokens_per_sec_per_gpu_cutlass_normalized"] == 1.0
         assert cutlass["generation_latency_speedup_vs_cutlass"] == 1.0
@@ -135,6 +152,147 @@ def test_write_results_summarizes_paired_steps_and_normalizes_to_cutlass(
         assert cutedsl["e2e_tokens_per_sec_per_gpu_cutlass_normalized"] > 1.0
         assert cutedsl["generation_latency_speedup_vs_cutlass"] > 1.0
         assert cutedsl["e2e_latency_speedup_vs_cutlass"] > 1.0
+        assert cutlass["manifest"]["nemo_rl_commit"] == NEMO_RL_COMMIT
+        assert cutedsl["manifest"]["linear_backend"] == "flashinfer_cutedsl"
+
+
+@pytest.mark.parametrize(
+    ("field", "different_value"),
+    (
+        ("nemo_rl_commit", "3" * 40),
+        ("vllm_commit", "4" * 40),
+        ("container", "/containers/different.sqsh"),
+        ("recipe", "recipes/different.yaml"),
+        ("cuda_graph", False),
+        ("quantization_ignored_layer_kws", ["lm_head"]),
+        ("moe_backend", "different_moe_backend"),
+    ),
+)
+def test_write_results_rejects_mismatched_invariant_manifest(
+    tmp_path: Path, field: str, different_value: object
+) -> None:
+    summary = _load_summary_module()
+    run_roots = _write_complete_matrix(tmp_path)
+    manifest_path = run_roots["qwen3-30b"] / "flashinfer_cutedsl" / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest[field] = different_value
+    manifest_path.write_text(json.dumps(manifest) + "\n")
+
+    with pytest.raises(
+        ValueError,
+        match=f"Invariant manifest mismatch for qwen3-30b: {field}",
+    ):
+        summary.write_results(run_roots, tmp_path / "summary")
+
+
+def test_write_results_requires_machine_readable_manifest(tmp_path: Path) -> None:
+    summary = _load_summary_module()
+    run_roots = _write_complete_matrix(tmp_path)
+    manifest_path = (
+        run_roots["nemotron3-super"] / "flashinfer_cutlass" / "run_manifest.json"
+    )
+    manifest_path.unlink()
+
+    with pytest.raises(
+        ValueError,
+        match=("Missing run manifest for nemotron3-super/flashinfer_cutlass"),
+    ):
+        summary.write_results(run_roots, tmp_path / "summary")
+
+
+def test_write_results_requires_exact_commit_ids(tmp_path: Path) -> None:
+    summary = _load_summary_module()
+    run_roots = _write_complete_matrix(tmp_path)
+    manifest_path = run_roots["qwen3-30b"] / "flashinfer_cutlass" / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["nemo_rl_commit"] = "not-an-exact-commit"
+    manifest_path.write_text(json.dumps(manifest) + "\n")
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Invalid exact commit in run manifest for "
+            "qwen3-30b/flashinfer_cutlass: nemo_rl_commit"
+        ),
+    ):
+        summary.write_results(run_roots, tmp_path / "summary")
+
+
+def test_write_results_rejects_wrong_declared_backend(tmp_path: Path) -> None:
+    summary = _load_summary_module()
+    run_roots = _write_complete_matrix(tmp_path)
+    manifest_path = run_roots["qwen3-235b"] / "flashinfer_cutedsl" / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["linear_backend"] = "flashinfer_cutlass"
+    manifest_path.write_text(json.dumps(manifest) + "\n")
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Declared linear backend mismatch for qwen3-235b/flashinfer_cutedsl: "
+            "flashinfer_cutlass"
+        ),
+    ):
+        summary.write_results(run_roots, tmp_path / "summary")
+
+
+def test_cli_requires_exact_model_matrix_by_default(tmp_path: Path) -> None:
+    run_roots = _write_complete_matrix(tmp_path)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SUMMARY_SCRIPT),
+            "--model-run",
+            f"qwen3-30b={run_roots['qwen3-30b']}",
+            "--output-dir",
+            str(tmp_path / "summary"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "Missing required models: nemotron3-super, qwen3-235b" in result.stderr
+
+
+def test_cli_rejects_unknown_model_label(tmp_path: Path) -> None:
+    run_roots = _write_complete_matrix(tmp_path)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SUMMARY_SCRIPT),
+            "--model-run",
+            f"qwen30={run_roots['qwen3-30b']}",
+            "--output-dir",
+            str(tmp_path / "summary"),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "Unknown models: qwen30" in result.stderr
+
+
+def test_cli_allows_known_partial_matrix_only_with_opt_in(tmp_path: Path) -> None:
+    run_roots = _write_complete_matrix(tmp_path)
+    output_dir = tmp_path / "summary"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SUMMARY_SCRIPT),
+            "--model-run",
+            f"qwen3-30b={run_roots['qwen3-30b']}",
+            "--allow-partial",
+            "--output-dir",
+            str(output_dir),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert set(json.loads((output_dir / "summary.json").read_text())) == {"qwen3-30b"}
 
 
 def test_write_results_rejects_missing_backend_log(tmp_path: Path) -> None:
@@ -146,8 +304,7 @@ def test_write_results_rejects_missing_backend_log(tmp_path: Path) -> None:
     with pytest.raises(
         ValueError,
         match=(
-            "Expected exactly one driver log for "
-            "qwen3-235b/flashinfer_cutedsl, found 0"
+            "Expected exactly one driver log for qwen3-235b/flashinfer_cutedsl, found 0"
         ),
     ):
         summary.write_results(run_roots, tmp_path / "summary")
@@ -156,7 +313,16 @@ def test_write_results_rejects_missing_backend_log(tmp_path: Path) -> None:
 def test_write_results_rejects_unpaired_generation_lengths(tmp_path: Path) -> None:
     summary = _load_summary_module()
     run_roots = _write_complete_matrix(tmp_path)
-    mismatched_lengths = [1_011.0, 1_012.0, 1_013.0, 1_014.0, 9_999.0, 1_016.0, 1_017.0, 1_018.0]
+    mismatched_lengths = [
+        1_011.0,
+        1_012.0,
+        1_013.0,
+        1_014.0,
+        9_999.0,
+        1_016.0,
+        1_017.0,
+        1_018.0,
+    ]
     _write_driver_log(
         run_roots["qwen3-30b"],
         "flashinfer_cutedsl",
@@ -175,9 +341,7 @@ def test_write_results_requires_every_requested_measured_step(tmp_path: Path) ->
     summary = _load_summary_module()
     run_roots = _write_complete_matrix(tmp_path)
     for backend in BACKENDS:
-        _write_driver_log(
-            run_roots["qwen3-30b"], backend, 10.0, num_steps=3
-        )
+        _write_driver_log(run_roots["qwen3-30b"], backend, 10.0, num_steps=3)
 
     with pytest.raises(
         ValueError,
@@ -192,9 +356,7 @@ def test_write_results_requires_every_requested_measured_step(tmp_path: Path) ->
 def test_write_results_rejects_short_backend_result_row(tmp_path: Path) -> None:
     summary = _load_summary_module()
     run_roots = _write_complete_matrix(tmp_path)
-    _write_driver_log(
-        run_roots["qwen3-235b"], "flashinfer_cutedsl", 20.0, num_steps=7
-    )
+    _write_driver_log(run_roots["qwen3-235b"], "flashinfer_cutedsl", 20.0, num_steps=7)
 
     with pytest.raises(
         ValueError,
@@ -206,19 +368,16 @@ def test_write_results_rejects_short_backend_result_row(tmp_path: Path) -> None:
         summary.write_results(run_roots, tmp_path / "summary")
 
 
-def test_write_results_rejects_incomplete_training_results_block(tmp_path: Path) -> None:
+def test_write_results_rejects_incomplete_training_results_block(
+    tmp_path: Path,
+) -> None:
     summary = _load_summary_module()
     run_roots = _write_complete_matrix(tmp_path)
     log_path = (
-        run_roots["qwen3-30b"]
-        / "flashinfer_cutedsl"
-        / "123-logs"
-        / "ray-driver.log"
+        run_roots["qwen3-30b"] / "flashinfer_cutedsl" / "123-logs" / "ray-driver.log"
     )
     log_path.write_text(
-        log_path.read_text().replace(
-            "    - E2E (Tokens/sec/gpu): 495.00\n", "", 1
-        )
+        log_path.read_text().replace("    - E2E (Tokens/sec/gpu): 495.00\n", "", 1)
     )
 
     with pytest.raises(
@@ -249,10 +408,7 @@ def test_write_results_rejects_zero_normalization_denominator(
     summary = _load_summary_module()
     run_roots = _write_complete_matrix(tmp_path)
     _set_metric_to_zero(
-        run_roots["qwen3-30b"]
-        / "flashinfer_cutlass"
-        / "123-logs"
-        / "ray-driver.log",
+        run_roots["qwen3-30b"] / "flashinfer_cutlass" / "123-logs" / "ray-driver.log",
         metric_label,
     )
 

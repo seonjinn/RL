@@ -8,20 +8,20 @@ import json
 import re
 from pathlib import Path
 from statistics import fmean
-from typing import Mapping, NamedTuple, Sequence, TypedDict
+from typing import Mapping, NamedTuple, Sequence, TypedDict, cast
 
 
 BACKENDS = ("flashinfer_cutlass", "flashinfer_cutedsl")
+MODELS = ("qwen3-30b", "qwen3-235b", "nemotron3-super")
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+EXACT_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
 TOTAL_STEP_PATTERN = re.compile(r"Total step time:\s*([0-9.]+)s")
 GENERATION_PATTERN = re.compile(r"generation:\s*([0-9.]+)s")
 E2E_THROUGHPUT_PATTERN = re.compile(r"E2E \(Tokens/sec/gpu\):\s*([0-9.]+)")
 GENERATION_THROUGHPUT_PATTERN = re.compile(
     r"Generation Worker Group \(Tokens/sec/gpu\):\s*([0-9.]+)"
 )
-MEAN_GENERATION_LENGTH_PATTERN = re.compile(
-    r"Mean Generation Length:\s*([0-9.]+)"
-)
+MEAN_GENERATION_LENGTH_PATTERN = re.compile(r"Mean Generation Length:\s*([0-9.]+)")
 
 
 class StepMetrics(NamedTuple):
@@ -55,7 +55,30 @@ class CsvRow(TypedDict):
     generation_tokens_per_sec_per_gpu: float
 
 
+class RunManifest(TypedDict):
+    model: str
+    nemo_rl_commit: str
+    vllm_commit: str
+    container: str
+    recipe: str
+    cuda_graph: bool
+    quantization_ignored_layer_kws: list[str]
+    moe_backend: str
+    linear_backend: str
+
+
 CSV_FIELDNAMES = tuple(CsvRow.__annotations__)
+MANIFEST_FIELDS = tuple(RunManifest.__annotations__)
+MANIFEST_INVARIANT_FIELDS = (
+    "model",
+    "nemo_rl_commit",
+    "vllm_commit",
+    "container",
+    "recipe",
+    "cuda_graph",
+    "quantization_ignored_layer_kws",
+    "moe_backend",
+)
 
 
 def _metric(pattern: re.Pattern[str], block: str) -> float | None:
@@ -119,6 +142,81 @@ def _find_driver_log(model: str, run_root: Path, backend: str) -> Path:
     return matches[0]
 
 
+def _load_run_manifest(model: str, run_root: Path, backend: str) -> RunManifest:
+    manifest_path = run_root / backend / "run_manifest.json"
+    if not manifest_path.is_file():
+        raise ValueError(f"Missing run manifest for {model}/{backend}")
+    try:
+        raw_manifest: object = json.loads(manifest_path.read_text())
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            f"Invalid JSON run manifest for {model}/{backend}: {error.msg}"
+        ) from error
+    if not isinstance(raw_manifest, dict):
+        raise ValueError(f"Run manifest for {model}/{backend} must be a JSON object")
+    manifest = cast(dict[str, object], raw_manifest)
+    missing_fields = [field for field in MANIFEST_FIELDS if field not in manifest]
+    if missing_fields:
+        raise ValueError(
+            f"Incomplete run manifest for {model}/{backend}: missing "
+            f"{', '.join(missing_fields)}"
+        )
+
+    string_fields = (
+        "model",
+        "nemo_rl_commit",
+        "vllm_commit",
+        "container",
+        "recipe",
+        "moe_backend",
+        "linear_backend",
+    )
+    for field in string_fields:
+        if not isinstance(manifest[field], str) or not manifest[field]:
+            raise ValueError(
+                f"Invalid run manifest field for {model}/{backend}: {field}"
+            )
+    if not isinstance(manifest["cuda_graph"], bool):
+        raise ValueError(
+            f"Invalid run manifest field for {model}/{backend}: cuda_graph"
+        )
+    quantization_scope = manifest["quantization_ignored_layer_kws"]
+    if not isinstance(quantization_scope, list) or not all(
+        isinstance(keyword, str) for keyword in quantization_scope
+    ):
+        raise ValueError(
+            "Invalid run manifest field for "
+            f"{model}/{backend}: quantization_ignored_layer_kws"
+        )
+    for commit_field in ("nemo_rl_commit", "vllm_commit"):
+        commit = cast(str, manifest[commit_field])
+        if EXACT_COMMIT_PATTERN.fullmatch(commit) is None:
+            raise ValueError(
+                f"Invalid exact commit in run manifest for {model}/{backend}: "
+                f"{commit_field}"
+            )
+    if manifest["model"] != model:
+        raise ValueError(
+            f"Declared model mismatch for {model}/{backend}: {manifest['model']}"
+        )
+    if manifest["linear_backend"] != backend:
+        raise ValueError(
+            f"Declared linear backend mismatch for {model}/{backend}: "
+            f"{manifest['linear_backend']}"
+        )
+    return cast(RunManifest, manifest)
+
+
+def validate_paired_manifests(
+    model: str, cutlass: RunManifest, cutedsl: RunManifest
+) -> None:
+    cutlass_mapping = cast(Mapping[str, object], cutlass)
+    cutedsl_mapping = cast(Mapping[str, object], cutedsl)
+    for field in MANIFEST_INVARIANT_FIELDS:
+        if cutlass_mapping[field] != cutedsl_mapping[field]:
+            raise ValueError(f"Invariant manifest mismatch for {model}: {field}")
+
+
 def _measured_steps(
     model: str,
     backend: str,
@@ -157,7 +255,9 @@ def summarize_steps(steps: Sequence[StepMetrics]) -> StepSummary:
 
 
 def validate_paired_steps(
-    model: str, cutlass_steps: Sequence[StepMetrics], cutedsl_steps: Sequence[StepMetrics]
+    model: str,
+    cutlass_steps: Sequence[StepMetrics],
+    cutedsl_steps: Sequence[StepMetrics],
 ) -> None:
     if len(cutlass_steps) != len(cutedsl_steps):
         raise ValueError(
@@ -242,8 +342,18 @@ def write_results(
 
     rows: list[CsvRow] = []
     summaries: dict[str, dict[str, StepSummary]] = {}
+    manifests: dict[str, dict[str, RunManifest]] = {}
     for model, raw_run_root in model_run_roots.items():
         run_root = Path(raw_run_root)
+        manifests[model] = {
+            backend: _load_run_manifest(model, run_root, backend)
+            for backend in BACKENDS
+        }
+        validate_paired_manifests(
+            model,
+            manifests[model]["flashinfer_cutlass"],
+            manifests[model]["flashinfer_cutedsl"],
+        )
         measured_steps: dict[str, list[StepMetrics]] = {}
         for backend in BACKENDS:
             log_path = _find_driver_log(model, run_root, backend)
@@ -251,8 +361,7 @@ def write_results(
                 log_path.read_text(errors="replace"), source=f"{model}/{backend}"
             )
             rows.extend(
-                CsvRow(model=model, backend=backend, **step._asdict())
-                for step in steps
+                CsvRow(model=model, backend=backend, **step._asdict()) for step in steps
             )
             measured_steps[backend] = _measured_steps(
                 model, backend, steps, first_step, last_step
@@ -271,11 +380,14 @@ def write_results(
                 model, backend, summary, first_step, last_step
             )
 
-    normalized_summaries = {
+    normalized_summaries: dict[str, dict[str, dict[str, int | float | RunManifest]]] = {
         model: {
-            backend: _with_cutlass_normalization(
-                summary, model_summaries["flashinfer_cutlass"]
-            )
+            backend: {
+                **_with_cutlass_normalization(
+                    summary, model_summaries["flashinfer_cutlass"]
+                ),
+                "manifest": manifests[model][backend],
+            }
             for backend, summary in model_summaries.items()
         }
         for model, model_summaries in summaries.items()
@@ -312,7 +424,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--first-step", type=int, default=3)
     parser.add_argument("--last-step", type=int, default=8)
+    parser.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="Allow a known subset of the three model rows.",
+    )
     return parser.parse_args()
+
+
+def validate_model_set(
+    model_run_roots: Mapping[str, Path], allow_partial: bool
+) -> None:
+    actual_models = set(model_run_roots)
+    required_models = set(MODELS)
+    unknown_models = sorted(actual_models - required_models)
+    if unknown_models:
+        raise ValueError(f"Unknown models: {', '.join(unknown_models)}")
+    missing_models = sorted(required_models - actual_models)
+    if missing_models and not allow_partial:
+        raise ValueError(f"Missing required models: {', '.join(missing_models)}")
 
 
 def main() -> None:
@@ -320,6 +450,7 @@ def main() -> None:
     model_run_roots = dict(args.model_run)
     if len(model_run_roots) != len(args.model_run):
         raise ValueError("Each MODEL may be supplied only once")
+    validate_model_set(model_run_roots, args.allow_partial)
     write_results(
         model_run_roots,
         args.output_dir,

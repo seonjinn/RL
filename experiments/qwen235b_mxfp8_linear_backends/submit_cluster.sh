@@ -22,8 +22,8 @@ case "${ACTION}" in
         ;;
 esac
 
-EXPECTED_NEMO_RL_BASE_COMMIT=${EXPECTED_NEMO_RL_BASE_COMMIT:-93e41795e2d6f340728ac238e7a426b4770473e3}
 EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-a76062edee3a3ac23d47a93c7ce466f06a19111f}
+MODEL=qwen3-235b
 CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g-mxfp8-rollout.yaml
 
 ACCOUNT=${SLURM_ACCOUNT:-coreai_dlalgo_llm}
@@ -40,12 +40,21 @@ DEPENDENCY_JOB_ID=${DEPENDENCY_JOB_ID:-}
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}
 CONTAINER=${CONTAINER:-${WORK_ROOT}/containers/nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh}
 CUSTOM_VLLM_ROOT=${CUSTOM_VLLM_ROOT:-${REPO_DIR}/3rdparty/vllm}
+NEMO_RL_STATUS_PATHS=(.)
+RUNTIME_NEMO_RL_STATUS_EXCLUSION=
+if [[ "${CUSTOM_VLLM_ROOT}" == "${REPO_DIR}/"* ]]; then
+    custom_vllm_relative=${CUSTOM_VLLM_ROOT#"${REPO_DIR}/"}
+    NEMO_RL_STATUS_PATHS+=(":(exclude)${custom_vllm_relative}")
+    RUNTIME_NEMO_RL_STATUS_EXCLUSION=" ':(exclude)${custom_vllm_relative}'"
+fi
 EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${WORK_ROOT}/experiments/qwen235b-mxfp8-linear-backends/${RUN_ID}/${BACKEND}}
 CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/.cache/qwen235b-mxfp8-linear-backends/${BACKEND}}
 HF_HOME=${HF_HOME:-${WORK_ROOT}/.cache/huggingface}
 DRIVER_VENV=${DRIVER_VENV:-${CACHE_ROOT}/driver-venv}
 WORKER_VENV=${WORKER_VENV:-/tmp/nemo-rl-qwen235b-${BACKEND}-workers}
 WANDB_MODE=${WANDB_MODE:-disabled}
+SUBMIT_NEMO_RL_COMMIT=$(git -C "${REPO_DIR}" rev-parse HEAD)
+SUBMIT_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT}
 
 if [[ "${ACTION}" != "dry-run" ]]; then
     [[ -f "${CONTAINER}" ]] || { echo "Missing container: ${CONTAINER}" >&2; exit 1; }
@@ -53,14 +62,17 @@ if [[ "${ACTION}" != "dry-run" ]]; then
         echo "Custom vLLM is not prepared at ${CUSTOM_VLLM_ROOT}" >&2
         exit 1
     }
-    actual_vllm_commit=$(git -C "${CUSTOM_VLLM_ROOT}" rev-parse HEAD)
-    git -C "${REPO_DIR}" merge-base --is-ancestor \
-        "${EXPECTED_NEMO_RL_BASE_COMMIT}" HEAD || {
-        echo "NeMo-RL HEAD does not contain ${EXPECTED_NEMO_RL_BASE_COMMIT}" >&2
+    [[ -f "${CUSTOM_VLLM_ROOT}/nemo-rl.env" ]] || {
+        echo "Custom vLLM environment is not prepared at ${CUSTOM_VLLM_ROOT}" >&2
         exit 1
     }
-    [[ "${actual_vllm_commit}" == "${EXPECTED_VLLM_COMMIT}" ]] || {
-        echo "Unexpected vLLM commit: ${actual_vllm_commit}" >&2
+    if [[ -n "$(git -C "${REPO_DIR}" status --porcelain --untracked-files=all -- "${NEMO_RL_STATUS_PATHS[@]}")" ]]; then
+        echo "NeMo-RL source is not clean at ${REPO_DIR}" >&2
+        exit 1
+    fi
+    SUBMIT_VLLM_COMMIT=$(git -C "${CUSTOM_VLLM_ROOT}" rev-parse HEAD)
+    [[ "${SUBMIT_VLLM_COMMIT}" == "${EXPECTED_VLLM_COMMIT}" ]] || {
+        echo "Unexpected vLLM commit: ${SUBMIT_VLLM_COMMIT}" >&2
         exit 1
     }
 fi
@@ -70,6 +82,21 @@ mkdir -p "${EXPERIMENT_ROOT}" "${CACHE_ROOT}" "${HF_HOME}"
 COMMAND=$(cat <<EOF
 set -euo pipefail
 cd ${REPO_DIR}
+runtime_nemo_rl_commit=\$(git rev-parse HEAD)
+[[ "\${runtime_nemo_rl_commit}" == "${SUBMIT_NEMO_RL_COMMIT}" ]] || {
+  echo "NeMo-RL runtime commit mismatch: expected ${SUBMIT_NEMO_RL_COMMIT}, found \${runtime_nemo_rl_commit}" >&2
+  exit 1
+}
+if [[ -n "\$(git status --porcelain --untracked-files=all -- .${RUNTIME_NEMO_RL_STATUS_EXCLUSION})" ]]; then
+  echo "NeMo-RL source is not clean at job start: ${REPO_DIR}" >&2
+  exit 1
+fi
+runtime_vllm_commit=\$(git -C ${CUSTOM_VLLM_ROOT} rev-parse HEAD)
+[[ "\${runtime_vllm_commit}" == "${SUBMIT_VLLM_COMMIT}" ]] || {
+  echo "vLLM runtime commit mismatch: expected ${SUBMIT_VLLM_COMMIT}, found \${runtime_vllm_commit}" >&2
+  exit 1
+}
+rm -f ${EXPERIMENT_ROOT}/run_manifest.json
 export HF_HOME=${HF_HOME}
 export NCCL_NVLS_ENABLE=0
 export RAY_CGRAPH_get_timeout=2400
@@ -84,13 +111,50 @@ export UV_PROJECT_ENVIRONMENT=${DRIVER_VENV}
 export UV_LOCK_TIMEOUT=7200
 export WANDB_MODE=${WANDB_MODE}
 export VLLM_PRECOMPILED_WHEEL_LOCATION=https://github.com/vllm-project/vllm/releases/download/v0.25.1/vllm-0.25.1-cp38-abi3-manylinux_2_28_aarch64.whl
-printf 'NEMO_RL_COMMIT=%s\n' "\$(git rev-parse HEAD)"
-printf 'VLLM_COMMIT=%s\n' "\$(git -C ${CUSTOM_VLLM_ROOT} rev-parse HEAD)"
+source ${CUSTOM_VLLM_ROOT}/nemo-rl.env
+printf 'NEMO_RL_COMMIT=%s\n' "\${runtime_nemo_rl_commit}"
+printf 'VLLM_COMMIT=%s\n' "\${runtime_vllm_commit}"
 if [[ ! -x ${DRIVER_VENV}/bin/python ]]; then
   uv venv ${DRIVER_VENV}
 fi
 uv pip install --python ${DRIVER_VENV}/bin/python setuptools_rust
-uv run --frozen --extra vllm python -c 'import flashinfer, vllm; print("vLLM=" + vllm.__version__); print("FlashInfer=" + flashinfer.__version__)'
+uv run --frozen --extra vllm python - <<'PY'
+from pathlib import Path
+
+import flashinfer
+import vllm
+
+vllm_path = Path(vllm.__file__).resolve()
+custom_vllm_root = Path("${CUSTOM_VLLM_ROOT}").resolve()
+if not vllm_path.is_relative_to(custom_vllm_root):
+    raise RuntimeError(
+        f"Expected vLLM from {custom_vllm_root}, but imported {vllm_path}"
+    )
+
+print(f"vLLM={vllm.__version__} path={vllm_path}")
+print(f"FlashInfer={flashinfer.__version__}")
+PY
+export MXFP8_NEMO_RL_COMMIT="\${runtime_nemo_rl_commit}"
+export MXFP8_VLLM_COMMIT="\${runtime_vllm_commit}"
+${DRIVER_VENV}/bin/python - <<'PY'
+import json
+import os
+from pathlib import Path
+
+manifest = {
+    "model": "${MODEL}",
+    "nemo_rl_commit": os.environ["MXFP8_NEMO_RL_COMMIT"],
+    "vllm_commit": os.environ["MXFP8_VLLM_COMMIT"],
+    "container": "${CONTAINER}",
+    "recipe": "${CONFIG}",
+    "cuda_graph": True,
+    "quantization_ignored_layer_kws": ["lm_head", "mlp.gate"],
+    "moe_backend": "flashinfer_trtllm",
+    "linear_backend": "${BACKEND}",
+}
+manifest_path = Path("${EXPERIMENT_ROOT}/run_manifest.json")
+manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+PY
 uv run --frozen --extra vllm examples/run_grpo.py \
   --config ${CONFIG} \
   cluster.num_nodes=${NUM_NODES} \

@@ -21,6 +21,9 @@ ACTION=submit ./experiments/qwen30b_mxfp8_linear_backends/prepare_custom_vllm_pt
 
 The launcher sources `3rdparty/vllm/nemo-rl.env` and fails before GRPO starts
 unless the runtime `vllm.__file__` resolves under that custom checkout.
+Submission also requires a clean NeMo-RL checkout. The launcher captures its
+exact commit and the custom-vLLM commit at submission, then rechecks both
+commits and NeMo-RL cleanliness when the queued job starts.
 
 Run a two-step scheduler and CUDA Graph/refit smoke validation first:
 
@@ -38,3 +41,7 @@ ACTION=submit MAX_STEPS=8 RUN_ID=$(date +%Y%m%d-%H%M%S) ./submit_matrix_ptyche.s
 
 The matrix submits both arms independently, with no inter-arm dependency.
 W&B and checkpoint writes are disabled; TensorBoard logging remains enabled.
+An explicit `EXPERIMENT_ROOT` is split into backend-specific subdirectories.
+Each arm writes `run_manifest.json` there after runtime validation, recording
+the model, exact source/runtime commits, container, recipe, CUDA Graph mode,
+quantization scope, MoE backend, and linear backend.

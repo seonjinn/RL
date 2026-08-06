@@ -9,6 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = (
     REPO_ROOT / "experiments" / "qwen30b_mxfp8_linear_backends" / "submit_ptyche.sh"
 )
+MATRIX_LAUNCHER = LAUNCHER.with_name("submit_matrix_ptyche.sh")
 PREPARE_SCRIPT = LAUNCHER.with_name("prepare_custom_vllm_ptyche.sh")
 BUILD_CUSTOM_VLLM_SCRIPT = REPO_ROOT / "tools" / "build-custom-vllm.sh"
 
@@ -151,6 +152,67 @@ def test_long_context_overrides_are_forwarded(tmp_path: Path) -> None:
     assert "policy.logprob_chunk_size=2048" in output
     assert "policy.megatron_cfg.defer_fp32_logits=true" in output
     assert "policy.generation.vllm_cfg.gpu_memory_utilization=0.5" in output
+
+
+def test_dry_run_captures_runtime_provenance_and_manifest(tmp_path: Path) -> None:
+    output = _dry_run(tmp_path, "flashinfer_cutedsl")
+    expected_nemo_rl_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
+    ).strip()
+    custom_vllm_root = tmp_path / "vllm"
+
+    assert f"source {custom_vllm_root}/nemo-rl.env" in output
+    assert "vllm_path = Path(vllm.__file__).resolve()" in output
+    assert f'custom_vllm_root = Path("{custom_vllm_root}").resolve()' in output
+    assert "vllm_path.is_relative_to(custom_vllm_root)" in output
+    assert "runtime_nemo_rl_commit=$(git rev-parse HEAD)" in output
+    assert expected_nemo_rl_commit in output
+    assert "git status --porcelain --untracked-files=all" in output
+    assert "runtime_vllm_commit=$(git -C" in output
+    assert "run_manifest.json" in output
+    assert '"model": "qwen3-30b"' in output
+    assert '"nemo_rl_commit"' in output
+    assert '"vllm_commit"' in output
+    assert '"container"' in output
+    assert '"recipe"' in output
+    assert '"cuda_graph": True' in output
+    assert '"quantization_ignored_layer_kws": ["lm_head", "mlp.gate"]' in output
+    assert '"moe_backend": "flashinfer_trtllm"' in output
+    assert '"linear_backend": "flashinfer_cutedsl"' in output
+
+
+def test_model_matrix_defaults_to_two_isolated_backend_roots(tmp_path: Path) -> None:
+    env = os.environ | {
+        "ACTION": "dry-run",
+        "EXPERIMENT_ROOT": str(tmp_path / "runs"),
+        "RUN_ID": "test-run",
+        "WORK_ROOT": str(tmp_path),
+    }
+    result = subprocess.run(
+        ["bash", str(MATRIX_LAUNCHER)],
+        check=True,
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.splitlines().count("backend=flashinfer_cutedsl") == 1
+    assert result.stdout.splitlines().count("backend=flashinfer_cutlass") == 1
+    assert result.stdout.splitlines().count("backend=flashinfer_trtllm") == 0
+    assert result.stdout.splitlines().count("backend=flashinfer_trtllm_adaptive") == 0
+    assert (
+        result.stdout.splitlines().count(
+            f"experiment_root={tmp_path / 'runs' / 'flashinfer_cutedsl'}"
+        )
+        == 1
+    )
+    assert (
+        result.stdout.splitlines().count(
+            f"experiment_root={tmp_path / 'runs' / 'flashinfer_cutlass'}"
+        )
+        == 1
+    )
 
 
 def test_custom_vllm_build_is_recoverable() -> None:

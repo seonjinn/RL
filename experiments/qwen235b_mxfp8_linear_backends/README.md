@@ -15,6 +15,8 @@ git -C ../../3rdparty/vllm rev-parse HEAD
 ```
 
 The command must print `a76062edee3a3ac23d47a93c7ce466f06a19111f`.
+The checkout must include `nemo-rl.env`; the launcher sources it and rejects a
+runtime `vllm.__file__` outside the custom checkout.
 
 Run the two-step smoke validation before measurement:
 
@@ -34,3 +36,11 @@ Each matrix arm is submitted independently with no inter-arm `afterok`
 dependency. Use two steps for CUDA Graph and refit smoke validation. Use eight
 steps for the measurement run and report the steady-state mean from steps 3
 through 8.
+
+Submission requires a clean NeMo-RL checkout. Its exact commit is captured at
+submission and rechecked with cleanliness when the queued job starts. An
+explicit `EXPERIMENT_ROOT` is treated as the shared run root, and the matrix
+appends the backend name for each arm. After provenance and runtime import
+validation, each arm writes `run_manifest.json` under that backend root with
+the model, exact source/runtime commits, container, recipe, CUDA Graph mode,
+quantization scope, MoE backend, and linear backend.
