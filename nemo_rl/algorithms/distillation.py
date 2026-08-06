@@ -241,7 +241,9 @@ def setup(
     assert generation_config is not None, (
         "A generation config in the PolicyConfig is required for distillation"
     )
-    generation_config["model_name"] = policy_config["model_name"]
+    policy_model_name = policy_config.get("model_name")
+    if policy_model_name is not None:
+        generation_config["model_name"] = policy_model_name
     checkpoint_engine_config = None
     if generation_config["backend"] == "vllm":
         vllm_config = cast(VllmConfig, generation_config)
