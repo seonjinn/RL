@@ -2502,6 +2502,131 @@ def _run_single_grpo_train_step(mock_grpo_components, train_func, monkeypatch):
             )
 
 
+def _run_single_cuda_graph_metrics_step(mock_grpo_components, train_func) -> None:
+    """Run one real trainer loop with only external infrastructure replaced."""
+    mock_batch = next(iter(mock_grpo_components["train_dataloader"]))
+    mock_rollout_metrics = {"mean_gen_tokens_per_sample": 2.0}
+    policy = mock_grpo_components["policy"]
+    master_config = mock_grpo_components["master_config"]
+    master_config.grpo.update(
+        {
+            "max_num_steps": 1,
+            "max_num_epochs": 1,
+            "val_period": 0,
+            "val_at_start": False,
+            "use_dynamic_sampling": False,
+        }
+    )
+
+    with ExitStack() as stack:
+        if train_func is grpo_train_sync:
+            master_config.data_plane = {"enabled": True}
+            stack.enter_context(mock_sync_grpo_infrastructure(policy))
+        elif train_func is async_grpo_train:
+            master_config.policy["generation"]["colocated"]["enabled"] = False
+            stack.enter_context(
+                mock_async_grpo_infrastructure(mock_batch, mock_rollout_metrics)
+            )
+            stack.enter_context(_patched_logprob_phase(policy))
+        else:
+            stack.enter_context(_patched_logprob_phase(policy))
+            stack.enter_context(
+                patch(
+                    "nemo_rl.algorithms.grpo.run_multi_turn_rollout",
+                    return_value=(mock_batch, mock_rollout_metrics),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "nemo_rl.algorithms.grpo.run_async_multi_turn_rollout",
+                    return_value=(mock_batch, mock_rollout_metrics),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "nemo_rl.algorithms.grpo.compute_and_apply_seq_logprob_error_masking",
+                    return_value=_mock_seq_logprob_error_result(),
+                )
+            )
+
+        train_func(
+            policy,
+            _mock_policy_generation(),
+            mock_grpo_components["train_dataloader"],
+            mock_grpo_components["val_dataloader"],
+            mock_grpo_components["tokenizer"],
+            mock_grpo_components["loss_fn"],
+            mock_grpo_components["task_to_env"],
+            mock_grpo_components["val_task_to_env"],
+            mock_grpo_components["logger"],
+            mock_grpo_components["checkpointer"],
+            _default_grpo_save_state(),
+            master_config,
+        )
+
+
+@pytest.mark.parametrize("train_func", [grpo_train, async_grpo_train, grpo_train_sync])
+def test_grpo_trainers_log_exact_cuda_graph_metrics(
+    mock_grpo_components, train_func
+) -> None:
+    mock_grpo_components["policy"].train.return_value["cuda_graph_metrics"] = {
+        "capture_count": 2,
+        "replay_count": 5,
+        "cache_hit_count": 7,
+        "cache_miss_count": 3,
+        "eviction_count": 1,
+        "fallback_count": 0,
+        "graph_calls": 2,
+        "eligible_calls": 4,
+        "logical_tokens": 6,
+        "padded_tokens": 12,
+        "capacity_tokens": 20,
+        "coverage": 0.5,
+        "capacity_utilization": 0.3,
+        "padding_utilization": 0.5,
+    }
+
+    _run_single_cuda_graph_metrics_step(mock_grpo_components, train_func)
+
+    metrics = _logged_train_metrics_with_key(
+        mock_grpo_components["logger"], "cuda_graph/capture_count"
+    )
+    assert {
+        key: value for key, value in metrics.items() if key.startswith("cuda_graph/")
+    } == {
+        "cuda_graph/capture_count": 2,
+        "cuda_graph/replay_count": 5,
+        "cuda_graph/cache_hit_count": 7,
+        "cuda_graph/cache_miss_count": 3,
+        "cuda_graph/eviction_count": 1,
+        "cuda_graph/fallback_count": 0,
+        "cuda_graph/graph_calls": 2,
+        "cuda_graph/eligible_calls": 4,
+        "cuda_graph/logical_tokens": 6,
+        "cuda_graph/padded_tokens": 12,
+        "cuda_graph/capacity_tokens": 20,
+        "cuda_graph/coverage": 0.5,
+        "cuda_graph/capacity_utilization": 0.3,
+        "cuda_graph/padding_utilization": 0.5,
+    }
+    assert "cuda_graph_metrics" not in metrics
+    assert metrics["loss"] == pytest.approx(0.5)
+    assert metrics["reward"] == pytest.approx(1.0)
+    assert metrics["gen_kl_error"] == pytest.approx(0.0001)
+    assert metrics["max_seq_mult_prob_error"] == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("train_func", [grpo_train, async_grpo_train, grpo_train_sync])
+def test_grpo_trainers_omit_cuda_graph_namespace_when_metrics_are_absent(
+    mock_grpo_components, train_func
+) -> None:
+    _run_single_cuda_graph_metrics_step(mock_grpo_components, train_func)
+
+    metrics = _logged_train_metrics_with_key(mock_grpo_components["logger"], "loss")
+    assert "cuda_graph_metrics" not in metrics
+    assert not any(key.startswith("cuda_graph/") for key in metrics)
+
+
 @pytest.mark.parametrize("train_func", [grpo_train, async_grpo_train])
 def test_grpo_train_clips_advantages_when_configured(
     mock_grpo_components, train_func, monkeypatch

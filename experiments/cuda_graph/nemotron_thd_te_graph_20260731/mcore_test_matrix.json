@@ -1,0 +1,98 @@
+{
+  "candidate_kind": "mcore",
+  "rows": {
+    "te_eval_capability_8": {
+      "allocations": [
+        {"gpus_per_node": 8, "num_nodes": 1},
+        {"gpus_per_node": 4, "num_nodes": 2}
+      ],
+      "pytest_filters": [],
+      "pytest_nodes": [
+        "tests/unit_tests/transformer/test_cuda_graphs.py::test_te_make_graphed_callables_supports_eval_no_grad",
+        "tests/unit_tests/transformer/test_cuda_graphs.py::test_te_eval_graph_input_output_buffer_reuse_capability"
+      ],
+      "world_size": 8
+    },
+    "execution_kind_bank_8": {
+      "allocations": [{"gpus_per_node": 4, "num_nodes": 2}],
+      "pytest_filters": [],
+      "pytest_nodes": [
+        "tests/unit_tests/transformer/test_te_cuda_graph_bank.py::test_bank_fingerprint_distinguishes_training_and_forward_only_eval",
+        "tests/unit_tests/transformer/test_te_cuda_graph_bank.py::test_bank_activation_installs_and_restores_execution_kind",
+        "tests/unit_tests/transformer/test_te_cuda_graph_bank.py::test_eval_bank_replay_requires_eval_no_grad_context",
+        "tests/unit_tests/transformer/test_te_cuda_graph_bank.py::test_training_bank_replay_rejects_forward_only_context",
+        "tests/unit_tests/transformer/test_te_cuda_graph_bank.py::test_eval_bank_rejects_backward_dw_launch",
+        "tests/unit_tests/transformer/test_te_cuda_graph_bank.py::test_failed_context_install_rolls_back_every_layer"
+      ],
+      "world_size": 8
+    },
+    "forward_only_schedule_8": {
+      "allocations": [{"gpus_per_node": 4, "num_nodes": 2}],
+      "pytest_filters": [],
+      "pytest_nodes": [
+        "tests/unit_tests/transformer/test_cuda_graphs.py::test_forward_only_helper_uses_eval_pp_vpp_schedule",
+        "tests/unit_tests/transformer/test_cuda_graphs.py::test_forward_only_helper_captures_no_backward_graphs",
+        "tests/unit_tests/transformer/test_cuda_graphs.py::test_forward_only_helper_disables_graph_io_buffer_reuse",
+        "tests/unit_tests/transformer/test_cuda_graphs.py::test_forward_only_helper_uses_effective_overlap_false_everywhere",
+        "tests/unit_tests/transformer/test_cuda_graphs.py::test_set_current_microbatch_uses_active_bank_subset_not_base_scope",
+        "tests/unit_tests/transformer/test_cuda_graphs.py::test_active_bank_subset_controls_pp2_vpp2_replay_index"
+      ],
+      "world_size": 8
+    },
+    "router_replay_8": {
+      "allocations": [{"gpus_per_node": 4, "num_nodes": 2}],
+      "pytest_filters": [],
+      "pytest_nodes": [
+        "tests/unit_tests/transformer/moe/test_router_replay.py::test_replay_forward_routes_are_owned_by_the_active_graph_bank",
+        "tests/unit_tests/transformer/moe/test_router_replay.py::test_route_copy_preserves_bank_pointer_and_changes_values",
+        "tests/unit_tests/transformer/moe/test_router_replay.py::test_route_copy_rejects_signature_mismatch_before_partial_copy",
+        "tests/unit_tests/transformer/moe/test_router_replay.py::test_bank_eviction_releases_route_inputs_once",
+        "tests/unit_tests/transformer/moe/test_router_replay.py::test_replay_forward_rejects_temporary_target_topk_idx",
+        "tests/unit_tests/transformer/moe/test_router_replay.py::test_eager_r3_context_survives_warmup_and_whole_call_fallback",
+        "tests/unit_tests/transformer/moe/test_router_replay.py::test_attn_only_graph_keeps_router_replay_eager"
+      ],
+      "world_size": 8
+    },
+    "router_replay_1f1b_8": {
+      "allocations": [{"gpus_per_node": 4, "num_nodes": 2}],
+      "pytest_filters": [],
+      "pytest_nodes": [
+        "tests/unit_tests/transformer/test_te_cuda_graph_bank.py::test_training_1f1b_preserves_routes_for_multiple_outstanding_microbatches"
+      ],
+      "world_size": 8
+    },
+    "dropless_hybridep_nano16": {
+      "allocations": [{"gpus_per_node": 4, "num_nodes": 4}],
+      "pytest_filters": [],
+      "pytest_nodes": [
+        "tests/unit_tests/transformer/test_partial_moe_cuda_graph_distributed.py::test_dropless_partial_moe_cuda_graph_distributed[dropless_hybridep_nano16]"
+      ],
+      "world_size": 16
+    },
+    "dropless_alltoall_qwen30_16": {
+      "allocations": [{"gpus_per_node": 4, "num_nodes": 4}],
+      "pytest_filters": [],
+      "pytest_nodes": [
+        "tests/unit_tests/transformer/test_partial_moe_cuda_graph_distributed.py::test_dropless_partial_moe_cuda_graph_distributed[dropless_alltoall_qwen30_16]"
+      ],
+      "world_size": 16
+    },
+    "dropless_alltoall_super32": {
+      "allocations": [{"gpus_per_node": 4, "num_nodes": 8}],
+      "pytest_filters": [],
+      "pytest_nodes": [
+        "tests/unit_tests/transformer/test_partial_moe_cuda_graph_distributed.py::test_dropless_partial_moe_cuda_graph_distributed[dropless_alltoall_super32]"
+      ],
+      "world_size": 32
+    },
+    "dropless_hybridep_qwen235_64": {
+      "allocations": [{"gpus_per_node": 4, "num_nodes": 16}],
+      "pytest_filters": [],
+      "pytest_nodes": [
+        "tests/unit_tests/transformer/test_partial_moe_cuda_graph_distributed.py::test_dropless_partial_moe_cuda_graph_distributed[dropless_hybridep_qwen235_64]"
+      ],
+      "world_size": 64
+    }
+  },
+  "schema_version": 1
+}

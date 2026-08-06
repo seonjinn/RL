@@ -1,0 +1,218 @@
+#!/bin/bash
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
+# Licensed under the Apache License, Version 2.0
+#SBATCH --exclusive
+#SBATCH --partition=batch
+#SBATCH --time=04:00:00
+#SBATCH --job-name=mcore_typed_matrix
+
+set -euo pipefail
+
+fail() { echo "$*" >&2; exit 2; }
+[[ -z "${COMMAND:-}" ]] || fail "Raw command payloads are forbidden"
+for name in TEST_ROW_ID TEST_WORLD_SIZE TEST_NUM_NODES TEST_GPUS_PER_NODE \
+  CANDIDATE_KIND CANDIDATE_SHA INTEGRATION_SHA CANDIDATE_SOURCE_ROOT \
+  CANDIDATE_SNAPSHOT_SHA256 SUBMISSION_INTENT_SHA256 \
+  RUN_LOG_ROOT TEST_MATRIX RUNNER_PATH CONTAINER CONTAINER_SHA256 MOUNTS EXPECTED_TE_SHA \
+  EXPECTED_TE_VERSION_BASE_SHA RUNTIME_ATTESTATION SUBMISSION_INTENT REPO_ROOT \
+  EXPECTED_NEMORL_SHA EXPECTED_BRIDGE_SHA EXPECTED_MCORE_SHA \
+  SOURCE_PROVENANCE_VERIFIER RUNTIME_ATTESTATION_COMMAND RUNTIME_FEATURE_SET \
+  RUNTIME_EXCLUDED_PACKAGES TORCH_CUDA_ARCH_LIST NVTE_CUDA_ARCHS; do
+  [[ -n "${!name:-}" ]] || fail "${name} is required"
+done
+expected_candidate_kind=${EXPECTED_CANDIDATE_KIND:-mcore}
+[[ "${CANDIDATE_KIND}" == "${expected_candidate_kind}" ]] || fail "CANDIDATE_KIND mismatch"
+[[ "${SLURM_JOB_NUM_NODES:?}" == "${TEST_NUM_NODES}" ]] || fail "SLURM node allocation mismatch"
+[[ "$((TEST_NUM_NODES * TEST_GPUS_PER_NODE))" == "${TEST_WORLD_SIZE}" ]] || \
+  fail "world-size/allocation mismatch"
+[[ "${RUN_LOG_ROOT}" == /* && "${CANDIDATE_SOURCE_ROOT}" == /* ]] || \
+  fail "runner paths must be absolute"
+[[ -f "${SUBMISSION_INTENT}" && -f "${RUNTIME_ATTESTATION}" ]] || \
+  fail "submission intent and runtime attestation must exist"
+[[ ! -L "${SUBMISSION_INTENT}" ]] || fail "submission intent must not be a symlink"
+[[ "${SLURM_JOB_ID:-}" =~ ^[1-9][0-9]*$ ]] || fail "SLURM job ID is invalid"
+scheduler_restart_count=${SLURM_RESTART_COUNT:-0}
+[[ "${scheduler_restart_count}" =~ ^[0-9]+$ ]] || fail "SLURM restart count is invalid"
+[[ "${SUBMISSION_INTENT_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
+  fail "submission intent SHA256 is invalid"
+[[ "${CANDIDATE_SNAPSHOT_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
+  fail "candidate snapshot SHA256 is invalid"
+python3 - "${RUNNER_PATH}" "${SUBMISSION_INTENT}" "${SUBMISSION_INTENT_SHA256}" \
+  "${CANDIDATE_SOURCE_ROOT}" "${CANDIDATE_SHA}" "${CANDIDATE_SNAPSHOT_SHA256}" <<'PY' || \
+  fail "Submission artifacts failed literal digest verification"
+import importlib.util
+import sys
+from pathlib import Path
+
+driver_path, intent_path, intent_sha256, source_root, candidate_sha, snapshot_sha256 = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("run_mcore_training", driver_path)
+if spec is None or spec.loader is None:
+    raise SystemExit("unable to load typed MCore driver")
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+intent = module.load_submission_intent(Path(intent_path), expected_sha256=intent_sha256)
+module.verify_source_snapshot(
+    source_root=Path(source_root),
+    candidate_sha=candidate_sha,
+    expected_sha256=snapshot_sha256,
+)
+if intent.get("candidate_sha") != candidate_sha:
+    raise SystemExit("submission intent candidate mismatch")
+if intent.get("snapshot_path") != source_root or intent.get("snapshot_sha256") != snapshot_sha256:
+    raise SystemExit("submission intent snapshot mismatch")
+PY
+submission_intent_sha256=${SUBMISSION_INTENT_SHA256}
+
+bridge_root=${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
+mcore_root=${bridge_root}/3rdparty/Megatron-LM
+"${SOURCE_PROVENANCE_VERIFIER}" \
+  "${REPO_ROOT}" "${EXPECTED_NEMORL_SHA}" \
+  "${bridge_root}" "${EXPECTED_BRIDGE_SHA}" \
+  "${mcore_root}" "${EXPECTED_MCORE_SHA}"
+
+mapfile -t runtime_fields < <(python3 - "${RUNTIME_ATTESTATION}" "${SUBMISSION_INTENT}" \
+  "${CONTAINER_SHA256}" "${EXPECTED_TE_SHA}" "${EXPECTED_TE_VERSION_BASE_SHA}" \
+  "${TEST_ROW_ID}" "${RUNTIME_FEATURE_SET}" "${RUNTIME_EXCLUDED_PACKAGES}" \
+  "${TORCH_CUDA_ARCH_LIST}" "${NVTE_CUDA_ARCHS}" \
+  "${SUBMISSION_INTENT_SHA256}" <<'PY'
+import hashlib
+import json
+import stat
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text())
+intent_path = Path(sys.argv[2])
+if intent_path.is_symlink() or not intent_path.is_file():
+    raise SystemExit("submission intent is not a regular file")
+if stat.S_IMODE(intent_path.stat().st_mode) & 0o222:
+    raise SystemExit("submission intent is writable")
+serialized_intent = intent_path.read_bytes()
+if hashlib.sha256(serialized_intent).hexdigest() != sys.argv[11]:
+    raise SystemExit("submission intent literal SHA256 mismatch")
+intent = json.loads(serialized_intent)
+if payload.get("status") != "passed":
+    raise SystemExit("runtime attestation is not passed")
+if payload.get("container_sha256") != sys.argv[3]:
+    raise SystemExit("runtime attestation container mismatch")
+if payload.get("transformer_engine_source_commit") != sys.argv[4]:
+    raise SystemExit("runtime attestation TE source commit mismatch")
+if payload.get("transformer_engine_version_base_commit") != sys.argv[5]:
+    raise SystemExit("runtime attestation TE version-base commit mismatch")
+expected_excluded = sys.argv[8].split(",")
+for document in (payload, intent):
+    if document.get("runtime_feature_set") != sys.argv[7]:
+        raise SystemExit("runtime feature set mismatch")
+    if document.get("excluded_packages") != expected_excluded:
+        raise SystemExit("runtime exclusion set mismatch")
+    if document.get("torch_cuda_arch_list") != sys.argv[9]:
+        raise SystemExit("runtime Torch CUDA architecture mismatch")
+    if document.get("nvte_cuda_archs") != sys.argv[10]:
+        raise SystemExit("runtime TE CUDA architecture mismatch")
+if sys.argv[6] != sys.argv[7] or intent.get("rows") != [sys.argv[7]]:
+    raise SystemExit("narrow runtime may only authorize its exact test row")
+package = payload.get("packages", {}).get("transformer_engine.pytorch", {})
+version = package.get("version")
+for value in (
+    version,
+    payload.get("expected_python_version"),
+    payload.get("uv_python_install_dir"),
+    payload.get("expected_uv_version"),
+    payload.get("uv_executable"),
+    payload.get("expected_nvte_with_nccl_ep"),
+    payload.get("runtime_feature_set"),
+    ",".join(payload.get("excluded_packages", [])),
+    payload.get("torch_cuda_arch_list"),
+    payload.get("nvte_cuda_archs"),
+):
+    if not isinstance(value, str) or not value:
+        raise SystemExit("runtime attestation lacks worker runtime provenance")
+    print(value)
+PY
+) || fail "Runtime attestation rejected"
+[[ "${#runtime_fields[@]}" == 10 ]] || fail "Runtime attestation fields rejected"
+TE_VERSION=${runtime_fields[0]}
+export UV_PYTHON=${runtime_fields[1]}
+export UV_PYTHON_INSTALL_DIR=${runtime_fields[2]}
+export PINNED_UV_VERSION=${runtime_fields[3]}
+export UV_EXECUTABLE=${runtime_fields[4]}
+export NVTE_WITH_NCCL_EP=${runtime_fields[5]}
+[[ "${runtime_fields[6]}" == "${RUNTIME_FEATURE_SET}" ]] || fail "Runtime feature mismatch"
+[[ "${runtime_fields[7]}" == "${RUNTIME_EXCLUDED_PACKAGES}" ]] || fail "Runtime exclusions mismatch"
+export TORCH_CUDA_ARCH_LIST=${runtime_fields[8]}
+export NVTE_CUDA_ARCHS=${runtime_fields[9]}
+export RUNTIME_FEATURE_SET RUNTIME_EXCLUDED_PACKAGES
+export UV_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never UV_LINK_MODE=copy
+export UV_PROJECT_ENVIRONMENT=/tmp/mcore-driver-${SLURM_JOB_ID:?}
+export NRL_FORCE_REBUILD_VENVS=true
+CONTAINER_PATH_PREFIX=$(dirname "${UV_EXECUTABLE}")
+export CONTAINER_PATH_PREFIX
+CONTAINER_ENV_VARS=CONTAINER_PATH_PREFIX,UV_PROJECT_ENVIRONMENT,UV_LINK_MODE,UV_PYTHON,UV_PYTHON_INSTALL_DIR,UV_MANAGED_PYTHON,UV_PYTHON_DOWNLOADS,PINNED_UV_VERSION,UV_EXECUTABLE,NRL_FORCE_REBUILD_VENVS,NVTE_WITH_NCCL_EP,NVTE_CUDA_ARCHS,TORCH_CUDA_ARCH_LIST,RUNTIME_FEATURE_SET,RUNTIME_EXCLUDED_PACKAGES
+export CONTAINER_ENV_VARS
+
+srun --nodes=1 --ntasks=1 \
+  --no-container-mount-home \
+  --container-image="${CONTAINER}" --container-mounts="${MOUNTS}" \
+  --container-workdir="${REPO_ROOT}" "--container-env=${CONTAINER_ENV_VARS}" \
+  --export=ALL "${RUNTIME_ATTESTATION_COMMAND}" \
+  --attestation "${RUNTIME_ATTESTATION}" \
+  --container "${CONTAINER}" \
+  --expected-container-sha256 "${CONTAINER_SHA256}" \
+  --nemo-rl-commit "${EXPECTED_NEMORL_SHA}" \
+  --bridge-commit "${EXPECTED_BRIDGE_SHA}" \
+  --mcore-commit "${EXPECTED_MCORE_SHA}" \
+  --uv-lock "${REPO_ROOT}/uv.lock" \
+  --expected-te-commit "${EXPECTED_TE_SHA}" \
+  --expected-te-version-base-commit "${EXPECTED_TE_VERSION_BASE_SHA}" \
+  --expected-device-count "${TEST_GPUS_PER_NODE}" \
+  --expected-python-version "${runtime_fields[1]}" \
+  --expected-python-install-dir "${runtime_fields[2]}" \
+  --expected-uv-version "${runtime_fields[3]}" \
+  --expected-uv-executable "${runtime_fields[4]}" \
+  --expected-nvte-with-nccl-ep "${NVTE_WITH_NCCL_EP}" \
+  --runtime-feature-set "${RUNTIME_FEATURE_SET}" \
+  --excluded-packages "${RUNTIME_EXCLUDED_PACKAGES}" \
+  --torch-cuda-arch-list "${TORCH_CUDA_ARCH_LIST}" \
+  --nvte-cuda-archs "${NVTE_CUDA_ARCHS}" >/dev/null || \
+  fail "Runtime attestation verifier rejected the typed job"
+export TE_VERSION
+
+master_addr=$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | head -n 1)
+master_port=$((29000 + SLURM_JOB_ID % 1000))
+export MASTER_ADDR=${master_addr} MASTER_PORT=${master_port}
+export PYTHONPATH=${CANDIDATE_SOURCE_ROOT}
+export PYTHONNOUSERSITE=1
+
+srun --nodes="${TEST_NUM_NODES}" --ntasks="${TEST_NUM_NODES}" --ntasks-per-node=1 \
+  --no-container-mount-home \
+  --container-image="${CONTAINER}" --container-mounts="${MOUNTS}" \
+  --container-workdir="${REPO_ROOT}" "--container-env=${CONTAINER_ENV_VARS}" \
+  --export=ALL /bin/bash --noprofile --norc -c '
+set -euo pipefail
+uv=$1
+environment_root=$2
+project_root=$3
+shift 3
+sync_command=("${uv}" sync --python "${UV_PYTHON}" --managed-python \
+  --locked --extra mcore --no-python-downloads --directory "${project_root}")
+IFS=, read -r -a excluded_packages <<<"${RUNTIME_EXCLUDED_PACKAGES}"
+for excluded_package in "${excluded_packages[@]}"; do
+  sync_command+=(--no-install-package "${excluded_package}")
+done
+"${sync_command[@]}"
+exec "${environment_root}/bin/python" "$@"
+' bash "${UV_EXECUTABLE}" "${UV_PROJECT_ENVIRONMENT}" "${REPO_ROOT}" \
+  "${RUNNER_PATH}" --launch-agent \
+  --matrix "${TEST_MATRIX}" --row-id "${TEST_ROW_ID}" \
+  --candidate-kind "${CANDIDATE_KIND}" --candidate-sha "${CANDIDATE_SHA}" \
+  --integration-sha "${INTEGRATION_SHA}" --source-root "${CANDIDATE_SOURCE_ROOT}" \
+  --snapshot-sha256 "${CANDIDATE_SNAPSHOT_SHA256}" \
+  --run-log-root "${RUN_LOG_ROOT}" --num-nodes "${TEST_NUM_NODES}" \
+  --gpus-per-node "${TEST_GPUS_PER_NODE}" --container-sha256 "${CONTAINER_SHA256}" \
+  --transformer-engine-version "${TE_VERSION}" \
+  --transformer-engine-source-commit "${EXPECTED_TE_SHA}" \
+  --transformer-engine-version-base-commit "${EXPECTED_TE_VERSION_BASE_SHA}" \
+  --scheduler-job-id "${SLURM_JOB_ID}" \
+  --scheduler-restart-count "${scheduler_restart_count}" \
+  --submission-intent-sha256 "${submission_intent_sha256}"

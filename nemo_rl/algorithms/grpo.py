@@ -56,6 +56,7 @@ from nemo_rl.algorithms.utils import (
     calculate_baseline_and_std_per_prompt,
     get_gdpo_reward_component_keys,
     log_generation_metrics_to_wandb,
+    merge_cuda_graph_metrics,
     print_efficiency_summary,
     print_performance_metrics,
     set_seed,
@@ -3349,6 +3350,7 @@ def grpo_train(
 
                 # Always log sequence-level error metrics (useful for deciding threshold)
                 metrics.update(seq_logprob_error_metrics)
+                merge_cuda_graph_metrics(metrics, train_results)
 
                 ## Checkpointing
                 consumed_samples += master_config.grpo.num_prompts_per_step
@@ -4812,6 +4814,7 @@ def async_grpo_train(
                 # Speculative-decoding (MTP) acceptance metrics for this step.
                 if hasattr(policy_generation, "get_step_metrics"):
                     metrics.update(policy_generation.get_step_metrics())
+                merge_cuda_graph_metrics(metrics, train_results)
 
                 # Checkpointing (same as sync version)
                 consumed_samples += master_config.grpo.num_prompts_per_step

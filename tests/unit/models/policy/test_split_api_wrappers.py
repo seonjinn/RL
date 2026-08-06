@@ -170,7 +170,11 @@ class TestTQPolicySplitFanout:
         meta = _meta()
         with (
             patch.object(TQPolicy, "_stamp_pad_seqlen"),
-            patch.object(TQPolicy, "_packing_args", return_value=(None, None)),
+            patch.object(
+                TQPolicy,
+                "_packing_args",
+                return_value=({"max_sequences_per_microbatch": 16}, None),
+            ) as mock_packing_args,
             patch(
                 "nemo_rl.models.policy.tq_policy.shard_meta_for_dp",
                 return_value=([meta, meta], None),
@@ -180,6 +184,13 @@ class TestTQPolicySplitFanout:
 
         train_meta = mock_shard.call_args.args[0]
         assert train_meta.fields == [*DP_TRAIN_FIELDS, ROUTED_EXPERTS_FIELD]
+        mock_packing_args.assert_called_once_with(
+            "train_mb_tokens",
+            for_cuda_graph_training=True,
+        )
+        assert mock_shard.call_args.kwargs["sequence_packing_args"] == {
+            "max_sequences_per_microbatch": 16
+        }
 
     def test_finish_dedupes_replica_twins(self):
         """TP/CP twins return identical metric copies; aggregating without

@@ -15,6 +15,7 @@
 import math
 import random
 import warnings
+from collections.abc import Iterable, Mapping
 from functools import partial, wraps
 from typing import Any, Optional
 
@@ -30,6 +31,303 @@ from nemo_rl.data.chat_templates import COMMON_CHAT_TEMPLATES
 from nemo_rl.models.policy import TokenizerConfig
 from nemo_rl.utils.fastokens import maybe_patch_fastokens
 from nemo_rl.utils.logger import Logger
+
+
+_CUDA_GRAPH_RAW_METRIC_KEYS: tuple[str, ...] = (
+    "capture_count",
+    "replay_count",
+    "cache_hit_count",
+    "cache_miss_count",
+    "eviction_count",
+    "fallback_count",
+    "graph_calls",
+    "eligible_calls",
+    "logical_tokens",
+    "padded_tokens",
+    "capacity_tokens",
+)
+_CUDA_GRAPH_REPLICATED_METRIC_KEYS: tuple[str, ...] = (
+    "capture_count",
+    "replay_count",
+    "cache_hit_count",
+    "cache_miss_count",
+    "eviction_count",
+    "fallback_count",
+)
+_CUDA_GRAPH_SUM_METRIC_KEYS: tuple[str, ...] = (
+    "graph_calls",
+    "eligible_calls",
+    "logical_tokens",
+    "padded_tokens",
+    "capacity_tokens",
+)
+_CUDA_GRAPH_CONTRACT_MINIMUMS: dict[str, int] = {
+    "normalized_schedule_key": 1,
+    "token_capacity_per_microbatch": 1,
+    "thd_max_packed_sequences": 2,
+}
+_CUDA_GRAPH_RATIO_KEYS: tuple[str, ...] = (
+    "coverage",
+    "capacity_utilization",
+    "padding_utilization",
+)
+_CUDA_GRAPH_POLICY_METRIC_KEYS: tuple[str, ...] = (
+    *_CUDA_GRAPH_RAW_METRIC_KEYS,
+    *_CUDA_GRAPH_RATIO_KEYS,
+)
+
+
+def _require_exact_mapping(
+    value: object, *, name: str, expected_keys: tuple[str, ...]
+) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{name} must be a mapping, got {type(value).__name__}.")
+    actual_keys = set(value)
+    expected_key_set = set(expected_keys)
+    if actual_keys != expected_key_set:
+        missing = sorted(expected_key_set - actual_keys)
+        unknown = sorted(actual_keys - expected_key_set, key=str)
+        raise ValueError(
+            f"{name} must contain exactly {list(expected_keys)}; "
+            f"missing={missing}, unknown={unknown}."
+        )
+    return value
+
+
+def _require_plain_nonnegative_integers(
+    mapping: Mapping[str, object], *, name: str, keys: tuple[str, ...]
+) -> dict[str, int]:
+    validated: dict[str, int] = {}
+    for key in keys:
+        value = mapping[key]
+        if type(value) is not int:
+            raise TypeError(f"{name}.{key} must be a plain integer, got {value!r}.")
+        if value < 0:
+            raise ValueError(f"{name}.{key} must be nonnegative, got {value}.")
+        validated[key] = value
+    return validated
+
+
+def _validate_cuda_graph_counter_order(metrics: Mapping[str, int]) -> None:
+    if metrics["capture_count"] > metrics["cache_miss_count"]:
+        raise ValueError(
+            "cuda_graph_metrics.capture_count must not exceed cache_miss_count."
+        )
+    if metrics["eviction_count"] > metrics["capture_count"]:
+        raise ValueError(
+            "cuda_graph_metrics.eviction_count must not exceed capture_count."
+        )
+    if metrics["graph_calls"] > metrics["eligible_calls"]:
+        raise ValueError(
+            "cuda_graph_metrics.graph_calls must not exceed eligible_calls."
+        )
+    if metrics["logical_tokens"] > metrics["padded_tokens"]:
+        raise ValueError(
+            "cuda_graph_metrics.logical_tokens must not exceed padded_tokens."
+        )
+    if metrics["padded_tokens"] > metrics["capacity_tokens"]:
+        raise ValueError(
+            "cuda_graph_metrics.padded_tokens must not exceed capacity_tokens."
+        )
+
+
+def _cuda_graph_ratios(metrics: Mapping[str, int]) -> dict[str, float]:
+    eligible_calls = metrics["eligible_calls"]
+    capacity_tokens = metrics["capacity_tokens"]
+    padded_tokens = metrics["padded_tokens"]
+    return {
+        "coverage": metrics["graph_calls"] / eligible_calls if eligible_calls else 0.0,
+        "capacity_utilization": metrics["logical_tokens"] / capacity_tokens
+        if capacity_tokens
+        else 0.0,
+        "padding_utilization": metrics["logical_tokens"] / padded_tokens
+        if padded_tokens
+        else 0.0,
+    }
+
+
+def aggregate_cuda_graph_metrics(
+    worker_results: Iterable[Mapping[str, Any]],
+) -> dict[str, int | float] | None:
+    """Aggregate exact per-DP CUDA graph telemetry from Policy worker results.
+
+    Args:
+        worker_results: One result mapping per data-parallel representative. An
+            enabled result carries paired ``cuda_graph_metrics`` and
+            ``cuda_graph_contract`` mappings; disabled results carry neither.
+
+    Returns:
+        The exact eleven counters plus three ratios, or ``None`` when telemetry is
+        absent from every result.
+
+    Raises:
+        TypeError: A mapping or value has the wrong type.
+        ValueError: Presence, schema, replicated values, or counter invariants
+            violate the CUDA graph telemetry contract.
+    """
+    replicated_metrics: dict[str, int] | None = None
+    replicated_contract: dict[str, int] | None = None
+    summed_metrics = {key: 0 for key in _CUDA_GRAPH_SUM_METRIC_KEYS}
+    saw_present = False
+    saw_absent = False
+
+    for index, worker_result in enumerate(worker_results):
+        if not isinstance(worker_result, Mapping):
+            raise TypeError(
+                f"worker_results[{index}] must be a mapping, "
+                f"got {type(worker_result).__name__}."
+            )
+        has_metrics = "cuda_graph_metrics" in worker_result
+        has_contract = "cuda_graph_contract" in worker_result
+        if has_metrics != has_contract:
+            raise ValueError(
+                f"worker_results[{index}] must contain both cuda_graph_metrics "
+                "and cuda_graph_contract, or neither."
+            )
+        if not has_metrics:
+            saw_absent = True
+            if saw_present:
+                raise ValueError(
+                    "cuda_graph telemetry must be present on every DP worker result "
+                    "or absent from all of them."
+                )
+            continue
+
+        saw_present = True
+        if saw_absent:
+            raise ValueError(
+                "cuda_graph telemetry must be present on every DP worker result "
+                "or absent from all of them."
+            )
+
+        raw_mapping = _require_exact_mapping(
+            worker_result["cuda_graph_metrics"],
+            name="cuda_graph_metrics",
+            expected_keys=_CUDA_GRAPH_RAW_METRIC_KEYS,
+        )
+        metrics = _require_plain_nonnegative_integers(
+            raw_mapping,
+            name="cuda_graph_metrics",
+            keys=_CUDA_GRAPH_RAW_METRIC_KEYS,
+        )
+        contract_mapping = _require_exact_mapping(
+            worker_result["cuda_graph_contract"],
+            name="cuda_graph_contract",
+            expected_keys=tuple(_CUDA_GRAPH_CONTRACT_MINIMUMS),
+        )
+        contract = _require_plain_nonnegative_integers(
+            contract_mapping,
+            name="cuda_graph_contract",
+            keys=tuple(_CUDA_GRAPH_CONTRACT_MINIMUMS),
+        )
+        for key, minimum in _CUDA_GRAPH_CONTRACT_MINIMUMS.items():
+            if contract[key] < minimum:
+                raise ValueError(
+                    f"cuda_graph_contract.{key} must be at least {minimum}, "
+                    f"got {contract[key]}."
+                )
+        if metrics["fallback_count"] != 0:
+            raise ValueError("cuda_graph_metrics.fallback_count must be zero.")
+        _validate_cuda_graph_counter_order(metrics)
+
+        current_replicated_metrics = {
+            key: metrics[key] for key in _CUDA_GRAPH_REPLICATED_METRIC_KEYS
+        }
+        if replicated_metrics is None:
+            replicated_metrics = current_replicated_metrics
+            replicated_contract = contract
+        else:
+            for key in _CUDA_GRAPH_REPLICATED_METRIC_KEYS:
+                if metrics[key] != replicated_metrics[key]:
+                    raise ValueError(
+                        f"cuda_graph_metrics.{key} differs across DP workers: "
+                        f"{replicated_metrics[key]} != {metrics[key]}."
+                    )
+            assert replicated_contract is not None
+            for key in _CUDA_GRAPH_CONTRACT_MINIMUMS:
+                if contract[key] != replicated_contract[key]:
+                    raise ValueError(
+                        f"cuda_graph_contract.{key} differs across DP workers: "
+                        f"{replicated_contract[key]} != {contract[key]}."
+                    )
+
+        for key in _CUDA_GRAPH_SUM_METRIC_KEYS:
+            summed_metrics[key] += metrics[key]
+
+    if not saw_present:
+        return None
+
+    assert replicated_metrics is not None
+    aggregated: dict[str, int] = {
+        **replicated_metrics,
+        **summed_metrics,
+    }
+    _validate_cuda_graph_counter_order(aggregated)
+    return {**aggregated, **_cuda_graph_ratios(aggregated)}
+
+
+def merge_cuda_graph_metrics(
+    destination: dict[str, Any], policy_result: Mapping[str, Any]
+) -> None:
+    """Validate and merge Policy-level CUDA graph metrics into a log payload.
+
+    Args:
+        destination: Existing flat metric payload to update.
+        policy_result: Policy result that may contain ``cuda_graph_metrics``.
+
+    Raises:
+        TypeError: The CUDA graph mapping or a value has the wrong type.
+        ValueError: The mapping is malformed, inconsistent, or collides with an
+            existing reserved destination key.
+    """
+    if "cuda_graph_metrics" not in policy_result:
+        return
+
+    policy_mapping = _require_exact_mapping(
+        policy_result["cuda_graph_metrics"],
+        name="cuda_graph_metrics",
+        expected_keys=_CUDA_GRAPH_POLICY_METRIC_KEYS,
+    )
+    counters = _require_plain_nonnegative_integers(
+        policy_mapping,
+        name="cuda_graph_metrics",
+        keys=_CUDA_GRAPH_RAW_METRIC_KEYS,
+    )
+    if counters["fallback_count"] != 0:
+        raise ValueError("cuda_graph_metrics.fallback_count must be zero.")
+    _validate_cuda_graph_counter_order(counters)
+
+    ratios: dict[str, float] = {}
+    for key in _CUDA_GRAPH_RATIO_KEYS:
+        value = policy_mapping[key]
+        if type(value) is not float:
+            raise TypeError(f"cuda_graph_metrics.{key} must be a float, got {value!r}.")
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(
+                f"cuda_graph_metrics.{key} must be finite and nonnegative, "
+                f"got {value!r}."
+            )
+        ratios[key] = value
+
+    expected_ratios = _cuda_graph_ratios(counters)
+    for key, expected in expected_ratios.items():
+        if not math.isclose(ratios[key], expected, rel_tol=1e-12, abs_tol=0.0):
+            raise ValueError(
+                f"cuda_graph_metrics.{key} must equal the ratio recomputed from "
+                f"counters ({expected}), got {ratios[key]}."
+            )
+
+    validated_metrics: dict[str, int | float] = {**counters, **ratios}
+    prefixed = {
+        f"cuda_graph/{key}": validated_metrics[key]
+        for key in _CUDA_GRAPH_POLICY_METRIC_KEYS
+    }
+    collisions = [key for key in prefixed if key in destination]
+    if collisions:
+        raise ValueError(
+            "CUDA graph metric destination collision: " + ", ".join(collisions)
+        )
+    destination.update(prefixed)
 
 
 def get_gdpo_reward_component_keys(batch) -> list[str]:

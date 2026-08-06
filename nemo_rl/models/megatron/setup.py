@@ -59,12 +59,20 @@ from megatron.bridge.utils.vocab_utils import calculate_padded_vocab_size
 from megatron.core import parallel_state
 from megatron.core.process_groups_config import ProcessGroupCollection
 from megatron.core.transformer import MegatronModule
-from megatron.core.transformer.enums import AttnBackend, InferenceCudaGraphScope
+from megatron.core.transformer.enums import (
+    AttnBackend,
+    CudaGraphModule,
+    InferenceCudaGraphScope,
+)
 from megatron.core.transformer.module import Float16Module
 from megatron.core.transformer.transformer_config import TransformerConfig
+from megatron.core.utils import is_te_min_version
 from transformers import PreTrainedTokenizerBase
 
 from nemo_rl.distributed.model_utils import patch_gpt_model_forward_for_linear_ce_fusion
+from nemo_rl.models.megatron.cuda_graph_storage import (
+    validate_training_graph_storage_lifecycle,
+)
 
 _HF_CONFIG_PATCHED = False
 
@@ -222,6 +230,9 @@ from nemo_rl.algorithms.logits_sampling_utils import TrainingSamplingParams
 from nemo_rl.distributed.named_sharding import NamedSharding
 from nemo_rl.models.megatron.community_import import import_model_from_hf_name
 from nemo_rl.models.megatron.config import ModelAndOptimizerState, RuntimeConfig
+from nemo_rl.models.megatron.data import (
+    _get_pack_sequence_parameters_for_megatron,
+)
 from nemo_rl.models.megatron.draft.utils import (
     build_draft_model,
     find_draft_owner_chunk,
@@ -315,9 +326,11 @@ def validate_and_set_config(
 ):
     # Handle generation configuration
     is_generation_colocated = None
+    generation_backend = None
     sampling_params = None
     if "generation" in config and config["generation"] is not None:
         generation_cfg = config["generation"]
+        generation_backend = generation_cfg.get("backend")
         # set generation colocated
         is_generation_colocated = generation_cfg["colocated"]["enabled"]
         # set sampling params
@@ -379,6 +392,21 @@ def validate_and_set_config(
         pretrained_path,
         weights_path,
         optimizer_path,
+    )
+    validate_training_graph_storage_lifecycle(
+        cuda_graph_impl=str(getattr(megatron_cfg.model, "cuda_graph_impl", "none")),
+        generation_colocated=is_generation_colocated,
+        generation_backend=generation_backend,
+        fp8_enabled=bool(
+            (config["megatron_cfg"].get("fp8_cfg") or {}).get("enabled", False)
+            or getattr(megatron_cfg.model, "fp8", None) is not None
+        ),
+        use_custom_fsdp=bool(
+            config["megatron_cfg"]
+            .get("distributed_data_parallel_config", {})
+            .get("use_custom_fsdp", False)
+        ),
+        offload_optimizer_for_logprob=offload_optimizer_for_logprob,
     )
 
     final_padded_vocab_size = calculate_padded_vocab_size(
@@ -779,6 +807,13 @@ def _apply_moe_config(model_cfg: Any, config: PolicyConfig) -> None:
         model_cfg.moe_pad_experts_for_cuda_graph_inference = config["megatron_cfg"][
             "moe_pad_experts_for_cuda_graph_inference"
         ]
+    for name in (
+        "moe_expert_capacity_factor",
+        "moe_pad_expert_input_to_capacity",
+        "moe_expert_rank_capacity_factor",
+    ):
+        if name in config["megatron_cfg"]:
+            setattr(model_cfg, name, config["megatron_cfg"][name])
     model_cfg.moe_shared_expert_overlap = config["megatron_cfg"][
         "moe_shared_expert_overlap"
     ]
@@ -788,6 +823,10 @@ def _apply_moe_config(model_cfg: Any, config: PolicyConfig) -> None:
     if "moe_flex_dispatcher_backend" in config["megatron_cfg"]:
         model_cfg.moe_flex_dispatcher_backend = config["megatron_cfg"][
             "moe_flex_dispatcher_backend"
+        ]
+    if "moe_hybridep_pad_uneven_dispatch_inputs" in config["megatron_cfg"]:
+        model_cfg.moe_hybridep_pad_uneven_dispatch_inputs = config["megatron_cfg"][
+            "moe_hybridep_pad_uneven_dispatch_inputs"
         ]
     if "moe_hybridep_num_sms" in config["megatron_cfg"]:
         num_sms = config["megatron_cfg"]["moe_hybridep_num_sms"]
@@ -877,6 +916,306 @@ def _apply_precision_config(
     model_cfg.pipeline_dtype = dtype_map[config["megatron_cfg"]["pipeline_dtype"]]
 
 
+_TE_CUDA_GRAPH_WARMUP_STEPS = 3
+_TE_CUDA_GRAPH_MIN_VERSION = "2.16.0"
+
+
+def _validate_positive_config_integer(
+    name: str,
+    value: object,
+    *,
+    minimum: int,
+) -> int:
+    """Return a validated non-boolean integer configuration value."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{name} must be an integer, got {value!r}.")
+    if value < minimum:
+        raise ValueError(f"{name} must be at least {minimum}, got {value}.")
+    return value
+
+
+def _normalize_cuda_graph_modules(modules: object) -> list[CudaGraphModule]:
+    """Normalize canonical training graph scopes to unique MCore enums."""
+    if isinstance(modules, str):
+        requested = tuple(item.strip() for item in modules.split(","))
+        if not requested or any(not item for item in requested):
+            raise ValueError(
+                "cuda_graph_modules string entries must be non-empty; use an "
+                "explicit empty list or tuple for whole-layer capture."
+            )
+    elif isinstance(modules, (list, tuple)):
+        requested = tuple(modules)
+    else:
+        raise ValueError(
+            "cuda_graph_modules must be a comma-separated string, list, or tuple; "
+            f"got {type(modules).__name__}."
+        )
+
+    normalized: list[CudaGraphModule] = []
+    for module in requested:
+        if isinstance(module, CudaGraphModule):
+            normalized_module = module
+        elif isinstance(module, str) and module:
+            try:
+                normalized_module = CudaGraphModule[module]
+            except KeyError as error:
+                supported = [member.name for member in CudaGraphModule]
+                raise ValueError(
+                    "cuda_graph_modules contains unsupported module "
+                    f"{module!r}; supported modules are {supported!r}."
+                ) from error
+        else:
+            raise ValueError(
+                "cuda_graph_modules entries must be non-empty strings or "
+                f"CudaGraphModule enums; got {module!r}."
+            )
+        if normalized_module in normalized:
+            raise ValueError(
+                "cuda_graph_modules must not contain duplicate modules; "
+                f"got {normalized_module.name!r} more than once."
+            )
+        normalized.append(normalized_module)
+
+    module_set = set(normalized)
+    if CudaGraphModule.moe in module_set and CudaGraphModule.moe_router in module_set:
+        raise ValueError("cuda_graph_modules must not contain both moe and moe_router.")
+    if (
+        CudaGraphModule.moe_preprocess in module_set
+        and CudaGraphModule.moe_router not in module_set
+    ):
+        raise ValueError("cuda_graph_modules moe_preprocess requires moe_router.")
+
+    return [module for module in CudaGraphModule if module in module_set]
+
+
+def _validate_te_moe_graph_request(
+    model_cfg: Any,
+    modules: list[CudaGraphModule],
+) -> None:
+    """Validate fixed-shape MoE scopes against Task 5 dispatcher support."""
+
+    def is_positive_capacity(value: object) -> bool:
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and value > 0
+        )
+
+    module_set = set(modules)
+    num_moe_experts = getattr(model_cfg, "num_moe_experts", None)
+    has_moe = isinstance(num_moe_experts, int) and num_moe_experts > 1
+    requests_moe = bool(
+        module_set
+        & {
+            CudaGraphModule.moe,
+            CudaGraphModule.moe_router,
+            CudaGraphModule.moe_preprocess,
+        }
+    )
+    if requests_moe and not has_moe:
+        raise ValueError(
+            "MoE CUDA graph modules require a model with multiple experts."
+        )
+
+    full_moe_requested = has_moe and (not modules or CudaGraphModule.moe in module_set)
+    drop_and_pad = getattr(model_cfg, "moe_pad_expert_input_to_capacity", False)
+    expert_capacity_factor = getattr(model_cfg, "moe_expert_capacity_factor", None)
+    if full_moe_requested:
+        if not drop_and_pad or not is_positive_capacity(expert_capacity_factor):
+            raise ValueError(
+                "Whole-MoE CUDA graph capture requires a fixed drop-and-pad expert "
+                "capacity. Set moe_pad_expert_input_to_capacity=true and a positive "
+                "moe_expert_capacity_factor."
+            )
+
+    if CudaGraphModule.moe_preprocess not in module_set:
+        return
+    if getattr(model_cfg, "overlap_moe_expert_parallel_comm", False):
+        raise ValueError(
+            "moe_preprocess CUDA graphs do not support "
+            "overlap_moe_expert_parallel_comm."
+        )
+    if drop_and_pad and not is_positive_capacity(expert_capacity_factor):
+        raise ValueError(
+            "moe_preprocess CUDA graphs with drop-and-pad require a positive "
+            "moe_expert_capacity_factor."
+        )
+
+    dispatcher = getattr(model_cfg, "moe_token_dispatcher_type", None)
+    if dispatcher == "allgather":
+        raise ValueError(
+            "MoE AllGather partial CUDA graph capture is unsupported because packed "
+            "padding can narrow the eager expert input."
+        )
+    if dispatcher == "alltoall":
+        if not drop_and_pad and (
+            expert_capacity_factor is not None
+            or getattr(model_cfg, "moe_router_padding_for_quantization", False)
+            or getattr(model_cfg, "moe_router_padding_for_fp8", False)
+        ):
+            raise ValueError(
+                "AlltoAll moe_preprocess CUDA graphs require dropless static output "
+                "geometry or fixed drop-and-pad capacity."
+            )
+        return
+    if dispatcher != "flex":
+        raise ValueError(
+            "moe_preprocess CUDA graphs require a supported AlltoAll or Flex/HybridEP "
+            f"dispatcher, got {dispatcher!r}."
+        )
+
+    backend = getattr(model_cfg, "moe_flex_dispatcher_backend", None)
+    if backend == "deepep":
+        raise ValueError(
+            "Flex/DeepEP is unsupported for partial CUDA graph capture because eager "
+            "permutation has routing-dependent output geometry."
+        )
+    if backend == "ncclep":
+        raise ValueError(
+            "Flex/NCCL-EP is unsupported for partial CUDA graph capture until graph "
+            "bank activation owns external-buffer lifecycle."
+        )
+    if backend != "hybridep":
+        raise ValueError(
+            "moe_preprocess CUDA graphs require Flex/HybridEP, got backend "
+            f"{backend!r}."
+        )
+    if getattr(model_cfg, "moe_hybridep_pad_uneven_dispatch_inputs", False):
+        raise ValueError(
+            "Flex/HybridEP uneven-input padding is unsafe during CUDA graph capture."
+        )
+
+
+def _configure_fixed_te_graph_geometry(
+    model_cfg: Any,
+    config: PolicyConfig,
+    modules: list[CudaGraphModule],
+) -> None:
+    """Validate and project one fixed packed geometry before MCore post-init."""
+    megatron_cfg = config["megatron_cfg"]
+    if getattr(model_cfg, "transformer_impl", None) != "transformer_engine":
+        raise ValueError(
+            "Packed TE training graphs require transformer_impl='transformer_engine'."
+        )
+    sequence_packing = config.get("sequence_packing")
+    if not sequence_packing or sequence_packing.get("enabled") is not True:
+        raise ValueError(
+            "Packed TE training graphs require sequence_packing.enabled=true."
+        )
+    if config["dynamic_batching"]["enabled"] is not False:
+        raise ValueError(
+            "Packed TE training graphs require dynamic_batching.enabled=false."
+        )
+
+    requested_attention_backend = megatron_cfg.get("attention_backend")
+    if requested_attention_backend not in (None, "fused"):
+        raise ValueError(
+            "Packed TE training graphs require attention_backend='fused' because "
+            "fixed-capacity THD metadata conservatively enables inter-sequence "
+            "padding, which Transformer Engine only supports with cuDNN fused "
+            "attention."
+        )
+    for nvte_var in ("NVTE_FUSED_ATTN", "NVTE_FLASH_ATTN", "NVTE_UNFUSED_ATTN"):
+        os.environ.pop(nvte_var, None)
+    model_cfg.attention_backend = AttnBackend.fused
+
+    thd_max_packed_sequences = _validate_positive_config_integer(
+        "thd_max_packed_sequences",
+        megatron_cfg.get("thd_max_packed_sequences"),
+        minimum=2,
+    )
+    train_mb_tokens = _validate_positive_config_integer(
+        "sequence_packing.train_mb_tokens",
+        sequence_packing.get("train_mb_tokens"),
+        minimum=1,
+    )
+    context_parallel_size = _validate_positive_config_integer(
+        "context_parallel_size",
+        megatron_cfg["context_parallel_size"],
+        minimum=1,
+    )
+    sequence_length_alignment = _validate_positive_config_integer(
+        "make_sequence_length_divisible_by",
+        config["make_sequence_length_divisible_by"],
+        minimum=1,
+    )
+    if train_mb_tokens % context_parallel_size != 0:
+        raise ValueError(
+            "sequence_packing.train_mb_tokens must be divisible by "
+            f"context_parallel_size ({context_parallel_size})."
+        )
+
+    (
+        individual_alignment,
+        global_packed_alignment,
+        _,
+    ) = _get_pack_sequence_parameters_for_megatron(
+        megatron_cfg,
+        sequence_length_alignment,
+        train_mb_tokens,
+    )
+    structural_alignment = 2 * context_parallel_size if context_parallel_size > 1 else 1
+    if individual_alignment % structural_alignment != 0:
+        raise ValueError(
+            "Packed TE training graphs require make_sequence_length_divisible_by "
+            f"to be divisible by 2 * context_parallel_size ({structural_alignment})."
+        )
+    if train_mb_tokens % individual_alignment != 0:
+        raise ValueError(
+            "sequence_packing.train_mb_tokens must be divisible by "
+            f"make_sequence_length_divisible_by ({individual_alignment})."
+        )
+    if train_mb_tokens % global_packed_alignment != 0:
+        raise ValueError(
+            "sequence_packing.train_mb_tokens must be divisible by the NeMo-RL "
+            f"packed alignment ({global_packed_alignment})."
+        )
+    if global_packed_alignment == 1:
+        local_packed_alignment = 1
+    elif global_packed_alignment % context_parallel_size == 0:
+        local_packed_alignment = global_packed_alignment // context_parallel_size
+    else:
+        raise ValueError(
+            "NeMo-RL packed alignment must be either 1 or divisible by "
+            f"context_parallel_size ({context_parallel_size}); got "
+            f"{global_packed_alignment}."
+        )
+
+    configured_warmup = megatron_cfg.get("cuda_graph_warmup_steps")
+    if configured_warmup is not None:
+        configured_warmup = _validate_positive_config_integer(
+            "cuda_graph_warmup_steps",
+            configured_warmup,
+            minimum=0,
+        )
+        if configured_warmup != _TE_CUDA_GRAPH_WARMUP_STEPS:
+            raise ValueError(
+                "Packed TE training graphs require exactly 3 warmup steps."
+            )
+        model_cfg.cuda_graph_warmup_steps = configured_warmup
+    if (
+        getattr(model_cfg, "cuda_graph_warmup_steps", None)
+        != _TE_CUDA_GRAPH_WARMUP_STEPS
+    ):
+        raise ValueError("Packed TE training graphs require exactly 3 warmup steps.")
+    if "cuda_graph_max_cached_schedules" in megatron_cfg:
+        raise ValueError(
+            "cuda_graph_max_cached_schedules is not a canonical user field; the TE "
+            "graph lifecycle fixes cache capacity at 2."
+        )
+    _validate_te_moe_graph_request(model_cfg, modules)
+    if not is_te_min_version(_TE_CUDA_GRAPH_MIN_VERSION):
+        raise ValueError(
+            "Transformer Engine >= 2.16 is required as a coarse THD CUDA graph "
+            "capability gate. The immutable runtime preflight must additionally prove "
+            "the required native TE commit ancestry."
+        )
+
+    model_cfg.thd_max_packed_sequences = thd_max_packed_sequences
+    model_cfg.pad_packed_seq_to = train_mb_tokens // context_parallel_size
+    model_cfg.pad_packed_seq_alignment = local_packed_alignment
+
+
 def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
     """Apply performance optimization configuration."""
     model_cfg.parallel_output = True
@@ -958,12 +1297,34 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
         model_cfg.transformer_impl = config["megatron_cfg"]["transformer_impl"]
     if "cuda_graph_impl" in config["megatron_cfg"]:
         model_cfg.cuda_graph_impl = config["megatron_cfg"]["cuda_graph_impl"]
-        if model_cfg.cuda_graph_impl != "none":
-            model_cfg.use_te_rng_tracker = True
         if "inference_cuda_graph_scope" in config["megatron_cfg"]:
             model_cfg.inference_cuda_graph_scope = InferenceCudaGraphScope[
                 config["megatron_cfg"]["inference_cuda_graph_scope"]
             ]
+
+    effective_cuda_graph_impl = getattr(model_cfg, "cuda_graph_impl", "none")
+    if effective_cuda_graph_impl != "none":
+        model_cfg.use_te_rng_tracker = True
+    cuda_graph_modules: list[CudaGraphModule] | None = None
+    if "cuda_graph_modules" in config["megatron_cfg"]:
+        if effective_cuda_graph_impl not in ("local", "transformer_engine"):
+            raise ValueError(
+                "cuda_graph_modules requires cuda_graph_impl='local' or "
+                "'transformer_engine'."
+            )
+        cuda_graph_modules = _normalize_cuda_graph_modules(
+            config["megatron_cfg"]["cuda_graph_modules"]
+        )
+        model_cfg.cuda_graph_modules = cuda_graph_modules
+    elif effective_cuda_graph_impl == "transformer_engine":
+        raise ValueError(
+            "cuda_graph_modules must be explicitly configured for packed TE "
+            "training graphs; use an empty list for whole-layer capture."
+        )
+
+    if effective_cuda_graph_impl == "transformer_engine":
+        assert cuda_graph_modules is not None
+        _configure_fixed_te_graph_geometry(model_cfg, config, cuda_graph_modules)
 
     # Use the graph-safe TE RNG tracker for either training graphs or inference graphs.
     if "generation" in config and config["generation"] is not None:

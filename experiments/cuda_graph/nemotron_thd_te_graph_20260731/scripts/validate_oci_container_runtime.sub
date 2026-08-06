@@ -1,0 +1,974 @@
+#!/bin/bash
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --gres=gpu:4
+#SBATCH --mem=0
+#SBATCH --partition=batch
+#SBATCH --time=04:00:00
+#SBATCH --job-name=validate_oci_container_runtime
+
+set -euo pipefail
+
+: "${CONTAINER:?Set CONTAINER to the immutable Enroot image path}"
+: "${CONTAINER_SHA256:?Set CONTAINER_SHA256 to the immutable image SHA256}"
+: "${ARTIFACT_DIR:?Set ARTIFACT_DIR to an absolute shared-storage path}"
+
+ACCOUNT=${ACCOUNT:-coreai_dlalgo_nemorl}
+PARTITION=${PARTITION:-batch}
+TEST_ONLY=${TEST_ONLY:-0}
+SBATCH_TEST_ONLY=${SBATCH_TEST_ONLY:-0}
+RUNTIME_PHASE=${RUNTIME_PHASE:-attest}
+NVTE_CUDA_ARCHS=${NVTE_CUDA_ARCHS:-100a}
+TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-10.0a}
+RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET:-te_eval_capability_8}
+RUNTIME_EXCLUDED_PACKAGES=${RUNTIME_EXCLUDED_PACKAGES:-causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm}
+RUNTIME_STAGE_CAPABILITY=${RUNTIME_STAGE_CAPABILITY:-}
+RUNTIME_TEST_REQUIREMENTS=${RUNTIME_TEST_REQUIREMENTS:-pytest==9.1.1,iniconfig==2.3.0,packaging==26.2,pluggy==1.6.0,pygments==2.20.0}
+STAGE_PARTITION=${STAGE_PARTITION:-cpu}
+RUNTIME_STAGE_CPUS_PER_TASK=${RUNTIME_STAGE_CPUS_PER_TASK:-32}
+
+if [[ "${CONTAINER}" != /* ]]; then
+  echo "CONTAINER must be an absolute path" >&2
+  exit 2
+fi
+if [[ ! "${CONTAINER_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "CONTAINER_SHA256 must be 64 lowercase hexadecimal characters" >&2
+  exit 2
+fi
+if [[ "${ARTIFACT_DIR}" != /* ]]; then
+  echo "ARTIFACT_DIR must be an absolute path" >&2
+  exit 2
+fi
+if [[ "${PARTITION}" != "batch" ]]; then
+  echo "OCI runtime validation requires PARTITION=batch" >&2
+  exit 2
+fi
+if [[ ! "${TEST_ONLY}" =~ ^[01]$ || ! "${SBATCH_TEST_ONLY}" =~ ^[01]$ ]]; then
+  echo "TEST_ONLY and SBATCH_TEST_ONLY must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "${RUNTIME_PHASE}" != "stage" && "${RUNTIME_PHASE}" != "attest" ]]; then
+  echo "RUNTIME_PHASE must be stage or attest" >&2
+  exit 2
+fi
+if [[ "${NVTE_CUDA_ARCHS}" != "100a" ]]; then
+  echo "OCI runtime staging requires NVTE_CUDA_ARCHS=100a" >&2
+  exit 2
+fi
+if [[ "${TORCH_CUDA_ARCH_LIST}" != "10.0a" ]]; then
+  echo "OCI runtime staging requires TORCH_CUDA_ARCH_LIST=10.0a" >&2
+  exit 2
+fi
+if [[ "${RUNTIME_FEATURE_SET}" != "te_eval_capability_8" && \
+      "${RUNTIME_FEATURE_SET}" != "bridge_forward_only_eval_8" ]]; then
+  echo "RUNTIME_FEATURE_SET must select one narrow eval row" >&2
+  exit 2
+fi
+if [[ "${RUNTIME_EXCLUDED_PACKAGES}" != "causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm" ]]; then
+  echo "RUNTIME_EXCLUDED_PACKAGES must be the sorted te_eval_capability_8 exclusion set" >&2
+  exit 2
+fi
+if [[ "${RUNTIME_STAGE_CAPABILITY}" != "mcore-test-v1" ]]; then
+  echo "RUNTIME_STAGE_CAPABILITY must explicitly select mcore-test-v1" >&2
+  exit 2
+fi
+if [[ "${RUNTIME_TEST_REQUIREMENTS}" != "pytest==9.1.1,iniconfig==2.3.0,packaging==26.2,pluggy==1.6.0,pygments==2.20.0" ]]; then
+  echo "RUNTIME_TEST_REQUIREMENTS must match the lock-pinned mcore-test-v1 identity" >&2
+  exit 2
+fi
+if [[ "${STAGE_PARTITION}" != "cpu" ]]; then
+  echo "OCI runtime staging requires STAGE_PARTITION=cpu" >&2
+  exit 2
+fi
+if [[ ! "${RUNTIME_STAGE_CPUS_PER_TASK}" =~ ^[0-9]+$ ]] ||
+   ((RUNTIME_STAGE_CPUS_PER_TASK < 1 || RUNTIME_STAGE_CPUS_PER_TASK > 96)); then
+  echo "RUNTIME_STAGE_CPUS_PER_TASK must be an integer from 1 through 96" >&2
+  exit 2
+fi
+if [[ "${TEST_ONLY}" == "1" && "${SBATCH_TEST_ONLY}" == "1" ]]; then
+  echo "TEST_ONLY and SBATCH_TEST_ONLY are mutually exclusive" >&2
+  exit 2
+fi
+
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+script_path=${script_dir}/$(basename "${BASH_SOURCE[0]}")
+
+if [[ -z "${SLURM_JOB_ID:-}" ]]; then
+  CONTAINER_RUNTIME_VALIDATOR=${CONTAINER_RUNTIME_VALIDATOR:-$(cd "${script_dir}/.." && pwd -P)/validate_container_runtime.py}
+  PROJECT_ROOT=${PROJECT_ROOT:-$(cd "${script_dir}/../../../.." && pwd -P)}
+  SOURCE_PROVENANCE_VERIFIER=${SOURCE_PROVENANCE_VERIFIER:-${PROJECT_ROOT}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/scripts/verify_source_provenance.sh}
+  if [[ "${TEST_ONLY}" != "1" ]]; then
+    : "${EXPECTED_NEMORL_SHA:?Set EXPECTED_NEMORL_SHA to the exact NeMo-RL commit}"
+    : "${EXPECTED_BRIDGE_SHA:?Set EXPECTED_BRIDGE_SHA to the exact Megatron-Bridge commit}"
+    : "${EXPECTED_MCORE_SHA:?Set EXPECTED_MCORE_SHA to the exact Megatron-LM commit}"
+    : "${EXPECTED_TE_SHA:?Set EXPECTED_TE_SHA to the exact Transformer Engine commit}"
+    : "${EXPECTED_TE_VERSION_BASE_SHA:?Set EXPECTED_TE_VERSION_BASE_SHA to the exact Transformer Engine version-base commit}"
+  fi
+  uv_lock_sha256=$(sha256sum "${PROJECT_ROOT}/uv.lock" | awk '{print $1}')
+  expected_python_version=$(tr -d '[:space:]' <"${PROJECT_ROOT}/.python-version")
+  expected_uv_version=$(sed -nE 's/^ARG UV_VERSION=([0-9]+\.[0-9]+\.[0-9]+)$/\1/p' "${PROJECT_ROOT}/docker/Dockerfile")
+  if [[ "${TEST_ONLY}" == "1" ]]; then
+    EXPECTED_NEMORL_SHA=${EXPECTED_NEMORL_SHA:-0000000000000000000000000000000000000000}
+    EXPECTED_BRIDGE_SHA=${EXPECTED_BRIDGE_SHA:-0000000000000000000000000000000000000000}
+    EXPECTED_MCORE_SHA=${EXPECTED_MCORE_SHA:-0000000000000000000000000000000000000000}
+    EXPECTED_TE_SHA=${EXPECTED_TE_SHA:-0000000000000000000000000000000000000000}
+    EXPECTED_TE_VERSION_BASE_SHA=${EXPECTED_TE_VERSION_BASE_SHA:-0000000000000000000000000000000000000000}
+  fi
+  runtime_stage_key=$(printf '%s\n' \
+    runtime-stage-v1 \
+    "${CONTAINER_SHA256}" \
+    "${uv_lock_sha256}" \
+    "${EXPECTED_NEMORL_SHA}" \
+    "${EXPECTED_BRIDGE_SHA}" \
+    "${EXPECTED_MCORE_SHA}" \
+    "${EXPECTED_TE_SHA}" \
+    "${EXPECTED_TE_VERSION_BASE_SHA}" \
+    "${expected_python_version}" \
+    "${expected_uv_version}" \
+    "${RUNTIME_FEATURE_SET}" \
+    "${RUNTIME_EXCLUDED_PACKAGES}" \
+    "${RUNTIME_STAGE_CAPABILITY}" \
+    "${RUNTIME_TEST_REQUIREMENTS}" \
+    "${TORCH_CUDA_ARCH_LIST}" \
+    "${NVTE_CUDA_ARCHS}" \
+    "${RUNTIME_STAGE_CPUS_PER_TASK}" | sha256sum | awk '{print $1}')
+  RUNTIME_STAGE_ROOT=${ARTIFACT_DIR%/}/staged-runtimes/${runtime_stage_key}
+  RUNTIME_STAGE_MARKER=${ARTIFACT_DIR%/}/stage-markers/${runtime_stage_key}.env
+  stage_marker_content=$(printf '%s\n' \
+    'schema=runtime-stage-v1' \
+    "stage_key=${runtime_stage_key}" \
+    "container_sha256=${CONTAINER_SHA256}" \
+    "uv_lock_sha256=${uv_lock_sha256}" \
+    "nemo_rl_commit=${EXPECTED_NEMORL_SHA}" \
+    "bridge_commit=${EXPECTED_BRIDGE_SHA}" \
+    "mcore_commit=${EXPECTED_MCORE_SHA}" \
+    "te_source_commit=${EXPECTED_TE_SHA}" \
+    "te_version_base_commit=${EXPECTED_TE_VERSION_BASE_SHA}" \
+    "python_version=${expected_python_version}" \
+    "uv_version=${expected_uv_version}" \
+    "feature_set=${RUNTIME_FEATURE_SET}" \
+    "excluded_packages=${RUNTIME_EXCLUDED_PACKAGES}" \
+    "stage_capability=${RUNTIME_STAGE_CAPABILITY}" \
+    "test_requirements=${RUNTIME_TEST_REQUIREMENTS}" \
+    "torch_cuda_arch_list=${TORCH_CUDA_ARCH_LIST}" \
+    "cuda_archs=${NVTE_CUDA_ARCHS}" \
+    "stage_cpus_per_task=${RUNTIME_STAGE_CPUS_PER_TASK}")
+  RUNTIME_STAGE_MARKER_SHA256=$(printf '%s\n' "${stage_marker_content}" | sha256sum | awk '{print $1}')
+  RUNTIME_STAGE_JOB_ID=${RUNTIME_STAGE_JOB_ID:-}
+  if [[ "${CONTAINER_RUNTIME_VALIDATOR}" != /* || ! -f "${CONTAINER_RUNTIME_VALIDATOR}" ]]; then
+    echo "CONTAINER_RUNTIME_VALIDATOR must be an existing absolute path" >&2
+    exit 2
+  fi
+  if [[ "${PROJECT_ROOT}" != /* || ! -f "${PROJECT_ROOT}/pyproject.toml" || ! -f "${PROJECT_ROOT}/uv.lock" || ! -f "${PROJECT_ROOT}/.python-version" || ! -f "${PROJECT_ROOT}/docker/Dockerfile" ]]; then
+    echo "PROJECT_ROOT must be an absolute NeMo-RL checkout with pyproject.toml, uv.lock, .python-version, and docker/Dockerfile" >&2
+    exit 2
+  fi
+  if [[ "${SOURCE_PROVENANCE_VERIFIER}" != /* || ! -x "${SOURCE_PROVENANCE_VERIFIER}" ]]; then
+    echo "SOURCE_PROVENANCE_VERIFIER must be an existing absolute executable" >&2
+    exit 2
+  fi
+  if [[ "${TEST_ONLY}" != "1" ]]; then
+    for commit in "${EXPECTED_NEMORL_SHA}" "${EXPECTED_BRIDGE_SHA}" "${EXPECTED_MCORE_SHA}" "${EXPECTED_TE_SHA}" "${EXPECTED_TE_VERSION_BASE_SHA}"; do
+      if [[ ! "${commit}" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "Expected source commits must be full lowercase hexadecimal SHAs" >&2
+        exit 2
+      fi
+    done
+  fi
+  if [[ "${RUNTIME_PHASE}" == "attest" && "${TEST_ONLY}" != "1" ]]; then
+    if [[ ! "${RUNTIME_STAGE_JOB_ID}" =~ ^[1-9][0-9]*$ ]]; then
+      echo "RUNTIME_STAGE_JOB_ID must identify the completed stage job" >&2
+      exit 2
+    fi
+    stage_job_record=${RUNTIME_STAGE_ROOT}/stage-job-id
+    if [[ -L "${RUNTIME_STAGE_ROOT}" || ! -d "${RUNTIME_STAGE_ROOT}" ]]; then
+      echo "Runtime stage root is missing or unsafe" >&2
+      exit 2
+    fi
+    if [[ -L "${stage_job_record}" || ! -f "${stage_job_record}" ]] ||
+       [[ "$(<"${stage_job_record}")" != "${RUNTIME_STAGE_JOB_ID}" ]]; then
+      echo "Runtime stage job record is missing, unsafe, or mismatched" >&2
+      exit 2
+    fi
+    stage_job_status=$(sacct -X -j "${RUNTIME_STAGE_JOB_ID}" \
+      --format=State,ExitCode -n -P | awk 'NF {print; count += 1} END {if (count != 1) exit 2}') || {
+      echo "Unable to resolve one authoritative runtime stage job" >&2
+      exit 2
+    }
+    if [[ "${stage_job_status}" != "COMPLETED|0:0" ]]; then
+      echo "Runtime stage job must be terminal COMPLETED with exit code 0:0" >&2
+      exit 2
+    fi
+    if [[ -L "$(dirname "${RUNTIME_STAGE_MARKER}")" ]]; then
+      echo "Runtime stage marker directory is unsafe" >&2
+      exit 2
+    fi
+    if [[ -L "${RUNTIME_STAGE_MARKER}" || ! -f "${RUNTIME_STAGE_MARKER}" ]]; then
+      echo "Runtime stage completion marker is missing or unsafe" >&2
+      exit 2
+    fi
+    if [[ "$(sha256sum "${RUNTIME_STAGE_MARKER}" | awk '{print $1}')" != \
+          "${RUNTIME_STAGE_MARKER_SHA256}" ]]; then
+      echo "Runtime stage marker SHA256 mismatch" >&2
+      exit 2
+    fi
+  fi
+  export ACCOUNT ARTIFACT_DIR CONTAINER CONTAINER_RUNTIME_VALIDATOR
+  export CONTAINER_SHA256 PARTITION PROJECT_ROOT SOURCE_PROVENANCE_VERIFIER
+  export EXPECTED_NEMORL_SHA EXPECTED_BRIDGE_SHA EXPECTED_MCORE_SHA EXPECTED_TE_SHA
+  export EXPECTED_TE_VERSION_BASE_SHA
+  export RUNTIME_PHASE RUNTIME_STAGE_ROOT RUNTIME_STAGE_MARKER
+  export RUNTIME_STAGE_MARKER_SHA256 RUNTIME_STAGE_JOB_ID NVTE_CUDA_ARCHS
+  export TORCH_CUDA_ARCH_LIST RUNTIME_FEATURE_SET RUNTIME_EXCLUDED_PACKAGES
+  export RUNTIME_STAGE_CAPABILITY RUNTIME_TEST_REQUIREMENTS RUNTIME_STAGE_CPUS_PER_TASK
+  export_spec=CONTAINER,CONTAINER_SHA256,ARTIFACT_DIR,CONTAINER_RUNTIME_VALIDATOR,PROJECT_ROOT,SOURCE_PROVENANCE_VERIFIER,EXPECTED_NEMORL_SHA,EXPECTED_BRIDGE_SHA,EXPECTED_MCORE_SHA,EXPECTED_TE_SHA,EXPECTED_TE_VERSION_BASE_SHA,RUNTIME_PHASE,RUNTIME_STAGE_ROOT,RUNTIME_STAGE_MARKER,RUNTIME_STAGE_MARKER_SHA256,RUNTIME_STAGE_JOB_ID,NVTE_CUDA_ARCHS,TORCH_CUDA_ARCH_LIST,RUNTIME_FEATURE_SET,RUNTIME_EXCLUDED_PACKAGES,RUNTIME_STAGE_CAPABILITY,RUNTIME_TEST_REQUIREMENTS,RUNTIME_STAGE_CPUS_PER_TASK,ACCOUNT,PARTITION,HOME,USER,LOGNAME,SHELL,PATH,LD_LIBRARY_PATH,HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy
+  submission_flag=--parsable
+  if [[ "${SBATCH_TEST_ONLY}" == "1" ]]; then
+    submission_flag=--test-only
+  fi
+  sbatch_command=(
+    sbatch
+    "${submission_flag}"
+    "--partition=${PARTITION}"
+    "--account=${ACCOUNT}"
+    "--output=${ARTIFACT_DIR}/oci-container-runtime-${RUNTIME_PHASE}-%j.log"
+    "--export=${export_spec}"
+    "${script_path}"
+  )
+  if [[ "${RUNTIME_PHASE}" == "stage" ]]; then
+    sbatch_command[2]="--partition=${STAGE_PARTITION}"
+    sbatch_command=("${sbatch_command[@]:0:4}" --gres=none \
+      "--cpus-per-task=${RUNTIME_STAGE_CPUS_PER_TASK}" "${sbatch_command[@]:4}")
+  else
+    sbatch_command=("${sbatch_command[@]:0:4}" --gres=gpu:4 "${sbatch_command[@]:4}")
+  fi
+  printf 'SBATCH:'
+  printf ' %q' "${sbatch_command[@]}"
+  printf '\n'
+  printf 'RUNTIME_PHASE=%s\nRUNTIME_STAGE_ROOT=%s\nRUNTIME_STAGE_MARKER=%s\nRUNTIME_STAGE_MARKER_SHA256=%s\nRUNTIME_STAGE_CPUS_PER_TASK=%s\n' \
+    "${RUNTIME_PHASE}" "${RUNTIME_STAGE_ROOT}" "${RUNTIME_STAGE_MARKER}" \
+    "${RUNTIME_STAGE_MARKER_SHA256}" \
+    "${RUNTIME_STAGE_CPUS_PER_TASK}"
+  if [[ "${TEST_ONLY}" == "1" ]]; then
+    echo "TEST_ONLY: no submission performed (local render only; scheduler not contacted)"
+    exit 0
+  fi
+  if [[ "${SBATCH_TEST_ONLY}" != "1" ]]; then
+    mkdir -p "${ARTIFACT_DIR}"
+  fi
+  "${sbatch_command[@]}"
+  exit 0
+fi
+
+: "${CONTAINER_RUNTIME_VALIDATOR:?Submission must export CONTAINER_RUNTIME_VALIDATOR}"
+if [[ "${CONTAINER_RUNTIME_VALIDATOR}" != /* || ! -f "${CONTAINER_RUNTIME_VALIDATOR}" ]]; then
+  echo "CONTAINER_RUNTIME_VALIDATOR must be an existing absolute path" >&2
+  exit 1
+fi
+if [[ -z "${PROJECT_ROOT:-}" ]]; then
+  PROJECT_ROOT=$(cd "$(dirname "${CONTAINER_RUNTIME_VALIDATOR}")/../../.." && pwd -P)
+fi
+if [[ "${PROJECT_ROOT}" != /* || ! -f "${PROJECT_ROOT}/pyproject.toml" || ! -f "${PROJECT_ROOT}/uv.lock" || ! -f "${PROJECT_ROOT}/.python-version" || ! -f "${PROJECT_ROOT}/docker/Dockerfile" ]]; then
+  echo "PROJECT_ROOT must be an absolute NeMo-RL checkout with pyproject.toml, uv.lock, .python-version, and docker/Dockerfile" >&2
+  exit 1
+fi
+validator=${CONTAINER_RUNTIME_VALIDATOR}
+validator=$(cd "$(dirname "${validator}")" && pwd -P)/$(basename "${validator}")
+project_root=$(cd "${PROJECT_ROOT}" && pwd -P)
+if [[ "${validator}" != "${project_root}/"* ]]; then
+  echo "CONTAINER_RUNTIME_VALIDATOR must be inside PROJECT_ROOT" >&2
+  exit 1
+fi
+
+unset PYTHONHOME PYTHONPATH VIRTUAL_ENV UV_PROJECT_ENVIRONMENT
+
+if [[ -L "${CONTAINER}" ]]; then
+  echo "Immutable container path must not be a symlink: ${CONTAINER}" >&2
+  exit 1
+fi
+[[ -f "${CONTAINER}" ]] || {
+  echo "Immutable container is missing: ${CONTAINER}" >&2
+  exit 1
+}
+: "${EXPECTED_NEMORL_SHA:?Submission must export EXPECTED_NEMORL_SHA}"
+: "${EXPECTED_BRIDGE_SHA:?Submission must export EXPECTED_BRIDGE_SHA}"
+: "${EXPECTED_MCORE_SHA:?Submission must export EXPECTED_MCORE_SHA}"
+: "${EXPECTED_TE_SHA:?Submission must export EXPECTED_TE_SHA}"
+: "${EXPECTED_TE_VERSION_BASE_SHA:?Submission must export EXPECTED_TE_VERSION_BASE_SHA}"
+: "${SOURCE_PROVENANCE_VERIFIER:?Submission must export SOURCE_PROVENANCE_VERIFIER}"
+for commit in "${EXPECTED_NEMORL_SHA}" "${EXPECTED_BRIDGE_SHA}" "${EXPECTED_MCORE_SHA}" "${EXPECTED_TE_SHA}" "${EXPECTED_TE_VERSION_BASE_SHA}"; do
+  if [[ ! "${commit}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Expected source commits must be full lowercase hexadecimal SHAs" >&2
+    exit 1
+  fi
+done
+if [[ "${SOURCE_PROVENANCE_VERIFIER}" != /* || ! -x "${SOURCE_PROVENANCE_VERIFIER}" ]]; then
+  echo "SOURCE_PROVENANCE_VERIFIER must be an existing absolute executable" >&2
+  exit 1
+fi
+if [[ "${RUNTIME_PHASE}" == "stage" &&
+      "${SLURM_CPUS_PER_TASK:-}" != "${RUNTIME_STAGE_CPUS_PER_TASK}" ]]; then
+  echo "SLURM_CPUS_PER_TASK does not match RUNTIME_STAGE_CPUS_PER_TASK" >&2
+  exit 1
+fi
+bridge_root=${project_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
+mcore_root=${bridge_root}/3rdparty/Megatron-LM
+"${SOURCE_PROVENANCE_VERIFIER}" \
+  "${project_root}" "${EXPECTED_NEMORL_SHA}" \
+  "${bridge_root}" "${EXPECTED_BRIDGE_SHA}" \
+  "${mcore_root}" "${EXPECTED_MCORE_SHA}"
+uv_lock_sha256=$(sha256sum "${project_root}/uv.lock" | awk '{print $1}')
+actual_container_sha256=$(sha256sum "${CONTAINER}" | awk '{print $1}')
+if [[ "${actual_container_sha256}" != "${CONTAINER_SHA256}" ]]; then
+  echo "Immutable container SHA256 mismatch" >&2
+  exit 1
+fi
+if stat --version >/dev/null 2>&1; then
+  read -r container_device container_inode container_size \
+    container_mtime_seconds container_ctime_seconds < <(
+      stat -Lc '%d %i %s %Y %Z' -- "${CONTAINER}"
+    )
+else
+  read -r container_device container_inode container_size \
+    container_mtime_seconds container_ctime_seconds < <(
+      stat -f '%d %i %z %m %c' "${CONTAINER}"
+    )
+fi
+[[ -f "${validator}" ]] || {
+  echo "Runtime probe is missing: ${validator}" >&2
+  exit 1
+}
+
+mkdir -p "${ARTIFACT_DIR}"
+mkdir -p "${ARTIFACT_DIR}/staged-runtimes"
+expected_python_version=$(tr -d '[:space:]' <"${project_root}/.python-version")
+if [[ ! "${expected_python_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo ".python-version must contain one exact X.Y.Z version" >&2
+  exit 1
+fi
+python_install_dir=${ARTIFACT_DIR%/}/uv-python-installations
+if [[ -L "${python_install_dir}" || ( -e "${python_install_dir}" && ! -d "${python_install_dir}" ) ]]; then
+  echo "Managed Python install directory is unsafe" >&2
+  exit 1
+fi
+mkdir -p "${python_install_dir}"
+expected_uv_version=$(sed -nE 's/^ARG UV_VERSION=([0-9]+\.[0-9]+\.[0-9]+)$/\1/p' "${project_root}/docker/Dockerfile")
+if [[ ! "${expected_uv_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "docker/Dockerfile must contain one exact ARG UV_VERSION=X.Y.Z pin" >&2
+  exit 1
+fi
+runtime_stage_root=${RUNTIME_STAGE_ROOT:?Submission must export RUNTIME_STAGE_ROOT}
+if [[ "${runtime_stage_root}" != "${ARTIFACT_DIR%/}/staged-runtimes/"* ]]; then
+  echo "RUNTIME_STAGE_ROOT must be inside ARTIFACT_DIR/staged-runtimes" >&2
+  exit 1
+fi
+runtime_stage_key=$(basename "${runtime_stage_root}")
+runtime_stage_marker=${RUNTIME_STAGE_MARKER:?Submission must export RUNTIME_STAGE_MARKER}
+if [[ "${runtime_stage_marker}" != \
+      "${ARTIFACT_DIR%/}/stage-markers/${runtime_stage_key}.env" ]]; then
+  echo "RUNTIME_STAGE_MARKER must be the keyed marker under ARTIFACT_DIR/stage-markers" >&2
+  exit 1
+fi
+if [[ ! "${RUNTIME_STAGE_MARKER_SHA256:?Submission must export RUNTIME_STAGE_MARKER_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "RUNTIME_STAGE_MARKER_SHA256 must be 64 lowercase hexadecimal characters" >&2
+  exit 1
+fi
+runtime_stage_job_id=${RUNTIME_STAGE_JOB_ID:-}
+if [[ "${RUNTIME_PHASE}" == "stage" ]]; then
+  runtime_stage_job_id=${SLURM_JOB_ID}
+fi
+if [[ ! "${runtime_stage_job_id}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Runtime stage job ID must be a positive integer" >&2
+  exit 1
+fi
+uv_bin_dir=${runtime_stage_root}/uv
+uv_executable=${uv_bin_dir}/uv
+artifact=${ARTIFACT_DIR}/oci-container-runtime-${SLURM_JOB_ID}.json
+partial_artifact=${artifact}.partial
+diagnostic=${ARTIFACT_DIR}/oci-container-runtime-${SLURM_JOB_ID}.diagnostics.log
+current_link=${ARTIFACT_DIR}/oci-container-runtime-latest.json
+partial_link=${current_link}.partial.${SLURM_JOB_ID}
+if [[ -e "${artifact}" || -e "${diagnostic}" ]]; then
+  echo "Immutable runtime artifact or diagnostic already exists for job ${SLURM_JOB_ID}" >&2
+  exit 1
+fi
+rm -f "${partial_artifact}" "${partial_link}"
+
+container_mounts="${project_root}:${project_root}:ro,${ARTIFACT_DIR}:${ARTIFACT_DIR}"
+runtime_environment_root=${runtime_stage_root}/environment
+runtime_uv_cache=${runtime_stage_root}/build-cache
+runtime_te_cmake_dir=${runtime_stage_root}/te-cmake
+runtime_site_packages=${runtime_environment_root}/lib/python3.13/site-packages
+runtime_environment=(
+  /usr/bin/env
+  -i
+  HOME=/root
+  PATH=/root/.local/bin:/usr/local/cuda/bin:/usr/local/bin:/usr/bin:/bin:/opt/nemo_rl_venv/bin
+  CUDA_HOME=/usr/local/cuda
+  CUDACXX=/usr/local/cuda/bin/nvcc
+  CPLUS_INCLUDE_PATH=/usr/local/cuda/include/cccl
+  "CUDNN_HOME=${runtime_site_packages}/nvidia/cudnn"
+  "CUDNN_PATH=${runtime_site_packages}/nvidia/cudnn"
+  "LD_LIBRARY_PATH=${runtime_site_packages}/nvidia/cudnn/lib:/usr/local/cuda/lib64:/usr/local/cuda/compat:/usr/local/lib:/usr/lib/x86_64-linux-gnu:/usr/lib/aarch64-linux-gnu"
+  NRL_CONTAINER=1
+  NRL_FORCE_REBUILD_VENVS=true
+  NVTE_WITH_NCCL_EP=0
+  NVTE_CUDA_ARCHS=100a
+  TORCH_CUDA_ARCH_LIST=10.0a
+  "RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET}"
+  RUNTIME_EXCLUDED_PACKAGES=causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm
+  "RUNTIME_STAGE_CAPABILITY=${RUNTIME_STAGE_CAPABILITY}"
+  "RUNTIME_TEST_REQUIREMENTS=${RUNTIME_TEST_REQUIREMENTS}"
+  "PINNED_UV_VERSION=${expected_uv_version}"
+  "UV_EXECUTABLE=${uv_executable}"
+  UV_LINK_MODE=copy
+  "UV_PYTHON=${expected_python_version}"
+  UV_MANAGED_PYTHON=1
+  "UV_PYTHON_INSTALL_DIR=${python_install_dir}"
+  "UV_PROJECT_ENVIRONMENT=${runtime_environment_root}"
+  "UV_CACHE_DIR=${runtime_uv_cache}"
+  "NVTE_CMAKE_BUILD_DIR=${runtime_te_cmake_dir}"
+  "RUNTIME_STAGE_ROOT=${runtime_stage_root}"
+  "RUNTIME_STAGE_MARKER=${runtime_stage_marker}"
+  "RUNTIME_STAGE_JOB_ID=${runtime_stage_job_id}"
+  "RUNTIME_STAGE_MARKER_SHA256=${RUNTIME_STAGE_MARKER_SHA256}"
+  "RUNTIME_STAGE_CPUS_PER_TASK=${RUNTIME_STAGE_CPUS_PER_TASK}"
+)
+if [[ "${RUNTIME_PHASE}" == "stage" ]]; then
+  runtime_environment+=(
+    "CMAKE_BUILD_PARALLEL_LEVEL=${RUNTIME_STAGE_CPUS_PER_TASK}"
+  )
+fi
+for proxy_variable in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
+  if [[ -n "${!proxy_variable:-}" ]]; then
+    runtime_environment+=("${proxy_variable}=${!proxy_variable}")
+  fi
+done
+stage_command='set -euo pipefail
+source_project_root=$1
+source_validator=$2
+environment_root=$3
+container=$4
+container_sha256=$5
+nemo_rl_commit=$6
+bridge_commit=$7
+mcore_commit=$8
+uv_lock_sha256=$9
+expected_te_commit=${10}
+container_device=${11}
+container_inode=${12}
+container_size=${13}
+container_mtime_seconds=${14}
+container_ctime_seconds=${15}
+expected_te_version_base_commit=${16}
+output_flag=${17}
+output=${18}
+runtime_stage_root=${19}
+if [[ "${output_flag}" != "--output" ]]; then
+  echo "Runtime probe payload requires --output" >&2
+  exit 2
+fi
+if [[ "${CMAKE_BUILD_PARALLEL_LEVEL:-}" != "${RUNTIME_STAGE_CPUS_PER_TASK}" ]]; then
+  echo "CMAKE_BUILD_PARALLEL_LEVEL must match the staged CPU allocation" >&2
+  exit 2
+fi
+if [[ "${source_validator}" != "${source_project_root}/"* ]]; then
+  echo "Runtime probe validator must be inside the immutable source root" >&2
+  exit 2
+fi
+cuda_home=${CUDA_HOME:-}
+cuda_compiler=${CUDACXX:-}
+if [[ -z "${cuda_home}" || "${cuda_home}" != /* ]]; then
+  echo "Runtime probe requires an absolute CUDA_HOME" >&2
+  exit 2
+fi
+if [[ "${cuda_compiler}" != "${cuda_home%/}/bin/nvcc" ]]; then
+  echo "CUDACXX must name CUDA_HOME/bin/nvcc" >&2
+  exit 2
+fi
+if [[ ! -x "${cuda_compiler}" ]]; then
+  echo "CUDA compiler is missing or not executable: ${cuda_compiler}" >&2
+  exit 2
+fi
+path_cuda_compiler=$(command -v nvcc || true)
+if [[ "${path_cuda_compiler}" != "${cuda_compiler}" ]]; then
+  echo "PATH nvcc does not match CUDACXX: ${path_cuda_compiler:-missing}" >&2
+  exit 2
+fi
+uv_cache_dir=${UV_CACHE_DIR:-}
+if [[ "${uv_cache_dir}" != "${runtime_stage_root}/build-cache" ]]; then
+  echo "UV_CACHE_DIR must be the job-local runtime cache" >&2
+  exit 2
+fi
+if [[ -e "${uv_cache_dir}" || -L "${uv_cache_dir}" ]]; then
+  echo "Job-local UV_CACHE_DIR must not already exist: ${uv_cache_dir}" >&2
+  exit 2
+fi
+te_cmake_dir=${NVTE_CMAKE_BUILD_DIR:-}
+if [[ "${te_cmake_dir}" != "${runtime_stage_root}/te-cmake" ]]; then
+  echo "NVTE_CMAKE_BUILD_DIR must be the job-local TE build directory" >&2
+  exit 2
+fi
+if [[ -e "${te_cmake_dir}" || -L "${te_cmake_dir}" ]]; then
+  echo "Job-local NVTE_CMAKE_BUILD_DIR must not already exist: ${te_cmake_dir}" >&2
+  exit 2
+fi
+validator_relative_path=${source_validator#"${source_project_root}/"}
+runtime_project_root=${runtime_stage_root}/source
+: "${RUNTIME_STAGE_MARKER:?Runtime stage payload requires RUNTIME_STAGE_MARKER}"
+: "${RUNTIME_STAGE_JOB_ID:?Runtime stage payload requires RUNTIME_STAGE_JOB_ID}"
+if [[ ! "${RUNTIME_STAGE_JOB_ID}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "RUNTIME_STAGE_JOB_ID must be a positive integer" >&2
+  exit 2
+fi
+marker=${RUNTIME_STAGE_MARKER}
+marker_dir=$(dirname "${marker}")
+partial_marker=${marker_dir}/.$(basename "${runtime_stage_root}").${RUNTIME_STAGE_JOB_ID}.partial
+stage_job_record=${runtime_stage_root}/stage-job-id
+if [[ -e "${runtime_stage_root}" || -L "${runtime_stage_root}" ]]; then
+  echo "Runtime stage destination already exists: ${runtime_stage_root}" >&2
+  exit 2
+fi
+if [[ -e "${marker}" || -L "${marker}" ]]; then
+  echo "Runtime stage marker already exists: ${marker}" >&2
+  exit 2
+fi
+if [[ -L "${marker_dir}" || ( -e "${marker_dir}" && ! -d "${marker_dir}" ) ]]; then
+  echo "Runtime stage marker directory is unsafe: ${marker_dir}" >&2
+  exit 2
+fi
+cleanup_runtime_workspace() {
+  rm -f -- "${marker}" "${partial_marker}"
+  chmod -R u+w -- "${runtime_stage_root}" 2>/dev/null || true
+  rm -rf -- "${runtime_stage_root}"
+}
+trap cleanup_runtime_workspace EXIT
+mkdir -p -m 0700 -- "${marker_dir}"
+if [[ -L "${marker_dir}" || ! -d "${marker_dir}" ]]; then
+  echo "Runtime stage marker directory publication is unsafe: ${marker_dir}" >&2
+  exit 2
+fi
+mkdir -m 0700 -- "${runtime_stage_root}" "${runtime_project_root}" "${uv_cache_dir}" "${te_cmake_dir}"
+cp -a -- "${source_project_root}/." "${runtime_project_root}/"
+project_root=${runtime_project_root}
+validator=${project_root}/${validator_relative_path}
+source_provenance_verifier=${project_root}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/scripts/verify_source_provenance.sh
+bridge_root=${project_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
+mcore_root=${bridge_root}/3rdparty/Megatron-LM
+if [[ ! -f "${validator}" || ! -x "${source_provenance_verifier}" ]]; then
+  echo "Runtime source copy is missing its validator or provenance verifier" >&2
+  exit 2
+fi
+verify_no_ignored_source_paths() {
+  local repository=$1
+  local label=$2
+  local allow_source_manifest=$3
+  local index=$4
+  local ignored_path
+  local ignored_paths_file=${te_cmake_dir}/runtime-ignored-paths-${index}
+  git -C "${repository}" ls-files -z --others --ignored --exclude-standard >"${ignored_paths_file}"
+  while IFS= read -r -d "" ignored_path; do
+    if [[ "${allow_source_manifest}" == "1" && "${ignored_path}" == ".source-manifest.env" ]]; then
+      if [[ -L "${repository}/${ignored_path}" || ! -f "${repository}/${ignored_path}" ]]; then
+        echo "Runtime source manifest must be a regular non-symlink file" >&2
+        return 2
+      fi
+      continue
+    fi
+    echo "Runtime source copy contains unexpected ignored path: ${label}:${ignored_path}" >&2
+    return 2
+  done <"${ignored_paths_file}"
+  rm -f -- "${ignored_paths_file}"
+}
+verify_no_ignored_source_paths "${project_root}" "NeMo-RL" 1 0
+verify_no_ignored_source_paths "${bridge_root}" "Megatron-Bridge" 0 1
+verify_no_ignored_source_paths "${mcore_root}" "Megatron-LM" 0 2
+"${source_provenance_verifier}" \
+  "${project_root}" "${nemo_rl_commit}" \
+  "${bridge_root}" "${bridge_commit}" \
+  "${mcore_root}" "${mcore_commit}"
+copied_uv_lock_sha256=$(sha256sum "${project_root}/uv.lock" | awk "{print \$1}")
+if [[ "${copied_uv_lock_sha256}" != "${uv_lock_sha256}" ]]; then
+  echo "Runtime source copy uv.lock SHA256 mismatch" >&2
+  exit 2
+fi
+expected_uv_version=$(sed -nE "s/^ARG UV_VERSION=([0-9]+\\.[0-9]+\\.[0-9]+)$/\\1/p" "${project_root}/docker/Dockerfile")
+if [[ "${PINNED_UV_VERSION:?Runtime probe requires the source-pinned uv version}" != "${expected_uv_version}" ]]; then
+  echo "PINNED_UV_VERSION does not match docker/Dockerfile" >&2
+  exit 2
+fi
+uv_executable=${UV_EXECUTABLE:?Runtime probe requires an exact uv executable}
+uv_bin_dir=$(dirname "${uv_executable}")
+if [[ "${uv_executable}" != "${uv_bin_dir}/uv" || "${uv_bin_dir}" != /* ]]; then
+  echo "UV_EXECUTABLE must be an absolute uv binary path" >&2
+  exit 2
+fi
+if [[ -L "${uv_bin_dir}" || -L "${uv_executable}" ]]; then
+  echo "Pinned uv path must not be a symlink" >&2
+  exit 2
+fi
+if [[ -e "${uv_bin_dir}" || -L "${uv_bin_dir}" ]]; then
+  echo "Pinned uv destination already exists: ${uv_bin_dir}" >&2
+  exit 2
+fi
+command -v curl >/dev/null || {
+  echo "curl is required to stage pinned uv" >&2
+  exit 2
+}
+command -v sha256sum >/dev/null || {
+  echo "sha256sum is required for installer artifact verification" >&2
+  exit 2
+}
+staging_uv_dir=${uv_bin_dir}.partial
+uv_installer=${uv_bin_dir}.installer.sh
+rm -rf -- "${staging_uv_dir}" "${uv_installer}"
+cleanup_uv_stage() {
+  rm -rf -- "${staging_uv_dir}" "${uv_installer}"
+}
+cleanup_uv_stage_and_workspace() {
+  cleanup_uv_stage
+  cleanup_runtime_workspace
+}
+trap cleanup_uv_stage_and_workspace EXIT
+curl --retry 3 --retry-delay 2 -fsSL \
+  -o "${uv_installer}" \
+  "https://astral.sh/uv/${expected_uv_version}/install.sh"
+env UV_UNMANAGED_INSTALL="${staging_uv_dir}" sh "${uv_installer}"
+staging_uv_executable=${staging_uv_dir}/uv
+[[ -x "${staging_uv_executable}" ]] || {
+  echo "Pinned uv installer did not create ${staging_uv_executable}" >&2
+  exit 2
+}
+staging_uv_version=$("${staging_uv_executable}" --version | awk "{print \$2}")
+if [[ "${staging_uv_version}" != "${expected_uv_version}" ]]; then
+  echo "Staged uv version mismatch: expected ${expected_uv_version}, got ${staging_uv_version}" >&2
+  exit 2
+fi
+mv --no-clobber --no-target-directory -- "${staging_uv_dir}" "${uv_bin_dir}"
+[[ ! -e "${staging_uv_dir}" && ! -L "${staging_uv_dir}" ]] || {
+  echo "Pinned uv destination appeared during publication: ${uv_bin_dir}" >&2
+  exit 2
+}
+rm -f -- "${uv_installer}"
+trap cleanup_runtime_workspace EXIT
+actual_uv_version=$("${uv_executable}" --version | awk "{print \$2}")
+if [[ "${actual_uv_version}" != "${expected_uv_version}" ]]; then
+  echo "Pinned uv version mismatch: expected ${expected_uv_version}, got ${actual_uv_version}" >&2
+  exit 2
+fi
+expected_python_version=$(tr -d "[:space:]" <"${project_root}/.python-version")
+if [[ "${UV_PYTHON:?Runtime probe requires an exact Python version}" != "${expected_python_version}" ]]; then
+  echo "UV_PYTHON does not match .python-version" >&2
+  exit 2
+fi
+python_install_dir=${UV_PYTHON_INSTALL_DIR:?Runtime probe requires a managed Python install directory}
+if [[ -L "${python_install_dir}" || ( -e "${python_install_dir}" && ! -d "${python_install_dir}" ) ]]; then
+  echo "Managed Python install directory is unsafe" >&2
+  exit 2
+fi
+mkdir -p -- "${python_install_dir}"
+if [[ -L "${python_install_dir}" || ! -d "${python_install_dir}" ]]; then
+  echo "Managed Python install directory publication is unsafe" >&2
+  exit 2
+fi
+"${uv_executable}" python install --managed-python --no-bin "${expected_python_version}"
+export UV_PYTHON_DOWNLOADS=never
+base_python=$("${uv_executable}" python find --managed-python "${expected_python_version}")
+if [[ ! -x "${base_python}" ]]; then
+  echo "Managed Python is missing or not executable: ${base_python}" >&2
+  exit 2
+fi
+actual_python_version=$("${base_python}" -c "import platform; print(platform.python_version())")
+if [[ "${actual_python_version}" != "${expected_python_version}" ]]; then
+  echo "Managed Python version mismatch: expected ${expected_python_version}, got ${actual_python_version}" >&2
+  exit 2
+fi
+cd "${project_root}"
+sync_command=(
+  "${uv_executable}" sync --python "${expected_python_version}" --managed-python
+  --locked --extra mcore --group test --no-python-downloads --directory "${project_root}"
+)
+IFS=, read -r -a excluded_packages <<<"${RUNTIME_EXCLUDED_PACKAGES}"
+for excluded_package in "${excluded_packages[@]}"; do
+  sync_command+=(--no-install-package "${excluded_package}")
+done
+"${sync_command[@]}"
+"${environment_root}/bin/python" -c \
+  "import megatron.core; import torch; import transformer_engine; import transformer_engine_torch"
+"${environment_root}/bin/python" - "${RUNTIME_TEST_REQUIREMENTS}" "${environment_root}" <<"PY"
+import importlib
+import importlib.metadata
+import sys
+from pathlib import Path
+
+expected = dict(requirement.rsplit("==", 1) for requirement in sys.argv[1].split(","))
+site_packages = (Path(sys.argv[2]) / "lib/python3.13/site-packages").resolve()
+for distribution, version in expected.items():
+    actual_version = importlib.metadata.version(distribution)
+    if actual_version != version:
+        raise SystemExit(
+            f"test dependency identity mismatch for {distribution}: "
+            f"expected {version}, got {actual_version}"
+        )
+    module = importlib.import_module(distribution)
+    module_path = Path(module.__file__).resolve()
+    if not module_path.is_relative_to(site_packages):
+        raise SystemExit(f"test dependency escaped staged site-packages: {module_path}")
+PY
+task2_root_test_runner=${project_root}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/scripts/run_task2_root_tests.sh
+if [[ ! -x "${task2_root_test_runner}" ]]; then
+  echo "Committed Task 2 root test runner is missing or not executable" >&2
+  exit 2
+fi
+"${task2_root_test_runner}" \
+  "${environment_root}/bin/python" "${runtime_stage_root}/test-results"
+"${source_provenance_verifier}" \
+  "${project_root}" "${nemo_rl_commit}" \
+  "${bridge_root}" "${bridge_commit}" \
+  "${mcore_root}" "${mcore_commit}"
+rm -rf -- "${uv_cache_dir}" "${te_cmake_dir}"
+printf "%s\n" "${RUNTIME_STAGE_JOB_ID}" >"${stage_job_record}"
+printf "%s\n" \
+  "schema=runtime-stage-v1" \
+  "stage_key=$(basename "${runtime_stage_root}")" \
+  "container_sha256=${container_sha256}" \
+  "uv_lock_sha256=${uv_lock_sha256}" \
+  "nemo_rl_commit=${nemo_rl_commit}" \
+  "bridge_commit=${bridge_commit}" \
+  "mcore_commit=${mcore_commit}" \
+  "te_source_commit=${expected_te_commit}" \
+  "te_version_base_commit=${expected_te_version_base_commit}" \
+  "python_version=${expected_python_version}" \
+  "uv_version=${expected_uv_version}" \
+  "feature_set=${RUNTIME_FEATURE_SET}" \
+  "excluded_packages=${RUNTIME_EXCLUDED_PACKAGES}" \
+  "stage_capability=${RUNTIME_STAGE_CAPABILITY}" \
+  "test_requirements=${RUNTIME_TEST_REQUIREMENTS}" \
+  "torch_cuda_arch_list=${TORCH_CUDA_ARCH_LIST}" \
+  "cuda_archs=${NVTE_CUDA_ARCHS}" \
+  "stage_cpus_per_task=${RUNTIME_STAGE_CPUS_PER_TASK}" >"${partial_marker}"
+actual_marker_sha256=$(sha256sum "${partial_marker}" | awk "{print \$1}")
+if [[ "${actual_marker_sha256}" != "${RUNTIME_STAGE_MARKER_SHA256}" ]]; then
+  echo "Runtime stage marker SHA256 mismatch" >&2
+  exit 2
+fi
+chmod a-w -- "${partial_marker}"
+chmod -R a-w -- "${runtime_stage_root}"
+writable_path=$(find "${runtime_stage_root}" \
+  \( -type f -o -type d \) \
+  \( -perm -200 -o -perm -020 -o -perm -002 \) -print -quit)
+if [[ -n "${writable_path}" ]]; then
+  echo "Runtime stage contains writable regular state: ${writable_path}" >&2
+  exit 2
+fi
+while IFS= read -r -d "" symlink_path; do
+  resolved_symlink=$(realpath -e -- "${symlink_path}") || {
+    echo "Runtime stage contains a broken symlink: ${symlink_path}" >&2
+    exit 2
+  }
+  case "${resolved_symlink}" in
+    "${runtime_stage_root}"|"${runtime_stage_root}"/*|"${python_install_dir}"|"${python_install_dir}"/*) ;;
+    *)
+      echo "Runtime stage symlink escapes trusted roots: ${symlink_path}" >&2
+      exit 2
+      ;;
+  esac
+done < <(find "${runtime_stage_root}" -type l -print0)
+mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"
+trap - EXIT
+printf "RUNTIME_STAGE_READY=%s\nRUNTIME_STAGE_MARKER=%s\nRUNTIME_STAGE_JOB_ID=%s\n" \
+  "${runtime_stage_root}" "${marker}" "${RUNTIME_STAGE_JOB_ID}"'
+
+attestation_command='set -euo pipefail
+source_project_root=$1
+source_validator=$2
+environment_root=$3
+container=$4
+container_sha256=$5
+nemo_rl_commit=$6
+bridge_commit=$7
+mcore_commit=$8
+uv_lock_sha256=$9
+expected_te_commit=${10}
+container_device=${11}
+container_inode=${12}
+container_size=${13}
+container_mtime_seconds=${14}
+container_ctime_seconds=${15}
+expected_te_version_base_commit=${16}
+output_flag=${17}
+output=${18}
+runtime_stage_root=${19}
+if [[ "${output_flag}" != "--output" ]]; then
+  echo "Runtime probe payload requires --output" >&2
+  exit 2
+fi
+: "${RUNTIME_STAGE_MARKER:?Runtime attestation requires RUNTIME_STAGE_MARKER}"
+: "${RUNTIME_STAGE_JOB_ID:?Runtime attestation requires RUNTIME_STAGE_JOB_ID}"
+marker=${RUNTIME_STAGE_MARKER}
+marker_dir=$(dirname "${marker}")
+stage_job_record=${runtime_stage_root}/stage-job-id
+if [[ ! "${RUNTIME_STAGE_JOB_ID}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "RUNTIME_STAGE_JOB_ID must be a positive integer" >&2
+  exit 2
+fi
+if [[ -L "${stage_job_record}" || ! -f "${stage_job_record}" ]] ||
+   [[ "$(<"${stage_job_record}")" != "${RUNTIME_STAGE_JOB_ID}" ]]; then
+  echo "Runtime stage job record is missing, unsafe, or mismatched" >&2
+  exit 2
+fi
+if [[ -L "${runtime_stage_root}" || ! -d "${runtime_stage_root}" ]]; then
+  echo "Runtime stage root must be a regular directory" >&2
+  exit 2
+fi
+if [[ -L "${marker_dir}" || ! -d "${marker_dir}" ]]; then
+  echo "Runtime stage marker directory is missing or unsafe" >&2
+  exit 2
+fi
+if [[ -L "${marker}" || ! -f "${marker}" ]]; then
+  echo "Runtime stage completion marker is missing or unsafe" >&2
+  exit 2
+fi
+actual_marker_sha256=$(sha256sum "${marker}" | awk "{print \$1}")
+if [[ "${actual_marker_sha256}" != "${RUNTIME_STAGE_MARKER_SHA256}" ]]; then
+  echo "Runtime stage marker SHA256 mismatch" >&2
+  exit 2
+fi
+writable_path=$(find "${runtime_stage_root}" \
+  \( -type f -o -type d \) \
+  \( -perm -200 -o -perm -020 -o -perm -002 \) -print -quit)
+if [[ -n "${writable_path}" ]]; then
+  echo "Runtime stage contains writable regular state: ${writable_path}" >&2
+  exit 2
+fi
+python_install_dir=${UV_PYTHON_INSTALL_DIR:?Runtime probe requires a managed Python install directory}
+while IFS= read -r -d "" symlink_path; do
+  resolved_symlink=$(realpath -e -- "${symlink_path}") || {
+    echo "Runtime stage contains a broken symlink: ${symlink_path}" >&2
+    exit 2
+  }
+  case "${resolved_symlink}" in
+    "${runtime_stage_root}"|"${runtime_stage_root}"/*|"${python_install_dir}"|"${python_install_dir}"/*) ;;
+    *)
+      echo "Runtime stage symlink escapes trusted roots: ${symlink_path}" >&2
+      exit 2
+      ;;
+  esac
+done < <(find "${runtime_stage_root}" -type l -print0)
+project_root=${runtime_stage_root}/source
+source_validator=${project_root}/${source_validator#"${source_project_root}/"}
+source_provenance_verifier=${project_root}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/scripts/verify_source_provenance.sh
+bridge_root=${project_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
+mcore_root=${bridge_root}/3rdparty/Megatron-LM
+"${source_provenance_verifier}" \
+  "${project_root}" "${nemo_rl_commit}" \
+  "${bridge_root}" "${bridge_commit}" \
+  "${mcore_root}" "${mcore_commit}"
+copied_uv_lock_sha256=$(sha256sum "${project_root}/uv.lock" | awk "{print \$1}")
+if [[ "${copied_uv_lock_sha256}" != "${uv_lock_sha256}" ]]; then
+  echo "Runtime stage uv.lock SHA256 mismatch" >&2
+  exit 2
+fi
+runtime_python=${environment_root}/bin/python
+if [[ ! -x "${runtime_python}" ]]; then
+  echo "Runtime stage Python is missing or unsafe" >&2
+  exit 2
+fi
+"${runtime_python}" "${source_validator}" \
+  --container-image "${container}" \
+  --container-sha256 "${container_sha256}" \
+  --expected-device-count 4 \
+  --expected-environment-root "${environment_root}" \
+  --expected-project-root "${project_root}" \
+  --expected-python-version "${UV_PYTHON}" \
+  --expected-python-install-dir "${UV_PYTHON_INSTALL_DIR}" \
+  --expected-uv-version "${PINNED_UV_VERSION}" \
+  --expected-uv-executable "${UV_EXECUTABLE}" \
+  --expected-nvte-with-nccl-ep "0" \
+  --runtime-feature-set "${RUNTIME_FEATURE_SET}" \
+  --excluded-packages "${RUNTIME_EXCLUDED_PACKAGES}" \
+  --torch-cuda-arch-list "${TORCH_CUDA_ARCH_LIST}" \
+  --nvte-cuda-archs "${NVTE_CUDA_ARCHS}" \
+  --nemo-rl-commit "${nemo_rl_commit}" \
+  --bridge-commit "${bridge_commit}" \
+  --mcore-commit "${mcore_commit}" \
+  --uv-lock-sha256 "${uv_lock_sha256}" \
+  --expected-te-commit "${expected_te_commit}" \
+  --expected-te-version-base-commit "${expected_te_version_base_commit}" \
+  --container-device "${container_device}" \
+  --container-inode "${container_inode}" \
+  --container-size "${container_size}" \
+  --container-mtime-seconds "${container_mtime_seconds}" \
+  --container-ctime-seconds "${container_ctime_seconds}" \
+  --output "${output}"'
+
+payload=${attestation_command}
+srun_resources=(--gres=gpu:4)
+if [[ "${RUNTIME_PHASE}" == "stage" ]]; then
+  payload=${stage_command}
+  srun_resources=(--gres=none "--cpus-per-task=${RUNTIME_STAGE_CPUS_PER_TASK}")
+fi
+
+set +e
+srun \
+  --nodes=1 \
+  --ntasks=1 \
+  "${srun_resources[@]}" \
+  --no-container-mount-home \
+  --container-image="${CONTAINER}" \
+  --container-mounts="${container_mounts}" \
+  --export=NIL \
+  "${runtime_environment[@]}" \
+  /bin/bash --noprofile --norc -c "${payload}" bash \
+    "${project_root}" \
+    "${validator}" \
+    "${runtime_environment_root}" \
+    "${CONTAINER}" \
+    "${actual_container_sha256}" \
+    "${EXPECTED_NEMORL_SHA}" \
+    "${EXPECTED_BRIDGE_SHA}" \
+    "${EXPECTED_MCORE_SHA}" \
+    "${uv_lock_sha256}" \
+    "${EXPECTED_TE_SHA}" \
+    "${container_device}" \
+    "${container_inode}" \
+    "${container_size}" \
+    "${container_mtime_seconds}" \
+    "${container_ctime_seconds}" \
+    "${EXPECTED_TE_VERSION_BASE_SHA}" \
+    --output "${partial_artifact}" \
+    "${runtime_stage_root}" \
+  2>&1 | tee "${diagnostic}"
+probe_status=${PIPESTATUS[0]}
+set -e
+
+if [[ "${RUNTIME_PHASE}" == "attest" && -f "${partial_artifact}" ]]; then
+  mv "${partial_artifact}" "${artifact}"
+  ln -s "$(basename "${artifact}")" "${partial_link}"
+  mv -f "${partial_link}" "${current_link}"
+fi
+if [[ ${probe_status} -ne 0 ]]; then
+  echo "OCI container runtime smoke failed; artifact=${artifact}; diagnostic=${diagnostic}" >&2
+  exit "${probe_status}"
+fi
+
+if [[ "${RUNTIME_PHASE}" == "stage" ]]; then
+  echo "OCI_CONTAINER_RUNTIME_STAGE=${runtime_stage_root}"
+  echo "OCI_CONTAINER_RUNTIME_DIAGNOSTIC=${diagnostic}"
+  exit 0
+fi
+echo "OCI_CONTAINER_RUNTIME_ARTIFACT=${artifact}"
+echo "OCI_CONTAINER_RUNTIME_DIAGNOSTIC=${diagnostic}"

@@ -1,0 +1,17 @@
+{
+  "candidate_kind": "bridge",
+  "rows": {
+    "bridge_forward_only_eval_8": {
+      "allocations": [
+        {"gpus_per_node": 8, "num_nodes": 1},
+        {"gpus_per_node": 4, "num_nodes": 2}
+      ],
+      "pytest_filters": [],
+      "pytest_nodes": [
+        "tests/unit_tests/training/test_forward_only_cuda_graph_distributed.py::test_bridge_forward_only_eval_pp2_vpp2_real_te"
+      ],
+      "world_size": 8
+    }
+  },
+  "schema_version": 1
+}

@@ -1,0 +1,148 @@
+#!/bin/bash
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --gres=gpu:4
+#SBATCH --partition=batch
+#SBATCH --time=02:00:00
+#SBATCH --job-name=bridge_recipe_bootstrap
+
+set -euo pipefail
+
+: "${BRIDGE_REPOSITORY:?Set BRIDGE_REPOSITORY to a fetchable Megatron-Bridge repository}"
+: "${EXPECTED_BRIDGE_SHA:?Set EXPECTED_BRIDGE_SHA to the exact Bridge commit}"
+: "${EXPECTED_MCORE_SHA:?Set EXPECTED_MCORE_SHA to the exact nested MCore commit}"
+: "${ARTIFACT_DIR:?Set ARTIFACT_DIR to an absolute shared-storage path}"
+: "${CONTAINER:?Set CONTAINER to the immutable nightly squashfs path}"
+: "${CONTAINER_SHA256:?Set CONTAINER_SHA256 to the squashfs SHA256}"
+
+ACCOUNT=${ACCOUNT:-coreai_dlalgo_nemorl}
+PARTITION=${PARTITION:-batch}
+MOUNTS=${MOUNTS:-/lustre:/lustre}
+TEST_ONLY=${TEST_ONLY:-0}
+
+valid_bridge_remote() {
+  local repository=$1
+  local remainder
+  local host
+  local path
+
+  if [[ "${repository}" == *\?* || "${repository}" == *\#* || \
+        "${repository}" =~ [[:space:][:cntrl:]] ]]; then
+    return 1
+  fi
+  case "${repository}" in
+    https://*)
+      remainder=${repository#https://}
+      [[ "${remainder}" == */* ]] || return 1
+      host=${remainder%%/*}
+      path=${remainder#*/}
+      [[ "${host}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?$ ]] || return 1
+      ;;
+    git@*)
+      [[ "${repository}" =~ ^git@[A-Za-z0-9][A-Za-z0-9.-]*: ]] || return 1
+      path=${repository#*:}
+      ;;
+    *) return 1 ;;
+  esac
+  case "/${path}/" in
+    */../*|*/./*) return 1 ;;
+  esac
+  [[ "${path}" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]]
+}
+
+if [[ ! "${EXPECTED_BRIDGE_SHA}" =~ ^[[:xdigit:]]{40}$ ]]; then
+  echo "EXPECTED_BRIDGE_SHA must be a full 40-character commit" >&2
+  exit 2
+fi
+if [[ ! "${EXPECTED_MCORE_SHA}" =~ ^[[:xdigit:]]{40}$ ]]; then
+  echo "EXPECTED_MCORE_SHA must be a full 40-character commit" >&2
+  exit 2
+fi
+if [[ ! "${CONTAINER_SHA256}" =~ ^[[:xdigit:]]{64}$ ]]; then
+  echo "CONTAINER_SHA256 must contain 64 hexadecimal characters" >&2
+  exit 2
+fi
+if [[ "${ARTIFACT_DIR}" != /* || "${CONTAINER}" != /* ]]; then
+  echo "ARTIFACT_DIR and CONTAINER must be absolute paths" >&2
+  exit 2
+fi
+if [[ "${PARTITION}" != "batch" ]]; then
+  echo "Production validation requires PARTITION=batch" >&2
+  exit 2
+fi
+if ! valid_bridge_remote "${BRIDGE_REPOSITORY}"; then
+  echo "BRIDGE_REPOSITORY must be a credential-free public HTTPS or git@host:path remote" >&2
+  exit 2
+fi
+
+script_path=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")
+
+if [[ -z "${SLURM_JOB_ID:-}" ]]; then
+  BRIDGE_BOOTSTRAP_PAYLOAD=${BRIDGE_BOOTSTRAP_PAYLOAD:-$(dirname "${script_path}")/bridge_bootstrap_payload.sh}
+  if [[ "${BRIDGE_BOOTSTRAP_PAYLOAD}" != /* || ! -f "${BRIDGE_BOOTSTRAP_PAYLOAD}" ]]; then
+    echo "BRIDGE_BOOTSTRAP_PAYLOAD must be an existing absolute path" >&2
+    exit 2
+  fi
+  export BRIDGE_BOOTSTRAP_PAYLOAD
+  sbatch_command=(
+    sbatch
+    --parsable
+    "--partition=${PARTITION}"
+    "--account=${ACCOUNT}"
+    --gres=gpu:4
+    "--output=${ARTIFACT_DIR}/slurm-%j.log"
+    --export=ALL
+    "${script_path}"
+  )
+  printf 'EXPECTED_BRIDGE_SHA=%s\n' "${EXPECTED_BRIDGE_SHA}"
+  printf 'EXPECTED_MCORE_SHA=%s\n' "${EXPECTED_MCORE_SHA}"
+  printf 'CONTAINER_SHA256=%s\n' "${CONTAINER_SHA256}"
+  printf 'SBATCH:'
+  printf ' %q' "${sbatch_command[@]}"
+  printf '\n'
+  if [[ "${TEST_ONLY}" == "1" ]]; then
+    echo "TEST_ONLY: no submission performed"
+    exit 0
+  fi
+  mkdir -p "${ARTIFACT_DIR}"
+  "${sbatch_command[@]}"
+  exit 0
+fi
+
+: "${BRIDGE_BOOTSTRAP_PAYLOAD:?Submission must export BRIDGE_BOOTSTRAP_PAYLOAD}"
+if [[ "${BRIDGE_BOOTSTRAP_PAYLOAD}" != /* || ! -f "${BRIDGE_BOOTSTRAP_PAYLOAD}" ]]; then
+  echo "BRIDGE_BOOTSTRAP_PAYLOAD must be an existing absolute path" >&2
+  exit 1
+fi
+
+if [[ ! -f "${CONTAINER}" ]]; then
+  echo "Immutable container is missing: ${CONTAINER}" >&2
+  exit 1
+fi
+actual_container_sha=$(sha256sum "${CONTAINER}" | awk '{print $1}')
+if [[ "${actual_container_sha}" != "${CONTAINER_SHA256}" ]]; then
+  echo "Container SHA256 mismatch: expected ${CONTAINER_SHA256}, got ${actual_container_sha}" >&2
+  exit 1
+fi
+
+export SLURM_EXPORT_ENV=ALL
+srun \
+  --nodes=1 \
+  --ntasks=1 \
+  --container-image="${CONTAINER}" \
+  --container-mounts="${MOUNTS}" \
+  --export=ALL \
+  bash "${BRIDGE_BOOTSTRAP_PAYLOAD}"

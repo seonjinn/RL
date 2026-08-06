@@ -15,7 +15,8 @@ import os
 import warnings
 from collections import defaultdict
 from contextlib import nullcontext
-from typing import Any, Iterable, Optional, Union
+from dataclasses import dataclass
+from typing import Any, Iterable, Literal, Optional, Union, cast
 
 import numpy as np
 import ray
@@ -24,6 +25,7 @@ from ray.util.queue import Queue as RayQueue
 from transformers import AutoProcessor, PreTrainedTokenizerBase
 
 from nemo_rl.algorithms.loss.interfaces import LossFunction
+from nemo_rl.algorithms.utils import aggregate_cuda_graph_metrics
 from nemo_rl.distributed.batched_data_dict import (
     BatchedDataDict,
     DynamicBatchingArgs,
@@ -38,7 +40,7 @@ from nemo_rl.models.generation.interfaces import (
     GenerationInterface,
     GenerationOutputSpec,
 )
-from nemo_rl.models.policy import PolicyConfig
+from nemo_rl.models.policy import PolicyConfig, SequencePackingConfig
 from nemo_rl.models.policy.interfaces import (
     ColocatablePolicyInterface,
     LogprobOutputSpec,
@@ -59,6 +61,13 @@ from nemo_rl.utils.flops_tracker import (
 from nemo_rl.utils.timer import Timer
 
 PathLike = Union[str, "os.PathLike[Any]"]
+
+
+@dataclass(frozen=True)
+class _EffectiveTECudaGraphConfig:
+    cuda_graph_impl: str
+    thd_max_packed_sequences: int | None
+    training_enabled: bool
 
 
 def _aggregate_megatron_flops_metrics(
@@ -83,6 +92,87 @@ def _aggregate_megatron_flops_metrics(
     return aggregated
 
 
+def _resolve_effective_te_cuda_graph_config(
+    worker_results: object,
+) -> _EffectiveTECudaGraphConfig:
+    """Validate and resolve one effective TE CUDA Graph config across workers."""
+    if not isinstance(worker_results, (list, tuple)):
+        raise TypeError(
+            "Megatron worker CUDA Graph configs must be returned as a list or tuple."
+        )
+    if not worker_results:
+        raise ValueError("Megatron worker CUDA Graph configs must not be empty.")
+
+    expected_keys = {
+        "cuda_graph_impl",
+        "thd_max_packed_sequences",
+        "training_enabled",
+    }
+    resolved_configs: list[_EffectiveTECudaGraphConfig] = []
+    for index, raw_config in enumerate(worker_results):
+        if not isinstance(raw_config, dict):
+            raise TypeError(
+                f"Megatron worker CUDA Graph config at rank {index} must be a dict, "
+                f"got {type(raw_config).__name__}."
+            )
+        actual_keys = set(raw_config)
+        if actual_keys != expected_keys:
+            missing = sorted(expected_keys - actual_keys)
+            unknown = sorted(actual_keys - expected_keys, key=str)
+            raise ValueError(
+                f"Megatron worker CUDA Graph config at rank {index} must contain "
+                f"exactly {sorted(expected_keys)}; missing={missing}, "
+                f"unknown={unknown}."
+            )
+
+        cuda_graph_impl = raw_config["cuda_graph_impl"]
+        capacity = raw_config["thd_max_packed_sequences"]
+        training_enabled = raw_config["training_enabled"]
+        if type(cuda_graph_impl) is not str:
+            raise TypeError(
+                "Megatron worker CUDA Graph config cuda_graph_impl must be a string, "
+                f"got {cuda_graph_impl!r} at rank {index}."
+            )
+        if capacity is not None and type(capacity) is not int:
+            raise TypeError(
+                "Megatron worker CUDA Graph config thd_max_packed_sequences must be "
+                f"an integer or None, got {capacity!r} at rank {index}."
+            )
+        if type(training_enabled) is not bool:
+            raise TypeError(
+                "Megatron worker CUDA Graph config training_enabled must be a bool, "
+                f"got {training_enabled!r} at rank {index}."
+            )
+        if training_enabled:
+            if cuda_graph_impl != "transformer_engine":
+                raise ValueError(
+                    "Megatron worker CUDA Graph config with training_enabled=true "
+                    "must use cuda_graph_impl='transformer_engine'."
+                )
+            if capacity is None or capacity < 2:
+                raise ValueError(
+                    "Megatron worker CUDA Graph config with training_enabled=true "
+                    "requires thd_max_packed_sequences >= 2."
+                )
+
+        resolved_configs.append(
+            _EffectiveTECudaGraphConfig(
+                cuda_graph_impl=cuda_graph_impl,
+                thd_max_packed_sequences=capacity,
+                training_enabled=training_enabled,
+            )
+        )
+
+    resolved = resolved_configs[0]
+    for index, config in enumerate(resolved_configs[1:], start=1):
+        if config != resolved:
+            raise ValueError(
+                "Effective TE CUDA Graph config must be consistent across all "
+                f"Megatron workers; rank 0={resolved!r}, rank {index}={config!r}."
+            )
+    return resolved
+
+
 class Policy(ColocatablePolicyInterface, GenerationInterface):
     def __init__(
         self,
@@ -99,6 +189,13 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         worker_extension_cls_fqn: Optional[str] = None,
         skip_weight_load: bool = False,
     ):
+        self._effective_te_cuda_graph_config: _EffectiveTECudaGraphConfig = (
+            _EffectiveTECudaGraphConfig(
+                cuda_graph_impl="none",
+                thd_max_packed_sequences=None,
+                training_enabled=False,
+            )
+        )
         if weights_path:
             weights_path = os.path.abspath(weights_path)
         if optimizer_path:
@@ -304,6 +401,8 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                 env_vars=env_vars or {},
             )
 
+        self._cache_effective_te_cuda_graph_config(megatron_enabled=megatron_enable)
+
         if config["dynamic_batching"]["enabled"]:
             assert pp_size == 1, (
                 "Dynamic batching is only supported for single pipeline parallel stage"
@@ -351,6 +450,23 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             self.use_sequence_packing = False
 
         self.cfg = config
+
+    def _cache_effective_te_cuda_graph_config(
+        self,
+        *,
+        megatron_enabled: bool,
+    ) -> None:
+        """Cache the worker-resolved graph config used by policy-side packing."""
+        if not megatron_enabled:
+            return
+
+        futures = self.worker_group.run_all_workers_single_data(
+            "get_effective_te_cuda_graph_config"
+        )
+        worker_results = ray.get(futures)
+        self._effective_te_cuda_graph_config = _resolve_effective_te_cuda_graph_config(
+            worker_results
+        )
 
     @property
     def data_parallel_size(self) -> int:
@@ -445,6 +561,54 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
     # DRY for Policy's logprob/train methods only. The data-plane sibling
     # TQPolicy shards KVBatchMeta via ``shard_meta_for_dp``; the
     # driver-on-data vs driver-on-meta split is by design.
+    def _sequence_packing_args_for_call(
+        self,
+        mb_tokens_key: Literal["train_mb_tokens", "logprob_mb_tokens"],
+        *,
+        for_cuda_graph_training: bool = False,
+    ) -> Optional[SequencePackingArgs]:
+        """Build isolated sequence-packing arguments for one policy call."""
+        try:
+            effective_config = self._effective_te_cuda_graph_config
+        except AttributeError as error:
+            raise RuntimeError(
+                "Effective TE CUDA Graph config was not initialized by Policy."
+            ) from error
+        is_te_graph_training = (
+            for_cuda_graph_training
+            and effective_config.training_enabled
+            and effective_config.cuda_graph_impl == "transformer_engine"
+        )
+        if not getattr(self, "use_sequence_packing", False):
+            if is_te_graph_training:
+                raise ValueError(
+                    "Transformer Engine CUDA Graph training requires "
+                    "sequence_packing.enabled=true."
+                )
+            return None
+
+        args = self.sequence_packing_args.copy()
+        args.pop("max_sequences_per_microbatch", None)
+        sequence_packing_config = cast(
+            SequencePackingConfig,
+            self.cfg["sequence_packing"],
+        )
+        args["max_tokens_per_microbatch"] = sequence_packing_config[mb_tokens_key]
+        if not is_te_graph_training:
+            return args
+
+        capacity = effective_config.thd_max_packed_sequences
+        if isinstance(capacity, bool) or not isinstance(capacity, int):
+            raise TypeError(
+                f"thd_max_packed_sequences must be an integer, got {capacity!r}."
+            )
+        if capacity < 2:
+            raise ValueError(
+                f"thd_max_packed_sequences must be at least 2, got {capacity}."
+            )
+        args["max_sequences_per_microbatch"] = capacity - 1
+        return args
+
     def _shard_for_logprob(
         self,
         data: BatchedDataDict[Any],
@@ -457,6 +621,9 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         (``None`` when neither is enabled).
         """
         dp_size = self.data_parallel_size
+        sequence_packing_args = self._sequence_packing_args_for_call(
+            "logprob_mb_tokens"
+        )
         if self.use_dynamic_batches:
             self.dynamic_batching_args["max_tokens_per_microbatch"] = self.cfg[
                 "dynamic_batching"
@@ -466,15 +633,12 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                 batch_size=None,
                 dynamic_batching_args=self.dynamic_batching_args,
             )
-        elif self.use_sequence_packing:
-            self.sequence_packing_args["max_tokens_per_microbatch"] = self.cfg[
-                "sequence_packing"
-            ]["logprob_mb_tokens"]
+        elif sequence_packing_args is not None:
             # we just shard into DP shards here as Sequence packing allows for CP.
             sharded_data, unsorted_data_indices = data.shard_by_batch_size(
                 dp_size,
                 batch_size=None,
-                sequence_packing_args=self.sequence_packing_args,
+                sequence_packing_args=sequence_packing_args,
             )
         else:
             sharded_data = data.shard_by_batch_size(  # type: ignore
@@ -488,6 +652,8 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         self,
         data: BatchedDataDict[Any],
         batch_size: int,
+        *,
+        eval_mode: bool = False,
     ) -> list["SlicedDataDict"]:
         """Shard inputs for ``train``.
 
@@ -498,6 +664,10 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         scalar metrics (no per-row outputs to reorder).
         """
         dp_size = self.data_parallel_size
+        sequence_packing_args = self._sequence_packing_args_for_call(
+            "train_mb_tokens",
+            for_cuda_graph_training=not eval_mode,
+        )
         if self.use_dynamic_batches:
             self.dynamic_batching_args["max_tokens_per_microbatch"] = self.cfg[
                 "dynamic_batching"
@@ -507,14 +677,11 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
                 batch_size=batch_size,
                 dynamic_batching_args=self.dynamic_batching_args,
             )
-        elif self.use_sequence_packing:
-            self.sequence_packing_args["max_tokens_per_microbatch"] = self.cfg[
-                "sequence_packing"
-            ]["train_mb_tokens"]
+        elif sequence_packing_args is not None:
             sharded_data, _ = data.shard_by_batch_size(
                 dp_size,
                 batch_size=batch_size,
-                sequence_packing_args=self.sequence_packing_args,
+                sequence_packing_args=sequence_packing_args,
             )
         else:
             sharded_data = data.shard_by_batch_size(
@@ -750,7 +917,11 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
         micro_batch_size = mbs or self.cfg["train_micro_batch_size"]
         # Shard and replicate the batch
         with timer.time("policy_training/sharding_data") if timer else nullcontext():
-            sharded_data = self._shard_for_train(data, batch_size)
+            sharded_data = self._shard_for_train(
+                data,
+                batch_size,
+                eval_mode=eval_mode,
+            )
 
         if self.flops_tracker is not None:
             self.flops_tracker.reset()
@@ -825,6 +996,10 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             for k, v in r["all_mb_metrics"].items():
                 all_mb_metrics[k].extend(v)
         aggregated_results["all_mb_metrics"] = dict(all_mb_metrics)
+
+        cuda_graph_metrics = aggregate_cuda_graph_metrics(results)
+        if cuda_graph_metrics is not None:
+            aggregated_results["cuda_graph_metrics"] = cuda_graph_metrics
 
         return aggregated_results
 

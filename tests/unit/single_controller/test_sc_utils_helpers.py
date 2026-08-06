@@ -131,6 +131,80 @@ class TestAggregateStepMetrics:
         assert out["moe/load_balance"] == pytest.approx(4.0)
         assert out["mtp/acc"] == pytest.approx(4.0)
 
+    def test_cuda_graph_metrics_are_preserved_exactly_after_mb_reduction(self) -> None:
+        cuda_graph_metrics = {
+            "capture_count": 2,
+            "replay_count": 5,
+            "cache_hit_count": 7,
+            "cache_miss_count": 3,
+            "eviction_count": 1,
+            "fallback_count": 0,
+            "graph_calls": 2,
+            "eligible_calls": 4,
+            "logical_tokens": 6,
+            "padded_tokens": 12,
+            "capacity_tokens": 20,
+            "coverage": 0.5,
+            "capacity_utilization": 0.3,
+            "padding_utilization": 0.5,
+        }
+
+        out = aggregate_step_metrics(
+            {
+                "all_mb_metrics": {"some_sum_metric": [1.0, 2.0]},
+                "cuda_graph_metrics": cuda_graph_metrics,
+            }
+        )
+
+        assert out == {
+            "some_sum_metric": 3.0,
+            "cuda_graph/capture_count": 2,
+            "cuda_graph/replay_count": 5,
+            "cuda_graph/cache_hit_count": 7,
+            "cuda_graph/cache_miss_count": 3,
+            "cuda_graph/eviction_count": 1,
+            "cuda_graph/fallback_count": 0,
+            "cuda_graph/graph_calls": 2,
+            "cuda_graph/eligible_calls": 4,
+            "cuda_graph/logical_tokens": 6,
+            "cuda_graph/padded_tokens": 12,
+            "cuda_graph/capacity_tokens": 20,
+            "cuda_graph/coverage": 0.5,
+            "cuda_graph/capacity_utilization": 0.3,
+            "cuda_graph/padding_utilization": 0.5,
+        }
+        assert "cuda_graph_metrics" not in out
+
+    def test_absent_cuda_graph_metrics_adds_no_graph_keys(self) -> None:
+        out = aggregate_step_metrics({"all_mb_metrics": {"loss": [0.5]}})
+
+        assert out == {"loss": 0.5}
+        assert not any(key.startswith("cuda_graph/") for key in out)
+
+    def test_cuda_graph_metric_collision_raises_after_mb_reduction(self) -> None:
+        with pytest.raises(ValueError, match="cuda_graph/capture_count"):
+            aggregate_step_metrics(
+                {
+                    "all_mb_metrics": {"cuda_graph/capture_count": [99]},
+                    "cuda_graph_metrics": {
+                        "capture_count": 2,
+                        "replay_count": 5,
+                        "cache_hit_count": 7,
+                        "cache_miss_count": 3,
+                        "eviction_count": 1,
+                        "fallback_count": 0,
+                        "graph_calls": 2,
+                        "eligible_calls": 4,
+                        "logical_tokens": 6,
+                        "padded_tokens": 12,
+                        "capacity_tokens": 20,
+                        "coverage": 0.5,
+                        "capacity_utilization": 0.3,
+                        "padding_utilization": 0.5,
+                    },
+                }
+            )
+
 
 class TestReduceAdvantagePumpMetrics:
     def test_reward_and_advantages_and_tokens(self) -> None:

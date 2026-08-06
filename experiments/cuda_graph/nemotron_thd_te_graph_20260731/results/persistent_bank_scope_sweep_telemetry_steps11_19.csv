@@ -1,0 +1,5 @@
+Exp,Job ID,Scope,Graph Calls,Eligible Calls,Eligible Coverage %,Captures,Replays,Cache Hits,Cache Misses,Cache Hit %,Evictions,Fallbacks,Capacity Tokens,Padding Utilization %,Capacity Utilization %
+baseline,5906622,baseline,0,0,,0,0,0,0,,0,0,,,
+attn,5907665,attn,348,348,100.0,0,9,9,0,100.0,0,0,"49152;65536",99.864610,81.845036
+attn_mamba,5907667,"attn,mamba",1914,1914,100.0,4,9,5,4,55.555556,4,0,"32768;49152;65536;81920",99.896190,84.104162
+attn_mamba_moe_router,5906624,"attn,mamba,moe_router",3640,3640,100.0,6,9,3,6,33.333333,6,0,"49152;65536;81920",99.914421,87.027972

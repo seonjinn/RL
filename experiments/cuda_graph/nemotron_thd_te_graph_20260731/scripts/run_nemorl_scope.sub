@@ -1,0 +1,130 @@
+#!/bin/bash
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#SBATCH --nodes=1
+#SBATCH --exclusive
+#SBATCH --partition=batch
+#SBATCH --time=04:00:00
+#SBATCH --job-name=nemorl_cg_scope
+
+set -euo pipefail
+
+: "${COMMAND:?run_scope.sh must export COMMAND}"
+: "${CONTAINER:?run_scope.sh must export CONTAINER}"
+: "${CONTAINER_SHA256:?run_scope.sh must export CONTAINER_SHA256}"
+: "${MOUNTS:?run_scope.sh must export MOUNTS}"
+: "${RUNTIME_ATTESTATION_COMMAND:?run_scope.sh must export RUNTIME_ATTESTATION_COMMAND}"
+: "${REPO_ROOT:?run_scope.sh must export REPO_ROOT}"
+: "${EXPECTED_NEMORL_SHA:?run_scope.sh must export EXPECTED_NEMORL_SHA}"
+: "${EXPECTED_BRIDGE_SHA:?run_scope.sh must export EXPECTED_BRIDGE_SHA}"
+: "${EXPECTED_MCORE_SHA:?run_scope.sh must export EXPECTED_MCORE_SHA}"
+: "${SOURCE_PROVENANCE_VERIFIER:?run_scope.sh must export SOURCE_PROVENANCE_VERIFIER}"
+: "${PINNED_UV_VERSION:?run_scope.sh must export PINNED_UV_VERSION}"
+: "${UV_EXECUTABLE:?run_scope.sh must export UV_EXECUTABLE}"
+: "${UV_PYTHON:?run_scope.sh must export UV_PYTHON}"
+: "${UV_PYTHON_INSTALL_DIR:?run_scope.sh must export UV_PYTHON_INSTALL_DIR}"
+: "${UV_MANAGED_PYTHON:?run_scope.sh must export UV_MANAGED_PYTHON}"
+: "${UV_PYTHON_DOWNLOADS:?run_scope.sh must export UV_PYTHON_DOWNLOADS}"
+: "${NVTE_WITH_NCCL_EP:?run_scope.sh must export NVTE_WITH_NCCL_EP}"
+[[ "${NVTE_WITH_NCCL_EP}" == "0" ]] || {
+  echo "NVTE_WITH_NCCL_EP must be 0 for the HybridEP partial-CUDA-Graph study" >&2
+  exit 2
+}
+export NVTE_WITH_NCCL_EP
+
+expected_python_version=$(tr -d '[:space:]' <"${REPO_ROOT}/.python-version")
+[[ "${UV_PYTHON}" == "${expected_python_version}" ]] || {
+  echo "UV_PYTHON must match ${REPO_ROOT}/.python-version" >&2
+  exit 2
+}
+[[ "${UV_PYTHON_INSTALL_DIR}" == /* ]] || {
+  echo "UV_PYTHON_INSTALL_DIR must be absolute" >&2
+  exit 2
+}
+[[ "${UV_MANAGED_PYTHON}" == "1" ]] || {
+  echo "UV_MANAGED_PYTHON must be 1" >&2
+  exit 2
+}
+[[ "${UV_PYTHON_DOWNLOADS}" == "never" ]] || {
+  echo "UV_PYTHON_DOWNLOADS must be never" >&2
+  exit 2
+}
+expected_uv_version=$(sed -nE 's/^ARG UV_VERSION=([0-9]+\.[0-9]+\.[0-9]+)$/\1/p' "${REPO_ROOT}/docker/Dockerfile")
+[[ "${PINNED_UV_VERSION}" == "${expected_uv_version}" ]] || {
+  echo "PINNED_UV_VERSION must match ${REPO_ROOT}/docker/Dockerfile" >&2
+  exit 2
+}
+[[ "${UV_EXECUTABLE}" == /* && -x "${UV_EXECUTABLE}" && ! -L "${UV_EXECUTABLE}" && ! -L "$(dirname "${UV_EXECUTABLE}")" ]] || {
+  echo "UV_EXECUTABLE must be an absolute, executable, non-symlink path" >&2
+  exit 2
+}
+
+bridge_root=${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
+mcore_root=${bridge_root}/3rdparty/Megatron-LM
+"${SOURCE_PROVENANCE_VERIFIER}" \
+  "${REPO_ROOT}" "${EXPECTED_NEMORL_SHA}" \
+  "${bridge_root}" "${EXPECTED_BRIDGE_SHA}" \
+  "${mcore_root}" "${EXPECTED_MCORE_SHA}"
+
+CONTAINER_PATH_PREFIX=$(dirname "${UV_EXECUTABLE}")
+case "${CONTAINER_PATH_PREFIX}" in
+  *:*|*$'\n'*)
+    echo "CONTAINER_PATH_PREFIX must not contain a colon or newline" >&2
+    exit 2
+    ;;
+esac
+export CONTAINER_PATH_PREFIX
+unset PYTHONHOME PYTHONPATH VIRTUAL_ENV
+export UV_PROJECT_ENVIRONMENT=/tmp/nemo-rl-driver-${SLURM_JOB_ID:?}
+export UV_LINK_MODE=copy
+export NRL_SLURM_JOB_ID=${SLURM_JOB_ID:?}
+export NRL_SLURM_RESTART_COUNT=${SLURM_RESTART_COUNT:-0}
+CONTAINER_ENV_VARS=CONTAINER_PATH_PREFIX,UV_PROJECT_ENVIRONMENT,UV_LINK_MODE,UV_PYTHON,UV_PYTHON_INSTALL_DIR,UV_MANAGED_PYTHON,UV_PYTHON_DOWNLOADS,PINNED_UV_VERSION,UV_EXECUTABLE,NRL_FORCE_REBUILD_VENVS,NVTE_WITH_NCCL_EP,NRL_SLURM_JOB_ID,NRL_SLURM_RESTART_COUNT
+export CONTAINER_ENV_VARS
+managed_python_setup_command='set -euo pipefail
+managed_python=$("${UV_EXECUTABLE}" python find --managed-python "${UV_PYTHON}")
+case "${managed_python}" in
+  "${UV_PYTHON_INSTALL_DIR}"/*) ;;
+  *)
+    echo "Managed Python resolved outside UV_PYTHON_INSTALL_DIR: ${managed_python}" >&2
+    exit 2
+    ;;
+esac
+actual_python_version=$("${managed_python}" -c "import platform; print(platform.python_version())")
+if [[ "${actual_python_version}" != "${UV_PYTHON}" ]]; then
+  echo "Managed Python version mismatch: expected ${UV_PYTHON}, got ${actual_python_version}" >&2
+  exit 2
+fi'
+if [[ -n "${SETUP_COMMAND:-}" ]]; then
+  SETUP_COMMAND=${managed_python_setup_command}$'\n'${SETUP_COMMAND}
+else
+  SETUP_COMMAND=${managed_python_setup_command}
+fi
+export SETUP_COMMAND
+
+export SLURM_EXPORT_ENV=ALL
+srun \
+  --nodes=1 \
+  --ntasks=1 \
+  --no-container-mount-home \
+  --container-image="${CONTAINER}" \
+  --container-mounts="${MOUNTS}" \
+  --container-workdir="${REPO_ROOT}" \
+  "--container-env=${CONTAINER_ENV_VARS}" \
+  --export=ALL \
+  /bin/bash --noprofile --norc -c "${RUNTIME_ATTESTATION_COMMAND}"
+
+# The allocation is created from this wrapper, so ray.sub's embedded SBATCH
+# comments are inert. Its mature Ray lifecycle remains the runtime implementation.
+exec bash "${REPO_ROOT}/ray.sub"

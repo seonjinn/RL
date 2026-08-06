@@ -69,6 +69,7 @@ from nemo_rl.algorithms.utils import (
     calculate_baseline_and_std_per_prompt,
     get_gdpo_reward_component_keys,
     log_generation_metrics_to_wandb,
+    merge_cuda_graph_metrics,
     print_performance_metrics,
 )
 from nemo_rl.data.interfaces import DatumSpec
@@ -1118,6 +1119,7 @@ def grpo_train_sync(
                 total_valid_tokens += metrics["global_valid_toks"]
 
                 metrics.update(seq_logprob_error_metrics)
+                merge_cuda_graph_metrics(metrics, train_results)
 
                 consumed_samples += master_config.grpo.num_prompts_per_step
                 timeout.mark_iteration()

@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "current_status": [
+    {
+      "text": "OCI-HSG jobs 5906622, 5907665, 5907667, and 5906624 completed 20/20 steps with the same 24-GPU Nano recipe, nightly image, alltoall dispatcher, sequence packing, warmup=3, and checkpoints disabled."
+    },
+    {
+      "text": "Steps 11-19: attn improves E2E TPS/GPU by 18.7% and policy-training TPS/GPU by 31.8%; attn+mamba improves them by 13.8% and 33.3%; adding moe_router improves them by 13.0% and 18.3% versus baseline.",
+      "href": "results/persistent_bank_scope_sweep_steps11_19.csv"
+    },
+    {
+      "text": "All CG arms have 100% eligible-call coverage and zero fallbacks. The capacity-2 bank hit rate is 100% for attn, 55.6% for attn+mamba, and 33.3% after adding moe_router in steps 11-19.",
+      "href": "results/persistent_bank_scope_sweep_telemetry_steps11_19.csv"
+    },
+    {
+      "text": "The 20-step correctness smoke has no NaN/Inf, no masked sequences, and no CG fallback. Aggregate validation accuracy varies across stochastic trajectories, so a matched 100-step baseline-versus-attn soak is still required.",
+      "href": "results/persistent_bank_scope_sweep_correctness_steps11_19.csv"
+    }
+  ],
+  "changes": [
+    {
+      "text": "Keep captured TE graph schedules and storage resident across PPO inference and policy-training calls instead of resetting the bank between phases."
+    },
+    {
+      "text": "Record graph calls, eligible coverage, captures, replays, cache hits and misses, evictions, fallbacks, and packed-token utilization in W&B."
+    }
+  ],
+  "next_steps": [
+    {
+      "text": "Run a 100-step matched baseline-versus-attn soak before making a correctness claim."
+    },
+    {
+      "text": "Evaluate capacity=4 or deterministic capacity bucketing for attn+mamba and router scopes; capacity=2 evicts when four token-capacity schedules appear."
+    }
+  ]
+}

@@ -74,11 +74,12 @@ def model_forward(
     model: GPTModel,
     data_dict: BatchedDataDict[Any],
     input_ids_cp_sharded: torch.Tensor,
-    position_ids: torch.Tensor,
-    attention_mask: torch.Tensor,
+    position_ids: Optional[torch.Tensor],
+    attention_mask: Optional[torch.Tensor],
     packed_seq_params: Optional[PackedSeqParams] = None,
     defer_fp32_logits: Optional[bool] = False,
     mtp_loss_mask: Optional[torch.Tensor] = None,
+    structural_padding_mask_cp_sharded: Optional[torch.Tensor] = None,
     straggler_timer: Optional[StragglerDetector] = None,
     use_fused_linear_logprobs: bool = False,
 ) -> torch.Tensor:
@@ -94,6 +95,8 @@ def model_forward(
         packed_seq_params: Parameters for packed sequences (optional)
         defer_fp32_logits: Whether to skip the conversion of logits to fp32
         mtp_loss_mask: MTP loss mask to exclude prompt tokens from MTP loss (optional)
+        structural_padding_mask_cp_sharded: CP-local bool structural padding mask.
+            True entries are ignored by model routing but remain separate from loss masks.
         straggler_timer: Straggler detector for profiling the forward pass
         use_fused_linear_logprobs: Whether to compute logprobs with the fused
             chunked linear cross-entropy kernel (directly from hidden states)
@@ -108,13 +111,26 @@ def model_forward(
         position_ids = None
 
     additional_kwargs = {}
-    # Mamba models currently do not support packed_seq_params
     if packed_seq_params is not None:
         additional_kwargs["packed_seq_params"] = packed_seq_params
 
     # Pass MTP loss mask to exclude prompt tokens from MTP loss
     if mtp_loss_mask is not None:
         additional_kwargs["loss_mask"] = mtp_loss_mask
+
+    if structural_padding_mask_cp_sharded is not None:
+        if structural_padding_mask_cp_sharded.dtype != torch.bool:
+            raise TypeError(
+                "The structural padding mask must have bool dtype, got "
+                f"{structural_padding_mask_cp_sharded.dtype}."
+            )
+        if structural_padding_mask_cp_sharded.shape != input_ids_cp_sharded.shape:
+            raise ValueError(
+                "The structural padding mask must match CP-local input_ids shape: "
+                f"{tuple(structural_padding_mask_cp_sharded.shape)} != "
+                f"{tuple(input_ids_cp_sharded.shape)}."
+            )
+        additional_kwargs["padding_mask"] = structural_padding_mask_cp_sharded
 
     if defer_fp32_logits:
         additional_kwargs["fp32_output"] = False
@@ -151,6 +167,203 @@ def apply_temperature_scaling(
     if sampling_params is not None and sampling_params.temperature != 1.0:
         logits.div_(sampling_params.temperature)
     return logits
+
+
+def _prepare_natural_packed_loss_input(
+    logits: torch.Tensor,
+    data: BatchedDataDict[Any],
+    loss_fn: LossFunction,
+    cu_seqlens_q: torch.Tensor,
+    cu_seqlens_q_padded: torch.Tensor,
+    packed_seq_params: Optional[PackedSeqParams],
+    vocab_parallel_rank: Optional[int] = None,
+    vocab_parallel_group: Optional[torch.distributed.ProcessGroup] = None,
+    context_parallel_group: Optional[torch.distributed.ProcessGroup] = None,
+    sampling_params: Optional[TrainingSamplingParams] = None,
+    chunk_size: Optional[int] = None,
+) -> tuple[dict[str, Any], BatchedDataDict[Any]]:
+    """Exclude fixed graph-capacity logits from packed loss computation."""
+    cp_size = (
+        1
+        if context_parallel_group is None
+        else torch.distributed.get_world_size(context_parallel_group)
+    )
+    natural_physical_tokens = int(cu_seqlens_q_padded[-1].item())
+    natural_tokens, remainder = divmod(natural_physical_tokens, cp_size)
+    if remainder != 0:
+        raise ValueError(
+            "The natural packed physical extent must be divisible by context "
+            f"parallel size: {natural_physical_tokens} % {cp_size} != 0."
+        )
+    if logits.shape[1] < natural_tokens:
+        raise ValueError(
+            "Packed logits are shorter than the natural CP-local physical extent: "
+            f"{logits.shape[1]} < {natural_tokens}."
+        )
+    if logits.shape[1] > natural_tokens:
+        _validate_fixed_packed_loss_metadata(
+            packed_seq_params=packed_seq_params,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_q_padded=cu_seqlens_q_padded,
+            local_model_capacity=logits.shape[1],
+            cp_size=cp_size,
+        )
+        logits = logits[:, :natural_tokens]
+
+    return prepare_packed_loss_input(
+        logits=logits,
+        data=data,
+        loss_fn=loss_fn,
+        cu_seqlens_q=cu_seqlens_q,
+        cu_seqlens_q_padded=cu_seqlens_q_padded,
+        vocab_parallel_rank=vocab_parallel_rank,
+        vocab_parallel_group=vocab_parallel_group,
+        context_parallel_group=context_parallel_group,
+        sampling_params=sampling_params,
+        chunk_size=chunk_size,
+    )
+
+
+def _validate_fixed_packed_loss_metadata(
+    packed_seq_params: Optional[PackedSeqParams],
+    cu_seqlens_q: torch.Tensor,
+    cu_seqlens_q_padded: torch.Tensor,
+    *,
+    local_model_capacity: int,
+    cp_size: int,
+) -> None:
+    """Prove that an excess logit suffix is an append-only fixed THD tail."""
+
+    def invalid(reason: str) -> ValueError:
+        return ValueError(
+            f"Excess packed logits require verified fixed-capacity metadata: {reason}."
+        )
+
+    if packed_seq_params is None:
+        raise invalid("PackedSeqParams is missing")
+    if packed_seq_params.qkv_format != "thd":
+        raise invalid(f"qkv_format is {packed_seq_params.qkv_format!r}, not 'thd'")
+    if packed_seq_params.pad_between_seqs is not True:
+        raise invalid("pad_between_seqs does not prove fixed THD finalization")
+    if packed_seq_params.total_tokens is None:
+        raise invalid("local total_tokens is missing")
+    if int(packed_seq_params.total_tokens) != local_model_capacity:
+        raise invalid(
+            "local total_tokens does not equal the local logits length "
+            f"({packed_seq_params.total_tokens} != {local_model_capacity})"
+        )
+
+    model_q = packed_seq_params.cu_seqlens_q
+    model_kv = packed_seq_params.cu_seqlens_kv
+    model_q_padded = packed_seq_params.cu_seqlens_q_padded
+    model_kv_padded = packed_seq_params.cu_seqlens_kv_padded
+    model_fields = (
+        ("cu_seqlens_q", model_q, cu_seqlens_q),
+        ("cu_seqlens_kv", model_kv, cu_seqlens_q),
+        ("cu_seqlens_q_padded", model_q_padded, cu_seqlens_q_padded),
+        ("cu_seqlens_kv_padded", model_kv_padded, cu_seqlens_q_padded),
+    )
+    if cu_seqlens_q.ndim != 1 or cu_seqlens_q_padded.ndim != 1:
+        raise invalid("real logical and physical boundaries must be one-dimensional")
+    if cu_seqlens_q.numel() != cu_seqlens_q_padded.numel():
+        raise invalid("real logical and physical boundary counts differ")
+    if cu_seqlens_q.numel() < 2:
+        raise invalid("real logical and physical boundaries contain no real sequence")
+    if int(cu_seqlens_q[0].item()) != 0:
+        raise invalid("real logical boundaries do not start at zero")
+    if int(cu_seqlens_q_padded[0].item()) != 0:
+        raise invalid("real padded boundaries do not start at zero")
+
+    logical_deltas = cu_seqlens_q[1:] - cu_seqlens_q[:-1]
+    padded_deltas = cu_seqlens_q_padded[1:] - cu_seqlens_q_padded[:-1]
+    if torch.any(logical_deltas < 0).item():
+        raise invalid("real logical boundaries are decreasing")
+    if torch.any(padded_deltas < 0).item():
+        raise invalid("real padded boundaries are decreasing")
+    if torch.any(padded_deltas < logical_deltas).item():
+        raise invalid("a real padded segment is shorter than its logical segment")
+    if cp_size > 1:
+        cp_segment_alignment = 2 * cp_size
+        if torch.any(padded_deltas % cp_segment_alignment != 0).item():
+            raise invalid("a real padded segment is not divisible by twice the CP size")
+
+    model_entry_counts: list[int] = []
+    for name, model_boundaries, real_boundaries in model_fields:
+        if model_boundaries is None:
+            raise invalid(f"{name} is missing")
+        if model_boundaries.ndim != 1:
+            raise invalid(f"{name} must be one-dimensional")
+        if model_boundaries.dtype != real_boundaries.dtype:
+            raise invalid(f"{name} dtype differs from its real boundaries")
+        if model_boundaries.device != real_boundaries.device:
+            raise invalid(f"{name} device differs from its real boundaries")
+        if model_boundaries.numel() <= real_boundaries.numel():
+            raise invalid(f"{name} has no additional fixed/dummy entry")
+        if not torch.equal(
+            model_boundaries[: real_boundaries.numel()],
+            real_boundaries,
+        ):
+            raise invalid(f"{name} does not start with the exact real boundaries")
+        model_entry_counts.append(model_boundaries.numel())
+
+    if len(set(model_entry_counts)) != 1:
+        raise invalid("model q/kv logical and padded boundary counts differ")
+
+    assert model_q is not None
+    assert model_kv is not None
+    assert model_q_padded is not None
+    assert model_kv_padded is not None
+    real_logical_entries = cu_seqlens_q.numel()
+    real_padded_entries = cu_seqlens_q_padded.numel()
+    q_padded_sentinels = model_q_padded[real_padded_entries:]
+    kv_padded_sentinels = model_kv_padded[real_padded_entries:]
+    global_model_capacity = int(q_padded_sentinels[0].item())
+    if int(kv_padded_sentinels[0].item()) != global_model_capacity:
+        raise invalid("immediate Q/KV padded sentinels disagree")
+    if int(model_q_padded[-1].item()) != global_model_capacity:
+        raise invalid("Q terminal padded sentinel disagrees with model capacity")
+    if int(model_kv_padded[-1].item()) != global_model_capacity:
+        raise invalid("KV terminal padded sentinel disagrees with model capacity")
+    if not torch.all(q_padded_sentinels == global_model_capacity).item():
+        raise invalid("Q padded fixed/dummy sentinels disagree")
+    if not torch.all(kv_padded_sentinels == global_model_capacity).item():
+        raise invalid("KV padded fixed/dummy sentinels disagree")
+
+    expected_global_capacity = local_model_capacity * cp_size
+    if global_model_capacity != expected_global_capacity:
+        raise invalid(
+            "padded model capacity does not equal local logits length times CP "
+            f"({global_model_capacity} != {local_model_capacity} * {cp_size})"
+        )
+
+    real_logical_end = int(cu_seqlens_q[-1].item())
+    real_padded_end = int(cu_seqlens_q_padded[-1].item())
+    if real_logical_end < 0 or real_padded_end < 0:
+        raise invalid("real logical or padded endpoint is negative")
+    if real_logical_end > real_padded_end:
+        raise invalid("real logical endpoint exceeds its padded endpoint")
+    dummy_tokens = global_model_capacity - real_padded_end
+    if dummy_tokens <= 0:
+        raise invalid(
+            "fixed model capacity does not contain a positive excess dummy tail "
+            f"({global_model_capacity} - {real_padded_end} = {dummy_tokens})"
+        )
+    if cp_size > 1 and dummy_tokens % (2 * cp_size) != 0:
+        raise invalid("fixed dummy tail is not divisible by twice the CP size")
+
+    expected_logical_dummy_end = real_logical_end + dummy_tokens
+    if expected_logical_dummy_end > global_model_capacity:
+        raise invalid("logical dummy endpoint exceeds the padded model capacity")
+    q_logical_sentinels = model_q[real_logical_entries:]
+    kv_logical_sentinels = model_kv[real_logical_entries:]
+    if not torch.all(q_logical_sentinels == expected_logical_dummy_end).item():
+        raise invalid(
+            "Q logical fixed/dummy sentinels disagree with the derived endpoint"
+        )
+    if not torch.all(kv_logical_sentinels == expected_logical_dummy_end).item():
+        raise invalid(
+            "KV logical fixed/dummy sentinels disagree with the derived endpoint"
+        )
 
 
 def forward_with_post_processing_fn(
@@ -201,7 +414,9 @@ def forward_with_post_processing_fn(
     attention_mask = processed_mb.attention_mask
     position_ids = processed_mb.position_ids
     packed_seq_params = processed_mb.packed_seq_params
+    cu_seqlens = processed_mb.cu_seqlens
     cu_seqlens_padded = processed_mb.cu_seqlens_padded
+    structural_padding_mask_cp_sharded = processed_mb.structural_padding_mask_cp_sharded
     mtp_loss_mask = processed_mb.mtp_loss_mask
     routed_experts_cp_sharded = processed_mb.routed_experts_cp_sharded
 
@@ -225,6 +440,7 @@ def forward_with_post_processing_fn(
                 packed_seq_params=packed_seq_params,
                 defer_fp32_logits=defer_fp32_logits,
                 mtp_loss_mask=mtp_loss_mask,
+                structural_padding_mask_cp_sharded=(structural_padding_mask_cp_sharded),
                 straggler_timer=straggler_timer,
                 use_fused_linear_logprobs=use_fused_linear_logprobs,
             )
@@ -274,6 +490,8 @@ def forward_with_post_processing_fn(
         post_processing_fn_wrapped = post_processing_fn(
             data_dict=data_dict,
             packed_seq_params=packed_seq_params,
+            cu_seqlens=cu_seqlens,
+            cu_seqlens_padded=cu_seqlens_padded,
             global_valid_seqs=global_valid_seqs,
             global_valid_toks=global_valid_toks,
         )
@@ -415,6 +633,8 @@ class LossPostProcessor:
         self,
         data_dict: BatchedDataDict[Any],
         packed_seq_params: Optional[PackedSeqParams] = None,
+        cu_seqlens: Optional[torch.Tensor] = None,
+        cu_seqlens_padded: Optional[torch.Tensor] = None,
         global_valid_seqs: Optional[torch.Tensor] = None,
         global_valid_toks: Optional[torch.Tensor] = None,
     ) -> Callable[[torch.Tensor], Tuple[torch.Tensor, Dict[str, Any]]]:
@@ -427,6 +647,8 @@ class LossPostProcessor:
         Args:
             data_dict: Batched data dictionary for the current microbatch
             packed_seq_params: Parameters for packed sequences (optional)
+            cu_seqlens: Real compact logical sequence boundaries.
+            cu_seqlens_padded: Real natural physical sequence boundaries.
             global_valid_seqs: Global valid sequence count for loss normalization
             global_valid_toks: Global valid token count for loss normalization
 
@@ -447,7 +669,7 @@ class LossPostProcessor:
 
         # wrap loss function with loss input preparation
         pack_sequences = self.cfg["sequence_packing"]["enabled"]
-        if pack_sequences and packed_seq_params is not None:
+        if pack_sequences:
             fuse_loss = self.cfg.get("sequence_packing", {}).get("fuse_loss", False)
             if fuse_loss:
                 # The fused path prepares loss via prepare_packed_loss_input and
@@ -458,9 +680,16 @@ class LossPostProcessor:
                     "prepare_fn (e.g. the value model's value-specific prep). "
                     "Disable fuse_loss for the value model."
                 )
+            if cu_seqlens is None or cu_seqlens_padded is None:
+                raise ValueError(
+                    "Packed loss requires explicit real logical and physical "
+                    "cu_seqlens boundaries."
+                )
+            if fuse_loss:
                 wrapper_cls = SequencePackingFusionLossWrapper
                 prepare_fn = partial(
-                    prepare_packed_loss_input,
+                    _prepare_natural_packed_loss_input,
+                    packed_seq_params=packed_seq_params,
                     sampling_params=self.sampling_params,
                     chunk_size=logprob_chunk_size,
                 )
@@ -471,8 +700,8 @@ class LossPostProcessor:
             loss_fn_wrapped = wrapper_cls(
                 loss_fn=self.loss_fn,
                 prepare_fn=prepare_fn,
-                cu_seqlens_q=packed_seq_params.cu_seqlens_q,
-                cu_seqlens_q_padded=packed_seq_params.cu_seqlens_q_padded,
+                cu_seqlens_q=cu_seqlens,
+                cu_seqlens_q_padded=cu_seqlens_padded,
                 vocab_parallel_rank=get_tensor_model_parallel_rank(),
                 vocab_parallel_group=get_tensor_model_parallel_group(),
                 context_parallel_group=get_context_parallel_group(),
