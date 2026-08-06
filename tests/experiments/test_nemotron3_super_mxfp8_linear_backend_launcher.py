@@ -23,11 +23,25 @@ ALL_LAUNCHERS = (
     REPO_ROOT / "experiments" / "qwen235b_mxfp8_linear_backends" / "submit_cluster.sh",
     LAUNCHER,
 )
+PTYCHE_SUBMISSION_SCRIPTS = ALL_LAUNCHERS + (
+    REPO_ROOT
+    / "experiments"
+    / "qwen30b_mxfp8_linear_backends"
+    / "prepare_custom_vllm_ptyche.sh",
+)
 RECIPE_PATHS = (
     "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml",
     "examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g-mxfp8-rollout.yaml",
     "examples/configs/recipes/llm/performance/grpo-nemotron3-super-120BA12B-32n4g.yaml",
 )
+
+
+@pytest.mark.parametrize("launcher", PTYCHE_SUBMISSION_SCRIPTS)
+def test_ptyche_requests_whole_nodes_without_gpu_gres(launcher: Path) -> None:
+    text = launcher.read_text()
+
+    assert "--nodes=" in text
+    assert "--gpus-per-node=" not in text
 
 
 def _initialize_source_repo(source_root: Path) -> str:

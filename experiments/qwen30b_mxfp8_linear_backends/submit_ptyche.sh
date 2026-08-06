@@ -341,7 +341,6 @@ export BASE_LOG_DIR=${EXPERIMENT_ROOT}
 
 SBATCH_ARGS=(
     --nodes="${NUM_NODES}"
-    --gpus-per-node="${GPUS_PER_NODE}"
     --exclusive
     --account="${ACCOUNT}"
     --partition="${PARTITION}"

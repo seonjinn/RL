@@ -100,7 +100,6 @@ export BASE_LOG_DIR=${PREP_ROOT}
 
 SBATCH_ARGS=(
     --nodes=1
-    --gpus-per-node=4
     --exclusive
     --account="${ACCOUNT}"
     --partition="${PARTITION}"
