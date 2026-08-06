@@ -302,7 +302,7 @@ def test_preparation_pins_ray_to_the_container_version() -> None:
     pin = 'uv add --frozen --bounds exact "ray[default]==\\${CONTAINER_RAY_VERSION}"'
     lock = (
         "UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv "
-        "uv lock --offline --no-build"
+        "uv lock --offline --no-build-isolation"
     )
 
     assert detect in prepare_text
