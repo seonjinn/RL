@@ -663,6 +663,7 @@ def _nvfp4_metadata(*, mode: str, shape: list[int] | None = None) -> dict[str, o
         "refit_transform": {
             "source_format": "bf16",
             "target_format": f"nvfp4_{mode}",
+            "transform_location": "destination",
         },
         "source_shape": value_shape,
         "source_dtype": "torch.bfloat16",
@@ -1049,6 +1050,32 @@ def test_build_refit_info_uses_declared_source_for_transformed_wire_components()
     assert [component["dtype"] for component in param["components"]] == [
         "torch.float8_e4m3fn",
         "torch.uint8",
+    ]
+
+
+def test_build_refit_info_honors_structured_source_transform_location():
+    metadata = {
+        "shape": [64, 128],
+        "dtype": "torch.float8_e4m3fn",
+        "refit_transform": {
+            "source_format": "bf16",
+            "target_format": "mxfp8_e4m3_e8m0",
+            "transform_location": "source",
+        },
+        "source_shape": [64, 128],
+        "source_dtype": "torch.bfloat16",
+        "scale_shape": [64, 4],
+        "scale_dtype": "torch.uint8",
+    }
+
+    param = _find(
+        _build_single_mxfp8_param(metadata),
+        "model.layers.0.mlp.down_proj.weight",
+    )
+
+    assert [component["role"] for component in param["wire_components"]] == [
+        "weight",
+        "weight_scale",
     ]
 
 

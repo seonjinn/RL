@@ -449,6 +449,10 @@ def describe_refit_wire_metadata(
         global_shape = tuple(int(size) for size in source_shape)
         request = request_by_name.get(parameter_name)
         if request is None or request.transform_location == "destination":
+            if parameter_name in metadata:
+                raise ValueError(
+                    f"Duplicate refit wire metadata output name {parameter_name!r}."
+                )
             metadata[parameter_name] = (global_shape, input_dtype)
             continue
 

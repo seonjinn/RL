@@ -952,6 +952,7 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
                     parameter_names=tuple(sorted(self._nrl_bf16_quantizable_names)),
                     source_format="bf16",
                     target_format=f"nvfp4_{self._nrl_bf16_mode}",
+                    transform_location="destination",
                 )
             ]
         return None

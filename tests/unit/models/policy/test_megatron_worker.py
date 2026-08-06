@@ -41,7 +41,11 @@ from nemo_rl.models.generation.megatron import MegatronGeneration
 from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.models.policy.lm_policy import Policy
 from nemo_rl.utils.checkpoint import CheckpointManager
-from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
+from nemo_rl.weight_sync.refit_transforms import (
+    RefitTransformLocation,
+    RefitTransformRequest,
+    TransformComponentSpec,
+)
 from tests.unit.test_utils import SimpleLossFn
 
 pytestmark = pytest.mark.mcore
@@ -299,6 +303,54 @@ def test_checkpoint_engine_prequant_handshake_exports_mxfp8_weights():
     assert exported[name].dtype == torch.float8_e4m3fn
     assert exported[scale_name].dtype == torch.uint8
     assert exported[scale_name].shape == (64, 2)
+
+
+def test_enable_refit_transforms_passes_source_location_to_codec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+    from nemo_rl.weight_sync import refit_transforms
+
+    name = "model.layers.0.mlp.down_proj.weight"
+    weight = torch.randn(64, 64, dtype=torch.bfloat16)
+
+    class SourceOnlyCodec:
+        transform_id = "test_source_only"
+
+        def describe_outputs(
+            self,
+            global_shape: tuple[int, ...],
+            input_dtype_name: str,
+            *,
+            transform_location: RefitTransformLocation = "destination",
+        ) -> tuple[TransformComponentSpec, ...]:
+            assert global_shape == (64, 64)
+            assert input_dtype_name == "torch.bfloat16"
+            assert transform_location == "source"
+            return ()
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._refit_prequant_names = set()
+    worker._refit_transform_requests_by_name = {}
+    worker._last_refit_param_info_hf = {name: (weight.shape, weight.dtype)}
+    worker._iter_params_with_optional_kv_scales = lambda: iter([(name, weight)])
+    monkeypatch.setattr(
+        refit_transforms,
+        "resolve_transform",
+        lambda _source_format, _target_format: SourceOnlyCodec(),
+    )
+
+    worker.enable_refit_transforms(
+        [
+            RefitTransformRequest(
+                parameter_names=(name,),
+                source_format="bf16",
+                target_format="mxfp8_e4m3_e8m0",
+            )
+        ]
+    )
 
 
 @pytest.mark.parametrize(

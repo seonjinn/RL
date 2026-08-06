@@ -1516,6 +1516,7 @@ def test_real_quant_prepare_refit_classifies_bf16_manifest(monkeypatch):
     assert requests[0].parameter_names == ("q_proj.weight",)
     assert requests[0].source_format == "bf16"
     assert requests[0].target_format == "nvfp4_w4a16"
+    assert requests[0].transform_location == "destination"
 
 
 def test_real_quant_bf16_w4a4_prepare_requires_calibration_path(monkeypatch):

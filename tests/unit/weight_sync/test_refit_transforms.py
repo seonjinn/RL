@@ -153,6 +153,25 @@ def test_describe_refit_wire_metadata_is_descriptor_only(
     }
 
 
+def test_describe_refit_wire_metadata_rejects_passthrough_name_collision() -> None:
+    weight_name = "model.layers.0.mlp.down_proj.weight"
+    generated_scale_name = weight_name + "_scale_from_checkpoint"
+    source_info = {
+        weight_name: ((64, 128), torch.bfloat16),
+        generated_scale_name: ((64, 4), torch.uint8),
+    }
+    requests = [
+        RefitTransformRequest(
+            parameter_names=(weight_name,),
+            source_format="bf16",
+            target_format="mxfp8_e4m3_e8m0",
+        )
+    ]
+
+    with pytest.raises(ValueError, match="Duplicate refit wire metadata output name"):
+        describe_refit_wire_metadata(source_info, requests)
+
+
 def test_bf16_to_nvfp4_w4a4_distinguishes_wire_from_destination_components() -> None:
     """Receiver conversion transfers BF16 while calibration stays at the destination."""
     codec = resolve_transform("bf16", "nvfp4_w4a4")

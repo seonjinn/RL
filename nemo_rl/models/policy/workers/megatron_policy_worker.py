@@ -1909,7 +1909,11 @@ class MegatronPolicyWorkerImpl(
                         f"Refit transform for {name!r} requires BF16 parameter "
                         f"storage; got {dtype}."
                     )
-                codec.describe_outputs(tuple(shape), str(dtype))
+                codec.describe_outputs(
+                    tuple(shape),
+                    str(dtype),
+                    transform_location=request.transform_location,
+                )
                 requested_names.add(name)
                 requests_by_name[name] = request
 
@@ -2485,6 +2489,7 @@ class MegatronPolicyWorkerImpl(
                             "refit_transform": {
                                 "source_format": request.source_format,
                                 "target_format": request.target_format,
+                                "transform_location": request.transform_location,
                             },
                             "source_shape": list(source_shape),
                             "source_dtype": str(source_dtype),

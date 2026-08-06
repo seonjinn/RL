@@ -29,7 +29,7 @@ live in ``nemo_rl/weight_sync/xferdtensor.py`` — import both from there.
 import re
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Optional, Protocol, cast, runtime_checkable
 
 import torch
 from torch.distributed._tensor import Shard
@@ -38,6 +38,7 @@ from torch.distributed.tensor.placement_types import Replicate
 from nemo_rl.weight_sync.refit_transforms import (
     DestinationComponentSpec,
     REFIT_PLAN_PROTOCOL_VERSION,
+    RefitTransformLocation,
     RefitTransformPlan,
     TransformComponentSpec,
     build_plan_agreement,
@@ -541,6 +542,17 @@ def _build_component_metadata(
             try:
                 source_format = str(transform["source_format"])
                 target_format = str(transform["target_format"])
+                transform_location = cast(
+                    RefitTransformLocation,
+                    transform.get(
+                        "transform_location",
+                        (
+                            "source"
+                            if target_format == "mxfp8_e4m3_e8m0"
+                            else "destination"
+                        ),
+                    ),
+                )
                 global_shape = tuple(int(size) for size in meta["source_shape"])
                 input_dtype = _restore_dtype(
                     meta["source_dtype"],
@@ -555,15 +567,22 @@ def _build_component_metadata(
         else:
             try:
                 source_format, target_format = _LEGACY_TRANSFORM_FORMATS[transform]
+                transform_location = "source"
             except KeyError as error:
                 raise ValueError(
                     f"nccl_reshard: {param_name!r} has unsupported refit transform "
                     f"{transform!r}."
                 ) from error
         codec = resolve_transform(source_format, target_format)
-        wire_component_specs = codec.describe_outputs(global_shape, str(input_dtype))
+        wire_component_specs = codec.describe_outputs(
+            global_shape,
+            str(input_dtype),
+            transform_location=transform_location,
+        )
         destination_component_specs = codec.describe_destination(
-            global_shape, str(input_dtype)
+            global_shape,
+            str(input_dtype),
+            transform_location=transform_location,
         )
         transform_id = codec.transform_id
 
