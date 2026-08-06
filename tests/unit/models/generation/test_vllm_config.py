@@ -12,19 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import cast
+
 import pytest
 
-from nemo_rl.models.generation.vllm.config import validate_vllm_quantization_config
+from nemo_rl.models.generation.vllm.config import (
+    VllmConfig,
+    validate_vllm_quantization_config,
+)
 
 
-def _config(**vllm_overrides: object) -> dict[str, object]:
-    return {
-        "vllm_cfg": {
-            "precision": "fp8",
-            "is_mx": True,
-            **vllm_overrides,
-        }
-    }
+def _config(**vllm_overrides: object) -> VllmConfig:
+    return cast(
+        VllmConfig,
+        {
+            "vllm_cfg": {
+                "precision": "fp8",
+                "is_mx": True,
+                **vllm_overrides,
+            }
+        },
+    )
 
 
 @pytest.mark.parametrize(
@@ -43,7 +51,7 @@ def test_refit_optimization_flags_require_boolean(field):
 def test_refit_prequantize_requires_mxfp8_rollout():
     with pytest.raises(ValueError, match="requires precision='fp8' and is_mx=true"):
         validate_vllm_quantization_config(
-            {"vllm_cfg": {"precision": "bf16", "refit_prequantize": True}}
+            _config(precision="bf16", is_mx=False, refit_prequantize=True)
         )
 
 
