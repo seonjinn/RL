@@ -46,7 +46,7 @@ mxfp8_assert_vllm_tracked_state() {
     while IFS= read -r changed_path; do
         [[ -z "${changed_path}" ]] && continue
         case "${changed_path}" in
-            pyproject.toml|requirements/*.txt) ;;
+            pyproject.toml|requirements/*) ;;
             *)
                 echo "Disallowed tracked vLLM change: ${changed_path}" >&2
                 return 1

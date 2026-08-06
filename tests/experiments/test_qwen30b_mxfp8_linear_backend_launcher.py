@@ -285,7 +285,7 @@ def test_custom_vllm_build_is_recoverable() -> None:
     assert "VLLM_TORCH_BACKEND:-cu130" in build_text
     assert "torch==2.10.0" not in build_text
     assert 'git restore --source="$GIT_REF" --worktree -- .' not in build_text
-    assert "pyproject.toml|requirements/*.txt" in build_text
+    assert "pyproject.toml|requirements/*" in build_text
     assert "Disallowed tracked vLLM changes after build" in build_text
     assert 'vllm = ["setuptools", "setuptools-rust"]' in pyproject_text
 
@@ -425,6 +425,10 @@ def _reuse_gate_result(
     requirements.mkdir()
     requirements_path = requirements / "cuda.txt"
     requirements_path.write_text("torch==2.11.0\nxformers==0.0.30\n")
+    requirements_test = requirements / "test"
+    requirements_test.mkdir()
+    requirements_input_path = requirements_test / "cuda.in"
+    requirements_input_path.write_text("torch==2.11.0\n")
     pyproject_path = custom_vllm / "pyproject.toml"
     pyproject_path.write_text("[build-system]\nrequires = ['torch == 2.11.0']\n")
     subprocess.run(["git", "-C", str(custom_vllm), "add", "."], check=True)
@@ -449,6 +453,7 @@ def _reuse_gate_result(
         ["git", "-C", str(custom_vllm), "rev-parse", "HEAD"], text=True
     ).strip()
     requirements_path.write_text("torch==2.11.0\nxformers==0.0.32.post1\n")
+    requirements_input_path.write_text("torch==2.11.0\n# prepared\n")
     pyproject_path.write_text("[build-system]\nrequires = []\n")
     dependency_diff = subprocess.check_output(
         [

@@ -106,7 +106,7 @@ echo "The built vLLM is available in: $BUILD_DIR"
 while IFS= read -r changed_path; do
   [[ -z "$changed_path" ]] && continue
   case "$changed_path" in
-    pyproject.toml|requirements/*.txt) ;;
+    pyproject.toml|requirements/*) ;;
     *)
       echo "[ERROR] Disallowed tracked vLLM changes after build: $changed_path"
       exit 1
