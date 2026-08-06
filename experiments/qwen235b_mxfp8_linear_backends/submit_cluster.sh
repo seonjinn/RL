@@ -192,10 +192,13 @@ if [[ ! -x ${DRIVER_VENV}/bin/python ]]; then
   uv venv ${DRIVER_VENV}
 fi
 uv pip install --python ${DRIVER_VENV}/bin/python setuptools_rust
+export MXFP8_CONTAINER_RAY_VERSION=\$(python3 -c 'import ray; print(ray.__version__)')
 uv run --frozen --extra vllm python - <<'PY'
+import os
 from pathlib import Path
 
 import flashinfer
+import ray
 import vllm
 
 vllm_path = Path(vllm.__file__).resolve()
@@ -207,6 +210,13 @@ if not vllm_path.is_relative_to(custom_vllm_root):
 
 print(f"vLLM={vllm.__version__} path={vllm_path}")
 print(f"FlashInfer={flashinfer.__version__}")
+expected_ray = os.environ["MXFP8_CONTAINER_RAY_VERSION"]
+if ray.__version__ != expected_ray:
+    raise RuntimeError(
+        "Ray version mismatch before workload launch: "
+        f"container={expected_ray}, driver={ray.__version__}"
+    )
+print(f"Ray={ray.__version__}")
 PY
 export MXFP8_NEMO_RL_COMMIT="\${runtime_nemo_rl_commit}"
 export MXFP8_DEPENDENCY_STATE_SHA256="\${runtime_dependency_state_sha256}"

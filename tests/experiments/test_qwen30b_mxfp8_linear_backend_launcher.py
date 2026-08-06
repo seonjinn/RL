@@ -295,6 +295,34 @@ def test_custom_vllm_build_is_recoverable() -> None:
     assert 'vllm = ["setuptools", "setuptools-rust"]' in pyproject_text
 
 
+def test_preparation_pins_ray_to_the_container_version() -> None:
+    prepare_text = PREPARE_SCRIPT.read_text()
+
+    detect = "CONTAINER_RAY_VERSION=\\$(python3 -c 'import ray; print(ray.__version__)')"
+    pin = 'uv add --no-sync --bounds exact "ray[default]==\\${CONTAINER_RAY_VERSION}"'
+    lock = "UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv uv lock"
+
+    assert detect in prepare_text
+    assert pin in prepare_text
+    assert "Ray lock mismatch" in prepare_text
+    assert prepare_text.index(detect) < prepare_text.index(pin) < prepare_text.index(lock)
+
+
+def test_launchers_reject_ray_version_drift_before_the_workload() -> None:
+    launchers = (
+        LAUNCHER,
+        REPO_ROOT
+        / "experiments/qwen235b_mxfp8_linear_backends/submit_cluster.sh",
+        REPO_ROOT
+        / "experiments/nemotron3_super_mxfp8_linear_backends/submit_ptyche.sh",
+    )
+
+    for launcher in launchers:
+        text = launcher.read_text()
+        assert "MXFP8_CONTAINER_RAY_VERSION" in text
+        assert "Ray version mismatch before workload launch" in text
+
+
 def test_custom_vllm_build_preserves_compatibility_requirements_for_lock(
     tmp_path: Path,
 ) -> None:

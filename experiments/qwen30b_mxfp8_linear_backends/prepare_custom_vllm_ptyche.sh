@@ -76,7 +76,30 @@ fi
 source 3rdparty/vllm/nemo-rl.env
 export NRL_FORCE_REBUILD_VENVS=true
 export SETUPTOOLS_SCM_PRETEND_VERSION=0.25.1
+CONTAINER_RAY_VERSION=\$(python3 -c 'import ray; print(ray.__version__)')
+echo "Pinning NeMo-RL driver Ray to container version \${CONTAINER_RAY_VERSION}"
+UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv \
+  uv add --no-sync --bounds exact "ray[default]==\${CONTAINER_RAY_VERSION}"
 UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv uv lock
+python3 - "\${CONTAINER_RAY_VERSION}" <<'PY'
+import sys
+import tomllib
+from pathlib import Path
+
+expected = sys.argv[1]
+with Path("uv.lock").open("rb") as lock_file:
+    lock = tomllib.load(lock_file)
+locked = {
+    package["version"]
+    for package in lock["package"]
+    if package["name"] == "ray"
+}
+if locked != {expected}:
+    raise SystemExit(
+        f"Ray lock mismatch: expected {expected}, found {sorted(locked)}"
+    )
+print(f"Ray lock verified: {expected}")
+PY
 3rdparty/vllm/.venv/bin/python - <<'PY'
 import flashinfer
 import vllm
