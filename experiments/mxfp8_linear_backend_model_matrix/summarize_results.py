@@ -8,7 +8,7 @@ import json
 import re
 from pathlib import Path
 from statistics import fmean
-from typing import Mapping, NamedTuple, Sequence
+from typing import Mapping, NamedTuple, Sequence, TypedDict
 
 
 BACKENDS = ("flashinfer_cutlass", "flashinfer_cutedsl")
@@ -44,37 +44,67 @@ class StepSummary(NamedTuple):
     generation_tokens_per_sec_per_gpu_mean: float
 
 
+class CsvRow(TypedDict):
+    model: str
+    backend: str
+    step: int
+    mean_generation_length: float
+    total_step_seconds: float
+    generation_seconds: float
+    e2e_tokens_per_sec_per_gpu: float
+    generation_tokens_per_sec_per_gpu: float
+
+
+CSV_FIELDNAMES = tuple(CsvRow.__annotations__)
+
+
 def _metric(pattern: re.Pattern[str], block: str) -> float | None:
     match = pattern.search(block)
     return float(match.group(1)) if match else None
 
 
-def parse_training_results(log_text: str) -> list[StepMetrics]:
+def parse_training_results(log_text: str, source: str = "log") -> list[StepMetrics]:
     clean_text = ANSI_ESCAPE.sub("", log_text)
     steps: list[StepMetrics] = []
-    for block in clean_text.split("Training Results:")[1:]:
+    for step, block in enumerate(clean_text.split("Training Results:")[1:], start=1):
         mean_generation_length = _metric(MEAN_GENERATION_LENGTH_PATTERN, block)
         total_step_seconds = _metric(TOTAL_STEP_PATTERN, block)
         generation_seconds = _metric(GENERATION_PATTERN, block)
         e2e_throughput = _metric(E2E_THROUGHPUT_PATTERN, block)
         generation_throughput = _metric(GENERATION_THROUGHPUT_PATTERN, block)
-        metrics = (
-            mean_generation_length,
-            total_step_seconds,
-            generation_seconds,
-            e2e_throughput,
-            generation_throughput,
-        )
-        if any(metric is None for metric in metrics):
-            continue
+        if (
+            mean_generation_length is None
+            or total_step_seconds is None
+            or generation_seconds is None
+            or e2e_throughput is None
+            or generation_throughput is None
+        ):
+            missing_metrics = [
+                metric_name
+                for metric_name, metric_value in (
+                    ("Mean Generation Length", mean_generation_length),
+                    ("Total step time", total_step_seconds),
+                    ("generation", generation_seconds),
+                    ("E2E (Tokens/sec/gpu)", e2e_throughput),
+                    (
+                        "Generation Worker Group (Tokens/sec/gpu)",
+                        generation_throughput,
+                    ),
+                )
+                if metric_value is None
+            ]
+            raise ValueError(
+                f"Incomplete Training Results block {step} for {source}: missing "
+                f"{', '.join(missing_metrics)}"
+            )
         steps.append(
             StepMetrics(
-                step=len(steps) + 1,
-                mean_generation_length=float(mean_generation_length),
-                total_step_seconds=float(total_step_seconds),
-                generation_seconds=float(generation_seconds),
-                e2e_tokens_per_sec_per_gpu=float(e2e_throughput),
-                generation_tokens_per_sec_per_gpu=float(generation_throughput),
+                step=step,
+                mean_generation_length=mean_generation_length,
+                total_step_seconds=total_step_seconds,
+                generation_seconds=generation_seconds,
+                e2e_tokens_per_sec_per_gpu=e2e_throughput,
+                generation_tokens_per_sec_per_gpu=generation_throughput,
             )
         )
     return steps
@@ -90,12 +120,19 @@ def _find_driver_log(model: str, run_root: Path, backend: str) -> Path:
 
 
 def _measured_steps(
-    steps: Sequence[StepMetrics], first_step: int, last_step: int
+    model: str,
+    backend: str,
+    steps: Sequence[StepMetrics],
+    first_step: int,
+    last_step: int,
 ) -> list[StepMetrics]:
     selected = [step for step in steps if first_step <= step.step <= last_step]
-    if not selected:
+    expected_steps = list(range(first_step, last_step + 1))
+    actual_steps = [step.step for step in selected]
+    if actual_steps != expected_steps:
         raise ValueError(
-            f"No completed steps between {first_step} and {last_step} inclusive"
+            f"Expected complete measured steps for {model}/{backend}: "
+            f"expected {expected_steps}, found {actual_steps}"
         )
     return selected
 
@@ -171,6 +208,29 @@ def _with_cutlass_normalization(
     return metrics
 
 
+def validate_normalization_denominators(
+    model: str,
+    backend: str,
+    summary: StepSummary,
+    first_step: int,
+    last_step: int,
+) -> None:
+    for metric_name, metric_value in (
+        (
+            "generation_tokens_per_sec_per_gpu_mean",
+            summary.generation_tokens_per_sec_per_gpu_mean,
+        ),
+        ("e2e_tokens_per_sec_per_gpu_mean", summary.e2e_tokens_per_sec_per_gpu_mean),
+        ("generation_seconds_mean", summary.generation_seconds_mean),
+        ("total_step_seconds_mean", summary.total_step_seconds_mean),
+    ):
+        if metric_value <= 0:
+            raise ValueError(
+                f"Invalid normalization denominator for {model}/{backend}, "
+                f"steps {first_step}-{last_step}: {metric_name} must be positive"
+            )
+
+
 def write_results(
     model_run_roots: Mapping[str, Path],
     output_dir: Path,
@@ -180,19 +240,23 @@ def write_results(
     if first_step > last_step:
         raise ValueError("first_step must be less than or equal to last_step")
 
-    rows: list[dict[str, int | float | str]] = []
+    rows: list[CsvRow] = []
     summaries: dict[str, dict[str, StepSummary]] = {}
     for model, raw_run_root in model_run_roots.items():
         run_root = Path(raw_run_root)
         measured_steps: dict[str, list[StepMetrics]] = {}
         for backend in BACKENDS:
             log_path = _find_driver_log(model, run_root, backend)
-            steps = parse_training_results(log_path.read_text(errors="replace"))
+            steps = parse_training_results(
+                log_path.read_text(errors="replace"), source=f"{model}/{backend}"
+            )
             rows.extend(
-                {"model": model, "backend": backend, **step._asdict()}
+                CsvRow(model=model, backend=backend, **step._asdict())
                 for step in steps
             )
-            measured_steps[backend] = _measured_steps(steps, first_step, last_step)
+            measured_steps[backend] = _measured_steps(
+                model, backend, steps, first_step, last_step
+            )
 
         validate_paired_steps(
             model,
@@ -202,6 +266,10 @@ def write_results(
         summaries[model] = {
             backend: summarize_steps(measured_steps[backend]) for backend in BACKENDS
         }
+        for backend, summary in summaries[model].items():
+            validate_normalization_denominators(
+                model, backend, summary, first_step, last_step
+            )
 
     normalized_summaries = {
         model: {
@@ -216,16 +284,7 @@ def write_results(
     with (output_dir / "step_metrics.csv").open("w", newline="") as output_file:
         writer = csv.DictWriter(
             output_file,
-            fieldnames=(
-                "model",
-                "backend",
-                "step",
-                "mean_generation_length",
-                "total_step_seconds",
-                "generation_seconds",
-                "e2e_tokens_per_sec_per_gpu",
-                "generation_tokens_per_sec_per_gpu",
-            ),
+            fieldnames=CSV_FIELDNAMES,
         )
         writer.writeheader()
         writer.writerows(rows)

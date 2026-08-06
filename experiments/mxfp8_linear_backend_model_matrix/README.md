@@ -24,6 +24,8 @@ CUTLASS latency divided by the backend latency, so values above one indicate a
 faster backend.
 
 The tool rejects a row before writing a result unless exactly one driver log is
-present per backend, the measured-step counts match, and the paired measured
-steps have identical mean generation lengths. This validation prevents a
-speedup from being reported for unmatched generation work.
+present per backend, every requested measured step is complete, and the paired
+measured steps have identical mean generation lengths. A malformed
+`Training Results` block is rejected at its original step ordinal. This
+validation prevents a speedup from being reported for incomplete or unmatched
+generation work.

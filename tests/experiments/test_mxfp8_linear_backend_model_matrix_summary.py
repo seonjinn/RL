@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -50,9 +51,10 @@ def _write_driver_log(
     backend: str,
     model_offset: float,
     generation_lengths: list[float] | None = None,
+    num_steps: int = 8,
 ) -> None:
     blocks = []
-    for step in range(1, 9):
+    for step in range(1, num_steps + 1):
         generation_length = (
             generation_lengths[step - 1]
             if generation_lengths is not None
@@ -81,6 +83,16 @@ def _write_driver_log(
     log_dir = run_root / backend / "123-logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     (log_dir / "ray-driver.log").write_text("".join(blocks))
+
+
+def _set_metric_to_zero(log_path: Path, metric_label: str) -> None:
+    log_path.write_text(
+        re.sub(
+            rf"({re.escape(metric_label)}:\s*)[0-9.]+",
+            r"\g<1>0.00",
+            log_path.read_text(),
+        )
+    )
 
 
 def _write_complete_matrix(tmp_path: Path) -> dict[str, Path]:
@@ -155,5 +167,100 @@ def test_write_results_rejects_unpaired_generation_lengths(tmp_path: Path) -> No
     with pytest.raises(
         ValueError,
         match="Paired mean generation length mismatch for qwen3-30b at step 5",
+    ):
+        summary.write_results(run_roots, tmp_path / "summary")
+
+
+def test_write_results_requires_every_requested_measured_step(tmp_path: Path) -> None:
+    summary = _load_summary_module()
+    run_roots = _write_complete_matrix(tmp_path)
+    for backend in BACKENDS:
+        _write_driver_log(
+            run_roots["qwen3-30b"], backend, 10.0, num_steps=3
+        )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Expected complete measured steps for qwen3-30b/flashinfer_cutlass: "
+            r"expected \[3, 4, 5, 6, 7, 8\], found \[3\]"
+        ),
+    ):
+        summary.write_results(run_roots, tmp_path / "summary")
+
+
+def test_write_results_rejects_short_backend_result_row(tmp_path: Path) -> None:
+    summary = _load_summary_module()
+    run_roots = _write_complete_matrix(tmp_path)
+    _write_driver_log(
+        run_roots["qwen3-235b"], "flashinfer_cutedsl", 20.0, num_steps=7
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Expected complete measured steps for qwen3-235b/flashinfer_cutedsl: "
+            r"expected \[3, 4, 5, 6, 7, 8\], found \[3, 4, 5, 6, 7\]"
+        ),
+    ):
+        summary.write_results(run_roots, tmp_path / "summary")
+
+
+def test_write_results_rejects_incomplete_training_results_block(tmp_path: Path) -> None:
+    summary = _load_summary_module()
+    run_roots = _write_complete_matrix(tmp_path)
+    log_path = (
+        run_roots["qwen3-30b"]
+        / "flashinfer_cutedsl"
+        / "123-logs"
+        / "ray-driver.log"
+    )
+    log_path.write_text(
+        log_path.read_text().replace(
+            "    - E2E (Tokens/sec/gpu): 495.00\n", "", 1
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Incomplete Training Results block 5 for qwen3-30b/flashinfer_cutedsl: "
+            r"missing E2E \(Tokens/sec/gpu\)"
+        ),
+    ):
+        summary.write_results(run_roots, tmp_path / "summary")
+
+
+@pytest.mark.parametrize(
+    ("metric_label", "summary_metric"),
+    (
+        ("Total step time", "total_step_seconds_mean"),
+        ("generation", "generation_seconds_mean"),
+        ("E2E (Tokens/sec/gpu)", "e2e_tokens_per_sec_per_gpu_mean"),
+        (
+            "Generation Worker Group (Tokens/sec/gpu)",
+            "generation_tokens_per_sec_per_gpu_mean",
+        ),
+    ),
+)
+def test_write_results_rejects_zero_normalization_denominator(
+    tmp_path: Path, metric_label: str, summary_metric: str
+) -> None:
+    summary = _load_summary_module()
+    run_roots = _write_complete_matrix(tmp_path)
+    _set_metric_to_zero(
+        run_roots["qwen3-30b"]
+        / "flashinfer_cutlass"
+        / "123-logs"
+        / "ray-driver.log",
+        metric_label,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Invalid normalization denominator for qwen3-30b/flashinfer_cutlass, "
+            f"steps 3-8: {summary_metric} must be positive"
+        ),
     ):
         summary.write_results(run_roots, tmp_path / "summary")
