@@ -299,6 +299,8 @@ def test_dry_run_captures_runtime_provenance_and_manifest(tmp_path: Path) -> Non
     assert '"defer_fp32_logits": True' in output
     assert '"sequence_packing": True' in output
     assert '"linear_backend": "flashinfer_cutedsl"' in output
+    assert "/.cache/nemo-rl-vllm0251-worker-venvs" in output
+    assert "export NRL_FORCE_REBUILD_VENVS=false" in output
 
 
 def test_matrix_isolates_explicit_output_root_by_backend(tmp_path: Path) -> None:

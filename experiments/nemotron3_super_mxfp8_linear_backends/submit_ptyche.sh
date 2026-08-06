@@ -84,7 +84,7 @@ EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${WORK_ROOT}/experiments/nemotron3-super-mxfp
 CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/.cache/nemotron3-super-mxfp8-linear-backends/${BACKEND}}
 HF_HOME=${HF_HOME:-${WORK_ROOT}/.cache/huggingface}
 DRIVER_VENV=${DRIVER_VENV:-${CACHE_ROOT}/driver-venv}
-WORKER_VENV=${WORKER_VENV:-/tmp/nemo-rl-nemotron3-super-${BACKEND}-${RUN_ID}-workers}
+WORKER_VENV=${WORKER_VENV:-${WORK_ROOT}/.cache/nemo-rl-vllm0251-worker-venvs}
 WANDB_MODE=${WANDB_MODE:-disabled}
 SUBMIT_NEMO_RL_COMMIT=$(git -C "${REPO_DIR}" rev-parse HEAD)
 SUBMIT_DEPENDENCY_STATE_SHA256=
@@ -173,7 +173,7 @@ rm -f ${EXPERIMENT_ROOT}/run_manifest.json
 export HF_HOME=${HF_HOME}
 export NCCL_NVLS_ENABLE=0
 export RAY_CGRAPH_get_timeout=2400
-export NRL_FORCE_REBUILD_VENVS=true
+export NRL_FORCE_REBUILD_VENVS=false
 export NEMO_RL_VENV_DIR=${WORKER_VENV}
 export NRL_VENV_BOOTSTRAP_PACKAGES='--torch-backend cu130 torch==2.11.0 numpy setuptools setuptools-rust setuptools-scm'
 export NRL_VENV_NO_BUILD_ISOLATION_PACKAGES=vllm

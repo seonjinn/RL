@@ -21,6 +21,7 @@ WALLTIME=${WALLTIME:-02:00:00}
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}
 CONTAINER=${CONTAINER:-${WORK_ROOT}/containers/nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh}
 PREP_ROOT=${PREP_ROOT:-${WORK_ROOT}/experiments/qwen30b-mxfp8-linear-backends/prepare}
+SHARED_WORKER_VENV_ROOT=${SHARED_WORKER_VENV_ROOT:-${WORK_ROOT}/.cache/nemo-rl-vllm0251-worker-venvs}
 
 mkdir -p "${PREP_ROOT}"
 
@@ -112,6 +113,20 @@ if locked != {expected}:
         f"Ray lock mismatch: expected {expected}, found {sorted(locked)}"
     )
 print(f"Ray lock verified: {expected}")
+PY
+export NEMO_RL_VENV_DIR=${SHARED_WORKER_VENV_ROOT}
+export NRL_VENV_BOOTSTRAP_PACKAGES='--torch-backend cu130 torch==2.11.0 numpy setuptools setuptools-rust setuptools-scm'
+export NRL_VENV_NO_BUILD_ISOLATION_PACKAGES=vllm
+UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv \
+  uv run --frozen --extra vllm python - <<'PY'
+from nemo_rl.distributed.virtual_cluster import PY_EXECUTABLES
+from nemo_rl.utils.venvs import create_local_venv
+
+create_local_venv(
+    PY_EXECUTABLES.VLLM,
+    "nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker",
+    force_rebuild=True,
+)
 PY
 3rdparty/vllm/.venv/bin/python - <<'PY'
 import flashinfer

@@ -90,7 +90,8 @@ def test_dry_run_changes_only_backend(tmp_path: Path) -> None:
         assert f"uv venv {tmp_path}" in output
         assert "uv pip install --python" in output
         assert "setuptools_rust" in output
-        assert f"/tmp/nemo-rl-qwen30b-{backend}-test-run-workers" in output
+        assert "/.cache/nemo-rl-vllm0251-worker-venvs" in output
+        assert "export NRL_FORCE_REBUILD_VENVS=false" in output
 
     adaptive_output = outputs["flashinfer_trtllm_adaptive"]
     assert "VLLM_MXFP8_DENSE_TRTLLM_ALLOW_CUTEDSL_FALLBACK=1" in adaptive_output
@@ -352,6 +353,16 @@ def test_launchers_reject_ray_version_drift_before_the_workload() -> None:
         text = launcher.read_text()
         assert "MXFP8_CONTAINER_RAY_VERSION" in text
         assert "Ray version mismatch before workload launch" in text
+
+
+def test_preparation_builds_shared_worker_venv_once() -> None:
+    prepare_text = PREPARE_SCRIPT.read_text()
+
+    assert "SHARED_WORKER_VENV_ROOT" in prepare_text
+    assert "nemo-rl-vllm0251-worker-venvs" in prepare_text
+    assert "create_local_venv(" in prepare_text
+    assert "VllmAsyncGenerationWorker" in prepare_text
+    assert "force_rebuild=True" in prepare_text
 
 
 def test_custom_vllm_build_preserves_compatibility_requirements_for_lock(

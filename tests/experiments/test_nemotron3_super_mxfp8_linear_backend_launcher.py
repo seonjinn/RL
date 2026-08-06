@@ -295,6 +295,8 @@ def test_dry_run_validates_custom_vllm_runtime_provenance(tmp_path: Path) -> Non
     assert '"defer_fp32_logits": True' in output
     assert '"sequence_packing": True' in output
     assert '"linear_backend": "flashinfer_cutedsl"' in output
+    assert "/.cache/nemo-rl-vllm0251-worker-venvs" in output
+    assert "export NRL_FORCE_REBUILD_VENVS=false" in output
 
 
 def test_matrix_dry_run_launches_independent_arms(tmp_path: Path) -> None:
