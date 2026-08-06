@@ -29,6 +29,7 @@ set -euo pipefail
 cd ${REPO_DIR}
 export UV_PROJECT_ENVIRONMENT=
 source ${REPO_DIR}/experiments/mxfp8_linear_backend_model_matrix/provenance.sh
+git submodule update --init --recursive
 assert_preparation_scope_clean() {
   if [[ -n "\$(git status --porcelain --untracked-files=all -- . \
       ":(exclude)pyproject.toml" ":(exclude)uv.lock" \
@@ -46,11 +47,19 @@ if [[ -d 3rdparty/vllm/.git ]]; then
   elif ! mxfp8_assert_vllm_tracked_state 3rdparty/vllm; then
     echo "Custom vLLM has disallowed tracked changes" >&2
     exit 1
-  elif mxfp8_vllm_reuse_state_valid \
-      3rdparty/vllm '${VLLM_GIT_REF}' '${VLLM_WHEEL}'; then
-    existing_vllm_valid=true
   else
-    echo "Existing custom vLLM checkout is not reusable"
+    if mxfp8_vllm_build_state_matches 3rdparty/vllm && \
+        [[ -x 3rdparty/vllm/.venv/bin/python ]] && \
+        3rdparty/vllm/.venv/bin/python -c 'import vllm'; then
+      printf 'export VLLM_GIT_REF=%s\nexport VLLM_PRECOMPILED_WHEEL_LOCATION=%s\n' \
+        '${VLLM_GIT_REF}' '${VLLM_WHEEL}' > 3rdparty/vllm/nemo-rl.env
+    fi
+    if mxfp8_vllm_reuse_state_valid \
+        3rdparty/vllm '${VLLM_GIT_REF}' '${VLLM_WHEEL}'; then
+      existing_vllm_valid=true
+    else
+      echo "Existing custom vLLM checkout is not reusable"
+    fi
   fi
 fi
 if [[ "\${existing_vllm_valid}" == true ]]; then

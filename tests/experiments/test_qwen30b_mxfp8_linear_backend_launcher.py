@@ -265,6 +265,7 @@ def test_custom_vllm_build_is_recoverable() -> None:
     assert "incomplete=3rdparty/vllm.incomplete" not in prepare_text
     assert "git submodule update --init --recursive --depth 1" not in prepare_text
     assert "assert_preparation_scope_clean" in prepare_text
+    assert "git submodule update --init --recursive" in prepare_text
     assert '":(exclude)pyproject.toml"' in prepare_text
     assert '":(exclude)uv.lock"' in prepare_text
     assert '":(exclude)3rdparty/vllm"' in prepare_text
@@ -278,6 +279,10 @@ def test_custom_vllm_build_is_recoverable() -> None:
     assert "existing_vllm_valid=false" in prepare_text
     assert "mxfp8_vllm_reuse_state_valid" in prepare_text
     assert VLLM_BUILD_STATE_MARKER in build_text
+    assert build_text.index("cat <<EOF >$BUILD_DIR/nemo-rl.env") < build_text.index(
+        'echo "Updating repo pyproject.toml to point vLLM to local clone..."'
+    )
+    assert "3rdparty/vllm/.venv/bin/python -c 'import vllm'" in prepare_text
     assert "Replacing custom vLLM commit" in prepare_text
     assert "mxfp8_vllm_build_state_matches 3rdparty/vllm" in prepare_text
     assert 'SBATCH_ARGS+=(--qos="${QOS}")' in prepare_text

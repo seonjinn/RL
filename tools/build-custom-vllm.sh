@@ -126,6 +126,10 @@ VLLM_DEPENDENCY_STATE_SHA256=$(
 )
 printf '%s\n' "$VLLM_DEPENDENCY_STATE_SHA256" > \
   "$BUILD_DIR/$VLLM_BUILD_STATE_MARKER"
+cat <<EOF >$BUILD_DIR/nemo-rl.env
+export VLLM_GIT_REF=$GIT_REF
+export VLLM_PRECOMPILED_WHEEL_LOCATION=$VLLM_PRECOMPILED_WHEEL_LOCATION
+EOF
 
 echo "Updating repo pyproject.toml to point vLLM to local clone..."
 
@@ -202,12 +206,6 @@ PY
 # Ensure build deps and re-lock
 uv pip install setuptools_scm
 uv lock
-
-# Write to a file that a docker build will use to set the necessary env vars
-cat <<EOF >$BUILD_DIR/nemo-rl.env
-export VLLM_GIT_REF=$GIT_REF
-export VLLM_PRECOMPILED_WHEEL_LOCATION=$VLLM_PRECOMPILED_WHEEL_LOCATION
-EOF
 
 cat <<EOF
 [INFO] pyproject.toml updated. NeMo RL is now configured to use the local vLLM at 3rdparty/vllm.
