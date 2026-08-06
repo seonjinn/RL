@@ -164,6 +164,8 @@ class VllmConfig(GenerationConfig):
 
 def validate_vllm_quantization_config(config: VllmConfig) -> None:
     """Reject quantization options that would otherwise be silently ignored."""
+    if "real_quant" in config and not isinstance(config["real_quant"], bool):
+        raise ValueError("policy.generation.real_quant must be a boolean.")
     vllm_cfg = config.get("vllm_cfg")
     if vllm_cfg is None:
         return

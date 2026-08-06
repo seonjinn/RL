@@ -85,6 +85,19 @@ def test_refit_prequantize_rejects_ambiguous_mxfp8_real_quant_rollout():
         validate_vllm_quantization_config(config)
 
 
+def test_real_quant_requires_boolean():
+    config = cast(
+        VllmConfig,
+        {
+            **_config(refit_prequantize=True),
+            "real_quant": "yes",
+        },
+    )
+
+    with pytest.raises(ValueError, match="real_quant must be a boolean"):
+        validate_vllm_quantization_config(config)
+
+
 def test_refit_prequantize_accepts_mxfp8_with_real_quant_false():
     config = _config(refit_prequantize=True)
     config["real_quant"] = False
