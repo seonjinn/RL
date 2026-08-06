@@ -89,19 +89,17 @@ def merge_refit_transform_requests(
                     )
                 requested_names.add(name)
 
-    return [
-        RefitTransformRequest(
-            parameter_names=tuple(sorted(parameter_names)),
-            source_format=source_format,
-            target_format=target_format,
-            transform_location=transform_location,
+    merged_requests: list[RefitTransformRequest] = []
+    for format_key, parameter_names in sorted(names_by_format.items()):
+        merged_requests.append(
+            RefitTransformRequest(
+                parameter_names=tuple(sorted(parameter_names)),
+                source_format=format_key[0],
+                target_format=format_key[1],
+                transform_location=cast(RefitTransformLocation, format_key[2]),
+            )
         )
-        for (
-            source_format,
-            target_format,
-            transform_location,
-        ), parameter_names in sorted(names_by_format.items())
-    ]
+    return merged_requests
 
 
 @dataclass(frozen=True)
