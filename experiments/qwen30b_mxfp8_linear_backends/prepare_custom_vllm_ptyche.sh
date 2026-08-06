@@ -94,7 +94,7 @@ uv_config = document["tool"]["uv"]
 uv_config["environments"] = ["python_version == '3.13' and sys_platform == 'linux' and platform_machine == 'aarch64'"]
 pyproject_path.write_text(tomlkit.dumps(document))
 PY
-UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv uv lock --offline --no-build-isolation
+UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv uv lock --no-build-isolation --refresh-package ray
 python3 - "\${CONTAINER_RAY_VERSION}" <<'PY'
 import sys
 import tomllib

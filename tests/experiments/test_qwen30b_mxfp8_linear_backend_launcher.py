@@ -314,7 +314,7 @@ def test_preparation_pins_ray_to_the_container_version() -> None:
     )
     lock = (
         "UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv "
-        "uv lock --offline --no-build-isolation"
+        "uv lock --no-build-isolation --refresh-package ray"
     )
 
     assert detect in prepare_text
@@ -322,6 +322,7 @@ def test_preparation_pins_ray_to_the_container_version() -> None:
     assert build_dependency in prepare_text
     assert cache_ray in prepare_text
     assert limit_lock_environment in prepare_text
+    assert "uv lock --offline" not in prepare_text
     assert "Ray lock mismatch" in prepare_text
     assert (
         prepare_text.index(detect)
