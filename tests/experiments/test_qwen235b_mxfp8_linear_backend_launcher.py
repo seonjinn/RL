@@ -129,6 +129,15 @@ def test_matrix_submit_invokes_two_independent_sbatch_jobs(tmp_path: Path) -> No
     ).strip()
     source_root = tmp_path / "nemo-rl"
     subprocess.run(["git", "init", "-q", str(source_root)], check=True)
+    (source_root / "pyproject.toml").write_text("[project]\nname = 'nemo-rl'\n")
+    (source_root / "uv.lock").write_text("version = 1\n")
+    recipe = (
+        source_root / "examples/configs/recipes/llm/performance/"
+        "grpo-qwen3-235b-16n4g-mxfp8-rollout.yaml"
+    )
+    recipe.parent.mkdir(parents=True)
+    recipe.write_text("grpo:\n  max_num_steps: 8\n")
+    subprocess.run(["git", "-C", str(source_root), "add", "."], check=True)
     subprocess.run(
         [
             "git",
@@ -197,9 +206,13 @@ def test_max_steps_changes_only_the_requested_run_length(tmp_path: Path) -> None
 
     assert "grpo.max_num_steps=2" in smoke
     assert "grpo.max_num_steps=8" in measurement
-    assert smoke.replace("grpo.max_num_steps=2", "grpo.max_num_steps=STEPS") == (
-        measurement.replace("grpo.max_num_steps=8", "grpo.max_num_steps=STEPS")
-    )
+    normalized_smoke = smoke.replace(
+        "grpo.max_num_steps=2", "grpo.max_num_steps=STEPS"
+    ).replace('"max_steps": 2', '"max_steps": STEPS')
+    normalized_measurement = measurement.replace(
+        "grpo.max_num_steps=8", "grpo.max_num_steps=STEPS"
+    ).replace('"max_steps": 8', '"max_steps": STEPS')
+    assert normalized_smoke == normalized_measurement
 
 
 def test_qkvo_scope_changes_only_linear_backend(tmp_path: Path) -> None:
@@ -211,7 +224,18 @@ def test_qkvo_scope_changes_only_linear_backend(tmp_path: Path) -> None:
     for backend, output in outputs.items():
         assert "grpo-qwen3-235b-16n4g-mxfp8-rollout.yaml" in output
         assert f"linear_backend={backend}" in output
+        assert "grpo.num_prompts_per_step=16" in output
+        assert "grpo.num_generations_per_prompt=32" in output
+        assert "policy.train_global_batch_size=512" in output
+        assert "policy.max_total_sequence_length=8192" in output
+        assert "policy.generation.max_new_tokens=8192" in output
+        assert "policy.generation.vllm_cfg.max_model_len=8192" in output
+        assert "data.max_input_seq_length=8192" in output
+        assert "policy.generation.vllm_cfg.tensor_parallel_size=4" in output
+        assert "policy.generation.vllm_cfg.gpu_memory_utilization=0.4" in output
         assert "policy.generation.vllm_cfg.enforce_eager=false" in output
+        assert "policy.generation.vllm_cfg.precision=fp8" in output
+        assert "policy.generation.vllm_cfg.is_mx=true" in output
         assert "quantization_ignored_layer_kws=[lm_head,mlp.gate]" in output
         assert "moe_backend=flashinfer_trtllm" in output
         assert "cluster.num_nodes=16" in output
@@ -244,7 +268,26 @@ def test_dry_run_captures_runtime_provenance_and_manifest(tmp_path: Path) -> Non
     assert "git status --porcelain --untracked-files=all" in output
     assert "runtime_vllm_commit=$(git -C" in output
     assert "run_manifest.json" in output
-    assert '"model": "qwen3-235b"' in output
+    assert '"model": "Qwen/Qwen3-235B-A22B"' in output
+    assert '"dependency_state_sha256"' in output
+    assert '"vllm_source_sha256"' in output
+    assert '"vllm_tracked_files_clean": True' in output
+    assert '"recipe_sha256"' in output
+    assert '"precision": "fp8"' in output
+    assert '"is_mx": True' in output
+    assert '"num_nodes": 16' in output
+    assert '"gpus_per_node": 4' in output
+    assert '"segment_size": 16' in output
+    assert '"num_prompts_per_step": 16' in output
+    assert '"num_generations_per_prompt": 32' in output
+    assert '"train_global_batch_size": 512' in output
+    assert '"max_total_sequence_length": 8192' in output
+    assert '"max_input_sequence_length": 8192' in output
+    assert '"max_new_tokens": 8192' in output
+    assert '"max_model_len": 8192' in output
+    assert '"generation_tensor_parallel_size": 4' in output
+    assert '"max_steps": 8' in output
+    assert '"gpu_memory_utilization": 0.4' in output
     assert '"linear_backend": "flashinfer_cutedsl"' in output
 
 

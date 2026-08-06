@@ -13,8 +13,14 @@ from typing import Mapping, NamedTuple, Sequence, TypedDict, cast
 
 BACKENDS = ("flashinfer_cutlass", "flashinfer_cutedsl")
 MODELS = ("qwen3-30b", "qwen3-235b", "nemotron3-super")
+MODEL_NAMES = {
+    "qwen3-30b": "Qwen/Qwen3-30B-A3B",
+    "qwen3-235b": "Qwen/Qwen3-235B-A22B",
+    "nemotron3-super": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16",
+}
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 EXACT_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
+SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 TOTAL_STEP_PATTERN = re.compile(r"Total step time:\s*([0-9.]+)s")
 GENERATION_PATTERN = re.compile(r"generation:\s*([0-9.]+)s")
 E2E_THROUGHPUT_PATTERN = re.compile(r"E2E \(Tokens/sec/gpu\):\s*([0-9.]+)")
@@ -58,26 +64,38 @@ class CsvRow(TypedDict):
 class RunManifest(TypedDict):
     model: str
     nemo_rl_commit: str
+    dependency_state_sha256: str
     vllm_commit: str
+    vllm_source_sha256: str
+    vllm_tracked_files_clean: bool
     container: str
     recipe: str
+    recipe_sha256: str
     cuda_graph: bool
+    precision: str
+    is_mx: bool
     quantization_ignored_layer_kws: list[str]
     moe_backend: str
+    num_nodes: int
+    gpus_per_node: int
+    segment_size: int
+    num_prompts_per_step: int
+    num_generations_per_prompt: int
+    train_global_batch_size: int
+    max_total_sequence_length: int
+    max_input_sequence_length: int
+    max_new_tokens: int
+    max_model_len: int
+    generation_tensor_parallel_size: int
+    max_steps: int
+    gpu_memory_utilization: float
     linear_backend: str
 
 
 CSV_FIELDNAMES = tuple(CsvRow.__annotations__)
 MANIFEST_FIELDS = tuple(RunManifest.__annotations__)
-MANIFEST_INVARIANT_FIELDS = (
-    "model",
-    "nemo_rl_commit",
-    "vllm_commit",
-    "container",
-    "recipe",
-    "cuda_graph",
-    "quantization_ignored_layer_kws",
-    "moe_backend",
+MANIFEST_INVARIANT_FIELDS = tuple(
+    field for field in MANIFEST_FIELDS if field != "linear_backend"
 )
 
 
@@ -161,13 +179,23 @@ def _load_run_manifest(model: str, run_root: Path, backend: str) -> RunManifest:
             f"Incomplete run manifest for {model}/{backend}: missing "
             f"{', '.join(missing_fields)}"
         )
+    unknown_fields = sorted(set(manifest) - set(MANIFEST_FIELDS))
+    if unknown_fields:
+        raise ValueError(
+            f"Unknown run manifest fields for {model}/{backend}: "
+            f"{', '.join(unknown_fields)}"
+        )
 
     string_fields = (
         "model",
         "nemo_rl_commit",
+        "dependency_state_sha256",
         "vllm_commit",
+        "vllm_source_sha256",
         "container",
         "recipe",
+        "recipe_sha256",
+        "precision",
         "moe_backend",
         "linear_backend",
     )
@@ -176,9 +204,14 @@ def _load_run_manifest(model: str, run_root: Path, backend: str) -> RunManifest:
             raise ValueError(
                 f"Invalid run manifest field for {model}/{backend}: {field}"
             )
-    if not isinstance(manifest["cuda_graph"], bool):
+    for field in ("vllm_tracked_files_clean", "cuda_graph", "is_mx"):
+        if not isinstance(manifest[field], bool):
+            raise ValueError(
+                f"Invalid run manifest field for {model}/{backend}: {field}"
+            )
+    if manifest["vllm_tracked_files_clean"] is not True:
         raise ValueError(
-            f"Invalid run manifest field for {model}/{backend}: cuda_graph"
+            f"Custom vLLM clean attestation is false for {model}/{backend}"
         )
     quantization_scope = manifest["quantization_ignored_layer_kws"]
     if not isinstance(quantization_scope, list) or not all(
@@ -188,6 +221,35 @@ def _load_run_manifest(model: str, run_root: Path, backend: str) -> RunManifest:
             "Invalid run manifest field for "
             f"{model}/{backend}: quantization_ignored_layer_kws"
         )
+    integer_fields = (
+        "num_nodes",
+        "gpus_per_node",
+        "segment_size",
+        "num_prompts_per_step",
+        "num_generations_per_prompt",
+        "train_global_batch_size",
+        "max_total_sequence_length",
+        "max_input_sequence_length",
+        "max_new_tokens",
+        "max_model_len",
+        "generation_tensor_parallel_size",
+        "max_steps",
+    )
+    for field in integer_fields:
+        value = manifest[field]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(
+                f"Invalid run manifest field for {model}/{backend}: {field}"
+            )
+    gpu_memory_utilization = manifest["gpu_memory_utilization"]
+    if (
+        isinstance(gpu_memory_utilization, bool)
+        or not isinstance(gpu_memory_utilization, (int, float))
+        or not 0 < gpu_memory_utilization <= 1
+    ):
+        raise ValueError(
+            f"Invalid run manifest field for {model}/{backend}: gpu_memory_utilization"
+        )
     for commit_field in ("nemo_rl_commit", "vllm_commit"):
         commit = cast(str, manifest[commit_field])
         if EXACT_COMMIT_PATTERN.fullmatch(commit) is None:
@@ -195,7 +257,17 @@ def _load_run_manifest(model: str, run_root: Path, backend: str) -> RunManifest:
                 f"Invalid exact commit in run manifest for {model}/{backend}: "
                 f"{commit_field}"
             )
-    if manifest["model"] != model:
+    for sha256_field in (
+        "dependency_state_sha256",
+        "vllm_source_sha256",
+        "recipe_sha256",
+    ):
+        sha256 = cast(str, manifest[sha256_field])
+        if SHA256_PATTERN.fullmatch(sha256) is None:
+            raise ValueError(
+                f"Invalid SHA256 in run manifest for {model}/{backend}: {sha256_field}"
+            )
+    if manifest["model"] != MODEL_NAMES[model]:
         raise ValueError(
             f"Declared model mismatch for {model}/{backend}: {manifest['model']}"
         )

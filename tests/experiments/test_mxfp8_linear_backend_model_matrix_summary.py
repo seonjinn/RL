@@ -20,8 +20,43 @@ SUMMARY_SCRIPT = (
 )
 BACKENDS = ("flashinfer_cutlass", "flashinfer_cutedsl")
 MODELS = ("qwen3-30b", "qwen3-235b", "nemotron3-super")
+MODEL_NAMES = {
+    "qwen3-30b": "Qwen/Qwen3-30B-A3B",
+    "qwen3-235b": "Qwen/Qwen3-235B-A22B",
+    "nemotron3-super": "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16",
+}
 NEMO_RL_COMMIT = "1" * 40
 VLLM_COMMIT = "2" * 40
+MANIFEST_FIELDS = {
+    "model",
+    "nemo_rl_commit",
+    "dependency_state_sha256",
+    "vllm_commit",
+    "vllm_source_sha256",
+    "vllm_tracked_files_clean",
+    "container",
+    "recipe",
+    "recipe_sha256",
+    "cuda_graph",
+    "precision",
+    "is_mx",
+    "quantization_ignored_layer_kws",
+    "moe_backend",
+    "num_nodes",
+    "gpus_per_node",
+    "segment_size",
+    "num_prompts_per_step",
+    "num_generations_per_prompt",
+    "train_global_batch_size",
+    "max_total_sequence_length",
+    "max_input_sequence_length",
+    "max_new_tokens",
+    "max_model_len",
+    "generation_tensor_parallel_size",
+    "max_steps",
+    "gpu_memory_utilization",
+    "linear_backend",
+}
 
 
 def _load_summary_module():
@@ -88,14 +123,33 @@ def _write_driver_log(
     log_dir.mkdir(parents=True, exist_ok=True)
     (log_dir / "ray-driver.log").write_text("".join(blocks))
     manifest = {
-        "model": run_root.name,
+        "model": MODEL_NAMES[run_root.name],
         "nemo_rl_commit": NEMO_RL_COMMIT,
+        "dependency_state_sha256": "3" * 64,
         "vllm_commit": VLLM_COMMIT,
+        "vllm_source_sha256": "4" * 64,
+        "vllm_tracked_files_clean": True,
         "container": "/containers/nemo-rl.sqsh",
         "recipe": f"recipes/{run_root.name}.yaml",
+        "recipe_sha256": "5" * 64,
         "cuda_graph": True,
+        "precision": "fp8",
+        "is_mx": True,
         "quantization_ignored_layer_kws": ["lm_head", "mlp.gate"],
         "moe_backend": "flashinfer_trtllm",
+        "num_nodes": 4,
+        "gpus_per_node": 4,
+        "segment_size": 4,
+        "num_prompts_per_step": 64,
+        "num_generations_per_prompt": 32,
+        "train_global_batch_size": 2_048,
+        "max_total_sequence_length": 4_096,
+        "max_input_sequence_length": 4_096,
+        "max_new_tokens": 4_096,
+        "max_model_len": 4_096,
+        "generation_tensor_parallel_size": 1,
+        "max_steps": 8,
+        "gpu_memory_utilization": 0.6,
         "linear_backend": backend,
     }
     (run_root / backend / "run_manifest.json").write_text(json.dumps(manifest) + "\n")
@@ -154,6 +208,60 @@ def test_write_results_summarizes_paired_steps_and_normalizes_to_cutlass(
         assert cutedsl["e2e_latency_speedup_vs_cutlass"] > 1.0
         assert cutlass["manifest"]["nemo_rl_commit"] == NEMO_RL_COMMIT
         assert cutedsl["manifest"]["linear_backend"] == "flashinfer_cutedsl"
+        assert set(cutlass["manifest"]) == MANIFEST_FIELDS
+
+
+def test_write_results_rejects_mismatched_launcher_run_config(tmp_path: Path) -> None:
+    summary = _load_summary_module()
+    run_roots = _write_complete_matrix(tmp_path)
+    manifest_path = run_roots["qwen3-30b"] / "flashinfer_cutedsl" / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["num_prompts_per_step"] = 32
+    manifest_path.write_text(json.dumps(manifest) + "\n")
+
+    with pytest.raises(
+        ValueError,
+        match="Invariant manifest mismatch for qwen3-30b: num_prompts_per_step",
+    ):
+        summary.write_results(run_roots, tmp_path / "summary")
+
+
+def test_write_results_rejects_unknown_manifest_fields(tmp_path: Path) -> None:
+    summary = _load_summary_module()
+    run_roots = _write_complete_matrix(tmp_path)
+    manifest_path = run_roots["qwen3-235b"] / "flashinfer_cutlass" / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["unvalidated_override"] = "different"
+    manifest_path.write_text(json.dumps(manifest) + "\n")
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Unknown run manifest fields for qwen3-235b/flashinfer_cutlass: "
+            "unvalidated_override"
+        ),
+    ):
+        summary.write_results(run_roots, tmp_path / "summary")
+
+
+def test_write_results_requires_clean_custom_vllm_attestation(tmp_path: Path) -> None:
+    summary = _load_summary_module()
+    run_roots = _write_complete_matrix(tmp_path)
+    manifest_path = (
+        run_roots["nemotron3-super"] / "flashinfer_cutedsl" / "run_manifest.json"
+    )
+    manifest = json.loads(manifest_path.read_text())
+    manifest["vllm_tracked_files_clean"] = False
+    manifest_path.write_text(json.dumps(manifest) + "\n")
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Custom vLLM clean attestation is false for "
+            "nemotron3-super/flashinfer_cutedsl"
+        ),
+    ):
+        summary.write_results(run_roots, tmp_path / "summary")
 
 
 @pytest.mark.parametrize(
@@ -161,11 +269,29 @@ def test_write_results_summarizes_paired_steps_and_normalizes_to_cutlass(
     (
         ("nemo_rl_commit", "3" * 40),
         ("vllm_commit", "4" * 40),
+        ("dependency_state_sha256", "6" * 64),
+        ("vllm_source_sha256", "7" * 64),
         ("container", "/containers/different.sqsh"),
         ("recipe", "recipes/different.yaml"),
+        ("recipe_sha256", "8" * 64),
         ("cuda_graph", False),
+        ("precision", "bfloat16"),
+        ("is_mx", False),
         ("quantization_ignored_layer_kws", ["lm_head"]),
         ("moe_backend", "different_moe_backend"),
+        ("num_nodes", 8),
+        ("gpus_per_node", 8),
+        ("segment_size", 8),
+        ("num_prompts_per_step", 32),
+        ("num_generations_per_prompt", 16),
+        ("train_global_batch_size", 512),
+        ("max_total_sequence_length", 8_192),
+        ("max_input_sequence_length", 2_048),
+        ("max_new_tokens", 2_048),
+        ("max_model_len", 8_192),
+        ("generation_tensor_parallel_size", 4),
+        ("max_steps", 2),
+        ("gpu_memory_utilization", 0.7),
     ),
 )
 def test_write_results_rejects_mismatched_invariant_manifest(

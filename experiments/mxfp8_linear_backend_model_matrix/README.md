@@ -30,10 +30,14 @@ CUTLASS latency divided by the backend latency, so values above one indicate a
 faster backend.
 
 The tool rejects a row before writing a result unless exactly one driver log is
-present per backend, each manifest declares the expected model and backend,
-and all invariant manifest fields match across the two arms. The invariant
-fields are the exact NeMo-RL and vLLM commits, container, recipe, CUDA Graph
-mode, quantization scope, and MoE backend. Every requested measured step must
-also be complete, and paired measured steps must have identical mean generation
-lengths. A malformed `Training Results` block is rejected at its original step
-ordinal. These checks run before speedups are calculated.
+present per backend and each manifest has exactly the closed schema expected by
+the tool. Unknown fields are rejected. The model, exact NeMo-RL commit,
+dependency fingerprint, vLLM commit/source fingerprint and clean assertion,
+container, recipe/content fingerprint, CUDA Graph mode, precision, MX mode,
+quantization scope, MoE backend, topology, batching, sequence limits,
+generation TP, max steps, and GPU memory utilization must match across the two
+arms. `linear_backend` is the only permitted difference and must declare the
+arm being read. Every requested measured step must also be complete, and paired
+measured steps must have identical mean generation lengths. These checks run
+before speedups are calculated; `summary.json` preserves each complete
+validated manifest.

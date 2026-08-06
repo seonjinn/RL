@@ -33,6 +33,11 @@ ACTION=test-only ./experiments/qwen30b_mxfp8_linear_backends/prepare_custom_vllm
 ACTION=submit ./experiments/qwen30b_mxfp8_linear_backends/prepare_custom_vllm_ptyche.sh
 ```
 
+Preparation may change only root `pyproject.toml`, root `uv.lock`, and
+`3rdparty/vllm`. It rejects any other tracked or untracked NeMo-RL source
+change before and after preparation. Replaced vLLM checkouts are moved under
+the external preparation output root, not elsewhere in the repository.
+
 Then validate scheduling and submit a short smoke matrix:
 
 ```bash
@@ -49,12 +54,14 @@ ACTION=submit MAX_STEPS=8 ./experiments/qwen30b_mxfp8_linear_backends/submit_mat
 
 Report the mean of steps 3-8. Primary metrics are rollout generation time and generated tokens/s/GPU. Secondary metrics are total step time, refit time, log-probability time, and training time.
 
-`ACTION=test-only` and `ACTION=submit` require a clean NeMo-RL checkout. The
-launcher captures its exact commit at submission and rechecks both the commit
-and cleanliness when the job starts. Each backend writes
-`<run-root>/<backend>/run_manifest.json` after runtime provenance validation.
-The manifest records the model, exact NeMo-RL and vLLM commits, container,
-recipe, CUDA Graph mode, quantization scope, MoE backend, and linear backend.
+`ACTION=test-only` and `ACTION=submit` reject all NeMo-RL source changes except
+the preparation-owned `pyproject.toml`, `uv.lock`, and `3rdparty/vllm` state.
+The launcher fingerprints the two dependency files, the recipe content, and
+the clean tracked vLLM source at submission, then rechecks them with the exact
+NeMo-RL and vLLM commits when the job starts. Untracked vLLM build artifacts
+may remain, but tracked and staged vLLM changes are rejected. Each backend
+writes the complete validated configuration to
+`<run-root>/<backend>/run_manifest.json`.
 
 ## 32K Output-Length Study
 

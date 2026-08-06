@@ -28,12 +28,23 @@ COMMAND=$(cat <<EOF
 set -euo pipefail
 cd ${REPO_DIR}
 export UV_PROJECT_ENVIRONMENT=
-git submodule update --init --recursive --depth 1
+assert_preparation_scope_clean() {
+  if [[ -n "\$(git status --porcelain --untracked-files=all -- . \
+      ":(exclude)pyproject.toml" ":(exclude)uv.lock" \
+      ":(exclude)3rdparty/vllm")" ]]; then
+    echo "Preparation found disallowed NeMo-RL source changes" >&2
+    return 1
+  fi
+}
+assert_preparation_scope_clean
 existing_vllm_valid=false
 if [[ -d 3rdparty/vllm/.git ]]; then
   actual=\$(git -C 3rdparty/vllm rev-parse HEAD)
   if [[ "\${actual}" != "${VLLM_GIT_REF}" ]]; then
     echo "Replacing custom vLLM commit \${actual} with ${VLLM_GIT_REF}"
+  elif ! git -C 3rdparty/vllm diff --quiet -- || \
+      ! git -C 3rdparty/vllm diff --cached --quiet --; then
+    echo "Replacing custom vLLM checkout with dirty tracked files"
   elif [[ -x 3rdparty/vllm/.venv/bin/python ]] && \
       3rdparty/vllm/.venv/bin/python -c 'import vllm'; then
     existing_vllm_valid=true
@@ -44,7 +55,7 @@ if [[ "\${existing_vllm_valid}" == true ]]; then
     '${VLLM_GIT_REF}' '${VLLM_WHEEL}' > 3rdparty/vllm/nemo-rl.env
 else
   if [[ -e 3rdparty/vllm ]]; then
-    incomplete=3rdparty/vllm.incomplete.\${SLURM_JOB_ID:-\$\$}
+    incomplete=${PREP_ROOT}/vllm.incomplete.\${SLURM_JOB_ID:-\$\$}
     echo "Moving incomplete custom vLLM build to \${incomplete}"
     mv 3rdparty/vllm "\${incomplete}"
   fi
@@ -72,6 +83,7 @@ print(
     FlashInferTrtllmMxfp8LinearKernel.__name__,
 )
 PY
+assert_preparation_scope_clean
 EOF
 )
 

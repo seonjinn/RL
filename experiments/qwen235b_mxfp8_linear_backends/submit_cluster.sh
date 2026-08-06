@@ -23,8 +23,10 @@ case "${ACTION}" in
 esac
 
 EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-a76062edee3a3ac23d47a93c7ce466f06a19111f}
-MODEL=qwen3-235b
+MODEL=Qwen/Qwen3-235B-A22B
 CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g-mxfp8-rollout.yaml
+PROVENANCE_HELPER=experiments/mxfp8_linear_backend_model_matrix/provenance.sh
+source "${SCRIPT_DIR}/../mxfp8_linear_backend_model_matrix/provenance.sh"
 
 ACCOUNT=${SLURM_ACCOUNT:-coreai_dlalgo_llm}
 PARTITION=${PARTITION:-batch}
@@ -34,18 +36,34 @@ NUM_NODES=${NUM_NODES:-16}
 GPUS_PER_NODE=${GPUS_PER_NODE:-4}
 SEGMENT_SIZE=${SEGMENT_SIZE:-16}
 MAX_STEPS=${MAX_STEPS:-8}
+NUM_PROMPTS_PER_STEP=${NUM_PROMPTS_PER_STEP:-16}
+NUM_GENERATIONS_PER_PROMPT=${NUM_GENERATIONS_PER_PROMPT:-32}
+TRAIN_GLOBAL_BATCH_SIZE=${TRAIN_GLOBAL_BATCH_SIZE:-512}
+MAX_TOTAL_SEQUENCE_LENGTH=${MAX_TOTAL_SEQUENCE_LENGTH:-8192}
+MAX_INPUT_SEQUENCE_LENGTH=${MAX_INPUT_SEQUENCE_LENGTH:-8192}
+MAX_NEW_TOKENS=${MAX_NEW_TOKENS:-8192}
+MAX_MODEL_LEN=${MAX_MODEL_LEN:-8192}
+GENERATION_TENSOR_PARALLEL_SIZE=${GENERATION_TENSOR_PARALLEL_SIZE:-4}
+GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION:-0.4}
+PRECISION=${PRECISION:-fp8}
+IS_MX=${IS_MX:-true}
+case "${IS_MX}" in
+    true) IS_MX_PYTHON=True ;;
+    false) IS_MX_PYTHON=False ;;
+    *) echo "IS_MX must be true or false" >&2; exit 2 ;;
+esac
 RUN_ID=${RUN_ID:-$(date +%Y%m%d-%H%M%S)}
 DEPENDENCY_JOB_ID=${DEPENDENCY_JOB_ID:-}
 
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}
 CONTAINER=${CONTAINER:-${WORK_ROOT}/containers/nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh}
 CUSTOM_VLLM_ROOT=${CUSTOM_VLLM_ROOT:-${REPO_DIR}/3rdparty/vllm}
-NEMO_RL_STATUS_PATHS=(.)
-RUNTIME_NEMO_RL_STATUS_EXCLUSION=
+NEMO_RL_STATUS_PATHS=(. ":(exclude)pyproject.toml" ":(exclude)uv.lock")
+RUNTIME_NEMO_RL_STATUS_EXCLUSIONS=" ':(exclude)pyproject.toml' ':(exclude)uv.lock'"
 if [[ "${CUSTOM_VLLM_ROOT}" == "${REPO_DIR}/"* ]]; then
     custom_vllm_relative=${CUSTOM_VLLM_ROOT#"${REPO_DIR}/"}
     NEMO_RL_STATUS_PATHS+=(":(exclude)${custom_vllm_relative}")
-    RUNTIME_NEMO_RL_STATUS_EXCLUSION=" ':(exclude)${custom_vllm_relative}'"
+    RUNTIME_NEMO_RL_STATUS_EXCLUSIONS+=" ':(exclude)${custom_vllm_relative}'"
 fi
 EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${WORK_ROOT}/experiments/qwen235b-mxfp8-linear-backends/${RUN_ID}/${BACKEND}}
 CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/.cache/qwen235b-mxfp8-linear-backends/${BACKEND}}
@@ -54,9 +72,15 @@ DRIVER_VENV=${DRIVER_VENV:-${CACHE_ROOT}/driver-venv}
 WORKER_VENV=${WORKER_VENV:-/tmp/nemo-rl-qwen235b-${BACKEND}-workers}
 WANDB_MODE=${WANDB_MODE:-disabled}
 SUBMIT_NEMO_RL_COMMIT=$(git -C "${REPO_DIR}" rev-parse HEAD)
+SUBMIT_DEPENDENCY_STATE_SHA256=
+SUBMIT_RECIPE_SHA256=
 SUBMIT_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT}
+SUBMIT_VLLM_SOURCE_SHA256=dry-run-not-validated
 
-if [[ "${ACTION}" != "dry-run" ]]; then
+if [[ "${ACTION}" == "dry-run" ]]; then
+    SUBMIT_DEPENDENCY_STATE_SHA256=$(mxfp8_dependency_state_sha256 "${REPO_DIR}")
+    SUBMIT_RECIPE_SHA256=$(mxfp8_file_sha256 "${REPO_DIR}/${CONFIG}")
+else
     [[ -f "${CONTAINER}" ]] || { echo "Missing container: ${CONTAINER}" >&2; exit 1; }
     [[ -d "${CUSTOM_VLLM_ROOT}/.git" ]] || {
         echo "Custom vLLM is not prepared at ${CUSTOM_VLLM_ROOT}" >&2
@@ -70,11 +94,18 @@ if [[ "${ACTION}" != "dry-run" ]]; then
         echo "NeMo-RL source is not clean at ${REPO_DIR}" >&2
         exit 1
     fi
+    SUBMIT_DEPENDENCY_STATE_SHA256=$(mxfp8_dependency_state_sha256 "${REPO_DIR}")
+    SUBMIT_RECIPE_SHA256=$(mxfp8_file_sha256 "${REPO_DIR}/${CONFIG}")
+    mxfp8_assert_vllm_tracked_clean "${CUSTOM_VLLM_ROOT}" || {
+        echo "Custom vLLM tracked files are not clean at ${CUSTOM_VLLM_ROOT}" >&2
+        exit 1
+    }
     SUBMIT_VLLM_COMMIT=$(git -C "${CUSTOM_VLLM_ROOT}" rev-parse HEAD)
     [[ "${SUBMIT_VLLM_COMMIT}" == "${EXPECTED_VLLM_COMMIT}" ]] || {
         echo "Unexpected vLLM commit: ${SUBMIT_VLLM_COMMIT}" >&2
         exit 1
     }
+    SUBMIT_VLLM_SOURCE_SHA256=$(mxfp8_vllm_source_sha256 "${CUSTOM_VLLM_ROOT}")
 fi
 
 mkdir -p "${EXPERIMENT_ROOT}" "${CACHE_ROOT}" "${HF_HOME}"
@@ -87,13 +118,33 @@ runtime_nemo_rl_commit=\$(git rev-parse HEAD)
   echo "NeMo-RL runtime commit mismatch: expected ${SUBMIT_NEMO_RL_COMMIT}, found \${runtime_nemo_rl_commit}" >&2
   exit 1
 }
-if [[ -n "\$(git status --porcelain --untracked-files=all -- .${RUNTIME_NEMO_RL_STATUS_EXCLUSION})" ]]; then
+if [[ -n "\$(git status --porcelain --untracked-files=all -- .${RUNTIME_NEMO_RL_STATUS_EXCLUSIONS})" ]]; then
   echo "NeMo-RL source is not clean at job start: ${REPO_DIR}" >&2
   exit 1
 fi
+source ${REPO_DIR}/${PROVENANCE_HELPER}
+runtime_dependency_state_sha256=\$(mxfp8_dependency_state_sha256 ${REPO_DIR})
+[[ "\${runtime_dependency_state_sha256}" == "${SUBMIT_DEPENDENCY_STATE_SHA256}" ]] || {
+  echo "Dependency state mismatch: expected ${SUBMIT_DEPENDENCY_STATE_SHA256}, found \${runtime_dependency_state_sha256}" >&2
+  exit 1
+}
+runtime_recipe_sha256=\$(mxfp8_file_sha256 ${REPO_DIR}/${CONFIG})
+[[ "\${runtime_recipe_sha256}" == "${SUBMIT_RECIPE_SHA256}" ]] || {
+  echo "Recipe content mismatch: expected ${SUBMIT_RECIPE_SHA256}, found \${runtime_recipe_sha256}" >&2
+  exit 1
+}
+mxfp8_assert_vllm_tracked_clean ${CUSTOM_VLLM_ROOT} || {
+  echo "Custom vLLM tracked files are not clean at job start: ${CUSTOM_VLLM_ROOT}" >&2
+  exit 1
+}
 runtime_vllm_commit=\$(git -C ${CUSTOM_VLLM_ROOT} rev-parse HEAD)
 [[ "\${runtime_vllm_commit}" == "${SUBMIT_VLLM_COMMIT}" ]] || {
   echo "vLLM runtime commit mismatch: expected ${SUBMIT_VLLM_COMMIT}, found \${runtime_vllm_commit}" >&2
+  exit 1
+}
+runtime_vllm_source_sha256=\$(mxfp8_vllm_source_sha256 ${CUSTOM_VLLM_ROOT})
+[[ "\${runtime_vllm_source_sha256}" == "${SUBMIT_VLLM_SOURCE_SHA256}" ]] || {
+  echo "vLLM source fingerprint mismatch: expected ${SUBMIT_VLLM_SOURCE_SHA256}, found \${runtime_vllm_source_sha256}" >&2
   exit 1
 }
 rm -f ${EXPERIMENT_ROOT}/run_manifest.json
@@ -135,7 +186,9 @@ print(f"vLLM={vllm.__version__} path={vllm_path}")
 print(f"FlashInfer={flashinfer.__version__}")
 PY
 export MXFP8_NEMO_RL_COMMIT="\${runtime_nemo_rl_commit}"
+export MXFP8_DEPENDENCY_STATE_SHA256="\${runtime_dependency_state_sha256}"
 export MXFP8_VLLM_COMMIT="\${runtime_vllm_commit}"
+export MXFP8_VLLM_SOURCE_SHA256="\${runtime_vllm_source_sha256}"
 ${DRIVER_VENV}/bin/python - <<'PY'
 import json
 import os
@@ -144,12 +197,31 @@ from pathlib import Path
 manifest = {
     "model": "${MODEL}",
     "nemo_rl_commit": os.environ["MXFP8_NEMO_RL_COMMIT"],
+    "dependency_state_sha256": os.environ["MXFP8_DEPENDENCY_STATE_SHA256"],
     "vllm_commit": os.environ["MXFP8_VLLM_COMMIT"],
+    "vllm_source_sha256": os.environ["MXFP8_VLLM_SOURCE_SHA256"],
+    "vllm_tracked_files_clean": True,
     "container": "${CONTAINER}",
     "recipe": "${CONFIG}",
+    "recipe_sha256": "${SUBMIT_RECIPE_SHA256}",
     "cuda_graph": True,
+    "precision": "${PRECISION}",
+    "is_mx": ${IS_MX_PYTHON},
     "quantization_ignored_layer_kws": ["lm_head", "mlp.gate"],
     "moe_backend": "flashinfer_trtllm",
+    "num_nodes": ${NUM_NODES},
+    "gpus_per_node": ${GPUS_PER_NODE},
+    "segment_size": ${SEGMENT_SIZE},
+    "num_prompts_per_step": ${NUM_PROMPTS_PER_STEP},
+    "num_generations_per_prompt": ${NUM_GENERATIONS_PER_PROMPT},
+    "train_global_batch_size": ${TRAIN_GLOBAL_BATCH_SIZE},
+    "max_total_sequence_length": ${MAX_TOTAL_SEQUENCE_LENGTH},
+    "max_input_sequence_length": ${MAX_INPUT_SEQUENCE_LENGTH},
+    "max_new_tokens": ${MAX_NEW_TOKENS},
+    "max_model_len": ${MAX_MODEL_LEN},
+    "generation_tensor_parallel_size": ${GENERATION_TENSOR_PARALLEL_SIZE},
+    "max_steps": ${MAX_STEPS},
+    "gpu_memory_utilization": ${GPU_MEMORY_UTILIZATION},
     "linear_backend": "${BACKEND}",
 }
 manifest_path = Path("${EXPERIMENT_ROOT}/run_manifest.json")
@@ -160,7 +232,18 @@ uv run --frozen --extra vllm examples/run_grpo.py \
   cluster.num_nodes=${NUM_NODES} \
   cluster.gpus_per_node=${GPUS_PER_NODE} \
   cluster.segment_size=${SEGMENT_SIZE} \
+  grpo.num_prompts_per_step=${NUM_PROMPTS_PER_STEP} \
+  grpo.num_generations_per_prompt=${NUM_GENERATIONS_PER_PROMPT} \
+  policy.train_global_batch_size=${TRAIN_GLOBAL_BATCH_SIZE} \
+  policy.max_total_sequence_length=${MAX_TOTAL_SEQUENCE_LENGTH} \
+  policy.generation.max_new_tokens=${MAX_NEW_TOKENS} \
+  policy.generation.vllm_cfg.max_model_len=${MAX_MODEL_LEN} \
+  data.max_input_seq_length=${MAX_INPUT_SEQUENCE_LENGTH} \
+  policy.generation.vllm_cfg.tensor_parallel_size=${GENERATION_TENSOR_PARALLEL_SIZE} \
+  policy.generation.vllm_cfg.gpu_memory_utilization=${GPU_MEMORY_UTILIZATION} \
   policy.generation.vllm_cfg.enforce_eager=false \
+  policy.generation.vllm_cfg.precision=${PRECISION} \
+  policy.generation.vllm_cfg.is_mx=${IS_MX} \
   "policy.generation.vllm_cfg.quantization_ignored_layer_kws=[lm_head,mlp.gate]" \
   ++policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm \
   ++policy.generation.vllm_kwargs.linear_backend=${BACKEND} \

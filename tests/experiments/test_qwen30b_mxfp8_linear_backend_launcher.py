@@ -64,7 +64,10 @@ def test_dry_run_changes_only_backend(tmp_path: Path) -> None:
         )
         assert f"linear_backend={effective_backend}" in output
         assert "policy.train_global_batch_size=2048" in output
+        assert "policy.generation.vllm_cfg.tensor_parallel_size=1" in output
         assert "policy.generation.vllm_cfg.enforce_eager=false" in output
+        assert "policy.generation.vllm_cfg.precision=fp8" in output
+        assert "policy.generation.vllm_cfg.is_mx=true" in output
         assert "quantization_ignored_layer_kws=[lm_head,mlp.gate]" in output
         assert "moe_backend=flashinfer_trtllm" in output
         assert "cluster.num_nodes=4" in output
@@ -170,14 +173,33 @@ def test_dry_run_captures_runtime_provenance_and_manifest(tmp_path: Path) -> Non
     assert "git status --porcelain --untracked-files=all" in output
     assert "runtime_vllm_commit=$(git -C" in output
     assert "run_manifest.json" in output
-    assert '"model": "qwen3-30b"' in output
+    assert '"model": "Qwen/Qwen3-30B-A3B"' in output
     assert '"nemo_rl_commit"' in output
+    assert '"dependency_state_sha256"' in output
     assert '"vllm_commit"' in output
+    assert '"vllm_source_sha256"' in output
+    assert '"vllm_tracked_files_clean": True' in output
     assert '"container"' in output
     assert '"recipe"' in output
+    assert '"recipe_sha256"' in output
     assert '"cuda_graph": True' in output
+    assert '"precision": "fp8"' in output
+    assert '"is_mx": True' in output
     assert '"quantization_ignored_layer_kws": ["lm_head", "mlp.gate"]' in output
     assert '"moe_backend": "flashinfer_trtllm"' in output
+    assert '"num_nodes": 4' in output
+    assert '"gpus_per_node": 4' in output
+    assert '"segment_size": 4' in output
+    assert '"num_prompts_per_step": 64' in output
+    assert '"num_generations_per_prompt": 32' in output
+    assert '"train_global_batch_size": 2048' in output
+    assert '"max_total_sequence_length": 4096' in output
+    assert '"max_input_sequence_length": 4096' in output
+    assert '"max_new_tokens": 4096' in output
+    assert '"max_model_len": 4096' in output
+    assert '"generation_tensor_parallel_size": 1' in output
+    assert '"max_steps": 8' in output
+    assert '"gpu_memory_utilization": 0.6' in output
     assert '"linear_backend": "flashinfer_cutedsl"' in output
 
 
@@ -221,8 +243,14 @@ def test_custom_vllm_build_is_recoverable() -> None:
     pyproject_text = (REPO_ROOT / "pyproject.toml").read_text()
 
     assert "3rdparty/vllm/nemo-rl.env" in prepare_text
-    assert "vllm.incomplete" in prepare_text
-    assert "git submodule update --init --recursive --depth 1" in prepare_text
+    assert "incomplete=${PREP_ROOT}/vllm.incomplete" in prepare_text
+    assert "incomplete=3rdparty/vllm.incomplete" not in prepare_text
+    assert "git submodule update --init --recursive --depth 1" not in prepare_text
+    assert "assert_preparation_scope_clean" in prepare_text
+    assert '":(exclude)pyproject.toml"' in prepare_text
+    assert '":(exclude)uv.lock"' in prepare_text
+    assert '":(exclude)3rdparty/vllm"' in prepare_text
+    assert "Preparation found disallowed NeMo-RL source changes" in prepare_text
     assert "3rdparty/vllm/.venv/bin/python -c 'import vllm'" in prepare_text
     assert "3rdparty/vllm/.venv/bin/python - <<'PY'" in prepare_text
     assert "uv run --frozen python - <<'PY'" not in prepare_text
@@ -236,4 +264,32 @@ def test_custom_vllm_build_is_recoverable() -> None:
     assert "TORCH_REQUIREMENT=$(sed -nE" in build_text
     assert "VLLM_TORCH_BACKEND:-cu130" in build_text
     assert "torch==2.10.0" not in build_text
+    assert 'git restore --source="$GIT_REF" --worktree -- .' in build_text
+    assert "git diff --quiet" in build_text
+    assert "git diff --cached --quiet" in build_text
     assert 'vllm = ["setuptools", "setuptools-rust"]' in pyproject_text
+
+
+def test_prepare_emits_valid_scoped_job_command(tmp_path: Path) -> None:
+    result = subprocess.run(
+        ["bash", str(PREPARE_SCRIPT)],
+        check=True,
+        cwd=REPO_ROOT,
+        env=os.environ
+        | {
+            "ACTION": "dry-run",
+            "PREP_ROOT": str(tmp_path / "prepare"),
+            "WORK_ROOT": str(tmp_path),
+        },
+        capture_output=True,
+        text=True,
+    )
+    command_start = result.stdout.index("set -euo pipefail\n")
+    command = result.stdout[command_start:]
+
+    syntax_check = subprocess.run(
+        ["bash", "-n"], input=command, capture_output=True, text=True
+    )
+
+    assert syntax_check.returncode == 0, syntax_check.stderr
+    assert str(tmp_path / "prepare" / "vllm.incomplete") in command
