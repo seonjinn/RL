@@ -25,6 +25,10 @@ from typing import TYPE_CHECKING, Any, Iterable, Iterator, Optional, TypeVar, ca
 log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from nemo_rl.modelopt.models.generation.nvfp4_refit import (
+        NVFP4Calibration,
+        NVFP4RefitMode,
+    )
     from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
 
 import ray
@@ -355,10 +359,8 @@ class MegatronPolicyWorkerImpl(
         # Staging-buffer cache for refit weight streaming; only populated when
         # cfg["refit_persistent_ipc_buffers"] is enabled.
         self._refit_ipc_buffer_cache: dict[str, Any] = {}
-        # HF param names to MXFP8-quantize on the trainer during refit; set by
-        # the structured transform handshake when refit prequantization is on.
-        self._refit_prequant_names: set[str] = set()
         self._refit_transform_requests_by_name: dict[str, "RefitTransformRequest"] = {}
+        self._nvfp4_refit_calibration: "NVFP4Calibration | None" = None
         self._nixl_preinit_agent = maybe_preinit_nixl_checkpoint_engine(config)
         # Pinned host staging for the reference-policy swap; only populated when
         # megatron_cfg["pinned_reference_swap"] is enabled. Buffer contents are
@@ -1882,7 +1884,10 @@ class MegatronPolicyWorkerImpl(
         Returns:
             Updated source metadata for the requested destination transforms.
         """
-        from nemo_rl.weight_sync.refit_transforms import resolve_transform
+        from nemo_rl.weight_sync.refit_transforms import (
+            describe_refit_wire_metadata,
+            resolve_transform,
+        )
 
         source_info = getattr(self, "_last_refit_param_info_hf", None)
         if source_info is None:
@@ -1890,6 +1895,7 @@ class MegatronPolicyWorkerImpl(
 
         requested_names: set[str] = set()
         requests_by_name: dict[str, RefitTransformRequest] = {}
+        source_target_formats: set[str] = set()
         for request in requests:
             canonical_names = tuple(sorted(set(request.parameter_names)))
             if request.parameter_names != canonical_names:
@@ -1916,38 +1922,150 @@ class MegatronPolicyWorkerImpl(
                 )
                 requested_names.add(name)
                 requests_by_name[name] = request
+            if request.transform_location == "source":
+                source_target_formats.add(request.target_format)
 
-        self._refit_prequant_names = {
-            name
-            for name, request in requests_by_name.items()
-            if request.target_format == "mxfp8_e4m3_e8m0"
+        if len(source_target_formats) > 1:
+            raise ValueError(
+                "Megatron refit export supports one source transform target format "
+                f"per transfer; got {sorted(source_target_formats)}."
+            )
+
+        refit_param_info_hf = describe_refit_wire_metadata(source_info, requests)
+        nvfp4_mode_by_format: dict[str, NVFP4RefitMode] = {
+            "nvfp4_w4a16": "w4a16",
+            "nvfp4_w4a4": "w4a4",
         }
-        self._refit_transform_requests_by_name = requests_by_name
+        nvfp4_source_formats = source_target_formats.intersection(nvfp4_mode_by_format)
+        nvfp4_calibration = None
+        if nvfp4_source_formats:
+            target_format = next(iter(nvfp4_source_formats))
+            selected_names = {
+                name
+                for name, request in requests_by_name.items()
+                if request.transform_location == "source"
+                and request.target_format == target_format
+            }
+            nvfp4_calibration = self._load_nvfp4_refit_calibration(
+                nvfp4_mode_by_format[target_format], selected_names
+            )
 
-        refit_param_info_hf = {}
-        for name, tensor in self._iter_params_with_optional_kv_scales():
-            refit_param_info_hf[name] = (tensor.shape, tensor.dtype)
+        self._refit_transform_requests_by_name = requests_by_name
+        self._nvfp4_refit_calibration = nvfp4_calibration
         return refit_param_info_hf
 
-    def _maybe_prequantize_param(
-        self, name: str, tensor: torch.Tensor
-    ) -> Iterator[tuple[str, torch.Tensor]]:
-        if (
-            name not in self._refit_prequant_names
-            or tensor.dtype == torch.float8_e4m3fn
-        ):
-            yield name, tensor
-            return
+    def _load_nvfp4_refit_calibration(
+        self, mode: "NVFP4RefitMode", selected_names: set[str]
+    ) -> "NVFP4Calibration | None":
+        """Load and validate the frozen W4A4 calibration artifact once."""
+        if mode != "w4a4":
+            return None
 
-        # Deferred: pulls in the heavy nemo_rl...generation.vllm package init,
-        # which trainer workers only need when prequantized refit is enabled.
-        from nemo_rl.models.generation.vllm.quantization.fp8_train_utils import (
-            mxfp8_e4m3_quantize_for_refit,
+        generation_cfg = cast(VllmConfig, self.cfg.get("generation"))
+        if generation_cfg is None:
+            raise ValueError(
+                "Source-owned NVFP4 W4A4 refit requires generation configuration."
+            )
+        artifact_path = generation_cfg.get("real_quant_calibration_path")
+        quant_cfg = generation_cfg.get("quant_cfg")
+        model_id = self.cfg.get("model_name")
+        vllm_kwargs = generation_cfg.get("vllm_kwargs") or {}
+        revision = vllm_kwargs.get("revision")
+        provenance = (
+            ("model_name", model_id),
+            ("generation.vllm_kwargs.revision", revision),
+            ("generation.quant_cfg", quant_cfg),
+            (
+                "generation.real_quant_calibration_path",
+                artifact_path,
+            ),
+        )
+        missing = [
+            name
+            for name, value in provenance
+            if not isinstance(value, str) or not value
+        ]
+        if missing:
+            raise ValueError(
+                "Source-owned NVFP4 W4A4 refit requires frozen calibration "
+                "provenance fields: " + ", ".join(missing)
+            )
+        artifact_path = cast(str, artifact_path)
+        model_id = cast(str, model_id)
+        revision = cast(str, revision)
+        quant_cfg = cast(str, quant_cfg)
+
+        # ModelOpt and safetensors are needed only for source-owned W4A4 export.
+        from nemo_rl.modelopt.calibration_artifact import load_nvfp4_calibration
+
+        return load_nvfp4_calibration(
+            artifact_path,
+            model_id=model_id,
+            model_revision=revision,
+            quant_cfg=quant_cfg,
+            expected_projection_names=selected_names,
         )
 
-        param_lp, param_scale = mxfp8_e4m3_quantize_for_refit(tensor)
-        yield name, param_lp
-        yield name + "_scale_from_checkpoint", param_scale
+    def _iter_refit_transformed_params(
+        self, weights: Iterable[tuple[str, torch.Tensor]]
+    ) -> Iterator[tuple[str, torch.Tensor]]:
+        """Apply the installed source-owned transform to Bridge weights."""
+        source_requests = {
+            name: request
+            for name, request in self._refit_transform_requests_by_name.items()
+            if request.transform_location == "source"
+        }
+        target_formats = sorted(
+            {request.target_format for request in source_requests.values()}
+        )
+        if not target_formats:
+            yield from weights
+            return
+        if len(target_formats) > 1:
+            raise ValueError(
+                "Megatron refit export supports one source transform target format "
+                f"per transfer; got {target_formats}."
+            )
+
+        target_format = target_formats[0]
+        selected_names = set(source_requests)
+        if target_format == "mxfp8_e4m3_e8m0":
+            # Deferred because trainer workers need vLLM utilities only for MXFP8.
+            from nemo_rl.models.generation.vllm.quantization.fp8_train_utils import (
+                mxfp8_e4m3_quantize_for_refit,
+            )
+
+            for name, tensor in weights:
+                if name not in selected_names or tensor.dtype == torch.float8_e4m3fn:
+                    yield name, tensor
+                    continue
+                param_lp, param_scale = mxfp8_e4m3_quantize_for_refit(tensor)
+                yield name, param_lp
+                yield name + "_scale_from_checkpoint", param_scale
+            return
+
+        nvfp4_modes: dict[str, NVFP4RefitMode] = {
+            "nvfp4_w4a16": "w4a16",
+            "nvfp4_w4a4": "w4a4",
+        }
+        try:
+            mode = nvfp4_modes[target_format]
+        except KeyError as error:
+            raise ValueError(
+                f"Unsupported source-owned refit target format {target_format!r}."
+            ) from error
+
+        # ModelOpt is needed only when source-owned NVFP4 export is selected.
+        from nemo_rl.modelopt.models.generation.nvfp4_refit import (
+            iter_bf16_nvfp4_refit_weights,
+        )
+
+        yield from iter_bf16_nvfp4_refit_weights(
+            weights,
+            selected_names=selected_names,
+            mode=mode,
+            calibration=self._nvfp4_refit_calibration,
+        )
 
     def _collect_mtp_metrics(
         self,
@@ -2165,9 +2283,7 @@ class MegatronPolicyWorkerImpl(
             conversion_tasks=conversion_tasks,  # used for metadata caching
         )
 
-        # Yield the original parameters first.
-        for name, tensor in base_iter:
-            yield name, tensor
+        yield from self._iter_refit_transformed_params(base_iter)
 
         if self.draft_model is not None:
             from nemo_rl.models.megatron.draft import export_eagle_weights_to_hf

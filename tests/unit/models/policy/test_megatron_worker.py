@@ -248,12 +248,18 @@ def test_checkpoint_engine_prequant_handshake_exports_mxfp8_weights():
         _iter_params_with_optional_kv_scales = (
             MegatronPolicyWorkerImpl._iter_params_with_optional_kv_scales
         )
-        _maybe_prequantize_param = MegatronPolicyWorkerImpl._maybe_prequantize_param
+        _iter_refit_transformed_params = (
+            MegatronPolicyWorkerImpl._iter_refit_transformed_params
+        )
+        _load_nvfp4_refit_calibration = (
+            MegatronPolicyWorkerImpl._load_nvfp4_refit_calibration
+        )
 
     name = "model.layers.0.mlp.down_proj.weight"
     weight = torch.randn(64, 64, dtype=torch.bfloat16)
     worker = _PrequantCheckpointWorker()
-    worker._refit_prequant_names = set()
+    worker._refit_transform_requests_by_name = {}
+    worker._nvfp4_refit_calibration = None
     worker.model = object()
     worker.draft_model = None
     worker.refit_conversion_tasks = []
@@ -305,6 +311,157 @@ def test_checkpoint_engine_prequant_handshake_exports_mxfp8_weights():
     assert exported[scale_name].shape == (64, 2)
 
 
+def test_enable_refit_transforms_describes_nvfp4_without_quantizing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nemo_rl.modelopt.models.generation import nvfp4_refit
+    from nemo_rl.models.generation.vllm.quantization import fp8_train_utils
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    name = "model.layers.0.mlp.down_proj.weight"
+    source_info = {
+        name: ((32, 16), torch.bfloat16),
+        "model.norm.weight": ((16,), torch.bfloat16),
+    }
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._refit_transform_requests_by_name = {}
+    worker._nvfp4_refit_calibration = None
+    worker._last_refit_param_info_hf = source_info
+    worker._iter_params_with_optional_kv_scales = MagicMock(
+        side_effect=AssertionError("metadata negotiation must not enumerate weights")
+    )
+
+    def fail_quantizer(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("metadata negotiation must not quantize")
+
+    monkeypatch.setattr(
+        fp8_train_utils, "mxfp8_e4m3_quantize_for_refit", fail_quantizer
+    )
+    monkeypatch.setattr(nvfp4_refit, "serialize_bf16_nvfp4_group", fail_quantizer)
+
+    updated = worker.enable_refit_transforms(
+        [
+            RefitTransformRequest(
+                parameter_names=(name,),
+                source_format="bf16",
+                target_format="nvfp4_w4a16",
+                transform_location="source",
+            )
+        ]
+    )
+
+    base_name = name.removesuffix(".weight")
+    assert updated == {
+        name: ((32, 8), torch.uint8),
+        f"{base_name}.weight_scale": ((32, 1), torch.float8_e4m3fn),
+        f"{base_name}.weight_scale_2": ((), torch.float32),
+        "model.norm.weight": ((16,), torch.bfloat16),
+    }
+
+
+def test_iter_params_applies_source_owned_nvfp4_to_bridge_weights(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nemo_rl.modelopt.models.generation import nvfp4_refit
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    gate = "model.layers.0.mlp.experts.3.gate_proj.weight"
+    up = "model.layers.0.mlp.experts.3.up_proj.weight"
+    norm = "model.layers.0.input_layernorm.weight"
+    gate_tensor = torch.full((32, 16), 2.0, dtype=torch.bfloat16)
+    up_tensor = torch.full((32, 16), 3.0, dtype=torch.bfloat16)
+    norm_tensor = torch.ones(16, dtype=torch.bfloat16)
+
+    def serialize_group(
+        tensors: dict[str, torch.Tensor], *, mode: str, calibration: Any
+    ) -> list[tuple[str, torch.Tensor]]:
+        assert mode == "w4a16"
+        assert calibration is None
+        output: list[tuple[str, torch.Tensor]] = []
+        for name in (gate, up):
+            assert tensors[name] is (gate_tensor if name == gate else up_tensor)
+            base_name = name.removesuffix(".weight")
+            output.extend(
+                [
+                    (name, torch.zeros((32, 8), dtype=torch.uint8)),
+                    (
+                        f"{base_name}.weight_scale",
+                        torch.ones((32, 1), dtype=torch.float8_e4m3fn),
+                    ),
+                    (
+                        f"{base_name}.weight_scale_2",
+                        torch.tensor(0.5, dtype=torch.float32),
+                    ),
+                ]
+            )
+        return output
+
+    monkeypatch.setattr(nvfp4_refit, "serialize_bf16_nvfp4_group", serialize_group)
+    request = RefitTransformRequest(
+        parameter_names=(gate, up),
+        source_format="bf16",
+        target_format="nvfp4_w4a16",
+        transform_location="source",
+    )
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._refit_transform_requests_by_name = {gate: request, up: request}
+    worker._nvfp4_refit_calibration = None
+    worker.model = object()
+    worker.draft_model = None
+    worker.refit_conversion_tasks = []
+    worker.cfg = {}
+    worker.megatron_bridge = SimpleNamespace(
+        export_hf_weights=lambda *_args, **_kwargs: iter(
+            [(norm, norm_tensor), (gate, gate_tensor), (up, up_tensor)]
+        )
+    )
+
+    output = list(worker._iter_params_with_optional_kv_scales())
+
+    assert output[0][0] == norm
+    assert output[0][1] is norm_tensor
+    assert [name for name, _ in output[1:]] == [
+        gate,
+        gate.removesuffix(".weight") + ".weight_scale",
+        gate.removesuffix(".weight") + ".weight_scale_2",
+        up,
+        up.removesuffix(".weight") + ".weight_scale",
+        up.removesuffix(".weight") + ".weight_scale_2",
+    ]
+
+
+def test_iter_refit_transformed_params_preserves_destination_owned_bf16() -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    name = "model.layers.0.mlp.down_proj.weight"
+    tensor = torch.ones((32, 16), dtype=torch.bfloat16)
+    q_scale_name = "model.layers.0.self_attn.q_scale"
+    q_scale = torch.tensor(0.5, dtype=torch.float32)
+    request = RefitTransformRequest(
+        parameter_names=(name,),
+        source_format="bf16",
+        target_format="nvfp4_w4a16",
+        transform_location="destination",
+    )
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._refit_transform_requests_by_name = {name: request}
+    worker._nvfp4_refit_calibration = None
+
+    output = list(
+        worker._iter_refit_transformed_params([(name, tensor), (q_scale_name, q_scale)])
+    )
+
+    assert [output_name for output_name, _ in output] == [name, q_scale_name]
+    assert output[0][1] is tensor
+    assert output[1][1] is q_scale
+
+
 def test_enable_refit_transforms_passes_source_location_to_codec(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -332,7 +489,6 @@ def test_enable_refit_transforms_passes_source_location_to_codec(
             return ()
 
     worker = object.__new__(MegatronPolicyWorkerImpl)
-    worker._refit_prequant_names = set()
     worker._refit_transform_requests_by_name = {}
     worker._last_refit_param_info_hf = {name: (weight.shape, weight.dtype)}
     worker._iter_params_with_optional_kv_scales = lambda: iter([(name, weight)])
@@ -429,7 +585,8 @@ def test_enable_refit_transforms_validates_before_mutating_state(
     )
 
     worker = object.__new__(MegatronPolicyWorkerImpl)
-    worker._refit_prequant_names = {"existing.weight"}
+    existing_calibration = object()
+    worker._nvfp4_refit_calibration = existing_calibration
     existing_request = RefitTransformRequest(
         parameter_names=("existing.weight",),
         source_format="bf16",
@@ -446,31 +603,57 @@ def test_enable_refit_transforms_validates_before_mutating_state(
     with pytest.raises(ValueError, match=error):
         worker.enable_refit_transforms(requests)
 
-    assert worker._refit_prequant_names == {"existing.weight"}
     assert worker._refit_transform_requests_by_name == {
         "existing.weight": existing_request
     }
+    assert worker._nvfp4_refit_calibration is existing_calibration
 
 
-@pytest.mark.parametrize(
-    ("selected", "dtype"),
-    [(False, torch.bfloat16), (True, torch.float8_e4m3fn)],
-)
-def test_maybe_prequantize_param_passthrough(selected, dtype):
+def test_enable_refit_transforms_rejects_mixed_source_formats_before_state_change() -> (
+    None
+):
     from nemo_rl.models.policy.workers.megatron_policy_worker import (
         MegatronPolicyWorkerImpl,
     )
 
+    first = "model.layers.0.mlp.down_proj.weight"
+    second = "model.layers.1.mlp.down_proj.weight"
+    existing_request = RefitTransformRequest(
+        parameter_names=(first,),
+        source_format="bf16",
+        target_format="nvfp4_w4a16",
+        transform_location="destination",
+    )
     worker = object.__new__(MegatronPolicyWorkerImpl)
-    name = "model.weight"
-    worker._refit_prequant_names = {name} if selected else set()
-    tensor = torch.ones(2, 2, dtype=dtype)
+    worker._refit_transform_requests_by_name = {first: existing_request}
+    worker._nvfp4_refit_calibration = None
+    worker._last_refit_param_info_hf = {
+        first: ((32, 32), torch.bfloat16),
+        second: ((32, 32), torch.bfloat16),
+    }
 
-    result = list(worker._maybe_prequantize_param(name, tensor))
+    requests = [
+        RefitTransformRequest(
+            parameter_names=(first,),
+            source_format="bf16",
+            target_format="mxfp8_e4m3_e8m0",
+            transform_location="source",
+        ),
+        RefitTransformRequest(
+            parameter_names=(second,),
+            source_format="bf16",
+            target_format="nvfp4_w4a16",
+            transform_location="source",
+        ),
+    ]
+    with pytest.raises(
+        ValueError,
+        match="mxfp8_e4m3_e8m0.*nvfp4_w4a16|nvfp4_w4a16.*mxfp8_e4m3_e8m0",
+    ):
+        worker.enable_refit_transforms(requests)
 
-    assert len(result) == 1
-    assert result[0][0] == name
-    assert result[0][1] is tensor
+    assert worker._refit_transform_requests_by_name == {first: existing_request}
+    assert worker._nvfp4_refit_calibration is None
 
 
 def test_megatron_prepare_for_training_restores_optimizer():

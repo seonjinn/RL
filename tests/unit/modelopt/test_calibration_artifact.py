@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import sys
 import types
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 import torch
@@ -399,6 +401,123 @@ def test_round_trip_preserves_exact_hf_projection_names_and_metadata(
         calibration.input_amax["model.layers.0.mlp.up_proj.weight"],
         torch.tensor(24.0),
     )
+
+
+@pytest.mark.mcore
+def test_megatron_w4a4_export_matches_frozen_artifact_serialization(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    metadata: dict[str, str | int],
+) -> None:
+    from nemo_rl.modelopt.models.generation import nvfp4_refit
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+    from nemo_rl.weight_sync.refit_transforms import RefitTransformRequest
+
+    name = "model.layers.0.mlp.down_proj.weight"
+    weight = torch.arange(32 * 16).remainder(7).reshape(32, 16).to(torch.bfloat16)
+    artifact_path = tmp_path / "calibration.safetensors"
+    save_nvfp4_calibration(
+        artifact_path,
+        {name: torch.tensor(24.0)},
+        **metadata,
+    )
+
+    def fake_exporter(
+        name: str, weight: torch.Tensor, quant_meta: Any
+    ) -> Iterator[tuple[str, torch.Tensor]]:
+        base_name = name.removesuffix(".weight")
+        rows, columns = weight.shape
+        return iter(
+            [
+                (name, weight[:, ::2].to(torch.uint8).contiguous()),
+                (
+                    f"{base_name}.weight_scale",
+                    torch.full(
+                        (rows, columns // 16),
+                        float(quant_meta.weight_amax),
+                        dtype=torch.float8_e4m3fn,
+                    ),
+                ),
+                (
+                    f"{base_name}.weight_scale_2",
+                    quant_meta.weight_amax.detach().float().reshape(()),
+                ),
+                (
+                    f"{base_name}.input_scale",
+                    quant_meta.input_amax.detach().float().reshape(()),
+                ),
+            ]
+        )
+
+    monkeypatch.setattr(nvfp4_refit, "_load_quant_meta", lambda: types.SimpleNamespace)
+    monkeypatch.setattr(
+        nvfp4_refit,
+        "get_modelopt_quant_exporter",
+        lambda mode: ("modelopt_nvfp4", fake_exporter),
+    )
+    load_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    real_load = calibration_artifact.load_nvfp4_calibration
+
+    def recording_load(*args: Any, **kwargs: Any) -> NVFP4Calibration:
+        load_calls.append((args, kwargs))
+        return real_load(*args, **kwargs)
+
+    monkeypatch.setattr(calibration_artifact, "load_nvfp4_calibration", recording_load)
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.cfg = {
+        "model_name": metadata["model_id"],
+        "generation": {
+            "backend": "vllm",
+            "real_quant_calibration_path": str(artifact_path),
+            "quant_cfg": metadata["quant_cfg"],
+            "vllm_kwargs": {"revision": metadata["model_revision"]},
+        },
+    }
+    worker._refit_transform_requests_by_name = {}
+    worker._nvfp4_refit_calibration = None
+    worker._last_refit_param_info_hf = {name: (weight.shape, weight.dtype)}
+    request = RefitTransformRequest(
+        parameter_names=(name,),
+        source_format="bf16",
+        target_format="nvfp4_w4a4",
+        transform_location="source",
+    )
+
+    updated = worker.enable_refit_transforms([request])
+    actual = list(worker._iter_refit_transformed_params([(name, weight)]))
+    expected_calibration = load_nvfp4_calibration(
+        artifact_path,
+        model_id=str(metadata["model_id"]),
+        model_revision=str(metadata["model_revision"]),
+        quant_cfg=str(metadata["quant_cfg"]),
+        expected_projection_names={name},
+    )
+    expected = nvfp4_refit.serialize_bf16_nvfp4_group(
+        {name: weight},
+        mode="w4a4",
+        calibration=expected_calibration,
+    )
+
+    base_name = name.removesuffix(".weight")
+    assert updated == {
+        name: ((32, 8), torch.uint8),
+        f"{base_name}.weight_scale": ((32, 1), torch.float8_e4m3fn),
+        f"{base_name}.weight_scale_2": ((), torch.float32),
+        f"{base_name}.input_scale": ((), torch.float32),
+    }
+    assert len(load_calls) == 1
+    assert load_calls[0][1]["model_id"] == metadata["model_id"]
+    assert load_calls[0][1]["model_revision"] == metadata["model_revision"]
+    assert load_calls[0][1]["quant_cfg"] == metadata["quant_cfg"]
+    assert load_calls[0][1]["expected_projection_names"] == {name}
+    assert [output_name for output_name, _ in actual] == [
+        output_name for output_name, _ in expected
+    ]
+    for (_, actual_tensor), (_, expected_tensor) in zip(actual, expected, strict=True):
+        assert torch.equal(actual_tensor, expected_tensor)
 
 
 def test_load_rejects_missing_required_metadata(
