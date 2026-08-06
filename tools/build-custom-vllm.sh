@@ -34,6 +34,15 @@ else
   VLLM_PRECOMPILED_WHEEL_LOCATION="https://github.com/vllm-project/vllm/releases/download/v0.16.0/vllm-0.16.0-cp38-abi3-manylinux_2_31_x86_64.whl"
 fi
 export VLLM_PRECOMPILED_WHEEL_LOCATION
+VLLM_BUILD_STATE_MARKER=nemo-rl-build-state.sha256
+
+sha256_stream() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+  else
+    shasum -a 256 | awk '{print $1}'
+  fi
+}
 
 BUILD_DIR=$(realpath "$SCRIPT_DIR/../3rdparty/vllm")
 if [[ -e "$BUILD_DIR" ]]; then
@@ -109,6 +118,14 @@ done < <(
     git diff --cached --name-only --no-ext-diff --
   } | sort -u
 )
+
+VLLM_DEPENDENCY_STATE_SHA256=$(
+  git diff --binary --full-index --no-ext-diff \
+    --no-renames --diff-algorithm=myers --src-prefix=a/ --dst-prefix=b/ \
+    HEAD -- requirements/ | sha256_stream
+)
+printf '%s\n' "$VLLM_DEPENDENCY_STATE_SHA256" > \
+  "$BUILD_DIR/$VLLM_BUILD_STATE_MARKER"
 
 echo "Updating repo pyproject.toml to point vLLM to local clone..."
 

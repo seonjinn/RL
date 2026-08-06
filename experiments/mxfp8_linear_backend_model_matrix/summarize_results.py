@@ -68,7 +68,7 @@ class RunManifest(TypedDict):
     vllm_commit: str
     vllm_source_sha256: str
     vllm_dependency_state_sha256: str
-    vllm_tracked_files_clean: bool
+    vllm_source_files_clean: bool
     container: str
     recipe: str
     recipe_sha256: str
@@ -212,7 +212,7 @@ def _load_run_manifest(model: str, run_root: Path, backend: str) -> RunManifest:
                 f"Invalid run manifest field for {model}/{backend}: {field}"
             )
     for field in (
-        "vllm_tracked_files_clean",
+        "vllm_source_files_clean",
         "cuda_graph",
         "is_mx",
         "activation_checkpointing",
@@ -223,9 +223,9 @@ def _load_run_manifest(model: str, run_root: Path, backend: str) -> RunManifest:
             raise ValueError(
                 f"Invalid run manifest field for {model}/{backend}: {field}"
             )
-    if manifest["vllm_tracked_files_clean"] is not True:
+    if manifest["vllm_source_files_clean"] is not True:
         raise ValueError(
-            f"Custom vLLM clean attestation is false for {model}/{backend}"
+            f"Custom vLLM source-files-clean attestation is false for {model}/{backend}"
         )
     quantization_scope = manifest["quantization_ignored_layer_kws"]
     if not isinstance(quantization_scope, list) or not all(

@@ -36,7 +36,12 @@ ACTION=submit ./experiments/qwen30b_mxfp8_linear_backends/prepare_custom_vllm_pt
 Preparation may change only root `pyproject.toml`, root `uv.lock`, and
 `3rdparty/vllm`. It rejects any other tracked or untracked NeMo-RL source
 change before and after preparation. Replaced vLLM checkouts are moved under
-the external preparation output root, not elsewhere in the repository.
+the external preparation output root, not elsewhere in the repository. The
+builder writes `nemo-rl-build-state.sha256` after applying the compatibility
+requirements rewrites. Preparation reuses a checkout only when its commit,
+environment pins, import smoke test, and marker all match the current
+requirements diff; a missing or stale marker forces the checkout to be moved
+aside and rebuilt.
 
 Then validate scheduling and submit a short smoke matrix:
 
@@ -61,10 +66,11 @@ the vLLM source and dependency states at submission, then rechecks them with
 the exact NeMo-RL and vLLM commits when the job starts. The source SHA256
 identifies pristine `HEAD`; a separate dependency SHA256 identifies the
 intentional tracked `requirements/*.txt` compatibility rewrites preserved by
-the build. Other staged or unstaged tracked vLLM changes are rejected, while
-untracked build artifacts may remain. Each backend writes the complete
-validated configuration, including log-probability batching, activation
-checkpointing, deferred FP32 logits, and sequence packing, to
+the build. The manifest's `vllm_source_files_clean` assertion covers tracked
+source outside that permitted requirements metadata. Other staged or unstaged
+tracked vLLM changes are rejected, while untracked build artifacts may remain.
+Each backend writes the complete validated configuration, including
+log-probability batching, activation checkpointing, deferred FP32 logits, and sequence packing, to
 `<run-root>/<backend>/run_manifest.json`.
 
 ## 32K Output-Length Study

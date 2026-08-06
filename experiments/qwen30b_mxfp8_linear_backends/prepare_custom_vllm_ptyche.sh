@@ -46,9 +46,11 @@ if [[ -d 3rdparty/vllm/.git ]]; then
   elif ! mxfp8_assert_vllm_tracked_state 3rdparty/vllm; then
     echo "Custom vLLM has disallowed tracked changes" >&2
     exit 1
-  elif [[ -x 3rdparty/vllm/.venv/bin/python ]] && \
-      3rdparty/vllm/.venv/bin/python -c 'import vllm'; then
+  elif mxfp8_vllm_reuse_state_valid \
+      3rdparty/vllm '${VLLM_GIT_REF}' '${VLLM_WHEEL}'; then
     existing_vllm_valid=true
+  else
+    echo "Existing custom vLLM checkout is not reusable"
   fi
 fi
 if [[ "\${existing_vllm_valid}" == true ]]; then
@@ -85,6 +87,7 @@ print(
 )
 PY
 mxfp8_assert_vllm_tracked_state 3rdparty/vllm
+mxfp8_vllm_build_state_matches 3rdparty/vllm
 assert_preparation_scope_clean
 EOF
 )

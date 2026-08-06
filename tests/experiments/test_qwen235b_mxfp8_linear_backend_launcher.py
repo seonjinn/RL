@@ -276,7 +276,7 @@ def test_dry_run_captures_runtime_provenance_and_manifest(tmp_path: Path) -> Non
     assert '"model": "Qwen/Qwen3-235B-A22B"' in output
     assert '"dependency_state_sha256"' in output
     assert '"vllm_source_sha256"' in output
-    assert '"vllm_tracked_files_clean": True' in output
+    assert '"vllm_source_files_clean": True' in output
     assert '"recipe_sha256"' in output
     assert '"precision": "fp8"' in output
     assert '"is_mx": True' in output

@@ -66,3 +66,50 @@ mxfp8_vllm_dependency_state_sha256() {
         --no-renames --diff-algorithm=myers --src-prefix=a/ --dst-prefix=b/ \
         HEAD -- requirements/ | mxfp8_sha256_stream
 }
+
+mxfp8_vllm_build_state_matches() {
+    local vllm_root=$1
+    local marker_path=${vllm_root}/nemo-rl-build-state.sha256
+    local recorded_sha256
+    local current_sha256
+    [[ -f "${marker_path}" ]] || {
+        echo "Missing vLLM build-state marker: ${marker_path}" >&2
+        return 1
+    }
+    recorded_sha256=$(cat "${marker_path}")
+    current_sha256=$(mxfp8_vllm_dependency_state_sha256 "${vllm_root}")
+    [[ "${recorded_sha256}" == "${current_sha256}" ]] || {
+        echo "Stale vLLM build-state marker: ${marker_path}" >&2
+        return 1
+    }
+}
+
+mxfp8_vllm_reuse_state_valid() {
+    local vllm_root=$1
+    local expected_commit=$2
+    local expected_wheel=$3
+    local actual_commit
+    [[ -d "${vllm_root}/.git" ]] || return 1
+    actual_commit=$(git -C "${vllm_root}" rev-parse HEAD)
+    [[ "${actual_commit}" == "${expected_commit}" ]] || return 1
+    mxfp8_assert_vllm_tracked_state "${vllm_root}" || return 1
+    mxfp8_vllm_build_state_matches "${vllm_root}" || return 1
+    [[ -f "${vllm_root}/nemo-rl.env" ]] || {
+        echo "Missing custom vLLM environment: ${vllm_root}/nemo-rl.env" >&2
+        return 1
+    }
+    (
+        unset VLLM_GIT_REF VLLM_PRECOMPILED_WHEEL_LOCATION
+        source "${vllm_root}/nemo-rl.env"
+        [[ "${VLLM_GIT_REF:-}" == "${expected_commit}" ]]
+        [[ "${VLLM_PRECOMPILED_WHEEL_LOCATION:-}" == "${expected_wheel}" ]]
+    ) || {
+        echo "Stale custom vLLM environment: ${vllm_root}/nemo-rl.env" >&2
+        return 1
+    }
+    [[ -x "${vllm_root}/.venv/bin/python" ]] &&
+        "${vllm_root}/.venv/bin/python" -c 'import vllm' || {
+        echo "Custom vLLM import check failed: ${vllm_root}" >&2
+        return 1
+    }
+}

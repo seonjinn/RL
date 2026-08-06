@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -13,6 +14,10 @@ LAUNCHER = (
 MATRIX_LAUNCHER = LAUNCHER.with_name("submit_matrix_ptyche.sh")
 PREPARE_SCRIPT = LAUNCHER.with_name("prepare_custom_vllm_ptyche.sh")
 BUILD_CUSTOM_VLLM_SCRIPT = REPO_ROOT / "tools" / "build-custom-vllm.sh"
+PROVENANCE_HELPER = (
+    REPO_ROOT / "experiments/mxfp8_linear_backend_model_matrix/provenance.sh"
+)
+VLLM_BUILD_STATE_MARKER = "nemo-rl-build-state.sha256"
 
 
 def _dry_run(
@@ -185,7 +190,7 @@ def test_dry_run_captures_runtime_provenance_and_manifest(tmp_path: Path) -> Non
     assert '"vllm_commit"' in output
     assert '"vllm_source_sha256"' in output
     assert '"vllm_dependency_state_sha256"' in output
-    assert '"vllm_tracked_files_clean": True' in output
+    assert '"vllm_source_files_clean": True' in output
     assert '"container"' in output
     assert '"recipe"' in output
     assert '"recipe_sha256"' in output
@@ -252,6 +257,7 @@ def test_model_matrix_defaults_to_two_isolated_backend_roots(tmp_path: Path) -> 
 def test_custom_vllm_build_is_recoverable() -> None:
     prepare_text = PREPARE_SCRIPT.read_text()
     build_text = BUILD_CUSTOM_VLLM_SCRIPT.read_text()
+    provenance_text = PROVENANCE_HELPER.read_text()
     pyproject_text = (REPO_ROOT / "pyproject.toml").read_text()
 
     assert "3rdparty/vllm/nemo-rl.env" in prepare_text
@@ -263,15 +269,17 @@ def test_custom_vllm_build_is_recoverable() -> None:
     assert '":(exclude)uv.lock"' in prepare_text
     assert '":(exclude)3rdparty/vllm"' in prepare_text
     assert "Preparation found disallowed NeMo-RL source changes" in prepare_text
-    assert "3rdparty/vllm/.venv/bin/python -c 'import vllm'" in prepare_text
+    assert "\"${vllm_root}/.venv/bin/python\" -c 'import vllm'" in provenance_text
     assert "3rdparty/vllm/.venv/bin/python - <<'PY'" in prepare_text
     assert "uv run --frozen python - <<'PY'" not in prepare_text
     assert "3rdparty/vllm/.venv uv lock" in prepare_text
     assert "SETUPTOOLS_SCM_PRETEND_VERSION=0.25.1" in prepare_text
     assert "setuptools_rust" in build_text
     assert "existing_vllm_valid=false" in prepare_text
+    assert "mxfp8_vllm_reuse_state_valid" in prepare_text
+    assert VLLM_BUILD_STATE_MARKER in build_text
     assert "Replacing custom vLLM commit" in prepare_text
-    assert "3rdparty/vllm/.venv/bin/python -c 'import vllm'" in prepare_text
+    assert "mxfp8_vllm_build_state_matches 3rdparty/vllm" in prepare_text
     assert 'SBATCH_ARGS+=(--qos="${QOS}")' in prepare_text
     assert "TORCH_REQUIREMENT=$(sed -nE" in build_text
     assert "VLLM_TORCH_BACKEND:-cu130" in build_text
@@ -384,6 +392,132 @@ def test_custom_vllm_build_preserves_compatibility_requirements_for_lock(
         text=True,
     ).splitlines()
     assert changed_paths == ["requirements/cuda.txt"]
+    dependency_diff = subprocess.check_output(
+        [
+            "git",
+            "-C",
+            str(repo / "3rdparty/vllm"),
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-ext-diff",
+            "--no-renames",
+            "--diff-algorithm=myers",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "HEAD",
+            "--",
+            "requirements/",
+        ]
+    )
+    expected_fingerprint = hashlib.sha256(dependency_diff).hexdigest()
+    marker = repo / "3rdparty/vllm" / VLLM_BUILD_STATE_MARKER
+    assert marker.read_text() == f"{expected_fingerprint}\n"
+
+
+def _reuse_gate_result(
+    tmp_path: Path, marker_state: str
+) -> tuple[subprocess.CompletedProcess[str], Path, str]:
+    custom_vllm = tmp_path / "vllm"
+    subprocess.run(["git", "init", "-q", str(custom_vllm)], check=True)
+    requirements = custom_vllm / "requirements"
+    requirements.mkdir()
+    requirements_path = requirements / "cuda.txt"
+    requirements_path.write_text("torch==2.11.0\nxformers==0.0.30\n")
+    subprocess.run(["git", "-C", str(custom_vllm), "add", "."], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(custom_vllm),
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "fixture",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    commit = subprocess.check_output(
+        ["git", "-C", str(custom_vllm), "rev-parse", "HEAD"], text=True
+    ).strip()
+    requirements_path.write_text("torch==2.11.0\nxformers==0.0.32.post1\n")
+    dependency_diff = subprocess.check_output(
+        [
+            "git",
+            "-C",
+            str(custom_vllm),
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-ext-diff",
+            "--no-renames",
+            "--diff-algorithm=myers",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "HEAD",
+            "--",
+            "requirements/",
+        ]
+    )
+    expected_fingerprint = hashlib.sha256(dependency_diff).hexdigest()
+    if marker_state == "valid":
+        (custom_vllm / VLLM_BUILD_STATE_MARKER).write_text(f"{expected_fingerprint}\n")
+    elif marker_state == "stale":
+        (custom_vllm / VLLM_BUILD_STATE_MARKER).write_text(f"{'0' * 64}\n")
+
+    venv_python = custom_vllm / ".venv/bin/python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.write_text("#!/usr/bin/env bash\nexit 0\n")
+    venv_python.chmod(0o755)
+    wheel = "https://example.invalid/vllm.whl"
+    (custom_vllm / "nemo-rl.env").write_text(
+        f"export VLLM_GIT_REF={commit}\n"
+        f"export VLLM_PRECOMPILED_WHEEL_LOCATION={wheel}\n"
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; mxfp8_vllm_reuse_state_valid "$2" "$3" "$4"',
+            "bash",
+            str(PROVENANCE_HELPER),
+            str(custom_vllm),
+            commit,
+            wheel,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return result, requirements_path, expected_fingerprint
+
+
+def test_prepare_reuse_gate_rejects_missing_and_stale_build_state(
+    tmp_path: Path,
+) -> None:
+    missing, _, _ = _reuse_gate_result(tmp_path / "missing", "missing")
+    stale, _, _ = _reuse_gate_result(tmp_path / "stale", "stale")
+
+    assert missing.returncode == 1
+    assert "Missing vLLM build-state marker" in missing.stderr
+    assert stale.returncode == 1
+    assert "Stale vLLM build-state marker" in stale.stderr
+
+
+def test_prepare_reuse_gate_accepts_matching_build_state(tmp_path: Path) -> None:
+    result, requirements_path, expected_fingerprint = _reuse_gate_result(
+        tmp_path, "valid"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert requirements_path.read_text().endswith("xformers==0.0.32.post1\n")
+    assert (requirements_path.parent.parent / VLLM_BUILD_STATE_MARKER).read_text() == (
+        f"{expected_fingerprint}\n"
+    )
 
 
 def test_prepare_emits_valid_scoped_job_command(tmp_path: Path) -> None:

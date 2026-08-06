@@ -34,7 +34,7 @@ MANIFEST_FIELDS = {
     "vllm_commit",
     "vllm_source_sha256",
     "vllm_dependency_state_sha256",
-    "vllm_tracked_files_clean",
+    "vllm_source_files_clean",
     "container",
     "recipe",
     "recipe_sha256",
@@ -135,7 +135,7 @@ def _write_driver_log(
         "vllm_commit": VLLM_COMMIT,
         "vllm_source_sha256": "4" * 64,
         "vllm_dependency_state_sha256": "6" * 64,
-        "vllm_tracked_files_clean": True,
+        "vllm_source_files_clean": True,
         "container": "/containers/nemo-rl.sqsh",
         "recipe": f"recipes/{run_root.name}.yaml",
         "recipe_sha256": "5" * 64,
@@ -256,20 +256,22 @@ def test_write_results_rejects_unknown_manifest_fields(tmp_path: Path) -> None:
         summary.write_results(run_roots, tmp_path / "summary")
 
 
-def test_write_results_requires_clean_custom_vllm_attestation(tmp_path: Path) -> None:
+def test_write_results_requires_clean_custom_vllm_source_attestation(
+    tmp_path: Path,
+) -> None:
     summary = _load_summary_module()
     run_roots = _write_complete_matrix(tmp_path)
     manifest_path = (
         run_roots["nemotron3-super"] / "flashinfer_cutedsl" / "run_manifest.json"
     )
     manifest = json.loads(manifest_path.read_text())
-    manifest["vllm_tracked_files_clean"] = False
+    manifest["vllm_source_files_clean"] = False
     manifest_path.write_text(json.dumps(manifest) + "\n")
 
     with pytest.raises(
         ValueError,
         match=(
-            "Custom vLLM clean attestation is false for "
+            "Custom vLLM source-files-clean attestation is false for "
             "nemotron3-super/flashinfer_cutedsl"
         ),
     ):

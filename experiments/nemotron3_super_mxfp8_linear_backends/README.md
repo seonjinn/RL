@@ -24,9 +24,11 @@ unless the runtime `vllm.__file__` resolves under that custom checkout.
 Tracked and staged vLLM changes are rejected at submission and job start unless
 they are the intentional `requirements/*.txt` compatibility rewrites. A
 dependency-state SHA256 records those rewrites separately from the pristine
-`HEAD` source SHA256; untracked build artifacts may remain. Submission rejects
-all NeMo-RL changes except preparation-owned changes to root `pyproject.toml`,
-root `uv.lock`, and `3rdparty/vllm`. The launcher also records explicit
+`HEAD` source SHA256. The `vllm_source_files_clean` manifest assertion covers
+tracked source outside that permitted requirements metadata; untracked build
+artifacts may remain. Submission rejects all NeMo-RL changes except
+preparation-owned changes to root `pyproject.toml`, root `uv.lock`, and
+`3rdparty/vllm`. The launcher also records explicit
 log-probability batching, activation checkpointing, deferred FP32 logits, and
 sequence packing and rechecks all provenance when the job starts.
 

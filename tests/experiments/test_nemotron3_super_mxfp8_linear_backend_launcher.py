@@ -257,7 +257,7 @@ def test_dry_run_validates_custom_vllm_runtime_provenance(tmp_path: Path) -> Non
     assert '"dependency_state_sha256"' in output
     assert '"vllm_source_sha256"' in output
     assert '"vllm_dependency_state_sha256"' in output
-    assert '"vllm_tracked_files_clean": True' in output
+    assert '"vllm_source_files_clean": True' in output
     assert '"recipe_sha256"' in output
     assert '"precision": "fp8"' in output
     assert '"is_mx": True' in output
@@ -477,7 +477,7 @@ def test_submit_accepts_only_preparation_dependency_mutations(
     assert expected_vllm_source_sha in result.stdout
     assert "runtime_dependency_state_sha256=" in result.stdout
     assert "runtime_vllm_source_sha256=" in result.stdout
-    assert '"vllm_tracked_files_clean": True' in result.stdout
+    assert '"vllm_source_files_clean": True' in result.stdout
 
 
 @pytest.mark.parametrize("launcher", ALL_LAUNCHERS)

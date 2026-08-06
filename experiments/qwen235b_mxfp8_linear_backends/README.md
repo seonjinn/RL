@@ -20,7 +20,8 @@ runtime `vllm.__file__` outside the custom checkout. Tracked and staged vLLM
 changes are rejected at submission and job start unless they are the
 intentional `requirements/*.txt` compatibility rewrites. Those rewrites have
 a separate dependency-state SHA256 from the pristine `HEAD` source SHA256.
-Untracked build artifacts may remain.
+The `vllm_source_files_clean` manifest assertion covers tracked source outside
+that permitted requirements metadata. Untracked build artifacts may remain.
 
 Run the two-step smoke validation before measurement:
 

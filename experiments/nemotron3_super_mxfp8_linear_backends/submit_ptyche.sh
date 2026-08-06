@@ -223,7 +223,7 @@ manifest = {
     "vllm_commit": os.environ["MXFP8_VLLM_COMMIT"],
     "vllm_source_sha256": os.environ["MXFP8_VLLM_SOURCE_SHA256"],
     "vllm_dependency_state_sha256": os.environ["MXFP8_VLLM_DEPENDENCY_STATE_SHA256"],
-    "vllm_tracked_files_clean": True,
+    "vllm_source_files_clean": True,
     "container": "${CONTAINER}",
     "recipe": "${CONFIG}",
     "recipe_sha256": "${SUBMIT_RECIPE_SHA256}",
