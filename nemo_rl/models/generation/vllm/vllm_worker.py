@@ -50,6 +50,7 @@ from nemo_rl.models.generation.vllm.utils import (
     pad_and_align_routed_expert_indices,
 )
 from nemo_rl.models.generation.vllm.worker_utils import (
+    configure_refit_runtime,
     resolve_data_parallel_local_rank,
     resolve_distributed_executor_backend,
 )
@@ -360,6 +361,7 @@ class BaseVllmGenerationWorker:
                 "please run at least once with the environment variable NRL_FORCE_REBUILD_VENVS=true set to force the rebuild of the environment."
             )
         vllm_kwargs: dict[str, Any] = copy.deepcopy(self.cfg.get("vllm_kwargs", {}))
+        configure_refit_runtime(self.cfg["vllm_cfg"], vllm_kwargs)
         checkpoint_engine_config = checkpoint_engine_refit_config(self.cfg)
         if checkpoint_engine_config is not None:
             from nemo_rl.models.generation.vllm.checkpoint_engine import (

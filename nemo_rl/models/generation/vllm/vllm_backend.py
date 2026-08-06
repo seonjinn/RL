@@ -23,6 +23,10 @@ from typing import Any, Literal, Optional
 import torch
 import zmq
 
+from nemo_rl.models.generation.vllm.worker_utils import (
+    refit_cache_loader_routes_enabled,
+)
+
 from nemo_rl.models.generation.vllm.checkpoint_engine import (
     VllmCheckpointEngineMixin,
     preinit_nixl_from_vllm_config,
@@ -220,18 +224,21 @@ def _record_loader_calls(model, cache: _RefitLoaderCache, weights: list) -> set[
     return loaded if loaded is not None else set()
 
 
-def load_weights_maybe_cached(model, weights: list) -> set[str]:
-    """model.load_weights with optional loader replay caching.
+def load_weights_maybe_cached(
+    model: Any,
+    weights: list[tuple[str, torch.Tensor]],
+    *,
+    cache_loader_routes: bool,
+) -> set[str]:
+    """Load weights, optionally replaying cached loader routes.
 
-    Opt-in via NRL_REFIT_CACHED_LOADERS=1 since model load_weights
-    implementations vary; the default is a plain model.load_weights call.
     Cached parameter identities are re-validated against named_parameters()
     on every call, so a process_weights_after_loading pass that replaces
     parameter objects drops the cache instead of loading into orphans.
     Returns the set of loaded weight names, mirroring model.load_weights.
     """
-    if os.getenv("NRL_REFIT_CACHED_LOADERS") != "1":
-        return model.load_weights(weights)
+    if not cache_loader_routes:
+        return model.load_weights(weights=weights)
 
     cache = getattr(model, "_nrl_refit_loader_cache", None)
     if cache is None:
@@ -251,7 +258,7 @@ def load_weights_maybe_cached(model, weights: list) -> set[str]:
 
     if replay and not _cached_params_still_valid(model, cache):
         cache.reset()
-        return model.load_weights(weights)
+        return model.load_weights(weights=weights)
 
     loaded: set[str] = set()
     for name, weight in replay:
@@ -263,7 +270,7 @@ def load_weights_maybe_cached(model, weights: list) -> set[str]:
     if record:
         loaded |= _record_loader_calls(model, cache, record)
     if fallback:
-        fallback_loaded = model.load_weights(fallback)
+        fallback_loaded = model.load_weights(weights=fallback)
         if fallback_loaded is not None:
             loaded |= fallback_loaded
     return loaded
@@ -328,7 +335,13 @@ class VllmInternalWorkerExtension:
     def _load_full_hf_weights(
         self, policy_weights: list[tuple[str, torch.Tensor]]
     ) -> None:
-        load_weights_maybe_cached(self.model_runner.model, policy_weights)
+        load_weights_maybe_cached(
+            self.model_runner.model,
+            policy_weights,
+            cache_loader_routes=refit_cache_loader_routes_enabled(
+                self.model_runner.vllm_config
+            ),
+        )
 
     def _load_hf_weights(self, policy_weights: list[tuple[str, torch.Tensor]]) -> None:
         from nemo_rl.models.generation.vllm.quantization import fp8

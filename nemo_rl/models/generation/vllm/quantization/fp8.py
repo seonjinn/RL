@@ -494,8 +494,15 @@ def load_weights(weights, model_runner):
             weights_quantized.append([k + "_scale_inv", param_scale])
     # Finally load the weights into vllm
     from nemo_rl.models.generation.vllm.vllm_backend import load_weights_maybe_cached
+    from nemo_rl.models.generation.vllm.worker_utils import (
+        refit_cache_loader_routes_enabled,
+    )
 
-    load_weights_maybe_cached(model, weights_quantized)
+    load_weights_maybe_cached(
+        model,
+        weights_quantized,
+        cache_loader_routes=refit_cache_loader_routes_enabled(model_runner.vllm_config),
+    )
 
 
 def cast_tensor_to_fp8_blockwise(

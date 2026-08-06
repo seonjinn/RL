@@ -36,8 +36,12 @@ class VllmSpecificArgs(TypedDict):
     precision: NotRequired[str]
     # Use ModelOpt MXFP8 quantization when precision is fp8.
     is_mx: NotRequired[bool]
+    # Quantize eligible weights on the trainer before MXFP8 refit transfer.
+    refit_prequantize: NotRequired[bool]
     # Batch MXFP8 MoE layout transforms across experts during refit.
     refit_batched_moe_shuffle: NotRequired[bool]
+    # Cache and replay stable vLLM weight-loader routes across refits.
+    refit_cache_loader_routes: NotRequired[bool]
     kv_cache_dtype: Literal["auto", "fp8", "fp8_e4m3"]
     enforce_eager: NotRequired[bool]
     enable_return_routed_experts: NotRequired[bool]
@@ -158,8 +162,32 @@ class VllmConfig(GenerationConfig):
     real_quant_ignore: NotRequired[list[str]]
 
 
+def validate_vllm_quantization_config(config: VllmConfig) -> None:
+    """Reject quantization options that would otherwise be silently ignored."""
+    vllm_cfg = config.get("vllm_cfg")
+    if vllm_cfg is None:
+        return
+    refit_prequantize = vllm_cfg.get("refit_prequantize")
+    if refit_prequantize is not None and not isinstance(refit_prequantize, bool):
+        raise ValueError(
+            "policy.generation.vllm_cfg.refit_prequantize must be a boolean."
+        )
+    if refit_prequantize and not (
+        vllm_cfg.get("precision") == "fp8" and vllm_cfg.get("is_mx") is True
+    ):
+        raise ValueError(
+            "policy.generation.vllm_cfg.refit_prequantize requires "
+            "precision='fp8' and is_mx=true."
+        )
+    for field in ("refit_batched_moe_shuffle", "refit_cache_loader_routes"):
+        value = vllm_cfg.get(field)
+        if value is not None and not isinstance(value, bool):
+            raise ValueError(f"policy.generation.vllm_cfg.{field} must be a boolean.")
+
+
 def normalize_vllm_refit_config(config: VllmConfig) -> VllmRefitConfig | None:
     """Validate the selected refit transport and resolve its scoped defaults."""
+    validate_vllm_quantization_config(config)
     if cast(dict[str, Any], config).get("checkpoint_engine") is not None:
         raise ValueError(
             "policy.generation.checkpoint_engine was replaced by "
