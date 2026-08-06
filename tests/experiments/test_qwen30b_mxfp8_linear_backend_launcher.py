@@ -29,6 +29,7 @@ def _dry_run(
         "CUSTOM_VLLM_ROOT": str(custom_vllm),
         "EXPERIMENT_ROOT": str(tmp_path / backend),
         "QOS": "interactive",
+        "RUN_ID": "test-run",
         "WANDB_MODE": "disabled",
         "WORK_ROOT": str(tmp_path),
     }
@@ -79,6 +80,7 @@ def test_dry_run_changes_only_backend(tmp_path: Path) -> None:
         assert f"uv venv {tmp_path}" in output
         assert "uv pip install --python" in output
         assert "setuptools_rust" in output
+        assert f"/tmp/nemo-rl-qwen30b-{backend}-test-run-workers" in output
 
     adaptive_output = outputs["flashinfer_trtllm_adaptive"]
     assert "VLLM_MXFP8_DENSE_TRTLLM_ALLOW_CUTEDSL_FALLBACK=1" in adaptive_output

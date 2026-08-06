@@ -98,7 +98,7 @@ EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${WORK_ROOT}/experiments/qwen30b-mxfp8-linear
 CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/.cache/qwen30b-mxfp8-linear-backends/${BACKEND}}
 HF_HOME=${HF_HOME:-${WORK_ROOT}/.cache/huggingface}
 DRIVER_VENV=${DRIVER_VENV:-${CACHE_ROOT}/driver-venv}
-WORKER_VENV=${WORKER_VENV:-/tmp/nemo-rl-qwen30b-${BACKEND}-workers}
+WORKER_VENV=${WORKER_VENV:-/tmp/nemo-rl-qwen30b-${BACKEND}-${RUN_ID}-workers}
 WANDB_MODE=${WANDB_MODE:-disabled}
 
 if [[ "${ACTION}" != "dry-run" ]]; then
