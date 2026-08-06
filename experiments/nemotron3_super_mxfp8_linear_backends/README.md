@@ -12,12 +12,15 @@ projections use the selected backend. It relies on the recipe's default
 colocated IPC refit path and does not enable `nccl_reshard`.
 
 Prepare the custom vLLM checkout at commit
-`a76062edee3a3ac23d47a93c7ce466f06a19111f` before using `ACTION=test-only` or
-`ACTION=submit`:
+`a76062edee3a3ac23d47a93c7ce466f06a19111f` with the existing Qwen preparation
+job before using `ACTION=test-only` or `ACTION=submit`:
 
 ```bash
-git -C ../../3rdparty/vllm rev-parse HEAD
+ACTION=submit ./experiments/qwen30b_mxfp8_linear_backends/prepare_custom_vllm_ptyche.sh
 ```
+
+The launcher sources `3rdparty/vllm/nemo-rl.env` and fails before GRPO starts
+unless the runtime `vllm.__file__` resolves under that custom checkout.
 
 Run a two-step scheduler and CUDA Graph/refit smoke validation first:
 

@@ -52,6 +52,10 @@ if [[ "${ACTION}" != "dry-run" ]]; then
         echo "Custom vLLM is not prepared at ${CUSTOM_VLLM_ROOT}" >&2
         exit 1
     }
+    [[ -f "${CUSTOM_VLLM_ROOT}/nemo-rl.env" ]] || {
+        echo "Custom vLLM environment is not prepared at ${CUSTOM_VLLM_ROOT}" >&2
+        exit 1
+    }
     actual_vllm_commit=$(git -C "${CUSTOM_VLLM_ROOT}" rev-parse HEAD)
     git -C "${REPO_DIR}" merge-base --is-ancestor \
         "${EXPECTED_NEMO_RL_BASE_COMMIT}" HEAD || {
@@ -82,14 +86,29 @@ export TORCH_CUDA_ARCH_LIST=10.0
 export UV_PROJECT_ENVIRONMENT=${DRIVER_VENV}
 export UV_LOCK_TIMEOUT=7200
 export WANDB_MODE=${WANDB_MODE}
-export VLLM_PRECOMPILED_WHEEL_LOCATION=https://github.com/vllm-project/vllm/releases/download/v0.25.1/vllm-0.25.1-cp38-abi3-manylinux_2_28_aarch64.whl
+source ${CUSTOM_VLLM_ROOT}/nemo-rl.env
 printf 'NEMO_RL_COMMIT=%s\n' "\$(git rev-parse HEAD)"
 printf 'VLLM_COMMIT=%s\n' "\$(git -C ${CUSTOM_VLLM_ROOT} rev-parse HEAD)"
 if [[ ! -x ${DRIVER_VENV}/bin/python ]]; then
   uv venv ${DRIVER_VENV}
 fi
 uv pip install --python ${DRIVER_VENV}/bin/python setuptools_rust
-uv run --frozen --extra vllm python -c 'import flashinfer, vllm; print("vLLM=" + vllm.__version__); print("FlashInfer=" + flashinfer.__version__)'
+uv run --frozen --extra vllm python - <<'PY'
+from pathlib import Path
+
+import flashinfer
+import vllm
+
+vllm_path = Path(vllm.__file__).resolve()
+custom_vllm_root = Path("${CUSTOM_VLLM_ROOT}").resolve()
+if not vllm_path.is_relative_to(custom_vllm_root):
+    raise RuntimeError(
+        f"Expected vLLM from {custom_vllm_root}, but imported {vllm_path}"
+    )
+
+print(f"vLLM={vllm.__version__} path={vllm_path}")
+print(f"FlashInfer={flashinfer.__version__}")
+PY
 uv run --frozen --extra vllm examples/run_grpo.py \
   --config ${CONFIG} \
   cluster.num_nodes=${NUM_NODES} \
@@ -103,7 +122,7 @@ uv run --frozen --extra vllm examples/run_grpo.py \
   policy.generation.vllm_cfg.enforce_eager=false \
   policy.generation.vllm_cfg.precision=fp8 \
   ++policy.generation.vllm_cfg.is_mx=true \
-  "policy.generation.vllm_cfg.quantization_ignored_layer_kws=[lm_head,mlp.gate]" \
+  "++policy.generation.vllm_cfg.quantization_ignored_layer_kws=[lm_head,mlp.gate]" \
   ++policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm \
   ++policy.generation.vllm_kwargs.linear_backend=${BACKEND} \
   +policy.generation.vllm_kwargs.distributed_timeout_seconds=2400 \
