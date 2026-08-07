@@ -20,6 +20,7 @@ from experiments.mxfp8_moe_tactic_audit.flashinfer_adapter import (
     force_tactic,
     load_prepacked_weights,
     normalize_tactic_pair,
+    observed_forced_cache_event,
     run_moe_pair,
 )
 from experiments.mxfp8_moe_tactic_audit.schema import (
@@ -191,6 +192,34 @@ def test_force_stock_tactic_inserts_literal_fallback_pair(
     assert tuner._file_configs == {"existing": ("OtherRunner", 7)}
     assert tuner.profiling_cache == {("existing",): (0, 7, None)}
     assert tuner._logged_file_hits == set()
+
+
+@pytest.mark.parametrize(
+    ("stock_fallback", "expected"),
+    [(False, "cache hit"), (True, "fallback")],
+)
+def test_cache_event_is_observed_from_active_runtime_dispatch(
+    stock_fallback: bool, expected: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tuner = SimpleNamespace(
+        _file_configs={}, profiling_cache={}, _logged_file_hits=set()
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.flashinfer_adapter._get_autotuner",
+        lambda: tuner,
+    )
+    cache_key = _cache_key()
+    context = (
+        force_stock_tactic(cache_key)
+        if stock_fallback
+        else force_tactic(cache_key, TacticPair(17, 23))
+    )
+
+    with context:
+        tuner._logged_file_hits.add(
+            ("flashinfer::trtllm_fp8_block_scale_moe", "MoERunner")
+        )
+        assert observed_forced_cache_event(cache_key) == expected
 
 
 def test_force_tactic_rejects_missing_exact_file_hit_and_restores_state(

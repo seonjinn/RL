@@ -14,8 +14,10 @@ import sys
 from typing import Literal, cast
 
 try:
+    from .collect_results import comparison_run_bindings
     from .schema import TACTIC_MEASUREMENT_FIELDS, TacticMeasurement, TacticPair
 except ImportError:  # pragma: no cover - direct script execution
+    from collect_results import comparison_run_bindings
     from schema import TACTIC_MEASUREMENT_FIELDS, TacticMeasurement, TacticPair
 
 
@@ -514,6 +516,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     generation_parser.add_argument("--stock", type=Path, required=True)
     generation_parser.add_argument("--candidate", type=Path, required=True)
+    generation_parser.add_argument("--stock-run-root", type=Path, action="append")
+    generation_parser.add_argument("--candidate-run-root", type=Path, action="append")
     return parser.parse_args(argv)
 
 
@@ -533,7 +537,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ValueError as error:
         print(f"correctness gate error: {error}", file=sys.stderr)
         return 2
-    print(json.dumps(asdict(result), sort_keys=True, ensure_ascii=True))
+    payload = asdict(result)
+    if args.command == "generation":
+        try:
+            stock_bindings = tuple(args.stock_run_root or (args.stock,))
+            candidate_bindings = tuple(args.candidate_run_root or (args.candidate,))
+            payload.update(comparison_run_bindings(stock_bindings, candidate_bindings))
+        except ValueError as error:
+            print(f"correctness gate error: {error}", file=sys.stderr)
+            return 2
+        payload["deterministic_generation"] = result.passed
+    print(json.dumps(payload, sort_keys=True, ensure_ascii=True))
     return 0 if result.passed else 1
 
 

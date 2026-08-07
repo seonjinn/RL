@@ -383,7 +383,7 @@ def _provenance(tmp_path: Path) -> CacheProvenance:
         selected_profiles=profiles,
         shmoo_results=shmoo,
         model_revision="qwen3-30b-a3b-revision",
-        container="nvcr.io/nvidia/nemo-rl@sha256:container",
+        container_sha256="c" * 64,
         vllm_commit="a76062edee3a3ac23d47a93c7ce466f06a19111f",
         flashinfer_version="0.6.13",
         cuda_version="13.0",
@@ -439,9 +439,12 @@ def test_build_candidate_uses_autotuner_and_preserves_nonpromoted_entries(
     decisions_payload = json.loads(
         (candidate_dir / "qualification_decisions.json").read_text(encoding="ascii")
     )
-    assert decisions_payload["cache_manifest_sha256"] == hashlib.sha256(
-        (candidate_dir / "cache_manifest.json").read_bytes()
-    ).hexdigest()
+    assert (
+        decisions_payload["cache_manifest_sha256"]
+        == hashlib.sha256(
+            (candidate_dir / "cache_manifest.json").read_bytes()
+        ).hexdigest()
+    )
     assert decisions_payload["decisions"][0]["selected"] == {"gemm1": 3, "gemm2": 4}
     assert decisions_payload["decisions"][0]["stock"] == {"gemm1": 1, "gemm2": 2}
 
@@ -458,7 +461,7 @@ def test_build_candidate_uses_autotuner_and_preserves_nonpromoted_entries(
         "flashinfer_version": "0.6.13",
         "gpu_name": "NVIDIA GB200",
         "model_revision": "qwen3-30b-a3b-revision",
-        "container": "nvcr.io/nvidia/nemo-rl@sha256:container",
+        "container_sha256": "c" * 64,
         "ep_size": "1",
         "tp_size": "1",
         "vllm_commit": "a76062edee3a3ac23d47a93c7ce466f06a19111f",

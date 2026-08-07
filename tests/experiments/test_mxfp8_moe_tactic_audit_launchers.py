@@ -9,6 +9,10 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
+from experiments.mxfp8_moe_tactic_audit.observe_runtime import sha256_path
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 AUDIT_DIR = REPO_ROOT / "experiments" / "mxfp8_moe_tactic_audit"
@@ -72,6 +76,8 @@ def test_shmoo_dry_run_requests_one_gb200_for_five_hours(tmp_path: Path) -> None
     assert "CUDA Graph" in output
     assert "nsys profile" in output
     assert "nsys stats --report nvtxppsum" in output
+    assert "nsys-selected.nsys-rep" in output
+    assert "nsys-selected.nsys\n" not in output
     assert "nsys_to_component_csv.py" in output
     assert "--stock-cache" in output
     assert "stock_input_cache_root=" in output
@@ -124,6 +130,9 @@ def test_validation_dry_runs_keep_stock_and_candidate_isolated(tmp_path: Path) -
     )
     assert '"realized_generated_tokens": None' not in candidate_output
     assert "RUNTIME_FINGERPRINTS_JSON" in candidate_output
+    assert "mxfp8_moe_tactic_audit.observe_runtime" in candidate_output
+    assert "read_bytes()" not in candidate_output
+    assert "TP_SIZE=4" not in candidate_output
     assert "\nPY\nif [[ 8 -eq 2 ]]" not in candidate_output
     assert "trap" in candidate_output
     assert "policy.model_name=" in candidate_output
@@ -481,6 +490,22 @@ def test_provenance_manifest_hashes_inputs_without_environment_credentials(
         assert len(manifest[field_name]) == 64
 
 
+def test_runtime_container_hash_uses_bounded_streaming(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catch loading a multi-GB squashfs through Path.read_bytes()."""
+    container = tmp_path / "container.sqsh"
+    payload = b"runtime-image" * 200_000
+    container.write_bytes(payload)
+    monkeypatch.setattr(
+        Path,
+        "read_bytes",
+        lambda _path: (_ for _ in ()).throw(AssertionError("unbounded read")),
+    )
+
+    assert sha256_path(container) == hashlib.sha256(payload).hexdigest()
+
+
 def _make_submit_environment(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
     """Build isolated repos and fake scheduler tools for submit-only launcher tests."""
     repo = tmp_path / "repo"
@@ -499,7 +524,7 @@ def _make_submit_environment(tmp_path: Path) -> tuple[dict[str, str], Path, Path
     model_cache = _make_model_cache(tmp_path)
     cache = tmp_path / "cache/candidate"
     cache.mkdir(parents=True)
-    (cache / "entry").write_text("cache\n", encoding="ascii")
+    (cache / "autotune_configs.json").write_text("{}\n", encoding="ascii")
     (cache / "cache_manifest.json").write_text("{}\n", encoding="ascii")
     container = tmp_path / "container.sqsh"
     container.write_text("container\n", encoding="ascii")
@@ -568,6 +593,39 @@ def test_validation_submit_pulls_preflights_and_then_calls_fake_sbatch(
     assert manifest["cache_sha256"] != "dry-run-not-validated"
     assert "--constraint=GB200" in result.stdout
     assert "--segment=4" in result.stdout
+
+
+def test_shmoo_submit_keeps_selected_profiles_in_manifest_arguments(
+    tmp_path: Path,
+) -> None:
+    """Catch a continuation typo that executes selected_profiles as a command."""
+    env, order_log, _ = _make_submit_environment(tmp_path)
+    selected_profiles = tmp_path / "selected_profiles.json"
+    selected_profiles.write_text('{"selected_profiles": []}\n', encoding="ascii")
+    stock_cache = tmp_path / "cache/stock-input"
+    stock_cache.mkdir(parents=True)
+    (stock_cache / "autotune_configs.json").write_text("{}\n", encoding="ascii")
+    env.update(
+        {
+            "RUN_ID": "shmoo-submit-test",
+            "SELECTED_PROFILES": str(selected_profiles),
+            "STOCK_INPUT_CACHE_ROOT": str(stock_cache),
+            "SHMOO_OUTPUT_ROOT": str(
+                tmp_path / "experiments/mxfp8-moe-tactic-audit/shmoo/shmoo-submit-test"
+            ),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(AUDIT_DIR / "submit_shmoo_ptyche.sh")],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert order_log.read_text(encoding="ascii").splitlines() == ["pull", "sbatch"]
 
 
 def _make_valid_two_step_smoke(

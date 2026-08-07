@@ -261,6 +261,20 @@ def force_stock_tactic(cache_key: str) -> Iterator[None]:
         yield
 
 
+def observed_forced_cache_event(cache_key: str) -> str:
+    """Return the cache event evidenced by the active forced dispatch."""
+    tuner = _get_autotuner()
+    configured = tuner._file_configs.get(cache_key)
+    if MOE_LOG_KEY not in tuner._logged_file_hits or not (
+        isinstance(configured, tuple)
+        and len(configured) == 2
+        and configured[0] == MOE_RUNNER
+        and isinstance(configured[1], list)
+    ):
+        raise TacticDispatchError("forced dispatch has no observed file-cache event")
+    return "fallback" if configured[1] == [-1, -1] else "cache hit"
+
+
 def _load_moe_runtime() -> tuple[Any, Any, Any, Any]:
     flashinfer = importlib.import_module("flashinfer")
     fused_moe = importlib.import_module("flashinfer.fused_moe")

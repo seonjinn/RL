@@ -8,12 +8,18 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from fractions import Fraction
 from hashlib import sha256
+from functools import lru_cache
 import json
 import math
 from pathlib import Path
 import random
 import sys
 from typing import cast
+
+try:
+    from .collect_results import comparison_run_bindings
+except ImportError:  # pragma: no cover - direct script execution
+    from collect_results import comparison_run_bindings
 
 
 DATASET_SHA256 = "3730d312f6e3440559ace48831e51066acaca737f6eabec99bccb9e4b3c39d14"
@@ -40,6 +46,10 @@ class PairedGsm8kComparison:
     accuracy_delta: float = 0.0
     provenance_matched: bool = False
     matched_examples: int = 0
+    bootstrap_seed: int = BOOTSTRAP_SEED
+    bootstrap_samples: int = BOOTSTRAP_SAMPLES
+    paired_outcomes: tuple[int, ...] = ()
+    paired_outcomes_sha256: str = ""
 
 
 @dataclass(frozen=True)
@@ -281,16 +291,37 @@ def paired_bootstrap_ci(
     )
     if not any(deltas):
         return (0.0, 0.0)
-    rng = random.Random(BOOTSTRAP_SEED)
+    return paired_outcome_bootstrap_ci(deltas, BOOTSTRAP_SEED, BOOTSTRAP_SAMPLES)
+
+
+@lru_cache(maxsize=16)
+def paired_outcome_bootstrap_ci(
+    deltas: tuple[int, ...], seed: int, samples: int
+) -> tuple[float, float]:
+    """Recompute the producer's deterministic paired percentile interval."""
+    if not deltas or any(delta not in {-1, 0, 1} for delta in deltas):
+        raise ValueError("paired outcomes must contain only -1, 0, or 1")
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise ValueError("bootstrap seed must be an integer")
+    if isinstance(samples, bool) or not isinstance(samples, int) or samples <= 0:
+        raise ValueError("bootstrap samples must be a positive integer")
+    if not any(deltas):
+        return (0.0, 0.0)
+    rng = random.Random(seed)
     sample_size = len(deltas)
     estimates = [
         sum(rng.choice(deltas) for _ in range(sample_size)) / sample_size
-        for _ in range(BOOTSTRAP_SAMPLES)
+        for _ in range(samples)
     ]
     estimates.sort()
-    lower_index = math.floor(0.025 * (BOOTSTRAP_SAMPLES - 1))
-    upper_index = math.ceil(0.975 * (BOOTSTRAP_SAMPLES - 1))
+    lower_index = math.floor(0.025 * (samples - 1))
+    upper_index = math.ceil(0.975 * (samples - 1))
     return (estimates[lower_index], estimates[upper_index])
+
+
+def paired_outcomes_sha256(deltas: Sequence[int]) -> str:
+    """Hash the exact ordered outcomes used for the published interval."""
+    return sha256(_canonical_json(list(deltas)).encode("ascii")).hexdigest()
 
 
 def _matching_evaluator_contract(evaluator: Mapping[str, object]) -> dict[str, object]:
@@ -357,8 +388,14 @@ def compare_gsm8k(stock: Path, candidate: Path) -> PairedGsm8kComparison:
     stock_accuracy = sum(stock_correct) / EXPECTED_TOTAL
     candidate_accuracy = sum(candidate_correct) / EXPECTED_TOTAL
     delta = candidate_accuracy - stock_accuracy
+    paired_outcomes = tuple(
+        int(candidate) - int(stock)
+        for stock, candidate in zip(stock_correct, candidate_correct, strict=True)
+    )
     p_value = exact_mcnemar_p_value(candidate_only, stock_only)
-    delta_ci95 = paired_bootstrap_ci(stock_correct, candidate_correct)
+    delta_ci95 = paired_outcome_bootstrap_ci(
+        paired_outcomes, BOOTSTRAP_SEED, BOOTSTRAP_SAMPLES
+    )
     passed = p_value >= 0.05 and delta_ci95[0] <= 0 <= delta_ci95[1]
     return PairedGsm8kComparison(
         stock_accuracy=stock_accuracy,
@@ -373,6 +410,8 @@ def compare_gsm8k(stock: Path, candidate: Path) -> PairedGsm8kComparison:
         accuracy_delta=delta,
         provenance_matched=True,
         matched_examples=EXPECTED_TOTAL,
+        paired_outcomes=paired_outcomes,
+        paired_outcomes_sha256=paired_outcomes_sha256(paired_outcomes),
     )
 
 
@@ -380,6 +419,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stock", type=Path, required=True)
     parser.add_argument("--candidate", type=Path, required=True)
+    parser.add_argument("--stock-run-root", type=Path, action="append")
+    parser.add_argument("--candidate-run-root", type=Path, action="append")
     return parser.parse_args(argv)
 
 
@@ -390,7 +431,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ValueError as error:
         print(f"GSM8K comparison error: {error}", file=sys.stderr)
         return 2
-    print(json.dumps(asdict(comparison), sort_keys=True, ensure_ascii=True))
+    payload = asdict(comparison)
+    try:
+        stock_bindings = tuple(args.stock_run_root or (args.stock,))
+        candidate_bindings = tuple(args.candidate_run_root or (args.candidate,))
+        payload.update(comparison_run_bindings(stock_bindings, candidate_bindings))
+    except ValueError as error:
+        print(f"GSM8K comparison error: {error}", file=sys.stderr)
+        return 2
+    print(json.dumps(payload, sort_keys=True, ensure_ascii=True))
     return 0 if comparison.passed else 1
 
 

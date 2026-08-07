@@ -6,18 +6,27 @@ import csv
 from hashlib import sha256
 import json
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 import pytest
 from experiments.mxfp8_moe_tactic_audit import plot_results
 from experiments.mxfp8_moe_tactic_audit.build_report import (
     AuditInputs,
+    _component_speedups,
     build_report,
     write_template,
 )
 from experiments.mxfp8_moe_tactic_audit.collect_results import (
+    comparison_artifact_bindings,
     summarize_run,
     write_run_evidence,
+)
+from experiments.mxfp8_moe_tactic_audit.compare_gsm8k import (
+    BOOTSTRAP_SAMPLES,
+    BOOTSTRAP_SEED,
+    paired_outcome_bootstrap_ci,
+    paired_outcomes_sha256,
 )
 from experiments.mxfp8_moe_tactic_audit.nsys_to_component_csv import convert
 
@@ -90,7 +99,9 @@ def write_grpo_run(
                     "exit_code": 0,
                     "metadata": {
                         "batch": "16 prompts x 8 generations",
+                        "generation_settings": "greedy generation fixture",
                         "run_id": run_id,
+                        "run_kind": "validation",
                         "topology": "4 nodes x 4 GPUs",
                     },
                     "runtime_fingerprints": {
@@ -194,7 +205,7 @@ def write_audit_artifacts(root: Path) -> dict[str, Path]:
     )
     cache_manifest = root / "cache_manifest.json"
     runtime_fingerprints = {
-        "container": "fixture-container",
+        "container_sha256": "c" * 64,
         "cuda_graph_mode": "required",
         "cuda_version": "13.0",
         "dp_size": "16",
@@ -259,6 +270,10 @@ def write_audit_artifacts(root: Path) -> dict[str, Path]:
         encoding="ascii",
     )
     gsm8k = root / "gsm8k_comparison.json"
+    paired_outcomes = (0,) * 1300 + (1,) * 10 + (-1,) * 9
+    delta_ci95 = paired_outcome_bootstrap_ci(
+        paired_outcomes, BOOTSTRAP_SEED, BOOTSTRAP_SAMPLES
+    )
     gsm8k.write_text(
         json.dumps(
             {
@@ -267,10 +282,14 @@ def write_audit_artifacts(root: Path) -> dict[str, Path]:
                 "both_wrong": 600,
                 "candidate_accuracy": 710 / 1319,
                 "candidate_only_wins": 10,
-                "delta_ci95": [-0.01, 0.01],
+                "bootstrap_samples": BOOTSTRAP_SAMPLES,
+                "bootstrap_seed": BOOTSTRAP_SEED,
+                "delta_ci95": delta_ci95,
                 "matched_examples": 1319,
                 "mcnemar_p_value": 1.0,
                 "passed": True,
+                "paired_outcomes": paired_outcomes,
+                "paired_outcomes_sha256": paired_outcomes_sha256(paired_outcomes),
                 "provenance_matched": True,
                 "stock_accuracy": 709 / 1319,
                 "stock_only_wins": 9,
@@ -290,9 +309,10 @@ def write_audit_artifacts(root: Path) -> dict[str, Path]:
                 "call_count",
                 "call_weight",
                 "component",
-                "median_us",
+                "mean_us",
                 "signature_key",
                 "tactic",
+                "comparison_tactic",
             ],
         )
         writer.writeheader()
@@ -305,9 +325,10 @@ def write_audit_artifacts(root: Path) -> dict[str, Path]:
                     "call_count": 10,
                     "call_weight": 10,
                     "component": "FC1/GEMM1",
-                    "median_us": 60.0,
+                    "mean_us": 60.0,
                     "signature_key": "sig-1",
                     "tactic": "1,2",
+                    "comparison_tactic": "3,4",
                 },
                 {
                     "arm": "candidate",
@@ -316,9 +337,10 @@ def write_audit_artifacts(root: Path) -> dict[str, Path]:
                     "call_count": 10,
                     "call_weight": 10,
                     "component": "FC1/GEMM1",
-                    "median_us": 50.0,
+                    "mean_us": 50.0,
                     "signature_key": "sig-1",
                     "tactic": "3,4",
+                    "comparison_tactic": "3,4",
                 },
                 {
                     "arm": "stock",
@@ -327,9 +349,10 @@ def write_audit_artifacts(root: Path) -> dict[str, Path]:
                     "call_count": 10,
                     "call_weight": 10,
                     "component": "FC2/GEMM2",
-                    "median_us": 40.0,
+                    "mean_us": 40.0,
                     "signature_key": "sig-1",
                     "tactic": "1,2",
+                    "comparison_tactic": "3,4",
                 },
                 {
                     "arm": "candidate",
@@ -338,9 +361,10 @@ def write_audit_artifacts(root: Path) -> dict[str, Path]:
                     "call_count": 10,
                     "call_weight": 10,
                     "component": "FC2/GEMM2",
-                    "median_us": 30.0,
+                    "mean_us": 30.0,
                     "signature_key": "sig-1",
                     "tactic": "3,4",
+                    "comparison_tactic": "3,4",
                 },
             ]
         )
@@ -414,6 +438,7 @@ def complete_inputs(root: Path, *, repeated: bool = True) -> AuditInputs:
             evidence = json.loads(evidence_path.read_text(encoding="ascii"))
             evidence["runtime_fingerprints"] = {
                 **manifest_runtime,
+                "cache_file_sha256": cache_hashes[arm],
                 "cache_sha256": cache_hashes[arm],
                 "container_sha256": "c" * 64,
                 "nemo_rl_commit": "f" * 40,
@@ -421,12 +446,19 @@ def complete_inputs(root: Path, *, repeated: bool = True) -> AuditInputs:
             evidence_path.write_text(
                 json.dumps(evidence, sort_keys=True), encoding="ascii"
             )
+    produced_bindings = [
+        comparison_artifact_bindings(stock_run, candidate_run)
+        for stock_run, candidate_run in zip(stock_runs, candidate_runs, strict=True)
+    ]
     bindings = {
         arm: {
-            run.name.removeprefix(f"{arm}-"): _sha(run / "run_manifest.json")
-            for run in runs
+            run_id: digest
+            for produced in produced_bindings
+            for run_id, digest in cast(
+                dict[str, str], produced[f"{arm}_run_manifests"]
+            ).items()
         }
-        for arm, runs in (("stock", stock_runs), ("candidate", candidate_runs))
+        for arm in ("stock", "candidate")
     }
     for artifact in (artifacts["correctness"], artifacts["gsm8k"]):
         payload = json.loads(artifact.read_text(encoding="ascii"))
@@ -435,6 +467,8 @@ def complete_inputs(root: Path, *, repeated: bool = True) -> AuditInputs:
                 "stock_run_manifests": bindings["stock"],
                 "candidate_run_manifests": bindings["candidate"],
                 "comparison_run_ids": sorted(bindings["stock"]),
+                "stock_arm_id": "stock",
+                "candidate_arm_id": "candidate",
             }
         )
         artifact.write_text(json.dumps(payload, sort_keys=True), encoding="ascii")
@@ -487,7 +521,13 @@ def test_launcher_evidence_is_derived_from_grpo_producer_masks_and_phase_markers
         run,
         arm="stock",
         run_id="producer",
-        metadata={"batch": "fixture", "run_id": "producer", "topology": "fixture"},
+        metadata={
+            "batch": "fixture",
+            "generation_settings": "fixture",
+            "run_id": "producer",
+            "run_kind": "validation",
+            "topology": "fixture",
+        },
         runtime_fingerprints={"producer": "fixture"},
     )
 
@@ -498,7 +538,7 @@ def test_nsys_producer_converts_tagged_summary_to_report_schema(tmp_path: Path) 
     raw = tmp_path / "nvtx.csv"
     raw.write_text(
         "Range,Instances,Total Time (ns)\n"
-        '"MXFP8_MOE_AUDIT|signature_key=sig-1|cache_key=cache-1|arm=stock|component=FC1/GEMM1|tactic=1,2|cache_event=cache hit|call_weight=10",2,120000\n',
+        '"MXFP8_MOE_AUDIT|signature_key=sig-1|cache_key=cache-1|arm=stock|component=FC1/GEMM1|tactic=1,2|comparison_tactic=3,4|cache_event=cache hit|call_weight=10",2,120000\n',
         encoding="ascii",
     )
     output = tmp_path / "components.csv"
@@ -513,10 +553,11 @@ def test_nsys_producer_converts_tagged_summary_to_report_schema(tmp_path: Path) 
             "arm": "stock",
             "component": "FC1/GEMM1",
             "tactic": "1,2",
+            "comparison_tactic": "3,4",
             "cache_event": "cache hit",
             "call_weight": "10",
             "call_count": "2",
-            "median_us": "60",
+            "mean_us": "60",
         }
     ]
 
@@ -541,6 +582,7 @@ def test_nsys_producer_output_is_accepted_by_the_report_consumer(
                     f"arm={row['arm']}",
                     f"component={row['component']}",
                     f"tactic={row['tactic']}",
+                    f"comparison_tactic={row['comparison_tactic']}",
                     f"cache_event={row['cache_event']}",
                     f"call_weight={row['call_weight']}",
                 )
@@ -549,7 +591,7 @@ def test_nsys_producer_output_is_accepted_by_the_report_consumer(
                 {
                     "Range": tag,
                     "Instances": row["call_count"],
-                    "Total Time (ns)": float(row["median_us"])
+                    "Total Time (ns)": float(row["mean_us"])
                     * float(row["call_count"])
                     * 1000,
                 }
@@ -591,6 +633,86 @@ def test_component_plot_preserves_each_profile_distribution(
         "FC1/GEMM1\nsignature-b",
         "FC2/GEMM2\nsignature-a",
     ]
+
+
+def test_component_weighting_uses_profile_weight_not_nsys_instances(
+    tmp_path: Path,
+) -> None:
+    selected = tmp_path / "selected.json"
+    selected.write_text(
+        json.dumps(
+            {
+                "selected_profiles": [
+                    {"signature_key": "sig-a", "call_count": 100},
+                    {"signature_key": "sig-b", "call_count": 1},
+                ]
+            }
+        ),
+        encoding="ascii",
+    )
+    nsys = tmp_path / "components.csv"
+    with nsys.open("w", newline="", encoding="ascii") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "signature_key",
+                "cache_key",
+                "arm",
+                "component",
+                "tactic",
+                "comparison_tactic",
+                "cache_event",
+                "call_weight",
+                "call_count",
+                "mean_us",
+            ],
+        )
+        writer.writeheader()
+        for component in ("FC1/GEMM1", "FC2/GEMM2"):
+            for signature, key, weight, calls, stock_time, candidate_time in (
+                ("sig-a", "key-a", 100, 1, 20, 10),
+                ("sig-b", "key-b", 1, 100, 10, 20),
+            ):
+                for arm, tactic, timing in (
+                    ("stock", "1,2", stock_time),
+                    ("candidate", "3,4", candidate_time),
+                ):
+                    writer.writerow(
+                        {
+                            "signature_key": signature,
+                            "cache_key": key,
+                            "arm": arm,
+                            "component": component,
+                            "tactic": tactic,
+                            "comparison_tactic": "3,4",
+                            "cache_event": "cache hit",
+                            "call_weight": weight,
+                            "call_count": calls,
+                            "mean_us": timing,
+                        }
+                    )
+    inputs = AuditInputs(
+        stock_runs=(),
+        candidate_runs=(),
+        cache_manifest=tmp_path,
+        stock_cache=tmp_path,
+        candidate_cache=tmp_path,
+        trace_summary=tmp_path,
+        qualification_decisions=tmp_path,
+        selected_profiles=selected,
+        shmoo=tmp_path,
+        nsys=nsys,
+        correctness=tmp_path,
+        gsm8k=tmp_path,
+    )
+
+    components, _, _ = _component_speedups(
+        inputs,
+        {"sig-a": ("key-a", 0.75), "sig-b": ("key-b", 0.25)},
+        {"key-a": ((1, 2), (3, 4)), "key-b": ((1, 2), (3, 4))},
+    )
+
+    assert components == (("FC1/GEMM1", 1.625), ("FC2/GEMM2", 1.625))
 
 
 def test_report_binds_shuffled_shmoo_rows_and_ignores_failed_fastest_row(
@@ -702,6 +824,58 @@ def test_gsm8k_inconsistent_passed_field_is_incomplete(tmp_path: Path) -> None:
 
     assert report.verdict == "INCOMPLETE"
     assert "passed field disagrees" in report.reasons[0]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("mcnemar_p_value", 0.25, "McNemar p-value disagrees"),
+        ("mcnemar_p_value", 1.1, "must be in [0, 1]"),
+        ("delta_ci95", [0.1, -0.1], "bounds are inconsistent"),
+        ("delta_ci95", [-1.1, 0.1], "bounds are inconsistent"),
+        ("paired_outcomes_sha256", "0" * 64, "paired outcomes disagree"),
+    ],
+)
+def test_gsm8k_statistical_evidence_is_recomputed(
+    tmp_path: Path, field: str, value: object, message: str
+) -> None:
+    inputs = complete_inputs(tmp_path)
+    gsm8k = json.loads(inputs.gsm8k.read_text(encoding="ascii"))
+    gsm8k[field] = value
+    inputs.gsm8k.write_text(json.dumps(gsm8k), encoding="ascii")
+
+    report = build_report(inputs, tmp_path / "report")
+
+    assert report.verdict == "INCOMPLETE"
+    assert message in report.reasons[0]
+
+
+def test_repetitions_require_identical_generation_settings(tmp_path: Path) -> None:
+    inputs = complete_inputs(tmp_path)
+    evidence_path = inputs.candidate_runs[1] / "run_evidence.json"
+    evidence = json.loads(evidence_path.read_text(encoding="ascii"))
+    evidence["metadata"]["generation_settings"] = "different"
+    evidence_path.write_text(json.dumps(evidence), encoding="ascii")
+
+    report = build_report(inputs, tmp_path / "report")
+
+    assert report.verdict == "INCOMPLETE"
+    assert "generation_settings metadata differ" in report.reasons[0]
+
+
+def test_observed_container_and_cache_file_hashes_bind_run_manifest(
+    tmp_path: Path,
+) -> None:
+    inputs = complete_inputs(tmp_path)
+    evidence_path = inputs.stock_runs[0] / "run_evidence.json"
+    evidence = json.loads(evidence_path.read_text(encoding="ascii"))
+    evidence["runtime_fingerprints"]["container_sha256"] = "0" * 64
+    evidence_path.write_text(json.dumps(evidence), encoding="ascii")
+
+    report = build_report(inputs, tmp_path / "report")
+
+    assert report.verdict == "INCOMPLETE"
+    assert "independently observed runtime fingerprints" in report.reasons[0]
 
 
 def test_runtime_mismatch_is_rejected_as_incomplete(tmp_path: Path) -> None:

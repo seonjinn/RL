@@ -14,6 +14,7 @@ from statistics import fmean, pstdev
 from typing import Sequence
 
 from .collect_results import (
+    COMPARABILITY_METADATA_FIELDS,
     EvidenceError,
     RunSummary,
     compare_manifests,
@@ -22,6 +23,13 @@ from .collect_results import (
     load_jsonl,
     sha256_file,
     summarize_run,
+)
+from .compare_gsm8k import (
+    BOOTSTRAP_SAMPLES,
+    BOOTSTRAP_SEED,
+    exact_mcnemar_p_value,
+    paired_outcome_bootstrap_ci,
+    paired_outcomes_sha256,
 )
 from .plot_results import PLOT_NAMES, write_complete_plots, write_unavailable_plots
 from .qualify_cache import (
@@ -356,7 +364,8 @@ def _component_speedups(
             )
         expected_call_weights[selected["signature_key"]] = call_weight
     indexed: dict[
-        tuple[str, str, str, str, tuple[int, int]], tuple[float, int, str]
+        tuple[str, str, str, str, tuple[int, int], tuple[int, int]],
+        tuple[float, int, str],
     ] = {}
     for row in rows:
         event = row.get("cache_event", "").strip().lower()
@@ -384,13 +393,16 @@ def _component_speedups(
             raise EvidenceError("NSys component row has invalid arm or component")
         try:
             tactic = tuple(int(item) for item in row.get("tactic", "").split(","))
+            comparison_tactic = tuple(
+                int(item) for item in row.get("comparison_tactic", "").split(",")
+            )
         except ValueError as error:
             raise EvidenceError("NSys component row has invalid tactic") from error
-        if len(tactic) != 2:
+        if len(tactic) != 2 or len(comparison_tactic) != 2:
             raise EvidenceError("NSys component row has invalid tactic")
         try:
             count_value = float(row.get("call_count", "nan"))
-            timing_value = float(row.get("median_us", "nan"))
+            timing_value = float(row.get("mean_us", "nan"))
         except (TypeError, ValueError) as error:
             raise EvidenceError(
                 "NSys component row has malformed numeric field"
@@ -412,8 +424,15 @@ def _component_speedups(
             raise EvidenceError("NSys call_weight must be an integer")
         if int(call_weight_number) != expected_call_weights.get(signature):
             raise EvidenceError("NSys call_weight does not bind selected profile")
-        timing = _number(timing_value, "NSys median_us", positive=True)
-        key = (signature, cache_key, arm, component, (tactic[0], tactic[1]))
+        timing = _number(timing_value, "NSys mean_us", positive=True)
+        key = (
+            signature,
+            cache_key,
+            arm,
+            component,
+            (tactic[0], tactic[1]),
+            (comparison_tactic[0], comparison_tactic[1]),
+        )
         if key in indexed:
             raise EvidenceError("duplicate NSys component row")
         indexed[key] = (timing, count, event)
@@ -424,9 +443,11 @@ def _component_speedups(
         weighted = total = 0.0
         for signature, (cache_key, trace_weight) in profiles.items():
             stock, candidate = tactics[cache_key]
-            stock_row = indexed.get((signature, cache_key, "stock", component, stock))
+            stock_row = indexed.get(
+                (signature, cache_key, "stock", component, stock, candidate)
+            )
             candidate_row = indexed.get(
-                (signature, cache_key, "candidate", component, candidate)
+                (signature, cache_key, "candidate", component, candidate, candidate)
             )
             if stock_row is None or candidate_row is None:
                 raise EvidenceError(
@@ -436,7 +457,7 @@ def _component_speedups(
             candidate_time, candidate_calls, candidate_event = candidate_row
             if stock_calls != candidate_calls:
                 raise EvidenceError("NSys stock/candidate component call counts differ")
-            weight = trace_weight * stock_calls
+            weight = trace_weight
             speedup = stock_time / candidate_time
             weighted += weight * speedup
             total += weight
@@ -500,9 +521,15 @@ def _run_summaries(
             raise EvidenceError(
                 "stock/candidate manifests differ: " + ", ".join(differences)
             )
-        for field in ("batch", "topology"):
-            if left.metadata.get(field) != right.metadata.get(field):
-                raise EvidenceError(f"stock/candidate {field} metadata differ")
+    metadata_anchor = stock[0].metadata
+    for run in (*stock, *candidate):
+        for field in COMPARABILITY_METADATA_FIELDS:
+            if run.metadata.get(field) != metadata_anchor.get(field):
+                raise EvidenceError(f"run repetition {field} metadata differ")
+    for run, path in zip((*stock, *candidate), paths, strict=True):
+        manifest_run_kind = load_json_object(path / "run_manifest.json").get("run_kind")
+        if run.metadata.get("run_kind") != manifest_run_kind:
+            raise EvidenceError("run metadata does not bind manifest run kind")
     for arm, runs, paths_for_arm in (
         ("stock", stock, inputs.stock_runs),
         ("candidate", candidate, inputs.candidate_runs),
@@ -515,6 +542,16 @@ def _run_summaries(
             isinstance(value, str) and value for value in cache_hashes
         ):
             raise EvidenceError(f"{arm} repetitions do not share one cache identity")
+    stock_cache = load_json_object(inputs.stock_runs[0] / "run_manifest.json").get(
+        "cache_sha256"
+    )
+    candidate_cache = load_json_object(
+        inputs.candidate_runs[0] / "run_manifest.json"
+    ).get("cache_sha256")
+    if stock_cache == candidate_cache:
+        raise EvidenceError(
+            "stock and candidate arms must use distinct cache identities"
+        )
     return stock, candidate
 
 
@@ -585,7 +622,9 @@ def _collect(inputs: AuditInputs) -> _Collected:
         *zip(candidate, inputs.candidate_runs, strict=True),
     ):
         required_runtime = set(RUNTIME_FINGERPRINT_FIELDS) | {
+            "cache_file_sha256",
             "cache_sha256",
+            "container_sha256",
             "nemo_rl_commit",
         }
         missing_runtime = required_runtime - set(run.runtime_fingerprints)
@@ -612,6 +651,16 @@ def _collect(inputs: AuditInputs) -> _Collected:
             raise EvidenceError(
                 "observed runtime cache hash does not match the run manifest"
             )
+        if run.runtime_fingerprints.get("cache_file_sha256") != manifest_cache:
+            raise EvidenceError(
+                "observed runtime cache file hash does not match the run manifest"
+            )
+        if run.runtime_fingerprints.get("container_sha256") != run_manifest.get(
+            "container_sha256"
+        ):
+            raise EvidenceError(
+                "observed runtime container hash does not match the run manifest"
+            )
         if run.runtime_fingerprints.get("nemo_rl_commit") != run_manifest.get(
             "nemo_rl_commit"
         ):
@@ -636,6 +685,10 @@ def _collect(inputs: AuditInputs) -> _Collected:
         "accuracy_delta",
         "mcnemar_p_value",
         "delta_ci95",
+        "bootstrap_seed",
+        "bootstrap_samples",
+        "paired_outcomes",
+        "paired_outcomes_sha256",
         "passed",
     )
     if any(name not in gsm8k for name in required_gsm8k):
@@ -689,11 +742,50 @@ def _collect(inputs: AuditInputs) -> _Collected:
         )
     ):
         raise EvidenceError("GSM8K accuracies or delta disagree with paired cells")
-    expected_passed = _number(
-        gsm8k["mcnemar_p_value"], "GSM8K mcnemar_p_value"
-    ) >= 0.05 and _number(delta_ci95[0], "GSM8K delta_ci95") <= 0 <= _number(
-        delta_ci95[1], "GSM8K delta_ci95"
+    p_value = _number(gsm8k["mcnemar_p_value"], "GSM8K mcnemar_p_value")
+    if not 0 <= p_value <= 1:
+        raise EvidenceError("GSM8K mcnemar_p_value must be in [0, 1]")
+    expected_p_value = exact_mcnemar_p_value(counts[0], counts[1])
+    if not math.isclose(p_value, expected_p_value, rel_tol=0.0, abs_tol=1e-12):
+        raise EvidenceError("GSM8K McNemar p-value disagrees with paired cells")
+    lower = _number(delta_ci95[0], "GSM8K delta_ci95")
+    upper = _number(delta_ci95[1], "GSM8K delta_ci95")
+    if not -1 <= lower <= upper <= 1 or not lower <= accuracy_delta <= upper:
+        raise EvidenceError("GSM8K delta_ci95 bounds are inconsistent")
+    outcomes = gsm8k.get("paired_outcomes")
+    if (
+        not isinstance(outcomes, list)
+        or len(outcomes) != 1319
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value not in {-1, 0, 1}
+            for value in outcomes
+        )
+    ):
+        raise EvidenceError("GSM8K paired outcomes are invalid")
+    paired_outcomes = tuple(outcomes)
+    if (
+        paired_outcomes.count(1) != counts[0]
+        or paired_outcomes.count(-1) != counts[1]
+        or paired_outcomes_sha256(paired_outcomes)
+        != gsm8k.get("paired_outcomes_sha256")
+    ):
+        raise EvidenceError("GSM8K paired outcomes disagree with paired cells")
+    if (
+        gsm8k.get("bootstrap_seed") != BOOTSTRAP_SEED
+        or gsm8k.get("bootstrap_samples") != BOOTSTRAP_SAMPLES
+    ):
+        raise EvidenceError("GSM8K bootstrap contract is invalid")
+    expected_ci = paired_outcome_bootstrap_ci(
+        paired_outcomes, BOOTSTRAP_SEED, BOOTSTRAP_SAMPLES
     )
+    if not all(
+        math.isclose(actual, expected, rel_tol=0.0, abs_tol=1e-12)
+        for actual, expected in zip((lower, upper), expected_ci, strict=True)
+    ):
+        raise EvidenceError("GSM8K delta_ci95 was not reproduced from paired outcomes")
+    expected_passed = p_value >= 0.05 and lower <= 0 <= upper
     if gsm8k.get("passed") is not expected_passed:
         raise EvidenceError("GSM8K passed field disagrees with paired statistics")
     expected_ids = {run.run_id for run in stock}
@@ -709,7 +801,9 @@ def _collect(inputs: AuditInputs) -> _Collected:
     }
     for label, payload in (("correctness", correctness), ("GSM8K", gsm8k)):
         if (
-            payload.get("stock_run_manifests") != expected_hashes["stock"]
+            payload.get("stock_arm_id") != "stock"
+            or payload.get("candidate_arm_id") != "candidate"
+            or payload.get("stock_run_manifests") != expected_hashes["stock"]
             or payload.get("candidate_run_manifests") != expected_hashes["candidate"]
             or payload.get("comparison_run_ids") != sorted(expected_ids)
         ):

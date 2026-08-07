@@ -164,3 +164,76 @@ Regenerated and visually inspected the explicit `NOT YET EXECUTED` template:
 all four PNGs are 4140x1473 at 600 DPI, every PDF is a single-page PDF 1.4,
 and the HTML has four `<figure>/<img>` entries with no escaped Markdown or
 `<pre>` block. The template carries no fabricated performance values.
+
+## Fix Round 4
+
+- The shmoo launcher now consumes the actual `nsys-selected.nsys-rep` output
+  and keeps `selected_profiles.json` as an `audit_write_manifest` argument.
+  Stock and candidate FC1/GEMM1 and FC2/GEMM2 paths each perform graph setup,
+  warmups, and capture before entering ten equivalent measured NVTX ranges.
+  Correctness checks remain outside those ranges.
+- NVTX labels carry the exact comparison tactic and a cache hit/fallback event
+  observed from the active FlashInfer autotuner state. The converter emits the
+  aggregate statistic as `mean_us`. The report pairs each stock range to its
+  candidate comparison and weights speedups only by the selected profile's
+  trace `call_weight`, independent of NSys range instance count.
+- `observe_runtime.py` independently reads runtime checkouts, package/CUDA/GPU
+  identity, execution topology, CUDA Graph mode, model snapshot revision, the
+  exact cache file hash, and the container hash. File hashing uses bounded
+  1-MiB reads. Runtime evidence and cache provenance require
+  `container_sha256`; the report binds the observed container and cache hashes
+  to each exact run manifest.
+- Deterministic generation and GSM8K producers now bind their output to exact
+  stock/candidate manifest hashes, explicit arm IDs, and sorted logical
+  comparison IDs. Compare mode supports multiple repetition IDs and writes a
+  distinctly named deterministic-generation artifact rather than presenting
+  one generation gate as the complete correctness summary.
+- Every stock/candidate repetition must agree on batch, topology, run kind,
+  generation settings, and every non-cache run-manifest field. Cache identity
+  is invariant within each arm and distinct across arms.
+- GSM8K output records the ordered paired outcomes, their SHA256, and the
+  deterministic bootstrap seed/sample contract. Report collection recomputes
+  the exact two-sided McNemar p-value and bootstrap CI, validates probability
+  and CI ranges, requires the observed delta inside the interval, and verifies
+  the producer's `passed` value from the recomputed gates.
+- Regressions exercise the real launcher with fake `sbatch`, actual shmoo NVTX
+  range production through the converter/report, runtime cache-event evidence,
+  bounded container hashing, exact correctness/GSM8K producer bindings,
+  profile-only weighting, repetition mismatches, runtime hash mismatches, and
+  malformed or unreproducible GSM8K statistics.
+
+## Fix Round 4 Verification
+
+```text
+PYTHONPATH=. .venv/bin/pytest -q \
+  tests/experiments/test_mxfp8_moe_tactic_audit_launchers.py \
+  tests/experiments/test_mxfp8_moe_tactic_audit_report.py \
+  tests/experiments/test_mxfp8_moe_tactic_cache_qualification.py \
+  tests/experiments/test_mxfp8_moe_tactic_correctness.py \
+  tests/experiments/test_mxfp8_moe_tactic_flashinfer_adapter.py \
+  tests/experiments/test_mxfp8_moe_tactic_shmoo.py
+
+141 passed, 16 macOS pytest temporary-directory cleanup warnings in 39.19s
+
+ruff check <changed audit modules and tests>
+All checks passed.
+
+pyright <changed audit production modules>
+0 errors, 0 warnings, 0 informations.
+
+bash -n experiments/mxfp8_moe_tactic_audit/submit_shmoo_ptyche.sh \
+  experiments/mxfp8_moe_tactic_audit/submit_validation_ptyche.sh \
+  experiments/mxfp8_moe_tactic_audit/provenance.sh
+0 errors.
+
+ruff format --check <changed Python modules and tests>
+All files formatted.
+
+git diff --check
+0 errors.
+```
+
+No GPU or live NSys workload was executed locally. GPU behavior is covered by
+the existing mocked CUDA contracts and the new producer-to-converter tests;
+the corrected launcher path still requires execution on the target GB200
+cluster to produce measured audit artifacts.

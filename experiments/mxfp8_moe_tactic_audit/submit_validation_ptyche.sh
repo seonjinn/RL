@@ -43,13 +43,23 @@ GSM8K_EVALUATOR=${GSM8K_EVALUATOR:-${WORK_ROOT}/vllm-benchmark/experiments/eval/
 GSM8K_DATASET=${GSM8K_DATASET:-${WORK_ROOT}/vllm-benchmark/experiments/eval/data/gsm8k_test_openai_1319.jsonl}
 VLLM_SERVER_PORT=${VLLM_SERVER_PORT:-18000}
 case "${ARM}" in stock) CACHE_ROOT=${STOCK_CACHE_ROOT} ;; candidate) CACHE_ROOT=${CANDIDATE_CACHE_ROOT} ;; esac
+CACHE_FILE=${CACHE_ROOT}/autotune_configs.json
 CACHE_MANIFEST=${CACHE_MANIFEST:-${CANDIDATE_CACHE_ROOT}/cache_manifest.json}
 
 if [[ "${VALIDATION_MODE}" == compare ]]; then
     COMPARE_ROOT=${COMPARE_ROOT:-${WORK_ROOT}/experiments/mxfp8-moe-tactic-audit/validation}
+    COMPARE_RUN_IDS=${COMPARE_RUN_IDS:-${RUN_ID}}
+    IFS=',' read -r -a compare_run_ids <<< "${COMPARE_RUN_IDS}"
+    [[ ${#compare_run_ids[@]} -gt 0 ]] || { echo "COMPARE_RUN_IDS must not be empty" >&2; exit 2; }
+    primary_run_id=${compare_run_ids[0]}
+    compare_binding_args=''
+    for comparison_run_id in "${compare_run_ids[@]}"; do
+        [[ -n "${comparison_run_id}" ]] || { echo "COMPARE_RUN_IDS contains an empty ID" >&2; exit 2; }
+        compare_binding_args+=" --stock-run-root ${COMPARE_ROOT}/stock/${comparison_run_id}/steps-8 --candidate-run-root ${COMPARE_ROOT}/candidate/${comparison_run_id}/steps-8"
+    done
     COMMAND="mkdir -p ${COMPARE_ROOT}
-python ${SCRIPT_DIR}/validate_correctness.py generation --stock ${COMPARE_ROOT}/stock/${RUN_ID}/steps-8/generation.jsonl --candidate ${COMPARE_ROOT}/candidate/${RUN_ID}/steps-8/generation.jsonl
-python ${SCRIPT_DIR}/compare_gsm8k.py --stock ${COMPARE_ROOT}/stock/${RUN_ID}/steps-8/gsm8k --candidate ${COMPARE_ROOT}/candidate/${RUN_ID}/steps-8/gsm8k > ${COMPARE_ROOT}/gsm8k_comparison.json"
+python ${SCRIPT_DIR}/validate_correctness.py generation --stock ${COMPARE_ROOT}/stock/${primary_run_id}/steps-8/generation.jsonl --candidate ${COMPARE_ROOT}/candidate/${primary_run_id}/steps-8/generation.jsonl${compare_binding_args} > ${COMPARE_ROOT}/deterministic_generation_comparison.json
+python ${SCRIPT_DIR}/compare_gsm8k.py --stock ${COMPARE_ROOT}/stock/${primary_run_id}/steps-8/gsm8k --candidate ${COMPARE_ROOT}/candidate/${primary_run_id}/steps-8/gsm8k${compare_binding_args} > ${COMPARE_ROOT}/gsm8k_comparison.json"
     printf 'validation_mode=compare\n%s\n' "${COMMAND}"
     [[ "${ACTION}" == dry-run ]] || {
         echo "VALIDATION_MODE=compare is local; ACTION must be dry-run" >&2
@@ -70,6 +80,7 @@ fi
 if [[ "${ACTION}" != dry-run ]]; then
     IFS=$'\t' read -r MODEL_SNAPSHOT MODEL_REVISION < <(audit_resolve_model_snapshot "${HF_MODEL_CACHE_DIR}" 16)
     audit_require_nonempty_dir "${CACHE_ROOT}"
+    [[ -s "${CACHE_FILE}" ]] || { echo "Missing runtime tactic cache: ${CACHE_FILE}" >&2; exit 1; }
     [[ -f "${CACHE_MANIFEST}" ]] || { echo "Missing qualification cache manifest: ${CACHE_MANIFEST}" >&2; exit 1; }
     [[ -f "${CONTAINER}" ]] || { echo "Missing container: ${CONTAINER}" >&2; exit 1; }
     [[ ! -e "${RUN_ROOT}" ]] || { echo "Run root already exists: ${RUN_ROOT}" >&2; exit 1; }
@@ -89,7 +100,7 @@ VALIDATION_EXECUTION_INPUTS=(
     "${GSM8K_EVALUATOR}"
 )
 if [[ "${ACTION}" != dry-run ]]; then
-    CACHE_SHA256=$(audit_sha256_path "${CACHE_ROOT}")
+    CACHE_SHA256=$(audit_sha256_path "${CACHE_FILE}")
     MODEL_SHA256=$(audit_sha256_path "${MODEL_SNAPSHOT}")
     RECIPE_SHA256=$(audit_sha256_path "${REPO_DIR}/${CONFIG}")
     SCRIPTS_SHA256=$(audit_scripts_sha256 "${SCRIPT_DIR}")
@@ -149,52 +160,13 @@ export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=${CACHE_ROOT}
 export MXFP8_MOE_CUDA_GRAPH_REPLAY=required
+export VLLM_TENSOR_PARALLEL_SIZE=1
+export VLLM_EXPERT_PARALLEL_SIZE=1
 mkdir -p ${RUN_ROOT}
 python examples/run_grpo.py --config ${CONFIG} cluster.num_nodes=4 cluster.gpus_per_node=4 cluster.segment_size=4 policy.model_name=${MODEL_SNAPSHOT} policy.generation.vllm_cfg.enforce_eager=false ++policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm grpo.max_num_steps=${MAX_STEPS} grpo.val_at_start=false checkpointing.enabled=false checkpointing.checkpoint_dir=${RUN_ROOT}/checkpoints logger.log_dir=${RUN_ROOT}/logs logger.wandb_enabled=false
-RUNTIME_FINGERPRINTS_JSON=\$(MODEL_REVISION=${MODEL_REVISION} CONTAINER_PATH=${CONTAINER} CACHE_ROOT_PATH=${CACHE_ROOT} TP_SIZE=4 EP_SIZE=1 DP_SIZE=16 ${DRIVER_VENV}/bin/python - <<'PY'
-import hashlib
-import json
-import os
-import subprocess
-from pathlib import Path
-import torch
-
-import flashinfer
-
-
-def sha256_path(path: Path) -> str:
-    if path.is_file():
-        return hashlib.sha256(path.read_bytes()).hexdigest()
-    digest = hashlib.sha256()
-    for member in sorted((item for item in path.rglob("*") if item.is_file()), key=lambda item: item.as_posix()):
-        relative = "./" + member.relative_to(path).as_posix()
-        digest.update(relative.encode("utf-8") + b"\0")
-        digest.update(hashlib.sha256(member.read_bytes()).hexdigest().encode("ascii") + b"\0")
-    return digest.hexdigest()
-
-
-gpu_name = torch.cuda.get_device_name(0)
-container_path = Path(os.environ["CONTAINER_PATH"])
-runtime = {
-    "model_revision": os.environ["MODEL_REVISION"],
-    "container": os.environ["CONTAINER_PATH"],
-    "container_sha256": sha256_path(container_path),
-    "nemo_rl_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-    "vllm_commit": subprocess.check_output(["git", "-C", "${CUSTOM_VLLM_ROOT}", "rev-parse", "HEAD"], text=True).strip(),
-    "flashinfer_version": str(flashinfer.__version__),
-    "cuda_version": str(torch.version.cuda),
-    "gpu_name": gpu_name,
-    "tp_size": os.environ["TP_SIZE"],
-    "ep_size": os.environ["EP_SIZE"],
-    "dp_size": os.environ["DP_SIZE"],
-    "cuda_graph_mode": "required",
-    "cache_sha256": sha256_path(Path(os.environ["CACHE_ROOT_PATH"])),
-}
-print(json.dumps(runtime, sort_keys=True))
-PY
-)
+RUNTIME_FINGERPRINTS_JSON=\$(${DRIVER_VENV}/bin/python -m experiments.mxfp8_moe_tactic_audit.observe_runtime --nemo-rl-root ${REPO_DIR} --vllm-root ${CUSTOM_VLLM_ROOT} --model-snapshot ${MODEL_SNAPSHOT} --container ${CONTAINER} --cache-root ${CACHE_ROOT})
 if [[ ${MAX_STEPS} -eq 8 ]]; then
-  ${DRIVER_VENV}/bin/python -m experiments.mxfp8_moe_tactic_audit.collect_results --write-run-evidence --run-root ${RUN_ROOT} --arm ${ARM} --run-id ${RUN_ID} --metadata-json '{"batch":"GRPO producer batch; see run manifest","run_id":"${RUN_ID}","topology":"4 nodes x 4 GPUs"}' --runtime-fingerprints-json "\${RUNTIME_FINGERPRINTS_JSON}"
+  ${DRIVER_VENV}/bin/python -m experiments.mxfp8_moe_tactic_audit.collect_results --write-run-evidence --run-root ${RUN_ROOT} --arm ${ARM} --run-id ${RUN_ID} --metadata-json '{"batch":"64 prompts x 32 generations","generation_settings":"max_total_sequence_length=4096; enforce_eager=false; CUDA Graph replay required","run_id":"${RUN_ID}","run_kind":"validation","topology":"4 nodes x 4 GPUs"}' --runtime-fingerprints-json "\${RUNTIME_FINGERPRINTS_JSON}"
 fi
 if [[ ${MAX_STEPS} -eq 2 ]]; then printf '{"arm":"${ARM}","cache_sha256":"${CACHE_SHA256}","execution_inputs_sha256":"${EXECUTION_INPUTS_SHA256}","model_snapshot_sha256":"${MODEL_SHA256}","nemo_rl_commit":"${NEMO_RL_COMMIT}","recipe_sha256":"${RECIPE_SHA256}","scripts_sha256":"${SCRIPTS_SHA256}","smoke_manifest_sha256":"%s","vllm_commit":"${EXPECTED_VLLM_COMMIT}"}\\n' "\$(shasum -a 256 ${RUN_ROOT}/run_manifest.json | awk '{print \$1}')" > ${SMOKE_MARKER}; fi
 ${POST_RUN}
@@ -209,6 +181,6 @@ case "${ACTION}" in
   dry-run) ;;
   test-only) CONTAINER=${CONTAINER} MOUNTS=/lustre:/lustre COMMAND="${COMMAND}" GPUS_PER_NODE=4 BASE_LOG_DIR="${RUN_ROOT}" sbatch --test-only "${SBATCH_ARGS[@]}" "${REPO_DIR}/ray.sub" ;;
   submit)
-    audit_write_manifest "${RUN_ROOT}" validation "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" "${EXPECTED_VLLM_COMMIT}" "${CONTAINER}" "${CONFIG}" "${MODEL_SNAPSHOT}" "${CACHE_ROOT}" "${VALIDATION_EXECUTION_INPUTS[0]}" "${VALIDATION_EXECUTION_INPUTS[@]:1}"
+    audit_write_manifest "${RUN_ROOT}" validation "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" "${EXPECTED_VLLM_COMMIT}" "${CONTAINER}" "${CONFIG}" "${MODEL_SNAPSHOT}" "${CACHE_FILE}" "${VALIDATION_EXECUTION_INPUTS[0]}" "${VALIDATION_EXECUTION_INPUTS[@]:1}"
     CONTAINER=${CONTAINER} MOUNTS=/lustre:/lustre COMMAND="${COMMAND}" GPUS_PER_NODE=4 BASE_LOG_DIR="${RUN_ROOT}" sbatch "${SBATCH_ARGS[@]}" "${REPO_DIR}/ray.sub" ;;
 esac

@@ -28,6 +28,7 @@ try:
         enumerate_valid_tactics,
         force_stock_tactic,
         force_tactic,
+        observed_forced_cache_event,
         run_moe_pair,
     )
     from .schema import ReplayProfile, TacticMeasurement, TacticPair
@@ -43,6 +44,7 @@ except ImportError:  # pragma: no cover - direct script execution
         enumerate_valid_tactics,
         force_stock_tactic,
         force_tactic,
+        observed_forced_cache_event,
         run_moe_pair,
     )
     from schema import ReplayProfile, TacticMeasurement, TacticPair
@@ -57,6 +59,12 @@ class _ProfileResult:
     deterministic: bool
     max_abs_error: float
     cosine_similarity: float
+
+
+@dataclass(frozen=True)
+class _ReplayResult:
+    outputs: tuple[torch.Tensor, ...]
+    timings_us: tuple[float, ...]
 
 
 def _seeded_order(signature_key: str, index: int) -> bytes:
@@ -179,7 +187,13 @@ def _l2_size_bytes(device: torch.device) -> int:
 
 @contextmanager
 def _nsys_component_range(
-    case: MoeKernelCase, tactic: TacticPair, arm: str, component: str
+    case: MoeKernelCase,
+    tactic: TacticPair,
+    arm: str,
+    component: str,
+    *,
+    comparison_tactic: TacticPair,
+    cache_event: str,
 ) -> Iterator[None]:
     """Emit the metadata NSys needs to produce one non-fabricated component row."""
     cache_key = cache_key_for_case(case, has_gemm1_lora_delta=component == "FC1/GEMM1")
@@ -191,7 +205,8 @@ def _nsys_component_range(
             f"arm={arm}",
             f"component={component}",
             f"tactic={tactic.gemm1},{tactic.gemm2}",
-            "cache_event=cache hit",
+            f"comparison_tactic={comparison_tactic.gemm1},{comparison_tactic.gemm2}",
+            f"cache_event={cache_event}",
             f"call_weight={case.profile.call_count}",
         )
     )
@@ -207,6 +222,80 @@ def _nsys_component_range(
     finally:
         if pushed:
             torch.cuda.nvtx.range_pop()
+
+
+def _profile_component_replays(
+    case: MoeKernelCase,
+    packed_topk: torch.Tensor,
+    tactic: TacticPair,
+    *,
+    cache_key: str,
+    arm: str,
+    component: str,
+    comparison_tactic: TacticPair,
+    warmups: int,
+    repetitions: int,
+    use_stock_fallback: bool,
+    zero_delta: torch.Tensor,
+) -> _ReplayResult:
+    """Profile only graph replays after setup and observe the active cache event."""
+    do_finalize = component == "FC2/GEMM2"
+    delta = None if do_finalize else zero_delta
+    force_context = (
+        force_stock_tactic(cache_key)
+        if use_stock_fallback
+        else force_tactic(cache_key, tactic)
+    )
+    with force_context:
+        for _ in range(warmups):
+            run_moe_pair(
+                case,
+                packed_topk,
+                do_finalize=do_finalize,
+                gemm1_lora_delta=delta,
+            )
+        torch.cuda.synchronize(case.hidden_states.device)
+        cache_event = observed_forced_cache_event(cache_key)
+
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            captured_result = run_moe_pair(
+                case,
+                packed_topk,
+                do_finalize=do_finalize,
+                gemm1_lora_delta=delta,
+            )
+        graph_output = (
+            _final_output(captured_result)
+            if do_finalize
+            else _intermediate_output(captured_result)
+        )
+        cold_l2 = torch.empty(
+            _l2_size_bytes(case.hidden_states.device) + 4 * 1024 * 1024,
+            dtype=torch.uint8,
+            device=case.hidden_states.device,
+        )
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        timings_us: list[float] = []
+        outputs: list[torch.Tensor] = []
+        for _ in range(repetitions):
+            cold_l2.add_(1)
+            start.record()
+            with _nsys_component_range(
+                case,
+                tactic,
+                arm,
+                component,
+                comparison_tactic=comparison_tactic,
+                cache_event=cache_event,
+            ):
+                graph.replay()
+                end.record()
+                end.synchronize()
+            timings_us.append(float(start.elapsed_time(end) * 1000.0))
+            outputs.append(graph_output.clone())
+    return _ReplayResult(tuple(outputs), tuple(timings_us))
 
 
 def _load_stock_tactics(path: Path) -> dict[str, TacticPair]:
@@ -267,48 +356,33 @@ def _profile_tactic_cuda(
         device=case.hidden_states.device,
     )
 
-    stock_final_context = (
-        force_stock_tactic(final_key)
-        if stock_final_tactic is None
-        else force_tactic(final_key, stock_final_tactic)
+    stock_final_replays = _profile_component_replays(
+        case,
+        packed_topk,
+        tactic if stock_final_tactic is None else stock_final_tactic,
+        cache_key=final_key,
+        arm="stock",
+        component="FC2/GEMM2",
+        comparison_tactic=tactic,
+        warmups=warmups,
+        repetitions=repetitions,
+        use_stock_fallback=stock_final_tactic is None,
+        zero_delta=zero_delta,
     )
-    with (
-        stock_final_context,
-        _nsys_component_range(
-            case,
-            tactic if stock_final_tactic is None else stock_final_tactic,
-            "stock",
-            "FC2/GEMM2",
-        ),
-    ):
-        stock_final = _final_output(
-            run_moe_pair(case, packed_topk, do_finalize=True, gemm1_lora_delta=None)
-        ).clone()
     try:
-        stock_intermediate_context = (
-            force_stock_tactic(intermediate_key)
-            if stock_intermediate_tactic is None
-            else force_tactic(intermediate_key, stock_intermediate_tactic)
+        stock_intermediate_replays = _profile_component_replays(
+            case,
+            packed_topk,
+            tactic if stock_intermediate_tactic is None else stock_intermediate_tactic,
+            cache_key=intermediate_key,
+            arm="stock",
+            component="FC1/GEMM1",
+            comparison_tactic=tactic,
+            warmups=warmups,
+            repetitions=repetitions,
+            use_stock_fallback=stock_intermediate_tactic is None,
+            zero_delta=zero_delta,
         )
-        with (
-            stock_intermediate_context,
-            _nsys_component_range(
-                case,
-                tactic
-                if stock_intermediate_tactic is None
-                else stock_intermediate_tactic,
-                "stock",
-                "FC1/GEMM1",
-            ),
-        ):
-            stock_intermediate = _intermediate_output(
-                run_moe_pair(
-                    case,
-                    packed_topk,
-                    do_finalize=False,
-                    gemm1_lora_delta=zero_delta,
-                )
-            ).clone()
     except TacticDispatchError:
         raise
     except Exception as error:
@@ -316,79 +390,57 @@ def _profile_tactic_cuda(
             "FlashInfer stock intermediate preflight is unavailable"
         ) from error
 
+    stock_final = stock_final_replays.outputs[0]
+    stock_intermediate = stock_intermediate_replays.outputs[0]
     if not bool(torch.isfinite(stock_final).all().item()):
         raise RuntimeError("stock FC2 output reference is not finite")
     if not bool(torch.isfinite(stock_intermediate).all().item()):
         raise RuntimeError("stock FC1 intermediate reference is not finite")
 
-    with (
-        force_tactic(intermediate_key, tactic),
-        _nsys_component_range(case, tactic, "candidate", "FC1/GEMM1"),
-    ):
-        candidate_intermediate = _intermediate_output(
-            run_moe_pair(
-                case,
-                packed_topk,
-                do_finalize=False,
-                gemm1_lora_delta=zero_delta,
-            )
-        ).clone()
-        repeated_intermediate = _intermediate_output(
-            run_moe_pair(
-                case,
-                packed_topk,
-                do_finalize=False,
-                gemm1_lora_delta=zero_delta,
-            )
-        ).clone()
-
-    timings_us: list[float] = []
-    replay_outputs: list[torch.Tensor] = []
-    with (
-        force_tactic(final_key, tactic),
-        _nsys_component_range(case, tactic, "candidate", "FC2/GEMM2"),
-    ):
-        candidate_final = _final_output(
-            run_moe_pair(case, packed_topk, do_finalize=True, gemm1_lora_delta=None)
-        ).clone()
-        for _ in range(warmups):
-            run_moe_pair(case, packed_topk, do_finalize=True, gemm1_lora_delta=None)
-        torch.cuda.synchronize(case.hidden_states.device)
-
-        graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
-            captured_result = run_moe_pair(
-                case, packed_topk, do_finalize=True, gemm1_lora_delta=None
-            )
-        graph_output = _final_output(captured_result)
-        cold_l2 = torch.empty(
-            _l2_size_bytes(case.hidden_states.device) + 4 * 1024 * 1024,
-            dtype=torch.uint8,
-            device=case.hidden_states.device,
-        )
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
-        for _ in range(repetitions):
-            cold_l2.add_(1)
-            start.record()
-            graph.replay()
-            end.record()
-            end.synchronize()
-            timings_us.append(float(start.elapsed_time(end) * 1000.0))
-            replay_outputs.append(graph_output.clone())
+    candidate_intermediate_replays = _profile_component_replays(
+        case,
+        packed_topk,
+        tactic,
+        cache_key=intermediate_key,
+        arm="candidate",
+        component="FC1/GEMM1",
+        comparison_tactic=tactic,
+        warmups=warmups,
+        repetitions=repetitions,
+        use_stock_fallback=False,
+        zero_delta=zero_delta,
+    )
+    candidate_final_replays = _profile_component_replays(
+        case,
+        packed_topk,
+        tactic,
+        cache_key=final_key,
+        arm="candidate",
+        component="FC2/GEMM2",
+        comparison_tactic=tactic,
+        warmups=warmups,
+        repetitions=repetitions,
+        use_stock_fallback=False,
+        zero_delta=zero_delta,
+    )
+    candidate_intermediate = candidate_intermediate_replays.outputs[0]
+    candidate_final = candidate_final_replays.outputs[0]
+    timings_us = list(candidate_final_replays.timings_us)
+    replay_outputs = list(candidate_final_replays.outputs)
 
     if not torch.equal(packed_topk, original_routing):
         raise RuntimeError("FlashInfer modified packed top-k routing inputs")
     all_outputs = [
         candidate_final,
         candidate_intermediate,
-        repeated_intermediate,
+        *candidate_intermediate_replays.outputs,
         *replay_outputs,
     ]
     finite = all(bool(torch.isfinite(output).all().item()) for output in all_outputs)
-    deterministic = torch.equal(candidate_intermediate, repeated_intermediate) and all(
-        torch.equal(candidate_final, output) for output in replay_outputs
-    )
+    deterministic = all(
+        torch.equal(candidate_intermediate, output)
+        for output in candidate_intermediate_replays.outputs
+    ) and all(torch.equal(candidate_final, output) for output in replay_outputs)
     max_abs_error = max(
         _max_abs_error(candidate_final, stock_final),
         _max_abs_error(candidate_intermediate, stock_intermediate),

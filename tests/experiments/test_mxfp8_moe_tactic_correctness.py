@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 from dataclasses import replace
 from pathlib import Path
@@ -255,6 +256,26 @@ def _write_generation(
     )
 
 
+def _write_run_binding(root: Path, *, arm: str, run_id: str) -> str:
+    manifest = root / "run_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "cache_sha256": ("a" if arm == "stock" else "b") * 64,
+                "container_sha256": "c" * 64,
+                "run_kind": "validation",
+            },
+            sort_keys=True,
+        ),
+        encoding="ascii",
+    )
+    (root / "run_evidence.json").write_text(
+        json.dumps({"arm": arm, "metadata": {"run_id": run_id}}, sort_keys=True),
+        encoding="ascii",
+    )
+    return hashlib.sha256(manifest.read_bytes()).hexdigest()
+
+
 def test_generation_comparison_reports_exact_mismatch_ids(tmp_path: Path) -> None:
     stock = tmp_path / "stock.jsonl"
     candidate = tmp_path / "candidate.jsonl"
@@ -272,6 +293,65 @@ def test_generation_comparison_reports_exact_mismatch_ids(tmp_path: Path) -> Non
     assert not comparison.passed
     assert comparison.compared_examples == 2
     assert comparison.mismatched_ids == ("example-b",)
+
+
+def test_comparison_commands_emit_exact_run_bindings(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stock_root = tmp_path / "stock"
+    candidate_root = tmp_path / "candidate"
+    stock_root.mkdir()
+    candidate_root.mkdir()
+    stock_sha = _write_run_binding(stock_root, arm="stock", run_id="paired-run")
+    candidate_sha = _write_run_binding(
+        candidate_root, arm="candidate", run_id="paired-run"
+    )
+    generation_rows = [("example", "a" * 64, [1, 2])]
+    stock_generation = stock_root / "generation.jsonl"
+    candidate_generation = candidate_root / "generation.jsonl"
+    _write_generation(stock_generation, generation_rows)
+    _write_generation(candidate_generation, generation_rows)
+
+    assert (
+        validate_correctness_main(
+            [
+                "generation",
+                "--stock",
+                str(stock_generation),
+                "--candidate",
+                str(candidate_generation),
+            ]
+        )
+        == 0
+    )
+    generation_payload = json.loads(capsys.readouterr().out)
+    assert generation_payload["stock_arm_id"] == "stock"
+    assert generation_payload["candidate_arm_id"] == "candidate"
+    assert generation_payload["comparison_run_ids"] == ["paired-run"]
+    assert generation_payload["stock_run_manifests"] == {"paired-run": stock_sha}
+    assert generation_payload["candidate_run_manifests"] == {
+        "paired-run": candidate_sha
+    }
+
+    both_correct = {f"gsm8k-{index:04d}" for index in range(1000)}
+    stock_only = {f"gsm8k-{index:04d}" for index in range(1000, 1010)}
+    candidate_only = {f"gsm8k-{index:04d}" for index in range(1010, 1020)}
+    stock_gsm8k = stock_root / "gsm8k"
+    candidate_gsm8k = candidate_root / "gsm8k"
+    _write_gsm8k_result(stock_gsm8k, both_correct | stock_only)
+    _write_gsm8k_result(candidate_gsm8k, both_correct | candidate_only)
+
+    assert (
+        compare_gsm8k_main(
+            ["--stock", str(stock_gsm8k), "--candidate", str(candidate_gsm8k)]
+        )
+        == 0
+    )
+    gsm8k_payload = json.loads(capsys.readouterr().out)
+    assert gsm8k_payload["stock_run_manifests"] == {"paired-run": stock_sha}
+    assert gsm8k_payload["candidate_run_manifests"] == {"paired-run": candidate_sha}
+    assert len(gsm8k_payload["paired_outcomes"]) == 1319
+    assert len(gsm8k_payload["paired_outcomes_sha256"]) == 64
 
 
 def test_generation_comparison_requires_identical_provenance(tmp_path: Path) -> None:

@@ -79,7 +79,7 @@ nsys profile --trace=cuda,nvtx --force-overwrite=true --output ${RUN_ROOT}/nsys-
   --warmups 3 \\
   --repetitions 10 \\
   --output ${SHMOO_OUTPUT_ROOT}/measurements.jsonl
-nsys stats --report nvtxppsum --format csv --output ${RUN_ROOT}/nsys-nvtx ${RUN_ROOT}/nsys-selected.nsys
+nsys stats --report nvtxppsum --format csv --output ${RUN_ROOT}/nsys-nvtx ${RUN_ROOT}/nsys-selected.nsys-rep
 python experiments/mxfp8_moe_tactic_audit/nsys_to_component_csv.py \\
   --nvtx-csv ${RUN_ROOT}/nsys-nvtx.csv \\
   --output ${SHMOO_OUTPUT_ROOT}/nsys_components.csv
@@ -123,7 +123,7 @@ case "${ACTION}" in
             examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml \
             "${MODEL_SNAPSHOT}" "${STOCK_INPUT_CACHE_ROOT}" "${SCRIPT_DIR}" \
             "${SCRIPT_DIR}/submit_shmoo_ptyche.sh" "${SCRIPT_DIR}/provenance.sh" \
-            "${SCRIPT_DIR}/shmoo_moe_tactics.py" "${SCRIPT_DIR}/nsys_to_component_csv.py" \\
+            "${SCRIPT_DIR}/shmoo_moe_tactics.py" "${SCRIPT_DIR}/nsys_to_component_csv.py" \
             "${SELECTED_PROFILES}"
         CONTAINER=${CONTAINER} MOUNTS=/lustre:/lustre COMMAND="${COMMAND}" GPUS_PER_NODE=1 \
             BASE_LOG_DIR="${RUN_ROOT}" sbatch "${SBATCH_ARGS[@]}" "${REPO_DIR}/ray.sub"

@@ -1,6 +1,8 @@
 from contextlib import contextmanager, nullcontext
+import csv
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -18,7 +20,9 @@ from experiments.mxfp8_moe_tactic_audit.schema import (
     TacticMeasurement,
     TacticPair,
 )
+from experiments.mxfp8_moe_tactic_audit.nsys_to_component_csv import convert
 from experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics import (
+    _nsys_component_range,
     _profile_tactic_cuda,
     main,
     profile_tactic,
@@ -71,6 +75,45 @@ def test_reconstruct_topk_reproduces_histogram_without_duplicate_experts() -> No
         rtol=0,
         atol=0,
     )
+
+
+def test_actual_shmoo_range_converts_to_mean_component_timing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exercise the producer label rather than constructing an idealized tag."""
+    labels: list[str] = []
+    monkeypatch.setattr(
+        torch.cuda.nvtx, "range_push", lambda label: labels.append(label)
+    )
+    monkeypatch.setattr(torch.cuda.nvtx, "range_pop", lambda: None)
+
+    with _nsys_component_range(
+        _case(),
+        TacticPair(1, 2),
+        "stock",
+        "FC1/GEMM1",
+        comparison_tactic=TacticPair(3, 4),
+        cache_event="fallback",
+    ):
+        pass
+
+    raw = tmp_path / "nvtx.csv"
+    with raw.open("w", newline="", encoding="ascii") as handle:
+        writer = csv.DictWriter(
+            handle, fieldnames=["Range", "Instances", "Total Time (ns)"]
+        )
+        writer.writeheader()
+        writer.writerow(
+            {"Range": labels[0], "Instances": 2, "Total Time (ns)": 120_000}
+        )
+    output = tmp_path / "components.csv"
+    convert(raw, output)
+
+    rows = list(csv.DictReader(output.open(encoding="ascii")))
+    assert rows[0]["cache_event"] == "fallback"
+    assert rows[0]["call_count"] == "2"
+    assert rows[0]["mean_us"] == "60"
+    assert "median_us" not in rows[0]
 
 
 def test_reconstruct_topk_is_deterministic_for_signature_key() -> None:
@@ -165,7 +208,7 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
     tactic = TacticPair(1, 2)
     run_modes: list[bool] = []
     forced: list[tuple[str, TacticPair | None]] = []
-    nsys_ranges: list[tuple[str, str, TacticPair]] = []
+    nsys_ranges: list[tuple[str, str, TacticPair, str]] = []
     graph_replays = 0
     cold_touches = 0
     original_zeros = torch.zeros
@@ -199,12 +242,23 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
         "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.force_tactic",
         lambda key, selected: fake_force(key, selected),
     )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.observed_forced_cache_event",
+        lambda _key: "cache hit",
+    )
 
     @contextmanager
     def fake_nsys_range(
-        _case: MoeKernelCase, selected: TacticPair, arm: str, component: str
+        _case: MoeKernelCase,
+        selected: TacticPair,
+        arm: str,
+        component: str,
+        *,
+        comparison_tactic: TacticPair,
+        cache_event: str,
     ):
-        nsys_ranges.append((arm, component, selected))
+        assert comparison_tactic == tactic
+        nsys_ranges.append((arm, component, selected, cache_event))
         yield
 
     monkeypatch.setattr(
@@ -232,7 +286,7 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
         intermediate_calls += 1
         selected_intermediate = (
             nonfinite_intermediate
-            if repeated_intermediate_nan and intermediate_calls == 3
+            if repeated_intermediate_nan and intermediate_calls == 8
             else intermediate
         )
         return MoePairResult(
@@ -305,8 +359,8 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
         },
     )
 
-    assert run_modes.count(True) == 6
-    assert run_modes.count(False) == 3
+    assert run_modes.count(True) == 8
+    assert run_modes.count(False) == 8
     assert forced == [
         ("final-key", TacticPair(5, 6)),
         ("intermediate-key", TacticPair(7, 8)),
@@ -314,13 +368,13 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
         ("final-key", tactic),
     ]
     assert nsys_ranges == [
-        ("stock", "FC2/GEMM2", TacticPair(5, 6)),
-        ("stock", "FC1/GEMM1", TacticPair(7, 8)),
-        ("candidate", "FC1/GEMM1", tactic),
-        ("candidate", "FC2/GEMM2", tactic),
+        *(("stock", "FC2/GEMM2", TacticPair(5, 6), "cache hit"),) * 10,
+        *(("stock", "FC1/GEMM1", TacticPair(7, 8), "cache hit"),) * 10,
+        *(("candidate", "FC1/GEMM1", tactic, "cache hit"),) * 10,
+        *(("candidate", "FC2/GEMM2", tactic, "cache hit"),) * 10,
     ]
-    assert graph_replays == 10
-    assert cold_touches == 10
+    assert graph_replays == 40
+    assert cold_touches == 40
     assert result.median_us == result.p95_us == 4.0
     assert result.finite is not repeated_intermediate_nan
     assert result.deterministic is not repeated_intermediate_nan
@@ -378,6 +432,16 @@ def test_stock_intermediate_invocation_failure_is_normalized_before_candidates(
     monkeypatch.setattr(
         "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.run_moe_pair",
         fake_run,
+    )
+
+    def fake_profile_component(*_args: object, **kwargs: object) -> object:
+        if kwargs["component"] == "FC1/GEMM1":
+            raise TypeError("zero-LoRA contract unavailable")
+        return SimpleNamespace(outputs=(case.output,), timings_us=(4.0,) * 10)
+
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics._profile_component_replays",
+        fake_profile_component,
     )
 
     with pytest.raises(IntermediateApiUnavailable):
@@ -445,6 +509,17 @@ def test_nonfinite_stock_reference_fails_before_candidate_profiling(
     monkeypatch.setattr(
         "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.run_moe_pair",
         fake_run,
+    )
+
+    def fake_profile_component(*_args: object, **kwargs: object) -> object:
+        if kwargs["arm"] != "stock":
+            raise AssertionError("candidate profiled")
+        output = final if kwargs["component"] == "FC2/GEMM2" else intermediate
+        return SimpleNamespace(outputs=(output,), timings_us=(4.0,) * 10)
+
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics._profile_component_replays",
+        fake_profile_component,
     )
 
     with pytest.raises(RuntimeError, match="stock .* reference is not finite"):

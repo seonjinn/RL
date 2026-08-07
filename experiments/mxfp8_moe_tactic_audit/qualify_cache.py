@@ -44,7 +44,7 @@ ARTIFACT_FINGERPRINT_FIELDS = frozenset(
 RUNTIME_FINGERPRINT_FIELDS = frozenset(
     {
         "model_revision",
-        "container",
+        "container_sha256",
         "vllm_commit",
         "flashinfer_version",
         "cuda_version",
@@ -91,7 +91,7 @@ class CacheProvenance:
     selected_profiles: Path
     shmoo_results: Path
     model_revision: str
-    container: str
+    container_sha256: str
     vllm_commit: str
     flashinfer_version: str
     cuda_version: str
@@ -108,7 +108,6 @@ class CacheProvenance:
             raise ValueError("trace_paths must not be empty")
         text_fields = (
             "model_revision",
-            "container",
             "vllm_commit",
             "flashinfer_version",
             "cuda_version",
@@ -119,6 +118,10 @@ class CacheProvenance:
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{field_name} must be a nonempty string")
+        if len(self.container_sha256) != 64 or any(
+            character not in "0123456789abcdef" for character in self.container_sha256
+        ):
+            raise ValueError("container_sha256 must be a lowercase SHA256")
         for field_name in ("tp_size", "ep_size", "dp_size"):
             value = getattr(self, field_name)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
@@ -128,7 +131,7 @@ class CacheProvenance:
         """Return runtime fields used to accept or reject the candidate path."""
         return {
             "model_revision": self.model_revision,
-            "container": self.container,
+            "container_sha256": self.container_sha256,
             "vllm_commit": self.vllm_commit,
             "flashinfer_version": self.flashinfer_version,
             "cuda_version": self.cuda_version,
@@ -580,13 +583,17 @@ def _write_qualification_decisions(
                 "reason": decision.reason,
                 "selected": decision.selected.to_json(),
                 "signature_keys": list(decision.signature_keys),
-                "stock": _cache_tactic(stock[decision.cache_key], decision.cache_key).to_json(),
+                "stock": _cache_tactic(
+                    stock[decision.cache_key], decision.cache_key
+                ).to_json(),
             }
         )
     payload = {
         "cache_manifest_sha256": _sha256_file(path.with_name("cache_manifest.json")),
         "decisions": rows,
-        "selected_profiles_sha256": manifest.source_fingerprints["selected_profiles_sha256"],
+        "selected_profiles_sha256": manifest.source_fingerprints[
+            "selected_profiles_sha256"
+        ],
         "shmoo_results_sha256": manifest.source_fingerprints["shmoo_results_sha256"],
         "trace_set_sha256": manifest.source_fingerprints["trace_set_sha256"],
     }

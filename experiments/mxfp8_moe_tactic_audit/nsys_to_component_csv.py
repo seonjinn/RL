@@ -16,10 +16,11 @@ FIELDS = (
     "arm",
     "component",
     "tactic",
+    "comparison_tactic",
     "cache_event",
     "call_weight",
 )
-OUTPUT_FIELDS = (*FIELDS, "call_count", "median_us")
+OUTPUT_FIELDS = (*FIELDS, "call_count", "mean_us")
 
 
 def _range_fields(value: str) -> dict[str, str] | None:
@@ -40,10 +41,11 @@ def _range_fields(value: str) -> dict[str, str] | None:
         raise ValueError("MXFP8 MoE audit NVTX range has invalid arm or component")
     if result["cache_event"] not in {"cache hit", "fallback"}:
         raise ValueError("MXFP8 MoE audit NVTX range has invalid cache event")
-    if len(result["tactic"].split(",")) != 2 or not all(
-        item.isdecimal() for item in result["tactic"].split(",")
-    ):
-        raise ValueError("MXFP8 MoE audit NVTX range has invalid tactic")
+    for field_name in ("tactic", "comparison_tactic"):
+        if len(result[field_name].split(",")) != 2 or not all(
+            item.isdecimal() for item in result[field_name].split(",")
+        ):
+            raise ValueError(f"MXFP8 MoE audit NVTX range has invalid {field_name}")
     if not result["call_weight"].isdecimal() or int(result["call_weight"]) <= 0:
         raise ValueError("MXFP8 MoE audit NVTX range has invalid call weight")
     return result
@@ -97,7 +99,7 @@ def convert(nvtx_csv: Path, output: Path) -> None:
                 {
                     **tagged,
                     "call_count": str(instances),
-                    "median_us": f"{total_ns / instances / 1000.0:.9g}",
+                    "mean_us": f"{total_ns / instances / 1000.0:.9g}",
                 }
             )
     if not rows:

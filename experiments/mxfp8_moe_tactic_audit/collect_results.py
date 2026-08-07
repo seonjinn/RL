@@ -16,6 +16,12 @@ from statistics import fmean
 FIRST_MEASURED_STEP = 3
 LAST_MEASURED_STEP = 8
 REQUIRED_PHASES = ("refit", "rollout", "logprob", "train")
+COMPARABILITY_METADATA_FIELDS = (
+    "batch",
+    "topology",
+    "run_kind",
+    "generation_settings",
+)
 CACHE_IDENTITY_FIELDS = frozenset({"cache_sha256"})
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 PATTERNS = {
@@ -110,6 +116,59 @@ def load_jsonl(path: Path) -> tuple[dict[str, object], ...]:
             raise EvidenceError(f"JSONL evidence {path}:{number} must be an object")
         rows.append(row)
     return tuple(rows)
+
+
+def comparison_artifact_bindings(
+    stock_artifact: Path, candidate_artifact: Path
+) -> dict[str, object]:
+    """Bind a paired producer result to exact run manifests and logical IDs."""
+    return comparison_run_bindings((stock_artifact,), (candidate_artifact,))
+
+
+def comparison_run_bindings(
+    stock_artifacts: tuple[Path, ...], candidate_artifacts: tuple[Path, ...]
+) -> dict[str, object]:
+    """Bind one or more paired producer results to exact run manifests."""
+    if not stock_artifacts or len(stock_artifacts) != len(candidate_artifacts):
+        raise EvidenceError("stock/candidate binding run counts differ")
+    hashes: dict[str, dict[str, str]] = {"stock": {}, "candidate": {}}
+    for expected_arm, artifacts in (
+        ("stock", stock_artifacts),
+        ("candidate", candidate_artifacts),
+    ):
+        for artifact in artifacts:
+            run_id, manifest_sha = _run_artifact_binding(artifact, expected_arm)
+            if run_id in hashes[expected_arm]:
+                raise EvidenceError(f"duplicate {expected_arm} comparison run ID")
+            hashes[expected_arm][run_id] = manifest_sha
+    if set(hashes["stock"]) != set(hashes["candidate"]):
+        raise EvidenceError("stock/candidate logical comparison IDs differ")
+    return {
+        "candidate_arm_id": "candidate",
+        "candidate_run_manifests": dict(sorted(hashes["candidate"].items())),
+        "comparison_run_ids": sorted(hashes["stock"]),
+        "stock_arm_id": "stock",
+        "stock_run_manifests": dict(sorted(hashes["stock"].items())),
+    }
+
+
+def _run_artifact_binding(artifact: Path, expected_arm: str) -> tuple[str, str]:
+    """Return one logical run ID and exact manifest hash."""
+    run_root = artifact if artifact.is_dir() else artifact.parent
+    while (
+        run_root != run_root.parent and not (run_root / "run_manifest.json").is_file()
+    ):
+        run_root = run_root.parent
+    manifest = run_root / "run_manifest.json"
+    evidence = load_json_object(run_root / "run_evidence.json")
+    arm = evidence.get("arm")
+    metadata = evidence.get("metadata")
+    if arm != expected_arm or not isinstance(metadata, dict):
+        raise EvidenceError(f"{expected_arm} producer artifact has invalid arm")
+    run_id = metadata.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        raise EvidenceError(f"{expected_arm} producer artifact has no run ID")
+    return run_id, sha256_file(manifest)
 
 
 def find_driver_log(run_root: Path) -> Path:
@@ -239,6 +298,12 @@ def write_run_evidence(
         raise EvidenceError("run evidence arm must be stock or candidate")
     if not run_id or metadata.get("run_id") != run_id:
         raise EvidenceError("run evidence metadata must bind the run ID")
+    missing_metadata = set(COMPARABILITY_METADATA_FIELDS) - set(metadata)
+    if missing_metadata:
+        raise EvidenceError(
+            "run evidence metadata is missing comparability fields: "
+            + ", ".join(sorted(missing_metadata))
+        )
     if not all(
         isinstance(key, str) and isinstance(value, str) and value
         for key, value in runtime_fingerprints.items()
