@@ -158,6 +158,7 @@ validate_vllm_environment() {
     [[ "\${prepared_environment_key}" == "\${expected_key}" ]] || return 1
   fi
   [[ -x "\${environment_root}/vllm-canonical/bin/python" ]] || return 1
+  [[ -x "\${environment_root}/mcore-canonical/bin/python" ]] || return 1
   NEMO_RL_VENV_DIR="\${environment_root}" \
     "\${environment_root}/vllm-canonical/bin/python" - <<'PY'
 import os
@@ -169,16 +170,25 @@ from nemo_rl.distributed.ray_actor_environment_registry import (
 from nemo_rl.distributed.virtual_cluster import PY_EXECUTABLES
 
 root = Path(os.environ["NEMO_RL_VENV_DIR"])
-canonical = (root / "vllm-canonical").resolve()
+canonical_by_executable = {
+    PY_EXECUTABLES.VLLM: (root / "vllm-canonical").resolve(),
+    PY_EXECUTABLES.MCORE: (root / "mcore-canonical").resolve(),
+}
 missing = []
 for actor_fqn, py_executable in sorted(ACTOR_ENVIRONMENT_REGISTRY.items()):
-    if py_executable != PY_EXECUTABLES.VLLM:
+    canonical = canonical_by_executable.get(py_executable)
+    if canonical is None:
         continue
     alias = root / actor_fqn
     if not alias.is_symlink() or alias.resolve() != canonical:
         missing.append(actor_fqn)
 if missing:
-    raise SystemExit(f"Missing or invalid vLLM actor aliases: {missing}")
+    raise SystemExit(f"Missing or invalid prepared actor aliases: {missing}")
+PY
+  "\${environment_root}/mcore-canonical/bin/python" - <<'PY'
+import megatron.bridge
+
+print(f"Prepared Megatron Bridge={megatron.bridge.__file__}")
 PY
 }
 mkdir -p "${VLLM_VENV_BASE_ROOT}"
@@ -202,27 +212,34 @@ from nemo_rl.utils.venvs import create_local_venv
 from pathlib import Path
 
 root = Path(os.environ["NEMO_RL_VENV_DIR"])
-canonical_python = Path(create_local_venv(
-    PY_EXECUTABLES.VLLM,
-    "vllm-canonical",
-))
-canonical = canonical_python.parent.parent
-actor_names = sorted(
-    actor_fqn
-    for actor_fqn, py_executable in ACTOR_ENVIRONMENT_REGISTRY.items()
-    if py_executable == PY_EXECUTABLES.VLLM
-)
+canonical_by_executable = {}
+for py_executable, canonical_name in (
+    (PY_EXECUTABLES.VLLM, "vllm-canonical"),
+    (PY_EXECUTABLES.MCORE, "mcore-canonical"),
+):
+    canonical_python = Path(create_local_venv(py_executable, canonical_name))
+    canonical_by_executable[py_executable] = canonical_python.parent.parent
+
 required = {
-    "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker",
-    "nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker",
+    "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker": PY_EXECUTABLES.VLLM,
+    "nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker": PY_EXECUTABLES.VLLM,
+    "nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker": PY_EXECUTABLES.MCORE,
+    "nemo_rl.models.value.workers.megatron_value_worker.MegatronValueWorker": PY_EXECUTABLES.MCORE,
 }
-missing = required.difference(actor_names)
+missing = {
+    actor_fqn
+    for actor_fqn, py_executable in required.items()
+    if ACTOR_ENVIRONMENT_REGISTRY.get(actor_fqn) != py_executable
+}
 if missing:
-    raise RuntimeError(f"Missing required vLLM actor registrations: {sorted(missing)}")
-for actor_name in actor_names:
+    raise RuntimeError(f"Missing required actor registrations: {sorted(missing)}")
+for actor_name, py_executable in sorted(ACTOR_ENVIRONMENT_REGISTRY.items()):
+    canonical = canonical_by_executable.get(py_executable)
+    if canonical is None:
+        continue
     alias = root / actor_name
     alias.symlink_to(canonical.name, target_is_directory=True)
-    print(f"Prepared vLLM actor alias: {actor_name} -> {canonical.name}")
+    print(f"Prepared actor alias: {actor_name} -> {canonical.name}")
 PY
   \${VLLM_ENVIRONMENT_ROOT}/vllm-canonical/bin/python - <<'PY'
 import flashinfer
@@ -232,6 +249,11 @@ import vllm
 print(f"Prepared vLLM={vllm.__version__}")
 print(f"Prepared FlashInfer={flashinfer.__version__}")
 print(f"Prepared Ray={ray.__version__}")
+PY
+  \${VLLM_ENVIRONMENT_ROOT}/mcore-canonical/bin/python - <<'PY'
+import megatron.bridge
+
+print(f"Prepared Megatron Bridge={megatron.bridge.__file__}")
 PY
   validate_vllm_environment \
     "\${VLLM_ENVIRONMENT_ROOT}" "\${VLLM_ENVIRONMENT_KEY}" false

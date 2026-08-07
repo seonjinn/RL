@@ -396,7 +396,7 @@ def test_launchers_reuse_versioned_canonical_vllm_environment_without_syncing() 
         assert "${DRIVER_VENV}/bin/python examples/run_grpo.py" in text
 
 
-def test_preparation_builds_one_canonical_vllm_venv_and_all_actor_aliases() -> None:
+def test_preparation_builds_canonical_vllm_and_mcore_venvs_with_actor_aliases() -> None:
     prepare_text = PREPARE_SCRIPT.read_text()
 
     assert "VLLM_VENV_BASE_ROOT" in prepare_text
@@ -405,10 +405,24 @@ def test_preparation_builds_one_canonical_vllm_venv_and_all_actor_aliases() -> N
     assert "nemo-rl-vllm0251-worker-venvs" in prepare_text
     assert "create_local_venv(" in prepare_text
     assert '"vllm-canonical"' in prepare_text
+    assert '"mcore-canonical"' in prepare_text
     assert "ACTOR_ENVIRONMENT_REGISTRY" in prepare_text
-    assert "py_executable == PY_EXECUTABLES.VLLM" in prepare_text
-    assert "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker" in prepare_text
+    assert '(PY_EXECUTABLES.VLLM, "vllm-canonical")' in prepare_text
+    assert '(PY_EXECUTABLES.MCORE, "mcore-canonical")' in prepare_text
+    assert (
+        "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker"
+        in prepare_text
+    )
     assert "VllmAsyncGenerationWorker" in prepare_text
+    assert (
+        "nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker"
+        in prepare_text
+    )
+    assert (
+        "nemo_rl.models.value.workers.megatron_value_worker.MegatronValueWorker"
+        in prepare_text
+    )
+    assert "import megatron.bridge" in prepare_text
     assert "READY" in prepare_text
     assert "prepared_environment_key" in prepare_text
     assert "flock" in prepare_text
