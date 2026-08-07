@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 import json
@@ -176,12 +177,72 @@ def _l2_size_bytes(device: torch.device) -> int:
     return 256 * 1024 * 1024
 
 
+@contextmanager
+def _nsys_component_range(
+    case: MoeKernelCase, tactic: TacticPair, arm: str, component: str
+) -> Iterator[None]:
+    """Emit the metadata NSys needs to produce one non-fabricated component row."""
+    cache_key = cache_key_for_case(case, has_gemm1_lora_delta=component == "FC1/GEMM1")
+    label = "|".join(
+        (
+            "MXFP8_MOE_AUDIT",
+            f"signature_key={case.profile.signature_key}",
+            f"cache_key={cache_key}",
+            f"arm={arm}",
+            f"component={component}",
+            f"tactic={tactic.gemm1},{tactic.gemm2}",
+            "cache_event=cache hit",
+            f"call_weight={case.profile.call_count}",
+        )
+    )
+    pushed = False
+    try:
+        torch.cuda.nvtx.range_push(label)
+        pushed = True
+    except RuntimeError:
+        # CPU-only unit tests have no NVTX library; an actual NSys run must emit ranges.
+        pass
+    try:
+        yield
+    finally:
+        if pushed:
+            torch.cuda.nvtx.range_pop()
+
+
+def _load_stock_tactics(path: Path) -> dict[str, TacticPair]:
+    """Load the exact stock-cache tactics used to tag NSys ranges."""
+    try:
+        payload = json.loads(path.read_text(encoding="ascii"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot read stock cache {path}: {error}") from error
+    if not isinstance(payload, Mapping):
+        raise ValueError("stock cache must be a JSON object")
+    tactics: dict[str, TacticPair] = {}
+    for cache_key, value in payload.items():
+        if cache_key == "_metadata":
+            continue
+        if not isinstance(value, list) or not value or value[0] != "MoERunner":
+            continue
+        if (
+            not isinstance(cache_key, str)
+            or len(value) != 2
+            or not isinstance(value[1], list)
+            or len(value[1]) != 2
+        ):
+            raise ValueError("stock cache contains an invalid MoERunner tactic")
+        tactics[cache_key] = TacticPair(value[1][0], value[1][1])
+    if not tactics:
+        raise ValueError("stock cache has no MoERunner tactics")
+    return tactics
+
+
 def _profile_tactic_cuda(
     case: MoeKernelCase,
     tactic: TacticPair,
     *,
     warmups: int,
     repetitions: int,
+    stock_tactics: Mapping[str, TacticPair] | None = None,
 ) -> _ProfileResult:
     if case.hidden_states.device.type != "cuda":
         raise ValueError("MXFP8 MoE tactic profiling requires CUDA")
@@ -190,6 +251,14 @@ def _profile_tactic_cuda(
     signature = case.profile.signature
     final_key = cache_key_for_case(case, has_gemm1_lora_delta=False)
     intermediate_key = cache_key_for_case(case, has_gemm1_lora_delta=True)
+    stock_final_tactic = None if stock_tactics is None else stock_tactics.get(final_key)
+    stock_intermediate_tactic = (
+        None if stock_tactics is None else stock_tactics.get(intermediate_key)
+    )
+    if stock_tactics is not None and (
+        stock_final_tactic is None or stock_intermediate_tactic is None
+    ):
+        raise ValueError("stock cache has no tactic for a replayed component key")
     zero_delta = torch.zeros(
         signature.num_tokens,
         signature.top_k,
@@ -198,12 +267,40 @@ def _profile_tactic_cuda(
         device=case.hidden_states.device,
     )
 
-    with force_stock_tactic(final_key):
+    stock_final_context = (
+        force_stock_tactic(final_key)
+        if stock_final_tactic is None
+        else force_tactic(final_key, stock_final_tactic)
+    )
+    with (
+        stock_final_context,
+        _nsys_component_range(
+            case,
+            tactic if stock_final_tactic is None else stock_final_tactic,
+            "stock",
+            "FC2/GEMM2",
+        ),
+    ):
         stock_final = _final_output(
             run_moe_pair(case, packed_topk, do_finalize=True, gemm1_lora_delta=None)
         ).clone()
     try:
-        with force_stock_tactic(intermediate_key):
+        stock_intermediate_context = (
+            force_stock_tactic(intermediate_key)
+            if stock_intermediate_tactic is None
+            else force_tactic(intermediate_key, stock_intermediate_tactic)
+        )
+        with (
+            stock_intermediate_context,
+            _nsys_component_range(
+                case,
+                tactic
+                if stock_intermediate_tactic is None
+                else stock_intermediate_tactic,
+                "stock",
+                "FC1/GEMM1",
+            ),
+        ):
             stock_intermediate = _intermediate_output(
                 run_moe_pair(
                     case,
@@ -224,7 +321,10 @@ def _profile_tactic_cuda(
     if not bool(torch.isfinite(stock_intermediate).all().item()):
         raise RuntimeError("stock FC1 intermediate reference is not finite")
 
-    with force_tactic(intermediate_key, tactic):
+    with (
+        force_tactic(intermediate_key, tactic),
+        _nsys_component_range(case, tactic, "candidate", "FC1/GEMM1"),
+    ):
         candidate_intermediate = _intermediate_output(
             run_moe_pair(
                 case,
@@ -244,7 +344,10 @@ def _profile_tactic_cuda(
 
     timings_us: list[float] = []
     replay_outputs: list[torch.Tensor] = []
-    with force_tactic(final_key, tactic):
+    with (
+        force_tactic(final_key, tactic),
+        _nsys_component_range(case, tactic, "candidate", "FC2/GEMM2"),
+    ):
         candidate_final = _final_output(
             run_moe_pair(case, packed_topk, do_finalize=True, gemm1_lora_delta=None)
         ).clone()
@@ -341,6 +444,7 @@ def profile_tactic(
     tactic: TacticPair,
     warmups: int = 3,
     repetitions: int = 10,
+    stock_tactics: Mapping[str, TacticPair] | None = None,
 ) -> TacticMeasurement:
     """Profile and qualify one paired FC1/FC2 tactic without leaking failures."""
     if warmups != 3:
@@ -349,7 +453,11 @@ def profile_tactic(
         raise ValueError("repetitions must be at least 10")
     try:
         result = _profile_tactic_cuda(
-            case, tactic, warmups=warmups, repetitions=repetitions
+            case,
+            tactic,
+            warmups=warmups,
+            repetitions=repetitions,
+            stock_tactics=stock_tactics,
         )
     except IntermediateApiUnavailable:
         return _failure_measurement(
@@ -408,6 +516,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--warmups", type=int, default=3)
     parser.add_argument("--repetitions", type=int, default=10)
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--stock-cache", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args(argv)
 
@@ -433,6 +542,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "--profile-limit=1 --tactic-limit=2 smoke"
         )
     synthetic_source = args.synthetic_smoke or bounded_implicit_smoke
+    if not synthetic_source and args.stock_cache is None:
+        raise SystemExit("real shmoo runs require --stock-cache for NSys stock tactics")
+    stock_tactics = (
+        None if args.stock_cache is None else _load_stock_tactics(args.stock_cache)
+    )
     assert_supported_flashinfer()
     profiles = _load_profiles(args.profiles)
     if args.profile_limit is not None:
@@ -451,12 +565,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.tactic_limit is not None:
                 tactics = tactics[: args.tactic_limit]
             for tactic in tactics:
-                measurement = profile_tactic(
-                    case,
-                    tactic,
-                    warmups=args.warmups,
-                    repetitions=args.repetitions,
-                )
+                if stock_tactics is None:
+                    measurement = profile_tactic(
+                        case,
+                        tactic,
+                        warmups=args.warmups,
+                        repetitions=args.repetitions,
+                    )
+                else:
+                    measurement = profile_tactic(
+                        case,
+                        tactic,
+                        warmups=args.warmups,
+                        repetitions=args.repetitions,
+                        stock_tactics=stock_tactics,
+                    )
                 row = measurement.to_json()
                 if synthetic_source:
                     row["synthetic"] = True

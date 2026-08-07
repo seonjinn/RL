@@ -71,6 +71,9 @@ def test_shmoo_dry_run_requests_one_gb200_for_five_hours(tmp_path: Path) -> None
     assert "--repetitions 10" in output
     assert "CUDA Graph" in output
     assert "nsys profile" in output
+    assert "nsys stats --report nvtxppsum" in output
+    assert "nsys_to_component_csv.py" in output
+    assert "--stock-cache" in output
     assert "stock_input_cache_root=" in output
     assert "mkdir -p ${RUN_ROOT} ${CACHE_ROOT}" not in output
 
@@ -116,7 +119,9 @@ def test_validation_dry_runs_keep_stock_and_candidate_isolated(tmp_path: Path) -
     assert "generation.jsonl" in candidate_output
     assert "--write-run-evidence" in candidate_output
     assert "--write-run-evidence" in candidate_output
-    assert "train_data_step" in (AUDIT_DIR / "collect_results.py").read_text(encoding="ascii")
+    assert "train_data_step" in (AUDIT_DIR / "collect_results.py").read_text(
+        encoding="ascii"
+    )
     assert '"realized_generated_tokens": None' not in candidate_output
     assert "RUNTIME_FINGERPRINTS_JSON" in candidate_output
     assert "\nPY\nif [[ 8 -eq 2 ]]" not in candidate_output
@@ -173,7 +178,7 @@ def test_compare_mode_is_the_only_cross_arm_validation_path(tmp_path: Path) -> N
     bin_dir.mkdir()
     compare_log = tmp_path / "compare.log"
     (bin_dir / "python").write_text(
-        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$COMPARE_LOG\"\n",
+        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "$COMPARE_LOG"\n',
         encoding="ascii",
     )
     (bin_dir / "python").chmod(0o755)
@@ -233,7 +238,7 @@ def test_validation_test_only_rejects_a_missing_cache_before_sbatch(
     bin_dir.mkdir()
     sbatch_log = tmp_path / "sbatch.log"
     (bin_dir / "sbatch").write_text(
-        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$SBATCH_LOG\"\n",
+        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "$SBATCH_LOG"\n',
         encoding="ascii",
     )
     (bin_dir / "sbatch").chmod(0o755)
@@ -272,7 +277,7 @@ def test_shmoo_test_only_rejects_a_missing_stock_input_cache_before_sbatch(
     bin_dir.mkdir()
     sbatch_log = tmp_path / "sbatch.log"
     (bin_dir / "sbatch").write_text(
-        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$SBATCH_LOG\"\n",
+        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "$SBATCH_LOG"\n',
         encoding="ascii",
     )
     (bin_dir / "sbatch").chmod(0o755)
@@ -308,12 +313,16 @@ def test_shmoo_test_only_rejects_a_missing_stock_input_cache_before_sbatch(
 
 def _init_git_repo(path: Path) -> str:
     subprocess.run(["git", "init", "-q"], check=True, cwd=path)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], check=True, cwd=path)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"], check=True, cwd=path
+    )
     subprocess.run(["git", "config", "user.name", "Test User"], check=True, cwd=path)
     (path / "tracked.txt").write_text("clean\n", encoding="ascii")
     subprocess.run(["git", "add", "tracked.txt"], check=True, cwd=path)
     subprocess.run(["git", "commit", "-q", "-m", "initial"], check=True, cwd=path)
-    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=path, text=True).strip()
+    return subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=path, text=True
+    ).strip()
 
 
 def test_provenance_rejects_dirty_tracked_source(tmp_path: Path) -> None:
@@ -324,7 +333,14 @@ def test_provenance_rejects_dirty_tracked_source(tmp_path: Path) -> None:
     (repo / "tracked.txt").write_text("dirty\n", encoding="ascii")
 
     result = subprocess.run(
-        ["bash", "-c", 'source "$1"; audit_assert_clean_tracked "$2"', "bash", str(PROVENANCE), str(repo)],
+        [
+            "bash",
+            "-c",
+            'source "$1"; audit_assert_clean_tracked "$2"',
+            "bash",
+            str(PROVENANCE),
+            str(repo),
+        ],
         capture_output=True,
         text=True,
     )
@@ -339,10 +355,21 @@ def test_provenance_accepts_a_clean_linked_worktree(tmp_path: Path) -> None:
     source.mkdir()
     _init_git_repo(source)
     linked = tmp_path / "linked"
-    subprocess.run(["git", "worktree", "add", "-q", "-b", "linked", str(linked)], check=True, cwd=source)
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "-b", "linked", str(linked)],
+        check=True,
+        cwd=source,
+    )
 
     result = subprocess.run(
-        ["bash", "-c", 'source "$1"; audit_assert_clean_tracked "$2"', "bash", str(PROVENANCE), str(linked)],
+        [
+            "bash",
+            "-c",
+            'source "$1"; audit_assert_clean_tracked "$2"',
+            "bash",
+            str(PROVENANCE),
+            str(linked),
+        ],
         check=True,
         capture_output=True,
         text=True,

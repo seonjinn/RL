@@ -111,3 +111,56 @@ PYTHONPATH=. .venv/bin/pyright <changed audit modules>
 Regenerated template report: all four PNGs are 4140x1473 at 600 DPI; HTML is
 structured and has four embedded figure elements. The template is explicitly
 `NOT YET EXECUTED` and makes no measured-performance claim.
+
+## Fix Round 3
+
+- The shmoo launcher now runs the real `nsys stats nvtxppsum` conversion after
+  capture. `nsys_to_component_csv.py` accepts the tagged NSys summary and
+  emits per-profile signature/cache/arm/component/tactic/cache-event/call-
+  weight/call-count/timing rows. Real shmoo runs load the stock
+  `autotune_configs.json`, force those exact stock tactics, and tag FC1/GEMM1
+  and FC2/GEMM2 independently; synthetic smoke remains isolated.
+- The collector validates the canonical `CacheManifest` schema, all
+  qualification decision fingerprints, exact arm-to-cache hashes, and the
+  independently observed runtime values. Validation evidence computes the
+  cache hash at runtime and records actual NeMo-RL/vLLM checkout SHAs,
+  FlashInfer/CUDA/GPU values, topology settings, and CUDA-graph mode.
+- Repetitions allow a shared logical comparison ID across stock and candidate
+  while requiring unique IDs within each arm, matching run settings, and one
+  invariant cache identity per arm. Correctness and GSM8K payloads must bind
+  the exact stock/candidate run-manifest hashes and comparison IDs.
+- GSM8K acceptance recomputes stock/candidate accuracy and delta from the four
+  paired cells, verifies all 1319 examples, validates statistical/pass-field
+  consistency, and rejects inconsistent producer payloads. Fractional NSys
+  call counts or call weights fail closed as `INCOMPLETE`.
+- Component charts receive the per-profile FC1/GEMM1 and FC2/GEMM2
+  distributions rather than component means. Captions enumerate every stock
+  and candidate arm/run/batch/topology represented. Raw trace files are named
+  only as sanitized member labels in report provenance.
+
+## Fix Round 3 Verification
+
+```text
+PYTHONPATH=. .venv/bin/pytest -q \
+  tests/experiments/test_mxfp8_moe_tactic_audit_report.py \
+  tests/experiments/test_mxfp8_moe_tactic_audit_launchers.py \
+  tests/experiments/test_mxfp8_moe_tactic_shmoo.py \
+  tests/experiments/test_mxfp8_moe_tactic_cache_qualification.py
+
+69 passed, 16 macOS pytest temporary-directory cleanup warnings in 28.42s
+
+.venv/bin/ruff check <changed audit modules and tests>
+All checks passed.
+
+.venv/bin/pyright <changed audit modules and tests>
+0 errors.
+
+bash -n experiments/mxfp8_moe_tactic_audit/submit_shmoo_ptyche.sh \
+  experiments/mxfp8_moe_tactic_audit/submit_validation_ptyche.sh
+0 errors.
+```
+
+Regenerated and visually inspected the explicit `NOT YET EXECUTED` template:
+all four PNGs are 4140x1473 at 600 DPI, every PDF is a single-page PDF 1.4,
+and the HTML has four `<figure>/<img>` entries with no escaped Markdown or
+`<pre>` block. The template carries no fabricated performance values.

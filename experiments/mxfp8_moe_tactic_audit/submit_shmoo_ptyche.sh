@@ -37,6 +37,10 @@ if [[ "${ACTION}" != dry-run ]]; then
         audit_resolve_model_snapshot "${HF_MODEL_CACHE_DIR}" 16
     )
     audit_require_nonempty_dir "${STOCK_INPUT_CACHE_ROOT}"
+    [[ -s "${STOCK_INPUT_CACHE_ROOT}/autotune_configs.json" ]] || {
+        echo "Missing stock tactic cache: ${STOCK_INPUT_CACHE_ROOT}/autotune_configs.json" >&2
+        exit 1
+    }
     [[ -s "${SELECTED_PROFILES}" ]] || { echo "Missing selected profiles: ${SELECTED_PROFILES}" >&2; exit 1; }
     [[ -f "${CONTAINER}" ]] || { echo "Missing container: ${CONTAINER}" >&2; exit 1; }
     [[ "${SHMOO_OUTPUT_ROOT}" == "${RUN_ROOT}" || "${SHMOO_OUTPUT_ROOT}" == "${RUN_ROOT}/"* ]] || {
@@ -71,9 +75,14 @@ nsys profile --trace=cuda,nvtx --force-overwrite=true --output ${RUN_ROOT}/nsys-
   python experiments/mxfp8_moe_tactic_audit/shmoo_moe_tactics.py \\
   --profiles ${SELECTED_PROFILES} \\
   --weights ${MOE_WEIGHTS} \\
+  --stock-cache ${STOCK_INPUT_CACHE_ROOT}/autotune_configs.json \\
   --warmups 3 \\
   --repetitions 10 \\
   --output ${SHMOO_OUTPUT_ROOT}/measurements.jsonl
+nsys stats --report nvtxppsum --format csv --output ${RUN_ROOT}/nsys-nvtx ${RUN_ROOT}/nsys-selected.nsys
+python experiments/mxfp8_moe_tactic_audit/nsys_to_component_csv.py \\
+  --nvtx-csv ${RUN_ROOT}/nsys-nvtx.csv \\
+  --output ${SHMOO_OUTPUT_ROOT}/nsys_components.csv
 EOF
 )
 
@@ -114,7 +123,8 @@ case "${ACTION}" in
             examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml \
             "${MODEL_SNAPSHOT}" "${STOCK_INPUT_CACHE_ROOT}" "${SCRIPT_DIR}" \
             "${SCRIPT_DIR}/submit_shmoo_ptyche.sh" "${SCRIPT_DIR}/provenance.sh" \
-            "${SCRIPT_DIR}/shmoo_moe_tactics.py" "${SELECTED_PROFILES}"
+            "${SCRIPT_DIR}/shmoo_moe_tactics.py" "${SCRIPT_DIR}/nsys_to_component_csv.py" \\
+            "${SELECTED_PROFILES}"
         CONTAINER=${CONTAINER} MOUNTS=/lustre:/lustre COMMAND="${COMMAND}" GPUS_PER_NODE=1 \
             BASE_LOG_DIR="${RUN_ROOT}" sbatch "${SBATCH_ARGS[@]}" "${REPO_DIR}/ray.sub"
         ;;

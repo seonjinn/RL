@@ -45,7 +45,20 @@ def _save(fig: Figure, base: Path, caption: str) -> None:
 
 def _bars(ax: Axes, data: pd.DataFrame, *, x: str, y: str, ylabel: str) -> None:
     order = list(data[x])
-    sns.barplot(data=data, x=x, y=y, hue=x, order=order, hue_order=order, palette=sns.color_palette("Paired", n_colors=len(order)), edgecolor=EDGE_COLOR, linewidth=2.0, legend=False, zorder=10, ax=ax)
+    sns.barplot(
+        data=data,
+        x=x,
+        y=y,
+        hue=x,
+        order=order,
+        hue_order=order,
+        palette=sns.color_palette("Paired", n_colors=len(order)),
+        edgecolor=EDGE_COLOR,
+        linewidth=2.0,
+        legend=False,
+        zorder=10,
+        ax=ax,
+    )
     _style(ax, ylabel)
     for container in ax.containers:
         if isinstance(container, BarContainer):
@@ -67,31 +80,65 @@ def write_complete_plots(
     plt.rcParams.update({"pdf.fonttype": 42, "ps.fonttype": 42})
     micro = pd.DataFrame(component_speedups, columns=["Component", "Speedup"])
     fig, ax = plt.subplots(figsize=(7, 4.2))
-    _bars(ax, micro, x="Component", y="Speedup", ylabel="Call-weighted component speedup")
+    _bars(ax, micro, x="Component", y="Speedup", ylabel="Per-profile component speedup")
     ax.axhline(1.0, linestyle="--", linewidth=1.1, color="black", zorder=2)
     _save(fig, output_dir / PLOT_NAMES[0], metadata_caption)
 
-    shares = pd.DataFrame((("Tactic change", tactic_change_share), ("Cache hit", cache_hit_share), ("Fallback", 1.0 - cache_hit_share)), columns=["Evidence", "Share"])
+    shares = pd.DataFrame(
+        (
+            ("Tactic change", tactic_change_share),
+            ("Cache hit", cache_hit_share),
+            ("Fallback", 1.0 - cache_hit_share),
+        ),
+        columns=["Evidence", "Share"],
+    )
     fig, ax = plt.subplots(figsize=(7, 4.2))
     _bars(ax, shares, x="Evidence", y="Share", ylabel="Share")
     ax.set_ylim(0, 1.12)
     _save(fig, output_dir / PLOT_NAMES[1], metadata_caption)
 
-    end_to_end = pd.DataFrame((("tok/s/GPU", normalized_throughput), ("Total step time", normalized_total_step_time)), columns=["Metric", "Candidate / Stock"])
+    end_to_end = pd.DataFrame(
+        (
+            ("tok/s/GPU", normalized_throughput),
+            ("Total step time", normalized_total_step_time),
+        ),
+        columns=["Metric", "Candidate / Stock"],
+    )
     fig, ax = plt.subplots(figsize=(7, 4.2))
     _bars(ax, end_to_end, x="Metric", y="Candidate / Stock", ylabel="Candidate / Stock")
     ax.axhline(1.0, linestyle="--", linewidth=1.1, color="black", zorder=2)
-    _save(fig, output_dir / PLOT_NAMES[2], metadata_caption + "; total step time: lower is better")
+    _save(
+        fig,
+        output_dir / PLOT_NAMES[2],
+        metadata_caption + "; total step time: lower is better",
+    )
 
     rows = []
     for run_id, arm, step, tokens, seconds in per_step:
         label = f"{arm}/{run_id} S{step}"
-        rows.extend(((label, arm.title(), "tok/s/GPU", tokens), (label, arm.title(), "Total step s", seconds)))
+        rows.extend(
+            (
+                (label, arm.title(), "tok/s/GPU", tokens),
+                (label, arm.title(), "Total step s", seconds),
+            )
+        )
     frame = pd.DataFrame(rows, columns=["Step", "Arm", "Metric", "Value"])
     fig, axes = plt.subplots(1, 2, figsize=(11.2, 4.2))
     for ax, metric in zip(axes, ("tok/s/GPU", "Total step s"), strict=True):
         subset = cast(pd.DataFrame, frame[frame["Metric"] == metric])
-        sns.barplot(data=subset, x="Step", y="Value", hue="Arm", hue_order=["Stock", "Candidate"], palette=sns.color_palette("Paired", n_colors=2), edgecolor=EDGE_COLOR, linewidth=2.0, errorbar=None, zorder=10, ax=ax)
+        sns.barplot(
+            data=subset,
+            x="Step",
+            y="Value",
+            hue="Arm",
+            hue_order=["Stock", "Candidate"],
+            palette=sns.color_palette("Paired", n_colors=2),
+            edgecolor=EDGE_COLOR,
+            linewidth=2.0,
+            errorbar=None,
+            zorder=10,
+            ax=ax,
+        )
         _style(ax, metric)
         for container in ax.containers:
             if isinstance(container, BarContainer):
@@ -100,7 +147,15 @@ def write_complete_plots(
             ax.get_legend().remove()
         ax.tick_params(axis="x", rotation=65, labelsize=7)
     handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="upper center", frameon=False, bbox_to_anchor=(0.5, 1.02), ncol=2, fontsize=11)
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        frameon=False,
+        bbox_to_anchor=(0.5, 1.02),
+        ncol=2,
+        fontsize=11,
+    )
     _save(fig, output_dir / PLOT_NAMES[3], metadata_caption + "; raw steps 3-8")
 
 
@@ -109,6 +164,13 @@ def write_unavailable_plots(output_dir: Path, state: str) -> None:
     plt.rcParams.update({"pdf.fonttype": 42, "ps.fonttype": 42})
     for name in PLOT_NAMES:
         fig, ax = plt.subplots(figsize=(7, 2.4))
-        ax.text(0.5, 0.5, f"{state}\nNo performance values reported", ha="center", va="center", fontsize=13)
+        ax.text(
+            0.5,
+            0.5,
+            f"{state}\nNo performance values reported",
+            ha="center",
+            va="center",
+            fontsize=13,
+        )
         ax.set_axis_off()
         _save(fig, output_dir / name, "MXFP8 MoE tactic audit")

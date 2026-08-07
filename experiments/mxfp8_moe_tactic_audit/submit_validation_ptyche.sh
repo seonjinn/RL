@@ -151,21 +151,45 @@ export VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=${CACHE_ROOT}
 export MXFP8_MOE_CUDA_GRAPH_REPLAY=required
 mkdir -p ${RUN_ROOT}
 python examples/run_grpo.py --config ${CONFIG} cluster.num_nodes=4 cluster.gpus_per_node=4 cluster.segment_size=4 policy.model_name=${MODEL_SNAPSHOT} policy.generation.vllm_cfg.enforce_eager=false ++policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm grpo.max_num_steps=${MAX_STEPS} grpo.val_at_start=false checkpointing.enabled=false checkpointing.checkpoint_dir=${RUN_ROOT}/checkpoints logger.log_dir=${RUN_ROOT}/logs logger.wandb_enabled=false
-RUNTIME_FINGERPRINTS_JSON=\$(${DRIVER_VENV}/bin/python - ${CACHE_MANIFEST} <<'PY'
+RUNTIME_FINGERPRINTS_JSON=\$(MODEL_REVISION=${MODEL_REVISION} CONTAINER_PATH=${CONTAINER} CACHE_ROOT_PATH=${CACHE_ROOT} TP_SIZE=4 EP_SIZE=1 DP_SIZE=16 ${DRIVER_VENV}/bin/python - <<'PY'
+import hashlib
 import json
-import sys
+import os
+import subprocess
+from pathlib import Path
+import torch
 
-payload = json.load(open(sys.argv[1], encoding="ascii"))
-fingerprints = payload.get("source_fingerprints")
-if not isinstance(fingerprints, dict):
-    raise RuntimeError("cache manifest has no source_fingerprints")
-runtime_fields = (
-    "model_revision", "container", "vllm_commit", "flashinfer_version",
-    "cuda_version", "gpu_name", "tp_size", "ep_size", "dp_size", "cuda_graph_mode",
-)
-runtime = {field: fingerprints.get(field) for field in runtime_fields}
-if not all(isinstance(value, str) and value for value in runtime.values()):
-    raise RuntimeError("cache manifest runtime fingerprints are incomplete")
+import flashinfer
+
+
+def sha256_path(path: Path) -> str:
+    if path.is_file():
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    for member in sorted((item for item in path.rglob("*") if item.is_file()), key=lambda item: item.as_posix()):
+        relative = "./" + member.relative_to(path).as_posix()
+        digest.update(relative.encode("utf-8") + b"\0")
+        digest.update(hashlib.sha256(member.read_bytes()).hexdigest().encode("ascii") + b"\0")
+    return digest.hexdigest()
+
+
+gpu_name = torch.cuda.get_device_name(0)
+container_path = Path(os.environ["CONTAINER_PATH"])
+runtime = {
+    "model_revision": os.environ["MODEL_REVISION"],
+    "container": os.environ["CONTAINER_PATH"],
+    "container_sha256": sha256_path(container_path),
+    "nemo_rl_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+    "vllm_commit": subprocess.check_output(["git", "-C", "${CUSTOM_VLLM_ROOT}", "rev-parse", "HEAD"], text=True).strip(),
+    "flashinfer_version": str(flashinfer.__version__),
+    "cuda_version": str(torch.version.cuda),
+    "gpu_name": gpu_name,
+    "tp_size": os.environ["TP_SIZE"],
+    "ep_size": os.environ["EP_SIZE"],
+    "dp_size": os.environ["DP_SIZE"],
+    "cuda_graph_mode": "required",
+    "cache_sha256": sha256_path(Path(os.environ["CACHE_ROOT_PATH"])),
+}
 print(json.dumps(runtime, sort_keys=True))
 PY
 )
@@ -185,6 +209,6 @@ case "${ACTION}" in
   dry-run) ;;
   test-only) CONTAINER=${CONTAINER} MOUNTS=/lustre:/lustre COMMAND="${COMMAND}" GPUS_PER_NODE=4 BASE_LOG_DIR="${RUN_ROOT}" sbatch --test-only "${SBATCH_ARGS[@]}" "${REPO_DIR}/ray.sub" ;;
   submit)
-    audit_write_manifest "${RUN_ROOT}" "validation-${ARM}" "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" "${EXPECTED_VLLM_COMMIT}" "${CONTAINER}" "${CONFIG}" "${MODEL_SNAPSHOT}" "${CACHE_ROOT}" "${VALIDATION_EXECUTION_INPUTS[0]}" "${VALIDATION_EXECUTION_INPUTS[@]:1}"
+    audit_write_manifest "${RUN_ROOT}" validation "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" "${EXPECTED_VLLM_COMMIT}" "${CONTAINER}" "${CONFIG}" "${MODEL_SNAPSHOT}" "${CACHE_ROOT}" "${VALIDATION_EXECUTION_INPUTS[0]}" "${VALIDATION_EXECUTION_INPUTS[@]:1}"
     CONTAINER=${CONTAINER} MOUNTS=/lustre:/lustre COMMAND="${COMMAND}" GPUS_PER_NODE=4 BASE_LOG_DIR="${RUN_ROOT}" sbatch "${SBATCH_ARGS[@]}" "${REPO_DIR}/ray.sub" ;;
 esac

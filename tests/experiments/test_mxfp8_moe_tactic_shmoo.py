@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-import torch
+import torch  # pyright: ignore[reportMissingImports]
 
 from experiments.mxfp8_moe_tactic_audit.flashinfer_adapter import (
     PREPACKED_ARTIFACT_FORMAT,
@@ -165,6 +165,7 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
     tactic = TacticPair(1, 2)
     run_modes: list[bool] = []
     forced: list[tuple[str, TacticPair | None]] = []
+    nsys_ranges: list[tuple[str, str, TacticPair]] = []
     graph_replays = 0
     cold_touches = 0
     original_zeros = torch.zeros
@@ -197,6 +198,18 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
     monkeypatch.setattr(
         "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.force_tactic",
         lambda key, selected: fake_force(key, selected),
+    )
+
+    @contextmanager
+    def fake_nsys_range(
+        _case: MoeKernelCase, selected: TacticPair, arm: str, component: str
+    ):
+        nsys_ranges.append((arm, component, selected))
+        yield
+
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics._nsys_component_range",
+        fake_nsys_range,
     )
 
     intermediate = torch.ones((2, 2, 768), dtype=torch.bfloat16)
@@ -281,15 +294,30 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
         type("CudaTensor", (), {"device": torch.device("cuda"), "shape": (2, 2048)})(),
     )
 
-    result = _profile_tactic_cuda(case, tactic, warmups=3, repetitions=10)
+    result = _profile_tactic_cuda(
+        case,
+        tactic,
+        warmups=3,
+        repetitions=10,
+        stock_tactics={
+            "final-key": TacticPair(5, 6),
+            "intermediate-key": TacticPair(7, 8),
+        },
+    )
 
     assert run_modes.count(True) == 6
     assert run_modes.count(False) == 3
     assert forced == [
-        ("final-key", None),
-        ("intermediate-key", None),
+        ("final-key", TacticPair(5, 6)),
+        ("intermediate-key", TacticPair(7, 8)),
         ("intermediate-key", tactic),
         ("final-key", tactic),
+    ]
+    assert nsys_ranges == [
+        ("stock", "FC2/GEMM2", TacticPair(5, 6)),
+        ("stock", "FC1/GEMM1", TacticPair(7, 8)),
+        ("candidate", "FC1/GEMM1", tactic),
+        ("candidate", "FC2/GEMM2", tactic),
     ]
     assert graph_replays == 10
     assert cold_touches == 10
@@ -519,6 +547,10 @@ def test_cli_writes_one_serializable_row_per_tactic_and_continues_failures(
     )
     output_path = tmp_path / "measurements.jsonl"
     weights_path = tmp_path / "prepacked.pt"
+    stock_cache_path = tmp_path / "stock-cache.json"
+    stock_cache_path.write_text(
+        json.dumps({"cache-key": ["MoERunner", [1, 2]]}), encoding="ascii"
+    )
     case = _case(profile)
     tactics = (TacticPair(1, 2), TacticPair(3, 4))
     build_calls: list[tuple[Path | None, bool]] = []
@@ -542,6 +574,7 @@ def test_cli_writes_one_serializable_row_per_tactic_and_continues_failures(
         tactic: TacticPair,
         warmups: int = 3,
         repetitions: int = 10,
+        stock_tactics: object = None,
     ) -> TacticMeasurement:
         return TacticMeasurement(
             signature_key=profile.signature_key,
@@ -572,6 +605,8 @@ def test_cli_writes_one_serializable_row_per_tactic_and_continues_failures(
                 "1",
                 "--weights",
                 str(weights_path),
+                "--stock-cache",
+                str(stock_cache_path),
                 "--tactic-limit",
                 "2",
                 "--warmups",

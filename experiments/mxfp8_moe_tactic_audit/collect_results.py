@@ -16,7 +16,7 @@ from statistics import fmean
 FIRST_MEASURED_STEP = 3
 LAST_MEASURED_STEP = 8
 REQUIRED_PHASES = ("refit", "rollout", "logprob", "train")
-CACHE_IDENTITY_FIELDS = frozenset({"cache_sha256", "run_kind"})
+CACHE_IDENTITY_FIELDS = frozenset({"cache_sha256"})
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 PATTERNS = {
     "loss": re.compile(r"(?:Policy )?Loss:\s*([0-9.eE+-]+)"),
@@ -25,8 +25,12 @@ PATTERNS = {
     "mean_generation_length": re.compile(r"Mean Generation Length:\s*([0-9.eE+-]+)"),
     "total_step_seconds": re.compile(r"Total step time:\s*([0-9.eE+-]+)s"),
     "generation_seconds": re.compile(r"generation:\s*([0-9.eE+-]+)s"),
-    "e2e_tokens_per_second_per_gpu": re.compile(r"E2E \(Tokens/sec/gpu\):\s*([0-9.eE+-]+)"),
-    "generated_tokens_per_second_per_gpu": re.compile(r"Generation Worker Group \(Tokens/sec/gpu\):\s*([0-9.eE+-]+)"),
+    "e2e_tokens_per_second_per_gpu": re.compile(
+        r"E2E \(Tokens/sec/gpu\):\s*([0-9.eE+-]+)"
+    ),
+    "generated_tokens_per_second_per_gpu": re.compile(
+        r"Generation Worker Group \(Tokens/sec/gpu\):\s*([0-9.eE+-]+)"
+    ),
 }
 
 
@@ -81,7 +85,9 @@ def load_json_object(path: Path) -> dict[str, object]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise EvidenceError(f"cannot read JSON evidence {path}: {error}") from error
-    if not isinstance(payload, dict) or not all(isinstance(key, str) for key in payload):
+    if not isinstance(payload, dict) or not all(
+        isinstance(key, str) for key in payload
+    ):
         raise EvidenceError(f"JSON evidence {path} must be an object")
     return payload
 
@@ -110,7 +116,9 @@ def find_driver_log(run_root: Path) -> Path:
     """Find the sole driver log in either direct or launcher log layout."""
     logs = sorted(path for path in run_root.rglob("ray-driver.log") if path.is_file())
     if len(logs) != 1:
-        raise EvidenceError(f"expected exactly one ray-driver.log under {run_root}, found {len(logs)}")
+        raise EvidenceError(
+            f"expected exactly one ray-driver.log under {run_root}, found {len(logs)}"
+        )
     return logs[0]
 
 
@@ -130,7 +138,9 @@ def _metric(block: str, name: str) -> float:
     return _finite_number(float(match.group(1)), name)
 
 
-def _token_counts(run_root: Path) -> tuple[dict[int, int], str, str, dict[str, str], dict[str, str]]:
+def _token_counts(
+    run_root: Path,
+) -> tuple[dict[int, int], str, str, dict[str, str], dict[str, str]]:
     evidence = load_json_object(run_root / "run_evidence.json")
     if evidence.get("exit_code") != 0:
         raise EvidenceError(f"{run_root} run exit code is not zero")
@@ -151,12 +161,17 @@ def _token_counts(run_root: Path) -> tuple[dict[int, int], str, str, dict[str, s
         if isinstance(step, bool) or not isinstance(step, int):
             raise EvidenceError(f"{run_root} token evidence has invalid step")
         if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
-            raise EvidenceError(f"{run_root} token evidence has invalid realized_generated_tokens")
+            raise EvidenceError(
+                f"{run_root} token evidence has invalid realized_generated_tokens"
+            )
         if step in tokens:
             raise EvidenceError(f"{run_root} token evidence duplicates step {step}")
         tokens[step] = count
     metadata = evidence.get("metadata")
-    if not isinstance(metadata, dict) or not all(isinstance(key, str) and isinstance(value, str) and value for key, value in metadata.items()):
+    if not isinstance(metadata, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) and value
+        for key, value in metadata.items()
+    ):
         raise EvidenceError(f"{run_root} has invalid run metadata")
     run_id = metadata.get("run_id")
     if not isinstance(run_id, str) or not run_id:
@@ -167,9 +182,13 @@ def _token_counts(run_root: Path) -> tuple[dict[int, int], str, str, dict[str, s
     if not isinstance(arm, str):  # narrows JSON object values for static analysis
         raise EvidenceError(f"{run_root} evidence has invalid arm")
     fingerprints = evidence.get("runtime_fingerprints")
-    if not isinstance(fingerprints, dict) or not fingerprints or not all(
-        isinstance(key, str) and isinstance(value, str) and value
-        for key, value in fingerprints.items()
+    if (
+        not isinstance(fingerprints, dict)
+        or not fingerprints
+        or not all(
+            isinstance(key, str) and isinstance(value, str) and value
+            for key, value in fingerprints.items()
+        )
     ):
         raise EvidenceError(f"{run_root} has invalid runtime fingerprints")
     return (
@@ -198,7 +217,9 @@ def _generated_token_count(path: Path) -> int:
                 raise EvidenceError(f"{path} token_loss_mask must be numeric")
             numeric = float(value)
             if not math.isfinite(numeric) or numeric < 0 or numeric != int(numeric):
-                raise EvidenceError(f"{path} token_loss_mask must contain nonnegative integers")
+                raise EvidenceError(
+                    f"{path} token_loss_mask must contain nonnegative integers"
+                )
             count += int(numeric)
     if count <= 0:
         raise EvidenceError(f"{path} realized generated tokens must be positive")
@@ -218,7 +239,10 @@ def write_run_evidence(
         raise EvidenceError("run evidence arm must be stock or candidate")
     if not run_id or metadata.get("run_id") != run_id:
         raise EvidenceError("run evidence metadata must bind the run ID")
-    if not all(isinstance(key, str) and isinstance(value, str) and value for key, value in runtime_fingerprints.items()):
+    if not all(
+        isinstance(key, str) and isinstance(value, str) and value
+        for key, value in runtime_fingerprints.items()
+    ):
         raise EvidenceError("runtime fingerprints must be a nonempty string mapping")
     log = find_driver_log(run_root)
     markers: dict[int, set[str]] = {}
@@ -228,11 +252,20 @@ def write_run_evidence(
     for step in range(FIRST_MEASURED_STEP, LAST_MEASURED_STEP + 1):
         missing = set(REQUIRED_PHASES) - markers.get(step, set())
         if missing:
-            raise EvidenceError(f"{log} missing successful phase markers for step {step}: {', '.join(sorted(missing))}")
+            raise EvidenceError(
+                f"{log} missing successful phase markers for step {step}: {', '.join(sorted(missing))}"
+            )
         dumps = sorted(run_root.rglob(f"train_data_step{step}.jsonl"))
         if len(dumps) != 1:
-            raise EvidenceError(f"expected exactly one producer train_data_step{step}.jsonl under {run_root}, found {len(dumps)}")
-        steps.append({"step": step, "realized_generated_tokens": _generated_token_count(dumps[0])})
+            raise EvidenceError(
+                f"expected exactly one producer train_data_step{step}.jsonl under {run_root}, found {len(dumps)}"
+            )
+        steps.append(
+            {
+                "step": step,
+                "realized_generated_tokens": _generated_token_count(dumps[0]),
+            }
+        )
     payload = {
         "arm": arm,
         "exit_code": 0,
@@ -242,11 +275,16 @@ def write_run_evidence(
         "steps": steps,
     }
     output = run_root / "run_evidence.json"
-    output.write_text(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n", encoding="ascii")
+    output.write_text(
+        json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+        encoding="ascii",
+    )
     return output
 
 
-def parse_training_results(log_text: str, *, tokens_by_step: Mapping[int, int], source: str) -> tuple[StepMetrics, ...]:
+def parse_training_results(
+    log_text: str, *, tokens_by_step: Mapping[int, int], source: str
+) -> tuple[StepMetrics, ...]:
     """Parse exactly steps 3-8 from actual GRPO Training Results labels."""
     blocks = ANSI_ESCAPE.sub("", log_text).split("Training Results:")[1:]
     if len(blocks) < LAST_MEASURED_STEP:
@@ -259,9 +297,20 @@ def parse_training_results(log_text: str, *, tokens_by_step: Mapping[int, int], 
         token_count = tokens_by_step.get(step)
         if token_count is None:
             raise EvidenceError(f"{source} has no realized token count for step {step}")
-        if min(values["total_step_seconds"], values["generation_seconds"], values["e2e_tokens_per_second_per_gpu"], values["generated_tokens_per_second_per_gpu"], values["mean_generation_length"]) <= 0:
+        if (
+            min(
+                values["total_step_seconds"],
+                values["generation_seconds"],
+                values["e2e_tokens_per_second_per_gpu"],
+                values["generated_tokens_per_second_per_gpu"],
+                values["mean_generation_length"],
+            )
+            <= 0
+        ):
             raise EvidenceError(f"{source} has nonpositive metric at step {step}")
-        parsed.append(StepMetrics(step=step, realized_generated_tokens=token_count, **values))
+        parsed.append(
+            StepMetrics(step=step, realized_generated_tokens=token_count, **values)
+        )
     if tuple(item.step for item in parsed) != tuple(range(3, 9)):
         raise EvidenceError("measured steps must be exactly 3-8")
     return tuple(parsed)
@@ -271,8 +320,23 @@ def summarize_run(run_root: Path) -> RunSummary:
     """Collect one run without treating within-run variation as run-to-run variance."""
     tokens, run_id, arm, metadata, runtime_fingerprints = _token_counts(run_root)
     log = find_driver_log(run_root)
-    steps = parse_training_results(log.read_text(errors="replace"), tokens_by_step=tokens, source=str(log))
-    finite = all(math.isfinite(value) for step in steps for value in (step.loss, step.kl, step.reward, step.mean_generation_length, step.total_step_seconds, step.generation_seconds, step.e2e_tokens_per_second_per_gpu, step.generated_tokens_per_second_per_gpu))
+    steps = parse_training_results(
+        log.read_text(errors="replace"), tokens_by_step=tokens, source=str(log)
+    )
+    finite = all(
+        math.isfinite(value)
+        for step in steps
+        for value in (
+            step.loss,
+            step.kl,
+            step.reward,
+            step.mean_generation_length,
+            step.total_step_seconds,
+            step.generation_seconds,
+            step.e2e_tokens_per_second_per_gpu,
+            step.generated_tokens_per_second_per_gpu,
+        )
+    )
     return RunSummary(
         run_id=run_id,
         arm=arm,
@@ -280,7 +344,9 @@ def summarize_run(run_root: Path) -> RunSummary:
         runtime_fingerprints=runtime_fingerprints,
         steps=steps,
         measured_steps=len(steps),
-        generated_tokens_per_second_per_gpu=fmean(step.generated_tokens_per_second_per_gpu for step in steps),
+        generated_tokens_per_second_per_gpu=fmean(
+            step.generated_tokens_per_second_per_gpu for step in steps
+        ),
         total_step_seconds=fmean(step.total_step_seconds for step in steps),
         realized_generated_tokens=sum(step.realized_generated_tokens for step in steps),
         all_metrics_finite=finite,
@@ -289,9 +355,23 @@ def summarize_run(run_root: Path) -> RunSummary:
 
 def compare_manifests(stock_path: Path, candidate_path: Path) -> tuple[str, ...]:
     """Compare all non-cache execution provenance exactly."""
-    stock = {key: value for key, value in load_json_object(stock_path).items() if key not in CACHE_IDENTITY_FIELDS}
-    candidate = {key: value for key, value in load_json_object(candidate_path).items() if key not in CACHE_IDENTITY_FIELDS}
-    return tuple(sorted(key for key in set(stock) | set(candidate) if stock.get(key) != candidate.get(key)))
+    stock = {
+        key: value
+        for key, value in load_json_object(stock_path).items()
+        if key not in CACHE_IDENTITY_FIELDS
+    }
+    candidate = {
+        key: value
+        for key, value in load_json_object(candidate_path).items()
+        if key not in CACHE_IDENTITY_FIELDS
+    }
+    return tuple(
+        sorted(
+            key
+            for key in set(stock) | set(candidate)
+            if stock.get(key) != candidate.get(key)
+        )
+    )
 
 
 def main() -> None:
