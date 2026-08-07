@@ -40,6 +40,8 @@ def test_provenance_json_defines_launcher_contract() -> None:
         "Hugging Face/W&B tokens",
     ]
     assert contract["minimum_profile_coverage"] == 0.95
+    assert contract["coverage_metric"] == "observed_moe_gpu_time"
+    assert contract["preserve_all_observed_signatures_in_raw_trace"] is True
     assert contract["warmups"] == 3
     assert contract["timed_repetitions_minimum"] >= 10
     assert contract["minimum_weighted_median_improvement"] == 0.02

@@ -22,6 +22,8 @@
     "Hugging Face/W&B tokens"
   ],
   "minimum_profile_coverage": 0.95,
+  "coverage_metric": "observed_moe_gpu_time",
+  "preserve_all_observed_signatures_in_raw_trace": true,
   "warmups": 3,
   "timed_repetitions_minimum": 10,
   "minimum_weighted_median_improvement": 0.02,
