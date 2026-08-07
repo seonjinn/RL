@@ -12,7 +12,7 @@ case "${ACTION}" in
     *) echo "Unsupported ACTION: ${ACTION}" >&2; exit 2 ;;
 esac
 
-EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-a76062edee3a3ac23d47a93c7ce466f06a19111f}
+EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-cb7dc7d7e560c0b95055772f1ee4d3a31a605edc}
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}
 if [[ -n "${RUN_ID:-}" ]]; then RUN_ID=${RUN_ID}; elif [[ "${ACTION}" == submit ]]; then RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-$$; else RUN_ID=dry-run; fi
 RUN_ROOT=${RUN_ROOT:-${WORK_ROOT}/experiments/mxfp8-moe-tactic-audit/shmoo/${RUN_ID}}

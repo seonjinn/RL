@@ -58,6 +58,12 @@ def test_trace_dry_run_is_eager_and_metadata_only(tmp_path: Path) -> None:
     assert "logger.wandb_enabled=false" in output
     assert "--constraint=GB200" in output
     assert "--segment=4" in output
+    assert "VLLM_MXFP8_AUDIT_SOURCE_ROOT=" in output
+    assert "sitecustomize.py" in output
+    assert "trtllm_moe_trace" in output
+    assert "find " in output and "-name '*.jsonl'" in output
+    assert "expected_ranks = set(range(16))" in output
+    assert 'row["runtime_fingerprint"] != expected_fingerprint' in output
     assert "CACHE_ROOT=" not in (AUDIT_DIR / "submit_trace_ptyche.sh").read_text(
         encoding="ascii"
     )

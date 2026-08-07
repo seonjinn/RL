@@ -12,7 +12,7 @@ case "${ACTION}" in
     *) echo "Unsupported ACTION: ${ACTION}" >&2; exit 2 ;;
 esac
 
-EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-a76062edee3a3ac23d47a93c7ce466f06a19111f}
+EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-cb7dc7d7e560c0b95055772f1ee4d3a31a605edc}
 MODEL=Qwen/Qwen3-30B-A3B
 CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}
@@ -52,11 +52,40 @@ NEMO_RL_COMMIT=$(git -C "${REPO_DIR}" rev-parse HEAD)
 COMMAND=$(cat <<EOF
 set -euo pipefail
 cd ${REPO_DIR}
-source ${CUSTOM_VLLM_ROOT}/nemo-rl.env
 runtime_nemo_rl_commit=\$(git rev-parse HEAD)
 runtime_vllm_commit=\$(git -C ${CUSTOM_VLLM_ROOT} rev-parse HEAD)
 [[ "\${runtime_nemo_rl_commit}" == "${NEMO_RL_COMMIT}" ]]
 [[ "\${runtime_vllm_commit}" == "${EXPECTED_VLLM_COMMIT}" ]]
+export VLLM_MXFP8_AUDIT_SOURCE_ROOT=${CUSTOM_VLLM_ROOT}
+PYTHON_OVERLAY=${RUN_ROOT}/python-overlay
+mkdir -p \${PYTHON_OVERLAY}
+cat > \${PYTHON_OVERLAY}/sitecustomize.py <<'PY'
+import os
+from pathlib import Path
+
+import vllm
+
+source = Path(os.environ["VLLM_MXFP8_AUDIT_SOURCE_ROOT"]).resolve() / "vllm"
+if not source.is_dir():
+    raise RuntimeError(f"missing custom vLLM source: {source}")
+vllm.__path__.insert(0, str(source))
+PY
+export PYTHONPATH=\${PYTHON_OVERLAY}:\${PYTHONPATH:-}
+python - <<'PY'
+import os
+from pathlib import Path
+
+from vllm.model_executor.layers.fused_moe.experts import trtllm_fp8_moe
+from vllm.model_executor.layers.fused_moe.experts import trtllm_moe_trace
+
+root = Path(os.environ["VLLM_MXFP8_AUDIT_SOURCE_ROOT"]).resolve()
+for module in (trtllm_fp8_moe, trtllm_moe_trace):
+    module_path = Path(module.__file__).resolve()
+    if not module_path.is_relative_to(root):
+        raise RuntimeError(
+            f"stock vLLM module loaded instead of audit source: {module_path}"
+        )
+PY
 unset VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR
 export VLLM_MXFP8_MOE_TRACE_DIR=${TRACE_DIR}
 export VLLM_MXFP8_MOE_MODEL_REVISION=${MODEL_REVISION}
@@ -79,6 +108,36 @@ python examples/run_grpo.py \\
   checkpointing.checkpoint_dir=${RUN_ROOT}/checkpoints \\
   logger.log_dir=${RUN_ROOT}/logs \\
   logger.wandb_enabled=${WANDB_ENABLED}
+find ${TRACE_DIR} -type f -name '*.jsonl' -size +0c -print -quit | grep -q .
+python - ${TRACE_DIR} ${NEMO_RL_COMMIT}-${EXPECTED_VLLM_COMMIT} <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+trace_dir = Path(sys.argv[1])
+expected_fingerprint = sys.argv[2]
+expected_ranks = set(range(16))
+observed_ranks = set()
+for trace_path in trace_dir.glob("moe-routing-rank*-pid*.jsonl"):
+    match = re.fullmatch(r"moe-routing-rank(\d+)-pid\d+\.jsonl", trace_path.name)
+    if match is None:
+        raise RuntimeError(f"unexpected trace filename: {trace_path.name}")
+    rank = int(match.group(1))
+    rows = [json.loads(line) for line in trace_path.read_text().splitlines() if line]
+    if not rows:
+        raise RuntimeError(f"empty trace file: {trace_path}")
+    for row in rows:
+        if row["runtime_fingerprint"] != expected_fingerprint:
+            raise RuntimeError(f"runtime fingerprint mismatch in {trace_path}")
+        if row["cuda_graph_state"] != "trace-eager" or row["dp_size"] != 16:
+            raise RuntimeError(f"unexpected trace execution state in {trace_path}")
+    observed_ranks.add(rank)
+if observed_ranks != expected_ranks:
+    raise RuntimeError(
+        f"incomplete trace rank coverage: expected={expected_ranks}, observed={observed_ranks}"
+    )
+PY
 touch ${RUN_ROOT}/trace_complete
 EOF
 )

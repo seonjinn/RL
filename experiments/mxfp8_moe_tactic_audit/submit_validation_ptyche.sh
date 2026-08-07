@@ -17,7 +17,7 @@ case "${COMPARE_ACTION}" in dry-run|run) ;; *) echo "COMPARE_ACTION must be dry-
 case "${ARM}" in stock|candidate) ;; *) echo "ARM must be stock or candidate" >&2; exit 2 ;; esac
 case "${MAX_STEPS}" in 2|8) ;; *) echo "MAX_STEPS must be 2 or 8" >&2; exit 2 ;; esac
 
-EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-a76062edee3a3ac23d47a93c7ce466f06a19111f}
+EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-cb7dc7d7e560c0b95055772f1ee4d3a31a605edc}
 MODEL=Qwen/Qwen3-30B-A3B
 CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}
