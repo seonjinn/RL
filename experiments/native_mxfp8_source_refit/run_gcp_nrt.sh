@@ -12,6 +12,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
   ACCOUNT=${SLURM_ACCOUNT:-coreai_chef_posttrain}
   PARTITION=${PARTITION:-batch}
   WALLTIME=${WALLTIME:-04:00:00}
+  PYTHON_VERSION=${PYTHON_VERSION:-3.13.14}
   WORK_ROOT=${WORK_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna}
   CONTAINER=${CONTAINER:-${WORK_ROOT}/containers/nemo-rl-nightly-refresh/nemo_rl_nightly_20260730_483099.sqsh}
   RESULT_ROOT=${RESULT_ROOT:-${WORK_ROOT}/experiments/native-mxfp8-source-refit/gcp-b200}
@@ -38,13 +39,21 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
   esac
 
   git -C "${REPO}" pull --ff-only
-  test -z "$(git -C "${REPO}" status --porcelain --untracked-files=no)"
+  test -z "$(git -C "${REPO}" status --porcelain)"
   if git -C "${REPO}" submodule status --recursive | grep -q '^-'; then
     echo "All pinned submodules must be initialized before submission" >&2
     exit 2
   fi
   REPO_SHA=$(git -C "${REPO}" rev-parse HEAD)
   test -f "${CONTAINER}"
+  CONTAINER_METADATA=${CONTAINER_METADATA:-${CONTAINER}.metadata.txt}
+  test -f "${CONTAINER_METADATA}"
+  CONTAINER_SHA256=${CONTAINER_SHA256:-$(sed -n 's/^sha256=//p' "${CONTAINER_METADATA}")}
+  if [[ ! "${CONTAINER_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "Container metadata must provide a valid sha256" >&2
+    exit 2
+  fi
+  test "$(sha256sum "${CONTAINER}" | awk '{print $1}')" = "${CONTAINER_SHA256}"
   mkdir -p "${RESULT_ROOT}/slurm" "${RESULT_ROOT}/manifests"
 
   args=(
@@ -58,7 +67,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     --job-name="native-mxfp8-source-${MAX_STEPS}step-${RUN_SUFFIX}"
     --output="${RESULT_ROOT}/slurm/%x-%j.out"
     --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"native_mxfp8_refit","description":"venv setup and model initialization"}}'
-    --export="ALL,REPO=${REPO},EXPECTED_REPO_SHA=${REPO_SHA},CONTAINER=${CONTAINER},MAX_STEPS=${MAX_STEPS},PROFILE=${PROFILE},TOTAL_NODES=${TOTAL_NODES},GEN_NODES=${GEN_NODES},GEN_GPUS_PER_NODE=${GEN_GPUS_PER_NODE},RUN_NAME=${RUN_NAME},EXPERIMENT_ROOT=${EXPERIMENT_ROOT},WORK_ROOT=${WORK_ROOT}"
+    --export="ALL,REPO=${REPO},EXPECTED_REPO_SHA=${REPO_SHA},CONTAINER=${CONTAINER},CONTAINER_METADATA=${CONTAINER_METADATA},CONTAINER_SHA256=${CONTAINER_SHA256},PYTHON_VERSION=${PYTHON_VERSION},MAX_STEPS=${MAX_STEPS},PROFILE=${PROFILE},TOTAL_NODES=${TOTAL_NODES},GEN_NODES=${GEN_NODES},GEN_GPUS_PER_NODE=${GEN_GPUS_PER_NODE},RUN_NAME=${RUN_NAME},EXPERIMENT_ROOT=${EXPERIMENT_ROOT},WORK_ROOT=${WORK_ROOT}"
   )
   if [[ -n "${ACTION_ARG}" ]]; then
     args+=("${ACTION_ARG}")
@@ -67,9 +76,10 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
   output=$(sbatch "${args[@]}" "${BASH_SOURCE[0]}")
   job_id=$(sed -n 's/^Submitted batch job //p' <<<"${output}")
   manifest=${RESULT_ROOT}/manifests/submission-${RUN_SUFFIX}.tsv
-  printf 'action\tjob_id\trepo_sha\trun_name\tcontainer\n' >"${manifest}"
-  printf '%s\t%s\t%s\t%s\t%s\n' \
+  printf 'action\tjob_id\trepo_sha\trun_name\tcontainer\tcontainer_sha256\n' >"${manifest}"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
     "${ACTION}" "${job_id:-n/a}" "${REPO_SHA}" "${RUN_NAME}" "${CONTAINER}" \
+    "${CONTAINER_SHA256}" \
     | tee -a "${manifest}"
   echo "manifest=${manifest}"
   exit 0
@@ -78,6 +88,8 @@ fi
 : "${REPO:?REPO is required}"
 : "${EXPECTED_REPO_SHA:?EXPECTED_REPO_SHA is required}"
 : "${CONTAINER:?CONTAINER is required}"
+: "${CONTAINER_METADATA:?CONTAINER_METADATA is required}"
+: "${CONTAINER_SHA256:?CONTAINER_SHA256 is required}"
 : "${MAX_STEPS:?MAX_STEPS is required}"
 : "${PROFILE:?PROFILE is required}"
 : "${TOTAL_NODES:?TOTAL_NODES is required}"
@@ -88,15 +100,28 @@ fi
 : "${WORK_ROOT:?WORK_ROOT is required}"
 
 test "$(git -C "${REPO}" rev-parse HEAD)" = "${EXPECTED_REPO_SHA}"
+test -z "$(git -C "${REPO}" status --porcelain)"
+if git -C "${REPO}" submodule status --recursive | grep -q '^[+-U]'; then
+  echo "Pinned submodule commits changed after submission" >&2
+  exit 2
+fi
+git -C "${REPO}" submodule foreach --quiet --recursive \
+  'test -z "$(git status --porcelain)"'
 test -f "${CONTAINER}"
+test -f "${CONTAINER_METADATA}"
+test "$(sed -n 's/^sha256=//p' "${CONTAINER_METADATA}")" = "${CONTAINER_SHA256}"
+test "$(sha256sum "${CONTAINER}" | awk '{print $1}')" = "${CONTAINER_SHA256}"
 test -f "${REPO}/ray.sub"
 mkdir -p "${EXPERIMENT_ROOT}/logs"
 
 HF_HOME=${HF_HOME:-${WORK_ROOT}/.cache/huggingface}
-CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/mopd_nano_fast/.cache/native-mxfp8-source/${EXPECTED_REPO_SHA}}
+CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/mopd_nano_fast/.cache/native-mxfp8-source/${EXPECTED_REPO_SHA}/${CONTAINER_SHA256}/${SLURM_JOB_ID}}
 SHARED_UV_CACHE=${SHARED_UV_CACHE:-${WORK_ROOT}/mopd_nano_fast/.cache/native-mxfp8-source/shared-vllm025/uv}
 RAY_BOOTSTRAP_ARCHIVE=${RAY_BOOTSTRAP_ARCHIVE:-${WORK_ROOT}/mopd_nano_fast/.cache/nccl-reshard-pr3294/bootstrap/ray-2.56.1-py31313.tar.gz}
 RAY_BOOTSTRAP_LOCAL_ROOT=${RAY_BOOTSTRAP_LOCAL_ROOT:-/tmp/nrl-ray-bootstrap-${SLURM_JOB_ID}}
+PYTHON_VERSION=${PYTHON_VERSION:-3.13.14}
+PYTHON_INSTALL_ROOT=${PYTHON_INSTALL_ROOT:-${RAY_BOOTSTRAP_LOCAL_ROOT}/python}
+PYTHON_BIN=${PYTHON_BIN:-${PYTHON_INSTALL_ROOT}/cpython-${PYTHON_VERSION}-linux-x86_64-gnu/bin/python3.13}
 WANDB_PROJECT=${WANDB_PROJECT:-sna-native-mxfp8-source-refit}
 WANDB_KEY_FILE=${WANDB_KEY_FILE:-${WORK_ROOT}/mopd_nano_fast/.cache/native-mxfp8-source/.wandb_key}
 
@@ -104,9 +129,26 @@ test -f "${RAY_BOOTSTRAP_ARCHIVE}"
 mkdir -p "${HF_HOME}" "${SHARED_UV_CACHE}" "${CACHE_ROOT}/venvs"
 if [[ ! -s "${WANDB_KEY_FILE}" && -f "${HOME}/.netrc" ]]; then
   mkdir -p "$(dirname "${WANDB_KEY_FILE}")"
-  (umask 077; awk '/machine api.wandb.ai/{f=1} f&&/password/{print $2; exit}' \
-    "${HOME}/.netrc" >"${WANDB_KEY_FILE}")
+  (umask 077; awk '
+    {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "machine" && i < NF) {
+          machine = $(i + 1)
+          i++
+        } else if (machine == "api.wandb.ai" && $i == "password" && i < NF) {
+          print $(i + 1)
+          exit
+        }
+      }
+    }
+  ' "${HOME}/.netrc" >"${WANDB_KEY_FILE}")
 fi
+IFS= read -r WANDB_KEY_VALUE <"${WANDB_KEY_FILE}" || true
+if [[ -z "${WANDB_KEY_VALUE}" || "${WANDB_KEY_VALUE}" =~ [[:space:]] ]]; then
+  echo "A non-empty single-token W&B API key is required" >&2
+  exit 2
+fi
+(umask 077; printf '%s' "${WANDB_KEY_VALUE}" >"${WANDB_KEY_FILE}")
 
 export SETUP_COMMAND="
 set -euo pipefail
@@ -120,6 +162,12 @@ fi
 test -x '${RAY_BOOTSTRAP_LOCAL_ROOT}/bin/ray'
 test -x '${RAY_BOOTSTRAP_LOCAL_ROOT}/bin/uv'
 '${RAY_BOOTSTRAP_LOCAL_ROOT}/bin/python' -c 'import ray, requests, urllib3'
+if [[ ! -x '${PYTHON_BIN}' ]]; then
+  UV_PYTHON_INSTALL_DIR='${PYTHON_INSTALL_ROOT}' \
+    '${RAY_BOOTSTRAP_LOCAL_ROOT}/bin/uv' python install '${PYTHON_VERSION}'
+fi
+test -x '${PYTHON_BIN}'
+test \"\$('${PYTHON_BIN}' -c 'import platform; print(platform.python_version())')\" = '${PYTHON_VERSION}'
 "
 
 MCORE_ACTOR_VENV=${CACHE_ROOT}/venvs/nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker
@@ -152,6 +200,8 @@ cat >"${EXPERIMENT_ROOT}/metadata.env" <<EOF
 repo=${REPO}
 repo_sha=${EXPECTED_REPO_SHA}
 container=${CONTAINER}
+container_sha256=${CONTAINER_SHA256}
+python_version=${PYTHON_VERSION}
 max_steps=${MAX_STEPS}
 profile=${PROFILE}
 total_nodes=${TOTAL_NODES}
@@ -179,12 +229,12 @@ export NRL_REFIT_NUM_STREAMS=${NRL_REFIT_NUM_STREAMS:-2}
 export COMMAND="
 set -euo pipefail
 cd '${REPO}'
-export PYTHONPATH='${REPO}:${RAY_BOOTSTRAP_LOCAL_ROOT}/lib/python3.13/site-packages'
+export PYTHONPATH='${REPO}'
 export HF_HOME='${HF_HOME}'
 export NEMO_RL_VENV_DIR='${CACHE_ROOT}/venvs'
 export UV_CACHE_DIR='${SHARED_UV_CACHE}'
 export UV_PROJECT_ENVIRONMENT='${CACHE_ROOT}/driver-venv'
-export UV_PYTHON='${RAY_BOOTSTRAP_LOCAL_ROOT}/bin/python3.13'
+export UV_PYTHON='${PYTHON_BIN}'
 export UV_LOCK_TIMEOUT=7200
 export NRL_FORCE_REBUILD_VENVS=false
 export NVTE_CUDA_ARCHS=100

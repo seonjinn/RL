@@ -21,5 +21,9 @@ ACTION=submit PROFILE=qwen06b MAX_STEPS=2 \
   experiments/native_mxfp8_source_refit/run_gcp_nrt.sh
 ```
 
-The launcher records the resolved code SHA, container path, topology, cache,
-and command inputs under the shared experiment result root.
+The launcher records the resolved code SHA, container SHA256, topology, cache,
+and command inputs under the shared experiment result root. Ray bootstraps with
+the pinned Python 3.13.13 archive, while driver and actor environments use
+Python 3.13.14 as required by this source revision. Writable venvs are isolated
+by source SHA, container SHA256, and SLURM job ID; only the download cache is
+shared across jobs.
