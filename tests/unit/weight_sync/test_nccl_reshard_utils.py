@@ -738,6 +738,66 @@ def test_pregrouped_gate_up_components_are_split_with_the_weight_shape():
     ]
 
 
+def test_pregrouped_gate_up_components_reject_odd_fused_dimension():
+    metadata = {
+        "model.layers.0.mlp.experts.gate_up_proj": {
+            "shape": [2, 65, 32],
+            "dtype": "torch.bfloat16",
+            "components": [
+                {
+                    "role": "weight",
+                    "shape": [2, 65, 32],
+                    "dtype": "torch.float8_e4m3fn",
+                },
+                {
+                    "role": "weight_scale",
+                    "shape": [2, 65, 1],
+                    "dtype": "torch.uint8",
+                },
+            ],
+        }
+    }
+
+    with pytest.raises(ValueError, match="even"):
+        build_nccl_reshard_refit_info(
+            metadata,
+            {"tp_size": 1, "ep_size": 2, "pp_size": 1},
+            {"tp_size": 1, "ep_size": 1, "pp_size": 1},
+            2,
+            1,
+        )
+
+
+def test_build_refit_info_rejects_supported_wrong_weight_scale_dtype():
+    metadata = {
+        "model.layers.0.mlp.down_proj.weight": {
+            "shape": [64, 256],
+            "dtype": "torch.bfloat16",
+            "components": [
+                {
+                    "role": "weight",
+                    "shape": [64, 256],
+                    "dtype": "torch.float8_e4m3fn",
+                },
+                {
+                    "role": "weight_scale",
+                    "shape": [64, 8],
+                    "dtype": "torch.bfloat16",
+                },
+            ],
+        }
+    }
+
+    with pytest.raises(ValueError, match="weight_scale.*uint8"):
+        build_nccl_reshard_refit_info(
+            metadata,
+            {"tp_size": 1, "ep_size": 1, "pp_size": 1},
+            {"tp_size": 1, "ep_size": 1, "pp_size": 1},
+            1,
+            1,
+        )
+
+
 @pytest.mark.parametrize(
     ("components", "message"),
     [

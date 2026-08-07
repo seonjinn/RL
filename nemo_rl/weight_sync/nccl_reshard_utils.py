@@ -281,6 +281,11 @@ def _normalize_component_metadata(
         dtype = _validate_serialized_dtype(
             component.get("dtype"), f"{name} component {role!r}"
         )
+        if role == "weight_scale" and dtype not in ("torch.uint8", "uint8"):
+            raise ValueError(
+                f"{name} component {role!r} must use canonical uint8 serialized "
+                f"dtype, got {dtype!r}"
+            )
         components.append({"role": role, "shape": component_shape, "dtype": dtype})
 
     if "weight" not in roles:
@@ -548,13 +553,33 @@ def group_expert_params_in_metadata(
             # entries — no un-fuse metadata needed; they then look exactly like
             # ordinary grouped gate/up.
             prefix = name[: -len(".gate_up_proj")]  # ".../experts"
-            e_global, inter, hidden = meta["shape"]
+            fused_shape = _normalize_shape(meta.get("shape"), f"{name} logical shape")
+            if len(fused_shape) != 3:
+                raise ValueError(
+                    f"{name} must have a 3-D [E, 2*intermediate, hidden] shape"
+                )
+            e_global, fused_inter, hidden = fused_shape
+            if fused_inter % 2:
+                raise ValueError(
+                    f"{name} fused intermediate dimension {fused_inter} must be even"
+                )
             component_metadata = None
             if "components" in meta:
                 _, component_metadata = _normalize_component_metadata(name, meta)
+                for component in component_metadata:
+                    component_shape = component["shape"]
+                    if (
+                        len(component_shape) != 3
+                        or component_shape[:2] != fused_shape[:2]
+                    ):
+                        raise ValueError(
+                            f"{name} component {component['role']!r} shape "
+                            f"{component_shape} must be 3-D with leading dimensions "
+                            f"{fused_shape[:2]}"
+                        )
             for role in ("gate_proj", "up_proj"):
                 grouped = {
-                    "shape": [e_global, inter // 2, hidden],
+                    "shape": [e_global, fused_inter // 2, hidden],
                     "dtype": meta["dtype"],
                     "grouped_expert_proj": role,
                 }
