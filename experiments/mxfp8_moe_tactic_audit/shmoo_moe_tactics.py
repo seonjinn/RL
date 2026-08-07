@@ -276,7 +276,12 @@ def _profile_tactic_cuda(
 
     if not torch.equal(packed_topk, original_routing):
         raise RuntimeError("FlashInfer modified packed top-k routing inputs")
-    all_outputs = [candidate_final, candidate_intermediate, *replay_outputs]
+    all_outputs = [
+        candidate_final,
+        candidate_intermediate,
+        repeated_intermediate,
+        *replay_outputs,
+    ]
     finite = all(bool(torch.isfinite(output).all().item()) for output in all_outputs)
     deterministic = torch.equal(candidate_intermediate, repeated_intermediate) and all(
         torch.equal(candidate_final, output) for output in replay_outputs
@@ -395,7 +400,7 @@ def _load_profiles(path: Path) -> tuple[ReplayProfile, ...]:
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profiles", type=Path, required=True)
-    weight_source = parser.add_mutually_exclusive_group(required=True)
+    weight_source = parser.add_mutually_exclusive_group()
     weight_source.add_argument("--weights", type=Path)
     weight_source.add_argument("--synthetic-smoke", action="store_true")
     parser.add_argument("--profile-limit", type=int)
@@ -418,6 +423,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("profile-limit must be positive")
     if args.tactic_limit is not None and args.tactic_limit <= 0:
         raise SystemExit("tactic-limit must be positive")
+    source_less = args.weights is None and not args.synthetic_smoke
+    bounded_implicit_smoke = (
+        source_less and args.profile_limit == 1 and args.tactic_limit == 2
+    )
+    if source_less and not bounded_implicit_smoke:
+        raise SystemExit(
+            "provide --weights or --synthetic-smoke unless using the bounded "
+            "--profile-limit=1 --tactic-limit=2 smoke"
+        )
+    synthetic_source = args.synthetic_smoke or bounded_implicit_smoke
     assert_supported_flashinfer()
     profiles = _load_profiles(args.profiles)
     if args.profile_limit is not None:
@@ -430,7 +445,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 replay_profile,
                 device,
                 weights_path=args.weights,
-                synthetic_smoke=args.synthetic_smoke,
+                synthetic_smoke=synthetic_source,
             )
             tactics = enumerate_valid_tactics(case)
             if args.tactic_limit is not None:
@@ -442,9 +457,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     warmups=args.warmups,
                     repetitions=args.repetitions,
                 )
+                row = measurement.to_json()
+                if synthetic_source:
+                    row["synthetic"] = True
                 output_file.write(
                     json.dumps(
-                        measurement.to_json(),
+                        row,
                         ensure_ascii=True,
                         separators=(",", ":"),
                         sort_keys=True,

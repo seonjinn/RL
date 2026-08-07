@@ -156,7 +156,9 @@ def test_profile_tactic_fails_closed_when_intermediate_api_is_unavailable(
     assert not measurement.finite
 
 
+@pytest.mark.parametrize("repeated_intermediate_nan", [False, True])
 def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
+    repeated_intermediate_nan: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     case = _case()
@@ -167,6 +169,7 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
     cold_touches = 0
     original_zeros = torch.zeros
     original_empty = torch.empty
+    intermediate_calls = 0
 
     monkeypatch.setattr(
         "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.reconstruct_topk",
@@ -197,6 +200,8 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
     )
 
     intermediate = torch.ones((2, 2, 768), dtype=torch.bfloat16)
+    nonfinite_intermediate = intermediate.clone()
+    nonfinite_intermediate[0, 0, 0] = float("nan")
 
     def fake_run_moe_pair(
         _case: MoeKernelCase,
@@ -205,12 +210,21 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
         do_finalize: bool,
         gemm1_lora_delta: torch.Tensor | None,
     ) -> MoePairResult:
+        nonlocal intermediate_calls
         run_modes.append(do_finalize)
         if do_finalize:
             assert gemm1_lora_delta is None
             return MoePairResult(final_output=_case.output, activated_intermediate=None)
         assert gemm1_lora_delta is not None
-        return MoePairResult(final_output=None, activated_intermediate=intermediate)
+        intermediate_calls += 1
+        selected_intermediate = (
+            nonfinite_intermediate
+            if repeated_intermediate_nan and intermediate_calls == 3
+            else intermediate
+        )
+        return MoePairResult(
+            final_output=None, activated_intermediate=selected_intermediate
+        )
 
     monkeypatch.setattr(
         "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.run_moe_pair",
@@ -280,7 +294,8 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
     assert graph_replays == 10
     assert cold_touches == 10
     assert result.median_us == result.p95_us == 4.0
-    assert result.finite and result.deterministic
+    assert result.finite is not repeated_intermediate_nan
+    assert result.deterministic is not repeated_intermediate_nan
 
 
 def test_stock_intermediate_invocation_failure_is_normalized_before_candidates(
@@ -408,7 +423,7 @@ def test_nonfinite_stock_reference_fails_before_candidate_profiling(
         _profile_tactic_cuda(case, TacticPair(1, 2), warmups=3, repetitions=10)
 
 
-def test_cli_requires_prepacked_weights_or_explicit_synthetic_smoke(
+def test_cli_rejects_broader_source_less_invocation(
     tmp_path: Path,
 ) -> None:
     with pytest.raises(SystemExit):
@@ -420,6 +435,78 @@ def test_cli_requires_prepacked_weights_or_explicit_synthetic_smoke(
                 str(tmp_path / "measurements.jsonl"),
             ]
         )
+
+
+def test_exact_brief_smoke_args_use_marked_bounded_synthetic_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _profile()
+    profiles_path = tmp_path / "selected_profiles.json"
+    profiles_path.write_text(
+        json.dumps({"selected_profiles": [profile.to_json()]}), encoding="ascii"
+    )
+    output_path = tmp_path / "measurements.jsonl"
+    case = _case(profile)
+    tactics = (TacticPair(1, 2), TacticPair(3, 4))
+    build_calls: list[tuple[Path | None, bool]] = []
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.assert_supported_flashinfer",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.build_kernel_case",
+        lambda _profile, _device, *, weights_path, synthetic_smoke: (
+            build_calls.append((weights_path, synthetic_smoke)) or case
+        ),
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.enumerate_valid_tactics",
+        lambda _case: tactics,
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.profile_tactic",
+        lambda _case, tactic, warmups=3, repetitions=10: TacticMeasurement(
+            signature_key=profile.signature_key,
+            tactic=tactic,
+            median_us=4.0,
+            p95_us=4.5,
+            cv=0.02,
+            warmups=warmups,
+            repetitions=repetitions,
+            finite=True,
+            deterministic=True,
+            max_abs_error=0.0,
+            cosine_similarity=1.0,
+            failure=None,
+        ),
+    )
+
+    assert (
+        main(
+            [
+                "--profiles",
+                str(profiles_path),
+                "--profile-limit",
+                "1",
+                "--tactic-limit",
+                "2",
+                "--warmups",
+                "3",
+                "--repetitions",
+                "10",
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+    rows = [
+        json.loads(line)
+        for line in output_path.read_text(encoding="ascii").splitlines()
+    ]
+    assert build_calls == [(None, True)]
+    assert len(rows) == 2
+    assert all(row["synthetic"] is True for row in rows)
 
 
 def test_cli_writes_one_serializable_row_per_tactic_and_continues_failures(
