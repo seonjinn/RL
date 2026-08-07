@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -136,20 +137,60 @@ def test_compare_mode_is_the_only_cross_arm_validation_path(tmp_path: Path) -> N
     assert "compare_gsm8k.py" in output
     assert "/validation/stock/" in output
 
-    rejected = subprocess.run(
+    for action in ("test-only", "submit"):
+        rejected = subprocess.run(
+            ["bash", str(AUDIT_DIR / "submit_validation_ptyche.sh")],
+            cwd=REPO_ROOT,
+            env=os.environ
+            | {
+                "ACTION": action,
+                "VALIDATION_MODE": "compare",
+                "WORK_ROOT": str(tmp_path),
+            },
+            capture_output=True,
+            text=True,
+        )
+        assert rejected.returncode == 2
+        assert "is local" in rejected.stderr
+
+    action_run = subprocess.run(
+        ["bash", str(AUDIT_DIR / "submit_validation_ptyche.sh")],
+        cwd=REPO_ROOT,
+        env=os.environ | {"ACTION": "run", "WORK_ROOT": str(tmp_path)},
+        capture_output=True,
+        text=True,
+    )
+    assert action_run.returncode == 2
+    assert "Unsupported ACTION: run" in action_run.stderr
+
+    bin_dir = tmp_path / "compare-bin"
+    bin_dir.mkdir()
+    compare_log = tmp_path / "compare.log"
+    (bin_dir / "python").write_text(
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$COMPARE_LOG\"\n",
+        encoding="ascii",
+    )
+    (bin_dir / "python").chmod(0o755)
+    local_run = subprocess.run(
         ["bash", str(AUDIT_DIR / "submit_validation_ptyche.sh")],
         cwd=REPO_ROOT,
         env=os.environ
         | {
-            "ACTION": "submit",
+            "ACTION": "dry-run",
+            "COMPARE_ACTION": "run",
             "VALIDATION_MODE": "compare",
             "WORK_ROOT": str(tmp_path),
+            "COMPARE_LOG": str(compare_log),
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
         },
+        check=True,
         capture_output=True,
         text=True,
     )
-    assert rejected.returncode == 2
-    assert "is local" in rejected.stderr
+    compare_calls = compare_log.read_text(encoding="ascii").splitlines()
+    assert len(compare_calls) == 2
+    assert "validate_correctness.py generation" in compare_calls[0]
+    assert "compare_gsm8k.py" in compare_calls[1]
 
 
 def _make_model_cache(tmp_path: Path, *, symlinked: bool = False) -> Path:
@@ -493,6 +534,86 @@ def test_validation_submit_pulls_preflights_and_then_calls_fake_sbatch(
     assert manifest["cache_sha256"] != "dry-run-not-validated"
     assert "--constraint=GB200" in result.stdout
     assert "--segment=4" in result.stdout
+
+
+def _make_valid_two_step_smoke(
+    tmp_path: Path,
+) -> tuple[dict[str, str], Path, Path, Path]:
+    """Create a two-step manifest and its arm-local marker through fake submit."""
+    env, order_log, manifest_path = _make_submit_environment(tmp_path)
+    subprocess.run(
+        ["bash", str(AUDIT_DIR / "submit_validation_ptyche.sh")],
+        cwd=REPO_ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+    marker_path = manifest_path.parent.parent / "smoke-candidate-valid.json"
+    marker_path.write_text(
+        json.dumps(
+            {
+                "cache_sha256": manifest["cache_sha256"],
+                "model_snapshot_sha256": manifest["model_snapshot_sha256"],
+                "smoke_manifest_sha256": hashlib.sha256(
+                    manifest_path.read_bytes()
+                ).hexdigest(),
+            }
+        ),
+        encoding="ascii",
+    )
+    env.update(
+        {
+            "ACTION": "test-only",
+            "MAX_STEPS": "8",
+            "SMOKE_MANIFEST": str(manifest_path),
+            "SMOKE_MARKER": str(marker_path),
+        }
+    )
+    return env, order_log, manifest_path, marker_path
+
+
+def test_eight_step_gate_accepts_a_matching_smoke_and_reaches_fake_sbatch(
+    tmp_path: Path,
+) -> None:
+    """Catch a smoke gate that hashes a different input list than its manifest."""
+    env, order_log, _, _ = _make_valid_two_step_smoke(tmp_path)
+    result = subprocess.run(
+        ["bash", str(AUDIT_DIR / "submit_validation_ptyche.sh")],
+        cwd=REPO_ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "grpo.max_num_steps=8" in result.stdout
+    assert order_log.read_text(encoding="ascii").splitlines() == [
+        "pull",
+        "sbatch",
+        "sbatch",
+    ]
+
+
+def test_eight_step_gate_rejects_a_mismatched_execution_inputs_hash(
+    tmp_path: Path,
+) -> None:
+    """Catch a stale smoke whose exact execution input list no longer matches."""
+    env, order_log, manifest_path, _ = _make_valid_two_step_smoke(tmp_path)
+    manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+    manifest["execution_inputs_sha256"] = "mismatched-inputs"
+    manifest_path.write_text(json.dumps(manifest), encoding="ascii")
+
+    result = subprocess.run(
+        ["bash", str(AUDIT_DIR / "submit_validation_ptyche.sh")],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "Stale smoke manifest execution_inputs_sha256" in result.stderr
+    assert order_log.read_text(encoding="ascii").splitlines() == ["pull", "sbatch"]
 
 
 def test_validation_submit_rejects_an_existing_run_root_before_sbatch(

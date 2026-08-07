@@ -8,10 +8,12 @@ source "${SCRIPT_DIR}/provenance.sh"
 
 ACTION=${ACTION:-dry-run}
 VALIDATION_MODE=${VALIDATION_MODE:-run}
+COMPARE_ACTION=${COMPARE_ACTION:-dry-run}
 ARM=${ARM:-candidate}
 MAX_STEPS=${MAX_STEPS:-2}
-case "${ACTION}" in test-only|dry-run|submit|run) ;; *) echo "Unsupported ACTION: ${ACTION}" >&2; exit 2 ;; esac
+case "${ACTION}" in test-only|dry-run|submit) ;; *) echo "Unsupported ACTION: ${ACTION}" >&2; exit 2 ;; esac
 case "${VALIDATION_MODE}" in run|compare) ;; *) echo "VALIDATION_MODE must be run or compare" >&2; exit 2 ;; esac
+case "${COMPARE_ACTION}" in dry-run|run) ;; *) echo "COMPARE_ACTION must be dry-run or run" >&2; exit 2 ;; esac
 case "${ARM}" in stock|candidate) ;; *) echo "ARM must be stock or candidate" >&2; exit 2 ;; esac
 case "${MAX_STEPS}" in 2|8) ;; *) echo "MAX_STEPS must be 2 or 8" >&2; exit 2 ;; esac
 
@@ -47,14 +49,16 @@ if [[ "${VALIDATION_MODE}" == compare ]]; then
     COMMAND="python ${SCRIPT_DIR}/validate_correctness.py generation --stock ${COMPARE_ROOT}/stock/${RUN_ID}/steps-8/generation.jsonl --candidate ${COMPARE_ROOT}/candidate/${RUN_ID}/steps-8/generation.jsonl
 python ${SCRIPT_DIR}/compare_gsm8k.py --stock ${COMPARE_ROOT}/stock/${RUN_ID}/steps-8/gsm8k --candidate ${COMPARE_ROOT}/candidate/${RUN_ID}/steps-8/gsm8k"
     printf 'validation_mode=compare\n%s\n' "${COMMAND}"
-    case "${ACTION}" in
+    [[ "${ACTION}" == dry-run ]] || {
+        echo "VALIDATION_MODE=compare is local; ACTION must be dry-run" >&2
+        exit 2
+    }
+    case "${COMPARE_ACTION}" in
         dry-run) ;;
         run) eval "${COMMAND}" ;;
-        *) echo "VALIDATION_MODE=compare is local; use ACTION=dry-run or ACTION=run" >&2; exit 2 ;;
     esac
     exit 0
 fi
-[[ "${ACTION}" != run ]] || { echo "ACTION=run is only valid for VALIDATION_MODE=compare" >&2; exit 2; }
 
 MODEL_SNAPSHOT=dry-run-not-validated
 MODEL_REVISION=dry-run-not-validated
@@ -73,15 +77,20 @@ MODEL_SHA256=dry-run-not-validated
 RECIPE_SHA256=dry-run-not-validated
 SCRIPTS_SHA256=dry-run-not-validated
 EXECUTION_INPUTS_SHA256=dry-run-not-validated
+VALIDATION_EXECUTION_INPUTS=(
+    "${SCRIPT_DIR}"
+    "${SCRIPT_DIR}/submit_validation_ptyche.sh"
+    "${SCRIPT_DIR}/provenance.sh"
+    "${SCRIPT_DIR}/validate_correctness.py"
+    "${SCRIPT_DIR}/compare_gsm8k.py"
+    "${GSM8K_EVALUATOR}"
+)
 if [[ "${ACTION}" != dry-run ]]; then
     CACHE_SHA256=$(audit_sha256_path "${CACHE_ROOT}")
     MODEL_SHA256=$(audit_sha256_path "${MODEL_SNAPSHOT}")
     RECIPE_SHA256=$(audit_sha256_path "${REPO_DIR}/${CONFIG}")
     SCRIPTS_SHA256=$(audit_scripts_sha256 "${SCRIPT_DIR}")
-    EXECUTION_INPUTS_SHA256=$(audit_execution_inputs_sha256 \
-        "${SCRIPT_DIR}/submit_validation_ptyche.sh" "${SCRIPT_DIR}/provenance.sh" \
-        "${SCRIPT_DIR}/validate_correctness.py" "${SCRIPT_DIR}/compare_gsm8k.py" \
-        "${GSM8K_EVALUATOR}")
+    EXECUTION_INPUTS_SHA256=$(audit_execution_inputs_sha256 "${VALIDATION_EXECUTION_INPUTS[@]}")
 fi
 SMOKE_MANIFEST=${SMOKE_MANIFEST:-${RUN_BASE}/steps-2/run_manifest.json}
 SMOKE_MARKER=${SMOKE_MARKER:-${RUN_BASE}/smoke-${ARM}-${CACHE_SHA256}.json}
@@ -152,6 +161,6 @@ case "${ACTION}" in
   dry-run) ;;
   test-only) CONTAINER=${CONTAINER} MOUNTS=/lustre:/lustre COMMAND="${COMMAND}" GPUS_PER_NODE=4 BASE_LOG_DIR="${RUN_ROOT}" sbatch --test-only "${SBATCH_ARGS[@]}" "${REPO_DIR}/ray.sub" ;;
   submit)
-    audit_write_manifest "${RUN_ROOT}" "validation-${ARM}" "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" "${EXPECTED_VLLM_COMMIT}" "${CONTAINER}" "${CONFIG}" "${MODEL_SNAPSHOT}" "${CACHE_ROOT}" "${SCRIPT_DIR}" "${SCRIPT_DIR}/submit_validation_ptyche.sh" "${SCRIPT_DIR}/provenance.sh" "${SCRIPT_DIR}/validate_correctness.py" "${SCRIPT_DIR}/compare_gsm8k.py" "${GSM8K_EVALUATOR}"
+    audit_write_manifest "${RUN_ROOT}" "validation-${ARM}" "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" "${EXPECTED_VLLM_COMMIT}" "${CONTAINER}" "${CONFIG}" "${MODEL_SNAPSHOT}" "${CACHE_ROOT}" "${VALIDATION_EXECUTION_INPUTS[0]}" "${VALIDATION_EXECUTION_INPUTS[@]:1}"
     CONTAINER=${CONTAINER} MOUNTS=/lustre:/lustre COMMAND="${COMMAND}" GPUS_PER_NODE=4 BASE_LOG_DIR="${RUN_ROOT}" sbatch "${SBATCH_ARGS[@]}" "${REPO_DIR}/ray.sub" ;;
 esac
