@@ -102,6 +102,13 @@ def test_rendered_arm_contract(
     assert rendered["output_root"].endswith(f"/{arm}")
     assert "grpo.max_num_steps=20" in rendered["training_command"]
     assert "policy.sequence_packing.enabled=true" in rendered["training_command"]
+    if legacy_prepadding == "1":
+        assert (
+            "++policy.megatron_cfg.moe_hybridep_prepad_packed_inputs=true"
+            in rendered["training_command"]
+        )
+    else:
+        assert "moe_hybridep_prepad_packed_inputs" not in rendered["training_command"]
     assert "--nodes=4" in rendered["sbatch_command"]
     assert "--gpus-per-node=8" in rendered["sbatch_command"]
     assert "--segment=4" in rendered["sbatch_command"]

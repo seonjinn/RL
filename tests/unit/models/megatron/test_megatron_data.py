@@ -78,6 +78,136 @@ class TestProcessedMicrobatchDataclass:
         assert torch.equal(microbatch.cu_seqlens_padded, mock_cu_seqlens_padded)
         assert microbatch.routed_experts is None
         assert microbatch.routed_experts_cp_sharded is None
+        assert microbatch.padding_mask is None
+
+
+@pytest.mark.mcore
+class TestQ30LegacyHybridEPPadding:
+    @patch("nemo_rl.models.megatron.data.get_expert_tensor_and_model_parallel_group")
+    @patch("nemo_rl.models.megatron.data.torch.distributed.all_reduce")
+    def test_aligns_once_to_group_max_and_masks_all_fake_rows(
+        self, mock_all_reduce, mock_group
+    ):
+        from megatron.core.packed_seq_params import PackedSeqParams
+
+        from nemo_rl.models.megatron.data import (
+            _pad_q30_packed_inputs_for_hybridep,
+        )
+
+        def set_peer_max(target, **_kwargs):
+            target.fill_(192)
+
+        mock_all_reduce.side_effect = set_peer_max
+        group = MagicMock()
+        mock_group.return_value = group
+        input_ids = torch.arange(128).view(1, 128)
+        cu_seqlens = torch.tensor([0, 100], dtype=torch.int32)
+        cu_seqlens_padded = torch.tensor([0, 128], dtype=torch.int32)
+        packed_seq_params = PackedSeqParams(
+            cu_seqlens_q=cu_seqlens_padded,
+            cu_seqlens_kv=cu_seqlens_padded,
+            cu_seqlens_q_padded=cu_seqlens_padded,
+            cu_seqlens_kv_padded=cu_seqlens_padded,
+            max_seqlen_q=128,
+            max_seqlen_kv=128,
+            qkv_format="thd",
+            total_tokens=128,
+        )
+
+        (
+            padded_input_ids,
+            padded_local_input_ids,
+            padded_params,
+            padded_cu_seqlens,
+            padding_mask,
+        ) = _pad_q30_packed_inputs_for_hybridep(
+            input_ids=input_ids,
+            input_ids_cp_sharded=input_ids,
+            packed_seq_params=packed_seq_params,
+            cu_seqlens=cu_seqlens,
+            cu_seqlens_padded=cu_seqlens_padded,
+            alignment=128,
+        )
+
+        assert padded_input_ids.shape == (1, 256)
+        assert padded_local_input_ids.shape == (1, 256)
+        assert padded_params.total_tokens == 256
+        assert padded_params.max_seqlen_q == 256
+        assert int(padded_cu_seqlens[-1]) == 256
+        assert not padding_mask[:, :100].any()
+        assert padding_mask[:, 100:].all()
+        mock_all_reduce.assert_called_once()
+        assert mock_all_reduce.call_args.kwargs == {
+            "op": torch.distributed.ReduceOp.MAX,
+            "group": group,
+        }
+        assert int(mock_all_reduce.call_args.args[0].item()) == 192
+
+    @patch("nemo_rl.models.megatron.data.get_expert_tensor_and_model_parallel_group")
+    @patch("nemo_rl.models.megatron.data.torch.distributed.all_reduce")
+    def test_masks_preexisting_tail_when_no_extra_rows_are_added(
+        self, mock_all_reduce, mock_group
+    ):
+        from megatron.core.packed_seq_params import PackedSeqParams
+
+        from nemo_rl.models.megatron.data import (
+            _pad_q30_packed_inputs_for_hybridep,
+        )
+
+        mock_all_reduce.side_effect = lambda target, **_kwargs: target.fill_(128)
+        input_ids = torch.arange(128).view(1, 128)
+        cu_seqlens = torch.tensor([0, 100], dtype=torch.int32)
+        cu_seqlens_padded = torch.tensor([0, 128], dtype=torch.int32)
+        packed_seq_params = PackedSeqParams(
+            cu_seqlens_q=cu_seqlens_padded,
+            cu_seqlens_kv=cu_seqlens_padded,
+            cu_seqlens_q_padded=cu_seqlens_padded,
+            cu_seqlens_kv_padded=cu_seqlens_padded,
+            max_seqlen_q=128,
+            max_seqlen_kv=128,
+            qkv_format="thd",
+            total_tokens=128,
+        )
+
+        *_, padding_mask = _pad_q30_packed_inputs_for_hybridep(
+            input_ids=input_ids,
+            input_ids_cp_sharded=input_ids,
+            packed_seq_params=packed_seq_params,
+            cu_seqlens=cu_seqlens,
+            cu_seqlens_padded=cu_seqlens_padded,
+            alignment=128,
+        )
+
+        assert not padding_mask[:, :100].any()
+        assert padding_mask[:, 100:].all()
+
+    @pytest.mark.parametrize(
+        ("override", "error"),
+        [
+            ({"tensor_model_parallel_size": 2}, "tensor parallel size"),
+            ({"pipeline_model_parallel_size": 2}, "pipeline parallel size"),
+            ({"context_parallel_size": 2}, "context parallel size"),
+            ({"sequence_parallel": True}, "sequence parallelism"),
+            ({"moe_flex_dispatcher_backend": "deepep"}, "HybridEP backend"),
+        ],
+    )
+    def test_q30_only_guard_rejects_unsupported_configs(self, override, error):
+        from nemo_rl.models.megatron.data import (
+            _validate_q30_legacy_hybridep_config,
+        )
+
+        megatron_cfg = {
+            "tensor_model_parallel_size": 1,
+            "pipeline_model_parallel_size": 1,
+            "context_parallel_size": 1,
+            "sequence_parallel": False,
+            "moe_token_dispatcher_type": "flex",
+            "moe_flex_dispatcher_backend": "hybridep",
+        }
+        megatron_cfg.update(override)
+
+        with pytest.raises(ValueError, match=error):
+            _validate_q30_legacy_hybridep_config(megatron_cfg)
 
 
 @pytest.mark.mcore

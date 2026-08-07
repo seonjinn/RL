@@ -720,6 +720,38 @@ class TestApplyMoeConfig:
 
         assert model_cfg.moe_hybridep_pad_uneven_dispatch_inputs is False
 
+    def test_legacy_prepad_disables_per_dispatch_padding(self, monkeypatch):
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        monkeypatch.setenv("NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN", "8")
+        monkeypatch.setenv("USE_MNNVL", "0")
+        model_cfg = SimpleNamespace(
+            moe_hybridep_pad_uneven_dispatch_inputs=True,
+        )
+        config = self._base_moe_cfg(
+            expert_model_parallel_size=8,
+            moe_flex_dispatcher_backend="hybridep",
+            moe_hybridep_prepad_packed_inputs=True,
+        )
+
+        _apply_moe_config(model_cfg, config)
+
+        assert model_cfg.moe_hybridep_pad_uneven_dispatch_inputs is False
+
+    def test_legacy_prepad_requires_hybridep(self):
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        model_cfg = SimpleNamespace(
+            moe_hybridep_pad_uneven_dispatch_inputs=False,
+        )
+        config = self._base_moe_cfg(
+            moe_flex_dispatcher_backend="deepep",
+            moe_hybridep_prepad_packed_inputs=True,
+        )
+
+        with pytest.raises(ValueError, match="requires the HybridEP flex backend"):
+            _apply_moe_config(model_cfg, config)
+
     def test_hybridep_env_vars_auto_set_with_warning(self, monkeypatch):
         """HybridEP backend with no env config: auto-set env vars and emit warnings."""
         from nemo_rl.models.megatron.setup import _apply_moe_config
