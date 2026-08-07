@@ -2800,6 +2800,10 @@ def grpo_train(
                             kv_scales=kv_scales_cache if sync_kv_scales else None,
                         )
                         POLICY_GENERATION_STALE = False
+                        print(
+                            f"[MXFP8_MOE_AUDIT] step={total_steps + 1} phase=refit status=success",
+                            flush=True,
+                        )
                     else:
                         if colocated_inference:
                             policy.offload_after_refit()  # unload optimizer to make space for generation
@@ -2881,6 +2885,10 @@ def grpo_train(
                             greedy=False,
                         )
                     policy_generation.finish_generation()
+                    print(
+                        f"[MXFP8_MOE_AUDIT] step={total_steps + 1} phase=rollout status=success",
+                        flush=True,
+                    )
                     # Collect generation logger metrics for performance reporting after each generation step
                     # inflight batch sizes and num pending samples are collected from each worker
                     if policy_generation is not None:
@@ -3130,6 +3138,10 @@ def grpo_train(
 
                     del logprob_data
                     del extra_multimodal_data
+                print(
+                    f"[MXFP8_MOE_AUDIT] step={total_steps + 1} phase=logprob status=success",
+                    flush=True,
+                )
 
                 # Seq-level logprob error metrics/masking require real prev_logprobs
                 if skip_prev_logprobs:
@@ -3199,6 +3211,10 @@ def grpo_train(
                         loss_fn,
                         timer=timer,
                     )
+                print(
+                    f"[MXFP8_MOE_AUDIT] step={total_steps + 1} phase=train status=success",
+                    flush=True,
+                )
 
                 # Recompute KV scales after policy training if needed
                 if sync_kv_scales:

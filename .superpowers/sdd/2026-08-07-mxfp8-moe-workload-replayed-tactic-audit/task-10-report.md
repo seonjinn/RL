@@ -65,3 +65,49 @@ and trace/qualification provenance requirements.
 ## Commit
 
 Review-fix implementation: `8f02405429af48879426c81d1a2e62cce00a6beb`
+
+## Fix Round 2
+
+- The synchronous GRPO producer emits explicit successful `refit`, `rollout`,
+  `logprob`, and `train` markers for each completed step. The validation
+  launcher derives `run_evidence.json` from those markers and the producer's
+  `train_data_step*.jsonl` `token_loss_mask` fields. It records only positive,
+  directly measured generated-token totals for steps 3-8.
+- `qualify_cache.py` now emits authoritative `qualification_decisions.json`
+  alongside its real cache manifest. It includes selected and stock tactics,
+  promotion decisions, signature bindings, and cache/trace/profile/shmoo
+  fingerprints. The report checks these bindings and excludes failed/zero
+  shmoo rows before any tactic metric is accepted.
+- Trace-set provenance now uses the same sorted member-digest JSON algorithm
+  as `CacheProvenance._sha256_file_set`. Report source hashes list each raw
+  trace artifact. Run evidence must carry cache-manifest runtime fingerprints.
+- Paired GSM8K output now records `matched_examples=1319`; collection requires
+  provenance matching, all paired count fields summing to 1319, accuracy,
+  McNemar, and CI data. Executed reports show replay coverage and paired GSM8K
+  comparison values.
+- Existing execution artifacts that are malformed, mismatched, or missing
+  component evidence render `INCOMPLETE`; only a complete failed gate renders
+  `REJECT`. Duplicate paths/run IDs, wrong arm labels, and non-comparable
+  repetition manifests cannot satisfy the stability gate. Per-step plots now
+  show every repetition, labelled by arm/run/step.
+
+## Fix Round 2 Verification
+
+```text
+PYTHONPATH=. .venv/bin/pytest -q \
+  tests/experiments/test_mxfp8_moe_tactic_audit_report.py \
+  tests/experiments/test_mxfp8_moe_tactic_audit_launchers.py \
+  tests/experiments/test_mxfp8_moe_tactic_cache_qualification.py
+
+60 passed, 16 macOS pytest temporary-directory cleanup warnings
+
+PYTHONPATH=. .venv/bin/ruff check <changed audit modules and tests>
+All checks passed.
+
+PYTHONPATH=. .venv/bin/pyright <changed audit modules>
+0 errors; 1 pre-existing seaborn source-resolution warning.
+```
+
+Regenerated template report: all four PNGs are 4140x1473 at 600 DPI; HTML is
+structured and has four embedded figure elements. The template is explicitly
+`NOT YET EXECUTED` and makes no measured-performance claim.

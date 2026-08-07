@@ -12,11 +12,15 @@ from experiments.mxfp8_moe_tactic_audit.build_report import (
     build_report,
     write_template,
 )
-from experiments.mxfp8_moe_tactic_audit.collect_results import summarize_run
+from experiments.mxfp8_moe_tactic_audit.collect_results import summarize_run, write_run_evidence
 
 
 def _sha(path: Path) -> str:
     return sha256(path.read_bytes()).hexdigest()
+
+
+def _trace_set_sha(paths: tuple[Path, ...]) -> str:
+    return sha256(json.dumps(sorted(_sha(path) for path in paths), separators=(",", ":")).encode("ascii")).hexdigest()
 
 
 def write_grpo_run(
@@ -79,6 +83,7 @@ def write_grpo_run(
                         "run_id": run_id,
                         "topology": "4 nodes x 4 GPUs",
                     },
+                    "runtime_fingerprints": {"producer": "fixture"},
                     "phases": {
                         "logprob": "success",
                         "refit": "success",
@@ -100,9 +105,12 @@ def write_grpo_run(
 def write_audit_artifacts(root: Path) -> dict[str, Path]:
     """Write cache-bound shmoo, trace, component, and provenance evidence."""
     trace_summary = root / "trace_summary.json"
+    raw_trace = root / "trace-rank0.jsonl"
+    raw_trace.write_text('{"producer":"routing-trace"}\n', encoding="ascii")
     trace_summary.write_text(
         json.dumps(
             {
+                "trace_paths": [raw_trace.name],
                 "profiles": [
                     {"cache_key": "cache-1", "call_weight": 1.0, "signature_key": "sig-1"}
                 ]
@@ -143,7 +151,7 @@ def write_audit_artifacts(root: Path) -> dict[str, Path]:
                 "source_fingerprints": {
                     "selected_profiles_sha256": _sha(selected_profiles),
                     "shmoo_results_sha256": _sha(shmoo),
-                    "trace_set_sha256": _sha(trace_summary),
+                    "trace_set_sha256": _trace_set_sha((raw_trace,)),
                 },
                 "stock_sha256": _sha(stock_cache),
             },
@@ -157,9 +165,9 @@ def write_audit_artifacts(root: Path) -> dict[str, Path]:
             {
                 "cache_manifest_sha256": _sha(cache_manifest),
                 "decisions": [
-                    {"cache_key": "cache-1", "promoted": True, "selected": {"gemm1": 3, "gemm2": 4}}
+                    {"cache_key": "cache-1", "promoted": True, "selected": {"gemm1": 3, "gemm2": 4}, "stock": {"gemm1": 1, "gemm2": 2}, "signature_keys": ["sig-1"]}
                 ],
-                "trace_summary_sha256": _sha(trace_summary),
+                "trace_set_sha256": _trace_set_sha((raw_trace,)),
             },
             sort_keys=True,
         ),
@@ -168,7 +176,7 @@ def write_audit_artifacts(root: Path) -> dict[str, Path]:
     correctness = root / "correctness.json"
     correctness.write_text(json.dumps({"cuda_graph_replay": True, "deterministic_generation": True, "micro_correctness": True}, sort_keys=True), encoding="ascii")
     gsm8k = root / "gsm8k_comparison.json"
-    gsm8k.write_text(json.dumps({"candidate_accuracy": 0.6, "passed": True, "stock_accuracy": 0.6}, sort_keys=True), encoding="ascii")
+    gsm8k.write_text(json.dumps({"accuracy_delta": 0.0, "both_correct": 700, "both_wrong": 600, "candidate_accuracy": 0.6, "candidate_only_wins": 10, "delta_ci95": [-0.01, 0.01], "matched_examples": 1319, "mcnemar_p_value": 1.0, "passed": True, "provenance_matched": True, "stock_accuracy": 0.6, "stock_only_wins": 9}, sort_keys=True), encoding="ascii")
     nsys = root / "nsys_components.csv"
     with nsys.open("w", newline="", encoding="ascii") as handle:
         writer = csv.DictWriter(handle, fieldnames=["arm", "cache_event", "cache_key", "call_count", "component", "median_us", "signature_key", "tactic"])
@@ -198,10 +206,10 @@ def write_audit_artifacts(root: Path) -> dict[str, Path]:
 def complete_inputs(root: Path, *, repeated: bool = True) -> AuditInputs:
     """Build a complete evidence set with one or two runs per arm."""
     stock_runs = (write_grpo_run(root, arm="stock", run_id="one", throughput=9500.0, total_step_seconds=210.0),)
-    candidate_runs = (write_grpo_run(root, arm="candidate", run_id="one", throughput=9700.0, total_step_seconds=205.0),)
+    candidate_runs = (write_grpo_run(root, arm="candidate", run_id="candidate-one", throughput=9700.0, total_step_seconds=205.0),)
     if repeated:
         stock_runs += (write_grpo_run(root, arm="stock", run_id="two", throughput=9550.0, total_step_seconds=209.0),)
-        candidate_runs += (write_grpo_run(root, arm="candidate", run_id="two", throughput=9750.0, total_step_seconds=204.0),)
+        candidate_runs += (write_grpo_run(root, arm="candidate", run_id="candidate-two", throughput=9750.0, total_step_seconds=204.0),)
     return AuditInputs(stock_runs=stock_runs, candidate_runs=candidate_runs, **write_audit_artifacts(root))
 
 
@@ -215,6 +223,23 @@ def test_summarize_run_parses_actual_grpo_labels_and_evidence_tokens(tmp_path: P
     assert summary.steps[0].kl == 0.01
     assert summary.steps[0].loss == 0.2
     assert summary.realized_generated_tokens == 6 * 64000
+
+
+def test_launcher_evidence_is_derived_from_grpo_producer_masks_and_phase_markers(tmp_path: Path) -> None:
+    run = write_grpo_run(tmp_path, arm="stock", run_id="producer", throughput=9500.0, total_step_seconds=210.0)
+    (run / "run_evidence.json").unlink()
+    log = run / "logs" / "ray-driver.log"
+    with log.open("a", encoding="utf-8") as handle:
+        for step in range(3, 9):
+            for phase in ("refit", "rollout", "logprob", "train"):
+                handle.write(f"\n[MXFP8_MOE_AUDIT] step={step} phase={phase} status=success")
+            dump = run / "logs" / "exp_001" / f"train_data_step{step}.jsonl"
+            dump.parent.mkdir(parents=True, exist_ok=True)
+            dump.write_text(json.dumps({"token_loss_mask": [1, 1, 0, 1]}) + "\n", encoding="ascii")
+
+    write_run_evidence(run, arm="stock", run_id="producer", metadata={"batch": "fixture", "run_id": "producer", "topology": "fixture"}, runtime_fingerprints={"producer": "fixture"})
+
+    assert summarize_run(run).realized_generated_tokens == 18
 
 
 def test_report_binds_shuffled_shmoo_rows_and_ignores_failed_fastest_row(tmp_path: Path) -> None:
@@ -277,7 +302,7 @@ def test_nsys_rows_must_bind_the_trace_cache_key(tmp_path: Path) -> None:
 
     report = build_report(inputs, tmp_path / "report")
 
-    assert report.verdict == "NOT YET EXECUTED"
+    assert report.verdict == "INCOMPLETE"
     assert "NSys component evidence missing" in report.reasons[0]
 
 
@@ -289,7 +314,7 @@ def test_missing_artifacts_render_not_yet_executed_without_numeric_claims(tmp_pa
     report = build_report(inputs, output_dir)
 
     markdown = (output_dir / "mxfp8_moe_tactic_audit_latest.md").read_text()
-    assert report.verdict == "NOT YET EXECUTED"
+    assert report.verdict == "INCOMPLETE"
     assert "not reported" in markdown
     assert "9500.00" not in markdown
 

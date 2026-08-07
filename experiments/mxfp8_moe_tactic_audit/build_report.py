@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import csv
 from dataclasses import dataclass
+from hashlib import sha256
 from html import escape
+import json
 import math
 from pathlib import Path
 from statistics import fmean, pstdev
@@ -56,6 +58,8 @@ class _Collected:
     cache_manifest_bindings: tuple[tuple[str, str], ...]
     metadata_caption: str
     failed_gates: tuple[str, ...]
+    covered_weight: float
+    gsm8k: dict[str, object]
 
 
 def _number(value: object, label: str, *, positive: bool = False) -> float:
@@ -100,6 +104,26 @@ def _cache(path: Path) -> dict[str, tuple[int, int]]:
     return entries
 
 
+def _trace_set_sha256(trace_summary: Path) -> str:
+    """Match qualify_cache's path-independent raw trace-set digest exactly."""
+    raw_paths = load_json_object(trace_summary).get("trace_paths")
+    if not isinstance(raw_paths, list) or not raw_paths:
+        raise EvidenceError("trace summary must list raw trace_paths")
+    paths: list[Path] = []
+    for value in raw_paths:
+        if not isinstance(value, str) or not value:
+            raise EvidenceError("trace summary has invalid trace path")
+        path = (trace_summary.parent / value).resolve()
+        if not path.is_file():
+            raise EvidenceError(f"trace summary raw trace is missing: {path}")
+        paths.append(path)
+    if len(set(paths)) != len(paths):
+        raise EvidenceError("trace summary duplicates a raw trace path")
+    member_digests = sorted(sha256_file(path) for path in paths)
+    payload = json.dumps(member_digests, ensure_ascii=True, separators=(",", ":"))
+    return sha256(payload.encode("ascii")).hexdigest()
+
+
 def _profiles(trace_path: Path, selected_path: Path) -> dict[str, tuple[str, float]]:
     trace = load_json_object(trace_path).get("profiles")
     selected = load_json_object(selected_path)
@@ -138,15 +162,15 @@ def _validate_provenance(inputs: AuditInputs) -> tuple[tuple[str, str], ...]:
     if not isinstance(fingerprints, dict):
         raise EvidenceError("cache manifest has no source fingerprints")
     expected = {
-        "trace_set_sha256": sha256_file(inputs.trace_summary),
+        "trace_set_sha256": _trace_set_sha256(inputs.trace_summary),
         "selected_profiles_sha256": sha256_file(inputs.selected_profiles),
         "shmoo_results_sha256": sha256_file(inputs.shmoo),
     }
     if any(fingerprints.get(key) != value for key, value in expected.items()):
         raise EvidenceError("cache manifest source fingerprints do not bind supplied artifacts")
     decisions = load_json_object(inputs.qualification_decisions)
-    if decisions.get("cache_manifest_sha256") != sha256_file(inputs.cache_manifest) or decisions.get("trace_summary_sha256") != sha256_file(inputs.trace_summary):
-        raise EvidenceError("qualification decisions do not bind cache manifest and trace summary")
+    if decisions.get("cache_manifest_sha256") != sha256_file(inputs.cache_manifest) or decisions.get("trace_set_sha256") != _trace_set_sha256(inputs.trace_summary):
+        raise EvidenceError("qualification decisions do not bind cache manifest and raw trace set")
     return tuple(
         (name, value)
         for name, value in (
@@ -154,7 +178,7 @@ def _validate_provenance(inputs: AuditInputs) -> tuple[tuple[str, str], ...]:
             ("candidate_sha256", manifest["candidate_sha256"]),
             *sorted(fingerprints.items()),
             ("qualification.cache_manifest_sha256", decisions["cache_manifest_sha256"]),
-            ("qualification.trace_summary_sha256", decisions["trace_summary_sha256"]),
+            ("qualification.trace_set_sha256", decisions["trace_set_sha256"]),
         )
         if isinstance(name, str) and isinstance(value, str)
     )
@@ -174,6 +198,14 @@ def _decision_tactics(inputs: AuditInputs, profiles: dict[str, tuple[str, float]
         if key in decisions or key not in stock or key not in candidate:
             raise EvidenceError("qualification/cache keys are incomplete or duplicate")
         selected = _tactic(row.get("selected"), f"decision {key}")
+        signatures = row.get("signature_keys")
+        if not isinstance(signatures, list) or not signatures or not all(isinstance(value, str) and value for value in signatures):
+            raise EvidenceError(f"decision {key} has no producer signature bindings")
+        if any(profiles.get(signature, (None, 0.0))[0] != key for signature in signatures):
+            raise EvidenceError(f"decision {key} signatures do not bind selected profiles")
+        recorded_stock = _tactic(row.get("stock"), f"decision stock {key}")
+        if recorded_stock != stock[key]:
+            raise EvidenceError(f"decision {key} does not bind to the stock cache tactic")
         expected_candidate = candidate[key] if row["promoted"] else stock[key]
         if selected != expected_candidate:
             raise EvidenceError(f"decision {key} does not bind to the cache-selected tactic")
@@ -245,8 +277,13 @@ def _component_speedups(inputs: AuditInputs, profiles: dict[str, tuple[str, floa
             raise EvidenceError("NSys component row has invalid tactic") from error
         if len(tactic) != 2:
             raise EvidenceError("NSys component row has invalid tactic")
-        count = int(_number(float(row.get("call_count", "nan")), "NSys call_count", positive=True))
-        timing = _number(float(row.get("median_us", "nan")), "NSys median_us", positive=True)
+        try:
+            count_value = float(row.get("call_count", "nan"))
+            timing_value = float(row.get("median_us", "nan"))
+        except (TypeError, ValueError) as error:
+            raise EvidenceError("NSys component row has malformed numeric field") from error
+        count = int(_number(count_value, "NSys call_count", positive=True))
+        timing = _number(timing_value, "NSys median_us", positive=True)
         key = (signature, cache_key, arm, component, (tactic[0], tactic[1]))
         if key in indexed:
             raise EvidenceError("duplicate NSys component row")
@@ -284,12 +321,26 @@ def _component_speedups(inputs: AuditInputs, profiles: dict[str, tuple[str, floa
 def _run_summaries(inputs: AuditInputs) -> tuple[tuple[RunSummary, ...], tuple[RunSummary, ...]]:
     if not inputs.stock_runs or not inputs.candidate_runs:
         raise EvidenceError("stock and candidate run sets are required")
+    paths = (*inputs.stock_runs, *inputs.candidate_runs)
+    if len({path.resolve() for path in paths}) != len(paths):
+        raise EvidenceError("duplicate run paths cannot satisfy repetition evidence")
     stock = tuple(summarize_run(path) for path in inputs.stock_runs)
     candidate = tuple(summarize_run(path) for path in inputs.candidate_runs)
     if len(stock) != len(candidate):
         raise EvidenceError("stock and candidate run counts differ; runs are not comparable")
     if any(not run.all_metrics_finite for run in (*stock, *candidate)):
         raise EvidenceError("run metrics are not finite")
+    if any(run.arm != "stock" for run in stock) or any(run.arm != "candidate" for run in candidate):
+        raise EvidenceError("run evidence arm does not match supplied arm")
+    if len({run.run_id for run in (*stock, *candidate)}) != len((*stock, *candidate)):
+        raise EvidenceError("run IDs must be unique across repetitions")
+    all_paths = (("stock", inputs.stock_runs), ("candidate", inputs.candidate_runs))
+    for arm, arm_paths in all_paths:
+        anchor = arm_paths[0] / "run_manifest.json"
+        for path in arm_paths[1:]:
+            differences = compare_manifests(anchor, path / "run_manifest.json")
+            if differences:
+                raise EvidenceError(f"{arm} repetition manifests differ: " + ", ".join(differences))
     for index, (left, right) in enumerate(zip(stock, candidate, strict=True)):
         differences = compare_manifests(
             inputs.stock_runs[index] / "run_manifest.json",
@@ -326,7 +377,17 @@ def _source_hashes(inputs: AuditInputs) -> tuple[tuple[str, str], ...]:
             ("manifest", path / "run_manifest.json"),
         )
     )
-    return tuple((label, sha256_file(path)) for label, path in (*paths, *run_paths))
+    raw_trace_paths = load_json_object(inputs.trace_summary).get("trace_paths")
+    if not isinstance(raw_trace_paths, list):
+        raise EvidenceError("trace summary must list raw trace_paths")
+    trace_paths = tuple(
+        (f"raw trace {value}", (inputs.trace_summary.parent / value).resolve())
+        for value in raw_trace_paths
+        if isinstance(value, str)
+    )
+    if len(trace_paths) != len(raw_trace_paths):
+        raise EvidenceError("trace summary has invalid trace path")
+    return tuple((label, sha256_file(path)) for label, path in (*paths, *trace_paths, *run_paths))
 
 
 def _collect(inputs: AuditInputs) -> _Collected:
@@ -337,6 +398,33 @@ def _collect(inputs: AuditInputs) -> _Collected:
     components, cache_hit_share = _component_speedups(inputs, profiles, tactics)
     stock, candidate = _run_summaries(inputs)
     correctness, gsm8k = load_json_object(inputs.correctness), load_json_object(inputs.gsm8k)
+    fingerprints = load_json_object(inputs.cache_manifest).get("source_fingerprints")
+    if not isinstance(fingerprints, dict):
+        raise EvidenceError("cache manifest has no runtime fingerprints")
+    for run in (*stock, *candidate):
+        if any(run.runtime_fingerprints.get(name) != value for name, value in fingerprints.items() if name not in {"trace_set_sha256", "selected_profiles_sha256", "shmoo_results_sha256"}):
+            raise EvidenceError("run runtime fingerprints do not match cache manifest")
+    required_gsm8k = ("provenance_matched", "matched_examples", "stock_accuracy", "candidate_accuracy", "candidate_only_wins", "stock_only_wins", "both_correct", "both_wrong", "accuracy_delta", "mcnemar_p_value", "delta_ci95", "passed")
+    if any(name not in gsm8k for name in required_gsm8k):
+        raise EvidenceError("GSM8K comparison is missing paired evidence fields")
+    if gsm8k.get("provenance_matched") is not True or gsm8k.get("matched_examples") != 1319:
+        raise EvidenceError("GSM8K comparison provenance or matched example count is invalid")
+    count_fields = ("candidate_only_wins", "stock_only_wins", "both_correct", "both_wrong")
+    counts: list[int] = []
+    for name in count_fields:
+        value = gsm8k[name]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise EvidenceError("GSM8K paired counts are invalid")
+        counts.append(value)
+    if sum(counts) != 1319:
+        raise EvidenceError("GSM8K paired counts are invalid")
+    delta_ci95 = gsm8k.get("delta_ci95")
+    if not isinstance(delta_ci95, list) or len(delta_ci95) != 2:
+        raise EvidenceError("GSM8K delta_ci95 is invalid")
+    for name in ("stock_accuracy", "candidate_accuracy", "accuracy_delta", "mcnemar_p_value"):
+        _number(gsm8k[name], f"GSM8K {name}")
+    for value in delta_ci95:
+        _number(value, "GSM8K delta_ci95")
     failed = tuple(key for key in CORRECTNESS_GATES if correctness.get(key) is not True) + (("GSM8K",) if gsm8k.get("passed") is not True else ())
     metadata = stock[0].metadata
     caption = f"run={metadata['run_id']}; batch={metadata['batch']}; topology={metadata['topology']}"
@@ -350,6 +438,8 @@ def _collect(inputs: AuditInputs) -> _Collected:
         cache_manifest_bindings,
         caption,
         failed,
+        _number(load_json_object(inputs.selected_profiles).get("covered_weight"), "covered_weight"),
+        gsm8k,
     )
 
 
@@ -378,7 +468,7 @@ def _markdown(collected: _Collected, verdict: str, reasons: Sequence[str]) -> st
         for run in runs:
             for step in run.steps:
                 lines.append(f"| {arm}/{run.run_id} | {step.step} | {step.reward:.4f} | {step.loss:.4f} | {step.kl:.4f} | {step.mean_generation_length:.2f} | {step.realized_generated_tokens} | {step.generated_tokens_per_second_per_gpu:.2f} | {step.total_step_seconds:.2f} |")
-    lines.extend(("", "## Tactic and Cache Evidence", "", "| Metric | Value |", "| --- | ---: |", *[f"| {name} call-weighted micro speedup | {value:.4f} |" for name, value in collected.component_speedups], f"| Tactic-change share | {collected.tactic_change_share:.1%} |", f"| Cache hit share | {collected.cache_hit_share:.1%} |", f"| Fallback share | {1.0 - collected.cache_hit_share:.1%} |", "", "## Figures", "", *[f"![{name}]({name}.png)" for name in PLOT_NAMES], "", "## Cache Manifest Bindings", "", "| Binding | SHA256 |", "| --- | --- |", *[f"| {name} | `{digest}` |" for name, digest in collected.cache_manifest_bindings], "", "## Source Hashes", "", "| Source | SHA256 |", "| --- | --- |", *[f"| {name} | `{digest}` |" for name, digest in collected.source_hashes], ""))
+    lines.extend(("", "## Tactic and Cache Evidence", "", "| Metric | Value |", "| --- | ---: |", f"| Achieved replay coverage | {collected.covered_weight:.1%} |", *[f"| {name} call-weighted micro speedup | {value:.4f} |" for name, value in collected.component_speedups], f"| Tactic-change share | {collected.tactic_change_share:.1%} |", f"| Cache hit share | {collected.cache_hit_share:.1%} |", f"| Fallback share | {1.0 - collected.cache_hit_share:.1%} |", "", "## GSM8K Paired Comparison", "", "| Metric | Value |", "| --- | ---: |", f"| Matched examples | {collected.gsm8k['matched_examples']} |", f"| Stock accuracy | {_number(collected.gsm8k['stock_accuracy'], 'GSM8K stock_accuracy'):.4f} |", f"| Candidate accuracy | {_number(collected.gsm8k['candidate_accuracy'], 'GSM8K candidate_accuracy'):.4f} |", f"| Candidate-only wins | {collected.gsm8k['candidate_only_wins']} |", f"| Stock-only wins | {collected.gsm8k['stock_only_wins']} |", f"| McNemar p-value | {_number(collected.gsm8k['mcnemar_p_value'], 'GSM8K mcnemar_p_value'):.4g} |", "", "## Figures", "", *[f"![{name}]({name}.png)" for name in PLOT_NAMES], "", "## Cache Manifest Bindings", "", "| Binding | SHA256 |", "| --- | --- |", *[f"| {name} | `{digest}` |" for name, digest in collected.cache_manifest_bindings], "", "## Source Hashes", "", "| Source | SHA256 |", "| --- | --- |", *[f"| {name} | `{digest}` |" for name, digest in collected.source_hashes], ""))
     return "\n".join(lines)
 
 
@@ -460,7 +550,16 @@ def build_report(inputs: AuditInputs, output_dir: Path) -> AuditReport:
     try:
         collected = _collect(inputs)
     except EvidenceError as error:
-        return _write_unexecuted(output_dir, "NOT YET EXECUTED", str(error))
+        has_execution = any(
+            path.exists()
+            for run in (*inputs.stock_runs, *inputs.candidate_runs)
+            for path in (run / "run_evidence.json", run / "run_manifest.json")
+        )
+        return _write_unexecuted(
+            output_dir,
+            "INCOMPLETE" if has_execution else "NOT YET EXECUTED",
+            str(error),
+        )
     stock_tokens, stock_time = _means(collected.stock_runs)
     candidate_tokens, candidate_time = _means(collected.candidate_runs)
     variations = tuple(value for value in (_variation(collected.stock_runs), _variation(collected.candidate_runs)) if value is not None)
@@ -477,21 +576,10 @@ def build_report(inputs: AuditInputs, output_dir: Path) -> AuditReport:
         else:
             verdict, reasons = "REJECT", (f"End-to-end speedup {speedup:.2%}; measured run-to-run variation {variation:.2%}.", "Stock FlashInfer autotuning is sufficient for this workload.")
     reasons = (*reasons, f"Run-to-run variation: {'not available' if not variations else f'{max(variations):.2%}'}. Within-run step variation is displayed separately and is not a promotion gate.")
-    first_stock = _first_run(collected.stock_runs)
-    first_candidate = _first_run(collected.candidate_runs)
     per_step = tuple(
-        (
-            stock_step.step,
-            stock_step.generated_tokens_per_second_per_gpu,
-            candidate_step.generated_tokens_per_second_per_gpu,
-            stock_step.total_step_seconds,
-            candidate_step.total_step_seconds,
-        )
-        for stock_step, candidate_step in zip(
-            first_stock.steps,
-            first_candidate.steps,
-            strict=True,
-        )
+        (run.run_id, run.arm, step.step, step.generated_tokens_per_second_per_gpu, step.total_step_seconds)
+        for run in (*collected.stock_runs, *collected.candidate_runs)
+        for step in run.steps
     )
     write_complete_plots(output_dir, component_speedups=collected.component_speedups, tactic_change_share=collected.tactic_change_share, cache_hit_share=collected.cache_hit_share, normalized_throughput=candidate_tokens / stock_tokens, normalized_total_step_time=candidate_time / stock_time, per_step=per_step, metadata_caption=collected.metadata_caption)
     _write(output_dir, _markdown(collected, verdict, reasons), verdict)

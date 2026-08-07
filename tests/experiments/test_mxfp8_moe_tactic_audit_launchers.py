@@ -114,13 +114,12 @@ def test_validation_dry_runs_keep_stock_and_candidate_isolated(tmp_path: Path) -
     assert "MXFP8_MOE_CUDA_GRAPH_REPLAY=required" in candidate_output
     assert "vllm serve" in candidate_output
     assert "generation.jsonl" in candidate_output
-    assert "run_evidence.json" in candidate_output
-    assert '"exit_code": 0' in candidate_output
-    assert '"refit": "success"' in candidate_output
-    assert '"rollout": "success"' in candidate_output
-    assert '"logprob": "success"' in candidate_output
-    assert '"train": "success"' in candidate_output
-    assert '"realized_generated_tokens": None' in candidate_output
+    assert "--write-run-evidence" in candidate_output
+    assert "--write-run-evidence" in candidate_output
+    assert "train_data_step" in (AUDIT_DIR / "collect_results.py").read_text(encoding="ascii")
+    assert '"realized_generated_tokens": None' not in candidate_output
+    assert "RUNTIME_FINGERPRINTS_JSON" in candidate_output
+    assert "\nPY\nif [[ 8 -eq 2 ]]" not in candidate_output
     assert "trap" in candidate_output
     assert "policy.model_name=" in candidate_output
     assert "HF_HUB_OFFLINE=1" in candidate_output
@@ -474,6 +473,7 @@ def _make_submit_environment(tmp_path: Path) -> tuple[dict[str, str], Path, Path
     cache = tmp_path / "cache/candidate"
     cache.mkdir(parents=True)
     (cache / "entry").write_text("cache\n", encoding="ascii")
+    (cache / "cache_manifest.json").write_text("{}\n", encoding="ascii")
     container = tmp_path / "container.sqsh"
     container.write_text("container\n", encoding="ascii")
     evaluator = tmp_path / "gsm8k.py"

@@ -60,7 +60,7 @@ def write_complete_plots(
     cache_hit_share: float,
     normalized_throughput: float,
     normalized_total_step_time: float,
-    per_step: Sequence[tuple[int, float, float, float, float]],
+    per_step: Sequence[tuple[str, str, int, float, float]],
     metadata_caption: str,
 ) -> None:
     """Write four 600-DPI PNG/PDF figures from complete executed evidence."""
@@ -84,19 +84,21 @@ def write_complete_plots(
     _save(fig, output_dir / PLOT_NAMES[2], metadata_caption + "; total step time: lower is better")
 
     rows = []
-    for step, stock_tokens, candidate_tokens, stock_seconds, candidate_seconds in per_step:
-        rows.extend(((f"Step {step}", "Stock", "tok/s/GPU", stock_tokens), (f"Step {step}", "Candidate", "tok/s/GPU", candidate_tokens), (f"Step {step}", "Stock", "Total step s", stock_seconds), (f"Step {step}", "Candidate", "Total step s", candidate_seconds)))
+    for run_id, arm, step, tokens, seconds in per_step:
+        label = f"{arm}/{run_id} S{step}"
+        rows.extend(((label, arm.title(), "tok/s/GPU", tokens), (label, arm.title(), "Total step s", seconds)))
     frame = pd.DataFrame(rows, columns=["Step", "Arm", "Metric", "Value"])
     fig, axes = plt.subplots(1, 2, figsize=(11.2, 4.2))
     for ax, metric in zip(axes, ("tok/s/GPU", "Total step s"), strict=True):
         subset = cast(pd.DataFrame, frame[frame["Metric"] == metric])
-        sns.barplot(data=subset, x="Step", y="Value", hue="Arm", hue_order=["Stock", "Candidate"], palette=sns.color_palette("Paired", n_colors=2), edgecolor=EDGE_COLOR, linewidth=2.0, zorder=10, ax=ax)
+        sns.barplot(data=subset, x="Step", y="Value", hue="Arm", hue_order=["Stock", "Candidate"], palette=sns.color_palette("Paired", n_colors=2), edgecolor=EDGE_COLOR, linewidth=2.0, errorbar=None, zorder=10, ax=ax)
         _style(ax, metric)
         for container in ax.containers:
             if isinstance(container, BarContainer):
                 ax.bar_label(container, fmt="%.3g", padding=2, fontsize=8)
         if ax.get_legend() is not None:
             ax.get_legend().remove()
+        ax.tick_params(axis="x", rotation=65, labelsize=7)
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", frameon=False, bbox_to_anchor=(0.5, 1.02), ncol=2, fontsize=11)
     _save(fig, output_dir / PLOT_NAMES[3], metadata_caption + "; raw steps 3-8")

@@ -9,6 +9,7 @@ import json
 import math
 from pathlib import Path
 import re
+import argparse
 from statistics import fmean
 
 
@@ -54,7 +55,9 @@ class RunSummary:
     """One complete measured run, not an aggregation across repetitions."""
 
     run_id: str
+    arm: str
     metadata: Mapping[str, str]
+    runtime_fingerprints: Mapping[str, str]
     steps: tuple[StepMetrics, ...]
     measured_steps: int
     generated_tokens_per_second_per_gpu: float
@@ -127,7 +130,7 @@ def _metric(block: str, name: str) -> float:
     return _finite_number(float(match.group(1)), name)
 
 
-def _token_counts(run_root: Path) -> tuple[dict[int, int], str, dict[str, str]]:
+def _token_counts(run_root: Path) -> tuple[dict[int, int], str, str, dict[str, str], dict[str, str]]:
     evidence = load_json_object(run_root / "run_evidence.json")
     if evidence.get("exit_code") != 0:
         raise EvidenceError(f"{run_root} run exit code is not zero")
@@ -158,7 +161,89 @@ def _token_counts(run_root: Path) -> tuple[dict[int, int], str, dict[str, str]]:
     run_id = metadata.get("run_id")
     if not isinstance(run_id, str) or not run_id:
         raise EvidenceError(f"{run_root} metadata has no run_id")
-    return tokens, run_id, dict(metadata)
+    arm = evidence.get("arm")
+    if arm not in {"stock", "candidate"}:
+        raise EvidenceError(f"{run_root} evidence has invalid arm")
+    if not isinstance(arm, str):  # narrows JSON object values for static analysis
+        raise EvidenceError(f"{run_root} evidence has invalid arm")
+    fingerprints = evidence.get("runtime_fingerprints")
+    if not isinstance(fingerprints, dict) or not fingerprints or not all(
+        isinstance(key, str) and isinstance(value, str) and value
+        for key, value in fingerprints.items()
+    ):
+        raise EvidenceError(f"{run_root} has invalid runtime fingerprints")
+    return (
+        tokens,
+        run_id,
+        arm,
+        {str(key): str(value) for key, value in metadata.items()},
+        {str(key): str(value) for key, value in fingerprints.items()},
+    )
+
+
+_PHASE_MARKER = re.compile(
+    r"\[MXFP8_MOE_AUDIT\]\s+step=(\d+)\s+phase=(refit|rollout|logprob|train)\s+status=success"
+)
+
+
+def _generated_token_count(path: Path) -> int:
+    """Sum GRPO's producer-written token loss masks without estimating tokens."""
+    count = 0
+    for row in load_jsonl(path):
+        mask = row.get("token_loss_mask")
+        if not isinstance(mask, list):
+            raise EvidenceError(f"{path} has no token_loss_mask")
+        for value in mask:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise EvidenceError(f"{path} token_loss_mask must be numeric")
+            numeric = float(value)
+            if not math.isfinite(numeric) or numeric < 0 or numeric != int(numeric):
+                raise EvidenceError(f"{path} token_loss_mask must contain nonnegative integers")
+            count += int(numeric)
+    if count <= 0:
+        raise EvidenceError(f"{path} realized generated tokens must be positive")
+    return count
+
+
+def write_run_evidence(
+    run_root: Path,
+    *,
+    arm: str,
+    run_id: str,
+    metadata: Mapping[str, str],
+    runtime_fingerprints: Mapping[str, str],
+) -> Path:
+    """Write launcher evidence from GRPO outputs that completed successfully."""
+    if arm not in {"stock", "candidate"}:
+        raise EvidenceError("run evidence arm must be stock or candidate")
+    if not run_id or metadata.get("run_id") != run_id:
+        raise EvidenceError("run evidence metadata must bind the run ID")
+    if not all(isinstance(key, str) and isinstance(value, str) and value for key, value in runtime_fingerprints.items()):
+        raise EvidenceError("runtime fingerprints must be a nonempty string mapping")
+    log = find_driver_log(run_root)
+    markers: dict[int, set[str]] = {}
+    for match in _PHASE_MARKER.finditer(log.read_text(errors="replace")):
+        markers.setdefault(int(match.group(1)), set()).add(match.group(2))
+    steps: list[dict[str, int]] = []
+    for step in range(FIRST_MEASURED_STEP, LAST_MEASURED_STEP + 1):
+        missing = set(REQUIRED_PHASES) - markers.get(step, set())
+        if missing:
+            raise EvidenceError(f"{log} missing successful phase markers for step {step}: {', '.join(sorted(missing))}")
+        dumps = sorted(run_root.rglob(f"train_data_step{step}.jsonl"))
+        if len(dumps) != 1:
+            raise EvidenceError(f"expected exactly one producer train_data_step{step}.jsonl under {run_root}, found {len(dumps)}")
+        steps.append({"step": step, "realized_generated_tokens": _generated_token_count(dumps[0])})
+    payload = {
+        "arm": arm,
+        "exit_code": 0,
+        "metadata": dict(metadata),
+        "phases": {phase: "success" for phase in REQUIRED_PHASES},
+        "runtime_fingerprints": dict(runtime_fingerprints),
+        "steps": steps,
+    }
+    output = run_root / "run_evidence.json"
+    output.write_text(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n", encoding="ascii")
+    return output
 
 
 def parse_training_results(log_text: str, *, tokens_by_step: Mapping[int, int], source: str) -> tuple[StepMetrics, ...]:
@@ -184,13 +269,15 @@ def parse_training_results(log_text: str, *, tokens_by_step: Mapping[int, int], 
 
 def summarize_run(run_root: Path) -> RunSummary:
     """Collect one run without treating within-run variation as run-to-run variance."""
-    tokens, run_id, metadata = _token_counts(run_root)
+    tokens, run_id, arm, metadata, runtime_fingerprints = _token_counts(run_root)
     log = find_driver_log(run_root)
     steps = parse_training_results(log.read_text(errors="replace"), tokens_by_step=tokens, source=str(log))
     finite = all(math.isfinite(value) for step in steps for value in (step.loss, step.kl, step.reward, step.mean_generation_length, step.total_step_seconds, step.generation_seconds, step.e2e_tokens_per_second_per_gpu, step.generated_tokens_per_second_per_gpu))
     return RunSummary(
         run_id=run_id,
+        arm=arm,
         metadata=metadata,
+        runtime_fingerprints=runtime_fingerprints,
         steps=steps,
         measured_steps=len(steps),
         generated_tokens_per_second_per_gpu=fmean(step.generated_tokens_per_second_per_gpu for step in steps),
@@ -205,3 +292,35 @@ def compare_manifests(stock_path: Path, candidate_path: Path) -> tuple[str, ...]
     stock = {key: value for key, value in load_json_object(stock_path).items() if key not in CACHE_IDENTITY_FIELDS}
     candidate = {key: value for key, value in load_json_object(candidate_path).items() if key not in CACHE_IDENTITY_FIELDS}
     return tuple(sorted(key for key in set(stock) | set(candidate) if stock.get(key) != candidate.get(key)))
+
+
+def main() -> None:
+    """Write strict evidence from an already-completed GRPO producer run."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--write-run-evidence", action="store_true")
+    parser.add_argument("--run-root", type=Path, required=True)
+    parser.add_argument("--arm", required=True)
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--metadata-json", required=True)
+    parser.add_argument("--runtime-fingerprints-json", required=True)
+    args = parser.parse_args()
+    if not args.write_run_evidence:
+        parser.error("--write-run-evidence is required")
+    try:
+        metadata = json.loads(args.metadata_json)
+        fingerprints = json.loads(args.runtime_fingerprints_json)
+    except json.JSONDecodeError as error:
+        parser.error(f"invalid JSON argument: {error}")
+    if not isinstance(metadata, dict) or not isinstance(fingerprints, dict):
+        parser.error("metadata and runtime fingerprints must be JSON objects")
+    write_run_evidence(
+        args.run_root,
+        arm=args.arm,
+        run_id=args.run_id,
+        metadata=metadata,
+        runtime_fingerprints=fingerprints,
+    )
+
+
+if __name__ == "__main__":
+    main()

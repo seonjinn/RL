@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -434,6 +435,15 @@ def test_build_candidate_uses_autotuner_and_preserves_nonpromoted_entries(
     assert manifest.promoted_entries == 1
     assert manifest.retained_entries == 3
     assert manifest.stock_sha256 != manifest.candidate_sha256
+
+    decisions_payload = json.loads(
+        (candidate_dir / "qualification_decisions.json").read_text(encoding="ascii")
+    )
+    assert decisions_payload["cache_manifest_sha256"] == hashlib.sha256(
+        (candidate_dir / "cache_manifest.json").read_bytes()
+    ).hexdigest()
+    assert decisions_payload["decisions"][0]["selected"] == {"gemm1": 3, "gemm2": 4}
+    assert decisions_payload["decisions"][0]["stock"] == {"gemm1": 1, "gemm2": 2}
 
     manifest_payload = json.loads(
         (candidate_dir / "cache_manifest.json").read_text(encoding="ascii")

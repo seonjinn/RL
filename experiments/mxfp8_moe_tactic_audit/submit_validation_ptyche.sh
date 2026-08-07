@@ -43,11 +43,13 @@ GSM8K_EVALUATOR=${GSM8K_EVALUATOR:-${WORK_ROOT}/vllm-benchmark/experiments/eval/
 GSM8K_DATASET=${GSM8K_DATASET:-${WORK_ROOT}/vllm-benchmark/experiments/eval/data/gsm8k_test_openai_1319.jsonl}
 VLLM_SERVER_PORT=${VLLM_SERVER_PORT:-18000}
 case "${ARM}" in stock) CACHE_ROOT=${STOCK_CACHE_ROOT} ;; candidate) CACHE_ROOT=${CANDIDATE_CACHE_ROOT} ;; esac
+CACHE_MANIFEST=${CACHE_MANIFEST:-${CANDIDATE_CACHE_ROOT}/cache_manifest.json}
 
 if [[ "${VALIDATION_MODE}" == compare ]]; then
     COMPARE_ROOT=${COMPARE_ROOT:-${WORK_ROOT}/experiments/mxfp8-moe-tactic-audit/validation}
-    COMMAND="python ${SCRIPT_DIR}/validate_correctness.py generation --stock ${COMPARE_ROOT}/stock/${RUN_ID}/steps-8/generation.jsonl --candidate ${COMPARE_ROOT}/candidate/${RUN_ID}/steps-8/generation.jsonl
-python ${SCRIPT_DIR}/compare_gsm8k.py --stock ${COMPARE_ROOT}/stock/${RUN_ID}/steps-8/gsm8k --candidate ${COMPARE_ROOT}/candidate/${RUN_ID}/steps-8/gsm8k"
+    COMMAND="mkdir -p ${COMPARE_ROOT}
+python ${SCRIPT_DIR}/validate_correctness.py generation --stock ${COMPARE_ROOT}/stock/${RUN_ID}/steps-8/generation.jsonl --candidate ${COMPARE_ROOT}/candidate/${RUN_ID}/steps-8/generation.jsonl
+python ${SCRIPT_DIR}/compare_gsm8k.py --stock ${COMPARE_ROOT}/stock/${RUN_ID}/steps-8/gsm8k --candidate ${COMPARE_ROOT}/candidate/${RUN_ID}/steps-8/gsm8k > ${COMPARE_ROOT}/gsm8k_comparison.json"
     printf 'validation_mode=compare\n%s\n' "${COMMAND}"
     [[ "${ACTION}" == dry-run ]] || {
         echo "VALIDATION_MODE=compare is local; ACTION must be dry-run" >&2
@@ -68,6 +70,7 @@ fi
 if [[ "${ACTION}" != dry-run ]]; then
     IFS=$'\t' read -r MODEL_SNAPSHOT MODEL_REVISION < <(audit_resolve_model_snapshot "${HF_MODEL_CACHE_DIR}" 16)
     audit_require_nonempty_dir "${CACHE_ROOT}"
+    [[ -f "${CACHE_MANIFEST}" ]] || { echo "Missing qualification cache manifest: ${CACHE_MANIFEST}" >&2; exit 1; }
     [[ -f "${CONTAINER}" ]] || { echo "Missing container: ${CONTAINER}" >&2; exit 1; }
     [[ ! -e "${RUN_ROOT}" ]] || { echo "Run root already exists: ${RUN_ROOT}" >&2; exit 1; }
 fi
@@ -148,48 +151,27 @@ export VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=${CACHE_ROOT}
 export MXFP8_MOE_CUDA_GRAPH_REPLAY=required
 mkdir -p ${RUN_ROOT}
 python examples/run_grpo.py --config ${CONFIG} cluster.num_nodes=4 cluster.gpus_per_node=4 cluster.segment_size=4 policy.model_name=${MODEL_SNAPSHOT} policy.generation.vllm_cfg.enforce_eager=false ++policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm grpo.max_num_steps=${MAX_STEPS} grpo.val_at_start=false checkpointing.enabled=false checkpointing.checkpoint_dir=${RUN_ROOT}/checkpoints logger.log_dir=${RUN_ROOT}/logs logger.wandb_enabled=false
-${DRIVER_VENV}/bin/python - ${RUN_ROOT}/run_evidence.json ${ARM} ${RUN_ID} ${MAX_STEPS} <<'PY'
+RUNTIME_FINGERPRINTS_JSON=\$(${DRIVER_VENV}/bin/python - ${CACHE_MANIFEST} <<'PY'
 import json
-from pathlib import Path
 import sys
 
-output, arm, run_id, max_steps_text = sys.argv[1:]
-root = Path(output).parent
-logs = sorted(root.glob("*-logs/ray-driver.log"))
-if len(logs) != 1:
-    raise RuntimeError(f"expected one ray-driver.log under {root}, found {len(logs)}")
-observed_steps = logs[0].read_text(errors="replace").count("Training Results:")
-max_steps = int(max_steps_text)
-if observed_steps < max_steps:
-    raise RuntimeError(
-        f"expected {max_steps} Training Results blocks, found {observed_steps}"
-    )
-payload = {
-    "arm": arm,
-    "exit_code": 0,
-    "metadata": {
-        "batch": "GRPO producer batch; see run manifest",
-        "run_id": run_id,
-        "topology": "4 nodes x 4 GPUs",
-    },
-    "observed_training_results": observed_steps,
-    "phases": {
-        "logprob": "success",
-        "refit": "success",
-        "rollout": "success",
-        "train": "success",
-    },
-    "steps": [
-        {
-            "realized_generated_tokens": None,
-            "step": step,
-            "token_evidence": "unavailable: GRPO producer emitted no exact count",
-        }
-        for step in range(1, max_steps + 1)
-    ],
-}
-Path(output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+payload = json.load(open(sys.argv[1], encoding="ascii"))
+fingerprints = payload.get("source_fingerprints")
+if not isinstance(fingerprints, dict):
+    raise RuntimeError("cache manifest has no source_fingerprints")
+runtime_fields = (
+    "model_revision", "container", "vllm_commit", "flashinfer_version",
+    "cuda_version", "gpu_name", "tp_size", "ep_size", "dp_size", "cuda_graph_mode",
+)
+runtime = {field: fingerprints.get(field) for field in runtime_fields}
+if not all(isinstance(value, str) and value for value in runtime.values()):
+    raise RuntimeError("cache manifest runtime fingerprints are incomplete")
+print(json.dumps(runtime, sort_keys=True))
 PY
+)
+if [[ ${MAX_STEPS} -eq 8 ]]; then
+  ${DRIVER_VENV}/bin/python -m experiments.mxfp8_moe_tactic_audit.collect_results --write-run-evidence --run-root ${RUN_ROOT} --arm ${ARM} --run-id ${RUN_ID} --metadata-json '{"batch":"GRPO producer batch; see run manifest","run_id":"${RUN_ID}","topology":"4 nodes x 4 GPUs"}' --runtime-fingerprints-json "\${RUNTIME_FINGERPRINTS_JSON}"
+fi
 if [[ ${MAX_STEPS} -eq 2 ]]; then printf '{"arm":"${ARM}","cache_sha256":"${CACHE_SHA256}","execution_inputs_sha256":"${EXECUTION_INPUTS_SHA256}","model_snapshot_sha256":"${MODEL_SHA256}","nemo_rl_commit":"${NEMO_RL_COMMIT}","recipe_sha256":"${RECIPE_SHA256}","scripts_sha256":"${SCRIPTS_SHA256}","smoke_manifest_sha256":"%s","vllm_commit":"${EXPECTED_VLLM_COMMIT}"}\\n' "\$(shasum -a 256 ${RUN_ROOT}/run_manifest.json | awk '{print \$1}')" > ${SMOKE_MARKER}; fi
 ${POST_RUN}
 EOF

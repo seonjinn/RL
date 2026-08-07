@@ -69,6 +69,7 @@ class BucketAudit:
     max_cv: float
     worst_high_weight_regression: float
     all_correct: bool
+    signature_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,7 @@ class QualificationDecision:
     selected: TacticPair
     promoted: bool
     reason: str
+    signature_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -341,6 +343,7 @@ def audit_bucket(
             max_cv=max_cv,
             worst_high_weight_regression=0.0,
             all_correct=False,
+            signature_keys=tuple(sorted(profile_weights)),
         )
 
     total_weight = math.fsum(weight for weight, _, _ in rows)
@@ -366,6 +369,7 @@ def audit_bucket(
             max(high_weight_regressions) if high_weight_regressions else 0.0
         ),
         all_correct=True,
+        signature_keys=tuple(sorted(profile_weights)),
     )
 
 
@@ -394,12 +398,14 @@ def qualify_bucket(bucket: BucketAudit) -> QualificationDecision:
             selected=bucket.candidate,
             promoted=True,
             reason="candidate passed qualification gates",
+            signature_keys=bucket.signature_keys,
         )
     return QualificationDecision(
         cache_key=bucket.cache_key,
         selected=bucket.stock,
         promoted=False,
         reason=reason,
+        signature_keys=bucket.signature_keys,
     )
 
 
@@ -557,6 +563,39 @@ def _write_manifest(path: Path, manifest: CacheManifest) -> None:
     )
 
 
+def _write_qualification_decisions(
+    path: Path,
+    *,
+    manifest: CacheManifest,
+    decisions: Sequence[QualificationDecision],
+    stock: Mapping[str, object],
+) -> None:
+    """Emit the authoritative cache-build decisions beside the manifest."""
+    rows: list[dict[str, object]] = []
+    for decision in sorted(decisions, key=lambda item: item.cache_key):
+        rows.append(
+            {
+                "cache_key": decision.cache_key,
+                "promoted": decision.promoted,
+                "reason": decision.reason,
+                "selected": decision.selected.to_json(),
+                "signature_keys": list(decision.signature_keys),
+                "stock": _cache_tactic(stock[decision.cache_key], decision.cache_key).to_json(),
+            }
+        )
+    payload = {
+        "cache_manifest_sha256": _sha256_file(path.with_name("cache_manifest.json")),
+        "decisions": rows,
+        "selected_profiles_sha256": manifest.source_fingerprints["selected_profiles_sha256"],
+        "shmoo_results_sha256": manifest.source_fingerprints["shmoo_results_sha256"],
+        "trace_set_sha256": manifest.source_fingerprints["trace_set_sha256"],
+    }
+    path.write_text(
+        json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+        encoding="ascii",
+    )
+
+
 def build_candidate_cache(
     stock_cache: Path,
     decisions: Sequence[QualificationDecision],
@@ -649,6 +688,12 @@ def build_candidate_cache(
         retained_entries=len(stock_entries) - len(promoted),
     )
     _write_manifest(output / "cache_manifest.json", manifest)
+    _write_qualification_decisions(
+        output / "qualification_decisions.json",
+        manifest=manifest,
+        decisions=decisions,
+        stock=stock_payload,
+    )
     return manifest
 
 

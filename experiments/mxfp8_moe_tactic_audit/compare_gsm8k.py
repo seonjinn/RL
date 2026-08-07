@@ -39,6 +39,7 @@ class PairedGsm8kComparison:
     both_wrong: int = 0
     accuracy_delta: float = 0.0
     provenance_matched: bool = False
+    matched_examples: int = 0
 
 
 @dataclass(frozen=True)
@@ -371,6 +372,7 @@ def compare_gsm8k(stock: Path, candidate: Path) -> PairedGsm8kComparison:
         both_wrong=both_wrong,
         accuracy_delta=delta,
         provenance_matched=True,
+        matched_examples=EXPECTED_TOTAL,
     )
 
 
