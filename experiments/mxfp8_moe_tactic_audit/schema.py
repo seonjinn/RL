@@ -151,6 +151,7 @@ class RoutingSignature:
 
     def __post_init__(self) -> None:
         """Validate the structural and observation invariants."""
+        object.__setattr__(self, "expert_counts", tuple(self.expert_counts))
         dimensions = {
             "num_tokens": self.num_tokens,
             "global_num_experts": self.global_num_experts,

@@ -1,6 +1,7 @@
 import hashlib
 import json
 from collections.abc import Mapping
+from typing import cast
 
 import pytest
 
@@ -41,6 +42,52 @@ def _structural_row(row: Mapping[str, object]) -> dict[str, object]:
         for key, value in row.items()
         if key != "sampled_gpu_time_us"
     }
+
+
+@pytest.fixture
+def task_3_jsonl_row() -> dict[str, object]:
+    """Return one complete Task 3 vLLM JSONL routing-trace row."""
+    return _valid_row()
+
+
+def test_routing_signature_accepts_task_3_jsonl_field_set(
+    task_3_jsonl_row: dict[str, object],
+) -> None:
+    signature = RoutingSignature.from_json(task_3_jsonl_row)
+
+    assert signature.to_json() == task_3_jsonl_row
+
+
+def test_routing_signature_normalizes_direct_list_counts_to_immutable_tuple() -> None:
+    input_counts = [1, 2, 1, 0]
+    signature = RoutingSignature(
+        schema_version=1,
+        model_revision="qwen3-30ba3b-test",
+        layer_family="routed_experts",
+        num_tokens=2,
+        global_num_experts=4,
+        local_num_experts=4,
+        top_k=2,
+        hidden_size=2048,
+        intermediate_size=768,
+        expert_counts=cast(tuple[int, ...], input_counts),
+        sampled_gpu_time_us=17.5,
+        tp_size=1,
+        ep_size=1,
+        dp_size=16,
+        cuda_graph_state="trace-eager",
+        weight_layout="MajorK",
+        quantization="MXFP8",
+        runtime_fingerprint="runtime-sha256",
+    )
+
+    assert signature.expert_counts == (1, 2, 1, 0)
+    assert isinstance(signature.expert_counts, tuple)
+    input_counts[0] = 4
+    assert signature.expert_counts == (1, 2, 1, 0)
+    with pytest.raises(AttributeError):
+        cast(list[int], signature.expert_counts).append(5)
+    assert RoutingSignature.from_json(signature.to_json()) == signature
 
 
 def test_routing_signature_rejects_histogram_sum_mismatch() -> None:
