@@ -1,6 +1,7 @@
 import hashlib
 import json
 from collections.abc import Mapping
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -10,6 +11,12 @@ from experiments.mxfp8_moe_tactic_audit.schema import (
     RoutingSignature,
     TacticMeasurement,
     TacticPair,
+)
+
+
+ROOT = Path(__file__).resolve().parents[2]
+TASK_3_ROUTING_SIGNATURE_FIXTURE = (
+    ROOT / "tests/fixtures/mxfp8_moe_tactic_audit/task3-routing-signature.jsonl"
 )
 
 
@@ -44,18 +51,13 @@ def _structural_row(row: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-@pytest.fixture
-def task_3_jsonl_row() -> dict[str, object]:
-    """Return one complete Task 3 vLLM JSONL routing-trace row."""
-    return _valid_row()
+def test_routing_signature_accepts_producer_generated_task_3_jsonl() -> None:
+    lines = TASK_3_ROUTING_SIGNATURE_FIXTURE.read_text(encoding="ascii").splitlines()
+    assert len(lines) == 1
+    row = cast(dict[str, object], json.loads(lines[0]))
+    signature = RoutingSignature.from_json(row)
 
-
-def test_routing_signature_accepts_task_3_jsonl_field_set(
-    task_3_jsonl_row: dict[str, object],
-) -> None:
-    signature = RoutingSignature.from_json(task_3_jsonl_row)
-
-    assert signature.to_json() == task_3_jsonl_row
+    assert signature.to_json() == row
 
 
 def test_routing_signature_normalizes_direct_list_counts_to_immutable_tuple() -> None:
