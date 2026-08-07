@@ -290,7 +290,7 @@ def test_custom_vllm_build_is_recoverable() -> None:
     assert "\"${vllm_root}/.venv/bin/python\" -c 'import vllm'" in provenance_text
     assert "3rdparty/vllm/.venv/bin/python - <<'PY'" in prepare_text
     assert "uv run --frozen python - <<'PY'" not in prepare_text
-    assert "3rdparty/vllm/.venv uv lock" in prepare_text
+    assert "uv lock --no-build-isolation --refresh-package ray" in prepare_text
     assert "SETUPTOOLS_SCM_PRETEND_VERSION=0.25.1" in prepare_text
     assert "setuptools_rust" in build_text
     assert "existing_vllm_valid=false" in prepare_text
@@ -334,10 +334,8 @@ def test_preparation_pins_ray_to_the_container_version() -> None:
         'uv_config["environments"] = ["python_version == \'3.13\' and '
         'sys_platform == \'linux\' and platform_machine == \'aarch64\'"]'
     )
-    lock = (
-        "UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv "
-        "uv lock --no-build-isolation --refresh-package ray"
-    )
+    lock = "uv lock --no-build-isolation --refresh-package ray"
+    reuse = "Reusing Ray lock pinned to \\${CONTAINER_RAY_VERSION}"
 
     assert detect in prepare_text
     assert pin in prepare_text
@@ -346,6 +344,11 @@ def test_preparation_pins_ray_to_the_container_version() -> None:
     assert limit_lock_environment in prepare_text
     assert "uv lock --offline" not in prepare_text
     assert "Ray lock mismatch" in prepare_text
+    assert "if ray_lock_matches_container; then" in prepare_text
+    assert reuse in prepare_text
+    assert prepare_text.index("if ray_lock_matches_container; then") < prepare_text.index(
+        lock
+    )
     assert (
         prepare_text.index(detect)
         < prepare_text.index(pin)

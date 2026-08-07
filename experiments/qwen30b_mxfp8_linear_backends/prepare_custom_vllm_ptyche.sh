@@ -121,8 +121,8 @@ uv_config = document["tool"]["uv"]
 uv_config["environments"] = ["python_version == '3.13' and sys_platform == 'linux' and platform_machine == 'aarch64'"]
 pyproject_path.write_text(tomlkit.dumps(document))
 PY
-UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv uv lock --no-build-isolation --refresh-package ray
-python3 - "\${CONTAINER_RAY_VERSION}" <<'PY'
+ray_lock_matches_container() {
+  python3 - "\${CONTAINER_RAY_VERSION}" <<'PY'
 import sys
 import tomllib
 from pathlib import Path
@@ -136,11 +136,18 @@ locked = {
     if package["name"] == "ray"
 }
 if locked != {expected}:
-    raise SystemExit(
-        f"Ray lock mismatch: expected {expected}, found {sorted(locked)}"
-    )
+    print(f"Ray lock mismatch: expected {expected}, found {sorted(locked)}")
+    raise SystemExit(1)
 print(f"Ray lock verified: {expected}")
 PY
+}
+if ray_lock_matches_container; then
+  echo "Reusing Ray lock pinned to \${CONTAINER_RAY_VERSION}"
+else
+  UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv \
+    uv lock --no-build-isolation --refresh-package ray
+  ray_lock_matches_container
+fi
 export NRL_VENV_BOOTSTRAP_PACKAGES='--torch-backend cu130 torch==2.11.0 numpy setuptools setuptools-rust setuptools-scm'
 export NRL_VENV_NO_BUILD_ISOLATION_PACKAGES=vllm
 VLLM_ENVIRONMENT_KEY=\$(mxfp8_vllm_environment_key \
