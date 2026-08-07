@@ -1,4 +1,5 @@
 import json
+from itertools import product
 import math
 from pathlib import Path
 
@@ -16,12 +17,13 @@ from experiments.mxfp8_moe_tactic_audit.select_profiles import (
 def _signature(
     *,
     expert_counts: tuple[int, ...] = (2, 2, 2, 2),
+    model_revision: str = "qwen3-30ba3b-test",
     sampled_gpu_time_us: float = 1.0,
     runtime_fingerprint: str = "runtime-a",
 ) -> RoutingSignature:
     return RoutingSignature(
         schema_version=1,
-        model_revision="qwen3-30ba3b-test",
+        model_revision=model_revision,
         layer_family="routed_experts",
         num_tokens=4,
         global_num_experts=4,
@@ -58,6 +60,22 @@ def _write_trace(path: Path, signatures: list[RoutingSignature]) -> None:
         + "\n",
         encoding="ascii",
     )
+
+
+def _expected_skew_class(expert_counts: tuple[int, ...]) -> str:
+    total = sum(expert_counts)
+    entropy = -sum(
+        probability * math.log(probability)
+        for count in expert_counts
+        if count > 0
+        for probability in (count / total,)
+    )
+    normalized_entropy = entropy / math.log(len(expert_counts))
+    if normalized_entropy >= 0.90:
+        return "balanced"
+    if normalized_entropy < 0.65:
+        return "high-skew"
+    return "median-skew"
 
 
 def test_aggregate_signatures_merges_exact_structural_keys_by_gpu_time(tmp_path: Path) -> None:
@@ -127,6 +145,57 @@ def test_select_profiles_preserves_entropy_class_representatives_in_high_weight_
     }
 
 
+def test_select_profiles_preserves_sole_skew_representative_after_coverage() -> None:
+    all_signatures = [
+        _signature(expert_counts=counts)
+        for counts in product(range(9), repeat=4)
+        if sum(counts) == 8
+    ]
+    high_skew = max(
+        (
+            signature
+            for signature in all_signatures
+            if _expected_skew_class(signature.expert_counts) == "high-skew"
+        ),
+        key=RoutingSignature.signature_key,
+    )
+    non_high_skew = sorted(
+        (
+            signature
+            for signature in all_signatures
+            if _expected_skew_class(signature.expert_counts) != "high-skew"
+            and signature.signature_key() < high_skew.signature_key()
+        ),
+        key=RoutingSignature.signature_key,
+    )
+    observed = [_observed(signature, weight=1.0) for signature in non_high_skew[:19]]
+    observed.append(_observed(high_skew, weight=1.0))
+
+    selection = select_profiles(observed, coverage=0.95)
+
+    assert high_skew.signature_key() in [item.signature_key for item in selection.selected]
+    assert {item.skew_class for item in selection.selected} >= {"high-skew"}
+    assert [item.signature_key for item in selection.selected] == sorted(
+        item.signature_key for item in selection.selected
+    )
+
+
+def test_select_profiles_uses_precision_safe_full_coverage() -> None:
+    observed = [
+        _observed(_signature(expert_counts=counts), weight=weight)
+        for counts, weight in (
+            ((2, 2, 2, 2), 0.7),
+            ((4, 2, 1, 1), 0.2),
+            ((7, 1, 0, 0), 0.1),
+        )
+    ]
+
+    selection = select_profiles(observed, coverage=1.0)
+
+    assert selection.covered_weight == 1.0
+    assert len(selection.selected) == 3
+
+
 @pytest.mark.parametrize(
     "paths, match",
     [
@@ -156,6 +225,23 @@ def test_aggregate_signatures_rejects_mixed_runtime_fingerprints(tmp_path: Path)
 
     with pytest.raises(ValueError, match="runtime fingerprints"):
         aggregate_signatures([trace])
+
+
+def test_aggregate_signatures_reads_utf8_jsonl(tmp_path: Path) -> None:
+    trace = tmp_path / "rank-0.jsonl"
+    signature = _signature(
+        model_revision="qwen3-30b-caf\u00e9",
+        runtime_fingerprint="runtime-\u00e9",
+    )
+    trace.write_text(
+        json.dumps(signature.to_json(), ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    observed = aggregate_signatures([trace])
+
+    assert observed[0].signature.model_revision == "qwen3-30b-caf\u00e9"
+    assert observed[0].signature.runtime_fingerprint == "runtime-\u00e9"
 
 
 @pytest.mark.parametrize("invalid_time", [0.0, -1.0, math.inf, math.nan])

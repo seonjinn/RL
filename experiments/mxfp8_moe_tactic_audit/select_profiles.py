@@ -17,6 +17,7 @@ else:
 
 
 SkewClass = Literal["balanced", "median-skew", "high-skew"]
+WorkloadBucket = tuple[int | str, ...]
 
 
 @dataclass(frozen=True)
@@ -66,7 +67,7 @@ def _read_signature_rows(paths: Sequence[Path]) -> list[RoutingSignature]:
 
     signatures: list[RoutingSignature] = []
     for path in paths:
-        with path.open(encoding="ascii") as trace_file:
+        with path.open(encoding="utf-8") as trace_file:
             for line_number, line in enumerate(trace_file, start=1):
                 if not line.strip():
                     raise ValueError(f"blank trace row in {path}:{line_number}")
@@ -149,6 +150,71 @@ def _classify_skew(signature: RoutingSignature) -> SkewClass:
     return "median-skew"
 
 
+def _workload_bucket_key(signature: RoutingSignature) -> WorkloadBucket:
+    """Return non-routing execution dimensions that define one workload bucket."""
+    return (
+        signature.schema_version,
+        signature.model_revision,
+        signature.layer_family,
+        signature.num_tokens,
+        signature.global_num_experts,
+        signature.local_num_experts,
+        signature.top_k,
+        signature.hidden_size,
+        signature.intermediate_size,
+        signature.tp_size,
+        signature.ep_size,
+        signature.dp_size,
+        signature.cuda_graph_state,
+        signature.weight_layout,
+        signature.quantization,
+        signature.runtime_fingerprint,
+    )
+
+
+def _bucket_weights(observed: Sequence[ObservedSignature]) -> dict[WorkloadBucket, float]:
+    """Aggregate observed GPU time by non-routing workload bucket."""
+    bucket_times: dict[WorkloadBucket, list[float]] = {}
+    for item in observed:
+        bucket_times.setdefault(_workload_bucket_key(item.signature), []).append(
+            item.aggregate_gpu_time_us
+        )
+    return {bucket: math.fsum(times) for bucket, times in bucket_times.items()}
+
+
+def _meets_coverage(
+    covered_gpu_time_us: float, total_gpu_time_us: float, coverage: float
+) -> bool:
+    """Compare coverage using a tolerance bounded to nearby float values."""
+    threshold_gpu_time_us = coverage * total_gpu_time_us
+    tolerance = max(math.ulp(covered_gpu_time_us), math.ulp(threshold_gpu_time_us))
+    return covered_gpu_time_us >= threshold_gpu_time_us or math.isclose(
+        covered_gpu_time_us,
+        threshold_gpu_time_us,
+        rel_tol=0.0,
+        abs_tol=tolerance,
+    )
+
+
+def _high_weight_buckets(
+    bucket_weights: Mapping[WorkloadBucket, float], coverage: float
+) -> set[WorkloadBucket]:
+    """Return buckets whose aggregate GPU time covers the requested fraction."""
+    ordered_buckets = sorted(
+        bucket_weights.items(),
+        key=lambda item: (-item[1], item[0]),
+    )
+    total_gpu_time_us = math.fsum(weight for _, weight in ordered_buckets)
+    selected_buckets: set[WorkloadBucket] = set()
+    selected_times: list[float] = []
+    for bucket, weight in ordered_buckets:
+        selected_buckets.add(bucket)
+        selected_times.append(weight)
+        if _meets_coverage(math.fsum(selected_times), total_gpu_time_us, coverage):
+            break
+    return selected_buckets
+
+
 def _replay_profile(
     observed: ObservedSignature, *, total_gpu_time_us: float
 ) -> ReplayProfile:
@@ -194,19 +260,39 @@ def select_profiles(
     if not math.isfinite(total_gpu_time_us) or total_gpu_time_us <= 0:
         raise ValueError("total GPU time must be finite and positive")
 
-    selected: list[ReplayProfile] = []
-    selected_gpu_time_us = 0.0
+    coverage_observed: list[ObservedSignature] = []
+    coverage_times: list[float] = []
     for item in ordered_observed:
-        selected.append(_replay_profile(item, total_gpu_time_us=total_gpu_time_us))
-        selected_gpu_time_us += item.aggregate_gpu_time_us
-        if selected_gpu_time_us / total_gpu_time_us >= coverage:
+        coverage_observed.append(item)
+        coverage_times.append(item.aggregate_gpu_time_us)
+        if _meets_coverage(math.fsum(coverage_times), total_gpu_time_us, coverage):
             break
 
+    qualifying_buckets = _high_weight_buckets(_bucket_weights(ordered_observed), coverage)
+    selected_by_key = {item.signature_key: item for item in coverage_observed}
+    representatives: dict[tuple[WorkloadBucket, SkewClass], ObservedSignature] = {}
+    for item in ordered_observed:
+        bucket = _workload_bucket_key(item.signature)
+        if bucket in qualifying_buckets:
+            representatives.setdefault((bucket, _classify_skew(item.signature)), item)
+    selected_by_key.update(
+        {item.signature_key: item for item in representatives.values()}
+    )
+    selected_observed = sorted(
+        selected_by_key.values(),
+        key=lambda item: (-item.aggregate_gpu_time_us, item.signature_key),
+    )
+    selected_gpu_time_us = math.fsum(
+        item.aggregate_gpu_time_us for item in selected_observed
+    )
     covered_weight = selected_gpu_time_us / total_gpu_time_us
-    if covered_weight < coverage:
+    if not _meets_coverage(selected_gpu_time_us, total_gpu_time_us, coverage):
         raise ValueError("achieved coverage is below the requested threshold")
     return ProfileSelection(
-        selected=tuple(selected),
+        selected=tuple(
+            _replay_profile(item, total_gpu_time_us=total_gpu_time_us)
+            for item in selected_observed
+        ),
         all_observed=ordered_observed,
         covered_weight=covered_weight,
         total_gpu_time_us=total_gpu_time_us,
