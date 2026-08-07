@@ -46,6 +46,7 @@ test -z "$(git -C "${REPO}" status --porcelain --untracked-files=no)"
 for path in \
   "${REPO}/${CONFIG}" \
   "${REPO}/ray.sub" \
+  "${REPO}/3rdparty/Gym-workspace/Gym/pyproject.toml" \
   "${CONTAINER}" \
   "${PYTHON_OVERLAY}" \
   "${ROOT_CACHE_OVERLAY}" \

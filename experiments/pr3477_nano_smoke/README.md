@@ -8,6 +8,12 @@ two trainer nodes plus two generation nodes, with eight GPUs per node. vLLM
 uses TP1 because Nano's 1856-wide expert intermediate dimension is not
 compatible with the MXFP8 grouping requirements at TP4.
 
+Initialize the Gym workspace before submission:
+
+```bash
+git submodule update --init --recursive 3rdparty/Gym-workspace/Gym
+```
+
 Run scheduling validation before submission:
 
 ```bash
