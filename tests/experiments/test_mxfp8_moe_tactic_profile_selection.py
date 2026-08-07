@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import experiments.mxfp8_moe_tactic_audit.select_profiles as profile_selection
 from experiments.mxfp8_moe_tactic_audit.schema import RoutingSignature
 from experiments.mxfp8_moe_tactic_audit.select_profiles import (
     ObservedSignature,
@@ -194,6 +195,44 @@ def test_select_profiles_uses_precision_safe_full_coverage() -> None:
 
     assert selection.covered_weight == 1.0
     assert len(selection.selected) == 3
+
+
+def test_select_profiles_requires_strict_requested_coverage() -> None:
+    coverage = 0.95
+    one_ulp_below = math.nextafter(coverage, 0.0)
+    first = _signature(expert_counts=(2, 2, 2, 2))
+    second = _signature(expert_counts=(2, 2, 1, 3))
+    observed = [
+        _observed(first, weight=one_ulp_below),
+        _observed(second, weight=1.0 - one_ulp_below),
+    ]
+
+    selection = select_profiles(observed, coverage=coverage)
+
+    assert selection.covered_weight >= coverage
+    assert [item.signature_key for item in selection.selected] == [
+        first.signature_key(),
+        second.signature_key(),
+    ]
+
+
+def test_select_profiles_uses_single_pass_weight_accumulation(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed = [
+        _observed(
+            _signature(model_revision=f"qwen3-30ba3b-test-{index}"),
+            weight=1.0,
+        )
+        for index in range(500)
+    ]
+
+    def fail_repeated_prefix_scan(_: object) -> float:
+        raise AssertionError("selection must not repeatedly rescan prefix weights")
+
+    monkeypatch.setattr(profile_selection.math, "fsum", fail_repeated_prefix_scan)
+
+    selection = select_profiles(observed, coverage=0.95)
+
+    assert selection.covered_weight >= 0.95
 
 
 @pytest.mark.parametrize(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from fractions import Fraction
 import json
 import math
 from pathlib import Path
@@ -18,6 +19,7 @@ else:
 
 SkewClass = Literal["balanced", "median-skew", "high-skew"]
 WorkloadBucket = tuple[int | str, ...]
+Weight = Fraction
 
 
 @dataclass(frozen=True)
@@ -172,45 +174,44 @@ def _workload_bucket_key(signature: RoutingSignature) -> WorkloadBucket:
     )
 
 
-def _bucket_weights(observed: Sequence[ObservedSignature]) -> dict[WorkloadBucket, float]:
+def _weight(value: float) -> Weight:
+    """Return the exact rational value of a finite binary float."""
+    return Fraction.from_float(float(value))
+
+
+def _bucket_weights(observed: Sequence[ObservedSignature]) -> dict[WorkloadBucket, Weight]:
     """Aggregate observed GPU time by non-routing workload bucket."""
-    bucket_times: dict[WorkloadBucket, list[float]] = {}
+    bucket_weights: dict[WorkloadBucket, Weight] = {}
     for item in observed:
-        bucket_times.setdefault(_workload_bucket_key(item.signature), []).append(
+        bucket = _workload_bucket_key(item.signature)
+        bucket_weights[bucket] = bucket_weights.get(bucket, Fraction()) + _weight(
             item.aggregate_gpu_time_us
         )
-    return {bucket: math.fsum(times) for bucket, times in bucket_times.items()}
+    return bucket_weights
 
 
 def _meets_coverage(
-    covered_gpu_time_us: float, total_gpu_time_us: float, coverage: float
+    covered_gpu_time: Weight, total_gpu_time: Weight, coverage: float
 ) -> bool:
-    """Compare coverage using a tolerance bounded to nearby float values."""
-    threshold_gpu_time_us = coverage * total_gpu_time_us
-    tolerance = max(math.ulp(covered_gpu_time_us), math.ulp(threshold_gpu_time_us))
-    return covered_gpu_time_us >= threshold_gpu_time_us or math.isclose(
-        covered_gpu_time_us,
-        threshold_gpu_time_us,
-        rel_tol=0.0,
-        abs_tol=tolerance,
-    )
+    """Return whether the reported float coverage meets the strict threshold."""
+    return float(covered_gpu_time / total_gpu_time) >= coverage
 
 
 def _high_weight_buckets(
-    bucket_weights: Mapping[WorkloadBucket, float], coverage: float
+    bucket_weights: Mapping[WorkloadBucket, Weight], coverage: float
 ) -> set[WorkloadBucket]:
     """Return buckets whose aggregate GPU time covers the requested fraction."""
     ordered_buckets = sorted(
         bucket_weights.items(),
         key=lambda item: (-item[1], item[0]),
     )
-    total_gpu_time_us = math.fsum(weight for _, weight in ordered_buckets)
+    total_gpu_time = sum((weight for _, weight in ordered_buckets), Fraction())
     selected_buckets: set[WorkloadBucket] = set()
-    selected_times: list[float] = []
+    selected_gpu_time = Fraction()
     for bucket, weight in ordered_buckets:
         selected_buckets.add(bucket)
-        selected_times.append(weight)
-        if _meets_coverage(math.fsum(selected_times), total_gpu_time_us, coverage):
+        selected_gpu_time += weight
+        if _meets_coverage(selected_gpu_time, total_gpu_time, coverage):
             break
     return selected_buckets
 
@@ -256,16 +257,18 @@ def select_profiles(
             key=lambda item: (-item.aggregate_gpu_time_us, item.signature_key),
         )
     )
-    total_gpu_time_us = math.fsum(item.aggregate_gpu_time_us for item in ordered_observed)
+    observed_weights = tuple(_weight(item.aggregate_gpu_time_us) for item in ordered_observed)
+    total_gpu_time = sum(observed_weights, Fraction())
+    total_gpu_time_us = float(total_gpu_time)
     if not math.isfinite(total_gpu_time_us) or total_gpu_time_us <= 0:
         raise ValueError("total GPU time must be finite and positive")
 
     coverage_observed: list[ObservedSignature] = []
-    coverage_times: list[float] = []
-    for item in ordered_observed:
+    coverage_gpu_time = Fraction()
+    for item, item_weight in zip(ordered_observed, observed_weights, strict=True):
         coverage_observed.append(item)
-        coverage_times.append(item.aggregate_gpu_time_us)
-        if _meets_coverage(math.fsum(coverage_times), total_gpu_time_us, coverage):
+        coverage_gpu_time += item_weight
+        if _meets_coverage(coverage_gpu_time, total_gpu_time, coverage):
             break
 
     qualifying_buckets = _high_weight_buckets(_bucket_weights(ordered_observed), coverage)
@@ -282,11 +285,12 @@ def select_profiles(
         selected_by_key.values(),
         key=lambda item: (-item.aggregate_gpu_time_us, item.signature_key),
     )
-    selected_gpu_time_us = math.fsum(
-        item.aggregate_gpu_time_us for item in selected_observed
+    selected_gpu_time = sum(
+        (_weight(item.aggregate_gpu_time_us) for item in selected_observed),
+        Fraction(),
     )
-    covered_weight = selected_gpu_time_us / total_gpu_time_us
-    if not _meets_coverage(selected_gpu_time_us, total_gpu_time_us, coverage):
+    covered_weight = float(selected_gpu_time / total_gpu_time)
+    if not _meets_coverage(selected_gpu_time, total_gpu_time, coverage):
         raise ValueError("achieved coverage is below the requested threshold")
     return ProfileSelection(
         selected=tuple(
