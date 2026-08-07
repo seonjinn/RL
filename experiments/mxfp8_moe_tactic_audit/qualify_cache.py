@@ -1,0 +1,637 @@
+"""Qualify MXFP8 MoE tactics and emit a standard FlashInfer cache artifact."""
+
+from __future__ import annotations
+
+import argparse
+import ast
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from hashlib import sha256
+import importlib
+import json
+import math
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+from types import MappingProxyType
+from typing import Any, cast
+
+if __package__:
+    from .flashinfer_adapter import MOE_CUSTOM_OP, MOE_RUNNER
+    from .schema import TacticMeasurement, TacticPair
+else:  # pragma: no cover - direct script validation entry point
+    from flashinfer_adapter import MOE_CUSTOM_OP, MOE_RUNNER
+    from schema import TacticMeasurement, TacticPair
+
+
+MANIFEST_SCHEMA_VERSION = 1
+MIN_WEIGHTED_GAIN = 0.02
+MAX_CV = 0.03
+MAX_HIGH_WEIGHT_REGRESSION = 0.01
+HIGH_WEIGHT_FRACTION = 0.05
+MIN_MICRO_COSINE_SIMILARITY = 0.999
+
+ARTIFACT_FINGERPRINT_FIELDS = frozenset(
+    {
+        "trace_set_sha256",
+        "selected_profiles_sha256",
+        "shmoo_results_sha256",
+    }
+)
+RUNTIME_FINGERPRINT_FIELDS = frozenset(
+    {
+        "model_revision",
+        "container",
+        "vllm_commit",
+        "flashinfer_version",
+        "cuda_version",
+        "gpu_name",
+        "tp_size",
+        "ep_size",
+        "dp_size",
+        "cuda_graph_mode",
+    }
+)
+SOURCE_FINGERPRINT_FIELDS = ARTIFACT_FINGERPRINT_FIELDS | RUNTIME_FINGERPRINT_FIELDS
+
+
+@dataclass(frozen=True)
+class BucketAudit:
+    """Aggregated stock-normalized qualification metrics for one cache bucket."""
+
+    cache_key: str
+    stock: TacticPair
+    candidate: TacticPair
+    weighted_gain: float
+    max_cv: float
+    worst_high_weight_regression: float
+    all_correct: bool
+
+
+@dataclass(frozen=True)
+class QualificationDecision:
+    """Selected tactic and promotion verdict for one exact FlashInfer key."""
+
+    cache_key: str
+    selected: TacticPair
+    promoted: bool
+    reason: str
+
+
+@dataclass(frozen=True)
+class CacheProvenance:
+    """Artifact inputs and runtime identity recorded in the cache manifest."""
+
+    trace_paths: tuple[Path, ...]
+    selected_profiles: Path
+    shmoo_results: Path
+    model_revision: str
+    container: str
+    vllm_commit: str
+    flashinfer_version: str
+    cuda_version: str
+    gpu_name: str
+    tp_size: int
+    ep_size: int
+    dp_size: int
+    cuda_graph_mode: str
+
+    def __post_init__(self) -> None:
+        """Normalize paths and reject incomplete provenance."""
+        object.__setattr__(self, "trace_paths", tuple(self.trace_paths))
+        if not self.trace_paths:
+            raise ValueError("trace_paths must not be empty")
+        text_fields = (
+            "model_revision",
+            "container",
+            "vllm_commit",
+            "flashinfer_version",
+            "cuda_version",
+            "gpu_name",
+            "cuda_graph_mode",
+        )
+        for field_name in text_fields:
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{field_name} must be a nonempty string")
+        for field_name in ("tp_size", "ep_size", "dp_size"):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{field_name} must be positive")
+
+    def runtime_fingerprints(self) -> Mapping[str, str]:
+        """Return runtime fields used to accept or reject the candidate path."""
+        return {
+            "model_revision": self.model_revision,
+            "container": self.container,
+            "vllm_commit": self.vllm_commit,
+            "flashinfer_version": self.flashinfer_version,
+            "cuda_version": self.cuda_version,
+            "gpu_name": self.gpu_name,
+            "tp_size": str(self.tp_size),
+            "ep_size": str(self.ep_size),
+            "dp_size": str(self.dp_size),
+            "cuda_graph_mode": self.cuda_graph_mode,
+        }
+
+    def source_fingerprints(self) -> Mapping[str, str]:
+        """Hash source artifacts and combine them with runtime provenance."""
+        fingerprints = dict(self.runtime_fingerprints())
+        fingerprints.update(
+            {
+                "trace_set_sha256": _sha256_file_set(self.trace_paths),
+                "selected_profiles_sha256": _sha256_file(self.selected_profiles),
+                "shmoo_results_sha256": _sha256_file(self.shmoo_results),
+            }
+        )
+        return fingerprints
+
+
+@dataclass(frozen=True)
+class CacheManifest:
+    """Versioned identity and entry counts for a candidate FlashInfer cache."""
+
+    stock_sha256: str
+    candidate_sha256: str
+    source_fingerprints: Mapping[str, str]
+    promoted_entries: int
+    retained_entries: int
+
+    def __post_init__(self) -> None:
+        """Freeze and validate the complete manifest contract."""
+        fingerprints = dict(self.source_fingerprints)
+        if frozenset(fingerprints) != SOURCE_FINGERPRINT_FIELDS:
+            missing = sorted(SOURCE_FINGERPRINT_FIELDS - frozenset(fingerprints))
+            unexpected = sorted(frozenset(fingerprints) - SOURCE_FINGERPRINT_FIELDS)
+            raise ValueError(
+                f"invalid source fingerprint fields: missing={missing}, "
+                f"unexpected={unexpected}"
+            )
+        for field_name, value in (
+            ("stock_sha256", self.stock_sha256),
+            ("candidate_sha256", self.candidate_sha256),
+        ):
+            if len(value) != 64 or any(
+                character not in "0123456789abcdef" for character in value
+            ):
+                raise ValueError(f"{field_name} must be a lowercase SHA256")
+        for field_name in ARTIFACT_FINGERPRINT_FIELDS:
+            value = fingerprints[field_name]
+            if len(value) != 64 or any(
+                character not in "0123456789abcdef" for character in value
+            ):
+                raise ValueError(f"{field_name} must be a lowercase SHA256")
+        for field_name in RUNTIME_FINGERPRINT_FIELDS:
+            if not fingerprints[field_name]:
+                raise ValueError(f"{field_name} must be nonempty")
+        for field_name, value in (
+            ("promoted_entries", self.promoted_entries),
+            ("retained_entries", self.retained_entries),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{field_name} must be nonnegative")
+        object.__setattr__(
+            self,
+            "source_fingerprints",
+            MappingProxyType(dict(sorted(fingerprints.items()))),
+        )
+
+    def to_json(self) -> dict[str, object]:
+        """Serialize the stable versioned manifest payload."""
+        return {
+            "schema_version": MANIFEST_SCHEMA_VERSION,
+            "stock_sha256": self.stock_sha256,
+            "candidate_sha256": self.candidate_sha256,
+            "source_fingerprints": dict(self.source_fingerprints),
+            "promoted_entries": self.promoted_entries,
+            "retained_entries": self.retained_entries,
+        }
+
+    @classmethod
+    def from_json(cls, payload: Mapping[str, object]) -> CacheManifest:
+        """Parse a manifest while rejecting missing or unexpected fields."""
+        expected = {
+            "schema_version",
+            "stock_sha256",
+            "candidate_sha256",
+            "source_fingerprints",
+            "promoted_entries",
+            "retained_entries",
+        }
+        if set(payload) != expected:
+            raise ValueError("invalid cache manifest fields")
+        if payload["schema_version"] != MANIFEST_SCHEMA_VERSION:
+            raise ValueError("unsupported cache manifest schema version")
+        raw_fingerprints = payload["source_fingerprints"]
+        if not isinstance(raw_fingerprints, Mapping) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in raw_fingerprints.items()
+        ):
+            raise ValueError("source_fingerprints must be a string mapping")
+        stock_sha256 = payload["stock_sha256"]
+        candidate_sha256 = payload["candidate_sha256"]
+        promoted_entries = payload["promoted_entries"]
+        retained_entries = payload["retained_entries"]
+        if not isinstance(stock_sha256, str) or not isinstance(candidate_sha256, str):
+            raise ValueError("cache SHA256 fields must be strings")
+        if not isinstance(promoted_entries, int) or not isinstance(
+            retained_entries, int
+        ):
+            raise ValueError("cache entry counts must be integers")
+        return cls(
+            stock_sha256=stock_sha256,
+            candidate_sha256=candidate_sha256,
+            source_fingerprints=cast(Mapping[str, str], raw_fingerprints),
+            promoted_entries=promoted_entries,
+            retained_entries=retained_entries,
+        )
+
+
+def _sha256_file(path: Path) -> str:
+    """Return the SHA256 of one artifact without loading it all into memory."""
+    digest = sha256()
+    with path.open("rb") as artifact:
+        for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sha256_file_set(paths: Sequence[Path]) -> str:
+    """Return a path-independent SHA256 for a multiset of trace artifacts."""
+    member_digests = sorted(_sha256_file(path) for path in paths)
+    payload = json.dumps(member_digests, ensure_ascii=True, separators=(",", ":"))
+    return sha256(payload.encode("ascii")).hexdigest()
+
+
+def _measurement_is_correct(measurement: TacticMeasurement) -> bool:
+    """Apply the Task 7 row-level finite, deterministic, and micro gate."""
+    return (
+        measurement.failure is None
+        and measurement.finite
+        and measurement.deterministic
+        and measurement.median_us > 0
+        and measurement.cv >= 0
+        and measurement.cosine_similarity >= MIN_MICRO_COSINE_SIMILARITY
+    )
+
+
+def _weighted_median(values: Sequence[tuple[float, float]]) -> float:
+    """Return the lower weighted median under deterministic gain ordering."""
+    total_weight = math.fsum(weight for _, weight in values)
+    midpoint = total_weight / 2
+    cumulative = 0.0
+    for value, weight in sorted(values, key=lambda item: item[0]):
+        cumulative += weight
+        if cumulative >= midpoint:
+            return value
+    raise ValueError("weighted median requires positive finite weights")
+
+
+def audit_bucket(
+    *,
+    cache_key: str,
+    stock: TacticPair,
+    candidate: TacticPair,
+    profile_weights: Mapping[str, float],
+    measurements: Sequence[TacticMeasurement],
+) -> BucketAudit:
+    """Aggregate candidate performance against the stock row for each profile."""
+    if not profile_weights:
+        raise ValueError("profile_weights must not be empty")
+    for signature_key, weight in profile_weights.items():
+        if not signature_key:
+            raise ValueError("profile signature keys must be nonempty")
+        if not math.isfinite(weight) or weight <= 0:
+            raise ValueError("profile weights must be finite and positive")
+
+    indexed: dict[tuple[str, TacticPair], TacticMeasurement] = {}
+    for measurement in measurements:
+        key = (measurement.signature_key, measurement.tactic)
+        if key in indexed:
+            raise ValueError(
+                "duplicate shmoo row for profile and tactic: "
+                f"{measurement.signature_key}/{measurement.tactic}"
+            )
+        indexed[key] = measurement
+
+    rows: list[tuple[float, TacticMeasurement, TacticMeasurement]] = []
+    all_correct = True
+    for signature_key, weight in profile_weights.items():
+        try:
+            stock_row = indexed[(signature_key, stock)]
+            candidate_row = indexed[(signature_key, candidate)]
+        except KeyError as error:
+            raise ValueError(
+                f"missing stock or candidate shmoo row for profile {signature_key}"
+            ) from error
+        all_correct = all_correct and _measurement_is_correct(stock_row)
+        all_correct = all_correct and _measurement_is_correct(candidate_row)
+        rows.append((weight, stock_row, candidate_row))
+
+    max_cv = max(candidate_row.cv for _, _, candidate_row in rows)
+    if not all_correct:
+        return BucketAudit(
+            cache_key=cache_key,
+            stock=stock,
+            candidate=candidate,
+            weighted_gain=0.0,
+            max_cv=max_cv,
+            worst_high_weight_regression=0.0,
+            all_correct=False,
+        )
+
+    total_weight = math.fsum(weight for weight, _, _ in rows)
+    gains = [
+        (
+            (stock_row.median_us - candidate_row.median_us) / stock_row.median_us,
+            weight,
+        )
+        for weight, stock_row, candidate_row in rows
+    ]
+    high_weight_regressions = [
+        (candidate_row.median_us - stock_row.median_us) / stock_row.median_us
+        for weight, stock_row, candidate_row in rows
+        if weight / total_weight >= HIGH_WEIGHT_FRACTION
+    ]
+    return BucketAudit(
+        cache_key=cache_key,
+        stock=stock,
+        candidate=candidate,
+        weighted_gain=_weighted_median(gains),
+        max_cv=max_cv,
+        worst_high_weight_regression=(
+            max(high_weight_regressions) if high_weight_regressions else 0.0
+        ),
+        all_correct=True,
+    )
+
+
+def qualify_bucket(bucket: BucketAudit) -> QualificationDecision:
+    """Promote only candidates that satisfy every binding Task 7 gate."""
+    if not bucket.all_correct:
+        reason = "candidate failed correctness checks"
+    elif not all(
+        math.isfinite(value)
+        for value in (
+            bucket.weighted_gain,
+            bucket.max_cv,
+            bucket.worst_high_weight_regression,
+        )
+    ):
+        reason = "qualification metrics are not finite"
+    elif bucket.weighted_gain < MIN_WEIGHTED_GAIN:
+        reason = "weighted gain below 2%"
+    elif bucket.max_cv > MAX_CV:
+        reason = "coefficient of variation above 3%"
+    elif bucket.worst_high_weight_regression > MAX_HIGH_WEIGHT_REGRESSION:
+        reason = "high-weight regression above 1%"
+    else:
+        return QualificationDecision(
+            cache_key=bucket.cache_key,
+            selected=bucket.candidate,
+            promoted=True,
+            reason="candidate passed qualification gates",
+        )
+    return QualificationDecision(
+        cache_key=bucket.cache_key,
+        selected=bucket.stock,
+        promoted=False,
+        reason=reason,
+    )
+
+
+def _validate_moe_file_key(cache_key: str) -> None:
+    """Reject keys outside the exact pinned FlashInfer MoE file-key shape."""
+    try:
+        parsed = ast.literal_eval(cache_key)
+    except (SyntaxError, ValueError) as error:
+        raise ValueError(
+            "cache key must be an exact FlashInfer MoE file key"
+        ) from error
+    if (
+        not isinstance(parsed, tuple)
+        or len(parsed) != 4
+        or parsed[0] != MOE_CUSTOM_OP
+        or parsed[1] != MOE_RUNNER
+        or not isinstance(parsed[2], tuple)
+        or parsed[3] != ()
+    ):
+        raise ValueError("cache key must be an exact FlashInfer MoE file key")
+
+
+def _load_json_object(path: Path) -> dict[str, object]:
+    """Read a JSON object with string keys."""
+    payload = json.loads(path.read_text(encoding="ascii"))
+    if not isinstance(payload, dict) or not all(
+        isinstance(key, str) for key in payload
+    ):
+        raise ValueError(f"{path} must contain a JSON object")
+    return cast(dict[str, object], payload)
+
+
+def _get_autotuner() -> Any:
+    """Load the optional pinned FlashInfer AutoTuner only on cache operations."""
+    autotuner = importlib.import_module("flashinfer.autotuner")
+    return autotuner.AutoTuner.get()
+
+
+def _validate_candidate_in_fresh_process(
+    candidate_path: Path,
+    promoted: Mapping[str, TacticPair],
+) -> None:
+    """Reload the standard cache in a new interpreter and verify exact pairs."""
+    repository_root = Path(__file__).resolve().parents[2]
+    environment = os.environ.copy()
+    existing_pythonpath = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = (
+        os.pathsep.join((str(repository_root), existing_pythonpath))
+        if existing_pythonpath
+        else str(repository_root)
+    )
+    expected = {key: tactic.to_json() for key, tactic in promoted.items()}
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "experiments.mxfp8_moe_tactic_audit.qualify_cache",
+            "--validate-cache",
+            str(candidate_path),
+        ],
+        cwd=repository_root,
+        env=environment,
+        input=json.dumps(expected, ensure_ascii=True),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        details = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(f"fresh-process candidate validation failed: {details}")
+
+
+def _write_manifest(path: Path, manifest: CacheManifest) -> None:
+    """Write the deterministic ASCII cache manifest."""
+    path.write_text(
+        json.dumps(manifest.to_json(), ensure_ascii=True, indent=2, sort_keys=True)
+        + "\n",
+        encoding="ascii",
+    )
+
+
+def build_candidate_cache(
+    stock_cache: Path,
+    decisions: Sequence[QualificationDecision],
+    output: Path,
+    *,
+    provenance: CacheProvenance,
+) -> CacheManifest:
+    """Replace promoted exact MoE keys through FlashInfer's native cache APIs."""
+    stock_cache = stock_cache.resolve()
+    output = output.resolve()
+    candidate_path = output / "autotune_configs.json"
+    if candidate_path == stock_cache:
+        raise ValueError("candidate cache must not overwrite the stock cache")
+
+    decision_by_key: dict[str, QualificationDecision] = {}
+    for decision in decisions:
+        if decision.cache_key in decision_by_key:
+            raise ValueError(
+                f"duplicate qualification decision for {decision.cache_key}"
+            )
+        decision_by_key[decision.cache_key] = decision
+    promoted = {
+        decision.cache_key: decision.selected
+        for decision in decisions
+        if decision.promoted
+    }
+    for cache_key in promoted:
+        _validate_moe_file_key(cache_key)
+
+    stock_payload = _load_json_object(stock_cache)
+    stock_entries = {key for key in stock_payload if key != "_metadata"}
+    missing_promoted = sorted(set(promoted) - stock_entries)
+    if missing_promoted:
+        raise ValueError(
+            f"promoted key is not present in stock cache: {missing_promoted[0]}"
+        )
+
+    tuner = _get_autotuner()
+    file_configs_snapshot = tuner._file_configs.copy()
+    profiling_cache_snapshot = tuner.profiling_cache.copy()
+    output.mkdir(parents=True, exist_ok=True)
+    try:
+        tuner._file_configs.clear()
+        tuner.profiling_cache.clear()
+        if tuner.load_configs(str(stock_cache)) is False:
+            raise RuntimeError(
+                "stock cache metadata does not match the current runtime"
+            )
+        for cache_key, tactic in promoted.items():
+            runner_name, _ = tuner._file_configs[cache_key]
+            if runner_name != MOE_RUNNER:
+                raise ValueError(
+                    f"promoted key does not resolve to {MOE_RUNNER}: {cache_key}"
+                )
+            tuner._file_configs[cache_key] = (
+                MOE_RUNNER,
+                (tactic.gemm1, tactic.gemm2),
+            )
+        shutil.copyfile(stock_cache, candidate_path)
+        tuner.save_configs(str(candidate_path))
+    finally:
+        tuner._file_configs.clear()
+        tuner._file_configs.update(file_configs_snapshot)
+        tuner.profiling_cache.clear()
+        tuner.profiling_cache.update(profiling_cache_snapshot)
+
+    candidate_payload = _load_json_object(candidate_path)
+    if set(candidate_payload) != set(stock_payload):
+        raise RuntimeError("candidate cache changed the stock JSON object keys")
+    for key, stock_value in stock_payload.items():
+        if key not in promoted and candidate_payload[key] != stock_value:
+            raise RuntimeError(f"candidate cache changed retained entry {key}")
+    for key, tactic in promoted.items():
+        if candidate_payload[key] != [MOE_RUNNER, [tactic.gemm1, tactic.gemm2]]:
+            raise RuntimeError(f"candidate cache serialized the wrong tactic for {key}")
+
+    _validate_candidate_in_fresh_process(candidate_path, promoted)
+    manifest = CacheManifest(
+        stock_sha256=_sha256_file(stock_cache),
+        candidate_sha256=_sha256_file(candidate_path),
+        source_fingerprints=provenance.source_fingerprints(),
+        promoted_entries=len(promoted),
+        retained_entries=len(stock_entries) - len(promoted),
+    )
+    _write_manifest(output / "cache_manifest.json", manifest)
+    return manifest
+
+
+def select_cache_path(
+    *,
+    stock_path: Path,
+    candidate_path: Path,
+    manifest_path: Path,
+    runtime_fingerprints: Mapping[str, str],
+) -> Path:
+    """Select the candidate only when its hash and every runtime field match."""
+    try:
+        manifest = CacheManifest.from_json(_load_json_object(manifest_path))
+        runtime_matches = all(
+            runtime_fingerprints.get(field) == manifest.source_fingerprints[field]
+            for field in RUNTIME_FINGERPRINT_FIELDS
+        )
+        candidate_matches = _sha256_file(candidate_path) == manifest.candidate_sha256
+        stock_matches = _sha256_file(stock_path) == manifest.stock_sha256
+    except (OSError, ValueError, json.JSONDecodeError):
+        return stock_path
+    if runtime_matches and candidate_matches and stock_matches:
+        return candidate_path
+    return stock_path
+
+
+def _validate_cache_from_stdin(candidate_path: Path) -> int:
+    """Fresh-process validation entry point used by cache construction."""
+    raw_expected = json.loads(sys.stdin.read())
+    if not isinstance(raw_expected, Mapping):
+        raise ValueError("expected tactic payload must be an object")
+    expected = {
+        str(key): TacticPair.from_json(cast(Mapping[str, object], value))
+        for key, value in raw_expected.items()
+        if isinstance(value, Mapping)
+    }
+    if len(expected) != len(raw_expected):
+        raise ValueError("expected tactic payload contains an invalid value")
+    tuner = _get_autotuner()
+    if tuner.load_configs(str(candidate_path)) is False:
+        raise RuntimeError("candidate cache metadata does not match the fresh runtime")
+    for cache_key, tactic in expected.items():
+        _validate_moe_file_key(cache_key)
+        loaded = tuner._file_configs.get(cache_key)
+        expected_value = (MOE_RUNNER, (tactic.gemm1, tactic.gemm2))
+        if loaded != expected_value:
+            raise RuntimeError(
+                f"candidate key {cache_key} resolved to {loaded!r}, "
+                f"expected {expected_value!r}"
+            )
+    return 0
+
+
+def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
+    """Parse the private fresh-process validation command."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--validate-cache", type=Path)
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the private fresh-process validation mode."""
+    args = _parse_args(argv)
+    if args.validate_cache is None:
+        raise SystemExit("--validate-cache is required")
+    return _validate_cache_from_stdin(args.validate_cache)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
