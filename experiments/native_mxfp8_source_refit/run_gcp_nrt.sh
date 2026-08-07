@@ -7,6 +7,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
   REPO=${REPO:-$(git -C "${SCRIPT_DIR}/../.." rev-parse --show-toplevel)}
   ACTION=${ACTION:-test-only}
   MAX_STEPS=${MAX_STEPS:-2}
+  PROFILE=${PROFILE:-qwen30b}
   RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
   ACCOUNT=${SLURM_ACCOUNT:-coreai_chef_posttrain}
   PARTITION=${PARTITION:-batch}
@@ -14,7 +15,20 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
   WORK_ROOT=${WORK_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna}
   CONTAINER=${CONTAINER:-${WORK_ROOT}/containers/nemo-rl-nightly-refresh/nemo_rl_nightly_20260730_483099.sqsh}
   RESULT_ROOT=${RESULT_ROOT:-${WORK_ROOT}/experiments/native-mxfp8-source-refit/gcp-b200}
-  RUN_NAME=${RUN_NAME:-native-mxfp8-source-qwen30b-${MAX_STEPS}step-${RUN_SUFFIX}}
+  case "${PROFILE}" in
+    qwen30b)
+      TOTAL_NODES=4
+      GEN_NODES=2
+      GEN_GPUS_PER_NODE=8
+      ;;
+    qwen06b)
+      TOTAL_NODES=1
+      GEN_NODES=1
+      GEN_GPUS_PER_NODE=4
+      ;;
+    *) echo "PROFILE must be qwen30b or qwen06b" >&2; exit 2 ;;
+  esac
+  RUN_NAME=${RUN_NAME:-native-mxfp8-source-${PROFILE}-${MAX_STEPS}step-${RUN_SUFFIX}}
   EXPERIMENT_ROOT=${RESULT_ROOT}/results/${RUN_NAME}
 
   case "${ACTION}" in
@@ -36,7 +50,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
   args=(
     --account="${ACCOUNT}"
     --partition="${PARTITION}"
-    --nodes=4
+    --nodes="${TOTAL_NODES}"
     --ntasks-per-node=1
     --gpus-per-node=8
     --exclusive
@@ -44,7 +58,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     --job-name="native-mxfp8-source-${MAX_STEPS}step-${RUN_SUFFIX}"
     --output="${RESULT_ROOT}/slurm/%x-%j.out"
     --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"native_mxfp8_refit","description":"venv setup and model initialization"}}'
-    --export="ALL,REPO=${REPO},EXPECTED_REPO_SHA=${REPO_SHA},CONTAINER=${CONTAINER},MAX_STEPS=${MAX_STEPS},RUN_NAME=${RUN_NAME},EXPERIMENT_ROOT=${EXPERIMENT_ROOT},WORK_ROOT=${WORK_ROOT}"
+    --export="ALL,REPO=${REPO},EXPECTED_REPO_SHA=${REPO_SHA},CONTAINER=${CONTAINER},MAX_STEPS=${MAX_STEPS},PROFILE=${PROFILE},TOTAL_NODES=${TOTAL_NODES},GEN_NODES=${GEN_NODES},GEN_GPUS_PER_NODE=${GEN_GPUS_PER_NODE},RUN_NAME=${RUN_NAME},EXPERIMENT_ROOT=${EXPERIMENT_ROOT},WORK_ROOT=${WORK_ROOT}"
   )
   if [[ -n "${ACTION_ARG}" ]]; then
     args+=("${ACTION_ARG}")
@@ -65,6 +79,10 @@ fi
 : "${EXPECTED_REPO_SHA:?EXPECTED_REPO_SHA is required}"
 : "${CONTAINER:?CONTAINER is required}"
 : "${MAX_STEPS:?MAX_STEPS is required}"
+: "${PROFILE:?PROFILE is required}"
+: "${TOTAL_NODES:?TOTAL_NODES is required}"
+: "${GEN_NODES:?GEN_NODES is required}"
+: "${GEN_GPUS_PER_NODE:?GEN_GPUS_PER_NODE is required}"
 : "${RUN_NAME:?RUN_NAME is required}"
 : "${EXPERIMENT_ROOT:?EXPERIMENT_ROOT is required}"
 : "${WORK_ROOT:?WORK_ROOT is required}"
@@ -108,15 +126,38 @@ MCORE_ACTOR_VENV=${CACHE_ROOT}/venvs/nemo_rl.models.policy.workers.megatron_poli
 MCORE_NVIDIA_ROOT=${MCORE_ACTOR_VENV}/lib/python3.13/site-packages/nvidia
 MCORE_LD_LIBRARY_PATH=${MCORE_NVIDIA_ROOT}/cudnn/lib:${MCORE_NVIDIA_ROOT}/cu13/lib:${MCORE_NVIDIA_ROOT}/nccl/lib:${MCORE_NVIDIA_ROOT}/nvshmem/lib:/opt/amazon/ofi-nccl/lib:/opt/amazon/efa/lib:/usr/local/cuda/compat/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
 
+case "${PROFILE}" in
+  qwen30b)
+    CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
+    MODEL_NAME=Qwen/Qwen3-30B-A3B
+    TRAIN_EP=16
+    NUM_PROMPTS=64
+    NUM_GENERATIONS=32
+    TRAIN_GLOBAL_BATCH=2048
+    MAX_SEQUENCE_LENGTH=4096
+    ;;
+  qwen06b)
+    CONFIG=examples/configs/grpo_math_1B_megatron.yaml
+    MODEL_NAME=Qwen/Qwen3-0.6B
+    TRAIN_EP=1
+    NUM_PROMPTS=2
+    NUM_GENERATIONS=4
+    TRAIN_GLOBAL_BATCH=8
+    MAX_SEQUENCE_LENGTH=512
+    ;;
+  *) echo "PROFILE must be qwen30b or qwen06b" >&2; exit 2 ;;
+esac
+
 cat >"${EXPERIMENT_ROOT}/metadata.env" <<EOF
 repo=${REPO}
 repo_sha=${EXPECTED_REPO_SHA}
 container=${CONTAINER}
 max_steps=${MAX_STEPS}
-total_nodes=4
-trainer_nodes=2
-generation_nodes=2
+profile=${PROFILE}
+total_nodes=${TOTAL_NODES}
+generation_nodes=${GEN_NODES}
 gpus_per_node=8
+generation_gpus_per_node=${GEN_GPUS_PER_NODE}
 train_precision=native_mxfp8
 generation_precision=mxfp8
 refit_transport=nccl_reshard
@@ -152,17 +193,18 @@ if [[ -s '${WANDB_KEY_FILE}' ]]; then
   export WANDB_API_KEY=\$(cat '${WANDB_KEY_FILE}')
 fi
 uv run --frozen examples/run_grpo.py \\
-  --config examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml \\
-  cluster.num_nodes=4 \\
+  --config '${CONFIG}' \\
+  policy.model_name='${MODEL_NAME}' \\
+  cluster.num_nodes='${TOTAL_NODES}' \\
   cluster.gpus_per_node=8 \\
   cluster.segment_size=1 \\
   policy.generation.colocated.enabled=false \\
-  policy.generation.colocated.resources.num_nodes=2 \\
-  policy.generation.colocated.resources.gpus_per_node=8 \\
+  policy.generation.colocated.resources.num_nodes='${GEN_NODES}' \\
+  policy.generation.colocated.resources.gpus_per_node='${GEN_GPUS_PER_NODE}' \\
   policy.generation.refit_transport=nccl_reshard \\
   policy.megatron_cfg.tensor_model_parallel_size=1 \\
   policy.megatron_cfg.pipeline_model_parallel_size=1 \\
-  policy.megatron_cfg.expert_model_parallel_size=16 \\
+  policy.megatron_cfg.expert_model_parallel_size='${TRAIN_EP}' \\
   policy.megatron_cfg.expert_tensor_parallel_size=1 \\
   policy.megatron_cfg.fp8_cfg.enabled=true \\
   policy.megatron_cfg.fp8_cfg.fp8=e4m3 \\
@@ -173,10 +215,10 @@ uv run --frozen examples/run_grpo.py \\
   ++policy.generation.vllm_cfg.expert_parallel_size=1 \\
   policy.generation.vllm_cfg.precision=fp8 \\
   policy.generation.vllm_cfg.is_mx=true \\
-  grpo.num_prompts_per_step=64 \\
-  grpo.num_generations_per_prompt=32 \\
-  policy.train_global_batch_size=2048 \\
-  policy.max_total_sequence_length=4096 \\
+  grpo.num_prompts_per_step='${NUM_PROMPTS}' \\
+  grpo.num_generations_per_prompt='${NUM_GENERATIONS}' \\
+  policy.train_global_batch_size='${TRAIN_GLOBAL_BATCH}' \\
+  policy.max_total_sequence_length='${MAX_SEQUENCE_LENGTH}' \\
   loss_fn.force_on_policy_ratio=false \\
   loss_fn.use_importance_sampling_correction=true \\
   ++grpo.skip_reference_policy_logprobs_calculation=false \\

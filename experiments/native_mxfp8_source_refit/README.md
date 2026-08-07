@@ -7,11 +7,17 @@ non-colocated NCCL-Reshard path.
 The first gate is a two-step Qwen3-30B-A3B run on four GCP-NRT B200 nodes. If
 that succeeds, run the same immutable code and container for 20 steps.
 
+A one-node Qwen3-0.6B profile exercises the same disaggregated refit contract
+with four trainer and four generation GPUs while the larger job is pending.
+
 ```bash
 ACTION=test-only MAX_STEPS=2 \
   experiments/native_mxfp8_source_refit/run_gcp_nrt.sh
 
 ACTION=submit MAX_STEPS=2 \
+  experiments/native_mxfp8_source_refit/run_gcp_nrt.sh
+
+ACTION=submit PROFILE=qwen06b MAX_STEPS=2 \
   experiments/native_mxfp8_source_refit/run_gcp_nrt.sh
 ```
 
