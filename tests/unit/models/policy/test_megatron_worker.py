@@ -67,6 +67,132 @@ class _ModelWithNonSerializableExtraState(torch.nn.Module):
         raise AssertionError("moving a module must not serialize its extra state")
 
 
+def test_native_mxfp8_param_map_supports_roles_and_legacy_keys() -> None:
+    from nemo_rl.weight_sync.nccl_reshard_utils import (
+        HFToLocalParamMap,
+        LocalParamSpec,
+    )
+
+    name = "model.layers.0.mlp.gate_proj.weight"
+    weight = LocalParamSpec(base=torch.empty(64, 256))
+    scale = LocalParamSpec(base=torch.empty(64, 8, dtype=torch.uint8))
+
+    source_map = HFToLocalParamMap(specs={name: weight, (name, "weight_scale"): scale})
+
+    assert source_map.get(name) is weight
+    assert source_map.get(name, role="weight") is weight
+    assert source_map.get(name, role="weight_scale") is scale
+    assert source_map.get(name, role="missing") is None
+
+
+def test_native_mxfp8_config_accepts_only_matching_vllm_mx_storage() -> None:
+    from nemo_rl.weight_sync.nccl_reshard_utils import (
+        check_nccl_reshard_refit_support,
+    )
+
+    config = SimpleNamespace(
+        policy={
+            "generation": {
+                "backend": "vllm",
+                "colocated": {"enabled": False},
+                "vllm_cfg": {"precision": "fp8", "is_mx": True},
+            },
+            "megatron_cfg": {
+                "enabled": True,
+                "fp8_cfg": {"fp8_param": True, "fp8_recipe": "mxfp8"},
+            },
+            "dtensor_cfg": {"enabled": False},
+        }
+    )
+
+    check_nccl_reshard_refit_support(config)
+
+    config.policy["generation"]["vllm_cfg"]["is_mx"] = False
+    with pytest.raises(ValueError, match="fp8_recipe must be 'blockwise'"):
+        check_nccl_reshard_refit_support(config)
+
+
+def test_native_mxfp8_train_transfer_uses_each_component_metadata(monkeypatch) -> None:
+    import nemo_rl.weight_sync.xferdtensor as xfer_module
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+    from nemo_rl.weight_sync.nccl_reshard_utils import (
+        HFToLocalParamMap,
+        LocalParamSpec,
+    )
+
+    name = "model.layers.0.mlp.down_proj.weight"
+    weight = torch.empty(64, 256, dtype=torch.float8_e4m3fn)
+    scale = torch.empty(64, 8, dtype=torch.uint8)
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker.my_pp_stage = 0
+    worker.pp_comm_group = object()
+    worker.hf_to_local_param_map = HFToLocalParamMap(
+        specs={
+            (name, "weight"): LocalParamSpec(base=weight),
+            (name, "weight_scale"): LocalParamSpec(base=scale),
+        }
+    )
+    worker.nccl_reshard_refit_info = {
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": name,
+                    "pp_stage": 0,
+                    "src_mesh_info": "src-mesh",
+                    "dst_mesh_info": "dst-mesh",
+                    "components": [
+                        {
+                            "role": "weight",
+                            "global_shape": [64, 256],
+                            "src_placements": ["weight-src"],
+                            "dst_placements": ["weight-dst"],
+                        },
+                        {
+                            "role": "weight_scale",
+                            "global_shape": [64, 8],
+                            "src_placements": ["scale-src"],
+                            "dst_placements": ["scale-dst"],
+                        },
+                    ],
+                }
+            ]
+        },
+    }
+    worker._broadcast_misc_params_packed = lambda **_: None
+    refs = []
+    transfers = []
+
+    class FakeDTensorRef:
+        def __init__(self, *, local_tensor, global_shape):
+            self.local_tensor = local_tensor
+            self.global_shape = global_shape
+            refs.append(self)
+
+    monkeypatch.setattr(xfer_module, "DTensorRef", FakeDTensorRef)
+    monkeypatch.setattr(
+        xfer_module,
+        "xferdtensor",
+        lambda *args: transfers.append(args),
+    )
+    monkeypatch.setattr(torch.cuda, "current_stream", lambda: "stream")
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(torch.distributed, "get_rank", lambda: 1)
+
+    worker.nccl_reshard_refit()
+
+    assert [ref.global_shape for ref in refs] == [[64, 256], [64, 8]]
+    assert refs[0].local_tensor is weight
+    assert refs[1].local_tensor is scale
+    assert [(call[2], call[5]) for call in transfers] == [
+        (["weight-src"], ["weight-dst"]),
+        (["scale-src"], ["scale-dst"]),
+    ]
+
+
 def test_megatron_offload_before_refit_finalizes_async_save_first(monkeypatch):
     """Async checkpoint tensor references must be released before GPU offload."""
     from nemo_rl.models.policy.workers.megatron_policy_worker import (

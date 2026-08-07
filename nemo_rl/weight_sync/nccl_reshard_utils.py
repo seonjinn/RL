@@ -102,18 +102,28 @@ class LocalParamSpec:
 
 @dataclass
 class HFToLocalParamMap:
-    """``hf_name -> LocalParamSpec`` container returned by build_hf_to_local_param_map.
+    """``(hf_name, role) -> LocalParamSpec`` refit source/destination map.
 
-    Holds LocalParamSpec for each HF param name.
+    String keys remain accepted and are normalized to the legacy ``weight`` role.
     """
 
-    specs: dict[str, LocalParamSpec] = field(default_factory=dict)
+    specs: dict[str | tuple[str, str], LocalParamSpec] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.specs = {
+            (key, "weight") if isinstance(key, str) else key: spec
+            for key, spec in self.specs.items()
+        }
 
     def get(
-        self, hf_name: str, default: Optional[LocalParamSpec] = None
+        self,
+        hf_name: str,
+        default: Optional[LocalParamSpec] = None,
+        *,
+        role: str = "weight",
     ) -> Optional[LocalParamSpec]:
-        """Spec for ``hf_name`` or ``default`` (``None``); loops assert non-None."""
-        return self.specs.get(hf_name, default)
+        """Spec for ``hf_name`` and ``role``, or ``default`` when absent."""
+        return self.specs.get((hf_name, role), default)
 
 
 # =========================================================================
@@ -849,12 +859,19 @@ def check_nccl_reshard_refit_support(master_config: dict) -> None:
         if gen_precision == "fp8":
             if fp8_param:
                 if vllm_cfg.get("is_mx"):
-                    violations.append(
-                        "policy.generation.vllm_cfg.is_mx=True does not support "
-                        "blockwise-FP8 storage from "
-                        "policy.megatron_cfg.fp8_cfg.fp8_param; use BF16 training "
-                        "storage for receiver-side MXFP8 quantization."
-                    )
+                    if fp8_recipe == "blockwise":
+                        violations.append(
+                            "policy.generation.vllm_cfg.is_mx=True does not support "
+                            "blockwise-FP8 storage from "
+                            "policy.megatron_cfg.fp8_cfg.fp8_param."
+                        )
+                    elif fp8_recipe != "mxfp8":
+                        violations.append(
+                            "policy.generation.vllm_cfg.is_mx=True with "
+                            "fp8_param=True requires "
+                            "policy.megatron_cfg.fp8_cfg.fp8_recipe='mxfp8'; "
+                            f"got {fp8_recipe!r}."
+                        )
                 elif fp8_recipe != "blockwise":
                     violations.append(
                         "policy.megatron_cfg.fp8_cfg.fp8_recipe must be 'blockwise' "
