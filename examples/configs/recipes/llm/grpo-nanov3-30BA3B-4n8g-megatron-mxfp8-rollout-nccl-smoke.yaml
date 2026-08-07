@@ -1,0 +1,48 @@
+defaults: ./grpo-nanov3-30BA3B-2n8g-megatron-pack-cp.yaml
+
+checkpointing:
+  enabled: false
+  checkpoint_dir: results/grpo-nanov3-30BA3B-4n8g-megatron-mxfp8-rollout-nccl-smoke
+
+policy:
+  precision: bfloat16
+  generation:
+    refit_transport: nccl_reshard
+    colocated:
+      enabled: false
+      resources:
+        num_nodes: 2
+        gpus_per_node: 8
+    vllm_cfg:
+      tensor_parallel_size: 1
+      pipeline_parallel_size: 1
+      expert_parallel_size: 1
+      precision: fp8
+      is_mx: true
+      quantization_ignored_layer_kws:
+        - conv1d
+        - mtp
+        - in_proj
+        - out_proj
+        - q_proj
+        - k_proj
+        - v_proj
+        - o_proj
+        - fc1_latent_proj
+        - fc2_latent_proj
+        - shared_experts
+      num_first_layers_in_bf16: 2
+      num_last_layers_in_bf16: 4
+
+logger:
+  log_dir: logs/grpo-nanov3-30BA3B-4n8g-megatron-mxfp8-rollout-nccl-smoke
+  wandb_enabled: true
+  tensorboard_enabled: true
+  wandb:
+    project: sna-pr3477-nano-smoke
+    name: grpo-nanov3-30BA3B-4n8g-megatron-mxfp8-rollout-nccl-smoke
+
+cluster:
+  gpus_per_node: 8
+  num_nodes: 4
+  segment_size: 1
