@@ -20,6 +20,7 @@ RUNTIME_ROOT=${RUNTIME_ROOT:-${WORK_ROOT}/containers/nemo-rl-nightly-refresh}
 CONTAINER=${CONTAINER:-${RUNTIME_ROOT}/nemo_rl_nightly_20260730_483099.sqsh}
 PYTHON_OVERLAY=${PYTHON_OVERLAY:-${RUNTIME_ROOT}/python-overlay-483099}
 ROOT_CACHE_OVERLAY=${ROOT_CACHE_OVERLAY:-${RUNTIME_ROOT}/root-cache-overlay-483099}
+UV_BIN_DIR=${UV_BIN_DIR:-${WORK_ROOT}/tools/uv-current}
 MODEL_PATH=${MODEL_PATH:-${WORK_ROOT}/nemo-evaluator-rundirs/nano_v35/conversions/Ultra-SFTb2-512K-hermes20k-lr2e-5-iter_0005000/hf}
 CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/mopd_nano_fast/.cache/pr3477-nano-smoke/exact-head}
 EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${WORK_ROOT}/experiments/pr3477-nano-smoke/results/${MAX_STEPS}step-${RUN_SUFFIX}}
@@ -48,6 +49,7 @@ for path in \
   "${CONTAINER}" \
   "${PYTHON_OVERLAY}" \
   "${ROOT_CACHE_OVERLAY}" \
+  "${UV_BIN_DIR}/uv" \
   "${MODEL_PATH}"; do
   test -e "${path}"
 done
@@ -82,6 +84,7 @@ gpus_per_node=${GPUS_PER_NODE}
 generation_nodes=${GEN_NODES}
 max_steps=${MAX_STEPS}
 container=${CONTAINER}
+uv_version=$(${UV_BIN_DIR}/uv --version)
 wandb_project=${WANDB_PROJECT}
 wandb_name=${WANDB_NAME}
 EOF
@@ -95,6 +98,7 @@ export NEMO_RL_VENV_DIR=${CACHE_ROOT}/worker-venvs
 export NVTE_CUDA_ARCHS=100
 export PYTHONPATH=${REPO}
 export TORCH_CUDA_ARCH_LIST=10.0
+export PATH=${UV_BIN_DIR}:\${PATH}
 export UV_CACHE_DIR=/root/.cache/uv
 export UV_PROJECT_ENVIRONMENT=${CACHE_ROOT}/driver-venv
 export UV_PYTHON_INSTALL_DIR=${CACHE_ROOT}/uv-python
