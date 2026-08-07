@@ -73,10 +73,12 @@ def _load_json_object(path: Path) -> Mapping[str, object]:
 
 
 def _canonical_sha256(value: object) -> str:
-    encoded = json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-    ).encode("ascii")
+    encoded = _canonical_json(value).encode("ascii")
     return sha256(encoded).hexdigest()
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
 def _contract_field(
@@ -94,15 +96,17 @@ def _contract_field(
 def _validate_generation_args(
     generation_args: Mapping[str, object], evaluator: Mapping[str, object]
 ) -> None:
-    required = {
-        "mode": "greedy",
-        "temperature": 0,
-        "top_p": 1,
-    }
-    for field_name, expected in required.items():
-        if generation_args.get(field_name) != expected:
+    if generation_args.get("mode") != "greedy":
+        raise ValueError("GSM8K generation_args.mode must equal 'greedy'")
+    for field_name, expected in (("temperature", 0), ("top_p", 1)):
+        value = generation_args.get(field_name)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or value != expected
+        ):
             raise ValueError(
-                f"GSM8K generation_args.{field_name} must equal {expected!r}"
+                f"GSM8K generation_args.{field_name} must be numeric {expected}"
             )
     seed = generation_args.get("seed")
     max_tokens = generation_args.get("max_tokens")
@@ -115,7 +119,14 @@ def _validate_generation_args(
     ):
         raise ValueError("GSM8K generation_args.max_tokens must be positive")
     for field_name in ("temperature", "top_p", "seed", "max_tokens"):
-        if evaluator.get(field_name) != generation_args.get(field_name):
+        evaluator_value = evaluator.get(field_name)
+        if isinstance(evaluator_value, bool) or not isinstance(
+            evaluator_value, (int, float)
+        ):
+            raise ValueError(f"GSM8K evaluator {field_name} must be numeric")
+        if _canonical_json(evaluator_value) != _canonical_json(
+            generation_args.get(field_name)
+        ):
             raise ValueError(
                 f"GSM8K evaluator {field_name} disagrees with generation arguments"
             )
@@ -177,9 +188,13 @@ def _load_run(root: Path) -> _Gsm8kRun:
         or evaluator.get("dataset_sha256") != DATASET_SHA256
     ):
         raise ValueError("GSM8K result does not use the immutable dataset SHA256")
+    dataset_total = dataset.get("total")
+    evaluator_limit = evaluator.get("limit")
     if (
-        dataset.get("total") != EXPECTED_TOTAL
-        or evaluator.get("limit") != EXPECTED_TOTAL
+        isinstance(dataset_total, bool)
+        or dataset_total != EXPECTED_TOTAL
+        or isinstance(evaluator_limit, bool)
+        or evaluator_limit != EXPECTED_TOTAL
     ):
         raise ValueError("GSM8K dataset and evaluator totals must equal 1319")
     if not isinstance(dataset.get("revision"), str) or not dataset.get("revision"):
@@ -217,7 +232,7 @@ def _load_run(root: Path) -> _Gsm8kRun:
         isinstance(exact_match, bool)
         or not isinstance(exact_match, (int, float))
         or not math.isfinite(exact_match)
-        or not math.isclose(exact_match, correct_count / EXPECTED_TOTAL, abs_tol=1e-15)
+        or exact_match != correct_count / EXPECTED_TOTAL
     ):
         raise ValueError("GSM8K aggregate exact_match disagrees with per-example rows")
     return _Gsm8kRun(
@@ -299,13 +314,19 @@ def compare_gsm8k(stock: Path, candidate: Path) -> PairedGsm8kComparison:
         raise ValueError("stock/candidate model revision mismatch")
     if stock_run.tokenizer_revision != candidate_run.tokenizer_revision:
         raise ValueError("stock/candidate tokenizer revision mismatch")
-    if stock_run.generation_args != candidate_run.generation_args:
+    if _canonical_json(stock_run.generation_args) != _canonical_json(
+        candidate_run.generation_args
+    ):
         raise ValueError("stock/candidate generation arguments mismatch")
-    if stock_run.runtime_fingerprint != candidate_run.runtime_fingerprint:
+    if _canonical_json(stock_run.runtime_fingerprint) != _canonical_json(
+        candidate_run.runtime_fingerprint
+    ):
         raise ValueError("stock/candidate runtime fingerprint mismatch")
-    if _matching_evaluator_contract(
-        stock_run.evaluator_contract
-    ) != _matching_evaluator_contract(candidate_run.evaluator_contract):
+    if _canonical_json(
+        _matching_evaluator_contract(stock_run.evaluator_contract)
+    ) != _canonical_json(
+        _matching_evaluator_contract(candidate_run.evaluator_contract)
+    ):
         raise ValueError("stock/candidate evaluator generation arguments mismatch")
     stock_ids = set(stock_run.correct_by_id)
     candidate_ids = set(candidate_run.correct_by_id)

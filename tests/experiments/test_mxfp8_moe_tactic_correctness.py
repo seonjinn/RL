@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,9 @@ from experiments.mxfp8_moe_tactic_audit.compare_gsm8k import (
 )
 from experiments.mxfp8_moe_tactic_audit.schema import TacticMeasurement, TacticPair
 from experiments.mxfp8_moe_tactic_audit.validate_correctness import (
+    Bf16PythonReferenceEvidence,
+    MicroCorrectnessEvidence,
+    MicroMeasurementEvidence,
     compare_generations,
     main as validate_correctness_main,
     validate_micro,
@@ -44,6 +48,44 @@ def _measurement(
         max_abs_error=max_abs_error,
         cosine_similarity=cosine_similarity,
         failure=failure,
+    )
+
+
+def _complete_micro_evidence(
+    measurements: list[TacticMeasurement],
+) -> MicroCorrectnessEvidence:
+    skew_classes = {
+        "balanced": "balanced",
+        "high-skew": "high-skew",
+    }
+    measurement_evidence = tuple(
+        MicroMeasurementEvidence(
+            signature_key=measurement.signature_key,
+            tactic=measurement.tactic,
+            skew_class=skew_classes[measurement.signature_key],  # type: ignore[arg-type]
+            routing_counts_match=True,
+            fc1_stock_compared=True,
+            fc2_stock_compared=True,
+            within_upstream_mxfp8_bounds=True,
+        )
+        for measurement in measurements
+    )
+    references = tuple(
+        Bf16PythonReferenceEvidence(
+            signature_key=row.signature_key,
+            tactic=row.tactic,
+            skew_class=row.skew_class,
+            comparison_target="fc2_final",
+            finite=True,
+            max_abs_error=0.01,
+            cosine_similarity=0.9999,
+            within_upstream_mxfp8_bounds=True,
+        )
+        for row in measurement_evidence
+    )
+    return MicroCorrectnessEvidence(
+        measurement_evidence=measurement_evidence,
+        bf16_python_references=references,
     )
 
 
@@ -81,17 +123,96 @@ def test_micro_gate_rejects_nan_even_if_schema_is_bypassed() -> None:
     assert any("nonfinite" in failure for failure in summary.failures)
 
 
-def test_micro_gate_accepts_complete_measurements() -> None:
-    summary = validate_micro(
-        [
-            _measurement(signature_key="balanced"),
-            _measurement(signature_key="high-skew", tactic=TacticPair(31, 47)),
-        ]
-    )
+def test_micro_gate_one_argument_interface_fails_closed() -> None:
+    summary = validate_micro([_measurement()])
+
+    assert not summary.passed
+    assert any("evidence" in failure for failure in summary.failures)
+
+
+def test_micro_gate_accepts_complete_measurements_and_evidence() -> None:
+    measurements = [
+        _measurement(signature_key="balanced"),
+        _measurement(signature_key="high-skew", tactic=TacticPair(31, 47)),
+    ]
+
+    summary = validate_micro(measurements, _complete_micro_evidence(measurements))
 
     assert summary.passed
     assert summary.checked_tactics == 2
     assert summary.failures == ()
+
+
+@pytest.mark.parametrize(
+    ("field_name", "reason"),
+    [
+        ("routing_counts_match", "routing count mismatch"),
+        ("fc1_stock_compared", "FC1 stock comparison"),
+        ("fc2_stock_compared", "FC2 stock comparison"),
+    ],
+)
+def test_programmatic_micro_gate_rejects_incomplete_measurement_evidence(
+    field_name: str, reason: str
+) -> None:
+    measurements = [
+        _measurement(signature_key="balanced"),
+        _measurement(signature_key="high-skew", tactic=TacticPair(31, 47)),
+    ]
+    evidence = _complete_micro_evidence(measurements)
+    first = replace(evidence.measurement_evidence[0], **{field_name: False})
+    incomplete = replace(
+        evidence,
+        measurement_evidence=(first, *evidence.measurement_evidence[1:]),
+    )
+
+    summary = validate_micro(measurements, incomplete)
+
+    assert not summary.passed
+    assert any(reason in failure for failure in summary.failures)
+
+
+@pytest.mark.parametrize(
+    "reference_update",
+    [
+        {"signature_key": "unrelated"},
+        {"tactic": TacticPair(99, 100)},
+        {"skew_class": "high-skew"},
+        {"comparison_target": "fc1_activated_intermediate"},
+    ],
+)
+def test_micro_gate_rejects_unbound_or_non_fc2_representative_references(
+    reference_update: dict[str, object],
+) -> None:
+    measurements = [
+        _measurement(signature_key="balanced"),
+        _measurement(signature_key="high-skew", tactic=TacticPair(31, 47)),
+    ]
+    evidence = _complete_micro_evidence(measurements)
+    bad_reference = replace(evidence.bf16_python_references[0], **reference_update)
+    incomplete = replace(
+        evidence,
+        bf16_python_references=(
+            *evidence.bf16_python_references,
+            bad_reference,
+        ),
+    )
+
+    summary = validate_micro(measurements, incomplete)
+
+    assert not summary.passed
+    assert any("BF16/Python reference" in failure for failure in summary.failures)
+
+
+def test_micro_gate_rejects_reference_tied_to_failed_measurement() -> None:
+    measurements = [
+        _measurement(signature_key="balanced", failure="kernel failed"),
+        _measurement(signature_key="high-skew", tactic=TacticPair(31, 47)),
+    ]
+
+    summary = validate_micro(measurements, _complete_micro_evidence(measurements))
+
+    assert not summary.passed
+    assert any("balanced BF16/Python" in failure for failure in summary.failures)
 
 
 def _generation_provenance() -> dict[str, object]:
@@ -188,7 +309,65 @@ def test_generation_comparison_rejects_non_greedy_decoding(tmp_path: Path) -> No
     _write_generation(stock, [("example", "a" * 64, [1])], provenance=provenance)
     _write_generation(candidate, [("example", "a" * 64, [1])], provenance=provenance)
 
-    with pytest.raises(ValueError, match="greedy"):
+    with pytest.raises(ValueError, match="temperature"):
+        compare_generations(stock, candidate)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "stock_value", "candidate_value"),
+    [
+        ("temperature", 0, False),
+        ("top_p", 1, True),
+    ],
+)
+def test_generation_rejects_boolean_numeric_decoding_fields(
+    tmp_path: Path,
+    field_name: str,
+    stock_value: int,
+    candidate_value: bool,
+) -> None:
+    stock = tmp_path / "stock.jsonl"
+    candidate = tmp_path / "candidate.jsonl"
+    stock_provenance = _generation_provenance()
+    stock_decoding = dict(stock_provenance["decoding"])  # type: ignore[arg-type]
+    stock_decoding[field_name] = stock_value
+    stock_provenance["decoding"] = stock_decoding
+    candidate_provenance = _generation_provenance()
+    candidate_decoding = dict(candidate_provenance["decoding"])  # type: ignore[arg-type]
+    candidate_decoding[field_name] = candidate_value
+    candidate_provenance["decoding"] = candidate_decoding
+    _write_generation(stock, [("example", "a" * 64, [1])], provenance=stock_provenance)
+    _write_generation(
+        candidate,
+        [("example", "a" * 64, [1])],
+        provenance=candidate_provenance,
+    )
+
+    with pytest.raises(ValueError, match=field_name):
+        compare_generations(stock, candidate)
+
+
+def test_generation_compares_complete_config_with_json_type_sensitivity(
+    tmp_path: Path,
+) -> None:
+    stock = tmp_path / "stock.jsonl"
+    candidate = tmp_path / "candidate.jsonl"
+    stock_provenance = _generation_provenance()
+    stock_decoding = dict(stock_provenance["decoding"])  # type: ignore[arg-type]
+    stock_decoding["min_tokens"] = 0
+    stock_provenance["decoding"] = stock_decoding
+    candidate_provenance = _generation_provenance()
+    candidate_decoding = dict(candidate_provenance["decoding"])  # type: ignore[arg-type]
+    candidate_decoding["min_tokens"] = False
+    candidate_provenance["decoding"] = candidate_decoding
+    _write_generation(stock, [("example", "a" * 64, [1])], provenance=stock_provenance)
+    _write_generation(
+        candidate,
+        [("example", "a" * 64, [1])],
+        provenance=candidate_provenance,
+    )
+
+    with pytest.raises(ValueError, match="provenance mismatch"):
         compare_generations(stock, candidate)
 
 
@@ -391,6 +570,86 @@ def test_compare_gsm8k_rejects_runtime_or_generation_mismatch(
     _write_gsm8k_result(candidate, set(), provenance=candidate_provenance)
 
     with pytest.raises(ValueError, match="generation arguments mismatch"):
+        compare_gsm8k(stock, candidate)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "stock_value", "candidate_value"),
+    [
+        ("temperature", 0, False),
+        ("top_p", 1, True),
+    ],
+)
+def test_compare_gsm8k_rejects_boolean_numeric_generation_fields(
+    tmp_path: Path,
+    field_name: str,
+    stock_value: int,
+    candidate_value: bool,
+) -> None:
+    stock = tmp_path / "stock"
+    candidate = tmp_path / "candidate"
+    stock_provenance = _gsm8k_provenance()
+    stock_contract = dict(stock_provenance["evaluation_contract"])  # type: ignore[arg-type]
+    stock_args = dict(stock_contract["generation_args"])  # type: ignore[arg-type]
+    stock_args[field_name] = stock_value
+    stock_contract["generation_args"] = stock_args
+    stock_provenance["evaluation_contract"] = stock_contract
+    stock_evaluator = dict(stock_provenance["evaluator"])  # type: ignore[arg-type]
+    stock_evaluator[field_name] = stock_value
+    stock_provenance["evaluator"] = stock_evaluator
+    candidate_provenance = _gsm8k_provenance()
+    candidate_contract = dict(candidate_provenance["evaluation_contract"])  # type: ignore[arg-type]
+    candidate_args = dict(candidate_contract["generation_args"])  # type: ignore[arg-type]
+    candidate_args[field_name] = candidate_value
+    candidate_contract["generation_args"] = candidate_args
+    candidate_provenance["evaluation_contract"] = candidate_contract
+    candidate_evaluator = dict(candidate_provenance["evaluator"])  # type: ignore[arg-type]
+    candidate_evaluator[field_name] = candidate_value
+    candidate_provenance["evaluator"] = candidate_evaluator
+    _write_gsm8k_result(stock, set(), provenance=stock_provenance)
+    _write_gsm8k_result(candidate, set(), provenance=candidate_provenance)
+
+    with pytest.raises(ValueError, match=field_name):
+        compare_gsm8k(stock, candidate)
+
+
+def test_compare_gsm8k_uses_type_sensitive_complete_generation_config(
+    tmp_path: Path,
+) -> None:
+    stock = tmp_path / "stock"
+    candidate = tmp_path / "candidate"
+    stock_provenance = _gsm8k_provenance()
+    stock_contract = dict(stock_provenance["evaluation_contract"])  # type: ignore[arg-type]
+    stock_args = dict(stock_contract["generation_args"])  # type: ignore[arg-type]
+    stock_args["min_tokens"] = 0
+    stock_contract["generation_args"] = stock_args
+    stock_provenance["evaluation_contract"] = stock_contract
+    candidate_provenance = _gsm8k_provenance()
+    candidate_contract = dict(candidate_provenance["evaluation_contract"])  # type: ignore[arg-type]
+    candidate_args = dict(candidate_contract["generation_args"])  # type: ignore[arg-type]
+    candidate_args["min_tokens"] = False
+    candidate_contract["generation_args"] = candidate_args
+    candidate_provenance["evaluation_contract"] = candidate_contract
+    _write_gsm8k_result(stock, set(), provenance=stock_provenance)
+    _write_gsm8k_result(candidate, set(), provenance=candidate_provenance)
+
+    with pytest.raises(ValueError, match="generation arguments mismatch"):
+        compare_gsm8k(stock, candidate)
+
+
+def test_compare_gsm8k_rejects_near_but_not_exact_aggregate_accuracy(
+    tmp_path: Path,
+) -> None:
+    stock = tmp_path / "stock"
+    candidate = tmp_path / "candidate"
+    _write_gsm8k_result(stock, set())
+    _write_gsm8k_result(candidate, set())
+    results_path = stock / "results.json"
+    results = json.loads(results_path.read_text(encoding="ascii"))
+    results["exact_match"] = 5e-16
+    results_path.write_text(json.dumps(results), encoding="ascii")
+
+    with pytest.raises(ValueError, match="exact_match"):
         compare_gsm8k(stock, candidate)
 
 

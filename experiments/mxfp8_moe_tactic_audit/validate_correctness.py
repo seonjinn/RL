@@ -11,7 +11,7 @@ import math
 from pathlib import Path
 import string
 import sys
-from typing import cast
+from typing import Literal, cast
 
 try:
     from .schema import TACTIC_MEASUREMENT_FIELDS, TacticMeasurement, TacticPair
@@ -21,9 +21,6 @@ except ImportError:  # pragma: no cover - direct script execution
 
 MIN_COSINE_SIMILARITY = 0.999
 MAX_MXFP8_ABS_ERROR = 0.1
-REQUIRED_STOCK_COMPARISONS = frozenset(
-    {"fc1_activated_intermediate", "fc2_reduced_output"}
-)
 REQUIRED_REFERENCE_SKEW_CLASSES = frozenset({"balanced", "high-skew"})
 
 
@@ -46,6 +43,139 @@ class GenerationComparison:
 
 
 @dataclass(frozen=True)
+class MicroMeasurementEvidence:
+    """Evidence that one measured tactic preserved the Task 6 contracts."""
+
+    signature_key: str
+    tactic: TacticPair
+    skew_class: Literal["balanced", "median-skew", "high-skew"]
+    routing_counts_match: bool
+    fc1_stock_compared: bool
+    fc2_stock_compared: bool
+    within_upstream_mxfp8_bounds: bool
+
+    @classmethod
+    def from_json(cls, row: Mapping[str, object]) -> MicroMeasurementEvidence:
+        """Parse one measurement-evidence JSON object."""
+        signature_key = row.get("signature_key")
+        skew_class = row.get("skew_class")
+        if not isinstance(signature_key, str) or not signature_key:
+            raise ValueError("measurement evidence has no signature_key")
+        if skew_class not in {"balanced", "median-skew", "high-skew"}:
+            raise ValueError("measurement evidence has invalid skew_class")
+        boolean_fields = (
+            "routing_counts_match",
+            "fc1_stock_compared",
+            "fc2_stock_compared",
+            "within_upstream_mxfp8_bounds",
+        )
+        if any(type(row.get(field_name)) is not bool for field_name in boolean_fields):
+            raise ValueError("measurement evidence flags must be booleans")
+        return cls(
+            signature_key=signature_key,
+            tactic=TacticPair.from_json(
+                _require_mapping(row.get("tactic"), "measurement evidence tactic")
+            ),
+            skew_class=cast(
+                Literal["balanced", "median-skew", "high-skew"], skew_class
+            ),
+            routing_counts_match=cast(bool, row["routing_counts_match"]),
+            fc1_stock_compared=cast(bool, row["fc1_stock_compared"]),
+            fc2_stock_compared=cast(bool, row["fc2_stock_compared"]),
+            within_upstream_mxfp8_bounds=cast(
+                bool, row["within_upstream_mxfp8_bounds"]
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class Bf16PythonReferenceEvidence:
+    """Final-output comparison against the upstream BF16/Python MoE reference."""
+
+    signature_key: str
+    tactic: TacticPair
+    skew_class: Literal["balanced", "high-skew"]
+    comparison_target: Literal["fc2_final"]
+    finite: bool
+    max_abs_error: float
+    cosine_similarity: float
+    within_upstream_mxfp8_bounds: bool
+
+    @classmethod
+    def from_json(cls, row: Mapping[str, object]) -> Bf16PythonReferenceEvidence:
+        """Parse one BF16/Python reference-evidence JSON object."""
+        signature_key = row.get("signature_key")
+        skew_class = row.get("skew_class")
+        comparison_target = row.get("comparison_target")
+        if not isinstance(signature_key, str) or not signature_key:
+            raise ValueError("BF16/Python reference has no signature_key")
+        if skew_class not in REQUIRED_REFERENCE_SKEW_CLASSES:
+            raise ValueError("BF16/Python reference has invalid skew_class")
+        if comparison_target != "fc2_final":
+            raise ValueError("BF16/Python comparison_target must be fc2_final")
+        finite = row.get("finite")
+        within_bounds = row.get("within_upstream_mxfp8_bounds")
+        if type(finite) is not bool or type(within_bounds) is not bool:
+            raise ValueError("BF16/Python reference flags must be booleans")
+        max_abs_error = row.get("max_abs_error")
+        cosine_similarity = row.get("cosine_similarity")
+        for field_name, value in (
+            ("max_abs_error", max_abs_error),
+            ("cosine_similarity", cosine_similarity),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+            ):
+                raise ValueError(f"BF16/Python reference {field_name} must be finite")
+        return cls(
+            signature_key=signature_key,
+            tactic=TacticPair.from_json(
+                _require_mapping(row.get("tactic"), "BF16/Python reference tactic")
+            ),
+            skew_class=cast(Literal["balanced", "high-skew"], skew_class),
+            comparison_target="fc2_final",
+            finite=cast(bool, finite),
+            max_abs_error=float(cast(float | int, max_abs_error)),
+            cosine_similarity=float(cast(float | int, cosine_similarity)),
+            within_upstream_mxfp8_bounds=cast(bool, within_bounds),
+        )
+
+
+@dataclass(frozen=True)
+class MicroCorrectnessEvidence:
+    """Complete evidence required by the authoritative micro gate."""
+
+    measurement_evidence: tuple[MicroMeasurementEvidence, ...]
+    bf16_python_references: tuple[Bf16PythonReferenceEvidence, ...]
+
+    @classmethod
+    def from_json(cls, row: Mapping[str, object]) -> MicroCorrectnessEvidence:
+        """Parse complete micro-correctness evidence."""
+        raw_measurements = row.get("measurement_evidence")
+        raw_references = row.get("bf16_python_references")
+        if not isinstance(raw_measurements, list):
+            raise ValueError("evidence.measurement_evidence must be an array")
+        if not isinstance(raw_references, list):
+            raise ValueError("evidence.bf16_python_references must be an array")
+        return cls(
+            measurement_evidence=tuple(
+                MicroMeasurementEvidence.from_json(
+                    _require_mapping(item, f"measurement_evidence[{index}]")
+                )
+                for index, item in enumerate(raw_measurements)
+            ),
+            bf16_python_references=tuple(
+                Bf16PythonReferenceEvidence.from_json(
+                    _require_mapping(item, f"bf16_python_references[{index}]")
+                )
+                for index, item in enumerate(raw_references)
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class _GenerationRun:
     ordered_ids: tuple[str, ...]
     prompt_sha256: Mapping[str, str]
@@ -62,13 +192,16 @@ def _measurement_label(measurement: TacticMeasurement) -> str:
 
 def validate_micro(
     measurements: Sequence[TacticMeasurement],
+    evidence: MicroCorrectnessEvidence | None = None,
 ) -> CorrectnessSummary:
     """Validate Task 6 measurements against promotion-blocking micro gates."""
     failures: list[str] = []
     seen: set[tuple[str, TacticPair]] = set()
+    successful_measurements: set[tuple[str, TacticPair]] = set()
     for measurement in measurements:
         label = _measurement_label(measurement)
         key = (measurement.signature_key, measurement.tactic)
+        failure_count = len(failures)
         if key in seen:
             failures.append(f"{label}: duplicate tactic measurement")
         seen.add(key)
@@ -108,9 +241,97 @@ def validate_micro(
                 f"{label}: max_abs_error {measurement.max_abs_error} exceeds "
                 f"the stock-relative MXFP8 bound {MAX_MXFP8_ABS_ERROR}"
             )
+        if len(failures) == failure_count:
+            successful_measurements.add(key)
 
     if not measurements:
         failures.append("no tactic measurements were provided")
+    if evidence is None:
+        failures.append("micro correctness evidence is required")
+        return CorrectnessSummary(
+            passed=False,
+            checked_tactics=len(measurements),
+            failures=tuple(failures),
+        )
+
+    measured_keys = {(row.signature_key, row.tactic) for row in measurements}
+    evidence_by_key: dict[tuple[str, TacticPair], MicroMeasurementEvidence] = {}
+    valid_evidence_keys: set[tuple[str, TacticPair]] = set()
+    for row in evidence.measurement_evidence:
+        key = (row.signature_key, row.tactic)
+        label = f"{row.signature_key}/({row.tactic.gemm1},{row.tactic.gemm2})"
+        if key in evidence_by_key:
+            failures.append(f"{label}: duplicate micro comparison evidence")
+            continue
+        evidence_by_key[key] = row
+        if key not in measured_keys:
+            failures.append(f"{label}: evidence has no matching measured tactic")
+
+    for measurement in measurements:
+        key = (measurement.signature_key, measurement.tactic)
+        label = _measurement_label(measurement)
+        row = evidence_by_key.get(key)
+        if row is None:
+            failures.append(f"{label}: missing micro comparison evidence")
+            continue
+        row_is_valid = True
+        if row.routing_counts_match is not True:
+            failures.append(f"{label}: routing count mismatch")
+            row_is_valid = False
+        if row.fc1_stock_compared is not True:
+            failures.append(f"{label}: missing FC1 stock comparison")
+            row_is_valid = False
+        if row.fc2_stock_compared is not True:
+            failures.append(f"{label}: missing FC2 stock comparison")
+            row_is_valid = False
+        if row.within_upstream_mxfp8_bounds is not True:
+            failures.append(f"{label}: outside upstream MXFP8 MoE numerical bounds")
+            row_is_valid = False
+        if row_is_valid and key in successful_measurements:
+            valid_evidence_keys.add(key)
+
+    valid_reference_skew_classes: set[str] = set()
+    for reference in evidence.bf16_python_references:
+        key = (reference.signature_key, reference.tactic)
+        row = evidence_by_key.get(key)
+        label = (
+            f"{reference.signature_key}/"
+            f"({reference.tactic.gemm1},{reference.tactic.gemm2})"
+        )
+        reference_is_valid = True
+        if key not in valid_evidence_keys or row is None:
+            failures.append(
+                f"{label}: BF16/Python reference is not bound to a successful "
+                "measured tactic"
+            )
+            reference_is_valid = False
+        elif row.skew_class != reference.skew_class:
+            failures.append(
+                f"{label}: BF16/Python reference skew_class does not match "
+                "measurement evidence"
+            )
+            reference_is_valid = False
+        if reference.comparison_target != "fc2_final":
+            failures.append(
+                f"{label}: BF16/Python reference comparison_target must be fc2_final"
+            )
+            reference_is_valid = False
+        if (
+            reference.finite is not True
+            or not math.isfinite(reference.max_abs_error)
+            or not 0 <= reference.max_abs_error <= MAX_MXFP8_ABS_ERROR
+            or not math.isfinite(reference.cosine_similarity)
+            or reference.cosine_similarity < MIN_COSINE_SIMILARITY
+            or reference.within_upstream_mxfp8_bounds is not True
+        ):
+            failures.append(f"{label}: BF16/Python reference failed numerical gates")
+            reference_is_valid = False
+        if reference_is_valid:
+            valid_reference_skew_classes.add(reference.skew_class)
+    for missing in sorted(
+        REQUIRED_REFERENCE_SKEW_CLASSES - valid_reference_skew_classes
+    ):
+        failures.append(f"missing valid {missing} BF16/Python MoE reference evidence")
     return CorrectnessSummary(
         passed=not failures,
         checked_tactics=len(measurements),
@@ -151,6 +372,10 @@ def _is_sha256(value: str) -> bool:
     )
 
 
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
 def _validate_generation_provenance(
     provenance: Mapping[str, object],
 ) -> None:
@@ -167,14 +392,18 @@ def _validate_generation_provenance(
     ):
         raise ValueError("generation provenance missing runtime_fingerprint")
     decoding = _require_mapping(provenance.get("decoding"), "provenance.decoding")
-    if (
-        decoding.get("mode") != "greedy"
-        or decoding.get("temperature") != 0
-        or decoding.get("top_p") != 1
-    ):
-        raise ValueError(
-            "generation decoding must be greedy with temperature=0 and top_p=1"
-        )
+    if decoding.get("mode") != "greedy":
+        raise ValueError("generation decoding mode must be greedy")
+    for field_name, expected in (("temperature", 0), ("top_p", 1)):
+        value = decoding.get(field_name)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or value != expected
+        ):
+            raise ValueError(
+                f"generation decoding {field_name} must be numeric {expected}"
+            )
     seed = decoding.get("seed")
     max_tokens = decoding.get("max_tokens")
     if isinstance(seed, bool) or not isinstance(seed, int):
@@ -213,7 +442,7 @@ def _load_generation(path: Path) -> _GenerationRun:
         if run_provenance is None:
             _validate_generation_provenance(provenance)
             run_provenance = provenance
-        elif provenance != run_provenance:
+        elif _canonical_json(provenance) != _canonical_json(run_provenance):
             raise ValueError(f"{path} contains inconsistent generation provenance")
         ordered_ids.append(identifier)
         prompt_sha256[identifier] = prompt_hash
@@ -232,7 +461,9 @@ def compare_generations(stock: Path, candidate: Path) -> GenerationComparison:
     """Require identical provenance, prompts, IDs, and output token IDs."""
     stock_run = _load_generation(stock)
     candidate_run = _load_generation(candidate)
-    if stock_run.provenance != candidate_run.provenance:
+    if _canonical_json(stock_run.provenance) != _canonical_json(
+        candidate_run.provenance
+    ):
         raise ValueError("stock/candidate generation provenance mismatch")
     if set(stock_run.ordered_ids) != set(candidate_run.ordered_ids):
         raise ValueError("stock/candidate generation example IDs mismatch")
@@ -272,77 +503,6 @@ def _load_json_object(path: Path) -> Mapping[str, object]:
     return _require_mapping(raw, str(path))
 
 
-def _evidence_failures(
-    measurements: Sequence[TacticMeasurement], evidence_path: Path
-) -> tuple[str, ...]:
-    evidence = _load_json_object(evidence_path)
-    raw_rows = evidence.get("measurement_evidence")
-    if not isinstance(raw_rows, list):
-        raise ValueError("evidence.measurement_evidence must be an array")
-    evidence_by_key: dict[tuple[str, TacticPair], Mapping[str, object]] = {}
-    for index, raw_row in enumerate(raw_rows):
-        row = _require_mapping(raw_row, f"measurement_evidence[{index}]")
-        signature_key = row.get("signature_key")
-        if not isinstance(signature_key, str) or not signature_key:
-            raise ValueError(f"measurement_evidence[{index}] has no signature_key")
-        tactic = TacticPair.from_json(
-            _require_mapping(row.get("tactic"), f"measurement_evidence[{index}].tactic")
-        )
-        key = (signature_key, tactic)
-        if key in evidence_by_key:
-            raise ValueError(
-                f"duplicate measurement evidence for {signature_key}/{tactic}"
-            )
-        evidence_by_key[key] = row
-
-    failures: list[str] = []
-    for measurement in measurements:
-        label = _measurement_label(measurement)
-        row = evidence_by_key.get((measurement.signature_key, measurement.tactic))
-        if row is None:
-            failures.append(f"{label}: missing micro comparison evidence")
-            continue
-        if row.get("routing_counts_match") is not True:
-            failures.append(f"{label}: routing count mismatch")
-        raw_comparisons = row.get("stock_comparisons")
-        if not isinstance(raw_comparisons, list) or not all(
-            isinstance(comparison, str) for comparison in raw_comparisons
-        ):
-            failures.append(f"{label}: missing FC1/FC2 stock comparisons")
-        elif not REQUIRED_STOCK_COMPARISONS.issubset(raw_comparisons):
-            failures.append(f"{label}: missing FC1/FC2 stock comparisons")
-        if row.get("within_upstream_mxfp8_bounds") is not True:
-            failures.append(f"{label}: outside upstream MXFP8 MoE numerical bounds")
-
-    raw_references = evidence.get("bf16_python_references")
-    if not isinstance(raw_references, list):
-        raise ValueError("evidence.bf16_python_references must be an array")
-    valid_skew_classes: set[str] = set()
-    for index, raw_reference in enumerate(raw_references):
-        reference = _require_mapping(raw_reference, f"bf16_python_references[{index}]")
-        skew_class = reference.get("skew_class")
-        cosine = reference.get("cosine_similarity")
-        max_error = reference.get("max_abs_error")
-        if skew_class not in REQUIRED_REFERENCE_SKEW_CLASSES:
-            continue
-        if (
-            reference.get("finite") is True
-            and isinstance(cosine, (int, float))
-            and not isinstance(cosine, bool)
-            and math.isfinite(cosine)
-            and cosine >= MIN_COSINE_SIMILARITY
-            and isinstance(max_error, (int, float))
-            and not isinstance(max_error, bool)
-            and math.isfinite(max_error)
-            and 0 <= max_error <= MAX_MXFP8_ABS_ERROR
-            and reference.get("within_upstream_mxfp8_bounds") is True
-        ):
-            valid_skew_classes.add(cast(str, skew_class))
-    for missing in sorted(REQUIRED_REFERENCE_SKEW_CLASSES - valid_skew_classes):
-        failures.append(f"missing valid {missing} BF16/Python MoE reference evidence")
-    return tuple(failures)
-
-
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -362,15 +522,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "micro":
             measurements = _load_measurements(args.measurements)
-            summary = validate_micro(measurements)
-            evidence_failures = _evidence_failures(measurements, args.evidence)
-            if evidence_failures:
-                summary = CorrectnessSummary(
-                    passed=False,
-                    checked_tactics=summary.checked_tactics,
-                    failures=summary.failures + evidence_failures,
-                )
-            result: CorrectnessSummary | GenerationComparison = summary
+            evidence = MicroCorrectnessEvidence.from_json(
+                _load_json_object(args.evidence)
+            )
+            result: CorrectnessSummary | GenerationComparison = validate_micro(
+                measurements, evidence
+            )
         else:
             result = compare_generations(args.stock, args.candidate)
     except ValueError as error:
