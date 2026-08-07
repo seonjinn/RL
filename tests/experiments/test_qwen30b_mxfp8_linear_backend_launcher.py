@@ -92,6 +92,9 @@ def test_dry_run_changes_only_backend(tmp_path: Path) -> None:
         assert output.count("/bin/python") >= 3
         assert "/.cache/nemo-rl-vllm0251-worker-venvs" in output
         assert "export NRL_FORCE_REBUILD_VENVS=false" in output
+        assert f"export HF_HOME={tmp_path}/hf" in output
+        assert "export HF_HUB_OFFLINE=1" in output
+        assert "export TRANSFORMERS_OFFLINE=1" in output
 
     adaptive_output = outputs["flashinfer_trtllm_adaptive"]
     assert "VLLM_MXFP8_DENSE_TRTLLM_ALLOW_CUTEDSL_FALLBACK=1" in adaptive_output
@@ -125,6 +128,16 @@ def test_rejects_unknown_backend(tmp_path: Path) -> None:
 
     assert result.returncode == 2
     assert "Unsupported BACKEND" in result.stderr
+
+
+def test_submit_preflights_complete_local_hf_snapshot() -> None:
+    launcher_text = LAUNCHER.read_text()
+
+    assert "HF_MODEL_CACHE_DIR=" in launcher_text
+    assert "HF_MODEL_REVISION_FILE=" in launcher_text
+    assert "model.safetensors.index.json" in launcher_text
+    assert "EXPECTED_MODEL_SHARDS=${EXPECTED_MODEL_SHARDS:-16}" in launcher_text
+    assert "Incomplete local model snapshot" in launcher_text
 
 
 def test_long_context_overrides_are_forwarded(tmp_path: Path) -> None:
@@ -186,6 +199,8 @@ def test_dry_run_captures_runtime_provenance_and_manifest(tmp_path: Path) -> Non
     assert "runtime_vllm_commit=$(git -C" in output
     assert "run_manifest.json" in output
     assert '"model": "Qwen/Qwen3-30B-A3B"' in output
+    assert '"model_revision"' in output
+    assert '"hf_hub_offline": bool(int(' in output
     assert '"nemo_rl_commit"' in output
     assert '"dependency_state_sha256"' in output
     assert '"vllm_commit"' in output

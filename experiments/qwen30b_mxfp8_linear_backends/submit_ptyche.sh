@@ -126,7 +126,12 @@ if [[ "${CUSTOM_VLLM_ROOT}" == "${REPO_DIR}/"* ]]; then
 fi
 EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${WORK_ROOT}/experiments/qwen30b-mxfp8-linear-backends/${RUN_ID}/${BACKEND}}
 CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/.cache/qwen30b-mxfp8-linear-backends/${BACKEND}}
-HF_HOME=${HF_HOME:-${WORK_ROOT}/.cache/huggingface}
+HF_HOME=${HF_HOME:-${WORK_ROOT}/hf}
+HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
+TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-1}
+HF_MODEL_CACHE_DIR=${HF_MODEL_CACHE_DIR:-${HF_HOME}/hub/models--Qwen--Qwen3-30B-A3B}
+HF_MODEL_REVISION_FILE=${HF_MODEL_REVISION_FILE:-${HF_MODEL_CACHE_DIR}/refs/main}
+EXPECTED_MODEL_SHARDS=${EXPECTED_MODEL_SHARDS:-16}
 SHARED_VENV_ROOT=${SHARED_VENV_ROOT:-${WORK_ROOT}/.cache/nemo-rl-vllm0251-worker-venvs}
 VLLM_BOOTSTRAP_PACKAGES='--torch-backend cu130 torch==2.11.0 numpy setuptools setuptools-rust setuptools-scm'
 VLLM_NO_BUILD_ISOLATION_PACKAGES=vllm
@@ -137,12 +142,29 @@ SUBMIT_RECIPE_SHA256=
 SUBMIT_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT}
 SUBMIT_VLLM_SOURCE_SHA256=dry-run-not-validated
 SUBMIT_VLLM_DEPENDENCY_STATE_SHA256=dry-run-not-validated
+SUBMIT_MODEL_REVISION=dry-run-not-validated
 
 if [[ "${ACTION}" == "dry-run" ]]; then
     SUBMIT_DEPENDENCY_STATE_SHA256=$(mxfp8_dependency_state_sha256 "${REPO_DIR}")
     SUBMIT_RECIPE_SHA256=$(mxfp8_file_sha256 "${REPO_DIR}/${CONFIG}")
 else
     [[ -f "${CONTAINER}" ]] || { echo "Missing container: ${CONTAINER}" >&2; exit 1; }
+    [[ -s "${HF_MODEL_REVISION_FILE}" ]] || {
+        echo "Missing local model revision: ${HF_MODEL_REVISION_FILE}" >&2
+        exit 1
+    }
+    SUBMIT_MODEL_REVISION=$(tr -d '[:space:]' < "${HF_MODEL_REVISION_FILE}")
+    MODEL_SNAPSHOT_DIR=${HF_MODEL_CACHE_DIR}/snapshots/${SUBMIT_MODEL_REVISION}
+    MODEL_SAFETENSORS_INDEX=${MODEL_SNAPSHOT_DIR}/model.safetensors.index.json
+    model_shard_count=$(find -L "${MODEL_SNAPSHOT_DIR}" -maxdepth 1 -type f \
+        -name 'model-*.safetensors' | wc -l | tr -d '[:space:]')
+    if [[ ! -f "${MODEL_SAFETENSORS_INDEX}" || \
+          "${model_shard_count}" -ne "${EXPECTED_MODEL_SHARDS}" ]]; then
+        echo "Incomplete local model snapshot: ${MODEL_SNAPSHOT_DIR} " \
+             "(index=$([[ -f "${MODEL_SAFETENSORS_INDEX}" ]] && echo present || echo missing), " \
+             "shards=${model_shard_count}/${EXPECTED_MODEL_SHARDS})" >&2
+        exit 1
+    fi
     [[ -d "${CUSTOM_VLLM_ROOT}/.git" ]] || {
         echo "Custom vLLM is not prepared at ${CUSTOM_VLLM_ROOT}" >&2
         exit 1
@@ -235,6 +257,8 @@ runtime_vllm_dependency_state_sha256=\$(mxfp8_vllm_dependency_state_sha256 ${CUS
 }
 rm -f ${EXPERIMENT_ROOT}/run_manifest.json
 export HF_HOME=${HF_HOME}
+export HF_HUB_OFFLINE=${HF_HUB_OFFLINE}
+export TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE}
 export NRL_FORCE_REBUILD_VENVS=false
 export NEMO_RL_VENV_DIR=${WORKER_VENV_ROOT}
 export NRL_VENV_BOOTSTRAP_PACKAGES='${VLLM_BOOTSTRAP_PACKAGES}'
@@ -301,6 +325,8 @@ from pathlib import Path
 
 manifest = {
     "model": "${MODEL}",
+    "model_revision": "${SUBMIT_MODEL_REVISION}",
+    "hf_hub_offline": bool(int("${HF_HUB_OFFLINE}")),
     "nemo_rl_commit": os.environ["MXFP8_NEMO_RL_COMMIT"],
     "dependency_state_sha256": os.environ["MXFP8_DEPENDENCY_STATE_SHA256"],
     "vllm_commit": os.environ["MXFP8_VLLM_COMMIT"],
