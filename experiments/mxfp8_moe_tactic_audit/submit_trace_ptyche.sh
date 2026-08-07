@@ -20,9 +20,7 @@ if [[ -n "${RUN_ID:-}" ]]; then RUN_ID=${RUN_ID}; elif [[ "${ACTION}" == submit 
 RUN_ROOT=${RUN_ROOT:-${WORK_ROOT}/experiments/mxfp8-moe-tactic-audit/trace/${RUN_ID}}
 CONTAINER=${CONTAINER:-${WORK_ROOT}/containers/nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh}
 CUSTOM_VLLM_ROOT=${CUSTOM_VLLM_ROOT:-${REPO_DIR}/3rdparty/vllm}
-MODEL_SNAPSHOT=${MODEL_SNAPSHOT:-${WORK_ROOT}/hf/hub/models--Qwen--Qwen3-30B-A3B}
-MODEL_REVISION_FILE=${MODEL_REVISION_FILE:-${MODEL_SNAPSHOT}/refs/main}
-CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/.cache/mxfp8-moe-tactic-audit/trace}
+HF_MODEL_CACHE_DIR=${HF_MODEL_CACHE_DIR:-${WORK_ROOT}/hf/hub/models--Qwen--Qwen3-30B-A3B}
 ACCOUNT=${SLURM_ACCOUNT:-coreai_dlalgo_llm}
 PARTITION=${PARTITION:-batch}
 QOS=${QOS:-}
@@ -35,20 +33,22 @@ esac
 
 if [[ "${ACTION}" == submit ]]; then
     audit_prepare_submit "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" "${EXPECTED_VLLM_COMMIT}"
+fi
+
+MODEL_SNAPSHOT=dry-run-not-validated
+MODEL_REVISION=dry-run-not-validated
+if [[ "${ACTION}" != dry-run ]]; then
+    IFS=$'\t' read -r MODEL_SNAPSHOT MODEL_REVISION < <(
+        audit_resolve_model_snapshot "${HF_MODEL_CACHE_DIR}" 16
+    )
+    [[ -f "${CONTAINER}" ]] || { echo "Missing container: ${CONTAINER}" >&2; exit 1; }
+fi
+if [[ "${ACTION}" == submit ]]; then
     [[ ! -e "${RUN_ROOT}" ]] || { echo "Run root already exists: ${RUN_ROOT}" >&2; exit 1; }
 fi
 
 TRACE_DIR=${RUN_ROOT}/trace
 NEMO_RL_COMMIT=$(git -C "${REPO_DIR}" rev-parse HEAD)
-if [[ "${ACTION}" == submit ]]; then
-    [[ -s "${MODEL_REVISION_FILE}" ]] || {
-        echo "Missing local model revision: ${MODEL_REVISION_FILE}" >&2
-        exit 1
-    }
-    MODEL_REVISION=$(tr -d '[:space:]' < "${MODEL_REVISION_FILE}")
-else
-    MODEL_REVISION=${MODEL_REVISION:-dry-run-not-validated}
-fi
 COMMAND=$(cat <<EOF
 set -euo pipefail
 cd ${REPO_DIR}
@@ -113,7 +113,7 @@ case "${ACTION}" in
     submit)
         audit_write_manifest "${RUN_ROOT}" trace "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" \
             "${EXPECTED_VLLM_COMMIT}" "${CONTAINER}" "${CONFIG}" "${MODEL_SNAPSHOT}" \
-            "${CACHE_ROOT}" "${SCRIPT_DIR}" "${SCRIPT_DIR}/submit_trace_ptyche.sh" \
+            - "${SCRIPT_DIR}" "${SCRIPT_DIR}/submit_trace_ptyche.sh" \
             "${SCRIPT_DIR}/provenance.sh"
         CONTAINER=${CONTAINER} MOUNTS=/lustre:/lustre COMMAND="${COMMAND}" GPUS_PER_NODE=4 \
             BASE_LOG_DIR="${RUN_ROOT}" sbatch "${SBATCH_ARGS[@]}" "${REPO_DIR}/ray.sub"

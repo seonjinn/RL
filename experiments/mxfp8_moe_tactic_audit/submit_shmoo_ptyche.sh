@@ -18,16 +18,34 @@ if [[ -n "${RUN_ID:-}" ]]; then RUN_ID=${RUN_ID}; elif [[ "${ACTION}" == submit 
 RUN_ROOT=${RUN_ROOT:-${WORK_ROOT}/experiments/mxfp8-moe-tactic-audit/shmoo/${RUN_ID}}
 CONTAINER=${CONTAINER:-${WORK_ROOT}/containers/nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh}
 CUSTOM_VLLM_ROOT=${CUSTOM_VLLM_ROOT:-${REPO_DIR}/3rdparty/vllm}
-MODEL_SNAPSHOT=${MODEL_SNAPSHOT:-${WORK_ROOT}/hf/hub/models--Qwen--Qwen3-30B-A3B}
+HF_MODEL_CACHE_DIR=${HF_MODEL_CACHE_DIR:-${WORK_ROOT}/hf/hub/models--Qwen--Qwen3-30B-A3B}
 SELECTED_PROFILES=${SELECTED_PROFILES:-${WORK_ROOT}/experiments/mxfp8-moe-tactic-audit/selected_profiles.json}
-MOE_WEIGHTS=${MOE_WEIGHTS:-${MODEL_SNAPSHOT}/model.safetensors.index.json}
-CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/.cache/mxfp8-moe-tactic-audit/shmoo}
+STOCK_INPUT_CACHE_ROOT=${STOCK_INPUT_CACHE_ROOT:-${WORK_ROOT}/.cache/mxfp8-moe-tactic-audit/shmoo/stock-input}
+SHMOO_OUTPUT_ROOT=${SHMOO_OUTPUT_ROOT:-${RUN_ROOT}}
 ACCOUNT=${SLURM_ACCOUNT:-coreai_dlalgo_llm}
 PARTITION=${PARTITION:-batch}
 QOS=${QOS:-}
 NSYS_CAPTURE_TACTICS=${NSYS_CAPTURE_TACTICS:-stock,winners}
 if [[ "${ACTION}" == submit ]]; then
     audit_prepare_submit "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" "${EXPECTED_VLLM_COMMIT}"
+fi
+
+MODEL_SNAPSHOT=dry-run-not-validated
+MODEL_REVISION=dry-run-not-validated
+if [[ "${ACTION}" != dry-run ]]; then
+    IFS=$'\t' read -r MODEL_SNAPSHOT MODEL_REVISION < <(
+        audit_resolve_model_snapshot "${HF_MODEL_CACHE_DIR}" 16
+    )
+    audit_require_nonempty_dir "${STOCK_INPUT_CACHE_ROOT}"
+    [[ -s "${SELECTED_PROFILES}" ]] || { echo "Missing selected profiles: ${SELECTED_PROFILES}" >&2; exit 1; }
+    [[ -f "${CONTAINER}" ]] || { echo "Missing container: ${CONTAINER}" >&2; exit 1; }
+    [[ "${SHMOO_OUTPUT_ROOT}" == "${RUN_ROOT}" || "${SHMOO_OUTPUT_ROOT}" == "${RUN_ROOT}/"* ]] || {
+        echo "SHMOO_OUTPUT_ROOT must be inside RUN_ROOT" >&2
+        exit 1
+    }
+fi
+MOE_WEIGHTS=${MOE_WEIGHTS:-${MODEL_SNAPSHOT}/model.safetensors.index.json}
+if [[ "${ACTION}" == submit ]]; then
     [[ ! -e "${RUN_ROOT}" ]] || { echo "Run root already exists: ${RUN_ROOT}" >&2; exit 1; }
 fi
 NEMO_RL_COMMIT=$(git -C "${REPO_DIR}" rev-parse HEAD)
@@ -40,12 +58,12 @@ runtime_nemo_rl_commit=\$(git rev-parse HEAD)
 runtime_vllm_commit=\$(git -C ${CUSTOM_VLLM_ROOT} rev-parse HEAD)
 [[ "\${runtime_nemo_rl_commit}" == "${NEMO_RL_COMMIT}" ]]
 [[ "\${runtime_vllm_commit}" == "${EXPECTED_VLLM_COMMIT}" ]]
-export VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=${CACHE_ROOT}
+export VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=${STOCK_INPUT_CACHE_ROOT}
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export MXFP8_MOE_CUDA_GRAPH_REPLAY=required
 export MXFP8_MOE_NSYS_CAPTURE_TACTICS=${NSYS_CAPTURE_TACTICS}
-mkdir -p ${RUN_ROOT} ${CACHE_ROOT}
+mkdir -p ${SHMOO_OUTPUT_ROOT}
 printf 'cuda_graph_replay=required\\n'
 printf 'crash_rows_preserved=true\\n'
 printf 'nsys_capture_tactics=%s\\n' "\${MXFP8_MOE_NSYS_CAPTURE_TACTICS}"
@@ -55,7 +73,7 @@ nsys profile --trace=cuda,nvtx --force-overwrite=true --output ${RUN_ROOT}/nsys-
   --weights ${MOE_WEIGHTS} \\
   --warmups 3 \\
   --repetitions 10 \\
-  --output ${RUN_ROOT}/measurements.jsonl
+  --output ${SHMOO_OUTPUT_ROOT}/measurements.jsonl
 EOF
 )
 
@@ -78,6 +96,7 @@ fi
 
 printf 'action=%s\n' "${ACTION}"
 printf 'run_root=%s\n' "${RUN_ROOT}"
+printf 'stock_input_cache_root=%s\n' "${STOCK_INPUT_CACHE_ROOT}"
 printf 'CUDA Graph replay required\n'
 printf 'NSys captures selected winners plus stock\n'
 printf 'sbatch_args='; printf ' %q' "${SBATCH_ARGS[@]}"; printf '\n'
@@ -93,7 +112,7 @@ case "${ACTION}" in
         audit_write_manifest "${RUN_ROOT}" shmoo "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" \
             "${EXPECTED_VLLM_COMMIT}" "${CONTAINER}" \
             examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml \
-            "${MODEL_SNAPSHOT}" "${CACHE_ROOT}" "${SCRIPT_DIR}" \
+            "${MODEL_SNAPSHOT}" "${STOCK_INPUT_CACHE_ROOT}" "${SCRIPT_DIR}" \
             "${SCRIPT_DIR}/submit_shmoo_ptyche.sh" "${SCRIPT_DIR}/provenance.sh" \
             "${SCRIPT_DIR}/shmoo_moe_tactics.py" "${SELECTED_PROFILES}"
         CONTAINER=${CONTAINER} MOUNTS=/lustre:/lustre COMMAND="${COMMAND}" GPUS_PER_NODE=1 \
