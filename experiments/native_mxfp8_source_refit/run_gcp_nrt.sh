@@ -23,7 +23,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
       GEN_GPUS_PER_NODE=8
       ;;
     qwen06b)
-      TOTAL_NODES=1
+      TOTAL_NODES=2
       GEN_NODES=1
       GEN_GPUS_PER_NODE=4
       ;;
