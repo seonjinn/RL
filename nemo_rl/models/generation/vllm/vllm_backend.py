@@ -21,6 +21,7 @@ from typing import Any, Literal
 
 import torch
 import zmq
+from torch.distributed._tensor import Shard
 
 from nemo_rl.models.generation.vllm.checkpoint_engine import (
     VllmCheckpointEngineMixin,
@@ -861,6 +862,58 @@ class VllmInternalWorkerExtension:
 
             return LocalParamSpec(base=value_param.data, pre=pre, post=post)
 
+        def _component_dtype(component: dict[str, Any]) -> torch.dtype | None:
+            value = component.get("dtype")
+            if isinstance(value, torch.dtype):
+                return value
+            return _STR_TO_DTYPE.get(value) if isinstance(value, str) else None
+
+        def _local_component_shape(
+            param_info: dict[str, Any], component: dict[str, Any]
+        ) -> tuple[int, ...]:
+            shape = list(component["global_shape"])
+            placements = component["dst_placements"]
+            mesh_shape = tuple(param_info["dst_mesh_info"].mesh.shape)
+            if len(placements) != len(mesh_shape):
+                raise ValueError(
+                    f"build_hf_to_local_param_map: component {component['role']!r} "
+                    f"for {param_info['name']!r} has {len(placements)} destination "
+                    f"placements for a {len(mesh_shape)}-D mesh"
+                )
+            for mesh_dim, placement in enumerate(placements):
+                if not isinstance(placement, Shard):
+                    continue
+                shard_count = mesh_shape[mesh_dim]
+                if shape[placement.dim] % shard_count:
+                    raise ValueError(
+                        f"build_hf_to_local_param_map: component {component['role']!r} "
+                        f"for {param_info['name']!r} shape {tuple(shape)} is not "
+                        f"divisible by destination shard count {shard_count} on "
+                        f"dimension {placement.dim}"
+                    )
+                shape[placement.dim] //= shard_count
+            return tuple(shape)
+
+        def _checkpoint_scale_param(
+            hf_name: str, value_param: torch.Tensor
+        ) -> tuple[str, torch.Tensor]:
+            vllm_name = vllm_names_by_id.get(id(value_param))
+            if vllm_name is None:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: resolved vLLM target for "
+                    f"{hf_name!r} is not a registered model parameter"
+                )
+            scale_name = vllm_name + "_scale_from_checkpoint"
+            scale_param = vllm_params.get(scale_name)
+            if scale_param is None:
+                raise ValueError(
+                    f"build_hf_to_local_param_map: MXFP8 target {vllm_name!r} for "
+                    f"{hf_name!r} has no initialized checkpoint-scale parameter "
+                    f"{scale_name!r}; run the first MXFP8 post-load processing before "
+                    "preparing NCCL reshard refit"
+                )
+            return scale_name, scale_param
+
         # Get dict of vllm_param and merged_slice for each hf_name
         vllm_param_map_and_slices = self._build_hf_to_gen_backend_mapping(refit_info)
         param_info_by_name = {
@@ -870,28 +923,131 @@ class VllmInternalWorkerExtension:
         }
         vllm_params = dict(self.model_runner.model.named_parameters())
         vllm_names_by_id = {id(param): name for name, param in vllm_params.items()}
-        specs = {}
+        specs: dict[str | tuple[str, str], LocalParamSpec] = {}
         for hf_name, (vllm_param, merged_slice) in vllm_param_map_and_slices.items():
-            wire_dtype_value = param_info_by_name[hf_name].get("dtype")
+            param_info = param_info_by_name[hf_name]
+            wire_dtype_value = param_info.get("dtype")
             wire_dtype = (
                 wire_dtype_value
                 if isinstance(wire_dtype_value, torch.dtype)
                 else _STR_TO_DTYPE.get(wire_dtype_value)
             )
+            components = param_info.get("components")
+            weight_component = None
+            scale_component = None
+            if isinstance(components, list):
+                weight_component = next(
+                    (
+                        component
+                        for component in components
+                        if component.get("role") == "weight"
+                    ),
+                    None,
+                )
+                scale_component = next(
+                    (
+                        component
+                        for component in components
+                        if component.get("role") == "weight_scale"
+                    ),
+                    None,
+                )
+            native_mxfp8 = scale_component is not None or (
+                weight_component is not None
+                and _component_dtype(weight_component) == torch.float8_e4m3fn
+                and wire_dtype != torch.float8_e4m3fn
+            )
+            if native_mxfp8:
+                roles = [component.get("role") for component in components]
+                if roles != ["weight", "weight_scale"]:
+                    raise ValueError(
+                        f"build_hf_to_local_param_map: native MXFP8 source "
+                        f"{hf_name!r} requires ordered components "
+                        f"['weight', 'weight_scale'], got {roles}"
+                    )
+                assert weight_component is not None and scale_component is not None
+                weight_shape = tuple(weight_component["global_shape"])
+                logical_shape = tuple(param_info["global_shape"])
+                if weight_shape != logical_shape:
+                    raise ValueError(
+                        f"build_hf_to_local_param_map: native MXFP8 weight component "
+                        f"for {hf_name!r} has shape {weight_shape}, expected "
+                        f"{logical_shape}"
+                    )
+                if _component_dtype(weight_component) != torch.float8_e4m3fn:
+                    raise ValueError(
+                        f"build_hf_to_local_param_map: native MXFP8 weight component "
+                        f"for {hf_name!r} must use torch.float8_e4m3fn"
+                    )
+                if not weight_shape or weight_shape[-1] % 32:
+                    raise ValueError(
+                        f"build_hf_to_local_param_map: native MXFP8 weight component "
+                        f"for {hf_name!r} must have K divisible by 32, got "
+                        f"{weight_shape}"
+                    )
+                expected_scale_shape = (*weight_shape[:-1], weight_shape[-1] // 32)
+                scale_shape = tuple(scale_component["global_shape"])
+                if scale_shape != expected_scale_shape:
+                    raise ValueError(
+                        f"build_hf_to_local_param_map: native MXFP8 weight_scale "
+                        f"component for {hf_name!r} has shape {scale_shape}, expected "
+                        f"{expected_scale_shape}"
+                    )
+                if _component_dtype(scale_component) != torch.uint8:
+                    raise ValueError(
+                        f"build_hf_to_local_param_map: native MXFP8 weight_scale "
+                        f"component for {hf_name!r} must use torch.uint8"
+                    )
+                if vllm_param.dtype != torch.float8_e4m3fn:
+                    raise ValueError(
+                        f"build_hf_to_local_param_map: native MXFP8 value target for "
+                        f"{hf_name!r} has dtype {vllm_param.dtype}, expected "
+                        "torch.float8_e4m3fn"
+                    )
+                scale_name, scale_param = _checkpoint_scale_param(hf_name, vllm_param)
+                if scale_param.dtype != torch.uint8:
+                    raise ValueError(
+                        f"build_hf_to_local_param_map: MXFP8 scale target "
+                        f"{scale_name!r} has dtype {scale_param.dtype}, expected torch.uint8"
+                    )
+                value_region = (
+                    vllm_param if merged_slice is None else vllm_param[merged_slice]
+                )
+                scale_region = (
+                    scale_param if merged_slice is None else scale_param[merged_slice]
+                )
+                expected_local_value_shape = _local_component_shape(
+                    param_info, weight_component
+                )
+                expected_local_scale_shape = _local_component_shape(
+                    param_info, scale_component
+                )
+                if tuple(value_region.shape) != expected_local_value_shape:
+                    raise ValueError(
+                        f"build_hf_to_local_param_map: native MXFP8 value target for "
+                        f"{hf_name!r} has shape {tuple(value_region.shape)}, expected "
+                        f"{expected_local_value_shape}"
+                    )
+                if tuple(scale_region.shape) != expected_local_scale_shape:
+                    raise ValueError(
+                        f"build_hf_to_local_param_map: MXFP8 scale target "
+                        f"{scale_name!r} for {hf_name!r} has shape "
+                        f"{tuple(scale_region.shape)}, expected "
+                        f"{expected_local_scale_shape}"
+                    )
+                specs[(hf_name, "weight")] = (
+                    LocalParamSpec(base=vllm_param.data)
+                    if merged_slice is None
+                    else _merged_param_spec(vllm_param, merged_slice)
+                )
+                specs[(hf_name, "weight_scale")] = (
+                    LocalParamSpec(base=scale_param.data)
+                    if merged_slice is None
+                    else _merged_param_spec(scale_param, merged_slice)
+                )
+                continue
             if wire_dtype == torch.bfloat16 and vllm_param.dtype == torch.float8_e4m3fn:
-                vllm_name = vllm_names_by_id.get(id(vllm_param))
-                if vllm_name is None:
-                    raise ValueError(
-                        f"build_hf_to_local_param_map: resolved vLLM target for "
-                        f"{hf_name!r} is not a registered model parameter"
-                    )
-                scale_name = vllm_name + "_scale_from_checkpoint"
-                scale_param = vllm_params.get(scale_name)
-                if scale_param is None:
-                    raise ValueError(
-                        f"build_hf_to_local_param_map: MXFP8 target {vllm_name!r} "
-                        f"for {hf_name!r} has no scale parameter {scale_name!r}"
-                    )
+                scale_name, scale_param = _checkpoint_scale_param(hf_name, vllm_param)
                 value_region = (
                     vllm_param if merged_slice is None else vllm_param[merged_slice]
                 )
@@ -1089,12 +1245,18 @@ class VllmInternalWorkerExtension:
 
         from nemo_rl.weight_sync.xferdtensor import DTensorRef, xferdtensor
 
-        def _recv_one_param(param_info, group, stream):
+        def _recv_one_component(
+            param_info: dict[str, Any],
+            component_info: dict[str, Any],
+            group: Any,
+            stream: Any,
+        ) -> None:
             # Coverage guard: every bulk param must have a spec; a missing entry
             # would silently discard its weights.
-            spec = self.hf_to_local_param_map.get(param_info["name"])
+            role = component_info["role"]
+            spec = self.hf_to_local_param_map.get(param_info["name"], role=role)
             assert spec is not None, (
-                f"nccl_reshard_refit: {param_info['name']!r} has no spec in "
+                f"nccl_reshard_refit: {param_info['name']!r} has no {role!r} spec in "
                 "hf_to_local_param_map (would silently discard its weights)"
             )
             # spec.pre/post run on the caller's current stream (this stage's
@@ -1102,14 +1264,14 @@ class VllmInternalWorkerExtension:
             ctx = (
                 spec.pre(spec.base) if spec.pre is not None else RefitCtx(buf=spec.base)
             )
-            dst_tensor = DTensorRef(ctx.buf, param_info["global_shape"])
+            dst_tensor = DTensorRef(ctx.buf, component_info["global_shape"])
             xferdtensor(
                 None,
                 param_info["src_mesh_info"],
-                param_info["src_placements"],
+                component_info["src_placements"],
                 dst_tensor,
                 param_info["dst_mesh_info"],
-                param_info["dst_placements"],
+                component_info["dst_placements"],
                 group,
                 stream,
             )
@@ -1139,7 +1301,18 @@ class VllmInternalWorkerExtension:
             with torch.cuda.stream(stage_stream):
                 group = self.pp_comm_groups[stage]
                 for p in params:
-                    _recv_one_param(p, group, stage_stream)
+                    components = p.get("components")
+                    if components is None:
+                        components = [
+                            {
+                                "role": "weight",
+                                "global_shape": p["global_shape"],
+                                "src_placements": p["src_placements"],
+                                "dst_placements": p["dst_placements"],
+                            }
+                        ]
+                    for component in components:
+                        _recv_one_component(p, component, group, stage_stream)
                 ev = torch.cuda.Event()
                 ev.record()
                 events[idx] = ev

@@ -19,31 +19,131 @@ Covers the FFN-only bulk path in ``nemo_rl/models/generation/vllm/vllm_backend.p
 a synthetic ``refit_info`` and a fake ``named_parameters()`` (no real vLLM model,
 no GPU).
 
-``vllm_backend`` does ``import vllm`` at module top, so these are vllm-marked and
-skipped where vllm is unavailable.
+The receiver methods are loaded from ``vllm_backend`` with a focused AST harness
+so this module does not require a local vLLM installation.
 """
 
+import ast
+import re
+import sys
+from dataclasses import dataclass, field
+from contextlib import nullcontext
+from pathlib import Path
+from types import ModuleType
 from types import SimpleNamespace
+from typing import Any, Callable
 
 import pytest
 import torch
+from torch.distributed._tensor import Shard
 
-pytest.importorskip("vllm")  # module-top `import vllm` in vllm_backend
 
-from nemo_rl.models.generation.vllm.vllm_backend import (  # noqa: E402
-    VllmInternalWorkerExtension,
-)
-from nemo_rl.weight_sync.nccl_reshard_utils import (  # noqa: E402
-    HFToLocalParamMap,
-)
+@dataclass
+class RefitCtx:
+    buf: torch.Tensor
+    extra: dict[str, Any] = field(default_factory=dict)
 
-pytestmark = pytest.mark.vllm
+
+@dataclass
+class LocalParamSpec:
+    base: Any
+    pre: Callable[[Any], RefitCtx] | None = None
+    post: Callable[[RefitCtx], None] | None = None
+
+
+@dataclass
+class HFToLocalParamMap:
+    specs: dict[str | tuple[str, str], LocalParamSpec] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.specs = {
+            (key, "weight") if isinstance(key, str) else key: spec
+            for key, spec in self.specs.items()
+        }
+
+    def get(
+        self,
+        hf_name: str,
+        default: LocalParamSpec | None = None,
+        *,
+        role: str = "weight",
+    ) -> LocalParamSpec | None:
+        return self.specs.get((hf_name, role), default)
+
+
+_STR_TO_DTYPE = {
+    "torch.bfloat16": torch.bfloat16,
+    "bfloat16": torch.bfloat16,
+    "torch.float8_e4m3fn": torch.float8_e4m3fn,
+    "float8_e4m3fn": torch.float8_e4m3fn,
+    "torch.uint8": torch.uint8,
+    "uint8": torch.uint8,
+}
+_LAYER_RE = re.compile(r"^(?:(?P<prefix>.+)\.)?layers\.(?P<index>\d+)(?:\.|$)")
+
+
+def _extract_layer_prefix(param_name: str) -> str | None:
+    match = _LAYER_RE.match(param_name)
+    if match is None:
+        return None
+    return match.group("prefix") or ""
+
+
+def _load_vllm_extension_class() -> type:
+    source_path = (
+        Path(__file__).parents[4] / "nemo_rl/models/generation/vllm/vllm_backend.py"
+    )
+    tree = ast.parse(source_path.read_text())
+    source_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "VllmInternalWorkerExtension"
+    )
+    method_names = {
+        "build_hf_to_local_param_map",
+        "_build_hf_to_gen_backend_mapping",
+        "nccl_reshard_refit",
+    }
+    methods = [
+        node
+        for node in source_class.body
+        if isinstance(node, ast.FunctionDef) and node.name in method_names
+    ]
+    class_kwargs = {
+        "name": "VllmInternalWorkerExtension",
+        "bases": [],
+        "keywords": [],
+        "body": methods,
+        "decorator_list": [],
+    }
+    if "type_params" in ast.ClassDef._fields:
+        class_kwargs["type_params"] = []
+    test_module = ast.Module(
+        body=[ast.ClassDef(**class_kwargs)],
+        type_ignores=[],
+    )
+    ast.fix_missing_locations(test_module)
+    namespace = {
+        "Any": Any,
+        "_STR_TO_DTYPE": _STR_TO_DTYPE,
+        "HFToLocalParamMap": HFToLocalParamMap,
+        "LocalParamSpec": LocalParamSpec,
+        "RefitCtx": RefitCtx,
+        "Shard": Shard,
+        "_extract_layer_prefix": _extract_layer_prefix,
+        "torch": torch,
+    }
+    exec(compile(test_module, str(source_path), "exec"), namespace)
+    return namespace["VllmInternalWorkerExtension"]
+
+
+VllmInternalWorkerExtension = _load_vllm_extension_class()
 
 
 # --------------------------------------------------------------------------
 # _build_hf_to_gen_backend_mapping
 # --------------------------------------------------------------------------
-def _make_ext(vllm_params):
+def _make_ext(vllm_params: dict[str, torch.Tensor]) -> Any:
     """A VllmInternalWorkerExtension whose model exposes ``vllm_params``."""
     ext = VllmInternalWorkerExtension()  # no __init__
     # named_modules() is consulted to detect the FusedMoE backend (w13 layout);
@@ -57,7 +157,7 @@ def _make_ext(vllm_params):
     return ext
 
 
-def _param(*shape):
+def _param(*shape: int) -> torch.Tensor:
     return torch.empty(*shape)
 
 
@@ -358,10 +458,20 @@ def test_build_hf_to_local_param_map_quantizes_bf16_for_mxfp8(monkeypatch):
             ),
         )
 
-    monkeypatch.setattr(
-        "nemo_rl.models.generation.vllm.quantization.fp8.quantize_mxfp8_weight",
-        fake_quantize,
-    )
+    package_names = [
+        "nemo_rl",
+        "nemo_rl.models",
+        "nemo_rl.models.generation",
+        "nemo_rl.models.generation.vllm",
+        "nemo_rl.models.generation.vllm.quantization",
+    ]
+    for package_name in package_names:
+        package = ModuleType(package_name)
+        package.__path__ = []
+        monkeypatch.setitem(sys.modules, package_name, package)
+    fp8_module = ModuleType("nemo_rl.models.generation.vllm.quantization.fp8")
+    fp8_module.quantize_mxfp8_weight = fake_quantize
+    monkeypatch.setitem(sys.modules, fp8_module.__name__, fp8_module)
 
     pmap = ext.build_hf_to_local_param_map(refit_info)
 
@@ -439,3 +549,459 @@ def test_build_hf_to_local_param_map_rejects_invalid_mxfp8_scale_shape():
 
     with pytest.raises(ValueError, match="has shape"):
         ext.build_hf_to_local_param_map(refit_info)
+
+
+def test_native_mxfp8_binds_dense_and_nested_moe_value_scale_regions_at_tp2(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hidden, intermediate, experts = 64, 128, 2
+    tp_size = 2
+    mesh = SimpleNamespace(mesh=torch.arange(tp_size))
+
+    def components(shape: tuple[int, ...], shard_dim: int) -> list[dict[str, Any]]:
+        scale_shape = (*shape[:-1], shape[-1] // 32)
+        return [
+            {
+                "role": "weight",
+                "global_shape": shape,
+                "dtype": "torch.float8_e4m3fn",
+                "src_placements": [Shard(shard_dim)],
+                "dst_placements": [Shard(shard_dim)],
+            },
+            {
+                "role": "weight_scale",
+                "global_shape": scale_shape,
+                "dtype": "torch.uint8",
+                "src_placements": [Shard(shard_dim)],
+                "dst_placements": [Shard(shard_dim)],
+            },
+        ]
+
+    dense_prefix = "model.layers.0.mlp"
+    expert_prefix = f"{dense_prefix}.experts"
+    params = [
+        {
+            "name": f"{dense_prefix}.gate_proj.weight",
+            "global_shape": [intermediate, hidden],
+            "dtype": "torch.bfloat16",
+            "dst_mesh_info": mesh,
+            "components": components((intermediate, hidden), 0),
+        },
+        {
+            "name": f"{dense_prefix}.up_proj.weight",
+            "global_shape": [intermediate, hidden],
+            "dtype": "torch.bfloat16",
+            "dst_mesh_info": mesh,
+            "components": components((intermediate, hidden), 0),
+        },
+        {
+            "name": f"{dense_prefix}.down_proj.weight",
+            "global_shape": [hidden, intermediate],
+            "dtype": "torch.bfloat16",
+            "dst_mesh_info": mesh,
+            "components": components((hidden, intermediate), 1),
+        },
+        {
+            "name": f"{expert_prefix}.gate_proj.weight",
+            "global_shape": [experts, intermediate, hidden],
+            "dtype": "torch.bfloat16",
+            "dst_mesh_info": mesh,
+            "grouped_expert_proj": "gate_proj",
+            "components": components((experts, intermediate, hidden), 1),
+        },
+        {
+            "name": f"{expert_prefix}.up_proj.weight",
+            "global_shape": [experts, intermediate, hidden],
+            "dtype": "torch.bfloat16",
+            "dst_mesh_info": mesh,
+            "grouped_expert_proj": "up_proj",
+            "components": components((experts, intermediate, hidden), 1),
+        },
+        {
+            "name": f"{expert_prefix}.down_proj.weight",
+            "global_shape": [experts, hidden, intermediate],
+            "dtype": "torch.bfloat16",
+            "dst_mesh_info": mesh,
+            "grouped_expert_proj": "down_proj",
+            "components": components((experts, hidden, intermediate), 2),
+        },
+    ]
+    gate_up = torch.empty(intermediate, hidden, dtype=torch.float8_e4m3fn)
+    gate_up_scale = torch.empty(intermediate, hidden // 32, dtype=torch.uint8)
+    down = torch.empty(hidden, intermediate // tp_size, dtype=torch.float8_e4m3fn)
+    down_scale = torch.empty(hidden, intermediate // tp_size // 32, dtype=torch.uint8)
+    w13 = torch.empty(experts, intermediate, hidden, dtype=torch.float8_e4m3fn)
+    w13_scale = torch.empty(experts, intermediate, hidden // 32, dtype=torch.uint8)
+    w2 = torch.empty(
+        experts, hidden, intermediate // tp_size, dtype=torch.float8_e4m3fn
+    )
+    w2_scale = torch.empty(
+        experts, hidden, intermediate // tp_size // 32, dtype=torch.uint8
+    )
+    ext = _make_ext(
+        {
+            f"{dense_prefix}.gate_up_proj.weight": gate_up,
+            f"{dense_prefix}.gate_up_proj.weight_scale_from_checkpoint": gate_up_scale,
+            f"{dense_prefix}.down_proj.weight": down,
+            f"{dense_prefix}.down_proj.weight_scale_from_checkpoint": down_scale,
+            f"{expert_prefix}.routed_experts.w13_weight": w13,
+            f"{expert_prefix}.routed_experts.w13_weight_scale_from_checkpoint": w13_scale,
+            f"{expert_prefix}.routed_experts.w2_weight": w2,
+            f"{expert_prefix}.routed_experts.w2_weight_scale_from_checkpoint": w2_scale,
+        }
+    )
+
+    mapping = ext.build_hf_to_local_param_map(
+        {
+            "gen_tp_size": tp_size,
+            "layer_names": ["model.layers.0"],
+            "per_layer_params": {"model.layers.0": params},
+        }
+    )
+
+    quantize_calls: list[torch.Tensor] = []
+
+    def fail_if_quantized(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        quantize_calls.append(weight)
+        return (
+            torch.empty_like(weight, dtype=torch.float8_e4m3fn),
+            torch.empty(
+                (*weight.shape[:-1], weight.shape[-1] // 32), dtype=torch.uint8
+            ),
+        )
+
+    package_names = [
+        "nemo_rl",
+        "nemo_rl.models",
+        "nemo_rl.models.generation",
+        "nemo_rl.models.generation.vllm",
+        "nemo_rl.models.generation.vllm.quantization",
+    ]
+    for package_name in package_names:
+        package = ModuleType(package_name)
+        package.__path__ = []
+        monkeypatch.setitem(sys.modules, package_name, package)
+    fp8_module = ModuleType("nemo_rl.models.generation.vllm.quantization.fp8")
+    fp8_module.quantize_mxfp8_weight = fail_if_quantized
+    monkeypatch.setitem(sys.modules, fp8_module.__name__, fp8_module)
+
+    targets = {
+        f"{dense_prefix}.gate_proj.weight": (gate_up, gate_up_scale, (64, 64), (64, 2)),
+        f"{dense_prefix}.up_proj.weight": (gate_up, gate_up_scale, (64, 64), (64, 2)),
+        f"{dense_prefix}.down_proj.weight": (down, down_scale, (64, 64), (64, 2)),
+        f"{expert_prefix}.gate_proj.weight": (
+            w13,
+            w13_scale,
+            (2, 64, 64),
+            (2, 64, 2),
+        ),
+        f"{expert_prefix}.up_proj.weight": (
+            w13,
+            w13_scale,
+            (2, 64, 64),
+            (2, 64, 2),
+        ),
+        f"{expert_prefix}.down_proj.weight": (
+            w2,
+            w2_scale,
+            (2, 64, 64),
+            (2, 64, 2),
+        ),
+    }
+    for name, (value, scale, value_shape, scale_shape) in targets.items():
+        value_spec = mapping.get(name, role="weight")
+        scale_spec = mapping.get(name, role="weight_scale")
+        assert value_spec is not None
+        assert scale_spec is not None
+        assert value_spec.base.data_ptr() == value.data_ptr()
+        assert scale_spec.base.data_ptr() == scale.data_ptr()
+        value_ctx = (
+            value_spec.pre(value_spec.base)
+            if value_spec.pre is not None
+            else RefitCtx(buf=value_spec.base)
+        )
+        scale_ctx = (
+            scale_spec.pre(scale_spec.base)
+            if scale_spec.pre is not None
+            else RefitCtx(buf=scale_spec.base)
+        )
+        assert tuple(value_ctx.buf.shape) == value_shape
+        assert tuple(scale_ctx.buf.shape) == scale_shape
+        assert value_ctx.buf.dtype == torch.float8_e4m3fn
+        assert scale_ctx.buf.dtype == torch.uint8
+        if value_spec.post is not None:
+            value_spec.post(value_ctx)
+        if scale_spec.post is not None:
+            scale_spec.post(scale_ctx)
+    assert quantize_calls == []
+
+
+def _single_native_down_refit_info(
+    components: list[dict[str, Any]],
+) -> dict[str, Any]:
+    name = "model.layers.0.mlp.down_proj.weight"
+    return {
+        "gen_tp_size": 1,
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": name,
+                    "global_shape": [64, 64],
+                    "dtype": "torch.bfloat16",
+                    "dst_mesh_info": SimpleNamespace(mesh=torch.arange(1)),
+                    "components": components,
+                }
+            ]
+        },
+    }
+
+
+def _native_down_components() -> list[dict[str, Any]]:
+    return [
+        {
+            "role": "weight",
+            "global_shape": (64, 64),
+            "dtype": "torch.float8_e4m3fn",
+            "src_placements": [Shard(1)],
+            "dst_placements": [Shard(1)],
+        },
+        {
+            "role": "weight_scale",
+            "global_shape": (64, 2),
+            "dtype": "torch.uint8",
+            "src_placements": [Shard(1)],
+            "dst_placements": [Shard(1)],
+        },
+    ]
+
+
+def test_native_mxfp8_rejects_incomplete_value_scale_pair() -> None:
+    name = "model.layers.0.mlp.down_proj.weight"
+    value = torch.empty(64, 64, dtype=torch.float8_e4m3fn)
+    scale = torch.empty(64, 2, dtype=torch.uint8)
+    refit_info = _single_native_down_refit_info(_native_down_components()[:1])
+    ext = _make_ext(
+        {
+            name: value,
+            f"{name}_scale_from_checkpoint": scale,
+        }
+    )
+
+    with pytest.raises(ValueError, match="requires ordered components"):
+        ext.build_hf_to_local_param_map(refit_info)
+
+
+@pytest.mark.parametrize(
+    ("scale_shape", "scale_dtype", "error"),
+    [
+        ((64, 3), "torch.uint8", "has shape"),
+        ((64, 2), "torch.bfloat16", "must use torch.uint8"),
+    ],
+)
+def test_native_mxfp8_rejects_wrong_scale_component_layout(
+    scale_shape: tuple[int, ...],
+    scale_dtype: str,
+    error: str,
+) -> None:
+    name = "model.layers.0.mlp.down_proj.weight"
+    components = _native_down_components()
+    components[1]["global_shape"] = scale_shape
+    components[1]["dtype"] = scale_dtype
+    ext = _make_ext(
+        {
+            name: torch.empty(64, 64, dtype=torch.float8_e4m3fn),
+            f"{name}_scale_from_checkpoint": torch.empty(64, 2, dtype=torch.uint8),
+        }
+    )
+
+    with pytest.raises(ValueError, match=error):
+        ext.build_hf_to_local_param_map(_single_native_down_refit_info(components))
+
+
+@pytest.mark.parametrize(
+    ("target_shape", "target_dtype", "error"),
+    [
+        ((64, 1), torch.uint8, "has shape"),
+        ((64, 2), torch.bfloat16, "has dtype"),
+    ],
+)
+def test_native_mxfp8_rejects_wrong_checkpoint_scale_target_layout(
+    target_shape: tuple[int, ...],
+    target_dtype: torch.dtype,
+    error: str,
+) -> None:
+    name = "model.layers.0.mlp.down_proj.weight"
+    ext = _make_ext(
+        {
+            name: torch.empty(64, 64, dtype=torch.float8_e4m3fn),
+            f"{name}_scale_from_checkpoint": torch.empty(
+                *target_shape, dtype=target_dtype
+            ),
+        }
+    )
+
+    with pytest.raises(ValueError, match=error):
+        ext.build_hf_to_local_param_map(
+            _single_native_down_refit_info(_native_down_components())
+        )
+
+
+@pytest.mark.parametrize(
+    ("target_shape", "target_dtype", "error"),
+    [
+        ((64, 32), torch.float8_e4m3fn, "has shape"),
+        ((64, 64), torch.bfloat16, "has dtype"),
+    ],
+)
+def test_native_mxfp8_rejects_wrong_value_target_layout(
+    target_shape: tuple[int, ...],
+    target_dtype: torch.dtype,
+    error: str,
+) -> None:
+    name = "model.layers.0.mlp.down_proj.weight"
+    ext = _make_ext(
+        {
+            name: torch.empty(*target_shape, dtype=target_dtype),
+            f"{name}_scale_from_checkpoint": torch.empty(64, 2, dtype=torch.uint8),
+        }
+    )
+
+    with pytest.raises(ValueError, match=error):
+        ext.build_hf_to_local_param_map(
+            _single_native_down_refit_info(_native_down_components())
+        )
+
+
+def test_native_mxfp8_requires_first_post_load_checkpoint_scale() -> None:
+    name = "model.layers.0.mlp.down_proj.weight"
+    ext = _make_ext({name: torch.empty(64, 64, dtype=torch.float8_e4m3fn)})
+
+    with pytest.raises(ValueError, match="first MXFP8 post-load processing"):
+        ext.build_hf_to_local_param_map(
+            _single_native_down_refit_info(_native_down_components())
+        )
+
+
+def test_native_mxfp8_receive_loop_uses_component_metadata_and_finalizes_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    name = "model.layers.0.mlp.down_proj.weight"
+    value = torch.empty(64, 64, dtype=torch.float8_e4m3fn)
+    scale = torch.empty(64, 2, dtype=torch.uint8)
+    ext = _make_ext({})
+    ext.hf_to_local_param_map = HFToLocalParamMap(
+        specs={
+            (name, "weight"): LocalParamSpec(base=value),
+            (name, "weight_scale"): LocalParamSpec(base=scale),
+        }
+    )
+    ext.nccl_reshard_refit_info = {
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "name": name,
+                    "global_shape": (64, 128),
+                    "src_mesh_info": "src-mesh",
+                    "src_placements": ["parent-src"],
+                    "dst_mesh_info": "dst-mesh",
+                    "dst_placements": ["parent-dst"],
+                    "components": [
+                        {
+                            "role": "weight",
+                            "global_shape": (64, 128),
+                            "src_placements": ["weight-src"],
+                            "dst_placements": ["weight-dst"],
+                        },
+                        {
+                            "role": "weight_scale",
+                            "global_shape": (64, 4),
+                            "src_placements": ["scale-src"],
+                            "dst_placements": ["scale-dst"],
+                        },
+                    ],
+                }
+            ]
+        },
+    }
+    ext.pp_comm_groups = {0: "group"}
+    ext.model_runner.vllm_config = "vllm-config"
+    ext.model_config = "model-config"
+    ext.device = "cpu"
+    ext._receive_and_load_misc_params = lambda: None
+    ext._maybe_process_fp8_kv_cache = lambda: None
+
+    transfers = []
+    finalizer_calls = []
+
+    class FakeDTensorRef:
+        def __init__(self, local_tensor: torch.Tensor, global_shape: Any) -> None:
+            self._local_tensor = local_tensor
+            self.shape = tuple(global_shape)
+
+    def fake_xferdtensor(
+        _src_tensor: Any,
+        _src_mesh: Any,
+        src_placements: Any,
+        dst_tensor: FakeDTensorRef,
+        _dst_mesh: Any,
+        dst_placements: Any,
+        _group: Any,
+        _stream: Any,
+    ) -> None:
+        transfers.append(
+            (
+                dst_tensor._local_tensor.data_ptr(),
+                dst_tensor.shape,
+                src_placements,
+                dst_placements,
+            )
+        )
+
+    xfer_module = ModuleType("nemo_rl.weight_sync.xferdtensor")
+    xfer_module.DTensorRef = FakeDTensorRef
+    xfer_module.xferdtensor = fake_xferdtensor
+    config_module = ModuleType("vllm.config")
+    config_module.set_current_vllm_config = lambda _config: nullcontext()
+    loader_module = ModuleType("vllm.model_executor.model_loader.utils")
+    loader_module.process_weights_after_loading = lambda *args: finalizer_calls.append(
+        args
+    )
+    monkeypatch.setitem(sys.modules, "nemo_rl", ModuleType("nemo_rl"))
+    monkeypatch.setitem(
+        sys.modules, "nemo_rl.weight_sync", ModuleType("nemo_rl.weight_sync")
+    )
+    monkeypatch.setitem(sys.modules, xfer_module.__name__, xfer_module)
+    monkeypatch.setitem(sys.modules, "vllm", ModuleType("vllm"))
+    monkeypatch.setitem(sys.modules, config_module.__name__, config_module)
+    monkeypatch.setitem(
+        sys.modules, "vllm.model_executor", ModuleType("vllm.model_executor")
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "vllm.model_executor.model_loader",
+        ModuleType("vllm.model_executor.model_loader"),
+    )
+    monkeypatch.setitem(sys.modules, loader_module.__name__, loader_module)
+
+    class FakeEvent:
+        def record(self) -> None:
+            return None
+
+        def synchronize(self) -> None:
+            return None
+
+    monkeypatch.setattr(torch.cuda, "Stream", lambda: object())
+    monkeypatch.setattr(torch.cuda, "stream", lambda _stream: nullcontext())
+    monkeypatch.setattr(torch.cuda, "Event", FakeEvent)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(torch.distributed, "get_rank", lambda: 1)
+
+    assert ext.nccl_reshard_refit() is True
+    assert transfers == [
+        (value.data_ptr(), (64, 128), ["weight-src"], ["weight-dst"]),
+        (scale.data_ptr(), (64, 4), ["scale-src"], ["scale-dst"]),
+    ]
+    assert len(finalizer_calls) == 1
