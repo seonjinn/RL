@@ -23,7 +23,14 @@ def test_provenance_json_defines_launcher_contract() -> None:
     assert contract["schema_version"] == 1
     assert contract["vllm_commit"] == "a76062edee3a3ac23d47a93c7ce466f06a19111f"
     assert contract["flashinfer_version"] == "0.6.13"
+    assert contract["model"] == "Qwen3-30B-A3B"
     assert contract["target"] == {"cluster": "Ptyche", "gpu": "GB200"}
+    assert contract["topology_recipe"] == {
+        "cluster": "Ptyche",
+        "gpu": "GB200",
+        "nodes": 4,
+        "recipe": "current NeMo-RL MXFP8 performance recipe",
+    }
     assert contract["privacy_forbidden_payloads"] == [
         "prompts",
         "token IDs",
@@ -38,9 +45,26 @@ def test_provenance_json_defines_launcher_contract() -> None:
     assert contract["minimum_weighted_median_improvement"] == 0.02
     assert contract["maximum_coefficient_variation"] == 0.03
     assert contract["maximum_high_weight_profile_regression"] == 0.01
+    assert contract["execution_modes"] == {
+        "trace_collection": "eager only",
+        "shmoo_replay": "CUDA Graphs required",
+        "vllm_validation": "CUDA Graphs required",
+        "nemorl_performance": "CUDA Graphs required",
+    }
+    assert contract["profile_scope"] == {
+        "tactic_pairs": "every legal FC1/FC2 tactic pair",
+        "inputs": "cold-L2 inputs",
+    }
     assert contract["cuda_graphs_required"] is True
     assert contract["exact_miss_fallback"] == "stock FlashInfer behavior; cache misses are not errors"
     assert contract["matched_gsm8k_examples"] == 1319
+    assert contract["validation_gates"] == [
+        "micro-correctness",
+        "CUDA Graph replay",
+        "deterministic vLLM generation",
+        "matched GSM8K",
+        "NeMo-RL finite metrics",
+    ]
     assert contract["pipeline_entry_points"] == [
         "submit_trace_ptyche.sh",
         "select_profiles.py",
