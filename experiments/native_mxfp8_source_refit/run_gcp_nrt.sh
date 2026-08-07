@@ -25,7 +25,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     qwen06b)
       TOTAL_NODES=2
       GEN_NODES=1
-      GEN_GPUS_PER_NODE=4
+      GEN_GPUS_PER_NODE=8
       ;;
     *) echo "PROFILE must be qwen30b or qwen06b" >&2; exit 2 ;;
   esac
