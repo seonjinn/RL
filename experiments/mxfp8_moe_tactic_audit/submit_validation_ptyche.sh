@@ -166,7 +166,7 @@ ${POST_RUN}
 EOF
 )
 
-SBATCH_ARGS=(--nodes=4 --exclusive --constraint=GB200 --account="${ACCOUNT}" --partition="${PARTITION}" --segment=4 --time=05:00:00 --job-name="mx-moe-${ARM}-${MAX_STEPS}s-${RUN_ID}" --output="${RUN_ROOT}/slurm-%j.out")
+SBATCH_ARGS=(--nodes=4 --exclusive --account="${ACCOUNT}" --partition="${PARTITION}" --segment=4 --time=05:00:00 --job-name="coreai_dlalgo_llm-mxmoe.${ARM}-${MAX_STEPS}s-${RUN_ID}" --output="${RUN_ROOT}/slurm-%j.out")
 [[ -z "${QOS}" ]] || SBATCH_ARGS+=(--qos="${QOS}")
 printf 'action=%s\narm=%s\nrun_root=%s\ncache_root=%s\n' "${ACTION}" "${ARM}" "${RUN_ROOT}" "${CACHE_ROOT}"
 printf 'sbatch_args='; printf ' %q' "${SBATCH_ARGS[@]}"; printf '\n%s\n' "${COMMAND}"

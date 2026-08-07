@@ -92,11 +92,10 @@ SBATCH_ARGS=(
     --gpus=1
     --gpus-per-task=1
     --exclusive
-    --constraint=GB200
     --account="${ACCOUNT}"
     --partition="${PARTITION}"
     --time=05:00:00
-    --job-name="mx-moe-shmoo-${RUN_ID}"
+    --job-name="coreai_dlalgo_llm-mxmoe.shmoo-${RUN_ID}"
     --output="${RUN_ROOT}/slurm-%j.out"
 )
 if [[ -n "${QOS}" ]]; then

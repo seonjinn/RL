@@ -145,12 +145,11 @@ EOF
 SBATCH_ARGS=(
     --nodes=4
     --exclusive
-    --constraint=GB200
     --account="${ACCOUNT}"
     --partition="${PARTITION}"
     --segment=4
     --time="${WALLTIME}"
-    --job-name="mx-moe-trace-${RUN_ID}"
+    --job-name="coreai_dlalgo_llm-mxmoe.trace-${RUN_ID}"
     --output="${RUN_ROOT}/slurm-%j.out"
 )
 if [[ -n "${QOS}" ]]; then

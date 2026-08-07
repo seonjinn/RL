@@ -56,7 +56,8 @@ def test_trace_dry_run_is_eager_and_metadata_only(tmp_path: Path) -> None:
     assert "VLLM_MXFP8_MOE_TRACE_DIR=" in output
     assert "trace_is_metadata_only=true" in output
     assert "logger.wandb_enabled=false" in output
-    assert "--constraint=GB200" in output
+    assert "--constraint=GB200" not in output
+    assert "--job-name=coreai_dlalgo_llm-mxmoe.trace-" in output
     assert "--segment=4" in output
     assert "VLLM_MXFP8_AUDIT_SOURCE_ROOT=" in output
     assert "sitecustomize.py" in output
@@ -76,7 +77,8 @@ def test_shmoo_dry_run_requests_one_gb200_for_five_hours(tmp_path: Path) -> None
     assert "--nodes=1" in output
     assert "--ntasks=1" in output
     assert "--time=05:00:00" in output
-    assert "--constraint=GB200" in output
+    assert "--constraint=GB200" not in output
+    assert "--job-name=coreai_dlalgo_llm-mxmoe.shmoo-" in output
     assert "--warmups 3" in output
     assert "--repetitions 10" in output
     assert "CUDA Graph" in output
@@ -210,7 +212,8 @@ def test_validation_dry_runs_keep_stock_and_candidate_isolated(tmp_path: Path) -
     assert "grpo.max_num_steps=8" in candidate_output
     assert "--dependency" not in stock_output
     assert "--dependency" not in candidate_output
-    assert "--constraint=GB200" in candidate_output
+    assert "--constraint=GB200" not in candidate_output
+    assert "--job-name=coreai_dlalgo_llm-mxmoe.candidate-" in candidate_output
     assert "--segment=4" in candidate_output
     assert "MXFP8_MOE_CUDA_GRAPH_REPLAY=required" in candidate_output
     assert "vllm serve" in candidate_output
@@ -699,7 +702,7 @@ def test_validation_submit_pulls_preflights_and_then_calls_fake_sbatch(
     manifest = json.loads(manifest_path.read_text(encoding="ascii"))
     assert manifest["model_snapshot_sha256"] != "dry-run-not-validated"
     assert manifest["cache_sha256"] != "dry-run-not-validated"
-    assert "--constraint=GB200" in result.stdout
+    assert "--constraint=GB200" not in result.stdout
     assert "--segment=4" in result.stdout
 
 
