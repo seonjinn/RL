@@ -17,7 +17,10 @@ import torch.nn.functional as functional  # pyright: ignore[reportMissingImports
 
 try:
     from .flashinfer_adapter import (
+        IntermediateApiUnavailable,
         MoeKernelCase,
+        MoePairResult,
+        TacticDispatchError,
         assert_supported_flashinfer,
         build_kernel_case,
         cache_key_for_case,
@@ -29,7 +32,10 @@ try:
     from .schema import ReplayProfile, TacticMeasurement, TacticPair
 except ImportError:  # pragma: no cover - direct script execution
     from flashinfer_adapter import (
+        IntermediateApiUnavailable,
         MoeKernelCase,
+        MoePairResult,
+        TacticDispatchError,
         assert_supported_flashinfer,
         build_kernel_case,
         cache_key_for_case,
@@ -39,10 +45,6 @@ except ImportError:  # pragma: no cover - direct script execution
         run_moe_pair,
     )
     from schema import ReplayProfile, TacticMeasurement, TacticPair
-
-
-class IntermediateApiUnavailable(RuntimeError):
-    """Raised when FlashInfer cannot expose the activated FC1 intermediate."""
 
 
 @dataclass(frozen=True)
@@ -126,22 +128,18 @@ def reconstruct_topk(
     return packed_topk, topk_weights
 
 
-def _activated_intermediate(
-    outputs: tuple[torch.Tensor, ...], case: MoeKernelCase
-) -> torch.Tensor:
-    signature = case.profile.signature
-    expected_elements = (
-        signature.num_tokens * signature.top_k * signature.intermediate_size
-    )
-    if (
-        len(outputs) != 4
-        or outputs[-1].dtype != torch.bfloat16
-        or outputs[-1].numel() != expected_elements
-    ):
-        raise IntermediateApiUnavailable("unexpected FlashInfer intermediate return")
-    return outputs[-1].reshape(
-        signature.num_tokens, signature.top_k, signature.intermediate_size
-    )
+def _final_output(result: MoePairResult) -> torch.Tensor:
+    if result.final_output is None:
+        raise RuntimeError("adapter returned no final FC2 output")
+    return result.final_output
+
+
+def _intermediate_output(result: MoePairResult) -> torch.Tensor:
+    if result.activated_intermediate is None:
+        raise IntermediateApiUnavailable(
+            "adapter returned no activated FC1 intermediate"
+        )
+    return result.activated_intermediate
 
 
 def _tensor_cosine(left: torch.Tensor, right: torch.Tensor) -> float:
@@ -201,56 +199,65 @@ def _profile_tactic_cuda(
     )
 
     with force_stock_tactic(final_key):
-        stock_final = run_moe_pair(
-            case, packed_topk, do_finalize=True, gemm1_lora_delta=None
-        )[0].clone()
-    with force_stock_tactic(intermediate_key):
-        stock_intermediate = _activated_intermediate(
-            run_moe_pair(
-                case,
-                packed_topk,
-                do_finalize=False,
-                gemm1_lora_delta=zero_delta,
-            ),
-            case,
+        stock_final = _final_output(
+            run_moe_pair(case, packed_topk, do_finalize=True, gemm1_lora_delta=None)
         ).clone()
+    try:
+        with force_stock_tactic(intermediate_key):
+            stock_intermediate = _intermediate_output(
+                run_moe_pair(
+                    case,
+                    packed_topk,
+                    do_finalize=False,
+                    gemm1_lora_delta=zero_delta,
+                )
+            ).clone()
+    except TacticDispatchError:
+        raise
+    except Exception as error:
+        raise IntermediateApiUnavailable(
+            "FlashInfer stock intermediate preflight is unavailable"
+        ) from error
+
+    if not bool(torch.isfinite(stock_final).all().item()):
+        raise RuntimeError("stock FC2 output reference is not finite")
+    if not bool(torch.isfinite(stock_intermediate).all().item()):
+        raise RuntimeError("stock FC1 intermediate reference is not finite")
 
     with force_tactic(intermediate_key, tactic):
-        candidate_intermediate = _activated_intermediate(
+        candidate_intermediate = _intermediate_output(
             run_moe_pair(
                 case,
                 packed_topk,
                 do_finalize=False,
                 gemm1_lora_delta=zero_delta,
-            ),
-            case,
+            )
         ).clone()
-        repeated_intermediate = _activated_intermediate(
+        repeated_intermediate = _intermediate_output(
             run_moe_pair(
                 case,
                 packed_topk,
                 do_finalize=False,
                 gemm1_lora_delta=zero_delta,
-            ),
-            case,
+            )
         ).clone()
 
     timings_us: list[float] = []
     replay_outputs: list[torch.Tensor] = []
     with force_tactic(final_key, tactic):
-        candidate_final = run_moe_pair(
-            case, packed_topk, do_finalize=True, gemm1_lora_delta=None
-        )[0].clone()
+        candidate_final = _final_output(
+            run_moe_pair(case, packed_topk, do_finalize=True, gemm1_lora_delta=None)
+        ).clone()
         for _ in range(warmups):
             run_moe_pair(case, packed_topk, do_finalize=True, gemm1_lora_delta=None)
         torch.cuda.synchronize(case.hidden_states.device)
 
         graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(graph):
-            captured_outputs = run_moe_pair(
+            captured_result = run_moe_pair(
                 case, packed_topk, do_finalize=True, gemm1_lora_delta=None
             )
-        graph_output = captured_outputs[0]
+        graph_output = _final_output(captured_result)
         cold_l2 = torch.empty(
             _l2_size_bytes(case.hidden_states.device) + 4 * 1024 * 1024,
             dtype=torch.uint8,
@@ -331,8 +338,8 @@ def profile_tactic(
     repetitions: int = 10,
 ) -> TacticMeasurement:
     """Profile and qualify one paired FC1/FC2 tactic without leaking failures."""
-    if warmups < 3:
-        raise ValueError("warmups must be at least 3")
+    if warmups != 3:
+        raise ValueError("warmups must equal 3")
     if repetitions < 10:
         raise ValueError("repetitions must be at least 10")
     try:
@@ -388,6 +395,9 @@ def _load_profiles(path: Path) -> tuple[ReplayProfile, ...]:
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profiles", type=Path, required=True)
+    weight_source = parser.add_mutually_exclusive_group(required=True)
+    weight_source.add_argument("--weights", type=Path)
+    weight_source.add_argument("--synthetic-smoke", action="store_true")
     parser.add_argument("--profile-limit", type=int)
     parser.add_argument("--tactic-limit", type=int)
     parser.add_argument("--warmups", type=int, default=3)
@@ -400,8 +410,8 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the shmoo and append one JSONL row for every paired tactic."""
     args = _parse_args(argv)
-    if args.warmups < 3:
-        raise SystemExit("warmups must be at least 3")
+    if args.warmups != 3:
+        raise SystemExit("warmups must equal 3")
     if args.repetitions < 10:
         raise SystemExit("repetitions must be at least 10")
     if args.profile_limit is not None and args.profile_limit <= 0:
@@ -416,7 +426,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", encoding="ascii") as output_file:
         for replay_profile in profiles:
-            case = build_kernel_case(replay_profile, device)
+            case = build_kernel_case(
+                replay_profile,
+                device,
+                weights_path=args.weights,
+                synthetic_smoke=args.synthetic_smoke,
+            )
             tactics = enumerate_valid_tactics(case)
             if args.tactic_limit is not None:
                 tactics = tactics[: args.tactic_limit]

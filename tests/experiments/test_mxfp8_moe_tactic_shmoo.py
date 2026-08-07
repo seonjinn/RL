@@ -6,7 +6,12 @@ from typing import cast
 import pytest
 import torch
 
-from experiments.mxfp8_moe_tactic_audit.flashinfer_adapter import MoeKernelCase
+from experiments.mxfp8_moe_tactic_audit.flashinfer_adapter import (
+    PREPACKED_ARTIFACT_FORMAT,
+    IntermediateApiUnavailable,
+    MoeKernelCase,
+    MoePairResult,
+)
 from experiments.mxfp8_moe_tactic_audit.schema import (
     ReplayProfile,
     RoutingSignature,
@@ -14,7 +19,6 @@ from experiments.mxfp8_moe_tactic_audit.schema import (
     TacticPair,
 )
 from experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics import (
-    IntermediateApiUnavailable,
     _profile_tactic_cuda,
     main,
     profile_tactic,
@@ -106,12 +110,17 @@ def _case(profile: ReplayProfile | None = None) -> MoeKernelCase:
         activation_type=3,
         routing_method_type=4,
         local_expert_offset=0,
+        weight_layout="MajorK",
+        use_shuffled_weight=True,
+        prepacked_weight_format=PREPACKED_ARTIFACT_FORMAT,
     )
 
 
-def test_profile_tactic_requires_three_warmups_and_ten_repetitions() -> None:
-    with pytest.raises(ValueError, match="warmups must be at least 3"):
+def test_profile_tactic_requires_exactly_three_warmups_and_ten_repetitions() -> None:
+    with pytest.raises(ValueError, match="warmups must equal 3"):
         profile_tactic(_case(), TacticPair(1, 2), warmups=2, repetitions=10)
+    with pytest.raises(ValueError, match="warmups must equal 3"):
+        profile_tactic(_case(), TacticPair(1, 2), warmups=4, repetitions=10)
     with pytest.raises(ValueError, match="repetitions must be at least 10"):
         profile_tactic(_case(), TacticPair(1, 2), warmups=3, repetitions=9)
 
@@ -195,13 +204,13 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
         *,
         do_finalize: bool,
         gemm1_lora_delta: torch.Tensor | None,
-    ) -> tuple[torch.Tensor, ...]:
+    ) -> MoePairResult:
         run_modes.append(do_finalize)
         if do_finalize:
             assert gemm1_lora_delta is None
-            return (_case.output,)
+            return MoePairResult(final_output=_case.output, activated_intermediate=None)
         assert gemm1_lora_delta is not None
-        return (torch.empty(0), torch.empty(0), torch.empty(0), intermediate)
+        return MoePairResult(final_output=None, activated_intermediate=intermediate)
 
     monkeypatch.setattr(
         "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.run_moe_pair",
@@ -274,6 +283,145 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
     assert result.finite and result.deterministic
 
 
+def test_stock_intermediate_invocation_failure_is_normalized_before_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _case()
+    object.__setattr__(
+        case,
+        "hidden_states",
+        type("CudaTensor", (), {"device": torch.device("cuda"), "shape": (2, 2048)})(),
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.reconstruct_topk",
+        lambda _profile, _device: (
+            torch.zeros((2, 2), dtype=torch.int32),
+            torch.full((2, 2), 0.5, dtype=torch.bfloat16),
+        ),
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.cache_key_for_case",
+        lambda _case, *, has_gemm1_lora_delta: (
+            "intermediate" if has_gemm1_lora_delta else "final"
+        ),
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.force_stock_tactic",
+        lambda _key: nullcontext(),
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.force_tactic",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("candidate forced")),
+    )
+    original_zeros = torch.zeros
+
+    def cpu_zeros(*args: object, **kwargs: object) -> torch.Tensor:
+        kwargs["device"] = "cpu"
+        return original_zeros(*args, **kwargs)
+
+    monkeypatch.setattr(torch, "zeros", cpu_zeros)
+
+    def fake_run(
+        _case: MoeKernelCase,
+        _packed: torch.Tensor,
+        *,
+        do_finalize: bool,
+        gemm1_lora_delta: torch.Tensor | None,
+    ) -> MoePairResult:
+        if do_finalize:
+            return MoePairResult(final_output=_case.output, activated_intermediate=None)
+        raise TypeError("zero-LoRA contract unavailable")
+
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.run_moe_pair",
+        fake_run,
+    )
+
+    with pytest.raises(IntermediateApiUnavailable):
+        _profile_tactic_cuda(case, tactic=TacticPair(1, 2), warmups=3, repetitions=10)
+
+
+@pytest.mark.parametrize("bad_reference", ["final", "intermediate"])
+def test_nonfinite_stock_reference_fails_before_candidate_profiling(
+    bad_reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case = _case()
+    object.__setattr__(
+        case,
+        "hidden_states",
+        type("CudaTensor", (), {"device": torch.device("cuda"), "shape": (2, 2048)})(),
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.reconstruct_topk",
+        lambda _profile, _device: (
+            torch.zeros((2, 2), dtype=torch.int32),
+            torch.full((2, 2), 0.5, dtype=torch.bfloat16),
+        ),
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.cache_key_for_case",
+        lambda _case, *, has_gemm1_lora_delta: (
+            "intermediate" if has_gemm1_lora_delta else "final"
+        ),
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.force_stock_tactic",
+        lambda _key: nullcontext(),
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.force_tactic",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("candidate forced")),
+    )
+    original_zeros = torch.zeros
+
+    def cpu_zeros(*args: object, **kwargs: object) -> torch.Tensor:
+        kwargs["device"] = "cpu"
+        return original_zeros(*args, **kwargs)
+
+    monkeypatch.setattr(torch, "zeros", cpu_zeros)
+    final = torch.zeros((2, 2048), dtype=torch.bfloat16)
+    intermediate = torch.zeros((2, 2, 768), dtype=torch.bfloat16)
+    if bad_reference == "final":
+        final[0, 0] = float("nan")
+    else:
+        intermediate[0, 0, 0] = float("inf")
+
+    def fake_run(
+        _case: MoeKernelCase,
+        _packed: torch.Tensor,
+        *,
+        do_finalize: bool,
+        gemm1_lora_delta: torch.Tensor | None,
+    ) -> MoePairResult:
+        return (
+            MoePairResult(final_output=final, activated_intermediate=None)
+            if do_finalize
+            else MoePairResult(final_output=None, activated_intermediate=intermediate)
+        )
+
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.run_moe_pair",
+        fake_run,
+    )
+
+    with pytest.raises(RuntimeError, match="stock .* reference is not finite"):
+        _profile_tactic_cuda(case, TacticPair(1, 2), warmups=3, repetitions=10)
+
+
+def test_cli_requires_prepacked_weights_or_explicit_synthetic_smoke(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "--profiles",
+                str(tmp_path / "profiles.json"),
+                "--output",
+                str(tmp_path / "measurements.jsonl"),
+            ]
+        )
+
+
 def test_cli_writes_one_serializable_row_per_tactic_and_continues_failures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -283,15 +431,19 @@ def test_cli_writes_one_serializable_row_per_tactic_and_continues_failures(
         json.dumps({"selected_profiles": [profile.to_json()]}), encoding="ascii"
     )
     output_path = tmp_path / "measurements.jsonl"
+    weights_path = tmp_path / "prepacked.pt"
     case = _case(profile)
     tactics = (TacticPair(1, 2), TacticPair(3, 4))
+    build_calls: list[tuple[Path | None, bool]] = []
     monkeypatch.setattr(
         "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.assert_supported_flashinfer",
         lambda: None,
     )
     monkeypatch.setattr(
         "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.build_kernel_case",
-        lambda _profile, _device: case,
+        lambda _profile, _device, *, weights_path, synthetic_smoke: (
+            build_calls.append((weights_path, synthetic_smoke)) or case
+        ),
     )
     monkeypatch.setattr(
         "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.enumerate_valid_tactics",
@@ -331,6 +483,8 @@ def test_cli_writes_one_serializable_row_per_tactic_and_continues_failures(
                 str(profiles_path),
                 "--profile-limit",
                 "1",
+                "--weights",
+                str(weights_path),
                 "--tactic-limit",
                 "2",
                 "--warmups",
@@ -348,6 +502,7 @@ def test_cli_writes_one_serializable_row_per_tactic_and_continues_failures(
         for line in output_path.read_text(encoding="ascii").splitlines()
     ]
     assert len(rows) == 2
+    assert build_calls == [(weights_path, False)]
     measurements = [TacticMeasurement.from_json(row) for row in rows]
     assert [measurement.tactic for measurement in measurements] == list(tactics)
     assert measurements[1].failure == "RuntimeError: kernel crash"

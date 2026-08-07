@@ -1,18 +1,26 @@
 import ast
 import importlib.metadata
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import torch
 
 from experiments.mxfp8_moe_tactic_audit.flashinfer_adapter import (
+    PREPACKED_ARTIFACT_FORMAT,
+    IntermediateApiUnavailable,
     MoeKernelCase,
+    MoePairResult,
+    TacticDispatchError,
+    _prepare_synthetic_weights,
     assert_supported_flashinfer,
     cache_key_for_case,
     enumerate_valid_tactics,
     force_stock_tactic,
     force_tactic,
+    load_prepacked_weights,
     normalize_tactic_pair,
+    run_moe_pair,
 )
 from experiments.mxfp8_moe_tactic_audit.schema import (
     ReplayProfile,
@@ -59,7 +67,47 @@ def _case() -> MoeKernelCase:
         activation_type=3,
         routing_method_type=4,
         local_expert_offset=0,
+        weight_layout="MajorK",
+        use_shuffled_weight=True,
+        prepacked_weight_format=PREPACKED_ARTIFACT_FORMAT,
     )
+
+
+def _cache_key() -> str:
+    return str(
+        (
+            "flashinfer::trtllm_fp8_block_scale_moe",
+            "MoERunner",
+            ((16, 2048),),
+            (),
+        )
+    )
+
+
+def _artifact_payload() -> dict[str, object]:
+    return {
+        "metadata": {
+            "format": PREPACKED_ARTIFACT_FORMAT,
+            "flashinfer_version": "0.6.13",
+            "model_revision": "qwen3-30ba3b-test",
+            "quantization": "MXFP8",
+            "weight_layout": "MajorK",
+            "use_shuffled_weight": True,
+            "activation": "SwiGLU",
+            "gated_rows_reordered": True,
+            "matrix_a_shuffled": True,
+            "matrix_sf_a_shuffled": True,
+            "global_num_experts": 4,
+            "local_num_experts": 4,
+            "hidden_size": 64,
+            "intermediate_size": 32,
+            "local_expert_offset": 0,
+        },
+        "gemm1_weights": torch.zeros((4, 64, 64), dtype=torch.float8_e4m3fn),
+        "gemm1_weights_scale": torch.zeros((4, 64, 2), dtype=torch.uint8),
+        "gemm2_weights": torch.zeros((4, 64, 32), dtype=torch.float8_e4m3fn),
+        "gemm2_weights_scale": torch.zeros((4, 64, 1), dtype=torch.uint8),
+    }
 
 
 def test_adapter_rejects_unpinned_flashinfer(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -89,6 +137,7 @@ def test_force_tactic_restores_only_audit_cache_state_after_exception(
     tuner = SimpleNamespace(
         _file_configs={"existing": ("OtherRunner", 7)},
         profiling_cache={("existing",): (0, 7, None)},
+        _logged_file_hits={("other", "OtherRunner")},
         untouched={"sentinel": object()},
     )
     original_untouched = tuner.untouched
@@ -96,14 +145,7 @@ def test_force_tactic_restores_only_audit_cache_state_after_exception(
         "experiments.mxfp8_moe_tactic_audit.flashinfer_adapter._get_autotuner",
         lambda: tuner,
     )
-    cache_key = str(
-        (
-            "flashinfer::trtllm_fp8_block_scale_moe",
-            "MoERunner",
-            ((16, 2048),),
-            (),
-        )
-    )
+    cache_key = _cache_key()
 
     with pytest.raises(RuntimeError, match="tactic crashed"):
         with force_tactic(cache_key, TacticPair(17, 23)):
@@ -113,6 +155,7 @@ def test_force_tactic_restores_only_audit_cache_state_after_exception(
 
     assert tuner._file_configs == {"existing": ("OtherRunner", 7)}
     assert tuner.profiling_cache == {("existing",): (0, 7, None)}
+    assert tuner._logged_file_hits == {("other", "OtherRunner")}
     assert tuner.untouched is original_untouched
 
 
@@ -130,26 +173,226 @@ def test_force_stock_tactic_inserts_literal_fallback_pair(
     tuner = SimpleNamespace(
         _file_configs={"existing": ("OtherRunner", 7)},
         profiling_cache={("existing",): (0, 7, None)},
+        _logged_file_hits=set(),
     )
     monkeypatch.setattr(
         "experiments.mxfp8_moe_tactic_audit.flashinfer_adapter._get_autotuner",
         lambda: tuner,
     )
-    cache_key = str(
-        (
-            "flashinfer::trtllm_fp8_block_scale_moe",
-            "MoERunner",
-            ((16, 2048),),
-            (),
-        )
-    )
+    cache_key = _cache_key()
 
     with force_stock_tactic(cache_key):
         assert tuner._file_configs == {cache_key: ("MoERunner", [-1, -1])}
         assert tuner.profiling_cache == {}
+        tuner._logged_file_hits.add(
+            ("flashinfer::trtllm_fp8_block_scale_moe", "MoERunner")
+        )
 
     assert tuner._file_configs == {"existing": ("OtherRunner", 7)}
     assert tuner.profiling_cache == {("existing",): (0, 7, None)}
+    assert tuner._logged_file_hits == set()
+
+
+def test_force_tactic_rejects_missing_exact_file_hit_and_restores_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tuner = SimpleNamespace(
+        _file_configs={"existing": ("OtherRunner", 7)},
+        profiling_cache={("existing",): (0, 7, None)},
+        _logged_file_hits={("other", "OtherRunner")},
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.flashinfer_adapter._get_autotuner",
+        lambda: tuner,
+    )
+
+    with pytest.raises(TacticDispatchError, match="did not log an exact file hit"):
+        with force_tactic(_cache_key(), TacticPair(17, 23)):
+            pass
+
+    assert tuner._file_configs == {"existing": ("OtherRunner", 7)}
+    assert tuner.profiling_cache == {("existing",): (0, 7, None)}
+    assert tuner._logged_file_hits == {("other", "OtherRunner")}
+
+
+def test_force_tactic_rejects_wrong_tactic_hit_and_restores_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tuner = SimpleNamespace(
+        _file_configs={"existing": ("OtherRunner", 7)},
+        profiling_cache={("existing",): (0, 7, None)},
+        _logged_file_hits=set(),
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.flashinfer_adapter._get_autotuner",
+        lambda: tuner,
+    )
+    cache_key = _cache_key()
+
+    with pytest.raises(TacticDispatchError, match="wrong tactic"):
+        with force_tactic(cache_key, TacticPair(17, 23)):
+            tuner._file_configs[cache_key] = ("MoERunner", [5, 11])
+            tuner._logged_file_hits.add(
+                ("flashinfer::trtllm_fp8_block_scale_moe", "MoERunner")
+            )
+
+    assert tuner._file_configs == {"existing": ("OtherRunner", 7)}
+    assert tuner.profiling_cache == {("existing",): (0, 7, None)}
+    assert tuner._logged_file_hits == set()
+
+
+def test_load_prepacked_weights_rejects_missing_preparation_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _artifact_payload()
+    metadata = payload["metadata"]
+    assert isinstance(metadata, dict)
+    del metadata["matrix_sf_a_shuffled"]
+    monkeypatch.setattr(torch, "load", lambda *_args, **_kwargs: payload)
+
+    with pytest.raises(ValueError, match="matrix_sf_a_shuffled"):
+        load_prepacked_weights(Path("weights.pt"), _profile(), torch.device("cpu"))
+
+
+def test_load_prepacked_weights_accepts_exact_kernel_ready_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _artifact_payload()
+    monkeypatch.setattr(torch, "load", lambda *_args, **_kwargs: payload)
+
+    prepared = load_prepacked_weights(
+        Path("weights.pt"), _profile(), torch.device("cpu")
+    )
+
+    assert prepared.gemm1_weights is payload["gemm1_weights"]
+    assert prepared.gemm1_weights_scale is payload["gemm1_weights_scale"]
+    assert prepared.local_expert_offset == 0
+
+
+def test_load_prepacked_weights_rejects_mismatched_layout_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _artifact_payload()
+    metadata = payload["metadata"]
+    assert isinstance(metadata, dict)
+    metadata["weight_layout"] = "BlockMajorK"
+    monkeypatch.setattr(torch, "load", lambda *_args, **_kwargs: payload)
+
+    with pytest.raises(ValueError, match="weight_layout"):
+        load_prepacked_weights(Path("weights.pt"), _profile(), torch.device("cpu"))
+
+
+def test_synthetic_weights_run_upstream_gated_reorder_and_shuffle_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, tuple[int, ...], int | None]] = []
+
+    def quantize(
+        tensor: torch.Tensor, swizzled: bool
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        assert not swizzled
+        return (
+            tensor.to(torch.float8_e4m3fn),
+            torch.zeros(
+                (*tensor.shape[:-1], tensor.shape[-1] // 32), dtype=torch.uint8
+            ),
+        )
+
+    def reorder(tensor: torch.Tensor) -> torch.Tensor:
+        calls.append(("reorder", tuple(tensor.shape), None))
+        return tensor
+
+    def shuffle_a(tensor: torch.Tensor, tile: int) -> torch.Tensor:
+        calls.append(("shuffle_a", tuple(tensor.shape), tile))
+        return tensor
+
+    def shuffle_sf(tensor: torch.Tensor, tile: int) -> torch.Tensor:
+        calls.append(("shuffle_sf", tuple(tensor.shape), tile))
+        return tensor
+
+    flashinfer = SimpleNamespace(
+        mxfp8_quantize=quantize,
+        reorder_rows_for_gated_act_gemm=reorder,
+        shuffle_matrix_a=shuffle_a,
+        shuffle_matrix_sf_a=shuffle_sf,
+    )
+
+    prepared = _prepare_synthetic_weights(_profile(), torch.device("cpu"), flashinfer)
+
+    assert [name for name, _, _ in calls].count("reorder") == 8
+    assert [name for name, _, _ in calls].count("shuffle_a") == 8
+    assert [name for name, _, _ in calls].count("shuffle_sf") == 8
+    assert all(tile == 128 for name, _, tile in calls if name.startswith("shuffle"))
+    assert prepared.gemm1_weights.dtype == torch.float8_e4m3fn
+    assert prepared.gemm1_weights_scale.dtype == torch.uint8
+
+
+def test_run_moe_pair_returns_typed_activated_intermediate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    intermediate = torch.ones((23, 2, 32), dtype=torch.bfloat16)
+    runtime = SimpleNamespace(
+        ActivationType=SimpleNamespace(Swiglu=SimpleNamespace(value=3)),
+        RoutingMethodType=SimpleNamespace(RenormalizeNaive=SimpleNamespace(value=4)),
+    )
+    routed_moe = lambda **_kwargs: (
+        torch.empty(0),
+        torch.empty(0),
+        torch.empty(0),
+        intermediate,
+    )
+    fp8_enum = SimpleNamespace(MxFp8="mxfp8")
+    weight_layout = SimpleNamespace(MajorK=SimpleNamespace(value=0))
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.flashinfer_adapter.assert_supported_flashinfer",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.flashinfer_adapter._load_moe_runtime",
+        lambda: (runtime, routed_moe, fp8_enum, weight_layout),
+    )
+
+    result = run_moe_pair(
+        _case(),
+        torch.zeros((23, 2), dtype=torch.int32),
+        do_finalize=False,
+        gemm1_lora_delta=torch.zeros((23, 2, 64), dtype=torch.bfloat16),
+    )
+
+    assert isinstance(result, MoePairResult)
+    assert result.final_output is None
+    assert result.activated_intermediate is not None
+    assert torch.equal(result.activated_intermediate, intermediate)
+
+
+@pytest.mark.parametrize("error", [TypeError("bad signature"), NotImplementedError()])
+def test_run_moe_pair_normalizes_intermediate_invocation_failures(
+    error: Exception, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def routed_moe(**_kwargs: object) -> None:
+        raise error
+
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.flashinfer_adapter.assert_supported_flashinfer",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.flashinfer_adapter._load_moe_runtime",
+        lambda: (
+            object(),
+            routed_moe,
+            SimpleNamespace(MxFp8="mxfp8"),
+            SimpleNamespace(MajorK=SimpleNamespace(value=0)),
+        ),
+    )
+
+    with pytest.raises(IntermediateApiUnavailable):
+        run_moe_pair(
+            _case(),
+            torch.zeros((23, 2), dtype=torch.int32),
+            do_finalize=False,
+            gemm1_lora_delta=torch.zeros((23, 2, 64), dtype=torch.bfloat16),
+        )
 
 
 def test_enumerate_valid_tactics_uses_mxfp8_trtllm_gen_api(
