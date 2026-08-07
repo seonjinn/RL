@@ -402,8 +402,8 @@ def qualify_bucket(bucket: BucketAudit) -> QualificationDecision:
     )
 
 
-def _validate_moe_file_key(cache_key: str) -> None:
-    """Reject keys outside the exact pinned FlashInfer MoE file-key shape."""
+def _parse_moe_file_key(cache_key: str) -> tuple[tuple[int, ...], ...]:
+    """Parse an exact pinned FlashInfer MoE file key and return its shapes."""
     try:
         parsed = ast.literal_eval(cache_key)
     except (SyntaxError, ValueError) as error:
@@ -416,9 +416,25 @@ def _validate_moe_file_key(cache_key: str) -> None:
         or parsed[0] != MOE_CUSTOM_OP
         or parsed[1] != MOE_RUNNER
         or not isinstance(parsed[2], tuple)
+        or not all(
+            isinstance(shape, tuple)
+            and all(
+                isinstance(dimension, int)
+                and not isinstance(dimension, bool)
+                and dimension >= 0
+                for dimension in shape
+            )
+            for shape in parsed[2]
+        )
         or parsed[3] != ()
     ):
         raise ValueError("cache key must be an exact FlashInfer MoE file key")
+    return cast(tuple[tuple[int, ...], ...], parsed[2])
+
+
+def _validate_moe_file_key(cache_key: str) -> None:
+    """Reject keys outside the exact pinned FlashInfer MoE file-key shape."""
+    _parse_moe_file_key(cache_key)
 
 
 def _load_json_object(path: Path) -> dict[str, object]:
@@ -437,11 +453,14 @@ def _get_autotuner() -> Any:
     return autotuner.AutoTuner.get()
 
 
-def _validate_candidate_in_fresh_process(
+def _run_cache_subprocess(
+    stock_path: Path,
     candidate_path: Path,
     promoted: Mapping[str, TacticPair],
+    retained: Mapping[str, TacticPair],
+    absent_key: str,
 ) -> None:
-    """Reload the standard cache in a new interpreter and verify exact pairs."""
+    """Build and validate the standard cache without touching the parent tuner."""
     repository_root = Path(__file__).resolve().parents[2]
     environment = os.environ.copy()
     existing_pythonpath = environment.get("PYTHONPATH")
@@ -450,25 +469,66 @@ def _validate_candidate_in_fresh_process(
         if existing_pythonpath
         else str(repository_root)
     )
-    expected = {key: tactic.to_json() for key, tactic in promoted.items()}
+    request = {
+        "stock_path": str(stock_path),
+        "candidate_path": str(candidate_path),
+        "promoted": {key: tactic.to_json() for key, tactic in promoted.items()},
+        "retained": {key: tactic.to_json() for key, tactic in retained.items()},
+        "absent_key": absent_key,
+    }
     result = subprocess.run(
         [
             sys.executable,
             "-m",
             "experiments.mxfp8_moe_tactic_audit.qualify_cache",
-            "--validate-cache",
-            str(candidate_path),
+            "--build-and-validate-cache",
         ],
         cwd=repository_root,
         env=environment,
-        input=json.dumps(expected, ensure_ascii=True),
+        input=json.dumps(request, ensure_ascii=True),
         text=True,
         capture_output=True,
         check=False,
     )
     if result.returncode != 0:
         details = result.stderr.strip() or result.stdout.strip()
-        raise RuntimeError(f"fresh-process candidate validation failed: {details}")
+        raise RuntimeError(f"cache subprocess failed: {details}")
+
+
+def _cache_tactic(value: object, cache_key: str) -> TacticPair:
+    """Parse one serialized AutoTuner runner/tactic value."""
+    if (
+        not isinstance(value, Sequence)
+        or isinstance(value, (str, bytes, bytearray))
+        or len(value) != 2
+        or value[0] != MOE_RUNNER
+        or not isinstance(value[1], Sequence)
+        or isinstance(value[1], (str, bytes, bytearray))
+    ):
+        raise ValueError(f"invalid MoERunner cache value for {cache_key}")
+    tactic_values = value[1]
+    if len(tactic_values) != 2:
+        raise ValueError(f"invalid MoERunner tactic pair for {cache_key}")
+    return TacticPair(gemm1=tactic_values[0], gemm2=tactic_values[1])  # type: ignore[arg-type]
+
+
+def _absent_key_from(retained_key: str, existing_keys: set[str]) -> str:
+    """Derive a valid exact MoE shape key that is absent from the stock cache."""
+    profile_shapes = _parse_moe_file_key(retained_key)
+    for shape_index, shape in enumerate(profile_shapes):
+        if not shape:
+            continue
+        for offset in range(1, 1_000_001):
+            changed_shape = (shape[0] + offset, *shape[1:])
+            changed_shapes = (
+                *profile_shapes[:shape_index],
+                changed_shape,
+                *profile_shapes[shape_index + 1 :],
+            )
+            cache_key = str((MOE_CUSTOM_OP, MOE_RUNNER, changed_shapes, ()))
+            if cache_key not in existing_keys:
+                return cache_key
+    raise ValueError("could not derive an absent FlashInfer MoE cache key")
 
 
 def _write_manifest(path: Path, manifest: CacheManifest) -> None:
@@ -517,34 +577,30 @@ def build_candidate_cache(
             f"promoted key is not present in stock cache: {missing_promoted[0]}"
         )
 
-    tuner = _get_autotuner()
-    file_configs_snapshot = tuner._file_configs.copy()
-    profiling_cache_snapshot = tuner.profiling_cache.copy()
+    retained: dict[str, TacticPair] = {}
+    for cache_key, value in stock_payload.items():
+        if cache_key == "_metadata" or cache_key in promoted:
+            continue
+        try:
+            _validate_moe_file_key(cache_key)
+        except ValueError:
+            continue
+        retained[cache_key] = _cache_tactic(value, cache_key)
+        break
+    if not retained:
+        raise ValueError(
+            "stock cache must retain an unmodified FlashInfer MoE key for validation"
+        )
+    absent_key = _absent_key_from(next(iter(retained)), stock_entries)
+
     output.mkdir(parents=True, exist_ok=True)
-    try:
-        tuner._file_configs.clear()
-        tuner.profiling_cache.clear()
-        if tuner.load_configs(str(stock_cache)) is False:
-            raise RuntimeError(
-                "stock cache metadata does not match the current runtime"
-            )
-        for cache_key, tactic in promoted.items():
-            runner_name, _ = tuner._file_configs[cache_key]
-            if runner_name != MOE_RUNNER:
-                raise ValueError(
-                    f"promoted key does not resolve to {MOE_RUNNER}: {cache_key}"
-                )
-            tuner._file_configs[cache_key] = (
-                MOE_RUNNER,
-                (tactic.gemm1, tactic.gemm2),
-            )
-        shutil.copyfile(stock_cache, candidate_path)
-        tuner.save_configs(str(candidate_path))
-    finally:
-        tuner._file_configs.clear()
-        tuner._file_configs.update(file_configs_snapshot)
-        tuner.profiling_cache.clear()
-        tuner.profiling_cache.update(profiling_cache_snapshot)
+    _run_cache_subprocess(
+        stock_path=stock_cache,
+        candidate_path=candidate_path,
+        promoted=promoted,
+        retained=retained,
+        absent_key=absent_key,
+    )
 
     candidate_payload = _load_json_object(candidate_path)
     if set(candidate_payload) != set(stock_payload):
@@ -556,7 +612,6 @@ def build_candidate_cache(
         if candidate_payload[key] != [MOE_RUNNER, [tactic.gemm1, tactic.gemm2]]:
             raise RuntimeError(f"candidate cache serialized the wrong tactic for {key}")
 
-    _validate_candidate_in_fresh_process(candidate_path, promoted)
     manifest = CacheManifest(
         stock_sha256=_sha256_file(stock_cache),
         candidate_sha256=_sha256_file(candidate_path),
@@ -591,46 +646,149 @@ def select_cache_path(
     return stock_path
 
 
-def _validate_cache_from_stdin(candidate_path: Path) -> int:
-    """Fresh-process validation entry point used by cache construction."""
-    raw_expected = json.loads(sys.stdin.read())
+def _expected_tactics(
+    request: Mapping[str, object], field_name: str
+) -> dict[str, TacticPair]:
+    """Parse one exact-key tactic mapping from the child request."""
+    raw_expected = request.get(field_name)
     if not isinstance(raw_expected, Mapping):
-        raise ValueError("expected tactic payload must be an object")
-    expected = {
-        str(key): TacticPair.from_json(cast(Mapping[str, object], value))
-        for key, value in raw_expected.items()
-        if isinstance(value, Mapping)
-    }
-    if len(expected) != len(raw_expected):
-        raise ValueError("expected tactic payload contains an invalid value")
-    tuner = _get_autotuner()
-    if tuner.load_configs(str(candidate_path)) is False:
-        raise RuntimeError("candidate cache metadata does not match the fresh runtime")
-    for cache_key, tactic in expected.items():
+        raise ValueError(f"{field_name} must be an object")
+    expected: dict[str, TacticPair] = {}
+    for cache_key, value in raw_expected.items():
+        if not isinstance(cache_key, str) or not isinstance(value, Mapping):
+            raise ValueError(f"{field_name} contains an invalid entry")
         _validate_moe_file_key(cache_key)
+        expected[cache_key] = TacticPair.from_json(cast(Mapping[str, object], value))
+    return expected
+
+
+def _lookup_tactic(tuner: Any, autotuner: Any, cache_key: str) -> tuple[bool, object]:
+    """Exercise pinned search_cache and choose_one for one exact file key."""
+    # FlashInfer and torch are optional outside native cache construction.
+    torch = importlib.import_module("torch")
+    profile_shapes = _parse_moe_file_key(cache_key)
+
+    def forward(
+        self: object,
+        inputs: list[object],
+        tactic: object = -1,
+        do_preparation: bool = False,
+        **kwargs: object,
+    ) -> None:
+        raise RuntimeError("lookup validation unexpectedly invoked MoERunner.forward")
+
+    def get_valid_tactics(
+        self: object, inputs: list[object], profile: object
+    ) -> list[int]:
+        return [-1]
+
+    runner_type = type(
+        MOE_RUNNER,
+        (autotuner.TunableRunner,),
+        {
+            "forward": forward,
+            "get_valid_tactics": get_valid_tactics,
+            "__module__": __name__,
+        },
+    )
+    runner = runner_type()
+    inputs = [torch.empty(shape, device="meta") for shape in profile_shapes]
+    input_shapes = tuple(value.size() for value in inputs)
+    tuning_config = autotuner.TuningConfig()
+    hit, runner_id, searched_tactic, _ = tuner.search_cache(
+        MOE_CUSTOM_OP,
+        [runner],
+        input_shapes,
+        tuning_config,
+        inputs=inputs,
+    )
+    if runner_id != 0:
+        raise RuntimeError(f"lookup returned invalid runner index {runner_id}")
+    selected_runner, selected_tactic = tuner.choose_one(
+        MOE_CUSTOM_OP,
+        [runner],
+        tuning_config,
+        inputs,
+    )
+    if selected_runner is not runner or selected_tactic != searched_tactic:
+        raise RuntimeError(
+            "search_cache and choose_one returned inconsistent lookup results"
+        )
+    return bool(hit), selected_tactic
+
+
+def _build_and_validate_cache_from_stdin() -> int:
+    """Build and validate a candidate entirely in this short-lived process."""
+    request = json.loads(sys.stdin.read())
+    if not isinstance(request, Mapping):
+        raise ValueError("cache subprocess request must be an object")
+    stock_path_value = request.get("stock_path")
+    candidate_path_value = request.get("candidate_path")
+    absent_key = request.get("absent_key")
+    if not all(
+        isinstance(value, str) and value
+        for value in (stock_path_value, candidate_path_value, absent_key)
+    ):
+        raise ValueError("cache subprocess paths and absent_key must be strings")
+    stock_path = Path(cast(str, stock_path_value))
+    candidate_path = Path(cast(str, candidate_path_value))
+    absent_key = cast(str, absent_key)
+    _validate_moe_file_key(absent_key)
+    promoted = _expected_tactics(request, "promoted")
+    retained = _expected_tactics(request, "retained")
+
+    autotuner = importlib.import_module("flashinfer.autotuner")
+    tuner = _get_autotuner()
+    if tuner.load_configs(str(stock_path)) is False:
+        raise RuntimeError("stock cache metadata does not match the child runtime")
+    for cache_key, tactic in promoted.items():
         loaded = tuner._file_configs.get(cache_key)
-        expected_value = (MOE_RUNNER, (tactic.gemm1, tactic.gemm2))
-        if loaded != expected_value:
+        if loaded is None or loaded[0] != MOE_RUNNER:
             raise RuntimeError(
-                f"candidate key {cache_key} resolved to {loaded!r}, "
-                f"expected {expected_value!r}"
+                f"promoted key is unavailable after stock load: {cache_key}"
             )
+        tuner._file_configs[cache_key] = (
+            MOE_RUNNER,
+            (tactic.gemm1, tactic.gemm2),
+        )
+    shutil.copyfile(stock_path, candidate_path)
+    tuner.save_configs(str(candidate_path))
+
+    tuner._file_configs.clear()
+    tuner.profiling_cache.clear()
+    if tuner.load_configs(str(candidate_path)) is False:
+        raise RuntimeError("candidate cache metadata does not match the child runtime")
+    for expected in (promoted, retained):
+        for cache_key, tactic in expected.items():
+            hit, selected_tactic = _lookup_tactic(tuner, autotuner, cache_key)
+            expected_tactic = (tactic.gemm1, tactic.gemm2)
+            if not hit or selected_tactic != expected_tactic:
+                raise RuntimeError(
+                    f"cache lookup for {cache_key} returned hit={hit}, "
+                    f"tactic={selected_tactic!r}; expected {expected_tactic!r}"
+                )
+    miss, heuristic_tactic = _lookup_tactic(tuner, autotuner, absent_key)
+    if miss or heuristic_tactic != -1:
+        raise RuntimeError(
+            f"absent key returned hit={miss}, tactic={heuristic_tactic!r}; "
+            "expected a heuristic miss"
+        )
     return 0
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     """Parse the private fresh-process validation command."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--validate-cache", type=Path)
+    parser.add_argument("--build-and-validate-cache", action="store_true")
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the private fresh-process validation mode."""
     args = _parse_args(argv)
-    if args.validate_cache is None:
-        raise SystemExit("--validate-cache is required")
-    return _validate_cache_from_stdin(args.validate_cache)
+    if not args.build_and_validate_cache:
+        raise SystemExit("--build-and-validate-cache is required")
+    return _build_and_validate_cache_from_stdin()
 
 
 if __name__ == "__main__":

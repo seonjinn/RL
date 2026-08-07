@@ -216,6 +216,7 @@ def _install_fake_flashinfer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     (package / "__init__.py").write_text("", encoding="ascii")
     (package / "autotuner.py").write_text(
         """\
+from abc import ABC, abstractmethod
 import json
 import os
 
@@ -238,6 +239,9 @@ class AutoTuner:
         return cls._instance
 
     def load_configs(self, path):
+        _record("load_configs", str(path))
+        if os.environ.get("FAKE_FLASHINFER_FAIL_STAGE") == "load":
+            raise RuntimeError("injected load failure")
         with open(path, encoding="ascii") as cache_file:
             payload = json.load(cache_file)
         metadata = payload.pop("_metadata", None)
@@ -247,13 +251,12 @@ class AutoTuner:
         self._file_configs.update(
             {key: (value[0], _tactic(value[1])) for key, value in payload.items()}
         )
-        log_path = os.environ.get("FAKE_FLASHINFER_LOAD_LOG")
-        if log_path:
-            with open(log_path, "a", encoding="ascii") as log_file:
-                log_file.write(f"{os.getpid()}:{path}\\n")
         return True
 
     def save_configs(self, path):
+        _record("save_configs", str(path))
+        if os.environ.get("FAKE_FLASHINFER_FAIL_STAGE") == "save":
+            raise RuntimeError("injected save failure")
         metadata = {"runtime_marker": os.environ.get("FAKE_FLASHINFER_RUNTIME", "runtime-a")}
         try:
             with open(path, encoding="ascii") as cache_file:
@@ -267,8 +270,72 @@ class AutoTuner:
         with open(path, "w", encoding="ascii") as cache_file:
             json.dump(payload, cache_file, indent=2)
 
-    def resolve(self, key):
-        return self._file_configs.get(key, ("MoERunner", (-1, -1)))[1]
+    def search_cache(self, custom_op, runners, input_shapes, tuning_config, inputs=None):
+        extras = runners[0].get_cache_key_extras(inputs) if inputs is not None else ()
+        key = str(
+            (
+                custom_op,
+                runners[0].__class__.__name__,
+                tuple(tuple(shape) for shape in input_shapes),
+                extras,
+            )
+        )
+        _record("search_cache", key)
+        if key in self._file_configs:
+            runner_name, tactic = self._file_configs[key]
+            runner_id = next(
+                (
+                    index
+                    for index, runner in enumerate(runners)
+                    if runner.__class__.__name__ == runner_name
+                ),
+                0,
+            )
+            return True, runner_id, tactic, None
+        return False, 0, -1, None
+
+    def choose_one(self, custom_op, runners, tuning_config, inputs, **kwargs):
+        input_shapes = tuple(value.size() for value in inputs)
+        key = str(
+            (
+                custom_op,
+                runners[0].__class__.__name__,
+                tuple(tuple(shape) for shape in input_shapes),
+                runners[0].get_cache_key_extras(inputs),
+            )
+        )
+        _record("choose_one", key)
+        _, runner_id, tactic, _ = self.search_cache(
+            custom_op, runners, input_shapes, tuning_config, inputs=inputs
+        )
+        return runners[runner_id], tactic
+
+
+class TunableRunner(ABC):
+    @abstractmethod
+    def get_valid_tactics(self, inputs, profile):
+        return [-1]
+
+    def get_cache_key_extras(self, inputs):
+        return ()
+
+    @abstractmethod
+    def forward(self, inputs, tactic=-1, do_preparation=False, **kwargs):
+        raise NotImplementedError
+
+
+class TuningConfig:
+    pass
+
+
+def _record(operation, key):
+    log_path = os.environ.get("FAKE_FLASHINFER_OPERATION_LOG")
+    if log_path:
+        with open(log_path, "a", encoding="ascii") as log_file:
+            log_file.write(
+                json.dumps({"pid": os.getpid(), "operation": operation, "key": key})
+                + "\\n"
+            )
 """,
         encoding="ascii",
     )
@@ -330,8 +397,8 @@ def test_build_candidate_uses_autotuner_and_preserves_nonpromoted_entries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _install_fake_flashinfer(tmp_path, monkeypatch)
-    load_log = tmp_path / "load.log"
-    monkeypatch.setenv("FAKE_FLASHINFER_LOAD_LOG", str(load_log))
+    operation_log = tmp_path / "operations.jsonl"
+    monkeypatch.setenv("FAKE_FLASHINFER_OPERATION_LOG", str(operation_log))
     stock_path = tmp_path / "stock.json"
     stock_payload = _write_stock_cache(stock_path)
     candidate_dir = tmp_path / "candidate"
@@ -398,18 +465,31 @@ def test_build_candidate_uses_autotuner_and_preserves_nonpromoted_entries(
         )
     )
 
-    load_pids = {line.split(":", 1)[0] for line in load_log.read_text().splitlines()}
-    assert str(os.getpid()) in load_pids
-    assert len(load_pids) >= 2
+    operations = [json.loads(line) for line in operation_log.read_text().splitlines()]
+    assert {event["pid"] for event in operations}.isdisjoint({os.getpid()})
+    for cache_key in (_cache_key(16), _cache_key(32), _cache_key(33)):
+        assert any(
+            event["operation"] == "search_cache" and event["key"] == cache_key
+            for event in operations
+        )
+        assert any(
+            event["operation"] == "choose_one" and event["key"] == cache_key
+            for event in operations
+        )
 
 
-def test_candidate_miss_uses_flashinfer_heuristic_and_retained_key_stays_stock(
+def test_parent_tuner_state_is_unchanged_on_child_success_and_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _install_fake_flashinfer(tmp_path, monkeypatch)
+    autotuner = importlib.import_module("flashinfer.autotuner")
+    tuner = autotuner.AutoTuner.get()
+    tuner._file_configs["parent-file-config"] = ("ParentRunner", 17)
+    tuner.profiling_cache["parent-profile-config"] = (0, 23, None)
+    expected_file_configs = tuner._file_configs.copy()
+    expected_profiling_cache = tuner.profiling_cache.copy()
     stock_path = tmp_path / "stock.json"
     _write_stock_cache(stock_path)
-    candidate_dir = tmp_path / "candidate"
     build_candidate_cache(
         stock_path,
         (
@@ -420,16 +500,31 @@ def test_candidate_miss_uses_flashinfer_heuristic_and_retained_key_stays_stock(
                 reason="candidate passed qualification gates",
             ),
         ),
-        candidate_dir,
+        tmp_path / "candidate",
         provenance=_provenance(tmp_path),
     )
 
-    autotuner = importlib.import_module("flashinfer.autotuner")
-    autotuner.AutoTuner._instance = None
-    tuner = autotuner.AutoTuner.get()
-    assert tuner.load_configs(candidate_dir / "autotune_configs.json")
-    assert tuner.resolve(_cache_key(32)) == (5, 6)
-    assert tuner.resolve(_cache_key(64)) == (-1, -1)
+    assert tuner._file_configs == expected_file_configs
+    assert tuner.profiling_cache == expected_profiling_cache
+
+    monkeypatch.setenv("FAKE_FLASHINFER_FAIL_STAGE", "save")
+    with pytest.raises(RuntimeError, match="cache subprocess failed"):
+        build_candidate_cache(
+            stock_path,
+            (
+                QualificationDecision(
+                    cache_key=_cache_key(16),
+                    selected=TacticPair(3, 4),
+                    promoted=True,
+                    reason="candidate passed qualification gates",
+                ),
+            ),
+            tmp_path / "failed-candidate",
+            provenance=_provenance(tmp_path),
+        )
+
+    assert tuner._file_configs == expected_file_configs
+    assert tuner.profiling_cache == expected_profiling_cache
 
 
 def test_fingerprint_mismatch_selects_stock_cache_path(
