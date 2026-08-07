@@ -216,14 +216,137 @@ _STR_TO_DTYPE = {
     "torch.bfloat16": torch.bfloat16,
     "torch.float16": torch.float16,
     "torch.float32": torch.float32,
+    "torch.uint8": torch.uint8,
     "torch.float8_e4m3fn": torch.float8_e4m3fn,
     "torch.float8_e5m2": torch.float8_e5m2,
+    "uint8": torch.uint8,
     "bfloat16": torch.bfloat16,
     "float16": torch.float16,
     "float32": torch.float32,
     "float8_e4m3fn": torch.float8_e4m3fn,
     "float8_e5m2": torch.float8_e5m2,
 }
+
+
+def _validate_serialized_dtype(dtype: Any, context: str) -> str:
+    """Validate and return a dtype name received in serialized metadata."""
+    if not isinstance(dtype, str) or dtype not in _STR_TO_DTYPE:
+        raise ValueError(f"{context} has unsupported serialized dtype {dtype!r}")
+    return dtype
+
+
+def _normalize_shape(shape: Any, context: str) -> tuple[int, ...]:
+    """Validate a positive logical shape and return it as a tuple."""
+    if not isinstance(shape, (list, tuple, torch.Size)) or not shape:
+        raise ValueError(f"{context} must be a nonempty shape")
+    if any(
+        isinstance(dim, bool) or not isinstance(dim, int) or dim <= 0 for dim in shape
+    ):
+        raise ValueError(f"{context} must contain only positive integer dimensions")
+    return tuple(shape)
+
+
+def _normalize_component_metadata(
+    name: str, meta: dict[str, Any]
+) -> tuple[tuple[int, ...], list[dict[str, Any]]]:
+    """Normalize legacy or serialized component metadata for one HF parameter."""
+    logical_shape = _normalize_shape(meta["shape"], f"{name} logical shape")
+    _validate_serialized_dtype(meta["dtype"], f"{name} dtype")
+    serialized_components = meta.get("components")
+    if serialized_components is None:
+        serialized_components = [
+            {
+                "role": "weight",
+                "shape": logical_shape,
+                "dtype": meta["dtype"],
+            }
+        ]
+    elif not isinstance(serialized_components, list) or not serialized_components:
+        raise ValueError(f"{name} components must not be empty")
+
+    components: list[dict[str, Any]] = []
+    roles: set[str] = set()
+    for index, component in enumerate(serialized_components):
+        if not isinstance(component, dict):
+            raise ValueError(f"{name} component {index} must be a mapping")
+        role = component.get("role")
+        if not isinstance(role, str) or not role:
+            raise ValueError(f"{name} component {index} has an invalid role")
+        if role in roles:
+            raise ValueError(f"{name} has duplicate component role {role!r}")
+        roles.add(role)
+        component_shape = _normalize_shape(
+            component.get("shape"), f"{name} component {role!r} shape"
+        )
+        dtype = _validate_serialized_dtype(
+            component.get("dtype"), f"{name} component {role!r}"
+        )
+        components.append({"role": role, "shape": component_shape, "dtype": dtype})
+
+    if "weight" not in roles:
+        raise ValueError(f"{name} components must include a 'weight' component")
+    weight = next(
+        component for component in components if component["role"] == "weight"
+    )
+    if weight["shape"] != logical_shape:
+        raise ValueError(
+            f"{name} weight component shape {weight['shape']} does not match "
+            f"logical shape {logical_shape}"
+        )
+
+    scale = next(
+        (component for component in components if component["role"] == "weight_scale"),
+        None,
+    )
+    if scale is not None:
+        if logical_shape[-1] % 32:
+            raise ValueError(
+                f"{name} weight_scale shape is invalid because the weight's "
+                f"last dimension {logical_shape[-1]} is not divisible by 32"
+            )
+        expected_scale_shape = (*logical_shape[:-1], logical_shape[-1] // 32)
+        if scale["shape"] != expected_scale_shape:
+            raise ValueError(
+                f"{name} weight_scale shape {scale['shape']} does not match "
+                f"expected logical shape {expected_scale_shape}"
+            )
+    return logical_shape, components
+
+
+def _validate_placement_dimensions(placements: list, ndim: int, context: str) -> None:
+    """Reject shard placements that cannot address a component dimension."""
+    for placement in placements:
+        if isinstance(placement, Shard) and not 0 <= placement.dim < ndim:
+            raise ValueError(
+                f"{context} has Shard({placement.dim}) for a {ndim}-D shape"
+            )
+
+
+def _build_component_infos(
+    parent_name: str,
+    components: list[dict[str, Any]],
+    src_dim_map: dict,
+    dst_dim_map: dict,
+) -> list[dict[str, Any]]:
+    """Build ordered component placement metadata from a parent HF name."""
+    component_infos = []
+    for component in components:
+        shape = component["shape"]
+        src_placements = get_placements(parent_name, src_dim_map, len(shape))
+        dst_placements = get_placements(parent_name, dst_dim_map, len(shape))
+        context = f"{parent_name} component {component['role']!r}"
+        _validate_placement_dimensions(src_placements, len(shape), f"{context} src")
+        _validate_placement_dimensions(dst_placements, len(shape), f"{context} dst")
+        component_infos.append(
+            {
+                "role": component["role"],
+                "global_shape": shape,
+                "dtype": component["dtype"],
+                "src_placements": src_placements,
+                "dst_placements": dst_placements,
+            }
+        )
+    return component_infos
 
 
 # =========================================================================
@@ -252,18 +375,26 @@ def restore_refit_info_placements(refit_info: dict) -> dict:
 
     vLLM's collective_rpc encodes ``Shard``/``Replicate`` as plain dicts and
     ``MeshInfo`` as a dict with a nested mesh list.  This rebuilds the
-    original Python objects in place so that the canonical
+    original Python objects in place, including nested component placements,
+    so that the canonical
     ``xferdtensor`` (which relies on ``isinstance(p, Shard)``) works
     correctly.  Idempotent — safe to call on already-restored ``refit_info``.
     """
     for layer_name in refit_info.get("layer_names", []):
         for param_info in refit_info.get("per_layer_params", {}).get(layer_name, []):
-            param_info["src_placements"] = [
-                _restore_placement(p) for p in param_info["src_placements"]
-            ]
-            param_info["dst_placements"] = [
-                _restore_placement(p) for p in param_info["dst_placements"]
-            ]
+            placement_infos = [param_info]
+            components = param_info.get("components", [])
+            if isinstance(components, list):
+                placement_infos.extend(
+                    component for component in components if isinstance(component, dict)
+                )
+            for placement_info in placement_infos:
+                placement_info["src_placements"] = [
+                    _restore_placement(p) for p in placement_info["src_placements"]
+                ]
+                placement_info["dst_placements"] = [
+                    _restore_placement(p) for p in placement_info["dst_placements"]
+                ]
             # Reconstruct MeshInfo if serialized to dict
             for key in ("src_mesh_info", "dst_mesh_info"):
                 mesh = param_info.get(key)
@@ -418,12 +549,29 @@ def group_expert_params_in_metadata(
             # ordinary grouped gate/up.
             prefix = name[: -len(".gate_up_proj")]  # ".../experts"
             e_global, inter, hidden = meta["shape"]
+            component_metadata = None
+            if "components" in meta:
+                _, component_metadata = _normalize_component_metadata(name, meta)
             for role in ("gate_proj", "up_proj"):
-                grouped_metadata[f"{prefix}.{role}.weight"] = {
+                grouped = {
                     "shape": [e_global, inter // 2, hidden],
                     "dtype": meta["dtype"],
                     "grouped_expert_proj": role,
                 }
+                if component_metadata is not None:
+                    grouped["components"] = [
+                        {
+                            "role": component["role"],
+                            "shape": [
+                                component["shape"][0],
+                                component["shape"][1] // 2,
+                                *component["shape"][2:],
+                            ],
+                            "dtype": component["dtype"],
+                        }
+                        for component in component_metadata
+                    ]
+                grouped_metadata[f"{prefix}.{role}.weight"] = grouped
             pre_grouped_experts = True
         elif name.endswith("experts.down_proj"):
             # Already-grouped down ``[E, hidden, inter]``: canonicalize the name
@@ -444,13 +592,55 @@ def group_expert_params_in_metadata(
     # Stack each (prefix, proj) group into one [E, *per_expert_shape] grouped
     # HF entry.
     for (prefix, proj), entries in expert_groups.items():
+        entries.sort(
+            key=lambda item: int(_INDIVIDUAL_EXPERT_RE.match(item[0]).group(2))
+        )
         num_experts_global = len(entries)
-        per_expert_shape = list(entries[0][1]["shape"])
-        grouped_metadata[f"{prefix}.{proj}.weight"] = {
+        first_name, first_meta = entries[0]
+        per_expert_shape, first_components = _normalize_component_metadata(
+            first_name, first_meta
+        )
+        grouped = {
             "shape": [num_experts_global, *per_expert_shape],
-            "dtype": entries[0][1]["dtype"],
+            "dtype": first_meta["dtype"],
             "grouped_expert_proj": proj,
         }
+        for name, meta in entries:
+            component_shape, components = _normalize_component_metadata(name, meta)
+            if component_shape != per_expert_shape:
+                raise ValueError(
+                    f"{name} shape {component_shape} does not match expert shape "
+                    f"{per_expert_shape} for {prefix}.{proj}"
+                )
+            if [component["role"] for component in components] != [
+                component["role"] for component in first_components
+            ]:
+                raise ValueError(
+                    f"{name} components must use the same ordered roles as {first_name}"
+                )
+            for first_component, component in zip(
+                first_components, components, strict=True
+            ):
+                if (
+                    component["shape"] != first_component["shape"]
+                    or component["dtype"] != first_component["dtype"]
+                ):
+                    raise ValueError(
+                        f"{name} component {component['role']!r} does not match "
+                        f"the grouped expert component in {first_name}"
+                    )
+        if "components" in first_meta or any(
+            "components" in meta for _, meta in entries
+        ):
+            grouped["components"] = [
+                {
+                    "role": component["role"],
+                    "shape": [num_experts_global, *component["shape"]],
+                    "dtype": component["dtype"],
+                }
+                for component in first_components
+            ]
+        grouped_metadata[f"{prefix}.{proj}.weight"] = grouped
 
     return grouped_metadata
 
@@ -808,7 +998,8 @@ def build_nccl_reshard_refit_info(
     per_layer_params: dict[str, list] = OrderedDict()
     for name, meta in state_dict_metadata.items():
         layer = _extract_layer_name(name)
-        ndim = len(meta["shape"])
+        logical_shape, component_metadata = _normalize_component_metadata(name, meta)
+        ndim = len(logical_shape)
         expert = is_expert_param(name)
         # Pick the gen (dst) mesh: experts go to the EP/TP-expert mesh, all other
         # params to the TP non-expert mesh (identical when gen EP is off).
@@ -832,7 +1023,7 @@ def build_nccl_reshard_refit_info(
             )
             info = {
                 "name": name,
-                "global_shape": tuple(meta["shape"]),
+                "global_shape": logical_shape,
                 "dtype": meta["dtype"],
                 "pp_stage": stage,
                 "src_mesh_info": stage_src_mesh,
@@ -848,13 +1039,22 @@ def build_nccl_reshard_refit_info(
             )
             info = {
                 "name": name,
-                "global_shape": tuple(meta["shape"]),
+                "global_shape": logical_shape,
                 "dtype": meta["dtype"],
                 "src_mesh_info": this_src_mesh,
                 "src_placements": get_placements(name, this_src_dim_map, ndim),
                 "dst_mesh_info": dst_mesh,
                 "dst_placements": get_placements(name, dst_dim_map, ndim),
             }
+
+        _validate_placement_dimensions(info["src_placements"], ndim, f"{name} src")
+        _validate_placement_dimensions(info["dst_placements"], ndim, f"{name} dst")
+        info["components"] = _build_component_infos(
+            name,
+            component_metadata,
+            (stage_src_dim_map if use_per_stage else this_src_dim_map),
+            dst_dim_map,
+        )
 
         # Propagate the grouped-expert projection tag (gate_proj/up_proj/
         # down_proj) so the train side stacks the matching per-expert tensors

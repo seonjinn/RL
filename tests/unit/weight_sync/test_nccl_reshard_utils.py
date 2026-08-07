@@ -38,6 +38,8 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
     group_expert_params_in_metadata,
     is_expert_param,
     is_nccl_reshard_param,
+    restore_refit_info_placements,
+    _validate_placement_dimensions,
 )
 
 
@@ -515,3 +517,292 @@ def test_build_refit_info_groups_experts_and_tags_them():
         for layer in info["layer_names"]
         for p in info["per_layer_params"][layer]
     )
+
+
+def test_build_refit_info_describes_native_mxfp8_components() -> None:
+    metadata = {
+        "model.layers.0.mlp.down_proj.weight": {
+            "shape": [64, 256],
+            "dtype": "torch.bfloat16",
+            "components": [
+                {
+                    "role": "weight",
+                    "shape": [64, 256],
+                    "dtype": "torch.float8_e4m3fn",
+                },
+                {
+                    "role": "weight_scale",
+                    "shape": [64, 8],
+                    "dtype": "torch.uint8",
+                },
+            ],
+        }
+    }
+    info = build_nccl_reshard_refit_info(
+        metadata,
+        {"tp_size": 4, "ep_size": 1, "pp_size": 1},
+        {"tp_size": 4, "ep_size": 1, "pp_size": 1},
+        4,
+        4,
+    )
+
+    param = info["per_layer_params"]["model.layers.0"][0]
+    components = param["components"]
+    assert [component["role"] for component in components] == [
+        "weight",
+        "weight_scale",
+    ]
+    assert tuple(components[0]["global_shape"]) == (64, 256)
+    assert tuple(components[1]["global_shape"]) == (64, 8)
+    assert components[0]["dtype"] == "torch.float8_e4m3fn"
+    assert components[1]["dtype"] == "torch.uint8"
+    assert any(
+        isinstance(placement, Shard) and placement.dim == 1
+        for placement in components[0]["src_placements"]
+    )
+    assert any(
+        isinstance(placement, Shard) and placement.dim == 1
+        for placement in components[1]["src_placements"]
+    )
+
+
+def test_component_scale_placement_uses_parent_column_parallel_weight_name():
+    metadata = {
+        "model.layers.0.mlp.gate_proj.weight": {
+            "shape": [256, 64],
+            "dtype": "torch.bfloat16",
+            "components": [
+                {
+                    "role": "weight",
+                    "shape": [256, 64],
+                    "dtype": "torch.float8_e4m3fn",
+                },
+                {
+                    "role": "weight_scale",
+                    "shape": [256, 2],
+                    "dtype": "torch.uint8",
+                },
+            ],
+        }
+    }
+    info = build_nccl_reshard_refit_info(
+        metadata,
+        {"tp_size": 2, "ep_size": 1, "pp_size": 1},
+        {"tp_size": 2, "ep_size": 1, "pp_size": 1},
+        2,
+        2,
+    )
+
+    scale = _find(info, "model.layers.0.mlp.gate_proj.weight")["components"][1]
+    assert any(
+        isinstance(placement, Shard) and placement.dim == 0
+        for placement in scale["src_placements"]
+    )
+
+
+def test_component_placements_reject_out_of_range_shard_dimensions():
+    with pytest.raises(ValueError, match=r"Shard\(1\).*1-D shape"):
+        _validate_placement_dimensions([Shard(1)], 1, "test component")
+
+
+def test_restore_refit_info_placements_restores_nested_component_placements():
+    refit_info = {
+        "layer_names": ["model.layers.0"],
+        "per_layer_params": {
+            "model.layers.0": [
+                {
+                    "src_placements": [{"dim": 0}],
+                    "dst_placements": [{}],
+                    "components": [
+                        {
+                            "role": "weight",
+                            "src_placements": [{"dim": 1}],
+                            "dst_placements": [{}],
+                        }
+                    ],
+                }
+            ]
+        },
+    }
+
+    restore_refit_info_placements(refit_info)
+
+    component = refit_info["per_layer_params"]["model.layers.0"][0]["components"][0]
+    assert isinstance(component["src_placements"][0], Shard)
+    assert component["src_placements"][0].dim == 1
+    assert isinstance(component["dst_placements"][0], Replicate)
+
+
+def test_build_refit_info_adds_implicit_weight_component_for_legacy_metadata():
+    info = build_nccl_reshard_refit_info(
+        _dense_metadata(),
+        {"tp_size": 2, "ep_size": 1, "pp_size": 1},
+        {"tp_size": 2, "ep_size": 1, "pp_size": 1},
+        2,
+        2,
+    )
+
+    param = _find(info, "model.layers.0.mlp.gate_proj.weight")
+    assert param["components"] == [
+        {
+            "role": "weight",
+            "global_shape": (64, 32),
+            "dtype": "torch.bfloat16",
+            "src_placements": param["src_placements"],
+            "dst_placements": param["dst_placements"],
+        }
+    ]
+
+
+def _component_moe_metadata(num_experts=2, inter=32, hidden=64):
+    metadata = {}
+    for expert in range(num_experts):
+        prefix = f"model.layers.0.mlp.experts.{expert}"
+        for projection, shape in (
+            ("gate_proj", [inter, hidden]),
+            ("down_proj", [hidden, inter]),
+        ):
+            metadata[f"{prefix}.{projection}.weight"] = {
+                "shape": shape,
+                "dtype": "torch.bfloat16",
+                "components": [
+                    {
+                        "role": "weight",
+                        "shape": shape,
+                        "dtype": "torch.float8_e4m3fn",
+                    },
+                    {
+                        "role": "weight_scale",
+                        "shape": [shape[0], shape[1] // 32],
+                        "dtype": "torch.uint8",
+                    },
+                ],
+            }
+    return metadata
+
+
+def test_grouped_expert_components_share_expert_order_and_shape_prefix():
+    info = build_nccl_reshard_refit_info(
+        _component_moe_metadata(),
+        {"tp_size": 1, "ep_size": 2, "pp_size": 1},
+        {"tp_size": 2, "ep_size": 1, "pp_size": 1},
+        2,
+        2,
+    )
+
+    gate = _find(info, "model.layers.0.mlp.experts.gate_proj.weight")
+    assert [component["role"] for component in gate["components"]] == [
+        "weight",
+        "weight_scale",
+    ]
+    assert tuple(gate["components"][0]["global_shape"]) == (2, 32, 64)
+    assert tuple(gate["components"][1]["global_shape"]) == (2, 32, 2)
+    assert any(
+        isinstance(placement, Shard) and placement.dim == 0
+        for placement in gate["components"][1]["src_placements"]
+    )
+
+
+def test_pregrouped_gate_up_components_are_split_with_the_weight_shape():
+    metadata = {
+        "model.layers.0.mlp.experts.gate_up_proj": {
+            "shape": [2, 64, 32],
+            "dtype": "torch.bfloat16",
+            "components": [
+                {
+                    "role": "weight",
+                    "shape": [2, 64, 32],
+                    "dtype": "torch.float8_e4m3fn",
+                },
+                {
+                    "role": "weight_scale",
+                    "shape": [2, 64, 1],
+                    "dtype": "torch.uint8",
+                },
+            ],
+        }
+    }
+
+    info = build_nccl_reshard_refit_info(
+        metadata,
+        {"tp_size": 1, "ep_size": 2, "pp_size": 1},
+        {"tp_size": 1, "ep_size": 1, "pp_size": 1},
+        2,
+        1,
+    )
+
+    gate = _find(info, "model.layers.0.mlp.experts.gate_proj.weight")
+    assert [tuple(component["global_shape"]) for component in gate["components"]] == [
+        (2, 32, 32),
+        (2, 32, 1),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("components", "message"),
+    [
+        ([], "must not be empty"),
+        (
+            [
+                {
+                    "role": "weight",
+                    "shape": [64, 256],
+                    "dtype": "torch.float8_e4m3fn",
+                },
+                {
+                    "role": "weight",
+                    "shape": [64, 256],
+                    "dtype": "torch.float8_e4m3fn",
+                },
+            ],
+            "duplicate component role",
+        ),
+        (
+            [
+                {
+                    "role": "weight",
+                    "shape": [64, 256],
+                    "dtype": "torch.float8_e4m3fn",
+                },
+                {
+                    "role": "weight_scale",
+                    "shape": [64, 8],
+                    "dtype": "torch.int8",
+                },
+            ],
+            "unsupported serialized dtype",
+        ),
+        (
+            [
+                {
+                    "role": "weight",
+                    "shape": [64, 256],
+                    "dtype": "torch.float8_e4m3fn",
+                },
+                {
+                    "role": "weight_scale",
+                    "shape": [64, 7],
+                    "dtype": "torch.uint8",
+                },
+            ],
+            "weight_scale shape",
+        ),
+    ],
+)
+def test_build_refit_info_rejects_invalid_component_metadata(components, message):
+    metadata = {
+        "model.layers.0.mlp.down_proj.weight": {
+            "shape": [64, 256],
+            "dtype": "torch.bfloat16",
+            "components": components,
+        }
+    }
+
+    with pytest.raises(ValueError, match=message):
+        build_nccl_reshard_refit_info(
+            metadata,
+            {"tp_size": 1, "ep_size": 1, "pp_size": 1},
+            {"tp_size": 1, "ep_size": 1, "pp_size": 1},
+            1,
+            1,
+        )
