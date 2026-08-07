@@ -4,6 +4,7 @@ import importlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 
 import pytest
@@ -467,7 +468,7 @@ def test_build_candidate_uses_autotuner_and_preserves_nonpromoted_entries(
 
     operations = [json.loads(line) for line in operation_log.read_text().splitlines()]
     assert {event["pid"] for event in operations}.isdisjoint({os.getpid()})
-    for cache_key in (_cache_key(16), _cache_key(32), _cache_key(33)):
+    for cache_key in (_cache_key(16), _cache_key(32), _cache_key(17)):
         assert any(
             event["operation"] == "search_cache" and event["key"] == cache_key
             for event in operations
@@ -476,6 +477,97 @@ def test_build_candidate_uses_autotuner_and_preserves_nonpromoted_entries(
             event["operation"] == "choose_one" and event["key"] == cache_key
             for event in operations
         )
+
+
+def test_build_candidate_supports_all_exact_moe_keys_promoted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_flashinfer(tmp_path, monkeypatch)
+    operation_log = tmp_path / "operations.jsonl"
+    monkeypatch.setenv("FAKE_FLASHINFER_OPERATION_LOG", str(operation_log))
+    stock_path = tmp_path / "stock.json"
+    stock_path.write_text(
+        json.dumps(
+            {
+                "_metadata": {"runtime_marker": "runtime-a"},
+                _cache_key(16): [MOE_RUNNER, [1, 2]],
+                _cache_key(32): [MOE_RUNNER, [5, 6]],
+            },
+            indent=2,
+        ),
+        encoding="ascii",
+    )
+    decisions = (
+        QualificationDecision(
+            cache_key=_cache_key(16),
+            selected=TacticPair(3, 4),
+            promoted=True,
+            reason="candidate passed qualification gates",
+        ),
+        QualificationDecision(
+            cache_key=_cache_key(32),
+            selected=TacticPair(7, 8),
+            promoted=True,
+            reason="candidate passed qualification gates",
+        ),
+    )
+
+    manifest = build_candidate_cache(
+        stock_path,
+        decisions,
+        tmp_path / "candidate",
+        provenance=_provenance(tmp_path),
+    )
+
+    assert manifest.promoted_entries == 2
+    assert manifest.retained_entries == 0
+    operations = [json.loads(line) for line in operation_log.read_text().splitlines()]
+    for cache_key in (_cache_key(16), _cache_key(32), _cache_key(17)):
+        assert any(
+            event["operation"] == "search_cache" and event["key"] == cache_key
+            for event in operations
+        )
+        assert any(
+            event["operation"] == "choose_one" and event["key"] == cache_key
+            for event in operations
+        )
+
+
+def test_cache_subprocess_timeout_removes_partial_candidate_and_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stock_path = tmp_path / "stock.json"
+    _write_stock_cache(stock_path)
+    candidate_dir = tmp_path / "candidate"
+    candidate_dir.mkdir()
+    candidate_path = candidate_dir / "autotune_configs.json"
+    manifest_path = candidate_dir / "cache_manifest.json"
+    candidate_path.write_text("stale candidate\n", encoding="ascii")
+    manifest_path.write_text("stale manifest\n", encoding="ascii")
+
+    def time_out(*args: object, **kwargs: object) -> None:
+        request = json.loads(str(kwargs["input"]))
+        Path(request["candidate_path"]).write_text("partial\n", encoding="ascii")
+        manifest_path.write_text("partial manifest\n", encoding="ascii")
+        assert kwargs["timeout"] == 2.5
+        raise subprocess.TimeoutExpired(cmd="cache-subprocess", timeout=2.5)
+
+    monkeypatch.setattr(subprocess, "run", time_out)
+
+    with pytest.raises(
+        RuntimeError,
+        match="cache subprocess timed out after 2.5 seconds",
+    ):
+        build_candidate_cache(
+            stock_path,
+            (),
+            candidate_dir,
+            provenance=_provenance(tmp_path),
+            subprocess_timeout_seconds=2.5,
+        )
+
+    assert not candidate_path.exists()
+    assert not manifest_path.exists()
 
 
 def test_parent_tuner_state_is_unchanged_on_child_success_and_failure(

@@ -32,6 +32,7 @@ MAX_CV = 0.03
 MAX_HIGH_WEIGHT_REGRESSION = 0.01
 HIGH_WEIGHT_FRACTION = 0.05
 MIN_MICRO_COSINE_SIMILARITY = 0.999
+DEFAULT_CACHE_SUBPROCESS_TIMEOUT_SECONDS = 120.0
 
 ARTIFACT_FINGERPRINT_FIELDS = frozenset(
     {
@@ -459,6 +460,7 @@ def _run_cache_subprocess(
     promoted: Mapping[str, TacticPair],
     retained: Mapping[str, TacticPair],
     absent_key: str,
+    timeout_seconds: float,
 ) -> None:
     """Build and validate the standard cache without touching the parent tuner."""
     repository_root = Path(__file__).resolve().parents[2]
@@ -476,21 +478,36 @@ def _run_cache_subprocess(
         "retained": {key: tactic.to_json() for key, tactic in retained.items()},
         "absent_key": absent_key,
     }
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "experiments.mxfp8_moe_tactic_audit.qualify_cache",
-            "--build-and-validate-cache",
-        ],
-        cwd=repository_root,
-        env=environment,
-        input=json.dumps(request, ensure_ascii=True),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    manifest_path = candidate_path.with_name("cache_manifest.json")
+    candidate_path.unlink(missing_ok=True)
+    manifest_path.unlink(missing_ok=True)
+    command = [
+        sys.executable,
+        "-m",
+        "experiments.mxfp8_moe_tactic_audit.qualify_cache",
+        "--build-and-validate-cache",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=repository_root,
+            env=environment,
+            input=json.dumps(request, ensure_ascii=True),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as error:
+        candidate_path.unlink(missing_ok=True)
+        manifest_path.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"cache subprocess timed out after {timeout_seconds:g} seconds "
+            "during FlashInfer load/modify/save/lookup"
+        ) from error
     if result.returncode != 0:
+        candidate_path.unlink(missing_ok=True)
+        manifest_path.unlink(missing_ok=True)
         details = result.stderr.strip() or result.stdout.strip()
         raise RuntimeError(f"cache subprocess failed: {details}")
 
@@ -512,9 +529,9 @@ def _cache_tactic(value: object, cache_key: str) -> TacticPair:
     return TacticPair(gemm1=tactic_values[0], gemm2=tactic_values[1])  # type: ignore[arg-type]
 
 
-def _absent_key_from(retained_key: str, existing_keys: set[str]) -> str:
+def _absent_key_from(source_key: str, existing_keys: set[str]) -> str:
     """Derive a valid exact MoE shape key that is absent from the stock cache."""
-    profile_shapes = _parse_moe_file_key(retained_key)
+    profile_shapes = _parse_moe_file_key(source_key)
     for shape_index, shape in enumerate(profile_shapes):
         if not shape:
             continue
@@ -546,8 +563,16 @@ def build_candidate_cache(
     output: Path,
     *,
     provenance: CacheProvenance,
+    subprocess_timeout_seconds: float = DEFAULT_CACHE_SUBPROCESS_TIMEOUT_SECONDS,
 ) -> CacheManifest:
     """Replace promoted exact MoE keys through FlashInfer's native cache APIs."""
+    if (
+        isinstance(subprocess_timeout_seconds, bool)
+        or not isinstance(subprocess_timeout_seconds, (int, float))
+        or not math.isfinite(subprocess_timeout_seconds)
+        or subprocess_timeout_seconds <= 0
+    ):
+        raise ValueError("subprocess_timeout_seconds must be finite and positive")
     stock_cache = stock_cache.resolve()
     output = output.resolve()
     candidate_path = output / "autotune_configs.json"
@@ -577,21 +602,24 @@ def build_candidate_cache(
             f"promoted key is not present in stock cache: {missing_promoted[0]}"
         )
 
+    exact_moe_keys: list[str] = []
     retained: dict[str, TacticPair] = {}
     for cache_key, value in stock_payload.items():
-        if cache_key == "_metadata" or cache_key in promoted:
+        if cache_key == "_metadata":
             continue
         try:
             _validate_moe_file_key(cache_key)
         except ValueError:
             continue
+        exact_moe_keys.append(cache_key)
+        if cache_key in promoted or retained:
+            continue
         retained[cache_key] = _cache_tactic(value, cache_key)
-        break
-    if not retained:
+    if not exact_moe_keys:
         raise ValueError(
-            "stock cache must retain an unmodified FlashInfer MoE key for validation"
+            "stock cache must contain an exact FlashInfer MoE key for validation"
         )
-    absent_key = _absent_key_from(next(iter(retained)), stock_entries)
+    absent_key = _absent_key_from(exact_moe_keys[0], stock_entries)
 
     output.mkdir(parents=True, exist_ok=True)
     _run_cache_subprocess(
@@ -600,6 +628,7 @@ def build_candidate_cache(
         promoted=promoted,
         retained=retained,
         absent_key=absent_key,
+        timeout_seconds=float(subprocess_timeout_seconds),
     )
 
     candidate_payload = _load_json_object(candidate_path)
