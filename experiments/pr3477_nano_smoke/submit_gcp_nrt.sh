@@ -19,6 +19,7 @@ WORK_ROOT=${WORK_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttr
 RUNTIME_ROOT=${RUNTIME_ROOT:-${WORK_ROOT}/containers/nemo-rl-nightly-refresh}
 CONTAINER=${CONTAINER:-${RUNTIME_ROOT}/nemo_rl_nightly_20260730_483099.sqsh}
 CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/mopd_nano_fast/.cache/pr3477-nano-smoke/exact-head}
+FORCE_REBUILD_VENVS=${FORCE_REBUILD_VENVS:-false}
 PYTHON_OVERLAY=${PYTHON_OVERLAY:-${CACHE_ROOT}/uv-python}
 ROOT_CACHE_OVERLAY=${ROOT_CACHE_OVERLAY:-${RUNTIME_ROOT}/root-cache-overlay-483099}
 UV_BIN_DIR=${UV_BIN_DIR:-${WORK_ROOT}/tools/uv-current}
@@ -87,6 +88,7 @@ max_steps=${MAX_STEPS}
 container=${CONTAINER}
 python_overlay=${PYTHON_OVERLAY}
 uv_version=$(${UV_BIN_DIR}/uv --version)
+force_rebuild_venvs=${FORCE_REBUILD_VENVS}
 wandb_project=${WANDB_PROJECT}
 wandb_name=${WANDB_NAME}
 EOF
@@ -95,7 +97,7 @@ COMMAND=$(cat <<EOF
 set -euo pipefail
 cd ${REPO}
 export HF_HOME=${WORK_ROOT}/.cache/huggingface
-export NRL_FORCE_REBUILD_VENVS=true
+export NRL_FORCE_REBUILD_VENVS=${FORCE_REBUILD_VENVS}
 export NEMO_RL_VENV_DIR=${CACHE_ROOT}/worker-venvs
 export NVTE_CUDA_ARCHS=100
 export PYTHONPATH=${REPO}
