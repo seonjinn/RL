@@ -21,7 +21,7 @@ WALLTIME=${WALLTIME:-02:00:00}
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}
 CONTAINER=${CONTAINER:-${WORK_ROOT}/containers/nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh}
 PREP_ROOT=${PREP_ROOT:-${WORK_ROOT}/experiments/qwen30b-mxfp8-linear-backends/prepare}
-SHARED_WORKER_VENV_ROOT=${SHARED_WORKER_VENV_ROOT:-${WORK_ROOT}/.cache/nemo-rl-vllm0251-worker-venvs}
+VLLM_VENV_BASE_ROOT=${VLLM_VENV_BASE_ROOT:-${WORK_ROOT}/.cache/nemo-rl-vllm0251-worker-venvs}
 
 mkdir -p "${PREP_ROOT}"
 
@@ -30,6 +30,10 @@ set -euo pipefail
 cd ${REPO_DIR}
 export UV_PROJECT_ENVIRONMENT=
 source ${REPO_DIR}/experiments/mxfp8_linear_backend_model_matrix/provenance.sh
+PREPARATION_LOCK=\$(git rev-parse --path-format=absolute --git-path \
+  mxfp8-vllm-preparation.lock)
+exec 8>"\${PREPARATION_LOCK}"
+flock 8
 git submodule update --init --recursive
 assert_preparation_scope_clean() {
   if [[ -n "\$(git status --porcelain --untracked-files=all -- . \
@@ -114,20 +118,105 @@ if locked != {expected}:
     )
 print(f"Ray lock verified: {expected}")
 PY
-export NEMO_RL_VENV_DIR=${SHARED_WORKER_VENV_ROOT}
 export NRL_VENV_BOOTSTRAP_PACKAGES='--torch-backend cu130 torch==2.11.0 numpy setuptools setuptools-rust setuptools-scm'
 export NRL_VENV_NO_BUILD_ISOLATION_PACKAGES=vllm
-UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv \
-  uv run --frozen --extra vllm python - <<'PY'
-from nemo_rl.distributed.virtual_cluster import PY_EXECUTABLES
-from nemo_rl.utils.venvs import create_local_venv
+VLLM_ENVIRONMENT_KEY=\$(mxfp8_vllm_environment_key \
+  "${REPO_DIR}" "${REPO_DIR}/3rdparty/vllm" "${CONTAINER}" \
+  "\${NRL_VENV_BOOTSTRAP_PACKAGES}" \
+  "\${NRL_VENV_NO_BUILD_ISOLATION_PACKAGES}")
+VLLM_ENVIRONMENT_ROOT=${VLLM_VENV_BASE_ROOT}/\${VLLM_ENVIRONMENT_KEY}
+validate_vllm_environment() {
+  local environment_root=\$1
+  local expected_key=\$2
+  local require_ready=\${3:-true}
+  local prepared_environment_key
+  if [[ "\${require_ready}" == true ]]; then
+    prepared_environment_key=\$(cat "\${environment_root}/READY" 2>/dev/null || true)
+    [[ "\${prepared_environment_key}" == "\${expected_key}" ]] || return 1
+  fi
+  [[ -x "\${environment_root}/vllm-canonical/bin/python" ]] || return 1
+  NEMO_RL_VENV_DIR="\${environment_root}" \
+    "\${environment_root}/vllm-canonical/bin/python" - <<'PY'
+import os
+from pathlib import Path
 
-create_local_venv(
-    PY_EXECUTABLES.VLLM,
-    "nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker",
-    force_rebuild=True,
+from nemo_rl.distributed.ray_actor_environment_registry import (
+    ACTOR_ENVIRONMENT_REGISTRY,
 )
+from nemo_rl.distributed.virtual_cluster import PY_EXECUTABLES
+
+root = Path(os.environ["NEMO_RL_VENV_DIR"])
+canonical = (root / "vllm-canonical").resolve()
+missing = []
+for actor_fqn, py_executable in sorted(ACTOR_ENVIRONMENT_REGISTRY.items()):
+    if py_executable != PY_EXECUTABLES.VLLM:
+        continue
+    alias = root / actor_fqn
+    if not alias.is_symlink() or alias.resolve() != canonical:
+        missing.append(actor_fqn)
+if missing:
+    raise SystemExit(f"Missing or invalid vLLM actor aliases: {missing}")
 PY
+}
+mkdir -p "${VLLM_VENV_BASE_ROOT}"
+exec 9>"${VLLM_VENV_BASE_ROOT}/.\${VLLM_ENVIRONMENT_KEY}.lock"
+flock 9
+if validate_vllm_environment \
+    "\${VLLM_ENVIRONMENT_ROOT}" "\${VLLM_ENVIRONMENT_KEY}"; then
+  echo "Reusing prepared vLLM environment \${VLLM_ENVIRONMENT_KEY}"
+else
+  rm -rf "\${VLLM_ENVIRONMENT_ROOT}"
+  mkdir -p "\${VLLM_ENVIRONMENT_ROOT}"
+  export NEMO_RL_VENV_DIR=\${VLLM_ENVIRONMENT_ROOT}
+  UV_PROJECT_ENVIRONMENT=${REPO_DIR}/3rdparty/vllm/.venv \
+    uv run --frozen --extra vllm python - <<'PY'
+import os
+from nemo_rl.distributed.virtual_cluster import PY_EXECUTABLES
+from nemo_rl.distributed.ray_actor_environment_registry import (
+    ACTOR_ENVIRONMENT_REGISTRY,
+)
+from nemo_rl.utils.venvs import create_local_venv
+from pathlib import Path
+
+root = Path(os.environ["NEMO_RL_VENV_DIR"])
+canonical_python = Path(create_local_venv(
+    PY_EXECUTABLES.VLLM,
+    "vllm-canonical",
+))
+canonical = canonical_python.parent.parent
+actor_names = sorted(
+    actor_fqn
+    for actor_fqn, py_executable in ACTOR_ENVIRONMENT_REGISTRY.items()
+    if py_executable == PY_EXECUTABLES.VLLM
+)
+required = {
+    "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker",
+    "nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker",
+}
+missing = required.difference(actor_names)
+if missing:
+    raise RuntimeError(f"Missing required vLLM actor registrations: {sorted(missing)}")
+for actor_name in actor_names:
+    alias = root / actor_name
+    alias.symlink_to(canonical.name, target_is_directory=True)
+    print(f"Prepared vLLM actor alias: {actor_name} -> {canonical.name}")
+PY
+  \${VLLM_ENVIRONMENT_ROOT}/vllm-canonical/bin/python - <<'PY'
+import flashinfer
+import ray
+import vllm
+
+print(f"Prepared vLLM={vllm.__version__}")
+print(f"Prepared FlashInfer={flashinfer.__version__}")
+print(f"Prepared Ray={ray.__version__}")
+PY
+  validate_vllm_environment \
+    "\${VLLM_ENVIRONMENT_ROOT}" "\${VLLM_ENVIRONMENT_KEY}" false
+  printf '%s\n' \${VLLM_ENVIRONMENT_KEY} > \${VLLM_ENVIRONMENT_ROOT}/READY.tmp
+  mv \${VLLM_ENVIRONMENT_ROOT}/READY.tmp \${VLLM_ENVIRONMENT_ROOT}/READY
+fi
+flock -u 9
+export NEMO_RL_VENV_DIR=\${VLLM_ENVIRONMENT_ROOT}
 3rdparty/vllm/.venv/bin/python - <<'PY'
 import flashinfer
 import vllm
@@ -149,6 +238,7 @@ PY
 mxfp8_assert_vllm_tracked_state 3rdparty/vllm
 mxfp8_vllm_build_state_matches 3rdparty/vllm
 assert_preparation_scope_clean
+flock -u 8
 EOF
 )
 

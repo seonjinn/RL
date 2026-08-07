@@ -35,6 +35,19 @@ mxfp8_file_sha256() {
     mxfp8_sha256_stream < "${path}"
 }
 
+mxfp8_file_identity() {
+    local path=$1
+    [[ -f "${path}" ]] || {
+        echo "Missing fingerprinted file: ${path}" >&2
+        return 1
+    }
+    if stat -c '%n:%s:%Y' "${path}" >/dev/null 2>&1; then
+        stat -c '%n:%s:%Y' "${path}"
+    else
+        stat -f '%N:%z:%m' "${path}"
+    fi
+}
+
 mxfp8_vllm_source_sha256() {
     local vllm_root=$1
     git -C "${vllm_root}" archive --format=tar HEAD | mxfp8_sha256_stream
@@ -65,6 +78,39 @@ mxfp8_vllm_dependency_state_sha256() {
     git -C "${vllm_root}" diff --binary --full-index --no-ext-diff \
         --no-renames --diff-algorithm=myers --src-prefix=a/ --dst-prefix=b/ \
         HEAD -- pyproject.toml requirements/ | mxfp8_sha256_stream
+}
+
+mxfp8_vllm_environment_key() {
+    local repo_dir=$1
+    local vllm_root=$2
+    local container=$3
+    local bootstrap_packages=$4
+    local no_build_isolation_packages=$5
+    local dependency_state
+    local vllm_source
+    local vllm_dependencies
+    local container_identity
+    local actor_registry
+    local venv_builder
+    dependency_state=$(mxfp8_dependency_state_sha256 "${repo_dir}") || return
+    vllm_source=$(mxfp8_vllm_source_sha256 "${vllm_root}") || return
+    vllm_dependencies=$(mxfp8_vllm_dependency_state_sha256 "${vllm_root}") || return
+    container_identity=$(mxfp8_file_identity "${container}") || return
+    actor_registry=$(mxfp8_file_sha256 \
+        "${repo_dir}/nemo_rl/distributed/ray_actor_environment_registry.py") || return
+    venv_builder=$(mxfp8_file_sha256 "${repo_dir}/nemo_rl/utils/venvs.py") || return
+    {
+        printf 'schema=%s\n' 2
+        printf 'nemo_rl_dependencies=%s\n' "${dependency_state}"
+        printf 'vllm_source=%s\n' "${vllm_source}"
+        printf 'vllm_dependencies=%s\n' "${vllm_dependencies}"
+        printf 'container_identity=%s\n' "${container_identity}"
+        printf 'actor_registry=%s\n' "${actor_registry}"
+        printf 'venv_builder=%s\n' "${venv_builder}"
+        printf 'bootstrap_packages=%s\n' "${bootstrap_packages}"
+        printf 'no_build_isolation_packages=%s\n' \
+            "${no_build_isolation_packages}"
+    } | mxfp8_sha256_stream
 }
 
 mxfp8_vllm_build_state_matches() {

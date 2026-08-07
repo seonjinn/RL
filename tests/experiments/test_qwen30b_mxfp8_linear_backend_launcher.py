@@ -355,7 +355,7 @@ def test_launchers_reject_ray_version_drift_before_the_workload() -> None:
         assert "Ray version mismatch before workload launch" in text
 
 
-def test_launchers_reuse_prebuilt_vllm_environment_without_syncing() -> None:
+def test_launchers_reuse_versioned_canonical_vllm_environment_without_syncing() -> None:
     launchers = (
         LAUNCHER,
         REPO_ROOT
@@ -366,9 +366,13 @@ def test_launchers_reuse_prebuilt_vllm_environment_without_syncing() -> None:
 
     for launcher in launchers:
         text = launcher.read_text()
-        assert "PREBUILT_VLLM_VENV" in text
-        assert "DRIVER_VENV=${DRIVER_VENV:-${PREBUILT_VLLM_VENV}}" in text
-        assert "WORKER_VENV_ROOT=${WORKER_VENV_ROOT:-${SHARED_VENV_ROOT}}" in text
+        assert "VLLM_ENVIRONMENT_KEY" in text
+        assert "VLLM_ENVIRONMENT_ROOT" in text
+        assert "DRIVER_VENV=${DRIVER_VENV:-${VLLM_ENVIRONMENT_ROOT}/vllm-canonical}" in text
+        assert "WORKER_VENV_ROOT=${WORKER_VENV_ROOT:-${VLLM_ENVIRONMENT_ROOT}}" in text
+        assert "${VLLM_ENVIRONMENT_ROOT}/READY" in text
+        assert 'cat "${VLLM_ENVIRONMENT_ROOT}/READY"' in text
+        assert "Prepared vLLM environment key mismatch" in text
         assert "uv venv ${DRIVER_VENV}" not in text
         assert "uv pip install --python ${DRIVER_VENV}" not in text
         assert "uv run --frozen --extra vllm python" not in text
@@ -376,14 +380,73 @@ def test_launchers_reuse_prebuilt_vllm_environment_without_syncing() -> None:
         assert "${DRIVER_VENV}/bin/python examples/run_grpo.py" in text
 
 
-def test_preparation_builds_shared_worker_venv_once() -> None:
+def test_preparation_builds_one_canonical_vllm_venv_and_all_actor_aliases() -> None:
     prepare_text = PREPARE_SCRIPT.read_text()
 
-    assert "SHARED_WORKER_VENV_ROOT" in prepare_text
+    assert "VLLM_VENV_BASE_ROOT" in prepare_text
+    assert "VLLM_ENVIRONMENT_KEY" in prepare_text
+    assert "VLLM_ENVIRONMENT_ROOT" in prepare_text
     assert "nemo-rl-vllm0251-worker-venvs" in prepare_text
     assert "create_local_venv(" in prepare_text
+    assert '"vllm-canonical"' in prepare_text
+    assert "ACTOR_ENVIRONMENT_REGISTRY" in prepare_text
+    assert "py_executable == PY_EXECUTABLES.VLLM" in prepare_text
+    assert "nemo_rl.models.generation.vllm.vllm_worker.VllmGenerationWorker" in prepare_text
     assert "VllmAsyncGenerationWorker" in prepare_text
-    assert "force_rebuild=True" in prepare_text
+    assert "READY" in prepare_text
+    assert "prepared_environment_key" in prepare_text
+    assert "flock" in prepare_text
+    assert "PREPARATION_LOCK" in prepare_text
+    assert "git rev-parse --path-format=absolute --git-path" in prepare_text
+    assert "PREPARATION_LOCK=${PREP_ROOT}" not in prepare_text
+    assert "validate_vllm_environment" in prepare_text
+    assert "VLLM_ENVIRONMENT_STAGING" not in prepare_text
+    assert "mv \\${VLLM_ENVIRONMENT_STAGING}" not in prepare_text
+    assert "force_rebuild=True" not in prepare_text
+    final_validation = (
+        'validate_vllm_environment \\\n'
+        '    "\\${VLLM_ENVIRONMENT_ROOT}" "\\${VLLM_ENVIRONMENT_KEY}" false'
+    )
+    ready_publish = (
+        "mv \\${VLLM_ENVIRONMENT_ROOT}/READY.tmp "
+        "\\${VLLM_ENVIRONMENT_ROOT}/READY"
+    )
+    assert prepare_text.index(final_validation) < prepare_text.index(ready_publish)
+
+
+def test_vllm_environment_key_fingerprints_runtime_inputs() -> None:
+    provenance_text = PROVENANCE_HELPER.read_text()
+
+    assert "mxfp8_vllm_environment_key()" in provenance_text
+    assert "mxfp8_dependency_state_sha256" in provenance_text
+    assert "mxfp8_vllm_source_sha256" in provenance_text
+    assert "mxfp8_vllm_dependency_state_sha256" in provenance_text
+    assert "container_identity=" in provenance_text
+    assert "actor_registry=" in provenance_text
+    assert "venv_builder=" in provenance_text
+    assert "bootstrap_packages=" in provenance_text
+    assert "schema=" in provenance_text
+
+
+def test_vllm_environment_key_propagates_fingerprint_failures(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            (
+                f"source {PROVENANCE_HELPER}; "
+                "mxfp8_vllm_environment_key "
+                f"{tmp_path / 'missing-repo'} "
+                f"{tmp_path / 'missing-vllm'} "
+                f"{tmp_path / 'missing-container'} "
+                "bootstrap no-build"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
 
 
 def test_custom_vllm_build_preserves_compatibility_requirements_for_lock(

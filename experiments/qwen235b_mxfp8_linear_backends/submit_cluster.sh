@@ -85,9 +85,8 @@ EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${WORK_ROOT}/experiments/qwen235b-mxfp8-linea
 CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/.cache/qwen235b-mxfp8-linear-backends/${BACKEND}}
 HF_HOME=${HF_HOME:-${WORK_ROOT}/.cache/huggingface}
 SHARED_VENV_ROOT=${SHARED_VENV_ROOT:-${WORK_ROOT}/.cache/nemo-rl-vllm0251-worker-venvs}
-PREBUILT_VLLM_VENV=${PREBUILT_VLLM_VENV:-${SHARED_VENV_ROOT}/nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker}
-DRIVER_VENV=${DRIVER_VENV:-${PREBUILT_VLLM_VENV}}
-WORKER_VENV_ROOT=${WORKER_VENV_ROOT:-${SHARED_VENV_ROOT}}
+VLLM_BOOTSTRAP_PACKAGES='--torch-backend cu130 torch==2.11.0 numpy setuptools setuptools-rust setuptools-scm'
+VLLM_NO_BUILD_ISOLATION_PACKAGES=vllm
 WANDB_MODE=${WANDB_MODE:-disabled}
 SUBMIT_NEMO_RL_COMMIT=$(git -C "${REPO_DIR}" rev-parse HEAD)
 SUBMIT_DEPENDENCY_STATE_SHA256=
@@ -126,6 +125,25 @@ else
     }
     SUBMIT_VLLM_SOURCE_SHA256=$(mxfp8_vllm_source_sha256 "${CUSTOM_VLLM_ROOT}")
     SUBMIT_VLLM_DEPENDENCY_STATE_SHA256=$(mxfp8_vllm_dependency_state_sha256 "${CUSTOM_VLLM_ROOT}")
+fi
+
+VLLM_ENVIRONMENT_KEY=dry-run
+if [[ "${ACTION}" != "dry-run" ]]; then
+    VLLM_ENVIRONMENT_KEY=$(mxfp8_vllm_environment_key \
+        "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" "${CONTAINER}" \
+        "${VLLM_BOOTSTRAP_PACKAGES}" "${VLLM_NO_BUILD_ISOLATION_PACKAGES}")
+fi
+VLLM_ENVIRONMENT_ROOT=${VLLM_ENVIRONMENT_ROOT:-${SHARED_VENV_ROOT}/${VLLM_ENVIRONMENT_KEY}}
+DRIVER_VENV=${DRIVER_VENV:-${VLLM_ENVIRONMENT_ROOT}/vllm-canonical}
+WORKER_VENV_ROOT=${WORKER_VENV_ROOT:-${VLLM_ENVIRONMENT_ROOT}}
+if [[ "${ACTION}" != "dry-run" && ! -f "${VLLM_ENVIRONMENT_ROOT}/READY" ]]; then
+    echo "Prepared vLLM environment is not ready: ${VLLM_ENVIRONMENT_ROOT}" >&2
+    exit 1
+fi
+if [[ "${ACTION}" != "dry-run" && \
+      "$(cat "${VLLM_ENVIRONMENT_ROOT}/READY")" != "${VLLM_ENVIRONMENT_KEY}" ]]; then
+    echo "Prepared vLLM environment key mismatch: ${VLLM_ENVIRONMENT_ROOT}" >&2
+    exit 1
 fi
 
 mkdir -p "${EXPERIMENT_ROOT}" "${CACHE_ROOT}" "${HF_HOME}"
@@ -178,8 +196,8 @@ export NCCL_NVLS_ENABLE=0
 export RAY_CGRAPH_get_timeout=2400
 export NRL_FORCE_REBUILD_VENVS=false
 export NEMO_RL_VENV_DIR=${WORKER_VENV_ROOT}
-export NRL_VENV_BOOTSTRAP_PACKAGES='--torch-backend cu130 torch==2.11.0 numpy setuptools setuptools-rust setuptools-scm'
-export NRL_VENV_NO_BUILD_ISOLATION_PACKAGES=vllm
+export NRL_VENV_BOOTSTRAP_PACKAGES='${VLLM_BOOTSTRAP_PACKAGES}'
+export NRL_VENV_NO_BUILD_ISOLATION_PACKAGES='${VLLM_NO_BUILD_ISOLATION_PACKAGES}'
 export NVTE_CUDA_ARCHS=100
 export SETUPTOOLS_SCM_PRETEND_VERSION=0.25.1
 export TORCH_CUDA_ARCH_LIST=10.0
@@ -192,6 +210,14 @@ printf 'NEMO_RL_COMMIT=%s\n' "\${runtime_nemo_rl_commit}"
 printf 'VLLM_COMMIT=%s\n' "\${runtime_vllm_commit}"
 [[ -x ${DRIVER_VENV}/bin/python ]] || {
   echo "Prepared vLLM environment is missing: ${DRIVER_VENV}" >&2
+  exit 1
+}
+[[ -f ${VLLM_ENVIRONMENT_ROOT}/READY ]] || {
+  echo "Prepared vLLM environment marker is missing: ${VLLM_ENVIRONMENT_ROOT}/READY" >&2
+  exit 1
+}
+[[ "\$(cat ${VLLM_ENVIRONMENT_ROOT}/READY)" == "${VLLM_ENVIRONMENT_KEY}" ]] || {
+  echo "Prepared vLLM environment key mismatch: ${VLLM_ENVIRONMENT_ROOT}" >&2
   exit 1
 }
 export VIRTUAL_ENV=${DRIVER_VENV}
