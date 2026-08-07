@@ -36,6 +36,9 @@ TRAINING_COMMAND="uv run --no-sync examples/run_grpo.py --config $RECIPE grpo.ma
 if [[ "$HYBRIDEP_BACKEND" == 1 ]]; then
   TRAINING_COMMAND="$TRAINING_COMMAND ++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep ++policy.megatron_cfg.moe_hybridep_num_sms=32 ++policy.megatron_cfg.moe_hybridep_pad_uneven_dispatch_inputs=$([[ $PAD_UNEVEN == 1 ]] && printf true || printf false)"
 fi
+if [[ "$LEGACY_PREPADDING" == 1 ]]; then
+  TRAINING_COMMAND="$TRAINING_COMMAND ++policy.megatron_cfg.moe_hybridep_prepad_packed_inputs=true"
+fi
 TRAINING_COMMAND="$TRAINING_COMMAND logger.log_dir=$OUTPUT_ROOT/training-\$SLURM_JOB_ID logger.wandb_enabled=$WANDB_ENABLED logger.wandb.project=$WANDB_PROJECT logger.wandb.name=$WANDB_NAME"
 
 SBATCH_RENDER=(sbatch --nodes="$NODES" --gpus-per-node="$GPUS_PER_NODE" --segment="$SEGMENT"
@@ -246,6 +249,8 @@ if hybridep:
         moe_hybridep_num_sms=32,
         moe_hybridep_pad_uneven_dispatch_inputs=expected_padding,
     )
+if os.environ["LEGACY_PREPADDING"] == "1":
+    megatron_cfg["moe_hybridep_prepad_packed_inputs"] = True
 model_cfg = SimpleNamespace(moe_hybridep_pad_uneven_dispatch_inputs=False)
 _apply_moe_config(model_cfg, {"megatron_cfg": megatron_cfg})
 assert model_cfg.moe_hybridep_pad_uneven_dispatch_inputs is expected_padding
@@ -290,6 +295,9 @@ if [[ "$HYBRIDEP_BACKEND" == 1 ]]; then
     ++policy.megatron_cfg.moe_hybridep_num_sms=32
     "++policy.megatron_cfg.moe_hybridep_pad_uneven_dispatch_inputs=$([[ $PAD_UNEVEN == 1 ]] && printf true || printf false)"
   )
+fi
+if [[ "$LEGACY_PREPADDING" == 1 ]]; then
+  RUN_ARGS+=(++policy.megatron_cfg.moe_hybridep_prepad_packed_inputs=true)
 fi
 uv run --no-sync examples/run_grpo.py "${RUN_ARGS[@]}" 2>&1 | tee "$OUTPUT_ROOT/training-$SLURM_JOB_ID.log"
 DRIVER

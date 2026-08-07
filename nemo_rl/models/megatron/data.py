@@ -13,7 +13,9 @@
 # limitations under the License.
 
 from contextlib import nullcontext
-from dataclasses import dataclass
+import logging
+import os
+from dataclasses import dataclass, replace
 from typing import Any, Iterator, Optional, Tuple
 
 import torch
@@ -24,6 +26,7 @@ from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.parallel_state import (
     get_context_parallel_rank,
     get_context_parallel_world_size,
+    get_expert_tensor_and_model_parallel_group,
 )
 from megatron.core.utils import StragglerDetector
 
@@ -35,6 +38,9 @@ from nemo_rl.utils.r3_trace import (
     r3_trace_verify_forward_enabled,
     trace_cp_routed_experts,
 )
+
+logger = logging.getLogger(__name__)
+_HYBRIDEP_PREPADDING_LOG_CALLS = 0
 
 
 @dataclass
@@ -48,6 +54,7 @@ class ProcessedInputs:
     packed_seq_params: Optional[PackedSeqParams]
     cu_seqlens_padded: Optional[torch.Tensor]
     mtp_loss_mask: Optional[torch.Tensor] = None
+    padding_mask: Optional[torch.Tensor] = None
     routed_experts: Optional[torch.Tensor] = None
     routed_experts_cp_sharded: Optional[torch.Tensor] = None
 
@@ -70,6 +77,7 @@ class ProcessedMicrobatch:
         cu_seqlens_padded: Padded cumulative sequence lengths (None if not packing)
         mtp_loss_mask: Pre-computed MTP loss mask (token_mask × sample_mask).
             None when MTP is disabled or token/sample masks are absent.
+        padding_mask: Boolean mask where True marks fake pre-padding rows.
         routed_experts: Optional token-aligned routed expert ids
         routed_experts_cp_sharded: Context-parallel sharded routed expert ids
     """
@@ -82,6 +90,7 @@ class ProcessedMicrobatch:
     packed_seq_params: Optional[PackedSeqParams]
     cu_seqlens_padded: Optional[torch.Tensor]
     mtp_loss_mask: Optional[torch.Tensor] = None
+    padding_mask: Optional[torch.Tensor] = None
     routed_experts: Optional[torch.Tensor] = None
     routed_experts_cp_sharded: Optional[torch.Tensor] = None
 
@@ -97,6 +106,7 @@ def make_processed_microbatch_iterator(
     delegate_pack_to_model: bool = False,
     delegate_mtp_loss_mask_to_model: bool = False,
     model_slices_context_parallel_inputs: bool = False,
+    prepad_packed_inputs_for_hybridep: bool = False,
 ) -> Iterator[ProcessedMicrobatch]:
     """Wrap a raw microbatch iterator to yield processed microbatches.
 
@@ -132,6 +142,7 @@ def make_processed_microbatch_iterator(
             delegate_pack_to_model=delegate_pack_to_model,
             delegate_mtp_loss_mask_to_model=delegate_mtp_loss_mask_to_model,
             model_slices_context_parallel_inputs=model_slices_context_parallel_inputs,
+            prepad_packed_inputs_for_hybridep=prepad_packed_inputs_for_hybridep,
             straggler_timer=straggler_timer,
         )
 
@@ -144,6 +155,7 @@ def make_processed_microbatch_iterator(
             packed_seq_params=processed_inputs.packed_seq_params,
             cu_seqlens_padded=processed_inputs.cu_seqlens_padded,
             mtp_loss_mask=processed_inputs.mtp_loss_mask,
+            padding_mask=processed_inputs.padding_mask,
             routed_experts=processed_inputs.routed_experts,
             routed_experts_cp_sharded=processed_inputs.routed_experts_cp_sharded,
         )
@@ -183,6 +195,19 @@ def get_microbatch_iterator(
     pad_factor = 1
     pad_full_seq_to = None
     pad_packed_seq_to_multiple_of = 1
+    prepad_packed_inputs_for_hybridep = bool(
+        cfg.get("megatron_cfg", {}).get("moe_hybridep_prepad_packed_inputs", False)
+    )
+    if prepad_packed_inputs_for_hybridep:
+        _validate_q30_legacy_hybridep_config(cfg["megatron_cfg"])
+        if not cfg["sequence_packing"]["enabled"]:
+            raise ValueError("legacy HybridEP pre-padding requires sequence packing")
+        if cfg["dynamic_batching"]["enabled"]:
+            raise ValueError(
+                "legacy HybridEP pre-padding does not support dynamic batching"
+            )
+        if delegate_pack_to_model or model_slices_context_parallel_inputs:
+            raise ValueError("legacy HybridEP pre-padding requires NeMo-owned packing")
 
     _, seq_dim_size = get_and_validate_seqlen(data)
 
@@ -224,6 +249,7 @@ def get_microbatch_iterator(
         delegate_pack_to_model=delegate_pack_to_model,
         delegate_mtp_loss_mask_to_model=delegate_mtp_loss_mask_to_model,
         model_slices_context_parallel_inputs=model_slices_context_parallel_inputs,
+        prepad_packed_inputs_for_hybridep=prepad_packed_inputs_for_hybridep,
     )
 
     # Compute padded sequence length for pipeline parallelism
@@ -250,6 +276,125 @@ def get_ltor_masks_and_position_ids(*args: Any, **kwargs: Any) -> Any:
     return _impl(*args, **kwargs)
 
 
+def get_hybridep_prepadding_contract() -> dict[str, bool]:
+    return {"enabled": True, "mcore_router_masks_padding": True}
+
+
+def _validate_q30_legacy_hybridep_config(megatron_cfg: dict[str, Any]) -> None:
+    requirements = (
+        ("tensor_model_parallel_size", 1, "tensor parallel size"),
+        ("pipeline_model_parallel_size", 1, "pipeline parallel size"),
+        ("context_parallel_size", 1, "context parallel size"),
+        ("sequence_parallel", False, "sequence parallelism"),
+        ("moe_token_dispatcher_type", "flex", "flex token dispatcher"),
+        ("moe_flex_dispatcher_backend", "hybridep", "HybridEP backend"),
+    )
+    for key, expected, description in requirements:
+        actual = megatron_cfg.get(key)
+        if actual != expected:
+            raise ValueError(
+                "Q30 legacy HybridEP pre-padding requires "
+                f"{description}={expected!r}; got {actual!r}"
+            )
+    if int(megatron_cfg.get("mtp_num_layers", 0) or 0) != 0:
+        raise ValueError("Q30 legacy HybridEP pre-padding does not support MTP")
+
+
+def _pad_q30_packed_inputs_for_hybridep(
+    *,
+    input_ids: torch.Tensor,
+    input_ids_cp_sharded: torch.Tensor,
+    packed_seq_params: PackedSeqParams,
+    cu_seqlens: torch.Tensor,
+    cu_seqlens_padded: torch.Tensor,
+    alignment: int,
+) -> tuple[torch.Tensor, torch.Tensor, PackedSeqParams, torch.Tensor, torch.Tensor]:
+    global _HYBRIDEP_PREPADDING_LOG_CALLS
+
+    if input_ids.shape != input_ids_cp_sharded.shape or input_ids.shape[0] != 1:
+        raise ValueError(
+            "Q30 legacy HybridEP pre-padding requires a single CP-local THD row"
+        )
+    if alignment <= 0:
+        raise ValueError(f"HybridEP alignment must be positive; got {alignment}")
+    if not torch.equal(cu_seqlens[:-1], cu_seqlens_padded[:-1]):
+        raise ValueError(
+            "Q30 legacy HybridEP pre-padding supports trailing padding only"
+        )
+
+    local_tokens = input_ids_cp_sharded.shape[1]
+    if int(cu_seqlens_padded[-1].item()) != local_tokens:
+        raise ValueError(
+            "Packed sequence metadata does not match the local token count"
+        )
+    valid_tokens = int(cu_seqlens[-1].item())
+    if valid_tokens > local_tokens:
+        raise ValueError("Valid token count exceeds the packed token count")
+
+    target = torch.tensor(
+        [local_tokens], dtype=torch.int64, device=input_ids_cp_sharded.device
+    )
+    group = get_expert_tensor_and_model_parallel_group(check_initialized=False)
+    torch.distributed.all_reduce(
+        target,
+        op=torch.distributed.ReduceOp.MAX,
+        group=group,
+    )
+    target_tokens = _round_up_to_multiple(int(target.item()), alignment)
+    added_tokens = target_tokens - local_tokens
+    if added_tokens < 0:
+        raise RuntimeError(
+            "HybridEP group maximum is smaller than the local token count"
+        )
+    if added_tokens:
+        input_ids = torch.nn.functional.pad(input_ids, (0, added_tokens), value=0)
+        input_ids_cp_sharded = torch.nn.functional.pad(
+            input_ids_cp_sharded, (0, added_tokens), value=0
+        )
+
+    padded_cu_seqlens = cu_seqlens_padded.clone()
+    padded_cu_seqlens[-1] = target_tokens
+    max_last_sequence = int((padded_cu_seqlens[-1] - padded_cu_seqlens[-2]).item())
+    packed_seq_params = replace(
+        packed_seq_params,
+        cu_seqlens_q=padded_cu_seqlens,
+        cu_seqlens_kv=padded_cu_seqlens,
+        cu_seqlens_q_padded=padded_cu_seqlens,
+        cu_seqlens_kv_padded=padded_cu_seqlens,
+        max_seqlen_q=max(int(packed_seq_params.max_seqlen_q), max_last_sequence),
+        max_seqlen_kv=max(int(packed_seq_params.max_seqlen_kv), max_last_sequence),
+        total_tokens=target_tokens,
+    )
+    padding_mask = torch.ones(
+        (1, target_tokens), dtype=torch.bool, device=input_ids_cp_sharded.device
+    )
+    padding_mask[:, :valid_tokens] = False
+
+    if os.getenv("NEMO_RL_HYBRIDEP_LOG_PACKING", "0") == "1":
+        max_calls = int(os.getenv("NEMO_RL_HYBRIDEP_LOG_PACKING_MAX_CALLS", "1"))
+        if _HYBRIDEP_PREPADDING_LOG_CALLS < max_calls:
+            _HYBRIDEP_PREPADDING_LOG_CALLS += 1
+            logger.warning(
+                "HybridEP legacy pre-padding: rank=%s call=%s valid_tokens=%s "
+                "local_tokens=%s target_tokens=%s added_tokens=%s overhead_pct=%.4f",
+                torch.distributed.get_rank(),
+                _HYBRIDEP_PREPADDING_LOG_CALLS,
+                valid_tokens,
+                local_tokens,
+                target_tokens,
+                added_tokens,
+                100.0 * (target_tokens - valid_tokens) / max(valid_tokens, 1),
+            )
+
+    return (
+        input_ids.contiguous(),
+        input_ids_cp_sharded.contiguous(),
+        packed_seq_params,
+        padded_cu_seqlens,
+        padding_mask,
+    )
+
+
 def process_microbatch(
     data_dict: BatchedDataDict[Any],
     seq_length_key: Optional[str] = None,
@@ -260,6 +405,7 @@ def process_microbatch(
     delegate_pack_to_model: bool = False,
     delegate_mtp_loss_mask_to_model: bool = False,
     model_slices_context_parallel_inputs: bool = False,
+    prepad_packed_inputs_for_hybridep: bool = False,
     straggler_timer: Optional[StragglerDetector] = None,
 ) -> ProcessedInputs:
     """Process a microbatch for Megatron model forward pass."""
@@ -286,6 +432,7 @@ def process_microbatch(
         cu_seqlens = None
         cu_seqlens_padded = None
         mtp_loss_mask = None
+        padding_mask = None
 
         if pack_sequences:
             # For packed sequences with padded input, we need sequence lengths
@@ -384,6 +531,29 @@ def process_microbatch(
                     cp_rank=get_context_parallel_rank(),
                     cp_size=get_context_parallel_world_size(),
                 )
+                if prepad_packed_inputs_for_hybridep:
+                    if delegate_pack_to_model or model_slices_context_parallel_inputs:
+                        raise ValueError(
+                            "Q30 legacy HybridEP pre-padding requires NeMo-owned packing"
+                        )
+                    if routed_experts is not None or "mtp_loss_mask" in data_dict:
+                        raise ValueError(
+                            "Q30 legacy HybridEP pre-padding does not support router replay or MTP"
+                        )
+                    (
+                        input_ids,
+                        local_input_ids,
+                        packed_seq_params,
+                        cu_seqlens_padded,
+                        padding_mask,
+                    ) = _pad_q30_packed_inputs_for_hybridep(
+                        input_ids=input_ids,
+                        input_ids_cp_sharded=local_input_ids,
+                        packed_seq_params=packed_seq_params,
+                        cu_seqlens=cu_seqlens,
+                        cu_seqlens_padded=cu_seqlens_padded,
+                        alignment=pad_packed_seq_to_multiple_of,
+                    )
                 if model_slices_context_parallel_inputs:
                     packed_seq_params = PackedSeqParams(
                         cu_seqlens_q=cu_seqlens,
@@ -556,6 +726,7 @@ def process_microbatch(
         packed_seq_params=packed_seq_params,
         cu_seqlens_padded=cu_seqlens_padded,
         mtp_loss_mask=mtp_loss_mask,
+        padding_mask=padding_mask,
         routed_experts=routed_experts,
         routed_experts_cp_sharded=routed_experts_cp_sharded,
     )
