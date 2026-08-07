@@ -2565,7 +2565,7 @@ def _run_single_cuda_graph_metrics_step(mock_grpo_components, train_func) -> Non
             mock_grpo_components["val_task_to_env"],
             mock_grpo_components["logger"],
             mock_grpo_components["checkpointer"],
-            _default_grpo_save_state(),
+            _initial_grpo_save_state(),
             master_config,
         )
 
