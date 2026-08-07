@@ -264,7 +264,7 @@ uv run --frozen examples/run_grpo.py \\
   ++policy.generation.vllm_cfg.pipeline_parallel_size=1 \\
   ++policy.generation.vllm_cfg.expert_parallel_size=1 \\
   policy.generation.vllm_cfg.precision=fp8 \\
-  policy.generation.vllm_cfg.is_mx=true \\
+  ++policy.generation.vllm_cfg.is_mx=true \\
   grpo.num_prompts_per_step='${NUM_PROMPTS}' \\
   grpo.num_generations_per_prompt='${NUM_GENERATIONS}' \\
   policy.train_global_batch_size='${TRAIN_GLOBAL_BATCH}' \\
