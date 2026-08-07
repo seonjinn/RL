@@ -22,8 +22,8 @@ ACTION=submit PROFILE=qwen06b MAX_STEPS=2 \
 ```
 
 The launcher records the resolved code SHA, container SHA256, topology, cache,
-and command inputs under the shared experiment result root. Ray bootstraps with
-the pinned Python 3.13.13 archive, while driver and actor environments use
-Python 3.13.14 as required by this source revision. Writable venvs are isolated
-by source SHA, container SHA256, and SLURM job ID; only the download cache is
-shared across jobs.
+and command inputs under the shared experiment result root. The pinned archive
+supplies `uv`; each node then creates Ray 2.56.1, driver, and actor
+environments on Python 3.13.14 as required by this source revision. Writable
+venvs are isolated by source SHA, container SHA256, and SLURM job ID; only the
+download cache is shared across jobs.

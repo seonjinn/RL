@@ -119,6 +119,7 @@ CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/mopd_nano_fast/.cache/native-mxfp8-source/
 SHARED_UV_CACHE=${SHARED_UV_CACHE:-${WORK_ROOT}/mopd_nano_fast/.cache/native-mxfp8-source/shared-vllm025/uv}
 RAY_BOOTSTRAP_ARCHIVE=${RAY_BOOTSTRAP_ARCHIVE:-${WORK_ROOT}/mopd_nano_fast/.cache/nccl-reshard-pr3294/bootstrap/ray-2.56.1-py31313.tar.gz}
 RAY_BOOTSTRAP_LOCAL_ROOT=${RAY_BOOTSTRAP_LOCAL_ROOT:-/tmp/nrl-ray-bootstrap-${SLURM_JOB_ID}}
+RAY_RUNTIME_ROOT=${RAY_RUNTIME_ROOT:-/tmp/nrl-ray-runtime-${SLURM_JOB_ID}}
 PYTHON_VERSION=${PYTHON_VERSION:-3.13.14}
 PYTHON_INSTALL_ROOT=${PYTHON_INSTALL_ROOT:-${RAY_BOOTSTRAP_LOCAL_ROOT}/python}
 PYTHON_BIN=${PYTHON_BIN:-${PYTHON_INSTALL_ROOT}/cpython-${PYTHON_VERSION}-linux-x86_64-gnu/bin/python3.13}
@@ -168,6 +169,13 @@ if [[ ! -x '${PYTHON_BIN}' ]]; then
 fi
 test -x '${PYTHON_BIN}'
 test \"\$('${PYTHON_BIN}' -c 'import platform; print(platform.python_version())')\" = '${PYTHON_VERSION}'
+if [[ ! -x '${RAY_RUNTIME_ROOT}/bin/ray' ]]; then
+  rm -rf '${RAY_RUNTIME_ROOT}'
+  '${RAY_BOOTSTRAP_LOCAL_ROOT}/bin/uv' venv --python '${PYTHON_BIN}' '${RAY_RUNTIME_ROOT}'
+  UV_CACHE_DIR='${SHARED_UV_CACHE}' '${RAY_BOOTSTRAP_LOCAL_ROOT}/bin/uv' pip install \
+    --python '${RAY_RUNTIME_ROOT}/bin/python' 'ray[default]==2.56.1'
+fi
+'${RAY_RUNTIME_ROOT}/bin/python' -c 'import platform, ray, requests, urllib3; assert platform.python_version() == \"${PYTHON_VERSION}\"; assert ray.__version__ == \"2.56.1\"'
 "
 
 MCORE_ACTOR_VENV=${CACHE_ROOT}/venvs/nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker
@@ -202,6 +210,7 @@ repo_sha=${EXPECTED_REPO_SHA}
 container=${CONTAINER}
 container_sha256=${CONTAINER_SHA256}
 python_version=${PYTHON_VERSION}
+ray_version=2.56.1
 max_steps=${MAX_STEPS}
 profile=${PROFILE}
 total_nodes=${TOTAL_NODES}
@@ -220,9 +229,9 @@ EOF
 export CONTAINER
 export MOUNTS=/lustre:/lustre
 export BASE_LOG_DIR=${EXPERIMENT_ROOT}
-export PATH=${RAY_BOOTSTRAP_LOCAL_ROOT}/bin:${PATH}
-export PYTHONPATH=${RAY_BOOTSTRAP_LOCAL_ROOT}/lib/python3.13/site-packages${PYTHONPATH:+:${PYTHONPATH}}
-export RAY_CLI=${RAY_BOOTSTRAP_LOCAL_ROOT}/bin/ray
+export PATH=${RAY_RUNTIME_ROOT}/bin:${PATH}
+export PYTHONPATH=${RAY_RUNTIME_ROOT}/lib/python3.13/site-packages${PYTHONPATH:+:${PYTHONPATH}}
+export RAY_CLI=${RAY_RUNTIME_ROOT}/bin/ray
 export UV_CACHE_DIR_OVERRIDE=${SHARED_UV_CACHE}
 export NRL_REFIT_NUM_STREAMS=${NRL_REFIT_NUM_STREAMS:-2}
 
@@ -234,7 +243,7 @@ export HF_HOME='${HF_HOME}'
 export NEMO_RL_VENV_DIR='${CACHE_ROOT}/venvs'
 export UV_CACHE_DIR='${SHARED_UV_CACHE}'
 export UV_PROJECT_ENVIRONMENT='${CACHE_ROOT}/driver-venv'
-export UV_PYTHON='${PYTHON_BIN}'
+export UV_PYTHON='${RAY_RUNTIME_ROOT}/bin/python'
 export UV_LOCK_TIMEOUT=7200
 export NRL_FORCE_REBUILD_VENVS=false
 export NVTE_CUDA_ARCHS=100
