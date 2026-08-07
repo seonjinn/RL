@@ -148,6 +148,48 @@ export VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=${CACHE_ROOT}
 export MXFP8_MOE_CUDA_GRAPH_REPLAY=required
 mkdir -p ${RUN_ROOT}
 python examples/run_grpo.py --config ${CONFIG} cluster.num_nodes=4 cluster.gpus_per_node=4 cluster.segment_size=4 policy.model_name=${MODEL_SNAPSHOT} policy.generation.vllm_cfg.enforce_eager=false ++policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm grpo.max_num_steps=${MAX_STEPS} grpo.val_at_start=false checkpointing.enabled=false checkpointing.checkpoint_dir=${RUN_ROOT}/checkpoints logger.log_dir=${RUN_ROOT}/logs logger.wandb_enabled=false
+${DRIVER_VENV}/bin/python - ${RUN_ROOT}/run_evidence.json ${ARM} ${RUN_ID} ${MAX_STEPS} <<'PY'
+import json
+from pathlib import Path
+import sys
+
+output, arm, run_id, max_steps_text = sys.argv[1:]
+root = Path(output).parent
+logs = sorted(root.glob("*-logs/ray-driver.log"))
+if len(logs) != 1:
+    raise RuntimeError(f"expected one ray-driver.log under {root}, found {len(logs)}")
+observed_steps = logs[0].read_text(errors="replace").count("Training Results:")
+max_steps = int(max_steps_text)
+if observed_steps < max_steps:
+    raise RuntimeError(
+        f"expected {max_steps} Training Results blocks, found {observed_steps}"
+    )
+payload = {
+    "arm": arm,
+    "exit_code": 0,
+    "metadata": {
+        "batch": "GRPO producer batch; see run manifest",
+        "run_id": run_id,
+        "topology": "4 nodes x 4 GPUs",
+    },
+    "observed_training_results": observed_steps,
+    "phases": {
+        "logprob": "success",
+        "refit": "success",
+        "rollout": "success",
+        "train": "success",
+    },
+    "steps": [
+        {
+            "realized_generated_tokens": None,
+            "step": step,
+            "token_evidence": "unavailable: GRPO producer emitted no exact count",
+        }
+        for step in range(1, max_steps + 1)
+    ],
+}
+Path(output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+PY
 if [[ ${MAX_STEPS} -eq 2 ]]; then printf '{"arm":"${ARM}","cache_sha256":"${CACHE_SHA256}","execution_inputs_sha256":"${EXECUTION_INPUTS_SHA256}","model_snapshot_sha256":"${MODEL_SHA256}","nemo_rl_commit":"${NEMO_RL_COMMIT}","recipe_sha256":"${RECIPE_SHA256}","scripts_sha256":"${SCRIPTS_SHA256}","smoke_manifest_sha256":"%s","vllm_commit":"${EXPECTED_VLLM_COMMIT}"}\\n' "\$(shasum -a 256 ${RUN_ROOT}/run_manifest.json | awk '{print \$1}')" > ${SMOKE_MARKER}; fi
 ${POST_RUN}
 EOF

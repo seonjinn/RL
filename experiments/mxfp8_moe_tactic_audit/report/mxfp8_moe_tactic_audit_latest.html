@@ -1,25 +1,13 @@
-<!doctype html><html><head><meta charset="utf-8"><title>MXFP8 MoE Tactic Audit</title></head><body><pre># MXFP8 MoE Tactic Audit
-
-## REJECT
-
-## INCOMPLETE EVIDENCE
-
-- hardware artifacts have not been collected
-- This is a not-yet-executed report template. Performance values are not reported.
-- Required evidence: six measured steps 3-8; successful refit/rollout/logprob/train phases; realized token counts; finite reward/loss/KL; matched manifests; 95% replay coverage; FC1/GEMM1 and FC2/GEMM2 shmoo data; cache hit/fallback NSys data; and matched GSM8K evidence.
-- Stock FlashInfer autotuning is sufficient for this workload until complete evidence proves otherwise.
-
-## Raw tables
-
-| Metric | Value |
-| --- | --- |
-| Steps 3-8 / realized tokens / finite reward-loss-KL | not reported |
-| FC1/GEMM1 and FC2/GEMM2 weighted micro speedup | not reported |
-| Tactic-change / cache hit / fallback | not reported |
-| Stock-normalized tok/s/GPU / step time / per-step variation | not reported |
-| 95% coverage / GSM8K | not reported |
-
-## Source hashes
-
-No source artifacts were supplied, so hashes are not reported.
-</pre></body></html>
+<!doctype html>
+<html><head><meta charset="utf-8"><title>MXFP8 MoE Tactic Audit</title><style>body{font-family:Arial,sans-serif;margin:2rem;max-width:1200px}table{border-collapse:collapse;width:100%;margin:1rem 0}th,td{border:1px solid #aaa;padding:.35rem;text-align:left}figure{margin:1.5rem 0}img{max-width:100%;height:auto}.verdict{font-weight:bold}</style></head><body>
+<h1>MXFP8 MoE Tactic Audit</h1><p class="verdict">NOT YET EXECUTED</p>
+<p>Template generated without execution artifacts; Task 11 supplies measured evidence.</p>
+<p>Performance values are not reported.</p>
+<h2>Required Evidence</h2>
+<p>steps 3-8; refit/rollout/logprob/train; explicit realized token counts; finite reward/loss/KL; 95% trace coverage; FC1/GEMM1 and FC2/GEMM2 component timings; cache hit/fallback; GSM8K; trace and qualification provenance.</p>
+<h2>Figures</h2>
+<figure><img src="mxfp8_moe_tactic_audit_micro_speedup.png" alt="mxfp8_moe_tactic_audit_micro_speedup"><figcaption>mxfp8_moe_tactic_audit_micro_speedup</figcaption></figure>
+<figure><img src="mxfp8_moe_tactic_audit_tactic_cache_shares.png" alt="mxfp8_moe_tactic_audit_tactic_cache_shares"><figcaption>mxfp8_moe_tactic_audit_tactic_cache_shares</figcaption></figure>
+<figure><img src="mxfp8_moe_tactic_audit_end_to_end.png" alt="mxfp8_moe_tactic_audit_end_to_end"><figcaption>mxfp8_moe_tactic_audit_end_to_end</figcaption></figure>
+<figure><img src="mxfp8_moe_tactic_audit_step_variation.png" alt="mxfp8_moe_tactic_audit_step_variation"><figcaption>mxfp8_moe_tactic_audit_step_variation</figcaption></figure>
+</body></html>

@@ -1,65 +1,60 @@
-"""Contracts for the fail-closed MXFP8 MoE tactic-audit report."""
+"""Producer-shaped contracts for the MXFP8 MoE tactic-audit report."""
 
 from __future__ import annotations
 
+import csv
+from hashlib import sha256
 import json
 from pathlib import Path
-from typing import Iterable
 
 from experiments.mxfp8_moe_tactic_audit.build_report import (
     AuditInputs,
     build_report,
     write_template,
 )
-from experiments.mxfp8_moe_tactic_audit.collect_results import (
-    compare_manifests,
-    summarize_run,
-)
+from experiments.mxfp8_moe_tactic_audit.collect_results import summarize_run
 
 
-def _sha() -> str:
-    return "a" * 64
+def _sha(path: Path) -> str:
+    return sha256(path.read_bytes()).hexdigest()
 
 
-def write_run_fixture(
+def write_grpo_run(
     root: Path,
     *,
-    steps: Iterable[int],
-    tokens_per_second_per_gpu: float,
-    generation_seconds: float,
-    total_step_seconds: float,
     arm: str,
+    run_id: str,
+    throughput: float,
+    total_step_seconds: float,
     complete: bool = True,
-    nested_log: bool = False,
 ) -> Path:
-    """Write a minimal validation run with real metric and phase evidence."""
-    run = root / arm
-    run.mkdir()
+    """Write actual GRPO labels and launcher-shaped execution evidence."""
+    run = root / f"{arm}-{run_id}"
+    log_dir = run / "logs"
+    log_dir.mkdir(parents=True)
     blocks = []
-    for _step in steps:
+    for _step in range(1, 9):
         blocks.append(
             "\n".join(
-                [
+                (
                     "Training Results:",
+                    "  • Loss: 0.2000",
+                    "  • Generation KL Error: 0.0100",
+                    "  • Avg Reward: 0.5000",
+                    "  • Mean Generation Length: 4000.0000",
                     f"  • Total step time: {total_step_seconds:.2f}s",
-                    f"  • generation: {generation_seconds:.2f}s (26.2%)",
-                    f"    - E2E (Tokens/sec/gpu): {tokens_per_second_per_gpu:.2f}",
+                    "  • generation: 55.00s (26.2%)",
+                    f"    - E2E (Tokens/sec/gpu): {throughput:.2f}",
                     "    - Generation Worker Group (Tokens/sec/gpu): "
-                    f"{tokens_per_second_per_gpu:.2f}",
-                    "  • Realized generated tokens: 64000",
-                    "  • Reward: 0.5",
-                    "  • KL: 0.01",
-                    "  • Loss: 0.2",
-                ]
+                    f"{throughput:.2f}",
+                )
             )
         )
-    log_dir = run / "validation-logs" if nested_log else run
-    log_dir.mkdir(exist_ok=True)
     (log_dir / "ray-driver.log").write_text("\n".join(blocks), encoding="utf-8")
     (run / "run_manifest.json").write_text(
         json.dumps(
             {
-                "cache_sha256": _sha() if arm == "stock" else "b" * 64,
+                "cache_sha256": "a" * 64 if arm == "stock" else "b" * 64,
                 "container_sha256": "c" * 64,
                 "execution_inputs_sha256": "d" * 64,
                 "model_snapshot_sha256": "e" * 64,
@@ -74,13 +69,26 @@ def write_run_fixture(
         encoding="ascii",
     )
     if complete:
-        (run / "phase_status.json").write_text(
+        (run / "run_evidence.json").write_text(
             json.dumps(
                 {
-                    "refit": "success",
-                    "rollout": "success",
-                    "logprob": "success",
-                    "train": "success",
+                    "arm": arm,
+                    "exit_code": 0,
+                    "metadata": {
+                        "batch": "16 prompts x 8 generations",
+                        "run_id": run_id,
+                        "topology": "4 nodes x 4 GPUs",
+                    },
+                    "phases": {
+                        "logprob": "success",
+                        "refit": "success",
+                        "rollout": "success",
+                        "train": "success",
+                    },
+                    "steps": [
+                        {"realized_generated_tokens": 64000, "step": step}
+                        for step in range(3, 9)
+                    ],
                 },
                 sort_keys=True,
             ),
@@ -90,218 +98,210 @@ def write_run_fixture(
 
 
 def write_audit_artifacts(root: Path) -> dict[str, Path]:
-    """Write compact, schema-shaped evidence for an executable report fixture."""
+    """Write cache-bound shmoo, trace, component, and provenance evidence."""
+    trace_summary = root / "trace_summary.json"
+    trace_summary.write_text(
+        json.dumps(
+            {
+                "profiles": [
+                    {"cache_key": "cache-1", "call_weight": 1.0, "signature_key": "sig-1"}
+                ]
+            },
+            sort_keys=True,
+        ),
+        encoding="ascii",
+    )
     selected_profiles = root / "selected_profiles.json"
     selected_profiles.write_text(
         json.dumps(
             {
                 "covered_weight": 0.96,
-                "total_gpu_time_us": 1000.0,
                 "selected_profiles": [
-                    {
-                        "signature_key": "sig-1",
-                        "call_count": 10,
-                        "normalized_weight": 1.0,
-                    }
+                    {"call_count": 10, "normalized_weight": 1.0, "signature_key": "sig-1"}
                 ],
-            }
+            },
+            sort_keys=True,
         ),
         encoding="ascii",
     )
     shmoo = root / "measurements.jsonl"
     rows = [
-        {"signature_key": "sig-1", "tactic": {"gemm1": 1, "gemm2": 2}, "median_us": 100.0},
-        {"signature_key": "sig-1", "tactic": {"gemm1": 3, "gemm2": 4}, "median_us": 90.0},
+        {"deterministic": True, "failure": "kernel failed", "finite": False, "median_us": 0.0, "signature_key": "sig-1", "tactic": {"gemm1": 9, "gemm2": 9}},
+        {"deterministic": True, "failure": None, "finite": True, "median_us": 90.0, "signature_key": "sig-1", "tactic": {"gemm1": 3, "gemm2": 4}},
+        {"deterministic": True, "failure": None, "finite": True, "median_us": 100.0, "signature_key": "sig-1", "tactic": {"gemm1": 1, "gemm2": 2}},
     ]
-    shmoo.write_text(
-        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
-        encoding="ascii",
-    )
+    shmoo.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in rows), encoding="ascii")
+    stock_cache = root / "stock_cache.json"
+    candidate_cache = root / "candidate_cache.json"
+    stock_cache.write_text(json.dumps({"cache-1": ["MoERunner", [1, 2]]}, sort_keys=True), encoding="ascii")
+    candidate_cache.write_text(json.dumps({"cache-1": ["MoERunner", [3, 4]]}, sort_keys=True), encoding="ascii")
     cache_manifest = root / "cache_manifest.json"
     cache_manifest.write_text(
         json.dumps(
             {
-                "stock_sha256": _sha(),
-                "candidate_sha256": "b" * 64,
-                "promoted_entries": 1,
-                "retained_entries": 4,
-                "source_fingerprints": {"trace_set_sha256": "4" * 64},
+                "candidate_sha256": _sha(candidate_cache),
+                "source_fingerprints": {
+                    "selected_profiles_sha256": _sha(selected_profiles),
+                    "shmoo_results_sha256": _sha(shmoo),
+                    "trace_set_sha256": _sha(trace_summary),
+                },
+                "stock_sha256": _sha(stock_cache),
+            },
+            sort_keys=True,
+        ),
+        encoding="ascii",
+    )
+    qualification_decisions = root / "qualification_decisions.json"
+    qualification_decisions.write_text(
+        json.dumps(
+            {
+                "cache_manifest_sha256": _sha(cache_manifest),
+                "decisions": [
+                    {"cache_key": "cache-1", "promoted": True, "selected": {"gemm1": 3, "gemm2": 4}}
+                ],
+                "trace_summary_sha256": _sha(trace_summary),
             },
             sort_keys=True,
         ),
         encoding="ascii",
     )
     correctness = root / "correctness.json"
-    correctness.write_text(
-        json.dumps(
-            {
-                "micro_correctness": True,
-                "cuda_graph_replay": True,
-                "deterministic_generation": True,
-                "gsm8k": True,
-            },
-            sort_keys=True,
-        ),
-        encoding="ascii",
-    )
+    correctness.write_text(json.dumps({"cuda_graph_replay": True, "deterministic_generation": True, "micro_correctness": True}, sort_keys=True), encoding="ascii")
     gsm8k = root / "gsm8k_comparison.json"
-    gsm8k.write_text(
-        json.dumps(
-            {
-                "passed": True,
-                "stock_accuracy": 0.6,
-                "candidate_accuracy": 0.6,
-                "accuracy_delta": 0.0,
-            },
-            sort_keys=True,
-        ),
-        encoding="ascii",
-    )
-    nsys = root / "nsys_cache.csv"
-    nsys.write_text("cache_event\ncache hit\nfallback\ncache hit\n", encoding="ascii")
+    gsm8k.write_text(json.dumps({"candidate_accuracy": 0.6, "passed": True, "stock_accuracy": 0.6}, sort_keys=True), encoding="ascii")
+    nsys = root / "nsys_components.csv"
+    with nsys.open("w", newline="", encoding="ascii") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["arm", "cache_event", "cache_key", "call_count", "component", "median_us", "signature_key", "tactic"])
+        writer.writeheader()
+        writer.writerows(
+            [
+                {"arm": "stock", "cache_event": "cache hit", "cache_key": "cache-1", "call_count": 10, "component": "FC1/GEMM1", "median_us": 60.0, "signature_key": "sig-1", "tactic": "1,2"},
+                {"arm": "candidate", "cache_event": "cache hit", "cache_key": "cache-1", "call_count": 10, "component": "FC1/GEMM1", "median_us": 50.0, "signature_key": "sig-1", "tactic": "3,4"},
+                {"arm": "stock", "cache_event": "fallback", "cache_key": "cache-1", "call_count": 10, "component": "FC2/GEMM2", "median_us": 40.0, "signature_key": "sig-1", "tactic": "1,2"},
+                {"arm": "candidate", "cache_event": "cache hit", "cache_key": "cache-1", "call_count": 10, "component": "FC2/GEMM2", "median_us": 30.0, "signature_key": "sig-1", "tactic": "3,4"},
+            ]
+        )
     return {
         "cache_manifest": cache_manifest,
+        "candidate_cache": candidate_cache,
         "correctness": correctness,
         "gsm8k": gsm8k,
         "nsys": nsys,
+        "qualification_decisions": qualification_decisions,
         "selected_profiles": selected_profiles,
         "shmoo": shmoo,
+        "stock_cache": stock_cache,
+        "trace_summary": trace_summary,
     }
 
 
-def test_summarize_run_requires_all_six_measured_steps(tmp_path: Path) -> None:
-    run = write_run_fixture(
-        tmp_path,
-        steps=range(1, 9),
-        tokens_per_second_per_gpu=9500.0,
-        generation_seconds=55.0,
-        total_step_seconds=210.0,
-        arm="stock",
-        nested_log=True,
-    )
+def complete_inputs(root: Path, *, repeated: bool = True) -> AuditInputs:
+    """Build a complete evidence set with one or two runs per arm."""
+    stock_runs = (write_grpo_run(root, arm="stock", run_id="one", throughput=9500.0, total_step_seconds=210.0),)
+    candidate_runs = (write_grpo_run(root, arm="candidate", run_id="one", throughput=9700.0, total_step_seconds=205.0),)
+    if repeated:
+        stock_runs += (write_grpo_run(root, arm="stock", run_id="two", throughput=9550.0, total_step_seconds=209.0),)
+        candidate_runs += (write_grpo_run(root, arm="candidate", run_id="two", throughput=9750.0, total_step_seconds=204.0),)
+    return AuditInputs(stock_runs=stock_runs, candidate_runs=candidate_runs, **write_audit_artifacts(root))
 
-    summary = summarize_run(run, first_step=3, last_step=8)
+
+def test_summarize_run_parses_actual_grpo_labels_and_evidence_tokens(tmp_path: Path) -> None:
+    run = write_grpo_run(tmp_path, arm="stock", run_id="one", throughput=9500.0, total_step_seconds=210.0)
+
+    summary = summarize_run(run)
 
     assert summary.measured_steps == 6
-    assert summary.generated_tokens_per_second_per_gpu > 0
-    assert summary.all_metrics_finite
+    assert summary.steps[0].reward == 0.5
+    assert summary.steps[0].kl == 0.01
+    assert summary.steps[0].loss == 0.2
     assert summary.realized_generated_tokens == 6 * 64000
 
 
-def test_manifest_comparison_allows_only_explicit_cache_identity(tmp_path: Path) -> None:
-    stock = write_run_fixture(
-        tmp_path,
-        steps=range(1, 9),
-        tokens_per_second_per_gpu=9500.0,
-        generation_seconds=55.0,
-        total_step_seconds=210.0,
-        arm="stock",
-    )
-    candidate = write_run_fixture(
-        tmp_path,
-        steps=range(1, 9),
-        tokens_per_second_per_gpu=9600.0,
-        generation_seconds=54.0,
-        total_step_seconds=208.0,
-        arm="candidate",
-    )
-
-    assert compare_manifests(stock / "run_manifest.json", candidate / "run_manifest.json") == ()
-    candidate_manifest = json.loads((candidate / "run_manifest.json").read_text())
-    candidate_manifest["recipe_sha256"] = "9" * 64
-    (candidate / "run_manifest.json").write_text(json.dumps(candidate_manifest))
-    assert compare_manifests(stock / "run_manifest.json", candidate / "run_manifest.json")
-
-
-def test_report_renders_complete_evidence_and_paper_assets(tmp_path: Path) -> None:
-    stock = write_run_fixture(
-        tmp_path,
-        steps=range(1, 9),
-        tokens_per_second_per_gpu=9500.0,
-        generation_seconds=55.0,
-        total_step_seconds=210.0,
-        arm="stock",
-    )
-    candidate = write_run_fixture(
-        tmp_path,
-        steps=range(1, 9),
-        tokens_per_second_per_gpu=9700.0,
-        generation_seconds=53.0,
-        total_step_seconds=205.0,
-        arm="candidate",
-        nested_log=True,
-    )
-    artifacts = write_audit_artifacts(tmp_path)
+def test_report_binds_shuffled_shmoo_rows_and_ignores_failed_fastest_row(tmp_path: Path) -> None:
+    inputs = complete_inputs(tmp_path)
     output_dir = tmp_path / "report"
 
-    report = build_report(
-        AuditInputs(stock_run=stock, candidate_run=candidate, **artifacts), output_dir
-    )
+    report = build_report(inputs, output_dir)
 
     markdown = (output_dir / "mxfp8_moe_tactic_audit_latest.md").read_text()
-    for required in (
-        "FC1/GEMM1",
-        "FC2/GEMM2",
-        "95%",
-        "cache hit",
-        "fallback",
-        "GSM8K",
-        "steps 3-8",
-        "KEEP",
-        "Source hashes",
-    ):
-        assert required in markdown
     assert report.verdict == "KEEP"
-    for plot_name in (
-        "mxfp8_moe_tactic_audit_micro_speedup",
-        "mxfp8_moe_tactic_audit_tactic_cache_shares",
-        "mxfp8_moe_tactic_audit_end_to_end",
-        "mxfp8_moe_tactic_audit_step_variation",
-    ):
-        assert (output_dir / f"{plot_name}.png").is_file()
-        assert (output_dir / f"{plot_name}.pdf").is_file()
-    assert (output_dir / "mxfp8_moe_tactic_audit_latest.html").is_file()
+    assert "FC1/GEMM1 call-weighted micro speedup | 1.2000" in markdown
+    assert "FC2/GEMM2 call-weighted micro speedup | 1.3333" in markdown
+    assert "Run-to-run variation" in markdown
+    assert "Total step time / stock" in markdown
+    assert "Cache Manifest Bindings" in markdown
+    assert "stock stock-one manifest" in markdown
+    html = (output_dir / "mxfp8_moe_tactic_audit_latest.html").read_text()
+    assert "<table>" in html
+    assert "<img src=" in html
+    assert "Raw Steps 3-8" in html
+    assert "Generation KL Error" in html
+    assert "run=one; batch=16 prompts x 8 generations; topology=4 nodes x 4 GPUs" in html
 
 
-def test_report_rejects_incomplete_evidence_without_performance_numbers(
+def test_one_run_per_arm_is_incomplete_for_promotion_but_preserves_raw_values(tmp_path: Path) -> None:
+    inputs = complete_inputs(tmp_path, repeated=False)
+    output_dir = tmp_path / "report"
+
+    report = build_report(inputs, output_dir)
+
+    markdown = (output_dir / "mxfp8_moe_tactic_audit_latest.md").read_text()
+    assert report.verdict == "INCOMPLETE"
+    assert "9500.00" in markdown
+    assert "9700.00" in markdown
+    assert "at least two comparable runs per arm" in markdown
+
+
+def test_failed_gate_rejects_but_preserves_raw_evidence(tmp_path: Path) -> None:
+    inputs = complete_inputs(tmp_path)
+    inputs.correctness.write_text(json.dumps({"cuda_graph_replay": False, "deterministic_generation": True, "micro_correctness": True}), encoding="ascii")
+    output_dir = tmp_path / "report"
+
+    report = build_report(inputs, output_dir)
+
+    markdown = (output_dir / "mxfp8_moe_tactic_audit_latest.md").read_text()
+    assert report.verdict == "REJECT"
+    assert "9500.00" in markdown
+    assert "failed correctness gates: cuda_graph_replay" in markdown
+
+
+def test_nsys_rows_must_bind_the_trace_cache_key(tmp_path: Path) -> None:
+    inputs = complete_inputs(tmp_path)
+    with inputs.nsys.open(newline="", encoding="ascii") as handle:
+        rows = list(csv.DictReader(handle))
+    rows[0]["cache_key"] = "wrong-cache"
+    with inputs.nsys.open("w", newline="", encoding="ascii") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+    report = build_report(inputs, tmp_path / "report")
+
+    assert report.verdict == "NOT YET EXECUTED"
+    assert "NSys component evidence missing" in report.reasons[0]
+
+
+def test_missing_artifacts_render_not_yet_executed_without_numeric_claims(tmp_path: Path) -> None:
+    inputs = complete_inputs(tmp_path)
+    inputs.nsys.unlink()
+    output_dir = tmp_path / "report"
+
+    report = build_report(inputs, output_dir)
+
+    markdown = (output_dir / "mxfp8_moe_tactic_audit_latest.md").read_text()
+    assert report.verdict == "NOT YET EXECUTED"
+    assert "not reported" in markdown
+    assert "9500.00" not in markdown
+
+
+def test_template_is_explicitly_not_yet_executed_without_source_artifacts(
     tmp_path: Path,
 ) -> None:
-    stock = write_run_fixture(
-        tmp_path,
-        steps=range(1, 9),
-        tokens_per_second_per_gpu=9500.0,
-        generation_seconds=55.0,
-        total_step_seconds=210.0,
-        arm="stock",
-        complete=False,
-    )
-    candidate = write_run_fixture(
-        tmp_path,
-        steps=range(1, 9),
-        tokens_per_second_per_gpu=9700.0,
-        generation_seconds=53.0,
-        total_step_seconds=205.0,
-        arm="candidate",
-    )
-    artifacts = write_audit_artifacts(tmp_path)
-    output_dir = tmp_path / "report"
+    report = write_template(tmp_path / "report")
 
-    report = build_report(
-        AuditInputs(stock_run=stock, candidate_run=candidate, **artifacts), output_dir
-    )
-
-    markdown = (output_dir / "mxfp8_moe_tactic_audit_latest.md").read_text()
-    assert report.verdict == "REJECT"
-    assert "INCOMPLETE EVIDENCE" in markdown
-    assert "not reported" in markdown
-    assert "## Raw tables" in markdown
-    assert "| Metric | Value |" in markdown
-
-
-def test_template_renders_placeholder_plots_in_a_new_directory(tmp_path: Path) -> None:
-    output_dir = tmp_path / "report"
-
-    report = write_template(output_dir)
-
-    assert report.verdict == "REJECT"
-    assert (output_dir / "mxfp8_moe_tactic_audit_micro_speedup.png").is_file()
+    markdown = (tmp_path / "report" / "mxfp8_moe_tactic_audit_latest.md").read_text()
+    assert report.verdict == "NOT YET EXECUTED"
+    assert "Template generated without execution artifacts" in markdown
+    assert "Performance values are not reported" in markdown
+    html = (tmp_path / "report" / "mxfp8_moe_tactic_audit_latest.html").read_text()
+    assert html.count("<img src=") == 4

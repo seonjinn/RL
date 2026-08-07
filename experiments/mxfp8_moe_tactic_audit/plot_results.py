@@ -1,14 +1,15 @@
-"""Paper-ready plots for the MXFP8 MoE tactic audit."""
+"""Publication plots backed by explicit component and run evidence."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+from typing import cast
 
-import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.container import BarContainer
 from matplotlib.figure import Figure
+import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
@@ -22,7 +23,7 @@ PLOT_NAMES = (
 )
 
 
-def _style_axis(ax: Axes, ylabel: str) -> None:
+def _style(ax: Axes, ylabel: str) -> None:
     ax.set_xlabel("")
     ax.set_ylabel(ylabel, fontsize=12)
     ax.tick_params(axis="x", labelsize=11)
@@ -33,31 +34,19 @@ def _style_axis(ax: Axes, ylabel: str) -> None:
         ax.spines[side].set_color("black")
 
 
-def _save(fig: Figure, output_base: Path) -> None:
-    output_base.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
+def _save(fig: Figure, base: Path, caption: str) -> None:
+    base.parent.mkdir(parents=True, exist_ok=True)
+    fig.text(0.5, 0.01, caption, ha="center", fontsize=9)
+    fig.tight_layout(rect=(0, 0.06, 1, 1))
     for extension in ("png", "pdf"):
-        fig.savefig(output_base.with_suffix(f".{extension}"), bbox_inches="tight", dpi=600)
+        fig.savefig(base.with_suffix(f".{extension}"), bbox_inches="tight", dpi=600)
     plt.close(fig)
 
 
-def _bar(ax: Axes, data: pd.DataFrame, *, x: str, y: str, ylabel: str) -> None:
+def _bars(ax: Axes, data: pd.DataFrame, *, x: str, y: str, ylabel: str) -> None:
     order = list(data[x])
-    sns.barplot(
-        data=data,
-        x=x,
-        y=y,
-        hue=x,
-        order=order,
-        hue_order=order,
-        palette=sns.color_palette("Paired", n_colors=len(order)),
-        edgecolor=EDGE_COLOR,
-        linewidth=2.0,
-        legend=False,
-        zorder=10,
-        ax=ax,
-    )
-    _style_axis(ax, ylabel)
+    sns.barplot(data=data, x=x, y=y, hue=x, order=order, hue_order=order, palette=sns.color_palette("Paired", n_colors=len(order)), edgecolor=EDGE_COLOR, linewidth=2.0, legend=False, zorder=10, ax=ax)
+    _style(ax, ylabel)
     for container in ax.containers:
         if isinstance(container, BarContainer):
             ax.bar_label(container, fmt="%.3g", padding=3, fontsize=10)
@@ -66,79 +55,58 @@ def _bar(ax: Axes, data: pd.DataFrame, *, x: str, y: str, ylabel: str) -> None:
 def write_complete_plots(
     output_dir: Path,
     *,
-    micro_speedups: Sequence[tuple[str, float]],
+    component_speedups: Sequence[tuple[str, float]],
     tactic_change_share: float,
     cache_hit_share: float,
-    normalized_generation_throughput: float,
-    normalized_step_speed: float,
-    step_values: Sequence[tuple[int, float, float]],
+    normalized_throughput: float,
+    normalized_total_step_time: float,
+    per_step: Sequence[tuple[int, float, float, float, float]],
+    metadata_caption: str,
 ) -> None:
-    """Write the four required 600-DPI PNG/PDF plot pairs."""
+    """Write four 600-DPI PNG/PDF figures from complete executed evidence."""
     plt.rcParams.update({"pdf.fonttype": 42, "ps.fonttype": 42})
-    micro = pd.DataFrame(micro_speedups, columns=["Kernel", "Speedup"])
+    micro = pd.DataFrame(component_speedups, columns=["Component", "Speedup"])
     fig, ax = plt.subplots(figsize=(7, 4.2))
-    _bar(ax, micro, x="Kernel", y="Speedup", ylabel="Call-weighted micro speedup")
+    _bars(ax, micro, x="Component", y="Speedup", ylabel="Call-weighted component speedup")
     ax.axhline(1.0, linestyle="--", linewidth=1.1, color="black", zorder=2)
-    _save(fig, output_dir / PLOT_NAMES[0])
+    _save(fig, output_dir / PLOT_NAMES[0], metadata_caption)
 
-    shares = pd.DataFrame(
-        [
-            ("Tactic change", tactic_change_share),
-            ("Cache hit", cache_hit_share),
-            ("Fallback", 1.0 - cache_hit_share),
-        ],
-        columns=["Evidence", "Share"],
-    )
+    shares = pd.DataFrame((("Tactic change", tactic_change_share), ("Cache hit", cache_hit_share), ("Fallback", 1.0 - cache_hit_share)), columns=["Evidence", "Share"])
     fig, ax = plt.subplots(figsize=(7, 4.2))
-    _bar(ax, shares, x="Evidence", y="Share", ylabel="Share")
+    _bars(ax, shares, x="Evidence", y="Share", ylabel="Share")
     ax.set_ylim(0, 1.12)
-    _save(fig, output_dir / PLOT_NAMES[1])
+    _save(fig, output_dir / PLOT_NAMES[1], metadata_caption)
 
-    end_to_end = pd.DataFrame(
-        [
-            ("Generation tok/s/GPU", normalized_generation_throughput),
-            ("Step speed", normalized_step_speed),
-        ],
-        columns=["Metric", "Stock normalized"],
-    )
+    end_to_end = pd.DataFrame((("tok/s/GPU", normalized_throughput), ("Total step time", normalized_total_step_time)), columns=["Metric", "Candidate / Stock"])
     fig, ax = plt.subplots(figsize=(7, 4.2))
-    _bar(ax, end_to_end, x="Metric", y="Stock normalized", ylabel="Stock normalized")
+    _bars(ax, end_to_end, x="Metric", y="Candidate / Stock", ylabel="Candidate / Stock")
     ax.axhline(1.0, linestyle="--", linewidth=1.1, color="black", zorder=2)
-    _save(fig, output_dir / PLOT_NAMES[2])
+    _save(fig, output_dir / PLOT_NAMES[2], metadata_caption + "; total step time: lower is better")
 
-    variation_rows = [
-        (f"Step {step}", "Stock", stock_value)
-        for step, stock_value, _ in step_values
-    ] + [
-        (f"Step {step}", "Candidate", candidate_value)
-        for step, _, candidate_value in step_values
-    ]
-    variation = pd.DataFrame(variation_rows, columns=["Step", "Arm", "tok/s/GPU"])
-    fig, ax = plt.subplots(figsize=(7, 4.2))
-    sns.barplot(
-        data=variation,
-        x="Step",
-        y="tok/s/GPU",
-        hue="Arm",
-        hue_order=["Stock", "Candidate"],
-        palette=sns.color_palette("Paired", n_colors=2),
-        edgecolor=EDGE_COLOR,
-        linewidth=2.0,
-        zorder=10,
-        ax=ax,
-    )
-    _style_axis(ax, "Generation tok/s/GPU")
-    handles, labels = ax.get_legend_handles_labels()
-    ax.legend().remove()
+    rows = []
+    for step, stock_tokens, candidate_tokens, stock_seconds, candidate_seconds in per_step:
+        rows.extend(((f"Step {step}", "Stock", "tok/s/GPU", stock_tokens), (f"Step {step}", "Candidate", "tok/s/GPU", candidate_tokens), (f"Step {step}", "Stock", "Total step s", stock_seconds), (f"Step {step}", "Candidate", "Total step s", candidate_seconds)))
+    frame = pd.DataFrame(rows, columns=["Step", "Arm", "Metric", "Value"])
+    fig, axes = plt.subplots(1, 2, figsize=(11.2, 4.2))
+    for ax, metric in zip(axes, ("tok/s/GPU", "Total step s"), strict=True):
+        subset = cast(pd.DataFrame, frame[frame["Metric"] == metric])
+        sns.barplot(data=subset, x="Step", y="Value", hue="Arm", hue_order=["Stock", "Candidate"], palette=sns.color_palette("Paired", n_colors=2), edgecolor=EDGE_COLOR, linewidth=2.0, zorder=10, ax=ax)
+        _style(ax, metric)
+        for container in ax.containers:
+            if isinstance(container, BarContainer):
+                ax.bar_label(container, fmt="%.3g", padding=2, fontsize=8)
+        if ax.get_legend() is not None:
+            ax.get_legend().remove()
+    handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", frameon=False, bbox_to_anchor=(0.5, 1.02), ncol=2, fontsize=11)
-    _save(fig, output_dir / PLOT_NAMES[3])
+    _save(fig, output_dir / PLOT_NAMES[3], metadata_caption + "; raw steps 3-8")
 
 
-def write_incomplete_plots(output_dir: Path) -> None:
-    """Render explicit non-numeric placeholders when collection fails closed."""
+def write_unavailable_plots(output_dir: Path, state: str) -> None:
+    """Render explicit placeholders without fabricated performance values."""
     plt.rcParams.update({"pdf.fonttype": 42, "ps.fonttype": 42})
-    for plot_name in PLOT_NAMES:
+    for name in PLOT_NAMES:
         fig, ax = plt.subplots(figsize=(7, 2.4))
-        ax.text(0.5, 0.5, "INCOMPLETE EVIDENCE\nNo performance values reported", ha="center", va="center", fontsize=13)
+        ax.text(0.5, 0.5, f"{state}\nNo performance values reported", ha="center", va="center", fontsize=13)
         ax.set_axis_off()
-        _save(fig, output_dir / plot_name)
+        _save(fig, output_dir / name, "MXFP8 MoE tactic audit")

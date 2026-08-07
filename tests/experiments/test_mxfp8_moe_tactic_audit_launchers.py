@@ -114,6 +114,13 @@ def test_validation_dry_runs_keep_stock_and_candidate_isolated(tmp_path: Path) -
     assert "MXFP8_MOE_CUDA_GRAPH_REPLAY=required" in candidate_output
     assert "vllm serve" in candidate_output
     assert "generation.jsonl" in candidate_output
+    assert "run_evidence.json" in candidate_output
+    assert '"exit_code": 0' in candidate_output
+    assert '"refit": "success"' in candidate_output
+    assert '"rollout": "success"' in candidate_output
+    assert '"logprob": "success"' in candidate_output
+    assert '"train": "success"' in candidate_output
+    assert '"realized_generated_tokens": None' in candidate_output
     assert "trap" in candidate_output
     assert "policy.model_name=" in candidate_output
     assert "HF_HUB_OFFLINE=1" in candidate_output
