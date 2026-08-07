@@ -16,7 +16,7 @@ EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-a76062edee3a3ac23d47a93c7ce466f06a1
 MODEL=Qwen/Qwen3-30B-A3B
 CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}
-RUN_ID=${RUN_ID:-trace-moe-audit}
+if [[ -n "${RUN_ID:-}" ]]; then RUN_ID=${RUN_ID}; elif [[ "${ACTION}" == submit ]]; then RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-$$; else RUN_ID=dry-run; fi
 RUN_ROOT=${RUN_ROOT:-${WORK_ROOT}/experiments/mxfp8-moe-tactic-audit/trace/${RUN_ID}}
 CONTAINER=${CONTAINER:-${WORK_ROOT}/containers/nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh}
 CUSTOM_VLLM_ROOT=${CUSTOM_VLLM_ROOT:-${REPO_DIR}/3rdparty/vllm}
@@ -35,6 +35,7 @@ esac
 
 if [[ "${ACTION}" == submit ]]; then
     audit_prepare_submit "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" "${EXPECTED_VLLM_COMMIT}"
+    [[ ! -e "${RUN_ROOT}" ]] || { echo "Run root already exists: ${RUN_ROOT}" >&2; exit 1; }
 fi
 
 TRACE_DIR=${RUN_ROOT}/trace
@@ -61,12 +62,15 @@ export VLLM_MXFP8_MOE_TRACE_DIR=${TRACE_DIR}
 export VLLM_MXFP8_MOE_MODEL_REVISION=${MODEL_REVISION}
 export VLLM_MXFP8_MOE_RUNTIME_FINGERPRINT=${NEMO_RL_COMMIT}-${EXPECTED_VLLM_COMMIT}
 export VLLM_MXFP8_MOE_DP_SIZE=16
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 mkdir -p ${TRACE_DIR}
 python examples/run_grpo.py \\
   --config ${CONFIG} \\
   cluster.num_nodes=4 \\
   cluster.gpus_per_node=4 \\
   cluster.segment_size=4 \\
+  policy.model_name=${MODEL_SNAPSHOT} \\
   policy.generation.vllm_cfg.enforce_eager=true \\
   ++policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm \\
   grpo.max_num_steps=2 \\
@@ -82,8 +86,10 @@ EOF
 SBATCH_ARGS=(
     --nodes=4
     --exclusive
+    --constraint=GB200
     --account="${ACCOUNT}"
     --partition="${PARTITION}"
+    --segment=4
     --time="${WALLTIME}"
     --job-name="mx-moe-trace-${RUN_ID}"
     --output="${RUN_ROOT}/slurm-%j.out"
@@ -107,7 +113,8 @@ case "${ACTION}" in
     submit)
         audit_write_manifest "${RUN_ROOT}" trace "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" \
             "${EXPECTED_VLLM_COMMIT}" "${CONTAINER}" "${CONFIG}" "${MODEL_SNAPSHOT}" \
-            "${CACHE_ROOT}" "${SCRIPT_DIR}"
+            "${CACHE_ROOT}" "${SCRIPT_DIR}" "${SCRIPT_DIR}/submit_trace_ptyche.sh" \
+            "${SCRIPT_DIR}/provenance.sh"
         CONTAINER=${CONTAINER} MOUNTS=/lustre:/lustre COMMAND="${COMMAND}" GPUS_PER_NODE=4 \
             BASE_LOG_DIR="${RUN_ROOT}" sbatch "${SBATCH_ARGS[@]}" "${REPO_DIR}/ray.sub"
         ;;

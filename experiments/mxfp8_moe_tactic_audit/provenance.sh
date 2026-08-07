@@ -50,17 +50,46 @@ audit_scripts_sha256() {
         done | audit_sha256_stream
 }
 
+audit_execution_inputs_sha256() {
+    local path
+    for path in "$@"; do
+        printf '%s\0' "${path}"
+        audit_sha256_path "${path}"
+        printf '\0'
+    done | audit_sha256_stream
+}
+
 audit_assert_clean_tracked() {
     local checkout=$1
-    [[ -d "${checkout}/.git" ]] || {
-        echo "Git checkout is missing: ${checkout}" >&2
+    [[ "$(git -C "${checkout}" rev-parse --is-inside-work-tree 2>/dev/null)" == true ]] || {
+        echo "Git worktree is missing: ${checkout}" >&2
         return 1
     }
-    git -C "${checkout}" diff --quiet --no-ext-diff -- &&
-        git -C "${checkout}" diff --cached --quiet --no-ext-diff -- || {
+    [[ -z "$(git -C "${checkout}" status --porcelain --untracked-files=no)" ]] || {
         echo "Tracked source is dirty: ${checkout}" >&2
         return 1
     }
+}
+
+audit_require_nonempty_dir() {
+    local path=$1
+    [[ -d "${path}" ]] && find "${path}" -type f -size +0c -print -quit | grep -q . || {
+        echo "Missing or empty required cache: ${path}" >&2
+        return 1
+    }
+}
+
+audit_resolve_model_snapshot() {
+    local cache_root=$1 expected_shards=$2 revision snapshot shard_count
+    [[ -s "${cache_root}/refs/main" ]] || { echo "Missing local model revision: ${cache_root}/refs/main" >&2; return 1; }
+    revision=$(tr -d '[:space:]' < "${cache_root}/refs/main")
+    snapshot=${cache_root}/snapshots/${revision}
+    shard_count=$(find -L "${snapshot}" -maxdepth 1 -type f -name 'model-*.safetensors' | wc -l | tr -d '[:space:]')
+    [[ -f "${snapshot}/model.safetensors.index.json" && "${shard_count}" == "${expected_shards}" ]] || {
+        echo "Incomplete local model snapshot: ${snapshot}" >&2
+        return 1
+    }
+    printf '%s\t%s\n' "${snapshot}" "${revision}"
 }
 
 audit_prepare_submit() {
@@ -94,6 +123,7 @@ audit_write_manifest() {
     local nemo_rl_commit
     local vllm_commit
 
+    shift 10
     mkdir -p "${output_root}"
     nemo_rl_commit=$(git -C "${repo_dir}" rev-parse HEAD)
     vllm_commit=$(git -C "${vllm_root}" rev-parse HEAD)
@@ -105,8 +135,9 @@ audit_write_manifest() {
         "${vllm_commit}" "$(audit_sha256_path "${container}")" \
         "$(audit_sha256_path "${repo_dir}/${recipe}")" \
         "$(audit_sha256_path "${model_snapshot}")" \
-        "$(audit_sha256_path_or_absent "${cache_root}")" \
-        "$(audit_scripts_sha256 "${scripts_root}")" <<'PY'
+        "$(audit_sha256_path "${cache_root}")" \
+        "$(audit_scripts_sha256 "${scripts_root}")" \
+        "$(audit_execution_inputs_sha256 "${scripts_root}" "$@")" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -121,6 +152,7 @@ from pathlib import Path
     model_snapshot_sha256,
     cache_sha256,
     scripts_sha256,
+    execution_inputs_sha256,
 ) = sys.argv[1:]
 manifest = {
     "cache_sha256": cache_sha256,
@@ -128,6 +160,7 @@ manifest = {
     "model_snapshot_sha256": model_snapshot_sha256,
     "nemo_rl_commit": nemo_rl_commit,
     "recipe_sha256": recipe_sha256,
+    "execution_inputs_sha256": execution_inputs_sha256,
     "run_kind": run_kind,
     "scripts_sha256": scripts_sha256,
     "vllm_commit": vllm_commit,
