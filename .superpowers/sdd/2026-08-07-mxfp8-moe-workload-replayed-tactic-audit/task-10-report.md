@@ -237,3 +237,60 @@ No GPU or live NSys workload was executed locally. GPU behavior is covered by
 the existing mocked CUDA contracts and the new producer-to-converter tests;
 the corrected launcher path still requires execution on the target GB200
 cluster to produce measured audit artifacts.
+
+## Fix Round 5
+
+- The shmoo launcher redirects `nsys stats` CSV stdout to the exact
+  `nsys-nvtx.csv` path consumed by the converter, independent of NSys report
+  suffix conventions. A shell/mock regression executes the rendered launcher
+  command with an NSys mock that reproduces the old `_nvtxppsum.csv` suffix.
+- Measured NVTX ranges now identify the FC1 cumulative endpoint and the
+  FC1+FC2 cumulative endpoint. Device synchronization occurs after each range.
+  The converter rejects legacy direct-component labels, missing or duplicate
+  cumulative stages, unequal call counts, and non-positive subtraction before
+  emitting normalized FC1/GEMM1 and derived FC2/GEMM2 rows.
+- Producer-derived timing tests track the active range and captured backend
+  mode. They prove that setup, warmup, graph capture, and correctness work are
+  outside measured ranges, that each range contains only its intended graph
+  replay, and that synchronization is outside every range.
+- Deterministic generation and GSM8K producers derive bindings only from the
+  stock/candidate artifacts they actually evaluate. Their CLIs no longer
+  accept arbitrary extra run roots, compare mode requires exactly one run ID,
+  and the report accepts that exact evaluated pair while repeated E2E runs
+  remain the independent variation evidence.
+
+## Fix Round 5 Verification
+
+```text
+PYTHONPATH=. .venv/bin/pytest -q \
+  tests/experiments/test_mxfp8_moe_tactic_audit_launchers.py \
+  tests/experiments/test_mxfp8_moe_tactic_audit_report.py \
+  tests/experiments/test_mxfp8_moe_tactic_cache_qualification.py \
+  tests/experiments/test_mxfp8_moe_tactic_correctness.py \
+  tests/experiments/test_mxfp8_moe_tactic_flashinfer_adapter.py \
+  tests/experiments/test_mxfp8_moe_tactic_shmoo.py
+
+145 passed, 16 macOS pytest temporary-directory cleanup warnings in 40.69s
+
+.venv/bin/ruff check <changed Python modules and tests>
+All checks passed.
+
+.venv/bin/ruff format --check <changed Python modules and tests>
+9 files already formatted.
+
+.venv/bin/pyright <changed production modules and type-clean changed tests>
+0 errors, 0 warnings, 0 informations.
+
+bash -n experiments/mxfp8_moe_tactic_audit/submit_shmoo_ptyche.sh \
+  experiments/mxfp8_moe_tactic_audit/submit_validation_ptyche.sh \
+  experiments/mxfp8_moe_tactic_audit/provenance.sh
+0 errors.
+```
+
+The changed correctness test module retains 43 pre-existing Pyright errors in
+unrelated fixtures; the new binding regression is outside those diagnostics.
+`uv run` cannot currently parse the repository workspace because `nemo-gym`
+is configured as a workspace source but is not a workspace member, so focused
+verification used the existing `.venv` directly. No GPU or live NSys workload
+was executed locally; the shell/mock and CUDA producer contracts cover the
+scoped regression paths pending target GB200 execution.

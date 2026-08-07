@@ -84,6 +84,92 @@ def test_shmoo_dry_run_requests_one_gb200_for_five_hours(tmp_path: Path) -> None
     assert "mkdir -p ${RUN_ROOT} ${CACHE_ROOT}" not in output
 
 
+def test_shmoo_command_streams_nsys_csv_to_the_exact_consumer_path(
+    tmp_path: Path,
+) -> None:
+    """Catch NSys appending a report suffix that the converter does not consume."""
+    vllm = tmp_path / "vllm"
+    vllm.mkdir()
+    _init_git_repo(vllm)
+    (vllm / "nemo-rl.env").write_text("true\n", encoding="ascii")
+    subprocess.run(["git", "add", "nemo-rl.env"], check=True, cwd=vllm)
+    subprocess.run(["git", "commit", "-q", "-m", "environment"], check=True, cwd=vllm)
+    vllm_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=vllm, text=True
+    ).strip()
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "nsys").write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+command=$1
+shift
+case "${command}" in
+  profile)
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --output) output=$2; shift 2 ;;
+        --output=*) output=${1#--output=}; shift ;;
+        *) shift ;;
+      esac
+    done
+    : > "${output}.nsys-rep"
+    ;;
+  stats)
+    output=
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --output) output=$2; shift 2 ;;
+        --output=*) output=${1#--output=}; shift ;;
+        *) shift ;;
+      esac
+    done
+    csv='Range,Instances,Total Time (ns)'
+    fc1='"MXFP8_MOE_AUDIT|signature_key=sig|cache_key=cache|arm=stock|component=FC1/GEMM1 cumulative|tactic=1,2|comparison_tactic=3,4|cache_event=cache hit|call_weight=1",1,1000'
+    pair='"MXFP8_MOE_AUDIT|signature_key=sig|cache_key=cache|arm=stock|component=FC1+FC2/GEMM1+GEMM2 cumulative|tactic=1,2|comparison_tactic=3,4|cache_event=cache hit|call_weight=1",1,2000'
+    if [[ -n "${output}" ]]; then
+      printf '%s\n%s\n%s\n' "${csv}" "${fc1}" "${pair}" > "${output}_nvtxppsum.csv"
+    else
+      printf '%s\n%s\n%s\n' "${csv}" "${fc1}" "${pair}"
+    fi
+    ;;
+esac
+""",
+        encoding="ascii",
+    )
+    (bin_dir / "nsys").chmod(0o755)
+    python = shutil.which("python3")
+    assert python is not None
+    (bin_dir / "python").symlink_to(python)
+    run_root = tmp_path / "shmoo"
+    rendered = _dry_run(
+        "submit_shmoo_ptyche.sh",
+        tmp_path,
+        {
+            "CUSTOM_VLLM_ROOT": str(vllm),
+            "EXPECTED_VLLM_COMMIT": vllm_commit,
+            "RUN_ROOT": str(run_root),
+            "SHMOO_OUTPUT_ROOT": str(run_root),
+        },
+    )
+    command = (
+        "set -euo pipefail\n" + rendered.split("set -euo pipefail\n", maxsplit=1)[1]
+    )
+
+    subprocess.run(
+        ["bash", "-c", command],
+        check=True,
+        cwd=REPO_ROOT,
+        env=os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+    )
+
+    assert (run_root / "nsys-nvtx.csv").is_file()
+    assert (run_root / "nsys_components.csv").is_file()
+
+
 def test_launchers_resolve_hf_cache_roots_to_exact_snapshots() -> None:
     """Catch a launcher passing an HF cache root to its runtime as a model."""
     for launcher_name in (
@@ -211,6 +297,22 @@ def test_compare_mode_is_the_only_cross_arm_validation_path(tmp_path: Path) -> N
     assert len(compare_calls) == 2
     assert "validate_correctness.py generation" in compare_calls[0]
     assert "compare_gsm8k.py" in compare_calls[1]
+
+    multiple_pairs = subprocess.run(
+        ["bash", str(AUDIT_DIR / "submit_validation_ptyche.sh")],
+        cwd=REPO_ROOT,
+        env=os.environ
+        | {
+            "ACTION": "dry-run",
+            "VALIDATION_MODE": "compare",
+            "COMPARE_RUN_ID": "one,two",
+            "WORK_ROOT": str(tmp_path),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert multiple_pairs.returncode == 2
+    assert "exactly one run pair" in multiple_pairs.stderr
 
 
 def _make_model_cache(tmp_path: Path, *, symlinked: bool = False) -> Path:

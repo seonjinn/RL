@@ -50,6 +50,10 @@ except ImportError:  # pragma: no cover - direct script execution
     from schema import ReplayProfile, TacticMeasurement, TacticPair
 
 
+FC1_CUMULATIVE = "FC1/GEMM1 cumulative"
+PAIR_CUMULATIVE = "FC1+FC2/GEMM1+GEMM2 cumulative"
+
+
 @dataclass(frozen=True)
 class _ProfileResult:
     median_us: float
@@ -196,7 +200,9 @@ def _nsys_component_range(
     cache_event: str,
 ) -> Iterator[None]:
     """Emit the metadata NSys needs to produce one non-fabricated component row."""
-    cache_key = cache_key_for_case(case, has_gemm1_lora_delta=component == "FC1/GEMM1")
+    cache_key = cache_key_for_case(
+        case, has_gemm1_lora_delta=component == FC1_CUMULATIVE
+    )
     label = "|".join(
         (
             "MXFP8_MOE_AUDIT",
@@ -239,7 +245,9 @@ def _profile_component_replays(
     zero_delta: torch.Tensor,
 ) -> _ReplayResult:
     """Profile only graph replays after setup and observe the active cache event."""
-    do_finalize = component == "FC2/GEMM2"
+    if component not in {FC1_CUMULATIVE, PAIR_CUMULATIVE}:
+        raise ValueError(f"unsupported cumulative component: {component}")
+    do_finalize = component == PAIR_CUMULATIVE
     delta = None if do_finalize else zero_delta
     force_context = (
         force_stock_tactic(cache_key)
@@ -292,7 +300,7 @@ def _profile_component_replays(
             ):
                 graph.replay()
                 end.record()
-                end.synchronize()
+            end.synchronize()
             timings_us.append(float(start.elapsed_time(end) * 1000.0))
             outputs.append(graph_output.clone())
     return _ReplayResult(tuple(outputs), tuple(timings_us))
@@ -362,7 +370,7 @@ def _profile_tactic_cuda(
         tactic if stock_final_tactic is None else stock_final_tactic,
         cache_key=final_key,
         arm="stock",
-        component="FC2/GEMM2",
+        component=PAIR_CUMULATIVE,
         comparison_tactic=tactic,
         warmups=warmups,
         repetitions=repetitions,
@@ -376,7 +384,7 @@ def _profile_tactic_cuda(
             tactic if stock_intermediate_tactic is None else stock_intermediate_tactic,
             cache_key=intermediate_key,
             arm="stock",
-            component="FC1/GEMM1",
+            component=FC1_CUMULATIVE,
             comparison_tactic=tactic,
             warmups=warmups,
             repetitions=repetitions,
@@ -403,7 +411,7 @@ def _profile_tactic_cuda(
         tactic,
         cache_key=intermediate_key,
         arm="candidate",
-        component="FC1/GEMM1",
+        component=FC1_CUMULATIVE,
         comparison_tactic=tactic,
         warmups=warmups,
         repetitions=repetitions,
@@ -416,7 +424,7 @@ def _profile_tactic_cuda(
         tactic,
         cache_key=final_key,
         arm="candidate",
-        component="FC2/GEMM2",
+        component=PAIR_CUMULATIVE,
         comparison_tactic=tactic,
         warmups=warmups,
         repetitions=repetitions,

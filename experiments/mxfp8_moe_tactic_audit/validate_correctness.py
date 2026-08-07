@@ -14,10 +14,10 @@ import sys
 from typing import Literal, cast
 
 try:
-    from .collect_results import comparison_run_bindings
+    from .collect_results import comparison_artifact_bindings
     from .schema import TACTIC_MEASUREMENT_FIELDS, TacticMeasurement, TacticPair
 except ImportError:  # pragma: no cover - direct script execution
-    from collect_results import comparison_run_bindings
+    from collect_results import comparison_artifact_bindings
     from schema import TACTIC_MEASUREMENT_FIELDS, TacticMeasurement, TacticPair
 
 
@@ -516,8 +516,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     generation_parser.add_argument("--stock", type=Path, required=True)
     generation_parser.add_argument("--candidate", type=Path, required=True)
-    generation_parser.add_argument("--stock-run-root", type=Path, action="append")
-    generation_parser.add_argument("--candidate-run-root", type=Path, action="append")
     return parser.parse_args(argv)
 
 
@@ -540,9 +538,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     payload = asdict(result)
     if args.command == "generation":
         try:
-            stock_bindings = tuple(args.stock_run_root or (args.stock,))
-            candidate_bindings = tuple(args.candidate_run_root or (args.candidate,))
-            payload.update(comparison_run_bindings(stock_bindings, candidate_bindings))
+            payload.update(comparison_artifact_bindings(args.stock, args.candidate))
         except ValueError as error:
             print(f"correctness gate error: {error}", file=sys.stderr)
             return 2

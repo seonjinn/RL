@@ -22,6 +22,8 @@ from experiments.mxfp8_moe_tactic_audit.schema import (
 )
 from experiments.mxfp8_moe_tactic_audit.nsys_to_component_csv import convert
 from experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics import (
+    FC1_CUMULATIVE,
+    PAIR_CUMULATIVE,
     _nsys_component_range,
     _profile_tactic_cuda,
     main,
@@ -87,15 +89,16 @@ def test_actual_shmoo_range_converts_to_mean_component_timing(
     )
     monkeypatch.setattr(torch.cuda.nvtx, "range_pop", lambda: None)
 
-    with _nsys_component_range(
-        _case(),
-        TacticPair(1, 2),
-        "stock",
-        "FC1/GEMM1",
-        comparison_tactic=TacticPair(3, 4),
-        cache_event="fallback",
-    ):
-        pass
+    for component in (FC1_CUMULATIVE, PAIR_CUMULATIVE):
+        with _nsys_component_range(
+            _case(),
+            TacticPair(1, 2),
+            "stock",
+            component,
+            comparison_tactic=TacticPair(3, 4),
+            cache_event="fallback",
+        ):
+            pass
 
     raw = tmp_path / "nvtx.csv"
     with raw.open("w", newline="", encoding="ascii") as handle:
@@ -106,14 +109,18 @@ def test_actual_shmoo_range_converts_to_mean_component_timing(
         writer.writerow(
             {"Range": labels[0], "Instances": 2, "Total Time (ns)": 120_000}
         )
+        writer.writerow(
+            {"Range": labels[1], "Instances": 2, "Total Time (ns)": 200_000}
+        )
     output = tmp_path / "components.csv"
     convert(raw, output)
 
     rows = list(csv.DictReader(output.open(encoding="ascii")))
-    assert rows[0]["cache_event"] == "fallback"
-    assert rows[0]["call_count"] == "2"
-    assert rows[0]["mean_us"] == "60"
-    assert "median_us" not in rows[0]
+    assert [row["component"] for row in rows] == ["FC1/GEMM1", "FC2/GEMM2"]
+    assert all(row["cache_event"] == "fallback" for row in rows)
+    assert all(row["call_count"] == "2" for row in rows)
+    assert [row["mean_us"] for row in rows] == ["60", "40"]
+    assert all("median_us" not in row for row in rows)
 
 
 def test_reconstruct_topk_is_deterministic_for_signature_key() -> None:
@@ -206,11 +213,25 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
 ) -> None:
     case = _case()
     tactic = TacticPair(1, 2)
+
+    class FakeGraph:
+        def __init__(self) -> None:
+            self.do_finalize: bool | None = None
+
+        def replay(self) -> None:
+            nonlocal graph_replays
+            graph_replays += 1
+            replay_ranges.append((active_range, self.do_finalize))
+
     run_modes: list[bool] = []
     forced: list[tuple[str, TacticPair | None]] = []
     nsys_ranges: list[tuple[str, str, TacticPair, str]] = []
     graph_replays = 0
     cold_touches = 0
+    active_range: str | None = None
+    synchronized_ranges: list[str | None] = []
+    replay_ranges: list[tuple[str | None, bool | None]] = []
+    capturing_graph: FakeGraph | None = None
     original_zeros = torch.zeros
     original_empty = torch.empty
     intermediate_calls = 0
@@ -257,9 +278,15 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
         comparison_tactic: TacticPair,
         cache_event: str,
     ):
+        nonlocal active_range
         assert comparison_tactic == tactic
+        assert active_range is None
+        active_range = component
         nsys_ranges.append((arm, component, selected, cache_event))
-        yield
+        try:
+            yield
+        finally:
+            active_range = None
 
     monkeypatch.setattr(
         "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics._nsys_component_range",
@@ -278,6 +305,9 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
         gemm1_lora_delta: torch.Tensor | None,
     ) -> MoePairResult:
         nonlocal intermediate_calls
+        assert active_range is None
+        if capturing_graph is not None:
+            capturing_graph.do_finalize = do_finalize
         run_modes.append(do_finalize)
         if do_finalize:
             assert gemm1_lora_delta is None
@@ -313,10 +343,15 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
         kwargs["device"] = "cpu"
         return original_empty(*args, **kwargs)
 
-    class FakeGraph:
-        def replay(self) -> None:
-            nonlocal graph_replays
-            graph_replays += 1
+    @contextmanager
+    def fake_graph_context(graph: FakeGraph):
+        nonlocal capturing_graph
+        assert capturing_graph is None
+        capturing_graph = graph
+        try:
+            yield
+        finally:
+            capturing_graph = None
 
     class FakeEvent:
         def __init__(self, *, enable_timing: bool) -> None:
@@ -326,7 +361,7 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
             pass
 
         def synchronize(self) -> None:
-            pass
+            synchronized_ranges.append(active_range)
 
         def elapsed_time(self, _other: object) -> float:
             return 0.004
@@ -335,7 +370,7 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
     monkeypatch.setattr(torch, "empty", cpu_empty)
     monkeypatch.setattr(torch.cuda, "synchronize", lambda _device: None)
     monkeypatch.setattr(torch.cuda, "CUDAGraph", FakeGraph)
-    monkeypatch.setattr(torch.cuda, "graph", lambda _graph: nullcontext())
+    monkeypatch.setattr(torch.cuda, "graph", fake_graph_context)
     monkeypatch.setattr(torch.cuda, "Event", FakeEvent)
     monkeypatch.setattr(
         torch.cuda,
@@ -368,13 +403,19 @@ def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
         ("final-key", tactic),
     ]
     assert nsys_ranges == [
-        *(("stock", "FC2/GEMM2", TacticPair(5, 6), "cache hit"),) * 10,
-        *(("stock", "FC1/GEMM1", TacticPair(7, 8), "cache hit"),) * 10,
-        *(("candidate", "FC1/GEMM1", tactic, "cache hit"),) * 10,
-        *(("candidate", "FC2/GEMM2", tactic, "cache hit"),) * 10,
+        *(("stock", PAIR_CUMULATIVE, TacticPair(5, 6), "cache hit"),) * 10,
+        *(("stock", FC1_CUMULATIVE, TacticPair(7, 8), "cache hit"),) * 10,
+        *(("candidate", FC1_CUMULATIVE, tactic, "cache hit"),) * 10,
+        *(("candidate", PAIR_CUMULATIVE, tactic, "cache hit"),) * 10,
     ]
     assert graph_replays == 40
     assert cold_touches == 40
+    assert all(component is not None for component, _mode in replay_ranges)
+    assert all(
+        (component == PAIR_CUMULATIVE) is do_finalize
+        for component, do_finalize in replay_ranges
+    )
+    assert synchronized_ranges == [None] * 40
     assert result.median_us == result.p95_us == 4.0
     assert result.finite is not repeated_intermediate_nan
     assert result.deterministic is not repeated_intermediate_nan
@@ -435,7 +476,7 @@ def test_stock_intermediate_invocation_failure_is_normalized_before_candidates(
     )
 
     def fake_profile_component(*_args: object, **kwargs: object) -> object:
-        if kwargs["component"] == "FC1/GEMM1":
+        if kwargs["component"] == FC1_CUMULATIVE:
             raise TypeError("zero-LoRA contract unavailable")
         return SimpleNamespace(outputs=(case.output,), timings_us=(4.0,) * 10)
 
@@ -514,7 +555,7 @@ def test_nonfinite_stock_reference_fails_before_candidate_profiling(
     def fake_profile_component(*_args: object, **kwargs: object) -> object:
         if kwargs["arm"] != "stock":
             raise AssertionError("candidate profiled")
-        output = final if kwargs["component"] == "FC2/GEMM2" else intermediate
+        output = final if kwargs["component"] == PAIR_CUMULATIVE else intermediate
         return SimpleNamespace(outputs=(output,), timings_us=(4.0,) * 10)
 
     monkeypatch.setattr(

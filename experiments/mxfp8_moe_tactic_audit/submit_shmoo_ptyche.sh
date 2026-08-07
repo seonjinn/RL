@@ -79,7 +79,7 @@ nsys profile --trace=cuda,nvtx --force-overwrite=true --output ${RUN_ROOT}/nsys-
   --warmups 3 \\
   --repetitions 10 \\
   --output ${SHMOO_OUTPUT_ROOT}/measurements.jsonl
-nsys stats --report nvtxppsum --format csv --output ${RUN_ROOT}/nsys-nvtx ${RUN_ROOT}/nsys-selected.nsys-rep
+nsys stats --report nvtxppsum --format csv ${RUN_ROOT}/nsys-selected.nsys-rep > ${RUN_ROOT}/nsys-nvtx.csv
 python experiments/mxfp8_moe_tactic_audit/nsys_to_component_csv.py \\
   --nvtx-csv ${RUN_ROOT}/nsys-nvtx.csv \\
   --output ${SHMOO_OUTPUT_ROOT}/nsys_components.csv

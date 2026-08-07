@@ -6,7 +6,6 @@ import csv
 from hashlib import sha256
 import json
 from pathlib import Path
-from typing import cast
 
 import pandas as pd
 import pytest
@@ -446,31 +445,10 @@ def complete_inputs(root: Path, *, repeated: bool = True) -> AuditInputs:
             evidence_path.write_text(
                 json.dumps(evidence, sort_keys=True), encoding="ascii"
             )
-    produced_bindings = [
-        comparison_artifact_bindings(stock_run, candidate_run)
-        for stock_run, candidate_run in zip(stock_runs, candidate_runs, strict=True)
-    ]
-    bindings = {
-        arm: {
-            run_id: digest
-            for produced in produced_bindings
-            for run_id, digest in cast(
-                dict[str, str], produced[f"{arm}_run_manifests"]
-            ).items()
-        }
-        for arm in ("stock", "candidate")
-    }
+    evaluated = comparison_artifact_bindings(stock_runs[0], candidate_runs[0])
     for artifact in (artifacts["correctness"], artifacts["gsm8k"]):
         payload = json.loads(artifact.read_text(encoding="ascii"))
-        payload.update(
-            {
-                "stock_run_manifests": bindings["stock"],
-                "candidate_run_manifests": bindings["candidate"],
-                "comparison_run_ids": sorted(bindings["stock"]),
-                "stock_arm_id": "stock",
-                "candidate_arm_id": "candidate",
-            }
-        )
+        payload.update(evaluated)
         artifact.write_text(json.dumps(payload, sort_keys=True), encoding="ascii")
     return AuditInputs(
         stock_runs=stock_runs, candidate_runs=candidate_runs, **artifacts
@@ -534,11 +512,27 @@ def test_launcher_evidence_is_derived_from_grpo_producer_masks_and_phase_markers
     assert summarize_run(run).realized_generated_tokens == 18
 
 
-def test_nsys_producer_converts_tagged_summary_to_report_schema(tmp_path: Path) -> None:
+def test_nsys_producer_rejects_legacy_direct_component_labels(tmp_path: Path) -> None:
     raw = tmp_path / "nvtx.csv"
     raw.write_text(
         "Range,Instances,Total Time (ns)\n"
         '"MXFP8_MOE_AUDIT|signature_key=sig-1|cache_key=cache-1|arm=stock|component=FC1/GEMM1|tactic=1,2|comparison_tactic=3,4|cache_event=cache hit|call_weight=10",2,120000\n',
+        encoding="ascii",
+    )
+    with pytest.raises(ValueError, match="invalid arm or component"):
+        convert(raw, tmp_path / "components.csv")
+
+
+def test_nsys_producer_derives_fc2_from_validated_cumulative_stages(
+    tmp_path: Path,
+) -> None:
+    raw = tmp_path / "nvtx.csv"
+    prefix = "signature_key=sig-1|cache_key=cache-1|arm=stock|component="
+    suffix = "|tactic=1,2|comparison_tactic=3,4|cache_event=cache hit|call_weight=10"
+    raw.write_text(
+        "Range,Instances,Total Time (ns)\n"
+        f'"MXFP8_MOE_AUDIT|{prefix}FC1/GEMM1 cumulative{suffix}",2,120000\n'
+        f'"MXFP8_MOE_AUDIT|{prefix}FC1+FC2/GEMM1+GEMM2 cumulative{suffix}",2,200000\n',
         encoding="ascii",
     )
     output = tmp_path / "components.csv"
@@ -546,19 +540,9 @@ def test_nsys_producer_converts_tagged_summary_to_report_schema(tmp_path: Path) 
     convert(raw, output)
 
     rows = list(csv.DictReader(output.open(encoding="ascii")))
-    assert rows == [
-        {
-            "signature_key": "sig-1",
-            "cache_key": "cache-1",
-            "arm": "stock",
-            "component": "FC1/GEMM1",
-            "tactic": "1,2",
-            "comparison_tactic": "3,4",
-            "cache_event": "cache hit",
-            "call_weight": "10",
-            "call_count": "2",
-            "mean_us": "60",
-        }
+    assert [(row["component"], row["mean_us"]) for row in rows] == [
+        ("FC1/GEMM1", "60"),
+        ("FC2/GEMM2", "40"),
     ]
 
 
@@ -573,29 +557,40 @@ def test_nsys_producer_output_is_accepted_by_the_report_consumer(
             handle, fieldnames=["Range", "Instances", "Total Time (ns)"]
         )
         writer.writeheader()
-        for row in source_rows:
-            tag = "|".join(
+        for arm in ("stock", "candidate"):
+            components = {
+                row["component"]: row for row in source_rows if row["arm"] == arm
+            }
+            fc1 = components["FC1/GEMM1"]
+            fc2 = components["FC2/GEMM2"]
+            for row, component, mean_us in (
+                (fc1, "FC1/GEMM1 cumulative", float(fc1["mean_us"])),
                 (
-                    "MXFP8_MOE_AUDIT",
-                    f"signature_key={row['signature_key']}",
-                    f"cache_key={row['cache_key']}",
-                    f"arm={row['arm']}",
-                    f"component={row['component']}",
-                    f"tactic={row['tactic']}",
-                    f"comparison_tactic={row['comparison_tactic']}",
-                    f"cache_event={row['cache_event']}",
-                    f"call_weight={row['call_weight']}",
+                    fc2,
+                    "FC1+FC2/GEMM1+GEMM2 cumulative",
+                    float(fc1["mean_us"]) + float(fc2["mean_us"]),
+                ),
+            ):
+                tag = "|".join(
+                    (
+                        "MXFP8_MOE_AUDIT",
+                        f"signature_key={row['signature_key']}",
+                        f"cache_key={row['cache_key']}",
+                        f"arm={row['arm']}",
+                        f"component={component}",
+                        f"tactic={row['tactic']}",
+                        f"comparison_tactic={row['comparison_tactic']}",
+                        f"cache_event={row['cache_event']}",
+                        f"call_weight={row['call_weight']}",
+                    )
                 )
-            )
-            writer.writerow(
-                {
-                    "Range": tag,
-                    "Instances": row["call_count"],
-                    "Total Time (ns)": float(row["mean_us"])
-                    * float(row["call_count"])
-                    * 1000,
-                }
-            )
+                writer.writerow(
+                    {
+                        "Range": tag,
+                        "Instances": row["call_count"],
+                        "Total Time (ns)": mean_us * float(row["call_count"]) * 1000,
+                    }
+                )
 
     convert(raw, inputs.nsys)
 
@@ -902,6 +897,23 @@ def test_unrelated_correctness_or_gsm8k_binding_is_incomplete(tmp_path: Path) ->
 
     assert report.verdict == "INCOMPLETE"
     assert "does not bind exact stock/candidate run artifacts" in report.reasons[0]
+
+
+def test_correctness_binds_one_evaluated_pair_while_repetitions_measure_variation(
+    tmp_path: Path,
+) -> None:
+    inputs = complete_inputs(tmp_path)
+    evaluated = comparison_artifact_bindings(
+        inputs.stock_runs[0], inputs.candidate_runs[0]
+    )
+    for artifact in (inputs.correctness, inputs.gsm8k):
+        payload = json.loads(artifact.read_text(encoding="ascii"))
+        payload.update(evaluated)
+        artifact.write_text(json.dumps(payload, sort_keys=True), encoding="ascii")
+
+    report = build_report(inputs, tmp_path / "report")
+
+    assert report.verdict == "KEEP", report.reasons
 
 
 def test_shared_comparison_ids_are_valid_but_per_arm_cache_mismatch_is_not(

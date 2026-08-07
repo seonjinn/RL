@@ -21,6 +21,10 @@ FIELDS = (
     "call_weight",
 )
 OUTPUT_FIELDS = (*FIELDS, "call_count", "mean_us")
+CUMULATIVE_COMPONENTS = (
+    "FC1/GEMM1 cumulative",
+    "FC1+FC2/GEMM1+GEMM2 cumulative",
+)
 
 
 def _range_fields(value: str) -> dict[str, str] | None:
@@ -35,8 +39,7 @@ def _range_fields(value: str) -> dict[str, str] | None:
     if tuple(result) != FIELDS:
         raise ValueError("MXFP8 MoE audit NVTX range fields are incomplete")
     if result["arm"] not in {"stock", "candidate"} or result["component"] not in {
-        "FC1/GEMM1",
-        "FC2/GEMM2",
+        *CUMULATIVE_COMPONENTS,
     }:
         raise ValueError("MXFP8 MoE audit NVTX range has invalid arm or component")
     if result["cache_event"] not in {"cache hit", "fallback"}:
@@ -84,6 +87,9 @@ def convert(nvtx_csv: Path, output: Path) -> None:
         if range_field is None or count_field is None or total_field is None:
             raise ValueError("NSys NVTX CSV lacks range/count/total-time columns")
         rows: list[dict[str, str]] = []
+        cumulative: dict[
+            tuple[str, ...], dict[str, tuple[dict[str, str], int, float]]
+        ] = {}
         for raw in reader:
             tagged = _range_fields(raw.get(range_field, ""))
             if tagged is None:
@@ -95,13 +101,42 @@ def convert(nvtx_csv: Path, output: Path) -> None:
                 raise ValueError("NSys NVTX CSV has malformed timing fields") from error
             if instances <= 0 or total_ns <= 0:
                 raise ValueError("NSys NVTX CSV has nonpositive timing evidence")
-            rows.append(
-                {
-                    **tagged,
-                    "call_count": str(instances),
-                    "mean_us": f"{total_ns / instances / 1000.0:.9g}",
-                }
+            component = tagged["component"]
+            key = tuple(
+                tagged[field]
+                for field in FIELDS
+                if field not in {"cache_event", "cache_key", "component"}
             )
+            stages = cumulative.setdefault(key, {})
+            if component in stages:
+                raise ValueError("duplicate MXFP8 MoE cumulative NVTX range")
+            stages[component] = (tagged, instances, total_ns)
+        for stages in cumulative.values():
+            if set(stages) != set(CUMULATIVE_COMPONENTS):
+                raise ValueError(
+                    "NSys cumulative timing requires both FC1 and paired ranges"
+                )
+            fc1_tagged, fc1_instances, fc1_total_ns = stages["FC1/GEMM1 cumulative"]
+            pair_tagged, pair_instances, pair_total_ns = stages[
+                "FC1+FC2/GEMM1+GEMM2 cumulative"
+            ]
+            if fc1_instances != pair_instances:
+                raise ValueError("NSys cumulative stage counts differ")
+            fc2_total_ns = pair_total_ns - fc1_total_ns
+            if fc2_total_ns <= 0:
+                raise ValueError("NSys cumulative pair time does not exceed FC1 time")
+            for tagged, component, total_ns in (
+                (fc1_tagged, "FC1/GEMM1", fc1_total_ns),
+                (pair_tagged, "FC2/GEMM2", fc2_total_ns),
+            ):
+                rows.append(
+                    {
+                        **tagged,
+                        "component": component,
+                        "call_count": str(fc1_instances),
+                        "mean_us": f"{total_ns / fc1_instances / 1000.0:.9g}",
+                    }
+                )
     if not rows:
         raise ValueError("NSys NVTX CSV has no MXFP8 MoE audit component ranges")
     output.parent.mkdir(parents=True, exist_ok=True)

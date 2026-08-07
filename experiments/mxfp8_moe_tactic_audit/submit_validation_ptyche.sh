@@ -48,18 +48,11 @@ CACHE_MANIFEST=${CACHE_MANIFEST:-${CANDIDATE_CACHE_ROOT}/cache_manifest.json}
 
 if [[ "${VALIDATION_MODE}" == compare ]]; then
     COMPARE_ROOT=${COMPARE_ROOT:-${WORK_ROOT}/experiments/mxfp8-moe-tactic-audit/validation}
-    COMPARE_RUN_IDS=${COMPARE_RUN_IDS:-${RUN_ID}}
-    IFS=',' read -r -a compare_run_ids <<< "${COMPARE_RUN_IDS}"
-    [[ ${#compare_run_ids[@]} -gt 0 ]] || { echo "COMPARE_RUN_IDS must not be empty" >&2; exit 2; }
-    primary_run_id=${compare_run_ids[0]}
-    compare_binding_args=''
-    for comparison_run_id in "${compare_run_ids[@]}"; do
-        [[ -n "${comparison_run_id}" ]] || { echo "COMPARE_RUN_IDS contains an empty ID" >&2; exit 2; }
-        compare_binding_args+=" --stock-run-root ${COMPARE_ROOT}/stock/${comparison_run_id}/steps-8 --candidate-run-root ${COMPARE_ROOT}/candidate/${comparison_run_id}/steps-8"
-    done
+    COMPARE_RUN_ID=${COMPARE_RUN_ID:-${RUN_ID}}
+    [[ -n "${COMPARE_RUN_ID}" && "${COMPARE_RUN_ID}" != *,* ]] || { echo "COMPARE_RUN_ID must name exactly one run pair" >&2; exit 2; }
     COMMAND="mkdir -p ${COMPARE_ROOT}
-python ${SCRIPT_DIR}/validate_correctness.py generation --stock ${COMPARE_ROOT}/stock/${primary_run_id}/steps-8/generation.jsonl --candidate ${COMPARE_ROOT}/candidate/${primary_run_id}/steps-8/generation.jsonl${compare_binding_args} > ${COMPARE_ROOT}/deterministic_generation_comparison.json
-python ${SCRIPT_DIR}/compare_gsm8k.py --stock ${COMPARE_ROOT}/stock/${primary_run_id}/steps-8/gsm8k --candidate ${COMPARE_ROOT}/candidate/${primary_run_id}/steps-8/gsm8k${compare_binding_args} > ${COMPARE_ROOT}/gsm8k_comparison.json"
+python ${SCRIPT_DIR}/validate_correctness.py generation --stock ${COMPARE_ROOT}/stock/${COMPARE_RUN_ID}/steps-8/generation.jsonl --candidate ${COMPARE_ROOT}/candidate/${COMPARE_RUN_ID}/steps-8/generation.jsonl > ${COMPARE_ROOT}/deterministic_generation_comparison.json
+python ${SCRIPT_DIR}/compare_gsm8k.py --stock ${COMPARE_ROOT}/stock/${COMPARE_RUN_ID}/steps-8/gsm8k --candidate ${COMPARE_ROOT}/candidate/${COMPARE_RUN_ID}/steps-8/gsm8k > ${COMPARE_ROOT}/gsm8k_comparison.json"
     printf 'validation_mode=compare\n%s\n' "${COMMAND}"
     [[ "${ACTION}" == dry-run ]] || {
         echo "VALIDATION_MODE=compare is local; ACTION must be dry-run" >&2

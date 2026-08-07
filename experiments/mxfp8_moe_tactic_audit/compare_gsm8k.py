@@ -17,9 +17,9 @@ import sys
 from typing import cast
 
 try:
-    from .collect_results import comparison_run_bindings
+    from .collect_results import comparison_artifact_bindings
 except ImportError:  # pragma: no cover - direct script execution
-    from collect_results import comparison_run_bindings
+    from collect_results import comparison_artifact_bindings
 
 
 DATASET_SHA256 = "3730d312f6e3440559ace48831e51066acaca737f6eabec99bccb9e4b3c39d14"
@@ -419,8 +419,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stock", type=Path, required=True)
     parser.add_argument("--candidate", type=Path, required=True)
-    parser.add_argument("--stock-run-root", type=Path, action="append")
-    parser.add_argument("--candidate-run-root", type=Path, action="append")
     return parser.parse_args(argv)
 
 
@@ -433,9 +431,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     payload = asdict(comparison)
     try:
-        stock_bindings = tuple(args.stock_run_root or (args.stock,))
-        candidate_bindings = tuple(args.candidate_run_root or (args.candidate,))
-        payload.update(comparison_run_bindings(stock_bindings, candidate_bindings))
+        payload.update(comparison_artifact_bindings(args.stock, args.candidate))
     except ValueError as error:
         print(f"GSM8K comparison error: {error}", file=sys.stderr)
         return 2

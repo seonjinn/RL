@@ -354,6 +354,57 @@ def test_comparison_commands_emit_exact_run_bindings(
     assert len(gsm8k_payload["paired_outcomes_sha256"]) == 64
 
 
+def test_comparison_commands_reject_untested_repetition_bindings(
+    tmp_path: Path,
+) -> None:
+    stock_root = tmp_path / "stock"
+    candidate_root = tmp_path / "candidate"
+    extra_stock = tmp_path / "extra-stock"
+    extra_candidate = tmp_path / "extra-candidate"
+    for root, arm, run_id in (
+        (stock_root, "stock", "evaluated"),
+        (candidate_root, "candidate", "evaluated"),
+        (extra_stock, "stock", "untested"),
+        (extra_candidate, "candidate", "untested"),
+    ):
+        root.mkdir()
+        _write_run_binding(root, arm=arm, run_id=run_id)
+    rows = [("example", "a" * 64, [1, 2])]
+    stock_generation = stock_root / "generation.jsonl"
+    candidate_generation = candidate_root / "generation.jsonl"
+    _write_generation(stock_generation, rows)
+    _write_generation(candidate_generation, rows)
+
+    with pytest.raises(SystemExit):
+        validate_correctness_main(
+            [
+                "generation",
+                "--stock",
+                str(stock_generation),
+                "--candidate",
+                str(candidate_generation),
+                "--stock-run-root",
+                str(extra_stock),
+                "--candidate-run-root",
+                str(extra_candidate),
+            ]
+        )
+
+    with pytest.raises(SystemExit):
+        compare_gsm8k_main(
+            [
+                "--stock",
+                str(stock_root / "gsm8k"),
+                "--candidate",
+                str(candidate_root / "gsm8k"),
+                "--stock-run-root",
+                str(extra_stock),
+                "--candidate-run-root",
+                str(extra_candidate),
+            ]
+        )
+
+
 def test_generation_comparison_requires_identical_provenance(tmp_path: Path) -> None:
     stock = tmp_path / "stock.jsonl"
     candidate = tmp_path / "candidate.jsonl"

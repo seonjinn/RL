@@ -788,7 +788,6 @@ def _collect(inputs: AuditInputs) -> _Collected:
     expected_passed = p_value >= 0.05 and lower <= 0 <= upper
     if gsm8k.get("passed") is not expected_passed:
         raise EvidenceError("GSM8K passed field disagrees with paired statistics")
-    expected_ids = {run.run_id for run in stock}
     expected_hashes = {
         arm: {
             run.run_id: sha256_file(path / "run_manifest.json")
@@ -800,12 +799,23 @@ def _collect(inputs: AuditInputs) -> _Collected:
         )
     }
     for label, payload in (("correctness", correctness), ("GSM8K", gsm8k)):
+        comparison_ids = payload.get("comparison_run_ids")
+        if (
+            not isinstance(comparison_ids, list)
+            or len(comparison_ids) != 1
+            or not isinstance(comparison_ids[0], str)
+        ):
+            raise EvidenceError(f"{label} must bind exactly one evaluated run pair")
+        run_id = comparison_ids[0]
         if (
             payload.get("stock_arm_id") != "stock"
             or payload.get("candidate_arm_id") != "candidate"
-            or payload.get("stock_run_manifests") != expected_hashes["stock"]
-            or payload.get("candidate_run_manifests") != expected_hashes["candidate"]
-            or payload.get("comparison_run_ids") != sorted(expected_ids)
+            or payload.get("stock_run_manifests")
+            != {run_id: expected_hashes["stock"].get(run_id)}
+            or payload.get("candidate_run_manifests")
+            != {run_id: expected_hashes["candidate"].get(run_id)}
+            or run_id not in expected_hashes["stock"]
+            or run_id not in expected_hashes["candidate"]
         ):
             raise EvidenceError(
                 f"{label} does not bind exact stock/candidate run artifacts"
