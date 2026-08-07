@@ -26,4 +26,6 @@ and command inputs under the shared experiment result root. The pinned archive
 supplies `uv`; each node then creates Ray 2.56.1, driver, and actor
 environments on Python 3.13.14 as required by this source revision. Writable
 venvs are isolated by source SHA, container SHA256, and SLURM job ID; only the
-download cache is shared across jobs.
+download cache is shared across jobs. The node setup redirects the container's
+`ray` entry point to that job-local runtime so the head, workers, and driver use
+the same Python patch version.

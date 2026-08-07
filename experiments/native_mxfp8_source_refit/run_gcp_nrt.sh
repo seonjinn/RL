@@ -176,6 +176,8 @@ if [[ ! -x '${RAY_RUNTIME_ROOT}/bin/ray' ]]; then
     --python '${RAY_RUNTIME_ROOT}/bin/python' 'ray[default]==2.56.1'
 fi
 '${RAY_RUNTIME_ROOT}/bin/python' -c 'import platform, ray, requests, urllib3; assert platform.python_version() == \"${PYTHON_VERSION}\"; assert ray.__version__ == \"2.56.1\"'
+ln -sfn '${RAY_RUNTIME_ROOT}/bin/ray' /opt/nemo_rl_venv/bin/ray
+test \"\$(readlink -f /opt/nemo_rl_venv/bin/ray)\" = '${RAY_RUNTIME_ROOT}/bin/ray'
 "
 
 MCORE_ACTOR_VENV=${CACHE_ROOT}/venvs/nemo_rl.models.policy.workers.megatron_policy_worker.MegatronPolicyWorker
