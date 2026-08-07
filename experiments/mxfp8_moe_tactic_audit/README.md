@@ -4,6 +4,9 @@ This experiment audits workload-replayed FlashInfer TRTLLM MXFP8 MoE FC1/FC2
 tactic pairs for Qwen3-30B-A3B. It is an opt-in, reproducible audit; it does
 not change the production request path until every gate passes.
 
+The machine-readable launcher contract is
+[`provenance.json`](provenance.json).
+
 ## Provenance Contract
 
 - Runtime: vLLM 0.25.1 at commit

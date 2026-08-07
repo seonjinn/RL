@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "vllm_commit": "a76062edee3a3ac23d47a93c7ce466f06a19111f",
+  "flashinfer_version": "0.6.13",
+  "target": {
+    "cluster": "Ptyche",
+    "gpu": "GB200"
+  },
+  "privacy_forbidden_payloads": [
+    "prompts",
+    "token IDs",
+    "hidden values",
+    "model outputs",
+    "credentials",
+    "Hugging Face/W&B tokens"
+  ],
+  "minimum_profile_coverage": 0.95,
+  "warmups": 3,
+  "timed_repetitions_minimum": 10,
+  "minimum_weighted_median_improvement": 0.02,
+  "maximum_coefficient_variation": 0.03,
+  "maximum_high_weight_profile_regression": 0.01,
+  "cuda_graphs_required": true,
+  "exact_miss_fallback": "stock FlashInfer behavior; cache misses are not errors",
+  "matched_gsm8k_examples": 1319,
+  "pipeline_entry_points": [
+    "submit_trace_ptyche.sh",
+    "select_profiles.py",
+    "shmoo_moe_tactics.py",
+    "qualify_cache.py",
+    "submit_validation_ptyche.sh",
+    "build_report.py"
+  ]
+}
