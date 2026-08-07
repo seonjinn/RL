@@ -18,6 +18,7 @@ PROVENANCE_HELPER = (
     REPO_ROOT / "experiments/mxfp8_linear_backend_model_matrix/provenance.sh"
 )
 VLLM_BUILD_STATE_MARKER = "nemo-rl-build-state.sha256"
+VLLM_SOURCE_COMPAT_STATE_MARKER = "nemo-rl-source-compat-state.sha256"
 
 
 def _dry_run(
@@ -296,7 +297,7 @@ def test_custom_vllm_build_is_recoverable() -> None:
     assert "mxfp8_vllm_reuse_state_valid" in prepare_text
     assert "Preserving polluted custom vLLM checkout" in prepare_text
     polluted_branch = prepare_text.split(
-        "elif ! mxfp8_assert_vllm_tracked_state 3rdparty/vllm; then", 1
+        "if ! mxfp8_assert_vllm_tracked_state 3rdparty/vllm; then", 1
     )[1].split("else", 1)[0]
     assert "exit 1" not in polluted_branch
     assert VLLM_BUILD_STATE_MARKER in build_text
@@ -441,6 +442,38 @@ def test_vllm_environment_key_fingerprints_runtime_inputs() -> None:
     assert "venv_builder=" in provenance_text
     assert "bootstrap_packages=" in provenance_text
     assert "schema=" in provenance_text
+
+
+def test_preparation_applies_source_compat_before_environment_key() -> None:
+    prepare_text = PREPARE_SCRIPT.read_text()
+    provenance_text = PROVENANCE_HELPER.read_text()
+
+    apply_call = "apply_vllm_source_compat_patches"
+    environment_key = "VLLM_ENVIRONMENT_KEY=\\$(mxfp8_vllm_environment_key"
+
+    assert apply_call in prepare_text
+    assert prepare_text.index(apply_call) < prepare_text.index(environment_key)
+    assert "mxfp8_write_vllm_source_compat_state" in prepare_text
+    assert "mxfp8_vllm_source_compat_state_matches" in provenance_text
+    assert VLLM_SOURCE_COMPAT_STATE_MARKER in provenance_text
+
+
+def test_provenance_fingerprints_and_restricts_source_compat_patches() -> None:
+    provenance_text = PROVENANCE_HELPER.read_text()
+
+    for path in (
+        "vllm/distributed/device_communicators/shm_broadcast.py",
+        "vllm/model_executor/models/llama_eagle3.py",
+        "vllm/tool_parsers/utils.py",
+        "vllm/v1/executor/ray_executor_v2.py",
+    ):
+        assert path in provenance_text
+
+    assert "mxfp8_vllm_source_compat_state_sha256" in provenance_text
+    assert "mxfp8_vllm_source_compat_state_matches" in provenance_text
+    assert "vllm_source_compat=" in provenance_text
+    assert "git -C \"${vllm_root}\" archive --format=tar HEAD" in provenance_text
+    assert "git -C \"${vllm_root}\" diff --binary" in provenance_text
 
 
 def test_vllm_environment_key_propagates_fingerprint_failures(tmp_path: Path) -> None:

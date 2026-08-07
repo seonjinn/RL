@@ -43,26 +43,48 @@ assert_preparation_scope_clean() {
     return 1
   fi
 }
+apply_vllm_source_compat_patches() {
+  PYTHONPATH=${REPO_DIR} 3rdparty/vllm/.venv/bin/python - <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+patches_path = Path("nemo_rl/models/generation/vllm/patches.py").resolve()
+spec = importlib.util.spec_from_file_location("nemo_rl_vllm_patches", patches_path)
+if spec is None or spec.loader is None:
+    raise RuntimeError(f"Could not load vLLM patches from {patches_path}")
+patches = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(patches)
+patches._apply_vllm_patches(sys.executable)
+PY
+  mxfp8_write_vllm_source_compat_state 3rdparty/vllm
+}
 assert_preparation_scope_clean
 existing_vllm_valid=false
 if [[ -d 3rdparty/vllm/.git ]]; then
   actual=\$(git -C 3rdparty/vllm rev-parse HEAD)
   if [[ "\${actual}" != "${VLLM_GIT_REF}" ]]; then
     echo "Replacing custom vLLM commit \${actual} with ${VLLM_GIT_REF}"
-  elif ! mxfp8_assert_vllm_tracked_state 3rdparty/vllm; then
-    echo "Preserving polluted custom vLLM checkout before rebuilding" >&2
   else
-    if mxfp8_vllm_build_state_matches 3rdparty/vllm && \
-        [[ -x 3rdparty/vllm/.venv/bin/python ]] && \
+    if [[ -x 3rdparty/vllm/.venv/bin/python ]] && \
         3rdparty/vllm/.venv/bin/python -c 'import vllm'; then
-      printf 'export VLLM_GIT_REF=%s\nexport VLLM_PRECOMPILED_WHEEL_LOCATION=%s\n' \
-        '${VLLM_GIT_REF}' '${VLLM_WHEEL}' > 3rdparty/vllm/nemo-rl.env
+      apply_vllm_source_compat_patches
     fi
-    if mxfp8_vllm_reuse_state_valid \
-        3rdparty/vllm '${VLLM_GIT_REF}' '${VLLM_WHEEL}'; then
-      existing_vllm_valid=true
+    if ! mxfp8_assert_vllm_tracked_state 3rdparty/vllm; then
+      echo "Preserving polluted custom vLLM checkout before rebuilding" >&2
     else
-      echo "Existing custom vLLM checkout is not reusable"
+      if mxfp8_vllm_build_state_matches 3rdparty/vllm && \
+          [[ -x 3rdparty/vllm/.venv/bin/python ]] && \
+          3rdparty/vllm/.venv/bin/python -c 'import vllm'; then
+        printf 'export VLLM_GIT_REF=%s\nexport VLLM_PRECOMPILED_WHEEL_LOCATION=%s\n' \
+          '${VLLM_GIT_REF}' '${VLLM_WHEEL}' > 3rdparty/vllm/nemo-rl.env
+      fi
+      if mxfp8_vllm_reuse_state_valid \
+          3rdparty/vllm '${VLLM_GIT_REF}' '${VLLM_WHEEL}'; then
+        existing_vllm_valid=true
+      else
+        echo "Existing custom vLLM checkout is not reusable"
+      fi
     fi
   fi
 fi
@@ -76,6 +98,7 @@ else
     mv 3rdparty/vllm "\${incomplete}"
   fi
   bash tools/build-custom-vllm.sh ${VLLM_GIT_URL} ${VLLM_GIT_REF} ${VLLM_WHEEL}
+  apply_vllm_source_compat_patches
 fi
 source 3rdparty/vllm/nemo-rl.env
 export NRL_FORCE_REBUILD_VENVS=true
