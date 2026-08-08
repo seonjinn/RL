@@ -61,6 +61,8 @@ def test_trace_dry_run_is_eager_and_metadata_only(tmp_path: Path) -> None:
     assert "--segment=4" in output
     assert "VLLM_MXFP8_AUDIT_SOURCE_ROOT=" in output
     assert "sitecustomize.py" in output
+    assert "except ModuleNotFoundError:" in output
+    assert "uv run --locked --extra vllm --directory" in output
     assert "trtllm_moe_trace" in output
     assert "find " in output and "-name '*.jsonl'" in output
     assert "expected_ranks = set(range(16))" in output

@@ -63,15 +63,19 @@ cat > \${PYTHON_OVERLAY}/sitecustomize.py <<'PY'
 import os
 from pathlib import Path
 
-import vllm
-
-source = Path(os.environ["VLLM_MXFP8_AUDIT_SOURCE_ROOT"]).resolve() / "vllm"
-if not source.is_dir():
-    raise RuntimeError(f"missing custom vLLM source: {source}")
-vllm.__path__.insert(0, str(source))
+try:
+    import vllm
+except ModuleNotFoundError:
+    # The NeMo-RL driver does not install the vLLM extra. Ray's vLLM actors do.
+    pass
+else:
+    source = Path(os.environ["VLLM_MXFP8_AUDIT_SOURCE_ROOT"]).resolve() / "vllm"
+    if not source.is_dir():
+        raise RuntimeError(f"missing custom vLLM source: {source}")
+    vllm.__path__.insert(0, str(source))
 PY
 export PYTHONPATH=\${PYTHON_OVERLAY}:\${PYTHONPATH:-}
-python - <<'PY'
+uv run --locked --extra vllm --directory ${REPO_DIR} python - <<'PY'
 import os
 from pathlib import Path
 
