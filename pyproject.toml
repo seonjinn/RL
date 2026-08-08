@@ -543,12 +543,12 @@ requires-dist = ["torch", "packaging", "ninja"]
 
 [[tool.uv.dependency-metadata]]
 name = "transformer-engine"
-version = "2.19.0.dev0+bffde8f4"
+version = "2.19.0.dev0+04a76c84"
 requires-dist = ["torch", "pydantic", "importlib-metadata>=1.0", "packaging"]
 
 [[tool.uv.dependency-metadata]]
 name = "transformer-engine-torch"
-version = "2.19.0.dev0+bffde8f4"
+version = "2.19.0.dev0+04a76c84"
 requires-dist = ["torch", "transformer-engine"]
 
 [[tool.uv.dependency-metadata]]

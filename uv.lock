@@ -172,12 +172,12 @@ version = "10.16.1.11"
 
 [[manifest.dependency-metadata]]
 name = "transformer-engine"
-version = "2.19.0.dev0+bffde8f4"
+version = "2.19.0.dev0+04a76c84"
 requires-dist = ["torch", "pydantic", "importlib-metadata>=1.0", "packaging"]
 
 [[manifest.dependency-metadata]]
 name = "transformer-engine-torch"
-version = "2.19.0.dev0+bffde8f4"
+version = "2.19.0.dev0+04a76c84"
 requires-dist = ["torch", "transformer-engine"]
 
 [[package]]
@@ -8023,7 +8023,7 @@ dependencies = [
 
 [[package]]
 name = "transformer-engine"
-version = "2.19.0.dev0+bffde8f4"
+version = "2.19.0.dev0+04a76c84"
 source = { git = "https://github.com/seonjinn/TransformerEngine.git?rev=04a76c84423d9a4eb2f2010ef6692e347326cc00#04a76c84423d9a4eb2f2010ef6692e347326cc00" }
 dependencies = [
     { name = "importlib-metadata", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },

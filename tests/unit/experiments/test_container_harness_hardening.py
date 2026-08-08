@@ -750,26 +750,32 @@ def test_runtime_probe_reads_exact_transformer_engine_vcs_commit() -> None:
     )
 
 
-def test_runtime_probe_distinguishes_te_source_and_version_base() -> None:
+def test_runtime_probe_binds_te_package_version_to_source_commit() -> None:
     module = _load_runtime_probe()
     source_commit = "04a76c84423d9a4eb2f2010ef6692e347326cc00"
-    version_base = "bffde8f4a0a4eea9036dc753e28269247e5de69d"
 
     assert module.validate_transformer_engine_identities(
-        version="2.19.0.dev0+bffde8f4",
+        version="2.19.0.dev0+04a76c84",
         source_commit=source_commit,
         expected_source_commit=source_commit,
-        expected_version_base_commit=version_base,
+        expected_version_base_commit=source_commit,
     ) == {
         "transformer_engine_source_commit": source_commit,
-        "transformer_engine_version_base_commit": version_base,
+        "transformer_engine_version_base_commit": source_commit,
     }
     with pytest.raises(RuntimeError, match="source commit mismatch"):
         module.validate_transformer_engine_identities(
-            version="2.19.0.dev0+bffde8f4",
-            source_commit=version_base,
+            version="2.19.0.dev0+04a76c84",
+            source_commit="bffde8f4a0a4eea9036dc753e28269247e5de69d",
             expected_source_commit=source_commit,
-            expected_version_base_commit=version_base,
+            expected_version_base_commit=source_commit,
+        )
+    with pytest.raises(RuntimeError, match="version-base commit mismatch"):
+        module.validate_transformer_engine_identities(
+            version="2.19.0.dev0+bffde8f4",
+            source_commit=source_commit,
+            expected_source_commit=source_commit,
+            expected_version_base_commit=source_commit,
         )
 
 

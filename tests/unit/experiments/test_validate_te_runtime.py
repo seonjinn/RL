@@ -5,6 +5,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from types import ModuleType
 
@@ -14,6 +15,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 EXPECTED_TE_COMMIT = "bffde8f4a0a4eea9036dc753e28269247e5de69d"
 EXPECTED_TE_SOURCE_COMMIT = "04a76c84423d9a4eb2f2010ef6692e347326cc00"
+EXPECTED_TE_SOURCE_VERSION = "2.19.0.dev0+04a76c84"
 MODULE_PATH = (
     REPO_ROOT
     / "experiments"
@@ -235,14 +237,38 @@ def test_validator_source_contains_no_clone_or_native_build_path() -> None:
 
 
 def test_outer_project_pins_the_validated_te_runtime_by_full_commit() -> None:
-    project = (REPO_ROOT / "pyproject.toml").read_text()
+    project_text = (REPO_ROOT / "pyproject.toml").read_text()
+    project = tomllib.loads(project_text)
 
     assert (
         "transformer-engine[pytorch,core_cu13] @ "
         "git+https://github.com/seonjinn/TransformerEngine.git@"
-        f"{EXPECTED_TE_SOURCE_COMMIT}" in project
+        f"{EXPECTED_TE_SOURCE_COMMIT}" in project_text
     )
-    assert "TransformerEngine.git@release_v2.15" not in project
-    assert '"nvidia-cudnn-frontend==1.26.0"' in project
-    assert '"nvidia-nccl-cu13==2.30.7"' in project
-    assert 'version = "2.19.0.dev0+bffde8f4"' in project
+    assert "TransformerEngine.git@release_v2.15" not in project_text
+    assert '"nvidia-cudnn-frontend==1.26.0"' in project_text
+    assert '"nvidia-nccl-cu13==2.30.7"' in project_text
+    dependency_metadata = {
+        entry["name"]: entry for entry in project["tool"]["uv"]["dependency-metadata"]
+    }
+    assert dependency_metadata["transformer-engine"]["version"] == (
+        EXPECTED_TE_SOURCE_VERSION
+    )
+    assert dependency_metadata["transformer-engine-torch"]["version"] == (
+        EXPECTED_TE_SOURCE_VERSION
+    )
+
+    lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text())
+    locked_packages = {entry["name"]: entry for entry in lock["package"]}
+    assert locked_packages["transformer-engine"]["version"] == (
+        EXPECTED_TE_SOURCE_VERSION
+    )
+    locked_metadata = {
+        entry["name"]: entry for entry in lock["manifest"]["dependency-metadata"]
+    }
+    assert locked_metadata["transformer-engine"]["version"] == (
+        EXPECTED_TE_SOURCE_VERSION
+    )
+    assert locked_metadata["transformer-engine-torch"]["version"] == (
+        EXPECTED_TE_SOURCE_VERSION
+    )
