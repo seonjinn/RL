@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import importlib.util
 import json
@@ -52,6 +53,20 @@ class RuntimePayloadFixture:
 def _load_runtime_probe() -> ModuleType:
     path = EXPERIMENT_DIR / "validate_container_runtime.py"
     spec = importlib.util.spec_from_file_location("container_runtime_probe", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(spec.name, None)
+    return module
+
+
+def _load_runtime_stage_readonly_helper() -> ModuleType:
+    path = EXPERIMENT_DIR / "make_runtime_stage_readonly.py"
+    assert path.is_file(), "The runtime stage needs a retrying read-only helper"
+    spec = importlib.util.spec_from_file_location("runtime_stage_readonly", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -156,8 +171,12 @@ def _stage_runtime_payload_fixture(
     source_verifier = (
         source_validator.parent / "scripts" / "verify_source_provenance.sh"
     )
+    source_readonly_helper = source_validator.parent / "make_runtime_stage_readonly.py"
     source_verifier.parent.mkdir(parents=True)
     source_validator.write_text("raise SystemExit('fixture validator must not run')\n")
+    source_readonly_helper.write_text(
+        (EXPERIMENT_DIR / "make_runtime_stage_readonly.py").read_text()
+    )
     _write_executable(source_verifier, verifier_body)
     (source_project_root / "docker").mkdir()
     (source_project_root / "docker" / "Dockerfile").write_text(
@@ -241,6 +260,7 @@ def _run_runtime_payload(
             "RUNTIME_STAGE_JOB_ID": "733",
             "RUNTIME_STAGE_CPUS_PER_TASK": "32",
             "CMAKE_BUILD_PARALLEL_LEVEL": "32",
+            "RUNTIME_BOOTSTRAP_PYTHON": sys.executable,
             "NVTE_CUDA_ARCHS": "100a",
             "TORCH_CUDA_ARCH_LIST": "10.0a",
             "RUNTIME_STAGE_CAPABILITY": RUNTIME_STAGE_CAPABILITY,
@@ -958,7 +978,8 @@ printf '{"status":"passed"}\n' >"${output}"
         'mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"'
         in command
     )
-    assert 'chmod -R a-w -- "${runtime_stage_root}"' in command
+    assert '"${bootstrap_python}" "${source_readonly_helper}"' in command
+    assert '--regular-file "${partial_marker}"' in command
     assert '"stage_cpus_per_task=${RUNTIME_STAGE_CPUS_PER_TASK}"' in command
     assert NEMORL_COMMIT in command
     assert BRIDGE_COMMIT in command
@@ -1078,6 +1099,351 @@ printf '{"status":"passed"}\n' >"${output}"
     assert (artifact_dir / "oci-container-runtime-734.json").is_file()
 
 
+def test_runtime_stage_readonly_retries_transient_lustre_eio(
+    tmp_path: Path,
+) -> None:
+    module = _load_runtime_stage_readonly_helper()
+    stage_root = tmp_path / "stage"
+    stage_root.mkdir()
+    payload = stage_root / "payload.bin"
+    payload.write_bytes(b"payload")
+    partial_marker = tmp_path / "partial-marker.env"
+    partial_marker.write_text("marker\n")
+    real_chmod = module.os.chmod
+    chmod_attempts = 0
+
+    def flaky_chmod(
+        path: os.PathLike[str] | str,
+        mode: int,
+        *,
+        follow_symlinks: bool = True,
+    ) -> None:
+        nonlocal chmod_attempts
+        if Path(path) == payload:
+            chmod_attempts += 1
+            if chmod_attempts == 1:
+                raise OSError(errno.EIO, "transient Lustre metadata failure")
+        real_chmod(path, mode, follow_symlinks=follow_symlinks)
+
+    try:
+        module.make_tree_readonly(
+            stage_root,
+            regular_files=(partial_marker,),
+            chmod_fn=flaky_chmod,
+            sleep_fn=lambda _: None,
+        )
+
+        assert chmod_attempts == 2
+        assert payload.stat().st_mode & 0o222 == 0
+        assert stage_root.stat().st_mode & 0o222 == 0
+        assert partial_marker.stat().st_mode & 0o222 == 0
+    finally:
+        real_chmod(stage_root, 0o700)
+        real_chmod(payload, 0o600)
+        real_chmod(partial_marker, 0o600)
+
+
+def test_runtime_stage_readonly_does_not_require_path_chmod_nofollow_support(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_runtime_stage_readonly_helper()
+    stage_root = tmp_path / "stage"
+    stage_root.mkdir()
+    payload = stage_root / "payload.bin"
+    payload.write_bytes(b"payload")
+    real_chmod = module.os.chmod
+
+    def unsupported_path_chmod(
+        path: os.PathLike[str] | str,
+        mode: int,
+        *,
+        follow_symlinks: bool = True,
+    ) -> None:
+        del path, mode, follow_symlinks
+        raise NotImplementedError("path chmod no-follow is unavailable")
+
+    monkeypatch.setattr(module.os, "chmod", unsupported_path_chmod)
+    try:
+        module.make_tree_readonly(stage_root)
+
+        assert payload.stat().st_mode & 0o222 == 0
+        assert stage_root.stat().st_mode & 0o222 == 0
+    finally:
+        real_chmod(stage_root, 0o700)
+        real_chmod(payload, 0o600)
+
+
+def test_runtime_stage_readonly_retries_default_fchmod_eio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_runtime_stage_readonly_helper()
+    stage_root = tmp_path / "stage"
+    stage_root.mkdir()
+    payload = stage_root / "payload.bin"
+    payload.write_bytes(b"payload")
+    real_chmod = module.os.chmod
+    real_fchmod = module.os.fchmod
+    fchmod_calls = 0
+
+    def flaky_fchmod(file_descriptor: int, mode: int) -> None:
+        nonlocal fchmod_calls
+        fchmod_calls += 1
+        if fchmod_calls == 1:
+            raise OSError(errno.EIO, "transient Lustre fchmod failure")
+        real_fchmod(file_descriptor, mode)
+
+    monkeypatch.setattr(module.os, "fchmod", flaky_fchmod)
+    try:
+        module.make_tree_readonly(stage_root, sleep_fn=lambda _: None)
+
+        assert fchmod_calls >= 3
+        assert payload.stat().st_mode & 0o222 == 0
+        assert stage_root.stat().st_mode & 0o222 == 0
+    finally:
+        real_chmod(stage_root, 0o700)
+        real_chmod(payload, 0o600)
+
+
+def test_runtime_stage_readonly_retries_partial_verification_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_runtime_stage_readonly_helper()
+    stage_root = tmp_path / "stage"
+    stage_root.mkdir()
+    payload = stage_root / "payload.bin"
+    payload.write_bytes(b"payload")
+    real_chmod = module.os.chmod
+    real_walk = module.os.walk
+    walk_calls = 0
+
+    def flaky_walk(*args: object, **kwargs: object) -> object:
+        nonlocal walk_calls
+        walk_calls += 1
+        if walk_calls != 2:
+            return real_walk(*args, **kwargs)
+
+        def partial_walk() -> object:
+            yield str(stage_root), [], [payload.name]
+            raise OSError(errno.EIO, "partial Lustre traversal", str(stage_root))
+
+        return partial_walk()
+
+    monkeypatch.setattr(module.os, "walk", flaky_walk)
+    try:
+        module.make_tree_readonly(stage_root, sleep_fn=lambda _: None)
+
+        assert walk_calls == 4
+        assert payload.stat().st_mode & 0o222 == 0
+        assert stage_root.stat().st_mode & 0o222 == 0
+    finally:
+        real_chmod(stage_root, 0o700)
+        real_chmod(payload, 0o600)
+
+
+def test_runtime_stage_readonly_rejects_escaped_symlink_without_mutating_target(
+    tmp_path: Path,
+) -> None:
+    module = _load_runtime_stage_readonly_helper()
+    stage_root = tmp_path / "stage"
+    stage_root.mkdir()
+    external_target = tmp_path / "external-target"
+    external_target.write_text("external\n")
+    stage_root.joinpath("escaped-link").symlink_to(external_target)
+    original_mode = external_target.stat().st_mode
+
+    with pytest.raises(ValueError, match="escapes trusted roots"):
+        module.make_tree_readonly(stage_root)
+
+    assert external_target.stat().st_mode == original_mode
+
+
+def test_runtime_stage_readonly_allows_symlink_into_explicit_trusted_root(
+    tmp_path: Path,
+) -> None:
+    module = _load_runtime_stage_readonly_helper()
+    stage_root = tmp_path / "stage"
+    stage_root.mkdir()
+    trusted_root = tmp_path / "python-installations"
+    trusted_root.mkdir()
+    trusted_target = trusted_root / "python"
+    trusted_target.write_text("python\n")
+    stage_root.joinpath("python-link").symlink_to(trusted_target)
+    original_mode = trusted_target.stat().st_mode
+    real_chmod = module.os.chmod
+    try:
+        module.make_tree_readonly(
+            stage_root,
+            trusted_symlink_roots=(trusted_root,),
+        )
+
+        assert trusted_target.stat().st_mode == original_mode
+        assert stage_root.stat().st_mode & 0o222 == 0
+    finally:
+        real_chmod(stage_root, 0o700)
+
+
+def test_runtime_stage_readonly_verify_only_rejects_writable_state(
+    tmp_path: Path,
+) -> None:
+    module = _load_runtime_stage_readonly_helper()
+    stage_root = tmp_path / "stage"
+    stage_root.mkdir()
+    payload = stage_root / "payload.bin"
+    payload.write_bytes(b"payload")
+    original_mode = payload.stat().st_mode
+
+    with pytest.raises(RuntimeError, match="writable regular state"):
+        module.verify_tree_readonly(stage_root)
+
+    assert payload.stat().st_mode == original_mode
+
+
+def test_runtime_stage_readonly_fails_after_bounded_persistent_eio(
+    tmp_path: Path,
+) -> None:
+    module = _load_runtime_stage_readonly_helper()
+    stage_root = tmp_path / "stage"
+    stage_root.mkdir()
+    payload = stage_root / "payload.bin"
+    payload.write_bytes(b"payload")
+    real_chmod = module.os.chmod
+    chmod_attempts = 0
+
+    def failing_chmod(
+        path: os.PathLike[str] | str,
+        mode: int,
+        *,
+        follow_symlinks: bool = True,
+    ) -> None:
+        nonlocal chmod_attempts
+        if Path(path) == payload:
+            chmod_attempts += 1
+            raise OSError(errno.EIO, "persistent Lustre metadata failure")
+        real_chmod(path, mode, follow_symlinks=follow_symlinks)
+
+    try:
+        with pytest.raises(RuntimeError, match="exhausted 3 attempts"):
+            module.make_tree_readonly(
+                stage_root,
+                max_attempts=3,
+                chmod_fn=failing_chmod,
+                sleep_fn=lambda _: None,
+            )
+
+        assert chmod_attempts == 3
+        assert payload.stat().st_mode & 0o222 != 0
+    finally:
+        real_chmod(stage_root, 0o700)
+        real_chmod(payload, 0o600)
+
+
+def test_runtime_stage_readonly_retries_incomplete_lustre_scan(
+    tmp_path: Path,
+) -> None:
+    module = _load_runtime_stage_readonly_helper()
+    stage_root = tmp_path / "stage"
+    stage_root.mkdir()
+    payload = stage_root / "payload.bin"
+    payload.write_bytes(b"payload")
+    real_chmod = module.os.chmod
+    real_lstat = module.os.lstat
+    payload_scans = 0
+
+    def flaky_lstat(path: os.PathLike[str] | str) -> os.stat_result:
+        nonlocal payload_scans
+        if Path(path) == payload:
+            payload_scans += 1
+            if payload_scans == 1:
+                raise OSError(errno.ESTALE, "transient Lustre scan failure")
+        return real_lstat(path)
+
+    try:
+        module.make_tree_readonly(
+            stage_root,
+            lstat_fn=flaky_lstat,
+            sleep_fn=lambda _: None,
+        )
+
+        assert payload_scans >= 2
+        assert payload.stat().st_mode & 0o222 == 0
+    finally:
+        real_chmod(stage_root, 0o700)
+        real_chmod(payload, 0o600)
+
+
+def test_runtime_stage_readonly_does_not_retry_permission_error(
+    tmp_path: Path,
+) -> None:
+    module = _load_runtime_stage_readonly_helper()
+    stage_root = tmp_path / "stage"
+    stage_root.mkdir()
+    payload = stage_root / "payload.bin"
+    payload.write_bytes(b"payload")
+    real_chmod = module.os.chmod
+    sleeps: list[float] = []
+
+    def denied_chmod(
+        path: os.PathLike[str] | str,
+        mode: int,
+        *,
+        follow_symlinks: bool = True,
+    ) -> None:
+        if Path(path) == payload:
+            raise PermissionError(errno.EPERM, "permission denied")
+        real_chmod(path, mode, follow_symlinks=follow_symlinks)
+
+    try:
+        with pytest.raises(PermissionError, match="permission denied"):
+            module.make_tree_readonly(
+                stage_root,
+                chmod_fn=denied_chmod,
+                sleep_fn=sleeps.append,
+            )
+
+        assert sleeps == []
+    finally:
+        real_chmod(stage_root, 0o700)
+        real_chmod(payload, 0o600)
+
+
+def test_runtime_stage_readonly_cli_reports_operational_failure(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    module = _load_runtime_stage_readonly_helper()
+
+    result = module.main(["--root", str(tmp_path / "missing-stage")])
+
+    assert result == 2
+    assert "Runtime stage read-only finalization failed" in capsys.readouterr().err
+
+
+def test_runtime_stage_finalization_uses_retrying_readonly_helper() -> None:
+    source = (
+        EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
+    ).read_text()
+    stage = source.split("stage_command='", 1)[1].split("'\n\nattestation_command=", 1)[
+        0
+    ]
+    attestation = source.split("attestation_command='", 1)[1].split("'\n\npayload=", 1)[
+        0
+    ]
+
+    assert "make_runtime_stage_readonly.py" in source
+    assert '"${bootstrap_python}" "${source_readonly_helper}"' in source
+    assert '--regular-file "${partial_marker}"' in source
+    assert '--trusted-symlink-root "${runtime_stage_root}"' in stage
+    assert '--trusted-symlink-root "${python_install_dir}"' in stage
+    assert "--verify-only" in attestation
+    assert '--regular-file "${marker}"' in attestation
+    assert '--trusted-symlink-root "${runtime_stage_root}"' in attestation
+    assert '--trusted-symlink-root "${python_install_dir}"' in attestation
+    assert '"${runtime_python}" "${readonly_helper}"' not in attestation
+    assert 'chmod a-w -- "${partial_marker}"' not in source
+    assert 'chmod -R a-w -- "${runtime_stage_root}"' not in source
+    assert 'find "${runtime_stage_root}"' not in stage
+    assert 'find "${runtime_stage_root}"' not in attestation
+
+
 def test_runtime_wrapper_separates_cpu_stage_from_gpu_attestation() -> None:
     source = (
         EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
@@ -1101,6 +1467,7 @@ def test_runtime_wrapper_separates_cpu_stage_from_gpu_attestation() -> None:
     assert "expected_runtime_exclusions=deep-ep,fast-hadamard-transform" in source
     assert '"RUNTIME_EXCLUDED_PACKAGES=${RUNTIME_EXCLUDED_PACKAGES}"' in source
     assert "RUNTIME_STAGE_CAPABILITY=${RUNTIME_STAGE_CAPABILITY:-}" in source
+    assert "RUNTIME_BOOTSTRAP_PYTHON=/opt/nemo_rl_venv/bin/python" in source
     assert '"${RUNTIME_STAGE_CAPABILITY}" != "mcore-test-v1"' in source
     assert (
         "pytest==9.1.1,iniconfig==2.3.0,"
@@ -1128,7 +1495,8 @@ def test_runtime_wrapper_separates_cpu_stage_from_gpu_attestation() -> None:
         'mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"'
         in source
     )
-    assert "-perm -200 -o -perm -020 -o -perm -002" in source
+    assert "--verify-only" in source
+    assert '--trusted-symlink-root "${python_install_dir}"' in source
     assert "attestation_command='" in source
     attestation = source.split("attestation_command='", 1)[1].split("'\n\n", 1)[0]
     assert "uv run" not in attestation
@@ -1294,6 +1662,9 @@ def test_runtime_stage_publishes_marker_only_after_immutable_symlink_safe_audits
     assert cleanup.index('rm -f -- "${marker}"') < cleanup.index(
         'chmod -R u+w -- "${runtime_stage_root}"'
     )
+    assert "2>/dev/null" not in cleanup
+    assert "failed to restore runtime stage write permissions" in cleanup
+    assert "failed to remove incomplete runtime stage" in cleanup
     assert (
         runtime_environment.count('"RUNTIME_STAGE_MARKER=${runtime_stage_marker}"') == 1
     )
@@ -1302,12 +1673,8 @@ def test_runtime_stage_publishes_marker_only_after_immutable_symlink_safe_audits
     )
     assert 'if [[ ! "${runtime_stage_job_id}" =~ ^[1-9][0-9]*$ ]]' in source
     assert "${ARTIFACT_DIR%/}/stage-markers/${runtime_stage_key}.env" in source
-    assert 'find "${runtime_stage_root}"' in stage
-    assert r"\( -type f -o -type d \)" in stage
-    assert 'find "${runtime_stage_root}" -type l -print0' in stage
-    assert 'realpath -e -- "${symlink_path}"' in stage
-    assert '"${runtime_stage_root}"/*' in stage
-    assert '"${python_install_dir}"/*' in stage
+    assert 'find "${runtime_stage_root}"' not in stage
+    assert 'find "${runtime_stage_root}"' not in attestation
     assert (
         ': "${RUNTIME_STAGE_MARKER:?Runtime stage payload requires RUNTIME_STAGE_MARKER}"'
         in stage
@@ -1327,14 +1694,14 @@ def test_runtime_stage_publishes_marker_only_after_immutable_symlink_safe_audits
     )
 
     cleanup_index = stage.index('rm -rf -- "${uv_cache_dir}" "${te_cmake_dir}"')
-    chmod_index = stage.index('chmod -R a-w -- "${runtime_stage_root}"')
-    writable_audit_index = stage.index('writable_path=$(find "${runtime_stage_root}"')
-    symlink_audit_index = stage.index('while IFS= read -r -d "" symlink_path; do')
+    readonly_index = stage.index('"${bootstrap_python}" "${source_readonly_helper}"')
     marker_index = stage.index(
         'mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"'
     )
-    assert cleanup_index < chmod_index < writable_audit_index < symlink_audit_index
-    assert symlink_audit_index < marker_index
+    assert cleanup_index < readonly_index < marker_index
+    attestation_helper_index = attestation.index("--verify-only")
+    provenance_index = attestation.index('"${source_provenance_verifier}"')
+    assert attestation_helper_index < provenance_index
 
 
 def test_runtime_attestation_submitter_requires_completed_stage_job() -> None:
@@ -1497,6 +1864,10 @@ def test_runtime_stage_audit_failure_never_publishes_marker(
         'arguments+=("${argument}"); done\n'
         'exec /bin/chmod "${arguments[@]}"\n',
     )
+    _write_executable(
+        fake_bin / "python",
+        f'#!/bin/sh\nexec "{sys.executable}" "$@"\n',
+    )
     marker = marker_dir / f"{stage_root.name}.env"
     partial_marker = marker_dir / f".{stage_root.name}.733.partial"
     marker_lines = [
@@ -1551,13 +1922,18 @@ def test_runtime_stage_audit_failure_never_publishes_marker(
             "partial_marker": str(partial_marker),
             "RUNTIME_STAGE_MARKER_SHA256": marker_sha256,
             "runtime_stage_root": str(stage_root),
+            "environment_root": str(tmp_path),
+            "bootstrap_python": str(fake_bin / "python"),
+            "source_readonly_helper": str(
+                EXPERIMENT_DIR / "make_runtime_stage_readonly.py"
+            ),
             "python_install_dir": str(python_install_dir),
             "marker": str(marker),
         }
     )
 
     result = subprocess.run(
-        ["bash", "-c", tail],
+        ["bash", "-c", f"set -euo pipefail\n{tail}"],
         env=environment,
         check=False,
         capture_output=True,
@@ -1570,6 +1946,53 @@ def test_runtime_stage_audit_failure_never_publishes_marker(
     subprocess.run(["/bin/chmod", "-R", "u+w", stage_root], check=True)
 
 
+def test_runtime_stage_readonly_helper_failure_never_publishes_marker(
+    tmp_path: Path,
+) -> None:
+    source = (
+        EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
+    ).read_text()
+    stage = source.split("stage_command='", 1)[1].split("'\n\nattestation_command=", 1)[
+        0
+    ]
+    tail = stage[stage.index("PYTHONDONTWRITEBYTECODE=1") :]
+
+    stage_root = tmp_path / "stage"
+    stage_root.mkdir()
+    environment_root = tmp_path / "environment"
+    environment_root.joinpath("bin").mkdir(parents=True)
+    _write_executable(
+        environment_root / "bin" / "python",
+        "#!/bin/sh\nexit 97\n",
+    )
+    partial_marker = tmp_path / ".partial.env"
+    partial_marker.write_text("partial\n")
+    marker = tmp_path / "published.env"
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "environment_root": str(environment_root),
+            "bootstrap_python": str(environment_root / "bin" / "python"),
+            "source_readonly_helper": str(tmp_path / "readonly-helper.py"),
+            "runtime_stage_root": str(stage_root),
+            "partial_marker": str(partial_marker),
+            "marker": str(marker),
+            "python_install_dir": str(tmp_path / "python-installations"),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{tail}"],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 97
+    assert not marker.exists()
+
+
 @pytest.mark.parametrize("marker_kind", ("missing", "symlink", "mismatch", "writable"))
 def test_gpu_attestation_rejects_untrusted_runtime_stage(
     tmp_path: Path, marker_kind: str
@@ -1578,6 +2001,38 @@ def test_gpu_attestation_rejects_untrusted_runtime_stage(
     stage_root.mkdir(parents=True)
     stage_job_record = stage_root / "stage-job-id"
     stage_job_record.write_text("733\n")
+    readonly_helper = (
+        stage_root
+        / "source"
+        / "experiments"
+        / "cuda_graph"
+        / "nemotron_thd_te_graph_20260731"
+        / "make_runtime_stage_readonly.py"
+    )
+    readonly_helper.parent.mkdir(parents=True)
+    readonly_helper.write_text(
+        (EXPERIMENT_DIR / "make_runtime_stage_readonly.py").read_text()
+    )
+    source_readonly_helper = (
+        tmp_path
+        / "source"
+        / "experiments"
+        / "cuda_graph"
+        / "nemotron_thd_te_graph_20260731"
+        / "make_runtime_stage_readonly.py"
+    )
+    source_readonly_helper.parent.mkdir(parents=True)
+    source_readonly_helper.write_text(
+        (EXPERIMENT_DIR / "make_runtime_stage_readonly.py").read_text()
+    )
+    runtime_python = stage_root / "environment" / "bin" / "python"
+    runtime_python.parent.mkdir(parents=True)
+    _write_executable(
+        runtime_python,
+        f'#!/bin/sh\nexec "{sys.executable}" "$@"\n',
+    )
+    python_install_dir = tmp_path / "uv-python-installations"
+    python_install_dir.mkdir()
     marker = tmp_path / "stage-markers" / f"{stage_root.name}.env"
     marker.parent.mkdir()
     expected_content = b"schema=runtime-stage-v1\n"
@@ -1609,7 +2064,8 @@ def test_gpu_attestation_rejects_untrusted_runtime_stage(
             "RUNTIME_STAGE_MARKER": str(marker),
             "RUNTIME_STAGE_MARKER_SHA256": expected_sha256,
             "RUNTIME_STAGE_JOB_ID": "733",
-            "UV_PYTHON_INSTALL_DIR": str(tmp_path / "uv-python-installations"),
+            "UV_PYTHON_INSTALL_DIR": str(python_install_dir),
+            "RUNTIME_BOOTSTRAP_PYTHON": sys.executable,
         }
     )
     arguments = [
@@ -1658,6 +2114,106 @@ def test_gpu_attestation_rejects_untrusted_runtime_stage(
         "writable": "contains writable regular state",
     }[marker_kind]
     assert expected_error in result.stderr
+
+
+def test_gpu_attestation_rejects_escaped_runtime_python_before_execution(
+    tmp_path: Path,
+) -> None:
+    stage_root = tmp_path / "staged-runtimes" / ("a" * 64)
+    stage_root.mkdir(parents=True)
+    stage_job_record = stage_root / "stage-job-id"
+    stage_job_record.write_text("733\n")
+    source_readonly_helper = (
+        tmp_path
+        / "source"
+        / "experiments"
+        / "cuda_graph"
+        / "nemotron_thd_te_graph_20260731"
+        / "make_runtime_stage_readonly.py"
+    )
+    source_readonly_helper.parent.mkdir(parents=True)
+    source_readonly_helper.write_text(
+        (EXPERIMENT_DIR / "make_runtime_stage_readonly.py").read_text()
+    )
+    escaped_python = tmp_path / "escaped-python"
+    escaped_python_marker = tmp_path / "escaped-python-executed"
+    _write_executable(
+        escaped_python,
+        '#!/bin/sh\nprintf executed >"${ESCAPED_PYTHON_MARKER}"\nexit 98\n',
+    )
+    runtime_python = stage_root / "environment" / "bin" / "python"
+    runtime_python.parent.mkdir(parents=True)
+    runtime_python.symlink_to(escaped_python)
+    marker = tmp_path / "stage-markers" / f"{stage_root.name}.env"
+    marker.parent.mkdir()
+    marker.write_text("schema=runtime-stage-v1\n")
+    marker_sha256 = hashlib.sha256(marker.read_bytes()).hexdigest()
+    for path in sorted(stage_root.rglob("*"), reverse=True):
+        if not path.is_symlink():
+            path.chmod(path.stat().st_mode & ~0o222)
+    stage_root.chmod(stage_root.stat().st_mode & ~0o222)
+    marker.chmod(marker.stat().st_mode & ~0o222)
+    python_install_dir = tmp_path / "uv-python-installations"
+    python_install_dir.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(
+        fake_bin / "sha256sum",
+        '#!/bin/sh\nexec /usr/bin/shasum -a 256 "$@"\n',
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "RUNTIME_STAGE_MARKER": str(marker),
+            "RUNTIME_STAGE_MARKER_SHA256": marker_sha256,
+            "RUNTIME_STAGE_JOB_ID": "733",
+            "UV_PYTHON_INSTALL_DIR": str(python_install_dir),
+            "RUNTIME_BOOTSTRAP_PYTHON": sys.executable,
+            "ESCAPED_PYTHON_MARKER": str(escaped_python_marker),
+        }
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            _attestation_payload(),
+            "bash",
+            str(tmp_path / "source"),
+            str(tmp_path / "source" / "validator.py"),
+            str(stage_root / "environment"),
+            str(tmp_path / "container.sqsh"),
+            "a" * 64,
+            NEMORL_COMMIT,
+            BRIDGE_COMMIT,
+            MCORE_COMMIT,
+            "b" * 64,
+            TE_COMMIT,
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            TE_COMMIT,
+            "--output",
+            str(tmp_path / "runtime.json"),
+            str(stage_root),
+        ],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    for path in sorted(stage_root.rglob("*"), reverse=True):
+        if not path.is_symlink():
+            path.chmod(path.stat().st_mode | 0o200)
+    stage_root.chmod(stage_root.stat().st_mode | 0o200)
+    marker.chmod(marker.stat().st_mode | 0o200)
+    assert result.returncode == 2
+    assert "escapes trusted roots" in result.stderr
+    assert not escaped_python_marker.exists()
 
 
 def test_runtime_payload_rejects_missing_nvcc_before_staging_uv(

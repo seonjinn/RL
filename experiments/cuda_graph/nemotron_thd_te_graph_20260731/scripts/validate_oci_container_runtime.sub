@@ -464,6 +464,7 @@ runtime_environment=(
   "RUNTIME_EXCLUDED_PACKAGES=${RUNTIME_EXCLUDED_PACKAGES}"
   "RUNTIME_STAGE_CAPABILITY=${RUNTIME_STAGE_CAPABILITY}"
   "RUNTIME_TEST_REQUIREMENTS=${RUNTIME_TEST_REQUIREMENTS}"
+  RUNTIME_BOOTSTRAP_PYTHON=/opt/nemo_rl_venv/bin/python
   "PINNED_UV_VERSION=${expected_uv_version}"
   "UV_EXECUTABLE=${uv_executable}"
   UV_LINK_MODE=copy
@@ -583,9 +584,19 @@ if [[ -L "${marker_dir}" || ( -e "${marker_dir}" && ! -d "${marker_dir}" ) ]]; t
   exit 2
 fi
 cleanup_runtime_workspace() {
-  rm -f -- "${marker}" "${partial_marker}"
-  chmod -R u+w -- "${runtime_stage_root}" 2>/dev/null || true
-  rm -rf -- "${runtime_stage_root}"
+  local original_status=${1-$?}
+  if ! rm -f -- "${marker}" "${partial_marker}"; then
+    echo "Warning: failed to remove runtime stage publication markers" >&2
+  fi
+  if [[ -e "${runtime_stage_root}" || -L "${runtime_stage_root}" ]]; then
+    if ! chmod -R u+w -- "${runtime_stage_root}"; then
+      echo "Warning: failed to restore runtime stage write permissions" >&2
+    fi
+    if ! rm -rf -- "${runtime_stage_root}"; then
+      echo "Warning: failed to remove incomplete runtime stage" >&2
+    fi
+  fi
+  return "${original_status}"
 }
 trap cleanup_runtime_workspace EXIT
 mkdir -p -m 0700 -- "${marker_dir}"
@@ -598,10 +609,16 @@ cp -a -- "${source_project_root}/." "${runtime_project_root}/"
 project_root=${runtime_project_root}
 validator=${project_root}/${validator_relative_path}
 source_provenance_verifier=${project_root}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/scripts/verify_source_provenance.sh
+readonly_helper=${project_root}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/make_runtime_stage_readonly.py
+source_readonly_helper=${source_project_root}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/make_runtime_stage_readonly.py
+bootstrap_python=${RUNTIME_BOOTSTRAP_PYTHON:?Runtime stage requires the immutable container Python}
 bridge_root=${project_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
 mcore_root=${bridge_root}/3rdparty/Megatron-LM
-if [[ ! -f "${validator}" || ! -x "${source_provenance_verifier}" ]]; then
-  echo "Runtime source copy is missing its validator or provenance verifier" >&2
+if [[ ! -f "${validator}" || ! -x "${source_provenance_verifier}" ||
+      -L "${readonly_helper}" || ! -f "${readonly_helper}" ||
+      -L "${source_readonly_helper}" || ! -f "${source_readonly_helper}" ||
+      ! -x "${bootstrap_python}" ]]; then
+  echo "Runtime source copy is missing a required validation helper" >&2
   exit 2
 fi
 verify_no_ignored_source_paths() {
@@ -668,11 +685,14 @@ staging_uv_dir=${uv_bin_dir}.partial
 uv_installer=${uv_bin_dir}.installer.sh
 rm -rf -- "${staging_uv_dir}" "${uv_installer}"
 cleanup_uv_stage() {
-  rm -rf -- "${staging_uv_dir}" "${uv_installer}"
+  if ! rm -rf -- "${staging_uv_dir}" "${uv_installer}"; then
+    echo "Warning: failed to remove incomplete pinned uv stage" >&2
+  fi
 }
 cleanup_uv_stage_and_workspace() {
+  local original_status=$?
   cleanup_uv_stage
-  cleanup_runtime_workspace
+  cleanup_runtime_workspace "${original_status}"
 }
 trap cleanup_uv_stage_and_workspace EXIT
 curl --retry 3 --retry-delay 2 -fsSL \
@@ -797,28 +817,12 @@ if [[ "${actual_marker_sha256}" != "${RUNTIME_STAGE_MARKER_SHA256}" ]]; then
   echo "Runtime stage marker SHA256 mismatch" >&2
   exit 2
 fi
-chmod a-w -- "${partial_marker}"
-chmod -R a-w -- "${runtime_stage_root}"
-writable_path=$(find "${runtime_stage_root}" \
-  \( -type f -o -type d \) \
-  \( -perm -200 -o -perm -020 -o -perm -002 \) -print -quit)
-if [[ -n "${writable_path}" ]]; then
-  echo "Runtime stage contains writable regular state: ${writable_path}" >&2
-  exit 2
-fi
-while IFS= read -r -d "" symlink_path; do
-  resolved_symlink=$(realpath -e -- "${symlink_path}") || {
-    echo "Runtime stage contains a broken symlink: ${symlink_path}" >&2
-    exit 2
-  }
-  case "${resolved_symlink}" in
-    "${runtime_stage_root}"|"${runtime_stage_root}"/*|"${python_install_dir}"|"${python_install_dir}"/*) ;;
-    *)
-      echo "Runtime stage symlink escapes trusted roots: ${symlink_path}" >&2
-      exit 2
-      ;;
-  esac
-done < <(find "${runtime_stage_root}" -type l -print0)
+PYTHONDONTWRITEBYTECODE=1 \
+  "${bootstrap_python}" "${source_readonly_helper}" \
+  --root "${runtime_stage_root}" \
+  --regular-file "${partial_marker}" \
+  --trusted-symlink-root "${runtime_stage_root}" \
+  --trusted-symlink-root "${python_install_dir}"
 mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"
 trap - EXIT
 printf "RUNTIME_STAGE_READY=%s\nRUNTIME_STAGE_MARKER=%s\nRUNTIME_STAGE_JOB_ID=%s\n" \
@@ -879,28 +883,27 @@ if [[ "${actual_marker_sha256}" != "${RUNTIME_STAGE_MARKER_SHA256}" ]]; then
   echo "Runtime stage marker SHA256 mismatch" >&2
   exit 2
 fi
-writable_path=$(find "${runtime_stage_root}" \
-  \( -type f -o -type d \) \
-  \( -perm -200 -o -perm -020 -o -perm -002 \) -print -quit)
-if [[ -n "${writable_path}" ]]; then
-  echo "Runtime stage contains writable regular state: ${writable_path}" >&2
+python_install_dir=${UV_PYTHON_INSTALL_DIR:?Runtime probe requires a managed Python install directory}
+project_root=${runtime_stage_root}/source
+source_readonly_helper=${source_project_root}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/make_runtime_stage_readonly.py
+bootstrap_python=${RUNTIME_BOOTSTRAP_PYTHON:?Runtime attestation requires the immutable container Python}
+if [[ -L "${source_readonly_helper}" || ! -f "${source_readonly_helper}" ||
+      ! -x "${bootstrap_python}" ]]; then
+  echo "Immutable runtime stage verifier or container Python is missing or unsafe" >&2
   exit 2
 fi
-python_install_dir=${UV_PYTHON_INSTALL_DIR:?Runtime probe requires a managed Python install directory}
-while IFS= read -r -d "" symlink_path; do
-  resolved_symlink=$(realpath -e -- "${symlink_path}") || {
-    echo "Runtime stage contains a broken symlink: ${symlink_path}" >&2
-    exit 2
-  }
-  case "${resolved_symlink}" in
-    "${runtime_stage_root}"|"${runtime_stage_root}"/*|"${python_install_dir}"|"${python_install_dir}"/*) ;;
-    *)
-      echo "Runtime stage symlink escapes trusted roots: ${symlink_path}" >&2
-      exit 2
-      ;;
-  esac
-done < <(find "${runtime_stage_root}" -type l -print0)
-project_root=${runtime_stage_root}/source
+PYTHONDONTWRITEBYTECODE=1 \
+  "${bootstrap_python}" "${source_readonly_helper}" \
+  --verify-only \
+  --root "${runtime_stage_root}" \
+  --regular-file "${marker}" \
+  --trusted-symlink-root "${runtime_stage_root}" \
+  --trusted-symlink-root "${python_install_dir}"
+runtime_python=${environment_root}/bin/python
+if [[ ! -x "${runtime_python}" ]]; then
+  echo "Runtime stage Python is missing or unsafe" >&2
+  exit 2
+fi
 source_validator=${project_root}/${source_validator#"${source_project_root}/"}
 source_provenance_verifier=${project_root}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/scripts/verify_source_provenance.sh
 bridge_root=${project_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
@@ -912,11 +915,6 @@ mcore_root=${bridge_root}/3rdparty/Megatron-LM
 copied_uv_lock_sha256=$(sha256sum "${project_root}/uv.lock" | awk "{print \$1}")
 if [[ "${copied_uv_lock_sha256}" != "${uv_lock_sha256}" ]]; then
   echo "Runtime stage uv.lock SHA256 mismatch" >&2
-  exit 2
-fi
-runtime_python=${environment_root}/bin/python
-if [[ ! -x "${runtime_python}" ]]; then
-  echo "Runtime stage Python is missing or unsafe" >&2
   exit 2
 fi
 "${runtime_python}" "${source_validator}" \
