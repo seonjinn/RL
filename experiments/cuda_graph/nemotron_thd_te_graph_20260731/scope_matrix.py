@@ -326,7 +326,10 @@ def render_scope_command(
         raise ValueError(
             "Router Replay cannot be combined with a router CUDA Graph scope"
         )
-    protected_overrides = {"policy.router_replay.enabled"}
+    protected_overrides = {
+        "policy.megatron_cfg.moe_router_dtype",
+        "policy.router_replay.enabled",
+    }
     if router_replay_enabled:
         protected_overrides.update(
             (
@@ -339,6 +342,8 @@ def render_scope_command(
         if override_key.startswith("~"):
             override_key = override_key[1:]
         if override_key in protected_overrides:
+            if override_key == "policy.megatron_cfg.moe_router_dtype":
+                raise ValueError(f"protected campaign override: {override_key}")
             raise ValueError(f"protected Router Replay override: {override_key}")
     modules = ",".join(scope)
     command = [
@@ -359,6 +364,7 @@ def render_scope_command(
         f"{spec.nemorl_generation_num_nodes}",
         f"policy.generation.colocated.resources.gpus_per_node={spec.gpus_per_node}",
         "++policy.megatron_cfg.attention_backend=fused",
+        "++policy.megatron_cfg.moe_router_dtype=fp32",
         f"cluster.num_nodes={spec.nemorl_cluster_num_nodes}",
         f"cluster.gpus_per_node={spec.gpus_per_node}",
         f"logger.log_dir={log_dir or f'exp_logs/nemotron_thd_te_graph_20260731/{run_name}'}",

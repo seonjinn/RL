@@ -76,8 +76,11 @@ case "${RUNTIME_FEATURE_SET}" in
   te_eval_capability_8|bridge_forward_only_eval_8)
     expected_runtime_exclusions=causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm
     ;;
-  dropless_hybridep_nano16|dropless_alltoall_qwen30_16|dropless_alltoall_super32|dropless_hybridep_qwen235_64)
+  dropless_hybridep_nano16|dropless_hybridep_qwen235_64)
     expected_runtime_exclusions=fast-hadamard-transform
+    ;;
+  dropless_alltoall_qwen30_16|dropless_alltoall_super32)
+    expected_runtime_exclusions=deep-ep,fast-hadamard-transform
     ;;
   *)
     echo "RUNTIME_FEATURE_SET must select one typed runtime row" >&2

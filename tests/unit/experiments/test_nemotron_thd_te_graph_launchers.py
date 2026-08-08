@@ -1009,6 +1009,51 @@ def test_rendered_nemorl_command_adds_experimental_struct_keys_with_hydra_plus_p
     assert "++policy.megatron_cfg.thd_max_packed_sequences=16" in graph_arguments
 
 
+@pytest.mark.parametrize("model", ("nano", "qwen3_30ba3b"))
+@pytest.mark.parametrize("cuda_graph_enabled", (False, True))
+def test_inherited_fp64_campaign_recipes_pin_fp32_router_math(
+    model: str, cuda_graph_enabled: bool
+) -> None:
+    """Baseline and graph rows must override the inherited fp64 recipe default."""
+    module = _load_experiment_module("scope_matrix")
+
+    arguments = shlex.split(
+        module.render_scope_command(
+            model=model,
+            scope=("moe_router",) if cuda_graph_enabled else (),
+            steps=20,
+            run_name=f"{model}-router-fp32",
+            cuda_graph_enabled=cuda_graph_enabled,
+        )
+    )
+
+    assert arguments.count("++policy.megatron_cfg.moe_router_dtype=fp32") == 1
+
+
+@pytest.mark.parametrize(
+    "override",
+    (
+        "policy.megatron_cfg.moe_router_dtype=fp64",
+        "++policy.megatron_cfg.moe_router_dtype=fp32",
+        "~policy.megatron_cfg.moe_router_dtype",
+    ),
+)
+def test_campaign_router_dtype_override_cannot_be_replaced_or_deleted(
+    override: str,
+) -> None:
+    """Callers must not weaken or duplicate the campaign's router-math pin."""
+    module = _load_experiment_module("scope_matrix")
+
+    with pytest.raises(ValueError, match="protected campaign override"):
+        module.render_scope_command(
+            model="nano",
+            scope=("moe_router",),
+            steps=20,
+            run_name="nano-protected-router-dtype",
+            extra_overrides=(override,),
+        )
+
+
 def test_rendered_nano_command_pins_the_claimed_hybridep_dispatcher() -> None:
     module = _load_experiment_module("scope_matrix")
 
@@ -2623,6 +2668,62 @@ def test_ray_and_mcore_sruns_override_image_uv_environment() -> None:
     assert 'exec "${environment_root}/bin/python" "$@"' in mcore_wrapper
     assert "/bin/bash --noprofile --norc -c" in mcore_wrapper
     assert "bash -lc" not in mcore_wrapper
+
+
+def test_alltoall_leaf_sync_excludes_deep_ep_without_reprobe(tmp_path: Path) -> None:
+    """AlltoAll workers must omit DeepEP from sync and skip the live import probe."""
+    source = (EXPERIMENT_DIR / "scripts" / "run_mcore_scope.sub").read_text()
+    start_marker = "--export=ALL /bin/bash --noprofile --norc -c '\n"
+    start = source.index(start_marker) + len(start_marker)
+    payload = source[start : source.index('\n\' bash "${UV_EXECUTABLE}"', start)]
+    uv_log = tmp_path / "uv-args.txt"
+    python_log = tmp_path / "python-args.txt"
+    fake_uv = tmp_path / "uv"
+    fake_uv.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" >"${UV_LOG}"\n')
+    fake_uv.chmod(0o755)
+    environment_root = tmp_path / "environment"
+    environment_root.joinpath("bin").mkdir(parents=True)
+    fake_python = environment_root / "bin" / "python"
+    fake_python.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" >"${PYTHON_LOG}"\n')
+    fake_python.chmod(0o755)
+    runner = tmp_path / "runner.py"
+    runner.write_text("raise SystemExit('fake Python must intercept this')\n")
+
+    result = subprocess.run(
+        [
+            "bash",
+            "--noprofile",
+            "--norc",
+            "-c",
+            payload,
+            "bash",
+            str(fake_uv),
+            str(environment_root),
+            str(tmp_path),
+            str(runner),
+            "--fixture",
+        ],
+        env={
+            **os.environ,
+            "UV_LOG": str(uv_log),
+            "PYTHON_LOG": str(python_log),
+            "UV_PYTHON": PYTHON_VERSION,
+            "RUNTIME_FEATURE_SET": "dropless_alltoall_qwen30_16",
+            "RUNTIME_EXCLUDED_PACKAGES": "deep-ep,fast-hadamard-transform",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    uv_arguments = uv_log.read_text().splitlines()
+    assert [
+        uv_arguments[index + 1]
+        for index, argument in enumerate(uv_arguments[:-1])
+        if argument == "--no-install-package"
+    ] == ["deep-ep", "fast-hadamard-transform"]
+    assert python_log.read_text().splitlines() == [str(runner), "--fixture"]
 
 
 def test_cluster_profiles_render_cluster_specific_gres_and_segment_contracts() -> None:

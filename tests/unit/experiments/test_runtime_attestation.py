@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -573,7 +575,7 @@ def test_validator_binds_dropless_alltoall_runtime_contract(
     payload.update(
         {
             "runtime_feature_set": feature_set,
-            "excluded_packages": ["fast-hadamard-transform"],
+            "excluded_packages": ["deep-ep", "fast-hadamard-transform"],
             "torch_cuda_arch_list": "10.0a",
             "nvte_cuda_archs": "100a",
         }
@@ -595,7 +597,7 @@ def test_validator_binds_dropless_alltoall_runtime_contract(
         expected_uv_version=UV_VERSION,
         expected_uv_executable=uv_executable,
         expected_runtime_feature_set=feature_set,
-        expected_excluded_packages=("fast-hadamard-transform",),
+        expected_excluded_packages=("deep-ep", "fast-hadamard-transform"),
         expected_torch_cuda_arch_list="10.0a",
         expected_nvte_cuda_archs="100a",
     )
@@ -604,15 +606,78 @@ def test_validator_binds_dropless_alltoall_runtime_contract(
 
 
 @pytest.mark.parametrize(
-    "row_id",
+    ("feature_set", "excluded_packages"),
     (
-        "dropless_hybridep_nano16",
-        "dropless_alltoall_qwen30_16",
-        "dropless_alltoall_super32",
-        "dropless_hybridep_qwen235_64",
+        ("dropless_hybridep_nano16", ("fast-hadamard-transform",)),
+        (
+            "dropless_alltoall_qwen30_16",
+            ("deep-ep", "fast-hadamard-transform"),
+        ),
+        (
+            "dropless_alltoall_super32",
+            ("deep-ep", "fast-hadamard-transform"),
+        ),
+        ("dropless_hybridep_qwen235_64", ("fast-hadamard-transform",)),
     ),
 )
-def test_profile_runtime_contract_selects_exact_moe_row(row_id: str) -> None:
+def test_mcore_submitter_resolves_exact_row_exclusions(
+    tmp_path: Path,
+    feature_set: str,
+    excluded_packages: tuple[str, ...],
+) -> None:
+    """The submitter must export the same typed exclusions verified by leaf jobs."""
+    submitter = (MODULE_PATH.parent / "submit_mcore_matrix.sh").read_text()
+    start_marker = 'runtime_contract=$(SELECTION="${selection}" python3 - "${RUNTIME_ATTESTATION}" <<\'PY\'\n'
+    start = submitter.index(start_marker) + len(start_marker)
+    contract_program = submitter[start : submitter.index("\nPY\n)", start)]
+    attestation = tmp_path / "runtime.json"
+    attestation.write_text(
+        json.dumps(
+            {
+                "runtime_feature_set": feature_set,
+                "excluded_packages": list(excluded_packages),
+                "torch_cuda_arch_list": "10.0a",
+                "nvte_cuda_archs": "100a",
+            }
+        )
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-", str(attestation)],
+        input=contract_program,
+        env={**os.environ, "SELECTION": f"{feature_set}\t16\t4\t4"},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().split("\t") == [
+        feature_set,
+        ",".join(excluded_packages),
+        "10.0a",
+        "100a",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("row_id", "excluded_packages"),
+    (
+        ("dropless_hybridep_nano16", ("fast-hadamard-transform",)),
+        (
+            "dropless_alltoall_qwen30_16",
+            ("deep-ep", "fast-hadamard-transform"),
+        ),
+        (
+            "dropless_alltoall_super32",
+            ("deep-ep", "fast-hadamard-transform"),
+        ),
+        ("dropless_hybridep_qwen235_64", ("fast-hadamard-transform",)),
+    ),
+)
+def test_profile_runtime_contract_selects_exact_moe_row(
+    row_id: str, excluded_packages: tuple[str, ...]
+) -> None:
     module = _load_module()
 
     assert module._runtime_contract_for_rows(
@@ -620,7 +685,7 @@ def test_profile_runtime_contract_selects_exact_moe_row(row_id: str) -> None:
         required_rows=(row_id,),
     ) == (
         row_id,
-        ("fast-hadamard-transform",),
+        excluded_packages,
     )
 
 

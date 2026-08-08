@@ -1080,6 +1080,7 @@ class TestApplyPerformanceConfig:
             moe_pad_expert_input_to_capacity=False,
             moe_router_padding_for_quantization=False,
             moe_router_load_balancing_type="none",
+            moe_router_dtype="fp32",
             moe_flex_dispatcher_backend=None,
             moe_hybridep_pad_uneven_dispatch_inputs=False,
             overlap_moe_expert_parallel_comm=False,
@@ -1110,6 +1111,37 @@ class TestApplyPerformanceConfig:
             "make_sequence_length_divisible_by": sequence_length_alignment,
         }
         return model_cfg, config
+
+    @pytest.mark.parametrize("modules", ([], ["moe"], ["moe_router"]))
+    @pytest.mark.parametrize("router_dtype", (None, "float32", "fp64"))
+    def test_te_router_capture_requires_exact_fp32_router_dtype(
+        self,
+        modules: list[str],
+        router_dtype: str | None,
+    ) -> None:
+        """Whole-layer, whole-MoE, and router scopes must reject non-fp32 math."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request(modules=modules)
+        model_cfg.moe_router_dtype = router_dtype
+        if not modules or modules == ["moe"]:
+            model_cfg.moe_pad_expert_input_to_capacity = True
+            model_cfg.moe_expert_capacity_factor = 1.0
+
+        with pytest.raises(ValueError, match="moe_router_dtype='fp32'"):
+            _apply_performance_config(model_cfg, config)
+
+    def test_dense_te_graph_allows_inherited_fp64_router_dtype(self) -> None:
+        """The router dtype gate applies only when the effective scope captures it."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request(modules=["attn"])
+        model_cfg.moe_router_dtype = "fp64"
+
+        with patch(
+            "nemo_rl.models.megatron.setup.is_te_min_version", return_value=True
+        ):
+            _apply_performance_config(model_cfg, config)
 
     def test_fixed_te_graph_request_projects_canonical_geometry(self) -> None:
         """Missing projection would let model and iterator capture different shapes."""

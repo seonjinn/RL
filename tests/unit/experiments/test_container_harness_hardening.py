@@ -243,13 +243,14 @@ def _run_runtime_payload(
             "CMAKE_BUILD_PARALLEL_LEVEL": "32",
             "NVTE_CUDA_ARCHS": "100a",
             "TORCH_CUDA_ARCH_LIST": "10.0a",
-            "RUNTIME_FEATURE_SET": "te_eval_capability_8",
             "RUNTIME_STAGE_CAPABILITY": RUNTIME_STAGE_CAPABILITY,
             "RUNTIME_TEST_REQUIREMENTS": RUNTIME_TEST_REQUIREMENTS,
-            "RUNTIME_EXCLUDED_PACKAGES": (
-                "causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm"
-            ),
         }
+    )
+    runtime_environment.setdefault("RUNTIME_FEATURE_SET", "te_eval_capability_8")
+    runtime_environment.setdefault(
+        "RUNTIME_EXCLUDED_PACKAGES",
+        "causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm",
     )
     runtime_environment["PATH"] = (
         f"{effective_cuda_home / 'bin'}:{runtime_environment.get('PATH', '')}"
@@ -504,7 +505,7 @@ def test_runtime_probe_binds_dropless_alltoall_feature_set(
     environment_root = tmp_path / "runtime-venv"
     project_root = tmp_path / "project"
     modules = _runtime_modules(module, environment_root)
-    exclusions = ("fast-hadamard-transform",)
+    exclusions = ("deep-ep", "fast-hadamard-transform")
     environment = {
         "UV_PROJECT_ENVIRONMENT": str(environment_root),
         "RUNTIME_FEATURE_SET": feature_set,
@@ -944,6 +945,7 @@ def test_runtime_wrapper_separates_cpu_stage_from_gpu_attestation() -> None:
     assert "dropless_alltoall_super32" in source
     assert "dropless_hybridep_qwen235_64" in source
     assert "expected_runtime_exclusions=fast-hadamard-transform" in source
+    assert "expected_runtime_exclusions=deep-ep,fast-hadamard-transform" in source
     assert '"RUNTIME_EXCLUDED_PACKAGES=${RUNTIME_EXCLUDED_PACKAGES}"' in source
     assert "RUNTIME_STAGE_CAPABILITY=${RUNTIME_STAGE_CAPABILITY:-}" in source
     assert '"${RUNTIME_STAGE_CAPABILITY}" != "mcore-test-v1"' in source
@@ -982,6 +984,42 @@ def test_runtime_wrapper_separates_cpu_stage_from_gpu_attestation() -> None:
     assert "cmake" not in attestation.lower()
     assert 'sha256sum "${marker}"' in attestation
     assert '"${runtime_python}" "${source_validator}"' in attestation
+
+
+@pytest.mark.parametrize(
+    ("feature_set", "excluded_packages"),
+    (
+        ("dropless_hybridep_nano16", "fast-hadamard-transform"),
+        (
+            "dropless_alltoall_qwen30_16",
+            "deep-ep,fast-hadamard-transform",
+        ),
+        (
+            "dropless_alltoall_super32",
+            "deep-ep,fast-hadamard-transform",
+        ),
+        ("dropless_hybridep_qwen235_64", "fast-hadamard-transform"),
+    ),
+)
+def test_runtime_wrapper_accepts_exact_dispatcher_exclusions(
+    tmp_path: Path, feature_set: str, excluded_packages: str
+) -> None:
+    """The shell-side runtime table must distinguish AlltoAll from HybridEP."""
+    result = _run_script(
+        "scripts/validate_oci_container_runtime.sub",
+        CONTAINER=str(tmp_path / "runtime.sqsh"),
+        CONTAINER_SHA256="a" * 64,
+        ARTIFACT_DIR=str(tmp_path / "artifacts"),
+        PROJECT_ROOT=str(REPO_ROOT),
+        TEST_ONLY="1",
+        RUNTIME_PHASE="stage",
+        RUNTIME_STAGE_CAPABILITY=RUNTIME_STAGE_CAPABILITY,
+        RUNTIME_TEST_REQUIREMENTS=RUNTIME_TEST_REQUIREMENTS,
+        RUNTIME_FEATURE_SET=feature_set,
+        RUNTIME_EXCLUDED_PACKAGES=excluded_packages,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_runtime_stage_runs_exact_task2_root_suite_before_marker_publication(
@@ -1746,6 +1784,7 @@ def test_runtime_payload_cleans_workspace_after_late_uv_failure(tmp_path: Path) 
         "    esac\n"
         "    ;;\n"
         "  sync)\n"
+        '    printf \'%s\\n\' "$@" >"${UV_SYNC_LOG}"\n'
         '    mkdir -p "${UV_CACHE_DIR}"\n'
         '    touch "${UV_CACHE_DIR}/build-marker"\n'
         '    mkdir -p "${NVTE_CMAKE_BUILD_DIR}"\n'
@@ -1791,6 +1830,7 @@ def test_runtime_payload_cleans_workspace_after_late_uv_failure(tmp_path: Path) 
     )
 
     environment = os.environ.copy()
+    uv_sync_log = tmp_path / "uv-sync.log"
     environment.update(
         {
             "PATH": f"{fixture.fake_bin}:/usr/bin:/bin",
@@ -1801,11 +1841,20 @@ def test_runtime_payload_cleans_workspace_after_late_uv_failure(tmp_path: Path) 
             "UV_PYTHON": PYTHON_VERSION,
             "UV_PYTHON_INSTALL_DIR": str(python_install_dir),
             "UV_PROJECT_ENVIRONMENT": str(fixture.environment_root),
+            "UV_SYNC_LOG": str(uv_sync_log),
+            "RUNTIME_FEATURE_SET": "dropless_alltoall_qwen30_16",
+            "RUNTIME_EXCLUDED_PACKAGES": "deep-ep,fast-hadamard-transform",
         }
     )
     result = _run_runtime_payload(fixture, environment=environment)
 
     assert result.returncode == 93, result.stderr
+    sync_arguments = uv_sync_log.read_text().splitlines()
+    assert [
+        sync_arguments[index + 1]
+        for index, argument in enumerate(sync_arguments[:-1])
+        if argument == "--no-install-package"
+    ] == ["deep-ep", "fast-hadamard-transform"]
     assert not fixture.environment_root.exists()
     assert not fixture.copied_project_root.exists()
     assert not Path(f"{fixture.environment_root}-uv-cache").exists()

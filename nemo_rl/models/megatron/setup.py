@@ -1021,6 +1021,10 @@ def _validate_te_moe_graph_request(
 
     full_moe_requested = has_moe and (not modules or CudaGraphModule.moe in module_set)
     captures_router = full_moe_requested or CudaGraphModule.moe_router in module_set
+    if captures_router and getattr(model_cfg, "moe_router_dtype", None) != "fp32":
+        raise ValueError(
+            "Packed THD router CUDA graphs require moe_router_dtype='fp32'."
+        )
     drop_and_pad = getattr(model_cfg, "moe_pad_expert_input_to_capacity", False)
     expert_capacity_factor = getattr(model_cfg, "moe_expert_capacity_factor", None)
     rank_capacity_factor = getattr(model_cfg, "moe_expert_rank_capacity_factor", None)

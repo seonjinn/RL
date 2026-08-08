@@ -92,8 +92,8 @@ feature_exclusions = {
         "mamba-ssm",
     ],
     "dropless_hybridep_nano16": ["fast-hadamard-transform"],
-    "dropless_alltoall_qwen30_16": ["fast-hadamard-transform"],
-    "dropless_alltoall_super32": ["fast-hadamard-transform"],
+    "dropless_alltoall_qwen30_16": ["deep-ep", "fast-hadamard-transform"],
+    "dropless_alltoall_super32": ["deep-ep", "fast-hadamard-transform"],
     "dropless_hybridep_qwen235_64": ["fast-hadamard-transform"],
 }
 expected_excluded = feature_exclusions.get(feature_set)

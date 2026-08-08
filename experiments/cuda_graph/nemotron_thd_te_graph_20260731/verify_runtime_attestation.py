@@ -64,19 +64,25 @@ DROPLESS_MOE_FEATURE_SETS = frozenset(
 HYBRIDEP_FEATURE_SETS = frozenset(
     (NANO_HYBRIDEP_FEATURE_SET, QWEN235_HYBRIDEP_FEATURE_SET)
 )
+ALLTOALL_FEATURE_SETS = frozenset(
+    (QWEN30_ALLTOALL_FEATURE_SET, SUPER_ALLTOALL_FEATURE_SET)
+)
 TE_EVAL_EXCLUDED_PACKAGES = (
     "causal-conv1d",
     "deep-ep",
     "fast-hadamard-transform",
     "mamba-ssm",
 )
-DROPLESS_MOE_EXCLUDED_PACKAGES = ("fast-hadamard-transform",)
+HYBRIDEP_EXCLUDED_PACKAGES = ("fast-hadamard-transform",)
+ALLTOALL_EXCLUDED_PACKAGES = ("deep-ep", "fast-hadamard-transform")
 RUNTIME_FEATURE_EXCLUSIONS = {
     TE_EVAL_FEATURE_SET: TE_EVAL_EXCLUDED_PACKAGES,
     BRIDGE_EVAL_FEATURE_SET: TE_EVAL_EXCLUDED_PACKAGES,
     **{
-        feature_set: DROPLESS_MOE_EXCLUDED_PACKAGES
-        for feature_set in DROPLESS_MOE_FEATURE_SETS
+        feature_set: HYBRIDEP_EXCLUDED_PACKAGES for feature_set in HYBRIDEP_FEATURE_SETS
+    },
+    **{
+        feature_set: ALLTOALL_EXCLUDED_PACKAGES for feature_set in ALLTOALL_FEATURE_SETS
     },
 }
 TE_EVAL_OPTIONAL_PACKAGES = frozenset(("mamba_ssm", "causal_conv1d"))
