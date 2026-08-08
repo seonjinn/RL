@@ -21,6 +21,8 @@ RUN_ROOT=${RUN_ROOT:-${WORK_ROOT}/experiments/mxfp8-moe-tactic-audit/trace/${RUN
 CONTAINER=${CONTAINER:-${WORK_ROOT}/containers/nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh}
 CUSTOM_VLLM_ROOT=${CUSTOM_VLLM_ROOT:-${REPO_DIR}/3rdparty/vllm}
 HF_MODEL_CACHE_DIR=${HF_MODEL_CACHE_DIR:-${WORK_ROOT}/hf/hub/models--Qwen--Qwen3-30B-A3B}
+HF_HOME=${HF_HOME:-${WORK_ROOT}/hf}
+HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-${HF_HOME}/datasets}
 ACCOUNT=${SLURM_ACCOUNT:-coreai_dlalgo_llm}
 PARTITION=${PARTITION:-batch}
 QOS=${QOS:-}
@@ -42,6 +44,7 @@ if [[ "${ACTION}" != dry-run ]]; then
         audit_resolve_model_snapshot "${HF_MODEL_CACHE_DIR}" 16
     )
     [[ -f "${CONTAINER}" ]] || { echo "Missing container: ${CONTAINER}" >&2; exit 1; }
+    audit_require_nonempty_dir "${HF_DATASETS_CACHE}/nvidia___open_math_instruct-2"
 fi
 if [[ "${ACTION}" == submit ]]; then
     [[ ! -e "${RUN_ROOT}" ]] || { echo "Run root already exists: ${RUN_ROOT}" >&2; exit 1; }
@@ -88,6 +91,8 @@ export VLLM_MXFP8_MOE_TRACE_DIR=${TRACE_DIR}
 export VLLM_MXFP8_MOE_MODEL_REVISION=${MODEL_REVISION}
 export VLLM_MXFP8_MOE_RUNTIME_FINGERPRINT=${NEMO_RL_COMMIT}-${EXPECTED_VLLM_COMMIT}
 export VLLM_MXFP8_MOE_DP_SIZE=16
+export HF_HOME=${HF_HOME}
+export HF_DATASETS_CACHE=${HF_DATASETS_CACHE}
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 mkdir -p ${TRACE_DIR}

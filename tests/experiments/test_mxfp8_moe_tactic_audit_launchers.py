@@ -65,6 +65,8 @@ def test_trace_dry_run_is_eager_and_metadata_only(tmp_path: Path) -> None:
     assert "uv run --locked --extra vllm --directory" not in output
     assert "missing custom vLLM audit module" in output
     assert "trtllm_fp8_moe.py" in output
+    assert "export HF_HOME=" in output
+    assert "export HF_DATASETS_CACHE=" in output
     assert "trtllm_moe_trace" in output
     assert "find " in output and "-name '*.jsonl'" in output
     assert "expected_ranks = set(range(16))" in output
