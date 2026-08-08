@@ -15,6 +15,7 @@ for name in TEST_ROW_ID TEST_WORLD_SIZE TEST_NUM_NODES TEST_GPUS_PER_NODE \
   CANDIDATE_SNAPSHOT_SHA256 SUBMISSION_INTENT_SHA256 \
   RUN_LOG_ROOT TEST_MATRIX RUNNER_PATH CONTAINER CONTAINER_SHA256 MOUNTS EXPECTED_TE_SHA \
   EXPECTED_TE_VERSION_BASE_SHA RUNTIME_ATTESTATION SUBMISSION_INTENT REPO_ROOT \
+  RUNTIME_PREFLIGHT_JOB_ID EXPECTED_UV_EXECUTABLE \
   EXPECTED_NEMORL_SHA EXPECTED_BRIDGE_SHA EXPECTED_MCORE_SHA \
   SOURCE_PROVENANCE_VERIFIER RUNTIME_ATTESTATION_COMMAND RUNTIME_FEATURE_SET \
   RUNTIME_EXCLUDED_PACKAGES TORCH_CUDA_ARCH_LIST NVTE_CUDA_ARCHS; do
@@ -31,6 +32,8 @@ expected_candidate_kind=${EXPECTED_CANDIDATE_KIND:-mcore}
   fail "submission intent and runtime attestation must exist"
 [[ ! -L "${SUBMISSION_INTENT}" ]] || fail "submission intent must not be a symlink"
 [[ "${SLURM_JOB_ID:-}" =~ ^[1-9][0-9]*$ ]] || fail "SLURM job ID is invalid"
+[[ "${RUNTIME_PREFLIGHT_JOB_ID}" =~ ^[1-9][0-9]*$ ]] || \
+  fail "Runtime attestation producer job ID is invalid"
 scheduler_restart_count=${SLURM_RESTART_COUNT:-0}
 [[ "${scheduler_restart_count}" =~ ^[0-9]+$ ]] || fail "SLURM restart count is invalid"
 [[ "${SUBMISSION_INTENT_SHA256}" =~ ^[0-9a-f]{64}$ ]] || \
@@ -169,8 +172,9 @@ srun --nodes=1 --ntasks=1 \
   --expected-python-version "${runtime_fields[1]}" \
   --expected-python-install-dir "${runtime_fields[2]}" \
   --expected-uv-version "${runtime_fields[3]}" \
-  --expected-uv-executable "${runtime_fields[4]}" \
+  --expected-uv-executable "${EXPECTED_UV_EXECUTABLE}" \
   --expected-nvte-with-nccl-ep "${NVTE_WITH_NCCL_EP}" \
+  --expected-runtime-attestation-job-id "${RUNTIME_PREFLIGHT_JOB_ID}" \
   --runtime-feature-set "${RUNTIME_FEATURE_SET}" \
   --excluded-packages "${RUNTIME_EXCLUDED_PACKAGES}" \
   --torch-cuda-arch-list "${TORCH_CUDA_ARCH_LIST}" \

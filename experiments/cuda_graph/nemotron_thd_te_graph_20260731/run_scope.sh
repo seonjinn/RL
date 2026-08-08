@@ -20,6 +20,18 @@ fail() {
   exit 2
 }
 
+run_sbatch_without_reserved_environment() {
+  local -a clean_environment=(env)
+  local exported_name
+
+  while IFS= read -r exported_name; do
+    if [[ "${exported_name}" == SBATCH_* ]]; then
+      clean_environment+=(-u "${exported_name}")
+    fi
+  done < <(compgen -e)
+  "${clean_environment[@]}" "$@"
+}
+
 sha256_regular_file() {
   python3 - "$1" <<'PY'
 import hashlib
@@ -190,13 +202,14 @@ profile_snapshot_output=$("${profile_snapshot_command[@]}") || fail "Cluster pro
 PROFILE_SHA256=
 while IFS=$'\t' read -r field value; do
   case "${field}" in
-    PROFILE_SHA256|PROFILE_ID|ACCOUNT|PARTITION|CONTAINER|CONTAINER_SHA256|MOUNTS|SBATCH_GPUS_PER_NODE|SBATCH_GRES|SBATCH_SEGMENT_SIZE|TIME_LIMIT|RUNTIME_ATTESTATION|RUNTIME_PREFLIGHT_JOB_ID|EXPECTED_TE_SHA|EXPECTED_TE_VERSION_BASE_SHA|EXPECTED_NEMORL_SHA|EXPECTED_BRIDGE_SHA|EXPECTED_MCORE_SHA|RUN_LOG_ROOT)
+    PROFILE_SHA256|PROFILE_ID|ACCOUNT|PARTITION|CONTAINER|CONTAINER_SHA256|MOUNTS|SBATCH_GPUS_PER_NODE|SBATCH_GRES|SBATCH_SEGMENT_SIZE|TIME_LIMIT|RUNTIME_ATTESTATION|RUNTIME_PREFLIGHT_JOB_ID|UV_EXECUTABLE|EXPECTED_TE_SHA|EXPECTED_TE_VERSION_BASE_SHA|EXPECTED_NEMORL_SHA|EXPECTED_BRIDGE_SHA|EXPECTED_MCORE_SHA|RUN_LOG_ROOT)
       printf -v "${field}" '%s' "${value}"
       ;;
     *) fail "Cluster profile snapshot returned an unknown field" ;;
   esac
 done <<<"${profile_snapshot_output}"
 [[ "${PROFILE_SHA256}" =~ ^[0-9a-f]{64}$ ]] || fail "Cluster profile snapshot omitted its digest"
+UV_EXECUTABLE=${UV_EXECUTABLE:-__REQUIRED_UV_EXECUTABLE__}
 if [[ ( "${MODEL}" == qwen3_30ba3b || "${MODEL}" == qwen3_235b ) && ( "${STEPS}" == 20 || ( "${MODEL}" == qwen3_235b && "${ROUTER_REPLAY}" == on ) ) ]]; then
   case "${QWEN_CAMPAIGN_ARM:-}" in
     A) [[ "${SCOPE}" == baseline && "${ROUTER_REPLAY}" == off ]] || fail "QWEN_CAMPAIGN_ARM A mismatch" ;;
@@ -242,6 +255,7 @@ for field in \
   MOUNTS \
   RUNTIME_ATTESTATION \
   RUNTIME_PREFLIGHT_JOB_ID \
+  UV_EXECUTABLE \
   EXPECTED_TE_SHA \
   EXPECTED_TE_VERSION_BASE_SHA \
   EXPECTED_NEMORL_SHA \
@@ -261,6 +275,11 @@ case "${RUNTIME_PREFLIGHT_JOB_ID:-}" in
   ""|__REQUIRED_*__) ;;
   *[!0-9]*|0) fail "RUNTIME_PREFLIGHT_JOB_ID must be a positive SLURM job ID" ;;
 esac
+case "${UV_EXECUTABLE:-}" in
+  ""|__REQUIRED_*__) ;;
+  /*) ;;
+  *) fail "UV_EXECUTABLE must be an absolute path" ;;
+esac
 [[ -f "${repo_root}/.python-version" ]] || \
   fail "NeMo-RL source snapshot is missing .python-version"
 [[ -f "${dockerfile}" ]] || fail "NeMo-RL source snapshot is missing docker/Dockerfile"
@@ -276,14 +295,6 @@ case "${RUNTIME_ATTESTATION:-}" in
     ;;
   *)
     MANAGED_PYTHON_INSTALL_DIR=__DERIVED_FROM_RUNTIME_ATTESTATION__/uv-python-installations
-    ;;
-esac
-case "${RUNTIME_ATTESTATION:-}:${RUNTIME_PREFLIGHT_JOB_ID:-}" in
-  /*:[1-9]*)
-    UV_EXECUTABLE=$(dirname "${RUNTIME_ATTESTATION}")/uv-${PINNED_UV_VERSION}-${RUNTIME_PREFLIGHT_JOB_ID}/uv
-    ;;
-  *)
-    UV_EXECUTABLE=__DERIVED_FROM_RUNTIME_ATTESTATION__/uv-${PINNED_UV_VERSION}-__PREFLIGHT_JOB_ID__/uv
     ;;
 esac
 if [[ "${MANAGED_PYTHON_INSTALL_DIR}" == /* ]]; then
@@ -466,6 +477,7 @@ runtime_attestation_command=(
   --expected-uv-version "${PINNED_UV_VERSION}"
   --expected-uv-executable "${UV_EXECUTABLE}"
   --expected-nvte-with-nccl-ep "${NVTE_WITH_NCCL_EP}"
+  --expected-runtime-attestation-job-id "${RUNTIME_PREFLIGHT_JOB_ID}"
 )
 printf -v RUNTIME_ATTESTATION_COMMAND '%q ' "${runtime_attestation_command[@]}"
 RUNTIME_ATTESTATION_COMMAND=${RUNTIME_ATTESTATION_COMMAND% }
@@ -559,7 +571,7 @@ export SOURCE_PROVENANCE_VERIFIER=${source_provenance_verifier}
 export R3_DRIVER_COMMAND_FILE
 
 if [[ "${SBATCH_TEST_ONLY}" == "1" ]]; then
-  scheduler_test_output=$("${sbatch_command[@]}")
+  scheduler_test_output=$(run_sbatch_without_reserved_environment "${sbatch_command[@]}")
   printf 'SBATCH_TEST_ONLY_OUTPUT: %s\n' "${scheduler_test_output}"
   exit 0
 fi
@@ -575,7 +587,7 @@ if [[ -n "${R3_DRIVER_COMMAND_FILE}" ]]; then
     fail "Written R3 driver command digest mismatch"
 fi
 
-job_id=$("${sbatch_command[@]}")
+job_id=$(run_sbatch_without_reserved_environment "${sbatch_command[@]}")
 [[ "${job_id}" =~ ^[1-9][0-9]*$ ]] || fail "sbatch --parsable returned an invalid job ID"
 if [[ -n "${R3_VALIDATION_RECORD_PATTERN}" ]]; then
   R3_VALIDATION_RECORD_INITIAL_PATH=${run_log_dir}/r3-validation-job-${job_id}-restart-0/r3-validation.json

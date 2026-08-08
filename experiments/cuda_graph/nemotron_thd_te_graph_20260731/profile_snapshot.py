@@ -20,11 +20,24 @@ from pathlib import Path
 
 CLUSTERS = frozenset({"ptyche", "oci-hsg", "lyris"})
 PROFILE_FIELDS = (
-    "PROFILE_ID", "ACCOUNT", "PARTITION", "CONTAINER", "CONTAINER_SHA256",
-    "MOUNTS", "SBATCH_GPUS_PER_NODE", "SBATCH_GRES", "SBATCH_SEGMENT_SIZE",
-    "TIME_LIMIT", "RUNTIME_ATTESTATION", "RUNTIME_PREFLIGHT_JOB_ID",
-    "EXPECTED_TE_SHA", "EXPECTED_TE_VERSION_BASE_SHA", "EXPECTED_NEMORL_SHA",
-    "EXPECTED_BRIDGE_SHA", "EXPECTED_MCORE_SHA",
+    "PROFILE_ID",
+    "ACCOUNT",
+    "PARTITION",
+    "CONTAINER",
+    "CONTAINER_SHA256",
+    "MOUNTS",
+    "SBATCH_GPUS_PER_NODE",
+    "SBATCH_GRES",
+    "SBATCH_SEGMENT_SIZE",
+    "TIME_LIMIT",
+    "RUNTIME_ATTESTATION",
+    "RUNTIME_PREFLIGHT_JOB_ID",
+    "UV_EXECUTABLE",
+    "EXPECTED_TE_SHA",
+    "EXPECTED_TE_VERSION_BASE_SHA",
+    "EXPECTED_NEMORL_SHA",
+    "EXPECTED_BRIDGE_SHA",
+    "EXPECTED_MCORE_SHA",
     "RUN_LOG_ROOT",
 )
 PROFILE_ASSIGNMENT = re.compile(r"([A-Z][A-Z0-9_]*)=([A-Za-z0-9_./,:=-]*)\Z")
@@ -42,7 +55,9 @@ def _read_regular_file(path: Path, label: str) -> bytes:
     try:
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     except OSError as error:
-        raise ValueError(f"{label} cannot be opened as a non-symlink file: {error}") from error
+        raise ValueError(
+            f"{label} cannot be opened as a non-symlink file: {error}"
+        ) from error
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise ValueError(f"{label} must be a regular file")
@@ -68,7 +83,9 @@ def _validate_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def load_profile_snapshot(profile_dir: Path, cluster: str, profile_file: str | None) -> ProfileSnapshot:
+def load_profile_snapshot(
+    profile_dir: Path, cluster: str, profile_file: str | None
+) -> ProfileSnapshot:
     if cluster not in CLUSTERS:
         raise ValueError("CLUSTER must be ptyche, oci-hsg, or lyris")
     _validate_directory(profile_dir)
@@ -76,7 +93,9 @@ def load_profile_snapshot(profile_dir: Path, cluster: str, profile_file: str | N
     if profile_file is None and not os.path.lexists(candidate):
         candidate = profile_dir / f"{cluster}.env.example"
     if not candidate.is_absolute() or candidate.parent != profile_dir:
-        raise ValueError("profile file must be a direct child of the trusted profile directory")
+        raise ValueError(
+            "profile file must be a direct child of the trusted profile directory"
+        )
     try:
         text = _read_regular_file(candidate, "profile file").decode("utf-8")
     except UnicodeDecodeError as error:
@@ -87,7 +106,9 @@ def load_profile_snapshot(profile_dir: Path, cluster: str, profile_file: str | N
             continue
         match = PROFILE_ASSIGNMENT.fullmatch(line)
         if match is None:
-            raise ValueError(f"profile line {number} must be a literal NAME=value assignment")
+            raise ValueError(
+                f"profile line {number} must be a literal NAME=value assignment"
+            )
         name, value = match.groups()
         if name not in PROFILE_FIELDS or name in values:
             raise ValueError(f"profile line {number} has an unknown or duplicate field")
@@ -103,7 +124,9 @@ def main() -> int:
     parser.add_argument("--expected-sha256")
     args = parser.parse_args()
     try:
-        snapshot = load_profile_snapshot(Path(args.profile_dir), args.cluster, args.profile_file)
+        snapshot = load_profile_snapshot(
+            Path(args.profile_dir), args.cluster, args.profile_file
+        )
         if args.expected_sha256 and snapshot.sha256 != args.expected_sha256:
             raise ValueError("profile SHA256 does not match validated profile")
     except ValueError as error:

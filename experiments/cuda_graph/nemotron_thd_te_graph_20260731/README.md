@@ -116,30 +116,20 @@ assume the current directory is
    scripts/create_source_snapshot.sh
    ```
 
-3. Verify the staged image and exact snapshot on one OCI node with four GPUs.
-   The job builds the same editable `uv run --locked --extra mcore` environment
-   used by policy workers and requires exactly four visible devices. It imports
-   PyTorch, Transformer Engine, Megatron Core, Megatron Bridge, Mamba SSM,
-   causal-conv1d, and CuPy, then validates the MCore TE grouped-linear symbols
-   used by Nano's `TEGroupedMLP`. It hashes the 67 GB image once and records
-   source, lock, image identity, the exact TE VCS commit, the exact Python patch
-   version, and the managed base-interpreter SHA256 in a machine-readable
-   success or failure artifact. Python downloads are enabled
-   only for the initial managed-interpreter staging command and are set to
-   `never` before `uv run --locked`. The preflight uv is installed with
-   `UV_UNMANAGED_INSTALL` under `ARTIFACT_DIR/uv-<version>-<job-id>` so it does
-   not mutate shell profiles and concurrent preflights cannot share a mutable
-   binary directory. The canonical source snapshot remains mounted read-only.
-   Before the editable build, the preflight copies that exact snapshot to the
-   job-local `/tmp/nemo-rl-runtime-<job-id>-source`, verifies the copied
-   NeMo-RL, Bridge, and MCore commits plus the copied `uv.lock` SHA256, runs the
-   editable build from that writable copy, and removes the copy on exit. Before
-   running copied code, it rejects every pre-existing ignored path except the
-   regular, non-symlink `.source-manifest.env`; this prevents stale build
-   outputs or ignored symlinks from escaping the private workspace. The copy
-   permits setuptools to create `*.egg-info`, `build/`, and optional MCore
-   in-place extension artifacts without modifying or racing on the shared
-   snapshot.
+3. Build and attest one content-addressed runtime in two phases. The CPU-only
+   `stage` phase copies the exact source snapshot into
+   `ARTIFACT_DIR/staged-runtimes/<stage-key>`, builds the locked editable
+   environment, runs the pinned test suite, removes build caches, and makes the
+   complete tree read-only before atomically publishing its marker. Its uv is
+   `staged-runtimes/<stage-key>/uv/uv`. The later `attest` phase is the first
+   GPU allocation: it requires the stage job to be `COMPLETED|0:0`, verifies
+   the marker and read-only tree, requires exactly four visible devices, and
+   writes the immutable runtime JSON. It imports PyTorch, Transformer Engine,
+   Megatron Core, Megatron Bridge, Mamba SSM, causal-conv1d, and CuPy, and
+   validates the MCore TE grouped-linear symbols in a machine-readable success
+   or failure artifact. Both phases bind the image, source
+   commits, lock digest, TE source/version-base commits, feature set, package
+   exclusions, Python version, uv version, and CUDA architectures.
 
    ```bash
    CONTAINER=/absolute/shared/containers/nemo_rl_nightly.sqsh \
@@ -150,8 +140,18 @@ assume the current directory is
    EXPECTED_BRIDGE_SHA='__REQUIRED_FULL_BRIDGE_COMMIT__' \
    EXPECTED_MCORE_SHA='__REQUIRED_FULL_MCORE_COMMIT__' \
    EXPECTED_TE_SHA='__REQUIRED_FULL_TE_COMMIT__' \
+   EXPECTED_TE_VERSION_BASE_SHA='__REQUIRED_FULL_TE_VERSION_BASE_COMMIT__' \
+   RUNTIME_FEATURE_SET=dropless_hybridep_nano16 \
+   RUNTIME_EXCLUDED_PACKAGES=fast-hadamard-transform \
+   RUNTIME_STAGE_CAPABILITY=mcore-test-v1 \
+   RUNTIME_PHASE=stage \
    scripts/validate_oci_container_runtime.sub
    ```
+
+   After the stage job and marker pass, run the same command with
+   `RUNTIME_PHASE=attest` and `RUNTIME_STAGE_JOB_ID=<completed-stage-job-id>`.
+   Use `SBATCH_GRES=none` on ptyche; the wrapper still verifies four visible
+   devices without adding unsupported GPU TRES options.
 
 4. Optionally bootstrap a second fresh Bridge checkout in the immutable
    container, verify the exact nested MCore commit, relock only
@@ -173,7 +173,11 @@ assume the current directory is
 
 5. Populate a local profile from `profiles/*.env.example`. Set
    `RUNTIME_PREFLIGHT_JOB_ID` to the successful preflight job and
-   `RUNTIME_ATTESTATION` to its exact non-symlink JSON artifact. Every leaf is
+   `RUNTIME_ATTESTATION` to its exact non-symlink JSON artifact. Set
+   `UV_EXECUTABLE` to the artifact's exact immutable `uv_executable` value;
+   the launcher forwards it back to the full attestation verifier instead of
+   reconstructing a historical per-job uv path. The verifier also requires
+   the JSON's producer job ID to equal `RUNTIME_PREFLIGHT_JOB_ID`. Every leaf is
    submitted with `afterok:<preflight-job>` and validates exact source, lock,
    image identity, device count, package set, TE commit, Python version, managed
    interpreter path, interpreter SHA256, uv version, uv path, and uv SHA256

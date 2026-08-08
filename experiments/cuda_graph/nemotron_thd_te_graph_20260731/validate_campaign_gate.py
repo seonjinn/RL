@@ -58,6 +58,7 @@ PROFILE_FIELDS = frozenset(
         "TIME_LIMIT",
         "RUNTIME_ATTESTATION",
         "RUNTIME_PREFLIGHT_JOB_ID",
+        "UV_EXECUTABLE",
         "EXPECTED_TE_SHA",
         "EXPECTED_NEMORL_SHA",
         "EXPECTED_BRIDGE_SHA",
@@ -146,7 +147,9 @@ def _parse_json(content: bytes) -> dict[str, object]:
         return result
 
     try:
-        payload = json.loads(content.decode("utf-8"), object_pairs_hook=reject_duplicates)
+        payload = json.loads(
+            content.decode("utf-8"), object_pairs_hook=reject_duplicates
+        )
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         _fail(f"gate file is not valid JSON: {error}")
     if not isinstance(payload, dict):
@@ -183,7 +186,9 @@ def _parse_profile(content: bytes) -> dict[str, str]:
 
 
 def _profile_values(args: argparse.Namespace) -> tuple[dict[str, str], str]:
-    snapshot = load_profile_snapshot(Path(args.profile_dir), args.cluster, args.profile_file)
+    snapshot = load_profile_snapshot(
+        Path(args.profile_dir), args.cluster, args.profile_file
+    )
     values = snapshot.values
     if FULL_COMMIT.fullmatch(values["EXPECTED_NEMORL_SHA"]) is None:
         _fail("profile EXPECTED_NEMORL_SHA must be a full lowercase commit")
@@ -198,7 +203,9 @@ def _profile_values(args: argparse.Namespace) -> tuple[dict[str, str], str]:
     return values, snapshot.sha256
 
 
-def _exact_mapping(value: object, fields: frozenset[str], label: str) -> dict[str, object]:
+def _exact_mapping(
+    value: object, fields: frozenset[str], label: str
+) -> dict[str, object]:
     if not isinstance(value, dict):
         _fail(f"{label} must be a JSON object")
     actual_fields = set(value)
@@ -248,16 +255,30 @@ def _validate_arm(arm: str, value: object) -> None:
     _require(evidence["correctness_passed"], True, f"arms.{arm}.correctness_passed")
     _require(evidence["undeclared_fallbacks"], 0, f"arms.{arm}.undeclared_fallbacks")
     r3_on = arm in {"C", "E"}
-    _require(evidence["router_replay"], "on" if r3_on else "off", f"arms.{arm}.router_replay")
+    _require(
+        evidence["router_replay"], "on" if r3_on else "off", f"arms.{arm}.router_replay"
+    )
     graph_status = "passed" if arm in {"B", "E"} else "not_applicable"
-    _require(evidence["graph_coverage_status"], graph_status, f"arms.{arm}.graph_coverage_status")
-    _require(evidence["r3_trace_status"], "passed" if r3_on else "not_applicable", f"arms.{arm}.r3_trace_status")
+    _require(
+        evidence["graph_coverage_status"],
+        graph_status,
+        f"arms.{arm}.graph_coverage_status",
+    )
+    _require(
+        evidence["r3_trace_status"],
+        "passed" if r3_on else "not_applicable",
+        f"arms.{arm}.r3_trace_status",
+    )
 
 
-def _validate_promotion(payload: dict[str, object], args: argparse.Namespace, expected: dict[str, str]) -> None:
+def _validate_promotion(
+    payload: dict[str, object], args: argparse.Namespace, expected: dict[str, str]
+) -> None:
     gate = _exact_mapping(
         payload,
-        frozenset({"gate_type", "status", "model", "phase", "steps", "provenance", "arms"}),
+        frozenset(
+            {"gate_type", "status", "model", "phase", "steps", "provenance", "arms"}
+        ),
         "promotion gate",
     )
     _require(gate["gate_type"], "smoke_promotion", "gate_type")
@@ -283,16 +304,23 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("kind", choices=("r3", "promotion"))
     parser.add_argument("--gate-file", required=True)
     parser.add_argument("--gate-sha256", required=True)
-    parser.add_argument("--model", required=True, choices=("qwen3_30ba3b", "qwen3_235b"))
+    parser.add_argument(
+        "--model", required=True, choices=("qwen3_30ba3b", "qwen3_235b")
+    )
     parser.add_argument("--profile-file")
     parser.add_argument("--profile-dir", required=True)
     parser.add_argument("--expected-profile-sha256")
-    parser.add_argument("--cluster", required=True, choices=("ptyche", "oci-hsg", "lyris"))
+    parser.add_argument(
+        "--cluster", required=True, choices=("ptyche", "oci-hsg", "lyris")
+    )
     parser.add_argument("--arm", action="append", default=[])
     args = parser.parse_args()
     if FULL_SHA256.fullmatch(args.gate_sha256) is None:
         parser.error("--gate-sha256 must be a full lowercase SHA256")
-    if args.expected_profile_sha256 and FULL_SHA256.fullmatch(args.expected_profile_sha256) is None:
+    if (
+        args.expected_profile_sha256
+        and FULL_SHA256.fullmatch(args.expected_profile_sha256) is None
+    ):
         parser.error("--expected-profile-sha256 must be a full lowercase SHA256")
     if args.kind == "r3":
         if args.model != "qwen3_235b":
@@ -301,7 +329,9 @@ def _parse_args() -> argparse.Namespace:
             parser.error("R3 validation does not accept --arm")
     if args.kind == "promotion":
         if not args.arm or len(set(args.arm)) != len(args.arm) or set(args.arm) - ARMS:
-            parser.error("promotion validation requires unique A, B, C, or E --arm values")
+            parser.error(
+                "promotion validation requires unique A, B, C, or E --arm values"
+            )
     return args
 
 
@@ -309,10 +339,15 @@ def main() -> int:
     args = _parse_args()
     try:
         profile, profile_sha256 = _profile_values(args)
-        if args.expected_profile_sha256 and profile_sha256 != args.expected_profile_sha256:
+        if (
+            args.expected_profile_sha256
+            and profile_sha256 != args.expected_profile_sha256
+        ):
             _fail("profile SHA256 does not match the expected snapshot")
         gate_content = _read_regular_file(Path(args.gate_file), "gate file")
-        if not hmac.compare_digest(hashlib.sha256(gate_content).hexdigest(), args.gate_sha256):
+        if not hmac.compare_digest(
+            hashlib.sha256(gate_content).hexdigest(), args.gate_sha256
+        ):
             _fail("gate file SHA256 does not match --gate-sha256")
         runtime_content = _read_regular_file(
             Path(profile["RUNTIME_ATTESTATION"]), "runtime attestation"

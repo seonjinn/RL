@@ -187,7 +187,7 @@ def _runtime_contract_for_rows(
     *, candidate_kind: str, required_rows: tuple[str, ...]
 ) -> tuple[str, tuple[str, ...]]:
     """Resolve the one narrow runtime contract that can authorize these rows."""
-    feature_sets = {
+    feature_sets: dict[tuple[str, tuple[str, ...]], str] = {
         ("mcore", (TE_EVAL_FEATURE_SET,)): TE_EVAL_FEATURE_SET,
         **{
             ("mcore", (feature_set,)): feature_set
@@ -503,6 +503,7 @@ def validate_attestation(
     expected_uv_version: str,
     expected_uv_executable: Path,
     expected_nvte_with_nccl_ep: str = "0",
+    expected_runtime_attestation_job_id: int | None = None,
     expected_te_version_base_commit: str | None = None,
     expected_runtime_feature_set: str | None = None,
     expected_excluded_packages: tuple[str, ...] | None = None,
@@ -528,6 +529,11 @@ def validate_attestation(
         )
     if expected_device_count <= 0:
         raise ValueError("expected device count must be positive")
+    if (
+        expected_runtime_attestation_job_id is not None
+        and expected_runtime_attestation_job_id <= 0
+    ):
+        raise ValueError("expected runtime attestation job ID must be positive")
     if re.fullmatch(r"\d+\.\d+\.\d+", expected_python_version) is None:
         raise ValueError("expected Python version must be an exact X.Y.Z version")
     if not expected_python_install_dir.is_absolute():
@@ -569,6 +575,13 @@ def validate_attestation(
         expected_nvte_cuda_archs,
     )
     if any(value is not None for value in runtime_contract):
+        if (
+            expected_runtime_feature_set is None
+            or expected_excluded_packages is None
+            or expected_torch_cuda_arch_list is None
+            or expected_nvte_cuda_archs is None
+        ):
+            raise ValueError("runtime feature contract must be provided together")
         feature_exclusions = RUNTIME_FEATURE_EXCLUSIONS.get(
             expected_runtime_feature_set
         )
@@ -627,6 +640,10 @@ def validate_attestation(
             REQUIRED_TE_GROUPED_LINEAR_SYMBOLS
         ),
     }
+    if expected_runtime_attestation_job_id is not None:
+        expected_provenance["runtime_attestation_job_id"] = (
+            expected_runtime_attestation_job_id
+        )
     if expected_te_version_base_commit is not None:
         expected_provenance.update(
             {
@@ -758,6 +775,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-uv-version")
     parser.add_argument("--expected-uv-executable", type=Path)
     parser.add_argument("--expected-nvte-with-nccl-ep")
+    parser.add_argument("--expected-runtime-attestation-job-id", type=int)
     parser.add_argument("--runtime-feature-set")
     parser.add_argument("--excluded-packages")
     parser.add_argument("--torch-cuda-arch-list")
@@ -819,8 +837,9 @@ def main() -> None:
             expected_python_version=runtime_payload["expected_python_version"],
             expected_python_install_dir=Path(runtime_payload["uv_python_install_dir"]),
             expected_uv_version=runtime_payload["expected_uv_version"],
-            expected_uv_executable=Path(runtime_payload["uv_executable"]),
+            expected_uv_executable=Path(values["UV_EXECUTABLE"]),
             expected_nvte_with_nccl_ep=runtime_payload["expected_nvte_with_nccl_ep"],
+            expected_runtime_attestation_job_id=int(values["RUNTIME_PREFLIGHT_JOB_ID"]),
             expected_runtime_feature_set=runtime_feature_set,
             expected_excluded_packages=runtime_exclusions,
             expected_torch_cuda_arch_list="10.0a",
@@ -859,6 +878,7 @@ def main() -> None:
         args.expected_uv_version,
         args.expected_uv_executable,
         args.expected_nvte_with_nccl_ep,
+        args.expected_runtime_attestation_job_id,
     )
     if any(value is None for value in legacy_required):
         raise ValueError("legacy mode requires every runtime-attestation argument")
@@ -891,6 +911,7 @@ def main() -> None:
         expected_uv_version=args.expected_uv_version,
         expected_uv_executable=args.expected_uv_executable,
         expected_nvte_with_nccl_ep=args.expected_nvte_with_nccl_ep,
+        expected_runtime_attestation_job_id=(args.expected_runtime_attestation_job_id),
         expected_runtime_feature_set=args.runtime_feature_set,
         expected_excluded_packages=(
             tuple(args.excluded_packages.split(","))

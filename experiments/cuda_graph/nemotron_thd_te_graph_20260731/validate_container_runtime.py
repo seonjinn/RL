@@ -606,6 +606,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--container-image", required=True)
     parser.add_argument("--container-sha256", required=True)
+    parser.add_argument("--runtime-attestation-job-id", required=True, type=int)
     parser.add_argument("--expected-device-count", required=True, type=int)
     parser.add_argument("--expected-environment-root", required=True, type=Path)
     parser.add_argument("--expected-project-root", required=True, type=Path)
@@ -635,7 +636,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.runtime_attestation_job_id <= 0:
+        raise ValueError("runtime attestation job ID must be positive")
     context = {
+        "runtime_attestation_job_id": args.runtime_attestation_job_id,
         "container_image": args.container_image,
         "container_sha256": args.container_sha256,
         "nemo_rl_commit": args.nemo_rl_commit,

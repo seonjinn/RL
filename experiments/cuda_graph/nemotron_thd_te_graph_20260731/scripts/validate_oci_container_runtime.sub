@@ -484,6 +484,10 @@ if [[ "${RUNTIME_PHASE}" == "stage" ]]; then
   runtime_environment+=(
     "CMAKE_BUILD_PARALLEL_LEVEL=${RUNTIME_STAGE_CPUS_PER_TASK}"
   )
+else
+  runtime_environment+=(
+    "RUNTIME_ATTESTATION_JOB_ID=${SLURM_JOB_ID}"
+  )
 fi
 for proxy_variable in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
   if [[ -n "${!proxy_variable:-}" ]]; then
@@ -854,11 +858,16 @@ if [[ "${output_flag}" != "--output" ]]; then
 fi
 : "${RUNTIME_STAGE_MARKER:?Runtime attestation requires RUNTIME_STAGE_MARKER}"
 : "${RUNTIME_STAGE_JOB_ID:?Runtime attestation requires RUNTIME_STAGE_JOB_ID}"
+: "${RUNTIME_ATTESTATION_JOB_ID:?Runtime attestation requires its Slurm job ID}"
 marker=${RUNTIME_STAGE_MARKER}
 marker_dir=$(dirname "${marker}")
 stage_job_record=${runtime_stage_root}/stage-job-id
 if [[ ! "${RUNTIME_STAGE_JOB_ID}" =~ ^[1-9][0-9]*$ ]]; then
   echo "RUNTIME_STAGE_JOB_ID must be a positive integer" >&2
+  exit 2
+fi
+if [[ ! "${RUNTIME_ATTESTATION_JOB_ID}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "RUNTIME_ATTESTATION_JOB_ID must be a positive integer" >&2
   exit 2
 fi
 if [[ -L "${stage_job_record}" || ! -f "${stage_job_record}" ]] ||
@@ -920,6 +929,7 @@ fi
 "${runtime_python}" "${source_validator}" \
   --container-image "${container}" \
   --container-sha256 "${container_sha256}" \
+  --runtime-attestation-job-id "${RUNTIME_ATTESTATION_JOB_ID}" \
   --expected-device-count 4 \
   --expected-environment-root "${environment_root}" \
   --expected-project-root "${project_root}" \

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import importlib.util
 import json
@@ -119,6 +120,7 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
         json.dumps(
             {
                 "status": "passed",
+                "runtime_attestation_job_id": 733,
                 "container_image": str(container),
                 "container_sha256": CONTAINER_SHA256,
                 "container_device": container_stat.st_dev,
@@ -202,6 +204,70 @@ def test_validator_accepts_exact_preflight_artifact_without_rehashing_container(
     assert result["transformer_engine_vcs_commit"] == TE_COMMIT
     assert result["nvte_with_nccl_ep"] == "0"
     assert result["transformer_engine_nccl_ep_available"] is False
+
+
+def test_validator_binds_attestation_to_producer_job(tmp_path: Path) -> None:
+    module = _load_module()
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(tmp_path)
+
+    result = module.validate_attestation(
+        attestation=attestation,
+        container=container,
+        expected_container_sha256=CONTAINER_SHA256,
+        nemo_rl_commit=NEMORL_COMMIT,
+        bridge_commit=BRIDGE_COMMIT,
+        mcore_commit=MCORE_COMMIT,
+        uv_lock=lock,
+        expected_te_commit=TE_COMMIT,
+        expected_device_count=4,
+        expected_python_version=PYTHON_VERSION,
+        expected_python_install_dir=python_install_dir,
+        expected_uv_version=UV_VERSION,
+        expected_uv_executable=uv_executable,
+        expected_runtime_attestation_job_id=733,
+    )
+    assert result["runtime_attestation_job_id"] == 733
+
+    with pytest.raises(ValueError, match="attestation provenance mismatch"):
+        module.validate_attestation(
+            attestation=attestation,
+            container=container,
+            expected_container_sha256=CONTAINER_SHA256,
+            nemo_rl_commit=NEMORL_COMMIT,
+            bridge_commit=BRIDGE_COMMIT,
+            mcore_commit=MCORE_COMMIT,
+            uv_lock=lock,
+            expected_te_commit=TE_COMMIT,
+            expected_device_count=4,
+            expected_python_version=PYTHON_VERSION,
+            expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
+            expected_runtime_attestation_job_id=734,
+        )
+
+
+def test_validator_rejects_partial_runtime_feature_contract(tmp_path: Path) -> None:
+    module = _load_module()
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(tmp_path)
+
+    with pytest.raises(ValueError, match="must be provided together"):
+        module.validate_attestation(
+            attestation=attestation,
+            container=container,
+            expected_container_sha256=CONTAINER_SHA256,
+            nemo_rl_commit=NEMORL_COMMIT,
+            bridge_commit=BRIDGE_COMMIT,
+            mcore_commit=MCORE_COMMIT,
+            uv_lock=lock,
+            expected_te_commit=TE_COMMIT,
+            expected_device_count=4,
+            expected_python_version=PYTHON_VERSION,
+            expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
+            expected_runtime_feature_set="dropless_hybridep_nano16",
+        )
 
 
 def test_validator_rejects_wrong_nvte_nccl_ep_policy(tmp_path: Path) -> None:
@@ -687,6 +753,63 @@ def test_profile_runtime_contract_selects_exact_moe_row(
         row_id,
         excluded_packages,
     )
+
+
+def test_matrix_mode_uses_profile_uv_as_independent_expected_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_module()
+    profile_uv = tmp_path / "profile-runtime" / "uv"
+    attested_uv = tmp_path / "different-attested-runtime" / "uv"
+    attestation = tmp_path / "runtime.json"
+    attestation.write_text("{}")
+    profile = tmp_path / "profile.env"
+    profile.write_text(
+        f"RUNTIME_ATTESTATION={attestation}\n"
+        f"CONTAINER={tmp_path / 'container.sqsh'}\n"
+        f"CONTAINER_SHA256={CONTAINER_SHA256}\n"
+        f"EXPECTED_NEMORL_SHA={NEMORL_COMMIT}\n"
+        f"EXPECTED_BRIDGE_SHA={BRIDGE_COMMIT}\n"
+        f"EXPECTED_MCORE_SHA={MCORE_COMMIT}\n"
+        f"EXPECTED_TE_SHA={TE_COMMIT}\n"
+        f"EXPECTED_TE_VERSION_BASE_SHA={TE_COMMIT}\n"
+        "SBATCH_GPUS_PER_NODE=4\n"
+        "RUNTIME_PREFLIGHT_JOB_ID=733\n"
+        f"UV_EXECUTABLE={profile_uv}\n"
+    )
+    runtime_payload = {
+        "expected_nvte_with_nccl_ep": "0",
+        "expected_python_version": PYTHON_VERSION,
+        "uv_python_install_dir": str(tmp_path / "uv-python-installations"),
+        "expected_uv_version": UV_VERSION,
+        "uv_executable": str(attested_uv),
+    }
+    captured: dict[str, object] = {}
+
+    def capture_attestation(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return runtime_payload
+
+    monkeypatch.setattr(
+        module,
+        "parse_args",
+        lambda: argparse.Namespace(
+            profile_file=profile,
+            candidate_kind="mcore",
+            candidate_sha="f" * 40,
+            test_result_dir=tmp_path,
+            required_rows="dropless_hybridep_nano16",
+        ),
+    )
+    monkeypatch.setattr(module, "_read_attestation", lambda _: runtime_payload)
+    monkeypatch.setattr(module, "_require_nvte_environment", lambda **_: None)
+    monkeypatch.setattr(module, "validate_attestation", capture_attestation)
+    monkeypatch.setattr(module, "validate_matrix_results", lambda **_: {})
+
+    module.main()
+
+    assert captured["expected_uv_executable"] == profile_uv
+    assert captured["expected_uv_executable"] != Path(runtime_payload["uv_executable"])
 
 
 def test_validator_rejects_wrong_or_mutated_managed_python(tmp_path: Path) -> None:

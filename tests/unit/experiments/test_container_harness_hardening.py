@@ -116,6 +116,67 @@ def _runtime_modules(module: ModuleType, environment_root: Path) -> dict[str, ob
     return modules
 
 
+def test_runtime_probe_artifact_records_attestation_producer_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_runtime_probe()
+    output = tmp_path / "runtime.json"
+    arguments = SimpleNamespace(
+        runtime_attestation_job_id=734,
+        container_image="/lustre/runtime.sqsh",
+        container_sha256="a" * 64,
+        nemo_rl_commit=NEMORL_COMMIT,
+        bridge_commit=BRIDGE_COMMIT,
+        mcore_commit=MCORE_COMMIT,
+        uv_lock_sha256="f" * 64,
+        expected_te_commit=TE_COMMIT,
+        expected_te_version_base_commit=TE_COMMIT,
+        expected_python_version=PYTHON_VERSION,
+        expected_uv_version=UV_VERSION,
+        expected_nvte_with_nccl_ep="0",
+        runtime_feature_set="dropless_hybridep_nano16",
+        excluded_packages="fast-hadamard-transform",
+        torch_cuda_arch_list="10.0a",
+        nvte_cuda_archs="100a",
+        container_device=1,
+        container_inode=2,
+        container_size=3,
+        container_mtime_seconds=4,
+        container_ctime_seconds=5,
+        expected_device_count=4,
+        expected_environment_root=tmp_path / "environment",
+        expected_project_root=tmp_path / "source",
+        expected_python_install_dir=tmp_path / "python",
+        expected_uv_executable=tmp_path / "uv",
+        output=output,
+    )
+    monkeypatch.setattr(module, "parse_args", lambda: arguments)
+    monkeypatch.setattr(
+        module,
+        "probe_runtime",
+        lambda **_: {
+            "packages": {
+                "transformer_engine.pytorch": {"version": "2.19.0.dev0+eeeeeeee"}
+            }
+        },
+    )
+    monkeypatch.setattr(module, "_distribution_vcs_commit", lambda _: TE_COMMIT)
+    monkeypatch.setattr(
+        module,
+        "validate_transformer_engine_identities",
+        lambda **_: {
+            "transformer_engine_source_commit": TE_COMMIT,
+            "transformer_engine_version_base_commit": TE_COMMIT,
+        },
+    )
+
+    module.main()
+
+    payload = json.loads(output.read_text())
+    assert payload["status"] == "passed"
+    assert payload["runtime_attestation_job_id"] == 734
+
+
 def _run_script(
     relative_path: str, **environment: str
 ) -> subprocess.CompletedProcess[str]:
@@ -1096,6 +1157,8 @@ printf '{"status":"passed"}\n' >"${output}"
     assert "--gpus-per-node" not in command
     assert "--gres=" not in command
     assert "--expected-device-count 4" in command
+    assert "RUNTIME_ATTESTATION_JOB_ID=734" in command
+    assert '--runtime-attestation-job-id "${RUNTIME_ATTESTATION_JOB_ID}"' in command
     assert (artifact_dir / "oci-container-runtime-734.json").is_file()
 
 
@@ -2064,6 +2127,7 @@ def test_gpu_attestation_rejects_untrusted_runtime_stage(
             "RUNTIME_STAGE_MARKER": str(marker),
             "RUNTIME_STAGE_MARKER_SHA256": expected_sha256,
             "RUNTIME_STAGE_JOB_ID": "733",
+            "RUNTIME_ATTESTATION_JOB_ID": "734",
             "UV_PYTHON_INSTALL_DIR": str(python_install_dir),
             "RUNTIME_BOOTSTRAP_PYTHON": sys.executable,
         }
@@ -2168,6 +2232,7 @@ def test_gpu_attestation_rejects_escaped_runtime_python_before_execution(
             "RUNTIME_STAGE_MARKER": str(marker),
             "RUNTIME_STAGE_MARKER_SHA256": marker_sha256,
             "RUNTIME_STAGE_JOB_ID": "733",
+            "RUNTIME_ATTESTATION_JOB_ID": "734",
             "UV_PYTHON_INSTALL_DIR": str(python_install_dir),
             "RUNTIME_BOOTSTRAP_PYTHON": sys.executable,
             "ESCAPED_PYTHON_MARKER": str(escaped_python_marker),

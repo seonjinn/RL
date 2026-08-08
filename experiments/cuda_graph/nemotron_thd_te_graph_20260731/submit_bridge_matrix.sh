@@ -4,6 +4,17 @@
 
 set -euo pipefail
 fail() { echo "$*" >&2; exit 2; }
+run_sbatch_without_reserved_environment() {
+  local -a clean_environment=(env)
+  local exported_name
+
+  while IFS= read -r exported_name; do
+    if [[ "${exported_name}" == SBATCH_* ]]; then
+      clean_environment+=(-u "${exported_name}")
+    fi
+  done < <(compgen -e)
+  "${clean_environment[@]}" "$@"
+}
 [[ -z "${COMMAND:-}" && -z "${BRIDGE_COMMAND:-}" ]] || \
   fail "Raw command payloads are forbidden by the typed matrix runner"
 [[ "${BRIDGE_TEST_ROWS:-}" == bridge_forward_only_eval_8 ]] || \
@@ -28,7 +39,7 @@ profile_output=$(python3 "${script_dir}/profile_snapshot.py" \
   --profile-file "${PROFILE_FILE}") || fail "Cluster profile rejected"
 while IFS=$'\t' read -r field value; do
   case "${field}" in
-    PROFILE_ID|ACCOUNT|PARTITION|CONTAINER|CONTAINER_SHA256|MOUNTS|SBATCH_GPUS_PER_NODE|SBATCH_GRES|SBATCH_SEGMENT_SIZE|TIME_LIMIT|RUNTIME_ATTESTATION|RUNTIME_PREFLIGHT_JOB_ID|EXPECTED_TE_SHA|EXPECTED_TE_VERSION_BASE_SHA|EXPECTED_NEMORL_SHA|EXPECTED_BRIDGE_SHA|EXPECTED_MCORE_SHA|RUN_LOG_ROOT|PROFILE_SHA256)
+    PROFILE_ID|ACCOUNT|PARTITION|CONTAINER|CONTAINER_SHA256|MOUNTS|SBATCH_GPUS_PER_NODE|SBATCH_GRES|SBATCH_SEGMENT_SIZE|TIME_LIMIT|RUNTIME_ATTESTATION|RUNTIME_PREFLIGHT_JOB_ID|UV_EXECUTABLE|EXPECTED_TE_SHA|EXPECTED_TE_VERSION_BASE_SHA|EXPECTED_NEMORL_SHA|EXPECTED_BRIDGE_SHA|EXPECTED_MCORE_SHA|RUN_LOG_ROOT|PROFILE_SHA256)
       printf -v "${field}" '%s' "${value}"
       ;;
     *) fail "Cluster profile snapshot returned an unknown field" ;;
@@ -37,10 +48,15 @@ done <<<"${profile_output}"
 [[ "${RUN_LOG_ROOT}" == /* ]] || fail "RUN_LOG_ROOT must be absolute"
 [[ "${PARTITION}" == batch ]] || fail "Typed matrix jobs require PARTITION=batch"
 [[ "${SBATCH_GPUS_PER_NODE}" == 4 ]] || fail "Bridge row requires four GPUs per node"
-for field in ACCOUNT CONTAINER CONTAINER_SHA256 MOUNTS RUNTIME_ATTESTATION EXPECTED_TE_SHA EXPECTED_TE_VERSION_BASE_SHA RUN_LOG_ROOT; do
+for field in ACCOUNT CONTAINER CONTAINER_SHA256 MOUNTS RUNTIME_ATTESTATION \
+  RUNTIME_PREFLIGHT_JOB_ID UV_EXECUTABLE EXPECTED_TE_SHA \
+  EXPECTED_TE_VERSION_BASE_SHA RUN_LOG_ROOT; do
   value=${!field:-}
   [[ -n "${value}" && "${value}" != *"__REQUIRED"* ]] || fail "Profile field ${field} is unresolved"
 done
+[[ "${RUNTIME_PREFLIGHT_JOB_ID}" =~ ^[1-9][0-9]*$ ]] || \
+  fail "RUNTIME_PREFLIGHT_JOB_ID must be a positive SLURM job ID"
+[[ "${UV_EXECUTABLE}" == /* ]] || fail "UV_EXECUTABLE must be an absolute path"
 
 runtime_contract=$(python3 - "${RUNTIME_ATTESTATION}" <<'PY'
 import json
@@ -128,7 +144,7 @@ IFS=$'\t' read -r snapshot snapshot_sha256 intent intent_sha256 <<<"${artifacts}
 [[ "${snapshot_sha256}" =~ ^[0-9a-f]{64}$ && "${intent_sha256}" =~ ^[0-9a-f]{64}$ ]] || \
   fail "Submission artifact digests are invalid"
 
-exports="ALL,TEST_ROW_ID=bridge_forward_only_eval_8,TEST_WORLD_SIZE=8,TEST_NUM_NODES=2,TEST_GPUS_PER_NODE=4,CANDIDATE_KIND=bridge,CANDIDATE_SHA=${BRIDGE_CANDIDATE_SHA},INTEGRATION_SHA=${integration_sha},CANDIDATE_SOURCE_ROOT=${snapshot},CANDIDATE_SNAPSHOT_SHA256=${snapshot_sha256},RUN_LOG_ROOT=${RUN_LOG_ROOT},TEST_MATRIX=${matrix},RUNNER_PATH=${driver},CONTAINER=${CONTAINER},CONTAINER_SHA256=${CONTAINER_SHA256},MOUNTS=${MOUNTS},EXPECTED_TE_SHA=${EXPECTED_TE_SHA},EXPECTED_TE_VERSION_BASE_SHA=${EXPECTED_TE_VERSION_BASE_SHA},RUNTIME_ATTESTATION=${RUNTIME_ATTESTATION},SUBMISSION_INTENT=${intent},SUBMISSION_INTENT_SHA256=${intent_sha256},REPO_ROOT=${repo_root},EXPECTED_NEMORL_SHA=${EXPECTED_NEMORL_SHA},EXPECTED_BRIDGE_SHA=${EXPECTED_BRIDGE_SHA},EXPECTED_MCORE_SHA=${EXPECTED_MCORE_SHA},SOURCE_PROVENANCE_VERIFIER=${source_provenance_verifier},RUNTIME_ATTESTATION_COMMAND=${runtime_attestation_command},RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET},RUNTIME_EXCLUDED_PACKAGES=${RUNTIME_EXCLUDED_PACKAGES},TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST},NVTE_CUDA_ARCHS=${NVTE_CUDA_ARCHS}"
+exports="ALL,TEST_ROW_ID=bridge_forward_only_eval_8,TEST_WORLD_SIZE=8,TEST_NUM_NODES=2,TEST_GPUS_PER_NODE=4,CANDIDATE_KIND=bridge,CANDIDATE_SHA=${BRIDGE_CANDIDATE_SHA},INTEGRATION_SHA=${integration_sha},CANDIDATE_SOURCE_ROOT=${snapshot},CANDIDATE_SNAPSHOT_SHA256=${snapshot_sha256},RUN_LOG_ROOT=${RUN_LOG_ROOT},TEST_MATRIX=${matrix},RUNNER_PATH=${driver},CONTAINER=${CONTAINER},CONTAINER_SHA256=${CONTAINER_SHA256},MOUNTS=${MOUNTS},EXPECTED_TE_SHA=${EXPECTED_TE_SHA},EXPECTED_TE_VERSION_BASE_SHA=${EXPECTED_TE_VERSION_BASE_SHA},RUNTIME_ATTESTATION=${RUNTIME_ATTESTATION},RUNTIME_PREFLIGHT_JOB_ID=${RUNTIME_PREFLIGHT_JOB_ID},EXPECTED_UV_EXECUTABLE=${UV_EXECUTABLE},SUBMISSION_INTENT=${intent},SUBMISSION_INTENT_SHA256=${intent_sha256},REPO_ROOT=${repo_root},EXPECTED_NEMORL_SHA=${EXPECTED_NEMORL_SHA},EXPECTED_BRIDGE_SHA=${EXPECTED_BRIDGE_SHA},EXPECTED_MCORE_SHA=${EXPECTED_MCORE_SHA},SOURCE_PROVENANCE_VERIFIER=${source_provenance_verifier},RUNTIME_ATTESTATION_COMMAND=${runtime_attestation_command},RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET},RUNTIME_EXCLUDED_PACKAGES=${RUNTIME_EXCLUDED_PACKAGES},TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST},NVTE_CUDA_ARCHS=${NVTE_CUDA_ARCHS}"
 command=(sbatch --parsable --nodes=2 "--account=${ACCOUNT}" "--partition=${PARTITION}" "--time=${TIME_LIMIT}" --job-name=bridge-forward-only-eval "--output=${RUN_LOG_ROOT}/slurm/bridge-forward-only-eval-%j.log" "--export=${exports}")
 if [[ "${SBATCH_GRES}" != none ]]; then
   command+=("--gres=${SBATCH_GRES}")
@@ -137,5 +153,5 @@ fi
 [[ "${SBATCH_TEST_ONLY:-0}" == 1 ]] && command+=(--test-only)
 command+=("${script_dir}/scripts/run_bridge_scope.sub")
 mkdir -p "${RUN_LOG_ROOT}/slurm"
-output=$("${command[@]}")
+output=$(run_sbatch_without_reserved_environment "${command[@]}")
 printf 'ROW: bridge_forward_only_eval_8\nSBATCH_OUTPUT: %s\n' "${output}"

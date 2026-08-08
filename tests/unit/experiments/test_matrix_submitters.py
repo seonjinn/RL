@@ -96,7 +96,9 @@ def _r3_gate(runtime_digest: str) -> dict[str, object]:
     }
 
 
-def _promotion_gate(model: str, runtime_digest: str, arms: tuple[str, ...]) -> dict[str, object]:
+def _promotion_gate(
+    model: str, runtime_digest: str, arms: tuple[str, ...]
+) -> dict[str, object]:
     arm_payload: dict[str, object] = {}
     for arm in arms:
         r3_on = arm in {"C", "E"}
@@ -108,7 +110,9 @@ def _promotion_gate(model: str, runtime_digest: str, arms: tuple[str, ...]) -> d
             "correctness_passed": True,
             "undeclared_fallbacks": 0,
             "router_replay": "on" if r3_on else "off",
-            "graph_coverage_status": "passed" if arm in {"B", "E"} else "not_applicable",
+            "graph_coverage_status": "passed"
+            if arm in {"B", "E"}
+            else "not_applicable",
             "r3_trace_status": "passed" if r3_on else "not_applicable",
         }
     return {
@@ -144,7 +148,9 @@ def _make_harness(
         EXPERIMENT_DIR / "validate_campaign_gate.py",
         harness / "validate_campaign_gate.py",
     )
-    shutil.copy2(EXPERIMENT_DIR / "profile_snapshot.py", harness / "profile_snapshot.py")
+    shutil.copy2(
+        EXPERIMENT_DIR / "profile_snapshot.py", harness / "profile_snapshot.py"
+    )
     capture_file = tmp_path / "captured.tsv"
     for relative_path in launchers:
         _write_launcher(harness / relative_path, relative_path)
@@ -176,6 +182,72 @@ def _load_mcore_driver():
     finally:
         sys.modules.pop(spec.name, None)
     return module
+
+
+def test_shell_profile_consumers_accept_every_snapshot_field() -> None:
+    spec = importlib.util.spec_from_file_location(
+        "profile_snapshot_for_consumer_test",
+        EXPERIMENT_DIR / "profile_snapshot.py",
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(spec.name, None)
+
+    for relative_path in (
+        "run_scope.sh",
+        "submit_mcore_matrix.sh",
+        "submit_bridge_matrix.sh",
+    ):
+        source = (EXPERIMENT_DIR / relative_path).read_text()
+        allowlist = next(
+            line.strip().removesuffix(")").split("|")
+            for line in source.splitlines()
+            if line.strip().startswith(("PROFILE_SHA256|", "PROFILE_ID|"))
+        )
+        assert set(module.PROFILE_FIELDS) <= set(allowlist), relative_path
+
+
+def test_direct_sbatch_submitters_scrub_reserved_environment() -> None:
+    expected_invocations = {
+        "run_scope.sh": (
+            'scheduler_test_output=$(run_sbatch_without_reserved_environment "${sbatch_command[@]}")',
+            'job_id=$(run_sbatch_without_reserved_environment "${sbatch_command[@]}")',
+        ),
+        "submit_mcore_matrix.sh": (
+            'output=$(run_sbatch_without_reserved_environment "${command[@]}")',
+        ),
+        "submit_bridge_matrix.sh": (
+            'output=$(run_sbatch_without_reserved_environment "${command[@]}")',
+        ),
+    }
+
+    for relative_path, invocations in expected_invocations.items():
+        source = (EXPERIMENT_DIR / relative_path).read_text()
+        assert '[[ "${exported_name}" == SBATCH_* ]]' in source
+        assert 'clean_environment+=(-u "${exported_name}")' in source
+        assert "done < <(compgen -e)" in source
+        for invocation in invocations:
+            assert invocation in source
+
+
+def test_typed_matrix_workers_bind_runtime_attestation_to_producer_job() -> None:
+    worker = (EXPERIMENT_DIR / "scripts" / "run_mcore_scope.sub").read_text()
+
+    assert "RUNTIME_PREFLIGHT_JOB_ID" in worker.split("; do", 1)[0]
+    assert (
+        '--expected-runtime-attestation-job-id "${RUNTIME_PREFLIGHT_JOB_ID}"' in worker
+    )
+    assert '--expected-uv-executable "${EXPECTED_UV_EXECUTABLE}"' in worker
+    for relative_path in ("submit_mcore_matrix.sh", "submit_bridge_matrix.sh"):
+        submitter = (EXPERIMENT_DIR / relative_path).read_text()
+        assert "RUNTIME_PREFLIGHT_JOB_ID=${RUNTIME_PREFLIGHT_JOB_ID}" in submitter, (
+            relative_path
+        )
+        assert "EXPECTED_UV_EXECUTABLE=${UV_EXECUTABLE}" in submitter, relative_path
 
 
 def test_mcore_candidate_archive_collection_resolves_every_literal_manifest_node(
@@ -223,7 +295,9 @@ def test_mcore_candidate_archive_collection_resolves_every_literal_manifest_node
 def test_mcore_worker_validates_entire_candidate_matrix_before_execution() -> None:
     source = MCORE_DRIVER_PATH.read_text()
 
-    validation = source.index("validate_pytest_node_collection(", source.index("def main"))
+    validation = source.index(
+        "validate_pytest_node_collection(", source.index("def main")
+    )
     execution = source.index("for node, command in zip(", source.index("def main"))
     validation_call = source[validation:execution]
 
@@ -287,9 +361,7 @@ def test_qwen_router_validation_smoke_defaults_to_ordered_paired_arms(
     tmp_path: Path,
 ) -> None:
     submitter = "submit_qwen_router_validation.sh"
-    harness, capture_file = _make_harness(
-        tmp_path, submitter, QWEN_ROUTER_CONDITIONS
-    )
+    harness, capture_file = _make_harness(tmp_path, submitter, QWEN_ROUTER_CONDITIONS)
 
     result = _run_submitter(
         harness,
@@ -313,9 +385,7 @@ def test_qwen235_smoke_defaults_to_a_and_b_without_a_route_gate(
     tmp_path: Path,
 ) -> None:
     submitter = "submit_qwen_router_validation.sh"
-    harness, capture_file = _make_harness(
-        tmp_path, submitter, QWEN_ROUTER_CONDITIONS
-    )
+    harness, capture_file = _make_harness(tmp_path, submitter, QWEN_ROUTER_CONDITIONS)
 
     result = _run_submitter(
         harness,
@@ -334,9 +404,7 @@ def test_qwen235_smoke_defaults_to_a_and_b_without_a_route_gate(
 
 def test_qwen30_performance_defaults_to_a_and_b(tmp_path: Path) -> None:
     submitter = "submit_qwen_router_validation.sh"
-    harness, capture_file = _make_harness(
-        tmp_path, submitter, QWEN_ROUTER_CONDITIONS
-    )
+    harness, capture_file = _make_harness(tmp_path, submitter, QWEN_ROUTER_CONDITIONS)
     profile, runtime_digest = _write_gate_profile(tmp_path)
     gate = tmp_path / "promotion-gate.json"
     gate_digest = _write_gate(
@@ -367,9 +435,7 @@ def test_qwen235_r3_smoke_rejects_self_attested_route_gate_before_leaf(
     tmp_path: Path,
 ) -> None:
     submitter = "submit_qwen_router_validation.sh"
-    harness, capture_file = _make_harness(
-        tmp_path, submitter, QWEN_ROUTER_CONDITIONS
-    )
+    harness, capture_file = _make_harness(tmp_path, submitter, QWEN_ROUTER_CONDITIONS)
     profile, runtime_digest = _write_gate_profile(tmp_path)
     gate = tmp_path / "r3-gate.json"
     gate_digest = _write_gate(gate, _r3_gate(runtime_digest))
@@ -397,9 +463,7 @@ def test_qwen_performance_requires_valid_promotion_gate_before_any_leaf(
     tmp_path: Path,
 ) -> None:
     submitter = "submit_qwen_router_validation.sh"
-    harness, capture_file = _make_harness(
-        tmp_path, submitter, QWEN_ROUTER_CONDITIONS
-    )
+    harness, capture_file = _make_harness(tmp_path, submitter, QWEN_ROUTER_CONDITIONS)
     profile, runtime_digest = _write_gate_profile(tmp_path)
     gate = tmp_path / "promotion-gate.json"
     gate_digest = _write_gate(
@@ -439,9 +503,7 @@ def test_qwen_router_validation_rejects_invalid_gate_controls_before_leaf_invoca
     tmp_path: Path, extra_environment: dict[str, str]
 ) -> None:
     submitter = "submit_qwen_router_validation.sh"
-    harness, capture_file = _make_harness(
-        tmp_path, submitter, QWEN_ROUTER_CONDITIONS
-    )
+    harness, capture_file = _make_harness(tmp_path, submitter, QWEN_ROUTER_CONDITIONS)
 
     result = _run_submitter(
         harness,
@@ -471,9 +533,7 @@ def test_qwen235_route_gate_rejects_untrusted_or_invalid_evidence_before_leaf(
     tmp_path: Path, case: str
 ) -> None:
     submitter = "submit_qwen_router_validation.sh"
-    harness, capture_file = _make_harness(
-        tmp_path, submitter, QWEN_ROUTER_CONDITIONS
-    )
+    harness, capture_file = _make_harness(tmp_path, submitter, QWEN_ROUTER_CONDITIONS)
     profile, runtime_digest = _write_gate_profile(tmp_path)
     payload = _r3_gate(runtime_digest)
     gate = tmp_path / "r3-gate.json"
@@ -521,9 +581,7 @@ def test_qwen_router_validation_rejects_untrusted_profiles_without_execution(
     tmp_path: Path, case: str
 ) -> None:
     submitter = "submit_qwen_router_validation.sh"
-    harness, capture_file = _make_harness(
-        tmp_path, submitter, QWEN_ROUTER_CONDITIONS
-    )
+    harness, capture_file = _make_harness(tmp_path, submitter, QWEN_ROUTER_CONDITIONS)
     profile, runtime_digest = _write_gate_profile(tmp_path)
     gate = tmp_path / "r3-gate.json"
     gate_digest = _write_gate(gate, _r3_gate(runtime_digest))
@@ -567,9 +625,7 @@ def test_qwen_router_validation_rejects_cluster_before_profile_or_leaf_resolutio
     tmp_path: Path,
 ) -> None:
     submitter = "submit_qwen_router_validation.sh"
-    harness, capture_file = _make_harness(
-        tmp_path, submitter, QWEN_ROUTER_CONDITIONS
-    )
+    harness, capture_file = _make_harness(tmp_path, submitter, QWEN_ROUTER_CONDITIONS)
 
     result = _run_submitter(
         harness,
@@ -589,9 +645,7 @@ def test_campaign_gate_rejects_fractional_slurm_job_ids(
     tmp_path: Path, job_field: str
 ) -> None:
     submitter = "submit_qwen_router_validation.sh"
-    harness, capture_file = _make_harness(
-        tmp_path, submitter, QWEN_ROUTER_CONDITIONS
-    )
+    harness, capture_file = _make_harness(tmp_path, submitter, QWEN_ROUTER_CONDITIONS)
     profile, runtime_digest = _write_gate_profile(tmp_path)
     gate = tmp_path / "gate.json"
     if job_field == "slurm_job_id":
@@ -666,7 +720,9 @@ def test_campaign_gate_reads_opened_file_even_if_path_is_swapped(
     assert validator._read_regular_file(gate, "gate file") == b'{"old":true}'
 
 
-def test_r3_validator_rejects_non_qwen235_argument(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_r3_validator_rejects_non_qwen235_argument(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     validator = _load_gate_validator()
     monkeypatch.setattr(
         sys,
@@ -698,9 +754,7 @@ def test_qwen_router_validation_performance_selected_pair_uses_twenty_steps(
     tmp_path: Path,
 ) -> None:
     submitter = "submit_qwen_router_validation.sh"
-    harness, capture_file = _make_harness(
-        tmp_path, submitter, QWEN_ROUTER_CONDITIONS
-    )
+    harness, capture_file = _make_harness(tmp_path, submitter, QWEN_ROUTER_CONDITIONS)
     profile, runtime_digest = _write_gate_profile(tmp_path)
     gate = tmp_path / "promotion-gate.json"
     gate_digest = _write_gate(
@@ -733,9 +787,7 @@ def test_qwen_router_validation_assigns_distinct_repeat_indices(
     tmp_path: Path,
 ) -> None:
     submitter = "submit_qwen_router_validation.sh"
-    harness, capture_file = _make_harness(
-        tmp_path, submitter, QWEN_ROUTER_CONDITIONS
-    )
+    harness, capture_file = _make_harness(tmp_path, submitter, QWEN_ROUTER_CONDITIONS)
 
     result = _run_submitter(
         harness,
@@ -772,9 +824,7 @@ def test_qwen_router_validation_rejects_invalid_inputs_before_leaf_invocation(
     tmp_path: Path, model: str, phase: str, arguments: tuple[str, ...]
 ) -> None:
     submitter = "submit_qwen_router_validation.sh"
-    harness, capture_file = _make_harness(
-        tmp_path, submitter, QWEN_ROUTER_CONDITIONS
-    )
+    harness, capture_file = _make_harness(tmp_path, submitter, QWEN_ROUTER_CONDITIONS)
 
     result = _run_submitter(
         harness,

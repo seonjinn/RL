@@ -147,6 +147,7 @@ def _campaign_leaf_harness(tmp_path: Path) -> tuple[Path, Path, Path, dict[str, 
                 "TIME_LIMIT=01:00:00",
                 f"RUNTIME_ATTESTATION={runtime}",
                 "RUNTIME_PREFLIGHT_JOB_ID=1",
+                f"UV_EXECUTABLE={tmp_path}/staged-runtimes/{'a' * 64}/uv/uv",
                 f"EXPECTED_TE_SHA={'e' * 40}",
                 f"EXPECTED_TE_VERSION_BASE_SHA={'f' * 40}",
                 f"EXPECTED_NEMORL_SHA={provenance['nemo_rl_commit']}",
@@ -1878,7 +1879,16 @@ def test_fake_sbatch_scheduler_test_only_publishes_no_metadata(tmp_path: Path) -
     invocation = tmp_path / "sbatch.argv"
     fake = fake_bin / "sbatch"
     fake.write_text(
-        "#!/bin/bash\nprintf '%s\\n' \"$@\" >\"${SBATCH_INVOCATION:?}\"\nprintf 'sbatch: Job 321 would be submitted\\n'\n"
+        "#!/bin/bash\n"
+        'printf \'ENV_SBATCH_GPUS=%s\\n\' "${SBATCH_GPUS-unset}" >"${FAKE_SBATCH_INVOCATION:?}"\n'
+        'printf \'ENV_SBATCH_GPUS_PER_NODE=%s\\n\' "${SBATCH_GPUS_PER_NODE-unset}" >>"${FAKE_SBATCH_INVOCATION:?}"\n'
+        'printf \'ENV_SBATCH_GRES=%s\\n\' "${SBATCH_GRES-unset}" >>"${FAKE_SBATCH_INVOCATION:?}"\n'
+        'printf \'ENV_SBATCH_TRES_PER_TASK=%s\\n\' "${SBATCH_TRES_PER_TASK-unset}" >>"${FAKE_SBATCH_INVOCATION:?}"\n'
+        'printf \'ENV_SBATCH_TEST_ONLY=%s\\n\' "${SBATCH_TEST_ONLY-unset}" >>"${FAKE_SBATCH_INVOCATION:?}"\n'
+        'printf \'ENV_SBATCH_EXCLUSIVE=%s\\n\' "${SBATCH_EXCLUSIVE-unset}" >>"${FAKE_SBATCH_INVOCATION:?}"\n'
+        'printf \'ENV_SBATCH_MEM=%s\\n\' "${SBATCH_MEM-unset}" >>"${FAKE_SBATCH_INVOCATION:?}"\n'
+        'printf \'%s\\n\' "$@" >>"${FAKE_SBATCH_INVOCATION:?}"\n'
+        "printf 'sbatch: Job 321 would be submitted\\n'\n"
     )
     fake.chmod(0o755)
     logs = tmp_path / "logs"
@@ -1897,14 +1907,28 @@ def test_fake_sbatch_scheduler_test_only_publishes_no_metadata(tmp_path: Path) -
         PROFILE_FILE=str(profile),
         LOG_ROOT_OVERRIDE=str(logs),
         PATH=f"{fake_bin}:{os.environ['PATH']}",
-        SBATCH_INVOCATION=str(invocation),
+        FAKE_SBATCH_INVOCATION=str(invocation),
+        SBATCH_GPUS="7",
+        SBATCH_GPUS_PER_NODE="7",
+        SBATCH_GRES="gpu:7",
+        SBATCH_TRES_PER_TASK="gres/gpu=1",
+        SBATCH_EXCLUSIVE="1",
+        SBATCH_MEM="0",
     )
 
     assert result.returncode == 0, result.stderr
     assert (
         "SBATCH_TEST_ONLY_OUTPUT: sbatch: Job 321 would be submitted" in result.stdout
     )
-    assert "--test-only" in invocation.read_text().splitlines()
+    invocation_lines = invocation.read_text().splitlines()
+    assert "ENV_SBATCH_GPUS=unset" in invocation_lines
+    assert "ENV_SBATCH_GPUS_PER_NODE=unset" in invocation_lines
+    assert "ENV_SBATCH_GRES=unset" in invocation_lines
+    assert "ENV_SBATCH_TRES_PER_TASK=unset" in invocation_lines
+    assert "ENV_SBATCH_TEST_ONLY=unset" in invocation_lines
+    assert "ENV_SBATCH_EXCLUSIVE=unset" in invocation_lines
+    assert "ENV_SBATCH_MEM=unset" in invocation_lines
+    assert "--test-only" in invocation_lines
     assert not logs.exists()
 
 
@@ -2137,6 +2161,7 @@ def test_leaf_job_depends_on_one_exact_runtime_preflight_artifact(
 ) -> None:
     root, experiment, profile, _ = _campaign_leaf_harness(tmp_path)
     attestation = "/lustre/example/runtime/oci-container-runtime-733.json"
+    staged_uv = f"/lustre/example/runtime/staged-runtimes/{'a' * 64}/uv/uv"
     profile.write_text(
         "\n".join(
             (
@@ -2152,6 +2177,7 @@ def test_leaf_job_depends_on_one_exact_runtime_preflight_artifact(
                 "TIME_LIMIT=04:00:00",
                 f"RUNTIME_ATTESTATION={attestation}",
                 "RUNTIME_PREFLIGHT_JOB_ID=733",
+                f"UV_EXECUTABLE={staged_uv}",
                 f"EXPECTED_TE_SHA={TE_SHA}",
                 f"EXPECTED_TE_VERSION_BASE_SHA={TE_SHA}",
                 f"EXPECTED_NEMORL_SHA={NEMORL_SHA}",
@@ -2199,15 +2225,10 @@ def test_leaf_job_depends_on_one_exact_runtime_preflight_artifact(
         "/lustre/example/runtime/uv-python-installations" in runtime_attestation_command
     )
     assert f"PINNED_UV_VERSION: {UV_VERSION}" in result.stdout
-    assert (
-        "UV_EXECUTABLE: /lustre/example/runtime/"
-        f"uv-{UV_VERSION}-733/uv" in result.stdout
-    )
+    assert f"UV_EXECUTABLE: {staged_uv}" in result.stdout
     assert f"--expected-uv-version {UV_VERSION}" in runtime_attestation_command
-    assert (
-        "--expected-uv-executable /lustre/example/runtime/"
-        f"uv-{UV_VERSION}-733/uv" in runtime_attestation_command
-    )
+    assert f"--expected-uv-executable {staged_uv}" in runtime_attestation_command
+    assert "--expected-runtime-attestation-job-id 733" in runtime_attestation_command
 
 
 def test_leaf_runtime_attestation_uses_the_nightly_container_python() -> None:
@@ -2232,6 +2253,67 @@ def test_leaf_runtime_attestation_uses_the_nightly_container_python() -> None:
     )[0]
     assert runtime_attestation_command.startswith("/opt/nemo_rl_venv/bin/python ")
     assert "/usr/bin/python3" not in runtime_attestation_command
+
+
+def test_leaf_job_rejects_relative_profile_uv_executable(tmp_path: Path) -> None:
+    root, experiment, profile, _ = _campaign_leaf_harness(tmp_path)
+    profile.write_text(
+        re.sub(
+            r"^UV_EXECUTABLE=.*$",
+            "UV_EXECUTABLE=relative/uv",
+            profile.read_text(),
+            flags=re.MULTILINE,
+        )
+    )
+
+    result = _run_copied_experiment_script(
+        root,
+        experiment,
+        "scopes/17_attn.sh",
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        STEPS="20",
+        TEST_ONLY="1",
+        PROFILE_FILE=str(profile),
+        RUN_TAG="unit",
+    )
+
+    assert result.returncode == 2
+    assert "UV_EXECUTABLE must be an absolute path" in result.stderr
+
+
+def test_leaf_job_rejects_unmounted_profile_uv_executable(tmp_path: Path) -> None:
+    root, experiment, profile, _ = _campaign_leaf_harness(tmp_path)
+    profile.write_text(
+        re.sub(
+            r"^UV_EXECUTABLE=.*$",
+            "UV_EXECUTABLE=/outside/runtime/uv/uv",
+            profile.read_text().replace(
+                f"MOUNTS={tmp_path}:{tmp_path}", "MOUNTS=/lustre:/lustre"
+            ),
+            flags=re.MULTILINE,
+        ).replace(
+            f"RUNTIME_ATTESTATION={tmp_path}/runtime.json",
+            "RUNTIME_ATTESTATION=/lustre/runtime/runtime.json",
+        )
+    )
+
+    result = _run_copied_experiment_script(
+        root,
+        experiment,
+        "scopes/17_attn.sh",
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        STEPS="20",
+        TEST_ONLY="1",
+        PROFILE_FILE=str(profile),
+        RUN_TAG="unit",
+    )
+
+    assert result.returncode == 2
+    assert "pinned uv executable is not container-mounted" in result.stderr
 
 
 def test_leaf_job_rejects_unmounted_managed_python_installation(
