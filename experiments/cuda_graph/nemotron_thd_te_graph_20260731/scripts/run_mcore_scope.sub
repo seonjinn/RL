@@ -195,12 +195,21 @@ environment_root=$2
 project_root=$3
 shift 3
 sync_command=("${uv}" sync --python "${UV_PYTHON}" --managed-python \
-  --locked --extra mcore --no-python-downloads --directory "${project_root}")
+  --locked --extra mcore --group test --no-python-downloads --directory "${project_root}")
 IFS=, read -r -a excluded_packages <<<"${RUNTIME_EXCLUDED_PACKAGES}"
 for excluded_package in "${excluded_packages[@]}"; do
   sync_command+=(--no-install-package "${excluded_package}")
 done
 "${sync_command[@]}"
+case "${RUNTIME_FEATURE_SET}" in
+  dropless_hybridep_nano16|dropless_hybridep_qwen235_64)
+    "${environment_root}/bin/python" - <<PY
+import deep_ep
+if not getattr(deep_ep, "HybridEPBuffer", None):
+    raise RuntimeError("deep_ep.HybridEPBuffer is unavailable")
+PY
+    ;;
+esac
 exec "${environment_root}/bin/python" "$@"
 ' bash "${UV_EXECUTABLE}" "${UV_PROJECT_ENVIRONMENT}" "${REPO_ROOT}" \
   "${RUNNER_PATH}" --launch-agent \

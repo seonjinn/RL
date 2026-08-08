@@ -180,12 +180,9 @@ def test_manifest_selects_exact_te_capability_nodes() -> None:
 
     assert tuple(rows) == (
         "te_eval_capability_8",
-        "execution_kind_bank_8",
-        "forward_only_schedule_8",
-        "router_replay_8",
-        "router_replay_1f1b_8",
         *PARTIAL_MOE_ROWS,
     )
+    assert not any("router_replay" in row_id for row_id in rows)
     assert rows["te_eval_capability_8"].pytest_nodes == (
         "tests/unit_tests/transformer/test_cuda_graphs.py::"
         "test_te_make_graphed_callables_supports_eval_no_grad",
@@ -870,6 +867,46 @@ def test_distributed_wrappers_reject_raw_command_payload(wrapper: str) -> None:
     assert "raw command" in result.stderr.lower()
 
 
+@pytest.mark.parametrize(
+    "wrapper", ("scripts/run_mcore_scope.sub", "scripts/run_bridge_scope.sub")
+)
+def test_distributed_wrappers_are_bash_syntax_valid(wrapper: str) -> None:
+    result = subprocess.run(
+        ["bash", "-n", str(EXPERIMENT_DIR / wrapper)],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_hybridep_probe_rejects_missing_buffer_under_python_optimization(
+    tmp_path: Path,
+) -> None:
+    source = (EXPERIMENT_DIR / "scripts" / "run_mcore_scope.sub").read_text()
+    match = re.search(
+        r'"\$\{environment_root\}/bin/python" - <<PY\n(?P<probe>.*?)\nPY',
+        source,
+        re.DOTALL,
+    )
+    assert match is not None
+    (tmp_path / "deep_ep.py").write_text("\n")
+    environment = os.environ | {"PYTHONPATH": str(tmp_path)}
+
+    result = subprocess.run(
+        [sys.executable, "-O", "-c", match["probe"]],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "HybridEPBuffer" in result.stderr
+
+
 def test_worker_rehashes_exact_intent_bytes_used_by_runtime_contract() -> None:
     source = (EXPERIMENT_DIR / "scripts" / "run_mcore_scope.sub").read_text()
 
@@ -877,6 +914,13 @@ def test_worker_rehashes_exact_intent_bytes_used_by_runtime_contract() -> None:
     assert "serialized_intent = intent_path.read_bytes()" in source
     assert "hashlib.sha256(serialized_intent).hexdigest() != sys.argv[11]" in source
     assert "intent = json.loads(serialized_intent)" in source
+
+
+def test_worker_provisions_the_same_locked_test_dependency_group() -> None:
+    """The leaf environment must include the pytest group attested during staging."""
+    source = (EXPERIMENT_DIR / "scripts" / "run_mcore_scope.sub").read_text()
+
+    assert "--locked --extra mcore --group test --no-python-downloads" in source
 
 
 def test_scope_classifier_accepts_only_the_committed_mcore_driver() -> None:

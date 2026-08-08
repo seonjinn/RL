@@ -49,25 +49,45 @@ REQUIRED_PACKAGES = frozenset(
 TE_EVAL_FEATURE_SET = "te_eval_capability_8"
 BRIDGE_EVAL_FEATURE_SET = "bridge_forward_only_eval_8"
 NARROW_EVAL_FEATURE_SETS = frozenset((TE_EVAL_FEATURE_SET, BRIDGE_EVAL_FEATURE_SET))
+NANO_HYBRIDEP_FEATURE_SET = "dropless_hybridep_nano16"
+QWEN30_ALLTOALL_FEATURE_SET = "dropless_alltoall_qwen30_16"
+SUPER_ALLTOALL_FEATURE_SET = "dropless_alltoall_super32"
+QWEN235_HYBRIDEP_FEATURE_SET = "dropless_hybridep_qwen235_64"
+DROPLESS_MOE_FEATURE_SETS = frozenset(
+    (
+        NANO_HYBRIDEP_FEATURE_SET,
+        QWEN30_ALLTOALL_FEATURE_SET,
+        SUPER_ALLTOALL_FEATURE_SET,
+        QWEN235_HYBRIDEP_FEATURE_SET,
+    )
+)
+HYBRIDEP_FEATURE_SETS = frozenset(
+    (NANO_HYBRIDEP_FEATURE_SET, QWEN235_HYBRIDEP_FEATURE_SET)
+)
 TE_EVAL_EXCLUDED_PACKAGES = (
     "causal-conv1d",
     "deep-ep",
     "fast-hadamard-transform",
     "mamba-ssm",
 )
+DROPLESS_MOE_EXCLUDED_PACKAGES = ("fast-hadamard-transform",)
+RUNTIME_FEATURE_EXCLUSIONS = {
+    TE_EVAL_FEATURE_SET: TE_EVAL_EXCLUDED_PACKAGES,
+    BRIDGE_EVAL_FEATURE_SET: TE_EVAL_EXCLUDED_PACKAGES,
+    **{
+        feature_set: DROPLESS_MOE_EXCLUDED_PACKAGES
+        for feature_set in DROPLESS_MOE_FEATURE_SETS
+    },
+}
 TE_EVAL_OPTIONAL_PACKAGES = frozenset(("mamba_ssm", "causal_conv1d"))
 MATRIX_ROWS = {
     "mcore": frozenset(
         (
             "te_eval_capability_8",
-            "execution_kind_bank_8",
-            "forward_only_schedule_8",
-            "packed_eval_8",
-            "packed_tp2_cp2_pp2_8",
-            "hybrid_ep16",
-            "hybrid_ep32",
-            "router_replay_8",
-            "router_replay_1f1b_8",
+            "dropless_hybridep_nano16",
+            "dropless_alltoall_qwen30_16",
+            "dropless_alltoall_super32",
+            "dropless_hybridep_qwen235_64",
         )
     ),
     "bridge": frozenset(("bridge_forward_only_eval_8",)),
@@ -75,18 +95,16 @@ MATRIX_ROWS = {
 MATRIX_ROW_WORLD_SIZES = {
     "mcore": {
         "te_eval_capability_8": 8,
-        "execution_kind_bank_8": 8,
-        "forward_only_schedule_8": 8,
-        "packed_eval_8": 8,
-        "packed_tp2_cp2_pp2_8": 8,
-        "hybrid_ep16": 16,
-        "hybrid_ep32": 32,
-        "router_replay_8": 8,
-        "router_replay_1f1b_8": 8,
+        "dropless_hybridep_nano16": 16,
+        "dropless_alltoall_qwen30_16": 16,
+        "dropless_alltoall_super32": 32,
+        "dropless_hybridep_qwen235_64": 64,
     },
     "bridge": {"bridge_forward_only_eval_8": 8},
 }
-ALLOWED_ALLOCATIONS = frozenset(((1, 8, 8), (2, 4, 8), (4, 4, 16), (8, 4, 32)))
+ALLOWED_ALLOCATIONS = frozenset(
+    ((1, 8, 8), (2, 4, 8), (4, 4, 16), (8, 4, 32), (16, 4, 64))
+)
 ROW_ID = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
@@ -157,6 +175,48 @@ def _read_attestation(attestation: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("runtime attestation must contain a JSON object")
     return payload
+
+
+def _runtime_contract_for_rows(
+    *, candidate_kind: str, required_rows: tuple[str, ...]
+) -> tuple[str, tuple[str, ...]]:
+    """Resolve the one narrow runtime contract that can authorize these rows."""
+    feature_sets = {
+        ("mcore", (TE_EVAL_FEATURE_SET,)): TE_EVAL_FEATURE_SET,
+        **{
+            ("mcore", (feature_set,)): feature_set
+            for feature_set in DROPLESS_MOE_FEATURE_SETS
+        },
+        ("bridge", (BRIDGE_EVAL_FEATURE_SET,)): BRIDGE_EVAL_FEATURE_SET,
+    }
+    feature_set = feature_sets.get((candidate_kind, required_rows))
+    if feature_set is None:
+        raise ValueError(
+            "runtime attestation must authorize exactly one supported matrix row"
+        )
+    return feature_set, RUNTIME_FEATURE_EXCLUSIONS[feature_set]
+
+
+def _expected_pytest_nodes(candidate_kind: str, row_id: str) -> tuple[str, ...]:
+    """Read the exact committed pytest-node contract for one matrix row."""
+    matrix_path = Path(__file__).with_name(f"{candidate_kind}_test_matrix.json")
+    matrix = _read_attestation(matrix_path)
+    if (
+        matrix.get("schema_version") != 1
+        or matrix.get("candidate_kind") != candidate_kind
+    ):
+        raise ValueError("test matrix identity is invalid")
+    rows = matrix.get("rows")
+    row = rows.get(row_id) if isinstance(rows, Mapping) else None
+    nodes = row.get("pytest_nodes") if isinstance(row, Mapping) else None
+    if (
+        not isinstance(nodes, list)
+        or not nodes
+        or len(nodes) != len(set(nodes))
+        or any(not isinstance(node, str) or not node for node in nodes)
+    ):
+        raise ValueError(f"test matrix row {row_id!r} has invalid pytest nodes")
+    return tuple(nodes)
 
 
 def _validate_device_bindings(
@@ -396,6 +456,23 @@ def validate_matrix_results(
             num_nodes=num_nodes,
             gpus_per_node=gpus_per_node,
         )
+        expected_nodes = _expected_pytest_nodes(candidate_kind, row_id)
+        node_results = payload.get("node_results")
+        if not isinstance(node_results, list) or len(node_results) != len(
+            expected_nodes
+        ):
+            raise ValueError("matrix result pytest node results are incomplete")
+        for expected_node, node_result in zip(
+            expected_nodes, node_results, strict=True
+        ):
+            if (
+                not isinstance(node_result, Mapping)
+                or set(node_result) != {"node", "status", "exit_code"}
+                or node_result.get("node") != expected_node
+                or node_result.get("status") != "passed"
+                or node_result.get("exit_code") != 0
+            ):
+                raise ValueError("matrix result pytest node results are invalid")
         if not isinstance(payload.get("transformer_engine_version"), str):
             raise ValueError("matrix result lacks Transformer Engine version")
         if row_id == "te_eval_capability_8":
@@ -486,9 +563,12 @@ def validate_attestation(
         expected_nvte_cuda_archs,
     )
     if any(value is not None for value in runtime_contract):
+        feature_exclusions = RUNTIME_FEATURE_EXCLUSIONS.get(
+            expected_runtime_feature_set
+        )
         if (
-            expected_runtime_feature_set not in NARROW_EVAL_FEATURE_SETS
-            or expected_excluded_packages != TE_EVAL_EXCLUDED_PACKAGES
+            feature_exclusions is None
+            or expected_excluded_packages != feature_exclusions
             or expected_torch_cuda_arch_list != "10.0a"
             or expected_nvte_cuda_archs != "100a"
         ):
@@ -632,6 +712,10 @@ def validate_attestation(
     required_packages = REQUIRED_PACKAGES
     if expected_runtime_feature_set in NARROW_EVAL_FEATURE_SETS:
         required_packages = required_packages.difference(TE_EVAL_OPTIONAL_PACKAGES)
+    elif expected_runtime_feature_set in HYBRIDEP_FEATURE_SETS:
+        required_packages = required_packages.union(("deep_ep",))
+        if payload.get("hybridep_buffer_available") is not True:
+            raise ValueError("runtime attestation does not prove DeepEP HybridEPBuffer")
     missing_packages = sorted(required_packages.difference(packages))
     if missing_packages:
         raise ValueError(
@@ -710,6 +794,11 @@ def main() -> None:
             environment=os.environ,
         )
         repository_root = Path(__file__).resolve().parents[3]
+        required_rows = tuple(args.required_rows.split())
+        runtime_feature_set, runtime_exclusions = _runtime_contract_for_rows(
+            candidate_kind=args.candidate_kind,
+            required_rows=required_rows,
+        )
         validate_attestation(
             attestation=runtime_path,
             container=Path(values["CONTAINER"]),
@@ -726,12 +815,8 @@ def main() -> None:
             expected_uv_version=runtime_payload["expected_uv_version"],
             expected_uv_executable=Path(runtime_payload["uv_executable"]),
             expected_nvte_with_nccl_ep=runtime_payload["expected_nvte_with_nccl_ep"],
-            expected_runtime_feature_set=(
-                TE_EVAL_FEATURE_SET
-                if args.candidate_kind == "mcore"
-                else BRIDGE_EVAL_FEATURE_SET
-            ),
-            expected_excluded_packages=TE_EVAL_EXCLUDED_PACKAGES,
+            expected_runtime_feature_set=runtime_feature_set,
+            expected_excluded_packages=runtime_exclusions,
             expected_torch_cuda_arch_list="10.0a",
             expected_nvte_cuda_archs="100a",
         )
@@ -748,7 +833,7 @@ def main() -> None:
             expected_te_commit=values["EXPECTED_TE_SHA"],
             expected_te_version_base_commit=values["EXPECTED_TE_VERSION_BASE_SHA"],
             test_result_dir=args.test_result_dir,
-            required_rows=tuple(args.required_rows.split()),
+            required_rows=required_rows,
         )
         print(json.dumps(results, sort_keys=True))
         return

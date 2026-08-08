@@ -61,7 +61,7 @@ IFS=$'\t' read -r RUNTIME_FEATURE_SET RUNTIME_EXCLUDED_PACKAGES \
   TORCH_CUDA_ARCH_LIST NVTE_CUDA_ARCHS <<<"${runtime_contract}"
 [[ -n "${NVTE_CUDA_ARCHS}" ]] || fail "Runtime feature contract is incomplete"
 
-remote_sha=$(git -C "${bridge_root}" ls-remote origin refs/heads/sna/thd-cg-hybrid-nemotron-20260731 | awk 'NF == 2 {print $1}')
+remote_sha=$(git -C "${bridge_root}" ls-remote fork refs/heads/sna/thd-cg-hybrid-nemotron-main-20260806 | awk 'NF == 2 {print $1}')
 [[ "${remote_sha}" =~ ^[0-9a-f]{40}$ ]] || fail "Bridge branch did not resolve to exactly one pushed SHA"
 [[ "${remote_sha}" == "${BRIDGE_CANDIDATE_SHA}" ]] || fail "Bridge candidate is absent from the pushed remote branch"
 candidate_mcore_sha=$(git -C "${bridge_root}" ls-tree "${BRIDGE_CANDIDATE_SHA}" 3rdparty/Megatron-LM | awk '$2 == "commit" {print $3}')
@@ -69,11 +69,11 @@ candidate_mcore_sha=$(git -C "${bridge_root}" ls-tree "${BRIDGE_CANDIDATE_SHA}" 
 git -C "${mcore_root}" cat-file -e "${candidate_mcore_sha}^{commit}" || \
   fail "Bridge candidate nested MCore commit is unavailable"
 root_branch=$(git -C "${repo_root}" branch --show-current)
-[[ "${root_branch}" == experiment/thd-cg-hybrid-nemotron-20260731 ]] || \
+[[ "${root_branch}" == experiment/thd-cg-hybrid-nemotron-main-20260806 ]] || \
   fail "NeMo-RL runner must use the Task 2 infrastructure branch"
 root_sha=$(git -C "${repo_root}" rev-parse HEAD)
 remote_root_sha=$(git -C "${repo_root}" ls-remote seonjinn \
-  refs/heads/experiment/thd-cg-hybrid-nemotron-20260731 | awk 'NF == 2 {print $1}')
+  refs/heads/experiment/thd-cg-hybrid-nemotron-main-20260806 | awk 'NF == 2 {print $1}')
 [[ "${remote_root_sha}" == "${root_sha}" ]] || \
   fail "NeMo-RL runner infrastructure is not pushed at the local HEAD"
 git -C "${repo_root}" diff --quiet --ignore-submodules=dirty || \

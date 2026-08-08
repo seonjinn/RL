@@ -404,6 +404,9 @@ class MegatronConfig(TypedDict):
     moe_pad_expert_input_to_capacity: NotRequired[bool]
     # Optional per-rank capacity factor. Omit to preserve the MCore provider default.
     moe_expert_rank_capacity_factor: NotRequired[float | None]
+    # Overlap expert-parallel communication with expert compute when supported.
+    # Omit to preserve the Megatron provider default.
+    overlap_moe_expert_parallel_comm: NotRequired[bool]
     # Can be used only with 'alltoall' token dispatcher
     moe_shared_expert_overlap: bool
     # Create gloo process groups during Megatron distributed init.

@@ -50,6 +50,36 @@ def configure_vllm_for_router_replay(config: PolicyConfig) -> None:
     vllm_kwargs["enable_return_routed_experts"] = True
 
 
+def validate_router_replay_cuda_graph_scope(
+    *,
+    enabled: bool,
+    cuda_graph_impl: object,
+    cuda_graph_modules: object,
+) -> None:
+    """Reject graph scopes whose captured router cannot consume replay routes."""
+    if not enabled or cuda_graph_impl == "none":
+        return
+
+    if isinstance(cuda_graph_modules, str):
+        configured_modules: Iterable[object] = (
+            module.strip() for module in cuda_graph_modules.split(",") if module.strip()
+        )
+    elif isinstance(cuda_graph_modules, (list, tuple)):
+        configured_modules = cuda_graph_modules
+    else:
+        configured_modules = ()
+    modules = {getattr(module, "name", module) for module in configured_modules}
+    captures_router = not modules or bool(
+        modules.intersection({"moe", "moe_router", "moe_preprocess"})
+    )
+    if captures_router:
+        raise ValueError(
+            "RouterReplay cannot be combined with a CUDA Graph scope that "
+            "captures the MoE router; replay routes are not graph-bank-owned "
+            "inputs yet."
+        )
+
+
 def validate_router_replay_config(config: PolicyConfig) -> None:
     if not router_replay_enabled(config):
         return
@@ -61,6 +91,12 @@ def validate_router_replay_config(config: PolicyConfig) -> None:
         raise ValueError("router_replay.enabled requires vLLM generation.")
     if not megatron_cfg.get("enabled", False):
         raise ValueError("router_replay.enabled requires the Megatron policy backend.")
+
+    validate_router_replay_cuda_graph_scope(
+        enabled=True,
+        cuda_graph_impl=megatron_cfg.get("cuda_graph_impl", "none"),
+        cuda_graph_modules=megatron_cfg.get("cuda_graph_modules"),
+    )
 
     vpp_size = megatron_cfg.get("virtual_pipeline_model_parallel_size")
     if vpp_size not in (None, 1):

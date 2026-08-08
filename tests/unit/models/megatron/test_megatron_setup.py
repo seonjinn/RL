@@ -708,6 +708,45 @@ class TestApplyMoeConfig:
             == NotRequired[float | None]
         )
 
+    def test_overlap_moe_expert_parallel_comm_is_an_optional_typed_key(
+        self,
+    ) -> None:
+        """An explicit YAML value must be representable without changing defaults."""
+        from typing import NotRequired
+
+        from nemo_rl.models.policy import MegatronConfig
+
+        assert (
+            MegatronConfig.__annotations__["overlap_moe_expert_parallel_comm"]
+            == NotRequired[bool]
+        )
+
+    @pytest.mark.parametrize("value", [True, False])
+    def test_overlap_moe_expert_parallel_comm_forwards_explicit_value(
+        self, value: bool
+    ) -> None:
+        """The worker must observe the overlap value requested by the recipe."""
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        model_cfg = SimpleNamespace(overlap_moe_expert_parallel_comm=not value)
+        config = self._base_moe_cfg(overlap_moe_expert_parallel_comm=value)
+
+        _apply_moe_config(model_cfg, config)
+
+        assert model_cfg.overlap_moe_expert_parallel_comm is value
+
+    def test_omitted_overlap_moe_expert_parallel_comm_preserves_default(
+        self,
+    ) -> None:
+        """Omission must not overwrite the provider or checkpoint default."""
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        model_cfg = SimpleNamespace(overlap_moe_expert_parallel_comm=True)
+
+        _apply_moe_config(model_cfg, self._base_moe_cfg())
+
+        assert model_cfg.overlap_moe_expert_parallel_comm is True
+
     def test_hybridep_padding_is_an_optional_typed_megatron_config_key(
         self,
     ) -> None:
@@ -717,9 +756,7 @@ class TestApplyMoeConfig:
         from nemo_rl.models.policy import MegatronConfig
 
         assert (
-            MegatronConfig.__annotations__[
-                "moe_hybridep_pad_uneven_dispatch_inputs"
-            ]
+            MegatronConfig.__annotations__["moe_hybridep_pad_uneven_dispatch_inputs"]
             == NotRequired[bool]
         )
 
@@ -728,12 +765,8 @@ class TestApplyMoeConfig:
         """The effective MCore config must use the explicitly requested value."""
         from nemo_rl.models.megatron.setup import _apply_moe_config
 
-        model_cfg = SimpleNamespace(
-            moe_hybridep_pad_uneven_dispatch_inputs=not value
-        )
-        config = self._base_moe_cfg(
-            moe_hybridep_pad_uneven_dispatch_inputs=value
-        )
+        model_cfg = SimpleNamespace(moe_hybridep_pad_uneven_dispatch_inputs=not value)
+        config = self._base_moe_cfg(moe_hybridep_pad_uneven_dispatch_inputs=value)
 
         _apply_moe_config(model_cfg, config)
 
@@ -1046,6 +1079,7 @@ class TestApplyPerformanceConfig:
             moe_expert_rank_capacity_factor=None,
             moe_pad_expert_input_to_capacity=False,
             moe_router_padding_for_quantization=False,
+            moe_router_load_balancing_type="none",
             moe_flex_dispatcher_backend=None,
             moe_hybridep_pad_uneven_dispatch_inputs=False,
             overlap_moe_expert_parallel_comm=False,
@@ -1086,9 +1120,7 @@ class TestApplyPerformanceConfig:
         model_cfg.attention_backend = AttnBackend.flash
 
         with (
-            patch(
-                "nemo_rl.models.megatron.setup.is_te_min_version", return_value=True
-            ),
+            patch("nemo_rl.models.megatron.setup.is_te_min_version", return_value=True),
             patch.dict(
                 os.environ,
                 {
@@ -1316,6 +1348,100 @@ class TestApplyPerformanceConfig:
             _apply_performance_config(model_cfg, config)
 
     @pytest.mark.parametrize(
+        "modules",
+        (["moe_router"], ["moe_router", "moe_preprocess"]),
+    )
+    @pytest.mark.parametrize(
+        "model_overrides",
+        (
+            {"moe_expert_capacity_factor": 1.25},
+            {"moe_expert_rank_capacity_factor": 1.25},
+            {"moe_pad_expert_input_to_capacity": True},
+        ),
+    )
+    def test_hybridep_packed_router_scopes_reject_capacity_modes(
+        self,
+        modules: list[str],
+        model_overrides: dict[str, object],
+    ) -> None:
+        """Physical THD padding must never consume a valid HybridEP route budget."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request(modules=modules)
+        model_cfg.moe_token_dispatcher_type = "flex"
+        model_cfg.moe_flex_dispatcher_backend = "hybridep"
+        config["megatron_cfg"].update(
+            {
+                "moe_token_dispatcher_type": "flex",
+                "moe_flex_dispatcher_backend": "hybridep",
+            }
+        )
+        for name, value in model_overrides.items():
+            setattr(model_cfg, name, value)
+
+        with pytest.raises(ValueError, match="dropless HybridEP"):
+            _apply_performance_config(model_cfg, config)
+
+    @pytest.mark.parametrize("balancing_type", ["quantile", "sinkhorn"])
+    def test_fixed_thd_hybridep_router_rejects_padding_unsafe_balancing(
+        self, balancing_type: str
+    ) -> None:
+        """These routers currently include or reject structural padding rows."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request(modules=["moe_router"])
+        model_cfg.moe_token_dispatcher_type = "flex"
+        model_cfg.moe_flex_dispatcher_backend = "hybridep"
+        model_cfg.moe_router_load_balancing_type = balancing_type
+        config["megatron_cfg"].update(
+            {
+                "moe_token_dispatcher_type": "flex",
+                "moe_flex_dispatcher_backend": "hybridep",
+                "moe_router_load_balancing_type": balancing_type,
+            }
+        )
+
+        with pytest.raises(ValueError, match="padding-aware"):
+            _apply_performance_config(model_cfg, config)
+
+    @pytest.mark.parametrize("modules", (["moe"], []))
+    def test_whole_moe_graph_rejects_padding_unsafe_balancing(
+        self, modules: list[str]
+    ) -> None:
+        """Whole-MoE capture includes the router and must share its safety gates."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request(modules=modules)
+        model_cfg.moe_pad_expert_input_to_capacity = True
+        model_cfg.moe_expert_capacity_factor = 1.0
+        model_cfg.moe_router_load_balancing_type = "quantile"
+
+        with pytest.raises(ValueError, match="padding-aware"):
+            _apply_performance_config(model_cfg, config)
+
+    @pytest.mark.parametrize("modules", (["moe"], []))
+    def test_whole_moe_hybridep_graph_rejects_capacity_routing(
+        self, modules: list[str]
+    ) -> None:
+        """HybridEP graph capture remains dropless even for whole-MoE scopes."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request(modules=modules)
+        model_cfg.moe_pad_expert_input_to_capacity = True
+        model_cfg.moe_expert_capacity_factor = 1.0
+        model_cfg.moe_token_dispatcher_type = "flex"
+        model_cfg.moe_flex_dispatcher_backend = "hybridep"
+        config["megatron_cfg"].update(
+            {
+                "moe_token_dispatcher_type": "flex",
+                "moe_flex_dispatcher_backend": "hybridep",
+            }
+        )
+
+        with pytest.raises(ValueError, match="dropless HybridEP"):
+            _apply_performance_config(model_cfg, config)
+
+    @pytest.mark.parametrize(
         "model_overrides,error",
         [
             (
@@ -1417,6 +1543,18 @@ class TestApplyPerformanceConfig:
             _apply_performance_config(model_cfg, config)
 
         assert model_cfg.use_te_rng_tracker is True
+
+    def test_inherited_te_graph_impl_cannot_bypass_router_replay_gate(self) -> None:
+        """Provider graph defaults must be checked against RouterReplay."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request(modules=["moe_router"])
+        model_cfg.cuda_graph_impl = "transformer_engine"
+        del config["megatron_cfg"]["cuda_graph_impl"]
+        config["router_replay"] = {"enabled": True}
+
+        with pytest.raises(ValueError, match="RouterReplay.*CUDA Graph"):
+            _apply_performance_config(model_cfg, config)
 
     def test_explicit_none_disables_inherited_te_graph_impl(self) -> None:
         """A policy override may intentionally disable a provider graph default."""

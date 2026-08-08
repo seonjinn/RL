@@ -112,12 +112,16 @@ def _load_experiment_module(name: str) -> ModuleType:
 def _campaign_leaf_harness(tmp_path: Path) -> tuple[Path, Path, Path, dict[str, str]]:
     root = tmp_path / "repo"
     experiment = root / "experiments" / "cuda_graph" / EXPERIMENT_DIR.name
-    shutil.copytree(EXPERIMENT_DIR, experiment, ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(
+        EXPERIMENT_DIR, experiment, ignore=shutil.ignore_patterns("__pycache__")
+    )
     (root / "docker").mkdir(parents=True)
     (root / "tools").mkdir()
     shutil.copy2(REPO_ROOT / ".python-version", root / ".python-version")
     shutil.copy2(REPO_ROOT / "docker" / "Dockerfile", root / "docker" / "Dockerfile")
-    shutil.copy2(REPO_ROOT / "tools" / "check_r3_trace.py", root / "tools" / "check_r3_trace.py")
+    shutil.copy2(
+        REPO_ROOT / "tools" / "check_r3_trace.py", root / "tools" / "check_r3_trace.py"
+    )
     runtime = tmp_path / "runtime.json"
     runtime.write_text("{}")
     provenance = {
@@ -131,14 +135,24 @@ def _campaign_leaf_harness(tmp_path: Path) -> tuple[Path, Path, Path, dict[str, 
     profile.write_text(
         "\n".join(
             (
-                "PROFILE_ID=unit", "ACCOUNT=unit", "PARTITION=batch", "CONTAINER=/tmp/container.sqsh",
+                "PROFILE_ID=unit",
+                "ACCOUNT=unit",
+                "PARTITION=batch",
+                "CONTAINER=/tmp/container.sqsh",
                 f"CONTAINER_SHA256={provenance['container_sha256']}",
                 f"MOUNTS={tmp_path}:{tmp_path}",
-                "SBATCH_GPUS_PER_NODE=4", "SBATCH_GRES=gpu:4", "SBATCH_SEGMENT_SIZE=", "TIME_LIMIT=01:00:00",
-                f"RUNTIME_ATTESTATION={runtime}", "RUNTIME_PREFLIGHT_JOB_ID=1", f"EXPECTED_TE_SHA={'e' * 40}",
+                "SBATCH_GPUS_PER_NODE=4",
+                "SBATCH_GRES=gpu:4",
+                "SBATCH_SEGMENT_SIZE=",
+                "TIME_LIMIT=01:00:00",
+                f"RUNTIME_ATTESTATION={runtime}",
+                "RUNTIME_PREFLIGHT_JOB_ID=1",
+                f"EXPECTED_TE_SHA={'e' * 40}",
                 f"EXPECTED_TE_VERSION_BASE_SHA={'f' * 40}",
-                f"EXPECTED_NEMORL_SHA={provenance['nemo_rl_commit']}", f"EXPECTED_BRIDGE_SHA={provenance['bridge_commit']}",
-                f"EXPECTED_MCORE_SHA={provenance['mcore_commit']}", "",
+                f"EXPECTED_NEMORL_SHA={provenance['nemo_rl_commit']}",
+                f"EXPECTED_BRIDGE_SHA={provenance['bridge_commit']}",
+                f"EXPECTED_MCORE_SHA={provenance['mcore_commit']}",
+                "",
             )
         )
     )
@@ -150,16 +164,42 @@ def _write_campaign_gate(path: Path, payload: dict[str, object]) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _run_campaign_leaf(root: Path, experiment: Path, leaf: str, **environment: str) -> subprocess.CompletedProcess[str]:
+def _run_campaign_leaf(
+    root: Path, experiment: Path, leaf: str, **environment: str
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    env.update({"CLUSTER": "oci-hsg", "MODE": "nemorl", "TEST_ONLY": "1", "RUN_TAG": "unit", **environment})
-    return subprocess.run(["bash", str(experiment / "conditions" / leaf)], cwd=root, env=env, check=False, capture_output=True, text=True)
+    env.update(
+        {
+            "CLUSTER": "oci-hsg",
+            "MODE": "nemorl",
+            "TEST_ONLY": "1",
+            "RUN_TAG": "unit",
+            **environment,
+        }
+    )
+    return subprocess.run(
+        ["bash", str(experiment / "conditions" / leaf)],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
 
-def _run_copied_experiment_script(root: Path, experiment: Path, relative_path: str, **environment: str) -> subprocess.CompletedProcess[str]:
+def _run_copied_experiment_script(
+    root: Path, experiment: Path, relative_path: str, **environment: str
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.update(environment)
-    return subprocess.run(["bash", str(experiment / relative_path)], cwd=root, env=env, check=False, capture_output=True, text=True)
+    return subprocess.run(
+        ["bash", str(experiment / relative_path)],
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
 
 def _validate_campaign_gate(
@@ -173,14 +213,27 @@ def _validate_campaign_gate(
     arm: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = [
-        "python3", str(experiment / "validate_campaign_gate.py"), kind,
-        "--gate-file", str(gate_file), "--gate-sha256", gate_sha256,
-        "--model", model, "--profile-file", str(profile),
-        "--profile-dir", str(experiment / "profiles"), "--cluster", "oci-hsg",
+        "python3",
+        str(experiment / "validate_campaign_gate.py"),
+        kind,
+        "--gate-file",
+        str(gate_file),
+        "--gate-sha256",
+        gate_sha256,
+        "--model",
+        model,
+        "--profile-file",
+        str(profile),
+        "--profile-dir",
+        str(experiment / "profiles"),
+        "--cluster",
+        "oci-hsg",
     ]
     if arm is not None:
         command.extend(("--arm", arm))
-    return subprocess.run(command, cwd=root, check=False, capture_output=True, text=True)
+    return subprocess.run(
+        command, cwd=root, check=False, capture_output=True, text=True
+    )
 
 
 def test_direct_qwen235_r3_leaf_rejects_self_attested_evidence(
@@ -188,37 +241,111 @@ def test_direct_qwen235_r3_leaf_rejects_self_attested_evidence(
 ) -> None:
     root, experiment, profile, provenance = _campaign_leaf_harness(tmp_path)
     r3 = {
-        "gate_type": "qwen235_r3_routes", "status": "passed", "model": "qwen3_235b", "slurm_job_id": 1,
+        "gate_type": "qwen235_r3_routes",
+        "status": "passed",
+        "model": "qwen3_235b",
+        "slurm_job_id": 1,
         "provenance": provenance,
-        "diagnostic": {"model": "Qwen/Qwen3-235B-A22B", "num_prompts": 128, "max_tokens": 256, "max_model_len": 8192, "prompt_repeat": 128, "tensor_parallel_size": 8, "pipeline_parallel_size": 1, "dtype": "bfloat16", "gpu_memory_utilization": 0.4, "enable_prefix_caching": False, "enable_chunked_prefill": False, "enforce_eager": False, "moe_backend": "triton", "num_outputs": 128, "num_failures": 0},
+        "diagnostic": {
+            "model": "Qwen/Qwen3-235B-A22B",
+            "num_prompts": 128,
+            "max_tokens": 256,
+            "max_model_len": 8192,
+            "prompt_repeat": 128,
+            "tensor_parallel_size": 8,
+            "pipeline_parallel_size": 1,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.4,
+            "enable_prefix_caching": False,
+            "enable_chunked_prefill": False,
+            "enforce_eager": False,
+            "moe_backend": "triton",
+            "num_outputs": 128,
+            "num_failures": 0,
+        },
     }
     r3_file = tmp_path / "r3.json"
     r3_sha = _write_campaign_gate(r3_file, r3)
-    result = _run_campaign_leaf(root, experiment, "qwen_C_baseline_r3on.sh", MODEL="qwen3_235b", PROFILE_FILE=str(profile), R3_PREFLIGHT_FILE=str(r3_file), R3_PREFLIGHT_SHA256=r3_sha)
+    result = _run_campaign_leaf(
+        root,
+        experiment,
+        "qwen_C_baseline_r3on.sh",
+        MODEL="qwen3_235b",
+        PROFILE_FILE=str(profile),
+        R3_PREFLIGHT_FILE=str(r3_file),
+        R3_PREFLIGHT_SHA256=r3_sha,
+    )
     assert result.returncode == 2
     assert "content-bound Slurm diagnostic producer" in result.stderr
     assert "SBATCH:" not in result.stdout
-    missing = _run_campaign_leaf(root, experiment, "qwen_C_baseline_r3on.sh", MODEL="qwen3_235b", PROFILE_FILE=str(profile))
+    missing = _run_campaign_leaf(
+        root,
+        experiment,
+        "qwen_C_baseline_r3on.sh",
+        MODEL="qwen3_235b",
+        PROFILE_FILE=str(profile),
+    )
     assert missing.returncode == 2
     assert "SBATCH:" not in missing.stdout
 
 
-def test_direct_qwen30_performance_requires_and_accepts_promotion_without_digest(tmp_path: Path) -> None:
+def test_direct_qwen30_performance_requires_and_accepts_promotion_without_digest(
+    tmp_path: Path,
+) -> None:
     root, experiment, profile, provenance = _campaign_leaf_harness(tmp_path)
     promotion = {
-        "gate_type": "smoke_promotion", "status": "passed", "model": "qwen3_30ba3b", "phase": "smoke", "steps": 5,
+        "gate_type": "smoke_promotion",
+        "status": "passed",
+        "model": "qwen3_30ba3b",
+        "phase": "smoke",
+        "steps": 5,
         "provenance": provenance,
-        "arms": {"A": {"job_id": 1, "status": "passed", "completed_steps": 5, "metrics_finite": True, "correctness_passed": True, "undeclared_fallbacks": 0, "router_replay": "off", "graph_coverage_status": "not_applicable", "r3_trace_status": "not_applicable"}},
+        "arms": {
+            "A": {
+                "job_id": 1,
+                "status": "passed",
+                "completed_steps": 5,
+                "metrics_finite": True,
+                "correctness_passed": True,
+                "undeclared_fallbacks": 0,
+                "router_replay": "off",
+                "graph_coverage_status": "not_applicable",
+                "r3_trace_status": "not_applicable",
+            }
+        },
     }
     gate = tmp_path / "promotion.json"
     digest = _write_campaign_gate(gate, promotion)
-    result = _run_campaign_leaf(root, experiment, "qwen_A_baseline_r3off.sh", MODEL="qwen3_30ba3b", STEPS="20", PROFILE_FILE=str(profile), SMOKE_PROMOTION_FILE=str(gate), SMOKE_PROMOTION_SHA256=digest)
+    result = _run_campaign_leaf(
+        root,
+        experiment,
+        "qwen_A_baseline_r3off.sh",
+        MODEL="qwen3_30ba3b",
+        STEPS="20",
+        PROFILE_FILE=str(profile),
+        SMOKE_PROMOTION_FILE=str(gate),
+        SMOKE_PROMOTION_SHA256=digest,
+    )
     assert result.returncode == 0, result.stderr
     assert "SBATCH:" in result.stdout
-    missing = _run_campaign_leaf(root, experiment, "qwen_A_baseline_r3off.sh", MODEL="qwen3_30ba3b", STEPS="20", PROFILE_FILE=str(profile))
+    missing = _run_campaign_leaf(
+        root,
+        experiment,
+        "qwen_A_baseline_r3off.sh",
+        MODEL="qwen3_30ba3b",
+        STEPS="20",
+        PROFILE_FILE=str(profile),
+    )
     assert missing.returncode == 2
     assert "SBATCH:" not in missing.stdout
-    mismatched = _run_campaign_leaf(root, experiment, "qwen_A_baseline_r3off.sh", MODEL="qwen3_30ba3b", PROFILE_FILE=str(profile), VALIDATED_PROFILE_SHA256="0" * 64)
+    mismatched = _run_campaign_leaf(
+        root,
+        experiment,
+        "qwen_A_baseline_r3off.sh",
+        MODEL="qwen3_30ba3b",
+        PROFILE_FILE=str(profile),
+        VALIDATED_PROFILE_SHA256="0" * 64,
+    )
     assert mismatched.returncode == 2
     assert "SBATCH:" not in mismatched.stdout
 
@@ -228,27 +355,79 @@ def test_direct_qwen235_performance_rejects_self_attested_r3_gate(
 ) -> None:
     root, experiment, profile, provenance = _campaign_leaf_harness(tmp_path)
     r3 = {
-        "gate_type": "qwen235_r3_routes", "status": "passed", "model": "qwen3_235b", "slurm_job_id": 1,
+        "gate_type": "qwen235_r3_routes",
+        "status": "passed",
+        "model": "qwen3_235b",
+        "slurm_job_id": 1,
         "provenance": provenance,
-        "diagnostic": {"model": "Qwen/Qwen3-235B-A22B", "num_prompts": 128, "max_tokens": 256, "max_model_len": 8192, "prompt_repeat": 128, "tensor_parallel_size": 8, "pipeline_parallel_size": 1, "dtype": "bfloat16", "gpu_memory_utilization": 0.4, "enable_prefix_caching": False, "enable_chunked_prefill": False, "enforce_eager": False, "moe_backend": "triton", "num_outputs": 128, "num_failures": 0},
+        "diagnostic": {
+            "model": "Qwen/Qwen3-235B-A22B",
+            "num_prompts": 128,
+            "max_tokens": 256,
+            "max_model_len": 8192,
+            "prompt_repeat": 128,
+            "tensor_parallel_size": 8,
+            "pipeline_parallel_size": 1,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.4,
+            "enable_prefix_caching": False,
+            "enable_chunked_prefill": False,
+            "enforce_eager": False,
+            "moe_backend": "triton",
+            "num_outputs": 128,
+            "num_failures": 0,
+        },
     }
     promotion = {
-        "gate_type": "smoke_promotion", "status": "passed", "model": "qwen3_235b", "phase": "smoke", "steps": 5,
+        "gate_type": "smoke_promotion",
+        "status": "passed",
+        "model": "qwen3_235b",
+        "phase": "smoke",
+        "steps": 5,
         "provenance": provenance,
-        "arms": {"C": {"job_id": 1, "status": "passed", "completed_steps": 5, "metrics_finite": True, "correctness_passed": True, "undeclared_fallbacks": 0, "router_replay": "on", "graph_coverage_status": "not_applicable", "r3_trace_status": "passed"}},
+        "arms": {
+            "C": {
+                "job_id": 1,
+                "status": "passed",
+                "completed_steps": 5,
+                "metrics_finite": True,
+                "correctness_passed": True,
+                "undeclared_fallbacks": 0,
+                "router_replay": "on",
+                "graph_coverage_status": "not_applicable",
+                "r3_trace_status": "passed",
+            }
+        },
     }
     r3_file = tmp_path / "r3.json"
     promotion_file = tmp_path / "promotion.json"
     r3_sha = _write_campaign_gate(r3_file, r3)
     promotion_sha = _write_campaign_gate(promotion_file, promotion)
-    assert _validate_campaign_gate(
-        root, experiment, "promotion", promotion_file, promotion_sha, "qwen3_235b", profile, arm="C",
-    ).returncode == 0
+    assert (
+        _validate_campaign_gate(
+            root,
+            experiment,
+            "promotion",
+            promotion_file,
+            promotion_sha,
+            "qwen3_235b",
+            profile,
+            arm="C",
+        ).returncode
+        == 0
+    )
 
     result = _run_campaign_leaf(
-        root, experiment, "qwen_C_baseline_r3on.sh", MODEL="qwen3_235b", STEPS="20", PROFILE_FILE=str(profile),
-        R3_PREFLIGHT_FILE=str(r3_file), R3_PREFLIGHT_SHA256=r3_sha,
-        SMOKE_PROMOTION_FILE=str(promotion_file), SMOKE_PROMOTION_SHA256=promotion_sha,
+        root,
+        experiment,
+        "qwen_C_baseline_r3on.sh",
+        MODEL="qwen3_235b",
+        STEPS="20",
+        PROFILE_FILE=str(profile),
+        R3_PREFLIGHT_FILE=str(r3_file),
+        R3_PREFLIGHT_SHA256=r3_sha,
+        SMOKE_PROMOTION_FILE=str(promotion_file),
+        SMOKE_PROMOTION_SHA256=promotion_sha,
     )
 
     assert result.returncode == 2
@@ -260,7 +439,11 @@ def test_direct_qwen30_smoke_accepts_explicit_profile_file(tmp_path: Path) -> No
     root, experiment, profile, _ = _campaign_leaf_harness(tmp_path)
 
     result = _run_campaign_leaf(
-        root, experiment, "qwen_A_baseline_r3off.sh", MODEL="qwen3_30ba3b", PROFILE_FILE=str(profile),
+        root,
+        experiment,
+        "qwen_A_baseline_r3off.sh",
+        MODEL="qwen3_30ba3b",
+        PROFILE_FILE=str(profile),
     )
 
     assert result.returncode == 0, result.stderr
@@ -905,10 +1088,7 @@ fi
     assert "++policy.megatron_cfg.hybridep_use_mnnvl=true" in submissions
     assert "USE_MNNVL=1" not in submissions
     assert "NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN" not in submissions
-    assert (
-        "++policy.megatron_cfg.hybridep_num_ranks_per_nvlink_domain=8"
-        in submissions
-    )
+    assert "++policy.megatron_cfg.hybridep_num_ranks_per_nvlink_domain=8" in submissions
     assert "policy.megatron_cfg.moe_token_dispatcher_type=flex" in submissions
     assert "++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep" in submissions
     assert (
@@ -1144,13 +1324,20 @@ def test_selector_tensorboard_policy_is_rendered_verbatim() -> None:
 
     qwen235 = shlex.split(
         module.render_scope_command(
-            model="qwen3_235b", scope=(), steps=5, run_name="qwen235-tb",
+            model="qwen3_235b",
+            scope=(),
+            steps=5,
+            run_name="qwen235-tb",
             cuda_graph_enabled=False,
         )
     )
     nano = shlex.split(
         module.render_scope_command(
-            model="nano", scope=(), steps=5, run_name="nano-tb", cuda_graph_enabled=False,
+            model="nano",
+            scope=(),
+            steps=5,
+            run_name="nano-tb",
+            cuda_graph_enabled=False,
         )
     )
 
@@ -1167,10 +1354,15 @@ def test_selector_tensorboard_policy_is_rendered_verbatim() -> None:
     ),
 )
 def test_dry_run_flags_fail_before_any_rendered_output(
-    environment: dict[str, str], error: str,
+    environment: dict[str, str],
+    error: str,
 ) -> None:
     result = _run_script(
-        "scopes/17_attn.sh", CLUSTER="oci-hsg", MODEL="nano", MODE="nemorl", **environment,
+        "scopes/17_attn.sh",
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        **environment,
     )
 
     assert result.returncode == 2
@@ -1189,7 +1381,11 @@ def test_dry_run_flags_fail_before_any_rendered_output(
     ),
 )
 def test_r3_wrapper_records_atomic_terminal_result(
-    tmp_path: Path, driver: str, checker_exit: str, expected_status: str, expected_exit: int,
+    tmp_path: Path,
+    driver: str,
+    checker_exit: str,
+    expected_status: str,
+    expected_exit: int,
 ) -> None:
     root = tmp_path / "repo"
     tools = root / "tools"
@@ -1200,7 +1396,7 @@ def test_r3_wrapper_records_atomic_terminal_result(
     fake_uv = tmp_path / "uv"
     fake_uv.write_text(
         "#!/bin/bash\n"
-        "printf invoked >\"${CHECKER_MARKER:?}\"\n"
+        'printf invoked >"${CHECKER_MARKER:?}"\n'
         "[[ \"$1 $2 $3\" == 'run python -' ]] || exit 70\n"
         "[[ \"$*\" == *'--require-forward-verify'* ]] || exit 71\n"
         "[[ \"$*\" == *'--require-cp-identity'* ]] || exit 72\n"
@@ -1213,8 +1409,27 @@ def test_r3_wrapper_records_atomic_terminal_result(
     wrapper = EXPERIMENT_DIR / "scripts" / "run_r3_validated_command.sh"
 
     result = subprocess.run(
-        ["bash", str(wrapper), sys.executable, str(log_dir), str(root), str(fake_uv), str(driver_file), hashlib.sha256(driver_file.read_bytes()).hexdigest(), hashlib.sha256((tools / "check_r3_trace.py").read_bytes()).hexdigest()], cwd=root, check=False, capture_output=True, text=True,
-        env={**os.environ, "NRL_SLURM_JOB_ID": "44", "NRL_SLURM_RESTART_COUNT": "3", "CHECKER_MARKER": str(marker)},
+        [
+            "bash",
+            str(wrapper),
+            sys.executable,
+            str(log_dir),
+            str(root),
+            str(fake_uv),
+            str(driver_file),
+            hashlib.sha256(driver_file.read_bytes()).hexdigest(),
+            hashlib.sha256((tools / "check_r3_trace.py").read_bytes()).hexdigest(),
+        ],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "NRL_SLURM_JOB_ID": "44",
+            "NRL_SLURM_RESTART_COUNT": "3",
+            "CHECKER_MARKER": str(marker),
+        },
     )
 
     attempt = log_dir / "r3-validation-job-44-restart-3"
@@ -1227,8 +1442,14 @@ def test_r3_wrapper_records_atomic_terminal_result(
     assert record["checker_source_path"] == str(tools / "check_r3_trace.py")
     assert record["checker_expected_sha256"] == record["checker_actual_sha256"]
     assert (attempt / "r3-validation.env").is_file()
-    r3_environment = dict(line.split("=", 1) for line in (attempt / "r3-validation.env").read_text().splitlines())
-    assert base64.b64decode(r3_environment["trace_dir_base64"]).decode() == record["trace_dir"]
+    r3_environment = dict(
+        line.split("=", 1)
+        for line in (attempt / "r3-validation.env").read_text().splitlines()
+    )
+    assert (
+        base64.b64decode(r3_environment["trace_dir_base64"]).decode()
+        == record["trace_dir"]
+    )
     assert base64.b64decode(r3_environment["driver_command_base64"]).decode() == driver
     assert r3_environment["checker_sha256"] == record["checker_actual_sha256"]
     assert marker.exists() is (expected_status != "not_run_driver_failed")
@@ -1238,12 +1459,22 @@ def test_r3_wrapper_records_atomic_terminal_result(
 
 def test_router_replay_renders_wrapper_but_r3off_keeps_driver() -> None:
     replay = _run_script(
-        "scopes/17_attn.sh", CLUSTER="oci-hsg", MODEL="qwen3_30ba3b", MODE="nemorl",
-        ROUTER_REPLAY="on", TEST_ONLY="1", RUN_TAG="r3-wrapper",
+        "scopes/17_attn.sh",
+        CLUSTER="oci-hsg",
+        MODEL="qwen3_30ba3b",
+        MODE="nemorl",
+        ROUTER_REPLAY="on",
+        TEST_ONLY="1",
+        RUN_TAG="r3-wrapper",
     )
     direct = _run_script(
-        "scopes/17_attn.sh", CLUSTER="oci-hsg", MODEL="qwen3_30ba3b", MODE="nemorl",
-        ROUTER_REPLAY="off", TEST_ONLY="1", RUN_TAG="r3-direct",
+        "scopes/17_attn.sh",
+        CLUSTER="oci-hsg",
+        MODEL="qwen3_30ba3b",
+        MODE="nemorl",
+        ROUTER_REPLAY="off",
+        TEST_ONLY="1",
+        RUN_TAG="r3-direct",
     )
 
     assert replay.returncode == 0, replay.stderr
@@ -1254,7 +1485,9 @@ def test_router_replay_renders_wrapper_but_r3off_keeps_driver() -> None:
     assert "examples/run_grpo.py" in direct.stdout
 
 
-def test_r3_wrapper_rejects_replaced_driver_bytes_before_execution(tmp_path: Path) -> None:
+def test_r3_wrapper_rejects_replaced_driver_bytes_before_execution(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "repo"
     (root / "tools").mkdir(parents=True)
     (root / "tools" / "check_r3_trace.py").write_text("# fixture\n")
@@ -1267,8 +1500,20 @@ def test_r3_wrapper_rejects_replaced_driver_bytes_before_execution(tmp_path: Pat
     wrapper = EXPERIMENT_DIR / "scripts" / "run_r3_validated_command.sh"
 
     result = subprocess.run(
-        ["bash", str(wrapper), sys.executable, str(log_dir), str(root), "/bin/true", str(driver), expected, "0" * 64],
-        check=False, capture_output=True, text=True,
+        [
+            "bash",
+            str(wrapper),
+            sys.executable,
+            str(log_dir),
+            str(root),
+            "/bin/true",
+            str(driver),
+            expected,
+            "0" * 64,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
         env={**os.environ, "NRL_SLURM_JOB_ID": "1"},
     )
 
@@ -1277,7 +1522,9 @@ def test_r3_wrapper_rejects_replaced_driver_bytes_before_execution(tmp_path: Pat
     assert not list(log_dir.rglob("r3-validation.json"))
 
 
-def test_r3_wrapper_binds_checker_bytes_and_exact_driver_environment(tmp_path: Path) -> None:
+def test_r3_wrapper_binds_checker_bytes_and_exact_driver_environment(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "repo"
     tools = root / "tools"
     tools.mkdir(parents=True)
@@ -1287,34 +1534,69 @@ def test_r3_wrapper_binds_checker_bytes_and_exact_driver_environment(tmp_path: P
     driver_environment = tmp_path / "driver.env"
     injected = tmp_path / "bash-env-injected"
     bash_env = tmp_path / "bash-env.sh"
-    bash_env.write_text("if [[ ${NRL_R3_TRACE:-0} == 1 ]]; then " f"printf injected >{shlex.quote(str(injected))}; fi\n")
+    bash_env.write_text(
+        "if [[ ${NRL_R3_TRACE:-0} == 1 ]]; then "
+        f"printf injected >{shlex.quote(str(injected))}; fi\n"
+    )
     driver = tmp_path / "driver.sh"
     driver_bytes = (
-        "printf '%s\\n' \"${NRL_R3_TRACE_DIR}\" \"${NRL_R3_TRACE_STEPS}\" "
-        "\"${NRL_R3_TRACE_SAMPLES}\" \"${NRL_R3_TRACE_MICROBATCHES}\" "
-        "\"${NRL_R3_TRACE}\" \"${NRL_R3_TRACE_VERIFY_FORWARD}\" "
-        "\"${NRL_ROUTER_REPLAY_VALIDATE}\" \"${BASH_ENV-unset}\" \"${ENV-unset}\" "
-        ">\"${DRIVER_ENV_CAPTURE}\"\n"
+        'printf \'%s\\n\' "${NRL_R3_TRACE_DIR}" "${NRL_R3_TRACE_STEPS}" '
+        '"${NRL_R3_TRACE_SAMPLES}" "${NRL_R3_TRACE_MICROBATCHES}" '
+        '"${NRL_R3_TRACE}" "${NRL_R3_TRACE_VERIFY_FORWARD}" '
+        '"${NRL_ROUTER_REPLAY_VALIDATE}" "${BASH_ENV-unset}" "${ENV-unset}" '
+        '>"${DRIVER_ENV_CAPTURE}"\n'
         f"printf mutated >{shlex.quote(str(checker))}"
     ).encode()
     driver.write_bytes(driver_bytes)
     fake_uv = tmp_path / "uv"
-    fake_uv.write_text("#!/bin/bash\n[[ \"$1 $2 $3\" == 'run python -' ]] || exit 70\ncat >\"${CHECKER_CAPTURE:?}\"\n")
+    fake_uv.write_text(
+        '#!/bin/bash\n[[ "$1 $2 $3" == \'run python -\' ]] || exit 70\ncat >"${CHECKER_CAPTURE:?}"\n'
+    )
     fake_uv.chmod(0o755)
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
 
     result = subprocess.run(
-        ["bash", str(EXPERIMENT_DIR / "scripts" / "run_r3_validated_command.sh"), sys.executable, str(log_dir), str(root), str(fake_uv), str(driver), hashlib.sha256(driver_bytes).hexdigest(), hashlib.sha256(checker.read_bytes()).hexdigest()],
-        check=False, capture_output=True, text=True,
-        env={**os.environ, "NRL_SLURM_JOB_ID": "52", "DRIVER_ENV_CAPTURE": str(driver_environment), "CHECKER_CAPTURE": str(captured_checker), "BASH_ENV": str(bash_env), "ENV": str(bash_env)},
+        [
+            "bash",
+            str(EXPERIMENT_DIR / "scripts" / "run_r3_validated_command.sh"),
+            sys.executable,
+            str(log_dir),
+            str(root),
+            str(fake_uv),
+            str(driver),
+            hashlib.sha256(driver_bytes).hexdigest(),
+            hashlib.sha256(checker.read_bytes()).hexdigest(),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "NRL_SLURM_JOB_ID": "52",
+            "DRIVER_ENV_CAPTURE": str(driver_environment),
+            "CHECKER_CAPTURE": str(captured_checker),
+            "BASH_ENV": str(bash_env),
+            "ENV": str(bash_env),
+        },
     )
 
     assert result.returncode == 0, result.stderr
     assert captured_checker.read_bytes() == b"original checker bytes\n"
-    assert driver_environment.read_text().splitlines()[1:] == ["5", "2", "2", "1", "1", "1", "unset", "unset"]
+    assert driver_environment.read_text().splitlines()[1:] == [
+        "5",
+        "2",
+        "2",
+        "1",
+        "1",
+        "1",
+        "unset",
+        "unset",
+    ]
     assert not injected.exists()
-    record = json.loads((log_dir / "r3-validation-job-52-restart-0" / "r3-validation.json").read_text())
+    record = json.loads(
+        (log_dir / "r3-validation-job-52-restart-0" / "r3-validation.json").read_text()
+    )
     assert record["driver_command"] == driver_bytes.decode()
 
 
@@ -1330,8 +1612,21 @@ def test_r3_wrapper_rejects_checker_digest_before_driver(tmp_path: Path) -> None
     log_dir.mkdir()
 
     result = subprocess.run(
-        ["bash", str(EXPERIMENT_DIR / "scripts" / "run_r3_validated_command.sh"), sys.executable, str(log_dir), str(root), "/bin/true", str(driver), hashlib.sha256(driver.read_bytes()).hexdigest(), "0" * 64],
-        check=False, capture_output=True, text=True, env={**os.environ, "NRL_SLURM_JOB_ID": "53"},
+        [
+            "bash",
+            str(EXPERIMENT_DIR / "scripts" / "run_r3_validated_command.sh"),
+            sys.executable,
+            str(log_dir),
+            str(root),
+            "/bin/true",
+            str(driver),
+            hashlib.sha256(driver.read_bytes()).hexdigest(),
+            "0" * 64,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "NRL_SLURM_JOB_ID": "53"},
     )
 
     assert result.returncode == 2
@@ -1352,12 +1647,27 @@ def test_r3_wrapper_normalizes_signal_exit(tmp_path: Path) -> None:
     log_dir.mkdir()
 
     result = subprocess.run(
-        ["bash", str(EXPERIMENT_DIR / "scripts" / "run_r3_validated_command.sh"), sys.executable, str(log_dir), str(root), "/bin/true", str(driver), hashlib.sha256(driver.read_bytes()).hexdigest(), hashlib.sha256(checker.read_bytes()).hexdigest()],
-        check=False, capture_output=True, text=True, env={**os.environ, "NRL_SLURM_JOB_ID": "54"},
+        [
+            "bash",
+            str(EXPERIMENT_DIR / "scripts" / "run_r3_validated_command.sh"),
+            sys.executable,
+            str(log_dir),
+            str(root),
+            "/bin/true",
+            str(driver),
+            hashlib.sha256(driver.read_bytes()).hexdigest(),
+            hashlib.sha256(checker.read_bytes()).hexdigest(),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "NRL_SLURM_JOB_ID": "54"},
     )
 
     assert result.returncode == 143
-    record = json.loads((log_dir / "r3-validation-job-54-restart-0" / "r3-validation.json").read_text())
+    record = json.loads(
+        (log_dir / "r3-validation-job-54-restart-0" / "r3-validation.json").read_text()
+    )
     assert record["status"] == "not_run_driver_failed"
     assert record["driver_exit_code"] == 143
     assert record["driver_raw_return_code"] == -15
@@ -1365,13 +1675,21 @@ def test_r3_wrapper_normalizes_signal_exit(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("router_replay", ("off", "on"))
 def test_fake_sbatch_submission_writes_strict_complete_metadata(
-    tmp_path: Path, router_replay: str,
+    tmp_path: Path,
+    router_replay: str,
 ) -> None:
     root, experiment, profile, provenance = _campaign_leaf_harness(tmp_path)
     container = tmp_path / "container.sqsh"
     container.write_bytes(b"container")
     container_sha = hashlib.sha256(container.read_bytes()).hexdigest()
-    profile.write_text(profile.read_text().replace("CONTAINER=/tmp/container.sqsh", f"CONTAINER={container}").replace(f"CONTAINER_SHA256={provenance['container_sha256']}", f"CONTAINER_SHA256={container_sha}"))
+    profile.write_text(
+        profile.read_text()
+        .replace("CONTAINER=/tmp/container.sqsh", f"CONTAINER={container}")
+        .replace(
+            f"CONTAINER_SHA256={provenance['container_sha256']}",
+            f"CONTAINER_SHA256={container_sha}",
+        )
+    )
     verifier = experiment / "scripts" / "verify_source_provenance.sh"
     verifier.write_text("#!/bin/bash\nexit 0\n")
     verifier.chmod(0o755)
@@ -1383,18 +1701,37 @@ def test_fake_sbatch_submission_writes_strict_complete_metadata(
     logs = tmp_path / "logs"
 
     result = _run_copied_experiment_script(
-        root, experiment, "scopes/00_baseline_no_cg.sh", CLUSTER="oci-hsg",
-        MODEL="qwen3_30ba3b" if router_replay == "on" else "nano", MODE="nemorl",
-        STEPS="5", TEST_ONLY="0", SBATCH_TEST_ONLY="0", RUN_TAG=f"metadata-{router_replay}",
-        ROUTER_REPLAY=router_replay, PROFILE_FILE=str(profile), LOG_ROOT_OVERRIDE=str(logs),
+        root,
+        experiment,
+        "scopes/00_baseline_no_cg.sh",
+        CLUSTER="oci-hsg",
+        MODEL="qwen3_30ba3b" if router_replay == "on" else "nano",
+        MODE="nemorl",
+        STEPS="5",
+        TEST_ONLY="0",
+        SBATCH_TEST_ONLY="0",
+        RUN_TAG=f"metadata-{router_replay}",
+        ROUTER_REPLAY=router_replay,
+        PROFILE_FILE=str(profile),
+        LOG_ROOT_OVERRIDE=str(logs),
         PATH=f"{fake_bin}:{os.environ['PATH']}",
     )
 
     assert result.returncode == 0, result.stderr
     run_dir = next(logs.iterdir())
-    env = dict(line.split("=", 1) for line in (run_dir / "run-metadata.env").read_text().splitlines())
-    assert all(re.fullmatch(r'''[a-z][a-z0-9_]*=[^'"`$\\;|&<>]*''', line) for line in (run_dir / "run-metadata.env").read_text().splitlines())
-    decoded = {key.removesuffix("_base64"): base64.b64decode(value).decode() for key, value in env.items() if key.endswith("_base64")}
+    env = dict(
+        line.split("=", 1)
+        for line in (run_dir / "run-metadata.env").read_text().splitlines()
+    )
+    assert all(
+        re.fullmatch(r"""[a-z][a-z0-9_]*=[^'"`$\\;|&<>]*""", line)
+        for line in (run_dir / "run-metadata.env").read_text().splitlines()
+    )
+    decoded = {
+        key.removesuffix("_base64"): base64.b64decode(value).decode()
+        for key, value in env.items()
+        if key.endswith("_base64")
+    }
     record = json.loads((run_dir / "run-metadata.json").read_text())
     assert env["job_id"] == "321" and record["job_id"] == 321
     assert isinstance(record["sbatch_argv"], list)
@@ -1408,7 +1745,9 @@ def test_fake_sbatch_submission_writes_strict_complete_metadata(
     assert decoded["container_path"] == record["container_path"]
     assert record["runtime_preflight_job_id"] == 1
     assert isinstance(record["runtime_preflight_job_id"], int)
-    assert record["runtime_attestation_sha256"] == provenance["runtime_attestation_sha256"]
+    assert (
+        record["runtime_attestation_sha256"] == provenance["runtime_attestation_sha256"]
+    )
     assert decoded["runtime_attestation"] == record["runtime_attestation"]
     assert decoded["managed_python_install_dir"] == record["managed_python_install_dir"]
     assert decoded["uv_executable"] == record["uv_executable"]
@@ -1440,7 +1779,9 @@ def test_fake_sbatch_submission_writes_strict_complete_metadata(
     assert record["topology"] == expected_topology
     if router_replay == "on":
         assert decoded["r3_validation_record_pattern"]
-        assert decoded["r3_validation_record_initial_path"].endswith("/r3-validation-job-321-restart-0/r3-validation.json")
+        assert decoded["r3_validation_record_initial_path"].endswith(
+            "/r3-validation-job-321-restart-0/r3-validation.json"
+        )
         assert env["r3_driver_command_sha256"] == record["r3_driver_command_sha256"]
         assert env["r3_checker_sha256"] == record["r3_checker_sha256"]
         assert decoded["r3_checker_path"] == record["r3_checker_path"]
@@ -1455,7 +1796,14 @@ def test_fake_sbatch_scheduler_test_only_publishes_no_metadata(tmp_path: Path) -
     root, experiment, profile, provenance = _campaign_leaf_harness(tmp_path)
     container = tmp_path / "container.sqsh"
     container.write_bytes(b"container")
-    profile.write_text(profile.read_text().replace("CONTAINER=/tmp/container.sqsh", f"CONTAINER={container}").replace(f"CONTAINER_SHA256={provenance['container_sha256']}", f"CONTAINER_SHA256={hashlib.sha256(container.read_bytes()).hexdigest()}"))
+    profile.write_text(
+        profile.read_text()
+        .replace("CONTAINER=/tmp/container.sqsh", f"CONTAINER={container}")
+        .replace(
+            f"CONTAINER_SHA256={provenance['container_sha256']}",
+            f"CONTAINER_SHA256={hashlib.sha256(container.read_bytes()).hexdigest()}",
+        )
+    )
     verifier = experiment / "scripts" / "verify_source_provenance.sh"
     verifier.write_text("#!/bin/bash\nexit 0\n")
     verifier.chmod(0o755)
@@ -1463,26 +1811,52 @@ def test_fake_sbatch_scheduler_test_only_publishes_no_metadata(tmp_path: Path) -
     fake_bin.mkdir()
     invocation = tmp_path / "sbatch.argv"
     fake = fake_bin / "sbatch"
-    fake.write_text("#!/bin/bash\nprintf '%s\\n' \"$@\" >\"${SBATCH_INVOCATION:?}\"\nprintf 'sbatch: Job 321 would be submitted\\n'\n")
+    fake.write_text(
+        "#!/bin/bash\nprintf '%s\\n' \"$@\" >\"${SBATCH_INVOCATION:?}\"\nprintf 'sbatch: Job 321 would be submitted\\n'\n"
+    )
     fake.chmod(0o755)
     logs = tmp_path / "logs"
 
     result = _run_copied_experiment_script(
-        root, experiment, "scopes/00_baseline_no_cg.sh", CLUSTER="oci-hsg", MODEL="nano", MODE="nemorl", STEPS="5", TEST_ONLY="0", SBATCH_TEST_ONLY="1", RUN_TAG="scheduler-test-only", PROFILE_FILE=str(profile), LOG_ROOT_OVERRIDE=str(logs), PATH=f"{fake_bin}:{os.environ['PATH']}", SBATCH_INVOCATION=str(invocation),
+        root,
+        experiment,
+        "scopes/00_baseline_no_cg.sh",
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        STEPS="5",
+        TEST_ONLY="0",
+        SBATCH_TEST_ONLY="1",
+        RUN_TAG="scheduler-test-only",
+        PROFILE_FILE=str(profile),
+        LOG_ROOT_OVERRIDE=str(logs),
+        PATH=f"{fake_bin}:{os.environ['PATH']}",
+        SBATCH_INVOCATION=str(invocation),
     )
 
     assert result.returncode == 0, result.stderr
-    assert "SBATCH_TEST_ONLY_OUTPUT: sbatch: Job 321 would be submitted" in result.stdout
+    assert (
+        "SBATCH_TEST_ONLY_OUTPUT: sbatch: Job 321 would be submitted" in result.stdout
+    )
     assert "--test-only" in invocation.read_text().splitlines()
     assert not logs.exists()
 
 
 @pytest.mark.parametrize("sbatch_output", ("", "0", "1.5", "warning\n321"))
-def test_fake_sbatch_rejects_malformed_real_job_ids(tmp_path: Path, sbatch_output: str) -> None:
+def test_fake_sbatch_rejects_malformed_real_job_ids(
+    tmp_path: Path, sbatch_output: str
+) -> None:
     root, experiment, profile, provenance = _campaign_leaf_harness(tmp_path)
     container = tmp_path / "container.sqsh"
     container.write_bytes(b"container")
-    profile.write_text(profile.read_text().replace("CONTAINER=/tmp/container.sqsh", f"CONTAINER={container}").replace(f"CONTAINER_SHA256={provenance['container_sha256']}", f"CONTAINER_SHA256={hashlib.sha256(container.read_bytes()).hexdigest()}"))
+    profile.write_text(
+        profile.read_text()
+        .replace("CONTAINER=/tmp/container.sqsh", f"CONTAINER={container}")
+        .replace(
+            f"CONTAINER_SHA256={provenance['container_sha256']}",
+            f"CONTAINER_SHA256={hashlib.sha256(container.read_bytes()).hexdigest()}",
+        )
+    )
     verifier = experiment / "scripts" / "verify_source_provenance.sh"
     verifier.write_text("#!/bin/bash\nexit 0\n")
     verifier.chmod(0o755)
@@ -1492,7 +1866,21 @@ def test_fake_sbatch_rejects_malformed_real_job_ids(tmp_path: Path, sbatch_outpu
     fake.write_text("#!/bin/bash\nprintf '%s' \"${FAKE_SBATCH_OUTPUT-}\"\n")
     fake.chmod(0o755)
     logs = tmp_path / "logs"
-    result = _run_copied_experiment_script(root, experiment, "scopes/00_baseline_no_cg.sh", CLUSTER="oci-hsg", MODEL="nano", MODE="nemorl", STEPS="5", TEST_ONLY="0", RUN_TAG="malformed", PROFILE_FILE=str(profile), LOG_ROOT_OVERRIDE=str(logs), PATH=f"{fake_bin}:{os.environ['PATH']}", FAKE_SBATCH_OUTPUT=sbatch_output)
+    result = _run_copied_experiment_script(
+        root,
+        experiment,
+        "scopes/00_baseline_no_cg.sh",
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        STEPS="5",
+        TEST_ONLY="0",
+        RUN_TAG="malformed",
+        PROFILE_FILE=str(profile),
+        LOG_ROOT_OVERRIDE=str(logs),
+        PATH=f"{fake_bin}:{os.environ['PATH']}",
+        FAKE_SBATCH_OUTPUT=sbatch_output,
+    )
     assert result.returncode == 2
     assert "invalid job ID" in result.stderr
     assert not list(logs.rglob("run-metadata.*")) if logs.exists() else True
@@ -1523,6 +1911,15 @@ def test_router_replay_rendering_is_explicit_and_rejects_router_graphs() -> None
             run_name="unsafe",
             router_replay_enabled=True,
         )
+    for scope in (("moe",), ()):
+        with pytest.raises(ValueError, match="Router Replay.*router CUDA Graph"):
+            module.render_scope_command(
+                model="qwen3_30ba3b",
+                scope=scope,
+                steps=5,
+                run_name="unsafe-whole-moe",
+                router_replay_enabled=True,
+            )
 
 
 @pytest.mark.parametrize(
@@ -1580,21 +1977,30 @@ def test_router_replay_shell_validation_rejects_invalid_and_unsafe_graphs() -> N
         MODE="nemorl",
         ROUTER_REPLAY="invalid",
     )
-    unsafe_router_graph = _run_script(
-        "scopes/03_moe_router.sh",
-        CLUSTER="oci-hsg",
-        MODEL="qwen3_30ba3b",
-        MODE="nemorl",
-        ROUTER_REPLAY="on",
-    )
+    unsafe_router_graphs = [
+        _run_script(
+            scope,
+            CLUSTER="oci-hsg",
+            MODEL="qwen3_30ba3b",
+            MODE="nemorl",
+            ROUTER_REPLAY="on",
+        )
+        for scope in (
+            "scopes/01_whole_layer.sh",
+            "scopes/02_moe.sh",
+            "scopes/03_moe_router.sh",
+            "scopes/04_moe_router_preprocess.sh",
+        )
+    ]
 
-    for result in (invalid_value, unsafe_router_graph):
+    for result in (invalid_value, *unsafe_router_graphs):
         assert result.returncode == 2
         assert "SBATCH:" not in result.stdout
     assert "ROUTER_REPLAY must be off or on" in invalid_value.stderr
-    assert "Router Replay cannot be combined with router CUDA Graph scopes" in (
-        unsafe_router_graph.stderr
-    )
+    for result in unsafe_router_graphs:
+        assert "Router Replay cannot be combined with router CUDA Graph scopes" in (
+            result.stderr
+        )
 
 
 def test_nano_test_only_launcher_renders_batch_job_without_singleton() -> None:
@@ -2198,13 +2604,15 @@ def test_ray_and_mcore_sruns_override_image_uv_environment() -> None:
         in nemorl_wrapper
     )
     assert f"CONTAINER_ENV_VARS={CONTAINER_ENV_VARS}" in nemorl_wrapper
-    assert 'export NRL_SLURM_JOB_ID=${SLURM_JOB_ID:?}' in nemorl_wrapper
-    assert 'export NRL_SLURM_RESTART_COUNT=${SLURM_RESTART_COUNT:-0}' in nemorl_wrapper
+    assert "export NRL_SLURM_JOB_ID=${SLURM_JOB_ID:?}" in nemorl_wrapper
+    assert "export NRL_SLURM_RESTART_COUNT=${SLURM_RESTART_COUNT:-0}" in nemorl_wrapper
     assert "export CONTAINER_ENV_VARS" in nemorl_wrapper
 
     mcore_wrapper = (EXPERIMENT_DIR / "scripts" / "run_mcore_scope.sub").read_text()
     assert "export NVTE_WITH_NCCL_EP=${runtime_fields[5]}" in mcore_wrapper
-    mcore_container_env_vars = CONTAINER_ENV_VARS.removesuffix(",NRL_SLURM_JOB_ID,NRL_SLURM_RESTART_COUNT")
+    mcore_container_env_vars = CONTAINER_ENV_VARS.removesuffix(
+        ",NRL_SLURM_JOB_ID,NRL_SLURM_RESTART_COUNT"
+    )
     assert f"CONTAINER_ENV_VARS={mcore_container_env_vars}" in mcore_wrapper
     assert mcore_wrapper.count('"--container-env=${CONTAINER_ENV_VARS}"') == 2
     assert (
@@ -2441,7 +2849,10 @@ def test_oci_runtime_staging_rejects_invalid_cpu_request(
     )
 
     assert result.returncode == 2
-    assert "RUNTIME_STAGE_CPUS_PER_TASK must be an integer from 1 through 96" in result.stderr
+    assert (
+        "RUNTIME_STAGE_CPUS_PER_TASK must be an integer from 1 through 96"
+        in result.stderr
+    )
 
 
 def test_oci_container_runtime_smoke_uses_persistent_probe_when_spooled(

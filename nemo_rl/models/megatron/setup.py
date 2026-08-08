@@ -241,6 +241,7 @@ from nemo_rl.models.megatron.draft.utils import (
 from nemo_rl.models.megatron.router_replay import (
     clear_global_router_replay_instances,
     router_replay_enabled,
+    validate_router_replay_cuda_graph_scope,
     validate_router_replay_config,
 )
 from nemo_rl.models.policy import PolicyConfig
@@ -811,6 +812,7 @@ def _apply_moe_config(model_cfg: Any, config: PolicyConfig) -> None:
         "moe_expert_capacity_factor",
         "moe_pad_expert_input_to_capacity",
         "moe_expert_rank_capacity_factor",
+        "overlap_moe_expert_parallel_comm",
     ):
         if name in config["megatron_cfg"]:
             setattr(model_cfg, name, config["megatron_cfg"][name])
@@ -1018,8 +1020,10 @@ def _validate_te_moe_graph_request(
         )
 
     full_moe_requested = has_moe and (not modules or CudaGraphModule.moe in module_set)
+    captures_router = full_moe_requested or CudaGraphModule.moe_router in module_set
     drop_and_pad = getattr(model_cfg, "moe_pad_expert_input_to_capacity", False)
     expert_capacity_factor = getattr(model_cfg, "moe_expert_capacity_factor", None)
+    rank_capacity_factor = getattr(model_cfg, "moe_expert_rank_capacity_factor", None)
     if full_moe_requested:
         if not drop_and_pad or not is_positive_capacity(expert_capacity_factor):
             raise ValueError(
@@ -1027,6 +1031,39 @@ def _validate_te_moe_graph_request(
                 "capacity. Set moe_pad_expert_input_to_capacity=true and a positive "
                 "moe_expert_capacity_factor."
             )
+
+    balancing_type = getattr(model_cfg, "moe_router_load_balancing_type", "none")
+    if isinstance(balancing_type, str):
+        balancing_types = {balancing_type}
+    elif isinstance(balancing_type, (list, tuple)):
+        balancing_types = set(balancing_type)
+    else:
+        balancing_types = set()
+    if captures_router and balancing_types.intersection(
+        {"quantile", "quantile_balancing", "sinkhorn"}
+    ):
+        raise ValueError(
+            "Packed THD router CUDA graphs require padding-aware routing; "
+            "quantile and sinkhorn routing are not padding-aware yet."
+        )
+
+    dispatcher = getattr(model_cfg, "moe_token_dispatcher_type", None)
+    backend = getattr(model_cfg, "moe_flex_dispatcher_backend", None)
+    if (
+        captures_router
+        and dispatcher == "flex"
+        and backend == "hybridep"
+        and (
+            drop_and_pad
+            or expert_capacity_factor is not None
+            or rank_capacity_factor is not None
+        )
+    ):
+        raise ValueError(
+            "Packed THD router CUDA graphs currently require dropless HybridEP: "
+            "moe_expert_capacity_factor and moe_expert_rank_capacity_factor must "
+            "be unset and moe_pad_expert_input_to_capacity must be false."
+        )
 
     if CudaGraphModule.moe_preprocess not in module_set:
         return
@@ -1041,7 +1078,6 @@ def _validate_te_moe_graph_request(
             "moe_expert_capacity_factor."
         )
 
-    dispatcher = getattr(model_cfg, "moe_token_dispatcher_type", None)
     if dispatcher == "allgather":
         raise ValueError(
             "MoE AllGather partial CUDA graph capture is unsupported because packed "
@@ -1064,7 +1100,6 @@ def _validate_te_moe_graph_request(
             f"dispatcher, got {dispatcher!r}."
         )
 
-    backend = getattr(model_cfg, "moe_flex_dispatcher_backend", None)
     if backend == "deepep":
         raise ValueError(
             "Flex/DeepEP is unsupported for partial CUDA graph capture because eager "
@@ -1321,6 +1356,12 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
             "cuda_graph_modules must be explicitly configured for packed TE "
             "training graphs; use an empty list for whole-layer capture."
         )
+
+    validate_router_replay_cuda_graph_scope(
+        enabled=router_replay_enabled(config),
+        cuda_graph_impl=effective_cuda_graph_impl,
+        cuda_graph_modules=getattr(model_cfg, "cuda_graph_modules", None),
+    )
 
     if effective_cuda_graph_impl == "transformer_engine":
         assert cuda_graph_modules is not None

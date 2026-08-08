@@ -46,12 +46,36 @@ REQUIRED_MODULE_DISTRIBUTIONS: dict[str, tuple[str, ...]] = {
 TE_EVAL_FEATURE_SET = "te_eval_capability_8"
 BRIDGE_EVAL_FEATURE_SET = "bridge_forward_only_eval_8"
 NARROW_EVAL_FEATURE_SETS = frozenset((TE_EVAL_FEATURE_SET, BRIDGE_EVAL_FEATURE_SET))
+NANO_HYBRIDEP_FEATURE_SET = "dropless_hybridep_nano16"
+QWEN30_ALLTOALL_FEATURE_SET = "dropless_alltoall_qwen30_16"
+SUPER_ALLTOALL_FEATURE_SET = "dropless_alltoall_super32"
+QWEN235_HYBRIDEP_FEATURE_SET = "dropless_hybridep_qwen235_64"
+DROPLESS_MOE_FEATURE_SETS = frozenset(
+    (
+        NANO_HYBRIDEP_FEATURE_SET,
+        QWEN30_ALLTOALL_FEATURE_SET,
+        SUPER_ALLTOALL_FEATURE_SET,
+        QWEN235_HYBRIDEP_FEATURE_SET,
+    )
+)
+HYBRIDEP_FEATURE_SETS = frozenset(
+    (NANO_HYBRIDEP_FEATURE_SET, QWEN235_HYBRIDEP_FEATURE_SET)
+)
 TE_EVAL_EXCLUDED_PACKAGES = (
     "causal-conv1d",
     "deep-ep",
     "fast-hadamard-transform",
     "mamba-ssm",
 )
+DROPLESS_MOE_EXCLUDED_PACKAGES = ("fast-hadamard-transform",)
+RUNTIME_FEATURE_EXCLUSIONS = {
+    TE_EVAL_FEATURE_SET: TE_EVAL_EXCLUDED_PACKAGES,
+    BRIDGE_EVAL_FEATURE_SET: TE_EVAL_EXCLUDED_PACKAGES,
+    **{
+        feature_set: DROPLESS_MOE_EXCLUDED_PACKAGES
+        for feature_set in DROPLESS_MOE_FEATURE_SETS
+    },
+}
 TE_EVAL_OPTIONAL_MODULES = frozenset(("mamba_ssm", "causal_conv1d"))
 EDITABLE_PROJECT_MODULES = frozenset(
     (
@@ -78,6 +102,7 @@ NCCL_EP_EXTENSION_SYMBOLS = (
     "ep_dispatch_bwd",
     "ep_combine_bwd",
 )
+HYBRIDEP_BUFFER_SYMBOL = "HybridEPBuffer"
 
 
 def _distribution_version(
@@ -222,9 +247,12 @@ def probe_runtime(
 ) -> dict[str, Any]:
     """Import the training stack and require exactly the allocated GPUs."""
     if expected_runtime_feature_set is not None:
-        if expected_runtime_feature_set not in NARROW_EVAL_FEATURE_SETS:
+        feature_exclusions = RUNTIME_FEATURE_EXCLUSIONS.get(
+            expected_runtime_feature_set
+        )
+        if feature_exclusions is None:
             raise RuntimeError("unsupported runtime feature set")
-        if expected_excluded_packages != TE_EVAL_EXCLUDED_PACKAGES:
+        if expected_excluded_packages != feature_exclusions:
             raise RuntimeError("runtime exclusions do not match the typed feature set")
         assert expected_excluded_packages is not None
         if environment.get("RUNTIME_FEATURE_SET") != expected_runtime_feature_set:
@@ -414,6 +442,7 @@ def probe_runtime(
         )
 
     modules = {"torch": torch_module}
+    hybridep_buffer_available: bool | None = None
     required_module_distributions = dict(REQUIRED_MODULE_DISTRIBUTIONS)
     if expected_runtime_feature_set in NARROW_EVAL_FEATURE_SETS:
         required_module_distributions = {
@@ -421,9 +450,19 @@ def probe_runtime(
             for name, distributions in required_module_distributions.items()
             if name not in TE_EVAL_OPTIONAL_MODULES
         }
+    elif expected_runtime_feature_set in HYBRIDEP_FEATURE_SETS:
+        required_module_distributions["deep_ep"] = ("deep-ep",)
     for module_name in required_module_distributions:
         if module_name != "torch":
             modules[module_name] = importer(module_name)
+
+    if (
+        expected_runtime_feature_set in HYBRIDEP_FEATURE_SETS
+        and getattr(modules["deep_ep"], HYBRIDEP_BUFFER_SYMBOL, None) is None
+    ):
+        raise RuntimeError(f"DeepEP runtime is missing {HYBRIDEP_BUFFER_SYMBOL}")
+    if expected_runtime_feature_set in HYBRIDEP_FEATURE_SETS:
+        hybridep_buffer_available = True
 
     te_extension = modules[TE_GROUPED_LINEAR_MODULE]
     transformer_engine_grouped_linear_symbols = [
@@ -487,6 +526,7 @@ def probe_runtime(
         "integration_sha": None,
         "test_row_id": "runtime_preflight",
         "runtime_feature_set": expected_runtime_feature_set,
+        "hybridep_buffer_available": hybridep_buffer_available,
         "excluded_packages": (
             list(expected_excluded_packages)
             if expected_excluded_packages is not None

@@ -25,6 +25,24 @@ TE_COMMIT = "d" * 40
 CONTAINER_SHA256 = "e" * 64
 PYTHON_VERSION = "3.13.13"
 UV_VERSION = "0.11.18"
+TE_EVAL_NODES = [
+    {
+        "node": (
+            "tests/unit_tests/transformer/test_cuda_graphs.py::"
+            "test_te_make_graphed_callables_supports_eval_no_grad"
+        ),
+        "status": "passed",
+        "exit_code": 0,
+    },
+    {
+        "node": (
+            "tests/unit_tests/transformer/test_cuda_graphs.py::"
+            "test_te_eval_graph_input_output_buffer_reuse_capability"
+        ),
+        "status": "passed",
+        "exit_code": 0,
+    },
+]
 
 
 def _device_bindings(
@@ -454,6 +472,158 @@ def test_validator_binds_typed_te_eval_runtime_contract(
         )
 
 
+@pytest.mark.parametrize(
+    "feature_set",
+    ("dropless_hybridep_nano16", "dropless_hybridep_qwen235_64"),
+)
+def test_validator_binds_dropless_hybridep_runtime_contract(
+    tmp_path: Path, feature_set: str
+) -> None:
+    """HybridEP evidence must prove DeepEP is installed in the immutable runtime."""
+    module = _load_module()
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(tmp_path)
+    payload = json.loads(attestation.read_text())
+    payload.update(
+        {
+            "runtime_feature_set": feature_set,
+            "excluded_packages": ["fast-hadamard-transform"],
+            "torch_cuda_arch_list": "10.0a",
+            "nvte_cuda_archs": "100a",
+            "hybridep_buffer_available": True,
+        }
+    )
+    payload["packages"]["deep_ep"] = {"version": "1.2.1"}
+    attestation.write_text(json.dumps(payload))
+    contract = {
+        "expected_runtime_feature_set": feature_set,
+        "expected_excluded_packages": ("fast-hadamard-transform",),
+        "expected_torch_cuda_arch_list": "10.0a",
+        "expected_nvte_cuda_archs": "100a",
+    }
+
+    result = module.validate_attestation(
+        attestation=attestation,
+        container=container,
+        expected_container_sha256=CONTAINER_SHA256,
+        nemo_rl_commit=NEMORL_COMMIT,
+        bridge_commit=BRIDGE_COMMIT,
+        mcore_commit=MCORE_COMMIT,
+        uv_lock=lock,
+        expected_te_commit=TE_COMMIT,
+        expected_device_count=4,
+        expected_python_version=PYTHON_VERSION,
+        expected_python_install_dir=python_install_dir,
+        expected_uv_version=UV_VERSION,
+        expected_uv_executable=uv_executable,
+        **contract,
+    )
+
+    assert result["runtime_feature_set"] == feature_set
+    payload["hybridep_buffer_available"] = False
+    attestation.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="HybridEPBuffer"):
+        module.validate_attestation(
+            attestation=attestation,
+            container=container,
+            expected_container_sha256=CONTAINER_SHA256,
+            nemo_rl_commit=NEMORL_COMMIT,
+            bridge_commit=BRIDGE_COMMIT,
+            mcore_commit=MCORE_COMMIT,
+            uv_lock=lock,
+            expected_te_commit=TE_COMMIT,
+            expected_device_count=4,
+            expected_python_version=PYTHON_VERSION,
+            expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
+            **contract,
+        )
+    payload["hybridep_buffer_available"] = True
+    del payload["packages"]["deep_ep"]
+    attestation.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="deep_ep"):
+        module.validate_attestation(
+            attestation=attestation,
+            container=container,
+            expected_container_sha256=CONTAINER_SHA256,
+            nemo_rl_commit=NEMORL_COMMIT,
+            bridge_commit=BRIDGE_COMMIT,
+            mcore_commit=MCORE_COMMIT,
+            uv_lock=lock,
+            expected_te_commit=TE_COMMIT,
+            expected_device_count=4,
+            expected_python_version=PYTHON_VERSION,
+            expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
+            **contract,
+        )
+
+
+@pytest.mark.parametrize(
+    "feature_set",
+    ("dropless_alltoall_qwen30_16", "dropless_alltoall_super32"),
+)
+def test_validator_binds_dropless_alltoall_runtime_contract(
+    tmp_path: Path, feature_set: str
+) -> None:
+    module = _load_module()
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(tmp_path)
+    payload = json.loads(attestation.read_text())
+    payload.update(
+        {
+            "runtime_feature_set": feature_set,
+            "excluded_packages": ["fast-hadamard-transform"],
+            "torch_cuda_arch_list": "10.0a",
+            "nvte_cuda_archs": "100a",
+        }
+    )
+    attestation.write_text(json.dumps(payload))
+
+    result = module.validate_attestation(
+        attestation=attestation,
+        container=container,
+        expected_container_sha256=CONTAINER_SHA256,
+        nemo_rl_commit=NEMORL_COMMIT,
+        bridge_commit=BRIDGE_COMMIT,
+        mcore_commit=MCORE_COMMIT,
+        uv_lock=lock,
+        expected_te_commit=TE_COMMIT,
+        expected_device_count=4,
+        expected_python_version=PYTHON_VERSION,
+        expected_python_install_dir=python_install_dir,
+        expected_uv_version=UV_VERSION,
+        expected_uv_executable=uv_executable,
+        expected_runtime_feature_set=feature_set,
+        expected_excluded_packages=("fast-hadamard-transform",),
+        expected_torch_cuda_arch_list="10.0a",
+        expected_nvte_cuda_archs="100a",
+    )
+
+    assert result["runtime_feature_set"] == feature_set
+
+
+@pytest.mark.parametrize(
+    "row_id",
+    (
+        "dropless_hybridep_nano16",
+        "dropless_alltoall_qwen30_16",
+        "dropless_alltoall_super32",
+        "dropless_hybridep_qwen235_64",
+    ),
+)
+def test_profile_runtime_contract_selects_exact_moe_row(row_id: str) -> None:
+    module = _load_module()
+
+    assert module._runtime_contract_for_rows(
+        candidate_kind="mcore",
+        required_rows=(row_id,),
+    ) == (
+        row_id,
+        ("fast-hadamard-transform",),
+    )
+
+
 def test_validator_rejects_wrong_or_mutated_managed_python(tmp_path: Path) -> None:
     module = _load_module()
     attestation, container, lock, python_install_dir, uv_executable = _fixture(tmp_path)
@@ -611,7 +781,7 @@ def test_matrix_validator_requires_exact_content_bound_rows(tmp_path: Path) -> N
             "device_bindings": _device_bindings(),
         },
         "test_row_id": "te_eval_capability_8",
-        "node_results": [],
+        "node_results": TE_EVAL_NODES,
     }
     (candidate_dir / "te_eval_capability_8.json").write_text(json.dumps(payload))
 
@@ -627,6 +797,21 @@ def test_matrix_validator_requires_exact_content_bound_rows(tmp_path: Path) -> N
     )
 
     assert results["te_eval_capability_8"] == payload
+    payload["node_results"] = []
+    (candidate_dir / "te_eval_capability_8.json").write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="pytest node results"):
+        module.validate_matrix_results(
+            candidate_kind="mcore",
+            candidate_sha=candidate_sha,
+            integration_sha=MCORE_COMMIT,
+            expected_container_sha256=CONTAINER_SHA256,
+            expected_te_commit=TE_COMMIT,
+            expected_te_version_base_commit="e" * 40,
+            test_result_dir=tmp_path,
+            required_rows=("te_eval_capability_8",),
+        )
+    payload["node_results"] = TE_EVAL_NODES
+    (candidate_dir / "te_eval_capability_8.json").write_text(json.dumps(payload))
     (candidate_dir / "extra.json").write_text(json.dumps(payload))
     with pytest.raises(ValueError, match="extra matrix result"):
         module.validate_matrix_results(
@@ -682,7 +867,7 @@ def test_matrix_validator_rejects_false_te_capability_evidence(
             "device_bindings": _device_bindings(),
         },
         "test_row_id": "te_eval_capability_8",
-        "node_results": [],
+        "node_results": TE_EVAL_NODES,
     }
     (candidate_dir / "te_eval_capability_8.json").write_text(json.dumps(payload))
 
@@ -727,7 +912,7 @@ def test_matrix_validator_rejects_missing_te_capability_evidence(
             "device_bindings": _device_bindings(),
         },
         "test_row_id": "te_eval_capability_8",
-        "node_results": [],
+        "node_results": TE_EVAL_NODES,
     }
     (candidate_dir / "te_eval_capability_8.json").write_text(json.dumps(payload))
 
@@ -779,7 +964,7 @@ def test_matrix_validator_rejects_duplicate_or_missing_device_slots(
             "device_bindings": bindings,
         },
         "test_row_id": "te_eval_capability_8",
-        "node_results": [],
+        "node_results": TE_EVAL_NODES,
     }
     (candidate_dir / "te_eval_capability_8.json").write_text(json.dumps(payload))
 

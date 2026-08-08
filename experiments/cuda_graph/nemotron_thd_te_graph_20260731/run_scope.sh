@@ -121,7 +121,7 @@ case "${ROUTER_REPLAY}" in
 esac
 if [[ "${ROUTER_REPLAY}" == "on" ]]; then
   case ",${SCOPE}," in
-    *,moe_router,*|*,moe_preprocess,*)
+    *,whole_layer,*|*,moe,*|*,moe_router,*|*,moe_preprocess,*)
       fail "Router Replay cannot be combined with router CUDA Graph scopes"
       ;;
   esac

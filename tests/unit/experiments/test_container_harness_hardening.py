@@ -437,6 +437,102 @@ def test_runtime_probe_binds_narrow_te_eval_feature_set(
         )
 
 
+@pytest.mark.parametrize(
+    "feature_set",
+    ("dropless_hybridep_nano16", "dropless_hybridep_qwen235_64"),
+)
+def test_runtime_probe_binds_dropless_hybridep_feature_set(
+    tmp_path: Path, feature_set: str
+) -> None:
+    """Every HybridEP gate must import DeepEP instead of trusting metadata."""
+    module = _load_runtime_probe()
+    environment_root = tmp_path / "runtime-venv"
+    project_root = tmp_path / "project"
+    modules = _runtime_modules(module, environment_root)
+    modules["deep_ep"] = SimpleNamespace(
+        __file__=str(
+            environment_root
+            / "lib"
+            / "python3.13"
+            / "site-packages"
+            / "deep_ep"
+            / "__init__.py"
+        ),
+        HybridEPBuffer=object,
+    )
+    exclusions = ("fast-hadamard-transform",)
+    environment = {
+        "UV_PROJECT_ENVIRONMENT": str(environment_root),
+        "RUNTIME_FEATURE_SET": feature_set,
+        "RUNTIME_EXCLUDED_PACKAGES": ",".join(exclusions),
+        "TORCH_CUDA_ARCH_LIST": "10.0a",
+        "NVTE_CUDA_ARCHS": "100a",
+    }
+
+    result = module.probe_runtime(
+        expected_device_count=4,
+        expected_environment_root=environment_root,
+        expected_project_root=project_root,
+        expected_runtime_feature_set=feature_set,
+        expected_excluded_packages=exclusions,
+        expected_torch_cuda_arch_list="10.0a",
+        expected_nvte_cuda_archs="100a",
+        importer=lambda name: modules[name],
+        version_getter=lambda distribution: f"fixture-{distribution}",
+        interpreter_path=environment_root / "bin" / "python",
+        runtime_prefix=environment_root,
+        environment=environment,
+    )
+
+    assert result["runtime_feature_set"] == feature_set
+    assert result["excluded_packages"] == list(exclusions)
+    assert result["hybridep_buffer_available"] is True
+    assert result["packages"]["deep_ep"]["distribution"] == "deep-ep"
+    assert "mamba_ssm" in result["packages"]
+    assert "causal_conv1d" in result["packages"]
+
+
+@pytest.mark.parametrize(
+    "feature_set",
+    ("dropless_alltoall_qwen30_16", "dropless_alltoall_super32"),
+)
+def test_runtime_probe_binds_dropless_alltoall_feature_set(
+    tmp_path: Path, feature_set: str
+) -> None:
+    """AlltoAll rows use the full locked MoE stack without requiring DeepEP."""
+    module = _load_runtime_probe()
+    environment_root = tmp_path / "runtime-venv"
+    project_root = tmp_path / "project"
+    modules = _runtime_modules(module, environment_root)
+    exclusions = ("fast-hadamard-transform",)
+    environment = {
+        "UV_PROJECT_ENVIRONMENT": str(environment_root),
+        "RUNTIME_FEATURE_SET": feature_set,
+        "RUNTIME_EXCLUDED_PACKAGES": ",".join(exclusions),
+        "TORCH_CUDA_ARCH_LIST": "10.0a",
+        "NVTE_CUDA_ARCHS": "100a",
+    }
+
+    result = module.probe_runtime(
+        expected_device_count=4,
+        expected_environment_root=environment_root,
+        expected_project_root=project_root,
+        expected_runtime_feature_set=feature_set,
+        expected_excluded_packages=exclusions,
+        expected_torch_cuda_arch_list="10.0a",
+        expected_nvte_cuda_archs="100a",
+        importer=lambda name: modules[name],
+        version_getter=lambda distribution: f"fixture-{distribution}",
+        interpreter_path=environment_root / "bin" / "python",
+        runtime_prefix=environment_root,
+        environment=environment,
+    )
+
+    assert result["runtime_feature_set"] == feature_set
+    assert result["hybridep_buffer_available"] is None
+    assert "deep_ep" not in result["packages"]
+
+
 def test_runtime_probe_requires_exact_uv_managed_python(tmp_path: Path) -> None:
     module = _load_runtime_probe()
     environment_root = tmp_path / "runtime-venv"
@@ -843,6 +939,12 @@ def test_runtime_wrapper_separates_cpu_stage_from_gpu_attestation() -> None:
     assert "RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET:-te_eval_capability_8}" in source
     assert '"RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET}"' in source
     assert "bridge_forward_only_eval_8" in source
+    assert "dropless_hybridep_nano16" in source
+    assert "dropless_alltoall_qwen30_16" in source
+    assert "dropless_alltoall_super32" in source
+    assert "dropless_hybridep_qwen235_64" in source
+    assert "expected_runtime_exclusions=fast-hadamard-transform" in source
+    assert '"RUNTIME_EXCLUDED_PACKAGES=${RUNTIME_EXCLUDED_PACKAGES}"' in source
     assert "RUNTIME_STAGE_CAPABILITY=${RUNTIME_STAGE_CAPABILITY:-}" in source
     assert '"${RUNTIME_STAGE_CAPABILITY}" != "mcore-test-v1"' in source
     assert (
@@ -851,8 +953,8 @@ def test_runtime_wrapper_separates_cpu_stage_from_gpu_attestation() -> None:
     )
     assert "TORCH_CUDA_ARCH_LIST=10.0a" in source
     assert (
-        "RUNTIME_EXCLUDED_PACKAGES=causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm"
-        in source
+        "RUNTIME_EXCLUDED_PACKAGES=${RUNTIME_EXCLUDED_PACKAGES:-causal-conv1d,"
+        "deep-ep,fast-hadamard-transform,mamba-ssm}" in source
     )
     assert '"${uv_executable}" sync' in source
     assert "--group test" in source
@@ -942,17 +1044,17 @@ def test_task2_root_runner_removes_passing_pytest_basetemp(tmp_path: Path) -> No
     fake_python.write_text(
         "#!/bin/bash\n"
         "set -euo pipefail\n"
-        "for argument in \"$@\"; do\n"
-        "  case \"${argument}\" in\n"
+        'for argument in "$@"; do\n'
+        '  case "${argument}" in\n'
         "    --basetemp=*) basetemp=${argument#*=} ;;\n"
         "  esac\n"
         "done\n"
         ': "${basetemp:?}"\n'
         'mkdir -p -- "${basetemp}"\n'
         'ln -s -- "${basetemp}/missing" "${basetemp}/broken-link"\n'
-        'mkdir -p -- tests/unit/unit_results\n'
-        'printf generated >tests/unit/unit_results.json\n'
-        'printf generated >tests/unit/unit_results/result.json\n'
+        "mkdir -p -- tests/unit/unit_results\n"
+        "printf generated >tests/unit/unit_results.json\n"
+        "printf generated >tests/unit/unit_results/result.json\n"
     )
     fake_python.chmod(0o755)
     result_root = tmp_path / "results"

@@ -83,15 +83,22 @@ feature_set = payload.get("runtime_feature_set")
 excluded = payload.get("excluded_packages")
 torch_arch = payload.get("torch_cuda_arch_list")
 nvte_arch = payload.get("nvte_cuda_archs")
-expected_excluded = [
-    "causal-conv1d",
-    "deep-ep",
-    "fast-hadamard-transform",
-    "mamba-ssm",
-]
 rows = [line.split("\t", 1)[0] for line in os.environ["SELECTION"].splitlines()]
-if feature_set != "te_eval_capability_8" or rows != [feature_set]:
-    raise SystemExit("narrow runtime attestation may only authorize te_eval_capability_8")
+feature_exclusions = {
+    "te_eval_capability_8": [
+        "causal-conv1d",
+        "deep-ep",
+        "fast-hadamard-transform",
+        "mamba-ssm",
+    ],
+    "dropless_hybridep_nano16": ["fast-hadamard-transform"],
+    "dropless_alltoall_qwen30_16": ["fast-hadamard-transform"],
+    "dropless_alltoall_super32": ["fast-hadamard-transform"],
+    "dropless_hybridep_qwen235_64": ["fast-hadamard-transform"],
+}
+expected_excluded = feature_exclusions.get(feature_set)
+if expected_excluded is None or rows != [feature_set]:
+    raise SystemExit("runtime attestation must authorize the exact selected row")
 if excluded != expected_excluded or torch_arch != "10.0a" or nvte_arch != "100a":
     raise SystemExit("runtime attestation feature contract mismatch")
 print("\t".join((feature_set, ",".join(excluded), torch_arch, nvte_arch)))
@@ -102,15 +109,15 @@ IFS=$'\t' read -r RUNTIME_FEATURE_SET RUNTIME_EXCLUDED_PACKAGES \
 [[ -n "${NVTE_CUDA_ARCHS}" ]] || fail "Runtime feature contract is incomplete"
 
 mcore_root=${repo_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM
-remote_sha=$(git -C "${mcore_root}" ls-remote origin refs/heads/sj/thd-cg-hybrid-nemotron-20260731 | awk 'NF == 2 {print $1}')
+remote_sha=$(git -C "${mcore_root}" ls-remote origin refs/heads/sj/thd-cg-hybrid-nemotron-main-20260806 | awk 'NF == 2 {print $1}')
 [[ "${remote_sha}" =~ ^[0-9a-f]{40}$ ]] || fail "Candidate branch did not resolve to exactly one pushed SHA"
 [[ "${remote_sha}" == "${MCORE_CANDIDATE_SHA}" ]] || fail "Candidate SHA does not match the pushed remote branch"
 root_branch=$(git -C "${repo_root}" branch --show-current)
-[[ "${root_branch}" == experiment/thd-cg-hybrid-nemotron-20260731 ]] || \
-  fail "NeMo-RL runner must use the Task 2 infrastructure branch"
+[[ "${root_branch}" == experiment/thd-cg-hybrid-nemotron-main-20260806 ]] || \
+  fail "NeMo-RL runner must use the HybridEP integration branch"
 root_sha=$(git -C "${repo_root}" rev-parse HEAD)
 remote_root_sha=$(git -C "${repo_root}" ls-remote seonjinn \
-  refs/heads/experiment/thd-cg-hybrid-nemotron-20260731 | awk 'NF == 2 {print $1}')
+  refs/heads/experiment/thd-cg-hybrid-nemotron-main-20260806 | awk 'NF == 2 {print $1}')
 [[ "${remote_root_sha}" == "${root_sha}" ]] || \
   fail "NeMo-RL runner infrastructure is not pushed at the local HEAD"
 git -C "${repo_root}" diff --quiet --ignore-submodules=dirty || \

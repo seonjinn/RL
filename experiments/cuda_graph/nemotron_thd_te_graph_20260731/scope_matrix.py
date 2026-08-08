@@ -156,9 +156,7 @@ def load_model_spec(model: str) -> ModelSpec:
     nemorl_allocation_num_nodes = int(
         _required(values, "NEMORL_ALLOCATION_NUM_NODES", path)
     )
-    nemorl_cluster_num_nodes = int(
-        _required(values, "NEMORL_CLUSTER_NUM_NODES", path)
-    )
+    nemorl_cluster_num_nodes = int(_required(values, "NEMORL_CLUSTER_NUM_NODES", path))
     policy_num_nodes = int(_required(values, "POLICY_NUM_NODES", path))
     nemorl_generation_num_nodes = int(
         _required(values, "NEMORL_GENERATION_NUM_NODES", path)
@@ -178,10 +176,7 @@ def load_model_spec(model: str) -> ModelSpec:
             f"{path}: NEMORL_CLUSTER_NUM_NODES must equal POLICY_NUM_NODES + "
             "NEMORL_GENERATION_NUM_NODES"
         )
-    if (
-        nemorl_allocation_num_nodes
-        != nemorl_cluster_num_nodes + nemorl_gym_num_nodes
-    ):
+    if nemorl_allocation_num_nodes != nemorl_cluster_num_nodes + nemorl_gym_num_nodes:
         raise ValueError(
             f"{path}: NEMORL_ALLOCATION_NUM_NODES must equal "
             "NEMORL_CLUSTER_NUM_NODES + NEMORL_GYM_NUM_NODES"
@@ -323,10 +318,11 @@ def render_scope_command(
         raise ValueError("run_name must be filesystem-safe")
     if spec.thd_max_packed_sequences < 2:
         raise ValueError("thd_max_packed_sequences must be at least 2")
-    if router_replay_enabled and cuda_graph_enabled and {
-        "moe_router",
-        "moe_preprocess",
-    }.intersection(scope):
+    if (
+        router_replay_enabled
+        and cuda_graph_enabled
+        and (not scope or {"moe", "moe_router", "moe_preprocess"}.intersection(scope))
+    ):
         raise ValueError(
             "Router Replay cannot be combined with a router CUDA Graph scope"
         )
@@ -367,12 +363,10 @@ def render_scope_command(
         f"cluster.gpus_per_node={spec.gpus_per_node}",
         f"logger.log_dir={log_dir or f'exp_logs/nemotron_thd_te_graph_20260731/{run_name}'}",
         "logger.wandb_enabled=true",
-        "logger.tensorboard_enabled="
-        f"{str(spec.nemorl_tensorboard_enabled).lower()}",
+        f"logger.tensorboard_enabled={str(spec.nemorl_tensorboard_enabled).lower()}",
         "logger.wandb.project=sna-cg-study",
         f"logger.wandb.name={run_name}",
-        "++policy.router_replay.enabled="
-        f"{str(router_replay_enabled).lower()}",
+        f"++policy.router_replay.enabled={str(router_replay_enabled).lower()}",
     ]
     if router_replay_enabled:
         command[2:2] = (

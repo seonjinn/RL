@@ -56,6 +56,49 @@ def test_validate_router_replay_config_allows_prefix_cache_default():
 
 
 @pytest.mark.mcore
+@pytest.mark.parametrize(
+    "modules",
+    (["moe"], ["moe_router"], ["moe_router", "moe_preprocess"], []),
+)
+def test_validate_router_replay_rejects_graph_scopes_that_capture_router(
+    modules: list[str],
+) -> None:
+    """Replay routes are not persistent inputs of the active TE graph bank."""
+    from nemo_rl.models.megatron.router_replay import validate_router_replay_config
+
+    config = {
+        "router_replay": {"enabled": True},
+        "generation": {"backend": "vllm", "vllm_cfg": {}, "vllm_kwargs": {}},
+        "megatron_cfg": {
+            "enabled": True,
+            "cuda_graph_impl": "transformer_engine",
+            "cuda_graph_modules": modules,
+        },
+    }
+
+    with pytest.raises(ValueError, match="RouterReplay.*CUDA Graph"):
+        validate_router_replay_config(config)
+
+
+@pytest.mark.mcore
+def test_validate_router_replay_allows_graph_scopes_that_keep_router_eager() -> None:
+    """Attention and Mamba graphs do not consume replay route tensors."""
+    from nemo_rl.models.megatron.router_replay import validate_router_replay_config
+
+    config = {
+        "router_replay": {"enabled": True},
+        "generation": {"backend": "vllm", "vllm_cfg": {}, "vllm_kwargs": {}},
+        "megatron_cfg": {
+            "enabled": True,
+            "cuda_graph_impl": "transformer_engine",
+            "cuda_graph_modules": ["attn", "mamba"],
+        },
+    }
+
+    validate_router_replay_config(config)
+
+
+@pytest.mark.mcore
 def test_normalize_routed_experts_dense_batch_uses_seq_major_order():
     from nemo_rl.models.megatron.router_replay import (
         _normalize_routed_experts_for_mcore,
