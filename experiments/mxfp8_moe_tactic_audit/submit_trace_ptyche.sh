@@ -63,19 +63,35 @@ export VLLM_MXFP8_AUDIT_SOURCE_ROOT=${CUSTOM_VLLM_ROOT}
 PYTHON_OVERLAY=${RUN_ROOT}/python-overlay
 mkdir -p \${PYTHON_OVERLAY}
 cat > \${PYTHON_OVERLAY}/sitecustomize.py <<'PY'
+import importlib.abc
+import importlib.util
 import os
+import sys
 from pathlib import Path
 
-try:
-    import vllm
-except ModuleNotFoundError:
-    # The NeMo-RL driver does not install the vLLM extra. Ray's vLLM actors do.
-    pass
-else:
-    source = Path(os.environ["VLLM_MXFP8_AUDIT_SOURCE_ROOT"]).resolve() / "vllm"
-    if not source.is_dir():
-        raise RuntimeError(f"missing custom vLLM source: {source}")
-    vllm.__path__.insert(0, str(source))
+root = Path(os.environ["VLLM_MXFP8_AUDIT_SOURCE_ROOT"]).resolve() / "vllm"
+module_root = root / "model_executor/layers/fused_moe/experts"
+audit_modules = {
+    "vllm.model_executor.layers.fused_moe.experts.trtllm_fp8_moe": (
+        module_root / "trtllm_fp8_moe.py"
+    ),
+    "vllm.model_executor.layers.fused_moe.experts.trtllm_moe_trace": (
+        module_root / "trtllm_moe_trace.py"
+    ),
+}
+
+
+class AuditModuleFinder(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        source = audit_modules.get(fullname)
+        if source is None:
+            return None
+        if not source.is_file():
+            raise ImportError(f"missing custom vLLM audit module: {source}")
+        return importlib.util.spec_from_file_location(fullname, source)
+
+
+sys.meta_path.insert(0, AuditModuleFinder())
 PY
 export PYTHONPATH=\${PYTHON_OVERLAY}:\${PYTHONPATH:-}
 for audit_module in \

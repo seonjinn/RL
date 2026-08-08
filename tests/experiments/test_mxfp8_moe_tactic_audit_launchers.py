@@ -61,7 +61,9 @@ def test_trace_dry_run_is_eager_and_metadata_only(tmp_path: Path) -> None:
     assert "--segment=4" in output
     assert "VLLM_MXFP8_AUDIT_SOURCE_ROOT=" in output
     assert "sitecustomize.py" in output
-    assert "except ModuleNotFoundError:" in output
+    assert "spec_from_file_location" in output
+    assert "sys.meta_path.insert" in output
+    assert "vllm.__path__.insert" not in output
     assert "uv run --locked --extra vllm --directory" not in output
     assert "missing custom vLLM audit module" in output
     assert "trtllm_fp8_moe.py" in output
