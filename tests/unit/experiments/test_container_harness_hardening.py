@@ -1158,6 +1158,7 @@ printf '{"status":"passed"}\n' >"${output}"
     assert "--gres=" not in command
     assert "--expected-device-count 4" in command
     assert "RUNTIME_ATTESTATION_JOB_ID=734" in command
+    assert "UV_PYTHON_DOWNLOADS=never" in command
     assert '--runtime-attestation-job-id "${RUNTIME_ATTESTATION_JOB_ID}"' in command
     assert (artifact_dir / "oci-container-runtime-734.json").is_file()
 

@@ -487,6 +487,7 @@ if [[ "${RUNTIME_PHASE}" == "stage" ]]; then
 else
   runtime_environment+=(
     "RUNTIME_ATTESTATION_JOB_ID=${SLURM_JOB_ID}"
+    UV_PYTHON_DOWNLOADS=never
   )
 fi
 for proxy_variable in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
