@@ -20,6 +20,8 @@ bridge_root=${repo_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
 mcore_root=${bridge_root}/3rdparty/Megatron-LM
 matrix=${script_dir}/bridge_test_matrix.json
 driver=${script_dir}/scripts/run_mcore_training.py
+slurm_segment_helper=${script_dir}/slurm_segment.py
+[[ -f "${slurm_segment_helper}" ]] || fail "Missing SLURM segment resolver"
 
 profile_output=$(python3 "${script_dir}/profile_snapshot.py" \
   --profile-dir "${script_dir}/profiles" --cluster "${CLUSTER}" \
@@ -60,6 +62,9 @@ PY
 IFS=$'\t' read -r RUNTIME_FEATURE_SET RUNTIME_EXCLUDED_PACKAGES \
   TORCH_CUDA_ARCH_LIST NVTE_CUDA_ARCHS <<<"${runtime_contract}"
 [[ -n "${NVTE_CUDA_ARCHS}" ]] || fail "Runtime feature contract is incomplete"
+segment_size=$(python3 "${slurm_segment_helper}" \
+  --cluster "${CLUSTER}" --num-nodes 2 \
+  --configured "${SBATCH_SEGMENT_SIZE}") || fail "SLURM segment resolution failed"
 
 remote_sha=$(git -C "${bridge_root}" ls-remote fork refs/heads/sna/thd-cg-hybrid-nemotron-main-20260806 | awk 'NF == 2 {print $1}')
 [[ "${remote_sha}" =~ ^[0-9a-f]{40}$ ]] || fail "Bridge branch did not resolve to exactly one pushed SHA"
@@ -125,8 +130,12 @@ IFS=$'\t' read -r snapshot snapshot_sha256 intent intent_sha256 <<<"${artifacts}
 
 exports="ALL,TEST_ROW_ID=bridge_forward_only_eval_8,TEST_WORLD_SIZE=8,TEST_NUM_NODES=2,TEST_GPUS_PER_NODE=4,CANDIDATE_KIND=bridge,CANDIDATE_SHA=${BRIDGE_CANDIDATE_SHA},INTEGRATION_SHA=${integration_sha},CANDIDATE_SOURCE_ROOT=${snapshot},CANDIDATE_SNAPSHOT_SHA256=${snapshot_sha256},RUN_LOG_ROOT=${RUN_LOG_ROOT},TEST_MATRIX=${matrix},RUNNER_PATH=${driver},CONTAINER=${CONTAINER},CONTAINER_SHA256=${CONTAINER_SHA256},MOUNTS=${MOUNTS},EXPECTED_TE_SHA=${EXPECTED_TE_SHA},EXPECTED_TE_VERSION_BASE_SHA=${EXPECTED_TE_VERSION_BASE_SHA},RUNTIME_ATTESTATION=${RUNTIME_ATTESTATION},SUBMISSION_INTENT=${intent},SUBMISSION_INTENT_SHA256=${intent_sha256},REPO_ROOT=${repo_root},EXPECTED_NEMORL_SHA=${EXPECTED_NEMORL_SHA},EXPECTED_BRIDGE_SHA=${EXPECTED_BRIDGE_SHA},EXPECTED_MCORE_SHA=${EXPECTED_MCORE_SHA},SOURCE_PROVENANCE_VERIFIER=${source_provenance_verifier},RUNTIME_ATTESTATION_COMMAND=${runtime_attestation_command},RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET},RUNTIME_EXCLUDED_PACKAGES=${RUNTIME_EXCLUDED_PACKAGES},TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST},NVTE_CUDA_ARCHS=${NVTE_CUDA_ARCHS}"
 command=(sbatch --parsable --nodes=2 "--account=${ACCOUNT}" "--partition=${PARTITION}" "--time=${TIME_LIMIT}" --job-name=bridge-forward-only-eval "--output=${RUN_LOG_ROOT}/slurm/bridge-forward-only-eval-%j.log" "--export=${exports}")
-[[ "${SBATCH_GRES}" == none ]] || command+=("--gres=${SBATCH_GRES}")
-[[ -z "${SBATCH_SEGMENT_SIZE}" ]] || command+=("--segment=${SBATCH_SEGMENT_SIZE}")
+if [[ "${SBATCH_GRES}" == none ]]; then
+  command+=("--gpus-per-node=${SBATCH_GPUS_PER_NODE}")
+else
+  command+=("--gres=${SBATCH_GRES}")
+fi
+[[ -z "${segment_size}" ]] || command+=("--segment=${segment_size}")
 [[ "${SBATCH_TEST_ONLY:-0}" == 1 ]] && command+=(--test-only)
 command+=("${script_dir}/scripts/run_bridge_scope.sub")
 mkdir -p "${RUN_LOG_ROOT}/slurm"

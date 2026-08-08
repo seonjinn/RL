@@ -16,8 +16,10 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 repo_root=$(cd "${script_dir}/../../.." && pwd -P)
 matrix=${script_dir}/mcore_test_matrix.json
 driver=${script_dir}/scripts/run_mcore_training.py
+slurm_segment_helper=${script_dir}/slurm_segment.py
 rows=${MCORE_TEST_ROWS:-}
 [[ -n "${rows}" ]] || fail "MCORE_TEST_ROWS must contain one or more literal row IDs"
+[[ -f "${slurm_segment_helper}" ]] || fail "Missing SLURM segment resolver"
 
 selection=$(python3 - "${driver}" "${matrix}" "${rows}" <<'PY'
 import importlib.util
@@ -174,10 +176,17 @@ IFS=$'\t' read -r snapshot snapshot_sha256 intent intent_sha256 <<<"${artifacts}
 
 while IFS=$'\t' read -r row_id world_size num_nodes gpus_per_node; do
   [[ "${SBATCH_GPUS_PER_NODE}" == "${gpus_per_node}" ]] || fail "Profile/allocation GPU mismatch"
+  segment_size=$(python3 "${slurm_segment_helper}" \
+    --cluster "${CLUSTER}" --num-nodes "${num_nodes}" \
+    --configured "${SBATCH_SEGMENT_SIZE}") || fail "SLURM segment resolution failed"
   exports="ALL,TEST_ROW_ID=${row_id},TEST_WORLD_SIZE=${world_size},TEST_NUM_NODES=${num_nodes},TEST_GPUS_PER_NODE=${gpus_per_node},CANDIDATE_KIND=mcore,CANDIDATE_SHA=${MCORE_CANDIDATE_SHA},INTEGRATION_SHA=${integration_sha},CANDIDATE_SOURCE_ROOT=${snapshot},CANDIDATE_SNAPSHOT_SHA256=${snapshot_sha256},RUN_LOG_ROOT=${RUN_LOG_ROOT},TEST_MATRIX=${matrix},RUNNER_PATH=${driver},CONTAINER=${CONTAINER},CONTAINER_SHA256=${CONTAINER_SHA256},MOUNTS=${MOUNTS},EXPECTED_TE_SHA=${EXPECTED_TE_SHA},EXPECTED_TE_VERSION_BASE_SHA=${EXPECTED_TE_VERSION_BASE_SHA},RUNTIME_ATTESTATION=${RUNTIME_ATTESTATION},SUBMISSION_INTENT=${intent},SUBMISSION_INTENT_SHA256=${intent_sha256},REPO_ROOT=${repo_root},EXPECTED_NEMORL_SHA=${EXPECTED_NEMORL_SHA},EXPECTED_BRIDGE_SHA=${EXPECTED_BRIDGE_SHA},EXPECTED_MCORE_SHA=${EXPECTED_MCORE_SHA},SOURCE_PROVENANCE_VERIFIER=${source_provenance_verifier},RUNTIME_ATTESTATION_COMMAND=${runtime_attestation_command},RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET},RUNTIME_EXCLUDED_PACKAGES=${RUNTIME_EXCLUDED_PACKAGES},TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST},NVTE_CUDA_ARCHS=${NVTE_CUDA_ARCHS}"
   command=(sbatch --parsable "--nodes=${num_nodes}" "--account=${ACCOUNT}" "--partition=${PARTITION}" "--time=${TIME_LIMIT}" "--job-name=mcore-${row_id}" "--output=${RUN_LOG_ROOT}/slurm/mcore-${row_id}-%j.log" "--export=${exports}")
-  [[ "${SBATCH_GRES}" == none ]] || command+=("--gres=${SBATCH_GRES}")
-  [[ -z "${SBATCH_SEGMENT_SIZE}" ]] || command+=("--segment=${SBATCH_SEGMENT_SIZE}")
+  if [[ "${SBATCH_GRES}" == none ]]; then
+    command+=("--gpus-per-node=${SBATCH_GPUS_PER_NODE}")
+  else
+    command+=("--gres=${SBATCH_GRES}")
+  fi
+  [[ -z "${segment_size}" ]] || command+=("--segment=${segment_size}")
   [[ "${SBATCH_TEST_ONLY:-0}" == 1 ]] && command+=(--test-only)
   command+=("${script_dir}/scripts/run_mcore_scope.sub")
   mkdir -p "${RUN_LOG_ROOT}/slurm"

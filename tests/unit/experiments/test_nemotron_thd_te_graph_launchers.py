@@ -763,10 +763,31 @@ def test_stage_enroot_image_test_only_renders_immutable_batch_submission(
     assert result.returncode == 0, result.stderr
     assert "SBATCH: sbatch --parsable" in result.stdout
     assert "--partition=batch" in result.stdout
-    assert "--gres=gpu:4" in result.stdout
+    assert "--gpus-per-node" not in result.stdout
+    assert "--gres=" not in result.stdout
     assert f"SOURCE_DIGEST={digest}" in result.stdout
     assert "TEST_ONLY: no submission performed" in result.stdout
     assert not (tmp_path / "containers").exists()
+
+
+def test_stage_enroot_image_uses_no_gpu_for_ptyche(
+    tmp_path: Path,
+) -> None:
+    result = _run_script(
+        "scripts/stage_enroot_image.sbatch",
+        TEST_ONLY="1",
+        SOURCE_IMAGE="nvcr.io/nvidia/nemo:nightly",
+        SOURCE_DIGEST="sha256:" + "a" * 64,
+        SOURCE_COMMIT="b" * 40,
+        OUTPUT_PREFIX="nemo_rl_nightly_ptyche",
+        CONTAINER_DIR=str(tmp_path / "containers"),
+        ACCOUNT="coreai_dlalgo_llm",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--account=coreai_dlalgo_llm" in result.stdout
+    assert "--gpus-per-node" not in result.stdout
+    assert "--gres=" not in result.stdout
 
 
 def test_stage_enroot_image_rejects_unpinned_source_before_submission(
@@ -2079,6 +2100,38 @@ def test_nano_test_only_launcher_renders_batch_job_without_singleton() -> None:
     assert "TEST_ONLY: no submission performed" in result.stdout
 
 
+def test_nano_ptyche_launcher_requests_all_gpus_with_tres_option(
+    tmp_path: Path,
+) -> None:
+    root, experiment, profile, _ = _campaign_leaf_harness(tmp_path)
+    profile.write_text(
+        profile.read_text()
+        .replace("PROFILE_ID=unit", "PROFILE_ID=ptyche")
+        .replace("SBATCH_GRES=gpu:4", "SBATCH_GRES=none")
+        .replace("SBATCH_SEGMENT_SIZE=", "SBATCH_SEGMENT_SIZE=2")
+    )
+
+    result = _run_copied_experiment_script(
+        root,
+        experiment,
+        "scopes/17_attn.sh",
+        CLUSTER="ptyche",
+        PROFILE_FILE=str(profile),
+        MODEL="nano",
+        MODE="nemorl",
+        STEPS="20",
+        TEST_ONLY="1",
+        RUN_GROUP="unit-ptyche",
+        REPEAT_INDEX="1",
+        RUN_TAG="unit",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--gpus-per-node=4" in result.stdout
+    assert "--gres=" not in result.stdout
+    assert "--segment=2" in result.stdout
+
+
 def test_leaf_job_depends_on_one_exact_runtime_preflight_artifact(
     tmp_path: Path,
 ) -> None:
@@ -2726,10 +2779,21 @@ def test_alltoall_leaf_sync_excludes_deep_ep_without_reprobe(tmp_path: Path) -> 
     assert python_log.read_text().splitlines() == [str(runner), "--fixture"]
 
 
-def test_cluster_profiles_render_cluster_specific_gres_and_segment_contracts() -> None:
-    ptyche = _run_script(
+def test_cluster_profiles_render_cluster_specific_gres_and_segment_contracts(
+    tmp_path: Path,
+) -> None:
+    root, experiment, profile, _ = _campaign_leaf_harness(tmp_path)
+    profile.write_text(
+        profile.read_text()
+        .replace("PROFILE_ID=unit", "PROFILE_ID=ptyche")
+        .replace("SBATCH_GRES=gpu:4", "SBATCH_GRES=none")
+    )
+    ptyche = _run_copied_experiment_script(
+        root,
+        experiment,
         "scopes/17_attn.sh",
         CLUSTER="ptyche",
+        PROFILE_FILE=str(profile),
         MODEL="nano",
         MODE="nemorl",
         STEPS="20",
@@ -2747,11 +2811,48 @@ def test_cluster_profiles_render_cluster_specific_gres_and_segment_contracts() -
     )
 
     assert ptyche.returncode == 0, ptyche.stderr
-    assert "--gres=gpu:4" in ptyche.stdout
-    assert "--segment=16" in ptyche.stdout
+    assert "--gpus-per-node=4" in ptyche.stdout
+    assert "--gres=" not in ptyche.stdout
+    assert "--segment=6" in ptyche.stdout
     assert lyris.returncode == 0, lyris.stderr
     assert "--gres=" not in lyris.stdout
     assert "--segment=" not in lyris.stdout
+
+
+@pytest.mark.parametrize(
+    ("num_nodes", "expected"),
+    ((2, 2), (4, 4), (5, 5), (6, 6), (8, 8), (16, 16), (18, 18), (64, 16), (256, 16)),
+)
+def test_ptyche_segment_is_derived_for_every_reachable_allocation(
+    num_nodes: int, expected: int
+) -> None:
+    module = _load_experiment_module("slurm_segment")
+
+    assert module.resolve_segment_size("ptyche", num_nodes, "") == expected
+
+
+def test_segment_resolution_validates_explicit_profile_value() -> None:
+    module = _load_experiment_module("slurm_segment")
+
+    assert module.resolve_segment_size("ptyche", 6, "2") == 2
+    assert module.resolve_segment_size("oci-hsg", 6, "") is None
+    with pytest.raises(ValueError, match="divide"):
+        module.resolve_segment_size("ptyche", 6, "4")
+    with pytest.raises(ValueError, match="at most 18"):
+        module.resolve_segment_size("ptyche", 36, "36")
+
+
+def test_ptyche_profile_requires_immutable_container_and_auto_segment() -> None:
+    values = dict(
+        line.split("=", 1)
+        for line in (EXPERIMENT_DIR / "profiles" / "ptyche.env.example")
+        .read_text()
+        .splitlines()
+        if line and not line.startswith("#")
+    )
+
+    assert values["CONTAINER"] == "__REQUIRED_IMMUTABLE_CONTAINER__"
+    assert values["SBATCH_SEGMENT_SIZE"] == ""
 
 
 def test_mcore_launcher_is_dependency_blocked_without_standalone_driver() -> None:
@@ -2896,6 +2997,25 @@ def test_oci_container_runtime_smoke_renders_four_gpu_batch_job(
     assert not (tmp_path / "artifacts").exists()
 
 
+def test_container_runtime_smoke_renders_tres_gpu_request_for_ptyche(
+    tmp_path: Path,
+) -> None:
+    result = _run_script(
+        "scripts/validate_oci_container_runtime.sub",
+        TEST_ONLY="1",
+        RUNTIME_STAGE_CAPABILITY="mcore-test-v1",
+        CONTAINER="/lustre/example/nemo_rl_nightly.sqsh",
+        CONTAINER_SHA256=CONTAINER_SHA256,
+        ARTIFACT_DIR=str(tmp_path / "artifacts"),
+        SBATCH_GPUS_PER_NODE="4",
+        SBATCH_GRES="none",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--gpus-per-node=4" in result.stdout
+    assert "--gres=" not in result.stdout
+
+
 def test_oci_runtime_staging_renders_cpu_only_job(tmp_path: Path) -> None:
     result = _run_script(
         "scripts/validate_oci_container_runtime.sub",
@@ -2915,6 +3035,28 @@ def test_oci_runtime_staging_renders_cpu_only_job(tmp_path: Path) -> None:
     assert "RUNTIME_STAGE_CPUS_PER_TASK=32" in result.stdout
     assert "RUNTIME_PHASE=stage" in result.stdout
     assert "TEST_ONLY: no submission performed" in result.stdout
+
+
+def test_runtime_staging_accepts_ptyche_batch_without_gpu_request(
+    tmp_path: Path,
+) -> None:
+    result = _run_script(
+        "scripts/validate_oci_container_runtime.sub",
+        TEST_ONLY="1",
+        RUNTIME_PHASE="stage",
+        RUNTIME_STAGE_CAPABILITY="mcore-test-v1",
+        STAGE_PARTITION="batch",
+        CONTAINER="/lustre/example/nemo_rl_nightly.sqsh",
+        CONTAINER_SHA256=CONTAINER_SHA256,
+        ARTIFACT_DIR=str(tmp_path / "artifacts"),
+        SBATCH_GPUS_PER_NODE="4",
+        SBATCH_GRES="none",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--partition=batch" in result.stdout
+    assert "--gpus-per-node" not in result.stdout
+    assert "--gres=" not in result.stdout
 
 
 def test_oci_runtime_staging_binds_explicit_single_cpu_request(tmp_path: Path) -> None:

@@ -14,8 +14,6 @@
 # limitations under the License.
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:4
-#SBATCH --mem=0
 #SBATCH --partition=batch
 #SBATCH --time=02:00:00
 #SBATCH --job-name=stage_training_container
@@ -119,11 +117,10 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     "${submission_flag}"
     "--partition=${PARTITION}"
     "--account=${ACCOUNT}"
-    --gres=gpu:4
     "--output=${CONTAINER_DIR}/${OUTPUT_PREFIX}_stage-%j.log"
     "--export=${export_spec}"
-    "${script_path}"
   )
+  sbatch_command+=("${script_path}")
   printf 'SOURCE_IMAGE=%s\n' "${SOURCE_IMAGE}"
   printf 'SOURCE_DIGEST=%s\n' "${SOURCE_DIGEST}"
   printf 'SBATCH:'

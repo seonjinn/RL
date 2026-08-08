@@ -51,6 +51,7 @@ mcore_root=${bridge_root}/3rdparty/Megatron-LM
 source_provenance_verifier=${script_dir}/scripts/verify_source_provenance.sh
 runtime_attestation_validator=${script_dir}/verify_runtime_attestation.py
 profile_snapshot_helper=${script_dir}/profile_snapshot.py
+slurm_segment_helper=${script_dir}/slurm_segment.py
 campaign_gate_validator=${script_dir}/validate_campaign_gate.py
 cd "${repo_root}"
 
@@ -225,10 +226,11 @@ case "${SBATCH_GRES:-}" in
   "gpu:${MODEL_GPUS_PER_NODE}") ;;
   *) fail "SBATCH_GRES must be none or gpu:${MODEL_GPUS_PER_NODE}" ;;
 esac
-if [[ -n "${SBATCH_SEGMENT_SIZE:-}" && \
-      ! "${SBATCH_SEGMENT_SIZE}" =~ ^[1-9][0-9]*$ ]]; then
-  fail "SBATCH_SEGMENT_SIZE must be empty or a positive integer"
-fi
+[[ -f "${slurm_segment_helper}" ]] || fail "Missing SLURM segment resolver"
+SBATCH_SEGMENT_SIZE=$(python3 "${slurm_segment_helper}" \
+  --cluster "${CLUSTER}" \
+  --num-nodes "${MODEL_ALLOCATION_NUM_NODES}" \
+  --configured "${SBATCH_SEGMENT_SIZE:-}") || fail "SLURM segment resolution failed"
 
 unresolved=()
 for field in \
@@ -484,7 +486,9 @@ case "${RUNTIME_PREFLIGHT_JOB_ID:-}" in
   ""|__REQUIRED_*__) ;;
   *) sbatch_command+=("--dependency=afterok:${RUNTIME_PREFLIGHT_JOB_ID}") ;;
 esac
-if [[ "${SBATCH_GRES}" != "none" ]]; then
+if [[ "${SBATCH_GRES}" == "none" ]]; then
+  sbatch_command+=("--gpus-per-node=${SBATCH_GPUS_PER_NODE}")
+else
   sbatch_command+=("--gres=${SBATCH_GRES}")
 fi
 if [[ -n "${SBATCH_SEGMENT_SIZE:-}" ]]; then
