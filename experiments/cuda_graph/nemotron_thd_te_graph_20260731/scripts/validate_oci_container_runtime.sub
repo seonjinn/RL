@@ -277,10 +277,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     sbatch_command[2]="--partition=${STAGE_PARTITION}"
     sbatch_command=("${sbatch_command[@]:0:4}" \
       "--cpus-per-task=${RUNTIME_STAGE_CPUS_PER_TASK}" "${sbatch_command[@]:4}")
-  elif [[ "${SBATCH_GRES}" == "none" ]]; then
-    sbatch_command=("${sbatch_command[@]:0:4}" \
-      "--gpus-per-node=${SBATCH_GPUS_PER_NODE}" "${sbatch_command[@]:4}")
-  else
+  elif [[ "${SBATCH_GRES}" != "none" ]]; then
     sbatch_command=("${sbatch_command[@]:0:4}" \
       "--gres=${SBATCH_GRES}" "${sbatch_command[@]:4}")
   fi
@@ -951,20 +948,16 @@ fi
   --output "${output}"'
 
 payload=${attestation_command}
-srun_resources=("--gres=${SBATCH_GRES}")
-if [[ "${SBATCH_GRES}" == "none" ]]; then
-  srun_resources=("--gpus-per-node=${SBATCH_GPUS_PER_NODE}")
-fi
+srun_command=(srun --nodes=1 --ntasks=1)
 if [[ "${RUNTIME_PHASE}" == "stage" ]]; then
   payload=${stage_command}
-  srun_resources=("--cpus-per-task=${RUNTIME_STAGE_CPUS_PER_TASK}")
+  srun_command+=("--cpus-per-task=${RUNTIME_STAGE_CPUS_PER_TASK}")
+elif [[ "${SBATCH_GRES}" != "none" ]]; then
+  srun_command+=("--gres=${SBATCH_GRES}")
 fi
 
 set +e
-srun \
-  --nodes=1 \
-  --ntasks=1 \
-  "${srun_resources[@]}" \
+"${srun_command[@]}" \
   --no-container-mount-home \
   --container-image="${CONTAINER}" \
   --container-mounts="${container_mounts}" \

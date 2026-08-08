@@ -2100,7 +2100,7 @@ def test_nano_test_only_launcher_renders_batch_job_without_singleton() -> None:
     assert "TEST_ONLY: no submission performed" in result.stdout
 
 
-def test_nano_ptyche_launcher_requests_all_gpus_with_tres_option(
+def test_nano_ptyche_launcher_omits_unsupported_gpu_tres_options(
     tmp_path: Path,
 ) -> None:
     root, experiment, profile, _ = _campaign_leaf_harness(tmp_path)
@@ -2127,7 +2127,7 @@ def test_nano_ptyche_launcher_requests_all_gpus_with_tres_option(
     )
 
     assert result.returncode == 0, result.stderr
-    assert "--gpus-per-node=4" in result.stdout
+    assert "--gpus-per-node" not in result.stdout
     assert "--gres=" not in result.stdout
     assert "--segment=2" in result.stdout
 
@@ -2811,7 +2811,7 @@ def test_cluster_profiles_render_cluster_specific_gres_and_segment_contracts(
     )
 
     assert ptyche.returncode == 0, ptyche.stderr
-    assert "--gpus-per-node=4" in ptyche.stdout
+    assert "--gpus-per-node" not in ptyche.stdout
     assert "--gres=" not in ptyche.stdout
     assert "--segment=6" in ptyche.stdout
     assert lyris.returncode == 0, lyris.stderr
@@ -2997,7 +2997,7 @@ def test_oci_container_runtime_smoke_renders_four_gpu_batch_job(
     assert not (tmp_path / "artifacts").exists()
 
 
-def test_container_runtime_smoke_renders_tres_gpu_request_for_ptyche(
+def test_container_runtime_smoke_omits_unsupported_gpu_tres_for_ptyche(
     tmp_path: Path,
 ) -> None:
     result = _run_script(
@@ -3012,7 +3012,7 @@ def test_container_runtime_smoke_renders_tres_gpu_request_for_ptyche(
     )
 
     assert result.returncode == 0, result.stderr
-    assert "--gpus-per-node=4" in result.stdout
+    assert "--gpus-per-node" not in result.stdout
     assert "--gres=" not in result.stdout
 
 

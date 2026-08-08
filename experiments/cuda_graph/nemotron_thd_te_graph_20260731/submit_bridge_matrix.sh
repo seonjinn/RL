@@ -130,9 +130,7 @@ IFS=$'\t' read -r snapshot snapshot_sha256 intent intent_sha256 <<<"${artifacts}
 
 exports="ALL,TEST_ROW_ID=bridge_forward_only_eval_8,TEST_WORLD_SIZE=8,TEST_NUM_NODES=2,TEST_GPUS_PER_NODE=4,CANDIDATE_KIND=bridge,CANDIDATE_SHA=${BRIDGE_CANDIDATE_SHA},INTEGRATION_SHA=${integration_sha},CANDIDATE_SOURCE_ROOT=${snapshot},CANDIDATE_SNAPSHOT_SHA256=${snapshot_sha256},RUN_LOG_ROOT=${RUN_LOG_ROOT},TEST_MATRIX=${matrix},RUNNER_PATH=${driver},CONTAINER=${CONTAINER},CONTAINER_SHA256=${CONTAINER_SHA256},MOUNTS=${MOUNTS},EXPECTED_TE_SHA=${EXPECTED_TE_SHA},EXPECTED_TE_VERSION_BASE_SHA=${EXPECTED_TE_VERSION_BASE_SHA},RUNTIME_ATTESTATION=${RUNTIME_ATTESTATION},SUBMISSION_INTENT=${intent},SUBMISSION_INTENT_SHA256=${intent_sha256},REPO_ROOT=${repo_root},EXPECTED_NEMORL_SHA=${EXPECTED_NEMORL_SHA},EXPECTED_BRIDGE_SHA=${EXPECTED_BRIDGE_SHA},EXPECTED_MCORE_SHA=${EXPECTED_MCORE_SHA},SOURCE_PROVENANCE_VERIFIER=${source_provenance_verifier},RUNTIME_ATTESTATION_COMMAND=${runtime_attestation_command},RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET},RUNTIME_EXCLUDED_PACKAGES=${RUNTIME_EXCLUDED_PACKAGES},TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST},NVTE_CUDA_ARCHS=${NVTE_CUDA_ARCHS}"
 command=(sbatch --parsable --nodes=2 "--account=${ACCOUNT}" "--partition=${PARTITION}" "--time=${TIME_LIMIT}" --job-name=bridge-forward-only-eval "--output=${RUN_LOG_ROOT}/slurm/bridge-forward-only-eval-%j.log" "--export=${exports}")
-if [[ "${SBATCH_GRES}" == none ]]; then
-  command+=("--gpus-per-node=${SBATCH_GPUS_PER_NODE}")
-else
+if [[ "${SBATCH_GRES}" != none ]]; then
   command+=("--gres=${SBATCH_GRES}")
 fi
 [[ -z "${segment_size}" ]] || command+=("--segment=${segment_size}")

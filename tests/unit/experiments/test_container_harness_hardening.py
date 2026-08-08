@@ -985,6 +985,99 @@ printf '{"status":"passed"}\n' >"${output}"
     ]
 
 
+def test_runtime_attestation_omits_gpu_tres_but_probes_four_devices(
+    tmp_path: Path,
+) -> None:
+    source_wrapper = EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
+    spool_dir = tmp_path / "slurm-spool" / "job734"
+    spool_dir.mkdir(parents=True)
+    spooled_wrapper = spool_dir / "slurm_script"
+    spooled_wrapper.write_text(source_wrapper.read_text())
+    spooled_wrapper.chmod(0o755)
+
+    container = tmp_path / "nightly.sqsh"
+    container.write_bytes(b"container")
+    container_digest = hashlib.sha256(container.read_bytes()).hexdigest()
+    artifact_dir = tmp_path / "artifacts"
+    runtime_stage_root = artifact_dir / "staged-runtimes" / ("a" * 64)
+    runtime_stage_marker = (
+        artifact_dir / "stage-markers" / f"{runtime_stage_root.name}.env"
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    srun_log = tmp_path / "srun.log"
+    provenance_verifier = tmp_path / "verify_source_provenance.sh"
+    _write_executable(provenance_verifier, "#!/bin/sh\nexit 0\n")
+    _write_executable(
+        fake_bin / "srun",
+        """#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$*" >"${SRUN_LOG}"
+output=
+while (($#)); do
+  if [[ "$1" == "--output" ]]; then
+    shift
+    output=$1
+  fi
+  shift
+done
+: "${output:?}"
+printf '{"status":"passed"}\n' >"${output}"
+""",
+    )
+
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "SRUN_LOG": str(srun_log),
+            "SLURM_JOB_ID": "734",
+            "CONTAINER_RUNTIME_VALIDATOR": str(
+                (EXPERIMENT_DIR / "validate_container_runtime.py").resolve()
+            ),
+            "PROJECT_ROOT": str(REPO_ROOT),
+            "CONTAINER": str(container),
+            "CONTAINER_SHA256": container_digest,
+            "ARTIFACT_DIR": str(artifact_dir),
+            "EXPECTED_NEMORL_SHA": NEMORL_COMMIT,
+            "EXPECTED_BRIDGE_SHA": BRIDGE_COMMIT,
+            "EXPECTED_MCORE_SHA": MCORE_COMMIT,
+            "EXPECTED_TE_SHA": TE_COMMIT,
+            "EXPECTED_TE_VERSION_BASE_SHA": TE_COMMIT,
+            "SOURCE_PROVENANCE_VERIFIER": str(provenance_verifier),
+            "RUNTIME_PHASE": "attest",
+            "RUNTIME_STAGE_CAPABILITY": RUNTIME_STAGE_CAPABILITY,
+            "RUNTIME_TEST_REQUIREMENTS": RUNTIME_TEST_REQUIREMENTS,
+            "RUNTIME_STAGE_ROOT": str(runtime_stage_root),
+            "RUNTIME_STAGE_MARKER": str(runtime_stage_marker),
+            "RUNTIME_STAGE_MARKER_SHA256": "b" * 64,
+            "RUNTIME_STAGE_JOB_ID": "733",
+            "RUNTIME_FEATURE_SET": "dropless_hybridep_nano16",
+            "RUNTIME_EXCLUDED_PACKAGES": "fast-hadamard-transform",
+            "TORCH_CUDA_ARCH_LIST": "10.0a",
+            "NVTE_CUDA_ARCHS": "100a",
+            "SBATCH_GPUS_PER_NODE": "4",
+            "SBATCH_GRES": "none",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(spooled_wrapper)],
+        cwd=REPO_ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    command = srun_log.read_text()
+    assert "--gpus-per-node" not in command
+    assert "--gres=" not in command
+    assert "--expected-device-count 4" in command
+    assert (artifact_dir / "oci-container-runtime-734.json").is_file()
+
+
 def test_runtime_wrapper_separates_cpu_stage_from_gpu_attestation() -> None:
     source = (
         EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
@@ -992,6 +1085,10 @@ def test_runtime_wrapper_separates_cpu_stage_from_gpu_attestation() -> None:
 
     assert "RUNTIME_PHASE=${RUNTIME_PHASE:-attest}" in source
     assert 'if [[ "${RUNTIME_PHASE}" == "stage" ]]' in source
+    assert 'elif [[ "${SBATCH_GRES}" != "none" ]]' in source
+    assert "srun_command=(srun --nodes=1 --ntasks=1)" in source
+    assert 'srun_command+=("--gres=${SBATCH_GRES}")' in source
+    assert '"--gpus-per-node=${SBATCH_GPUS_PER_NODE}"' not in source
     assert "NVTE_CUDA_ARCHS=100a" in source
     assert "RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET:-te_eval_capability_8}" in source
     assert '"RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET}"' in source

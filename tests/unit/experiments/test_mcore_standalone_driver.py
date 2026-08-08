@@ -785,13 +785,14 @@ def test_submitters_render_runtime_and_literal_digest_exports(submitter: str) ->
 @pytest.mark.parametrize(
     "submitter", ("submit_mcore_matrix.sh", "submit_bridge_matrix.sh")
 )
-def test_submitters_use_tres_gpu_request_when_profile_disables_gres(
+def test_submitters_omit_gpu_request_when_profile_disables_gres(
     submitter: str,
 ) -> None:
     source = (EXPERIMENT_DIR / submitter).read_text()
 
-    assert 'if [[ "${SBATCH_GRES}" == none ]]' in source
-    assert '"--gpus-per-node=${SBATCH_GPUS_PER_NODE}"' in source
+    assert 'if [[ "${SBATCH_GRES}" != none ]]' in source
+    assert '"--gres=${SBATCH_GRES}"' in source
+    assert '"--gpus-per-node=${SBATCH_GPUS_PER_NODE}"' not in source
 
 
 def test_mcore_submitter_rejects_unknown_row_before_remote_lookup() -> None:

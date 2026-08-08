@@ -486,9 +486,7 @@ case "${RUNTIME_PREFLIGHT_JOB_ID:-}" in
   ""|__REQUIRED_*__) ;;
   *) sbatch_command+=("--dependency=afterok:${RUNTIME_PREFLIGHT_JOB_ID}") ;;
 esac
-if [[ "${SBATCH_GRES}" == "none" ]]; then
-  sbatch_command+=("--gpus-per-node=${SBATCH_GPUS_PER_NODE}")
-else
+if [[ "${SBATCH_GRES}" != "none" ]]; then
   sbatch_command+=("--gres=${SBATCH_GRES}")
 fi
 if [[ -n "${SBATCH_SEGMENT_SIZE:-}" ]]; then
