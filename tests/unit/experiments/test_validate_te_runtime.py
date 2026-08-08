@@ -244,5 +244,5 @@ def test_outer_project_pins_the_validated_te_runtime_by_full_commit() -> None:
     )
     assert "TransformerEngine.git@release_v2.15" not in project
     assert '"nvidia-cudnn-frontend==1.26.0"' in project
-    assert '"nvidia-nccl-cu13==2.30.4"' in project
+    assert '"nvidia-nccl-cu13==2.30.7"' in project
     assert 'version = "2.19.0.dev0+bffde8f4"' in project
