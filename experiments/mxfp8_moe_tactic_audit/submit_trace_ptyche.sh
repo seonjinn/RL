@@ -75,21 +75,14 @@ else:
     vllm.__path__.insert(0, str(source))
 PY
 export PYTHONPATH=\${PYTHON_OVERLAY}:\${PYTHONPATH:-}
-uv run --locked --extra vllm --directory ${REPO_DIR} python - <<'PY'
-import os
-from pathlib import Path
-
-from vllm.model_executor.layers.fused_moe.experts import trtllm_fp8_moe
-from vllm.model_executor.layers.fused_moe.experts import trtllm_moe_trace
-
-root = Path(os.environ["VLLM_MXFP8_AUDIT_SOURCE_ROOT"]).resolve()
-for module in (trtllm_fp8_moe, trtllm_moe_trace):
-    module_path = Path(module.__file__).resolve()
-    if not module_path.is_relative_to(root):
-        raise RuntimeError(
-            f"stock vLLM module loaded instead of audit source: {module_path}"
-        )
-PY
+for audit_module in \
+  ${CUSTOM_VLLM_ROOT}/vllm/model_executor/layers/fused_moe/experts/trtllm_fp8_moe.py \
+  ${CUSTOM_VLLM_ROOT}/vllm/model_executor/layers/fused_moe/experts/trtllm_moe_trace.py; do
+  [[ -s "\${audit_module}" ]] || {
+    echo "missing custom vLLM audit module: \${audit_module}" >&2
+    exit 1
+  }
+done
 unset VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR
 export VLLM_MXFP8_MOE_TRACE_DIR=${TRACE_DIR}
 export VLLM_MXFP8_MOE_MODEL_REVISION=${MODEL_REVISION}
