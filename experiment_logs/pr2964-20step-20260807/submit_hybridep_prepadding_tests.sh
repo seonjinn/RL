@@ -12,6 +12,7 @@ esac
 work_root=/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna
 experiment_root=${work_root}/experiments/pr2964-20step-20260807
 repo=${VALIDATION_REPO_OVERRIDE:-${experiment_root}/RL}
+dependency_repo=${DEPENDENCY_REPO_OVERRIDE:-${repo}}
 container=${CONTAINER_OVERRIDE:-${work_root}/containers/nemo-rl-nightly-cw-fallback-20260808/nemo_rl_nightly_20260805_15171871.sqsh}
 test -n "${VALIDATION_HEAD_OVERRIDE:-}"
 run_root=${experiment_root}/runs/hybridep-prepadding-${VALIDATION_HEAD_OVERRIDE:0:12}
@@ -34,7 +35,7 @@ export CONTAINER="${container}"
 export MOUNTS=/lustre:/lustre
 export BASE_LOG_DIR="${run_root}/ray"
 export GPUS_PER_NODE=8
-export PYTHONPATH="${repo}:${repo}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${repo}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
+export PYTHONPATH="${repo}:${dependency_repo}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/src:${dependency_repo}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
 
 cd "${repo}"
 sbatch "${submit_mode[@]}" \
