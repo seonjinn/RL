@@ -936,6 +936,20 @@ def test_worker_provisions_the_same_locked_test_dependency_group() -> None:
     assert "--locked --extra mcore --group test --no-python-downloads" in source
 
 
+def test_worker_isolates_parallel_native_builds_in_node_local_uv_cache() -> None:
+    """One sync per node must never contend on an inherited shared UV cache."""
+    source = (EXPERIMENT_DIR / "scripts" / "run_mcore_scope.sub").read_text()
+    assignment = (
+        "export UV_CACHE_DIR=/tmp/mcore-driver-${SLURM_JOB_ID:?}-"
+        "${scheduler_restart_count}-uv-cache"
+    )
+
+    assert assignment in source
+    assert source.index(assignment) < source.index("srun --nodes=1 --ntasks=1")
+    container_environment = source.split("CONTAINER_ENV_VARS=", 1)[1].splitlines()[0]
+    assert "UV_CACHE_DIR" in container_environment.split(",")
+
+
 def test_scope_classifier_accepts_only_the_committed_mcore_driver() -> None:
     scope_path = EXPERIMENT_DIR / "scope_matrix.py"
     spec = importlib.util.spec_from_file_location("scope_matrix", scope_path)

@@ -2794,6 +2794,10 @@ def test_ray_and_mcore_sruns_override_image_uv_environment() -> None:
         ",NRL_SLURM_JOB_ID,NRL_SLURM_RESTART_COUNT"
     )
     assert f"CONTAINER_ENV_VARS={mcore_container_env_vars}" in mcore_wrapper
+    assert (
+        ",UV_CACHE_DIR"
+        in mcore_wrapper.split("CONTAINER_ENV_VARS=", 1)[1].splitlines()[0]
+    )
     assert mcore_wrapper.count('"--container-env=${CONTAINER_ENV_VARS}"') == 2
     assert (
         "NVTE_CUDA_ARCHS,TORCH_CUDA_ARCH_LIST,RUNTIME_FEATURE_SET,"
