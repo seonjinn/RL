@@ -729,14 +729,14 @@ def test_scheduler_preflight_invokes_real_sbatch_test_only(
     sbatch_log = tmp_path / "sbatch.log"
     _write_executable(
         fake_bin / "sbatch",
-        '#!/bin/bash\nprintf \'%s\\n\' "$*" >"${SBATCH_LOG}"\n',
+        '#!/bin/bash\nprintf \'%s\\n\' "$*" >"${FAKE_SBATCH_LOG}"\n',
     )
 
     result = _run_script(
         relative_path,
         **environment,
         PATH=f"{fake_bin}:{os.environ['PATH']}",
-        SBATCH_LOG=str(sbatch_log),
+        FAKE_SBATCH_LOG=str(sbatch_log),
         SBATCH_TEST_ONLY="1",
     )
 
@@ -745,6 +745,62 @@ def test_scheduler_preflight_invokes_real_sbatch_test_only(
     assert "--test-only" in submitted_arguments
     assert "--parsable" not in submitted_arguments
     assert "--export=ALL" not in submitted_arguments
+
+
+def test_runtime_submitter_scrubs_reserved_sbatch_environment(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    sbatch_log = tmp_path / "sbatch.log"
+    _write_executable(
+        fake_bin / "sbatch",
+        """#!/bin/bash
+printf 'ENV_SBATCH_GRES=%s\n' "${SBATCH_GRES-unset}" >"${FAKE_SBATCH_LOG}"
+printf 'ENV_SBATCH_GPUS_PER_NODE=%s\n' "${SBATCH_GPUS_PER_NODE-unset}" >>"${FAKE_SBATCH_LOG}"
+printf 'ENV_SBATCH_TEST_ONLY=%s\n' "${SBATCH_TEST_ONLY-unset}" >>"${FAKE_SBATCH_LOG}"
+printf 'ENV_SBATCH_EXCLUSIVE=%s\n' "${SBATCH_EXCLUSIVE-unset}" >>"${FAKE_SBATCH_LOG}"
+printf 'ENV_SBATCH_MEM=%s\n' "${SBATCH_MEM-unset}" >>"${FAKE_SBATCH_LOG}"
+printf 'ARG=%s\n' "$@" >>"${FAKE_SBATCH_LOG}"
+""",
+    )
+
+    result = _run_script(
+        "scripts/validate_oci_container_runtime.sub",
+        CONTAINER="/lustre/example/nightly.sqsh",
+        CONTAINER_SHA256="c" * 64,
+        ARTIFACT_DIR="/lustre/example/runtime-artifacts",
+        EXPECTED_NEMORL_SHA=NEMORL_COMMIT,
+        EXPECTED_BRIDGE_SHA=BRIDGE_COMMIT,
+        EXPECTED_MCORE_SHA=MCORE_COMMIT,
+        EXPECTED_TE_SHA=TE_COMMIT,
+        EXPECTED_TE_VERSION_BASE_SHA=TE_COMMIT,
+        RUNTIME_PHASE="stage",
+        RUNTIME_STAGE_CAPABILITY=RUNTIME_STAGE_CAPABILITY,
+        SOURCE_PROVENANCE_VERIFIER=str(
+            EXPERIMENT_DIR / "scripts" / "verify_source_provenance.sh"
+        ),
+        STAGE_PARTITION="batch",
+        SBATCH_GPUS_PER_NODE="4",
+        SBATCH_GRES="none",
+        SBATCH_TEST_ONLY="1",
+        SBATCH_EXCLUSIVE="1",
+        SBATCH_MEM="0",
+        PATH=f"{fake_bin}:{os.environ['PATH']}",
+        FAKE_SBATCH_LOG=str(sbatch_log),
+    )
+
+    assert result.returncode == 0, result.stderr
+    submitted = sbatch_log.read_text()
+    assert "ENV_SBATCH_GRES=unset" in submitted
+    assert "ENV_SBATCH_GPUS_PER_NODE=unset" in submitted
+    assert "ENV_SBATCH_TEST_ONLY=unset" in submitted
+    assert "ENV_SBATCH_EXCLUSIVE=unset" in submitted
+    assert "ENV_SBATCH_MEM=unset" in submitted
+    assert "SBATCH_GPUS_PER_NODE=4" in submitted
+    assert "SBATCH_GRES=none" in submitted
+    assert "ARG=--gpus" not in submitted
+    assert "ARG=--gres" not in submitted
 
 
 def test_runtime_job_uses_worker_parity_uv_environment_and_exact_provenance(
