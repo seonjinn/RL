@@ -1726,20 +1726,33 @@ def test_hybridep_prepadding_rejects_missing_alignment_group():
 
 
 @pytest.mark.mcore
-def test_hybridep_prepadding_preserves_cp_zigzag_layout():
+@pytest.mark.parametrize(
+    ("cp_size", "cp_rank", "group_max", "expected_local_input_ids"),
+    [
+        (1, 0, 16, list(range(1, 17))),
+        (2, 0, 10, [1, 2, 3, 4, 5, 6, 0, 0, 0, 0, 0, 0]),
+        (2, 1, 10, [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 0, 0]),
+    ],
+)
+def test_hybridep_prepadding_preserves_cp_zigzag_layout(
+    cp_size: int,
+    cp_rank: int,
+    group_max: int,
+    expected_local_input_ids: list[int],
+) -> None:
     from megatron.core.packed_seq_params import PackedSeqParams
 
     from nemo_rl.distributed.model_utils import _get_tokens_on_this_cp_rank
     from nemo_rl.models.megatron import data as megatron_data
 
     def set_group_max(target, **_kwargs):
-        target.fill_(10)
+        target.fill_(group_max)
 
     input_ids = torch.arange(1, 17).view(1, 16)
     input_ids_cp_sharded = _get_tokens_on_this_cp_rank(
         input_ids,
-        cp_rank=0,
-        cp_size=2,
+        cp_rank=cp_rank,
+        cp_size=cp_size,
     )
     cu_seqlens_padded = torch.tensor([0, 16], dtype=torch.int32)
     packed_seq_params = PackedSeqParams(
@@ -1750,7 +1763,7 @@ def test_hybridep_prepadding_preserves_cp_zigzag_layout():
         max_seqlen_q=16,
         max_seqlen_kv=16,
         qkv_format="thd",
-        total_tokens=8,
+        total_tokens=input_ids_cp_sharded.shape[1],
     )
 
     with (
@@ -1784,20 +1797,84 @@ def test_hybridep_prepadding_preserves_cp_zigzag_layout():
             packed_seq_params=packed_seq_params,
             cu_seqlens_padded=cu_seqlens_padded,
             pad_packed_seq_to_multiple_of=8,
-            cp_rank=0,
-            cp_size=2,
+            cp_rank=cp_rank,
+            cp_size=cp_size,
         )
 
-    assert padded_input_ids.shape == (1, 24)
+    expected_full_seq_len = 16 if cp_size == 1 else 24
+    expected_local_seq_len = expected_full_seq_len // cp_size
+    assert padded_input_ids.shape == (1, expected_full_seq_len)
     assert torch.equal(padded_input_ids[:, :16], input_ids)
     assert torch.count_nonzero(padded_input_ids[:, 16:]) == 0
     assert torch.equal(
         padded_local_input_ids,
-        torch.tensor([[1, 2, 3, 4, 5, 6, 0, 0, 0, 0, 0, 0]]),
+        torch.tensor([expected_local_input_ids]),
     )
-    assert torch.equal(padded_cu_seqlens, torch.tensor([0, 24]))
-    assert padded_params.max_seqlen_q == 24
-    assert padded_params.total_tokens == 12
+    assert torch.equal(padded_cu_seqlens, torch.tensor([0, expected_full_seq_len]))
+    assert padded_params.max_seqlen_q == expected_full_seq_len
+    assert padded_params.total_tokens == expected_local_seq_len
+
+
+@pytest.mark.mcore
+@patch("nemo_rl.models.megatron.data.get_context_parallel_rank", return_value=0)
+@patch("nemo_rl.models.megatron.data.get_context_parallel_world_size", return_value=1)
+def test_process_microbatch_prepads_hybridep_inputs_end_to_end(
+    mock_cp_world: MagicMock, mock_cp_rank: MagicMock
+) -> None:
+    """Packed tokens and their routing mask stay aligned through preprocessing."""
+    from nemo_rl.models.megatron import data as megatron_data
+
+    def set_group_max(target, **_kwargs):
+        target.fill_(10)
+
+    data_dict = {
+        "input_ids": torch.tensor(
+            [[11, 12, 13, 0, 0], [21, 22, 23, 24, 25]],
+            dtype=torch.long,
+        ),
+        "input_lengths": torch.tensor([3, 5], dtype=torch.long),
+    }
+
+    with (
+        patch.object(
+            megatron_data,
+            "get_expert_tensor_and_model_parallel_group",
+            return_value=MagicMock(),
+        ),
+        patch.object(
+            megatron_data.torch.distributed,
+            "all_reduce",
+            side_effect=set_group_max,
+        ) as mock_all_reduce,
+        patch.object(
+            megatron_data.torch.distributed,
+            "is_available",
+            return_value=True,
+        ),
+        patch.object(
+            megatron_data.torch.distributed,
+            "is_initialized",
+            return_value=True,
+        ),
+    ):
+        result = megatron_data.process_microbatch(
+            data_dict,
+            seq_length_key="input_lengths",
+            pack_sequences=True,
+            pad_packed_seq_to_multiple_of=8,
+            create_packed_seq_padding_mask=True,
+            prepad_packed_seq_for_hybridep=True,
+            straggler_timer=MagicMock(),
+        )
+
+    assert result.input_ids.shape == (1, 16)
+    assert result.input_ids_cp_sharded.shape == (1, 16)
+    assert result.padding_mask.shape == result.input_ids_cp_sharded.shape
+    assert torch.equal(result.padding_mask[0, :8], torch.zeros(8, dtype=torch.bool))
+    assert torch.equal(result.padding_mask[0, 8:], torch.ones(8, dtype=torch.bool))
+    assert result.packed_seq_params.total_tokens == 16
+    assert torch.equal(result.cu_seqlens_padded, torch.tensor([0, 3, 16]))
+    mock_all_reduce.assert_called_once()
 
 
 @pytest.mark.mcore
