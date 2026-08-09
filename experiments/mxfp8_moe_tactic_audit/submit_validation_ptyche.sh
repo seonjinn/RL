@@ -128,9 +128,8 @@ if [[ "${MAX_STEPS}" == 8 && "${ACTION}" != dry-run ]]; then
     audit_assert_smoke_manifest_matches "${SMOKE_MANIFEST}" "${NEMO_RL_COMMIT}" \
         "${EXPECTED_VLLM_COMMIT}" "${RECIPE_SHA256}" "${MODEL_SHA256}" \
         "${CACHE_SHA256}" "${SCRIPTS_SHA256}" "${EXECUTION_INPUTS_SHA256}"
-    grep -Fq "\"cache_sha256\": \"${CACHE_SHA256}\"" "${SMOKE_MARKER}" || { echo "Stale smoke marker cache" >&2; exit 1; }
-    grep -Fq "\"model_snapshot_sha256\": \"${MODEL_SHA256}\"" "${SMOKE_MARKER}" || { echo "Stale smoke marker model" >&2; exit 1; }
-    grep -Fq "\"smoke_manifest_sha256\": \"$(audit_sha256_path "${SMOKE_MANIFEST}")\"" "${SMOKE_MARKER}" || { echo "Stale smoke marker manifest" >&2; exit 1; }
+    audit_assert_smoke_marker_matches "${SMOKE_MARKER}" "${CACHE_SHA256}" \
+        "${MODEL_SHA256}" "$(audit_sha256_path "${SMOKE_MANIFEST}")"
 fi
 
 POST_RUN=''

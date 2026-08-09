@@ -223,3 +223,24 @@ for key, value in zip(keys, expected, strict=True):
         raise SystemExit(f"Stale smoke manifest {key}")
 PY
 }
+
+audit_assert_smoke_marker_matches() {
+    local marker=$1 cache_sha256=$2 model_sha256=$3 smoke_manifest_sha256=$4
+    python3 - "${marker}" "${cache_sha256}" "${model_sha256}" \
+        "${smoke_manifest_sha256}" <<'PY'
+import json
+import sys
+
+path, *expected = sys.argv[1:]
+keys = (
+    "cache_sha256",
+    "model_snapshot_sha256",
+    "smoke_manifest_sha256",
+)
+with open(path, encoding="ascii") as handle:
+    marker = json.load(handle)
+for key, value in zip(keys, expected, strict=True):
+    if marker.get(key) != value:
+        raise SystemExit(f"Stale smoke marker {key}")
+PY
+}

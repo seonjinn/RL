@@ -1173,7 +1173,8 @@ def _make_valid_two_step_smoke(
                 "smoke_manifest_sha256": hashlib.sha256(
                     manifest_path.read_bytes()
                 ).hexdigest(),
-            }
+            },
+            separators=(",", ":"),
         ),
         encoding="ascii",
     )
