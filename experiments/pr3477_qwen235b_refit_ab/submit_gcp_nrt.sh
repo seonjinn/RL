@@ -12,6 +12,11 @@ PARTITION=${PARTITION:-batch}
 TOTAL_NODES=${TOTAL_NODES:-8}
 GPUS_PER_NODE=${GPUS_PER_NODE:-8}
 GEN_NODES=${GEN_NODES:-4}
+TRAIN_TP=${TRAIN_TP:-2}
+TRAIN_PP=${TRAIN_PP:-4}
+TRAIN_CP=${TRAIN_CP:-2}
+TRAIN_EP=${TRAIN_EP:-8}
+TRAIN_ETP=${TRAIN_ETP:-1}
 MAX_STEPS=${MAX_STEPS:-20}
 WALLTIME=${WALLTIME:-04:00:00}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
@@ -43,6 +48,18 @@ esac
 
 if (( TOTAL_NODES != 8 || GPUS_PER_NODE != 8 || GEN_NODES != 4 )); then
   echo "The reportable A/B requires 8 nodes, 8 GPUs/node, and 4 generation nodes" >&2
+  exit 2
+fi
+
+TRAIN_WORLD_SIZE=$(((TOTAL_NODES - GEN_NODES) * GPUS_PER_NODE))
+DENSE_MODEL_PARALLEL_SIZE=$((TRAIN_TP * TRAIN_PP * TRAIN_CP))
+EXPERT_MODEL_PARALLEL_SIZE=$((TRAIN_ETP * TRAIN_EP * TRAIN_PP))
+if (( TRAIN_WORLD_SIZE % DENSE_MODEL_PARALLEL_SIZE != 0 )); then
+  echo "Trainer world size ${TRAIN_WORLD_SIZE} is not divisible by TP*PP*CP=${DENSE_MODEL_PARALLEL_SIZE}" >&2
+  exit 2
+fi
+if (( TRAIN_WORLD_SIZE % EXPERT_MODEL_PARALLEL_SIZE != 0 )); then
+  echo "Trainer world size ${TRAIN_WORLD_SIZE} is not divisible by ETP*EP*PP=${EXPERT_MODEL_PARALLEL_SIZE}" >&2
   exit 2
 fi
 
@@ -86,6 +103,12 @@ total_nodes=${TOTAL_NODES}
 gpus_per_node=${GPUS_PER_NODE}
 trainer_nodes=$((TOTAL_NODES - GEN_NODES))
 generation_nodes=${GEN_NODES}
+trainer_world_size=${TRAIN_WORLD_SIZE}
+trainer_tp=${TRAIN_TP}
+trainer_pp=${TRAIN_PP}
+trainer_cp=${TRAIN_CP}
+trainer_ep=${TRAIN_EP}
+trainer_etp=${TRAIN_ETP}
 max_steps=${MAX_STEPS}
 seed=42
 train_global_batch_size=512
@@ -121,7 +144,11 @@ uv run --frozen examples/run_grpo.py \
   policy.generation.colocated.resources.num_nodes=${GEN_NODES} \
   policy.generation.colocated.resources.gpus_per_node=${GPUS_PER_NODE} \
   policy.generation.refit_transport=${REFIT_TRANSPORT} \
-  policy.megatron_cfg.expert_tensor_parallel_size=1 \
+  policy.megatron_cfg.tensor_model_parallel_size=${TRAIN_TP} \
+  policy.megatron_cfg.pipeline_model_parallel_size=${TRAIN_PP} \
+  policy.megatron_cfg.context_parallel_size=${TRAIN_CP} \
+  policy.megatron_cfg.expert_tensor_parallel_size=${TRAIN_ETP} \
+  policy.megatron_cfg.expert_model_parallel_size=${TRAIN_EP} \
   policy.megatron_cfg.moe_token_dispatcher_type=alltoall \
   policy.megatron_cfg.moe_flex_dispatcher_backend=deepep \
   policy.generation.vllm_cfg.tensor_parallel_size=4 \
