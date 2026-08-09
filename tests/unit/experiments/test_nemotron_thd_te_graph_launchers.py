@@ -2683,10 +2683,10 @@ def test_readonly_actor_venv_probe_uses_non_editable_tier_installs() -> None:
     assert "probe_tier mcore megatron.core" in source
     assert '--container-image="${CONTAINER}"' in source
     assert 'bash "${PROBE_SCRIPT_PATH}"' in source
-    assert (
-        source.count('find "${RUNTIME_STAGE_ROOT}" -xdev \\( -type f -o -type d \\)')
-        == 2
-    )
+    assert source.count('find "${project_root}" -xdev') == 2
+    assert "export UV_PROJECT=${build_project_root}" in source
+    assert "--exclude='*.egg-info'" in source
+    assert "diff -qr --no-dereference" in source
     assert '"${uv_executable}" sync --locked --directory "${project_root}"' in source
     assert '"${uv_executable}" run --locked --extra "${tier}"' in source
     assert "path.is_relative_to(root)" in source

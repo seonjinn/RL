@@ -74,9 +74,9 @@ done
   echo "Staged uv and Python must be executable" >&2
   exit 2
 }
-if find "${RUNTIME_STAGE_ROOT}" -xdev \( -type f -o -type d \) \
+if find "${project_root}" -xdev \( -type f -o -type d \) \
   -perm /222 -print -quit | grep -q .; then
-  echo "RUNTIME_STAGE_ROOT must be read-only before the actor-venv probe" >&2
+  echo "Staged source must be read-only before the actor-venv probe" >&2
   exit 2
 fi
 
@@ -88,11 +88,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
+build_project_root=${probe_root}/source
+mkdir -m 0700 -- "${build_project_root}"
+tar --exclude='./.git' --exclude='*/.git' --exclude='*.egg-info' \
+  -C "${project_root}" -cf - . | tar -C "${build_project_root}" -xf -
+diff -qr --no-dereference --exclude=.git --exclude='*.egg-info' \
+  "${project_root}" "${build_project_root}"
+chmod -R u+w -- "${build_project_root}"
+
 export UV_NO_EDITABLE=1
 export UV_LINK_MODE=copy
 export UV_MANAGED_PYTHON=1
 export UV_PYTHON_DOWNLOADS=never
 export UV_PYTHON=$(tr -d '[:space:]' <"${project_root}/.python-version")
+export UV_PROJECT=${build_project_root}
 export PATH=$(dirname "${uv_executable}"):${PATH}
 
 probe_tier() {
@@ -115,9 +124,10 @@ probe_tier() {
 probe_tier vllm vllm
 probe_tier mcore megatron.core
 
-if find "${RUNTIME_STAGE_ROOT}" -xdev \( -type f -o -type d \) \
+if find "${project_root}" -xdev \( -type f -o -type d \) \
   -perm /222 -print -quit | grep -q .; then
-  echo "Actor-venv probe made the immutable runtime writable" >&2
+  echo "Actor-venv probe made the immutable source writable" >&2
   exit 2
 fi
-printf 'READONLY_ACTOR_VENV_PROBE=passed\nUV_NO_EDITABLE=%s\n' "${UV_NO_EDITABLE}"
+printf 'READONLY_ACTOR_VENV_PROBE=passed\nUV_NO_EDITABLE=%s\nUV_PROJECT=%s\n' \
+  "${UV_NO_EDITABLE}" "${UV_PROJECT}"
