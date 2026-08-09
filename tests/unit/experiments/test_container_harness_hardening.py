@@ -1628,7 +1628,9 @@ def test_runtime_stage_runs_exact_task2_root_suite_before_marker_publication(
     fake_python = tmp_path / "python"
     argument_log = tmp_path / "arguments.txt"
     fake_python.write_text(
-        '#!/bin/bash\nprintf \'%s\\n\' "$@" >"${TASK2_TEST_ARGUMENT_LOG:?}"\n'
+        "#!/bin/bash\n"
+        'printf \'PWD=%s\\n\' "${PWD}" >>"${TASK2_TEST_ARGUMENT_LOG:?}"\n'
+        'printf \'%s\\n\' "$@" >>"${TASK2_TEST_ARGUMENT_LOG}"\n'
     )
     fake_python.chmod(0o755)
     result_root = tmp_path / "results"
@@ -1644,6 +1646,7 @@ def test_runtime_stage_runs_exact_task2_root_suite_before_marker_publication(
 
     assert result.returncode == 0, result.stderr
     assert argument_log.read_text().splitlines() == [
+        f"PWD={tmp_path.resolve()}",
         "-m",
         "pytest",
         "-q",
@@ -1657,8 +1660,19 @@ def test_runtime_stage_runs_exact_task2_root_suite_before_marker_publication(
         "tests/unit/experiments/test_mcore_standalone_driver.py",
         "tests/unit/experiments/test_matrix_submitters.py",
         "tests/unit/experiments/test_nemotron_thd_te_graph_launchers.py",
-        "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/"
-        "Megatron-LM/tests/unit_tests/data/test_dataset_utils.py",
+        "PWD="
+        + str(
+            REPO_ROOT / "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/"
+            "Megatron-LM"
+        ),
+        "-m",
+        "pytest",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        f"--basetemp={result_root}/mcore-tmp",
+        f"--junitxml={result_root}/task-2-mcore.xml",
+        "tests/unit_tests/data/test_dataset_utils.py",
     ]
     source = (
         EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
@@ -1685,14 +1699,17 @@ def test_task2_root_runner_removes_passing_pytest_basetemp(tmp_path: Path) -> No
         'for argument in "$@"; do\n'
         '  case "${argument}" in\n'
         "    --basetemp=*) basetemp=${argument#*=} ;;\n"
+        "    *test_validate_te_runtime.py) outer_suite=1 ;;\n"
         "  esac\n"
         "done\n"
         ': "${basetemp:?}"\n'
         'mkdir -p -- "${basetemp}"\n'
         'ln -s -- "${basetemp}/missing" "${basetemp}/broken-link"\n'
-        "mkdir -p -- tests/unit/unit_results\n"
-        "printf generated >tests/unit/unit_results.json\n"
-        "printf generated >tests/unit/unit_results/result.json\n"
+        'if [[ "${outer_suite:-0}" == "1" ]]; then\n'
+        "  mkdir -p -- tests/unit/unit_results\n"
+        "  printf generated >tests/unit/unit_results.json\n"
+        "  printf generated >tests/unit/unit_results/result.json\n"
+        "fi\n"
     )
     fake_python.chmod(0o755)
     result_root = tmp_path / "results"
@@ -1708,6 +1725,7 @@ def test_task2_root_runner_removes_passing_pytest_basetemp(tmp_path: Path) -> No
     assert result.returncode == 0, result.stderr
     assert result_root.is_dir()
     assert not (result_root / "tmp").exists()
+    assert not (result_root / "mcore-tmp").exists()
     assert not (tmp_path / "tests/unit/unit_results.json").exists()
     assert not (tmp_path / "tests/unit/unit_results").exists()
 
