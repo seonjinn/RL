@@ -11,3 +11,15 @@ parallelism of the upstream `16n4g` performance recipe. Only
 See [PLAN.md](PLAN.md) for the fixed setup and commands. Runtime metadata,
 SLURM logs, and W&B run identifiers are written under the remote experiment
 root printed by the submission script.
+
+## Execution History
+
+| Jobs | Outcome | Interpretation |
+| --- | --- | --- |
+| `507182`, `507183` | Failed during environment setup | The original container did not provide the lockfile-required Python 3.13.14 interpreter. |
+| `507329`, `507330` | Cancelled | The direct container interpreter used NCCL 2.30.4 while the source lock required NCCL 2.30.7, so this pair was not a valid source/runtime comparison. |
+| `507350`, `507351` | Failed during worker-venv setup | Builders on multiple nodes concurrently rebuilt the same Lustre venv and raced in `rmtree` and package installation. No model, refit, or training step ran. |
+| `508251`, `508252` | Submitted | The locked runtime is retained, while worker venvs are rebuilt independently on each node under `/tmp`. |
+
+Only runs that reach measured GRPO steps are eligible for the performance
+comparison.
