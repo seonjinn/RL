@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_DIR=${REPO_DIR_OVERRIDE:-$(realpath "${SCRIPT_DIR}/../..")}
+MEGATRON_LM_ROOT=${REPO_DIR}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM
 source "${SCRIPT_DIR}/provenance.sh"
 
 ACTION=${ACTION:-dry-run}
@@ -95,6 +96,7 @@ if [[ "${ACTION}" != dry-run ]]; then
     [[ -n "${VLLM_ENVIRONMENT_ROOT}" ]] || { echo "VLLM_ENVIRONMENT_ROOT must name a prepared vLLM environment" >&2; exit 1; }
     [[ -f "${VLLM_ENVIRONMENT_ROOT}/READY" ]] || { echo "Prepared vLLM environment marker is missing: ${VLLM_ENVIRONMENT_ROOT}/READY" >&2; exit 1; }
     [[ -L "${DRIVER_VENV}/bin/python" || -x "${DRIVER_VENV}/bin/python" ]] || { echo "Prepared vLLM environment is missing: ${DRIVER_VENV}" >&2; exit 1; }
+    [[ -d "${MEGATRON_LM_ROOT}/megatron" ]] || { echo "Missing Megatron-LM checkout: ${MEGATRON_LM_ROOT}" >&2; exit 1; }
 fi
 NEMO_RL_COMMIT=$(git -C "${REPO_DIR}" rev-parse HEAD)
 CACHE_SHA256=dry-run-not-validated
@@ -171,7 +173,7 @@ export NEMO_RL_VENV_DIR=${VLLM_ENVIRONMENT_ROOT}
 export UV_PROJECT_ENVIRONMENT=${DRIVER_VENV}
 export VIRTUAL_ENV=${DRIVER_VENV}
 export PATH=${DRIVER_VENV}/bin:\${PATH}
-export PYTHONPATH=${REPO_DIR}
+export PYTHONPATH=${REPO_DIR}:${MEGATRON_LM_ROOT}
 export HF_HOME=${WORK_ROOT}/hf
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1

@@ -437,8 +437,15 @@ def test_validation_uses_the_prepared_vllm_environment(tmp_path: Path) -> None:
     assert f"export UV_PROJECT_ENVIRONMENT={canonical}" in output
     assert f"export VIRTUAL_ENV={canonical}" in output
     assert f"export PATH={canonical / 'bin'}:" in output
-    assert f"export PYTHONPATH={REPO_ROOT}" in output
+    megatron = (
+        REPO_ROOT
+        / "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
+    )
+    assert f"export PYTHONPATH={REPO_ROOT}:{megatron}" in output
     assert f"export PYTHONPATH={REPO_ROOT}:{tmp_path / 'vllm'}" not in output
+    assert "Missing Megatron-LM checkout" in (
+        AUDIT_DIR / "submit_validation_ptyche.sh"
+    ).read_text(encoding="ascii")
     assert f"{canonical / 'bin/python'} examples/run_grpo.py" in output
     assert "source " not in output or "/nemo-rl.env" not in output
     assert "Expected vLLM 0.25.1" in output
@@ -901,6 +908,11 @@ def _make_submit_environment(tmp_path: Path) -> tuple[dict[str, str], Path, Path
     (recipe / "grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml").write_text(
         "recipe: test\n", encoding="ascii"
     )
+    megatron = (
+        repo
+        / "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron"
+    )
+    megatron.mkdir(parents=True)
     subprocess.run(["git", "add", "."], check=True, cwd=repo)
     subprocess.run(["git", "commit", "-q", "-m", "recipe"], check=True, cwd=repo)
     model_cache = _make_model_cache(tmp_path)
