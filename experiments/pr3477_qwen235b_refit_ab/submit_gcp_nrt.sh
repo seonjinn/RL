@@ -153,6 +153,7 @@ export VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM}
 export VLLM_WORKER_MULTIPROC_METHOD=${VLLM_WORKER_MULTIPROC_METHOD}
 export WANDB_API_KEY="\$(cat ${WANDB_KEY_FILE})"
 printf 'NEMO_RL_SOURCE_COMMIT=%s\n' "\$(git rev-parse HEAD)"
+uv run --frozen python -m nemo_rl.utils.prefetch_venvs VllmAsyncGenerationWorker MegatronPolicyWorker
 uv run --frozen examples/run_grpo.py \
   --config ${CONFIG} \
   cluster.num_nodes=${TOTAL_NODES} \
@@ -173,6 +174,7 @@ uv run --frozen examples/run_grpo.py \
   policy.generation.vllm_cfg.pipeline_parallel_size=${VLLM_PP} \
   policy.generation.vllm_cfg.expert_parallel_size=1 \
   policy.generation.vllm_cfg.use_tqdm=false \
+  ++policy.generation.vllm_cfg.env_vars.VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM} \
   +policy.generation.vllm_kwargs.distributed_timeout_seconds=2400 \
   policy.train_global_batch_size=512 \
   grpo.seed=42 \

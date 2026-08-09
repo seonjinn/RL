@@ -32,6 +32,7 @@ root printed by the submission script.
 | `508634` | Failed during vLLM profile warmup | A forked vLLM rank aborted while CuTe DSL compiled FlashInfer's MXFP8 quantization kernel. The replacement uses the `spawn` worker start method so CUTLASS/MLIR state is initialized independently. |
 | `508660` | Failed during policy worker creation | `spawn` fixed the CuTe DSL abort and vLLM initialized, but a stale incomplete worker venv lacked `megatron.bridge`. Replacement runs use a run-scoped worker-venv namespace shared only by the matched pair. |
 | `508689` | Cancelled after vLLM native failure | Fresh worker venvs fixed the missing Megatron dependency, but one generation rank segfaulted during profile warmup and caused a TCPStore cancellation cascade. A clean retry reuses the completed venv and kernel cache on a different node set. |
+| `508746` | Cancelled after deterministic vLLM native failure | One generation engine emitted `CUDA driver error: out of memory` from `CUDASymmetricMemory`, then all eight ranks segfaulted and the engine failed. The shell export did not reliably cover vLLM's internal non-leader Ray workers. The replacement injects the setting through `vllm_cfg.env_vars` and sequentially prefetches both worker venvs before model startup. |
 
 The reportable replacement returns to full-node allocation and combines the
 recipe-native TP4 with PP2, yielding one 8-GPU generation engine per node.

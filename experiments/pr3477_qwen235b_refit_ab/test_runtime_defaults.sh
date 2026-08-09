@@ -25,6 +25,8 @@ grep -Fq 'policy.megatron_cfg.expert_model_parallel_size=${TRAIN_EP}' "${SUBMIT_
 grep -Fq 'VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM:-0}' "${SUBMIT_SCRIPT}"
 grep -Fq 'VLLM_WORKER_MULTIPROC_METHOD=${VLLM_WORKER_MULTIPROC_METHOD:-spawn}' "${SUBMIT_SCRIPT}"
 grep -Fq 'export VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM}' "${SUBMIT_SCRIPT}"
+grep -Fq 'uv run --frozen python -m nemo_rl.utils.prefetch_venvs VllmAsyncGenerationWorker MegatronPolicyWorker' "${SUBMIT_SCRIPT}"
+grep -Fq '++policy.generation.vllm_cfg.env_vars.VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM}' "${SUBMIT_SCRIPT}"
 grep -Fq 'export VLLM_WORKER_MULTIPROC_METHOD=${VLLM_WORKER_MULTIPROC_METHOD}' "${SUBMIT_SCRIPT}"
 grep -Fq 'vllm_allreduce_use_symm_mem=${VLLM_ALLREDUCE_USE_SYMM_MEM}' "${SUBMIT_SCRIPT}"
 grep -Fq -- '--exclusive' "${SUBMIT_SCRIPT}"
