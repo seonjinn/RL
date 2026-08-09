@@ -26,6 +26,7 @@ root printed by the submission script.
 | `508531`, `508532` | Failed during vLLM initialization | TP8 placed one engine per node, but Qwen3-235B MXFP8 MoE scale shuffle does not support that partition: `shape '[128, 4096, 6]' is invalid for input of size 4194304`. |
 | `508561`, `508562` | Failed during launcher preflight | `ray.sub` rejected 4-GPU requests on physical 8-GPU nodes before Ray started. |
 | `508571`, `508572` | Failed during wrapper startup | Slurm copied the partial-node wrapper into its spool, so a wrapper-relative `ray.sub` path was invalid. The wrapper now receives the absolute repo path. |
+| `508584`, `508585` | Cancelled during Ray startup | The partial allocation provided 112 CPUs/node, but `ray.sub` requested the physical `CPUTot=224` for each internal `srun`, so no Ray step could start. The experiment now passes the allocated 112 CPUs explicitly. |
 
 The reportable replacement uses the recipe-native TP4 with one engine per node:
 16 nodes request 4 GPUs each, split into 8 trainer and 8 generation nodes. The

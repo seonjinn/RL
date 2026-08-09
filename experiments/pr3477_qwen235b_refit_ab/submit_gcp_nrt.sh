@@ -15,6 +15,7 @@ TOTAL_NODES=${TOTAL_NODES:-16}
 GPUS_PER_NODE=${GPUS_PER_NODE:-4}
 GEN_NODES=${GEN_NODES:-8}
 VLLM_TP=${VLLM_TP:-4}
+CPUS_PER_WORKER=${CPUS_PER_WORKER:-112}
 TRAIN_TP=${TRAIN_TP:-2}
 TRAIN_PP=${TRAIN_PP:-4}
 TRAIN_CP=${TRAIN_CP:-2}
@@ -57,6 +58,10 @@ if (( TOTAL_NODES != 16 || GPUS_PER_NODE != 4 || GEN_NODES != 8 )); then
 fi
 if (( VLLM_TP != GPUS_PER_NODE )); then
   echo "The B200 A/B requires one vLLM engine per node (VLLM_TP=${GPUS_PER_NODE})" >&2
+  exit 2
+fi
+if (( CPUS_PER_WORKER != 112 )); then
+  echo "The 4-GPU B200 allocation provides 112 CPUs per worker" >&2
   exit 2
 fi
 
@@ -116,6 +121,7 @@ generation_nodes=${GEN_NODES}
 generation_world_size=${GEN_WORLD_SIZE}
 generation_tensor_parallel_size=${VLLM_TP}
 generation_data_parallel_size=$((GEN_WORLD_SIZE / VLLM_TP))
+cpus_per_worker=${CPUS_PER_WORKER}
 trainer_world_size=${TRAIN_WORLD_SIZE}
 trainer_tp=${TRAIN_TP}
 trainer_pp=${TRAIN_PP}
@@ -192,6 +198,7 @@ export CONTAINER
 export MOUNTS=/lustre:/lustre
 export CONTAINER_REMAP_ROOT=1
 export COMMAND
+export CPUS_PER_WORKER
 export GPUS_PER_NODE
 export NRL_ALLOW_PARTIAL_GPU_NODES
 export NRL_RAY_SUB_PATH

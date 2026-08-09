@@ -16,7 +16,7 @@ Ray, SLURM, GCP-NRT B200, W&B.
 - Cluster: GCP-NRT B200; request 4 of the 8 GPUs on each allocated node
 - Allocation: 16 nodes, 64 GPUs total
 - Split: 8 trainer nodes and 8 generation nodes
-- Scheduling: partial-node GRES opt-in, non-exclusive allocation
+- Scheduling: partial-node GRES opt-in, non-exclusive allocation, 112 CPUs/node
 - Recipe: `grpo-qwen3-235b-16n4g-mxfp8-rollout.yaml`
 - Parallelism: trainer TP2/PP4/CP2/EP8; generation TP4/PP1/EP1, DP8
 - GRPO: 16 prompts, 32 generations per prompt, GBS 512, seed 42
