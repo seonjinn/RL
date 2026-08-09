@@ -5,6 +5,7 @@ set -euo pipefail
 dispatcher=${1:-}
 mode=${2:-submit}
 round=${3:-}
+attempt=${ATTEMPT_SUFFIX_OVERRIDE:-}
 case "${dispatcher}" in
   baseline|hybridep) ;;
   *) printf 'Usage: %s {baseline|hybridep} {submit|test-only} ROUND\n' "$0" >&2; exit 2 ;;
@@ -17,6 +18,10 @@ case "${round}" in
   1|2|3) ;;
   *) printf 'Usage: %s {baseline|hybridep} {submit|test-only} ROUND\n' "$0" >&2; exit 2 ;;
 esac
+case "${attempt}" in
+  ''|retry[1-9]|retry[1-9][0-9]) ;;
+  *) printf 'ATTEMPT_SUFFIX_OVERRIDE must be empty or retry1..retry99\n' >&2; exit 2 ;;
+esac
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 submit_script=${script_dir}/../pr2964-20step-20260807/submit_performance_20step.sh
@@ -26,7 +31,7 @@ source_experiment_root=${work_root}/experiments/pr2964-20step-20260807
 export MAX_NUM_STEPS_OVERRIDE=200
 export TIME_LIMIT_OVERRIDE=04:00:00
 export EXPERIMENT_ROOT_OVERRIDE=${work_root}/experiments/pr2964-q30-4hour-20260809
-export RUN_NAME_OVERRIDE=qwen3-30ba3b-sync-${dispatcher}-pr2964-200step-round${round}
+export RUN_NAME_OVERRIDE=qwen3-30ba3b-sync-${dispatcher}-pr2964-200step-round${round}${attempt:+-${attempt}}
 export CHECKPOINTING_ENABLED_OVERRIDE=true
 export CHECKPOINT_DIR_OVERRIDE=${EXPERIMENT_ROOT_OVERRIDE}/checkpoints/${dispatcher}
 export CHECKPOINT_SAVE_PERIOD_OVERRIDE=200
@@ -43,7 +48,7 @@ export HYBRIDEP_DEPENDENCY_ANCESTOR_OVERRIDE=4846673cf66cb47fc1eecf0ea22d17c1bea
 export CONTAINER_OVERRIDE=${work_root}/containers/nemo-rl-nightly-cw-fallback-20260808/nemo_rl_nightly_20260805_15171871.sqsh
 export HYBRID_EP_WHEEL_OVERRIDE=${source_experiment_root}/deepep-wheels/17cfb817bccec3a9c247013360cc550c2bac441e-dmabuf-506072/deep_ep-1.2.1+17cfb81-cp313-cp313-linux_x86_64.whl
 export HYBRID_EP_WHEEL_SHA256_OVERRIDE=f181085dcbfdcb88bc2a33f9df52d4acfd99d1f5e3a73a03ce3dfa38947f559d
-export SLURM_EXCLUDE=pool0-0167,pool0-0272,pool0-0337
+export SLURM_EXCLUDE=${SLURM_EXCLUDE_OVERRIDE:-pool0-0167,pool0-0272,pool0-0337}
 export NRL_FORCE_REBUILD_VENVS_OVERRIDE=false
 
 exec bash "${submit_script}" qwen3-30ba3b "${dispatcher}" "${mode}"

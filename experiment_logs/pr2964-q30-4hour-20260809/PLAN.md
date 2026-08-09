@@ -47,7 +47,10 @@ bash experiment_logs/pr2964-q30-4hour-20260809/submit_q30_4hour.sh hybridep subm
 NeMo-RL must checkpoint and exit cleanly before the SLURM walltime. A dependent
 round automatically resumes from the latest checkpoint. `TIMEOUT`, an
 application fatal, or a resume from the wrong step is a failed round and must
-be diagnosed before retrying.
+be diagnosed before retrying. Infrastructure retries use
+`ATTEMPT_SUFFIX_OVERRIDE=retryN` so failed logs and submission metadata remain
+immutable; `SLURM_EXCLUDE_OVERRIDE` can add a node implicated by the preserved
+failure evidence.
 
 ## Analysis
 

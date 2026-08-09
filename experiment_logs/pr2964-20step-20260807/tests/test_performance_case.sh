@@ -143,6 +143,8 @@ long_submit_path=${long_experiment_dir}/submit_q30_4hour.sh
 }
 long_submit_script=$(<"${long_submit_path}")
 assert_contains "${long_submit_script}" 'round=${3:-}'
+assert_contains "${long_submit_script}" 'attempt=${ATTEMPT_SUFFIX_OVERRIDE:-}'
+assert_contains "${long_submit_script}" 'retry[1-9]|retry[1-9][0-9]) ;;'
 assert_contains "${long_submit_script}" '1|2|3) ;;'
 assert_contains "${long_submit_script}" 'MAX_NUM_STEPS_OVERRIDE=200'
 assert_contains "${long_submit_script}" 'TIME_LIMIT_OVERRIDE=04:00:00'
@@ -157,8 +159,8 @@ assert_contains "${long_submit_script}" 'CHECKPOINT_SAVE_OPTIMIZER_OVERRIDE=true
 assert_contains "${long_submit_script}" 'VALIDATION_HEAD_OVERRIDE=541413bd2912561950413b39809db40590a652bb'
 assert_contains "${long_submit_script}" 'HYBRIDEP_DEPENDENCY_ANCESTOR_OVERRIDE=4846673cf66cb47fc1eecf0ea22d17c1bead8f75'
 assert_contains "${long_submit_script}" 'MCORE_EXPECTED_COMMIT_OVERRIDE=34b55f24f0826c9aebd6693ecb60648cd934737d'
-assert_contains "${long_submit_script}" 'SLURM_EXCLUDE=pool0-0167,pool0-0272,pool0-0337'
-assert_contains "${long_submit_script}" 'RUN_NAME_OVERRIDE=qwen3-30ba3b-sync-${dispatcher}-pr2964-200step-round${round}'
+assert_contains "${long_submit_script}" 'SLURM_EXCLUDE=${SLURM_EXCLUDE_OVERRIDE:-pool0-0167,pool0-0272,pool0-0337}'
+assert_contains "${long_submit_script}" 'RUN_NAME_OVERRIDE=qwen3-30ba3b-sync-${dispatcher}-pr2964-200step-round${round}${attempt:+-${attempt}}'
 assert_contains "${long_submit_script}" 'exec bash "${submit_script}" qwen3-30ba3b "${dispatcher}" "${mode}"'
 
 focused_test_script=$(<"${experiment_dir}/submit_hybridep_prepadding_tests.sh")
