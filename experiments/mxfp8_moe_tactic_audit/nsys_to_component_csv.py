@@ -112,9 +112,22 @@ def convert(nvtx_csv: Path, output: Path) -> None:
                 raise ValueError("duplicate MXFP8 MoE cumulative NVTX range")
             stages[component] = (tagged, instances, total_ns)
         for stages in cumulative.values():
+            if set(stages) == {"FC1+FC2/GEMM1+GEMM2 cumulative"}:
+                tagged, instances, total_ns = stages[
+                    "FC1+FC2/GEMM1+GEMM2 cumulative"
+                ]
+                rows.append(
+                    {
+                        **tagged,
+                        "component": "FC1+FC2/GEMM1+GEMM2",
+                        "call_count": str(instances),
+                        "mean_us": f"{total_ns / instances / 1000.0:.9g}",
+                    }
+                )
+                continue
             if set(stages) != set(CUMULATIVE_COMPONENTS):
                 raise ValueError(
-                    "NSys cumulative timing requires both FC1 and paired ranges"
+                    "NSys cumulative timing requires a paired range and optional FC1 range"
                 )
             fc1_tagged, fc1_instances, fc1_total_ns = stages["FC1/GEMM1 cumulative"]
             pair_tagged, pair_instances, pair_total_ns = stages[

@@ -123,6 +123,42 @@ def test_actual_shmoo_range_converts_to_mean_component_timing(
     assert all("median_us" not in row for row in rows)
 
 
+def test_pair_only_range_is_preserved_without_false_fc1_fc2_split(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    labels: list[str] = []
+    monkeypatch.setattr(
+        torch.cuda.nvtx, "range_push", lambda label: labels.append(label)
+    )
+    monkeypatch.setattr(torch.cuda.nvtx, "range_pop", lambda: None)
+    with _nsys_component_range(
+        _case(),
+        TacticPair(1, 2),
+        "candidate",
+        PAIR_CUMULATIVE,
+        comparison_tactic=TacticPair(1, 2),
+        cache_event="cache hit",
+    ):
+        pass
+
+    raw = tmp_path / "nvtx.csv"
+    with raw.open("w", newline="", encoding="ascii") as handle:
+        writer = csv.DictWriter(
+            handle, fieldnames=["Range", "Instances", "Total Time (ns)"]
+        )
+        writer.writeheader()
+        writer.writerow(
+            {"Range": labels[0], "Instances": 2, "Total Time (ns)": 200_000}
+        )
+    output = tmp_path / "components.csv"
+    convert(raw, output)
+
+    rows = list(csv.DictReader(output.open(encoding="ascii")))
+    assert len(rows) == 1
+    assert rows[0]["component"] == "FC1+FC2/GEMM1+GEMM2"
+    assert rows[0]["mean_us"] == "100"
+
+
 def test_reconstruct_topk_is_deterministic_for_signature_key() -> None:
     profile = _profile()
 

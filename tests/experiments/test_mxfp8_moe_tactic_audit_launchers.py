@@ -145,7 +145,7 @@ def test_shmoo_dry_run_requests_one_gb200_for_five_hours(tmp_path: Path) -> None
     assert "--pair-only" in output
     assert "CUDA Graph" in output
     assert "nsys profile" in output
-    assert "nsys stats --report nvtxppsum" in output
+    assert "nsys stats --report nvtx_gpu_proj_sum" in output
     assert "nsys-selected.nsys-rep" in output
     assert "nsys-selected.nsys\n" not in output
     assert "nsys_to_component_csv.py" in output
