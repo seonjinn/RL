@@ -24,6 +24,7 @@ WALLTIME=${WALLTIME:-04:00:00}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
 NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-false}
 VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM:-0}
+VLLM_FUSE_ALLREDUCE_RMS=${VLLM_FUSE_ALLREDUCE_RMS:-false}
 VLLM_WORKER_MULTIPROC_METHOD=${VLLM_WORKER_MULTIPROC_METHOD:-spawn}
 
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna}
@@ -130,6 +131,7 @@ container=${CONTAINER}
 driver_runtime=uv_run_frozen
 worker_venv_dir=${WORKER_VENV_ROOT}
 vllm_allreduce_use_symm_mem=${VLLM_ALLREDUCE_USE_SYMM_MEM}
+vllm_fuse_allreduce_rms=${VLLM_FUSE_ALLREDUCE_RMS}
 vllm_worker_multiproc_method=${VLLM_WORKER_MULTIPROC_METHOD}
 wandb_project=${WANDB_PROJECT}
 wandb_name=${WANDB_NAME}
@@ -175,6 +177,7 @@ uv run --frozen examples/run_grpo.py \
   policy.generation.vllm_cfg.expert_parallel_size=1 \
   policy.generation.vllm_cfg.use_tqdm=false \
   ++policy.generation.vllm_cfg.env_vars.VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM} \
+  ++policy.generation.vllm_kwargs.compilation_config.pass_config.fuse_allreduce_rms=${VLLM_FUSE_ALLREDUCE_RMS} \
   +policy.generation.vllm_kwargs.distributed_timeout_seconds=2400 \
   policy.train_global_batch_size=512 \
   grpo.seed=42 \
