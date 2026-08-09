@@ -38,7 +38,7 @@ CONTAINER_ENV_VARS = (
     "CONTAINER_PATH_PREFIX,UV_PROJECT,UV_PROJECT_ENVIRONMENT,UV_LINK_MODE,UV_PYTHON,"
     "UV_PYTHON_INSTALL_DIR,UV_MANAGED_PYTHON,UV_PYTHON_DOWNLOADS,"
     "UV_NO_EDITABLE,PINNED_UV_VERSION,UV_EXECUTABLE,RUNTIME_PYTHON,NEMO_RL_VENV_DIR,"
-    "NRL_FORCE_REBUILD_VENVS,NVTE_WITH_NCCL_EP,NVTE_CUDA_ARCHS,"
+    "NRL_FORCE_REBUILD_VENVS,NRL_MEGATRON_CHECKPOINT_DIR,NVTE_WITH_NCCL_EP,NVTE_CUDA_ARCHS,"
     "TORCH_CUDA_ARCH_LIST,CMAKE_BUILD_PARALLEL_LEVEL,NRL_SLURM_JOB_ID,"
     "NRL_SLURM_RESTART_COUNT"
 )
@@ -1864,6 +1864,10 @@ def test_fake_sbatch_submission_writes_strict_complete_metadata(
         record["runtime_attestation_sha256"] == provenance["runtime_attestation_sha256"]
     )
     assert decoded["runtime_attestation"] == record["runtime_attestation"]
+    assert decoded["megatron_checkpoint_dir"] == record["megatron_checkpoint_dir"]
+    assert record["megatron_checkpoint_dir"] == str(
+        Path(record["runtime_attestation"]).parent / "megatron-checkpoints"
+    )
     assert decoded["managed_python_install_dir"] == record["managed_python_install_dir"]
     assert decoded["uv_executable"] == record["uv_executable"]
     assert decoded["runtime_python"] == record["runtime_python"]
@@ -2574,6 +2578,7 @@ def test_nemorl_job_wrapper_uses_shared_attested_python_and_isolates_worker_venv
         '"${CONTAINER_PATH_PREFIX:-}" '
         '"${RUNTIME_PYTHON:-}" '
         '"${NEMO_RL_VENV_DIR:-}" '
+        '"${NRL_MEGATRON_CHECKPOINT_DIR:-}" '
         '"${PATH:-}" '
         '"${NRL_SLURM_JOB_ID:-}" '
         '"${NRL_SLURM_RESTART_COUNT:-}" '
@@ -2598,6 +2603,7 @@ def test_nemorl_job_wrapper_uses_shared_attested_python_and_isolates_worker_venv
     managed_python.chmod(0o755)
     runtime_python.symlink_to(managed_python)
     base_log_dir = tmp_path / "logs"
+    megatron_checkpoint_dir = tmp_path / "shared" / "megatron-checkpoints"
     environment = os.environ.copy()
     environment.update(
         {
@@ -2622,6 +2628,7 @@ def test_nemorl_job_wrapper_uses_shared_attested_python_and_isolates_worker_venv
             "UV_PYTHON_DOWNLOADS": "never",
             "NVTE_WITH_NCCL_EP": "0",
             "BASE_LOG_DIR": str(base_log_dir),
+            "NRL_MEGATRON_CHECKPOINT_DIR": str(megatron_checkpoint_dir),
             "ENVIRONMENT_LOG": str(environment_log),
         }
     )
@@ -2640,7 +2647,7 @@ def test_nemorl_job_wrapper_uses_shared_attested_python_and_isolates_worker_venv
 
     assert result.returncode == 0, result.stderr
     environment_lines = environment_log.read_text().splitlines()
-    assert environment_lines[:11] == [
+    assert environment_lines[:12] == [
         str(runtime_stage_root / "environment"),
         PYTHON_VERSION,
         str(python_install_dir),
@@ -2652,9 +2659,11 @@ def test_nemorl_job_wrapper_uses_shared_attested_python_and_isolates_worker_venv
         str(uv_executable.parent),
         str(runtime_python),
         "/tmp/nemo-rl-worker-venvs/job-733-restart-0",
+        str(megatron_checkpoint_dir),
     ]
-    assert environment_lines[11].split(":")[0] == str(fake_bin)
-    assert environment_lines[12:] == ["733", "0"]
+    assert megatron_checkpoint_dir.is_dir()
+    assert environment_lines[12].split(":")[0] == str(fake_bin)
+    assert environment_lines[13:] == ["733", "0"]
 
     runtime_python.unlink()
     outside_python = tmp_path / "outside-managed-python" / "bin" / "python3.13"
@@ -2800,6 +2809,9 @@ def test_scope_job_wrapper_rejects_mutated_uv_before_executing_it(
             "UV_PYTHON_DOWNLOADS": "never",
             "NVTE_WITH_NCCL_EP": "0",
             "BASE_LOG_DIR": str(tmp_path / "logs"),
+            "NRL_MEGATRON_CHECKPOINT_DIR": str(
+                tmp_path / "shared" / "megatron-checkpoints"
+            ),
             **extra_environment,
         }
     )

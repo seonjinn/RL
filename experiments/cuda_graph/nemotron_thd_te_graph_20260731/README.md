@@ -198,6 +198,12 @@ assume the current directory is
    `NRL_FORCE_REBUILD_VENVS=true`
    without allowing builders on
    different nodes or concurrent scope jobs to remove each other's environments.
+   Initial HF-to-Megatron conversion uses
+   `NRL_MEGATRON_CHECKPOINT_DIR=<runtime-attestation-dir>/megatron-checkpoints`.
+   This source-attested Lustre path is shared by every policy rank and recorded
+   in run metadata; populate it with one successful smoke before launching
+   concurrent performance repeats so they reuse a complete conversion instead
+   of racing or writing node-local container caches.
    Typed MCore standalone leaves also execute the attested staged
    Python directly. The wrapper passes the explicit UV allowlist and
    an attested `CONTAINER_PATH_PREFIX` through Pyxis `--container-env`, then
