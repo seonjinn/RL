@@ -29,6 +29,7 @@ root printed by the submission script.
 | `508571`, `508572` | Failed during wrapper startup | Slurm copied the partial-node wrapper into its spool, so a wrapper-relative `ray.sub` path was invalid. The wrapper now receives the absolute repo path. |
 | `508584`, `508585` | Cancelled during Ray startup | The partial allocation provided 112 CPUs/node, but `ray.sub` requested the physical `CPUTot=224` for each internal `srun`, so no Ray step could start. The experiment now passes the allocated 112 CPUs explicitly. |
 | `508599`, `508600` | Cancelled during Ray startup | Concurrent partial-node Ray clusters shared physical nodes and produced duplicate membership (`72/64` worker units). Partial-node Ray is not isolated enough for this A/B. |
+| `508634` | Failed during vLLM profile warmup | A forked vLLM rank aborted while CuTe DSL compiled FlashInfer's MXFP8 quantization kernel. The replacement uses the `spawn` worker start method so CUTLASS/MLIR state is initialized independently. |
 
 The reportable replacement returns to full-node allocation and combines the
 recipe-native TP4 with PP2, yielding one 8-GPU generation engine per node.

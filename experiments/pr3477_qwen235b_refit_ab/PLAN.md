@@ -17,6 +17,7 @@ Ray, SLURM, GCP-NRT B200, W&B.
 - Allocation: 8 nodes, 64 GPUs total
 - Split: 4 trainer nodes and 4 generation nodes
 - Scheduling: full-node exclusive allocation
+- vLLM worker start method: `spawn` to avoid forking imported CUTLASS/MLIR state
 - Recipe: `grpo-qwen3-235b-16n4g-mxfp8-rollout.yaml`
 - Parallelism: trainer TP2/PP4/CP2/EP8; generation TP4/PP2/EP1, DP4
 - GRPO: 16 prompts, 32 generations per prompt, GBS 512, seed 42

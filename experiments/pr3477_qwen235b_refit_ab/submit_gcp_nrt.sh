@@ -24,6 +24,7 @@ WALLTIME=${WALLTIME:-04:00:00}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
 NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-false}
 VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM:-0}
+VLLM_WORKER_MULTIPROC_METHOD=${VLLM_WORKER_MULTIPROC_METHOD:-spawn}
 
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna}
 RUNTIME_ROOT=${RUNTIME_ROOT:-${WORK_ROOT}/containers/nemo-rl-nightly-cw-fallback-20260808}
@@ -128,6 +129,7 @@ container=${CONTAINER}
 driver_runtime=uv_run_frozen
 worker_venv_dir=${WORKER_VENV_ROOT}
 vllm_allreduce_use_symm_mem=${VLLM_ALLREDUCE_USE_SYMM_MEM}
+vllm_worker_multiproc_method=${VLLM_WORKER_MULTIPROC_METHOD}
 wandb_project=${WANDB_PROJECT}
 wandb_name=${WANDB_NAME}
 EOF
@@ -147,6 +149,7 @@ export UV_CACHE_DIR=${CACHE_ROOT}/uv-cache
 export UV_PROJECT_ENVIRONMENT=${CACHE_ROOT}/driver-venv
 export UV_LOCK_TIMEOUT=7200
 export VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM}
+export VLLM_WORKER_MULTIPROC_METHOD=${VLLM_WORKER_MULTIPROC_METHOD}
 export WANDB_API_KEY="\$(cat ${WANDB_KEY_FILE})"
 printf 'NEMO_RL_SOURCE_COMMIT=%s\n' "\$(git rev-parse HEAD)"
 uv run --frozen examples/run_grpo.py \
