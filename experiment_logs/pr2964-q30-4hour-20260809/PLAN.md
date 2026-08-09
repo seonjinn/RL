@@ -11,6 +11,7 @@ own checkpoint across dependent four-hour GCP-NRT B200 allocations.
 - Recipe: `examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n8g.yaml`
 - Topology: four nodes, eight GPUs per node, segment size four
 - NeMo-RL validation source: `541413bd2912561950413b39809db40590a652bb`
+- Validation-lineage DeepEP pin: `4846673cf66cb47fc1eecf0ea22d17c1bead8f75`
 - PR #2964 production tree: `eecfeeb08958e7211421231a84b603631f151f45`
 - Megatron-Bridge: `fcbabe7845bce2a3281318111d0c86159fc19890`
 - MCore routing fix: `34b55f24f0826c9aebd6693ecb60648cd934737d`
