@@ -437,7 +437,8 @@ def test_validation_uses_the_prepared_vllm_environment(tmp_path: Path) -> None:
     assert f"export UV_PROJECT_ENVIRONMENT={canonical}" in output
     assert f"export VIRTUAL_ENV={canonical}" in output
     assert f"export PATH={canonical / 'bin'}:" in output
-    assert f"export PYTHONPATH={REPO_ROOT}:{tmp_path / 'vllm'}" in output
+    assert f"export PYTHONPATH={REPO_ROOT}" in output
+    assert f"export PYTHONPATH={REPO_ROOT}:{tmp_path / 'vllm'}" not in output
     assert f"{canonical / 'bin/python'} examples/run_grpo.py" in output
     assert "source " not in output or "/nemo-rl.env" not in output
     assert "Expected vLLM 0.25.1" in output
