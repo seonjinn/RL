@@ -55,11 +55,13 @@ def test_trace_dry_run_is_eager_and_metadata_only(tmp_path: Path) -> None:
     assert "policy.generation.vllm_cfg.enforce_eager=true" in output
     assert "grpo.max_num_steps=2" in output
     assert "VLLM_MXFP8_MOE_TRACE_DIR=" in output
-    assert "VLLM_MXFP8_MOE_TRACE_INTERVAL=128" in output
-    assert "VLLM_MXFP8_MOE_TRACE_MAX_SAMPLES=2048" in output
+    assert "VLLM_MXFP8_MOE_TRACE_WARMUP_CALLS=192" in output
+    assert "VLLM_MXFP8_MOE_TRACE_INTERVAL=127" in output
+    assert "VLLM_MXFP8_MOE_TRACE_MAX_SAMPLES=512" in output
     assert "trace_is_metadata_only=true" in output
-    assert "trace_interval=128" in output
-    assert "trace_max_samples_per_process=2048" in output
+    assert "trace_warmup_calls=192" in output
+    assert "trace_interval=127" in output
+    assert "trace_max_samples_per_process=512" in output
     assert "logger.wandb_enabled=false" in output
     assert "--constraint=GB200" not in output
     assert "--job-name=coreai_dlalgo_llm-mxmoe.trace-" in output
@@ -87,13 +89,19 @@ def test_trace_dry_run_accepts_bounded_sampling_overrides(tmp_path: Path) -> Non
     output = _dry_run(
         "submit_trace_ptyche.sh",
         tmp_path,
-        {"TRACE_INTERVAL": "64", "TRACE_MAX_SAMPLES": "512"},
+        {
+            "TRACE_WARMUP_CALLS": "96",
+            "TRACE_INTERVAL": "61",
+            "TRACE_MAX_SAMPLES": "256",
+        },
     )
 
-    assert "VLLM_MXFP8_MOE_TRACE_INTERVAL=64" in output
-    assert "VLLM_MXFP8_MOE_TRACE_MAX_SAMPLES=512" in output
-    assert "trace_interval=64" in output
-    assert "trace_max_samples_per_process=512" in output
+    assert "VLLM_MXFP8_MOE_TRACE_WARMUP_CALLS=96" in output
+    assert "VLLM_MXFP8_MOE_TRACE_INTERVAL=61" in output
+    assert "VLLM_MXFP8_MOE_TRACE_MAX_SAMPLES=256" in output
+    assert "trace_warmup_calls=96" in output
+    assert "trace_interval=61" in output
+    assert "trace_max_samples_per_process=256" in output
 
 
 def test_trace_uses_one_prepared_vllm_environment_for_driver_and_actors(

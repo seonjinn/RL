@@ -12,7 +12,7 @@ case "${ACTION}" in
     *) echo "Unsupported ACTION: ${ACTION}" >&2; exit 2 ;;
 esac
 
-EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-174ba94e392380af58907127f36c33f8b19ab900}
+EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-1de469ba64891f13c871ab008b42e7fdb970a817}
 MODEL=Qwen/Qwen3-30B-A3B
 CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}
@@ -30,12 +30,17 @@ PARTITION=${PARTITION:-batch}
 QOS=${QOS:-}
 WALLTIME=${WALLTIME:-05:00:00}
 WANDB_ENABLED=${WANDB_ENABLED:-false}
-TRACE_INTERVAL=${TRACE_INTERVAL:-128}
-TRACE_MAX_SAMPLES=${TRACE_MAX_SAMPLES:-2048}
+TRACE_WARMUP_CALLS=${TRACE_WARMUP_CALLS:-192}
+TRACE_INTERVAL=${TRACE_INTERVAL:-127}
+TRACE_MAX_SAMPLES=${TRACE_MAX_SAMPLES:-512}
 case "${WANDB_ENABLED}" in
     true|false) ;;
     *) echo "WANDB_ENABLED must be true or false" >&2; exit 2 ;;
 esac
+[[ "${TRACE_WARMUP_CALLS}" =~ ^[0-9]+$ ]] || {
+    echo "TRACE_WARMUP_CALLS must be a nonnegative integer" >&2
+    exit 2
+}
 [[ "${TRACE_INTERVAL}" =~ ^[1-9][0-9]*$ ]] || {
     echo "TRACE_INTERVAL must be a positive integer" >&2
     exit 2
@@ -132,6 +137,7 @@ for audit_module in \
 done
 unset VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR
 export VLLM_MXFP8_MOE_TRACE_DIR=${TRACE_DIR}
+export VLLM_MXFP8_MOE_TRACE_WARMUP_CALLS=${TRACE_WARMUP_CALLS}
 export VLLM_MXFP8_MOE_TRACE_INTERVAL=${TRACE_INTERVAL}
 export VLLM_MXFP8_MOE_TRACE_MAX_SAMPLES=${TRACE_MAX_SAMPLES}
 export VLLM_MXFP8_MOE_MODEL_REVISION=${MODEL_REVISION}
@@ -230,6 +236,7 @@ fi
 printf 'action=%s\n' "${ACTION}"
 printf 'run_root=%s\n' "${RUN_ROOT}"
 printf 'trace_is_metadata_only=true\n'
+printf 'trace_warmup_calls=%s\n' "${TRACE_WARMUP_CALLS}"
 printf 'trace_interval=%s\n' "${TRACE_INTERVAL}"
 printf 'trace_max_samples_per_process=%s\n' "${TRACE_MAX_SAMPLES}"
 printf 'sbatch_args='; printf ' %q' "${SBATCH_ARGS[@]}"; printf '\n'
