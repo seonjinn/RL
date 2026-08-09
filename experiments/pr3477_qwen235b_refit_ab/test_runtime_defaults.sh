@@ -29,7 +29,9 @@ grep -Fq 'export NRL_ALLOW_PARTIAL_GPU_NODES' "${SUBMIT_SCRIPT}"
 grep -Fq -- '--oversubscribe' "${SUBMIT_SCRIPT}"
 grep -Fq 'NRL_ALLOW_PARTIAL_GPU_NODES' "${SCRIPT_DIR}/../../ray.sub"
 grep -Fq 'PARTIAL_RAY_SUB=${SCRIPT_DIR}/ray_partial.sub' "${SUBMIT_SCRIPT}"
-grep -Fq 'source "${SCRIPT_DIR}/../../ray.sub"' "${PARTIAL_RAY_SUB}"
+grep -Fq 'NRL_RAY_SUB_PATH=${REPO}/ray.sub' "${SUBMIT_SCRIPT}"
+grep -Fq 'export NRL_RAY_SUB_PATH' "${SUBMIT_SCRIPT}"
+grep -Fq 'source "${NRL_RAY_SUB_PATH:?NRL_RAY_SUB_PATH is required}"' "${PARTIAL_RAY_SUB}"
 if grep -Fq '#SBATCH --exclusive' "${PARTIAL_RAY_SUB}"; then
   echo "partial-node wrapper must not request exclusive nodes" >&2
   exit 1

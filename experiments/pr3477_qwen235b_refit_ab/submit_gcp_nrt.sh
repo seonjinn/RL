@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel)
 PARTIAL_RAY_SUB=${SCRIPT_DIR}/ray_partial.sub
+NRL_RAY_SUB_PATH=${REPO}/ray.sub
 
 ACTION=${ACTION:-test-only}
 MODE=${MODE:?MODE is required: legacy or nccl}
@@ -193,6 +194,7 @@ export CONTAINER_REMAP_ROOT=1
 export COMMAND
 export GPUS_PER_NODE
 export NRL_ALLOW_PARTIAL_GPU_NODES
+export NRL_RAY_SUB_PATH
 export BASE_LOG_DIR=${EXPERIMENT_ROOT}
 
 SBATCH_ARGS=(

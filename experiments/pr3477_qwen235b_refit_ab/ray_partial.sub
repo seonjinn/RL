@@ -2,5 +2,4 @@
 
 set -euo pipefail
 
-SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-source "${SCRIPT_DIR}/../../ray.sub"
+source "${NRL_RAY_SUB_PATH:?NRL_RAY_SUB_PATH is required}"
