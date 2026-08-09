@@ -13,6 +13,9 @@ grep -Fq 'NEMO_RL_VENV_DIR=${WORKER_VENV_ROOT}' "${SUBMIT_SCRIPT}"
 grep -Fq 'UV_CACHE_DIR=${CACHE_ROOT}/uv-cache' "${SUBMIT_SCRIPT}"
 grep -Fq 'TRAIN_EP=${TRAIN_EP:-8}' "${SUBMIT_SCRIPT}"
 grep -Fq 'policy.megatron_cfg.expert_model_parallel_size=${TRAIN_EP}' "${SUBMIT_SCRIPT}"
+grep -Fq 'VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM:-0}' "${SUBMIT_SCRIPT}"
+grep -Fq 'export VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM}' "${SUBMIT_SCRIPT}"
+grep -Fq 'vllm_allreduce_use_symm_mem=${VLLM_ALLREDUCE_USE_SYMM_MEM}' "${SUBMIT_SCRIPT}"
 grep -Fq 'uv run --frozen examples/run_grpo.py' "${SUBMIT_SCRIPT}"
 
 if grep -Fq 'UV_PYTHON_INSTALL_DIR=' "${SUBMIT_SCRIPT}"; then
