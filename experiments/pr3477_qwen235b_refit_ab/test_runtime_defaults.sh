@@ -33,6 +33,10 @@ if grep -Fq 'NRL_ALLOW_PARTIAL_GPU_NODES' "${SUBMIT_SCRIPT}" "${SCRIPT_DIR}/../.
   echo "reportable A/B must use full-node allocation" >&2
   exit 1
 fi
+if grep -Fq '#SBATCH --dependency=singleton' "${SCRIPT_DIR}/../../ray.sub"; then
+  echo "reportable A/B jobs must not depend on unrelated jobs with the same name" >&2
+  exit 1
+fi
 if [[ -e "${SCRIPT_DIR}/ray_partial.sub" ]]; then
   echo "partial-node wrapper must not exist" >&2
   exit 1
