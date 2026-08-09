@@ -30,6 +30,7 @@ root printed by the submission script.
 | `508584`, `508585` | Cancelled during Ray startup | The partial allocation provided 112 CPUs/node, but `ray.sub` requested the physical `CPUTot=224` for each internal `srun`, so no Ray step could start. The experiment now passes the allocated 112 CPUs explicitly. |
 | `508599`, `508600` | Cancelled during Ray startup | Concurrent partial-node Ray clusters shared physical nodes and produced duplicate membership (`72/64` worker units). Partial-node Ray is not isolated enough for this A/B. |
 | `508634` | Failed during vLLM profile warmup | A forked vLLM rank aborted while CuTe DSL compiled FlashInfer's MXFP8 quantization kernel. The replacement uses the `spawn` worker start method so CUTLASS/MLIR state is initialized independently. |
+| `508660` | Failed during policy worker creation | `spawn` fixed the CuTe DSL abort and vLLM initialized, but a stale incomplete worker venv lacked `megatron.bridge`. Replacement runs use a run-scoped worker-venv namespace shared only by the matched pair. |
 
 The reportable replacement returns to full-node allocation and combines the
 recipe-native TP4 with PP2, yielding one 8-GPU generation engine per node.
