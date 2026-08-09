@@ -715,6 +715,31 @@
       </div>
       <div class="callout">Correctness sanity: mean loss is 0.01325 baseline vs 0.01666 HybridEP; reward is 0.56682 vs 0.57010; KL is 0.00303 vs 0.00318. Step-10 validation accuracy is 0.6094 vs 0.6133 and Step-20 is 0.6133 vs 0.6211. No accuracy or reward regression signal is present. Offline W&amp;B IDs are <code>kv68ur20</code> (baseline) and <code>5321e23i</code> (HybridEP).</div>
       <div class="callout">All 32 logged Super alignment calls had zero padding: 8,192 → 8,192 local tokens and 262,144 → 262,144 group tokens. Calls 5–32 occurred during Steps 2–8 and each added one experiment-only telemetry SUM on the HybridEP side. This establishes zero added-token overhead in those calls; peak GPU-memory and persistent-storage overhead were not separately measured. The directly logged <code>train/mean_total_tokens_per_sample</code> is 3,038.38 for baseline and 2,942.29 for HybridEP: the HybridEP rollout processed 3.16% fewer tokens per sample. That workload difference is larger than the 1.37% step-time reduction and explains why logged E2E throughput is 1.82% lower despite faster mean step time. As a sensitivity check, telemetry-free Steps 9–20 (n=12) show E2E/generation/policy/LogProb time changes of −0.88%/−0.09%/−36.64%/+5.43%, and throughput changes of −3.33%/−3.49%/+53.35%/−6.33%. The primary predeclared window remains Steps 2–20; small E2E and LogProb differences are sensitive to rollout and node variance.</div>
+
+      <h3>Steady-state window sensitivity · Steps 5–20</h3>
+      <p class="section-note">All four canonical time and throughput keys are present for every arm and every requested step (n=16/16). Time deltas are HybridEP relative to baseline; negative is faster. TPS deltas are positive when HybridEP is higher. Direct TPS is the arithmetic mean of the W&amp;B metric; ratio-of-sums is total tokens divided by total phase GPU-seconds.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Model</th><th>Phase</th><th>Mean time</th><th>Median time</th><th>Direct TPS mean</th><th>Ratio-of-sums TPS</th></tr>
+          </thead>
+          <tbody>
+            <tr><td rowspan="4">Qwen3-30B-A3B</td><td>E2E</td><td>−3.64%</td><td>−4.01%</td><td>+3.90%</td><td>+3.75%</td></tr>
+            <tr><td>Generation</td><td>+0.49%</td><td>+0.18%</td><td>−0.53%</td><td>−0.52%</td></tr>
+            <tr><td>Policy training</td><td>−9.73%</td><td>−13.39%</td><td>+10.67%</td><td>+10.75%</td></tr>
+            <tr><td>LogProb</td><td>−14.09%</td><td>−15.78%</td><td>+16.56%</td><td>+16.37%</td></tr>
+            <tr><td rowspan="4">Qwen3-235B-A22B</td><td>E2E</td><td>−0.33%</td><td>−0.83%</td><td>+0.78%</td><td>+0.64%</td></tr>
+            <tr><td>Generation</td><td>+0.93%</td><td>+0.88%</td><td>−0.62%</td><td>−0.62%</td></tr>
+            <tr><td>Policy training</td><td>−16.54%</td><td>−16.42%</td><td>+20.01%</td><td>+20.18%</td></tr>
+            <tr><td>LogProb</td><td>−13.59%</td><td>−12.22%</td><td>+15.68%</td><td>+16.07%</td></tr>
+            <tr><td rowspan="4">Nemotron3 Super</td><td>E2E</td><td>−0.53%</td><td>+0.35%</td><td>−3.14%</td><td>−2.70%</td></tr>
+            <tr><td>Generation</td><td>+0.36%</td><td>−0.35%</td><td>−3.49%</td><td>−3.56%</td></tr>
+            <tr><td>Policy training</td><td>−40.48%</td><td>−41.04%</td><td>+63.21%</td><td>+62.60%</td></tr>
+            <tr><td>LogProb</td><td>−4.35%</td><td>−15.77%</td><td>+3.11%</td><td>+1.18%</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout">The 5–20 sensitivity preserves the primary conclusion: HybridEP materially accelerates policy training and LogProb for both Qwen models, and policy training for Super. Qwen E2E improves modestly; Super E2E/TPS remains rollout-token sensitive. In the telemetry-free Super Steps 9–20 window, mean policy time is 36.65% lower and ratio-of-sums policy TPS is 52.09% higher, while mean LogProb time is 5.42% higher and ratio-of-sums LogProb TPS is 8.60% lower. Therefore Super's large policy gain is robust, but its small E2E and LogProb deltas are not treated as stable speedups.</div>
     </section>
 
     <section aria-labelledby="historical-title">

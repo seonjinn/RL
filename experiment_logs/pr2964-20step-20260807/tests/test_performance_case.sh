@@ -109,5 +109,8 @@ assert_contains "${report_html}" 'train/mean_total_tokens_per_sample'
 assert_contains "${report_html}" '3.16% fewer tokens per sample'
 assert_contains "${report_html}" 'job 507302 · external routing MCore'
 assert_not_contains "${report_html}" "507302 completed 20/20 with Bridge's stock MCore"
+assert_contains "${report_html}" 'Steady-state window sensitivity · Steps 5–20'
+assert_contains "${report_html}" 'n=16/16'
+assert_contains "${report_html}" 'ratio-of-sums policy TPS is 52.09% higher'
 
 printf 'performance-case-tests-pass\n'
