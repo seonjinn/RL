@@ -12,6 +12,7 @@ PARTITION=${PARTITION:-batch}
 TOTAL_NODES=${TOTAL_NODES:-8}
 GPUS_PER_NODE=${GPUS_PER_NODE:-8}
 GEN_NODES=${GEN_NODES:-4}
+VLLM_TP=${VLLM_TP:-8}
 TRAIN_TP=${TRAIN_TP:-2}
 TRAIN_PP=${TRAIN_PP:-4}
 TRAIN_CP=${TRAIN_CP:-2}
@@ -51,8 +52,13 @@ if (( TOTAL_NODES != 8 || GPUS_PER_NODE != 8 || GEN_NODES != 4 )); then
   echo "The reportable A/B requires 8 nodes, 8 GPUs/node, and 4 generation nodes" >&2
   exit 2
 fi
+if (( VLLM_TP != GPUS_PER_NODE )); then
+  echo "The B200 A/B requires one vLLM engine per node (VLLM_TP=${GPUS_PER_NODE})" >&2
+  exit 2
+fi
 
 TRAIN_WORLD_SIZE=$(((TOTAL_NODES - GEN_NODES) * GPUS_PER_NODE))
+GEN_WORLD_SIZE=$((GEN_NODES * GPUS_PER_NODE))
 DENSE_MODEL_PARALLEL_SIZE=$((TRAIN_TP * TRAIN_PP * TRAIN_CP))
 EXPERT_MODEL_PARALLEL_SIZE=$((TRAIN_ETP * TRAIN_EP * TRAIN_PP))
 if (( TRAIN_WORLD_SIZE % DENSE_MODEL_PARALLEL_SIZE != 0 )); then
@@ -104,6 +110,9 @@ total_nodes=${TOTAL_NODES}
 gpus_per_node=${GPUS_PER_NODE}
 trainer_nodes=$((TOTAL_NODES - GEN_NODES))
 generation_nodes=${GEN_NODES}
+generation_world_size=${GEN_WORLD_SIZE}
+generation_tensor_parallel_size=${VLLM_TP}
+generation_data_parallel_size=$((GEN_WORLD_SIZE / VLLM_TP))
 trainer_world_size=${TRAIN_WORLD_SIZE}
 trainer_tp=${TRAIN_TP}
 trainer_pp=${TRAIN_PP}
@@ -154,7 +163,7 @@ uv run --frozen examples/run_grpo.py \
   policy.megatron_cfg.expert_model_parallel_size=${TRAIN_EP} \
   policy.megatron_cfg.moe_token_dispatcher_type=alltoall \
   policy.megatron_cfg.moe_flex_dispatcher_backend=deepep \
-  policy.generation.vllm_cfg.tensor_parallel_size=4 \
+  policy.generation.vllm_cfg.tensor_parallel_size=${VLLM_TP} \
   policy.generation.vllm_cfg.pipeline_parallel_size=1 \
   policy.generation.vllm_cfg.expert_parallel_size=1 \
   policy.generation.vllm_cfg.use_tqdm=false \
