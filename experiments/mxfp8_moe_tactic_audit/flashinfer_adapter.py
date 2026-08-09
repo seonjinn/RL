@@ -194,7 +194,7 @@ def cache_key_for_case(case: MoeKernelCase, *, has_gemm1_lora_delta: bool) -> st
         _profile_shape(case.output.shape, bucket),
         (0,),
         (bucket, signature.top_k),
-        (0,),
+        (bucket,),
         _profile_shape(case.hidden_states.shape, bucket),
         _profile_shape(case.hidden_states_scale.shape, bucket),
         (bucket, signature.top_k, 2 * signature.intermediate_size)

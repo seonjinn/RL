@@ -484,7 +484,7 @@ def test_cache_key_for_case_matches_moe_input_profile_layout() -> None:
         (32, 64),
         (0,),
         (32, 2),
-        (0,),
+        (32,),
         (32, 64),
         (32, 2),
         (0,),
