@@ -98,9 +98,10 @@ def test_trace_uses_one_prepared_vllm_environment_for_driver_and_actors(
     assert "from vllm.model_executor.layers.fused_moe.routed_experts" in output
     assert "from vllm.model_executor.layers.fused_moe.runner.moe_runner" in output
     assert "Ray version mismatch before trace launch" in output
-    assert "Prepared vLLM environment is missing" in (
-        AUDIT_DIR / "submit_trace_ptyche.sh"
-    ).read_text(encoding="ascii")
+    source = (AUDIT_DIR / "submit_trace_ptyche.sh").read_text(encoding="ascii")
+    assert '[[ -L "${DRIVER_VENV}/bin/python" || -x "${DRIVER_VENV}/bin/python" ]]' in source
+    assert f"[[ -x {driver_python} ]]" in output
+    assert "Prepared vLLM environment is missing" in source
 
 
 def test_shmoo_dry_run_requests_one_gb200_for_five_hours(tmp_path: Path) -> None:

@@ -46,7 +46,7 @@ if [[ "${ACTION}" != dry-run ]]; then
         echo "VLLM_ENVIRONMENT_ROOT must name a prepared vLLM environment" >&2
         exit 1
     }
-    [[ -x "${DRIVER_VENV}/bin/python" ]] || {
+    [[ -L "${DRIVER_VENV}/bin/python" || -x "${DRIVER_VENV}/bin/python" ]] || {
         echo "Prepared vLLM environment is missing: ${DRIVER_VENV}" >&2
         exit 1
     }
@@ -130,6 +130,10 @@ export HF_DATASETS_CACHE=${HF_DATASETS_CACHE}
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 mkdir -p ${TRACE_DIR}
+[[ -x ${DRIVER_VENV}/bin/python ]] || {
+  echo "Prepared vLLM environment is not executable in the container: ${DRIVER_VENV}" >&2
+  exit 1
+}
 container_ray_version=\$(/opt/nemo_rl_venv/bin/python -c 'import ray; print(ray.__version__)')
 prepared_ray_version=\$(${DRIVER_VENV}/bin/python -c 'import ray; print(ray.__version__)')
 [[ "\${container_ray_version}" == "\${prepared_ray_version}" ]] || {
