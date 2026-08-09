@@ -261,12 +261,13 @@
         using canonical 8-GPU performance recipes and explicit x86 HybridEP topology.
       </p>
       <div class="header-meta">
-        <span>Updated 2026-08-09 12:14 PDT</span>
+        <span>Updated 2026-08-09 13:13 PDT</span>
         <span>NeMo RL main 0e687e6d · strict A/B candidate 3d6d1324 · Bridge-main candidate 541413bd</span>
         <span>PR #2964 remote eecfeeb0 · one-time padding path published · focused coverage 12/12 passed</span>
         <span>DeepEP 17cfb817 + DMA-BUF fix a9d657d2</span>
         <span>MCore workload candidate c8cedc3d · Bridge-main routing candidate 34b55f24 · stock boundary 14499ef0</span>
         <span>20-step target per workload</span>
+        <span>Q30 200-step checkpoint/resume follow-up active</span>
       </div>
     </header>
 
@@ -291,6 +292,35 @@
         <div class="value"><span class="pill ready">3 strict A/B complete</span></div>
         <p>Strict Steps 2–20 E2E/LogProb/policy time reductions are 3.55%/13.61%/9.42% for Q30, 0.49%/14.64%/15.69% for Q235, and 1.37%/9.50%/44.00% for Super. Policy throughput rises 10.29%, 18.66%, and 69.91%, respectively.</p>
       </article>
+    </section>
+
+    <section aria-labelledby="long-run-title">
+      <h2 id="long-run-title">Active 200-step resumed Qwen3-30B-A3B A/B</h2>
+      <p class="section-note">Launch snapshot at 2026-08-09 13:13 PDT. Both arms use the canonical <code>grpo-qwen3-30ba3b-4n8g.yaml</code> recipe on 4 × 8 GCP-NRT B200 GPUs, NeMo <code>541413bd</code>, Bridge <code>fcbabe78</code>, routing-fixed MCore <code>34b55f24</code>, and DeepEP <code>17cfb817</code>. The dispatcher is the only intentional workload difference.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Arm</th><th>Job chain</th><th>Launch state</th><th>Checkpoint policy</th><th>Run artifacts</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>All-to-all baseline</strong></td>
+              <td><code>508637 → 508638 → 508639</code></td>
+              <td><span class="pill pending">Round 1 running</span><br>Retry passed the five-minute startup gate with zero strict runtime fatals.</td>
+              <td>Full model and optimizer state before 3:15; latest checkpoint retained; resume to Step 200.</td>
+              <td><code>.../runs/qwen3-30ba3b-sync-baseline-pr2964-200step-round1-retry1</code></td>
+            </tr>
+            <tr>
+              <td><strong>HybridEP</strong></td>
+              <td><code>508612 → 508613 → 508614</code></td>
+              <td><span class="pill pending">Step 2/200</span><br>Round 1 entered steady-state training with zero strict runtime fatals.</td>
+              <td>Same save deadline and retention policy; independent dispatcher-specific checkpoint root.</td>
+              <td><code>.../runs/qwen3-30ba3b-sync-hybridep-pr2964-200step-round1</code><br>Offline W&amp;B <code>bsolax90</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout">Initial baseline job <code>508609</code> failed before Step 1 when one vLLM Ray worker on <code>pool0-0343</code> exited with <code>SYSTEM_ERROR</code> / EOF during CUDA-graph warmup. It recorded no comparable training metric and is excluded from the A/B. Its logs are preserved; the retry has a distinct run name and excludes that node. Jobs <code>508610</code>/<code>508611</code> were automatically cancelled when their <code>afterok</code> dependency could not be satisfied.</div>
     </section>
 
     <section aria-labelledby="jobs-title">
