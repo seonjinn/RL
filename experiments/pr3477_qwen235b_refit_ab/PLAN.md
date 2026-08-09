@@ -13,11 +13,11 @@ Ray, SLURM, GCP-NRT B200, W&B.
 
 ## Fixed Setup
 
-- Cluster: GCP-NRT, 8 B200 GPUs per node
-- Allocation: 8 nodes, 64 GPUs total
-- Split: 4 trainer nodes and 4 generation nodes
+- Cluster: GCP-NRT B200; request 4 of the 8 GPUs on each allocated node
+- Allocation: 16 nodes, 64 GPUs total
+- Split: 8 trainer nodes and 8 generation nodes
 - Recipe: `grpo-qwen3-235b-16n4g-mxfp8-rollout.yaml`
-- Parallelism: trainer TP2/PP4/CP2/EP16; generation TP4/PP1/EP1
+- Parallelism: trainer TP2/PP4/CP2/EP8; generation TP4/PP1/EP1, DP8
 - GRPO: 16 prompts, 32 generations per prompt, GBS 512, seed 42
 - Evaluation window: steps 3-20 after warmup
 - Checkpointing and validation: disabled

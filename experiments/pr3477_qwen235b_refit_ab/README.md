@@ -4,8 +4,8 @@ This experiment measures whether PR 3477's NCCL-Reshard path works for BF16
 training plus MXFP8 rollout on Qwen3-235B-A22B, and how much refit time it
 saves versus the legacy non-colocated collective path.
 
-The pair uses 8 GCP-NRT B200 nodes (64 GPUs), preserving the GPU budget and
-parallelism of the upstream `16n4g` performance recipe. Only
+The pair requests 4 GPUs on each of 16 GCP-NRT B200 nodes (64 GPUs), preserving
+the GPU budget and parallelism of the upstream `16n4g` performance recipe. Only
 `policy.generation.refit_transport` differs between arms.
 
 See [PLAN.md](PLAN.md) for the fixed setup and commands. Runtime metadata,
@@ -21,7 +21,12 @@ root printed by the submission script.
 | `507350`, `507351` | Failed during worker-venv setup | Builders on multiple nodes concurrently rebuilt the same Lustre venv and raced in `rmtree` and package installation. No model, refit, or training step ran. |
 | `508251`, `508252` | Cancelled during worker-venv setup | Node-local venvs removed the directory race but repeated dependency fetches on every node. One `TransferQueue` fetch failed with `curl 56`/early EOF and another `uv sync` stalled. |
 | `508298`, `508299` | Cancelled after topology audit | The coordinated venv path was valid, but the inherited EP16 and PP4 required 64 trainer ranks while the non-colocated split supplied 32. |
-| `508312`, `508313` | Submitted | Uses the coordinated shared runtime plus trainer TP2/PP4/CP2/EP8/ETP1, which is valid for the 32-rank trainer partition. |
+| `508312`, `508313` | Failed during vLLM initialization | TP4 placed two MXFP8 engines on each 8-GPU B200 node. One vLLM engine hit a symmetric-memory OOM and worker SIGSEGV during FlashInfer autotuning. |
+| `508491`, `508492` | Failed during vLLM initialization | Disabling vLLM symmetric all-reduce did not remove the two-engine-per-node initialization failure. |
+| `508531`, `508532` | Failed during vLLM initialization | TP8 placed one engine per node, but Qwen3-235B MXFP8 MoE scale shuffle does not support that partition: `shape '[128, 4096, 6]' is invalid for input of size 4194304`. |
+
+The reportable replacement uses the recipe-native TP4 with one engine per node:
+16 nodes request 4 GPUs each, split into 8 trainer and 8 generation nodes.
 
 Only runs that reach measured GRPO steps are eligible for the performance
 comparison.
