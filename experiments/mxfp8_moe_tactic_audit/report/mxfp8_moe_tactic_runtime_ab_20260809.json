@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "experiment": "Qwen3-30B-A3B NeMo-RL MXFP8 MoE FC1/FC2 tactic lookup A/B",
+  "date": "2026-08-09",
+  "configuration": {
+    "hardware": "16 NVIDIA GB200 GPUs (4 nodes x 4 GPUs)",
+    "recipe": "examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml",
+    "workload": "64 prompts x 32 generations; max_total_sequence_length=4096",
+    "cuda_graph": true,
+    "vllm_commit": "b9eea5bbbec24a2af6acd0d92c02a3640a748e9c",
+    "vllm_version": "0.25.1",
+    "flashinfer_version": "0.6.13",
+    "runtime_bundle_sha256": "a4fc632cbfc41904238786f50503b411bc2d322b2c43b5d397578a5c4fb7d47e"
+  },
+  "lookup_override": {
+    "cache_key": "flashinfer::trtllm_fp8_block_scale_moe / MoERunner / ((128,2048),(128,128),(128,),(128,),(128,2048),(128,64),(0,),(0,))",
+    "stock_tactics": [16, 578],
+    "candidate_tactics": [32, 574],
+    "changed_cache_entries": 1,
+    "qualification": {
+      "trace_weighted_kernel_speedup": 1.015216,
+      "weighted_median_gain_percent": 1.2167,
+      "maximum_cv_percent": 3.7384,
+      "qualified_for_promotion": false
+    }
+  },
+  "runs": [
+    {
+      "run": "r9",
+      "stock_job": 2551257,
+      "candidate_job": 2551259,
+      "measured_steps": [3, 4, 5, 6, 7, 8],
+      "realized_generated_tokens_per_arm": 47752694,
+      "stock": {
+        "generation_tokens_per_second_per_gpu": 9675.8366667,
+        "e2e_tokens_per_second_per_gpu": 2444.8683333,
+        "total_step_seconds": 208.9333333
+      },
+      "candidate": {
+        "generation_tokens_per_second_per_gpu": 9761.5333333,
+        "e2e_tokens_per_second_per_gpu": 2443.085,
+        "total_step_seconds": 209.08
+      }
+    },
+    {
+      "run": "r11",
+      "stock_job": 2551503,
+      "candidate_job": 2551505,
+      "measured_steps": [3, 4, 5, 6, 7, 8],
+      "realized_generated_tokens_per_arm": 47752694,
+      "stock": {
+        "generation_tokens_per_second_per_gpu": 9810.3166667,
+        "e2e_tokens_per_second_per_gpu": 2437.6283333,
+        "total_step_seconds": 209.5516667
+      },
+      "candidate": {
+        "generation_tokens_per_second_per_gpu": 9834.665,
+        "e2e_tokens_per_second_per_gpu": 2443.7783333,
+        "total_step_seconds": 209.0383333
+      }
+    }
+  ],
+  "aggregate": {
+    "generation_tokens_per_second_per_gpu": {
+      "stock": 9743.0766667,
+      "candidate": 9798.09916665,
+      "candidate_over_stock": 1.0056473434
+    },
+    "e2e_tokens_per_second_per_gpu": {
+      "stock": 2441.2483333,
+      "candidate": 2443.43166665,
+      "candidate_over_stock": 1.0008943512
+    },
+    "total_step_seconds": {
+      "stock": 209.2425,
+      "candidate": 209.05916665,
+      "candidate_over_stock": 0.9991238236
+    },
+    "maximum_run_to_run_cv_percent": 0.975993,
+    "verdict": "No promotion: the measured end-to-end gain is below run-to-run variation and the candidate failed the micro qualification gate."
+  },
+  "correctness_scope": "Replayed-tensor numerical checks passed. No new matched GSM8K run was performed for this unqualified candidate."
+}

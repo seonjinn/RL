@@ -18,10 +18,10 @@
 </head>
 <body>
   <h1>MXFP8 MoE Tactic Audit</h1>
-  <p class="verdict">MICRO AUDIT COMPLETE: NO PROMOTION</p>
+  <p class="verdict">END-TO-END AUDIT COMPLETE: NO PROMOTION</p>
   <p>The production-prepacked Qwen3-30B-A3B MXFP8 expert FC1/FC2 path was replayed with CUDA Graphs enabled. Eight representative routing profiles cover 95.31% of sampled MoE GPU time. The audit measured all 920 legal FC1/FC2 tactic pairs for every selected profile, producing 7,360 successful rows.</p>
   <p>All rows were finite and deterministic, with <code>max_abs_error=0</code> and cosine similarity between 0.99999988 and 1.00000012. These checks establish micro-kernel numerical agreement for the replayed tensors; they are not a GSM8K or end-to-end accuracy claim.</p>
-  <p>The final same-job comparison repeated stock <code>(16,530)</code> and the five strongest common candidates 50 times per profile. Candidate <code>(32,574)</code> was the best stable direction: aggregate trace-weighted FC1+FC2 time improved by 1.52%, the binding lower weighted-median gain was 1.22%, and no profile regressed. It did not pass promotion because the required weighted-median gain is 2% and its maximum CV was 3.74%, above the 3% limit. No candidate cache was published, so runtime behavior remains unchanged.</p>
+  <p>The final same-job comparison repeated stock <code>(16,530)</code> and the five strongest common candidates 50 times per profile. Candidate <code>(32,574)</code> was the best stable direction: aggregate trace-weighted FC1+FC2 time improved by 1.52%, the binding lower weighted-median gain was 1.22%, and no profile regressed. It did not pass promotion because the required weighted-median gain is 2% and its maximum CV was 3.74%, above the 3% limit.</p>
   <figure>
     <img src="mxfp8_moe_tactic_audit_actual_pair_speedup.png" alt="Stock-relative FC1 and FC2 kernel throughput">
   </figure>
@@ -38,6 +38,21 @@
     </tbody>
   </table>
   <p class="note">The ratio is weighted stock FC1+FC2 time divided by weighted candidate FC1+FC2 time. It is a kernel-level ratio, not NeMo-RL generation throughput.</p>
+  <h2>Experimental Runtime A/B</h2>
+  <p>The unqualified <code>(32,574)</code> direction was nevertheless evaluated in two matched NeMo-RL A/B repetitions to quantify its end-to-end opportunity. The candidate runtime bundle changed exactly one FlashInfer TRTLLM MoE cache leaf: the 128-token bucket used FC1 tactic <code>32</code> and FC2 tactic <code>574</code> instead of stock tactics <code>16</code> and <code>578</code>. Every other cache entry and runtime input was identical.</p>
+  <p>Both arms used Qwen3-30B-A3B, 16 GB200 GPUs across four nodes, vLLM 0.25.1, FlashInfer 0.6.13, CUDA Graphs enabled, 64 prompts times 32 generations, and a maximum sequence length of 4,096. Steps 3--8 generated exactly 47,752,694 tokens per arm in each repetition.</p>
+  <table>
+    <thead><tr><th>Repetition</th><th>Generation tok/s/GPU</th><th>E2E tok/s/GPU</th><th>Total step time</th></tr></thead>
+    <tbody>
+      <tr><td><code>r9</code></td><td>9,675.84 &rarr; 9,761.53 (<strong>+0.89%</strong>)</td><td>2,444.87 &rarr; 2,443.09 (<strong>-0.07%</strong>)</td><td>208.93 s &rarr; 209.08 s (<strong>+0.07%</strong>, worse)</td></tr>
+      <tr><td><code>r11</code></td><td>9,810.32 &rarr; 9,834.67 (<strong>+0.25%</strong>)</td><td>2,437.63 &rarr; 2,443.78 (<strong>+0.25%</strong>)</td><td>209.55 s &rarr; 209.04 s (<strong>-0.24%</strong>, better)</td></tr>
+      <tr><td>Aggregate</td><td>9,743.08 &rarr; 9,798.10 (<strong>+0.56%</strong>)</td><td>2,441.25 &rarr; 2,443.43 (<strong>+0.09%</strong>)</td><td>209.24 s &rarr; 209.06 s (<strong>-0.09%</strong>, better)</td></tr>
+    </tbody>
+  </table>
+  <figure>
+    <img src="mxfp8_moe_tactic_audit_end_to_end.png" alt="FC1 and FC2 runtime lookup end-to-end result">
+  </figure>
+  <p>The lookup increased generation-only throughput by 0.56%, but the whole RL step improved by only 0.09%. The generation gain is below the measured 0.98% maximum run-to-run variation. Therefore, this result does not establish a repeatable production benefit.</p>
   <h2>Execution Record</h2>
   <table>
     <thead><tr><th>Stage</th><th>Job</th><th>Result</th></tr></thead>
@@ -46,6 +61,8 @@
       <tr><td>Full 920-pair audit</td><td><code>2550024</code></td><td>All 7,360 JSONL rows completed; job canceled only after raw data completion while NSys finalization remained active</td></tr>
       <tr><td>Top-five repeat run</td><td><code>2550079</code></td><td>All 40 JSONL rows completed; superseded by the stock-inclusive run</td></tr>
       <tr><td>Stock plus top-five, 50 repeats</td><td><code>2550086</code></td><td>Completed successfully, 48/48 rows</td></tr>
+      <tr><td>Runtime A/B repetition <code>r9</code></td><td><code>2551257</code>, <code>2551259</code></td><td>All eight training steps completed; evidence recovered after the original postprocessor rejected nested token masks</td></tr>
+      <tr><td>Runtime A/B repetition <code>r11</code></td><td><code>2551503</code>, <code>2551505</code></td><td>Both stock and candidate jobs completed successfully</td></tr>
     </tbody>
   </table>
   <h2>Qualification Status</h2>
@@ -54,9 +71,10 @@
     <li>Stability gate: maximum CV at most 3%.</li>
     <li>Regression gate: no high-weight profile may regress by more than 1%.</li>
     <li>Result: no candidate passed every gate; do not enable an FC1/FC2 tactic override.</li>
-    <li>End-to-end NeMo-RL and matched GSM8K candidate runs were intentionally not started because no candidate qualified for promotion.</li>
-    <li>Final production provenance still requires rerunning the trace stage without the teardown failure.</li>
+    <li>Experimental end-to-end result: generation +0.56%, E2E +0.09%, and total step time -0.09%; all are below the observed run-to-run variation.</li>
+    <li>Replayed-tensor numerical checks passed, but no new matched GSM8K run was performed for this unqualified candidate.</li>
+    <li>Final decision: retain stock FlashInfer FC1/FC2 tactic selection for this workload.</li>
   </ul>
-  <p>Machine-readable summary: <a href="mxfp8_moe_tactic_micro_audit_20260808.json">mxfp8_moe_tactic_micro_audit_20260808.json</a></p>
+  <p>Machine-readable summaries: <a href="mxfp8_moe_tactic_micro_audit_20260808.json">micro audit</a> and <a href="mxfp8_moe_tactic_runtime_ab_20260809.json">runtime A/B</a>.</p>
 </body>
 </html>
