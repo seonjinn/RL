@@ -443,6 +443,24 @@ def test_validation_uses_the_prepared_vllm_environment(tmp_path: Path) -> None:
     assert "Expected FlashInfer 0.6.13" in output
 
 
+def test_performance_only_validation_omits_correctness_inputs(tmp_path: Path) -> None:
+    """Keep an end-to-end timing run independent of optional GSM8K artifacts."""
+    output = _dry_run(
+        "submit_validation_ptyche.sh",
+        tmp_path,
+        {
+            "ARM": "candidate",
+            "MAX_STEPS": "8",
+            "RUN_CORRECTNESS": "false",
+        },
+    )
+
+    assert "grpo.max_num_steps=8" in output
+    assert "--write-run-evidence" in output
+    assert "vllm serve" not in output
+    assert "gsm8k_vllm_eval.py" not in output
+
+
 def test_compare_mode_is_the_only_cross_arm_validation_path(tmp_path: Path) -> None:
     """Catch run-mode validation reading artifacts from the other arm."""
     output = _dry_run(

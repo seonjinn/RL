@@ -11,11 +11,13 @@ VALIDATION_MODE=${VALIDATION_MODE:-run}
 COMPARE_ACTION=${COMPARE_ACTION:-dry-run}
 ARM=${ARM:-candidate}
 MAX_STEPS=${MAX_STEPS:-2}
+RUN_CORRECTNESS=${RUN_CORRECTNESS:-true}
 case "${ACTION}" in test-only|dry-run|submit) ;; *) echo "Unsupported ACTION: ${ACTION}" >&2; exit 2 ;; esac
 case "${VALIDATION_MODE}" in run|compare) ;; *) echo "VALIDATION_MODE must be run or compare" >&2; exit 2 ;; esac
 case "${COMPARE_ACTION}" in dry-run|run) ;; *) echo "COMPARE_ACTION must be dry-run or run" >&2; exit 2 ;; esac
 case "${ARM}" in stock|candidate) ;; *) echo "ARM must be stock or candidate" >&2; exit 2 ;; esac
 case "${MAX_STEPS}" in 2|8) ;; *) echo "MAX_STEPS must be 2 or 8" >&2; exit 2 ;; esac
+case "${RUN_CORRECTNESS}" in true|false) ;; *) echo "RUN_CORRECTNESS must be true or false" >&2; exit 2 ;; esac
 
 EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-b9eea5bbbec24a2af6acd0d92c02a3640a748e9c}
 MODEL=Qwen/Qwen3-30B-A3B
@@ -94,8 +96,10 @@ VALIDATION_EXECUTION_INPUTS=(
     "${SCRIPT_DIR}/provenance.sh"
     "${SCRIPT_DIR}/validate_correctness.py"
     "${SCRIPT_DIR}/compare_gsm8k.py"
-    "${GSM8K_EVALUATOR}"
 )
+if [[ "${RUN_CORRECTNESS}" == true ]]; then
+    VALIDATION_EXECUTION_INPUTS+=("${GSM8K_EVALUATOR}")
+fi
 if [[ "${ACTION}" != dry-run ]]; then
     CACHE_SHA256=$(audit_sha256_path "${CACHE_FILE}")
     MODEL_SHA256=$(audit_sha256_path "${MODEL_SNAPSHOT}")
@@ -116,7 +120,7 @@ if [[ "${MAX_STEPS}" == 8 && "${ACTION}" != dry-run ]]; then
 fi
 
 POST_RUN=''
-if [[ "${MAX_STEPS}" == 8 ]]; then
+if [[ "${MAX_STEPS}" == 8 && "${RUN_CORRECTNESS}" == true ]]; then
     POST_RUN=$(cat <<EOF
 server_pid=
 cleanup_server() { [[ -z "\${server_pid}" ]] || { kill "\${server_pid}" 2>/dev/null || true; wait "\${server_pid}" 2>/dev/null || true; }; }
