@@ -21,7 +21,12 @@ The machine-readable launcher contract is
 
 ## Trace Privacy
 
-Trace artifacts contain execution metadata only. Never write prompts, token IDs, hidden values, or model outputs, credentials, or Hugging Face/W&B tokens to artifacts. Preserve every observed routing signature in the raw trace, but select representative signatures covering at least 95% of observed MoE GPU time.
+Trace artifacts contain execution metadata only. Never write prompts, token IDs,
+hidden values, model outputs, credentials, or Hugging Face/W&B tokens to
+artifacts. Sample the routing stream at a fixed interval with a per-process
+record limit, then select representative signatures covering at least 95% of
+sampled MoE GPU time. The bounded sampler avoids synchronizing and writing on
+every MoE invocation.
 
 ## Replay and Qualification
 

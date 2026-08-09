@@ -12,7 +12,7 @@ case "${ACTION}" in
     *) echo "Unsupported ACTION: ${ACTION}" >&2; exit 2 ;;
 esac
 
-EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-cb7dc7d7e560c0b95055772f1ee4d3a31a605edc}
+EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-174ba94e392380af58907127f36c33f8b19ab900}
 MODEL=Qwen/Qwen3-30B-A3B
 CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}
@@ -30,10 +30,20 @@ PARTITION=${PARTITION:-batch}
 QOS=${QOS:-}
 WALLTIME=${WALLTIME:-05:00:00}
 WANDB_ENABLED=${WANDB_ENABLED:-false}
+TRACE_INTERVAL=${TRACE_INTERVAL:-128}
+TRACE_MAX_SAMPLES=${TRACE_MAX_SAMPLES:-2048}
 case "${WANDB_ENABLED}" in
     true|false) ;;
     *) echo "WANDB_ENABLED must be true or false" >&2; exit 2 ;;
 esac
+[[ "${TRACE_INTERVAL}" =~ ^[1-9][0-9]*$ ]] || {
+    echo "TRACE_INTERVAL must be a positive integer" >&2
+    exit 2
+}
+[[ "${TRACE_MAX_SAMPLES}" =~ ^[1-9][0-9]*$ ]] || {
+    echo "TRACE_MAX_SAMPLES must be a positive integer" >&2
+    exit 2
+}
 
 if [[ "${ACTION}" == submit ]]; then
     audit_prepare_submit "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" "${EXPECTED_VLLM_COMMIT}"
@@ -122,6 +132,8 @@ for audit_module in \
 done
 unset VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR
 export VLLM_MXFP8_MOE_TRACE_DIR=${TRACE_DIR}
+export VLLM_MXFP8_MOE_TRACE_INTERVAL=${TRACE_INTERVAL}
+export VLLM_MXFP8_MOE_TRACE_MAX_SAMPLES=${TRACE_MAX_SAMPLES}
 export VLLM_MXFP8_MOE_MODEL_REVISION=${MODEL_REVISION}
 export VLLM_MXFP8_MOE_RUNTIME_FINGERPRINT=${NEMO_RL_COMMIT}-${EXPECTED_VLLM_COMMIT}
 export VLLM_MXFP8_MOE_DP_SIZE=16
@@ -218,6 +230,8 @@ fi
 printf 'action=%s\n' "${ACTION}"
 printf 'run_root=%s\n' "${RUN_ROOT}"
 printf 'trace_is_metadata_only=true\n'
+printf 'trace_interval=%s\n' "${TRACE_INTERVAL}"
+printf 'trace_max_samples_per_process=%s\n' "${TRACE_MAX_SAMPLES}"
 printf 'sbatch_args='; printf ' %q' "${SBATCH_ARGS[@]}"; printf '\n'
 printf '%s\n' "${COMMAND}"
 
