@@ -50,6 +50,8 @@ case "${ARM}" in stock) CACHE_ROOT=${STOCK_CACHE_ROOT} ;; candidate) CACHE_ROOT=
 CACHE_FILE=${CACHE_ROOT}/autotune_configs.json
 CACHE_MANIFEST=${CACHE_MANIFEST:-${CANDIDATE_CACHE_ROOT}/cache_manifest.json}
 RUNTIME_CACHE_FILE=${CACHE_ROOT}/${FLASHINFER_RUNTIME_CACHE_HASH}/autotune_configs.json
+STAGED_CACHE_ROOT=${RUN_ROOT}/runtime-cache
+STAGED_RUNTIME_CACHE_FILE=${STAGED_CACHE_ROOT}/${FLASHINFER_RUNTIME_CACHE_HASH}/autotune_configs.json
 if [[ -n "${FLASHINFER_RUNTIME_CACHE_HASH}" && ! "${FLASHINFER_RUNTIME_CACHE_HASH}" =~ ^[0-9a-f]{64}$ ]]; then
     echo "FLASHINFER_RUNTIME_CACHE_HASH must be a lowercase SHA-256 string" >&2
     exit 2
@@ -172,8 +174,11 @@ export PATH=${DRIVER_VENV}/bin:\${PATH}
 export HF_HOME=${WORK_ROOT}/hf
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
-export VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=${CACHE_ROOT}
 if [[ -n "${FLASHINFER_RUNTIME_CACHE_HASH}" ]]; then cmp -s ${CACHE_FILE} ${RUNTIME_CACHE_FILE} || { echo "Runtime tactic cache drifted after submit preflight" >&2; exit 1; }; fi
+mkdir -p ${STAGED_CACHE_ROOT}/${FLASHINFER_RUNTIME_CACHE_HASH}
+cp ${RUNTIME_CACHE_FILE} ${STAGED_RUNTIME_CACHE_FILE}
+cmp -s ${RUNTIME_CACHE_FILE} ${STAGED_RUNTIME_CACHE_FILE} || { echo "Failed to stage runtime tactic cache" >&2; exit 1; }
+export VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=${STAGED_CACHE_ROOT}
 export MXFP8_MOE_CUDA_GRAPH_REPLAY=required
 export VLLM_TENSOR_PARALLEL_SIZE=1
 export VLLM_EXPERT_PARALLEL_SIZE=1

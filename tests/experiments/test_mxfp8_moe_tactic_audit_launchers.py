@@ -481,6 +481,34 @@ def test_validation_checks_the_runtime_hashed_cache_copy(tmp_path: Path) -> None
     assert f"--cache-root {cache_root}" in output
 
 
+def test_validation_stages_runtime_cache_in_a_writable_run_directory(
+    tmp_path: Path,
+) -> None:
+    """Keep the immutable source cache separate from vLLM's atomic rewrites."""
+    runtime_hash = "b" * 64
+    source_root = tmp_path / "immutable-candidate-cache"
+    run_root = tmp_path / "candidate-run"
+    output = _dry_run(
+        "submit_validation_ptyche.sh",
+        tmp_path,
+        {
+            "ARM": "candidate",
+            "CANDIDATE_CACHE_ROOT": str(source_root),
+            "FLASHINFER_RUNTIME_CACHE_HASH": runtime_hash,
+            "RUN_ROOT": str(run_root),
+        },
+    )
+
+    source = source_root / runtime_hash / "autotune_configs.json"
+    staged_root = run_root / "runtime-cache"
+    staged = staged_root / runtime_hash / "autotune_configs.json"
+    assert f"mkdir -p {staged.parent}" in output
+    assert f"cp {source} {staged}" in output
+    assert f"cmp -s {source} {staged}" in output
+    assert f"export VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR={staged_root}" in output
+    assert f"export VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR={source_root}" not in output
+
+
 def test_compare_mode_is_the_only_cross_arm_validation_path(tmp_path: Path) -> None:
     """Catch run-mode validation reading artifacts from the other arm."""
     output = _dry_run(
