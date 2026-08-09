@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from experiments.mxfp8_moe_tactic_audit.collect_results import _generated_token_count
 from experiments.mxfp8_moe_tactic_audit.observe_runtime import (
     observe_runtime,
     sha256_path,
@@ -964,6 +965,16 @@ def test_runtime_container_hash_uses_bounded_streaming(
     )
 
     assert sha256_path(container) == hashlib.sha256(payload).hexdigest()
+
+
+def test_generated_token_count_accepts_producer_batched_masks(tmp_path: Path) -> None:
+    dump = tmp_path / "train_data_step3.jsonl"
+    dump.write_text(
+        json.dumps({"token_loss_mask": [[1, 1, 0], [0, 1, 0]]}) + "\n",
+        encoding="ascii",
+    )
+
+    assert _generated_token_count(dump) == 3
 
 
 @pytest.mark.parametrize("node_count_name", ["SLURM_NNODES", "MXFP8_MOE_NODE_COUNT"])

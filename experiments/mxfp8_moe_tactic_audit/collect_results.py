@@ -271,18 +271,23 @@ def _generated_token_count(path: Path) -> int:
         mask = row.get("token_loss_mask")
         if not isinstance(mask, list):
             raise EvidenceError(f"{path} has no token_loss_mask")
-        for value in mask:
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise EvidenceError(f"{path} token_loss_mask must be numeric")
-            numeric = float(value)
-            if not math.isfinite(numeric) or numeric < 0 or numeric != int(numeric):
-                raise EvidenceError(
-                    f"{path} token_loss_mask must contain nonnegative integers"
-                )
-            count += int(numeric)
+        count += _sum_token_loss_mask(mask, path)
     if count <= 0:
         raise EvidenceError(f"{path} realized generated tokens must be positive")
     return count
+
+
+def _sum_token_loss_mask(value: object, path: Path) -> int:
+    if isinstance(value, list):
+        return sum(_sum_token_loss_mask(item, path) for item in value)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise EvidenceError(f"{path} token_loss_mask must be numeric")
+    numeric = float(value)
+    if not math.isfinite(numeric) or numeric < 0 or numeric != int(numeric):
+        raise EvidenceError(
+            f"{path} token_loss_mask must contain nonnegative integers"
+        )
+    return int(numeric)
 
 
 def write_run_evidence(

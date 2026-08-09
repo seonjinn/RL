@@ -505,7 +505,8 @@ def test_launcher_evidence_is_derived_from_grpo_producer_masks_and_phase_markers
             dump = run / "logs" / "exp_001" / f"train_data_step{step}.jsonl"
             dump.parent.mkdir(parents=True, exist_ok=True)
             dump.write_text(
-                json.dumps({"token_loss_mask": [1, 1, 0, 1]}) + "\n", encoding="ascii"
+                json.dumps({"token_loss_mask": [[1, 1, 0, 1]]}) + "\n",
+                encoding="ascii",
             )
 
     write_run_evidence(
