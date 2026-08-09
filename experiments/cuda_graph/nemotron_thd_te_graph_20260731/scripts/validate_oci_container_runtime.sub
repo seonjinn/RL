@@ -264,11 +264,17 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
   if [[ "${SBATCH_TEST_ONLY}" == "1" ]]; then
     submission_flag=--test-only
   fi
+  runtime_time_limit=00:15:00
+  if [[ "${RUNTIME_PHASE}" == "stage" ]]; then
+    runtime_time_limit=00:45:00
+  fi
   sbatch_command=(
     sbatch
     "${submission_flag}"
     "--partition=${PARTITION}"
     "--account=${ACCOUNT}"
+    "--job-name=${ACCOUNT}-cuda-graph.runtime-${RUNTIME_PHASE}"
+    "--time=${runtime_time_limit}"
     "--output=${ARTIFACT_DIR}/oci-container-runtime-${RUNTIME_PHASE}-%j.log"
     "--export=${export_spec}"
     "${script_path}"
