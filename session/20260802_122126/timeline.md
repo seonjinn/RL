@@ -1,5 +1,32 @@
 # Timeline
 
+## 2026-08-09 08:40:00 PDT
+
+- NeMo-RL integration commit `4e5f9bac7` pins Bridge `2f6338610`, which pins
+  MCore candidate `2dbad0a2d`.
+- Verified Bridge and MCore include their current upstream main commits and all
+  three nested worktrees are clean at the intended SHAs.
+
+## 2026-08-09 08:25:00 PDT
+
+- ptyche job `2551742` completed the exact 4-node/16-GPU Nano HybridEP gate
+  from MCore candidate `fc718cf4c`.
+- Verified capture plus 20 changing-route replays and eager/graph parity for
+  output, loss, routes, input gradients, all parameter gradients, THD padding,
+  and simulated optimizer updates.
+- Confirmed the product root cause: `_HybridEPManager.token_probs` and
+  `dispatched_probs` retained completed eager autograd graphs across the later TE
+  backward capture boundary. Value-preserving manager-side detach fixes capture
+  while caller-held tensors preserve gradient ownership.
+- Found that NeMo-RL candidate snapshot creation is not consumed by the worker
+  launcher because `run_nemorl_scope.sub` clears `PYTHONPATH`. Decided to promote
+  the candidate through Bridge/NeMo-RL gitlinks and refresh attestation before
+  any 20-step performance claim.
+- Merged current MCore main `d12f6c8c9` into candidate `2dbad0a2d` and pushed it.
+- Merged current Bridge main `355ef3ea` into Bridge `2f6338610`, resolved the
+  MCore FSDP API and dependency metadata conflicts, pinned MCore `2dbad0a2d`,
+  passed `uv lock --check` and all pre-commit hooks, and pushed it.
+
 ## 2026-08-05 23:54:00 PDT
 
 - All 12 corrected jobs were running after five minutes.

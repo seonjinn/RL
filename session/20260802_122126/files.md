@@ -1,5 +1,22 @@
 # Files
 
+## 2026-08-09 HybridEP Capture Fix
+
+### Changed
+
+- `3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/moe/token_dispatcher.py` - detach manager-held completed HybridEP autograd references.
+- `3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/tests/unit_tests/transformer/moe/test_token_dispatcher.py` - verify manager reference release and preserved gradients.
+- `3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/tests/unit_tests/transformer/test_partial_moe_cuda_graph_distributed.py` - exact staged capture/replay diagnostics and parity gate.
+
+### Generated
+
+- ptyche attestation `experiment-logs/attestations/mcore/fc718cf4c5a17d50e9f06982363a463a54972eb7/dropless_hybridep_nano16.json` - passed 16-rank result for Slurm job `2551742`.
+
+### Promoted
+
+- `3rdparty/Megatron-Bridge-workspace/Megatron-Bridge` - Bridge `2f6338610`,
+  recursively pinning MCore `2dbad0a2d`.
+
 ## 2026-08-05 Campaign Refresh
 
 ### Inspected

@@ -1,63 +1,71 @@
 # Session State
 
 - Session: 20260802_122126
-- Repo: /Users/sna/CudaGraph_PR/RL-thd-cg-hybrid-nemotron-latest-main-20260804
-- Branch: experiment/thd-cg-hybrid-nemotron-latest-main-20260804
+- Repo: /Users/sna/CudaGraph_PR/RL-thd-cg-hybrid-nemotron-main-20260806
+- Branch: experiment/thd-cg-hybrid-nemotron-main-20260806
 - Started: 2026-08-02 12:21:26 PDT
-- Updated: 2026-08-05 23:54:00 PDT
+- Updated: 2026-08-09 08:40:00 PDT
 
 ## Goal
 
 Establish correctness and performance of Transformer Engine partial CUDA Graph
-scopes for packed Nemotron 3 policies. For Nano, measure every valid subset of
-`attn`, `mamba`, `moe_router`, and `moe_preprocess`, then determine whether the
-all-enabled scope is the fastest graph-safe configuration.
+scopes for packed Nemotron 3 policies. For Nano, measure valid individual and
+combined `attn`, `mamba`, `moe_router`, and `moe_preprocess` scopes and select
+the fastest graph-safe configuration.
 
 ## Current Subtask
 
-Launch a matched 20-step Nano matrix on OCI-HSG using the exact persistent graph
-bank implementation that completed the 100-step baseline and attention runs.
+Promote the corrected HybridEP autograd-lifetime implementation into the nested
+Bridge/NeMo-RL gitlinks, re-attest it on ptyche, and run a matched Nano 20-step
+baseline versus partial-CUDA-Graph comparison.
 
 ## Loaded Skills
 
 - `e2etrain:ssh-slurm` - cluster preflight, submission, monitoring, and failure triage.
 - `nemo-rl-auto-research` - experiment lifecycle and reproducibility ledger.
 - `nemo-rl-session-memory` - durable campaign state and handoff.
-- `superpowers:using-git-worktrees` - preserve the existing isolated worktree.
-- `superpowers:brainstorming` - consulted for possible launcher changes; no new launcher behavior is needed because persistent scope leaves already cover the approved matrix.
+- `superpowers:systematic-debugging` - root-cause isolation before product changes.
+- `superpowers:test-driven-development` - regression-first product fix.
+- `superpowers:brainstorming` - explicit candidate-integration design choice.
+- `mcore-testing` - targeted distributed test and exact result requirements.
 
 ## Current Status
 
-Campaign source `e95e40325` is pushed as
-`experiment/nano-cg-4axis-matrix-20260805`. A clean recursive OCI-HSG worktree
-uses Bridge `0142aebf` and MCore `281200606`. The first 12 jobs (`5912632` to
-`5912655`) failed before NeMo-RL startup because the direct launcher's stale
-2026-08-01 container could not resolve project Python 3.13.14. The successful
-100-step runs used the newer 2026-08-05 nightly ending in runtime job `5884993`.
-A corrected matrix now uses that exact image. All 12 corrected jobs (`5913139`,
-`5913180`, `5913182`, `5913184`, `5913186`, `5913188`, `5913190`, `5913192`,
-`5913194`, `5913196`, `5913198`, and `5913200`) are running without
-dependencies. Every row loaded the NeMo-RL config with Python 3.13.14 and
-initialized all eight vLLM workers; no fatal runtime marker was present during
-the first five minutes. Generation-side vLLM graph capture is in progress.
+NeMo-RL `c538a5442` is fully merged with current NeMo-RL main. MCore candidate
+`2dbad0a2d` is pushed, includes current MCore main `d12f6c8c9`, and fixes two stale `_HybridEPManager` autograd references
+by detaching manager-held `token_probs` after dispatch and
+`dispatched_probs` after combine. ptyche job `2551742` passed the exact
+4-node/16-GPU Nano HybridEP gate: three backward warmups, TE capture, 20
+changing-route replays, output/loss/route/input-gradient/parameter-gradient
+parity, structural THD padding, and optimizer-update parity. Its attestation is
+under `experiment-logs/attestations/mcore/fc718cf4c.../`.
+
+Bridge `2f6338610` is pushed, includes current Bridge main `355ef3ea`, and pins
+MCore `2dbad0a2d`. The candidate snapshot path in `run_scope.sh` is not consumed
+by `run_nemorl_scope.sub`, so NeMo-RL performance uses explicit nested gitlink
+promotion and a refreshed runtime attestation rather than silently testing old
+integration MCore `4013232a9`. NeMo-RL integration commit `4e5f9bac7` now pins
+Bridge `2f6338610`.
 
 ## Plan
 
-- [x] Merge the persistent graph-bank experiment with latest NeMo-RL main.
-- [x] Define the valid four-axis Nano scope matrix.
-- [x] Commit and push the exact campaign source SHA.
-- [x] Check OCI-HSG scheduling with `sbatch --test-only`.
-- [x] Submit one matched 20-step run for baseline and each valid scope.
-- [x] Monitor the corrected matrix for at least five minutes and verify Python/config entry.
+- [x] Isolate the HybridEP capture contamination to stale manager-held autograd references.
+- [x] Implement and push the value-preserving detach fix plus focused regression coverage.
+- [x] Pass the exact 16-GPU Nano HybridEP correctness gate on ptyche.
+- [x] Merge current MCore and Bridge main into the candidate stack.
+- [x] Promote Bridge `2f6338610` through the NeMo-RL gitlink.
+- [ ] Re-run the exact MCore gate and refresh the ptyche source/runtime attestation.
+- [ ] Submit matched 20-step Nano baseline and graph rows with warmup 3 and checkpoints disabled.
 - [ ] Collect phase timing, throughput, CUDA Graph coverage/cache telemetry, memory, and correctness metrics.
-- [ ] Repeat only the stable leading configurations after the first complete matrix.
 
 ## Assumptions
 
-- All rows use the same Nano performance recipe, seed, 24 GPUs, all-to-all dispatcher, sequence packing, fused attention, warmup 3, no checkpoints, container, and source SHA.
-- `moe_preprocess` requires `moe_router`; its isolated incremental effect is the comparison between router and router-plus-preprocess.
-- The all-enabled scope is a performance hypothesis, not a guaranteed result. It wins only if extra graph coverage outweighs graph-bank misses, recaptures, padding, and replay overhead.
+- All comparison rows use identical source, runtime, seed, recipe, topology,
+  dispatcher, sequence packing, fused attention, and model snapshot.
+- `moe_preprocess` requires `moe_router`; its isolated effect is router versus
+  router-plus-preprocess.
+- Twenty steps validate function and short-window metrics, not convergence.
 
 ## Blockers
 
-- None known. The next gate is successful policy-worker initialization and first optimizer step for every scope.
+- None. The next gate is the exact 16-GPU rerun on the merged candidate.
