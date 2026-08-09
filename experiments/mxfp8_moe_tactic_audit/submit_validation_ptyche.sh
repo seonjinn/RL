@@ -106,7 +106,6 @@ RECIPE_SHA256=dry-run-not-validated
 SCRIPTS_SHA256=dry-run-not-validated
 EXECUTION_INPUTS_SHA256=dry-run-not-validated
 VALIDATION_EXECUTION_INPUTS=(
-    "${SCRIPT_DIR}"
     "${SCRIPT_DIR}/submit_validation_ptyche.sh"
     "${SCRIPT_DIR}/provenance.sh"
     "${SCRIPT_DIR}/validate_correctness.py"
@@ -219,6 +218,6 @@ case "${ACTION}" in
   dry-run) ;;
   test-only) CONTAINER=${CONTAINER} MOUNTS=/lustre:/lustre COMMAND="${COMMAND}" GPUS_PER_NODE=4 BASE_LOG_DIR="${RUN_ROOT}" sbatch --test-only "${SBATCH_ARGS[@]}" "${REPO_DIR}/ray.sub" ;;
   submit)
-    audit_write_manifest "${RUN_ROOT}" validation "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" "${EXPECTED_VLLM_COMMIT}" "${CONTAINER}" "${CONFIG}" "${MODEL_SNAPSHOT}" "${CACHE_ROOT}" "${VALIDATION_EXECUTION_INPUTS[0]}" "${VALIDATION_EXECUTION_INPUTS[@]:1}"
+    audit_write_manifest "${RUN_ROOT}" validation "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" "${EXPECTED_VLLM_COMMIT}" "${CONTAINER}" "${CONFIG}" "${MODEL_SNAPSHOT}" "${CACHE_ROOT}" "${SCRIPT_DIR}" "${VALIDATION_EXECUTION_INPUTS[@]}"
     CONTAINER=${CONTAINER} MOUNTS=/lustre:/lustre COMMAND="${COMMAND}" GPUS_PER_NODE=4 BASE_LOG_DIR="${RUN_ROOT}" sbatch "${SBATCH_ARGS[@]}" "${REPO_DIR}/ray.sub" ;;
 esac

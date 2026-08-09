@@ -157,7 +157,7 @@ audit_write_manifest() {
     recipe_sha256=$(audit_sha256_path "${repo_dir}/${recipe}") || return
     model_snapshot_sha256=$(audit_sha256_path "${model_snapshot}") || return
     scripts_sha256=$(audit_scripts_sha256 "${scripts_root}") || return
-    execution_inputs_sha256=$(audit_execution_inputs_sha256 "${scripts_root}" "$@") || return
+    execution_inputs_sha256=$(audit_execution_inputs_sha256 "$@") || return
     python3 - "${output_root}/run_manifest.json" "${run_kind}" "${nemo_rl_commit}" \
         "${vllm_commit}" "${container_sha256}" "${recipe_sha256}" \
         "${model_snapshot_sha256}" \
