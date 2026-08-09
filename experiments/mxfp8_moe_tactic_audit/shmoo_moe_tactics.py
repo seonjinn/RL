@@ -716,6 +716,18 @@ def _load_profiles(path: Path) -> tuple[ReplayProfile, ...]:
     )
 
 
+def _parse_tactic_pair(value: str) -> TacticPair:
+    parts = value.split(",")
+    if len(parts) != 2:
+        raise argparse.ArgumentTypeError("tactic pair must be GEMM1,GEMM2")
+    try:
+        return TacticPair(*(int(part) for part in parts))
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            "tactic pair must contain integer IDs"
+        ) from error
+
+
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profiles", type=Path, required=True)
@@ -724,6 +736,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     weight_source.add_argument("--synthetic-smoke", action="store_true")
     parser.add_argument("--profile-limit", type=int)
     parser.add_argument("--tactic-limit", type=int)
+    parser.add_argument("--tactic-pair", type=_parse_tactic_pair, action="append")
     parser.add_argument("--pair-only", action="store_true")
     parser.add_argument("--monolithic-replay", action="store_true")
     parser.add_argument("--warmups", type=int, default=3)
@@ -786,6 +799,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 synthetic_smoke=synthetic_source,
             )
             tactics = enumerate_valid_tactics(case)
+            if args.tactic_pair:
+                requested = tuple(args.tactic_pair)
+                legal_tactics = set(tactics)
+                missing = [tactic for tactic in requested if tactic not in legal_tactics]
+                if missing:
+                    raise ValueError(f"requested tactic is not legal: {missing[0]}")
+                tactics = requested
             if args.tactic_limit is not None:
                 tactics = tactics[: args.tactic_limit]
             for tactic in tactics:

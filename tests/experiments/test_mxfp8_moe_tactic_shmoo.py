@@ -946,6 +946,83 @@ def test_bounded_monolithic_cli_preflights_and_forwards_mode(
     assert profile_modes == [(True, True)]
 
 
+def test_cli_profiles_only_explicit_tactic_pairs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _profile()
+    profiles_path = tmp_path / "selected_profiles.json"
+    profiles_path.write_text(
+        json.dumps({"selected_profiles": [profile.to_json()]}), encoding="ascii"
+    )
+    output_path = tmp_path / "measurements.jsonl"
+    case = _case(profile)
+    tactics = (TacticPair(1, 2), TacticPair(3, 4), TacticPair(5, 6))
+    measured: list[TacticPair] = []
+
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.assert_monolithic_replay_supported",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.build_kernel_case",
+        lambda *_args, **_kwargs: case,
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.enumerate_valid_tactics",
+        lambda _case: tactics,
+    )
+
+    def fake_profile_tactic(
+        _case: MoeKernelCase,
+        tactic: TacticPair,
+        **_kwargs: object,
+    ) -> TacticMeasurement:
+        measured.append(tactic)
+        return TacticMeasurement(
+            signature_key=profile.signature_key,
+            tactic=tactic,
+            median_us=4.0,
+            p95_us=4.5,
+            cv=0.02,
+            warmups=3,
+            repetitions=10,
+            finite=True,
+            deterministic=True,
+            max_abs_error=0.0,
+            cosine_similarity=1.0,
+            failure=None,
+        )
+
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.profile_tactic",
+        fake_profile_tactic,
+    )
+
+    assert (
+        main(
+            [
+                "--profiles",
+                str(profiles_path),
+                "--synthetic-smoke",
+                "--profile-limit",
+                "1",
+                "--tactic-limit",
+                "3",
+                "--tactic-pair",
+                "3,4",
+                "--tactic-pair",
+                "5,6",
+                "--pair-only",
+                "--monolithic-replay",
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+    assert measured == [TacticPair(3, 4), TacticPair(5, 6)]
+
+
 def test_exact_brief_smoke_args_use_marked_bounded_synthetic_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -34,6 +34,8 @@ SHMOO_WEIGHT_MODE=${SHMOO_WEIGHT_MODE:-prepacked}
 REPLAY_MODE=${REPLAY_MODE:-routed}
 PROFILE_LIMIT=${PROFILE_LIMIT:-}
 TACTIC_LIMIT=${TACTIC_LIMIT:-}
+TACTIC_PAIRS=${TACTIC_PAIRS:-}
+REPETITIONS=${REPETITIONS:-10}
 PAIR_ONLY=${PAIR_ONLY:-1}
 case "${SHMOO_WEIGHT_MODE}" in
     prepacked|synthetic) ;;
@@ -51,8 +53,23 @@ for value_name in PROFILE_LIMIT TACTIC_LIMIT; do
         exit 2
     fi
 done
+if [[ ! "${REPETITIONS}" =~ ^[1-9][0-9]*$ || "${REPETITIONS}" -lt 10 ]]; then
+    echo "REPETITIONS must be an integer of at least 10: ${REPETITIONS}" >&2
+    exit 2
+fi
 PROFILE_LIMIT_ARGUMENT=${PROFILE_LIMIT:+--profile-limit ${PROFILE_LIMIT}}
 TACTIC_LIMIT_ARGUMENT=${TACTIC_LIMIT:+--tactic-limit ${TACTIC_LIMIT}}
+TACTIC_PAIR_ARGUMENTS=
+if [[ -n "${TACTIC_PAIRS}" ]]; then
+    IFS=';' read -r -a tactic_pairs <<< "${TACTIC_PAIRS}"
+    for tactic_pair in "${tactic_pairs[@]}"; do
+        [[ "${tactic_pair}" =~ ^[0-9]+,[0-9]+$ ]] || {
+            echo "TACTIC_PAIRS entries must use GEMM1,GEMM2: ${tactic_pair}" >&2
+            exit 2
+        }
+        TACTIC_PAIR_ARGUMENTS+=" --tactic-pair ${tactic_pair}"
+    done
+fi
 case "${PAIR_ONLY}" in
     0) PAIR_ONLY_ARGUMENT= ;;
     1) PAIR_ONLY_ARGUMENT=--pair-only ;;
@@ -151,10 +168,11 @@ nsys profile --trace=cuda,nvtx --cuda-graph-trace=node --force-overwrite=true --
   ${STOCK_CACHE_ARGUMENT} \\
   ${PROFILE_LIMIT_ARGUMENT} \\
   ${TACTIC_LIMIT_ARGUMENT} \\
+  ${TACTIC_PAIR_ARGUMENTS} \\
   ${PAIR_ONLY_ARGUMENT} \\
   ${REPLAY_ARGUMENT} \\
   --warmups 3 \\
-  --repetitions 10 \\
+  --repetitions ${REPETITIONS} \\
   --output ${SHMOO_OUTPUT_ROOT}/measurements.jsonl
 nsys stats --quiet --report nvtx_gpu_proj_sum --format csv --output - \\
   ${RUN_ROOT}/nsys-selected.nsys-rep > ${RUN_ROOT}/nsys-nvtx.csv

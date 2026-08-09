@@ -225,6 +225,25 @@ def test_shmoo_monolithic_replay_uses_captured_weights_and_explicit_bounds(
     assert "--tactic-limit 1000" in output
 
 
+def test_shmoo_launcher_forwards_explicit_tactic_pairs(tmp_path: Path) -> None:
+    output = _dry_run(
+        "submit_shmoo_ptyche.sh",
+        tmp_path,
+        {
+            "REPLAY_MODE": "monolithic",
+            "PROFILE_LIMIT": "8",
+            "TACTIC_LIMIT": "1000",
+            "TACTIC_PAIRS": "32,568;32,280;32,550",
+            "REPETITIONS": "50",
+        },
+    )
+
+    assert "--tactic-pair 32,568" in output
+    assert "--tactic-pair 32,280" in output
+    assert "--tactic-pair 32,550" in output
+    assert "--repetitions 50" in output
+
+
 def test_shmoo_synthetic_mode_uses_prepared_environment_without_stock_artifacts(
     tmp_path: Path,
 ) -> None:
