@@ -33,6 +33,7 @@ WANDB_ENABLED=${WANDB_ENABLED:-false}
 TRACE_WARMUP_CALLS=${TRACE_WARMUP_CALLS:-192}
 TRACE_INTERVAL=${TRACE_INTERVAL:-127}
 TRACE_MAX_SAMPLES=${TRACE_MAX_SAMPLES:-512}
+AUTOTUNE_CACHE_CAPTURE_ROOT=${AUTOTUNE_CACHE_CAPTURE_ROOT:-}
 case "${WANDB_ENABLED}" in
     true|false) ;;
     *) echo "WANDB_ENABLED must be true or false" >&2; exit 2 ;;
@@ -77,10 +78,45 @@ if [[ "${ACTION}" != dry-run ]]; then
 fi
 if [[ "${ACTION}" == submit ]]; then
     [[ ! -e "${RUN_ROOT}" ]] || { echo "Run root already exists: ${RUN_ROOT}" >&2; exit 1; }
+    if [[ -n "${AUTOTUNE_CACHE_CAPTURE_ROOT}" ]]; then
+        [[ ! -e "${AUTOTUNE_CACHE_CAPTURE_ROOT}" ]] || {
+            echo "Autotune cache capture root already exists: ${AUTOTUNE_CACHE_CAPTURE_ROOT}" >&2
+            exit 1
+        }
+    fi
 fi
 
 TRACE_DIR=${RUN_ROOT}/trace
 NEMO_RL_COMMIT=$(git -C "${REPO_DIR}" rev-parse HEAD)
+CACHE_SETUP_COMMAND='unset VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR'
+CACHE_FINALIZE_COMMAND=''
+if [[ -n "${AUTOTUNE_CACHE_CAPTURE_ROOT}" ]]; then
+    CACHE_RAW_ROOT=${AUTOTUNE_CACHE_CAPTURE_ROOT}/raw
+    CACHE_OUTPUT=${AUTOTUNE_CACHE_CAPTURE_ROOT}/autotune_configs.json
+    CACHE_SETUP_COMMAND="mkdir -p ${CACHE_RAW_ROOT}
+export VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=${CACHE_RAW_ROOT}"
+    CACHE_FINALIZE_COMMAND=$(cat <<EOF
+mapfile -d '' generated_caches < <(find ${CACHE_RAW_ROOT} -type f -name autotune_configs.json -print0)
+[[ "\${#generated_caches[@]}" -eq 1 ]] || {
+  echo "expected exactly one generated FlashInfer autotune cache, found \${#generated_caches[@]}" >&2
+  exit 1
+}
+${DRIVER_VENV}/bin/python - "\${generated_caches[0]}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+with path.open(encoding="ascii") as handle:
+    payload = json.load(handle)
+if not isinstance(payload, dict) or not any(key != "_metadata" for key in payload):
+    raise RuntimeError(f"invalid or empty FlashInfer autotune cache: {path}")
+PY
+install -m 0444 "\${generated_caches[0]}" ${CACHE_OUTPUT}
+printf 'captured_cache=%s\n' ${CACHE_OUTPUT}
+EOF
+)
+fi
 COMMAND=$(cat <<EOF
 set -euo pipefail
 cd ${REPO_DIR}
@@ -135,7 +171,7 @@ for audit_module in \
     exit 1
   }
 done
-unset VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR
+${CACHE_SETUP_COMMAND}
 export VLLM_MXFP8_MOE_TRACE_DIR=${TRACE_DIR}
 export VLLM_MXFP8_MOE_TRACE_WARMUP_CALLS=${TRACE_WARMUP_CALLS}
 export VLLM_MXFP8_MOE_TRACE_INTERVAL=${TRACE_INTERVAL}
@@ -215,6 +251,7 @@ if observed_ranks != expected_ranks:
         f"incomplete trace rank coverage: expected={expected_ranks}, observed={observed_ranks}"
     )
 PY
+${CACHE_FINALIZE_COMMAND}
 touch ${RUN_ROOT}/trace_complete
 EOF
 )
@@ -239,6 +276,11 @@ printf 'trace_is_metadata_only=true\n'
 printf 'trace_warmup_calls=%s\n' "${TRACE_WARMUP_CALLS}"
 printf 'trace_interval=%s\n' "${TRACE_INTERVAL}"
 printf 'trace_max_samples_per_process=%s\n' "${TRACE_MAX_SAMPLES}"
+if [[ -n "${AUTOTUNE_CACHE_CAPTURE_ROOT}" ]]; then
+    printf 'autotune_cache_capture_root=%s\n' "${AUTOTUNE_CACHE_CAPTURE_ROOT}"
+else
+    printf 'autotune_cache_capture_root=disabled\n'
+fi
 printf 'sbatch_args='; printf ' %q' "${SBATCH_ARGS[@]}"; printf '\n'
 printf '%s\n' "${COMMAND}"
 

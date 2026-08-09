@@ -80,9 +80,8 @@ def test_trace_dry_run_is_eager_and_metadata_only(tmp_path: Path) -> None:
     assert "find " in output and "-name '*.jsonl'" in output
     assert "expected_ranks = set(range(16))" in output
     assert 'row["runtime_fingerprint"] != expected_fingerprint' in output
-    assert "CACHE_ROOT=" not in (AUDIT_DIR / "submit_trace_ptyche.sh").read_text(
-        encoding="ascii"
-    )
+    assert "autotune_cache_capture_root=disabled" in output
+    assert "export VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=" not in output
 
 
 def test_trace_dry_run_accepts_bounded_sampling_overrides(tmp_path: Path) -> None:
@@ -102,6 +101,24 @@ def test_trace_dry_run_accepts_bounded_sampling_overrides(tmp_path: Path) -> Non
     assert "trace_warmup_calls=96" in output
     assert "trace_interval=61" in output
     assert "trace_max_samples_per_process=256" in output
+
+
+def test_trace_can_capture_one_persistent_stock_autotune_cache(
+    tmp_path: Path,
+) -> None:
+    cache_root = tmp_path / "captured-stock-cache"
+    output = _dry_run(
+        "submit_trace_ptyche.sh",
+        tmp_path,
+        {"AUTOTUNE_CACHE_CAPTURE_ROOT": str(cache_root)},
+    )
+
+    assert f"autotune_cache_capture_root={cache_root}" in output
+    assert f"export VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR={cache_root / 'raw'}" in output
+    assert "printf 'captured_cache=%s\\n'" in output
+    assert str(cache_root / "autotune_configs.json") in output
+    assert "expected exactly one generated FlashInfer autotune cache" in output
+    assert "json.load" in output
 
 
 def test_trace_uses_one_prepared_vllm_environment_for_driver_and_actors(
