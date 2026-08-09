@@ -49,6 +49,16 @@ def _positive_integer(environment: Mapping[str, str], name: str) -> int:
     return value
 
 
+def _positive_integer_from_any(
+    environment: Mapping[str, str], names: Sequence[str]
+) -> int:
+    for name in names:
+        if name in environment:
+            return _positive_integer(environment, name)
+    joined_names = " or ".join(names)
+    raise ValueError(f"runtime environment is missing {joined_names}")
+
+
 def observe_runtime(
     *,
     nemo_rl_root: Path,
@@ -61,7 +71,9 @@ def observe_runtime(
     flashinfer_module: Any,
 ) -> dict[str, str]:
     """Collect independently observed runtime and artifact fingerprints."""
-    node_count = _positive_integer(environment, "SLURM_JOB_NUM_NODES")
+    node_count = _positive_integer_from_any(
+        environment, ("SLURM_JOB_NUM_NODES", "SLURM_NNODES")
+    )
     gpu_count = int(torch_module.cuda.device_count())
     if gpu_count <= 0:
         raise ValueError("runtime CUDA device count must be positive")

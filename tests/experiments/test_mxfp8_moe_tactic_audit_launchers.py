@@ -8,10 +8,14 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from experiments.mxfp8_moe_tactic_audit.observe_runtime import sha256_path
+from experiments.mxfp8_moe_tactic_audit.observe_runtime import (
+    observe_runtime,
+    sha256_path,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -893,6 +897,50 @@ def test_runtime_container_hash_uses_bounded_streaming(
     )
 
     assert sha256_path(container) == hashlib.sha256(payload).hexdigest()
+
+
+def test_runtime_observation_accepts_slurm_nnodes(tmp_path: Path) -> None:
+    """Accept the node-count variable exported by Ptyche's batch environment."""
+    nemo_rl = tmp_path / "nemo-rl"
+    vllm = tmp_path / "vllm"
+    nemo_rl.mkdir()
+    vllm.mkdir()
+    _init_git_repo(nemo_rl)
+    _init_git_repo(vllm)
+    model_snapshot = tmp_path / "model/snapshots/revision"
+    model_snapshot.mkdir(parents=True)
+    (model_snapshot / "config.json").write_text("{}\n", encoding="ascii")
+    container = tmp_path / "container.sqsh"
+    container.write_bytes(b"container")
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+    (cache_root / "autotune_configs.json").write_text("{}\n", encoding="ascii")
+    torch_module = SimpleNamespace(
+        cuda=SimpleNamespace(
+            device_count=lambda: 4,
+            get_device_name=lambda _device: "NVIDIA GB200",
+        ),
+        version=SimpleNamespace(cuda="13.0"),
+    )
+
+    payload = observe_runtime(
+        nemo_rl_root=nemo_rl,
+        vllm_root=vllm,
+        model_snapshot=model_snapshot,
+        container=container,
+        cache_root=cache_root,
+        environment={
+            "SLURM_NNODES": "4",
+            "VLLM_TENSOR_PARALLEL_SIZE": "1",
+            "VLLM_EXPERT_PARALLEL_SIZE": "1",
+            "MXFP8_MOE_CUDA_GRAPH_REPLAY": "required",
+        },
+        torch_module=torch_module,
+        flashinfer_module=SimpleNamespace(__version__="0.6.13"),
+    )
+
+    assert payload["node_count"] == "4"
+    assert payload["dp_size"] == "16"
 
 
 def _make_submit_environment(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
