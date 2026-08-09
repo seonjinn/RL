@@ -20,6 +20,7 @@ set -euo pipefail
 : "${UV_PYTHON_INSTALL_DIR:?Set UV_PYTHON_INSTALL_DIR to the managed Python root}"
 : "${PROBE_SCRIPT_PATH:?Set PROBE_SCRIPT_PATH to this persistent script}"
 MOUNTS=${MOUNTS:-/lustre:/lustre}
+export NVTE_WITH_NCCL_EP=0
 
 [[ "${CONTAINER}" == /* && -f "${CONTAINER}" && ! -L "${CONTAINER}" ]] || {
   echo "CONTAINER must be an absolute regular non-symlink file" >&2
@@ -54,7 +55,7 @@ if [[ "${READONLY_ACTOR_VENV_PROBE_PAYLOAD:-0}" != "1" ]]; then
     --container-image="${CONTAINER}" \
     --container-mounts="${MOUNTS}" \
     --container-workdir="${RUNTIME_STAGE_ROOT}/source" \
-    --container-env=CONTAINER,RUNTIME_STAGE_ROOT,UV_PYTHON_INSTALL_DIR,PROBE_SCRIPT_PATH,MOUNTS,READONLY_ACTOR_VENV_PROBE_PAYLOAD \
+    --container-env=CONTAINER,RUNTIME_STAGE_ROOT,UV_PYTHON_INSTALL_DIR,PROBE_SCRIPT_PATH,MOUNTS,READONLY_ACTOR_VENV_PROBE_PAYLOAD,NVTE_WITH_NCCL_EP \
     --export=ALL \
     env READONLY_ACTOR_VENV_PROBE_PAYLOAD=1 \
     bash "${PROBE_SCRIPT_PATH}"
@@ -132,5 +133,5 @@ if find "${project_root}" -xdev \( -type f -o -type d \) \
   echo "Actor-venv probe made the immutable source writable" >&2
   exit 2
 fi
-printf 'READONLY_ACTOR_VENV_PROBE=passed\nUV_NO_EDITABLE=%s\nUV_PROJECT=%s\n' \
-  "${UV_NO_EDITABLE}" "${UV_PROJECT}"
+printf 'READONLY_ACTOR_VENV_PROBE=passed\nUV_NO_EDITABLE=%s\nUV_PROJECT=%s\nNVTE_WITH_NCCL_EP=%s\n' \
+  "${UV_NO_EDITABLE}" "${UV_PROJECT}" "${NVTE_WITH_NCCL_EP}"

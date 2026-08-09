@@ -2681,6 +2681,8 @@ def test_readonly_actor_venv_probe_uses_non_editable_tier_installs() -> None:
     source = (EXPERIMENT_DIR / "scripts" / "probe_readonly_actor_venvs.sub").read_text()
 
     assert "export UV_NO_EDITABLE=1" in source
+    assert "NVTE_WITH_NCCL_EP=0" in source
+    assert "READONLY_ACTOR_VENV_PROBE_PAYLOAD,NVTE_WITH_NCCL_EP" in source
     assert "probe_tier vllm vllm" in source
     assert "probe_tier mcore megatron.core" in source
     assert '--container-image="${CONTAINER}"' in source
