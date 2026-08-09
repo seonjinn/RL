@@ -17,7 +17,7 @@ case "${COMPARE_ACTION}" in dry-run|run) ;; *) echo "COMPARE_ACTION must be dry-
 case "${ARM}" in stock|candidate) ;; *) echo "ARM must be stock or candidate" >&2; exit 2 ;; esac
 case "${MAX_STEPS}" in 2|8) ;; *) echo "MAX_STEPS must be 2 or 8" >&2; exit 2 ;; esac
 
-EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-cb7dc7d7e560c0b95055772f1ee4d3a31a605edc}
+EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-b9eea5bbbec24a2af6acd0d92c02a3640a748e9c}
 MODEL=Qwen/Qwen3-30B-A3B
 CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}
@@ -38,7 +38,8 @@ CANDIDATE_CACHE_ROOT=${CANDIDATE_CACHE_ROOT:-${WORK_ROOT}/.cache/mxfp8-moe-tacti
 ACCOUNT=${SLURM_ACCOUNT:-coreai_dlalgo_llm}
 PARTITION=${PARTITION:-batch}
 QOS=${QOS:-}
-DRIVER_VENV=${DRIVER_VENV:-${WORK_ROOT}/.cache/nemo-rl-vllm0251-worker-venvs/vllm-canonical}
+VLLM_ENVIRONMENT_ROOT=${VLLM_ENVIRONMENT_ROOT:-}
+DRIVER_VENV=${DRIVER_VENV:-${VLLM_ENVIRONMENT_ROOT:+${VLLM_ENVIRONMENT_ROOT}/vllm-canonical}}
 GSM8K_EVALUATOR=${GSM8K_EVALUATOR:-${WORK_ROOT}/vllm-benchmark/experiments/eval/gsm8k_vllm_eval.py}
 GSM8K_DATASET=${GSM8K_DATASET:-${WORK_ROOT}/vllm-benchmark/experiments/eval/data/gsm8k_test_openai_1319.jsonl}
 VLLM_SERVER_PORT=${VLLM_SERVER_PORT:-18000}
@@ -77,6 +78,9 @@ if [[ "${ACTION}" != dry-run ]]; then
     [[ -f "${CACHE_MANIFEST}" ]] || { echo "Missing qualification cache manifest: ${CACHE_MANIFEST}" >&2; exit 1; }
     [[ -f "${CONTAINER}" ]] || { echo "Missing container: ${CONTAINER}" >&2; exit 1; }
     [[ ! -e "${RUN_ROOT}" ]] || { echo "Run root already exists: ${RUN_ROOT}" >&2; exit 1; }
+    [[ -n "${VLLM_ENVIRONMENT_ROOT}" ]] || { echo "VLLM_ENVIRONMENT_ROOT must name a prepared vLLM environment" >&2; exit 1; }
+    [[ -f "${VLLM_ENVIRONMENT_ROOT}/READY" ]] || { echo "Prepared vLLM environment marker is missing: ${VLLM_ENVIRONMENT_ROOT}/READY" >&2; exit 1; }
+    [[ -L "${DRIVER_VENV}/bin/python" || -x "${DRIVER_VENV}/bin/python" ]] || { echo "Prepared vLLM environment is missing: ${DRIVER_VENV}" >&2; exit 1; }
 fi
 NEMO_RL_COMMIT=$(git -C "${REPO_DIR}" rev-parse HEAD)
 CACHE_SHA256=dry-run-not-validated
@@ -145,9 +149,12 @@ fi
 COMMAND=$(cat <<EOF
 set -euo pipefail
 cd ${REPO_DIR}
-source ${CUSTOM_VLLM_ROOT}/nemo-rl.env
 [[ "\$(git rev-parse HEAD)" == "${NEMO_RL_COMMIT}" ]]
 [[ "\$(git -C ${CUSTOM_VLLM_ROOT} rev-parse HEAD)" == "${EXPECTED_VLLM_COMMIT}" ]]
+export NEMO_RL_VENV_DIR=${VLLM_ENVIRONMENT_ROOT}
+export UV_PROJECT_ENVIRONMENT=${DRIVER_VENV}
+export VIRTUAL_ENV=${DRIVER_VENV}
+export PATH=${DRIVER_VENV}/bin:\${PATH}
 export HF_HOME=${WORK_ROOT}/hf
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
@@ -156,7 +163,20 @@ export MXFP8_MOE_CUDA_GRAPH_REPLAY=required
 export VLLM_TENSOR_PARALLEL_SIZE=1
 export VLLM_EXPERT_PARALLEL_SIZE=1
 mkdir -p ${RUN_ROOT}
-python examples/run_grpo.py --config ${CONFIG} cluster.num_nodes=4 cluster.gpus_per_node=4 cluster.segment_size=4 policy.model_name=${MODEL_SNAPSHOT} policy.generation.vllm_cfg.enforce_eager=false ++policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm grpo.max_num_steps=${MAX_STEPS} grpo.val_at_start=false checkpointing.enabled=false checkpointing.checkpoint_dir=${RUN_ROOT}/checkpoints logger.log_dir=${RUN_ROOT}/logs logger.wandb_enabled=false
+[[ -x ${DRIVER_VENV}/bin/python ]] || { echo "Prepared vLLM environment is not executable in the container: ${DRIVER_VENV}" >&2; exit 1; }
+${DRIVER_VENV}/bin/python - <<'PY'
+import flashinfer
+import vllm
+
+if vllm.__version__ != "0.25.1":
+    raise RuntimeError(f"Expected vLLM 0.25.1, found {vllm.__version__}")
+if flashinfer.__version__ != "0.6.13":
+    raise RuntimeError(
+        f"Expected FlashInfer 0.6.13, found {flashinfer.__version__}"
+    )
+print(f"vLLM={vllm.__version__} FlashInfer={flashinfer.__version__}")
+PY
+${DRIVER_VENV}/bin/python examples/run_grpo.py --config ${CONFIG} cluster.num_nodes=4 cluster.gpus_per_node=4 cluster.segment_size=4 policy.model_name=${MODEL_SNAPSHOT} policy.generation.vllm_cfg.enforce_eager=false ++policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm grpo.max_num_steps=${MAX_STEPS} grpo.val_at_start=false checkpointing.enabled=false checkpointing.checkpoint_dir=${RUN_ROOT}/checkpoints logger.log_dir=${RUN_ROOT}/logs logger.wandb_enabled=false
 RUNTIME_FINGERPRINTS_JSON=\$(${DRIVER_VENV}/bin/python -m experiments.mxfp8_moe_tactic_audit.observe_runtime --nemo-rl-root ${REPO_DIR} --vllm-root ${CUSTOM_VLLM_ROOT} --model-snapshot ${MODEL_SNAPSHOT} --container ${CONTAINER} --cache-root ${CACHE_ROOT})
 if [[ ${MAX_STEPS} -eq 8 ]]; then
   ${DRIVER_VENV}/bin/python -m experiments.mxfp8_moe_tactic_audit.collect_results --write-run-evidence --run-root ${RUN_ROOT} --arm ${ARM} --run-id ${RUN_ID} --metadata-json '{"batch":"64 prompts x 32 generations","generation_settings":"max_total_sequence_length=4096; enforce_eager=false; CUDA Graph replay required","run_id":"${RUN_ID}","run_kind":"validation","topology":"4 nodes x 4 GPUs"}' --runtime-fingerprints-json "\${RUNTIME_FINGERPRINTS_JSON}"

@@ -423,6 +423,26 @@ def test_validation_dry_runs_keep_stock_and_candidate_isolated(tmp_path: Path) -
     assert "ord(char)" not in candidate_output
 
 
+def test_validation_uses_the_prepared_vllm_environment(tmp_path: Path) -> None:
+    """Catch validation falling back to a stale container or source-only env."""
+    environment_root = tmp_path / "prepared-vllm-environment"
+    output = _dry_run(
+        "submit_validation_ptyche.sh",
+        tmp_path,
+        {"VLLM_ENVIRONMENT_ROOT": str(environment_root)},
+    )
+
+    canonical = environment_root / "vllm-canonical"
+    assert f"export NEMO_RL_VENV_DIR={environment_root}" in output
+    assert f"export UV_PROJECT_ENVIRONMENT={canonical}" in output
+    assert f"export VIRTUAL_ENV={canonical}" in output
+    assert f"export PATH={canonical / 'bin'}:" in output
+    assert f"{canonical / 'bin/python'} examples/run_grpo.py" in output
+    assert "source " not in output or "/nemo-rl.env" not in output
+    assert "Expected vLLM 0.25.1" in output
+    assert "Expected FlashInfer 0.6.13" in output
+
+
 def test_compare_mode_is_the_only_cross_arm_validation_path(tmp_path: Path) -> None:
     """Catch run-mode validation reading artifacts from the other arm."""
     output = _dry_run(
@@ -824,6 +844,12 @@ def _make_submit_environment(tmp_path: Path) -> tuple[dict[str, str], Path, Path
     container.write_text("container\n", encoding="ascii")
     evaluator = tmp_path / "gsm8k.py"
     evaluator.write_text("print('not run')\n", encoding="ascii")
+    environment_root = tmp_path / "prepared-vllm-environment"
+    driver_bin = environment_root / "vllm-canonical/bin"
+    driver_bin.mkdir(parents=True)
+    (environment_root / "READY").write_text("test-environment\n", encoding="ascii")
+    (driver_bin / "python").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="ascii")
+    (driver_bin / "python").chmod(0o755)
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -858,6 +884,7 @@ def _make_submit_environment(tmp_path: Path) -> tuple[dict[str, str], Path, Path
         "HF_MODEL_CACHE_DIR": str(model_cache),
         "CANDIDATE_CACHE_ROOT": str(cache),
         "GSM8K_EVALUATOR": str(evaluator),
+        "VLLM_ENVIRONMENT_ROOT": str(environment_root),
         "ORDER_LOG": str(order_log),
         "EXPECTED_MANIFEST": str(
             tmp_path
