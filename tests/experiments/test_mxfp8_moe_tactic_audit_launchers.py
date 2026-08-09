@@ -151,6 +151,28 @@ def test_shmoo_dry_run_requests_one_gb200_for_five_hours(tmp_path: Path) -> None
     assert "mkdir -p ${RUN_ROOT} ${CACHE_ROOT}" not in output
 
 
+def test_shmoo_synthetic_mode_uses_prepared_environment_without_stock_artifacts(
+    tmp_path: Path,
+) -> None:
+    environment_root = tmp_path / "prepared-vllm-environment"
+    output = _dry_run(
+        "submit_shmoo_ptyche.sh",
+        tmp_path,
+        {
+            "SHMOO_WEIGHT_MODE": "synthetic",
+            "VLLM_ENVIRONMENT_ROOT": str(environment_root),
+        },
+    )
+
+    driver_python = environment_root / "vllm-canonical" / "bin" / "python"
+    assert "shmoo_weight_mode=synthetic" in output
+    assert "--synthetic-smoke" in output
+    assert "--weights " not in output
+    assert "--stock-cache " not in output
+    assert f"{driver_python} experiments/mxfp8_moe_tactic_audit/shmoo_moe_tactics.py" in output
+    assert "source " not in output or "/nemo-rl.env" not in output
+
+
 def test_shmoo_command_streams_nsys_csv_to_the_exact_consumer_path(
     tmp_path: Path,
 ) -> None:
@@ -217,7 +239,9 @@ esac
             "CUSTOM_VLLM_ROOT": str(vllm),
             "EXPECTED_VLLM_COMMIT": vllm_commit,
             "RUN_ROOT": str(run_root),
+            "SHMOO_PYTHON": str(bin_dir / "python"),
             "SHMOO_OUTPUT_ROOT": str(run_root),
+            "VLLM_ENVIRONMENT_ROOT": "",
         },
     )
     command = (

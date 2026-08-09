@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from itertools import product
 import math
 from pathlib import Path
@@ -11,6 +12,7 @@ from experiments.mxfp8_moe_tactic_audit.select_profiles import (
     ObservedSignature,
     aggregate_signatures,
     main,
+    select_representative_profiles,
     select_profiles,
 )
 
@@ -233,6 +235,45 @@ def test_select_profiles_uses_single_pass_weight_accumulation(monkeypatch: pytes
     selection = select_profiles(observed, coverage=0.95)
 
     assert selection.covered_weight >= 0.95
+
+
+def test_representative_selection_bounds_unique_histograms_per_workload_bucket() -> None:
+    signatures = [
+        _signature(
+            expert_counts=(first, second, third, 8 - first - second - third)
+        )
+        for first in range(9)
+        for second in range(9 - first)
+        for third in range(9 - first - second)
+    ]
+    observed = [
+        _observed(signature, weight=float(index + 1))
+        for index, signature in enumerate(signatures)
+    ]
+
+    selection = select_representative_profiles(observed, coverage=0.95)
+
+    assert len(selection.selected) <= 3
+    assert selection.covered_weight == pytest.approx(1.0)
+    assert sum(profile.call_count for profile in selection.selected) == len(observed)
+    assert sum(
+        profile.aggregate_gpu_time_us for profile in selection.selected
+    ) == pytest.approx(sum(item.aggregate_gpu_time_us for item in observed))
+
+
+def test_representative_selection_keeps_only_high_weight_workload_buckets() -> None:
+    heavy = _observed(_signature(sampled_gpu_time_us=95.0), weight=95.0)
+    light_signature = replace(
+        _signature(sampled_gpu_time_us=5.0),
+        num_tokens=8,
+        expert_counts=(4, 4, 4, 4),
+    )
+    light = _observed(light_signature, weight=5.0)
+
+    selection = select_representative_profiles([heavy, light], coverage=0.95)
+
+    assert [profile.signature.num_tokens for profile in selection.selected] == [4]
+    assert selection.covered_weight == pytest.approx(0.95)
 
 
 @pytest.mark.parametrize(

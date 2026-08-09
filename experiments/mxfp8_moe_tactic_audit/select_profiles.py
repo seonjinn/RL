@@ -303,6 +303,73 @@ def select_profiles(
     )
 
 
+def select_representative_profiles(
+    observed: Sequence[ObservedSignature], coverage: float = 0.95
+) -> ProfileSelection:
+    """Select bounded routing representatives for high-weight shape buckets."""
+    if not math.isfinite(coverage) or not 0 < coverage <= 1:
+        raise ValueError("coverage must be finite and in (0, 1]")
+    if not observed:
+        raise ValueError("observed signatures must not be empty")
+
+    ordered_observed = tuple(
+        sorted(
+            observed,
+            key=lambda item: (-item.aggregate_gpu_time_us, item.signature_key),
+        )
+    )
+    bucket_weights = _bucket_weights(ordered_observed)
+    qualifying_buckets = _high_weight_buckets(bucket_weights, coverage)
+    total_gpu_time = sum(bucket_weights.values(), Fraction())
+    selected_gpu_time = sum(
+        (bucket_weights[bucket] for bucket in qualifying_buckets), Fraction()
+    )
+    total_gpu_time_us = float(total_gpu_time)
+
+    grouped: dict[
+        tuple[WorkloadBucket, SkewClass], list[ObservedSignature]
+    ] = {}
+    for item in ordered_observed:
+        bucket = _workload_bucket_key(item.signature)
+        if bucket not in qualifying_buckets:
+            continue
+        grouped.setdefault((bucket, _classify_skew(item.signature)), []).append(item)
+
+    representatives: list[ObservedSignature] = []
+    for items in grouped.values():
+        representative = min(
+            items,
+            key=lambda item: (
+                -item.aggregate_gpu_time_us,
+                -item.call_count,
+                item.signature_key,
+            ),
+        )
+        representatives.append(
+            ObservedSignature(
+                signature=representative.signature,
+                signature_key=representative.signature_key,
+                call_count=sum(item.call_count for item in items),
+                aggregate_gpu_time_us=math.fsum(
+                    item.aggregate_gpu_time_us for item in items
+                ),
+            )
+        )
+
+    representatives.sort(
+        key=lambda item: (-item.aggregate_gpu_time_us, item.signature_key)
+    )
+    return ProfileSelection(
+        selected=tuple(
+            _replay_profile(item, total_gpu_time_us=total_gpu_time_us)
+            for item in representatives
+        ),
+        all_observed=ordered_observed,
+        covered_weight=float(selected_gpu_time / total_gpu_time),
+        total_gpu_time_us=total_gpu_time_us,
+    )
+
+
 def _all_observed_payload(selection: ProfileSelection) -> list[dict[str, object]]:
     """Serialize every raw signature with its aggregate GPU-time weight."""
     return [
@@ -343,7 +410,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     try:
         trace_paths = sorted(args.trace_dir.glob("*.jsonl"))
-        selection = select_profiles(aggregate_signatures(trace_paths), coverage=args.coverage)
+        selection = select_representative_profiles(
+            aggregate_signatures(trace_paths), coverage=args.coverage
+        )
         _write_selection(args.output, selection)
     except (OSError, ValueError) as error:
         raise SystemExit(str(error)) from error
