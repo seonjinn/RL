@@ -21,6 +21,7 @@ WORK_ROOT=${WORK_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttr
 RUNTIME_ROOT=${RUNTIME_ROOT:-${WORK_ROOT}/containers/nemo-rl-nightly-cw-fallback-20260808}
 CONTAINER=${CONTAINER:-${RUNTIME_ROOT}/nemo_rl_nightly_20260805_15171871.sqsh}
 CACHE_ROOT=${CACHE_ROOT:-${WORK_ROOT}/mopd_nano_fast/.cache/pr3477-qwen235b-refit-ab/${RUN_SUFFIX}/${MODE}}
+WORKER_VENV_ROOT=${WORKER_VENV_ROOT:-/tmp/nemo-rl-pr3477-qwen235b-${RUN_SUFFIX}-${MODE}-workers}
 EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${WORK_ROOT}/experiments/pr3477-qwen235b-refit-ab/results/${RUN_SUFFIX}/${MODE}}
 WANDB_PROJECT=${WANDB_PROJECT:-sna-pr3477-qwen235b-refit-ab}
 WANDB_NAME=${WANDB_NAME:-qwen235b-${MODE}-${MAX_STEPS}step-${RUN_SUFFIX}}
@@ -90,6 +91,7 @@ seed=42
 train_global_batch_size=512
 container=${CONTAINER}
 driver_runtime=uv_run_frozen
+worker_venv_dir=${WORKER_VENV_ROOT}
 wandb_project=${WANDB_PROJECT}
 wandb_name=${WANDB_NAME}
 EOF
@@ -99,7 +101,7 @@ set -euo pipefail
 cd ${REPO}
 export HF_HOME=${WORK_ROOT}/.cache/huggingface
 export NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS}
-export NEMO_RL_VENV_DIR=${CACHE_ROOT}/worker-venvs
+export NEMO_RL_VENV_DIR=${WORKER_VENV_ROOT}
 export NCCL_NVLS_ENABLE=0
 export NVTE_CUDA_ARCHS=100
 export PYTHONPATH=${REPO}
