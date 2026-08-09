@@ -116,13 +116,16 @@ probe_tier() {
   "${uv_executable}" sync --locked --directory "${project_root}"
   "${uv_executable}" run --locked --extra "${tier}" \
     --directory "${project_root}" echo "Finished creating ${tier} actor venv"
-  "${environment_root}/bin/python" -c \
-    'import importlib, pathlib, sys; root = pathlib.Path(sys.argv[1]).resolve(); modules = [importlib.import_module(name) for name in ("nemo_rl", sys.argv[2])]; paths = [pathlib.Path(module.__file__).resolve() for module in modules]; assert all(path.is_relative_to(root) for path in paths), paths; print("NON_EDITABLE_IMPORTS=" + ",".join(map(str, paths)))' \
-    "${environment_root}" "${import_name}"
+  (
+    cd "${probe_root}"
+    "${environment_root}/bin/python" -c \
+      'import importlib, pathlib, sys; root = pathlib.Path(sys.argv[1]).resolve(); modules = [importlib.import_module(name) for name in ("nemo_rl", sys.argv[2])]; paths = [pathlib.Path(module.__file__).resolve() for module in modules]; assert all(path.is_relative_to(root) for path in paths), paths; print("NON_EDITABLE_IMPORTS=" + ",".join(map(str, paths)))' \
+      "${environment_root}" "${import_name}"
+  )
 }
 
-probe_tier vllm vllm
 probe_tier mcore megatron.core
+probe_tier vllm vllm
 
 if find "${project_root}" -xdev \( -type f -o -type d \) \
   -perm /222 -print -quit | grep -q .; then

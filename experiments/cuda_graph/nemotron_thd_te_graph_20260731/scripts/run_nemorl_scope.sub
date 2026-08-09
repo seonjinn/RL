@@ -128,10 +128,12 @@ export UV_NO_EDITABLE=1
 export NRL_SLURM_JOB_ID=${SLURM_JOB_ID:?}
 export NRL_SLURM_RESTART_COUNT=${SLURM_RESTART_COUNT:-0}
 export NEMO_RL_VENV_DIR=/tmp/nemo-rl-worker-venvs/job-${NRL_SLURM_JOB_ID}-restart-${NRL_SLURM_RESTART_COUNT}
+export UV_PROJECT=/tmp/nemo-rl-worker-projects/job-${NRL_SLURM_JOB_ID}-restart-${NRL_SLURM_RESTART_COUNT}/source
 export RUNTIME_PYTHON
-CONTAINER_ENV_VARS=CONTAINER_PATH_PREFIX,UV_PROJECT_ENVIRONMENT,UV_LINK_MODE,UV_PYTHON,UV_PYTHON_INSTALL_DIR,UV_MANAGED_PYTHON,UV_PYTHON_DOWNLOADS,UV_NO_EDITABLE,PINNED_UV_VERSION,UV_EXECUTABLE,RUNTIME_PYTHON,NEMO_RL_VENV_DIR,NRL_FORCE_REBUILD_VENVS,NVTE_WITH_NCCL_EP,NRL_SLURM_JOB_ID,NRL_SLURM_RESTART_COUNT
+CONTAINER_ENV_VARS=CONTAINER_PATH_PREFIX,UV_PROJECT,UV_PROJECT_ENVIRONMENT,UV_LINK_MODE,UV_PYTHON,UV_PYTHON_INSTALL_DIR,UV_MANAGED_PYTHON,UV_PYTHON_DOWNLOADS,UV_NO_EDITABLE,PINNED_UV_VERSION,UV_EXECUTABLE,RUNTIME_PYTHON,NEMO_RL_VENV_DIR,NRL_FORCE_REBUILD_VENVS,NVTE_WITH_NCCL_EP,NRL_SLURM_JOB_ID,NRL_SLURM_RESTART_COUNT
 export CONTAINER_ENV_VARS
 managed_python_setup_command='set -euo pipefail
+umask 077
 managed_python=$("${UV_EXECUTABLE}" python find --managed-python "${UV_PYTHON}")
 case "${managed_python}" in
   "${UV_PYTHON_INSTALL_DIR}"/*) ;;
@@ -159,6 +161,21 @@ if [[ "${UV_NO_EDITABLE}" != "1" ]]; then
   echo "UV_NO_EDITABLE must be 1 for immutable runtime source" >&2
   exit 2
 fi
+runtime_stage_root=${UV_EXECUTABLE%/uv/uv}
+source_project_root=${runtime_stage_root}/source
+project_parent=$(dirname "${UV_PROJECT}")
+if [[ "${UV_PROJECT}" != "/tmp/nemo-rl-worker-projects/job-${NRL_SLURM_JOB_ID}-restart-${NRL_SLURM_RESTART_COUNT}/source" ||
+      -e "${project_parent}" || -L "${project_parent}" ]]; then
+  echo "UV_PROJECT must select a fresh job- and restart-isolated build view" >&2
+  exit 2
+fi
+mkdir -m 0700 -p -- "${project_parent}"
+mkdir -m 0700 -- "${UV_PROJECT}"
+tar --exclude="./.git" --exclude="*/.git" --exclude="*.egg-info" \
+  -C "${source_project_root}" -cf - . | tar -C "${UV_PROJECT}" -xf -
+diff -qr --no-dereference --exclude=.git --exclude="*.egg-info" \
+  "${source_project_root}" "${UV_PROJECT}"
+chmod -R u+w -- "${UV_PROJECT}"
 mkdir -p "${NEMO_RL_VENV_DIR}"
 [[ -d "${NEMO_RL_VENV_DIR}" && -w "${NEMO_RL_VENV_DIR}" ]] || {
   echo "NEMO_RL_VENV_DIR is not a writable shared directory" >&2

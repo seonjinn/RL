@@ -35,7 +35,7 @@ UV_VERSION_MATCH = re.search(
 assert UV_VERSION_MATCH is not None
 UV_VERSION = UV_VERSION_MATCH.group(1)
 CONTAINER_ENV_VARS = (
-    "CONTAINER_PATH_PREFIX,UV_PROJECT_ENVIRONMENT,UV_LINK_MODE,UV_PYTHON,"
+    "CONTAINER_PATH_PREFIX,UV_PROJECT,UV_PROJECT_ENVIRONMENT,UV_LINK_MODE,UV_PYTHON,"
     "UV_PYTHON_INSTALL_DIR,UV_MANAGED_PYTHON,UV_PYTHON_DOWNLOADS,"
     "UV_NO_EDITABLE,PINNED_UV_VERSION,UV_EXECUTABLE,RUNTIME_PYTHON,NEMO_RL_VENV_DIR,"
     "NRL_FORCE_REBUILD_VENVS,NVTE_WITH_NCCL_EP,NRL_SLURM_JOB_ID,"
@@ -2568,6 +2568,7 @@ def test_nemorl_job_wrapper_uses_shared_attested_python_and_isolates_worker_venv
         '"${UV_PYTHON:-}" "${UV_PYTHON_INSTALL_DIR:-}" '
         '"${UV_MANAGED_PYTHON:-}" "${UV_PYTHON_DOWNLOADS:-}" '
         '"${UV_NO_EDITABLE:-}" '
+        '"${UV_PROJECT:-}" '
         '"${CONTAINER_ENV_VARS:-}" '
         '"${CONTAINER_PATH_PREFIX:-}" '
         '"${RUNTIME_PYTHON:-}" '
@@ -2638,20 +2639,21 @@ def test_nemorl_job_wrapper_uses_shared_attested_python_and_isolates_worker_venv
 
     assert result.returncode == 0, result.stderr
     environment_lines = environment_log.read_text().splitlines()
-    assert environment_lines[:10] == [
+    assert environment_lines[:11] == [
         str(runtime_stage_root / "environment"),
         PYTHON_VERSION,
         str(python_install_dir),
         "1",
         "never",
         "1",
+        "/tmp/nemo-rl-worker-projects/job-733-restart-0/source",
         CONTAINER_ENV_VARS,
         str(uv_executable.parent),
         str(runtime_python),
         "/tmp/nemo-rl-worker-venvs/job-733-restart-0",
     ]
-    assert environment_lines[10].split(":")[0] == str(fake_bin)
-    assert environment_lines[11:] == ["733", "0"]
+    assert environment_lines[11].split(":")[0] == str(fake_bin)
+    assert environment_lines[12:] == ["733", "0"]
 
     runtime_python.unlink()
     outside_python = tmp_path / "outside-managed-python" / "bin" / "python3.13"
@@ -2690,6 +2692,16 @@ def test_readonly_actor_venv_probe_uses_non_editable_tier_installs() -> None:
     assert '"${uv_executable}" sync --locked --directory "${project_root}"' in source
     assert '"${uv_executable}" run --locked --extra "${tier}"' in source
     assert "path.is_relative_to(root)" in source
+
+
+def test_nemorl_wrapper_builds_actor_venvs_from_private_exact_source_copy() -> None:
+    source = (EXPERIMENT_DIR / "scripts" / "run_nemorl_scope.sub").read_text()
+
+    assert "export UV_PROJECT=/tmp/nemo-rl-worker-projects/job-" in source
+    assert 'tar --exclude="./.git" --exclude="*/.git"' in source
+    assert "diff -qr --no-dereference --exclude=.git" in source
+    assert 'chmod -R u+w -- "${UV_PROJECT}"' in source
+    assert '"${source_project_root}" "${UV_PROJECT}"' in source
 
 
 @pytest.mark.parametrize(
