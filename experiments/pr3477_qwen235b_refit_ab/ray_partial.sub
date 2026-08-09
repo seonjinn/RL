@@ -1,5 +1,0 @@
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-source "${NRL_RAY_SUB_PATH:?NRL_RAY_SUB_PATH is required}"

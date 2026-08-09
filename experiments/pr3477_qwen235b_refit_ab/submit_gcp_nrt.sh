@@ -4,18 +4,16 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel)
-PARTIAL_RAY_SUB=${SCRIPT_DIR}/ray_partial.sub
-NRL_RAY_SUB_PATH=${REPO}/ray.sub
 
 ACTION=${ACTION:-test-only}
 MODE=${MODE:?MODE is required: legacy or nccl}
 ACCOUNT=${SLURM_ACCOUNT:-coreai_chef_posttrain}
 PARTITION=${PARTITION:-batch}
-TOTAL_NODES=${TOTAL_NODES:-16}
-GPUS_PER_NODE=${GPUS_PER_NODE:-4}
-GEN_NODES=${GEN_NODES:-8}
+TOTAL_NODES=${TOTAL_NODES:-8}
+GPUS_PER_NODE=${GPUS_PER_NODE:-8}
+GEN_NODES=${GEN_NODES:-4}
 VLLM_TP=${VLLM_TP:-4}
-CPUS_PER_WORKER=${CPUS_PER_WORKER:-112}
+VLLM_PP=${VLLM_PP:-2}
 TRAIN_TP=${TRAIN_TP:-2}
 TRAIN_PP=${TRAIN_PP:-4}
 TRAIN_CP=${TRAIN_CP:-2}
@@ -25,7 +23,6 @@ MAX_STEPS=${MAX_STEPS:-20}
 WALLTIME=${WALLTIME:-04:00:00}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
 NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-false}
-NRL_ALLOW_PARTIAL_GPU_NODES=${NRL_ALLOW_PARTIAL_GPU_NODES:-1}
 VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM:-0}
 
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna}
@@ -52,16 +49,12 @@ case "${ACTION}" in
   *) echo "ACTION must be dry-run, test-only, or submit" >&2; exit 2 ;;
 esac
 
-if (( TOTAL_NODES != 16 || GPUS_PER_NODE != 4 || GEN_NODES != 8 )); then
-  echo "The reportable A/B requires 16 nodes, 4 GPUs/node, and 8 generation nodes" >&2
+if (( TOTAL_NODES != 8 || GPUS_PER_NODE != 8 || GEN_NODES != 4 )); then
+  echo "The reportable A/B requires 8 nodes, 8 GPUs/node, and 4 generation nodes" >&2
   exit 2
 fi
-if (( VLLM_TP != GPUS_PER_NODE )); then
-  echo "The B200 A/B requires one vLLM engine per node (VLLM_TP=${GPUS_PER_NODE})" >&2
-  exit 2
-fi
-if (( CPUS_PER_WORKER != 112 )); then
-  echo "The 4-GPU B200 allocation provides 112 CPUs per worker" >&2
+if (( VLLM_TP * VLLM_PP != GPUS_PER_NODE )); then
+  echo "The B200 A/B requires one vLLM engine per node (VLLM_TP*VLLM_PP=${GPUS_PER_NODE})" >&2
   exit 2
 fi
 
@@ -88,7 +81,7 @@ fi
 REPO_SHA=$(git -C "${REPO}" rev-parse HEAD)
 for path in \
   "${REPO}/${CONFIG}" \
-  "${PARTIAL_RAY_SUB}" \
+  "${REPO}/ray.sub" \
   "${CONTAINER}"; do
   test -e "${path}"
 done
@@ -120,8 +113,8 @@ trainer_nodes=$((TOTAL_NODES - GEN_NODES))
 generation_nodes=${GEN_NODES}
 generation_world_size=${GEN_WORLD_SIZE}
 generation_tensor_parallel_size=${VLLM_TP}
-generation_data_parallel_size=$((GEN_WORLD_SIZE / VLLM_TP))
-cpus_per_worker=${CPUS_PER_WORKER}
+generation_pipeline_parallel_size=${VLLM_PP}
+generation_data_parallel_size=$((GEN_WORLD_SIZE / (VLLM_TP * VLLM_PP)))
 trainer_world_size=${TRAIN_WORLD_SIZE}
 trainer_tp=${TRAIN_TP}
 trainer_pp=${TRAIN_PP}
@@ -135,7 +128,6 @@ container=${CONTAINER}
 driver_runtime=uv_run_frozen
 worker_venv_dir=${WORKER_VENV_ROOT}
 vllm_allreduce_use_symm_mem=${VLLM_ALLREDUCE_USE_SYMM_MEM}
-allow_partial_gpu_nodes=${NRL_ALLOW_PARTIAL_GPU_NODES}
 wandb_project=${WANDB_PROJECT}
 wandb_name=${WANDB_NAME}
 EOF
@@ -174,7 +166,7 @@ uv run --frozen examples/run_grpo.py \
   policy.megatron_cfg.moe_token_dispatcher_type=alltoall \
   policy.megatron_cfg.moe_flex_dispatcher_backend=deepep \
   policy.generation.vllm_cfg.tensor_parallel_size=${VLLM_TP} \
-  policy.generation.vllm_cfg.pipeline_parallel_size=1 \
+  policy.generation.vllm_cfg.pipeline_parallel_size=${VLLM_PP} \
   policy.generation.vllm_cfg.expert_parallel_size=1 \
   policy.generation.vllm_cfg.use_tqdm=false \
   +policy.generation.vllm_kwargs.distributed_timeout_seconds=2400 \
@@ -198,16 +190,13 @@ export CONTAINER
 export MOUNTS=/lustre:/lustre
 export CONTAINER_REMAP_ROOT=1
 export COMMAND
-export CPUS_PER_WORKER
 export GPUS_PER_NODE
-export NRL_ALLOW_PARTIAL_GPU_NODES
-export NRL_RAY_SUB_PATH
 export BASE_LOG_DIR=${EXPERIMENT_ROOT}
 
 SBATCH_ARGS=(
   --nodes="${TOTAL_NODES}"
   --gpus-per-node="${GPUS_PER_NODE}"
-  --oversubscribe
+  --exclusive
   --account="${ACCOUNT}"
   --partition="${PARTITION}"
   --time="${WALLTIME}"
@@ -221,9 +210,9 @@ printf 'mode=%s\nrepo=%s\nsha=%s\nresult=%s\n' \
 
 if (( PRINT_ONLY == 1 )); then
   printf 'SBATCH:'
-  printf ' %q' sbatch "${SBATCH_ACTION[@]}" "${SBATCH_ARGS[@]}" "${PARTIAL_RAY_SUB}"
+  printf ' %q' sbatch "${SBATCH_ACTION[@]}" "${SBATCH_ARGS[@]}" "${REPO}/ray.sub"
   printf '\nCOMMAND:\n%s\n' "${COMMAND}"
   exit 0
 fi
 
-exec sbatch "${SBATCH_ACTION[@]}" "${SBATCH_ARGS[@]}" "${PARTIAL_RAY_SUB}"
+exec sbatch "${SBATCH_ACTION[@]}" "${SBATCH_ARGS[@]}" "${REPO}/ray.sub"

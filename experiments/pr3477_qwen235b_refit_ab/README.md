@@ -4,8 +4,9 @@ This experiment measures whether PR 3477's NCCL-Reshard path works for BF16
 training plus MXFP8 rollout on Qwen3-235B-A22B, and how much refit time it
 saves versus the legacy non-colocated collective path.
 
-The pair requests 4 GPUs on each of 16 GCP-NRT B200 nodes (64 GPUs), preserving
-the GPU budget and parallelism of the upstream `16n4g` performance recipe. Only
+The pair uses 8 full GCP-NRT B200 nodes (64 GPUs). The trainer keeps the
+upstream 32-GPU mesh. Generation uses TP4/PP2/DP4 so each vLLM engine occupies
+one full 8-GPU node while preserving the TP4 MXFP8 MoE shard layout. Only
 `policy.generation.refit_transport` differs between arms.
 
 See [PLAN.md](PLAN.md) for the fixed setup and commands. Runtime metadata,
@@ -27,11 +28,10 @@ root printed by the submission script.
 | `508561`, `508562` | Failed during launcher preflight | `ray.sub` rejected 4-GPU requests on physical 8-GPU nodes before Ray started. |
 | `508571`, `508572` | Failed during wrapper startup | Slurm copied the partial-node wrapper into its spool, so a wrapper-relative `ray.sub` path was invalid. The wrapper now receives the absolute repo path. |
 | `508584`, `508585` | Cancelled during Ray startup | The partial allocation provided 112 CPUs/node, but `ray.sub` requested the physical `CPUTot=224` for each internal `srun`, so no Ray step could start. The experiment now passes the allocated 112 CPUs explicitly. |
+| `508599`, `508600` | Cancelled during Ray startup | Concurrent partial-node Ray clusters shared physical nodes and produced duplicate membership (`72/64` worker units). Partial-node Ray is not isolated enough for this A/B. |
 
-The reportable replacement uses the recipe-native TP4 with one engine per node:
-16 nodes request 4 GPUs each, split into 8 trainer and 8 generation nodes. The
-experiment explicitly opts into partial-node GRES allocation; the default
-`ray.sub` behavior still requires a full-node claim.
+The reportable replacement returns to full-node allocation and combines the
+recipe-native TP4 with PP2, yielding one 8-GPU generation engine per node.
 
 Only runs that reach measured GRPO steps are eligible for the performance
 comparison.
