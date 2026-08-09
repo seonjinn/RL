@@ -124,7 +124,7 @@ EOF
 SBATCH_ARGS=(
     --nodes=1
     --ntasks=1
-    --gres=gpu:1
+    --exclusive
     --account="${ACCOUNT}"
     --partition="${PARTITION}"
     --time=05:00:00

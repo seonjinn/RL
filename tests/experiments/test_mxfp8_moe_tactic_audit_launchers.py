@@ -135,8 +135,8 @@ def test_shmoo_dry_run_requests_one_gb200_for_five_hours(tmp_path: Path) -> None
 
     assert "--nodes=1" in output
     assert "--ntasks=1" in output
-    assert "--gres=gpu:1" in output
-    assert "--exclusive" not in output
+    assert "--gres=gpu:1" not in output
+    assert "--exclusive" in output
     assert "--time=05:00:00" in output
     assert "--constraint=GB200" not in output
     assert "--job-name=coreai_dlalgo_llm-mxmoe.shmoo-" in output

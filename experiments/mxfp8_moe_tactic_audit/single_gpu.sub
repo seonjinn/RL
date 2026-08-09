@@ -15,10 +15,9 @@ chmod +x "${COMMAND_FILE}"
 srun \
     --nodes=1 \
     --ntasks=1 \
-    --gres=gpu:1 \
     --mpi=pmix \
     --no-container-mount-home \
     --container-mounts="${MOUNTS}" \
     --container-image="${CONTAINER}" \
     --container-workdir="${SLURM_SUBMIT_DIR}" \
-    bash "${COMMAND_FILE}"
+    env CUDA_VISIBLE_DEVICES=0 bash "${COMMAND_FILE}"
