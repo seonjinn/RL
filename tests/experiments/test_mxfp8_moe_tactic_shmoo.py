@@ -206,6 +206,36 @@ def test_profile_tactic_fails_closed_when_intermediate_api_is_unavailable(
     assert not measurement.finite
 
 
+def test_profile_tactic_pair_only_does_not_require_intermediate_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = SimpleNamespace(
+        median_us=7.0,
+        p95_us=8.0,
+        cv=0.01,
+        finite=True,
+        deterministic=True,
+        max_abs_error=0.0,
+        cosine_similarity=1.0,
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics._profile_tactic_pair_cuda",
+        lambda *_args, **_kwargs: result,
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics._profile_tactic_cuda",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            IntermediateApiUnavailable("unexpected return contract")
+        ),
+    )
+
+    measurement = profile_tactic(_case(), TacticPair(1, 2), pair_only=True)
+
+    assert measurement.failure is None
+    assert measurement.median_us == 7.0
+    assert measurement.finite
+
+
 @pytest.mark.parametrize("repeated_intermediate_nan", [False, True])
 def test_profile_tactic_uses_paired_graph_replay_and_cold_l2_each_time(
     repeated_intermediate_nan: bool,
@@ -609,7 +639,7 @@ def test_exact_brief_smoke_args_use_marked_bounded_synthetic_source(
     )
     monkeypatch.setattr(
         "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.profile_tactic",
-        lambda _case, tactic, warmups=3, repetitions=10: TacticMeasurement(
+        lambda _case, tactic, warmups=3, repetitions=10, pair_only=False: TacticMeasurement(
             signature_key=profile.signature_key,
             tactic=tactic,
             median_us=4.0,
@@ -691,6 +721,7 @@ def test_cli_writes_one_serializable_row_per_tactic_and_continues_failures(
         warmups: int = 3,
         repetitions: int = 10,
         stock_tactics: object = None,
+        pair_only: bool = False,
     ) -> TacticMeasurement:
         return TacticMeasurement(
             signature_key=profile.signature_key,

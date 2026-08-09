@@ -142,6 +142,7 @@ def test_shmoo_dry_run_requests_one_gb200_for_five_hours(tmp_path: Path) -> None
     assert "--job-name=coreai_dlalgo_llm-mxmoe.shmoo-" in output
     assert "--warmups 3" in output
     assert "--repetitions 10" in output
+    assert "--pair-only" in output
     assert "CUDA Graph" in output
     assert "nsys profile" in output
     assert "nsys stats --report nvtxppsum" in output

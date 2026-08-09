@@ -475,6 +475,83 @@ def _profile_tactic_cuda(
     )
 
 
+def _profile_tactic_pair_cuda(
+    case: MoeKernelCase,
+    tactic: TacticPair,
+    *,
+    warmups: int,
+    repetitions: int,
+    stock_tactics: Mapping[str, TacticPair] | None = None,
+) -> _ProfileResult:
+    """Profile the complete FC1+FC2 tactic pair when FC1 output is private."""
+    if case.hidden_states.device.type != "cuda":
+        raise ValueError("MXFP8 MoE tactic profiling requires CUDA")
+    packed_topk, _ = reconstruct_topk(case.profile, case.hidden_states.device)
+    original_routing = packed_topk.clone()
+    final_key = cache_key_for_case(case, has_gemm1_lora_delta=False)
+    stock_tactic = None if stock_tactics is None else stock_tactics.get(final_key)
+    if stock_tactics is not None and stock_tactic is None:
+        raise ValueError("stock cache has no tactic for the replayed pair key")
+    zero_delta = torch.empty(0, dtype=torch.bfloat16, device=case.hidden_states.device)
+
+    stock_replays = _profile_component_replays(
+        case,
+        packed_topk,
+        tactic if stock_tactic is None else stock_tactic,
+        cache_key=final_key,
+        arm="stock",
+        component=PAIR_CUMULATIVE,
+        comparison_tactic=tactic,
+        warmups=warmups,
+        repetitions=repetitions,
+        use_stock_fallback=stock_tactic is None,
+        zero_delta=zero_delta,
+    )
+    candidate_replays = _profile_component_replays(
+        case,
+        packed_topk,
+        tactic,
+        cache_key=final_key,
+        arm="candidate",
+        component=PAIR_CUMULATIVE,
+        comparison_tactic=tactic,
+        warmups=warmups,
+        repetitions=repetitions,
+        use_stock_fallback=False,
+        zero_delta=zero_delta,
+    )
+    stock_output = stock_replays.outputs[0]
+    candidate_output = candidate_replays.outputs[0]
+    if not torch.equal(packed_topk, original_routing):
+        raise RuntimeError("FlashInfer modified packed top-k routing inputs")
+    all_outputs = [stock_output, *candidate_replays.outputs]
+    finite = all(bool(torch.isfinite(output).all().item()) for output in all_outputs)
+    deterministic = all(
+        torch.equal(candidate_output, output) for output in candidate_replays.outputs
+    )
+    max_abs_error = max(
+        _max_abs_error(output, stock_output) for output in candidate_replays.outputs
+    )
+    cosine_similarity = min(
+        _tensor_cosine(output, stock_output) for output in candidate_replays.outputs
+    )
+    timings_us = list(candidate_replays.timings_us)
+    median_us = float(statistics.median(timings_us))
+    sorted_timings = sorted(timings_us)
+    p95_us = float(sorted_timings[math.ceil(0.95 * len(sorted_timings)) - 1])
+    mean_us = statistics.fmean(timings_us)
+    cv = float(statistics.pstdev(timings_us) / mean_us) if mean_us > 0 else 0.0
+    return _ProfileResult(
+        median_us=median_us,
+        p95_us=p95_us,
+        cv=cv,
+        finite=finite,
+        deterministic=deterministic,
+        max_abs_error=max_abs_error,
+        cosine_similarity=cosine_similarity,
+    )
+
+
 def _failure_measurement(
     case: MoeKernelCase,
     tactic: TacticPair,
@@ -505,6 +582,7 @@ def profile_tactic(
     warmups: int = 3,
     repetitions: int = 10,
     stock_tactics: Mapping[str, TacticPair] | None = None,
+    pair_only: bool = False,
 ) -> TacticMeasurement:
     """Profile and qualify one paired FC1/FC2 tactic without leaking failures."""
     if warmups != 3:
@@ -512,7 +590,8 @@ def profile_tactic(
     if repetitions < 10:
         raise ValueError("repetitions must be at least 10")
     try:
-        result = _profile_tactic_cuda(
+        profiler = _profile_tactic_pair_cuda if pair_only else _profile_tactic_cuda
+        result = profiler(
             case,
             tactic,
             warmups=warmups,
@@ -573,6 +652,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     weight_source.add_argument("--synthetic-smoke", action="store_true")
     parser.add_argument("--profile-limit", type=int)
     parser.add_argument("--tactic-limit", type=int)
+    parser.add_argument("--pair-only", action="store_true")
     parser.add_argument("--warmups", type=int, default=3)
     parser.add_argument("--repetitions", type=int, default=10)
     parser.add_argument("--device", default="cuda:0")
@@ -631,6 +711,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         tactic,
                         warmups=args.warmups,
                         repetitions=args.repetitions,
+                        pair_only=args.pair_only,
                     )
                 else:
                     measurement = profile_tactic(
@@ -639,6 +720,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         warmups=args.warmups,
                         repetitions=args.repetitions,
                         stock_tactics=stock_tactics,
+                        pair_only=args.pair_only,
                     )
                 row = measurement.to_json()
                 if synthetic_source:

@@ -33,6 +33,7 @@ NSYS_CAPTURE_TACTICS=${NSYS_CAPTURE_TACTICS:-stock,winners}
 SHMOO_WEIGHT_MODE=${SHMOO_WEIGHT_MODE:-prepacked}
 PROFILE_LIMIT=${PROFILE_LIMIT:-}
 TACTIC_LIMIT=${TACTIC_LIMIT:-}
+PAIR_ONLY=${PAIR_ONLY:-1}
 case "${SHMOO_WEIGHT_MODE}" in
     prepacked|synthetic) ;;
     *) echo "Unsupported SHMOO_WEIGHT_MODE: ${SHMOO_WEIGHT_MODE}" >&2; exit 2 ;;
@@ -46,6 +47,11 @@ for value_name in PROFILE_LIMIT TACTIC_LIMIT; do
 done
 PROFILE_LIMIT_ARGUMENT=${PROFILE_LIMIT:+--profile-limit ${PROFILE_LIMIT}}
 TACTIC_LIMIT_ARGUMENT=${TACTIC_LIMIT:+--tactic-limit ${TACTIC_LIMIT}}
+case "${PAIR_ONLY}" in
+    0) PAIR_ONLY_ARGUMENT= ;;
+    1) PAIR_ONLY_ARGUMENT=--pair-only ;;
+    *) echo "PAIR_ONLY must be 0 or 1: ${PAIR_ONLY}" >&2; exit 2 ;;
+esac
 if [[ "${ACTION}" == submit ]]; then
     audit_prepare_submit "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" "${EXPECTED_VLLM_COMMIT}"
 fi
@@ -124,6 +130,7 @@ nsys profile --trace=cuda,nvtx --force-overwrite=true --output ${RUN_ROOT}/nsys-
   ${STOCK_CACHE_ARGUMENT} \\
   ${PROFILE_LIMIT_ARGUMENT} \\
   ${TACTIC_LIMIT_ARGUMENT} \\
+  ${PAIR_ONLY_ARGUMENT} \\
   --warmups 3 \\
   --repetitions 10 \\
   --output ${SHMOO_OUTPUT_ROOT}/measurements.jsonl
@@ -151,6 +158,7 @@ fi
 printf 'action=%s\n' "${ACTION}"
 printf 'run_root=%s\n' "${RUN_ROOT}"
 printf 'shmoo_weight_mode=%s\n' "${SHMOO_WEIGHT_MODE}"
+printf 'pair_only=%s\n' "${PAIR_ONLY}"
 printf 'stock_input_cache_root=%s\n' "${STOCK_INPUT_CACHE_ROOT}"
 printf 'job_script=%s\n' "${SCRIPT_DIR}/single_gpu.sub"
 printf 'CUDA Graph replay required\n'
