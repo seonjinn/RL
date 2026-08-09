@@ -2154,9 +2154,13 @@ def test_nano_ptyche_launcher_omits_unsupported_gpu_tres_options(
     assert "--gpus-per-node" not in result.stdout
     assert "--gres=" not in result.stdout
     assert "--segment=2" in result.stdout
+    assert (
+        "--job-name=unit-cuda-graph.attn-nano-nemorl-ptyche-20step-r3off-unit"
+        in result.stdout
+    )
 
 
-def test_leaf_job_depends_on_one_exact_runtime_preflight_artifact(
+def test_leaf_job_verifies_one_exact_runtime_preflight_artifact_without_dependency(
     tmp_path: Path,
 ) -> None:
     root, experiment, profile, _ = _campaign_leaf_harness(tmp_path)
@@ -2202,7 +2206,7 @@ def test_leaf_job_depends_on_one_exact_runtime_preflight_artifact(
     )
 
     assert result.returncode == 0, result.stderr
-    assert "--dependency=afterok:733" in result.stdout
+    assert "--dependency" not in result.stdout
     assert "verify_runtime_attestation.py" in result.stdout
     assert attestation in result.stdout
     assert "validate_te_runtime.py" not in result.stdout

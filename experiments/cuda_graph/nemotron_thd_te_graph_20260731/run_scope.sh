@@ -490,14 +490,10 @@ sbatch_command=(
   "--account=${ACCOUNT}"
   "--partition=${PARTITION}"
   "--time=${TIME_LIMIT}"
-  "--job-name=cg-${run_name}"
+  "--job-name=${ACCOUNT}-cuda-graph.${run_name}"
   "--output=${run_log_dir}/slurm-%j.log"
   --export=ALL
 )
-case "${RUNTIME_PREFLIGHT_JOB_ID:-}" in
-  ""|__REQUIRED_*__) ;;
-  *) sbatch_command+=("--dependency=afterok:${RUNTIME_PREFLIGHT_JOB_ID}") ;;
-esac
 if [[ "${SBATCH_GRES}" != "none" ]]; then
   sbatch_command+=("--gres=${SBATCH_GRES}")
 fi

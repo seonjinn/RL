@@ -177,11 +177,11 @@ assume the current directory is
    `UV_EXECUTABLE` to the artifact's exact immutable `uv_executable` value;
    the launcher forwards it back to the full attestation verifier instead of
    reconstructing a historical per-job uv path. The verifier also requires
-   the JSON's producer job ID to equal `RUNTIME_PREFLIGHT_JOB_ID`. Every leaf is
-   submitted with `afterok:<preflight-job>` and validates exact source, lock,
-   image identity, device count, package set, TE commit, Python version, managed
-   interpreter path, interpreter SHA256, uv version, uv path, and uv SHA256
-   before starting Ray. Each NeMo-RL leaf
+   the JSON's producer job ID to equal `RUNTIME_PREFLIGHT_JOB_ID`. The completed
+   immutable attestation is verified directly by every dependency-free leaf,
+   which validates exact source, lock, image identity, device count, package
+   set, TE commit, Python version, managed interpreter path, interpreter
+   SHA256, uv version, uv path, and uv SHA256 before starting Ray. Each NeMo-RL leaf
    derives `UV_PYTHON_INSTALL_DIR` from the immutable attestation directory,
    requires that path to be container-mounted, forces uv-managed Python with
    downloads disabled, and gives the NeMo-RL driver a fresh per-job
