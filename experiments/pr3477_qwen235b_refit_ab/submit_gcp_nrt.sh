@@ -15,7 +15,7 @@ GEN_NODES=${GEN_NODES:-4}
 MAX_STEPS=${MAX_STEPS:-20}
 WALLTIME=${WALLTIME:-04:00:00}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
-NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-false}
+NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-true}
 
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna}
 RUNTIME_ROOT=${RUNTIME_ROOT:-${WORK_ROOT}/containers/nemo-rl-nightly-cw-fallback-20260808}
@@ -89,7 +89,7 @@ max_steps=${MAX_STEPS}
 seed=42
 train_global_batch_size=512
 container=${CONTAINER}
-driver_python=/opt/nemo_rl_venv/bin/python
+driver_runtime=uv_run_frozen
 wandb_project=${WANDB_PROJECT}
 wandb_name=${WANDB_NAME}
 EOF
@@ -99,14 +99,18 @@ set -euo pipefail
 cd ${REPO}
 export HF_HOME=${WORK_ROOT}/.cache/huggingface
 export NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS}
+export NEMO_RL_VENV_DIR=${CACHE_ROOT}/worker-venvs
 export NCCL_NVLS_ENABLE=0
 export NVTE_CUDA_ARCHS=100
 export PYTHONPATH=${REPO}
 export RAY_CGRAPH_get_timeout=2400
 export TORCH_CUDA_ARCH_LIST=10.0
+export UV_CACHE_DIR=/root/.cache/uv
+export UV_PROJECT_ENVIRONMENT=${CACHE_ROOT}/driver-venv
+export UV_LOCK_TIMEOUT=7200
 export WANDB_API_KEY="\$(cat ${WANDB_KEY_FILE})"
 printf 'NEMO_RL_SOURCE_COMMIT=%s\n' "\$(git rev-parse HEAD)"
-/opt/nemo_rl_venv/bin/python examples/run_grpo.py \
+uv run --frozen examples/run_grpo.py \
   --config ${CONFIG} \
   cluster.num_nodes=${TOTAL_NODES} \
   cluster.gpus_per_node=${GPUS_PER_NODE} \
