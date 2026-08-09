@@ -31,10 +31,21 @@ PARTITION=${PARTITION:-batch}
 QOS=${QOS:-}
 NSYS_CAPTURE_TACTICS=${NSYS_CAPTURE_TACTICS:-stock,winners}
 SHMOO_WEIGHT_MODE=${SHMOO_WEIGHT_MODE:-prepacked}
+PROFILE_LIMIT=${PROFILE_LIMIT:-}
+TACTIC_LIMIT=${TACTIC_LIMIT:-}
 case "${SHMOO_WEIGHT_MODE}" in
     prepacked|synthetic) ;;
     *) echo "Unsupported SHMOO_WEIGHT_MODE: ${SHMOO_WEIGHT_MODE}" >&2; exit 2 ;;
 esac
+for value_name in PROFILE_LIMIT TACTIC_LIMIT; do
+    value=${!value_name}
+    if [[ -n "${value}" && ! "${value}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "${value_name} must be a positive integer: ${value}" >&2
+        exit 2
+    fi
+done
+PROFILE_LIMIT_ARGUMENT=${PROFILE_LIMIT:+--profile-limit ${PROFILE_LIMIT}}
+TACTIC_LIMIT_ARGUMENT=${TACTIC_LIMIT:+--tactic-limit ${TACTIC_LIMIT}}
 if [[ "${ACTION}" == submit ]]; then
     audit_prepare_submit "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" "${EXPECTED_VLLM_COMMIT}"
 fi
@@ -111,6 +122,8 @@ nsys profile --trace=cuda,nvtx --force-overwrite=true --output ${RUN_ROOT}/nsys-
   --profiles ${SELECTED_PROFILES} \\
   ${WEIGHT_ARGUMENT} \\
   ${STOCK_CACHE_ARGUMENT} \\
+  ${PROFILE_LIMIT_ARGUMENT} \\
+  ${TACTIC_LIMIT_ARGUMENT} \\
   --warmups 3 \\
   --repetitions 10 \\
   --output ${SHMOO_OUTPUT_ROOT}/measurements.jsonl

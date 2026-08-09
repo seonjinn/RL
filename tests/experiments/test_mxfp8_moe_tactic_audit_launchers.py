@@ -164,6 +164,8 @@ def test_shmoo_synthetic_mode_uses_prepared_environment_without_stock_artifacts(
         {
             "SHMOO_WEIGHT_MODE": "synthetic",
             "VLLM_ENVIRONMENT_ROOT": str(environment_root),
+            "PROFILE_LIMIT": "1",
+            "TACTIC_LIMIT": "2",
         },
     )
 
@@ -172,6 +174,8 @@ def test_shmoo_synthetic_mode_uses_prepared_environment_without_stock_artifacts(
     assert "--synthetic-smoke" in output
     assert "--weights " not in output
     assert "--stock-cache " not in output
+    assert "--profile-limit 1" in output
+    assert "--tactic-limit 2" in output
     assert f"{driver_python} experiments/mxfp8_moe_tactic_audit/shmoo_moe_tactics.py" in output
     assert "source " not in output or "/nemo-rl.env" not in output
 
