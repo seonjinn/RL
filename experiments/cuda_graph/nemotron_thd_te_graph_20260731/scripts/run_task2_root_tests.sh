@@ -38,7 +38,8 @@ env PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
   tests/unit/experiments/test_container_harness_hardening.py \
   tests/unit/experiments/test_mcore_standalone_driver.py \
   tests/unit/experiments/test_matrix_submitters.py \
-  tests/unit/experiments/test_nemotron_thd_te_graph_launchers.py || pytest_status=$?
+  tests/unit/experiments/test_nemotron_thd_te_graph_launchers.py \
+  3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/tests/unit_tests/data/test_dataset_utils.py || pytest_status=$?
 if ((pytest_status != 0)); then
   exit "${pytest_status}"
 fi

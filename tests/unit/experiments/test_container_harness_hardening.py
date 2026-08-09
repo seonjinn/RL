@@ -1657,6 +1657,8 @@ def test_runtime_stage_runs_exact_task2_root_suite_before_marker_publication(
         "tests/unit/experiments/test_mcore_standalone_driver.py",
         "tests/unit/experiments/test_matrix_submitters.py",
         "tests/unit/experiments/test_nemotron_thd_te_graph_launchers.py",
+        "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/"
+        "Megatron-LM/tests/unit_tests/data/test_dataset_utils.py",
     ]
     source = (
         EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
