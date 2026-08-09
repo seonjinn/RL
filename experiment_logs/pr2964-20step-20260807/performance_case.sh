@@ -69,6 +69,37 @@ render_case() {
     )
   fi
 
+  local checkpointing_enabled=${CHECKPOINTING_ENABLED_OVERRIDE:-false}
+  local -a checkpoint_overrides=()
+  case "${checkpointing_enabled}" in
+    false)
+      checkpoint_overrides+=(checkpointing.enabled=false)
+      ;;
+    true)
+      : "${CHECKPOINT_DIR_OVERRIDE:?CHECKPOINT_DIR_OVERRIDE is required when checkpointing is enabled}"
+      : "${CHECKPOINT_SAVE_PERIOD_OVERRIDE:?CHECKPOINT_SAVE_PERIOD_OVERRIDE is required when checkpointing is enabled}"
+      : "${CHECKPOINT_MUST_SAVE_BY_OVERRIDE:?CHECKPOINT_MUST_SAVE_BY_OVERRIDE is required when checkpointing is enabled}"
+      : "${CHECKPOINT_METRIC_NAME_OVERRIDE:?CHECKPOINT_METRIC_NAME_OVERRIDE is required when checkpointing is enabled}"
+      : "${CHECKPOINT_KEEP_TOP_K_OVERRIDE:?CHECKPOINT_KEEP_TOP_K_OVERRIDE is required when checkpointing is enabled}"
+      : "${CHECKPOINT_FT_KEEP_LATEST_K_OVERRIDE:?CHECKPOINT_FT_KEEP_LATEST_K_OVERRIDE is required when checkpointing is enabled}"
+      : "${CHECKPOINT_SAVE_OPTIMIZER_OVERRIDE:?CHECKPOINT_SAVE_OPTIMIZER_OVERRIDE is required when checkpointing is enabled}"
+      checkpoint_overrides+=(
+        checkpointing.enabled=true
+        "checkpointing.checkpoint_dir=${CHECKPOINT_DIR_OVERRIDE}"
+        "checkpointing.save_period=${CHECKPOINT_SAVE_PERIOD_OVERRIDE}"
+        "checkpointing.checkpoint_must_save_by=${CHECKPOINT_MUST_SAVE_BY_OVERRIDE}"
+        "checkpointing.metric_name=${CHECKPOINT_METRIC_NAME_OVERRIDE}"
+        "checkpointing.keep_top_k=${CHECKPOINT_KEEP_TOP_K_OVERRIDE}"
+        "++checkpointing.ft_keep_latest_k=${CHECKPOINT_FT_KEEP_LATEST_K_OVERRIDE}"
+        "checkpointing.save_optimizer=${CHECKPOINT_SAVE_OPTIMIZER_OVERRIDE}"
+      )
+      ;;
+    *)
+      printf 'CHECKPOINTING_ENABLED_OVERRIDE must be true or false: %s\n' "${checkpointing_enabled}" >&2
+      return 2
+      ;;
+  esac
+
   wandb_name=$(basename "${run_root}")
   driver_args=(
     /opt/nemo_rl_venv/bin/python
@@ -90,8 +121,10 @@ render_case() {
   for override in "${dispatcher_overrides[@]}"; do
     driver_args+=("${override}")
   done
+  for override in "${checkpoint_overrides[@]}"; do
+    driver_args+=("${override}")
+  done
   driver_args+=(
-    checkpointing.enabled=false
     "logger.log_dir=${run_root}/training"
     logger.wandb_enabled=true
     logger.wandb.project=sna-hybridep-b200

@@ -30,6 +30,7 @@ q30_baseline=$(printf '%s\n' "${driver_args[@]}")
 assert_contains "${q30_baseline}" 'grpo-qwen3-30ba3b-4n8g.yaml'
 assert_contains "${q30_baseline}" 'grpo.max_num_steps=20'
 assert_contains "${q30_baseline}" 'policy.megatron_cfg.moe_token_dispatcher_type=alltoall'
+assert_contains "${q30_baseline}" 'checkpointing.enabled=false'
 assert_contains "${q30_baseline}" 'logger.tensorboard_enabled=true'
 assert_not_contains "${q30_baseline}" 'moe_flex_dispatcher_backend=hybridep'
 assert_not_contains "${q30_baseline}" 'moe_hybridep_prepad_packed_inputs=true'
@@ -39,6 +40,34 @@ render_case qwen3-30ba3b baseline /tmp/q30-baseline-maxsteps
 q30_baseline_maxsteps=$(printf '%s\n' "${driver_args[@]}")
 unset MAX_NUM_STEPS_OVERRIDE
 assert_contains "${q30_baseline_maxsteps}" 'grpo.max_num_steps=1000'
+
+CHECKPOINTING_ENABLED_OVERRIDE=true
+CHECKPOINT_DIR_OVERRIDE=/tmp/q30-checkpoints
+CHECKPOINT_SAVE_PERIOD_OVERRIDE=200
+CHECKPOINT_MUST_SAVE_BY_OVERRIDE=00:03:15:00
+CHECKPOINT_METRIC_NAME_OVERRIDE=null
+CHECKPOINT_KEEP_TOP_K_OVERRIDE=1
+CHECKPOINT_FT_KEEP_LATEST_K_OVERRIDE=1
+CHECKPOINT_SAVE_OPTIMIZER_OVERRIDE=true
+render_case qwen3-30ba3b baseline /tmp/q30-baseline-checkpoint
+q30_baseline_checkpoint=$(printf '%s\n' "${driver_args[@]}")
+unset CHECKPOINTING_ENABLED_OVERRIDE
+unset CHECKPOINT_DIR_OVERRIDE
+unset CHECKPOINT_SAVE_PERIOD_OVERRIDE
+unset CHECKPOINT_MUST_SAVE_BY_OVERRIDE
+unset CHECKPOINT_METRIC_NAME_OVERRIDE
+unset CHECKPOINT_KEEP_TOP_K_OVERRIDE
+unset CHECKPOINT_FT_KEEP_LATEST_K_OVERRIDE
+unset CHECKPOINT_SAVE_OPTIMIZER_OVERRIDE
+assert_contains "${q30_baseline_checkpoint}" 'checkpointing.enabled=true'
+assert_contains "${q30_baseline_checkpoint}" 'checkpointing.checkpoint_dir=/tmp/q30-checkpoints'
+assert_contains "${q30_baseline_checkpoint}" 'checkpointing.save_period=200'
+assert_contains "${q30_baseline_checkpoint}" 'checkpointing.checkpoint_must_save_by=00:03:15:00'
+assert_contains "${q30_baseline_checkpoint}" 'checkpointing.metric_name=null'
+assert_contains "${q30_baseline_checkpoint}" 'checkpointing.keep_top_k=1'
+assert_contains "${q30_baseline_checkpoint}" '++checkpointing.ft_keep_latest_k=1'
+assert_contains "${q30_baseline_checkpoint}" 'checkpointing.save_optimizer=true'
+assert_not_contains "${q30_baseline_checkpoint}" 'checkpointing.enabled=false'
 
 render_case qwen3-30ba3b hybridep /tmp/q30-hybridep
 q30_hybridep=$(printf '%s\n' "${driver_args[@]}")
@@ -105,6 +134,31 @@ assert_contains "${submit_script}" 'export NRL_FORCE_REBUILD_VENVS="${force_rebu
 assert_contains "${submit_script}" 'export UV_FROZEN=1'
 assert_contains "${submit_script}" 'nrl_force_rebuild_venvs=%s\n'
 assert_contains "${submit_script}" 'max_num_steps=%s\ntime_limit=%s\n'
+
+long_experiment_dir=$(cd "${experiment_dir}/.." && pwd)/pr2964-q30-4hour-20260809
+long_submit_path=${long_experiment_dir}/submit_q30_4hour.sh
+[[ -f "${long_submit_path}" ]] || {
+  printf 'missing four-hour launcher: %s\n' "${long_submit_path}" >&2
+  exit 1
+}
+long_submit_script=$(<"${long_submit_path}")
+assert_contains "${long_submit_script}" 'round=${3:-}'
+assert_contains "${long_submit_script}" '1|2|3) ;;'
+assert_contains "${long_submit_script}" 'MAX_NUM_STEPS_OVERRIDE=200'
+assert_contains "${long_submit_script}" 'TIME_LIMIT_OVERRIDE=04:00:00'
+assert_contains "${long_submit_script}" 'CHECKPOINTING_ENABLED_OVERRIDE=true'
+assert_contains "${long_submit_script}" 'CHECKPOINT_DIR_OVERRIDE=${EXPERIMENT_ROOT_OVERRIDE}/checkpoints/${dispatcher}'
+assert_contains "${long_submit_script}" 'CHECKPOINT_SAVE_PERIOD_OVERRIDE=200'
+assert_contains "${long_submit_script}" 'CHECKPOINT_MUST_SAVE_BY_OVERRIDE=00:03:15:00'
+assert_contains "${long_submit_script}" 'CHECKPOINT_METRIC_NAME_OVERRIDE=null'
+assert_contains "${long_submit_script}" 'CHECKPOINT_KEEP_TOP_K_OVERRIDE=1'
+assert_contains "${long_submit_script}" 'CHECKPOINT_FT_KEEP_LATEST_K_OVERRIDE=1'
+assert_contains "${long_submit_script}" 'CHECKPOINT_SAVE_OPTIMIZER_OVERRIDE=true'
+assert_contains "${long_submit_script}" 'VALIDATION_HEAD_OVERRIDE=541413bd2912561950413b39809db40590a652bb'
+assert_contains "${long_submit_script}" 'MCORE_EXPECTED_COMMIT_OVERRIDE=34b55f24f0826c9aebd6693ecb60648cd934737d'
+assert_contains "${long_submit_script}" 'SLURM_EXCLUDE=pool0-0167,pool0-0272,pool0-0337'
+assert_contains "${long_submit_script}" 'RUN_NAME_OVERRIDE=qwen3-30ba3b-sync-${dispatcher}-pr2964-200step-round${round}'
+assert_contains "${long_submit_script}" 'exec bash "${submit_script}" qwen3-30ba3b "${dispatcher}" "${mode}"'
 
 focused_test_script=$(<"${experiment_dir}/submit_hybridep_prepadding_tests.sh")
 assert_contains "${focused_test_script}" 'tests/unit/models/megatron/test_hybridep_data.py::test_hybridep_prepads_packed_inputs_before_model_forward'
