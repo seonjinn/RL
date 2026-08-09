@@ -191,8 +191,11 @@ assume the current directory is
    path. Each node copies the exact attested source, excluding VCS and prior
    `*.egg-info` artifacts, into a private writable `/tmp` build view and verifies
    the copy before exposing it through `UV_PROJECT`. Actor builds also set
-   `UV_NO_EDITABLE=1`, so uv installs deployment-style wheels without writing
-   into the immutable staged source. This preserves `NRL_FORCE_REBUILD_VENVS=true`
+   `UV_NO_EDITABLE=1` and pin `NVTE_CUDA_ARCHS=100a` plus
+   `TORCH_CUDA_ARCH_LIST=10.0a`, matching the attested GB200 runtime instead of
+   compiling unused CUDA architectures. uv installs deployment-style wheels
+   without writing into the immutable staged source. This preserves
+   `NRL_FORCE_REBUILD_VENVS=true`
    without allowing builders on
    different nodes or concurrent scope jobs to remove each other's environments.
    Typed MCore standalone leaves also execute the attested staged

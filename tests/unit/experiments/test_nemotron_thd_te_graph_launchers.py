@@ -38,7 +38,8 @@ CONTAINER_ENV_VARS = (
     "CONTAINER_PATH_PREFIX,UV_PROJECT,UV_PROJECT_ENVIRONMENT,UV_LINK_MODE,UV_PYTHON,"
     "UV_PYTHON_INSTALL_DIR,UV_MANAGED_PYTHON,UV_PYTHON_DOWNLOADS,"
     "UV_NO_EDITABLE,PINNED_UV_VERSION,UV_EXECUTABLE,RUNTIME_PYTHON,NEMO_RL_VENV_DIR,"
-    "NRL_FORCE_REBUILD_VENVS,NVTE_WITH_NCCL_EP,NRL_SLURM_JOB_ID,"
+    "NRL_FORCE_REBUILD_VENVS,NVTE_WITH_NCCL_EP,NVTE_CUDA_ARCHS,"
+    "TORCH_CUDA_ARCH_LIST,CMAKE_BUILD_PARALLEL_LEVEL,NRL_SLURM_JOB_ID,"
     "NRL_SLURM_RESTART_COUNT"
 )
 DENSE_AXES = ("attn", "mlp", "mamba")
@@ -2682,7 +2683,13 @@ def test_readonly_actor_venv_probe_uses_non_editable_tier_installs() -> None:
 
     assert "export UV_NO_EDITABLE=1" in source
     assert "NVTE_WITH_NCCL_EP=0" in source
-    assert "READONLY_ACTOR_VENV_PROBE_PAYLOAD,NVTE_WITH_NCCL_EP" in source
+    assert "export NVTE_CUDA_ARCHS=100a" in source
+    assert "export TORCH_CUDA_ARCH_LIST=10.0a" in source
+    assert "export CMAKE_BUILD_PARALLEL_LEVEL=${SLURM_CPUS_PER_TASK:?}" in source
+    assert (
+        "READONLY_ACTOR_VENV_PROBE_PAYLOAD,NVTE_WITH_NCCL_EP,NVTE_CUDA_ARCHS,"
+        "TORCH_CUDA_ARCH_LIST,CMAKE_BUILD_PARALLEL_LEVEL" in source
+    )
     assert "probe_tier vllm vllm" in source
     assert "probe_tier mcore megatron.core" in source
     assert '--container-image="${CONTAINER}"' in source
@@ -2700,6 +2707,9 @@ def test_nemorl_wrapper_builds_actor_venvs_from_private_exact_source_copy() -> N
     source = (EXPERIMENT_DIR / "scripts" / "run_nemorl_scope.sub").read_text()
 
     assert "export UV_PROJECT=/tmp/nemo-rl-worker-projects/job-" in source
+    assert "export NVTE_CUDA_ARCHS=100a" in source
+    assert "export TORCH_CUDA_ARCH_LIST=10.0a" in source
+    assert "export CMAKE_BUILD_PARALLEL_LEVEL=32" in source
     assert 'tar --exclude="./.git" --exclude="*/.git"' in source
     assert "diff -qr --no-dereference --exclude=.git" in source
     assert 'chmod -R u+w -- "${UV_PROJECT}"' in source
