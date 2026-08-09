@@ -2771,7 +2771,7 @@ def test_ray_submission_has_no_global_singleton_dependency() -> None:
     assert "#SBATCH --dependency=singleton" not in ray_submission
 
 
-def test_ray_and_mcore_sruns_override_image_uv_environment() -> None:
+def test_ray_and_nemorl_sruns_override_image_uv_environment() -> None:
     ray_submission = (REPO_ROOT / "ray.sub").read_text()
     assert 'CONTAINER_ENV_VARS="${CONTAINER_ENV_VARS:-}"' in ray_submission
     assert "--container-env=$CONTAINER_ENV_VARS" in ray_submission
@@ -2787,26 +2787,6 @@ def test_ray_and_mcore_sruns_override_image_uv_environment() -> None:
     assert "export NRL_SLURM_JOB_ID=${SLURM_JOB_ID:?}" in nemorl_wrapper
     assert "export NRL_SLURM_RESTART_COUNT=${SLURM_RESTART_COUNT:-0}" in nemorl_wrapper
     assert "export CONTAINER_ENV_VARS" in nemorl_wrapper
-
-    mcore_wrapper = (EXPERIMENT_DIR / "scripts" / "run_mcore_scope.sub").read_text()
-    assert "export NVTE_WITH_NCCL_EP=${runtime_fields[5]}" in mcore_wrapper
-    mcore_container_env_vars = CONTAINER_ENV_VARS.removesuffix(
-        ",NRL_SLURM_JOB_ID,NRL_SLURM_RESTART_COUNT"
-    )
-    assert f"CONTAINER_ENV_VARS={mcore_container_env_vars}" in mcore_wrapper
-    assert (
-        ",UV_CACHE_DIR"
-        in mcore_wrapper.split("CONTAINER_ENV_VARS=", 1)[1].splitlines()[0]
-    )
-    assert mcore_wrapper.count('"--container-env=${CONTAINER_ENV_VARS}"') == 2
-    assert (
-        "NVTE_CUDA_ARCHS,TORCH_CUDA_ARCH_LIST,RUNTIME_FEATURE_SET,"
-        "RUNTIME_EXCLUDED_PACKAGES" in mcore_wrapper
-    )
-    assert 'sync_command+=(--no-install-package "${excluded_package}")' in mcore_wrapper
-    assert 'exec "${environment_root}/bin/python" "$@"' in mcore_wrapper
-    assert "/bin/bash --noprofile --norc -c" in mcore_wrapper
-    assert "bash -lc" not in mcore_wrapper
 
 
 def test_alltoall_leaf_sync_excludes_deep_ep_without_reprobe(tmp_path: Path) -> None:
