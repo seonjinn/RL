@@ -72,7 +72,8 @@ def convert(nvtx_csv: Path, output: Path) -> None:
             (
                 name
                 for name in reader.fieldnames
-                if name.lower() in {"instances", "calls", "count"}
+                if name.lower()
+                in {"instances", "range instances", "calls", "count"}
             ),
             None,
         )

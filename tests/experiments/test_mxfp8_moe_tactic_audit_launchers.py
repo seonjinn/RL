@@ -145,7 +145,9 @@ def test_shmoo_dry_run_requests_one_gb200_for_five_hours(tmp_path: Path) -> None
     assert "--pair-only" in output
     assert "CUDA Graph" in output
     assert "nsys profile" in output
-    assert "nsys stats --report nvtx_gpu_proj_sum" in output
+    assert "--cuda-graph-trace=node" in output
+    assert "nsys stats --quiet --report nvtx_gpu_proj_sum" in output
+    assert "--format csv --output -" in output
     assert "nsys-selected.nsys-rep" in output
     assert "nsys-selected.nsys\n" not in output
     assert "nsys_to_component_csv.py" in output
@@ -225,7 +227,7 @@ case "${command}" in
     csv='Range,Instances,Total Time (ns)'
     fc1='"MXFP8_MOE_AUDIT|signature_key=sig|cache_key=cache|arm=stock|component=FC1/GEMM1 cumulative|tactic=1,2|comparison_tactic=3,4|cache_event=cache hit|call_weight=1",1,1000'
     pair='"MXFP8_MOE_AUDIT|signature_key=sig|cache_key=cache|arm=stock|component=FC1+FC2/GEMM1+GEMM2 cumulative|tactic=1,2|comparison_tactic=3,4|cache_event=cache hit|call_weight=1",1,2000'
-    if [[ -n "${output}" ]]; then
+    if [[ -n "${output}" && "${output}" != - ]]; then
       printf '%s\n%s\n%s\n' "${csv}" "${fc1}" "${pair}" > "${output}_nvtxppsum.csv"
     else
       printf '%s\n%s\n%s\n' "${csv}" "${fc1}" "${pair}"

@@ -123,7 +123,7 @@ mkdir -p ${SHMOO_OUTPUT_ROOT}
 printf 'cuda_graph_replay=required\\n'
 printf 'crash_rows_preserved=true\\n'
 printf 'nsys_capture_tactics=%s\\n' "\${MXFP8_MOE_NSYS_CAPTURE_TACTICS}"
-nsys profile --trace=cuda,nvtx --force-overwrite=true --output ${RUN_ROOT}/nsys-selected \\
+nsys profile --trace=cuda,nvtx --cuda-graph-trace=node --force-overwrite=true --output ${RUN_ROOT}/nsys-selected \\
   ${SHMOO_PYTHON} experiments/mxfp8_moe_tactic_audit/shmoo_moe_tactics.py \\
   --profiles ${SELECTED_PROFILES} \\
   ${WEIGHT_ARGUMENT} \\
@@ -134,7 +134,8 @@ nsys profile --trace=cuda,nvtx --force-overwrite=true --output ${RUN_ROOT}/nsys-
   --warmups 3 \\
   --repetitions 10 \\
   --output ${SHMOO_OUTPUT_ROOT}/measurements.jsonl
-nsys stats --report nvtx_gpu_proj_sum --format csv ${RUN_ROOT}/nsys-selected.nsys-rep > ${RUN_ROOT}/nsys-nvtx.csv
+nsys stats --quiet --report nvtx_gpu_proj_sum --format csv --output - \\
+  ${RUN_ROOT}/nsys-selected.nsys-rep > ${RUN_ROOT}/nsys-nvtx.csv
 ${SHMOO_PYTHON} experiments/mxfp8_moe_tactic_audit/nsys_to_component_csv.py \\
   --nvtx-csv ${RUN_ROOT}/nsys-nvtx.csv \\
   --output ${SHMOO_OUTPUT_ROOT}/nsys_components.csv
