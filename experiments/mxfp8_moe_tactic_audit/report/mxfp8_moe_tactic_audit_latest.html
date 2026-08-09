@@ -38,6 +38,35 @@
     </tbody>
   </table>
   <p class="note">The ratio is weighted stock FC1+FC2 time divided by weighted candidate FC1+FC2 time. It is a kernel-level ratio, not NeMo-RL generation throughput.</p>
+  <h2>Improvement by Matrix and Routing Shape</h2>
+  <p>For this model, FC1 and FC2 use fixed projection dimensions while the expert-specific row count changes with routing:</p>
+  <ul>
+    <li>FC1: 128 grouped GEMMs, <code>A_e[M_e,2048] x B_e[2048,1536]</code>.</li>
+    <li>FC2: 128 grouped GEMMs, <code>A_e[M_e,768] x B_e[768,2048]</code>.</li>
+    <li><code>sum(M_e) = total_tokens x top_k</code>, with <code>top_k=8</code>.</li>
+  </ul>
+  <p>Therefore, two calls with the same total token count can behave differently when their per-expert <code>M_e</code> distributions differ. The table compares micro-audit stock <code>(16,530)</code> against candidate <code>(32,574)</code>.</p>
+  <table>
+    <thead><tr><th>Total tokens</th><th>Active experts</th><th>Expert M<sub>e</sub> p50 / p90 / max</th><th>Routing skew</th><th>Observed GPU-time share</th><th>FC1+FC2 gain</th></tr></thead>
+    <tbody>
+      <tr><td>126</td><td>76</td><td>1.0 / 14.5 / 126</td><td>Median</td><td>5.36%</td><td><strong>+4.74%</strong></td></tr>
+      <tr><td>126</td><td>53</td><td>0.0 / 14.6 / 125</td><td>High</td><td>4.38%</td><td><strong>+3.59%</strong></td></tr>
+      <tr><td>128</td><td>96</td><td>3.0 / 16.0 / 127</td><td>Median</td><td>32.30%</td><td><strong>+2.05%</strong></td></tr>
+      <tr><td>128</td><td>68</td><td>1.0 / 13.0 / 128</td><td>High</td><td>23.03%</td><td><strong>+1.23%</strong></td></tr>
+      <tr><td>125</td><td>64</td><td>0.5 / 21.3 / 125</td><td>High</td><td>1.21%</td><td>+0.74%</td></tr>
+      <tr><td>127</td><td>68</td><td>1.0 / 14.0 / 126</td><td>High</td><td>12.36%</td><td>+0.67%</td></tr>
+      <tr><td>127</td><td>80</td><td>2.0 / 17.3 / 127</td><td>Median</td><td>15.20%</td><td>0.00%</td></tr>
+      <tr><td>125</td><td>118</td><td>4.0 / 14.9 / 100</td><td>Median</td><td>1.47%</td><td>0.00%</td></tr>
+    </tbody>
+  </table>
+  <figure>
+    <img src="mxfp8_moe_tactic_profile_distribution.png" alt="FC1 and FC2 profile-level improvement distribution">
+  </figure>
+  <p>The strongest gain was 4.74% for a 126-token profile. However, that profile represented only 5.36% of observed MoE GPU time. The highest-weight profile represented 32.30% and improved by 2.05%. Across the selected profiles, 58.1% of covered GPU time fell in the 1--3% improvement range, while 17.5% showed no measurable change.</p>
+  <h2>Can the Table Be Reused Across Models?</h2>
+  <p><code>M,N,K</code> equality is necessary but not sufficient. A dense GEMM tactic can be reused as a hint across models only when the physical execution signature also matches: GPU architecture, FlashInfer/TRTLLM build, quantization and output dtype, tensor and scale layouts, strides and alignment, padding, epilogue/fusion, workspace, and CUDA Graph state.</p>
+  <p>For grouped MoE GEMMs, the key must additionally include the per-expert <code>M_e</code> distribution or the backend's exact shape profile, local expert count, <code>top_k</code>, and TP/EP configuration. Matching only total <code>M</code> can select a tactic tuned for a different routing skew. Tactic IDs are backend-build-specific and must not be carried across FlashInfer/TRTLLM versions without revalidation.</p>
+  <p>The safe policy is to treat a table from another model as a candidate seed. Use it only on a full execution-signature match, validate it on the target runtime, and fall back to the backend default for every miss.</p>
   <h2>Experimental Runtime A/B</h2>
   <p>The unqualified <code>(32,574)</code> direction was nevertheless evaluated in two matched NeMo-RL A/B repetitions to quantify its end-to-end opportunity. The candidate runtime bundle changed exactly one FlashInfer TRTLLM MoE cache leaf: the 128-token bucket used FC1 tactic <code>32</code> and FC2 tactic <code>574</code> instead of stock tactics <code>16</code> and <code>578</code>. Every other cache entry and runtime input was identical.</p>
   <p>Both arms used Qwen3-30B-A3B, 16 GB200 GPUs across four nodes, vLLM 0.25.1, FlashInfer 0.6.13, CUDA Graphs enabled, 64 prompts times 32 generations, and a maximum sequence length of 4,096. Steps 3--8 generated exactly 47,752,694 tokens per arm in each repetition.</p>
@@ -75,6 +104,6 @@
     <li>Replayed-tensor numerical checks passed, but no new matched GSM8K run was performed for this unqualified candidate.</li>
     <li>Final decision: retain stock FlashInfer FC1/FC2 tactic selection for this workload.</li>
   </ul>
-  <p>Machine-readable summaries: <a href="mxfp8_moe_tactic_micro_audit_20260808.json">micro audit</a> and <a href="mxfp8_moe_tactic_runtime_ab_20260809.json">runtime A/B</a>.</p>
+  <p>Machine-readable summaries: <a href="mxfp8_moe_tactic_micro_audit_20260808.json">micro audit</a>, <a href="mxfp8_moe_tactic_profile_distribution_20260808.json">profile distribution</a>, and <a href="mxfp8_moe_tactic_runtime_ab_20260809.json">runtime A/B</a>.</p>
 </body>
 </html>

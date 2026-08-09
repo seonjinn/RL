@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "scope": "Qwen3-30B-A3B MXFP8 MoE FC1/FC2 same-run micro comparison",
+  "source": {
+    "selected_profiles_sha256": "5a1a435a0c7781bd826ccdf14f3e699952babdafda2425331fb95ff11fb4fca3",
+    "focused_measurements_sha256": "138f897215b1832be4c4648452a2366e302e2568b35b1c6341f9eba99bae2e14",
+    "job_id": 2550086,
+    "repetitions_per_profile": 50
+  },
+  "matrix_dimensions": {
+    "fc1": "128 grouped GEMMs: A_e[M_e,2048] x B_e[2048,1536]",
+    "fc2": "128 grouped GEMMs: A_e[M_e,768] x B_e[768,2048]",
+    "routing_constraint": "sum(M_e)=num_tokens*top_k; top_k=8",
+    "runner_token_bucket": 128
+  },
+  "comparison": {
+    "stock_tactics": [16, 530],
+    "candidate_tactics": [32, 574],
+    "trace_weighted_speedup": 1.0152159201,
+    "selected_observed_gpu_time_coverage": 0.9530801641
+  },
+  "profiles": [
+    {
+      "signature_key": "156b717fa9967794256117ca4251b5cea9924ed8c77f046efd0e26f79a34d6ca",
+      "total_tokens": 128,
+      "active_experts": 96,
+      "expert_m_p50": 3.0,
+      "expert_m_p90": 16.0,
+      "expert_m_max": 127,
+      "skew_class": "median-skew",
+      "call_count": 2677,
+      "observed_gpu_time_share": 0.3230051912,
+      "stock_median_us": 103.583999,
+      "candidate_median_us": 101.503998,
+      "speedup": 1.0204918129
+    },
+    {
+      "signature_key": "ae9833a1b7c36f4c57b9936857df0e0b72eb863ebdd2ee6a1086ac854ca7b691",
+      "total_tokens": 128,
+      "active_experts": 68,
+      "expert_m_p50": 1.0,
+      "expert_m_p90": 13.0,
+      "expert_m_max": 128,
+      "skew_class": "high-skew",
+      "call_count": 1944,
+      "observed_gpu_time_share": 0.2303008395,
+      "stock_median_us": 84.16,
+      "candidate_median_us": 83.136,
+      "speedup": 1.0123171713
+    },
+    {
+      "signature_key": "cb0a57c6d0bf3ee542fba4ba47ec49325397429b6fb30fe9f5a748a0bc0167e6",
+      "total_tokens": 127,
+      "active_experts": 80,
+      "expert_m_p50": 2.0,
+      "expert_m_p90": 17.3,
+      "expert_m_max": 127,
+      "skew_class": "median-skew",
+      "call_count": 1270,
+      "observed_gpu_time_share": 0.151984425,
+      "stock_median_us": 91.296002,
+      "candidate_median_us": 91.296002,
+      "speedup": 1.0
+    },
+    {
+      "signature_key": "7030e2699402eee778d4e24617ad1cc626b12b597d6995506d37558967c35360",
+      "total_tokens": 127,
+      "active_experts": 68,
+      "expert_m_p50": 1.0,
+      "expert_m_p90": 14.0,
+      "expert_m_max": 126,
+      "skew_class": "high-skew",
+      "call_count": 1049,
+      "observed_gpu_time_share": 0.1235505988,
+      "stock_median_us": 83.664,
+      "candidate_median_us": 83.103999,
+      "speedup": 1.006738551
+    },
+    {
+      "signature_key": "eb97eac2e21c2ff3e248dcc29eb145c0d216d749f4e4270c1b4d0961177c9633",
+      "total_tokens": 126,
+      "active_experts": 76,
+      "expert_m_p50": 1.0,
+      "expert_m_p90": 14.5,
+      "expert_m_max": 126,
+      "skew_class": "median-skew",
+      "call_count": 442,
+      "observed_gpu_time_share": 0.0535814427,
+      "stock_median_us": 91.296002,
+      "candidate_median_us": 87.168001,
+      "speedup": 1.0473568465
+    },
+    {
+      "signature_key": "87c61b29c56d3365e3ba26e4fd484262bf5d71958f1a8e3eba4e7f0bf1942c6d",
+      "total_tokens": 126,
+      "active_experts": 53,
+      "expert_m_p50": 0.0,
+      "expert_m_p90": 14.6,
+      "expert_m_max": 125,
+      "skew_class": "high-skew",
+      "call_count": 367,
+      "observed_gpu_time_share": 0.04381831,
+      "stock_median_us": 73.392,
+      "candidate_median_us": 70.848003,
+      "speedup": 1.0359078155
+    },
+    {
+      "signature_key": "5e9cdbd596e35cfe93350c045c583ad4de51e7d5d6a0ba2f73f2b8d9580f62ed",
+      "total_tokens": 125,
+      "active_experts": 118,
+      "expert_m_p50": 4.0,
+      "expert_m_p90": 14.9,
+      "expert_m_max": 100,
+      "skew_class": "median-skew",
+      "call_count": 120,
+      "observed_gpu_time_share": 0.0147475242,
+      "stock_median_us": 115.872003,
+      "candidate_median_us": 115.872003,
+      "speedup": 1.0
+    },
+    {
+      "signature_key": "6d3f2a64b1f9b18fff5e1d97030e15dc1023b9f4f7cb3d0d8f2f442b1d33545d",
+      "total_tokens": 125,
+      "active_experts": 64,
+      "expert_m_p50": 0.5,
+      "expert_m_p90": 21.3,
+      "expert_m_max": 125,
+      "skew_class": "high-skew",
+      "call_count": 101,
+      "observed_gpu_time_share": 0.0120918328,
+      "stock_median_us": 81.119999,
+      "candidate_median_us": 80.527999,
+      "speedup": 1.0073514901
+    }
+  ],
+  "gain_distribution": [
+    {"range": "No change", "profile_count": 2, "selected_gpu_time_share": 0.1749401105},
+    {"range": "0-1%", "profile_count": 2, "selected_gpu_time_share": 0.1423200657},
+    {"range": "1-2%", "profile_count": 1, "selected_gpu_time_share": 0.2416384772},
+    {"range": "2-3%", "profile_count": 1, "selected_gpu_time_share": 0.3389066348},
+    {"range": "3-4%", "profile_count": 1, "selected_gpu_time_share": 0.0459754716},
+    {"range": "4-5%", "profile_count": 1, "selected_gpu_time_share": 0.0562192403}
+  ]
+}

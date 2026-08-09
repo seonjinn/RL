@@ -23,6 +23,39 @@ The final same-job comparison repeated stock `(16,530)` and the five strongest c
 
 The metric above is `weighted stock FC1+FC2 time / weighted candidate FC1+FC2 time`; it is a kernel-level ratio, not NeMo-RL generation throughput.
 
+## Improvement by Matrix and Routing Shape
+
+For this model, FC1 and FC2 use fixed projection dimensions while the expert-specific row count changes with routing:
+
+- FC1: 128 grouped GEMMs, `A_e[M_e,2048] x B_e[2048,1536]`.
+- FC2: 128 grouped GEMMs, `A_e[M_e,768] x B_e[768,2048]`.
+- `sum(M_e) = total_tokens x top_k`, with `top_k=8`.
+
+Therefore, two calls with the same total token count can behave differently when their per-expert `M_e` distributions differ. The table compares micro-audit stock `(16,530)` against candidate `(32,574)`.
+
+| Total tokens | Active experts | Expert `M_e` p50 / p90 / max | Routing skew | Observed GPU-time share | FC1+FC2 gain |
+| ---: | ---: | ---: | --- | ---: | ---: |
+| 126 | 76 | 1.0 / 14.5 / 126 | Median | 5.36% | **+4.74%** |
+| 126 | 53 | 0.0 / 14.6 / 125 | High | 4.38% | **+3.59%** |
+| 128 | 96 | 3.0 / 16.0 / 127 | Median | 32.30% | **+2.05%** |
+| 128 | 68 | 1.0 / 13.0 / 128 | High | 23.03% | **+1.23%** |
+| 125 | 64 | 0.5 / 21.3 / 125 | High | 1.21% | +0.74% |
+| 127 | 68 | 1.0 / 14.0 / 126 | High | 12.36% | +0.67% |
+| 127 | 80 | 2.0 / 17.3 / 127 | Median | 15.20% | 0.00% |
+| 125 | 118 | 4.0 / 14.9 / 100 | Median | 1.47% | 0.00% |
+
+![FC1/FC2 profile-level improvement distribution](mxfp8_moe_tactic_profile_distribution.png)
+
+The strongest gain was 4.74% for a 126-token profile. However, that profile represented only 5.36% of observed MoE GPU time. The highest-weight profile represented 32.30% and improved by 2.05%. Across the selected profiles, 58.1% of covered GPU time fell in the 1--3% improvement range, while 17.5% showed no measurable change.
+
+## Can the Table Be Reused Across Models?
+
+`M,N,K` equality is necessary but not sufficient. A dense GEMM tactic can be reused as a hint across models only when the physical execution signature also matches: GPU architecture, FlashInfer/TRTLLM build, quantization and output dtype, tensor and scale layouts, strides and alignment, padding, epilogue/fusion, workspace, and CUDA Graph state.
+
+For grouped MoE GEMMs, the key must additionally include the per-expert `M_e` distribution or the backend's exact shape profile, local expert count, `top_k`, and TP/EP configuration. Matching only total `M` can select a tactic tuned for a different routing skew. Tactic IDs are backend-build-specific and must not be carried across FlashInfer/TRTLLM versions without revalidation.
+
+The safe policy is to treat a table from another model as a candidate seed. Use it only on a full execution-signature match, validate it on the target runtime, and fall back to the backend default for every miss.
+
 ## Experimental Runtime A/B
 
 The unqualified `(32,574)` direction was nevertheless evaluated in two matched NeMo-RL A/B repetitions to quantify its end-to-end opportunity. The candidate runtime bundle changed exactly one FlashInfer TRTLLM MoE cache leaf: the 128-token bucket used FC1 tactic `32` and FC2 tactic `574` instead of stock tactics `16` and `578`. Every other cache entry and runtime input was identical.
@@ -60,4 +93,4 @@ The lookup increased generation-only throughput by 0.56%, but the whole RL step 
 - Replayed-tensor numerical checks passed, but no new matched GSM8K run was performed for this unqualified candidate.
 - Final decision: retain stock FlashInfer FC1/FC2 tactic selection for this workload.
 
-Machine-readable summaries: [micro audit](mxfp8_moe_tactic_micro_audit_20260808.json) and [runtime A/B](mxfp8_moe_tactic_runtime_ab_20260809.json).
+Machine-readable summaries: [micro audit](mxfp8_moe_tactic_micro_audit_20260808.json), [profile distribution](mxfp8_moe_tactic_profile_distribution_20260808.json), and [runtime A/B](mxfp8_moe_tactic_runtime_ab_20260809.json).
