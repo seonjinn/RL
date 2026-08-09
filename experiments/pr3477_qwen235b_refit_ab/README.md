@@ -24,9 +24,12 @@ root printed by the submission script.
 | `508312`, `508313` | Failed during vLLM initialization | TP4 placed two MXFP8 engines on each 8-GPU B200 node. One vLLM engine hit a symmetric-memory OOM and worker SIGSEGV during FlashInfer autotuning. |
 | `508491`, `508492` | Failed during vLLM initialization | Disabling vLLM symmetric all-reduce did not remove the two-engine-per-node initialization failure. |
 | `508531`, `508532` | Failed during vLLM initialization | TP8 placed one engine per node, but Qwen3-235B MXFP8 MoE scale shuffle does not support that partition: `shape '[128, 4096, 6]' is invalid for input of size 4194304`. |
+| `508561`, `508562` | Failed during launcher preflight | `ray.sub` rejected 4-GPU requests on physical 8-GPU nodes before Ray started. |
 
 The reportable replacement uses the recipe-native TP4 with one engine per node:
-16 nodes request 4 GPUs each, split into 8 trainer and 8 generation nodes.
+16 nodes request 4 GPUs each, split into 8 trainer and 8 generation nodes. The
+experiment explicitly opts into partial-node GRES allocation; the default
+`ray.sub` behavior still requires a full-node claim.
 
 Only runs that reach measured GRPO steps are eligible for the performance
 comparison.

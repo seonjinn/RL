@@ -23,6 +23,10 @@ grep -Fq 'policy.megatron_cfg.expert_model_parallel_size=${TRAIN_EP}' "${SUBMIT_
 grep -Fq 'VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM:-0}' "${SUBMIT_SCRIPT}"
 grep -Fq 'export VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM}' "${SUBMIT_SCRIPT}"
 grep -Fq 'vllm_allreduce_use_symm_mem=${VLLM_ALLREDUCE_USE_SYMM_MEM}' "${SUBMIT_SCRIPT}"
+grep -Fq 'NRL_ALLOW_PARTIAL_GPU_NODES=${NRL_ALLOW_PARTIAL_GPU_NODES:-1}' "${SUBMIT_SCRIPT}"
+grep -Fq 'export NRL_ALLOW_PARTIAL_GPU_NODES' "${SUBMIT_SCRIPT}"
+grep -Fq -- '--oversubscribe' "${SUBMIT_SCRIPT}"
+grep -Fq 'NRL_ALLOW_PARTIAL_GPU_NODES' "${SCRIPT_DIR}/../../ray.sub"
 grep -Fq 'uv run --frozen examples/run_grpo.py' "${SUBMIT_SCRIPT}"
 
 if grep -Fq 'UV_PYTHON_INSTALL_DIR=' "${SUBMIT_SCRIPT}"; then

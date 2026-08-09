@@ -22,6 +22,7 @@ MAX_STEPS=${MAX_STEPS:-20}
 WALLTIME=${WALLTIME:-04:00:00}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
 NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-false}
+NRL_ALLOW_PARTIAL_GPU_NODES=${NRL_ALLOW_PARTIAL_GPU_NODES:-1}
 VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM:-0}
 
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna}
@@ -126,6 +127,7 @@ container=${CONTAINER}
 driver_runtime=uv_run_frozen
 worker_venv_dir=${WORKER_VENV_ROOT}
 vllm_allreduce_use_symm_mem=${VLLM_ALLREDUCE_USE_SYMM_MEM}
+allow_partial_gpu_nodes=${NRL_ALLOW_PARTIAL_GPU_NODES}
 wandb_project=${WANDB_PROJECT}
 wandb_name=${WANDB_NAME}
 EOF
@@ -189,12 +191,13 @@ export MOUNTS=/lustre:/lustre
 export CONTAINER_REMAP_ROOT=1
 export COMMAND
 export GPUS_PER_NODE
+export NRL_ALLOW_PARTIAL_GPU_NODES
 export BASE_LOG_DIR=${EXPERIMENT_ROOT}
 
 SBATCH_ARGS=(
   --nodes="${TOTAL_NODES}"
   --gpus-per-node="${GPUS_PER_NODE}"
-  --exclusive
+  --oversubscribe
   --account="${ACCOUNT}"
   --partition="${PARTITION}"
   --time="${WALLTIME}"

@@ -44,11 +44,19 @@ maybe_gres_arg() {
   # Check if any nodes in the partition have GRES configured
   # Assumes a homogeneous allocation (not a heterogeneous job)
   if sinfo -p $SLURM_JOB_PARTITION -h -o "%G" | grep -q "gpu:"; then
-    # Do a quick assert here that gpus:8 == gpus:$GPUS_PER_NODE. It is probably a user error if someone isn't using GPUS_PER_NODE=8 on our clusters if it supports --gres=gpu:8 or gpu:a100:8
     # Some clusters append socket specs like "(S:0-3)" to the GRES string.
-    if [[ $GPUS_PER_NODE -ne $(sinfo -p $SLURM_JOB_PARTITION -h -o "%G" | grep "gpu:" | cut -d'(' -f1 | awk -F: '{print $NF}') ]]; then
+    local detected_gpus
+    detected_gpus=$(sinfo -p "$SLURM_JOB_PARTITION" -h -o "%G" | grep "gpu:" | head -n 1 | cut -d'(' -f1 | awk -F: '{print $NF}')
+    if (( GPUS_PER_NODE > detected_gpus )); then
+      echo "Error: GPUS_PER_NODE=$GPUS_PER_NODE exceeds the detected gpu:$detected_gpus GRES." >&2
+      exit 1
+    fi
+    if (( GPUS_PER_NODE != detected_gpus )) && [[ "${NRL_ALLOW_PARTIAL_GPU_NODES:-0}" != 1 ]]; then
       echo "Error: GPUS_PER_NODE=$GPUS_PER_NODE but GRES detected is $(sinfo -p $SLURM_JOB_PARTITION -h -o "%G" | grep "gpu:") meaning GPUS_PER_NODE is not set to fully claim the GPUs on the nodes." >&2
       exit 1
+    fi
+    if (( GPUS_PER_NODE < detected_gpus )); then
+      echo "[WARNING] Partial-node GPU allocation enabled: requesting $GPUS_PER_NODE of $detected_gpus GPUs per node." >&2
     fi
     echo "--gres=gpu:${GPUS_PER_NODE}"
     return
