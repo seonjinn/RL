@@ -112,5 +112,10 @@ assert_not_contains "${report_html}" "507302 completed 20/20 with Bridge's stock
 assert_contains "${report_html}" 'Steady-state window sensitivity · Steps 5–20'
 assert_contains "${report_html}" 'n=16/16'
 assert_contains "${report_html}" 'ratio-of-sums policy TPS is 52.09% higher'
+assert_contains "${report_html}" 'Job 507275 completed 20/20 in 5:16:18'
+assert_contains "${report_html}" '896.590 ± 264.189 s'
+assert_contains "${report_html}" '3.765 ± 0.926'
+assert_contains "${report_html}" 'byte-for-byte identical to PR #2964 head'
+assert_not_contains "${report_html}" 'Super 507275 completed 15 steps'
 
 printf 'performance-case-tests-pass\n'
