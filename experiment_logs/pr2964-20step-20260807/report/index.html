@@ -691,7 +691,7 @@
       <div class="callout">Descriptive sensitivity versus main-pinned Bridge job 506895 changes E2E/generation/policy/LogProb time by +0.15%/+0.47%/+3.82%/+0.59% and direct throughput by +1.28%/+1.24%/−3.12%/+1.30%. Versus strict HybridEP job 506434, the corresponding time changes are +0.40%/+0.19%/−1.30%/+1.68% and throughput changes are +4.13%/+3.91%/+5.53%/+1.32%. These are stack/run-condition sensitivity checks, not dispatcher A/B comparisons.</div>
 
       <h3>Nemotron 3 Super · Bridge-main stock-MCore correctness boundary</h3>
-      <p class="section-note">GCP-NRT B200 · canonical 32n8g performance recipe · job 507502 · same NeMo <code>541413bd</code>, Bridge <code>fcbabe78</code>, DeepEP <code>17cfb817</code> plus DMA-BUF fix, container, prepadding option, and 20-step command as job 507275; only MCore changes to stock <code>14499ef0</code>.</p>
+      <p class="section-note">GCP-NRT B200 · canonical 32n8g performance recipe · job 507502 · same NeMo <code>541413bd</code>, Bridge <code>fcbabe78</code>, DeepEP <code>17cfb817</code> plus DMA-BUF fix, container, prepadding option, and 20-step command as job 507275. The only intentional software-stack change is MCore <code>34b55f24 → 14499ef0</code>; stock additionally excludes known-bad node 0167, and run-name/dependency bookkeeping differs.</p>
       <div class="table-wrap">
         <table>
           <thead>
