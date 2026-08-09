@@ -367,6 +367,11 @@ def write_audit_artifacts(root: Path) -> dict[str, Path]:
                 },
             ]
         )
+    decision_payload = json.loads(qualification_decisions.read_text(encoding="ascii"))
+    decision_payload["nsys_pairs_sha256"] = _sha(nsys)
+    qualification_decisions.write_text(
+        json.dumps(decision_payload, sort_keys=True), encoding="ascii"
+    )
     return {
         "cache_manifest": cache_manifest,
         "candidate_cache": candidate_cache,
@@ -452,6 +457,14 @@ def complete_inputs(root: Path, *, repeated: bool = True) -> AuditInputs:
         artifact.write_text(json.dumps(payload, sort_keys=True), encoding="ascii")
     return AuditInputs(
         stock_runs=stock_runs, candidate_runs=candidate_runs, **artifacts
+    )
+
+
+def _rebind_nsys(inputs: AuditInputs) -> None:
+    decisions = json.loads(inputs.qualification_decisions.read_text(encoding="ascii"))
+    decisions["nsys_pairs_sha256"] = _sha(inputs.nsys)
+    inputs.qualification_decisions.write_text(
+        json.dumps(decisions, sort_keys=True), encoding="ascii"
     )
 
 
@@ -593,6 +606,7 @@ def test_nsys_producer_output_is_accepted_by_the_report_consumer(
                 )
 
     convert(raw, inputs.nsys)
+    _rebind_nsys(inputs)
 
     report = build_report(inputs, tmp_path / "report")
     assert report.verdict == "KEEP", report.reasons
@@ -708,6 +722,99 @@ def test_component_weighting_uses_profile_weight_not_nsys_instances(
     )
 
     assert components == (("FC1/GEMM1", 1.625), ("FC2/GEMM2", 1.625))
+
+
+def test_report_accepts_measured_pair_component_without_stage_timings(
+    tmp_path: Path,
+) -> None:
+    inputs = complete_inputs(tmp_path)
+    with inputs.nsys.open("w", newline="", encoding="ascii") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "signature_key",
+                "cache_key",
+                "arm",
+                "component",
+                "tactic",
+                "comparison_tactic",
+                "cache_event",
+                "call_weight",
+                "call_count",
+                "mean_us",
+            ],
+        )
+        writer.writeheader()
+        for arm, tactic, mean_us in (
+            ("stock", "1,2", 100.0),
+            ("candidate", "3,4", 80.0),
+        ):
+            writer.writerow(
+                {
+                    "signature_key": "sig-1",
+                    "cache_key": "cache-1",
+                    "arm": arm,
+                    "component": "FC1+FC2/GEMM1+GEMM2",
+                    "tactic": tactic,
+                    "comparison_tactic": "3,4",
+                    "cache_event": "cache hit",
+                    "call_weight": 10,
+                    "call_count": 10,
+                    "mean_us": mean_us,
+                }
+            )
+    _rebind_nsys(inputs)
+    output_dir = tmp_path / "report"
+
+    report = build_report(inputs, output_dir)
+
+    markdown = (output_dir / "mxfp8_moe_tactic_audit_latest.md").read_text()
+    assert report.verdict == "KEEP", report.reasons
+    assert "FC1+FC2/GEMM1+GEMM2 call-weighted micro speedup | 1.2500" in markdown
+    assert "FC1/GEMM1 call-weighted micro speedup" not in markdown
+    assert "FC2/GEMM2 call-weighted micro speedup" not in markdown
+
+
+def test_report_rejects_mixed_pair_and_stage_component_evidence(
+    tmp_path: Path,
+) -> None:
+    inputs = complete_inputs(tmp_path)
+    with inputs.nsys.open("a", newline="", encoding="ascii") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "arm",
+                "cache_event",
+                "cache_key",
+                "call_count",
+                "call_weight",
+                "component",
+                "mean_us",
+                "signature_key",
+                "tactic",
+                "comparison_tactic",
+            ],
+        )
+        writer.writerow(
+            {
+                "arm": "stock",
+                "cache_event": "cache hit",
+                "cache_key": "cache-1",
+                "call_count": 10,
+                "call_weight": 10,
+                "component": "FC1+FC2/GEMM1+GEMM2",
+                "mean_us": 100,
+                "signature_key": "sig-1",
+                "tactic": "1,2",
+                "comparison_tactic": "3,4",
+            }
+        )
+    _rebind_nsys(inputs)
+
+    report = build_report(inputs, tmp_path / "report")
+
+    assert report.verdict == "INCOMPLETE"
+    assert "mixed" in report.reasons[0]
 
 
 def test_report_binds_shuffled_shmoo_rows_and_ignores_failed_fastest_row(

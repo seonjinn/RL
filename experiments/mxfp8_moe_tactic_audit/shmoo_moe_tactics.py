@@ -22,6 +22,7 @@ try:
         MoeKernelCase,
         MoePairResult,
         TacticDispatchError,
+        assert_monolithic_replay_supported,
         assert_supported_flashinfer,
         build_kernel_case,
         cache_key_for_case,
@@ -29,6 +30,7 @@ try:
         force_stock_tactic,
         force_tactic,
         observed_forced_cache_event,
+        run_monolithic_moe_pair,
         run_moe_pair,
     )
     from .schema import ReplayProfile, TacticMeasurement, TacticPair
@@ -38,6 +40,7 @@ except ImportError:  # pragma: no cover - direct script execution
         MoeKernelCase,
         MoePairResult,
         TacticDispatchError,
+        assert_monolithic_replay_supported,
         assert_supported_flashinfer,
         build_kernel_case,
         cache_key_for_case,
@@ -45,6 +48,7 @@ except ImportError:  # pragma: no cover - direct script execution
         force_stock_tactic,
         force_tactic,
         observed_forced_cache_event,
+        run_monolithic_moe_pair,
         run_moe_pair,
     )
     from schema import ReplayProfile, TacticMeasurement, TacticPair
@@ -75,10 +79,7 @@ def _seeded_order(signature_key: str, index: int) -> bytes:
     return sha256(f"{signature_key}:{index}".encode("ascii")).digest()
 
 
-def reconstruct_topk(
-    profile: ReplayProfile, device: torch.device
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Reconstruct deterministic packed routing with the exact expert histogram."""
+def _reconstruct_expert_rows(profile: ReplayProfile) -> tuple[tuple[int, ...], ...]:
     signature = profile.signature
     if signature.top_k > signature.global_num_experts:
         raise ValueError("routing would require the same expert twice for a token")
@@ -127,6 +128,15 @@ def reconstruct_topk(
                 profile.signature_key, token * signature.global_num_experts + expert
             )
         )
+    return tuple(tuple(row) for row in token_experts)
+
+
+def reconstruct_topk(
+    profile: ReplayProfile, device: torch.device
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Reconstruct deterministic packed routing with the exact expert histogram."""
+    signature = profile.signature
+    token_experts = _reconstruct_expert_rows(profile)
 
     topk_ids = torch.tensor(token_experts, dtype=torch.int32, device=device)
     topk_weights = torch.full(
@@ -139,6 +149,24 @@ def reconstruct_topk(
         topk_weights[:, -1] = 1 - topk_weights[:, :-1].sum(dim=1)
     packed_topk = (topk_ids << 16) | topk_weights.view(torch.int16).to(torch.int32)
     return packed_topk, topk_weights
+
+
+def reconstruct_router_logits(
+    profile: ReplayProfile, device: torch.device
+) -> torch.Tensor:
+    """Reconstruct dense BF16 logits whose top-k has the exact histogram."""
+    signature = profile.signature
+    topk_ids = torch.tensor(
+        _reconstruct_expert_rows(profile), dtype=torch.int64, device=device
+    )
+    router_logits = torch.full(
+        (signature.num_tokens, signature.global_num_experts),
+        -1.0,
+        dtype=torch.bfloat16,
+        device=device,
+    )
+    router_logits.scatter_(1, topk_ids, 1.0)
+    return router_logits
 
 
 def _final_output(result: MoePairResult) -> torch.Tensor:
@@ -198,10 +226,13 @@ def _nsys_component_range(
     *,
     comparison_tactic: TacticPair,
     cache_event: str,
+    router_logits: torch.Tensor | None = None,
 ) -> Iterator[None]:
     """Emit the metadata NSys needs to produce one non-fabricated component row."""
     cache_key = cache_key_for_case(
-        case, has_gemm1_lora_delta=component == FC1_CUMULATIVE
+        case,
+        has_gemm1_lora_delta=component == FC1_CUMULATIVE,
+        router_logits=router_logits,
     )
     label = "|".join(
         (
@@ -232,7 +263,7 @@ def _nsys_component_range(
 
 def _profile_component_replays(
     case: MoeKernelCase,
-    packed_topk: torch.Tensor,
+    routing_input: torch.Tensor,
     tactic: TacticPair,
     *,
     cache_key: str,
@@ -242,13 +273,27 @@ def _profile_component_replays(
     warmups: int,
     repetitions: int,
     use_stock_fallback: bool,
-    zero_delta: torch.Tensor,
+    zero_delta: torch.Tensor | None,
+    monolithic_replay: bool = False,
 ) -> _ReplayResult:
     """Profile only graph replays after setup and observe the active cache event."""
     if component not in {FC1_CUMULATIVE, PAIR_CUMULATIVE}:
         raise ValueError(f"unsupported cumulative component: {component}")
     do_finalize = component == PAIR_CUMULATIVE
+    if monolithic_replay and not do_finalize:
+        raise ValueError("monolithic replay supports only the full FC1+FC2 pair")
     delta = None if do_finalize else zero_delta
+
+    def run_pair() -> MoePairResult:
+        if monolithic_replay:
+            return run_monolithic_moe_pair(case, routing_input)
+        return run_moe_pair(
+            case,
+            routing_input,
+            do_finalize=do_finalize,
+            gemm1_lora_delta=delta,
+        )
+
     force_context = (
         force_stock_tactic(cache_key)
         if use_stock_fallback
@@ -256,23 +301,13 @@ def _profile_component_replays(
     )
     with force_context:
         for _ in range(warmups):
-            run_moe_pair(
-                case,
-                packed_topk,
-                do_finalize=do_finalize,
-                gemm1_lora_delta=delta,
-            )
+            run_pair()
         torch.cuda.synchronize(case.hidden_states.device)
         cache_event = observed_forced_cache_event(cache_key)
 
         graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(graph):
-            captured_result = run_moe_pair(
-                case,
-                packed_topk,
-                do_finalize=do_finalize,
-                gemm1_lora_delta=delta,
-            )
+            captured_result = run_pair()
         graph_output = (
             _final_output(captured_result)
             if do_finalize
@@ -290,14 +325,27 @@ def _profile_component_replays(
         for _ in range(repetitions):
             cold_l2.add_(1)
             start.record()
-            with _nsys_component_range(
-                case,
-                tactic,
-                arm,
-                component,
-                comparison_tactic=comparison_tactic,
-                cache_event=cache_event,
-            ):
+            range_context = (
+                _nsys_component_range(
+                    case,
+                    tactic,
+                    arm,
+                    component,
+                    comparison_tactic=comparison_tactic,
+                    cache_event=cache_event,
+                    router_logits=routing_input,
+                )
+                if monolithic_replay
+                else _nsys_component_range(
+                    case,
+                    tactic,
+                    arm,
+                    component,
+                    comparison_tactic=comparison_tactic,
+                    cache_event=cache_event,
+                )
+            )
+            with range_context:
                 graph.replay()
                 end.record()
             end.synchronize()
@@ -482,21 +530,30 @@ def _profile_tactic_pair_cuda(
     warmups: int,
     repetitions: int,
     stock_tactics: Mapping[str, TacticPair] | None = None,
+    monolithic_replay: bool = False,
 ) -> _ProfileResult:
     """Profile the complete FC1+FC2 tactic pair when FC1 output is private."""
     if case.hidden_states.device.type != "cuda":
         raise ValueError("MXFP8 MoE tactic profiling requires CUDA")
-    packed_topk, _ = reconstruct_topk(case.profile, case.hidden_states.device)
-    original_routing = packed_topk.clone()
-    final_key = cache_key_for_case(case, has_gemm1_lora_delta=False)
+    if monolithic_replay:
+        routing_input = reconstruct_router_logits(
+            case.profile, case.hidden_states.device
+        )
+    else:
+        routing_input, _ = reconstruct_topk(case.profile, case.hidden_states.device)
+    original_routing = routing_input.clone()
+    final_key = cache_key_for_case(
+        case,
+        has_gemm1_lora_delta=False,
+        router_logits=routing_input if monolithic_replay else None,
+    )
     stock_tactic = None if stock_tactics is None else stock_tactics.get(final_key)
     if stock_tactics is not None and stock_tactic is None:
         raise ValueError("stock cache has no tactic for the replayed pair key")
-    zero_delta = torch.empty(0, dtype=torch.bfloat16, device=case.hidden_states.device)
 
     stock_replays = _profile_component_replays(
         case,
-        packed_topk,
+        routing_input,
         tactic if stock_tactic is None else stock_tactic,
         cache_key=final_key,
         arm="stock",
@@ -505,11 +562,12 @@ def _profile_tactic_pair_cuda(
         warmups=warmups,
         repetitions=repetitions,
         use_stock_fallback=stock_tactic is None,
-        zero_delta=zero_delta,
+        zero_delta=None,
+        monolithic_replay=monolithic_replay,
     )
     candidate_replays = _profile_component_replays(
         case,
-        packed_topk,
+        routing_input,
         tactic,
         cache_key=final_key,
         arm="candidate",
@@ -518,12 +576,13 @@ def _profile_tactic_pair_cuda(
         warmups=warmups,
         repetitions=repetitions,
         use_stock_fallback=False,
-        zero_delta=zero_delta,
+        zero_delta=None,
+        monolithic_replay=monolithic_replay,
     )
     stock_output = stock_replays.outputs[0]
     candidate_output = candidate_replays.outputs[0]
-    if not torch.equal(packed_topk, original_routing):
-        raise RuntimeError("FlashInfer modified packed top-k routing inputs")
+    if not torch.equal(routing_input, original_routing):
+        raise RuntimeError("FlashInfer modified routing inputs")
     all_outputs = [stock_output, *candidate_replays.outputs]
     finite = all(bool(torch.isfinite(output).all().item()) for output in all_outputs)
     deterministic = all(
@@ -583,21 +642,34 @@ def profile_tactic(
     repetitions: int = 10,
     stock_tactics: Mapping[str, TacticPair] | None = None,
     pair_only: bool = False,
+    monolithic_replay: bool = False,
 ) -> TacticMeasurement:
     """Profile and qualify one paired FC1/FC2 tactic without leaking failures."""
     if warmups != 3:
         raise ValueError("warmups must equal 3")
     if repetitions < 10:
         raise ValueError("repetitions must be at least 10")
+    if monolithic_replay and not pair_only:
+        raise ValueError("monolithic replay requires pair_only")
     try:
         profiler = _profile_tactic_pair_cuda if pair_only else _profile_tactic_cuda
-        result = profiler(
-            case,
-            tactic,
-            warmups=warmups,
-            repetitions=repetitions,
-            stock_tactics=stock_tactics,
-        )
+        if monolithic_replay:
+            result = _profile_tactic_pair_cuda(
+                case,
+                tactic,
+                warmups=warmups,
+                repetitions=repetitions,
+                stock_tactics=stock_tactics,
+                monolithic_replay=True,
+            )
+        else:
+            result = profiler(
+                case,
+                tactic,
+                warmups=warmups,
+                repetitions=repetitions,
+                stock_tactics=stock_tactics,
+            )
     except IntermediateApiUnavailable:
         return _failure_measurement(
             case,
@@ -653,6 +725,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--profile-limit", type=int)
     parser.add_argument("--tactic-limit", type=int)
     parser.add_argument("--pair-only", action="store_true")
+    parser.add_argument("--monolithic-replay", action="store_true")
     parser.add_argument("--warmups", type=int, default=3)
     parser.add_argument("--repetitions", type=int, default=10)
     parser.add_argument("--device", default="cuda:0")
@@ -672,6 +745,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("profile-limit must be positive")
     if args.tactic_limit is not None and args.tactic_limit <= 0:
         raise SystemExit("tactic-limit must be positive")
+    if args.monolithic_replay and not args.pair_only:
+        raise SystemExit("--monolithic-replay requires --pair-only")
+    if args.monolithic_replay and (
+        args.profile_limit is None or args.tactic_limit is None
+    ):
+        raise SystemExit(
+            "--monolithic-replay requires explicit --profile-limit and --tactic-limit"
+        )
     source_less = args.weights is None and not args.synthetic_smoke
     bounded_implicit_smoke = (
         source_less and args.profile_limit == 1 and args.tactic_limit == 2
@@ -687,7 +768,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     stock_tactics = (
         None if args.stock_cache is None else _load_stock_tactics(args.stock_cache)
     )
-    assert_supported_flashinfer()
+    if args.monolithic_replay:
+        assert_monolithic_replay_supported()
+    else:
+        assert_supported_flashinfer()
     profiles = _load_profiles(args.profiles)
     if args.profile_limit is not None:
         profiles = profiles[: args.profile_limit]
@@ -706,22 +790,43 @@ def main(argv: Sequence[str] | None = None) -> int:
                 tactics = tactics[: args.tactic_limit]
             for tactic in tactics:
                 if stock_tactics is None:
-                    measurement = profile_tactic(
-                        case,
-                        tactic,
-                        warmups=args.warmups,
-                        repetitions=args.repetitions,
-                        pair_only=args.pair_only,
-                    )
+                    if args.monolithic_replay:
+                        measurement = profile_tactic(
+                            case,
+                            tactic,
+                            warmups=args.warmups,
+                            repetitions=args.repetitions,
+                            pair_only=True,
+                            monolithic_replay=True,
+                        )
+                    else:
+                        measurement = profile_tactic(
+                            case,
+                            tactic,
+                            warmups=args.warmups,
+                            repetitions=args.repetitions,
+                            pair_only=args.pair_only,
+                        )
                 else:
-                    measurement = profile_tactic(
-                        case,
-                        tactic,
-                        warmups=args.warmups,
-                        repetitions=args.repetitions,
-                        stock_tactics=stock_tactics,
-                        pair_only=args.pair_only,
-                    )
+                    if args.monolithic_replay:
+                        measurement = profile_tactic(
+                            case,
+                            tactic,
+                            warmups=args.warmups,
+                            repetitions=args.repetitions,
+                            stock_tactics=stock_tactics,
+                            pair_only=True,
+                            monolithic_replay=True,
+                        )
+                    else:
+                        measurement = profile_tactic(
+                            case,
+                            tactic,
+                            warmups=args.warmups,
+                            repetitions=args.repetitions,
+                            stock_tactics=stock_tactics,
+                            pair_only=args.pair_only,
+                        )
                 row = measurement.to_json()
                 if synthetic_source:
                     row["synthetic"] = True

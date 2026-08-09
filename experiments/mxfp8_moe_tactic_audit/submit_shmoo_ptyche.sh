@@ -12,7 +12,7 @@ case "${ACTION}" in
     *) echo "Unsupported ACTION: ${ACTION}" >&2; exit 2 ;;
 esac
 
-EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-1de469ba64891f13c871ab008b42e7fdb970a817}
+EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-b9eea5bbbec24a2af6acd0d92c02a3640a748e9c}
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}
 if [[ -n "${RUN_ID:-}" ]]; then RUN_ID=${RUN_ID}; elif [[ "${ACTION}" == submit ]]; then RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-$$; else RUN_ID=dry-run; fi
 RUN_ROOT=${RUN_ROOT:-${WORK_ROOT}/experiments/mxfp8-moe-tactic-audit/shmoo/${RUN_ID}}
@@ -31,12 +31,18 @@ PARTITION=${PARTITION:-batch}
 QOS=${QOS:-}
 NSYS_CAPTURE_TACTICS=${NSYS_CAPTURE_TACTICS:-stock,winners}
 SHMOO_WEIGHT_MODE=${SHMOO_WEIGHT_MODE:-prepacked}
+REPLAY_MODE=${REPLAY_MODE:-routed}
 PROFILE_LIMIT=${PROFILE_LIMIT:-}
 TACTIC_LIMIT=${TACTIC_LIMIT:-}
 PAIR_ONLY=${PAIR_ONLY:-1}
 case "${SHMOO_WEIGHT_MODE}" in
     prepacked|synthetic) ;;
     *) echo "Unsupported SHMOO_WEIGHT_MODE: ${SHMOO_WEIGHT_MODE}" >&2; exit 2 ;;
+esac
+case "${REPLAY_MODE}" in
+    routed) REPLAY_ARGUMENT= ;;
+    monolithic) REPLAY_ARGUMENT=--monolithic-replay ;;
+    *) echo "Unsupported REPLAY_MODE: ${REPLAY_MODE}" >&2; exit 2 ;;
 esac
 for value_name in PROFILE_LIMIT TACTIC_LIMIT; do
     value=${!value_name}
@@ -52,6 +58,20 @@ case "${PAIR_ONLY}" in
     1) PAIR_ONLY_ARGUMENT=--pair-only ;;
     *) echo "PAIR_ONLY must be 0 or 1: ${PAIR_ONLY}" >&2; exit 2 ;;
 esac
+if [[ "${REPLAY_MODE}" == monolithic ]]; then
+    [[ "${SHMOO_WEIGHT_MODE}" == prepacked ]] || {
+        echo "monolithic replay requires SHMOO_WEIGHT_MODE=prepacked" >&2
+        exit 2
+    }
+    [[ "${PAIR_ONLY}" == 1 ]] || {
+        echo "monolithic replay requires PAIR_ONLY=1" >&2
+        exit 2
+    }
+    [[ -n "${PROFILE_LIMIT}" && -n "${TACTIC_LIMIT}" ]] || {
+        echo "monolithic replay requires explicit PROFILE_LIMIT and TACTIC_LIMIT" >&2
+        exit 2
+    }
+fi
 if [[ "${ACTION}" == submit ]]; then
     audit_prepare_submit "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" "${EXPECTED_VLLM_COMMIT}"
 fi
@@ -75,7 +95,8 @@ if [[ "${ACTION}" != dry-run ]]; then
         exit 1
     }
 fi
-MOE_WEIGHTS=${MOE_WEIGHTS:-${MODEL_SNAPSHOT}/model.safetensors.index.json}
+PREPACKED_WEIGHT_ROOT=${PREPACKED_WEIGHT_ROOT:-${WORK_ROOT}/.cache/mxfp8-moe-tactic-audit/prepacked/stock-v0251-20260808}
+MOE_WEIGHTS=${MOE_WEIGHTS:-${PREPACKED_WEIGHT_ROOT}/flashinfer_mxfp8_moe_prepacked_v1.pt}
 if [[ "${SHMOO_WEIGHT_MODE}" == prepacked ]]; then
     WEIGHT_ARGUMENT="--weights ${MOE_WEIGHTS}"
     STOCK_CACHE_ARGUMENT="--stock-cache ${STOCK_INPUT_CACHE_ROOT}/autotune_configs.json"
@@ -131,6 +152,7 @@ nsys profile --trace=cuda,nvtx --cuda-graph-trace=node --force-overwrite=true --
   ${PROFILE_LIMIT_ARGUMENT} \\
   ${TACTIC_LIMIT_ARGUMENT} \\
   ${PAIR_ONLY_ARGUMENT} \\
+  ${REPLAY_ARGUMENT} \\
   --warmups 3 \\
   --repetitions 10 \\
   --output ${SHMOO_OUTPUT_ROOT}/measurements.jsonl
@@ -159,6 +181,7 @@ fi
 printf 'action=%s\n' "${ACTION}"
 printf 'run_root=%s\n' "${RUN_ROOT}"
 printf 'shmoo_weight_mode=%s\n' "${SHMOO_WEIGHT_MODE}"
+printf 'replay_mode=%s\n' "${REPLAY_MODE}"
 printf 'pair_only=%s\n' "${PAIR_ONLY}"
 printf 'stock_input_cache_root=%s\n' "${STOCK_INPUT_CACHE_ROOT}"
 printf 'job_script=%s\n' "${SCRIPT_DIR}/single_gpu.sub"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ast
 from collections.abc import Mapping, Sequence
+import csv
 from dataclasses import dataclass
 from hashlib import sha256
 import importlib
@@ -32,6 +33,7 @@ MAX_CV = 0.03
 MAX_HIGH_WEIGHT_REGRESSION = 0.01
 HIGH_WEIGHT_FRACTION = 0.05
 MIN_MICRO_COSINE_SIMILARITY = 0.999
+MAX_MXFP8_ABS_ERROR = 0.1
 DEFAULT_CACHE_SUBPROCESS_TIMEOUT_SECONDS = 120.0
 
 ARTIFACT_FINGERPRINT_FIELDS = frozenset(
@@ -81,6 +83,19 @@ class QualificationDecision:
     promoted: bool
     reason: str
     signature_keys: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class QualificationInputs:
+    """Typed public inputs for fail-closed pair-only cache qualification."""
+
+    stock_cache: Path
+    selected_profiles: Path
+    shmoo_results: Path
+    nsys_pairs: Path
+    trace_summary: Path
+    runtime_provenance: Path
+    output_dir: Path
 
 
 @dataclass(frozen=True)
@@ -273,12 +288,24 @@ def _sha256_file_set(paths: Sequence[Path]) -> str:
 
 def _measurement_is_correct(measurement: TacticMeasurement) -> bool:
     """Apply the Task 7 row-level finite, deterministic, and micro gate."""
+    numeric_values = (
+        measurement.median_us,
+        measurement.p95_us,
+        measurement.cv,
+        measurement.max_abs_error,
+        measurement.cosine_similarity,
+    )
     return (
         measurement.failure is None
         and measurement.finite
         and measurement.deterministic
+        and all(math.isfinite(value) for value in numeric_values)
+        and measurement.warmups == 3
+        and measurement.repetitions >= 10
         and measurement.median_us > 0
+        and measurement.p95_us > 0
         and measurement.cv >= 0
+        and 0 <= measurement.max_abs_error <= MAX_MXFP8_ABS_ERROR
         and measurement.cosine_similarity >= MIN_MICRO_COSINE_SIMILARITY
     )
 
@@ -457,6 +484,250 @@ def _load_json_object(path: Path) -> dict[str, object]:
     return cast(dict[str, object], payload)
 
 
+def _positive_number(value: object, field_name: str) -> float:
+    """Parse one finite positive JSON number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be numeric")
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise ValueError(f"{field_name} must be finite and positive")
+    return number
+
+
+def _selected_profile_contract(path: Path) -> tuple[dict[str, float], dict[str, int]]:
+    """Load selected profile weights and call counts without weakening the producer."""
+    payload = _load_json_object(path)
+    covered_weight = _positive_number(payload.get("covered_weight"), "covered_weight")
+    if covered_weight < 0.95 or covered_weight > 1.0:
+        raise ValueError("selected profile coverage must be in [0.95, 1]")
+    raw_profiles = payload.get("selected_profiles")
+    if not isinstance(raw_profiles, list) or not raw_profiles:
+        raise ValueError("selected_profiles must be a nonempty array")
+    weights: dict[str, float] = {}
+    call_counts: dict[str, int] = {}
+    for index, row in enumerate(raw_profiles):
+        if not isinstance(row, Mapping):
+            raise ValueError(f"selected_profiles[{index}] must be an object")
+        signature_key = row.get("signature_key")
+        call_count = row.get("call_count")
+        if not isinstance(signature_key, str) or not signature_key:
+            raise ValueError(f"selected_profiles[{index}] has no signature_key")
+        if signature_key in weights:
+            raise ValueError(f"duplicate selected signature {signature_key}")
+        if (
+            isinstance(call_count, bool)
+            or not isinstance(call_count, int)
+            or call_count <= 0
+        ):
+            raise ValueError(f"selected_profiles[{index}] has invalid call_count")
+        weights[signature_key] = _positive_number(
+            row.get("normalized_weight"),
+            f"selected_profiles[{index}].normalized_weight",
+        )
+        call_counts[signature_key] = call_count
+    if not math.isclose(
+        math.fsum(weights.values()), covered_weight, rel_tol=1e-9, abs_tol=1e-12
+    ):
+        raise ValueError("selected profile weights do not match covered_weight")
+    return weights, call_counts
+
+
+def _trace_contract(
+    path: Path, profile_weights: Mapping[str, float]
+) -> tuple[dict[str, str], tuple[Path, ...]]:
+    """Load exact signature/cache-key bindings and raw trace provenance."""
+    payload = _load_json_object(path)
+    raw_paths = payload.get("trace_paths")
+    if not isinstance(raw_paths, list) or not raw_paths:
+        raise ValueError("trace_summary.trace_paths must be a nonempty array")
+    trace_paths: list[Path] = []
+    for index, raw_path in enumerate(raw_paths):
+        if not isinstance(raw_path, str) or not raw_path:
+            raise ValueError(f"trace_paths[{index}] must be a nonempty string")
+        trace_path = (path.parent / raw_path).resolve()
+        if not trace_path.is_file():
+            raise ValueError(f"trace path does not exist: {trace_path}")
+        trace_paths.append(trace_path)
+    if len(set(trace_paths)) != len(trace_paths):
+        raise ValueError("trace_summary contains duplicate trace paths")
+
+    raw_profiles = payload.get("profiles")
+    if not isinstance(raw_profiles, list) or not raw_profiles:
+        raise ValueError("trace_summary.profiles must be a nonempty array")
+    bindings: dict[str, str] = {}
+    for index, row in enumerate(raw_profiles):
+        if not isinstance(row, Mapping):
+            raise ValueError(f"trace profile {index} must be an object")
+        signature_key = row.get("signature_key")
+        cache_key = row.get("cache_key")
+        if not isinstance(signature_key, str) or not signature_key:
+            raise ValueError(f"trace profile {index} has no signature_key")
+        if not isinstance(cache_key, str) or not cache_key:
+            raise ValueError(f"trace profile {index} has no cache_key")
+        if signature_key in bindings:
+            raise ValueError(f"duplicate trace signature {signature_key}")
+        _validate_moe_file_key(cache_key)
+        expected_weight = profile_weights.get(signature_key)
+        if expected_weight is None or not math.isclose(
+            _positive_number(row.get("call_weight"), "trace call_weight"),
+            expected_weight,
+            rel_tol=1e-9,
+            abs_tol=1e-12,
+        ):
+            raise ValueError("trace mapping does not bind selected profile weights")
+        bindings[signature_key] = cache_key
+    if set(bindings) != set(profile_weights):
+        raise ValueError("trace and selected profile signatures differ")
+    return bindings, tuple(trace_paths)
+
+
+def _csv_tactic(value: object, field_name: str) -> TacticPair:
+    """Parse one comma-delimited pair from the NSys consumer schema."""
+    if not isinstance(value, str):
+        raise ValueError(f"NSys {field_name} must be a tactic pair")
+    parts = value.split(",")
+    if len(parts) != 2:
+        raise ValueError(f"NSys {field_name} must be a tactic pair")
+    try:
+        return TacticPair(int(parts[0]), int(parts[1]))
+    except ValueError as error:
+        raise ValueError(f"NSys {field_name} must be a tactic pair") from error
+
+
+def _nsys_pair_contract(
+    path: Path,
+    *,
+    profile_bindings: Mapping[str, str],
+    call_counts: Mapping[str, int],
+) -> dict[str, set[TacticPair]]:
+    """Validate pair-only NSys rows and return measured candidate pairs."""
+    try:
+        with path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            if reader.fieldnames is None:
+                raise ValueError("NSys pair CSV has no header")
+            required = {
+                "signature_key",
+                "cache_key",
+                "arm",
+                "component",
+                "tactic",
+                "comparison_tactic",
+                "cache_event",
+                "call_weight",
+                "call_count",
+                "mean_us",
+            }
+            if set(reader.fieldnames) != required:
+                raise ValueError("NSys pair CSV fields do not match the typed contract")
+            rows = list(reader)
+    except OSError as error:
+        raise ValueError(f"cannot read NSys pair CSV {path}: {error}") from error
+    if not rows:
+        raise ValueError("NSys pair CSV must not be empty")
+
+    observed_bindings: dict[str, str] = {}
+    candidate_tactics = {signature: set() for signature in profile_bindings}
+    paired_arms: dict[
+        tuple[str, TacticPair], dict[str, tuple[TacticPair, int, int]]
+    ] = {}
+    for index, row in enumerate(rows, start=2):
+        if None in row or any(value is None for value in row.values()):
+            raise ValueError(f"NSys pair CSV row {index} is malformed")
+        signature_key = row["signature_key"]
+        cache_key = row["cache_key"]
+        if signature_key not in profile_bindings:
+            raise ValueError(f"NSys row has unselected signature {signature_key}")
+        _validate_moe_file_key(cache_key)
+        previous = observed_bindings.setdefault(signature_key, cache_key)
+        if previous != cache_key or profile_bindings[signature_key] != cache_key:
+            raise ValueError("NSys and trace signature/cache-key mappings disagree")
+        if row["component"] != "FC1+FC2/GEMM1+GEMM2":
+            raise ValueError("NSys qualification input must contain pair-only timings")
+        if row["arm"] not in {"stock", "candidate"}:
+            raise ValueError("NSys pair CSV has invalid arm")
+        if row["cache_event"].strip().lower() not in {"cache hit", "fallback"}:
+            raise ValueError("NSys pair CSV has invalid cache_event")
+        tactic = _csv_tactic(row["tactic"], "tactic")
+        comparison_tactic = _csv_tactic(row["comparison_tactic"], "comparison_tactic")
+        if row["arm"] == "candidate":
+            if tactic != comparison_tactic:
+                raise ValueError(
+                    "candidate NSys tactic does not match comparison_tactic"
+                )
+            candidate_tactics[signature_key].add(tactic)
+        try:
+            call_weight = int(row["call_weight"])
+            call_count = int(row["call_count"])
+            mean_us = float(row["mean_us"])
+        except ValueError as error:
+            raise ValueError(
+                f"NSys pair CSV row {index} has invalid numerics"
+            ) from error
+        if (
+            call_weight != call_counts[signature_key]
+            or call_count <= 0
+            or not math.isfinite(mean_us)
+            or mean_us <= 0
+        ):
+            raise ValueError(f"NSys pair CSV row {index} has unbound timing evidence")
+        arm_rows = paired_arms.setdefault((signature_key, comparison_tactic), {})
+        if row["arm"] in arm_rows:
+            raise ValueError("NSys pair CSV contains a duplicate comparison arm")
+        arm_rows[row["arm"]] = (tactic, call_weight, call_count)
+    for (signature_key, comparison_tactic), arm_rows in paired_arms.items():
+        if set(arm_rows) != {"stock", "candidate"}:
+            raise ValueError(
+                "NSys pair CSV requires matching stock and candidate arms for "
+                f"{signature_key}/{comparison_tactic}"
+            )
+        _, stock_weight, stock_count = arm_rows["stock"]
+        candidate_tactic, candidate_weight, candidate_count = arm_rows["candidate"]
+        if candidate_tactic != comparison_tactic or (
+            stock_weight,
+            stock_count,
+        ) != (candidate_weight, candidate_count):
+            raise ValueError("NSys stock and candidate comparison arms do not match")
+    if set(observed_bindings) != set(profile_bindings) or any(
+        not tactics for tactics in candidate_tactics.values()
+    ):
+        raise ValueError("NSys pair CSV does not cover every selected signature")
+    return candidate_tactics
+
+
+def _load_measurements(path: Path) -> tuple[TacticMeasurement, ...]:
+    """Parse exact shmoo JSONL rows and reject duplicates."""
+    measurements: list[TacticMeasurement] = []
+    seen: set[tuple[str, TacticPair]] = set()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise ValueError(f"cannot read shmoo results {path}: {error}") from error
+    if not lines:
+        raise ValueError("shmoo results must not be empty")
+    for line_number, line in enumerate(lines, start=1):
+        if not line:
+            raise ValueError(f"blank shmoo row at line {line_number}")
+        raw = json.loads(line)
+        if not isinstance(raw, Mapping):
+            raise ValueError(f"shmoo row {line_number} must be an object")
+        measurement = TacticMeasurement.from_json(cast(Mapping[str, object], raw))
+        key = (measurement.signature_key, measurement.tactic)
+        if key in seen:
+            raise ValueError(f"duplicate shmoo row at line {line_number}")
+        seen.add(key)
+        measurements.append(measurement)
+    return tuple(measurements)
+
+
+def _runtime_provenance(path: Path) -> dict[str, object]:
+    """Parse the exact typed runtime provenance object used by the public CLI."""
+    payload = _load_json_object(path)
+    if set(payload) != RUNTIME_FINGERPRINT_FIELDS:
+        raise ValueError("runtime provenance fields do not match the typed contract")
+    return payload
+
+
 def _get_autotuner() -> Any:
     """Load the optional pinned FlashInfer AutoTuner only on cache operations."""
     autotuner = importlib.import_module("flashinfer.autotuner")
@@ -572,6 +843,7 @@ def _write_qualification_decisions(
     manifest: CacheManifest,
     decisions: Sequence[QualificationDecision],
     stock: Mapping[str, object],
+    nsys_pairs: Path | None,
 ) -> None:
     """Emit the authoritative cache-build decisions beside the manifest."""
     rows: list[dict[str, object]] = []
@@ -597,9 +869,143 @@ def _write_qualification_decisions(
         "shmoo_results_sha256": manifest.source_fingerprints["shmoo_results_sha256"],
         "trace_set_sha256": manifest.source_fingerprints["trace_set_sha256"],
     }
+    if nsys_pairs is not None:
+        payload["nsys_pairs_sha256"] = _sha256_file(nsys_pairs)
     path.write_text(
         json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
         encoding="ascii",
+    )
+
+
+def select_qualification_decisions(
+    *,
+    stock: Mapping[str, TacticPair],
+    profile_bindings: Mapping[str, str],
+    profile_weights: Mapping[str, float],
+    measurements: Sequence[TacticMeasurement],
+    nsys_candidate_tactics: Mapping[str, set[TacticPair]],
+) -> tuple[QualificationDecision, ...]:
+    """Choose the strongest fully measured tactic that passes every gate."""
+    signatures_by_key: dict[str, list[str]] = {}
+    for signature_key, cache_key in profile_bindings.items():
+        signatures_by_key.setdefault(cache_key, []).append(signature_key)
+
+    measured_by_signature: dict[str, set[TacticPair]] = {}
+    for measurement in measurements:
+        if measurement.signature_key in profile_bindings:
+            measured_by_signature.setdefault(measurement.signature_key, set()).add(
+                measurement.tactic
+            )
+
+    decisions: list[QualificationDecision] = []
+    for cache_key, raw_signatures in sorted(signatures_by_key.items()):
+        signatures = tuple(sorted(raw_signatures))
+        stock_tactic = stock.get(cache_key)
+        if stock_tactic is None:
+            raise ValueError(
+                f"selected cache key is absent from stock cache: {cache_key}"
+            )
+        tactic_sets: list[set[TacticPair]] = []
+        for signature in signatures:
+            measured = measured_by_signature.get(signature, set())
+            nsys_measured = nsys_candidate_tactics.get(signature, set())
+            tactic_sets.append(measured & nsys_measured)
+        complete_tactics = set.intersection(*tactic_sets) if tactic_sets else set()
+        if stock_tactic not in complete_tactics:
+            raise ValueError(
+                f"stock tactic lacks complete shmoo/NSys evidence for {cache_key}"
+            )
+
+        weights = {signature: profile_weights[signature] for signature in signatures}
+        eligible: list[tuple[BucketAudit, QualificationDecision]] = []
+        for tactic in sorted(
+            complete_tactics - {stock_tactic},
+            key=lambda item: (item.gemm1, item.gemm2),
+        ):
+            audit = audit_bucket(
+                cache_key=cache_key,
+                stock=stock_tactic,
+                candidate=tactic,
+                profile_weights=weights,
+                measurements=measurements,
+            )
+            decision = qualify_bucket(audit)
+            if decision.promoted:
+                eligible.append((audit, decision))
+        if eligible:
+            _, selected = max(
+                eligible,
+                key=lambda item: (
+                    item[0].weighted_gain,
+                    -item[0].max_cv,
+                    -item[0].worst_high_weight_regression,
+                    -item[0].candidate.gemm1,
+                    -item[0].candidate.gemm2,
+                ),
+            )
+            decisions.append(selected)
+        else:
+            decisions.append(
+                QualificationDecision(
+                    cache_key=cache_key,
+                    selected=stock_tactic,
+                    promoted=False,
+                    reason="no fully measured candidate passed qualification gates",
+                    signature_keys=signatures,
+                )
+            )
+    if not decisions:
+        raise ValueError("no selected cache keys were available for qualification")
+    return tuple(decisions)
+
+
+def qualify_and_build_cache(inputs: QualificationInputs) -> CacheManifest:
+    """Validate public artifacts, qualify exact keys, and build the candidate."""
+    profile_weights, call_counts = _selected_profile_contract(inputs.selected_profiles)
+    profile_bindings, trace_paths = _trace_contract(
+        inputs.trace_summary, profile_weights
+    )
+    nsys_candidate_tactics = _nsys_pair_contract(
+        inputs.nsys_pairs,
+        profile_bindings=profile_bindings,
+        call_counts=call_counts,
+    )
+    measurements = _load_measurements(inputs.shmoo_results)
+    stock_payload = _load_json_object(inputs.stock_cache)
+    stock = {
+        cache_key: _cache_tactic(value, cache_key)
+        for cache_key, value in stock_payload.items()
+        if cache_key != "_metadata" and cache_key in set(profile_bindings.values())
+    }
+    decisions = select_qualification_decisions(
+        stock=stock,
+        profile_bindings=profile_bindings,
+        profile_weights=profile_weights,
+        measurements=measurements,
+        nsys_candidate_tactics=nsys_candidate_tactics,
+    )
+    runtime = _runtime_provenance(inputs.runtime_provenance)
+    provenance = CacheProvenance(
+        trace_paths=trace_paths,
+        selected_profiles=inputs.selected_profiles,
+        shmoo_results=inputs.shmoo_results,
+        model_revision=cast(str, runtime["model_revision"]),
+        container_sha256=cast(str, runtime["container_sha256"]),
+        vllm_commit=cast(str, runtime["vllm_commit"]),
+        flashinfer_version=cast(str, runtime["flashinfer_version"]),
+        cuda_version=cast(str, runtime["cuda_version"]),
+        gpu_name=cast(str, runtime["gpu_name"]),
+        tp_size=cast(int, runtime["tp_size"]),
+        ep_size=cast(int, runtime["ep_size"]),
+        dp_size=cast(int, runtime["dp_size"]),
+        cuda_graph_mode=cast(str, runtime["cuda_graph_mode"]),
+    )
+    return build_candidate_cache(
+        inputs.stock_cache,
+        decisions,
+        inputs.output_dir,
+        provenance=provenance,
+        nsys_pairs=inputs.nsys_pairs,
     )
 
 
@@ -609,6 +1015,7 @@ def build_candidate_cache(
     output: Path,
     *,
     provenance: CacheProvenance,
+    nsys_pairs: Path | None = None,
     subprocess_timeout_seconds: float = DEFAULT_CACHE_SUBPROCESS_TIMEOUT_SECONDS,
 ) -> CacheManifest:
     """Replace promoted exact MoE keys through FlashInfer's native cache APIs."""
@@ -700,6 +1107,7 @@ def build_candidate_cache(
         manifest=manifest,
         decisions=decisions,
         stock=stock_payload,
+        nsys_pairs=nsys_pairs,
     )
     return manifest
 
@@ -858,18 +1266,57 @@ def _build_and_validate_cache_from_stdin() -> int:
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
-    """Parse the private fresh-process validation command."""
+    """Parse public qualification inputs or the private child-process mode."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-and-validate-cache", action="store_true")
+    parser.add_argument("--stock-cache", type=Path)
+    parser.add_argument("--selected-profiles", type=Path)
+    parser.add_argument("--shmoo-results", type=Path)
+    parser.add_argument("--nsys-pairs", type=Path)
+    parser.add_argument("--trace-summary", type=Path)
+    parser.add_argument("--runtime-provenance", type=Path)
+    parser.add_argument("--output-dir", type=Path)
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the private fresh-process validation mode."""
+    """Run public qualification or private fresh-process cache validation."""
     args = _parse_args(argv)
-    if not args.build_and_validate_cache:
-        raise SystemExit("--build-and-validate-cache is required")
-    return _build_and_validate_cache_from_stdin()
+    if args.build_and_validate_cache:
+        return _build_and_validate_cache_from_stdin()
+    public_fields = (
+        "stock_cache",
+        "selected_profiles",
+        "shmoo_results",
+        "nsys_pairs",
+        "trace_summary",
+        "runtime_provenance",
+        "output_dir",
+    )
+    missing = [name for name in public_fields if getattr(args, name) is None]
+    if missing:
+        print(
+            "qualification error: missing required arguments: "
+            + ", ".join(f"--{name.replace('_', '-')}" for name in missing),
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        qualify_and_build_cache(
+            QualificationInputs(
+                stock_cache=args.stock_cache,
+                selected_profiles=args.selected_profiles,
+                shmoo_results=args.shmoo_results,
+                nsys_pairs=args.nsys_pairs,
+                trace_summary=args.trace_summary,
+                runtime_provenance=args.runtime_provenance,
+                output_dir=args.output_dir,
+            )
+        )
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as error:
+        print(f"qualification error: {error}", file=sys.stderr)
+        return 2
+    return 0
 
 
 if __name__ == "__main__":

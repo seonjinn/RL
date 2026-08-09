@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from experiments.mxfp8_moe_tactic_audit import flashinfer_adapter
 from experiments.mxfp8_moe_tactic_audit.flashinfer_adapter import (
     PREPACKED_ARTIFACT_FORMAT,
     IntermediateApiUnavailable,
@@ -298,6 +299,26 @@ def test_load_prepacked_weights_accepts_exact_kernel_ready_contract(
     assert prepared.local_expert_offset == 0
 
 
+def test_load_prepacked_weights_preserves_runtime_blocked_shapes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _artifact_payload()
+    payload["gemm1_weights"] = torch.zeros((4, 2, 32, 64), dtype=torch.float8_e4m3fn)
+    payload["gemm1_weights_scale"] = torch.zeros((4, 2, 2), dtype=torch.float8_e8m0fnu)
+    payload["gemm2_weights"] = torch.zeros((4, 64, 1, 32), dtype=torch.float8_e4m3fn)
+    payload["gemm2_weights_scale"] = torch.zeros((4, 2, 1), dtype=torch.float8_e8m0fnu)
+    monkeypatch.setattr(torch, "load", lambda *_args, **_kwargs: payload)
+
+    prepared = load_prepacked_weights(
+        Path("weights.pt"), _profile(), torch.device("cpu")
+    )
+
+    assert prepared.gemm1_weights is payload["gemm1_weights"]
+    assert prepared.gemm1_weights_scale is payload["gemm1_weights_scale"]
+    assert prepared.gemm2_weights is payload["gemm2_weights"]
+    assert prepared.gemm2_weights_scale is payload["gemm2_weights_scale"]
+
+
 def test_load_prepacked_weights_rejects_mismatched_layout_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -424,6 +445,95 @@ def test_run_moe_pair_normalizes_intermediate_invocation_failures(
         )
 
 
+def test_run_monolithic_moe_pair_matches_vllm_call_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _case()
+    blocked_gemm1 = torch.empty((4, 2, 32, 64), dtype=torch.float8_e4m3fn)
+    blocked_gemm2 = torch.empty((4, 64, 1, 32), dtype=torch.float8_e4m3fn)
+    object.__setattr__(case, "gemm1_weights", blocked_gemm1)
+    object.__setattr__(case, "gemm2_weights", blocked_gemm2)
+    router_logits = torch.zeros((23, 4), dtype=torch.bfloat16)
+    final_output = torch.ones((23, 64), dtype=torch.bfloat16)
+    calls: list[dict[str, object]] = []
+    major_k = object()
+
+    def monolithic_moe(**kwargs: object) -> torch.Tensor:
+        calls.append(kwargs)
+        return final_output
+
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.flashinfer_adapter.assert_supported_flashinfer",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.flashinfer_adapter._load_monolithic_moe_runtime",
+        lambda: (
+            monolithic_moe,
+            SimpleNamespace(MxFp8="mxfp8"),
+            SimpleNamespace(MajorK=major_k),
+        ),
+    )
+
+    result = flashinfer_adapter.run_monolithic_moe_pair(case, router_logits)
+
+    assert result.final_output is final_output
+    assert result.activated_intermediate is None
+    assert calls == [
+        {
+            "routing_logits": router_logits,
+            "routing_bias": None,
+            "hidden_states": case.hidden_states,
+            "hidden_states_scale": case.hidden_states_scale,
+            "gemm1_weights": blocked_gemm1,
+            "gemm1_weights_scale": case.gemm1_weights_scale,
+            "gemm1_alpha": None,
+            "gemm1_beta": None,
+            "gemm1_clamp_limit": None,
+            "gemm2_weights": blocked_gemm2,
+            "gemm2_weights_scale": case.gemm2_weights_scale,
+            "num_experts": 4,
+            "top_k": 2,
+            "n_group": None,
+            "topk_group": None,
+            "intermediate_size": 32,
+            "local_expert_offset": 0,
+            "local_num_experts": 4,
+            "routed_scaling_factor": None,
+            "routing_method_type": 4,
+            "use_shuffled_weight": True,
+            "weight_layout": major_k,
+            "fp8_quantization_type": "mxfp8",
+            "activation_type": 3,
+        }
+    ]
+
+
+def test_run_monolithic_moe_pair_propagates_flashinfer_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def rejected_moe(**_kwargs: object) -> None:
+        raise TypeError("runtime prepacked shape rejected")
+
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.flashinfer_adapter.assert_supported_flashinfer",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.flashinfer_adapter._load_monolithic_moe_runtime",
+        lambda: (
+            rejected_moe,
+            SimpleNamespace(MxFp8="mxfp8"),
+            SimpleNamespace(MajorK=object()),
+        ),
+    )
+
+    with pytest.raises(TypeError, match="runtime prepacked shape rejected"):
+        flashinfer_adapter.run_monolithic_moe_pair(
+            _case(), torch.zeros((23, 4), dtype=torch.bfloat16)
+        )
+
+
 def test_enumerate_valid_tactics_uses_mxfp8_trtllm_gen_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -492,3 +602,27 @@ def test_cache_key_for_case_matches_moe_input_profile_layout() -> None:
     )
     assert intermediate[2][6] == (32, 2, 64)
     assert final[3] == intermediate[3] == ()
+
+
+def test_cache_key_for_monolithic_case_includes_router_logits_shape() -> None:
+    case = _case()
+    router_logits = torch.empty((23, 4), dtype=torch.bfloat16)
+
+    key = ast.literal_eval(
+        cache_key_for_case(
+            case,
+            has_gemm1_lora_delta=False,
+            router_logits=router_logits,
+        )
+    )
+
+    assert key[2] == (
+        (32, 64),
+        (32, 4),
+        (0,),
+        (0,),
+        (32, 64),
+        (32, 2),
+        (0,),
+        (0,),
+    )

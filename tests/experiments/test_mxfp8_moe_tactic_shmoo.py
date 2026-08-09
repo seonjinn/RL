@@ -8,6 +8,7 @@ from typing import cast
 import pytest
 import torch  # pyright: ignore[reportMissingImports]
 
+from experiments.mxfp8_moe_tactic_audit import shmoo_moe_tactics as shmoo
 from experiments.mxfp8_moe_tactic_audit.flashinfer_adapter import (
     PREPACKED_ARTIFACT_FORMAT,
     IntermediateApiUnavailable,
@@ -184,6 +185,23 @@ def test_reconstruct_topk_is_deterministic_for_signature_key() -> None:
     )
 
 
+def test_reconstruct_router_logits_reproduces_128_expert_histogram() -> None:
+    expert_counts = (1,) * 8 + (0,) * 120
+    profile = _profile(expert_counts=expert_counts, num_tokens=4, top_k=2)
+
+    router_logits = shmoo.reconstruct_router_logits(profile, torch.device("cpu"))
+
+    selected = torch.topk(router_logits, profile.signature.top_k, dim=1).indices
+    histogram = torch.bincount(selected.flatten(), minlength=128)
+    assert router_logits.shape == (4, 128)
+    assert router_logits.dtype == torch.bfloat16
+    assert tuple(histogram.tolist()) == expert_counts
+    assert torch.equal(
+        router_logits,
+        shmoo.reconstruct_router_logits(profile, torch.device("cpu")),
+    )
+
+
 def test_reconstruct_topk_rejects_histogram_requiring_duplicate_expert() -> None:
     profile = _profile(expert_counts=cast(tuple[int, ...], (3, 1)), num_tokens=2)
 
@@ -284,6 +302,175 @@ def test_profile_tactic_pair_only_does_not_require_intermediate_api(
     assert measurement.failure is None
     assert measurement.median_us == 7.0
     assert measurement.finite
+
+
+def test_monolithic_pair_profiler_uses_router_logits_cache_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _case()
+    object.__setattr__(
+        case,
+        "hidden_states",
+        type("CudaTensor", (), {"device": torch.device("cuda"), "shape": (2, 2048)})(),
+    )
+    tactic = TacticPair(1, 2)
+    router_logits = torch.zeros((2, 4), dtype=torch.bfloat16)
+    cache_calls: list[torch.Tensor | None] = []
+    replay_calls: list[tuple[torch.Tensor, bool]] = []
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.reconstruct_router_logits",
+        lambda _profile, _device: router_logits,
+    )
+
+    def fake_cache_key(
+        _case: MoeKernelCase,
+        *,
+        has_gemm1_lora_delta: bool,
+        router_logits: torch.Tensor | None = None,
+    ) -> str:
+        assert not has_gemm1_lora_delta
+        cache_calls.append(router_logits)
+        return "monolithic-key"
+
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.cache_key_for_case",
+        fake_cache_key,
+    )
+
+    def fake_replays(
+        _case: MoeKernelCase,
+        routing_input: torch.Tensor,
+        _tactic: TacticPair,
+        **kwargs: object,
+    ) -> object:
+        replay_calls.append((routing_input, cast(bool, kwargs["monolithic_replay"])))
+        return SimpleNamespace(outputs=(_case.output,) * 10, timings_us=(4.0,) * 10)
+
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics._profile_component_replays",
+        fake_replays,
+    )
+
+    result = shmoo._profile_tactic_pair_cuda(
+        case,
+        tactic,
+        warmups=3,
+        repetitions=10,
+        stock_tactics={"monolithic-key": TacticPair(5, 6)},
+        monolithic_replay=True,
+    )
+
+    assert cache_calls == [router_logits]
+    assert replay_calls == [(router_logits, True), (router_logits, True)]
+    assert result.deterministic
+    assert result.max_abs_error == 0.0
+    assert result.cosine_similarity == 1.0
+
+
+def test_monolithic_component_replay_uses_existing_cuda_graph_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _case()
+    tactic = TacticPair(1, 2)
+    router_logits = torch.zeros((2, 4), dtype=torch.bfloat16)
+    graph_replays = 0
+    monolithic_calls = 0
+
+    class FakeGraph:
+        def replay(self) -> None:
+            nonlocal graph_replays
+            graph_replays += 1
+
+    class FakeColdL2:
+        def add_(self, _value: int) -> None:
+            pass
+
+    class FakeEvent:
+        def __init__(self, *, enable_timing: bool) -> None:
+            assert enable_timing
+
+        def record(self) -> None:
+            pass
+
+        def synchronize(self) -> None:
+            pass
+
+        def elapsed_time(self, _other: object) -> float:
+            return 0.004
+
+    @contextmanager
+    def fake_graph(_graph: FakeGraph):
+        yield
+
+    def fake_monolithic(
+        _case: MoeKernelCase, actual_logits: torch.Tensor
+    ) -> MoePairResult:
+        nonlocal monolithic_calls
+        monolithic_calls += 1
+        assert actual_logits is router_logits
+        return MoePairResult(final_output=_case.output, activated_intermediate=None)
+
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.force_tactic",
+        lambda _key, _tactic: nullcontext(),
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.observed_forced_cache_event",
+        lambda _key: "cache hit",
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.run_monolithic_moe_pair",
+        fake_monolithic,
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.run_moe_pair",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("routed call")),
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics._nsys_component_range",
+        lambda *_args, **_kwargs: nullcontext(),
+    )
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda _device: None)
+    monkeypatch.setattr(torch.cuda, "CUDAGraph", FakeGraph)
+    monkeypatch.setattr(torch.cuda, "graph", fake_graph)
+    monkeypatch.setattr(torch.cuda, "Event", FakeEvent)
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics._l2_size_bytes",
+        lambda _device: 1024,
+    )
+    monkeypatch.setattr(
+        torch,
+        "empty",
+        lambda *_args, **kwargs: (
+            FakeColdL2()
+            if kwargs.get("dtype") == torch.uint8
+            else torch.empty(*_args, **kwargs)
+        ),
+    )
+    object.__setattr__(
+        case,
+        "hidden_states",
+        type("CudaTensor", (), {"device": torch.device("cuda"), "shape": (2, 2048)})(),
+    )
+
+    result = shmoo._profile_component_replays(
+        case,
+        router_logits,
+        tactic,
+        cache_key="monolithic-key",
+        arm="candidate",
+        component=PAIR_CUMULATIVE,
+        comparison_tactic=tactic,
+        warmups=3,
+        repetitions=10,
+        use_stock_fallback=False,
+        zero_delta=None,
+        monolithic_replay=True,
+    )
+
+    assert monolithic_calls == 4
+    assert graph_replays == 10
+    assert len(result.outputs) == len(result.timings_us) == 10
 
 
 @pytest.mark.parametrize("repeated_intermediate_nan", [False, True])
@@ -661,6 +848,104 @@ def test_cli_rejects_broader_source_less_invocation(
         )
 
 
+def test_cli_requires_pair_only_and_explicit_bounds_for_monolithic_replay(
+    tmp_path: Path,
+) -> None:
+    base_args = [
+        "--profiles",
+        str(tmp_path / "profiles.json"),
+        "--synthetic-smoke",
+        "--monolithic-replay",
+        "--output",
+        str(tmp_path / "measurements.jsonl"),
+    ]
+    with pytest.raises(SystemExit, match="requires --pair-only"):
+        main([*base_args, "--profile-limit", "1", "--tactic-limit", "2"])
+    with pytest.raises(SystemExit, match="requires explicit --profile-limit"):
+        main([*base_args, "--pair-only"])
+
+
+def test_bounded_monolithic_cli_preflights_and_forwards_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _profile()
+    profiles_path = tmp_path / "selected_profiles.json"
+    profiles_path.write_text(
+        json.dumps({"selected_profiles": [profile.to_json()]}), encoding="ascii"
+    )
+    output_path = tmp_path / "measurements.jsonl"
+    case = _case(profile)
+    preflight_calls = 0
+    profile_modes: list[tuple[bool, bool]] = []
+
+    def fake_preflight() -> None:
+        nonlocal preflight_calls
+        preflight_calls += 1
+
+    def fake_profile_tactic(
+        _case: MoeKernelCase,
+        tactic: TacticPair,
+        warmups: int = 3,
+        repetitions: int = 10,
+        stock_tactics: object = None,
+        pair_only: bool = False,
+        monolithic_replay: bool = False,
+    ) -> TacticMeasurement:
+        profile_modes.append((pair_only, monolithic_replay))
+        return TacticMeasurement(
+            signature_key=profile.signature_key,
+            tactic=tactic,
+            median_us=4.0,
+            p95_us=4.5,
+            cv=0.02,
+            warmups=warmups,
+            repetitions=repetitions,
+            finite=True,
+            deterministic=True,
+            max_abs_error=0.0,
+            cosine_similarity=1.0,
+            failure=None,
+        )
+
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.assert_monolithic_replay_supported",
+        fake_preflight,
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.build_kernel_case",
+        lambda *_args, **_kwargs: case,
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.enumerate_valid_tactics",
+        lambda _case: (TacticPair(1, 2),),
+    )
+    monkeypatch.setattr(
+        "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.profile_tactic",
+        fake_profile_tactic,
+    )
+
+    assert (
+        main(
+            [
+                "--profiles",
+                str(profiles_path),
+                "--synthetic-smoke",
+                "--profile-limit",
+                "1",
+                "--tactic-limit",
+                "1",
+                "--pair-only",
+                "--monolithic-replay",
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+    assert preflight_calls == 1
+    assert profile_modes == [(True, True)]
+
+
 def test_exact_brief_smoke_args_use_marked_bounded_synthetic_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -689,19 +974,21 @@ def test_exact_brief_smoke_args_use_marked_bounded_synthetic_source(
     )
     monkeypatch.setattr(
         "experiments.mxfp8_moe_tactic_audit.shmoo_moe_tactics.profile_tactic",
-        lambda _case, tactic, warmups=3, repetitions=10, pair_only=False: TacticMeasurement(
-            signature_key=profile.signature_key,
-            tactic=tactic,
-            median_us=4.0,
-            p95_us=4.5,
-            cv=0.02,
-            warmups=warmups,
-            repetitions=repetitions,
-            finite=True,
-            deterministic=True,
-            max_abs_error=0.0,
-            cosine_similarity=1.0,
-            failure=None,
+        lambda _case, tactic, warmups=3, repetitions=10, pair_only=False: (
+            TacticMeasurement(
+                signature_key=profile.signature_key,
+                tactic=tactic,
+                median_us=4.0,
+                p95_us=4.5,
+                cv=0.02,
+                warmups=warmups,
+                repetitions=repetitions,
+                finite=True,
+                deterministic=True,
+                max_abs_error=0.0,
+                cosine_similarity=1.0,
+                failure=None,
+            )
         ),
     )
 

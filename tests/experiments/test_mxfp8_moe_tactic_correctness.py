@@ -144,6 +144,58 @@ def test_micro_gate_accepts_complete_measurements_and_evidence() -> None:
     assert summary.failures == ()
 
 
+def test_micro_gate_accepts_pair_only_final_output_evidence() -> None:
+    measurements = [
+        _measurement(signature_key="balanced"),
+        _measurement(signature_key="high-skew", tactic=TacticPair(31, 47)),
+    ]
+    evidence = _complete_micro_evidence(measurements)
+    pair_only = replace(
+        evidence,
+        measurement_evidence=tuple(
+            replace(
+                row,
+                fc1_stock_compared=False,
+                fc2_stock_compared=False,
+                pair_final_stock_compared=True,
+            )
+            for row in evidence.measurement_evidence
+        ),
+    )
+
+    summary = validate_micro(measurements, pair_only)
+
+    assert summary.passed
+    assert summary.failures == ()
+
+
+def test_micro_gate_rejects_pair_only_evidence_without_final_comparison() -> None:
+    measurements = [
+        _measurement(signature_key="balanced"),
+        _measurement(signature_key="high-skew", tactic=TacticPair(31, 47)),
+    ]
+    evidence = _complete_micro_evidence(measurements)
+    incomplete = replace(
+        evidence,
+        measurement_evidence=tuple(
+            replace(
+                row,
+                fc1_stock_compared=False,
+                fc2_stock_compared=False,
+                pair_final_stock_compared=False,
+            )
+            for row in evidence.measurement_evidence
+        ),
+    )
+
+    summary = validate_micro(measurements, incomplete)
+
+    assert not summary.passed
+    assert any(
+        "pair final-output stock comparison" in failure for failure in summary.failures
+    )
+
+
 @pytest.mark.parametrize(
     ("field_name", "reason"),
     [

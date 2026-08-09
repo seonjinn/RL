@@ -26,6 +26,7 @@ MOE_CUSTOM_OP = "flashinfer::trtllm_fp8_block_scale_moe"
 MOE_RUNNER = "MoERunner"
 MOE_LOG_KEY = (MOE_CUSTOM_OP, MOE_RUNNER)
 PREPACKED_ARTIFACT_FORMAT = "flashinfer_mxfp8_moe_prepacked_v1"
+PRODUCTION_TUNE_MAX_NUM_TOKENS = 8192
 
 
 class TacticDispatchError(RuntimeError):
@@ -34,6 +35,10 @@ class TacticDispatchError(RuntimeError):
 
 class IntermediateApiUnavailable(RuntimeError):
     """Raised when FlashInfer cannot expose the activated FC1 intermediate."""
+
+
+class MonolithicApiUnavailable(RuntimeError):
+    """Raised when the pinned FlashInfer monolithic MoE API is unavailable."""
 
 
 @dataclass(frozen=True)
@@ -183,25 +188,53 @@ def _profile_shape(shape: torch.Size | tuple[int, ...], bucket: int) -> tuple[in
     return (bucket, *values[1:])
 
 
-def cache_key_for_case(case: MoeKernelCase, *, has_gemm1_lora_delta: bool) -> str:
+def cache_key_for_case(
+    case: MoeKernelCase,
+    *,
+    has_gemm1_lora_delta: bool,
+    router_logits: torch.Tensor | None = None,
+) -> str:
     """Build the exact hash-free AutoTuner file key for one replay case."""
     signature = case.profile.signature
+    if router_logits is not None:
+        expected_shape = (signature.num_tokens, signature.global_num_experts)
+        if tuple(router_logits.shape) != expected_shape:
+            raise ValueError(
+                f"router_logits shape mismatch: {tuple(router_logits.shape)} "
+                f"!= {expected_shape}"
+            )
+        if has_gemm1_lora_delta:
+            raise ValueError("monolithic replay does not support gemm1_lora_delta")
     bucket = _map_to_hybrid_bucket(
         signature.num_tokens,
-        tune_max_num_tokens(case),
+        PRODUCTION_TUNE_MAX_NUM_TOKENS
+        if router_logits is not None
+        else tune_max_num_tokens(case),
     )
-    profile_shapes = (
-        _profile_shape(case.output.shape, bucket),
-        (0,),
-        (bucket, signature.top_k),
-        (bucket,),
-        _profile_shape(case.hidden_states.shape, bucket),
-        _profile_shape(case.hidden_states_scale.shape, bucket),
-        (bucket, signature.top_k, 2 * signature.intermediate_size)
-        if has_gemm1_lora_delta
-        else (0,),
-        (0,),
-    )
+    if router_logits is None:
+        profile_shapes = (
+            _profile_shape(case.output.shape, bucket),
+            (0,),
+            (bucket, signature.top_k),
+            (bucket,),
+            _profile_shape(case.hidden_states.shape, bucket),
+            _profile_shape(case.hidden_states_scale.shape, bucket),
+            (bucket, signature.top_k, 2 * signature.intermediate_size)
+            if has_gemm1_lora_delta
+            else (0,),
+            (0,),
+        )
+    else:
+        profile_shapes = (
+            _profile_shape(case.output.shape, bucket),
+            _profile_shape(router_logits.shape, bucket),
+            (0,),
+            (0,),
+            _profile_shape(case.hidden_states.shape, bucket),
+            _profile_shape(case.hidden_states_scale.shape, bucket),
+            (0,),
+            (0,),
+        )
     return str((MOE_CUSTOM_OP, MOE_RUNNER, profile_shapes, ()))
 
 
@@ -303,25 +336,49 @@ def _load_moe_runtime() -> tuple[Any, Any, Any, Any]:
     )
 
 
+def _load_monolithic_moe_runtime() -> tuple[Any, Any, Any]:
+    try:
+        fused_moe = importlib.import_module("flashinfer.fused_moe")
+        monolithic_moe = fused_moe.trtllm_fp8_block_scale_moe
+        fp8_quantization_type = fused_moe.Fp8QuantizationType
+        weight_layout = fused_moe.WeightLayout
+    except (AttributeError, ImportError) as error:
+        raise MonolithicApiUnavailable(
+            "FlashInfer monolithic trtllm_fp8_block_scale_moe is unavailable"
+        ) from error
+    if not callable(monolithic_moe):
+        raise MonolithicApiUnavailable(
+            "FlashInfer monolithic trtllm_fp8_block_scale_moe is not callable"
+        )
+    return monolithic_moe, fp8_quantization_type, weight_layout
+
+
+def assert_monolithic_replay_supported() -> None:
+    """Fail before shmoo setup unless the pinned monolithic API is callable."""
+    assert_supported_flashinfer()
+    _load_monolithic_moe_runtime()
+
+
 def _validate_prepacked_tensor(
     payload: Mapping[str, object],
     name: str,
     *,
-    shape: tuple[int, ...],
-    dtype: torch.dtype,
+    local_num_experts: int,
+    dtypes: tuple[torch.dtype, ...],
     device: torch.device,
 ) -> torch.Tensor:
     tensor = payload.get(name)
     if not isinstance(tensor, torch.Tensor):
         raise ValueError(f"prepacked artifact is missing tensor {name}")
     tensor = cast(Any, tensor)
-    if tuple(tensor.shape) != shape:
+    if tensor.ndim == 0 or tensor.shape[0] != local_num_experts:
         raise ValueError(
-            f"prepacked artifact {name} shape mismatch: {tuple(tensor.shape)} != {shape}"
+            f"prepacked artifact {name} expert axis mismatch: "
+            f"{tuple(tensor.shape)} does not start with {local_num_experts}"
         )
-    if tensor.dtype != dtype:
+    if tensor.dtype not in dtypes:
         raise ValueError(
-            f"prepacked artifact {name} dtype mismatch: {tensor.dtype} != {dtype}"
+            f"prepacked artifact {name} dtype mismatch: {tensor.dtype} not in {dtypes}"
         )
     if tensor.device != device:
         raise ValueError(
@@ -377,37 +434,36 @@ def load_prepacked_weights(
         raise ValueError("prepacked artifact metadata local_expert_offset is invalid")
 
     experts = signature.local_num_experts
-    hidden = signature.hidden_size
-    intermediate = signature.intermediate_size
-    if hidden % 32 or intermediate % 32:
+    if signature.hidden_size % 32 or signature.intermediate_size % 32:
         raise ValueError("MXFP8 prepacked dimensions must be divisible by 32")
+    scale_dtypes = (torch.uint8, torch.float8_e8m0fnu)
     return PrepackedMoeWeights(
         gemm1_weights=_validate_prepacked_tensor(
             payload,
             "gemm1_weights",
-            shape=(experts, 2 * intermediate, hidden),
-            dtype=torch.float8_e4m3fn,
+            local_num_experts=experts,
+            dtypes=(torch.float8_e4m3fn,),
             device=device,
         ),
         gemm1_weights_scale=_validate_prepacked_tensor(
             payload,
             "gemm1_weights_scale",
-            shape=(experts, 2 * intermediate, hidden // 32),
-            dtype=torch.uint8,
+            local_num_experts=experts,
+            dtypes=scale_dtypes,
             device=device,
         ),
         gemm2_weights=_validate_prepacked_tensor(
             payload,
             "gemm2_weights",
-            shape=(experts, hidden, intermediate),
-            dtype=torch.float8_e4m3fn,
+            local_num_experts=experts,
+            dtypes=(torch.float8_e4m3fn,),
             device=device,
         ),
         gemm2_weights_scale=_validate_prepacked_tensor(
             payload,
             "gemm2_weights_scale",
-            shape=(experts, hidden, intermediate // 32),
-            dtype=torch.uint8,
+            local_num_experts=experts,
+            dtypes=scale_dtypes,
             device=device,
         ),
         local_expert_offset=local_expert_offset,
@@ -643,3 +699,66 @@ def run_moe_pair(
             signature.num_tokens, signature.top_k, signature.intermediate_size
         ),
     )
+
+
+def run_monolithic_moe_pair(
+    case: MoeKernelCase, router_logits: torch.Tensor
+) -> MoePairResult:
+    """Run the production-shaped monolithic FlashInfer FC1+FC2 invocation."""
+    assert_supported_flashinfer()
+    monolithic_moe, fp8_enum, weight_layout = _load_monolithic_moe_runtime()
+    if (
+        case.prepacked_weight_format != PREPACKED_ARTIFACT_FORMAT
+        or case.weight_layout != "MajorK"
+        or not case.use_shuffled_weight
+    ):
+        raise ValueError("MoE case does not contain validated prepacked MajorK weights")
+    signature = case.profile.signature
+    expected_shape = (signature.num_tokens, signature.global_num_experts)
+    if tuple(router_logits.shape) != expected_shape:
+        raise ValueError(
+            f"router_logits shape mismatch: {tuple(router_logits.shape)} "
+            f"!= {expected_shape}"
+        )
+    if router_logits.device != case.hidden_states.device:
+        raise ValueError("router_logits must be on the hidden-states device")
+    if not router_logits.is_floating_point() or not router_logits.is_contiguous():
+        raise ValueError("router_logits must be a contiguous floating-point tensor")
+
+    raw_result = monolithic_moe(
+        routing_logits=router_logits,
+        routing_bias=None,
+        hidden_states=case.hidden_states,
+        hidden_states_scale=case.hidden_states_scale,
+        gemm1_weights=case.gemm1_weights,
+        gemm1_weights_scale=case.gemm1_weights_scale,
+        gemm1_alpha=None,
+        gemm1_beta=None,
+        gemm1_clamp_limit=None,
+        gemm2_weights=case.gemm2_weights,
+        gemm2_weights_scale=case.gemm2_weights_scale,
+        num_experts=signature.global_num_experts,
+        top_k=signature.top_k,
+        n_group=None,
+        topk_group=None,
+        intermediate_size=signature.intermediate_size,
+        local_expert_offset=case.local_expert_offset,
+        local_num_experts=signature.local_num_experts,
+        routed_scaling_factor=None,
+        routing_method_type=case.routing_method_type,
+        use_shuffled_weight=case.use_shuffled_weight,
+        weight_layout=weight_layout.MajorK,
+        fp8_quantization_type=fp8_enum.MxFp8,
+        activation_type=case.activation_type,
+    )
+    if isinstance(raw_result, torch.Tensor):
+        final_output = raw_result
+    elif (
+        isinstance(raw_result, (tuple, list))
+        and raw_result
+        and isinstance(raw_result[0], torch.Tensor)
+    ):
+        final_output = raw_result[0]
+    else:
+        raise RuntimeError("unexpected FlashInfer final-output return contract")
+    return MoePairResult(final_output=final_output, activated_intermediate=None)

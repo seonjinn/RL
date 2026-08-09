@@ -55,6 +55,7 @@ class MicroMeasurementEvidence:
     fc1_stock_compared: bool
     fc2_stock_compared: bool
     within_upstream_mxfp8_bounds: bool
+    pair_final_stock_compared: bool = False
 
     @classmethod
     def from_json(cls, row: Mapping[str, object]) -> MicroMeasurementEvidence:
@@ -73,6 +74,9 @@ class MicroMeasurementEvidence:
         )
         if any(type(row.get(field_name)) is not bool for field_name in boolean_fields):
             raise ValueError("measurement evidence flags must be booleans")
+        pair_final_stock_compared = row.get("pair_final_stock_compared", False)
+        if type(pair_final_stock_compared) is not bool:
+            raise ValueError("pair_final_stock_compared must be a boolean")
         return cls(
             signature_key=signature_key,
             tactic=TacticPair.from_json(
@@ -87,6 +91,7 @@ class MicroMeasurementEvidence:
             within_upstream_mxfp8_bounds=cast(
                 bool, row["within_upstream_mxfp8_bounds"]
             ),
+            pair_final_stock_compared=cast(bool, pair_final_stock_compared),
         )
 
 
@@ -280,12 +285,20 @@ def validate_micro(
         if row.routing_counts_match is not True:
             failures.append(f"{label}: routing count mismatch")
             row_is_valid = False
-        if row.fc1_stock_compared is not True:
-            failures.append(f"{label}: missing FC1 stock comparison")
-            row_is_valid = False
-        if row.fc2_stock_compared is not True:
-            failures.append(f"{label}: missing FC2 stock comparison")
-            row_is_valid = False
+        if row.pair_final_stock_compared is not True:
+            if (
+                row.fc1_stock_compared is not True
+                and row.fc2_stock_compared is not True
+            ):
+                failures.append(f"{label}: missing pair final-output stock comparison")
+                row_is_valid = False
+            else:
+                if row.fc1_stock_compared is not True:
+                    failures.append(f"{label}: missing FC1 stock comparison")
+                    row_is_valid = False
+                if row.fc2_stock_compared is not True:
+                    failures.append(f"{label}: missing FC2 stock comparison")
+                    row_is_valid = False
         if row.within_upstream_mxfp8_bounds is not True:
             failures.append(f"{label}: outside upstream MXFP8 MoE numerical bounds")
             row_is_valid = False

@@ -81,7 +81,9 @@ def test_trace_dry_run_is_eager_and_metadata_only(tmp_path: Path) -> None:
     assert "expected_ranks = set(range(16))" in output
     assert 'row["runtime_fingerprint"] != expected_fingerprint' in output
     assert "autotune_cache_capture_root=disabled" in output
+    assert "prepacked_weight_capture_root=disabled" in output
     assert "export VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=" not in output
+    assert "export VLLM_MXFP8_MOE_PREPACKED_WEIGHT_DIR=" not in output
 
 
 def test_trace_dry_run_accepts_bounded_sampling_overrides(tmp_path: Path) -> None:
@@ -121,6 +123,28 @@ def test_trace_can_capture_one_persistent_stock_autotune_cache(
     assert "json.load" in output
 
 
+def test_trace_can_capture_actual_kernel_ready_moe_weights(
+    tmp_path: Path,
+) -> None:
+    weight_root = tmp_path / "captured-prepacked-weights"
+    output = _dry_run(
+        "submit_trace_ptyche.sh",
+        tmp_path,
+        {"PREPACKED_WEIGHT_CAPTURE_ROOT": str(weight_root)},
+    )
+
+    assert f"prepacked_weight_capture_root={weight_root}" in output
+    assert f"export VLLM_MXFP8_MOE_PREPACKED_WEIGHT_DIR={weight_root}" in output
+    assert "expected exactly one captured prepacked MXFP8 MoE weight artifact" in output
+    assert "flashinfer_mxfp8_moe_prepacked_v1.pt" in output
+    assert "prepacked_weight_capture.json" in output
+    assert "sha256" in output
+    assert "size_bytes" in output
+    assert output.index("prepacked_weight_capture.json") < output.index(
+        "trace_complete"
+    )
+
+
 def test_trace_uses_one_prepared_vllm_environment_for_driver_and_actors(
     tmp_path: Path,
 ) -> None:
@@ -134,14 +158,19 @@ def test_trace_uses_one_prepared_vllm_environment_for_driver_and_actors(
 
     driver_python = environment_root / "vllm-canonical" / "bin" / "python"
     assert f"export NEMO_RL_VENV_DIR={environment_root}" in output
-    assert f"export UV_PROJECT_ENVIRONMENT={environment_root / 'vllm-canonical'}" in output
+    assert (
+        f"export UV_PROJECT_ENVIRONMENT={environment_root / 'vllm-canonical'}" in output
+    )
     assert f"export VIRTUAL_ENV={environment_root / 'vllm-canonical'}" in output
     assert f"{driver_python} examples/run_grpo.py" in output
     assert "from vllm.model_executor.layers.fused_moe.routed_experts" in output
     assert "from vllm.model_executor.layers.fused_moe.runner.moe_runner" in output
     assert "Ray version mismatch before trace launch" in output
     source = (AUDIT_DIR / "submit_trace_ptyche.sh").read_text(encoding="ascii")
-    assert '[[ -L "${DRIVER_VENV}/bin/python" || -x "${DRIVER_VENV}/bin/python" ]]' in source
+    assert (
+        '[[ -L "${DRIVER_VENV}/bin/python" || -x "${DRIVER_VENV}/bin/python" ]]'
+        in source
+    )
     assert f"[[ -x {driver_python} ]]" in output
     assert "Prepared vLLM environment is missing" in source
 
@@ -174,6 +203,28 @@ def test_shmoo_dry_run_requests_one_gb200_for_five_hours(tmp_path: Path) -> None
     assert "single_gpu.sub" in output
 
 
+def test_shmoo_monolithic_replay_uses_captured_weights_and_explicit_bounds(
+    tmp_path: Path,
+) -> None:
+    captured_weights = tmp_path / "flashinfer_mxfp8_moe_prepacked_v1.pt"
+    output = _dry_run(
+        "submit_shmoo_ptyche.sh",
+        tmp_path,
+        {
+            "MOE_WEIGHTS": str(captured_weights),
+            "REPLAY_MODE": "monolithic",
+            "PROFILE_LIMIT": "8",
+            "TACTIC_LIMIT": "1000",
+        },
+    )
+
+    assert "replay_mode=monolithic" in output
+    assert f"--weights {captured_weights}" in output
+    assert "--monolithic-replay" in output
+    assert "--profile-limit 8" in output
+    assert "--tactic-limit 1000" in output
+
+
 def test_shmoo_synthetic_mode_uses_prepared_environment_without_stock_artifacts(
     tmp_path: Path,
 ) -> None:
@@ -196,7 +247,10 @@ def test_shmoo_synthetic_mode_uses_prepared_environment_without_stock_artifacts(
     assert "--stock-cache " not in output
     assert "--profile-limit 1" in output
     assert "--tactic-limit 2" in output
-    assert f"{driver_python} experiments/mxfp8_moe_tactic_audit/shmoo_moe_tactics.py" in output
+    assert (
+        f"{driver_python} experiments/mxfp8_moe_tactic_audit/shmoo_moe_tactics.py"
+        in output
+    )
     assert "source " not in output or "/nemo-rl.env" not in output
 
 
@@ -826,8 +880,11 @@ def test_shmoo_submit_keeps_selected_profiles_in_manifest_arguments(
     stock_cache = tmp_path / "cache/stock-input"
     stock_cache.mkdir(parents=True)
     (stock_cache / "autotune_configs.json").write_text("{}\n", encoding="ascii")
+    captured_weights = tmp_path / "flashinfer_mxfp8_moe_prepacked_v1.pt"
+    captured_weights.write_bytes(b"captured-weights")
     env.update(
         {
+            "MOE_WEIGHTS": str(captured_weights),
             "RUN_ID": "shmoo-submit-test",
             "SELECTED_PROFILES": str(selected_profiles),
             "STOCK_INPUT_CACHE_ROOT": str(stock_cache),

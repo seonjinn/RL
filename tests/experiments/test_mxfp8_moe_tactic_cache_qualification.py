@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib
+import csv
+from dataclasses import replace
 import hashlib
 import json
 import os
@@ -16,6 +18,7 @@ from experiments.mxfp8_moe_tactic_audit.qualify_cache import (
     QualificationDecision,
     audit_bucket,
     build_candidate_cache,
+    main as qualify_cache_main,
     qualify_bucket,
     select_cache_path,
 )
@@ -99,6 +102,35 @@ def test_rejects_candidate_when_any_row_fails_correctness() -> None:
 
     assert not decision.promoted
     assert decision.reason == "candidate failed correctness checks"
+
+
+@pytest.mark.parametrize(
+    "candidate_override",
+    [
+        {"warmups": 2},
+        {"repetitions": 9},
+        {"p95_us": 0.0},
+        {"max_abs_error": 0.11},
+    ],
+)
+def test_audit_rejects_incomplete_or_out_of_bounds_measurements(
+    candidate_override: dict[str, float | int],
+) -> None:
+    stock = _measurement("heavy", TacticPair(1, 2), 100.0)
+    candidate = replace(
+        _measurement("heavy", TacticPair(3, 4), 90.0),
+        **candidate_override,
+    )
+
+    audit = audit_bucket(
+        cache_key=_cache_key(16),
+        stock=stock.tactic,
+        candidate=candidate.tactic,
+        profile_weights={"heavy": 1.0},
+        measurements=(stock, candidate),
+    )
+
+    assert not audit.all_correct
 
 
 def _measurement(
@@ -699,3 +731,264 @@ def test_build_rejects_nonexact_or_absent_promoted_moe_keys(
             tmp_path / "absent-candidate",
             provenance=_provenance(tmp_path),
         )
+
+
+def _write_qualification_cli_inputs(tmp_path: Path) -> dict[str, Path]:
+    cache_key = _cache_key(16)
+    stock_cache = tmp_path / "stock.json"
+    stock_cache.write_text(
+        json.dumps(
+            {
+                "_metadata": {"runtime_marker": "runtime-a"},
+                cache_key: [MOE_RUNNER, [1, 2]],
+            }
+        ),
+        encoding="ascii",
+    )
+    selected_profiles = tmp_path / "selected_profiles.json"
+    selected_profiles.write_text(
+        json.dumps(
+            {
+                "covered_weight": 1.0,
+                "selected_profiles": [
+                    {
+                        "call_count": 60,
+                        "normalized_weight": 0.6,
+                        "signature_key": "heavy",
+                    },
+                    {
+                        "call_count": 40,
+                        "normalized_weight": 0.4,
+                        "signature_key": "light",
+                    },
+                ],
+            }
+        ),
+        encoding="ascii",
+    )
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text("trace\n", encoding="ascii")
+    trace_summary = tmp_path / "trace_summary.json"
+    trace_summary.write_text(
+        json.dumps(
+            {
+                "profiles": [
+                    {
+                        "cache_key": cache_key,
+                        "call_weight": 0.6,
+                        "signature_key": "heavy",
+                    },
+                    {
+                        "cache_key": cache_key,
+                        "call_weight": 0.4,
+                        "signature_key": "light",
+                    },
+                ],
+                "trace_paths": [trace.name],
+            }
+        ),
+        encoding="ascii",
+    )
+    tactics = {
+        TacticPair(1, 2): ((100.0, 0.01), (100.0, 0.01)),
+        TacticPair(3, 4): ((95.0, 0.02), (99.0, 0.02)),
+        TacticPair(5, 6): ((90.0, 0.04), (90.0, 0.04)),
+        TacticPair(7, 8): ((94.0, 0.01), (102.0, 0.01)),
+    }
+    shmoo = tmp_path / "shmoo.jsonl"
+    shmoo.write_text(
+        "".join(
+            json.dumps(
+                _measurement(signature, tactic, median, cv=cv).to_json(),
+                sort_keys=True,
+            )
+            + "\n"
+            for tactic, values in tactics.items()
+            for signature, (median, cv) in zip(("heavy", "light"), values, strict=True)
+        ),
+        encoding="ascii",
+    )
+    nsys_pairs = tmp_path / "nsys_pairs.csv"
+    with nsys_pairs.open("w", newline="", encoding="ascii") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "signature_key",
+                "cache_key",
+                "arm",
+                "component",
+                "tactic",
+                "comparison_tactic",
+                "cache_event",
+                "call_weight",
+                "call_count",
+                "mean_us",
+            ],
+        )
+        writer.writeheader()
+        for signature, weight in (("heavy", 60), ("light", 40)):
+            for tactic in tactics:
+                writer.writerow(
+                    {
+                        "signature_key": signature,
+                        "cache_key": cache_key,
+                        "arm": "stock",
+                        "component": "FC1+FC2/GEMM1+GEMM2",
+                        "tactic": "1,2",
+                        "comparison_tactic": f"{tactic.gemm1},{tactic.gemm2}",
+                        "cache_event": "cache hit",
+                        "call_weight": weight,
+                        "call_count": 1,
+                        "mean_us": 1,
+                    }
+                )
+                writer.writerow(
+                    {
+                        "signature_key": signature,
+                        "cache_key": cache_key,
+                        "arm": "candidate",
+                        "component": "FC1+FC2/GEMM1+GEMM2",
+                        "tactic": f"{tactic.gemm1},{tactic.gemm2}",
+                        "comparison_tactic": f"{tactic.gemm1},{tactic.gemm2}",
+                        "cache_event": "cache hit",
+                        "call_weight": weight,
+                        "call_count": 1,
+                        "mean_us": 1,
+                    }
+                )
+    runtime = tmp_path / "runtime.json"
+    runtime.write_text(
+        json.dumps(
+            {
+                "container_sha256": "c" * 64,
+                "cuda_graph_mode": "enabled",
+                "cuda_version": "13.0",
+                "dp_size": 16,
+                "ep_size": 1,
+                "flashinfer_version": "0.6.13",
+                "gpu_name": "NVIDIA GB200",
+                "model_revision": "qwen3-30b-a3b-revision",
+                "tp_size": 1,
+                "vllm_commit": "a" * 40,
+            }
+        ),
+        encoding="ascii",
+    )
+    return {
+        "nsys_pairs": nsys_pairs,
+        "runtime": runtime,
+        "selected_profiles": selected_profiles,
+        "shmoo": shmoo,
+        "stock_cache": stock_cache,
+        "trace_summary": trace_summary,
+    }
+
+
+def test_public_cli_selects_best_fully_eligible_pair_and_builds_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_flashinfer(tmp_path, monkeypatch)
+    inputs = _write_qualification_cli_inputs(tmp_path)
+    output = tmp_path / "candidate"
+
+    result = qualify_cache_main(
+        [
+            "--stock-cache",
+            str(inputs["stock_cache"]),
+            "--selected-profiles",
+            str(inputs["selected_profiles"]),
+            "--shmoo-results",
+            str(inputs["shmoo"]),
+            "--nsys-pairs",
+            str(inputs["nsys_pairs"]),
+            "--trace-summary",
+            str(inputs["trace_summary"]),
+            "--runtime-provenance",
+            str(inputs["runtime"]),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    assert result == 0
+    candidate = json.loads(
+        (output / "autotune_configs.json").read_text(encoding="ascii")
+    )
+    assert candidate[_cache_key(16)] == [MOE_RUNNER, [3, 4]]
+    decisions = json.loads(
+        (output / "qualification_decisions.json").read_text(encoding="ascii")
+    )
+    assert (
+        decisions["nsys_pairs_sha256"]
+        == hashlib.sha256(inputs["nsys_pairs"].read_bytes()).hexdigest()
+    )
+    assert decisions["decisions"][0]["signature_keys"] == ["heavy", "light"]
+
+
+def test_public_cli_rejects_signature_cache_mapping_disagreement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_flashinfer(tmp_path, monkeypatch)
+    inputs = _write_qualification_cli_inputs(tmp_path)
+    nsys = inputs["nsys_pairs"]
+    nsys.write_text(
+        nsys.read_text(encoding="ascii").replace(_cache_key(16), _cache_key(32)),
+        encoding="ascii",
+    )
+
+    result = qualify_cache_main(
+        [
+            "--stock-cache",
+            str(inputs["stock_cache"]),
+            "--selected-profiles",
+            str(inputs["selected_profiles"]),
+            "--shmoo-results",
+            str(inputs["shmoo"]),
+            "--nsys-pairs",
+            str(nsys),
+            "--trace-summary",
+            str(inputs["trace_summary"]),
+            "--runtime-provenance",
+            str(inputs["runtime"]),
+            "--output-dir",
+            str(tmp_path / "candidate"),
+        ]
+    )
+
+    assert result == 2
+    assert not (tmp_path / "candidate" / "autotune_configs.json").exists()
+
+
+def test_public_cli_rejects_candidate_nsys_rows_without_stock_pairs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_flashinfer(tmp_path, monkeypatch)
+    inputs = _write_qualification_cli_inputs(tmp_path)
+    nsys = inputs["nsys_pairs"]
+    rows = list(csv.DictReader(nsys.open(newline="", encoding="ascii")))
+    with nsys.open("w", newline="", encoding="ascii") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(row for row in rows if row["arm"] == "candidate")
+
+    result = qualify_cache_main(
+        [
+            "--stock-cache",
+            str(inputs["stock_cache"]),
+            "--selected-profiles",
+            str(inputs["selected_profiles"]),
+            "--shmoo-results",
+            str(inputs["shmoo"]),
+            "--nsys-pairs",
+            str(nsys),
+            "--trace-summary",
+            str(inputs["trace_summary"]),
+            "--runtime-provenance",
+            str(inputs["runtime"]),
+            "--output-dir",
+            str(tmp_path / "candidate"),
+        ]
+    )
+
+    assert result == 2
+    assert not (tmp_path / "candidate" / "autotune_configs.json").exists()

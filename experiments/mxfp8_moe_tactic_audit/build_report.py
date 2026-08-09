@@ -44,6 +44,8 @@ CORRECTNESS_GATES = (
     "cuda_graph_replay",
     "deterministic_generation",
 )
+PAIR_COMPONENT = "FC1+FC2/GEMM1+GEMM2"
+STAGE_COMPONENTS = ("FC1/GEMM1", "FC2/GEMM2")
 
 
 @dataclass(frozen=True)
@@ -222,6 +224,7 @@ def _validate_provenance(inputs: AuditInputs) -> tuple[tuple[str, str], ...]:
     decisions = load_json_object(inputs.qualification_decisions)
     decision_expected = {
         "cache_manifest_sha256": sha256_file(inputs.cache_manifest),
+        "nsys_pairs_sha256": sha256_file(inputs.nsys),
         "trace_set_sha256": _trace_set_sha256(inputs.trace_summary),
         "selected_profiles_sha256": sha256_file(inputs.selected_profiles),
         "shmoo_results_sha256": sha256_file(inputs.shmoo),
@@ -386,7 +389,7 @@ def _component_speedups(
             and component
         ):
             raise EvidenceError("NSys component row is malformed")
-        if component not in {"FC1/GEMM1", "FC2/GEMM2"} or arm not in {
+        if component not in {*STAGE_COMPONENTS, PAIR_COMPONENT} or arm not in {
             "stock",
             "candidate",
         }:
@@ -436,10 +439,22 @@ def _component_speedups(
         if key in indexed:
             raise EvidenceError("duplicate NSys component row")
         indexed[key] = (timing, count, event)
+    observed_components = {key[3] for key in indexed}
+    if PAIR_COMPONENT in observed_components and len(observed_components) != 1:
+        raise EvidenceError(
+            "NSys component evidence contains mixed pair and stage timings"
+        )
+    if observed_components == {PAIR_COMPONENT}:
+        report_components = (PAIR_COMPONENT,)
+    elif observed_components == set(STAGE_COMPONENTS):
+        report_components = STAGE_COMPONENTS
+    else:
+        raise EvidenceError("NSys component evidence is incomplete")
+
     results: list[tuple[str, float]] = []
     distribution: list[tuple[str, float]] = []
     hit_weight = fallback_weight = 0.0
-    for component in ("FC1/GEMM1", "FC2/GEMM2"):
+    for component in report_components:
         weighted = total = 0.0
         for signature, (cache_key, trace_weight) in profiles.items():
             stock, candidate = tactics[cache_key]
@@ -1019,7 +1034,7 @@ def _write_unexecuted(output_dir: Path, state: str, reason: str) -> AuditReport:
             "",
             "## Required Evidence",
             "",
-            "- steps 3-8; refit/rollout/logprob/train; explicit realized token counts; finite reward/loss/KL; 95% trace coverage; FC1/GEMM1 and FC2/GEMM2 component timings; cache hit/fallback; GSM8K; trace and qualification provenance.",
+            "- steps 3-8; refit/rollout/logprob/train; explicit realized token counts; finite reward/loss/KL; 95% trace coverage; measured FC1+FC2 pair timing or validated stage timings; cache hit/fallback; GSM8K; trace and qualification provenance.",
             "",
             "## Figures",
             "",

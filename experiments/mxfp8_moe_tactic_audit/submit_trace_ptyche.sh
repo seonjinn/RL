@@ -12,7 +12,7 @@ case "${ACTION}" in
     *) echo "Unsupported ACTION: ${ACTION}" >&2; exit 2 ;;
 esac
 
-EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-1de469ba64891f13c871ab008b42e7fdb970a817}
+EXPECTED_VLLM_COMMIT=${EXPECTED_VLLM_COMMIT:-b9eea5bbbec24a2af6acd0d92c02a3640a748e9c}
 MODEL=Qwen/Qwen3-30B-A3B
 CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
 WORK_ROOT=${WORK_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna}
@@ -34,6 +34,7 @@ TRACE_WARMUP_CALLS=${TRACE_WARMUP_CALLS:-192}
 TRACE_INTERVAL=${TRACE_INTERVAL:-127}
 TRACE_MAX_SAMPLES=${TRACE_MAX_SAMPLES:-512}
 AUTOTUNE_CACHE_CAPTURE_ROOT=${AUTOTUNE_CACHE_CAPTURE_ROOT:-}
+PREPACKED_WEIGHT_CAPTURE_ROOT=${PREPACKED_WEIGHT_CAPTURE_ROOT:-}
 case "${WANDB_ENABLED}" in
     true|false) ;;
     *) echo "WANDB_ENABLED must be true or false" >&2; exit 2 ;;
@@ -84,12 +85,20 @@ if [[ "${ACTION}" == submit ]]; then
             exit 1
         }
     fi
+    if [[ -n "${PREPACKED_WEIGHT_CAPTURE_ROOT}" ]]; then
+        [[ ! -e "${PREPACKED_WEIGHT_CAPTURE_ROOT}" ]] || {
+            echo "Prepacked weight capture root already exists: ${PREPACKED_WEIGHT_CAPTURE_ROOT}" >&2
+            exit 1
+        }
+    fi
 fi
 
 TRACE_DIR=${RUN_ROOT}/trace
 NEMO_RL_COMMIT=$(git -C "${REPO_DIR}" rev-parse HEAD)
 CACHE_SETUP_COMMAND='unset VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR'
 CACHE_FINALIZE_COMMAND=''
+WEIGHT_CAPTURE_SETUP_COMMAND=''
+WEIGHT_CAPTURE_FINALIZE_COMMAND=''
 if [[ -n "${AUTOTUNE_CACHE_CAPTURE_ROOT}" ]]; then
     CACHE_RAW_ROOT=${AUTOTUNE_CACHE_CAPTURE_ROOT}/raw
     CACHE_OUTPUT=${AUTOTUNE_CACHE_CAPTURE_ROOT}/autotune_configs.json
@@ -114,6 +123,46 @@ if not isinstance(payload, dict) or not any(key != "_metadata" for key in payloa
 PY
 install -m 0444 "\${generated_caches[0]}" ${CACHE_OUTPUT}
 printf 'captured_cache=%s\n' ${CACHE_OUTPUT}
+EOF
+)
+fi
+if [[ -n "${PREPACKED_WEIGHT_CAPTURE_ROOT}" ]]; then
+    WEIGHT_CAPTURE_SETUP_COMMAND="mkdir -p ${PREPACKED_WEIGHT_CAPTURE_ROOT}
+export VLLM_MXFP8_MOE_PREPACKED_WEIGHT_DIR=${PREPACKED_WEIGHT_CAPTURE_ROOT}"
+    WEIGHT_CAPTURE_METADATA=${PREPACKED_WEIGHT_CAPTURE_ROOT}/prepacked_weight_capture.json
+    WEIGHT_CAPTURE_FINALIZE_COMMAND=$(cat <<EOF
+mapfile -d '' captured_weights < <(
+  find ${PREPACKED_WEIGHT_CAPTURE_ROOT} -type f \
+    -name flashinfer_mxfp8_moe_prepacked_v1.pt -size +0c -print0
+)
+[[ "\${#captured_weights[@]}" -eq 1 ]] || {
+  echo "expected exactly one captured prepacked MXFP8 MoE weight artifact, found \${#captured_weights[@]}" >&2
+  exit 1
+}
+${DRIVER_VENV}/bin/python - "\${captured_weights[0]}" ${WEIGHT_CAPTURE_METADATA} <<'PY'
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+artifact = Path(sys.argv[1])
+output = Path(sys.argv[2])
+digest = hashlib.sha256()
+with artifact.open("rb") as handle:
+    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        digest.update(chunk)
+payload = {
+    "artifact": str(artifact),
+    "sha256": digest.hexdigest(),
+    "size_bytes": artifact.stat().st_size,
+}
+temporary = output.with_suffix(f"{output.suffix}.tmp-{os.getpid()}")
+temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="ascii")
+temporary.replace(output)
+PY
+printf 'captured_prepacked_weight=%s\n' "\${captured_weights[0]}"
+printf 'captured_prepacked_weight_metadata=%s\n' ${WEIGHT_CAPTURE_METADATA}
 EOF
 )
 fi
@@ -172,6 +221,7 @@ for audit_module in \
   }
 done
 ${CACHE_SETUP_COMMAND}
+${WEIGHT_CAPTURE_SETUP_COMMAND}
 export VLLM_MXFP8_MOE_TRACE_DIR=${TRACE_DIR}
 export VLLM_MXFP8_MOE_TRACE_WARMUP_CALLS=${TRACE_WARMUP_CALLS}
 export VLLM_MXFP8_MOE_TRACE_INTERVAL=${TRACE_INTERVAL}
@@ -252,6 +302,7 @@ if observed_ranks != expected_ranks:
     )
 PY
 ${CACHE_FINALIZE_COMMAND}
+${WEIGHT_CAPTURE_FINALIZE_COMMAND}
 touch ${RUN_ROOT}/trace_complete
 EOF
 )
@@ -280,6 +331,11 @@ if [[ -n "${AUTOTUNE_CACHE_CAPTURE_ROOT}" ]]; then
     printf 'autotune_cache_capture_root=%s\n' "${AUTOTUNE_CACHE_CAPTURE_ROOT}"
 else
     printf 'autotune_cache_capture_root=disabled\n'
+fi
+if [[ -n "${PREPACKED_WEIGHT_CAPTURE_ROOT}" ]]; then
+    printf 'prepacked_weight_capture_root=%s\n' "${PREPACKED_WEIGHT_CAPTURE_ROOT}"
+else
+    printf 'prepacked_weight_capture_root=disabled\n'
 fi
 printf 'sbatch_args='; printf ' %q' "${SBATCH_ARGS[@]}"; printf '\n'
 printf '%s\n' "${COMMAND}"
