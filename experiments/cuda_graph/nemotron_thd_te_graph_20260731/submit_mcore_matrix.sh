@@ -31,6 +31,9 @@ driver=${script_dir}/scripts/run_mcore_training.py
 slurm_segment_helper=${script_dir}/slurm_segment.py
 rows=${MCORE_TEST_ROWS:-}
 [[ -n "${rows}" ]] || fail "MCORE_TEST_ROWS must contain one or more literal row IDs"
+test_variant=${MCORE_TEST_VARIANT:-default}
+[[ "${test_variant}" =~ ^[a-z0-9][a-z0-9-]{0,47}$ ]] || \
+  fail "MCORE_TEST_VARIANT must contain 1-48 lowercase letters, digits, or hyphens"
 [[ -f "${slurm_segment_helper}" ]] || fail "Missing SLURM segment resolver"
 
 selection=$(python3 - "${driver}" "${matrix}" "${rows}" <<'PY'
@@ -152,13 +155,13 @@ runtime_attestation_command=${script_dir}/verify_runtime_attestation.py
 artifacts=$(SELECTION=${selection} python3 - "${driver}" "${mcore_root}" \
   "${RUN_LOG_ROOT}" "${MCORE_CANDIDATE_SHA}" "${integration_sha}" \
   "${PROFILE_SHA256}" "${RUNTIME_FEATURE_SET}" "${RUNTIME_EXCLUDED_PACKAGES}" \
-  "${TORCH_CUDA_ARCH_LIST}" "${NVTE_CUDA_ARCHS}" <<'PY'
+  "${TORCH_CUDA_ARCH_LIST}" "${NVTE_CUDA_ARCHS}" "${test_variant}" <<'PY'
 import importlib.util
 import os
 import sys
 from pathlib import Path
 
-driver_path, repository, run_log_root, candidate_sha, integration_sha, profile_sha256, feature_set, excluded, torch_arch, nvte_arch = sys.argv[1:]
+driver_path, repository, run_log_root, candidate_sha, integration_sha, profile_sha256, feature_set, excluded, torch_arch, nvte_arch, test_variant = sys.argv[1:]
 spec = importlib.util.spec_from_file_location("run_mcore_training", driver_path)
 if spec is None or spec.loader is None:
     raise SystemExit("unable to load typed MCore driver")
@@ -175,6 +178,7 @@ payload = {
     "excluded_packages": excluded.split(","),
     "torch_cuda_arch_list": torch_arch,
     "nvte_cuda_archs": nvte_arch,
+    "test_variant": test_variant,
     "rows": [line.split("\t")[0] for line in os.environ["SELECTION"].splitlines()],
 }
 artifacts = module.prepare_candidate_submission(
@@ -196,8 +200,8 @@ while IFS=$'\t' read -r row_id world_size num_nodes gpus_per_node; do
   segment_size=$(python3 "${slurm_segment_helper}" \
     --cluster "${CLUSTER}" --num-nodes "${num_nodes}" \
     --configured "${SBATCH_SEGMENT_SIZE}") || fail "SLURM segment resolution failed"
-  exports="ALL,TEST_ROW_ID=${row_id},TEST_WORLD_SIZE=${world_size},TEST_NUM_NODES=${num_nodes},TEST_GPUS_PER_NODE=${gpus_per_node},CANDIDATE_KIND=mcore,CANDIDATE_SHA=${MCORE_CANDIDATE_SHA},INTEGRATION_SHA=${integration_sha},CANDIDATE_SOURCE_ROOT=${snapshot},CANDIDATE_SNAPSHOT_SHA256=${snapshot_sha256},RUN_LOG_ROOT=${RUN_LOG_ROOT},TEST_MATRIX=${matrix},RUNNER_PATH=${driver},CONTAINER=${CONTAINER},CONTAINER_SHA256=${CONTAINER_SHA256},MOUNTS=${MOUNTS},EXPECTED_TE_SHA=${EXPECTED_TE_SHA},EXPECTED_TE_VERSION_BASE_SHA=${EXPECTED_TE_VERSION_BASE_SHA},RUNTIME_ATTESTATION=${RUNTIME_ATTESTATION},RUNTIME_PREFLIGHT_JOB_ID=${RUNTIME_PREFLIGHT_JOB_ID},EXPECTED_UV_EXECUTABLE=${UV_EXECUTABLE},SUBMISSION_INTENT=${intent},SUBMISSION_INTENT_SHA256=${intent_sha256},REPO_ROOT=${repo_root},EXPECTED_NEMORL_SHA=${EXPECTED_NEMORL_SHA},EXPECTED_BRIDGE_SHA=${EXPECTED_BRIDGE_SHA},EXPECTED_MCORE_SHA=${EXPECTED_MCORE_SHA},SOURCE_PROVENANCE_VERIFIER=${source_provenance_verifier},RUNTIME_ATTESTATION_COMMAND=${runtime_attestation_command},RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET},RUNTIME_EXCLUDED_PACKAGES=${RUNTIME_EXCLUDED_PACKAGES},TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST},NVTE_CUDA_ARCHS=${NVTE_CUDA_ARCHS}"
-  job_name="${ACCOUNT}-cuda-graph.mcore-${row_id}"
+  exports="ALL,TEST_ROW_ID=${row_id},TEST_VARIANT=${test_variant},TEST_WORLD_SIZE=${world_size},TEST_NUM_NODES=${num_nodes},TEST_GPUS_PER_NODE=${gpus_per_node},CANDIDATE_KIND=mcore,CANDIDATE_SHA=${MCORE_CANDIDATE_SHA},INTEGRATION_SHA=${integration_sha},CANDIDATE_SOURCE_ROOT=${snapshot},CANDIDATE_SNAPSHOT_SHA256=${snapshot_sha256},RUN_LOG_ROOT=${RUN_LOG_ROOT},TEST_MATRIX=${matrix},RUNNER_PATH=${driver},CONTAINER=${CONTAINER},CONTAINER_SHA256=${CONTAINER_SHA256},MOUNTS=${MOUNTS},EXPECTED_TE_SHA=${EXPECTED_TE_SHA},EXPECTED_TE_VERSION_BASE_SHA=${EXPECTED_TE_VERSION_BASE_SHA},RUNTIME_ATTESTATION=${RUNTIME_ATTESTATION},RUNTIME_PREFLIGHT_JOB_ID=${RUNTIME_PREFLIGHT_JOB_ID},EXPECTED_UV_EXECUTABLE=${UV_EXECUTABLE},SUBMISSION_INTENT=${intent},SUBMISSION_INTENT_SHA256=${intent_sha256},REPO_ROOT=${repo_root},EXPECTED_NEMORL_SHA=${EXPECTED_NEMORL_SHA},EXPECTED_BRIDGE_SHA=${EXPECTED_BRIDGE_SHA},EXPECTED_MCORE_SHA=${EXPECTED_MCORE_SHA},SOURCE_PROVENANCE_VERIFIER=${source_provenance_verifier},RUNTIME_ATTESTATION_COMMAND=${runtime_attestation_command},RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET},RUNTIME_EXCLUDED_PACKAGES=${RUNTIME_EXCLUDED_PACKAGES},TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST},NVTE_CUDA_ARCHS=${NVTE_CUDA_ARCHS}"
+  job_name="${ACCOUNT}-cuda-graph.mcore-${row_id}.${test_variant}"
   command=(sbatch --parsable "--nodes=${num_nodes}" "--account=${ACCOUNT}" "--partition=${PARTITION}" "--time=${TIME_LIMIT}" "--job-name=${job_name}" "--output=${RUN_LOG_ROOT}/slurm/mcore-${row_id}-%j.log" "--export=${exports}")
   if [[ "${SBATCH_GRES}" != none ]]; then
     command+=("--gres=${SBATCH_GRES}")
