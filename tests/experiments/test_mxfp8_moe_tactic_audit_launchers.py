@@ -461,6 +461,26 @@ def test_performance_only_validation_omits_correctness_inputs(tmp_path: Path) ->
     assert "gsm8k_vllm_eval.py" not in output
 
 
+def test_validation_checks_the_runtime_hashed_cache_copy(tmp_path: Path) -> None:
+    """Catch a canonical cache that vLLM would ignore at runtime."""
+    runtime_hash = "a" * 64
+    cache_root = tmp_path / "candidate-cache"
+    output = _dry_run(
+        "submit_validation_ptyche.sh",
+        tmp_path,
+        {
+            "ARM": "candidate",
+            "CANDIDATE_CACHE_ROOT": str(cache_root),
+            "FLASHINFER_RUNTIME_CACHE_HASH": runtime_hash,
+        },
+    )
+
+    canonical = cache_root / "autotune_configs.json"
+    runtime = cache_root / runtime_hash / "autotune_configs.json"
+    assert f"cmp -s {canonical} {runtime}" in output
+    assert f"--cache-root {cache_root}" in output
+
+
 def test_compare_mode_is_the_only_cross_arm_validation_path(tmp_path: Path) -> None:
     """Catch run-mode validation reading artifacts from the other arm."""
     output = _dry_run(

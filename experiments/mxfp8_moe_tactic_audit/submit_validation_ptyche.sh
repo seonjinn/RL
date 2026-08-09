@@ -42,12 +42,18 @@ PARTITION=${PARTITION:-batch}
 QOS=${QOS:-}
 VLLM_ENVIRONMENT_ROOT=${VLLM_ENVIRONMENT_ROOT:-}
 DRIVER_VENV=${DRIVER_VENV:-${VLLM_ENVIRONMENT_ROOT:+${VLLM_ENVIRONMENT_ROOT}/vllm-canonical}}
+FLASHINFER_RUNTIME_CACHE_HASH=${FLASHINFER_RUNTIME_CACHE_HASH:-}
 GSM8K_EVALUATOR=${GSM8K_EVALUATOR:-${WORK_ROOT}/vllm-benchmark/experiments/eval/gsm8k_vllm_eval.py}
 GSM8K_DATASET=${GSM8K_DATASET:-${WORK_ROOT}/vllm-benchmark/experiments/eval/data/gsm8k_test_openai_1319.jsonl}
 VLLM_SERVER_PORT=${VLLM_SERVER_PORT:-18000}
 case "${ARM}" in stock) CACHE_ROOT=${STOCK_CACHE_ROOT} ;; candidate) CACHE_ROOT=${CANDIDATE_CACHE_ROOT} ;; esac
 CACHE_FILE=${CACHE_ROOT}/autotune_configs.json
 CACHE_MANIFEST=${CACHE_MANIFEST:-${CANDIDATE_CACHE_ROOT}/cache_manifest.json}
+RUNTIME_CACHE_FILE=${CACHE_ROOT}/${FLASHINFER_RUNTIME_CACHE_HASH}/autotune_configs.json
+if [[ -n "${FLASHINFER_RUNTIME_CACHE_HASH}" && ! "${FLASHINFER_RUNTIME_CACHE_HASH}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "FLASHINFER_RUNTIME_CACHE_HASH must be a lowercase SHA-256 string" >&2
+    exit 2
+fi
 
 if [[ "${VALIDATION_MODE}" == compare ]]; then
     COMPARE_ROOT=${COMPARE_ROOT:-${WORK_ROOT}/experiments/mxfp8-moe-tactic-audit/validation}
@@ -77,6 +83,10 @@ if [[ "${ACTION}" != dry-run ]]; then
     IFS=$'\t' read -r MODEL_SNAPSHOT MODEL_REVISION < <(audit_resolve_model_snapshot "${HF_MODEL_CACHE_DIR}" 16)
     audit_require_nonempty_dir "${CACHE_ROOT}"
     [[ -s "${CACHE_FILE}" ]] || { echo "Missing runtime tactic cache: ${CACHE_FILE}" >&2; exit 1; }
+    if [[ -n "${FLASHINFER_RUNTIME_CACHE_HASH}" ]]; then
+        [[ -s "${RUNTIME_CACHE_FILE}" ]] || { echo "Missing vLLM-resolved runtime tactic cache: ${RUNTIME_CACHE_FILE}" >&2; exit 1; }
+        cmp -s "${CACHE_FILE}" "${RUNTIME_CACHE_FILE}" || { echo "Canonical and vLLM-resolved runtime tactic caches differ" >&2; exit 1; }
+    fi
     [[ -f "${CACHE_MANIFEST}" ]] || { echo "Missing qualification cache manifest: ${CACHE_MANIFEST}" >&2; exit 1; }
     [[ -f "${CONTAINER}" ]] || { echo "Missing container: ${CONTAINER}" >&2; exit 1; }
     [[ ! -e "${RUN_ROOT}" ]] || { echo "Run root already exists: ${RUN_ROOT}" >&2; exit 1; }
@@ -101,7 +111,7 @@ if [[ "${RUN_CORRECTNESS}" == true ]]; then
     VALIDATION_EXECUTION_INPUTS+=("${GSM8K_EVALUATOR}")
 fi
 if [[ "${ACTION}" != dry-run ]]; then
-    CACHE_SHA256=$(audit_sha256_path "${CACHE_FILE}")
+    CACHE_SHA256=$(audit_sha256_path "${CACHE_ROOT}")
     MODEL_SHA256=$(audit_sha256_path "${MODEL_SNAPSHOT}")
     RECIPE_SHA256=$(audit_sha256_path "${REPO_DIR}/${CONFIG}")
     SCRIPTS_SHA256=$(audit_scripts_sha256 "${SCRIPT_DIR}")
@@ -163,6 +173,7 @@ export HF_HOME=${WORK_ROOT}/hf
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=${CACHE_ROOT}
+if [[ -n "${FLASHINFER_RUNTIME_CACHE_HASH}" ]]; then cmp -s ${CACHE_FILE} ${RUNTIME_CACHE_FILE} || { echo "Runtime tactic cache drifted after submit preflight" >&2; exit 1; }; fi
 export MXFP8_MOE_CUDA_GRAPH_REPLAY=required
 export VLLM_TENSOR_PARALLEL_SIZE=1
 export VLLM_EXPERT_PARALLEL_SIZE=1
@@ -198,6 +209,6 @@ case "${ACTION}" in
   dry-run) ;;
   test-only) CONTAINER=${CONTAINER} MOUNTS=/lustre:/lustre COMMAND="${COMMAND}" GPUS_PER_NODE=4 BASE_LOG_DIR="${RUN_ROOT}" sbatch --test-only "${SBATCH_ARGS[@]}" "${REPO_DIR}/ray.sub" ;;
   submit)
-    audit_write_manifest "${RUN_ROOT}" validation "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" "${EXPECTED_VLLM_COMMIT}" "${CONTAINER}" "${CONFIG}" "${MODEL_SNAPSHOT}" "${CACHE_FILE}" "${VALIDATION_EXECUTION_INPUTS[0]}" "${VALIDATION_EXECUTION_INPUTS[@]:1}"
+    audit_write_manifest "${RUN_ROOT}" validation "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" "${EXPECTED_VLLM_COMMIT}" "${CONTAINER}" "${CONFIG}" "${MODEL_SNAPSHOT}" "${CACHE_ROOT}" "${VALIDATION_EXECUTION_INPUTS[0]}" "${VALIDATION_EXECUTION_INPUTS[@]:1}"
     CONTAINER=${CONTAINER} MOUNTS=/lustre:/lustre COMMAND="${COMMAND}" GPUS_PER_NODE=4 BASE_LOG_DIR="${RUN_ROOT}" sbatch "${SBATCH_ARGS[@]}" "${REPO_DIR}/ray.sub" ;;
 esac
