@@ -32,6 +32,7 @@ def _dry_run(
         "RUN_ID": "launcher-test",
         "REPO_DIR_OVERRIDE": str(REPO_ROOT),
         "CUSTOM_VLLM_ROOT": str(tmp_path / "vllm"),
+        "VLLM_ENVIRONMENT_ROOT": str(tmp_path / "prepared-vllm-environment"),
         "CONTAINER": str(tmp_path / "nemo-rl.sqsh"),
     }
     if extra_env is not None:
@@ -76,6 +77,30 @@ def test_trace_dry_run_is_eager_and_metadata_only(tmp_path: Path) -> None:
     assert "CACHE_ROOT=" not in (AUDIT_DIR / "submit_trace_ptyche.sh").read_text(
         encoding="ascii"
     )
+
+
+def test_trace_uses_one_prepared_vllm_environment_for_driver_and_actors(
+    tmp_path: Path,
+) -> None:
+    """Catch fallback to the stale container Python or an unprepared actor env."""
+    environment_root = tmp_path / "prepared-vllm-environment"
+    output = _dry_run(
+        "submit_trace_ptyche.sh",
+        tmp_path,
+        {"VLLM_ENVIRONMENT_ROOT": str(environment_root)},
+    )
+
+    driver_python = environment_root / "vllm-canonical" / "bin" / "python"
+    assert f"export NEMO_RL_VENV_DIR={environment_root}" in output
+    assert f"export UV_PROJECT_ENVIRONMENT={environment_root / 'vllm-canonical'}" in output
+    assert f"export VIRTUAL_ENV={environment_root / 'vllm-canonical'}" in output
+    assert f"{driver_python} examples/run_grpo.py" in output
+    assert "from vllm.model_executor.layers.fused_moe.routed_experts" in output
+    assert "from vllm.model_executor.layers.fused_moe.runner.moe_runner" in output
+    assert "Ray version mismatch before trace launch" in output
+    assert "Prepared vLLM environment is missing" in (
+        AUDIT_DIR / "submit_trace_ptyche.sh"
+    ).read_text(encoding="ascii")
 
 
 def test_shmoo_dry_run_requests_one_gb200_for_five_hours(tmp_path: Path) -> None:

@@ -20,6 +20,8 @@ if [[ -n "${RUN_ID:-}" ]]; then RUN_ID=${RUN_ID}; elif [[ "${ACTION}" == submit 
 RUN_ROOT=${RUN_ROOT:-${WORK_ROOT}/experiments/mxfp8-moe-tactic-audit/trace/${RUN_ID}}
 CONTAINER=${CONTAINER:-${WORK_ROOT}/containers/nemo_rl_nightly_20260711_vllm025_ffmpeg_20260713_1218.sqsh}
 CUSTOM_VLLM_ROOT=${CUSTOM_VLLM_ROOT:-${REPO_DIR}/3rdparty/vllm}
+VLLM_ENVIRONMENT_ROOT=${VLLM_ENVIRONMENT_ROOT:-}
+DRIVER_VENV=${VLLM_ENVIRONMENT_ROOT:+${VLLM_ENVIRONMENT_ROOT}/vllm-canonical}
 HF_MODEL_CACHE_DIR=${HF_MODEL_CACHE_DIR:-${WORK_ROOT}/hf/hub/models--Qwen--Qwen3-30B-A3B}
 HF_HOME=${HF_HOME:-${WORK_ROOT}/hf}
 HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-${HF_HOME}/datasets}
@@ -40,6 +42,18 @@ fi
 MODEL_SNAPSHOT=dry-run-not-validated
 MODEL_REVISION=dry-run-not-validated
 if [[ "${ACTION}" != dry-run ]]; then
+    [[ -n "${VLLM_ENVIRONMENT_ROOT}" ]] || {
+        echo "VLLM_ENVIRONMENT_ROOT must name a prepared vLLM environment" >&2
+        exit 1
+    }
+    [[ -x "${DRIVER_VENV}/bin/python" ]] || {
+        echo "Prepared vLLM environment is missing: ${DRIVER_VENV}" >&2
+        exit 1
+    }
+    [[ -f "${VLLM_ENVIRONMENT_ROOT}/READY" ]] || {
+        echo "Prepared vLLM environment marker is missing: ${VLLM_ENVIRONMENT_ROOT}/READY" >&2
+        exit 1
+    }
     IFS=$'\t' read -r MODEL_SNAPSHOT MODEL_REVISION < <(
         audit_resolve_model_snapshot "${HF_MODEL_CACHE_DIR}" 16
     )
@@ -60,6 +74,10 @@ runtime_vllm_commit=\$(git -C ${CUSTOM_VLLM_ROOT} rev-parse HEAD)
 [[ "\${runtime_nemo_rl_commit}" == "${NEMO_RL_COMMIT}" ]]
 [[ "\${runtime_vllm_commit}" == "${EXPECTED_VLLM_COMMIT}" ]]
 export VLLM_MXFP8_AUDIT_SOURCE_ROOT=${CUSTOM_VLLM_ROOT}
+export NEMO_RL_VENV_DIR=${VLLM_ENVIRONMENT_ROOT}
+export UV_PROJECT_ENVIRONMENT=${DRIVER_VENV}
+export VIRTUAL_ENV=${DRIVER_VENV}
+export PATH=${DRIVER_VENV}/bin:\${PATH}
 PYTHON_OVERLAY=${RUN_ROOT}/python-overlay
 mkdir -p \${PYTHON_OVERLAY}
 cat > \${PYTHON_OVERLAY}/sitecustomize.py <<'PY'
@@ -112,7 +130,26 @@ export HF_DATASETS_CACHE=${HF_DATASETS_CACHE}
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 mkdir -p ${TRACE_DIR}
-python examples/run_grpo.py \\
+container_ray_version=\$(/opt/nemo_rl_venv/bin/python -c 'import ray; print(ray.__version__)')
+prepared_ray_version=\$(${DRIVER_VENV}/bin/python -c 'import ray; print(ray.__version__)')
+[[ "\${container_ray_version}" == "\${prepared_ray_version}" ]] || {
+  echo "Ray version mismatch before trace launch: container=\${container_ray_version}, prepared=\${prepared_ray_version}" >&2
+  exit 1
+}
+${DRIVER_VENV}/bin/python - <<'PY'
+import flashinfer
+import vllm
+from vllm.model_executor.layers.fused_moe.routed_experts import RoutedExperts
+from vllm.model_executor.layers.fused_moe.runner.moe_runner import MoERunner
+
+if vllm.__version__ != "0.25.1":
+    raise RuntimeError(f"Expected vLLM 0.25.1, found {vllm.__version__}")
+if flashinfer.__version__ != "0.6.13":
+    raise RuntimeError(f"Expected FlashInfer 0.6.13, found {flashinfer.__version__}")
+print(f"vLLM={vllm.__version__} FlashInfer={flashinfer.__version__}")
+print(f"MoE API={RoutedExperts.__name__}/{MoERunner.__name__}")
+PY
+${DRIVER_VENV}/bin/python examples/run_grpo.py \\
   --config ${CONFIG} \\
   cluster.num_nodes=4 \\
   cluster.gpus_per_node=4 \\
@@ -127,7 +164,7 @@ python examples/run_grpo.py \\
   logger.log_dir=${RUN_ROOT}/logs \\
   logger.wandb_enabled=${WANDB_ENABLED}
 find ${TRACE_DIR} -type f -name '*.jsonl' -size +0c -print -quit | grep -q .
-python - ${TRACE_DIR} ${NEMO_RL_COMMIT}-${EXPECTED_VLLM_COMMIT} <<'PY'
+${DRIVER_VENV}/bin/python - ${TRACE_DIR} ${NEMO_RL_COMMIT}-${EXPECTED_VLLM_COMMIT} <<'PY'
 import json
 import re
 import sys
