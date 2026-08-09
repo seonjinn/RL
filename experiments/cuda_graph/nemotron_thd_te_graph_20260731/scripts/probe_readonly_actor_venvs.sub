@@ -74,7 +74,8 @@ done
   echo "Staged uv and Python must be executable" >&2
   exit 2
 }
-if find "${RUNTIME_STAGE_ROOT}" -xdev -perm /222 -print -quit | grep -q .; then
+if find "${RUNTIME_STAGE_ROOT}" -xdev \( -type f -o -type d \) \
+  -perm /222 -print -quit | grep -q .; then
   echo "RUNTIME_STAGE_ROOT must be read-only before the actor-venv probe" >&2
   exit 2
 fi
@@ -114,7 +115,8 @@ probe_tier() {
 probe_tier vllm vllm
 probe_tier mcore megatron.core
 
-if find "${RUNTIME_STAGE_ROOT}" -xdev -perm /222 -print -quit | grep -q .; then
+if find "${RUNTIME_STAGE_ROOT}" -xdev \( -type f -o -type d \) \
+  -perm /222 -print -quit | grep -q .; then
   echo "Actor-venv probe made the immutable runtime writable" >&2
   exit 2
 fi
