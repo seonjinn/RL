@@ -28,6 +28,7 @@ CUMULATIVE_COMPONENTS = (
 
 
 def _range_fields(value: str) -> dict[str, str] | None:
+    value = value.removeprefix(":")
     if not value.startswith(PREFIX):
         return None
     result: dict[str, str] = {}

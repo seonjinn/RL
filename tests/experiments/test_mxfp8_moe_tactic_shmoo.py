@@ -159,7 +159,7 @@ def test_pair_only_range_is_preserved_without_false_fc1_fc2_split(
         writer.writeheader()
         writer.writerow(
             {
-                "Range": labels[0],
+                "Range": f":{labels[0]}",
                 "Range Instances": 2,
                 "Total Proj Time (ns)": 200_000,
             }
