@@ -148,13 +148,13 @@ ROWS: tuple[MetricRow, ...] = (
         "family": "Throughput",
         "model": "Nemotron3 Super",
         "metric": "E2E",
-        "improvement_pct": -1.82,
+        "improvement_pct": -1.83,
     },
     {
         "family": "Throughput",
         "model": "Nemotron3 Super",
         "metric": "Generation",
-        "improvement_pct": -2.43,
+        "improvement_pct": -2.41,
     },
     {
         "family": "Throughput",

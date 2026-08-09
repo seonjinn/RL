@@ -26,6 +26,10 @@ class SummaryChartTest(unittest.TestCase):
             rows[("Step time", "Qwen3-235B-A22B", "Generation")], -0.83
         )
         self.assertAlmostEqual(rows[("Step time", "Nemotron3 Super", "Policy")], 44.00)
+        self.assertAlmostEqual(rows[("Throughput", "Nemotron3 Super", "E2E")], -1.83)
+        self.assertAlmostEqual(
+            rows[("Throughput", "Nemotron3 Super", "Generation")], -2.41
+        )
         self.assertAlmostEqual(rows[("Throughput", "Nemotron3 Super", "LogProb")], 8.90)
 
     def test_renderer_writes_png_and_pdf_for_both_metric_families(self) -> None:
