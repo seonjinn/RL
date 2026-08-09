@@ -228,8 +228,8 @@ def cache_key_for_case(
         profile_shapes = (
             _profile_shape(case.output.shape, bucket),
             _profile_shape(router_logits.shape, bucket),
-            (0,),
-            (0,),
+            (bucket,),
+            (bucket,),
             _profile_shape(case.hidden_states.shape, bucket),
             _profile_shape(case.hidden_states_scale.shape, bucket),
             (0,),

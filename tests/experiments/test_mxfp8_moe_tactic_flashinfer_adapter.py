@@ -619,8 +619,8 @@ def test_cache_key_for_monolithic_case_includes_router_logits_shape() -> None:
     assert key[2] == (
         (32, 64),
         (32, 4),
-        (0,),
-        (0,),
+        (32,),
+        (32,),
         (32, 64),
         (32, 2),
         (0,),
