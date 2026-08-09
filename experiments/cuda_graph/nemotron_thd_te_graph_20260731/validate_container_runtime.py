@@ -688,11 +688,17 @@ def main() -> None:
             expected_source_commit=args.expected_te_commit,
             expected_version_base_commit=args.expected_te_version_base_commit,
         )
+        deep_ep_identity: dict[str, str] = {}
+        if args.runtime_feature_set in HYBRIDEP_FEATURE_SETS:
+            deep_ep_identity["deep_ep_vcs_commit"] = _distribution_vcs_commit(
+                "deep-ep"
+            )
         payload = {
             "status": "passed",
             **context,
             "transformer_engine_vcs_commit": te_commit,
             **te_identities,
+            **deep_ep_identity,
             **runtime,
         }
     except Exception as error:

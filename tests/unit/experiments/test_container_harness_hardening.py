@@ -175,6 +175,7 @@ def test_runtime_probe_artifact_records_attestation_producer_job(
     payload = json.loads(output.read_text())
     assert payload["status"] == "passed"
     assert payload["runtime_attestation_job_id"] == 734
+    assert payload["deep_ep_vcs_commit"] == TE_COMMIT
 
 
 def _run_script(

@@ -25,6 +25,7 @@ NEMORL_COMMIT = "a" * 40
 BRIDGE_COMMIT = "b" * 40
 MCORE_COMMIT = "c" * 40
 TE_COMMIT = "d" * 40
+DEEP_EP_COMMIT = "f" * 40
 CONTAINER_SHA256 = "e" * 64
 PYTHON_VERSION = "3.13.13"
 UV_VERSION = "0.11.18"
@@ -558,6 +559,7 @@ def test_validator_binds_dropless_hybridep_runtime_contract(
             "torch_cuda_arch_list": "10.0a",
             "nvte_cuda_archs": "100a",
             "hybridep_buffer_available": True,
+            "deep_ep_vcs_commit": DEEP_EP_COMMIT,
         }
     )
     payload["packages"]["deep_ep"] = {"version": "1.2.1"}
@@ -587,6 +589,27 @@ def test_validator_binds_dropless_hybridep_runtime_contract(
     )
 
     assert result["runtime_feature_set"] == feature_set
+    assert result["deep_ep_vcs_commit"] == DEEP_EP_COMMIT
+    payload["deep_ep_vcs_commit"] = "not-a-full-commit"
+    attestation.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="DeepEP VCS commit"):
+        module.validate_attestation(
+            attestation=attestation,
+            container=container,
+            expected_container_sha256=CONTAINER_SHA256,
+            nemo_rl_commit=NEMORL_COMMIT,
+            bridge_commit=BRIDGE_COMMIT,
+            mcore_commit=MCORE_COMMIT,
+            uv_lock=lock,
+            expected_te_commit=TE_COMMIT,
+            expected_device_count=4,
+            expected_python_version=PYTHON_VERSION,
+            expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
+            **contract,
+        )
+    payload["deep_ep_vcs_commit"] = DEEP_EP_COMMIT
     payload["hybridep_buffer_available"] = False
     attestation.write_text(json.dumps(payload))
     with pytest.raises(ValueError, match="HybridEPBuffer"):

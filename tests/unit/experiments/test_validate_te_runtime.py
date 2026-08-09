@@ -16,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 EXPECTED_TE_COMMIT = "bffde8f4a0a4eea9036dc753e28269247e5de69d"
 EXPECTED_TE_SOURCE_COMMIT = "04a76c84423d9a4eb2f2010ef6692e347326cc00"
 EXPECTED_TE_SOURCE_VERSION = "2.19.0.dev0+04a76c84"
+EXPECTED_HYBRIDEP_COMMIT = "de0dd1185142c727b9c118aeb4cc4702e34deeba"
 MODULE_PATH = (
     REPO_ROOT
     / "experiments"
@@ -272,3 +273,15 @@ def test_outer_project_pins_the_validated_te_runtime_by_full_commit() -> None:
     assert locked_metadata["transformer-engine-torch"]["version"] == (
         EXPECTED_TE_SOURCE_VERSION
     )
+
+
+def test_outer_project_pins_aarch64_hybridep_runtime_by_full_commit() -> None:
+    project_text = (REPO_ROOT / "pyproject.toml").read_text()
+    lock_text = (REPO_ROOT / "uv.lock").read_text()
+
+    expected_revision = f"DeepEP.git@{EXPECTED_HYBRIDEP_COMMIT}"
+    expected_locked_revision = f"DeepEP.git?rev={EXPECTED_HYBRIDEP_COMMIT}"
+    assert expected_revision in project_text
+    assert expected_locked_revision in lock_text
+    assert "DeepEP.git@a48493600c4886c1b297aaa78db0e1ebc2d8dd6c" not in project_text
+    assert "DeepEP.git?rev=a48493600c4886c1b297aaa78db0e1ebc2d8dd6c" not in lock_text

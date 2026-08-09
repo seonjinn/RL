@@ -739,6 +739,9 @@ def validate_attestation(
         required_packages = required_packages.union(("deep_ep",))
         if payload.get("hybridep_buffer_available") is not True:
             raise ValueError("runtime attestation does not prove DeepEP HybridEPBuffer")
+        deep_ep_commit = payload.get("deep_ep_vcs_commit")
+        if not isinstance(deep_ep_commit, str) or FULL_COMMIT.fullmatch(deep_ep_commit) is None:
+            raise ValueError("runtime attestation lacks a full DeepEP VCS commit")
     missing_packages = sorted(required_packages.difference(packages))
     if missing_packages:
         raise ValueError(
