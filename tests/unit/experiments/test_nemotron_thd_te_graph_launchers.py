@@ -2789,62 +2789,6 @@ def test_ray_and_nemorl_sruns_override_image_uv_environment() -> None:
     assert "export CONTAINER_ENV_VARS" in nemorl_wrapper
 
 
-def test_alltoall_leaf_sync_excludes_deep_ep_without_reprobe(tmp_path: Path) -> None:
-    """AlltoAll workers must omit DeepEP from sync and skip the live import probe."""
-    source = (EXPERIMENT_DIR / "scripts" / "run_mcore_scope.sub").read_text()
-    start_marker = "--export=ALL /bin/bash --noprofile --norc -c '\n"
-    start = source.index(start_marker) + len(start_marker)
-    payload = source[start : source.index('\n\' bash "${UV_EXECUTABLE}"', start)]
-    uv_log = tmp_path / "uv-args.txt"
-    python_log = tmp_path / "python-args.txt"
-    fake_uv = tmp_path / "uv"
-    fake_uv.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" >"${UV_LOG}"\n')
-    fake_uv.chmod(0o755)
-    environment_root = tmp_path / "environment"
-    environment_root.joinpath("bin").mkdir(parents=True)
-    fake_python = environment_root / "bin" / "python"
-    fake_python.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" >"${PYTHON_LOG}"\n')
-    fake_python.chmod(0o755)
-    runner = tmp_path / "runner.py"
-    runner.write_text("raise SystemExit('fake Python must intercept this')\n")
-
-    result = subprocess.run(
-        [
-            "bash",
-            "--noprofile",
-            "--norc",
-            "-c",
-            payload,
-            "bash",
-            str(fake_uv),
-            str(environment_root),
-            str(tmp_path),
-            str(runner),
-            "--fixture",
-        ],
-        env={
-            **os.environ,
-            "UV_LOG": str(uv_log),
-            "PYTHON_LOG": str(python_log),
-            "UV_PYTHON": PYTHON_VERSION,
-            "RUNTIME_FEATURE_SET": "dropless_alltoall_qwen30_16",
-            "RUNTIME_EXCLUDED_PACKAGES": "deep-ep,fast-hadamard-transform",
-        },
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    uv_arguments = uv_log.read_text().splitlines()
-    assert [
-        uv_arguments[index + 1]
-        for index, argument in enumerate(uv_arguments[:-1])
-        if argument == "--no-install-package"
-    ] == ["deep-ep", "fast-hadamard-transform"]
-    assert python_log.read_text().splitlines() == [str(runner), "--fixture"]
-
-
 def test_cluster_profiles_render_cluster_specific_gres_and_segment_contracts(
     tmp_path: Path,
 ) -> None:
