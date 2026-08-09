@@ -7,6 +7,7 @@ REPO=$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel)
 
 ACTION=${ACTION:-test-only}
 MODE=${MODE:?MODE is required: legacy or nccl}
+AFTER_OK_JOB_ID=${AFTER_OK_JOB_ID:-}
 ACCOUNT=${SLURM_ACCOUNT:-coreai_chef_posttrain}
 PARTITION=${PARTITION:-batch}
 TOTAL_NODES=${TOTAL_NODES:-8}
@@ -125,6 +126,7 @@ trainer_cp=${TRAIN_CP}
 trainer_ep=${TRAIN_EP}
 trainer_etp=${TRAIN_ETP}
 max_steps=${MAX_STEPS}
+after_ok_job_id=${AFTER_OK_JOB_ID:-none}
 seed=42
 train_global_batch_size=512
 container=${CONTAINER}
@@ -213,6 +215,13 @@ SBATCH_ARGS=(
   --output="${EXPERIMENT_ROOT}/slurm-%j.out"
   --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"model_loading","description":"environment and Qwen3-235B initialization"}}'
 )
+if [[ -n "${AFTER_OK_JOB_ID}" ]]; then
+  if [[ ! "${AFTER_OK_JOB_ID}" =~ ^[0-9]+$ ]]; then
+    echo "AFTER_OK_JOB_ID must be a numeric SLURM job ID" >&2
+    exit 2
+  fi
+  SBATCH_ARGS+=(--dependency="afterok:${AFTER_OK_JOB_ID}")
+fi
 
 printf 'mode=%s\nrepo=%s\nsha=%s\nresult=%s\n' \
   "${MODE}" "${REPO}" "${REPO_SHA}" "${EXPERIMENT_ROOT}"

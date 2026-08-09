@@ -25,6 +25,7 @@ grep -Fq 'policy.megatron_cfg.expert_model_parallel_size=${TRAIN_EP}' "${SUBMIT_
 grep -Fq 'VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM:-0}' "${SUBMIT_SCRIPT}"
 grep -Fq 'VLLM_FUSE_ALLREDUCE_RMS=${VLLM_FUSE_ALLREDUCE_RMS:-false}' "${SUBMIT_SCRIPT}"
 grep -Fq 'VLLM_WORKER_MULTIPROC_METHOD=${VLLM_WORKER_MULTIPROC_METHOD:-spawn}' "${SUBMIT_SCRIPT}"
+grep -Fq 'AFTER_OK_JOB_ID=${AFTER_OK_JOB_ID:-}' "${SUBMIT_SCRIPT}"
 grep -Fq 'export VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM}' "${SUBMIT_SCRIPT}"
 grep -Fq 'uv run --frozen python -m nemo_rl.utils.prefetch_venvs VllmAsyncGenerationWorker MegatronPolicyWorker' "${SUBMIT_SCRIPT}"
 grep -Fq '++policy.generation.vllm_cfg.env_vars.VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM}' "${SUBMIT_SCRIPT}"
@@ -32,6 +33,7 @@ grep -Fq '++policy.generation.vllm_kwargs.compilation_config.pass_config.fuse_al
 grep -Fq 'export VLLM_WORKER_MULTIPROC_METHOD=${VLLM_WORKER_MULTIPROC_METHOD}' "${SUBMIT_SCRIPT}"
 grep -Fq 'vllm_allreduce_use_symm_mem=${VLLM_ALLREDUCE_USE_SYMM_MEM}' "${SUBMIT_SCRIPT}"
 grep -Fq -- '--exclusive' "${SUBMIT_SCRIPT}"
+grep -Fq 'SBATCH_ARGS+=(--dependency="afterok:${AFTER_OK_JOB_ID}")' "${SUBMIT_SCRIPT}"
 grep -Fq 'policy.generation.vllm_cfg.pipeline_parallel_size=${VLLM_PP}' "${SUBMIT_SCRIPT}"
 if grep -Fq 'NRL_ALLOW_PARTIAL_GPU_NODES' "${SUBMIT_SCRIPT}" "${SCRIPT_DIR}/../../ray.sub"; then
   echo "reportable A/B must use full-node allocation" >&2
