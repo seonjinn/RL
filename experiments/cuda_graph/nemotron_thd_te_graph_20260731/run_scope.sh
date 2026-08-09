@@ -102,6 +102,7 @@ RUN_TAG=${RUN_TAG:-$(date -u +%Y%m%dT%H%M%SZ)}
 RUN_GROUP=${RUN_GROUP:-adhoc-${MODEL}-${MODE}-${CLUSTER}-${RUN_TAG}}
 REPEAT_INDEX=${REPEAT_INDEX:-0}
 ROUTER_REPLAY=${ROUTER_REPLAY:-off}
+NEMORL_WANDB_ENABLED=${NEMORL_WANDB_ENABLED:-true}
 NVTE_WITH_NCCL_EP=0
 
 case "${TEST_ONLY}" in
@@ -111,6 +112,10 @@ esac
 case "${SBATCH_TEST_ONLY}" in
   0|1) ;;
   *) fail "SBATCH_TEST_ONLY must be 0 or 1" ;;
+esac
+case "${NEMORL_WANDB_ENABLED}" in
+  false|true) ;;
+  *) fail "NEMORL_WANDB_ENABLED must be false or true" ;;
 esac
 if [[ "${TEST_ONLY}" == "1" && "${SBATCH_TEST_ONLY}" == "1" ]]; then
   fail "TEST_ONLY and SBATCH_TEST_ONLY are mutually exclusive"
@@ -329,6 +334,24 @@ if [[ "${UV_EXECUTABLE}" == /* ]]; then
   [[ "${uv_is_mounted}" == "true" ]] || \
     fail "pinned uv executable is not container-mounted: ${UV_EXECUTABLE}"
 fi
+case "${UV_EXECUTABLE}" in
+  ""|__REQUIRED_*__)
+    RUNTIME_PYTHON=__DERIVED_FROM_UV_EXECUTABLE__/environment/bin/python
+    ;;
+  *)
+    uv_suffix=/uv/uv
+    [[ "${UV_EXECUTABLE}" == *"${uv_suffix}" ]] || \
+      fail "UV_EXECUTABLE must use the staged-runtimes/<sha256>/uv/uv layout"
+    runtime_stage_root=${UV_EXECUTABLE%"${uv_suffix}"}
+    runtime_stage_key=${runtime_stage_root##*/}
+    runtime_stage_parent=${runtime_stage_root%/*}
+    [[ "${runtime_stage_parent##*/}" == "staged-runtimes" && \
+       ${#runtime_stage_key} -eq 64 && \
+       ! "${runtime_stage_key}" =~ [^0-9a-f] ]] || \
+      fail "UV_EXECUTABLE must use the staged-runtimes/<sha256>/uv/uv layout"
+    RUNTIME_PYTHON=${runtime_stage_root}/environment/bin/python
+    ;;
+esac
 case "${EXPECTED_TE_SHA:-}" in
   ""|__REQUIRED_*__) ;;
   *)
@@ -408,8 +431,12 @@ if [[ "${MODE}" == "nemorl" ]]; then
     --steps "${STEPS}"
     --run-name "${run_name}"
     --log-dir "${run_log_dir}"
+    --wandb-enabled "${NEMORL_WANDB_ENABLED}"
     --router-replay "${ROUTER_REPLAY}"
   )
+  if [[ "${RUNTIME_PYTHON}" == /* ]]; then
+    render_args+=(--driver-python "${RUNTIME_PYTHON}")
+  fi
   if ((${#extra_overrides[@]})); then
     for override in "${extra_overrides[@]}"; do
       render_args+=(--override "${override}")
@@ -519,6 +546,8 @@ printf 'MANAGED_PYTHON_VERSION: %s\n' "${MANAGED_PYTHON_VERSION}"
 printf 'MANAGED_PYTHON_INSTALL_DIR: %s\n' "${MANAGED_PYTHON_INSTALL_DIR}"
 printf 'PINNED_UV_VERSION: %s\n' "${PINNED_UV_VERSION}"
 printf 'UV_EXECUTABLE: %s\n' "${UV_EXECUTABLE}"
+printf 'RUNTIME_PYTHON: %s\n' "${RUNTIME_PYTHON}"
+printf 'NEMORL_WANDB_ENABLED: %s\n' "${NEMORL_WANDB_ENABLED}"
 printf 'NVTE_WITH_NCCL_EP: %s\n' "${NVTE_WITH_NCCL_EP}"
 printf 'COMMAND: %q\n' "${COMMAND}"
 printf 'SBATCH:'
@@ -534,6 +563,16 @@ if ((${#unresolved[@]})); then
 fi
 [[ -f "${CONTAINER}" ]] || fail "Immutable container is missing: ${CONTAINER}"
 [[ ! -L "${CONTAINER}" ]] || fail "Immutable container path must not be a symlink"
+if [[ "${MODE}" == "nemorl" ]]; then
+  [[ -f "${RUNTIME_PYTHON}" && -x "${RUNTIME_PYTHON}" ]] || \
+    fail "Attested runtime Python is missing, unsafe, or not executable: ${RUNTIME_PYTHON}"
+  resolved_runtime_python=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "${RUNTIME_PYTHON}")
+  resolved_python_install_dir=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "${MANAGED_PYTHON_INSTALL_DIR}")
+  case "${resolved_runtime_python}" in
+    "${resolved_python_install_dir}"/*) ;;
+    *) fail "Attested runtime Python resolves outside MANAGED_PYTHON_INSTALL_DIR" ;;
+  esac
+fi
 [[ -x "${source_provenance_verifier}" ]] || \
   fail "Source provenance verifier is missing or not executable"
 [[ -f "${runtime_attestation_validator}" ]] || \
@@ -562,6 +601,7 @@ export UV_PYTHON_INSTALL_DIR=${MANAGED_PYTHON_INSTALL_DIR}
 export UV_MANAGED_PYTHON=1
 export UV_PYTHON_DOWNLOADS=never
 export PINNED_UV_VERSION UV_EXECUTABLE
+export RUNTIME_PYTHON NEMORL_WANDB_ENABLED
 export NVTE_WITH_NCCL_EP
 export SOURCE_PROVENANCE_VERIFIER=${source_provenance_verifier}
 export R3_DRIVER_COMMAND_FILE
@@ -600,6 +640,7 @@ container_path_base64=$(printf '%s' "${CONTAINER}" | base64 | tr -d '\n')
 runtime_attestation_base64=$(printf '%s' "${RUNTIME_ATTESTATION}" | base64 | tr -d '\n')
 managed_python_install_dir_base64=$(printf '%s' "${MANAGED_PYTHON_INSTALL_DIR}" | base64 | tr -d '\n')
 uv_executable_base64=$(printf '%s' "${UV_EXECUTABLE}" | base64 | tr -d '\n')
+runtime_python_base64=$(printf '%s' "${RUNTIME_PYTHON}" | base64 | tr -d '\n')
 r3_validation_record_pattern_base64=$(printf '%s' "${R3_VALIDATION_RECORD_PATTERN}" | base64 | tr -d '\n')
 r3_validation_record_initial_path_base64=$(printf '%s' "${R3_VALIDATION_RECORD_INITIAL_PATH}" | base64 | tr -d '\n')
 r3_driver_command_file_base64=$(printf '%s' "${R3_DRIVER_COMMAND_FILE}" | base64 | tr -d '\n')
@@ -634,15 +675,16 @@ metadata_json_tmp=$(mktemp "${run_log_dir}/.run-metadata.json.XXXXXX")
   printf 'profile_sha256=%s\n' "${PROFILE_SHA256}"
   printf 'phase=%s\nsteps=%s\nrun_group=%s\nrepeat=%s\nrouter_replay=%s\n' "${PHASE}" "${STEPS}" "${RUN_GROUP}" "${REPEAT_INDEX}" "${ROUTER_REPLAY}"
   printf 'tensorboard_enabled=%s\n' "${NEMORL_TENSORBOARD_ENABLED}"
+  printf 'wandb_enabled=%s\n' "${NEMORL_WANDB_ENABLED}"
   printf 'num_nodes=%s\ngpus_per_node=%s\n' "${MODEL_ALLOCATION_NUM_NODES}" "${MODEL_GPUS_PER_NODE}"
   printf 'nemorl_allocation_num_nodes=%s\nnemorl_cluster_num_nodes=%s\n' "${MODEL_NEMORL_ALLOCATION_NUM_NODES}" "${MODEL_NEMORL_CLUSTER_NUM_NODES}"
   printf 'policy_num_nodes=%s\nnemorl_generation_num_nodes=%s\nnemorl_gym_num_nodes=%s\n' "${MODEL_POLICY_NUM_NODES}" "${MODEL_NEMORL_GENERATION_NUM_NODES}" "${MODEL_NEMORL_GYM_NUM_NODES}"
   printf 'mcore_num_nodes=%s\n' "${MODEL_MCORE_NUM_NODES}"
   printf 'nemo_rl_commit=%s\nbridge_commit=%s\nmcore_commit=%s\ntransformer_engine_commit=%s\ncontainer_sha256=%s\n' "${EXPECTED_NEMORL_SHA}" "${EXPECTED_BRIDGE_SHA}" "${EXPECTED_MCORE_SHA}" "${EXPECTED_TE_SHA}" "${CONTAINER_SHA256}"
-  printf 'runtime_preflight_job_id=%s\nruntime_attestation_base64=%s\nruntime_attestation_sha256=%s\nmanaged_python_version=%s\nmanaged_python_install_dir_base64=%s\npinned_uv_version=%s\nuv_executable_base64=%s\n' "${RUNTIME_PREFLIGHT_JOB_ID}" "${runtime_attestation_base64}" "${RUNTIME_ATTESTATION_SHA256}" "${MANAGED_PYTHON_VERSION}" "${managed_python_install_dir_base64}" "${PINNED_UV_VERSION}" "${uv_executable_base64}"
+  printf 'runtime_preflight_job_id=%s\nruntime_attestation_base64=%s\nruntime_attestation_sha256=%s\nmanaged_python_version=%s\nmanaged_python_install_dir_base64=%s\npinned_uv_version=%s\nuv_executable_base64=%s\nruntime_python_base64=%s\n' "${RUNTIME_PREFLIGHT_JOB_ID}" "${runtime_attestation_base64}" "${RUNTIME_ATTESTATION_SHA256}" "${MANAGED_PYTHON_VERSION}" "${managed_python_install_dir_base64}" "${PINNED_UV_VERSION}" "${uv_executable_base64}" "${runtime_python_base64}"
   printf 'r3_validation_record_pattern_base64=%s\nr3_validation_record_initial_path_base64=%s\nr3_driver_command_file_base64=%s\nr3_driver_command_sha256=%s\nr3_checker_path_base64=%s\nr3_checker_sha256=%s\nr3_record_python_base64=%s\n' "${r3_validation_record_pattern_base64}" "${r3_validation_record_initial_path_base64}" "${r3_driver_command_file_base64}" "${R3_DRIVER_COMMAND_SHA256}" "${r3_checker_path_base64}" "${R3_CHECKER_SHA256}" "${r3_record_python_base64}"
 } >"${metadata_env_tmp}"
-METADATA_JOB_ID=${job_id} METADATA_RENDERED_DRIVER=${RENDERED_DRIVER_COMMAND} METADATA_COMMAND=${COMMAND} METADATA_RUN_LOG_DIR=${run_log_dir} METADATA_SCHEDULER_ARGV_JSON=${sbatch_argv_json} METADATA_OUTPUT_PATTERN=${run_log_dir}/slurm-%j.log METADATA_OUTPUT_PATH=${run_log_dir}/slurm-${job_id}.log METADATA_R3_RECORD_PATTERN=${R3_VALIDATION_RECORD_PATTERN} METADATA_R3_RECORD_INITIAL=${R3_VALIDATION_RECORD_INITIAL_PATH} METADATA_R3_DRIVER_FILE=${R3_DRIVER_COMMAND_FILE} METADATA_R3_DRIVER_SHA=${R3_DRIVER_COMMAND_SHA256} METADATA_R3_CHECKER_PATH=${R3_CHECKER_PATH} METADATA_R3_CHECKER_SHA=${R3_CHECKER_SHA256} METADATA_R3_RECORD_PYTHON=${R3_RECORD_PYTHON} METADATA_MODEL=${MODEL} METADATA_DISPATCHER=${DISPATCHER} METADATA_SCOPE=${SCOPE} METADATA_SCOPE_NAME=${SCOPE_NAME} METADATA_MODE=${MODE} METADATA_CLUSTER=${CLUSTER} METADATA_PROFILE=${PROFILE_ID} METADATA_PROFILE_SHA256=${PROFILE_SHA256} METADATA_PHASE=${PHASE} METADATA_STEPS=${STEPS} METADATA_RUN_GROUP=${RUN_GROUP} METADATA_REPEAT=${REPEAT_INDEX} METADATA_ROUTER_REPLAY=${ROUTER_REPLAY} METADATA_TENSORBOARD=${NEMORL_TENSORBOARD_ENABLED} METADATA_NUM_NODES=${MODEL_ALLOCATION_NUM_NODES} METADATA_NEMORL_ALLOCATION_NODES=${MODEL_NEMORL_ALLOCATION_NUM_NODES} METADATA_NEMORL_CLUSTER_NODES=${MODEL_NEMORL_CLUSTER_NUM_NODES} METADATA_POLICY_NODES=${MODEL_POLICY_NUM_NODES} METADATA_NEMORL_GENERATION_NODES=${MODEL_NEMORL_GENERATION_NUM_NODES} METADATA_NEMORL_GYM_NODES=${MODEL_NEMORL_GYM_NUM_NODES} METADATA_MCORE_NODES=${MODEL_MCORE_NUM_NODES} METADATA_GPUS_PER_NODE=${MODEL_GPUS_PER_NODE} METADATA_NEMORL_SHA=${EXPECTED_NEMORL_SHA} METADATA_BRIDGE_SHA=${EXPECTED_BRIDGE_SHA} METADATA_MCORE_SHA=${EXPECTED_MCORE_SHA} METADATA_TE_SHA=${EXPECTED_TE_SHA} METADATA_CONTAINER_PATH=${CONTAINER} METADATA_CONTAINER_SHA=${CONTAINER_SHA256} METADATA_RUNTIME_ATTESTATION=${RUNTIME_ATTESTATION} METADATA_RUNTIME_ATTESTATION_SHA=${RUNTIME_ATTESTATION_SHA256} METADATA_RUNTIME_PREFLIGHT=${RUNTIME_PREFLIGHT_JOB_ID} METADATA_PYTHON_VERSION=${MANAGED_PYTHON_VERSION} METADATA_PYTHON_DIR=${MANAGED_PYTHON_INSTALL_DIR} METADATA_UV_VERSION=${PINNED_UV_VERSION} METADATA_UV_EXECUTABLE=${UV_EXECUTABLE} python3 - "${metadata_json_tmp}" <<'PY'
+METADATA_JOB_ID=${job_id} METADATA_RENDERED_DRIVER=${RENDERED_DRIVER_COMMAND} METADATA_COMMAND=${COMMAND} METADATA_RUN_LOG_DIR=${run_log_dir} METADATA_SCHEDULER_ARGV_JSON=${sbatch_argv_json} METADATA_OUTPUT_PATTERN=${run_log_dir}/slurm-%j.log METADATA_OUTPUT_PATH=${run_log_dir}/slurm-${job_id}.log METADATA_R3_RECORD_PATTERN=${R3_VALIDATION_RECORD_PATTERN} METADATA_R3_RECORD_INITIAL=${R3_VALIDATION_RECORD_INITIAL_PATH} METADATA_R3_DRIVER_FILE=${R3_DRIVER_COMMAND_FILE} METADATA_R3_DRIVER_SHA=${R3_DRIVER_COMMAND_SHA256} METADATA_R3_CHECKER_PATH=${R3_CHECKER_PATH} METADATA_R3_CHECKER_SHA=${R3_CHECKER_SHA256} METADATA_R3_RECORD_PYTHON=${R3_RECORD_PYTHON} METADATA_MODEL=${MODEL} METADATA_DISPATCHER=${DISPATCHER} METADATA_SCOPE=${SCOPE} METADATA_SCOPE_NAME=${SCOPE_NAME} METADATA_MODE=${MODE} METADATA_CLUSTER=${CLUSTER} METADATA_PROFILE=${PROFILE_ID} METADATA_PROFILE_SHA256=${PROFILE_SHA256} METADATA_PHASE=${PHASE} METADATA_STEPS=${STEPS} METADATA_RUN_GROUP=${RUN_GROUP} METADATA_REPEAT=${REPEAT_INDEX} METADATA_ROUTER_REPLAY=${ROUTER_REPLAY} METADATA_TENSORBOARD=${NEMORL_TENSORBOARD_ENABLED} METADATA_WANDB=${NEMORL_WANDB_ENABLED} METADATA_NUM_NODES=${MODEL_ALLOCATION_NUM_NODES} METADATA_NEMORL_ALLOCATION_NODES=${MODEL_NEMORL_ALLOCATION_NUM_NODES} METADATA_NEMORL_CLUSTER_NODES=${MODEL_NEMORL_CLUSTER_NUM_NODES} METADATA_POLICY_NODES=${MODEL_POLICY_NUM_NODES} METADATA_NEMORL_GENERATION_NODES=${MODEL_NEMORL_GENERATION_NUM_NODES} METADATA_NEMORL_GYM_NODES=${MODEL_NEMORL_GYM_NUM_NODES} METADATA_MCORE_NODES=${MODEL_MCORE_NUM_NODES} METADATA_GPUS_PER_NODE=${MODEL_GPUS_PER_NODE} METADATA_NEMORL_SHA=${EXPECTED_NEMORL_SHA} METADATA_BRIDGE_SHA=${EXPECTED_BRIDGE_SHA} METADATA_MCORE_SHA=${EXPECTED_MCORE_SHA} METADATA_TE_SHA=${EXPECTED_TE_SHA} METADATA_CONTAINER_PATH=${CONTAINER} METADATA_CONTAINER_SHA=${CONTAINER_SHA256} METADATA_RUNTIME_ATTESTATION=${RUNTIME_ATTESTATION} METADATA_RUNTIME_ATTESTATION_SHA=${RUNTIME_ATTESTATION_SHA256} METADATA_RUNTIME_PREFLIGHT=${RUNTIME_PREFLIGHT_JOB_ID} METADATA_PYTHON_VERSION=${MANAGED_PYTHON_VERSION} METADATA_PYTHON_DIR=${MANAGED_PYTHON_INSTALL_DIR} METADATA_UV_VERSION=${PINNED_UV_VERSION} METADATA_UV_EXECUTABLE=${UV_EXECUTABLE} METADATA_RUNTIME_PYTHON=${RUNTIME_PYTHON} python3 - "${metadata_json_tmp}" <<'PY'
 import json
 import os
 import sys
@@ -669,6 +711,7 @@ record = {
     "phase": os.environ["METADATA_PHASE"], "steps": int(os.environ["METADATA_STEPS"]),
     "run_group": os.environ["METADATA_RUN_GROUP"], "repeat": int(os.environ["METADATA_REPEAT"]),
     "router_replay": os.environ["METADATA_ROUTER_REPLAY"], "tensorboard_enabled": os.environ["METADATA_TENSORBOARD"] == "true",
+    "wandb_enabled": os.environ["METADATA_WANDB"] == "true",
     "topology": {
         "num_nodes": int(os.environ["METADATA_NUM_NODES"]),
         "gpus_per_node": int(os.environ["METADATA_GPUS_PER_NODE"]),
@@ -685,7 +728,7 @@ record = {
     "runtime_attestation": os.environ["METADATA_RUNTIME_ATTESTATION"], "runtime_attestation_sha256": os.environ["METADATA_RUNTIME_ATTESTATION_SHA"],
     "runtime_preflight_job_id": int(os.environ["METADATA_RUNTIME_PREFLIGHT"]), "managed_python_version": os.environ["METADATA_PYTHON_VERSION"],
     "managed_python_install_dir": os.environ["METADATA_PYTHON_DIR"], "pinned_uv_version": os.environ["METADATA_UV_VERSION"],
-    "uv_executable": os.environ["METADATA_UV_EXECUTABLE"],
+    "uv_executable": os.environ["METADATA_UV_EXECUTABLE"], "runtime_python": os.environ["METADATA_RUNTIME_PYTHON"],
 }
 with open(sys.argv[1], "w", encoding="utf-8") as output:
     json.dump(record, output, sort_keys=True)

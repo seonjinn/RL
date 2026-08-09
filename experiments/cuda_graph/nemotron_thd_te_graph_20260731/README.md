@@ -5,9 +5,10 @@ report surface for the 2026-07-31 Nemotron CUDA Graph study. It covers
 Nemotron 3 Nano, Super, and Ultra plus the Qwen3-30B-A3B and
 Qwen3-235B-A22B comparison selectors.
 Every training launch disables checkpoints, uses exactly three successful
-optimizer warmups, writes to W&B project `sna-cg-study`, and uses only the
+optimizer warmups, defaults to W&B project `sna-cg-study`, and uses only the
 current `cuda_graph_modules` and `thd_max_packed_sequences` configuration
-fields.
+fields. Set `NEMORL_WANDB_ENABLED=false` when no W&B credential is available;
+TensorBoard and local logs remain authoritative.
 
 No file here contains credentials. Profile files with real cluster paths and
 source revisions remain local under `profiles/*.env`.
@@ -184,10 +185,13 @@ assume the current directory is
    SHA256, uv version, uv path, and uv SHA256 before starting Ray. Each NeMo-RL leaf
    derives `UV_PYTHON_INSTALL_DIR` from the immutable attestation directory,
    requires that path to be container-mounted, forces uv-managed Python with
-   downloads disabled, and gives the NeMo-RL driver a fresh per-job
-   `UV_PROJECT_ENVIRONMENT`. Typed MCore standalone leaves instead execute the
-   attested staged Python directly, so GPU nodes never fetch or rebuild locked
-   dependencies. The wrapper passes the explicit UV allowlist and
+   downloads disabled, and executes the NeMo-RL driver with the attested staged
+   Python on every Ray node. Per-actor environments remain writable and are
+   created independently on every node under a job- and restart-isolated `/tmp`
+   path. This preserves `NRL_FORCE_REBUILD_VENVS=true` without allowing builders
+   on different nodes or concurrent scope jobs to remove each other's
+   environments. Typed MCore standalone leaves also execute the attested staged
+   Python directly. The wrapper passes the explicit UV allowlist and
    an attested `CONTAINER_PATH_PREFIX` through Pyxis `--container-env`, then
    prepends that one directory inside each Ray head, worker, and standalone
    MCore container. It deliberately does not import the host `PATH`: preserving
@@ -307,11 +311,12 @@ starts.
 
 TensorBoard logging is enabled by the Nano, Super, Ultra, and
 Qwen3-30B-A3B selectors. It is intentionally disabled for Qwen3-235B-A22B
-until an exact-runtime compatibility smoke proves it safe. W&B remains enabled
-for every selector under project `sna-cg-study`, so Qwen3-235B uses the W&B
-fallback. The selected policy is recorded as `tensorboard_enabled` in run
-metadata; backend files live under the run log directory's `tensorboard/` and
-`wandb/` subdirectories.
+until an exact-runtime compatibility smoke proves it safe. W&B is enabled by
+default for every selector under project `sna-cg-study` and can be disabled
+explicitly with `NEMORL_WANDB_ENABLED=false`. Both logging choices, together
+with the exact staged runtime Python, are recorded in run metadata; backend
+files live under the run log directory's `tensorboard/` and `wandb/`
+subdirectories.
 
 ```bash
 uv run export_wandb.py \

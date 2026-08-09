@@ -304,6 +304,8 @@ def render_scope_command(
     cuda_graph_enabled: bool = True,
     router_replay_enabled: bool = False,
     log_dir: str | None = None,
+    driver_python: str | None = None,
+    wandb_enabled: bool = True,
     extra_overrides: Sequence[str] = (),
 ) -> str:
     """Render one NeMo-RL driver command with the canonical graph fields."""
@@ -318,6 +320,8 @@ def render_scope_command(
         raise ValueError("run_name must be filesystem-safe")
     if spec.thd_max_packed_sequences < 2:
         raise ValueError("thd_max_packed_sequences must be at least 2")
+    if driver_python is not None and not Path(driver_python).is_absolute():
+        raise ValueError("driver_python must be absolute")
     if (
         router_replay_enabled
         and cuda_graph_enabled
@@ -346,11 +350,11 @@ def render_scope_command(
                 raise ValueError(f"protected campaign override: {override_key}")
             raise ValueError(f"protected Router Replay override: {override_key}")
     modules = ",".join(scope)
+    driver_prefix = ["uv", "run"] if driver_python is None else [driver_python]
     command = [
         "env",
         "NRL_FORCE_REBUILD_VENVS=true",
-        "uv",
-        "run",
+        *driver_prefix,
         spec.nemorl_launcher,
         "--config",
         spec.nemorl_recipe,
@@ -368,7 +372,7 @@ def render_scope_command(
         f"cluster.num_nodes={spec.nemorl_cluster_num_nodes}",
         f"cluster.gpus_per_node={spec.gpus_per_node}",
         f"logger.log_dir={log_dir or f'exp_logs/nemotron_thd_te_graph_20260731/{run_name}'}",
-        "logger.wandb_enabled=true",
+        f"logger.wandb_enabled={str(wandb_enabled).lower()}",
         f"logger.tensorboard_enabled={str(spec.nemorl_tensorboard_enabled).lower()}",
         "logger.wandb.project=sna-cg-study",
         f"logger.wandb.name={run_name}",
@@ -441,6 +445,8 @@ def _build_parser() -> argparse.ArgumentParser:
     render.add_argument("--steps", type=int, choices=VALID_STEPS, required=True)
     render.add_argument("--run-name", required=True)
     render.add_argument("--log-dir")
+    render.add_argument("--driver-python")
+    render.add_argument("--wandb-enabled", choices=("false", "true"), default="true")
     render.add_argument("--router-replay", choices=("off", "on"), default="off")
     render.add_argument("--override", action="append", default=[])
     return parser
@@ -481,6 +487,8 @@ def main() -> None:
             cuda_graph_enabled=row.cuda_graph_enabled,
             router_replay_enabled=args.router_replay == "on",
             log_dir=args.log_dir,
+            driver_python=args.driver_python,
+            wandb_enabled=args.wandb_enabled == "true",
             extra_overrides=args.override,
         )
     )

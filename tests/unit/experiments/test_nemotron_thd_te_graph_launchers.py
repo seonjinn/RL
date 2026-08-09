@@ -37,8 +37,9 @@ UV_VERSION = UV_VERSION_MATCH.group(1)
 CONTAINER_ENV_VARS = (
     "CONTAINER_PATH_PREFIX,UV_PROJECT_ENVIRONMENT,UV_LINK_MODE,UV_PYTHON,"
     "UV_PYTHON_INSTALL_DIR,UV_MANAGED_PYTHON,UV_PYTHON_DOWNLOADS,"
-    "PINNED_UV_VERSION,UV_EXECUTABLE,NRL_FORCE_REBUILD_VENVS,NVTE_WITH_NCCL_EP,"
-    "NRL_SLURM_JOB_ID,NRL_SLURM_RESTART_COUNT"
+    "PINNED_UV_VERSION,UV_EXECUTABLE,RUNTIME_PYTHON,NEMO_RL_VENV_DIR,"
+    "NRL_FORCE_REBUILD_VENVS,NVTE_WITH_NCCL_EP,NRL_SLURM_JOB_ID,"
+    "NRL_SLURM_RESTART_COUNT"
 )
 DENSE_AXES = ("attn", "mlp", "mamba")
 MOE_AXES = (
@@ -124,6 +125,24 @@ def _campaign_leaf_harness(tmp_path: Path) -> tuple[Path, Path, Path, dict[str, 
     )
     runtime = tmp_path / "runtime.json"
     runtime.write_text("{}")
+    runtime_stage_root = tmp_path / "staged-runtimes" / ("a" * 64)
+    staged_uv = runtime_stage_root / "uv" / "uv"
+    staged_uv.parent.mkdir(parents=True)
+    staged_uv.write_text(f"#!/bin/sh\nprintf 'uv {UV_VERSION} (fixture)\\n'\n")
+    staged_uv.chmod(0o755)
+    managed_python = (
+        tmp_path
+        / "uv-python-installations"
+        / f"cpython-{PYTHON_VERSION}-fixture"
+        / "bin"
+        / "python3.13"
+    )
+    managed_python.parent.mkdir(parents=True)
+    managed_python.write_text("#!/bin/sh\nexit 0\n")
+    managed_python.chmod(0o755)
+    runtime_python = runtime_stage_root / "environment" / "bin" / "python"
+    runtime_python.parent.mkdir(parents=True)
+    runtime_python.symlink_to(managed_python)
     provenance = {
         "nemo_rl_commit": "1" * 40,
         "bridge_commit": "2" * 40,
@@ -147,7 +166,7 @@ def _campaign_leaf_harness(tmp_path: Path) -> tuple[Path, Path, Path, dict[str, 
                 "TIME_LIMIT=01:00:00",
                 f"RUNTIME_ATTESTATION={runtime}",
                 "RUNTIME_PREFLIGHT_JOB_ID=1",
-                f"UV_EXECUTABLE={tmp_path}/staged-runtimes/{'a' * 64}/uv/uv",
+                f"UV_EXECUTABLE={staged_uv}",
                 f"EXPECTED_TE_SHA={'e' * 40}",
                 f"EXPECTED_TE_VERSION_BASE_SHA={'f' * 40}",
                 f"EXPECTED_NEMORL_SHA={provenance['nemo_rl_commit']}",
@@ -992,6 +1011,27 @@ def test_rendered_nemorl_command_uses_only_current_graph_fields() -> None:
     assert "cuda_graph_max_cached_schedules" not in command
 
 
+def test_rendered_nemorl_command_can_use_shared_runtime_python_without_wandb() -> None:
+    module = _load_experiment_module("scope_matrix")
+    runtime_python = "/lustre/runtime/environment/bin/python"
+
+    arguments = shlex.split(
+        module.render_scope_command(
+            model="nano",
+            scope=("moe_router",),
+            steps=20,
+            run_name="nano-router-shared-python",
+            driver_python=runtime_python,
+            wandb_enabled=False,
+        )
+    )
+
+    assert arguments[:3] == ["env", "NRL_FORCE_REBUILD_VENVS=true", runtime_python]
+    assert "uv" not in arguments
+    assert arguments.count("logger.wandb_enabled=false") == 1
+    assert "logger.wandb_enabled=true" not in arguments
+
+
 def test_rendered_nemorl_command_adds_experimental_struct_keys_with_hydra_plus_plus() -> (
     None
 ):
@@ -1781,6 +1821,7 @@ def test_fake_sbatch_submission_writes_strict_complete_metadata(
         ROUTER_REPLAY=router_replay,
         PROFILE_FILE=str(profile),
         LOG_ROOT_OVERRIDE=str(logs),
+        NEMORL_WANDB_ENABLED="true" if router_replay == "on" else "false",
         PATH=f"{fake_bin}:{os.environ['PATH']}",
     )
 
@@ -1808,6 +1849,7 @@ def test_fake_sbatch_submission_writes_strict_complete_metadata(
     assert decoded["resolved_output_path"] == record["resolved_output_path"]
     assert decoded["run_log_dir"] == record["run_log_dir"]
     assert record["tensorboard_enabled"] is True
+    assert record["wandb_enabled"] is (router_replay == "on")
     assert record["container_path"] == str(container)
     assert decoded["container_path"] == record["container_path"]
     assert record["runtime_preflight_job_id"] == 1
@@ -1818,6 +1860,7 @@ def test_fake_sbatch_submission_writes_strict_complete_metadata(
     assert decoded["runtime_attestation"] == record["runtime_attestation"]
     assert decoded["managed_python_install_dir"] == record["managed_python_install_dir"]
     assert decoded["uv_executable"] == record["uv_executable"]
+    assert decoded["runtime_python"] == record["runtime_python"]
     assert decoded["r3_record_python"] == record["r3_record_python"]
     assert env["scope_name"] == record["scope_name"] == "baseline_no_cg"
     expected_topology = (
@@ -2235,6 +2278,43 @@ def test_leaf_job_verifies_one_exact_runtime_preflight_artifact_without_dependen
     assert "--expected-runtime-attestation-job-id 733" in runtime_attestation_command
 
 
+def test_leaf_uses_attested_shared_python_and_can_disable_wandb(
+    tmp_path: Path,
+) -> None:
+    root, experiment, profile, _ = _campaign_leaf_harness(tmp_path)
+    runtime_stage_root = tmp_path / "staged-runtimes" / ("a" * 64)
+    runtime_python = runtime_stage_root / "environment" / "bin" / "python"
+
+    result = _run_copied_experiment_script(
+        root,
+        experiment,
+        "scopes/17_attn.sh",
+        CLUSTER="oci-hsg",
+        PROFILE_FILE=str(profile),
+        MODEL="nano",
+        MODE="nemorl",
+        STEPS="20",
+        TEST_ONLY="1",
+        RUN_TAG="shared-python",
+        NEMORL_WANDB_ENABLED="false",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"RUNTIME_PYTHON: {runtime_python}" in result.stdout
+    command_line = next(
+        line for line in result.stdout.splitlines() if line.startswith("COMMAND: ")
+    )
+    command = shlex.split(command_line.removeprefix("COMMAND: "))[0]
+    arguments = shlex.split(command)
+    assert arguments[:3] == [
+        "env",
+        "NRL_FORCE_REBUILD_VENVS=true",
+        str(runtime_python),
+    ]
+    assert "logger.wandb_enabled=false" in arguments
+    assert "logger.wandb_enabled=true" not in arguments
+
+
 def test_leaf_runtime_attestation_uses_the_nightly_container_python() -> None:
     result = _run_script(
         "scopes/17_attn.sh",
@@ -2467,7 +2547,7 @@ def test_nemorl_job_wrapper_requires_managed_python_contract(tmp_path: Path) -> 
     assert "PINNED_UV_VERSION" in result.stderr
 
 
-def test_nemorl_job_wrapper_isolates_driver_on_managed_python(
+def test_nemorl_job_wrapper_uses_shared_attested_python_and_isolates_worker_venvs(
     tmp_path: Path,
 ) -> None:
     repo_root = tmp_path / "repo"
@@ -2483,6 +2563,8 @@ def test_nemorl_job_wrapper_isolates_driver_on_managed_python(
         '"${UV_MANAGED_PYTHON:-}" "${UV_PYTHON_DOWNLOADS:-}" '
         '"${CONTAINER_ENV_VARS:-}" '
         '"${CONTAINER_PATH_PREFIX:-}" '
+        '"${RUNTIME_PYTHON:-}" '
+        '"${NEMO_RL_VENV_DIR:-}" '
         '"${PATH:-}" '
         '"${NRL_SLURM_JOB_ID:-}" '
         '"${NRL_SLURM_RESTART_COUNT:-}" '
@@ -2494,10 +2576,19 @@ def test_nemorl_job_wrapper_isolates_driver_on_managed_python(
     fake_srun.write_text("#!/bin/bash\nexit 0\n")
     fake_srun.chmod(0o755)
     python_install_dir = tmp_path / "uv-python-installations"
-    uv_executable = tmp_path / f"uv-{UV_VERSION}-733" / "uv"
+    runtime_stage_root = tmp_path / "staged-runtimes" / ("a" * 64)
+    uv_executable = runtime_stage_root / "uv" / "uv"
     uv_executable.parent.mkdir(parents=True)
     uv_executable.write_text(f"#!/bin/sh\nprintf 'uv {UV_VERSION} (fixture)\\n'\n")
     uv_executable.chmod(0o755)
+    runtime_python = runtime_stage_root / "environment" / "bin" / "python"
+    runtime_python.parent.mkdir(parents=True)
+    managed_python = python_install_dir / "cpython-fixture" / "bin" / "python3.13"
+    managed_python.parent.mkdir(parents=True)
+    managed_python.write_text("#!/bin/sh\nexit 0\n")
+    managed_python.chmod(0o755)
+    runtime_python.symlink_to(managed_python)
+    base_log_dir = tmp_path / "logs"
     environment = os.environ.copy()
     environment.update(
         {
@@ -2515,11 +2606,13 @@ def test_nemorl_job_wrapper_isolates_driver_on_managed_python(
             "SOURCE_PROVENANCE_VERIFIER": "/usr/bin/true",
             "PINNED_UV_VERSION": UV_VERSION,
             "UV_EXECUTABLE": str(uv_executable),
+            "RUNTIME_PYTHON": str(runtime_python),
             "UV_PYTHON": PYTHON_VERSION,
             "UV_PYTHON_INSTALL_DIR": str(python_install_dir),
             "UV_MANAGED_PYTHON": "1",
             "UV_PYTHON_DOWNLOADS": "never",
             "NVTE_WITH_NCCL_EP": "0",
+            "BASE_LOG_DIR": str(base_log_dir),
             "ENVIRONMENT_LOG": str(environment_log),
         }
     )
@@ -2538,17 +2631,40 @@ def test_nemorl_job_wrapper_isolates_driver_on_managed_python(
 
     assert result.returncode == 0, result.stderr
     environment_lines = environment_log.read_text().splitlines()
-    assert environment_lines[:7] == [
-        "/tmp/nemo-rl-driver-733",
+    assert environment_lines[:9] == [
+        str(runtime_stage_root / "environment"),
         PYTHON_VERSION,
         str(python_install_dir),
         "1",
         "never",
         CONTAINER_ENV_VARS,
         str(uv_executable.parent),
+        str(runtime_python),
+        "/tmp/nemo-rl-worker-venvs/job-733-restart-0",
     ]
-    assert environment_lines[7].split(":")[0] == str(fake_bin)
-    assert environment_lines[8:] == ["733", "0"]
+    assert environment_lines[9].split(":")[0] == str(fake_bin)
+    assert environment_lines[10:] == ["733", "0"]
+
+    runtime_python.unlink()
+    outside_python = tmp_path / "outside-managed-python" / "bin" / "python3.13"
+    outside_python.parent.mkdir(parents=True)
+    outside_python.write_text("#!/bin/sh\nexit 0\n")
+    outside_python.chmod(0o755)
+    runtime_python.symlink_to(outside_python)
+
+    rejected = subprocess.run(
+        [
+            "bash",
+            str(EXPERIMENT_DIR / "scripts" / "run_nemorl_scope.sub"),
+        ],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert rejected.returncode == 2
+    assert "RUNTIME_PYTHON must resolve inside UV_PYTHON_INSTALL_DIR" in rejected.stderr
 
 
 @pytest.mark.parametrize(
@@ -2583,7 +2699,9 @@ def test_scope_job_wrapper_rejects_mutated_uv_before_executing_it(
     fake_srun.chmod(0o755)
 
     execution_marker = tmp_path / "mutated-uv-executed"
-    uv_executable = tmp_path / f"uv-{UV_VERSION}-812" / "uv"
+    python_install_dir = tmp_path / "uv-python-installations"
+    runtime_stage_root = tmp_path / "staged-runtimes" / ("a" * 64)
+    uv_executable = runtime_stage_root / "uv" / "uv"
     uv_executable.parent.mkdir(parents=True)
     uv_executable.write_text(
         "#!/bin/sh\n"
@@ -2591,6 +2709,13 @@ def test_scope_job_wrapper_rejects_mutated_uv_before_executing_it(
         f"printf 'uv {UV_VERSION} (mutated fixture)\\n'\n"
     )
     uv_executable.chmod(0o755)
+    runtime_python = runtime_stage_root / "environment" / "bin" / "python"
+    runtime_python.parent.mkdir(parents=True)
+    managed_python = python_install_dir / "cpython-fixture" / "bin" / "python3.13"
+    managed_python.parent.mkdir(parents=True)
+    managed_python.write_text("#!/bin/sh\nexit 0\n")
+    managed_python.chmod(0o755)
+    runtime_python.symlink_to(managed_python)
     host_execution_marker = tmp_path / "unattested-path-command-executed"
     sibling_srun = uv_executable.parent / "srun"
     sibling_srun.write_text(
@@ -2617,13 +2742,15 @@ def test_scope_job_wrapper_rejects_mutated_uv_before_executing_it(
             "SOURCE_PROVENANCE_VERIFIER": "/usr/bin/true",
             "PINNED_UV_VERSION": UV_VERSION,
             "UV_EXECUTABLE": str(uv_executable),
+            "RUNTIME_PYTHON": str(runtime_python),
             "UV_EXECUTION_MARKER": str(execution_marker),
             "HOST_EXECUTION_MARKER": str(host_execution_marker),
             "UV_PYTHON": PYTHON_VERSION,
-            "UV_PYTHON_INSTALL_DIR": str(tmp_path / "uv-python-installations"),
+            "UV_PYTHON_INSTALL_DIR": str(python_install_dir),
             "UV_MANAGED_PYTHON": "1",
             "UV_PYTHON_DOWNLOADS": "never",
             "NVTE_WITH_NCCL_EP": "0",
+            "BASE_LOG_DIR": str(tmp_path / "logs"),
             **extra_environment,
         }
     )

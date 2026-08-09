@@ -32,11 +32,13 @@ set -euo pipefail
 : "${SOURCE_PROVENANCE_VERIFIER:?run_scope.sh must export SOURCE_PROVENANCE_VERIFIER}"
 : "${PINNED_UV_VERSION:?run_scope.sh must export PINNED_UV_VERSION}"
 : "${UV_EXECUTABLE:?run_scope.sh must export UV_EXECUTABLE}"
+: "${RUNTIME_PYTHON:?run_scope.sh must export RUNTIME_PYTHON}"
 : "${UV_PYTHON:?run_scope.sh must export UV_PYTHON}"
 : "${UV_PYTHON_INSTALL_DIR:?run_scope.sh must export UV_PYTHON_INSTALL_DIR}"
 : "${UV_MANAGED_PYTHON:?run_scope.sh must export UV_MANAGED_PYTHON}"
 : "${UV_PYTHON_DOWNLOADS:?run_scope.sh must export UV_PYTHON_DOWNLOADS}"
 : "${NVTE_WITH_NCCL_EP:?run_scope.sh must export NVTE_WITH_NCCL_EP}"
+: "${BASE_LOG_DIR:?run_scope.sh must export BASE_LOG_DIR}"
 [[ "${NVTE_WITH_NCCL_EP}" == "0" ]] || {
   echo "NVTE_WITH_NCCL_EP must be 0 for the HybridEP partial-CUDA-Graph study" >&2
   exit 2
@@ -69,6 +71,40 @@ expected_uv_version=$(sed -nE 's/^ARG UV_VERSION=([0-9]+\.[0-9]+\.[0-9]+)$/\1/p'
   echo "UV_EXECUTABLE must be an absolute, executable, non-symlink path" >&2
   exit 2
 }
+uv_suffix=/uv/uv
+if [[ "${UV_EXECUTABLE}" != *"${uv_suffix}" ]]; then
+  echo "UV_EXECUTABLE must use the staged-runtimes/<sha256>/uv/uv layout" >&2
+  exit 2
+fi
+runtime_stage_root=${UV_EXECUTABLE%"${uv_suffix}"}
+runtime_stage_key=${runtime_stage_root##*/}
+runtime_stage_parent=${runtime_stage_root%/*}
+if [[ "${runtime_stage_parent##*/}" != "staged-runtimes" ||
+      ${#runtime_stage_key} -ne 64 || "${runtime_stage_key}" =~ [^0-9a-f] ]]; then
+  echo "UV_EXECUTABLE must use the staged-runtimes/<sha256>/uv/uv layout" >&2
+  exit 2
+fi
+runtime_environment_root=${runtime_stage_root}/environment
+expected_runtime_python=${runtime_environment_root}/bin/python
+if [[ "${RUNTIME_PYTHON}" != "${expected_runtime_python}" ||
+      ! -f "${RUNTIME_PYTHON}" || ! -x "${RUNTIME_PYTHON}" ||
+      -L "${runtime_environment_root}" ]]; then
+  echo "RUNTIME_PYTHON must be the executable staged environment Python" >&2
+  exit 2
+fi
+resolved_runtime_python=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "${RUNTIME_PYTHON}")
+resolved_python_install_dir=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "${UV_PYTHON_INSTALL_DIR}")
+case "${resolved_runtime_python}" in
+  "${resolved_python_install_dir}"/*) ;;
+  *)
+    echo "RUNTIME_PYTHON must resolve inside UV_PYTHON_INSTALL_DIR" >&2
+    exit 2
+    ;;
+esac
+if [[ "${BASE_LOG_DIR}" != /* || "${BASE_LOG_DIR}" == *:* || "${BASE_LOG_DIR}" == *$'\n'* ]]; then
+  echo "BASE_LOG_DIR must be an absolute path without colons or newlines" >&2
+  exit 2
+fi
 
 bridge_root=${REPO_ROOT}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
 mcore_root=${bridge_root}/3rdparty/Megatron-LM
@@ -86,11 +122,13 @@ case "${CONTAINER_PATH_PREFIX}" in
 esac
 export CONTAINER_PATH_PREFIX
 unset PYTHONHOME PYTHONPATH VIRTUAL_ENV
-export UV_PROJECT_ENVIRONMENT=/tmp/nemo-rl-driver-${SLURM_JOB_ID:?}
+export UV_PROJECT_ENVIRONMENT=${runtime_environment_root}
 export UV_LINK_MODE=copy
 export NRL_SLURM_JOB_ID=${SLURM_JOB_ID:?}
 export NRL_SLURM_RESTART_COUNT=${SLURM_RESTART_COUNT:-0}
-CONTAINER_ENV_VARS=CONTAINER_PATH_PREFIX,UV_PROJECT_ENVIRONMENT,UV_LINK_MODE,UV_PYTHON,UV_PYTHON_INSTALL_DIR,UV_MANAGED_PYTHON,UV_PYTHON_DOWNLOADS,PINNED_UV_VERSION,UV_EXECUTABLE,NRL_FORCE_REBUILD_VENVS,NVTE_WITH_NCCL_EP,NRL_SLURM_JOB_ID,NRL_SLURM_RESTART_COUNT
+export NEMO_RL_VENV_DIR=/tmp/nemo-rl-worker-venvs/job-${NRL_SLURM_JOB_ID}-restart-${NRL_SLURM_RESTART_COUNT}
+export RUNTIME_PYTHON
+CONTAINER_ENV_VARS=CONTAINER_PATH_PREFIX,UV_PROJECT_ENVIRONMENT,UV_LINK_MODE,UV_PYTHON,UV_PYTHON_INSTALL_DIR,UV_MANAGED_PYTHON,UV_PYTHON_DOWNLOADS,PINNED_UV_VERSION,UV_EXECUTABLE,RUNTIME_PYTHON,NEMO_RL_VENV_DIR,NRL_FORCE_REBUILD_VENVS,NVTE_WITH_NCCL_EP,NRL_SLURM_JOB_ID,NRL_SLURM_RESTART_COUNT
 export CONTAINER_ENV_VARS
 managed_python_setup_command='set -euo pipefail
 managed_python=$("${UV_EXECUTABLE}" python find --managed-python "${UV_PYTHON}")
@@ -105,7 +143,22 @@ actual_python_version=$("${managed_python}" -c "import platform; print(platform.
 if [[ "${actual_python_version}" != "${UV_PYTHON}" ]]; then
   echo "Managed Python version mismatch: expected ${UV_PYTHON}, got ${actual_python_version}" >&2
   exit 2
-fi'
+fi
+if [[ "${RUNTIME_PYTHON}" != "${UV_PROJECT_ENVIRONMENT}/bin/python" ||
+      ! -f "${RUNTIME_PYTHON}" || ! -x "${RUNTIME_PYTHON}" ]]; then
+  echo "Shared runtime Python is unavailable on this Ray node" >&2
+  exit 2
+fi
+runtime_python_version=$("${RUNTIME_PYTHON}" -c "import platform; print(platform.python_version())")
+if [[ "${runtime_python_version}" != "${UV_PYTHON}" ]]; then
+  echo "Runtime Python version mismatch: expected ${UV_PYTHON}, got ${runtime_python_version}" >&2
+  exit 2
+fi
+mkdir -p "${NEMO_RL_VENV_DIR}"
+[[ -d "${NEMO_RL_VENV_DIR}" && -w "${NEMO_RL_VENV_DIR}" ]] || {
+  echo "NEMO_RL_VENV_DIR is not a writable shared directory" >&2
+  exit 2
+}'
 if [[ -n "${SETUP_COMMAND:-}" ]]; then
   SETUP_COMMAND=${managed_python_setup_command}$'\n'${SETUP_COMMAND}
 else
