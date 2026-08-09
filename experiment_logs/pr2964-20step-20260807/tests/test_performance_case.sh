@@ -105,5 +105,9 @@ report_html=$(<"${experiment_dir}/report/index.html")
 assert_contains "${report_html}" 'assets/step-time-improvement.png'
 assert_contains "${report_html}" 'assets/throughput-improvement.png'
 assert_contains "${report_html}" 'Positive bars mean HybridEP improved the metric'
+assert_contains "${report_html}" 'train/mean_total_tokens_per_sample'
+assert_contains "${report_html}" '3.16% fewer tokens per sample'
+assert_contains "${report_html}" 'job 507302 · external routing MCore'
+assert_not_contains "${report_html}" "507302 completed 20/20 with Bridge's stock MCore"
 
 printf 'performance-case-tests-pass\n'
