@@ -1,0 +1,110 @@
+{
+  "audit_scope": "Qwen3-30B-A3B MXFP8 MoE expert FC1/FC2 monolithic replay",
+  "coverage": 0.9530801641449307,
+  "decision": "NO_PROMOTION",
+  "decision_reason": "No common tactic pair passed both the 2% weighted-gain and 3% maximum-CV gates.",
+  "full_audit": {
+    "all_rows_deterministic": true,
+    "all_rows_finite": true,
+    "all_rows_max_abs_error_zero": true,
+    "all_rows_successful": true,
+    "cosine_similarity_max": 1.0000001192092896,
+    "cosine_similarity_min": 0.9999998807907104,
+    "job_id": 2550024,
+    "legal_tactic_pairs": 920,
+    "profiles": 8,
+    "rows": 7360
+  },
+  "gates": {
+    "maximum_cv": 0.03,
+    "maximum_high_weight_regression": 0.01,
+    "minimum_weighted_gain": 0.02
+  },
+  "measurement_context": {
+    "cuda_graph_replay": "required",
+    "flashinfer_version": "0.6.13",
+    "model": "Qwen3-30B-A3B",
+    "nemo_rl_commit": "d678bfbf2d3b05df8c628d5004a4d08756be4250",
+    "prepacked_weight_sha256": "bc7717a501be9add5b5c3916d94520a3d5b35fb286f9a1e1ab6bf0e3fb1bbe1c",
+    "repetitions": 50,
+    "stock_tactic": [16, 530],
+    "vllm_commit": "b9eea5bbbec24a2af6acd0d92c02a3640a748e9c"
+  },
+  "same_run_comparison": {
+    "all_rows_deterministic": true,
+    "all_rows_finite": true,
+    "all_rows_max_abs_error_zero": true,
+    "all_rows_successful": true,
+    "candidates": [
+      {
+        "maximum_cv": 0.047,
+        "maximum_profile_regression": 0.0,
+        "pair": [16, 530],
+        "speedup_vs_stock": 1.0,
+        "weighted_median_gain": 0.0,
+        "weighted_median_us": 87.849995
+      },
+      {
+        "maximum_cv": 0.032168,
+        "maximum_profile_regression": 0.017675,
+        "pair": [32, 232],
+        "speedup_vs_stock": 1.004542,
+        "weighted_median_gain": 0.000154465,
+        "weighted_median_us": 87.452774
+      },
+      {
+        "maximum_cv": 0.283435,
+        "maximum_profile_regression": 0.008837,
+        "pair": [32, 280],
+        "speedup_vs_stock": 1.013806,
+        "weighted_median_gain": 0.012547536,
+        "weighted_median_us": 86.653693
+      },
+      {
+        "maximum_cv": 0.40859,
+        "maximum_profile_regression": 0.008837,
+        "pair": [32, 550],
+        "speedup_vs_stock": 1.013632,
+        "weighted_median_gain": 0.012547536,
+        "weighted_median_us": 86.668514
+      },
+      {
+        "maximum_cv": 0.037466,
+        "maximum_profile_regression": 0.004557,
+        "pair": [32, 568],
+        "speedup_vs_stock": 1.007035,
+        "weighted_median_gain": 0.0,
+        "weighted_median_us": 87.23627
+      },
+      {
+        "maximum_cv": 0.037384,
+        "maximum_profile_regression": 0.0,
+        "pair": [32, 574],
+        "speedup_vs_stock": 1.015216,
+        "weighted_median_gain": 0.012167304,
+        "weighted_median_us": 86.533311
+      }
+    ],
+    "job_id": 2550086,
+    "rows": 48,
+    "stock_maximum_cv": 0.047
+  },
+  "source_artifacts": {
+    "focused_measurements": {
+      "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/mxfp8-moe-tactic-audit/shmoo/monolithic-stock-top5-repeat50-v0251-a01r-20260808/measurements.jsonl",
+      "sha256": "138f897215b1832be4c4648452a2366e302e2568b35b1c6341f9eba99bae2e14"
+    },
+    "full_measurements": {
+      "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/mxfp8-moe-tactic-audit/shmoo/monolithic-high8-full-v0251-a01r-20260808/measurements.jsonl",
+      "sha256": "35010a7de35e803c3e5ddcf4028041877d28402afea42f7033abce0e2e366574"
+    },
+    "nsys_components": {
+      "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/mxfp8-moe-tactic-audit/shmoo/monolithic-stock-top5-repeat50-v0251-a01r-20260808/nsys_components.csv",
+      "sha256": "d369c3db9fc93802ffafb87f64e5e8a509716ae4f695e518f733bf660e244676"
+    },
+    "selected_profiles": {
+      "path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/mxfp8-moe-tactic-audit/profiles/20260808T2015Z-bounded-trace-v0251/selected_profiles.json",
+      "sha256": "5a1a435a0c7781bd826ccdf14f3e699952babdafda2425331fb95ff11fb4fca3"
+    }
+  }
+}
