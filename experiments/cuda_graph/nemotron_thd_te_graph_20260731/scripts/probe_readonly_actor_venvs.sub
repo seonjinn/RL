@@ -1,0 +1,121 @@
+#!/bin/bash
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -euo pipefail
+
+: "${CONTAINER:?Set CONTAINER to the immutable Enroot image path}"
+: "${RUNTIME_STAGE_ROOT:?Set RUNTIME_STAGE_ROOT to the attested staged runtime}"
+: "${UV_PYTHON_INSTALL_DIR:?Set UV_PYTHON_INSTALL_DIR to the managed Python root}"
+: "${PROBE_SCRIPT_PATH:?Set PROBE_SCRIPT_PATH to this persistent script}"
+MOUNTS=${MOUNTS:-/lustre:/lustre}
+
+[[ "${CONTAINER}" == /* && -f "${CONTAINER}" && ! -L "${CONTAINER}" ]] || {
+  echo "CONTAINER must be an absolute regular non-symlink file" >&2
+  exit 2
+}
+[[ "${RUNTIME_STAGE_ROOT}" == /* && -d "${RUNTIME_STAGE_ROOT}" &&
+   ! -L "${RUNTIME_STAGE_ROOT}" ]] || {
+  echo "RUNTIME_STAGE_ROOT must be an absolute regular directory" >&2
+  exit 2
+}
+[[ "${UV_PYTHON_INSTALL_DIR}" == /* && -d "${UV_PYTHON_INSTALL_DIR}" &&
+   ! -L "${UV_PYTHON_INSTALL_DIR}" ]] || {
+  echo "UV_PYTHON_INSTALL_DIR must be an absolute regular directory" >&2
+  exit 2
+}
+[[ "${PROBE_SCRIPT_PATH}" == /* && -f "${PROBE_SCRIPT_PATH}" &&
+   ! -L "${PROBE_SCRIPT_PATH}" && -x "${PROBE_SCRIPT_PATH}" ]] || {
+  echo "PROBE_SCRIPT_PATH must be an absolute executable non-symlink file" >&2
+  exit 2
+}
+if [[ "${MOUNTS}" != "/lustre:/lustre" ]]; then
+  echo "MOUNTS must be /lustre:/lustre" >&2
+  exit 2
+fi
+
+if [[ "${READONLY_ACTOR_VENV_PROBE_PAYLOAD:-0}" != "1" ]]; then
+  exec srun \
+    --nodes=1 \
+    --ntasks=1 \
+    --cpus-per-task="${SLURM_CPUS_PER_TASK:?}" \
+    --no-container-mount-home \
+    --container-image="${CONTAINER}" \
+    --container-mounts="${MOUNTS}" \
+    --container-workdir="${RUNTIME_STAGE_ROOT}/source" \
+    --container-env=CONTAINER,RUNTIME_STAGE_ROOT,UV_PYTHON_INSTALL_DIR,PROBE_SCRIPT_PATH,MOUNTS,READONLY_ACTOR_VENV_PROBE_PAYLOAD \
+    --export=ALL \
+    env READONLY_ACTOR_VENV_PROBE_PAYLOAD=1 \
+    bash "${PROBE_SCRIPT_PATH}"
+fi
+
+project_root=${RUNTIME_STAGE_ROOT}/source
+uv_executable=${RUNTIME_STAGE_ROOT}/uv/uv
+runtime_python=${RUNTIME_STAGE_ROOT}/environment/bin/python
+for path in "${project_root}/pyproject.toml" "${project_root}/uv.lock" \
+  "${uv_executable}"; do
+  [[ -f "${path}" && ! -L "${path}" ]] || {
+    echo "Required runtime path is missing or unsafe: ${path}" >&2
+    exit 2
+  }
+done
+[[ -f "${runtime_python}" && -x "${uv_executable}" && -x "${runtime_python}" ]] || {
+  echo "Staged uv and Python must be executable" >&2
+  exit 2
+}
+if find "${RUNTIME_STAGE_ROOT}" -xdev -perm /222 -print -quit | grep -q .; then
+  echo "RUNTIME_STAGE_ROOT must be read-only before the actor-venv probe" >&2
+  exit 2
+fi
+
+probe_root=/tmp/nemo-rl-readonly-actor-venv-probe-${SLURM_JOB_ID:?}
+rm -rf -- "${probe_root}"
+mkdir -m 0700 -- "${probe_root}"
+cleanup() {
+  rm -rf -- "${probe_root}"
+}
+trap cleanup EXIT
+
+export UV_NO_EDITABLE=1
+export UV_LINK_MODE=copy
+export UV_MANAGED_PYTHON=1
+export UV_PYTHON_DOWNLOADS=never
+export UV_PYTHON=$(tr -d '[:space:]' <"${project_root}/.python-version")
+export PATH=$(dirname "${uv_executable}"):${PATH}
+
+probe_tier() {
+  local tier=$1
+  local import_name=$2
+  local environment_root=${probe_root}/${tier}
+  local cache_root=${probe_root}/cache-${tier}
+  export UV_PROJECT_ENVIRONMENT=${environment_root}
+  export UV_CACHE_DIR=${cache_root}
+
+  "${uv_executable}" venv --allow-existing "${environment_root}"
+  "${uv_executable}" sync --locked --directory "${project_root}"
+  "${uv_executable}" run --locked --extra "${tier}" \
+    --directory "${project_root}" echo "Finished creating ${tier} actor venv"
+  "${environment_root}/bin/python" -c \
+    'import importlib, pathlib, sys; root = pathlib.Path(sys.argv[1]).resolve(); modules = [importlib.import_module(name) for name in ("nemo_rl", sys.argv[2])]; paths = [pathlib.Path(module.__file__).resolve() for module in modules]; assert all(path.is_relative_to(root) for path in paths), paths; print("NON_EDITABLE_IMPORTS=" + ",".join(map(str, paths)))' \
+    "${environment_root}" "${import_name}"
+}
+
+probe_tier vllm vllm
+probe_tier mcore megatron.core
+
+if find "${RUNTIME_STAGE_ROOT}" -xdev -perm /222 -print -quit | grep -q .; then
+  echo "Actor-venv probe made the immutable runtime writable" >&2
+  exit 2
+fi
+printf 'READONLY_ACTOR_VENV_PROBE=passed\nUV_NO_EDITABLE=%s\n' "${UV_NO_EDITABLE}"

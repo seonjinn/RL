@@ -188,9 +188,11 @@ assume the current directory is
    downloads disabled, and executes the NeMo-RL driver with the attested staged
    Python on every Ray node. Per-actor environments remain writable and are
    created independently on every node under a job- and restart-isolated `/tmp`
-   path. This preserves `NRL_FORCE_REBUILD_VENVS=true` without allowing builders
-   on different nodes or concurrent scope jobs to remove each other's
-   environments. Typed MCore standalone leaves also execute the attested staged
+   path. Actor builds set `UV_NO_EDITABLE=1`, so uv installs deployment-style
+   wheels without writing `*.egg-info` into the immutable staged source. This
+   preserves `NRL_FORCE_REBUILD_VENVS=true` without allowing builders on
+   different nodes or concurrent scope jobs to remove each other's environments.
+   Typed MCore standalone leaves also execute the attested staged
    Python directly. The wrapper passes the explicit UV allowlist and
    an attested `CONTAINER_PATH_PREFIX` through Pyxis `--container-env`, then
    prepends that one directory inside each Ray head, worker, and standalone

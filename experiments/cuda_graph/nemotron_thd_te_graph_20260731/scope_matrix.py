@@ -354,6 +354,7 @@ def render_scope_command(
     command = [
         "env",
         "NRL_FORCE_REBUILD_VENVS=true",
+        "UV_NO_EDITABLE=1",
         *driver_prefix,
         spec.nemorl_launcher,
         "--config",

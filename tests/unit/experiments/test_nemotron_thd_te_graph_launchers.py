@@ -37,7 +37,7 @@ UV_VERSION = UV_VERSION_MATCH.group(1)
 CONTAINER_ENV_VARS = (
     "CONTAINER_PATH_PREFIX,UV_PROJECT_ENVIRONMENT,UV_LINK_MODE,UV_PYTHON,"
     "UV_PYTHON_INSTALL_DIR,UV_MANAGED_PYTHON,UV_PYTHON_DOWNLOADS,"
-    "PINNED_UV_VERSION,UV_EXECUTABLE,RUNTIME_PYTHON,NEMO_RL_VENV_DIR,"
+    "UV_NO_EDITABLE,PINNED_UV_VERSION,UV_EXECUTABLE,RUNTIME_PYTHON,NEMO_RL_VENV_DIR,"
     "NRL_FORCE_REBUILD_VENVS,NVTE_WITH_NCCL_EP,NRL_SLURM_JOB_ID,"
     "NRL_SLURM_RESTART_COUNT"
 )
@@ -1026,7 +1026,12 @@ def test_rendered_nemorl_command_can_use_shared_runtime_python_without_wandb() -
         )
     )
 
-    assert arguments[:3] == ["env", "NRL_FORCE_REBUILD_VENVS=true", runtime_python]
+    assert arguments[:4] == [
+        "env",
+        "NRL_FORCE_REBUILD_VENVS=true",
+        "UV_NO_EDITABLE=1",
+        runtime_python,
+    ]
     assert "uv" not in arguments
     assert arguments.count("logger.wandb_enabled=false") == 1
     assert "logger.wandb_enabled=true" not in arguments
@@ -2309,8 +2314,9 @@ def test_leaf_uses_attested_shared_python_and_can_disable_wandb(
     assert arguments[:3] == [
         "env",
         "NRL_FORCE_REBUILD_VENVS=true",
-        str(runtime_python),
+        "UV_NO_EDITABLE=1",
     ]
+    assert arguments[3] == str(runtime_python)
     assert "logger.wandb_enabled=false" in arguments
     assert "logger.wandb_enabled=true" not in arguments
 
@@ -2561,6 +2567,7 @@ def test_nemorl_job_wrapper_uses_shared_attested_python_and_isolates_worker_venv
         "printf '%s\\n' \"${UV_PROJECT_ENVIRONMENT:-}\" "
         '"${UV_PYTHON:-}" "${UV_PYTHON_INSTALL_DIR:-}" '
         '"${UV_MANAGED_PYTHON:-}" "${UV_PYTHON_DOWNLOADS:-}" '
+        '"${UV_NO_EDITABLE:-}" '
         '"${CONTAINER_ENV_VARS:-}" '
         '"${CONTAINER_PATH_PREFIX:-}" '
         '"${RUNTIME_PYTHON:-}" '
@@ -2631,19 +2638,20 @@ def test_nemorl_job_wrapper_uses_shared_attested_python_and_isolates_worker_venv
 
     assert result.returncode == 0, result.stderr
     environment_lines = environment_log.read_text().splitlines()
-    assert environment_lines[:9] == [
+    assert environment_lines[:10] == [
         str(runtime_stage_root / "environment"),
         PYTHON_VERSION,
         str(python_install_dir),
         "1",
         "never",
+        "1",
         CONTAINER_ENV_VARS,
         str(uv_executable.parent),
         str(runtime_python),
         "/tmp/nemo-rl-worker-venvs/job-733-restart-0",
     ]
-    assert environment_lines[9].split(":")[0] == str(fake_bin)
-    assert environment_lines[10:] == ["733", "0"]
+    assert environment_lines[10].split(":")[0] == str(fake_bin)
+    assert environment_lines[11:] == ["733", "0"]
 
     runtime_python.unlink()
     outside_python = tmp_path / "outside-managed-python" / "bin" / "python3.13"
@@ -2665,6 +2673,20 @@ def test_nemorl_job_wrapper_uses_shared_attested_python_and_isolates_worker_venv
 
     assert rejected.returncode == 2
     assert "RUNTIME_PYTHON must resolve inside UV_PYTHON_INSTALL_DIR" in rejected.stderr
+
+
+def test_readonly_actor_venv_probe_uses_non_editable_tier_installs() -> None:
+    source = (EXPERIMENT_DIR / "scripts" / "probe_readonly_actor_venvs.sub").read_text()
+
+    assert "export UV_NO_EDITABLE=1" in source
+    assert "probe_tier vllm vllm" in source
+    assert "probe_tier mcore megatron.core" in source
+    assert '--container-image="${CONTAINER}"' in source
+    assert 'bash "${PROBE_SCRIPT_PATH}"' in source
+    assert source.count('find "${RUNTIME_STAGE_ROOT}" -xdev -perm /222') == 2
+    assert '"${uv_executable}" sync --locked --directory "${project_root}"' in source
+    assert '"${uv_executable}" run --locked --extra "${tier}"' in source
+    assert "path.is_relative_to(root)" in source
 
 
 @pytest.mark.parametrize(
