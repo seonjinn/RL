@@ -124,9 +124,7 @@ EOF
 SBATCH_ARGS=(
     --nodes=1
     --ntasks=1
-    --gpus=1
-    --gpus-per-task=1
-    --exclusive
+    --gres=gpu:1
     --account="${ACCOUNT}"
     --partition="${PARTITION}"
     --time=05:00:00
@@ -141,6 +139,7 @@ printf 'action=%s\n' "${ACTION}"
 printf 'run_root=%s\n' "${RUN_ROOT}"
 printf 'shmoo_weight_mode=%s\n' "${SHMOO_WEIGHT_MODE}"
 printf 'stock_input_cache_root=%s\n' "${STOCK_INPUT_CACHE_ROOT}"
+printf 'job_script=%s\n' "${SCRIPT_DIR}/single_gpu.sub"
 printf 'CUDA Graph replay required\n'
 printf 'NSys captures selected winners plus stock\n'
 printf 'sbatch_args='; printf ' %q' "${SBATCH_ARGS[@]}"; printf '\n'
@@ -150,7 +149,7 @@ case "${ACTION}" in
     dry-run) ;;
     test-only)
         CONTAINER=${CONTAINER} MOUNTS=/lustre:/lustre COMMAND="${COMMAND}" GPUS_PER_NODE=1 \
-            BASE_LOG_DIR="${RUN_ROOT}" sbatch --test-only "${SBATCH_ARGS[@]}" "${REPO_DIR}/ray.sub"
+            BASE_LOG_DIR="${RUN_ROOT}" sbatch --test-only "${SBATCH_ARGS[@]}" "${SCRIPT_DIR}/single_gpu.sub"
         ;;
     submit)
         audit_write_manifest "${RUN_ROOT}" shmoo "${REPO_DIR}" "${CUSTOM_VLLM_ROOT}" \
@@ -158,9 +157,10 @@ case "${ACTION}" in
             examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml \
             "${MODEL_SNAPSHOT}" "${MANIFEST_CACHE_ROOT}" "${SCRIPT_DIR}" \
             "${SCRIPT_DIR}/submit_shmoo_ptyche.sh" "${SCRIPT_DIR}/provenance.sh" \
+            "${SCRIPT_DIR}/single_gpu.sub" \
             "${SCRIPT_DIR}/shmoo_moe_tactics.py" "${SCRIPT_DIR}/nsys_to_component_csv.py" \
             "${SELECTED_PROFILES}"
         CONTAINER=${CONTAINER} MOUNTS=/lustre:/lustre COMMAND="${COMMAND}" GPUS_PER_NODE=1 \
-            BASE_LOG_DIR="${RUN_ROOT}" sbatch "${SBATCH_ARGS[@]}" "${REPO_DIR}/ray.sub"
+            BASE_LOG_DIR="${RUN_ROOT}" sbatch "${SBATCH_ARGS[@]}" "${SCRIPT_DIR}/single_gpu.sub"
         ;;
 esac

@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+: "${BASE_LOG_DIR:?BASE_LOG_DIR is required}"
+: "${COMMAND:?COMMAND is required}"
+: "${CONTAINER:?CONTAINER is required}"
+: "${MOUNTS:?MOUNTS is required}"
+
+mkdir -p "${BASE_LOG_DIR}"
+COMMAND_FILE="${BASE_LOG_DIR}/single_gpu_command.sh"
+printf '%s\n' "${COMMAND}" > "${COMMAND_FILE}"
+chmod +x "${COMMAND_FILE}"
+
+srun \
+    --nodes=1 \
+    --ntasks=1 \
+    --gres=gpu:1 \
+    --mpi=pmix \
+    --no-container-mount-home \
+    --container-mounts="${MOUNTS}" \
+    --container-image="${CONTAINER}" \
+    --container-workdir="${SLURM_SUBMIT_DIR}" \
+    bash "${COMMAND_FILE}"

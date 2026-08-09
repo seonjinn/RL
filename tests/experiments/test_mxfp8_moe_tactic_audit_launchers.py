@@ -135,6 +135,8 @@ def test_shmoo_dry_run_requests_one_gb200_for_five_hours(tmp_path: Path) -> None
 
     assert "--nodes=1" in output
     assert "--ntasks=1" in output
+    assert "--gres=gpu:1" in output
+    assert "--exclusive" not in output
     assert "--time=05:00:00" in output
     assert "--constraint=GB200" not in output
     assert "--job-name=coreai_dlalgo_llm-mxmoe.shmoo-" in output
@@ -149,6 +151,7 @@ def test_shmoo_dry_run_requests_one_gb200_for_five_hours(tmp_path: Path) -> None
     assert "--stock-cache" in output
     assert "stock_input_cache_root=" in output
     assert "mkdir -p ${RUN_ROOT} ${CACHE_ROOT}" not in output
+    assert "single_gpu.sub" in output
 
 
 def test_shmoo_synthetic_mode_uses_prepared_environment_without_stock_artifacts(
