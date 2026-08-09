@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel)
+PARTIAL_RAY_SUB=${SCRIPT_DIR}/ray_partial.sub
 
 ACTION=${ACTION:-test-only}
 MODE=${MODE:?MODE is required: legacy or nccl}
@@ -81,7 +82,7 @@ fi
 REPO_SHA=$(git -C "${REPO}" rev-parse HEAD)
 for path in \
   "${REPO}/${CONFIG}" \
-  "${REPO}/ray.sub" \
+  "${PARTIAL_RAY_SUB}" \
   "${CONTAINER}"; do
   test -e "${path}"
 done
@@ -211,9 +212,9 @@ printf 'mode=%s\nrepo=%s\nsha=%s\nresult=%s\n' \
 
 if (( PRINT_ONLY == 1 )); then
   printf 'SBATCH:'
-  printf ' %q' sbatch "${SBATCH_ACTION[@]}" "${SBATCH_ARGS[@]}" "${REPO}/ray.sub"
+  printf ' %q' sbatch "${SBATCH_ACTION[@]}" "${SBATCH_ARGS[@]}" "${PARTIAL_RAY_SUB}"
   printf '\nCOMMAND:\n%s\n' "${COMMAND}"
   exit 0
 fi
 
-exec sbatch "${SBATCH_ACTION[@]}" "${SBATCH_ARGS[@]}" "${REPO}/ray.sub"
+exec sbatch "${SBATCH_ACTION[@]}" "${SBATCH_ARGS[@]}" "${PARTIAL_RAY_SUB}"

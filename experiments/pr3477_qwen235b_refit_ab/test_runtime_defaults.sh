@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 SUBMIT_SCRIPT=${SCRIPT_DIR}/submit_gcp_nrt.sh
+PARTIAL_RAY_SUB=${SCRIPT_DIR}/ray_partial.sub
 
 grep -Fq 'nemo-rl-nightly-cw-fallback-20260808' "${SUBMIT_SCRIPT}"
 grep -Fq 'nemo_rl_nightly_20260805_15171871.sqsh' "${SUBMIT_SCRIPT}"
@@ -27,6 +28,12 @@ grep -Fq 'NRL_ALLOW_PARTIAL_GPU_NODES=${NRL_ALLOW_PARTIAL_GPU_NODES:-1}' "${SUBM
 grep -Fq 'export NRL_ALLOW_PARTIAL_GPU_NODES' "${SUBMIT_SCRIPT}"
 grep -Fq -- '--oversubscribe' "${SUBMIT_SCRIPT}"
 grep -Fq 'NRL_ALLOW_PARTIAL_GPU_NODES' "${SCRIPT_DIR}/../../ray.sub"
+grep -Fq 'PARTIAL_RAY_SUB=${SCRIPT_DIR}/ray_partial.sub' "${SUBMIT_SCRIPT}"
+grep -Fq 'source "${SCRIPT_DIR}/../../ray.sub"' "${PARTIAL_RAY_SUB}"
+if grep -Fq '#SBATCH --exclusive' "${PARTIAL_RAY_SUB}"; then
+  echo "partial-node wrapper must not request exclusive nodes" >&2
+  exit 1
+fi
 grep -Fq 'uv run --frozen examples/run_grpo.py' "${SUBMIT_SCRIPT}"
 
 if grep -Fq 'UV_PYTHON_INSTALL_DIR=' "${SUBMIT_SCRIPT}"; then
