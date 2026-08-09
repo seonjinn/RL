@@ -481,14 +481,14 @@ def test_cache_key_for_case_matches_moe_input_profile_layout() -> None:
         "MoERunner",
     )
     assert final[2] == (
-        (16, 64),
+        (32, 64),
         (0,),
-        (16, 2),
+        (32, 2),
         (0,),
-        (16, 64),
-        (16, 2),
+        (32, 64),
+        (32, 2),
         (0,),
         (0,),
     )
-    assert intermediate[2][6] == (16, 2, 64)
+    assert intermediate[2][6] == (32, 2, 64)
     assert final[3] == intermediate[3] == ()

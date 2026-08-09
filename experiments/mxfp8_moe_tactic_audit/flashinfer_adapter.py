@@ -153,13 +153,29 @@ def enumerate_valid_tactics(case: MoeKernelCase) -> tuple[TacticPair, ...]:
     )
 
 
-def _last_positive_power_of_two(value: int) -> int:
-    return 1 << (max(value, 1).bit_length() - 1)
+def _next_positive_power_of_two(value: int) -> int:
+    normalized = max(value, 1)
+    return 1 << (normalized - 1).bit_length()
+
+
+def _map_to_hybrid_bucket(value: int, maximum: int) -> int:
+    """Mirror the token-bucket mapper pinned by FlashInfer 0.6.13."""
+    if value <= 0:
+        return 1
+    if value >= maximum:
+        return maximum
+    if value <= 256:
+        return _next_positive_power_of_two(value)
+    if value <= 2048:
+        return min(((value + 255) // 256) * 256, maximum)
+    if value <= 4096:
+        return min(((value + 511) // 512) * 512, maximum)
+    return min(_next_positive_power_of_two(value), maximum)
 
 
 def tune_max_num_tokens(case: MoeKernelCase) -> int:
     """Return the upstream-tested token cap used to pin the cache bucket."""
-    return max(_last_positive_power_of_two(case.profile.signature.num_tokens), 16)
+    return max(_next_positive_power_of_two(case.profile.signature.num_tokens), 16)
 
 
 def _profile_shape(shape: torch.Size | tuple[int, ...], bucket: int) -> tuple[int, ...]:
@@ -170,8 +186,8 @@ def _profile_shape(shape: torch.Size | tuple[int, ...], bucket: int) -> tuple[in
 def cache_key_for_case(case: MoeKernelCase, *, has_gemm1_lora_delta: bool) -> str:
     """Build the exact hash-free AutoTuner file key for one replay case."""
     signature = case.profile.signature
-    bucket = min(
-        _last_positive_power_of_two(signature.num_tokens),
+    bucket = _map_to_hybrid_bucket(
+        signature.num_tokens,
         tune_max_num_tokens(case),
     )
     profile_shapes = (
