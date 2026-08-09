@@ -895,31 +895,6 @@ def test_distributed_wrappers_are_bash_syntax_valid(wrapper: str) -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_hybridep_probe_rejects_missing_buffer_under_python_optimization(
-    tmp_path: Path,
-) -> None:
-    source = (EXPERIMENT_DIR / "scripts" / "run_mcore_scope.sub").read_text()
-    match = re.search(
-        r'"\$\{environment_root\}/bin/python" - <<PY\n(?P<probe>.*?)\nPY',
-        source,
-        re.DOTALL,
-    )
-    assert match is not None
-    (tmp_path / "deep_ep.py").write_text("\n")
-    environment = os.environ | {"PYTHONPATH": str(tmp_path)}
-
-    result = subprocess.run(
-        [sys.executable, "-O", "-c", match["probe"]],
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode != 0
-    assert "HybridEPBuffer" in result.stderr
-
-
 def test_worker_rehashes_exact_intent_bytes_used_by_runtime_contract() -> None:
     source = (EXPERIMENT_DIR / "scripts" / "run_mcore_scope.sub").read_text()
 
@@ -929,25 +904,169 @@ def test_worker_rehashes_exact_intent_bytes_used_by_runtime_contract() -> None:
     assert "intent = json.loads(serialized_intent)" in source
 
 
-def test_worker_provisions_the_same_locked_test_dependency_group() -> None:
-    """The leaf environment must include the pytest group attested during staging."""
-    source = (EXPERIMENT_DIR / "scripts" / "run_mcore_scope.sub").read_text()
-
-    assert "--locked --extra mcore --group test --no-python-downloads" in source
-
-
-def test_worker_isolates_parallel_native_builds_in_node_local_uv_cache() -> None:
-    """One sync per node must never contend on an inherited shared UV cache."""
-    source = (EXPERIMENT_DIR / "scripts" / "run_mcore_scope.sub").read_text()
-    assignment = (
-        "export UV_CACHE_DIR=/tmp/mcore-driver-${SLURM_JOB_ID:?}-"
-        "${scheduler_restart_count}-uv-cache"
+def test_worker_reuses_attested_runtime_without_dependency_rebuild(
+    tmp_path: Path,
+) -> None:
+    """The GPU worker must launch the staged Python without a networked uv sync."""
+    module = _load_driver()
+    repository, candidate_sha = _git_repository(tmp_path / "candidate")
+    run_log_root = tmp_path / "logs"
+    artifacts = module.prepare_candidate_submission(
+        archive_sources=((repository, candidate_sha, Path(".")),),
+        run_log_root=run_log_root,
+        candidate_kind="mcore",
+        candidate_sha=candidate_sha,
+        intent_payload={
+            "schema_version": 1,
+            "candidate_kind": "mcore",
+            "candidate_sha": candidate_sha,
+            "integration_sha": candidate_sha,
+            "profile_sha256": "a" * 64,
+            "runtime_feature_set": "dropless_hybridep_nano16",
+            "excluded_packages": ["fast-hadamard-transform"],
+            "torch_cuda_arch_list": "10.0a",
+            "nvte_cuda_archs": "100a",
+            "rows": ["dropless_hybridep_nano16"],
+        },
+    )
+    runtime_root = tmp_path / "staged-runtime"
+    environment_root = runtime_root / "environment"
+    python_executable = environment_root / "bin" / "python"
+    uv_executable = runtime_root / "uv" / "uv"
+    python_executable.parent.mkdir(parents=True)
+    python_executable.write_text("#!/bin/sh\nexit 0\n")
+    python_executable.chmod(0o555)
+    python_install_dir = tmp_path / "uv-python-installations"
+    attestation = tmp_path / "runtime-attestation.json"
+    container_sha256 = "b" * 64
+    te_sha = "c" * 40
+    attestation.write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "container_sha256": container_sha256,
+                "transformer_engine_source_commit": te_sha,
+                "transformer_engine_version_base_commit": te_sha,
+                "runtime_feature_set": "dropless_hybridep_nano16",
+                "excluded_packages": ["fast-hadamard-transform"],
+                "torch_cuda_arch_list": "10.0a",
+                "nvte_cuda_archs": "100a",
+                "packages": {"transformer_engine.pytorch": {"version": "2.19.0.dev0"}},
+                "expected_python_version": "3.13.14",
+                "uv_python_install_dir": str(python_install_dir),
+                "expected_uv_version": "0.11.28",
+                "uv_executable": str(uv_executable),
+                "expected_nvte_with_nccl_ep": "0",
+                "expected_environment_root": str(environment_root),
+                "python_executable": str(python_executable),
+                "runtime_prefix": str(environment_root),
+            }
+        )
     )
 
-    assert assignment in source
-    assert source.index(assignment) < source.index("srun --nodes=1 --ntasks=1")
-    container_environment = source.split("CONTAINER_ENV_VARS=", 1)[1].splitlines()[0]
-    assert "UV_CACHE_DIR" in container_environment.split(",")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    srun_log = tmp_path / "srun.jsonl"
+    fake_srun = fake_bin / "srun"
+    fake_srun.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "payload = {\n"
+        "    'argv': sys.argv[1:],\n"
+        "    'environment': {\n"
+        "        key: os.environ.get(key)\n"
+        "        for key in ('NRL_FORCE_REBUILD_VENVS', 'UV_PROJECT_ENVIRONMENT')\n"
+        "    },\n"
+        "}\n"
+        "with open(os.environ['FAKE_SRUN_LOG'], 'a') as output:\n"
+        "    output.write(json.dumps(payload) + '\\n')\n"
+    )
+    fake_srun.chmod(0o755)
+    fake_scontrol = fake_bin / "scontrol"
+    fake_scontrol.write_text("#!/bin/sh\nprintf 'node0\\n'\n")
+    fake_scontrol.chmod(0o755)
+    bash_with_mapfile = fake_bin / "bash-with-mapfile"
+    bash_with_mapfile.write_text(
+        "#!/bin/bash\n"
+        "mapfile() {\n"
+        "    runtime_fields=()\n"
+        '    while IFS= read -r line; do runtime_fields+=("${line}"); done\n'
+        "    return 0\n"
+        "}\n"
+        'source "$1"\n'
+    )
+    bash_with_mapfile.chmod(0o755)
+
+    environment = os.environ.copy()
+    environment.pop("COMMAND", None)
+    environment.pop("NRL_FORCE_REBUILD_VENVS", None)
+    environment.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{environment['PATH']}",
+            "FAKE_SRUN_LOG": str(srun_log),
+            "TEST_ROW_ID": "dropless_hybridep_nano16",
+            "TEST_WORLD_SIZE": "16",
+            "TEST_NUM_NODES": "4",
+            "TEST_GPUS_PER_NODE": "4",
+            "CANDIDATE_KIND": "mcore",
+            "CANDIDATE_SHA": candidate_sha,
+            "INTEGRATION_SHA": candidate_sha,
+            "CANDIDATE_SOURCE_ROOT": str(artifacts.snapshot_root),
+            "CANDIDATE_SNAPSHOT_SHA256": artifacts.snapshot_sha256,
+            "SUBMISSION_INTENT": str(artifacts.intent_path),
+            "SUBMISSION_INTENT_SHA256": artifacts.intent_sha256,
+            "RUN_LOG_ROOT": str(run_log_root),
+            "TEST_MATRIX": str(MATRIX_PATH),
+            "RUNNER_PATH": str(DRIVER_PATH),
+            "CONTAINER": str(tmp_path / "runtime.sqsh"),
+            "CONTAINER_SHA256": container_sha256,
+            "MOUNTS": f"{tmp_path}:{tmp_path}",
+            "EXPECTED_TE_SHA": te_sha,
+            "EXPECTED_TE_VERSION_BASE_SHA": te_sha,
+            "RUNTIME_ATTESTATION": str(attestation),
+            "RUNTIME_PREFLIGHT_JOB_ID": "734",
+            "EXPECTED_UV_EXECUTABLE": str(uv_executable),
+            "EXPECTED_NEMORL_SHA": "d" * 40,
+            "EXPECTED_BRIDGE_SHA": "e" * 40,
+            "EXPECTED_MCORE_SHA": candidate_sha,
+            "SOURCE_PROVENANCE_VERIFIER": "/usr/bin/true",
+            "RUNTIME_ATTESTATION_COMMAND": "/usr/bin/true",
+            "RUNTIME_FEATURE_SET": "dropless_hybridep_nano16",
+            "RUNTIME_EXCLUDED_PACKAGES": "fast-hadamard-transform",
+            "TORCH_CUDA_ARCH_LIST": "10.0a",
+            "NVTE_CUDA_ARCHS": "100a",
+            "REPO_ROOT": str(REPO_ROOT),
+            "SLURM_JOB_NUM_NODES": "4",
+            "SLURM_JOB_NODELIST": "node[0-3]",
+            "SLURM_JOB_ID": "1234",
+            "SLURM_RESTART_COUNT": "0",
+        }
+    )
+    try:
+        result = subprocess.run(
+            [
+                str(bash_with_mapfile),
+                str(EXPERIMENT_DIR / "scripts" / "run_mcore_scope.sub"),
+            ],
+            cwd=REPO_ROOT,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        _restore_owner_write(artifacts.snapshot_root)
+
+    assert result.returncode == 0, result.stderr
+    calls = tuple(json.loads(line) for line in srun_log.read_text().splitlines())
+    assert len(calls) == 2
+    worker_call = calls[1]
+    assert str(python_executable) in worker_call["argv"]
+    assert not any("sync --python" in argument for argument in worker_call["argv"])
+    assert worker_call["environment"] == {
+        "NRL_FORCE_REBUILD_VENVS": None,
+        "UV_PROJECT_ENVIRONMENT": str(environment_root),
+    }
 
 
 def test_scope_classifier_accepts_only_the_committed_mcore_driver() -> None:

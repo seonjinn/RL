@@ -181,11 +181,13 @@ assume the current directory is
    submitted with `afterok:<preflight-job>` and validates exact source, lock,
    image identity, device count, package set, TE commit, Python version, managed
    interpreter path, interpreter SHA256, uv version, uv path, and uv SHA256
-   before starting Ray. The leaf
+   before starting Ray. Each NeMo-RL leaf
    derives `UV_PYTHON_INSTALL_DIR` from the immutable attestation directory,
    requires that path to be container-mounted, forces uv-managed Python with
    downloads disabled, and gives the NeMo-RL driver a fresh per-job
-   `UV_PROJECT_ENVIRONMENT`. The wrapper passes the explicit UV allowlist and
+   `UV_PROJECT_ENVIRONMENT`. Typed MCore standalone leaves instead execute the
+   attested staged Python directly, so GPU nodes never fetch or rebuild locked
+   dependencies. The wrapper passes the explicit UV allowlist and
    an attested `CONTAINER_PATH_PREFIX` through Pyxis `--container-env`, then
    prepends that one directory inside each Ray head, worker, and standalone
    MCore container. It deliberately does not import the host `PATH`: preserving

@@ -81,6 +81,7 @@ mapfile -t runtime_fields < <(python3 - "${RUNTIME_ATTESTATION}" "${SUBMISSION_I
   "${SUBMISSION_INTENT_SHA256}" <<'PY'
 import hashlib
 import json
+import os
 import stat
 import sys
 from pathlib import Path
@@ -128,13 +129,25 @@ for value in (
     ",".join(payload.get("excluded_packages", [])),
     payload.get("torch_cuda_arch_list"),
     payload.get("nvte_cuda_archs"),
+    payload.get("expected_environment_root"),
+    payload.get("python_executable"),
 ):
     if not isinstance(value, str) or not value:
         raise SystemExit("runtime attestation lacks worker runtime provenance")
     print(value)
+environment_root = Path(payload["expected_environment_root"])
+python_executable = Path(payload["python_executable"])
+if not environment_root.is_absolute() or not environment_root.is_dir():
+    raise SystemExit("runtime attestation environment root is invalid")
+if python_executable != environment_root / "bin" / "python":
+    raise SystemExit("runtime attestation Python is outside the staged environment")
+if not python_executable.is_file() or not os.access(python_executable, os.X_OK):
+    raise SystemExit("runtime attestation Python is missing or not executable")
+if payload.get("runtime_prefix") != str(environment_root):
+    raise SystemExit("runtime attestation prefix does not match its environment")
 PY
 ) || fail "Runtime attestation rejected"
-[[ "${#runtime_fields[@]}" == 10 ]] || fail "Runtime attestation fields rejected"
+[[ "${#runtime_fields[@]}" == 12 ]] || fail "Runtime attestation fields rejected"
 TE_VERSION=${runtime_fields[0]}
 export UV_PYTHON=${runtime_fields[1]}
 export UV_PYTHON_INSTALL_DIR=${runtime_fields[2]}
@@ -145,14 +158,15 @@ export NVTE_WITH_NCCL_EP=${runtime_fields[5]}
 [[ "${runtime_fields[7]}" == "${RUNTIME_EXCLUDED_PACKAGES}" ]] || fail "Runtime exclusions mismatch"
 export TORCH_CUDA_ARCH_LIST=${runtime_fields[8]}
 export NVTE_CUDA_ARCHS=${runtime_fields[9]}
+export UV_PROJECT_ENVIRONMENT=${runtime_fields[10]}
+RUNTIME_PYTHON=${runtime_fields[11]}
+export RUNTIME_PYTHON
 export RUNTIME_FEATURE_SET RUNTIME_EXCLUDED_PACKAGES
 export UV_MANAGED_PYTHON=1 UV_PYTHON_DOWNLOADS=never UV_LINK_MODE=copy
-export UV_PROJECT_ENVIRONMENT=/tmp/mcore-driver-${SLURM_JOB_ID:?}
-export UV_CACHE_DIR=/tmp/mcore-driver-${SLURM_JOB_ID:?}-${scheduler_restart_count}-uv-cache
-export NRL_FORCE_REBUILD_VENVS=true
+unset NRL_FORCE_REBUILD_VENVS UV_CACHE_DIR
 CONTAINER_PATH_PREFIX=$(dirname "${UV_EXECUTABLE}")
 export CONTAINER_PATH_PREFIX
-CONTAINER_ENV_VARS=CONTAINER_PATH_PREFIX,UV_PROJECT_ENVIRONMENT,UV_LINK_MODE,UV_PYTHON,UV_PYTHON_INSTALL_DIR,UV_MANAGED_PYTHON,UV_PYTHON_DOWNLOADS,PINNED_UV_VERSION,UV_EXECUTABLE,NRL_FORCE_REBUILD_VENVS,NVTE_WITH_NCCL_EP,NVTE_CUDA_ARCHS,TORCH_CUDA_ARCH_LIST,RUNTIME_FEATURE_SET,RUNTIME_EXCLUDED_PACKAGES,UV_CACHE_DIR
+CONTAINER_ENV_VARS=CONTAINER_PATH_PREFIX,UV_PROJECT_ENVIRONMENT,UV_LINK_MODE,UV_PYTHON,UV_PYTHON_INSTALL_DIR,UV_MANAGED_PYTHON,UV_PYTHON_DOWNLOADS,PINNED_UV_VERSION,UV_EXECUTABLE,NVTE_WITH_NCCL_EP,NVTE_CUDA_ARCHS,TORCH_CUDA_ARCH_LIST,RUNTIME_FEATURE_SET,RUNTIME_EXCLUDED_PACKAGES,RUNTIME_PYTHON
 export CONTAINER_ENV_VARS
 
 srun --nodes=1 --ntasks=1 \
@@ -193,31 +207,7 @@ srun --nodes="${TEST_NUM_NODES}" --ntasks="${TEST_NUM_NODES}" --ntasks-per-node=
   --no-container-mount-home \
   --container-image="${CONTAINER}" --container-mounts="${MOUNTS}" \
   --container-workdir="${REPO_ROOT}" "--container-env=${CONTAINER_ENV_VARS}" \
-  --export=ALL /bin/bash --noprofile --norc -c '
-set -euo pipefail
-uv=$1
-environment_root=$2
-project_root=$3
-shift 3
-sync_command=("${uv}" sync --python "${UV_PYTHON}" --managed-python \
-  --locked --extra mcore --group test --no-python-downloads --directory "${project_root}")
-IFS=, read -r -a excluded_packages <<<"${RUNTIME_EXCLUDED_PACKAGES}"
-for excluded_package in "${excluded_packages[@]}"; do
-  sync_command+=(--no-install-package "${excluded_package}")
-done
-"${sync_command[@]}"
-case "${RUNTIME_FEATURE_SET}" in
-  dropless_hybridep_nano16|dropless_hybridep_qwen235_64)
-    "${environment_root}/bin/python" - <<PY
-import deep_ep
-if not getattr(deep_ep, "HybridEPBuffer", None):
-    raise RuntimeError("deep_ep.HybridEPBuffer is unavailable")
-PY
-    ;;
-esac
-exec "${environment_root}/bin/python" "$@"
-' bash "${UV_EXECUTABLE}" "${UV_PROJECT_ENVIRONMENT}" "${REPO_ROOT}" \
-  "${RUNNER_PATH}" --launch-agent \
+  --export=ALL "${RUNTIME_PYTHON}" "${RUNNER_PATH}" --launch-agent \
   --matrix "${TEST_MATRIX}" --row-id "${TEST_ROW_ID}" \
   --candidate-kind "${CANDIDATE_KIND}" --candidate-sha "${CANDIDATE_SHA}" \
   --integration-sha "${INTEGRATION_SHA}" --source-root "${CANDIDATE_SOURCE_ROOT}" \
