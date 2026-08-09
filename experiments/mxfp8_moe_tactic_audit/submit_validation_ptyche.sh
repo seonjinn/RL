@@ -13,6 +13,7 @@ COMPARE_ACTION=${COMPARE_ACTION:-dry-run}
 ARM=${ARM:-candidate}
 MAX_STEPS=${MAX_STEPS:-2}
 RUN_CORRECTNESS=${RUN_CORRECTNESS:-true}
+NODE_COUNT=4
 case "${ACTION}" in test-only|dry-run|submit) ;; *) echo "Unsupported ACTION: ${ACTION}" >&2; exit 2 ;; esac
 case "${VALIDATION_MODE}" in run|compare) ;; *) echo "VALIDATION_MODE must be run or compare" >&2; exit 2 ;; esac
 case "${COMPARE_ACTION}" in dry-run|run) ;; *) echo "COMPARE_ACTION must be dry-run or run" >&2; exit 2 ;; esac
@@ -185,6 +186,7 @@ export VLLM_FLASHINFER_AUTOTUNE_CACHE_DIR=${STAGED_CACHE_ROOT}
 export MXFP8_MOE_CUDA_GRAPH_REPLAY=required
 export VLLM_TENSOR_PARALLEL_SIZE=1
 export VLLM_EXPERT_PARALLEL_SIZE=1
+export MXFP8_MOE_NODE_COUNT=${NODE_COUNT}
 mkdir -p ${RUN_ROOT}
 [[ -x ${DRIVER_VENV}/bin/python ]] || { echo "Prepared vLLM environment is not executable in the container: ${DRIVER_VENV}" >&2; exit 1; }
 ${DRIVER_VENV}/bin/python - <<'PY'
@@ -199,7 +201,7 @@ if flashinfer.__version__ != "0.6.13":
     )
 print(f"vLLM={vllm.__version__} FlashInfer={flashinfer.__version__}")
 PY
-${DRIVER_VENV}/bin/python examples/run_grpo.py --config ${CONFIG} cluster.num_nodes=4 cluster.gpus_per_node=4 cluster.segment_size=4 policy.model_name=${MODEL_SNAPSHOT} policy.generation.vllm_cfg.enforce_eager=false ++policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm grpo.max_num_steps=${MAX_STEPS} grpo.val_at_start=false checkpointing.enabled=false checkpointing.checkpoint_dir=${RUN_ROOT}/checkpoints logger.log_dir=${RUN_ROOT}/logs logger.wandb_enabled=false
+${DRIVER_VENV}/bin/python examples/run_grpo.py --config ${CONFIG} cluster.num_nodes=${NODE_COUNT} cluster.gpus_per_node=4 cluster.segment_size=4 policy.model_name=${MODEL_SNAPSHOT} policy.generation.vllm_cfg.enforce_eager=false ++policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm grpo.max_num_steps=${MAX_STEPS} grpo.val_at_start=false checkpointing.enabled=false checkpointing.checkpoint_dir=${RUN_ROOT}/checkpoints logger.log_dir=${RUN_ROOT}/logs logger.wandb_enabled=false
 RUNTIME_FINGERPRINTS_JSON=\$(${DRIVER_VENV}/bin/python -m experiments.mxfp8_moe_tactic_audit.observe_runtime --nemo-rl-root ${REPO_DIR} --vllm-root ${CUSTOM_VLLM_ROOT} --model-snapshot ${MODEL_SNAPSHOT} --container ${CONTAINER} --cache-root ${CACHE_ROOT})
 if [[ ${MAX_STEPS} -eq 8 ]]; then
   ${DRIVER_VENV}/bin/python -m experiments.mxfp8_moe_tactic_audit.collect_results --write-run-evidence --run-root ${RUN_ROOT} --arm ${ARM} --run-id ${RUN_ID} --metadata-json '{"batch":"64 prompts x 32 generations","generation_settings":"max_total_sequence_length=4096; enforce_eager=false; CUDA Graph replay required","run_id":"${RUN_ID}","run_kind":"validation","topology":"4 nodes x 4 GPUs"}' --runtime-fingerprints-json "\${RUNTIME_FINGERPRINTS_JSON}"
@@ -209,7 +211,7 @@ ${POST_RUN}
 EOF
 )
 
-SBATCH_ARGS=(--nodes=4 --exclusive --account="${ACCOUNT}" --partition="${PARTITION}" --segment=4 --time=05:00:00 --job-name="coreai_dlalgo_llm-mxmoe.${ARM}-${MAX_STEPS}s-${RUN_ID}" --output="${RUN_ROOT}/slurm-%j.out")
+SBATCH_ARGS=(--nodes="${NODE_COUNT}" --exclusive --account="${ACCOUNT}" --partition="${PARTITION}" --segment=4 --time=05:00:00 --job-name="coreai_dlalgo_llm-mxmoe.${ARM}-${MAX_STEPS}s-${RUN_ID}" --output="${RUN_ROOT}/slurm-%j.out")
 [[ -z "${QOS}" ]] || SBATCH_ARGS+=(--qos="${QOS}")
 printf 'action=%s\narm=%s\nrun_root=%s\ncache_root=%s\n' "${ACTION}" "${ARM}" "${RUN_ROOT}" "${CACHE_ROOT}"
 printf 'sbatch_args='; printf ' %q' "${SBATCH_ARGS[@]}"; printf '\n%s\n' "${COMMAND}"

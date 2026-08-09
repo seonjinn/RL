@@ -441,6 +441,7 @@ def test_validation_uses_the_prepared_vllm_environment(tmp_path: Path) -> None:
     assert f"export UV_PROJECT_ENVIRONMENT={canonical}" in output
     assert f"export VIRTUAL_ENV={canonical}" in output
     assert f"export PATH={canonical / 'bin'}:" in output
+    assert "export MXFP8_MOE_NODE_COUNT=4" in output
     megatron = (
         REPO_ROOT
         / "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM"
@@ -899,8 +900,11 @@ def test_runtime_container_hash_uses_bounded_streaming(
     assert sha256_path(container) == hashlib.sha256(payload).hexdigest()
 
 
-def test_runtime_observation_accepts_slurm_nnodes(tmp_path: Path) -> None:
-    """Accept the node-count variable exported by Ptyche's batch environment."""
+@pytest.mark.parametrize("node_count_name", ["SLURM_NNODES", "MXFP8_MOE_NODE_COUNT"])
+def test_runtime_observation_accepts_supported_node_count_names(
+    tmp_path: Path, node_count_name: str
+) -> None:
+    """Accept scheduler or explicit node-count provenance."""
     nemo_rl = tmp_path / "nemo-rl"
     vllm = tmp_path / "vllm"
     nemo_rl.mkdir()
@@ -930,7 +934,7 @@ def test_runtime_observation_accepts_slurm_nnodes(tmp_path: Path) -> None:
         container=container,
         cache_root=cache_root,
         environment={
-            "SLURM_NNODES": "4",
+            node_count_name: "4",
             "VLLM_TENSOR_PARALLEL_SIZE": "1",
             "VLLM_EXPERT_PARALLEL_SIZE": "1",
             "MXFP8_MOE_CUDA_GRAPH_REPLAY": "required",

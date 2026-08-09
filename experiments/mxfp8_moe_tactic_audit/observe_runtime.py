@@ -72,7 +72,8 @@ def observe_runtime(
 ) -> dict[str, str]:
     """Collect independently observed runtime and artifact fingerprints."""
     node_count = _positive_integer_from_any(
-        environment, ("SLURM_JOB_NUM_NODES", "SLURM_NNODES")
+        environment,
+        ("MXFP8_MOE_NODE_COUNT", "SLURM_JOB_NUM_NODES", "SLURM_NNODES"),
     )
     gpu_count = int(torch_module.cuda.device_count())
     if gpu_count <= 0:
