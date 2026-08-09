@@ -16,7 +16,7 @@ source "${script_dir}/performance_case.sh"
 
 work_root=/lustre/fsw/portfolios/coreai/projects/coreai_chef_posttrain/users/sna
 repo=${VALIDATION_REPO_OVERRIDE:-${work_root}/experiments/pr2964-20step-20260807/RL}
-experiment_root=${work_root}/experiments/pr2964-20step-20260807
+experiment_root=${EXPERIMENT_ROOT_OVERRIDE:-${work_root}/experiments/pr2964-20step-20260807}
 run_name=${RUN_NAME_OVERRIDE:-${model}-sync-${dispatcher}-pr2964-dmabuf-cudava-20step}
 run_root=${experiment_root}/runs/${run_name}
 container=${CONTAINER_OVERRIDE:-${work_root}/containers/nemo-rl-nightly-cw-fallback-20260808/nemo_rl_nightly_20260805_15171871.sqsh}
@@ -31,15 +31,17 @@ mcore_source=${MCORE_SOURCE_OVERRIDE:-${repo}/3rdparty/Megatron-Bridge-workspace
 mcore_commit=${MCORE_EXPECTED_COMMIT_OVERRIDE:-$(git -C "${mcore_source}" rev-parse HEAD)}
 hybridep_dependency_ancestor=${HYBRIDEP_DEPENDENCY_ANCESTOR_OVERRIDE:-a9aaa395c37963a9fd8a7320d61a516c7b714e57}
 force_rebuild_venvs=${NRL_FORCE_REBUILD_VENVS_OVERRIDE:-false}
+max_num_steps=${MAX_NUM_STEPS_OVERRIDE:-20}
 job_reaper_comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"90","reason":"other","description":"NeMo-RL performance recipe model initialization and colocated vLLM startup"}}'
 
 render_case "${model}" "${dispatcher}" "${run_root}"
 
 case "${model}" in
-  qwen3-30ba3b) time_limit=03:00:00 ;;
-  qwen3-235b) time_limit=06:00:00 ;;
-  nemotron3-super) time_limit=08:00:00 ;;
+  qwen3-30ba3b) default_time_limit=03:00:00 ;;
+  qwen3-235b) default_time_limit=06:00:00 ;;
+  nemotron3-super) default_time_limit=08:00:00 ;;
 esac
+time_limit=${TIME_LIMIT_OVERRIDE:-${default_time_limit}}
 
 test "$(git -C "${repo}" rev-parse HEAD)" = "${validation_head}"
 test "$(git -C "${mcore_source}" rev-parse HEAD)" = "${mcore_commit}"
@@ -123,13 +125,14 @@ printf '%s\n' "${job_output}"
 
 if [[ "${mode}" == submit ]]; then
   printf -v rendered_command '%q ' "${driver_args[@]}"
-  printf 'job_id=%s\nrun_name=%s\nmodel=%s\ndispatcher=%s\nrecipe=%s\nnum_nodes=%s\ngpus_per_node=8\nvalidation_head=%s\npr2964_head=%s\nhybridep_dependency_ancestor=%s\nmcore_source=%s\nmcore_commit=%s\ndeepep_commit=%s\ndeepep_wheel=%s\ndeepep_wheel_sha256=%s\ncontainer=%s\njob_dependency=%s\nslurm_exclude=%s\nnrl_force_rebuild_venvs=%s\njob_reaper_comment=%s\ncommand=%s\n' \
+  printf 'job_id=%s\nrun_name=%s\nmodel=%s\ndispatcher=%s\nrecipe=%s\nnum_nodes=%s\ngpus_per_node=8\nvalidation_head=%s\npr2964_head=%s\nhybridep_dependency_ancestor=%s\nmcore_source=%s\nmcore_commit=%s\ndeepep_commit=%s\ndeepep_wheel=%s\ndeepep_wheel_sha256=%s\ncontainer=%s\njob_dependency=%s\nslurm_exclude=%s\nnrl_force_rebuild_venvs=%s\nmax_num_steps=%s\ntime_limit=%s\njob_reaper_comment=%s\ncommand=%s\n' \
     "${job_output}" "${run_name}" "${model}" "${dispatcher}" "${driver_args[3]}" \
     "${num_nodes}" "$(git rev-parse HEAD)" \
     60a10b4f54c2754d44150771a06260fe9e8b186f \
     "${hybridep_dependency_ancestor}" \
     "${mcore_source}" "${mcore_commit}" \
     17cfb817bccec3a9c247013360cc550c2bac441e "${wheel}" "${wheel_sha256}" \
-    "${container}" "${job_dependency}" "${slurm_exclude}" "${force_rebuild_venvs}" "${job_reaper_comment}" "${rendered_command}" \
+    "${container}" "${job_dependency}" "${slurm_exclude}" "${force_rebuild_venvs}" \
+    "${max_num_steps}" "${time_limit}" "${job_reaper_comment}" "${rendered_command}" \
     > "${run_root}/submission.env"
 fi

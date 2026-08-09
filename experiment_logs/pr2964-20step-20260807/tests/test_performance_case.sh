@@ -28,10 +28,17 @@ q30_baseline=$(printf '%s\n' "${driver_args[@]}")
 [[ "${num_nodes}" == 4 ]]
 [[ "${segment_size}" == 4 ]]
 assert_contains "${q30_baseline}" 'grpo-qwen3-30ba3b-4n8g.yaml'
+assert_contains "${q30_baseline}" 'grpo.max_num_steps=20'
 assert_contains "${q30_baseline}" 'policy.megatron_cfg.moe_token_dispatcher_type=alltoall'
 assert_contains "${q30_baseline}" 'logger.tensorboard_enabled=true'
 assert_not_contains "${q30_baseline}" 'moe_flex_dispatcher_backend=hybridep'
 assert_not_contains "${q30_baseline}" 'moe_hybridep_prepad_packed_inputs=true'
+
+MAX_NUM_STEPS_OVERRIDE=1000
+render_case qwen3-30ba3b baseline /tmp/q30-baseline-maxsteps
+q30_baseline_maxsteps=$(printf '%s\n' "${driver_args[@]}")
+unset MAX_NUM_STEPS_OVERRIDE
+assert_contains "${q30_baseline_maxsteps}" 'grpo.max_num_steps=1000'
 
 render_case qwen3-30ba3b hybridep /tmp/q30-hybridep
 q30_hybridep=$(printf '%s\n' "${driver_args[@]}")
@@ -78,7 +85,10 @@ submit_script=$(<"${experiment_dir}/submit_performance_20step.sh")
 assert_contains "${submit_script}" '--comment=${job_reaper_comment}'
 assert_contains "${submit_script}" '"exemptIdleTimeMins":"90"'
 assert_contains "${submit_script}" 'model initialization and colocated vLLM startup'
-assert_contains "${submit_script}" 'nemotron3-super) time_limit=08:00:00'
+assert_contains "${submit_script}" 'nemotron3-super) default_time_limit=08:00:00'
+assert_contains "${submit_script}" 'experiment_root=${EXPERIMENT_ROOT_OVERRIDE:-${work_root}/experiments/pr2964-20step-20260807}'
+assert_contains "${submit_script}" 'max_num_steps=${MAX_NUM_STEPS_OVERRIDE:-20}'
+assert_contains "${submit_script}" 'time_limit=${TIME_LIMIT_OVERRIDE:-${default_time_limit}}'
 assert_contains "${submit_script}" 'repo=${VALIDATION_REPO_OVERRIDE:-${work_root}/experiments/pr2964-20step-20260807/RL}'
 assert_contains "${submit_script}" 'validation_head=${VALIDATION_HEAD_OVERRIDE:-a028b33bcde0ef8aeb9fcc626a2e0c57fb568d2f}'
 assert_contains "${submit_script}" 'test "$(git -C "${repo}" rev-parse HEAD)" = "${validation_head}"'
@@ -94,6 +104,7 @@ assert_contains "${submit_script}" 'force_rebuild_venvs=${NRL_FORCE_REBUILD_VENV
 assert_contains "${submit_script}" 'export NRL_FORCE_REBUILD_VENVS="${force_rebuild_venvs}"'
 assert_contains "${submit_script}" 'export UV_FROZEN=1'
 assert_contains "${submit_script}" 'nrl_force_rebuild_venvs=%s\n'
+assert_contains "${submit_script}" 'max_num_steps=%s\ntime_limit=%s\n'
 
 focused_test_script=$(<"${experiment_dir}/submit_hybridep_prepadding_tests.sh")
 assert_contains "${focused_test_script}" 'tests/unit/models/megatron/test_hybridep_data.py::test_hybridep_prepads_packed_inputs_before_model_forward'

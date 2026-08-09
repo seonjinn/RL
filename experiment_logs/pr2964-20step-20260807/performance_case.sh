@@ -4,6 +4,7 @@ render_case() {
   local model=$1
   local dispatcher=$2
   local run_root=$3
+  local max_num_steps=${MAX_NUM_STEPS_OVERRIDE:-20}
 
   local config
   local wandb_name
@@ -73,7 +74,7 @@ render_case() {
     /opt/nemo_rl_venv/bin/python
     examples/run_grpo.py
     --config "${config}"
-    grpo.max_num_steps=20
+    "grpo.max_num_steps=${max_num_steps}"
     "cluster.num_nodes=${num_nodes}"
     cluster.gpus_per_node=8
   )
