@@ -31,6 +31,8 @@ grep -Fq 'uv run --frozen python -m nemo_rl.utils.prefetch_venvs VllmAsyncGenera
 grep -Fq '++policy.generation.vllm_cfg.env_vars.VLLM_ALLREDUCE_USE_SYMM_MEM=${VLLM_ALLREDUCE_USE_SYMM_MEM}' "${SUBMIT_SCRIPT}"
 grep -Fq '++policy.generation.vllm_kwargs.compilation_config.pass_config.fuse_allreduce_rms=${VLLM_FUSE_ALLREDUCE_RMS}' "${SUBMIT_SCRIPT}"
 grep -Fq 'export VLLM_WORKER_MULTIPROC_METHOD=${VLLM_WORKER_MULTIPROC_METHOD}' "${SUBMIT_SCRIPT}"
+grep -Fq 'export HF_HUB_OFFLINE=1' "${SUBMIT_SCRIPT}"
+grep -Fq 'export TRANSFORMERS_OFFLINE=1' "${SUBMIT_SCRIPT}"
 grep -Fq 'vllm_allreduce_use_symm_mem=${VLLM_ALLREDUCE_USE_SYMM_MEM}' "${SUBMIT_SCRIPT}"
 grep -Fq -- '--exclusive' "${SUBMIT_SCRIPT}"
 grep -Fq 'SBATCH_ARGS+=(--dependency="afterok:${AFTER_OK_JOB_ID}")' "${SUBMIT_SCRIPT}"

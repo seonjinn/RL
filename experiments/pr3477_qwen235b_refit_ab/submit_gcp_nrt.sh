@@ -135,6 +135,8 @@ worker_venv_dir=${WORKER_VENV_ROOT}
 vllm_allreduce_use_symm_mem=${VLLM_ALLREDUCE_USE_SYMM_MEM}
 vllm_fuse_allreduce_rms=${VLLM_FUSE_ALLREDUCE_RMS}
 vllm_worker_multiproc_method=${VLLM_WORKER_MULTIPROC_METHOD}
+hf_hub_offline=1
+transformers_offline=1
 wandb_project=${WANDB_PROJECT}
 wandb_name=${WANDB_NAME}
 EOF
@@ -143,6 +145,8 @@ COMMAND=$(cat <<EOF
 set -euo pipefail
 cd ${REPO}
 export HF_HOME=${WORK_ROOT}/.cache/huggingface
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 export NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS}
 export NEMO_RL_VENV_DIR=${WORKER_VENV_ROOT}
 export NCCL_NVLS_ENABLE=0
