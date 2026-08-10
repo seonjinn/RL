@@ -609,21 +609,25 @@ class VllmInternalWorkerExtension:
     def _weight_update_lifecycle(
         self, transport: WeightUpdateTransport
     ) -> Iterator[WeightUpdateFinalizer]:
-        """Provide setup/finalization around a transport-owned weight update."""
+        """Reload checkpoint-format weights while preserving kernel storage."""
         del transport
         from vllm.config import set_current_vllm_config
-        from vllm.model_executor.model_loader.utils import (
-            process_weights_after_loading,
+        from vllm.model_executor.model_loader.reload import (
+            finalize_layerwise_reload,
+            initialize_layerwise_reload,
         )
 
+        model = self.model_runner.model
+
         def finalize() -> None:
-            with set_current_vllm_config(self.model_runner.vllm_config):
-                process_weights_after_loading(
-                    self.model_runner.model, self.model_config, self.device
-                )
+            with torch.device(self.device):
+                finalize_layerwise_reload(model, self.model_config)
             self._maybe_process_mtp_drafter_after_loading()
 
-        yield finalize
+        with set_current_vllm_config(self.model_runner.vllm_config):
+            with torch.device(self.device):
+                initialize_layerwise_reload(model)
+            yield finalize
         # Preserve the IPC lifetime boundary: the COMPLETE ACK is sent before
         # this optional second pass, just as it was before lifecycle hooks.
         self._maybe_process_fp8_kv_cache()
