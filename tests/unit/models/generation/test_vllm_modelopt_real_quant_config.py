@@ -1618,22 +1618,34 @@ def test_fake_quant_load_weights_exposes_input_quantizer_buffers(monkeypatch):
     torch.testing.assert_close(child.input_quantizer_amax, torch.tensor([3.0]))
 
 
-def test_base_collective_refit_uses_one_layerwise_reload_lifecycle(monkeypatch):
+@pytest.mark.parametrize("with_mtp", [False, True])
+def test_base_collective_refit_uses_one_layerwise_reload_lifecycle(
+    monkeypatch, with_mtp
+):
     _import_vllm_quant_backend(monkeypatch)
     backend = _base_vllm_backend()
     config_mod = sys.modules["vllm.config"]
     reload_mod = sys.modules["vllm.model_executor.model_loader.reload"]
 
     model = torch.nn.Linear(1, 1)
-    vllm_config = object()
+    draft_model = torch.nn.Linear(1, 1)
+    draft_model_config = object()
+    speculative_config = (
+        types.SimpleNamespace(method="mtp", draft_model_config=draft_model_config)
+        if with_mtp
+        else None
+    )
+    vllm_config = types.SimpleNamespace(speculative_config=speculative_config)
     model_config = object()
     extension = object.__new__(backend.VllmInternalWorkerExtension)
     extension.model_runner = types.SimpleNamespace(
         model=model,
         vllm_config=vllm_config,
+        drafter=types.SimpleNamespace(model=draft_model) if with_mtp else None,
     )
     extension.model_config = model_config
     extension.device = torch.device("cpu")
+    extension._mtp_drafter_from_disk = False
     extension.state_dict_info = {
         "first.weight": object(),
         "second.weight": object(),
@@ -1668,21 +1680,95 @@ def test_base_collective_refit_uses_one_layerwise_reload_lifecycle(monkeypatch):
         backend.torch.cuda, "empty_cache", lambda: calls.append("empty_cache")
     )
     extension._load_weights = load
-    extension._maybe_process_mtp_drafter_after_loading = lambda: calls.append("mtp")
     extension._maybe_process_fp8_kv_cache = lambda: calls.append("kv")
 
     assert extension.update_weights_from_collective() is True
     assert config_mod.current is None
-    assert calls == [
+    expected_calls = [
         ("initialize", model),
-        ("load", "first.weight"),
-        ("load", "second.weight"),
-        ("finalize", model, model_config),
-        "mtp",
-        "kv",
-        "gc",
-        "empty_cache",
     ]
+    if with_mtp:
+        expected_calls.append(("initialize", draft_model))
+    expected_calls.extend(
+        [
+            ("load", "first.weight"),
+            ("load", "second.weight"),
+            ("finalize", model, model_config),
+        ]
+    )
+    if with_mtp:
+        expected_calls.append(("finalize", draft_model, draft_model_config))
+    expected_calls.extend(
+        [
+            "kv",
+            "gc",
+            "empty_cache",
+        ]
+    )
+    assert calls == expected_calls
+
+
+def test_base_ipc_refit_owns_weights_before_ack_allows_buffer_reuse(monkeypatch):
+    _import_vllm_quant_backend(monkeypatch)
+    backend = _base_vllm_backend()
+    from nemo_rl.models.policy.utils import IPCProtocol
+
+    payload_value = torch.tensor([1.0], dtype=torch.float32)
+    payload_buffer = payload_value.view(torch.uint8)
+    used_bytes = backend.calculate_aligned_size(payload_value.nbytes)
+    loaded = []
+
+    class FakeSocket:
+        def __init__(self):
+            self.payloads = [
+                ("ipc-handle", ["first.weight"], used_bytes),
+                ("ipc-handle", ["second.weight"], used_bytes),
+                IPCProtocol.COMPLETE,
+            ]
+            self.index = 0
+            self.sent = []
+
+        def recv_pyobj(self):
+            if self.index == 1:
+                payload_value.fill_(2.0)
+            payload = self.payloads[self.index]
+            self.index += 1
+            return payload
+
+        def send(self, payload):
+            self.sent.append(payload)
+
+    model = torch.nn.Linear(1, 1)
+    extension = object.__new__(backend.VllmInternalWorkerExtension)
+    extension.model_runner = types.SimpleNamespace(
+        model=model,
+        vllm_config=types.SimpleNamespace(speculative_config=None),
+    )
+    extension.model_config = object()
+    extension.device = torch.device("cpu")
+    extension.zmq_socket = FakeSocket()
+    extension.state_dict_info = {
+        "first.weight": ([1], torch.float32),
+        "second.weight": ([1], torch.float32),
+    }
+    extension.maybe_init_zmq = lambda: None
+    extension._load_weights = lambda weights: loaded.extend(weights)
+    extension._maybe_process_mtp_drafter_after_loading = lambda: None
+    extension._maybe_process_fp8_kv_cache = lambda: None
+    extension._synchronize_before_ipc_data_ack = lambda: None
+
+    monkeypatch.setattr(
+        backend,
+        "rebuild_cuda_tensor_from_ipc",
+        lambda _ipc_handle, _device_index: payload_buffer,
+    )
+    monkeypatch.setattr(backend.torch.cuda, "empty_cache", lambda: None)
+
+    assert extension.update_weights_via_ipc_zmq() is True
+    assert [name for name, _ in loaded] == ["first.weight", "second.weight"]
+    torch.testing.assert_close(loaded[0][1], torch.tensor([1.0]))
+    torch.testing.assert_close(loaded[1][1], torch.tensor([2.0]))
+    assert extension.zmq_socket.sent == [IPCProtocol.ACK.value.encode()] * 3
 
 
 def test_real_quant_reload_keeps_vllm_config_active_during_layerwise_processing(

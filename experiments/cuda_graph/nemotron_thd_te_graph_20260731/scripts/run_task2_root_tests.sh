@@ -48,6 +48,7 @@ env PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
   tests/unit/experiments/test_matrix_submitters.py \
   tests/unit/experiments/test_nemotron_thd_te_graph_launchers.py \
   tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py::test_base_collective_refit_uses_one_layerwise_reload_lifecycle \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py::test_base_ipc_refit_owns_weights_before_ack_allows_buffer_reuse \
   || pytest_status=$?
 if ((pytest_status != 0)); then
   exit "${pytest_status}"
