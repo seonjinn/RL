@@ -10,15 +10,15 @@ MODE=${MODE:?MODE is required: legacy or nccl}
 AFTER_OK_JOB_ID=${AFTER_OK_JOB_ID:-}
 ACCOUNT=${SLURM_ACCOUNT:-coreai_chef_posttrain}
 PARTITION=${PARTITION:-batch}
-TOTAL_NODES=${TOTAL_NODES:-8}
+TOTAL_NODES=${TOTAL_NODES:-16}
 GPUS_PER_NODE=${GPUS_PER_NODE:-8}
-GEN_NODES=${GEN_NODES:-4}
+GEN_NODES=${GEN_NODES:-8}
 VLLM_TP=${VLLM_TP:-4}
-VLLM_PP=${VLLM_PP:-2}
+VLLM_PP=${VLLM_PP:-1}
 TRAIN_TP=${TRAIN_TP:-2}
 TRAIN_PP=${TRAIN_PP:-4}
 TRAIN_CP=${TRAIN_CP:-2}
-TRAIN_EP=${TRAIN_EP:-8}
+TRAIN_EP=${TRAIN_EP:-16}
 TRAIN_ETP=${TRAIN_ETP:-1}
 MAX_STEPS=${MAX_STEPS:-20}
 WALLTIME=${WALLTIME:-04:00:00}
@@ -53,12 +53,13 @@ case "${ACTION}" in
   *) echo "ACTION must be dry-run, test-only, or submit" >&2; exit 2 ;;
 esac
 
-if (( TOTAL_NODES != 8 || GPUS_PER_NODE != 8 || GEN_NODES != 4 )); then
-  echo "The reportable A/B requires 8 nodes, 8 GPUs/node, and 4 generation nodes" >&2
+if (( TOTAL_NODES != 16 || GPUS_PER_NODE != 8 || GEN_NODES != 8 )); then
+  echo "The reportable A/B requires 16 nodes, 8 GPUs/node, and 8 generation nodes" >&2
   exit 2
 fi
-if (( VLLM_TP * VLLM_PP != GPUS_PER_NODE )); then
-  echo "The B200 A/B requires one vLLM engine per node (VLLM_TP*VLLM_PP=${GPUS_PER_NODE})" >&2
+VLLM_ENGINE_SIZE=$((VLLM_TP * VLLM_PP))
+if (( GPUS_PER_NODE % VLLM_ENGINE_SIZE != 0 )); then
+  echo "VLLM_TP*VLLM_PP=${VLLM_ENGINE_SIZE} must divide ${GPUS_PER_NODE} GPUs/node" >&2
   exit 2
 fi
 
