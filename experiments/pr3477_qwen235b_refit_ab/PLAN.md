@@ -4,7 +4,7 @@
 MoE-only MXFP8 rollout on Qwen3-235B-A22B.
 
 **Architecture:** Run a matched 20-step GRPO pair from the same PR 3477 source
-commit, container, model, data, seed, and 64-GPU topology. The control uses the
+commit, container, model, data, seed, and 128-GPU topology. The control uses the
 legacy non-colocated collective synchronizer (`refit_transport=null`); the
 treatment uses `refit_transport=nccl_reshard`.
 
@@ -14,15 +14,16 @@ Ray, SLURM, GCP-NRT B200, W&B.
 ## Fixed Setup
 
 - Cluster: GCP-NRT B200, 8 GPUs per node
-- Allocation: 8 nodes, 64 GPUs total
-- Split: 4 trainer nodes and 4 generation nodes
+- Allocation: 16 nodes, 128 GPUs total
+- Split: 8 trainer nodes and 8 generation nodes
 - Scheduling: full-node exclusive allocation
 - vLLM worker start method: `spawn` to avoid forking imported CUTLASS/MLIR state
 - Recipe: `grpo-qwen3-235b-16n4g-mxfp8-rollout.yaml`
-- Parallelism: trainer TP2/PP4/CP2/EP8; generation TP4/PP2/EP1, DP4
+- Parallelism: trainer TP2/PP4/CP2/EP16; generation TP4/PP1/EP1, DP16
 - GRPO: 16 prompts, 32 generations per prompt, GBS 512, seed 42
 - Evaluation window: steps 3-20 after warmup
-- Checkpointing and validation: disabled
+- Checkpointing: disabled
+- Validation: recipe-default periodic validation at steps 10 and 20
 - W&B project: `sna-pr3477-qwen235b-refit-ab`
 
 ## Execution
