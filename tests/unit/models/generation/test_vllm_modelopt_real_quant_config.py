@@ -1754,10 +1754,13 @@ def test_base_ipc_refit_owns_weights_before_ack_allows_buffer_reuse(monkeypatch)
     backend = _base_vllm_backend()
     from nemo_rl.models.policy.utils import IPCProtocol
 
+    layerwise_mod = sys.modules["vllm.model_executor.model_loader.reload.layerwise"]
     payload_value = torch.tensor([1.0], dtype=torch.float32)
     payload_buffer = payload_value.view(torch.uint8)
     used_bytes = backend.calculate_aligned_size(payload_value.nbytes)
     loaded = []
+    source_storage_ptrs = []
+    layerwise_info = types.SimpleNamespace(loaded_weights=[])
 
     class FakeSocket:
         def __init__(self):
@@ -1793,23 +1796,68 @@ def test_base_ipc_refit_owns_weights_before_ack_allows_buffer_reuse(monkeypatch)
         "second.weight": ([1], torch.float32),
     }
     extension.maybe_init_zmq = lambda: None
-    extension._load_weights = lambda weights: loaded.extend(weights)
     extension._maybe_process_mtp_drafter_after_loading = lambda: None
     extension._maybe_process_fp8_kv_cache = lambda: None
     extension._synchronize_before_ipc_data_ack = lambda: None
+
+    def load_weights(weights):
+        for name, weight in weights:
+            source_storage_ptrs.append(weight.untyped_storage().data_ptr())
+            arguments = types.SimpleNamespace(arguments={"loaded_weight": weight})
+            layerwise_info.loaded_weights.append((name, arguments))
+            loaded.append((name, arguments))
+
+    extension._load_weights = load_weights
 
     monkeypatch.setattr(
         backend,
         "rebuild_cuda_tensor_from_ipc",
         lambda _ipc_handle, _device_index: payload_buffer,
     )
+    monkeypatch.setattr(
+        layerwise_mod, "get_layerwise_info", lambda _module: layerwise_info
+    )
     monkeypatch.setattr(backend.torch.cuda, "empty_cache", lambda: None)
 
     assert extension.update_weights_via_ipc_zmq() is True
     assert [name for name, _ in loaded] == ["first.weight", "second.weight"]
-    torch.testing.assert_close(loaded[0][1], torch.tensor([1.0]))
-    torch.testing.assert_close(loaded[1][1], torch.tensor([2.0]))
+    assert source_storage_ptrs == [payload_buffer.untyped_storage().data_ptr()] * 2
+    torch.testing.assert_close(
+        loaded[0][1].arguments["loaded_weight"], torch.tensor([1.0])
+    )
+    torch.testing.assert_close(
+        loaded[1][1].arguments["loaded_weight"], torch.tensor([2.0])
+    )
     assert extension.zmq_socket.sent == [IPCProtocol.ACK.value.encode()] * 3
+
+
+def test_real_quant_ipc_reload_roots_include_refit_owned_drafter(monkeypatch):
+    backend = _import_vllm_quant_backend(monkeypatch)
+
+    model = torch.nn.Linear(1, 1)
+    draft_model = torch.nn.Linear(1, 1)
+    draft_model_config = object()
+    extension = object.__new__(backend.VllmQuantInternalWorkerExtension)
+    extension.model_runner = types.SimpleNamespace(
+        model=model,
+        vllm_config=types.SimpleNamespace(
+            speculative_config=types.SimpleNamespace(
+                method="mtp", draft_model_config=draft_model_config
+            )
+        ),
+        drafter=types.SimpleNamespace(model=draft_model),
+    )
+    extension.model_config = object()
+    extension._mtp_drafter_from_disk = False
+    extension.state_dict_info = {"model.weight": object()}
+    extension._nrl_modelopt_reload_roots = (model,)
+    monkeypatch.setattr(
+        backend.VllmQuantInternalWorkerExtension,
+        "_is_real_quant_model",
+        lambda _self: True,
+    )
+
+    assert extension._ipc_layerwise_reload_roots() == (model, draft_model)
 
 
 @pytest.mark.parametrize("with_mtp", [False, True])
