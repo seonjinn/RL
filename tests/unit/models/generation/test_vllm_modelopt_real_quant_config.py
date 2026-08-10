@@ -239,6 +239,17 @@ def _install_fake_vllm_reload(monkeypatch):
         "vllm.model_executor.model_loader.reload.layerwise",
         layerwise_module,
     )
+    loader_utils_module = types.ModuleType(
+        "vllm.model_executor.model_loader.utils"
+    )
+    loader_utils_module.process_weights_after_loading = (
+        lambda model, model_config, device: None
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "vllm.model_executor.model_loader.utils",
+        loader_utils_module,
+    )
     modelopt_module = types.ModuleType(
         "vllm.model_executor.layers.quantization.modelopt"
     )
@@ -1605,6 +1616,73 @@ def test_fake_quant_load_weights_exposes_input_quantizer_buffers(monkeypatch):
     assert "weight_quantizer_amax" not in seen_names
     assert not hasattr(child.input_quantizer_amax, "weight_loader")
     torch.testing.assert_close(child.input_quantizer_amax, torch.tensor([3.0]))
+
+
+def test_base_collective_refit_uses_one_layerwise_reload_lifecycle(monkeypatch):
+    _import_vllm_quant_backend(monkeypatch)
+    backend = _base_vllm_backend()
+    config_mod = sys.modules["vllm.config"]
+    reload_mod = sys.modules["vllm.model_executor.model_loader.reload"]
+
+    model = torch.nn.Linear(1, 1)
+    vllm_config = object()
+    model_config = object()
+    extension = object.__new__(backend.VllmInternalWorkerExtension)
+    extension.model_runner = types.SimpleNamespace(
+        model=model,
+        vllm_config=vllm_config,
+    )
+    extension.model_config = model_config
+    extension.device = torch.device("cpu")
+    extension.state_dict_info = {
+        "first.weight": object(),
+        "second.weight": object(),
+    }
+    extension.model_update_group = object()
+    calls = []
+
+    def initialize(model_arg):
+        assert config_mod.get_current_vllm_config() is vllm_config
+        calls.append(("initialize", model_arg))
+
+    def finalize(model_arg, config_arg):
+        assert config_mod.get_current_vllm_config() is vllm_config
+        calls.append(("finalize", model_arg, config_arg))
+
+    def consume(*, iterator, group, src, post_unpack_func):
+        assert list(iterator) == list(extension.state_dict_info.items())
+        assert group is extension.model_update_group
+        assert src == 0
+        post_unpack_func([("first.weight", torch.ones(1))])
+        post_unpack_func([("second.weight", torch.ones(1))])
+
+    def load(weights):
+        assert config_mod.get_current_vllm_config() is vllm_config
+        calls.append(("load", weights[0][0]))
+
+    monkeypatch.setattr(reload_mod, "initialize_layerwise_reload", initialize)
+    monkeypatch.setattr(reload_mod, "finalize_layerwise_reload", finalize)
+    monkeypatch.setattr(backend, "packed_broadcast_consumer", consume)
+    monkeypatch.setattr(backend.gc, "collect", lambda: calls.append("gc"))
+    monkeypatch.setattr(
+        backend.torch.cuda, "empty_cache", lambda: calls.append("empty_cache")
+    )
+    extension._load_weights = load
+    extension._maybe_process_mtp_drafter_after_loading = lambda: calls.append("mtp")
+    extension._maybe_process_fp8_kv_cache = lambda: calls.append("kv")
+
+    assert extension.update_weights_from_collective() is True
+    assert config_mod.current is None
+    assert calls == [
+        ("initialize", model),
+        ("load", "first.weight"),
+        ("load", "second.weight"),
+        ("finalize", model, model_config),
+        "mtp",
+        "kv",
+        "gc",
+        "empty_cache",
+    ]
 
 
 def test_real_quant_reload_keeps_vllm_config_active_during_layerwise_processing(
