@@ -304,31 +304,6 @@ def _batch_fused_modelopt_moe_weights(
     return batched
 
 
-def _detach_pending_layerwise_weights(
-    reload_roots: tuple[torch.nn.Module, ...],
-    source_storage_ptrs: set[int],
-) -> None:
-    """Own deferred weights before a transport buffer may be reused.
-
-    Completed layers have already released their buffered arguments, so this
-    clones only tensors from a layer split across transport batches. Only the
-    cached layerwise-reload subgraphs are inspected.
-    """
-    if not source_storage_ptrs:
-        return
-    from vllm.model_executor.model_loader.reload.layerwise import get_layerwise_info
-
-    for reload_root in reload_roots:
-        for module in reload_root.modules():
-            info = get_layerwise_info(module)
-            for _, arguments in info.loaded_weights:
-                loaded_weight = arguments.arguments.get("loaded_weight")
-                if not isinstance(loaded_weight, torch.Tensor):
-                    continue
-                if loaded_weight.untyped_storage().data_ptr() in source_storage_ptrs:
-                    arguments.arguments["loaded_weight"] = loaded_weight.clone()
-
-
 def _iter_modelopt_quant_modules(
     model: torch.nn.Module,
 ) -> list[tuple[str, torch.nn.Module]]:
@@ -447,14 +422,6 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
     def _is_real_quant_model(self) -> bool:
         return os.environ.get("VLLM_MODELOPT_REAL_QUANT", "0") == "1"
 
-    def _prepare_ipc_weights_for_load(
-        self, weights: list[tuple[str, torch.Tensor]]
-    ) -> list[tuple[str, torch.Tensor]]:
-        """Let the real-quant loader own only weights deferred across ACKs."""
-        if self._is_real_quant_model():
-            return weights
-        return super()._prepare_ipc_weights_for_load(weights)
-
     def _get_modelopt_reload_roots(self) -> tuple[torch.nn.Module, ...]:
         """Return the invariant ModelOpt layerwise-reload subgraphs."""
         if self._nrl_modelopt_reload_roots is None:
@@ -465,6 +432,14 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
                 )
             )
         return self._nrl_modelopt_reload_roots
+
+    def _ipc_layerwise_reload_roots(self) -> tuple[torch.nn.Module, ...]:
+        """Limit main-model scanning while including any refit-owned drafter."""
+        if not self._is_real_quant_model():
+            return super()._ipc_layerwise_reload_roots()
+        return self._get_modelopt_reload_roots() + tuple(
+            draft_model for draft_model, _ in self._weight_reload_targets()[1:]
+        )
 
     @contextmanager
     def _weight_update_lifecycle(
@@ -632,9 +607,6 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
         """
         if self._is_real_quant_model():
             weights = list(weights)
-            source_storage_ptrs = {
-                tensor.untyped_storage().data_ptr() for _, tensor in weights
-            }
             quant_config = (
                 self.model_runner.vllm_config.model_config.hf_config.quantization_config
             )
@@ -663,19 +635,8 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
                 weights = filtered
             if not weights:
                 return None
-            try:
-                with torch.device(self.device):
-                    return super()._load_weights(weights)
-            finally:
-                with torch.device(self.device):
-                    reload_roots = self._get_modelopt_reload_roots() + tuple(
-                        draft_model
-                        for draft_model, _ in self._weight_reload_targets()[1:]
-                    )
-                    _detach_pending_layerwise_weights(
-                        reload_roots,
-                        source_storage_ptrs,
-                    )
+            with torch.device(self.device):
+                return super()._load_weights(weights)
 
         with ExitStack() as contexts:
             for _, child in self.model_runner.model.named_children():

@@ -1340,27 +1340,33 @@ def test_real_quant_load_weights_forwards_ignored_weights_to_vllm_loader(monkeyp
     assert forwarded == [("lm_head.weight", mismatched)]
 
 
-def test_real_quant_load_weights_detaches_pending_layerwise_views(monkeypatch):
-    backend = _import_vllm_quant_backend(monkeypatch)
+def test_detach_pending_layerwise_weights_owns_main_and_draft_views(monkeypatch):
+    _import_vllm_quant_backend(monkeypatch)
+    backend = _base_vllm_backend()
     layerwise_mod = sys.modules["vllm.model_executor.model_loader.reload.layerwise"]
-    model = torch.nn.Module()
-    model.reload_root = torch.nn.Linear(2, 2, bias=False)
-    model.unrelated = torch.nn.Linear(2, 2, bias=False)
-    extension = _make_real_quant_extension(backend, model, [])
-    extension._nrl_modelopt_reload_roots = (model.reload_root,)
-    _patch_real_quant_load(monkeypatch, backend, [])
+    main_root = torch.nn.Linear(2, 2, bias=False)
+    draft_root = torch.nn.Linear(2, 2, bias=False)
 
-    source = torch.arange(4, dtype=torch.float32)
-    incoming = source.view(2, 2)
-    bound_arguments = types.SimpleNamespace(arguments={"loaded_weight": incoming})
-    layerwise_info = types.SimpleNamespace(loaded_weights=[("weight", bound_arguments)])
+    source = torch.arange(8, dtype=torch.float32)
+    main_arguments = types.SimpleNamespace(
+        arguments={"loaded_weight": source[:4].view(2, 2)}
+    )
+    draft_arguments = types.SimpleNamespace(
+        arguments={"loaded_weight": source[4:].view(2, 2)}
+    )
+    layerwise_info = {
+        main_root: types.SimpleNamespace(
+            loaded_weights=[("weight", main_arguments)]
+        ),
+        draft_root: types.SimpleNamespace(
+            loaded_weights=[("weight", draft_arguments)]
+        ),
+    }
     inspected = []
 
     def get_layerwise_info(module):
         inspected.append(module)
-        if module is model.reload_root:
-            return layerwise_info
-        return types.SimpleNamespace(loaded_weights=[])
+        return layerwise_info[module]
 
     monkeypatch.setattr(
         layerwise_mod,
@@ -1368,14 +1374,28 @@ def test_real_quant_load_weights_detaches_pending_layerwise_views(monkeypatch):
         get_layerwise_info,
     )
 
-    assert extension._load_weights([("reload_root.weight", incoming)]) == "loaded"
+    backend._detach_pending_layerwise_weights(
+        (main_root, draft_root), {source.untyped_storage().data_ptr()}
+    )
 
-    detached = bound_arguments.arguments["loaded_weight"]
-    assert detached.untyped_storage().data_ptr() != source.untyped_storage().data_ptr()
-    torch.testing.assert_close(detached, incoming)
+    detached_main = main_arguments.arguments["loaded_weight"]
+    detached_draft = draft_arguments.arguments["loaded_weight"]
+    assert (
+        detached_main.untyped_storage().data_ptr()
+        != source.untyped_storage().data_ptr()
+    )
+    assert (
+        detached_draft.untyped_storage().data_ptr()
+        != source.untyped_storage().data_ptr()
+    )
+    torch.testing.assert_close(detached_main, source[:4].view(2, 2))
+    torch.testing.assert_close(detached_draft, source[4:].view(2, 2))
     source.zero_()
-    torch.testing.assert_close(detached, torch.arange(4).view(2, 2).float())
-    assert inspected == [model.reload_root]
+    torch.testing.assert_close(detached_main, torch.arange(4).view(2, 2).float())
+    torch.testing.assert_close(
+        detached_draft, torch.arange(4, 8).view(2, 2).float()
+    )
+    assert inspected == [main_root, draft_root]
 
 
 def test_real_quant_pre_ack_fence_is_device_wide_and_load_does_not_fence(
@@ -1398,11 +1418,6 @@ def test_real_quant_pre_ack_fence_is_device_wide_and_load_does_not_fence(
         "_load_weights",
         lambda _self, _weights: events.append("load") or "loaded",
     )
-    monkeypatch.setattr(
-        backend,
-        "_detach_pending_layerwise_weights",
-        lambda _roots, _storage_ptrs: events.append("detach"),
-    )
     monkeypatch.setattr(backend.torch, "device", lambda _device: nullcontext())
     monkeypatch.setattr(
         backend.torch.accelerator,
@@ -1416,10 +1431,10 @@ def test_real_quant_pre_ack_fence_is_device_wide_and_load_does_not_fence(
     )
 
     assert extension._load_weights([("weight", torch.ones(1))]) == "loaded"
-    assert events == ["load", "detach"]
+    assert events == ["load"]
 
     extension._synchronize_before_ipc_data_ack()
-    assert events == ["load", "detach", "sync"]
+    assert events == ["load", "sync"]
 
 
 @pytest.mark.parametrize("load_numel", [0, 10])

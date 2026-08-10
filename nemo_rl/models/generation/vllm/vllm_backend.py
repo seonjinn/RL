@@ -116,6 +116,30 @@ class _IPCWeightManifest:
             raise IPCWeightManifestError("; ".join(details))
 
 
+def _detach_pending_layerwise_weights(
+    reload_roots: tuple[torch.nn.Module, ...],
+    source_storage_ptrs: set[int],
+) -> None:
+    """Own deferred weights before a transport buffer may be reused.
+
+    Completed layers have already cleared their buffered arguments, so only
+    tensors still pending across IPC batches are cloned.
+    """
+    if not source_storage_ptrs:
+        return
+    from vllm.model_executor.model_loader.reload.layerwise import get_layerwise_info
+
+    for reload_root in reload_roots:
+        for module in reload_root.modules():
+            info = get_layerwise_info(module)
+            for _, arguments in info.loaded_weights:
+                loaded_weight = arguments.arguments.get("loaded_weight")
+                if not isinstance(loaded_weight, torch.Tensor):
+                    continue
+                if loaded_weight.untyped_storage().data_ptr() in source_storage_ptrs:
+                    arguments.arguments["loaded_weight"] = loaded_weight.clone()
+
+
 class NixlVllmWorker(VllmWorker):
     """vLLM worker that establishes NIXL/UCX before vLLM initialization."""
 
@@ -184,6 +208,7 @@ class VllmInternalWorkerExtension:
     _mtp_drafter_from_disk: bool = False
     _sparse_delta_applier: Any = None
     _nrl_named_parameters: dict[str, torch.nn.Parameter]
+    _nrl_weight_reload_targets: tuple[tuple[Any, Any], ...] | None = None
 
     def _get_named_parameters(self) -> dict[str, torch.nn.Parameter]:
         params = getattr(self, "_nrl_named_parameters", None)
@@ -321,6 +346,7 @@ class VllmInternalWorkerExtension:
                 e.g. {tensor_name: (shape, dtype)}
         """
         self.state_dict_info = state_dict_info  # pyrefly: ignore[implicitly-defined-attribute]  This class does not define __init__ so assignments like this should be ignored
+        self._nrl_weight_reload_targets = None
 
     def prepare_sparse_delta_refit_info(
         self, state_dict_info: dict[str, tuple[tuple[int, ...], torch.dtype]]
@@ -505,6 +531,9 @@ class VllmInternalWorkerExtension:
 
     def _weight_reload_targets(self) -> tuple[tuple[Any, Any], ...]:
         """Return models whose runtime tensor storage must survive a refit."""
+        if self._nrl_weight_reload_targets is not None:
+            return self._nrl_weight_reload_targets
+
         targets: list[tuple[Any, Any]] = [(self.model_runner.model, self.model_config)]
         draft_model = self._get_drafter_model()
         state_dict_info = getattr(self, "state_dict_info", None)
@@ -515,7 +544,8 @@ class VllmInternalWorkerExtension:
         if draft_model is None or not (
             self._mtp_drafter_refit_enabled() or has_streamed_draft_weights
         ):
-            return tuple(targets)
+            self._nrl_weight_reload_targets = tuple(targets)
+            return self._nrl_weight_reload_targets
 
         speculative_config = self.model_runner.vllm_config.speculative_config
         draft_model_config = speculative_config.draft_model_config
@@ -524,7 +554,12 @@ class VllmInternalWorkerExtension:
                 "vLLM drafter refit requires speculative_config.draft_model_config"
             )
         targets.append((draft_model, draft_model_config))
-        return tuple(targets)
+        self._nrl_weight_reload_targets = tuple(targets)
+        return self._nrl_weight_reload_targets
+
+    def _ipc_layerwise_reload_roots(self) -> tuple[torch.nn.Module, ...]:
+        """Return layerwise roots that may retain views of an IPC batch."""
+        return tuple(model for model, _ in self._weight_reload_targets())
 
     def load_mtp_weights_from_disk(self, model_path: str) -> bool:
         """Load only the MTP (multi-token-prediction) draft weights from disk.
@@ -586,6 +621,7 @@ class VllmInternalWorkerExtension:
         # Mark that the MTP drafter is served from a one-time disk load so refit
         # does not re-load or re-process these static weights.
         self._mtp_drafter_from_disk = True
+        self._nrl_weight_reload_targets = None
         logger.info(
             "[mtp] Loaded MTP draft weights for layers %s from %s",
             sorted(mtp_layer_indices),
@@ -614,12 +650,6 @@ class VllmInternalWorkerExtension:
         # MTP drafters co-trained with the policy receive their weights from the
         # policy stream (no `draft.` prefix), so feed it the policy weights too.
         self._maybe_refit_mtp_drafter(policy_weights)
-
-    def _prepare_ipc_weights_for_load(
-        self, weights: list[tuple[str, torch.Tensor]]
-    ) -> list[tuple[str, torch.Tensor]]:
-        """Own IPC tensors that vLLM may retain until layerwise finalization."""
-        return [(name, weight.clone()) for name, weight in weights]
 
     def _get_sparse_delta_applier(self) -> Any:
         if self._sparse_delta_applier is None:
@@ -731,7 +761,17 @@ class VllmInternalWorkerExtension:
                             "inaccurate info like keys or cached dtype in "
                             "state_dict_info"
                         )
-                        self._load_weights(self._prepare_ipc_weights_for_load(weights))
+                        source_storage_ptrs = {
+                            tensor.untyped_storage().data_ptr() for _, tensor in weights
+                        }
+                        try:
+                            self._load_weights(weights)
+                        finally:
+                            with torch.device(self.device):
+                                _detach_pending_layerwise_weights(
+                                    self._ipc_layerwise_reload_roots(),
+                                    source_storage_ptrs,
+                                )
                     except Exception as error:
                         batch_error = error
                         # The manifest only keeps the exception message; log
