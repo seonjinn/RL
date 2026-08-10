@@ -447,6 +447,14 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
     def _is_real_quant_model(self) -> bool:
         return os.environ.get("VLLM_MODELOPT_REAL_QUANT", "0") == "1"
 
+    def _prepare_ipc_weights_for_load(
+        self, weights: list[tuple[str, torch.Tensor]]
+    ) -> list[tuple[str, torch.Tensor]]:
+        """Let the real-quant loader own only weights deferred across ACKs."""
+        if self._is_real_quant_model():
+            return weights
+        return super()._prepare_ipc_weights_for_load(weights)
+
     def _get_modelopt_reload_roots(self) -> tuple[torch.nn.Module, ...]:
         """Return the invariant ModelOpt layerwise-reload subgraphs."""
         if self._nrl_modelopt_reload_roots is None:
@@ -476,13 +484,20 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
 
         model = self.model_runner.model
         reload_roots = self._get_modelopt_reload_roots()
+        draft_targets = self._weight_reload_targets()[1:]
+        reload_targets = (
+            tuple((reload_root, self.model_config) for reload_root in reload_roots)
+            + draft_targets
+        )
 
         def finalize() -> None:
             try:
                 with torch.device(self.device):
                     _require_complete_modelopt_layerwise_reload(model)
-                    for reload_root in reload_roots:
-                        finalize_layerwise_reload(reload_root, self.model_config)
+                    for draft_model, _ in draft_targets:
+                        _require_complete_modelopt_layerwise_reload(draft_model)
+                    for reload_root, model_config in reload_targets:
+                        finalize_layerwise_reload(reload_root, model_config)
                 # Fence completion for both collective return and the IPC
                 # COMPLETE acknowledgment. Data-batch ACKs use the hook below.
                 torch.accelerator.synchronize()
@@ -499,7 +514,7 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
             # that online processing as well as deferred finalization.
             with set_current_vllm_config(self.model_runner.vllm_config):
                 with torch.device(self.device):
-                    for reload_root in reload_roots:
+                    for reload_root, _ in reload_targets:
                         initialize_layerwise_reload(reload_root)
                 yield finalize
         except IPCWeightManifestError as error:
@@ -653,8 +668,12 @@ class VllmQuantInternalWorkerExtension(VllmInternalWorkerExtension):
                     return super()._load_weights(weights)
             finally:
                 with torch.device(self.device):
+                    reload_roots = self._get_modelopt_reload_roots() + tuple(
+                        draft_model
+                        for draft_model, _ in self._weight_reload_targets()[1:]
+                    )
                     _detach_pending_layerwise_weights(
-                        self._get_modelopt_reload_roots(),
+                        reload_roots,
                         source_storage_ptrs,
                     )
 

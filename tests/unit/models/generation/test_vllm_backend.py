@@ -140,13 +140,20 @@ def test_update_weights_from_collective_uses_layerwise_reload(monkeypatch, with_
     ext, expected_state_info = _make_collective_update_extension(vllm_backend)
 
     def initialize_layerwise_reload(model):
-        assert model is ext.model_runner.model
-        call_order.append("initialize_main")
+        if model is ext.model_runner.model:
+            call_order.append("initialize_main")
+            return
+        assert model is draft_model
+        call_order.append("initialize_draft")
 
     def finalize_layerwise_reload(model, model_config):
-        assert model is ext.model_runner.model
-        assert model_config is ext.model_config
-        call_order.append("finalize_main")
+        if model is ext.model_runner.model:
+            assert model_config is ext.model_config
+            call_order.append("finalize_main")
+            return
+        assert model is draft_model
+        assert model_config is draft_model_config
+        call_order.append("finalize_draft")
 
     monkeypatch.setattr(
         "vllm.model_executor.model_loader.reload.initialize_layerwise_reload",
@@ -204,18 +211,15 @@ def test_update_weights_from_collective_uses_layerwise_reload(monkeypatch, with_
     expected_call_order = [
         "config_enter",
         "initialize_main",
-        "broadcast",
-        "load",
-        "finalize_main",
     ]
     if with_mtp:
-        expected_call_order.extend(["config_enter", "process_mtp", "config_exit"])
+        expected_call_order.append("initialize_draft")
+    expected_call_order.extend(["broadcast", "load", "finalize_main"])
+    if with_mtp:
+        expected_call_order.append("finalize_draft")
     expected_call_order.extend(["config_exit", "kv", "gc", "empty_cache"])
 
-    expected_process_calls = (
-        [(draft_model, draft_model_config, ext.device)] if with_mtp else []
-    )
-    assert process_calls == expected_process_calls
+    assert process_calls == []
     assert call_order == expected_call_order
 
 

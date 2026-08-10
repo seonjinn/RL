@@ -1708,6 +1708,47 @@ def test_base_collective_refit_uses_one_layerwise_reload_lifecycle(
     assert calls == expected_calls
 
 
+@pytest.mark.parametrize(
+    "method, from_disk, state_keys, expected_draft",
+    [
+        ("mtp", False, ["model.weight"], True),
+        ("mtp", True, ["model.weight"], False),
+        ("eagle3", False, ["draft.weight"], True),
+        ("eagle3", False, ["model.weight"], False),
+    ],
+)
+def test_base_weight_reload_targets_only_include_refit_owned_drafter(
+    monkeypatch, method, from_disk, state_keys, expected_draft
+):
+    _import_vllm_quant_backend(monkeypatch)
+    backend = _base_vllm_backend()
+
+    model = torch.nn.Linear(1, 1)
+    draft_model = torch.nn.Linear(1, 1)
+    model_config = object()
+    draft_model_config = object()
+    extension = object.__new__(backend.VllmInternalWorkerExtension)
+    extension.model_runner = types.SimpleNamespace(
+        model=model,
+        vllm_config=types.SimpleNamespace(
+            speculative_config=types.SimpleNamespace(
+                method=method, draft_model_config=draft_model_config
+            )
+        ),
+        drafter=types.SimpleNamespace(model=draft_model),
+    )
+    extension.model_config = model_config
+    extension._mtp_drafter_from_disk = from_disk
+    extension.state_dict_info = {key: object() for key in state_keys}
+
+    targets = extension._weight_reload_targets()
+
+    assert targets[0] == (model, model_config)
+    assert targets[1:] == (
+        ((draft_model, draft_model_config),) if expected_draft else ()
+    )
+
+
 def test_base_ipc_refit_owns_weights_before_ack_allows_buffer_reuse(monkeypatch):
     _import_vllm_quant_backend(monkeypatch)
     backend = _base_vllm_backend()
@@ -1771,23 +1812,35 @@ def test_base_ipc_refit_owns_weights_before_ack_allows_buffer_reuse(monkeypatch)
     assert extension.zmq_socket.sent == [IPCProtocol.ACK.value.encode()] * 3
 
 
+@pytest.mark.parametrize("with_mtp", [False, True])
 def test_real_quant_reload_keeps_vllm_config_active_during_layerwise_processing(
-    monkeypatch,
+    monkeypatch, with_mtp
 ):
     backend = _import_vllm_quant_backend(monkeypatch)
     config_mod = sys.modules["vllm.config"]
     reload_mod = sys.modules["vllm.model_executor.model_loader.reload"]
 
     model = _mark_as_modelopt_layer(torch.nn.Linear(1, 1))
+    draft_model = torch.nn.Linear(1, 1)
+    draft_model_config = object()
     vllm_config = object()
+    if with_mtp:
+        vllm_config = types.SimpleNamespace(
+            speculative_config=types.SimpleNamespace(
+                method="mtp", draft_model_config=draft_model_config
+            )
+        )
     model_config = object()
     extension = object.__new__(backend.VllmQuantInternalWorkerExtension)
     extension.model_runner = types.SimpleNamespace(
         model=model,
         vllm_config=vllm_config,
+        drafter=types.SimpleNamespace(model=draft_model) if with_mtp else None,
     )
     extension.model_config = model_config
     extension.device = torch.device("cpu")
+    extension._mtp_drafter_from_disk = False
+    extension.state_dict_info = {"model.weight": object()}
     extension._nrl_modelopt_reload_roots = (model,)
     calls = []
 
@@ -1821,12 +1874,16 @@ def test_real_quant_reload_keeps_vllm_config_active_during_layerwise_processing(
         finish()
 
     assert config_mod.current is None
-    assert calls == [
+    expected_calls = [
         ("initialize", model),
-        "load",
-        ("finalize", model, model_config),
-        "sync",
     ]
+    if with_mtp:
+        expected_calls.append(("initialize", draft_model))
+    expected_calls.extend(["load", ("finalize", model, model_config)])
+    if with_mtp:
+        expected_calls.append(("finalize", draft_model, draft_model_config))
+    expected_calls.append("sync")
+    assert calls == expected_calls
 
 
 def test_real_quant_collective_reload_uses_vllm_layerwise_lifecycle(monkeypatch):

@@ -503,6 +503,29 @@ class VllmInternalWorkerExtension:
         with set_current_vllm_config(self.model_runner.vllm_config):
             process_weights_after_loading(draft_model, draft_model_config, self.device)
 
+    def _weight_reload_targets(self) -> tuple[tuple[Any, Any], ...]:
+        """Return models whose runtime tensor storage must survive a refit."""
+        targets: list[tuple[Any, Any]] = [(self.model_runner.model, self.model_config)]
+        draft_model = self._get_drafter_model()
+        state_dict_info = getattr(self, "state_dict_info", None)
+        has_streamed_draft_weights = bool(
+            state_dict_info
+            and any(name.startswith("draft.") for name in state_dict_info)
+        )
+        if draft_model is None or not (
+            self._mtp_drafter_refit_enabled() or has_streamed_draft_weights
+        ):
+            return tuple(targets)
+
+        speculative_config = self.model_runner.vllm_config.speculative_config
+        draft_model_config = speculative_config.draft_model_config
+        if draft_model_config is None:
+            raise RuntimeError(
+                "vLLM drafter refit requires speculative_config.draft_model_config"
+            )
+        targets.append((draft_model, draft_model_config))
+        return tuple(targets)
+
     def load_mtp_weights_from_disk(self, model_path: str) -> bool:
         """Load only the MTP (multi-token-prediction) draft weights from disk.
 
@@ -592,6 +615,12 @@ class VllmInternalWorkerExtension:
         # policy stream (no `draft.` prefix), so feed it the policy weights too.
         self._maybe_refit_mtp_drafter(policy_weights)
 
+    def _prepare_ipc_weights_for_load(
+        self, weights: list[tuple[str, torch.Tensor]]
+    ) -> list[tuple[str, torch.Tensor]]:
+        """Own IPC tensors that vLLM may retain until layerwise finalization."""
+        return [(name, weight.clone()) for name, weight in weights]
+
     def _get_sparse_delta_applier(self) -> Any:
         if self._sparse_delta_applier is None:
             # Avoid importing sparse-refit code for existing refit transports.
@@ -617,16 +646,17 @@ class VllmInternalWorkerExtension:
             initialize_layerwise_reload,
         )
 
-        model = self.model_runner.model
+        reload_targets = self._weight_reload_targets()
 
         def finalize() -> None:
             with torch.device(self.device):
-                finalize_layerwise_reload(model, self.model_config)
-            self._maybe_process_mtp_drafter_after_loading()
+                for model, model_config in reload_targets:
+                    finalize_layerwise_reload(model, model_config)
 
         with set_current_vllm_config(self.model_runner.vllm_config):
             with torch.device(self.device):
-                initialize_layerwise_reload(model)
+                for model, _ in reload_targets:
+                    initialize_layerwise_reload(model)
             yield finalize
         # Preserve the IPC lifetime boundary: the COMPLETE ACK is sent before
         # this optional second pass, just as it was before lifecycle hooks.
@@ -701,7 +731,7 @@ class VllmInternalWorkerExtension:
                             "inaccurate info like keys or cached dtype in "
                             "state_dict_info"
                         )
-                        self._load_weights(weights)
+                        self._load_weights(self._prepare_ipc_weights_for_load(weights))
                     except Exception as error:
                         batch_error = error
                         # The manifest only keeps the exception message; log
