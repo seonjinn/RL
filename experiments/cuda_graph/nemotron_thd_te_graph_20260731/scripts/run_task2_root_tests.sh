@@ -46,7 +46,9 @@ env PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
   tests/unit/experiments/test_container_harness_hardening.py \
   tests/unit/experiments/test_mcore_standalone_driver.py \
   tests/unit/experiments/test_matrix_submitters.py \
-  tests/unit/experiments/test_nemotron_thd_te_graph_launchers.py || pytest_status=$?
+  tests/unit/experiments/test_nemotron_thd_te_graph_launchers.py \
+  tests/unit/models/generation/test_vllm_modelopt_real_quant_config.py::test_base_collective_refit_uses_one_layerwise_reload_lifecycle \
+  || pytest_status=$?
 if ((pytest_status != 0)); then
   exit "${pytest_status}"
 fi
