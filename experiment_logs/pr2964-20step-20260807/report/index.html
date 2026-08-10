@@ -261,13 +261,14 @@
         using canonical 8-GPU performance recipes and explicit x86 HybridEP topology.
       </p>
       <div class="header-meta">
-        <span>Updated 2026-08-09 13:13 PDT</span>
+        <span>Updated 2026-08-09 20:33 PDT</span>
         <span>NeMo RL main 0e687e6d · strict A/B candidate 3d6d1324 · Bridge-main candidate 541413bd</span>
         <span>PR #2964 remote eecfeeb0 · one-time padding path published · focused coverage 12/12 passed</span>
         <span>DeepEP 17cfb817 + DMA-BUF fix a9d657d2</span>
         <span>MCore workload candidate c8cedc3d · Bridge-main routing candidate 34b55f24 · stock boundary 14499ef0</span>
         <span>20-step target per workload</span>
-        <span>Q30 200-step checkpoint/resume follow-up active</span>
+        <span>Q30 resumed A/B active · HybridEP Step 160 · baseline Step 150</span>
+        <span>Nemotron3 Super 200-step HybridEP chain submitted</span>
       </div>
     </header>
 
@@ -296,7 +297,7 @@
 
     <section aria-labelledby="long-run-title">
       <h2 id="long-run-title">Active 200-step resumed Qwen3-30B-A3B A/B</h2>
-      <p class="section-note">Launch snapshot at 2026-08-09 13:13 PDT. Both arms use the canonical <code>grpo-qwen3-30ba3b-4n8g.yaml</code> recipe on 4 × 8 GCP-NRT B200 GPUs, NeMo <code>541413bd</code>, Bridge <code>fcbabe78</code>, routing-fixed MCore <code>34b55f24</code>, and DeepEP <code>17cfb817</code>. The dispatcher is the only intentional workload difference.</p>
+      <p class="section-note">Progress snapshot at 2026-08-09 20:33 PDT. Both arms use the canonical <code>grpo-qwen3-30ba3b-4n8g.yaml</code> recipe on 4 × 8 GCP-NRT B200 GPUs, NeMo <code>541413bd</code>, Bridge <code>fcbabe78</code>, routing-fixed MCore <code>34b55f24</code>, and DeepEP <code>17cfb817</code>. The dispatcher is the only intentional workload difference.</p>
       <div class="table-wrap">
         <table>
           <thead>
@@ -306,21 +307,61 @@
             <tr>
               <td><strong>All-to-all baseline</strong></td>
               <td><code>508637 → 508638 → 508639</code></td>
-              <td><span class="pill pending">Round 1 running</span><br>Retry passed the five-minute startup gate with zero strict runtime fatals.</td>
-              <td>Full model and optimizer state before 3:15; latest checkpoint retained; resume to Step 200.</td>
-              <td><code>.../runs/qwen3-30ba3b-sync-baseline-pr2964-200step-round1-retry1</code></td>
+              <td><span class="pill pending">Round 2 · Step 150/200</span><br>Round 1 completed with exit <code>0:0</code>, saved Step 76, and Round 2 loaded that checkpoint successfully.</td>
+              <td>Full model and optimizer state before 3:15; latest checkpoint retained; Round 3 waits on <code>afterok:508638</code>.</td>
+              <td><code>.../runs/qwen3-30ba3b-sync-baseline-pr2964-200step-round{1-retry1,2-retry1}</code></td>
             </tr>
             <tr>
               <td><strong>HybridEP</strong></td>
               <td><code>508612 → 508613 → 508614</code></td>
-              <td><span class="pill pending">Step 2/200</span><br>Round 1 entered steady-state training with zero strict runtime fatals.</td>
-              <td>Same save deadline and retention policy; independent dispatcher-specific checkpoint root.</td>
-              <td><code>.../runs/qwen3-30ba3b-sync-hybridep-pr2964-200step-round1</code><br>Offline W&amp;B <code>bsolax90</code></td>
+              <td><span class="pill pending">Round 2 · Step 160/200</span><br>Round 1 completed with exit <code>0:0</code>, saved Step 80, and Round 2 resumed without a metric discontinuity.</td>
+              <td>Same save deadline and retention policy; Round 3 waits on <code>afterok:508613</code>.</td>
+              <td><code>.../runs/qwen3-30ba3b-sync-hybridep-pr2964-200step-round{1,2}</code><br>Round-1 offline W&amp;B <code>bsolax90</code></td>
             </tr>
           </tbody>
         </table>
       </div>
       <div class="callout">Initial baseline job <code>508609</code> failed before Step 1 when one vLLM Ray worker on <code>pool0-0343</code> exited with <code>SYSTEM_ERROR</code> / EOF during CUDA-graph warmup. It recorded no comparable training metric and is excluded from the A/B. Its logs are preserved; the retry has a distinct run name and excludes that node. Jobs <code>508610</code>/<code>508611</code> were automatically cancelled when their <code>afterok</code> dependency could not be satisfied.</div>
+      <h3>Interim accuracy audit · common Steps 2–134</h3>
+      <p class="section-note">Round TensorBoard histories are merged by global step with last-observation deduplication. The comparison uses 133 common training steps and 13 common validation checkpoints; later HybridEP-only steps are excluded from the A/B.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Metric</th><th>All-to-all baseline</th><th>HybridEP</th><th>HybridEP delta</th><th>Interpretation</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Validation accuracy</td><td>55.228%</td><td>55.499%</td><td>+0.270 percentage point</td><td>Paired 95% CI −0.94 to +1.48 percentage points; <code>p=0.635</code>.</td></tr>
+            <tr><td>Training reward</td><td>0.520783</td><td>0.520552</td><td>−0.044%</td><td>Trajectory correlation <code>r=0.991</code>; no measurable regression.</td></tr>
+            <tr><td><code>train/gen_kl_error</code></td><td>0.0018731</td><td>0.0018746</td><td>+0.081%</td><td>Stable distribution and no resume-boundary jump.</td></tr>
+            <tr><td>Approximate entropy</td><td>0.23916</td><td>0.23854</td><td>−0.258%</td><td>Small relative change within the observed per-step variance.</td></tr>
+            <tr><td>Gradient norm</td><td>0.035790</td><td>0.035681</td><td>−0.303%</td><td>No divergence or boundary discontinuity.</td></tr>
+            <tr><td>Valid samples per step</td><td>2,048</td><td>2,048</td><td>exact match</td><td>All 133 common steps match; 57 audited correctness tags contain zero NaN/Inf values.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout"><strong>Interim conclusion:</strong> no detectable HybridEP accuracy impact. The asymmetric exponential <code>token_mult_prob_error</code>/<code>policy_kl_error</code> metrics retain rare large outliers in both arms: median token error is 1.02241 baseline versus 1.02218 HybridEP, while counts above 1.05 are 21/133 versus 23/133. These are disclosed as a shared workload warning and are not attributed to HybridEP.</div>
+    </section>
+
+    <section aria-labelledby="super-long-run-title">
+      <h2 id="super-long-run-title">Active 200-step Nemotron3 Super HybridEP stability study</h2>
+      <p class="section-note">Submitted 2026-08-09 20:33 PDT on GCP-NRT. This is a single-arm long-horizon correctness study using the canonical <code>grpo-nemotron3-super-120BA12B-32n8g.yaml</code> recipe; it does not reserve a second 256-GPU baseline chain.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Job chain</th><th>Topology</th><th>Current state</th><th>Checkpoint policy</th><th>Frozen source stack</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>509489 → 509490 → … → 509508</code><br>20 sequential <code>afterok</code> rounds</td>
+              <td>32 × 8 B200<br>256 GPUs per active round</td>
+              <td><span class="pill pending">Round 1 pending resources</span><br>Scheduler estimate: 2026-08-10 00:29 PDT. Rounds 2–20 wait on dependencies.</td>
+              <td>Four-hour allocations; full model and optimizer state saved by 3:15; latest checkpoint retained; target Step 200.</td>
+              <td>NeMo <code>541413bd</code><br>Bridge <code>fcbabe78</code><br>MCore <code>34b55f24</code><br>DeepEP <code>17cfb817</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout">The only recipe-level additions are HybridEP plus one-time THD prepadding, <code>grpo.max_num_steps=200</code>, and checkpoint/resume controls. Model, batch sizes, sequence length, generation settings, and Megatron TP/EP topology remain canonical. The chain passed <code>sbatch --test-only</code> before submission and every round requests all eight GPUs on each allocated node.</div>
     </section>
 
     <section aria-labelledby="jobs-title">
