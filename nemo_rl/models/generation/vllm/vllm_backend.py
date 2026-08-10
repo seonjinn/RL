@@ -121,6 +121,12 @@ class NixlVllmWorker(VllmWorker):
     """vLLM worker that establishes NIXL/UCX before vLLM initialization."""
 
     def __new__(cls, vllm_config: Any, *args: Any, **kwargs: Any) -> "NixlVllmWorker":
+        # Imported lazily because FP8 is an optional vLLM configuration.
+        from nemo_rl.models.generation.vllm.quantization.fp8 import (
+            initialize_fp8_worker,
+        )
+
+        initialize_fp8_worker(vllm_config, required=False)
         worker = super().__new__(cls)
         worker._nrl_nixl_preinit_agent = preinit_nixl_from_vllm_config(vllm_config)
         return worker

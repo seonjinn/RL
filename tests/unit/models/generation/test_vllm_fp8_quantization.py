@@ -81,6 +81,146 @@ def test_init_fp8_uses_mxfp8_quantization_config(fp8_module, monkeypatch):
     assert "VLLM_USE_DEEP_GEMM_E8M0" not in fp8.os.environ
 
 
+def test_engine_core_preserves_fp8_config_for_spawned_workers(fp8_module, monkeypatch):
+    fp8 = fp8_module
+    config = fp8.FP8Config(model_parallel_size=4, is_mx=True)
+    vllm_config = types.SimpleNamespace(nrl_fp8_cfg=config)
+    patched_configs = []
+
+    monkeypatch.setattr(
+        fp8,
+        "monkey_patch_vllm_ray_executor",
+        lambda fp8_config: patched_configs.append(fp8_config),
+    )
+    monkeypatch.setattr(
+        fp8,
+        "original_run_engine_core",
+        lambda *args, **kwargs: kwargs["vllm_config"],
+    )
+
+    result = fp8.my_run_engine_core(vllm_config=vllm_config)
+
+    assert result.nrl_fp8_cfg == config
+    assert patched_configs == [config]
+
+
+def test_fp8_worker_applies_config_before_model_initialization(fp8_module, monkeypatch):
+    fp8 = fp8_module
+    config = fp8.FP8Config(model_parallel_size=4, is_mx=True)
+    applied_configs = []
+
+    monkeypatch.setattr(
+        fp8,
+        "apply_fp8_patches",
+        lambda _worker, fp8_config: applied_configs.append(fp8_config),
+    )
+
+    worker = fp8.Fp8VllmWorker.__new__(
+        fp8.Fp8VllmWorker,
+        types.SimpleNamespace(nrl_fp8_cfg=config),
+    )
+
+    assert worker is not None
+    assert applied_configs == [config]
+
+
+def test_fp8_worker_reads_serialized_additional_config(fp8_module, monkeypatch):
+    fp8 = fp8_module
+    config = fp8.FP8Config(model_parallel_size=4, is_mx=True)
+    applied_configs = []
+
+    monkeypatch.setattr(
+        fp8,
+        "apply_fp8_patches",
+        lambda _worker, fp8_config: applied_configs.append(fp8_config),
+    )
+
+    fp8.Fp8VllmWorker.__new__(
+        fp8.Fp8VllmWorker,
+        types.SimpleNamespace(
+            additional_config={
+                fp8.FP8_CONFIG_KEY: {
+                    "model_parallel_size": 4,
+                    "is_mx": True,
+                }
+            }
+        ),
+    )
+
+    assert applied_configs == [config]
+
+
+def test_configure_fp8_worker_serializes_config(fp8_module):
+    fp8 = fp8_module
+    fp8.global_fp8_config = fp8.FP8Config(model_parallel_size=4, is_mx=True)
+    vllm_kwargs = {"additional_config": {"existing": "value"}}
+
+    fp8.configure_fp8_worker(vllm_kwargs)
+
+    assert vllm_kwargs["worker_cls"] == fp8.FP8_VLLM_WORKER
+    assert vllm_kwargs["additional_config"] == {
+        "existing": "value",
+        fp8.FP8_CONFIG_KEY: {
+            "use_weight_pow2_scale": False,
+            "use_activation_pow2_scale": False,
+            "num_first_layers_in_bf16": 0,
+            "num_last_layers_in_bf16": 0,
+            "model_parallel_size": 4,
+            "kv_cache_dtype": "auto",
+            "use_fp8_weights": True,
+            "is_mx": True,
+        },
+    }
+
+
+def test_configure_fp8_worker_rejects_incompatible_worker_class(fp8_module):
+    fp8 = fp8_module
+    fp8.global_fp8_config = fp8.FP8Config(model_parallel_size=4, is_mx=True)
+
+    with pytest.raises(ValueError, match="worker_cls to be unset"):
+        fp8.configure_fp8_worker({"worker_cls": "custom.Worker"})
+
+
+def test_fp8_worker_requires_serialized_config(fp8_module):
+    fp8 = fp8_module
+
+    with pytest.raises(RuntimeError, match="missing its serialized config"):
+        fp8.Fp8VllmWorker.__new__(
+            fp8.Fp8VllmWorker,
+            types.SimpleNamespace(),
+        )
+
+
+def test_apply_fp8_patches_is_idempotent_for_same_config(fp8_module, monkeypatch):
+    fp8 = fp8_module
+    config = fp8.FP8Config(
+        use_fp8_weights=False,
+        model_parallel_size=4,
+        is_mx=True,
+    )
+    fp8.global_fp8_config = config
+    fp8.fp8_patches_applied = True
+    monkeypatch.setattr(
+        fp8,
+        "patch",
+        lambda *_args, **_kwargs: pytest.fail("patches must not be reapplied"),
+    )
+
+    fp8.apply_fp8_patches(None, config)
+
+
+def test_apply_fp8_patches_rejects_different_config(fp8_module):
+    fp8 = fp8_module
+    fp8.global_fp8_config = fp8.FP8Config(model_parallel_size=4, is_mx=True)
+    fp8.fp8_patches_applied = True
+
+    with pytest.raises(RuntimeError, match="different config"):
+        fp8.apply_fp8_patches(
+            None,
+            fp8.FP8Config(model_parallel_size=8, is_mx=True),
+        )
+
+
 def test_quantize_mxfp8_weight_restores_grouped_expert_shape(fp8_module, monkeypatch):
     fp8 = fp8_module
     weight = torch.zeros(2, 3, 32, dtype=torch.bfloat16)

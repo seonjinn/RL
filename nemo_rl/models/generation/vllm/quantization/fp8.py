@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 from unittest.mock import patch
 
@@ -28,6 +28,7 @@ from vllm.model_executor.layers.linear import LinearBase
 from vllm.triton_utils import tl, triton
 from vllm.v1.engine.core import EngineCoreProc
 from vllm.v1.engine.utils import CoreEngineProcManager
+from vllm.v1.worker.gpu_worker import Worker as VllmWorker
 
 from nemo_rl.models.generation.vllm.quantization.mxfp8_utils import (
     pad_flashinfer_scale_k,
@@ -77,6 +78,48 @@ fp8_state: FP8State = FP8State()
 
 fp8_patches_applied = False
 
+FP8_VLLM_WORKER = "nemo_rl.models.generation.vllm.quantization.fp8.Fp8VllmWorker"
+NIXL_VLLM_WORKER = "nemo_rl.models.generation.vllm.vllm_backend.NixlVllmWorker"
+FP8_CONFIG_KEY = "nemo_rl_fp8"
+
+
+def initialize_fp8_worker(vllm_config: Any, *, required: bool) -> None:
+    """Apply FP8 patches from config serialized into a vLLM worker process."""
+    fp8_config = getattr(vllm_config, "nrl_fp8_cfg", None)
+    if fp8_config is None:
+        config_dict = getattr(vllm_config, "additional_config", {}).get(FP8_CONFIG_KEY)
+        if config_dict is not None:
+            fp8_config = FP8Config(**config_dict)
+    if fp8_config is None:
+        if required:
+            raise RuntimeError("FP8 vLLM worker is missing its serialized config.")
+        return
+    apply_fp8_patches(None, fp8_config)
+
+
+class Fp8VllmWorker(VllmWorker):
+    """vLLM worker that installs NeMo-RL FP8 patches before model creation."""
+
+    def __new__(cls, vllm_config: Any, *args: Any, **kwargs: Any) -> "Fp8VllmWorker":
+        initialize_fp8_worker(vllm_config, required=True)
+        return super().__new__(cls)
+
+
+def configure_fp8_worker(vllm_kwargs: dict[str, Any]) -> None:
+    """Select a worker class that initializes FP8 in spawned vLLM workers."""
+    if global_fp8_config is None:
+        raise RuntimeError("init_fp8 must run before configuring the vLLM worker.")
+    worker_cls = vllm_kwargs.setdefault("worker_cls", FP8_VLLM_WORKER)
+    if worker_cls not in (FP8_VLLM_WORKER, NIXL_VLLM_WORKER):
+        raise ValueError(
+            "FP8 generation requires vllm_kwargs.worker_cls to be unset, "
+            f"{FP8_VLLM_WORKER}, or {NIXL_VLLM_WORKER}; got {worker_cls}."
+        )
+    additional_config = dict(vllm_kwargs.get("additional_config") or {})
+    additional_config[FP8_CONFIG_KEY] = asdict(global_fp8_config)
+    vllm_kwargs["additional_config"] = additional_config
+
+
 original_run_engine_core = EngineCoreProc.run_engine_core
 original_init = CoreEngineProcManager.__init__
 
@@ -88,7 +131,6 @@ def my_init(*args, **kwargs):
 
 def my_run_engine_core(*args, **kwargs):
     fp8_cfg = kwargs["vllm_config"].nrl_fp8_cfg
-    del kwargs["vllm_config"].nrl_fp8_cfg
     monkey_patch_vllm_ray_executor(fp8_cfg)
     return original_run_engine_core(*args, **kwargs)
 
@@ -124,7 +166,12 @@ def monkey_patch_vllm_ray_executor(fp8_config):
 
 def apply_fp8_patches(self, fp8_config):
     global global_fp8_config, fp8_patches_applied
-    assert not fp8_patches_applied
+    if fp8_patches_applied:
+        if global_fp8_config != fp8_config:
+            raise RuntimeError(
+                "vLLM FP8 patches are already initialized with a different config."
+            )
+        return
 
     global_fp8_config = fp8_config
 

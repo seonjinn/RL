@@ -472,11 +472,15 @@ class BaseVllmGenerationWorker:
         # Call init_fp8 when precision is fp8
         # (kv_cache_dtype can be fp8/fp8_e4m3 or auto, validated in init_fp8)
         if self.cfg["vllm_cfg"]["precision"] == "fp8":
-            from nemo_rl.models.generation.vllm.quantization.fp8 import init_fp8
+            from nemo_rl.models.generation.vllm.quantization.fp8 import (
+                configure_fp8_worker,
+                init_fp8,
+            )
 
             fp8_kwargs = init_fp8(
                 self.cfg["vllm_cfg"], self.model_name, model_parallel_size
             )
+            configure_fp8_worker(vllm_kwargs)
 
             # Merge (rather than replace) so fp8's quantization_config coexists
             # with user-supplied hf_overrides, which take precedence.
