@@ -58,7 +58,7 @@ This teardown-only failure does not remove or truncate the measured history.
 | `508251`, `508252` | Cancelled during worker-venv setup | Node-local venvs removed the directory race but repeated dependency fetches on every node. One `TransferQueue` fetch failed with `curl 56`/early EOF and another `uv sync` stalled. |
 | `508298`, `508299` | Cancelled after topology audit | The coordinated venv path was valid, but the inherited EP16 and PP4 required 64 trainer ranks while the non-colocated split supplied 32. |
 | `508312`, `508313` | Failed during vLLM initialization | TP4 placed two MXFP8 engines on each 8-GPU B200 node. One vLLM engine hit a symmetric-memory OOM and worker SIGSEGV during FlashInfer autotuning. |
-| `508491`, `508492` | Failed during vLLM initialization | Disabling vLLM symmetric all-reduce did not remove the two-engine-per-node initialization failure. |
+| `508491`, `508492` | Legacy cancelled; NCCL failed during vLLM initialization | Disabling vLLM symmetric all-reduce did not remove the two-engine-per-node initialization failure. The legacy arm was cancelled after reproducing the same startup stall. |
 | `508531`, `508532` | Failed during vLLM initialization | TP8 placed one engine per node, but Qwen3-235B MXFP8 MoE scale shuffle does not support that partition: `shape '[128, 4096, 6]' is invalid for input of size 4194304`. |
 | `508561`, `508562` | Failed during launcher preflight | `ray.sub` rejected 4-GPU requests on physical 8-GPU nodes before Ray started. |
 | `508571`, `508572` | Failed during wrapper startup | Slurm copied the partial-node wrapper into its spool, so a wrapper-relative `ray.sub` path was invalid. The wrapper now receives the absolute repo path. |
