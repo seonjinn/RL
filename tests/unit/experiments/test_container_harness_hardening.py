@@ -834,7 +834,7 @@ def test_scheduler_preflight_invokes_real_sbatch_test_only(
     assert "--parsable" not in submitted_arguments
     assert "--export=ALL" not in submitted_arguments
     if relative_path == "scripts/validate_oci_container_runtime.sub":
-        assert "--time=00:45:00" in submitted_arguments
+        assert "--time=01:30:00" in submitted_arguments
         assert (
             "--job-name=coreai_dlalgo_nemorl-cuda-graph.runtime-stage"
             in submitted_arguments

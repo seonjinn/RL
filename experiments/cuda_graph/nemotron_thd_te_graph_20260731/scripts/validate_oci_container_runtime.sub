@@ -266,7 +266,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
   fi
   runtime_time_limit=00:15:00
   if [[ "${RUNTIME_PHASE}" == "stage" ]]; then
-    runtime_time_limit=00:45:00
+    runtime_time_limit=01:30:00
   fi
   sbatch_command=(
     sbatch
