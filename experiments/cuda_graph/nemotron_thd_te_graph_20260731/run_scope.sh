@@ -404,6 +404,15 @@ else
 fi
 
 extra_overrides=()
+case "${OVERLAP_PARAM_GATHER:-}" in
+  "") ;;
+  true|false)
+    extra_overrides+=(
+      "policy.megatron_cfg.distributed_data_parallel_config.overlap_param_gather=${OVERLAP_PARAM_GATHER}"
+    )
+    ;;
+  *) fail "OVERLAP_PARAM_GATHER must be true or false" ;;
+esac
 case "${MOE_SHARED_EXPERT_OVERLAP:-}" in
   "") ;;
   true|false)

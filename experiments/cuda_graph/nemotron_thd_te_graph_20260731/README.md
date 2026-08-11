@@ -234,8 +234,9 @@ matrix formed by:
 - every subset of `attn`, `mlp`, and `mamba`; and
 - `none`, `moe`, `moe_router`, or `moe_router,moe_preprocess`.
 
-The nine files in `variants/` vary shared-expert overlap and `moe_act`
-recomputation without pretending those settings are graph scope names.
+The ten files in `variants/` vary shared-expert overlap, `moe_act`
+recomputation, and distributed-optimizer parameter-gather overlap without
+pretending those settings are graph scope names.
 `scope_matrix.py` classifies each row before any scheduler call as `runnable`,
 `model-incompatible`, `capacity-blocked`, `dependency-blocked`, or
 `submitted`. Full-MoE and whole-layer capture remain capacity-blocked until a

@@ -1341,7 +1341,7 @@ def test_scope_and_variant_leaves_are_persistent_and_exact() -> None:
     assert [path.name for path in scopes] == [
         f"{row.index:02d}_{row.name}.sh" for row in rows
     ]
-    assert len(variants) == 9
+    assert len(variants) == 10
     for launcher in [*scopes, *variants]:
         text = launcher.read_text()
         assert "WARMUP_STEPS=3" in text
@@ -2175,6 +2175,30 @@ def test_nano_test_only_launcher_renders_batch_job_without_singleton() -> None:
     assert "run_nemorl_scope.sub" in result.stdout
     assert "dependency" not in result.stdout.lower()
     assert "TEST_ONLY: no submission performed" in result.stdout
+
+
+def test_nano_router_launcher_forwards_overlap_param_gather_diagnostic() -> None:
+    result = _run_script(
+        "scopes/03_moe_router.sh",
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        STEPS="20",
+        TEST_ONLY="1",
+        RUN_TAG="overlap-param-gather-off",
+        OVERLAP_PARAM_GATHER="false",
+    )
+
+    assert result.returncode == 0, result.stderr
+    command_line = next(
+        line for line in result.stdout.splitlines() if line.startswith("COMMAND: ")
+    )
+    command = shlex.split(command_line.removeprefix("COMMAND: "))[0]
+    arguments = shlex.split(command)
+    assert (
+        "policy.megatron_cfg.distributed_data_parallel_config."
+        "overlap_param_gather=false"
+    ) in arguments
 
 
 def test_nano_ptyche_launcher_omits_unsupported_gpu_tres_options(
