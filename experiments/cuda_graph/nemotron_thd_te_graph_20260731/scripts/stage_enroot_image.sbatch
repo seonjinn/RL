@@ -90,10 +90,13 @@ if [[ "${CONTAINER_DIR}" != /* ]]; then
   echo "CONTAINER_DIR must be absolute" >&2
   exit 2
 fi
-if [[ "${PARTITION}" != "batch" ]]; then
-  echo "Container staging requires PARTITION=batch" >&2
-  exit 2
-fi
+case "${PARTITION}" in
+  batch | cpu | cpu_datamover) ;;
+  *)
+    echo "PARTITION must be one of: batch, cpu, cpu_datamover" >&2
+    exit 2
+    ;;
+esac
 if [[ ! "${TEST_ONLY}" =~ ^[01]$ || ! "${SBATCH_TEST_ONLY}" =~ ^[01]$ ]]; then
   echo "TEST_ONLY and SBATCH_TEST_ONLY must be 0 or 1" >&2
   exit 2

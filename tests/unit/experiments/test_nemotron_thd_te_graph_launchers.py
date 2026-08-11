@@ -811,6 +811,45 @@ def test_stage_enroot_image_uses_no_gpu_for_ptyche(
     assert "--gres=" not in result.stdout
 
 
+def test_stage_enroot_image_allows_cpu_datamover_without_gpu(
+    tmp_path: Path,
+) -> None:
+    result = _run_script(
+        "scripts/stage_enroot_image.sbatch",
+        TEST_ONLY="1",
+        SOURCE_IMAGE="nvcr.io/nvidian/nemo-rl:nightly",
+        SOURCE_DIGEST="sha256:" + "a" * 64,
+        SOURCE_COMMIT="b" * 40,
+        OUTPUT_PREFIX="nemo_rl_nightly_oci",
+        CONTAINER_DIR=str(tmp_path / "containers"),
+        PARTITION="cpu_datamover",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--partition=cpu_datamover" in result.stdout
+    assert "--gpus-per-node" not in result.stdout
+    assert "--gres=" not in result.stdout
+
+
+def test_stage_enroot_image_rejects_unapproved_partition(
+    tmp_path: Path,
+) -> None:
+    result = _run_script(
+        "scripts/stage_enroot_image.sbatch",
+        TEST_ONLY="1",
+        SOURCE_IMAGE="nvcr.io/nvidian/nemo-rl:nightly",
+        SOURCE_DIGEST="sha256:" + "a" * 64,
+        SOURCE_COMMIT="b" * 40,
+        OUTPUT_PREFIX="nemo_rl_nightly_oci",
+        CONTAINER_DIR=str(tmp_path / "containers"),
+        PARTITION="interactive",
+    )
+
+    assert result.returncode == 2
+    assert "PARTITION must be one of: batch, cpu, cpu_datamover" in result.stderr
+    assert "SBATCH:" not in result.stdout
+
+
 def test_stage_enroot_image_rejects_unpinned_source_before_submission(
     tmp_path: Path,
 ) -> None:
