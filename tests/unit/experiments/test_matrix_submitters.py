@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.util
 import json
@@ -294,16 +295,31 @@ def test_mcore_candidate_archive_collection_resolves_every_literal_manifest_node
 
 def test_mcore_worker_validates_entire_candidate_matrix_before_execution() -> None:
     source = MCORE_DRIVER_PATH.read_text()
-
-    validation = source.index(
-        "validate_pytest_node_collection(", source.index("def main")
+    module = ast.parse(source)
+    main = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.FunctionDef) and node.name == "main"
     )
-    execution = source.index("for node, command in zip(", source.index("def main"))
-    validation_call = source[validation:execution]
+    calls = [node for node in ast.walk(main) if isinstance(node, ast.Call)]
+    validation = next(
+        node
+        for node in calls
+        if isinstance(node.func, ast.Name)
+        and node.func.id == "validate_pytest_node_collection"
+    )
+    execution = next(
+        node
+        for node in calls
+        if isinstance(node.func, ast.Name) and node.func.id == "run_pytest_command"
+    )
+    rows = next(
+        keyword.value for keyword in validation.keywords if keyword.arg == "rows"
+    )
 
-    assert validation < execution
-    assert "rows=rows" in validation_call
-    assert "rows={row.row_id: row}" not in validation_call
+    assert validation.lineno < execution.lineno
+    assert isinstance(rows, ast.Name)
+    assert rows.id == "rows"
 
 
 def _run_submitter(
