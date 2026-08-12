@@ -537,10 +537,14 @@ def test_pytest_command_uses_the_explicit_environment(
     module = _load_driver()
     captured_environment: dict[str, str] | None = None
 
-    def run_command(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+    def run_command(
+        *args: object, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
         nonlocal captured_environment
         captured_environment = kwargs["env"]
-        return subprocess.CompletedProcess(args[0], returncode=0, stdout="ok", stderr="")
+        return subprocess.CompletedProcess(
+            args[0], returncode=0, stdout="ok", stderr=""
+        )
 
     monkeypatch.setattr(module.subprocess, "run", run_command)
     environment = {"MASTER_PORT": "31000", "MCORE_PYTEST_NODE_INDEX": "1"}
@@ -563,6 +567,7 @@ def test_distributed_pytest_nodes_use_distinct_rendezvous_ports(
 ) -> None:
     module = _load_driver()
     monkeypatch.setenv("MASTER_PORT", "29999")
+    monkeypatch.setenv("TORCHELASTIC_USE_AGENT_STORE", "True")
 
     first = module.pytest_node_environment(node_index=0)
     second = module.pytest_node_environment(node_index=1)
@@ -571,7 +576,10 @@ def test_distributed_pytest_nodes_use_distinct_rendezvous_ports(
     assert second["MASTER_PORT"] == "31000"
     assert first["MCORE_PYTEST_NODE_INDEX"] == "0"
     assert second["MCORE_PYTEST_NODE_INDEX"] == "1"
+    assert "TORCHELASTIC_USE_AGENT_STORE" not in first
+    assert "TORCHELASTIC_USE_AGENT_STORE" not in second
     assert os.environ["MASTER_PORT"] == "29999"
+    assert os.environ["TORCHELASTIC_USE_AGENT_STORE"] == "True"
 
 
 @pytest.mark.parametrize("master_port", (None, "not-a-port", "65000"))

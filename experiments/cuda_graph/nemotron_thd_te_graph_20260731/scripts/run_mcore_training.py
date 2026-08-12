@@ -337,6 +337,7 @@ def pytest_node_environment(*, node_index: int) -> dict[str, str]:
         raise ValueError("derived pytest MASTER_PORT exceeds 65535")
     master_port = base_master_port + 1000 + node_index
     environment = os.environ.copy()
+    environment.pop("TORCHELASTIC_USE_AGENT_STORE", None)
     environment["MASTER_PORT"] = str(master_port)
     environment["MCORE_PYTEST_NODE_INDEX"] = str(node_index)
     return environment
@@ -353,7 +354,9 @@ def validate_pytest_node_collection(
         dict.fromkeys(node for row in rows.values() for node in row.pytest_nodes)
     )
     if not expected_nodes:
-        raise ValueError("candidate collection requires at least one literal pytest node")
+        raise ValueError(
+            "candidate collection requires at least one literal pytest node"
+        )
     environment = os.environ.copy()
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
     completed = subprocess.run(
