@@ -2,12 +2,12 @@
   "schema_version": 1,
   "title": "Packed THD + Partial CUDA Graph, 쉽게 이해하기",
   "subtitle": "NeMo-RL에서 Megatron-Core와 Transformer Engine을 연결해 Attention, Mamba, MoE router를 안전하게 capture·replay하기 위해 무엇을 바꿨는지 설명합니다.",
-  "updated": "2026-08-05 21:45 PDT",
+  "updated": "2026-08-11 22:09 PDT",
   "status": [
-    "Nano 20-step baseline, attention, attention+Mamba, attention+Mamba+router 네 run이 모두 20/20 step을 완료했습니다.",
-    "세 CUDA Graph scope 모두 eligible call coverage 100%, fallback 0을 기록했습니다.",
-    "Logprob phase를 지나도 graph bank와 graph-owned storage를 유지하도록 lifecycle reset 문제를 수정했습니다.",
-    "Matched 100-step correctness soak는 OCI-HSG job 5908997(baseline)과 5909007(attention)에서 실행 중이며, 2026-08-05 21:45 PDT 기준 두 작업 모두 RUNNING입니다."
+    "기존 Nano 20-step baseline, attention, attention+Mamba, attention+Mamba+router 네 run은 모두 20/20 step을 완료했고, 세 graph scope는 eligible-call coverage 100%와 fallback 0을 기록했습니다.",
+    "Matched 100-step baseline job 5908997과 attention job 5909007은 모두 COMPLETED|0:0입니다. Aggregate metric 회수와 직접 output·gradient parity 판정은 아직 남아 있습니다.",
+    "현재 exact source snapshot은 NeMo-RL bce65fdd3, Megatron-Bridge 91d904d7, Megatron-LM 97cc30cb9입니다. OCI-HSG에서 exact nightly image를 CPU-only로 staging한 뒤 동일 runtime을 GPU에서 attest하는 중입니다.",
+    "현재 Megatron-LM은 예전 sj/cudagraph-on-ultra보다 memory lifetime, schedule별 graph-bank ownership, rollback-safe 전환, packed THD metadata, Mamba·MoE·HybridEP invariant를 더 엄격하게 검증합니다. NeMo-RL logprob→policy-training E2E gate 전에는 최종 안전 판정을 보류합니다."
   ],
   "beginner_background": [
     "일반적인 PyTorch eager 실행은 매 iteration마다 CPU가 많은 GPU kernel을 하나씩 launch합니다. Kernel 자체가 짧거나 module 경계가 잘게 나뉘면 이 CPU launch overhead가 GPU 계산 사이의 빈 공간으로 나타납니다.",
@@ -58,8 +58,8 @@
       "excerpt": "before = fingerprint_training_graph_storage(model)\n# eager logprob runs without moving graph-owned storage\nafter = fingerprint_training_graph_storage(model)\nassert classify_storage_change(before, after) is StorageChange.NONE"
     },
     {
-      "title": "PR 5672의 THD partial graph 경로를 hybrid model scope로 확장합니다",
-      "purpose": "MCore transformer layer와 TE graph bank가 PackedSeqParams를 잃지 않도록 연결하고, attention뿐 아니라 Mamba, moe_router, moe_preprocess의 module boundary와 output ABI를 처리합니다. moe_preprocess는 router와 함께 사용해야 하며 dropless token dispatcher의 metadata 수명도 replay 범위에 맞춥니다.",
+      "title": "PR 5672 계열의 THD partial graph 경로를 hybrid model scope로 확장합니다",
+      "purpose": "PR 5672의 설계를 출발점으로 삼되, 이후 upstream #5975의 graph-memory correctness 수정과 현재 MCore API를 함께 사용합니다. PackedSeqParams를 보존하고 attention뿐 아니라 Mamba, moe_router, moe_preprocess의 module boundary와 output ABI를 처리합니다. moe_preprocess는 router와 함께 사용해야 하며 dropless token dispatcher metadata의 수명도 replay 범위에 맞춥니다.",
       "files": [
         "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/transformer_layer.py",
         "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/te_cuda_graph_bank.py",
@@ -67,6 +67,16 @@
         "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/moe/token_dispatcher.py"
       ],
       "excerpt": "cuda_graph_modules = [\n    CudaGraphModule.attn,\n    CudaGraphModule.mamba,\n    CudaGraphModule.moe_router,\n    # CudaGraphModule.moe_preprocess requires moe_router\n]"
+    },
+    {
+      "title": "예전 cudagraph-on-ultra보다 graph 소유권과 실패 경계를 엄격하게 만듭니다",
+      "purpose": "예전 branch의 module-global shared buffer와 shape-mismatch eager fallback 대신, schedule별 bank가 graph identity, packed input, padding mask, dispatcher state를 소유합니다. Bank 설치와 해제는 transaction으로 처리하고 중간 실패 시 원래 참조를 복원합니다. #5975의 save_for_backward 수명 추적은 graph allocator storage가 backward 전에 재사용되는 문제를 막습니다.",
+      "files": [
+        "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/cuda_graphs.py",
+        "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/te_cuda_graph_bank.py",
+        "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/transformer_layer.py"
+      ],
+      "excerpt": "old: global buffers + automatic eager fallback\ncurrent: schedule-owned bank + replay fingerprints + rollback-safe transitions\n#5975: saved-tensor lifetime ownership before allocator reuse"
     },
     {
       "title": "Graph를 켰다는 설정 대신 실제 replay 증거를 기록합니다",
@@ -89,8 +99,14 @@
     {
       "severity": "risk",
       "title": "20 step은 convergence correctness를 증명하지 못합니다",
-      "detail": "NaN/Inf, masked sequence, fallback은 없었지만 각 run이 독립적인 stochastic trajectory를 사용했습니다. Reward와 validation accuracy 차이를 CUDA Graph의 numerical impact라고 분리할 수 없습니다.",
-      "next": "현재 실행 중인 matched 100-step baseline/attention soak를 완료하고 step window와 seed, input 분포를 함께 비교합니다."
+      "detail": "NaN/Inf, masked sequence, fallback은 없었지만 각 run이 독립적인 stochastic trajectory를 사용했습니다. Matched 100-step 두 job도 정상 종료했지만, 종료 성공만으로 reward와 validation accuracy 차이를 CUDA Graph의 numerical impact라고 분리할 수 없습니다.",
+      "next": "100-step artifact의 step window, seed, input 분포와 accuracy metric을 회수하고, 고정 packed input의 output·gradient·parameter-delta parity gate와 함께 판정합니다."
+    },
+    {
+      "severity": "confirmed",
+      "title": "현재 E2E blocker는 logprob에서 policy training으로 돌아오는 DDP 전환입니다",
+      "detail": "NeMo-RL logprob는 eager 경로로 들어가며 TE replay hook을 내립니다. 이전 실패는 warmup 3회가 끝나 graph를 capture하기 전에 발생했으므로 replay corruption보다 DDP overlap_param_gather hook과 phase 전환 collective의 불일치가 더 강한 가설입니다.",
+      "next": "동일 exact runtime에서 overlap_param_gather=false 한 변수만 바꾼 5-step 진단을 실행합니다. 안정화되면 logprob 경계에서 필요한 DDP hook만 일시 정지·복구하고 overlap 자체는 training steady state에서 유지합니다."
     },
     {
       "severity": "measure",
@@ -113,8 +129,8 @@
     {
       "severity": "measure",
       "title": "Upstream main과 nested dependency가 계속 이동합니다",
-      "detail": "현재 branch는 PR 5672 계열의 THD partial graph 수정과 이후 Megatron main 변경을 함께 포함합니다. NeMo-RL main과 nested Bridge/MCore가 갱신되면 API와 이미 merge된 수정이 겹치는지 다시 확인해야 합니다.",
-      "next": "Upstream merge 전에 NeMo-RL, Bridge, MCore의 exact commit과 diff provenance를 다시 고정하고 중복 patch 및 regression test를 audit합니다."
+      "detail": "현재 branch는 PR 5672 계열의 THD partial graph 수정과 이후 Megatron main 변경을 함께 포함합니다. 실험 source와 nightly image의 source commit을 섞으면 결과 provenance가 깨지므로, 지금 진단은 exact snapshot과 exact image digest를 고정했습니다.",
+      "next": "현재 runtime gate를 먼저 통과한 뒤 latest NeMo-RL main 통합을 별도 branch와 새 lock·image attestation으로 수행하고 중복 patch 및 regression test를 audit합니다."
     }
   ],
   "quiz": [
@@ -171,7 +187,7 @@
         "Validation accuracy 차이는 모두 CUDA Graph numerical error입니다."
       ],
       "answer": 2,
-      "feedback": "독립 stochastic trajectory의 aggregate accuracy는 원인 분리에 부족합니다. Matched 100-step soak와 더 직접적인 parity gate가 필요합니다."
+      "feedback": "독립 stochastic trajectory의 aggregate accuracy와 job 종료 성공만으로는 원인 분리에 부족합니다. Matched 100-step metric 분석과 더 직접적인 parity gate가 필요합니다."
     }
   ]
 }

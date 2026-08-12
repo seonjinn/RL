@@ -740,7 +740,7 @@ td small, th small {{ display: block; color: var(--muted); font-size: .68rem; fo
           <tbody>{correctness_rows}</tbody>
         </table>
       </div>
-      <div class="callout"><strong>현재까지 확인된 범위</strong>20-step run에서 NaN/Inf, masked sequence, graph fallback은 관찰되지 않았습니다. 다만 trajectory가 sample 단위로 pair되지 않았으므로 accuracy 차이를 CUDA Graph 영향이라고 결론 내릴 수 없습니다. Matched 100-step soak가 다음 correctness gate입니다.</div>
+      <div class="callout"><strong>현재까지 확인된 범위</strong>20-step run에서 NaN/Inf, masked sequence, graph fallback은 관찰되지 않았고 matched 100-step baseline·attention job도 정상 종료했습니다. 다만 job 성공과 독립 trajectory의 aggregate metric만으로 numerical parity를 증명할 수 없습니다. 100-step metric 분석과 고정 input의 output·gradient·parameter-delta parity가 다음 correctness gate입니다.</div>
     </section>
 
     <section id="quiz">
