@@ -275,6 +275,9 @@ def _stage_runtime_payload_fixture(
     )
     cuda_home = tmp_path / "cuda"
     cuda_home.joinpath("bin").mkdir(parents=True)
+    cuda_driver_stub_dir = cuda_home / "targets" / "sbsa-linux" / "lib" / "stubs"
+    cuda_driver_stub_dir.mkdir(parents=True)
+    (cuda_driver_stub_dir / "libcuda.so").write_bytes(b"fixture CUDA driver stub\n")
     _write_executable(
         cuda_home / "bin" / "nvcc",
         "#!/bin/sh\nprintf 'Cuda compilation tools, fixture release 13.2\\n'\n",
@@ -307,6 +310,11 @@ def _run_runtime_payload(
     )
     runtime_environment["CUDA_HOME"] = str(effective_cuda_home)
     runtime_environment["CUDACXX"] = str(effective_cuda_compiler)
+    cuda_driver_stub_dir = (
+        effective_cuda_home / "targets" / "sbsa-linux" / "lib" / "stubs"
+    )
+    runtime_environment["CUDA_DRIVER_STUB_DIR"] = str(cuda_driver_stub_dir)
+    runtime_environment["LIBRARY_PATH"] = str(cuda_driver_stub_dir)
     runtime_stage_root = fixture.environment_root.parent
     runtime_environment.update(
         {
@@ -1004,6 +1012,8 @@ printf '{"status":"passed"}\n' >"${output}"
     assert "/root/.cache/uv" not in command
     assert "CUDA_HOME=/usr/local/cuda" in command
     assert "CUDACXX=/usr/local/cuda/bin/nvcc" in command
+    assert "LIBRARY_PATH=/usr/local/cuda/targets/sbsa-linux/lib/stubs" in command
+    assert "LD_LIBRARY_PATH=/usr/local/cuda/targets/sbsa-linux/lib/stubs" not in command
     assert "NRL_FORCE_REBUILD_VENVS=true" in command
     assert "NVTE_WITH_NCCL_EP=0" in command
     assert f"UV_PROJECT_ENVIRONMENT={runtime_stage_root}/environment" in command
@@ -1551,6 +1561,10 @@ def test_runtime_wrapper_separates_cpu_stage_from_gpu_attestation() -> None:
         "packaging==26.2,pluggy==1.6.0,pygments==2.20.0" in source
     )
     assert "TORCH_CUDA_ARCH_LIST=10.0a" in source
+    assert "CUDA_DRIVER_STUB_DIR=/usr/local/cuda/targets/sbsa-linux/lib/stubs" in source
+    assert '[[ -f "${CUDA_DRIVER_STUB_DIR}/libcuda.so" ]]' in source
+    assert '"LIBRARY_PATH=${CUDA_DRIVER_STUB_DIR}"' in source
+    assert '"LD_LIBRARY_PATH=${CUDA_DRIVER_STUB_DIR}"' not in source
     assert (
         "RUNTIME_EXCLUDED_PACKAGES=${RUNTIME_EXCLUDED_PACKAGES:-causal-conv1d,"
         "deep-ep,fast-hadamard-transform,mamba-ssm}" in source

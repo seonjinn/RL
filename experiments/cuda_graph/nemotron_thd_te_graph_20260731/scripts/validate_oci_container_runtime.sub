@@ -450,6 +450,7 @@ runtime_environment_root=${runtime_stage_root}/environment
 runtime_uv_cache=${runtime_stage_root}/build-cache
 runtime_te_cmake_dir=${runtime_stage_root}/te-cmake
 runtime_site_packages=${runtime_environment_root}/lib/python3.13/site-packages
+CUDA_DRIVER_STUB_DIR=/usr/local/cuda/targets/sbsa-linux/lib/stubs
 runtime_environment=(
   /usr/bin/env
   -i
@@ -488,6 +489,8 @@ runtime_environment=(
 )
 if [[ "${RUNTIME_PHASE}" == "stage" ]]; then
   runtime_environment+=(
+    "CUDA_DRIVER_STUB_DIR=${CUDA_DRIVER_STUB_DIR}"
+    "LIBRARY_PATH=${CUDA_DRIVER_STUB_DIR}"
     "CMAKE_BUILD_PARALLEL_LEVEL=${RUNTIME_STAGE_CPUS_PER_TASK}"
   )
 else
@@ -552,6 +555,15 @@ if [[ "${path_cuda_compiler}" != "${cuda_compiler}" ]]; then
   echo "PATH nvcc does not match CUDACXX: ${path_cuda_compiler:-missing}" >&2
   exit 2
 fi
+if [[ "${CUDA_DRIVER_STUB_DIR:-}" != "${cuda_home%/}/targets/sbsa-linux/lib/stubs" ||
+      "${LIBRARY_PATH:-}" != "${CUDA_DRIVER_STUB_DIR}" ]]; then
+  echo "CPU runtime stage requires the image-provided SBSA CUDA driver stub" >&2
+  exit 2
+fi
+[[ -f "${CUDA_DRIVER_STUB_DIR}/libcuda.so" ]] || {
+  echo "CPU runtime stage CUDA driver stub is missing" >&2
+  exit 2
+}
 uv_cache_dir=${UV_CACHE_DIR:-}
 if [[ "${uv_cache_dir}" != "${runtime_stage_root}/build-cache" ]]; then
   echo "UV_CACHE_DIR must be the job-local runtime cache" >&2
