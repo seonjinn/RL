@@ -2,12 +2,13 @@
   "schema_version": 1,
   "title": "Packed THD + Partial CUDA Graph, 쉽게 이해하기",
   "subtitle": "NeMo-RL에서 Megatron-Core와 Transformer Engine을 연결해 Attention, Mamba, MoE router를 안전하게 capture·replay하기 위해 무엇을 바꿨는지 설명합니다.",
-  "updated": "2026-08-11 22:09 PDT",
+  "updated": "2026-08-11 22:33 PDT",
   "status": [
     "기존 Nano 20-step baseline, attention, attention+Mamba, attention+Mamba+router 네 run은 모두 20/20 step을 완료했고, 세 graph scope는 eligible-call coverage 100%와 fallback 0을 기록했습니다.",
-    "Matched 100-step baseline job 5908997과 attention job 5909007은 모두 COMPLETED|0:0입니다. Aggregate metric 회수와 직접 output·gradient parity 판정은 아직 남아 있습니다.",
-    "현재 exact source snapshot은 NeMo-RL bce65fdd3, Megatron-Bridge 91d904d7, Megatron-LM 97cc30cb9입니다. OCI-HSG에서 exact nightly image를 CPU-only로 staging한 뒤 동일 runtime을 GPU에서 attest하는 중입니다.",
-    "현재 Megatron-LM은 예전 sj/cudagraph-on-ultra보다 memory lifetime, schedule별 graph-bank ownership, rollback-safe 전환, packed THD metadata, Mamba·MoE·HybridEP invariant를 더 엄격하게 검증합니다. NeMo-RL logprob→policy-training E2E gate 전에는 최종 안전 판정을 보류합니다."
+    "Matched 100-step baseline job 5908997과 attention job 5909007은 모두 COMPLETED|0:0이지만 correctness는 일치하지 않았습니다. Step 100 validation accuracy는 0.6367 대 0.2266이었고, attention run의 policy KL은 평균 약 5.66M, 최대 약 278.19M까지 발산했습니다.",
+    "Attention run은 graph capture가 시작되는 step 4보다 이른 warmup step 1부터 probs_ratio_max=94.79였습니다. 따라서 확인된 문제는 replay만의 문제가 아니며, CG enable 시 training에만 적용되는 fixed-capacity THD geometry를 우선 검증해야 합니다.",
+    "현재 exact source snapshot은 NeMo-RL bce65fdd3, Megatron-Bridge 91d904d7, Megatron-LM 97cc30cb9입니다. OCI-HSG exact nightly image는 GPU를 점유하지 않는 CPU data-mover node에서 staging 중이며, 완료 후 동일 runtime을 GPU에서 attest합니다.",
+    "현재 Megatron-LM은 예전 sj/cudagraph-on-ultra보다 memory lifetime, schedule별 graph-bank ownership, rollback-safe 전환, packed THD metadata, Mamba·MoE·HybridEP invariant를 더 엄격하게 검증합니다. 이는 구조적 안전성의 개선이며 수치적 correctness 증명과는 별개입니다. 현재 구현은 parity gate를 통과하기 전까지 promotion하지 않습니다."
   ],
   "beginner_background": [
     "일반적인 PyTorch eager 실행은 매 iteration마다 CPU가 많은 GPU kernel을 하나씩 launch합니다. Kernel 자체가 짧거나 module 경계가 잘게 나뉘면 이 CPU launch overhead가 GPU 계산 사이의 빈 공간으로 나타납니다.",
@@ -92,21 +93,27 @@
   "problems": [
     {
       "severity": "confirmed",
+      "title": "Matched 100-step attention run에서 수치적 correctness가 깨졌습니다",
+      "detail": "동일 NeMo-RL commit cf800294a와 동일 seed/config를 사용한 baseline 5908997 및 attention 5909007 비교에서 step 100 validation accuracy가 0.6367에서 0.2266으로 하락했습니다. Attention run의 policy KL은 평균 약 5.66M, 최대 약 278.19M, probs_ratio_max는 최대 53,856이었습니다. masked sequence count는 두 run 모두 0이라 기존 threshold가 이 오류를 잡지 못했습니다.",
+      "next": "현재 exact runtime으로 baseline/attention 5-step을 다시 짝지어 실행하고 step 1부터 probs ratio, policy KL, grad norm을 비교합니다. 이 gate를 통과하기 전에는 성능 결과를 채택하지 않습니다."
+    },
+    {
+      "severity": "confirmed",
+      "title": "오류는 graph capture 이전 warmup에서 이미 시작됩니다",
+      "detail": "Warmup은 step 1–3이고 첫 capture는 step 4지만 attention run의 probs_ratio_max는 step 1에서 94.79였습니다. CG가 enable되면 policy training은 처음부터 fixed token/sequence-capacity THD packer를 사용하고, eager logprob은 dynamic packing을 사용합니다. 과거 100-step과 현재 NeMo-RL의 이 핵심 data/train/worker 경로는 동일합니다.",
+      "next": "동일 weight와 packed input으로 dynamic geometry 대 fixed-capacity geometry의 forward output, loss, gradient, parameter delta를 capture 없이 먼저 비교합니다. Geometry parity가 성립한 뒤에만 capture/replay parity를 검사합니다."
+    },
+    {
+      "severity": "confirmed",
       "title": "넓은 scope에서 capacity-2 bank가 thrash합니다",
       "detail": "Attention은 step 11–19에서 hit rate 100%였지만 attention+Mamba는 55.6%, router까지 추가하면 33.3%로 내려갑니다. 네 token-capacity schedule이 두 bank slot을 번갈아 밀어내기 때문에 recapture 비용이 생깁니다.",
       "next": "동일 workload에서 bank capacity 2와 4, deterministic capacity bucketing을 GPU memory peak와 함께 비교합니다."
     },
     {
       "severity": "risk",
-      "title": "20 step은 convergence correctness를 증명하지 못합니다",
-      "detail": "NaN/Inf, masked sequence, fallback은 없었지만 각 run이 독립적인 stochastic trajectory를 사용했습니다. Matched 100-step 두 job도 정상 종료했지만, 종료 성공만으로 reward와 validation accuracy 차이를 CUDA Graph의 numerical impact라고 분리할 수 없습니다.",
-      "next": "100-step artifact의 step window, seed, input 분포와 accuracy metric을 회수하고, 고정 packed input의 output·gradient·parameter-delta parity gate와 함께 판정합니다."
-    },
-    {
-      "severity": "confirmed",
-      "title": "현재 E2E blocker는 logprob에서 policy training으로 돌아오는 DDP 전환입니다",
-      "detail": "NeMo-RL logprob는 eager 경로로 들어가며 TE replay hook을 내립니다. 이전 실패는 warmup 3회가 끝나 graph를 capture하기 전에 발생했으므로 replay corruption보다 DDP overlap_param_gather hook과 phase 전환 collective의 불일치가 더 강한 가설입니다.",
-      "next": "동일 exact runtime에서 overlap_param_gather=false 한 변수만 바꾼 5-step 진단을 실행합니다. 안정화되면 logprob 경계에서 필요한 DDP hook만 일시 정지·복구하고 overlap 자체는 training steady state에서 유지합니다."
+      "title": "일부 실패 run에는 logprob→policy-training DDP 전환 문제도 별도로 남아 있습니다",
+      "detail": "NeMo-RL logprob는 eager 경로로 들어가며 TE replay hook을 내립니다. 일부 run은 capture 전에 멈췄으므로 fixed-geometry correctness 문제와 별개로 DDP overlap_param_gather hook 또는 phase-transition collective가 진행을 막을 가능성이 있습니다.",
+      "next": "Geometry parity 진단과 분리하여 overlap_param_gather=false 한 변수만 바꾼 5-step run을 실행하고 hang 여부를 판정합니다."
     },
     {
       "severity": "measure",
@@ -179,15 +186,15 @@
       "feedback": "Eager path에서는 replay hook만 제거할 수 있습니다. Graph-owned storage 주소가 그대로라면 bank를 유지하는 것이 안전하며 recapture를 피합니다."
     },
     {
-      "question": "현재 20-step accuracy 결과로 말할 수 있는 가장 강한 결론은 무엇인가요?",
+      "question": "현재 correctness 결과로 말할 수 있는 가장 강한 결론은 무엇인가요?",
       "options": [
-        "CUDA Graph가 baseline과 완전히 동일하게 수렴합니다.",
-        "Router scope가 attention보다 정확도가 높습니다.",
-        "측정된 smoke window에서 NaN/Inf, masked sequence, fallback이 없었지만 convergence parity는 아직 미확정입니다.",
-        "Validation accuracy 차이는 모두 CUDA Graph numerical error입니다."
+        "현재 구현은 예전 branch보다 안전하므로 convergence도 자동으로 동일합니다.",
+        "100-step job이 정상 종료했으므로 correctness가 보장됩니다.",
+        "Matched attention run은 명확히 발산했고 capture 전 warmup부터 차이가 나므로 fixed-geometry parity를 먼저 증명해야 합니다.",
+        "Attention scope의 validation 차이는 graph-bank thrashing만으로 모두 설명됩니다."
       ],
       "answer": 2,
-      "feedback": "독립 stochastic trajectory의 aggregate accuracy와 job 종료 성공만으로는 원인 분리에 부족합니다. Matched 100-step metric 분석과 더 직접적인 parity gate가 필요합니다."
+      "feedback": "Job 완료와 graph coverage는 수치적 동등성을 뜻하지 않습니다. Capture 전부터 차이가 있으므로 dynamic 대 fixed THD geometry, 그 다음 eager 대 replay 순서로 분리 검증해야 합니다."
     }
   ]
 }
