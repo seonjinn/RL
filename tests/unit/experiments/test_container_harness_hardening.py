@@ -1014,6 +1014,8 @@ printf '{"status":"passed"}\n' >"${output}"
     assert "CUDACXX=/usr/local/cuda/bin/nvcc" in command
     assert "LIBRARY_PATH=/usr/local/cuda/targets/sbsa-linux/lib/stubs" in command
     assert "LD_LIBRARY_PATH=/usr/local/cuda/targets/sbsa-linux/lib/stubs" not in command
+    assert "MAMBA_FORCE_BUILD=TRUE" in command
+    assert "CAUSAL_CONV1D_FORCE_BUILD=TRUE" in command
     assert "NRL_FORCE_REBUILD_VENVS=true" in command
     assert "NVTE_WITH_NCCL_EP=0" in command
     assert f"UV_PROJECT_ENVIRONMENT={runtime_stage_root}/environment" in command
@@ -1182,6 +1184,8 @@ printf '{"status":"passed"}\n' >"${output}"
     assert "--expected-device-count 4" in command
     assert "RUNTIME_ATTESTATION_JOB_ID=734" in command
     assert "UV_PYTHON_DOWNLOADS=never" in command
+    assert "MAMBA_FORCE_BUILD=TRUE" not in command
+    assert "CAUSAL_CONV1D_FORCE_BUILD=TRUE" not in command
     assert '--runtime-attestation-job-id "${RUNTIME_ATTESTATION_JOB_ID}"' in command
     assert (artifact_dir / "oci-container-runtime-734.json").is_file()
 
@@ -1565,6 +1569,8 @@ def test_runtime_wrapper_separates_cpu_stage_from_gpu_attestation() -> None:
     assert '[[ -f "${CUDA_DRIVER_STUB_DIR}/libcuda.so" ]]' in source
     assert '"LIBRARY_PATH=${CUDA_DRIVER_STUB_DIR}"' in source
     assert '"LD_LIBRARY_PATH=${CUDA_DRIVER_STUB_DIR}"' not in source
+    assert "MAMBA_FORCE_BUILD=TRUE" in source
+    assert "CAUSAL_CONV1D_FORCE_BUILD=TRUE" in source
     assert (
         "RUNTIME_EXCLUDED_PACKAGES=${RUNTIME_EXCLUDED_PACKAGES:-causal-conv1d,"
         "deep-ep,fast-hadamard-transform,mamba-ssm}" in source
