@@ -3327,6 +3327,25 @@ def test_oci_runtime_staging_renders_cpu_only_job(tmp_path: Path) -> None:
     assert "TEST_ONLY: no submission performed" in result.stdout
 
 
+def test_oci_runtime_staging_accepts_cpu_datamover(tmp_path: Path) -> None:
+    result = _run_script(
+        "scripts/validate_oci_container_runtime.sub",
+        TEST_ONLY="1",
+        RUNTIME_PHASE="stage",
+        RUNTIME_STAGE_CAPABILITY="mcore-test-v1",
+        STAGE_PARTITION="cpu_datamover",
+        CONTAINER="/lustre/example/nemo_rl_nightly.sqsh",
+        CONTAINER_SHA256=CONTAINER_SHA256,
+        ARTIFACT_DIR=str(tmp_path / "artifacts"),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--partition=cpu_datamover" in result.stdout
+    assert "--cpus-per-task=32" in result.stdout
+    assert "--gres=gpu" not in result.stdout
+    assert "--gpus" not in result.stdout
+
+
 def test_runtime_staging_accepts_ptyche_batch_without_gpu_request(
     tmp_path: Path,
 ) -> None:

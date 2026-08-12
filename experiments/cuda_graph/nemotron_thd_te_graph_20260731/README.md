@@ -157,6 +157,10 @@ assume the current directory is
    scripts/validate_oci_container_runtime.sub
    ```
 
+   On OCI-HSG, set `STAGE_PARTITION=cpu_datamover` when the regular `cpu`
+   partition cannot schedule promptly. Runtime staging remains CPU-only on
+   either partition.
+
    After the stage job and marker pass, run the same command with
    `RUNTIME_PHASE=attest` and `RUNTIME_STAGE_JOB_ID=<completed-stage-job-id>`.
    Use `SBATCH_GRES=none` on ptyche; the wrapper still verifies four visible

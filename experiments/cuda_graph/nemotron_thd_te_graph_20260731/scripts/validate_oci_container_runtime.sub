@@ -100,9 +100,9 @@ if [[ "${RUNTIME_TEST_REQUIREMENTS}" != "pytest==9.1.1,iniconfig==2.3.0,packagin
   exit 2
 fi
 case "${STAGE_PARTITION}" in
-  cpu|batch) ;;
+  cpu|cpu_datamover|batch) ;;
   *)
-    echo "Runtime staging requires STAGE_PARTITION=cpu or batch" >&2
+    echo "Runtime staging requires STAGE_PARTITION=cpu, cpu_datamover, or batch" >&2
     exit 2
     ;;
 esac
