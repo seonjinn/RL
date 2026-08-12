@@ -2,13 +2,17 @@
   "schema_version": 1,
   "title": "Packed THD + Partial CUDA Graph, 쉽게 이해하기",
   "subtitle": "NeMo-RL에서 Megatron-Core와 Transformer Engine을 연결해 Attention, Mamba, MoE router를 안전하게 capture·replay하기 위해 무엇을 바꿨는지 설명합니다.",
-  "updated": "2026-08-11 22:33 PDT",
+  "updated": "2026-08-12 16:42 PDT",
   "status": [
     "기존 Nano 20-step baseline, attention, attention+Mamba, attention+Mamba+router 네 run은 모두 20/20 step을 완료했고, 세 graph scope는 eligible-call coverage 100%와 fallback 0을 기록했습니다.",
     "Matched 100-step baseline job 5908997과 attention job 5909007은 모두 COMPLETED|0:0이지만 correctness는 일치하지 않았습니다. Step 100 validation accuracy는 0.6367 대 0.2266이었고, attention run의 policy KL은 평균 약 5.66M, 최대 약 278.19M까지 발산했습니다.",
     "Attention run은 graph capture가 시작되는 step 4보다 이른 warmup step 1부터 probs_ratio_max=94.79였습니다. 따라서 확인된 문제는 replay만의 문제가 아니며, CG enable 시 training에만 적용되는 fixed-capacity THD geometry를 우선 검증해야 합니다.",
-    "현재 exact source snapshot은 NeMo-RL bce65fdd3, Megatron-Bridge 91d904d7, Megatron-LM 97cc30cb9입니다. OCI-HSG exact nightly image는 GPU를 점유하지 않는 CPU data-mover node에서 staging 중이며, 완료 후 동일 runtime을 GPU에서 attest합니다.",
-    "현재 Megatron-LM은 예전 sj/cudagraph-on-ultra보다 memory lifetime, schedule별 graph-bank ownership, rollback-safe 전환, packed THD metadata, Mamba·MoE·HybridEP invariant를 더 엄격하게 검증합니다. 이는 구조적 안전성의 개선이며 수치적 correctness 증명과는 별개입니다. 현재 구현은 parity gate를 통과하기 전까지 promotion하지 않습니다."
+    "현재 exact source는 NeMo-RL b2d76d461, Megatron-Bridge db5315d4d, Megatron-LM c6fe36e78입니다. OCI-HSG runtime attestation job 6073438은 exact nightly image에서 4×GB200, TE 04a76c84, DeepEP de0dd118, Mamba와 causal-conv1d를 확인하고 COMPLETED|0:0으로 통과했습니다.",
+    "현재 Megatron-LM은 예전 sj/cudagraph-on-ultra보다 memory lifetime, schedule별 graph-bank ownership, packed THD metadata, Mamba·MoE·HybridEP invariant를 더 엄격하게 검증합니다. 다만 generic MCore packed replay의 fail-open 지점과 old-only eager fallback·THD attention-mask 절약은 보완 후보입니다.",
+    "Current-source gate 6073919는 runtime attestation을 통과했지만 첫 Nano TP2/PP2/CP2/EP8 HybridEP test의 TE backward capture에서 모든 rank가 cudaErrorStreamCaptureImplicit를 냈습니다. Cleanup이 분산 teardown에서 멈춰 16 GPU가 idle 상태가 되기 전에 16분 59초에 취소했으며, 뒤의 fixed-capacity THD parity node는 시작하지 못했습니다.",
+    "현재 c6fe36e에는 HybridEP manager autograd-reference 수정 11d93a8a가 포함되어 있습니다. Job 6074997은 preprocess에서 manager-held token_probs가 eager graph를 붙잡아 capture에 실패했고, dispatch+combine까지 완료한 6075013은 product detach가 실행된 뒤 16/16 rank에서 TE capture를 통과했습니다.",
+    "과거 16-GPU full-parity 성공 job 2551742는 현재와 같은 PyTorch 2.11, CUDA 13, TE 04a76c84, DeepEP de0dd118 조합이었고 MCORE_TEST_RELEASE_WARMUP_GRAPH=1로 마지막 eager output, gradients, autograd graph를 정리했습니다. 따라서 runtime regression 가설은 기각되며, 남은 핵심은 capture 전 eager autograd owner의 수명입니다.",
+    "Job 6075013의 뒤이은 fixed-THD parity node는 rank별 첫 pytest 종료 시각 차이 때문에 NCCL process group을 서로 다른 시점에 재초기화하여 무효화됐습니다. Runner에 node별 전-rank barrier, fail-fast, 240초 pytest timeout을 추가했고 로컬 단위 테스트 45개가 통과했습니다. 이제 standard warmup에서 zero_grad-only와 full eager-output release를 분리 검증합니다."
   ],
   "beginner_background": [
     "일반적인 PyTorch eager 실행은 매 iteration마다 CPU가 많은 GPU kernel을 하나씩 launch합니다. Kernel 자체가 짧거나 module 경계가 잘게 나뉘면 이 CPU launch overhead가 GPU 계산 사이의 빈 공간으로 나타납니다.",
@@ -45,7 +49,7 @@
       "purpose": "세 번의 성공한 optimizer step 이후 첫 schedule miss에서 bank를 capture합니다. 같은 key는 activate하여 replay하고, capacity를 넘으면 가장 오래 사용하지 않은 bank만 reset합니다. Rank마다 다른 상태로 진행하지 않도록 schedule key와 transition 결과를 collective로 검증합니다.",
       "files": [
         "nemo_rl/models/megatron/cuda_graph_lifecycle.py",
-        "nemo_rl/models/policy/workers/megatron_policy_worker.py"
+        "nemo_rl/models/megatron/megatron_policy_worker.py"
       ],
       "excerpt": "result = lifecycle.ensure_active(\n    key,\n    lambda: self._capture_te_cuda_graph_bank(key, packed_seq_params),\n)\n# result.status: warming | captured | hit"
     },
@@ -54,7 +58,7 @@
       "purpose": "Capture 시 tensor storage pointer, offset, shape, stride, dtype, device를 fingerprint로 저장합니다. Replay 전에 주소 변화가 없는지 확인하고, 실제 storage relocation이 필요한 순간에만 bank를 reset합니다. Eager logprob로 전환할 때는 graph hook을 uninstall하지만 bank와 storage는 유지합니다.",
       "files": [
         "nemo_rl/models/megatron/cuda_graph_storage.py",
-        "nemo_rl/models/policy/workers/megatron_policy_worker.py"
+        "nemo_rl/models/megatron/megatron_policy_worker.py"
       ],
       "excerpt": "before = fingerprint_training_graph_storage(model)\n# eager logprob runs without moving graph-owned storage\nafter = fingerprint_training_graph_storage(model)\nassert classify_storage_change(before, after) is StorageChange.NONE"
     },
@@ -71,19 +75,19 @@
     },
     {
       "title": "예전 cudagraph-on-ultra보다 graph 소유권과 실패 경계를 엄격하게 만듭니다",
-      "purpose": "예전 branch의 module-global shared buffer와 shape-mismatch eager fallback 대신, schedule별 bank가 graph identity, packed input, padding mask, dispatcher state를 소유합니다. Bank 설치와 해제는 transaction으로 처리하고 중간 실패 시 원래 참조를 복원합니다. #5975의 save_for_backward 수명 추적은 graph allocator storage가 backward 전에 재사용되는 문제를 막습니다.",
+      "purpose": "예전 branch의 module-global shared buffer 대신 schedule별 bank가 graph identity, packed input, padding mask, dispatcher state를 소유합니다. Bank 설치와 해제는 transaction으로 처리하고 중간 실패 시 원래 참조를 복원합니다. #5975의 save_for_backward 수명 추적은 graph allocator storage가 backward 전에 재사용되는 문제를 막습니다. 예전 branch의 명시적 shape·overflow eager fallback과 THD attention-mask skip은 현재 구현에도 선택적으로 복원할 가치가 있습니다.",
       "files": [
         "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/cuda_graphs.py",
         "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/te_cuda_graph_bank.py",
         "3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM/megatron/core/transformer/transformer_layer.py"
       ],
-      "excerpt": "old: global buffers + automatic eager fallback\ncurrent: schedule-owned bank + replay fingerprints + rollback-safe transitions\n#5975: saved-tensor lifetime ownership before allocator reuse"
+      "excerpt": "old: global buffers + explicit eager fallbacks + THD mask skip\ncurrent: schedule-owned bank + replay fingerprints + rollback-safe transitions\n#5975: saved-tensor lifetime ownership before allocator reuse"
     },
     {
       "title": "Graph를 켰다는 설정 대신 실제 replay 증거를 기록합니다",
       "purpose": "매 policy-training call에서 eligible call, graph call, capture, replay, cache hit/miss, eviction, fallback과 logical·padded·capacity token을 수집합니다. 이 counter는 rank 간 합의와 invariant 검증을 거친 뒤 W&B와 결과 CSV로 전달됩니다.",
       "files": [
-        "nemo_rl/models/policy/workers/megatron_policy_worker.py",
+        "nemo_rl/models/megatron/megatron_policy_worker.py",
         "nemo_rl/algorithms/utils.py",
         "experiments/cuda_graph/nemotron_thd_te_graph_20260731/analyze_cuda_graph_calls.py"
       ],
@@ -91,6 +95,30 @@
     }
   ],
   "problems": [
+    {
+      "severity": "confirmed",
+      "title": "Current-source Nano HybridEP gate가 TE backward capture에서 실패했습니다",
+      "detail": "Job 6073919의 runtime attestation은 통과했지만, 모든 대표 rank가 Transformer Engine make_graphed_callables의 backward capture에서 cudaErrorStreamCaptureImplicit를 기록했습니다. CUDA capture가 invalidated된 뒤 test cleanup이 world barrier 전에 멈춰 두 번째 fixed-THD parity node는 실행되지 않았습니다.",
+      "next": "Standard full-model warmup에서 zero_grad-only와 eager-output release를 분리해 capture를 재검증한 뒤, fixed-THD eager parity와 20-replay numerical parity를 독립 gate로 실행합니다."
+    },
+    {
+      "severity": "risk",
+      "title": "Capture 전에 남은 eager autograd graph가 기본 스트림을 붙잡습니다",
+      "detail": "PyTorch 2.11은 retained loss/output이 이전 default-stream AccumulateGrad를 살려 두면 CUDA Graph capture가 깨질 수 있다고 명시합니다. 6074997의 manager-held token_probs 실패, 6075013의 dispatch/combine detach 후 capture 성공, 그리고 같은 runtime을 쓴 과거 2551742의 explicit output/grad/graph release 성공이 이 lifetime 원인과 일치합니다.",
+      "next": "zero_grad-only가 실패하고 full release가 통과하는지 확인하여 grad buffer와 graph reachability를 구분하고, production worker가 capture 직전 eager output/loss를 보유하지 않는지 audit합니다."
+    },
+    {
+      "severity": "confirmed",
+      "title": "분산 runner가 rank별 pytest 종료를 동기화하지 않았습니다",
+      "detail": "6075013의 첫 capture node는 16/16 rank에서 통과했지만 rank별 종료 시각이 약 20초 벌어졌고, 빠른 rank가 다음 fixed-THD pytest의 NCCL process group을 먼저 열고 닫았습니다. 그래서 connection refused와 ncclRemoteError가 발생했으며 이 결과는 THD numerical failure 증거가 아닙니다.",
+      "next": "Node별 전-rank result exchange, 첫 실패 후 공통 fail-fast, pytest timeout을 적용한 runner로 fixed-THD parity를 다시 실행합니다."
+    },
+    {
+      "severity": "risk",
+      "title": "Generic MCore packed replay에는 fail-open 지점이 남아 있습니다",
+      "detail": "현재 TransformerLayer는 capture metadata가 없는 graph에서 replay-time packed_seq_params를 제거할 수 있습니다. 감사한 NeMo-RL worker는 첫 실제 PackedSeqParams를 capture helper에 전달하므로 이 exact 경로에서는 완화되지만, generic MCore caller까지 안전하다고 일반화할 수 없습니다.",
+      "next": "Packed capture eligibility를 명시적으로 검사하고 metadata가 없거나 fixed capacity를 초과하면 error 또는 계측 가능한 eager fallback으로 전환합니다."
+    },
     {
       "severity": "confirmed",
       "title": "Matched 100-step attention run에서 수치적 correctness가 깨졌습니다",
@@ -132,6 +160,12 @@
       "title": "Mamba와 MoE는 attention보다 더 많은 runtime invariant를 가집니다",
       "detail": "Mamba는 hybrid layer pattern과 CP metadata가 맞아야 하며, MoE router/preprocess는 token routing, auxiliary-loss ownership, dropless dispatcher metadata가 replay에서도 동일한 의미를 가져야 합니다. 100% coverage만으로 output·gradient parity가 보장되지는 않습니다.",
       "next": "고정 packed input에 대해 eager 대 graph output, router top-k, expert count, aux loss, gradient, parameter delta parity gate를 scope별로 실행합니다."
+    },
+    {
+      "severity": "risk",
+      "title": "Nano HybridEP의 moe_preprocess 결합은 아직 실행 증거가 없습니다",
+      "detail": "현재 Nano 16-rank distributed row는 moe_router control contract를 검사하지만 moe_preprocess는 campaign metadata에서 비활성화되어 있습니다. Production Nano의 52-layer hybrid pattern, 128 experts, top-k 6, shared experts까지 포함한 결합 parity도 아직 없습니다.",
+      "next": "router 단독 gate가 통과한 뒤 moe_router+moe_preprocess, attn+mamba+moe_router, 마지막으로 네 scope 결합을 5-step correctness부터 순차 승격합니다."
     },
     {
       "severity": "measure",

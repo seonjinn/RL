@@ -7,6 +7,8 @@ import re
 import stat
 import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import ModuleType
 
@@ -449,6 +451,84 @@ def test_rank_aggregation_requires_semantic_capability_consensus() -> None:
             gpus_per_node=4,
             pytest_nodes=("tests/test_graphs.py::test_one",),
         )
+
+
+def test_node_result_exchange_waits_for_every_rank_before_next_test(
+    tmp_path: Path,
+) -> None:
+    module = _load_driver()
+    phase_dir = tmp_path / "node-0"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(
+            module.synchronize_node_results,
+            phase_dir=phase_dir,
+            rank=0,
+            world_size=2,
+            node="tests/test_graphs.py::test_one",
+            exit_code=0,
+            timeout_seconds=2.0,
+            poll_interval_seconds=0.01,
+        )
+        deadline = time.monotonic() + 1.0
+        while not (phase_dir / "rank-0.json").is_file():
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert not first.done()
+
+        second = executor.submit(
+            module.synchronize_node_results,
+            phase_dir=phase_dir,
+            rank=1,
+            world_size=2,
+            node="tests/test_graphs.py::test_one",
+            exit_code=0,
+            timeout_seconds=2.0,
+            poll_interval_seconds=0.01,
+        )
+
+        expected = (
+            {
+                "rank": 0,
+                "node": "tests/test_graphs.py::test_one",
+                "status": "passed",
+                "exit_code": 0,
+            },
+            {
+                "rank": 1,
+                "node": "tests/test_graphs.py::test_one",
+                "status": "passed",
+                "exit_code": 0,
+            },
+        )
+        assert first.result(timeout=2.0) == expected
+        assert second.result(timeout=2.0) == expected
+
+
+def test_pytest_timeout_is_reported_as_a_failed_node(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_driver()
+
+    def raise_timeout(*args: object, **kwargs: object) -> None:
+        raise subprocess.TimeoutExpired(
+            cmd=("python", "-m", "pytest"),
+            timeout=12.0,
+            output="partial stdout\n",
+            stderr="partial stderr\n",
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", raise_timeout)
+    exit_code, output = module.run_pytest_command(
+        command=("python", "-m", "pytest", "tests/test_graphs.py::test_one"),
+        source_root=tmp_path,
+        timeout_seconds=12.0,
+    )
+
+    assert exit_code == 124
+    assert "partial stdout" in output
+    assert "partial stderr" in output
+    assert "PYTEST_TIMEOUT" in output
 
 
 def test_rank_aggregation_rejects_measured_binding_for_another_rank() -> None:

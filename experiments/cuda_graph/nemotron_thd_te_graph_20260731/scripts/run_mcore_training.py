@@ -293,6 +293,33 @@ def pytest_commands(
     )
 
 
+def run_pytest_command(
+    *, command: tuple[str, ...], source_root: Path, timeout_seconds: float
+) -> tuple[int, str]:
+    """Run one pytest node with a bounded teardown and preserve partial output."""
+    if timeout_seconds <= 0:
+        raise ValueError("pytest timeout must be positive")
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=source_root,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as error:
+        standard_output = error.stdout or ""
+        standard_error = error.stderr or ""
+        if isinstance(standard_output, bytes):
+            standard_output = standard_output.decode(errors="replace")
+        if isinstance(standard_error, bytes):
+            standard_error = standard_error.decode(errors="replace")
+        timeout_marker = f"PYTEST_TIMEOUT after {timeout_seconds:.1f} seconds\n"
+        return 124, standard_output + standard_error + timeout_marker
+    return completed.returncode, completed.stdout + completed.stderr
+
+
 def validate_pytest_node_collection(
     *,
     source_root: Path,
@@ -556,6 +583,58 @@ def rank_result_dir(
         / row_id
         / run_identity
     )
+
+
+def synchronize_node_results(
+    *,
+    phase_dir: Path,
+    rank: int,
+    world_size: int,
+    node: str,
+    exit_code: int,
+    timeout_seconds: float,
+    poll_interval_seconds: float,
+) -> tuple[dict[str, Any], ...]:
+    """Exchange one pytest result before any rank starts the next node."""
+    if rank not in range(world_size) or world_size <= 0:
+        raise ValueError("node-result rank is outside the distributed world")
+    if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+        raise ValueError("node-result exit code must be an integer")
+    if timeout_seconds <= 0 or poll_interval_seconds <= 0:
+        raise ValueError("node-result synchronization timeouts must be positive")
+    payload = {
+        "rank": rank,
+        "node": node,
+        "status": "passed" if exit_code == 0 else "failed",
+        "exit_code": exit_code,
+    }
+    write_json_atomic(payload, phase_dir / f"rank-{rank}.json")
+    rank_files = tuple(phase_dir / f"rank-{item}.json" for item in range(world_size))
+    deadline = time.monotonic() + timeout_seconds
+    while not all(path.is_file() for path in rank_files):
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"timed out synchronizing distributed pytest node: {node}"
+            )
+        time.sleep(poll_interval_seconds)
+
+    expected_keys = {"rank", "node", "status", "exit_code"}
+    results: list[dict[str, Any]] = []
+    for expected_rank, path in enumerate(rank_files):
+        result = json.loads(path.read_text())
+        if (
+            not isinstance(result, Mapping)
+            or set(result) != expected_keys
+            or result.get("rank") != expected_rank
+            or result.get("node") != node
+            or result.get("status") not in {"passed", "failed"}
+            or not isinstance(result.get("exit_code"), int)
+            or isinstance(result.get("exit_code"), bool)
+            or (result.get("status") == "passed") != (result.get("exit_code") == 0)
+        ):
+            raise ValueError("distributed pytest node result has an invalid schema")
+        results.append(dict(result))
+    return tuple(results)
 
 
 def validate_rank_payloads(
@@ -975,42 +1054,6 @@ def main() -> int:
     world_size = int(os.environ.get("WORLD_SIZE", "-1"))
     if world_size != row.world_size or rank not in range(world_size):
         raise ValueError("torchrun rank environment does not match the typed row")
-    verify_source_snapshot(
-        source_root=args.source_root,
-        candidate_sha=args.candidate_sha,
-        expected_sha256=args.snapshot_sha256,
-    )
-    validate_pytest_node_collection(
-        source_root=args.source_root,
-        rows=rows,
-        python_executable=Path(sys.executable),
-    )
-
-    node_results: list[dict[str, Any]] = []
-    node_capabilities: dict[str, tuple[dict[str, Any], ...]] = {}
-    for node, command in zip(
-        row.pytest_nodes,
-        pytest_commands(row, python_executable=Path(sys.executable)),
-        strict=True,
-    ):
-        completed = subprocess.run(
-            command,
-            cwd=args.source_root,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        output = completed.stdout + completed.stderr
-        sys.stdout.write(output)
-        node_capabilities[node] = _capability_from_output(output)
-        node_results.append(
-            {
-                "node": node,
-                "status": "passed" if completed.returncode == 0 else "failed",
-                "exit_code": completed.returncode,
-            }
-        )
-
     rank_dir = rank_result_dir(
         run_log_root=args.run_log_root,
         candidate_kind=args.candidate_kind,
@@ -1018,15 +1061,90 @@ def main() -> int:
         row_id=args.row_id,
         run_identity=run_identity,
     )
-    capability = validate_row_capability(
-        row_id=args.row_id,
-        node_capabilities=node_capabilities,
-        expected_device_binding={
-            "node_rank": rank // args.gpus_per_node,
-            "local_rank": rank % args.gpus_per_node,
-            "cuda_device_index": rank % args.gpus_per_node,
-        },
+    verify_source_snapshot(
+        source_root=args.source_root,
+        candidate_sha=args.candidate_sha,
+        expected_sha256=args.snapshot_sha256,
     )
+    collection_error: ValueError | None = None
+    try:
+        validate_pytest_node_collection(
+            source_root=args.source_root,
+            rows=rows,
+            python_executable=Path(sys.executable),
+        )
+    except ValueError as error:
+        collection_error = error
+    collection_results = synchronize_node_results(
+        phase_dir=rank_dir / "collection-phase",
+        rank=rank,
+        world_size=world_size,
+        node="pytest-collection",
+        exit_code=0 if collection_error is None else 1,
+        timeout_seconds=float(
+            os.environ.get("RUNNER_NODE_SYNC_TIMEOUT_SECONDS", "300")
+        ),
+        poll_interval_seconds=0.25,
+    )
+    if any(result["exit_code"] != 0 for result in collection_results):
+        detail = str(collection_error) if collection_error is not None else "peer rank"
+        raise ValueError(f"distributed pytest collection failed on {detail}")
+    node_results: list[dict[str, Any]] = []
+    node_capabilities: dict[str, tuple[dict[str, Any], ...]] = {}
+    commands = pytest_commands(row, python_executable=Path(sys.executable))
+    synchronization_timeout = float(
+        os.environ.get("RUNNER_NODE_SYNC_TIMEOUT_SECONDS", "300")
+    )
+    pytest_timeout = float(os.environ.get("RUNNER_PYTEST_TIMEOUT_SECONDS", "240"))
+    for node_index, (node, command) in enumerate(
+        zip(row.pytest_nodes, commands, strict=True)
+    ):
+        exit_code, output = run_pytest_command(
+            command=command,
+            source_root=args.source_root,
+            timeout_seconds=pytest_timeout,
+        )
+        sys.stdout.write(output)
+        node_capabilities[node] = _capability_from_output(output)
+        local_result = {
+            "node": node,
+            "status": "passed" if exit_code == 0 else "failed",
+            "exit_code": exit_code,
+        }
+        node_results.append(local_result)
+        distributed_results = synchronize_node_results(
+            phase_dir=rank_dir / "node-phases" / f"{node_index:03d}",
+            rank=rank,
+            world_size=world_size,
+            node=node,
+            exit_code=exit_code,
+            timeout_seconds=synchronization_timeout,
+            poll_interval_seconds=0.25,
+        )
+        if any(result["exit_code"] != 0 for result in distributed_results):
+            node_results.extend(
+                {
+                    "node": skipped_node,
+                    "status": "failed",
+                    "exit_code": 125,
+                }
+                for skipped_node in row.pytest_nodes[node_index + 1 :]
+            )
+            break
+
+    expected_device_binding = {
+        "node_rank": rank // args.gpus_per_node,
+        "local_rank": rank % args.gpus_per_node,
+        "cuda_device_index": rank % args.gpus_per_node,
+    }
+    if all(result["exit_code"] == 0 for result in node_results):
+        capability = validate_row_capability(
+            row_id=args.row_id,
+            node_capabilities=node_capabilities,
+            expected_device_binding=expected_device_binding,
+        )
+    else:
+        capability = expected_device_binding
     capability["global_rank"] = rank
     rank_payload = {
         "run_identity": run_identity,
