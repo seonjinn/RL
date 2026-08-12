@@ -52,6 +52,8 @@ class TestActivationOffloadHarness(unittest.TestCase):
         self.assertIn("EXPECTED_SOURCE_COMMIT", submitter)
         self.assertIn("merge-base --is-ancestor", submitter)
         self.assertIn("Evidence branch changes NeMo-RL runtime files", submitter)
+        self.assertIn("NRL_FORCE_REBUILD_VENVS=false", submitter)
+        self.assertIn("pr2279-perf-${EXPECTED_SOURCE_COMMIT:0:10}", submitter)
         self.assertIn("sbatch --test-only", submitter)
         self.assertIn("sbatch --parsable", submitter)
         self.assertLess(

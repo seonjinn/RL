@@ -55,7 +55,7 @@ submit_arm() {
 
     mkdir -p "${log_dir}"
     printf -v command \
-        'cd %q && export NRL_IGNORE_VERSION_MISMATCH=1 NRL_FORCE_REBUILD_VENVS=true NEMO_RL_VENV_DIR=%q HF_HOME=%q HF_DATASETS_CACHE=%q/cache && uv run --frozen --extra mcore examples/run_grpo.py --config %q grpo.max_num_steps=%q logger.log_dir=%q logger.wandb_enabled=false logger.tensorboard_enabled=true' \
+        'cd %q && export NRL_IGNORE_VERSION_MISMATCH=1 NRL_FORCE_REBUILD_VENVS=false NEMO_RL_VENV_DIR=%q HF_HOME=%q HF_DATASETS_CACHE=%q/cache && uv run --frozen --extra mcore examples/run_grpo.py --config %q grpo.max_num_steps=%q logger.log_dir=%q logger.wandb_enabled=false logger.tensorboard_enabled=true' \
         "${ROOT}" \
         "${VENV_ROOT}" \
         "${HF_HOME}" \
