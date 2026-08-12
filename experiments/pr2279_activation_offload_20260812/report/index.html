@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PR 2279 Activation CPU Offload</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 1100px; padding: 0 1rem; color: #202124; }
+    h1, h2 { color: #1b5e20; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #cfd8dc; padding: .55rem; text-align: left; }
+    th { background: #edf7ed; }
+    code { background: #f3f4f5; padding: .1rem .3rem; }
+    .pending { color: #8a5a00; font-weight: 600; }
+    .failed { color: #b3261e; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>NeMo-RL PR #2279: fine-grained activation CPU offload</h1>
+  <p>Exact source: <code>2f39df66d6fd0a0b1b53cf472eb1599c6c05dfce</code>.</p>
+  <h2>Experiment design</h2>
+  <table>
+    <tr><th>Factor</th><th>OFF</th><th>ON</th></tr>
+    <tr><td>Model/workload</td><td colspan="2">Qwen3-30B-A3B official 4n4g GB200 performance config</td></tr>
+    <tr><td>Training CUDA graph</td><td colspan="2">Transformer Engine</td></tr>
+    <tr><td>CPU-offload protocol</td><td colspan="2"><code>NVTE_CPU_OFFLOAD_V1=1</code></td></tr>
+    <tr><td>Activation offload</td><td>false / null</td><td>true / <code>moe_act</code></td></tr>
+  </table>
+  <h2>Status</h2>
+  <p class="pending">Focused Linux unit and functional/performance measurements are in progress.</p>
+  <h2>Failure ledger</h2>
+  <table>
+    <tr><th>Cluster/job</th><th>Classification</th><th>Root cause and action</th></tr>
+    <tr><td>Pre-Tyche 2572885; Lyris 2676543</td><td class="failed">Harness</td><td><code>sbatch --wrap</code> uses <code>/bin/sh</code>; replaced Bash-only pipefail with POSIX <code>set -eu</code>.</td></tr>
+    <tr><td>Lyris 2676553</td><td class="failed">Image</td><td>2026-07-26 nightly has an older uv without Python 3.13.14; stage a fresh immutable nightly.</td></tr>
+  </table>
+  <h2>Performance results</h2>
+  <p class="pending">No claim-ready OFF/ON result yet. This section will include E2E, generation, logprob, policy training, refit, throughput, memory, and correctness.</p>
+</body>
+</html>

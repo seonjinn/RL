@@ -1,0 +1,18 @@
+defaults: ../../../examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
+
+checkpointing:
+  enabled: false
+grpo:
+  max_num_steps: 10
+logger:
+  log_dir: logs/pr2279_activation_offload
+  wandb_enabled: false
+  tensorboard_enabled: true
+policy:
+  megatron_cfg:
+    cuda_graph_impl: transformer_engine
+    fine_grained_activation_offloading: false
+    offload_modules: null
+    env_vars:
+      NVTE_CPU_OFFLOAD_V1: "1"
+      PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:False"
