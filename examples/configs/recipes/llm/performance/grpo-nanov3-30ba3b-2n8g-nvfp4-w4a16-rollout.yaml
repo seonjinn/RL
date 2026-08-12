@@ -1,0 +1,96 @@
+defaults: ../../../../modelopt/qa_grpo_nano3_megatron.yaml
+grpo:
+  max_num_steps: 2
+  val_period: 0
+loss_fn:
+  force_on_policy_ratio: false
+  use_importance_sampling_correction: true
+checkpointing:
+  enabled: false
+  checkpoint_dir: results/grpo-nanov3-30ba3b-2n8g-nvfp4-w4a16-rollout
+policy:
+  model_name: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16
+  precision: bfloat16
+  quant_cfg: null
+  megatron_cfg:
+    tensor_model_parallel_size: 1
+    pipeline_model_parallel_size: 1
+    expert_model_parallel_size: 8
+    expert_tensor_parallel_size: 1
+    sequence_parallel: false
+    fp8_cfg:
+      fp8_param: false
+  make_sequence_length_divisible_by: 1
+  generation:
+    quant_cfg: examples/modelopt/quant_configs/nano3_nvfp4_weightonly.yaml
+    real_quant: true
+    real_quant_export_cpu_offload: true
+    real_quant_ignore:
+      - lm_head
+      - '*output_layer*'
+      - '*mlp.gate'
+      - '*router*'
+      - '*block_sparse_moe.gate*'
+      - '*self_attention*'
+      - '*self_attn*'
+      - '*proj_out.*'
+      - '*.gate.*'
+      - '*mlp.shared_expert_gate.*'
+      - '*linear_attn.conv1d*'
+      - '*mixer.conv1d*'
+      - '*.mixer.in_proj*'
+      - '*.mixer.out_proj*'
+      - '*.shared_expert.*'
+      - '*.shared_experts.*'
+      - '*.norm.*'
+      - '*.q_proj*'
+      - '*.k_proj*'
+      - '*.v_proj*'
+      - '*.o_proj*'
+      - '*.qkv_proj*'
+      - '*.linear_proj*'
+      - '*.linear_qkv*'
+      - '*.layers.4.*'
+      - '*.layers.11.*'
+      - '*.layers.18.*'
+      - '*.layers.25.*'
+      - '*.layers.32.*'
+      - '*.layers.41.*'
+    colocated:
+      enabled: false
+      resources:
+        num_nodes: 1
+        gpus_per_node: 8
+    vllm_cfg:
+      precision: bfloat16
+      tensor_parallel_size: 1
+      expert_parallel_size: 1
+      pipeline_parallel_size: 1
+      gpu_memory_utilization: 0.6
+      enable_prefix_caching: false
+    vllm_kwargs:
+      tokenizer: ${policy.tokenizer.name}
+      mamba_ssm_cache_dtype: float32
+      compilation_config:
+        backend: eager
+data:
+  max_input_seq_length: 1024
+  train:
+    dataset_name: DAPOMath17K
+  default:
+    prompt_file: null
+env:
+  dapo:
+    num_workers: 2
+  math:
+    num_workers: 2
+    math_verify_impl: dapo_math_verify
+logger:
+  log_dir: logs/grpo-nanov3-30ba3b-2n8g-nvfp4-w4a16-rollout
+  wandb:
+    project: sna-bf16-nvfp4-rollout
+    name: grpo-nanov3-30ba3b-2n8g-nvfp4-w4a16-rollout
+cluster:
+  gpus_per_node: 8
+  num_nodes: 2
+  segment_size: 1

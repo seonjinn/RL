@@ -8,6 +8,7 @@ REPO=$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel)
 ACTION=${ACTION:-test-only}
 QUANT_MODE=${QUANT_MODE:?QUANT_MODE is required: bf16, w4a16, or w4a4}
 TRANSPORT=${TRANSPORT:?TRANSPORT is required: legacy or nccl}
+MODEL_PRESET=${MODEL_PRESET:-qwen}
 ACCOUNT=${SLURM_ACCOUNT:-coreai_chef_posttrain}
 PARTITION=${PARTITION:-batch}
 WALLTIME=${WALLTIME:-04:00:00}
@@ -19,7 +20,7 @@ CONTAINER=${CONTAINER:-${RUNTIME_ROOT}/nemo_rl_nightly_20260730_483099.sqsh}
 PYTHON_OVERLAY=${PYTHON_OVERLAY:-${RUNTIME_ROOT}/python-overlay-483099}
 ROOT_CACHE_OVERLAY=${ROOT_CACHE_OVERLAY:-${RUNTIME_ROOT}/root-cache-overlay-483099}
 CAMPAIGN_ROOT=${CAMPAIGN_ROOT:-${WORK_ROOT}/experiments/bf16-nvfp4-rollout}
-EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${CAMPAIGN_ROOT}/results/${QUANT_MODE}-${TRANSPORT}-${RUN_SUFFIX}}
+EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${CAMPAIGN_ROOT}/results/${MODEL_PRESET}-${QUANT_MODE}-${TRANSPORT}-${RUN_SUFFIX}}
 CACHE_BASE=${CACHE_BASE:-${WORK_ROOT}/mopd_nano_fast/.cache/bf16-nvfp4-rollout}
 WANDB_PROJECT=${WANDB_PROJECT:-sna-bf16-nvfp4-rollout}
 WANDB_NAME=${WANDB_NAME:-${QUANT_MODE}-${TRANSPORT}-${RUN_SUFFIX}}
@@ -44,6 +45,18 @@ case "${QUANT_MODE}" in
     test -f "${NVFP4_CALIBRATION_ARTIFACT}"
     ;;
   *) echo "QUANT_MODE must be bf16, w4a16, or w4a4" >&2; exit 2 ;;
+esac
+
+case "${MODEL_PRESET}" in
+  qwen) ;;
+  nano)
+    if [[ "${QUANT_MODE}" != w4a16 ]]; then
+      echo "MODEL_PRESET=nano currently supports QUANT_MODE=w4a16 only" >&2
+      exit 2
+    fi
+    TEST_SCRIPT=tests/test_suites/llm/performance/grpo-nanov3-30ba3b-2n8g-nvfp4-w4a16-rollout.sh
+    ;;
+  *) echo "MODEL_PRESET must be qwen or nano" >&2; exit 2 ;;
 esac
 
 if [[ "${QUANT_MODE}" == bf16 && "${TRANSPORT}" != legacy ]]; then
@@ -71,7 +84,7 @@ if git -C "${REPO}" submodule status --recursive | grep -q '^-'; then
 fi
 
 REPO_SHA=$(git -C "${REPO}" rev-parse HEAD)
-CACHE_ROOT=${CACHE_ROOT:-${CACHE_BASE}/${REPO_SHA:0:9}/${QUANT_MODE}-${TRANSPORT}}
+CACHE_ROOT=${CACHE_ROOT:-${CACHE_BASE}/${REPO_SHA:0:9}/${MODEL_PRESET}-${QUANT_MODE}-${TRANSPORT}}
 for path in \
   "${REPO}/${TEST_SCRIPT}" \
   "${REPO}/ray.sub" \
@@ -81,7 +94,7 @@ for path in \
   test -e "${path}"
 done
 
-SNAPSHOT_GROUP=code_snapshots_nvfp4/${REPO_SHA:0:9}-${RUN_SUFFIX}-${QUANT_MODE}-${TRANSPORT}
+SNAPSHOT_GROUP=code_snapshots_nvfp4/${REPO_SHA:0:9}-${RUN_SUFFIX}-${MODEL_PRESET}-${QUANT_MODE}-${TRANSPORT}
 SNAPSHOT_REPO=$(
   CODE_SNAPSHOT_DIRNAME="${SNAPSHOT_GROUP}" \
     bash "${REPO}/tools/code_snapshot.sh" "${QUANT_MODE}-${TRANSPORT}"
@@ -110,6 +123,7 @@ fi
 
 cat >"${EXPERIMENT_ROOT}/metadata.env" <<EOF
 quant_mode=${QUANT_MODE}
+model_preset=${MODEL_PRESET}
 transport=${TRANSPORT}
 refit_transport=${REFIT_TRANSPORT}
 repo_sha=${REPO_SHA}
@@ -167,11 +181,11 @@ SBATCH_ARGS=(
   --account="${ACCOUNT}"
   --partition="${PARTITION}"
   --time="${WALLTIME}"
-  --job-name="sna-nvfp4-${QUANT_MODE}-${TRANSPORT}"
+  --job-name="sna-nvfp4-${MODEL_PRESET}-${QUANT_MODE}-${TRANSPORT}"
   --output="${EXPERIMENT_ROOT}/slurm-%j.out"
   --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"120","reason":"model_loading","description":"environment and Qwen3-30B precision-control initialization"}}'
 )
 
-printf 'mode=%s\ntransport=%s\nsha=%s\nsnapshot=%s\nresult=%s\n' \
-  "${QUANT_MODE}" "${TRANSPORT}" "${REPO_SHA}" "${SNAPSHOT_REPO}" "${EXPERIMENT_ROOT}"
+printf 'model=%s\nmode=%s\ntransport=%s\nsha=%s\nsnapshot=%s\nresult=%s\n' \
+  "${MODEL_PRESET}" "${QUANT_MODE}" "${TRANSPORT}" "${REPO_SHA}" "${SNAPSHOT_REPO}" "${EXPERIMENT_ROOT}"
 exec sbatch "${SBATCH_ACTION[@]}" "${SBATCH_ARGS[@]}" "${SNAPSHOT_REPO}/ray.sub"
