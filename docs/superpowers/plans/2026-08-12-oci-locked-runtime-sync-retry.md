@@ -127,7 +127,7 @@ the six required sections and exactly five quiz questions.
 - Consumes: the pushed NeMo-RL commit and unchanged Bridge `db5315d4d26737d9a124320eeca4bb3476af92e9`, MCore `c6fe36e784164b95cbfd0ee9dbf56d045fd6d70a`, TE `04a76c84423d9a4eb2f2010ef6692e347326cc00`, and container SHA256 `80f33fef2eac060bc54274446e4956d753687a54155d68be2059eccfba1e423d`.
 - Produces: a completed read-only stage, a four-GPU runtime attestation, and validated MCore CUDA Graph diagnostics.
 
-- [ ] **Step 1: Commit and push**
+- [x] **Step 1: Commit and push**
 
 Run repository verification, stage only named files, and commit with:
 
