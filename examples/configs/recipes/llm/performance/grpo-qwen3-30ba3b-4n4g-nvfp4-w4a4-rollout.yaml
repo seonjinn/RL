@@ -1,0 +1,30 @@
+defaults: ./grpo-qwen3-30ba3b-4n4g.yaml
+loss_fn:
+  force_on_policy_ratio: false
+  use_importance_sampling_correction: true
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-30ba3b-4n4g-nvfp4-w4a4-rollout
+policy:
+  quant_cfg: null
+  generation:
+    quant_cfg: examples/modelopt/quant_configs/nvfp4_experts.yaml
+    real_quant: true
+    real_quant_export_cpu_offload: true
+    real_quant_calibration_path: null
+    vllm_kwargs:
+      moe_backend: flashinfer_trtllm
+      revision: ad44e777bcd18fa416d9da3bd8f70d33ebb85d39
+    real_quant_ignore:
+      - lm_head
+      - '*output_layer*'
+      - '*mlp.gate*'
+      - '*router*'
+      - '*self_attention*'
+      - '*self_attn*'
+      - '*.shared_expert.*'
+      - '*.shared_experts.*'
+logger:
+  log_dir: logs/grpo-qwen3-30ba3b-4n4g-nvfp4-w4a4-rollout
+  wandb:
+    project: nemo-rl
+    name: grpo-qwen3-30ba3b-4n4g-nvfp4-w4a4-rollout
