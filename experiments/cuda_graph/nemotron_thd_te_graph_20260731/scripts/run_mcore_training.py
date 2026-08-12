@@ -294,7 +294,11 @@ def pytest_commands(
 
 
 def run_pytest_command(
-    *, command: tuple[str, ...], source_root: Path, timeout_seconds: float
+    *,
+    command: tuple[str, ...],
+    source_root: Path,
+    timeout_seconds: float,
+    environment: Mapping[str, str] | None = None,
 ) -> tuple[int, str]:
     """Run one pytest node with a bounded teardown and preserve partial output."""
     if timeout_seconds <= 0:
@@ -307,6 +311,7 @@ def run_pytest_command(
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
+            env=None if environment is None else dict(environment),
         )
     except subprocess.TimeoutExpired as error:
         standard_output = error.stdout or ""
@@ -318,6 +323,23 @@ def run_pytest_command(
         timeout_marker = f"PYTEST_TIMEOUT after {timeout_seconds:.1f} seconds\n"
         return 124, standard_output + standard_error + timeout_marker
     return completed.returncode, completed.stdout + completed.stderr
+
+
+def pytest_node_environment(*, node_index: int) -> dict[str, str]:
+    """Give each distributed pytest process group a fresh rendezvous endpoint."""
+    if node_index < 0:
+        raise ValueError("pytest node index must be non-negative")
+    raw_master_port = os.environ.get("MASTER_PORT")
+    if raw_master_port is None or not raw_master_port.isdecimal():
+        raise ValueError("MASTER_PORT must be a decimal integer")
+    base_master_port = int(raw_master_port)
+    if base_master_port < 1 or base_master_port > 64535 - node_index:
+        raise ValueError("derived pytest MASTER_PORT exceeds 65535")
+    master_port = base_master_port + 1000 + node_index
+    environment = os.environ.copy()
+    environment["MASTER_PORT"] = str(master_port)
+    environment["MCORE_PYTEST_NODE_INDEX"] = str(node_index)
+    return environment
 
 
 def validate_pytest_node_collection(
@@ -1103,6 +1125,7 @@ def main() -> int:
             command=command,
             source_root=args.source_root,
             timeout_seconds=pytest_timeout,
+            environment=pytest_node_environment(node_index=node_index),
         )
         sys.stdout.write(output)
         node_capabilities[node] = _capability_from_output(output)

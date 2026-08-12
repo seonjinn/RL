@@ -531,6 +531,63 @@ def test_pytest_timeout_is_reported_as_a_failed_node(
     assert "PYTEST_TIMEOUT" in output
 
 
+def test_pytest_command_uses_the_explicit_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_driver()
+    captured_environment: dict[str, str] | None = None
+
+    def run_command(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal captured_environment
+        captured_environment = kwargs["env"]
+        return subprocess.CompletedProcess(args[0], returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", run_command)
+    environment = {"MASTER_PORT": "31000", "MCORE_PYTEST_NODE_INDEX": "1"}
+
+    exit_code, output = module.run_pytest_command(
+        command=("python", "-m", "pytest", "tests/test_graphs.py::test_one"),
+        source_root=tmp_path,
+        timeout_seconds=12.0,
+        environment=environment,
+    )
+
+    assert exit_code == 0
+    assert output == "ok"
+    assert captured_environment == environment
+    assert captured_environment is not environment
+
+
+def test_distributed_pytest_nodes_use_distinct_rendezvous_ports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_driver()
+    monkeypatch.setenv("MASTER_PORT", "29999")
+
+    first = module.pytest_node_environment(node_index=0)
+    second = module.pytest_node_environment(node_index=1)
+
+    assert first["MASTER_PORT"] == "30999"
+    assert second["MASTER_PORT"] == "31000"
+    assert first["MCORE_PYTEST_NODE_INDEX"] == "0"
+    assert second["MCORE_PYTEST_NODE_INDEX"] == "1"
+    assert os.environ["MASTER_PORT"] == "29999"
+
+
+@pytest.mark.parametrize("master_port", (None, "not-a-port", "65000"))
+def test_distributed_pytest_node_rejects_invalid_rendezvous_port(
+    monkeypatch: pytest.MonkeyPatch, master_port: str | None
+) -> None:
+    module = _load_driver()
+    if master_port is None:
+        monkeypatch.delenv("MASTER_PORT", raising=False)
+    else:
+        monkeypatch.setenv("MASTER_PORT", master_port)
+
+    with pytest.raises(ValueError, match="MASTER_PORT"):
+        module.pytest_node_environment(node_index=0)
+
+
 def test_rank_aggregation_rejects_measured_binding_for_another_rank() -> None:
     module = _load_driver()
     run_identity = module.derive_run_identity(
