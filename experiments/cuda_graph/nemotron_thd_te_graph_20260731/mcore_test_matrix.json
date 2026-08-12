@@ -17,7 +17,8 @@
       "allocations": [{"gpus_per_node": 4, "num_nodes": 4}],
       "pytest_filters": [],
       "pytest_nodes": [
-        "tests/unit_tests/transformer/test_partial_moe_cuda_graph_distributed.py::test_dropless_partial_moe_cuda_graph_distributed[dropless_hybridep_nano16]"
+        "tests/unit_tests/transformer/test_partial_moe_cuda_graph_distributed.py::test_dropless_partial_moe_cuda_graph_distributed[dropless_hybridep_nano16]",
+        "tests/unit_tests/transformer/test_fixed_capacity_thd_parity.py::test_fixed_capacity_thd_matches_compact_thd"
       ],
       "world_size": 16
     },

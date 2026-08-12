@@ -31,6 +31,10 @@ PARTIAL_MOE_TEST = (
     "tests/unit_tests/transformer/test_partial_moe_cuda_graph_distributed.py::"
     "test_dropless_partial_moe_cuda_graph_distributed"
 )
+FIXED_THD_PARITY_TEST = (
+    "tests/unit_tests/transformer/test_fixed_capacity_thd_parity.py::"
+    "test_fixed_capacity_thd_matches_compact_thd"
+)
 PARTIAL_MOE_ROWS = {
     "dropless_hybridep_nano16": (16, 4, 4),
     "dropless_alltoall_qwen30_16": (16, 4, 4),
@@ -194,7 +198,10 @@ def test_manifest_selects_exact_te_capability_nodes() -> None:
         assert row.world_size == world_size
         assert row.allocations == ((num_nodes, gpus_per_node),)
         assert row.pytest_filters == ()
-        assert row.pytest_nodes == (f"{PARTIAL_MOE_TEST}[{row_id}]",)
+        expected_nodes = (f"{PARTIAL_MOE_TEST}[{row_id}]",)
+        if row_id == "dropless_hybridep_nano16":
+            expected_nodes += (FIXED_THD_PARITY_TEST,)
+        assert row.pytest_nodes == expected_nodes
 
 
 def test_submission_preparation_creates_fresh_verified_immutable_snapshots(
