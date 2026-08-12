@@ -782,7 +782,28 @@ IFS=, read -r -a excluded_packages <<<"${RUNTIME_EXCLUDED_PACKAGES}"
 for excluded_package in "${excluded_packages[@]}"; do
   sync_command+=(--no-install-package "${excluded_package}")
 done
-"${sync_command[@]}"
+run_locked_uv_sync() {
+  local attempt
+  local retry_delay
+  local status
+  local -a retry_delays=(5 10)
+
+  for attempt in 1 2 3; do
+    if "${sync_command[@]}"; then
+      return 0
+    else
+      status=$?
+    fi
+    if ((attempt == 3)); then
+      return "${status}"
+    fi
+    retry_delay=${retry_delays[attempt - 1]}
+    printf "Locked uv sync attempt %s/3 failed with status %s; retrying in %ss\n" \
+      "${attempt}" "${status}" "${retry_delay}" >&2
+    sleep "${retry_delay}"
+  done
+}
+run_locked_uv_sync
 "${environment_root}/bin/python" -c \
   "import megatron.core; import torch; import transformer_engine; import transformer_engine_torch"
 "${environment_root}/bin/python" - "${RUNTIME_TEST_REQUIREMENTS}" "${environment_root}" <<"PY"

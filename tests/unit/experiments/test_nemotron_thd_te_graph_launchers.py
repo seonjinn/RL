@@ -111,6 +111,16 @@ def _load_experiment_module(name: str) -> ModuleType:
     return module
 
 
+def _extract_shell_function(relative_path: str, function_name: str) -> str:
+    source = (EXPERIMENT_DIR / relative_path).read_text()
+    match = re.search(
+        rf"(?ms)^{re.escape(function_name)}\(\) \{{\n.*?^\}}\n",
+        source,
+    )
+    assert match is not None, f"missing shell function: {function_name}"
+    return match.group(0)
+
+
 def _campaign_leaf_harness(tmp_path: Path) -> tuple[Path, Path, Path, dict[str, str]]:
     root = tmp_path / "repo"
     experiment = root / "experiments" / "cuda_graph" / EXPERIMENT_DIR.name
@@ -3405,6 +3415,149 @@ def test_oci_runtime_staging_rejects_invalid_cpu_request(
         "RUNTIME_STAGE_CPUS_PER_TASK must be an integer from 1 through 96"
         in result.stderr
     )
+
+
+def test_locked_uv_sync_retries_once_with_the_same_job_local_cache(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text(
+        """#!/bin/bash
+set -euo pipefail
+attempt=0
+if [[ -f "${ATTEMPT_FILE}" ]]; then
+  attempt=$(<"${ATTEMPT_FILE}")
+fi
+attempt=$((attempt + 1))
+printf '%s\n' "${attempt}" >"${ATTEMPT_FILE}"
+printf '%s\n' "$*" >>"${COMMAND_LOG}"
+if ((attempt == 1)); then
+  mkdir -p "${UV_CACHE_DIR}"
+  touch "${UV_CACHE_DIR}/first-attempt"
+  exit 17
+fi
+[[ -f "${UV_CACHE_DIR}/first-attempt" ]] || exit 91
+"""
+    )
+    fake_uv.chmod(0o755)
+    fake_sleep = fake_bin / "sleep"
+    fake_sleep.write_text(
+        """#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$1" >>"${SLEEP_LOG}"
+"""
+    )
+    fake_sleep.chmod(0o755)
+    attempt_file = tmp_path / "attempt"
+    command_log = tmp_path / "commands"
+    sleep_log = tmp_path / "sleeps"
+    uv_cache = tmp_path / "uv-cache"
+    shell_function = _extract_shell_function(
+        "scripts/validate_oci_container_runtime.sub", "run_locked_uv_sync"
+    )
+    script = "\n".join(
+        (
+            "set -euo pipefail",
+            shell_function,
+            'sync_command=("${FAKE_UV}" sync --locked --extra mcore)',
+            "run_locked_uv_sync",
+        )
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "FAKE_UV": str(fake_uv),
+            "ATTEMPT_FILE": str(attempt_file),
+            "COMMAND_LOG": str(command_log),
+            "SLEEP_LOG": str(sleep_log),
+            "UV_CACHE_DIR": str(uv_cache),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert attempt_file.read_text().splitlines() == ["2"]
+    assert command_log.read_text().splitlines() == [
+        "sync --locked --extra mcore",
+        "sync --locked --extra mcore",
+    ]
+    assert sleep_log.read_text().splitlines() == ["5"]
+
+
+def test_locked_uv_sync_returns_the_third_failure(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text(
+        """#!/bin/bash
+set -euo pipefail
+attempt=0
+if [[ -f "${ATTEMPT_FILE}" ]]; then
+  attempt=$(<"${ATTEMPT_FILE}")
+fi
+attempt=$((attempt + 1))
+printf '%s\n' "${attempt}" >"${ATTEMPT_FILE}"
+case "${attempt}" in
+  1) exit 17 ;;
+  2) exit 18 ;;
+  3) exit 19 ;;
+  *) exit 90 ;;
+esac
+"""
+    )
+    fake_uv.chmod(0o755)
+    fake_sleep = fake_bin / "sleep"
+    fake_sleep.write_text(
+        """#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$1" >>"${SLEEP_LOG}"
+"""
+    )
+    fake_sleep.chmod(0o755)
+    attempt_file = tmp_path / "attempt"
+    sleep_log = tmp_path / "sleeps"
+    shell_function = _extract_shell_function(
+        "scripts/validate_oci_container_runtime.sub", "run_locked_uv_sync"
+    )
+    script = "\n".join(
+        (
+            "set -euo pipefail",
+            shell_function,
+            'sync_command=("${FAKE_UV}" sync --locked)',
+            "run_locked_uv_sync",
+        )
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "FAKE_UV": str(fake_uv),
+            "ATTEMPT_FILE": str(attempt_file),
+            "SLEEP_LOG": str(sleep_log),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 19
+    assert attempt_file.read_text().splitlines() == ["3"]
+    assert sleep_log.read_text().splitlines() == ["5", "10"]
 
 
 def test_oci_container_runtime_smoke_uses_persistent_probe_when_spooled(

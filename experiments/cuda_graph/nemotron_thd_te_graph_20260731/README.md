@@ -140,6 +140,13 @@ assume the current directory is
    commits, lock digest, TE source/version-base commits, feature set, package
    exclusions, Python version, uv version, and CUDA architectures.
 
+   The locked environment sync is attempted at most three times within one
+   stage job. Retries reuse that stage's private build cache, retain the exact
+   `uv sync --locked` dependency identity, and wait five then ten seconds. If
+   the third attempt fails, the stage publishes neither its completion marker
+   nor runtime attestation evidence; the incomplete stage is removed by the
+   existing failure trap.
+
    ```bash
    CONTAINER=/absolute/shared/containers/nemo_rl_nightly.sqsh \
    CONTAINER_SHA256='__REQUIRED_64_LOWERCASE_HEX__' \

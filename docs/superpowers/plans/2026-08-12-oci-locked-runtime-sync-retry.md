@@ -32,16 +32,16 @@
 - Consumes: the existing Bash `sync_command` array and job-local `UV_CACHE_DIR`.
 - Produces: `run_locked_uv_sync`, which returns on the first success or returns the third attempt's status.
 
-- [ ] **Step 1: Write failing behavior tests**
+- [x] **Step 1: Write failing behavior tests**
 
 Add a fixture that evaluates the production helper with a fake uv executable.
 The success case records two invocations after one injected failure and verifies
 that a cache sentinel survives into attempt two. The failure case injects three
 distinct nonzero statuses, verifies three invocations, and expects the third
-status. Set the test delay variable to zero only inside the fixture so tests do
-not sleep; production delays remain fixed.
+status. Replace `sleep` only on the test process `PATH` so tests do not wait;
+production delays remain fixed.
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run:
 
@@ -53,7 +53,7 @@ python3 -m pytest -q --confcutdir=tests/unit/experiments \
 
 Expected: both tests fail because `run_locked_uv_sync` does not exist.
 
-- [ ] **Step 3: Implement the minimal helper**
+- [x] **Step 3: Implement the minimal helper**
 
 Define `run_locked_uv_sync` before the stage payload calls it. Iterate over
 fixed delays `0 5 10`, execute `"${sync_command[@]}"`, return immediately on
@@ -61,17 +61,17 @@ success, print an attempt/delay diagnostic after attempts one and two, and
 return the third command status without falling through `set -e`. Replace the
 single `"${sync_command[@]}"` call with `run_locked_uv_sync`.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run the command from Step 2. Expected: both retry behavior tests pass.
 
-- [ ] **Step 5: Document the bounded retry contract**
+- [x] **Step 5: Document the bounded retry contract**
 
 In the runtime staging section, state that locked environment sync is retried
 at most three times inside one stage using one job-local cache. State that a
 third failure publishes no stage or attestation evidence.
 
-- [ ] **Step 6: Run full local verification**
+- [x] **Step 6: Run full local verification**
 
 Run:
 
@@ -96,13 +96,13 @@ errors are reported.
 - Consumes: terminal evidence from jobs `6076502` and `6077198` and the Task 1 diff.
 - Produces: a validated HTML page that separates staging-network failures from CUDA Graph evidence.
 
-- [ ] **Step 1: Add concise problem and resolution context**
+- [x] **Step 1: Add concise problem and resolution context**
 
 Record both job IDs, their exact lock-pinned failed commits, their CPU-only
 allocation, and the bounded retry behavior. Do not classify either failure as
 capture, replay, performance, or numerical-correctness evidence.
 
-- [ ] **Step 2: Regenerate and test the explainer**
+- [x] **Step 2: Regenerate and test the explainer**
 
 Run:
 
