@@ -219,6 +219,34 @@ fi
 
 # Number of GPUs per worker node
 GPUS_PER_NODE=${GPUS_PER_NODE:-8}
+DEDICATED_RAY_HEAD=${DEDICATED_RAY_HEAD:-false}
+MODEL_NUM_NODES=${MODEL_NUM_NODES:-}
+HEAD_RAY_GPU_ARG=""
+HEAD_CUDA_VISIBILITY_COMMAND=":"
+WORKER_RAY_GPU_ARG=""
+
+case "$DEDICATED_RAY_HEAD" in
+  true|True)
+    if ! [[ "$MODEL_NUM_NODES" =~ ^[1-9][0-9]*$ ]]; then
+      echo "ERROR: MODEL_NUM_NODES must be a positive integer in dedicated-head mode, got '$MODEL_NUM_NODES'" >&2
+      exit 1
+    fi
+    expected_allocated_nodes=$((MODEL_NUM_NODES + 1))
+    if [[ "$SLURM_JOB_NUM_NODES" -ne "$expected_allocated_nodes" ]]; then
+      echo "ERROR: dedicated-head mode expected $expected_allocated_nodes allocated nodes but received $SLURM_JOB_NUM_NODES" >&2
+      exit 1
+    fi
+    HEAD_RAY_GPU_ARG="--num-gpus=0"
+    HEAD_CUDA_VISIBILITY_COMMAND='export CUDA_VISIBLE_DEVICES=""'
+    WORKER_RAY_GPU_ARG="--num-gpus=${GPUS_PER_NODE}"
+    ;;
+  false|False)
+    ;;
+  *)
+    echo "ERROR: DEDICATED_RAY_HEAD must be true or false, got '$DEDICATED_RAY_HEAD'" >&2
+    exit 1
+    ;;
+esac
 
 # Detect GRES support and set GRES_ARG
 log_phase "detecting GRES support (sinfo)"
@@ -360,8 +388,12 @@ export RAY_health_check_period_ms="${RAY_health_check_period_ms:-10000}"
 num_retries=3
 WORKER_NUM_RETRIES=20
 
-# Total Ray worker_units expected once every node has registered with the head.
-NUM_ACTORS=$((GPUS_PER_NODE * SLURM_JOB_NUM_NODES))
+# Total Ray worker_units expected once every model node has registered.
+if [[ "$DEDICATED_RAY_HEAD" == "true" || "$DEDICATED_RAY_HEAD" == "True" ]]; then
+  NUM_ACTORS=$((GPUS_PER_NODE * MODEL_NUM_NODES))
+else
+  NUM_ACTORS=$((GPUS_PER_NODE * SLURM_JOB_NUM_NODES))
+fi
 
 # Track backgrounded srun client PIDs for head and workers
 declare -A SRUN_PIDS
@@ -558,6 +590,7 @@ fi
 # Give the head node actual resources to make it schedulable
 
 head_cmd=$(cat <<EOF
+$HEAD_CUDA_VISIBILITY_COMMAND
 if [[ "\${RAY_SUB_DEBUG_ENV:-0}" == "1" ]]; then
   env | grep -viE '(WANDB_API_KEY|HF_TOKEN|API_KEY|TOKEN|SECRET|PASSWORD)=' || true
 fi
@@ -657,6 +690,9 @@ ray-status-sidecar &
 sed -i 's/context\.py_executable = " "\.join(self\.nsight_cmd) + " python"/context.py_executable = " ".join(self.nsight_cmd) + f" {context.py_executable}"/g' /opt/nemo_rl_venv/lib64/python*/site-packages/ray/_private/runtime_env/nsight.py
 
 source $LOG_DIR/topology_probe.sh
+if [[ "$DEDICATED_RAY_HEAD" == "true" || "$DEDICATED_RAY_HEAD" == "True" ]]; then
+  RAY_RESOURCES='{\"slurm_managed_ray_cluster\": 1}'
+fi
 
 # Start the head without --block. 'ray start --head' then returns as soon as the
 # GCS is listening, so we touch STARTED_RAY_HEAD only after the head is actually up.
@@ -679,6 +715,7 @@ while [[ \$count -lt $num_retries ]]; do
 "${RAY_CLI}" start --head \
     --disable-usage-stats \
     --resources="\$RAY_RESOURCES" \
+    $HEAD_RAY_GPU_ARG \
     --node-ip-address="$head_node_ip" \
     --port=${PORT} \
     --ray-client-server-port=${RAY_CLIENT_SERVER_PORT} \
@@ -886,6 +923,7 @@ while [[ \$count -lt $WORKER_NUM_RETRIES ]]; do
 "${RAY_CLI}" start --address "$ip_head" \
           --disable-usage-stats \
           --resources="\$RAY_RESOURCES" \
+          $WORKER_RAY_GPU_ARG \
           --min-worker-port=${MIN_WORKER_PORT} \
           --max-worker-port=${MAX_WORKER_PORT} \
           \
