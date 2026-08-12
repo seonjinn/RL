@@ -11,7 +11,8 @@
 ## Global Constraints
 
 - Accepted staging partitions are exactly `batch`, `cpu`, and `cpu_datamover`.
-- The wrapper must not request GPUs, exclusive nodes, CPUs, or memory.
+- The wrapper must not request GPUs, exclusive nodes, or memory. CPU staging
+  requests 32 CPUs and four hours; the default `batch` path adds no CPU flag.
 - Production experiment launchers remain restricted to `batch`.
 - The image digest is `sha256:09509475e2efdef6f6bc32726f16b2cfbf238e7128246dbf27cb17d4472c401d`.
 - The image source commit is `0e687e6d07623d780a4174310e92382ce738a8a2`.

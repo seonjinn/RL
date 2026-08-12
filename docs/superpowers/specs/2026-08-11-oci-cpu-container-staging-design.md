@@ -18,8 +18,10 @@ partitions for this non-GPU work.
 Extend `stage_enroot_image.sbatch` so `PARTITION` accepts only `batch`, `cpu`,
 or `cpu_datamover`, while retaining `batch` as the default. The wrapper passes
 the selected partition to `sbatch` and continues to omit GPU, exclusive-node,
-CPU, and memory requests. Production experiment launchers remain restricted
-to `batch` and are not changed.
+and memory requests. CPU partitions request 32 CPUs and four hours so large
+nightly squashfs imports do not serialize on one CPU or hit the prior two-hour
+limit. The default `batch` path does not add a CPU request. Production
+experiment launchers remain restricted to `batch` and are not changed.
 
 The OCI staging run will use `cpu_datamover`. Its source is the same immutable
 nightly digest used on ptyche:
@@ -36,6 +38,7 @@ Focused launcher tests will prove that:
 
 - the default remains a GPU-free `batch` submission;
 - `cpu_datamover` renders a GPU-free submission;
+- CPU staging renders 32 CPUs and a four-hour limit;
 - an unapproved partition fails before contacting Slurm; and
 - digest, commit, and credential-free image validation remain unchanged.
 

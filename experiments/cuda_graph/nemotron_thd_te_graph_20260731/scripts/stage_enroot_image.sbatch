@@ -36,6 +36,8 @@ ACCOUNT=${ACCOUNT:-coreai_dlalgo_nemorl}
 PARTITION=${PARTITION:-batch}
 TEST_ONLY=${TEST_ONLY:-0}
 SBATCH_TEST_ONLY=${SBATCH_TEST_ONLY:-0}
+STAGE_CPUS_PER_TASK=${STAGE_CPUS_PER_TASK:-32}
+STAGE_TIME_LIMIT=${STAGE_TIME_LIMIT:-04:00:00}
 
 valid_source_image() {
   local reference=$1
@@ -97,6 +99,17 @@ case "${PARTITION}" in
     exit 2
     ;;
 esac
+if [[ "${PARTITION}" == "cpu" || "${PARTITION}" == "cpu_datamover" ]]; then
+  if [[ ! "${STAGE_CPUS_PER_TASK}" =~ ^[0-9]+$ ]] ||
+     ((STAGE_CPUS_PER_TASK < 1 || STAGE_CPUS_PER_TASK > 96)); then
+    echo "STAGE_CPUS_PER_TASK must be an integer from 1 through 96" >&2
+    exit 2
+  fi
+  if [[ ! "${STAGE_TIME_LIMIT}" =~ ^[0-9]{2}:[0-5][0-9]:[0-5][0-9]$ ]]; then
+    echo "STAGE_TIME_LIMIT must use HH:MM:SS with two-digit fields" >&2
+    exit 2
+  fi
+fi
 if [[ ! "${TEST_ONLY}" =~ ^[01]$ || ! "${SBATCH_TEST_ONLY}" =~ ^[01]$ ]]; then
   echo "TEST_ONLY and SBATCH_TEST_ONLY must be 0 or 1" >&2
   exit 2
@@ -109,8 +122,8 @@ fi
 script_path=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then
   export ACCOUNT CONTAINER_DIR OUTPUT_PREFIX PARTITION SOURCE_COMMIT SOURCE_DIGEST
-  export SOURCE_IMAGE
-  export_spec=SOURCE_IMAGE,SOURCE_DIGEST,SOURCE_COMMIT,OUTPUT_PREFIX,CONTAINER_DIR,ACCOUNT,PARTITION,HOME,USER,LOGNAME,SHELL,PATH,LD_LIBRARY_PATH,HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy,ENROOT_CACHE_PATH,ENROOT_DATA_PATH
+  export SOURCE_IMAGE STAGE_CPUS_PER_TASK STAGE_TIME_LIMIT
+  export_spec=SOURCE_IMAGE,SOURCE_DIGEST,SOURCE_COMMIT,OUTPUT_PREFIX,CONTAINER_DIR,ACCOUNT,PARTITION,STAGE_CPUS_PER_TASK,STAGE_TIME_LIMIT,HOME,USER,LOGNAME,SHELL,PATH,LD_LIBRARY_PATH,HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy,ENROOT_CACHE_PATH,ENROOT_DATA_PATH
   submission_flag=--parsable
   if [[ "${SBATCH_TEST_ONLY}" == "1" ]]; then
     submission_flag=--test-only
@@ -123,6 +136,12 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     "--output=${CONTAINER_DIR}/${OUTPUT_PREFIX}_stage-%j.log"
     "--export=${export_spec}"
   )
+  if [[ "${PARTITION}" == "cpu" || "${PARTITION}" == "cpu_datamover" ]]; then
+    sbatch_command+=(
+      "--cpus-per-task=${STAGE_CPUS_PER_TASK}"
+      "--time=${STAGE_TIME_LIMIT}"
+    )
+  fi
   sbatch_command+=("${script_path}")
   printf 'SOURCE_IMAGE=%s\n' "${SOURCE_IMAGE}"
   printf 'SOURCE_DIGEST=%s\n' "${SOURCE_DIGEST}"
@@ -141,6 +160,13 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
 fi
 
 unset PYTHONHOME PYTHONPATH VIRTUAL_ENV UV_PROJECT_ENVIRONMENT
+
+if [[ "${PARTITION}" == "cpu" || "${PARTITION}" == "cpu_datamover" ]]; then
+  if [[ "${SLURM_CPUS_PER_TASK:-}" != "${STAGE_CPUS_PER_TASK}" ]]; then
+    echo "SLURM_CPUS_PER_TASK does not match STAGE_CPUS_PER_TASK" >&2
+    exit 1
+  fi
+fi
 
 registry=${SOURCE_IMAGE%%/*}
 repository_reference=${SOURCE_IMAGE#*/}

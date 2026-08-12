@@ -784,6 +784,7 @@ def test_stage_enroot_image_test_only_renders_immutable_batch_submission(
     assert result.returncode == 0, result.stderr
     assert "SBATCH: sbatch --parsable" in result.stdout
     assert "--partition=batch" in result.stdout
+    assert "--cpus-per-task" not in result.stdout
     assert "--gpus-per-node" not in result.stdout
     assert "--gres=" not in result.stdout
     assert f"SOURCE_DIGEST={digest}" in result.stdout
@@ -807,6 +808,7 @@ def test_stage_enroot_image_uses_no_gpu_for_ptyche(
 
     assert result.returncode == 0, result.stderr
     assert "--account=coreai_dlalgo_llm" in result.stdout
+    assert "--cpus-per-task" not in result.stdout
     assert "--gpus-per-node" not in result.stdout
     assert "--gres=" not in result.stdout
 
@@ -827,8 +829,31 @@ def test_stage_enroot_image_allows_cpu_datamover_without_gpu(
 
     assert result.returncode == 0, result.stderr
     assert "--partition=cpu_datamover" in result.stdout
+    assert "--cpus-per-task=32" in result.stdout
+    assert "--time=04:00:00" in result.stdout
+    assert "STAGE_CPUS_PER_TASK\\,STAGE_TIME_LIMIT" in result.stdout
     assert "--gpus-per-node" not in result.stdout
     assert "--gres=" not in result.stdout
+
+
+def test_stage_enroot_image_rejects_invalid_cpu_staging_width(
+    tmp_path: Path,
+) -> None:
+    result = _run_script(
+        "scripts/stage_enroot_image.sbatch",
+        TEST_ONLY="1",
+        SOURCE_IMAGE="nvcr.io/nvidian/nemo-rl:nightly",
+        SOURCE_DIGEST="sha256:" + "a" * 64,
+        SOURCE_COMMIT="b" * 40,
+        OUTPUT_PREFIX="nemo_rl_nightly_oci",
+        CONTAINER_DIR=str(tmp_path / "containers"),
+        PARTITION="cpu_datamover",
+        STAGE_CPUS_PER_TASK="0",
+    )
+
+    assert result.returncode == 2
+    assert "STAGE_CPUS_PER_TASK must be an integer from 1 through 96" in result.stderr
+    assert "SBATCH:" not in result.stdout
 
 
 def test_stage_enroot_image_rejects_unapproved_partition(

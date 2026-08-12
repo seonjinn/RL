@@ -102,12 +102,15 @@ assume the current directory is
    OUTPUT_PREFIX=nemo_rl_nightly_20260731 \
    CONTAINER_DIR=/absolute/shared/containers \
    PARTITION=cpu_datamover \
+   STAGE_CPUS_PER_TASK=32 \
+   STAGE_TIME_LIMIT=04:00:00 \
    scripts/stage_enroot_image.sbatch
    ```
 
    Use `PARTITION=cpu_datamover` for OCI-HSG image staging without a GPU
-   allocation. This setting applies only to container staging; production
-   scope jobs remain restricted to `batch`.
+   allocation. CPU staging defaults to 32 CPUs and four hours because importing
+   a nightly image constructs a large squashfs. These settings apply only to
+   container staging; production scope jobs remain restricted to `batch`.
 
 2. Commit the outer repository and both nested gitlinks, then create one clean,
    detached source snapshot. The snapshot records the exact three commits and
