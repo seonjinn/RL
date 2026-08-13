@@ -1415,7 +1415,7 @@ def test_scope_and_variant_leaves_are_persistent_and_exact() -> None:
     assert [path.name for path in scopes] == [
         f"{row.index:02d}_{row.name}.sh" for row in rows
     ]
-    assert len(variants) == 11
+    assert len(variants) == 12
     for launcher in [*scopes, *variants]:
         text = launcher.read_text()
         assert "WARMUP_STEPS=3" in text
@@ -2297,6 +2297,34 @@ def test_nano_attention_launcher_forwards_hybridep_uneven_input_padding() -> Non
     ) == 1
 
 
+def test_nano_attention_cache3_variant_is_persistent_and_exact() -> None:
+    result = _run_script(
+        "variants/attn_hybridep_pad_uneven_cache3.sh",
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        STEPS="20",
+        TEST_ONLY="1",
+        RUN_TAG="hybridep-uneven-padding-cache3",
+    )
+
+    assert result.returncode == 0, result.stderr
+    command_line = next(
+        line for line in result.stdout.splitlines() if line.startswith("COMMAND: ")
+    )
+    command = shlex.split(command_line.removeprefix("COMMAND: "))[0]
+    arguments = shlex.split(command)
+    assert (
+        arguments.count(
+            "++policy.megatron_cfg.moe_hybridep_pad_uneven_dispatch_inputs=true"
+        )
+        == 1
+    )
+    assert (
+        arguments.count("++policy.megatron_cfg.cuda_graph_max_cached_schedules=3") == 1
+    )
+
+
 def test_nano_launcher_rejects_invalid_hybridep_uneven_input_padding() -> None:
     result = _run_script(
         "scopes/17_attn.sh",
@@ -2310,6 +2338,42 @@ def test_nano_launcher_rejects_invalid_hybridep_uneven_input_padding() -> None:
 
     assert result.returncode == 2
     assert "HYBRIDEP_PAD_UNEVEN_DISPATCH_INPUTS must be true or false" in result.stderr
+    assert "SBATCH:" not in result.stdout
+
+
+@pytest.mark.parametrize("capacity", ("0", "true", "3.0"))
+def test_nano_launcher_rejects_invalid_graph_cache_capacity(capacity: str) -> None:
+    result = _run_script(
+        "scopes/17_attn.sh",
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        TEST_ONLY="1",
+        RUN_TAG="invalid-graph-cache-capacity",
+        CUDA_GRAPH_MAX_CACHED_SCHEDULES=capacity,
+    )
+
+    assert result.returncode == 2
+    assert "CUDA_GRAPH_MAX_CACHED_SCHEDULES must be a positive integer" in result.stderr
+    assert "SBATCH:" not in result.stdout
+
+
+def test_baseline_launcher_rejects_irrelevant_graph_cache_capacity() -> None:
+    result = _run_script(
+        "scopes/00_baseline_no_cg.sh",
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        TEST_ONLY="1",
+        RUN_TAG="irrelevant-graph-cache-capacity",
+        CUDA_GRAPH_MAX_CACHED_SCHEDULES="3",
+    )
+
+    assert result.returncode == 2
+    assert (
+        "CUDA_GRAPH_MAX_CACHED_SCHEDULES requires NeMo-RL Transformer Engine "
+        "training graphs" in result.stderr
+    )
     assert "SBATCH:" not in result.stdout
 
 

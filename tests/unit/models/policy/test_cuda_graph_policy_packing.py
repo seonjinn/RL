@@ -209,6 +209,7 @@ def _fields_with_optional_routed_experts(
 class _EffectiveTECudaGraphConfig:
     cuda_graph_impl: str
     thd_max_packed_sequences: int | None
+    cuda_graph_max_cached_schedules: int | None
     training_enabled: bool
 
 
@@ -435,11 +436,13 @@ def _effective_config(
     *,
     cuda_graph_impl: str = "transformer_engine",
     capacity: int | None = 5,
+    cache_capacity: int | None = 3,
     training_enabled: bool = True,
 ) -> dict[str, Any]:
     return {
         "cuda_graph_impl": cuda_graph_impl,
         "thd_max_packed_sequences": capacity,
+        "cuda_graph_max_cached_schedules": cache_capacity,
         "training_enabled": training_enabled,
     }
 
@@ -448,11 +451,13 @@ def _resolved_effective_config(
     *,
     cuda_graph_impl: str = "transformer_engine",
     capacity: int | None = 5,
+    cache_capacity: int | None = 3,
     training_enabled: bool = True,
 ) -> _EffectiveTECudaGraphConfig:
     return _EffectiveTECudaGraphConfig(
         cuda_graph_impl=cuda_graph_impl,
         thd_max_packed_sequences=capacity,
+        cuda_graph_max_cached_schedules=cache_capacity,
         training_enabled=training_enabled,
     )
 
@@ -471,6 +476,7 @@ def test_effective_config_cache_has_exact_internal_type_and_init_annotation() ->
     ] == [
         ("cuda_graph_impl", "str"),
         ("thd_max_packed_sequences", "int | None"),
+        ("cuda_graph_max_cached_schedules", "int | None"),
         ("training_enabled", "bool"),
     ]
     dataclass_decorator = next(
@@ -615,6 +621,7 @@ def _make_policy(
         policy._effective_te_cuda_graph_config = _resolved_effective_config(
             cuda_graph_impl=effective_config["cuda_graph_impl"],
             capacity=effective_config["thd_max_packed_sequences"],
+            cache_capacity=effective_config["cuda_graph_max_cached_schedules"],
             training_enabled=effective_config["training_enabled"],
         )
     return policy
@@ -652,6 +659,7 @@ def _make_tq_policy(
         policy._effective_te_cuda_graph_config = _resolved_effective_config(
             cuda_graph_impl=effective_config["cuda_graph_impl"],
             capacity=effective_config["thd_max_packed_sequences"],
+            cache_capacity=effective_config["cuda_graph_max_cached_schedules"],
             training_enabled=effective_config["training_enabled"],
         )
     return policy
@@ -667,16 +675,20 @@ def test_effective_config_resolver_accepts_identical_training_ranks() -> None:
     assert resolved is not expected
 
 
-def test_effective_config_resolver_rejects_rank_disagreement() -> None:
+@pytest.mark.parametrize(
+    ("first", "second"),
+    (
+        (_effective_config(capacity=5), _effective_config(capacity=6)),
+        (_effective_config(cache_capacity=2), _effective_config(cache_capacity=3)),
+    ),
+)
+def test_effective_config_resolver_rejects_rank_disagreement(
+    first: dict[str, Any], second: dict[str, Any]
+) -> None:
     resolver, _ = _effective_config_api()
 
     with pytest.raises(ValueError, match="consistent across all Megatron workers"):
-        resolver(
-            [
-                _effective_config(capacity=5),
-                _effective_config(capacity=6),
-            ]
-        )
+        resolver([first, second])
 
 
 @pytest.mark.parametrize(
@@ -689,6 +701,9 @@ def test_effective_config_resolver_rejects_rank_disagreement() -> None:
         [_effective_config(cuda_graph_impl=cast(Any, 1))],
         [_effective_config(capacity=cast(Any, True))],
         [_effective_config(capacity=cast(Any, "5"))],
+        [_effective_config(cache_capacity=cast(Any, True))],
+        [_effective_config(cache_capacity=cast(Any, "3"))],
+        [_effective_config(cache_capacity=0)],
         [_effective_config(training_enabled=cast(Any, 1))],
         [_effective_config(cuda_graph_impl="local")],
         [_effective_config(capacity=None)],
@@ -740,6 +755,7 @@ def test_dtensor_policy_construction_skips_worker_config_rpc() -> None:
     assert policy._effective_te_cuda_graph_config == _resolved_effective_config(
         cuda_graph_impl="none",
         capacity=None,
+        cache_capacity=None,
         training_enabled=False,
     )
     assert _ConstructionWorkerGroup.instances[-1].dispatches == []

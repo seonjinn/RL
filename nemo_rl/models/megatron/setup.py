@@ -1356,9 +1356,10 @@ def _configure_fixed_te_graph_geometry(
     ):
         raise ValueError("Packed TE training graphs require exactly 3 warmup steps.")
     if "cuda_graph_max_cached_schedules" in megatron_cfg:
-        raise ValueError(
-            "cuda_graph_max_cached_schedules is not a canonical user field; the TE "
-            "graph lifecycle fixes cache capacity at 2."
+        _validate_positive_config_integer(
+            "cuda_graph_max_cached_schedules",
+            megatron_cfg["cuda_graph_max_cached_schedules"],
+            minimum=1,
         )
     _validate_te_moe_graph_request(model_cfg, modules)
     if not is_te_min_version(_TE_CUDA_GRAPH_MIN_VERSION):

@@ -399,6 +399,10 @@ class MegatronConfig(TypedDict):
     # Fixed THD sequence capacity, including the one structural dummy sequence.
     # Transformer Engine graphs with sequence packing require a value >= 2.
     thd_max_packed_sequences: NotRequired[int]
+    # Maximum number of training schedule-specific TE graph banks kept resident.
+    # Omit to preserve the current two-bank default; size this to the observed
+    # number of recurring normalized schedule keys when memory permits.
+    cuda_graph_max_cached_schedules: NotRequired[int]
     # When True, each expert sees a fixed number of tokens for cuda-graph capture.
     # Required when cuda_graph_impl= 'local' with transformer_impl != 'inference_optimized'.
     moe_pad_experts_for_cuda_graph_inference: NotRequired[bool]

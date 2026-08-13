@@ -71,6 +71,7 @@ PathLike = Union[str, "os.PathLike[Any]"]
 class _EffectiveTECudaGraphConfig:
     cuda_graph_impl: str
     thd_max_packed_sequences: int | None
+    cuda_graph_max_cached_schedules: int | None
     training_enabled: bool
 
 
@@ -110,6 +111,7 @@ def _resolve_effective_te_cuda_graph_config(
     expected_keys = {
         "cuda_graph_impl",
         "thd_max_packed_sequences",
+        "cuda_graph_max_cached_schedules",
         "training_enabled",
     }
     resolved_configs: list[_EffectiveTECudaGraphConfig] = []
@@ -131,6 +133,7 @@ def _resolve_effective_te_cuda_graph_config(
 
         cuda_graph_impl = raw_config["cuda_graph_impl"]
         capacity = raw_config["thd_max_packed_sequences"]
+        cache_capacity = raw_config["cuda_graph_max_cached_schedules"]
         training_enabled = raw_config["training_enabled"]
         if type(cuda_graph_impl) is not str:
             raise TypeError(
@@ -141,6 +144,12 @@ def _resolve_effective_te_cuda_graph_config(
             raise TypeError(
                 "Megatron worker CUDA Graph config thd_max_packed_sequences must be "
                 f"an integer or None, got {capacity!r} at rank {index}."
+            )
+        if cache_capacity is not None and type(cache_capacity) is not int:
+            raise TypeError(
+                "Megatron worker CUDA Graph config "
+                "cuda_graph_max_cached_schedules must be an integer or None, "
+                f"got {cache_capacity!r} at rank {index}."
             )
         if type(training_enabled) is not bool:
             raise TypeError(
@@ -158,11 +167,17 @@ def _resolve_effective_te_cuda_graph_config(
                     "Megatron worker CUDA Graph config with training_enabled=true "
                     "requires thd_max_packed_sequences >= 2."
                 )
+            if cache_capacity is None or cache_capacity < 1:
+                raise ValueError(
+                    "Megatron worker CUDA Graph config with training_enabled=true "
+                    "requires cuda_graph_max_cached_schedules >= 1."
+                )
 
         resolved_configs.append(
             _EffectiveTECudaGraphConfig(
                 cuda_graph_impl=cuda_graph_impl,
                 thd_max_packed_sequences=capacity,
+                cuda_graph_max_cached_schedules=cache_capacity,
                 training_enabled=training_enabled,
             )
         )
@@ -197,6 +212,7 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             _EffectiveTECudaGraphConfig(
                 cuda_graph_impl="none",
                 thd_max_packed_sequences=None,
+                cuda_graph_max_cached_schedules=None,
                 training_enabled=False,
             )
         )

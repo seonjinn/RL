@@ -1193,6 +1193,7 @@ class TestApplyPerformanceConfig:
                 "transformer_impl": "transformer_engine",
                 "cuda_graph_impl": "transformer_engine",
                 "cuda_graph_modules": modules,
+                "cuda_graph_max_cached_schedules": 3,
                 "thd_max_packed_sequences": thd_max_packed_sequences,
                 "tensor_model_parallel_size": 1,
                 "pipeline_model_parallel_size": 1,
@@ -1314,6 +1315,9 @@ class TestApplyPerformanceConfig:
             ("zero_sequence_alignment", "make_sequence_length_divisible_by"),
             ("wrong_transformer_impl", "transformer_impl='transformer_engine'"),
             ("wrong_warmup", "exactly 3"),
+            ("null_graph_cache_capacity", "must be an integer"),
+            ("boolean_graph_cache_capacity", "must be an integer"),
+            ("zero_graph_cache_capacity", "must be at least 1"),
         ],
     )
     def test_fixed_te_graph_request_rejects_unsafe_geometry(
@@ -1343,6 +1347,12 @@ class TestApplyPerformanceConfig:
             config["megatron_cfg"]["transformer_impl"] = "local"
         elif mutation == "wrong_warmup":
             model_cfg.cuda_graph_warmup_steps = 2
+        elif mutation == "null_graph_cache_capacity":
+            config["megatron_cfg"]["cuda_graph_max_cached_schedules"] = None
+        elif mutation == "boolean_graph_cache_capacity":
+            config["megatron_cfg"]["cuda_graph_max_cached_schedules"] = True
+        elif mutation == "zero_graph_cache_capacity":
+            config["megatron_cfg"]["cuda_graph_max_cached_schedules"] = 0
 
         with pytest.raises((TypeError, ValueError), match=error):
             _apply_performance_config(model_cfg, config)

@@ -161,6 +161,14 @@ esac
 [[ "${WARMUP_STEPS:-}" == "3" ]] || fail "WARMUP_STEPS must be exactly 3"
 [[ "${THD_MAX_PACKED_SEQUENCES:-}" == "16" ]] || \
   fail "THD_MAX_PACKED_SEQUENCES must be 16"
+if [[ -n "${CUDA_GRAPH_MAX_CACHED_SCHEDULES:-}" && \
+      ! "${CUDA_GRAPH_MAX_CACHED_SCHEDULES}" =~ ^[1-9][0-9]*$ ]]; then
+  fail "CUDA_GRAPH_MAX_CACHED_SCHEDULES must be a positive integer"
+fi
+if [[ -n "${CUDA_GRAPH_MAX_CACHED_SCHEDULES:-}" && \
+      ( "${CUDA_GRAPH_IMPL}" != "transformer_engine" || "${MODE}" != "nemorl" ) ]]; then
+  fail "CUDA_GRAPH_MAX_CACHED_SCHEDULES requires NeMo-RL Transformer Engine training graphs"
+fi
 [[ "${CHECKPOINTING_ENABLED:-}" == "false" ]] || \
   fail "CHECKPOINTING_ENABLED must be false"
 [[ "${WANDB_PROJECT:-}" == "sna-cg-study" ]] || \
@@ -414,6 +422,11 @@ else
 fi
 
 extra_overrides=()
+if [[ -n "${CUDA_GRAPH_MAX_CACHED_SCHEDULES:-}" ]]; then
+  extra_overrides+=(
+    "++policy.megatron_cfg.cuda_graph_max_cached_schedules=${CUDA_GRAPH_MAX_CACHED_SCHEDULES}"
+  )
+fi
 case "${OVERLAP_PARAM_GATHER:-}" in
   "") ;;
   true|false)

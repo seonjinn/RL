@@ -127,7 +127,7 @@ def test_runtime_schedule_provider_and_explicit_drained_phases() -> None:
     assert not worker._assert_te_cuda_graph_model_drained()
 
 
-def test_initialization_uses_topology_only_helper_and_direct_fixed_manager(
+def test_initialization_uses_configured_cache_capacity_and_topology_only_helper(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manager_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
@@ -158,7 +158,7 @@ def test_initialization_uses_topology_only_helper_and_direct_fixed_manager(
         },
         {
             "TECudaGraphLifecycle": FakeLifecycle,
-            "_TE_CUDA_GRAPH_CACHE_CAPACITY": 2,
+            "_TE_CUDA_GRAPH_DEFAULT_CACHE_CAPACITY": 2,
             "_TE_CUDA_GRAPH_WARMUP_STEPS": 3,
             "log": SimpleNamespace(info=lambda *_args, **_kwargs: None),
         },
@@ -173,13 +173,14 @@ def test_initialization_uses_topology_only_helper_and_direct_fixed_manager(
     worker.megatron_cfg = SimpleNamespace(
         model=SimpleNamespace(cuda_graph_modules=("attention",))
     )
+    worker.cfg = {"megatron_cfg": {"cuda_graph_max_cached_schedules": 3}}
     worker._te_cuda_graph_runtime_schedule_count = 1
     worker._assert_te_cuda_graph_model_drained = lambda: True
 
     worker._initialize_te_cuda_graph_lifecycle()
 
     assert sample_args == [None]
-    assert lifecycle_calls == [{"capacity": 2, "warmup_steps": 3}]
+    assert lifecycle_calls == [{"capacity": 3, "warmup_steps": 3}]
     assert len(manager_calls) == 1
     args, kwargs = manager_calls[0]
     assert args == (topology_layers,)
@@ -190,8 +191,57 @@ def test_initialization_uses_topology_only_helper_and_direct_fixed_manager(
     assert worker._te_cuda_graph_capture_sample_packed_seq_params is None
 
 
+def test_initialization_preserves_two_bank_default_when_config_is_omitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lifecycle_calls: list[dict[str, Any]] = []
+
+    class FakeManager:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+    class FakeLifecycle:
+        def __init__(self, **kwargs: Any) -> None:
+            lifecycle_calls.append(kwargs)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "megatron.core.transformer.te_cuda_graph_bank",
+        SimpleNamespace(TECudaGraphBankManager=FakeManager),
+    )
+    worker_type = _extract_worker_methods(
+        {
+            "_initialize_te_cuda_graph_lifecycle",
+            "_te_cuda_graph_runtime_num_microbatches",
+        },
+        {
+            "TECudaGraphLifecycle": FakeLifecycle,
+            "_TE_CUDA_GRAPH_DEFAULT_CACHE_CAPACITY": 2,
+            "_TE_CUDA_GRAPH_WARMUP_STEPS": 3,
+            "log": SimpleNamespace(info=lambda *_args, **_kwargs: None),
+        },
+    )
+    worker = worker_type()
+    worker._build_te_cuda_graph_helper = lambda _sample: SimpleNamespace(
+        flattened_callables=()
+    )
+    worker.megatron_cfg = SimpleNamespace(
+        model=SimpleNamespace(cuda_graph_modules=("attention",))
+    )
+    worker.cfg = {"megatron_cfg": {}}
+    worker._te_cuda_graph_runtime_schedule_count = 1
+    worker._assert_te_cuda_graph_model_drained = lambda: True
+
+    worker._initialize_te_cuda_graph_lifecycle()
+
+    assert lifecycle_calls == [{"capacity": 2, "warmup_steps": 3}]
+
+
 def test_effective_graph_config_rpc_uses_validated_model_config() -> None:
-    worker_type = _extract_worker_methods({"get_effective_te_cuda_graph_config"})
+    worker_type = _extract_worker_methods(
+        {"get_effective_te_cuda_graph_config"},
+        {"_TE_CUDA_GRAPH_DEFAULT_CACHE_CAPACITY": 2},
+    )
     worker = worker_type()
     worker.megatron_cfg = SimpleNamespace(
         model=SimpleNamespace(
@@ -200,11 +250,36 @@ def test_effective_graph_config_rpc_uses_validated_model_config() -> None:
         )
     )
     worker._te_cuda_graph_lifecycle = object()
+    worker.cfg = {"megatron_cfg": {"cuda_graph_max_cached_schedules": 3}}
 
     assert worker.get_effective_te_cuda_graph_config() == {
         "cuda_graph_impl": "transformer_engine",
         "thd_max_packed_sequences": 65,
+        "cuda_graph_max_cached_schedules": 3,
         "training_enabled": True,
+    }
+
+
+def test_disabled_graph_config_omits_irrelevant_cache_capacity() -> None:
+    worker_type = _extract_worker_methods(
+        {"get_effective_te_cuda_graph_config"},
+        {"_TE_CUDA_GRAPH_DEFAULT_CACHE_CAPACITY": 2},
+    )
+    worker = worker_type()
+    worker.megatron_cfg = SimpleNamespace(
+        model=SimpleNamespace(
+            cuda_graph_impl="none",
+            thd_max_packed_sequences=None,
+        )
+    )
+    worker._te_cuda_graph_lifecycle = None
+    worker.cfg = {"megatron_cfg": {}}
+
+    assert worker.get_effective_te_cuda_graph_config() == {
+        "cuda_graph_impl": "none",
+        "thd_max_packed_sequences": None,
+        "cuda_graph_max_cached_schedules": None,
+        "training_enabled": False,
     }
 
 
@@ -557,7 +632,23 @@ def test_split_schedule_pins_first_key_without_second_transition() -> None:
 
 
 def test_capture_helper_receives_exact_first_metadata_identity() -> None:
-    worker_type = _extract_worker_methods({"_capture_te_cuda_graph_bank"})
+    allocator_values = iter((100, 200, 140, 275))
+    log_calls: list[tuple[Any, ...]] = []
+    worker_type = _extract_worker_methods(
+        {"_capture_te_cuda_graph_bank"},
+        {
+            "torch": SimpleNamespace(
+                cuda=SimpleNamespace(
+                    memory_allocated=lambda: next(allocator_values),
+                    memory_reserved=lambda: next(allocator_values),
+                )
+            ),
+            "log": SimpleNamespace(
+                info=lambda *args: log_calls.append(args),
+                exception=lambda *_args, **_kwargs: None,
+            ),
+        },
+    )
     worker = worker_type()
     sample = object()
     manager = object()
@@ -582,10 +673,39 @@ def test_capture_helper_receives_exact_first_metadata_identity() -> None:
     assert worker._capture_te_cuda_graph_bank(TECudaGraphScheduleKey(4), sample) is bank
     assert samples == [sample]
     assert worker._te_cuda_graph_capture_sample_packed_seq_params is sample
+    assert log_calls == [
+        (
+            "TE CUDA Graph bank captured: schedule_key=%d "
+            "allocated_before_bytes=%d allocated_after_bytes=%d "
+            "allocated_delta_bytes=%d reserved_before_bytes=%d "
+            "reserved_after_bytes=%d reserved_delta_bytes=%d.",
+            4,
+            100,
+            140,
+            40,
+            200,
+            275,
+            75,
+        )
+    ]
 
 
 def test_capture_releases_registered_bank_when_hook_restore_fails() -> None:
-    worker_type = _extract_worker_methods({"_capture_te_cuda_graph_bank"})
+    worker_type = _extract_worker_methods(
+        {"_capture_te_cuda_graph_bank"},
+        {
+            "torch": SimpleNamespace(
+                cuda=SimpleNamespace(
+                    memory_allocated=lambda: 100,
+                    memory_reserved=lambda: 200,
+                )
+            ),
+            "log": SimpleNamespace(
+                info=lambda *_args, **_kwargs: None,
+                exception=lambda *_args, **_kwargs: None,
+            ),
+        },
+    )
     worker = worker_type()
     events: list[str] = []
     bank = SimpleNamespace(reset=lambda: events.append("bank.reset"))

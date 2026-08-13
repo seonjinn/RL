@@ -128,7 +128,7 @@ from nemo_rl.weight_sync.nccl_reshard_utils import (
 
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
 
-_TE_CUDA_GRAPH_CACHE_CAPACITY = 2
+_TE_CUDA_GRAPH_DEFAULT_CACHE_CAPACITY = 2
 _TE_CUDA_GRAPH_WARMUP_STEPS = 3
 
 
@@ -691,9 +691,24 @@ class MegatronPolicyWorkerImpl(
             raise RuntimeError(
                 "effective TE CUDA Graph training requires a sequence capacity"
             )
+        cache_capacity = None
+        if training_enabled:
+            cache_capacity = self.cfg["megatron_cfg"].get(
+                "cuda_graph_max_cached_schedules",
+                _TE_CUDA_GRAPH_DEFAULT_CACHE_CAPACITY,
+            )
+            if isinstance(cache_capacity, bool) or not isinstance(cache_capacity, int):
+                raise TypeError(
+                    "effective cuda_graph_max_cached_schedules must be an integer"
+                )
+            if cache_capacity < 1:
+                raise ValueError(
+                    "effective cuda_graph_max_cached_schedules must be at least 1"
+                )
         return {
             "cuda_graph_impl": str(model_config.cuda_graph_impl),
             "thd_max_packed_sequences": capacity,
+            "cuda_graph_max_cached_schedules": cache_capacity,
             "training_enabled": training_enabled,
         }
 
@@ -739,6 +754,15 @@ class MegatronPolicyWorkerImpl(
             TECudaGraphBankManager,
         )
 
+        cache_capacity = self.cfg["megatron_cfg"].get(
+            "cuda_graph_max_cached_schedules",
+            _TE_CUDA_GRAPH_DEFAULT_CACHE_CAPACITY,
+        )
+        if isinstance(cache_capacity, bool) or not isinstance(cache_capacity, int):
+            raise TypeError("cuda_graph_max_cached_schedules must be an integer")
+        if cache_capacity < 1:
+            raise ValueError("cuda_graph_max_cached_schedules must be at least 1")
+
         topology_helper = self._build_te_cuda_graph_helper(None)
         self._te_cuda_graph_bank_manager = TECudaGraphBankManager(
             topology_helper.flattened_callables,
@@ -749,7 +773,7 @@ class MegatronPolicyWorkerImpl(
             runtime_num_microbatches=self._te_cuda_graph_runtime_num_microbatches,
         )
         self._te_cuda_graph_lifecycle = TECudaGraphLifecycle(
-            capacity=_TE_CUDA_GRAPH_CACHE_CAPACITY,
+            capacity=cache_capacity,
             warmup_steps=_TE_CUDA_GRAPH_WARMUP_STEPS,
         )
         self._te_cuda_graph_capture_helper = None
@@ -758,7 +782,7 @@ class MegatronPolicyWorkerImpl(
             "Initialized Transformer Engine CUDA Graph worker lifecycle with "
             "warmup_steps=%d and cache_capacity=%d.",
             _TE_CUDA_GRAPH_WARMUP_STEPS,
-            _TE_CUDA_GRAPH_CACHE_CAPACITY,
+            cache_capacity,
         )
 
     def _assert_te_cuda_graph_model_drained(self) -> bool:
@@ -837,8 +861,7 @@ class MegatronPolicyWorkerImpl(
         if change == StorageChange.NONE:
             return
         raise RuntimeError(
-            "TE CUDA Graph storage changed after capture "
-            f"(change={change.name})."
+            f"TE CUDA Graph storage changed after capture (change={change.name})."
         )
 
     def _collectively_validate_te_cuda_graph_storage_before_replay(
@@ -981,6 +1004,8 @@ class MegatronPolicyWorkerImpl(
         sample_packed_seq_params: Any,
     ) -> Any:
         """Capture one bank from the exact first real microbatch metadata."""
+        allocated_before = torch.cuda.memory_allocated()
+        reserved_before = torch.cuda.memory_reserved()
         self._te_cuda_graph_capture_sample_packed_seq_params = sample_packed_seq_params
         helper = self._build_te_cuda_graph_helper(sample_packed_seq_params)
         self._te_cuda_graph_capture_helper = helper
@@ -1005,6 +1030,21 @@ class MegatronPolicyWorkerImpl(
                     "Transformer Engine CUDA Graph capture found no graphable "
                     "modules on the model-parallel replica."
                 )
+            allocated_after = torch.cuda.memory_allocated()
+            reserved_after = torch.cuda.memory_reserved()
+            log.info(
+                "TE CUDA Graph bank captured: schedule_key=%d "
+                "allocated_before_bytes=%d allocated_after_bytes=%d "
+                "allocated_delta_bytes=%d reserved_before_bytes=%d "
+                "reserved_after_bytes=%d reserved_delta_bytes=%d.",
+                key.num_microbatches,
+                allocated_before,
+                allocated_after,
+                allocated_after - allocated_before,
+                reserved_before,
+                reserved_after,
+                reserved_after - reserved_before,
+            )
             return bank
         except BaseException:
             if bank is not None:
@@ -2843,8 +2883,7 @@ class MegatronPolicyWorkerImpl(
 
                     if (
                         not preserve_graph_banks
-                        and self.cfg["megatron_cfg"]["empty_unused_memory_level"]
-                        >= 1
+                        and self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1
                     ):
                         gc.collect()
                         torch.cuda.empty_cache()
@@ -2873,8 +2912,7 @@ class MegatronPolicyWorkerImpl(
 
                     if (
                         not preserve_graph_banks
-                        and self.cfg["megatron_cfg"]["empty_unused_memory_level"]
-                        >= 1
+                        and self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1
                     ):
                         gc.collect()
                         torch.cuda.empty_cache()
