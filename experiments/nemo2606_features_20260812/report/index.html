@@ -20,7 +20,7 @@
 </head>
 <body>
   <h1>NeMo 26.06 Policy performance features</h1>
-  <p>Latest update: 2026-08-12 21:05 PDT. Branch:
+  <p>Latest update: 2026-08-12 21:24 PDT. Branch:
     <code>sna/nemo-2606-latest-main-integration-20260812</code>.</p>
 
   <div class="cards">
@@ -58,8 +58,11 @@
       <tr><td>Pre-Tyche 2574124</td><td class="ok">COMPLETED 0:0</td><td>nightly staging</td><td class="wrap">28 GiB immutable image; metadata and file SHA both <code>ddbce4c3…a924f0c</code>.</td></tr>
       <tr><td>Pre-Tyche 2574467</td><td class="bad">FAILED 1:0</td><td>contract attempt 1</td><td class="wrap">CUDA, NeMo-RL, TE, MCore imports succeeded. Diagnostic accessed nonexistent <code>te.__version__</code>; feature pytest was not reached. Fixed by distribution metadata lookup in <code>7d3b82d67</code>.</td></tr>
       <tr><td>Pre-Tyche 2574515</td><td class="ok">COMPLETED 0:0</td><td>contract retry</td><td class="wrap">Exact clean source <code>7d3b82d67</code>. GPU smoke passed with CUDA 13.0, four devices, TE <code>2.15.0+42b84005</code>; selected feature contracts: 31 passed.</td></tr>
-      <tr><td>Pre-Tyche 2574549</td><td class="wait">PENDING (Priority)</td><td>Q30 matched-eager model gate</td><td class="wrap">Exact source <code>2c184f89c</code>, immutable image SHA <code>ddbce4c3…a924f0c</code>, 8 nodes × 4 GB200, six optimizer updates. Runtime has not started; no model evidence yet.</td></tr>
-      <tr><td>Lyris 2678498</td><td class="wait">RUNNING</td><td>backup nightly staging</td><td class="wrap">Fresh immutable import; SHA will be recorded after completion.</td></tr>
+      <tr><td>Pre-Tyche 2574549</td><td class="bad">FAILED 1:0</td><td>Q30 matched-eager model gate</td><td class="wrap">Model/driver 미실행. 빈 Lustre UV cache를 <code>/root/.cache/uv</code>에 mount하여 image package의 absolute symlink target을 가렸고 Ray head가 <code>urllib3.exceptions</code> import 전에 실패했습니다. Full-CG/CuTeDSL 오류가 아닙니다.</td></tr>
+      <tr><td>Pre-Tyche 2574678</td><td class="bad">FAILED 1:0</td><td>cache-free Ray smoke attempt</td><td class="wrap">Cache mask 제거 후 Ray head와 4/4 worker 연결은 성공했습니다. 진단 Python one-liner의 괄호 오류로 driver만 실패해 acceptance에는 사용하지 않습니다.</td></tr>
+      <tr><td>Pre-Tyche 2574686</td><td class="ok">COMPLETED 0:0</td><td>cache-free Ray smoke</td><td class="wrap">Ray 2.56.1, requests 2.34.2, urllib3 2.7.0 import; head 첫 시도 성공; 4/4 worker 연결; driver <code>ray status</code> 성공.</td></tr>
+      <tr><td>Pre-Tyche 2574659</td><td class="wait">RUNNING</td><td>nightly refresh</td><td class="wrap">새 immutable 파일로 다시 import 중이며 기존 working image는 보존했습니다.</td></tr>
+      <tr><td>Lyris 2678498</td><td class="ok">COMPLETED 0:0</td><td>backup nightly staging</td><td class="wrap">Valid SquashFS, 29,827,043,328 bytes, metadata SHA <code>c42c28fe…a95fa06e</code>; stable symlink가 immutable image를 가리킵니다.</td></tr>
     </tbody>
   </table>
 
