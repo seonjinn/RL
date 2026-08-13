@@ -77,3 +77,37 @@ def test_cutedsl_overlay_changes_only_the_fused_grouped_mlp_bundle(model: str) -
         "env_vars": {"NVTE_CUTEDSL_FUSED_GROUPED_MLP": "1"},
     }
 
+
+@pytest.mark.parametrize(
+    "model", ("qwen3-30ba3b-4n4g", "qwen3-235b-16n4g")
+)
+def test_a2a_matched_baseline_has_compatible_eager_settings(model: str) -> None:
+    cutedsl_name = f"grpo-{model}-megatron-mxfp8-cutedsl.yaml"
+    config = _load_raw(f"grpo-{model}-megatron-mxfp8-cutedsl-a2a-matched.yaml")
+
+    assert config["defaults"] == f"./{cutedsl_name}"
+    assert set(config) == {"defaults", "checkpointing", "policy", "logger"}
+    assert config["checkpointing"]["enabled"] is False
+    assert config["policy"]["megatron_cfg"] == {
+        "activation_checkpointing": False,
+        "defer_fp32_logits": False,
+        "overlap_moe_expert_parallel_comm": False,
+        "high_priority_a2a_comm_stream": False,
+        "delay_wgrad_compute": False,
+    }
+
+
+@pytest.mark.parametrize(
+    "model", ("qwen3-30ba3b-4n4g", "qwen3-235b-16n4g")
+)
+def test_a2a_overlay_changes_only_the_overlap_bundle(model: str) -> None:
+    matched_name = f"grpo-{model}-megatron-mxfp8-cutedsl-a2a-matched.yaml"
+    config = _load_raw(f"grpo-{model}-megatron-mxfp8-cutedsl-a2a.yaml")
+
+    assert config["defaults"] == f"./{matched_name}"
+    assert set(config) == {"defaults", "checkpointing", "policy", "logger"}
+    assert config["policy"]["megatron_cfg"] == {
+        "overlap_moe_expert_parallel_comm": True,
+        "high_priority_a2a_comm_stream": True,
+        "delay_wgrad_compute": True,
+    }

@@ -265,6 +265,66 @@ class TestForwardWithPostProcessingFn:
         assert callable(wrapped_fn)
         assert isinstance(output, torch.Tensor)
 
+    @patch(
+        "nemo_rl.models.megatron.train.get_tensor_model_parallel_rank", return_value=0
+    )
+    @patch("nemo_rl.models.megatron.train.get_tensor_model_parallel_group")
+    @patch("nemo_rl.models.megatron.train.get_context_parallel_group")
+    @patch(
+        "nemo_rl.models.megatron.train.get_context_parallel_world_size", return_value=1
+    )
+    @patch("nemo_rl.models.megatron.train.model_forward")
+    def test_forward_builds_schedule_plan_for_ep_a2a_overlap(
+        self,
+        mock_model_forward,
+        _mock_cp_size,
+        _mock_cp_group,
+        _mock_tp_group,
+        _mock_tp_rank,
+    ) -> None:
+        from nemo_rl.models.megatron.data import ProcessedMicrobatch
+        from nemo_rl.models.megatron.train import (
+            LossPostProcessor,
+            forward_with_post_processing_fn,
+        )
+
+        data_dict = MagicMock()
+        data_dict.get_multimodal_dict.return_value = {}
+        processed_mb = ProcessedMicrobatch(
+            data_dict=data_dict,
+            input_ids=torch.tensor([[1, 2, 3]]),
+            input_ids_cp_sharded=torch.tensor([[1, 2, 3]]),
+            attention_mask=torch.ones(1, 3),
+            position_ids=torch.tensor([[0, 1, 2]]),
+            packed_seq_params=MagicMock(),
+            cu_seqlens_padded=None,
+            mtp_loss_mask=torch.ones(1, 3),
+        )
+        model = MagicMock()
+        schedule_plan = MagicMock()
+        model.build_schedule_plan.return_value = schedule_plan
+        post_processor = LossPostProcessor(
+            loss_fn=MagicMock(), cfg={"sequence_packing": {"enabled": False}}
+        )
+
+        output, wrapped_fn = forward_with_post_processing_fn(
+            data_iterator=iter([processed_mb]),
+            model=model,
+            post_processing_fn=post_processor,
+            return_schedule_plan=True,
+        )
+
+        assert output is schedule_plan
+        assert callable(wrapped_fn)
+        mock_model_forward.assert_not_called()
+        model.build_schedule_plan.assert_called_once_with(
+            input_ids=processed_mb.input_ids_cp_sharded,
+            position_ids=processed_mb.position_ids,
+            attention_mask=processed_mb.attention_mask,
+            packed_seq_params=processed_mb.packed_seq_params,
+            loss_mask=processed_mb.mtp_loss_mask,
+        )
+
     @patch("nemo_rl.models.megatron.train.model_forward")
     def test_forward_with_logprobs_post_processor(self, mock_model_forward):
         """Test forward with LogprobsPostProcessor."""
