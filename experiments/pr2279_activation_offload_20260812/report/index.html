@@ -13,11 +13,15 @@
     code { background: #f3f4f5; padding: .1rem .3rem; }
     .pending { color: #8a5a00; font-weight: 600; }
     .failed { color: #b3261e; font-weight: 600; }
+    .passed { color: #1b5e20; font-weight: 600; }
+    .invalid { color: #7b1fa2; font-weight: 600; }
+    .notice { border-left: 4px solid #7b1fa2; padding: .7rem 1rem; background: #faf5fc; }
   </style>
 </head>
 <body>
   <h1>NeMo-RL PR #2279: fine-grained activation CPU offload</h1>
-  <p>Exact PR runtime: <code>2f39df66d6fd0a0b1b53cf472eb1599c6c05dfce</code>.<br>
+  <p>Final lifecycle runtime: <code>01398467224921c058a70702cb4a8285eb98fc71</code>.<br>
+  Historical pre-fix runtime: <code>2f39df66d6fd0a0b1b53cf472eb1599c6c05dfce</code>.<br>
   Each launch records its immutable harness revision as
   <code>EXPECTED_SOURCE_COMMIT</code>.</p>
   <h2>Experiment design</h2>
@@ -29,9 +33,15 @@
     <tr><td>Activation offload</td><td>false / null</td><td>true / <code>moe_act</code></td></tr>
   </table>
   <h2>Status</h2>
-  <p>Focused Linux unit validation passed 12/12 tests on Pre-Tyche job
-  <code>2573408</code>. The first Lyris Qwen3-30B-A3B correctness pair,
-  jobs <code>2677022</code> and <code>2677024</code>, is running.</p>
+  <p>Historical Lyris jobs <code>2677022</code> and <code>2677024</code> both
+  completed 3/3 updates, but the ON arm reported zero activation-offload MiB on
+  every rank. It is therefore invalid as performance evidence. The final
+  lifecycle runtime passed two RED/GREEN cycles; focused regression job
+  <code>2573881</code> completed <code>0:0</code> with 56/56 selected tests
+  passing. The post-fix ON-only GB200 gate is next.</p>
+  <p class="notice"><strong>No performance benefit has been established.</strong>
+  The next run first proves nonzero offload and multi-update stability. Speedup
+  requires later replicated, dependency-matched OFF/ON runs at the same source.</p>
   <h2>Failure ledger</h2>
   <table>
     <tr><th>Cluster/job</th><th>Classification</th><th>Root cause and action</th></tr>
@@ -42,11 +52,46 @@
     <tr><td>Lyris 2676732</td><td class="failed">Smoke harness</td><td>Base image does not include the optional mcore-extra TE Python package. TE is built in the source-pinned venv; the base-image assertion was narrowed.</td></tr>
     <tr><td>Lyris 2676760</td><td>Passed</td><td>uv 0.11.28, torch 2.11.0+cu130, CUDA 13.0, Ray 2.56.1, and 4 GB200 GPUs verified.</td></tr>
     <tr><td>Pre-Tyche 2573195; Lyris 2676792</td><td class="failed">Harness</td><td>The focused file is marked <code>mcore</code> and the unit-test hook excludes it without <code>--mcore-only</code>. Added the selector and invoked the source-pinned test venv directly.</td></tr>
-    <tr><td>Pre-Tyche 2573408</td><td>Passed</td><td>12 activation-offload setup tests passed against the pinned Bridge/MCore/TE environment.</td></tr>
-    <tr><td>Lyris 2677022, 2677024</td><td class="pending">Running</td><td>The first concurrent pair shared a worker-venv root and recovered from a transient creation race. It is correctness/cache warmup only; later pairs use arm-specific roots.</td></tr>
+    <tr><td>Pre-Tyche 2573408</td><td class="passed">Passed</td><td>12 activation-offload setup tests passed against the pinned Bridge/MCore/TE environment.</td></tr>
+    <tr><td>Lyris 2677022, 2677024</td><td class="invalid">Execution passed; feature failed</td><td>Both 16-GB200 jobs completed 3/3 updates. ON reported <code>moe_act=0.00 MB</code> and Total <code>0.00 MB</code> on ranks 0-15, so timing is non-claimable.</td></tr>
+    <tr><td>Pre-Tyche 2573688</td><td class="failed">Expected RED</td><td>Forward-only policy logprob still saw activation offload enabled.</td></tr>
+    <tr><td>Pre-Tyche 2573756</td><td class="passed">Initial GREEN</td><td>Three config-lifecycle tests passed; review then found a post-warmup cached-manager case.</td></tr>
+    <tr><td>Pre-Tyche 2573839</td><td class="failed">Expected RED</td><td>A stateful <code>logprob -&gt; train -&gt; logprob -&gt; train</code> test reproduced cached forward-index consumption.</td></tr>
+    <tr><td>Pre-Tyche 2573853</td><td class="passed">GREEN</td><td>Manager lifecycle, nested disabled state, VPP config restoration, and VPP discovery atomicity passed 4/4.</td></tr>
+    <tr><td>Pre-Tyche 2573862</td><td class="passed">Passed</td><td>Runtime <code>aeeb3d6f5</code> passed 56 focused training/setup tests.</td></tr>
+    <tr><td>Pre-Tyche 2573881</td><td class="passed">Passed</td><td>Final runtime <code>013984672</code> completed <code>0:0</code> and passed 56/56 selected training/setup tests.</td></tr>
     <tr><td>GitHub Actions 31650398312</td><td class="failed">Infrastructure</td><td>Six shards failed on the same flash-attn wheel HTTP/2 <code>refused stream</code> fetch; no #2279 assertion failed.</td></tr>
   </table>
+  <h2>Root cause and solution</h2>
+  <p>GRPO runs current/reference logprob before policy training. The pre-fix
+  <code>no_grad</code>, <code>forward_only</code> pass initialized and reset
+  MCore's one-time offload warmup without a backward graph, freezing an empty
+  layout. This exactly explains the all-rank 0.00-MB summary.</p>
+  <p>The final fix suspends config-controlled initialization during every
+  forward-only phase. If a real training warmup already created the singleton,
+  it also suspends the existing manager and cached chunks, then restores the
+  prior state in <code>finally</code>. VPP configs are fully discovered and
+  deduplicated before mutation. A cached MoE hook may create an empty singleton
+  during the first logprob, but it remains warm with zero cached chunks so the
+  first policy forward/backward can initialize the real layout.</p>
   <h2>Performance results</h2>
-  <p class="pending">No claim-ready OFF/ON result yet. This section will include E2E, generation, logprob, policy training, refit, throughput, memory, and correctness.</p>
+  <p class="invalid">Historical diagnostic only; ON offloaded zero bytes.</p>
+  <table>
+    <tr><th>Metric</th><th>OFF</th><th>ON</th><th>Diagnostic delta</th></tr>
+    <tr><td>Step time</td><td>181.085 s</td><td>179.800 s</td><td>-0.71%</td></tr>
+    <tr><td>E2E throughput/GPU</td><td>2336.735 tok/s</td><td>2354.435 tok/s</td><td>+0.76%</td></tr>
+    <tr><td>Policy throughput/GPU</td><td>5109.585 tok/s</td><td>5133.500 tok/s</td><td>+0.47%</td></tr>
+    <tr><td>Logprob throughput/GPU</td><td>20352.600 tok/s</td><td>20370.155 tok/s</td><td>+0.09%</td></tr>
+    <tr><td>Generation throughput/GPU</td><td>5931.200 tok/s</td><td>6061.670 tok/s</td><td>+2.20%</td></tr>
+  </table>
+  <p>These are means of warm steps 2-3 only. The pair used different node
+  groups, had slight valid-token drift, and recovered from a shared-venv startup
+  race. Across all three steps E2E was approximately 0.17% worse with ON.</p>
+  <h2>Post-fix gate</h2>
+  <p>The launch harness defaults to an ON-only, 3-step Qwen3-30B-A3B run on
+  4 nodes and 16 GB200 GPUs. Its checker requires finite loss and gradient norm
+  through step 3 plus one complete MCore summary with strictly positive
+  <code>moe_act</code> and Total values for all 16 ranks. Passing proves feature
+  activation and stability only.</p>
 </body>
 </html>
