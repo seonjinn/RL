@@ -20,7 +20,7 @@
 </head>
 <body>
   <h1>NeMo 26.06 Policy performance features</h1>
-  <p>Latest update: 2026-08-12 21:24 PDT. Branch:
+  <p>Latest update: 2026-08-12 21:56 PDT. Branch:
     <code>sna/nemo-2606-latest-main-integration-20260812</code>.</p>
 
   <div class="cards">
@@ -46,7 +46,7 @@
     <thead><tr><th>Feature</th><th>NeMo-RL interface</th><th>Dependency-matched comparison</th><th>Runtime evidence</th></tr></thead>
     <tbody>
       <tr><td>CuTeDSL fused GroupedGEMM</td><td class="wrap"><code>model_overrides.use_transformer_engine_op_fuser</code>, interleave 32, <code>NVTE_CUTEDSL_FUSED_GROUPED_MLP</code></td><td>MXFP8 OFF bundle vs ON bundle</td><td class="wait">latest-main Q30/Q235 pending</td></tr>
-      <tr><td>Full-iteration CUDA Graph</td><td class="wrap">fixed worker-local sequence padding, resident storage checks, training/validation stage graphs, graph-safe metrics</td><td>eager PagedStash vs full-iteration graph</td><td class="ok">contract job 2574515: 31 passed</td></tr>
+      <tr><td>Full-iteration CUDA Graph</td><td class="wrap">fixed worker-local sequence padding, resident storage checks, training/validation stage graphs, graph-safe metrics</td><td>eager PagedStash vs full-iteration graph</td><td class="ok">contract jobs 2574515 and 2678843: 31 passed each</td></tr>
       <tr><td>EP A2A overlap</td><td class="wrap">schedule-plan adapter, combined 1F1B, high-priority A2A stream, delayed WGRAD</td><td>same HybridEP settings, overlap triple OFF vs ON</td><td class="wait">Nsight temporal evidence pending</td></tr>
     </tbody>
   </table>
@@ -61,8 +61,15 @@
       <tr><td>Pre-Tyche 2574549</td><td class="bad">FAILED 1:0</td><td>Q30 matched-eager model gate</td><td class="wrap">Model/driver 미실행. 빈 Lustre UV cache를 <code>/root/.cache/uv</code>에 mount하여 image package의 absolute symlink target을 가렸고 Ray head가 <code>urllib3.exceptions</code> import 전에 실패했습니다. Full-CG/CuTeDSL 오류가 아닙니다.</td></tr>
       <tr><td>Pre-Tyche 2574678</td><td class="bad">FAILED 1:0</td><td>cache-free Ray smoke attempt</td><td class="wrap">Cache mask 제거 후 Ray head와 4/4 worker 연결은 성공했습니다. 진단 Python one-liner의 괄호 오류로 driver만 실패해 acceptance에는 사용하지 않습니다.</td></tr>
       <tr><td>Pre-Tyche 2574686</td><td class="ok">COMPLETED 0:0</td><td>cache-free Ray smoke</td><td class="wrap">Ray 2.56.1, requests 2.34.2, urllib3 2.7.0 import; head 첫 시도 성공; 4/4 worker 연결; driver <code>ray status</code> 성공.</td></tr>
-      <tr><td>Pre-Tyche 2574659</td><td class="wait">RUNNING</td><td>nightly refresh</td><td class="wrap">새 immutable 파일로 다시 import 중이며 기존 working image는 보존했습니다.</td></tr>
+      <tr><td>Pre-Tyche 2574659</td><td class="ok">COMPLETED 0:0</td><td>nightly refresh</td><td class="wrap">29,827,043,328-byte immutable image; metadata SHA와 독립 재계산 SHA가 <code>ab3380e5…a069ab</code>로 일치했습니다.</td></tr>
+      <tr><td>Pre-Tyche 2574771</td><td>CANCELLED 0:0</td><td>Q30 gate superseded</td><td class="wrap">할당 전 취소했습니다. 이미 진단된 <code>UV_NO_EDITABLE=1</code> packaging 실패를 반복할 command여서 GPU runtime evidence가 없습니다.</td></tr>
       <tr><td>Lyris 2678498</td><td class="ok">COMPLETED 0:0</td><td>backup nightly staging</td><td class="wrap">Valid SquashFS, 29,827,043,328 bytes, metadata SHA <code>c42c28fe…a95fa06e</code>; stable symlink가 immutable image를 가리킵니다.</td></tr>
+      <tr><td>Lyris 2678843</td><td class="ok">COMPLETED 0:0</td><td>latest feature contracts</td><td class="wrap">Clean source <code>80126e248</code>, CUDA 13.0, four GB200 devices, TE <code>2.15.0+42b84005</code>; selected feature contracts 31 passed.</td></tr>
+      <tr><td>Lyris 2678892</td><td class="bad">FAILED 1:0</td><td>Q30 gate attempt</td><td class="wrap"><code>UV_NO_EDITABLE=1</code>로 만든 wheel이 <code>nemo_rl.algorithms</code> 등 subpackage를 누락했습니다. Ray 이후 model 생성 전에 중단됐고 feature 오류가 아닙니다.</td></tr>
+      <tr><td>Lyris 2678917</td><td class="ok">COMPLETED 0:0</td><td>editable import smoke</td><td class="wrap">동일 source/image에서 editable install 후 <code>nemo_rl.algorithms.grpo</code> import를 확인했습니다.</td></tr>
+      <tr><td>Lyris 2678933</td><td class="bad">FAILED 1:0</td><td>Q30 gate retry</td><td class="wrap">Ray 32/32와 editable import는 성공했습니다. 존재하지 않는 <code>/users/sna/hf</code>를 offline cache로 지정해 tokenizer에서 중단됐습니다.</td></tr>
+      <tr><td>Lyris 2679044</td><td class="ok">COMPLETED 0:0</td><td>Q30 HF preflight</td><td class="wrap"><code>/users/sna/hf_home</code>에서 Q30 tokenizer, hidden size 2048 config, 16/16 weight shards, OpenMathInstruct-2 <code>train_1M</code> 1,000,000 rows를 offline으로 확인했습니다.</td></tr>
+      <tr><td>Lyris 2679062</td><td class="wait">RUNNING</td><td>Q30 matched-eager functional gate</td><td class="wrap">8 nodes × 4 GB200, two 4-node segments. MXFP8 + CuTeDSL ON, Full-CG/A2A OFF. Ray 32/32가 연결됐으며 model/training 초기화 중입니다.</td></tr>
     </tbody>
   </table>
 
