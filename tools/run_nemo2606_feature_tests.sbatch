@@ -10,7 +10,7 @@ set -euo pipefail
 : "${CONTAINER:?Set CONTAINER to an immutable NeMo-RL image}"
 : "${VENV_ROOT:?Set VENV_ROOT to a source-specific Lustre path}"
 
-TEST_EXPR=${TEST_EXPR:-full_cuda_graph or fixed_sequence or ep_a2a or a2a_overlap or delay_wgrad or schedule_plan}
+TEST_EXPR=${TEST_EXPR:-cutedsl or full_cuda_graph or fixed_sequence or ep_a2a or a2a_overlap or delay_wgrad or schedule_plan}
 
 actual_commit=$(git -C "${SOURCE_ROOT}" rev-parse HEAD)
 if [[ "${actual_commit}" != "${EXPECTED_COMMIT}" ]]; then
@@ -27,9 +27,10 @@ if [[ ! -f "${CONTAINER}" || ! -f "${CONTAINER}.metadata.txt" ]]; then
 fi
 
 printf -v test_command \
-    'set -euo pipefail; cd %q; export NRL_IGNORE_VERSION_MISMATCH=1 NRL_FORCE_REBUILD_VENVS=false NEMO_RL_VENV_DIR=%q; uv run --frozen --extra mcore --group test pytest --mcore-only -q tests/unit/models/megatron/test_megatron_setup.py tests/unit/models/megatron/test_train.py tests/unit/models/megatron/test_full_cuda_graph.py tests/unit/models/megatron/test_megatron_data.py tests/unit/models/policy/test_megatron_worker.py -k %q' \
+    'set -euo pipefail; cd %q; export NRL_IGNORE_VERSION_MISMATCH=1 NRL_FORCE_REBUILD_VENVS=false NEMO_RL_VENV_DIR=%q; uv run --frozen --extra mcore --group test python -c %q; uv run --frozen --extra mcore --group test pytest --mcore-only -q tests/test_nemo2606_cutedsl_recipes.py tests/unit/models/megatron/test_megatron_setup.py tests/unit/models/megatron/test_train.py tests/unit/models/megatron/test_full_cuda_graph.py tests/unit/models/megatron/test_megatron_data.py tests/unit/models/policy/test_megatron_worker.py -k %q' \
     "${SOURCE_ROOT}" \
     "${VENV_ROOT}" \
+    'import torch; import nemo_rl; import transformer_engine.pytorch as te; import megatron.core; assert torch.cuda.is_available(); assert torch.cuda.device_count() == 4; print({"cuda": torch.version.cuda, "devices": torch.cuda.device_count(), "nemo_rl": nemo_rl.__file__, "te": te.__version__})' \
     "${TEST_EXPR}"
 
 srun \
