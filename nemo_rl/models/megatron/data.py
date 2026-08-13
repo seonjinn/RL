@@ -86,6 +86,30 @@ class ProcessedMicrobatch:
     routed_experts_cp_sharded: Optional[torch.Tensor] = None
 
 
+def _pad_microbatch_to_fixed_sequence_length(
+    data: BatchedDataDict[Any], fixed_sequence_length: int
+) -> BatchedDataDict[Any]:
+    """Right-pad every sequence-aligned tensor without changing row metadata."""
+    _, sequence_length = get_and_validate_seqlen(data)
+    if sequence_length > fixed_sequence_length:
+        raise ValueError(
+            f"microbatch sequence length {sequence_length} exceeds "
+            f"fixed_sequence_length={fixed_sequence_length}"
+        )
+    if sequence_length == fixed_sequence_length:
+        return data
+
+    for key, value in data.items():
+        if not torch.is_tensor(value) or value.ndim <= 1:
+            continue
+        padded_shape = list(value.shape)
+        padded_shape[1] = fixed_sequence_length
+        padded = value.new_zeros(padded_shape)
+        padded[:, :sequence_length, ...].copy_(value)
+        data[key] = padded
+    return data
+
+
 def make_processed_microbatch_iterator(
     raw_iterator: Iterator[BatchedDataDict[Any]],
     cfg: dict[str, Any],
@@ -97,6 +121,7 @@ def make_processed_microbatch_iterator(
     delegate_pack_to_model: bool = False,
     delegate_mtp_loss_mask_to_model: bool = False,
     model_slices_context_parallel_inputs: bool = False,
+    fixed_sequence_length: Optional[int] = None,
 ) -> Iterator[ProcessedMicrobatch]:
     """Wrap a raw microbatch iterator to yield processed microbatches.
 
@@ -120,6 +145,10 @@ def make_processed_microbatch_iterator(
     for data_dict in raw_iterator:
         # Move to GPU
         data_dict = data_dict.to("cuda")
+        if fixed_sequence_length is not None:
+            data_dict = _pad_microbatch_to_fixed_sequence_length(
+                data_dict, fixed_sequence_length
+            )
 
         # Process the microbatch
         processed_inputs = process_microbatch(
@@ -158,6 +187,7 @@ def get_microbatch_iterator(
     delegate_pack_to_model: bool = False,
     delegate_mtp_loss_mask_to_model: bool = False,
     model_slices_context_parallel_inputs: bool = False,
+    fixed_sequence_length: Optional[int] = None,
 ) -> Tuple[Iterator[ProcessedMicrobatch], int, int, int, int]:
     """Create a processed microbatch iterator from a batch of data.
 
@@ -185,6 +215,19 @@ def get_microbatch_iterator(
     pad_packed_seq_to_multiple_of = 1
 
     _, seq_dim_size = get_and_validate_seqlen(data)
+
+    if fixed_sequence_length is not None:
+        if cfg["sequence_packing"]["enabled"]:
+            raise ValueError(
+                "fixed_sequence_length is incompatible with sequence packing"
+            )
+        if fixed_sequence_length <= 0:
+            raise ValueError("fixed_sequence_length must be positive")
+        if seq_dim_size > fixed_sequence_length:
+            raise ValueError(
+                f"batch sequence length {seq_dim_size} exceeds "
+                f"fixed_sequence_length={fixed_sequence_length}"
+            )
 
     # Auto-detect seq_length_key if not provided
     if seq_length_key is None and cfg["sequence_packing"]["enabled"]:
@@ -224,10 +267,17 @@ def get_microbatch_iterator(
         delegate_pack_to_model=delegate_pack_to_model,
         delegate_mtp_loss_mask_to_model=delegate_mtp_loss_mask_to_model,
         model_slices_context_parallel_inputs=model_slices_context_parallel_inputs,
+        fixed_sequence_length=fixed_sequence_length,
     )
 
     # Compute padded sequence length for pipeline parallelism
-    padded_seq_length = pad_full_seq_to if pad_full_seq_to is not None else seq_dim_size
+    padded_seq_length = (
+        fixed_sequence_length
+        if fixed_sequence_length is not None
+        else pad_full_seq_to
+        if pad_full_seq_to is not None
+        else seq_dim_size
+    )
 
     return (
         processed_iterator,

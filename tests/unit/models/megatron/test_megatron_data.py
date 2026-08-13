@@ -1235,6 +1235,60 @@ class TestGetMicrobatchIterator:
 
     @patch("nemo_rl.models.megatron.data.get_and_validate_seqlen")
     @patch("nemo_rl.models.megatron.data.make_processed_microbatch_iterator")
+    def test_get_microbatch_iterator_reports_fixed_and_natural_lengths(
+        self, mock_make_iterator, mock_get_and_validate_seqlen
+    ):
+        from nemo_rl.models.megatron.data import get_microbatch_iterator
+
+        mock_get_and_validate_seqlen.return_value = (1, 5)
+        mock_make_iterator.return_value = iter([])
+        mock_data = MagicMock()
+        mock_data.size = 4
+        mock_data.make_microbatch_iterator.return_value = iter([])
+        cfg = {
+            "dynamic_batching": {"enabled": False},
+            "sequence_packing": {"enabled": False},
+        }
+
+        _, _, _, natural_length, padded_length = get_microbatch_iterator(
+            data=mock_data,
+            cfg=cfg,
+            mbs=1,
+            straggler_timer=MagicMock(),
+            fixed_sequence_length=8,
+        )
+
+        assert natural_length == 5
+        assert padded_length == 8
+        assert mock_make_iterator.call_args.kwargs["fixed_sequence_length"] == 8
+
+    def test_get_microbatch_iterator_rejects_fixed_length_with_packing(self):
+        from nemo_rl.models.megatron.data import get_microbatch_iterator
+
+        data = BatchedDataDict(
+            {
+                "input_ids": torch.ones(1, 4, dtype=torch.long),
+                "input_lengths": torch.tensor([4]),
+            }
+        )
+        cfg = {
+            "dynamic_batching": {"enabled": False},
+            "sequence_packing": {"enabled": True},
+            "megatron_cfg": {},
+            "make_sequence_length_divisible_by": 1,
+        }
+
+        with pytest.raises(ValueError, match="fixed_sequence_length.*packing"):
+            get_microbatch_iterator(
+                data=data,
+                cfg=cfg,
+                mbs=1,
+                straggler_timer=MagicMock(),
+                fixed_sequence_length=8,
+            )
+
+    @patch("nemo_rl.models.megatron.data.get_and_validate_seqlen")
+    @patch("nemo_rl.models.megatron.data.make_processed_microbatch_iterator")
     def test_get_microbatch_iterator_auto_detects_seq_length_key(
         self, mock_make_iterator, mock_get_and_validate_seqlen
     ):
@@ -1384,6 +1438,44 @@ class TestMakeProcessedMicrobatchIterator:
         assert call_kwargs["pad_individual_seqs_to_multiple_of"] == 8
         assert call_kwargs["pad_packed_seq_to_multiple_of"] == 16
         assert call_kwargs["pad_full_seq_to"] == 1024
+
+    def test_fixed_sequence_padding_preserves_rows_and_pads_aligned_tensors(self):
+        from nemo_rl.models.megatron.data import (
+            _pad_microbatch_to_fixed_sequence_length,
+        )
+
+        data = BatchedDataDict(
+            {
+                "input_ids": torch.tensor([[1, 2, 3, 0, 0]]),
+                "token_mask": torch.tensor([[1, 1, 1, 0, 0]]),
+                "prev_logprobs": torch.arange(5).reshape(1, 5).float(),
+                "routed_experts": torch.ones(1, 5, 2, 2, dtype=torch.long),
+                "input_lengths": torch.tensor([3]),
+                "sample_mask": torch.tensor([1]),
+            }
+        )
+
+        padded = _pad_microbatch_to_fixed_sequence_length(data, 8)
+
+        assert padded is data
+        assert padded["input_ids"].shape == (1, 8)
+        assert padded["routed_experts"].shape == (1, 8, 2, 2)
+        assert torch.equal(padded["input_ids"][:, :5], torch.tensor([[1, 2, 3, 0, 0]]))
+        assert torch.count_nonzero(padded["input_ids"][:, 5:]) == 0
+        assert torch.count_nonzero(padded["prev_logprobs"][:, 5:]) == 0
+        assert torch.count_nonzero(padded["routed_experts"][:, 5:]) == 0
+        assert torch.equal(padded["input_lengths"], torch.tensor([3]))
+        assert torch.equal(padded["sample_mask"], torch.tensor([1]))
+
+    def test_fixed_sequence_padding_rejects_oversized_input(self):
+        from nemo_rl.models.megatron.data import (
+            _pad_microbatch_to_fixed_sequence_length,
+        )
+
+        data = BatchedDataDict({"input_ids": torch.ones(1, 9)})
+
+        with pytest.raises(ValueError, match="exceeds fixed_sequence_length=8"):
+            _pad_microbatch_to_fixed_sequence_length(data, 8)
 
 
 PACK_SEQUENCES_TEST_ACTOR_FQN = (
