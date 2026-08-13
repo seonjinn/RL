@@ -1,0 +1,15 @@
+defaults: ./grpo-qwen3-30ba3b-4n4g-megatron-mxfp8-cutedsl.yaml
+checkpointing:
+  enabled: false
+  checkpoint_dir: results/grpo-qwen3-30ba3b-4n4g-megatron-mxfp8-cutedsl-a2a-matched
+policy:
+  megatron_cfg:
+    activation_checkpointing: false
+    defer_fp32_logits: false
+    overlap_moe_expert_parallel_comm: false
+    high_priority_a2a_comm_stream: false
+    delay_wgrad_compute: false
+logger:
+  log_dir: logs/grpo-qwen3-30ba3b-4n4g-megatron-mxfp8-cutedsl-a2a-matched
+  wandb:
+    name: grpo-qwen3-30ba3b-4n4g-megatron-mxfp8-cutedsl-a2a-matched
