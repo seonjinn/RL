@@ -17,7 +17,8 @@
 </head>
 <body>
   <h1>NeMo-RL PR #2279: fine-grained activation CPU offload</h1>
-  <p>Exact source: <code>2f39df66d6fd0a0b1b53cf472eb1599c6c05dfce</code>.</p>
+  <p>Exact PR runtime: <code>2f39df66d6fd0a0b1b53cf472eb1599c6c05dfce</code>.<br>
+  Exact evidence source: <code>42eb7c0f742ebb3006a880f8fab807bff29d81fe</code>.</p>
   <h2>Experiment design</h2>
   <table>
     <tr><th>Factor</th><th>OFF</th><th>ON</th></tr>
@@ -33,6 +34,11 @@
     <tr><th>Cluster/job</th><th>Classification</th><th>Root cause and action</th></tr>
     <tr><td>Pre-Tyche 2572885; Lyris 2676543</td><td class="failed">Harness</td><td><code>sbatch --wrap</code> uses <code>/bin/sh</code>; replaced Bash-only pipefail with POSIX <code>set -eu</code>.</td></tr>
     <tr><td>Lyris 2676553</td><td class="failed">Image</td><td>2026-07-26 nightly has an older uv without Python 3.13.14; stage a fresh immutable nightly.</td></tr>
+    <tr><td>Pre-Tyche 2572912</td><td class="failed">Setup timeout</td><td>TE compiled seven CUDA architectures and exceeded 30 minutes before tests; reuse its cache with a one-hour limit.</td></tr>
+    <tr><td>Lyris 2676585</td><td>Passed</td><td>Fresh 28 GB nightly staged; SHA256 <code>aa7621512376f5562a950708625f0db011f2a240d4fc1a612083489df4d8e8ab</code>.</td></tr>
+    <tr><td>Lyris 2676732</td><td class="failed">Smoke harness</td><td>Base image does not include the optional mcore-extra TE Python package. TE is built in the source-pinned venv; the base-image assertion was narrowed.</td></tr>
+    <tr><td>Lyris 2676760</td><td>Passed</td><td>uv 0.11.28, torch 2.11.0+cu130, CUDA 13.0, Ray 2.56.1, and 4 GB200 GPUs verified.</td></tr>
+    <tr><td>GitHub Actions 31650398312</td><td class="failed">Infrastructure</td><td>Six shards failed on the same flash-attn wheel HTTP/2 <code>refused stream</code> fetch; no #2279 assertion failed.</td></tr>
   </table>
   <h2>Performance results</h2>
   <p class="pending">No claim-ready OFF/ON result yet. This section will include E2E, generation, logprob, policy training, refit, throughput, memory, and correctness.</p>
