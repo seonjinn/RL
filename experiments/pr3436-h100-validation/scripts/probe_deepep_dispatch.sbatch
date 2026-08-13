@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=8
 #SBATCH --gpus-per-node=8
 #SBATCH --time=00:20:00
@@ -26,7 +26,7 @@ export MASTER_ADDR
 MASTER_ADDR=$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | sed -n '1p')
 export MASTER_PORT=$((6000 + SLURM_JOB_ID % 1500))
 export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
-export HYBRID_EP_MULTINODE=0
+export HYBRID_EP_MULTINODE=1
 export TORCH_CUDA_ARCH_LIST=9.0
 export USE_MNNVL=0
 export NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN=8
