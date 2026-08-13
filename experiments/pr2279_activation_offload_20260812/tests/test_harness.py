@@ -55,6 +55,8 @@ class TestActivationOffloadHarness(unittest.TestCase):
         self.assertIn("NRL_FORCE_REBUILD_VENVS=false", submitter)
         self.assertIn("NVTE_CUDA_ARCHS=100", submitter)
         self.assertIn("pr2279-perf-${EXPECTED_RUNTIME_COMMIT:0:10}", submitter)
+        self.assertIn('local venv_root="${VENV_ROOT}-${arm}"', submitter)
+        self.assertIn('"${venv_root}"', submitter)
         self.assertIn("sbatch --test-only", submitter)
         self.assertIn("sbatch --parsable", submitter)
         self.assertLess(
