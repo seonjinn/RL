@@ -1,0 +1,44 @@
+defaults: ./grpo-qwen3-30ba3b-4n4g-megatron-mxfp8-cutedsl-a2a-matched.yaml
+grpo:
+  skip_reference_policy_logprobs_calculation: true
+  val_period: 0
+  val_at_start: false
+  val_at_end: false
+loss_fn:
+  reference_policy_kl_penalty: 0.0
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-30ba3b-8n4g-megatron-mxfp8-cutedsl-full-cg-matched
+policy:
+  dynamic_batching:
+    enabled: false
+  sequence_packing:
+    enabled: false
+    fuse_loss: false
+  megatron_cfg:
+    cuda_graph_impl: none
+    cuda_graph_modules: []
+    cuda_graph_warmup_steps: 3
+    cuda_graph_use_single_mempool: true
+    moe_pad_experts_for_cuda_graph_inference: true
+    moe_expert_rank_capacity_factor: 1.5
+    moe_paged_stash: true
+    moe_paged_stash_page_size: 64
+    moe_paged_stash_buffer_size_factor_cuda: 1.2
+    moe_paged_stash_buffer_size_factor_cpu: 1.0
+    offload_modules: []
+  generation:
+    vllm_cfg:
+      async_engine: false
+    colocated:
+      enabled: false
+      resources:
+        num_nodes: 4
+        gpus_per_node: 4
+logger:
+  log_dir: logs/grpo-qwen3-30ba3b-8n4g-megatron-mxfp8-cutedsl-full-cg-matched
+  wandb:
+    name: grpo-qwen3-30ba3b-8n4g-megatron-mxfp8-cutedsl-full-cg-matched
+cluster:
+  num_nodes: 8
+  gpus_per_node: 4
+  segment_size: 4

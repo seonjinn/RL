@@ -6,6 +6,10 @@ policy:
   megatron_cfg:
     activation_checkpointing: false
     defer_fp32_logits: false
+    moe_token_dispatcher_type: flex
+    moe_flex_dispatcher_backend: hybridep
+    moe_hybridep_num_sms: 32
+    moe_hybridep_num_sms_preprocessing: 32
     overlap_moe_expert_parallel_comm: false
     high_priority_a2a_comm_stream: false
     delay_wgrad_compute: false

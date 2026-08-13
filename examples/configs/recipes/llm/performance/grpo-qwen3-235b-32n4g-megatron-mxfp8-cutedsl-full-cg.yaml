@@ -1,0 +1,10 @@
+defaults: ./grpo-qwen3-235b-32n4g-megatron-mxfp8-cutedsl-full-cg-matched.yaml
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-235b-32n4g-megatron-mxfp8-cutedsl-full-cg
+policy:
+  megatron_cfg:
+    cuda_graph_impl: full_iteration
+logger:
+  log_dir: logs/grpo-qwen3-235b-32n4g-megatron-mxfp8-cutedsl-full-cg
+  wandb:
+    name: grpo-qwen3-235b-32n4g-megatron-mxfp8-cutedsl-full-cg

@@ -1,0 +1,12 @@
+defaults: ./grpo-qwen3-235b-32n4g-megatron-mxfp8-cutedsl-full-cg.yaml
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-235b-32n4g-megatron-mxfp8-cutedsl-full-cg-a2a
+policy:
+  megatron_cfg:
+    overlap_moe_expert_parallel_comm: true
+    high_priority_a2a_comm_stream: true
+    delay_wgrad_compute: true
+logger:
+  log_dir: logs/grpo-qwen3-235b-32n4g-megatron-mxfp8-cutedsl-full-cg-a2a
+  wandb:
+    name: grpo-qwen3-235b-32n4g-megatron-mxfp8-cutedsl-full-cg-a2a
