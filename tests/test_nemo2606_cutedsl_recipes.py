@@ -113,6 +113,7 @@ def test_a2a_matched_baseline_has_compatible_eager_settings(
     assert config["policy"]["megatron_cfg"] == {
         "activation_checkpointing": False,
         "defer_fp32_logits": False,
+        "env_vars": {"CUDA_DEVICE_MAX_CONNECTIONS": "32"},
         "overlap_moe_expert_parallel_comm": False,
         "high_priority_a2a_comm_stream": False,
         "delay_wgrad_compute": False,
