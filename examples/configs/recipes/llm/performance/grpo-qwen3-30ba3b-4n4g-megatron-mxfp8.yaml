@@ -1,0 +1,21 @@
+defaults: ./grpo-qwen3-30ba3b-4n4g.yaml
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-30ba3b-4n4g-megatron-mxfp8
+policy:
+  megatron_cfg:
+    moe_router_dtype: fp32
+    cuda_graph_impl: none
+    fp8_cfg:
+      enabled: true
+      fp8: e4m3
+      fp8_recipe: mxfp8
+      fp8_param: false
+    model_overrides:
+      use_transformer_engine_op_fuser: false
+      moe_mlp_glu_interleave_size: null
+    env_vars:
+      NVTE_CUTEDSL_FUSED_GROUPED_MLP: "0"
+logger:
+  log_dir: logs/grpo-qwen3-30ba3b-4n4g-megatron-mxfp8
+  wandb:
+    name: grpo-qwen3-30ba3b-4n4g-megatron-mxfp8

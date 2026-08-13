@@ -1,0 +1,14 @@
+defaults: ./grpo-qwen3-30ba3b-4n4g-megatron-mxfp8.yaml
+checkpointing:
+  checkpoint_dir: results/grpo-qwen3-30ba3b-4n4g-megatron-mxfp8-cutedsl
+policy:
+  megatron_cfg:
+    model_overrides:
+      use_transformer_engine_op_fuser: true
+      moe_mlp_glu_interleave_size: 32
+    env_vars:
+      NVTE_CUTEDSL_FUSED_GROUPED_MLP: "1"
+logger:
+  log_dir: logs/grpo-qwen3-30ba3b-4n4g-megatron-mxfp8-cutedsl
+  wandb:
+    name: grpo-qwen3-30ba3b-4n4g-megatron-mxfp8-cutedsl
