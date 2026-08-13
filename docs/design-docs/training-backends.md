@@ -77,8 +77,10 @@ policy:
     offload_modules: ["core_attn", "attn_proj"]
 ```
 
-Pinned MCore requires the `transformer_engine` CUDA-graph implementation for
-this dense module pair; `local` CUDA graphs support only partial MoE offload.
+Current NeMo RL supports this dense module pair with the `transformer_engine`
+CUDA-graph implementation. Pinned MCore also permits `full_iteration`, but
+NeMo RL does not yet wire MCore's full-iteration capture and replay lifecycle.
+`local` CUDA graphs support only partial MoE offload.
 
 Supported module names are `attn_norm`, `qkv_linear`, `core_attn`,
 `attn_proj`, `mlp_norm`, `expert_fc1`, `moe_act`, and `fused_group_mlp`.
