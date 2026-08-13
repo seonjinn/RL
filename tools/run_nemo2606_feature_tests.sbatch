@@ -11,6 +11,7 @@ set -euo pipefail
 : "${VENV_ROOT:?Set VENV_ROOT to a source-specific Lustre path}"
 
 TEST_EXPR=${TEST_EXPR:-cutedsl or full_cuda_graph or fixed_sequence or ep_a2a or a2a_overlap or delay_wgrad or schedule_plan}
+CONTRACT_RESULT_ROOT=${CONTRACT_RESULT_ROOT:-${VENV_ROOT}/contract-results/${SLURM_JOB_ID:-manual}}
 
 actual_commit=$(git -C "${SOURCE_ROOT}" rev-parse HEAD)
 if [[ "${actual_commit}" != "${EXPECTED_COMMIT}" ]]; then
@@ -27,8 +28,9 @@ if [[ ! -f "${CONTAINER}" || ! -f "${CONTAINER}.metadata.txt" ]]; then
 fi
 
 printf -v test_command \
-    'set -euo pipefail; cd %q; export NRL_IGNORE_VERSION_MISMATCH=1 NRL_FORCE_REBUILD_VENVS=false NEMO_RL_VENV_DIR=%q; uv run --frozen --extra mcore --group test python -c %q; uv run --frozen --extra mcore --group test pytest --mcore-only -q tests/test_nemo2606_cutedsl_recipes.py tests/unit/models/megatron/test_megatron_setup.py tests/unit/models/megatron/test_train.py tests/unit/models/megatron/test_full_cuda_graph.py tests/unit/models/megatron/test_megatron_data.py tests/unit/models/policy/test_megatron_worker.py -k %q' \
+    'set -euo pipefail; cd %q; result_root=%q; cleanup_contract_results() { mkdir -p "${result_root}"; if [[ -f tests/unit/unit_results.json ]]; then mv -f tests/unit/unit_results.json "${result_root}/"; fi; if [[ -d tests/unit/unit_results ]]; then mv tests/unit/unit_results "${result_root}/"; fi; }; trap cleanup_contract_results EXIT; export NRL_IGNORE_VERSION_MISMATCH=1 NRL_FORCE_REBUILD_VENVS=false NEMO_RL_VENV_DIR=%q; uv run --frozen --extra mcore --group test python -c %q; uv run --frozen --extra mcore --group test pytest --mcore-only -q tests/test_nemo2606_cutedsl_recipes.py tests/unit/models/megatron/test_megatron_setup.py tests/unit/models/megatron/test_train.py tests/unit/models/megatron/test_full_cuda_graph.py tests/unit/models/megatron/test_megatron_data.py tests/unit/models/policy/test_megatron_worker.py -k %q' \
     "${SOURCE_ROOT}" \
+    "${CONTRACT_RESULT_ROOT}" \
     "${VENV_ROOT}" \
     'from importlib.metadata import version; import torch; import nemo_rl; import transformer_engine.pytorch; import megatron.core; assert torch.cuda.is_available(); assert torch.cuda.device_count() == 4; print({"cuda": torch.version.cuda, "devices": torch.cuda.device_count(), "nemo_rl": nemo_rl.__file__, "te": version("transformer-engine")})' \
     "${TEST_EXPR}"

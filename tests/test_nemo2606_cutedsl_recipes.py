@@ -29,11 +29,13 @@ def _load_raw(name: str) -> dict[str, Any]:
     return value
 
 
-def test_feature_contract_runner_reads_transformer_engine_distribution_version() -> None:
+def test_feature_contract_runner_smoke_and_cleanup() -> None:
     runner = (PROJECT_ROOT / "tools/run_nemo2606_feature_tests.sbatch").read_text()
 
     assert "te.__version__" not in runner
     assert 'version("transformer-engine")' in runner
+    assert "trap cleanup_contract_results EXIT" in runner
+    assert "CONTRACT_RESULT_ROOT" in runner
 
 
 @pytest.mark.parametrize(
