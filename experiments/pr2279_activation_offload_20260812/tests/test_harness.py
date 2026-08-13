@@ -142,6 +142,64 @@ class TestActivationOffloadHarness(unittest.TestCase):
         )
         self.assertEqual(normalized_baseline, normalized_treatment)
 
+    def test_pair_analyzer_excludes_warmup_and_reports_deltas(self) -> None:
+        def metric(values: list[float]) -> dict[str, float]:
+            return {str(step): value for step, value in enumerate(values, start=1)}
+
+        off = {
+            "timing/train/total_step_time": metric([100.0, 90.0, 80.0, 70.0]),
+            "performance/tokens_per_sec_per_gpu": metric(
+                [1000.0, 1100.0, 1200.0, 1300.0]
+            ),
+            "train/total_num_tokens": metric([100.0, 100.0, 100.0, 100.0]),
+            "ray/node.0.gpu.0.mem_gb": metric([10.0, 11.0, 12.0, 13.0]),
+        }
+        on = {
+            "timing/train/total_step_time": metric([100.0, 80.0, 70.0, 60.0]),
+            "performance/tokens_per_sec_per_gpu": metric(
+                [1000.0, 1200.0, 1300.0, 1400.0]
+            ),
+            "train/total_num_tokens": metric([100.0, 100.0, 100.0, 101.0]),
+            "ray/node.0.gpu.0.mem_gb": metric([10.0, 10.0, 11.0, 12.0]),
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            off_path = tmp / "off.json"
+            on_path = tmp / "on.json"
+            output_path = tmp / "comparison.json"
+            off_path.write_text(json.dumps(off))
+            on_path.write_text(json.dumps(on))
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/analyze_pair.py"),
+                    "--off",
+                    str(off_path),
+                    "--on",
+                    str(on_path),
+                    "--warmup-steps",
+                    "2",
+                    "--output",
+                    str(output_path),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            comparison = json.loads(output_path.read_text())
+
+        step_time = comparison["metrics"]["timing/train/total_step_time"]
+        self.assertEqual(step_time["steps"], [3, 4])
+        self.assertEqual(step_time["off_mean"], 75.0)
+        self.assertEqual(step_time["on_mean"], 65.0)
+        self.assertAlmostEqual(step_time["on_vs_off_percent"], -13.3333333333)
+        self.assertEqual(comparison["memory"]["off_peak_gpu_mem_gb"], 13.0)
+        self.assertEqual(comparison["memory"]["on_peak_gpu_mem_gb"], 12.0)
+        self.assertAlmostEqual(comparison["workload"]["token_drift_percent"], 0.5)
+
     def test_stage_script_is_precluster_compatible(self) -> None:
         stage = (ROOT / "scripts/stage_enroot_image.sbatch").read_text()
 
