@@ -823,6 +823,13 @@ class Policy(ColocatablePolicyInterface, GenerationInterface):
             aggregated_results["mtp_metrics"] = results[0]["mtp_metrics"]
         if "draft_grad_norm" in results[0]:
             aggregated_results["draft_grad_norm"] = results[0]["draft_grad_norm"]
+        aggregated_results.update(
+            {
+                key: value
+                for key, value in results[0].items()
+                if key.startswith("full_cuda_graph_")
+            }
+        )
 
         if self.flops_tracker is not None:
             aggregated_results["total_flops"] = self.flops_tracker.total_flops
