@@ -103,7 +103,7 @@ def test_quantize_mxfp8_weight_restores_grouped_expert_shape(fp8_module, monkeyp
         rows = tensor.numel() // tensor.shape[-1]
         return (
             torch.zeros(rows, tensor.shape[-1], dtype=torch.float8_e4m3fn),
-            torch.zeros(rows * tensor.shape[-1] // 32, dtype=torch.uint8),
+            torch.tensor([0, 2, 0, 127, 255, 5], dtype=torch.uint8),
         )
 
     monkeypatch.setattr(mxfp8_utils, "mxfp8_e4m3_quantize", flattened_quantize)
@@ -112,7 +112,9 @@ def test_quantize_mxfp8_weight_restores_grouped_expert_shape(fp8_module, monkeyp
 
     assert value.shape == weight.shape
     assert scale.shape == (2, 3, 1)
-    assert torch.all(scale == 1)
+    assert torch.equal(
+        scale.flatten(), torch.tensor([1, 2, 1, 127, 255, 5], dtype=torch.uint8)
+    )
 
 
 def test_init_fp8_passes_modelopt_ignore_patterns_without_hf_expansion(
