@@ -910,9 +910,7 @@ def _apply_moe_config(model_cfg: Any, config: PolicyConfig) -> None:
             "high_priority_a2a_comm_stream"
         ]
     if "delay_wgrad_compute" in config["megatron_cfg"]:
-        model_cfg.delay_wgrad_compute = config["megatron_cfg"][
-            "delay_wgrad_compute"
-        ]
+        model_cfg.delay_wgrad_compute = config["megatron_cfg"]["delay_wgrad_compute"]
 
     # HybridEP settings for MoE expert parallelism
     # See: https://github.com/deepseek-ai/DeepEP/tree/hybrid-ep
@@ -926,6 +924,10 @@ def _apply_moe_config(model_cfg: Any, config: PolicyConfig) -> None:
             model_cfg.moe_flex_dispatcher_num_sms = num_sms
         else:
             model_cfg.moe_hybridep_num_sms = num_sms
+    if "moe_hybridep_num_sms_preprocessing" in config["megatron_cfg"]:
+        model_cfg.moe_hybridep_num_sms_preprocessing = config["megatron_cfg"][
+            "moe_hybridep_num_sms_preprocessing"
+        ]
 
     # HybridEP environment variables
     # These are required by DeepEP's hybrid-ep branch for NVLink domain configuration.

@@ -479,6 +479,7 @@ def test_full_cuda_graph_current_logprob_uses_fixed_validation_graph_and_crops(
     worker._full_cuda_graph_enabled = True
     worker._full_cuda_graph_phase = "policy_logprob"
     worker._full_cuda_graph_schedule = object()
+    worker._policy_schedule = worker._full_cuda_graph_schedule
     worker._router_replay_enabled = False
     worker.model = _FakeTrainableModel()
     worker.timer = SimpleNamespace(start=lambda _name: None, stop=lambda _name: None)

@@ -421,6 +421,7 @@ def megatron_forward_backward(
     use_router_replay: bool = False,
     router_replay_train: bool = False,
     forward_backward_func: Optional[Callable[..., Any]] = None,
+    full_cuda_graph: bool = False,
 ) -> Any:
     """Execute forward and backward passes using Megatron's utilities.
 
@@ -449,7 +450,6 @@ def megatron_forward_backward(
     Returns:
         Results from the forward/backward execution
     """
-    full_cuda_graph = forward_backward_func is not None
     if full_cuda_graph:
         if not forward_only and (
             global_valid_seqs is None or global_valid_toks is None

@@ -71,6 +71,7 @@ from nemo_rl.models.megatron.full_cuda_graph import (
     FullCudaGraphStorageSignature,
     build_full_cuda_graph_schedule,
     build_full_cuda_graph_stage_evidence_envelope_consensus,
+    build_paged_stash_schedule,
     materialize_full_cuda_graph_metrics,
     require_supported_full_cuda_graph_operation,
     validate_full_cuda_graph_policy_config,
@@ -432,6 +433,7 @@ class MegatronPolicyWorkerImpl(
             config["megatron_cfg"].get("cuda_graph_impl") == "full_iteration"
         )
         self._full_cuda_graph_schedule: Optional[Callable[..., Any]] = None
+        self._policy_schedule: Optional[Callable[..., Any]] = None
         self._full_cuda_graph_wrapper: Any = None
         self._full_cuda_graph_phase = "training"
         self._full_cuda_graph_storage_signature: Optional[
@@ -674,6 +676,18 @@ class MegatronPolicyWorkerImpl(
                 model=self.model,
                 optimizer=self.optimizer,
                 copy_main_params=copy_main_params,
+            )
+            self._policy_schedule = self._full_cuda_graph_schedule
+        elif self._get_model_config().moe_expert_rank_capacity_factor is not None:
+            self._policy_schedule = build_paged_stash_schedule(
+                raw_schedule=get_forward_backward_func(),
+                model_config=self._get_model_config(),
+                model=self.model,
+                optimizer=self.optimizer,
+                copy_main_params=bool(
+                    self.megatron_cfg.optimizer.reuse_grad_buf_for_mxfp8_param_ag
+                    and self.megatron_cfg.ddp.overlap_param_gather
+                ),
             )
 
         # vars used for refit
@@ -1053,11 +1067,8 @@ class MegatronPolicyWorkerImpl(
                             ),
                             use_router_replay=use_router_replay,
                             router_replay_train=not eval_mode,
-                            forward_backward_func=(
-                                self._full_cuda_graph_schedule
-                                if full_cuda_graph_enabled
-                                else None
-                            ),
+                            forward_backward_func=self._policy_schedule,
+                            full_cuda_graph=full_cuda_graph_enabled,
                         )
                         if full_cuda_graph_enabled:
                             losses_reduced = materialize_full_cuda_graph_metrics(
@@ -1903,9 +1914,8 @@ class MegatronPolicyWorkerImpl(
                 use_fused_linear_logprobs=use_fused_linear_logprobs,
                 use_router_replay=use_router_replay,
                 router_replay_train=False,
-                forward_backward_func=(
-                    self._full_cuda_graph_schedule if full_cuda_graph_enabled else None
-                ),
+                forward_backward_func=self._policy_schedule,
+                full_cuda_graph=full_cuda_graph_enabled,
             )
 
         if full_cuda_graph_enabled:

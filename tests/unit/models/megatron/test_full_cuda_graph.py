@@ -169,6 +169,52 @@ def test_full_cuda_graph_policy_config_reads_cutedsl_from_model_overrides():
     validate_full_cuda_graph_policy_config(config, init_optimizer=True)
 
 
+def test_dependency_matched_eager_schedule_uses_paged_stash_without_graph():
+    from nemo_rl.models.megatron.full_cuda_graph import build_paged_stash_schedule
+
+    observed = {}
+
+    class FakePagedStashRunner:
+        def __init__(
+            self,
+            model_config,
+            copy_main_params,
+            model,
+            optimizer,
+            forward_backward_func,
+        ):
+            observed.update(
+                model_config=model_config,
+                copy_main_params=copy_main_params,
+                model=model,
+                optimizer=optimizer,
+                forward_backward_func=forward_backward_func,
+            )
+
+    raw_schedule = object()
+    model = object()
+    optimizer = object()
+    model_config = SimpleNamespace(moe_expert_rank_capacity_factor=1.5)
+
+    schedule = build_paged_stash_schedule(
+        raw_schedule=raw_schedule,
+        model_config=model_config,
+        model=model,
+        optimizer=optimizer,
+        copy_main_params=True,
+        paged_stash_cls=FakePagedStashRunner,
+    )
+
+    assert isinstance(schedule, FakePagedStashRunner)
+    assert observed == {
+        "model_config": model_config,
+        "copy_main_params": True,
+        "model": [model],
+        "optimizer": optimizer,
+        "forward_backward_func": raw_schedule,
+    }
+
+
 @pytest.mark.parametrize(
     ("mutation", "match"),
     [

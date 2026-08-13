@@ -430,6 +430,7 @@ class MegatronConfig(TypedDict):
     # See: https://github.com/deepseek-ai/DeepEP/tree/hybrid-ep
     moe_flex_dispatcher_backend: NotRequired[str]
     moe_hybridep_num_sms: NotRequired[int]
+    moe_hybridep_num_sms_preprocessing: NotRequired[int]
     # Number of HybridEP ranks per NVLink domain (default: min(expert_model_parallel_size, 64))
     hybridep_num_ranks_per_nvlink_domain: NotRequired[int]
     # Enable multi-node NVLink support (default: expert_model_parallel_size > 4)

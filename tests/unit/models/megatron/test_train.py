@@ -875,6 +875,7 @@ class TestMegatronForwardBackward:
             global_valid_seqs=torch.tensor(1.0),
             global_valid_toks=torch.tensor(2.0),
             forward_backward_func=graph_schedule,
+            full_cuda_graph=True,
         )
 
         mock_get_fb.assert_not_called()
@@ -929,6 +930,7 @@ class TestMegatronForwardBackward:
             ),
             forward_only=True,
             forward_backward_func=graph_schedule,
+            full_cuda_graph=True,
         )
 
         call_kwargs = graph_schedule.call_args.kwargs
@@ -1011,6 +1013,7 @@ class TestMegatronForwardBackward:
             global_valid_seqs=torch.tensor(1.0),
             global_valid_toks=torch.tensor(2.0),
             forward_backward_func=fake_raw_schedule,
+            full_cuda_graph=True,
         )
 
         static_microbatch = observed["microbatch"]

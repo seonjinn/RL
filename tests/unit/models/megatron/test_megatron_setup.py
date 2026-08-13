@@ -782,6 +782,7 @@ class TestApplyMoeConfig:
             ("moe_paged_stash_page_size", 128),
             ("moe_paged_stash_buffer_size_factor_cuda", 1.25),
             ("moe_paged_stash_buffer_size_factor_cpu", 0.5),
+            ("moe_hybridep_num_sms_preprocessing", 32),
         ],
     )
     def test_full_cuda_graph_moe_field_is_applied(

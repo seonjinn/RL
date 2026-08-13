@@ -1699,3 +1699,29 @@ def build_full_cuda_graph_schedule(
         )
         schedule = _PagedStashValidationStateAdapter(paged_stash_runner)
     return schedule, graph
+
+
+def build_paged_stash_schedule(
+    *,
+    raw_schedule: Callable[..., Any],
+    model_config: Any,
+    model: Any,
+    optimizer: Any,
+    copy_main_params: bool,
+    paged_stash_cls: Optional[type] = None,
+) -> Callable[..., Any]:
+    """Wrap eager execution in MCore's static-capacity overflow fallback."""
+    if model_config.moe_expert_rank_capacity_factor is None:
+        return raw_schedule
+    if paged_stash_cls is None:
+        from megatron.core.transformer.moe.paged_stash import PagedStashRunner
+
+        paged_stash_cls = PagedStashRunner
+    model_chunks = model if isinstance(model, list) else [model]
+    return paged_stash_cls(
+        model_config,
+        copy_main_params,
+        model_chunks,
+        optimizer,
+        raw_schedule,
+    )
