@@ -147,6 +147,7 @@ def test_full_cuda_graph_has_dependency_matched_eager_baseline(
         f"./grpo-{base_model}-megatron-mxfp8-cutedsl-a2a-matched.yaml"
     )
     assert config["grpo"]["skip_reference_policy_logprobs_calculation"] is True
+    assert config["grpo"]["seq_logprob_error_threshold"] == 1.0e30
     assert config["loss_fn"]["reference_policy_kl_penalty"] == 0.0
     assert config["policy"]["dynamic_batching"]["enabled"] is False
     assert config["policy"]["sequence_packing"] == {

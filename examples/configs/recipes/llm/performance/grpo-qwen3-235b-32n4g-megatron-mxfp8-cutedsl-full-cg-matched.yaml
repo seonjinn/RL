@@ -1,6 +1,7 @@
 defaults: ./grpo-qwen3-235b-16n4g-megatron-mxfp8-cutedsl-a2a-matched.yaml
 grpo:
   skip_reference_policy_logprobs_calculation: true
+  seq_logprob_error_threshold: 1.0e+30
   val_period: 0
   val_at_start: false
   val_at_end: false
