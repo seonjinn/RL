@@ -54,7 +54,7 @@ class TestActivationOffloadHarness(unittest.TestCase):
         self.assertIn("Evidence branch changes NeMo-RL runtime files", submitter)
         self.assertIn("NRL_FORCE_REBUILD_VENVS=false", submitter)
         self.assertIn("NVTE_CUDA_ARCHS=100", submitter)
-        self.assertIn("pr2279-perf-${EXPECTED_SOURCE_COMMIT:0:10}", submitter)
+        self.assertIn("pr2279-perf-${EXPECTED_RUNTIME_COMMIT:0:10}", submitter)
         self.assertIn("sbatch --test-only", submitter)
         self.assertIn("sbatch --parsable", submitter)
         self.assertLess(

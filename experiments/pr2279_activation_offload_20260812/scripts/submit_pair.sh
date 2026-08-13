@@ -19,7 +19,7 @@ DRY_RUN=${DRY_RUN:-0}
 ARM_FILTER=${ARM_FILTER:-}
 RUN_LABEL=${RUN_LABEL:-$(date -u +%Y%m%dT%H%M%SZ)}
 EXPERIMENT_ROOT="${ROOT}/experiments/pr2279_activation_offload_20260812"
-VENV_ROOT="/lustre/fsw/coreai_dlalgo_llm/users/sna/venvs/pr2279-perf-${EXPECTED_SOURCE_COMMIT:0:10}"
+VENV_ROOT="/lustre/fsw/coreai_dlalgo_llm/users/sna/venvs/pr2279-perf-${EXPECTED_RUNTIME_COMMIT:0:10}"
 
 git -C "${ROOT}" pull --ff-only "${SOURCE_REMOTE}" "${SOURCE_BRANCH}"
 git -C "${ROOT}" submodule update --init --recursive
