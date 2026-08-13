@@ -64,6 +64,7 @@ runtime, and rejects runtime-file changes outside this experiment directory.
 | Pre-Tyche | 2573853 | GREEN | Manager lifecycle and VPP atomicity tests passed 4/4 | Run the full focused regression set |
 | Pre-Tyche | 2573862 | Passed | Runtime `aeeb3d6f5` passed all 56 selected training/setup tests | Reviewer corrected the test invariant from singleton absence to warmup/layout preservation |
 | Pre-Tyche | 2573881 | Passed | Final runtime `013984672` passed 56/56 selected training/setup tests and completed `0:0` | Proceed to the ON-only GB200 lifecycle gate |
+| Lyris | 2677648 | Passed | Final runtime `013984672` completed 3/3 Qwen3-30B-A3B updates; every rank reported positive `moe_act` offload and the automatic lifecycle checker accepted the run | Proceed to a controlled same-runtime OFF/ON performance comparison |
 | GitHub CI | run 31650398312 | Infrastructure failure | Six functional shards hit the same flash-attn wheel HTTP/2 `refused stream` fetch error | No source change; rerun the external-network failures after approval |
 
 ## Root cause and fix
@@ -83,6 +84,27 @@ and its cached chunks, preserves a pre-disabled nested state, restores in
 `finally`, and discovers all VPP configs before mutating any. A first logprob may
 create an empty singleton through cached MoE hooks, but it remains in warmup
 with zero cached chunks so real training can initialize it.
+
+## Post-fix GB200 lifecycle result
+
+Lyris job `2677648` ran the official Qwen3-30B-A3B 4-node/16-GB200
+performance workload at runtime `013984672`. It completed all three policy
+updates and passed the automatic lifecycle checker.
+
+| Gate | Result |
+| --- | --- |
+| `moe_act` summary | Positive on ranks 0-15 |
+| Per-rank range | 3,246.56-5,205.24 MiB |
+| Sum across ranks | 72,192.00 MiB (70.50 GiB) |
+| Optimizer updates | 3/3 completed |
+| Loss | `0.012618`, `-0.002424`, `-0.004723` |
+| Gradient norm | `0.034980`, `0.037861`, `0.034533` |
+| Automatic acceptance | `true` |
+
+The MCore summary is the amount selected by the activation-offload manager; it
+is not a measurement of net GPU-memory reduction. This ON-only gate establishes
+that the fixed NeMo-RL lifecycle activates the feature and remains stable across
+multiple GRPO steps. It does not establish a speedup or memory benefit.
 
 ## Historical diagnostic only
 
@@ -110,5 +132,7 @@ worse with ON.
   but the ON summary was zero-byte and performance is non-claimable.
 - Pre-Tyche final lifecycle regression: `2573881` completed `0:0` and passed
   56/56 selected tests against runtime `013984672`.
-- Next gate: one Qwen3-30B-A3B ON-only 4-node,
-  16-GB200, 3-step run with automatic nonzero 16-rank summary validation.
+- Lyris post-fix lifecycle gate: `2677648` completed `0:0`, passed 3/3 policy
+  updates, and reported positive `moe_act` offload on all 16 ranks.
+- Next gate: dependency-matched OFF/ON runs at the same runtime and fixed
+  workload, followed by replicated measurements before a performance claim.

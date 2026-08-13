@@ -38,10 +38,12 @@
   every rank. It is therefore invalid as performance evidence. The final
   lifecycle runtime passed two RED/GREEN cycles; focused regression job
   <code>2573881</code> completed <code>0:0</code> with 56/56 selected tests
-  passing. The post-fix ON-only GB200 gate is next.</p>
+  passing. Post-fix Lyris job <code>2677648</code> then completed 3/3 updates
+  and reported positive <code>moe_act</code> offload on all 16 ranks.</p>
   <p class="notice"><strong>No performance benefit has been established.</strong>
-  The next run first proves nonzero offload and multi-update stability. Speedup
-  requires later replicated, dependency-matched OFF/ON runs at the same source.</p>
+  Job 2677648 proves nonzero offload and multi-update stability. Speedup and
+  memory benefit require replicated, dependency-matched OFF/ON runs at the same
+  source and workload.</p>
   <h2>Failure ledger</h2>
   <table>
     <tr><th>Cluster/job</th><th>Classification</th><th>Root cause and action</th></tr>
@@ -60,6 +62,7 @@
     <tr><td>Pre-Tyche 2573853</td><td class="passed">GREEN</td><td>Manager lifecycle, nested disabled state, VPP config restoration, and VPP discovery atomicity passed 4/4.</td></tr>
     <tr><td>Pre-Tyche 2573862</td><td class="passed">Passed</td><td>Runtime <code>aeeb3d6f5</code> passed 56 focused training/setup tests.</td></tr>
     <tr><td>Pre-Tyche 2573881</td><td class="passed">Passed</td><td>Final runtime <code>013984672</code> completed <code>0:0</code> and passed 56/56 selected training/setup tests.</td></tr>
+    <tr><td>Lyris 2677648</td><td class="passed">Passed</td><td>Final runtime <code>013984672</code> completed 3/3 Qwen3-30B-A3B updates. All 16 ranks reported positive <code>moe_act</code> offload; the automatic lifecycle checker accepted the run.</td></tr>
     <tr><td>GitHub Actions 31650398312</td><td class="failed">Infrastructure</td><td>Six shards failed on the same flash-attn wheel HTTP/2 <code>refused stream</code> fetch; no #2279 assertion failed.</td></tr>
   </table>
   <h2>Root cause and solution</h2>
@@ -74,6 +77,22 @@
   deduplicated before mutation. A cached MoE hook may create an empty singleton
   during the first logprob, but it remains warm with zero cached chunks so the
   first policy forward/backward can initialize the real layout.</p>
+  <h2>Post-fix GB200 lifecycle result</h2>
+  <p>Lyris job <code>2677648</code> used the official Qwen3-30B-A3B 4-node,
+  16-GB200 performance workload and runtime <code>013984672</code>.</p>
+  <table>
+    <tr><th>Gate</th><th>Result</th></tr>
+    <tr><td><code>moe_act</code> summary</td><td class="passed">Positive on ranks 0-15</td></tr>
+    <tr><td>Per-rank range</td><td>3,246.56-5,205.24 MiB</td></tr>
+    <tr><td>Sum across ranks</td><td>72,192.00 MiB (70.50 GiB)</td></tr>
+    <tr><td>Optimizer updates</td><td class="passed">3/3 completed</td></tr>
+    <tr><td>Loss</td><td>0.012618, -0.002424, -0.004723</td></tr>
+    <tr><td>Gradient norm</td><td>0.034980, 0.037861, 0.034533</td></tr>
+    <tr><td>Automatic acceptance</td><td class="passed">true</td></tr>
+  </table>
+  <p>The MCore summary is the amount selected by the offload manager, not net
+  GPU-memory reduction. This ON-only result establishes feature activation and
+  multi-step stability; it does not establish speedup or memory savings.</p>
   <h2>Performance results</h2>
   <p class="invalid">Historical diagnostic only; ON offloaded zero bytes.</p>
   <table>
@@ -87,11 +106,10 @@
   <p>These are means of warm steps 2-3 only. The pair used different node
   groups, had slight valid-token drift, and recovered from a shared-venv startup
   race. Across all three steps E2E was approximately 0.17% worse with ON.</p>
-  <h2>Post-fix gate</h2>
-  <p>The launch harness defaults to an ON-only, 3-step Qwen3-30B-A3B run on
-  4 nodes and 16 GB200 GPUs. Its checker requires finite loss and gradient norm
-  through step 3 plus one complete MCore summary with strictly positive
-  <code>moe_act</code> and Total values for all 16 ranks. Passing proves feature
-  activation and stability only.</p>
+  <h2>Next measurement</h2>
+  <p>Run dependency-matched OFF/ON arms at runtime <code>013984672</code> with
+  fixed workload and source provenance. Exclude warmup, preserve component
+  timings and memory telemetry, then replicate before attributing a performance
+  effect to activation offload.</p>
 </body>
 </html>
