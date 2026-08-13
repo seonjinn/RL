@@ -15,7 +15,8 @@ speed or CPU-offload protocol changes to activation offload itself.
 - Exact evidence source: pass the immutable harness commit as
   `EXPECTED_SOURCE_COMMIT`; the submitter rejects runtime changes relative to
   the PR runtime above
-- Current evidence source: `42eb7c0f742ebb3006a880f8fab807bff29d81fe`
+- Each launch records its immutable evidence source through
+  `EXPECTED_SOURCE_COMMIT`; no moving branch name is accepted as provenance
 - Both arms complete at least three optimizer updates with finite loss/gradient
 - ON logs a non-zero Megatron activation-offload summary
 - Same prompt/token workload across arms
