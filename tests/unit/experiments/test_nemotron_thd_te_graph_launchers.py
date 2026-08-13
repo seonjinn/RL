@@ -1415,7 +1415,7 @@ def test_scope_and_variant_leaves_are_persistent_and_exact() -> None:
     assert [path.name for path in scopes] == [
         f"{row.index:02d}_{row.name}.sh" for row in rows
     ]
-    assert len(variants) == 10
+    assert len(variants) == 11
     for launcher in [*scopes, *variants]:
         text = launcher.read_text()
         assert "WARMUP_STEPS=3" in text
@@ -2273,6 +2273,73 @@ def test_nano_router_launcher_forwards_overlap_param_gather_diagnostic() -> None
         "policy.megatron_cfg.distributed_data_parallel_config."
         "overlap_param_gather=false"
     ) in arguments
+
+
+def test_nano_attention_launcher_forwards_hybridep_uneven_input_padding() -> None:
+    result = _run_script(
+        "variants/attn_hybridep_pad_uneven.sh",
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        STEPS="20",
+        TEST_ONLY="1",
+        RUN_TAG="hybridep-uneven-padding",
+    )
+
+    assert result.returncode == 0, result.stderr
+    command_line = next(
+        line for line in result.stdout.splitlines() if line.startswith("COMMAND: ")
+    )
+    command = shlex.split(command_line.removeprefix("COMMAND: "))[0]
+    arguments = shlex.split(command)
+    assert arguments.count(
+        "++policy.megatron_cfg.moe_hybridep_pad_uneven_dispatch_inputs=true"
+    ) == 1
+
+
+def test_nano_launcher_rejects_invalid_hybridep_uneven_input_padding() -> None:
+    result = _run_script(
+        "scopes/17_attn.sh",
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        TEST_ONLY="1",
+        RUN_TAG="hybridep-invalid-padding",
+        HYBRIDEP_PAD_UNEVEN_DISPATCH_INPUTS="invalid",
+    )
+
+    assert result.returncode == 2
+    assert "HYBRIDEP_PAD_UNEVEN_DISPATCH_INPUTS must be true or false" in result.stderr
+    assert "SBATCH:" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "model", "mode"),
+    (
+        ("variants/attn_hybridep_pad_uneven.sh", "super", "nemorl"),
+        ("variants/attn_hybridep_pad_uneven.sh", "nano", "mcore"),
+        ("scopes/19_attn_moe_router.sh", "nano", "nemorl"),
+    ),
+)
+def test_hybridep_uneven_input_padding_rejects_unvalidated_contracts(
+    relative_path: str, model: str, mode: str
+) -> None:
+    result = _run_script(
+        relative_path,
+        CLUSTER="oci-hsg",
+        MODEL=model,
+        MODE=mode,
+        TEST_ONLY="1",
+        RUN_TAG="hybridep-unsafe-padding",
+        HYBRIDEP_PAD_UNEVEN_DISPATCH_INPUTS="true",
+    )
+
+    assert result.returncode == 2
+    assert (
+        "HYBRIDEP_PAD_UNEVEN_DISPATCH_INPUTS is validated only for "
+        "MODEL=nano MODE=nemorl SCOPE=attn"
+    ) in result.stderr
+    assert "SBATCH:" not in result.stdout
 
 
 def test_nano_ptyche_launcher_omits_unsupported_gpu_tres_options(

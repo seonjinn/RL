@@ -182,6 +182,16 @@ if [[ "${MODE}" == "nemorl" ]]; then
 else
   MODEL_ALLOCATION_NUM_NODES=${MODEL_MCORE_NUM_NODES}
 fi
+case "${HYBRIDEP_PAD_UNEVEN_DISPATCH_INPUTS:-}" in
+  "") ;;
+  true|false)
+    if [[ "${MODEL}" != "nano" || "${MODE}" != "nemorl" || \
+          "${SCOPE}" != "attn" || "${DISPATCHER}" != "hybridep" ]]; then
+      fail "HYBRIDEP_PAD_UNEVEN_DISPATCH_INPUTS is validated only for MODEL=nano MODE=nemorl SCOPE=attn"
+    fi
+    ;;
+  *) fail "HYBRIDEP_PAD_UNEVEN_DISPATCH_INPUTS must be true or false" ;;
+esac
 
 profile_dir=${script_dir}/profiles
 if [[ -n "${PROFILE_FILE:-}" ]]; then
@@ -413,6 +423,11 @@ case "${OVERLAP_PARAM_GATHER:-}" in
     ;;
   *) fail "OVERLAP_PARAM_GATHER must be true or false" ;;
 esac
+if [[ -n "${HYBRIDEP_PAD_UNEVEN_DISPATCH_INPUTS:-}" ]]; then
+    extra_overrides+=(
+      "++policy.megatron_cfg.moe_hybridep_pad_uneven_dispatch_inputs=${HYBRIDEP_PAD_UNEVEN_DISPATCH_INPUTS}"
+    )
+fi
 case "${MOE_SHARED_EXPERT_OVERLAP:-}" in
   "") ;;
   true|false)

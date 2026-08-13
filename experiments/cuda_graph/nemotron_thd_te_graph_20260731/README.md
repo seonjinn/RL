@@ -253,9 +253,12 @@ matrix formed by:
 - every subset of `attn`, `mlp`, and `mamba`; and
 - `none`, `moe`, `moe_router`, or `moe_router,moe_preprocess`.
 
-The ten files in `variants/` vary shared-expert overlap, `moe_act`
-recomputation, and distributed-optimizer parameter-gather overlap without
-pretending those settings are graph scope names.
+The eleven files in `variants/` vary shared-expert overlap, `moe_act`
+recomputation, distributed-optimizer parameter-gather overlap, and the
+attention-only HybridEP uneven-input diagnostic without pretending those
+settings are graph scope names. `attn_hybridep_pad_uneven.sh` is validated
+only for Nano NeMo-RL with `attn` capture; `moe_preprocess` capture requires a
+phase-aware padding contract and is not enabled by this variant.
 `scope_matrix.py` classifies each row before any scheduler call as `runnable`,
 `model-incompatible`, `capacity-blocked`, `dependency-blocked`, or
 `submitted`. Full-MoE and whole-layer capture remain capacity-blocked until a
