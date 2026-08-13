@@ -56,6 +56,12 @@ class _SerializableModelConfig:
         self.finalized = True
 
 
+@dataclass
+class _CuTeModelConfig:
+    use_transformer_engine_op_fuser: bool = False
+    moe_mlp_glu_interleave_size: int | None = None
+
+
 @pytest.mark.mcore
 class TestValidateModelPaths:
     """Tests for validate_model_paths function."""
@@ -610,6 +616,26 @@ class TestApplyModelOverrides:
                 {"tensor_model_parallel_size": 2},
             )
 
+    def test_cutedsl_knobs_remain_model_overrides(self) -> None:
+        """CuTeDSL provider knobs stay outside NeMo-RL's first-class schema."""
+        from nemo_rl.models.megatron.setup import (
+            _merge_model_overrides,
+            _validate_model_override_conflicts,
+        )
+        from nemo_rl.models.policy import MegatronConfig
+
+        overrides = {
+            "use_transformer_engine_op_fuser": True,
+            "moe_mlp_glu_interleave_size": 32,
+        }
+
+        assert overrides.keys().isdisjoint(MegatronConfig.__annotations__)
+        _validate_model_override_conflicts({"model_overrides": overrides}, overrides)
+        merged_model_cfg = _merge_model_overrides(_CuTeModelConfig(), overrides)
+
+        assert merged_model_cfg.use_transformer_engine_op_fuser is True
+        assert merged_model_cfg.moe_mlp_glu_interleave_size == 32
+
 
 @pytest.mark.mcore
 class TestApplyParallelismConfig:
@@ -748,6 +774,29 @@ class TestApplyMoeConfig:
         cfg.update(overrides)
         return {"megatron_cfg": cfg}
 
+    @pytest.mark.parametrize(
+        ("field_name", "value"),
+        [
+            ("moe_expert_rank_capacity_factor", 1.2),
+            ("moe_paged_stash", True),
+            ("moe_paged_stash_page_size", 128),
+            ("moe_paged_stash_buffer_size_factor_cuda", 1.25),
+            ("moe_paged_stash_buffer_size_factor_cpu", 0.5),
+        ],
+    )
+    def test_full_cuda_graph_moe_field_is_applied(
+        self, field_name: str, value: Any
+    ) -> None:
+        """Full-CG capacity and paged-stash settings reach the MCore config."""
+        from nemo_rl.models.megatron.setup import _apply_moe_config
+
+        model_cfg = SimpleNamespace()
+        config = self._base_moe_cfg(**{field_name: value})
+
+        _apply_moe_config(model_cfg, config)
+
+        assert getattr(model_cfg, field_name) == value
+
     @pytest.mark.parametrize("moe_grouped_gemm", [True, False])
     def test_moe_grouped_gemm_explicit(self, moe_grouped_gemm):
         """moe_grouped_gemm is applied when present in config."""
@@ -812,9 +861,7 @@ class TestApplyMoeConfig:
         model_cfg.high_priority_a2a_comm_stream = "priority-default"
         model_cfg.delay_wgrad_compute = "wgrad-default"
 
-        _apply_moe_config(
-            model_cfg, {"megatron_cfg": self._base_moe_megatron_cfg()}
-        )
+        _apply_moe_config(model_cfg, {"megatron_cfg": self._base_moe_megatron_cfg()})
 
         assert model_cfg.overlap_moe_expert_parallel_comm == "overlap-default"
         assert model_cfg.high_priority_a2a_comm_stream == "priority-default"
@@ -1110,6 +1157,30 @@ class TestApplyPerformanceConfig:
         assert model_cfg.parallel_output is True
         assert model_cfg.apply_rope_fusion is True
         assert model_cfg.bias_activation_fusion is True
+
+    @pytest.mark.parametrize(
+        ("field_name", "value"),
+        [
+            ("cuda_graph_warmup_steps", 5),
+            ("cuda_graph_use_single_mempool", False),
+        ],
+    )
+    def test_full_iteration_cuda_graph_field_is_applied(
+        self, field_name: str, value: Any
+    ) -> None:
+        """Full-iteration capture settings reach the MCore config."""
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg = SimpleNamespace(gated_linear_unit=True)
+        config = self._config()
+        config["megatron_cfg"].update(
+            {"cuda_graph_impl": "full_iteration", field_name: value}
+        )
+
+        _apply_performance_config(model_cfg, config)
+
+        assert model_cfg.cuda_graph_impl == "full_iteration"
+        assert getattr(model_cfg, field_name) == value
 
     def test_activation_checkpointing_enabled(self):
         """Test activation checkpointing configuration."""

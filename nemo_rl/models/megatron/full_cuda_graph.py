@@ -1301,9 +1301,27 @@ def validate_full_cuda_graph_policy_config(
         errors.append("Megatron generation refit/offload is not supported")
     if megatron_cfg.get("cuda_graph_modules", []) != []:
         errors.append("cuda_graph_modules must be empty")
+    fixed_sequence_length = config.get("max_total_sequence_length")
+    length_divisor = config.get("make_sequence_length_divisible_by")
+    if type(fixed_sequence_length) is not int or fixed_sequence_length <= 0:
+        errors.append("max_total_sequence_length must be a positive integer")
+    if type(length_divisor) is not int or length_divisor <= 0:
+        errors.append("make_sequence_length_divisible_by must be a positive integer")
+    elif (
+        type(fixed_sequence_length) is int
+        and fixed_sequence_length > 0
+        and fixed_sequence_length % length_divisor != 0
+    ):
+        errors.append(
+            "max_total_sequence_length must be divisible by "
+            "make_sequence_length_divisible_by"
+        )
 
     expert_parallel_size = megatron_cfg["expert_model_parallel_size"]
     if expert_parallel_size > 1:
+        model_overrides = megatron_cfg.get("model_overrides")
+        if not isinstance(model_overrides, Mapping):
+            model_overrides = {}
         if (
             megatron_cfg.get("moe_token_dispatcher_type") != "flex"
             or megatron_cfg.get("moe_flex_dispatcher_backend") != "hybridep"
@@ -1333,9 +1351,9 @@ def validate_full_cuda_graph_policy_config(
             errors.append("MoE requires a positive static routed-token budget")
         if megatron_cfg.get("moe_paged_stash") is not True:
             errors.append("MoE requires paged stash for fixed-address activations")
-        if megatron_cfg.get("use_transformer_engine_op_fuser") is not True:
+        if model_overrides.get("use_transformer_engine_op_fuser") is not True:
             errors.append("MoE requires the TE operation fuser")
-        if megatron_cfg.get("moe_mlp_glu_interleave_size") != 32:
+        if model_overrides.get("moe_mlp_glu_interleave_size") != 32:
             errors.append("MoE requires GLU interleave size 32")
         preprocessing_sms = megatron_cfg.get("moe_hybridep_num_sms_preprocessing")
         if type(preprocessing_sms) is not int or preprocessing_sms <= 0:

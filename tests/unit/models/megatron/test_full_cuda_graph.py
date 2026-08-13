@@ -40,6 +40,8 @@ class _ProcessedMicrobatch:
 
 def _full_cuda_graph_config() -> dict:
     return {
+        "max_total_sequence_length": 8,
+        "make_sequence_length_divisible_by": 1,
         "dynamic_batching": {"enabled": False},
         "sequence_packing": {"enabled": False},
         "generation": {
@@ -140,6 +142,33 @@ def test_full_cuda_graph_policy_config_accepts_fixed_shape_noncolocated_training
     )
 
 
+def test_full_cuda_graph_policy_config_reads_cutedsl_from_model_overrides():
+    from nemo_rl.models.megatron.full_cuda_graph import (
+        validate_full_cuda_graph_policy_config,
+    )
+
+    config = _full_cuda_graph_config()
+    config["megatron_cfg"].update(
+        expert_model_parallel_size=16,
+        expert_tensor_parallel_size=1,
+        moe_token_dispatcher_type="flex",
+        moe_flex_dispatcher_backend="hybridep",
+        moe_grouped_gemm=True,
+        moe_expert_rank_capacity_factor=1.25,
+        moe_paged_stash=True,
+        moe_hybridep_num_sms_preprocessing=8,
+        offload_modules=[],
+        fp8_cfg={"enabled": True, "fp8_recipe": "mxfp8"},
+        env_vars={"NVTE_CUTEDSL_FUSED_GROUPED_MLP": "1"},
+        model_overrides={
+            "use_transformer_engine_op_fuser": True,
+            "moe_mlp_glu_interleave_size": 32,
+        },
+    )
+
+    validate_full_cuda_graph_policy_config(config, init_optimizer=True)
+
+
 @pytest.mark.parametrize(
     ("mutation", "match"),
     [
@@ -156,6 +185,17 @@ def test_full_cuda_graph_policy_config_accepts_fixed_shape_noncolocated_training
         (
             lambda cfg: cfg["megatron_cfg"].update(context_parallel_size=2),
             "context parallelism",
+        ),
+        (
+            lambda cfg: cfg.update(max_total_sequence_length=0),
+            "max_total_sequence_length must be a positive integer",
+        ),
+        (
+            lambda cfg: cfg.update(
+                max_total_sequence_length=7,
+                make_sequence_length_divisible_by=4,
+            ),
+            "max_total_sequence_length must be divisible",
         ),
     ],
 )
