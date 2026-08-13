@@ -547,6 +547,27 @@ def test_full_cuda_graph_current_logprob_uses_fixed_validation_graph_and_crops(
     assert result["logprobs"].shape == (1, 5)
 
 
+def test_disabled_full_cuda_graph_metrics_add_no_collective(monkeypatch):
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._full_cuda_graph_enabled = False
+    monkeypatch.setattr(
+        torch.distributed,
+        "all_gather_object",
+        lambda *_args, **_kwargs: pytest.fail(
+            "the baseline path must not add a graph-evidence collective"
+        ),
+    )
+    metrics = {"loss": 1.25}
+
+    worker._add_full_cuda_graph_execution_metrics(metrics)
+
+    assert metrics == {"loss": 1.25}
+
+
 def test_set_moe_grad_scale_func_sets_and_clears_on_model_config():
     """_set_moe_grad_scale_func should set/clear moe_grad_scale_func on the config."""
     from nemo_rl.models.policy.workers.megatron_policy_worker import (

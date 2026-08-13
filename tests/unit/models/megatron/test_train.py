@@ -939,6 +939,96 @@ class TestMegatronForwardBackward:
         assert FULL_CUDA_GRAPH_GLOBAL_VALID_SEQS not in static_microbatch.data_dict
         assert FULL_CUDA_GRAPH_GLOBAL_VALID_TOKS not in static_microbatch.data_dict
 
+    def test_full_cuda_graph_preserves_a2a_schedule_plan(self):
+        from nemo_rl.algorithms.loss import NLLLossFn
+        from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+        from nemo_rl.models.megatron.data import ProcessedMicrobatch
+        from nemo_rl.models.megatron.full_cuda_graph import (
+            FULL_CUDA_GRAPH_GLOBAL_VALID_SEQS,
+            FULL_CUDA_GRAPH_GLOBAL_VALID_TOKS,
+            ProcessedMicrobatchStaticBufferLoader,
+        )
+        from nemo_rl.models.megatron.train import (
+            LossPostProcessor,
+            megatron_forward_backward,
+        )
+
+        observed = {}
+
+        class RecordingLossPostProcessor(LossPostProcessor):
+            def __call__(
+                self,
+                data_dict,
+                packed_seq_params=None,
+                global_valid_seqs=None,
+                global_valid_toks=None,
+            ):
+                observed["valid_seqs"] = global_valid_seqs
+                observed["valid_toks"] = global_valid_toks
+                return lambda output_tensor: (output_tensor.new_zeros(()), {})
+
+        input_ids = torch.tensor([[1, 2, 3]])
+        microbatch = ProcessedMicrobatch(
+            data_dict=BatchedDataDict(
+                {
+                    "input_ids": input_ids,
+                    "token_mask": torch.ones_like(input_ids),
+                    "sample_mask": torch.ones(1),
+                }
+            ),
+            input_ids=input_ids,
+            input_ids_cp_sharded=input_ids,
+            attention_mask=torch.ones(1, 3),
+            position_ids=torch.tensor([[0, 1, 2]]),
+            packed_seq_params=None,
+            cu_seqlens_padded=None,
+        )
+        model = MagicMock()
+        schedule_plan = MagicMock()
+        model.build_schedule_plan.return_value = schedule_plan
+        static_loader = ProcessedMicrobatchStaticBufferLoader()
+
+        def fake_raw_schedule(*, forward_step_func, data_iterator, model, **_kwargs):
+            static_microbatch = static_loader(next(data_iterator), "training", 0)
+            observed["microbatch"] = static_microbatch
+            output, _ = forward_step_func(
+                iter([static_microbatch]),
+                model,
+                return_schedule_plan=True,
+            )
+            return output
+
+        output = megatron_forward_backward(
+            model=model,
+            data_iterator=iter([microbatch]),
+            num_microbatches=1,
+            seq_length=3,
+            mbs=1,
+            post_processing_fn=RecordingLossPostProcessor(
+                loss_fn=NLLLossFn(),
+                cfg={"sequence_packing": {"enabled": False}},
+            ),
+            global_valid_seqs=torch.tensor(1.0),
+            global_valid_toks=torch.tensor(2.0),
+            forward_backward_func=fake_raw_schedule,
+        )
+
+        static_microbatch = observed["microbatch"]
+        assert output is schedule_plan
+        model.build_schedule_plan.assert_called_once_with(
+            input_ids=static_microbatch.input_ids_cp_sharded,
+            position_ids=static_microbatch.position_ids,
+            attention_mask=static_microbatch.attention_mask,
+        )
+        assert (
+            observed["valid_seqs"]
+            is static_microbatch.data_dict[FULL_CUDA_GRAPH_GLOBAL_VALID_SEQS]
+        )
+        assert (
+            observed["valid_toks"]
+            is static_microbatch.data_dict[FULL_CUDA_GRAPH_GLOBAL_VALID_TOKS]
+        )
+
 
 class TestLossPostProcessor:
     """Tests for LossPostProcessor class."""
