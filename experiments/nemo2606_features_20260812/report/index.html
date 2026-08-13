@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NeMo 26.06 Policy Performance Features</title>
+  <style>
+    :root { color-scheme: light dark; --ok:#2e7d32; --wait:#a76500; --bad:#b3261e; --line:#7b7b7b55; }
+    body { font: 15px/1.55 system-ui, sans-serif; max-width: 1180px; margin: 0 auto; padding: 28px; }
+    h1, h2 { line-height: 1.2; } h2 { margin-top: 34px; }
+    code { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+    .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px; }
+    .card { border:1px solid var(--line); border-radius:10px; padding:14px; }
+    .ok { color:var(--ok); } .wait { color:var(--wait); } .bad { color:var(--bad); }
+    table { width:100%; border-collapse:collapse; display:block; overflow-x:auto; }
+    th, td { border:1px solid var(--line); padding:8px; text-align:left; vertical-align:top; white-space:nowrap; }
+    th { background:#7772; } td.wrap { white-space:normal; min-width:260px; }
+    .note { border-left:4px solid var(--wait); padding:8px 12px; background:#a7650012; }
+  </style>
+</head>
+<body>
+  <h1>NeMo 26.06 Policy performance features</h1>
+  <p>Latest update: 2026-08-12 21:05 PDT. Branch:
+    <code>sna/nemo-2606-latest-main-integration-20260812</code>.</p>
+
+  <div class="cards">
+    <div class="card"><strong>Source base</strong><br><code>origin/main 2c5ee18f4</code><br><span class="ok">latest 확인</span></div>
+    <div class="card"><strong>CuTeDSL</strong><br>config/runtime gate 구현<br><span class="wait">controlled timing 미측정</span></div>
+    <div class="card"><strong>Full iteration CG</strong><br>PolicyTraining + current Logprob 포트<br><span class="ok">Linux contract 통과</span></div>
+    <div class="card"><strong>A2A overlap</strong><br>combined-1F1B + HP stream + delayed WGRAD<br><span class="wait">temporal profile 미측정</span></div>
+  </div>
+
+  <h2>측정 원칙</h2>
+  <p class="note">현재 claim 가능한 성능 향상 수치는 없습니다. smoke, 서로 다른 branch,
+    단일 순차 pair, token drift가 있는 결과는 speedup 근거로 사용하지 않습니다.</p>
+  <ul>
+    <li>Qwen3-30B-A3B: MXFP8, GB200, performance workload.</li>
+    <li>Qwen3-235B-A22B: MXFP8, GB200, performance workload.</li>
+    <li>Full-CG는 HybridEP/static capacity/PagedStash를 동일하게 둔 eager baseline과 비교합니다.</li>
+    <li>current-policy Logprob는 큰 error threshold로 실행을 강제하고 reference Logprob는 모든 Full-CG arm에서 동일하게 생략합니다.</li>
+    <li>최종 수치는 alternating order와 replica를 포함해 Step/E2E/Policy/Logprob/Generation/Refit 및 memory를 함께 보고합니다.</li>
+  </ul>
+
+  <h2>기능별 상태</h2>
+  <table>
+    <thead><tr><th>Feature</th><th>NeMo-RL interface</th><th>Dependency-matched comparison</th><th>Runtime evidence</th></tr></thead>
+    <tbody>
+      <tr><td>CuTeDSL fused GroupedGEMM</td><td class="wrap"><code>model_overrides.use_transformer_engine_op_fuser</code>, interleave 32, <code>NVTE_CUTEDSL_FUSED_GROUPED_MLP</code></td><td>MXFP8 OFF bundle vs ON bundle</td><td class="wait">latest-main Q30/Q235 pending</td></tr>
+      <tr><td>Full-iteration CUDA Graph</td><td class="wrap">fixed worker-local sequence padding, resident storage checks, training/validation stage graphs, graph-safe metrics</td><td>eager PagedStash vs full-iteration graph</td><td class="ok">contract job 2574515: 31 passed</td></tr>
+      <tr><td>EP A2A overlap</td><td class="wrap">schedule-plan adapter, combined 1F1B, high-priority A2A stream, delayed WGRAD</td><td>same HybridEP settings, overlap triple OFF vs ON</td><td class="wait">Nsight temporal evidence pending</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Job and root-cause log</h2>
+  <table>
+    <thead><tr><th>Cluster / Job</th><th>State</th><th>Purpose</th><th>Evidence / root cause</th></tr></thead>
+    <tbody>
+      <tr><td>Pre-Tyche 2574124</td><td class="ok">COMPLETED 0:0</td><td>nightly staging</td><td class="wrap">28 GiB immutable image; metadata and file SHA both <code>ddbce4c3…a924f0c</code>.</td></tr>
+      <tr><td>Pre-Tyche 2574467</td><td class="bad">FAILED 1:0</td><td>contract attempt 1</td><td class="wrap">CUDA, NeMo-RL, TE, MCore imports succeeded. Diagnostic accessed nonexistent <code>te.__version__</code>; feature pytest was not reached. Fixed by distribution metadata lookup in <code>7d3b82d67</code>.</td></tr>
+      <tr><td>Pre-Tyche 2574515</td><td class="ok">COMPLETED 0:0</td><td>contract retry</td><td class="wrap">Exact clean source <code>7d3b82d67</code>. GPU smoke passed with CUDA 13.0, four devices, TE <code>2.15.0+42b84005</code>; selected feature contracts: 31 passed.</td></tr>
+      <tr><td>Pre-Tyche 2574549</td><td class="wait">PENDING (Priority)</td><td>Q30 matched-eager model gate</td><td class="wrap">Exact source <code>2c184f89c</code>, immutable image SHA <code>ddbce4c3…a924f0c</code>, 8 nodes × 4 GB200, six optimizer updates. Runtime has not started; no model evidence yet.</td></tr>
+      <tr><td>Lyris 2678498</td><td class="wait">RUNNING</td><td>backup nightly staging</td><td class="wrap">Fresh immutable import; SHA will be recorded after completion.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Performance result matrix</h2>
+  <table>
+    <thead><tr><th>Model</th><th>Path</th><th>Step time</th><th>E2E</th><th>Policy</th><th>Logprob</th><th>Generation</th><th>Refit</th><th>Memory</th></tr></thead>
+    <tbody>
+      <tr><td>Qwen3-30B-A3B</td><td>MXFP8 CuTe OFF/ON</td><td colspan="7">unmeasured on latest main</td></tr>
+      <tr><td>Qwen3-30B-A3B</td><td>matched eager / Full-CG / Full-CG+A2A</td><td colspan="7">unmeasured</td></tr>
+      <tr><td>Qwen3-235B-A22B</td><td>MXFP8 CuTe OFF/ON</td><td colspan="7">unmeasured on latest main</td></tr>
+      <tr><td>Qwen3-235B-A22B</td><td>matched eager / Full-CG / Full-CG+A2A</td><td colspan="7">unmeasured</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Artifact locations</h2>
+  <ul>
+    <li>Run index: <code>../results/run_index.tsv</code></li>
+    <li>Pre-Tyche root: <code>/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/nemo2606_features_20260812</code></li>
+    <li>Lyris root: <code>/lustre/fsw/coreai_dlalgo_llm/users/sna/experiments/nemo2606_features_20260812</code></li>
+    <li>Recipes: <code>examples/configs/recipes/llm/performance/*nemo-2606 feature overlays*</code></li>
+  </ul>
+</body>
+</html>
