@@ -36,9 +36,14 @@ speed or CPU-offload protocol changes to activation offload itself.
 | Lyris | 2676585 | Passed | Fresh nightly image staged with immutable metadata and SHA256 | Image SHA256 `aa7621512376f5562a950708625f0db011f2a240d4fc1a612083489df4d8e8ab` |
 | Lyris | 2676732 | Smoke harness failure | The base image intentionally lacks the mcore-extra TE Python package; the smoke asserted too much | Validate base image uv/Python/torch/ray/CUDA only; TE is built in the source-pinned mcore venv |
 | Lyris | 2676760 | Passed | Fresh image recognized 4 GB200 GPUs with torch 2.11.0+cu130, CUDA 13.0, Ray 2.56.1 | Use the immutable image for focused unit and performance jobs |
+| Pre-Tyche | 2573195 | Harness failure | The focused file is marked `mcore`; NeMo-RL's unit-test hook excludes it unless `--mcore-only` is passed | Add `--mcore-only`, install the test dependency group in the source-pinned venv, and invoke that venv's Python directly |
+| Lyris | 2676792 | Harness failure | Same missing `--mcore-only` selection caused zero collected tests after the dependency build completed | Reuse the completed cache with the corrected command |
+| Pre-Tyche | 2573408 | Passed | Source-pinned Bridge/MCore/TE environment ran the corrected focused selection | 12 activation-offload setup tests passed |
+| Lyris | 2677022, 2677024 | Running | The first concurrent pair shared a worker-venv root and saw a transient creation race; both jobs recovered | Treat as correctness/cache warmup only and use arm-specific venv roots for subsequent pairs |
 | GitHub CI | run 31650398312 | Infrastructure failure | Six functional shards hit the same flash-attn wheel HTTP/2 `refused stream` fetch error | No source change; rerun the external-network failures after approval |
 
 ## Current jobs
 
-- Pre-Tyche focused unit retry: `2573195` (running; cached TE build)
-- Lyris focused unit: `2676792` (running; `NVTE_CUDA_ARCHS=100`)
+- Pre-Tyche focused unit: `2573408` passed 12/12 selected tests.
+- Lyris Qwen3-30B-A3B OFF/ON correctness pair: `2677022` / `2677024`
+  running on 16 GB200 GPUs per arm.

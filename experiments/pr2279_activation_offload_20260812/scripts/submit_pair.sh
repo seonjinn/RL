@@ -51,13 +51,14 @@ submit_arm() {
     local config="${EXPERIMENT_ROOT}/configs/qwen30_${arm}.yaml"
     local log_dir="${EXPERIMENT_ROOT}/logs/${RUN_LABEL}-${arm}"
     local job_name="coreai_dlalgo_llm-sna.pr2279-q30-${arm}"
+    local venv_root="${VENV_ROOT}-${arm}"
     local command
 
     mkdir -p "${log_dir}"
     printf -v command \
         'cd %q && export NRL_IGNORE_VERSION_MISMATCH=1 NRL_FORCE_REBUILD_VENVS=false NVTE_CUDA_ARCHS=100 NEMO_RL_VENV_DIR=%q HF_HOME=%q HF_DATASETS_CACHE=%q/cache && uv run --frozen --extra mcore examples/run_grpo.py --config %q grpo.max_num_steps=%q logger.log_dir=%q logger.wandb_enabled=false logger.tensorboard_enabled=true' \
         "${ROOT}" \
-        "${VENV_ROOT}" \
+        "${venv_root}" \
         "${HF_HOME}" \
         "${HF_HOME}" \
         "${config}" \
