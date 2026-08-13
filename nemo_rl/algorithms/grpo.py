@@ -149,6 +149,22 @@ from nemo_rl.weight_sync.factory import create_weight_synchronizer
 TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
 
 
+def _full_cuda_graph_evidence_for_logging(
+    train_results: dict[str, Any],
+) -> dict[str, int | float | str]:
+    """Extract logger-safe Full-CG evidence already reduced across policy ranks."""
+    evidence: dict[str, int | float | str] = {}
+    for key, value in train_results.items():
+        if not key.startswith("full_cuda_graph_"):
+            continue
+        if type(value) not in (int, float, str):
+            raise TypeError(
+                f"Full-CG evidence {key!r} must be a JSON scalar, got {type(value)}"
+            )
+        evidence[key] = value
+    return evidence
+
+
 def _save_async_replay_buffer_checkpoint(
     replay_buffer: Any,
     checkpoint_path: str,
@@ -3490,6 +3506,7 @@ def grpo_train(
                     else:
                         print(f"Skipping aggregation for {k} ({type(v)})")
 
+                metrics.update(_full_cuda_graph_evidence_for_logging(train_results))
                 metrics.update(rollout_metrics)
                 metrics["generation_logger_metrics"] = generation_logger_metrics
                 total_valid_tokens += metrics["global_valid_toks"]
@@ -5057,6 +5074,7 @@ def async_grpo_train(
                         metrics[k] = np.mean(v).item()
                     else:
                         metrics[k] = np.sum(v).item()
+                metrics.update(_full_cuda_graph_evidence_for_logging(train_results))
                 metrics.update(rollout_metrics)
                 if generation_logger_metrics is not None:
                     metrics["generation_logger_metrics"] = generation_logger_metrics

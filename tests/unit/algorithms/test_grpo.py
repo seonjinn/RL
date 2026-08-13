@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 from contextlib import ExitStack, contextmanager
-from typing import Any
+from typing import Any, Callable
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -2704,6 +2705,35 @@ def _run_single_grpo_train_step(mock_grpo_components, train_func, monkeypatch):
                 _initial_grpo_save_state(),
                 master_config,
             )
+
+
+@pytest.mark.parametrize("train_func", [grpo_train, async_grpo_train])
+def test_grpo_train_logs_full_cuda_graph_evidence(
+    mock_grpo_components: dict[str, Any],
+    train_func: Callable[..., Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = {
+        "full_cuda_graph_warmup_calls": 3,
+        "full_cuda_graph_capture_calls": 1,
+        "full_cuda_graph_replay_calls": 3,
+        "full_cuda_graph_reset_calls": 0,
+        "full_cuda_graph_storage_signature_sha256": "a" * 64,
+        "full_cuda_graph_validation_warmup_calls": 3,
+        "full_cuda_graph_validation_capture_calls": 1,
+        "full_cuda_graph_validation_replay_calls": 3,
+        "full_cuda_graph_validation_reset_calls": 0,
+    }
+    mock_grpo_components["policy"].train.return_value.update(evidence)
+
+    _run_single_grpo_train_step(mock_grpo_components, train_func, monkeypatch)
+
+    train_metrics = _logged_train_metrics_with_key(
+        mock_grpo_components["logger"], "full_cuda_graph_capture_calls"
+    )
+    logged_evidence = {key: train_metrics[key] for key in evidence}
+    assert logged_evidence == evidence
+    assert json.loads(json.dumps(logged_evidence)) == evidence
 
 
 @pytest.mark.parametrize("train_func", [grpo_train, async_grpo_train])
