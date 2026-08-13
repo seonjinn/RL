@@ -144,15 +144,19 @@ def test_qwen3vl_type_fallback_still_delegates_packing():
 
 
 class _FakeTrainableModel:
-    def __init__(self):
+    def __init__(self, parameters=()):
         self.train_called = False
         self.eval_called = False
+        self._parameters = parameters
 
     def train(self):
         self.train_called = True
 
     def eval(self):
         self.eval_called = True
+
+    def parameters(self):
+        return iter(self._parameters)
 
 
 class _ModelWithNonSerializableExtraState(torch.nn.Module):
@@ -344,6 +348,203 @@ def test_megatron_prepare_for_training_restores_optimizer():
 
     assert model.train_called
     assert restored_devices == ["cuda"]
+
+
+@pytest.mark.parametrize(
+    ("method_name", "args", "kwargs", "match"),
+    [
+        ("begin_train_step", (), {"loss_fn": object()}, "split/async PolicyTraining"),
+        (
+            "get_reference_policy_logprobs",
+            (),
+            {"data": BatchedDataDict()},
+            "Logprob",
+        ),
+        ("offload_before_refit", (), {}, "colocated refit/offload"),
+        ("offload_after_refit", (), {}, "colocated refit/offload"),
+        ("finish_inference", (), {}, "colocated refit/offload"),
+        (
+            "get_topk_logits",
+            (),
+            {"data": BatchedDataDict(), "k": 4},
+            "evaluation",
+        ),
+        (
+            "calibrate_qkv_fp8_scales",
+            (),
+            {"data": BatchedDataDict()},
+            "evaluation",
+        ),
+    ],
+)
+def test_full_cuda_graph_worker_rejects_unsupported_runtime_operations(
+    method_name, args, kwargs, match
+):
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._full_cuda_graph_enabled = True
+
+    with pytest.raises(RuntimeError, match=match):
+        getattr(MegatronPolicyWorkerImpl, method_name)(worker, *args, **kwargs)
+
+
+def test_full_cuda_graph_worker_rejects_eval_train_before_schedule():
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._full_cuda_graph_enabled = True
+
+    with pytest.raises(RuntimeError, match="evaluation"):
+        MegatronPolicyWorkerImpl.train(
+            worker,
+            BatchedDataDict(),
+            loss_fn=object(),
+            eval_mode=True,
+        )
+
+
+def test_full_cuda_graph_prepare_for_training_preserves_resident_storage():
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        MegatronPolicyWorkerImpl,
+    )
+
+    parameter = SimpleNamespace(is_cuda=True)
+    model = _FakeTrainableModel(parameters=(parameter,))
+    worker = object.__new__(MegatronPolicyWorkerImpl)
+    worker._full_cuda_graph_enabled = True
+    worker._full_cuda_graph_storage_signature = None
+    worker.model = model
+    worker.optimizer = object()
+    worker.move_model = lambda *_args, **_kwargs: pytest.fail(
+        "graph mode must not move model storage"
+    )
+    worker.move_optimizer = lambda *_args, **_kwargs: pytest.fail(
+        "graph mode must not move optimizer storage"
+    )
+
+    MegatronPolicyWorkerImpl.prepare_for_training(worker)
+
+    assert worker.model is model
+    assert model.train_called
+    assert worker._full_cuda_graph_phase == "training"
+
+
+def test_full_cuda_graph_prepare_for_logprob_preserves_resident_storage(
+    monkeypatch,
+):
+    from nemo_rl.models.policy.workers import megatron_policy_worker
+
+    parameter = SimpleNamespace(is_cuda=True)
+    model = _FakeTrainableModel(parameters=(parameter,))
+    worker = object.__new__(megatron_policy_worker.MegatronPolicyWorkerImpl)
+    worker._full_cuda_graph_enabled = True
+    worker._full_cuda_graph_storage_signature = None
+    worker.model = model
+    worker.optimizer = object()
+    worker.move_model = lambda *_args, **_kwargs: pytest.fail(
+        "graph mode must not move model storage"
+    )
+    worker.move_optimizer = lambda *_args, **_kwargs: pytest.fail(
+        "graph mode must not move optimizer storage"
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker.gc,
+        "collect",
+        lambda: pytest.fail("graph mode must not collect storage"),
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker.torch.cuda,
+        "empty_cache",
+        lambda: pytest.fail("graph mode must not empty the CUDA cache"),
+    )
+
+    megatron_policy_worker.MegatronPolicyWorkerImpl.prepare_for_lp_inference(worker)
+
+    assert worker.model is model
+    assert model.eval_called
+    assert worker._full_cuda_graph_phase == "policy_logprob"
+
+
+def test_full_cuda_graph_current_logprob_uses_fixed_validation_graph_and_crops(
+    monkeypatch,
+):
+    from nemo_rl.models.policy.workers import megatron_policy_worker
+
+    worker = object.__new__(megatron_policy_worker.MegatronPolicyWorkerImpl)
+    worker._full_cuda_graph_enabled = True
+    worker._full_cuda_graph_phase = "policy_logprob"
+    worker._full_cuda_graph_schedule = object()
+    worker._router_replay_enabled = False
+    worker.model = _FakeTrainableModel()
+    worker.timer = SimpleNamespace(start=lambda _name: None, stop=lambda _name: None)
+    worker.cfg = {
+        "max_total_sequence_length": 8,
+        "logprob_batch_size": 1,
+        "logprob_chunk_size": None,
+        "megatron_cfg": {"use_fused_linear_logprobs": False},
+        "sequence_packing": {"enabled": False},
+    }
+    worker.sampling_params = None
+    worker.defer_fp32_logits = False
+    worker.mcore_state = SimpleNamespace(straggler_timer=None)
+    worker.delegate_pack_to_model = False
+    worker.delegate_mtp_loss_mask_to_model = False
+    worker.model_slices_context_parallel_inputs = False
+    precheck_stages = []
+    worker._validate_full_cuda_graph_storage_before_schedule = (
+        lambda *, stage="training": precheck_stages.append(stage)
+    )
+    postchecks = []
+    worker._validate_full_cuda_graph_storage_after_schedule = lambda: postchecks.append(
+        True
+    )
+    observed = {}
+
+    def fake_iterator(*_args, **kwargs):
+        observed["iterator_kwargs"] = kwargs
+        return iter([object()]), 1, 1, 5, 8
+
+    def fake_forward_backward(**kwargs):
+        observed["forward_kwargs"] = kwargs
+        return [{"logprobs": torch.ones(1, 8)}]
+
+    monkeypatch.setattr(
+        megatron_policy_worker, "get_microbatch_iterator", fake_iterator
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker, "megatron_forward_backward", fake_forward_backward
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker.parallel_state,
+        "is_pipeline_last_stage",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        megatron_policy_worker,
+        "broadcast_tensors_from_last_stage",
+        lambda tensors: tensors,
+    )
+    monkeypatch.setattr(torch.cuda.nvtx, "range_push", lambda _name: None)
+    monkeypatch.setattr(torch.cuda.nvtx, "range_pop", lambda: None)
+
+    result = megatron_policy_worker.MegatronPolicyWorkerImpl.get_logprobs(
+        worker,
+        data=BatchedDataDict({"input_ids": torch.ones(1, 5)}),
+    )
+
+    assert observed["iterator_kwargs"]["fixed_sequence_length"] == 8
+    assert (
+        observed["forward_kwargs"]["forward_backward_func"]
+        is worker._full_cuda_graph_schedule
+    )
+    assert precheck_stages == ["validation"]
+    assert postchecks == [True]
+    assert result["logprobs"].shape == (1, 5)
 
 
 def test_set_moe_grad_scale_func_sets_and_clears_on_model_config():
