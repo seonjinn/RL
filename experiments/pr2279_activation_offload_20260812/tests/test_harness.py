@@ -16,6 +16,8 @@ class TestActivationOffloadHarness(unittest.TestCase):
     def _run_lifecycle_checker(
         self,
         *,
+        expect_offload: str = "on",
+        include_summary: bool = True,
         zero_rank: int | None = None,
         missing_rank: int | None = None,
         missing_step: int | None = None,
@@ -27,14 +29,16 @@ class TestActivationOffloadHarness(unittest.TestCase):
                 continue
             value = 0.0 if rank == zero_rank else 96.0 + rank
             rank_rows.append(f"Rank {rank:<2} {value:12.2f} {value:12.2f}")
-        log = "\n".join(
-            [
-                "Activation Offload Summary (MB)",
-                "Rank          moe_act       Total",
-                *rank_rows,
-                "Total         1656.00     1656.00",
-            ]
-        )
+        log = "policy training completed"
+        if include_summary:
+            log = "\n".join(
+                [
+                    "Activation Offload Summary (MB)",
+                    "Rank          moe_act       Total",
+                    *rank_rows,
+                    "Total         1656.00     1656.00",
+                ]
+            )
         steps = [step for step in (1, 2, 3) if step != missing_step]
         metrics = {
             metric: {
@@ -65,6 +69,8 @@ class TestActivationOffloadHarness(unittest.TestCase):
                     "3",
                     "--expected-world-size",
                     "16",
+                    "--expect-offload",
+                    expect_offload,
                     "--output",
                     str(output_path),
                 ],
@@ -95,6 +101,18 @@ class TestActivationOffloadHarness(unittest.TestCase):
 
     def test_lifecycle_checker_rejects_nonfinite_metric(self) -> None:
         result = self._run_lifecycle_checker(nonfinite_metric="train/grad_norm")
+
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_lifecycle_checker_accepts_off_arm_without_summary(self) -> None:
+        result = self._run_lifecycle_checker(
+            expect_offload="off", include_summary=False
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_lifecycle_checker_rejects_off_arm_with_offload_summary(self) -> None:
+        result = self._run_lifecycle_checker(expect_offload="off")
 
         self.assertNotEqual(result.returncode, 0)
 
@@ -150,6 +168,8 @@ class TestActivationOffloadHarness(unittest.TestCase):
         self.assertIn('local venv_root="${VENV_ROOT}-${arm}"', submitter)
         self.assertIn('"${venv_root}"', submitter)
         self.assertIn("check_lifecycle.py", submitter)
+        self.assertIn("--expect-offload %q", submitter)
+        self.assertIn('"${arm}"', submitter)
         self.assertIn("acceptance.json", submitter)
         self.assertIn("provenance.txt", submitter)
         self.assertIn("sbatch --test-only", submitter)

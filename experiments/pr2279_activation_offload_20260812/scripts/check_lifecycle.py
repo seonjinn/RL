@@ -94,22 +94,27 @@ def check_lifecycle(
     metrics_path: Path,
     expected_steps: int,
     expected_world_size: int,
+    expect_offload: str,
 ) -> dict[str, Any]:
     log_text = log_path.read_text(errors="replace")
     metrics = json.loads(metrics_path.read_text())
     if not isinstance(metrics, dict):
         raise ValueError("metrics JSON must contain an object")
 
+    cleaned_log = ANSI_ESCAPE.sub("", log_text)
     offload_summary = _find_complete_nonzero_summary(log_text, expected_world_size)
     metric_summary, errors = _validate_metrics(metrics, expected_steps)
-    if offload_summary is None:
+    if expect_offload == "on" and offload_summary is None:
         errors.append(
             "no complete activation-offload summary has positive moe_act and Total "
             f"values for all {expected_world_size} ranks"
         )
+    if expect_offload == "off" and SUMMARY_MARKER in cleaned_log:
+        errors.append("OFF arm unexpectedly emitted an activation-offload summary")
 
     return {
         "accepted": not errors,
+        "expect_offload": expect_offload,
         "expected_steps": expected_steps,
         "expected_world_size": expected_world_size,
         "offload_summary": offload_summary,
@@ -126,6 +131,7 @@ def main() -> int:
     parser.add_argument("--metrics", required=True, type=Path)
     parser.add_argument("--expected-steps", required=True, type=int)
     parser.add_argument("--expected-world-size", required=True, type=int)
+    parser.add_argument("--expect-offload", required=True, choices=("off", "on"))
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
 
@@ -135,6 +141,7 @@ def main() -> int:
             metrics_path=args.metrics,
             expected_steps=args.expected_steps,
             expected_world_size=args.expected_world_size,
+            expect_offload=args.expect_offload,
         )
     except (OSError, ValueError, json.JSONDecodeError) as error:
         result = {"accepted": False, "errors": [str(error)]}
@@ -142,7 +149,7 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     if result["accepted"]:
-        print(f"Activation-offload lifecycle accepted: {args.output}")
+        print(f"Activation-offload {args.expect_offload} arm accepted: {args.output}")
         return 0
     print(
         "Activation-offload lifecycle rejected: " + "; ".join(result["errors"]),
