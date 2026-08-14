@@ -57,14 +57,24 @@ MXFP8_CASES = {
         "gpus_per_node": 4,
         "segment_size": 4,
         "async_engine": None,
-        "moe_backend": None,
+        "moe_backend": "flashinfer_trtllm",
+        "ignore_patterns": [
+            "model.layers.*.self_attn.*",
+            "model.layers.*.mlp.gate",
+            "lm_head",
+        ],
     },
     "grpo-qwen3-30ba3b-4n4g-async-1off-mxfp8-rollout": {
         "nodes": 4,
         "gpus_per_node": 4,
         "segment_size": 2,
         "async_engine": True,
-        "moe_backend": None,
+        "moe_backend": "flashinfer_trtllm",
+        "ignore_patterns": [
+            "model.layers.*.self_attn.*",
+            "model.layers.*.mlp.gate",
+            "lm_head",
+        ],
     },
     "grpo-qwen3-32b-4n4g-mxfp8-rollout": {
         "nodes": 4,
