@@ -671,6 +671,7 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
     _logged_gemma4_unified_drop: bool = False
     _sparse_delta_applier: Any = None
     _nrl_named_parameters: dict[str, torch.nn.Parameter]
+    _nrl_mxfp8_linear_reload_roots: tuple[torch.nn.Module, ...] | None = None
     hf_to_local_param_map: HFToLocalParamMap
     _nrl_layerwise_reload_active: bool = False
     # Initialization detaches parameters, so any later failure leaves this
@@ -686,6 +687,21 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             params = dict(self.model_runner.model.named_parameters())
             self._nrl_named_parameters = params
         return params
+
+    def _get_mxfp8_linear_reload_roots(self) -> tuple[torch.nn.Module, ...]:
+        roots = self._nrl_mxfp8_linear_reload_roots
+        if roots is None:
+            from nemo_rl.models.generation.vllm.quantization.fp8 import (
+                uses_native_mxfp8_linear_refit,
+            )
+
+            roots = tuple(
+                module
+                for module in self.model_runner.model.modules()
+                if uses_native_mxfp8_linear_refit(module)
+            )
+            self._nrl_mxfp8_linear_reload_roots = roots
+        return roots
 
     def _load_full_hf_weights(
         self, weights: Iterable[tuple[str, torch.Tensor]]
@@ -1529,20 +1545,55 @@ class VllmInternalWorkerExtension(RefitBuilderInterface):
             return
 
         from vllm.config import set_current_vllm_config
+        from vllm.model_executor.model_loader.reload import (
+            finalize_layerwise_reload,
+            initialize_layerwise_reload,
+        )
         from vllm.model_executor.model_loader.utils import (
             process_weights_after_loading,
         )
 
+        reload_roots = self._get_mxfp8_linear_reload_roots()
+        if not reload_roots:
+
+            def finalize() -> None:
+                with set_current_vllm_config(self.model_runner.vllm_config):
+                    process_weights_after_loading(
+                        self.model_runner.model, self.model_config, self.device
+                    )
+                self._maybe_process_mtp_drafter_after_loading()
+
+            yield finalize
+            self._maybe_process_fp8_kv_cache()
+            return
+
+        pending_roots = list(reload_roots)
+
         def finalize() -> None:
+            while pending_roots:
+                root = pending_roots[0]
+                finalize_layerwise_reload(root, self.model_config)
+                pending_roots.pop(0)
             with set_current_vllm_config(self.model_runner.vllm_config):
                 process_weights_after_loading(
                     self.model_runner.model, self.model_config, self.device
                 )
             self._maybe_process_mtp_drafter_after_loading()
 
-        yield finalize
-        # KV-cache scales are covered by the full process_weights_after_loading
-        # pass in finalize(); no second pass is needed.
+        with set_current_vllm_config(self.model_runner.vllm_config):
+            with torch.device(self.device):
+                for root in reload_roots:
+                    initialize_layerwise_reload(root)
+                try:
+                    yield finalize
+                finally:
+                    while pending_roots:
+                        root = pending_roots[0]
+                        finalize_layerwise_reload(root, self.model_config)
+                        pending_roots.pop(0)
+        # Preserve the IPC lifetime boundary: the COMPLETE ACK is sent before
+        # this optional second pass, just as it was before lifecycle hooks.
+        self._maybe_process_fp8_kv_cache()
 
     def _weight_update_errors_are_fatal(self) -> bool:
         """Whether transport errors should propagate instead of returning False."""
