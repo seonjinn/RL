@@ -6,10 +6,21 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).parents[3]
+RAY_SUB = REPO_ROOT / "ray.sub"
 LAUNCHER = (
     REPO_ROOT
     / "experiments/pr3436-h100-validation/scripts/run_qwen30_hybridep.sh"
 )
+
+
+def test_ray_container_names_are_scoped_to_slurm_job() -> None:
+    script = RAY_SUB.read_text()
+
+    assert "RAY_CONTAINER_NAME_SUFFIX=${RAY_CONTAINER_NAME_SUFFIX:-${SLURM_JOB_ID:-manual}-${SLURM_RESTART_COUNT:-0}}" in script
+    assert "RAY_HEAD_CONTAINER_NAME=\"ray-head-${RAY_CONTAINER_NAME_SUFFIX}\"" in script
+    assert "RAY_WORKER_CONTAINER_NAME=\"ray-worker-${RAY_CONTAINER_NAME_SUFFIX}\"" in script
+    assert "--container-name=ray-head" not in script
+    assert "--container-name=ray-worker" not in script
 
 
 def run_launcher(
