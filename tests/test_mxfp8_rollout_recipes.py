@@ -202,6 +202,24 @@ MXFP8_CASES = {
     },
 }
 
+
+def test_nano_bf16_baseline_matches_mxfp8_topology() -> None:
+    bf16 = _load_resolved_yaml(
+        PERF_CONFIG_DIR / "grpo-nanov3-30ba3b-8n4g-bf16-rollout-nccl.yaml"
+    )
+    mxfp8 = _load_resolved_yaml(
+        PERF_CONFIG_DIR / "grpo-nanov3-30ba3b-8n4g-mxfp8-rollout-nccl.yaml"
+    )
+
+    assert bf16["policy"]["generation"]["vllm_cfg"]["precision"] == "bfloat16"
+    assert "is_mx" not in bf16["policy"]["generation"]["vllm_cfg"]
+    assert bf16["policy"]["generation"]["refit_transport"] == "nccl_reshard"
+    assert bf16["cluster"] == mxfp8["cluster"]
+    assert (
+        bf16["policy"]["generation"]["colocated"]
+        == mxfp8["policy"]["generation"]["colocated"]
+    )
+
 REMOVED_BACKEND_VARIANT_SUFFIXES = (
     "-flashinfer-trtllm",
     "-triton",
