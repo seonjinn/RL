@@ -6,10 +6,15 @@ source "$SCRIPT_DIR/common.env"
 export NCCL_NVLS_ENABLE=0
 export RAY_CGRAPH_get_timeout=2400
 
+# ===== BEGIN CONFIG =====
 NUM_NODES=8
 GPUS_PER_NODE=4
+SEGMENT_SIZE=8
+STEPS_PER_RUN=20
 MAX_STEPS=20
+NUM_RUNS=$(((MAX_STEPS + STEPS_PER_RUN - 1) / STEPS_PER_RUN))
 NUM_MINUTES=240
+# ===== END CONFIG =====
 
 cd "$PROJECT_ROOT"
 uv run examples/run_grpo.py \
