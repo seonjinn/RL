@@ -1,5 +1,7 @@
 import os
+import signal
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -15,10 +17,7 @@ def _write_executable(path: Path, content: str) -> None:
 
 
 def _write_fake_commands(bin_dir: Path) -> None:
-    _write_executable(
-        bin_dir / "sinfo",
-        "#!/bin/bash\nexit 0\n",
-    )
+    _write_executable(bin_dir / "sinfo", "#!/bin/bash\nexit 0\n")
     _write_executable(
         bin_dir / "scontrol",
         """#!/bin/bash
@@ -43,9 +42,13 @@ for arg in "$@"; do
     --container-name=ray-worker) role=worker ;;
   esac
 done
-if [[ -n "$role" ]]; then
-  printf '%s' "${!#}" > "$RAY_SUB_CAPTURE_DIR/$role.sh"
-fi
+case "$role" in
+  head) export SLURMD_NODENAME=node0 SLURM_PROCID=0 ;;
+  worker) export SLURMD_NODENAME=node1 SLURM_PROCID=1 ;;
+  *) exit 0 ;;
+esac
+printf '%s\\n' "$role" >> "$RAY_SUB_SRUN_LOG"
+exec /bin/bash -x -c "${!#}"
 """,
     )
     _write_executable(
@@ -57,21 +60,24 @@ if [[ "$1" == "status" ]]; then
 fi
 if [[ "$1" == "start" ]]; then
   env | sort > "$RAY_SUB_DAEMON_ENV_DIR/$(date +%s%N)-$$"
-  count_file="$RAY_SUB_DAEMON_ENV_DIR/start-count"
-  count=0
-  [[ -f "$count_file" ]] && count=$(<"$count_file")
-  count=$((count + 1))
-  printf '%s' "$count" > "$count_file"
-  if (( count <= ${RAY_SUB_RAY_START_FAILURES:-0} )); then
+  if [[ " $* " == *" --head "* ]]; then
+    count_file="$RAY_SUB_DAEMON_ENV_DIR/head-start-count"
+    count=0
+    [[ -f "$count_file" ]] && count=$(<"$count_file")
+    count=$((count + 1))
+    printf '%s' "$count" > "$count_file"
+    if (( count <= ${RAY_SUB_RAY_START_FAILURES:-0} )); then
+      exit 1
+    fi
+  fi
+  if [[ " $* " == *" --block "* ]]; then
+    while [[ ! -f "$RAY_SUB_LOG_DIR/ENDED" ]]; do /bin/sleep 0.02; done
     exit 1
   fi
 fi
 """,
     )
-    _write_executable(
-        bin_dir / "sleep",
-        "#!/bin/bash\n/bin/sleep 0.02\n",
-    )
+    _write_executable(bin_dir / "sleep", "#!/bin/bash\n/bin/sleep 0.02\n")
     _write_executable(bin_dir / "rm", "#!/bin/bash\nexit 0\n")
     _write_executable(bin_dir / "sed", "#!/bin/bash\nexit 0\n")
 
@@ -79,6 +85,7 @@ fi
 def _base_environment(
     tmp_path: Path, bin_dir: Path, *, job_id: str = "424242"
 ) -> dict[str, str]:
+    log_dir = tmp_path / f"{job_id}-logs"
     return {
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "SLURM_JOB_ID": job_id,
@@ -86,79 +93,106 @@ def _base_environment(
         "SLURM_JOB_PARTITION": "test",
         "SLURM_JOB_ACCOUNT": "test",
         "SLURM_JOB_NODELIST": "node[0-1]",
+        "SLURM_STEP_ID": "7",
+        "PMI_RANK": "1",
+        "PMIX_RANK": "1",
+        "MPI_LOCALRANKID": "1",
+        "OMPI_COMM_WORLD_RANK": "1",
         "SLURM_SUBMIT_DIR": str(tmp_path),
         "BASE_LOG_DIR": str(tmp_path),
         "CONTAINER": "test.sqsh",
         "MOUNTS": "",
         "GPUS_PER_NODE": "4",
         "CPUS_PER_WORKER": "8",
-        "RAY_SUB_CAPTURE_DIR": str(tmp_path / "capture"),
         "RAY_SUB_DAEMON_ENV_DIR": str(tmp_path / "daemon-env"),
         "RAY_SUB_OBSERVATIONS": str(tmp_path / "observations"),
+        "RAY_SUB_SRUN_LOG": str(tmp_path / "srun"),
+        "RAY_SUB_LOG_DIR": str(log_dir),
+        "ray": "3",
+        "head": "1",
+        "workers": "0",
+        "sandbox": "4",
     }
 
 
-def _render_launcher(
+def _bash_3_compatibility_shim(path: Path) -> None:
+    path.write_text(
+        """declare() {
+  if [[ "$1" == "-A" ]]; then
+    shift
+  fi
+  builtin declare "$@"
+}
+"""
+    )
+
+
+def _run_launcher(
     tmp_path: Path,
     *,
     job_id: str = "424242",
     caller_alias: str | None = None,
+    ray_start_failures: int = 0,
     setup_command: str = 'printf "setup:%s\\n" "$SLURM_JOB_ID" >> "$RAY_SUB_OBSERVATIONS"',
     driver_command: str = 'printf "driver:%s\\n" "$SLURM_JOB_ID" >> "$RAY_SUB_OBSERVATIONS"',
-) -> tuple[dict[str, str], Path]:
+) -> tuple[int, dict[str, str], Path]:
     bin_dir = tmp_path / "bin"
-    capture_dir = tmp_path / "capture"
     daemon_env_dir = tmp_path / "daemon-env"
     bin_dir.mkdir()
-    capture_dir.mkdir()
     daemon_env_dir.mkdir()
     _write_fake_commands(bin_dir)
+    shim = tmp_path / "bash-env"
+    _bash_3_compatibility_shim(shim)
     env = _base_environment(tmp_path, bin_dir, job_id=job_id)
+    env["BASH_ENV"] = str(shim)
     if caller_alias is not None:
         env["NATIVE_SLURM_JOB_ID"] = caller_alias
     env["SETUP_COMMAND"] = setup_command
     env["COMMAND"] = driver_command
-    renderer = tmp_path / "render-ray-sub.sh"
-    source = RAY_SUB.read_text()
-    source = source.replace(
-        "declare -A SRUN_PIDS", ": # test harness does not launch sruns"
+    env["RAY_SUB_RAY_START_FAILURES"] = str(ray_start_failures)
+    outer_log = (tmp_path / "outer.log").open("w")
+    process = subprocess.Popen(
+        ["/bin/bash", str(RAY_SUB)],
+        env=env,
+        stdout=outer_log,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
     )
-    source = source.replace(
-        "########################################################\n# Optional sandbox sidecar for NeMo-Skills-backed Gym resources.",
-        """printf '%s' "$head_cmd" > "$RAY_SUB_CAPTURE_DIR/head.sh"
-printf '%s' "$worker_cmd" > "$RAY_SUB_CAPTURE_DIR/worker.sh"
-exit 0
+    log_dir = Path(env["RAY_SUB_LOG_DIR"])
+    try:
+        returncode = process.wait(timeout=10)
+    finally:
+        log_dir.mkdir(exist_ok=True)
+        (log_dir / "ENDED").touch()
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        time.sleep(0.05)
+        outer_log.close()
+    return returncode, env, log_dir
 
-########################################################
-# Optional sandbox sidecar for NeMo-Skills-backed Gym resources.""",
-        1,
-    )
-    renderer.write_text(source)
-    subprocess.run(
-        ["bash", str(renderer)],
+
+def _run_invalid_launcher(
+    tmp_path: Path, job_id: str
+) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+    bin_dir = tmp_path / "bin"
+    daemon_env_dir = tmp_path / "daemon-env"
+    bin_dir.mkdir()
+    daemon_env_dir.mkdir()
+    _write_fake_commands(bin_dir)
+    shim = tmp_path / "bash-env"
+    _bash_3_compatibility_shim(shim)
+    env = _base_environment(tmp_path, bin_dir, job_id=job_id)
+    env["BASH_ENV"] = str(shim)
+    result = subprocess.run(
+        ["/bin/bash", str(RAY_SUB)],
         env=env,
         capture_output=True,
         text=True,
         timeout=10,
     )
-    env.pop("NATIVE_SLURM_JOB_ID", None)
-    return env, tmp_path / f"{job_id}-logs"
-
-
-def _run_generated_script(
-    script: Path, env: dict[str, str], *, expect_success: bool = True
-) -> subprocess.CompletedProcess[bytes]:
-    result = subprocess.run(
-        ["bash", str(script)],
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-        timeout=10,
-    )
-    if expect_success:
-        assert result.returncode == 0
-    return result
+    return result, env
 
 
 def _observations(env: dict[str, str]) -> list[str]:
@@ -167,71 +201,68 @@ def _observations(env: dict[str, str]) -> list[str]:
 
 
 def _daemon_environments(env: dict[str, str]) -> list[str]:
-    return [
-        path.read_text()
-        for path in Path(env["RAY_SUB_DAEMON_ENV_DIR"]).iterdir()
-        if path.name != "start-count"
+    return [path.read_text() for path in Path(env["RAY_SUB_DAEMON_ENV_DIR"]).iterdir()]
+
+
+def test_real_srun_launch_preserves_only_native_id_for_user_hooks(tmp_path):
+    """Fails if the real srun boundary leaks an alias or daemon scheduler state."""
+    returncode, env, log_dir = _run_launcher(tmp_path, caller_alias="999999")
+
+    assert returncode == 0
+    assert sorted(_observations(env)) == [
+        "driver:424242",
+        "setup:424242",
+        "setup:424242",
     ]
-
-
-def test_generated_head_worker_and_driver_receive_only_the_native_scheduler_id(
-    tmp_path,
-):
-    """Fails if generated user hooks do not receive the captured Slurm job ID."""
-    env, log_dir = _render_launcher(tmp_path, caller_alias="999999")
-
-    _run_generated_script(tmp_path / "capture" / "head.sh", env)
-    _run_generated_script(tmp_path / "capture" / "worker.sh", env, expect_success=False)
-
-    assert _observations(env) == ["setup:424242", "driver:424242", "setup:424242"]
-    assert (log_dir / "ENDED").exists()
+    assert sorted(path.name for path in log_dir.glob("setup-complete-*")) == [
+        "setup-complete-node0",
+        "setup-complete-node1",
+    ]
     assert _daemon_environments(env)
+    forbidden = (
+        "PMI_RANK=",
+        "PMIX_RANK=",
+        "MPI_LOCALRANKID=",
+        "OMPI_COMM_WORLD_RANK=",
+        "SLURM_JOB_ID=",
+        "SLURM_STEP_ID=",
+        "NATIVE_SLURM_JOB_ID=",
+    )
     for daemon_environment in _daemon_environments(env):
         assert not any(
-            line.startswith(
-                ("PMI", "PMIX", "MPI", "OMPI", "SLURM_", "NATIVE_SLURM_JOB_ID=")
-            )
-            for line in daemon_environment.splitlines()
+            line.startswith(forbidden) for line in daemon_environment.splitlines()
         )
 
 
 @pytest.mark.parametrize("job_id", ["", "not-a-decimal-job-id"])
-def test_invalid_native_scheduler_id_fails_before_rendering_or_launching(
+def test_invalid_native_scheduler_id_fails_before_srun_rendering_or_launching(
     tmp_path, job_id
 ):
-    """Fails if an absent or malformed scheduler identity reaches user hooks or Ray."""
-    env, _ = _render_launcher(tmp_path, job_id=job_id)
+    """Fails if an invalid native ID gets past the renderer's entry validation."""
+    result, env = _run_invalid_launcher(tmp_path, job_id)
 
-    assert not (Path(env["RAY_SUB_CAPTURE_DIR"]) / "head.sh").exists()
+    assert result.returncode != 0
+    assert "SLURM_JOB_ID must be a non-empty decimal scheduler job ID" in result.stderr
     assert not _observations(env)
     assert not _daemon_environments(env)
 
 
-@pytest.mark.parametrize("role", ["head", "worker"])
-def test_setup_failure_signals_ended_and_prevents_ray_and_driver(tmp_path, role):
-    """Fails if a failed per-node setup is ignored before the Ray retry loop."""
-    env, log_dir = _render_launcher(
+def test_worker_setup_failure_blocks_ray_start_and_driver_allocation_wide(tmp_path):
+    """Fails if head startup races ahead of a concurrent worker setup failure."""
+    returncode, env, log_dir = _run_launcher(
         tmp_path,
-        setup_command='printf "setup:%s\\n" "$SLURM_JOB_ID" >> "$RAY_SUB_OBSERVATIONS"; exit 23',
-    )
-    env["RAY_SUB_RAY_START_FAILURES"] = "100"
-
-    result = _run_generated_script(
-        tmp_path / "capture" / f"{role}.sh", env, expect_success=False
+        setup_command='if [[ "$SLURMD_NODENAME" == "node1" ]]; then /bin/sleep 0.5; exit 23; fi',
     )
 
-    assert result.returncode != 0
-    assert _observations(env) == ["setup:424242"]
+    assert returncode != 0
     assert (log_dir / "ENDED").exists()
     assert not _daemon_environments(env)
+    assert not _observations(env)
 
 
 def test_successful_setup_runs_once_when_the_head_retries_ray_start(tmp_path):
     """Fails if setup remains inside the head's Ray-start retry loop."""
-    env, _ = _render_launcher(tmp_path)
-    env["RAY_SUB_RAY_START_FAILURES"] = "2"
+    returncode, env, _ = _run_launcher(tmp_path, ray_start_failures=2)
 
-    _run_generated_script(tmp_path / "capture" / "head.sh", env)
-
-    assert _observations(env) == ["setup:424242", "driver:424242"]
-    assert len(_daemon_environments(env)) == 3
+    assert returncode == 0
+    assert _observations(env).count("setup:424242") == 2
