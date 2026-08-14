@@ -283,7 +283,9 @@ nv-grouped-gemm = { git = "https://github.com/fanshiqing/grouped_gemm", tag = "v
 nvidia-modelopt = { git = "https://github.com/NVIDIA/Model-Optimizer", rev = "c3b913b9cc1d82d5a0af9fa77b4db87829e6f158" }
 nvidia-resiliency-ext = { git = "https://github.com/NVIDIA/nvidia-resiliency-ext.git", tag = "v0.6.0" }
 flashinfer-jit-cache = { index = "flashinfer-cu130" }
-vllm = { path = "3rdparty/vllm", editable = true }
+vllm = [
+  { path = "3rdparty/vllm", editable = true, extra = "vllm" },
+]
 
 [tool.uv.workspace]
 members = [
