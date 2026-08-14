@@ -53,6 +53,11 @@ printf '%s\\n' "$role" >> "$RAY_SUB_SRUN_LOG"
 if [[ "$role" == "worker" && "${RAY_SUB_SKIP_WORKER:-0}" == "1" ]]; then
   exit 0
 fi
+if [[ "$role" == "worker" && "${RAY_SUB_HOLD_WORKER_BEFORE_COMMAND:-0}" == "1" ]]; then
+  printf 'worker-holding-before-command\\n' >> "$RAY_SUB_SRUN_LOG"
+  while [[ ! -f "$RAY_SUB_LOG_DIR/ENDED" ]]; do /bin/sleep 0.02; done
+  exit 1
+fi
 exec /bin/bash -x -c "${!#}"
 """,
     )
@@ -149,6 +154,7 @@ def _run_launcher(
     ray_start_failures: int = 0,
     setup_timeout_seconds: int | None = None,
     skip_worker: bool = False,
+    hold_worker_before_command: bool = False,
     stale_markers: bool = False,
     caller_marker_dir: Path | None = None,
     setup_command: str = 'printf "setup:%s\\n" "$SLURM_JOB_ID" >> "$RAY_SUB_OBSERVATIONS"',
@@ -172,6 +178,8 @@ def _run_launcher(
         env["SETUP_TIMEOUT_SECONDS"] = str(setup_timeout_seconds)
     if skip_worker:
         env["RAY_SUB_SKIP_WORKER"] = "1"
+    if hold_worker_before_command:
+        env["RAY_SUB_HOLD_WORKER_BEFORE_COMMAND"] = "1"
     log_dir = Path(env["RAY_SUB_LOG_DIR"])
     if stale_markers:
         log_dir.mkdir()
@@ -236,6 +244,11 @@ def _daemon_environments(env: dict[str, str]) -> list[str]:
     return [path.read_text() for path in Path(env["RAY_SUB_DAEMON_ENV_DIR"]).iterdir()]
 
 
+def _srun_events(env: dict[str, str]) -> list[str]:
+    path = Path(env["RAY_SUB_SRUN_LOG"])
+    return path.read_text().splitlines() if path.exists() else []
+
+
 def test_real_srun_launch_preserves_only_native_id_for_user_hooks(tmp_path):
     """Fails if the real srun boundary leaks an alias or daemon scheduler state."""
     run = _run_launcher(tmp_path, caller_alias="999999")
@@ -293,13 +306,17 @@ def test_worker_setup_failure_blocks_ray_start_and_driver_allocation_wide(tmp_pa
 
 
 def test_head_setup_failure_signals_ended_before_ray_or_driver(tmp_path):
-    """Fails if a head setup failure relies on cleanup to create ENDED."""
-    run = _run_launcher(tmp_path, setup_command="exit 23")
+    """A failed head setup terminates a worker that successfully reached the barrier."""
+    run = _run_launcher(
+        tmp_path,
+        setup_command='if [[ "$RAY_SUB_TEST_ROLE" == "head" ]]; then exit 23; fi; '
+        'printf "worker-setup:%s\\n" "$SLURM_JOB_ID" >> "$RAY_SUB_OBSERVATIONS"',
+    )
 
     assert run.returncode != 0
     assert run.ended_before_cleanup
+    assert _observations(run.environment) == ["worker-setup:424242"]
     assert not _daemon_environments(run.environment)
-    assert not _observations(run.environment)
 
 
 def test_stale_root_markers_do_not_bypass_a_worker_setup_failure(tmp_path):
@@ -318,16 +335,25 @@ def test_stale_root_markers_do_not_bypass_a_worker_setup_failure(tmp_path):
 
 
 def test_setup_barrier_timeout_signals_ended_before_ray_or_driver(tmp_path):
-    """Fails if a missing worker setup marker can leave the barrier without failure."""
-    run = _run_launcher(tmp_path, setup_timeout_seconds=0, skip_worker=True)
+    """A live worker without a marker fails only through the setup-barrier timeout."""
+    run = _run_launcher(
+        tmp_path,
+        setup_timeout_seconds=0,
+        hold_worker_before_command=True,
+    )
 
     assert run.returncode != 0
     assert run.ended_before_cleanup
-    assert (
-        "Timed out waiting for setup completion" in (tmp_path / "outer.log").read_text()
-    )
+    outer_log = (tmp_path / "outer.log").read_text()
+    assert "Timed out waiting for setup completion" in outer_log
+    assert "Background srun 'ray-workers'" not in outer_log
+    assert sorted(_srun_events(run.environment)) == [
+        "head",
+        "worker",
+        "worker-holding-before-command",
+    ]
+    assert _observations(run.environment) == ["setup:424242"]
     assert not _daemon_environments(run.environment)
-    assert not _observations(run.environment)
 
 
 def test_successful_setup_runs_once_when_the_head_retries_ray_start(tmp_path):
