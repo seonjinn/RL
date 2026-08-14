@@ -70,6 +70,7 @@ def run_launcher(
             {
                 "policy.logprob_batch_size=2",
                 "policy.logprob_chunk_size=null",
+                "policy.megatron_cfg.defer_fp32_logits=false",
                 "policy.megatron_cfg.moe_token_dispatcher_type=alltoall",
                 "~policy.megatron_cfg.moe_flex_dispatcher_backend",
                 "~policy.megatron_cfg.moe_hybridep_num_sms",
@@ -85,6 +86,7 @@ def run_launcher(
             {
                 "policy.logprob_batch_size=1",
                 "policy.logprob_chunk_size=null",
+                "policy.megatron_cfg.defer_fp32_logits=false",
                 "policy.megatron_cfg.moe_token_dispatcher_type=flex",
                 "policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep",
             },
@@ -98,6 +100,7 @@ def run_launcher(
             {
                 "policy.logprob_batch_size=2",
                 "policy.logprob_chunk_size=1024",
+                "policy.megatron_cfg.defer_fp32_logits=true",
                 "policy.megatron_cfg.moe_token_dispatcher_type=flex",
                 "policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep",
             },

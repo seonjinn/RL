@@ -45,6 +45,11 @@ case "${DISPATCHER_MODE}" in
     ;;
 esac
 
+declare -a chunk_overrides=("policy.megatron_cfg.defer_fp32_logits=false")
+if [[ "${LOGPROB_CHUNK_SIZE}" != "null" ]]; then
+  chunk_overrides=("policy.megatron_cfg.defer_fp32_logits=true")
+fi
+
 UV_NO_SYNC=1 uv run env -u UV_NO_SYNC -u UV_FROZEN python examples/run_grpo.py \
   --config examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n8g.yaml \
   grpo.max_num_steps="${MAX_NUM_STEPS}" \
@@ -54,4 +59,5 @@ UV_NO_SYNC=1 uv run env -u UV_NO_SYNC -u UV_FROZEN python examples/run_grpo.py \
   logger.log_dir="${EXPERIMENT_OUTPUT_DIR}/training" \
   logger.wandb_enabled="${WANDB_ENABLED}" \
   logger.wandb.name="${RUN_NAME}" \
+  "${chunk_overrides[@]}" \
   "${dispatcher_overrides[@]}"
