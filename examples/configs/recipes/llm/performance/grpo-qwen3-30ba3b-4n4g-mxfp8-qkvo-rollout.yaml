@@ -1,0 +1,9 @@
+defaults: ./grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
+policy:
+  generation:
+    vllm_cfg:
+      # Exercise the dense backend on Q/K/V/O while leaving the vocabulary
+      # head and replicated MoE router in BF16.
+      quantization_ignored_layer_kws:
+        - lm_head
+        - mlp.gate

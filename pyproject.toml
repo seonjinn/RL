@@ -68,6 +68,7 @@ dependencies = [
   # Worker venvs run a base sync before backend extras, so NIXL must be available here.
   "nixl==1.3.0; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
   "pybase64",                                                                                                 # for sglang refit
+  "setuptools_scm",                                                                                           # custom vLLM source version metadata
   "awscrt>=0.35.0",                                                                                           # for parallel S3 refit transport
   "zstandard",                                                                                                # for sparse refit body compression
   "fastokens-b10>=0.1.1",                                                                                     # Rust-backed BPE tokenizer (~10x faster encode); enable at runtime with NRL_USE_FASTOKENS=1
@@ -143,11 +144,7 @@ vllm = [
   # sudo apt-get install libibverbs-dev
   "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@29d31c095796f3c8ece47ee9cdcc167051bbeed9 ; platform_machine == 'x86_64'",
   "deep_ep @ git+https://github.com/deepseek-ai/DeepEP.git@a48493600c4886c1b297aaa78db0e1ebc2d8dd6c ; platform_machine == 'aarch64'",
-  # Default wheels on GitHub are cu130. See v0.25.1 release assets:
-  # https://github.com/vllm-project/vllm/releases/tag/v0.25.1
-  "vllm @ https://github.com/vllm-project/vllm/releases/download/v0.25.1/vllm-0.25.1-cp38-abi3-manylinux_2_28_aarch64.whl ; sys_platform == 'linux' and platform_machine == 'aarch64'",
-  "vllm @ https://github.com/vllm-project/vllm/releases/download/v0.25.1/vllm-0.25.1-cp38-abi3-manylinux_2_28_x86_64.whl ; sys_platform == 'linux' and platform_machine == 'x86_64'",
-  "vllm==0.25.1 ; sys_platform != 'linux' or (platform_machine != 'aarch64' and platform_machine != 'x86_64')",
+  "vllm",
   "num2words>=0.5.14",
   "flashinfer-python==0.6.13",
   "flashinfer-cubin==0.6.13",
@@ -286,6 +283,7 @@ nv-grouped-gemm = { git = "https://github.com/fanshiqing/grouped_gemm", tag = "v
 nvidia-modelopt = { git = "https://github.com/NVIDIA/Model-Optimizer", rev = "c3b913b9cc1d82d5a0af9fa77b4db87829e6f158" }
 nvidia-resiliency-ext = { git = "https://github.com/NVIDIA/nvidia-resiliency-ext.git", tag = "v0.6.0" }
 flashinfer-jit-cache = { index = "flashinfer-cu130" }
+vllm = { path = "3rdparty/vllm", editable = true }
 
 [tool.uv.workspace]
 members = [
