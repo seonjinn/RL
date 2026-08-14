@@ -309,12 +309,18 @@ def test_head_setup_failure_signals_ended_before_ray_or_driver(tmp_path):
     """A failed head setup terminates a worker that successfully reached the barrier."""
     run = _run_launcher(
         tmp_path,
-        setup_command='if [[ "$RAY_SUB_TEST_ROLE" == "head" ]]; then exit 23; fi; '
-        'printf "worker-setup:%s\\n" "$SLURM_JOB_ID" >> "$RAY_SUB_OBSERVATIONS"',
+        setup_command='if [[ "$RAY_SUB_TEST_ROLE" == "worker" ]]; then '
+        'printf "worker-setup:%s\\n" "$SLURM_JOB_ID" >> "$RAY_SUB_OBSERVATIONS"; '
+        'touch "$RAY_SUB_LOG_DIR/head-setup-test-worker-ready"; exit 0; fi; '
+        "for head_wait_attempt in $(seq 1 100); do "
+        'if [[ -f "$RAY_SUB_LOG_DIR/head-setup-test-worker-ready" ]]; then exit 23; fi; '
+        "/bin/sleep 0.02; done; "
+        'echo "worker setup did not reach the barrier" >&2; exit 24',
     )
 
     assert run.returncode != 0
     assert run.ended_before_cleanup
+    assert (run.log_dir / "head-setup-test-worker-ready").is_file()
     assert _observations(run.environment) == ["worker-setup:424242"]
     assert not _daemon_environments(run.environment)
 
