@@ -11,11 +11,10 @@ WANDB_ENABLED=${WANDB_ENABLED:-true}
 export HYBRID_EP_MULTINODE=0
 export NRL_FORCE_REBUILD_VENVS=${NRL_FORCE_REBUILD_VENVS:-true}
 export TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST:-9.0}
-export UV_NO_SYNC=${UV_NO_SYNC:-1}
 export USE_MNNVL=0
 export USE_NIXL=0
 
-uv run examples/run_grpo.py \
+UV_NO_SYNC=1 uv run env -u UV_NO_SYNC python examples/run_grpo.py \
   --config examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n8g.yaml \
   grpo.max_num_steps="${MAX_NUM_STEPS}" \
   checkpointing.enabled=false \
