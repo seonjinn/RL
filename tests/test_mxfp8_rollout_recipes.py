@@ -23,6 +23,35 @@ PERF_SUITE_DIR = PROJECT_ROOT / "tests/test_suites/llm/performance"
 GB200_SUITE = PROJECT_ROOT / "tests/test_suites/performance_gb200.txt"
 
 MXFP8_CASES = {
+    "grpo-nanov3-30ba3b-8n4g-mxfp8-rollout-nccl": {
+        "nodes": 8,
+        "gpus_per_node": 4,
+        "segment_size": 8,
+        "async_engine": False,
+        "tensor_parallel_size": 1,
+        "moe_backend": "flashinfer_trtllm",
+        "refit_transport": "nccl_reshard",
+        "generation_nodes": 4,
+        "megatron_parallelism": {
+            "tensor_model_parallel_size": 2,
+            "pipeline_model_parallel_size": 2,
+            "context_parallel_size": 2,
+            "expert_model_parallel_size": 8,
+        },
+        "ignore_patterns": [
+            "model.layers.*.mixer.qkv_proj",
+            "model.layers.*.mixer.o_proj",
+            "model.layers.*.mixer.in_proj",
+            "model.layers.*.mixer.out_proj",
+            "model.layers.*.mixer.up_proj",
+            "model.layers.*.mixer.down_proj",
+            "model.layers.*.mixer.gate",
+            "model.layers.*.mixer.shared_experts.*",
+            "model.layers.*.mixer.fc1_latent_proj",
+            "model.layers.*.mixer.fc2_latent_proj",
+            "lm_head",
+        ],
+    },
     "grpo-qwen3-30ba3b-4n4g-mxfp8-rollout": {
         "nodes": 4,
         "gpus_per_node": 4,
@@ -154,6 +183,17 @@ def test_mxfp8_rollout_recipe_matrix(case_name: str, expected: dict) -> None:
             config["policy"]["generation"]["vllm_kwargs"]["moe_backend"]
             == expected["moe_backend"]
         )
+    if "refit_transport" in expected:
+        generation = config["policy"]["generation"]
+        assert generation["refit_transport"] == expected["refit_transport"]
+        assert generation["colocated"]["enabled"] is False
+        assert generation["colocated"]["resources"] == {
+            "num_nodes": expected["generation_nodes"],
+            "gpus_per_node": expected["gpus_per_node"],
+        }
+        megatron_cfg = config["policy"]["megatron_cfg"]
+        for key, value in expected["megatron_parallelism"].items():
+            assert megatron_cfg[key] == value
 
 
 def test_mxfp8_rollout_recipes_are_in_gb200_performance_suite() -> None:
