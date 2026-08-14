@@ -137,7 +137,7 @@ export VLLM_PRECOMPILED_WHEEL_LOCATION=${VLLM_PRECOMPILED_WHEEL_LOCATION}
 export WANDB_API_KEY='${WANDB_API_KEY:-}'
 printf 'NEMO_RL_SOURCE_COMMIT=%s\n' "\$(git rev-parse HEAD)"
 printf 'VLLM_SOURCE_COMMIT=%s\n' "\$(git -C 3rdparty/vllm rev-parse HEAD)"
-uv run --frozen examples/run_grpo.py \
+uv run --locked examples/run_grpo.py \
   --config ${CONFIG} \
   ${MODEL_OVERRIDES[*]} \
   ++policy.generation.vllm_kwargs.linear_backend=${LINEAR_BACKEND} \
