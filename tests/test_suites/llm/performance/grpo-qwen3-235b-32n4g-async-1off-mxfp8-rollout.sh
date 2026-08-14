@@ -28,7 +28,7 @@ uv run examples/run_grpo.py \
     policy.train_global_batch_size=512 \
     policy.generation.refit_transport=nccl_reshard \
     policy.megatron_cfg.moe_token_dispatcher_type=alltoall \
-    policy.megatron_cfg.moe_flex_dispatcher_backend=deepep \
+    +policy.megatron_cfg.moe_flex_dispatcher_backend=deepep \
     loss_fn.force_on_policy_ratio=false \
     loss_fn.use_importance_sampling_correction=true \
     logger.log_dir=$LOG_DIR \
