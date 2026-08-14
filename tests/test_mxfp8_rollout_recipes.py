@@ -130,6 +130,11 @@ def test_nano_bf16_baseline_matches_mxfp8_topology() -> None:
     assert bf16["policy"]["generation"]["vllm_cfg"]["precision"] == "bfloat16"
     assert "is_mx" not in bf16["policy"]["generation"]["vllm_cfg"]
     assert bf16["policy"]["generation"]["refit_transport"] == "nccl_reshard"
+    assert (
+        bf16["policy"]["generation"]["vllm_kwargs"]["moe_backend"]
+        == mxfp8["policy"]["generation"]["vllm_kwargs"]["moe_backend"]
+        == "flashinfer_trtllm"
+    )
     assert bf16["cluster"] == mxfp8["cluster"]
     assert (
         bf16["policy"]["generation"]["colocated"]
