@@ -210,6 +210,18 @@ else
 fi
 mkdir -p $LOG_DIR
 
+# Every launcher invocation gets a private setup-marker namespace. It is created
+# before srun and includes an outer-generated nonce so stale markers in a reused
+# LOG_DIR cannot satisfy this invocation's setup barrier.
+SETUP_MARKER_NONCE=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+SETUP_MARKER_DIR="$LOG_DIR/.setup-markers-${NATIVE_SLURM_JOB_ID}-${SLURM_RESTART_COUNT:-0}-${NRL_JOB_START_EPOCH}-${SETUP_MARKER_NONCE}"
+if ! mkdir -m 700 "$SETUP_MARKER_DIR"; then
+  echo "Error: Could not create setup marker directory '$SETUP_MARKER_DIR'." >&2
+  exit 1
+fi
+unset SETUP_MARKER_NONCE
+export -n SETUP_MARKER_DIR
+
 # LOG_DIR must be shared across all nodes. Write a canary the head and worker
 # containers check at startup: a node that can't see it isn't on the shared FS, so
 # we fail there immediately instead of hanging on signal files that never appear.
@@ -609,6 +621,14 @@ if [[ "\${RAY_SUB_DEBUG_ENV:-0}" == "1" ]]; then
   env | grep -viE '(WANDB_API_KEY|HF_TOKEN|API_KEY|TOKEN|SECRET|PASSWORD)=' || true
 fi
 
+RAY_SUB_NODE_NAME="\${SLURMD_NODENAME:-}"
+if [[ -z "\$RAY_SUB_NODE_NAME" ]]; then
+  echo "[ERROR] Missing SLURMD_NODENAME on the head node." >&2
+  touch "$LOG_DIR/ENDED"
+  exit 1
+fi
+export -n RAY_SUB_NODE_NAME
+
 # Turn on pipefail here; it does not carry into this 'bash -c' subshell from the
 # submit host. Without it, 'ray status | grep worker_units | awk ...' exits 0 even
 # when grep matches nothing (awk's status wins), so the '|| echo 0' fallback never
@@ -719,14 +739,15 @@ fi
 # Clear MPI/PMIx/SLURM env vars inherited from the srun launcher so TRT-LLM's
 # MPI_Init (in the ray daemon child process below) starts clean.
 # NOTE: keep this after topology_probe.sh, which reads SLURM_TOPOLOGY_ADDR/SLURM_PROCID.
-for v in \$(env | awk -F= '/^(PMI|PMIX|MPI|OMPI|SLURM)_/{print \$1}'); do
+for v in \$(env | awk -F= '/^(PMI|PMIX|MPI|OMPI|SLURM_|SLURMD_)/{print \$1}'); do
     unset "\$v"
 done
 
 SETUP_NODE_LIST="$SETUP_NODE_LIST"
-SETUP_MARKER="$LOG_DIR/setup-complete-\$SLURMD_NODENAME"
-if [[ " \$SETUP_NODE_LIST " != *" \$SLURMD_NODENAME "* ]]; then
-  echo "[ERROR] Head node \$SLURMD_NODENAME is not in the allocation setup node list." >&2
+SETUP_MARKER_DIR="$SETUP_MARKER_DIR"
+SETUP_MARKER="\$SETUP_MARKER_DIR/\$RAY_SUB_NODE_NAME"
+if [[ " \$SETUP_NODE_LIST " != *" \$RAY_SUB_NODE_NAME "* ]]; then
+  echo "[ERROR] Head node \$RAY_SUB_NODE_NAME is not in the allocation setup node list." >&2
   touch "$LOG_DIR/ENDED"
   exit 1
 fi
@@ -747,7 +768,7 @@ wait-for-setup() {
       exit 1
     fi
     for setup_node in \$SETUP_NODE_LIST; do
-      if [[ ! -f "$LOG_DIR/setup-complete-\$setup_node" ]]; then
+      if [[ ! -f "\$SETUP_MARKER_DIR/\$setup_node" ]]; then
         if (( SECONDS >= setup_deadline )); then
           echo "[ERROR] Timed out waiting for setup completion on \$setup_node." >&2
           touch "$LOG_DIR/ENDED"
@@ -891,7 +912,15 @@ worker_cmd=$(cat <<EOF
 if [[ "\${RAY_SUB_DEBUG_ENV:-0}" == "1" ]]; then
   env | grep -viE '(WANDB_API_KEY|HF_TOKEN|API_KEY|TOKEN|SECRET|PASSWORD)=' || true
 fi
-echo "[INFO] Worker \$SLURM_PROCID on node \$SLURMD_NODENAME"
+
+RAY_SUB_NODE_NAME="\${SLURMD_NODENAME:-}"
+if [[ -z "\$RAY_SUB_NODE_NAME" ]]; then
+  echo "[ERROR] Missing SLURMD_NODENAME on a worker node." >&2
+  touch "$LOG_DIR/ENDED"
+  exit 1
+fi
+export -n RAY_SUB_NODE_NAME
+echo "[INFO] Worker \$SLURM_PROCID on node \$RAY_SUB_NODE_NAME"
 
 # Fail fast if LOG_DIR is not actually shared with the submit host -- the worker
 # gates on STARTED_RAY_HEAD and other signal files that would otherwise never appear.
@@ -932,18 +961,18 @@ log-sync-sidecar() {
     echo "RAY_LOG_SYNC_FREQUENCY is not set, skipping log sync sidecar"
     return
   fi
-  mkdir -p "$LOG_DIR/ray/\$SLURMD_NODENAME"
+  mkdir -p "$LOG_DIR/ray/\$RAY_SUB_NODE_NAME"
   while true; do
     sleep $RAY_LOG_SYNC_FREQUENCY
     if ls /tmp/ray/session_[0-9]* > /dev/null 2>&1; then
       for session_dir in /tmp/ray/session_[0-9]*/; do
         if [[ -d "\$session_dir/logs" ]]; then
           session_name=\$(basename "\$session_dir")
-          mkdir -p "$LOG_DIR/ray/\$SLURMD_NODENAME/\$session_name"
+          mkdir -p "$LOG_DIR/ray/\$RAY_SUB_NODE_NAME/\$session_name"
           if command -v rsync > /dev/null 2>&1; then
-            rsync -ahP "\$session_dir/logs/" "$LOG_DIR/ray/\$SLURMD_NODENAME/\$session_name/logs/" 2>/dev/null || true
+            rsync -ahP "\$session_dir/logs/" "$LOG_DIR/ray/\$RAY_SUB_NODE_NAME/\$session_name/logs/" 2>/dev/null || true
           else
-            cp -r "\$session_dir/logs" "$LOG_DIR/ray/\$SLURMD_NODENAME/\$session_name/"
+            cp -r "\$session_dir/logs" "$LOG_DIR/ray/\$RAY_SUB_NODE_NAME/\$session_name/"
           fi
         fi
       done
@@ -964,14 +993,15 @@ source $LOG_DIR/topology_probe.sh
 # Clear MPI/PMIx/SLURM env vars inherited from the srun launcher so TRT-LLM's
 # MPI_Init (in the ray daemon child process below) starts clean.
 # NOTE: keep this after topology_probe.sh, which reads SLURM_TOPOLOGY_ADDR/SLURM_PROCID.
-for v in \$(env | awk -F= '/^(PMI|PMIX|MPI|OMPI|SLURM)_/{print \$1}'); do
+for v in \$(env | awk -F= '/^(PMI|PMIX|MPI|OMPI|SLURM_|SLURMD_)/{print \$1}'); do
     unset "\$v"
 done
 
 SETUP_NODE_LIST="$SETUP_NODE_LIST"
-SETUP_MARKER="$LOG_DIR/setup-complete-\$SLURMD_NODENAME"
-if [[ " \$SETUP_NODE_LIST " != *" \$SLURMD_NODENAME "* ]]; then
-  echo "[ERROR] Worker \$SLURMD_NODENAME is not in the allocation setup node list." >&2
+SETUP_MARKER_DIR="$SETUP_MARKER_DIR"
+SETUP_MARKER="\$SETUP_MARKER_DIR/\$RAY_SUB_NODE_NAME"
+if [[ " \$SETUP_NODE_LIST " != *" \$RAY_SUB_NODE_NAME "* ]]; then
+  echo "[ERROR] Worker \$RAY_SUB_NODE_NAME is not in the allocation setup node list." >&2
   touch "$LOG_DIR/ENDED"
   exit 1
 fi
@@ -992,7 +1022,7 @@ wait-for-setup() {
       exit 1
     fi
     for setup_node in \$SETUP_NODE_LIST; do
-      if [[ ! -f "$LOG_DIR/setup-complete-\$setup_node" ]]; then
+      if [[ ! -f "\$SETUP_MARKER_DIR/\$setup_node" ]]; then
         if (( SECONDS >= setup_deadline )); then
           echo "[ERROR] Timed out waiting for setup completion on \$setup_node." >&2
           touch "$LOG_DIR/ENDED"

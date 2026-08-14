@@ -2,6 +2,7 @@ import os
 import signal
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -47,7 +48,11 @@ case "$role" in
   worker) export SLURMD_NODENAME=node1 SLURM_PROCID=1 ;;
   *) exit 0 ;;
 esac
+export RAY_SUB_TEST_ROLE="$role"
 printf '%s\\n' "$role" >> "$RAY_SUB_SRUN_LOG"
+if [[ "$role" == "worker" && "${RAY_SUB_SKIP_WORKER:-0}" == "1" ]]; then
+  exit 0
+fi
 exec /bin/bash -x -c "${!#}"
 """,
     )
@@ -94,6 +99,7 @@ def _base_environment(
         "SLURM_JOB_ACCOUNT": "test",
         "SLURM_JOB_NODELIST": "node[0-1]",
         "SLURM_STEP_ID": "7",
+        "SLURMD_NODENAME": "caller-forgery",
         "PMI_RANK": "1",
         "PMIX_RANK": "1",
         "MPI_LOCALRANKID": "1",
@@ -127,15 +133,27 @@ def _bash_3_compatibility_shim(path: Path) -> None:
     )
 
 
+@dataclass
+class LauncherRun:
+    returncode: int
+    environment: dict[str, str]
+    log_dir: Path
+    ended_before_cleanup: bool
+
+
 def _run_launcher(
     tmp_path: Path,
     *,
     job_id: str = "424242",
     caller_alias: str | None = None,
     ray_start_failures: int = 0,
+    setup_timeout_seconds: int | None = None,
+    skip_worker: bool = False,
+    stale_markers: bool = False,
+    caller_marker_dir: Path | None = None,
     setup_command: str = 'printf "setup:%s\\n" "$SLURM_JOB_ID" >> "$RAY_SUB_OBSERVATIONS"',
     driver_command: str = 'printf "driver:%s\\n" "$SLURM_JOB_ID" >> "$RAY_SUB_OBSERVATIONS"',
-) -> tuple[int, dict[str, str], Path]:
+) -> LauncherRun:
     bin_dir = tmp_path / "bin"
     daemon_env_dir = tmp_path / "daemon-env"
     bin_dir.mkdir()
@@ -150,6 +168,20 @@ def _run_launcher(
     env["SETUP_COMMAND"] = setup_command
     env["COMMAND"] = driver_command
     env["RAY_SUB_RAY_START_FAILURES"] = str(ray_start_failures)
+    if setup_timeout_seconds is not None:
+        env["SETUP_TIMEOUT_SECONDS"] = str(setup_timeout_seconds)
+    if skip_worker:
+        env["RAY_SUB_SKIP_WORKER"] = "1"
+    log_dir = Path(env["RAY_SUB_LOG_DIR"])
+    if stale_markers:
+        log_dir.mkdir()
+        (log_dir / "setup-complete-node0").touch()
+        (log_dir / "setup-complete-node1").touch()
+    if caller_marker_dir is not None:
+        caller_marker_dir.mkdir()
+        (caller_marker_dir / "node0").touch()
+        (caller_marker_dir / "node1").touch()
+        env["SETUP_MARKER_DIR"] = str(caller_marker_dir)
     outer_log = (tmp_path / "outer.log").open("w")
     process = subprocess.Popen(
         ["/bin/bash", str(RAY_SUB)],
@@ -158,9 +190,9 @@ def _run_launcher(
         stderr=subprocess.STDOUT,
         start_new_session=True,
     )
-    log_dir = Path(env["RAY_SUB_LOG_DIR"])
     try:
         returncode = process.wait(timeout=10)
+        ended_before_cleanup = (log_dir / "ENDED").exists()
     finally:
         log_dir.mkdir(exist_ok=True)
         (log_dir / "ENDED").touch()
@@ -170,7 +202,7 @@ def _run_launcher(
             pass
         time.sleep(0.05)
         outer_log.close()
-    return returncode, env, log_dir
+    return LauncherRun(returncode, env, log_dir, ended_before_cleanup)
 
 
 def _run_invalid_launcher(
@@ -206,19 +238,18 @@ def _daemon_environments(env: dict[str, str]) -> list[str]:
 
 def test_real_srun_launch_preserves_only_native_id_for_user_hooks(tmp_path):
     """Fails if the real srun boundary leaks an alias or daemon scheduler state."""
-    returncode, env, log_dir = _run_launcher(tmp_path, caller_alias="999999")
+    run = _run_launcher(tmp_path, caller_alias="999999")
 
-    assert returncode == 0
-    assert sorted(_observations(env)) == [
+    assert run.returncode == 0
+    assert sorted(_observations(run.environment)) == [
         "driver:424242",
         "setup:424242",
         "setup:424242",
     ]
-    assert sorted(path.name for path in log_dir.glob("setup-complete-*")) == [
-        "setup-complete-node0",
-        "setup-complete-node1",
-    ]
-    assert _daemon_environments(env)
+    marker_dirs = list(run.log_dir.glob(".setup-markers-*"))
+    assert len(marker_dirs) == 1
+    assert sorted(path.name for path in marker_dirs[0].iterdir()) == ["node0", "node1"]
+    assert _daemon_environments(run.environment)
     forbidden = (
         "PMI_RANK=",
         "PMIX_RANK=",
@@ -226,9 +257,10 @@ def test_real_srun_launch_preserves_only_native_id_for_user_hooks(tmp_path):
         "OMPI_COMM_WORLD_RANK=",
         "SLURM_JOB_ID=",
         "SLURM_STEP_ID=",
+        "SLURMD_NODENAME=",
         "NATIVE_SLURM_JOB_ID=",
     )
-    for daemon_environment in _daemon_environments(env):
+    for daemon_environment in _daemon_environments(run.environment):
         assert not any(
             line.startswith(forbidden) for line in daemon_environment.splitlines()
         )
@@ -249,20 +281,58 @@ def test_invalid_native_scheduler_id_fails_before_srun_rendering_or_launching(
 
 def test_worker_setup_failure_blocks_ray_start_and_driver_allocation_wide(tmp_path):
     """Fails if head startup races ahead of a concurrent worker setup failure."""
-    returncode, env, log_dir = _run_launcher(
+    run = _run_launcher(
         tmp_path,
-        setup_command='if [[ "$SLURMD_NODENAME" == "node1" ]]; then /bin/sleep 0.5; exit 23; fi',
+        setup_command='if [[ "$RAY_SUB_TEST_ROLE" == "worker" ]]; then /bin/sleep 0.5; exit 23; fi',
     )
 
-    assert returncode != 0
-    assert (log_dir / "ENDED").exists()
-    assert not _daemon_environments(env)
-    assert not _observations(env)
+    assert run.returncode != 0
+    assert run.ended_before_cleanup
+    assert not _daemon_environments(run.environment)
+    assert not _observations(run.environment)
+
+
+def test_head_setup_failure_signals_ended_before_ray_or_driver(tmp_path):
+    """Fails if a head setup failure relies on cleanup to create ENDED."""
+    run = _run_launcher(tmp_path, setup_command="exit 23")
+
+    assert run.returncode != 0
+    assert run.ended_before_cleanup
+    assert not _daemon_environments(run.environment)
+    assert not _observations(run.environment)
+
+
+def test_stale_root_markers_do_not_bypass_a_worker_setup_failure(tmp_path):
+    """Fails if markers from an earlier launcher invocation satisfy this barrier."""
+    run = _run_launcher(
+        tmp_path,
+        stale_markers=True,
+        caller_marker_dir=tmp_path / "forged-markers",
+        setup_command='if [[ "$RAY_SUB_TEST_ROLE" == "worker" ]]; then exit 23; fi',
+    )
+
+    assert run.returncode != 0
+    assert run.ended_before_cleanup
+    assert not _daemon_environments(run.environment)
+    assert not _observations(run.environment)
+
+
+def test_setup_barrier_timeout_signals_ended_before_ray_or_driver(tmp_path):
+    """Fails if a missing worker setup marker can leave the barrier without failure."""
+    run = _run_launcher(tmp_path, setup_timeout_seconds=0, skip_worker=True)
+
+    assert run.returncode != 0
+    assert run.ended_before_cleanup
+    assert (
+        "Timed out waiting for setup completion" in (tmp_path / "outer.log").read_text()
+    )
+    assert not _daemon_environments(run.environment)
+    assert not _observations(run.environment)
 
 
 def test_successful_setup_runs_once_when_the_head_retries_ray_start(tmp_path):
     """Fails if setup remains inside the head's Ray-start retry loop."""
-    returncode, env, _ = _run_launcher(tmp_path, ray_start_failures=2)
+    run = _run_launcher(tmp_path, ray_start_failures=2)
 
-    assert returncode == 0
-    assert _observations(env).count("setup:424242") == 2
+    assert run.returncode == 0
+    assert _observations(run.environment).count("setup:424242") == 2
