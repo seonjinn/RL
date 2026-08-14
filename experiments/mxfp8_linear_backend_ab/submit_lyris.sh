@@ -102,6 +102,20 @@ mkdir -p "${RUN_ROOT}" "${CACHE_ROOT}"
 if [[ "${WANDB_ENABLED}" == true && -z "${WANDB_API_KEY:-}" ]]; then
   WANDB_API_KEY=$(bash -lc 'source ~/.bashrc >/dev/null 2>&1 || true; printf %s "${WANDB_API_KEY:-}"')
 fi
+if [[ "${WANDB_ENABLED}" == true && -z "${WANDB_API_KEY:-}" && -f "${HOME}/.netrc" ]]; then
+  WANDB_API_KEY=$(awk '
+    {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "machine" && (i + 1) <= NF) {
+          in_wandb = ($(i + 1) == "api.wandb.ai")
+        } else if (in_wandb && $i == "password" && (i + 1) <= NF) {
+          print $(i + 1)
+          exit
+        }
+      }
+    }
+  ' "${HOME}/.netrc")
+fi
 if [[ "${WANDB_ENABLED}" == true && -z "${WANDB_API_KEY:-}" ]]; then
   echo "WANDB_API_KEY is required when WANDB_ENABLED=true." >&2
   exit 2
