@@ -30,7 +30,7 @@ VLLM_COMMIT=${VLLM_COMMIT:-a76062edee3a3ac23d47a93c7ce466f06a19111f}
 VLLM_PRECOMPILED_WHEEL_LOCATION=${VLLM_PRECOMPILED_WHEEL_LOCATION:-https://github.com/vllm-project/vllm/releases/download/v0.25.1/vllm-0.25.1-cp38-abi3-manylinux_2_28_aarch64.whl}
 
 QWEN_MODEL_PATH=${QWEN_MODEL_PATH:-${HF_HOME}/hub/models--Qwen--Qwen3-30B-A3B/snapshots/ad44e777bcd18fa416d9da3bd8f70d33ebb85d39}
-NANO_MODEL_PATH=${NANO_MODEL_PATH:-/lustre/fsw/coreai_dlalgo_llm/users/guyueh/hf_home/hub/models--nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16/snapshots/97ab8012882a655dc38df4fee47422aca9caca079}
+NANO_MODEL_PATH=${NANO_MODEL_PATH:-/lustre/fsw/coreai_dlalgo_llm/users/guyueh/hf_home/hub/models--nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16/snapshots/97ab8012882a655dc38df4fee47422aca9caca07}
 NANO_TOKENIZER_PATH=${NANO_TOKENIZER_PATH:-/lustre/fsw/coreai_dlalgo_llm/users/guyueh/hf_home/hub/models--nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-BF16/snapshots/cbd3fa9f933d55ef16a84236559f4ee2a0526848}
 
 case "${ACTION}" in
