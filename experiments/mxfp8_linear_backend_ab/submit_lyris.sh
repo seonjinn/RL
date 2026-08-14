@@ -168,7 +168,7 @@ SBATCH_ARGS=(
   --account="${ACCOUNT}"
   --partition="${PARTITION}"
   --time="${WALLTIME}"
-  --job-name="${ACCOUNT}.mxfp8-linear-${MODEL}-${LINEAR_BACKEND#flashinfer_}"
+  --job-name="${ACCOUNT}-mxfp8-linear.${MODEL}-${LINEAR_BACKEND#flashinfer_}"
   --output="${RUN_ROOT}/slurm-%j.out"
 )
 
