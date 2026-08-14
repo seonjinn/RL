@@ -26,7 +26,7 @@ MXFP8_CASES = {
     "grpo-nanov3-30ba3b-8n4g-mxfp8-rollout-nccl": {
         "nodes": 8,
         "gpus_per_node": 4,
-        "segment_size": 8,
+        "segment_size": 4,
         "async_engine": False,
         "tensor_parallel_size": 1,
         "moe_backend": "flashinfer_trtllm",
@@ -293,6 +293,9 @@ def test_mxfp8_rollout_recipe_matrix(case_name: str, expected: dict) -> None:
             "num_nodes": expected["generation_nodes"],
             "gpus_per_node": expected["gpus_per_node"],
         }
+        training_nodes = expected["nodes"] - expected["generation_nodes"]
+        assert training_nodes % expected["segment_size"] == 0
+        assert expected["generation_nodes"] % expected["segment_size"] == 0
         megatron_cfg = config["policy"]["megatron_cfg"]
         for key, value in expected["megatron_parallelism"].items():
             assert megatron_cfg[key] == value
