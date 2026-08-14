@@ -29,11 +29,11 @@ from vllm.triton_utils import tl, triton
 from vllm.v1.engine.core import EngineCoreProc
 from vllm.v1.engine.utils import CoreEngineProcManager
 
-from nemo_rl.models.generation.vllm.quantization.mxfp8_utils import (
-    pad_flashinfer_scale_k,
-)
 from nemo_rl.models.generation.vllm.quantization.ignore_patterns import (
     get_embedded_mtp_ignore_patterns,
+)
+from nemo_rl.models.generation.vllm.quantization.mxfp8_utils import (
+    pad_flashinfer_scale_k,
 )
 
 logger = init_logger(__name__)
