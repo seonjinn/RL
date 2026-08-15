@@ -611,7 +611,6 @@ class VllmInternalWorkerExtension:
         self, transport: WeightUpdateTransport
     ) -> Iterator[WeightUpdateFinalizer]:
         """Provide setup/finalization around a transport-owned weight update."""
-        del transport
         from vllm.config import set_current_vllm_config
         from vllm.model_executor.model_loader.utils import (
             process_weights_after_loading,
@@ -623,6 +622,10 @@ class VllmInternalWorkerExtension:
                     self.model_runner.model, self.model_config, self.device
                 )
             self._maybe_process_mtp_drafter_after_loading()
+            if transport == "nccl_reshard":
+                self.hf_to_local_param_map = self.build_hf_to_local_param_map(
+                    self.nccl_reshard_refit_info
+                )
 
         yield finalize
         # Preserve the IPC lifetime boundary: the COMPLETE ACK is sent before
