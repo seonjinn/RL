@@ -9,30 +9,34 @@ set -euo pipefail
 cd "${NEMO_SOURCE}"
 export PYTHONPATH="${NEMO_SOURCE}${PYTHONPATH:+:${PYTHONPATH}}"
 
-/opt/nemo_rl_venv/bin/python - <<'PY'
+VLLM_PY=$(uv run --locked --extra vllm --directory "${NEMO_SOURCE}" \
+  python -c 'import sys; print(sys.executable)')
+
+"${VLLM_PY}" - <<'PY'
 import flashinfer
+import pyarrow
 import torch
 import vllm
 
 print(
     f"torch={torch.__version__} vllm={vllm.__version__} "
-    f"flashinfer={flashinfer.__version__}",
+    f"flashinfer={flashinfer.__version__} pyarrow={pyarrow.__version__}",
     flush=True,
 )
 PY
 
-/opt/nemo_rl_venv/bin/python -m pytest -q \
+"${VLLM_PY}" -m pytest -q \
   tests/unit/models/generation/test_rollout_profiler.py \
   tests/unit/models/generation/test_vllm_rollout_profiler.py \
   tests/unit/models/generation/test_vllm_fp8_quantization.py
 
 NTRACE_INSTALL_SOURCE="${NTRACE_SOURCE}" \
 NTRACE_INSTALL_TARGET="${NTRACE_RUNTIME}" \
-NTRACE_INSTALL_PYTHON=/opt/nemo_rl_venv/bin/python \
+NTRACE_INSTALL_PYTHON="${VLLM_PY}" \
   bash "${NTRACE_SOURCE}/scripts/ntrace_nemo_rl_install_target.sh"
 
 PYTHONPATH="${NTRACE_RUNTIME}:${PYTHONPATH}" \
-  /opt/nemo_rl_venv/bin/python - <<'PY'
+  "${VLLM_PY}" - <<'PY'
 import ntrace
 from ntrace.backends import get_backend, selected_backend_name
 
