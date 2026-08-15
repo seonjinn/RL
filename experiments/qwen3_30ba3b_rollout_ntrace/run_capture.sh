@@ -91,6 +91,7 @@ if [[ "${NTRACE_ARM}" == bf16 ]]; then
     policy.generation.vllm_cfg.precision=bfloat16
     '~policy.generation.vllm_cfg.is_mx'
     '~policy.generation.vllm_cfg.quantization_ignore_patterns'
+    policy.generation.vllm_cfg.expose_http_server=true
     policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm
     policy.generation.refit_transport=vllm_zmq_sparse
     ++policy.generation.refit_cfg.sparse.delta_compression.encoding=xor
