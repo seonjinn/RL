@@ -3,10 +3,11 @@
 This experiment compares the GPU-time breakdown of BF16 and MoE-only MXFP8
 rollout generation. Both arms use the same NeMo-RL source, Qwen3-30B-A3B
 recipe, four-node allocation, asynchronous vLLM engine, CUDA Graph mode, and
-matched generation workload. The BF16 arm uses the standard BF16 refit path.
-The MXFP8 arm uses the NCCL reshard receiver that converts BF16 wire tensors
-to the MXFP8 destination layout. Refit time is reported separately from the
-generation-kernel breakdown.
+matched generation workload. The BF16 arm uses the Qwen-compatible sparse
+BF16 refit path. The MXFP8 arm uses the NCCL reshard receiver that converts
+BF16 wire tensors to the MXFP8 destination layout. The optimizer learning rate
+is zero in both arms so the captured rollout steps use the same policy weights.
+Refit time is reported separately from the generation-kernel breakdown.
 
 The outer rollout profiler hook currently runs in the synchronous GRPO trainer.
 The experiment therefore disables `async_grpo` while retaining
