@@ -41,3 +41,13 @@ NTRACE_RESULTS_ROOT=/shared/path/to/results
 
 Use `tools/launch` so the NeMo-RL code snapshot and exact git revision are
 stored with the job.
+
+After a capture completes, run the artifact and CUDA Graph gates before using
+the profile:
+
+```bash
+uv run experiments/qwen3_30ba3b_rollout_ntrace/analyze_capture.sh \
+  /path/to/run-root \
+  /path/to/ntrace-source \
+  /path/to/ntrace-runtime
+```
