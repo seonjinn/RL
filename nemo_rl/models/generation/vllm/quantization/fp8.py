@@ -29,9 +29,6 @@ from vllm.triton_utils import tl, triton
 from vllm.v1.engine.core import EngineCoreProc
 from vllm.v1.engine.utils import CoreEngineProcManager
 
-from nemo_rl.models.generation.vllm.quantization.ignore_patterns import (
-    get_embedded_mtp_ignore_patterns,
-)
 from nemo_rl.models.generation.vllm.quantization.mxfp8_utils import (
     pad_flashinfer_scale_k,
 )
@@ -198,7 +195,7 @@ def init_fp8(vllm_cfg, model_name, model_parallel_size):
     use_fp8_weights = vllm_cfg.get("precision") == "fp8"
     if vllm_cfg.get("is_mx") and not use_fp8_weights:
         raise ValueError("is_mx=True requires precision='fp8'")
-    config = AutoConfig.from_pretrained(model_name)
+    config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
     kv_cache_dtype = vllm_cfg["kv_cache_dtype"]
 
     # Validate configuration: kv_cache_dtype
@@ -279,10 +276,8 @@ def init_fp8(vllm_cfg, model_name, model_parallel_size):
     num_last_layers_in_bf16 = vllm_cfg.get("num_last_layers_in_bf16", 0)
     if global_fp8_config.is_mx:
         fp8_block_quant_kwargs = dict(MXFP8_BLOCK_QUANT_KWARGS)
-        embedded_mtp_ignore_patterns = get_embedded_mtp_ignore_patterns(config)
     else:
         fp8_block_quant_kwargs = dict(FP8_BLOCK_QUANT_KWARGS)
-        embedded_mtp_ignore_patterns = []
     if num_first_layers_in_bf16 > 0 or num_last_layers_in_bf16 > 0:
         with init_empty_weights():
             model = AutoModel.from_config(config)
@@ -328,12 +323,9 @@ def init_fp8(vllm_cfg, model_name, model_parallel_size):
     ignored_layers = fp8_block_quant_kwargs.setdefault("ignored_layers", [])
     ignored_layers.extend(DEFAULT_QUANTIZATION_IGNORED_LAYERS)
     fp8_block_quant_kwargs["ignored_layers"] = list(dict.fromkeys(ignored_layers))
-    if embedded_mtp_ignore_patterns or quantization_ignore_patterns:
+    if quantization_ignore_patterns:
         fp8_block_quant_kwargs.setdefault("ignore", []).extend(
-            [
-                *embedded_mtp_ignore_patterns,
-                *(quantization_ignore_patterns or []),
-            ]
+            quantization_ignore_patterns
         )
 
     if "ignored_layers" in fp8_block_quant_kwargs:
