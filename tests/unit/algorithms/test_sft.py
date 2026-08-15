@@ -181,9 +181,12 @@ def test_exit_on_max_steps(mock_components):
 
 
 def test_sft_logs_dataloader_wait(mock_components):
-    mock_components["master_config"].sft.max_num_steps = 1
+    mock_components["master_config"].sft.max_num_steps = 2
 
-    with patch("nemo_rl.algorithms.sft.perf_counter", side_effect=[10.0, 10.25]):
+    with patch(
+        "nemo_rl.algorithms.sft.perf_counter",
+        side_effect=[10.0, 10.25, 20.0, 20.5],
+    ):
         sft_train(
             mock_components["policy"],
             mock_components["train_dataloader"],
@@ -196,12 +199,60 @@ def test_sft_logs_dataloader_wait(mock_components):
             _initial_sft_save_state(),
         )
 
-    timing_metrics = next(
+    timing_metrics = [
         call.args[0]
         for call in mock_components["logger"].log_metrics.call_args_list
         if call.kwargs.get("prefix") == "timing/train"
+    ]
+    assert [metrics["dataloader_wait"] for metrics in timing_metrics] == pytest.approx(
+        [0.25, 0.5]
     )
-    assert timing_metrics["dataloader_wait"] == pytest.approx(0.25)
+
+
+def test_sft_dataloader_wait_does_not_cross_epoch_boundary(mock_components):
+    mock_components["train_dataloader"].__iter__ = lambda self: iter(
+        [
+            {
+                "message_log": [
+                    [
+                        {
+                            "token_ids": torch.tensor([1, 2, 3]),
+                            "role": "assistant",
+                        }
+                    ]
+                ],
+                "loss_multiplier": torch.tensor(1.0),
+            }
+        ]
+    )
+    mock_components["train_dataloader"].__len__ = MagicMock(return_value=1)
+    mock_components["master_config"].sft.max_num_steps = 2
+    mock_components["master_config"].sft.max_num_epochs = 2
+
+    with patch(
+        "nemo_rl.algorithms.sft.perf_counter",
+        side_effect=[10.0, 10.1, 20.0, 30.0, 30.3],
+    ):
+        sft_train(
+            mock_components["policy"],
+            mock_components["train_dataloader"],
+            mock_components["val_dataloader"],
+            mock_components["tokenizer"],
+            mock_components["loss_fn"],
+            mock_components["master_config"],
+            mock_components["logger"],
+            mock_components["checkpointer"],
+            _initial_sft_save_state(),
+        )
+
+    timing_metrics = [
+        call.args[0]
+        for call in mock_components["logger"].log_metrics.call_args_list
+        if call.kwargs.get("prefix") == "timing/train"
+    ]
+    assert [metrics["dataloader_wait"] for metrics in timing_metrics] == pytest.approx(
+        [0.1, 0.3]
+    )
 
 
 def test_exit_on_max_epochs(mock_components):

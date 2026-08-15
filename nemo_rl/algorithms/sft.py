@@ -803,8 +803,11 @@ def sft_train(
                 timing_metrics.items(), key=lambda item: item[1], reverse=True
             ):
                 if k != "total_step_time":
-                    percent = (v / total_time * 100) if total_time > 0 else 0
-                    print(f"  • {k}: {v:.2f}s ({percent:.1f}%)")
+                    if k == "dataloader_wait":
+                        print(f"  • {k}: {v:.2f}s")
+                    else:
+                        percent = (v / total_time * 100) if total_time > 0 else 0
+                        print(f"  • {k}: {v:.2f}s ({percent:.1f}%)")
 
             total_num_gpus = (
                 master_config.cluster["num_nodes"]
