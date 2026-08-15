@@ -75,6 +75,8 @@ common_args=(
   grpo.max_num_steps=4
   grpo.async_grpo.enabled=false
   grpo.async_grpo.in_flight_weight_updates=false
+  policy.megatron_cfg.optimizer.lr=0.0
+  policy.megatron_cfg.optimizer.min_lr=0.0
   checkpointing.enabled=false
   logger.log_dir="${RUN_ROOT}/logs"
   logger.wandb_enabled=false
@@ -89,7 +91,10 @@ if [[ "${NTRACE_ARM}" == bf16 ]]; then
     '~policy.generation.vllm_cfg.is_mx'
     '~policy.generation.vllm_cfg.quantization_ignore_patterns'
     policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm
-    policy.generation.refit_transport=null
+    policy.generation.refit_transport=vllm_zmq_sparse
+    policy.generation.refit_cfg.sparse.delta_compression.encoding=xor
+    policy.generation.refit_cfg.sparse.verify_samples_per_payload=0
+    policy.generation.refit_cfg.sparse.baseline.in_memory=false
   )
 else
   precision_args=(policy.generation.refit_transport=nccl_reshard)
