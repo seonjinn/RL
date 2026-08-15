@@ -20,7 +20,13 @@ it does not measure async 1-off pipeline overlap.
 - Each rank contains about 17.3 million measured replay rows and 28.8K--30.2K
   unique replay nodes.
 - Every replay node maps to a captured CUDA Graph clone. Uncovered nodes: zero.
-- The breakdown averages three explicit steady-state iteration windows.
+- The breakdown keeps all three explicit iteration windows and reports the
+  later two separately from the first-window stall.
+- UTC-aligned multirank analysis detects no communication kernels, no
+  straggler, 0.01% mean jitter, and 0.04% p90 jitter. The worst iteration has
+  only 73 ms of rank spread.
+- Each rank has 17.4K--23.6K non-graph rows without an iteration-0 stack match.
+  This is about 0.1% of active events and does not affect graph replay coverage.
 - The capture finished all four GRPO steps and saved the trace before a
   post-save Ray finalizer error. The finalizer error did not modify the saved
   artifacts.
@@ -35,7 +41,8 @@ steady-state value. It is dominated by a first-window stall that needs separate
 request-orchestration and profiler-boundary analysis.
 
 Across ranks, active time varies by only 2.7% from minimum to maximum. Worker
-compute skew is therefore not the main source of the first-window stall.
+compute skew and NCCL communication are therefore not the source of the
+first-window stall.
 
 The stack-attributed MoE path averages 34.04 seconds in the later two windows.
 This is 46.5% of steady-state active GPU time. Raw kernel-name analysis splits
@@ -93,3 +100,4 @@ required for that comparison.
 - Analysis workflow: `5e06de216`
 - Data: `data/rollout_bottleneck_summary.json` and
   `data/rollout_bottleneck_summary.tsv`
+- Native multirank report: `ntrace_multirank.html`
