@@ -16,6 +16,7 @@ import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, fields
 from functools import partial
+from time import perf_counter
 from typing import Any, Optional
 
 import numpy as np
@@ -592,7 +593,9 @@ def sft_train(
     ):
         print(f"\n{'=' * 25} Epoch {current_epoch + 1}/{max_num_epochs} {'=' * 25}")
 
+        batch_fetch_started_at = perf_counter()
         for batch in train_dataloader:
+            timer.record("dataloader_wait", perf_counter() - batch_fetch_started_at)
             print(
                 f"\n{'=' * 25} Step {current_step + 1}/{min(len(train_dataloader), master_config.sft.max_num_steps)} {'=' * 25}"
             )
@@ -831,6 +834,8 @@ def sft_train(
                     flush=True,
                 )
                 return
+
+            batch_fetch_started_at = perf_counter()
 
         current_epoch += 1
         current_step = 0  # Reset step counter for new epoch
