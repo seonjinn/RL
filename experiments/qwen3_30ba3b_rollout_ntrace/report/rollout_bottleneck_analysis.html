@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Qwen3-30B-A3B MXFP8 rollout bottleneck</title>
+  <style>
+    :root { --bg:#f7f8fa; --panel:#fff; --text:#172033; --muted:#5d6879;
+      --line:#d9dee7; --green:#3f8f3a; --blue:#3979ad; --amber:#d89a22;
+      --red:#c34a4a; --gray:#8b95a5; --ink:#202838; }
+    @media (prefers-color-scheme:dark) { :root { --bg:#101318; --panel:#171c24;
+      --text:#edf1f7; --muted:#aeb8c8; --line:#333b48; --green:#70bf68;
+      --blue:#72acd5; --amber:#e8b65d; --red:#df7474; --gray:#8f9aaa;
+      --ink:#edf1f7; } }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text);
+      font:15px/1.52 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    .wrap { max-width:1040px; margin:0 auto; padding:38px 24px 60px; }
+    h1 { margin:0 0 8px; font-size:32px; line-height:1.16; letter-spacing:0; }
+    h2 { margin:34px 0 12px; font-size:20px; letter-spacing:0; }
+    p { margin:8px 0; } .sub { color:var(--muted); }
+    .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:22px 0; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:6px;
+      padding:15px; min-height:98px; }
+    .value { display:block; font-size:26px; font-weight:720; line-height:1.1; }
+    .label { display:block; margin-top:7px; color:var(--muted); font-size:13px; }
+    .figure { background:var(--panel); border:1px solid var(--line); border-radius:6px;
+      padding:18px; margin:14px 0; overflow-x:auto; }
+    svg { width:100%; min-width:760px; height:auto; display:block; }
+    .small { color:var(--muted); font-size:13px; }
+    table { width:100%; border-collapse:collapse; margin:12px 0; }
+    th,td { padding:9px 10px; border-bottom:1px solid var(--line); text-align:right; }
+    th:first-child,td:first-child { text-align:left; }
+    th { color:var(--muted); font-size:12px; text-transform:uppercase; }
+    .callout { border-left:4px solid var(--green); background:var(--panel);
+      padding:14px 16px; margin:18px 0; }
+    .warn { border-left-color:var(--amber); }
+    code { background:color-mix(in srgb,var(--panel) 65%,var(--line)); padding:1px 4px;
+      border-radius:3px; }
+    .cols { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+    ul { margin:8px 0; padding-left:20px; }
+    @media (max-width:760px) { .cards,.cols { grid-template-columns:1fr 1fr; }
+      h1 { font-size:27px; } }
+    @media (max-width:480px) { .cards,.cols { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body><main class="wrap">
+  <h1>Where Qwen3-30B-A3B MXFP8 rollout spends GPU time</h1>
+  <p class="sub">NeMo-RL rollout | 8 generation GPUs | GB200 | CUDA Graph on |
+    vLLM 0.25.1 | FlashInfer 0.6.13 | three traced windows</p>
+
+  <div class="cards">
+    <div class="card"><span class="value">46.5%</span><span class="label">of steady active GPU time in the MoE path</span></div>
+    <div class="card"><span class="value">5.6%</span><span class="label">idle in the later two steady windows</span></div>
+    <div class="card"><span class="value">133.63 s</span><span class="label">idle in the first traced window</span></div>
+    <div class="card"><span class="value">1.28x</span><span class="label">steady-window bound if MoE becomes 2x faster</span></div>
+  </div>
+
+  <div class="figure">
+    <svg viewBox="0 0 920 310" role="img" aria-label="First and later rollout windows split by stack-attributed GPU time">
+      <text x="10" y="26" fill="var(--ink)" font-size="18" font-weight="700">The first traced window is not steady state</text>
+      <text x="10" y="54" fill="var(--muted)" font-size="13">Same scale: one pixel width represents the same time in both bars.</text>
+      <text x="10" y="88" fill="var(--text)" font-size="13" font-weight="700">First window | 205.06 s</text>
+      <rect x="10" y="98" width="885" height="44" rx="3" fill="var(--line)"/>
+      <rect x="10" y="98" width="577" height="44" rx="3" fill="var(--gray)"/>
+      <rect x="587" y="98" width="145" height="44" fill="var(--green)"/>
+      <rect x="732" y="98" width="144" height="44" fill="var(--blue)"/>
+      <rect x="876" y="98" width="19" height="44" rx="3" fill="var(--amber)"/>
+      <text x="298" y="125" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">Idle 133.63 s (65.2%)</text>
+      <text x="10" y="173" fill="var(--text)" font-size="13" font-weight="700">Later two-window mean | 77.51 s</text>
+      <rect x="10" y="183" width="335" height="44" rx="3" fill="var(--line)"/>
+      <rect x="10" y="183" width="19" height="44" rx="3" fill="var(--gray)"/>
+      <rect x="29" y="183" width="147" height="44" fill="var(--green)"/>
+      <rect x="176" y="183" width="148" height="44" fill="var(--blue)"/>
+      <rect x="324" y="183" width="21" height="44" rx="3" fill="var(--amber)"/>
+      <text x="102" y="210" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">MoE 34.04 s</text>
+      <text x="250" y="210" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Compiled 34.40 s</text>
+      <g font-size="13" fill="var(--text)">
+        <rect x="18" y="252" width="13" height="13" fill="var(--gray)"/><text x="38" y="263">GPU idle</text>
+        <rect x="155" y="252" width="13" height="13" fill="var(--green)"/><text x="175" y="263">MoE path</text>
+        <rect x="283" y="252" width="13" height="13" fill="var(--blue)"/><text x="303" y="263">compiled model body</text>
+        <rect x="480" y="252" width="13" height="13" fill="var(--amber)"/><text x="500" y="263">sampling + other</text>
+      </g>
+      <text x="10" y="292" fill="var(--muted)" font-size="13">The 39.5% all-window idle average is dominated by the first window. Later-window idle is 5.6%.</text>
+    </svg>
+  </div>
+
+  <h2>What runs inside the MXFP8 path?</h2>
+  <div class="cols">
+    <div>
+      <table>
+        <thead><tr><th>Raw kernel family</th><th>Mean time</th></tr></thead>
+        <tbody>
+          <tr><td>Expert FC1 / SwiGLU BMM</td><td>12.29 s</td></tr>
+          <tr><td>Expert FC2 BMM</td><td>7.07 s</td></tr>
+          <tr><td>MoE routing + finalize</td><td>3.52 s</td></tr>
+          <tr><td>MXFP8 quantization/layout</td><td>0.63 s</td></tr>
+          <tr><td>Attention kernels</td><td>16.95 s</td></tr>
+        </tbody>
+      </table>
+      <p class="small">These are additive raw-kernel instance times used to split ntrace's
+        <code>Other</code> class. They are not a second wall-time breakdown.</p>
+    </div>
+    <div>
+      <div class="callout"><strong>First target: expert BMM and routing.</strong><br>
+        MoE owns 34.04 s, or 46.5% of later-window active GPU time. A 2x MoE
+        improvement has a 1.28x steady-window upper bound if idle and all other
+        work stay fixed.</div>
+      <div class="callout warn"><strong>The first-window stall is separate.</strong><br>
+        Its 133.63 s idle interval may come from rollout orchestration, request
+        availability, or the profiler boundary. The GPU trace alone cannot decide.</div>
+    </div>
+  </div>
+
+  <h2>What this says about the adaptive linear work</h2>
+  <p>This recipe quantizes only routed expert FC1 and FC2. QKVO, attention, the
+    MLP gate, and <code>lm_head</code> stay BF16. The measured MXFP8 work therefore
+    runs through the FlashInfer TRTLLM MoE grouped-BMM backend. A dense-linear
+    tactic lookup does not optimize this recipe unless the quantization scope is
+    expanded to dense projections. Expert FC1/FC2 tactic selection is the relevant
+    kernel-tuning path here.</p>
+
+  <h2>Evidence and limitation</h2>
+  <ul>
+    <li>About 17.3M measured replay rows and 28.8K-30.2K unique replay nodes per rank.</li>
+    <li>Zero uncovered replay nodes across ranks 0-7; all nodes map to captured graph clones.</li>
+    <li>Rank active-time max/min spread is 2.7%, so worker compute skew is small.</li>
+    <li>The trace saved successfully before a post-save Ray finalizer error.</li>
+  </ul>
+  <div class="callout warn"><strong>No matched BF16 speedup claim is made here.</strong><br>
+    The BF16 control failed before generation because Qwen sparse refit tried to copy
+    a 2D expert W2 tensor into a 3D vLLM destination. A generation-only BF16 control
+    or a Qwen-compatible sparse-refit conversion is still required.</div>
+  <p class="small">Provenance: NeMo-RL experiment snapshot <code>4048c388</code> |
+    ntrace <code>bed58828</code> | analysis workflow <code>5e06de216</code> |
+    source data: <a href="data/rollout_bottleneck_summary.json">JSON</a> and
+    <a href="data/rollout_bottleneck_summary.tsv">TSV</a>.</p>
+</main></body></html>
