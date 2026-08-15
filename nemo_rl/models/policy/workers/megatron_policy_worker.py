@@ -1075,6 +1075,7 @@ class MegatronPolicyWorkerImpl(
         ensure_active: bool,
     ) -> TECudaGraphScheduleKey:
         """Normalize, pin, and when allowed collectively ensure one schedule."""
+        self._assert_hybridep_preprocess_capture_padding_disabled()
         lifecycle = self._te_cuda_graph_lifecycle
         if lifecycle is None:
             raise RuntimeError("TE CUDA Graph lifecycle is not initialized.")
@@ -1467,6 +1468,104 @@ class MegatronPolicyWorkerImpl(
         if manager.active_bank is not None:
             manager.uninstall()
         self._te_cuda_graph_installed_key = None
+
+    def _te_cuda_graph_uses_hybridep_preprocess_capture(self) -> bool:
+        if getattr(self, "_te_cuda_graph_lifecycle", None) is None:
+            return False
+        config = self.megatron_cfg.model
+        modules = getattr(config, "cuda_graph_modules", ())
+        module_names = {getattr(module, "name", module) for module in modules}
+        return (
+            "moe_preprocess" in module_names
+            and getattr(config, "moe_token_dispatcher_type", None) == "flex"
+            and getattr(config, "moe_flex_dispatcher_backend", None) == "hybridep"
+        )
+
+    def _hybridep_dispatcher_configs(self) -> tuple[Any, ...]:
+        configs: list[Any] = [self.megatron_cfg.model]
+        configs.extend(
+            config
+            for module in self.model.modules()
+            if (config := getattr(module, "config", None)) is not None
+        )
+        unique_configs: list[Any] = []
+        seen_ids: set[int] = set()
+        for config in configs:
+            if id(config) in seen_ids:
+                continue
+            seen_ids.add(id(config))
+            if (
+                getattr(config, "moe_token_dispatcher_type", None) == "flex"
+                and getattr(config, "moe_flex_dispatcher_backend", None)
+                == "hybridep"
+            ):
+                unique_configs.append(config)
+        return tuple(unique_configs)
+
+    @contextmanager
+    def _hybridep_uneven_padding_for_eager_path(self) -> Iterator[None]:
+        if not self._te_cuda_graph_uses_hybridep_preprocess_capture():
+            yield
+            return
+
+        configs = self._hybridep_dispatcher_configs()
+        original_values = tuple(
+            bool(
+                getattr(
+                    config,
+                    "moe_hybridep_pad_uneven_dispatch_inputs",
+                    False,
+                )
+            )
+            for config in configs
+        )
+        padding_enabled = bool(
+            self._collectively_validate_te_cuda_graph_integer(
+                int(any(original_values)),
+                name="HybridEP eager padding precondition",
+            )
+        )
+        if padding_enabled:
+            raise RuntimeError(
+                "HybridEP moe_preprocess capture configuration must start with "
+                "uneven-input padding disabled."
+            )
+        try:
+            for config in configs:
+                config.moe_hybridep_pad_uneven_dispatch_inputs = True
+            yield
+        finally:
+            for config, original_value in zip(
+                configs,
+                original_values,
+                strict=True,
+            ):
+                config.moe_hybridep_pad_uneven_dispatch_inputs = original_value
+
+    def _assert_hybridep_preprocess_capture_padding_disabled(self) -> None:
+        if not self._te_cuda_graph_uses_hybridep_preprocess_capture():
+            return
+        padding_enabled = any(
+            bool(
+                getattr(
+                    config,
+                    "moe_hybridep_pad_uneven_dispatch_inputs",
+                    False,
+                )
+            )
+            for config in self._hybridep_dispatcher_configs()
+        )
+        padding_enabled = bool(
+            self._collectively_validate_te_cuda_graph_integer(
+                int(padding_enabled),
+                name="HybridEP capture padding state",
+            )
+        )
+        if padding_enabled:
+            raise RuntimeError(
+                "HybridEP uneven-input padding must be disabled during capture "
+                "and training replay."
+            )
 
     def enable_forward_pre_hook(self):
         assert isinstance(self.model, DistributedDataParallel)
@@ -2687,22 +2786,23 @@ class MegatronPolicyWorkerImpl(
             require=require_router_replay,
         )
 
-        with maybe_r3_trace_stage("prev-logprob", enabled=use_router_replay):
-            list_of_logprobs = megatron_forward_backward(
-                model=self.model,
-                data_iterator=mb_iterator,
-                seq_length=padded_seq_length,
-                mbs=micro_batch_size,
-                num_microbatches=num_microbatches,
-                post_processing_fn=logprobs_post_processor,
-                forward_only=True,
-                defer_fp32_logits=self.defer_fp32_logits,
-                sampling_params=self.sampling_params,
-                straggler_timer=self.mcore_state.straggler_timer,
-                use_fused_linear_logprobs=use_fused_linear_logprobs,
-                use_router_replay=use_router_replay,
-                router_replay_train=False,
-            )
+        with self._hybridep_uneven_padding_for_eager_path():
+            with maybe_r3_trace_stage("prev-logprob", enabled=use_router_replay):
+                list_of_logprobs = megatron_forward_backward(
+                    model=self.model,
+                    data_iterator=mb_iterator,
+                    seq_length=padded_seq_length,
+                    mbs=micro_batch_size,
+                    num_microbatches=num_microbatches,
+                    post_processing_fn=logprobs_post_processor,
+                    forward_only=True,
+                    defer_fp32_logits=self.defer_fp32_logits,
+                    sampling_params=self.sampling_params,
+                    straggler_timer=self.mcore_state.straggler_timer,
+                    use_fused_linear_logprobs=use_fused_linear_logprobs,
+                    use_router_replay=use_router_replay,
+                    router_replay_train=False,
+                )
 
         if parallel_state.is_pipeline_last_stage(ignore_virtual=True):
             all_log_probs_padded = []

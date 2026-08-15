@@ -194,8 +194,12 @@ case "${HYBRIDEP_PAD_UNEVEN_DISPATCH_INPUTS:-}" in
   "") ;;
   true|false)
     if [[ "${MODEL}" != "nano" || "${MODE}" != "nemorl" || \
-          "${SCOPE}" != "attn" || "${DISPATCHER}" != "hybridep" ]]; then
-      fail "HYBRIDEP_PAD_UNEVEN_DISPATCH_INPUTS is validated only for MODEL=nano MODE=nemorl SCOPE=attn"
+          "${DISPATCHER}" != "hybridep" ]]; then
+      fail "HYBRIDEP_PAD_UNEVEN_DISPATCH_INPUTS requires MODEL=nano MODE=nemorl DISPATCHER=hybridep"
+    fi
+    if [[ ",${SCOPE}," == *",moe_preprocess,"* && \
+          "${HYBRIDEP_PAD_UNEVEN_DISPATCH_INPUTS}" == "true" ]]; then
+      fail "moe_preprocess capture must start with uneven-input padding disabled"
     fi
     ;;
   *) fail "HYBRIDEP_PAD_UNEVEN_DISPATCH_INPUTS must be true or false" ;;

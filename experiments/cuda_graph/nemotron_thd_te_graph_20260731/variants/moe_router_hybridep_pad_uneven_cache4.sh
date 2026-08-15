@@ -1,0 +1,28 @@
+#!/bin/bash
+# Copyright (c) 2026, NVIDIA CORPORATION.  All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -euo pipefail
+export CUDA_GRAPH_IMPL=transformer_engine
+export SCOPE=moe_router
+export SCOPE_NAME=moe_router_hybridep_pad_uneven_cache4
+export RUN_NAME=moe_router_hybridep_pad_uneven_cache4
+export WARMUP_STEPS=3
+export THD_MAX_PACKED_SEQUENCES=16
+export CHECKPOINTING_ENABLED=false
+export WANDB_PROJECT=sna-cg-study
+export HYBRIDEP_PAD_UNEVEN_DISPATCH_INPUTS=true
+export CUDA_GRAPH_MAX_CACHED_SCHEDULES=4
+
+bash "$(dirname "${BASH_SOURCE[0]}")/../run_scope.sh"

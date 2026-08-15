@@ -1415,7 +1415,7 @@ def test_scope_and_variant_leaves_are_persistent_and_exact() -> None:
     assert [path.name for path in scopes] == [
         f"{row.index:02d}_{row.name}.sh" for row in rows
     ]
-    assert len(variants) == 12
+    assert len(variants) == 17
     for launcher in [*scopes, *variants]:
         text = launcher.read_text()
         assert "WARMUP_STEPS=3" in text
@@ -2325,6 +2325,92 @@ def test_nano_attention_cache3_variant_is_persistent_and_exact() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("launcher", "scope", "cache_capacity"),
+    (
+        ("variants/baseline_hybridep_pad_uneven.sh", "baseline", None),
+        ("variants/mamba_hybridep_pad_uneven_cache4.sh", "mamba", "4"),
+        (
+            "variants/moe_router_hybridep_pad_uneven_cache4.sh",
+            "moe_router",
+            "4",
+        ),
+        (
+            "variants/attn_mamba_hybridep_pad_uneven_cache4.sh",
+            "attn,mamba",
+            "4",
+        ),
+        (
+            "variants/attn_mamba_moe_router_hybridep_pad_uneven_cache4.sh",
+            "attn,mamba,moe_router",
+            "4",
+        ),
+    ),
+)
+def test_nano_hybridep_padding_variants_are_persistent_and_exact(
+    launcher: str, scope: str, cache_capacity: str | None
+) -> None:
+    result = _run_script(
+        launcher,
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        STEPS="20",
+        TEST_ONLY="1",
+        RUN_TAG="hybridep-phase-padding",
+    )
+
+    assert result.returncode == 0, result.stderr
+    command_line = next(
+        line for line in result.stdout.splitlines() if line.startswith("COMMAND: ")
+    )
+    command = shlex.split(command_line.removeprefix("COMMAND: "))[0]
+    arguments = shlex.split(command)
+    assert f"++policy.megatron_cfg.cuda_graph_modules=[{scope}]" in arguments or (
+        scope == "baseline"
+        and "++policy.megatron_cfg.cuda_graph_impl=none" in arguments
+    )
+    assert (
+        arguments.count(
+            "++policy.megatron_cfg.moe_hybridep_pad_uneven_dispatch_inputs=true"
+        )
+        == 1
+    )
+    cache_arguments = [
+        argument
+        for argument in arguments
+        if argument.startswith(
+            "++policy.megatron_cfg.cuda_graph_max_cached_schedules="
+        )
+    ]
+    if cache_capacity is None:
+        assert cache_arguments == []
+    else:
+        assert cache_arguments == [
+            "++policy.megatron_cfg.cuda_graph_max_cached_schedules="
+            f"{cache_capacity}"
+        ]
+
+
+def test_nano_preprocess_launcher_rejects_static_uneven_padding() -> None:
+    result = _run_script(
+        "scopes/04_moe_router_preprocess.sh",
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        STEPS="20",
+        TEST_ONLY="1",
+        RUN_TAG="hybridep-preprocess-static-padding",
+        HYBRIDEP_PAD_UNEVEN_DISPATCH_INPUTS="true",
+    )
+
+    assert result.returncode == 2
+    assert "moe_preprocess capture must start with uneven-input padding disabled" in (
+        result.stderr
+    )
+    assert "SBATCH:" not in result.stdout
+
+
 def test_nano_launcher_rejects_invalid_hybridep_uneven_input_padding() -> None:
     result = _run_script(
         "scopes/17_attn.sh",
@@ -2382,7 +2468,6 @@ def test_baseline_launcher_rejects_irrelevant_graph_cache_capacity() -> None:
     (
         ("variants/attn_hybridep_pad_uneven.sh", "super", "nemorl"),
         ("variants/attn_hybridep_pad_uneven.sh", "nano", "mcore"),
-        ("scopes/19_attn_moe_router.sh", "nano", "nemorl"),
     ),
 )
 def test_hybridep_uneven_input_padding_rejects_unvalidated_contracts(
@@ -2400,8 +2485,8 @@ def test_hybridep_uneven_input_padding_rejects_unvalidated_contracts(
 
     assert result.returncode == 2
     assert (
-        "HYBRIDEP_PAD_UNEVEN_DISPATCH_INPUTS is validated only for "
-        "MODEL=nano MODE=nemorl SCOPE=attn"
+        "HYBRIDEP_PAD_UNEVEN_DISPATCH_INPUTS requires "
+        "MODEL=nano MODE=nemorl DISPATCHER=hybridep"
     ) in result.stderr
     assert "SBATCH:" not in result.stdout
 
