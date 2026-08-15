@@ -2176,7 +2176,11 @@ def test_runtime_stage_readonly_helper_failure_never_publishes_marker(
     stage = source.split("stage_command='", 1)[1].split("'\n\nattestation_command=", 1)[
         0
     ]
-    tail = stage[stage.index("PYTHONDONTWRITEBYTECODE=1") :]
+    readonly_helper_call = (
+        'PYTHONDONTWRITEBYTECODE=1 \\\n  "${bootstrap_python}" '
+        '"${source_readonly_helper}"'
+    )
+    tail = stage[stage.index(readonly_helper_call) :]
 
     stage_root = tmp_path / "stage"
     stage_root.mkdir()
