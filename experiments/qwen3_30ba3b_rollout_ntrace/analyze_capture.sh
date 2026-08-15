@@ -50,21 +50,45 @@ for rank in {0..7}; do
     >> "${ANALYSIS_ROOT}/capture_manifest.tsv"
 done
 
-"${PYTHON_BIN}" "${NTRACE_SOURCE}/scripts/audit_graph_replay_coverage.py" \
-  "${DATA_DIR}" \
-  --rank 0 --rank 1 --rank 2 --rank 3 \
-  --rank 4 --rank 5 --rank 6 --rank 7 \
-  --output-json "${ANALYSIS_ROOT}/graph_replay_coverage.json" \
-  2>&1 | tee "${ANALYSIS_ROOT}/graph_replay_coverage.log"
+coverage_json=${ANALYSIS_ROOT}/graph_replay_coverage.json
+if "${PYTHON_BIN}" - "${coverage_json}" <<'PY'
+import json
+import sys
+from pathlib import Path
 
+path = Path(sys.argv[1])
+if not path.is_file():
+    raise SystemExit(1)
+reports = json.loads(path.read_text()).get("ranks", [])
+if len(reports) != 8 or not all(report.get("complete") for report in reports):
+    raise SystemExit(1)
+PY
+then
+  echo "reusing complete CUDA Graph replay coverage audit: ${coverage_json}"
+else
+  "${PYTHON_BIN}" "${NTRACE_SOURCE}/scripts/audit_graph_replay_coverage.py" \
+    "${DATA_DIR}" \
+    --rank 0 --rank 1 --rank 2 --rank 3 \
+    --rank 4 --rank 5 --rank 6 --rank 7 \
+    --output-json "${coverage_json}" \
+    2>&1 | tee "${ANALYSIS_ROOT}/graph_replay_coverage.log"
+fi
+
+breakdown_pids=()
 for rank in {0..7}; do
   rank_dir=${ANALYSIS_ROOT}/per_rank/rank${rank}
   mkdir -p "${rank_dir}"
-  "${PYTHON_BIN}" -m ntrace breakdown "${DATA_DIR}" \
-    --input-format ntrace \
-    --rank "${rank}" \
-    --output-dir "${rank_dir}" \
-    2>&1 | tee "${rank_dir}/breakdown.log"
+  (
+    "${PYTHON_BIN}" -m ntrace breakdown "${DATA_DIR}" \
+      --input-format ntrace \
+      --rank "${rank}" \
+      --output-dir "${rank_dir}" \
+      2>&1 | tee "${rank_dir}/breakdown.log"
+  ) &
+  breakdown_pids+=("$!")
+done
+for pid in "${breakdown_pids[@]}"; do
+  wait "${pid}"
 done
 
 "${PYTHON_BIN}" -m ntrace multirank "${DATA_DIR}" \
