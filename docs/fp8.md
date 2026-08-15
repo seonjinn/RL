@@ -57,6 +57,33 @@ FP8 generations are recommended to be configured with the following settings:
                 pow2_activation_scaling_factors: False
 ```
 
+For ModelOpt MXFP8, `quantization_ignore_patterns` accepts exact module names,
+substrings, and `fnmatch` wildcards. Matching modules remain in BF16. For
+example, the following scope quantizes only Qwen3 routed experts while keeping
+attention, the router, and the language-model head in BF16:
+
+```
+    policy:
+        generation:
+            vllm_cfg:
+                precision: "fp8"
+                is_mx: true
+                quantization_ignore_patterns:
+                    - model.layers.*.self_attn.*
+                    - model.layers.*.mlp.gate
+```
+
+`lm_head` is always excluded from FP8 and MXFP8 quantization, even when it is
+not listed in `quantization_ignore_patterns` in the YAML configuration.
+Speculative decoding uses a separate vLLM draft `ModelConfig`, so target ignore
+patterns must not include draft parameter names. External drafts, such as the
+Eagle3 model used with Kimi, keep the precision from their own checkpoint or
+explicit speculative-decoding configuration. Native MTP drafts, such as those
+used by DeepSeek and GLM, normally inherit the target quantization backend in
+vLLM 0.25.1. NeMo RL disables that implicit inheritance when the target uses
+runtime ModelOpt MXFP8, which keeps an otherwise unspecified native MTP draft
+in BF16. An explicit draft quantization setting still takes precedence.
+
 To train with FP8, you need to set the Megatron path and configure it using the following settings:
 
 ```
