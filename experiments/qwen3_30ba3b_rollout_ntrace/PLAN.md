@@ -1,6 +1,7 @@
 # Plan
 
-1. Build the native ntrace runtime from the pinned ntrace commit.
+1. Run the profiler/MXFP8 unit gates and build the native ntrace runtime from
+   the pinned ntrace commit.
 2. Capture one warm-up and three steady-state BF16 rollouts.
 3. Capture the same window with MoE-only MXFP8 and `flashinfer_trtllm`.
 4. Audit CUDA Graph replay provenance and reject incomplete captures.
