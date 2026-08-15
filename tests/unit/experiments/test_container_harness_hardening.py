@@ -1910,11 +1910,14 @@ def test_runtime_stage_publishes_marker_only_after_immutable_symlink_safe_audits
     )
 
     cleanup_index = stage.index('rm -rf -- "${uv_cache_dir}" "${te_cmake_dir}"')
+    vllm_prepatch_index = stage.index(
+        "prepare_vllm_source_for_readonly_runtime(sys.executable)"
+    )
     readonly_index = stage.index('"${bootstrap_python}" "${source_readonly_helper}"')
     marker_index = stage.index(
         'mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"'
     )
-    assert cleanup_index < readonly_index < marker_index
+    assert vllm_prepatch_index < cleanup_index < readonly_index < marker_index
     attestation_helper_index = attestation.index("--verify-only")
     provenance_index = attestation.index('"${source_provenance_verifier}"')
     assert attestation_helper_index < provenance_index

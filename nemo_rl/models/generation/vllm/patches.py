@@ -12,9 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import errno
 import os
 from contextlib import contextmanager
 from importlib.util import find_spec
+from pathlib import Path
+from typing import Callable, Iterator
 
 
 def _get_vllm_file(relative_path: str) -> str:
@@ -47,12 +50,40 @@ def _get_vllm_file(relative_path: str) -> str:
 
 
 @contextmanager
-def _locked_file_patch(file_path: str):
-    """Yield (content, writer) under an exclusive file lock."""
+def _locked_file_patch(
+    file_path: str,
+) -> Iterator[tuple[str, Callable[[str], None]]]:
+    """Yield source and a writer, or a fail-closed read-only writer.
+
+    Production actor runtimes are immutable. Their vLLM sources are patched
+    once while the staged environment is writable, then every actor repeats
+    the patch checks after the tree is made read-only. In that state no lock
+    is needed when the requested edit is already present. If an edit is still
+    required, the writer raises instead of silently running unpatched code.
+    """
     import fcntl
 
     lock_path = file_path + ".patch_lock"
-    lock_fd = open(lock_path, "w")
+    try:
+        lock_fd = open(lock_path, "w")
+    except OSError as lock_error:
+        if lock_error.errno not in {errno.EACCES, errno.EPERM, errno.EROFS}:
+            raise
+
+        with open(file_path) as source:
+            content = source.read()
+
+        def reject_write(_new_content: str) -> None:
+            raise PermissionError(
+                lock_error.errno,
+                "vLLM source is read-only and the required patch was not "
+                "applied during runtime staging",
+                file_path,
+            ) from lock_error
+
+        yield content, reject_write
+        return
+
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
 
@@ -634,3 +665,28 @@ def _apply_vllm_patches(
     _patch_vllm_ray_executor_v2_tcpstore_port(patch_logger)
     _patch_vllm_shm_broadcast_bind_retry(patch_logger)
     _patch_vllm_radio_layerscale_loader(patch_logger)
+
+
+def prepare_vllm_source_for_readonly_runtime(
+    py_executable: str,
+    *,
+    package_root: str | Path | None = None,
+) -> None:
+    """Apply vLLM source patches before publishing an immutable runtime."""
+    _apply_vllm_patches(py_executable)
+
+    if package_root is None:
+        package_root = Path(_get_vllm_file("__init__.py")).parent
+    resolved_root = Path(package_root).resolve()
+    patch_locks = list(resolved_root.rglob("*.patch_lock"))
+    for patch_lock in patch_locks:
+        if patch_lock.is_symlink() or not patch_lock.is_file():
+            raise RuntimeError(f"Unsafe vLLM patch lock path: {patch_lock}")
+        patch_lock.unlink()
+
+    remaining_locks = list(resolved_root.rglob("*.patch_lock"))
+    if remaining_locks:
+        raise RuntimeError(
+            "vLLM patch locks remain before read-only publication: "
+            + ", ".join(str(path) for path in remaining_locks)
+        )

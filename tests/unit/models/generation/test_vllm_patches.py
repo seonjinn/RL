@@ -31,6 +31,7 @@ The two port patches ship their own suites. These cover the remaining two:
 import ast
 import logging
 import os
+from pathlib import Path
 
 import pytest
 
@@ -221,3 +222,65 @@ def test_init_workers_ray_reports_success_and_is_idempotent(monkeypatch, tmp_pat
 
     assert patches._patch_vllm_init_workers_ray("py-exec", None) is True
     assert ray_executor.read_text() == once
+
+
+def test_init_workers_ray_accepts_prepatched_readonly_source_without_lock(
+    monkeypatch, tmp_path
+):
+    """Immutable staged runtimes must not need an adjacent patch lock."""
+    ray_executor = tmp_path / "ray_executor.py"
+    ray_executor.write_text(
+        'self._init_workers_ray(placement_group, runtime_env={"py_executable": '
+        '"py-exec"})\n'
+    )
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _r: str(ray_executor))
+
+    ray_executor.chmod(0o444)
+    tmp_path.chmod(0o555)
+    try:
+        assert patches._patch_vllm_init_workers_ray("py-exec", None) is True
+        assert not Path(f"{ray_executor}.patch_lock").exists()
+    finally:
+        tmp_path.chmod(0o755)
+
+
+def test_init_workers_ray_rejects_unpatched_readonly_source(monkeypatch, tmp_path):
+    """Read-only fallback must fail closed when a source edit is still needed."""
+    ray_executor = tmp_path / "ray_executor.py"
+    ray_executor.write_text("self._init_workers_ray(placement_group)\n")
+    monkeypatch.setattr(patches, "_get_vllm_file", lambda _r: str(ray_executor))
+
+    ray_executor.chmod(0o444)
+    tmp_path.chmod(0o555)
+    try:
+        with pytest.raises(PermissionError, match="read-only"):
+            patches._patch_vllm_init_workers_ray("py-exec", None)
+        assert not Path(f"{ray_executor}.patch_lock").exists()
+    finally:
+        tmp_path.chmod(0o755)
+
+
+def test_prepare_vllm_source_for_readonly_runtime_removes_patch_locks(
+    monkeypatch, tmp_path
+):
+    """Staging must leave no lock files that actors would need to mutate."""
+    package_root = tmp_path / "vllm"
+    package_root.mkdir()
+    first_lock = package_root / "ray_executor.py.patch_lock"
+    nested_lock = package_root / "model_executor" / "radio.py.patch_lock"
+    nested_lock.parent.mkdir()
+    applied_with: list[str] = []
+
+    def apply_patches(py_executable: str, *, extra_env_vars=None) -> None:
+        applied_with.append(py_executable)
+        first_lock.write_text("")
+        nested_lock.write_text("")
+
+    monkeypatch.setattr(patches, "_apply_vllm_patches", apply_patches)
+
+    patches.prepare_vllm_source_for_readonly_runtime(
+        "staged-python", package_root=package_root
+    )
+
+    assert applied_with == ["staged-python"]
+    assert list(package_root.rglob("*.patch_lock")) == []

@@ -825,7 +825,17 @@ fi
 "${environment_root}/bin/python" -c \
   "import megatron.core; import torch; import transformer_engine; import transformer_engine_torch"
 if [[ "${ACTOR_RUNTIME_LAYOUT}" == "split-mcore-vllm-v1" ]]; then
-  "${runtime_stage_root}/vllm-environment/bin/python" -c "import torch; import vllm"
+  vllm_python=${runtime_stage_root}/vllm-environment/bin/python
+  "${vllm_python}" -c "import torch; import vllm"
+  PYTHONDONTWRITEBYTECODE=1 "${vllm_python}" - <<"PY"
+import sys
+
+from nemo_rl.models.generation.vllm.patches import (
+    prepare_vllm_source_for_readonly_runtime,
+)
+
+prepare_vllm_source_for_readonly_runtime(sys.executable)
+PY
 fi
 "${environment_root}/bin/python" - "${RUNTIME_TEST_REQUIREMENTS}" "${environment_root}" <<"PY"
 import importlib
