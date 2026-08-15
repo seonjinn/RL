@@ -134,4 +134,10 @@ done
 test -s "${ANALYSIS_ROOT}/native_multirank/ntrace_multirank.html"
 test -s "${ANALYSIS_ROOT}/native_multirank/ntrace_multirank.json.gz"
 
+"${PYTHON_BIN}" \
+  experiments/qwen3_30ba3b_rollout_ntrace/summarize_breakdown.py \
+  "${ANALYSIS_ROOT}"
+test -s "${ANALYSIS_ROOT}/rollout_bottleneck_summary.json"
+test -s "${ANALYSIS_ROOT}/rollout_bottleneck_summary.tsv"
+
 echo "analysis complete: ${ANALYSIS_ROOT}"
