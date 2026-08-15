@@ -439,19 +439,25 @@ def test_build_hf_to_local_param_map_uses_routed_expert_runtime_mxfp8_scale(
         hidden_size // 32,
         dtype=torch.uint8,
     )
-    ext = _make_ext(
-        {
-            "model.layers.0.mlp.experts.routed_experts.w13_weight": weight,
-            "model.layers.0.mlp.experts.routed_experts.w13_weight_scale": runtime_scale,
-        }
-    )
+    weight_name = "model.layers.0.mlp.experts.routed_experts.w13_weight"
+    runtime_scale_name = weight_name + "_scale"
+    checkpoint_scale_name = weight_name + "_scale_from_checkpoint"
+    vllm_params = {
+        weight_name: weight,
+        runtime_scale_name: runtime_scale,
+    }
+    ext = _make_ext(vllm_params)
+
+    quantize_call = 0
 
     def fake_quantize(value):
+        nonlocal quantize_call
+        quantize_call += 1
         return (
-            torch.full_like(value, 3, dtype=torch.float8_e4m3fn),
+            torch.full_like(value, 2 * quantize_call + 1, dtype=torch.float8_e4m3fn),
             torch.full(
                 (*value.shape[:-1], value.shape[-1] // 32),
-                7,
+                2 * quantize_call + 5,
                 dtype=torch.uint8,
             ),
         )
@@ -468,6 +474,20 @@ def test_build_hf_to_local_param_map_uses_routed_expert_runtime_mxfp8_scale(
 
     assert torch.all(weight[:, :intermediate_size, :].float() == 3)
     assert torch.all(runtime_scale[:, :intermediate_size, :] == 7)
+
+    checkpoint_scale = torch.nn.Parameter(runtime_scale.data, requires_grad=False)
+    replacement_runtime_scale = torch.nn.Parameter(
+        torch.zeros_like(runtime_scale), requires_grad=False
+    )
+    vllm_params[checkpoint_scale_name] = checkpoint_scale
+    vllm_params[runtime_scale_name] = replacement_runtime_scale
+
+    second_ctx = spec.pre(spec.base)
+    spec.post(second_ctx)
+
+    assert torch.all(weight[:, :intermediate_size, :].float() == 5)
+    assert torch.all(checkpoint_scale[:, :intermediate_size, :] == 9)
+    assert torch.all(replacement_runtime_scale == 0)
 
 
 def test_build_hf_to_local_param_map_quantizes_dense_gate_and_up_for_mxfp8(
