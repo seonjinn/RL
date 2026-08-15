@@ -77,6 +77,20 @@ def _load_runtime_stage_readonly_helper() -> ModuleType:
     return module
 
 
+def _load_flashinfer_readonly_helper() -> ModuleType:
+    path = EXPERIMENT_DIR / "prepare_flashinfer_readonly_runtime.py"
+    assert path.is_file(), "The split vLLM runtime needs a FlashInfer prepublisher"
+    spec = importlib.util.spec_from_file_location("flashinfer_readonly_runtime", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(spec.name, None)
+    return module
+
+
 def _runtime_modules(module: ModuleType, environment_root: Path) -> dict[str, object]:
     class FakeCuda:
         @staticmethod
@@ -318,10 +332,16 @@ def _stage_runtime_payload_fixture(
         source_validator.parent / "scripts" / "verify_source_provenance.sh"
     )
     source_readonly_helper = source_validator.parent / "make_runtime_stage_readonly.py"
+    source_flashinfer_readonly_helper = (
+        source_validator.parent / "prepare_flashinfer_readonly_runtime.py"
+    )
     source_verifier.parent.mkdir(parents=True)
     source_validator.write_text("raise SystemExit('fixture validator must not run')\n")
     source_readonly_helper.write_text(
         (EXPERIMENT_DIR / "make_runtime_stage_readonly.py").read_text()
+    )
+    source_flashinfer_readonly_helper.write_text(
+        (EXPERIMENT_DIR / "prepare_flashinfer_readonly_runtime.py").read_text()
     )
     _write_executable(source_verifier, verifier_body)
     (source_project_root / "docker").mkdir()
@@ -1913,14 +1933,96 @@ def test_runtime_stage_publishes_marker_only_after_immutable_symlink_safe_audits
     vllm_prepatch_index = stage.index(
         "prepare_vllm_source_for_readonly_runtime(sys.executable)"
     )
+    flashinfer_prepare_index = stage.index(
+        '"${vllm_python}" "${source_flashinfer_readonly_helper}" --prepare'
+    )
     readonly_index = stage.index('"${bootstrap_python}" "${source_readonly_helper}"')
+    flashinfer_verify_index = stage.index(
+        '"${vllm_python}" "${source_flashinfer_readonly_helper}" --verify-only'
+    )
+    assert stage.count('FLASHINFER_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}"') == 2
     marker_index = stage.index(
         'mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"'
     )
-    assert vllm_prepatch_index < cleanup_index < readonly_index < marker_index
-    attestation_helper_index = attestation.index("--verify-only")
+    assert (
+        vllm_prepatch_index
+        < flashinfer_prepare_index
+        < cleanup_index
+        < readonly_index
+        < flashinfer_verify_index
+        < marker_index
+    )
+    attestation_readonly_index = attestation.index(
+        '"${bootstrap_python}" "${source_readonly_helper}"'
+    )
+    attestation_flashinfer_index = attestation.index(
+        '"${vllm_python}" "${source_flashinfer_readonly_helper}" --verify-only'
+    )
+    assert attestation.count('FLASHINFER_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}"') == 1
     provenance_index = attestation.index('"${source_provenance_verifier}"')
-    assert attestation_helper_index < provenance_index
+    assert attestation_readonly_index < attestation_flashinfer_index < provenance_index
+
+
+@pytest.mark.parametrize(
+    ("prepare_name", "alias"),
+    (
+        (
+            "prepare_flashinfer_bmm_symlink",
+            "flashinfer/trtllm/batched_gemm/trtllmGen_bmm_export",
+        ),
+        (
+            "prepare_flashinfer_gemm_symlink",
+            "flashinfer/trtllm/gemm/trtllmGen_gemm_export",
+        ),
+    ),
+)
+def test_flashinfer_cubin_prepublication_avoids_readonly_lock_creation(
+    tmp_path: Path, prepare_name: str, alias: str
+) -> None:
+    module = _load_flashinfer_readonly_helper()
+    cubin_root = tmp_path / "flashinfer_cubin" / "cubins"
+    target = cubin_root / "artifact-hash" / "bmm" / "include" / "export"
+    target.mkdir(parents=True)
+    loader = tmp_path / "cubin_loader.py"
+    loader.write_text(
+        """from pathlib import Path
+
+class ExplodingFileLock:
+    def __init__(self, *args, **kwargs):
+        raise AssertionError("read-only replay attempted to create a lock")
+
+class FileLockModule:
+    FileLock = ExplodingFileLock
+
+filelock = FileLockModule()
+
+def ensure_symlink(link, target):
+    link = Path(link)
+    target = Path(target)
+
+    link.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = str(link) + ".lock"
+    lock = filelock.FileLock(lock_path, timeout=60)
+    with lock:
+        if link.is_symlink() or link.exists():
+            if link.is_symlink() and link.resolve() == target.resolve():
+                return
+            raise AssertionError("unexpected stale path")
+        link.symlink_to(target)
+"""
+    )
+
+    module.patch_flashinfer_cubin_loader(loader)
+    link = getattr(module, prepare_name)(cubin_root, target)
+
+    assert link.is_symlink()
+    assert link == cubin_root / alias
+    assert link.resolve() == target.resolve()
+    assert not Path(f"{link}.lock").exists()
+
+    namespace: dict[str, object] = {}
+    exec(compile(loader.read_text(), str(loader), "exec"), namespace)
+    namespace["ensure_symlink"](link, target)
 
 
 def test_runtime_attestation_submitter_requires_completed_stage_job() -> None:
@@ -2130,9 +2232,9 @@ def test_runtime_stage_audit_failure_never_publishes_marker(
             "expected_te_version_base_commit": TE_COMMIT,
             "expected_python_version": PYTHON_VERSION,
             "expected_uv_version": UV_VERSION,
-                "RUNTIME_FEATURE_SET": "te_eval_capability_8",
-                "ACTOR_RUNTIME_LAYOUT": "mcore-only-v1",
-                "RUNTIME_STAGE_CAPABILITY": RUNTIME_STAGE_CAPABILITY,
+            "RUNTIME_FEATURE_SET": "te_eval_capability_8",
+            "ACTOR_RUNTIME_LAYOUT": "mcore-only-v1",
+            "RUNTIME_STAGE_CAPABILITY": RUNTIME_STAGE_CAPABILITY,
             "RUNTIME_TEST_REQUIREMENTS": RUNTIME_TEST_REQUIREMENTS,
             "RUNTIME_EXCLUDED_PACKAGES": (
                 "causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm"

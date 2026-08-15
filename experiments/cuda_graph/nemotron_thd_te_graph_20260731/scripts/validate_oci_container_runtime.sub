@@ -643,12 +643,14 @@ validator=${project_root}/${validator_relative_path}
 source_provenance_verifier=${project_root}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/scripts/verify_source_provenance.sh
 readonly_helper=${project_root}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/make_runtime_stage_readonly.py
 source_readonly_helper=${source_project_root}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/make_runtime_stage_readonly.py
+source_flashinfer_readonly_helper=${source_project_root}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/prepare_flashinfer_readonly_runtime.py
 bootstrap_python=${RUNTIME_BOOTSTRAP_PYTHON:?Runtime stage requires the immutable container Python}
 bridge_root=${project_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge
 mcore_root=${bridge_root}/3rdparty/Megatron-LM
 if [[ ! -f "${validator}" || ! -x "${source_provenance_verifier}" ||
       -L "${readonly_helper}" || ! -f "${readonly_helper}" ||
       -L "${source_readonly_helper}" || ! -f "${source_readonly_helper}" ||
+      -L "${source_flashinfer_readonly_helper}" || ! -f "${source_flashinfer_readonly_helper}" ||
       ! -x "${bootstrap_python}" ]]; then
   echo "Runtime source copy is missing a required validation helper" >&2
   exit 2
@@ -836,6 +838,9 @@ from nemo_rl.models.generation.vllm.patches import (
 
 prepare_vllm_source_for_readonly_runtime(sys.executable)
 PY
+  PYTHONDONTWRITEBYTECODE=1 FLASHINFER_NO_DOWNLOAD=1 \
+    FLASHINFER_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
+    "${vllm_python}" "${source_flashinfer_readonly_helper}" --prepare
 fi
 "${environment_root}/bin/python" - "${RUNTIME_TEST_REQUIREMENTS}" "${environment_root}" <<"PY"
 import importlib
@@ -901,6 +906,11 @@ PYTHONDONTWRITEBYTECODE=1 \
   --regular-file "${partial_marker}" \
   --trusted-symlink-root "${runtime_stage_root}" \
   --trusted-symlink-root "${python_install_dir}"
+if [[ "${ACTOR_RUNTIME_LAYOUT}" == "split-mcore-vllm-v1" ]]; then
+  PYTHONDONTWRITEBYTECODE=1 FLASHINFER_NO_DOWNLOAD=1 \
+    FLASHINFER_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
+    "${vllm_python}" "${source_flashinfer_readonly_helper}" --verify-only
+fi
 mv --no-clobber --no-target-directory -- "${partial_marker}" "${marker}"
 trap - EXIT
 printf "RUNTIME_STAGE_READY=%s\nRUNTIME_STAGE_MARKER=%s\nRUNTIME_STAGE_JOB_ID=%s\n" \
@@ -969,6 +979,7 @@ fi
 python_install_dir=${UV_PYTHON_INSTALL_DIR:?Runtime probe requires a managed Python install directory}
 project_root=${runtime_stage_root}/source
 source_readonly_helper=${source_project_root}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/make_runtime_stage_readonly.py
+source_flashinfer_readonly_helper=${source_project_root}/experiments/cuda_graph/nemotron_thd_te_graph_20260731/prepare_flashinfer_readonly_runtime.py
 bootstrap_python=${RUNTIME_BOOTSTRAP_PYTHON:?Runtime attestation requires the immutable container Python}
 if [[ -L "${source_readonly_helper}" || ! -f "${source_readonly_helper}" ||
       ! -x "${bootstrap_python}" ]]; then
@@ -982,6 +993,18 @@ PYTHONDONTWRITEBYTECODE=1 \
   --regular-file "${marker}" \
   --trusted-symlink-root "${runtime_stage_root}" \
   --trusted-symlink-root "${python_install_dir}"
+if [[ "${ACTOR_RUNTIME_LAYOUT}" == "split-mcore-vllm-v1" ]]; then
+  vllm_python=${runtime_stage_root}/vllm-environment/bin/python
+  if [[ -L "${source_flashinfer_readonly_helper}" ||
+        ! -f "${source_flashinfer_readonly_helper}" ||
+        ! -x "${vllm_python}" ]]; then
+    echo "FlashInfer verifier or staged vLLM Python is missing or unsafe" >&2
+    exit 2
+  fi
+  PYTHONDONTWRITEBYTECODE=1 FLASHINFER_NO_DOWNLOAD=1 \
+    FLASHINFER_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
+    "${vllm_python}" "${source_flashinfer_readonly_helper}" --verify-only
+fi
 runtime_python=${environment_root}/bin/python
 if [[ ! -x "${runtime_python}" ]]; then
   echo "Runtime stage Python is missing or unsafe" >&2
