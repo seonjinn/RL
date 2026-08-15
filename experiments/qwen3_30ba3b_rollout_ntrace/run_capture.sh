@@ -77,6 +77,7 @@ common_args=(
   grpo.async_grpo.in_flight_weight_updates=false
   policy.megatron_cfg.optimizer.lr=0.0
   policy.megatron_cfg.optimizer.min_lr=0.0
+  policy.megatron_cfg.scheduler.lr_warmup_init=0.0
   checkpointing.enabled=false
   logger.log_dir="${RUN_ROOT}/logs"
   logger.wandb_enabled=false
