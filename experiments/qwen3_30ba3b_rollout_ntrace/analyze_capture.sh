@@ -66,12 +66,43 @@ PY
 then
   echo "reusing complete CUDA Graph replay coverage audit: ${coverage_json}"
 else
-  "${PYTHON_BIN}" "${NTRACE_SOURCE}/scripts/audit_graph_replay_coverage.py" \
-    "${DATA_DIR}" \
-    --rank 0 --rank 1 --rank 2 --rank 3 \
-    --rank 4 --rank 5 --rank 6 --rank 7 \
-    --output-json "${coverage_json}" \
-    2>&1 | tee "${ANALYSIS_ROOT}/graph_replay_coverage.log"
+  coverage_parts=${ANALYSIS_ROOT}/graph_replay_coverage_parts
+  mkdir -p "${coverage_parts}"
+  audit_pids=()
+  for rank in {0..7}; do
+    (
+      "${PYTHON_BIN}" \
+        "${NTRACE_SOURCE}/scripts/audit_graph_replay_coverage.py" \
+        "${DATA_DIR}" \
+        --rank "${rank}" \
+        --output-json "${coverage_parts}/rank${rank}.json" \
+        > "${coverage_parts}/rank${rank}.log" 2>&1
+    ) &
+    audit_pids+=("$!")
+  done
+  audit_status=0
+  for pid in "${audit_pids[@]}"; do
+    wait "${pid}" || audit_status=1
+  done
+  "${PYTHON_BIN}" - "${coverage_parts}" "${coverage_json}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+parts = Path(sys.argv[1])
+output = Path(sys.argv[2])
+reports = []
+for rank in range(8):
+    report = json.loads((parts / f"rank{rank}.json").read_text())["ranks"][0]
+    if report["rank"] != rank:
+        raise SystemExit(f"coverage rank mismatch: expected {rank}, got {report['rank']}")
+    reports.append(report)
+output.write_text(json.dumps({"ranks": reports}, indent=2) + "\n")
+PY
+  if (( audit_status != 0 )); then
+    echo "CUDA Graph replay coverage is incomplete" >&2
+    exit "${audit_status}"
+  fi
 fi
 
 breakdown_pids=()
