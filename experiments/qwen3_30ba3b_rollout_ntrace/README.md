@@ -31,6 +31,7 @@ After capture, run the graph replay audit before producing breakdowns.
 NTRACE_ARM=bf16|mxfp8
 NTRACE_RUNTIME=/shared/path/to/ntrace-runtime
 NTRACE_SOURCE_COMMIT=<commit>
+NEMO_SOURCE_COMMIT=<commit>
 NTRACE_RESULTS_ROOT=/shared/path/to/results
 ```
 

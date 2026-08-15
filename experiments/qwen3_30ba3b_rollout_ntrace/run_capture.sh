@@ -15,6 +15,7 @@ NUM_MINUTES=180
 : "${NTRACE_ARM:?set NTRACE_ARM to bf16 or mxfp8}"
 : "${NTRACE_RUNTIME:?set NTRACE_RUNTIME to the shared ntrace install target}"
 : "${NTRACE_SOURCE_COMMIT:?set NTRACE_SOURCE_COMMIT to the ntrace git commit}"
+: "${NEMO_SOURCE_COMMIT:?set NEMO_SOURCE_COMMIT to the NeMo-RL git commit}"
 : "${NTRACE_RESULTS_ROOT:?set NTRACE_RESULTS_ROOT to a shared result directory}"
 
 case "${NTRACE_ARM}" in
@@ -57,7 +58,7 @@ PY
 
 cat > "${RUN_ROOT}/provenance.txt" <<EOF
 arm=${NTRACE_ARM}
-nemo_rl_commit=$(git rev-parse HEAD)
+nemo_rl_commit=${NEMO_SOURCE_COMMIT}
 ntrace_commit=${NTRACE_SOURCE_COMMIT}
 container=${CONTAINER:-unknown}
 slurm_job_id=${SLURM_JOB_ID:-unknown}
