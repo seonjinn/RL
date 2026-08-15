@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Any
+
+
+def validate_mxfp8_precision(vllm_cfg: dict[str, Any]) -> None:
+    if vllm_cfg.get("is_mx", False) and vllm_cfg.get("precision") != "fp8":
+        raise ValueError("is_mx=True requires precision='fp8'")
+
 
 def resolve_distributed_executor_backend(
     tensor_parallel_size: int,

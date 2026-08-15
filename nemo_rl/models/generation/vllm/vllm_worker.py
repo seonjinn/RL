@@ -52,6 +52,7 @@ from nemo_rl.models.generation.vllm.utils import (
 from nemo_rl.models.generation.vllm.worker_utils import (
     resolve_data_parallel_local_rank,
     resolve_distributed_executor_backend,
+    validate_mxfp8_precision,
 )
 from nemo_rl.models.huggingface.common import ModelFlag
 from nemo_rl.models.policy.utils import is_vllm_v1_engine_enabled
@@ -497,6 +498,8 @@ class BaseVllmGenerationWorker:
             )
             vllm_kwargs["ray_workers_use_nsight"] = True
             self._patch_vllm_nsight_config()
+
+        validate_mxfp8_precision(self.cfg["vllm_cfg"])
 
         # Call init_fp8 when precision is fp8
         # (kv_cache_dtype can be fp8/fp8_e4m3 or auto, validated in init_fp8)

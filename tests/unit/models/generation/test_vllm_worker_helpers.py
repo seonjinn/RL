@@ -19,6 +19,7 @@ import pytest
 from nemo_rl.models.generation.vllm.worker_utils import (
     resolve_data_parallel_local_rank,
     resolve_distributed_executor_backend,
+    validate_mxfp8_precision,
 )
 
 
@@ -49,3 +50,21 @@ def test_resolve_data_parallel_local_rank(
         resolve_data_parallel_local_rank(rank, model_parallel_size, executor_backend)
         == expected
     )
+
+
+@pytest.mark.parametrize("precision", [None, "auto", "bf16", "bfloat16"])
+def test_validate_mxfp8_precision_rejects_non_fp8_precision(precision):
+    with pytest.raises(ValueError, match="is_mx=True requires precision='fp8'"):
+        validate_mxfp8_precision({"precision": precision, "is_mx": True})
+
+
+@pytest.mark.parametrize(
+    "vllm_cfg",
+    [
+        {"precision": "fp8", "is_mx": True},
+        {"precision": "bfloat16", "is_mx": False},
+        {"precision": "bfloat16"},
+    ],
+)
+def test_validate_mxfp8_precision_accepts_supported_configs(vllm_cfg):
+    validate_mxfp8_precision(vllm_cfg)
