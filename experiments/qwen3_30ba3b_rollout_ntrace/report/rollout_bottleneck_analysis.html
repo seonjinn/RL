@@ -108,7 +108,8 @@
         work stay fixed.</div>
       <div class="callout warn"><strong>The first-window stall is separate.</strong><br>
         Its 133.63 s idle interval may come from rollout orchestration, request
-        availability, or the profiler boundary. The GPU trace alone cannot decide.</div>
+        availability, or the profiler boundary. Multirank analysis rules out NCCL
+        and rank skew, but the GPU trace alone cannot choose among the remaining causes.</div>
     </div>
   </div>
 
@@ -125,6 +126,7 @@
     <li>About 17.3M measured replay rows and 28.8K-30.2K unique replay nodes per rank.</li>
     <li>Zero uncovered replay nodes across ranks 0-7; all nodes map to captured graph clones.</li>
     <li>Rank active-time max/min spread is 2.7%, so worker compute skew is small.</li>
+    <li>No communication kernels or straggler; mean jitter is 0.01% and p90 is 0.04%.</li>
     <li>The trace saved successfully before a post-save Ray finalizer error.</li>
   </ul>
   <div class="callout warn"><strong>No matched BF16 speedup claim is made here.</strong><br>
@@ -134,5 +136,6 @@
   <p class="small">Provenance: NeMo-RL experiment snapshot <code>4048c388</code> |
     ntrace <code>bed58828</code> | analysis workflow <code>5e06de216</code> |
     source data: <a href="data/rollout_bottleneck_summary.json">JSON</a> and
-    <a href="data/rollout_bottleneck_summary.tsv">TSV</a>.</p>
+    <a href="data/rollout_bottleneck_summary.tsv">TSV</a> |
+    <a href="ntrace_multirank.html">native multirank report</a>.</p>
 </main></body></html>
