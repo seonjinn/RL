@@ -42,8 +42,12 @@ def _stack_category(path: tuple[str, ...]) -> str:
 
 def _raw_kernel_category(name: str) -> str:
     lower = name.lower()
+    if name.startswith("bmm_MxE4m3_"):
+        return "expert_fc1_bmm"
+    if name.startswith("bmm_Bfloat16_"):
+        return "expert_fc2_bmm"
     if name.startswith("bmm_"):
-        return "expert_bmm"
+        return "expert_bmm_other"
     if "moe::dev::routing" in lower or "moe::dev::finalize" in lower:
         return "moe_routing_finalize"
     if "fmha" in lower or "attention" in lower:
@@ -170,7 +174,8 @@ def main() -> None:
         "idle_s",
         "idle_pct",
         "moe_stack_s",
-        "expert_bmm_raw_s",
+        "expert_fc1_bmm_raw_s",
+        "expert_fc2_bmm_raw_s",
         "attention_raw_s",
         "quantization_layout_raw_s",
     )
@@ -185,7 +190,8 @@ def main() -> None:
             rank["idle_s"],
             rank["idle_pct"],
             stack_categories.get("moe", 0.0),
-            raw_categories.get("expert_bmm", 0.0),
+            raw_categories.get("expert_fc1_bmm", 0.0),
+            raw_categories.get("expert_fc2_bmm", 0.0),
             raw_categories.get("attention", 0.0),
             raw_categories.get("quantization_layout", 0.0),
         )
