@@ -71,6 +71,7 @@ def _rank_summary(path: Path) -> dict[str, Any]:
 
     kernel_classes_ns: Counter[str] = Counter()
     stack_categories_ns: Counter[str] = Counter()
+    stack_categories_per_iter_ns = [Counter() for _ in range(num_iterations)]
     stack: list[tuple[dict[str, Any], tuple[str, ...]]] = [(data, ())]
     while stack:
         node, parent_path = stack.pop()
@@ -89,6 +90,16 @@ def _rank_summary(path: Path) -> dict[str, Any]:
         )
         if active_ns:
             stack_categories_ns[_stack_category(node_path)] += active_ns
+        stack_category = _stack_category(node_path)
+        for category, durations_ns in node.get(
+            "kernel_breakdown_per_iter", {}
+        ).items():
+            if category == "Idle":
+                continue
+            for index, duration_ns in enumerate(durations_ns):
+                stack_categories_per_iter_ns[index][stack_category] += float(
+                    duration_ns
+                )
         stack.extend((child, node_path) for child in node.get("children", []))
 
     raw_other_ns: Counter[str] = Counter()
@@ -100,6 +111,11 @@ def _rank_summary(path: Path) -> dict[str, Any]:
         raw_other_ns[_raw_kernel_category(name)] += duration_ns
 
     active_s = step_s - idle_s
+    step_per_iter_s = [float(value) / 1e9 for value in data["time_per_iter_ns"]]
+    idle_per_iter_s = [
+        float(value) / 1e9
+        for value in data["time_no_further_nvtx_range_per_iter_ns"]
+    ]
     return {
         "rank": int(path.parent.name.removeprefix("rank")),
         "num_iterations": num_iterations,
@@ -116,6 +132,25 @@ def _rank_summary(path: Path) -> dict[str, Any]:
         "raw_other_categories_s": {
             key: value / 1e9 for key, value in sorted(raw_other_ns.items())
         },
+        "iterations": [
+            {
+                "index": index,
+                "label": data["iteration_labels"][index],
+                "step_s": step_per_iter_s[index],
+                "active_s": step_per_iter_s[index] - idle_per_iter_s[index],
+                "idle_s": idle_per_iter_s[index],
+                "idle_pct": 100.0
+                * idle_per_iter_s[index]
+                / step_per_iter_s[index],
+                "stack_categories_s": {
+                    key: value / 1e9
+                    for key, value in sorted(
+                        stack_categories_per_iter_ns[index].items()
+                    )
+                },
+            }
+            for index in range(num_iterations)
+        ],
     }
 
 
@@ -126,6 +161,30 @@ def _metric_summary(ranks: list[dict[str, Any]], key: str) -> dict[str, float]:
         "min": min(values),
         "max": max(values),
         "max_over_min": max(values) / min(values),
+    }
+
+
+def _iteration_summary(
+    ranks: list[dict[str, Any]], index: int
+) -> dict[str, Any]:
+    iterations = [rank["iterations"][index] for rank in ranks]
+    stack_keys = sorted(
+        set().union(*(iteration["stack_categories_s"] for iteration in iterations))
+    )
+    return {
+        "index": index,
+        "label": iterations[0]["label"],
+        "step_s": _metric_summary(iterations, "step_s"),
+        "active_s": _metric_summary(iterations, "active_s"),
+        "idle_s": _metric_summary(iterations, "idle_s"),
+        "idle_pct": _metric_summary(iterations, "idle_pct"),
+        "stack_categories_s": {
+            key: statistics.fmean(
+                iteration["stack_categories_s"].get(key, 0.0)
+                for iteration in iterations
+            )
+            for key in stack_keys
+        },
     }
 
 
@@ -152,6 +211,10 @@ def main() -> None:
             "idle_s": _metric_summary(ranks, "idle_s"),
             "idle_pct": _metric_summary(ranks, "idle_pct"),
         },
+        "iterations": [
+            _iteration_summary(ranks, index)
+            for index in range(ranks[0]["num_iterations"])
+        ],
         "notes": {
             "stack_categories": (
                 "Conserved self time classified from each breakdown node's full "
