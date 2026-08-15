@@ -92,9 +92,9 @@ if [[ "${NTRACE_ARM}" == bf16 ]]; then
     '~policy.generation.vllm_cfg.quantization_ignore_patterns'
     policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm
     policy.generation.refit_transport=vllm_zmq_sparse
-    policy.generation.refit_cfg.sparse.delta_compression.encoding=xor
-    policy.generation.refit_cfg.sparse.verify_samples_per_payload=0
-    policy.generation.refit_cfg.sparse.baseline.in_memory=false
+    ++policy.generation.refit_cfg.sparse.delta_compression.encoding=xor
+    ++policy.generation.refit_cfg.sparse.verify_samples_per_payload=0
+    ++policy.generation.refit_cfg.sparse.baseline.in_memory=false
   )
 else
   precision_args=(policy.generation.refit_transport=nccl_reshard)
