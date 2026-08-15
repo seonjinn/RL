@@ -38,9 +38,13 @@ CONTAINER_ENV_VARS = (
     "CONTAINER_PATH_PREFIX,UV_PROJECT,UV_PROJECT_ENVIRONMENT,UV_LINK_MODE,UV_PYTHON,"
     "UV_PYTHON_INSTALL_DIR,UV_MANAGED_PYTHON,UV_PYTHON_DOWNLOADS,"
     "UV_NO_EDITABLE,PINNED_UV_VERSION,UV_EXECUTABLE,RUNTIME_PYTHON,NEMO_RL_VENV_DIR,"
-    "NRL_FORCE_REBUILD_VENVS,NRL_MEGATRON_CHECKPOINT_DIR,NVTE_WITH_NCCL_EP,NVTE_CUDA_ARCHS,"
+    "NRL_FORCE_REBUILD_VENVS,NEMO_RL_MCORE_PY_EXECUTABLE,"
+    "NEMO_RL_VLLM_PY_EXECUTABLE,"
+    "NRL_MEGATRON_CHECKPOINT_DIR,NVTE_WITH_NCCL_EP,NVTE_CUDA_ARCHS,"
     "TORCH_CUDA_ARCH_LIST,CMAKE_BUILD_PARALLEL_LEVEL,NRL_SLURM_JOB_ID,"
-    "NRL_SLURM_RESTART_COUNT"
+    "NRL_SLURM_RESTART_COUNT,HF_HOME,HF_HUB_CACHE,HF_DATASETS_CACHE,HF_MODULES_CACHE,"
+    "HF_HUB_OFFLINE,TRANSFORMERS_OFFLINE,HF_DATASETS_OFFLINE,"
+    "HF_HUB_DISABLE_IMPLICIT_TOKEN,HF_HUB_DISABLE_TELEMETRY"
 )
 DENSE_AXES = ("attn", "mlp", "mamba")
 MOE_AXES = (
@@ -152,8 +156,11 @@ def _campaign_leaf_harness(tmp_path: Path) -> tuple[Path, Path, Path, dict[str, 
     managed_python.write_text("#!/bin/sh\nexit 0\n")
     managed_python.chmod(0o755)
     runtime_python = runtime_stage_root / "environment" / "bin" / "python"
+    vllm_runtime_python = runtime_stage_root / "vllm-environment" / "bin" / "python"
     runtime_python.parent.mkdir(parents=True)
+    vllm_runtime_python.parent.mkdir(parents=True)
     runtime_python.symlink_to(managed_python)
+    vllm_runtime_python.symlink_to(managed_python)
     provenance = {
         "nemo_rl_commit": "1" * 40,
         "bridge_commit": "2" * 40,
@@ -1080,6 +1087,7 @@ def test_rendered_nemorl_command_uses_only_current_graph_fields() -> None:
     assert "policy.offload_optimizer_for_logprob=false" in command
     assert "logger.wandb.project=sna-cg-study" in shlex.split(command)
     assert "NRL_FORCE_REBUILD_VENVS=true" in command
+    assert "NEMO_RL_PY_EXECUTABLES_SYSTEM=1" not in command
     assert "++policy.router_replay.enabled=false" in command
     assert "cuda_graph_scope" not in command
     assert "cuda_graph_max_packed_seqs" not in command
@@ -1945,6 +1953,15 @@ def test_fake_sbatch_submission_writes_strict_complete_metadata(
     assert decoded["managed_python_install_dir"] == record["managed_python_install_dir"]
     assert decoded["uv_executable"] == record["uv_executable"]
     assert decoded["runtime_python"] == record["runtime_python"]
+    assert decoded["vllm_runtime_python"] == record["vllm_runtime_python"]
+    assert decoded["hf_home"] == record["hf_home"] == ""
+    expected_runtime_contract = (
+        ("dropless_alltoall_qwen30_16", "deep-ep,fast-hadamard-transform")
+        if router_replay == "on"
+        else ("dropless_hybridep_nano16", "fast-hadamard-transform")
+    )
+    assert record["runtime_feature_set"] == expected_runtime_contract[0]
+    assert record["runtime_excluded_packages"] == expected_runtime_contract[1]
     assert decoded["r3_record_python"] == record["r3_record_python"]
     assert env["scope_name"] == record["scope_name"] == "baseline_no_cg"
     expected_topology = (
@@ -2662,6 +2679,16 @@ def test_leaf_runtime_attestation_uses_the_nightly_container_python() -> None:
     )[0]
     assert runtime_attestation_command.startswith("/opt/nemo_rl_venv/bin/python ")
     assert "/usr/bin/python3" not in runtime_attestation_command
+    assert (
+        "--runtime-feature-set dropless_hybridep_nano16"
+        in runtime_attestation_command
+    )
+    assert (
+        "--excluded-packages fast-hadamard-transform"
+        in runtime_attestation_command
+    )
+    assert "--torch-cuda-arch-list 10.0a" in runtime_attestation_command
+    assert "--nvte-cuda-archs 100a" in runtime_attestation_command
 
 
 def test_leaf_job_rejects_relative_profile_uv_executable(tmp_path: Path) -> None:
@@ -2893,6 +2920,8 @@ def test_nemorl_job_wrapper_uses_shared_attested_python_and_isolates_worker_venv
         '"${RUNTIME_PYTHON:-}" '
         '"${NEMO_RL_VENV_DIR:-}" '
         '"${NRL_MEGATRON_CHECKPOINT_DIR:-}" '
+        '"${NEMO_RL_MCORE_PY_EXECUTABLE:-}" '
+        '"${NEMO_RL_VLLM_PY_EXECUTABLE:-}" '
         '"${PATH:-}" '
         '"${NRL_SLURM_JOB_ID:-}" '
         '"${NRL_SLURM_RESTART_COUNT:-}" '
@@ -2910,12 +2939,15 @@ def test_nemorl_job_wrapper_uses_shared_attested_python_and_isolates_worker_venv
     uv_executable.write_text(f"#!/bin/sh\nprintf 'uv {UV_VERSION} (fixture)\\n'\n")
     uv_executable.chmod(0o755)
     runtime_python = runtime_stage_root / "environment" / "bin" / "python"
+    vllm_runtime_python = runtime_stage_root / "vllm-environment" / "bin" / "python"
     runtime_python.parent.mkdir(parents=True)
+    vllm_runtime_python.parent.mkdir(parents=True)
     managed_python = python_install_dir / "cpython-fixture" / "bin" / "python3.13"
     managed_python.parent.mkdir(parents=True)
     managed_python.write_text("#!/bin/sh\nexit 0\n")
     managed_python.chmod(0o755)
     runtime_python.symlink_to(managed_python)
+    vllm_runtime_python.symlink_to(managed_python)
     base_log_dir = tmp_path / "logs"
     megatron_checkpoint_dir = tmp_path / "shared" / "megatron-checkpoints"
     environment = os.environ.copy()
@@ -2936,6 +2968,8 @@ def test_nemorl_job_wrapper_uses_shared_attested_python_and_isolates_worker_venv
             "PINNED_UV_VERSION": UV_VERSION,
             "UV_EXECUTABLE": str(uv_executable),
             "RUNTIME_PYTHON": str(runtime_python),
+            "NEMO_RL_MCORE_PY_EXECUTABLE": str(runtime_python),
+            "NEMO_RL_VLLM_PY_EXECUTABLE": str(vllm_runtime_python),
             "UV_PYTHON": PYTHON_VERSION,
             "UV_PYTHON_INSTALL_DIR": str(python_install_dir),
             "UV_MANAGED_PYTHON": "1",
@@ -2961,7 +2995,7 @@ def test_nemorl_job_wrapper_uses_shared_attested_python_and_isolates_worker_venv
 
     assert result.returncode == 0, result.stderr
     environment_lines = environment_log.read_text().splitlines()
-    assert environment_lines[:12] == [
+    assert environment_lines[:14] == [
         str(runtime_stage_root / "environment"),
         PYTHON_VERSION,
         str(python_install_dir),
@@ -2974,10 +3008,12 @@ def test_nemorl_job_wrapper_uses_shared_attested_python_and_isolates_worker_venv
         str(runtime_python),
         "/tmp/nemo-rl-worker-venvs/job-733-restart-0",
         str(megatron_checkpoint_dir),
+        str(runtime_python),
+        str(vllm_runtime_python),
     ]
     assert megatron_checkpoint_dir.is_dir()
-    assert environment_lines[12].split(":")[0] == str(fake_bin)
-    assert environment_lines[13:] == ["733", "0"]
+    assert environment_lines[14].split(":")[0] == str(fake_bin)
+    assert environment_lines[15:] == ["733", "0"]
 
     runtime_python.unlink()
     outside_python = tmp_path / "outside-managed-python" / "bin" / "python3.13"
@@ -3082,12 +3118,15 @@ def test_scope_job_wrapper_rejects_mutated_uv_before_executing_it(
     )
     uv_executable.chmod(0o755)
     runtime_python = runtime_stage_root / "environment" / "bin" / "python"
+    vllm_runtime_python = runtime_stage_root / "vllm-environment" / "bin" / "python"
     runtime_python.parent.mkdir(parents=True)
+    vllm_runtime_python.parent.mkdir(parents=True)
     managed_python = python_install_dir / "cpython-fixture" / "bin" / "python3.13"
     managed_python.parent.mkdir(parents=True)
     managed_python.write_text("#!/bin/sh\nexit 0\n")
     managed_python.chmod(0o755)
     runtime_python.symlink_to(managed_python)
+    vllm_runtime_python.symlink_to(managed_python)
     host_execution_marker = tmp_path / "unattested-path-command-executed"
     sibling_srun = uv_executable.parent / "srun"
     sibling_srun.write_text(
@@ -3115,6 +3154,8 @@ def test_scope_job_wrapper_rejects_mutated_uv_before_executing_it(
             "PINNED_UV_VERSION": UV_VERSION,
             "UV_EXECUTABLE": str(uv_executable),
             "RUNTIME_PYTHON": str(runtime_python),
+            "NEMO_RL_MCORE_PY_EXECUTABLE": str(runtime_python),
+            "NEMO_RL_VLLM_PY_EXECUTABLE": str(vllm_runtime_python),
             "UV_EXECUTION_MARKER": str(execution_marker),
             "HOST_EXECUTION_MARKER": str(host_execution_marker),
             "UV_PYTHON": PYTHON_VERSION,
@@ -3292,7 +3333,21 @@ def test_ray_and_nemorl_sruns_override_image_uv_environment() -> None:
     assert f"CONTAINER_ENV_VARS={CONTAINER_ENV_VARS}" in nemorl_wrapper
     assert "export NRL_SLURM_JOB_ID=${SLURM_JOB_ID:?}" in nemorl_wrapper
     assert "export NRL_SLURM_RESTART_COUNT=${SLURM_RESTART_COUNT:-0}" in nemorl_wrapper
+    assert "NEMO_RL_MCORE_PY_EXECUTABLE" in nemorl_wrapper
+    assert "NEMO_RL_VLLM_PY_EXECUTABLE" in nemorl_wrapper
     assert "export CONTAINER_ENV_VARS" in nemorl_wrapper
+
+
+def test_runtime_stage_builds_and_attests_split_actor_environments() -> None:
+    source = (
+        EXPERIMENT_DIR / "scripts" / "validate_oci_container_runtime.sub"
+    ).read_text()
+
+    assert "--locked --extra mcore --group test" in source
+    assert "--locked --extra vllm --no-python-downloads" in source
+    assert "probe_vllm_actor_runtime" in (
+        EXPERIMENT_DIR / "validate_container_runtime.py"
+    ).read_text()
 
 
 def test_cluster_profiles_render_cluster_specific_gres_and_segment_contracts(

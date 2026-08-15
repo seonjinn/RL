@@ -205,18 +205,15 @@ assume the current directory is
    derives `UV_PYTHON_INSTALL_DIR` from the immutable attestation directory,
    requires that path to be container-mounted, forces uv-managed Python with
    downloads disabled, and executes the NeMo-RL driver with the attested staged
-   Python on every Ray node. Per-actor environments remain writable and are
-   created independently on every node under a job- and restart-isolated `/tmp`
-   path. Each node copies the exact attested source, excluding VCS and prior
-   `*.egg-info` artifacts, into a private writable `/tmp` build view and verifies
-   the copy before exposing it through `UV_PROJECT`. Actor builds also set
-   `UV_NO_EDITABLE=1` and pin `NVTE_CUDA_ARCHS=100a` plus
-   `TORCH_CUDA_ARCH_LIST=10.0a`, matching the attested GB200 runtime instead of
-   compiling unused CUDA architectures. uv installs deployment-style wheels
-   without writing into the immutable staged source. This preserves
-   `NRL_FORCE_REBUILD_VENVS=true`
-   without allowing builders on
-   different nodes or concurrent scope jobs to remove each other's environments.
+   Python on every Ray node. Dropless training stages install the mutually
+   exclusive `mcore` and `vllm` extras into separate immutable environments
+   under one content-addressed stage. Runtime attestation probes both stacks,
+   and NeMo-RL selects their exact Python executables by actor tier instead of
+   compiling environments after GPUs are allocated. Each node still verifies
+   an exact private source copy and imports Megatron Core, Transformer Engine,
+   and vLLM before Ray starts. `NRL_FORCE_REBUILD_VENVS=true` remains explicit
+   for any unregistered fallback tier, but the validated policy and vLLM actors
+   do not enter the uv environment builder.
    Initial HF-to-Megatron conversion uses
    `NRL_MEGATRON_CHECKPOINT_DIR=<runtime-attestation-dir>/megatron-checkpoints`.
    This source-attested Lustre path is shared by every policy rank and recorded

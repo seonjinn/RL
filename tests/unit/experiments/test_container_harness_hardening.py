@@ -101,6 +101,9 @@ def _runtime_modules(module: ModuleType, environment_root: Path) -> dict[str, ob
         name: SimpleNamespace(__file__=str(site_packages / name / "__init__.py"))
         for name in module.REQUIRED_MODULE_DISTRIBUTIONS
     }
+    modules["vllm"] = SimpleNamespace(
+        __file__=str(site_packages / "vllm" / "__init__.py")
+    )
     modules["torch"] = SimpleNamespace(
         __file__=str(site_packages / "torch" / "__init__.py"),
         cuda=FakeCuda(),
@@ -114,6 +117,79 @@ def _runtime_modules(module: ModuleType, environment_root: Path) -> dict[str, ob
         TERowParallelGroupedLinear=object,
     )
     return modules
+
+
+def test_vllm_actor_runtime_probe_binds_separate_environment(tmp_path: Path) -> None:
+    module = _load_runtime_probe()
+    environment_root = tmp_path / "vllm-environment"
+    python_executable = environment_root / "bin" / "python"
+    python_executable.parent.mkdir(parents=True)
+    _write_executable(python_executable, "#!/bin/sh\nexit 0\n")
+    site_packages = environment_root / "lib/python3.13/site-packages"
+    torch_path = site_packages / "torch/__init__.py"
+    vllm_path = site_packages / "vllm/__init__.py"
+    torch_path.parent.mkdir(parents=True)
+    vllm_path.parent.mkdir(parents=True)
+    torch_path.write_text("")
+    vllm_path.write_text("")
+
+    def runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        command = args[0]
+        assert command[:2] == [str(python_executable), "-I"]
+        assert json.loads(command[-1]) == ["fast-hadamard-transform"]
+        environment = kwargs["env"]
+        assert environment["UV_PROJECT_ENVIRONMENT"] == str(environment_root)
+        assert "PYTHONPATH" not in environment
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(
+                {
+                    "cuda_available": True,
+                    "device_count": 4,
+                    "python_executable": str(python_executable),
+                    "runtime_prefix": str(environment_root),
+                    "torch_path": str(torch_path),
+                    "torch_version": "2.11.0",
+                    "vllm_path": str(vllm_path),
+                    "vllm_version": "0.25.1",
+                    "present_excluded_packages": [],
+                }
+            ),
+            stderr="",
+        )
+
+    result = module.probe_vllm_actor_runtime(
+        environment_root=environment_root,
+        expected_device_count=4,
+        expected_excluded_packages=("fast-hadamard-transform",),
+        runner=runner,
+    )
+
+    assert result["runtime_prefix"] == str(environment_root)
+    assert result["packages"]["vllm"]["version"] == "0.25.1"
+    assert result["excluded_packages"] == ["fast-hadamard-transform"]
+
+    def excluded_runner(
+        *args: object, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        process = runner(*args, **kwargs)
+        payload = json.loads(process.stdout)
+        payload["present_excluded_packages"] = ["fast-hadamard-transform"]
+        return subprocess.CompletedProcess(
+            process.args,
+            process.returncode,
+            stdout=json.dumps(payload),
+            stderr=process.stderr,
+        )
+
+    with pytest.raises(RuntimeError, match="contains excluded packages"):
+        module.probe_vllm_actor_runtime(
+            environment_root=environment_root,
+            expected_device_count=4,
+            expected_excluded_packages=("fast-hadamard-transform",),
+            runner=excluded_runner,
+        )
 
 
 def test_runtime_probe_artifact_records_attestation_producer_job(
@@ -145,6 +221,7 @@ def test_runtime_probe_artifact_records_attestation_producer_job(
         container_ctime_seconds=5,
         expected_device_count=4,
         expected_environment_root=tmp_path / "environment",
+        expected_vllm_environment_root=tmp_path / "vllm-environment",
         expected_project_root=tmp_path / "source",
         expected_python_install_dir=tmp_path / "python",
         expected_uv_executable=tmp_path / "uv",
@@ -161,6 +238,13 @@ def test_runtime_probe_artifact_records_attestation_producer_job(
         },
     )
     monkeypatch.setattr(module, "_distribution_vcs_commit", lambda _: TE_COMMIT)
+    monkeypatch.setattr(
+        module,
+        "probe_vllm_actor_runtime",
+        lambda **_: {
+            "packages": {"vllm": {"distribution": "vllm", "version": "0.25.1"}}
+        },
+    )
     monkeypatch.setattr(
         module,
         "validate_transformer_engine_identities",
@@ -579,6 +663,7 @@ def test_runtime_probe_binds_dropless_hybridep_feature_set(
     assert result["excluded_packages"] == list(exclusions)
     assert result["hybridep_buffer_available"] is True
     assert result["packages"]["deep_ep"]["distribution"] == "deep-ep"
+    assert "vllm" not in result["packages"]
     assert "mamba_ssm" in result["packages"]
     assert "causal_conv1d" in result["packages"]
 
@@ -622,6 +707,7 @@ def test_runtime_probe_binds_dropless_alltoall_feature_set(
     assert result["runtime_feature_set"] == feature_set
     assert result["hybridep_buffer_available"] is None
     assert "deep_ep" not in result["packages"]
+    assert "vllm" not in result["packages"]
 
 
 def test_runtime_probe_requires_exact_uv_managed_python(tmp_path: Path) -> None:
@@ -1053,6 +1139,7 @@ printf '{"status":"passed"}\n' >"${output}"
         in command
     )
     assert "--locked --extra mcore --group test --no-python-downloads" in command
+    assert "--locked --extra vllm --no-python-downloads" in command
     assert 'sync_command+=(--no-install-package "${excluded_package}")' in command
     assert (
         "RUNTIME_EXCLUDED_PACKAGES=causal-conv1d,deep-ep,"
@@ -2011,6 +2098,7 @@ def test_runtime_stage_audit_failure_never_publishes_marker(
         f"te_version_base_commit={TE_COMMIT}",
         f"python_version={PYTHON_VERSION}",
         f"uv_version={UV_VERSION}",
+        "actor_runtime_layout=mcore-only-v1",
         "feature_set=te_eval_capability_8",
         "excluded_packages=causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm",
         f"stage_capability={RUNTIME_STAGE_CAPABILITY}",
@@ -2039,8 +2127,9 @@ def test_runtime_stage_audit_failure_never_publishes_marker(
             "expected_te_version_base_commit": TE_COMMIT,
             "expected_python_version": PYTHON_VERSION,
             "expected_uv_version": UV_VERSION,
-            "RUNTIME_FEATURE_SET": "te_eval_capability_8",
-            "RUNTIME_STAGE_CAPABILITY": RUNTIME_STAGE_CAPABILITY,
+                "RUNTIME_FEATURE_SET": "te_eval_capability_8",
+                "ACTOR_RUNTIME_LAYOUT": "mcore-only-v1",
+                "RUNTIME_STAGE_CAPABILITY": RUNTIME_STAGE_CAPABILITY,
             "RUNTIME_TEST_REQUIREMENTS": RUNTIME_TEST_REQUIREMENTS,
             "RUNTIME_EXCLUDED_PACKAGES": (
                 "causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm"

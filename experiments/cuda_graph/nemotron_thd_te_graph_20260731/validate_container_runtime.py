@@ -147,6 +147,108 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def probe_vllm_actor_runtime(
+    *,
+    environment_root: Path,
+    expected_device_count: int,
+    expected_excluded_packages: tuple[str, ...],
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> dict[str, Any]:
+    if environment_root.is_symlink() or not environment_root.is_dir():
+        raise RuntimeError(f"vLLM environment is missing or unsafe: {environment_root}")
+    environment_root = environment_root.resolve(strict=False)
+    python_executable = environment_root / "bin" / "python"
+    if not python_executable.is_file() or not os.access(python_executable, os.X_OK):
+        raise RuntimeError(f"vLLM Python is missing: {python_executable}")
+    probe = """
+import importlib.metadata
+import json
+import sys
+
+import torch
+import vllm
+
+excluded_packages = json.loads(sys.argv[1])
+present_excluded_packages = []
+for distribution in excluded_packages:
+    try:
+        importlib.metadata.version(distribution)
+    except importlib.metadata.PackageNotFoundError:
+        continue
+    present_excluded_packages.append(distribution)
+
+print(json.dumps({
+    "cuda_available": bool(torch.cuda.is_available()),
+    "device_count": int(torch.cuda.device_count()),
+    "python_executable": sys.executable,
+    "runtime_prefix": sys.prefix,
+    "torch_path": torch.__file__,
+    "torch_version": importlib.metadata.version("torch"),
+    "vllm_path": vllm.__file__,
+    "vllm_version": importlib.metadata.version("vllm"),
+    "present_excluded_packages": present_excluded_packages,
+}, sort_keys=True))
+"""
+    environment = os.environ.copy()
+    for variable in ("PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV"):
+        environment.pop(variable, None)
+    environment["UV_PROJECT_ENVIRONMENT"] = str(environment_root)
+    process = runner(
+        [
+            str(python_executable),
+            "-I",
+            "-c",
+            probe,
+            json.dumps(expected_excluded_packages),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    if process.returncode != 0:
+        raise RuntimeError(
+            f"vLLM actor runtime probe failed: {process.stderr.strip()}"
+        )
+    try:
+        payload = json.loads(process.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("vLLM actor runtime probe returned invalid JSON") from error
+    if payload.get("runtime_prefix") != str(environment_root):
+        raise RuntimeError("vLLM actor runtime prefix mismatch")
+    if not payload.get("cuda_available"):
+        raise RuntimeError("vLLM actor runtime has no CUDA device")
+    if payload.get("device_count") != expected_device_count:
+        raise RuntimeError("vLLM actor runtime CUDA device count mismatch")
+    if payload.get("present_excluded_packages") != []:
+        raise RuntimeError(
+            "vLLM actor runtime contains excluded packages: "
+            + ", ".join(payload.get("present_excluded_packages", []))
+        )
+    for label in ("torch_path", "vllm_path"):
+        module_path = Path(payload.get(label, "")).resolve(strict=False)
+        _require_path_within(label=label, path=module_path, root=environment_root)
+    return {
+        "python_executable": str(python_executable),
+        "runtime_prefix": str(environment_root),
+        "cuda_available": True,
+        "device_count": expected_device_count,
+        "excluded_packages": list(expected_excluded_packages),
+        "packages": {
+            "torch": {
+                "distribution": "torch",
+                "version": str(payload["torch_version"]),
+                "path": str(Path(payload["torch_path"]).resolve(strict=False)),
+            },
+            "vllm": {
+                "distribution": "vllm",
+                "version": str(payload["vllm_version"]),
+                "path": str(Path(payload["vllm_path"]).resolve(strict=False)),
+            },
+        },
+    }
+
+
 def _distribution_vcs_commit(
     distribution: str,
     distribution_getter: Callable[[str], Any] = importlib.metadata.distribution,
@@ -609,6 +711,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runtime-attestation-job-id", required=True, type=int)
     parser.add_argument("--expected-device-count", required=True, type=int)
     parser.add_argument("--expected-environment-root", required=True, type=Path)
+    parser.add_argument("--expected-vllm-environment-root", required=True, type=Path)
     parser.add_argument("--expected-project-root", required=True, type=Path)
     parser.add_argument("--expected-python-version", required=True)
     parser.add_argument("--expected-python-install-dir", required=True, type=Path)
@@ -676,6 +779,14 @@ def main() -> None:
             expected_torch_cuda_arch_list=args.torch_cuda_arch_list,
             expected_nvte_cuda_archs=args.nvte_cuda_archs,
         )
+        if args.runtime_feature_set in DROPLESS_MOE_FEATURE_SETS:
+            vllm_runtime = probe_vllm_actor_runtime(
+                environment_root=args.expected_vllm_environment_root,
+                expected_device_count=args.expected_device_count,
+                expected_excluded_packages=tuple(args.excluded_packages.split(",")),
+            )
+            runtime["packages"]["vllm"] = vllm_runtime["packages"]["vllm"]
+            runtime["actor_runtimes"] = {"vllm": vllm_runtime}
         te_version = runtime["packages"]["transformer_engine.pytorch"]["version"]
         if _version_pair(te_version) < (2, 16):
             raise RuntimeError(

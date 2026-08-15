@@ -361,6 +361,7 @@ fi
 case "${UV_EXECUTABLE}" in
   ""|__REQUIRED_*__)
     RUNTIME_PYTHON=__DERIVED_FROM_UV_EXECUTABLE__/environment/bin/python
+    VLLM_RUNTIME_PYTHON=__DERIVED_FROM_UV_EXECUTABLE__/vllm-environment/bin/python
     ;;
   *)
     uv_suffix=/uv/uv
@@ -374,6 +375,7 @@ case "${UV_EXECUTABLE}" in
        ! "${runtime_stage_key}" =~ [^0-9a-f] ]] || \
       fail "UV_EXECUTABLE must use the staged-runtimes/<sha256>/uv/uv layout"
     RUNTIME_PYTHON=${runtime_stage_root}/environment/bin/python
+    VLLM_RUNTIME_PYTHON=${runtime_stage_root}/vllm-environment/bin/python
     ;;
 esac
 case "${EXPECTED_TE_SHA:-}" in
@@ -549,6 +551,35 @@ runtime_attestation_command=(
   --expected-nvte-with-nccl-ep "${NVTE_WITH_NCCL_EP}"
   --expected-runtime-attestation-job-id "${RUNTIME_PREFLIGHT_JOB_ID}"
 )
+RUNTIME_FEATURE_SET=
+RUNTIME_EXCLUDED_PACKAGES=
+if [[ "${MODE}" == "nemorl" ]]; then
+  case "${MODEL}" in
+    nano)
+      RUNTIME_FEATURE_SET=dropless_hybridep_nano16
+      RUNTIME_EXCLUDED_PACKAGES=fast-hadamard-transform
+      ;;
+    qwen3_30ba3b)
+      RUNTIME_FEATURE_SET=dropless_alltoall_qwen30_16
+      RUNTIME_EXCLUDED_PACKAGES=deep-ep,fast-hadamard-transform
+      ;;
+    super)
+      RUNTIME_FEATURE_SET=dropless_alltoall_super32
+      RUNTIME_EXCLUDED_PACKAGES=deep-ep,fast-hadamard-transform
+      ;;
+    qwen3_235b)
+      RUNTIME_FEATURE_SET=dropless_hybridep_qwen235_64
+      RUNTIME_EXCLUDED_PACKAGES=fast-hadamard-transform
+      ;;
+    *) fail "MODEL ${MODEL} has no typed NeMo-RL runtime feature contract" ;;
+  esac
+  runtime_attestation_command+=(
+    --runtime-feature-set "${RUNTIME_FEATURE_SET}"
+    --excluded-packages "${RUNTIME_EXCLUDED_PACKAGES}"
+    --torch-cuda-arch-list 10.0a
+    --nvte-cuda-archs 100a
+  )
+fi
 printf -v RUNTIME_ATTESTATION_COMMAND '%q ' "${runtime_attestation_command[@]}"
 RUNTIME_ATTESTATION_COMMAND=${RUNTIME_ATTESTATION_COMMAND% }
 
@@ -610,6 +641,8 @@ fi
 if [[ "${MODE}" == "nemorl" ]]; then
   [[ -f "${RUNTIME_PYTHON}" && -x "${RUNTIME_PYTHON}" ]] || \
     fail "Attested runtime Python is missing, unsafe, or not executable: ${RUNTIME_PYTHON}"
+  [[ -f "${VLLM_RUNTIME_PYTHON}" && -x "${VLLM_RUNTIME_PYTHON}" ]] || \
+    fail "Attested vLLM Python is missing, unsafe, or not executable: ${VLLM_RUNTIME_PYTHON}"
   resolved_runtime_python=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "${RUNTIME_PYTHON}")
   resolved_python_install_dir=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "${MANAGED_PYTHON_INSTALL_DIR}")
   case "${resolved_runtime_python}" in
@@ -634,6 +667,8 @@ export COMMAND CONTAINER CONTAINER_SHA256 MOUNTS RUNTIME_ATTESTATION_COMMAND
 export BASE_LOG_DIR=${run_log_dir}
 export GPUS_PER_NODE=${MODEL_GPUS_PER_NODE}
 export NRL_FORCE_REBUILD_VENVS=true
+export NEMO_RL_MCORE_PY_EXECUTABLE=${RUNTIME_PYTHON}
+export NEMO_RL_VLLM_PY_EXECUTABLE=${VLLM_RUNTIME_PYTHON}
 export REPO_ROOT=${repo_root}
 export MODEL DISPATCHER SCOPE SCOPE_NAME MODE CLUSTER PROFILE_ID PHASE STEPS
 export RUN_GROUP REPEAT_INDEX
@@ -645,7 +680,9 @@ export UV_PYTHON_INSTALL_DIR=${MANAGED_PYTHON_INSTALL_DIR}
 export UV_MANAGED_PYTHON=1
 export UV_PYTHON_DOWNLOADS=never
 export PINNED_UV_VERSION UV_EXECUTABLE
-export RUNTIME_PYTHON NEMORL_WANDB_ENABLED
+export RUNTIME_PYTHON VLLM_RUNTIME_PYTHON NEMORL_WANDB_ENABLED
+export NEMO_RL_MCORE_PY_EXECUTABLE NEMO_RL_VLLM_PY_EXECUTABLE
+export RUNTIME_FEATURE_SET RUNTIME_EXCLUDED_PACKAGES
 export NRL_MEGATRON_CHECKPOINT_DIR
 export NVTE_WITH_NCCL_EP
 export SOURCE_PROVENANCE_VERIFIER=${source_provenance_verifier}
@@ -686,6 +723,8 @@ runtime_attestation_base64=$(printf '%s' "${RUNTIME_ATTESTATION}" | base64 | tr 
 managed_python_install_dir_base64=$(printf '%s' "${MANAGED_PYTHON_INSTALL_DIR}" | base64 | tr -d '\n')
 uv_executable_base64=$(printf '%s' "${UV_EXECUTABLE}" | base64 | tr -d '\n')
 runtime_python_base64=$(printf '%s' "${RUNTIME_PYTHON}" | base64 | tr -d '\n')
+vllm_runtime_python_base64=$(printf '%s' "${VLLM_RUNTIME_PYTHON}" | base64 | tr -d '\n')
+hf_home_base64=$(printf '%s' "${HF_HOME:-}" | base64 | tr -d '\n')
 megatron_checkpoint_dir_base64=$(printf '%s' "${NRL_MEGATRON_CHECKPOINT_DIR}" | base64 | tr -d '\n')
 r3_validation_record_pattern_base64=$(printf '%s' "${R3_VALIDATION_RECORD_PATTERN}" | base64 | tr -d '\n')
 r3_validation_record_initial_path_base64=$(printf '%s' "${R3_VALIDATION_RECORD_INITIAL_PATH}" | base64 | tr -d '\n')
@@ -727,11 +766,12 @@ metadata_json_tmp=$(mktemp "${run_log_dir}/.run-metadata.json.XXXXXX")
   printf 'policy_num_nodes=%s\nnemorl_generation_num_nodes=%s\nnemorl_gym_num_nodes=%s\n' "${MODEL_POLICY_NUM_NODES}" "${MODEL_NEMORL_GENERATION_NUM_NODES}" "${MODEL_NEMORL_GYM_NUM_NODES}"
   printf 'mcore_num_nodes=%s\n' "${MODEL_MCORE_NUM_NODES}"
   printf 'nemo_rl_commit=%s\nbridge_commit=%s\nmcore_commit=%s\ntransformer_engine_commit=%s\ncontainer_sha256=%s\n' "${EXPECTED_NEMORL_SHA}" "${EXPECTED_BRIDGE_SHA}" "${EXPECTED_MCORE_SHA}" "${EXPECTED_TE_SHA}" "${CONTAINER_SHA256}"
-  printf 'runtime_preflight_job_id=%s\nruntime_attestation_base64=%s\nruntime_attestation_sha256=%s\nmanaged_python_version=%s\nmanaged_python_install_dir_base64=%s\npinned_uv_version=%s\nuv_executable_base64=%s\nruntime_python_base64=%s\n' "${RUNTIME_PREFLIGHT_JOB_ID}" "${runtime_attestation_base64}" "${RUNTIME_ATTESTATION_SHA256}" "${MANAGED_PYTHON_VERSION}" "${managed_python_install_dir_base64}" "${PINNED_UV_VERSION}" "${uv_executable_base64}" "${runtime_python_base64}"
+  printf 'runtime_preflight_job_id=%s\nruntime_attestation_base64=%s\nruntime_attestation_sha256=%s\nmanaged_python_version=%s\nmanaged_python_install_dir_base64=%s\npinned_uv_version=%s\nuv_executable_base64=%s\nruntime_python_base64=%s\nvllm_runtime_python_base64=%s\nruntime_feature_set=%s\nruntime_excluded_packages=%s\n' "${RUNTIME_PREFLIGHT_JOB_ID}" "${runtime_attestation_base64}" "${RUNTIME_ATTESTATION_SHA256}" "${MANAGED_PYTHON_VERSION}" "${managed_python_install_dir_base64}" "${PINNED_UV_VERSION}" "${uv_executable_base64}" "${runtime_python_base64}" "${vllm_runtime_python_base64}" "${RUNTIME_FEATURE_SET}" "${RUNTIME_EXCLUDED_PACKAGES}"
+  printf 'hf_home_base64=%s\nhf_hub_offline=%s\ntransformers_offline=%s\nhf_datasets_offline=%s\nhf_hub_disable_implicit_token=%s\n' "${hf_home_base64}" "${HF_HUB_OFFLINE:-}" "${TRANSFORMERS_OFFLINE:-}" "${HF_DATASETS_OFFLINE:-}" "${HF_HUB_DISABLE_IMPLICIT_TOKEN:-}"
   printf 'megatron_checkpoint_dir_base64=%s\n' "${megatron_checkpoint_dir_base64}"
   printf 'r3_validation_record_pattern_base64=%s\nr3_validation_record_initial_path_base64=%s\nr3_driver_command_file_base64=%s\nr3_driver_command_sha256=%s\nr3_checker_path_base64=%s\nr3_checker_sha256=%s\nr3_record_python_base64=%s\n' "${r3_validation_record_pattern_base64}" "${r3_validation_record_initial_path_base64}" "${r3_driver_command_file_base64}" "${R3_DRIVER_COMMAND_SHA256}" "${r3_checker_path_base64}" "${R3_CHECKER_SHA256}" "${r3_record_python_base64}"
 } >"${metadata_env_tmp}"
-METADATA_JOB_ID=${job_id} METADATA_RENDERED_DRIVER=${RENDERED_DRIVER_COMMAND} METADATA_COMMAND=${COMMAND} METADATA_RUN_LOG_DIR=${run_log_dir} METADATA_SCHEDULER_ARGV_JSON=${sbatch_argv_json} METADATA_OUTPUT_PATTERN=${run_log_dir}/slurm-%j.log METADATA_OUTPUT_PATH=${run_log_dir}/slurm-${job_id}.log METADATA_R3_RECORD_PATTERN=${R3_VALIDATION_RECORD_PATTERN} METADATA_R3_RECORD_INITIAL=${R3_VALIDATION_RECORD_INITIAL_PATH} METADATA_R3_DRIVER_FILE=${R3_DRIVER_COMMAND_FILE} METADATA_R3_DRIVER_SHA=${R3_DRIVER_COMMAND_SHA256} METADATA_R3_CHECKER_PATH=${R3_CHECKER_PATH} METADATA_R3_CHECKER_SHA=${R3_CHECKER_SHA256} METADATA_R3_RECORD_PYTHON=${R3_RECORD_PYTHON} METADATA_MODEL=${MODEL} METADATA_DISPATCHER=${DISPATCHER} METADATA_SCOPE=${SCOPE} METADATA_SCOPE_NAME=${SCOPE_NAME} METADATA_MODE=${MODE} METADATA_CLUSTER=${CLUSTER} METADATA_PROFILE=${PROFILE_ID} METADATA_PROFILE_SHA256=${PROFILE_SHA256} METADATA_PHASE=${PHASE} METADATA_STEPS=${STEPS} METADATA_RUN_GROUP=${RUN_GROUP} METADATA_REPEAT=${REPEAT_INDEX} METADATA_ROUTER_REPLAY=${ROUTER_REPLAY} METADATA_TENSORBOARD=${NEMORL_TENSORBOARD_ENABLED} METADATA_WANDB=${NEMORL_WANDB_ENABLED} METADATA_NUM_NODES=${MODEL_ALLOCATION_NUM_NODES} METADATA_NEMORL_ALLOCATION_NODES=${MODEL_NEMORL_ALLOCATION_NUM_NODES} METADATA_NEMORL_CLUSTER_NODES=${MODEL_NEMORL_CLUSTER_NUM_NODES} METADATA_POLICY_NODES=${MODEL_POLICY_NUM_NODES} METADATA_NEMORL_GENERATION_NODES=${MODEL_NEMORL_GENERATION_NUM_NODES} METADATA_NEMORL_GYM_NODES=${MODEL_NEMORL_GYM_NUM_NODES} METADATA_MCORE_NODES=${MODEL_MCORE_NUM_NODES} METADATA_GPUS_PER_NODE=${MODEL_GPUS_PER_NODE} METADATA_NEMORL_SHA=${EXPECTED_NEMORL_SHA} METADATA_BRIDGE_SHA=${EXPECTED_BRIDGE_SHA} METADATA_MCORE_SHA=${EXPECTED_MCORE_SHA} METADATA_TE_SHA=${EXPECTED_TE_SHA} METADATA_CONTAINER_PATH=${CONTAINER} METADATA_CONTAINER_SHA=${CONTAINER_SHA256} METADATA_RUNTIME_ATTESTATION=${RUNTIME_ATTESTATION} METADATA_RUNTIME_ATTESTATION_SHA=${RUNTIME_ATTESTATION_SHA256} METADATA_RUNTIME_PREFLIGHT=${RUNTIME_PREFLIGHT_JOB_ID} METADATA_PYTHON_VERSION=${MANAGED_PYTHON_VERSION} METADATA_PYTHON_DIR=${MANAGED_PYTHON_INSTALL_DIR} METADATA_UV_VERSION=${PINNED_UV_VERSION} METADATA_UV_EXECUTABLE=${UV_EXECUTABLE} METADATA_RUNTIME_PYTHON=${RUNTIME_PYTHON} METADATA_MEGATRON_CHECKPOINT_DIR=${NRL_MEGATRON_CHECKPOINT_DIR} python3 - "${metadata_json_tmp}" <<'PY'
+METADATA_JOB_ID=${job_id} METADATA_RENDERED_DRIVER=${RENDERED_DRIVER_COMMAND} METADATA_COMMAND=${COMMAND} METADATA_RUN_LOG_DIR=${run_log_dir} METADATA_SCHEDULER_ARGV_JSON=${sbatch_argv_json} METADATA_OUTPUT_PATTERN=${run_log_dir}/slurm-%j.log METADATA_OUTPUT_PATH=${run_log_dir}/slurm-${job_id}.log METADATA_R3_RECORD_PATTERN=${R3_VALIDATION_RECORD_PATTERN} METADATA_R3_RECORD_INITIAL=${R3_VALIDATION_RECORD_INITIAL_PATH} METADATA_R3_DRIVER_FILE=${R3_DRIVER_COMMAND_FILE} METADATA_R3_DRIVER_SHA=${R3_DRIVER_COMMAND_SHA256} METADATA_R3_CHECKER_PATH=${R3_CHECKER_PATH} METADATA_R3_CHECKER_SHA=${R3_CHECKER_SHA256} METADATA_R3_RECORD_PYTHON=${R3_RECORD_PYTHON} METADATA_MODEL=${MODEL} METADATA_DISPATCHER=${DISPATCHER} METADATA_SCOPE=${SCOPE} METADATA_SCOPE_NAME=${SCOPE_NAME} METADATA_MODE=${MODE} METADATA_CLUSTER=${CLUSTER} METADATA_PROFILE=${PROFILE_ID} METADATA_PROFILE_SHA256=${PROFILE_SHA256} METADATA_PHASE=${PHASE} METADATA_STEPS=${STEPS} METADATA_RUN_GROUP=${RUN_GROUP} METADATA_REPEAT=${REPEAT_INDEX} METADATA_ROUTER_REPLAY=${ROUTER_REPLAY} METADATA_TENSORBOARD=${NEMORL_TENSORBOARD_ENABLED} METADATA_WANDB=${NEMORL_WANDB_ENABLED} METADATA_NUM_NODES=${MODEL_ALLOCATION_NUM_NODES} METADATA_NEMORL_ALLOCATION_NODES=${MODEL_NEMORL_ALLOCATION_NUM_NODES} METADATA_NEMORL_CLUSTER_NODES=${MODEL_NEMORL_CLUSTER_NUM_NODES} METADATA_POLICY_NODES=${MODEL_POLICY_NUM_NODES} METADATA_NEMORL_GENERATION_NODES=${MODEL_NEMORL_GENERATION_NUM_NODES} METADATA_NEMORL_GYM_NODES=${MODEL_NEMORL_GYM_NUM_NODES} METADATA_MCORE_NODES=${MODEL_MCORE_NUM_NODES} METADATA_GPUS_PER_NODE=${MODEL_GPUS_PER_NODE} METADATA_NEMORL_SHA=${EXPECTED_NEMORL_SHA} METADATA_BRIDGE_SHA=${EXPECTED_BRIDGE_SHA} METADATA_MCORE_SHA=${EXPECTED_MCORE_SHA} METADATA_TE_SHA=${EXPECTED_TE_SHA} METADATA_CONTAINER_PATH=${CONTAINER} METADATA_CONTAINER_SHA=${CONTAINER_SHA256} METADATA_RUNTIME_ATTESTATION=${RUNTIME_ATTESTATION} METADATA_RUNTIME_ATTESTATION_SHA=${RUNTIME_ATTESTATION_SHA256} METADATA_RUNTIME_PREFLIGHT=${RUNTIME_PREFLIGHT_JOB_ID} METADATA_PYTHON_VERSION=${MANAGED_PYTHON_VERSION} METADATA_PYTHON_DIR=${MANAGED_PYTHON_INSTALL_DIR} METADATA_UV_VERSION=${PINNED_UV_VERSION} METADATA_UV_EXECUTABLE=${UV_EXECUTABLE} METADATA_RUNTIME_PYTHON=${RUNTIME_PYTHON} METADATA_VLLM_RUNTIME_PYTHON=${VLLM_RUNTIME_PYTHON} METADATA_RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET} METADATA_RUNTIME_EXCLUDED_PACKAGES=${RUNTIME_EXCLUDED_PACKAGES} METADATA_HF_HOME=${HF_HOME:-} METADATA_HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-} METADATA_TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-} METADATA_HF_DATASETS_OFFLINE=${HF_DATASETS_OFFLINE:-} METADATA_HF_HUB_DISABLE_IMPLICIT_TOKEN=${HF_HUB_DISABLE_IMPLICIT_TOKEN:-} METADATA_MEGATRON_CHECKPOINT_DIR=${NRL_MEGATRON_CHECKPOINT_DIR} python3 - "${metadata_json_tmp}" <<'PY'
 import json
 import os
 import sys
@@ -776,6 +816,14 @@ record = {
     "runtime_preflight_job_id": int(os.environ["METADATA_RUNTIME_PREFLIGHT"]), "managed_python_version": os.environ["METADATA_PYTHON_VERSION"],
     "managed_python_install_dir": os.environ["METADATA_PYTHON_DIR"], "pinned_uv_version": os.environ["METADATA_UV_VERSION"],
     "uv_executable": os.environ["METADATA_UV_EXECUTABLE"], "runtime_python": os.environ["METADATA_RUNTIME_PYTHON"],
+    "vllm_runtime_python": os.environ["METADATA_VLLM_RUNTIME_PYTHON"],
+    "runtime_feature_set": os.environ["METADATA_RUNTIME_FEATURE_SET"],
+    "runtime_excluded_packages": os.environ["METADATA_RUNTIME_EXCLUDED_PACKAGES"],
+    "hf_home": os.environ["METADATA_HF_HOME"],
+    "hf_hub_offline": os.environ["METADATA_HF_HUB_OFFLINE"],
+    "transformers_offline": os.environ["METADATA_TRANSFORMERS_OFFLINE"],
+    "hf_datasets_offline": os.environ["METADATA_HF_DATASETS_OFFLINE"],
+    "hf_hub_disable_implicit_token": os.environ["METADATA_HF_HUB_DISABLE_IMPLICIT_TOKEN"],
     "megatron_checkpoint_dir": os.environ["METADATA_MEGATRON_CHECKPOINT_DIR"],
 }
 with open(sys.argv[1], "w", encoding="utf-8") as output:

@@ -75,12 +75,15 @@ fi
 case "${RUNTIME_FEATURE_SET}" in
   te_eval_capability_8|bridge_forward_only_eval_8)
     expected_runtime_exclusions=causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm
+    actor_runtime_layout=mcore-only-v1
     ;;
   dropless_hybridep_nano16|dropless_hybridep_qwen235_64)
     expected_runtime_exclusions=fast-hadamard-transform
+    actor_runtime_layout=split-mcore-vllm-v1
     ;;
   dropless_alltoall_qwen30_16|dropless_alltoall_super32)
     expected_runtime_exclusions=deep-ep,fast-hadamard-transform
+    actor_runtime_layout=split-mcore-vllm-v1
     ;;
   *)
     echo "RUNTIME_FEATURE_SET must select one typed runtime row" >&2
@@ -162,6 +165,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     "${EXPECTED_TE_VERSION_BASE_SHA}" \
     "${expected_python_version}" \
     "${expected_uv_version}" \
+    "${actor_runtime_layout}" \
     "${RUNTIME_FEATURE_SET}" \
     "${RUNTIME_EXCLUDED_PACKAGES}" \
     "${RUNTIME_STAGE_CAPABILITY}" \
@@ -183,6 +187,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     "te_version_base_commit=${EXPECTED_TE_VERSION_BASE_SHA}" \
     "python_version=${expected_python_version}" \
     "uv_version=${expected_uv_version}" \
+    "actor_runtime_layout=${actor_runtime_layout}" \
     "feature_set=${RUNTIME_FEATURE_SET}" \
     "excluded_packages=${RUNTIME_EXCLUDED_PACKAGES}" \
     "stage_capability=${RUNTIME_STAGE_CAPABILITY}" \
@@ -447,6 +452,7 @@ rm -f "${partial_artifact}" "${partial_link}"
 
 container_mounts="${project_root}:${project_root}:ro,${ARTIFACT_DIR}:${ARTIFACT_DIR}"
 runtime_environment_root=${runtime_stage_root}/environment
+vllm_environment_root=${runtime_stage_root}/vllm-environment
 runtime_uv_cache=${runtime_stage_root}/build-cache
 runtime_te_cmake_dir=${runtime_stage_root}/te-cmake
 runtime_site_packages=${runtime_environment_root}/lib/python3.13/site-packages
@@ -470,6 +476,7 @@ runtime_environment=(
   "RUNTIME_FEATURE_SET=${RUNTIME_FEATURE_SET}"
   "RUNTIME_EXCLUDED_PACKAGES=${RUNTIME_EXCLUDED_PACKAGES}"
   "RUNTIME_STAGE_CAPABILITY=${RUNTIME_STAGE_CAPABILITY}"
+  "ACTOR_RUNTIME_LAYOUT=${actor_runtime_layout}"
   "RUNTIME_TEST_REQUIREMENTS=${RUNTIME_TEST_REQUIREMENTS}"
   RUNTIME_BOOTSTRAP_PYTHON=/opt/nemo_rl_venv/bin/python
   "PINNED_UV_VERSION=${expected_uv_version}"
@@ -776,7 +783,8 @@ fi
 cd "${project_root}"
 sync_command=(
   "${uv_executable}" sync --python "${expected_python_version}" --managed-python
-  --locked --extra mcore --group test --no-python-downloads --directory "${project_root}"
+  --locked --extra mcore --group test --no-python-downloads
+  --directory "${project_root}"
 )
 IFS=, read -r -a excluded_packages <<<"${RUNTIME_EXCLUDED_PACKAGES}"
 for excluded_package in "${excluded_packages[@]}"; do
@@ -804,8 +812,21 @@ run_locked_uv_sync() {
   done
 }
 run_locked_uv_sync
+if [[ "${ACTOR_RUNTIME_LAYOUT}" == "split-mcore-vllm-v1" ]]; then
+  sync_command=(
+    "${uv_executable}" sync --python "${expected_python_version}" --managed-python
+    --locked --extra vllm --no-python-downloads --directory "${project_root}"
+  )
+  for excluded_package in "${excluded_packages[@]}"; do
+    sync_command+=(--no-install-package "${excluded_package}")
+  done
+  UV_PROJECT_ENVIRONMENT="${runtime_stage_root}/vllm-environment" run_locked_uv_sync
+fi
 "${environment_root}/bin/python" -c \
   "import megatron.core; import torch; import transformer_engine; import transformer_engine_torch"
+if [[ "${ACTOR_RUNTIME_LAYOUT}" == "split-mcore-vllm-v1" ]]; then
+  "${runtime_stage_root}/vllm-environment/bin/python" -c "import torch; import vllm"
+fi
 "${environment_root}/bin/python" - "${RUNTIME_TEST_REQUIREMENTS}" "${environment_root}" <<"PY"
 import importlib
 import importlib.metadata
@@ -851,6 +872,7 @@ printf "%s\n" \
   "te_version_base_commit=${expected_te_version_base_commit}" \
   "python_version=${expected_python_version}" \
   "uv_version=${expected_uv_version}" \
+  "actor_runtime_layout=${ACTOR_RUNTIME_LAYOUT}" \
   "feature_set=${RUNTIME_FEATURE_SET}" \
   "excluded_packages=${RUNTIME_EXCLUDED_PACKAGES}" \
   "stage_capability=${RUNTIME_STAGE_CAPABILITY}" \
@@ -974,6 +996,7 @@ fi
   --runtime-attestation-job-id "${RUNTIME_ATTESTATION_JOB_ID}" \
   --expected-device-count 4 \
   --expected-environment-root "${environment_root}" \
+  --expected-vllm-environment-root "${runtime_stage_root}/vllm-environment" \
   --expected-project-root "${project_root}" \
   --expected-python-version "${UV_PYTHON}" \
   --expected-python-install-dir "${UV_PYTHON_INSTALL_DIR}" \

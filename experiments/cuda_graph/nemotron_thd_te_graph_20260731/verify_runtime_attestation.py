@@ -742,6 +742,36 @@ def validate_attestation(
         deep_ep_commit = payload.get("deep_ep_vcs_commit")
         if not isinstance(deep_ep_commit, str) or FULL_COMMIT.fullmatch(deep_ep_commit) is None:
             raise ValueError("runtime attestation lacks a full DeepEP VCS commit")
+    if expected_runtime_feature_set in DROPLESS_MOE_FEATURE_SETS:
+        required_packages = required_packages.union(("vllm",))
+        actor_runtimes = payload.get("actor_runtimes")
+        if not isinstance(actor_runtimes, Mapping):
+            raise ValueError("runtime attestation lacks actor runtimes")
+        vllm_runtime = actor_runtimes.get("vllm")
+        if not isinstance(vllm_runtime, Mapping):
+            raise ValueError("runtime attestation lacks the vLLM actor runtime")
+        expected_vllm_root = (
+            expected_uv_executable.parent.parent / "vllm-environment"
+        )
+        expected_vllm_python = expected_vllm_root / "bin" / "python"
+        if (
+            vllm_runtime.get("runtime_prefix") != str(expected_vllm_root)
+            or vllm_runtime.get("python_executable") != str(expected_vllm_python)
+            or vllm_runtime.get("cuda_available") is not True
+            or vllm_runtime.get("device_count") != expected_device_count
+            or vllm_runtime.get("excluded_packages") != list(feature_exclusions)
+        ):
+            raise ValueError("runtime attestation vLLM actor identity mismatch")
+        vllm_packages = vllm_runtime.get("packages")
+        if (
+            not isinstance(vllm_packages, Mapping)
+            or vllm_packages.get("vllm") != packages.get("vllm")
+        ):
+            raise ValueError("runtime attestation vllm package identity mismatch")
+        if not expected_vllm_python.is_file() or not os.access(
+            expected_vllm_python, os.X_OK
+        ):
+            raise ValueError("attested vLLM actor Python is missing")
     missing_packages = sorted(required_packages.difference(packages))
     if missing_packages:
         raise ValueError(

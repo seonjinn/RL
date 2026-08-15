@@ -40,6 +40,8 @@ set -euo pipefail
 : "${NVTE_WITH_NCCL_EP:?run_scope.sh must export NVTE_WITH_NCCL_EP}"
 : "${BASE_LOG_DIR:?run_scope.sh must export BASE_LOG_DIR}"
 : "${NRL_MEGATRON_CHECKPOINT_DIR:?run_scope.sh must export NRL_MEGATRON_CHECKPOINT_DIR}"
+: "${NEMO_RL_MCORE_PY_EXECUTABLE:?run_scope.sh must export the MCore Python}"
+: "${NEMO_RL_VLLM_PY_EXECUTABLE:?run_scope.sh must export the vLLM Python}"
 [[ "${NVTE_WITH_NCCL_EP}" == "0" ]] || {
   echo "NVTE_WITH_NCCL_EP must be 0 for the HybridEP partial-CUDA-Graph study" >&2
   exit 2
@@ -87,10 +89,19 @@ if [[ "${runtime_stage_parent##*/}" != "staged-runtimes" ||
 fi
 runtime_environment_root=${runtime_stage_root}/environment
 expected_runtime_python=${runtime_environment_root}/bin/python
+vllm_environment_root=${runtime_stage_root}/vllm-environment
+expected_vllm_runtime_python=${vllm_environment_root}/bin/python
 if [[ "${RUNTIME_PYTHON}" != "${expected_runtime_python}" ||
       ! -f "${RUNTIME_PYTHON}" || ! -x "${RUNTIME_PYTHON}" ||
       -L "${runtime_environment_root}" ]]; then
   echo "RUNTIME_PYTHON must be the executable staged environment Python" >&2
+  exit 2
+fi
+if [[ "${NEMO_RL_MCORE_PY_EXECUTABLE}" != "${expected_runtime_python}" ||
+      "${NEMO_RL_VLLM_PY_EXECUTABLE}" != "${expected_vllm_runtime_python}" ||
+      ! -f "${NEMO_RL_VLLM_PY_EXECUTABLE}" ||
+      ! -x "${NEMO_RL_VLLM_PY_EXECUTABLE}" ]]; then
+  echo "Tier-specific actor Python paths do not match the attested runtime" >&2
   exit 2
 fi
 resolved_runtime_python=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "${RUNTIME_PYTHON}")
@@ -145,7 +156,8 @@ export NRL_SLURM_RESTART_COUNT=${SLURM_RESTART_COUNT:-0}
 export NEMO_RL_VENV_DIR=/tmp/nemo-rl-worker-venvs/job-${NRL_SLURM_JOB_ID}-restart-${NRL_SLURM_RESTART_COUNT}
 export UV_PROJECT=/tmp/nemo-rl-worker-projects/job-${NRL_SLURM_JOB_ID}-restart-${NRL_SLURM_RESTART_COUNT}/source
 export RUNTIME_PYTHON
-CONTAINER_ENV_VARS=CONTAINER_PATH_PREFIX,UV_PROJECT,UV_PROJECT_ENVIRONMENT,UV_LINK_MODE,UV_PYTHON,UV_PYTHON_INSTALL_DIR,UV_MANAGED_PYTHON,UV_PYTHON_DOWNLOADS,UV_NO_EDITABLE,PINNED_UV_VERSION,UV_EXECUTABLE,RUNTIME_PYTHON,NEMO_RL_VENV_DIR,NRL_FORCE_REBUILD_VENVS,NRL_MEGATRON_CHECKPOINT_DIR,NVTE_WITH_NCCL_EP,NVTE_CUDA_ARCHS,TORCH_CUDA_ARCH_LIST,CMAKE_BUILD_PARALLEL_LEVEL,NRL_SLURM_JOB_ID,NRL_SLURM_RESTART_COUNT
+export NEMO_RL_MCORE_PY_EXECUTABLE NEMO_RL_VLLM_PY_EXECUTABLE
+CONTAINER_ENV_VARS=CONTAINER_PATH_PREFIX,UV_PROJECT,UV_PROJECT_ENVIRONMENT,UV_LINK_MODE,UV_PYTHON,UV_PYTHON_INSTALL_DIR,UV_MANAGED_PYTHON,UV_PYTHON_DOWNLOADS,UV_NO_EDITABLE,PINNED_UV_VERSION,UV_EXECUTABLE,RUNTIME_PYTHON,NEMO_RL_VENV_DIR,NRL_FORCE_REBUILD_VENVS,NEMO_RL_MCORE_PY_EXECUTABLE,NEMO_RL_VLLM_PY_EXECUTABLE,NRL_MEGATRON_CHECKPOINT_DIR,NVTE_WITH_NCCL_EP,NVTE_CUDA_ARCHS,TORCH_CUDA_ARCH_LIST,CMAKE_BUILD_PARALLEL_LEVEL,NRL_SLURM_JOB_ID,NRL_SLURM_RESTART_COUNT,HF_HOME,HF_HUB_CACHE,HF_DATASETS_CACHE,HF_MODULES_CACHE,HF_HUB_OFFLINE,TRANSFORMERS_OFFLINE,HF_DATASETS_OFFLINE,HF_HUB_DISABLE_IMPLICIT_TOKEN,HF_HUB_DISABLE_TELEMETRY
 export CONTAINER_ENV_VARS
 managed_python_setup_command='set -euo pipefail
 umask 077
@@ -172,6 +184,8 @@ if [[ "${runtime_python_version}" != "${UV_PYTHON}" ]]; then
   echo "Runtime Python version mismatch: expected ${UV_PYTHON}, got ${runtime_python_version}" >&2
   exit 2
 fi
+"${RUNTIME_PYTHON}" -c "import megatron.core, transformer_engine"
+"${NEMO_RL_VLLM_PY_EXECUTABLE}" -c "import torch, vllm"
 if [[ "${UV_NO_EDITABLE}" != "1" ]]; then
   echo "UV_NO_EDITABLE must be 1 for immutable runtime source" >&2
   exit 2

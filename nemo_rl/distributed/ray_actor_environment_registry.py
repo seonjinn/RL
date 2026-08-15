@@ -17,14 +17,25 @@ import os
 from nemo_rl.distributed.virtual_cluster import PY_EXECUTABLES
 
 USE_SYSTEM_EXECUTABLE = os.environ.get("NEMO_RL_PY_EXECUTABLES_SYSTEM", "0") == "1"
+
+
+def _tier_executable(variable: str, default: str) -> str:
+    override = os.environ.get(variable)
+    if override is None:
+        return PY_EXECUTABLES.SYSTEM if USE_SYSTEM_EXECUTABLE else default
+    if not os.path.isabs(override):
+        raise ValueError(f"{variable} must be an absolute path")
+    return os.path.normpath(override)
+
+
 VLLM_EXECUTABLE = (
-    PY_EXECUTABLES.SYSTEM if USE_SYSTEM_EXECUTABLE else PY_EXECUTABLES.VLLM
+    _tier_executable("NEMO_RL_VLLM_PY_EXECUTABLE", PY_EXECUTABLES.VLLM)
 )
 SGLANG_EXECUTABLE = (
     PY_EXECUTABLES.SYSTEM if USE_SYSTEM_EXECUTABLE else PY_EXECUTABLES.SGLANG
 )
 MCORE_EXECUTABLE = (
-    PY_EXECUTABLES.SYSTEM if USE_SYSTEM_EXECUTABLE else PY_EXECUTABLES.MCORE
+    _tier_executable("NEMO_RL_MCORE_PY_EXECUTABLE", PY_EXECUTABLES.MCORE)
 )
 TRTLLM_EXECUTABLE = (
     PY_EXECUTABLES.SYSTEM if USE_SYSTEM_EXECUTABLE else PY_EXECUTABLES.TRTLLM
@@ -48,16 +59,16 @@ ACTOR_ENVIRONMENT_REGISTRY: dict[str, str] = {
     "nemo_rl.environments.code_jaccard_environment.CodeJaccardEnvironment": PY_EXECUTABLES.SYSTEM,
     "nemo_rl.environments.games.sliding_puzzle.SlidingPuzzleEnv": PY_EXECUTABLES.SYSTEM,
     # AsyncTrajectoryCollector needs vLLM environment to handle exceptions from VllmGenerationWorker
-    "nemo_rl.algorithms.async_utils.AsyncTrajectoryCollector": PY_EXECUTABLES.VLLM,
+    "nemo_rl.algorithms.async_utils.AsyncTrajectoryCollector": VLLM_EXECUTABLE,
     # ReplayBuffer needs vLLM environment to handle trajectory data from VllmGenerationWorker
-    "nemo_rl.algorithms.async_utils.ReplayBuffer": PY_EXECUTABLES.VLLM,
+    "nemo_rl.algorithms.async_utils.ReplayBuffer": VLLM_EXECUTABLE,
     # SyncRolloutActor doesn't import vllm directly — policy_generation is a
     # Ray actor handle. The VLLM env is needed because (1) transfer_queue is
     # bundled into the VLLM venv (and the policy training venvs), and the
     # actor writes flattened tensors to TQ via dp_client.put_samples;
     # (2) same-node colocation with VllmGenerationWorker avoids duplicate
     # venv caches.
-    "nemo_rl.experience.sync_rollout_actor.SyncRolloutActor": PY_EXECUTABLES.VLLM,
+    "nemo_rl.experience.sync_rollout_actor.SyncRolloutActor": VLLM_EXECUTABLE,
     "nemo_rl.environments.tools.retriever.RAGEnvironment": PY_EXECUTABLES.SYSTEM,
     "nemo_rl.environments.nemo_gym.NemoGym": PY_EXECUTABLES.NEMO_GYM,
 }

@@ -176,6 +176,33 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
     return attestation, container, lock, python_install_dir, uv_executable
 
 
+def _add_vllm_actor_runtime(payload: dict, uv_executable: Path) -> None:
+    environment_root = uv_executable.parent.parent / "vllm-environment"
+    python_executable = environment_root / "bin" / "python"
+    python_executable.parent.mkdir(parents=True, exist_ok=True)
+    python_executable.write_text("#!/bin/sh\nexit 0\n")
+    python_executable.chmod(0o755)
+    package = {
+        "distribution": "vllm",
+        "version": "0.25.1",
+        "path": str(environment_root / "lib/python3.13/site-packages/vllm/__init__.py"),
+    }
+    payload["packages"]["vllm"] = package
+    payload["actor_runtimes"] = {
+        "vllm": {
+            "python_executable": str(python_executable),
+            "runtime_prefix": str(environment_root),
+            "cuda_available": True,
+            "device_count": 4,
+            "excluded_packages": payload["excluded_packages"],
+            "packages": {
+                "torch": {"distribution": "torch", "version": "2.11.0"},
+                "vllm": package,
+            },
+        }
+    }
+
+
 def test_validator_accepts_exact_preflight_artifact_without_rehashing_container(
     tmp_path: Path,
 ) -> None:
@@ -563,6 +590,7 @@ def test_validator_binds_dropless_hybridep_runtime_contract(
         }
     )
     payload["packages"]["deep_ep"] = {"version": "1.2.1"}
+    _add_vllm_actor_runtime(payload, uv_executable)
     attestation.write_text(json.dumps(payload))
     contract = {
         "expected_runtime_feature_set": feature_set,
@@ -649,6 +677,26 @@ def test_validator_binds_dropless_hybridep_runtime_contract(
             expected_uv_executable=uv_executable,
             **contract,
         )
+    payload["packages"]["deep_ep"] = {"version": "1.2.1"}
+    del payload["packages"]["vllm"]
+    attestation.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="vllm"):
+        module.validate_attestation(
+            attestation=attestation,
+            container=container,
+            expected_container_sha256=CONTAINER_SHA256,
+            nemo_rl_commit=NEMORL_COMMIT,
+            bridge_commit=BRIDGE_COMMIT,
+            mcore_commit=MCORE_COMMIT,
+            uv_lock=lock,
+            expected_te_commit=TE_COMMIT,
+            expected_device_count=4,
+            expected_python_version=PYTHON_VERSION,
+            expected_python_install_dir=python_install_dir,
+            expected_uv_version=UV_VERSION,
+            expected_uv_executable=uv_executable,
+            **contract,
+        )
 
 
 @pytest.mark.parametrize(
@@ -669,6 +717,7 @@ def test_validator_binds_dropless_alltoall_runtime_contract(
             "nvte_cuda_archs": "100a",
         }
     )
+    _add_vllm_actor_runtime(payload, uv_executable)
     attestation.write_text(json.dumps(payload))
 
     result = module.validate_attestation(
