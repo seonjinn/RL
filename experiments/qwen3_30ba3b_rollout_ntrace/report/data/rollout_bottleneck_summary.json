@@ -1,0 +1,1091 @@
+{
+  "ranks": [
+    {
+      "rank": 0,
+      "num_iterations": 3,
+      "step_s": 120.0208755,
+      "active_s": 71.909243034,
+      "idle_s": 48.111632466,
+      "idle_pct": 40.08605358490323,
+      "kernel_classes_s": {
+        "Activation": 0.0,
+        "AllToAll": 0.0,
+        "AttentionBwd": 0.0,
+        "AttentionFwd": 0.0,
+        "AttentionMisc": 0.0,
+        "CatCopy": 0.025779847,
+        "CrossEntropy": 0.0,
+        "CudaGraph": 0.0,
+        "Elementwise": 0.9504698006666666,
+        "Embedding": 0.0,
+        "Fill": 0.028425062,
+        "GatedDeltaProduct": 0.0,
+        "GemmCUBLAS": 0.0,
+        "GemmCUTLASS": 0.0,
+        "GemmNVJET": 7.804412698,
+        "GroupedGemm": 0.0,
+        "Idle": 48.111632466,
+        "LayerNorm": 0.0,
+        "Memcpy": 0.0,
+        "MoERouting": 0.19647030533333332,
+        "NCCLAllGather": 0.0,
+        "NCCLAllReduce": 0.0,
+        "NCCLBroadcast": 0.0,
+        "NCCLReduceScatter": 0.0,
+        "NCCLSendRecv": 0.0,
+        "Other": 62.02420097566667,
+        "Quantize": 0.0,
+        "RMSNorm": 0.0,
+        "Reduce": 0.8791677786666666,
+        "Roll": 0.0,
+        "Rotary": 0.0,
+        "StateSpace": 0.0,
+        "Sync": 0.0,
+        "TopK": 0.0003165666666666667,
+        "Uncategorized": 0.0,
+        "WeightUpdate": 0.0
+      },
+      "stack_categories_s": {
+        "attention": 0.9368038523333333,
+        "compiled_model_unresolved": 34.107045454,
+        "kv_cache": 0.004333792666666667,
+        "moe": 33.204865862,
+        "no_python_stack": 0.18386516066666667,
+        "runtime_other": 0.8945835093333334,
+        "sampling": 2.577745403
+      },
+      "raw_other_categories_s": {
+        "attention": 16.96967144,
+        "expert_fc1_bmm": 12.099267792,
+        "expert_fc2_bmm": 6.835407952,
+        "kv_cache": 0.7332281833333334,
+        "moe_routing_finalize": 3.484482528,
+        "quantization_layout": 0.65495192,
+        "sampling": 0.670844895,
+        "triton_fused": 2.8227214400000005
+      },
+      "iterations": [
+        {
+          "index": 0,
+          "label": 0,
+          "step_s": 205.051122185,
+          "active_s": 70.58812597400001,
+          "idle_s": 134.462996211,
+          "idle_pct": 65.57535251608405,
+          "stack_categories_s": {
+            "attention": 0.934111256,
+            "compiled_model_unresolved": 33.300340365,
+            "kv_cache": 0.004340666,
+            "moe": 32.825334935,
+            "no_python_stack": 0.0,
+            "runtime_other": 0.9868104,
+            "sampling": 2.537188352
+          }
+        },
+        {
+          "index": 1,
+          "label": 1,
+          "step_s": 79.080540981,
+          "active_s": 74.464711471,
+          "idle_s": 4.61582951,
+          "idle_pct": 5.836871438586903,
+          "stack_categories_s": {
+            "attention": 0.943768785,
+            "compiled_model_unresolved": 35.901227985,
+            "kv_cache": 0.004307987,
+            "moe": 33.898220809,
+            "no_python_stack": 0.259324211,
+            "runtime_other": 0.788364365,
+            "sampling": 2.669497329
+          }
+        },
+        {
+          "index": 2,
+          "label": 2,
+          "step_s": 75.930963334,
+          "active_s": 70.674891657,
+          "idle_s": 5.256071677,
+          "idle_pct": 6.922171728389572,
+          "stack_categories_s": {
+            "attention": 0.932531516,
+            "compiled_model_unresolved": 33.119568012,
+            "kv_cache": 0.004352725,
+            "moe": 32.891041842,
+            "no_python_stack": 0.292271271,
+            "runtime_other": 0.908575763,
+            "sampling": 2.526550528
+          }
+        }
+      ]
+    },
+    {
+      "rank": 1,
+      "num_iterations": 3,
+      "step_s": 120.01922452633333,
+      "active_s": 72.09765582066666,
+      "idle_s": 47.921568705666665,
+      "idle_pct": 39.928243908251744,
+      "kernel_classes_s": {
+        "Activation": 0.0,
+        "AllToAll": 0.0,
+        "AttentionBwd": 0.0,
+        "AttentionFwd": 0.0,
+        "AttentionMisc": 0.0,
+        "CatCopy": 0.02930014833333333,
+        "CrossEntropy": 0.0,
+        "CudaGraph": 0.0,
+        "Elementwise": 0.9707802893333333,
+        "Embedding": 0.0,
+        "Fill": 0.032167272,
+        "GatedDeltaProduct": 0.0,
+        "GemmCUBLAS": 0.0,
+        "GemmCUTLASS": 0.0,
+        "GemmNVJET": 7.895366662333333,
+        "GroupedGemm": 0.0,
+        "Idle": 47.921568705666665,
+        "LayerNorm": 0.0,
+        "Memcpy": 0.0,
+        "MoERouting": 0.19763770333333333,
+        "NCCLAllGather": 0.0,
+        "NCCLAllReduce": 0.0,
+        "NCCLBroadcast": 0.0,
+        "NCCLReduceScatter": 0.0,
+        "NCCLSendRecv": 0.0,
+        "Other": 62.144232278999986,
+        "Quantize": 0.0,
+        "RMSNorm": 0.0,
+        "Reduce": 0.8278130756666667,
+        "Roll": 0.0,
+        "Rotary": 0.0,
+        "StateSpace": 0.0,
+        "Sync": 0.0,
+        "TopK": 0.00035839066666666663,
+        "Uncategorized": 0.0,
+        "WeightUpdate": 0.0
+      },
+      "stack_categories_s": {
+        "attention": 0.943936032666667,
+        "compiled_model_unresolved": 34.17717906099998,
+        "kv_cache": 0.004725535333333333,
+        "moe": 33.27140585,
+        "no_python_stack": 0.19496950333333335,
+        "runtime_other": 0.9106774406666667,
+        "sampling": 2.594762397666667
+      },
+      "raw_other_categories_s": {
+        "attention": 16.907404272,
+        "expert_fc1_bmm": 12.168704176,
+        "expert_fc2_bmm": 6.771219456,
+        "kv_cache": 0.741405905,
+        "moe_routing_finalize": 3.606343264,
+        "quantization_layout": 0.6266716,
+        "sampling": 0.6734682266666667,
+        "triton_fused": 2.8408683600000004
+      },
+      "iterations": [
+        {
+          "index": 0,
+          "label": 0,
+          "step_s": 205.046025104,
+          "active_s": 71.33166734899999,
+          "idle_s": 133.714357755,
+          "idle_pct": 65.21187508374261,
+          "stack_categories_s": {
+            "attention": 0.943731747,
+            "compiled_model_unresolved": 33.704124292,
+            "kv_cache": 0.00507845,
+            "moe": 33.116853795,
+            "no_python_stack": 0.0,
+            "runtime_other": 1.003425411,
+            "sampling": 2.558453654
+          }
+        },
+        {
+          "index": 1,
+          "label": 1,
+          "step_s": 79.080655189,
+          "active_s": 74.00623431,
+          "idle_s": 5.074420879,
+          "idle_pct": 6.416766359449491,
+          "stack_categories_s": {
+            "attention": 0.951139483,
+            "compiled_model_unresolved": 35.673275388,
+            "kv_cache": 0.004835127,
+            "moe": 33.655266718,
+            "no_python_stack": 0.204594389,
+            "runtime_other": 0.831387603,
+            "sampling": 2.685735602
+          }
+        },
+        {
+          "index": 2,
+          "label": 2,
+          "step_s": 75.930993286,
+          "active_s": 70.955065803,
+          "idle_s": 4.975927483,
+          "idle_pct": 6.553223219743461,
+          "stack_categories_s": {
+            "attention": 0.936936868,
+            "compiled_model_unresolved": 33.154137503,
+            "kv_cache": 0.004263029,
+            "moe": 33.042097037,
+            "no_python_stack": 0.380314121,
+            "runtime_other": 0.897219308,
+            "sampling": 2.540097937
+          }
+        }
+      ]
+    },
+    {
+      "rank": 2,
+      "num_iterations": 3,
+      "step_s": 120.018414709,
+      "active_s": 71.55455612433333,
+      "idle_s": 48.46385858466667,
+      "idle_pct": 40.38035221692729,
+      "kernel_classes_s": {
+        "Activation": 0.0,
+        "AllToAll": 0.0,
+        "AttentionBwd": 0.0,
+        "AttentionFwd": 0.0,
+        "AttentionMisc": 0.0,
+        "CatCopy": 0.025221409666666667,
+        "CrossEntropy": 0.0,
+        "CudaGraph": 0.0,
+        "Elementwise": 0.9401494403333333,
+        "Embedding": 0.0,
+        "Fill": 0.027711927,
+        "GatedDeltaProduct": 0.0,
+        "GemmCUBLAS": 0.0,
+        "GemmCUTLASS": 0.0,
+        "GemmNVJET": 7.7866296749999995,
+        "GroupedGemm": 0.0,
+        "Idle": 48.46385858466667,
+        "LayerNorm": 0.0,
+        "Memcpy": 0.0,
+        "MoERouting": 0.193992679,
+        "NCCLAllGather": 0.0,
+        "NCCLAllReduce": 0.0,
+        "NCCLBroadcast": 0.0,
+        "NCCLReduceScatter": 0.0,
+        "NCCLSendRecv": 0.0,
+        "Other": 61.73691790766666,
+        "Quantize": 0.0,
+        "RMSNorm": 0.0,
+        "Reduce": 0.8436151333333333,
+        "Roll": 0.0,
+        "Rotary": 0.0,
+        "StateSpace": 0.0,
+        "Sync": 0.0,
+        "TopK": 0.0003179523333333333,
+        "Uncategorized": 0.0,
+        "WeightUpdate": 0.0
+      },
+      "stack_categories_s": {
+        "attention": 0.9261618670000002,
+        "compiled_model_unresolved": 33.75023316099999,
+        "kv_cache": 0.004267925666666667,
+        "moe": 33.190959502666665,
+        "no_python_stack": 0.209289458,
+        "runtime_other": 0.9069734406666666,
+        "sampling": 2.566670769333333
+      },
+      "raw_other_categories_s": {
+        "attention": 16.6972412,
+        "expert_fc1_bmm": 12.1087664,
+        "expert_fc2_bmm": 6.769109088,
+        "kv_cache": 0.726356059,
+        "moe_routing_finalize": 3.504121904,
+        "quantization_layout": 0.638350544,
+        "sampling": 0.6722352216666667,
+        "triton_fused": 2.8096479926666666
+      },
+      "iterations": [
+        {
+          "index": 0,
+          "label": 0,
+          "step_s": 205.043598499,
+          "active_s": 70.528502688,
+          "idle_s": 134.515095811,
+          "idle_pct": 65.60316771442929,
+          "stack_categories_s": {
+            "attention": 0.926745464,
+            "compiled_model_unresolved": 33.228314902,
+            "kv_cache": 0.00443621,
+            "moe": 32.849036484,
+            "no_python_stack": 0.0,
+            "runtime_other": 0.988740897,
+            "sampling": 2.531228731
+          }
+        },
+        {
+          "index": 1,
+          "label": 1,
+          "step_s": 79.080493493,
+          "active_s": 73.81149011500001,
+          "idle_s": 5.269003378,
+          "idle_pct": 6.662835732640437,
+          "stack_categories_s": {
+            "attention": 0.931476781,
+            "compiled_model_unresolved": 35.425624724,
+            "kv_cache": 0.004054491,
+            "moe": 33.706465208,
+            "no_python_stack": 0.26778764,
+            "runtime_other": 0.809822177,
+            "sampling": 2.666259094
+          }
+        },
+        {
+          "index": 2,
+          "label": 2,
+          "step_s": 75.931152135,
+          "active_s": 70.32367557,
+          "idle_s": 5.607476565,
+          "idle_pct": 7.3849486111185545,
+          "stack_categories_s": {
+            "attention": 0.920263356,
+            "compiled_model_unresolved": 32.596759857,
+            "kv_cache": 0.004313076,
+            "moe": 33.017376816,
+            "no_python_stack": 0.360080734,
+            "runtime_other": 0.922357248,
+            "sampling": 2.502524483
+          }
+        }
+      ]
+    },
+    {
+      "rank": 3,
+      "num_iterations": 3,
+      "step_s": 120.01927371,
+      "active_s": 73.23961225666666,
+      "idle_s": 46.77966145333333,
+      "idle_pct": 38.976790983059956,
+      "kernel_classes_s": {
+        "Activation": 0.0,
+        "AllToAll": 0.0,
+        "AttentionBwd": 0.0,
+        "AttentionFwd": 0.0,
+        "AttentionMisc": 0.0,
+        "CatCopy": 0.028711165,
+        "CrossEntropy": 0.0,
+        "CudaGraph": 0.0,
+        "Elementwise": 0.9627544656666667,
+        "Embedding": 0.0,
+        "Fill": 0.03198104533333333,
+        "GatedDeltaProduct": 0.0,
+        "GemmCUBLAS": 0.0,
+        "GemmCUTLASS": 0.0,
+        "GemmNVJET": 7.936547298333333,
+        "GroupedGemm": 0.0,
+        "Idle": 46.77966145333333,
+        "LayerNorm": 0.0,
+        "Memcpy": 0.0,
+        "MoERouting": 0.19520868466666666,
+        "NCCLAllGather": 0.0,
+        "NCCLAllReduce": 0.0,
+        "NCCLBroadcast": 0.0,
+        "NCCLReduceScatter": 0.0,
+        "NCCLSendRecv": 0.0,
+        "Other": 63.237944161666654,
+        "Quantize": 0.0,
+        "RMSNorm": 0.0,
+        "Reduce": 0.8460852746666667,
+        "Roll": 0.0,
+        "Rotary": 0.0,
+        "StateSpace": 0.0,
+        "Sync": 0.0,
+        "TopK": 0.00038016133333333333,
+        "Uncategorized": 0.0,
+        "WeightUpdate": 0.0
+      },
+      "stack_categories_s": {
+        "attention": 0.9585052386666665,
+        "compiled_model_unresolved": 33.88923571066666,
+        "kv_cache": 0.004070313,
+        "moe": 34.704523368333334,
+        "no_python_stack": 0.18943863933333333,
+        "runtime_other": 0.908542159,
+        "sampling": 2.5852968276666664
+      },
+      "raw_other_categories_s": {
+        "attention": 16.845698048,
+        "expert_fc1_bmm": 12.434921264,
+        "expert_fc2_bmm": 7.536724336,
+        "kv_cache": 0.7533035466666667,
+        "moe_routing_finalize": 3.473437904,
+        "quantization_layout": 0.631381088,
+        "sampling": 0.678134522,
+        "triton_fused": 2.7236160813333337
+      },
+      "iterations": [
+        {
+          "index": 0,
+          "label": 0,
+          "step_s": 205.045828814,
+          "active_s": 71.90861367600002,
+          "idle_s": 133.137215138,
+          "idle_pct": 64.93046745114268,
+          "stack_categories_s": {
+            "attention": 0.955760863,
+            "compiled_model_unresolved": 33.20878229,
+            "kv_cache": 0.004478453,
+            "moe": 34.198806306,
+            "no_python_stack": 0.0,
+            "runtime_other": 1.005067021,
+            "sampling": 2.535718743
+          }
+        },
+        {
+          "index": 1,
+          "label": 1,
+          "step_s": 79.080945206,
+          "active_s": 75.358387126,
+          "idle_s": 3.72255808,
+          "idle_pct": 4.707275653196876,
+          "stack_categories_s": {
+            "attention": 0.966568332,
+            "compiled_model_unresolved": 35.26097973,
+            "kv_cache": 0.004242646,
+            "moe": 35.387602642,
+            "no_python_stack": 0.215533646,
+            "runtime_other": 0.845848754,
+            "sampling": 2.677611376
+          }
+        },
+        {
+          "index": 2,
+          "label": 2,
+          "step_s": 75.93104711,
+          "active_s": 72.451835968,
+          "idle_s": 3.479211142,
+          "idle_pct": 4.582066591232078,
+          "stack_categories_s": {
+            "attention": 0.953186521,
+            "compiled_model_unresolved": 33.197945112,
+            "kv_cache": 0.00348984,
+            "moe": 34.527161157,
+            "no_python_stack": 0.352782272,
+            "runtime_other": 0.874710702,
+            "sampling": 2.542560364
+          }
+        }
+      ]
+    },
+    {
+      "rank": 4,
+      "num_iterations": 3,
+      "step_s": 120.02140133133332,
+      "active_s": 72.43374818866666,
+      "idle_s": 47.58765314266667,
+      "idle_pct": 39.64930638602969,
+      "kernel_classes_s": {
+        "Activation": 0.0,
+        "AllToAll": 0.0,
+        "AttentionBwd": 0.0,
+        "AttentionFwd": 0.0,
+        "AttentionMisc": 0.0,
+        "CatCopy": 0.027758611,
+        "CrossEntropy": 0.0,
+        "CudaGraph": 0.0,
+        "Elementwise": 0.9564593693333333,
+        "Embedding": 0.0,
+        "Fill": 0.03065150033333333,
+        "GatedDeltaProduct": 0.0,
+        "GemmCUBLAS": 0.0,
+        "GemmCUTLASS": 0.0,
+        "GemmNVJET": 7.881672917666667,
+        "GroupedGemm": 0.0,
+        "Idle": 47.58765314266667,
+        "LayerNorm": 0.0,
+        "Memcpy": 0.0,
+        "MoERouting": 0.19722949866666667,
+        "NCCLAllGather": 0.0,
+        "NCCLAllReduce": 0.0,
+        "NCCLBroadcast": 0.0,
+        "NCCLReduceScatter": 0.0,
+        "NCCLSendRecv": 0.0,
+        "Other": 62.47562450533334,
+        "Quantize": 0.0,
+        "RMSNorm": 0.0,
+        "Reduce": 0.8639988246666668,
+        "Roll": 0.0,
+        "Rotary": 0.0,
+        "StateSpace": 0.0,
+        "Sync": 0.0,
+        "TopK": 0.00035296166666666664,
+        "Uncategorized": 0.0,
+        "WeightUpdate": 0.0
+      },
+      "stack_categories_s": {
+        "attention": 0.9430776116666666,
+        "compiled_model_unresolved": 33.858184320333336,
+        "kv_cache": 0.004092236666666666,
+        "moe": 33.918583022,
+        "no_python_stack": 0.1953173536666667,
+        "runtime_other": 0.939456415,
+        "sampling": 2.5750372293333337
+      },
+      "raw_other_categories_s": {
+        "attention": 16.885105888,
+        "expert_fc1_bmm": 12.33741376,
+        "expert_fc2_bmm": 7.047663888,
+        "kv_cache": 0.7225701816666666,
+        "moe_routing_finalize": 3.523870912,
+        "quantization_layout": 0.61563528,
+        "sampling": 0.6698959366666667,
+        "triton_fused": 2.5630120663333336
+      },
+      "iterations": [
+        {
+          "index": 0,
+          "label": 0,
+          "step_s": 205.053082579,
+          "active_s": 71.46164743900002,
+          "idle_s": 133.59143514,
+          "idle_pct": 65.14968390613281,
+          "stack_categories_s": {
+            "attention": 0.943574829,
+            "compiled_model_unresolved": 33.437359489,
+            "kv_cache": 0.004234363,
+            "moe": 33.495071692,
+            "no_python_stack": 0.0,
+            "runtime_other": 1.018499106,
+            "sampling": 2.56290796
+          }
+        },
+        {
+          "index": 1,
+          "label": 1,
+          "step_s": 79.081147798,
+          "active_s": 74.425826652,
+          "idle_s": 4.655321146,
+          "idle_pct": 5.886764767111456,
+          "stack_categories_s": {
+            "attention": 0.947415539,
+            "compiled_model_unresolved": 35.318143578,
+            "kv_cache": 0.004247318,
+            "moe": 34.383309376,
+            "no_python_stack": 0.247082616,
+            "runtime_other": 0.867237831,
+            "sampling": 2.658390394
+          }
+        },
+        {
+          "index": 2,
+          "label": 2,
+          "step_s": 75.929973617,
+          "active_s": 71.413770475,
+          "idle_s": 4.516203142,
+          "idle_pct": 5.9478529055999365,
+          "stack_categories_s": {
+            "attention": 0.938242467,
+            "compiled_model_unresolved": 32.819049894,
+            "kv_cache": 0.003795029,
+            "moe": 33.877367998,
+            "no_python_stack": 0.338869445,
+            "runtime_other": 0.932632308,
+            "sampling": 2.503813334
+          }
+        }
+      ]
+    },
+    {
+      "rank": 5,
+      "num_iterations": 3,
+      "step_s": 120.03768869566667,
+      "active_s": 73.50503640000001,
+      "idle_s": 46.532652295666665,
+      "idle_pct": 38.76503521626577,
+      "kernel_classes_s": {
+        "Activation": 0.0,
+        "AllToAll": 0.0,
+        "AttentionBwd": 0.0,
+        "AttentionFwd": 0.0,
+        "AttentionMisc": 0.0,
+        "CatCopy": 0.025197773,
+        "CrossEntropy": 0.0,
+        "CudaGraph": 0.0,
+        "Elementwise": 0.9367960123333332,
+        "Embedding": 0.0,
+        "Fill": 0.027233526999999997,
+        "GatedDeltaProduct": 0.0,
+        "GemmCUBLAS": 0.0,
+        "GemmCUTLASS": 0.0,
+        "GemmNVJET": 7.842325044666667,
+        "GroupedGemm": 0.0,
+        "Idle": 46.532652295666665,
+        "LayerNorm": 0.0,
+        "Memcpy": 0.0,
+        "MoERouting": 0.197365379,
+        "NCCLAllGather": 0.0,
+        "NCCLAllReduce": 0.0,
+        "NCCLBroadcast": 0.0,
+        "NCCLReduceScatter": 0.0,
+        "NCCLSendRecv": 0.0,
+        "Other": 63.61159730433334,
+        "Quantize": 0.0,
+        "RMSNorm": 0.0,
+        "Reduce": 0.8642028946666668,
+        "Roll": 0.0,
+        "Rotary": 0.0,
+        "StateSpace": 0.0,
+        "Sync": 0.0,
+        "TopK": 0.000318465,
+        "Uncategorized": 0.0,
+        "WeightUpdate": 0.0
+      },
+      "stack_categories_s": {
+        "attention": 0.9196990673333333,
+        "compiled_model_unresolved": 34.12100069566667,
+        "kv_cache": 0.0036952903333333335,
+        "moe": 34.775035818333336,
+        "no_python_stack": 0.20905326533333335,
+        "runtime_other": 0.92538417,
+        "sampling": 2.551168093
+      },
+      "raw_other_categories_s": {
+        "attention": 16.98879536,
+        "expert_fc1_bmm": 12.490169072,
+        "expert_fc2_bmm": 7.54527176,
+        "kv_cache": 0.7227996373333334,
+        "moe_routing_finalize": 3.434816592,
+        "quantization_layout": 0.639085312,
+        "sampling": 0.6657568853333332,
+        "triton_fused": 2.800719538666667
+      },
+      "iterations": [
+        {
+          "index": 0,
+          "label": 0,
+          "step_s": 205.101962016,
+          "active_s": 72.12428089699998,
+          "idle_s": 132.977681119,
+          "idle_pct": 64.83491421141375,
+          "stack_categories_s": {
+            "attention": 0.919349224,
+            "compiled_model_unresolved": 33.345555734,
+            "kv_cache": 0.00380323,
+            "moe": 34.337019499,
+            "no_python_stack": 0.0,
+            "runtime_other": 1.009679508,
+            "sampling": 2.508873702
+          }
+        },
+        {
+          "index": 1,
+          "label": 1,
+          "step_s": 79.081128694,
+          "active_s": 76.147206884,
+          "idle_s": 2.93392181,
+          "idle_pct": 3.7100150926685003,
+          "stack_categories_s": {
+            "attention": 0.92482924,
+            "compiled_model_unresolved": 36.017019637,
+            "kv_cache": 0.003810038,
+            "moe": 35.456068634,
+            "no_python_stack": 0.27237341,
+            "runtime_other": 0.813349879,
+            "sampling": 2.659756046
+          }
+        },
+        {
+          "index": 2,
+          "label": 2,
+          "step_s": 75.929975377,
+          "active_s": 72.24362141900001,
+          "idle_s": 3.686353958,
+          "idle_pct": 4.854938961453471,
+          "stack_categories_s": {
+            "attention": 0.914918738,
+            "compiled_model_unresolved": 33.000426716,
+            "kv_cache": 0.003472603,
+            "moe": 34.532019322,
+            "no_python_stack": 0.354786386,
+            "runtime_other": 0.953123123,
+            "sampling": 2.484874531
+          }
+        }
+      ]
+    },
+    {
+      "rank": 6,
+      "num_iterations": 3,
+      "step_s": 120.01916810166666,
+      "active_s": 72.43537667333334,
+      "idle_s": 47.583791428333335,
+      "idle_pct": 39.64682657025728,
+      "kernel_classes_s": {
+        "Activation": 0.0,
+        "AllToAll": 0.0,
+        "AttentionBwd": 0.0,
+        "AttentionFwd": 0.0,
+        "AttentionMisc": 0.0,
+        "CatCopy": 0.028782428,
+        "CrossEntropy": 0.0,
+        "CudaGraph": 0.0,
+        "Elementwise": 0.95953648,
+        "Embedding": 0.0,
+        "Fill": 0.03074933466666667,
+        "GatedDeltaProduct": 0.0,
+        "GemmCUBLAS": 0.0,
+        "GemmCUTLASS": 0.0,
+        "GemmNVJET": 7.951552615666667,
+        "GroupedGemm": 0.0,
+        "Idle": 47.583791428333335,
+        "LayerNorm": 0.0,
+        "Memcpy": 0.0,
+        "MoERouting": 0.19715517433333335,
+        "NCCLAllGather": 0.0,
+        "NCCLAllReduce": 0.0,
+        "NCCLBroadcast": 0.0,
+        "NCCLReduceScatter": 0.0,
+        "NCCLSendRecv": 0.0,
+        "Other": 62.42845733066667,
+        "Quantize": 0.0,
+        "RMSNorm": 0.0,
+        "Reduce": 0.8387692596666667,
+        "Roll": 0.0,
+        "Rotary": 0.0,
+        "StateSpace": 0.0,
+        "Sync": 0.0,
+        "TopK": 0.00037405033333333333,
+        "Uncategorized": 0.0,
+        "WeightUpdate": 0.0
+      },
+      "stack_categories_s": {
+        "attention": 0.957285249,
+        "compiled_model_unresolved": 34.194652479999995,
+        "kv_cache": 0.004219286666666667,
+        "moe": 33.574483627,
+        "no_python_stack": 0.214619783,
+        "runtime_other": 0.924455571,
+        "sampling": 2.5656606766666665
+      },
+      "raw_other_categories_s": {
+        "attention": 17.174073904,
+        "expert_fc1_bmm": 12.294862976,
+        "expert_fc2_bmm": 6.869258176,
+        "kv_cache": 0.7534113546666666,
+        "moe_routing_finalize": 3.598759584,
+        "quantization_layout": 0.626851328,
+        "sampling": 0.6692621146666666,
+        "triton_fused": 2.7036298293333334
+      },
+      "iterations": [
+        {
+          "index": 0,
+          "label": 0,
+          "step_s": 205.046102408,
+          "active_s": 71.05763393699999,
+          "idle_s": 133.988468471,
+          "idle_pct": 65.34553297891526,
+          "stack_categories_s": {
+            "attention": 0.953158245,
+            "compiled_model_unresolved": 33.296197827,
+            "kv_cache": 0.004520374,
+            "moe": 33.25963149,
+            "no_python_stack": 0.0,
+            "runtime_other": 1.026452263,
+            "sampling": 2.517673738
+          }
+        },
+        {
+          "index": 1,
+          "label": 1,
+          "step_s": 79.081368152,
+          "active_s": 74.916384809,
+          "idle_s": 4.164983343,
+          "idle_pct": 5.266706229708377,
+          "stack_categories_s": {
+            "attention": 0.969624633,
+            "compiled_model_unresolved": 36.10587258,
+            "kv_cache": 0.004001529,
+            "moe": 34.08257439,
+            "no_python_stack": 0.242288736,
+            "runtime_other": 0.848489926,
+            "sampling": 2.663533015
+          }
+        },
+        {
+          "index": 2,
+          "label": 2,
+          "step_s": 75.930033745,
+          "active_s": 71.332111274,
+          "idle_s": 4.597922471,
+          "idle_pct": 6.055472708521974,
+          "stack_categories_s": {
+            "attention": 0.949072869,
+            "compiled_model_unresolved": 33.181887033,
+            "kv_cache": 0.004135957,
+            "moe": 33.381245001,
+            "no_python_stack": 0.401570613,
+            "runtime_other": 0.898424524,
+            "sampling": 2.515775277
+          }
+        }
+      ]
+    },
+    {
+      "rank": 7,
+      "num_iterations": 3,
+      "step_s": 120.04275747333332,
+      "active_s": 73.45231684566666,
+      "idle_s": 46.590440627666666,
+      "idle_pct": 38.81153816215561,
+      "kernel_classes_s": {
+        "Activation": 0.0,
+        "AllToAll": 0.0,
+        "AttentionBwd": 0.0,
+        "AttentionFwd": 0.0,
+        "AttentionMisc": 0.0,
+        "CatCopy": 0.02929950766666667,
+        "CrossEntropy": 0.0,
+        "CudaGraph": 0.0,
+        "Elementwise": 0.966670372,
+        "Embedding": 0.0,
+        "Fill": 0.03306321166666666,
+        "GatedDeltaProduct": 0.0,
+        "GemmCUBLAS": 0.0,
+        "GemmCUTLASS": 0.0,
+        "GemmNVJET": 7.985573066666666,
+        "GroupedGemm": 0.0,
+        "Idle": 46.590440627666666,
+        "LayerNorm": 0.0,
+        "Memcpy": 0.0,
+        "MoERouting": 0.19765145466666667,
+        "NCCLAllGather": 0.0,
+        "NCCLAllReduce": 0.0,
+        "NCCLBroadcast": 0.0,
+        "NCCLReduceScatter": 0.0,
+        "NCCLSendRecv": 0.0,
+        "Other": 63.410160570999984,
+        "Quantize": 0.0,
+        "RMSNorm": 0.0,
+        "Reduce": 0.8295258916666668,
+        "Roll": 0.0,
+        "Rotary": 0.0,
+        "StateSpace": 0.0,
+        "Sync": 0.0,
+        "TopK": 0.0003727703333333333,
+        "Uncategorized": 0.0,
+        "WeightUpdate": 0.0
+      },
+      "stack_categories_s": {
+        "attention": 0.938496514,
+        "compiled_model_unresolved": 34.53749942699999,
+        "kv_cache": 0.004912882333333333,
+        "moe": 34.267935491,
+        "no_python_stack": 0.18959312566666667,
+        "runtime_other": 0.9443281733333333,
+        "sampling": 2.569551232333333
+      },
+      "raw_other_categories_s": {
+        "attention": 17.1224968,
+        "expert_fc1_bmm": 12.361864976,
+        "expert_fc2_bmm": 7.182164512,
+        "kv_cache": 0.7391065066666667,
+        "moe_routing_finalize": 3.516329376,
+        "quantization_layout": 0.63112296,
+        "sampling": 0.663098566,
+        "triton_fused": 2.8497062316666666
+      },
+      "iterations": [
+        {
+          "index": 0,
+          "label": 0,
+          "step_s": 205.116803515,
+          "active_s": 72.45049593299998,
+          "idle_s": 132.666307582,
+          "idle_pct": 64.67841995806953,
+          "stack_categories_s": {
+            "attention": 0.936983511,
+            "compiled_model_unresolved": 34.004010502,
+            "kv_cache": 0.004921407,
+            "moe": 33.940023817,
+            "no_python_stack": 0.0,
+            "runtime_other": 1.02405457,
+            "sampling": 2.540502126
+          }
+        },
+        {
+          "index": 1,
+          "label": 1,
+          "step_s": 79.081393656,
+          "active_s": 75.528246833,
+          "idle_s": 3.553146823,
+          "idle_pct": 4.493025045127563,
+          "stack_categories_s": {
+            "attention": 0.947126854,
+            "compiled_model_unresolved": 35.991639983,
+            "kv_cache": 0.004874109,
+            "moe": 34.830254724,
+            "no_python_stack": 0.257448207,
+            "runtime_other": 0.860097143,
+            "sampling": 2.636805813
+          }
+        },
+        {
+          "index": 2,
+          "label": 2,
+          "step_s": 75.930075249,
+          "active_s": 72.37820777099999,
+          "idle_s": 3.551867478,
+          "idle_pct": 4.677813720521472,
+          "stack_categories_s": {
+            "attention": 0.931379177,
+            "compiled_model_unresolved": 33.616847796,
+            "kv_cache": 0.004943131,
+            "moe": 34.033527932,
+            "no_python_stack": 0.31133117,
+            "runtime_other": 0.948832807,
+            "sampling": 2.531345758
+          }
+        }
+      ]
+    }
+  ],
+  "aggregate": {
+    "step_s": {
+      "mean": 120.02485050591666,
+      "min": 120.018414709,
+      "max": 120.04275747333332,
+      "max_over_min": 1.0002028252447122
+    },
+    "active_s": {
+      "mean": 72.57844316791666,
+      "min": 71.55455612433333,
+      "max": 73.50503640000001,
+      "max_over_min": 1.0272586454491803
+    },
+    "idle_s": {
+      "mean": 47.446407338,
+      "min": 46.532652295666665,
+      "max": 48.46385858466667,
+      "max_over_min": 1.0415021752194393
+    },
+    "idle_pct": {
+      "mean": 39.530518378481325,
+      "min": 38.76503521626577,
+      "max": 40.38035221692729,
+      "max_over_min": 1.0416694320448787
+    }
+  },
+  "iterations": [
+    {
+      "index": 0,
+      "label": 0,
+      "step_s": {
+        "mean": 205.06306564,
+        "min": 205.043598499,
+        "max": 205.116803515,
+        "max_over_min": 1.0003570217092164
+      },
+      "active_s": {
+        "mean": 71.431370986625,
+        "min": 70.528502688,
+        "max": 72.45049593299998,
+        "max_over_min": 1.0272512980107118
+      },
+      "idle_s": {
+        "mean": 133.631694653375,
+        "min": 132.666307582,
+        "max": 134.515095811,
+        "max_over_min": 1.0139356273849507
+      },
+      "idle_pct": {
+        "mean": 65.16617672749125,
+        "min": 64.67841995806953,
+        "max": 65.60316771442929,
+        "max_over_min": 1.0142976244156747
+      },
+      "stack_categories_s": {
+        "attention": 0.939176892375,
+        "compiled_model_unresolved": 33.440585675125,
+        "kv_cache": 0.004476644125,
+        "moe": 33.50272225225,
+        "no_python_stack": 0.0,
+        "runtime_other": 1.007841147,
+        "sampling": 2.53656837575
+      }
+    },
+    {
+      "index": 1,
+      "label": 1,
+      "step_s": {
+        "mean": 79.080959146125,
+        "min": 79.080493493,
+        "max": 79.081393656,
+        "max_over_min": 1.0000113828702912
+      },
+      "active_s": {
+        "mean": 74.832311025,
+        "min": 73.81149011500001,
+        "max": 76.147206884,
+        "max_over_min": 1.031644351920831
+      },
+      "idle_s": {
+        "mean": 4.248648121125,
+        "min": 2.93392181,
+        "max": 5.269003378,
+        "max_over_min": 1.7958908652715593
+      },
+      "idle_pct": {
+        "mean": 5.372532539811201,
+        "min": 3.7100150926685003,
+        "max": 6.662835732640437,
+        "max_over_min": 1.795905290468256
+      },
+      "stack_categories_s": {
+        "attention": 0.947743705875,
+        "compiled_model_unresolved": 35.711722950625,
+        "kv_cache": 0.004296655625,
+        "moe": 34.424970312625,
+        "no_python_stack": 0.24580410687499998,
+        "runtime_other": 0.83307470975,
+        "sampling": 2.664698583625
+      }
+    },
+    {
+      "index": 2,
+      "label": 2,
+      "step_s": {
+        "mean": 75.93052673162501,
+        "min": 75.929973617,
+        "max": 75.931152135,
+        "max_over_min": 1.0000155211169433
+      },
+      "active_s": {
+        "mean": 71.471647492125,
+        "min": 70.32367557,
+        "max": 72.451835968,
+        "max_over_min": 1.0302623601617868
+      },
+      "idle_s": {
+        "mean": 4.4588792395,
+        "min": 3.479211142,
+        "max": 5.607476565,
+        "max_over_min": 1.6117091881283703
+      },
+      "idle_pct": {
+        "mean": 5.872311055822565,
+        "min": 4.582066591232078,
+        "max": 7.3849486111185545,
+        "max_over_min": 1.6117069588752542
+      },
+      "stack_categories_s": {
+        "attention": 0.934566439,
+        "compiled_model_unresolved": 33.085827740375,
+        "kv_cache": 0.00409567375,
+        "moe": 33.662729638125,
+        "no_python_stack": 0.3490007515,
+        "runtime_other": 0.916984472875,
+        "sampling": 2.5184427765
+      }
+    }
+  ],
+  "notes": {
+    "stack_categories": "Conserved self time classified from each breakdown node's full Python stack path.",
+    "raw_other_categories": "Additive raw-kernel instance time used to split ntrace's Other class; it is diagnostic and is not a conserved wall-time total."
+  }
+}

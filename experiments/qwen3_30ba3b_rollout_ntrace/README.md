@@ -3,11 +3,12 @@
 This experiment compares the GPU-time breakdown of BF16 and MoE-only MXFP8
 rollout generation. Both arms use the same NeMo-RL source, Qwen3-30B-A3B
 recipe, four-node allocation, asynchronous vLLM engine, CUDA Graph mode, and
-matched generation workload. The BF16 arm uses the Qwen-compatible sparse
-BF16 refit path. The MXFP8 arm uses the NCCL reshard receiver that converts
-BF16 wire tensors to the MXFP8 destination layout. The optimizer learning rate
-is zero in both arms so the captured rollout steps use the same policy weights.
-Refit time is reported separately from the generation-kernel breakdown.
+matched generation workload. The MXFP8 arm uses the NCCL reshard receiver that
+converts BF16 wire tensors to the MXFP8 destination layout. The optimizer
+learning rate is zero so the captured rollout steps use fixed policy weights.
+The attempted BF16 sparse-refit control failed before generation on Qwen's
+2D-to-3D expert W2 layout conversion. The report therefore analyzes the MXFP8
+bottleneck without claiming a matched BF16 speedup.
 
 The outer rollout profiler hook currently runs in the synchronous GRPO trainer.
 The experiment therefore disables `async_grpo` while retaining
@@ -18,7 +19,8 @@ rollout-kernel comparisons, not async 1-off pipeline throughput results.
 
 - generation workers: 8 GPUs, TP1/PP1/EP1
 - warm-up rollouts: 1
-- measured steady-state rollouts: 3
+- measured rollouts: 3; the first contains a large idle stall, so the report
+  also summarizes the later two windows separately
 - captured generation ranks: 0-7
 - CUDA graph provenance: engine initialization
 - model scope: routed MoE experts only for MXFP8; attention, MLP gate, and
@@ -26,6 +28,9 @@ rollout-kernel comparisons, not async 1-off pipeline throughput results.
 
 The ntrace source and runtime commits are recorded in each result directory.
 After capture, run the graph replay audit before producing breakdowns.
+
+The current result and its compact source data are in
+[`report/rollout_bottleneck_analysis.md`](report/rollout_bottleneck_analysis.md).
 
 ## Launch
 
