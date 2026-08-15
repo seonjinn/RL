@@ -50,6 +50,9 @@ case "$role" in
 esac
 export RAY_SUB_TEST_ROLE="$role"
 printf '%s\\n' "$role" >> "$RAY_SUB_SRUN_LOG"
+if [[ "$role" == "head" && "${RAY_SUB_SYNC_FAST_DRIVER_EXIT:-0}" == "1" ]]; then
+  printf '%s' "$$" > "$RAY_SUB_HEAD_SRUN_PID_FILE"
+fi
 if [[ "$role" == "worker" && "${RAY_SUB_SKIP_WORKER:-0}" == "1" ]]; then
   exit 0
 fi
@@ -79,6 +82,11 @@ if [[ "$1" == "start" ]]; then
     if (( count <= ${RAY_SUB_RAY_START_FAILURES:-0} )); then
       exit 1
     fi
+    if [[ "${RAY_SUB_SYNC_FAST_DRIVER_EXIT:-0}" == "1" ]]; then
+      while [[ ! -f "$RAY_SUB_OUTER_READINESS_POLL_FILE" ]]; do
+        /bin/sleep 0.01
+      done
+    fi
   fi
   if [[ " $* " == *" --block "* ]]; then
     while [[ ! -f "$RAY_SUB_LOG_DIR/ENDED" ]]; do /bin/sleep 0.02; done
@@ -87,7 +95,29 @@ if [[ "$1" == "start" ]]; then
 fi
 """,
     )
-    _write_executable(bin_dir / "sleep", "#!/bin/bash\n/bin/sleep 0.02\n")
+    _write_executable(
+        bin_dir / "sleep",
+        """#!/bin/bash
+if [[ "$1" == "2" && "${RAY_SUB_SYNC_FAST_DRIVER_EXIT:-0}" == "1" ]]; then
+  touch "$RAY_SUB_OUTER_READINESS_POLL_FILE"
+  for (( attempt = 0; attempt < 3000; attempt++ )); do
+    if [[ -f "$RAY_SUB_HEAD_SRUN_PID_FILE" ]]; then
+      head_pid=$(<"$RAY_SUB_HEAD_SRUN_PID_FILE")
+      if ! /bin/kill -0 "$head_pid" 2>/dev/null; then
+        exit 0
+      fi
+    fi
+    /bin/sleep 0.01
+  done
+  echo "Timed out waiting for the synchronized head srun to exit." >&2
+  exit 1
+fi
+if [[ "${RAY_SUB_SYNC_FAST_DRIVER_EXIT:-0}" == "1" && "$1" =~ ^(10|60)$ ]]; then
+  exec /bin/sleep "$1"
+fi
+/bin/sleep 0.02
+""",
+    )
     _write_executable(bin_dir / "rm", "#!/bin/bash\nexit 0\n")
     _write_executable(bin_dir / "sed", "#!/bin/bash\nexit 0\n")
 
@@ -155,6 +185,7 @@ def _run_launcher(
     setup_timeout_seconds: int | None = None,
     skip_worker: bool = False,
     hold_worker_before_command: bool = False,
+    sync_fast_driver_exit: bool = False,
     stale_markers: bool = False,
     caller_marker_dir: Path | None = None,
     setup_command: str = 'printf "setup:%s\\n" "$SLURM_JOB_ID" >> "$RAY_SUB_OBSERVATIONS"',
@@ -180,6 +211,12 @@ def _run_launcher(
         env["RAY_SUB_SKIP_WORKER"] = "1"
     if hold_worker_before_command:
         env["RAY_SUB_HOLD_WORKER_BEFORE_COMMAND"] = "1"
+    if sync_fast_driver_exit:
+        env["RAY_SUB_SYNC_FAST_DRIVER_EXIT"] = "1"
+        env["RAY_SUB_HEAD_SRUN_PID_FILE"] = str(tmp_path / "head-srun-pid")
+        env["RAY_SUB_OUTER_READINESS_POLL_FILE"] = str(
+            tmp_path / "outer-readiness-poll"
+        )
     log_dir = Path(env["RAY_SUB_LOG_DIR"])
     if stale_markers:
         log_dir.mkdir()
@@ -199,7 +236,7 @@ def _run_launcher(
         start_new_session=True,
     )
     try:
-        returncode = process.wait(timeout=10)
+        returncode = process.wait(timeout=30 if sync_fast_driver_exit else 10)
         ended_before_cleanup = (log_dir / "ENDED").exists()
     finally:
         log_dir.mkdir(exist_ok=True)
@@ -277,6 +314,22 @@ def test_real_srun_launch_preserves_only_native_id_for_user_hooks(tmp_path):
         assert not any(
             line.startswith(forbidden) for line in daemon_environment.splitlines()
         )
+
+
+@pytest.mark.parametrize("driver_exit_code", [0, 23])
+def test_fast_driver_exit_after_head_ready_propagates_status(
+    tmp_path, driver_exit_code
+):
+    """Fails if a published head exit is misclassified as a startup death."""
+    run = _run_launcher(
+        tmp_path,
+        sync_fast_driver_exit=True,
+        driver_command=f"exit {driver_exit_code}",
+    )
+
+    assert (run.log_dir / "STARTED_RAY_HEAD").is_file()
+    assert run.returncode == driver_exit_code
+    assert not run.ended_before_cleanup
 
 
 @pytest.mark.parametrize("job_id", ["", "not-a-decimal-job-id"])

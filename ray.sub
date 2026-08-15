@@ -420,6 +420,12 @@ check_srun_processes() {
     pid="${SRUN_PIDS[$name]}"
     # Check if the process is still running
     if ! kill -0 "$pid" 2>/dev/null; then
+      # In non-interactive mode, a head that published readiness may have already
+      # finished the driver. The COMMAND path below waits on it and propagates its
+      # exact status; worker/sandbox exits and interactive head exits remain fatal.
+      if [[ "$pid" == "${SRUN_PIDS["ray-head"]}" ]] && [[ -n "$COMMAND" ]] && [[ -f "$LOG_DIR/STARTED_RAY_HEAD" ]]; then
+        continue
+      fi
       echo "[ERROR] Background srun '$name' died (pid=$pid). Could be a failure in startup or an issue with the node preventing the srun to start. Attempting to exit." >&2
       # Signal sidecars inside containers to terminate ASAP
       touch "$LOG_DIR/ENDED"
