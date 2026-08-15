@@ -68,6 +68,9 @@ class DataConfig(TypedDict):
     # This saturates CPU threads without consuming too much memory
     # However, setting it too high might cause memory issues for long seqlens.
     num_workers: NotRequired[int]
+    # Pin DataLoader tensor batches in host memory. This can reduce input stalls,
+    # but increases non-pageable host-memory use for prefetched batches.
+    pin_memory: NotRequired[bool]
     # multiple dataloader configs
     # currently only supported for GRPO
     use_multiple_dataloader: NotRequired[bool]

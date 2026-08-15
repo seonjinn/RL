@@ -230,6 +230,8 @@ data:
   add_generation_prompt: false
   shuffle: true
   num_workers: 1
+  # Pin prefetched tensor batches in host memory. Enable after validating host-memory headroom.
+  pin_memory: false
 
   # dataset
   train:

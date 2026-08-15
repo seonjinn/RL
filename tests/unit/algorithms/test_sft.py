@@ -23,13 +23,34 @@ from nemo_rl.algorithms.loss import NLLLossFn
 from nemo_rl.algorithms.sft import (
     MasterConfig,
     SFTConfig,
+    _get_sft_dataloader_kwargs,
     _get_sft_save_state,
     _initial_sft_save_state,
     setup,
     sft_train,
     validate,
 )
+from nemo_rl.data import DataConfig
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+
+
+@pytest.mark.parametrize(
+    ("data_config", "expected"),
+    [
+        (
+            {"shuffle": False, "num_workers": 2, "pin_memory": True},
+            {"num_workers": 2, "pin_memory": True},
+        ),
+        (
+            {"shuffle": False, "num_workers": 0},
+            {"num_workers": 0},
+        ),
+    ],
+)
+def test_get_sft_dataloader_kwargs(
+    data_config: DataConfig, expected: dict[str, int | bool]
+) -> None:
+    assert _get_sft_dataloader_kwargs(data_config) == expected
 
 
 def test_get_sft_save_state_handles_legacy_checkpoint_and_filters_metrics():

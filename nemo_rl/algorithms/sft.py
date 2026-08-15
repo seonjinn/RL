@@ -226,6 +226,16 @@ def _build_sft_collate_fn(
     )
 
 
+def _get_sft_dataloader_kwargs(data_config: DataConfig) -> dict[str, int | bool]:
+    """Return explicitly configured SFT DataLoader performance options."""
+    dataloader_kwargs: dict[str, int | bool] = {
+        "num_workers": data_config["num_workers"]
+    }
+    if "pin_memory" in data_config:
+        dataloader_kwargs["pin_memory"] = data_config["pin_memory"]
+    return dataloader_kwargs
+
+
 # =======================================================
 # Setup & Initialization
 # =======================================================
@@ -304,13 +314,14 @@ def setup(
     #           Data
     # ==========================
     sft_collate_fn = _build_sft_collate_fn(policy_config, cluster_config)
+    dataloader_kwargs = _get_sft_dataloader_kwargs(data_config)
     train_dataloader = StatefulDataLoader(
         train_dataset,
         batch_size=policy_config["train_global_batch_size"],
         shuffle=data_config["shuffle"],
         collate_fn=sft_collate_fn,
         drop_last=True,
-        num_workers=data_config["num_workers"],
+        **dataloader_kwargs,
     )
 
     if last_checkpoint_path is not None:
@@ -323,7 +334,7 @@ def setup(
             shuffle=False,
             collate_fn=sft_collate_fn,
             drop_last=False,
-            num_workers=data_config["num_workers"],
+            **dataloader_kwargs,
         )
     else:
         val_dataloader = None
