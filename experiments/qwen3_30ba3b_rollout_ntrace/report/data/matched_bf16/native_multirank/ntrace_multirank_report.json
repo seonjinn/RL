@@ -1,0 +1,1794 @@
+{
+ "num_ranks": 8,
+ "ranks": [
+  0,
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7
+ ],
+ "num_total_iterations": 3,
+ "clock_source": "utc",
+ "capabilities": {
+  "python_stacks": true,
+  "nvtx_payloads": false,
+  "clock_quality": "anchored"
+ },
+ "warnings": [],
+ "communication_map": {
+  "version": 1,
+  "name": "Megatron-Core communication categories",
+  "mapping_path": "/lustre/fsw/coreai_dlalgo_llm/users/sna/ntrace-runtime-92a94b8-bf16/ntrace/analysis/multirank/communication_map.yaml",
+  "sha256": "c1d4c4ca7137ed2661dcbdd45a121004200c1a3d5b0120396afe761b2bf0a75e",
+  "matching": {
+   "category_order": "categories list controls report display order",
+   "matching_priority": "matching_order breaks ties within one frame",
+   "accounting_priority": "accounting_order assigns overlapping semantic intervals deterministically",
+   "stack_order": "captured stack frames are scanned leaf to root",
+   "rule_logic": "rules are ORed; contains tokens within one rule are ANDed on the same frame",
+   "fallback": "unmatched kernels use their backend fallback category",
+   "kind_split": "a display family holds one backend kind; kinds beyond a category's primary render as '<category>:<kind>' split families",
+   "matching_order": [
+    "dist_opt_param_ag",
+    "dist_opt_grad_rs",
+    "embd_grad_ar",
+    "optim_grad_norm",
+    "moe_a2a",
+    "pp_transfer"
+   ],
+   "accounting_order": [
+    "pp_transfer",
+    "moe_a2a",
+    "dist_opt_param_ag",
+    "dist_opt_grad_rs",
+    "embd_grad_ar",
+    "optim_grad_norm"
+   ]
+  },
+  "categories": [
+   {
+    "id": "moe_a2a",
+    "report_id": "moe",
+    "label": "MoE dispatch/combine",
+    "color": "#952fc6",
+    "primary_kind": "hybrid",
+    "kind_splits": [
+     {
+      "kind": "collective",
+      "label": "MoE AllGather",
+      "color": "#d6409f"
+     }
+    ],
+    "frame_rules": [
+     {
+      "contains": [
+       "token_dispatcher.py"
+      ]
+     },
+     {
+      "contains": [
+       "fused_a2a.py"
+      ]
+     },
+     {
+      "contains": [
+       "hybrid_ep"
+      ]
+     },
+     {
+      "contains": [
+       "moe_utils.py",
+       "all_to_all"
+      ]
+     }
+    ]
+   },
+   {
+    "id": "pp_transfer",
+    "report_id": "pp",
+    "label": "PP P2P send/recv",
+    "color": "#ef9100",
+    "primary_kind": "p2p",
+    "kind_splits": [
+     {
+      "kind": "collective",
+      "label": "PP collective",
+      "color": null
+     }
+    ],
+    "frame_rules": [
+     {
+      "contains": [
+       "p2p_communication.py"
+      ]
+     },
+     {
+      "contains": [
+       "schedules.py",
+       "pp_post_forward"
+      ]
+     },
+     {
+      "contains": [
+       "schedules.py",
+       "pp_post_backward"
+      ]
+     }
+    ]
+   },
+   {
+    "id": "dist_opt_param_ag",
+    "report_id": "opt_param",
+    "label": "Optimizer param sync",
+    "color": "#4b62b5",
+    "primary_kind": null,
+    "kind_splits": [],
+    "frame_rules": [
+     {
+      "contains": [
+       "param_and_grad_buffer.py",
+       "start_param_sync"
+      ]
+     },
+     {
+      "contains": [
+       "param_and_grad_buffer.py",
+       "finish_param_sync"
+      ]
+     },
+     {
+      "contains": [
+       "distributed_data_parallel.py",
+       "start_param_sync"
+      ]
+     }
+    ]
+   },
+   {
+    "id": "dist_opt_grad_rs",
+    "report_id": "opt_grad",
+    "label": "Optimizer grad sync",
+    "color": "#2b78c5",
+    "primary_kind": null,
+    "kind_splits": [],
+    "frame_rules": [
+     {
+      "contains": [
+       "param_and_grad_buffer.py",
+       "start_grad_sync"
+      ]
+     },
+     {
+      "contains": [
+       "param_and_grad_buffer.py",
+       "finish_grad_sync"
+      ]
+     },
+     {
+      "contains": [
+       "param_and_grad_buffer.py",
+       "reduce_scatter"
+      ]
+     },
+     {
+      "contains": [
+       "distributed_data_parallel.py",
+       "start_grad_sync"
+      ]
+     }
+    ]
+   },
+   {
+    "id": "embd_grad_ar",
+    "report_id": "embedding",
+    "label": "Embedding grad sync",
+    "color": "#148a72",
+    "primary_kind": null,
+    "kind_splits": [],
+    "frame_rules": [
+     {
+      "contains": [
+       "finalize_model_grads.py",
+       "embedding"
+      ]
+     }
+    ]
+   },
+   {
+    "id": "optim_grad_norm",
+    "report_id": "grad_norm",
+    "label": "Grad norm sync",
+    "color": "#b7791f",
+    "primary_kind": null,
+    "kind_splits": [],
+    "frame_rules": [
+     {
+      "contains": [
+       "clip_grads.py"
+      ]
+     }
+    ]
+   }
+  ],
+  "backends": [
+   {
+    "id": "nccl_collective",
+    "label": "NCCL collective",
+    "kind": "collective",
+    "kernel_classes": {
+     "NCCLAllReduce": "AllReduce",
+     "NCCLAllGather": "AllGather",
+     "NCCLReduceScatter": "ReduceScatter",
+     "NCCLBroadcast": "Broadcast"
+    },
+    "fallback_category": "other_collective",
+    "default": false,
+    "variants": [],
+    "fallback_variant": null
+   },
+   {
+    "id": "nccl_p2p",
+    "label": "NCCL P2P",
+    "kind": "p2p",
+    "kernel_classes": {
+     "NCCLSendRecv": "Send / Receive"
+    },
+    "fallback_category": "other_p2p",
+    "default": false,
+    "variants": [],
+    "fallback_variant": null
+   },
+   {
+    "id": "hybridep",
+    "label": "HybridEP",
+    "kind": "hybrid",
+    "kernel_classes": {
+     "AllToAll": "HybridEP"
+    },
+    "fallback_category": "other_hybridep",
+    "default": false,
+    "variants": [
+     {
+      "id": "dispatch",
+      "label": "Dispatch",
+      "kernel_contains": "hybrid_ep::dispatch_kernel"
+     },
+     {
+      "id": "combine",
+      "label": "Combine",
+      "kernel_contains": "hybrid_ep::combine_kernel"
+     },
+     {
+      "id": "device_sync",
+      "label": "Device synchronization",
+      "kernel_contains": "hybrid_ep::device_sync_kernel"
+     }
+    ],
+    "fallback_variant": {
+     "id": "other",
+     "label": "Other HybridEP"
+    }
+   },
+   {
+    "id": "other_comm",
+    "label": "Other communication",
+    "kind": "other",
+    "kernel_classes": {},
+    "fallback_category": "other_comm",
+    "default": true,
+    "variants": [],
+    "fallback_variant": null
+   }
+  ],
+  "fallback_categories": [
+   {
+    "id": "other_collective",
+    "report_id": "other_coll",
+    "label": "Other collective work",
+    "color": "#00a6a6"
+   },
+   {
+    "id": "other_p2p",
+    "report_id": "other_p2p",
+    "label": "Other P2P work",
+    "color": "#d9485f"
+   },
+   {
+    "id": "other_hybridep",
+    "report_id": "other_hybridep",
+    "label": "Other HybridEP work",
+    "color": "#718000"
+   },
+   {
+    "id": "other_comm",
+    "report_id": "other_comm",
+    "label": "Other communication",
+    "color": "#687067"
+   }
+  ]
+ },
+ "inspector_diagnostics": [],
+ "audit_json_href": null,
+ "topology": {
+  "hostname_by_rank": {
+   "0": "ptyche0210.ptyche.clusters.nvidia.com",
+   "1": "ptyche0210.ptyche.clusters.nvidia.com",
+   "2": "ptyche0210.ptyche.clusters.nvidia.com",
+   "3": "ptyche0210.ptyche.clusters.nvidia.com",
+   "4": "ptyche0207.ptyche.clusters.nvidia.com",
+   "5": "ptyche0207.ptyche.clusters.nvidia.com",
+   "6": "ptyche0207.ptyche.clusters.nvidia.com",
+   "7": "ptyche0207.ptyche.clusters.nvidia.com"
+  },
+  "gpu_ordinal_by_rank": {},
+  "hostname_source": "clock_metadata"
+ },
+ "exposed_comm": {
+  "0": {
+   "exposed_pct": 0.0,
+   "total_comm_ms": 0.0,
+   "exposed_ms": 0.0,
+   "severity": "excellent",
+   "per_iter_exposed_pct": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_exposed_ms": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_comm_ms": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_iter_ms": [
+    196660.91,
+    100974.82,
+    96953.97
+   ],
+   "per_iter_busy_ms": [
+    93771.55,
+    98291.39,
+    93839.88
+   ]
+  },
+  "1": {
+   "exposed_pct": 0.0,
+   "total_comm_ms": 0.0,
+   "exposed_ms": 0.0,
+   "severity": "excellent",
+   "per_iter_exposed_pct": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_exposed_ms": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_comm_ms": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_iter_ms": [
+    196670.15,
+    100974.88,
+    96953.98
+   ],
+   "per_iter_busy_ms": [
+    92348.72,
+    96143.36,
+    93194.1
+   ]
+  },
+  "2": {
+   "exposed_pct": 0.0,
+   "total_comm_ms": 0.0,
+   "exposed_ms": 0.0,
+   "severity": "excellent",
+   "per_iter_exposed_pct": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_exposed_ms": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_comm_ms": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_iter_ms": [
+    196660.72,
+    100975.08,
+    96954.28
+   ],
+   "per_iter_busy_ms": [
+    92038.83,
+    96382.96,
+    92417.88
+   ]
+  },
+  "3": {
+   "exposed_pct": 0.0,
+   "total_comm_ms": 0.0,
+   "exposed_ms": 0.0,
+   "severity": "excellent",
+   "per_iter_exposed_pct": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_exposed_ms": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_comm_ms": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_iter_ms": [
+    196662.35,
+    100975.1,
+    96954.28
+   ],
+   "per_iter_busy_ms": [
+    94807.42,
+    98391.26,
+    94568.79
+   ]
+  },
+  "4": {
+   "exposed_pct": 0.0,
+   "total_comm_ms": 0.0,
+   "exposed_ms": 0.0,
+   "severity": "excellent",
+   "per_iter_exposed_pct": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_exposed_ms": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_comm_ms": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_iter_ms": [
+    196660.52,
+    100974.86,
+    96954.52
+   ],
+   "per_iter_busy_ms": [
+    93430.57,
+    96758.03,
+    93271.9
+   ]
+  },
+  "5": {
+   "exposed_pct": 0.0,
+   "total_comm_ms": 0.0,
+   "exposed_ms": 0.0,
+   "severity": "excellent",
+   "per_iter_exposed_pct": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_exposed_ms": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_comm_ms": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_iter_ms": [
+    196660.72,
+    100974.9,
+    96954.54
+   ],
+   "per_iter_busy_ms": [
+    92523.41,
+    96287.36,
+    92182.6
+   ]
+  },
+  "6": {
+   "exposed_pct": 0.0,
+   "total_comm_ms": 0.0,
+   "exposed_ms": 0.0,
+   "severity": "excellent",
+   "per_iter_exposed_pct": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_exposed_ms": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_comm_ms": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_iter_ms": [
+    196685.71,
+    100975.12,
+    96954.59
+   ],
+   "per_iter_busy_ms": [
+    91566.03,
+    96207.86,
+    92140.4
+   ]
+  },
+  "7": {
+   "exposed_pct": 0.0,
+   "total_comm_ms": 0.0,
+   "exposed_ms": 0.0,
+   "severity": "excellent",
+   "per_iter_exposed_pct": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_exposed_ms": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_comm_ms": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "per_iter_iter_ms": [
+    196682.32,
+    100975.15,
+    96954.62
+   ],
+   "per_iter_busy_ms": [
+    92210.95,
+    96030.99,
+    92803.74
+   ]
+  }
+ },
+ "comm_kernels": {
+  "cross_rank_aligned": true,
+  "stack_attribution": true,
+  "iter_windows_us": [
+   [
+    0,
+    196686126
+   ],
+   [
+    0,
+    100975510
+   ],
+   [
+    0,
+    96954624
+   ]
+  ],
+  "categories": [
+   {
+    "key": "nccl_collective",
+    "label": "NCCL collective (unattributed)",
+    "base_label": "NCCL collective"
+   },
+   {
+    "key": "nccl_p2p",
+    "label": "NCCL P2P (unattributed)",
+    "base_label": "NCCL P2P"
+   },
+   {
+    "key": "hybridep",
+    "label": "HybridEP (unattributed)",
+    "base_label": "HybridEP"
+   },
+   {
+    "key": "other_comm",
+    "label": "Other communication (unattributed)",
+    "base_label": "Other communication"
+   }
+  ],
+  "backend_categories": [
+   {
+    "key": "nccl_collective",
+    "label": "NCCL collective"
+   },
+   {
+    "key": "nccl_p2p",
+    "label": "NCCL P2P"
+   },
+   {
+    "key": "hybridep",
+    "label": "HybridEP"
+   },
+   {
+    "key": "other_comm",
+    "label": "Other communication"
+   }
+  ],
+  "hybridep_components": [
+   {
+    "key": "dispatch",
+    "label": "Dispatch"
+   },
+   {
+    "key": "combine",
+    "label": "Combine"
+   },
+   {
+    "key": "device_sync",
+    "label": "Device synchronization"
+   },
+   {
+    "key": "other",
+    "label": "Other HybridEP"
+   }
+  ],
+  "category_by_class": {},
+  "by_rank": {
+   "0": {
+    "class_ms": {},
+    "cat_ms_per_iter": {},
+    "spans_per_iter": [
+     {},
+     {},
+     {}
+    ],
+    "dropped_per_iter": [
+     0,
+     0,
+     0
+    ],
+    "stack_coverage_ms": {},
+    "inspector_attr_ms": 0.0,
+    "inspector_coll_ms": 0.0,
+    "backend_per_iter": {
+     "nccl_collective": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "nccl_p2p": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "hybridep": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "other_comm": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     }
+    },
+    "hybridep_components": {
+     "dispatch": {
+      "label": "Dispatch",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "combine": {
+      "label": "Combine",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "device_sync": {
+      "label": "Device synchronization",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "other": {
+      "label": "Other HybridEP",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     }
+    }
+   },
+   "1": {
+    "class_ms": {},
+    "cat_ms_per_iter": {},
+    "spans_per_iter": [
+     {},
+     {},
+     {}
+    ],
+    "dropped_per_iter": [
+     0,
+     0,
+     0
+    ],
+    "stack_coverage_ms": {},
+    "inspector_attr_ms": 0.0,
+    "inspector_coll_ms": 0.0,
+    "backend_per_iter": {
+     "nccl_collective": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "nccl_p2p": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "hybridep": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "other_comm": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     }
+    },
+    "hybridep_components": {
+     "dispatch": {
+      "label": "Dispatch",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "combine": {
+      "label": "Combine",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "device_sync": {
+      "label": "Device synchronization",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "other": {
+      "label": "Other HybridEP",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     }
+    }
+   },
+   "2": {
+    "class_ms": {},
+    "cat_ms_per_iter": {},
+    "spans_per_iter": [
+     {},
+     {},
+     {}
+    ],
+    "dropped_per_iter": [
+     0,
+     0,
+     0
+    ],
+    "stack_coverage_ms": {},
+    "inspector_attr_ms": 0.0,
+    "inspector_coll_ms": 0.0,
+    "backend_per_iter": {
+     "nccl_collective": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "nccl_p2p": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "hybridep": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "other_comm": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     }
+    },
+    "hybridep_components": {
+     "dispatch": {
+      "label": "Dispatch",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "combine": {
+      "label": "Combine",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "device_sync": {
+      "label": "Device synchronization",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "other": {
+      "label": "Other HybridEP",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     }
+    }
+   },
+   "3": {
+    "class_ms": {},
+    "cat_ms_per_iter": {},
+    "spans_per_iter": [
+     {},
+     {},
+     {}
+    ],
+    "dropped_per_iter": [
+     0,
+     0,
+     0
+    ],
+    "stack_coverage_ms": {},
+    "inspector_attr_ms": 0.0,
+    "inspector_coll_ms": 0.0,
+    "backend_per_iter": {
+     "nccl_collective": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "nccl_p2p": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "hybridep": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "other_comm": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     }
+    },
+    "hybridep_components": {
+     "dispatch": {
+      "label": "Dispatch",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "combine": {
+      "label": "Combine",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "device_sync": {
+      "label": "Device synchronization",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "other": {
+      "label": "Other HybridEP",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     }
+    }
+   },
+   "4": {
+    "class_ms": {},
+    "cat_ms_per_iter": {},
+    "spans_per_iter": [
+     {},
+     {},
+     {}
+    ],
+    "dropped_per_iter": [
+     0,
+     0,
+     0
+    ],
+    "stack_coverage_ms": {},
+    "inspector_attr_ms": 0.0,
+    "inspector_coll_ms": 0.0,
+    "backend_per_iter": {
+     "nccl_collective": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "nccl_p2p": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "hybridep": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "other_comm": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     }
+    },
+    "hybridep_components": {
+     "dispatch": {
+      "label": "Dispatch",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "combine": {
+      "label": "Combine",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "device_sync": {
+      "label": "Device synchronization",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "other": {
+      "label": "Other HybridEP",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     }
+    }
+   },
+   "5": {
+    "class_ms": {},
+    "cat_ms_per_iter": {},
+    "spans_per_iter": [
+     {},
+     {},
+     {}
+    ],
+    "dropped_per_iter": [
+     0,
+     0,
+     0
+    ],
+    "stack_coverage_ms": {},
+    "inspector_attr_ms": 0.0,
+    "inspector_coll_ms": 0.0,
+    "backend_per_iter": {
+     "nccl_collective": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "nccl_p2p": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "hybridep": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "other_comm": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     }
+    },
+    "hybridep_components": {
+     "dispatch": {
+      "label": "Dispatch",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "combine": {
+      "label": "Combine",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "device_sync": {
+      "label": "Device synchronization",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "other": {
+      "label": "Other HybridEP",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     }
+    }
+   },
+   "6": {
+    "class_ms": {},
+    "cat_ms_per_iter": {},
+    "spans_per_iter": [
+     {},
+     {},
+     {}
+    ],
+    "dropped_per_iter": [
+     0,
+     0,
+     0
+    ],
+    "stack_coverage_ms": {},
+    "inspector_attr_ms": 0.0,
+    "inspector_coll_ms": 0.0,
+    "backend_per_iter": {
+     "nccl_collective": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "nccl_p2p": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "hybridep": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "other_comm": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     }
+    },
+    "hybridep_components": {
+     "dispatch": {
+      "label": "Dispatch",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "combine": {
+      "label": "Combine",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "device_sync": {
+      "label": "Device synchronization",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "other": {
+      "label": "Other HybridEP",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     }
+    }
+   },
+   "7": {
+    "class_ms": {},
+    "cat_ms_per_iter": {},
+    "spans_per_iter": [
+     {},
+     {},
+     {}
+    ],
+    "dropped_per_iter": [
+     0,
+     0,
+     0
+    ],
+    "stack_coverage_ms": {},
+    "inspector_attr_ms": 0.0,
+    "inspector_coll_ms": 0.0,
+    "backend_per_iter": {
+     "nccl_collective": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "nccl_p2p": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "hybridep": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "other_comm": {
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     }
+    },
+    "hybridep_components": {
+     "dispatch": {
+      "label": "Dispatch",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "combine": {
+      "label": "Combine",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "device_sync": {
+      "label": "Device synchronization",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "other": {
+      "label": "Other HybridEP",
+      "kernel_count": [
+       0,
+       0,
+       0
+      ],
+      "kernel_duration_ms": [
+       0.0,
+       0.0,
+       0.0
+      ]
+     }
+    }
+   }
+  }
+ },
+ "jitter": {
+  "num_iterations": 3,
+  "mean_pct": 0.005,
+  "p90_pct": 0.013,
+  "severity": "good",
+  "per_iter_pct": [
+   0.013,
+   0.0,
+   0.001
+  ],
+  "skipped_iterations": []
+ },
+ "straggler": {
+  "straggler_rank": null,
+  "is_single": false,
+  "fraction": 0.0,
+  "mean_margin_pct": 0.0,
+  "per_iter_slowest_rank": [
+   6,
+   7,
+   7
+  ],
+  "per_iter_margin_pct": [
+   0.009,
+   0.0,
+   0.0
+  ],
+  "skipped_iterations": []
+ },
+ "inspector_summary": null,
+ "communication_families": {
+  "families": [],
+  "rules": {
+   "timing": "ntrace kernel rows are authoritative for existence, count, and runtime",
+   "purpose": "nearest matching captured Python stack frame; unmatched rows remain in a backend-specific fallback family",
+   "association": "compatible NCCL kind and rank plus actual time-window overlap within the configured tolerance",
+   "exposed": "exact ntrace exposed total per rank/iteration, proportionally attributed by semantic interval-union duration",
+   "child_exposed": "family attributed exposure proportionally subdivided by child summed ntrace runtime"
+  }
+ },
+ "nccl_enrichment": {
+  "available": false,
+  "provenance": null,
+  "clock": {
+   "source": "utc",
+   "association_enabled": false,
+   "reason": "inspector_not_provided",
+   "tolerance_us": null
+  },
+  "rank_coverage": {
+   "analyzed_ranks": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+   ],
+   "inspector_ranks": [],
+   "association_enabled_ranks": [],
+   "missing_inspector_ranks": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+   ]
+  },
+  "field_availability": {
+   "rank_observations": 0,
+   "communicator_label": 0,
+   "participants": 0,
+   "message_size": 0,
+   "operation_type": 0,
+   "peer": 0,
+   "algorithm": 0,
+   "protocol": 0,
+   "datatype": 0,
+   "timing_source": 0,
+   "bus_bandwidth": 0
+  },
+  "coverage": {
+   "global": {
+    "kernel_count": 0,
+    "kernel_duration_ns": 0,
+    "unavailable_count": 0,
+    "unavailable_duration_ns": 0,
+    "states": {
+     "unique": {
+      "kernel_count": 0,
+      "kernel_duration_ns": 0
+     },
+     "fanout": {
+      "kernel_count": 0,
+      "kernel_duration_ns": 0
+     },
+     "ambiguous": {
+      "kernel_count": 0,
+      "kernel_duration_ns": 0
+     },
+     "unmatched": {
+      "kernel_count": 0,
+      "kernel_duration_ns": 0
+     }
+    }
+   },
+   "by_kind": {
+    "collective": {
+     "kernel_count": 0,
+     "kernel_duration_ns": 0,
+     "unavailable_count": 0,
+     "unavailable_duration_ns": 0,
+     "states": {
+      "unique": {
+       "kernel_count": 0,
+       "kernel_duration_ns": 0
+      },
+      "fanout": {
+       "kernel_count": 0,
+       "kernel_duration_ns": 0
+      },
+      "ambiguous": {
+       "kernel_count": 0,
+       "kernel_duration_ns": 0
+      },
+      "unmatched": {
+       "kernel_count": 0,
+       "kernel_duration_ns": 0
+      }
+     }
+    },
+    "p2p": {
+     "kernel_count": 0,
+     "kernel_duration_ns": 0,
+     "unavailable_count": 0,
+     "unavailable_duration_ns": 0,
+     "states": {
+      "unique": {
+       "kernel_count": 0,
+       "kernel_duration_ns": 0
+      },
+      "fanout": {
+       "kernel_count": 0,
+       "kernel_duration_ns": 0
+      },
+      "ambiguous": {
+       "kernel_count": 0,
+       "kernel_duration_ns": 0
+      },
+      "unmatched": {
+       "kernel_count": 0,
+       "kernel_duration_ns": 0
+      }
+     }
+    }
+   },
+   "by_class": {},
+   "by_rank": {},
+   "by_iteration": {}
+  },
+  "communicator_categories": [],
+  "per_iteration": {}
+ }
+}
