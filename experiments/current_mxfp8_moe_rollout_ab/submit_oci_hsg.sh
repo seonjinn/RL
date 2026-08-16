@@ -2,14 +2,14 @@
 
 set -euo pipefail
 
-EXPECTED_ARM=mxfp8
+EXPECTED_ARM=bf16
 ACTION=${ACTION:-test-only}
 MODEL=${MODEL:-qwen30}
 ARM=${ARM:-${EXPECTED_ARM}}
-BRANCH=${BRANCH:-sna/exp-current-mxfp8-moerollout-20260816}
+BRANCH=${BRANCH:-sna/exp-current-bf16-trtllm-20260816}
 EXPECTED_HEAD=${EXPECTED_HEAD:-}
 BASE=${BASE:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna}
-REPO=${REPO:-${BASE}/RL-exp-current-mxfp8-moerollout-20260816}
+REPO=${REPO:-${BASE}/RL-exp-current-bf16-trtllm-20260816}
 CONTAINER=${CONTAINER:-${BASE}/containers/nemo-rl-nightly-current-20260806-5906409/nemo-rl-nightly-current_20260806_5906409.sqsh}
 HF_HOME=${HF_HOME:-${BASE}/hf_home}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
@@ -33,12 +33,12 @@ fi
 
 case "${MODEL}" in
   qwen30)
-    CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
+    CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g.yaml
     MODEL_LABEL=Qwen3-30B-A3B
     TRAIN_GLOBAL_BATCH_SIZE=2048
     ;;
   nano)
-    CONFIG=examples/configs/recipes/llm/performance/grpo-nanov3-30ba3b-8n4g-mxfp8-rollout-nccl.yaml
+    CONFIG=examples/configs/recipes/llm/performance/grpo-nanov3-30ba3b-8n4g-bf16-rollout-nccl.yaml
     MODEL_LABEL=Nemotron3-Nano-30B-A3B
     TRAIN_GLOBAL_BATCH_SIZE=16
     ;;
@@ -109,8 +109,8 @@ gpus_per_node=${GPUS_PER_NODE}
 trainer_nodes=$((TOTAL_NODES - GEN_NODES))
 generation_nodes=${GEN_NODES}
 training_precision=bf16
-rollout_precision=mxfp8
-quantization_scope=routed_expert_fc1_fc2_only
+rollout_precision=bf16
+quantization_scope=none
 moe_backend=flashinfer_trtllm
 refit_transport=nccl_reshard
 cuda_graphs=enabled

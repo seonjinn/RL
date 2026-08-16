@@ -2,7 +2,7 @@ defaults: ../grpo-nanov3-30BA3B-2n8g-megatron-pack-cp.yaml
 
 checkpointing:
   enabled: false
-  checkpoint_dir: results/grpo-nanov3-30ba3b-8n4g-mxfp8-rollout-nccl
+  checkpoint_dir: results/grpo-nanov3-30ba3b-8n4g-bf16-rollout-nccl
 
 loss_fn:
   force_on_policy_ratio: false
@@ -25,28 +25,15 @@ policy:
       gpu_memory_utilization: 0.5
       async_engine: false
       enforce_eager: false
-      precision: fp8
-      is_mx: true
-      quantization_ignore_patterns:
-        - model.layers.*.mixer.qkv_proj
-        - model.layers.*.mixer.o_proj
-        - model.layers.*.mixer.in_proj
-        - model.layers.*.mixer.out_proj
-        - model.layers.*.mixer.up_proj
-        - model.layers.*.mixer.down_proj
-        - model.layers.*.mixer.gate
-        - model.layers.*.mixer.shared_experts.*
-        - model.layers.*.mixer.fc1_latent_proj
-        - model.layers.*.mixer.fc2_latent_proj
-        - lm_head
+      precision: bfloat16
     vllm_kwargs:
       moe_backend: flashinfer_trtllm
 
 logger:
-  log_dir: logs/grpo-nanov3-30ba3b-8n4g-mxfp8-rollout-nccl
+  log_dir: logs/grpo-nanov3-30ba3b-8n4g-bf16-rollout-nccl
   wandb:
     project: nemo-rl
-    name: grpo-nanov3-30ba3b-8n4g-mxfp8-rollout-nccl
+    name: grpo-nanov3-30ba3b-8n4g-bf16-rollout-nccl
 
 cluster:
   gpus_per_node: 4
