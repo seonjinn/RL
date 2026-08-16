@@ -1018,6 +1018,34 @@ def _apply_moe_config(model_cfg: Any, config: PolicyConfig) -> None:
             model_cfg.moe_hybridep_num_sms = num_sms
 
     if config["megatron_cfg"].get("moe_flex_dispatcher_backend") == "hybridep":
+        sequence_packing = config.get("sequence_packing")
+        sequence_packing_enabled = (
+            sequence_packing is not None and sequence_packing["enabled"]
+        )
+        prepad_packed_inputs = config["megatron_cfg"].get(
+            "moe_hybridep_prepad_packed_inputs"
+        )
+        if prepad_packed_inputs:
+            if config["megatron_cfg"]["moe_token_dispatcher_type"] != "flex":
+                raise ValueError(
+                    "HybridEP input prepadding requires the flex token dispatcher."
+                )
+            if not sequence_packing_enabled:
+                raise ValueError(
+                    "HybridEP input prepadding requires sequence packing to be enabled."
+                )
+            if config["megatron_cfg"]["pipeline_model_parallel_size"] != 1:
+                raise ValueError(
+                    "HybridEP input prepadding currently requires pipeline parallel size 1."
+                )
+            if config["megatron_cfg"].get("mtp_num_layers"):
+                raise ValueError(
+                    "HybridEP input prepadding currently requires MTP disabled."
+                )
+        # Packed inputs are aligned once in NeMo-RL before forward. Repeating the
+        # scalar MAX collective inside each MoE layer can interleave with expert
+        # parameter all-gathers on the same EP communicator.
+        model_cfg.moe_hybridep_pad_uneven_dispatch_inputs = not prepad_packed_inputs
         _configure_hybridep_environment(model_cfg, config["megatron_cfg"])
 
     model_cfg.moe_permute_fusion = config["megatron_cfg"]["moe_permute_fusion"]
