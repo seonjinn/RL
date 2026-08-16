@@ -13,6 +13,7 @@ NUM_MINUTES=180
 # ===== END CONFIG =====
 
 : "${NTRACE_ARM:?set NTRACE_ARM to bf16 or mxfp8}"
+: "${NTRACE_SOURCE:?set NTRACE_SOURCE to the pinned ntrace source tree}"
 : "${NTRACE_RUNTIME:?set NTRACE_RUNTIME to the shared ntrace install target}"
 : "${NTRACE_SOURCE_COMMIT:?set NTRACE_SOURCE_COMMIT to the ntrace git commit}"
 : "${NEMO_SOURCE_COMMIT:?set NEMO_SOURCE_COMMIT to the NeMo-RL git commit}"
@@ -29,6 +30,13 @@ esac
 RUN_ID=${SLURM_JOB_ID:-local}-$(date -u +%Y%m%dT%H%M%SZ)
 RUN_ROOT=${NTRACE_RESULTS_ROOT}/${NTRACE_ARM}/${RUN_ID}
 mkdir -p "${RUN_ROOT}"
+
+if [[ ! -d "${NTRACE_RUNTIME}/ntrace" ]]; then
+  NTRACE_INSTALL_SOURCE="${NTRACE_SOURCE}" \
+  NTRACE_INSTALL_TARGET="${NTRACE_RUNTIME}" \
+  NTRACE_INSTALL_PYTHON="$(command -v python)" \
+    bash "${NTRACE_SOURCE}/scripts/ntrace_nemo_rl_install_target.sh"
+fi
 
 export PYTHONPATH="${NTRACE_RUNTIME}${PYTHONPATH:+:${PYTHONPATH}}"
 export NRL_ROLLOUT_PROFILER_CLASS=ntrace.NemoRLRolloutTraceController

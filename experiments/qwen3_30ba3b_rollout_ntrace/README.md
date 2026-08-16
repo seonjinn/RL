@@ -37,6 +37,7 @@ The current result and its compact source data are in
 
 ```bash
 NTRACE_ARM=bf16|mxfp8
+NTRACE_SOURCE=/shared/path/to/pinned-ntrace-source
 NTRACE_RUNTIME=/shared/path/to/ntrace-runtime
 NTRACE_SOURCE_COMMIT=<commit>
 NEMO_SOURCE_COMMIT=<commit>
