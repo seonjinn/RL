@@ -196,12 +196,18 @@ def _valid_sample_record(
 def _routed_experts_semantics(rows: Any) -> dict[str, Any]:
     """Summarize populated MoE routes without treating dense-layer zeros as routes."""
     if hasattr(rows, "detach"):
+        import torch
+
         tensor = rows.detach()
         missing = tensor.eq(-1).all(dim=-1)
         zero = tensor.eq(0).all(dim=-1)
         valid = ~(missing | zero)
-        populated = valid.any(dim=0)
+        default_route = valid & tensor.eq(
+            torch.arange(tensor.shape[-1], dtype=tensor.dtype, device=tensor.device)
+        ).all(dim=-1)
+        populated = (valid & ~default_route).any(dim=0)
         valid_by_layer = valid.sum(dim=0).cpu().tolist()
+        default_by_layer = default_route.sum(dim=0).cpu().tolist()
         missing_by_layer = missing.sum(dim=0).cpu().tolist()
         zero_by_layer = zero.sum(dim=0).cpu().tolist()
         sorted_routes = tensor.sort(dim=-1).values
@@ -214,6 +220,7 @@ def _routed_experts_semantics(rows: Any) -> dict[str, Any]:
             .cpu()
             .tolist(),
             "valid_route_rows_by_layer": valid_by_layer,
+            "default_route_rows_by_layer": default_by_layer,
             "missing_route_rows_by_layer": missing_by_layer,
             "zero_route_rows_by_layer": zero_by_layer,
             "valid_route_rows": int(valid.sum().item()),
@@ -235,11 +242,13 @@ def _routed_experts_semantics(rows: Any) -> dict[str, Any]:
         if route_row
         and not all(route == 0 for route in route_row)
         and not all(route == -1 for route in route_row)
+        and list(route_row) != list(range(len(route_row)))
     }
     summary: dict[str, Any] = {
         "layer_count": layer_count,
         "populated_layer_indices": sorted(populated_layers),
         "valid_route_rows_by_layer": [0] * layer_count,
+        "default_route_rows_by_layer": [0] * layer_count,
         "missing_route_rows_by_layer": [0] * layer_count,
         "zero_route_rows_by_layer": [0] * layer_count,
         "valid_route_rows": 0,
@@ -268,6 +277,8 @@ def _routed_experts_semantics(rows: Any) -> dict[str, Any]:
             else:
                 summary["valid_route_rows"] += 1
                 summary["valid_route_rows_by_layer"][layer_idx] += 1
+                if route_values == list(range(len(route_values))):
+                    summary["default_route_rows_by_layer"][layer_idx] += 1
                 if len(set(route_values)) != len(route_values):
                     summary["duplicate_valid_rows"] += 1
                 if any(route < 0 for route in route_values):

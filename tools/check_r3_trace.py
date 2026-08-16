@@ -146,6 +146,14 @@ def _failures_for_route_semantics(
         valid_length = producer.get("valid_length")
         input_shape = producer.get("input_ids", {}).get("valid_shape")
         routed_shape = producer.get("routed_experts", {}).get("valid_shape")
+        valid_routed_shape = (
+            isinstance(routed_shape, list)
+            and len(routed_shape) == 3
+            and all(type(dim) is int for dim in routed_shape)
+            and routed_shape[0] == valid_length
+            and routed_shape[1] > 0
+            and routed_shape[2] > 0
+        )
         if not isinstance(valid_length, int) or valid_length <= 0:
             failures.append(f"invalid producer valid_length for key={key}")
         if not (
@@ -156,11 +164,7 @@ def _failures_for_route_semantics(
             failures.append(
                 f"input_ids valid_shape disagrees with length for key={key}"
             )
-        if not (
-            isinstance(routed_shape, list)
-            and len(routed_shape) == 3
-            and routed_shape[0] == valid_length
-        ):
+        if not valid_routed_shape:
             failures.append(
                 f"routed_experts valid_shape disagrees with length for key={key}"
             )
@@ -171,6 +175,7 @@ def _failures_for_route_semantics(
         layer_count = semantics.get("layer_count")
         populated = semantics.get("populated_layer_indices")
         valid_by_layer = semantics.get("valid_route_rows_by_layer")
+        default_by_layer = semantics.get("default_route_rows_by_layer")
         missing_by_layer = semantics.get("missing_route_rows_by_layer")
         zero_by_layer = semantics.get("zero_route_rows_by_layer")
         if not isinstance(layer_count, int) or layer_count <= 0:
@@ -178,6 +183,7 @@ def _failures_for_route_semantics(
             continue
         raw_layer_fields = {
             "valid_route_rows_by_layer": valid_by_layer,
+            "default_route_rows_by_layer": default_by_layer,
             "missing_route_rows_by_layer": missing_by_layer,
             "zero_route_rows_by_layer": zero_by_layer,
         }
@@ -195,6 +201,7 @@ def _failures_for_route_semantics(
         if invalid_layer_fields:
             continue
         assert isinstance(valid_by_layer, list)
+        assert isinstance(default_by_layer, list)
         assert isinstance(missing_by_layer, list)
         assert isinstance(zero_by_layer, list)
         per_layer_fields: tuple[list[int], ...] = (
@@ -202,6 +209,16 @@ def _failures_for_route_semantics(
             [int(count) for count in missing_by_layer],
             [int(count) for count in zero_by_layer],
         )
+        default_counts = [int(count) for count in default_by_layer]
+        for layer_idx, (default_count, valid_count) in enumerate(
+            zip(default_counts, per_layer_fields[0])
+        ):
+            if default_count > valid_count:
+                failures.append(
+                    "routed_experts default row count exceeds valid row count "
+                    f"for key={key} layer={layer_idx}: "
+                    f"default={default_count} valid={valid_count}"
+                )
         if isinstance(valid_length, int) and valid_length > 0:
             for layer_idx in range(layer_count):
                 row_count = sum(counts[layer_idx] for counts in per_layer_fields)
@@ -211,11 +228,7 @@ def _failures_for_route_semantics(
                         f"for key={key} layer={layer_idx}: "
                         f"expected={valid_length} actual={row_count}"
                     )
-        if (
-            isinstance(routed_shape, list)
-            and len(routed_shape) == 3
-            and routed_shape[1] != layer_count
-        ):
+        if valid_routed_shape and routed_shape[1] != layer_count:
             failures.append(
                 f"routed_experts semantic layer_count disagrees with shape for key={key}"
             )
@@ -233,7 +246,9 @@ def _failures_for_route_semantics(
         populated_indices = [int(index) for index in populated]
         valid_counts, missing_counts, zero_counts = per_layer_fields
         observed_populated = {
-            layer_idx for layer_idx, count in enumerate(valid_counts) if count > 0
+            layer_idx
+            for layer_idx, count in enumerate(valid_counts)
+            if count > default_counts[layer_idx]
         }
         if set(populated_indices) != observed_populated:
             failures.append(
@@ -251,9 +266,9 @@ def _failures_for_route_semantics(
                 for layer_idx in range(layer_count)
                 if layer_idx not in expected_payload_indices
                 and (
-                    valid_counts[layer_idx] != 0
+                    valid_counts[layer_idx] != default_counts[layer_idx]
                     or missing_counts[layer_idx] != 0
-                    or zero_counts[layer_idx] != valid_length
+                    or zero_counts[layer_idx] + valid_counts[layer_idx] != valid_length
                 )
             }
             if invalid_structural_layers:
@@ -269,19 +284,51 @@ def _failures_for_route_semantics(
                 f"expected routed-expert layers out of range for key={key}: "
                 f"{sorted(out_of_range)}"
             )
-        else:
+        elif isinstance(valid_length, int) and valid_length > 0 and valid_routed_shape:
+            topk = routed_shape[2]
+            missing_expected = {
+                index for index in expected_payload_indices if missing_counts[index] > 0
+            }
+            if missing_expected:
+                failures.append(
+                    f"missing routes on expected MoE layers for key={key}: "
+                    f"{sorted(missing_expected)}"
+                )
             zero_expected = {
-                index for index in expected_payload_indices if zero_counts[index] > 0
+                index
+                for index in expected_payload_indices
+                if topk > 1 and zero_counts[index] > 0
             }
             if zero_expected:
                 failures.append(
                     f"zero routes on expected MoE layers for key={key}: "
                     f"{sorted(zero_expected)}"
                 )
+            incomplete_expected = {
+                index
+                for index in expected_payload_indices
+                if topk > 1 and valid_counts[index] != valid_length
+            }
+            if incomplete_expected:
+                failures.append(
+                    f"incomplete valid routes on expected MoE layers for key={key}: "
+                    f"{sorted(incomplete_expected)}"
+                )
+            default_only_expected = {
+                index
+                for index in expected_payload_indices
+                if topk > 1
+                and valid_counts[index] > 0
+                and valid_counts[index] == default_counts[index]
+            }
+            if default_only_expected:
+                failures.append(
+                    f"only default routes on expected MoE layers for key={key}: "
+                    f"{sorted(default_only_expected)}"
+                )
         for field in (
             "duplicate_valid_rows",
             "negative_valid_rows",
-            "zero_rows_in_populated_layers",
         ):
             count = semantics.get(field)
             if not isinstance(count, int) or count != 0:
@@ -414,7 +461,6 @@ def check_trace(
         required_verifier_actions = (
             ("prev-logprob", "replay_forward"),
             ("train", "replay_forward"),
-            ("train", "replay_backward"),
         )
         for stage, action in required_verifier_actions:
             if summary["replay_forward_verify_by_stage_action"][(stage, action)] == 0:

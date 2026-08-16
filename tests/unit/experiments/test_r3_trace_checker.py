@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -47,6 +49,7 @@ def _write_legacy_trace(
                 "valid_route_rows_by_layer": [
                     4 if layer_idx in populated_layers else 0 for layer_idx in range(4)
                 ],
+                "default_route_rows_by_layer": [0, 0, 0, 0],
                 "missing_route_rows_by_layer": missing_route_rows_by_layer,
                 "zero_route_rows_by_layer": zero_route_rows_by_layer,
                 "duplicate_valid_rows": 0,
@@ -168,6 +171,47 @@ def test_checker_accepts_hash_matched_legacy_policy_payloads(tmp_path: Path) -> 
     )
 
 
+def test_checker_accepts_training_without_backward_recomputation(
+    tmp_path: Path,
+) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+    path = next(trace_dir.glob("*.jsonl"))
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    records = [
+        record
+        for record in records
+        if not (
+            record.get("event") == "router_replay_forward_verify"
+            and record.get("stage") == "train"
+            and record.get("action") == "replay_backward"
+        )
+    ]
+    path.write_text("".join(json.dumps(record) + "\n" for record in records))
+
+    assert checker.check_trace(trace_dir, require_forward_verify=True) == 0
+
+
+def test_checker_accepts_default_padding_routes_on_structural_layers(
+    tmp_path: Path,
+) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+    path = next(trace_dir.glob("*.jsonl"))
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    producer = records[0]
+    semantics = producer["routed_experts"]["semantics"]
+    semantics["populated_layer_indices"] = [1, 3]
+    semantics["valid_route_rows_by_layer"] = [1, 4, 1, 4]
+    semantics["default_route_rows_by_layer"] = [1, 0, 1, 0]
+    semantics["zero_route_rows_by_layer"] = [3, 0, 3, 0]
+    path.write_text("".join(json.dumps(record) + "\n" for record in records))
+
+    assert checker.check_trace(trace_dir) == 0
+
+
 def test_checker_rejects_all_zero_rollout_routes(tmp_path: Path) -> None:
     checker = _load_checker()
     trace_dir = tmp_path / "trace"
@@ -184,6 +228,39 @@ def test_checker_rejects_zero_routes_on_one_expected_moe_layer(tmp_path: Path) -
         populated_layers=[3],
         zero_route_rows_by_layer=[4, 4, 4, 0],
     )
+
+    assert checker.check_trace(trace_dir) == 1
+
+
+def test_checker_rejects_default_only_routes_on_expected_moe_layer(
+    tmp_path: Path,
+) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+    path = next(trace_dir.glob("*.jsonl"))
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    semantics = records[0]["routed_experts"]["semantics"]
+    semantics["populated_layer_indices"] = [3]
+    semantics["default_route_rows_by_layer"] = [0, 4, 0, 0]
+    path.write_text("".join(json.dumps(record) + "\n" for record in records))
+
+    assert checker.check_trace(trace_dir) == 1
+
+
+def test_checker_rejects_missing_routes_on_expected_moe_layer(
+    tmp_path: Path,
+) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+    path = next(trace_dir.glob("*.jsonl"))
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    semantics = records[0]["routed_experts"]["semantics"]
+    semantics["populated_layer_indices"] = [3]
+    semantics["valid_route_rows_by_layer"] = [0, 0, 0, 4]
+    semantics["missing_route_rows_by_layer"] = [0, 4, 0, 0]
+    path.write_text("".join(json.dumps(record) + "\n" for record in records))
 
     assert checker.check_trace(trace_dir) == 1
 
@@ -208,6 +285,25 @@ def test_checker_rejects_missing_consumer_hash(tmp_path: Path) -> None:
         populated_layers=[1, 3],
         omit_consumer_hash=True,
     )
+
+    assert checker.check_trace(trace_dir) == 1
+
+
+@pytest.mark.parametrize("invalid_shape", ([4], [4, 4, "2"], [4, 4, 0]))
+def test_checker_rejects_invalid_route_shape_without_crashing(
+    tmp_path: Path,
+    invalid_shape: list[object],
+) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+    path = next(trace_dir.glob("*.jsonl"))
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    for record in records:
+        routed_experts = record.get("routed_experts")
+        if routed_experts is not None:
+            routed_experts["valid_shape"] = invalid_shape
+    path.write_text("".join(json.dumps(record) + "\n" for record in records))
 
     assert checker.check_trace(trace_dir) == 1
 
