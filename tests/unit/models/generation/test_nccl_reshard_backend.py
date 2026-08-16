@@ -326,6 +326,8 @@ def test_build_hf_to_local_param_map_specs_and_roundtrip():
     egctx.buf.fill_(5.0)
     eg.post(egctx)
     assert torch.equal(w13[:, 0:Pl, :], torch.full_like(w13[:, 0:Pl, :], 5.0))
+
+
 def test_build_hf_to_local_param_map_quantizes_bf16_for_mxfp8(monkeypatch):
     H, E, Pl = 32, 2, 64
     refit_info = {
@@ -674,6 +676,8 @@ def test_build_hf_to_local_param_map_rejects_invalid_mxfp8_metadata(
 
     with pytest.raises(ValueError, match=error):
         _make_ext(vllm_params).build_hf_to_local_param_map(refit_info)
+
+
 def test_build_hf_to_local_param_map_stages_trtllm_local_experts():
     """Packed TRTLLM storage receives canonical EP-local weights via load_weights."""
     H, E, P = 16, 4, 32
