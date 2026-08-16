@@ -37,11 +37,14 @@ launch both tracked wrappers:
 
 ```bash
 export REFIT_NSYS_RESULTS_ROOT=/shared/path/to/refit-nsys-results
+export RAY_LOG_SYNC_FREQUENCY=30
 tools/launch \
   experiments/qwen3_30ba3b_refit_nsys/run_bf16.sh \
   experiments/qwen3_30ba3b_refit_nsys/run_mxfp8.sh
 ```
 
-The `.nsys-rep` files are copied into the SLURM job log tree by Ray log sync.
+`RAY_LOG_SYNC_FREQUENCY` must be exported before `tools/launch` so the parent
+SLURM job starts its log-sync sidecar. The `.nsys-rep` files are then copied
+into the SLURM job log tree.
 Use the labeled ranges to choose one optimization only after the BF16 and MXFP8
 profiles have been compared.

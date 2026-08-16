@@ -6,8 +6,8 @@ set -euo pipefail
 NUM_NODES=4
 GPUS_PER_NODE=4
 SEGMENT_SIZE=2
-STEPS_PER_RUN=4
-MAX_STEPS=4
+STEPS_PER_RUN=3
+MAX_STEPS=3
 NUM_RUNS=1
 NUM_MINUTES=180
 # ===== END CONFIG =====
@@ -29,7 +29,7 @@ mkdir -p "${RUN_ROOT}"
 
 export NRL_REFIT_NVTX_DETAIL=1
 export VLLM_RAY_EXTRA_ENV_VARS_TO_COPY="${VLLM_RAY_EXTRA_ENV_VARS_TO_COPY:+${VLLM_RAY_EXTRA_ENV_VARS_TO_COPY},}NRL_REFIT_NVTX_DETAIL"
-export NRL_NSYS_WORKER_PATTERNS="megatron_policy_worker,vllm_generation_worker"
+export NRL_NSYS_WORKER_PATTERNS="megatron_policy_worker,vllm_generation_worker,vllm_async_generation_worker"
 export NRL_NSYS_PROFILE_STEP_RANGE="2:3"
 export NRL_NSYS_EXTRA_OPTIONS='{"cuda-memory-usage":"true","cpuctxsw":"none"}'
 export RAY_LOG_SYNC_FREQUENCY=30
@@ -38,7 +38,7 @@ CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1of
 
 common_args=(
   --config "${CONFIG}"
-  grpo.max_num_steps=4
+  grpo.max_num_steps=3
   grpo.async_grpo.enabled=false
   grpo.async_grpo.in_flight_weight_updates=false
   policy.megatron_cfg.optimizer.lr=0.0
