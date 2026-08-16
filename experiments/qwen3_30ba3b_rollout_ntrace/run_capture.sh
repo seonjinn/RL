@@ -20,7 +20,12 @@ NUM_MINUTES=180
 : "${NTRACE_RESULTS_ROOT:?set NTRACE_RESULTS_ROOT to a shared result directory}"
 
 case "${NTRACE_ARM}" in
-  bf16|mxfp8) ;;
+  bf16)
+    QUANTIZATION_SCOPE=bf16
+    ;;
+  mxfp8)
+    QUANTIZATION_SCOPE=expert_fc1_fc2
+    ;;
   *)
     echo "NTRACE_ARM must be bf16 or mxfp8, got ${NTRACE_ARM}" >&2
     exit 2
@@ -76,6 +81,7 @@ num_iters=${NTRACE_ROLLOUT_NUM_ITERS}
 cuda_graph=enabled
 moe_backend=flashinfer_trtllm
 refit_transport=nccl_reshard
+quantization_scope=${QUANTIZATION_SCOPE}
 EOF
 
 CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off-mxfp8-rollout.yaml
@@ -106,6 +112,7 @@ if [[ "${NTRACE_ARM}" == bf16 ]]; then
   )
 else
   precision_args=(
+    'policy.generation.vllm_cfg.quantization_ignored_layer_kws=[q_proj,k_proj,v_proj,o_proj,lm_head]'
     ++policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm
     policy.generation.refit_transport=nccl_reshard
   )
