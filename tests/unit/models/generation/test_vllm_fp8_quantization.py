@@ -73,7 +73,13 @@ def test_init_fp8_uses_mxfp8_quantization_config(fp8_module, monkeypatch):
     assert vllm_kwargs == {
         "quantization": "fp8",
         "kv_cache_dtype": "auto",
-        "hf_overrides": {"quantization_config": fp8.MXFP8_BLOCK_QUANT_KWARGS},
+        "hf_overrides": {
+            "quantization_config": {
+                **fp8.MXFP8_BLOCK_QUANT_KWARGS,
+                "ignored_layers": ["lm_head"],
+                "ignore": ["lm_head"],
+            }
+        },
     }
     assert applied_configs == [fp8.global_fp8_config]
     assert fp8.global_fp8_config.is_mx is True

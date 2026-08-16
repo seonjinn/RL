@@ -299,6 +299,12 @@ def init_fp8(vllm_cfg, model_name, model_parallel_size):
         else:
             fp8_block_quant_kwargs["ignored_layers"].extend(ignored_layers)
         print("ignored_layers", fp8_block_quant_kwargs["ignored_layers"])
+
+    # AutoModel does not expose the causal LM head, so keyword-based discovery
+    # above cannot find it. Refit sends lm_head in BF16 without MXFP8 scales.
+    fp8_block_quant_kwargs.setdefault("ignored_layers", [])
+    if "lm_head" not in fp8_block_quant_kwargs["ignored_layers"]:
+        fp8_block_quant_kwargs["ignored_layers"].append("lm_head")
     if "ignored_layers" in fp8_block_quant_kwargs:
         fp8_block_quant_kwargs["ignore"] = fp8_block_quant_kwargs["ignored_layers"]
 
