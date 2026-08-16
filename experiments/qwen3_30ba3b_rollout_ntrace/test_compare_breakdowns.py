@@ -32,16 +32,22 @@ def _summary(scale: float) -> dict:
 
 
 LOG = """
+ [ntrace.nemo_rl.rollout] armed rank=0 backend=cpp capture_iter=1 last_iter=3
+========================= Step 1/4 =========================
+[ntrace.nemo_rl.rollout] rollout started iteration=0 step_id=step1/attempt1
+Generating responses for batch of size 8...
+  • Mean Generation Length: 50.0
 ========================= Step 2/4 =========================
-[ntrace.nemo_rl.rollout] rollout started iteration=0 step_id=step2/attempt1
+[ntrace.nemo_rl.rollout] rollout started iteration=1 step_id=step2/attempt1
+[ntrace.nemo_rl.rollout] rollout started iteration=1 step_id=step2/attempt1
 Generating responses for batch of size 8...
   • Mean Generation Length: 100.0
 ========================= Step 3/4 =========================
-[ntrace.nemo_rl.rollout] rollout started iteration=1 step_id=step3/attempt1
+[ntrace.nemo_rl.rollout] rollout started iteration=2 step_id=step3/attempt1
 Generating responses for batch of size 8...
   • Mean Generation Length: 200.0
 ========================= Step 4/4 =========================
-[ntrace.nemo_rl.rollout] rollout started iteration=2 step_id=step4/attempt1
+[ntrace.nemo_rl.rollout] rollout started iteration=3 step_id=step4/attempt1
 Generating responses for batch of size 8...
   • Mean Generation Length: 300.0
 """

@@ -17,6 +17,7 @@ ITERATION_PATTERN = re.compile(
     r"rollout started iteration=(?P<iteration>\d+) "
     r"step_id=step(?P<step>\d+)/"
 )
+CAPTURE_ITER_PATTERN = re.compile(r"armed rank=\d+ .*capture_iter=(?P<iteration>\d+)")
 
 
 def parse_run_log(path: Path) -> dict[str, Any]:
@@ -45,6 +46,12 @@ def parse_run_log(path: Path) -> dict[str, Any]:
 
     if not iteration_steps:
         raise ValueError("no ntrace iteration markers found")
+    capture_iters = {
+        int(match.group("iteration")) for match in CAPTURE_ITER_PATTERN.finditer(text)
+    }
+    if len(capture_iters) > 1:
+        raise ValueError(f"workers use different capture iterations: {capture_iters}")
+    capture_iter = capture_iters.pop() if capture_iters else 0
     missing = sorted(set(iteration_steps.values()) - set(lengths))
     if missing:
         raise ValueError(f"missing generation lengths for steps {missing}")
@@ -52,6 +59,7 @@ def parse_run_log(path: Path) -> dict[str, Any]:
         "batch_size": batch_sizes.pop(),
         "generation_lengths": lengths,
         "iteration_steps": iteration_steps,
+        "capture_iter": capture_iter,
     }
 
 
@@ -63,13 +71,20 @@ def load_arm(summary_path: Path, log_path: Path) -> dict[str, Any]:
     rank_count = len(ranks)
     if rank_count == 0:
         raise ValueError("summary has no ranks")
-    if set(range(len(iterations))) != set(run["iteration_steps"]):
-        raise ValueError("summary iterations do not match run-log iteration markers")
+    summary_indices = {int(iteration["index"]) for iteration in iterations}
+    if summary_indices != set(range(len(iterations))):
+        raise ValueError(f"summary iterations are not contiguous: {summary_indices}")
 
     normalized_iterations = []
     for iteration in iterations:
         index = int(iteration["index"])
-        step = run["iteration_steps"][index]
+        rollout_iteration = index + run["capture_iter"]
+        if rollout_iteration not in run["iteration_steps"]:
+            raise ValueError(
+                f"trace iteration {index} maps to missing rollout iteration "
+                f"{rollout_iteration}"
+            )
+        step = run["iteration_steps"][rollout_iteration]
         mean_length = run["generation_lengths"][step]
         tokens_per_rank = mean_length * run["batch_size"] / rank_count
         categories = iteration["stack_categories_s"]
