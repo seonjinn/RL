@@ -3,139 +3,186 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Qwen3-30B-A3B MXFP8 rollout bottleneck</title>
+  <title>Where MoE-only MXFP8 saves rollout time</title>
   <style>
-    :root { --bg:#f7f8fa; --panel:#fff; --text:#172033; --muted:#5d6879;
-      --line:#d9dee7; --green:#3f8f3a; --blue:#3979ad; --amber:#d89a22;
-      --red:#c34a4a; --gray:#8b95a5; --ink:#202838; }
-    @media (prefers-color-scheme:dark) { :root { --bg:#101318; --panel:#171c24;
-      --text:#edf1f7; --muted:#aeb8c8; --line:#333b48; --green:#70bf68;
-      --blue:#72acd5; --amber:#e8b65d; --red:#df7474; --gray:#8f9aaa;
-      --ink:#edf1f7; } }
+    :root { --bg:#f6f8fa; --panel:#fff; --text:#172033; --muted:#5c6879;
+      --line:#d8dee8; --green:#397d35; --green2:#78ae68; --blue:#3979ad;
+      --gray:#8a95a5; --amber:#c88616; --red:#bd4747; --code:#eef1f5;
+      --bar-text:#fff; }
+    [data-theme="dark"] { --bg:#101318; --panel:#171c24; --text:#edf1f7;
+      --muted:#aeb8c8; --line:#333b48; --green:#6fbd68; --green2:#477f45;
+      --blue:#72acd5; --gray:#8f9aaa; --amber:#e5ae4a; --red:#df7474;
+      --code:#242b35; --bar-text:#101318; }
     * { box-sizing:border-box; }
     body { margin:0; background:var(--bg); color:var(--text);
-      font:15px/1.52 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-    .wrap { max-width:1040px; margin:0 auto; padding:38px 24px 60px; }
-    h1 { margin:0 0 8px; font-size:32px; line-height:1.16; letter-spacing:0; }
-    h2 { margin:34px 0 12px; font-size:20px; letter-spacing:0; }
-    p { margin:8px 0; } .sub { color:var(--muted); }
-    .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:22px 0; }
+      font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    .wrap { max-width:980px; margin:0 auto; padding:32px 22px 54px; }
+    h1 { margin:0 50px 7px 0; font-size:31px; line-height:1.16; letter-spacing:0; }
+    h2 { margin:29px 0 10px; font-size:19px; letter-spacing:0; }
+    p { margin:8px 0; } a { color:var(--blue); }
+    .sub,.small { color:var(--muted); } .small { font-size:13px; }
+    button { position:absolute; top:18px; right:20px; border:1px solid var(--line);
+      background:var(--panel); color:var(--text); border-radius:5px; padding:6px 9px;
+      cursor:pointer; }
+    .lead { max-width:880px; font-size:16px; }
+    .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:9px; margin:18px 0; }
     .card { background:var(--panel); border:1px solid var(--line); border-radius:6px;
-      padding:15px; min-height:98px; }
-    .value { display:block; font-size:26px; font-weight:720; line-height:1.1; }
-    .label { display:block; margin-top:7px; color:var(--muted); font-size:13px; }
+      padding:13px; min-height:86px; }
+    .value { display:block; font-size:25px; font-weight:740; line-height:1.05; }
+    .label { display:block; margin-top:6px; color:var(--muted); font-size:12px; }
     .figure { background:var(--panel); border:1px solid var(--line); border-radius:6px;
-      padding:18px; margin:14px 0; overflow-x:auto; }
-    svg { width:100%; min-width:760px; height:auto; display:block; }
-    .small { color:var(--muted); font-size:13px; }
-    table { width:100%; border-collapse:collapse; margin:12px 0; }
-    th,td { padding:9px 10px; border-bottom:1px solid var(--line); text-align:right; }
+      padding:16px; overflow-x:auto; }
+    .scroll-note { display:none; color:var(--muted); font-size:12px; margin:0 0 6px; }
+    svg { width:100%; min-width:740px; height:auto; display:block; }
+    svg a text { text-decoration:underline; }
+    table { width:100%; border-collapse:collapse; margin:10px 0; }
+    th,td { padding:8px 9px; border-bottom:1px solid var(--line); text-align:right; }
     th:first-child,td:first-child { text-align:left; }
     th { color:var(--muted); font-size:12px; text-transform:uppercase; }
+    .cols { display:grid; grid-template-columns:1.08fr .92fr; gap:18px; }
     .callout { border-left:4px solid var(--green); background:var(--panel);
-      padding:14px 16px; margin:18px 0; }
+      padding:12px 14px; margin:12px 0; }
     .warn { border-left-color:var(--amber); }
-    code { background:color-mix(in srgb,var(--panel) 65%,var(--line)); padding:1px 4px;
-      border-radius:3px; }
-    .cols { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
-    ul { margin:8px 0; padding-left:20px; }
-    @media (max-width:760px) { .cards,.cols { grid-template-columns:1fr 1fr; }
-      h1 { font-size:27px; } }
-    @media (max-width:480px) { .cards,.cols { grid-template-columns:1fr; } }
+    code { background:var(--code); padding:1px 4px; border-radius:3px; }
+    ol,ul { margin:7px 0; padding-left:21px; } li { margin:5px 0; }
+    @media (max-width:720px) { .cards { grid-template-columns:1fr 1fr; }
+      .cols { grid-template-columns:1fr; } h1 { font-size:27px; }
+      .scroll-note { display:block; } }
   </style>
 </head>
 <body><main class="wrap">
-  <h1>Where Qwen3-30B-A3B MXFP8 rollout spends GPU time</h1>
-  <p class="sub">NeMo-RL rollout | 8 generation GPUs | GB200 | CUDA Graph on |
-    vLLM 0.25.1 | FlashInfer 0.6.13 | three traced windows</p>
+  <button id="theme" aria-label="Toggle color theme">Theme</button>
+  <h1>Where does MoE-only MXFP8 save rollout time?</h1>
+  <p class="sub">Qwen3-30B-A3B | GB200 | 8 rollout GPUs | CUDA Graph on |
+    vLLM 0.25.1 | FlashInfer 0.6.13</p>
+  <p class="lead">The matched run keeps attention, the router gate, and
+    <code>lm_head</code> in BF16 and converts only expert FC1 and FC2 to MXFP8.
+    The <a href="https://github.com/seonjinn/RL/blob/48f2c4057/experiments/qwen3_30ba3b_rollout_ntrace/run_capture.sh#L104-L130">capture wrapper locks that scope</a>
+    after user overrides. Both arms use the same TRTLLM MoE backend and generate
+    almost the same token count. The comparison uses steady GRPO steps 3 and 4,
+    after stack capture.</p>
 
   <div class="cards">
-    <div class="card"><span class="value">46.5%</span><span class="label">of steady active GPU time in the MoE path</span></div>
-    <div class="card"><span class="value">5.6%</span><span class="label">idle in the later two steady windows</span></div>
-    <div class="card"><span class="value">133.63 s</span><span class="label">idle in the first traced window</span></div>
-    <div class="card"><span class="value">1.28x</span><span class="label">steady-window bound if MoE becomes 2x faster</span></div>
+    <div class="card"><span class="value">1.281x</span><span class="label">MXFP8 throughput over BF16</span></div>
+    <div class="card"><span class="value">-39.3%</span><span class="label">stack-attributed MoE time per token</span></div>
+    <div class="card"><span class="value">-23.4%</span><span class="label">active GPU time per token</span></div>
+    <div class="card"><span class="value">0.033%</span><span class="label">difference in generated token volume</span></div>
   </div>
 
   <div class="figure">
-    <svg viewBox="0 0 920 310" role="img" aria-label="First and later rollout windows split by stack-attributed GPU time">
-      <text x="10" y="26" fill="var(--ink)" font-size="18" font-weight="700">The first traced window is not steady state</text>
-      <text x="10" y="54" fill="var(--muted)" font-size="13">Same scale: one pixel width represents the same time in both bars.</text>
-      <text x="10" y="88" fill="var(--text)" font-size="13" font-weight="700">First window | 205.06 s</text>
-      <rect x="10" y="98" width="885" height="44" rx="3" fill="var(--line)"/>
-      <rect x="10" y="98" width="577" height="44" rx="3" fill="var(--gray)"/>
-      <rect x="587" y="98" width="145" height="44" fill="var(--green)"/>
-      <rect x="732" y="98" width="144" height="44" fill="var(--blue)"/>
-      <rect x="876" y="98" width="19" height="44" rx="3" fill="var(--amber)"/>
-      <text x="298" y="125" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">Idle 133.63 s (65.2%)</text>
-      <text x="10" y="173" fill="var(--text)" font-size="13" font-weight="700">Later two-window mean | 77.51 s</text>
-      <rect x="10" y="183" width="335" height="44" rx="3" fill="var(--line)"/>
-      <rect x="10" y="183" width="19" height="44" rx="3" fill="var(--gray)"/>
-      <rect x="29" y="183" width="147" height="44" fill="var(--green)"/>
-      <rect x="176" y="183" width="148" height="44" fill="var(--blue)"/>
-      <rect x="324" y="183" width="21" height="44" rx="3" fill="var(--amber)"/>
-      <text x="102" y="210" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">MoE 34.04 s</text>
-      <text x="250" y="210" text-anchor="middle" fill="#fff" font-size="14" font-weight="700">Compiled 34.40 s</text>
+    <p class="scroll-note">Scroll horizontally to see the full comparison.</p>
+    <svg viewBox="0 0 920 300" role="img" aria-label="BF16 and MXFP8 rollout time per million generated tokens">
+      <text x="10" y="25" fill="var(--text)" font-size="18" font-weight="700">One million generated tokens need 26.8 fewer GPU-seconds</text>
+      <text x="10" y="49" fill="var(--muted)" font-size="13">Critical wall time; the two bars use the same scale.</text>
+
+      <text x="10" y="91" fill="var(--text)" font-size="13" font-weight="700">BF16</text>
+      <rect x="140" y="70" width="732" height="42" rx="3" fill="var(--line)"/>
+      <rect x="140" y="70" width="30" height="42" rx="3" fill="var(--gray)"/>
+      <rect x="170" y="70" width="412" height="42" fill="var(--green)"/>
+      <rect x="582" y="70" width="290" height="42" rx="3" fill="var(--blue)"/>
+      <text x="376" y="96" text-anchor="middle" fill="var(--bar-text)" font-size="14" font-weight="700">MoE 68.6 s</text>
+      <text x="727" y="96" text-anchor="middle" fill="var(--bar-text)" font-size="14" font-weight="700">other active 48.4 s</text>
+      <text x="880" y="96" fill="var(--text)" font-size="13" font-weight="700">122.0 s</text>
+
+      <text x="10" y="158" fill="var(--text)" font-size="13" font-weight="700">MoE-only MXFP8</text>
+      <rect x="140" y="137" width="571" height="42" rx="3" fill="var(--line)"/>
+      <rect x="140" y="137" width="33" height="42" rx="3" fill="var(--gray)"/>
+      <rect x="173" y="137" width="250" height="42" fill="var(--green)"/>
+      <rect x="423" y="137" width="288" height="42" rx="3" fill="var(--blue)"/>
+      <text x="298" y="163" text-anchor="middle" fill="var(--bar-text)" font-size="14" font-weight="700">MoE 41.7 s</text>
+      <text x="567" y="163" text-anchor="middle" fill="var(--bar-text)" font-size="14" font-weight="700">other active 48.0 s</text>
+      <text x="719" y="163" fill="var(--text)" font-size="13" font-weight="700">95.2 s</text>
+
+      <path d="M730 205 L850 205" stroke="var(--green)" stroke-width="3"/>
+      <path d="M850 205 l-10 -6 v12 z" fill="var(--green)"/>
+      <text x="790" y="197" text-anchor="middle" fill="var(--green)" font-size="16" font-weight="700">1.281x throughput</text>
+      <a href="https://github.com/seonjinn/RL/blob/48f2c4057/experiments/qwen3_30ba3b_rollout_ntrace/compare_breakdowns.py#L127-L170">
+        <text x="790" y="224" text-anchor="middle" fill="var(--blue)" font-size="12">token-normalized calculation</text>
+      </a>
+
       <g font-size="13" fill="var(--text)">
-        <rect x="18" y="252" width="13" height="13" fill="var(--gray)"/><text x="38" y="263">GPU idle</text>
-        <rect x="155" y="252" width="13" height="13" fill="var(--green)"/><text x="175" y="263">MoE path</text>
-        <rect x="283" y="252" width="13" height="13" fill="var(--blue)"/><text x="303" y="263">compiled model body</text>
-        <rect x="480" y="252" width="13" height="13" fill="var(--amber)"/><text x="500" y="263">sampling + other</text>
+        <rect x="145" y="245" width="13" height="13" fill="var(--gray)"/><text x="165" y="256">GPU idle</text>
+        <rect x="272" y="245" width="13" height="13" fill="var(--green)"/><text x="292" y="256">MoE path</text>
+        <rect x="403" y="245" width="13" height="13" fill="var(--blue)"/><text x="423" y="256">all other active work</text>
       </g>
-      <text x="10" y="292" fill="var(--muted)" font-size="13">The 39.5% all-window idle average is dominated by the first window. Later-window idle is 5.6%.</text>
+      <text x="140" y="283" fill="var(--muted)" font-size="13">Worked example: BF16 spends 122.0 GPU-s per million tokens; MXFP8 spends 95.2 GPU-s.</text>
     </svg>
   </div>
 
-  <h2>What runs inside the MXFP8 path?</h2>
+  <h2>Which kernels changed?</h2>
   <div class="cols">
+    <table>
+      <thead><tr><th>Raw kernel family</th><th>BF16</th><th>MXFP8</th><th>Change</th></tr></thead>
+      <tbody>
+        <tr><td>Expert FC1 BMM (K=2048, N=1536)</td><td>27.77</td><td>15.34</td><td><strong>-44.8%</strong></td></tr>
+        <tr><td>Expert FC2 BMM (K=768, N=2048)</td><td>14.78</td><td>8.67</td><td><strong>-41.3%</strong></td></tr>
+        <tr><td>Routing + finalize</td><td>4.18</td><td>4.37</td><td>+4.8%</td></tr>
+        <tr><td>Attention</td><td>21.35</td><td>21.29</td><td>-0.3%</td></tr>
+        <tr><td>MXFP8 quantize/layout</td><td>0</td><td>0.78</td><td>new</td></tr>
+      </tbody>
+    </table>
     <div>
-      <table>
-        <thead><tr><th>Raw kernel family</th><th>Mean time</th></tr></thead>
-        <tbody>
-          <tr><td>Expert FC1 / SwiGLU BMM</td><td>12.29 s</td></tr>
-          <tr><td>Expert FC2 BMM</td><td>7.07 s</td></tr>
-          <tr><td>MoE routing + finalize</td><td>3.52 s</td></tr>
-          <tr><td>MXFP8 quantization/layout</td><td>0.63 s</td></tr>
-          <tr><td>Attention kernels</td><td>16.95 s</td></tr>
-        </tbody>
-      </table>
-      <p class="small">These are additive raw-kernel instance times used to split ntrace's
-        <code>Other</code> class. They are not a second wall-time breakdown.</p>
-    </div>
-    <div>
-      <div class="callout"><strong>First target: expert BMM and routing.</strong><br>
-        MoE owns 34.04 s, or 46.5% of later-window active GPU time. A 2x MoE
-        improvement has a 1.28x steady-window upper bound if idle and all other
-        work stay fixed.</div>
-      <div class="callout warn"><strong>The first-window stall is separate.</strong><br>
-        Its 133.63 s idle interval may come from rollout orchestration, request
-        availability, or the profiler boundary. Multirank analysis rules out NCCL
-        and rank skew, but the GPU trace alone cannot choose among the remaining causes.</div>
+      <p class="small">Seconds per million tokens, averaged over all three traced
+        windows. Routed M varies by expert. Raw kernel names split the expert
+        families but are not a second wall-time total.</p>
+      <div class="callout"><strong>The speedup comes from expert BMM.</strong><br>
+        Attention stays flat. Routing does not improve, so lower-precision expert
+        math explains the measured throughput gain.</div>
     </div>
   </div>
 
-  <h2>What this says about the adaptive linear work</h2>
-  <p>This recipe quantizes only routed expert FC1 and FC2. QKVO, attention, the
-    MLP gate, and <code>lm_head</code> stay BF16. The measured MXFP8 work therefore
-    runs through the FlashInfer TRTLLM MoE grouped-BMM backend. A dense-linear
-    tactic lookup does not optimize this recipe unless the quantization scope is
-    expanded to dense projections. Expert FC1/FC2 tactic selection is the relevant
-    kernel-tuning path here.</p>
+  <h2>Does it work?</h2>
+  <table>
+    <thead><tr><th>Gate</th><th>Evidence</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>Matched work</td><td>1.62275M vs 1.62221M tokens/rank</td><td>0.033% difference</td></tr>
+      <tr><td>Runtime scope</td><td>Only TRTLLM MXFP8 MoE tuning; no dense MXFP8 GEMM</td><td>Passed</td></tr>
+      <tr><td>Trace files</td><td>Records, stacks, graph nodes, sources on ranks 0-7</td><td>Passed</td></tr>
+      <tr><td>CUDA Graph replay</td><td>Complete on ranks 0-7; zero uncovered replay nodes</td><td>Passed</td></tr>
+      <tr><td>Multirank</td><td>Mean jitter: BF16 0.005%, MXFP8 0.002%; no single straggler</td><td>Good</td></tr>
+      <tr><td>Functional smoke</td><td>4 GRPO steps; BF16 KL 0.0018-0.0020, MXFP8 KL 0.0038-0.0042</td><td>Finite</td></tr>
+      <tr><td>Unit tests</td><td>Scope, ModelOpt matcher, layout, repeated refit</td><td>27 passed</td></tr>
+    </tbody>
+  </table>
+  <p class="small">This verifies matched short-run execution and comparable token
+    volume. The 1.281x speedup is the measurement from this run; no run-to-run
+    uncertainty was collected. The higher MXFP8 KL range also requires a longer
+    convergence and accuracy study before making an accuracy claim. The SLURM job failed
+    after trace save because Ray initialized a core worker twice during Python
+    finalization; all rank artifacts had already passed the file gate.</p>
 
-  <h2>Evidence and limitation</h2>
-  <ul>
-    <li>About 17.3M measured replay rows and 28.8K-30.2K unique replay nodes per rank.</li>
-    <li>Zero uncovered replay nodes across ranks 0-7; all nodes map to captured graph clones.</li>
-    <li>Rank active-time max/min spread is 2.7%, so worker compute skew is small.</li>
-    <li>No communication kernels or straggler; mean jitter is 0.01% and p90 is 0.04%.</li>
-    <li>The trace saved successfully before a post-save Ray finalizer error.</li>
-  </ul>
-  <div class="callout warn"><strong>No matched BF16 speedup claim is made here.</strong><br>
-    The BF16 control failed before generation because Qwen sparse refit tried to copy
-    a 2D expert W2 tensor into a 3D vLLM destination. A generation-only BF16 control
-    or a Qwen-compatible sparse-refit conversion is still required.</div>
-  <p class="small">Provenance: NeMo-RL experiment snapshot <code>4048c388</code> |
-    ntrace <code>bed58828</code> | analysis workflow <code>5e06de216</code> |
-    source data: <a href="data/rollout_bottleneck_summary.json">JSON</a> and
-    <a href="data/rollout_bottleneck_summary.tsv">TSV</a> |
-    <a href="ntrace_multirank.html">native multirank report</a>.</p>
-</main></body></html>
+  <h2>What should change next?</h2>
+  <ol>
+    <li><strong>Keep tuning expert grouped BMM.</strong> MoE still owns 46.5% of
+      MXFP8 active GPU time, and FC1 is the larger remaining family. Record the
+      routed M-bucket frequency and tune the common buckets first. If the
+      remaining MoE time were halved with all other work fixed, this profile
+      bounds the additional throughput gain at about 1.28x.</li>
+    <li><strong>Tune or fuse routing/finalize.</strong> It rose 4.8% per token
+      and does not benefit from lower-precision weights.</li>
+    <li><strong>Persist the autotune cache.</strong> Cold start profiled 21 MoE
+      inputs on each worker for about 18 minutes. Warm all quantization shapes
+      to remove the observed inference-time JIT warning.</li>
+    <li><strong>Then address attention.</strong> Its 21.3 s/Mtoken is unchanged
+      and becomes the next large non-MoE floor.</li>
+  </ol>
+  <div class="callout warn"><strong>Practical consequence</strong><br>
+    In this matched run, MoE-only MXFP8 raises steady throughput by 28.1%.
+    The next patch should target grouped-BMM tactics and
+    routing, while moving autotuning out of job startup.</div>
+
+  <p class="small">Provenance: NeMo-RL snapshot <code>3837bff80</code> |
+    analysis <code>48f2c4057</code> | ntrace <code>92a94b8</code> |
+    <a href="data/matched_comparison.json">comparison JSON</a> |
+    <a href="data/matched_bf16/rollout_bottleneck_summary.json">BF16 summary</a> |
+    <a href="data/matched_mxfp8/rollout_bottleneck_summary.json">MXFP8 summary</a> |
+    <a href="data/matched_bf16/native_multirank/ntrace_multirank.html">BF16 multirank</a> |
+    <a href="data/matched_mxfp8/native_multirank/ntrace_multirank.html">MXFP8 multirank</a>.</p>
+</main>
+<script>
+  const root=document.documentElement;
+  document.getElementById('theme').onclick=()=>{
+    root.dataset.theme=root.dataset.theme==='dark'?'light':'dark';
+  };
+</script>
+</body></html>

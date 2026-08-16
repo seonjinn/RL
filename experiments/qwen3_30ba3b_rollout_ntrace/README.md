@@ -18,8 +18,8 @@ rollout-kernel comparisons, not async 1-off pipeline throughput results.
 
 - generation workers: 8 GPUs, TP1/PP1/EP1
 - warm-up rollouts: 1
-- measured rollouts: 3; the first contains a large idle stall, so the report
-  also summarizes the later two windows separately
+- measured rollouts: 3; the first includes stack-capture overhead, so the
+  throughput comparison uses the later two windows
 - captured generation ranks: 0-7
 - CUDA graph provenance: engine initialization
 - model scope: routed MoE experts only for MXFP8; attention, MLP gate, and
@@ -43,8 +43,11 @@ NEMO_SOURCE_COMMIT=<commit>
 NTRACE_RESULTS_ROOT=/shared/path/to/results
 ```
 
-Launch `run_capture_bf16.sh` and `run_capture_mxfp8.sh` as separate jobs. The
-wrappers set the arm and give each `tools/launch` job its own code snapshot.
+Launch `run_capture_bf16.sh` and
+`run_capture_mxfp8_moe_only_exact_scope.sh` as separate jobs. The wrappers set
+the arm and give each `tools/launch` job its own code snapshot. The exact-scope
+wrapper locks attention, the router gate, and `lm_head` to BF16 after all
+forwarded command-line overrides.
 
 Use `tools/launch` so the NeMo-RL code snapshot and exact git revision are
 stored with the job.

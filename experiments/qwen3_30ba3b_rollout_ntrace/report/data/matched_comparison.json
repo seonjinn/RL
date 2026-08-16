@@ -1,0 +1,48 @@
+{
+  "steady_iteration_indices": [
+    1,
+    2
+  ],
+  "bf16": {
+    "tokens_per_rank": 1622752.6400000001,
+    "wall_s_critical": 197.929773527,
+    "throughput_tokens_per_s_per_gpu": 8198.628286606094,
+    "active_s_per_mtoken": 117.00123429555782,
+    "idle_s_per_mtoken": 4.9701189940754,
+    "moe_s_per_mtoken": 68.64946461479798,
+    "raw_s_per_mtoken": {
+      "attention": 21.34996989213889,
+      "expert_fc1_bmm": 27.770245449995155,
+      "expert_fc2_bmm": 14.783793315991575,
+      "kv_cache": 0.915331127316886,
+      "moe_routing_finalize": 4.1752318959549015,
+      "other": 8.737090941639996,
+      "sampling": 0.8281703838118986,
+      "triton_fused": 3.3571449788561005
+    }
+  },
+  "mxfp8": {
+    "tokens_per_rank": 1622211.7376,
+    "wall_s_critical": 154.462256974,
+    "throughput_tokens_per_s_per_gpu": 10502.317973205974,
+    "active_s_per_mtoken": 89.67239645706717,
+    "idle_s_per_mtoken": 5.54406206079223,
+    "moe_s_per_mtoken": 41.70161106000803,
+    "raw_s_per_mtoken": {
+      "attention": 21.293331413922342,
+      "expert_fc1_bmm": 15.33699049423363,
+      "expert_fc2_bmm": 8.67150952752501,
+      "kv_cache": 0.9059505796015934,
+      "moe_routing_finalize": 4.373838139941605,
+      "other": 8.60194330803929,
+      "quantization_layout": 0.7797757887560869,
+      "sampling": 0.8319387837979381,
+      "triton_fused": 3.3191435771727154
+    }
+  },
+  "ratios": {
+    "throughput_speedup": 1.2809847703869395,
+    "active_time_reduction": 0.23357734645307282,
+    "moe_time_reduction": 0.39254280723088275
+  }
+}
