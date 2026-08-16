@@ -66,6 +66,8 @@ slurm_nodes=${SLURM_JOB_NODELIST:-unknown}
 capture_iter=${NTRACE_ROLLOUT_CAPTURE_ITER}
 num_iters=${NTRACE_ROLLOUT_NUM_ITERS}
 cuda_graph=enabled
+moe_backend=flashinfer_trtllm
+refit_transport=nccl_reshard
 EOF
 
 CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-async-1off-mxfp8-rollout.yaml
@@ -91,15 +93,14 @@ if [[ "${NTRACE_ARM}" == bf16 ]]; then
     policy.generation.vllm_cfg.precision=bfloat16
     '~policy.generation.vllm_cfg.is_mx'
     '~policy.generation.vllm_cfg.quantization_ignore_patterns'
-    ++policy.generation.vllm_cfg.expose_http_server=true
     policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm
-    policy.generation.refit_transport=vllm_zmq_sparse
-    ++policy.generation.refit_cfg.sparse.delta_compression.encoding=xor
-    ++policy.generation.refit_cfg.sparse.verify_samples_per_payload=0
-    ++policy.generation.refit_cfg.sparse.baseline.in_memory=false
+    policy.generation.refit_transport=nccl_reshard
   )
 else
-  precision_args=(policy.generation.refit_transport=nccl_reshard)
+  precision_args=(
+    policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm
+    policy.generation.refit_transport=nccl_reshard
+  )
 fi
 
 uv run examples/run_grpo.py \

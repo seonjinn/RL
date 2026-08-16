@@ -3,12 +3,11 @@
 This experiment compares the GPU-time breakdown of BF16 and MoE-only MXFP8
 rollout generation. Both arms use the same NeMo-RL source, Qwen3-30B-A3B
 recipe, four-node allocation, asynchronous vLLM engine, CUDA Graph mode, and
-matched generation workload. The MXFP8 arm uses the NCCL reshard receiver that
-converts BF16 wire tensors to the MXFP8 destination layout. The optimizer
-learning rate is zero so the captured rollout steps use fixed policy weights.
-The attempted BF16 sparse-refit control failed before generation on Qwen's
-2D-to-3D expert W2 layout conversion. The report therefore analyzes the MXFP8
-bottleneck without claiming a matched BF16 speedup.
+matched generation workload. Both arms use the FlashInfer TRTLLM MoE backend
+and NCCL Reshard refit. The MXFP8 receiver converts BF16 wire tensors to the
+MXFP8 destination layout. The optimizer learning rate is zero so the captured
+rollout steps use fixed policy weights. This replaces the earlier BF16 sparse
+refit control, which failed before generation on Qwen's expert W2 layout.
 
 The outer rollout profiler hook currently runs in the synchronous GRPO trainer.
 The experiment therefore disables `async_grpo` while retaining
