@@ -100,13 +100,13 @@ if [[ "${NTRACE_ARM}" == bf16 ]]; then
   precision_args=(
     policy.generation.vllm_cfg.precision=bfloat16
     '~policy.generation.vllm_cfg.is_mx'
-    '~policy.generation.vllm_cfg.quantization_ignore_patterns'
-    policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm
+    '~policy.generation.vllm_cfg.quantization_ignored_layer_kws'
+    ++policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm
     policy.generation.refit_transport=nccl_reshard
   )
 else
   precision_args=(
-    policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm
+    ++policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm
     policy.generation.refit_transport=nccl_reshard
   )
 fi
