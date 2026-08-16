@@ -386,3 +386,69 @@ def test_checker_rejects_malformed_router_assignment_payload_index(
     path.write_text("".join(json.dumps(record) + "\n" for record in records))
 
     assert checker.check_trace(trace_dir) == 1
+
+
+@pytest.mark.parametrize("invalid_count", ("1", True, 1.5))
+def test_checker_rejects_malformed_cp_identity_count(
+    tmp_path: Path,
+    invalid_count: object,
+) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+    path = next(trace_dir.glob("*.jsonl"))
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    for record in records:
+        if record.get("event") == "cp_routed_experts":
+            record["cp_token_identity_verified_count"] = invalid_count
+    path.write_text("".join(json.dumps(record) + "\n" for record in records))
+
+    assert checker.check_trace(trace_dir, require_cp_identity=True) == 1
+
+
+def test_checker_rejects_boolean_lengths_and_tensor_dimensions(
+    tmp_path: Path,
+) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+    path = next(trace_dir.glob("*.jsonl"))
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    for record in records:
+        if "valid_length" in record:
+            record["valid_length"] = True
+        input_ids = record.get("input_ids")
+        if input_ids is not None:
+            input_ids["valid_shape"] = [1]
+        routed_experts = record.get("routed_experts")
+        if routed_experts is not None:
+            routed_experts["valid_shape"] = [1, 4, 2]
+    semantics = records[0]["routed_experts"]["semantics"]
+    semantics["valid_route_rows_by_layer"] = [0, 1, 0, 1]
+    semantics["zero_route_rows_by_layer"] = [1, 0, 1, 0]
+    path.write_text("".join(json.dumps(record) + "\n" for record in records))
+
+    assert checker.check_trace(trace_dir) == 1
+
+
+def test_checker_rejects_boolean_tensor_dimension(tmp_path: Path) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+    path = next(trace_dir.glob("*.jsonl"))
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    for record in records:
+        if "valid_length" in record:
+            record["valid_length"] = 1
+        input_ids = record.get("input_ids")
+        if input_ids is not None:
+            input_ids["valid_shape"] = [True]
+        routed_experts = record.get("routed_experts")
+        if routed_experts is not None:
+            routed_experts["valid_shape"] = [1, 4, 2]
+    semantics = records[0]["routed_experts"]["semantics"]
+    semantics["valid_route_rows_by_layer"] = [0, 1, 0, 1]
+    semantics["zero_route_rows_by_layer"] = [1, 0, 1, 0]
+    path.write_text("".join(json.dumps(record) + "\n" for record in records))
+
+    assert checker.check_trace(trace_dir) == 1

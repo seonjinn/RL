@@ -76,7 +76,7 @@ def _tensor_signature(
     if not (
         isinstance(shape, list)
         and shape
-        and all(isinstance(dimension, int) and dimension >= 0 for dimension in shape)
+        and all(type(dimension) is int and dimension >= 0 for dimension in shape)
     ):
         failures.append(f"invalid {field} valid_shape for {label}")
         return None
@@ -110,7 +110,10 @@ def _failures_for_fetch_matches(
                 continue
             for fetch_record in fetch_records:
                 label = f"stage={stage} key={key} rank={fetch_record.get('rank')}"
-                if fetch_record.get("valid_length") != producer.get("valid_length"):
+                fetch_valid_length = fetch_record.get("valid_length")
+                if type(fetch_valid_length) is not int or fetch_valid_length <= 0:
+                    failures.append(f"invalid fetch valid_length {label}")
+                elif fetch_valid_length != producer.get("valid_length"):
                     failures.append(
                         "valid_length mismatch "
                         f"{label}: producer={producer.get('valid_length')} "
@@ -154,7 +157,7 @@ def _failures_for_route_semantics(
             and routed_shape[1] > 0
             and routed_shape[2] > 0
         )
-        if not isinstance(valid_length, int) or valid_length <= 0:
+        if type(valid_length) is not int or valid_length <= 0:
             failures.append(f"invalid producer valid_length for key={key}")
         if not (
             isinstance(input_shape, list)
@@ -178,7 +181,7 @@ def _failures_for_route_semantics(
         default_by_layer = semantics.get("default_route_rows_by_layer")
         missing_by_layer = semantics.get("missing_route_rows_by_layer")
         zero_by_layer = semantics.get("zero_route_rows_by_layer")
-        if not isinstance(layer_count, int) or layer_count <= 0:
+        if type(layer_count) is not int or layer_count <= 0:
             failures.append(f"invalid routed_experts layer_count for key={key}")
             continue
         raw_layer_fields = {
@@ -193,7 +196,7 @@ def _failures_for_route_semantics(
             if not (
                 isinstance(counts, list)
                 and len(counts) == layer_count
-                and all(isinstance(count, int) and count >= 0 for count in counts)
+                and all(type(count) is int and count >= 0 for count in counts)
             )
         ]
         for field in invalid_layer_fields:
@@ -219,7 +222,7 @@ def _failures_for_route_semantics(
                     f"for key={key} layer={layer_idx}: "
                     f"default={default_count} valid={valid_count}"
                 )
-        if isinstance(valid_length, int) and valid_length > 0:
+        if type(valid_length) is int and valid_length > 0:
             for layer_idx in range(layer_count):
                 row_count = sum(counts[layer_idx] for counts in per_layer_fields)
                 if row_count != valid_length:
@@ -235,8 +238,7 @@ def _failures_for_route_semantics(
         if not (
             isinstance(populated, list)
             and all(
-                isinstance(index, int) and 0 <= index < layer_count
-                for index in populated
+                type(index) is int and 0 <= index < layer_count for index in populated
             )
         ):
             failures.append(f"invalid populated routed-expert layers for key={key}")
@@ -260,7 +262,7 @@ def _failures_for_route_semantics(
                 f"unexpected populated routed-expert layers for key={key}: "
                 f"{sorted(unexpected_populated)}"
             )
-        if isinstance(valid_length, int) and valid_length > 0:
+        if type(valid_length) is int and valid_length > 0:
             invalid_structural_layers = {
                 layer_idx
                 for layer_idx in range(layer_count)
@@ -284,7 +286,7 @@ def _failures_for_route_semantics(
                 f"expected routed-expert layers out of range for key={key}: "
                 f"{sorted(out_of_range)}"
             )
-        elif isinstance(valid_length, int) and valid_length > 0 and valid_routed_shape:
+        elif type(valid_length) is int and valid_length > 0 and valid_routed_shape:
             topk = routed_shape[2]
             missing_expected = {
                 index for index in expected_payload_indices if missing_counts[index] > 0
@@ -331,7 +333,7 @@ def _failures_for_route_semantics(
             "negative_valid_rows",
         ):
             count = semantics.get(field)
-            if not isinstance(count, int) or count != 0:
+            if type(count) is not int or count != 0:
                 failures.append(
                     f"invalid routed_experts semantics key={key} {field}={count}"
                 )
@@ -347,6 +349,7 @@ def _summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
     replay_forward_verify_by_stage_action = Counter()
     cp_identity_verified_counts = []
     cp_identity_verified_by_stage = Counter()
+    invalid_cp_identity_verified_counts_by_stage = Counter()
     payload_indices_by_stage: dict[str, set[int]] = defaultdict(set)
     invalid_assignment_payload_indices_by_stage = Counter()
     duplicate_producer_keys: set[str] = set()
@@ -382,10 +385,13 @@ def _summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         elif event == "cp_routed_experts":
             verified_count = record.get("cp_token_identity_verified_count")
             if verified_count is not None:
-                cp_identity_verified_counts.append(int(verified_count))
-                if int(verified_count) > 0:
-                    stage = str(record.get("stage", "<missing>"))
-                    cp_identity_verified_by_stage[stage] += int(verified_count)
+                stage = str(record.get("stage", "<missing>"))
+                if type(verified_count) is not int or verified_count < 0:
+                    invalid_cp_identity_verified_counts_by_stage[stage] += 1
+                    continue
+                cp_identity_verified_counts.append(verified_count)
+                if verified_count > 0:
+                    cp_identity_verified_by_stage[stage] += verified_count
 
     return {
         "events": events,
@@ -396,6 +402,9 @@ def _summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         "replay_forward_verify_by_stage_action": replay_forward_verify_by_stage_action,
         "cp_identity_verified_counts": cp_identity_verified_counts,
         "cp_identity_verified_by_stage": cp_identity_verified_by_stage,
+        "invalid_cp_identity_verified_counts_by_stage": (
+            invalid_cp_identity_verified_counts_by_stage
+        ),
         "payload_indices_by_stage": payload_indices_by_stage,
         "invalid_assignment_payload_indices_by_stage": (
             invalid_assignment_payload_indices_by_stage
@@ -491,6 +500,14 @@ def check_trace(
     cp_identity_verified_counts = summary["cp_identity_verified_counts"]
     if require_cp_identity:
         for stage in REQUIRED_REPLAY_STAGES:
+            invalid_count = summary["invalid_cp_identity_verified_counts_by_stage"][
+                stage
+            ]
+            if invalid_count > 0:
+                failures.append(
+                    "invalid CP token-identity verification records for "
+                    f"stage={stage}: {invalid_count}"
+                )
             if summary["cp_identity_verified_by_stage"][stage] <= 0:
                 failures.append(
                     f"no positive CP token-identity verification for stage={stage}"
