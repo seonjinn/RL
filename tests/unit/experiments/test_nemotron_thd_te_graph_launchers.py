@@ -2203,6 +2203,35 @@ def test_router_replay_off_allows_unprotected_vllm_override() -> None:
     )
 
 
+def test_nano_router_replay_can_force_modular_triton_moe_backend() -> None:
+    result = _run_script(
+        "scopes/05_mamba.sh",
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        ROUTER_REPLAY="on",
+        TEST_ONLY="1",
+        VLLM_MOE_BACKEND="triton",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "++policy.generation.vllm_kwargs.moe_backend=triton" in result.stdout
+
+
+def test_vllm_moe_backend_rejects_unknown_value() -> None:
+    result = _run_script(
+        "scopes/05_mamba.sh",
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        TEST_ONLY="1",
+        VLLM_MOE_BACKEND="unknown",
+    )
+
+    assert result.returncode == 2
+    assert "VLLM_MOE_BACKEND must be auto or triton" in result.stderr
+
+
 def test_router_replay_shell_validation_rejects_invalid_and_unsafe_graphs() -> None:
     invalid_value = _run_script(
         "scopes/17_attn.sh",

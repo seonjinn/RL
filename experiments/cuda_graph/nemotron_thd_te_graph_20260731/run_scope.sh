@@ -102,6 +102,7 @@ RUN_TAG=${RUN_TAG:-$(date -u +%Y%m%dT%H%M%SZ)}
 RUN_GROUP=${RUN_GROUP:-adhoc-${MODEL}-${MODE}-${CLUSTER}-${RUN_TAG}}
 REPEAT_INDEX=${REPEAT_INDEX:-0}
 ROUTER_REPLAY=${ROUTER_REPLAY:-off}
+VLLM_MOE_BACKEND=${VLLM_MOE_BACKEND:-auto}
 NEMORL_WANDB_ENABLED=${NEMORL_WANDB_ENABLED:-true}
 NVTE_WITH_NCCL_EP=0
 
@@ -147,6 +148,14 @@ fi
 case "${MODE}" in
   nemorl|mcore) ;;
   *) fail "MODE must be nemorl or mcore" ;;
+esac
+case "${VLLM_MOE_BACKEND}" in
+  auto) ;;
+  triton)
+    [[ "${MODE}" == "nemorl" ]] || \
+      fail "VLLM_MOE_BACKEND=triton requires MODE=nemorl"
+    ;;
+  *) fail "VLLM_MOE_BACKEND must be auto or triton" ;;
 esac
 case "${CLUSTER}" in
   ptyche|oci-hsg|lyris) ;;
@@ -428,6 +437,9 @@ else
 fi
 
 extra_overrides=()
+if [[ "${VLLM_MOE_BACKEND}" == "triton" ]]; then
+  extra_overrides+=("++policy.generation.vllm_kwargs.moe_backend=triton")
+fi
 if [[ -n "${CUDA_GRAPH_MAX_CACHED_SCHEDULES:-}" ]]; then
   extra_overrides+=(
     "++policy.megatron_cfg.cuda_graph_max_cached_schedules=${CUDA_GRAPH_MAX_CACHED_SCHEDULES}"
@@ -623,7 +635,11 @@ printf 'UV_EXECUTABLE: %s\n' "${UV_EXECUTABLE}"
 printf 'RUNTIME_PYTHON: %s\n' "${RUNTIME_PYTHON}"
 printf 'NRL_MEGATRON_CHECKPOINT_DIR: %s\n' "${NRL_MEGATRON_CHECKPOINT_DIR}"
 printf 'NEMORL_WANDB_ENABLED: %s\n' "${NEMORL_WANDB_ENABLED}"
+printf 'VLLM_MOE_BACKEND: %s\n' "${VLLM_MOE_BACKEND}"
 printf 'NVTE_WITH_NCCL_EP: %s\n' "${NVTE_WITH_NCCL_EP}"
+if [[ "${MODE}" == "nemorl" ]]; then
+  printf 'RENDERED_DRIVER_COMMAND: %q\n' "${RENDERED_DRIVER_COMMAND}"
+fi
 printf 'COMMAND: %q\n' "${COMMAND}"
 printf 'SBATCH:'
 printf ' %q' "${sbatch_command[@]}"
