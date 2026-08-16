@@ -337,6 +337,7 @@ def render_scope_command(
     if router_replay_enabled:
         protected_overrides.update(
             (
+                "loss_fn.force_on_policy_ratio",
                 "policy.generation.vllm_cfg.enable_prefix_caching",
                 "policy.generation.vllm_kwargs.enable_chunked_prefill",
             )
@@ -388,6 +389,7 @@ def render_scope_command(
         )
         command.extend(
             (
+                "loss_fn.force_on_policy_ratio=false",
                 "++policy.generation.vllm_cfg.enable_prefix_caching=false",
                 "++policy.generation.vllm_kwargs.enable_chunked_prefill=false",
             )

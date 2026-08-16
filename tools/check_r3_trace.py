@@ -30,6 +30,14 @@ REQUIRED_FETCH_STAGES = ("prev_lp", "train")
 REQUIRED_REPLAY_STAGES = ("prev-logprob", "train")
 
 
+def _valid_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
 def _iter_records(trace_dir: Path) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for path in sorted(trace_dir.glob("*.jsonl")):
@@ -48,10 +56,34 @@ def _iter_records(trace_dir: Path) -> list[dict[str, Any]]:
     return records
 
 
-def _hashes(record: dict[str, Any]) -> tuple[str, str]:
-    input_hash = record.get("input_ids", {}).get("valid_sha256", "")
-    routed_hash = record.get("routed_experts", {}).get("valid_sha256", "")
-    return input_hash, routed_hash
+def _tensor_signature(
+    record: dict[str, Any],
+    field: str,
+    *,
+    label: str,
+    failures: list[str],
+) -> tuple[str, tuple[int, ...], str] | None:
+    tensor = record.get(field)
+    if not isinstance(tensor, dict):
+        failures.append(f"missing {field} tensor record for {label}")
+        return None
+    digest = tensor.get("valid_sha256")
+    shape = tensor.get("valid_shape")
+    dtype = tensor.get("dtype")
+    if not isinstance(digest, str) or not _valid_sha256(digest):
+        failures.append(f"invalid {field} valid_sha256 for {label}")
+        return None
+    if not (
+        isinstance(shape, list)
+        and shape
+        and all(isinstance(dimension, int) and dimension >= 0 for dimension in shape)
+    ):
+        failures.append(f"invalid {field} valid_shape for {label}")
+        return None
+    if not isinstance(dtype, str) or not dtype:
+        failures.append(f"invalid {field} dtype for {label}")
+        return None
+    return digest, tuple(int(dimension) for dimension in shape), dtype
 
 
 def _failures_for_fetch_matches(
@@ -60,26 +92,202 @@ def _failures_for_fetch_matches(
 ) -> list[str]:
     failures = []
     for key, producer in producer_by_key.items():
-        producer_input_hash, producer_routed_hash = _hashes(producer)
+        producer_input = _tensor_signature(
+            producer, "input_ids", label=f"producer key={key}", failures=failures
+        )
+        producer_routed = _tensor_signature(
+            producer,
+            "routed_experts",
+            label=f"producer key={key}",
+            failures=failures,
+        )
         for stage in REQUIRED_FETCH_STAGES:
             fetch_records = fetch_by_stage_key.get((stage, key), [])
             if not fetch_records:
-                failures.append(f"missing TQ fetch record for stage={stage} key={key}")
+                failures.append(
+                    f"missing policy payload record for stage={stage} key={key}"
+                )
                 continue
             for fetch_record in fetch_records:
-                fetch_input_hash, fetch_routed_hash = _hashes(fetch_record)
-                if fetch_input_hash and producer_input_hash != fetch_input_hash:
+                label = f"stage={stage} key={key} rank={fetch_record.get('rank')}"
+                if fetch_record.get("valid_length") != producer.get("valid_length"):
                     failures.append(
-                        "input_ids hash mismatch "
-                        f"stage={stage} key={key} rank={fetch_record.get('rank')}: "
-                        f"producer={producer_input_hash} fetch={fetch_input_hash}"
+                        "valid_length mismatch "
+                        f"{label}: producer={producer.get('valid_length')} "
+                        f"fetch={fetch_record.get('valid_length')}"
                     )
-                if producer_routed_hash != fetch_routed_hash:
+                fetch_input = _tensor_signature(
+                    fetch_record, "input_ids", label=label, failures=failures
+                )
+                fetch_routed = _tensor_signature(
+                    fetch_record, "routed_experts", label=label, failures=failures
+                )
+                if producer_input is not None and fetch_input is not None:
+                    if producer_input != fetch_input:
+                        failures.append(
+                            "input_ids signature mismatch "
+                            f"{label}: producer={producer_input} fetch={fetch_input}"
+                        )
+                if producer_routed is not None and fetch_routed is not None:
+                    if producer_routed != fetch_routed:
+                        failures.append(
+                            "routed_experts signature mismatch "
+                            f"{label}: producer={producer_routed} fetch={fetch_routed}"
+                        )
+    return failures
+
+
+def _failures_for_route_semantics(
+    producer_by_key: dict[str, dict[str, Any]],
+    expected_payload_indices: set[int],
+) -> list[str]:
+    failures = []
+    for key, producer in producer_by_key.items():
+        valid_length = producer.get("valid_length")
+        input_shape = producer.get("input_ids", {}).get("valid_shape")
+        routed_shape = producer.get("routed_experts", {}).get("valid_shape")
+        if not isinstance(valid_length, int) or valid_length <= 0:
+            failures.append(f"invalid producer valid_length for key={key}")
+        if not (
+            isinstance(input_shape, list)
+            and len(input_shape) == 1
+            and input_shape[0] == valid_length
+        ):
+            failures.append(
+                f"input_ids valid_shape disagrees with length for key={key}"
+            )
+        if not (
+            isinstance(routed_shape, list)
+            and len(routed_shape) == 3
+            and routed_shape[0] == valid_length
+        ):
+            failures.append(
+                f"routed_experts valid_shape disagrees with length for key={key}"
+            )
+        semantics = producer.get("routed_experts", {}).get("semantics")
+        if not isinstance(semantics, dict):
+            failures.append(f"missing routed_experts semantics for key={key}")
+            continue
+        layer_count = semantics.get("layer_count")
+        populated = semantics.get("populated_layer_indices")
+        valid_by_layer = semantics.get("valid_route_rows_by_layer")
+        missing_by_layer = semantics.get("missing_route_rows_by_layer")
+        zero_by_layer = semantics.get("zero_route_rows_by_layer")
+        if not isinstance(layer_count, int) or layer_count <= 0:
+            failures.append(f"invalid routed_experts layer_count for key={key}")
+            continue
+        raw_layer_fields = {
+            "valid_route_rows_by_layer": valid_by_layer,
+            "missing_route_rows_by_layer": missing_by_layer,
+            "zero_route_rows_by_layer": zero_by_layer,
+        }
+        invalid_layer_fields = [
+            field
+            for field, counts in raw_layer_fields.items()
+            if not (
+                isinstance(counts, list)
+                and len(counts) == layer_count
+                and all(isinstance(count, int) and count >= 0 for count in counts)
+            )
+        ]
+        for field in invalid_layer_fields:
+            failures.append(f"invalid routed_experts {field} for key={key}")
+        if invalid_layer_fields:
+            continue
+        assert isinstance(valid_by_layer, list)
+        assert isinstance(missing_by_layer, list)
+        assert isinstance(zero_by_layer, list)
+        per_layer_fields: tuple[list[int], ...] = (
+            [int(count) for count in valid_by_layer],
+            [int(count) for count in missing_by_layer],
+            [int(count) for count in zero_by_layer],
+        )
+        if isinstance(valid_length, int) and valid_length > 0:
+            for layer_idx in range(layer_count):
+                row_count = sum(counts[layer_idx] for counts in per_layer_fields)
+                if row_count != valid_length:
                     failures.append(
-                        "routed_experts hash mismatch "
-                        f"stage={stage} key={key} rank={fetch_record.get('rank')}: "
-                        f"producer={producer_routed_hash} fetch={fetch_routed_hash}"
+                        "routed_experts semantic row count mismatch "
+                        f"for key={key} layer={layer_idx}: "
+                        f"expected={valid_length} actual={row_count}"
                     )
+        if (
+            isinstance(routed_shape, list)
+            and len(routed_shape) == 3
+            and routed_shape[1] != layer_count
+        ):
+            failures.append(
+                f"routed_experts semantic layer_count disagrees with shape for key={key}"
+            )
+        if not (
+            isinstance(populated, list)
+            and all(
+                isinstance(index, int) and 0 <= index < layer_count
+                for index in populated
+            )
+        ):
+            failures.append(f"invalid populated routed-expert layers for key={key}")
+            continue
+        if not populated:
+            failures.append(f"no populated routed-expert layers for key={key}")
+        populated_indices = [int(index) for index in populated]
+        valid_counts, missing_counts, zero_counts = per_layer_fields
+        observed_populated = {
+            layer_idx for layer_idx, count in enumerate(valid_counts) if count > 0
+        }
+        if set(populated_indices) != observed_populated:
+            failures.append(
+                f"populated routed-expert layers disagree with row counts for key={key}"
+            )
+        unexpected_populated = set(populated_indices) - expected_payload_indices
+        if unexpected_populated:
+            failures.append(
+                f"unexpected populated routed-expert layers for key={key}: "
+                f"{sorted(unexpected_populated)}"
+            )
+        if isinstance(valid_length, int) and valid_length > 0:
+            invalid_structural_layers = {
+                layer_idx
+                for layer_idx in range(layer_count)
+                if layer_idx not in expected_payload_indices
+                and (
+                    valid_counts[layer_idx] != 0
+                    or missing_counts[layer_idx] != 0
+                    or zero_counts[layer_idx] != valid_length
+                )
+            }
+            if invalid_structural_layers:
+                failures.append(
+                    f"invalid structural routed-expert layers for key={key}: "
+                    f"{sorted(invalid_structural_layers)}"
+                )
+        out_of_range = {
+            index for index in expected_payload_indices if index >= layer_count
+        }
+        if out_of_range:
+            failures.append(
+                f"expected routed-expert layers out of range for key={key}: "
+                f"{sorted(out_of_range)}"
+            )
+        else:
+            zero_expected = {
+                index for index in expected_payload_indices if zero_counts[index] > 0
+            }
+            if zero_expected:
+                failures.append(
+                    f"zero routes on expected MoE layers for key={key}: "
+                    f"{sorted(zero_expected)}"
+                )
+        for field in (
+            "duplicate_valid_rows",
+            "negative_valid_rows",
+            "zero_rows_in_populated_layers",
+        ):
+            count = semantics.get(field)
+            if not isinstance(count, int) or count != 0:
+                failures.append(
+                    f"invalid routed_experts semantics key={key} {field}={count}"
+                )
     return failures
 
 
@@ -91,20 +299,30 @@ def _summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
     replay_actions_by_stage_action = Counter()
     replay_forward_verify_by_stage_action = Counter()
     cp_identity_verified_counts = []
+    cp_identity_verified_by_stage = Counter()
+    payload_indices_by_stage: dict[str, set[int]] = defaultdict(set)
+    duplicate_producer_keys: set[str] = set()
     ranks_by_event: dict[str, set[int]] = defaultdict(set)
 
     for record in records:
-        event = record.get("event")
+        event = str(record.get("event", "<missing>"))
         rank = record.get("rank")
         if isinstance(rank, int):
             ranks_by_event[event].add(rank)
         if event == "rollout_payload_sample":
             key = record["key"]
-            producer_by_key.setdefault(key, record)
-        elif event == "tq_fetch_sample":
+            if key in producer_by_key:
+                duplicate_producer_keys.add(key)
+            else:
+                producer_by_key[key] = record
+        elif event in {"tq_fetch_sample", "policy_payload_sample"}:
             fetch_by_stage_key[(record["stage"], record["key"])].append(record)
         elif event == "router_replay_assignment":
-            replay_assignments_by_stage[record["stage"]] += 1
+            stage = str(record.get("stage", "<missing>"))
+            replay_assignments_by_stage[stage] += 1
+            payload_idx = record.get("payload_idx")
+            if isinstance(payload_idx, int) and payload_idx >= 0:
+                payload_indices_by_stage[stage].add(payload_idx)
         elif event == "router_replay_action":
             replay_actions_by_stage_action[(record["stage"], record["action"])] += 1
         elif event == "router_replay_forward_verify":
@@ -115,6 +333,9 @@ def _summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
             verified_count = record.get("cp_token_identity_verified_count")
             if verified_count is not None:
                 cp_identity_verified_counts.append(int(verified_count))
+                if int(verified_count) > 0:
+                    stage = str(record.get("stage", "<missing>"))
+                    cp_identity_verified_by_stage[stage] += int(verified_count)
 
     return {
         "events": events,
@@ -124,6 +345,9 @@ def _summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         "replay_actions_by_stage_action": replay_actions_by_stage_action,
         "replay_forward_verify_by_stage_action": replay_forward_verify_by_stage_action,
         "cp_identity_verified_counts": cp_identity_verified_counts,
+        "cp_identity_verified_by_stage": cp_identity_verified_by_stage,
+        "payload_indices_by_stage": payload_indices_by_stage,
+        "duplicate_producer_keys": duplicate_producer_keys,
         "ranks_by_event": ranks_by_event,
     }
 
@@ -142,6 +366,26 @@ def check_trace(
     if not producer_by_key:
         failures.append("no rollout_payload_sample records found")
 
+    for key in sorted(summary["duplicate_producer_keys"]):
+        failures.append(f"duplicate rollout producer key={key}")
+
+    payload_indices_by_stage = summary["payload_indices_by_stage"]
+    for stage in REQUIRED_REPLAY_STAGES:
+        if not payload_indices_by_stage[stage]:
+            failures.append(f"no valid router payload indices for stage={stage}")
+    if payload_indices_by_stage["prev-logprob"] != payload_indices_by_stage["train"]:
+        failures.append(
+            "router payload indices differ between prev-logprob and train: "
+            f"prev={sorted(payload_indices_by_stage['prev-logprob'])} "
+            f"train={sorted(payload_indices_by_stage['train'])}"
+        )
+    expected_payload_indices = set().union(
+        *(payload_indices_by_stage[stage] for stage in REQUIRED_REPLAY_STAGES)
+    )
+
+    failures.extend(
+        _failures_for_route_semantics(producer_by_key, expected_payload_indices)
+    )
     failures.extend(
         _failures_for_fetch_matches(
             producer_by_key,
@@ -166,8 +410,18 @@ def check_trace(
         for record in records
         if record.get("event") == "router_replay_forward_verify"
     ]
-    if require_forward_verify and not replay_forward_verify_records:
-        failures.append("no router_replay_forward_verify records found")
+    if require_forward_verify:
+        required_verifier_actions = (
+            ("prev-logprob", "replay_forward"),
+            ("train", "replay_forward"),
+            ("train", "replay_backward"),
+        )
+        for stage, action in required_verifier_actions:
+            if summary["replay_forward_verify_by_stage_action"][(stage, action)] == 0:
+                failures.append(
+                    "no router_replay_forward_verify records for "
+                    f"stage={stage} action={action}"
+                )
     for record in replay_forward_verify_records:
         if not record.get("matches_expected"):
             failures.append(
@@ -177,8 +431,12 @@ def check_trace(
             )
 
     cp_identity_verified_counts = summary["cp_identity_verified_counts"]
-    if require_cp_identity and not cp_identity_verified_counts:
-        failures.append("no CP token-identity verification records found")
+    if require_cp_identity:
+        for stage in REQUIRED_REPLAY_STAGES:
+            if summary["cp_identity_verified_by_stage"][stage] <= 0:
+                failures.append(
+                    f"no positive CP token-identity verification for stage={stage}"
+                )
 
     print(f"Trace dir: {trace_dir}")
     print(f"Records: {len(records)}")
@@ -224,7 +482,9 @@ def check_trace(
             print(f"  - {failure}")
         return 1
 
-    print("\nPASS: producer routed_experts matched TQ fetches, and replay was set.")
+    print(
+        "\nPASS: producer routed_experts matched policy payloads, and replay was set."
+    )
     return 0
 
 

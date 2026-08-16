@@ -193,6 +193,88 @@ def _valid_sample_record(
     }
 
 
+def _routed_experts_semantics(rows: Any) -> dict[str, Any]:
+    """Summarize populated MoE routes without treating dense-layer zeros as routes."""
+    if hasattr(rows, "detach"):
+        tensor = rows.detach()
+        missing = tensor.eq(-1).all(dim=-1)
+        zero = tensor.eq(0).all(dim=-1)
+        valid = ~(missing | zero)
+        populated = valid.any(dim=0)
+        valid_by_layer = valid.sum(dim=0).cpu().tolist()
+        missing_by_layer = missing.sum(dim=0).cpu().tolist()
+        zero_by_layer = zero.sum(dim=0).cpu().tolist()
+        sorted_routes = tensor.sort(dim=-1).values
+        duplicates = (sorted_routes[..., 1:] == sorted_routes[..., :-1]).any(dim=-1)
+        negative = tensor.lt(0).any(dim=-1)
+        return {
+            "layer_count": int(tensor.shape[1]),
+            "populated_layer_indices": populated.nonzero(as_tuple=False)
+            .reshape(-1)
+            .cpu()
+            .tolist(),
+            "valid_route_rows_by_layer": valid_by_layer,
+            "missing_route_rows_by_layer": missing_by_layer,
+            "zero_route_rows_by_layer": zero_by_layer,
+            "valid_route_rows": int(valid.sum().item()),
+            "missing_route_rows": int(missing.sum().item()),
+            "structural_zero_rows": int((zero & ~populated.unsqueeze(0)).sum().item()),
+            "duplicate_valid_rows": int((valid & duplicates).sum().item()),
+            "negative_valid_rows": int((valid & negative).sum().item()),
+            "zero_rows_in_populated_layers": int(
+                (zero & populated.unsqueeze(0)).sum().item()
+            ),
+        }
+
+    token_rows = list(rows)
+    layer_count = len(token_rows[0]) if token_rows else 0
+    populated_layers = {
+        layer_idx
+        for token_row in token_rows
+        for layer_idx, route_row in enumerate(token_row)
+        if route_row
+        and not all(route == 0 for route in route_row)
+        and not all(route == -1 for route in route_row)
+    }
+    summary: dict[str, Any] = {
+        "layer_count": layer_count,
+        "populated_layer_indices": sorted(populated_layers),
+        "valid_route_rows_by_layer": [0] * layer_count,
+        "missing_route_rows_by_layer": [0] * layer_count,
+        "zero_route_rows_by_layer": [0] * layer_count,
+        "valid_route_rows": 0,
+        "missing_route_rows": 0,
+        "structural_zero_rows": 0,
+        "duplicate_valid_rows": 0,
+        "negative_valid_rows": 0,
+        "zero_rows_in_populated_layers": 0,
+    }
+    for token_row in token_rows:
+        if len(token_row) != layer_count:
+            raise ValueError("routed_experts rows must have a stable layer dimension")
+        for layer_idx, route_row in enumerate(token_row):
+            route_values = list(route_row)
+            if route_values and all(route == -1 for route in route_values):
+                summary["missing_route_rows"] += 1
+                summary["missing_route_rows_by_layer"][layer_idx] += 1
+            elif route_values and all(route == 0 for route in route_values):
+                summary["zero_route_rows_by_layer"][layer_idx] += 1
+                field = (
+                    "zero_rows_in_populated_layers"
+                    if layer_idx in populated_layers
+                    else "structural_zero_rows"
+                )
+                summary[field] += 1
+            else:
+                summary["valid_route_rows"] += 1
+                summary["valid_route_rows_by_layer"][layer_idx] += 1
+                if len(set(route_values)) != len(route_values):
+                    summary["duplicate_valid_rows"] += 1
+                if any(route < 0 for route in route_values):
+                    summary["negative_valid_rows"] += 1
+    return summary
+
+
 def _length_at(lengths: Any, sample_idx: int) -> int:
     value = lengths[sample_idx]
     if hasattr(value, "item"):
@@ -382,18 +464,22 @@ def trace_rollout_payload(
     for sample_idx in range(sample_count):
         valid_length = _length_at(input_lengths, sample_idx)
         preview_limit = 16 if sample_idx < preview_samples else 0
+        routed_record = _valid_sample_record(
+            routed_experts,
+            sample_idx=sample_idx,
+            valid_length=valid_length,
+            preview_limit=preview_limit,
+        )
+        routed_record["semantics"] = _routed_experts_semantics(
+            routed_experts[sample_idx, :valid_length]
+        )
         record = {
             "event": "rollout_payload_sample",
             "trace_step": step,
             "sample_idx": sample_idx,
             "key": keys[sample_idx],
             "valid_length": valid_length,
-            "routed_experts": _valid_sample_record(
-                routed_experts,
-                sample_idx=sample_idx,
-                valid_length=valid_length,
-                preview_limit=preview_limit,
-            ),
+            "routed_experts": routed_record,
         }
         if input_ids is not None:
             record["input_ids"] = _valid_sample_record(
@@ -405,13 +491,45 @@ def trace_rollout_payload(
         _write_record(record)
 
 
+def trace_policy_payload(
+    *,
+    stage: str,
+    keys: Sequence[str],
+    data: Any,
+) -> None:
+    _trace_consumer_payload(
+        event="policy_payload_sample",
+        counter_name=f"policy_payload:{stage}",
+        stage=stage,
+        keys=keys,
+        data=data,
+    )
+
+
 def trace_tq_fetch_payload(
     *,
     stage: str,
     keys: Sequence[str],
     data: Any,
 ) -> None:
-    active, step = _should_trace_step(f"tq_fetch:{stage}")
+    _trace_consumer_payload(
+        event="tq_fetch_sample",
+        counter_name=f"tq_fetch:{stage}",
+        stage=stage,
+        keys=keys,
+        data=data,
+    )
+
+
+def _trace_consumer_payload(
+    *,
+    event: str,
+    counter_name: str,
+    stage: str,
+    keys: Sequence[str],
+    data: Any,
+) -> None:
+    active, step = _should_trace_step(counter_name)
     if not active or "routed_experts" not in data or "input_lengths" not in data:
         return
 
@@ -425,7 +543,7 @@ def trace_tq_fetch_payload(
         valid_length = _length_at(input_lengths, sample_idx)
         preview_limit = 16 if sample_idx < preview_samples else 0
         record = {
-            "event": "tq_fetch_sample",
+            "event": event,
             "stage": stage,
             "trace_step": step,
             "sample_idx": sample_idx,

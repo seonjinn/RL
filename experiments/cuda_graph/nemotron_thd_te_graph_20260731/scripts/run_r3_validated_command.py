@@ -106,6 +106,22 @@ def valid_sha256(value: str) -> bool:
     )
 
 
+def runtime_python_from_uv(uv: str) -> str:
+    suffix = os.path.join("uv", "uv")
+    if not uv.endswith(os.sep + suffix):
+        fail("R3 uv executable must use the staged-runtimes/<sha256>/uv/uv layout")
+    stage_root = uv[: -len(suffix)].rstrip(os.sep)
+    stage_key = os.path.basename(stage_root)
+    if os.path.basename(
+        os.path.dirname(stage_root)
+    ) != "staged-runtimes" or not valid_sha256(stage_key):
+        fail("R3 uv executable must use the staged-runtimes/<sha256>/uv/uv layout")
+    runtime_python = os.path.join(stage_root, "environment", "bin", "python")
+    if not os.path.isfile(runtime_python) or not os.access(runtime_python, os.X_OK):
+        fail("R3 attested runtime Python is missing or not executable")
+    return runtime_python
+
+
 def encode(value: str) -> str:
     return base64.b64encode(value.encode()).decode("ascii")
 
@@ -129,6 +145,7 @@ def main() -> int:
         fail("invalid R3 paths or Slurm identity")
     if not valid_sha256(driver_sha) or not valid_sha256(checker_sha):
         fail("R3 driver and checker digests must be lowercase SHA256")
+    runtime_python = runtime_python_from_uv(uv)
     driver_bytes = read_bound_file(driver_file, driver_sha, "driver command file")
     try:
         driver = driver_bytes.decode("utf-8")
@@ -152,9 +169,10 @@ def main() -> int:
             os.mkdir(trace_name, 0o700, dir_fd=attempt_fd)
             trace = f"{base}/{attempt_name}/{trace_name}"
             checker_command = [
-                uv,
-                "run",
-                "python",
+                runtime_python,
+                "-I",
+                "-B",
+                "-S",
                 "-",
                 trace,
                 "--require-forward-verify",

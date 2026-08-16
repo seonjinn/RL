@@ -137,6 +137,11 @@ from nemo_rl.utils.multimodal_payload_metrics import (
     print_multimodal_payload_metrics,
 )
 from nemo_rl.utils.nsys import maybe_gpu_profile_step
+from nemo_rl.utils.r3_trace import (
+    r3_trace_enabled,
+    trace_policy_payload,
+    trace_rollout_payload,
+)
 from nemo_rl.utils.timer import TimeoutChecker, Timer
 from nemo_rl.utils.venvs import create_local_venv_on_each_node
 from nemo_rl.weight_sync.checkpoint_engine_config import (
@@ -3195,6 +3200,17 @@ def grpo_train(
                         train_data, flat_messages, master_config.policy
                     )
                     train_data.to("cpu")
+                    legacy_r3_trace_keys: list[str] = []
+                    if r3_trace_enabled():
+                        legacy_r3_trace_keys = [
+                            f"legacy-step-{total_steps + 1}-sample-{sample_idx}"
+                            for sample_idx in range(
+                                int(train_data["input_ids"].shape[0])
+                            )
+                        ]
+                        trace_rollout_payload(
+                            keys=legacy_r3_trace_keys, data=train_data
+                        )
 
                     metrics_logging_data["content"] = flat_messages["content"]
 
@@ -3235,6 +3251,12 @@ def grpo_train(
                     )
 
                     if not skip_prev_logprobs:
+                        if legacy_r3_trace_keys:
+                            trace_policy_payload(
+                                stage="prev_lp",
+                                keys=legacy_r3_trace_keys,
+                                data=logprob_data,
+                            )
                         train_data["prev_logprobs"] = policy.get_logprobs(
                             logprob_data, timer=timer
                         )["logprobs"]
@@ -3329,6 +3351,12 @@ def grpo_train(
 
                 print("▶ Training policy...", flush=True)
                 with timer.time("policy_training"):
+                    if legacy_r3_trace_keys:
+                        trace_policy_payload(
+                            stage="train",
+                            keys=legacy_r3_trace_keys,
+                            data=train_data,
+                        )
                     train_results = policy.train(
                         train_data,
                         loss_fn,

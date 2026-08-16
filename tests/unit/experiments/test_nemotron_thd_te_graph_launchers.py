@@ -115,6 +115,22 @@ def _load_experiment_module(name: str) -> ModuleType:
     return module
 
 
+def _create_staged_runtime(
+    tmp_path: Path,
+    runtime_python_source: str = "#!/bin/bash\nexit 0\n",
+) -> tuple[Path, Path]:
+    stage = tmp_path / "staged-runtimes" / ("a" * 64)
+    uv = stage / "uv" / "uv"
+    uv.parent.mkdir(parents=True)
+    uv.write_text("#!/bin/bash\nexit 0\n")
+    uv.chmod(0o755)
+    runtime_python = stage / "environment" / "bin" / "python"
+    runtime_python.parent.mkdir(parents=True)
+    runtime_python.write_text(runtime_python_source)
+    runtime_python.chmod(0o755)
+    return uv, runtime_python
+
+
 def _extract_shell_function(relative_path: str, function_name: str) -> str:
     source = (EXPERIMENT_DIR / relative_path).read_text()
     match = re.search(
@@ -1588,16 +1604,15 @@ def test_r3_wrapper_records_atomic_terminal_result(
     (tools / "check_r3_trace.py").write_text("# fixture\n")
     driver_file = tmp_path / "driver.sh"
     driver_file.write_text(driver)
-    fake_uv = tmp_path / "uv"
-    fake_uv.write_text(
+    fake_uv, _ = _create_staged_runtime(
+        tmp_path,
         "#!/bin/bash\n"
         'printf invoked >"${CHECKER_MARKER:?}"\n'
-        "[[ \"$1 $2 $3\" == 'run python -' ]] || exit 70\n"
+        "[[ \"$1 $2 $3 $4\" == '-I -B -S -' ]] || exit 70\n"
         "[[ \"$*\" == *'--require-forward-verify'* ]] || exit 71\n"
         "[[ \"$*\" == *'--require-cp-identity'* ]] || exit 72\n"
-        f"exit {checker_exit}\n"
+        f"exit {checker_exit}\n",
     )
-    fake_uv.chmod(0o755)
     marker = tmp_path / "checker.marker"
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
@@ -1692,6 +1707,7 @@ def test_r3_wrapper_rejects_replaced_driver_bytes_before_execution(
     driver.write_text("exit 0")
     expected = hashlib.sha256(driver.read_bytes()).hexdigest()
     driver.write_text("exit 88")
+    staged_uv, _ = _create_staged_runtime(tmp_path)
     wrapper = EXPERIMENT_DIR / "scripts" / "run_r3_validated_command.sh"
 
     result = subprocess.run(
@@ -1701,7 +1717,7 @@ def test_r3_wrapper_rejects_replaced_driver_bytes_before_execution(
             sys.executable,
             str(log_dir),
             str(root),
-            "/bin/true",
+            str(staged_uv),
             str(driver),
             expected,
             "0" * 64,
@@ -1743,11 +1759,12 @@ def test_r3_wrapper_binds_checker_bytes_and_exact_driver_environment(
         f"printf mutated >{shlex.quote(str(checker))}"
     ).encode()
     driver.write_bytes(driver_bytes)
-    fake_uv = tmp_path / "uv"
-    fake_uv.write_text(
-        '#!/bin/bash\n[[ "$1 $2 $3" == \'run python -\' ]] || exit 70\ncat >"${CHECKER_CAPTURE:?}"\n'
+    fake_uv, _ = _create_staged_runtime(
+        tmp_path,
+        "#!/bin/bash\n"
+        "[[ \"$1 $2 $3 $4\" == '-I -B -S -' ]] || exit 70\n"
+        'cat >"${CHECKER_CAPTURE:?}"\n',
     )
-    fake_uv.chmod(0o755)
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
 
@@ -1795,14 +1812,34 @@ def test_r3_wrapper_binds_checker_bytes_and_exact_driver_environment(
     assert record["driver_command"] == driver_bytes.decode()
 
 
-def test_r3_wrapper_rejects_checker_digest_before_driver(tmp_path: Path) -> None:
+def test_r3_wrapper_runs_checker_with_attested_runtime_python(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "repo"
     tools = root / "tools"
     tools.mkdir(parents=True)
-    (tools / "check_r3_trace.py").write_text("original\n")
-    driver_marker = tmp_path / "driver-ran"
+    checker = tools / "check_r3_trace.py"
+    checker.write_bytes(b"original checker bytes\n")
     driver = tmp_path / "driver.sh"
-    driver.write_text(f"printf ran >{shlex.quote(str(driver_marker))}")
+    driver.write_text("exit 0")
+    stage = tmp_path / "staged-runtimes" / ("a" * 64)
+    fake_uv = stage / "uv" / "uv"
+    fake_uv.parent.mkdir(parents=True)
+    uv_marker = tmp_path / "uv.marker"
+    fake_uv.write_text(
+        f"#!/bin/bash\nprintf invoked >{shlex.quote(str(uv_marker))}\nexit 99\n"
+    )
+    fake_uv.chmod(0o755)
+    runtime_python = stage / "environment" / "bin" / "python"
+    runtime_python.parent.mkdir(parents=True)
+    checker_capture = tmp_path / "checker.stdin"
+    argv_capture = tmp_path / "checker.argv"
+    runtime_python.write_text(
+        "#!/bin/bash\n"
+        'printf \'%s\\n\' "$@" >"${CHECKER_ARGV_CAPTURE:?}"\n'
+        'cat >"${CHECKER_CAPTURE:?}"\n'
+    )
+    runtime_python.chmod(0o755)
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
 
@@ -1813,7 +1850,111 @@ def test_r3_wrapper_rejects_checker_digest_before_driver(tmp_path: Path) -> None
             sys.executable,
             str(log_dir),
             str(root),
-            "/bin/true",
+            str(fake_uv),
+            str(driver),
+            hashlib.sha256(driver.read_bytes()).hexdigest(),
+            hashlib.sha256(checker.read_bytes()).hexdigest(),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "NRL_SLURM_JOB_ID": "55",
+            "CHECKER_CAPTURE": str(checker_capture),
+            "CHECKER_ARGV_CAPTURE": str(argv_capture),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not uv_marker.exists()
+    assert checker_capture.read_bytes() == checker.read_bytes()
+    assert argv_capture.read_text().splitlines()[:4] == ["-I", "-B", "-S", "-"]
+    record = json.loads(
+        (log_dir / "r3-validation-job-55-restart-0" / "r3-validation.json").read_text()
+    )
+    assert record["checker_command"][0] == str(runtime_python)
+
+
+def test_r3_wrapper_isolates_checker_and_keeps_stage_unchanged(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    tools = root / "tools"
+    tools.mkdir(parents=True)
+    checker = tools / "check_r3_trace.py"
+    checker.write_text(
+        "try:\n"
+        "    import r3_pythonpath_injected\n"
+        "except ModuleNotFoundError:\n"
+        "    pass\n"
+        "else:\n"
+        "    r3_pythonpath_injected.mark()\n"
+    )
+    driver = tmp_path / "driver.sh"
+    driver.write_text("exit 0")
+    staged_uv, runtime_python = _create_staged_runtime(tmp_path)
+    runtime_python.unlink()
+    runtime_python.symlink_to(sys.executable)
+    injected = tmp_path / "pythonpath-injected"
+    malicious = tmp_path / "malicious"
+    malicious.mkdir()
+    (malicious / "r3_pythonpath_injected.py").write_text(
+        "from pathlib import Path\n"
+        f"def mark():\n    Path({str(injected)!r}).write_text('injected')\n"
+    )
+    stage_root = staged_uv.parents[1]
+    before = sorted(str(path.relative_to(stage_root)) for path in stage_root.rglob("*"))
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(EXPERIMENT_DIR / "scripts" / "run_r3_validated_command.sh"),
+            sys.executable,
+            str(log_dir),
+            str(root),
+            str(staged_uv),
+            str(driver),
+            hashlib.sha256(driver.read_bytes()).hexdigest(),
+            hashlib.sha256(checker.read_bytes()).hexdigest(),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "NRL_SLURM_JOB_ID": "56",
+            "PYTHONPATH": str(malicious),
+            "PYTHONDONTWRITEBYTECODE": "0",
+        },
+    )
+
+    after = sorted(str(path.relative_to(stage_root)) for path in stage_root.rglob("*"))
+    assert result.returncode == 0, result.stderr
+    assert not injected.exists()
+    assert after == before
+
+
+def test_r3_wrapper_rejects_checker_digest_before_driver(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    tools = root / "tools"
+    tools.mkdir(parents=True)
+    (tools / "check_r3_trace.py").write_text("original\n")
+    driver_marker = tmp_path / "driver-ran"
+    driver = tmp_path / "driver.sh"
+    driver.write_text(f"printf ran >{shlex.quote(str(driver_marker))}")
+    staged_uv, _ = _create_staged_runtime(tmp_path)
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(EXPERIMENT_DIR / "scripts" / "run_r3_validated_command.sh"),
+            sys.executable,
+            str(log_dir),
+            str(root),
+            str(staged_uv),
             str(driver),
             hashlib.sha256(driver.read_bytes()).hexdigest(),
             "0" * 64,
@@ -1838,6 +1979,7 @@ def test_r3_wrapper_normalizes_signal_exit(tmp_path: Path) -> None:
     checker.write_text("# fixture\n")
     driver = tmp_path / "driver.sh"
     driver.write_text("kill -TERM $$")
+    staged_uv, _ = _create_staged_runtime(tmp_path)
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
 
@@ -1848,7 +1990,7 @@ def test_r3_wrapper_normalizes_signal_exit(tmp_path: Path) -> None:
             sys.executable,
             str(log_dir),
             str(root),
-            "/bin/true",
+            str(staged_uv),
             str(driver),
             hashlib.sha256(driver.read_bytes()).hexdigest(),
             hashlib.sha256(checker.read_bytes()).hexdigest(),
@@ -2135,6 +2277,7 @@ def test_router_replay_rendering_is_explicit_and_rejects_router_graphs() -> None
     )
 
     assert "++policy.router_replay.enabled=true" in arguments
+    assert "loss_fn.force_on_policy_ratio=false" in arguments
     assert "NRL_ROUTER_REPLAY_VALIDATE=1" in arguments
     assert "NRL_R3_TRACE_VERIFY_FORWARD=1" in arguments
     with pytest.raises(ValueError, match="Router Replay.*router CUDA Graph"):
@@ -2169,6 +2312,8 @@ def test_router_replay_rendering_is_explicit_and_rejects_router_graphs() -> None
         (True, "++policy.generation.vllm_kwargs.enable_chunked_prefill=true"),
         (True, "~policy.generation.vllm_kwargs.enable_chunked_prefill"),
         (True, "~policy.generation.vllm_kwargs.enable_chunked_prefill=true"),
+        (True, "loss_fn.force_on_policy_ratio=true"),
+        (True, "~loss_fn.force_on_policy_ratio"),
     ),
 )
 def test_router_replay_rejects_normalized_protected_overrides(
@@ -2338,9 +2483,12 @@ def test_nano_attention_launcher_forwards_hybridep_uneven_input_padding() -> Non
     )
     command = shlex.split(command_line.removeprefix("COMMAND: "))[0]
     arguments = shlex.split(command)
-    assert arguments.count(
-        "++policy.megatron_cfg.moe_hybridep_pad_uneven_dispatch_inputs=true"
-    ) == 1
+    assert (
+        arguments.count(
+            "++policy.megatron_cfg.moe_hybridep_pad_uneven_dispatch_inputs=true"
+        )
+        == 1
+    )
 
 
 def test_nano_attention_cache3_variant_is_persistent_and_exact() -> None:
@@ -2425,16 +2573,13 @@ def test_nano_hybridep_padding_variants_are_persistent_and_exact(
     cache_arguments = [
         argument
         for argument in arguments
-        if argument.startswith(
-            "++policy.megatron_cfg.cuda_graph_max_cached_schedules="
-        )
+        if argument.startswith("++policy.megatron_cfg.cuda_graph_max_cached_schedules=")
     ]
     if cache_capacity is None:
         assert cache_arguments == []
     else:
         assert cache_arguments == [
-            "++policy.megatron_cfg.cuda_graph_max_cached_schedules="
-            f"{cache_capacity}"
+            f"++policy.megatron_cfg.cuda_graph_max_cached_schedules={cache_capacity}"
         ]
 
 
@@ -2709,13 +2854,9 @@ def test_leaf_runtime_attestation_uses_the_nightly_container_python() -> None:
     assert runtime_attestation_command.startswith("/opt/nemo_rl_venv/bin/python ")
     assert "/usr/bin/python3" not in runtime_attestation_command
     assert (
-        "--runtime-feature-set dropless_hybridep_nano16"
-        in runtime_attestation_command
+        "--runtime-feature-set dropless_hybridep_nano16" in runtime_attestation_command
     )
-    assert (
-        "--excluded-packages fast-hadamard-transform"
-        in runtime_attestation_command
-    )
+    assert "--excluded-packages fast-hadamard-transform" in runtime_attestation_command
     assert "--torch-cuda-arch-list 10.0a" in runtime_attestation_command
     assert "--nvte-cuda-archs 100a" in runtime_attestation_command
 
@@ -3374,9 +3515,10 @@ def test_runtime_stage_builds_and_attests_split_actor_environments() -> None:
 
     assert "--locked --extra mcore --group test" in source
     assert "--locked --extra vllm --no-python-downloads" in source
-    assert "probe_vllm_actor_runtime" in (
-        EXPERIMENT_DIR / "validate_container_runtime.py"
-    ).read_text()
+    assert (
+        "probe_vllm_actor_runtime"
+        in (EXPERIMENT_DIR / "validate_container_runtime.py").read_text()
+    )
 
 
 def test_cluster_profiles_render_cluster_specific_gres_and_segment_contracts(
