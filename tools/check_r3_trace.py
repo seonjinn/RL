@@ -348,6 +348,7 @@ def _summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
     cp_identity_verified_counts = []
     cp_identity_verified_by_stage = Counter()
     payload_indices_by_stage: dict[str, set[int]] = defaultdict(set)
+    invalid_assignment_payload_indices_by_stage = Counter()
     duplicate_producer_keys: set[str] = set()
     ranks_by_event: dict[str, set[int]] = defaultdict(set)
 
@@ -368,8 +369,10 @@ def _summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
             stage = str(record.get("stage", "<missing>"))
             replay_assignments_by_stage[stage] += 1
             payload_idx = record.get("payload_idx")
-            if isinstance(payload_idx, int) and payload_idx >= 0:
+            if type(payload_idx) is int and payload_idx >= 0:
                 payload_indices_by_stage[stage].add(payload_idx)
+            else:
+                invalid_assignment_payload_indices_by_stage[stage] += 1
         elif event == "router_replay_action":
             replay_actions_by_stage_action[(record["stage"], record["action"])] += 1
         elif event == "router_replay_forward_verify":
@@ -394,6 +397,9 @@ def _summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         "cp_identity_verified_counts": cp_identity_verified_counts,
         "cp_identity_verified_by_stage": cp_identity_verified_by_stage,
         "payload_indices_by_stage": payload_indices_by_stage,
+        "invalid_assignment_payload_indices_by_stage": (
+            invalid_assignment_payload_indices_by_stage
+        ),
         "duplicate_producer_keys": duplicate_producer_keys,
         "ranks_by_event": ranks_by_event,
     }
@@ -418,6 +424,12 @@ def check_trace(
 
     payload_indices_by_stage = summary["payload_indices_by_stage"]
     for stage in REQUIRED_REPLAY_STAGES:
+        invalid_count = summary["invalid_assignment_payload_indices_by_stage"][stage]
+        if invalid_count > 0:
+            failures.append(
+                "invalid router_replay_assignment payload_idx records for "
+                f"stage={stage}: {invalid_count}"
+            )
         if not payload_indices_by_stage[stage]:
             failures.append(f"no valid router payload indices for stage={stage}")
     if payload_indices_by_stage["prev-logprob"] != payload_indices_by_stage["train"]:
@@ -469,7 +481,7 @@ def check_trace(
                     f"stage={stage} action={action}"
                 )
     for record in replay_forward_verify_records:
-        if not record.get("matches_expected"):
+        if record.get("matches_expected") is not True:
             failures.append(
                 "router replay forward verifier mismatch "
                 f"stage={record.get('stage')} action={record.get('action')} "

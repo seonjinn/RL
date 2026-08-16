@@ -348,3 +348,41 @@ def test_checker_requires_forward_and_cp_evidence_for_each_stage(
         )
         == 1
     )
+
+
+def test_checker_rejects_non_boolean_forward_verifier_result(
+    tmp_path: Path,
+) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+    path = next(trace_dir.glob("*.jsonl"))
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    for record in records:
+        if record.get("event") == "router_replay_forward_verify":
+            record["matches_expected"] = "false"
+    path.write_text("".join(json.dumps(record) + "\n" for record in records))
+
+    assert checker.check_trace(trace_dir, require_forward_verify=True) == 1
+
+
+@pytest.mark.parametrize("invalid_payload_idx", (-1, "bad", True))
+def test_checker_rejects_malformed_router_assignment_payload_index(
+    tmp_path: Path,
+    invalid_payload_idx: object,
+) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+    path = next(trace_dir.glob("*.jsonl"))
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    records.append(
+        {
+            "event": "router_replay_assignment",
+            "stage": "train",
+            "payload_idx": invalid_payload_idx,
+        }
+    )
+    path.write_text("".join(json.dumps(record) + "\n" for record in records))
+
+    assert checker.check_trace(trace_dir) == 1
