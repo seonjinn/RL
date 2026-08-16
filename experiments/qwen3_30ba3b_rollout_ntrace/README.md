@@ -36,13 +36,15 @@ The current result and its compact source data are in
 `run_capture.sh` expects these environment variables:
 
 ```bash
-NTRACE_ARM=bf16|mxfp8
 NTRACE_SOURCE=/shared/path/to/pinned-ntrace-source
 NTRACE_RUNTIME=/shared/path/to/ntrace-runtime
 NTRACE_SOURCE_COMMIT=<commit>
 NEMO_SOURCE_COMMIT=<commit>
 NTRACE_RESULTS_ROOT=/shared/path/to/results
 ```
+
+Launch `run_capture_bf16.sh` and `run_capture_mxfp8.sh` as separate jobs. The
+wrappers set the arm and give each `tools/launch` job its own code snapshot.
 
 Use `tools/launch` so the NeMo-RL code snapshot and exact git revision are
 stored with the job.
