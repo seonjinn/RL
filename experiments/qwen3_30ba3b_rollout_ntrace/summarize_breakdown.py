@@ -42,12 +42,10 @@ def _stack_category(path: tuple[str, ...]) -> str:
 
 def _raw_kernel_category(name: str) -> str:
     lower = name.lower()
-    if name.startswith("bmm_MxE4m3_"):
-        return "expert_fc1_bmm"
-    if name.startswith("bmm_Bfloat16_"):
-        return "expert_fc2_bmm"
     if name.startswith("bmm_"):
-        return "expert_bmm_other"
+        # TRTLLM uses BF16-prefixed BMM names for both projections in the BF16
+        # path. The fused SwiGLU suffix identifies FC1; FC2 has no activation.
+        return "expert_fc1_bmm" if "swiglu" in lower else "expert_fc2_bmm"
     if "moe::dev::routing" in lower or "moe::dev::finalize" in lower:
         return "moe_routing_finalize"
     if "fmha" in lower or "attention" in lower:
@@ -102,13 +100,16 @@ def _rank_summary(path: Path) -> dict[str, Any]:
                 )
         stack.extend((child, node_path) for child in node.get("children", []))
 
-    raw_other_ns: Counter[str] = Counter()
-    for name, stats in data["instance_stats_global"].get("Other", {}).items():
-        instances = stats["instances"]
-        duration_ns = (
-            int(instances["count"]) * float(instances["avg_ns"]) / num_iterations
-        )
-        raw_other_ns[_raw_kernel_category(name)] += duration_ns
+    raw_kernel_ns: Counter[str] = Counter()
+    for kernel_stats in data["instance_stats_global"].values():
+        for name, stats in kernel_stats.items():
+            instances = stats["instances"]
+            duration_ns = (
+                int(instances["count"])
+                * float(instances["avg_ns"])
+                / num_iterations
+            )
+            raw_kernel_ns[_raw_kernel_category(name)] += duration_ns
 
     active_s = step_s - idle_s
     step_per_iter_s = [float(value) / 1e9 for value in data["time_per_iter_ns"]]
@@ -129,8 +130,8 @@ def _rank_summary(path: Path) -> dict[str, Any]:
         "stack_categories_s": {
             key: value / 1e9 for key, value in sorted(stack_categories_ns.items())
         },
-        "raw_other_categories_s": {
-            key: value / 1e9 for key, value in sorted(raw_other_ns.items())
+        "raw_kernel_categories_s": {
+            key: value / 1e9 for key, value in sorted(raw_kernel_ns.items())
         },
         "iterations": [
             {
@@ -220,9 +221,10 @@ def main() -> None:
                 "Conserved self time classified from each breakdown node's full "
                 "Python stack path."
             ),
-            "raw_other_categories": (
-                "Additive raw-kernel instance time used to split ntrace's Other "
-                "class; it is diagnostic and is not a conserved wall-time total."
+            "raw_kernel_categories": (
+                "Additive raw-kernel instance time across all ntrace classes. "
+                "It is diagnostic, averaged over every captured window, and is "
+                "not a conserved wall-time total."
             ),
         },
     }
@@ -245,7 +247,7 @@ def main() -> None:
     lines = ["\t".join(columns)]
     for rank in ranks:
         stack_categories = rank["stack_categories_s"]
-        raw_categories = rank["raw_other_categories_s"]
+        raw_categories = rank["raw_kernel_categories_s"]
         values = (
             rank["rank"],
             rank["step_s"],
