@@ -13,6 +13,10 @@ current refit and rollout performance optimizations to both arms.
 - Both arms use this same source revision.
 - The branch combines the current MXFP8 receiver path with the BF16 TRTLLM
   reload and two-gather expert conversion optimizations.
+- The OCI staged image provides Python 3.13.11. The experiment branch lowers
+  only the project and lockfile Python patch-version floor from 3.13.14 to
+  3.13.11. The upstream bump changed metadata only; both arms use the same
+  interpreter and dependency lock.
 
 ## Matched Conditions
 
@@ -22,6 +26,8 @@ current refit and rollout performance optimizations to both arms.
 - Refit transport: NCCL Reshard
 - MoE backend: FlashInfer TRTLLM
 - CUDA Graphs: enabled (`enforce_eager=false`)
+- Container: `nemo_rl_nightly_main_py31314_20260804_5876258.sqsh`
+- Python: 3.13.11 with an experiment-only patch-version floor override
 - Steps: 20
 - Seed: 42
 - MXFP8 scope: routed expert FC1/FC2 only
