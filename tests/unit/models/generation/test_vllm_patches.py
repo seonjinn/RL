@@ -163,6 +163,11 @@ def test_radio_layerscale_patch_warns_on_unknown_source(monkeypatch, tmp_path, c
     [
         (None, None, "RAY_ENABLE_UV_RUN_RUNTIME_ENV"),
         ("", ["MY_VAR"], "MY_VAR,RAY_ENABLE_UV_RUN_RUNTIME_ENV"),
+        (
+            "NRL_REFIT_NVTX_DETAIL",
+            None,
+            "NRL_REFIT_NVTX_DETAIL,RAY_ENABLE_UV_RUN_RUNTIME_ENV",
+        ),
         # A value the caller already set must survive, not be clobbered.
         ("PRESET", ["MY_VAR"], "MY_VAR,PRESET,RAY_ENABLE_UV_RUN_RUNTIME_ENV"),
         # Duplicates collapse and surrounding whitespace is stripped.

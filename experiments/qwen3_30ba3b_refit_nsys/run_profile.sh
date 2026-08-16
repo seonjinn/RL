@@ -28,6 +28,7 @@ RUN_ROOT=${RESULTS_ROOT}/${REFIT_NSYS_ARM}/${RUN_ID}
 mkdir -p "${RUN_ROOT}"
 
 export NRL_REFIT_NVTX_DETAIL=1
+export VLLM_RAY_EXTRA_ENV_VARS_TO_COPY="${VLLM_RAY_EXTRA_ENV_VARS_TO_COPY:+${VLLM_RAY_EXTRA_ENV_VARS_TO_COPY},}NRL_REFIT_NVTX_DETAIL"
 export NRL_NSYS_WORKER_PATTERNS="megatron_policy_worker,vllm_generation_worker"
 export NRL_NSYS_PROFILE_STEP_RANGE="2:3"
 export NRL_NSYS_EXTRA_OPTIONS='{"cuda-memory-usage":"true","cpuctxsw":"none"}'
