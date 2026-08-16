@@ -15,7 +15,34 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from nemo_rl.utils.nsys import maybe_gpu_profile_step
+from nemo_rl.utils.nsys import maybe_gpu_profile_step, refit_nvtx_range
+
+
+class TestRefitNvtxRange:
+    def test_disabled_is_noop(self):
+        with (
+            patch("nemo_rl.utils.nsys.NRL_REFIT_NVTX_DETAIL", False),
+            patch("nemo_rl.utils.nsys.torch.cuda.nvtx.range_push") as range_push,
+            patch("nemo_rl.utils.nsys.torch.cuda.nvtx.range_pop") as range_pop,
+        ):
+            with refit_nvtx_range("refit/test"):
+                pass
+
+        range_push.assert_not_called()
+        range_pop.assert_not_called()
+
+    def test_enabled_balances_range_on_error(self):
+        with (
+            patch("nemo_rl.utils.nsys.NRL_REFIT_NVTX_DETAIL", True),
+            patch("nemo_rl.utils.nsys.torch.cuda.nvtx.range_push") as range_push,
+            patch("nemo_rl.utils.nsys.torch.cuda.nvtx.range_pop") as range_pop,
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            with refit_nvtx_range("refit/test"):
+                raise RuntimeError("boom")
+
+        range_push.assert_called_once_with("refit/test")
+        range_pop.assert_called_once_with()
 
 
 class MockPolicy:

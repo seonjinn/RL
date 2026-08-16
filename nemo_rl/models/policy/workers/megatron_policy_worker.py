@@ -101,7 +101,7 @@ from nemo_rl.models.policy.workers.checkpoint_engine import (
 )
 from nemo_rl.models.policy.workers.patches import apply_transformer_engine_patch
 from nemo_rl.utils.grad_norm import warn_if_inf_grad_norm
-from nemo_rl.utils.nsys import wrap_with_nvtx_name
+from nemo_rl.utils.nsys import refit_nvtx_range, wrap_with_nvtx_name
 from nemo_rl.utils.nvml import log_gpu_memory_diagnostics
 from nemo_rl.utils.packed_tensor import packed_broadcast_producer
 from nemo_rl.utils.r3_trace import maybe_r3_trace_stage
@@ -2564,9 +2564,10 @@ class MegatronPolicyWorkerImpl(
 
         def _expert_spec(proj, grouped_name):
             def pre(_base):
-                return RefitCtx(
-                    buf=self._group_experts(proj, grouped_name, expert_groups)
-                )
+                with refit_nvtx_range("refit_trainer/stack_grouped_experts"):
+                    return RefitCtx(
+                        buf=self._group_experts(proj, grouped_name, expert_groups)
+                    )
 
             return LocalParamSpec(base=None, pre=pre)
 
@@ -2628,30 +2629,35 @@ class MegatronPolicyWorkerImpl(
                 src_tensor = DTensorRef(
                     local_tensor=ctx.buf, global_shape=param_info["global_shape"]
                 )
-                xferdtensor(
-                    src_tensor,
-                    param_info["src_mesh_info"],
-                    param_info["src_placements"],
-                    None,
-                    param_info["dst_mesh_info"],
-                    param_info["dst_placements"],
-                    group,
-                    nccl_reshard_stream,
-                )
+                with refit_nvtx_range("refit_trainer/nccl_reshard_send"):
+                    xferdtensor(
+                        src_tensor,
+                        param_info["src_mesh_info"],
+                        param_info["src_placements"],
+                        None,
+                        param_info["dst_mesh_info"],
+                        param_info["dst_placements"],
+                        group,
+                        nccl_reshard_stream,
+                    )
                 if spec.post is not None:
                     spec.post(ctx)
                 # Drop refs to the per-iteration grouped MoE tensor so its CUDA
                 # memory returns to the caching allocator
                 del ctx, src_tensor
 
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
+        with refit_nvtx_range("refit_trainer/bulk_synchronize"):
+            torch.cuda.synchronize()
+        with refit_nvtx_range("refit_trainer/empty_cache_after_bulk"):
+            torch.cuda.empty_cache()
 
         import time
 
         misc_t0 = time.perf_counter()
-        self._broadcast_misc_params_packed(kv_scales=kv_scales)
-        torch.cuda.synchronize()
+        with refit_nvtx_range("refit_trainer/broadcast_misc"):
+            self._broadcast_misc_params_packed(kv_scales=kv_scales)
+        with refit_nvtx_range("refit_trainer/misc_synchronize"):
+            torch.cuda.synchronize()
         if torch.distributed.get_rank() == 0:
             print(
                 f"[nccl_reshard_refit] misc broadcast (train side): "

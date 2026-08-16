@@ -14,6 +14,8 @@
 import atexit
 import json
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any, Protocol
 
 import rich
@@ -21,6 +23,7 @@ import torch
 
 NRL_NSYS_WORKER_PATTERNS = os.environ.get("NRL_NSYS_WORKER_PATTERNS", "")
 NRL_NSYS_PROFILE_STEP_RANGE = os.environ.get("NRL_NSYS_PROFILE_STEP_RANGE", "")
+NRL_REFIT_NVTX_DETAIL = os.environ.get("NRL_REFIT_NVTX_DETAIL", "0") == "1"
 
 
 def _parse_extra_options(raw: str) -> dict[str, Any]:
@@ -57,6 +60,20 @@ class ProfilablePolicy(Protocol):
     def start_gpu_profiling(self) -> None: ...
 
     def stop_gpu_profiling(self) -> None: ...
+
+
+@contextmanager
+def refit_nvtx_range(name: str) -> Iterator[None]:
+    """Emit a detailed refit range only for explicit profiling runs."""
+    if not NRL_REFIT_NVTX_DETAIL:
+        yield
+        return
+
+    torch.cuda.nvtx.range_push(name)
+    try:
+        yield
+    finally:
+        torch.cuda.nvtx.range_pop()
 
 
 def maybe_gpu_profile_step(policy: ProfilablePolicy, step: int):

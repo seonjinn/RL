@@ -40,7 +40,7 @@ from nemo_rl.models.policy.utils import (
     calculate_aligned_size,
     rebuild_cuda_tensor_from_ipc,
 )
-from nemo_rl.utils.nsys import wrap_with_nvtx_name
+from nemo_rl.utils.nsys import refit_nvtx_range, wrap_with_nvtx_name
 from nemo_rl.utils.packed_tensor import packed_broadcast_consumer
 from nemo_rl.weight_sync.nccl_reshard_utils import (
     _STR_TO_DTYPE,
@@ -1397,29 +1397,35 @@ class VllmInternalWorkerExtension:
             merged_slice: tuple[slice, ...] | None,
         ) -> LocalParamSpec:
             def pre(_base: torch.Tensor) -> RefitCtx:
-                value_region = (
-                    value_param.data
-                    if merged_slice is None
-                    else value_param.data[merged_slice]
-                )
-                scale_region = (
-                    scale_param.data
-                    if merged_slice is None
-                    else scale_param.data[merged_slice]
-                )
-                return RefitCtx(
-                    buf=torch.empty_like(value_region, dtype=torch.bfloat16),
-                    extra={"value_region": value_region, "scale_region": scale_region},
-                )
+                with refit_nvtx_range("refit_receiver/allocate_bf16_staging"):
+                    value_region = (
+                        value_param.data
+                        if merged_slice is None
+                        else value_param.data[merged_slice]
+                    )
+                    scale_region = (
+                        scale_param.data
+                        if merged_slice is None
+                        else scale_param.data[merged_slice]
+                    )
+                    return RefitCtx(
+                        buf=torch.empty_like(value_region, dtype=torch.bfloat16),
+                        extra={
+                            "value_region": value_region,
+                            "scale_region": scale_region,
+                        },
+                    )
 
             def post(ctx: RefitCtx) -> None:
                 from nemo_rl.models.generation.vllm.quantization.fp8 import (
                     quantize_mxfp8_weight,
                 )
 
-                value, scale = quantize_mxfp8_weight(ctx.buf)
-                ctx.extra["value_region"].copy_(value)
-                ctx.extra["scale_region"].copy_(scale)
+                with refit_nvtx_range("refit_receiver/mxfp8_quantize"):
+                    value, scale = quantize_mxfp8_weight(ctx.buf)
+                with refit_nvtx_range("refit_receiver/copy_mxfp8_value_and_scale"):
+                    ctx.extra["value_region"].copy_(value)
+                    ctx.extra["scale_region"].copy_(scale)
             return LocalParamSpec(base=value_param.data, pre=pre, post=post)
 
         # Get dict of vllm_param and merged_slice for each hf_name
@@ -1691,22 +1697,27 @@ class VllmInternalWorkerExtension:
             )
             # spec.pre/post run on the caller's current stream (this stage's
             # stream); xferdtensor should use the same stream.
-            ctx = (
-                spec.pre(spec.base) if spec.pre is not None else RefitCtx(buf=spec.base)
-            )
+            with refit_nvtx_range("refit_receiver/prepare_destination"):
+                ctx = (
+                    spec.pre(spec.base)
+                    if spec.pre is not None
+                    else RefitCtx(buf=spec.base)
+                )
             dst_tensor = DTensorRef(ctx.buf, param_info["global_shape"])
-            xferdtensor(
-                None,
-                param_info["src_mesh_info"],
-                param_info["src_placements"],
-                dst_tensor,
-                param_info["dst_mesh_info"],
-                param_info["dst_placements"],
-                group,
-                stream,
-            )
+            with refit_nvtx_range("refit_receiver/nccl_reshard_receive"):
+                xferdtensor(
+                    None,
+                    param_info["src_mesh_info"],
+                    param_info["src_placements"],
+                    dst_tensor,
+                    param_info["dst_mesh_info"],
+                    param_info["dst_placements"],
+                    group,
+                    stream,
+                )
             if spec.post is not None:
-                spec.post(ctx)
+                with refit_nvtx_range("refit_receiver/postprocess_destination"):
+                    spec.post(ctx)
 
         # Group params by PP stage so different stages' bulk reshards run
         # concurrently on their own streams.  Non-PP = single stage 0 (params
@@ -1736,23 +1747,30 @@ class VllmInternalWorkerExtension:
                 ev.record()
                 events[idx] = ev
 
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
+        with refit_nvtx_range("refit_receiver/bulk_synchronize"):
+            torch.cuda.synchronize()
+        with refit_nvtx_range("refit_receiver/empty_cache_after_bulk"):
+            torch.cuda.empty_cache()
 
         import time
 
         misc_t0 = time.perf_counter()
-        self._receive_and_load_misc_params()
-        torch.cuda.synchronize()
+        with refit_nvtx_range("refit_receiver/receive_and_load_misc"):
+            self._receive_and_load_misc_params()
+        with refit_nvtx_range("refit_receiver/misc_synchronize"):
+            torch.cuda.synchronize()
         if torch.distributed.get_rank() == 0:
             print(
                 f"[nccl_reshard_refit] misc recv+load (gen side): "
                 f"{time.perf_counter() - misc_t0:.2f}s",
                 flush=True,
             )
-        torch.cuda.empty_cache()
-        finalize()
-        torch.cuda.empty_cache()
+        with refit_nvtx_range("refit_receiver/empty_cache_before_finalize"):
+            torch.cuda.empty_cache()
+        with refit_nvtx_range("refit_receiver/finalize_weight_update"):
+            finalize()
+        with refit_nvtx_range("refit_receiver/empty_cache_after_finalize"):
+            torch.cuda.empty_cache()
         return True
 
     def _receive_and_load_misc_params(self) -> None:
