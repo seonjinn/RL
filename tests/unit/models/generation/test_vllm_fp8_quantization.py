@@ -12,12 +12,67 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import subprocess
 import types
+from pathlib import Path
 
 import pytest
 import torch
 
 pytestmark = pytest.mark.vllm
+
+
+def test_mxfp8_capture_scope_overrides_forwarded_cli_scope(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+
+    fake_python = bin_dir / "python"
+    fake_python.write_text("#!/bin/sh\ncat >/dev/null\n")
+    fake_python.chmod(0o755)
+
+    fake_uv = bin_dir / "uv"
+    fake_uv.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
+    fake_uv.chmod(0o755)
+
+    runtime = tmp_path / "runtime"
+    (runtime / "ntrace").mkdir(parents=True)
+    repo_root = Path(__file__).parents[4]
+    script = repo_root / "experiments/qwen3_30ba3b_rollout_ntrace/run_capture.sh"
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "NTRACE_ARM": "mxfp8",
+        "NTRACE_SOURCE": str(tmp_path / "source"),
+        "NTRACE_RUNTIME": str(runtime),
+        "NTRACE_SOURCE_COMMIT": "ntrace-commit",
+        "NEMO_SOURCE_COMMIT": "nemo-commit",
+        "NTRACE_RESULTS_ROOT": str(tmp_path / "results"),
+    }
+    forwarded_legacy_scope = (
+        "policy.generation.vllm_cfg.quantization_ignored_layer_kws=[q_proj]"
+    )
+    forwarded_exact_scope = (
+        "policy.generation.vllm_cfg.quantization_ignore_patterns=[lm_head]"
+    )
+
+    result = subprocess.run(
+        ["bash", str(script), forwarded_legacy_scope, forwarded_exact_scope],
+        cwd=repo_root,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    args = result.stdout.splitlines()
+    locked_legacy_scope = "~policy.generation.vllm_cfg.quantization_ignored_layer_kws"
+    locked_exact_scope = (
+        "++policy.generation.vllm_cfg.quantization_ignore_patterns="
+        "[model.layers.*.self_attn.*,model.layers.*.mlp.gate,lm_head]"
+    )
+    assert args.index(locked_legacy_scope) > args.index(forwarded_legacy_scope)
+    assert args.index(locked_exact_scope) > args.index(forwarded_exact_scope)
 
 
 @pytest.fixture()
@@ -39,6 +94,19 @@ def fp8_module():
         fp8.global_fp8_config = old_config
         fp8.fp8_state = old_state
         fp8.fp8_patches_applied = old_patches_applied
+
+
+@pytest.fixture()
+def stubbed_fp8_module(fp8_module, monkeypatch):
+    monkeypatch.setattr(
+        fp8_module.AutoConfig,
+        "from_pretrained",
+        lambda *_args, **_kwargs: types.SimpleNamespace(num_hidden_layers=4),
+    )
+    monkeypatch.setattr(
+        fp8_module, "monkey_patch_vllm_ray_executor", lambda _config: None
+    )
+    return fp8_module
 
 
 def test_init_fp8_uses_mxfp8_quantization_config(fp8_module, monkeypatch):
@@ -87,15 +155,8 @@ def test_init_fp8_uses_mxfp8_quantization_config(fp8_module, monkeypatch):
     assert "VLLM_USE_DEEP_GEMM_E8M0" not in fp8.os.environ
 
 
-def test_init_fp8_passes_modelopt_ignore_patterns(fp8_module, monkeypatch):
-    fp8 = fp8_module
-
-    monkeypatch.setattr(
-        fp8.AutoConfig,
-        "from_pretrained",
-        lambda *_args, **_kwargs: types.SimpleNamespace(num_hidden_layers=4),
-    )
-    monkeypatch.setattr(fp8, "monkey_patch_vllm_ray_executor", lambda _config: None)
+def test_init_fp8_passes_modelopt_ignore_patterns(stubbed_fp8_module):
+    fp8 = stubbed_fp8_module
 
     vllm_kwargs = fp8.init_fp8(
         {
@@ -119,6 +180,93 @@ def test_init_fp8_passes_modelopt_ignore_patterns(fp8_module, monkeypatch):
         "model.layers.*.mlp.gate",
         "lm_head",
     ]
+
+    from vllm.model_executor.layers.quantization.modelopt import (
+        ModelOptMxFp8Config,
+    )
+
+    modelopt_config = ModelOptMxFp8Config.from_config(quant_config)
+    assert modelopt_config.is_layer_excluded("model.layers.0.self_attn.qkv_proj")
+    assert modelopt_config.is_layer_excluded("model.layers.17.mlp.gate")
+    assert modelopt_config.is_layer_excluded("lm_head")
+    assert not modelopt_config.is_layer_excluded("model.layers.0.mlp.experts")
+
+
+def test_init_fp8_excludes_lm_head_for_non_mx_fp8(stubbed_fp8_module):
+    fp8 = stubbed_fp8_module
+
+    vllm_kwargs = fp8.init_fp8(
+        {
+            "precision": "fp8",
+            "kv_cache_dtype": "auto",
+            "async_engine": False,
+        },
+        "dummy-model",
+        model_parallel_size=1,
+    )
+
+    quant_config = vllm_kwargs["hf_overrides"]["quantization_config"]
+    assert quant_config["ignored_layers"] == ["lm_head"]
+    assert quant_config["ignore"] == ["lm_head"]
+
+
+def test_init_fp8_rejects_ignore_patterns_without_mxfp8(stubbed_fp8_module):
+    fp8 = stubbed_fp8_module
+
+    with pytest.raises(
+        ValueError, match="quantization_ignore_patterns requires is_mx=True"
+    ):
+        fp8.init_fp8(
+            {
+                "precision": "fp8",
+                "kv_cache_dtype": "auto",
+                "async_engine": False,
+                "quantization_ignore_patterns": ["lm_head"],
+            },
+            "dummy-model",
+            model_parallel_size=1,
+        )
+
+
+@pytest.mark.parametrize("patterns", ["lm_head", b"lm_head", 1])
+def test_init_fp8_rejects_scalar_ignore_patterns(stubbed_fp8_module, patterns):
+    fp8 = stubbed_fp8_module
+
+    with pytest.raises(
+        ValueError, match="quantization_ignore_patterns must be a list of strings"
+    ):
+        fp8.init_fp8(
+            {
+                "precision": "fp8",
+                "kv_cache_dtype": "auto",
+                "async_engine": False,
+                "is_mx": True,
+                "quantization_ignore_patterns": patterns,
+            },
+            "dummy-model",
+            model_parallel_size=1,
+        )
+
+
+@pytest.mark.parametrize("patterns", [[1], [""], ["  "]])
+def test_init_fp8_rejects_invalid_ignore_pattern_elements(stubbed_fp8_module, patterns):
+    fp8 = stubbed_fp8_module
+
+    with pytest.raises(
+        ValueError,
+        match="quantization_ignore_patterns must contain non-empty strings",
+    ):
+        fp8.init_fp8(
+            {
+                "precision": "fp8",
+                "kv_cache_dtype": "auto",
+                "async_engine": False,
+                "is_mx": True,
+                "quantization_ignore_patterns": patterns,
+            },
+            "dummy-model",
+            model_parallel_size=1,
+        )
 
 
 @pytest.mark.parametrize("precision", [None, "auto", "bf16", "bfloat16"])

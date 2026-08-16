@@ -102,6 +102,7 @@ common_args=(
 )
 
 precision_args=()
+scope_lock_args=()
 if [[ "${NTRACE_ARM}" == bf16 ]]; then
   precision_args=(
     policy.generation.vllm_cfg.precision=bfloat16
@@ -112,10 +113,12 @@ if [[ "${NTRACE_ARM}" == bf16 ]]; then
   )
 else
   precision_args=(
-    '~policy.generation.vllm_cfg.quantization_ignored_layer_kws'
-    '++policy.generation.vllm_cfg.quantization_ignore_patterns=[model.layers.*.self_attn.*,model.layers.*.mlp.gate,lm_head]'
     ++policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm
     policy.generation.refit_transport=nccl_reshard
+  )
+  scope_lock_args=(
+    '~policy.generation.vllm_cfg.quantization_ignored_layer_kws'
+    '++policy.generation.vllm_cfg.quantization_ignore_patterns=[model.layers.*.self_attn.*,model.layers.*.mlp.gate,lm_head]'
   )
 fi
 
@@ -123,4 +126,5 @@ uv run examples/run_grpo.py \
   "${common_args[@]}" \
   "${precision_args[@]}" \
   "$@" \
+  "${scope_lock_args[@]}" \
   2>&1 | tee "${RUN_ROOT}/run.log"
