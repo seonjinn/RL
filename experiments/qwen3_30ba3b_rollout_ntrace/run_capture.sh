@@ -112,7 +112,8 @@ if [[ "${NTRACE_ARM}" == bf16 ]]; then
   )
 else
   precision_args=(
-    'policy.generation.vllm_cfg.quantization_ignored_layer_kws=[q_proj,k_proj,v_proj,o_proj,lm_head]'
+    '~policy.generation.vllm_cfg.quantization_ignored_layer_kws'
+    '++policy.generation.vllm_cfg.quantization_ignore_patterns=[model.layers.*.self_attn.*,model.layers.*.mlp.gate,lm_head]'
     ++policy.generation.vllm_kwargs.moe_backend=flashinfer_trtllm
     policy.generation.refit_transport=nccl_reshard
   )

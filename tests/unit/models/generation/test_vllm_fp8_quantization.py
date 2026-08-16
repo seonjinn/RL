@@ -87,6 +87,40 @@ def test_init_fp8_uses_mxfp8_quantization_config(fp8_module, monkeypatch):
     assert "VLLM_USE_DEEP_GEMM_E8M0" not in fp8.os.environ
 
 
+def test_init_fp8_passes_modelopt_ignore_patterns(fp8_module, monkeypatch):
+    fp8 = fp8_module
+
+    monkeypatch.setattr(
+        fp8.AutoConfig,
+        "from_pretrained",
+        lambda *_args, **_kwargs: types.SimpleNamespace(num_hidden_layers=4),
+    )
+    monkeypatch.setattr(fp8, "monkey_patch_vllm_ray_executor", lambda _config: None)
+
+    vllm_kwargs = fp8.init_fp8(
+        {
+            "precision": "fp8",
+            "kv_cache_dtype": "auto",
+            "async_engine": False,
+            "is_mx": True,
+            "quantization_ignore_patterns": [
+                "model.layers.*.self_attn.*",
+                "model.layers.*.mlp.gate",
+                "lm_head",
+            ],
+        },
+        "dummy-model",
+        model_parallel_size=1,
+    )
+
+    quant_config = vllm_kwargs["hf_overrides"]["quantization_config"]
+    assert quant_config["ignore"] == [
+        "model.layers.*.self_attn.*",
+        "model.layers.*.mlp.gate",
+        "lm_head",
+    ]
+
+
 @pytest.mark.parametrize("precision", [None, "auto", "bf16", "bfloat16"])
 def test_init_fp8_rejects_mxfp8_without_fp8_precision(
     fp8_module, monkeypatch, precision
