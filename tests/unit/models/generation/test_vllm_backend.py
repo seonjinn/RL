@@ -801,6 +801,43 @@ def test_update_weights_via_ipc_acks_manifest_error_and_returns_false(monkeypatc
 
 
 @pytest.mark.vllm
+def test_nccl_reshard_lifecycle_refreshes_live_parameter_map(monkeypatch):
+    from vllm import config as vllm_config_module
+    from vllm.model_executor import model_loader
+
+    from nemo_rl.models.generation.vllm import vllm_backend
+
+    ext = vllm_backend.VllmInternalWorkerExtension.__new__(
+        vllm_backend.VllmInternalWorkerExtension
+    )
+    ext.model_runner = SimpleNamespace(model=object(), vllm_config=object())
+    ext.model_config = object()
+    ext.device = object()
+    ext.nccl_reshard_refit_info = {"layer_names": [], "per_layer_params": {}}
+    ext.hf_to_local_param_map = "stale"
+    ext._maybe_process_mtp_drafter_after_loading = lambda: None
+    ext._maybe_process_fp8_kv_cache = lambda: None
+    ext.build_hf_to_local_param_map = MagicMock(return_value="refreshed")
+
+    @contextlib.contextmanager
+    def set_current_vllm_config(_config):
+        yield
+
+    monkeypatch.setattr(
+        vllm_config_module, "set_current_vllm_config", set_current_vllm_config
+    )
+    monkeypatch.setattr(
+        model_loader.utils, "process_weights_after_loading", lambda *_args: None
+    )
+
+    with ext._weight_update_lifecycle("nccl_reshard") as finalize:
+        finalize()
+
+    assert ext.hf_to_local_param_map == "refreshed"
+    ext.build_hf_to_local_param_map.assert_called_once_with(ext.nccl_reshard_refit_info)
+
+
+@pytest.mark.vllm
 def test_read_mtp_layer_weights_from_checkpoint_filters_and_reads(tmp_path):
     """Only the requested MTP layer tensors are read, across the shards holding them."""
     from nemo_rl.models.generation.vllm.vllm_backend import (
