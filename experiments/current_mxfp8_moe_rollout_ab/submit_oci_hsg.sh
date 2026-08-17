@@ -10,6 +10,7 @@ EXPECTED_HEAD=${EXPECTED_HEAD:-}
 BASE=${BASE:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna}
 REPO=${REPO:-${BASE}/RL-exp-current-bf16-mxfp8-superset-20260816}
 CONTAINER=${CONTAINER:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/mkar/containers/nemo-rl-nightly-ngc-20260815_212622.sqsh}
+RUNTIME_SITE_PACKAGES=${RUNTIME_SITE_PACKAGES:-}
 HF_HOME=${HF_HOME:-${BASE}/hf_home}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
 EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${BASE}/experiments/current-mxfp8-moe-rollout-ab/${MODEL}/${ARM}/${RUN_SUFFIX}}
@@ -87,6 +88,10 @@ fi
 for path in "${REPO}/${CONFIG}" "${REPO}/ray.sub" "${CONTAINER}" "${HF_HOME}"; do
   test -e "${path}"
 done
+if [[ -n "${RUNTIME_SITE_PACKAGES}" ]]; then
+  test -f "${RUNTIME_SITE_PACKAGES}/urllib3/exceptions.py"
+  test -f "${RUNTIME_SITE_PACKAGES}/nvidia/cudnn/lib/libcudnn.so.9"
+fi
 
 mkdir -p "${EXPERIMENT_ROOT}" "${CACHE_ROOT}"
 WANDB_KEY_FILE=${CACHE_ROOT}/.wandb_key
@@ -112,6 +117,7 @@ repo_sha=${LOCAL_HEAD}
 branch=${BRANCH}
 config=${CONFIG}
 container=${CONTAINER}
+runtime_site_packages=${RUNTIME_SITE_PACKAGES:-container_default}
 python_version=3.13.11
 python_floor_override=experiment_only_metadata_override_from_3.13.14
 gym_source_commit=5a6fc589c0196f73a5931781b06da61f668a80d7
@@ -195,6 +201,9 @@ export CONTAINER
 export CONTAINER_REMAP_ROOT=1
 export GPUS_PER_NODE
 export MOUNTS=/lustre:/lustre
+if [[ -n "${RUNTIME_SITE_PACKAGES}" ]]; then
+  MOUNTS+=",${RUNTIME_SITE_PACKAGES}:/opt/nemo_rl_venv/lib/python3.13/site-packages"
+fi
 export UV_CACHE_DIR_OVERRIDE=${CACHE_ROOT}/uv-cache
 
 SBATCH_ARGS=(
