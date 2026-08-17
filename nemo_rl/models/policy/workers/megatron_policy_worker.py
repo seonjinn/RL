@@ -156,6 +156,7 @@ class _TECudaGraphWorkerPhase(Enum):
 @dataclass
 class _TECudaGraphCallState:
     execution_snapshot: Any
+    enclosing_call_id: int
     capture_count: int = 0
     replay_count: int = 0
     cache_hit_count: int = 0
@@ -169,6 +170,7 @@ class _TECudaGraphCallState:
     router_route_generation: Optional[int] = None
     router_replay_counter_snapshot: dict[str, int] = field(default_factory=dict)
     reduced_router_replay_counters: dict[str, int] = field(default_factory=dict)
+    r3_trace_completed_local_calls: Optional[list[tuple[int, int, int]]] = None
 
 
 @dataclass(frozen=True)
@@ -462,6 +464,7 @@ class MegatronPolicyWorkerImpl(
 
         self.cfg = config
         self._router_replay_enabled = router_replay_enabled(config)
+        self._r3_trace_enclosing_call_counter = 0
         self._nixl_preinit_agent = maybe_preinit_nixl_checkpoint_engine(config)
 
         # Set rank for non-collocated to check which ranks to broadcast from
@@ -1323,12 +1326,26 @@ class MegatronPolicyWorkerImpl(
         call_state.padded_tokens += int(geometry.padded_tokens)
         call_state.capacity_tokens += int(geometry.capacity_tokens)
 
-    def _begin_te_cuda_graph_call(self) -> _TECudaGraphCallState:
+    def _next_r3_trace_enclosing_call_id(self) -> int:
+        enclosing_call_id = (
+            int(getattr(self, "_r3_trace_enclosing_call_counter", 0)) + 1
+        )
+        self._r3_trace_enclosing_call_counter = enclosing_call_id
+        return enclosing_call_id
+
+    def _begin_te_cuda_graph_call(
+        self,
+        *,
+        enclosing_call_id: int,
+    ) -> _TECudaGraphCallState:
         manager = self._te_cuda_graph_bank_manager
         if manager is None:
             raise RuntimeError("TE CUDA Graph counter manager is not initialized.")
+        if type(enclosing_call_id) is not int or enclosing_call_id < 1:
+            raise RuntimeError("TE CUDA Graph enclosing call ID must be positive.")
         return _TECudaGraphCallState(
             execution_snapshot=manager.snapshot_execution_counters(),
+            enclosing_call_id=enclosing_call_id,
             router_replay_counter_snapshot=(
                 self._snapshot_router_replay_graph_counters()
                 if getattr(self, "_router_replay_enabled", False)
@@ -1341,6 +1358,7 @@ class MegatronPolicyWorkerImpl(
 
     def _begin_router_replay_trace_call_counters(
         self,
+        call_state: _TECudaGraphCallState,
         *,
         schedule_key: int,
         num_microbatches: int,
@@ -1348,6 +1366,10 @@ class MegatronPolicyWorkerImpl(
         identity = current_r3_trace_call_identity()
         if identity is None:
             return None
+        if identity.enclosing_call_id != call_state.enclosing_call_id:
+            raise RuntimeError(
+                "Router replay trace identity does not match its enclosing call."
+            )
         if schedule_key != num_microbatches:
             raise RuntimeError(
                 "Router replay trace schedule key must equal num_microbatches."
@@ -1361,12 +1383,15 @@ class MegatronPolicyWorkerImpl(
 
     def _finish_router_replay_trace_call_counters(
         self,
+        call_state: Optional[_TECudaGraphCallState],
         trace_call: Optional[
             tuple[R3TraceCallIdentity, dict[str, int], int, int]
         ],
     ) -> None:
         if trace_call is None:
             return
+        if call_state is None:
+            raise RuntimeError("Router replay trace call has no enclosing state.")
         identity, snapshot, schedule_key, num_microbatches = trace_call
         current = self._snapshot_router_replay_graph_counters()
         counters = {
@@ -1378,6 +1403,11 @@ class MegatronPolicyWorkerImpl(
             call_identity=identity,
             schedule_key=schedule_key,
             num_microbatches=num_microbatches,
+        )
+        if call_state.r3_trace_completed_local_calls is None:
+            call_state.r3_trace_completed_local_calls = []
+        call_state.r3_trace_completed_local_calls.append(
+            (identity.trace_step, schedule_key, num_microbatches)
         )
 
     def _finalize_router_replay_graph_counters(
@@ -1412,11 +1442,6 @@ class MegatronPolicyWorkerImpl(
             for index, name in enumerate(ROUTER_REPLAY_GRAPH_COUNTER_FIELDS)
         }
         call_state.reduced_router_replay_counters = counters
-        trace_router_replay_graph_counter_summary(
-            counters,
-            schedule_key=int(call_state.normalized_schedule_key or 0),
-            num_microbatches=int(call_state.normalized_schedule_key or 0),
-        )
         unsafe = [
             f"{name}={counters[name]}"
             for name in ROUTER_REPLAY_GRAPH_UNSAFE_COUNTER_FIELDS
@@ -1600,6 +1625,12 @@ class MegatronPolicyWorkerImpl(
             padded_tokens=int(geometry[1].item()),
             capacity_tokens=int(geometry[2].item()),
         )
+        if call_state.r3_trace_completed_local_calls:
+            trace_router_replay_graph_counter_summary(
+                call_state.reduced_router_replay_counters,
+                enclosing_call_id=call_state.enclosing_call_id,
+                local_calls=tuple(call_state.r3_trace_completed_local_calls),
+            )
         return cast(dict[str, int], asdict(step_metrics)), {
             "normalized_schedule_key": normalized_schedule_key,
             "token_capacity_per_microbatch": token_capacity,
@@ -2043,8 +2074,11 @@ class MegatronPolicyWorkerImpl(
             "Megatron does not run cross-tokenizer distillation."
         )
         self.timer.start("train")
+        r3_trace_enclosing_call_id = self._next_r3_trace_enclosing_call_id()
         te_cuda_graph_call_state = (
-            self._begin_te_cuda_graph_call()
+            self._begin_te_cuda_graph_call(
+                enclosing_call_id=r3_trace_enclosing_call_id
+            )
             if getattr(self, "_te_cuda_graph_lifecycle", None) is not None
             and not eval_mode
             else None
@@ -2219,15 +2253,21 @@ class MegatronPolicyWorkerImpl(
 
                     # Forward pass.
                     draft_enabled = "draft" in self.cfg and self.cfg["draft"]["enabled"]
-                    with maybe_r3_trace_stage("train", enabled=use_router_replay):
-                        trace_counter_call = (
-                            self._begin_router_replay_trace_call_counters(
-                                schedule_key=te_cuda_graph_key.num_microbatches,
-                                num_microbatches=num_microbatches,
+                    with maybe_r3_trace_stage(
+                        "train",
+                        enabled=use_router_replay,
+                        enclosing_call_id=r3_trace_enclosing_call_id,
+                    ):
+                        trace_counter_call = None
+                        if te_cuda_graph_key is not None:
+                            assert te_cuda_graph_call_state is not None
+                            trace_counter_call = (
+                                self._begin_router_replay_trace_call_counters(
+                                    te_cuda_graph_call_state,
+                                    schedule_key=te_cuda_graph_key.num_microbatches,
+                                    num_microbatches=num_microbatches,
+                                )
                             )
-                            if te_cuda_graph_key is not None
-                            else None
-                        )
                         local_graph_error: Optional[Exception] = None
                         if te_cuda_graph_key is not None:
                             self._te_cuda_graph_phase = (
@@ -2290,7 +2330,8 @@ class MegatronPolicyWorkerImpl(
                                 te_cuda_graph_key,
                             )
                         self._finish_router_replay_trace_call_counters(
-                            trace_counter_call
+                            te_cuda_graph_call_state,
+                            trace_counter_call,
                         )
 
                 # Clear mtp_grad_scale_func after the forward-backward pass so
@@ -2633,8 +2674,11 @@ class MegatronPolicyWorkerImpl(
             is not _TECudaGraphWorkerPhase.IDLE
         ):
             raise RuntimeError("begin_train_step requires an IDLE CUDA Graph worker")
+        r3_trace_enclosing_call_id = self._next_r3_trace_enclosing_call_id()
         te_cuda_graph_call_state = (
-            self._begin_te_cuda_graph_call()
+            self._begin_te_cuda_graph_call(
+                enclosing_call_id=r3_trace_enclosing_call_id
+            )
             if getattr(self, "_te_cuda_graph_lifecycle", None) is not None
             else None
         )
@@ -2653,6 +2697,7 @@ class MegatronPolicyWorkerImpl(
 
         state = self._split_step_state_init(loss_fn=loss_fn, gbs=gbs, mbs=mbs)
         state["te_cuda_graph_call_state"] = te_cuda_graph_call_state
+        state["r3_trace_enclosing_call_id"] = r3_trace_enclosing_call_id
 
         # Null both mcore hooks that would fire a mid-step DP reduce:
         #   grad_sync_func — PP scheduler's direct call on last-MB boundaries
@@ -2838,17 +2883,21 @@ class MegatronPolicyWorkerImpl(
         # The critical wrap: hooks fire (accumulate main_grad) but the
         # per-call reduce dispatch is gated off.
         with (
-            maybe_r3_trace_stage("train", enabled=use_router_replay),
+            maybe_r3_trace_stage(
+                "train",
+                enabled=use_router_replay,
+                enclosing_call_id=state["r3_trace_enclosing_call_id"],
+            ),
             self.model.no_sync(),
         ):
-            trace_counter_call = (
-                self._begin_router_replay_trace_call_counters(
+            trace_counter_call = None
+            if te_cuda_graph_key is not None:
+                assert te_cuda_graph_call_state is not None
+                trace_counter_call = self._begin_router_replay_trace_call_counters(
+                    te_cuda_graph_call_state,
                     schedule_key=te_cuda_graph_key.num_microbatches,
                     num_microbatches=num_microbatches,
                 )
-                if te_cuda_graph_key is not None
-                else None
-            )
             rerun_state_machine = get_rerun_state_machine()
             losses_reduced: list[dict[str, Any]] = []
             while rerun_state_machine.should_run_forward_backward(data_iterator):
@@ -2914,7 +2963,10 @@ class MegatronPolicyWorkerImpl(
                         te_cuda_graph_call_state,
                         te_cuda_graph_key,
                     )
-            self._finish_router_replay_trace_call_counters(trace_counter_call)
+            self._finish_router_replay_trace_call_counters(
+                te_cuda_graph_call_state,
+                trace_counter_call,
+            )
 
         if self.cfg["megatron_cfg"]["empty_unused_memory_level"] >= 1:
             torch.cuda.empty_cache()

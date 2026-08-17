@@ -485,12 +485,18 @@ def _failures_for_graph_consumers(records: list[dict[str, Any]]) -> list[str]:
     def consumer_key(record: dict[str, Any], label: str) -> tuple[Any, ...] | None:
         rank = record.get("rank")
         step = record.get("trace_step")
+        enclosing_call_id = record.get("enclosing_call_id")
         generation = record.get("microbatch_generation")
         layer = record.get("layer_number")
         payload = record.get("payload_idx")
         digest = record.get("route_digest")
         if type(rank) is not int or rank < 0 or type(step) is not int or step < 1:
             failures.append(f"invalid rank/trace_step for {label}")
+            return None
+        if record.get("stage") == "train" and (
+            type(enclosing_call_id) is not int or enclosing_call_id < 1
+        ):
+            failures.append(f"invalid enclosing_call_id for {label}")
             return None
         if type(generation) is not int or generation < 0:
             failures.append(f"invalid microbatch_generation for {label}")
@@ -504,7 +510,16 @@ def _failures_for_graph_consumers(records: list[dict[str, Any]]) -> list[str]:
         identities = identity_key(record, label)
         if identities is None:
             return None
-        return rank, step, generation, layer, payload, str(digest), identities
+        return (
+            rank,
+            step,
+            generation,
+            layer,
+            payload,
+            str(digest),
+            identities,
+            enclosing_call_id,
+        )
 
     keyed: dict[str, dict[tuple[Any, ...], dict[str, Any]]] = {
         "prev-logprob": {},
@@ -558,7 +573,10 @@ def _failures_for_graph_consumers(records: list[dict[str, Any]]) -> list[str]:
     if prev_mapping_identity != train_mapping_identity:
         failures.append("router mapping/content identity differs between prev-logprob and train")
 
-    graph_calls: dict[tuple[int, int, int], list[tuple[tuple[Any, ...], dict[str, Any]]]] = defaultdict(list)
+    graph_calls: dict[
+        tuple[int, int, int, int],
+        list[tuple[tuple[Any, ...], dict[str, Any]]],
+    ] = defaultdict(list)
     surface_signatures: dict[tuple[Any, ...], tuple[Any, ...]] = {}
     for key, record in keyed["graph"].items():
         label = f"rank={key[0]} step={key[1]} generation={key[2]} layer={key[3]} payload={key[4]}"
@@ -598,7 +616,7 @@ def _failures_for_graph_consumers(records: list[dict[str, Any]]) -> list[str]:
         previous_signature = surface_signatures.setdefault(surface, signature)
         if previous_signature != signature:
             failures.append(f"physical signature changed for surface={surface}")
-        graph_calls[(key[0], key[1], schedule_key)].append((key, record))
+        graph_calls[(key[0], key[7], key[1], schedule_key)].append((key, record))
 
     calls_by_schedule: dict[tuple[int, int], list[tuple[int, bool]]] = defaultdict(list)
     copy_state: dict[tuple[int, int, int, int], tuple[int, int]] = {}
@@ -606,7 +624,7 @@ def _failures_for_graph_consumers(records: list[dict[str, Any]]) -> list[str]:
     for key in train_keys:
         expected_mappings_by_rank[key[0]].add((key[3], key[4]))
     for call_key, call_records in graph_calls.items():
-        rank, trace_step, schedule_key = call_key
+        rank, _enclosing_call_id, trace_step, schedule_key = call_key
         outcomes = {record["successful_graph_launch"] for _, record in call_records}
         if len(outcomes) != 1:
             failures.append(f"mixed graph success within call={call_key}")
@@ -655,27 +673,36 @@ def _failures_for_graph_counters(records: list[dict[str, Any]]) -> list[str]:
     ]
     if not counter_records:
         return ["no router_replay_graph_counters records for stage=train"]
-    graph_calls: dict[tuple[int, int, int], list[dict[str, Any]]] = defaultdict(list)
+    graph_calls: dict[tuple[int, int, int, int], list[dict[str, Any]]] = defaultdict(list)
     for record in records:
         if record.get("event") != "router_replay_graph_consumer":
             continue
         rank = record.get("rank")
+        enclosing_call_id = record.get("enclosing_call_id")
         step = record.get("trace_step")
         schedule_key = record.get("schedule_key")
-        if type(rank) is int and type(step) is int and type(schedule_key) is int:
-            graph_calls[(rank, step, schedule_key)].append(record)
-    counters_by_call: dict[tuple[int, int, int], dict[str, Any]] = {}
+        if (
+            type(rank) is int
+            and type(enclosing_call_id) is int
+            and type(step) is int
+            and type(schedule_key) is int
+        ):
+            graph_calls[(rank, enclosing_call_id, step, schedule_key)].append(record)
+    counters_by_call: dict[tuple[int, int, int, int], dict[str, Any]] = {}
     for record in counter_records:
         label = f"stage={record.get('stage')} rank={record.get('rank')}"
         if record.get("stage") != GRAPH_CONSUMER_STAGE:
             failures.append(f"invalid graph counter stage for {label}")
         rank = record.get("rank")
+        enclosing_call_id = record.get("enclosing_call_id")
         trace_step = record.get("trace_step")
         schedule_key = record.get("schedule_key")
         num_microbatches = record.get("num_microbatches")
         if (
             type(rank) is not int
             or rank < 0
+            or type(enclosing_call_id) is not int
+            or enclosing_call_id < 1
             or type(trace_step) is not int
             or trace_step < 1
             or type(schedule_key) is not int
@@ -685,7 +712,7 @@ def _failures_for_graph_counters(records: list[dict[str, Any]]) -> list[str]:
         ):
             failures.append(f"invalid graph counter call identity for {label}")
             continue
-        call_key = (rank, trace_step, schedule_key)
+        call_key = (rank, enclosing_call_id, trace_step, schedule_key)
         if call_key in counters_by_call:
             failures.append(f"duplicate graph counter call={call_key}")
             continue
@@ -744,21 +771,103 @@ def _failures_for_graph_counter_summaries(
     records: list[dict[str, Any]],
 ) -> list[str]:
     failures: list[str] = []
+    local_by_enclosing: dict[
+        tuple[int, int], dict[tuple[int, int, int], dict[str, Any]]
+    ] = defaultdict(dict)
     for record in records:
-        if record.get("event") != "router_replay_graph_counter_summary":
+        if record.get("event") != "router_replay_graph_counters":
             continue
-        label = f"rank={record.get('rank')} schedule={record.get('schedule_key')}"
-        if record.get("stage") != "train" or record.get("scope") != "global_reduced":
-            failures.append(f"invalid graph counter summary identity for {label}")
+        rank = record.get("rank")
+        enclosing_call_id = record.get("enclosing_call_id")
+        trace_step = record.get("trace_step")
         schedule_key = record.get("schedule_key")
         num_microbatches = record.get("num_microbatches")
         if (
-            type(schedule_key) is not int
-            or schedule_key < 1
-            or type(num_microbatches) is not int
-            or num_microbatches != schedule_key
+            type(rank) is int
+            and rank >= 0
+            and type(enclosing_call_id) is int
+            and enclosing_call_id >= 1
+            and type(trace_step) is int
+            and trace_step >= 1
+            and type(schedule_key) is int
+            and schedule_key >= 1
+            and type(num_microbatches) is int
+            and num_microbatches == schedule_key
         ):
-            failures.append(f"invalid graph counter summary schedule for {label}")
+            local_by_enclosing[(rank, enclosing_call_id)][
+                (trace_step, schedule_key, num_microbatches)
+            ] = record
+
+    summaries_by_enclosing: dict[
+        tuple[int, int], list[dict[str, Any]]
+    ] = defaultdict(list)
+    valid_summaries: dict[tuple[int, int], dict[str, Any]] = {}
+    for record in records:
+        if record.get("event") != "router_replay_graph_counter_summary":
+            continue
+        rank = record.get("rank")
+        enclosing_call_id = record.get("enclosing_call_id")
+        label = f"rank={rank} enclosing_call_id={enclosing_call_id}"
+        if (
+            record.get("stage") != "train"
+            or record.get("scope") != "global_reduced"
+            or type(rank) is not int
+            or rank < 0
+            or type(enclosing_call_id) is not int
+            or enclosing_call_id < 1
+        ):
+            failures.append(f"invalid graph counter summary identity for {label}")
+            continue
+        summary_key = (rank, enclosing_call_id)
+        summaries_by_enclosing[summary_key].append(record)
+        raw_local_calls = record.get("local_calls")
+        parsed_local_calls: list[tuple[int, int, int]] = []
+        if not isinstance(raw_local_calls, list) or not raw_local_calls:
+            failures.append(f"invalid graph counter summary local calls for {label}")
+        else:
+            for local_call in raw_local_calls:
+                if not isinstance(local_call, dict) or set(local_call) != {
+                    "trace_step",
+                    "schedule_key",
+                    "num_microbatches",
+                }:
+                    failures.append(
+                        f"invalid graph counter summary local call for {label}"
+                    )
+                    continue
+                trace_step = local_call.get("trace_step")
+                schedule_key = local_call.get("schedule_key")
+                num_microbatches = local_call.get("num_microbatches")
+                if (
+                    type(trace_step) is not int
+                    or trace_step < 1
+                    or type(schedule_key) is not int
+                    or schedule_key < 1
+                    or type(num_microbatches) is not int
+                    or num_microbatches != schedule_key
+                ):
+                    failures.append(
+                        f"invalid graph counter summary local call for {label}"
+                    )
+                    continue
+                parsed_local_calls.append(
+                    (trace_step, schedule_key, num_microbatches)
+                )
+        expected_local_calls = sorted(local_by_enclosing.get(summary_key, {}))
+        if parsed_local_calls != expected_local_calls:
+            failures.append(f"graph counter summary local calls differ for {label}")
+        expected_range = (
+            [expected_local_calls[0][0], expected_local_calls[-1][0]]
+            if expected_local_calls
+            else []
+        )
+        if (
+            record.get("local_call_count") != len(expected_local_calls)
+            or record.get("local_trace_step_range") != expected_range
+            or record.get("schedule_keys")
+            != sorted({call[1] for call in expected_local_calls})
+        ):
+            failures.append(f"graph counter summary metadata differs for {label}")
         counters = record.get("counters")
         if not isinstance(counters, dict) or set(counters) != set(GRAPH_COUNTER_FIELDS):
             failures.append(f"invalid graph counter summary schema for {label}")
@@ -777,6 +886,63 @@ def _failures_for_graph_counter_summaries(
         warmup = counters["route_eager_warmup_payloads"]
         if produced != copied + warmup or copied != launched:
             failures.append(f"inconsistent graph counter summary for {label}")
+        valid_summaries.setdefault(summary_key, record)
+
+    evidence_keys = set(local_by_enclosing)
+    summary_keys = set(summaries_by_enclosing)
+    if evidence_keys != summary_keys:
+        failures.append(
+            "graph counter summaries do not exactly match enclosing calls: "
+            f"summaries={sorted(summary_keys)} evidence={sorted(evidence_keys)}"
+        )
+    for summary_key, summary_records in summaries_by_enclosing.items():
+        if len(summary_records) != 1:
+            failures.append(f"duplicate graph counter summary for {summary_key}")
+
+    calls_by_rank: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    for (rank, enclosing_call_id), calls in local_by_enclosing.items():
+        calls_by_rank[rank].append((min(call[0] for call in calls), enclosing_call_id))
+    for rank, calls in calls_by_rank.items():
+        ordered_ids = [call_id for _, call_id in sorted(calls)]
+        if any(current <= previous for previous, current in zip(ordered_ids, ordered_ids[1:])):
+            failures.append(f"enclosing call IDs regressed or were reused for rank={rank}")
+
+    summaries_by_logical_call: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for (_rank, enclosing_call_id), record in valid_summaries.items():
+        summaries_by_logical_call[enclosing_call_id].append(record)
+    for enclosing_call_id, summary_records in summaries_by_logical_call.items():
+        reference = summary_records[0]
+        for record in summary_records[1:]:
+            for field in (
+                "local_calls",
+                "local_trace_step_range",
+                "local_call_count",
+                "schedule_keys",
+                "counters",
+            ):
+                if record.get(field) != reference.get(field):
+                    failures.append(
+                        "graph counter summaries disagree across ranks for "
+                        f"enclosing_call_id={enclosing_call_id}"
+                    )
+                    break
+        aggregate = {field: 0 for field in GRAPH_COUNTER_FIELDS}
+        for (rank, call_id), calls in local_by_enclosing.items():
+            if call_id != enclosing_call_id:
+                continue
+            for local_record in calls.values():
+                counters = local_record.get("counters")
+                if not isinstance(counters, dict):
+                    continue
+                for field in GRAPH_COUNTER_FIELDS:
+                    value = counters.get(field)
+                    if type(value) is int:
+                        aggregate[field] += value
+        if reference.get("counters") != aggregate:
+            failures.append(
+                "graph counter summary totals differ from local aggregation for "
+                f"enclosing_call_id={enclosing_call_id}"
+            )
     return failures
 
 

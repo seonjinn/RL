@@ -44,7 +44,7 @@ def test_graph_consumer_trace_contains_identity_without_content_or_addresses(
     monkeypatch.setenv("NRL_R3_TRACE", "1")
     monkeypatch.setenv("NRL_R3_TRACE_STEPS", "99")
     monkeypatch.setenv("NRL_R3_TRACE_DIR", str(tmp_path))
-    with r3_trace_stage("train"):
+    with r3_trace_stage("train", enclosing_call_id=7):
         trace_router_replay_graph_consumer(
             action="replay_forward",
             layer_number=4,
@@ -70,6 +70,7 @@ def test_graph_consumer_trace_contains_identity_without_content_or_addresses(
     record = json.loads(next(tmp_path.glob("*.jsonl")).read_text().splitlines()[-1])
     assert record["event"] == "router_replay_graph_consumer"
     assert record["stage"] == "train"
+    assert record["enclosing_call_id"] == 7
     assert record["action"] == "replay_forward"
     assert record["layer_number"] == 4
     assert record["payload_idx"] == 1
@@ -109,11 +110,12 @@ def test_graph_counter_trace_carries_detached_call_identity(
     monkeypatch.setenv("NRL_R3_TRACE", "1")
     monkeypatch.setenv("NRL_R3_TRACE_STEPS", "99")
     monkeypatch.setenv("NRL_R3_TRACE_DIR", str(tmp_path))
-    with r3_trace_stage("train"):
+    with r3_trace_stage("train", enclosing_call_id=7):
         identity = current_r3_trace_call_identity()
         assert identity is not None
         assert identity.stage == "train"
         assert identity.trace_step >= 1
+        assert identity.enclosing_call_id == 7
     assert current_r3_trace_call_identity() is None
 
     trace_router_replay_graph_counters(
@@ -127,6 +129,7 @@ def test_graph_counter_trace_carries_detached_call_identity(
     assert record["event"] == "router_replay_graph_counters"
     assert record["stage"] == "train"
     assert record["trace_step"] == identity.trace_step
+    assert record["enclosing_call_id"] == 7
     assert record["schedule_key"] == 5
     assert record["num_microbatches"] == 5
 
@@ -140,11 +143,19 @@ def test_reduced_graph_counter_summary_uses_distinct_event(
     monkeypatch.setenv("NRL_R3_TRACE_DIR", str(tmp_path))
     trace_router_replay_graph_counter_summary(
         {"route_payloads_produced": 10},
-        schedule_key=5,
-        num_microbatches=5,
+        enclosing_call_id=7,
+        local_calls=((1, 5, 5), (2, 5, 5)),
     )
 
     record = json.loads(next(tmp_path.glob("*.jsonl")).read_text().splitlines()[-1])
     assert record["event"] == "router_replay_graph_counter_summary"
     assert record["scope"] == "global_reduced"
     assert "trace_step" not in record
+    assert record["enclosing_call_id"] == 7
+    assert record["local_calls"] == [
+        {"trace_step": 1, "schedule_key": 5, "num_microbatches": 5},
+        {"trace_step": 2, "schedule_key": 5, "num_microbatches": 5},
+    ]
+    assert record["local_trace_step_range"] == [1, 2]
+    assert record["local_call_count"] == 2
+    assert record["schedule_keys"] == [5]

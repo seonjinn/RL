@@ -58,12 +58,19 @@ _context: contextvars.ContextVar[Optional[dict[str, Any]]] = contextvars.Context
 class R3TraceCallIdentity:
     stage: str
     trace_step: int
+    enclosing_call_id: Optional[int] = None
 
     def __post_init__(self) -> None:
         if type(self.stage) is not str or not self.stage:
             raise ValueError("R3 trace call stage must be a nonempty string.")
         if type(self.trace_step) is not int or self.trace_step < 1:
             raise ValueError("R3 trace call step must be a positive int.")
+        if self.stage == "train" and (
+            type(self.enclosing_call_id) is not int or self.enclosing_call_id < 1
+        ):
+            raise ValueError(
+                "Train R3 trace calls require a positive enclosing_call_id."
+            )
 
 
 def r3_trace_enabled() -> bool:
@@ -128,6 +135,7 @@ def current_r3_trace_call_identity() -> Optional[R3TraceCallIdentity]:
     return R3TraceCallIdentity(
         stage=str(ctx["stage"]),
         trace_step=int(ctx["trace_step"]),
+        enclosing_call_id=ctx.get("enclosing_call_id"),
     )
 
 
@@ -159,11 +167,18 @@ def _trace_path() -> Path:
 def _write_record(record: dict[str, Any]) -> None:
     if not r3_trace_enabled():
         return
+    ctx = _current_context()
+    enclosing_identity = (
+        {"enclosing_call_id": ctx["enclosing_call_id"]}
+        if ctx is not None and ctx.get("stage") == "train"
+        else {}
+    )
     payload = {
         "time": time.time(),
         "host": socket.gethostname(),
         "pid": os.getpid(),
         **_torch_rank_info(),
+        **enclosing_identity,
         **record,
     }
     line = json.dumps(payload, sort_keys=True) + "\n"
@@ -660,13 +675,22 @@ def _trace_consumer_payload(
 
 
 @contextmanager
-def r3_trace_stage(stage: str) -> Iterator[None]:
+def r3_trace_stage(
+    stage: str,
+    *,
+    enclosing_call_id: Optional[int] = None,
+) -> Iterator[None]:
+    if stage == "train" and (
+        type(enclosing_call_id) is not int or enclosing_call_id < 1
+    ):
+        raise ValueError("Train R3 trace stages require a positive enclosing_call_id.")
     active, step = _should_trace_step(f"stage:{stage}")
     token = _context.set(
         {
             "active": active,
             "stage": stage,
             "trace_step": step,
+            "enclosing_call_id": enclosing_call_id,
             "microbatch_counts": defaultdict(int),
         }
     )
@@ -677,10 +701,15 @@ def r3_trace_stage(stage: str) -> Iterator[None]:
         _context.reset(token)
 
 
-def maybe_r3_trace_stage(stage: str, *, enabled: bool) -> Any:
+def maybe_r3_trace_stage(
+    stage: str,
+    *,
+    enabled: bool,
+    enclosing_call_id: Optional[int] = None,
+) -> Any:
     if not enabled or not r3_trace_enabled():
         return nullcontext()
-    return r3_trace_stage(stage)
+    return r3_trace_stage(stage, enclosing_call_id=enclosing_call_id)
 
 
 def trace_cp_routed_experts(
@@ -856,6 +885,11 @@ def trace_router_replay_graph_counters(
         return
     if call_identity.stage != "train" or call_identity.trace_step < 1:
         raise ValueError("Graph counters require a valid train trace call identity.")
+    if (
+        type(call_identity.enclosing_call_id) is not int
+        or call_identity.enclosing_call_id < 1
+    ):
+        raise ValueError("Graph counters require a positive enclosing_call_id.")
     if type(schedule_key) is not int or schedule_key < 1:
         raise ValueError("Graph counter schedule_key must be a positive int.")
     if type(num_microbatches) is not int or num_microbatches < 1:
@@ -865,6 +899,7 @@ def trace_router_replay_graph_counters(
             "event": "router_replay_graph_counters",
             "stage": call_identity.stage,
             "trace_step": call_identity.trace_step,
+            "enclosing_call_id": call_identity.enclosing_call_id,
             "schedule_key": schedule_key,
             "num_microbatches": num_microbatches,
             "counters": dict(counters),
@@ -875,23 +910,50 @@ def trace_router_replay_graph_counters(
 def trace_router_replay_graph_counter_summary(
     counters: dict[str, int],
     *,
-    schedule_key: int,
-    num_microbatches: int,
+    enclosing_call_id: int,
+    local_calls: Sequence[tuple[int, int, int]],
 ) -> None:
     """Trace a reduced whole-training-call summary distinct from local calls."""
     if not r3_trace_enabled():
         return
-    if type(schedule_key) is not int or schedule_key < 1:
-        raise ValueError("Graph counter summary schedule_key must be a positive int.")
-    if type(num_microbatches) is not int or num_microbatches < 1:
-        raise ValueError("Graph counter summary num_microbatches must be positive.")
+    if type(enclosing_call_id) is not int or enclosing_call_id < 1:
+        raise ValueError("Graph counter summary enclosing_call_id must be positive.")
+    if not local_calls:
+        raise ValueError("Graph counter summary requires completed local calls.")
+    normalized_calls: list[tuple[int, int, int]] = []
+    for trace_step, schedule_key, num_microbatches in local_calls:
+        if (
+            type(trace_step) is not int
+            or trace_step < 1
+            or type(schedule_key) is not int
+            or schedule_key < 1
+            or type(num_microbatches) is not int
+            or num_microbatches != schedule_key
+        ):
+            raise ValueError("Graph counter summary has an invalid local call.")
+        normalized_calls.append((trace_step, schedule_key, num_microbatches))
+    if len({call[0] for call in normalized_calls}) != len(normalized_calls):
+        raise ValueError("Graph counter summary has duplicate local trace steps.")
+    normalized_calls.sort()
+    trace_steps = [call[0] for call in normalized_calls]
+    schedule_keys = sorted({call[1] for call in normalized_calls})
     _write_record(
         {
             "event": "router_replay_graph_counter_summary",
             "scope": "global_reduced",
             "stage": "train",
-            "schedule_key": schedule_key,
-            "num_microbatches": num_microbatches,
+            "enclosing_call_id": enclosing_call_id,
+            "local_calls": [
+                {
+                    "trace_step": trace_step,
+                    "schedule_key": schedule_key,
+                    "num_microbatches": num_microbatches,
+                }
+                for trace_step, schedule_key, num_microbatches in normalized_calls
+            ],
+            "local_trace_step_range": [trace_steps[0], trace_steps[-1]],
+            "local_call_count": len(normalized_calls),
+            "schedule_keys": schedule_keys,
             "counters": dict(counters),
         }
     )

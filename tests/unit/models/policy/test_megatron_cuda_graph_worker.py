@@ -947,6 +947,48 @@ def test_sync_and_split_emit_call_local_counters_inside_trace_context() -> None:
             "_begin_router_replay_trace_call_counters",
             "_finish_router_replay_trace_call_counters",
         } <= calls
+        trace_context = next(
+            item.context_expr
+            for item in trace_with.items
+            if isinstance(item.context_expr, ast.Call)
+            and isinstance(item.context_expr.func, ast.Name)
+            and item.context_expr.func.id == "maybe_r3_trace_stage"
+        )
+        assert {
+            keyword.arg for keyword in trace_context.keywords
+        } >= {"enabled", "enclosing_call_id"}
+
+
+def test_graph_enclosing_call_ids_are_monotonic_and_stored_on_call_state() -> None:
+    states: list[SimpleNamespace] = []
+
+    def make_state(**kwargs: Any) -> SimpleNamespace:
+        kwargs.setdefault("r3_trace_completed_local_calls", None)
+        state = SimpleNamespace(**kwargs)
+        states.append(state)
+        return state
+
+    worker_type = _extract_worker_methods(
+        {"_begin_te_cuda_graph_call", "_next_r3_trace_enclosing_call_id"},
+        {"_TECudaGraphCallState": make_state},
+    )
+    worker = worker_type()
+    worker._te_cuda_graph_bank_manager = SimpleNamespace(
+        snapshot_execution_counters=lambda: "snapshot"
+    )
+    worker._router_replay_enabled = False
+
+    first = worker._begin_te_cuda_graph_call(
+        enclosing_call_id=worker._next_r3_trace_enclosing_call_id()
+    )
+    second = worker._begin_te_cuda_graph_call(
+        enclosing_call_id=worker._next_r3_trace_enclosing_call_id()
+    )
+
+    assert first.enclosing_call_id == 1
+    assert second.enclosing_call_id == 2
+    assert first.r3_trace_completed_local_calls is None
+    assert second.r3_trace_completed_local_calls is None
 
 
 def test_graph_counters_are_local_to_each_trace_context() -> None:
@@ -956,8 +998,8 @@ def test_graph_counters_are_local_to_each_trace_context() -> None:
         "route_graph_launches",
         "route_eager_warmup_payloads",
     )
-    first = SimpleNamespace(stage="train", trace_step=7)
-    second = SimpleNamespace(stage="train", trace_step=8)
+    first = SimpleNamespace(stage="train", trace_step=7, enclosing_call_id=3)
+    second = SimpleNamespace(stage="train", trace_step=8, enclosing_call_id=3)
     identities = [first, second, None]
     snapshots = iter(
         (
@@ -983,17 +1025,21 @@ def test_graph_counters_are_local_to_each_trace_context() -> None:
     )
     worker = worker_type()
     worker._snapshot_router_replay_graph_counters = lambda: next(snapshots)
+    call_state = SimpleNamespace(
+        enclosing_call_id=3,
+        r3_trace_completed_local_calls=[],
+    )
 
     first_call = worker._begin_router_replay_trace_call_counters(
-        schedule_key=5, num_microbatches=5
+        call_state, schedule_key=5, num_microbatches=5
     )
-    worker._finish_router_replay_trace_call_counters(first_call)
+    worker._finish_router_replay_trace_call_counters(call_state, first_call)
     second_call = worker._begin_router_replay_trace_call_counters(
-        schedule_key=5, num_microbatches=5
+        call_state, schedule_key=5, num_microbatches=5
     )
-    worker._finish_router_replay_trace_call_counters(second_call)
+    worker._finish_router_replay_trace_call_counters(call_state, second_call)
     untraced = worker._begin_router_replay_trace_call_counters(
-        schedule_key=5, num_microbatches=5
+        call_state, schedule_key=5, num_microbatches=5
     )
 
     assert untraced is None
@@ -1002,6 +1048,7 @@ def test_graph_counters_are_local_to_each_trace_context() -> None:
     assert records[1]["counters"] == dict.fromkeys(fields, 3)
     assert all(record["schedule_key"] == 5 for record in records)
     assert all(record["num_microbatches"] == 5 for record in records)
+    assert call_state.r3_trace_completed_local_calls == [(7, 5, 5), (8, 5, 5)]
 
 
 def test_router_route_counters_reduce_globally_and_block_unsafe_state() -> None:
@@ -1638,6 +1685,9 @@ def test_metrics_validate_and_reduce_across_tp_cp_then_pp_for_cp_replicas() -> N
         padded_tokens=27,
         capacity_tokens=32,
         normalized_schedule_key=5,
+        enclosing_call_id=1,
+        r3_trace_completed_local_calls=[],
+        reduced_router_replay_counters={},
     )
 
     metrics, contract = worker._finalize_te_cuda_graph_call(call_state)
