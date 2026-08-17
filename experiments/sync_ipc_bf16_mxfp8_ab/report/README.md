@@ -39,6 +39,8 @@ lower. MXFP8 therefore shows a real generation gain, but the extra BF16 policy
 logprob pass required for importance-sampling correction and the MXFP8 refit
 conversion cost more than the generation stage saves.
 
+![Qwen3-30B-A3B BF16 versus MXFP8 summary](plots/qwen3_30ba3b_mxfp8_summary_600dpi.png)
+
 ### Nemotron3 Nano
 
 | Metric | BF16 rollout | MXFP8 rollout | MXFP8 change |
