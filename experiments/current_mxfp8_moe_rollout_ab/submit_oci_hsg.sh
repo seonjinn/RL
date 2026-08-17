@@ -17,6 +17,7 @@ EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${BASE}/experiments/current-mxfp8-moe-rollout
 CACHE_ROOT=${CACHE_ROOT:-${BASE}/.cache/current-mxfp8-moe-rollout-ab/${MODEL}/${ARM}/${RUN_SUFFIX}}
 WANDB_PROJECT=${WANDB_PROJECT:-sna-current-mxfp8-moe-rollout-ab}
 WANDB_NAME=${WANDB_NAME:-${MODEL}-${ARM}-20step-${RUN_SUFFIX}}
+WANDB_ENABLED=${WANDB_ENABLED:-true}
 ACCOUNT=${SLURM_ACCOUNT:-nemotron_sw_post}
 PARTITION=${PARTITION:-batch}
 TOTAL_NODES=${TOTAL_NODES:-8}
@@ -95,7 +96,7 @@ fi
 
 mkdir -p "${EXPERIMENT_ROOT}" "${CACHE_ROOT}"
 WANDB_KEY_FILE=${CACHE_ROOT}/.wandb_key
-if [[ -f "${HOME}/.netrc" ]]; then
+if [[ "${WANDB_ENABLED}" == true && -f "${HOME}/.netrc" ]]; then
   umask 077
   awk '
     {
@@ -105,11 +106,19 @@ if [[ -f "${HOME}/.netrc" ]]; then
       }
     }
   ' "${HOME}/.netrc" >"${WANDB_KEY_FILE}"
-elif [[ -n "${WANDB_API_KEY:-}" ]]; then
+elif [[ "${WANDB_ENABLED}" == true && -n "${WANDB_API_KEY:-}" ]]; then
   umask 077
   printf '%s\n' "${WANDB_API_KEY}" >"${WANDB_KEY_FILE}"
 fi
-test -s "${WANDB_KEY_FILE}"
+if [[ "${WANDB_ENABLED}" == true ]]; then
+  test -s "${WANDB_KEY_FILE}"
+  WANDB_KEY_SETUP="export WANDB_API_KEY=\"\$(cat ${WANDB_KEY_FILE})\""
+elif [[ "${WANDB_ENABLED}" == false ]]; then
+  WANDB_KEY_SETUP=:
+else
+  echo "WANDB_ENABLED must be true or false" >&2
+  exit 2
+fi
 
 cat >"${EXPERIMENT_ROOT}/metadata.env" <<EOF
 repo=${REPO}
@@ -139,6 +148,7 @@ max_steps=${MAX_STEPS}
 seed=42
 wandb_project=${WANDB_PROJECT}
 wandb_name=${WANDB_NAME}
+wandb_enabled=${WANDB_ENABLED}
 EOF
 
 COMMAND=$(cat <<EOF
@@ -157,7 +167,7 @@ export UV_CACHE_DIR=/root/.cache/uv
 export UV_PROJECT_ENVIRONMENT=${CACHE_ROOT}/driver-venv
 export UV_PYTHON_INSTALL_DIR=${CACHE_ROOT}/uv-python
 export UV_LOCK_TIMEOUT=7200
-export WANDB_API_KEY="\$(cat ${WANDB_KEY_FILE})"
+${WANDB_KEY_SETUP}
 printf 'NEMO_RL_SOURCE_COMMIT=%s\n' "\$(git rev-parse HEAD)"
 uv run --frozen examples/run_grpo.py \
   --config ${CONFIG} \
@@ -184,7 +194,7 @@ uv run --frozen examples/run_grpo.py \
   ++grpo.val_at_end=false \
   checkpointing.enabled=false \
   logger.log_dir=${EXPERIMENT_ROOT}/logs \
-  logger.wandb_enabled=true \
+  logger.wandb_enabled=${WANDB_ENABLED} \
   logger.tensorboard_enabled=true \
   logger.monitor_gpus=true \
   ++logger.wandb.entity=nvidia \
