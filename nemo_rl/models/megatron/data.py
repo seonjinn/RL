@@ -582,13 +582,6 @@ def _validate_cuda_graph_training_inputs(
                 f"{field_name} must have the fixed CUDA graph entry capacity "
                 f"({expected_entries})."
             )
-    if not torch.equal(packed_seq_params.cu_seqlens_q, packed_seq_params.cu_seqlens_kv):
-        raise ValueError("PackedSeqParams Q/KV logical boundaries must match.")
-    if not torch.equal(
-        packed_seq_params.cu_seqlens_q_padded,
-        packed_seq_params.cu_seqlens_kv_padded,
-    ):
-        raise ValueError("PackedSeqParams Q/KV padded boundaries must match.")
     if packed_seq_params.total_tokens != local_token_capacity:
         raise ValueError(
             "PackedSeqParams.total_tokens must equal the CP-local fixed token capacity."
@@ -616,6 +609,77 @@ def _validate_cuda_graph_training_inputs(
             raise ValueError(
                 f"Real {field_name} must contain exactly one endpoint per real "
                 "sequence plus the origin."
+            )
+
+    if int(inputs.cu_seqlens[-1]) != geometry.logical_tokens:
+        raise ValueError(
+            "Real logical boundaries must end at packed geometry logical_tokens."
+        )
+    if int(inputs.cu_seqlens_padded[-1]) != geometry.padded_tokens:
+        raise ValueError(
+            "Real padded boundaries must end at packed geometry padded_tokens."
+        )
+
+    dummy_tokens = global_token_capacity - geometry.padded_tokens
+    expected_logical_boundaries = inputs.cu_seqlens
+    expected_padded_boundaries = inputs.cu_seqlens_padded
+    if dummy_tokens:
+        has_inter_sequence_padding = not torch.equal(
+            inputs.cu_seqlens,
+            inputs.cu_seqlens_padded,
+        )
+        dummy_logical_endpoint = (
+            geometry.logical_tokens + dummy_tokens
+            if has_inter_sequence_padding
+            else global_token_capacity
+        )
+        expected_logical_boundaries = torch.cat(
+            (
+                expected_logical_boundaries,
+                expected_logical_boundaries.new_tensor([dummy_logical_endpoint]),
+            )
+        )
+        expected_padded_boundaries = torch.cat(
+            (
+                expected_padded_boundaries,
+                expected_padded_boundaries.new_tensor([global_token_capacity]),
+            )
+        )
+
+    def pad_boundaries_to_capacity(boundaries: torch.Tensor) -> torch.Tensor:
+        trailing_entries = expected_entries - boundaries.numel()
+        if trailing_entries < 0:
+            raise ValueError(
+                "Fixed packed sequence boundaries exceed their entry capacity."
+            )
+        if trailing_entries == 0:
+            return boundaries
+        return torch.cat(
+            (
+                boundaries,
+                boundaries.new_full((trailing_entries,), boundaries[-1]),
+            )
+        )
+
+    expected_logical_boundaries = pad_boundaries_to_capacity(
+        expected_logical_boundaries
+    )
+    expected_padded_boundaries = pad_boundaries_to_capacity(expected_padded_boundaries)
+    for field_name, expected_boundaries in (
+        ("cu_seqlens_q", expected_logical_boundaries),
+        ("cu_seqlens_kv", expected_logical_boundaries),
+        ("cu_seqlens_q_padded", expected_padded_boundaries),
+        ("cu_seqlens_kv_padded", expected_padded_boundaries),
+    ):
+        cumulative = getattr(packed_seq_params, field_name)
+        if (
+            cumulative.dtype != expected_boundaries.dtype
+            or cumulative.device != expected_boundaries.device
+            or not torch.equal(cumulative, expected_boundaries)
+        ):
+            raise ValueError(
+                f"{field_name} does not match the exact fixed packed sequence "
+                "boundaries."
             )
 
     expected_seq_idx = _build_packed_seq_idx(

@@ -150,6 +150,76 @@ def _extract_make_processed_microbatch_iterator(namespace: dict[str, Any]) -> An
     return namespace["make_processed_microbatch_iterator"]
 
 
+def _extract_validate_cuda_graph_training_inputs() -> Any:
+    tree = ast.parse(_DATA_PATH.read_text())
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_validate_cuda_graph_training_inputs"
+    )
+    body = [
+        ast.ImportFrom(
+            module="__future__",
+            names=[ast.alias(name="annotations")],
+            level=0,
+        ),
+        function,
+    ]
+
+    def build_seq_idx(
+        cu_seqlens_padded: torch.Tensor,
+        *,
+        capacity_tokens: int,
+        real_sequence_count: int,
+    ) -> torch.Tensor:
+        parts = []
+        for sequence_id in range(real_sequence_count):
+            physical_length = int(
+                cu_seqlens_padded[sequence_id + 1] - cu_seqlens_padded[sequence_id]
+            )
+            parts.extend([sequence_id] * physical_length)
+        parts.extend(
+            [real_sequence_count] * (capacity_tokens - int(cu_seqlens_padded[-1]))
+        )
+        return torch.tensor([parts], dtype=torch.int32)
+
+    def build_sample_ids(
+        cu_seqlens_padded: torch.Tensor,
+        *,
+        capacity_tokens: int,
+        real_sequence_count: int,
+        **_kwargs: Any,
+    ) -> torch.Tensor:
+        parts = []
+        for sequence_id in range(real_sequence_count):
+            physical_length = int(
+                cu_seqlens_padded[sequence_id + 1] - cu_seqlens_padded[sequence_id]
+            )
+            parts.extend([sequence_id] * physical_length)
+        parts.extend([0] * (capacity_tokens - int(cu_seqlens_padded[-1])))
+        return torch.tensor(parts, dtype=torch.int64)
+
+    namespace = {
+        "Any": Any,
+        "ProcessedInputs": Any,
+        "_build_packed_seq_aux_loss_sample_ids": build_sample_ids,
+        "_build_packed_seq_idx": build_seq_idx,
+        "get_context_parallel_rank": lambda: 0,
+        "get_context_parallel_world_size": lambda: 1,
+        "torch": torch,
+    }
+    exec(
+        compile(
+            ast.fix_missing_locations(ast.Module(body=body, type_ignores=[])),
+            _DATA_PATH,
+            "exec",
+        ),
+        namespace,
+    )
+    return namespace["_validate_cuda_graph_training_inputs"]
+
+
 def _packed_seq_params() -> Any:
     return SimpleNamespace(
         qkv_format="thd",
@@ -211,6 +281,84 @@ def _replay_microbatch(
         identity=identity,
         full_cuda_payload=full_cuda_payload,
     )
+
+
+def _fixed_boundary_replay_microbatch(
+    generation_provider: Callable[[], int],
+    *,
+    logical_values: tuple[int, ...] = (0, 2, 3),
+    padded_values: tuple[int, ...] = (0, 2, 4),
+    capacity_tokens: int = 8,
+    max_sequences: int = 3,
+) -> Any:
+    microbatch = _replay_microbatch(11, generation_provider)
+    logical = torch.tensor(logical_values, dtype=torch.int32)
+    padded = torch.tensor(padded_values, dtype=torch.int32)
+    real_sequence_count = len(logical_values) - 1
+    dummy_tokens = capacity_tokens - padded_values[-1]
+    packed_logical_values = list(logical_values)
+    packed_padded_values = list(padded_values)
+    if dummy_tokens:
+        has_inter_sequence_padding = logical_values != padded_values
+        packed_logical_values.append(
+            logical_values[-1] + dummy_tokens
+            if has_inter_sequence_padding
+            else capacity_tokens
+        )
+        packed_padded_values.append(capacity_tokens)
+    while len(packed_logical_values) < max_sequences + 1:
+        packed_logical_values.append(packed_logical_values[-1])
+        packed_padded_values.append(packed_padded_values[-1])
+    packed_logical = torch.tensor(packed_logical_values, dtype=torch.int32)
+    packed_padded = torch.tensor(packed_padded_values, dtype=torch.int32)
+    sequence_ids: list[int] = []
+    sample_ids: list[int] = []
+    structural_mask: list[bool] = []
+    for sequence_id in range(real_sequence_count):
+        logical_length = logical_values[sequence_id + 1] - logical_values[sequence_id]
+        physical_length = padded_values[sequence_id + 1] - padded_values[sequence_id]
+        sequence_ids.extend([sequence_id] * physical_length)
+        sample_ids.extend([sequence_id] * physical_length)
+        structural_mask.extend(
+            [False] * logical_length + [True] * (physical_length - logical_length)
+        )
+    sequence_ids.extend([real_sequence_count] * dummy_tokens)
+    sample_ids.extend([0] * dummy_tokens)
+    structural_mask.extend([True] * dummy_tokens)
+    microbatch.input_ids = torch.zeros((1, capacity_tokens), dtype=torch.int64)
+    microbatch.input_ids_cp_sharded = microbatch.input_ids
+    microbatch.structural_padding_mask = torch.tensor(
+        [structural_mask], dtype=torch.bool
+    )
+    microbatch.structural_padding_mask_cp_sharded = microbatch.structural_padding_mask
+    microbatch.cu_seqlens = logical
+    microbatch.cu_seqlens_padded = padded
+    microbatch.packed_geometry = SimpleNamespace(
+        logical_tokens=logical_values[-1],
+        padded_tokens=padded_values[-1],
+        capacity_tokens=capacity_tokens,
+        real_sequence_count=real_sequence_count,
+        cu_seqlens_capacity_entries=max_sequences + 1,
+    )
+    microbatch.packed_seq_params = SimpleNamespace(
+        qkv_format="thd",
+        cu_seqlens_q=packed_logical,
+        cu_seqlens_kv=packed_logical.clone(),
+        cu_seqlens_q_padded=packed_padded,
+        cu_seqlens_kv_padded=packed_padded.clone(),
+        max_seqlen_q=capacity_tokens,
+        max_seqlen_kv=capacity_tokens,
+        local_cp_size=None,
+        cp_group=None,
+        total_tokens=capacity_tokens,
+        seq_idx=torch.tensor([sequence_ids], dtype=torch.int32),
+        tokens_per_sample=None,
+        pad_between_seqs=True,
+        seq_aux_loss_sample_ids=torch.tensor(sample_ids, dtype=torch.int64),
+        seq_aux_loss_num_samples=torch.tensor(real_sequence_count, dtype=torch.int64),
+        seq_aux_loss_max_samples=max_sequences - 1,
+    )
+    return microbatch
 
 
 @pytest.mark.mcore
@@ -484,6 +632,89 @@ def test_replay_identity_binds_every_packed_seq_consumer_field(
 
     with pytest.raises(RuntimeError, match="identity.*index 0"):
         next(replayable.replay())
+
+
+@pytest.mark.parametrize(
+    ("fields", "replacement"),
+    [
+        (
+            ("cu_seqlens_q", "cu_seqlens_kv"),
+            torch.tensor([0, 2, 4, 7], dtype=torch.int32),
+        ),
+        (
+            ("cu_seqlens_q_padded", "cu_seqlens_kv_padded"),
+            torch.tensor([0, 2, 5, 8], dtype=torch.int32),
+        ),
+    ],
+    ids=("logical-qkv-pair", "padded-qkv-pair"),
+)
+def test_production_identity_rejects_identical_qkv_boundary_mutation_before_yield(
+    fields: tuple[str, str],
+    replacement: torch.Tensor,
+) -> None:
+    components = _extract_replay_identity_components()
+    replayable_type = components["ReplayableProcessedMicrobatchIterator"]
+    replay_identity = components["_processed_microbatch_replay_identity"]
+    validate_graph_inputs = _extract_validate_cuda_graph_training_inputs()
+    generations = iter((49,))
+    factory_call = 0
+
+    def factory(generation_provider: Callable[[], int]) -> Iterator[Any]:
+        nonlocal factory_call
+        factory_call += 1
+        microbatch = _fixed_boundary_replay_microbatch(generation_provider)
+        if factory_call == 2:
+            for field in fields:
+                setattr(microbatch.packed_seq_params, field, replacement.clone())
+        validate_graph_inputs(
+            microbatch,
+            global_token_capacity=8,
+            thd_max_packed_sequences=3,
+        )
+        microbatch.replay_identity = replay_identity(
+            microbatch,
+            source_identity="exact-cpu-source",
+        )
+        yield microbatch
+
+    replayable = replayable_type(factory, lambda: next(generations))
+    list(replayable)
+
+    with pytest.raises(ValueError, match="fixed.*boundaries"):
+        next(replayable.replay())
+
+
+@pytest.mark.parametrize(
+    ("logical_values", "padded_values"),
+    [
+        ((0, 3), (0, 4)),
+        ((0, 2, 3), (0, 4, 8)),
+    ],
+    ids=("dummy-plus-trailing-entry", "no-dummy-plus-trailing-entry"),
+)
+def test_production_identity_accepts_exact_fixed_boundary_capacity_contract(
+    logical_values: tuple[int, ...],
+    padded_values: tuple[int, ...],
+) -> None:
+    components = _extract_replay_identity_components()
+    replay_identity = components["_processed_microbatch_replay_identity"]
+    validate_graph_inputs = _extract_validate_cuda_graph_training_inputs()
+    microbatch = _fixed_boundary_replay_microbatch(
+        lambda: 50,
+        logical_values=logical_values,
+        padded_values=padded_values,
+    )
+
+    validate_graph_inputs(
+        microbatch,
+        global_token_capacity=8,
+        thd_max_packed_sequences=3,
+    )
+
+    assert replay_identity(
+        microbatch,
+        source_identity="exact-cpu-source",
+    )
 
 
 def test_graph_identity_is_derived_before_h2d() -> None:
