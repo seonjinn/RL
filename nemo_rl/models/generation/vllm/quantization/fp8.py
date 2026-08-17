@@ -1183,17 +1183,14 @@ def process_weights_after_loading_mxfp8_moe(self, layer) -> None:
     epilogue_tile_m = 128
     e8m0_unit_scale = 127
     is_gated = self.moe.is_act_and_mul
-    intermediate_size_factor = 2 if is_gated else 1
     w13_weight = layer.w13_weight.data
     w2_weight = layer.w2_weight.data
     w13_scale = layer.w13_weight_scale_from_checkpoint.data
     w2_scale = layer.w2_weight_scale_from_checkpoint.data
     unpadded_hidden_size = w13_weight.shape[2]
     unpadded_intermediate_size = w2_weight.shape[2]
-    padded_hidden_size, padded_intermediate_size = (
-        flashinfer_mxfp8_moe_padding_plan(
-            unpadded_hidden_size, unpadded_intermediate_size
-        )
+    padded_hidden_size, padded_intermediate_size = flashinfer_mxfp8_moe_padding_plan(
+        unpadded_hidden_size, unpadded_intermediate_size
     )
     requires_padding = (
         padded_hidden_size != unpadded_hidden_size
@@ -1212,29 +1209,42 @@ def process_weights_after_loading_mxfp8_moe(self, layer) -> None:
         )
         layer.mxfp8_padded_intermediate_size_per_partition = padded_intermediate_size
 
-        w13_weight = pad_tensor_dim(
-            w13_weight,
-            1,
-            intermediate_size_factor * padded_intermediate_size,
-        )
+        if is_gated:
+            gate_weight, up_weight = w13_weight.chunk(2, dim=1)
+            gate_scale, up_scale = w13_scale.chunk(2, dim=1)
+            w13_weight = torch.cat(
+                (
+                    pad_tensor_dim(gate_weight, 1, padded_intermediate_size),
+                    pad_tensor_dim(up_weight, 1, padded_intermediate_size),
+                ),
+                dim=1,
+            )
+            w13_scale = torch.cat(
+                (
+                    pad_tensor_dim(
+                        gate_scale, 1, padded_intermediate_size, e8m0_unit_scale
+                    ),
+                    pad_tensor_dim(
+                        up_scale, 1, padded_intermediate_size, e8m0_unit_scale
+                    ),
+                ),
+                dim=1,
+            )
+        else:
+            w13_weight = pad_tensor_dim(w13_weight, 1, padded_intermediate_size)
+            w13_scale = pad_tensor_dim(
+                w13_scale, 1, padded_intermediate_size, e8m0_unit_scale
+            )
         w13_weight = pad_tensor_dim(w13_weight, 2, padded_hidden_size)
         w2_weight = pad_tensor_dim(w2_weight, 1, padded_hidden_size)
         w2_weight = pad_tensor_dim(w2_weight, 2, padded_intermediate_size)
-        w13_scale = pad_tensor_dim(
-            w13_scale,
-            1,
-            intermediate_size_factor * padded_intermediate_size,
-            e8m0_unit_scale,
-        )
         w13_scale = pad_tensor_dim(
             w13_scale,
             2,
             padded_hidden_size // MXFP8_BLOCK_SIZE,
             e8m0_unit_scale,
         )
-        w2_scale = pad_tensor_dim(
-            w2_scale, 1, padded_hidden_size, e8m0_unit_scale
-        )
+        w2_scale = pad_tensor_dim(w2_scale, 1, padded_hidden_size, e8m0_unit_scale)
         w2_scale = pad_tensor_dim(
             w2_scale,
             2,
@@ -1278,15 +1288,12 @@ def process_weights_after_loading_mxfp8_moe(self, layer) -> None:
             kernel_moe_config = copy(self.moe)
             kernel_moe_config.hidden_dim = padded_hidden_size
             kernel_moe_config.hidden_dim_unpadded = unpadded_hidden_size
-            kernel_moe_config.intermediate_size_per_partition = (
-                padded_intermediate_size
-            )
+            kernel_moe_config.intermediate_size_per_partition = padded_intermediate_size
             kernel_moe_config.intermediate_size_per_partition_unpadded = (
                 unpadded_intermediate_size
             )
             kernel_moe_config.intermediate_size = (
-                padded_intermediate_size
-                * kernel_moe_config.moe_parallel_config.tp_size
+                padded_intermediate_size * kernel_moe_config.moe_parallel_config.tp_size
             )
         self.moe_quant_config = self.get_fused_moe_quant_config(layer)
         assert self.moe_quant_config is not None
