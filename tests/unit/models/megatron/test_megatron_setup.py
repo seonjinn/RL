@@ -1684,17 +1684,111 @@ class TestApplyPerformanceConfig:
 
         assert model_cfg.use_te_rng_tracker is True
 
-    def test_inherited_te_graph_impl_cannot_bypass_router_replay_gate(self) -> None:
-        """Provider graph defaults must be checked against RouterReplay."""
+    @pytest.mark.parametrize(
+        ("mutation", "error"),
+        (
+            ("missing_capability", "r3_router_cuda_graph_input_v1"),
+            ("router_fusion", "fusion"),
+            ("fp8", "BF16"),
+            ("nvfp4", "BF16"),
+            ("non_bf16", "BF16"),
+            ("non_hybridep", "HybridEP"),
+        ),
+    )
+    def test_inherited_te_graph_impl_cannot_bypass_router_replay_gate(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        mutation: str,
+        error: str,
+    ) -> None:
+        """Materialized provider defaults must satisfy the exact replay contract."""
         from nemo_rl.models.megatron.setup import _apply_performance_config
 
         model_cfg, config = self._fixed_te_graph_request(modules=["moe_router"])
         model_cfg.cuda_graph_impl = "transformer_engine"
+        model_cfg.bf16 = True
+        model_cfg.fp8 = None
+        model_cfg.fp4 = False
+        model_cfg.moe_router_fusion = False
+        model_cfg.moe_token_dispatcher_type = "flex"
+        model_cfg.moe_flex_dispatcher_backend = "hybridep"
         del config["megatron_cfg"]["cuda_graph_impl"]
+        config["precision"] = "bfloat16"
         config["router_replay"] = {"enabled": True}
+        config["megatron_cfg"].update(
+            {
+                "moe_token_dispatcher_type": "flex",
+                "moe_flex_dispatcher_backend": "hybridep",
+            }
+        )
+        monkeypatch.setenv("NRL_ROUTER_REPLAY_VALIDATE", "1")
+        capability = "r3_router_cuda_graph_input_v1"
+        if mutation == "missing_capability":
+            capability = None
+        elif mutation == "router_fusion":
+            model_cfg.moe_router_fusion = True
+        elif mutation == "fp8":
+            model_cfg.fp8 = "hybrid"
+        elif mutation == "nvfp4":
+            model_cfg.fp4 = True
+        elif mutation == "non_bf16":
+            model_cfg.bf16 = False
+        elif mutation == "non_hybridep":
+            model_cfg.moe_token_dispatcher_type = "alltoall"
+            model_cfg.moe_flex_dispatcher_backend = None
+        monkeypatch.setattr(
+            "nemo_rl.models.megatron.setup.resolve_router_replay_cuda_graph_input_capability",
+            lambda: capability,
+        )
 
-        with pytest.raises(ValueError, match="RouterReplay.*CUDA Graph"):
+        with (
+            patch("nemo_rl.models.megatron.setup.is_te_min_version", return_value=True),
+            pytest.raises(ValueError, match=error),
+        ):
             _apply_performance_config(model_cfg, config)
+
+    @pytest.mark.parametrize(
+        "modules",
+        (["moe_router"], ["attn", "mamba", "moe_router"]),
+    )
+    def test_fixed_te_graph_router_replay_accepts_exact_materialized_contract(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        modules: list[str],
+    ) -> None:
+        """Both v1 graph scopes pass after provider defaults are materialized."""
+        from megatron.core.transformer.enums import CudaGraphModule
+        from nemo_rl.models.megatron.setup import _apply_performance_config
+
+        model_cfg, config = self._fixed_te_graph_request(modules=modules)
+        model_cfg.bf16 = True
+        model_cfg.fp8 = None
+        model_cfg.fp4 = False
+        model_cfg.moe_router_fusion = False
+        model_cfg.moe_token_dispatcher_type = "flex"
+        model_cfg.moe_flex_dispatcher_backend = "hybridep"
+        config["precision"] = "bfloat16"
+        config["router_replay"] = {"enabled": True}
+        config["megatron_cfg"].update(
+            {
+                "moe_token_dispatcher_type": "flex",
+                "moe_flex_dispatcher_backend": "hybridep",
+            }
+        )
+        monkeypatch.setenv("NRL_ROUTER_REPLAY_VALIDATE", "1")
+        monkeypatch.setattr(
+            "nemo_rl.models.megatron.setup.resolve_router_replay_cuda_graph_input_capability",
+            lambda: "r3_router_cuda_graph_input_v1",
+        )
+
+        with patch(
+            "nemo_rl.models.megatron.setup.is_te_min_version", return_value=True
+        ):
+            _apply_performance_config(model_cfg, config)
+
+        assert model_cfg.cuda_graph_modules == [
+            CudaGraphModule[module] for module in modules
+        ]
 
     def test_explicit_none_disables_inherited_te_graph_impl(self) -> None:
         """A policy override may intentionally disable a provider graph default."""

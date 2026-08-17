@@ -36,6 +36,12 @@ MOE_AXES = (
 )
 VALID_STEPS = (5, 20, 100)
 MODEL_NAMES = ("nano", "super", "ultra", "qwen3_30ba3b", "qwen3_235b")
+R3_ROUTER_GRAPH_SCOPES = frozenset(
+    (
+        frozenset(("moe_router",)),
+        frozenset(("attn", "mamba", "moe_router")),
+    )
+)
 ALLOWED_MCORE_DRIVERS: frozenset[str] = frozenset(
     (str(EXPERIMENT_DIR / "scripts" / "run_mcore_training.py"),)
 )
@@ -322,14 +328,22 @@ def render_scope_command(
         raise ValueError("thd_max_packed_sequences must be at least 2")
     if driver_python is not None and not Path(driver_python).is_absolute():
         raise ValueError("driver_python must be absolute")
-    if (
-        router_replay_enabled
-        and cuda_graph_enabled
-        and (not scope or {"moe", "moe_router", "moe_preprocess"}.intersection(scope))
-    ):
-        raise ValueError(
-            "Router Replay cannot be combined with a router CUDA Graph scope"
+    scope_set = frozenset(scope)
+    captures_router = not scope or bool(
+        {"moe", "moe_router", "moe_preprocess"}.intersection(scope_set)
+    )
+    if router_replay_enabled and cuda_graph_enabled and captures_router:
+        exact_v1_scope = (
+            model == "nano"
+            and scope_set in R3_ROUTER_GRAPH_SCOPES
+            and len(scope_set) == len(scope)
         )
+        if not exact_v1_scope:
+            raise ValueError(
+                "Router Replay cannot be combined with this router CUDA Graph "
+                "scope; v1 supports Nano {moe_router} and "
+                "{attn,mamba,moe_router} only."
+            )
     protected_overrides = {
         "policy.megatron_cfg.moe_router_dtype",
         "policy.router_replay.enabled",

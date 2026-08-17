@@ -55,6 +55,38 @@ print(digest.hexdigest())
 PY
 }
 
+require_r3_router_graph_attestation_binding() {
+  python3 - "$1" <<'PY'
+import json
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+descriptor = os.open(path, flags)
+try:
+    details = os.fstat(descriptor)
+    if not stat.S_ISREG(details.st_mode):
+        raise ValueError(f"not a regular file: {path}")
+    with os.fdopen(descriptor, encoding="utf-8") as source:
+        descriptor = -1
+        payload = json.load(source)
+finally:
+    if descriptor >= 0:
+        os.close(descriptor)
+if not isinstance(payload, dict):
+    raise ValueError("runtime attestation must contain a JSON object")
+if payload.get("runtime_feature_set") != "dropless_hybridep_nano16_r3_router_graph_v1":
+    raise ValueError("runtime attestation has the wrong runtime feature")
+capabilities = payload.get("mcore_capabilities")
+if not isinstance(capabilities, dict) or capabilities.get(
+    "router_replay_cuda_graph_input"
+) != "r3_router_cuda_graph_input_v1":
+    raise ValueError("runtime attestation lacks the exact MCore router capability")
+PY
+}
+
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 repo_root=$(cd "${script_dir}/../../.." && pwd -P)
 dockerfile=${repo_root}/docker/Dockerfile
@@ -138,10 +170,18 @@ case "${ROUTER_REPLAY}" in
   on) R3_NAME=r3on ;;
   *) fail "ROUTER_REPLAY must be off or on" ;;
 esac
+R3_ROUTER_GRAPH_REQUESTED=0
 if [[ "${ROUTER_REPLAY}" == "on" ]]; then
   case ",${SCOPE}," in
     *,whole_layer,*|*,moe,*|*,moe_router,*|*,moe_preprocess,*)
-      fail "Router Replay cannot be combined with router CUDA Graph scopes"
+      if [[ "${MODEL}" == "nano" && "${MODE}" == "nemorl" && \
+            "${CUDA_GRAPH_IMPL}" == "transformer_engine" && \
+            ( "${SCOPE}" == "moe_router" || \
+              "${SCOPE}" == "attn,mamba,moe_router" ) ]]; then
+        R3_ROUTER_GRAPH_REQUESTED=1
+      else
+        fail "Router Replay cannot be combined with router CUDA Graph scopes outside the Nano v1 capability"
+      fi
       ;;
   esac
 fi
@@ -568,7 +608,11 @@ RUNTIME_EXCLUDED_PACKAGES=
 if [[ "${MODE}" == "nemorl" ]]; then
   case "${MODEL}" in
     nano)
-      RUNTIME_FEATURE_SET=dropless_hybridep_nano16
+      if [[ "${R3_ROUTER_GRAPH_REQUESTED}" == "1" ]]; then
+        RUNTIME_FEATURE_SET=dropless_hybridep_nano16_r3_router_graph_v1
+      else
+        RUNTIME_FEATURE_SET=dropless_hybridep_nano16
+      fi
       RUNTIME_EXCLUDED_PACKAGES=fast-hadamard-transform
       ;;
     qwen3_30ba3b)
@@ -585,6 +629,14 @@ if [[ "${MODE}" == "nemorl" ]]; then
       ;;
     *) fail "MODEL ${MODEL} has no typed NeMo-RL runtime feature contract" ;;
   esac
+  if [[ "${R3_ROUTER_GRAPH_REQUESTED}" == "1" && \
+        "${RUNTIME_FEATURE_SET}" != "dropless_hybridep_nano16_r3_router_graph_v1" ]]; then
+    fail "Router Replay router graphs require runtime feature dropless_hybridep_nano16_r3_router_graph_v1"
+  fi
+  if [[ "${R3_ROUTER_GRAPH_REQUESTED}" == "1" ]]; then
+    require_r3_router_graph_attestation_binding "${RUNTIME_ATTESTATION}" || \
+      fail "Selected runtime attestation must bind dropless_hybridep_nano16_r3_router_graph_v1 to r3_router_cuda_graph_input_v1"
+  fi
   runtime_attestation_command+=(
     --runtime-feature-set "${RUNTIME_FEATURE_SET}"
     --excluded-packages "${RUNTIME_EXCLUDED_PACKAGES}"

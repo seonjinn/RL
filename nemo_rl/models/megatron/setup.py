@@ -243,7 +243,9 @@ from nemo_rl.models.megatron.draft.utils import (
 )
 from nemo_rl.models.megatron.router_replay import (
     clear_global_router_replay_instances,
+    resolve_router_replay_cuda_graph_input_capability,
     router_replay_enabled,
+    router_replay_validation_enabled,
     validate_router_replay_cuda_graph_scope,
     validate_router_replay_config,
 )
@@ -1480,12 +1482,6 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
             "training graphs; use an empty list for whole-layer capture."
         )
 
-    validate_router_replay_cuda_graph_scope(
-        enabled=router_replay_enabled(config),
-        cuda_graph_impl=effective_cuda_graph_impl,
-        cuda_graph_modules=getattr(model_cfg, "cuda_graph_modules", None),
-    )
-
     if effective_cuda_graph_impl == "transformer_engine":
         assert cuda_graph_modules is not None
         _configure_fixed_te_graph_geometry(model_cfg, config, cuda_graph_modules)
@@ -1509,6 +1505,34 @@ def _apply_performance_config(model_cfg: Any, config: PolicyConfig) -> None:
             model_cfg.fp8_param = fp8_cfg["fp8_param"]
         except KeyError as e:
             raise KeyError(f"Missing key in fp8_cfg: {e}")
+
+    effective_sequence_capacity = getattr(model_cfg, "thd_max_packed_sequences", None)
+    effective_token_capacity = getattr(model_cfg, "pad_packed_seq_to", None)
+    validate_router_replay_cuda_graph_scope(
+        enabled=router_replay_enabled(config),
+        cuda_graph_impl=effective_cuda_graph_impl,
+        cuda_graph_modules=getattr(model_cfg, "cuda_graph_modules", None),
+        runtime_capability=resolve_router_replay_cuda_graph_input_capability(),
+        validation_enabled=router_replay_validation_enabled(),
+        router_fusion=bool(getattr(model_cfg, "moe_router_fusion", False)),
+        fixed_thd_capacity=(
+            isinstance(effective_sequence_capacity, int)
+            and not isinstance(effective_sequence_capacity, bool)
+            and effective_sequence_capacity >= 2
+            and isinstance(effective_token_capacity, int)
+            and not isinstance(effective_token_capacity, bool)
+            and effective_token_capacity > 0
+        ),
+        bf16=(
+            getattr(model_cfg, "bf16", False) is True
+            and not bool(getattr(model_cfg, "fp8", None))
+            and not bool(getattr(model_cfg, "fp4", False))
+        ),
+        hybridep=(
+            getattr(model_cfg, "moe_token_dispatcher_type", None) == "flex"
+            and getattr(model_cfg, "moe_flex_dispatcher_backend", None) == "hybridep"
+        ),
+    )
 
 
 def _validate_optimizer_config(config: PolicyConfig) -> None:

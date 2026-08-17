@@ -2296,7 +2296,7 @@ def test_fake_sbatch_rejects_malformed_real_job_ids(
     assert not list(logs.rglob("run-metadata.*")) if logs.exists() else True
 
 
-def test_router_replay_rendering_is_explicit_and_rejects_router_graphs() -> None:
+def test_router_replay_rendering_is_explicit_and_gates_router_graphs() -> None:
     module = _load_experiment_module("scope_matrix")
 
     arguments = shlex.split(
@@ -2314,21 +2314,34 @@ def test_router_replay_rendering_is_explicit_and_rejects_router_graphs() -> None
     assert "loss_fn.force_on_policy_ratio=false" in arguments
     assert "NRL_ROUTER_REPLAY_VALIDATE=1" in arguments
     assert "NRL_R3_TRACE_VERIFY_FORWARD=1" in arguments
-    with pytest.raises(ValueError, match="Router Replay.*router CUDA Graph"):
-        module.render_scope_command(
-            model="qwen3_30ba3b",
-            scope=("moe_router",),
-            steps=5,
-            run_name="unsafe",
-            router_replay_enabled=True,
-        )
-    for scope in (("moe",), ()):
-        with pytest.raises(ValueError, match="Router Replay.*router CUDA Graph"):
+    for scope in (("moe_router",), ("attn", "mamba", "moe_router")):
+        graph_arguments = shlex.split(
             module.render_scope_command(
-                model="qwen3_30ba3b",
+                model="nano",
                 scope=scope,
                 steps=5,
-                run_name="unsafe-whole-moe",
+                run_name="nano-r3-router-graph",
+                router_replay_enabled=True,
+            )
+        )
+        assert "++policy.router_replay.enabled=true" in graph_arguments
+        assert (
+            f"++policy.megatron_cfg.cuda_graph_modules=[{','.join(scope)}]"
+            in graph_arguments
+        )
+    for model, scope in (
+        ("nano", ("moe",)),
+        ("nano", ()),
+        ("nano", ("attn", "moe_router")),
+        ("nano", ("moe_router", "moe_preprocess")),
+        ("qwen3_30ba3b", ("moe_router",)),
+    ):
+        with pytest.raises(ValueError, match="Router Replay.*router CUDA Graph"):
+            module.render_scope_command(
+                model=model,
+                scope=scope,
+                steps=5,
+                run_name="unsafe-router-graph",
                 router_replay_enabled=True,
             )
 
@@ -2423,15 +2436,17 @@ def test_router_replay_shell_validation_rejects_invalid_and_unsafe_graphs() -> N
         _run_script(
             scope,
             CLUSTER="oci-hsg",
-            MODEL="qwen3_30ba3b",
+            MODEL=model,
             MODE="nemorl",
             ROUTER_REPLAY="on",
+            TEST_ONLY="1",
         )
-        for scope in (
-            "scopes/01_whole_layer.sh",
-            "scopes/02_moe.sh",
-            "scopes/03_moe_router.sh",
-            "scopes/04_moe_router_preprocess.sh",
+        for model, scope in (
+            ("nano", "scopes/01_whole_layer.sh"),
+            ("nano", "scopes/02_moe.sh"),
+            ("nano", "scopes/04_moe_router_preprocess.sh"),
+            ("nano", "scopes/19_attn_moe_router.sh"),
+            ("qwen3_30ba3b", "scopes/03_moe_router.sh"),
         )
     ]
 
@@ -2443,6 +2458,98 @@ def test_router_replay_shell_validation_rejects_invalid_and_unsafe_graphs() -> N
         assert "Router Replay cannot be combined with router CUDA Graph scopes" in (
             result.stderr
         )
+
+
+@pytest.mark.parametrize(
+    "scope",
+    ("scopes/03_moe_router.sh", "scopes/23_attn_mamba_moe_router.sh"),
+)
+def test_router_replay_router_graph_test_only_requires_exact_runtime_feature(
+    tmp_path: Path,
+    scope: str,
+) -> None:
+    """A supported leaf requests only the version-bound runtime attestation."""
+    root, experiment, profile, _ = _campaign_leaf_harness(tmp_path)
+    (tmp_path / "runtime.json").write_text(
+        json.dumps(
+            {
+                "runtime_feature_set": ("dropless_hybridep_nano16_r3_router_graph_v1"),
+                "mcore_capabilities": {
+                    "router_replay_cuda_graph_input": ("r3_router_cuda_graph_input_v1")
+                },
+            }
+        )
+    )
+    result = _run_copied_experiment_script(
+        root,
+        experiment,
+        scope,
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        ROUTER_REPLAY="on",
+        TEST_ONLY="1",
+        RUN_TAG="r3-router-graph-v1",
+        PROFILE_FILE=str(profile),
+    )
+
+    assert result.returncode == 0, result.stderr
+    runtime_attestation_line = next(
+        line
+        for line in result.stdout.splitlines()
+        if line.startswith("RUNTIME_ATTESTATION: ")
+    )
+    runtime_attestation_command = shlex.split(
+        runtime_attestation_line.removeprefix("RUNTIME_ATTESTATION: ")
+    )[0]
+    assert (
+        "--runtime-feature-set dropless_hybridep_nano16_r3_router_graph_v1"
+        in runtime_attestation_command
+    )
+    assert "SBATCH:" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("runtime_feature_set", "mcore_capability"),
+    (
+        ("dropless_hybridep_nano16", "r3_router_cuda_graph_input_v1"),
+        ("dropless_hybridep_nano16_r3_router_graph_v1", None),
+        (
+            "dropless_hybridep_nano16_r3_router_graph_v1",
+            "r3_router_cuda_graph_input_v0",
+        ),
+    ),
+)
+def test_router_replay_router_graph_test_only_rejects_unbound_attestation(
+    tmp_path: Path,
+    runtime_feature_set: str,
+    mcore_capability: str | None,
+) -> None:
+    """Legacy, missing, and wrong-version evidence fail before SBATCH rendering."""
+    root, experiment, profile, _ = _campaign_leaf_harness(tmp_path)
+    payload: dict[str, object] = {"runtime_feature_set": runtime_feature_set}
+    if mcore_capability is not None:
+        payload["mcore_capabilities"] = {
+            "router_replay_cuda_graph_input": mcore_capability
+        }
+    (tmp_path / "runtime.json").write_text(json.dumps(payload))
+
+    result = _run_copied_experiment_script(
+        root,
+        experiment,
+        "scopes/03_moe_router.sh",
+        CLUSTER="oci-hsg",
+        MODEL="nano",
+        MODE="nemorl",
+        ROUTER_REPLAY="on",
+        TEST_ONLY="1",
+        RUN_TAG="r3-router-graph-unbound",
+        PROFILE_FILE=str(profile),
+    )
+
+    assert result.returncode == 2
+    assert "must bind dropless_hybridep_nano16_r3_router_graph_v1" in result.stderr
+    assert "SBATCH:" not in result.stdout
 
 
 def test_nano_test_only_launcher_renders_batch_job_without_singleton() -> None:

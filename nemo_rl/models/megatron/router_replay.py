@@ -32,6 +32,11 @@ from nemo_rl.utils.r3_trace import (
 )
 
 _ROUTER_REPLAY_VALIDATE_ENV = "NRL_ROUTER_REPLAY_VALIDATE"
+_ROUTER_REPLAY_CUDA_GRAPH_INPUT_CAPABILITY = "r3_router_cuda_graph_input_v1"
+_ROUTER_REPLAY_CUDA_GRAPH_SCOPES = (
+    frozenset(("moe_router",)),
+    frozenset(("attn", "mamba", "moe_router")),
+)
 _MISSING_ROUTE_SENTINEL = ROUTED_EXPERTS_MISSING_ROUTE_SENTINEL
 _MISSING_ROUTE_FALLBACK_PATCH_ATTR = "_nrl_missing_route_fallback_patch"
 
@@ -50,13 +55,32 @@ def configure_vllm_for_router_replay(config: PolicyConfig) -> None:
     vllm_kwargs["enable_return_routed_experts"] = True
 
 
+def resolve_router_replay_cuda_graph_input_capability() -> str | None:
+    """Read the versioned route-input capability from the active MCore runtime."""
+    try:
+        from megatron.core.transformer.moe.router_replay import (
+            ROUTER_REPLAY_CUDA_GRAPH_INPUT_CAPABILITY,
+        )
+    except ImportError:
+        return None
+    if not isinstance(ROUTER_REPLAY_CUDA_GRAPH_INPUT_CAPABILITY, str):
+        return None
+    return ROUTER_REPLAY_CUDA_GRAPH_INPUT_CAPABILITY
+
+
 def validate_router_replay_cuda_graph_scope(
     *,
     enabled: bool,
     cuda_graph_impl: object,
     cuda_graph_modules: object,
+    runtime_capability: str | None,
+    validation_enabled: bool,
+    router_fusion: bool,
+    fixed_thd_capacity: bool,
+    bf16: bool,
+    hybridep: bool,
 ) -> None:
-    """Reject graph scopes whose captured router cannot consume replay routes."""
+    """Allow graph-owned replay routing only for the exact proven v1 contract."""
     if not enabled or cuda_graph_impl == "none":
         return
 
@@ -72,12 +96,63 @@ def validate_router_replay_cuda_graph_scope(
     captures_router = not modules or bool(
         modules.intersection({"moe", "moe_router", "moe_preprocess"})
     )
-    if captures_router:
+    if not captures_router:
+        return
+    if cuda_graph_impl != "transformer_engine" or frozenset(modules) not in (
+        _ROUTER_REPLAY_CUDA_GRAPH_SCOPES
+    ):
         raise ValueError(
-            "RouterReplay cannot be combined with a CUDA Graph scope that "
-            "captures the MoE router; replay routes are not graph-bank-owned "
-            "inputs yet."
+            "R3 v1 supports only tested partial graph-owned router scopes: "
+            "{moe_router} or {attn,mamba,moe_router} with "
+            "cuda_graph_impl='transformer_engine'."
         )
+    if runtime_capability != _ROUTER_REPLAY_CUDA_GRAPH_INPUT_CAPABILITY:
+        raise ValueError(
+            "The active Megatron-Core runtime lacks "
+            f"{_ROUTER_REPLAY_CUDA_GRAPH_INPUT_CAPABILITY}."
+        )
+    if not validation_enabled:
+        raise ValueError("R3 router CUDA graph input requires route validation.")
+    if router_fusion:
+        raise ValueError("R3 router CUDA graph input does not support router fusion.")
+    if not fixed_thd_capacity:
+        raise ValueError("R3 router CUDA graph input requires fixed THD capacity.")
+    if not bf16:
+        raise ValueError(
+            "R3 router CUDA graph input v1 requires BF16 without FP8 or NVFP4."
+        )
+    if not hybridep:
+        raise ValueError("R3 router CUDA graph input v1 requires HybridEP.")
+
+
+def _requested_fixed_thd_capacity(config: PolicyConfig) -> bool:
+    megatron_cfg = config.get("megatron_cfg") or {}
+    sequence_packing = config.get("sequence_packing") or {}
+    dynamic_batching = config.get("dynamic_batching") or {}
+    sequence_capacity = megatron_cfg.get("thd_max_packed_sequences")
+    token_capacity = sequence_packing.get("train_mb_tokens")
+    return (
+        sequence_packing.get("enabled") is True
+        and dynamic_batching.get("enabled") is False
+        and isinstance(sequence_capacity, int)
+        and not isinstance(sequence_capacity, bool)
+        and sequence_capacity >= 2
+        and isinstance(token_capacity, int)
+        and not isinstance(token_capacity, bool)
+        and token_capacity > 0
+    )
+
+
+def _requested_unquantized_bf16(config: PolicyConfig) -> bool:
+    megatron_cfg = config.get("megatron_cfg") or {}
+    fp8_cfg = megatron_cfg.get("fp8_cfg") or {}
+    model_overrides = megatron_cfg.get("model_overrides") or {}
+    return (
+        config.get("precision") == "bfloat16"
+        and fp8_cfg.get("enabled") is not True
+        and not bool(model_overrides.get("fp8"))
+        and not bool(model_overrides.get("fp4"))
+    )
 
 
 def validate_router_replay_config(config: PolicyConfig) -> None:
@@ -96,6 +171,19 @@ def validate_router_replay_config(config: PolicyConfig) -> None:
         enabled=True,
         cuda_graph_impl=megatron_cfg.get("cuda_graph_impl", "none"),
         cuda_graph_modules=megatron_cfg.get("cuda_graph_modules"),
+        runtime_capability=resolve_router_replay_cuda_graph_input_capability(),
+        validation_enabled=router_replay_validation_enabled(),
+        router_fusion=(
+            megatron_cfg.get("moe_router_fusion") is True
+            or (megatron_cfg.get("model_overrides") or {}).get("moe_router_fusion")
+            is True
+        ),
+        fixed_thd_capacity=_requested_fixed_thd_capacity(config),
+        bf16=_requested_unquantized_bf16(config),
+        hybridep=(
+            megatron_cfg.get("moe_token_dispatcher_type") == "flex"
+            and megatron_cfg.get("moe_flex_dispatcher_backend") == "hybridep"
+        ),
     )
 
     vpp_size = megatron_cfg.get("virtual_pipeline_model_parallel_size")
@@ -224,7 +312,7 @@ def _payload_indices_for_moe_layers(
     )
 
 
-def _router_replay_validation_enabled() -> bool:
+def router_replay_validation_enabled() -> bool:
     return os.getenv(_ROUTER_REPLAY_VALIDATE_ENV, "0").lower() in {
         "1",
         "true",
@@ -240,7 +328,7 @@ def _validate_replay_tensor(
     layer_number: int,
     payload_idx: int,
 ) -> None:
-    if replay_tensor.numel() == 0 or not _router_replay_validation_enabled():
+    if replay_tensor.numel() == 0 or not router_replay_validation_enabled():
         return
 
     missing_route_mask = replay_tensor.eq(_MISSING_ROUTE_SENTINEL).all(dim=-1)

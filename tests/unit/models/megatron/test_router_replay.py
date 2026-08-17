@@ -58,25 +58,220 @@ def test_validate_router_replay_config_allows_prefix_cache_default():
 @pytest.mark.mcore
 @pytest.mark.parametrize(
     "modules",
-    (["moe"], ["moe_router"], ["moe_router", "moe_preprocess"], []),
+    (
+        ["moe"],
+        ["moe_router", "moe_preprocess"],
+        ["attn", "moe_router"],
+        ["attn", "mlp", "mamba", "moe_router"],
+        [],
+    ),
 )
 def test_validate_router_replay_rejects_graph_scopes_that_capture_router(
     modules: list[str],
 ) -> None:
-    """Replay routes are not persistent inputs of the active TE graph bank."""
+    """Only the two distributed-parity-covered router scopes may be enabled."""
+    from nemo_rl.models.megatron.router_replay import (
+        validate_router_replay_cuda_graph_scope,
+    )
+
+    with pytest.raises(ValueError, match="only tested partial graph-owned router"):
+        validate_router_replay_cuda_graph_scope(
+            enabled=True,
+            cuda_graph_impl="transformer_engine",
+            cuda_graph_modules=modules,
+            runtime_capability="r3_router_cuda_graph_input_v1",
+            validation_enabled=True,
+            router_fusion=False,
+            fixed_thd_capacity=True,
+            bf16=True,
+            hybridep=True,
+        )
+
+
+@pytest.mark.mcore
+@pytest.mark.parametrize(
+    "modules",
+    (["moe_router"], ["attn", "mamba", "moe_router"]),
+)
+def test_router_replay_allows_router_graph_with_exact_runtime_capability(
+    monkeypatch: pytest.MonkeyPatch,
+    modules: list[str],
+) -> None:
+    """The exact v1 MCore capability unlocks only its two proven graph scopes."""
+    from nemo_rl.models.megatron.router_replay import (
+        validate_router_replay_cuda_graph_scope,
+    )
+
+    monkeypatch.setenv("NRL_ROUTER_REPLAY_VALIDATE", "1")
+    validate_router_replay_cuda_graph_scope(
+        enabled=True,
+        cuda_graph_impl="transformer_engine",
+        cuda_graph_modules=modules,
+        runtime_capability="r3_router_cuda_graph_input_v1",
+        validation_enabled=True,
+        router_fusion=False,
+        fixed_thd_capacity=True,
+        bf16=True,
+        hybridep=True,
+    )
+
+
+@pytest.mark.mcore
+@pytest.mark.parametrize(
+    ("capability", "validation", "fusion", "fixed", "bf16", "hybridep", "message"),
+    [
+        (None, True, False, True, True, True, "r3_router_cuda_graph_input_v1"),
+        (
+            "r3_router_cuda_graph_input_v0",
+            True,
+            False,
+            True,
+            True,
+            True,
+            "r3_router_cuda_graph_input_v1",
+        ),
+        (
+            "r3_router_cuda_graph_input_v1",
+            False,
+            False,
+            True,
+            True,
+            True,
+            "validation",
+        ),
+        (
+            "r3_router_cuda_graph_input_v1",
+            True,
+            True,
+            True,
+            True,
+            True,
+            "fusion",
+        ),
+        (
+            "r3_router_cuda_graph_input_v1",
+            True,
+            False,
+            False,
+            True,
+            True,
+            "fixed THD",
+        ),
+        (
+            "r3_router_cuda_graph_input_v1",
+            True,
+            False,
+            True,
+            False,
+            True,
+            "BF16",
+        ),
+        (
+            "r3_router_cuda_graph_input_v1",
+            True,
+            False,
+            True,
+            True,
+            False,
+            "HybridEP",
+        ),
+    ],
+)
+def test_router_replay_router_graph_gate_fails_closed(
+    capability: str | None,
+    validation: bool,
+    fusion: bool,
+    fixed: bool,
+    bf16: bool,
+    hybridep: bool,
+    message: str,
+) -> None:
+    """Every unproven part of the v1 runtime contract fails closed."""
+    from nemo_rl.models.megatron.router_replay import (
+        validate_router_replay_cuda_graph_scope,
+    )
+
+    with pytest.raises(ValueError, match=message):
+        validate_router_replay_cuda_graph_scope(
+            enabled=True,
+            cuda_graph_impl="transformer_engine",
+            cuda_graph_modules=["moe_router"],
+            runtime_capability=capability,
+            validation_enabled=validation,
+            router_fusion=fusion,
+            fixed_thd_capacity=fixed,
+            bf16=bf16,
+            hybridep=hybridep,
+        )
+
+
+@pytest.mark.mcore
+def test_router_replay_config_resolves_exact_mcore_cuda_graph_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Policy validation consumes the staged MCore constant, not a NeMo alias."""
+    from megatron.core.transformer.moe import router_replay as mcore_router_replay
+
     from nemo_rl.models.megatron.router_replay import validate_router_replay_config
 
+    monkeypatch.setattr(
+        mcore_router_replay,
+        "ROUTER_REPLAY_CUDA_GRAPH_INPUT_CAPABILITY",
+        "r3_router_cuda_graph_input_v1",
+        raising=False,
+    )
+    monkeypatch.setenv("NRL_ROUTER_REPLAY_VALIDATE", "1")
     config = {
+        "precision": "bfloat16",
         "router_replay": {"enabled": True},
         "generation": {"backend": "vllm", "vllm_cfg": {}, "vllm_kwargs": {}},
         "megatron_cfg": {
             "enabled": True,
             "cuda_graph_impl": "transformer_engine",
-            "cuda_graph_modules": modules,
+            "cuda_graph_modules": ["moe_router"],
+            "thd_max_packed_sequences": 16,
+            "moe_token_dispatcher_type": "flex",
+            "moe_flex_dispatcher_backend": "hybridep",
         },
+        "sequence_packing": {"enabled": True, "train_mb_tokens": 4096},
+        "dynamic_batching": {"enabled": False},
     }
 
-    with pytest.raises(ValueError, match="RouterReplay.*CUDA Graph"):
+    validate_router_replay_config(config)
+
+
+@pytest.mark.mcore
+def test_router_replay_config_rejects_missing_mcore_cuda_graph_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An older nested MCore cannot enable graph-owned replay routing."""
+    from megatron.core.transformer.moe import router_replay as mcore_router_replay
+
+    from nemo_rl.models.megatron.router_replay import validate_router_replay_config
+
+    monkeypatch.delattr(
+        mcore_router_replay,
+        "ROUTER_REPLAY_CUDA_GRAPH_INPUT_CAPABILITY",
+        raising=False,
+    )
+    monkeypatch.setenv("NRL_ROUTER_REPLAY_VALIDATE", "1")
+    config = {
+        "precision": "bfloat16",
+        "router_replay": {"enabled": True},
+        "generation": {"backend": "vllm", "vllm_cfg": {}, "vllm_kwargs": {}},
+        "megatron_cfg": {
+            "enabled": True,
+            "cuda_graph_impl": "transformer_engine",
+            "cuda_graph_modules": ["moe_router"],
+            "thd_max_packed_sequences": 16,
+            "moe_token_dispatcher_type": "flex",
+            "moe_flex_dispatcher_backend": "hybridep",
+        },
+        "sequence_packing": {"enabled": True, "train_mb_tokens": 4096},
+        "dynamic_batching": {"enabled": False},
+    }
+
+    with pytest.raises(ValueError, match="r3_router_cuda_graph_input_v1"):
         validate_router_replay_config(config)
 
 
