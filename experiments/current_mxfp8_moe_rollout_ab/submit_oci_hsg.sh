@@ -6,6 +6,7 @@ ACTION=${ACTION:-test-only}
 MODEL=${MODEL:-qwen30}
 ARM=${ARM:-mxfp8}
 BRANCH=${BRANCH:-sna/exp-current-bf16-mxfp8-superset-20260816}
+GIT_REMOTE=${GIT_REMOTE:-origin}
 EXPECTED_HEAD=${EXPECTED_HEAD:-}
 BASE=${BASE:-/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemorl/users/sna}
 REPO=${REPO:-${BASE}/RL-exp-current-bf16-mxfp8-superset-20260816}
@@ -23,9 +24,11 @@ WANDB_NAME=${WANDB_NAME:-${MODEL}-${ARM}-20step-${RUN_SUFFIX}}
 WANDB_ENABLED=${WANDB_ENABLED:-true}
 ACCOUNT=${SLURM_ACCOUNT:-nemotron_sw_post}
 PARTITION=${PARTITION:-batch}
+CLUSTER_LABEL=${CLUSTER_LABEL:-oci-hsg-cs-001}
 TOTAL_NODES=${TOTAL_NODES:-}
 GPUS_PER_NODE=${GPUS_PER_NODE:-4}
 SLURM_USE_GRES=${SLURM_USE_GRES:-auto}
+SLURM_USE_SEGMENT=${SLURM_USE_SEGMENT:-true}
 GEN_NODES=${GEN_NODES:-}
 SEGMENT_SIZE=${SEGMENT_SIZE:-}
 VLLM_TP=${VLLM_TP:-}
@@ -105,10 +108,10 @@ case "${ACTION}" in
   *) echo "ACTION must be submit or test-only" >&2; exit 2 ;;
 esac
 
-git -C "${REPO}" fetch origin "${BRANCH}"
-git -C "${REPO}" pull --ff-only origin "${BRANCH}"
+git -C "${REPO}" fetch "${GIT_REMOTE}" "${BRANCH}"
+git -C "${REPO}" pull --ff-only "${GIT_REMOTE}" "${BRANCH}"
 LOCAL_HEAD=$(git -C "${REPO}" rev-parse HEAD)
-REMOTE_HEAD=$(git -C "${REPO}" rev-parse "origin/${BRANCH}")
+REMOTE_HEAD=$(git -C "${REPO}" rev-parse "${GIT_REMOTE}/${BRANCH}")
 if [[ "${LOCAL_HEAD}" != "${REMOTE_HEAD}" ]]; then
   echo "Local and remote heads differ: local=${LOCAL_HEAD}, remote=${REMOTE_HEAD}" >&2
   exit 2
@@ -188,7 +191,7 @@ use_container_python=${USE_CONTAINER_PYTHON}
 worker_venv_root=${WORKER_VENV_ROOT}
 python_version=runtime_interpreter
 gym_source_commit=5a6fc589c0196f73a5931781b06da61f668a80d7
-cluster=oci-hsg-cs-001
+cluster=${CLUSTER_LABEL}
 hardware=GB200
 model=${MODEL_LABEL}
 arm=${ARM}
@@ -286,11 +289,15 @@ SBATCH_ARGS=(
   --account="${ACCOUNT}"
   --partition="${PARTITION}"
   --time="${WALLTIME}"
-  --segment="${SEGMENT_SIZE}"
   --job-name="sna-${MODEL}-${ARM}-${MAX_STEPS}s"
   --output="${EXPERIMENT_ROOT}/slurm-%j.out"
   --comment="{\"OccupiedIdleGPUsJobReaper\":{\"exemptIdleTimeMins\":\"${IDLE_REAPER_EXEMPT_MINS}\",\"reason\":\"${IDLE_REAPER_EXEMPT_REASON}\",\"description\":\"${IDLE_REAPER_EXEMPT_DESCRIPTION}\"}}"
 )
+case "${SLURM_USE_SEGMENT}" in
+  true) SBATCH_ARGS+=(--segment="${SEGMENT_SIZE}") ;;
+  false) ;;
+  *) echo "SLURM_USE_SEGMENT must be true or false" >&2; exit 2 ;;
+esac
 case "${SLURM_USE_GRES}" in
   true) SBATCH_ARGS+=(--gres="gpu:${GPUS_PER_NODE}") ;;
   false) ;;
