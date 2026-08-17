@@ -104,3 +104,9 @@ def test_job_name_follows_cluster_account_convention() -> None:
     sbatch = render_sbatch(use_gres=False, account="coreai_dlalgo_llm")
 
     assert "--job-name=coreai_dlalgo_llm-sync-ipc.qwen30-bf16-1s" in sbatch
+
+
+def test_launcher_does_not_mask_the_container_uv_cache() -> None:
+    source = LAUNCHER.read_text()
+
+    assert "export UV_CACHE_DIR_OVERRIDE=" not in source

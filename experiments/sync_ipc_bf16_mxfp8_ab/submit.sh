@@ -199,7 +199,6 @@ export CONTAINER
 export CONTAINER_REMAP_ROOT=1
 export GPUS_PER_NODE=4
 export MOUNTS=/lustre:/lustre
-export UV_CACHE_DIR_OVERRIDE=${CACHE_ROOT}/uv-cache
 
 SBATCH_ARGS=(
   --nodes="${TOTAL_NODES}"
