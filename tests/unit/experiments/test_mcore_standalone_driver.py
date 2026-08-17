@@ -10,6 +10,7 @@ import stat
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,6 +68,7 @@ class MCoreSubmitterHarness:
     scheduler_argv: Path
     scheduler_contact: Path
     run_log_root: Path
+    cleanup: Callable[[], None]
 
 
 def _load_driver() -> ModuleType:
@@ -211,12 +213,17 @@ def _git(path: Path, *arguments: str) -> str:
 
 def _mcore_submitter_harness(
     tmp_path: Path,
+    request: pytest.FixtureRequest,
     *,
     root_branch: str = CURRENT_ROOT_BRANCH,
     mcore_branch: str = CURRENT_MCORE_BRANCH,
     root_remote_matches: bool = True,
     mcore_remote_matches: bool = True,
 ) -> MCoreSubmitterHarness:
+    def cleanup() -> None:
+        _restore_owner_write(tmp_path)
+
+    request.addfinalizer(cleanup)
     root = tmp_path / "root"
     experiment = (
         root / "experiments" / "cuda_graph" / "nemotron_thd_te_graph_20260731"
@@ -359,6 +366,7 @@ def _mcore_submitter_harness(
         scheduler_argv=scheduler_argv,
         scheduler_contact=scheduler_contact,
         run_log_root=run_log_root,
+        cleanup=cleanup,
     )
 
 
@@ -1207,8 +1215,11 @@ def test_mcore_submitter_rejects_unknown_row_before_remote_lookup() -> None:
     assert "unknown test row" in result.stderr.lower()
 
 
-def test_mcore_submitter_accepts_only_current_campaign_refs(tmp_path: Path) -> None:
-    harness = _mcore_submitter_harness(tmp_path)
+def test_mcore_submitter_accepts_only_current_campaign_refs(
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+) -> None:
+    harness = _mcore_submitter_harness(tmp_path, request)
 
     result = _run_mcore_submitter(harness)
 
@@ -1217,9 +1228,13 @@ def test_mcore_submitter_accepts_only_current_campaign_refs(tmp_path: Path) -> N
     assert "--test-only" in json.loads(harness.scheduler_argv.read_text())
 
 
-def test_mcore_submitter_rejects_stale_campaign_refs(tmp_path: Path) -> None:
+def test_mcore_submitter_rejects_stale_campaign_refs(
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+) -> None:
     harness = _mcore_submitter_harness(
         tmp_path,
+        request,
         root_branch=STALE_ROOT_BRANCH,
         mcore_branch=STALE_MCORE_BRANCH,
     )
@@ -1245,12 +1260,14 @@ def test_mcore_submitter_rejects_stale_campaign_refs(tmp_path: Path) -> None:
 )
 def test_mcore_submitter_rejects_remote_ref_mismatch(
     tmp_path: Path,
+    request: pytest.FixtureRequest,
     root_remote_matches: bool,
     mcore_remote_matches: bool,
     expected_error: str,
 ) -> None:
     harness = _mcore_submitter_harness(
         tmp_path,
+        request,
         root_remote_matches=root_remote_matches,
         mcore_remote_matches=mcore_remote_matches,
     )
@@ -1309,9 +1326,10 @@ def test_mcore_submitter_rejects_invalid_test_modes_before_external_work(
 @pytest.mark.parametrize("empty_mode", ("TEST_ONLY", "SBATCH_TEST_ONLY"))
 def test_mcore_submitter_rejects_explicit_empty_test_mode_before_external_work(
     tmp_path: Path,
+    request: pytest.FixtureRequest,
     empty_mode: str,
 ) -> None:
-    harness = _mcore_submitter_harness(tmp_path)
+    harness = _mcore_submitter_harness(tmp_path, request)
     mode_environment = {"TEST_ONLY": "0", "SBATCH_TEST_ONLY": "0"}
     mode_environment[empty_mode] = ""
 
@@ -1325,8 +1343,9 @@ def test_mcore_submitter_rejects_explicit_empty_test_mode_before_external_work(
 
 def test_mcore_submitter_test_only_renders_without_scheduler_or_artifacts(
     tmp_path: Path,
+    request: pytest.FixtureRequest,
 ) -> None:
-    harness = _mcore_submitter_harness(tmp_path)
+    harness = _mcore_submitter_harness(tmp_path, request)
 
     result = _run_mcore_submitter(
         harness,
@@ -1342,8 +1361,11 @@ def test_mcore_submitter_test_only_renders_without_scheduler_or_artifacts(
     assert not harness.run_log_root.exists()
 
 
-def test_mcore_submitter_test_only_uses_real_command_builder(tmp_path: Path) -> None:
-    harness = _mcore_submitter_harness(tmp_path)
+def test_mcore_submitter_test_only_uses_real_command_builder(
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+) -> None:
+    harness = _mcore_submitter_harness(tmp_path, request)
 
     rendered = _run_mcore_submitter(
         harness,
@@ -1371,6 +1393,30 @@ def test_mcore_submitter_test_only_uses_real_command_builder(tmp_path: Path) -> 
         _normalize_mcore_sbatch_command(submitted_arguments)
     )
     assert "--test-only" not in submitted_arguments
+
+
+def test_mcore_submitter_harness_cleanup_restores_readonly_tree(
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+) -> None:
+    harness = _mcore_submitter_harness(tmp_path, request)
+
+    try:
+        result = _run_mcore_submitter(harness)
+        assert result.returncode == 0, result.stderr
+        immutable_snapshot = next(
+            (harness.run_log_root / "source-snapshots" / "mcore").glob("*/*")
+        )
+        assert immutable_snapshot.stat().st_mode & stat.S_IWUSR == 0
+
+        cleanup = getattr(harness, "cleanup", None)
+        assert callable(cleanup)
+        cleanup()
+        assert immutable_snapshot.stat().st_mode & stat.S_IWUSR != 0
+        shutil.rmtree(harness.run_log_root)
+        assert not harness.run_log_root.exists()
+    finally:
+        _restore_owner_write(tmp_path)
 
 
 @pytest.mark.parametrize("cluster", ("ptyche", "oci-hsg", "lyris"))
