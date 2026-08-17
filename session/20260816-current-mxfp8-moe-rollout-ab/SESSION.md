@@ -17,6 +17,9 @@ current refit and rollout performance optimizations to both arms.
   only the project and lockfile Python patch-version floor from 3.13.14 to
   3.13.11. The upstream bump changed metadata only; both arms use the same
   interpreter and dependency lock.
+- Gym is pinned to experiment-only fork commit
+  `5a6fc589c0196f73a5931781b06da61f668a80d7`, which makes the same metadata-only
+  Python floor adjustment. The template workspace uses the same floor.
 
 ## Matched Conditions
 
@@ -26,7 +29,7 @@ current refit and rollout performance optimizations to both arms.
 - Refit transport: NCCL Reshard
 - MoE backend: FlashInfer TRTLLM
 - CUDA Graphs: enabled (`enforce_eager=false`)
-- Container: `nemo_rl_nightly_main_py31314_20260804_5876258.sqsh`
+- Container: `nemo-rl-nightly-ngc-20260815_212622.sqsh`
 - Python: 3.13.11 with an experiment-only patch-version floor override
 - Steps: 20
 - Seed: 42
