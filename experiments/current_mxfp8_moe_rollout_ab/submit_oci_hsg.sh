@@ -21,10 +21,12 @@ WANDB_NAME=${WANDB_NAME:-${MODEL}-${ARM}-20step-${RUN_SUFFIX}}
 WANDB_ENABLED=${WANDB_ENABLED:-true}
 ACCOUNT=${SLURM_ACCOUNT:-nemotron_sw_post}
 PARTITION=${PARTITION:-batch}
-TOTAL_NODES=${TOTAL_NODES:-8}
+TOTAL_NODES=${TOTAL_NODES:-}
 GPUS_PER_NODE=${GPUS_PER_NODE:-4}
-GEN_NODES=${GEN_NODES:-4}
-SEGMENT_SIZE=${SEGMENT_SIZE:-4}
+GEN_NODES=${GEN_NODES:-}
+SEGMENT_SIZE=${SEGMENT_SIZE:-}
+VLLM_TP=${VLLM_TP:-}
+VLLM_PP=${VLLM_PP:-1}
 MAX_STEPS=${MAX_STEPS:-20}
 WALLTIME=${WALLTIME:-04:00:00}
 
@@ -35,6 +37,10 @@ case "${MODEL}:${ARM}" in
     TRAIN_GLOBAL_BATCH_SIZE=2048
     ROLLOUT_PRECISION=bf16
     QUANTIZATION_SCOPE=none
+    TOTAL_NODES=${TOTAL_NODES:-8}
+    GEN_NODES=${GEN_NODES:-4}
+    SEGMENT_SIZE=${SEGMENT_SIZE:-4}
+    VLLM_TP=${VLLM_TP:-1}
     ;;
   qwen30:mxfp8)
     CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-30ba3b-4n4g-mxfp8-rollout.yaml
@@ -42,6 +48,21 @@ case "${MODEL}:${ARM}" in
     TRAIN_GLOBAL_BATCH_SIZE=2048
     ROLLOUT_PRECISION=mxfp8
     QUANTIZATION_SCOPE=routed_expert_fc1_fc2_only
+    TOTAL_NODES=${TOTAL_NODES:-8}
+    GEN_NODES=${GEN_NODES:-4}
+    SEGMENT_SIZE=${SEGMENT_SIZE:-4}
+    VLLM_TP=${VLLM_TP:-1}
+    ;;
+  qwen235:mxfp8)
+    CONFIG=examples/configs/recipes/llm/performance/grpo-qwen3-235b-16n4g-mxfp8-rollout.yaml
+    MODEL_LABEL=Qwen3-235B-A22B
+    TRAIN_GLOBAL_BATCH_SIZE=512
+    ROLLOUT_PRECISION=mxfp8
+    QUANTIZATION_SCOPE=routed_expert_fc1_fc2_only
+    TOTAL_NODES=${TOTAL_NODES:-32}
+    GEN_NODES=${GEN_NODES:-16}
+    SEGMENT_SIZE=${SEGMENT_SIZE:-4}
+    VLLM_TP=${VLLM_TP:-4}
     ;;
   nano:bf16)
     CONFIG=examples/configs/recipes/llm/performance/grpo-nanov3-30ba3b-8n4g-bf16-rollout-nccl.yaml
@@ -49,6 +70,10 @@ case "${MODEL}:${ARM}" in
     TRAIN_GLOBAL_BATCH_SIZE=16
     ROLLOUT_PRECISION=bf16
     QUANTIZATION_SCOPE=none
+    TOTAL_NODES=${TOTAL_NODES:-8}
+    GEN_NODES=${GEN_NODES:-4}
+    SEGMENT_SIZE=${SEGMENT_SIZE:-4}
+    VLLM_TP=${VLLM_TP:-1}
     ;;
   nano:mxfp8)
     CONFIG=examples/configs/recipes/llm/performance/grpo-nanov3-30ba3b-8n4g-mxfp8-rollout-nccl.yaml
@@ -56,9 +81,13 @@ case "${MODEL}:${ARM}" in
     TRAIN_GLOBAL_BATCH_SIZE=16
     ROLLOUT_PRECISION=mxfp8
     QUANTIZATION_SCOPE=routed_expert_fc1_fc2_only
+    TOTAL_NODES=${TOTAL_NODES:-8}
+    GEN_NODES=${GEN_NODES:-4}
+    SEGMENT_SIZE=${SEGMENT_SIZE:-4}
+    VLLM_TP=${VLLM_TP:-1}
     ;;
   *)
-    echo "MODEL must be qwen30 or nano and ARM must be bf16 or mxfp8" >&2
+    echo "Supported MODEL:ARM pairs are qwen30:bf16, qwen30:mxfp8, qwen235:mxfp8, nano:bf16, and nano:mxfp8" >&2
     exit 2
     ;;
 esac
@@ -190,8 +219,8 @@ ${PYTHON_RUNNER} examples/run_grpo.py \
   policy.generation.colocated.resources.gpus_per_node=${GPUS_PER_NODE} \
   policy.generation.refit_transport=nccl_reshard \
   policy.megatron_cfg.expert_tensor_parallel_size=1 \
-  policy.generation.vllm_cfg.tensor_parallel_size=1 \
-  policy.generation.vllm_cfg.pipeline_parallel_size=1 \
+  policy.generation.vllm_cfg.tensor_parallel_size=${VLLM_TP} \
+  policy.generation.vllm_cfg.pipeline_parallel_size=${VLLM_PP} \
   policy.generation.vllm_cfg.expert_parallel_size=1 \
   policy.generation.vllm_cfg.async_engine=false \
   policy.generation.vllm_cfg.enforce_eager=false \
