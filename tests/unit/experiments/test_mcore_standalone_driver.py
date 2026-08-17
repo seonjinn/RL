@@ -4,11 +4,14 @@ import importlib.util
 import json
 import os
 import re
+import shlex
+import shutil
 import stat
 import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 
@@ -50,6 +53,20 @@ PARTIAL_MOE_ROWS = {
     "dropless_alltoall_super32": (32, 8, 4),
     "dropless_hybridep_qwen235_64": (64, 16, 4),
 }
+CURRENT_ROOT_BRANCH = "sj/r3-cg-router-input"
+CURRENT_MCORE_BRANCH = "sj/r3-cg-router-input-mcore"
+STALE_ROOT_BRANCH = "experiment/thd-cg-hybrid-nemotron-main-20260806"
+STALE_MCORE_BRANCH = "sj/thd-cg-hybrid-nemotron-main-20260806"
+
+
+@dataclass(frozen=True)
+class MCoreSubmitterHarness:
+    root: Path
+    submitter: Path
+    environment: dict[str, str]
+    scheduler_argv: Path
+    scheduler_contact: Path
+    run_log_root: Path
 
 
 def _load_driver() -> ModuleType:
@@ -177,6 +194,208 @@ def _git_repository(path: Path) -> tuple[Path, str]:
         text=True,
     ).stdout.strip()
     return path, commit
+
+
+def _init_bare_repository(path: Path) -> None:
+    subprocess.run(["git", "init", "--bare", "-q", path], check=True)
+
+
+def _git(path: Path, *arguments: str) -> str:
+    return subprocess.run(
+        ["git", "-C", path, *arguments],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _mcore_submitter_harness(
+    tmp_path: Path,
+    *,
+    root_branch: str = CURRENT_ROOT_BRANCH,
+    mcore_branch: str = CURRENT_MCORE_BRANCH,
+    root_remote_matches: bool = True,
+    mcore_remote_matches: bool = True,
+) -> MCoreSubmitterHarness:
+    root = tmp_path / "root"
+    experiment = (
+        root / "experiments" / "cuda_graph" / "nemotron_thd_te_graph_20260731"
+    )
+    scripts = experiment / "scripts"
+    profiles = experiment / "profiles"
+    scripts.mkdir(parents=True)
+    profiles.mkdir()
+    for name in (
+        "mcore_test_matrix.json",
+        "profile_snapshot.py",
+        "slurm_segment.py",
+        "submit_mcore_matrix.sh",
+        "verify_runtime_attestation.py",
+    ):
+        shutil.copy2(EXPERIMENT_DIR / name, experiment / name)
+    for name in (
+        "run_mcore_scope.sub",
+        "run_mcore_training.py",
+        "verify_source_provenance.sh",
+    ):
+        shutil.copy2(EXPERIMENT_DIR / "scripts" / name, scripts / name)
+    (root / ".gitignore").write_text("__pycache__/\n")
+
+    mcore_root = (
+        root
+        / "3rdparty"
+        / "Megatron-Bridge-workspace"
+        / "Megatron-Bridge"
+        / "3rdparty"
+        / "Megatron-LM"
+    )
+    mcore_root.mkdir(parents=True)
+    _git(mcore_root, "init", "-q")
+    _git(mcore_root, "config", "user.name", "Fixture")
+    _git(mcore_root, "config", "user.email", "fixture@example.com")
+    (mcore_root / "candidate.py").write_text("VALUE = 1\n")
+    _git(mcore_root, "add", "candidate.py")
+    _git(mcore_root, "commit", "-qm", "candidate base")
+    _git(mcore_root, "branch", "-M", mcore_branch)
+    mcore_remote = tmp_path / "mcore-remote.git"
+    _init_bare_repository(mcore_remote)
+    _git(mcore_root, "remote", "add", "origin", str(mcore_remote))
+    _git(mcore_root, "push", "-q", "origin", f"HEAD:refs/heads/{mcore_branch}")
+    if not mcore_remote_matches:
+        (mcore_root / "candidate.py").write_text("VALUE = 2\n")
+        _git(mcore_root, "add", "candidate.py")
+        _git(mcore_root, "commit", "-qm", "unpushed candidate")
+    candidate_sha = _git(mcore_root, "rev-parse", "HEAD")
+
+    runtime_attestation = tmp_path / "runtime-attestation.json"
+    runtime_attestation.write_text(
+        json.dumps(
+            {
+                "runtime_feature_set": (
+                    "dropless_hybridep_nano16_r3_router_graph_v1"
+                ),
+                "excluded_packages": ["fast-hadamard-transform"],
+                "torch_cuda_arch_list": "10.0a",
+                "nvte_cuda_archs": "100a",
+            }
+        )
+    )
+    run_log_root = tmp_path / "run-logs"
+    profile = profiles / "oci-hsg.env"
+    profile.write_text(
+        "\n".join(
+            (
+                "PROFILE_ID=oci-hsg",
+                "ACCOUNT=fixture",
+                "PARTITION=batch",
+                f"CONTAINER={tmp_path / 'runtime.sqsh'}",
+                f"CONTAINER_SHA256={'a' * 64}",
+                f"MOUNTS={tmp_path}:{tmp_path}",
+                "SBATCH_GPUS_PER_NODE=4",
+                "SBATCH_GRES=none",
+                "SBATCH_SEGMENT_SIZE=",
+                "TIME_LIMIT=00:10:00",
+                f"RUNTIME_ATTESTATION={runtime_attestation}",
+                "RUNTIME_PREFLIGHT_JOB_ID=733",
+                f"UV_EXECUTABLE={tmp_path / 'uv'}",
+                f"EXPECTED_TE_SHA={'b' * 40}",
+                f"EXPECTED_TE_VERSION_BASE_SHA={'c' * 40}",
+                f"EXPECTED_NEMORL_SHA={'d' * 40}",
+                f"EXPECTED_BRIDGE_SHA={'e' * 40}",
+                f"EXPECTED_MCORE_SHA={candidate_sha}",
+                f"RUN_LOG_ROOT={run_log_root}",
+                "",
+            )
+        )
+    )
+
+    _git(root, "init", "-q")
+    _git(root, "config", "user.name", "Fixture")
+    _git(root, "config", "user.email", "fixture@example.com")
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "root base")
+    _git(root, "branch", "-M", root_branch)
+    root_remote = tmp_path / "root-remote.git"
+    _init_bare_repository(root_remote)
+    _git(root, "remote", "add", "seonjinn", str(root_remote))
+    _git(root, "push", "-q", "seonjinn", f"HEAD:refs/heads/{root_branch}")
+    if not root_remote_matches:
+        (root / "root-revision.txt").write_text("unpushed\n")
+        _git(root, "add", "root-revision.txt")
+        _git(root, "commit", "-qm", "unpushed root")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    scheduler_argv = tmp_path / "scheduler-argv.json"
+    scheduler_contact = tmp_path / "scheduler-contact"
+    fake_sbatch = fake_bin / "sbatch"
+    fake_sbatch.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, sys\n"
+        "pathlib.Path(os.environ['SCHEDULER_CONTACT']).write_text('contacted')\n"
+        "pathlib.Path(os.environ['SCHEDULER_ARGV']).write_text(json.dumps(sys.argv[1:]))\n"
+        "print('733')\n"
+    )
+    fake_sbatch.chmod(0o755)
+    environment = {
+        **os.environ,
+        "CLUSTER": "oci-hsg",
+        "PROFILE_FILE": str(profile),
+        "MCORE_CANDIDATE_SHA": candidate_sha,
+        "MCORE_TEST_ROWS": R3_ROUTER_GRAPH_ROW,
+        "MCORE_TEST_VARIANT": "fixture",
+        "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+        "SCHEDULER_ARGV": str(scheduler_argv),
+        "SCHEDULER_CONTACT": str(scheduler_contact),
+        "TEST_ONLY": "0",
+        "SBATCH_TEST_ONLY": "1",
+    }
+    environment.pop("COMMAND", None)
+    environment.pop("MCORE_COMMAND", None)
+    return MCoreSubmitterHarness(
+        root=root,
+        submitter=experiment / "submit_mcore_matrix.sh",
+        environment=environment,
+        scheduler_argv=scheduler_argv,
+        scheduler_contact=scheduler_contact,
+        run_log_root=run_log_root,
+    )
+
+
+def _run_mcore_submitter(
+    harness: MCoreSubmitterHarness, **environment: str
+) -> subprocess.CompletedProcess[str]:
+    merged_environment = {**harness.environment, **environment}
+    return subprocess.run(
+        ["bash", str(harness.submitter)],
+        cwd=harness.root,
+        env=merged_environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _normalize_mcore_sbatch_command(arguments: list[str]) -> tuple[str, ...]:
+    dynamic_exports = {
+        "CANDIDATE_SOURCE_ROOT",
+        "SUBMISSION_INTENT",
+        "SUBMISSION_INTENT_SHA256",
+    }
+    normalized: list[str] = []
+    for argument in arguments:
+        if not argument.startswith("--export="):
+            normalized.append(argument)
+            continue
+        exports = argument.removeprefix("--export=").split(",")
+        normalized_exports = []
+        for export in exports:
+            name, separator, value = export.partition("=")
+            normalized_exports.append(
+                f"{name}=<dynamic>" if separator and name in dynamic_exports else export
+            )
+        normalized.append("--export=" + ",".join(normalized_exports))
+    return tuple(normalized)
 
 
 def _restore_owner_write(path: Path) -> None:
@@ -986,6 +1205,155 @@ def test_mcore_submitter_rejects_unknown_row_before_remote_lookup() -> None:
 
     assert result.returncode == 2
     assert "unknown test row" in result.stderr.lower()
+
+
+def test_mcore_submitter_accepts_only_current_campaign_refs(tmp_path: Path) -> None:
+    harness = _mcore_submitter_harness(tmp_path)
+
+    result = _run_mcore_submitter(harness)
+
+    assert result.returncode == 0, result.stderr
+    assert harness.scheduler_contact.read_text() == "contacted"
+    assert "--test-only" in json.loads(harness.scheduler_argv.read_text())
+
+
+def test_mcore_submitter_rejects_stale_campaign_refs(tmp_path: Path) -> None:
+    harness = _mcore_submitter_harness(
+        tmp_path,
+        root_branch=STALE_ROOT_BRANCH,
+        mcore_branch=STALE_MCORE_BRANCH,
+    )
+
+    result = _run_mcore_submitter(
+        harness,
+        TEST_ONLY="1",
+        SBATCH_TEST_ONLY="0",
+    )
+
+    assert result.returncode == 2
+    assert "current R3 campaign" in result.stderr
+    assert "SBATCH:" not in result.stdout
+    assert not harness.scheduler_contact.exists()
+
+
+@pytest.mark.parametrize(
+    ("root_remote_matches", "mcore_remote_matches", "expected_error"),
+    (
+        (False, True, "local HEAD"),
+        (True, False, "candidate SHA"),
+    ),
+)
+def test_mcore_submitter_rejects_remote_ref_mismatch(
+    tmp_path: Path,
+    root_remote_matches: bool,
+    mcore_remote_matches: bool,
+    expected_error: str,
+) -> None:
+    harness = _mcore_submitter_harness(
+        tmp_path,
+        root_remote_matches=root_remote_matches,
+        mcore_remote_matches=mcore_remote_matches,
+    )
+
+    result = _run_mcore_submitter(
+        harness,
+        TEST_ONLY="1",
+        SBATCH_TEST_ONLY="0",
+    )
+
+    assert result.returncode == 2
+    assert expected_error in result.stderr
+    assert "SBATCH:" not in result.stdout
+    assert not harness.scheduler_contact.exists()
+
+
+@pytest.mark.parametrize(
+    ("mode_environment", "expected_error"),
+    (
+        ({"TEST_ONLY": "2", "SBATCH_TEST_ONLY": "0"}, "TEST_ONLY must be 0 or 1"),
+        (
+            {"TEST_ONLY": "0", "SBATCH_TEST_ONLY": "yes"},
+            "SBATCH_TEST_ONLY must be 0 or 1",
+        ),
+        (
+            {"TEST_ONLY": "1", "SBATCH_TEST_ONLY": "1"},
+            "mutually exclusive",
+        ),
+    ),
+)
+def test_mcore_submitter_rejects_invalid_test_modes_before_external_work(
+    mode_environment: dict[str, str],
+    expected_error: str,
+) -> None:
+    environment = {
+        **os.environ,
+        "MCORE_TEST_ROWS": R3_ROUTER_GRAPH_ROW,
+        **mode_environment,
+    }
+    environment.pop("COMMAND", None)
+    environment.pop("MCORE_COMMAND", None)
+
+    result = subprocess.run(
+        ["bash", str(EXPERIMENT_DIR / "submit_mcore_matrix.sh")],
+        cwd=REPO_ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert expected_error in result.stderr
+
+
+def test_mcore_submitter_test_only_renders_without_scheduler_or_artifacts(
+    tmp_path: Path,
+) -> None:
+    harness = _mcore_submitter_harness(tmp_path)
+
+    result = _run_mcore_submitter(
+        harness,
+        TEST_ONLY="1",
+        SBATCH_TEST_ONLY="0",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "ROW: dropless_hybridep_nano16_r3_router_graph" in result.stdout
+    assert "SBATCH: sbatch " in result.stdout
+    assert "TEST_ONLY: no submission performed" in result.stdout
+    assert not harness.scheduler_contact.exists()
+    assert not harness.run_log_root.exists()
+
+
+def test_mcore_submitter_test_only_uses_real_command_builder(tmp_path: Path) -> None:
+    harness = _mcore_submitter_harness(tmp_path)
+
+    rendered = _run_mcore_submitter(
+        harness,
+        TEST_ONLY="1",
+        SBATCH_TEST_ONLY="0",
+    )
+    rendered_line = next(
+        line.removeprefix("SBATCH: ")
+        for line in rendered.stdout.splitlines()
+        if line.startswith("SBATCH: ")
+    )
+    rendered_arguments = shlex.split(rendered_line)
+    assert not harness.scheduler_contact.exists()
+
+    submitted = _run_mcore_submitter(
+        harness,
+        TEST_ONLY="0",
+        SBATCH_TEST_ONLY="0",
+    )
+    submitted_arguments = ["sbatch", *json.loads(harness.scheduler_argv.read_text())]
+
+    assert rendered.returncode == 0, rendered.stderr
+    assert submitted.returncode == 0, submitted.stderr
+    assert _normalize_mcore_sbatch_command(rendered_arguments) == (
+        _normalize_mcore_sbatch_command(submitted_arguments)
+    )
+    assert "--test-only" not in submitted_arguments
 
 
 @pytest.mark.parametrize("cluster", ("ptyche", "oci-hsg", "lyris"))

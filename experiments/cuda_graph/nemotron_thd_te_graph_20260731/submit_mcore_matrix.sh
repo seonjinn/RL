@@ -23,6 +23,14 @@ run_sbatch_without_reserved_environment() {
 
 [[ -z "${COMMAND:-}" && -z "${MCORE_COMMAND:-}" ]] || \
   fail "Raw command payloads are forbidden by the typed matrix runner"
+TEST_ONLY=${TEST_ONLY:-0}
+SBATCH_TEST_ONLY=${SBATCH_TEST_ONLY:-0}
+[[ "${TEST_ONLY}" == 0 || "${TEST_ONLY}" == 1 ]] || \
+  fail "TEST_ONLY must be 0 or 1"
+[[ "${SBATCH_TEST_ONLY}" == 0 || "${SBATCH_TEST_ONLY}" == 1 ]] || \
+  fail "SBATCH_TEST_ONLY must be 0 or 1"
+[[ "${TEST_ONLY}" == 0 || "${SBATCH_TEST_ONLY}" == 0 ]] || \
+  fail "TEST_ONLY and SBATCH_TEST_ONLY are mutually exclusive"
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 repo_root=$(cd "${script_dir}/../../.." && pwd -P)
@@ -138,17 +146,22 @@ IFS=$'\t' read -r RUNTIME_FEATURE_SET RUNTIME_EXCLUDED_PACKAGES \
 [[ -n "${NVTE_CUDA_ARCHS}" ]] || fail "Runtime feature contract is incomplete"
 
 mcore_root=${repo_root}/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/3rdparty/Megatron-LM
-remote_sha=$(git -C "${mcore_root}" ls-remote origin refs/heads/sj/thd-cg-hybrid-nemotron-main-20260806 | awk 'NF == 2 {print $1}')
-[[ "${remote_sha}" =~ ^[0-9a-f]{40}$ ]] || fail "Candidate branch did not resolve to exactly one pushed SHA"
-[[ "${remote_sha}" == "${MCORE_CANDIDATE_SHA}" ]] || fail "Candidate SHA does not match the pushed remote branch"
+remote_sha=$(git -C "${mcore_root}" ls-remote origin \
+  refs/heads/sj/r3-cg-router-input-mcore | awk 'NF == 2 {print $1}')
+[[ "${remote_sha}" =~ ^[0-9a-f]{40}$ ]] || \
+  fail "MCore current R3 campaign branch did not resolve to exactly one pushed SHA"
+[[ "${remote_sha}" == "${MCORE_CANDIDATE_SHA}" ]] || \
+  fail "MCore candidate SHA does not match the pushed current R3 campaign branch"
 root_branch=$(git -C "${repo_root}" branch --show-current)
-[[ "${root_branch}" == experiment/thd-cg-hybrid-nemotron-main-20260806 ]] || \
-  fail "NeMo-RL runner must use the HybridEP integration branch"
+[[ "${root_branch}" == sj/r3-cg-router-input ]] || \
+  fail "NeMo-RL runner must use the current R3 campaign branch"
 root_sha=$(git -C "${repo_root}" rev-parse HEAD)
 remote_root_sha=$(git -C "${repo_root}" ls-remote seonjinn \
-  refs/heads/experiment/thd-cg-hybrid-nemotron-main-20260806 | awk 'NF == 2 {print $1}')
+  refs/heads/sj/r3-cg-router-input | awk 'NF == 2 {print $1}')
+[[ "${remote_root_sha}" =~ ^[0-9a-f]{40}$ ]] || \
+  fail "NeMo-RL current R3 campaign branch did not resolve to one pushed SHA"
 [[ "${remote_root_sha}" == "${root_sha}" ]] || \
-  fail "NeMo-RL runner infrastructure is not pushed at the local HEAD"
+  fail "NeMo-RL current R3 campaign remote does not match the local HEAD"
 git -C "${repo_root}" diff --quiet --ignore-submodules=dirty || \
   fail "NeMo-RL source has unstaged tracked changes"
 git -C "${repo_root}" diff --cached --quiet --ignore-submodules=dirty || \
@@ -158,9 +171,24 @@ git -C "${repo_root}" diff --cached --quiet --ignore-submodules=dirty || \
 integration_sha=${EXPECTED_MCORE_SHA}
 source_provenance_verifier=${script_dir}/scripts/verify_source_provenance.sh
 runtime_attestation_command=${script_dir}/verify_runtime_attestation.py
+artifact_run_log_root=${RUN_LOG_ROOT}
+test_only_artifact_root=
+cleanup_test_only_artifacts() {
+  if [[ -n "${test_only_artifact_root}" && -d "${test_only_artifact_root}" ]]; then
+    chmod -R u+w "${test_only_artifact_root}" 2>/dev/null || true
+    rm -rf "${test_only_artifact_root}"
+  fi
+}
+if [[ "${TEST_ONLY}" == 1 ]]; then
+  test_only_artifact_root=$(mktemp -d \
+    "${TMPDIR:-/tmp}/nemo-rl-mcore-test-only.XXXXXXXX") || \
+    fail "Failed to create TEST_ONLY artifact root"
+  artifact_run_log_root=${test_only_artifact_root}
+  trap cleanup_test_only_artifacts EXIT
+fi
 
 artifacts=$(SELECTION=${selection} python3 - "${driver}" "${mcore_root}" \
-  "${RUN_LOG_ROOT}" "${MCORE_CANDIDATE_SHA}" "${integration_sha}" \
+  "${artifact_run_log_root}" "${MCORE_CANDIDATE_SHA}" "${integration_sha}" \
   "${PROFILE_SHA256}" "${RUNTIME_FEATURE_SET}" "${RUNTIME_EXCLUDED_PACKAGES}" \
   "${TORCH_CUDA_ARCH_LIST}" "${NVTE_CUDA_ARCHS}" "${test_variant}" <<'PY'
 import importlib.util
@@ -214,8 +242,14 @@ while IFS=$'\t' read -r row_id world_size num_nodes gpus_per_node; do
     command+=("--gres=${SBATCH_GRES}")
   fi
   [[ -z "${segment_size}" ]] || command+=("--segment=${segment_size}")
-  [[ "${SBATCH_TEST_ONLY:-0}" == 1 ]] && command+=(--test-only)
+  [[ "${SBATCH_TEST_ONLY}" == 1 ]] && command+=(--test-only)
   command+=("${script_dir}/scripts/run_mcore_scope.sub")
+  if [[ "${TEST_ONLY}" == 1 ]]; then
+    printf 'ROW: %s\nSBATCH:' "${row_id}"
+    printf ' %q' "${command[@]}"
+    printf '\nTEST_ONLY: no submission performed\n'
+    continue
+  fi
   mkdir -p "${RUN_LOG_ROOT}/slurm"
   output=$(run_sbatch_without_reserved_environment "${command[@]}")
   printf 'ROW: %s\nSBATCH_OUTPUT: %s\n' "${row_id}" "${output}"
