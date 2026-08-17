@@ -810,7 +810,7 @@ def test_nccl_reshard_lifecycle_refreshes_live_parameter_map(monkeypatch):
     ext = vllm_backend.VllmInternalWorkerExtension.__new__(
         vllm_backend.VllmInternalWorkerExtension
     )
-    ext.model_runner = SimpleNamespace(model=object(), vllm_config=object())
+    ext.model_runner = SimpleNamespace(model=torch.nn.Module(), vllm_config=object())
     ext.model_config = object()
     ext.device = object()
     ext.nccl_reshard_refit_info = {"layer_names": [], "per_layer_params": {}}
