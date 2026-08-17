@@ -108,11 +108,20 @@ and partition ownership are graph-key material.
 ### Physical representation
 
 The graph input uses the fixed token capacity already selected for packed
-training. Valid logical rows contain expert IDs. Every top-k slot of every tail
-row contains the canonical sentinel `-1`, which is never interpreted as a
-valid route. The logical token count and existing packed-token validity
-contract identify valid rows; this design does not add a second independent
-route-validity mask.
+training. Valid logical rows contain rollout-selected expert IDs. Every
+structural padding row contains the canonical valid dummy route
+`[0, 1, ..., topk - 1]`, matching NeMo-RL's packed-route padding contract.
+Router computation still executes for fixed-capacity padding rows, so an
+out-of-range sentinel must never reach the captured `gather` operation. The
+logical token count and existing packed-token validity contract distinguish
+real route rows from structural dummy rows; this design does not add a second
+independent route-validity mask.
+
+The existing all-`-1` missing-route sentinel remains valid in general eager R3
+processing. It is not accepted by `r3_router_cuda_graph_input_v1`: every
+logical row must have a complete rollout route before graph entry. Supporting
+data-dependent missing-route fallback inside the captured router is a separate
+capability.
 
 The implementation must not infer valid rows from expert value `0`; expert
 zero is valid. It must not use structural zeros to distinguish non-MoE layers.
@@ -127,7 +136,8 @@ Before graph launch, every rank validates:
 - exact fixed capacity, logical count, top-k, and layer identity;
 - all valid IDs are in `[0, num_experts)`;
 - IDs within a valid top-k row are unique;
-- every valid row is populated and every tail row uses the sentinel;
+- every logical row is populated, contains no missing-route sentinel, and
+  every structural tail row uses the canonical dummy route;
 - packed token identity and CP ownership match the hidden-state microbatch;
 - the R3 payload exists for every graph-owned router layer; and
 - the payload belongs to the current training microbatch and storage
@@ -246,8 +256,8 @@ Write failing tests before production changes for:
 
 - fixed-capacity route packing, CP slicing, padding, and token-identity
   preservation;
-- valid expert zero, canonical tail sentinel, top-k uniqueness, and range
-  validation;
+- valid expert zero, canonical structural dummy routes, missing-route
+  rejection, top-k uniqueness, and range validation;
 - missing, stale, wrong-layer, wrong-capacity, and wrong-schema rejection;
 - graph-key inclusion of route signature and exclusion of route values;
 - bank-owned static copy with changing route values and a stable address;
