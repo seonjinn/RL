@@ -37,6 +37,13 @@ FIXED_THD_PARITY_TEST = (
     "tests/unit_tests/transformer/test_fixed_capacity_thd_parity.py::"
     "test_fixed_capacity_thd_matches_compact_thd"
 )
+R3_ROUTER_GRAPH_ROW = "dropless_hybridep_nano16_r3_router_graph"
+R3_ROUTER_GRAPH_TESTS = (
+    "tests/unit_tests/transformer/test_partial_moe_cuda_graph_distributed.py::"
+    "test_dropless_hybridep_nano16_r3_router_graph",
+    "tests/unit_tests/transformer/test_partial_moe_cuda_graph_distributed.py::"
+    "test_dropless_hybridep_nano16_r3_router_graph_rejects_invalid_route",
+)
 PARTIAL_MOE_ROWS = {
     "dropless_hybridep_nano16": (16, 4, 4),
     "dropless_alltoall_qwen30_16": (16, 4, 4),
@@ -186,7 +193,11 @@ def test_manifest_selects_exact_te_capability_nodes() -> None:
 
     assert tuple(rows) == (
         "te_eval_capability_8",
-        *PARTIAL_MOE_ROWS,
+        "dropless_hybridep_nano16",
+        R3_ROUTER_GRAPH_ROW,
+        "dropless_alltoall_qwen30_16",
+        "dropless_alltoall_super32",
+        "dropless_hybridep_qwen235_64",
     )
     assert not any("router_replay" in row_id for row_id in rows)
     assert rows["te_eval_capability_8"].pytest_nodes == (
@@ -204,6 +215,11 @@ def test_manifest_selects_exact_te_capability_nodes() -> None:
         if row_id == "dropless_hybridep_nano16":
             expected_nodes += (FIXED_THD_PARITY_TEST,)
         assert row.pytest_nodes == expected_nodes
+    r3_row = rows[R3_ROUTER_GRAPH_ROW]
+    assert r3_row.world_size == 16
+    assert r3_row.allocations == ((4, 4),)
+    assert r3_row.pytest_filters == ()
+    assert r3_row.pytest_nodes == R3_ROUTER_GRAPH_TESTS
 
 
 def test_submission_preparation_creates_fresh_verified_immutable_snapshots(
