@@ -23,6 +23,7 @@ ACCOUNT=${SLURM_ACCOUNT:-nemotron_sw_post}
 PARTITION=${PARTITION:-batch}
 TOTAL_NODES=${TOTAL_NODES:-}
 GPUS_PER_NODE=${GPUS_PER_NODE:-4}
+SLURM_USE_GRES=${SLURM_USE_GRES:-auto}
 GEN_NODES=${GEN_NODES:-}
 SEGMENT_SIZE=${SEGMENT_SIZE:-}
 VLLM_TP=${VLLM_TP:-}
@@ -181,6 +182,7 @@ model=${MODEL_LABEL}
 arm=${ARM}
 total_nodes=${TOTAL_NODES}
 gpus_per_node=${GPUS_PER_NODE}
+slurm_use_gres=${SLURM_USE_GRES}
 trainer_nodes=$((TOTAL_NODES - GEN_NODES))
 generation_nodes=${GEN_NODES}
 training_precision=bf16
@@ -264,7 +266,6 @@ export UV_CACHE_DIR_OVERRIDE=${CACHE_ROOT}/uv-cache
 
 SBATCH_ARGS=(
   --nodes="${TOTAL_NODES}"
-  --gres="gpu:${GPUS_PER_NODE}"
   --exclusive
   --account="${ACCOUNT}"
   --partition="${PARTITION}"
@@ -274,6 +275,16 @@ SBATCH_ARGS=(
   --output="${EXPERIMENT_ROOT}/slurm-%j.out"
   --comment="{\"OccupiedIdleGPUsJobReaper\":{\"exemptIdleTimeMins\":\"${IDLE_REAPER_EXEMPT_MINS}\",\"reason\":\"${IDLE_REAPER_EXEMPT_REASON}\",\"description\":\"${IDLE_REAPER_EXEMPT_DESCRIPTION}\"}}"
 )
+case "${SLURM_USE_GRES}" in
+  true) SBATCH_ARGS+=(--gres="gpu:${GPUS_PER_NODE}") ;;
+  false) ;;
+  auto)
+    if sinfo -p "${PARTITION}" -h -o '%G' | grep -q 'gpu:'; then
+      SBATCH_ARGS+=(--gres="gpu:${GPUS_PER_NODE}")
+    fi
+    ;;
+  *) echo "SLURM_USE_GRES must be auto, true, or false" >&2; exit 2 ;;
+esac
 if [[ -n "${SLURM_DEPENDENCY}" ]]; then
   SBATCH_ARGS+=(--dependency="${SLURM_DEPENDENCY}")
 fi
