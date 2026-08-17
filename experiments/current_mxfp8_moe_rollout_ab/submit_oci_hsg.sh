@@ -29,6 +29,7 @@ VLLM_TP=${VLLM_TP:-}
 VLLM_PP=${VLLM_PP:-1}
 MAX_STEPS=${MAX_STEPS:-20}
 WALLTIME=${WALLTIME:-04:00:00}
+SLURM_DEPENDENCY=${SLURM_DEPENDENCY:-}
 IDLE_REAPER_EXEMPT_MINS=${IDLE_REAPER_EXEMPT_MINS:-120}
 IDLE_REAPER_EXEMPT_REASON=${IDLE_REAPER_EXEMPT_REASON:-model_loading}
 IDLE_REAPER_EXEMPT_DESCRIPTION=${IDLE_REAPER_EXEMPT_DESCRIPTION:-NeMo-RL environment build, model load, FlashInfer autotuning, and CUDA Graph capture}
@@ -189,6 +190,7 @@ moe_backend=flashinfer_trtllm
 refit_transport=nccl_reshard
 cuda_graphs=enabled
 max_steps=${MAX_STEPS}
+slurm_dependency=${SLURM_DEPENDENCY:-none}
 idle_reaper_exempt_minutes=${IDLE_REAPER_EXEMPT_MINS}
 seed=42
 wandb_project=${WANDB_PROJECT}
@@ -272,6 +274,9 @@ SBATCH_ARGS=(
   --output="${EXPERIMENT_ROOT}/slurm-%j.out"
   --comment="{\"OccupiedIdleGPUsJobReaper\":{\"exemptIdleTimeMins\":\"${IDLE_REAPER_EXEMPT_MINS}\",\"reason\":\"${IDLE_REAPER_EXEMPT_REASON}\",\"description\":\"${IDLE_REAPER_EXEMPT_DESCRIPTION}\"}}"
 )
+if [[ -n "${SLURM_DEPENDENCY}" ]]; then
+  SBATCH_ARGS+=(--dependency="${SLURM_DEPENDENCY}")
+fi
 
 printf 'action=%s\nmodel=%s\narm=%s\nsha=%s\nresult=%s\n' \
   "${ACTION}" "${MODEL}" "${ARM}" "${LOCAL_HEAD}" "${EXPERIMENT_ROOT}"
