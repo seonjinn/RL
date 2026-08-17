@@ -30,6 +30,25 @@ _SIDECAR_FIELDS = {
     "input_lengths",
     "routed_experts",
 }
+_MANDATORY_LOSS_METRICS = {
+    "token_mult_prob_error",
+    "gen_kl_error",
+    "policy_kl_error",
+    "num_valid_samples",
+}
+_MANDATORY_BATCH_METRICS = {
+    "effective_valid_tokens",
+    "sample_mask_sum",
+    "reward_sum",
+    "reward_mean",
+    "reward_l2_norm",
+}
+_FULL_TENSOR_FIELDS = (
+    "selected_output",
+    "selected_output_gradient",
+    "selected_input_gradient",
+)
+DEFAULT_MAX_WORKER_HOST_BYTES = 256 * 1024**3
 
 
 @dataclass(frozen=True)
@@ -222,6 +241,11 @@ def load_frozen_batch(source: Path) -> FrozenBatch:
     )
     if any(not np.all(np.isfinite(array)) for array in numeric_arrays):
         raise ValueError("frozen JSONL numeric training fields must be finite")
+    positions = np.arange(token_ids.shape[1])[None, :]
+    valid_positions = positions < input_lengths[:, None]
+    effective_mask = token_mask * sample_mask[:, None]
+    if not np.any(np.logical_and(valid_positions, effective_mask != 0)):
+        raise ValueError("frozen batch has no effective valid training token")
     batch = {
         "input_ids": token_ids.astype(np.int64, copy=False),
         "input_lengths": input_lengths.astype(np.int64, copy=False),
@@ -252,8 +276,31 @@ def _compare_number(
     rtol: float,
     atol: float,
 ) -> None:
+    for value in (eager, graph):
+        try:
+            finite = bool(np.all(np.isfinite(value)))
+        except TypeError as error:
+            raise ValueError(f"{label} is not numeric on rank {rank}") from error
+        if not finite:
+            raise ValueError(f"{label} must be finite on rank {rank}")
     if not np.allclose(eager, graph, rtol=rtol, atol=atol, equal_nan=False):
-        raise ValueError(f"{label} parity failed on rank {rank}: {eager!r} != {graph!r}")
+        raise ValueError(
+            f"{label} parity failed on rank {rank}: {eager!r} != {graph!r}"
+        )
+
+
+def _require_finite_tree(value: Any, *, label: str, rank: int) -> None:
+    if isinstance(value, Mapping):
+        for name, child in value.items():
+            _require_finite_tree(child, label=f"{label}.{name}", rank=rank)
+    elif isinstance(value, (list, tuple)):
+        for index, child in enumerate(value):
+            _require_finite_tree(child, label=f"{label}[{index}]", rank=rank)
+    elif isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(
+        value, bool
+    ):
+        if not bool(np.isfinite(value)):
+            raise ValueError(f"{label} must be finite on rank {rank}")
 
 
 def _compare_tensor_evidence(
@@ -269,9 +316,10 @@ def _compare_tensor_evidence(
         if re.fullmatch(r"[0-9a-f]{64}", str(evidence.get("sha256", ""))) is None:
             raise ValueError(f"{label} lacks a valid {side} SHA256 on rank {rank}")
     for field in ("shape", "dtype", "numel", "sample_indices"):
-        if field in eager or field in graph:
-            if eager.get(field) != graph.get(field):
-                raise ValueError(f"{label} {field} parity failed on rank {rank}")
+        if field not in eager or field not in graph:
+            raise ValueError(f"{label} lacks {field} evidence on rank {rank}")
+        if eager[field] != graph[field]:
+            raise ValueError(f"{label} {field} parity failed on rank {rank}")
     for field in ("l2_norm", "max_abs", "mean", "values"):
         if field not in eager or field not in graph:
             raise ValueError(f"{label} lacks numeric {field} evidence on rank {rank}")
@@ -285,28 +333,185 @@ def _compare_tensor_evidence(
         )
 
 
+def _validate_full_tensor_comparison(
+    comparison: Mapping[str, Any],
+    *,
+    expected_numel: int,
+    label: str,
+    rank: int,
+    rtol: float,
+    atol: float,
+) -> None:
+    required = {
+        "numel",
+        "max_abs_diff",
+        "max_rel_diff",
+        "mismatch_count",
+        "rtol",
+        "atol",
+    }
+    if not required.issubset(comparison):
+        raise ValueError(f"{label} lacks full tensor comparison on rank {rank}")
+    _require_finite_tree(comparison, label=label, rank=rank)
+    if int(comparison["numel"]) != expected_numel or expected_numel < 1:
+        raise ValueError(f"{label} full tensor numel is invalid on rank {rank}")
+    if float(comparison["max_abs_diff"]) < 0 or float(comparison["max_rel_diff"]) < 0:
+        raise ValueError(f"{label} full tensor differences are invalid on rank {rank}")
+    if int(comparison["mismatch_count"]) != 0:
+        raise ValueError(f"{label} full tensor parity failed on rank {rank}")
+    if float(comparison["rtol"]) != rtol or float(comparison["atol"]) != atol:
+        raise ValueError(f"{label} full tensor tolerances differ on rank {rank}")
+
+
+def _validate_runtime_routes(
+    eager_routes: Any,
+    setup_routes: Any,
+    graph_routes: Any,
+    route_comparison: Any,
+    *,
+    rank: int,
+) -> int:
+    if (
+        not isinstance(eager_routes, list)
+        or not isinstance(setup_routes, list)
+        or not isinstance(graph_routes, list)
+    ):
+        raise ValueError(f"runtime route evidence is missing on rank {rank}")
+    if (
+        not eager_routes
+        or len(eager_routes) != len(setup_routes)
+        or len(eager_routes) != len(graph_routes)
+    ):
+        raise ValueError(f"runtime route coverage differs on rank {rank}")
+    if not isinstance(route_comparison, Mapping):
+        raise ValueError(f"runtime route comparison is missing on rank {rank}")
+    _require_finite_tree(route_comparison, label="runtime_route_comparison", rank=rank)
+    if int(route_comparison.get("compared_routes", -1)) != len(eager_routes):
+        raise ValueError(f"runtime route comparison coverage is invalid on rank {rank}")
+    if int(route_comparison.get("mismatch_count", -1)) != 0:
+        raise ValueError(f"runtime route comparison failed on rank {rank}")
+
+    exact_fields = (
+        "sequence_index",
+        "layer_number",
+        "payload_index",
+        "route_sha256",
+        "shape",
+        "dtype",
+        "expert_counts",
+        "invalid_expert_count",
+    )
+    for index, (eager, setup, graph) in enumerate(
+        zip(eager_routes, setup_routes, graph_routes)
+    ):
+        if (
+            not isinstance(eager, Mapping)
+            or not isinstance(setup, Mapping)
+            or not isinstance(graph, Mapping)
+        ):
+            raise ValueError(f"runtime route {index} is malformed on rank {rank}")
+        _require_finite_tree(eager, label=f"eager.runtime_routes[{index}]", rank=rank)
+        _require_finite_tree(setup, label=f"setup.runtime_routes[{index}]", rank=rank)
+        _require_finite_tree(graph, label=f"graph.runtime_routes[{index}]", rank=rank)
+        if re.fullmatch(r"[0-9a-f]{64}", str(eager.get("route_sha256", ""))) is None:
+            raise ValueError(f"runtime route SHA256 is malformed on rank {rank}")
+        for field in exact_fields:
+            if eager.get(field) != setup.get(field) or eager.get(field) != graph.get(
+                field
+            ):
+                raise ValueError(
+                    f"runtime route {field} differs at index {index} on rank {rank}"
+                )
+        eager_generation = eager.get("generation")
+        setup_generation = setup.get("generation")
+        graph_generation = graph.get("generation")
+        if (
+            not isinstance(eager_generation, int)
+            or isinstance(eager_generation, bool)
+            or not isinstance(graph_generation, int)
+            or isinstance(graph_generation, bool)
+            or not isinstance(setup_generation, int)
+            or isinstance(setup_generation, bool)
+            or graph_generation <= setup_generation
+            or graph_generation <= eager_generation
+        ):
+            raise ValueError(f"runtime route generations are not fresh on rank {rank}")
+        launch = graph.get("graph_launch")
+        if not isinstance(launch, Mapping) or launch.get("successful") is not True:
+            raise ValueError(f"runtime route graph launch is absent on rank {rank}")
+        copy_generation = launch.get("copy_generation")
+        if (
+            not isinstance(copy_generation, int)
+            or isinstance(copy_generation, bool)
+            or copy_generation < 1
+        ):
+            raise ValueError(
+                f"runtime route graph copy generation is invalid on rank {rank}"
+            )
+        if (
+            not isinstance(launch.get("graph_index"), int)
+            or int(launch["graph_index"]) < 0
+        ):
+            raise ValueError(f"runtime route graph index is invalid on rank {rank}")
+        if (
+            re.fullmatch(r"[0-9a-f]{64}", str(launch.get("schedule_key_sha256", "")))
+            is None
+        ):
+            raise ValueError(
+                f"runtime route schedule identity is invalid on rank {rank}"
+            )
+        if eager.get("graph_launch") is not None:
+            raise ValueError(
+                f"eager runtime route unexpectedly reports a graph on rank {rank}"
+            )
+    return len(eager_routes)
+
+
 def validate_parity(
-    eager_results: Sequence[Mapping[str, Any]],
-    graph_results: Sequence[Mapping[str, Any]],
+    worker_results: Sequence[Mapping[str, Any]],
     *,
     rtol: float = RTOL,
     atol: float = ATOL,
 ) -> dict[str, Any]:
-    """Validate exact content identity and bounded numeric parity on all 16 ranks."""
-    if len(eager_results) != WORLD_SIZE or len(graph_results) != WORLD_SIZE:
+    """Validate same-worker full-tensor and runtime-route parity on all ranks."""
+    if len(worker_results) != WORLD_SIZE:
         raise ValueError("parity requires exactly one result on all 16 ranks")
-    eager = {int(result["rank"]): result for result in eager_results}
-    graph = {int(result["rank"]): result for result in graph_results}
+    results = {int(result["rank"]): result for result in worker_results}
     expected_ranks = set(range(WORLD_SIZE))
-    if set(eager) != expected_ranks or set(graph) != expected_ranks:
-        raise ValueError("parity requires exactly one eager and graph result on all 16 ranks")
+    if set(results) != expected_ranks or len(results) != len(worker_results):
+        raise ValueError("parity requires exactly one result on all 16 ranks")
 
     compared_gradients = 0
+    compared_routes = 0
     for rank in range(WORLD_SIZE):
-        eager_rank = eager[rank]
-        graph_rank = graph[rank]
+        combined = results[rank]
+        eager_rank = combined.get("eager")
+        graph_rank = combined.get("graph")
+        if not isinstance(eager_rank, Mapping) or not isinstance(graph_rank, Mapping):
+            raise ValueError(f"combined same-worker arms are missing on rank {rank}")
+        _require_finite_tree(combined, label="result", rank=rank)
         if eager_rank.get("arm") != "eager" or graph_rank.get("arm") != "graph":
             raise ValueError(f"parity arm labels are invalid on rank {rank}")
+        max_host_bytes = int(combined.get("max_host_bytes", 0))
+        input_snapshot_bytes = int(combined.get("input_snapshot_host_bytes", -1))
+        baseline_bytes = int(combined.get("baseline_host_bytes", -1))
+        snapshot_bytes = max(
+            int(eager_rank.get("snapshot_host_bytes", -1)),
+            int(graph_rank.get("snapshot_host_bytes", -1)),
+        )
+        snapshot_limit = int(eager_rank.get("snapshot_host_limit_bytes", -1))
+        if snapshot_limit != int(graph_rank.get("snapshot_host_limit_bytes", -2)):
+            raise ValueError(f"worker snapshot limits differ on rank {rank}")
+        if (
+            max_host_bytes < 1
+            or input_snapshot_bytes < 0
+            or baseline_bytes < 1
+            or snapshot_bytes < 1
+            or snapshot_bytes > snapshot_limit
+            or input_snapshot_bytes + baseline_bytes + snapshot_bytes
+            > max_host_bytes
+        ):
+            raise ValueError(f"worker host-memory evidence is invalid on rank {rank}")
         for digest in (
             "token_digest",
             "route_digest",
@@ -342,6 +547,21 @@ def validate_parity(
                 rtol=rtol,
                 atol=atol,
             )
+        full_comparisons = combined.get("full_tensor_comparisons")
+        if not isinstance(full_comparisons, Mapping):
+            raise ValueError(f"full tensor comparisons are missing on rank {rank}")
+        for field in _FULL_TENSOR_FIELDS:
+            comparison = full_comparisons.get(field)
+            if not isinstance(comparison, Mapping):
+                raise ValueError(f"{field} lacks full tensor comparison on rank {rank}")
+            _validate_full_tensor_comparison(
+                comparison,
+                expected_numel=int(eager_rank[field]["numel"]),
+                label=field,
+                rank=rank,
+                rtol=rtol,
+                atol=atol,
+            )
         if not eager_rank["parameter_gradients"]:
             raise ValueError(f"parameter gradient evidence is empty on rank {rank}")
         for collection in ("parameter_gradients", "simulated_parameter_deltas"):
@@ -360,6 +580,33 @@ def validate_parity(
                 )
                 if collection == "parameter_gradients":
                     compared_gradients += 1
+            full_collection = full_comparisons.get(collection)
+            if not isinstance(full_collection, Mapping) or set(full_collection) != set(
+                eager_collection
+            ):
+                raise ValueError(
+                    f"{collection} full tensor parameter names differ on rank {rank}"
+                )
+            for name, comparison in full_collection.items():
+                if not isinstance(comparison, Mapping):
+                    raise ValueError(
+                        f"{collection}.{name} lacks full tensor comparison on rank {rank}"
+                    )
+                _validate_full_tensor_comparison(
+                    comparison,
+                    expected_numel=int(eager_collection[name]["numel"]),
+                    label=f"{collection}.{name}",
+                    rank=rank,
+                    rtol=rtol,
+                    atol=atol,
+                )
+        for required_metric in _MANDATORY_LOSS_METRICS:
+            if required_metric not in eager_rank.get("metrics", {}) or (
+                required_metric not in graph_rank.get("metrics", {})
+            ):
+                raise ValueError(
+                    f"mandatory metric {required_metric} is missing on rank {rank}"
+                )
         if set(eager_rank["metrics"]) != set(graph_rank["metrics"]):
             raise ValueError(f"metric names differ on rank {rank}")
         for name in eager_rank["metrics"]:
@@ -371,13 +618,91 @@ def validate_parity(
                 rtol=rtol,
                 atol=atol,
             )
+        eager_batch_metrics = eager_rank.get("batch_metrics")
+        graph_batch_metrics = graph_rank.get("batch_metrics")
+        if not isinstance(eager_batch_metrics, Mapping) or not isinstance(
+            graph_batch_metrics, Mapping
+        ):
+            raise ValueError(f"batch metrics are missing on rank {rank}")
+        if not _MANDATORY_BATCH_METRICS.issubset(eager_batch_metrics) or not (
+            _MANDATORY_BATCH_METRICS.issubset(graph_batch_metrics)
+        ):
+            raise ValueError(
+                f"mandatory mask/reward metrics are missing on rank {rank}"
+            )
+        if set(eager_batch_metrics) != set(graph_batch_metrics):
+            raise ValueError(f"batch metric names differ on rank {rank}")
+        for name in eager_batch_metrics:
+            _compare_number(
+                eager_batch_metrics[name],
+                graph_batch_metrics[name],
+                label=f"batch_metrics.{name}",
+                rank=rank,
+                rtol=rtol,
+                atol=atol,
+            )
+        if int(graph_batch_metrics["effective_valid_tokens"]) < 1:
+            raise ValueError(f"effective valid token count is zero on rank {rank}")
+
+        compared_routes += _validate_runtime_routes(
+            eager_rank.get("runtime_routes"),
+            graph_rank.get("setup_runtime_routes"),
+            graph_rank.get("runtime_routes"),
+            combined.get("runtime_route_comparison"),
+            rank=rank,
+        )
         graph_metrics = graph_rank["graph_metrics"]
-        for positive in ("requested_graph_calls", "graph_calls", "cache_hits"):
-            if int(graph_metrics.get(positive, 0)) < 1:
-                raise ValueError(f"graph {positive} is absent on rank {rank}")
-        if int(graph_metrics.get("captures", -1)) != 1:
-            raise ValueError(f"graph capture count is not exactly one on rank {rank}")
-        for zero in ("recaptures", "fallback_count", "unsafe_route_events"):
+        required_graph_metrics = {
+            "setup_capture_count",
+            "setup_replay_count",
+            "setup_cache_hit_count",
+            "setup_cache_miss_count",
+            "setup_eviction_count",
+            "setup_fallback_count",
+            "setup_unsafe_route_events",
+            "setup_eligible_calls",
+            "setup_graph_calls",
+            "eligible_calls",
+            "graph_calls",
+            "measured_capture_count",
+            "measured_replay_count",
+            "measured_cache_hit_count",
+            "measured_cache_miss_count",
+            "measured_eviction_count",
+            "measured_fallback_count",
+            "measured_unsafe_route_events",
+        }
+        if not isinstance(
+            graph_metrics, Mapping
+        ) or not required_graph_metrics.issubset(graph_metrics):
+            raise ValueError(f"graph telemetry is incomplete on rank {rank}")
+        eligible_calls = int(graph_metrics.get("eligible_calls", 0))
+        graph_calls = int(graph_metrics.get("graph_calls", 0))
+        if eligible_calls < 1 or graph_calls != eligible_calls:
+            raise ValueError(f"graph call coverage is incomplete on rank {rank}")
+        if int(graph_metrics.get("setup_capture_count", -1)) != 1:
+            raise ValueError(
+                f"graph setup capture count is not exactly one on rank {rank}"
+            )
+        for zero in (
+            "setup_eviction_count",
+            "setup_fallback_count",
+            "setup_unsafe_route_events",
+        ):
+            if int(graph_metrics[zero]) != 0:
+                raise ValueError(f"graph {zero} is nonzero on rank {rank}")
+        if (
+            int(graph_metrics.get("measured_replay_count", 0)) < 1
+            or int(graph_metrics.get("measured_cache_hit_count", 0)) < 1
+        ):
+            raise ValueError(f"graph measured hit is absent on rank {rank}")
+        for zero in (
+            "measured_capture_count",
+            "measured_cache_miss_count",
+            "measured_eviction_count",
+            "measured_fallback_count",
+            "measured_unsafe_route_events",
+        ):
             if int(graph_metrics.get(zero, -1)) != 0:
                 raise ValueError(f"graph {zero} is nonzero on rank {rank}")
 
@@ -387,6 +712,7 @@ def validate_parity(
         "rtol": rtol,
         "atol": atol,
         "compared_parameter_gradients": compared_gradients,
+        "compared_runtime_routes": compared_routes,
     }
 
 
@@ -401,7 +727,13 @@ def write_immutable_json(path: Path, payload: Mapping[str, Any]) -> None:
         raise FileExistsError(f"parity artifact already exists: {path}") from error
     try:
         with os.fdopen(fd, "w") as output:
-            json.dump(payload, output, sort_keys=True, separators=(",", ":"))
+            json.dump(
+                payload,
+                output,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
             output.write("\n")
             output.flush()
             os.fsync(output.fileno())
@@ -517,28 +849,26 @@ def _run_distributed(
             ),
         )
 
-        def arm(name: str) -> list[dict[str, Any]]:
-            futures = policy.worker_group.run_all_workers_sharded_data(
-                "run_r3_router_graph_parity_arm",
-                data=shards,
-                in_sharded_axes=["data_parallel"],
-                replicate_on_axes=[
-                    "context_parallel",
-                    "tensor_parallel",
-                    "pipeline_parallel",
-                ],
-                output_is_replicated=[],
-                common_kwargs={
-                    "loss_fn": loss_fn,
-                    "arm": name,
-                    "simulated_learning_rate": args.simulated_learning_rate,
-                },
-            )
-            return policy.worker_group.get_all_worker_results(futures)
-
-        eager = arm("eager")
-        graph = arm("graph")
-        comparison = validate_parity(eager, graph, rtol=args.rtol, atol=args.atol)
+        futures = policy.worker_group.run_all_workers_sharded_data(
+            "run_r3_router_graph_parity",
+            data=shards,
+            in_sharded_axes=["data_parallel"],
+            replicate_on_axes=[
+                "context_parallel",
+                "tensor_parallel",
+                "pipeline_parallel",
+            ],
+            output_is_replicated=[],
+            common_kwargs={
+                "loss_fn": loss_fn,
+                "simulated_learning_rate": args.simulated_learning_rate,
+                "rtol": args.rtol,
+                "atol": args.atol,
+                "max_host_bytes": args.max_worker_host_bytes,
+            },
+        )
+        workers = policy.worker_group.get_all_worker_results(futures)
+        comparison = validate_parity(workers, rtol=args.rtol, atol=args.atol)
         return {
             "schema": "nemo_rl_r3_router_graph_parity_v1",
             "comparison": comparison,
@@ -550,6 +880,12 @@ def _run_distributed(
                 "rows": frozen.row_count,
             },
             "config": OmegaConf.to_container(config, resolve=True),
+            "diagnostic": {
+                "rtol": args.rtol,
+                "atol": args.atol,
+                "simulated_learning_rate": args.simulated_learning_rate,
+                "max_worker_host_bytes": args.max_worker_host_bytes,
+            },
             "provenance": {
                 "profile_sha256": args.profile_sha256,
                 "runtime_attestation_path": str(
@@ -558,8 +894,7 @@ def _run_distributed(
                 "runtime_attestation_sha256": runtime_attestation_sha256,
                 "runtime_attestation": runtime_attestation,
             },
-            "eager": eager,
-            "graph": graph,
+            "workers": workers,
         }
     finally:
         policy.shutdown()
@@ -576,6 +911,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rtol", type=float, default=RTOL)
     parser.add_argument("--atol", type=float, default=ATOL)
     parser.add_argument("--simulated-learning-rate", type=float, default=1e-4)
+    parser.add_argument(
+        "--max-worker-host-bytes",
+        type=int,
+        default=DEFAULT_MAX_WORKER_HOST_BYTES,
+    )
     args, args.overrides = parser.parse_known_args()
     return args
 
@@ -584,6 +924,15 @@ def main() -> None:
     args = parse_args()
     if re.fullmatch(r"[0-9a-f]{64}", args.profile_sha256) is None:
         raise ValueError("--profile-sha256 must be a full lowercase SHA256")
+    if args.rtol != RTOL or args.atol != ATOL:
+        raise ValueError("R3 parity requires exact rtol=atol=5e-2")
+    if args.max_worker_host_bytes < 3:
+        raise ValueError("--max-worker-host-bytes must be positive")
+    if (
+        not np.isfinite(args.simulated_learning_rate)
+        or args.simulated_learning_rate <= 0
+    ):
+        raise ValueError("--simulated-learning-rate must be finite and positive")
     frozen = load_frozen_batch(args.frozen_batch)
     if frozen.source_sha256 != args.expected_source_sha:
         raise ValueError("frozen source SHA does not match --expected-source-sha")

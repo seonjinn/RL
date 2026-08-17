@@ -266,6 +266,38 @@ def test_r3_router_graph_parity_driver_rejects_missing_or_unbound_sidecar(
     sidecar.unlink()
 
 
+def test_r3_router_graph_parity_driver_rejects_zero_effective_valid_tokens(
+    tmp_path: Path,
+) -> None:
+    driver = _load_r3_router_graph_parity_driver()
+    frozen = tmp_path / "train_data_step3.jsonl"
+    frozen.write_text(
+        json.dumps(
+            {
+                "idx": 0,
+                "token_ids": [1, 2],
+                "input_lengths": 2,
+                "token_loss_mask": [0.0, 0.0],
+                "sample_loss_mask": 1.0,
+                "advantages": [0.0, 1.0],
+                "generation_logprobs": [0.0, -1.0],
+                "prev_logprobs": [0.0, -1.0],
+                "rewards": 1.0,
+            }
+        )
+        + "\n"
+    )
+    _write_r3_parity_sidecar(
+        frozen,
+        token_ids=np.asarray([[1, 2]], dtype=np.int64),
+        input_lengths=np.asarray([2], dtype=np.int64),
+        routed_experts=np.asarray([[[[0, 1]], [[1, 2]]]], dtype=np.int16),
+    )
+
+    with pytest.raises(ValueError, match="effective valid training token"):
+        driver.load_frozen_batch(frozen)
+
+
 def test_r3_router_graph_parity_driver_requires_typed_runtime_attestation(
     tmp_path: Path,
 ) -> None:
@@ -288,7 +320,7 @@ def test_r3_router_graph_parity_driver_requires_typed_runtime_attestation(
         driver.load_runtime_attestation(attestation)
 
 
-def _r3_router_graph_parity_rank_result(rank: int, arm: str) -> dict[str, object]:
+def _r3_router_graph_parity_rank_result(rank: int) -> dict[str, object]:
     def tensor_evidence(*, sha256: str, values: list[float]) -> dict[str, object]:
         return {
             "sha256": sha256,
@@ -298,90 +330,246 @@ def _r3_router_graph_parity_rank_result(rank: int, arm: str) -> dict[str, object
             "l2_norm": 2.2360679775,
             "max_abs": 2.0,
             "mean": 1.5,
+            "sample_indices": [0, 1],
             "values": values,
         }
 
+    def arm(name: str) -> dict[str, object]:
+        graph = name == "graph"
+        generation = 6 if graph else 5
+        runtime_route = {
+            "sequence_index": 0,
+            "layer_number": 3,
+            "payload_index": 1,
+            "route_sha256": "9" * 64,
+            "shape": [2, 2],
+            "dtype": "torch.int64",
+            "expert_counts": [1, 1, 1, 1],
+            "invalid_expert_count": 0,
+            "generation": generation,
+            "graph_launch": (
+                {
+                    "successful": True,
+                    "copy_generation": generation,
+                    "graph_index": 0,
+                    "schedule_key_sha256": "8" * 64,
+                }
+                if graph
+                else None
+            ),
+        }
+        result = {
+            "rank": rank,
+            "arm": name,
+            "token_digest": "c" * 64,
+            "route_digest": "d" * 64,
+            "mask_digest": "e" * 64,
+            "reward_digest": "f" * 64,
+            "loss": 1.25,
+            "selected_output": tensor_evidence(sha256="a" * 64, values=[1.0, 2.0]),
+            "selected_output_gradient": tensor_evidence(
+                sha256="a" * 64, values=[1.0, 2.0]
+            ),
+            "selected_input_gradient": tensor_evidence(
+                sha256="a" * 64, values=[1.0, 2.0]
+            ),
+            "parameter_gradients": {
+                "decoder.weight": tensor_evidence(sha256="a" * 64, values=[1.0, 2.0])
+            },
+            "simulated_parameter_deltas": {
+                "decoder.weight": tensor_evidence(sha256="b" * 64, values=[-0.1, -0.2])
+            },
+            "metrics": {
+                "token_mult_prob_error": 1.0,
+                "policy_kl_error": 0.125,
+                "gen_kl_error": 0.25,
+                "num_valid_samples": 1.0,
+            },
+            "batch_metrics": {
+                "effective_valid_tokens": 1,
+                "sample_mask_sum": 1.0,
+                "reward_sum": 1.0,
+                "reward_mean": 1.0,
+                "reward_l2_norm": 1.0,
+            },
+            "graph_metrics": {
+                "setup_capture_count": 1 if graph else 0,
+                "setup_replay_count": 0,
+                "setup_cache_hit_count": 0,
+                "setup_cache_miss_count": 1 if graph else 0,
+                "setup_eviction_count": 0,
+                "setup_fallback_count": 0,
+                "setup_unsafe_route_events": 0,
+                "setup_eligible_calls": 1 if graph else 0,
+                "setup_graph_calls": 1 if graph else 0,
+                "eligible_calls": 1 if graph else 0,
+                "graph_calls": 1 if graph else 0,
+                "measured_capture_count": 0,
+                "measured_replay_count": 1 if graph else 0,
+                "measured_cache_hit_count": 1 if graph else 0,
+                "measured_cache_miss_count": 0,
+                "measured_eviction_count": 0,
+                "measured_fallback_count": 0,
+                "measured_unsafe_route_events": 0,
+            },
+            "runtime_routes": [runtime_route],
+            "setup_runtime_routes": [],
+            "snapshot_host_bytes": 500,
+            "snapshot_host_limit_bytes": 735,
+        }
+        if graph:
+            setup_route = dict(runtime_route)
+            setup_route["generation"] = 5
+            setup_route["graph_launch"] = None
+            result["setup_runtime_routes"] = [setup_route]
+        return result
+
+    def comparison(numel: int = 2) -> dict[str, object]:
+        return {
+            "numel": numel,
+            "max_abs_diff": 0.0,
+            "max_rel_diff": 0.0,
+            "mismatch_count": 0,
+            "rtol": 0.05,
+            "atol": 0.05,
+        }
+
+    eager = arm("eager")
+    graph = arm("graph")
     return {
         "rank": rank,
-        "arm": arm,
-        "token_digest": "c" * 64,
-        "route_digest": "d" * 64,
-        "mask_digest": "e" * 64,
-        "reward_digest": "f" * 64,
-        "loss": 1.25,
-        "selected_output": tensor_evidence(sha256="a" * 64, values=[1.0, 2.0]),
-        "selected_output_gradient": tensor_evidence(
-            sha256="a" * 64, values=[1.0, 2.0]
-        ),
-        "selected_input_gradient": tensor_evidence(
-            sha256="a" * 64, values=[1.0, 2.0]
-        ),
-        "parameter_gradients": {
-            "decoder.weight": tensor_evidence(
-                sha256="a" * 64, values=[1.0, 2.0]
-            )
+        "eager": eager,
+        "graph": graph,
+        "full_tensor_comparisons": {
+            "selected_output": comparison(),
+            "selected_output_gradient": comparison(),
+            "selected_input_gradient": comparison(),
+            "parameter_gradients": {"decoder.weight": comparison()},
+            "simulated_parameter_deltas": {"decoder.weight": comparison()},
         },
-        "simulated_parameter_deltas": {
-            "decoder.weight": tensor_evidence(
-                sha256="b" * 64, values=[-0.1, -0.2]
-            )
+        "runtime_route_comparison": {
+            "compared_routes": 1,
+            "mismatch_count": 0,
         },
-        "metrics": {
-            "token_mult_prob_error": 1.0,
-            "policy_kl": 0.125,
-            "generation_kl": 0.25,
-        },
-        "graph_metrics": {
-            "requested_graph_calls": 1 if arm == "graph" else 0,
-            "graph_calls": 1 if arm == "graph" else 0,
-            "cache_hits": 1 if arm == "graph" else 0,
-            "captures": 1 if arm == "graph" else 0,
-            "recaptures": 0,
-            "fallback_count": 0,
-            "unsafe_route_events": 0,
-        },
+        "baseline_host_bytes": 100,
+        "input_snapshot_host_bytes": 20,
+        "max_host_bytes": 1000,
     }
 
 
 def test_r3_router_graph_parity_driver_checks_every_rank_and_parameter() -> None:
     driver = _load_r3_router_graph_parity_driver()
-    eager = [_r3_router_graph_parity_rank_result(rank, "eager") for rank in range(16)]
-    graph = [_r3_router_graph_parity_rank_result(rank, "graph") for rank in range(16)]
+    results = [_r3_router_graph_parity_rank_result(rank) for rank in range(16)]
 
-    comparison = driver.validate_parity(eager, graph, rtol=0.05, atol=0.05)
+    comparison = driver.validate_parity(results, rtol=0.05, atol=0.05)
 
     assert comparison["status"] == "passed"
     assert comparison["world_size"] == 16
     assert comparison["compared_parameter_gradients"] == 16
-    graph[7]["route_digest"] = "0" * 64
+    results[7]["graph"]["route_digest"] = "0" * 64
     with pytest.raises(ValueError, match="route_digest.*rank 7"):
-        driver.validate_parity(eager, graph, rtol=0.05, atol=0.05)
-    graph[7]["route_digest"] = "d" * 64
-    graph[9]["parameter_gradients"]["decoder.weight"]["values"][1] = 4.0
-    with pytest.raises(ValueError, match="decoder.weight.*rank 9"):
-        driver.validate_parity(eager, graph, rtol=0.05, atol=0.05)
+        driver.validate_parity(results, rtol=0.05, atol=0.05)
+
+
+def test_r3_router_graph_parity_driver_uses_one_combined_worker_call() -> None:
+    source = (
+        EXPERIMENT_DIR / "scripts/run_r3_router_graph_parity.py"
+    ).read_text()
+
+    assert '"run_r3_router_graph_parity"' in source
+    assert '"run_r3_router_graph_parity_arm"' not in source
+
+
+def test_r3_router_graph_parity_driver_rejects_unsampled_full_tensor_diff() -> None:
+    driver = _load_r3_router_graph_parity_driver()
+    results = [_r3_router_graph_parity_rank_result(rank) for rank in range(16)]
+
+    # The report samples and summaries still match; only the worker's full-tensor
+    # comparison detects this adversarial difference outside sampled positions.
+    comparison = results[9]["full_tensor_comparisons"]["parameter_gradients"][
+        "decoder.weight"
+    ]
+    comparison.update(max_abs_diff=2.0, max_rel_diff=1.0, mismatch_count=1)
+
+    with pytest.raises(ValueError, match="decoder.weight.*full tensor.*rank 9"):
+        driver.validate_parity(results, rtol=0.05, atol=0.05)
+
+
+def test_r3_router_graph_parity_driver_rejects_runtime_route_difference() -> None:
+    driver = _load_r3_router_graph_parity_driver()
+    results = [_r3_router_graph_parity_rank_result(rank) for rank in range(16)]
+    # Caller/pre-pack route_digest remains equal; installed RouterReplay route differs.
+    results[7]["graph"]["runtime_routes"][0]["route_sha256"] = "0" * 64
+
+    with pytest.raises(ValueError, match="runtime route.*rank 7"):
+        driver.validate_parity(results)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("eligible_calls", 2, "coverage"),
+        ("graph_calls", 0, "coverage"),
+        ("measured_capture_count", 1, "measured_capture_count"),
+        ("measured_cache_miss_count", 1, "measured_cache_miss_count"),
+        ("measured_eviction_count", 1, "measured_eviction_count"),
+        ("measured_fallback_count", 1, "measured_fallback_count"),
+        ("measured_unsafe_route_events", 1, "measured_unsafe_route_events"),
+    ],
+)
+def test_r3_router_graph_parity_driver_rejects_inexact_graph_telemetry(
+    field: str, value: int, message: str
+) -> None:
+    driver = _load_r3_router_graph_parity_driver()
+    results = [_r3_router_graph_parity_rank_result(rank) for rank in range(16)]
+    results[0]["graph"]["graph_metrics"][field] = value
+
+    with pytest.raises(ValueError, match=message):
+        driver.validate_parity(results)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda result: result["graph"]["metrics"].pop("gen_kl_error"), "metric"),
+        (
+            lambda result: result["graph"]["metrics"].update(
+                token_mult_prob_error=float("nan")
+            ),
+            "finite",
+        ),
+        (
+            lambda result: result["full_tensor_comparisons"]["selected_output"].update(
+                max_abs_diff=float("inf")
+            ),
+            "finite",
+        ),
+    ],
+)
+def test_r3_router_graph_parity_driver_rejects_missing_or_nonfinite_evidence(
+    mutation, message: str
+) -> None:
+    driver = _load_r3_router_graph_parity_driver()
+    results = [_r3_router_graph_parity_rank_result(rank) for rank in range(16)]
+    mutation(results[0])
+
+    with pytest.raises(ValueError, match=message):
+        driver.validate_parity(results)
 
 
 def test_r3_router_graph_parity_driver_rejects_incomplete_rank_evidence() -> None:
     driver = _load_r3_router_graph_parity_driver()
-    eager = [_r3_router_graph_parity_rank_result(rank, "eager") for rank in range(16)]
-    graph = [_r3_router_graph_parity_rank_result(rank, "graph") for rank in range(16)]
+    results = [_r3_router_graph_parity_rank_result(rank) for rank in range(16)]
 
-    eager[0].pop("selected_input_gradient")
-    graph[0].pop("selected_input_gradient")
+    results[0]["eager"].pop("selected_input_gradient")
+    results[0]["graph"].pop("selected_input_gradient")
     with pytest.raises(ValueError, match="selected_input_gradient.*rank 0"):
-        driver.validate_parity(eager, graph)
+        driver.validate_parity(results)
 
-    eager[0]["selected_input_gradient"] = _r3_router_graph_parity_rank_result(
-        0, "eager"
-    )["selected_input_gradient"]
-    graph[0]["selected_input_gradient"] = _r3_router_graph_parity_rank_result(
-        0, "graph"
-    )["selected_input_gradient"]
-    eager.append(eager[0])
-    graph.append(graph[0])
+    results[0] = _r3_router_graph_parity_rank_result(0)
+    results.append(results[0])
     with pytest.raises(ValueError, match="exactly one.*all 16 ranks"):
-        driver.validate_parity(eager, graph)
+        driver.validate_parity(results)
 
 
 def test_r3_router_graph_parity_driver_writes_one_immutable_artifact(
@@ -399,6 +587,16 @@ def test_r3_router_graph_parity_driver_writes_one_immutable_artifact(
     assert artifact.stat().st_mode & 0o777 == 0o444
     with pytest.raises(FileExistsError, match="already exists"):
         driver.write_immutable_json(artifact, {"status": "replaced"})
+
+
+def test_r3_router_graph_parity_driver_refuses_nonfinite_json(tmp_path: Path) -> None:
+    driver = _load_r3_router_graph_parity_driver()
+    artifact = tmp_path / "parity.json"
+
+    with pytest.raises(ValueError, match="JSON compliant"):
+        driver.write_immutable_json(artifact, {"loss": float("nan")})
+
+    assert not artifact.exists()
 
 
 def _r3_router_graph_parity_launcher_fixture(

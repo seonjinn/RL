@@ -149,6 +149,12 @@ TokenizerType = TypeVar("TokenizerType", bound=PreTrainedTokenizerBase)
 
 _TE_CUDA_GRAPH_DEFAULT_CACHE_CAPACITY = 2
 _TE_CUDA_GRAPH_WARMUP_STEPS = 3
+_R3_PARITY_DEFAULT_MAX_HOST_BYTES = 256 * 1024**3
+_R3_PARITY_FULL_TENSOR_FIELDS = (
+    "selected_output",
+    "selected_output_gradient",
+    "selected_input_gradient",
+)
 _R3_PARITY_ROUTER_REPLAY_ATTRIBUTES = (
     "target_topk_idx",
     "recorded_topk_idx",
@@ -2689,6 +2695,8 @@ class MegatronPolicyWorkerImpl(
         detached = tensor.detach()
         flat = detached.reshape(-1)
         numeric = flat.to(dtype=torch.float64, device="cpu")
+        if numeric.numel() < 1 or not torch.isfinite(numeric).all():
+            raise RuntimeError("R3 parity tensor evidence must be nonempty and finite")
         if numeric.numel() <= max_values:
             indices = list(range(numeric.numel()))
         elif numeric.numel() > 0:
@@ -2760,6 +2768,47 @@ class MegatronPolicyWorkerImpl(
         update(value)
         return digest.hexdigest()
 
+    @classmethod
+    def _r3_router_graph_parity_state_tensor_bytes(cls, value: Any) -> int:
+        seen: set[int] = set()
+
+        def size(item: Any) -> int:
+            if isinstance(item, torch.Tensor):
+                if id(item) in seen:
+                    return 0
+                seen.add(id(item))
+                return int(item.numel() * item.element_size())
+            if isinstance(item, dict):
+                return sum(size(key) + size(child) for key, child in item.items())
+            if isinstance(item, (tuple, list)):
+                return sum(size(child) for child in item)
+            return 0
+
+        return size(value)
+
+    @classmethod
+    def _r3_router_graph_parity_clone_state_to_cpu(cls, value: Any) -> Any:
+        if isinstance(value, torch.Tensor):
+            return value.detach().to(device="cpu", copy=True)
+        if isinstance(value, dict):
+            return {
+                copy.deepcopy(key): cls._r3_router_graph_parity_clone_state_to_cpu(
+                    child
+                )
+                for key, child in value.items()
+            }
+        if isinstance(value, list):
+            return [
+                cls._r3_router_graph_parity_clone_state_to_cpu(child)
+                for child in value
+            ]
+        if isinstance(value, tuple):
+            return tuple(
+                cls._r3_router_graph_parity_clone_state_to_cpu(child)
+                for child in value
+            )
+        return copy.deepcopy(value)
+
     def _zero_r3_router_graph_parity_grad_storage(self) -> None:
         """Zero every existing autograd/Megatron grad tensor without rebinding it."""
         for parameter in self.model.parameters():
@@ -2769,27 +2818,57 @@ class MegatronPolicyWorkerImpl(
             if isinstance(parameter.grad, torch.Tensor):
                 parameter.grad.zero_()
 
-    def _snapshot_r3_router_graph_parity_state(self) -> dict[str, Any]:
+    def _snapshot_r3_router_graph_parity_state(
+        self,
+        *,
+        max_host_bytes: int = _R3_PARITY_DEFAULT_MAX_HOST_BYTES,
+    ) -> dict[str, Any]:
         if getattr(self, "_train_step_state", None) is not None:
             raise RuntimeError("R3 parity diagnostic requires a drained train worker")
+        if isinstance(max_host_bytes, bool) or max_host_bytes < 1:
+            raise ValueError("R3 parity snapshot host-memory budget must be positive")
+
+        host_bytes = 0
+
+        def reserve(byte_count: int, *, label: str) -> None:
+            nonlocal host_bytes
+            if byte_count < 0 or host_bytes + byte_count > max_host_bytes:
+                raise RuntimeError(
+                    "R3 parity snapshot exceeds the host-memory budget while "
+                    f"copying {label}: required>{max_host_bytes} bytes"
+                )
+            host_bytes += byte_count
 
         grad_storage = []
         parameter_sha256 = {}
+        parameter_values = []
         for name, parameter in self.model.named_parameters():
             parameter_sha256[name] = self._r3_router_graph_parity_tensor_sha256(
                 parameter
+            )
+            reserve(
+                int(parameter.numel() * parameter.element_size()),
+                label=f"parameter {name}",
+            )
+            parameter_values.append(
+                (name, parameter, parameter.detach().to(device="cpu", copy=True))
             )
             slots = []
             for slot_name in ("main_grad", "grad"):
                 present = hasattr(parameter, slot_name)
                 slot = getattr(parameter, slot_name, None)
+                if isinstance(slot, torch.Tensor):
+                    reserve(
+                        int(slot.numel() * slot.element_size()),
+                        label=f"{name}.{slot_name}",
+                    )
                 slots.append(
                     (
                         slot_name,
                         present,
                         slot,
                         (
-                            slot.detach().cpu().clone()
+                            slot.detach().to(device="cpu", copy=True)
                             if isinstance(slot, torch.Tensor)
                             else None
                         ),
@@ -2801,12 +2880,24 @@ class MegatronPolicyWorkerImpl(
         if callable(getattr(self.optimizer, "state_dict", None)):
             candidate = self.optimizer.state_dict()
             if isinstance(candidate, dict):
-                optimizer_state = copy.deepcopy(candidate)
+                reserve(
+                    self._r3_router_graph_parity_state_tensor_bytes(candidate),
+                    label="optimizer state",
+                )
+                optimizer_state = self._r3_router_graph_parity_clone_state_to_cpu(
+                    candidate
+                )
         scheduler_state = None
         if callable(getattr(self.scheduler, "state_dict", None)):
             candidate = self.scheduler.state_dict()
             if isinstance(candidate, dict):
-                scheduler_state = copy.deepcopy(candidate)
+                reserve(
+                    self._r3_router_graph_parity_state_tensor_bytes(candidate),
+                    label="scheduler state",
+                )
+                scheduler_state = self._r3_router_graph_parity_clone_state_to_cpu(
+                    candidate
+                )
 
         known_module_attributes = []
         route_counter_dicts = []
@@ -2820,6 +2911,10 @@ class MegatronPolicyWorkerImpl(
             ):
                 present = hasattr(module, attribute)
                 attribute_value = getattr(module, attribute, None)
+                reserve(
+                    self._r3_router_graph_parity_state_tensor_bytes(attribute_value),
+                    label=f"module {attribute}",
+                )
                 try:
                     saved_attribute_value = copy.deepcopy(attribute_value)
                 except Exception:
@@ -2841,6 +2936,12 @@ class MegatronPolicyWorkerImpl(
                         saved = list(value)
                     elif isinstance(value, dict):
                         saved = copy.deepcopy(value)
+                    elif isinstance(value, torch.Tensor):
+                        reserve(
+                            int(value.numel() * value.element_size()),
+                            label=f"RouterReplay {attribute}",
+                        )
+                        saved = value.detach().to(device="cpu", copy=True)
                     else:
                         saved = value
                     attributes.append((attribute, present, value, saved))
@@ -2873,7 +2974,9 @@ class MegatronPolicyWorkerImpl(
             "runtime_schedule_count": getattr(
                 self, "_te_cuda_graph_runtime_schedule_count", 1
             ),
-            "phase": getattr(self, "_te_cuda_graph_phase", _TECudaGraphWorkerPhase.IDLE),
+            "phase": getattr(
+                self, "_te_cuda_graph_phase", _TECudaGraphWorkerPhase.IDLE
+            ),
             "manager_active_bank": getattr(manager, "active_bank", None),
             "manager_counter": (
                 (
@@ -2884,6 +2987,14 @@ class MegatronPolicyWorkerImpl(
                 else None
             ),
         }
+        buffers = []
+        for name, buffer in self.model.named_buffers():
+            reserve(
+                int(buffer.numel() * buffer.element_size()),
+                label=f"buffer {name}",
+            )
+            buffers.append((buffer, buffer.detach().to(device="cpu", copy=True)))
+
         return {
             "torch_cpu_rng": torch.get_rng_state().clone(),
             "torch_cuda_rng": (
@@ -2896,10 +3007,7 @@ class MegatronPolicyWorkerImpl(
             "module_training": [
                 (module, module.training) for module in self.model.modules()
             ],
-            "buffers": [
-                (buffer, buffer.detach().cpu().clone())
-                for _, buffer in self.model.named_buffers()
-            ],
+            "buffers": buffers,
             "known_module_attributes": known_module_attributes,
             "route_counter_dicts": route_counter_dicts,
             "router_replay_attributes": router_replay_attributes,
@@ -2907,6 +3015,8 @@ class MegatronPolicyWorkerImpl(
             "config_attributes": config_attributes,
             "grad_storage": grad_storage,
             "parameter_sha256": parameter_sha256,
+            "parameter_values": parameter_values,
+            "snapshot_host_bytes": host_bytes,
             "optimizer_state": optimizer_state,
             "optimizer_state_sha256": (
                 self._r3_router_graph_parity_state_digest(optimizer_state)
@@ -2922,9 +3032,7 @@ class MegatronPolicyWorkerImpl(
             "active_route_generation": getattr(
                 self, "_active_router_route_generation", None
             ),
-            "next_route_generation": getattr(
-                self, "_next_router_route_generation", 1
-            ),
+            "next_route_generation": getattr(self, "_next_router_route_generation", 1),
             "r3_trace_counter": getattr(self, "_r3_trace_enclosing_call_counter", 0),
             "graph_state": graph_state,
         }
@@ -2936,6 +3044,10 @@ class MegatronPolicyWorkerImpl(
         restore_execution_generations: bool = True,
     ) -> None:
         with torch.no_grad():
+            for _name, parameter, saved in snapshot["parameter_values"]:
+                parameter.copy_(
+                    saved.to(device=parameter.device, dtype=parameter.dtype)
+                )
             for buffer, saved in snapshot["buffers"]:
                 buffer.copy_(saved.to(device=buffer.device, dtype=buffer.dtype))
             for parameter, slots in snapshot["grad_storage"]:
@@ -2948,7 +3060,9 @@ class MegatronPolicyWorkerImpl(
                         setattr(parameter, slot_name, None)
                         continue
                     setattr(parameter, slot_name, original)
-                    original.copy_(saved.to(device=original.device, dtype=original.dtype))
+                    original.copy_(
+                        saved.to(device=original.device, dtype=original.dtype)
+                    )
 
         for module, training in snapshot["module_training"]:
             module.training = training
@@ -2971,6 +3085,10 @@ class MegatronPolicyWorkerImpl(
                 elif isinstance(original, dict):
                     original.clear()
                     original.update(saved)
+                elif isinstance(original, torch.Tensor):
+                    original.copy_(
+                        saved.to(device=original.device, dtype=original.dtype)
+                    )
                 setattr(replay, attribute, original)
 
         model_config = snapshot["config"]
@@ -2988,7 +3106,7 @@ class MegatronPolicyWorkerImpl(
                 self._r3_router_graph_parity_state_digest(current)
                 != snapshot["optimizer_state_sha256"]
             ):
-                self.optimizer.load_state_dict(copy.deepcopy(optimizer_state))
+                self.optimizer.load_state_dict(optimizer_state)
         scheduler_state = snapshot["scheduler_state"]
         if scheduler_state is not None:
             current = self.scheduler.state_dict()
@@ -2996,7 +3114,7 @@ class MegatronPolicyWorkerImpl(
                 self._r3_router_graph_parity_state_digest(current)
                 != snapshot["scheduler_state_sha256"]
             ):
-                self.scheduler.load_state_dict(copy.deepcopy(scheduler_state))
+                self.scheduler.load_state_dict(scheduler_state)
 
         if restore_execution_generations:
             self._active_router_route_generation = snapshot["active_route_generation"]
@@ -3014,7 +3132,10 @@ class MegatronPolicyWorkerImpl(
     ) -> None:
         saved = snapshot["graph_state"]
         current_lifecycle = getattr(self, "_te_cuda_graph_lifecycle", None)
-        if current_lifecycle is not None and current_lifecycle is not saved["lifecycle"]:
+        if (
+            current_lifecycle is not None
+            and current_lifecycle is not saved["lifecycle"]
+        ):
             current_lifecycle.reset_banks()
 
         self._te_cuda_graph_lifecycle = saved["lifecycle"]
@@ -3022,7 +3143,10 @@ class MegatronPolicyWorkerImpl(
         manager = getattr(self, "_te_cuda_graph_bank_manager", None)
         if manager is not None:
             active_bank = getattr(manager, "active_bank", None)
-            if active_bank is not None and active_bank is not saved["manager_active_bank"]:
+            if (
+                active_bank is not None
+                and active_bank is not saved["manager_active_bank"]
+            ):
                 manager.uninstall()
             if saved["manager_active_bank"] is not None:
                 saved["manager_active_bank"].activate()
@@ -3034,9 +3158,7 @@ class MegatronPolicyWorkerImpl(
 
         self._te_cuda_graph_installed_key = saved["installed_key"]
         self._te_cuda_graph_capture_helper = saved["capture_helper"]
-        self._te_cuda_graph_capture_sample_packed_seq_params = saved[
-            "capture_metadata"
-        ]
+        self._te_cuda_graph_capture_sample_packed_seq_params = saved["capture_metadata"]
         self._te_cuda_graph_storage_fingerprint = saved["storage_fingerprint"]
         self._te_cuda_graph_reset_required = saved["reset_required"]
         self._te_cuda_graph_phase = saved["phase"]
@@ -3058,6 +3180,286 @@ class MegatronPolicyWorkerImpl(
             raise RuntimeError(
                 "R3 parity diagnostic mutated parameters: " + ", ".join(changed)
             )
+
+    def _r3_router_graph_parity_changed_parameters(
+        self,
+        snapshot: dict[str, Any],
+    ) -> list[str]:
+        current = {
+            name: self._r3_router_graph_parity_tensor_sha256(parameter)
+            for name, parameter in self.model.named_parameters()
+        }
+        return sorted(
+            name
+            for name in set(current) | set(snapshot["parameter_sha256"])
+            if current.get(name) != snapshot["parameter_sha256"].get(name)
+        )
+
+    @staticmethod
+    def _r3_router_graph_parity_compare_full_tensor(
+        eager: torch.Tensor,
+        graph: torch.Tensor,
+        *,
+        rtol: float,
+        atol: float,
+        scale: float = 1.0,
+        chunk_numel: int = 1_048_576,
+    ) -> dict[str, Any]:
+        if eager.shape != graph.shape:
+            raise RuntimeError(
+                "R3 parity full tensor shapes differ: "
+                f"{tuple(eager.shape)} != {tuple(graph.shape)}"
+            )
+        if eager.numel() < 1:
+            raise RuntimeError("R3 parity refuses an empty full tensor comparison")
+        if rtol < 0 or atol < 0 or not np.isfinite((rtol, atol, scale)).all():
+            raise ValueError("R3 parity full tensor tolerances must be finite")
+
+        eager_flat = eager.detach().reshape(-1)
+        graph_flat = graph.detach().reshape(-1)
+        mismatch_count = 0
+        max_abs_diff = 0.0
+        max_rel_diff = 0.0
+        for start in range(0, eager_flat.numel(), chunk_numel):
+            stop = min(start + chunk_numel, eager_flat.numel())
+            eager_chunk = eager_flat[start:stop].to(dtype=torch.float64, device="cpu")
+            graph_chunk = graph_flat[start:stop].to(dtype=torch.float64, device="cpu")
+            if scale != 1.0:
+                eager_chunk.mul_(scale)
+                graph_chunk.mul_(scale)
+            if (
+                not torch.isfinite(eager_chunk).all()
+                or not torch.isfinite(graph_chunk).all()
+            ):
+                raise RuntimeError("R3 parity full tensor evidence must be finite")
+            difference = (graph_chunk - eager_chunk).abs()
+            relative = difference / eager_chunk.abs().clamp_min(
+                max(atol, torch.finfo(torch.float64).tiny)
+            )
+            mismatch_count += int(
+                (~torch.isclose(graph_chunk, eager_chunk, rtol=rtol, atol=atol)).sum()
+            )
+            max_abs_diff = max(max_abs_diff, float(difference.max().item()))
+            max_rel_diff = max(max_rel_diff, float(relative.max().item()))
+        return {
+            "numel": eager_flat.numel(),
+            "max_abs_diff": max_abs_diff,
+            "max_rel_diff": max_rel_diff,
+            "mismatch_count": mismatch_count,
+            "rtol": rtol,
+            "atol": atol,
+        }
+
+    def _r3_router_graph_parity_live_tensors(
+        self,
+        capture: dict[str, torch.Tensor],
+    ) -> dict[str, Any]:
+        parameter_gradients = {}
+        for name, parameter in self.model.named_parameters():
+            gradient = getattr(parameter, "main_grad", None)
+            if not isinstance(gradient, torch.Tensor):
+                gradient = parameter.grad
+            if not isinstance(gradient, torch.Tensor):
+                raise RuntimeError(f"R3 parity gradient is missing for {name}")
+            parameter_gradients[name] = gradient.detach()
+        return {
+            "selected_output": capture["output"].detach(),
+            "selected_output_gradient": capture["output_grad"].detach(),
+            "selected_input_gradient": capture["input_grad"].detach(),
+            "parameter_gradients": parameter_gradients,
+        }
+
+    @staticmethod
+    def _r3_router_graph_parity_tensor_bytes(tensor: torch.Tensor) -> int:
+        return int(tensor.numel() * tensor.element_size())
+
+    def _r3_router_graph_parity_store_full_baseline(
+        self,
+        live: dict[str, Any],
+        baseline: dict[str, Any],
+        *,
+        max_host_bytes: int,
+    ) -> None:
+        tensors = [live[field] for field in _R3_PARITY_FULL_TENSOR_FIELDS]
+        tensors.extend(live["parameter_gradients"].values())
+        required = sum(self._r3_router_graph_parity_tensor_bytes(t) for t in tensors)
+        if required > max_host_bytes:
+            raise RuntimeError(
+                "R3 parity full-tensor baseline exceeds the host-memory budget: "
+                f"{required} > {max_host_bytes} bytes"
+            )
+        baseline.update(
+            {
+                field: live[field].to(device="cpu", copy=True)
+                for field in _R3_PARITY_FULL_TENSOR_FIELDS
+            }
+        )
+        baseline["parameter_gradients"] = {
+            name: gradient.to(device="cpu", copy=True)
+            for name, gradient in live["parameter_gradients"].items()
+        }
+        baseline["host_bytes"] = required
+
+    def _r3_router_graph_parity_compare_full_baseline(
+        self,
+        live: dict[str, Any],
+        baseline: dict[str, Any],
+        *,
+        simulated_learning_rate: float,
+        rtol: float,
+        atol: float,
+    ) -> dict[str, Any]:
+        comparisons = {
+            field: self._r3_router_graph_parity_compare_full_tensor(
+                baseline[field], live[field], rtol=rtol, atol=atol
+            )
+            for field in _R3_PARITY_FULL_TENSOR_FIELDS
+        }
+        eager_gradients = baseline.get("parameter_gradients")
+        graph_gradients = live["parameter_gradients"]
+        if not isinstance(eager_gradients, dict) or set(eager_gradients) != set(
+            graph_gradients
+        ):
+            raise RuntimeError("R3 parity full parameter-gradient names differ")
+        comparisons["parameter_gradients"] = {}
+        comparisons["simulated_parameter_deltas"] = {}
+        for name, graph_gradient in graph_gradients.items():
+            eager_gradient = eager_gradients[name]
+            comparisons["parameter_gradients"][name] = (
+                self._r3_router_graph_parity_compare_full_tensor(
+                    eager_gradient,
+                    graph_gradient,
+                    rtol=rtol,
+                    atol=atol,
+                )
+            )
+            comparisons["simulated_parameter_deltas"][name] = (
+                self._r3_router_graph_parity_compare_full_tensor(
+                    eager_gradient,
+                    graph_gradient,
+                    rtol=rtol,
+                    atol=atol,
+                    scale=-simulated_learning_rate,
+                )
+            )
+        return comparisons
+
+    def _r3_router_graph_parity_replay_instances(
+        self,
+        model: Any,
+    ) -> list[Any]:
+        roots = model if isinstance(model, (tuple, list)) else (model,)
+        replays = []
+        seen: set[int] = set()
+        for root in roots:
+            modules = (
+                root.modules() if callable(getattr(root, "modules", None)) else (root,)
+            )
+            for module in modules:
+                replay = getattr(module, "router_replay", None)
+                if replay is not None and id(replay) not in seen:
+                    seen.add(id(replay))
+                    replays.append(replay)
+        return replays
+
+    @contextmanager
+    def _capture_r3_router_graph_parity_runtime_routes(
+        self,
+    ) -> Iterator[dict[str, list[dict[str, Any]]]]:
+        import nemo_rl.models.megatron.train as megatron_train
+
+        original_set = megatron_train.set_router_replay_forward
+        original_record = megatron_train.record_router_replay_graph_consumers
+        records: dict[str, list[dict[str, Any]]] = {
+            "eager": [],
+            "setup": [],
+            "measured": [],
+        }
+        phase_calls: defaultdict[str, int] = defaultdict(int)
+
+        def set_forward(
+            model: Any,
+            routed_experts: torch.Tensor,
+            **kwargs: Any,
+        ) -> None:
+            original_set(model, routed_experts, **kwargs)
+            phase = getattr(self, "_r3_router_graph_parity_route_phase", None)
+            if phase not in records:
+                raise RuntimeError("R3 parity runtime-route phase is not armed")
+            sequence_index = phase_calls[phase]
+            phase_calls[phase] += 1
+            generation = kwargs.get("microbatch_generation")
+            for replay in self._r3_router_graph_parity_replay_instances(model):
+                route = getattr(replay, "target_topk_idx", None)
+                signature = getattr(replay, "_nrl_graph_input_signature", None)
+                if not isinstance(route, torch.Tensor) or signature is None:
+                    raise RuntimeError(
+                        "R3 parity did not observe the installed RouterReplay route"
+                    )
+                num_experts = int(getattr(signature, "num_experts", -1))
+                if num_experts < 1:
+                    raise RuntimeError("R3 parity route lacks an expert cardinality")
+                route_i64 = (
+                    route.detach().reshape(-1).to(device="cpu", dtype=torch.int64)
+                )
+                valid = torch.logical_and(route_i64 >= 0, route_i64 < num_experts)
+                counts = torch.bincount(
+                    route_i64[valid], minlength=num_experts
+                ).tolist()
+                records[phase].append(
+                    {
+                        "sequence_index": sequence_index,
+                        "layer_number": int(getattr(replay, "_nrl_layer_number")),
+                        "payload_index": int(getattr(replay, "_nrl_payload_idx")),
+                        "route_sha256": self._r3_router_graph_parity_payload_digest(
+                            {"installed_route": route}
+                        ),
+                        "shape": list(route.shape),
+                        "dtype": str(route.dtype),
+                        "expert_counts": counts,
+                        "invalid_expert_count": int((~valid).sum().item()),
+                        "generation": int(generation),
+                        "graph_launch": None,
+                    }
+                )
+
+        def record_consumers(model: Any, **kwargs: Any) -> None:
+            original_record(model, **kwargs)
+            phase = getattr(self, "_r3_router_graph_parity_route_phase", None)
+            generation = kwargs.get("microbatch_generation")
+            schedule_key = kwargs.get("schedule_key")
+            launch_expected = kwargs.get("graph_launch_expected")
+            for replay in self._r3_router_graph_parity_replay_instances(model):
+                layer = int(getattr(replay, "_nrl_layer_number"))
+                payload = int(getattr(replay, "_nrl_payload_idx"))
+                matches = [
+                    event
+                    for event in records.get(phase, [])
+                    if event["layer_number"] == layer
+                    and event["payload_index"] == payload
+                    and event["generation"] == generation
+                ]
+                if len(matches) != 1:
+                    raise RuntimeError(
+                        "R3 parity could not bind RouterReplay consumer evidence"
+                    )
+                launch_record = getattr(replay, "graph_input_launch_record", None)
+                matches[0]["graph_launch"] = {
+                    "successful": bool(launch_expected and launch_record is not None),
+                    "copy_generation": getattr(launch_record, "copy_generation", None),
+                    "graph_index": getattr(launch_record, "graph_index", None),
+                    "schedule_key_sha256": hashlib.sha256(
+                        str(schedule_key).encode()
+                    ).hexdigest(),
+                }
+
+        megatron_train.set_router_replay_forward = set_forward
+        megatron_train.record_router_replay_graph_consumers = record_consumers
+        try:
+            yield records
+        finally:
+            megatron_train.set_router_replay_forward = original_set
+            megatron_train.record_router_replay_graph_consumers = original_record
 
     def _install_r3_router_graph_parity_input_hooks(
         self,
@@ -3103,7 +3505,14 @@ class MegatronPolicyWorkerImpl(
         data: BatchedDataDict[Any],
         arm: str,
         simulated_learning_rate: float,
-        capture_count: int,
+        setup_telemetry: Optional[dict[str, int]],
+        runtime_routes: list[dict[str, Any]],
+        setup_runtime_routes: list[dict[str, Any]],
+        baseline_output: Optional[dict[str, Any]],
+        comparison_baseline: Optional[dict[str, Any]],
+        max_baseline_bytes: int,
+        rtol: float,
+        atol: float,
     ) -> dict[str, Any]:
         state = self._assert_step_open()
         capture = self._r3_router_graph_parity_capture
@@ -3114,14 +3523,26 @@ class MegatronPolicyWorkerImpl(
                 "R3 parity diagnostic did not observe: " + ", ".join(missing)
             )
 
+        live = self._r3_router_graph_parity_live_tensors(capture)
+        full_comparisons = None
+        if baseline_output is not None:
+            self._r3_router_graph_parity_store_full_baseline(
+                live,
+                baseline_output,
+                max_host_bytes=max_baseline_bytes,
+            )
+        if comparison_baseline is not None:
+            full_comparisons = self._r3_router_graph_parity_compare_full_baseline(
+                live,
+                comparison_baseline,
+                simulated_learning_rate=simulated_learning_rate,
+                rtol=rtol,
+                atol=atol,
+            )
+
         gradients = {}
         deltas = {}
-        for name, parameter in self.model.named_parameters():
-            gradient = getattr(parameter, "main_grad", None)
-            if not isinstance(gradient, torch.Tensor):
-                gradient = parameter.grad
-            if not isinstance(gradient, torch.Tensor):
-                raise RuntimeError(f"R3 parity gradient is missing for {name}")
+        for name, gradient in live["parameter_gradients"].items():
             gradients[name] = self._r3_router_graph_parity_tensor_evidence(gradient)
             delta = gradient.detach().to(torch.float64) * (-simulated_learning_rate)
             deltas[name] = self._r3_router_graph_parity_tensor_evidence(delta)
@@ -3141,6 +3562,8 @@ class MegatronPolicyWorkerImpl(
         ]
         if not losses:
             raise RuntimeError("R3 parity diagnostic observed no microbatch loss")
+        if not np.isfinite(losses).all():
+            raise RuntimeError("R3 parity diagnostic loss must be finite")
         metrics: dict[str, float] = {}
         metric_values: defaultdict[str, list[float]] = defaultdict(list)
         for microbatch_metrics in state.get("all_mb_metrics", []):
@@ -3151,33 +3574,108 @@ class MegatronPolicyWorkerImpl(
                     metric_values[name].append(float(value))
         for name, values in metric_values.items():
             metrics[name] = sum(values) / len(values)
+        mandatory_metrics = {
+            "token_mult_prob_error",
+            "gen_kl_error",
+            "policy_kl_error",
+            "num_valid_samples",
+        }
+        missing_metrics = mandatory_metrics - set(metrics)
+        if missing_metrics:
+            raise RuntimeError(
+                "R3 parity diagnostic lacks mandatory metrics: "
+                + ", ".join(sorted(missing_metrics))
+            )
+        if not np.isfinite(list(metrics.values())).all():
+            raise RuntimeError("R3 parity diagnostic metrics must be finite")
+
+        required_batch_tensors = (
+            "input_ids",
+            "input_lengths",
+            "token_mask",
+            "sample_mask",
+            "rewards",
+        )
+        if any(
+            name not in data or not isinstance(data[name], torch.Tensor)
+            for name in required_batch_tensors
+        ):
+            raise RuntimeError("R3 parity diagnostic batch metrics are incomplete")
+        input_ids = data["input_ids"]
+        input_lengths = data["input_lengths"]
+        token_mask = data["token_mask"]
+        sample_mask = data["sample_mask"]
+        rewards = data["rewards"]
+        positions = torch.arange(input_ids.shape[1], device=input_lengths.device)
+        valid_positions = positions.unsqueeze(0) < input_lengths.unsqueeze(1)
+        effective = token_mask * sample_mask.unsqueeze(1)
+        effective_valid_tokens = int(
+            torch.logical_and(valid_positions, effective != 0).sum().item()
+        )
+        if effective_valid_tokens < 1:
+            raise RuntimeError("R3 parity diagnostic has no effective valid token")
+        numeric_batch_tensors = (token_mask, sample_mask, rewards)
+        if any(not torch.isfinite(tensor).all() for tensor in numeric_batch_tensors):
+            raise RuntimeError("R3 parity diagnostic batch metrics must be finite")
+        rewards_f64 = rewards.detach().to(dtype=torch.float64)
+        batch_metrics = {
+            "effective_valid_tokens": effective_valid_tokens,
+            "sample_mask_sum": float(sample_mask.detach().to(torch.float64).sum()),
+            "reward_sum": float(rewards_f64.sum()),
+            "reward_mean": float(rewards_f64.mean()),
+            "reward_l2_norm": float(torch.linalg.vector_norm(rewards_f64)),
+        }
 
         graph_metrics = {
-            "requested_graph_calls": 0,
+            "setup_capture_count": 0,
+            "setup_replay_count": 0,
+            "setup_cache_hit_count": 0,
+            "setup_cache_miss_count": 0,
+            "setup_eviction_count": 0,
+            "setup_fallback_count": 0,
+            "setup_unsafe_route_events": 0,
+            "setup_eligible_calls": 0,
+            "setup_graph_calls": 0,
+            "eligible_calls": 0,
             "graph_calls": 0,
-            "cache_hits": 0,
-            "captures": capture_count,
-            "recaptures": max(0, capture_count - 1),
-            "fallback_count": 0,
-            "unsafe_route_events": 0,
+            "measured_capture_count": 0,
+            "measured_replay_count": 0,
+            "measured_cache_hit_count": 0,
+            "measured_cache_miss_count": 0,
+            "measured_eviction_count": 0,
+            "measured_fallback_count": 0,
+            "measured_unsafe_route_events": 0,
         }
         call_state = state.get("te_cuda_graph_call_state")
         if arm == "graph":
-            if call_state is None:
+            if call_state is None or setup_telemetry is None:
                 raise RuntimeError("graph parity arm did not create CUDA Graph state")
             finalized, _ = self._finalize_te_cuda_graph_call(call_state)
+            unsafe = getattr(call_state, "reduced_router_replay_counters", {})
             graph_metrics.update(
                 {
-                    "requested_graph_calls": 1,
+                    "setup_capture_count": setup_telemetry["capture_count"],
+                    "setup_replay_count": setup_telemetry["replay_count"],
+                    "setup_cache_hit_count": setup_telemetry["cache_hit_count"],
+                    "setup_cache_miss_count": setup_telemetry["cache_miss_count"],
+                    "setup_eviction_count": setup_telemetry["eviction_count"],
+                    "setup_fallback_count": setup_telemetry["fallback_count"],
+                    "setup_unsafe_route_events": setup_telemetry["unsafe_route_events"],
+                    "setup_eligible_calls": setup_telemetry["eligible_calls"],
+                    "setup_graph_calls": setup_telemetry["graph_calls"],
+                    "eligible_calls": finalized["eligible_calls"],
                     "graph_calls": finalized["graph_calls"],
-                    "cache_hits": finalized["cache_hit_count"],
-                    "fallback_count": finalized["fallback_count"],
+                    "measured_capture_count": finalized["capture_count"],
+                    "measured_replay_count": finalized["replay_count"],
+                    "measured_cache_hit_count": finalized["cache_hit_count"],
+                    "measured_cache_miss_count": finalized["cache_miss_count"],
+                    "measured_eviction_count": finalized["eviction_count"],
+                    "measured_fallback_count": finalized["fallback_count"],
+                    "measured_unsafe_route_events": sum(
+                        int(unsafe.get(name, 0))
+                        for name in ROUTER_REPLAY_GRAPH_UNSAFE_COUNTER_FIELDS
+                    ),
                 }
-            )
-            unsafe = call_state.reduced_router_replay_counters
-            graph_metrics["unsafe_route_events"] = sum(
-                int(unsafe.get(name, 0))
-                for name in ROUTER_REPLAY_GRAPH_UNSAFE_COUNTER_FIELDS
             )
 
         rank = (
@@ -3185,7 +3683,7 @@ class MegatronPolicyWorkerImpl(
             if torch.distributed.is_initialized()
             else int(getattr(self, "rank", 0))
         )
-        return {
+        result = {
             "rank": rank,
             "arm": arm,
             "token_digest": self._r3_router_graph_parity_payload_digest(
@@ -3218,8 +3716,14 @@ class MegatronPolicyWorkerImpl(
             "parameter_gradients": gradients,
             "simulated_parameter_deltas": deltas,
             "metrics": metrics,
+            "batch_metrics": batch_metrics,
             "graph_metrics": graph_metrics,
+            "runtime_routes": copy.deepcopy(runtime_routes),
+            "setup_runtime_routes": copy.deepcopy(setup_runtime_routes),
         }
+        if full_comparisons is not None:
+            result["_full_tensor_comparisons"] = full_comparisons
+        return result
 
     def run_r3_router_graph_parity_arm(
         self,
@@ -3228,21 +3732,39 @@ class MegatronPolicyWorkerImpl(
         loss_fn: LossFunction,
         arm: str,
         simulated_learning_rate: float,
+        _baseline_output: Optional[dict[str, Any]] = None,
+        _comparison_baseline: Optional[dict[str, Any]] = None,
+        _runtime_route_records: Optional[dict[str, list[dict[str, Any]]]] = None,
+        _max_snapshot_bytes: int = _R3_PARITY_DEFAULT_MAX_HOST_BYTES,
+        _max_baseline_bytes: int = _R3_PARITY_DEFAULT_MAX_HOST_BYTES,
+        _rtol: float = 5e-2,
+        _atol: float = 5e-2,
     ) -> dict[str, Any]:
         """Run one frozen eager or measured graph forward/backward, then abort."""
         if arm not in {"eager", "graph"}:
             raise ValueError("R3 parity arm must be exactly eager or graph")
-        if simulated_learning_rate <= 0:
-            raise ValueError("simulated_learning_rate must be positive")
-        snapshot = self._snapshot_r3_router_graph_parity_state()
+        if simulated_learning_rate <= 0 or not np.isfinite(simulated_learning_rate):
+            raise ValueError("simulated_learning_rate must be finite and positive")
+        if _rtol < 0 or _atol < 0 or not np.isfinite((_rtol, _atol)).all():
+            raise ValueError("R3 parity tolerances must be finite and nonnegative")
+        snapshot = self._snapshot_r3_router_graph_parity_state(
+            max_host_bytes=_max_snapshot_bytes
+        )
         original_lifecycle = snapshot["graph_state"]["lifecycle"]
         if arm == "graph" and original_lifecycle is None:
             raise RuntimeError("graph parity arm requires TE CUDA Graph training")
 
         self._r3_router_graph_parity_active = True
-        capture_count = 0
+        setup_telemetry: Optional[dict[str, int]] = None
+        completed = False
+        runtime_route_records = _runtime_route_records or {
+            "eager": [],
+            "setup": [],
+            "measured": [],
+        }
 
-        def execute(*, collect: bool) -> Optional[dict[str, Any]]:
+        def execute(*, phase: str, collect: bool) -> Optional[dict[str, Any]]:
+            self._r3_router_graph_parity_route_phase = phase
             self._r3_router_graph_parity_capture = {}
             handles = self._install_r3_router_graph_parity_input_hooks(
                 self._r3_router_graph_parity_capture
@@ -3256,12 +3778,25 @@ class MegatronPolicyWorkerImpl(
                         raise RuntimeError(
                             "R3 parity graph setup did not capture exactly one bank"
                         )
-                    return {"capture_count": call_state.capture_count}
+                    finalized, _ = self._finalize_te_cuda_graph_call(call_state)
+                    unsafe = getattr(call_state, "reduced_router_replay_counters", {})
+                    finalized["unsafe_route_events"] = sum(
+                        int(unsafe.get(name, 0))
+                        for name in ROUTER_REPLAY_GRAPH_UNSAFE_COUNTER_FIELDS
+                    )
+                    return finalized
                 return self._collect_r3_router_graph_parity_result(
                     data=data,
                     arm=arm,
                     simulated_learning_rate=simulated_learning_rate,
-                    capture_count=capture_count,
+                    setup_telemetry=setup_telemetry,
+                    runtime_routes=runtime_route_records[phase],
+                    setup_runtime_routes=runtime_route_records["setup"],
+                    baseline_output=_baseline_output,
+                    comparison_baseline=_comparison_baseline,
+                    max_baseline_bytes=_max_baseline_bytes,
+                    rtol=_rtol,
+                    atol=_atol,
                 )
             finally:
                 try:
@@ -3281,18 +3816,35 @@ class MegatronPolicyWorkerImpl(
                     capacity=capacity,
                     warmup_steps=0,
                 )
-                setup = execute(collect=False)
+                setup = execute(phase="setup", collect=False)
                 assert setup is not None
-                capture_count = int(setup["capture_count"])
+                setup_telemetry = cast(dict[str, int], setup)
+                changed_after_setup = self._r3_router_graph_parity_changed_parameters(
+                    snapshot
+                )
+                if changed_after_setup:
+                    raise RuntimeError(
+                        "R3 parity graph setup mutated parameters: "
+                        + ", ".join(changed_after_setup)
+                    )
                 self._restore_r3_router_graph_parity_mutable_state(
                     snapshot,
                     restore_execution_generations=False,
                 )
 
-            result = execute(collect=True)
+            result = execute(
+                phase="eager" if arm == "eager" else "measured",
+                collect=True,
+            )
             assert result is not None
+            result["snapshot_host_bytes"] = int(snapshot["snapshot_host_bytes"])
+            result["snapshot_host_limit_bytes"] = _max_snapshot_bytes
+            completed = True
             return result
         finally:
+            changed_parameters = self._r3_router_graph_parity_changed_parameters(
+                snapshot
+            )
             try:
                 if getattr(self, "_train_step_state", None) is not None:
                     self.abort_train_step()
@@ -3302,11 +3854,143 @@ class MegatronPolicyWorkerImpl(
                 finally:
                     try:
                         self._restore_r3_router_graph_parity_mutable_state(snapshot)
-                        self._assert_r3_router_graph_parity_parameters_unchanged(snapshot)
+                        self._assert_r3_router_graph_parity_parameters_unchanged(
+                            snapshot
+                        )
                     finally:
                         self._r3_router_graph_parity_active = False
                         if hasattr(self, "_r3_router_graph_parity_capture"):
                             del self._r3_router_graph_parity_capture
+                        if hasattr(self, "_r3_router_graph_parity_route_phase"):
+                            del self._r3_router_graph_parity_route_phase
+            if completed and changed_parameters:
+                raise RuntimeError(
+                    "R3 parity diagnostic mutated parameters: "
+                    + ", ".join(changed_parameters)
+                )
+
+    @staticmethod
+    def _r3_router_graph_parity_compare_runtime_routes(
+        eager_routes: list[dict[str, Any]],
+        graph_routes: list[dict[str, Any]],
+    ) -> dict[str, int]:
+        exact_fields = (
+            "sequence_index",
+            "layer_number",
+            "payload_index",
+            "route_sha256",
+            "shape",
+            "dtype",
+            "expert_counts",
+            "invalid_expert_count",
+        )
+        mismatch_count = abs(len(eager_routes) - len(graph_routes))
+        for eager, graph in zip(eager_routes, graph_routes):
+            mismatch_count += sum(
+                eager.get(name) != graph.get(name) for name in exact_fields
+            )
+            eager_generation = eager.get("generation")
+            graph_generation = graph.get("generation")
+            if (
+                not isinstance(eager_generation, int)
+                or not isinstance(graph_generation, int)
+                or graph_generation <= eager_generation
+            ):
+                mismatch_count += 1
+        return {
+            "compared_routes": min(len(eager_routes), len(graph_routes)),
+            "mismatch_count": mismatch_count,
+        }
+
+    def run_r3_router_graph_parity(
+        self,
+        *,
+        data: BatchedDataDict[Any],
+        loss_fn: LossFunction,
+        simulated_learning_rate: float,
+        rtol: float,
+        atol: float,
+        max_host_bytes: int = _R3_PARITY_DEFAULT_MAX_HOST_BYTES,
+    ) -> dict[str, Any]:
+        """Compare eager and measured graph arms on one live worker transaction."""
+        if isinstance(max_host_bytes, bool) or max_host_bytes < 3:
+            raise ValueError("R3 parity host-memory budget must be positive")
+        baseline: dict[str, Any] = {}
+        data_tensors = [
+            (name, tensor)
+            for name, tensor in data.items()
+            if isinstance(tensor, torch.Tensor)
+        ]
+        data_snapshot_bytes = sum(
+            self._r3_router_graph_parity_tensor_bytes(tensor)
+            for _, tensor in data_tensors
+        )
+        if data_snapshot_bytes >= max_host_bytes:
+            raise RuntimeError("R3 parity input snapshot exceeds its memory budget")
+        data_snapshot = [
+            (name, tensor, tensor.detach().to(device="cpu", copy=True))
+            for name, tensor in data_tensors
+        ]
+        remaining_host_bytes = max_host_bytes - data_snapshot_bytes
+        baseline_budget = remaining_host_bytes // 4
+        snapshot_budget = remaining_host_bytes - baseline_budget
+
+        def restore_data() -> None:
+            with torch.no_grad():
+                for _name, tensor, saved in data_snapshot:
+                    tensor.copy_(saved.to(device=tensor.device, dtype=tensor.dtype))
+
+        try:
+            with self._capture_r3_router_graph_parity_runtime_routes() as routes:
+                eager = self.run_r3_router_graph_parity_arm(
+                    data=data,
+                    loss_fn=loss_fn,
+                    arm="eager",
+                    simulated_learning_rate=simulated_learning_rate,
+                    _baseline_output=baseline,
+                    _runtime_route_records=routes,
+                    _max_snapshot_bytes=snapshot_budget,
+                    _max_baseline_bytes=baseline_budget,
+                    _rtol=rtol,
+                    _atol=atol,
+                )
+                restore_data()
+                graph = self.run_r3_router_graph_parity_arm(
+                    data=data,
+                    loss_fn=loss_fn,
+                    arm="graph",
+                    simulated_learning_rate=simulated_learning_rate,
+                    _comparison_baseline=baseline,
+                    _runtime_route_records=routes,
+                    _max_snapshot_bytes=snapshot_budget,
+                    _max_baseline_bytes=baseline_budget,
+                    _rtol=rtol,
+                    _atol=atol,
+                )
+                full_comparisons = graph.pop("_full_tensor_comparisons", None)
+                if not isinstance(full_comparisons, dict):
+                    raise RuntimeError("R3 parity full tensor comparison is missing")
+                rank = int(eager["rank"])
+                if int(graph["rank"]) != rank:
+                    raise RuntimeError("R3 parity arms ran on different workers")
+                return {
+                    "rank": rank,
+                    "eager": eager,
+                    "graph": graph,
+                    "full_tensor_comparisons": full_comparisons,
+                    "runtime_route_comparison": (
+                        self._r3_router_graph_parity_compare_runtime_routes(
+                            eager["runtime_routes"], graph["runtime_routes"]
+                        )
+                    ),
+                    "baseline_host_bytes": int(baseline["host_bytes"]),
+                    "input_snapshot_host_bytes": data_snapshot_bytes,
+                    "max_host_bytes": max_host_bytes,
+                }
+        finally:
+            restore_data()
+            baseline.clear()
+            data_snapshot.clear()
 
     def _split_step_state_init(
         self,

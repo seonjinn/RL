@@ -31,6 +31,7 @@ The bugs these catch:
 
 from __future__ import annotations
 
+import copy
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -751,6 +752,111 @@ def test_r3_router_graph_parity_zeroes_existing_grad_storage_in_place() -> None:
     assert torch.equal(grad, torch.zeros_like(grad))
 
 
+def test_r3_router_graph_parity_full_compare_detects_unsampled_element() -> None:
+    worker = _make_r3_router_graph_parity_worker()
+    eager = torch.zeros(1025)
+    graph = eager.clone()
+    graph[1001] = 1.0
+
+    comparison = worker._r3_router_graph_parity_compare_full_tensor(
+        eager,
+        graph,
+        rtol=5e-2,
+        atol=5e-2,
+        chunk_numel=127,
+    )
+
+    assert comparison["numel"] == 1025
+    assert comparison["max_abs_diff"] == 1.0
+    assert comparison["mismatch_count"] == 1
+
+
+def test_r3_router_graph_parity_runtime_compare_uses_installed_routes() -> None:
+    worker = _make_r3_router_graph_parity_worker()
+    eager = [
+        {
+            "sequence_index": 0,
+            "layer_number": 1,
+            "payload_index": 0,
+            "route_sha256": "a" * 64,
+            "shape": [2, 2],
+            "dtype": "torch.int64",
+            "expert_counts": [1, 1, 1, 1],
+            "invalid_expert_count": 0,
+            "generation": 5,
+        }
+    ]
+    graph = copy.deepcopy(eager)
+    graph[0]["generation"] = 6
+    graph[0]["route_sha256"] = "b" * 64
+
+    comparison = worker._r3_router_graph_parity_compare_runtime_routes(eager, graph)
+
+    assert comparison == {"compared_routes": 1, "mismatch_count": 1}
+
+
+def test_r3_router_graph_parity_captures_installed_route_and_graph_copy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import nemo_rl.models.megatron.train as megatron_train
+
+    worker = _make_r3_router_graph_parity_worker()
+    replay = SimpleNamespace(
+        _nrl_layer_number=7,
+        _nrl_payload_idx=2,
+        _nrl_graph_input_signature=SimpleNamespace(num_experts=4),
+        target_topk_idx=None,
+        graph_input_launch_record=None,
+    )
+    worker.model.router_replay = replay
+
+    def set_forward(model, routed_experts, **kwargs) -> None:
+        del model, kwargs
+        replay.target_topk_idx = routed_experts
+
+    def record_consumers(model, **kwargs) -> None:
+        del model, kwargs
+        replay.graph_input_launch_record = SimpleNamespace(
+            copy_generation=77,
+            graph_index=3,
+        )
+
+    monkeypatch.setattr(megatron_train, "set_router_replay_forward", set_forward)
+    monkeypatch.setattr(
+        megatron_train,
+        "record_router_replay_graph_consumers",
+        record_consumers,
+    )
+    worker._r3_router_graph_parity_route_phase = "measured"
+    route = torch.tensor([[0, 1], [1, 3]], dtype=torch.int64)
+
+    with worker._capture_r3_router_graph_parity_runtime_routes() as records:
+        megatron_train.set_router_replay_forward(
+            worker.model,
+            route,
+            microbatch_generation=6,
+        )
+        megatron_train.record_router_replay_graph_consumers(
+            worker.model,
+            microbatch_generation=6,
+            schedule_key=1,
+            graph_launch_expected=True,
+        )
+
+    assert megatron_train.set_router_replay_forward is set_forward
+    assert megatron_train.record_router_replay_graph_consumers is record_consumers
+    assert len(records["measured"]) == 1
+    evidence = records["measured"][0]
+    assert evidence["layer_number"] == 7
+    assert evidence["payload_index"] == 2
+    assert evidence["expert_counts"] == [1, 2, 0, 1]
+    assert evidence["invalid_expert_count"] == 0
+    assert len(evidence["route_sha256"]) == 64
+    assert evidence["graph_launch"]["successful"] is True
+    assert evidence["graph_launch"]["copy_generation"] == 77
+    assert evidence["graph_launch"]["graph_index"] == 3
+
+
 def test_r3_router_graph_parity_arm_restores_rng_buffers_and_grad_storage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -829,7 +935,12 @@ def test_r3_router_graph_parity_arm_restores_rng_buffers_and_grad_storage(
         worker.model.weight.grad.copy_(torch.tensor([0.75, -1.0]))
         worker._train_step_state["mb_losses"].append(torch.tensor(1.25))
         worker._train_step_state["all_mb_metrics"].append(
-            {"loss": torch.tensor(1.25), "policy_kl": torch.tensor(0.125)}
+            {
+                "token_mult_prob_error": torch.tensor(0.01),
+                "gen_kl_error": torch.tensor(0.02),
+                "policy_kl_error": torch.tensor(0.03),
+                "num_valid_samples": torch.tensor(1.0),
+            }
         )
         worker._r3_router_graph_parity_capture.update(
             {
@@ -857,7 +968,11 @@ def test_r3_router_graph_parity_arm_restores_rng_buffers_and_grad_storage(
     worker.scheduler.load_state_dict.side_effect = restore_scheduler_state
     batch = {
         "input_ids": torch.tensor([[1, 2, 3]]),
+        "input_lengths": torch.tensor([3]),
         "routed_experts": torch.tensor([[[0, 1], [1, 2], [2, 3]]]),
+        "token_mask": torch.tensor([[0.0, 1.0, 1.0]]),
+        "sample_mask": torch.tensor([1.0]),
+        "rewards": torch.tensor([1.0]),
     }
 
     result = worker.run_r3_router_graph_parity_arm(
@@ -958,6 +1073,88 @@ def test_r3_router_graph_parity_arm_aborts_and_restores_after_failure(
     assert worker._train_step_state is None
 
 
+def test_r3_router_graph_parity_restores_parameter_value_after_mutation_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = _make_r3_router_graph_parity_worker()
+    parameter = worker.model.weight
+    parameter_before = parameter.detach().clone()
+    parameter_identity = id(parameter)
+
+    def begin_train_step(*, loss_fn, gbs=None, mbs=None) -> None:
+        del loss_fn, gbs, mbs
+        worker._train_step_state = {"open": True}
+
+    def train_microbatch(data) -> None:
+        del data
+        with torch.no_grad():
+            parameter.add_(1000)
+        raise RuntimeError("failure after parameter mutation")
+
+    def abort_train_step() -> None:
+        worker._train_step_state = None
+
+    worker.begin_train_step = begin_train_step
+    worker.train_microbatch = train_microbatch
+    worker.abort_train_step = abort_train_step
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    with pytest.raises(RuntimeError, match="failure after parameter mutation"):
+        worker.run_r3_router_graph_parity_arm(
+            data={},
+            loss_fn=worker._test_loss_fn,
+            arm="eager",
+            simulated_learning_rate=0.1,
+        )
+
+    assert id(worker.model.weight) == parameter_identity
+    assert torch.equal(worker.model.weight, parameter_before)
+    assert worker._train_step_state is None
+    assert worker._r3_router_graph_parity_active is False
+
+
+def test_r3_router_graph_parity_rejects_and_restores_parameter_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = _make_r3_router_graph_parity_worker()
+    parameter = worker.model.weight
+    parameter_before = parameter.detach().clone()
+    parameter_identity = id(parameter)
+
+    def begin_train_step(*, loss_fn, gbs=None, mbs=None) -> None:
+        del loss_fn, gbs, mbs
+        worker._train_step_state = {"te_cuda_graph_call_state": None}
+
+    def train_microbatch(data) -> None:
+        del data
+        with torch.no_grad():
+            parameter.mul_(17)
+
+    def abort_train_step() -> None:
+        worker._train_step_state = None
+
+    worker.begin_train_step = begin_train_step
+    worker.train_microbatch = train_microbatch
+    worker.abort_train_step = abort_train_step
+    worker._collect_r3_router_graph_parity_result = MagicMock(
+        return_value={"arm": "eager"}
+    )
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    with pytest.raises(RuntimeError, match="mutated parameters.*weight"):
+        worker.run_r3_router_graph_parity_arm(
+            data={},
+            loss_fn=worker._test_loss_fn,
+            arm="eager",
+            simulated_learning_rate=0.1,
+        )
+
+    assert id(worker.model.weight) == parameter_identity
+    assert torch.equal(worker.model.weight, parameter_before)
+    assert worker._train_step_state is None
+    assert worker._r3_router_graph_parity_active is False
+
+
 def test_r3_router_graph_parity_capture_and_hit_use_fresh_route_generations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1001,6 +1198,21 @@ def test_r3_router_graph_parity_capture_and_hit_use_fresh_route_generations(
     worker.abort_train_step = abort_train_step
     worker._collect_r3_router_graph_parity_result = MagicMock(
         return_value={"arm": "graph"}
+    )
+    worker._finalize_te_cuda_graph_call = MagicMock(
+        return_value=(
+            {
+                "capture_count": 1,
+                "replay_count": 0,
+                "cache_hit_count": 0,
+                "cache_miss_count": 1,
+                "eviction_count": 0,
+                "fallback_count": 0,
+                "graph_calls": 1,
+                "eligible_calls": 1,
+            },
+            {},
+        )
     )
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
 
