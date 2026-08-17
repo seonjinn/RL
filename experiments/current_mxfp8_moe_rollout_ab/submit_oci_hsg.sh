@@ -29,6 +29,9 @@ VLLM_TP=${VLLM_TP:-}
 VLLM_PP=${VLLM_PP:-1}
 MAX_STEPS=${MAX_STEPS:-20}
 WALLTIME=${WALLTIME:-04:00:00}
+IDLE_REAPER_EXEMPT_MINS=${IDLE_REAPER_EXEMPT_MINS:-120}
+IDLE_REAPER_EXEMPT_REASON=${IDLE_REAPER_EXEMPT_REASON:-model_loading}
+IDLE_REAPER_EXEMPT_DESCRIPTION=${IDLE_REAPER_EXEMPT_DESCRIPTION:-NeMo-RL environment build, model load, FlashInfer autotuning, and CUDA Graph capture}
 
 case "${MODEL}:${ARM}" in
   qwen30:bf16)
@@ -186,6 +189,7 @@ moe_backend=flashinfer_trtllm
 refit_transport=nccl_reshard
 cuda_graphs=enabled
 max_steps=${MAX_STEPS}
+idle_reaper_exempt_minutes=${IDLE_REAPER_EXEMPT_MINS}
 seed=42
 wandb_project=${WANDB_PROJECT}
 wandb_name=${WANDB_NAME}
@@ -266,6 +270,7 @@ SBATCH_ARGS=(
   --segment="${SEGMENT_SIZE}"
   --job-name="sna-${MODEL}-${ARM}-${MAX_STEPS}s"
   --output="${EXPERIMENT_ROOT}/slurm-%j.out"
+  --comment="{\"OccupiedIdleGPUsJobReaper\":{\"exemptIdleTimeMins\":\"${IDLE_REAPER_EXEMPT_MINS}\",\"reason\":\"${IDLE_REAPER_EXEMPT_REASON}\",\"description\":\"${IDLE_REAPER_EXEMPT_DESCRIPTION}\"}}"
 )
 
 printf 'action=%s\nmodel=%s\narm=%s\nsha=%s\nresult=%s\n' \
