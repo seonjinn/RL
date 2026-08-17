@@ -23,8 +23,13 @@ focusing on:
 - Sequence dimension validation
 """
 
+import ast
+import gc
+import hashlib
+import weakref
+from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Callable, Iterator, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -43,6 +48,87 @@ from tests.unit.models.megatron.megatron_data_actors import (
     GetPackSequenceParametersTestActor,
     PackSequencesTestActor,
 )
+
+_DATA_PATH = Path(__file__).resolve().parents[4] / "nemo_rl/models/megatron/data.py"
+
+
+def _extract_replayable_processed_microbatch_iterator() -> type:
+    tree = ast.parse(_DATA_PATH.read_text())
+    helper_names = {
+        "_processed_microbatch_replay_identity",
+        "_update_replay_identity_tensor",
+    }
+    body = [
+        ast.ImportFrom(
+            module="__future__",
+            names=[ast.alias(name="annotations")],
+            level=0,
+        ),
+        *[
+            node
+            for node in tree.body
+            if (isinstance(node, ast.FunctionDef) and node.name in helper_names)
+            or (
+                isinstance(node, ast.ClassDef)
+                and node.name == "ReplayableProcessedMicrobatchIterator"
+            )
+        ],
+    ]
+    namespace = {
+        "Any": Any,
+        "Callable": Callable,
+        "Iterator": Iterator,
+        "Optional": Optional,
+        "ProcessedMicrobatch": Any,
+        "_next_microbatch_generation": lambda: 999,
+        "hashlib": hashlib,
+        "torch": torch,
+    }
+    exec(
+        compile(
+            ast.fix_missing_locations(ast.Module(body=body, type_ignores=[])),
+            _DATA_PATH,
+            "exec",
+        ),
+        namespace,
+    )
+    return namespace["ReplayableProcessedMicrobatchIterator"]
+
+
+def _replay_microbatch(
+    identity: int,
+    generation_provider: Callable[[], int],
+    *,
+    full_cuda_payload: Any = None,
+) -> Any:
+    return SimpleNamespace(
+        data_dict=SimpleNamespace(),
+        input_ids=torch.tensor([[identity]], dtype=torch.int64),
+        input_ids_cp_sharded=torch.tensor([[identity]], dtype=torch.int64),
+        attention_mask=None,
+        position_ids=None,
+        packed_seq_params=SimpleNamespace(),
+        cu_seqlens=torch.tensor([0, 1], dtype=torch.int32),
+        cu_seqlens_padded=torch.tensor([0, 1, 1], dtype=torch.int32),
+        structural_padding_mask=torch.tensor([[False]], dtype=torch.bool),
+        structural_padding_mask_cp_sharded=torch.tensor([[False]], dtype=torch.bool),
+        packed_geometry=SimpleNamespace(
+            logical_tokens=1,
+            padded_tokens=1,
+            capacity_tokens=1,
+            real_sequence_count=1,
+            cu_seqlens_capacity_entries=3,
+        ),
+        mtp_loss_mask=None,
+        routed_experts=torch.tensor([[[identity % 4]]], dtype=torch.int32),
+        routed_experts_cp_sharded=torch.tensor(
+            [[[[identity % 4]]]],
+            dtype=torch.int32,
+        ),
+        microbatch_generation=generation_provider(),
+        identity=identity,
+        full_cuda_payload=full_cuda_payload,
+    )
 
 
 @pytest.mark.mcore
@@ -148,35 +234,168 @@ def test_processed_iterator_assigns_strictly_advancing_microbatch_generations(
     assert second.microbatch_generation == first.microbatch_generation + 1
 
 
-@pytest.mark.mcore
-def test_replayable_processed_iterator_reuses_preflight_generations_once() -> None:
-    from nemo_rl.models.megatron.data import ReplayableProcessedMicrobatchIterator
+def test_replay_rejects_same_count_reordering_before_mismatched_yield() -> None:
+    replayable_type = _extract_replayable_processed_microbatch_iterator()
+    orders = iter(((11, 22, 33), (22, 11, 33)))
+    generations = iter((41, 42, 43))
 
+    def factory(generation_provider: Callable[[], int]) -> Iterator[Any]:
+        for identity in next(orders):
+            yield _replay_microbatch(identity, generation_provider)
+
+    replayable = replayable_type(factory, lambda: next(generations))
+    list(replayable)
+    schedule = replayable.replay()
+    model_inputs: list[int] = []
+
+    with pytest.raises(RuntimeError, match="identity.*index 0"):
+        model_inputs.append(next(schedule).identity)
+
+    assert model_inputs == []
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "input_ids_cp_sharded",
+        "routed_experts_cp_sharded",
+        "structural_padding_mask_cp_sharded",
+        "cu_seqlens_padded",
+    ],
+)
+def test_replay_identity_binds_token_route_and_structural_ownership(
+    field: str,
+) -> None:
+    replayable_type = _extract_replayable_processed_microbatch_iterator()
+    generations = iter((45,))
+    factory_call = 0
+
+    def factory(generation_provider: Callable[[], int]) -> Iterator[Any]:
+        nonlocal factory_call
+        factory_call += 1
+        microbatch = _replay_microbatch(11, generation_provider)
+        if factory_call == 2:
+            replacements = {
+                "input_ids_cp_sharded": torch.tensor([[12]], dtype=torch.int64),
+                "routed_experts_cp_sharded": torch.tensor([[[[2]]]], dtype=torch.int32),
+                "structural_padding_mask_cp_sharded": torch.tensor(
+                    [[True]], dtype=torch.bool
+                ),
+                "cu_seqlens_padded": torch.tensor([0, 0, 1], dtype=torch.int32),
+            }
+            setattr(microbatch, field, replacements[field])
+        yield microbatch
+
+    replayable = replayable_type(factory, lambda: next(generations))
+    list(replayable)
+
+    with pytest.raises(RuntimeError, match="identity.*index 0"):
+        next(replayable.replay())
+
+
+def test_replay_rejects_extra_item_without_consumer_requesting_n_plus_one() -> None:
+    replayable_type = _extract_replayable_processed_microbatch_iterator()
+    orders = iter(((11, 22), (11, 22, 33)))
+    generations = iter((51, 52))
+
+    def factory(generation_provider: Callable[[], int]) -> Iterator[Any]:
+        for identity in next(orders):
+            yield _replay_microbatch(identity, generation_provider)
+
+    replayable = replayable_type(factory, lambda: next(generations))
+    list(replayable)
+    schedule = replayable.replay()
+
+    assert next(schedule).identity == 11
+    with pytest.raises(RuntimeError, match="more inputs than preflight"):
+        next(schedule)
+
+
+def test_valid_replay_preserves_order_generations_and_releases_payloads() -> None:
+    class FullCudaPayload:
+        pass
+
+    replayable_type = _extract_replayable_processed_microbatch_iterator()
     source_generations = iter((41, 42, 43))
     factory_calls: list[list[int]] = []
+    preflight_payload_refs: list[weakref.ReferenceType[FullCudaPayload]] = []
+    schedule_payload_refs: list[weakref.ReferenceType[FullCudaPayload]] = []
 
-    def factory(generation_provider: Any) -> Any:
+    def factory(generation_provider: Callable[[], int]) -> Iterator[Any]:
         call_generations: list[int] = []
         factory_calls.append(call_generations)
         for identity in (1, 2, 3):
-            generation = generation_provider()
-            call_generations.append(generation)
-            yield SimpleNamespace(identity=identity, microbatch_generation=generation)
+            payload = FullCudaPayload()
+            target_refs = (
+                preflight_payload_refs
+                if len(factory_calls) == 1
+                else schedule_payload_refs
+            )
+            target_refs.append(weakref.ref(payload))
+            microbatch = _replay_microbatch(
+                identity,
+                generation_provider,
+                full_cuda_payload=payload,
+            )
+            call_generations.append(microbatch.microbatch_generation)
+            yield microbatch
 
-    replayable = ReplayableProcessedMicrobatchIterator(
-        factory,
-        lambda: next(source_generations),
-    )
-    preflight = list(replayable)
-    schedule = list(replayable.replay())
+    replayable = replayable_type(factory, lambda: next(source_generations))
 
-    assert [item.identity for item in preflight] == [1, 2, 3]
+    def consume_preflight() -> list[int]:
+        return [microbatch.identity for microbatch in replayable]
+
+    assert consume_preflight() == [1, 2, 3]
+    gc.collect()
+    assert all(reference() is None for reference in preflight_payload_refs)
+
+    schedule_iterator = replayable.replay()
+    assert schedule_payload_refs == []
+    schedule = list(schedule_iterator)
+
     assert [item.identity for item in schedule] == [1, 2, 3]
-    assert [item.microbatch_generation for item in preflight] == [41, 42, 43]
     assert [item.microbatch_generation for item in schedule] == [41, 42, 43]
     assert factory_calls == [[41, 42, 43], [41, 42, 43]]
+    del schedule
+    gc.collect()
+    assert all(reference() is None for reference in schedule_payload_refs)
     with pytest.raises(RuntimeError, match="only once"):
         replayable.replay()
+
+
+@pytest.mark.parametrize("mode", ["dynamic", "packable", "regular"])
+def test_replay_is_compatible_with_deterministic_production_factories(
+    mode: str,
+) -> None:
+    replayable_type = _extract_replayable_processed_microbatch_iterator()
+    data = BatchedDataDict(
+        {"input_ids": torch.tensor([[11], [22], [33]], dtype=torch.int64)}
+    )
+    if mode == "dynamic":
+        data.micro_batch_indices = [[[0, 1], [1, 2], [2, 3]]]
+        data.micro_batch_lengths = [[1, 1, 1]]
+        raw_factory = data.make_microbatch_iterator_with_dynamic_shapes
+    elif mode == "packable":
+        data.micro_batch_indices = [[[0, 1], [1, 2], [2, 3]]]
+        data.micro_batch_lengths = [[1, 1, 1]]
+        raw_factory = data.make_microbatch_iterator_for_packable_sequences
+    else:
+        raw_factory = lambda: data.make_microbatch_iterator(1)
+
+    generations = iter((61, 62, 63))
+    factory_calls = 0
+
+    def factory(generation_provider: Callable[[], int]) -> Iterator[Any]:
+        nonlocal factory_calls
+        factory_calls += 1
+        for raw_microbatch in raw_factory():
+            identity = int(raw_microbatch["input_ids"][0, 0].item())
+            yield _replay_microbatch(identity, generation_provider)
+
+    replayable = replayable_type(factory, lambda: next(generations))
+    assert [microbatch.identity for microbatch in replayable] == [11, 22, 33]
+    assert [microbatch.identity for microbatch in replayable.replay()] == [11, 22, 33]
+    assert factory_calls == 2
 
 
 @pytest.mark.mcore

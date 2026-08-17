@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hashlib
 from contextlib import nullcontext
 from dataclasses import dataclass
 from itertools import count
@@ -115,6 +116,60 @@ class ProcessedMicrobatch:
             raise ValueError("microbatch_generation must be nonnegative.")
 
 
+def _update_replay_identity_tensor(
+    digest: Any,
+    name: str,
+    tensor: Optional[torch.Tensor],
+) -> None:
+    digest.update(name.encode("utf-8"))
+    if tensor is None:
+        digest.update(b":none;")
+        return
+    if not torch.is_tensor(tensor):
+        raise TypeError(f"Replay identity field {name} must be a Tensor or None.")
+    value = tensor.detach()
+    if value.device.type != "cpu":
+        value = value.cpu()
+    value = value.contiguous()
+    digest.update(f":{value.dtype}:{tuple(value.shape)}:".encode("utf-8"))
+    if value.numel() > 0:
+        digest.update(value.view(torch.uint8).numpy().tobytes())
+    digest.update(b";")
+
+
+def _processed_microbatch_replay_identity(microbatch: ProcessedMicrobatch) -> str:
+    """Return a compact content identity without retaining payload tensors."""
+    digest = hashlib.sha256()
+    for name in (
+        "input_ids_cp_sharded",
+        "routed_experts_cp_sharded",
+        "structural_padding_mask_cp_sharded",
+        "cu_seqlens",
+        "cu_seqlens_padded",
+    ):
+        _update_replay_identity_tensor(digest, name, getattr(microbatch, name))
+
+    geometry = microbatch.packed_geometry
+    digest.update(b"packed_geometry:")
+    if geometry is None:
+        digest.update(b"none;")
+    else:
+        for name in (
+            "logical_tokens",
+            "padded_tokens",
+            "capacity_tokens",
+            "real_sequence_count",
+            "cu_seqlens_capacity_entries",
+        ):
+            value = getattr(geometry, name)
+            if type(value) is not int:
+                raise TypeError(
+                    f"Replay identity geometry field {name} must be an int."
+                )
+            digest.update(f"{name}:{value};".encode("utf-8"))
+    return digest.hexdigest()
+
+
 class ReplayableProcessedMicrobatchIterator(Iterator[ProcessedMicrobatch]):
     """Reprocess graph microbatches without retaining their CUDA payloads."""
 
@@ -130,6 +185,7 @@ class ReplayableProcessedMicrobatchIterator(Iterator[ProcessedMicrobatch]):
             else generation_provider
         )
         self._generations: list[int] = []
+        self._identities: list[str] = []
         self._exhausted = False
         self._replay_created = False
         self._iterator = factory(self._record_generation)
@@ -144,10 +200,12 @@ class ReplayableProcessedMicrobatchIterator(Iterator[ProcessedMicrobatch]):
 
     def __next__(self) -> ProcessedMicrobatch:
         try:
-            return next(self._iterator)
+            microbatch = next(self._iterator)
         except StopIteration:
             self._exhausted = True
             raise
+        self._identities.append(_processed_microbatch_replay_identity(microbatch))
+        return microbatch
 
     def replay(self) -> Iterator[ProcessedMicrobatch]:
         """Create the one schedule iterator with the preflight generations."""
@@ -162,28 +220,60 @@ class ReplayableProcessedMicrobatchIterator(Iterator[ProcessedMicrobatch]):
             )
         self._replay_created = True
         generations = tuple(self._generations)
+        identities = tuple(self._identities)
+        if len(generations) != len(identities):
+            raise RuntimeError(
+                "CUDA graph microbatch preflight generation and identity counts "
+                f"differ: {len(generations)} != {len(identities)}."
+            )
 
         def replay_iterator() -> Iterator[ProcessedMicrobatch]:
-            generation_iterator = iter(generations)
+            generation_index = 0
 
             def replay_generation() -> int:
-                try:
-                    return next(generation_iterator)
-                except StopIteration as error:
+                nonlocal generation_index
+                if generation_index >= len(generations):
                     raise RuntimeError(
                         "CUDA graph microbatch replay produced more inputs than "
                         "preflight."
-                    ) from error
+                    )
+                generation = generations[generation_index]
+                generation_index += 1
+                return generation
 
-            replay_count = 0
-            for microbatch in self._factory(replay_generation):
-                replay_count += 1
+            replay_source = iter(self._factory(replay_generation))
+            for index, (generation, identity) in enumerate(
+                zip(generations, identities, strict=True)
+            ):
+                try:
+                    microbatch = next(replay_source)
+                except StopIteration as error:
+                    raise RuntimeError(
+                        "CUDA graph microbatch replay produced fewer inputs than "
+                        f"preflight: {index} != {len(generations)}."
+                    ) from error
+                if microbatch.microbatch_generation != generation:
+                    raise RuntimeError(
+                        "CUDA graph microbatch replay generation differs at index "
+                        f"{index}: {microbatch.microbatch_generation} != {generation}."
+                    )
+                replay_identity = _processed_microbatch_replay_identity(microbatch)
+                if replay_identity != identity:
+                    raise RuntimeError(
+                        "CUDA graph microbatch replay identity differs at index "
+                        f"{index}."
+                    )
+                if index == len(generations) - 1:
+                    try:
+                        next(replay_source)
+                    except StopIteration:
+                        pass
+                    else:
+                        raise RuntimeError(
+                            "CUDA graph microbatch replay produced more inputs than "
+                            "preflight."
+                        )
                 yield microbatch
-            if replay_count != len(generations):
-                raise RuntimeError(
-                    "CUDA graph microbatch replay count differs from preflight: "
-                    f"{replay_count} != {len(generations)}."
-                )
 
         return replay_iterator()
 
@@ -547,7 +637,9 @@ def make_processed_microbatch_iterator(
         if type(microbatch_generation) is not int:
             raise TypeError("microbatch generation provider must return an int.")
         if microbatch_generation < 0:
-            raise ValueError("microbatch generation provider returned a negative value.")
+            raise ValueError(
+                "microbatch generation provider returned a negative value."
+            )
 
         yield ProcessedMicrobatch(
             data_dict=data_dict,
