@@ -16,6 +16,7 @@ RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
 EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${BASE}/experiments/current-mxfp8-moe-rollout-ab/${MODEL}/${ARM}/${RUN_SUFFIX}}
 CACHE_ROOT=${CACHE_ROOT:-${BASE}/.cache/current-mxfp8-moe-rollout-ab/${MODEL}/${ARM}/${RUN_SUFFIX}}
 MOUNT_UV_CACHE=${MOUNT_UV_CACHE:-true}
+USE_CONTAINER_PYTHON=${USE_CONTAINER_PYTHON:-false}
 WORKER_VENV_ROOT=${WORKER_VENV_ROOT:-/tmp/nemo_rl_worker_venvs/${MODEL}/${ARM}/${RUN_SUFFIX}}
 WANDB_PROJECT=${WANDB_PROJECT:-sna-current-mxfp8-moe-rollout-ab}
 WANDB_NAME=${WANDB_NAME:-${MODEL}-${ARM}-20step-${RUN_SUFFIX}}
@@ -164,6 +165,14 @@ else
   PYTHON_RUNNER="uv run --frozen"
   UV_DRIVER_SETUP="export UV_PROJECT_ENVIRONMENT=${CACHE_ROOT}/driver-venv
 export UV_PYTHON_INSTALL_DIR=${CACHE_ROOT}/uv-python"
+  if [[ "${USE_CONTAINER_PYTHON}" == true ]]; then
+    UV_DRIVER_SETUP+="
+export UV_PYTHON=/opt/nemo_rl_venv/bin/python
+export UV_NO_MANAGED_PYTHON=1"
+  elif [[ "${USE_CONTAINER_PYTHON}" != false ]]; then
+    echo "USE_CONTAINER_PYTHON must be true or false" >&2
+    exit 2
+  fi
 fi
 
 cat >"${EXPERIMENT_ROOT}/metadata.env" <<EOF
@@ -175,6 +184,7 @@ container=${CONTAINER}
 runtime_site_packages=${RUNTIME_SITE_PACKAGES:-container_default}
 python_runner=${PYTHON_RUNNER}
 mount_uv_cache=${MOUNT_UV_CACHE}
+use_container_python=${USE_CONTAINER_PYTHON}
 worker_venv_root=${WORKER_VENV_ROOT}
 python_version=runtime_interpreter
 gym_source_commit=5a6fc589c0196f73a5931781b06da61f668a80d7
