@@ -9,6 +9,7 @@ MAX_STEPS=${MAX_STEPS:-1}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
 BRANCH=${BRANCH:-sna/exp-sync-ipc-bf16-mxfp8-ab-20260816}
 EXPECTED_HEAD=${EXPECTED_HEAD:-}
+USE_GRES=${USE_GRES:-false}
 
 case "${MODEL}" in
   qwen30)
@@ -93,6 +94,14 @@ if [[ "${ACTION}" == render ]]; then
   exit 0
 fi
 
+if [[ "${ACTION}" == render-sbatch ]]; then
+  printf '%s\n' "--nodes=${TOTAL_NODES}"
+  if [[ "${USE_GRES}" == true ]]; then
+    printf '%s\n' "--gres=gpu:4"
+  fi
+  exit 0
+fi
+
 BASE=${BASE:-/lustre/fsw/coreai_dlalgo_llm/users/sna}
 REPO=${REPO:-${BASE}/RL-sync-ipc-bf16-mxfp8-ab-20260816}
 CONTAINER=${CONTAINER:-${BASE}/containers/nemo2606/nemo_rl_nightly_nemo2606_20260812_2574124.sqsh}
@@ -112,7 +121,7 @@ case "${ACTION}" in
   test-only) SBATCH_ACTION=(--test-only) ;;
   submit) SBATCH_ACTION=() ;;
   *)
-    echo "ACTION must be render, test-only, or submit" >&2
+    echo "ACTION must be render, render-sbatch, test-only, or submit" >&2
     exit 2
     ;;
 esac
@@ -193,7 +202,6 @@ export UV_CACHE_DIR_OVERRIDE=${CACHE_ROOT}/uv-cache
 
 SBATCH_ARGS=(
   --nodes="${TOTAL_NODES}"
-  --gres=gpu:4
   --exclusive
   --account="${ACCOUNT}"
   --partition="${PARTITION}"
@@ -202,6 +210,9 @@ SBATCH_ARGS=(
   --job-name="sna-sync-ipc-${MODEL}-${ARM}-${MAX_STEPS}s"
   --output="${EXPERIMENT_ROOT}/slurm-%j.out"
 )
+if [[ "${USE_GRES}" == true ]]; then
+  SBATCH_ARGS+=(--gres=gpu:4)
+fi
 
 printf 'action=%s\nmodel=%s\narm=%s\nsha=%s\nresult=%s\n' \
   "${ACTION}" "${MODEL}" "${ARM}" "${LOCAL_HEAD}" "${EXPERIMENT_ROOT}"

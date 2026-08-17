@@ -27,6 +27,23 @@ def render(model: str, arm: str, max_steps: int = 1) -> str:
     return result.stdout
 
 
+def render_sbatch(use_gres: bool) -> str:
+    env = os.environ | {
+        "ACTION": "render-sbatch",
+        "MODEL": "qwen30",
+        "ARM": "bf16",
+        "USE_GRES": str(use_gres).lower(),
+    }
+    result = subprocess.run(
+        ["bash", str(LAUNCHER)],
+        check=True,
+        capture_output=True,
+        env=env,
+        text=True,
+    )
+    return result.stdout
+
+
 def test_qwen_bf16_uses_sync_colocated_ipc_and_cuda_graphs() -> None:
     command = render("qwen30", "bf16")
 
@@ -75,3 +92,8 @@ def test_unknown_arm_is_rejected() -> None:
 
     assert result.returncode == 2
     assert "ARM must be bf16 or mxfp8" in result.stderr
+
+
+def test_gres_is_optional_for_exclusive_node_clusters() -> None:
+    assert "--gres" not in render_sbatch(use_gres=False)
+    assert "--gres=gpu:4" in render_sbatch(use_gres=True)

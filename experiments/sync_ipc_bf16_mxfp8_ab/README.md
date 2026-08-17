@@ -28,5 +28,6 @@ ACTION=render MODEL=qwen30 ARM=mxfp8 MAX_STEPS=20 \
 ```
 
 Cluster submission requires `REPO`, `CONTAINER`, `HF_HOME`, `BASE`, `PARTITION`,
-and `SLURM_ACCOUNT` to describe the selected reproducible environment.
-
+and `SLURM_ACCOUNT` to describe the selected reproducible environment. Keep
+`USE_GRES=false` for exclusive-node Lyris/Ptyche partitions; set it to `true`
+only on clusters that require an explicit GPU GRES request.
