@@ -115,6 +115,40 @@ def _load_experiment_module(name: str) -> ModuleType:
     return module
 
 
+def test_r3_router_graph_mcore_row_renders_typed_distributed_commands() -> None:
+    runner = _load_experiment_module("scripts/run_mcore_training")
+    rows = runner.load_matrix(
+        EXPERIMENT_DIR / "mcore_test_matrix.json", candidate_kind="mcore"
+    )
+
+    row = rows["dropless_hybridep_nano16_r3_router_graph"]
+    commands = runner.pytest_commands(row, python_executable=Path("/runtime/python"))
+
+    assert row.world_size == 16
+    assert row.allocations == ((4, 4),)
+    assert commands == (
+        (
+            "/runtime/python",
+            "-m",
+            "pytest",
+            "-q",
+            "tests/unit_tests/transformer/test_partial_moe_cuda_graph_distributed.py::"
+            "test_dropless_hybridep_nano16_r3_router_graph",
+        ),
+        (
+            "/runtime/python",
+            "-m",
+            "pytest",
+            "-q",
+            "tests/unit_tests/transformer/test_partial_moe_cuda_graph_distributed.py::"
+            "test_dropless_hybridep_nano16_r3_router_graph_rejects_invalid_route",
+        ),
+    )
+    rendered = " ".join(shlex.join(command) for command in commands)
+    assert "MCORE_TEST_DISABLE_NANO_SHARED_EXPERT" not in rendered
+    assert "MCORE_TEST_" not in rendered
+
+
 def _create_staged_runtime(
     tmp_path: Path,
     runtime_python_source: str = "#!/bin/bash\nexit 0\n",

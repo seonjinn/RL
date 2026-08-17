@@ -22,6 +22,15 @@
       ],
       "world_size": 16
     },
+    "dropless_hybridep_nano16_r3_router_graph": {
+      "allocations": [{"gpus_per_node": 4, "num_nodes": 4}],
+      "pytest_filters": [],
+      "pytest_nodes": [
+        "tests/unit_tests/transformer/test_partial_moe_cuda_graph_distributed.py::test_dropless_hybridep_nano16_r3_router_graph",
+        "tests/unit_tests/transformer/test_partial_moe_cuda_graph_distributed.py::test_dropless_hybridep_nano16_r3_router_graph_rejects_invalid_route"
+      ],
+      "world_size": 16
+    },
     "dropless_alltoall_qwen30_16": {
       "allocations": [{"gpus_per_node": 4, "num_nodes": 4}],
       "pytest_filters": [],
