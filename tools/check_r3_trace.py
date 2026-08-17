@@ -665,9 +665,6 @@ def _failures_for_graph_counters(records: list[dict[str, Any]]) -> list[str]:
         if type(rank) is int and type(step) is int and type(schedule_key) is int:
             graph_calls[(rank, step, schedule_key)].append(record)
     counters_by_call: dict[tuple[int, int, int], dict[str, Any]] = {}
-    global_consumer_counts: Counter[tuple[int, int]] = Counter()
-    for (_, trace_step, schedule_key), consumers in graph_calls.items():
-        global_consumer_counts[(trace_step, schedule_key)] += len(consumers)
     for record in counter_records:
         label = f"stage={record.get('stage')} rank={record.get('rank')}"
         if record.get("stage") != GRAPH_CONSUMER_STAGE:
@@ -718,7 +715,7 @@ def _failures_for_graph_counters(records: list[dict[str, Any]]) -> list[str]:
         successful_outcomes = {
             consumer.get("successful_graph_launch") for consumer in consumers
         }
-        expected_produced = global_consumer_counts[(trace_step, schedule_key)]
+        expected_produced = len(consumers)
         if produced != expected_produced:
             failures.append(
                 f"graph counter produced count does not match consumer call for {call_key}"
@@ -740,6 +737,46 @@ def _failures_for_graph_counters(records: list[dict[str, Any]]) -> list[str]:
             "graph counter calls do not exactly match graph consumer calls: "
             f"counters={sorted(counters_by_call)} consumers={sorted(graph_calls)}"
         )
+    return failures
+
+
+def _failures_for_graph_counter_summaries(
+    records: list[dict[str, Any]],
+) -> list[str]:
+    failures: list[str] = []
+    for record in records:
+        if record.get("event") != "router_replay_graph_counter_summary":
+            continue
+        label = f"rank={record.get('rank')} schedule={record.get('schedule_key')}"
+        if record.get("stage") != "train" or record.get("scope") != "global_reduced":
+            failures.append(f"invalid graph counter summary identity for {label}")
+        schedule_key = record.get("schedule_key")
+        num_microbatches = record.get("num_microbatches")
+        if (
+            type(schedule_key) is not int
+            or schedule_key < 1
+            or type(num_microbatches) is not int
+            or num_microbatches != schedule_key
+        ):
+            failures.append(f"invalid graph counter summary schedule for {label}")
+        counters = record.get("counters")
+        if not isinstance(counters, dict) or set(counters) != set(GRAPH_COUNTER_FIELDS):
+            failures.append(f"invalid graph counter summary schema for {label}")
+            continue
+        if any(
+            type(counters[field]) is not int or counters[field] < 0
+            for field in GRAPH_COUNTER_FIELDS
+        ):
+            failures.append(f"invalid graph counter summary value for {label}")
+            continue
+        if any(counters[field] != 0 for field in UNSAFE_GRAPH_COUNTER_FIELDS):
+            failures.append(f"unsafe graph counter summary for {label}")
+        produced = counters["route_payloads_produced"]
+        copied = counters["route_payloads_copied"]
+        launched = counters["route_graph_launches"]
+        warmup = counters["route_eager_warmup_payloads"]
+        if produced != copied + warmup or copied != launched:
+            failures.append(f"inconsistent graph counter summary for {label}")
     return failures
 
 
@@ -865,6 +902,7 @@ def check_trace(
     )
     failures.extend(_failures_for_graph_consumers(records))
     failures.extend(_failures_for_graph_counters(records))
+    failures.extend(_failures_for_graph_counter_summaries(records))
 
     replay_assignments_by_stage = summary["replay_assignments_by_stage"]
     for stage in REQUIRED_REPLAY_STAGES:

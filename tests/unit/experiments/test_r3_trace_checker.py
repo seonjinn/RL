@@ -327,6 +327,24 @@ def _production_warmup_trace(records: list[dict[str, Any]]) -> list[dict[str, An
                 "counters": counters,
             }
         )
+    summary_counters = dict(GRAPH_COUNTERS)
+    summary_counters.update(
+        route_payloads_produced=40,
+        route_payloads_copied=10,
+        route_graph_launches=10,
+        route_eager_warmup_payloads=30,
+    )
+    records.append(
+        {
+            "event": "router_replay_graph_counter_summary",
+            "scope": "global_reduced",
+            "stage": "train",
+            "rank": 0,
+            "schedule_key": 5,
+            "num_microbatches": 5,
+            "counters": summary_counters,
+        }
+    )
     return records
 
 
@@ -851,7 +869,11 @@ def test_checker_accepts_three_warmups_then_success(tmp_path: Path) -> None:
     assert checker.check_trace(trace_dir) == 0
 
 
-def test_checker_rejects_missing_warmup_call_counter(tmp_path: Path) -> None:
+@pytest.mark.parametrize("missing_step", (1, 4))
+def test_checker_rejects_missing_call_local_counter(
+    tmp_path: Path,
+    missing_step: int,
+) -> None:
     checker = _load_checker()
     trace_dir = tmp_path / "trace"
     _write_legacy_trace(trace_dir, populated_layers=[1, 3])
@@ -862,7 +884,7 @@ def test_checker_rejects_missing_warmup_call_counter(tmp_path: Path) -> None:
             for record in records
             if not (
                 record.get("event") == "router_replay_graph_counters"
-                and record.get("trace_step") == 2
+                and record.get("trace_step") == missing_step
             )
         ]
 

@@ -915,7 +915,7 @@ def test_training_handoffs_pass_explicit_graph_launch_expectation() -> None:
             assert "router_replay_graph_launch_expected" in keywords
 
 
-def test_sync_and_split_capture_graph_counter_identity_inside_trace_context() -> None:
+def test_sync_and_split_emit_call_local_counters_inside_trace_context() -> None:
     tree = ast.parse(_WORKER_PATH.read_text())
     class_node = next(
         node
@@ -937,43 +937,71 @@ def test_sync_and_split_capture_graph_counter_identity_inside_trace_context() ->
                 for item in node.items
             )
         )
-        assert any(
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "_capture_router_replay_trace_call_identity"
+        calls = {
+            node.func.attr
             for statement in trace_with.body
             for node in ast.walk(statement)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
+        assert {
+            "_begin_router_replay_trace_call_counters",
+            "_finish_router_replay_trace_call_counters",
+        } <= calls
+
+
+def test_graph_counters_are_local_to_each_trace_context() -> None:
+    fields = (
+        "route_payloads_produced",
+        "route_payloads_copied",
+        "route_graph_launches",
+        "route_eager_warmup_payloads",
+    )
+    first = SimpleNamespace(stage="train", trace_step=7)
+    second = SimpleNamespace(stage="train", trace_step=8)
+    identities = [first, second, None]
+    snapshots = iter(
+        (
+            dict.fromkeys(fields, 0),
+            dict.fromkeys(fields, 2),
+            dict.fromkeys(fields, 2),
+            dict.fromkeys(fields, 5),
         )
-
-
-def test_graph_counter_call_identity_capture_is_trace_optional() -> None:
-    identity = SimpleNamespace(stage="train", trace_step=7)
-    current = [identity, None]
+    )
+    records: list[dict[str, Any]] = []
     worker_type = _extract_worker_methods(
-        {"_capture_router_replay_trace_call_identity"},
-        {"current_r3_trace_call_identity": lambda: current.pop(0)},
+        {
+            "_begin_router_replay_trace_call_counters",
+            "_finish_router_replay_trace_call_counters",
+        },
+        {
+            "ROUTER_REPLAY_GRAPH_COUNTER_FIELDS": fields,
+            "current_r3_trace_call_identity": lambda: identities.pop(0),
+            "trace_router_replay_graph_counters": lambda counters, **kwargs: (
+                records.append({"counters": counters, **kwargs})
+            ),
+        },
     )
     worker = worker_type()
-    traced = SimpleNamespace(
-        r3_trace_call_identity=None,
-        r3_trace_num_microbatches=None,
+    worker._snapshot_router_replay_graph_counters = lambda: next(snapshots)
+
+    first_call = worker._begin_router_replay_trace_call_counters(
+        schedule_key=5, num_microbatches=5
     )
-    untraced = SimpleNamespace(
-        r3_trace_call_identity=None,
-        r3_trace_num_microbatches=None,
+    worker._finish_router_replay_trace_call_counters(first_call)
+    second_call = worker._begin_router_replay_trace_call_counters(
+        schedule_key=5, num_microbatches=5
+    )
+    worker._finish_router_replay_trace_call_counters(second_call)
+    untraced = worker._begin_router_replay_trace_call_counters(
+        schedule_key=5, num_microbatches=5
     )
 
-    worker._capture_router_replay_trace_call_identity(
-        traced, schedule_key=5, num_microbatches=5
-    )
-    worker._capture_router_replay_trace_call_identity(
-        untraced, schedule_key=5, num_microbatches=5
-    )
-
-    assert traced.r3_trace_call_identity is identity
-    assert traced.r3_trace_num_microbatches == 5
-    assert untraced.r3_trace_call_identity is None
-    assert untraced.r3_trace_num_microbatches is None
+    assert untraced is None
+    assert [record["call_identity"] for record in records] == [first, second]
+    assert records[0]["counters"] == dict.fromkeys(fields, 2)
+    assert records[1]["counters"] == dict.fromkeys(fields, 3)
+    assert all(record["schedule_key"] == 5 for record in records)
+    assert all(record["num_microbatches"] == 5 for record in records)
 
 
 def test_router_route_counters_reduce_globally_and_block_unsafe_state() -> None:
@@ -1021,7 +1049,7 @@ def test_router_route_counters_reduce_globally_and_block_unsafe_state() -> None:
             "torch": fake_torch,
             "ROUTER_REPLAY_GRAPH_COUNTER_FIELDS": counter_fields,
             "ROUTER_REPLAY_GRAPH_UNSAFE_COUNTER_FIELDS": counter_fields[4:],
-            "trace_router_replay_graph_counters": lambda _counters, **_kwargs: None,
+            "trace_router_replay_graph_counter_summary": lambda _counters, **_kwargs: None,
         },
     )
     worker = worker_type()
@@ -1037,9 +1065,7 @@ def test_router_route_counters_reduce_globally_and_block_unsafe_state() -> None:
     worker._snapshot_router_replay_graph_counters = lambda: current
     call_state = SimpleNamespace(
         router_replay_counter_snapshot={name: 0 for name in counter_fields},
-        r3_trace_call_identity=None,
         normalized_schedule_key=5,
-        r3_trace_num_microbatches=5,
     )
 
     with pytest.raises(RuntimeError, match="stale_generation_count=8"):
@@ -1089,7 +1115,7 @@ def test_router_route_counters_require_produced_copied_launch_consistency() -> N
             "torch": fake_torch,
             "ROUTER_REPLAY_GRAPH_COUNTER_FIELDS": counter_fields,
             "ROUTER_REPLAY_GRAPH_UNSAFE_COUNTER_FIELDS": counter_fields[4:],
-            "trace_router_replay_graph_counters": lambda _counters, **_kwargs: None,
+            "trace_router_replay_graph_counter_summary": lambda _counters, **_kwargs: None,
         },
     )
     worker = worker_type()
@@ -1104,9 +1130,7 @@ def test_router_route_counters_require_produced_copied_launch_consistency() -> N
     worker._snapshot_router_replay_graph_counters = lambda: current
     call_state = SimpleNamespace(
         router_replay_counter_snapshot={name: 0 for name in counter_fields},
-        r3_trace_call_identity=None,
         normalized_schedule_key=5,
-        r3_trace_num_microbatches=5,
     )
 
     with pytest.raises(RuntimeError, match="inconsistent route evidence"):

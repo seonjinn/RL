@@ -129,3 +129,22 @@ def test_graph_counter_trace_carries_detached_call_identity(
     assert record["trace_step"] == identity.trace_step
     assert record["schedule_key"] == 5
     assert record["num_microbatches"] == 5
+
+
+def test_reduced_graph_counter_summary_uses_distinct_event(
+    tmp_path, monkeypatch
+) -> None:
+    from nemo_rl.utils.r3_trace import trace_router_replay_graph_counter_summary
+
+    monkeypatch.setenv("NRL_R3_TRACE", "1")
+    monkeypatch.setenv("NRL_R3_TRACE_DIR", str(tmp_path))
+    trace_router_replay_graph_counter_summary(
+        {"route_payloads_produced": 10},
+        schedule_key=5,
+        num_microbatches=5,
+    )
+
+    record = json.loads(next(tmp_path.glob("*.jsonl")).read_text().splitlines()[-1])
+    assert record["event"] == "router_replay_graph_counter_summary"
+    assert record["scope"] == "global_reduced"
+    assert "trace_step" not in record

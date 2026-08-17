@@ -851,7 +851,7 @@ def trace_router_replay_graph_counters(
     schedule_key: int,
     num_microbatches: int,
 ) -> None:
-    """Trace globally reduced route lifecycle counters without payload values."""
+    """Trace one rank-local route lifecycle delta for an exact train call."""
     if call_identity is None:
         return
     if call_identity.stage != "train" or call_identity.trace_step < 1:
@@ -865,6 +865,31 @@ def trace_router_replay_graph_counters(
             "event": "router_replay_graph_counters",
             "stage": call_identity.stage,
             "trace_step": call_identity.trace_step,
+            "schedule_key": schedule_key,
+            "num_microbatches": num_microbatches,
+            "counters": dict(counters),
+        }
+    )
+
+
+def trace_router_replay_graph_counter_summary(
+    counters: dict[str, int],
+    *,
+    schedule_key: int,
+    num_microbatches: int,
+) -> None:
+    """Trace a reduced whole-training-call summary distinct from local calls."""
+    if not r3_trace_enabled():
+        return
+    if type(schedule_key) is not int or schedule_key < 1:
+        raise ValueError("Graph counter summary schedule_key must be a positive int.")
+    if type(num_microbatches) is not int or num_microbatches < 1:
+        raise ValueError("Graph counter summary num_microbatches must be positive.")
+    _write_record(
+        {
+            "event": "router_replay_graph_counter_summary",
+            "scope": "global_reduced",
+            "stage": "train",
             "schedule_key": schedule_key,
             "num_microbatches": num_microbatches,
             "counters": dict(counters),
