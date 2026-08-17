@@ -558,7 +558,7 @@ def _failures_for_graph_consumers(records: list[dict[str, Any]]) -> list[str]:
     if prev_mapping_identity != train_mapping_identity:
         failures.append("router mapping/content identity differs between prev-logprob and train")
 
-    surfaces: dict[tuple[Any, ...], list[tuple[int, int, bool, Any]]] = defaultdict(list)
+    graph_calls: dict[tuple[int, int, int], list[tuple[tuple[Any, ...], dict[str, Any]]]] = defaultdict(list)
     surface_signatures: dict[tuple[Any, ...], tuple[Any, ...]] = {}
     for key, record in keyed["graph"].items():
         label = f"rank={key[0]} step={key[1]} generation={key[2]} layer={key[3]} payload={key[4]}"
@@ -598,32 +598,51 @@ def _failures_for_graph_consumers(records: list[dict[str, Any]]) -> list[str]:
         previous_signature = surface_signatures.setdefault(surface, signature)
         if previous_signature != signature:
             failures.append(f"physical signature changed for surface={surface}")
-        surfaces[surface].append(
-            (key[1], int(copy_generation or 0), successful, record.get("graph_index"))
-        )
+        graph_calls[(key[0], key[1], schedule_key)].append((key, record))
 
-    for surface, launches in surfaces.items():
-        launches.sort()
-        warmups = 0
-        last_copy = 0
-        promoted = False
-        graph_index: int | None = None
-        for _, copy_generation, successful, current_graph_index in launches:
-            if not successful:
-                warmups += 1
-                if promoted or warmups > 3:
-                    failures.append(f"invalid graph warmup window for surface={surface}")
-            else:
-                promoted = True
-                if graph_index is None:
-                    graph_index = current_graph_index
-                elif graph_index != current_graph_index:
-                    failures.append(f"graph index changed for surface={surface}")
-                if copy_generation <= last_copy:
-                    failures.append(f"copy generation did not strictly advance for surface={surface}")
-                last_copy = copy_generation
-        if not promoted:
-            failures.append(f"no successful graph launch after warmup for surface={surface}")
+    calls_by_schedule: dict[tuple[int, int], list[tuple[int, bool]]] = defaultdict(list)
+    copy_state: dict[tuple[int, int, int, int], tuple[int, int]] = {}
+    expected_mappings_by_rank: dict[int, set[tuple[int, int]]] = defaultdict(set)
+    for key in train_keys:
+        expected_mappings_by_rank[key[0]].add((key[3], key[4]))
+    for call_key, call_records in graph_calls.items():
+        rank, trace_step, schedule_key = call_key
+        outcomes = {record["successful_graph_launch"] for _, record in call_records}
+        if len(outcomes) != 1:
+            failures.append(f"mixed graph success within call={call_key}")
+            continue
+        successful = bool(next(iter(outcomes)))
+        generations: dict[int, set[tuple[int, int]]] = defaultdict(set)
+        for key, record in call_records:
+            generations[key[2]].add((key[3], key[4]))
+            if successful:
+                surface = (rank, key[3], key[4], schedule_key)
+                copy_generation = int(record["copy_generation"])
+                graph_index = int(record["graph_index"])
+                previous = copy_state.get(surface)
+                if previous is not None and (
+                    graph_index != previous[0] or copy_generation <= previous[1]
+                ):
+                    failures.append(
+                        f"graph metadata did not stay stable/advance for surface={surface}"
+                    )
+                copy_state[surface] = (graph_index, copy_generation)
+        mappings = list(generations.values())
+        if len(generations) != schedule_key or not mappings or any(
+            mapping != expected_mappings_by_rank[rank] for mapping in mappings
+        ):
+            failures.append(f"incomplete generation/layer payload set for call={call_key}")
+        calls_by_schedule[(rank, schedule_key)].append((trace_step, successful))
+
+    for surface, calls in calls_by_schedule.items():
+        calls.sort()
+        outcomes = [successful for _, successful in calls]
+        if outcomes[:3] != [False, False, False] or not outcomes[3:] or not all(
+            outcomes[3:]
+        ):
+            failures.append(
+                f"graph surface requires exactly three warmup calls before promotion: {surface}"
+            )
     return failures
 
 
@@ -636,11 +655,44 @@ def _failures_for_graph_counters(records: list[dict[str, Any]]) -> list[str]:
     ]
     if not counter_records:
         return ["no router_replay_graph_counters records for stage=train"]
-    saw_successful_window = False
+    graph_calls: dict[tuple[int, int, int], list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        if record.get("event") != "router_replay_graph_consumer":
+            continue
+        rank = record.get("rank")
+        step = record.get("trace_step")
+        schedule_key = record.get("schedule_key")
+        if type(rank) is int and type(step) is int and type(schedule_key) is int:
+            graph_calls[(rank, step, schedule_key)].append(record)
+    counters_by_call: dict[tuple[int, int, int], dict[str, Any]] = {}
+    global_consumer_counts: Counter[tuple[int, int]] = Counter()
+    for (_, trace_step, schedule_key), consumers in graph_calls.items():
+        global_consumer_counts[(trace_step, schedule_key)] += len(consumers)
     for record in counter_records:
         label = f"stage={record.get('stage')} rank={record.get('rank')}"
         if record.get("stage") != GRAPH_CONSUMER_STAGE:
             failures.append(f"invalid graph counter stage for {label}")
+        rank = record.get("rank")
+        trace_step = record.get("trace_step")
+        schedule_key = record.get("schedule_key")
+        num_microbatches = record.get("num_microbatches")
+        if (
+            type(rank) is not int
+            or rank < 0
+            or type(trace_step) is not int
+            or trace_step < 1
+            or type(schedule_key) is not int
+            or schedule_key < 1
+            or type(num_microbatches) is not int
+            or num_microbatches != schedule_key
+        ):
+            failures.append(f"invalid graph counter call identity for {label}")
+            continue
+        call_key = (rank, trace_step, schedule_key)
+        if call_key in counters_by_call:
+            failures.append(f"duplicate graph counter call={call_key}")
+            continue
+        counters_by_call[call_key] = record
         counters = record.get("counters")
         if not isinstance(counters, dict) or set(counters) != set(GRAPH_COUNTER_FIELDS):
             failures.append(f"invalid graph counter schema for {label}")
@@ -662,18 +714,32 @@ def _failures_for_graph_counters(records: list[dict[str, Any]]) -> list[str]:
         copied = counters["route_payloads_copied"]
         launched = counters["route_graph_launches"]
         warmup = counters["route_eager_warmup_payloads"]
-        if produced != copied + warmup or copied != launched:
+        consumers = graph_calls.get(call_key, [])
+        successful_outcomes = {
+            consumer.get("successful_graph_launch") for consumer in consumers
+        }
+        expected_produced = global_consumer_counts[(trace_step, schedule_key)]
+        if produced != expected_produced:
+            failures.append(
+                f"graph counter produced count does not match consumer call for {call_key}"
+            )
+        if successful_outcomes == {False}:
+            consistent = produced == warmup and copied == 0 and launched == 0 and produced > 0
+        elif successful_outcomes == {True}:
+            consistent = produced == copied == launched and produced > 0 and warmup == 0
+        else:
+            consistent = False
+        if not consistent:
             failures.append(
                 "inconsistent graph route counters for "
                 f"{label}: produced={produced} copied={copied} "
                 f"launched={launched} warmup={warmup}"
             )
-        if launched > 0:
-            saw_successful_window = True
-        elif warmup <= 0:
-            failures.append(f"zero-launch graph counters lack warmup evidence for {label}")
-    if not saw_successful_window:
-        failures.append("no post-warmup graph counter record has a successful launch")
+    if set(counters_by_call) != set(graph_calls):
+        failures.append(
+            "graph counter calls do not exactly match graph consumer calls: "
+            f"counters={sorted(counters_by_call)} consumers={sorted(graph_calls)}"
+        )
     return failures
 
 

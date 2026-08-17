@@ -24,6 +24,7 @@ import time
 from collections import defaultdict
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
 from typing import Any, Optional
@@ -51,6 +52,18 @@ _context: contextvars.ContextVar[Optional[dict[str, Any]]] = contextvars.Context
     "nrl_r3_trace_context",
     default=None,
 )
+
+
+@dataclass(frozen=True)
+class R3TraceCallIdentity:
+    stage: str
+    trace_step: int
+
+    def __post_init__(self) -> None:
+        if type(self.stage) is not str or not self.stage:
+            raise ValueError("R3 trace call stage must be a nonempty string.")
+        if type(self.trace_step) is not int or self.trace_step < 1:
+            raise ValueError("R3 trace call step must be a positive int.")
 
 
 def r3_trace_enabled() -> bool:
@@ -105,6 +118,17 @@ def _current_context() -> Optional[dict[str, Any]]:
     if ctx and ctx.get("active"):
         return ctx
     return None
+
+
+def current_r3_trace_call_identity() -> Optional[R3TraceCallIdentity]:
+    """Return the typed active call identity without retaining trace context."""
+    ctx = _current_context()
+    if ctx is None:
+        return None
+    return R3TraceCallIdentity(
+        stage=str(ctx["stage"]),
+        trace_step=int(ctx["trace_step"]),
+    )
 
 
 def _torch_rank_info() -> dict[str, Any]:
@@ -820,12 +844,29 @@ def _identity_trace_record(
     return [{"key": key, "identity": identity} for key, identity in identities]
 
 
-def trace_router_replay_graph_counters(counters: dict[str, int]) -> None:
+def trace_router_replay_graph_counters(
+    counters: dict[str, int],
+    *,
+    call_identity: Optional[R3TraceCallIdentity],
+    schedule_key: int,
+    num_microbatches: int,
+) -> None:
     """Trace globally reduced route lifecycle counters without payload values."""
+    if call_identity is None:
+        return
+    if call_identity.stage != "train" or call_identity.trace_step < 1:
+        raise ValueError("Graph counters require a valid train trace call identity.")
+    if type(schedule_key) is not int or schedule_key < 1:
+        raise ValueError("Graph counter schedule_key must be a positive int.")
+    if type(num_microbatches) is not int or num_microbatches < 1:
+        raise ValueError("Graph counter num_microbatches must be a positive int.")
     _write_record(
         {
             "event": "router_replay_graph_counters",
-            "stage": "train",
+            "stage": call_identity.stage,
+            "trace_step": call_identity.trace_step,
+            "schedule_key": schedule_key,
+            "num_microbatches": num_microbatches,
             "counters": dict(counters),
         }
     )

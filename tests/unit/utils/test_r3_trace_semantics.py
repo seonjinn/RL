@@ -42,6 +42,7 @@ def test_graph_consumer_trace_contains_identity_without_content_or_addresses(
     )
 
     monkeypatch.setenv("NRL_R3_TRACE", "1")
+    monkeypatch.setenv("NRL_R3_TRACE_STEPS", "99")
     monkeypatch.setenv("NRL_R3_TRACE_DIR", str(tmp_path))
     with r3_trace_stage("train"):
         trace_router_replay_graph_consumer(
@@ -94,3 +95,37 @@ def test_graph_consumer_trace_contains_identity_without_content_or_addresses(
         "static_address",
     ):
         assert forbidden not in serialized
+
+
+def test_graph_counter_trace_carries_detached_call_identity(
+    tmp_path, monkeypatch
+) -> None:
+    from nemo_rl.utils.r3_trace import (
+        current_r3_trace_call_identity,
+        r3_trace_stage,
+        trace_router_replay_graph_counters,
+    )
+
+    monkeypatch.setenv("NRL_R3_TRACE", "1")
+    monkeypatch.setenv("NRL_R3_TRACE_STEPS", "99")
+    monkeypatch.setenv("NRL_R3_TRACE_DIR", str(tmp_path))
+    with r3_trace_stage("train"):
+        identity = current_r3_trace_call_identity()
+        assert identity is not None
+        assert identity.stage == "train"
+        assert identity.trace_step >= 1
+    assert current_r3_trace_call_identity() is None
+
+    trace_router_replay_graph_counters(
+        {"route_payloads_produced": 10},
+        call_identity=identity,
+        schedule_key=5,
+        num_microbatches=5,
+    )
+
+    record = json.loads(next(tmp_path.glob("*.jsonl")).read_text().splitlines()[-1])
+    assert record["event"] == "router_replay_graph_counters"
+    assert record["stage"] == "train"
+    assert record["trace_step"] == identity.trace_step
+    assert record["schedule_key"] == 5
+    assert record["num_microbatches"] == 5

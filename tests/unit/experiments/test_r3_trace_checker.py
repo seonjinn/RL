@@ -253,6 +253,7 @@ def _write_legacy_trace(
             "valid_shape": [4, 4, 2],
             "dtype": "torch.int32",
         }
+    records = _production_warmup_trace(records)
     trace_dir.mkdir()
     (trace_dir / "r3_trace_test.jsonl").write_text(
         "".join(json.dumps(record) + "\n" for record in records)
@@ -270,6 +271,63 @@ def _rewrite_trace(
         "".join(json.dumps(record) + "\n" for record in updated),
         encoding="utf-8",
     )
+
+
+def _production_warmup_trace(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    train_templates = [
+        record
+        for record in records
+        if record.get("stage") == "train"
+        and record.get("event")
+        in {"router_replay_assignment", "router_replay_action", "router_replay_graph_consumer"}
+        and (
+            record.get("event") != "router_replay_action"
+            or record.get("action") == "replay_forward"
+        )
+    ]
+    records = [record for record in records if record not in train_templates]
+    records = [
+        record
+        for record in records
+        if record.get("event") != "router_replay_graph_counters"
+    ]
+    for step in range(1, 5):
+        successful = step == 4
+        for microbatch_idx in range(5):
+            generation = 100 + (step - 1) * 5 + microbatch_idx
+            for source in train_templates:
+                clone = json.loads(json.dumps(source))
+                clone["trace_step"] = step
+                clone["microbatch_generation"] = generation
+                if clone["event"] == "router_replay_graph_consumer":
+                    if successful:
+                        clone["copy_generation"] = microbatch_idx + 1
+                    else:
+                        clone["successful_graph_launch"] = False
+                        clone["bank_id"] = None
+                        clone["graph_index"] = None
+                        clone["copy_generation"] = None
+                records.append(clone)
+        counters = dict(GRAPH_COUNTERS)
+        counters.update(
+            route_payloads_produced=10,
+            route_payloads_copied=10 if successful else 0,
+            route_graph_launches=10 if successful else 0,
+            route_eager_warmup_payloads=0 if successful else 10,
+        )
+        records.append(
+            {
+                "event": "router_replay_graph_counters",
+                "stage": "train",
+                "rank": 0,
+                "world_size": 1,
+                "trace_step": step,
+                "schedule_key": 5,
+                "num_microbatches": 5,
+                "counters": counters,
+            }
+        )
+    return records
 
 
 def test_checker_accepts_hash_matched_legacy_policy_payloads(tmp_path: Path) -> None:
@@ -790,45 +848,65 @@ def test_checker_accepts_three_warmups_then_success(tmp_path: Path) -> None:
     trace_dir = tmp_path / "trace"
     _write_legacy_trace(trace_dir, populated_layers=[1, 3])
 
-    def add_warmups(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        train_records = [
-            r
-            for r in records
-            if r.get("stage") == "train"
-            and r.get("event")
-            in {"router_replay_assignment", "router_replay_action", "router_replay_graph_consumer"}
-            and (r.get("event") != "router_replay_action" or r.get("action") == "replay_forward")
+    assert checker.check_trace(trace_dir) == 0
+
+
+def test_checker_rejects_missing_warmup_call_counter(tmp_path: Path) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+
+    def remove_counter(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            record
+            for record in records
+            if not (
+                record.get("event") == "router_replay_graph_counters"
+                and record.get("trace_step") == 2
+            )
         ]
-        for record in train_records:
-            record["trace_step"] = 4
-            record["microbatch_generation"] = 20
-        for step, generation in ((1, 17), (2, 18), (3, 19)):
-            for source in train_records:
-                clone = json.loads(json.dumps(source))
-                clone["trace_step"] = step
-                clone["microbatch_generation"] = generation
-                if clone["event"] == "router_replay_graph_consumer":
-                    clone["successful_graph_launch"] = False
-                    clone["bank_id"] = None
-                    clone["graph_index"] = None
-                    clone["copy_generation"] = None
-                records.append(clone)
-            warmup_counters = dict(GRAPH_COUNTERS)
-            warmup_counters.update(
-                route_payloads_produced=2,
-                route_payloads_copied=0,
-                route_graph_launches=0,
-                route_eager_warmup_payloads=2,
-            )
-            records.append(
-                {
-                    "event": "router_replay_graph_counters",
-                    "stage": "train",
-                    "rank": 0,
-                    "counters": warmup_counters,
-                }
-            )
+
+    _rewrite_trace(trace_dir, remove_counter)
+    assert checker.check_trace(trace_dir) == 1
+
+
+def test_checker_rejects_duplicate_graph_call_counter(tmp_path: Path) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+
+    def duplicate_counter(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        counter = next(
+            record
+            for record in records
+            if record.get("event") == "router_replay_graph_counters"
+        )
+        records.append(json.loads(json.dumps(counter)))
         return records
 
-    _rewrite_trace(trace_dir, add_warmups)
-    assert checker.check_trace(trace_dir) == 0
+    _rewrite_trace(trace_dir, duplicate_counter)
+    assert checker.check_trace(trace_dir) == 1
+
+
+def test_checker_rejects_mixed_success_within_warmup_call(tmp_path: Path) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+
+    def mix_call(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        graph = next(
+            record
+            for record in records
+            if record.get("event") == "router_replay_graph_consumer"
+            and record.get("trace_step") == 1
+        )
+        graph.update(
+            successful_graph_launch=True,
+            bank_id=5,
+            graph_index=0,
+            copy_generation=1,
+        )
+        return records
+
+    _rewrite_trace(trace_dir, mix_call)
+    assert checker.check_trace(trace_dir) == 1
