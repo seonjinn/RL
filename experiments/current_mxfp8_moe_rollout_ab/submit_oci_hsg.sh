@@ -119,6 +119,14 @@ else
   echo "WANDB_ENABLED must be true or false" >&2
   exit 2
 fi
+if [[ -n "${RUNTIME_SITE_PACKAGES}" ]]; then
+  PYTHON_RUNNER=/opt/nemo_rl_venv/bin/python
+  UV_DRIVER_SETUP="unset UV_PROJECT_ENVIRONMENT UV_PYTHON_INSTALL_DIR"
+else
+  PYTHON_RUNNER="uv run --frozen"
+  UV_DRIVER_SETUP="export UV_PROJECT_ENVIRONMENT=${CACHE_ROOT}/driver-venv
+export UV_PYTHON_INSTALL_DIR=${CACHE_ROOT}/uv-python"
+fi
 
 cat >"${EXPERIMENT_ROOT}/metadata.env" <<EOF
 repo=${REPO}
@@ -127,6 +135,7 @@ branch=${BRANCH}
 config=${CONFIG}
 container=${CONTAINER}
 runtime_site_packages=${RUNTIME_SITE_PACKAGES:-container_default}
+python_runner=${PYTHON_RUNNER}
 python_version=3.13.11
 python_floor_override=experiment_only_metadata_override_from_3.13.14
 gym_source_commit=5a6fc589c0196f73a5931781b06da61f668a80d7
@@ -164,12 +173,11 @@ export NVTE_CUDA_ARCHS=100
 export PYTHONPATH=${REPO}
 export TORCH_CUDA_ARCH_LIST=10.0
 export UV_CACHE_DIR=/root/.cache/uv
-export UV_PROJECT_ENVIRONMENT=${CACHE_ROOT}/driver-venv
-export UV_PYTHON_INSTALL_DIR=${CACHE_ROOT}/uv-python
+${UV_DRIVER_SETUP}
 export UV_LOCK_TIMEOUT=7200
 ${WANDB_KEY_SETUP}
 printf 'NEMO_RL_SOURCE_COMMIT=%s\n' "\$(git rev-parse HEAD)"
-uv run --frozen examples/run_grpo.py \
+${PYTHON_RUNNER} examples/run_grpo.py \
   --config ${CONFIG} \
   cluster.num_nodes=${TOTAL_NODES} \
   cluster.gpus_per_node=${GPUS_PER_NODE} \
@@ -200,7 +208,7 @@ uv run --frozen examples/run_grpo.py \
   ++logger.wandb.entity=nvidia \
   logger.wandb.project=${WANDB_PROJECT} \
   logger.wandb.name=${WANDB_NAME}
-uv run --frozen tests/json_dump_tb_logs.py ${EXPERIMENT_ROOT}/logs \
+${PYTHON_RUNNER} tests/json_dump_tb_logs.py ${EXPERIMENT_ROOT}/logs \
   --output_path ${EXPERIMENT_ROOT}/metrics.json || true
 EOF
 )
