@@ -34,6 +34,7 @@ SEGMENT_SIZE=${SEGMENT_SIZE:-}
 VLLM_TP=${VLLM_TP:-}
 VLLM_PP=${VLLM_PP:-1}
 MAX_STEPS=${MAX_STEPS:-20}
+JOB_NAME=${JOB_NAME:-${ACCOUNT}-mxfp8-ab.${MODEL}-${ARM}-${MAX_STEPS}s}
 WALLTIME=${WALLTIME:-04:00:00}
 SLURM_DEPENDENCY=${SLURM_DEPENDENCY:-}
 IDLE_REAPER_EXEMPT_MINS=${IDLE_REAPER_EXEMPT_MINS:-120}
@@ -289,7 +290,7 @@ SBATCH_ARGS=(
   --account="${ACCOUNT}"
   --partition="${PARTITION}"
   --time="${WALLTIME}"
-  --job-name="sna-${MODEL}-${ARM}-${MAX_STEPS}s"
+  --job-name="${JOB_NAME}"
   --output="${EXPERIMENT_ROOT}/slurm-%j.out"
   --comment="{\"OccupiedIdleGPUsJobReaper\":{\"exemptIdleTimeMins\":\"${IDLE_REAPER_EXEMPT_MINS}\",\"reason\":\"${IDLE_REAPER_EXEMPT_REASON}\",\"description\":\"${IDLE_REAPER_EXEMPT_DESCRIPTION}\"}}"
 )
