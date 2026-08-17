@@ -4,11 +4,26 @@ import importlib.util
 import json
 from pathlib import Path
 from types import ModuleType
+from typing import Any, Callable
 
 import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+GRAPH_CAPABILITY = "r3_router_cuda_graph_input_v1"
+GRAPH_COUNTERS = {
+    "route_payloads_produced": 2,
+    "route_payloads_copied": 2,
+    "route_graph_launches": 2,
+    "route_eager_warmup_payloads": 0,
+    "fallback_count": 0,
+    "missing_route_count": 0,
+    "stale_generation_count": 0,
+    "malformed_route_count": 0,
+    "out_of_range_count": 0,
+    "duplicate_route_count": 0,
+    "cp_mismatch_count": 0,
+}
 
 
 def _load_checker() -> ModuleType:
@@ -143,6 +158,72 @@ def _write_legacy_trace(
             "cp_token_identity_verified_count": 1,
         },
     ]
+    route_digests = {1: "c" * 64, 3: "d" * 64}
+    layer_numbers = {1: 2, 3: 4}
+    for record in records:
+        if record.get("event") == "router_replay_assignment":
+            payload_idx = record["payload_idx"]
+            record["layer_number"] = layer_numbers[payload_idx]
+            record["tensor"] = {
+                "shape": [4, 2],
+                "dtype": "torch.int64",
+                "sha256": route_digests[payload_idx],
+                "preview": [],
+            }
+    records = [
+        record
+        for record in records
+        if not (
+            record.get("event") == "router_replay_action"
+            and record.get("action") == "replay_forward"
+        )
+    ]
+    for stage, generation in (("prev-logprob", 11), ("train", 17)):
+        for payload_idx, layer_number in layer_numbers.items():
+            records.append(
+                {
+                    "event": "router_replay_action",
+                    "stage": stage,
+                    "action": "replay_forward",
+                    "layer_number": layer_number,
+                    "microbatch_generation": generation,
+                    "route_digest": route_digests[payload_idx],
+                }
+            )
+    for graph_index, (payload_idx, layer_number) in enumerate(
+        layer_numbers.items()
+    ):
+        records.append(
+            {
+                "event": "router_replay_graph_consumer",
+                "stage": "train",
+                "action": "replay_forward",
+                "layer_number": layer_number,
+                "payload_idx": payload_idx,
+                "microbatch_generation": 17,
+                "route_digest": route_digests[payload_idx],
+                "physical_signature": {
+                    "shape": [4, 2],
+                    "dtype": "torch.int64",
+                    "device_type": "cuda",
+                    "topk": 2,
+                    "num_experts": 8,
+                },
+                "bank_id": 5,
+                "graph_index": graph_index,
+                "schedule_key": 5,
+                "copy_generation": graph_index + 1,
+                "successful_graph_launch": True,
+                "capability_version": GRAPH_CAPABILITY,
+            }
+        )
+    records.append(
+        {
+            "event": "router_replay_graph_counters",
+            "stage": "train",
+            "counters": GRAPH_COUNTERS,
+        }
+    )
     if duplicate_producer:
         records.insert(1, dict(records[0]))
     if omit_consumer_hash:
@@ -153,6 +234,19 @@ def _write_legacy_trace(
     trace_dir.mkdir()
     (trace_dir / "r3_trace_test.jsonl").write_text(
         "".join(json.dumps(record) + "\n" for record in records)
+    )
+
+
+def _rewrite_trace(
+    trace_dir: Path,
+    mutate: Callable[[list[dict[str, Any]]], list[dict[str, Any]]],
+) -> None:
+    path = next(trace_dir.glob("*.jsonl"))
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    updated = mutate(records)
+    path.write_text(
+        "".join(json.dumps(record) + "\n" for record in updated),
+        encoding="utf-8",
     )
 
 
@@ -450,5 +544,163 @@ def test_checker_rejects_boolean_tensor_dimension(tmp_path: Path) -> None:
     semantics["valid_route_rows_by_layer"] = [0, 1, 0, 1]
     semantics["zero_route_rows_by_layer"] = [1, 0, 1, 0]
     path.write_text("".join(json.dumps(record) + "\n" for record in records))
+
+    assert checker.check_trace(trace_dir) == 1
+
+
+def test_checker_rejects_missing_graph_consumers(tmp_path: Path) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+    _rewrite_trace(
+        trace_dir,
+        lambda records: [
+            record
+            for record in records
+            if record.get("event") != "router_replay_graph_consumer"
+        ],
+    )
+
+    assert checker.check_trace(trace_dir) == 1
+
+
+def test_checker_rejects_stale_graph_microbatch_generation(tmp_path: Path) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+
+    def make_stale(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        graph = next(
+            record
+            for record in records
+            if record.get("event") == "router_replay_graph_consumer"
+        )
+        graph["microbatch_generation"] = 16
+        return records
+
+    _rewrite_trace(trace_dir, make_stale)
+
+    assert checker.check_trace(trace_dir) == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("layer_number", 3), ("payload_idx", 0)),
+)
+def test_checker_rejects_wrong_graph_layer_payload_mapping(
+    tmp_path: Path,
+    field: str,
+    value: int,
+) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+
+    def corrupt_mapping(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        graph = next(
+            record
+            for record in records
+            if record.get("event") == "router_replay_graph_consumer"
+        )
+        graph[field] = value
+        return records
+
+    _rewrite_trace(trace_dir, corrupt_mapping)
+
+    assert checker.check_trace(trace_dir) == 1
+
+
+def test_checker_rejects_graph_route_digest_mismatch(tmp_path: Path) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+
+    def corrupt_digest(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        graph = next(
+            record
+            for record in records
+            if record.get("event") == "router_replay_graph_consumer"
+        )
+        graph["route_digest"] = "e" * 64
+        return records
+
+    _rewrite_trace(trace_dir, corrupt_digest)
+
+    assert checker.check_trace(trace_dir) == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("shape", [4, True]),
+        ("dtype", "torch.int32"),
+        ("device_type", 1),
+        ("topk", True),
+        ("num_experts", 0),
+    ),
+)
+def test_checker_rejects_malformed_graph_physical_signature(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+
+    def corrupt_signature(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        graph = next(
+            record
+            for record in records
+            if record.get("event") == "router_replay_graph_consumer"
+        )
+        graph["physical_signature"][field] = value
+        return records
+
+    _rewrite_trace(trace_dir, corrupt_signature)
+
+    assert checker.check_trace(trace_dir) == 1
+
+
+def test_checker_rejects_graph_evidence_for_subset_of_required_stage_mappings(
+    tmp_path: Path,
+) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+    _rewrite_trace(
+        trace_dir,
+        lambda records: [
+            record
+            for record in records
+            if not (
+                record.get("event") == "router_replay_graph_consumer"
+                and record.get("payload_idx") == 3
+            )
+        ],
+    )
+
+    assert checker.check_trace(trace_dir) == 1
+
+
+@pytest.mark.parametrize("unsafe_counter", ["fallback_count", "cp_mismatch_count"])
+def test_checker_rejects_unsafe_graph_counters(
+    tmp_path: Path,
+    unsafe_counter: str,
+) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+
+    def increment_unsafe(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        counter_record = next(
+            record
+            for record in records
+            if record.get("event") == "router_replay_graph_counters"
+        )
+        counter_record["counters"][unsafe_counter] = 1
+        return records
+
+    _rewrite_trace(trace_dir, increment_unsafe)
 
     assert checker.check_trace(trace_dir) == 1

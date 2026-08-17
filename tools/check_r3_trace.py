@@ -28,6 +28,30 @@ FETCH_STAGE_TO_REPLAY_STAGE = {
 }
 REQUIRED_FETCH_STAGES = ("prev_lp", "train")
 REQUIRED_REPLAY_STAGES = ("prev-logprob", "train")
+GRAPH_CONSUMER_STAGE = "train"
+GRAPH_INPUT_CAPABILITY = "r3_router_cuda_graph_input_v1"
+GRAPH_COUNTER_FIELDS = (
+    "route_payloads_produced",
+    "route_payloads_copied",
+    "route_graph_launches",
+    "route_eager_warmup_payloads",
+    "fallback_count",
+    "missing_route_count",
+    "stale_generation_count",
+    "malformed_route_count",
+    "out_of_range_count",
+    "duplicate_route_count",
+    "cp_mismatch_count",
+)
+UNSAFE_GRAPH_COUNTER_FIELDS = (
+    "fallback_count",
+    "missing_route_count",
+    "stale_generation_count",
+    "malformed_route_count",
+    "out_of_range_count",
+    "duplicate_route_count",
+    "cp_mismatch_count",
+)
 
 
 def _valid_sha256(value: Any) -> bool:
@@ -340,6 +364,320 @@ def _failures_for_route_semantics(
     return failures
 
 
+def _trace_tensor_signature(
+    record: dict[str, Any],
+    *,
+    label: str,
+    failures: list[str],
+) -> tuple[str, tuple[int, int], str] | None:
+    tensor = record.get("tensor")
+    if not isinstance(tensor, dict):
+        failures.append(f"missing router assignment tensor for {label}")
+        return None
+    digest = tensor.get("sha256")
+    shape = tensor.get("shape")
+    dtype = tensor.get("dtype")
+    if not _valid_sha256(digest):
+        failures.append(f"invalid router assignment digest for {label}")
+        return None
+    if not (
+        isinstance(shape, list)
+        and len(shape) == 2
+        and all(type(dimension) is int and dimension > 0 for dimension in shape)
+    ):
+        failures.append(f"invalid router assignment shape for {label}")
+        return None
+    if not isinstance(dtype, str) or not dtype:
+        failures.append(f"invalid router assignment dtype for {label}")
+        return None
+    return str(digest), (int(shape[0]), int(shape[1])), dtype
+
+
+def _graph_physical_signature(
+    record: dict[str, Any],
+    *,
+    label: str,
+    failures: list[str],
+) -> tuple[tuple[int, int], str, str, int, int] | None:
+    signature = record.get("physical_signature")
+    if not isinstance(signature, dict):
+        failures.append(f"missing graph physical_signature for {label}")
+        return None
+    shape = signature.get("shape")
+    dtype = signature.get("dtype")
+    device_type = signature.get("device_type")
+    topk = signature.get("topk")
+    num_experts = signature.get("num_experts")
+    if not (
+        isinstance(shape, list)
+        and len(shape) == 2
+        and all(type(dimension) is int and dimension > 0 for dimension in shape)
+    ):
+        failures.append(f"invalid graph physical_signature shape for {label}")
+        return None
+    if dtype != "torch.int64":
+        failures.append(f"invalid graph physical_signature dtype for {label}")
+        return None
+    if not isinstance(device_type, str) or not device_type:
+        failures.append(f"invalid graph physical_signature device_type for {label}")
+        return None
+    if type(topk) is not int or topk <= 0 or topk != shape[1]:
+        failures.append(f"invalid graph physical_signature topk for {label}")
+        return None
+    if type(num_experts) is not int or num_experts < topk:
+        failures.append(f"invalid graph physical_signature num_experts for {label}")
+        return None
+    return (
+        (int(shape[0]), int(shape[1])),
+        dtype,
+        device_type,
+        int(topk),
+        int(num_experts),
+    )
+
+
+def _failures_for_graph_consumers(records: list[dict[str, Any]]) -> list[str]:
+    failures: list[str] = []
+    assignments: dict[
+        str,
+        dict[tuple[int, int], set[tuple[str, tuple[int, int], str]]],
+    ] = {stage: defaultdict(set) for stage in REQUIRED_REPLAY_STAGES}
+    for record in records:
+        if record.get("event") != "router_replay_assignment":
+            continue
+        stage = record.get("stage")
+        if stage not in assignments:
+            continue
+        layer_number = record.get("layer_number")
+        payload_idx = record.get("payload_idx")
+        label = (
+            f"stage={stage} layer={layer_number} payload={payload_idx} "
+            f"rank={record.get('rank')}"
+        )
+        if type(layer_number) is not int or layer_number <= 0:
+            failures.append(f"invalid router assignment layer_number for {label}")
+            continue
+        if type(payload_idx) is not int or payload_idx < 0:
+            failures.append(f"invalid router assignment payload_idx for {label}")
+            continue
+        tensor_signature = _trace_tensor_signature(
+            record,
+            label=label,
+            failures=failures,
+        )
+        if tensor_signature is not None:
+            assignments[str(stage)][(layer_number, payload_idx)].add(
+                tensor_signature
+            )
+
+    prev_assignments = assignments["prev-logprob"]
+    train_assignments = assignments[GRAPH_CONSUMER_STAGE]
+    if set(prev_assignments) != set(train_assignments):
+        failures.append(
+            "router layer/payload mappings differ between prev-logprob and train: "
+            f"prev={sorted(prev_assignments)} train={sorted(train_assignments)}"
+        )
+    for mapping in sorted(set(prev_assignments) & set(train_assignments)):
+        if prev_assignments[mapping] != train_assignments[mapping]:
+            failures.append(
+                "router assignment identity differs between prev-logprob and train "
+                f"for layer={mapping[0]} payload={mapping[1]}"
+            )
+
+    forward_actions: dict[
+        str,
+        dict[int, set[tuple[int, str]]],
+    ] = {stage: defaultdict(set) for stage in REQUIRED_REPLAY_STAGES}
+    for record in records:
+        if record.get("event") != "router_replay_action" or record.get(
+            "action"
+        ) != "replay_forward":
+            continue
+        stage = record.get("stage")
+        if stage not in forward_actions:
+            continue
+        layer_number = record.get("layer_number")
+        generation = record.get("microbatch_generation")
+        digest = record.get("route_digest")
+        label = f"stage={stage} layer={layer_number} rank={record.get('rank')}"
+        if type(layer_number) is not int or layer_number <= 0:
+            failures.append(f"invalid replay action layer_number for {label}")
+            continue
+        if type(generation) is not int or generation < 0:
+            failures.append(f"invalid replay action microbatch_generation for {label}")
+            continue
+        if not _valid_sha256(digest):
+            failures.append(f"invalid replay action route_digest for {label}")
+            continue
+        forward_actions[str(stage)][layer_number].add((generation, str(digest)))
+
+    assignment_by_stage_layer = {
+        stage: {
+            layer_number: (payload_idx, signatures)
+            for (layer_number, payload_idx), signatures in stage_assignments.items()
+        }
+        for stage, stage_assignments in assignments.items()
+    }
+    for stage, stage_assignments in assignments.items():
+        if len(assignment_by_stage_layer[stage]) != len(stage_assignments):
+            failures.append(
+                f"one router layer maps to multiple payload indices for stage={stage}"
+            )
+    for stage in REQUIRED_REPLAY_STAGES:
+        for layer_number, (payload_idx, signatures) in assignment_by_stage_layer[
+            stage
+        ].items():
+            actions = forward_actions[stage].get(layer_number, set())
+            if not actions:
+                failures.append(
+                    "missing replay_forward identity for "
+                    f"stage={stage} layer={layer_number} payload={payload_idx}"
+                )
+                continue
+            assignment_digests = {signature[0] for signature in signatures}
+            action_digests = {digest for _, digest in actions}
+            if action_digests != assignment_digests:
+                failures.append(
+                    "replay_forward digest differs from assignment for "
+                    f"stage={stage} layer={layer_number} payload={payload_idx}"
+                )
+
+    graph_records = [
+        record
+        for record in records
+        if record.get("event") == "router_replay_graph_consumer"
+    ]
+    if not graph_records:
+        failures.append("no router_replay_graph_consumer records for stage=train")
+        return failures
+
+    graph_mappings: set[tuple[int, int]] = set()
+    for record in graph_records:
+        stage = record.get("stage")
+        action = record.get("action")
+        layer_number = record.get("layer_number")
+        payload_idx = record.get("payload_idx")
+        label = (
+            f"stage={stage} layer={layer_number} payload={payload_idx} "
+            f"rank={record.get('rank')}"
+        )
+        if stage != GRAPH_CONSUMER_STAGE or action != "replay_forward":
+            failures.append(f"invalid graph consumer stage/action for {label}")
+            continue
+        if type(layer_number) is not int or layer_number <= 0:
+            failures.append(f"invalid graph consumer layer_number for {label}")
+            continue
+        if type(payload_idx) is not int or payload_idx < 0:
+            failures.append(f"invalid graph consumer payload_idx for {label}")
+            continue
+        mapping = (layer_number, payload_idx)
+        graph_mappings.add(mapping)
+        if mapping not in train_assignments:
+            failures.append(f"unexpected graph layer/payload mapping for {label}")
+            continue
+
+        generation = record.get("microbatch_generation")
+        digest = record.get("route_digest")
+        if type(generation) is not int or generation < 0:
+            failures.append(f"invalid graph microbatch_generation for {label}")
+        if not _valid_sha256(digest):
+            failures.append(f"invalid graph route_digest for {label}")
+        elif type(generation) is int and (
+            generation,
+            str(digest),
+        ) not in forward_actions[GRAPH_CONSUMER_STAGE].get(layer_number, set()):
+            failures.append(
+                "graph generation/digest differs from train replay_forward "
+                f"for {label}"
+            )
+
+        physical_signature = _graph_physical_signature(
+            record,
+            label=label,
+            failures=failures,
+        )
+        if physical_signature is not None:
+            shape, dtype, device_type, _, _ = physical_signature
+            assignment_physical = {
+                (assignment_shape, assignment_dtype)
+                for _, assignment_shape, assignment_dtype in train_assignments[
+                    mapping
+                ]
+            }
+            if (shape, dtype) not in assignment_physical:
+                failures.append(
+                    f"graph physical signature differs from assignment for {label}"
+                )
+            if device_type != "cuda":
+                failures.append(f"graph physical signature is not CUDA for {label}")
+
+        typed_integer_fields = {
+            "bank_id": 1,
+            "graph_index": 0,
+            "schedule_key": 1,
+            "copy_generation": 1,
+        }
+        for field, minimum in typed_integer_fields.items():
+            value = record.get(field)
+            if type(value) is not int or value < minimum:
+                failures.append(f"invalid graph {field} for {label}")
+        if record.get("successful_graph_launch") is not True:
+            failures.append(f"graph consumer did not launch successfully for {label}")
+        if record.get("capability_version") != GRAPH_INPUT_CAPABILITY:
+            failures.append(f"invalid graph capability_version for {label}")
+
+    missing_mappings = set(train_assignments) - graph_mappings
+    if missing_mappings:
+        failures.append(
+            "missing graph consumers for required train layer/payload mappings: "
+            f"{sorted(missing_mappings)}"
+        )
+    return failures
+
+
+def _failures_for_graph_counters(records: list[dict[str, Any]]) -> list[str]:
+    failures: list[str] = []
+    counter_records = [
+        record
+        for record in records
+        if record.get("event") == "router_replay_graph_counters"
+    ]
+    if not counter_records:
+        return ["no router_replay_graph_counters records for stage=train"]
+    for record in counter_records:
+        label = f"stage={record.get('stage')} rank={record.get('rank')}"
+        if record.get("stage") != GRAPH_CONSUMER_STAGE:
+            failures.append(f"invalid graph counter stage for {label}")
+        counters = record.get("counters")
+        if not isinstance(counters, dict) or set(counters) != set(GRAPH_COUNTER_FIELDS):
+            failures.append(f"invalid graph counter schema for {label}")
+            continue
+        if any(
+            type(counters[field]) is not int or counters[field] < 0
+            for field in GRAPH_COUNTER_FIELDS
+        ):
+            failures.append(f"invalid graph counter value for {label}")
+            continue
+        unsafe = [
+            f"{field}={counters[field]}"
+            for field in UNSAFE_GRAPH_COUNTER_FIELDS
+            if counters[field] != 0
+        ]
+        if unsafe:
+            failures.append(f"unsafe graph counters for {label}: {', '.join(unsafe)}")
+        produced = counters["route_payloads_produced"]
+        copied = counters["route_payloads_copied"]
+        launched = counters["route_graph_launches"]
+        warmup = counters["route_eager_warmup_payloads"]
+        if produced != copied + warmup or copied != launched or launched <= 0:
+            failures.append(
+                "inconsistent graph route counters for "
+                f"{label}: produced={produced} copied={copied} "
+                f"launched={launched} warmup={warmup}"
+            )
+    return failures
+
+
 def _summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
     events = Counter(record.get("event", "<missing>") for record in records)
     producer_by_key: dict[str, dict[str, Any]] = {}
@@ -460,6 +798,8 @@ def check_trace(
             summary["fetch_by_stage_key"],
         )
     )
+    failures.extend(_failures_for_graph_consumers(records))
+    failures.extend(_failures_for_graph_counters(records))
 
     replay_assignments_by_stage = summary["replay_assignments_by_stage"]
     for stage in REQUIRED_REPLAY_STAGES:

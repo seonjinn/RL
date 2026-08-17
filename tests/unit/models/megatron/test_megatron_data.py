@@ -50,6 +50,9 @@ from tests.unit.models.megatron.megatron_data_actors import (
 )
 
 _DATA_PATH = Path(__file__).resolve().parents[4] / "nemo_rl/models/megatron/data.py"
+_MODEL_UTILS_PATH = (
+    Path(__file__).resolve().parents[4] / "nemo_rl/distributed/model_utils.py"
+)
 
 _PACKED_SEQ_CONSUMER_FIELDS = (
     "qkv_format",
@@ -218,6 +221,49 @@ def _extract_validate_cuda_graph_training_inputs() -> Any:
         namespace,
     )
     return namespace["_validate_cuda_graph_training_inputs"]
+
+
+def _extract_router_replay_packing_helpers() -> dict[str, Any]:
+    tree = ast.parse(_DATA_PATH.read_text())
+    model_utils_tree = ast.parse(_MODEL_UTILS_PATH.read_text())
+    helper_names = {
+        "_build_packed_structural_padding_mask",
+        "_pack_token_aligned_tensors",
+        "_pad_routed_experts_tail",
+        "_pad_token_aligned_tail",
+        "_shard_routed_experts_for_cp",
+    }
+    body = [
+        ast.ImportFrom(
+            module="__future__",
+            names=[ast.alias(name="annotations")],
+            level=0,
+        ),
+        next(
+            node
+            for node in model_utils_tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_get_tokens_on_this_cp_rank"
+        ),
+        *[
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name in helper_names
+        ],
+    ]
+    namespace = {
+        "Optional": Optional,
+        "torch": torch,
+    }
+    exec(
+        compile(
+            ast.fix_missing_locations(ast.Module(body=body, type_ignores=[])),
+            _DATA_PATH,
+            "exec",
+        ),
+        namespace,
+    )
+    return namespace
 
 
 def _packed_seq_params() -> Any:
@@ -3503,6 +3549,84 @@ def test_shard_routed_experts_for_cp_matches_input_ids_zigzag(cp_size):
     for pad_pos in range(int(seq_lengths[0]), seq0_padded_len):
         for layer in range(num_layers):
             assert torch.equal(routed_packed[0, pad_pos, layer], expected_route)
+
+
+def test_router_replay_mbs2_fixed_capacity_cp2_preserves_token_route_rows() -> None:
+    helpers = _extract_router_replay_packing_helpers()
+    pack_tokens = helpers["_pack_token_aligned_tensors"]
+    pack_routes = helpers["_shard_routed_experts_for_cp"]
+    pad_tokens = helpers["_pad_token_aligned_tail"]
+    pad_routes = helpers["_pad_routed_experts_tail"]
+    build_structural_mask = helpers["_build_packed_structural_padding_mask"]
+
+    input_ids = torch.tensor(
+        [[0, 2, 3, 4, 5], [6, 7, 1, 0, 0]],
+        dtype=torch.int64,
+    )
+    seq_lengths = torch.tensor([5, 3], dtype=torch.int32)
+    cu_seqlens = torch.tensor([0, 5, 8], dtype=torch.int32)
+    cu_seqlens_padded = torch.tensor([0, 8, 16], dtype=torch.int32)
+    capacity_tokens = 24
+    num_layers = 4
+    topk = 2
+    routed_experts = torch.zeros(
+        2,
+        5,
+        num_layers,
+        topk,
+        dtype=torch.int32,
+    )
+    for batch_idx, seq_len in enumerate(seq_lengths.tolist()):
+        for token_idx in range(seq_len):
+            expert = int(input_ids[batch_idx, token_idx])
+            routed_experts[batch_idx, token_idx, :, 0] = expert
+            routed_experts[batch_idx, token_idx, :, 1] = (expert + 1) % 8
+
+    canonical_route = torch.arange(topk, dtype=torch.int32)
+    for cp_rank in (0, 1):
+        _, local_tokens = pack_tokens(
+            input_ids,
+            seq_lengths.tolist(),
+            cu_seqlens_padded,
+            cp_rank=cp_rank,
+            cp_size=2,
+        )
+        _, local_routes, _, _ = pack_routes(
+            routed_experts,
+            None,
+            seq_lengths,
+            cu_seqlens,
+            cu_seqlens_padded,
+            cp_rank,
+            2,
+        )
+        _, local_structural = build_structural_mask(
+            seq_lengths,
+            cu_seqlens_padded,
+            capacity_tokens=capacity_tokens,
+            cp_rank=cp_rank,
+            cp_size=2,
+        )
+        local_tokens = pad_tokens(local_tokens, target_tokens=12, value=0)
+        local_routes = pad_routes(local_routes, target_tokens=12)
+
+        assert local_tokens is not None
+        assert local_routes is not None
+        assert local_tokens.shape == (1, 12)
+        assert local_routes.shape == (1, 12, num_layers, topk)
+        logical = ~local_structural[0]
+        for layer_idx in range(num_layers):
+            assert torch.equal(
+                local_routes[0, logical, layer_idx, 0].to(torch.int64),
+                local_tokens[0, logical],
+            )
+            structural_rows = local_routes[0, local_structural[0], layer_idx]
+            assert torch.equal(
+                structural_rows,
+                canonical_route.expand_as(structural_rows),
+            )
+
+    assert torch.equal(routed_experts[0, 0, 0], canonical_route)
 
 
 GET_PACK_SEQUENCE_PARAMETERS_TEST_ACTOR_FQN = f"{GetPackSequenceParametersTestActor.__module__}.GetPackSequenceParametersTestActor"
