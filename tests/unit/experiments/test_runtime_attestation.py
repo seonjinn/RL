@@ -102,10 +102,13 @@ def _load_module() -> ModuleType:
     return module
 
 
-def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
+def _fixture(
+    tmp_path: Path, *, container_mode: int = 0o644
+) -> tuple[Path, Path, Path, Path, Path]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     container = tmp_path / "nemo_rl_immutable.sqsh"
     container.write_bytes(b"fixture-container")
+    container.chmod(container_mode)
     lock = tmp_path / "uv.lock"
     lock.write_text("fixture-lock\n")
     lock_sha256 = hashlib.sha256(lock.read_bytes()).hexdigest()
@@ -296,8 +299,9 @@ def test_validator_accepts_exact_preflight_artifact_without_rehashing_container(
     tmp_path: Path,
 ) -> None:
     module = _load_module()
-    attestation, container, lock, python_install_dir, uv_executable = _fixture(tmp_path)
-    container.chmod(0)
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(
+        tmp_path, container_mode=0
+    )
     try:
         result = module.validate_attestation(
             attestation=attestation,

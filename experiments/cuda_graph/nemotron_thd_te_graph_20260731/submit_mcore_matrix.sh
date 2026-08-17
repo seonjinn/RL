@@ -114,12 +114,19 @@ feature_exclusions = {
         "mamba-ssm",
     ],
     "dropless_hybridep_nano16": ["fast-hadamard-transform"],
+    "dropless_hybridep_nano16_r3_router_graph_v1": ["fast-hadamard-transform"],
     "dropless_alltoall_qwen30_16": ["deep-ep", "fast-hadamard-transform"],
     "dropless_alltoall_super32": ["deep-ep", "fast-hadamard-transform"],
     "dropless_hybridep_qwen235_64": ["fast-hadamard-transform"],
 }
+row_features = {
+    "dropless_hybridep_nano16_r3_router_graph": (
+        "dropless_hybridep_nano16_r3_router_graph_v1"
+    ),
+}
 expected_excluded = feature_exclusions.get(feature_set)
-if expected_excluded is None or rows != [feature_set]:
+expected_feature_set = row_features.get(rows[0], rows[0]) if len(rows) == 1 else None
+if expected_excluded is None or feature_set != expected_feature_set:
     raise SystemExit("runtime attestation must authorize the exact selected row")
 if excluded != expected_excluded or torch_arch != "10.0a" or nvte_arch != "100a":
     raise SystemExit("runtime attestation feature contract mismatch")

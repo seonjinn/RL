@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import importlib.util
 import itertools
@@ -946,6 +947,60 @@ def test_r3_router_graph_mcore_row_renders_typed_distributed_commands() -> None:
     assert "MCORE_TEST_" not in rendered
 
 
+@pytest.mark.parametrize(
+    ("feature_set", "expected_returncode"),
+    (
+        ("dropless_hybridep_nano16_r3_router_graph_v1", 0),
+        ("dropless_hybridep_nano16_r3_router_graph", 1),
+        ("dropless_hybridep_nano16", 1),
+    ),
+)
+def test_r3_mcore_row_requires_version_bound_runtime_feature(
+    tmp_path: Path,
+    feature_set: str,
+    expected_returncode: int,
+) -> None:
+    submitter = (EXPERIMENT_DIR / "submit_mcore_matrix.sh").read_text()
+    start_marker = (
+        'runtime_contract=$(SELECTION="${selection}" python3 - '
+        '"${RUNTIME_ATTESTATION}" <<\'PY\'\n'
+    )
+    start = submitter.index(start_marker) + len(start_marker)
+    contract_program = submitter[start : submitter.index("\nPY\n)", start)]
+    attestation = tmp_path / "runtime.json"
+    attestation.write_text(
+        json.dumps(
+            {
+                "runtime_feature_set": feature_set,
+                "excluded_packages": ["fast-hadamard-transform"],
+                "torch_cuda_arch_list": "10.0a",
+                "nvte_cuda_archs": "100a",
+            }
+        )
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-", str(attestation)],
+        input=contract_program,
+        env={
+            **os.environ,
+            "SELECTION": "dropless_hybridep_nano16_r3_router_graph\t16\t4\t4",
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == expected_returncode
+    if expected_returncode == 0:
+        assert result.stdout.strip().split("\t") == [
+            "dropless_hybridep_nano16_r3_router_graph_v1",
+            "fast-hadamard-transform",
+            "10.0a",
+            "100a",
+        ]
+
+
 def _create_staged_runtime(
     tmp_path: Path,
     runtime_python_source: str = "#!/bin/bash\nexit 0\n",
@@ -1042,6 +1097,159 @@ def _campaign_leaf_harness(tmp_path: Path) -> tuple[Path, Path, Path, dict[str, 
         )
     )
     return root, experiment, profile, provenance
+
+
+def _write_valid_r3_leaf_attestation(
+    root: Path,
+    profile: Path,
+    provenance: dict[str, str],
+) -> dict[str, object]:
+    values = dict(
+        line.split("=", 1)
+        for line in profile.read_text().splitlines()
+        if line and not line.startswith("#")
+    )
+    runtime = Path(values["RUNTIME_ATTESTATION"])
+    stage_root = Path(values["UV_EXECUTABLE"]).parent.parent
+    project_root = stage_root / "source"
+    mcore_source_root = (
+        project_root
+        / "3rdparty"
+        / "Megatron-Bridge-workspace"
+        / "Megatron-Bridge"
+        / "3rdparty"
+        / "Megatron-LM"
+    )
+    module_path = (
+        mcore_source_root
+        / "megatron"
+        / "core"
+        / "transformer"
+        / "moe"
+        / "router_replay.py"
+    )
+    module_path.parent.mkdir(parents=True, exist_ok=True)
+    module_path.write_text("# staged MCore fixture\n")
+    runtime_python = stage_root / "environment" / "bin" / "python"
+    vllm_root = stage_root / "vllm-environment"
+    vllm_python = vllm_root / "bin" / "python"
+    container = runtime.parent / "runtime.sqsh"
+    container.write_bytes(b"immutable-runtime-fixture")
+    container_sha256 = hashlib.sha256(container.read_bytes()).hexdigest()
+    profile.write_text(
+        profile.read_text()
+        .replace("CONTAINER=/tmp/container.sqsh", f"CONTAINER={container}")
+        .replace(
+            f"CONTAINER_SHA256={provenance['container_sha256']}",
+            f"CONTAINER_SHA256={container_sha256}",
+        )
+    )
+    provenance["container_sha256"] = container_sha256
+    uv_lock = root / "uv.lock"
+    shutil.copy2(REPO_ROOT / "uv.lock", uv_lock)
+    managed_python_dir = runtime.parent / "uv-python-installations"
+    managed_python = next(managed_python_dir.glob("*/bin/python3.13"))
+    vllm_package = {
+        "distribution": "vllm",
+        "version": "0.25.1",
+        "path": str(vllm_root / "lib/python3.13/site-packages/vllm/__init__.py"),
+    }
+    container_stat = container.stat()
+    payload: dict[str, object] = {
+        "status": "passed",
+        "runtime_attestation_job_id": 1,
+        "container_image": str(container),
+        "container_sha256": container_sha256,
+        "container_device": container_stat.st_dev,
+        "container_inode": container_stat.st_ino,
+        "container_size": container_stat.st_size,
+        "container_mtime_seconds": int(container_stat.st_mtime),
+        "container_ctime_seconds": int(container_stat.st_ctime),
+        "nemo_rl_commit": provenance["nemo_rl_commit"],
+        "bridge_commit": provenance["bridge_commit"],
+        "mcore_commit": provenance["mcore_commit"],
+        "uv_lock_sha256": hashlib.sha256(uv_lock.read_bytes()).hexdigest(),
+        "expected_te_commit": "e" * 40,
+        "expected_te_version_base_commit": "f" * 40,
+        "transformer_engine_vcs_commit": "e" * 40,
+        "transformer_engine_source_commit": "e" * 40,
+        "transformer_engine_version_base_commit": "f" * 40,
+        "device_count": 4,
+        "expected_device_count": 4,
+        "expected_python_version": PYTHON_VERSION,
+        "python_version": PYTHON_VERSION,
+        "uv_python_install_dir": str(managed_python_dir),
+        "python_base_executable": str(managed_python),
+        "python_base_executable_sha256": hashlib.sha256(
+            managed_python.read_bytes()
+        ).hexdigest(),
+        "expected_uv_version": UV_VERSION,
+        "uv_version": UV_VERSION,
+        "uv_executable": values["UV_EXECUTABLE"],
+        "uv_executable_sha256": hashlib.sha256(
+            Path(values["UV_EXECUTABLE"]).read_bytes()
+        ).hexdigest(),
+        "expected_nvte_with_nccl_ep": "0",
+        "nvte_with_nccl_ep": "0",
+        "transformer_engine_nccl_ep_available": False,
+        "transformer_engine_nccl_ep_symbols": [],
+        "transformer_engine_grouped_linear_symbols": [
+            "TEColumnParallelGroupedLinear",
+            "TERowParallelGroupedLinear",
+        ],
+        "runtime_feature_set": "dropless_hybridep_nano16_r3_router_graph_v1",
+        "excluded_packages": ["fast-hadamard-transform"],
+        "torch_cuda_arch_list": "10.0a",
+        "nvte_cuda_archs": "100a",
+        "hybridep_buffer_available": True,
+        "deep_ep_vcs_commit": "d" * 40,
+        "expected_project_root": str(project_root),
+        "python_executable": str(runtime_python),
+        "runtime_prefix": str(stage_root / "environment"),
+        "mcore_capabilities": {
+            "router_replay_cuda_graph_input": "r3_router_cuda_graph_input_v1"
+        },
+        "mcore_capability_probe": {
+            "schema_version": 1,
+            "python_executable": str(runtime_python),
+            "runtime_prefix": str(stage_root / "environment"),
+            "module_path": str(module_path),
+            "source_root": str(mcore_source_root),
+            "source_commit": provenance["mcore_commit"],
+        },
+        "packages": {
+            "torch": {"version": "2.11.0"},
+            "transformer_engine.pytorch": {"version": "2.19.0.dev0"},
+            "megatron.core": {"version": "0.16.0rc0"},
+            "megatron.core.extensions.transformer_engine": {
+                "version": "0.16.0rc0"
+            },
+            "megatron.bridge": {"version": "0.2.0"},
+            "mamba_ssm": {"version": "2.2.6.post3"},
+            "causal_conv1d": {"version": "1.5.3.post1"},
+            "cupy": {"version": "14.0.1"},
+            "deep_ep": {"version": "1.2.1"},
+            "vllm": vllm_package,
+        },
+        "actor_runtimes": {
+            "vllm": {
+                "python_executable": str(vllm_python),
+                "runtime_prefix": str(vllm_root),
+                "cuda_available": True,
+                "device_count": 4,
+                "excluded_packages": ["fast-hadamard-transform"],
+                "packages": {
+                    "torch": {"distribution": "torch", "version": "2.11.0"},
+                    "vllm": vllm_package,
+                },
+            }
+        },
+    }
+    runtime.write_text(json.dumps(payload))
+    provenance["runtime_attestation_sha256"] = hashlib.sha256(
+        runtime.read_bytes()
+    ).hexdigest()
+    return payload
 
 
 def _write_campaign_gate(path: Path, payload: dict[str, object]) -> str:
@@ -3266,17 +3474,8 @@ def test_router_replay_router_graph_test_only_requires_exact_runtime_feature(
     scope: str,
 ) -> None:
     """A supported leaf requests only the version-bound runtime attestation."""
-    root, experiment, profile, _ = _campaign_leaf_harness(tmp_path)
-    (tmp_path / "runtime.json").write_text(
-        json.dumps(
-            {
-                "runtime_feature_set": ("dropless_hybridep_nano16_r3_router_graph_v1"),
-                "mcore_capabilities": {
-                    "router_replay_cuda_graph_input": ("r3_router_cuda_graph_input_v1")
-                },
-            }
-        )
-    )
+    root, experiment, profile, provenance = _campaign_leaf_harness(tmp_path)
+    _write_valid_r3_leaf_attestation(root, profile, provenance)
     result = _run_copied_experiment_script(
         root,
         experiment,
@@ -3304,6 +3503,85 @@ def test_router_replay_router_graph_test_only_requires_exact_runtime_feature(
         in runtime_attestation_command
     )
     assert "SBATCH:" in result.stdout
+
+
+@pytest.mark.parametrize("launch_mode", ("test-only", "scheduler-only"))
+def test_router_replay_router_graph_full_attestation_fails_before_sbatch(
+    tmp_path: Path,
+    launch_mode: str,
+) -> None:
+    root, experiment, profile, provenance = _campaign_leaf_harness(tmp_path)
+    valid_payload = _write_valid_r3_leaf_attestation(root, profile, provenance)
+    runtime = Path(
+        next(
+            line.split("=", 1)[1]
+            for line in profile.read_text().splitlines()
+            if line.startswith("RUNTIME_ATTESTATION=")
+        )
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    scheduler_contact = tmp_path / "scheduler-contact"
+    fake_sbatch = fake_bin / "sbatch"
+    fake_sbatch.write_text(
+        "#!/bin/sh\n"
+        'printf contacted >"${SCHEDULER_CONTACT:?}"\n'
+        "exit 0\n"
+    )
+    fake_sbatch.chmod(0o755)
+    mode = (
+        {"TEST_ONLY": "1", "SBATCH_TEST_ONLY": "0"}
+        if launch_mode == "test-only"
+        else {"TEST_ONLY": "0", "SBATCH_TEST_ONLY": "1"}
+    )
+
+    mutations = (
+        "missing-probe",
+        "wrong-python",
+        "wrong-source",
+        "wrong-exclusions",
+        "wrong-container",
+        "wrong-schema",
+        "wrong-source-commit",
+    )
+    for mutation in mutations:
+        payload = copy.deepcopy(valid_payload)
+        probe = payload["mcore_capability_probe"]
+        assert isinstance(probe, dict)
+        if mutation == "missing-probe":
+            payload.pop("mcore_capability_probe")
+        elif mutation == "wrong-python":
+            probe["python_executable"] = "/wrong/stage/environment/bin/python"
+        elif mutation == "wrong-source":
+            probe["source_root"] = "/wrong/stage/source/Megatron-LM"
+        elif mutation == "wrong-exclusions":
+            payload["excluded_packages"] = []
+        elif mutation == "wrong-container":
+            payload["container_inode"] = -1
+        elif mutation == "wrong-schema":
+            probe["schema_version"] = True
+        elif mutation == "wrong-source-commit":
+            probe["source_commit"] = "0" * 40
+        runtime.write_text(json.dumps(payload))
+
+        result = _run_copied_experiment_script(
+            root,
+            experiment,
+            "scopes/03_moe_router.sh",
+            CLUSTER="oci-hsg",
+            MODEL="nano",
+            MODE="nemorl",
+            ROUTER_REPLAY="on",
+            RUN_TAG=f"r3-full-gate-{mutation}",
+            PROFILE_FILE=str(profile),
+            PATH=f"{fake_bin}:{os.environ['PATH']}",
+            SCHEDULER_CONTACT=str(scheduler_contact),
+            **mode,
+        )
+
+        assert result.returncode != 0, mutation
+        assert "SBATCH:" not in result.stdout, mutation
+        assert not scheduler_contact.exists(), mutation
 
 
 @pytest.mark.parametrize(
@@ -3345,7 +3623,7 @@ def test_router_replay_router_graph_test_only_rejects_unbound_attestation(
     )
 
     assert result.returncode == 2
-    assert "must bind dropless_hybridep_nano16_r3_router_graph_v1" in result.stderr
+    assert "Canonical runtime attestation rejected" in result.stderr
     assert "SBATCH:" not in result.stdout
 
 

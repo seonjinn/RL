@@ -55,38 +55,6 @@ print(digest.hexdigest())
 PY
 }
 
-require_r3_router_graph_attestation_binding() {
-  python3 - "$1" <<'PY'
-import json
-import os
-import stat
-import sys
-
-path = sys.argv[1]
-flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-descriptor = os.open(path, flags)
-try:
-    details = os.fstat(descriptor)
-    if not stat.S_ISREG(details.st_mode):
-        raise ValueError(f"not a regular file: {path}")
-    with os.fdopen(descriptor, encoding="utf-8") as source:
-        descriptor = -1
-        payload = json.load(source)
-finally:
-    if descriptor >= 0:
-        os.close(descriptor)
-if not isinstance(payload, dict):
-    raise ValueError("runtime attestation must contain a JSON object")
-if payload.get("runtime_feature_set") != "dropless_hybridep_nano16_r3_router_graph_v1":
-    raise ValueError("runtime attestation has the wrong runtime feature")
-capabilities = payload.get("mcore_capabilities")
-if not isinstance(capabilities, dict) or capabilities.get(
-    "router_replay_cuda_graph_input"
-) != "r3_router_cuda_graph_input_v1":
-    raise ValueError("runtime attestation lacks the exact MCore router capability")
-PY
-}
-
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 repo_root=$(cd "${script_dir}/../../.." && pwd -P)
 dockerfile=${repo_root}/docker/Dockerfile
@@ -633,16 +601,19 @@ if [[ "${MODE}" == "nemorl" ]]; then
         "${RUNTIME_FEATURE_SET}" != "dropless_hybridep_nano16_r3_router_graph_v1" ]]; then
     fail "Router Replay router graphs require runtime feature dropless_hybridep_nano16_r3_router_graph_v1"
   fi
-  if [[ "${R3_ROUTER_GRAPH_REQUESTED}" == "1" ]]; then
-    require_r3_router_graph_attestation_binding "${RUNTIME_ATTESTATION}" || \
-      fail "Selected runtime attestation must bind dropless_hybridep_nano16_r3_router_graph_v1 to r3_router_cuda_graph_input_v1"
-  fi
   runtime_attestation_command+=(
     --runtime-feature-set "${RUNTIME_FEATURE_SET}"
     --excluded-packages "${RUNTIME_EXCLUDED_PACKAGES}"
     --torch-cuda-arch-list 10.0a
     --nvte-cuda-archs 100a
   )
+fi
+if [[ "${R3_ROUTER_GRAPH_REQUESTED}" == "1" ]]; then
+  [[ -f "${runtime_attestation_validator}" ]] || \
+    fail "Runtime attestation validator is missing"
+  NVTE_WITH_NCCL_EP="${NVTE_WITH_NCCL_EP}" \
+    python3 "${runtime_attestation_command[@]:1}" >/dev/null || \
+    fail "Canonical runtime attestation rejected the R3 router graph feature"
 fi
 printf -v RUNTIME_ATTESTATION_COMMAND '%q ' "${runtime_attestation_command[@]}"
 RUNTIME_ATTESTATION_COMMAND=${RUNTIME_ATTESTATION_COMMAND% }
