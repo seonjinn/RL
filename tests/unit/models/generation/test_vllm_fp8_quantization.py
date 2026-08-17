@@ -1084,6 +1084,13 @@ def test_process_mxfp8_moe_pads_gated_halves_independently(fp8_module, monkeypat
         "_shuffle_mxfp8_moe_batched",
         lambda _layer, w13, w2, s13, s2, _gated, _tile: (w13, w2, s13, s2),
     )
+    monkeypatch.setattr(
+        "vllm.model_executor.parameter.get_tensor_model_parallel_rank", lambda: 0
+    )
+    monkeypatch.setattr(
+        "vllm.model_executor.parameter.get_tensor_model_parallel_world_size",
+        lambda: 1,
+    )
 
     fp8.process_weights_after_loading_mxfp8_moe(quant_method, layer)
 

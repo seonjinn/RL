@@ -39,7 +39,9 @@ from nemo_rl.models.generation.vllm.vllm_backend import (  # noqa: E402
 from nemo_rl.weight_sync.nccl_reshard_utils import (  # noqa: E402
     HFToLocalParamMap,
     MeshInfo,
+    build_nccl_reshard_refit_info,
 )
+from nemo_rl.weight_sync.xferdtensor import get_local_shard_slices  # noqa: E402
 
 pytestmark = pytest.mark.vllm
 
@@ -395,6 +397,181 @@ def test_build_hf_to_local_param_map_quantizes_bf16_for_mxfp8(monkeypatch):
     down.post(down_ctx)
     assert torch.all(w2.float() == 3)
     assert torch.all(w2_scale == 7)
+
+
+def test_qwen_moe_ep16_to_tp4_mxfp8_receiver_places_every_projection(monkeypatch):
+    """Exercise the Qwen expert topology across every rollout TP coordinate."""
+    hidden_size, num_experts, intermediate_size = 128, 128, 128
+    local_intermediate = intermediate_size // 4
+    metadata = {}
+    for expert_id in range(num_experts):
+        prefix = f"model.layers.0.mlp.experts.{expert_id}"
+        metadata[f"{prefix}.gate_proj.weight"] = {
+            "shape": [intermediate_size, hidden_size],
+            "dtype": "torch.bfloat16",
+        }
+        metadata[f"{prefix}.up_proj.weight"] = {
+            "shape": [intermediate_size, hidden_size],
+            "dtype": "torch.bfloat16",
+        }
+        metadata[f"{prefix}.down_proj.weight"] = {
+            "shape": [hidden_size, intermediate_size],
+            "dtype": "torch.bfloat16",
+        }
+
+    refit_info = build_nccl_reshard_refit_info(
+        metadata,
+        train_parallelism={"tp_size": 2, "ep_size": 16, "pp_size": 1},
+        gen_parallelism={"tp_size": 4, "ep_size": 1, "pp_size": 1},
+        train_world_size=16,
+        gen_world_size=64,
+    )
+    infos = {
+        param["grouped_expert_proj"]: param
+        for param in refit_info["per_layer_params"]["model.layers.0"]
+    }
+
+    assert isinstance(infos["gate_proj"]["src_placements"][0], Shard)
+    assert infos["gate_proj"]["src_placements"][0].dim == 0
+    assert infos["gate_proj"]["dst_placements"][0].dim == 1
+    assert infos["up_proj"]["dst_placements"][0].dim == 1
+    assert infos["down_proj"]["dst_placements"][0].dim == 2
+    for ep_rank in range(16):
+        source_slices = get_local_shard_slices(
+            infos["gate_proj"]["global_shape"],
+            infos["gate_proj"]["src_mesh_info"],
+            infos["gate_proj"]["src_placements"],
+            ep_rank,
+        )
+        assert source_slices[0] == slice(8 * ep_rank, 8 * (ep_rank + 1))
+
+    def fake_quantize(weight):
+        scale = (
+            weight[..., :1]
+            .to(torch.uint8)
+            .expand(*weight.shape[:-1], weight.shape[-1] // 32)
+        )
+        return weight.to(torch.float8_e4m3fn), scale.clone()
+
+    monkeypatch.setattr(
+        "nemo_rl.models.generation.vllm.quantization.fp8.quantize_mxfp8_weight",
+        fake_quantize,
+    )
+
+    names = {
+        projection: f"model.layers.0.mlp.experts.{projection}.weight"
+        for projection in ("gate_proj", "up_proj", "down_proj")
+    }
+    for tp_rank in range(4):
+        w13 = torch.zeros(
+            num_experts,
+            2 * local_intermediate,
+            hidden_size,
+            dtype=torch.float8_e4m3fn,
+        )
+        w2 = torch.zeros(
+            num_experts,
+            hidden_size,
+            local_intermediate,
+            dtype=torch.float8_e4m3fn,
+        )
+        w13_scale = torch.zeros(
+            num_experts,
+            2 * local_intermediate,
+            hidden_size // 32,
+            dtype=torch.uint8,
+        )
+        w2_scale = torch.zeros(
+            num_experts,
+            hidden_size,
+            local_intermediate // 32,
+            dtype=torch.uint8,
+        )
+        ext = _make_ext(
+            {
+                "model.layers.0.mlp.experts.routed_experts.w13_weight": w13,
+                "model.layers.0.mlp.experts.routed_experts.w13_weight_scale_from_checkpoint": w13_scale,
+                "model.layers.0.mlp.experts.routed_experts.w2_weight": w2,
+                "model.layers.0.mlp.experts.routed_experts.w2_weight_scale_from_checkpoint": w2_scale,
+            }
+        )
+        param_map = ext.build_hf_to_local_param_map(refit_info)
+        dst_rank = 16 + tp_rank
+
+        for update_round in range(2):
+            expected = {}
+            for projection_id, projection in enumerate(
+                ("gate_proj", "up_proj", "down_proj")
+            ):
+                info = infos[projection]
+                local_slices = get_local_shard_slices(
+                    info["global_shape"],
+                    info["dst_mesh_info"],
+                    info["dst_placements"],
+                    dst_rank,
+                )
+                replica_slices = get_local_shard_slices(
+                    info["global_shape"],
+                    info["dst_mesh_info"],
+                    info["dst_placements"],
+                    dst_rank + 4,
+                )
+                assert replica_slices == local_slices
+                local_shape = tuple(
+                    global_size if shard.start is None else shard.stop - shard.start
+                    for global_size, shard in zip(
+                        info["global_shape"], local_slices, strict=True
+                    )
+                )
+                assert local_shape == (
+                    (num_experts, local_intermediate, hidden_size)
+                    if projection != "down_proj"
+                    else (num_experts, hidden_size, local_intermediate)
+                )
+
+                spec = param_map.get(names[projection])
+                assert (
+                    spec is not None and spec.pre is not None and spec.post is not None
+                )
+                ctx = spec.pre(spec.base)
+                assert tuple(ctx.buf.shape) == local_shape
+                expert_values = (
+                    torch.arange(num_experts, dtype=torch.bfloat16) % 4
+                    + 1
+                    + 4 * projection_id
+                    + tp_rank
+                    + update_round
+                )
+                ctx.buf.copy_(
+                    expert_values.reshape(num_experts, 1, 1).expand(local_shape)
+                )
+                spec.post(ctx)
+                expected[projection] = expert_values
+
+            gate = expected["gate_proj"].reshape(num_experts, 1, 1)
+            up = expected["up_proj"].reshape(num_experts, 1, 1)
+            down = expected["down_proj"].reshape(num_experts, 1, 1)
+            torch.testing.assert_close(
+                w13[:, :local_intermediate].float(),
+                gate.expand(num_experts, local_intermediate, hidden_size).float(),
+            )
+            torch.testing.assert_close(
+                w13[:, local_intermediate:].float(),
+                up.expand(num_experts, local_intermediate, hidden_size).float(),
+            )
+            torch.testing.assert_close(
+                w2.float(),
+                down.expand(num_experts, hidden_size, local_intermediate).float(),
+            )
+            assert torch.equal(
+                w13_scale[:, :local_intermediate],
+                gate.to(torch.uint8).expand_as(w13_scale[:, :local_intermediate]),
+            )
+            assert torch.equal(
+                w13_scale[:, local_intermediate:],
+                up.to(torch.uint8).expand_as(w13_scale[:, local_intermediate:]),
+            )
+            assert torch.equal(w2_scale, down.to(torch.uint8).expand_as(w2_scale))
 
 
 def test_build_hf_to_local_param_map_uses_routed_expert_runtime_mxfp8_scale(
