@@ -11,6 +11,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 GRAPH_CAPABILITY = "r3_router_cuda_graph_input_v1"
+SAMPLE_IDENTITY = "f" * 64
+SOURCE_IDENTITIES = [{"key": "legacy-step-1-sample-0", "identity": SAMPLE_IDENTITY}]
 GRAPH_COUNTERS = {
     "route_payloads_produced": 2,
     "route_payloads_copied": 2,
@@ -76,21 +78,27 @@ def _write_legacy_trace(
     records = [
         {
             "event": "rollout_payload_sample",
+            "rank": 0,
             "key": "legacy-step-1-sample-0",
+            "sample_identity": SAMPLE_IDENTITY,
             "valid_length": 4,
             **hashes,
         },
         {
             "event": "policy_payload_sample",
+            "rank": 0,
             "stage": "prev_lp",
             "key": "legacy-step-1-sample-0",
+            "sample_identity": SAMPLE_IDENTITY,
             "valid_length": 4,
             **hashes,
         },
         {
             "event": "policy_payload_sample",
+            "rank": 0,
             "stage": "train",
             "key": "legacy-step-1-sample-0",
+            "sample_identity": SAMPLE_IDENTITY,
             "valid_length": 4,
             **hashes,
         },
@@ -170,6 +178,13 @@ def _write_legacy_trace(
                 "sha256": route_digests[payload_idx],
                 "preview": [],
             }
+            record["rank"] = 0
+            record["trace_step"] = 1
+            record["microbatch_generation"] = (
+                11 if record["stage"] == "prev-logprob" else 17
+            )
+            record["route_digest"] = route_digests[payload_idx]
+            record["source_sample_identities"] = SOURCE_IDENTITIES
     records = [
         record
         for record in records
@@ -186,8 +201,12 @@ def _write_legacy_trace(
                     "stage": stage,
                     "action": "replay_forward",
                     "layer_number": layer_number,
+                    "payload_idx": payload_idx,
+                    "rank": 0,
+                    "trace_step": 1,
                     "microbatch_generation": generation,
                     "route_digest": route_digests[payload_idx],
+                    "source_sample_identities": SOURCE_IDENTITIES,
                 }
             )
     for graph_index, (payload_idx, layer_number) in enumerate(
@@ -196,6 +215,8 @@ def _write_legacy_trace(
         records.append(
             {
                 "event": "router_replay_graph_consumer",
+                "rank": 0,
+                "trace_step": 1,
                 "stage": "train",
                 "action": "replay_forward",
                 "layer_number": layer_number,
@@ -215,6 +236,7 @@ def _write_legacy_trace(
                 "copy_generation": graph_index + 1,
                 "successful_graph_launch": True,
                 "capability_version": GRAPH_CAPABILITY,
+                "source_sample_identities": SOURCE_IDENTITIES,
             }
         )
     records.append(
@@ -704,3 +726,109 @@ def test_checker_rejects_unsafe_graph_counters(
     _rewrite_trace(trace_dir, increment_unsafe)
 
     assert checker.check_trace(trace_dir) == 1
+
+
+def test_checker_rejects_disconnected_rollout_producer_replacement(
+    tmp_path: Path,
+) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+
+    def replace_producer(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        producer = next(r for r in records if r.get("event") == "rollout_payload_sample")
+        producer["sample_identity"] = "9" * 64
+        return records
+
+    _rewrite_trace(trace_dir, replace_producer)
+    assert checker.check_trace(trace_dir) == 1
+
+
+def test_checker_rejects_added_generation_without_graph_consumer(tmp_path: Path) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+
+    def add_generation(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        for event in ("router_replay_assignment", "router_replay_action"):
+            source = next(
+                r
+                for r in records
+                if r.get("event") == event
+                and r.get("stage") == "train"
+                and r.get("layer_number") == 2
+                and (event != "router_replay_action" or r.get("action") == "replay_forward")
+            )
+            clone = json.loads(json.dumps(source))
+            clone["trace_step"] = 2
+            clone["microbatch_generation"] = 18
+            records.append(clone)
+        return records
+
+    _rewrite_trace(trace_dir, add_generation)
+    assert checker.check_trace(trace_dir) == 1
+
+
+def test_checker_rejects_duplicate_conflicting_graph_consumer(tmp_path: Path) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+
+    def duplicate_graph(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        source = next(r for r in records if r.get("event") == "router_replay_graph_consumer")
+        clone = json.loads(json.dumps(source))
+        clone["graph_index"] = 99
+        records.append(clone)
+        return records
+
+    _rewrite_trace(trace_dir, duplicate_graph)
+    assert checker.check_trace(trace_dir) == 1
+
+
+def test_checker_accepts_three_warmups_then_success(tmp_path: Path) -> None:
+    checker = _load_checker()
+    trace_dir = tmp_path / "trace"
+    _write_legacy_trace(trace_dir, populated_layers=[1, 3])
+
+    def add_warmups(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        train_records = [
+            r
+            for r in records
+            if r.get("stage") == "train"
+            and r.get("event")
+            in {"router_replay_assignment", "router_replay_action", "router_replay_graph_consumer"}
+            and (r.get("event") != "router_replay_action" or r.get("action") == "replay_forward")
+        ]
+        for record in train_records:
+            record["trace_step"] = 4
+            record["microbatch_generation"] = 20
+        for step, generation in ((1, 17), (2, 18), (3, 19)):
+            for source in train_records:
+                clone = json.loads(json.dumps(source))
+                clone["trace_step"] = step
+                clone["microbatch_generation"] = generation
+                if clone["event"] == "router_replay_graph_consumer":
+                    clone["successful_graph_launch"] = False
+                    clone["bank_id"] = None
+                    clone["graph_index"] = None
+                    clone["copy_generation"] = None
+                records.append(clone)
+            warmup_counters = dict(GRAPH_COUNTERS)
+            warmup_counters.update(
+                route_payloads_produced=2,
+                route_payloads_copied=0,
+                route_graph_launches=0,
+                route_eager_warmup_payloads=2,
+            )
+            records.append(
+                {
+                    "event": "router_replay_graph_counters",
+                    "stage": "train",
+                    "rank": 0,
+                    "counters": warmup_counters,
+                }
+            )
+        return records
+
+    _rewrite_trace(trace_dir, add_warmups)
+    assert checker.check_trace(trace_dir) == 0

@@ -437,6 +437,7 @@ def forward_with_post_processing_fn(
                 graph_consumer_evidence_expected=(
                     router_replay_graph_schedule_key is not None
                 ),
+                source_sample_identities=processed_mb.source_sample_identities,
             )
 
         # Insert hook to capture hidden states and embeddings for draft model training
@@ -462,6 +463,7 @@ def forward_with_post_processing_fn(
                 microbatch_generation=processed_mb.microbatch_generation,
                 schedule_key=router_replay_graph_schedule_key,
                 graph_launch_expected=router_replay_graph_launch_expected,
+                source_sample_identities=processed_mb.source_sample_identities,
             )
     except Exception:
         # The forward above armed the router-replay action (set_router_replay_forward);

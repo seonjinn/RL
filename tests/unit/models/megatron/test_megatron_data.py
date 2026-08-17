@@ -324,6 +324,7 @@ def _replay_microbatch(
             if replay_identity is None
             else replay_identity
         ),
+        source_sample_identities=((f"sample-{identity}", "a" * 64),),
         identity=identity,
         full_cuda_payload=full_cuda_payload,
     )
@@ -804,6 +805,9 @@ def test_graph_identity_is_derived_before_h2d() -> None:
         "_next_microbatch_generation": lambda: 1,
         "_processed_microbatch_replay_identity": processed_replay_identity,
         "_raw_microbatch_replay_identity": raw_replay_identity,
+        "_raw_source_sample_identities": lambda _data: (
+            ("sample-0", "a" * 64),
+        ),
         "_validate_cuda_graph_training_inputs": lambda *_args, **_kwargs: None,
         "get_tensor_model_parallel_rank": lambda: 0,
         "get_tensor_model_parallel_world_size": lambda: 1,
@@ -837,6 +841,7 @@ def test_graph_identity_is_derived_before_h2d() -> None:
         "consumer-metadata:cuda",
     ]
     assert microbatch.replay_identity == "bound-provenance"
+    assert microbatch.source_sample_identities == (("sample-0", "a" * 64),)
 
 
 def test_replay_rejects_extra_item_without_consumer_requesting_n_plus_one() -> None:
@@ -3627,6 +3632,23 @@ def test_router_replay_mbs2_fixed_capacity_cp2_preserves_token_route_rows() -> N
             )
 
     assert torch.equal(routed_experts[0, 0, 0], canonical_route)
+
+
+def test_r3_sample_identity_metadata_survives_dp_slice_without_becoming_input() -> None:
+    identities = [(f"sample-{index}", f"{index + 1:x}" * 64) for index in range(4)]
+    batch = BatchedDataDict(
+        {
+            "input_ids": torch.arange(8).reshape(4, 2),
+            "__r3_trace_sample_identities": identities,
+        }
+    )
+
+    shards = batch.shard_by_batch_size(shards=2)
+
+    assert shards[0]["__r3_trace_sample_identities"] == identities[:2]
+    assert shards[1]["__r3_trace_sample_identities"] == identities[2:]
+    assert shards[0].to("cpu")["__r3_trace_sample_identities"] == identities[:2]
+    assert "__r3_trace_sample_identities" not in shards[0].get_multimodal_dict()
 
 
 GET_PACK_SEQUENCE_PARAMETERS_TEST_ACTOR_FQN = f"{GetPackSequenceParametersTestActor.__module__}.GetPackSequenceParametersTestActor"

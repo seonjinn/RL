@@ -1491,6 +1491,7 @@ def test_graph_consumer_records_content_safe_launch_evidence(
             modules=lambda: [router],
         )
         routes = torch.tensor([[[0, 1]], [[2, 3]]], dtype=torch.int32)
+        source_identities = (("sample-0", "a" * 64),)
         records: list[dict[str, object]] = []
         monkeypatch.setattr(
             router_replay_module,
@@ -1503,6 +1504,7 @@ def test_graph_consumer_records_content_safe_launch_evidence(
             routes,
             microbatch_generation=7,
             graph_consumer_evidence_expected=True,
+            source_sample_identities=source_identities,
         )
         replay.graph_input_launch_record = SimpleNamespace(
             bank_id=991,
@@ -1514,6 +1516,7 @@ def test_graph_consumer_records_content_safe_launch_evidence(
             microbatch_generation=7,
             schedule_key=5,
             graph_launch_expected=True,
+            source_sample_identities=source_identities,
         )
 
         counters = router_replay_module.snapshot_router_replay_graph_counters(model)
@@ -1540,6 +1543,7 @@ def test_graph_consumer_records_content_safe_launch_evidence(
                 "copy_generation": 11,
                 "successful_graph_launch": True,
                 "capability_version": "r3_router_cuda_graph_input_v1",
+                "source_sample_identities": source_identities,
             }
         ]
         assert records[0]["bank_id"] != 991

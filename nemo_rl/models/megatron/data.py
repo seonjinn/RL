@@ -36,6 +36,7 @@ from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.model_utils import _get_tokens_on_this_cp_rank
 from nemo_rl.models.megatron.common import _round_up_to_multiple
 from nemo_rl.utils.r3_trace import (
+    R3_TRACE_SAMPLE_IDENTITIES_FIELD,
     r3_trace_verify_forward_enabled,
     trace_cp_routed_experts,
 )
@@ -111,6 +112,7 @@ class ProcessedMicrobatch:
     routed_experts_cp_sharded: Optional[torch.Tensor] = None
     microbatch_generation: int = 0
     replay_identity: Optional[str] = None
+    source_sample_identities: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.microbatch_generation) is not int:
@@ -121,6 +123,36 @@ class ProcessedMicrobatch:
             type(self.replay_identity) is not str or not self.replay_identity
         ):
             raise ValueError("replay_identity must be a nonempty string or None.")
+        _validate_source_sample_identities(self.source_sample_identities)
+
+
+def _validate_source_sample_identities(
+    identities: tuple[tuple[str, str], ...],
+) -> None:
+    if type(identities) is not tuple:
+        raise TypeError("source_sample_identities must be a tuple.")
+    for item in identities:
+        if (
+            type(item) is not tuple
+            or len(item) != 2
+            or type(item[0]) is not str
+            or not item[0]
+            or type(item[1]) is not str
+            or len(item[1]) != 64
+            or any(character not in "0123456789abcdef" for character in item[1])
+        ):
+            raise ValueError("source_sample_identities contains a malformed entry.")
+
+
+def _raw_source_sample_identities(
+    data_dict: BatchedDataDict[Any],
+) -> tuple[tuple[str, str], ...]:
+    value = data_dict.get(R3_TRACE_SAMPLE_IDENTITIES_FIELD)
+    if value is None:
+        return ()
+    identities = tuple(tuple(item) for item in value)
+    _validate_source_sample_identities(identities)
+    return identities
 
 
 def _update_replay_identity_tensor(
@@ -342,6 +374,7 @@ class ReplayableProcessedMicrobatchIterator(Iterator[ProcessedMicrobatch]):
         )
         self._generations: list[int] = []
         self._identities: list[str] = []
+        self._source_sample_identities: list[tuple[tuple[str, str], ...]] = []
         self._exhausted = False
         self._replay_created = False
         self._iterator = factory(self._record_generation)
@@ -367,6 +400,7 @@ class ReplayableProcessedMicrobatchIterator(Iterator[ProcessedMicrobatch]):
                 "replay identity."
             )
         self._identities.append(replay_identity)
+        self._source_sample_identities.append(microbatch.source_sample_identities)
         return microbatch
 
     def replay(self) -> Iterator[ProcessedMicrobatch]:
@@ -383,6 +417,7 @@ class ReplayableProcessedMicrobatchIterator(Iterator[ProcessedMicrobatch]):
         self._replay_created = True
         generations = tuple(self._generations)
         identities = tuple(self._identities)
+        source_sample_identities = tuple(self._source_sample_identities)
         if len(generations) != len(identities):
             raise RuntimeError(
                 "CUDA graph microbatch preflight generation and identity counts "
@@ -404,8 +439,13 @@ class ReplayableProcessedMicrobatchIterator(Iterator[ProcessedMicrobatch]):
                 return generation
 
             replay_source = iter(self._factory(replay_generation))
-            for index, (generation, identity) in enumerate(
-                zip(generations, identities, strict=True)
+            for index, (generation, identity, sample_identities) in enumerate(
+                zip(
+                    generations,
+                    identities,
+                    source_sample_identities,
+                    strict=True,
+                )
             ):
                 try:
                     microbatch = next(replay_source)
@@ -429,6 +469,11 @@ class ReplayableProcessedMicrobatchIterator(Iterator[ProcessedMicrobatch]):
                     raise RuntimeError(
                         "CUDA graph microbatch replay identity differs at index "
                         f"{index}."
+                    )
+                if microbatch.source_sample_identities != sample_identities:
+                    raise RuntimeError(
+                        "CUDA graph microbatch source sample identities differ at "
+                        f"index {index}."
                     )
                 if index == len(generations) - 1:
                     try:
@@ -845,6 +890,7 @@ def make_processed_microbatch_iterator(
             )
 
     for data_dict in raw_iterator:
+        source_sample_identities = _raw_source_sample_identities(data_dict)
         source_identity = None
         if for_cuda_graph_training:
             source_identity = _raw_microbatch_replay_identity(
@@ -930,6 +976,7 @@ def make_processed_microbatch_iterator(
             routed_experts_cp_sharded=processed_inputs.routed_experts_cp_sharded,
             microbatch_generation=microbatch_generation,
             replay_identity=replay_identity,
+            source_sample_identities=source_sample_identities,
         )
 
 

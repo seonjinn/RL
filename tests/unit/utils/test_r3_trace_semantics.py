@@ -16,6 +16,22 @@ from __future__ import annotations
 
 import json
 
+import torch
+
+
+def test_sample_payload_identity_is_valid_length_bound_and_typed() -> None:
+    from nemo_rl.utils.r3_trace import sample_payload_identity
+
+    input_ids = torch.tensor([11, 12, 99], dtype=torch.int64)
+    routes = torch.tensor([[[0, 1]], [[2, 3]], [[3, 0]]], dtype=torch.int32)
+    identity = sample_payload_identity(input_ids, routes, 2)
+
+    input_ids[2] = 7
+    routes[2] = 1
+    assert sample_payload_identity(input_ids, routes, 2) == identity
+    routes[1, 0, 0] = 3
+    assert sample_payload_identity(input_ids, routes, 2) != identity
+
 
 def test_graph_consumer_trace_contains_identity_without_content_or_addresses(
     tmp_path, monkeypatch
@@ -47,6 +63,7 @@ def test_graph_consumer_trace_contains_identity_without_content_or_addresses(
             copy_generation=11,
             successful_graph_launch=True,
             capability_version="r3_router_cuda_graph_input_v1",
+            source_sample_identities=(("sample-0", "b" * 64),),
         )
 
     record = json.loads(next(tmp_path.glob("*.jsonl")).read_text().splitlines()[-1])
@@ -64,6 +81,9 @@ def test_graph_consumer_trace_contains_identity_without_content_or_addresses(
     assert record["copy_generation"] == 11
     assert record["successful_graph_launch"] is True
     assert record["capability_version"] == "r3_router_cuda_graph_input_v1"
+    assert record["source_sample_identities"] == [
+        {"key": "sample-0", "identity": "b" * 64}
+    ]
     serialized = json.dumps(record, sort_keys=True)
     for forbidden in (
         "input_ids",

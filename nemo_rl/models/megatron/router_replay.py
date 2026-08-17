@@ -73,6 +73,7 @@ _ROUTER_REPLAY_GRAPH_CONSUMER_ATTRIBUTES = (
     "_nrl_graph_input_schedule_key",
     "_nrl_route_digest",
     "_nrl_graph_input_signature",
+    "_nrl_source_sample_identities",
 )
 
 
@@ -383,6 +384,24 @@ def _validate_microbatch_generation(microbatch_generation: int) -> None:
         raise TypeError("microbatch_generation must be an int.")
     if microbatch_generation < 0:
         raise ValueError("microbatch_generation must be nonnegative.")
+
+
+def _validate_source_sample_identities(
+    identities: tuple[tuple[str, str], ...],
+) -> None:
+    if type(identities) is not tuple:
+        raise TypeError("source_sample_identities must be a tuple.")
+    for item in identities:
+        if (
+            type(item) is not tuple
+            or len(item) != 2
+            or type(item[0]) is not str
+            or not item[0]
+            or type(item[1]) is not str
+            or len(item[1]) != 64
+            or any(character not in "0123456789abcdef" for character in item[1])
+        ):
+            raise ValueError("source_sample_identities contains a malformed entry.")
 
 
 def _route_digest(replay_tensor: torch.Tensor) -> str:
@@ -722,11 +741,6 @@ def build_router_replay_assignments(
             layer_number=layer_number,
             payload_idx=payload_idx,
         )
-        trace_router_replay_assignment(
-            layer_number=layer_number,
-            payload_idx=payload_idx,
-            replay_tensor=replay_tensor,
-        )
         replay_assignments.append(
             (
                 replay_instance,
@@ -832,6 +846,7 @@ def set_router_replay_forward(
     *,
     microbatch_generation: int,
     graph_consumer_evidence_expected: bool = False,
+    source_sample_identities: tuple[tuple[str, str], ...] = (),
 ) -> None:
     from megatron.core.transformer.moe.router_replay import RouterReplayAction
 
@@ -839,6 +854,7 @@ def set_router_replay_forward(
         _validate_microbatch_generation(microbatch_generation)
         if type(graph_consumer_evidence_expected) is not bool:
             raise TypeError("graph_consumer_evidence_expected must be a bool.")
+        _validate_source_sample_identities(source_sample_identities)
         assignments = build_router_replay_assignments(model, routed_experts)
         for replay_instance, _ in assignments:
             previous_generation = getattr(
@@ -867,6 +883,7 @@ def set_router_replay_forward(
         replay_instance._nrl_route_digest = (
             _route_digest(replay_tensor) if digest_required else None
         )
+        replay_instance._nrl_source_sample_identities = source_sample_identities
         model_config = _unwrap_model_config(model)
         num_experts = getattr(model_config, "num_moe_experts", -1)
         replay_instance._nrl_graph_input_signature = RouterReplayGraphInputSignature(
@@ -884,6 +901,14 @@ def set_router_replay_forward(
         )
         replay_instance.set_target_indices(replay_tensor)
         _increment_router_replay_counter(replay_instance, "route_payloads_produced")
+        trace_router_replay_assignment(
+            layer_number=int(getattr(replay_instance, "_nrl_layer_number")),
+            payload_idx=int(getattr(replay_instance, "_nrl_payload_idx")),
+            replay_tensor=replay_tensor,
+            microbatch_generation=microbatch_generation,
+            route_digest=replay_instance._nrl_route_digest,
+            source_sample_identities=source_sample_identities,
+        )
         trace_router_replay_action(
             action="replay_forward",
             layer_number=getattr(replay_instance, "_nrl_layer_number", None),
@@ -893,6 +918,8 @@ def set_router_replay_forward(
             ),
             microbatch_generation=microbatch_generation,
             route_digest=replay_instance._nrl_route_digest,
+            payload_idx=getattr(replay_instance, "_nrl_payload_idx", None),
+            source_sample_identities=source_sample_identities,
         )
         replay_instance.set_router_replay_action(RouterReplayAction.REPLAY_FORWARD)
 
@@ -903,6 +930,7 @@ def record_router_replay_graph_consumers(
     microbatch_generation: int,
     schedule_key: int,
     graph_launch_expected: bool,
+    source_sample_identities: tuple[tuple[str, str], ...] = (),
 ) -> None:
     """Record post-success MCore launch evidence for current route values."""
     _validate_microbatch_generation(microbatch_generation)
@@ -910,6 +938,7 @@ def record_router_replay_graph_consumers(
         raise ValueError("Router replay graph schedule_key must be a positive int.")
     if type(graph_launch_expected) is not bool:
         raise TypeError("graph_launch_expected must be a bool.")
+    _validate_source_sample_identities(source_sample_identities)
     for replay_instance, layer_number in _router_replay_instances_for_model(model):
         active_generation = getattr(replay_instance, "graph_input_generation", None)
         if active_generation != microbatch_generation:
@@ -920,6 +949,11 @@ def record_router_replay_graph_consumers(
                 "Router replay graph consumer generation is stale: "
                 f"expected={microbatch_generation}, active={active_generation}."
             )
+        active_source_identities = getattr(
+            replay_instance, "_nrl_source_sample_identities", None
+        )
+        if active_source_identities != source_sample_identities:
+            raise ValueError("Router replay graph consumer source identities are stale.")
 
         record = getattr(replay_instance, "graph_input_launch_record", None)
         successful_graph_launch = record is not None and graph_launch_expected
@@ -1018,6 +1052,7 @@ def record_router_replay_graph_consumers(
             copy_generation=copy_generation,
             successful_graph_launch=successful_graph_launch,
             capability_version=_ROUTER_REPLAY_CUDA_GRAPH_INPUT_CAPABILITY,
+            source_sample_identities=source_sample_identities,
         )
         if launch_error is not None:
             raise launch_error

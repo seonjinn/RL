@@ -40,6 +40,8 @@ _DEFAULT_TRACE_STEPS = 1
 _DEFAULT_TRACE_SAMPLES = 2
 _DEFAULT_TRACE_MICROBATCHES = 2
 
+R3_TRACE_SAMPLE_IDENTITIES_FIELD = "__r3_trace_sample_identities"
+
 _write_lock = threading.Lock()
 _patch_lock = threading.Lock()
 _router_replay_patch_depth = 0
@@ -191,6 +193,52 @@ def _valid_sample_record(
         "valid_sha256": _tensor_sha256(sample),
         "valid_preview": _tensor_preview(sample, preview_limit),
     }
+
+
+def sample_payload_identity(
+    input_ids: Any,
+    routed_experts: Any,
+    valid_length: int,
+) -> str:
+    """Return a content-safe identity for one valid token/route sample."""
+    import torch
+
+    if type(valid_length) is not int or valid_length < 0:
+        raise ValueError("valid_length must be a nonnegative int.")
+    digest = hashlib.sha256(b"nrl-r3-sample-payload-v1\0")
+    digest.update(f"valid_length:int:{valid_length};".encode())
+    for name, tensor in (("input_ids", input_ids), ("routed_experts", routed_experts)):
+        sample = tensor[:valid_length].detach()
+        if sample.device.type != "cpu":
+            raise ValueError(f"{name} identity must be computed before H2D.")
+        sample = sample.contiguous()
+        header = f"{name}:{sample.dtype}:{tuple(sample.shape)}:{sample.numel()};"
+        digest.update(header.encode())
+        digest.update(sample.reshape(-1).view(torch.uint8).numpy().tobytes())
+        digest.update(b";")
+    return digest.hexdigest()
+
+
+def _sample_payload_identities(
+    *, keys: Sequence[str], data: Any
+) -> list[tuple[str, str]]:
+    input_ids = data.get("input_ids")
+    routed_experts = data.get("routed_experts")
+    input_lengths = data.get("input_lengths")
+    if input_ids is None or routed_experts is None or input_lengths is None:
+        return []
+    sample_count = min(len(keys), int(input_ids.shape[0]), int(routed_experts.shape[0]))
+    return [
+        (
+            str(keys[sample_idx]),
+            sample_payload_identity(
+                input_ids[sample_idx],
+                routed_experts[sample_idx],
+                _length_at(input_lengths, sample_idx),
+            ),
+        )
+        for sample_idx in range(sample_count)
+    ]
 
 
 def _routed_experts_semantics(rows: Any) -> dict[str, Any]:
@@ -466,6 +514,10 @@ def trace_rollout_payload(
     if not active or "routed_experts" not in data or "input_lengths" not in data:
         return
 
+    identities = _sample_payload_identities(keys=keys, data=data)
+    if not identities:
+        return
+    data[R3_TRACE_SAMPLE_IDENTITIES_FIELD] = identities
     routed_experts = data["routed_experts"]
     input_lengths = data["input_lengths"]
     input_ids = data.get("input_ids")
@@ -489,6 +541,7 @@ def trace_rollout_payload(
             "trace_step": step,
             "sample_idx": sample_idx,
             "key": keys[sample_idx],
+            "sample_identity": identities[sample_idx][1],
             "valid_length": valid_length,
             "routed_experts": routed_record,
         }
@@ -544,6 +597,10 @@ def _trace_consumer_payload(
     if not active or "routed_experts" not in data or "input_lengths" not in data:
         return
 
+    identities = _sample_payload_identities(keys=keys, data=data)
+    if not identities:
+        return
+    data[R3_TRACE_SAMPLE_IDENTITIES_FIELD] = identities
     routed_experts = data["routed_experts"]
     input_lengths = data["input_lengths"]
     input_ids = data.get("input_ids")
@@ -559,6 +616,7 @@ def _trace_consumer_payload(
             "trace_step": step,
             "sample_idx": sample_idx,
             "key": keys[sample_idx],
+            "sample_identity": identities[sample_idx][1],
             "valid_length": valid_length,
             "routed_experts": _valid_sample_record(
                 routed_experts,
@@ -649,6 +707,9 @@ def trace_router_replay_assignment(
     layer_number: int,
     payload_idx: int,
     replay_tensor: Any,
+    microbatch_generation: Optional[int] = None,
+    route_digest: Optional[str] = None,
+    source_sample_identities: Sequence[tuple[str, str]] = (),
 ) -> None:
     ctx = _current_context()
     if ctx is None:
@@ -661,6 +722,11 @@ def trace_router_replay_assignment(
             "layer_number": int(layer_number),
             "payload_idx": int(payload_idx),
             "tensor": _tensor_record(replay_tensor),
+            "microbatch_generation": microbatch_generation,
+            "route_digest": route_digest,
+            "source_sample_identities": _identity_trace_record(
+                source_sample_identities
+            ),
         }
     )
 
@@ -673,6 +739,8 @@ def trace_router_replay_action(
     replay_backward_list_len: Optional[int] = None,
     microbatch_generation: Optional[int] = None,
     route_digest: Optional[str] = None,
+    payload_idx: Optional[int] = None,
+    source_sample_identities: Sequence[tuple[str, str]] = (),
 ) -> None:
     ctx = _current_context()
     if ctx is None:
@@ -685,12 +753,18 @@ def trace_router_replay_action(
     }
     if layer_number is not None:
         record["layer_number"] = int(layer_number)
+    if payload_idx is not None:
+        record["payload_idx"] = int(payload_idx)
     if replay_backward_list_len is not None:
         record["replay_backward_list_len"] = int(replay_backward_list_len)
     if microbatch_generation is not None:
         record["microbatch_generation"] = int(microbatch_generation)
     if route_digest is not None:
         record["route_digest"] = route_digest
+    if source_sample_identities:
+        record["source_sample_identities"] = _identity_trace_record(
+            source_sample_identities
+        )
     if replay_tensor is not None:
         record["tensor"] = _tensor_record(replay_tensor)
     _write_record(record)
@@ -710,6 +784,7 @@ def trace_router_replay_graph_consumer(
     copy_generation: Optional[int],
     successful_graph_launch: bool,
     capability_version: str,
+    source_sample_identities: Sequence[tuple[str, str]],
 ) -> None:
     """Trace content-safe evidence for one graph-owned route consumer."""
     ctx = _current_context()
@@ -732,8 +807,17 @@ def trace_router_replay_graph_consumer(
             "copy_generation": copy_generation,
             "successful_graph_launch": bool(successful_graph_launch),
             "capability_version": capability_version,
+            "source_sample_identities": _identity_trace_record(
+                source_sample_identities
+            ),
         }
     )
+
+
+def _identity_trace_record(
+    identities: Sequence[tuple[str, str]],
+) -> list[dict[str, str]]:
+    return [{"key": key, "identity": identity} for key, identity in identities]
 
 
 def trace_router_replay_graph_counters(counters: dict[str, int]) -> None:
