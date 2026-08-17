@@ -940,7 +940,7 @@ def trace_router_replay_graph_counter_summary(
     _write_record(
         {
             "event": "router_replay_graph_counter_summary",
-            "scope": "global_reduced",
+            "scope": "rank_local_completed",
             "stage": "train",
             "enclosing_call_id": enclosing_call_id,
             "local_calls": [

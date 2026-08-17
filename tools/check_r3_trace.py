@@ -54,6 +54,45 @@ UNSAFE_GRAPH_COUNTER_FIELDS = (
 )
 
 
+def _failures_for_graph_world(records: list[dict[str, Any]]) -> list[str]:
+    failures: list[str] = []
+    relevant: list[dict[str, Any]] = []
+    for record in records:
+        event = record.get("event")
+        if record.get("stage") != "train":
+            continue
+        if event in {
+            "router_replay_assignment",
+            "router_replay_graph_consumer",
+            "router_replay_graph_counters",
+            "router_replay_graph_counter_summary",
+        } or (
+            event == "router_replay_action"
+            and record.get("action") == "replay_forward"
+        ):
+            relevant.append(record)
+    world_sizes: set[int] = set()
+    for record in relevant:
+        rank = record.get("rank")
+        world_size = record.get("world_size")
+        if (
+            type(rank) is not int
+            or rank < 0
+            or type(world_size) is not int
+            or world_size < 1
+            or rank >= world_size
+        ):
+            failures.append(
+                "invalid graph trace rank/world_size for "
+                f"event={record.get('event')} rank={rank} world_size={world_size}"
+            )
+            continue
+        world_sizes.add(world_size)
+    if len(world_sizes) > 1:
+        failures.append(f"inconsistent graph trace world_size values: {world_sizes}")
+    return failures
+
+
 def _valid_sha256(value: Any) -> bool:
     return (
         isinstance(value, str)
@@ -810,7 +849,7 @@ def _failures_for_graph_counter_summaries(
         label = f"rank={rank} enclosing_call_id={enclosing_call_id}"
         if (
             record.get("stage") != "train"
-            or record.get("scope") != "global_reduced"
+            or record.get("scope") != "rank_local_completed"
             or type(rank) is not int
             or rank < 0
             or type(enclosing_call_id) is not int
@@ -899,13 +938,21 @@ def _failures_for_graph_counter_summaries(
         if len(summary_records) != 1:
             failures.append(f"duplicate graph counter summary for {summary_key}")
 
-    calls_by_rank: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    calls_by_rank: dict[int, list[tuple[int, int, int]]] = defaultdict(list)
     for (rank, enclosing_call_id), calls in local_by_enclosing.items():
-        calls_by_rank[rank].append((min(call[0] for call in calls), enclosing_call_id))
+        trace_steps = [call[0] for call in calls]
+        calls_by_rank[rank].append(
+            (enclosing_call_id, min(trace_steps), max(trace_steps))
+        )
     for rank, calls in calls_by_rank.items():
-        ordered_ids = [call_id for _, call_id in sorted(calls)]
-        if any(current <= previous for previous, current in zip(ordered_ids, ordered_ids[1:])):
-            failures.append(f"enclosing call IDs regressed or were reused for rank={rank}")
+        ordered_calls = sorted(calls)
+        if any(
+            previous_max >= current_min
+            for (_, _, previous_max), (_, current_min, _) in zip(
+                ordered_calls, ordered_calls[1:]
+            )
+        ):
+            failures.append(f"enclosing calls interleaved or regressed for rank={rank}")
 
     summaries_by_logical_call: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for (_rank, enclosing_call_id), record in valid_summaries.items():
@@ -918,7 +965,6 @@ def _failures_for_graph_counter_summaries(
                 "local_trace_step_range",
                 "local_call_count",
                 "schedule_keys",
-                "counters",
             ):
                 if record.get(field) != reference.get(field):
                     failures.append(
@@ -926,22 +972,57 @@ def _failures_for_graph_counter_summaries(
                         f"enclosing_call_id={enclosing_call_id}"
                     )
                     break
-        aggregate = {field: 0 for field in GRAPH_COUNTER_FIELDS}
-        for (rank, call_id), calls in local_by_enclosing.items():
-            if call_id != enclosing_call_id:
-                continue
-            for local_record in calls.values():
-                counters = local_record.get("counters")
-                if not isinstance(counters, dict):
-                    continue
-                for field in GRAPH_COUNTER_FIELDS:
-                    value = counters.get(field)
-                    if type(value) is int:
-                        aggregate[field] += value
-        if reference.get("counters") != aggregate:
+        ranks = {
+            rank
+            for rank, call_id in local_by_enclosing
+            if call_id == enclosing_call_id
+        }
+        world_sizes = {
+            record.get("world_size")
+            for record in summary_records
+            if type(record.get("world_size")) is int
+        }
+        if len(world_sizes) != 1:
             failures.append(
-                "graph counter summary totals differ from local aggregation for "
+                f"inconsistent world_size for enclosing_call_id={enclosing_call_id}"
+            )
+        else:
+            world_size = next(iter(world_sizes))
+            expected_ranks = set(range(world_size))
+            if ranks != expected_ranks or len(summary_records) != world_size:
+                failures.append(
+                    "graph counter summary rank set is incomplete for "
+                    f"enclosing_call_id={enclosing_call_id}: "
+                    f"expected={sorted(expected_ranks)} actual={sorted(ranks)}"
+                )
+        local_coverage = {
+            rank: set(calls)
+            for (rank, call_id), calls in local_by_enclosing.items()
+            if call_id == enclosing_call_id
+        }
+        if local_coverage and any(
+            coverage != next(iter(local_coverage.values()))
+            for coverage in local_coverage.values()
+        ):
+            failures.append(
+                "cross-rank local call coverage differs for "
                 f"enclosing_call_id={enclosing_call_id}"
+            )
+
+    for summary_key, summary_record in valid_summaries.items():
+        aggregate = {field: 0 for field in GRAPH_COUNTER_FIELDS}
+        for local_record in local_by_enclosing.get(summary_key, {}).values():
+            counters = local_record.get("counters")
+            if not isinstance(counters, dict):
+                continue
+            for field in GRAPH_COUNTER_FIELDS:
+                value = counters.get(field)
+                if type(value) is int:
+                    aggregate[field] += value
+        if summary_record.get("counters") != aggregate:
+            failures.append(
+                "rank-local graph counter summary differs from local aggregation for "
+                f"rank={summary_key[0]} enclosing_call_id={summary_key[1]}"
             )
     return failures
 
@@ -1066,6 +1147,7 @@ def check_trace(
             summary["fetch_by_stage_key"],
         )
     )
+    failures.extend(_failures_for_graph_world(records))
     failures.extend(_failures_for_graph_consumers(records))
     failures.extend(_failures_for_graph_counters(records))
     failures.extend(_failures_for_graph_counter_summaries(records))

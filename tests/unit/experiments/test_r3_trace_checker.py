@@ -299,6 +299,7 @@ def _production_warmup_trace(records: list[dict[str, Any]]) -> list[dict[str, An
                 clone = json.loads(json.dumps(source))
                 clone["trace_step"] = step
                 clone["enclosing_call_id"] = 1
+                clone["world_size"] = 1
                 clone["microbatch_generation"] = generation
                 if clone["event"] == "router_replay_graph_consumer":
                     if successful:
@@ -339,7 +340,7 @@ def _production_warmup_trace(records: list[dict[str, Any]]) -> list[dict[str, An
     records.append(
         {
             "event": "router_replay_graph_counter_summary",
-            "scope": "global_reduced",
+            "scope": "rank_local_completed",
             "stage": "train",
             "rank": 0,
             "world_size": 1,
@@ -360,6 +361,70 @@ def _production_warmup_trace(records: list[dict[str, Any]]) -> list[dict[str, An
             "counters": summary_counters,
         }
     )
+    return records
+
+
+def _minimal_enclosing_counter_records(
+    *,
+    world_size: int,
+    calls_by_rank: dict[int, dict[int, list[int]]],
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for rank, calls in calls_by_rank.items():
+        for enclosing_call_id, trace_steps in calls.items():
+            local_counters = dict(GRAPH_COUNTERS)
+            local_counters.update(
+                route_payloads_produced=1,
+                route_payloads_copied=0,
+                route_graph_launches=0,
+                route_eager_warmup_payloads=1,
+            )
+            for trace_step in trace_steps:
+                records.append(
+                    {
+                        "event": "router_replay_graph_counters",
+                        "stage": "train",
+                        "rank": rank,
+                        "world_size": world_size,
+                        "enclosing_call_id": enclosing_call_id,
+                        "trace_step": trace_step,
+                        "schedule_key": 1,
+                        "num_microbatches": 1,
+                        "counters": dict(local_counters),
+                    }
+                )
+            summary_counters = dict(GRAPH_COUNTERS)
+            summary_counters.update(
+                route_payloads_produced=len(trace_steps),
+                route_payloads_copied=0,
+                route_graph_launches=0,
+                route_eager_warmup_payloads=len(trace_steps),
+            )
+            records.append(
+                {
+                    "event": "router_replay_graph_counter_summary",
+                    "scope": "rank_local_completed",
+                    "stage": "train",
+                    "rank": rank,
+                    "world_size": world_size,
+                    "enclosing_call_id": enclosing_call_id,
+                    "local_calls": [
+                        {
+                            "trace_step": trace_step,
+                            "schedule_key": 1,
+                            "num_microbatches": 1,
+                        }
+                        for trace_step in sorted(trace_steps)
+                    ],
+                    "local_trace_step_range": [
+                        min(trace_steps),
+                        max(trace_steps),
+                    ],
+                    "local_call_count": len(trace_steps),
+                    "schedule_keys": [1],
+                    "counters": summary_counters,
+                }
+            )
     return records
 
 
@@ -972,13 +1037,15 @@ def test_checker_requires_cross_rank_summary_agreement(tmp_path: Path) -> None:
             clone["rank"] = 1
             clone["world_size"] = 2
             rank_one.append(clone)
-        for record in [*records, *rank_one]:
-            if record.get("event") == "router_replay_graph_counter_summary":
-                record["world_size"] = 2
-                record["counters"] = {
-                    field: value * 2
-                    for field, value in record["counters"].items()
-                }
+            for record in [*records, *rank_one]:
+                if record.get("event") in {
+                    "router_replay_assignment",
+                    "router_replay_action",
+                    "router_replay_graph_consumer",
+                    "router_replay_graph_counters",
+                    "router_replay_graph_counter_summary",
+                }:
+                    record["world_size"] = 2
         return [*records, *rank_one]
 
     _rewrite_trace(trace_dir, add_second_rank)
@@ -998,6 +1065,43 @@ def test_checker_requires_cross_rank_summary_agreement(tmp_path: Path) -> None:
     _rewrite_trace(trace_dir, disagree)
 
     assert checker.check_trace(trace_dir) == 1
+
+
+def test_summary_checker_rejects_interleaved_enclosing_calls() -> None:
+    checker = _load_checker()
+    records = _minimal_enclosing_counter_records(
+        world_size=1,
+        calls_by_rank={0: {1: [1, 3], 2: [2, 4]}},
+    )
+
+    failures = checker._failures_for_graph_counter_summaries(records)
+
+    assert any("interleaved" in failure for failure in failures)
+
+
+def test_summary_checker_rejects_missing_world_rank() -> None:
+    checker = _load_checker()
+    records = _minimal_enclosing_counter_records(
+        world_size=2,
+        calls_by_rank={0: {1: [1, 2]}},
+    )
+
+    failures = checker._failures_for_graph_counter_summaries(records)
+
+    assert any("rank set" in failure for failure in failures)
+
+
+def test_summary_checker_accepts_two_sequential_calls_on_all_ranks() -> None:
+    checker = _load_checker()
+    records = _minimal_enclosing_counter_records(
+        world_size=2,
+        calls_by_rank={
+            0: {1: [1, 2], 2: [3, 4]},
+            1: {1: [1, 2], 2: [3, 4]},
+        },
+    )
+
+    assert checker._failures_for_graph_counter_summaries(records) == []
 
 
 def test_checker_rejects_duplicate_enclosing_call_summary(tmp_path: Path) -> None:

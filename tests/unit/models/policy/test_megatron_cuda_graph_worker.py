@@ -959,7 +959,7 @@ def test_sync_and_split_emit_call_local_counters_inside_trace_context() -> None:
         } >= {"enabled", "enclosing_call_id"}
 
 
-def test_graph_enclosing_call_ids_are_monotonic_and_stored_on_call_state() -> None:
+def test_graph_enclosing_call_ids_are_trace_gated_monotonic_and_stored() -> None:
     states: list[SimpleNamespace] = []
 
     def make_state(**kwargs: Any) -> SimpleNamespace:
@@ -969,20 +969,34 @@ def test_graph_enclosing_call_ids_are_monotonic_and_stored_on_call_state() -> No
         return state
 
     worker_type = _extract_worker_methods(
-        {"_begin_te_cuda_graph_call", "_next_r3_trace_enclosing_call_id"},
-        {"_TECudaGraphCallState": make_state},
+        {
+            "_begin_te_cuda_graph_call",
+            "_next_r3_trace_enclosing_call_id",
+            "_maybe_r3_trace_enclosing_call_id",
+        },
+        {
+            "_TECudaGraphCallState": make_state,
+            "r3_trace_enabled": lambda: trace_enabled.pop(0),
+        },
     )
     worker = worker_type()
     worker._te_cuda_graph_bank_manager = SimpleNamespace(
         snapshot_execution_counters=lambda: "snapshot"
     )
+    worker._router_replay_enabled = True
+    trace_enabled = [False, True, True, True]
+
+    assert worker._maybe_r3_trace_enclosing_call_id() is None
+    first_id = worker._maybe_r3_trace_enclosing_call_id()
+    second_id = worker._maybe_r3_trace_enclosing_call_id()
     worker._router_replay_enabled = False
+    assert worker._maybe_r3_trace_enclosing_call_id() is None
 
     first = worker._begin_te_cuda_graph_call(
-        enclosing_call_id=worker._next_r3_trace_enclosing_call_id()
+        enclosing_call_id=first_id
     )
     second = worker._begin_te_cuda_graph_call(
-        enclosing_call_id=worker._next_r3_trace_enclosing_call_id()
+        enclosing_call_id=second_id
     )
 
     assert first.enclosing_call_id == 1
@@ -1048,7 +1062,50 @@ def test_graph_counters_are_local_to_each_trace_context() -> None:
     assert records[1]["counters"] == dict.fromkeys(fields, 3)
     assert all(record["schedule_key"] == 5 for record in records)
     assert all(record["num_microbatches"] == 5 for record in records)
-    assert call_state.r3_trace_completed_local_calls == [(7, 5, 5), (8, 5, 5)]
+    assert call_state.r3_trace_completed_local_calls == [
+        (7, 5, 5, dict.fromkeys(fields, 2)),
+        (8, 5, 5, dict.fromkeys(fields, 3)),
+    ]
+
+
+def test_completed_summary_uses_only_traced_local_deltas_after_cutoff() -> None:
+    fields = (
+        "route_payloads_produced",
+        "route_payloads_copied",
+        "route_graph_launches",
+        "route_eager_warmup_payloads",
+    )
+    summaries: list[dict[str, Any]] = []
+    worker_type = _extract_worker_methods(
+        {"_trace_completed_router_replay_enclosing_call"},
+        {
+            "ROUTER_REPLAY_GRAPH_COUNTER_FIELDS": fields,
+            "trace_router_replay_graph_counter_summary": (
+                lambda counters, **kwargs: summaries.append(
+                    {"counters": counters, **kwargs}
+                )
+            ),
+        },
+    )
+    worker = worker_type()
+    call_state = SimpleNamespace(
+        enclosing_call_id=9,
+        reduced_router_replay_counters=dict.fromkeys(fields, 50),
+        r3_trace_completed_local_calls=[
+            (1, 5, 5, dict.fromkeys(fields, 2)),
+            (2, 5, 5, dict.fromkeys(fields, 3)),
+        ],
+    )
+
+    worker._trace_completed_router_replay_enclosing_call(call_state)
+
+    assert summaries == [
+        {
+            "counters": dict.fromkeys(fields, 5),
+            "enclosing_call_id": 9,
+            "local_calls": ((1, 5, 5), (2, 5, 5)),
+        }
+    ]
 
 
 def test_router_route_counters_reduce_globally_and_block_unsafe_state() -> None:
@@ -1674,6 +1731,7 @@ def test_metrics_validate_and_reduce_across_tp_cp_then_pp_for_cp_replicas() -> N
             eligible_calls=8,
         )
     )
+    worker._trace_completed_router_replay_enclosing_call = lambda _state: None
     call_state = SimpleNamespace(
         execution_snapshot=object(),
         capture_count=1,
