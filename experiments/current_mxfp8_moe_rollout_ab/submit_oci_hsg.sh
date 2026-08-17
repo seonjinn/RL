@@ -122,7 +122,9 @@ else
 fi
 if [[ -n "${RUNTIME_SITE_PACKAGES}" ]]; then
   PYTHON_RUNNER=/opt/nemo_rl_venv/bin/python
-  UV_DRIVER_SETUP="unset UV_PROJECT_ENVIRONMENT UV_PYTHON_INSTALL_DIR"
+  UV_DRIVER_SETUP="unset UV_PROJECT_ENVIRONMENT UV_PYTHON_INSTALL_DIR
+export UV_PYTHON=/opt/nemo_rl_venv/bin/python
+export UV_NO_MANAGED_PYTHON=1"
 else
   PYTHON_RUNNER="uv run --frozen"
   UV_DRIVER_SETUP="export UV_PROJECT_ENVIRONMENT=${CACHE_ROOT}/driver-venv
@@ -138,8 +140,7 @@ container=${CONTAINER}
 runtime_site_packages=${RUNTIME_SITE_PACKAGES:-container_default}
 python_runner=${PYTHON_RUNNER}
 worker_venv_root=${WORKER_VENV_ROOT}
-python_version=3.13.11
-python_floor_override=experiment_only_metadata_override_from_3.13.14
+python_version=runtime_interpreter
 gym_source_commit=5a6fc589c0196f73a5931781b06da61f668a80d7
 cluster=oci-hsg-cs-001
 hardware=GB200
