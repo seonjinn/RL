@@ -1306,6 +1306,23 @@ def test_mcore_submitter_rejects_invalid_test_modes_before_external_work(
     assert expected_error in result.stderr
 
 
+@pytest.mark.parametrize("empty_mode", ("TEST_ONLY", "SBATCH_TEST_ONLY"))
+def test_mcore_submitter_rejects_explicit_empty_test_mode_before_external_work(
+    tmp_path: Path,
+    empty_mode: str,
+) -> None:
+    harness = _mcore_submitter_harness(tmp_path)
+    mode_environment = {"TEST_ONLY": "0", "SBATCH_TEST_ONLY": "0"}
+    mode_environment[empty_mode] = ""
+
+    result = _run_mcore_submitter(harness, **mode_environment)
+
+    assert result.returncode == 2
+    assert f"{empty_mode} must be 0 or 1" in result.stderr
+    assert not harness.scheduler_contact.exists()
+    assert not harness.run_log_root.exists()
+
+
 def test_mcore_submitter_test_only_renders_without_scheduler_or_artifacts(
     tmp_path: Path,
 ) -> None:

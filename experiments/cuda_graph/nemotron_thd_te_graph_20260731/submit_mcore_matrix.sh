@@ -23,8 +23,8 @@ run_sbatch_without_reserved_environment() {
 
 [[ -z "${COMMAND:-}" && -z "${MCORE_COMMAND:-}" ]] || \
   fail "Raw command payloads are forbidden by the typed matrix runner"
-TEST_ONLY=${TEST_ONLY:-0}
-SBATCH_TEST_ONLY=${SBATCH_TEST_ONLY:-0}
+TEST_ONLY=${TEST_ONLY-0}
+SBATCH_TEST_ONLY=${SBATCH_TEST_ONLY-0}
 [[ "${TEST_ONLY}" == 0 || "${TEST_ONLY}" == 1 ]] || \
   fail "TEST_ONLY must be 0 or 1"
 [[ "${SBATCH_TEST_ONLY}" == 0 || "${SBATCH_TEST_ONLY}" == 1 ]] || \
