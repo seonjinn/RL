@@ -433,9 +433,21 @@ def test_qwen_moe_ep16_to_tp4_mxfp8_receiver_places_every_projection(monkeypatch
 
     assert isinstance(infos["gate_proj"]["src_placements"][0], Shard)
     assert infos["gate_proj"]["src_placements"][0].dim == 0
-    assert infos["gate_proj"]["dst_placements"][0].dim == 1
-    assert infos["up_proj"]["dst_placements"][0].dim == 1
-    assert infos["down_proj"]["dst_placements"][0].dim == 2
+    assert [
+        placement.dim
+        for placement in infos["gate_proj"]["dst_placements"]
+        if isinstance(placement, Shard)
+    ] == [1]
+    assert [
+        placement.dim
+        for placement in infos["up_proj"]["dst_placements"]
+        if isinstance(placement, Shard)
+    ] == [1]
+    assert [
+        placement.dim
+        for placement in infos["down_proj"]["dst_placements"]
+        if isinstance(placement, Shard)
+    ] == [2]
     for ep_rank in range(16):
         source_slices = get_local_shard_slices(
             infos["gate_proj"]["global_shape"],
