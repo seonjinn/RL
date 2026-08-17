@@ -10,6 +10,7 @@ RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
 BRANCH=${BRANCH:-sna/exp-sync-ipc-bf16-mxfp8-ab-20260816}
 EXPECTED_HEAD=${EXPECTED_HEAD:-}
 USE_GRES=${USE_GRES:-false}
+ACCOUNT=${SLURM_ACCOUNT:-coreai_dlalgo_llm}
 
 case "${MODEL}" in
   qwen30)
@@ -96,6 +97,7 @@ fi
 
 if [[ "${ACTION}" == render-sbatch ]]; then
   printf '%s\n' "--nodes=${TOTAL_NODES}"
+  printf '%s\n' "--job-name=${ACCOUNT}-sync-ipc.${MODEL}-${ARM}-${MAX_STEPS}s"
   if [[ "${USE_GRES}" == true ]]; then
     printf '%s\n' "--gres=gpu:4"
   fi
@@ -110,7 +112,6 @@ RESULT_ROOT=${RESULT_ROOT:-${BASE}/experiments/sync-ipc-bf16-mxfp8-ab}
 EXPERIMENT_ROOT=${RESULT_ROOT}/${MODEL}/${ARM}/${RUN_SUFFIX}
 CACHE_ROOT=${BASE}/.cache/sync-ipc-bf16-mxfp8-ab/${MODEL}/${ARM}/${RUN_SUFFIX}
 WORKER_VENV_ROOT=/tmp/nemo_rl_worker_venvs/sync-ipc/${MODEL}/${ARM}/${RUN_SUFFIX}
-ACCOUNT=${SLURM_ACCOUNT:-coreai_dlalgo_llm}
 PARTITION=${PARTITION:-36x2-a01r}
 WALLTIME=${WALLTIME:-05:00:00}
 WANDB_ENABLED=${WANDB_ENABLED:-false}
@@ -207,7 +208,7 @@ SBATCH_ARGS=(
   --partition="${PARTITION}"
   --time="${WALLTIME}"
   --segment=4
-  --job-name="sna-sync-ipc-${MODEL}-${ARM}-${MAX_STEPS}s"
+  --job-name="${ACCOUNT}-sync-ipc.${MODEL}-${ARM}-${MAX_STEPS}s"
   --output="${EXPERIMENT_ROOT}/slurm-%j.out"
 )
 if [[ "${USE_GRES}" == true ]]; then

@@ -27,12 +27,13 @@ def render(model: str, arm: str, max_steps: int = 1) -> str:
     return result.stdout
 
 
-def render_sbatch(use_gres: bool) -> str:
+def render_sbatch(use_gres: bool, account: str = "coreai_dlalgo_llm") -> str:
     env = os.environ | {
         "ACTION": "render-sbatch",
         "MODEL": "qwen30",
         "ARM": "bf16",
         "USE_GRES": str(use_gres).lower(),
+        "SLURM_ACCOUNT": account,
     }
     result = subprocess.run(
         ["bash", str(LAUNCHER)],
@@ -97,3 +98,9 @@ def test_unknown_arm_is_rejected() -> None:
 def test_gres_is_optional_for_exclusive_node_clusters() -> None:
     assert "--gres" not in render_sbatch(use_gres=False)
     assert "--gres=gpu:4" in render_sbatch(use_gres=True)
+
+
+def test_job_name_follows_cluster_account_convention() -> None:
+    sbatch = render_sbatch(use_gres=False, account="coreai_dlalgo_llm")
+
+    assert "--job-name=coreai_dlalgo_llm-sync-ipc.qwen30-bf16-1s" in sbatch
