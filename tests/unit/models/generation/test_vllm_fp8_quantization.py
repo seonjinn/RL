@@ -91,6 +91,93 @@ def test_init_fp8_uses_mxfp8_quantization_config(fp8_module, monkeypatch):
     assert "VLLM_USE_DEEP_GEMM_E8M0" not in fp8.os.environ
 
 
+def test_patch_ray_executor_v2_applies_fp8_before_worker_init(fp8_module, monkeypatch):
+    import cloudpickle
+    from vllm.v1.executor import ray_executor_v2
+
+    fp8 = fp8_module
+    events = []
+
+    class FakeRayWorkerProc:
+        def initialize_worker(self, *args, **kwargs):
+            events.append(("initialize", args, kwargs))
+            return "initialized"
+
+    monkeypatch.setattr(ray_executor_v2, "RayWorkerProc", FakeRayWorkerProc)
+    monkeypatch.setattr(
+        fp8,
+        "apply_fp8_patches",
+        lambda _worker, config: events.append(("patch", config)),
+    )
+
+    first_config = "first-config"
+    second_config = "second-config"
+    fp8._patch_vllm_ray_executor_v2(first_config)
+    first_worker_cls_local = ray_executor_v2.RayWorkerProc
+    first_worker_local = first_worker_cls_local()
+    first_result_local = first_worker_local.initialize_worker(1, {"A": "B"})
+
+    fp8._patch_vllm_ray_executor_v2(second_config)
+    second_worker_cls_local = ray_executor_v2.RayWorkerProc
+    second_worker_local = second_worker_cls_local()
+    second_result_local = second_worker_local.initialize_worker(2, {"C": "D"})
+
+    assert first_result_local == "initialized"
+    assert second_result_local == "initialized"
+    assert events == [
+        ("patch", first_config),
+        ("initialize", (1, {"A": "B"}), {}),
+        ("patch", second_config),
+        ("initialize", (2, {"C": "D"}), {}),
+    ]
+    assert first_worker_cls_local.__bases__ == (FakeRayWorkerProc,)
+    assert second_worker_cls_local.__bases__ == (FakeRayWorkerProc,)
+
+    first_worker_cls = cloudpickle.loads(cloudpickle.dumps(first_worker_cls_local))
+    second_worker_cls = cloudpickle.loads(cloudpickle.dumps(second_worker_cls_local))
+    serialized_events = []
+    monkeypatch.setitem(
+        first_worker_cls.initialize_worker.__globals__,
+        "apply_fp8_patches",
+        lambda _worker, config: serialized_events.append(("first", config)),
+    )
+    assert first_worker_cls().initialize_worker() == "initialized"
+    monkeypatch.setitem(
+        second_worker_cls.initialize_worker.__globals__,
+        "apply_fp8_patches",
+        lambda _worker, config: serialized_events.append(("second", config)),
+    )
+    assert second_worker_cls().initialize_worker() == "initialized"
+    assert serialized_events == [("first", first_config), ("second", second_config)]
+
+
+@pytest.mark.parametrize("model_parallel_size", [1, 2])
+def test_run_engine_core_removes_serialized_fp8_config(
+    fp8_module, monkeypatch, model_parallel_size
+):
+    fp8 = fp8_module
+    fp8_config = types.SimpleNamespace(model_parallel_size=model_parallel_size)
+    vllm_config = types.SimpleNamespace(nrl_fp8_cfg=fp8_config)
+    applied_configs = []
+
+    monkeypatch.setattr(
+        fp8,
+        "monkey_patch_vllm_ray_executor",
+        lambda config: applied_configs.append(config),
+    )
+    monkeypatch.setattr(
+        fp8,
+        "original_run_engine_core",
+        lambda **kwargs: kwargs["vllm_config"],
+    )
+
+    result = fp8.my_run_engine_core(vllm_config=vllm_config)
+
+    assert result is vllm_config
+    assert applied_configs == [fp8_config]
+    assert not hasattr(vllm_config, "nrl_fp8_cfg")
+
+
 @pytest.mark.parametrize("precision", [None, "auto", "bf16", "bfloat16"])
 def test_init_fp8_rejects_mxfp8_without_fp8_precision(
     fp8_module, monkeypatch, precision
