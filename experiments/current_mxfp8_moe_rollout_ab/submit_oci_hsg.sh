@@ -15,6 +15,7 @@ HF_HOME=${HF_HOME:-${BASE}/hf_home}
 RUN_SUFFIX=${RUN_SUFFIX:-$(date +%Y%m%d-%H%M%S)}
 EXPERIMENT_ROOT=${EXPERIMENT_ROOT:-${BASE}/experiments/current-mxfp8-moe-rollout-ab/${MODEL}/${ARM}/${RUN_SUFFIX}}
 CACHE_ROOT=${CACHE_ROOT:-${BASE}/.cache/current-mxfp8-moe-rollout-ab/${MODEL}/${ARM}/${RUN_SUFFIX}}
+MOUNT_UV_CACHE=${MOUNT_UV_CACHE:-true}
 WORKER_VENV_ROOT=${WORKER_VENV_ROOT:-/tmp/nemo_rl_worker_venvs/${MODEL}/${ARM}/${RUN_SUFFIX}}
 WANDB_PROJECT=${WANDB_PROJECT:-sna-current-mxfp8-moe-rollout-ab}
 WANDB_NAME=${WANDB_NAME:-${MODEL}-${ARM}-20step-${RUN_SUFFIX}}
@@ -173,6 +174,7 @@ config=${CONFIG}
 container=${CONTAINER}
 runtime_site_packages=${RUNTIME_SITE_PACKAGES:-container_default}
 python_runner=${PYTHON_RUNNER}
+mount_uv_cache=${MOUNT_UV_CACHE}
 worker_venv_root=${WORKER_VENV_ROOT}
 python_version=runtime_interpreter
 gym_source_commit=5a6fc589c0196f73a5931781b06da61f668a80d7
@@ -262,7 +264,11 @@ export MOUNTS=/lustre:/lustre
 if [[ -n "${RUNTIME_SITE_PACKAGES}" ]]; then
   MOUNTS+=",${RUNTIME_SITE_PACKAGES}:/opt/nemo_rl_venv/lib/python3.13/site-packages"
 fi
-export UV_CACHE_DIR_OVERRIDE=${CACHE_ROOT}/uv-cache
+case "${MOUNT_UV_CACHE}" in
+  true) export UV_CACHE_DIR_OVERRIDE=${CACHE_ROOT}/uv-cache ;;
+  false) unset UV_CACHE_DIR_OVERRIDE ;;
+  *) echo "MOUNT_UV_CACHE must be true or false" >&2; exit 2 ;;
+esac
 
 SBATCH_ARGS=(
   --nodes="${TOTAL_NODES}"
