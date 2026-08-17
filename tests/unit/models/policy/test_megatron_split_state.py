@@ -31,6 +31,7 @@ The bugs these catch:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -699,6 +700,355 @@ class TestAbort:
         w.begin_train_step(loss_fn=w._test_loss_fn)
         assert w._train_step_state is not None
         assert float(w._train_step_state["local_valid_seqs"].item()) == 0.0
+
+
+# ── frozen eager/graph R3 parity diagnostic ───────────────────────────
+
+
+class _ParityStateModel(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.tensor([2.0, -3.0]))
+        self.weight.main_grad = torch.tensor([7.0, -11.0])
+        self.weight.grad = torch.tensor([13.0, -17.0])
+        self.register_buffer("running", torch.tensor([19.0]))
+        self.config = SimpleNamespace(
+            grad_sync_func="saved-grad-sync",
+            no_sync_func="saved-no-sync",
+        )
+        self.inference_params = {"sentinel": 23}
+
+    def forward(self, hidden: torch.Tensor) -> torch.Tensor:
+        return hidden * self.weight
+
+
+def _make_r3_router_graph_parity_worker():
+    from nemo_rl.algorithms.loss.interfaces import LossType
+
+    worker = _make_worker(LossType.TOKEN_LEVEL)
+    worker.model = _ParityStateModel()
+    worker._te_cuda_graph_lifecycle = None
+    worker._te_cuda_graph_bank_manager = None
+    worker._te_cuda_graph_installed_key = None
+    worker._active_router_route_generation = None
+    worker._next_router_route_generation = 5
+    worker._train_step_state = None
+    return worker
+
+
+def test_r3_router_graph_parity_zeroes_existing_grad_storage_in_place() -> None:
+    worker = _make_r3_router_graph_parity_worker()
+    main_grad = worker.model.weight.main_grad
+    grad = worker.model.weight.grad
+    main_grad_ptr = main_grad.data_ptr()
+    grad_ptr = grad.data_ptr()
+
+    worker._zero_r3_router_graph_parity_grad_storage()
+
+    assert main_grad.data_ptr() == main_grad_ptr
+    assert grad.data_ptr() == grad_ptr
+    assert torch.equal(main_grad, torch.zeros_like(main_grad))
+    assert torch.equal(grad, torch.zeros_like(grad))
+
+
+def test_r3_router_graph_parity_arm_restores_rng_buffers_and_grad_storage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = _make_r3_router_graph_parity_worker()
+    worker.model.router_replay = SimpleNamespace(
+        target_topk_idx=None,
+        recorded_topk_idx=None,
+        router_replay_action=None,
+        replay_backward_list=[],
+        graph_input_generation=None,
+        _nrl_last_graph_input_generation=3,
+        _nrl_last_graph_input_copy_generation=17,
+        _nrl_graph_route_counters={"stale_generation_count": 0},
+    )
+    worker.model.eval()
+    worker.model._inference_key_value_memory = {"cache": torch.tensor([31.0])}
+    worker.model.config.param_sync_func = "saved-param-sync"
+    parameter_before = worker.model.weight.detach().clone()
+    buffer_before = worker.model.running.detach().clone()
+    main_grad_before = worker.model.weight.main_grad.clone()
+    grad_before = worker.model.weight.grad.clone()
+    main_grad_ptr = worker.model.weight.main_grad.data_ptr()
+    grad_ptr = worker.model.weight.grad.data_ptr()
+    cpu_rng_before = torch.get_rng_state().clone()
+    cuda_rng_state = [torch.tensor([29], dtype=torch.uint8)]
+    restored_cuda_rng: list[torch.Tensor] = []
+    optimizer_state = {"state": {0: {"moment": torch.tensor([37.0])}}}
+    scheduler_state = {"steps": 41}
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        torch.cuda,
+        "get_rng_state_all",
+        lambda: [state.clone() for state in cuda_rng_state],
+    )
+    monkeypatch.setattr(
+        torch.cuda,
+        "set_rng_state_all",
+        lambda states: restored_cuda_rng.extend(state.clone() for state in states),
+    )
+
+    def restore_optimizer_state(saved) -> None:
+        optimizer_state.clear()
+        optimizer_state.update(saved)
+
+    def restore_scheduler_state(saved) -> None:
+        scheduler_state.clear()
+        scheduler_state.update(saved)
+
+    def begin_train_step(*, loss_fn, gbs=None, mbs=None) -> None:
+        del loss_fn, gbs, mbs
+        worker._train_step_state = {
+            "mb_losses": [],
+            "all_mb_metrics": [],
+            "te_cuda_graph_call_state": None,
+        }
+
+    def train_microbatch(data) -> None:
+        del data
+        torch.rand(4)
+        worker.model.train()
+        worker.model.running.add_(101)
+        worker.model.inference_params["sentinel"] = 99
+        worker.model._inference_key_value_memory["cache"].zero_()
+        worker.model.config.grad_sync_func = "mutated-grad-sync"
+        worker.model.config.no_sync_func = "mutated-no-sync"
+        worker.model.config.param_sync_func = "mutated-param-sync"
+        worker.model.router_replay.replay_backward_list.append(torch.tensor([1]))
+        worker.model.router_replay._nrl_last_graph_input_generation = 97
+        worker.model.router_replay._nrl_last_graph_input_copy_generation = 101
+        worker.model.router_replay._nrl_graph_route_counters[
+            "stale_generation_count"
+        ] = 1
+        optimizer_state["state"][0]["moment"].zero_()
+        scheduler_state["steps"] = 99
+        worker.model.weight.main_grad.copy_(torch.tensor([0.25, -0.5]))
+        worker.model.weight.grad.copy_(torch.tensor([0.75, -1.0]))
+        worker._train_step_state["mb_losses"].append(torch.tensor(1.25))
+        worker._train_step_state["all_mb_metrics"].append(
+            {"loss": torch.tensor(1.25), "policy_kl": torch.tensor(0.125)}
+        )
+        worker._r3_router_graph_parity_capture.update(
+            {
+                "output": torch.tensor([1.0, 2.0, 3.0]),
+                "output_grad": torch.tensor([0.125, 0.25, 0.5]),
+                "input": torch.tensor([4.0, 5.0]),
+                "input_grad": torch.tensor([0.5, -0.25]),
+            }
+        )
+
+    abort_calls: list[None] = []
+
+    def abort_train_step() -> None:
+        abort_calls.append(None)
+        worker._train_step_state = None
+
+    worker.begin_train_step = begin_train_step
+    worker.train_microbatch = train_microbatch
+    worker.abort_train_step = abort_train_step
+    worker.optimizer = MagicMock()
+    worker.scheduler = MagicMock()
+    worker.optimizer.state_dict.side_effect = lambda: optimizer_state
+    worker.optimizer.load_state_dict.side_effect = restore_optimizer_state
+    worker.scheduler.state_dict.side_effect = lambda: scheduler_state
+    worker.scheduler.load_state_dict.side_effect = restore_scheduler_state
+    batch = {
+        "input_ids": torch.tensor([[1, 2, 3]]),
+        "routed_experts": torch.tensor([[[0, 1], [1, 2], [2, 3]]]),
+    }
+
+    result = worker.run_r3_router_graph_parity_arm(
+        data=batch,
+        loss_fn=worker._test_loss_fn,
+        arm="eager",
+        simulated_learning_rate=0.1,
+    )
+
+    assert result["arm"] == "eager"
+    assert result["loss"] == pytest.approx(1.25)
+    assert set(result["parameter_gradients"]) == {"weight"}
+    assert result["parameter_gradients"]["weight"]["values"] == [0.25, -0.5]
+    assert result["simulated_parameter_deltas"]["weight"]["values"] == [
+        -0.025,
+        0.05,
+    ]
+    assert len(result["token_digest"]) == 64
+    assert len(result["route_digest"]) == 64
+    assert result["selected_output"]["values"] == [1.0, 2.0, 3.0]
+    assert result["selected_input_gradient"]["values"] == [0.5, -0.25]
+    assert abort_calls == [None]
+    assert torch.equal(torch.get_rng_state(), cpu_rng_before)
+    assert len(restored_cuda_rng) == 1
+    assert torch.equal(restored_cuda_rng[0], cuda_rng_state[0])
+    assert torch.equal(worker.model.weight, parameter_before)
+    assert torch.equal(worker.model.running, buffer_before)
+    assert worker.model.training is False
+    assert worker.model.inference_params == {"sentinel": 23}
+    assert torch.equal(
+        worker.model._inference_key_value_memory["cache"], torch.tensor([31.0])
+    )
+    assert worker.model.config.grad_sync_func == "saved-grad-sync"
+    assert worker.model.config.no_sync_func == "saved-no-sync"
+    assert worker.model.config.param_sync_func == "saved-param-sync"
+    assert worker.model.router_replay.replay_backward_list == []
+    assert worker.model.router_replay._nrl_last_graph_input_generation == 3
+    assert worker.model.router_replay._nrl_last_graph_input_copy_generation == 17
+    assert worker.model.router_replay._nrl_graph_route_counters == {
+        "stale_generation_count": 0
+    }
+    assert torch.equal(optimizer_state["state"][0]["moment"], torch.tensor([37.0]))
+    assert scheduler_state == {"steps": 41}
+    assert worker.model.weight.main_grad.data_ptr() == main_grad_ptr
+    assert worker.model.weight.grad.data_ptr() == grad_ptr
+    assert torch.equal(worker.model.weight.main_grad, main_grad_before)
+    assert torch.equal(worker.model.weight.grad, grad_before)
+    assert worker._train_step_state is None
+    worker.optimizer.step.assert_not_called()
+    worker.scheduler.step.assert_not_called()
+
+
+def test_r3_router_graph_parity_arm_aborts_and_restores_after_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = _make_r3_router_graph_parity_worker()
+    buffer_before = worker.model.running.clone()
+    main_grad_before = worker.model.weight.main_grad.clone()
+    cpu_rng_before = torch.get_rng_state().clone()
+
+    def begin_train_step(*, loss_fn, gbs=None, mbs=None) -> None:
+        del loss_fn, gbs, mbs
+        worker._train_step_state = {"open": True}
+
+    def train_microbatch(data) -> None:
+        del data
+        torch.rand(2)
+        worker.model.running.zero_()
+        worker.model.weight.main_grad.zero_()
+        raise RuntimeError("diagnostic forward failed")
+
+    abort_calls: list[None] = []
+
+    def abort_train_step() -> None:
+        abort_calls.append(None)
+        worker._train_step_state = None
+
+    worker.begin_train_step = begin_train_step
+    worker.train_microbatch = train_microbatch
+    worker.abort_train_step = abort_train_step
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    with pytest.raises(RuntimeError, match="diagnostic forward failed"):
+        worker.run_r3_router_graph_parity_arm(
+            data={
+                "input_ids": torch.tensor([[1]]),
+                "routed_experts": torch.tensor([[[0, 1]]]),
+            },
+            loss_fn=worker._test_loss_fn,
+            arm="eager",
+            simulated_learning_rate=0.1,
+        )
+
+    assert abort_calls == [None]
+    assert torch.equal(torch.get_rng_state(), cpu_rng_before)
+    assert torch.equal(worker.model.running, buffer_before)
+    assert torch.equal(worker.model.weight.main_grad, main_grad_before)
+    assert worker._train_step_state is None
+
+
+def test_r3_router_graph_parity_capture_and_hit_use_fresh_route_generations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = _make_r3_router_graph_parity_worker()
+    original_lifecycle = SimpleNamespace(_capacity=1)
+    manager = SimpleNamespace(
+        active_bank=None,
+        _execution_counter=SimpleNamespace(eligible_calls=43, graph_calls=47),
+    )
+
+    class OriginalBank:
+        def activate(self) -> None:
+            manager.active_bank = self
+
+    original_bank = OriginalBank()
+    manager.active_bank = original_bank
+    worker._te_cuda_graph_lifecycle = original_lifecycle
+    worker._te_cuda_graph_bank_manager = manager
+    worker._te_cuda_graph_installed_key = "original-key"
+    worker.model._nrl_graph_route_counters = {"stale_generation_count": 0}
+    observed_generations: list[int] = []
+
+    def begin_train_step(*, loss_fn, gbs=None, mbs=None) -> None:
+        del loss_fn, gbs, mbs
+        worker._train_step_state = {
+            "te_cuda_graph_call_state": SimpleNamespace(capture_count=1)
+        }
+
+    def train_microbatch(data) -> None:
+        del data
+        observed_generations.append(worker._next_router_route_generation)
+        worker._next_router_route_generation += 1
+        manager._execution_counter.eligible_calls += 1
+        manager._execution_counter.graph_calls += 1
+
+    def abort_train_step() -> None:
+        worker._train_step_state = None
+
+    worker.begin_train_step = begin_train_step
+    worker.train_microbatch = train_microbatch
+    worker.abort_train_step = abort_train_step
+    worker._collect_r3_router_graph_parity_result = MagicMock(
+        return_value={"arm": "graph"}
+    )
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    result = worker.run_r3_router_graph_parity_arm(
+        data={},
+        loss_fn=worker._test_loss_fn,
+        arm="graph",
+        simulated_learning_rate=0.1,
+    )
+
+    assert result == {"arm": "graph"}
+    assert observed_generations == [5, 6]
+    assert worker._next_router_route_generation == 5
+    assert worker.model._nrl_graph_route_counters["stale_generation_count"] == 0
+    assert worker._te_cuda_graph_lifecycle is original_lifecycle
+    assert worker._te_cuda_graph_installed_key == "original-key"
+    assert manager.active_bank is original_bank
+    assert manager._execution_counter.eligible_calls == 43
+    assert manager._execution_counter.graph_calls == 47
+
+
+def test_r3_router_graph_parity_distinguishes_input_and_output_gradients() -> None:
+    from nemo_rl.models.policy.workers.megatron_policy_worker import (
+        _R3ParityLossPostProcessor,
+    )
+
+    worker = _make_r3_router_graph_parity_worker()
+    capture: dict[str, torch.Tensor] = {}
+    handles = worker._install_r3_router_graph_parity_input_hooks(capture)
+
+    class PostProcessor:
+        def __call__(self, *args, **kwargs):
+            del args, kwargs
+            return lambda output: (output.square().sum(), {})
+
+    try:
+        hidden = torch.tensor([3.0, 5.0], requires_grad=True)
+        output = worker.model(hidden)
+        loss, _ = _R3ParityLossPostProcessor(PostProcessor(), capture)()(output)
+        loss.backward()
+    finally:
+        for handle in handles:
+            handle.remove()
+
+    assert capture["input"].data_ptr() == hidden.data_ptr()
+    assert torch.equal(capture["input_grad"], torch.tensor([24.0, 90.0]))
+    assert torch.equal(capture["output_grad"], torch.tensor([12.0, -30.0]))
+    assert not torch.equal(capture["input_grad"], capture["output_grad"])
 
 
 # ── grad_sync_func full lifecycle (integration of begin → finish/abort) ─

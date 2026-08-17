@@ -12,26 +12,139 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hashlib
 import logging
 import shutil
 import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
+import numpy as np
 import pytest
 import torch
 
 from nemo_rl.utils.logger import (
     Logger,
     MLflowLogger,
+    R3_PARITY_SIDECAR_SCHEMA,
     RayGpuMonitorLogger,
     SwanlabLogger,
     TensorboardLogger,
     WandbLogger,
     flatten_dict,
     log_container_init_timing,
+    maybe_log_r3_parity_sidecar,
     print_message_log_samples,
     should_log_nemo_gym_full_result_tables,
 )
+
+
+def test_r3_parity_sidecar_disabled_avoids_payload_conversion_and_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ConversionTrap:
+        def __array__(self):
+            raise AssertionError("disabled export converted a payload")
+
+    logger = MagicMock(base_log_dir=str(tmp_path))
+    monkeypatch.delenv("NRL_R3_PARITY_EXPORT", raising=False)
+
+    result = maybe_log_r3_parity_sidecar(
+        logger=logger,
+        json_filename="train_data_step1.jsonl",
+        token_ids=ConversionTrap(),
+        input_lengths=ConversionTrap(),
+        routed_experts=ConversionTrap(),
+    )
+
+    assert result is None
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_r3_parity_sidecar_is_safe_content_bound_and_exclusive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = MagicMock(base_log_dir=str(tmp_path))
+    json_path = tmp_path / "train_data_step3.jsonl"
+    json_path.write_text(
+        '{"idx":0,"token_ids":[11,12,0],"input_lengths":2}\n'
+        '{"idx":1,"token_ids":[21,22,23],"input_lengths":3}\n'
+    )
+    token_ids = torch.tensor([[11, 12, 0], [21, 22, 23]], dtype=torch.long)
+    input_lengths = torch.tensor([2, 3], dtype=torch.long)
+    routed_experts = torch.tensor(
+        [
+            [[[0, 1]], [[2, 3]], [[0, 1]]],
+            [[[1, 2]], [[2, 3]], [[3, 4]]],
+        ],
+        dtype=torch.int16,
+    )
+    monkeypatch.setenv("NRL_R3_PARITY_EXPORT", "1")
+
+    sidecar = maybe_log_r3_parity_sidecar(
+        logger=logger,
+        json_filename=json_path.name,
+        token_ids=token_ids,
+        input_lengths=input_lengths,
+        routed_experts=routed_experts,
+    )
+
+    assert sidecar == json_path.with_suffix(".r3-parity.npz")
+    assert sidecar is not None and sidecar.is_file() and not sidecar.is_symlink()
+    assert sidecar.stat().st_mode & 0o777 == 0o444
+    assert not list(tmp_path.glob(".*.tmp-*"))
+    with np.load(sidecar, allow_pickle=False) as payload:
+        assert payload["schema"].item() == R3_PARITY_SIDECAR_SCHEMA
+        assert payload["json_sha256"].item() == hashlib.sha256(
+            json_path.read_bytes()
+        ).hexdigest()
+        assert payload["token_ids"].tolist() == token_ids.tolist()
+        assert payload["input_lengths"].tolist() == [2, 3]
+        assert payload["routed_experts"].tolist() == routed_experts.tolist()
+        assert payload["content_sha256"].dtype.kind == "U"
+        assert len(payload["content_sha256"].item()) == 64
+        assert len(payload["token_input_sha256"].item()) == 64
+        assert len(payload["route_sha256"].item()) == 64
+        assert all(array.dtype.kind != "O" for array in payload.values())
+
+    with pytest.raises(FileExistsError):
+        maybe_log_r3_parity_sidecar(
+            logger=logger,
+            json_filename=json_path.name,
+            token_ids=token_ids,
+            input_lengths=input_lengths,
+            routed_experts=routed_experts,
+        )
+    assert hashlib.sha256(sidecar.read_bytes()).hexdigest()
+
+
+def test_r3_parity_sidecar_enabled_requires_routes_and_completed_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = MagicMock(base_log_dir=str(tmp_path))
+    monkeypatch.setenv("NRL_R3_PARITY_EXPORT", "1")
+
+    with pytest.raises(FileNotFoundError, match="completed JSONL"):
+        maybe_log_r3_parity_sidecar(
+            logger=logger,
+            json_filename="train_data_step1.jsonl",
+            token_ids=torch.tensor([[1]]),
+            input_lengths=torch.tensor([1]),
+            routed_experts=torch.tensor([[[[0, 1]]]]),
+        )
+
+    (tmp_path / "train_data_step1.jsonl").write_text('{"idx":0}\n')
+    with pytest.raises(ValueError, match="routed_experts"):
+        maybe_log_r3_parity_sidecar(
+            logger=logger,
+            json_filename="train_data_step1.jsonl",
+            token_ids=torch.tensor([[1]]),
+            input_lengths=torch.tensor([1]),
+            routed_experts=None,
+        )
 
 
 class TestFlattenDict:

@@ -84,7 +84,12 @@ from nemo_rl.models.generation.interfaces import GenerationInterface
 from nemo_rl.models.generation.megatron import MegatronGeneration
 from nemo_rl.models.policy.interfaces import ColocatablePolicyInterface
 from nemo_rl.utils.checkpoint import CheckpointManager
-from nemo_rl.utils.logger import Logger, print_message_log_samples
+from nemo_rl.utils.logger import (
+    Logger,
+    maybe_log_r3_parity_sidecar,
+    print_message_log_samples,
+    r3_parity_export_enabled,
+)
 from nemo_rl.utils.memory_tracker import MemoryTracker
 from nemo_rl.utils.nsys import maybe_gpu_profile_step
 from nemo_rl.utils.timer import TimeoutChecker, Timer
@@ -983,10 +988,18 @@ def grpo_train_sync(
                 # the NonTensorStack wire field via materialize.
                 _log_input_ids: Optional[torch.Tensor] = None
                 _log_content: Optional[np.ndarray] = None
+                _log_routed_experts: Optional[torch.Tensor] = None
                 if not _should_log_nemo_gym_responses(master_config):
                     _log_select = ["input_ids"]
                     if "content" in (meta.fields or []):
                         _log_select.append("content")
+                    if r3_parity_export_enabled():
+                        if "routed_experts" not in (meta.fields or []):
+                            raise ValueError(
+                                "R3 parity export requires routed_experts in "
+                                "the data-plane training batch"
+                            )
+                        _log_select.append("routed_experts")
                     _log_extras = policy.read_from_dataplane(
                         meta,
                         select_fields=_log_select,
@@ -994,6 +1007,7 @@ def grpo_train_sync(
                     )
                     _log_input_ids = _log_extras["input_ids"]
                     _log_content = _log_extras.get("content")
+                    _log_routed_experts = _log_extras.get("routed_experts")
 
                 # ── Step-end TQ cleanup ────────────────────────────────
                 policy.finish_step(meta)
@@ -1262,8 +1276,14 @@ def grpo_train_sync(
                 # an object-array column above (stashed before clear_samples).
                 if _log_content is not None:
                     log_data["content"] = _log_content.tolist()
-                logger.log_batched_dict_as_jsonl(
-                    log_data, f"train_data_step{total_steps + 1}.jsonl"
+                json_filename = f"train_data_step{total_steps + 1}.jsonl"
+                logger.log_batched_dict_as_jsonl(log_data, json_filename)
+                maybe_log_r3_parity_sidecar(
+                    logger=logger,
+                    json_filename=json_filename,
+                    token_ids=_log_input_ids,
+                    input_lengths=input_lengths,
+                    routed_experts=_log_routed_experts,
                 )
                 del log_data
 

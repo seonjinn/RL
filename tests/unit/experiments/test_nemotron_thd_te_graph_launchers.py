@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+import numpy as np
 import pytest
 
 
@@ -113,6 +114,540 @@ def _load_experiment_module(name: str) -> ModuleType:
     finally:
         sys.modules.pop(spec.name, None)
     return module
+
+
+def _load_r3_router_graph_parity_driver() -> ModuleType:
+    return _load_experiment_module("scripts/run_r3_router_graph_parity")
+
+
+def _r3_parity_array_digest(arrays: dict[str, np.ndarray]) -> str:
+    digest = hashlib.sha256()
+    for name in sorted(arrays):
+        array = np.ascontiguousarray(arrays[name])
+        digest.update(name.encode())
+        digest.update(b"\0")
+        digest.update(array.dtype.str.encode())
+        digest.update(b"\0")
+        digest.update(json.dumps(list(array.shape), separators=(",", ":")).encode())
+        digest.update(b"\0")
+        digest.update(array.tobytes())
+    return digest.hexdigest()
+
+
+def _write_r3_parity_sidecar(
+    frozen: Path,
+    *,
+    token_ids: np.ndarray,
+    input_lengths: np.ndarray,
+    routed_experts: np.ndarray,
+) -> Path:
+    schema = "nemo_rl_r3_frozen_batch_v1"
+    json_sha256 = hashlib.sha256(frozen.read_bytes()).hexdigest()
+    token_input_sha256 = _r3_parity_array_digest(
+        {"input_lengths": input_lengths, "token_ids": token_ids}
+    )
+    route_sha256 = _r3_parity_array_digest(
+        {"input_lengths": input_lengths, "routed_experts": routed_experts}
+    )
+    content_sha256 = hashlib.sha256(
+        (
+            f"{schema}\0{json_sha256}\0{token_input_sha256}\0{route_sha256}"
+        ).encode()
+    ).hexdigest()
+    sidecar = frozen.with_suffix(".r3-parity.npz")
+    np.savez_compressed(
+        sidecar,
+        schema=np.asarray(schema),
+        json_sha256=np.asarray(json_sha256),
+        token_input_sha256=np.asarray(token_input_sha256),
+        route_sha256=np.asarray(route_sha256),
+        content_sha256=np.asarray(content_sha256),
+        token_ids=token_ids,
+        input_lengths=input_lengths,
+        routed_experts=routed_experts,
+    )
+    return sidecar
+
+
+def test_r3_router_graph_parity_driver_loads_exact_json_and_safe_sidecar(
+    tmp_path: Path,
+) -> None:
+    driver = _load_r3_router_graph_parity_driver()
+    frozen = tmp_path / "train_data_step17.jsonl"
+    rows = (
+        {
+            "idx": 0,
+            "token_ids": [11, 12, 0],
+            "input_lengths": 2,
+            "token_loss_mask": [0.0, 1.0, 0.0],
+            "sample_loss_mask": 1.0,
+            "advantages": [0.0, 0.5, 0.0],
+            "generation_logprobs": [0.0, -0.25, 0.0],
+            "prev_logprobs": [0.0, -0.5, 0.0],
+            "rewards": 1.0,
+        },
+        {
+            "idx": 1,
+            "token_ids": [21, 22, 23],
+            "input_lengths": 3,
+            "token_loss_mask": [0.0, 1.0, 1.0],
+            "sample_loss_mask": 1.0,
+            "advantages": [0.0, -0.5, 0.25],
+            "generation_logprobs": [0.0, -0.75, -1.0],
+            "prev_logprobs": [0.0, -0.5, -1.25],
+            "rewards": -1.0,
+        },
+    )
+    frozen.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    sidecar = _write_r3_parity_sidecar(
+        frozen,
+        token_ids=np.asarray([[11, 12, 0], [21, 22, 23]], dtype=np.int64),
+        input_lengths=np.asarray([2, 3], dtype=np.int64),
+        routed_experts=np.asarray(
+            [
+                [[[0, 1]], [[2, 3]], [[0, 1]]],
+                [[[1, 2]], [[2, 3]], [[3, 4]]],
+            ],
+            dtype=np.int16,
+        ),
+    )
+
+    loaded = driver.load_frozen_batch(frozen)
+
+    assert loaded.source_path == frozen.resolve()
+    assert loaded.sidecar_path == sidecar.resolve()
+    assert loaded.source_sha256 == hashlib.sha256(frozen.read_bytes()).hexdigest()
+    assert loaded.row_count == 2
+    assert loaded.batch["input_ids"].tolist() == [[11, 12, 0], [21, 22, 23]]
+    assert loaded.batch["routed_experts"].tolist() == [
+        [[[0, 1]], [[2, 3]], [[0, 1]]],
+        [[[1, 2]], [[2, 3]], [[3, 4]]],
+    ]
+    assert loaded.batch["sample_mask"].tolist() == [1.0, 1.0]
+    assert loaded.batch["rewards"].tolist() == [1.0, -1.0]
+
+
+def test_r3_router_graph_parity_driver_rejects_missing_or_unbound_sidecar(
+    tmp_path: Path,
+) -> None:
+    driver = _load_r3_router_graph_parity_driver()
+    frozen = tmp_path / "train_data_step1.jsonl"
+    frozen.write_text(
+        json.dumps(
+            {
+                "idx": 0,
+                "token_ids": [1, 2],
+                "input_lengths": 2,
+                "token_loss_mask": [0.0, 1.0],
+                "sample_loss_mask": 1.0,
+                "advantages": [0.0, 1.0],
+                "generation_logprobs": [0.0, -1.0],
+                "prev_logprobs": [0.0, -1.0],
+                "rewards": 1.0,
+            }
+        )
+        + "\n"
+    )
+
+    with pytest.raises(FileNotFoundError, match="sidecar"):
+        driver.load_frozen_batch(frozen)
+
+    sidecar = _write_r3_parity_sidecar(
+        frozen,
+        token_ids=np.asarray([[1, 2]], dtype=np.int64),
+        input_lengths=np.asarray([2], dtype=np.int64),
+        routed_experts=np.asarray([[[[0, 1]], [[1, 2]]]], dtype=np.int16),
+    )
+    frozen.write_text(frozen.read_text().replace("-1.0", "-2.0"))
+    with pytest.raises(ValueError, match="JSON SHA256"):
+        driver.load_frozen_batch(frozen)
+
+    frozen.unlink()
+    sidecar.unlink()
+
+
+def test_r3_router_graph_parity_driver_requires_typed_runtime_attestation(
+    tmp_path: Path,
+) -> None:
+    driver = _load_r3_router_graph_parity_driver()
+    attestation = tmp_path / "runtime.json"
+    payload = {
+        "runtime_feature_set": "dropless_hybridep_nano16_r3_router_graph_v1",
+        "mcore_capabilities": {
+            "router_replay_cuda_graph_input": "r3_router_cuda_graph_input_v1"
+        },
+    }
+    attestation.write_text(json.dumps(payload))
+
+    loaded, digest = driver.load_runtime_attestation(attestation)
+
+    assert loaded == payload
+    assert digest == hashlib.sha256(attestation.read_bytes()).hexdigest()
+    attestation.write_text(json.dumps({"runtime_feature_set": "unbound"}))
+    with pytest.raises(ValueError, match="runtime feature"):
+        driver.load_runtime_attestation(attestation)
+
+
+def _r3_router_graph_parity_rank_result(rank: int, arm: str) -> dict[str, object]:
+    def tensor_evidence(*, sha256: str, values: list[float]) -> dict[str, object]:
+        return {
+            "sha256": sha256,
+            "shape": [2],
+            "dtype": "torch.float32",
+            "numel": 2,
+            "l2_norm": 2.2360679775,
+            "max_abs": 2.0,
+            "mean": 1.5,
+            "values": values,
+        }
+
+    return {
+        "rank": rank,
+        "arm": arm,
+        "token_digest": "c" * 64,
+        "route_digest": "d" * 64,
+        "mask_digest": "e" * 64,
+        "reward_digest": "f" * 64,
+        "loss": 1.25,
+        "selected_output": tensor_evidence(sha256="a" * 64, values=[1.0, 2.0]),
+        "selected_output_gradient": tensor_evidence(
+            sha256="a" * 64, values=[1.0, 2.0]
+        ),
+        "selected_input_gradient": tensor_evidence(
+            sha256="a" * 64, values=[1.0, 2.0]
+        ),
+        "parameter_gradients": {
+            "decoder.weight": tensor_evidence(
+                sha256="a" * 64, values=[1.0, 2.0]
+            )
+        },
+        "simulated_parameter_deltas": {
+            "decoder.weight": tensor_evidence(
+                sha256="b" * 64, values=[-0.1, -0.2]
+            )
+        },
+        "metrics": {
+            "token_mult_prob_error": 1.0,
+            "policy_kl": 0.125,
+            "generation_kl": 0.25,
+        },
+        "graph_metrics": {
+            "requested_graph_calls": 1 if arm == "graph" else 0,
+            "graph_calls": 1 if arm == "graph" else 0,
+            "cache_hits": 1 if arm == "graph" else 0,
+            "captures": 1 if arm == "graph" else 0,
+            "recaptures": 0,
+            "fallback_count": 0,
+            "unsafe_route_events": 0,
+        },
+    }
+
+
+def test_r3_router_graph_parity_driver_checks_every_rank_and_parameter() -> None:
+    driver = _load_r3_router_graph_parity_driver()
+    eager = [_r3_router_graph_parity_rank_result(rank, "eager") for rank in range(16)]
+    graph = [_r3_router_graph_parity_rank_result(rank, "graph") for rank in range(16)]
+
+    comparison = driver.validate_parity(eager, graph, rtol=0.05, atol=0.05)
+
+    assert comparison["status"] == "passed"
+    assert comparison["world_size"] == 16
+    assert comparison["compared_parameter_gradients"] == 16
+    graph[7]["route_digest"] = "0" * 64
+    with pytest.raises(ValueError, match="route_digest.*rank 7"):
+        driver.validate_parity(eager, graph, rtol=0.05, atol=0.05)
+    graph[7]["route_digest"] = "d" * 64
+    graph[9]["parameter_gradients"]["decoder.weight"]["values"][1] = 4.0
+    with pytest.raises(ValueError, match="decoder.weight.*rank 9"):
+        driver.validate_parity(eager, graph, rtol=0.05, atol=0.05)
+
+
+def test_r3_router_graph_parity_driver_rejects_incomplete_rank_evidence() -> None:
+    driver = _load_r3_router_graph_parity_driver()
+    eager = [_r3_router_graph_parity_rank_result(rank, "eager") for rank in range(16)]
+    graph = [_r3_router_graph_parity_rank_result(rank, "graph") for rank in range(16)]
+
+    eager[0].pop("selected_input_gradient")
+    graph[0].pop("selected_input_gradient")
+    with pytest.raises(ValueError, match="selected_input_gradient.*rank 0"):
+        driver.validate_parity(eager, graph)
+
+    eager[0]["selected_input_gradient"] = _r3_router_graph_parity_rank_result(
+        0, "eager"
+    )["selected_input_gradient"]
+    graph[0]["selected_input_gradient"] = _r3_router_graph_parity_rank_result(
+        0, "graph"
+    )["selected_input_gradient"]
+    eager.append(eager[0])
+    graph.append(graph[0])
+    with pytest.raises(ValueError, match="exactly one.*all 16 ranks"):
+        driver.validate_parity(eager, graph)
+
+
+def test_r3_router_graph_parity_driver_writes_one_immutable_artifact(
+    tmp_path: Path,
+) -> None:
+    driver = _load_r3_router_graph_parity_driver()
+    artifact = tmp_path / "parity.json"
+
+    driver.write_immutable_json(artifact, {"status": "passed", "world_size": 16})
+
+    assert json.loads(artifact.read_text()) == {
+        "status": "passed",
+        "world_size": 16,
+    }
+    assert artifact.stat().st_mode & 0o777 == 0o444
+    with pytest.raises(FileExistsError, match="already exists"):
+        driver.write_immutable_json(artifact, {"status": "replaced"})
+
+
+def _r3_router_graph_parity_launcher_fixture(
+    tmp_path: Path,
+) -> tuple[Path, dict[str, str]]:
+    runtime = tmp_path / "runtime.json"
+    runtime.write_text(
+        json.dumps(
+            {
+                "runtime_feature_set": (
+                    "dropless_hybridep_nano16_r3_router_graph_v1"
+                ),
+                "mcore_capabilities": {
+                    "router_replay_cuda_graph_input": (
+                        "r3_router_cuda_graph_input_v1"
+                    )
+                },
+            }
+        )
+    )
+    container = tmp_path / "runtime.sqsh"
+    container.write_bytes(b"immutable-runtime")
+    runtime_stage = tmp_path / "staged-runtimes" / ("a" * 64)
+    runtime_python = runtime_stage / "environment" / "bin" / "python"
+    runtime_python.parent.mkdir(parents=True)
+    runtime_python.write_text("#!/bin/sh\nexit 0\n")
+    runtime_python.chmod(0o755)
+    vllm_python = runtime_stage / "vllm-environment" / "bin" / "python"
+    vllm_python.parent.mkdir(parents=True)
+    vllm_python.write_text("#!/bin/sh\nexit 0\n")
+    vllm_python.chmod(0o755)
+    uv = runtime_stage / "uv" / "uv"
+    uv.parent.mkdir(parents=True)
+    uv.write_text("#!/bin/sh\nexit 0\n")
+    uv.chmod(0o755)
+    hf_home = tmp_path / "hf"
+    hf_home.mkdir()
+    fake_bin = tmp_path / "profile-bin"
+    fake_bin.mkdir()
+    verifier_calls = tmp_path / "runtime-verifier-calls.txt"
+    fake_python = fake_bin / "python3"
+    fake_python.write_text(
+        "#!/bin/bash\n"
+        'if [[ "$1" == *verify_runtime_attestation.py ]]; then\n'
+        '  printf "%s\\n" "$*" >>"${FAKE_VERIFIER_CALLS:?}"\n'
+        "  exit 0\n"
+        "fi\n"
+        f'exec {shlex.quote(sys.executable)} "$@"\n'
+    )
+    fake_python.chmod(0o755)
+    frozen = tmp_path / "train_data_step17.jsonl"
+    frozen.write_text('{"fixture":"validated by driver"}\n')
+    artifacts = tmp_path / "artifacts"
+    profile = tmp_path / "oci-hsg.env"
+    profile.write_text(
+        "\n".join(
+            (
+                "PROFILE_ID=oci-hsg",
+                "ACCOUNT=unit-account",
+                "PARTITION=batch",
+                f"CONTAINER={container}",
+                f"CONTAINER_SHA256={hashlib.sha256(container.read_bytes()).hexdigest()}",
+                f"MOUNTS={tmp_path}:{tmp_path}",
+                "SBATCH_GPUS_PER_NODE=4",
+                "SBATCH_GRES=gpu:4",
+                "SBATCH_SEGMENT_SIZE=",
+                "TIME_LIMIT=00:30:00",
+                f"RUNTIME_ATTESTATION={runtime}",
+                "RUNTIME_PREFLIGHT_JOB_ID=123",
+                f"UV_EXECUTABLE={uv}",
+                f"EXPECTED_TE_SHA={'e' * 40}",
+                f"EXPECTED_TE_VERSION_BASE_SHA={'f' * 40}",
+                f"EXPECTED_NEMORL_SHA={_git(REPO_ROOT, 'rev-parse', 'HEAD')}",
+                f"EXPECTED_BRIDGE_SHA={'b' * 40}",
+                f"EXPECTED_MCORE_SHA={'c' * 40}",
+                f"RUN_LOG_ROOT={tmp_path / 'logs'}",
+                "",
+            )
+        )
+    )
+    environment = {
+        "PROJECT_ROOT": str(REPO_ROOT),
+        "PROFILE_FILE": str(profile),
+        "FROZEN_BATCH": str(frozen),
+        "ARTIFACT_DIR": str(artifacts),
+        "CONFIG": str(
+            REPO_ROOT
+            / "examples/configs/recipes/llm/"
+            "grpo-nanov3-30BA3B-2n8g-megatron-pack-cp.yaml"
+        ),
+        "HF_HOME": str(hf_home),
+        "RUNTIME_PYTHON": str(runtime_python),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_VERIFIER_CALLS": str(verifier_calls),
+    }
+    return profile, environment
+
+
+def test_r3_router_graph_parity_launcher_test_modes_render_identical_payload(
+    tmp_path: Path,
+) -> None:
+    _, environment = _r3_router_graph_parity_launcher_fixture(tmp_path)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    invocation = tmp_path / "sbatch.txt"
+    sbatch = fake_bin / "sbatch"
+    sbatch.write_text(
+        "#!/bin/bash\n"
+        'printf "ENV_SBATCH_GPUS=%s\\n" "${SBATCH_GPUS-unset}" >"${FAKE_INVOCATION:?}"\n'
+        'printf "ENV_NRL_ROUTER_REPLAY_VALIDATE=%s\\n" "${NRL_ROUTER_REPLAY_VALIDATE-unset}" >>"${FAKE_INVOCATION:?}"\n'
+        'printf "%s\\n" "$@" >>"${FAKE_INVOCATION:?}"\n'
+        "printf 'sbatch: Job 123 would be submitted\\n'\n"
+    )
+    sbatch.chmod(0o755)
+    ambient = {
+        "SBATCH_GPUS": "99",
+        "NRL_ROUTER_REPLAY_VALIDATE": "0",
+        "NRL_R3_PARITY_ARM": "ambient-invalid",
+    }
+
+    test_only = _run_script(
+        "diagnostics/submit_r3_router_graph_parity.sh",
+        **environment,
+        **ambient,
+        TEST_ONLY="1",
+        SBATCH_TEST_ONLY="0",
+    )
+    scheduler_environment = {
+        **environment,
+        "PATH": f"{fake_bin}:{environment['PATH']}",
+        "FAKE_INVOCATION": str(invocation),
+    }
+    scheduler_only = _run_script(
+        "diagnostics/submit_r3_router_graph_parity.sh",
+        **scheduler_environment,
+        **ambient,
+        TEST_ONLY="0",
+        SBATCH_TEST_ONLY="1",
+    )
+
+    assert test_only.returncode == 0, test_only.stderr
+    assert scheduler_only.returncode == 0, scheduler_only.stderr
+    test_payload = next(
+        line for line in test_only.stdout.splitlines() if line.startswith("PAYLOAD: ")
+    )
+    scheduler_payload = next(
+        line
+        for line in scheduler_only.stdout.splitlines()
+        if line.startswith("PAYLOAD: ")
+    )
+    assert test_payload == scheduler_payload
+    payload = shlex.split(test_payload.removeprefix("PAYLOAD: "))
+    assert "--nodes=4" in payload
+    assert "--gres=gpu:4" in payload
+    assert "--export=NONE" in payload
+    assert not any(argument.startswith("--dependency") for argument in payload)
+    rendered = " ".join(payload)
+    for exact in (
+        "dropless_hybridep_nano16_r3_router_graph_v1",
+        "r3_router_cuda_graph_input_v1",
+        "NRL_ROUTER_REPLAY_VALIDATE=1",
+        "++policy.router_replay.enabled=true",
+        "++policy.generation.vllm_kwargs.moe_backend=triton",
+        "policy.precision=bfloat16",
+        "policy.megatron_cfg.moe_token_dispatcher_type=flex",
+        "++policy.megatron_cfg.moe_flex_dispatcher_backend=hybridep",
+        "++policy.megatron_cfg.thd_max_packed_sequences=16",
+        "++policy.megatron_cfg.cuda_graph_modules=[moe_router]",
+        "cluster.num_nodes=4",
+        "cluster.gpus_per_node=4",
+    ):
+        assert exact in rendered
+    assert "TEST_ONLY: no submission performed" in test_only.stdout
+    invocation_lines = invocation.read_text().splitlines()
+    assert "ENV_SBATCH_GPUS=unset" in invocation_lines
+    assert "ENV_NRL_ROUTER_REPLAY_VALIDATE=unset" in invocation_lines
+    assert "--test-only" in invocation_lines
+    assert not Path(environment["ARTIFACT_DIR"]).exists()
+    verifier_calls = Path(environment["FAKE_VERIFIER_CALLS"]).read_text().splitlines()
+    assert len(verifier_calls) == 2
+    assert all("verify_runtime_attestation.py" in call for call in verifier_calls)
+
+
+def test_r3_router_graph_parity_launcher_delegates_to_multinode_ray_bootstrap() -> None:
+    source = (
+        EXPERIMENT_DIR / "diagnostics/submit_r3_router_graph_parity.sh"
+    ).read_text()
+
+    assert "scripts/run_nemorl_scope.sub" in source
+    assert "ray.sub" in (
+        EXPERIMENT_DIR / "scripts/run_nemorl_scope.sub"
+    ).read_text()
+    assert "--ntasks=1" not in source
+    assert "srun" not in source
+    assert "RUNTIME_PYTHON=${runtime_stage_root}/environment/bin/python" not in source
+    assert "canonical_runtime_python=${runtime_stage_root}/environment/bin/python" in source
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("source", "source SHA mismatch"),
+        ("profile", "exactly 4 GPUs per node"),
+        ("attestation", "runtime feature"),
+    ),
+)
+def test_r3_router_graph_parity_launcher_fails_closed_before_payload(
+    tmp_path: Path,
+    mutation: str,
+    message: str,
+) -> None:
+    profile, environment = _r3_router_graph_parity_launcher_fixture(tmp_path)
+    if mutation == "source":
+        profile.write_text(
+            profile.read_text().replace(
+                f"EXPECTED_NEMORL_SHA={_git(REPO_ROOT, 'rev-parse', 'HEAD')}",
+                f"EXPECTED_NEMORL_SHA={'0' * 40}",
+            )
+        )
+    elif mutation == "profile":
+        profile.write_text(
+            profile.read_text().replace(
+                "SBATCH_GPUS_PER_NODE=4", "SBATCH_GPUS_PER_NODE=8"
+            )
+        )
+    else:
+        Path(profile.parent / "runtime.json").write_text(
+            json.dumps(
+                {
+                    "runtime_feature_set": "dropless_hybridep_nano16",
+                    "mcore_capabilities": {
+                        "router_replay_cuda_graph_input": (
+                            "r3_router_cuda_graph_input_v1"
+                        )
+                    },
+                }
+            )
+        )
+
+    result = _run_script(
+        "diagnostics/submit_r3_router_graph_parity.sh",
+        **environment,
+        TEST_ONLY="1",
+    )
+
+    assert result.returncode == 2
+    assert message in result.stderr
+    assert "PAYLOAD:" not in result.stdout
+    assert "SBATCH:" not in result.stdout
 
 
 def test_r3_router_graph_mcore_row_renders_typed_distributed_commands() -> None:

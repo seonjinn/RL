@@ -221,6 +221,9 @@ def mock_grpo_components():
                         "role": "user",
                         "content": "test",
                         "token_ids": torch.tensor([1, 2, 3]),
+                        "routed_experts": torch.tensor(
+                            [[[0, 1]], [[1, 2]], [[2, 3]]], dtype=torch.int16
+                        ),
                     },
                 ]
             ],
@@ -1173,7 +1176,7 @@ def mock_sync_grpo_infrastructure(policy):
         }
     )
     meta = MagicMock()
-    meta.fields = ["input_ids"]
+    meta.fields = ["input_ids", "routed_experts"]
     rollout_metrics = {
         "mean_gen_tokens_per_sample": 10.0,
         "max_gen_tokens": 20,
@@ -1226,6 +1229,9 @@ def mock_sync_grpo_infrastructure(policy):
         "prev_logprobs": torch.zeros(1, 4),
         "reference_policy_logprobs": torch.zeros(1, 4),
         "input_ids": torch.ones(1, 4, dtype=torch.long),
+        "routed_experts": torch.tensor(
+            [[[[0, 1]], [[1, 2]], [[2, 3]], [[0, 1]]]], dtype=torch.int16
+        ),
     }
     policy.read_from_dataplane.side_effect = lambda meta, select_fields, **kw: (
         BatchedDataDict({k: dp_bank[k].clone() for k in select_fields})
@@ -2829,6 +2835,45 @@ def test_grpo_trainers_omit_cuda_graph_namespace_when_metrics_are_absent(
     metrics = _logged_train_metrics_with_key(mock_grpo_components["logger"], "loss")
     assert "cuda_graph_metrics" not in metrics
     assert not any(key.startswith("cuda_graph/") for key in metrics)
+
+
+@pytest.mark.parametrize("train_func", [grpo_train, async_grpo_train, grpo_train_sync])
+def test_grpo_trainers_export_r3_parity_sidecar_only_after_json_logging(
+    mock_grpo_components,
+    train_func,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    master_config = mock_grpo_components["master_config"]
+    master_config.policy["router_replay"] = {"enabled": True}
+    monkeypatch.setenv("NRL_R3_PARITY_EXPORT", "1")
+    events: list[tuple[str, str]] = []
+    logger = mock_grpo_components["logger"]
+
+    def log_json(data, filename) -> None:
+        del data
+        events.append(("json", filename))
+
+    logger.log_batched_dict_as_jsonl.side_effect = log_json
+    target = "nemo_rl.algorithms.grpo.maybe_log_r3_parity_sidecar"
+    if train_func is grpo_train_sync:
+        target = "nemo_rl.algorithms.grpo_sync.maybe_log_r3_parity_sidecar"
+
+    def export_sidecar(**kwargs) -> None:
+        assert kwargs["logger"] is logger
+        assert kwargs["json_filename"] == "train_data_step1.jsonl"
+        assert isinstance(kwargs["token_ids"], torch.Tensor)
+        assert kwargs["input_lengths"].tolist() == [4]
+        assert isinstance(kwargs["routed_experts"], torch.Tensor)
+        assert kwargs["routed_experts"].shape[-2:] == (1, 2)
+        events.append(("sidecar", kwargs["json_filename"]))
+
+    with patch(target, side_effect=export_sidecar):
+        _run_single_cuda_graph_metrics_step(mock_grpo_components, train_func)
+
+    assert events[-2:] == [
+        ("json", "train_data_step1.jsonl"),
+        ("sidecar", "train_data_step1.jsonl"),
+    ]
 
 
 @pytest.mark.parametrize("train_func", [grpo_train, async_grpo_train])

@@ -14,14 +14,18 @@
 
 
 import glob
+import hashlib
 import json
 import logging
 import os
 import re
+import secrets
+import stat
 import subprocess
 import threading
 import time
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, Callable, Mapping, NotRequired, Optional, TypedDict
 
 import mlflow
@@ -45,6 +49,136 @@ from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 
 # Flag to track if rich logging has been configured
 _rich_logging_configured = False
+
+R3_PARITY_SIDECAR_SCHEMA = "nemo_rl_r3_frozen_batch_v1"
+_R3_PARITY_EXPORT_ENV = "NRL_R3_PARITY_EXPORT"
+
+
+def r3_parity_export_enabled() -> bool:
+    """Return whether the one-shot frozen R3 parity sidecar is requested."""
+    value = os.environ.get(_R3_PARITY_EXPORT_ENV, "0")
+    if value not in {"0", "1"}:
+        raise ValueError(f"{_R3_PARITY_EXPORT_ENV} must be exactly 0 or 1")
+    return value == "1"
+
+
+def _r3_parity_array_digest(arrays: Mapping[str, np.ndarray]) -> str:
+    digest = hashlib.sha256()
+    for name in sorted(arrays):
+        array = np.ascontiguousarray(arrays[name])
+        digest.update(name.encode())
+        digest.update(b"\0")
+        digest.update(array.dtype.str.encode())
+        digest.update(b"\0")
+        digest.update(json.dumps(list(array.shape), separators=(",", ":")).encode())
+        digest.update(b"\0")
+        digest.update(array.tobytes())
+    return digest.hexdigest()
+
+
+def _r3_parity_numpy(value: Any, *, name: str) -> np.ndarray:
+    if isinstance(value, torch.Tensor):
+        value = value.detach().cpu().contiguous().numpy()
+    array = np.asarray(value)
+    if array.dtype.kind == "O":
+        raise TypeError(f"{name} must not have object dtype")
+    return np.ascontiguousarray(array)
+
+
+def maybe_log_r3_parity_sidecar(
+    *,
+    logger: Any,
+    json_filename: str,
+    token_ids: Any,
+    input_lengths: Any,
+    routed_experts: Any,
+) -> Optional[Path]:
+    """Write a safe, immutable route sidecar for an already-completed JSONL.
+
+    The environment check intentionally precedes every payload access so the
+    ordinary training path performs no tensor conversion or filesystem work.
+    """
+    if not r3_parity_export_enabled():
+        return None
+
+    filename = Path(json_filename)
+    if (
+        filename.name != json_filename
+        or re.fullmatch(r"train_data_step[0-9]+\.jsonl", filename.name) is None
+    ):
+        raise ValueError("R3 parity export requires an exact train_data_step*.jsonl")
+
+    json_path = Path(logger.base_log_dir) / filename
+    try:
+        json_stat = json_path.lstat()
+    except FileNotFoundError as error:
+        raise FileNotFoundError(
+            f"R3 parity export requires completed JSONL: {json_path}"
+        ) from error
+    if not stat.S_ISREG(json_stat.st_mode) or json_path.is_symlink():
+        raise ValueError(f"completed JSONL must be a regular non-symlink: {json_path}")
+    if routed_experts is None:
+        raise ValueError("routed_experts is required for R3 parity export")
+
+    tokens = _r3_parity_numpy(token_ids, name="token_ids")
+    lengths = _r3_parity_numpy(input_lengths, name="input_lengths")
+    routes = _r3_parity_numpy(routed_experts, name="routed_experts")
+    if tokens.ndim != 2 or tokens.dtype.kind not in "iu":
+        raise ValueError("token_ids must be a rank-2 integer array")
+    if lengths.ndim != 1 or lengths.dtype.kind not in "iu":
+        raise ValueError("input_lengths must be a rank-1 integer array")
+    if routes.ndim != 4 or routes.dtype.kind not in "iu":
+        raise ValueError("routed_experts must be a rank-4 integer array")
+    if lengths.shape[0] != tokens.shape[0] or routes.shape[:2] != tokens.shape:
+        raise ValueError("token_ids, input_lengths, and routed_experts shapes disagree")
+    if np.any(lengths < 1) or np.any(lengths > tokens.shape[1]):
+        raise ValueError("input_lengths must identify valid token_ids lengths")
+
+    json_sha256 = hashlib.sha256(json_path.read_bytes()).hexdigest()
+    token_input_sha256 = _r3_parity_array_digest(
+        {"input_lengths": lengths, "token_ids": tokens}
+    )
+    route_sha256 = _r3_parity_array_digest(
+        {"input_lengths": lengths, "routed_experts": routes}
+    )
+    content_sha256 = hashlib.sha256(
+        (
+            f"{R3_PARITY_SIDECAR_SCHEMA}\0{json_sha256}\0"
+            f"{token_input_sha256}\0{route_sha256}"
+        ).encode()
+    ).hexdigest()
+
+    sidecar_path = json_path.with_suffix(".r3-parity.npz")
+    temp_path = json_path.parent / f".{sidecar_path.name}.tmp-{secrets.token_hex(8)}"
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(temp_path, flags, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as output:
+            np.savez_compressed(
+                output,
+                schema=np.asarray(R3_PARITY_SIDECAR_SCHEMA),
+                json_sha256=np.asarray(json_sha256),
+                token_input_sha256=np.asarray(token_input_sha256),
+                route_sha256=np.asarray(route_sha256),
+                content_sha256=np.asarray(content_sha256),
+                token_ids=tokens,
+                input_lengths=lengths,
+                routed_experts=routes,
+            )
+            output.flush()
+            os.fsync(output.fileno())
+            os.fchmod(output.fileno(), 0o444)
+        os.link(temp_path, sidecar_path)
+        directory_fd = os.open(json_path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temp_path.unlink(missing_ok=True)
+    print(f"Saved immutable R3 parity sidecar to {sidecar_path}")
+    return sidecar_path
 
 
 class WandbConfig(TypedDict):

@@ -126,6 +126,7 @@ from nemo_rl.utils.checkpoint import CheckpointingConfig, CheckpointManager
 from nemo_rl.utils.logger import (
     Logger,
     LoggerConfig,
+    maybe_log_r3_parity_sidecar,
     print_message_log_samples,
     should_log_nemo_gym_full_result_tables,
 )
@@ -3676,8 +3677,14 @@ def grpo_train(
                 ].tolist()
                 log_data["prev_logprobs"] = train_data["prev_logprobs"].tolist()
 
-                logger.log_batched_dict_as_jsonl(
-                    log_data, f"train_data_step{total_steps + 1}.jsonl"
+                json_filename = f"train_data_step{total_steps + 1}.jsonl"
+                logger.log_batched_dict_as_jsonl(log_data, json_filename)
+                maybe_log_r3_parity_sidecar(
+                    logger=logger,
+                    json_filename=json_filename,
+                    token_ids=train_data["input_ids"],
+                    input_lengths=input_lengths,
+                    routed_experts=train_data.get("routed_experts"),
                 )
                 del log_data
             del flat_messages
@@ -5237,8 +5244,14 @@ def async_grpo_train(
                     "generation_logprobs"
                 ].tolist()
                 log_data["prev_logprobs"] = train_data["prev_logprobs"].tolist()
-                logger.log_batched_dict_as_jsonl(
-                    log_data, f"train_data_step{step + 1}.jsonl"
+                json_filename = f"train_data_step{step + 1}.jsonl"
+                logger.log_batched_dict_as_jsonl(log_data, json_filename)
+                maybe_log_r3_parity_sidecar(
+                    logger=logger,
+                    json_filename=json_filename,
+                    token_ids=train_data["input_ids"],
+                    input_lengths=input_lengths,
+                    routed_experts=train_data.get("routed_experts"),
                 )
                 del log_data
             del train_data
