@@ -77,7 +77,7 @@ case "${RUNTIME_FEATURE_SET}" in
     expected_runtime_exclusions=causal-conv1d,deep-ep,fast-hadamard-transform,mamba-ssm
     actor_runtime_layout=mcore-only-v1
     ;;
-  dropless_hybridep_nano16|dropless_hybridep_qwen235_64)
+  dropless_hybridep_nano16|dropless_hybridep_nano16_r3_router_graph_v1|dropless_hybridep_qwen235_64)
     expected_runtime_exclusions=fast-hadamard-transform
     actor_runtime_layout=split-mcore-vllm-v1
     ;;
@@ -1031,6 +1031,8 @@ fi
   --expected-environment-root "${environment_root}" \
   --expected-vllm-environment-root "${runtime_stage_root}/vllm-environment" \
   --expected-project-root "${project_root}" \
+  --expected-mcore-python "${runtime_python}" \
+  --expected-mcore-source-root "${mcore_root}" \
   --expected-python-version "${UV_PYTHON}" \
   --expected-python-install-dir "${UV_PYTHON_INSTALL_DIR}" \
   --expected-uv-version "${PINNED_UV_VERSION}" \

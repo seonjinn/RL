@@ -7,8 +7,10 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -29,6 +31,8 @@ DEEP_EP_COMMIT = "f" * 40
 CONTAINER_SHA256 = "e" * 64
 PYTHON_VERSION = "3.13.13"
 UV_VERSION = "0.11.18"
+R3_ROUTER_GRAPH_FEATURE_SET = "dropless_hybridep_nano16_r3_router_graph_v1"
+R3_ROUTER_GRAPH_CAPABILITY = "r3_router_cuda_graph_input_v1"
 TE_EVAL_NODES = [
     {
         "node": (
@@ -201,6 +205,91 @@ def _add_vllm_actor_runtime(payload: dict, uv_executable: Path) -> None:
             },
         }
     }
+
+
+def _add_r3_router_graph_runtime(
+    payload: dict[str, Any], uv_executable: Path
+) -> None:
+    stage_root = uv_executable.parent.parent
+    project_root = stage_root / "source"
+    mcore_source_root = (
+        project_root
+        / "3rdparty"
+        / "Megatron-Bridge-workspace"
+        / "Megatron-Bridge"
+        / "3rdparty"
+        / "Megatron-LM"
+    )
+    module_path = (
+        mcore_source_root
+        / "megatron"
+        / "core"
+        / "transformer"
+        / "moe"
+        / "router_replay.py"
+    )
+    module_path.parent.mkdir(parents=True, exist_ok=True)
+    module_path.write_text("# staged MCore fixture\n")
+    mcore_python = stage_root / "environment" / "bin" / "python"
+    mcore_python.parent.mkdir(parents=True, exist_ok=True)
+    mcore_python.write_text("#!/bin/sh\nexit 0\n")
+    mcore_python.chmod(0o755)
+    payload.update(
+        {
+            "runtime_feature_set": R3_ROUTER_GRAPH_FEATURE_SET,
+            "excluded_packages": ["fast-hadamard-transform"],
+            "torch_cuda_arch_list": "10.0a",
+            "nvte_cuda_archs": "100a",
+            "hybridep_buffer_available": True,
+            "deep_ep_vcs_commit": DEEP_EP_COMMIT,
+            "expected_project_root": str(project_root),
+            "python_executable": str(mcore_python),
+            "runtime_prefix": str(stage_root / "environment"),
+            "mcore_capabilities": {
+                "router_replay_cuda_graph_input": R3_ROUTER_GRAPH_CAPABILITY
+            },
+            "mcore_capability_probe": {
+                "schema_version": 1,
+                "python_executable": str(mcore_python),
+                "runtime_prefix": str(stage_root / "environment"),
+                "module_path": str(module_path),
+                "source_root": str(mcore_source_root),
+                "source_commit": MCORE_COMMIT,
+            },
+        }
+    )
+    payload["packages"]["deep_ep"] = {"version": "1.2.1"}
+    _add_vllm_actor_runtime(payload, uv_executable)
+
+
+def _validate_r3_router_graph_fixture(
+    module: ModuleType,
+    *,
+    attestation: Path,
+    container: Path,
+    lock: Path,
+    python_install_dir: Path,
+    uv_executable: Path,
+) -> dict[str, object]:
+    return module.validate_attestation(
+        attestation=attestation,
+        container=container,
+        expected_container_sha256=CONTAINER_SHA256,
+        nemo_rl_commit=NEMORL_COMMIT,
+        bridge_commit=BRIDGE_COMMIT,
+        mcore_commit=MCORE_COMMIT,
+        uv_lock=lock,
+        expected_te_commit=TE_COMMIT,
+        expected_device_count=4,
+        expected_python_version=PYTHON_VERSION,
+        expected_python_install_dir=python_install_dir,
+        expected_uv_version=UV_VERSION,
+        expected_uv_executable=uv_executable,
+        expected_runtime_feature_set=R3_ROUTER_GRAPH_FEATURE_SET,
+        expected_excluded_packages=("fast-hadamard-transform",),
+        expected_torch_cuda_arch_list="10.0a",
+        expected_nvte_cuda_archs="100a",
+    )
 
 
 def test_validator_accepts_exact_preflight_artifact_without_rehashing_container(
@@ -699,6 +788,121 @@ def test_validator_binds_dropless_hybridep_runtime_contract(
         )
 
 
+def test_validator_accepts_exact_r3_router_graph_capability_evidence(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(tmp_path)
+    payload = json.loads(attestation.read_text())
+    _add_r3_router_graph_runtime(payload, uv_executable)
+    attestation.write_text(json.dumps(payload))
+
+    result = _validate_r3_router_graph_fixture(
+        module,
+        attestation=attestation,
+        container=container,
+        lock=lock,
+        python_install_dir=python_install_dir,
+        uv_executable=uv_executable,
+    )
+
+    assert result["runtime_feature_set"] == R3_ROUTER_GRAPH_FEATURE_SET
+    assert result["mcore_capabilities"] == {
+        "router_replay_cuda_graph_input": R3_ROUTER_GRAPH_CAPABILITY
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        (lambda payload: payload.pop("mcore_capabilities"), "MCore capabilities"),
+        (
+            lambda payload: payload.__setitem__("mcore_capabilities", []),
+            "MCore capabilities",
+        ),
+        (
+            lambda payload: payload["mcore_capabilities"].__setitem__(
+                "router_replay_cuda_graph_input", "r3_router_cuda_graph_input_v0"
+            ),
+            "MCore router capability",
+        ),
+        (
+            lambda payload: payload["mcore_capability_probe"].__setitem__(
+                "python_executable", "/wrong/stage/environment/bin/python"
+            ),
+            "capability probe identity",
+        ),
+        (
+            lambda payload: payload["mcore_capability_probe"].__setitem__(
+                "source_root", "/wrong/stage/source/Megatron-LM"
+            ),
+            "capability probe identity",
+        ),
+        (
+            lambda payload: payload["mcore_capability_probe"].pop("module_path"),
+            "capability probe schema",
+        ),
+        (
+            lambda payload: payload["mcore_capability_probe"].__setitem__(
+                "unknown", "not-typed"
+            ),
+            "capability probe schema",
+        ),
+    ),
+    ids=(
+        "absent-capability",
+        "malformed-capability",
+        "wrong-version",
+        "wrong-stage-python",
+        "wrong-source",
+        "missing-probe-field",
+        "unknown-probe-field",
+    ),
+)
+def test_validator_rejects_unbound_r3_router_graph_capability_evidence(
+    tmp_path: Path,
+    mutation: Callable[[dict[str, Any]], object],
+    message: str,
+) -> None:
+    module = _load_module()
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(tmp_path)
+    payload = json.loads(attestation.read_text())
+    _add_r3_router_graph_runtime(payload, uv_executable)
+    mutation(payload)
+    attestation.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match=message):
+        _validate_r3_router_graph_fixture(
+            module,
+            attestation=attestation,
+            container=container,
+            lock=lock,
+            python_install_dir=python_install_dir,
+            uv_executable=uv_executable,
+        )
+
+
+def test_validator_rejects_legacy_runtime_for_r3_router_graph_feature(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    attestation, container, lock, python_install_dir, uv_executable = _fixture(tmp_path)
+    payload = json.loads(attestation.read_text())
+    _add_r3_router_graph_runtime(payload, uv_executable)
+    payload["runtime_feature_set"] = "dropless_hybridep_nano16"
+    attestation.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="feature contract mismatch"):
+        _validate_r3_router_graph_fixture(
+            module,
+            attestation=attestation,
+            container=container,
+            lock=lock,
+            python_install_dir=python_install_dir,
+            uv_executable=uv_executable,
+        )
+
+
 @pytest.mark.parametrize(
     "feature_set",
     ("dropless_alltoall_qwen30_16", "dropless_alltoall_super32"),
@@ -803,6 +1007,10 @@ def test_mcore_submitter_resolves_exact_row_exclusions(
     (
         ("dropless_hybridep_nano16", ("fast-hadamard-transform",)),
         (
+            "dropless_hybridep_nano16_r3_router_graph",
+            ("fast-hadamard-transform",),
+        ),
+        (
             "dropless_alltoall_qwen30_16",
             ("deep-ep", "fast-hadamard-transform"),
         ),
@@ -822,7 +1030,11 @@ def test_profile_runtime_contract_selects_exact_moe_row(
         candidate_kind="mcore",
         required_rows=(row_id,),
     ) == (
-        row_id,
+        (
+            R3_ROUTER_GRAPH_FEATURE_SET
+            if row_id == "dropless_hybridep_nano16_r3_router_graph"
+            else row_id
+        ),
         excluded_packages,
     )
 

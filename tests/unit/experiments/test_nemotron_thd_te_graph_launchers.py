@@ -4677,6 +4677,22 @@ def test_oci_container_runtime_smoke_renders_four_gpu_batch_job(
     assert not (tmp_path / "artifacts").exists()
 
 
+def test_oci_runtime_staging_accepts_r3_router_graph_feature(tmp_path: Path) -> None:
+    result = _run_script(
+        "scripts/validate_oci_container_runtime.sub",
+        TEST_ONLY="1",
+        RUNTIME_STAGE_CAPABILITY="mcore-test-v1",
+        RUNTIME_FEATURE_SET="dropless_hybridep_nano16_r3_router_graph_v1",
+        RUNTIME_EXCLUDED_PACKAGES="fast-hadamard-transform",
+        CONTAINER="/lustre/example/nemo_rl_nightly.sqsh",
+        CONTAINER_SHA256=CONTAINER_SHA256,
+        ARTIFACT_DIR=str(tmp_path / "artifacts"),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "SBATCH: sbatch --parsable" in result.stdout
+
+
 def test_container_runtime_smoke_omits_unsupported_gpu_tres_for_ptyche(
     tmp_path: Path,
 ) -> None:
@@ -5095,6 +5111,71 @@ def test_container_runtime_probe_requires_four_visible_gpus_and_packages(
         "causal_conv1d",
         "cupy",
     }
+
+
+@pytest.mark.parametrize(
+    ("capabilities", "expected_error"),
+    (
+        ({"router_replay_cuda_graph_input": "r3_router_cuda_graph_input_v1"}, None),
+        ({}, "exact MCore router capability"),
+        ({"router_replay_cuda_graph_input": 1}, "exact MCore router capability"),
+        (
+            {"router_replay_cuda_graph_input": "r3_router_cuda_graph_input_v0"},
+            "exact MCore router capability",
+        ),
+    ),
+    ids=("exact", "absent", "malformed", "wrong-version"),
+)
+def test_container_runtime_probes_exact_staged_mcore_router_capability(
+    tmp_path: Path,
+    capabilities: dict[str, object],
+    expected_error: str | None,
+) -> None:
+    module = _load_experiment_module("validate_container_runtime")
+    environment_root = tmp_path / "environment"
+    python_executable = environment_root / "bin" / "python"
+    python_executable.parent.mkdir(parents=True)
+    python_executable.write_text("#!/bin/sh\nexit 0\n")
+    python_executable.chmod(0o755)
+    mcore_source_root = tmp_path / "source" / "Megatron-LM"
+    module_path = (
+        mcore_source_root
+        / "megatron"
+        / "core"
+        / "transformer"
+        / "moe"
+        / "router_replay.py"
+    )
+    payload = {
+        "schema_version": 1,
+        "python_executable": str(python_executable),
+        "runtime_prefix": str(environment_root),
+        "module_path": str(module_path),
+        "source_root": str(mcore_source_root),
+        "capabilities": capabilities,
+    }
+
+    def runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del args, kwargs
+        return subprocess.CompletedProcess([], 0, json.dumps(payload), "")
+
+    if expected_error is not None:
+        with pytest.raises(RuntimeError, match=expected_error):
+            module.probe_mcore_router_graph_capability(
+                python_executable=python_executable,
+                expected_source_root=mcore_source_root,
+                runner=runner,
+            )
+        return
+
+    result = module.probe_mcore_router_graph_capability(
+        python_executable=python_executable,
+        expected_source_root=mcore_source_root,
+        runner=runner,
+    )
+    assert result["capabilities"] == capabilities
+    assert result["python_executable"] == str(python_executable)
+    assert result["module_path"] == str(module_path)
 
 
 def test_container_runtime_probe_requires_te_grouped_linear_backend(

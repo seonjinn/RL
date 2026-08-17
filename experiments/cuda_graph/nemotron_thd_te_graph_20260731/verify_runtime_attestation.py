@@ -50,19 +50,28 @@ TE_EVAL_FEATURE_SET = "te_eval_capability_8"
 BRIDGE_EVAL_FEATURE_SET = "bridge_forward_only_eval_8"
 NARROW_EVAL_FEATURE_SETS = frozenset((TE_EVAL_FEATURE_SET, BRIDGE_EVAL_FEATURE_SET))
 NANO_HYBRIDEP_FEATURE_SET = "dropless_hybridep_nano16"
+R3_ROUTER_GRAPH_ROW = "dropless_hybridep_nano16_r3_router_graph"
+R3_ROUTER_GRAPH_FEATURE_SET = "dropless_hybridep_nano16_r3_router_graph_v1"
+R3_ROUTER_GRAPH_CAPABILITY_KEY = "router_replay_cuda_graph_input"
+R3_ROUTER_GRAPH_CAPABILITY = "r3_router_cuda_graph_input_v1"
 QWEN30_ALLTOALL_FEATURE_SET = "dropless_alltoall_qwen30_16"
 SUPER_ALLTOALL_FEATURE_SET = "dropless_alltoall_super32"
 QWEN235_HYBRIDEP_FEATURE_SET = "dropless_hybridep_qwen235_64"
 DROPLESS_MOE_FEATURE_SETS = frozenset(
     (
         NANO_HYBRIDEP_FEATURE_SET,
+        R3_ROUTER_GRAPH_FEATURE_SET,
         QWEN30_ALLTOALL_FEATURE_SET,
         SUPER_ALLTOALL_FEATURE_SET,
         QWEN235_HYBRIDEP_FEATURE_SET,
     )
 )
 HYBRIDEP_FEATURE_SETS = frozenset(
-    (NANO_HYBRIDEP_FEATURE_SET, QWEN235_HYBRIDEP_FEATURE_SET)
+    (
+        NANO_HYBRIDEP_FEATURE_SET,
+        R3_ROUTER_GRAPH_FEATURE_SET,
+        QWEN235_HYBRIDEP_FEATURE_SET,
+    )
 )
 ALLTOALL_FEATURE_SETS = frozenset(
     (QWEN30_ALLTOALL_FEATURE_SET, SUPER_ALLTOALL_FEATURE_SET)
@@ -91,6 +100,7 @@ MATRIX_ROWS = {
         (
             "te_eval_capability_8",
             "dropless_hybridep_nano16",
+            R3_ROUTER_GRAPH_ROW,
             "dropless_alltoall_qwen30_16",
             "dropless_alltoall_super32",
             "dropless_hybridep_qwen235_64",
@@ -102,6 +112,7 @@ MATRIX_ROW_WORLD_SIZES = {
     "mcore": {
         "te_eval_capability_8": 8,
         "dropless_hybridep_nano16": 16,
+        R3_ROUTER_GRAPH_ROW: 16,
         "dropless_alltoall_qwen30_16": 16,
         "dropless_alltoall_super32": 32,
         "dropless_hybridep_qwen235_64": 64,
@@ -189,6 +200,7 @@ def _runtime_contract_for_rows(
     """Resolve the one narrow runtime contract that can authorize these rows."""
     feature_sets: dict[tuple[str, tuple[str, ...]], str] = {
         ("mcore", (TE_EVAL_FEATURE_SET,)): TE_EVAL_FEATURE_SET,
+        ("mcore", (R3_ROUTER_GRAPH_ROW,)): R3_ROUTER_GRAPH_FEATURE_SET,
         **{
             ("mcore", (feature_set,)): feature_set
             for feature_set in DROPLESS_MOE_FEATURE_SETS
@@ -201,6 +213,80 @@ def _runtime_contract_for_rows(
             "runtime attestation must authorize exactly one supported matrix row"
         )
     return feature_set, RUNTIME_FEATURE_EXCLUSIONS[feature_set]
+
+
+def _validate_r3_router_graph_capability(
+    *,
+    payload: Mapping[str, Any],
+    expected_uv_executable: Path,
+    mcore_commit: str,
+) -> None:
+    capabilities = payload.get("mcore_capabilities")
+    if not isinstance(capabilities, Mapping) or set(capabilities) != {
+        R3_ROUTER_GRAPH_CAPABILITY_KEY
+    }:
+        raise ValueError("runtime attestation has invalid MCore capabilities")
+    if (
+        capabilities.get(R3_ROUTER_GRAPH_CAPABILITY_KEY)
+        != R3_ROUTER_GRAPH_CAPABILITY
+    ):
+        raise ValueError("runtime attestation has the wrong MCore router capability")
+
+    probe = payload.get("mcore_capability_probe")
+    probe_keys = {
+        "schema_version",
+        "python_executable",
+        "runtime_prefix",
+        "module_path",
+        "source_root",
+        "source_commit",
+    }
+    if not isinstance(probe, Mapping) or set(probe) != probe_keys:
+        raise ValueError("runtime attestation capability probe schema is invalid")
+    if type(probe.get("schema_version")) is not int:
+        raise ValueError("runtime attestation capability probe schema is not typed")
+
+    stage_root = expected_uv_executable.parent.parent
+    expected_runtime_prefix = stage_root / "environment"
+    expected_python = expected_runtime_prefix / "bin" / "python"
+    expected_project_root = stage_root / "source"
+    expected_source_root = (
+        expected_project_root
+        / "3rdparty"
+        / "Megatron-Bridge-workspace"
+        / "Megatron-Bridge"
+        / "3rdparty"
+        / "Megatron-LM"
+    )
+    expected_module_path = (
+        expected_source_root
+        / "megatron"
+        / "core"
+        / "transformer"
+        / "moe"
+        / "router_replay.py"
+    )
+    expected_probe = {
+        "schema_version": 1,
+        "python_executable": str(expected_python),
+        "runtime_prefix": str(expected_runtime_prefix),
+        "module_path": str(expected_module_path),
+        "source_root": str(expected_source_root),
+        "source_commit": mcore_commit,
+    }
+    if dict(probe) != expected_probe:
+        raise ValueError("runtime attestation capability probe identity mismatch")
+    root_identity = {
+        "expected_project_root": str(expected_project_root),
+        "python_executable": str(expected_python),
+        "runtime_prefix": str(expected_runtime_prefix),
+    }
+    if any(payload.get(key) != value for key, value in root_identity.items()):
+        raise ValueError("runtime attestation staged MCore identity mismatch")
+    if not expected_python.is_file() or not os.access(expected_python, os.X_OK):
+        raise ValueError("attested staged MCore Python is missing")
+    if not expected_module_path.is_file():
+        raise ValueError("attested staged MCore capability source is missing")
 
 
 def _expected_pytest_nodes(candidate_kind: str, row_id: str) -> tuple[str, ...]:
@@ -601,6 +687,12 @@ def validate_attestation(
         )
         if actual_contract != expected_contract:
             raise ValueError("runtime attestation feature contract mismatch")
+        if expected_runtime_feature_set == R3_ROUTER_GRAPH_FEATURE_SET:
+            _validate_r3_router_graph_capability(
+                payload=payload,
+                expected_uv_executable=expected_uv_executable,
+                mcore_commit=mcore_commit,
+            )
 
     expected_provenance: dict[str, object] = {
         "container_image": str(container),

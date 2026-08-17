@@ -47,19 +47,27 @@ TE_EVAL_FEATURE_SET = "te_eval_capability_8"
 BRIDGE_EVAL_FEATURE_SET = "bridge_forward_only_eval_8"
 NARROW_EVAL_FEATURE_SETS = frozenset((TE_EVAL_FEATURE_SET, BRIDGE_EVAL_FEATURE_SET))
 NANO_HYBRIDEP_FEATURE_SET = "dropless_hybridep_nano16"
+R3_ROUTER_GRAPH_FEATURE_SET = "dropless_hybridep_nano16_r3_router_graph_v1"
+R3_ROUTER_GRAPH_CAPABILITY_KEY = "router_replay_cuda_graph_input"
+R3_ROUTER_GRAPH_CAPABILITY = "r3_router_cuda_graph_input_v1"
 QWEN30_ALLTOALL_FEATURE_SET = "dropless_alltoall_qwen30_16"
 SUPER_ALLTOALL_FEATURE_SET = "dropless_alltoall_super32"
 QWEN235_HYBRIDEP_FEATURE_SET = "dropless_hybridep_qwen235_64"
 DROPLESS_MOE_FEATURE_SETS = frozenset(
     (
         NANO_HYBRIDEP_FEATURE_SET,
+        R3_ROUTER_GRAPH_FEATURE_SET,
         QWEN30_ALLTOALL_FEATURE_SET,
         SUPER_ALLTOALL_FEATURE_SET,
         QWEN235_HYBRIDEP_FEATURE_SET,
     )
 )
 HYBRIDEP_FEATURE_SETS = frozenset(
-    (NANO_HYBRIDEP_FEATURE_SET, QWEN235_HYBRIDEP_FEATURE_SET)
+    (
+        NANO_HYBRIDEP_FEATURE_SET,
+        R3_ROUTER_GRAPH_FEATURE_SET,
+        QWEN235_HYBRIDEP_FEATURE_SET,
+    )
 )
 ALLTOALL_FEATURE_SETS = frozenset(
     (QWEN30_ALLTOALL_FEATURE_SET, SUPER_ALLTOALL_FEATURE_SET)
@@ -109,6 +117,97 @@ NCCL_EP_EXTENSION_SYMBOLS = (
     "ep_combine_bwd",
 )
 HYBRIDEP_BUFFER_SYMBOL = "HybridEPBuffer"
+
+
+def probe_mcore_router_graph_capability(
+    *,
+    python_executable: Path,
+    expected_source_root: Path,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> dict[str, Any]:
+    """Import the versioned router-graph capability with the staged MCore Python."""
+    python_executable = _absolute_path(python_executable)
+    expected_source_root = _absolute_path(expected_source_root)
+    if not python_executable.is_file() or not os.access(python_executable, os.X_OK):
+        raise RuntimeError(f"staged MCore Python is missing: {python_executable}")
+    probe = f"""
+import json
+import sys
+
+from megatron.core.transformer.moe import router_replay
+
+print(json.dumps({{
+    "schema_version": 1,
+    "python_executable": sys.executable,
+    "runtime_prefix": sys.prefix,
+    "module_path": router_replay.__file__,
+    "source_root": sys.argv[1],
+    "capabilities": {{
+        {R3_ROUTER_GRAPH_CAPABILITY_KEY!r}: getattr(
+            router_replay, "ROUTER_REPLAY_CUDA_GRAPH_INPUT_CAPABILITY", None
+        ),
+    }},
+}}, allow_nan=False, sort_keys=True))
+"""
+    environment = os.environ.copy()
+    for variable in ("PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV"):
+        environment.pop(variable, None)
+    environment.update(
+        {
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONNOUSERSITE": "1",
+        }
+    )
+    process = runner(
+        [str(python_executable), "-I", "-c", probe, str(expected_source_root)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    if process.returncode != 0:
+        raise RuntimeError(
+            "staged MCore capability import failed: " + process.stderr.strip()
+        )
+    try:
+        payload = json.loads(process.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("staged MCore capability probe returned invalid JSON") from error
+    expected_keys = {
+        "schema_version",
+        "python_executable",
+        "runtime_prefix",
+        "module_path",
+        "source_root",
+        "capabilities",
+    }
+    if not isinstance(payload, Mapping) or set(payload) != expected_keys:
+        raise RuntimeError("staged MCore capability probe returned an invalid schema")
+    if type(payload.get("schema_version")) is not int:
+        raise RuntimeError("staged MCore capability probe schema version is not typed")
+    expected_module_path = (
+        expected_source_root
+        / "megatron"
+        / "core"
+        / "transformer"
+        / "moe"
+        / "router_replay.py"
+    )
+    expected_identity = {
+        "schema_version": 1,
+        "python_executable": str(python_executable),
+        "runtime_prefix": str(python_executable.parent.parent),
+        "module_path": str(expected_module_path),
+        "source_root": str(expected_source_root),
+    }
+    if any(payload.get(key) != value for key, value in expected_identity.items()):
+        raise RuntimeError("staged MCore capability probe identity mismatch")
+    capabilities = payload.get("capabilities")
+    if capabilities != {
+        R3_ROUTER_GRAPH_CAPABILITY_KEY: R3_ROUTER_GRAPH_CAPABILITY
+    }:
+        raise RuntimeError("staged Python lacks the exact MCore router capability")
+    return dict(payload)
 
 
 def _distribution_version(
@@ -713,6 +812,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-environment-root", required=True, type=Path)
     parser.add_argument("--expected-vllm-environment-root", required=True, type=Path)
     parser.add_argument("--expected-project-root", required=True, type=Path)
+    parser.add_argument("--expected-mcore-python", required=True, type=Path)
+    parser.add_argument("--expected-mcore-source-root", required=True, type=Path)
     parser.add_argument("--expected-python-version", required=True)
     parser.add_argument("--expected-python-install-dir", required=True, type=Path)
     parser.add_argument("--expected-uv-version", required=True)
@@ -787,6 +888,29 @@ def main() -> None:
             )
             runtime["packages"]["vllm"] = vllm_runtime["packages"]["vllm"]
             runtime["actor_runtimes"] = {"vllm": vllm_runtime}
+        if args.runtime_feature_set == R3_ROUTER_GRAPH_FEATURE_SET:
+            expected_mcore_python = args.expected_environment_root / "bin" / "python"
+            expected_mcore_source_root = (
+                args.expected_project_root
+                / "3rdparty"
+                / "Megatron-Bridge-workspace"
+                / "Megatron-Bridge"
+                / "3rdparty"
+                / "Megatron-LM"
+            )
+            if args.expected_mcore_python != expected_mcore_python:
+                raise RuntimeError("staged MCore Python path mismatch")
+            if args.expected_mcore_source_root != expected_mcore_source_root:
+                raise RuntimeError("staged MCore source root mismatch")
+            capability_probe = probe_mcore_router_graph_capability(
+                python_executable=expected_mcore_python,
+                expected_source_root=expected_mcore_source_root,
+            )
+            runtime["mcore_capabilities"] = capability_probe.pop("capabilities")
+            runtime["mcore_capability_probe"] = {
+                **capability_probe,
+                "source_commit": args.mcore_commit,
+            }
         te_version = runtime["packages"]["transformer_engine.pytorch"]["version"]
         if _version_pair(te_version) < (2, 16):
             raise RuntimeError(
