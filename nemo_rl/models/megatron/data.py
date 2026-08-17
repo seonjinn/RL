@@ -14,7 +14,8 @@
 
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Any, Iterator, Optional, Tuple
+from itertools import count
+from typing import Any, Callable, Iterator, Optional, Tuple
 
 import torch
 from megatron.bridge.training.utils.packed_seq_utils import (
@@ -37,6 +38,13 @@ from nemo_rl.utils.r3_trace import (
     r3_trace_verify_forward_enabled,
     trace_cp_routed_experts,
 )
+
+_MICROBATCH_GENERATIONS = count(1)
+
+
+def _next_microbatch_generation() -> int:
+    """Return one process-local, strictly advancing microbatch generation."""
+    return next(_MICROBATCH_GENERATIONS)
 
 
 @dataclass
@@ -98,6 +106,13 @@ class ProcessedMicrobatch:
     mtp_loss_mask: Optional[torch.Tensor] = None
     routed_experts: Optional[torch.Tensor] = None
     routed_experts_cp_sharded: Optional[torch.Tensor] = None
+    microbatch_generation: int = 0
+
+    def __post_init__(self) -> None:
+        if type(self.microbatch_generation) is not int:
+            raise TypeError("microbatch_generation must be an int.")
+        if self.microbatch_generation < 0:
+            raise ValueError("microbatch_generation must be nonnegative.")
 
 
 @dataclass(frozen=True)
@@ -367,6 +382,7 @@ def make_processed_microbatch_iterator(
     for_cuda_graph_training: bool = False,
     delegate_mtp_loss_mask_to_model: bool = False,
     model_slices_context_parallel_inputs: bool = False,
+    microbatch_generation_provider: Optional[Callable[[], int]] = None,
 ) -> Iterator[ProcessedMicrobatch]:
     """Wrap a raw microbatch iterator to yield processed microbatches.
 
@@ -387,6 +403,11 @@ def make_processed_microbatch_iterator(
         ProcessedMicrobatch objects containing processed tensors ready for model forward
     """
     pack_sequences = cfg["sequence_packing"]["enabled"]
+    generation_provider = (
+        _next_microbatch_generation
+        if microbatch_generation_provider is None
+        else microbatch_generation_provider
+    )
     if thd_max_packed_sequences is not None and not for_cuda_graph_training:
         raise ValueError(
             "Fixed THD sequence capacity is training-graph-only; set "
@@ -449,6 +470,12 @@ def make_processed_microbatch_iterator(
                 sequence_parallel=sequence_parallel,
             )
 
+        microbatch_generation = generation_provider()
+        if type(microbatch_generation) is not int:
+            raise TypeError("microbatch generation provider must return an int.")
+        if microbatch_generation < 0:
+            raise ValueError("microbatch generation provider returned a negative value.")
+
         yield ProcessedMicrobatch(
             data_dict=data_dict,
             input_ids=processed_inputs.input_ids,
@@ -466,6 +493,7 @@ def make_processed_microbatch_iterator(
             mtp_loss_mask=processed_inputs.mtp_loss_mask,
             routed_experts=processed_inputs.routed_experts,
             routed_experts_cp_sharded=processed_inputs.routed_experts_cp_sharded,
+            microbatch_generation=microbatch_generation,
         )
 
 
@@ -480,6 +508,7 @@ def get_microbatch_iterator(
     for_cuda_graph_training: bool = False,
     delegate_mtp_loss_mask_to_model: bool = False,
     model_slices_context_parallel_inputs: bool = False,
+    microbatch_generation_provider: Optional[Callable[[], int]] = None,
 ) -> Tuple[Iterator[ProcessedMicrobatch], int, int, int, int]:
     """Create a processed microbatch iterator from a batch of data.
 
@@ -620,6 +649,7 @@ def get_microbatch_iterator(
         for_cuda_graph_training=for_cuda_graph_training,
         delegate_mtp_loss_mask_to_model=delegate_mtp_loss_mask_to_model,
         model_slices_context_parallel_inputs=model_slices_context_parallel_inputs,
+        microbatch_generation_provider=microbatch_generation_provider,
     )
 
     # Compute padded sequence length for pipeline parallelism

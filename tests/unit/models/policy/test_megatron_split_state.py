@@ -630,6 +630,19 @@ class TestFinish:
 
 
 class TestAbort:
+    def test_aborted_train_step_clears_graph_route_generation(
+        self, mock_module_symbols
+    ):
+        from nemo_rl.algorithms.loss.interfaces import LossType
+
+        w = _make_worker(LossType.TOKEN_LEVEL)
+        w.begin_train_step(loss_fn=w._test_loss_fn, gbs=16, mbs=1)
+        w._active_router_route_generation = 3
+
+        w.abort_train_step()
+
+        assert w._active_router_route_generation is None
+
     def test_restores_grad_sync_func(self, mock_module_symbols):
         from nemo_rl.algorithms.loss.interfaces import LossType
 

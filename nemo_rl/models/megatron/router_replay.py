@@ -14,9 +14,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import os
 from collections.abc import Iterable
+from dataclasses import dataclass
 from functools import wraps
 from typing import Any, Optional
 
@@ -29,6 +31,7 @@ from nemo_rl.models.policy import PolicyConfig
 from nemo_rl.utils.r3_trace import (
     trace_router_replay_action,
     trace_router_replay_assignment,
+    trace_router_replay_graph_consumer,
 )
 
 _ROUTER_REPLAY_VALIDATE_ENV = "NRL_ROUTER_REPLAY_VALIDATE"
@@ -39,6 +42,48 @@ _ROUTER_REPLAY_CUDA_GRAPH_SCOPES = (
 )
 _MISSING_ROUTE_SENTINEL = ROUTED_EXPERTS_MISSING_ROUTE_SENTINEL
 _MISSING_ROUTE_FALLBACK_PATCH_ATTR = "_nrl_missing_route_fallback_patch"
+ROUTER_REPLAY_GRAPH_COUNTER_FIELDS = (
+    "route_payloads_produced",
+    "route_payloads_copied",
+    "route_graph_launches",
+    "missing_route_count",
+    "stale_generation_count",
+    "malformed_route_count",
+    "out_of_range_count",
+    "duplicate_route_count",
+    "cp_mismatch_count",
+)
+_ROUTER_REPLAY_GRAPH_CONSUMER_ATTRIBUTES = (
+    "graph_input_launch_record",
+    "graph_input_bank_id",
+    "graph_input_graph_index",
+    "graph_input_copy_generation",
+    "_nrl_graph_input_schedule_key",
+    "_nrl_route_digest",
+    "_nrl_graph_input_signature",
+)
+
+
+@dataclass(frozen=True)
+class RouterReplayGraphInputSignature:
+    """Content-independent physical identity for one model-local route slice."""
+
+    layer_number: int
+    payload_idx: int
+    shape: tuple[int, int]
+    dtype: str
+    device_type: str
+    topk: int
+    num_experts: int
+
+    def trace_record(self) -> dict[str, Any]:
+        return {
+            "shape": list(self.shape),
+            "dtype": self.dtype,
+            "device_type": self.device_type,
+            "topk": self.topk,
+            "num_experts": self.num_experts,
+        }
 
 
 def router_replay_enabled(config: PolicyConfig) -> bool:
@@ -321,6 +366,82 @@ def router_replay_validation_enabled() -> bool:
     }
 
 
+def _validate_microbatch_generation(microbatch_generation: int) -> None:
+    if type(microbatch_generation) is not int:
+        raise TypeError("microbatch_generation must be an int.")
+    if microbatch_generation < 0:
+        raise ValueError("microbatch_generation must be nonnegative.")
+
+
+def _route_digest(replay_tensor: torch.Tensor) -> str:
+    tensor = replay_tensor.detach()
+    if tensor.device.type != "cpu":
+        tensor = tensor.cpu()
+    return hashlib.sha256(tensor.contiguous().numpy().tobytes()).hexdigest()
+
+
+def _router_replay_counters(replay_instance: Any) -> dict[str, int]:
+    counters = getattr(replay_instance, "_nrl_graph_route_counters", None)
+    if not isinstance(counters, dict) or set(counters) != set(
+        ROUTER_REPLAY_GRAPH_COUNTER_FIELDS
+    ):
+        counters = {name: 0 for name in ROUTER_REPLAY_GRAPH_COUNTER_FIELDS}
+        replay_instance._nrl_graph_route_counters = counters
+    return counters
+
+
+def _increment_router_replay_counter(
+    replay_instance: Any,
+    name: str,
+    amount: int = 1,
+) -> None:
+    if name not in ROUTER_REPLAY_GRAPH_COUNTER_FIELDS:
+        raise ValueError(f"Unknown RouterReplay graph counter: {name}")
+    _router_replay_counters(replay_instance)[name] += amount
+
+
+def _route_error_counter_name(error: BaseException) -> str:
+    message = str(error).lower()
+    if "missing-route" in message or "missing route" in message:
+        return "missing_route_count"
+    if "duplicate" in message:
+        return "duplicate_route_count"
+    if "outside" in message or "expert range" in message:
+        return "out_of_range_count"
+    if (
+        "context" in message
+        or "cp-" in message
+        or "token count" in message
+        or "indices shape must equal" in message
+        or "structural padding mask shape" in message
+    ):
+        return "cp_mismatch_count"
+    if "generation" in message:
+        return "stale_generation_count"
+    return "malformed_route_count"
+
+
+def _record_router_replay_error(model: Any, error: BaseException) -> None:
+    counter_name = _route_error_counter_name(error)
+    for replay_instance, _ in _router_replay_instances_for_model(model):
+        _increment_router_replay_counter(replay_instance, counter_name)
+
+
+def record_router_replay_graph_error(model: Any, error: BaseException) -> None:
+    """Count a controller-side graph route validation failure by category."""
+    _record_router_replay_error(model, error)
+
+
+def snapshot_router_replay_graph_counters(model: Any) -> dict[str, int]:
+    """Return process-local cumulative route lifecycle counters for this model."""
+    totals = {name: 0 for name in ROUTER_REPLAY_GRAPH_COUNTER_FIELDS}
+    for replay_instance, _ in _router_replay_instances_for_model(model):
+        counters = _router_replay_counters(replay_instance)
+        for name in ROUTER_REPLAY_GRAPH_COUNTER_FIELDS:
+            totals[name] += int(counters[name])
+    return totals
+
+
 def _validate_replay_tensor(
     replay_tensor: torch.Tensor,
     model_config: Any,
@@ -582,6 +703,7 @@ def build_router_replay_assignments(
             local_routed_experts[:, payload_idx, :].to(dtype=torch.long).contiguous()
         )
         setattr(replay_instance, "_nrl_layer_number", layer_number)
+        setattr(replay_instance, "_nrl_payload_idx", payload_idx)
         _validate_replay_tensor(
             replay_tensor,
             model_config,
@@ -603,14 +725,147 @@ def build_router_replay_assignments(
     return replay_assignments
 
 
-def set_router_replay_forward(model: Any, routed_experts: torch.Tensor) -> None:
+def validate_router_replay_graph_microbatch(
+    model: Any,
+    routed_experts: torch.Tensor,
+    structural_padding_mask: torch.Tensor,
+    *,
+    microbatch_generation: int,
+) -> tuple[RouterReplayGraphInputSignature, ...]:
+    """Validate current route identity without arming replay or graph state."""
+    _validate_microbatch_generation(microbatch_generation)
+    for replay_instance, _ in _router_replay_instances_for_model(model):
+        previous_generation = getattr(
+            replay_instance,
+            "_nrl_last_graph_input_generation",
+            None,
+        )
+        if previous_generation is not None and microbatch_generation <= int(
+            previous_generation
+        ):
+            raise ValueError(
+                "Router replay microbatch generation must strictly advance before "
+                "graph activation: "
+                f"current={microbatch_generation}, previous={previous_generation}."
+            )
+    if not isinstance(structural_padding_mask, torch.Tensor):
+        raise TypeError(
+            "Router replay graph preflight requires a structural padding Tensor."
+        )
+    if structural_padding_mask.dtype != torch.bool:
+        raise TypeError(
+            "Router replay graph structural padding mask must use torch.bool."
+        )
+
+    from megatron.core.transformer.moe import router_replay as mcore_router_replay
+
+    capability = getattr(
+        mcore_router_replay,
+        "ROUTER_REPLAY_CUDA_GRAPH_INPUT_CAPABILITY",
+        None,
+    )
+    validator = getattr(
+        mcore_router_replay,
+        "validate_router_replay_cuda_graph_input",
+        None,
+    )
+    if capability != _ROUTER_REPLAY_CUDA_GRAPH_INPUT_CAPABILITY or not callable(
+        validator
+    ):
+        raise RuntimeError(
+            "The active Megatron-Core runtime lacks the exact "
+            f"{_ROUTER_REPLAY_CUDA_GRAPH_INPUT_CAPABILITY} validation contract."
+        )
+
+    assignments = build_router_replay_assignments(model, routed_experts)
+    model_config = _unwrap_model_config(model)
+    if model_config is None:
+        raise ValueError("Could not locate Megatron model config for route preflight.")
+    num_experts = getattr(model_config, "num_moe_experts", None)
+    if isinstance(num_experts, bool) or not isinstance(num_experts, int):
+        raise ValueError(
+            "Router replay graph preflight requires integer num_moe_experts."
+        )
+
+    flattened_mask = structural_padding_mask.reshape(-1).contiguous()
+    flattened_mask = _split_for_sequence_parallel(model_config, flattened_mask)
+    signatures: list[RouterReplayGraphInputSignature] = []
+    for replay_instance, replay_tensor in assignments:
+        layer_number = int(getattr(replay_instance, "_nrl_layer_number"))
+        payload_idx = int(getattr(replay_instance, "_nrl_payload_idx"))
+        signature = validator(
+            replay_tensor,
+            structural_padding_mask=flattened_mask,
+            expected_tokens=int(replay_tensor.shape[0]),
+            topk=int(replay_tensor.shape[1]),
+            num_experts=num_experts,
+        )
+        signatures.append(
+            RouterReplayGraphInputSignature(
+                layer_number=layer_number,
+                payload_idx=payload_idx,
+                shape=(int(signature.shape[0]), int(signature.shape[1])),
+                dtype=str(signature.dtype),
+                device_type=str(signature.device_type),
+                topk=int(signature.topk),
+                num_experts=int(signature.num_experts),
+            )
+        )
+    return tuple(signatures)
+
+
+def set_router_replay_forward(
+    model: Any,
+    routed_experts: torch.Tensor,
+    *,
+    microbatch_generation: int,
+) -> None:
     from megatron.core.transformer.moe.router_replay import RouterReplayAction
 
+    try:
+        _validate_microbatch_generation(microbatch_generation)
+        assignments = build_router_replay_assignments(model, routed_experts)
+        for replay_instance, _ in assignments:
+            previous_generation = getattr(
+                replay_instance,
+                "_nrl_last_graph_input_generation",
+                None,
+            )
+            if previous_generation is not None and microbatch_generation <= int(
+                previous_generation
+            ):
+                raise ValueError(
+                    "Router replay microbatch generation must strictly advance: "
+                    f"current={microbatch_generation}, previous={previous_generation}."
+                )
+    except (TypeError, ValueError, RuntimeError) as error:
+        _record_router_replay_error(model, error)
+        raise
+
     _install_missing_route_fallback_patch()
-    for replay_instance, replay_tensor in build_router_replay_assignments(
-        model, routed_experts
-    ):
+    for replay_instance, replay_tensor in assignments:
+        for attribute in _ROUTER_REPLAY_GRAPH_CONSUMER_ATTRIBUTES:
+            setattr(replay_instance, attribute, None)
+        replay_instance.graph_input_generation = microbatch_generation
+        replay_instance._nrl_last_graph_input_generation = microbatch_generation
+        replay_instance._nrl_route_digest = _route_digest(replay_tensor)
+        model_config = _unwrap_model_config(model)
+        num_experts = getattr(model_config, "num_moe_experts", -1)
+        replay_instance._nrl_graph_input_signature = RouterReplayGraphInputSignature(
+            layer_number=int(getattr(replay_instance, "_nrl_layer_number")),
+            payload_idx=int(getattr(replay_instance, "_nrl_payload_idx")),
+            shape=(int(replay_tensor.shape[0]), int(replay_tensor.shape[1])),
+            dtype=str(replay_tensor.dtype),
+            device_type=replay_tensor.device.type,
+            topk=int(replay_tensor.shape[1]),
+            num_experts=(
+                int(num_experts)
+                if isinstance(num_experts, int) and not isinstance(num_experts, bool)
+                else -1
+            ),
+        )
         replay_instance.set_target_indices(replay_tensor)
+        _increment_router_replay_counter(replay_instance, "route_payloads_produced")
         trace_router_replay_action(
             action="replay_forward",
             layer_number=getattr(replay_instance, "_nrl_layer_number", None),
@@ -618,8 +873,99 @@ def set_router_replay_forward(model: Any, routed_experts: torch.Tensor) -> None:
             replay_backward_list_len=len(
                 getattr(replay_instance, "replay_backward_list", [])
             ),
+            microbatch_generation=microbatch_generation,
+            route_digest=replay_instance._nrl_route_digest,
         )
         replay_instance.set_router_replay_action(RouterReplayAction.REPLAY_FORWARD)
+
+
+def record_router_replay_graph_consumers(
+    model: Any,
+    *,
+    microbatch_generation: int,
+    schedule_key: int,
+) -> None:
+    """Record post-success MCore launch evidence for current route values."""
+    _validate_microbatch_generation(microbatch_generation)
+    if type(schedule_key) is not int or schedule_key < 1:
+        raise ValueError("Router replay graph schedule_key must be a positive int.")
+    for replay_instance, layer_number in _router_replay_instances_for_model(model):
+        active_generation = getattr(replay_instance, "graph_input_generation", None)
+        if active_generation != microbatch_generation:
+            _increment_router_replay_counter(
+                replay_instance, "stale_generation_count"
+            )
+            raise ValueError(
+                "Router replay graph consumer generation is stale: "
+                f"expected={microbatch_generation}, active={active_generation}."
+            )
+
+        record = getattr(replay_instance, "graph_input_launch_record", None)
+        successful_graph_launch = record is not None
+        bank_id: Optional[int] = None
+        graph_index: Optional[int] = None
+        copy_generation: Optional[int] = None
+        if successful_graph_launch:
+            mcore_bank_id = getattr(record, "bank_id", None)
+            graph_index = getattr(record, "graph_index", None)
+            copy_generation = getattr(record, "copy_generation", None)
+            record_values = (mcore_bank_id, graph_index, copy_generation)
+            if any(type(value) is not int for value in record_values):
+                _increment_router_replay_counter(
+                    replay_instance, "malformed_route_count"
+                )
+                raise RuntimeError(
+                    "Router replay graph launch record has malformed integer fields."
+                )
+            if mcore_bank_id < 0 or graph_index < 0 or copy_generation < 1:
+                _increment_router_replay_counter(
+                    replay_instance, "malformed_route_count"
+                )
+                raise RuntimeError(
+                    "Router replay graph launch record has invalid integer ranges."
+                )
+            previous_copy_generation = getattr(
+                replay_instance,
+                "_nrl_last_graph_input_copy_generation",
+                None,
+            )
+            if previous_copy_generation is not None and copy_generation <= int(
+                previous_copy_generation
+            ):
+                _increment_router_replay_counter(
+                    replay_instance, "stale_generation_count"
+                )
+                raise RuntimeError(
+                    "Router replay graph copy generation must strictly advance."
+                )
+            replay_instance._nrl_last_graph_input_copy_generation = copy_generation
+            _increment_router_replay_counter(replay_instance, "route_payloads_copied")
+            _increment_router_replay_counter(replay_instance, "route_graph_launches")
+            # MCore's bank token is process-private. The normalized schedule key
+            # identifies the selected bank without serializing that private value.
+            bank_id = schedule_key
+
+        replay_instance._nrl_graph_input_schedule_key = schedule_key
+        signature = getattr(replay_instance, "_nrl_graph_input_signature", None)
+        if not isinstance(signature, RouterReplayGraphInputSignature):
+            _increment_router_replay_counter(replay_instance, "malformed_route_count")
+            raise RuntimeError("Router replay graph consumer lacks a physical signature.")
+        action = getattr(replay_instance, "router_replay_action", None)
+        action_name = str(getattr(action, "value", action))
+        trace_router_replay_graph_consumer(
+            action=action_name,
+            layer_number=layer_number,
+            payload_idx=signature.payload_idx,
+            microbatch_generation=microbatch_generation,
+            route_digest=str(getattr(replay_instance, "_nrl_route_digest")),
+            physical_signature=signature.trace_record(),
+            bank_id=bank_id,
+            graph_index=graph_index,
+            schedule_key=schedule_key,
+            copy_generation=copy_generation,
+            successful_graph_launch=successful_graph_launch,
+            capability_version=_ROUTER_REPLAY_CUDA_GRAPH_INPUT_CAPABILITY,
+        )
 
 
 def set_router_replay_backward(model: Any) -> None:
@@ -643,11 +989,19 @@ def clear_router_replay(model: Optional[Any] = None) -> None:
     if model is None:
         RouterReplay.clear_global_router_replay_action()
         RouterReplay.clear_global_indices()
+        instances = RouterReplay.global_router_replay_instances
+        for replay_instance in instances:
+            replay_instance.graph_input_generation = None
+            for attribute in _ROUTER_REPLAY_GRAPH_CONSUMER_ATTRIBUTES:
+                setattr(replay_instance, attribute, None)
         return
 
     for replay_instance, _ in _router_replay_instances_for_model(model):
         replay_instance.clear_router_replay_action()
         replay_instance.clear_indices()
+        replay_instance.graph_input_generation = None
+        for attribute in _ROUTER_REPLAY_GRAPH_CONSUMER_ATTRIBUTES:
+            setattr(replay_instance, attribute, None)
 
 
 def clear_global_router_replay_instances() -> None:

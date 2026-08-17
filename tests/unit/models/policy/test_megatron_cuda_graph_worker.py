@@ -92,11 +92,22 @@ def _extract_worker_methods(
         "ProcessedMicrobatch": Any,
         "TECudaGraphScheduleKey": TECudaGraphScheduleKey,
         "_TECudaGraphWorkerPhase": _Phase,
+        "clear_router_replay": lambda _model: None,
+        "record_router_replay_graph_error": lambda _model, _error: None,
     }
     if namespace is not None:
         globals_dict.update(namespace)
     exec(compile(module, str(_WORKER_PATH), "exec"), globals_dict)
-    return globals_dict["_Worker"]
+    worker_type = globals_dict["_Worker"]
+    if (
+        "_ensure_te_cuda_graph_schedule" in method_names
+        and "_assert_hybridep_preprocess_capture_padding_disabled"
+        not in method_names
+    ):
+        worker_type._assert_hybridep_preprocess_capture_padding_disabled = (
+            lambda _self: None
+        )
+    return worker_type
 
 
 def test_runtime_schedule_provider_and_explicit_drained_phases() -> None:
@@ -125,6 +136,23 @@ def test_runtime_schedule_provider_and_explicit_drained_phases() -> None:
 
     worker._te_cuda_graph_phase = _Phase.SPLIT_OPEN_AFTER_FIRST
     assert not worker._assert_te_cuda_graph_model_drained()
+
+
+def test_router_replay_generation_provider_is_typed_and_strictly_advancing() -> None:
+    worker_type = _extract_worker_methods(
+        {"_next_router_replay_microbatch_generation"}
+    )
+    worker = worker_type()
+    worker._next_router_route_generation = 4
+
+    generations = [
+        worker._next_router_replay_microbatch_generation(),
+        worker._next_router_replay_microbatch_generation(),
+        worker._next_router_replay_microbatch_generation(),
+    ]
+
+    assert generations == [4, 5, 6]
+    assert all(type(generation) is int for generation in generations)
 
 
 def test_initialization_uses_configured_cache_capacity_and_topology_only_helper(
@@ -354,6 +382,140 @@ def test_first_microbatch_preflight_failure_is_raised_collectively() -> None:
         worker._collectively_peek_te_cuda_graph_training_iterator(iter(()), object())
 
     assert collective_calls == [(local_error, "microbatch preflight")]
+
+
+def test_router_route_preflight_runs_before_bank_schedule_activation() -> None:
+    tree = ast.parse(_WORKER_PATH.read_text())
+    class_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "MegatronPolicyWorkerImpl"
+    )
+    methods = {
+        node.name: node for node in class_node.body if isinstance(node, ast.FunctionDef)
+    }
+
+    for method_name in ("train", "_train_microbatch_body"):
+        calls = [node for node in ast.walk(methods[method_name]) if isinstance(node, ast.Call)]
+        preflight_line = min(
+            call.lineno
+            for call in calls
+            if isinstance(call.func, ast.Attribute)
+            and call.func.attr == "_collectively_preflight_router_replay_microbatch"
+        )
+        ensure_line = min(
+            call.lineno
+            for call in calls
+            if isinstance(call.func, ast.Attribute)
+            and call.func.attr == "_ensure_te_cuda_graph_schedule"
+        )
+        assert preflight_line < ensure_line
+
+
+def test_router_route_preflight_rejects_stale_generation_collectively() -> None:
+    worker_type = _extract_worker_methods(
+        {"_collectively_preflight_router_replay_microbatch"}
+    )
+    worker = worker_type()
+    worker.model = object()
+    worker._router_replay_enabled = True
+    worker._active_router_route_generation = 7
+    call_state = SimpleNamespace(
+        router_route_generation=7,
+        router_route_signature=((1, 0, (8, 2)),),
+    )
+    microbatch = SimpleNamespace(
+        routed_experts_cp_sharded=object(),
+        structural_padding_mask_cp_sharded=object(),
+        microbatch_generation=7,
+    )
+    collective_calls: list[tuple[Any, str]] = []
+    worker._collectively_validate_te_cuda_graph_integer = (
+        lambda value, *, name, group=None: value
+    )
+
+    def raise_collectively(error: Any, *, operation: str) -> None:
+        collective_calls.append((error, operation))
+        if error is not None:
+            raise RuntimeError("collective stale route generation") from error
+
+    worker._collectively_raise_te_cuda_graph_failure = raise_collectively
+
+    with pytest.raises(RuntimeError, match="collective stale route generation"):
+        worker._collectively_preflight_router_replay_microbatch(
+            microbatch,
+            call_state,
+        )
+
+    assert len(collective_calls) == 1
+    assert collective_calls[0][1] == "router route preflight"
+    assert isinstance(collective_calls[0][0], ValueError)
+
+
+def test_router_route_counters_reduce_globally_and_block_unsafe_state() -> None:
+    class FakeTensor:
+        def __init__(self, values: int | list[int]) -> None:
+            self.values = [values] if isinstance(values, int) else values
+
+        def __getitem__(self, index: int) -> "FakeTensor":
+            return FakeTensor([self.values[index]])
+
+        def item(self) -> int:
+            assert len(self.values) == 1
+            return self.values[0]
+
+    calls: list[tuple[Any, Any]] = []
+    reduce_op = SimpleNamespace(MAX="max", SUM="sum")
+
+    def all_reduce(tensor: FakeTensor, *, op: Any) -> None:
+        calls.append((op, None))
+        if op == reduce_op.SUM:
+            tensor.values = [value * 8 for value in tensor.values]
+
+    fake_torch = SimpleNamespace(
+        int32="int32",
+        int64="int64",
+        tensor=lambda values, *, dtype, device: FakeTensor(values),
+        distributed=SimpleNamespace(ReduceOp=reduce_op, all_reduce=all_reduce),
+    )
+    counter_fields = (
+        "route_payloads_produced",
+        "route_payloads_copied",
+        "route_graph_launches",
+        "missing_route_count",
+        "stale_generation_count",
+        "malformed_route_count",
+        "out_of_range_count",
+        "duplicate_route_count",
+        "cp_mismatch_count",
+    )
+    worker_type = _extract_worker_methods(
+        {"_finalize_router_replay_graph_counters"},
+        {
+            "torch": fake_torch,
+            "ROUTER_REPLAY_GRAPH_COUNTER_FIELDS": counter_fields,
+            "trace_router_replay_graph_counters": lambda _counters: None,
+        },
+    )
+    worker = worker_type()
+    worker.model = object()
+    worker._te_cuda_graph_device = lambda: "cuda"
+    current = {name: 0 for name in counter_fields}
+    current.update(
+        route_payloads_produced=3,
+        route_payloads_copied=2,
+        route_graph_launches=2,
+        stale_generation_count=1,
+    )
+    worker._snapshot_router_replay_graph_counters = lambda: current
+    call_state = SimpleNamespace(
+        router_replay_counter_snapshot={name: 0 for name in counter_fields}
+    )
+
+    with pytest.raises(RuntimeError, match="stale_generation_count=8"):
+        worker._finalize_router_replay_graph_counters(call_state)
+
+    assert calls == [(reduce_op.MAX, None), (reduce_op.SUM, None)]
 
 
 def test_schedule_uses_exact_sample_and_two_entry_lru() -> None:
@@ -1000,11 +1162,16 @@ def test_remote_graph_failure_raises_and_never_falls_back() -> None:
     )
     worker_type = _extract_worker_methods(
         {"_collectively_raise_te_cuda_graph_failure"},
-        {"torch": fake_torch},
+        {
+            "torch": fake_torch,
+            "clear_router_replay": lambda model: cleanup.append("route.clear"),
+        },
     )
     worker = worker_type()
     worker._te_cuda_graph_device = lambda: "cuda"
     cleanup: list[str] = []
+    worker.model = object()
+    worker._active_router_route_generation = 9
     worker._reset_te_cuda_graph_banks_after_failure = lambda: cleanup.append("reset")
 
     with pytest.raises(RuntimeError, match="another rank"):
@@ -1012,7 +1179,43 @@ def test_remote_graph_failure_raises_and_never_falls_back() -> None:
             None,
             operation="replay",
         )
-    assert cleanup == ["reset"]
+    assert cleanup == ["route.clear", "reset"]
+    assert worker._active_router_route_generation is None
+
+
+def test_split_success_and_abort_clear_route_lifecycle_state() -> None:
+    tree = ast.parse(_WORKER_PATH.read_text())
+    class_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "MegatronPolicyWorkerImpl"
+    )
+    methods = {
+        node.name: node for node in class_node.body if isinstance(node, ast.FunctionDef)
+    }
+
+    for method_name in ("_finish_train_step_body", "abort_train_step"):
+        calls = [node for node in ast.walk(methods[method_name]) if isinstance(node, ast.Call)]
+        assert any(
+            isinstance(call.func, ast.Name)
+            and call.func.id == "clear_router_replay"
+            for call in calls
+        )
+        assignments = [
+            node
+            for node in ast.walk(methods[method_name])
+            if isinstance(node, ast.Assign)
+        ]
+        assert any(
+            any(
+                isinstance(target, ast.Attribute)
+                and target.attr == "_active_router_route_generation"
+                for target in assignment.targets
+            )
+            and isinstance(assignment.value, ast.Constant)
+            and assignment.value.value is None
+            for assignment in assignments
+        )
 
 
 def test_split_abort_restores_idle_and_runs_deferred_failure_cleanup() -> None:

@@ -57,6 +57,7 @@ from nemo_rl.models.megatron.draft.hidden_capture import (
 )
 from nemo_rl.models.megatron.router_replay import (
     clear_router_replay,
+    record_router_replay_graph_consumers,
     set_router_replay_backward,
     set_router_replay_forward,
 )
@@ -380,6 +381,7 @@ def forward_with_post_processing_fn(
     use_fused_linear_logprobs: bool = False,
     use_router_replay: bool = False,
     router_replay_train: bool = False,
+    router_replay_graph_schedule_key: Optional[int] = None,
 ) -> Tuple[torch.Tensor, Callable]:
     """Perform forward pass with pre-processed microbatch and return output tensor and post-processing function.
 
@@ -420,16 +422,22 @@ def forward_with_post_processing_fn(
     mtp_loss_mask = processed_mb.mtp_loss_mask
     routed_experts_cp_sharded = processed_mb.routed_experts_cp_sharded
 
-    if use_router_replay:
-        if routed_experts_cp_sharded is None:
-            raise RuntimeError(
-                "Router replay is enabled but routed_experts is missing from the microbatch."
-            )
-        set_router_replay_forward(model, routed_experts_cp_sharded)
-
-    # Insert hook to capture hidden states and embeddings for draft model training if draft_model is provided
-    capture_context, capture = get_capture_context(model, enable_hidden_capture)
     try:
+        if use_router_replay:
+            if routed_experts_cp_sharded is None:
+                raise RuntimeError(
+                    "Router replay is enabled but routed_experts is missing from the "
+                    "microbatch."
+                )
+            set_router_replay_forward(
+                model,
+                routed_experts_cp_sharded,
+                microbatch_generation=processed_mb.microbatch_generation,
+            )
+
+        # Insert hook to capture hidden states and embeddings for draft model training
+        # if draft_model is provided.
+        capture_context, capture = get_capture_context(model, enable_hidden_capture)
         with capture_context:
             output_tensor = model_forward(
                 model=model,
@@ -443,6 +451,12 @@ def forward_with_post_processing_fn(
                 structural_padding_mask_cp_sharded=(structural_padding_mask_cp_sharded),
                 straggler_timer=straggler_timer,
                 use_fused_linear_logprobs=use_fused_linear_logprobs,
+            )
+        if use_router_replay and router_replay_graph_schedule_key is not None:
+            record_router_replay_graph_consumers(
+                model,
+                microbatch_generation=processed_mb.microbatch_generation,
+                schedule_key=router_replay_graph_schedule_key,
             )
     except Exception:
         # The forward above armed the router-replay action (set_router_replay_forward);
@@ -532,6 +546,7 @@ def megatron_forward_backward(
     use_fused_linear_logprobs: bool = False,
     use_router_replay: bool = False,
     router_replay_train: bool = False,
+    router_replay_graph_schedule_key: Optional[int] = None,
 ) -> Any:
     """Execute forward and backward passes using Megatron's utilities.
 
@@ -571,6 +586,7 @@ def megatron_forward_backward(
         use_fused_linear_logprobs=use_fused_linear_logprobs,
         use_router_replay=use_router_replay,
         router_replay_train=router_replay_train,
+        router_replay_graph_schedule_key=router_replay_graph_schedule_key,
     )
     forward_backward_func = get_forward_backward_func()
     if use_router_replay:

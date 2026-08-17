@@ -20,7 +20,7 @@ import time
 import warnings
 from collections import OrderedDict, defaultdict
 from contextlib import AbstractContextManager, contextmanager, nullcontext
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import Enum, auto
 from typing import Any, Iterable, Iterator, Optional, TypeVar, cast
 
@@ -83,7 +83,14 @@ from nemo_rl.models.megatron.pipeline_parallel import (
     broadcast_obj_from_pp_rank,
     broadcast_tensors_from_last_stage,
 )
-from nemo_rl.models.megatron.router_replay import router_replay_enabled
+from nemo_rl.models.megatron.router_replay import (
+    ROUTER_REPLAY_GRAPH_COUNTER_FIELDS,
+    clear_router_replay,
+    record_router_replay_graph_error,
+    router_replay_enabled,
+    snapshot_router_replay_graph_counters,
+    validate_router_replay_graph_microbatch,
+)
 from nemo_rl.models.megatron.setup import (
     finalize_megatron_setup,
     handle_model_import,
@@ -118,7 +125,10 @@ from nemo_rl.utils.grad_norm import warn_if_inf_grad_norm
 from nemo_rl.utils.nsys import wrap_with_nvtx_name
 from nemo_rl.utils.nvml import log_gpu_memory_diagnostics
 from nemo_rl.utils.packed_tensor import packed_broadcast_producer
-from nemo_rl.utils.r3_trace import maybe_r3_trace_stage
+from nemo_rl.utils.r3_trace import (
+    maybe_r3_trace_stage,
+    trace_router_replay_graph_counters,
+)
 from nemo_rl.utils.timer import Timer
 from nemo_rl.weight_sync.nccl_reshard_utils import (
     HFToLocalParamMap,
@@ -151,6 +161,10 @@ class _TECudaGraphCallState:
     padded_tokens: int = 0
     capacity_tokens: int = 0
     normalized_schedule_key: Optional[int] = None
+    router_route_signature: Optional[tuple[Any, ...]] = None
+    router_route_generation: Optional[int] = None
+    router_replay_counter_snapshot: dict[str, int] = field(default_factory=dict)
+    reduced_router_replay_counters: dict[str, int] = field(default_factory=dict)
 
 
 def _should_use_router_replay(
@@ -642,6 +656,8 @@ class MegatronPolicyWorkerImpl(
             None
         )
         self._te_cuda_graph_reset_required = False
+        self._active_router_route_generation: Optional[int] = None
+        self._next_router_route_generation = 1
         if (
             init_optimizer
             and self.megatron_cfg.model.cuda_graph_impl == "transformer_engine"
@@ -675,6 +691,14 @@ class MegatronPolicyWorkerImpl(
     def _te_cuda_graph_runtime_num_microbatches(self) -> int:
         """Return the worker-owned normalized runtime schedule count."""
         return self._te_cuda_graph_runtime_schedule_count
+
+    def _next_router_replay_microbatch_generation(self) -> int:
+        """Reserve one strictly advancing worker-local route generation."""
+        generation = self._next_router_route_generation
+        if type(generation) is not int or generation < 1:
+            raise RuntimeError("Router replay generation counter is invalid.")
+        self._next_router_route_generation += 1
+        return generation
 
     def get_effective_te_cuda_graph_config(self) -> dict[str, Any]:
         """Return the validated worker-side graph configuration to the policy."""
@@ -958,9 +982,16 @@ class MegatronPolicyWorkerImpl(
             return
         cleanup_error: Optional[Exception] = None
         try:
-            self._reset_te_cuda_graph_banks_after_failure()
+            clear_router_replay(self.model)
         except Exception as caught_error:
             cleanup_error = caught_error
+        finally:
+            self._active_router_route_generation = None
+        try:
+            self._reset_te_cuda_graph_banks_after_failure()
+        except Exception as caught_error:
+            if cleanup_error is None:
+                cleanup_error = caught_error
         if error is not None:
             raise RuntimeError(
                 f"TE CUDA Graph {operation} failed collectively."
@@ -1217,8 +1248,61 @@ class MegatronPolicyWorkerImpl(
         if manager is None:
             raise RuntimeError("TE CUDA Graph counter manager is not initialized.")
         return _TECudaGraphCallState(
-            execution_snapshot=manager.snapshot_execution_counters()
+            execution_snapshot=manager.snapshot_execution_counters(),
+            router_replay_counter_snapshot=(
+                self._snapshot_router_replay_graph_counters()
+                if getattr(self, "_router_replay_enabled", False)
+                else {}
+            ),
         )
+
+    def _snapshot_router_replay_graph_counters(self) -> dict[str, int]:
+        return snapshot_router_replay_graph_counters(self.model)
+
+    def _finalize_router_replay_graph_counters(
+        self,
+        call_state: _TECudaGraphCallState,
+    ) -> dict[str, int]:
+        """World-reduce route evidence and reject every unsafe counter."""
+        current = self._snapshot_router_replay_graph_counters()
+        snapshot = call_state.router_replay_counter_snapshot
+        local_delta = [
+            int(current.get(name, 0)) - int(snapshot.get(name, 0))
+            for name in ROUTER_REPLAY_GRAPH_COUNTER_FIELDS
+        ]
+        regressed = torch.tensor(
+            int(any(value < 0 for value in local_delta)),
+            dtype=torch.int32,
+            device=self._te_cuda_graph_device(),
+        )
+        torch.distributed.all_reduce(regressed, op=torch.distributed.ReduceOp.MAX)
+        if bool(regressed.item()):
+            raise RuntimeError(
+                "Router replay graph counters regressed on at least one rank."
+            )
+        reduced = torch.tensor(
+            local_delta,
+            dtype=torch.int64,
+            device=self._te_cuda_graph_device(),
+        )
+        torch.distributed.all_reduce(reduced, op=torch.distributed.ReduceOp.SUM)
+        counters = {
+            name: int(reduced[index].item())
+            for index, name in enumerate(ROUTER_REPLAY_GRAPH_COUNTER_FIELDS)
+        }
+        call_state.reduced_router_replay_counters = counters
+        trace_router_replay_graph_counters(counters)
+        unsafe = [
+            f"{name}={counters[name]}"
+            for name in ROUTER_REPLAY_GRAPH_COUNTER_FIELDS[3:]
+            if counters[name] != 0
+        ]
+        if unsafe:
+            raise RuntimeError(
+                "Router replay graph promotion is blocked by unsafe counters: "
+                + ", ".join(unsafe)
+            )
+        return counters
 
     def _record_te_cuda_graph_schedule_replay(
         self,
@@ -1243,6 +1327,8 @@ class MegatronPolicyWorkerImpl(
             raise RuntimeError("TE CUDA Graph counter manager is not initialized.")
         if call_state.normalized_schedule_key is None:
             raise RuntimeError("TE CUDA Graph call has no normalized schedule key.")
+        if getattr(self, "_router_replay_enabled", False):
+            self._finalize_router_replay_graph_counters(call_state)
         pg_collection = get_pg_collection(self.model)
 
         def validate_across_model_parallel_replica(value: int, *, name: str) -> int:
@@ -1432,6 +1518,84 @@ class MegatronPolicyWorkerImpl(
                 "TE CUDA Graph collective microbatch preflight produced no input."
             )
         return first, preserved
+
+    def _collectively_preflight_router_replay_microbatch(
+        self,
+        microbatch: ProcessedMicrobatch,
+        call_state: _TECudaGraphCallState,
+    ) -> None:
+        """Validate current route identity on every rank before bank activation."""
+        if not self._router_replay_enabled:
+            return
+        local_error: Optional[Exception] = None
+        signature: Optional[tuple[Any, ...]] = None
+        generation: Optional[int] = None
+        try:
+            generation = microbatch.microbatch_generation
+            if type(generation) is not int:
+                raise TypeError("Router route microbatch generation must be an int.")
+            previous_generation = call_state.router_route_generation
+            active_generation = self._active_router_route_generation
+            if (
+                previous_generation is not None
+                and generation <= previous_generation
+            ) or (active_generation is not None and generation <= active_generation):
+                raise ValueError(
+                    "Router route microbatch generation must strictly advance."
+                )
+            routed_experts = microbatch.routed_experts_cp_sharded
+            if routed_experts is None:
+                raise RuntimeError(
+                    "Router replay graph preflight is missing routed_experts."
+                )
+            structural_padding_mask = (
+                microbatch.structural_padding_mask_cp_sharded
+            )
+            if structural_padding_mask is None:
+                raise RuntimeError(
+                    "Router replay graph preflight is missing the CP structural mask."
+                )
+            signature = validate_router_replay_graph_microbatch(
+                self.model,
+                routed_experts,
+                structural_padding_mask,
+                microbatch_generation=generation,
+            )
+            if (
+                call_state.router_route_signature is not None
+                and signature != call_state.router_route_signature
+            ):
+                raise ValueError(
+                    "Router replay graph physical signature changed within a call."
+                )
+        except Exception as error:
+            local_error = error
+            record_router_replay_graph_error(self.model, error)
+        self._collectively_raise_te_cuda_graph_failure(
+            local_error,
+            operation="router route preflight",
+        )
+        if generation is None or signature is None:
+            raise RuntimeError(
+                "TE CUDA Graph collective router route preflight produced no identity."
+            )
+        collective_error: Optional[Exception] = None
+        try:
+            generation = self._collectively_validate_te_cuda_graph_integer(
+                generation,
+                name="router route microbatch generation",
+            )
+        except Exception as error:
+            collective_error = error
+            record_router_replay_graph_error(self.model, error)
+        self._collectively_raise_te_cuda_graph_failure(
+            collective_error,
+            operation="router route generation agreement",
+        )
+        call_state.router_route_generation = generation
+        if call_state.router_route_signature is None:
+            call_state.router_route_signature = signature
+        self._active_router_route_generation = generation
 
     def _record_te_cuda_graph_optimizer_step(self, successful: bool) -> None:
         lifecycle = self._te_cuda_graph_lifecycle
@@ -1734,6 +1898,12 @@ class MegatronPolicyWorkerImpl(
                 batch = gb_result["batch"]
                 global_valid_seqs = gb_result["global_valid_seqs"]
                 global_valid_toks = gb_result["global_valid_toks"]
+                use_router_replay = _should_use_router_replay(
+                    enabled=self._router_replay_enabled,
+                    data=batch,
+                    stage="train",
+                    require=True,
+                )
 
                 # Pre-compute the MTP loss mask, only when MTP is enabled, so
                 # process_microbatch can pack it.
@@ -1761,21 +1931,35 @@ class MegatronPolicyWorkerImpl(
                     for_cuda_graph_training=te_cuda_graph_call_state is not None,
                     delegate_mtp_loss_mask_to_model=self.delegate_mtp_loss_mask_to_model,
                     model_slices_context_parallel_inputs=self.model_slices_context_parallel_inputs,
+                    microbatch_generation_provider=(
+                        self._next_router_replay_microbatch_generation
+                        if use_router_replay
+                        else None
+                    ),
                 )
                 te_cuda_graph_key = None
                 if te_cuda_graph_call_state is not None:
-                    first_microbatch, data_iterator = (
-                        self._collectively_peek_te_cuda_graph_training_iterator(
-                            data_iterator,
+                    try:
+                        first_microbatch, data_iterator = (
+                            self._collectively_peek_te_cuda_graph_training_iterator(
+                                data_iterator,
+                                te_cuda_graph_call_state,
+                            )
+                        )
+                        self._collectively_preflight_router_replay_microbatch(
+                            first_microbatch,
                             te_cuda_graph_call_state,
                         )
-                    )
-                    te_cuda_graph_key = self._ensure_te_cuda_graph_schedule(
-                        num_microbatches=num_microbatches,
-                        first_microbatch=first_microbatch,
-                        call_state=te_cuda_graph_call_state,
-                        ensure_active=True,
-                    )
+                        te_cuda_graph_key = self._ensure_te_cuda_graph_schedule(
+                            num_microbatches=num_microbatches,
+                            first_microbatch=first_microbatch,
+                            call_state=te_cuda_graph_call_state,
+                            ensure_active=True,
+                        )
+                    except Exception:
+                        clear_router_replay(self.model)
+                        self._active_router_route_generation = None
+                        raise
                 # Track total microbatches for MoE aux-loss averaging
                 total_num_microbatches += int(num_microbatches)
 
@@ -1817,12 +2001,6 @@ class MegatronPolicyWorkerImpl(
 
                     # Forward pass.
                     draft_enabled = "draft" in self.cfg and self.cfg["draft"]["enabled"]
-                    use_router_replay = _should_use_router_replay(
-                        enabled=self._router_replay_enabled,
-                        data=batch,
-                        stage="train",
-                        require=True,
-                    )
                     with maybe_r3_trace_stage("train", enabled=use_router_replay):
                         local_graph_error: Optional[Exception] = None
                         if te_cuda_graph_key is not None:
@@ -1850,12 +2028,26 @@ class MegatronPolicyWorkerImpl(
                                 ),
                                 use_router_replay=use_router_replay,
                                 router_replay_train=not eval_mode,
+                                router_replay_graph_schedule_key=(
+                                    te_cuda_graph_key.num_microbatches
+                                    if te_cuda_graph_key is not None
+                                    else None
+                                ),
                             )
                         except Exception as error:
                             if te_cuda_graph_key is None:
                                 raise
+                            if (
+                                use_router_replay
+                                and "router replay cuda graph"
+                                in str(error).lower()
+                            ):
+                                record_router_replay_graph_error(self.model, error)
                             local_graph_error = error
                         finally:
+                            if use_router_replay:
+                                clear_router_replay(self.model)
+                            self._active_router_route_generation = None
                             if te_cuda_graph_key is not None:
                                 self._te_cuda_graph_phase = _TECudaGraphWorkerPhase.IDLE
                         if te_cuda_graph_key is not None:
@@ -2316,6 +2508,12 @@ class MegatronPolicyWorkerImpl(
 
         state["local_valid_seqs"] = state["local_valid_seqs"] + call_local_seqs
         state["local_valid_toks"] = state["local_valid_toks"] + call_local_toks
+        use_router_replay = _should_use_router_replay(
+            enabled=self._router_replay_enabled,
+            data=data,
+            stage="train",
+            require=True,
+        )
 
         # Build the per-call iterator. Each ``train_microbatches_from_meta``
         # call carries one DP slice; the iterator subdivides into pipeline
@@ -2333,39 +2531,53 @@ class MegatronPolicyWorkerImpl(
             straggler_timer=self.mcore_state.straggler_timer,
             delegate_pack_to_model=getattr(self, "delegate_pack_to_model", False),
             for_cuda_graph_training=state["te_cuda_graph_call_state"] is not None,
+            microbatch_generation_provider=(
+                self._next_router_replay_microbatch_generation
+                if use_router_replay
+                else None
+            ),
         )
         te_cuda_graph_key = None
         te_cuda_graph_call_state = state["te_cuda_graph_call_state"]
         if te_cuda_graph_call_state is not None:
-            first_microbatch, data_iterator = (
-                self._collectively_peek_te_cuda_graph_training_iterator(
-                    data_iterator,
+            try:
+                first_microbatch, data_iterator = (
+                    self._collectively_peek_te_cuda_graph_training_iterator(
+                        data_iterator,
+                        te_cuda_graph_call_state,
+                    )
+                )
+                self._collectively_preflight_router_replay_microbatch(
+                    first_microbatch,
                     te_cuda_graph_call_state,
                 )
-            )
-            first_split_call = state["te_cuda_graph_key"] is None
-            expected_phase = (
-                _TECudaGraphWorkerPhase.SPLIT_OPEN_BEFORE_FIRST
-                if first_split_call
-                else _TECudaGraphWorkerPhase.SPLIT_OPEN_AFTER_FIRST
-            )
-            if self._te_cuda_graph_phase is not expected_phase:
-                raise RuntimeError(
-                    "split TE CUDA Graph worker phase does not match call order"
+                first_split_call = state["te_cuda_graph_key"] is None
+                expected_phase = (
+                    _TECudaGraphWorkerPhase.SPLIT_OPEN_BEFORE_FIRST
+                    if first_split_call
+                    else _TECudaGraphWorkerPhase.SPLIT_OPEN_AFTER_FIRST
                 )
-            te_cuda_graph_key = self._ensure_te_cuda_graph_schedule(
-                num_microbatches=num_microbatches,
-                first_microbatch=first_microbatch,
-                call_state=te_cuda_graph_call_state,
-                ensure_active=first_split_call,
-            )
-            pinned_key = state["te_cuda_graph_key"]
-            if pinned_key is not None and pinned_key != te_cuda_graph_key:
-                raise RuntimeError(
-                    "A split train step cannot change its pinned TE CUDA Graph "
-                    "schedule key before launch."
+                if self._te_cuda_graph_phase is not expected_phase:
+                    raise RuntimeError(
+                        "split TE CUDA Graph worker phase does not match call order"
+                    )
+                te_cuda_graph_key = self._ensure_te_cuda_graph_schedule(
+                    num_microbatches=num_microbatches,
+                    first_microbatch=first_microbatch,
+                    call_state=te_cuda_graph_call_state,
+                    ensure_active=first_split_call,
                 )
-            state["te_cuda_graph_key"] = te_cuda_graph_key
+                pinned_key = state["te_cuda_graph_key"]
+                if pinned_key is not None and pinned_key != te_cuda_graph_key:
+                    raise RuntimeError(
+                        "A split train step cannot change its pinned TE CUDA Graph "
+                        "schedule key before launch."
+                    )
+                state["te_cuda_graph_key"] = te_cuda_graph_key
+            except Exception:
+                clear_router_replay(self.model)
+                self._active_router_route_generation = None
+                raise
         state["total_num_microbatches"] += int(num_microbatches)
 
         loss_post_processor = LossPostProcessor(
@@ -2382,13 +2594,6 @@ class MegatronPolicyWorkerImpl(
         placeholder_n = torch.tensor(1.0, device="cuda")
 
         draft_enabled = "draft" in self.cfg and self.cfg["draft"]["enabled"]
-        use_router_replay = _should_use_router_replay(
-            enabled=self._router_replay_enabled,
-            data=data,
-            stage="train",
-            require=True,
-        )
-
         # The critical wrap: hooks fire (accumulate main_grad) but the
         # per-call reduce dispatch is gated off.
         with (
@@ -2424,12 +2629,25 @@ class MegatronPolicyWorkerImpl(
                         ),
                         use_router_replay=use_router_replay,
                         router_replay_train=True,
+                        router_replay_graph_schedule_key=(
+                            te_cuda_graph_key.num_microbatches
+                            if te_cuda_graph_key is not None
+                            else None
+                        ),
                     )
                 except Exception as error:
                     if te_cuda_graph_key is None:
                         raise
+                    if (
+                        use_router_replay
+                        and "router replay cuda graph" in str(error).lower()
+                    ):
+                        record_router_replay_graph_error(self.model, error)
                     local_graph_error = error
                 finally:
+                    if use_router_replay:
+                        clear_router_replay(self.model)
+                    self._active_router_route_generation = None
                     if te_cuda_graph_key is not None:
                         self._te_cuda_graph_phase = (
                             _TECudaGraphWorkerPhase.SPLIT_OPEN_AFTER_FIRST
@@ -2694,16 +2912,24 @@ class MegatronPolicyWorkerImpl(
             metrics["cuda_graph_metrics"] = cuda_graph_metrics
             metrics["cuda_graph_contract"] = cuda_graph_contract
 
-        state["te_cuda_graph_key"] = None
-        state["te_cuda_graph_call_state"] = None
-        self._train_step_state = None
-        self._te_cuda_graph_phase = _TECudaGraphWorkerPhase.IDLE
+        try:
+            clear_router_replay(self.model)
+        finally:
+            self._active_router_route_generation = None
+            state["te_cuda_graph_key"] = None
+            state["te_cuda_graph_call_state"] = None
+            self._train_step_state = None
+            self._te_cuda_graph_phase = _TECudaGraphWorkerPhase.IDLE
         return metrics
 
     @wrap_with_nvtx_name("megatron_policy_worker/abort_train_step")
     def abort_train_step(self) -> None:
         state = getattr(self, "_train_step_state", None)
         if state is None:
+            try:
+                clear_router_replay(self.model)
+            finally:
+                self._active_router_route_generation = None
             return
         try:
             # Restore hooks before zeroing buffers, even when abort follows a
@@ -2714,12 +2940,16 @@ class MegatronPolicyWorkerImpl(
                 self.model.zero_grad_buffer()
                 self.optimizer.zero_grad()
             finally:
-                state["te_cuda_graph_key"] = None
-                state["te_cuda_graph_call_state"] = None
-                self._train_step_state = None
-                self._te_cuda_graph_phase = _TECudaGraphWorkerPhase.IDLE
-                if getattr(self, "_te_cuda_graph_reset_required", False):
-                    self._reset_te_cuda_graph_banks_after_failure()
+                try:
+                    clear_router_replay(self.model)
+                finally:
+                    self._active_router_route_generation = None
+                    state["te_cuda_graph_key"] = None
+                    state["te_cuda_graph_call_state"] = None
+                    self._train_step_state = None
+                    self._te_cuda_graph_phase = _TECudaGraphWorkerPhase.IDLE
+                    if getattr(self, "_te_cuda_graph_reset_required", False):
+                        self._reset_te_cuda_graph_banks_after_failure()
 
     @wrap_with_nvtx_name("megatron_policy_worker/get_logprobs")
     def get_logprobs(
@@ -2751,6 +2981,12 @@ class MegatronPolicyWorkerImpl(
             if micro_batch_size is not None
             else self.cfg["logprob_batch_size"]
         )
+        use_router_replay = _should_use_router_replay(
+            enabled=self._router_replay_enabled,
+            data=data,
+            stage="prev-logprob",
+            require=require_router_replay,
+        )
 
         self.model.eval()
 
@@ -2769,6 +3005,11 @@ class MegatronPolicyWorkerImpl(
             for_cuda_graph_training=False,
             delegate_mtp_loss_mask_to_model=self.delegate_mtp_loss_mask_to_model,
             model_slices_context_parallel_inputs=self.model_slices_context_parallel_inputs,
+            microbatch_generation_provider=(
+                self._next_router_replay_microbatch_generation
+                if use_router_replay
+                else None
+            ),
         )
 
         use_fused_linear_logprobs = self.cfg["megatron_cfg"].get(
@@ -2779,13 +3020,6 @@ class MegatronPolicyWorkerImpl(
             sampling_params=self.sampling_params,
             use_fused_linear_logprobs=use_fused_linear_logprobs,
         )
-        use_router_replay = _should_use_router_replay(
-            enabled=self._router_replay_enabled,
-            data=data,
-            stage="prev-logprob",
-            require=require_router_replay,
-        )
-
         with self._hybridep_uneven_padding_for_eager_path():
             with maybe_r3_trace_stage("prev-logprob", enabled=use_router_replay):
                 list_of_logprobs = megatron_forward_backward(

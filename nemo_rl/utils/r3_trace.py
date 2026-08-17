@@ -671,6 +671,8 @@ def trace_router_replay_action(
     layer_number: Optional[int],
     replay_tensor: Optional[Any] = None,
     replay_backward_list_len: Optional[int] = None,
+    microbatch_generation: Optional[int] = None,
+    route_digest: Optional[str] = None,
 ) -> None:
     ctx = _current_context()
     if ctx is None:
@@ -685,6 +687,61 @@ def trace_router_replay_action(
         record["layer_number"] = int(layer_number)
     if replay_backward_list_len is not None:
         record["replay_backward_list_len"] = int(replay_backward_list_len)
+    if microbatch_generation is not None:
+        record["microbatch_generation"] = int(microbatch_generation)
+    if route_digest is not None:
+        record["route_digest"] = route_digest
     if replay_tensor is not None:
         record["tensor"] = _tensor_record(replay_tensor)
     _write_record(record)
+
+
+def trace_router_replay_graph_consumer(
+    *,
+    action: str,
+    layer_number: int,
+    payload_idx: int,
+    microbatch_generation: int,
+    route_digest: str,
+    physical_signature: dict[str, Any],
+    bank_id: Optional[int],
+    graph_index: Optional[int],
+    schedule_key: int,
+    copy_generation: Optional[int],
+    successful_graph_launch: bool,
+    capability_version: str,
+) -> None:
+    """Trace content-safe evidence for one graph-owned route consumer."""
+    ctx = _current_context()
+    if ctx is None:
+        return
+    _write_record(
+        {
+            "event": "router_replay_graph_consumer",
+            "stage": ctx["stage"],
+            "trace_step": ctx["trace_step"],
+            "action": action,
+            "layer_number": int(layer_number),
+            "payload_idx": int(payload_idx),
+            "microbatch_generation": int(microbatch_generation),
+            "route_digest": route_digest,
+            "physical_signature": physical_signature,
+            "bank_id": bank_id,
+            "graph_index": graph_index,
+            "schedule_key": int(schedule_key),
+            "copy_generation": copy_generation,
+            "successful_graph_launch": bool(successful_graph_launch),
+            "capability_version": capability_version,
+        }
+    )
+
+
+def trace_router_replay_graph_counters(counters: dict[str, int]) -> None:
+    """Trace globally reduced route lifecycle counters without payload values."""
+    _write_record(
+        {
+            "event": "router_replay_graph_counters",
+            "stage": "train",
+            "counters": dict(counters),
+        }
+    )

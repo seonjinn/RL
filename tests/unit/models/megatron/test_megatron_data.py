@@ -84,6 +84,68 @@ class TestProcessedMicrobatchDataclass:
         assert microbatch.packed_geometry is None
         assert microbatch.routed_experts is None
         assert microbatch.routed_experts_cp_sharded is None
+        assert microbatch.microbatch_generation == 0
+
+    @pytest.mark.parametrize("generation", [True, 1.5, "1"])
+    def test_processed_microbatch_rejects_non_integer_generation(
+        self, generation: object
+    ) -> None:
+        from nemo_rl.models.megatron.data import ProcessedMicrobatch
+
+        with pytest.raises(TypeError, match="microbatch_generation"):
+            ProcessedMicrobatch(
+                data_dict=MagicMock(),
+                input_ids=torch.tensor([[1]]),
+                input_ids_cp_sharded=torch.tensor([[1]]),
+                attention_mask=None,
+                position_ids=None,
+                packed_seq_params=None,
+                cu_seqlens_padded=None,
+                microbatch_generation=generation,
+            )
+
+
+@pytest.mark.mcore
+def test_processed_iterator_assigns_strictly_advancing_microbatch_generations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nemo_rl.models.megatron import data as data_module
+
+    class FakeData(dict):
+        def to(self, device: str) -> "FakeData":
+            assert device == "cuda"
+            return self
+
+    processed = SimpleNamespace(
+        input_ids=torch.tensor([[1]]),
+        input_ids_cp_sharded=torch.tensor([[1]]),
+        attention_mask=None,
+        position_ids=None,
+        packed_seq_params=None,
+        cu_seqlens=None,
+        cu_seqlens_padded=None,
+        structural_padding_mask=None,
+        structural_padding_mask_cp_sharded=None,
+        packed_geometry=None,
+        mtp_loss_mask=None,
+        routed_experts=None,
+        routed_experts_cp_sharded=None,
+    )
+    monkeypatch.setattr(data_module, "process_microbatch", lambda **_kwargs: processed)
+
+    iterator = data_module.make_processed_microbatch_iterator(
+        raw_iterator=iter((FakeData(), FakeData())),
+        cfg={"sequence_packing": {"enabled": False}},
+        seq_length_key=None,
+        pad_individual_seqs_to_multiple_of=1,
+        pad_packed_seq_to_multiple_of=1,
+        straggler_timer=None,
+        pad_full_seq_to=None,
+    )
+    first, second = list(iterator)
+
+    assert type(first.microbatch_generation) is int
+    assert second.microbatch_generation == first.microbatch_generation + 1
 
 
 @pytest.mark.mcore

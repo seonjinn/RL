@@ -442,7 +442,11 @@ def test_router_replay_assignments_use_layer_numbers_for_model_chunks():
         ):
             assert torch.equal(replay_tensor, expected_tensor)
 
-        set_router_replay_forward(model_chunks, routed_experts)
+        set_router_replay_forward(
+            model_chunks,
+            routed_experts,
+            microbatch_generation=1,
+        )
         for chunk in model_chunks:
             for module in chunk.modules():
                 replay = getattr(module, "router_replay", None)
@@ -547,7 +551,11 @@ def test_router_replay_actions_are_scoped_to_model_instances():
             dtype=torch.int32,
         )
 
-        set_router_replay_forward(active_model, routed_experts)
+        set_router_replay_forward(
+            active_model,
+            routed_experts,
+            microbatch_generation=1,
+        )
 
         active_replays = [
             active_model.router_1.router_replay,
@@ -615,7 +623,11 @@ def test_router_replay_noops_on_pp_rank_without_local_moe_layers():
         )
 
         assert build_router_replay_assignments(model, routed_experts) == []
-        set_router_replay_forward(model, routed_experts)
+        set_router_replay_forward(
+            model,
+            routed_experts,
+            microbatch_generation=1,
+        )
     finally:
         RouterReplay.clear_global_router_replay_instances()
 
@@ -1313,5 +1325,221 @@ def test_clear_global_router_replay_instances_clears_registry():
         clear_global_router_replay_instances()
 
         assert RouterReplay.global_router_replay_instances == []
+    finally:
+        RouterReplay.clear_global_router_replay_instances()
+
+
+@pytest.mark.mcore
+def test_graph_router_replay_replaces_values_for_each_microbatch() -> None:
+    from megatron.core.transformer.moe.router_replay import RouterReplay
+
+    from nemo_rl.models.megatron.router_replay import (
+        clear_router_replay,
+        set_router_replay_forward,
+    )
+
+    RouterReplay.clear_global_router_replay_instances()
+    try:
+        replay = RouterReplay()
+        router = SimpleNamespace(router_replay=replay, layer_number=1)
+        model = SimpleNamespace(
+            config=SimpleNamespace(num_layers=1, moe_layer_freq=[1]),
+            modules=lambda: [router],
+        )
+        first = torch.tensor([[[0, 1]], [[2, 3]]], dtype=torch.int32)
+        second = torch.tensor([[[1, 2]], [[0, 3]]], dtype=torch.int32)
+
+        set_router_replay_forward(model, first, microbatch_generation=7)
+        assert torch.equal(replay.target_topk_idx, first[:, 0].long())
+        clear_router_replay(model)
+        set_router_replay_forward(model, second, microbatch_generation=8)
+
+        assert torch.equal(replay.target_topk_idx, second[:, 0].long())
+        assert replay.graph_input_generation == 8
+    finally:
+        RouterReplay.clear_global_router_replay_instances()
+
+
+@pytest.mark.mcore
+@pytest.mark.parametrize("generation", [7, 6])
+def test_graph_router_replay_rejects_stale_or_regressed_microbatch_generation(
+    generation: int,
+) -> None:
+    from megatron.core.transformer.moe.router_replay import RouterReplay
+
+    from nemo_rl.models.megatron.router_replay import (
+        clear_router_replay,
+        set_router_replay_forward,
+    )
+
+    RouterReplay.clear_global_router_replay_instances()
+    try:
+        replay = RouterReplay()
+        router = SimpleNamespace(router_replay=replay, layer_number=1)
+        model = SimpleNamespace(
+            config=SimpleNamespace(num_layers=1, moe_layer_freq=[1]),
+            modules=lambda: [router],
+        )
+        routes = torch.tensor([[[0, 1]], [[2, 3]]], dtype=torch.int32)
+        set_router_replay_forward(model, routes, microbatch_generation=7)
+        clear_router_replay(model)
+
+        with pytest.raises(ValueError, match="strictly advance"):
+            set_router_replay_forward(
+                model,
+                routes.clone(),
+                microbatch_generation=generation,
+            )
+
+        assert replay.router_replay_action is None
+        assert replay.target_topk_idx is None
+        assert replay.graph_input_generation is None
+    finally:
+        RouterReplay.clear_global_router_replay_instances()
+
+
+@pytest.mark.mcore
+def test_graph_preflight_rejects_stale_generation_before_replay_assignment() -> None:
+    from megatron.core.transformer.moe.router_replay import RouterReplay
+
+    from nemo_rl.models.megatron.router_replay import (
+        clear_router_replay,
+        set_router_replay_forward,
+        validate_router_replay_graph_microbatch,
+    )
+
+    RouterReplay.clear_global_router_replay_instances()
+    try:
+        replay = RouterReplay()
+        router = SimpleNamespace(router_replay=replay, layer_number=1)
+        model = SimpleNamespace(
+            config=SimpleNamespace(
+                num_layers=1,
+                moe_layer_freq=[1],
+                num_moe_experts=4,
+            ),
+            modules=lambda: [router],
+        )
+        routes = torch.tensor([[[0, 1]], [[2, 3]]], dtype=torch.int32)
+        set_router_replay_forward(model, routes, microbatch_generation=7)
+        clear_router_replay(model)
+
+        with pytest.raises(ValueError, match="before graph activation"):
+            validate_router_replay_graph_microbatch(
+                model,
+                routes.clone(),
+                torch.zeros(2, dtype=torch.bool),
+                microbatch_generation=7,
+            )
+
+        assert replay.router_replay_action is None
+        assert replay.target_topk_idx is None
+        assert replay.graph_input_generation is None
+    finally:
+        RouterReplay.clear_global_router_replay_instances()
+
+
+@pytest.mark.mcore
+def test_clear_router_replay_clears_generation_and_graph_consumer_state() -> None:
+    from megatron.core.transformer.moe.router_replay import RouterReplay
+
+    from nemo_rl.models.megatron.router_replay import clear_router_replay
+
+    RouterReplay.clear_global_router_replay_instances()
+    try:
+        replay = RouterReplay()
+        router = SimpleNamespace(router_replay=replay, layer_number=1)
+        model = SimpleNamespace(
+            config=SimpleNamespace(num_layers=1, moe_layer_freq=[1]),
+            modules=lambda: [router],
+        )
+        replay.graph_input_generation = 9
+        replay.graph_input_launch_record = object()
+        replay.graph_input_bank_id = 31
+        replay.graph_input_graph_index = 2
+        replay.graph_input_copy_generation = 4
+
+        clear_router_replay(model)
+
+        assert replay.graph_input_generation is None
+        assert replay.graph_input_launch_record is None
+        assert replay.graph_input_bank_id is None
+        assert replay.graph_input_graph_index is None
+        assert replay.graph_input_copy_generation is None
+    finally:
+        RouterReplay.clear_global_router_replay_instances()
+
+
+@pytest.mark.mcore
+def test_graph_consumer_records_content_safe_launch_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from megatron.core.transformer.moe.router_replay import RouterReplay
+
+    from nemo_rl.models.megatron import router_replay as router_replay_module
+
+    RouterReplay.clear_global_router_replay_instances()
+    try:
+        replay = RouterReplay()
+        router = SimpleNamespace(router_replay=replay, layer_number=1)
+        model = SimpleNamespace(
+            config=SimpleNamespace(
+                num_layers=1,
+                moe_layer_freq=[1],
+                num_moe_experts=4,
+            ),
+            modules=lambda: [router],
+        )
+        routes = torch.tensor([[[0, 1]], [[2, 3]]], dtype=torch.int32)
+        records: list[dict[str, object]] = []
+        monkeypatch.setattr(
+            router_replay_module,
+            "trace_router_replay_graph_consumer",
+            lambda **record: records.append(record),
+        )
+
+        router_replay_module.set_router_replay_forward(
+            model,
+            routes,
+            microbatch_generation=7,
+        )
+        replay.graph_input_launch_record = SimpleNamespace(
+            bank_id=991,
+            graph_index=2,
+            copy_generation=11,
+        )
+        router_replay_module.record_router_replay_graph_consumers(
+            model,
+            microbatch_generation=7,
+            schedule_key=5,
+        )
+
+        counters = router_replay_module.snapshot_router_replay_graph_counters(model)
+        assert counters["route_payloads_produced"] == 1
+        assert counters["route_payloads_copied"] == 1
+        assert counters["route_graph_launches"] == 1
+        assert records == [
+            {
+                "action": "replay_forward",
+                "layer_number": 1,
+                "payload_idx": 0,
+                "microbatch_generation": 7,
+                "route_digest": replay._nrl_route_digest,
+                "physical_signature": {
+                    "shape": [2, 2],
+                    "dtype": "torch.int64",
+                    "device_type": "cpu",
+                    "topk": 2,
+                    "num_experts": 4,
+                },
+                "bank_id": 5,
+                "graph_index": 2,
+                "schedule_key": 5,
+                "copy_generation": 11,
+                "successful_graph_launch": True,
+                "capability_version": "r3_router_cuda_graph_input_v1",
+            }
+        ]
+        assert records[0]["bank_id"] != 991
     finally:
         RouterReplay.clear_global_router_replay_instances()
