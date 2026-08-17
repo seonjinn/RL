@@ -149,6 +149,37 @@ def test_processed_iterator_assigns_strictly_advancing_microbatch_generations(
 
 
 @pytest.mark.mcore
+def test_replayable_processed_iterator_reuses_preflight_generations_once() -> None:
+    from nemo_rl.models.megatron.data import ReplayableProcessedMicrobatchIterator
+
+    source_generations = iter((41, 42, 43))
+    factory_calls: list[list[int]] = []
+
+    def factory(generation_provider: Any) -> Any:
+        call_generations: list[int] = []
+        factory_calls.append(call_generations)
+        for identity in (1, 2, 3):
+            generation = generation_provider()
+            call_generations.append(generation)
+            yield SimpleNamespace(identity=identity, microbatch_generation=generation)
+
+    replayable = ReplayableProcessedMicrobatchIterator(
+        factory,
+        lambda: next(source_generations),
+    )
+    preflight = list(replayable)
+    schedule = list(replayable.replay())
+
+    assert [item.identity for item in preflight] == [1, 2, 3]
+    assert [item.identity for item in schedule] == [1, 2, 3]
+    assert [item.microbatch_generation for item in preflight] == [41, 42, 43]
+    assert [item.microbatch_generation for item in schedule] == [41, 42, 43]
+    assert factory_calls == [[41, 42, 43], [41, 42, 43]]
+    with pytest.raises(RuntimeError, match="only once"):
+        replayable.replay()
+
+
+@pytest.mark.mcore
 class TestGetAndValidateSeqlen:
     """Tests for get_and_validate_seqlen function."""
 
@@ -1782,7 +1813,10 @@ class TestGetMicrobatchIterator:
         mock_get_and_validate_seqlen,
     ) -> None:
         """Using the ordinary PP target would expose variable graph input shapes."""
-        from nemo_rl.models.megatron.data import get_microbatch_iterator
+        from nemo_rl.models.megatron.data import (
+            ReplayableProcessedMicrobatchIterator,
+            get_microbatch_iterator,
+        )
 
         mock_get_and_validate_seqlen.return_value = (1, 96)
         mock_get_params.return_value = (4, 8, None)
@@ -1823,6 +1857,7 @@ class TestGetMicrobatchIterator:
         assert call_kwargs["pad_full_seq_to"] == 128
         assert call_kwargs["thd_max_packed_sequences"] == 5
         assert call_kwargs["for_cuda_graph_training"] is True
+        assert isinstance(result[0], ReplayableProcessedMicrobatchIterator)
         assert result[-1] == 128
 
     @patch("nemo_rl.models.megatron.data.get_and_validate_seqlen")

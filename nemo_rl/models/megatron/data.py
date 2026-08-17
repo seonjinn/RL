@@ -115,6 +115,79 @@ class ProcessedMicrobatch:
             raise ValueError("microbatch_generation must be nonnegative.")
 
 
+class ReplayableProcessedMicrobatchIterator(Iterator[ProcessedMicrobatch]):
+    """Reprocess graph microbatches without retaining their CUDA payloads."""
+
+    def __init__(
+        self,
+        factory: Callable[[Callable[[], int]], Iterator[ProcessedMicrobatch]],
+        generation_provider: Optional[Callable[[], int]],
+    ) -> None:
+        self._factory = factory
+        self._generation_provider = (
+            _next_microbatch_generation
+            if generation_provider is None
+            else generation_provider
+        )
+        self._generations: list[int] = []
+        self._exhausted = False
+        self._replay_created = False
+        self._iterator = factory(self._record_generation)
+
+    def _record_generation(self) -> int:
+        generation = self._generation_provider()
+        self._generations.append(generation)
+        return generation
+
+    def __iter__(self) -> "ReplayableProcessedMicrobatchIterator":
+        return self
+
+    def __next__(self) -> ProcessedMicrobatch:
+        try:
+            return next(self._iterator)
+        except StopIteration:
+            self._exhausted = True
+            raise
+
+    def replay(self) -> Iterator[ProcessedMicrobatch]:
+        """Create the one schedule iterator with the preflight generations."""
+        if not self._exhausted:
+            raise RuntimeError(
+                "CUDA graph microbatch preflight must exhaust its iterator before "
+                "schedule replay."
+            )
+        if self._replay_created:
+            raise RuntimeError(
+                "CUDA graph microbatch schedule replay may be created only once."
+            )
+        self._replay_created = True
+        generations = tuple(self._generations)
+
+        def replay_iterator() -> Iterator[ProcessedMicrobatch]:
+            generation_iterator = iter(generations)
+
+            def replay_generation() -> int:
+                try:
+                    return next(generation_iterator)
+                except StopIteration as error:
+                    raise RuntimeError(
+                        "CUDA graph microbatch replay produced more inputs than "
+                        "preflight."
+                    ) from error
+
+            replay_count = 0
+            for microbatch in self._factory(replay_generation):
+                replay_count += 1
+                yield microbatch
+            if replay_count != len(generations):
+                raise RuntimeError(
+                    "CUDA graph microbatch replay count differs from preflight: "
+                    f"{replay_count} != {len(generations)}."
+                )
+
+        return replay_iterator()
+
+
 @dataclass(frozen=True)
 class PackedGeometry:
     """Immutable logical, physical, and fixed-capacity packed geometry."""
@@ -586,10 +659,10 @@ def get_microbatch_iterator(
         seq_length_key = "input_lengths"
 
     if cfg["dynamic_batching"]["enabled"]:
-        raw_iterator = data.make_microbatch_iterator_with_dynamic_shapes()
+        raw_iterator_factory = data.make_microbatch_iterator_with_dynamic_shapes
         data_iterator_len = data.get_microbatch_iterator_dynamic_shapes_len()
     elif cfg["sequence_packing"]["enabled"]:
-        raw_iterator = data.make_microbatch_iterator_for_packable_sequences()
+        raw_iterator_factory = data.make_microbatch_iterator_for_packable_sequences
         data_iterator_len, pack_seq_dim_size = (
             data.get_microbatch_iterator_for_packable_sequences_len()
         )
@@ -632,25 +705,42 @@ def get_microbatch_iterator(
             pad_full_seq_to = train_mb_tokens
         micro_batch_size = 1
     else:
-        raw_iterator = data.make_microbatch_iterator(mbs)
+        raw_iterator_factory = lambda: data.make_microbatch_iterator(mbs)
         data_iterator_len = data.size // mbs
 
-    # Wrap the raw iterator with processing
-    processed_iterator = make_processed_microbatch_iterator(
-        raw_iterator=raw_iterator,
-        cfg=cfg,
-        seq_length_key=seq_length_key,
-        pad_individual_seqs_to_multiple_of=pad_factor,
-        pad_packed_seq_to_multiple_of=pad_packed_seq_to_multiple_of,
-        pad_full_seq_to=pad_full_seq_to,
-        straggler_timer=straggler_timer,
-        delegate_pack_to_model=delegate_pack_to_model,
-        thd_max_packed_sequences=thd_max_packed_sequences,
-        for_cuda_graph_training=for_cuda_graph_training,
-        delegate_mtp_loss_mask_to_model=delegate_mtp_loss_mask_to_model,
-        model_slices_context_parallel_inputs=model_slices_context_parallel_inputs,
-        microbatch_generation_provider=microbatch_generation_provider,
-    )
+    def processed_iterator_factory(
+        generation_provider: Callable[[], int],
+    ) -> Iterator[ProcessedMicrobatch]:
+        return make_processed_microbatch_iterator(
+            raw_iterator=raw_iterator_factory(),
+            cfg=cfg,
+            seq_length_key=seq_length_key,
+            pad_individual_seqs_to_multiple_of=pad_factor,
+            pad_packed_seq_to_multiple_of=pad_packed_seq_to_multiple_of,
+            pad_full_seq_to=pad_full_seq_to,
+            straggler_timer=straggler_timer,
+            delegate_pack_to_model=delegate_pack_to_model,
+            thd_max_packed_sequences=thd_max_packed_sequences,
+            for_cuda_graph_training=for_cuda_graph_training,
+            delegate_mtp_loss_mask_to_model=delegate_mtp_loss_mask_to_model,
+            model_slices_context_parallel_inputs=model_slices_context_parallel_inputs,
+            microbatch_generation_provider=generation_provider,
+        )
+
+    if for_cuda_graph_training:
+        processed_iterator: Iterator[ProcessedMicrobatch] = (
+            ReplayableProcessedMicrobatchIterator(
+                processed_iterator_factory,
+                microbatch_generation_provider,
+            )
+        )
+    else:
+        generation_provider = (
+            _next_microbatch_generation
+            if microbatch_generation_provider is None
+            else microbatch_generation_provider
+        )
+        processed_iterator = processed_iterator_factory(generation_provider)
 
     # Compute padded sequence length for pipeline parallelism
     padded_seq_length = pad_full_seq_to if pad_full_seq_to is not None else seq_dim_size

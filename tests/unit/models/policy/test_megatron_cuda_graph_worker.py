@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import ast
 import copy
+import gc
 import sys
+import weakref
 from contextlib import contextmanager
 from enum import Enum, auto
 from pathlib import Path
@@ -43,6 +45,21 @@ class _Phase(Enum):
     SPLIT_OPEN_BEFORE_FIRST = auto()
     GRAPH_SCHEDULE_LIVE = auto()
     SPLIT_OPEN_AFTER_FIRST = auto()
+
+
+class _ReplayableTestIterator:
+    def __init__(self, items: list[Any]) -> None:
+        self._items = tuple(items)
+        self._iterator = iter(self._items)
+
+    def __iter__(self) -> "_ReplayableTestIterator":
+        return self
+
+    def __next__(self) -> Any:
+        return next(self._iterator)
+
+    def replay(self) -> Any:
+        return iter(self._items)
 
 
 def _extract_worker_methods(
@@ -92,6 +109,7 @@ def _extract_worker_methods(
         "Iterator": Any,
         "ProcessedMicrobatch": Any,
         "TECudaGraphScheduleKey": TECudaGraphScheduleKey,
+        "_TECudaGraphPreflightSample": SimpleNamespace,
         "_TECudaGraphWorkerPhase": _Phase,
         "clear_router_replay": lambda _model: None,
         "record_router_replay_graph_error": lambda _model, _error: None,
@@ -427,11 +445,15 @@ def test_router_route_preflight_rejects_later_invalid_microbatch_collectively() 
     )
     microbatches = [
         SimpleNamespace(
+            packed_seq_params=object(),
+            packed_geometry=object(),
             routed_experts_cp_sharded="routes-1",
             structural_padding_mask_cp_sharded="mask-1",
             microbatch_generation=7,
         ),
         SimpleNamespace(
+            packed_seq_params=object(),
+            packed_geometry=object(),
             routed_experts_cp_sharded="routes-2",
             structural_padding_mask_cp_sharded="mask-2",
             microbatch_generation=8,
@@ -458,13 +480,14 @@ def test_router_route_preflight_rejects_later_invalid_microbatch_collectively() 
             raise RuntimeError("collective later route failure") from error
 
     worker._collectively_raise_te_cuda_graph_failure = raise_collectively
+    worker._record_te_cuda_graph_geometry = lambda *_args: None
 
     method = worker._collectively_preflight_router_replay_microbatches
     method.__globals__["validate_router_replay_graph_microbatch"] = validate_route
 
     with pytest.raises(RuntimeError, match="collective later route failure"):
         method(
-            iter(microbatches),
+            _ReplayableTestIterator(microbatches),
             call_state,
         )
 
@@ -490,6 +513,8 @@ def test_router_route_preflight_rejects_later_generation_mismatch_collectively()
     )
     microbatches = [
         SimpleNamespace(
+            packed_seq_params=object(),
+            packed_geometry=object(),
             routed_experts_cp_sharded=object(),
             structural_padding_mask_cp_sharded=object(),
             microbatch_generation=generation,
@@ -513,13 +538,14 @@ def test_router_route_preflight_rejects_later_generation_mismatch_collectively()
 
     worker._collectively_validate_te_cuda_graph_integer = agree
     worker._collectively_raise_te_cuda_graph_failure = raise_collectively
+    worker._record_te_cuda_graph_geometry = lambda *_args: None
     method = worker._collectively_preflight_router_replay_microbatches
     method.__globals__["validate_router_replay_graph_microbatch"] = (
         lambda *_args, **_kwargs: ("physical-signature",)
     )
 
     with pytest.raises(RuntimeError, match="collective later generation mismatch"):
-        method(iter(microbatches), call_state)
+        method(_ReplayableTestIterator(microbatches), call_state)
 
     assert agreements == [
         (2, "router route microbatch count"),
@@ -528,6 +554,197 @@ def test_router_route_preflight_rejects_later_generation_mismatch_collectively()
     ]
     assert collective_calls[0] == (None, "router route preflight")
     assert collective_calls[-1][1] == "router route generation agreement"
+
+
+def test_all_microbatch_preflight_retains_only_compact_metadata_for_replay() -> None:
+    class Payload:
+        pass
+
+    class ReplayableMicrobatches:
+        def __init__(self) -> None:
+            self.preflight_payload_refs: list[weakref.ReferenceType[Payload]] = []
+            self._iterator = self._make(preflight=True)
+
+        def _make(self, *, preflight: bool) -> Any:
+            for generation in (20, 21, 22):
+                payload = Payload()
+                if preflight:
+                    self.preflight_payload_refs.append(weakref.ref(payload))
+                yield SimpleNamespace(
+                    identity=generation,
+                    full_cuda_payload=payload,
+                    packed_seq_params=SimpleNamespace(generation=generation),
+                    packed_geometry=SimpleNamespace(
+                        logical_tokens=1,
+                        padded_tokens=2,
+                        capacity_tokens=4,
+                    ),
+                    routed_experts_cp_sharded=f"routes-{generation}",
+                    structural_padding_mask_cp_sharded=f"mask-{generation}",
+                    microbatch_generation=generation,
+                )
+
+        def __iter__(self) -> "ReplayableMicrobatches":
+            return self
+
+        def __next__(self) -> Any:
+            return next(self._iterator)
+
+        def replay(self) -> Any:
+            return self._make(preflight=False)
+
+    worker_type = _extract_worker_methods(
+        {
+            "_collectively_preflight_router_replay_microbatches",
+            "_record_te_cuda_graph_geometry",
+        }
+    )
+    worker = worker_type()
+    worker.model = object()
+    worker._router_replay_enabled = True
+    worker._active_router_route_generation = None
+    worker._collectively_raise_te_cuda_graph_failure = (
+        lambda error, *, operation: (_ for _ in ()).throw(error)
+        if error is not None
+        else None
+    )
+    worker._collectively_validate_te_cuda_graph_integer = (
+        lambda value, *, name, group=None: value
+    )
+    call_state = SimpleNamespace(
+        router_route_generation=None,
+        router_route_signature=None,
+        logical_tokens=0,
+        padded_tokens=0,
+        capacity_tokens=0,
+    )
+    source = ReplayableMicrobatches()
+    method = worker._collectively_preflight_router_replay_microbatches
+    method.__globals__["validate_router_replay_graph_microbatch"] = (
+        lambda *_args, **_kwargs: ("physical-signature",)
+    )
+
+    first_sample, schedule_iterator = method(
+        source,
+        call_state,
+        expected_num_microbatches=3,
+    )
+    gc.collect()
+
+    assert all(reference() is None for reference in source.preflight_payload_refs)
+    assert not hasattr(first_sample, "full_cuda_payload")
+    assert [microbatch.identity for microbatch in schedule_iterator] == [20, 21, 22]
+
+
+@pytest.mark.parametrize("method_name", ["train", "_train_microbatch_body_impl"])
+def test_non_r3_active_bank_never_requires_router_launch_evidence(
+    method_name: str,
+) -> None:
+    tree = ast.parse(_WORKER_PATH.read_text())
+    class_node = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "MegatronPolicyWorkerImpl"
+    )
+    method = next(
+        node
+        for node in class_node.body
+        if isinstance(node, ast.FunctionDef) and node.name == method_name
+    )
+    resolver_calls = [
+        call
+        for call in ast.walk(method)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr
+        == "_collectively_resolve_router_replay_graph_launch_expected"
+    ]
+
+    assert len(resolver_calls) == 1
+    keywords = {
+        keyword.arg: ast.unparse(keyword.value)
+        for keyword in resolver_calls[0].keywords
+    }
+    assert keywords["enabled"] == "use_router_replay"
+
+    worker_type = _extract_worker_methods(
+        {
+            "_collectively_resolve_router_replay_graph_launch_expected",
+            "_te_cuda_graph_launch_expected",
+        }
+    )
+    worker = worker_type()
+    key = TECudaGraphScheduleKey(2)
+    worker._te_cuda_graph_bank_manager = SimpleNamespace(active_bank=object())
+    worker._te_cuda_graph_installed_key = key
+    worker._collectively_raise_te_cuda_graph_failure = (
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("non-R3 training must not resolve route launch evidence")
+        )
+    )
+
+    assert worker._te_cuda_graph_launch_expected(key) is True
+    assert (
+        worker._collectively_resolve_router_replay_graph_launch_expected(
+            key,
+            enabled=False,
+        )
+        is False
+    )
+
+
+def test_rank_local_launch_expectation_failure_is_collective_before_schedule() -> (
+    None
+):
+    worker_type = _extract_worker_methods(
+        {
+            "_collectively_raise_te_cuda_graph_failure",
+            "_collectively_resolve_router_replay_graph_launch_expected",
+        }
+    )
+    worker = worker_type()
+    bank_resets: list[str] = []
+    schedule_entries: list[str] = []
+    failed = SimpleNamespace(item=lambda: 1)
+    fake_torch = SimpleNamespace(
+        int32=object(),
+        tensor=lambda *_args, **_kwargs: failed,
+        distributed=SimpleNamespace(
+            ReduceOp=SimpleNamespace(MAX=object()),
+            all_reduce=lambda *_args, **_kwargs: None,
+        ),
+    )
+    resolver = worker._collectively_resolve_router_replay_graph_launch_expected
+    resolver.__globals__["torch"] = fake_torch
+    resolver.__globals__["clear_router_replay"] = lambda _model: None
+    worker.model = object()
+    worker._active_router_route_generation = 17
+    worker._te_cuda_graph_device = lambda: "cpu"
+    worker._reset_te_cuda_graph_banks_after_failure = lambda: bank_resets.append(
+        "reset"
+    )
+    worker._te_cuda_graph_launch_expected = lambda _key: (_ for _ in ()).throw(
+        RuntimeError("rank-local key/bank mismatch")
+    )
+    worker._collectively_validate_te_cuda_graph_integer = (
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("agreement must wait for local failure resolution")
+        )
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="router replay launch expectation failed collectively",
+    ):
+        worker._collectively_resolve_router_replay_graph_launch_expected(
+            TECudaGraphScheduleKey(2),
+            enabled=True,
+        )
+        schedule_entries.append("entered")
+
+    assert schedule_entries == []
+    assert bank_resets == ["reset"]
+    assert worker._active_router_route_generation is None
 
 
 def test_post_preflight_regions_are_enclosed_by_route_cleanup() -> None:
