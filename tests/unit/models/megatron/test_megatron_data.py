@@ -51,12 +51,34 @@ from tests.unit.models.megatron.megatron_data_actors import (
 
 _DATA_PATH = Path(__file__).resolve().parents[4] / "nemo_rl/models/megatron/data.py"
 
+_PACKED_SEQ_CONSUMER_FIELDS = (
+    "qkv_format",
+    "cu_seqlens_q",
+    "cu_seqlens_kv",
+    "cu_seqlens_q_padded",
+    "cu_seqlens_kv_padded",
+    "max_seqlen_q",
+    "max_seqlen_kv",
+    "local_cp_size",
+    "cp_group",
+    "total_tokens",
+    "seq_idx",
+    "tokens_per_sample",
+    "pad_between_seqs",
+    "seq_aux_loss_sample_ids",
+    "seq_aux_loss_num_samples",
+    "seq_aux_loss_max_samples",
+)
 
-def _extract_replayable_processed_microbatch_iterator() -> type:
+
+def _extract_replay_identity_components() -> dict[str, Any]:
     tree = ast.parse(_DATA_PATH.read_text())
     helper_names = {
         "_processed_microbatch_replay_identity",
+        "_stable_replay_process_group_ranks",
+        "_update_replay_identity_scalar",
         "_update_replay_identity_tensor",
+        "_update_replay_identity_tensor_metadata",
     }
     body = [
         ast.ImportFrom(
@@ -92,7 +114,61 @@ def _extract_replayable_processed_microbatch_iterator() -> type:
         ),
         namespace,
     )
-    return namespace["ReplayableProcessedMicrobatchIterator"]
+    return namespace
+
+
+def _extract_replayable_processed_microbatch_iterator() -> type:
+    return _extract_replay_identity_components()[
+        "ReplayableProcessedMicrobatchIterator"
+    ]
+
+
+def _extract_make_processed_microbatch_iterator(namespace: dict[str, Any]) -> Any:
+    tree = ast.parse(_DATA_PATH.read_text())
+    method = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "make_processed_microbatch_iterator"
+    )
+    body = [
+        ast.ImportFrom(
+            module="__future__",
+            names=[ast.alias(name="annotations")],
+            level=0,
+        ),
+        method,
+    ]
+    exec(
+        compile(
+            ast.fix_missing_locations(ast.Module(body=body, type_ignores=[])),
+            _DATA_PATH,
+            "exec",
+        ),
+        namespace,
+    )
+    return namespace["make_processed_microbatch_iterator"]
+
+
+def _packed_seq_params() -> Any:
+    return SimpleNamespace(
+        qkv_format="thd",
+        cu_seqlens_q=torch.tensor([0, 1, 1], dtype=torch.int32),
+        cu_seqlens_kv=torch.tensor([0, 1, 1], dtype=torch.int32),
+        cu_seqlens_q_padded=torch.tensor([0, 1, 1], dtype=torch.int32),
+        cu_seqlens_kv_padded=torch.tensor([0, 1, 1], dtype=torch.int32),
+        max_seqlen_q=1,
+        max_seqlen_kv=1,
+        local_cp_size=1,
+        cp_group=None,
+        total_tokens=1,
+        seq_idx=torch.tensor([[0]], dtype=torch.int32),
+        tokens_per_sample=1,
+        pad_between_seqs=False,
+        seq_aux_loss_sample_ids=torch.tensor([0], dtype=torch.int64),
+        seq_aux_loss_num_samples=torch.tensor(1, dtype=torch.int64),
+        seq_aux_loss_max_samples=2,
+    )
 
 
 def _replay_microbatch(
@@ -100,6 +176,7 @@ def _replay_microbatch(
     generation_provider: Callable[[], int],
     *,
     full_cuda_payload: Any = None,
+    replay_identity: Optional[str] = None,
 ) -> Any:
     return SimpleNamespace(
         data_dict=SimpleNamespace(),
@@ -107,7 +184,7 @@ def _replay_microbatch(
         input_ids_cp_sharded=torch.tensor([[identity]], dtype=torch.int64),
         attention_mask=None,
         position_ids=None,
-        packed_seq_params=SimpleNamespace(),
+        packed_seq_params=_packed_seq_params(),
         cu_seqlens=torch.tensor([0, 1], dtype=torch.int32),
         cu_seqlens_padded=torch.tensor([0, 1, 1], dtype=torch.int32),
         structural_padding_mask=torch.tensor([[False]], dtype=torch.bool),
@@ -126,6 +203,11 @@ def _replay_microbatch(
             dtype=torch.int32,
         ),
         microbatch_generation=generation_provider(),
+        replay_identity=(
+            f"test-replay-identity:{identity}"
+            if replay_identity is None
+            else replay_identity
+        ),
         identity=identity,
         full_cuda_payload=full_cuda_payload,
     )
@@ -266,7 +348,9 @@ def test_replay_rejects_same_count_reordering_before_mismatched_yield() -> None:
 def test_replay_identity_binds_token_route_and_structural_ownership(
     field: str,
 ) -> None:
-    replayable_type = _extract_replayable_processed_microbatch_iterator()
+    components = _extract_replay_identity_components()
+    replayable_type = components["ReplayableProcessedMicrobatchIterator"]
+    replay_identity = components["_processed_microbatch_replay_identity"]
     generations = iter((45,))
     factory_call = 0
 
@@ -284,6 +368,7 @@ def test_replay_identity_binds_token_route_and_structural_ownership(
                 "cu_seqlens_padded": torch.tensor([0, 0, 1], dtype=torch.int32),
             }
             setattr(microbatch, field, replacements[field])
+        microbatch.replay_identity = replay_identity(microbatch)
         yield microbatch
 
     replayable = replayable_type(factory, lambda: next(generations))
@@ -291,6 +376,190 @@ def test_replay_identity_binds_token_route_and_structural_ownership(
 
     with pytest.raises(RuntimeError, match="identity.*index 0"):
         next(replayable.replay())
+
+
+def test_replay_never_hashes_live_cuda_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    components = _extract_replay_identity_components()
+    replayable_type = components["ReplayableProcessedMicrobatchIterator"]
+    live_hash_calls: list[Any] = []
+
+    def forbidden_live_hash(microbatch: Any) -> str:
+        live_hash_calls.append(microbatch)
+        raise AssertionError("live CUDA payload identity hashing is forbidden")
+
+    components["_processed_microbatch_replay_identity"] = forbidden_live_hash
+    generations = iter((47,))
+
+    def factory(generation_provider: Callable[[], int]) -> Iterator[Any]:
+        yield _replay_microbatch(11, generation_provider)
+
+    replayable = replayable_type(factory, lambda: next(generations))
+    assert [microbatch.identity for microbatch in replayable] == [11]
+    assert [microbatch.identity for microbatch in replayable.replay()] == [11]
+    assert live_hash_calls == []
+
+
+def test_replay_identity_rejects_cuda_before_cpu_or_numpy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    components = _extract_replay_identity_components()
+    update_tensor = components["_update_replay_identity_tensor"]
+    calls: list[str] = []
+
+    class FakeCudaTensor:
+        device = SimpleNamespace(type="cuda")
+
+        def detach(self) -> "FakeCudaTensor":
+            calls.append("detach")
+            return self
+
+        def cpu(self) -> Any:
+            calls.append("cpu")
+            raise AssertionError("identity must not copy a CUDA payload to CPU")
+
+        def contiguous(self) -> Any:
+            calls.append("contiguous")
+            raise AssertionError("identity must not reach a CUDA NumPy conversion")
+
+    tensor = FakeCudaTensor()
+    monkeypatch.setattr(torch, "is_tensor", lambda value: value is tensor)
+
+    with pytest.raises(ValueError, match="before H2D"):
+        update_tensor(hashlib.sha256(), "live_payload", tensor)
+
+    assert calls == ["detach"]
+
+
+@pytest.mark.parametrize("field", _PACKED_SEQ_CONSUMER_FIELDS)
+def test_replay_identity_binds_every_packed_seq_consumer_field(
+    field: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    components = _extract_replay_identity_components()
+    replayable_type = components["ReplayableProcessedMicrobatchIterator"]
+    replay_identity = components["_processed_microbatch_replay_identity"]
+    first_group = SimpleNamespace(ranks=(0, 2))
+    second_group = SimpleNamespace(ranks=(1, 3))
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(
+        torch.distributed,
+        "get_process_group_ranks",
+        lambda group: list(group.ranks),
+    )
+    replacements = {
+        "qkv_format": "sbhd",
+        "cu_seqlens_q": torch.tensor([0, 0, 1], dtype=torch.int32),
+        "cu_seqlens_kv": torch.tensor([0, 0, 1], dtype=torch.int32),
+        "cu_seqlens_q_padded": torch.tensor([0, 0, 1], dtype=torch.int32),
+        "cu_seqlens_kv_padded": torch.tensor([0, 0, 1], dtype=torch.int32),
+        "max_seqlen_q": 2,
+        "max_seqlen_kv": 2,
+        "local_cp_size": 2,
+        "cp_group": second_group,
+        "total_tokens": 2,
+        "seq_idx": torch.tensor([[1]], dtype=torch.int32),
+        "tokens_per_sample": 2,
+        "pad_between_seqs": True,
+        "seq_aux_loss_sample_ids": torch.tensor([1], dtype=torch.int64),
+        "seq_aux_loss_num_samples": torch.tensor(2, dtype=torch.int64),
+        "seq_aux_loss_max_samples": 3,
+    }
+    generations = iter((48,))
+    factory_call = 0
+
+    def factory(generation_provider: Callable[[], int]) -> Iterator[Any]:
+        nonlocal factory_call
+        factory_call += 1
+        microbatch = _replay_microbatch(11, generation_provider)
+        microbatch.packed_seq_params.cp_group = first_group
+        if factory_call == 2:
+            setattr(microbatch.packed_seq_params, field, replacements[field])
+        microbatch.replay_identity = replay_identity(microbatch)
+        yield microbatch
+
+    replayable = replayable_type(factory, lambda: next(generations))
+    list(replayable)
+
+    with pytest.raises(RuntimeError, match="identity.*index 0"):
+        next(replayable.replay())
+
+
+def test_graph_identity_is_derived_before_h2d() -> None:
+    events: list[str] = []
+
+    class FakeData(dict):
+        device = "cpu"
+
+        def to(self, device: str) -> "FakeData":
+            events.append(f"to:{device}")
+            self.device = device
+            return self
+
+    def process_microbatch(**kwargs: Any) -> Any:
+        data_dict = kwargs["data_dict"]
+        events.append(f"process:{data_dict.device}")
+        return _replay_microbatch(11, lambda: 0)
+
+    def raw_replay_identity(data_dict: Any, **_kwargs: Any) -> str:
+        assert data_dict.device == "cpu"
+        events.append("source-identity:cpu")
+        return "raw-cpu-provenance"
+
+    def processed_replay_identity(
+        _processed: Any,
+        *,
+        source_identity: str,
+    ) -> str:
+        assert source_identity == "raw-cpu-provenance"
+        events.append("consumer-metadata:cuda")
+        return "bound-provenance"
+
+    namespace = {
+        "Any": Any,
+        "BatchedDataDict": Any,
+        "Callable": Callable,
+        "Iterator": Iterator,
+        "Optional": Optional,
+        "ProcessedMicrobatch": lambda **kwargs: SimpleNamespace(**kwargs),
+        "StragglerDetector": Any,
+        "_next_microbatch_generation": lambda: 1,
+        "_processed_microbatch_replay_identity": processed_replay_identity,
+        "_raw_microbatch_replay_identity": raw_replay_identity,
+        "_validate_cuda_graph_training_inputs": lambda *_args, **_kwargs: None,
+        "get_tensor_model_parallel_rank": lambda: 0,
+        "get_tensor_model_parallel_world_size": lambda: 1,
+        "process_microbatch": process_microbatch,
+        "torch": torch,
+    }
+    make_iterator = _extract_make_processed_microbatch_iterator(namespace)
+    iterator = make_iterator(
+        raw_iterator=iter((FakeData(),)),
+        cfg={
+            "sequence_packing": {"enabled": True},
+            "megatron_cfg": {
+                "sequence_parallel": False,
+                "tensor_model_parallel_size": 1,
+            },
+        },
+        seq_length_key="input_lengths",
+        pad_individual_seqs_to_multiple_of=1,
+        pad_packed_seq_to_multiple_of=1,
+        straggler_timer=None,
+        pad_full_seq_to=1,
+        thd_max_packed_sequences=2,
+        for_cuda_graph_training=True,
+    )
+    microbatch = next(iterator)
+
+    assert events == [
+        "source-identity:cpu",
+        "to:cuda",
+        "process:cuda",
+        "consumer-metadata:cuda",
+    ]
+    assert microbatch.replay_identity == "bound-provenance"
 
 
 def test_replay_rejects_extra_item_without_consumer_requesting_n_plus_one() -> None:

@@ -91,6 +91,8 @@ class ProcessedMicrobatch:
             None when MTP is disabled or token/sample masks are absent.
         routed_experts: Optional token-aligned routed expert ids
         routed_experts_cp_sharded: Context-parallel sharded routed expert ids
+        replay_identity: Compact CPU-derived identity used to bind graph preflight
+            to the schedule replay without retaining or reading live CUDA payloads
     """
 
     data_dict: BatchedDataDict[Any]
@@ -108,12 +110,17 @@ class ProcessedMicrobatch:
     routed_experts: Optional[torch.Tensor] = None
     routed_experts_cp_sharded: Optional[torch.Tensor] = None
     microbatch_generation: int = 0
+    replay_identity: Optional[str] = None
 
     def __post_init__(self) -> None:
         if type(self.microbatch_generation) is not int:
             raise TypeError("microbatch_generation must be an int.")
         if self.microbatch_generation < 0:
             raise ValueError("microbatch_generation must be nonnegative.")
+        if self.replay_identity is not None and (
+            type(self.replay_identity) is not str or not self.replay_identity
+        ):
+            raise ValueError("replay_identity must be a nonempty string or None.")
 
 
 def _update_replay_identity_tensor(
@@ -129,17 +136,135 @@ def _update_replay_identity_tensor(
         raise TypeError(f"Replay identity field {name} must be a Tensor or None.")
     value = tensor.detach()
     if value.device.type != "cpu":
-        value = value.cpu()
+        raise ValueError(
+            f"Replay identity field {name} must be derived before H2D; got "
+            f"device {value.device}."
+        )
     value = value.contiguous()
     digest.update(f":{value.dtype}:{tuple(value.shape)}:".encode("utf-8"))
     if value.numel() > 0:
-        digest.update(value.view(torch.uint8).numpy().tobytes())
+        digest.update(value.reshape(-1).view(torch.uint8).numpy().tobytes())
     digest.update(b";")
 
 
-def _processed_microbatch_replay_identity(microbatch: ProcessedMicrobatch) -> str:
-    """Return a compact content identity without retaining payload tensors."""
+def _update_replay_identity_tensor_metadata(
+    digest: Any,
+    name: str,
+    tensor: Optional[torch.Tensor],
+) -> None:
+    """Hash consumer-visible tensor metadata without reading device contents."""
+    digest.update(name.encode("utf-8"))
+    if tensor is None:
+        digest.update(b":none;")
+        return
+    if not torch.is_tensor(tensor):
+        raise TypeError(f"Replay identity field {name} must be a Tensor or None.")
+    digest.update(f":{tensor.dtype}:{tuple(tensor.shape)};".encode("utf-8"))
+
+
+def _update_replay_identity_scalar(digest: Any, name: str, value: Any) -> None:
+    """Hash one typed static field without object representations or addresses."""
+    digest.update(name.encode("utf-8"))
+    if value is None:
+        digest.update(b":none;")
+    elif type(value) is bool:
+        digest.update(b":bool:1;" if value else b":bool:0;")
+    elif type(value) is int:
+        digest.update(f":int:{value};".encode("utf-8"))
+    elif type(value) is str:
+        encoded = value.encode("utf-8")
+        digest.update(f":str:{len(encoded)}:".encode("utf-8"))
+        digest.update(encoded)
+        digest.update(b";")
+    elif type(value) is tuple and all(type(item) is int for item in value):
+        digest.update(f":rank_tuple:{len(value)}:".encode("utf-8"))
+        for item in value:
+            digest.update(f"{item};".encode("utf-8"))
+    else:
+        raise TypeError(
+            f"Replay identity field {name} has unsupported static type "
+            f"{type(value).__name__}."
+        )
+
+
+def _stable_replay_process_group_ranks(group: Any) -> Optional[tuple[int, ...]]:
+    """Return stable process-group topology without hashing private addresses."""
+    if group is None:
+        return None
+    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+        raise RuntimeError(
+            "Replay identity cannot bind a process group before distributed "
+            "initialization."
+        )
+    ranks = tuple(torch.distributed.get_process_group_ranks(group))
+    if any(type(rank) is not int for rank in ranks):
+        raise TypeError("Replay identity process-group ranks must be integers.")
+    return ranks
+
+
+def _raw_microbatch_replay_identity(
+    data_dict: BatchedDataDict[Any],
+    *,
+    seq_length_key: Optional[str],
+    pad_individual_seqs_to_multiple_of: int,
+    pad_packed_seq_to_multiple_of: int,
+    pad_full_seq_to: Optional[int],
+    pack_sequences: bool,
+    delegate_pack_to_model: bool,
+    thd_max_packed_sequences: Optional[int],
+    delegate_mtp_loss_mask_to_model: bool,
+    model_slices_context_parallel_inputs: bool,
+    tp_rank: int,
+    tp_size: int,
+    sequence_parallel: bool,
+) -> str:
+    """Bind immutable CPU sources and deterministic packing/topology semantics."""
     digest = hashlib.sha256()
+    source_fields = ["input_ids", "routed_experts", "mtp_loss_mask"]
+    if seq_length_key is not None:
+        source_fields.append(seq_length_key)
+    for name in source_fields:
+        _update_replay_identity_tensor(digest, f"source.{name}", data_dict.get(name))
+    for name, value in (
+        ("seq_length_key", seq_length_key),
+        (
+            "pad_individual_seqs_to_multiple_of",
+            pad_individual_seqs_to_multiple_of,
+        ),
+        ("pad_packed_seq_to_multiple_of", pad_packed_seq_to_multiple_of),
+        ("pad_full_seq_to", pad_full_seq_to),
+        ("pack_sequences", pack_sequences),
+        ("delegate_pack_to_model", delegate_pack_to_model),
+        ("thd_max_packed_sequences", thd_max_packed_sequences),
+        ("delegate_mtp_loss_mask_to_model", delegate_mtp_loss_mask_to_model),
+        (
+            "model_slices_context_parallel_inputs",
+            model_slices_context_parallel_inputs,
+        ),
+        ("tp_rank", tp_rank),
+        ("tp_size", tp_size),
+        ("sequence_parallel", sequence_parallel),
+        ("cp_rank", get_context_parallel_rank()),
+        ("cp_size", get_context_parallel_world_size()),
+    ):
+        _update_replay_identity_scalar(digest, f"processing.{name}", value)
+    return digest.hexdigest()
+
+
+def _processed_microbatch_replay_identity(
+    microbatch: Any,
+    *,
+    source_identity: Optional[str] = None,
+) -> str:
+    """Bind graph consumer metadata to exact CPU-source provenance."""
+    digest = hashlib.sha256()
+    if source_identity is not None:
+        _update_replay_identity_scalar(digest, "source_identity", source_identity)
+    update_tensor = (
+        _update_replay_identity_tensor
+        if source_identity is None
+        else _update_replay_identity_tensor_metadata
+    )
     for name in (
         "input_ids_cp_sharded",
         "routed_experts_cp_sharded",
@@ -147,7 +272,7 @@ def _processed_microbatch_replay_identity(microbatch: ProcessedMicrobatch) -> st
         "cu_seqlens",
         "cu_seqlens_padded",
     ):
-        _update_replay_identity_tensor(digest, name, getattr(microbatch, name))
+        update_tensor(digest, name, getattr(microbatch, name))
 
     geometry = microbatch.packed_geometry
     digest.update(b"packed_geometry:")
@@ -161,12 +286,43 @@ def _processed_microbatch_replay_identity(microbatch: ProcessedMicrobatch) -> st
             "real_sequence_count",
             "cu_seqlens_capacity_entries",
         ):
-            value = getattr(geometry, name)
-            if type(value) is not int:
-                raise TypeError(
-                    f"Replay identity geometry field {name} must be an int."
-                )
-            digest.update(f"{name}:{value};".encode("utf-8"))
+            _update_replay_identity_scalar(digest, name, getattr(geometry, name))
+
+    packed_seq_params = microbatch.packed_seq_params
+    digest.update(b"packed_seq_params:")
+    if packed_seq_params is None:
+        digest.update(b"none;")
+    else:
+        for name in (
+            "cu_seqlens_q",
+            "cu_seqlens_kv",
+            "cu_seqlens_q_padded",
+            "cu_seqlens_kv_padded",
+            "seq_idx",
+            "seq_aux_loss_sample_ids",
+            "seq_aux_loss_num_samples",
+        ):
+            update_tensor(
+                digest, f"packed_seq_params.{name}", getattr(packed_seq_params, name)
+            )
+        for name in (
+            "qkv_format",
+            "max_seqlen_q",
+            "max_seqlen_kv",
+            "local_cp_size",
+            "total_tokens",
+            "tokens_per_sample",
+            "pad_between_seqs",
+            "seq_aux_loss_max_samples",
+        ):
+            _update_replay_identity_scalar(
+                digest, f"packed_seq_params.{name}", getattr(packed_seq_params, name)
+            )
+        _update_replay_identity_scalar(
+            digest,
+            "packed_seq_params.cp_group_ranks",
+            _stable_replay_process_group_ranks(packed_seq_params.cp_group),
+        )
     return digest.hexdigest()
 
 
@@ -204,7 +360,13 @@ class ReplayableProcessedMicrobatchIterator(Iterator[ProcessedMicrobatch]):
         except StopIteration:
             self._exhausted = True
             raise
-        self._identities.append(_processed_microbatch_replay_identity(microbatch))
+        replay_identity = microbatch.replay_identity
+        if type(replay_identity) is not str or not replay_identity:
+            raise RuntimeError(
+                "CUDA graph microbatch preflight requires a nonempty CPU-derived "
+                "replay identity."
+            )
+        self._identities.append(replay_identity)
         return microbatch
 
     def replay(self) -> Iterator[ProcessedMicrobatch]:
@@ -257,7 +419,12 @@ class ReplayableProcessedMicrobatchIterator(Iterator[ProcessedMicrobatch]):
                         "CUDA graph microbatch replay generation differs at index "
                         f"{index}: {microbatch.microbatch_generation} != {generation}."
                     )
-                replay_identity = _processed_microbatch_replay_identity(microbatch)
+                replay_identity = microbatch.replay_identity
+                if type(replay_identity) is not str or not replay_identity:
+                    raise RuntimeError(
+                        "CUDA graph microbatch replay requires a nonempty "
+                        f"CPU-derived identity at index {index}."
+                    )
                 if replay_identity != identity:
                     raise RuntimeError(
                         "CUDA graph microbatch replay identity differs at index "
@@ -415,6 +582,13 @@ def _validate_cuda_graph_training_inputs(
                 f"{field_name} must have the fixed CUDA graph entry capacity "
                 f"({expected_entries})."
             )
+    if not torch.equal(packed_seq_params.cu_seqlens_q, packed_seq_params.cu_seqlens_kv):
+        raise ValueError("PackedSeqParams Q/KV logical boundaries must match.")
+    if not torch.equal(
+        packed_seq_params.cu_seqlens_q_padded,
+        packed_seq_params.cu_seqlens_kv_padded,
+    ):
+        raise ValueError("PackedSeqParams Q/KV padded boundaries must match.")
     if packed_seq_params.total_tokens != local_token_capacity:
         raise ValueError(
             "PackedSeqParams.total_tokens must equal the CP-local fixed token capacity."
@@ -431,7 +605,6 @@ def _validate_cuda_graph_training_inputs(
             "Packed Mamba seq_idx must match the global fixed token shape consumed "
             "after Mamba context-parallel all-to-all."
         )
-
     expected_real_entries = geometry.real_sequence_count + 1
     for field_name in ("cu_seqlens", "cu_seqlens_padded"):
         cumulative = getattr(inputs, field_name)
@@ -444,6 +617,16 @@ def _validate_cuda_graph_training_inputs(
                 f"Real {field_name} must contain exactly one endpoint per real "
                 "sequence plus the origin."
             )
+
+    expected_seq_idx = _build_packed_seq_idx(
+        inputs.cu_seqlens_padded,
+        capacity_tokens=global_token_capacity,
+        real_sequence_count=geometry.real_sequence_count,
+    )
+    if not torch.equal(packed_seq_params.seq_idx, expected_seq_idx):
+        raise ValueError(
+            "Packed Mamba seq_idx does not match the exact packed token ownership."
+        )
 
     sample_ids = packed_seq_params.seq_aux_loss_sample_ids
     if not isinstance(sample_ids, torch.Tensor):
@@ -598,10 +781,27 @@ def make_processed_microbatch_iterator(
             )
 
     for data_dict in raw_iterator:
-        # Move to GPU
-        data_dict = data_dict.to("cuda")
+        source_identity = None
+        if for_cuda_graph_training:
+            source_identity = _raw_microbatch_replay_identity(
+                data_dict,
+                seq_length_key=seq_length_key,
+                pad_individual_seqs_to_multiple_of=(pad_individual_seqs_to_multiple_of),
+                pad_packed_seq_to_multiple_of=pad_packed_seq_to_multiple_of,
+                pad_full_seq_to=pad_full_seq_to,
+                pack_sequences=pack_sequences,
+                delegate_pack_to_model=delegate_pack_to_model,
+                thd_max_packed_sequences=thd_max_packed_sequences,
+                delegate_mtp_loss_mask_to_model=delegate_mtp_loss_mask_to_model,
+                model_slices_context_parallel_inputs=(
+                    model_slices_context_parallel_inputs
+                ),
+                tp_rank=tp_rank,
+                tp_size=tp_size,
+                sequence_parallel=sequence_parallel,
+            )
 
-        # Process the microbatch
+        data_dict = data_dict.to("cuda")
         processed_inputs = process_microbatch(
             data_dict=data_dict,
             seq_length_key=seq_length_key,
@@ -632,6 +832,12 @@ def make_processed_microbatch_iterator(
                 tp_size=tp_size,
                 sequence_parallel=sequence_parallel,
             )
+            replay_identity = _processed_microbatch_replay_identity(
+                processed_inputs,
+                source_identity=source_identity,
+            )
+        else:
+            replay_identity = None
 
         microbatch_generation = generation_provider()
         if type(microbatch_generation) is not int:
@@ -659,6 +865,7 @@ def make_processed_microbatch_iterator(
             routed_experts=processed_inputs.routed_experts,
             routed_experts_cp_sharded=processed_inputs.routed_experts_cp_sharded,
             microbatch_generation=microbatch_generation,
+            replay_identity=replay_identity,
         )
 
 
