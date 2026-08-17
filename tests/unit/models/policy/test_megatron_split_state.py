@@ -771,6 +771,39 @@ def test_r3_router_graph_parity_full_compare_detects_unsampled_element() -> None
     assert comparison["mismatch_count"] == 1
 
 
+def test_r3_router_graph_parity_snapshot_preserves_shared_state_tensor_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = _make_r3_router_graph_parity_worker()
+    shared = torch.tensor([29.0, 31.0, 37.0])
+    optimizer_state = {"left": shared, "right": shared}
+    worker.optimizer = MagicMock()
+    worker.scheduler = MagicMock()
+    worker.optimizer.state_dict.side_effect = lambda: optimizer_state
+    scheduler_state = {"shared": shared}
+    worker.scheduler.state_dict.side_effect = lambda: scheduler_state
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    snapshot = worker._snapshot_r3_router_graph_parity_state(max_host_bytes=1024)
+
+    assert snapshot["optimizer_state"]["left"] is snapshot["optimizer_state"]["right"]
+    assert snapshot["scheduler_state"]["shared"] is not snapshot["optimizer_state"][
+        "left"
+    ]
+    assert snapshot["snapshot_host_bytes"] == 52
+
+    shared.zero_()
+    worker._restore_r3_router_graph_parity_mutable_state(snapshot)
+
+    restored = worker.optimizer.load_state_dict.call_args.args[0]
+    assert restored["left"] is restored["right"]
+    assert torch.equal(restored["left"], torch.tensor([29.0, 31.0, 37.0]))
+    restored_scheduler = worker.scheduler.load_state_dict.call_args.args[0]
+    assert torch.equal(
+        restored_scheduler["shared"], torch.tensor([29.0, 31.0, 37.0])
+    )
+
+
 def test_r3_router_graph_parity_runtime_compare_uses_installed_routes() -> None:
     worker = _make_r3_router_graph_parity_worker()
     eager = [
@@ -980,6 +1013,7 @@ def test_r3_router_graph_parity_arm_restores_rng_buffers_and_grad_storage(
         loss_fn=worker._test_loss_fn,
         arm="eager",
         simulated_learning_rate=0.1,
+        _max_snapshot_bytes=1024,
     )
 
     assert result["arm"] == "eager"
@@ -994,6 +1028,8 @@ def test_r3_router_graph_parity_arm_restores_rng_buffers_and_grad_storage(
     assert len(result["route_digest"]) == 64
     assert result["selected_output"]["values"] == [1.0, 2.0, 3.0]
     assert result["selected_input_gradient"]["values"] == [0.5, -0.25]
+    assert result["snapshot_host_bytes"] == 36
+    assert result["snapshot_host_limit_bytes"] == 1024
     assert abort_calls == [None]
     assert torch.equal(torch.get_rng_state(), cpu_rng_before)
     assert len(restored_cuda_rng) == 1

@@ -420,7 +420,12 @@ def _r3_router_graph_parity_rank_result(rank: int) -> dict[str, object]:
         if graph:
             setup_route = dict(runtime_route)
             setup_route["generation"] = 5
-            setup_route["graph_launch"] = None
+            setup_route["graph_launch"] = {
+                "successful": True,
+                "copy_generation": 5,
+                "graph_index": 0,
+                "schedule_key_sha256": "8" * 64,
+            }
             result["setup_runtime_routes"] = [setup_route]
         return result
 
@@ -506,8 +511,60 @@ def test_r3_router_graph_parity_driver_rejects_runtime_route_difference() -> Non
 
 
 @pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (
+            lambda result: result["graph"]["setup_runtime_routes"][0].update(
+                graph_launch=None
+            ),
+            "setup runtime route graph launch",
+        ),
+        (
+            lambda result: result["graph"]["runtime_routes"][0][
+                "graph_launch"
+            ].update(copy_generation=5),
+            "copy generation.*fresh",
+        ),
+        (
+            lambda result: result["graph"]["runtime_routes"][0][
+                "graph_launch"
+            ].update(copy_generation=4),
+            "copy generation.*fresh",
+        ),
+        (
+            lambda result: result["graph"]["runtime_routes"][0][
+                "graph_launch"
+            ].update(graph_index=1),
+            "graph identity",
+        ),
+        (
+            lambda result: result["graph"]["runtime_routes"][0][
+                "graph_launch"
+            ].update(schedule_key_sha256="7" * 64),
+            "schedule identity",
+        ),
+    ],
+)
+def test_r3_router_graph_parity_driver_rejects_invalid_setup_or_measured_launch(
+    mutation, message: str
+) -> None:
+    driver = _load_r3_router_graph_parity_driver()
+    results = [_r3_router_graph_parity_rank_result(rank) for rank in range(16)]
+    mutation(results[0])
+
+    with pytest.raises(ValueError, match=message):
+        driver.validate_parity(results)
+
+
+@pytest.mark.parametrize(
     ("field", "value", "message"),
     [
+        ("setup_eligible_calls", 2, "setup graph call coverage"),
+        ("setup_graph_calls", 0, "setup graph call coverage"),
+        ("setup_capture_count", 0, "setup graph transaction"),
+        ("setup_replay_count", 1, "setup graph transaction"),
+        ("setup_cache_hit_count", 1, "setup graph transaction"),
+        ("setup_cache_miss_count", 0, "setup graph transaction"),
         ("eligible_calls", 2, "coverage"),
         ("graph_calls", 0, "coverage"),
         ("measured_capture_count", 1, "measured_capture_count"),

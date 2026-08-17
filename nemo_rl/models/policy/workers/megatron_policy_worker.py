@@ -2787,24 +2787,44 @@ class MegatronPolicyWorkerImpl(
         return size(value)
 
     @classmethod
-    def _r3_router_graph_parity_clone_state_to_cpu(cls, value: Any) -> Any:
+    def _r3_router_graph_parity_clone_state_to_cpu(
+        cls,
+        value: Any,
+        *,
+        _tensor_memo: dict[int, torch.Tensor] | None = None,
+    ) -> Any:
+        if _tensor_memo is None:
+            _tensor_memo = {}
         if isinstance(value, torch.Tensor):
-            return value.detach().to(device="cpu", copy=True)
+            identity = id(value)
+            if identity not in _tensor_memo:
+                _tensor_memo[identity] = value.detach().to(device="cpu", copy=True)
+            return _tensor_memo[identity]
         if isinstance(value, dict):
             return {
-                copy.deepcopy(key): cls._r3_router_graph_parity_clone_state_to_cpu(
-                    child
+                cls._r3_router_graph_parity_clone_state_to_cpu(
+                    key,
+                    _tensor_memo=_tensor_memo,
+                ): cls._r3_router_graph_parity_clone_state_to_cpu(
+                    child,
+                    _tensor_memo=_tensor_memo,
                 )
                 for key, child in value.items()
             }
         if isinstance(value, list):
             return [
-                cls._r3_router_graph_parity_clone_state_to_cpu(child)
+                cls._r3_router_graph_parity_clone_state_to_cpu(
+                    child,
+                    _tensor_memo=_tensor_memo,
+                )
                 for child in value
             ]
         if isinstance(value, tuple):
             return tuple(
-                cls._r3_router_graph_parity_clone_state_to_cpu(child)
+                cls._r3_router_graph_parity_clone_state_to_cpu(
+                    child,
+                    _tensor_memo=_tensor_memo,
+                )
                 for child in value
             )
         return copy.deepcopy(value)

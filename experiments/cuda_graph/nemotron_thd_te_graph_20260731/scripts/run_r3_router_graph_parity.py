@@ -436,29 +436,54 @@ def _validate_runtime_routes(
             or graph_generation <= eager_generation
         ):
             raise ValueError(f"runtime route generations are not fresh on rank {rank}")
-        launch = graph.get("graph_launch")
-        if not isinstance(launch, Mapping) or launch.get("successful") is not True:
-            raise ValueError(f"runtime route graph launch is absent on rank {rank}")
-        copy_generation = launch.get("copy_generation")
+        launches: dict[str, Mapping[str, Any]] = {}
+        for phase, route in (("setup", setup), ("measured", graph)):
+            launch = route.get("graph_launch")
+            if not isinstance(launch, Mapping) or launch.get("successful") is not True:
+                raise ValueError(
+                    f"{phase} runtime route graph launch is absent on rank {rank}"
+                )
+            copy_generation = launch.get("copy_generation")
+            if (
+                not isinstance(copy_generation, int)
+                or isinstance(copy_generation, bool)
+                or copy_generation < 1
+            ):
+                raise ValueError(
+                    f"{phase} runtime route graph copy generation is invalid "
+                    f"on rank {rank}"
+                )
+            if (
+                not isinstance(launch.get("graph_index"), int)
+                or isinstance(launch.get("graph_index"), bool)
+                or int(launch["graph_index"]) < 0
+            ):
+                raise ValueError(
+                    f"{phase} runtime route graph identity is invalid on rank {rank}"
+                )
+            if (
+                re.fullmatch(
+                    r"[0-9a-f]{64}", str(launch.get("schedule_key_sha256", ""))
+                )
+                is None
+            ):
+                raise ValueError(
+                    f"{phase} runtime route schedule identity is invalid on rank {rank}"
+                )
+            launches[phase] = launch
+        if launches["setup"]["graph_index"] != launches["measured"]["graph_index"]:
+            raise ValueError(f"runtime route graph identity differs on rank {rank}")
         if (
-            not isinstance(copy_generation, int)
-            or isinstance(copy_generation, bool)
-            or copy_generation < 1
+            launches["setup"]["schedule_key_sha256"]
+            != launches["measured"]["schedule_key_sha256"]
+        ):
+            raise ValueError(f"runtime route schedule identity differs on rank {rank}")
+        if (
+            int(launches["measured"]["copy_generation"])
+            <= int(launches["setup"]["copy_generation"])
         ):
             raise ValueError(
-                f"runtime route graph copy generation is invalid on rank {rank}"
-            )
-        if (
-            not isinstance(launch.get("graph_index"), int)
-            or int(launch["graph_index"]) < 0
-        ):
-            raise ValueError(f"runtime route graph index is invalid on rank {rank}")
-        if (
-            re.fullmatch(r"[0-9a-f]{64}", str(launch.get("schedule_key_sha256", "")))
-            is None
-        ):
-            raise ValueError(
-                f"runtime route schedule identity is invalid on rank {rank}"
+                f"runtime route graph copy generation is not fresh on rank {rank}"
             )
         if eager.get("graph_launch") is not None:
             raise ValueError(
@@ -676,14 +701,25 @@ def validate_parity(
             graph_metrics, Mapping
         ) or not required_graph_metrics.issubset(graph_metrics):
             raise ValueError(f"graph telemetry is incomplete on rank {rank}")
+        setup_eligible_calls = int(graph_metrics.get("setup_eligible_calls", 0))
+        setup_graph_calls = int(graph_metrics.get("setup_graph_calls", 0))
+        if setup_eligible_calls < 1 or setup_graph_calls != setup_eligible_calls:
+            raise ValueError(f"setup graph call coverage is incomplete on rank {rank}")
+        setup_transaction = {
+            "setup_capture_count": 1,
+            "setup_replay_count": 0,
+            "setup_cache_hit_count": 0,
+            "setup_cache_miss_count": 1,
+        }
+        if any(
+            int(graph_metrics.get(name, -1)) != expected
+            for name, expected in setup_transaction.items()
+        ):
+            raise ValueError(f"setup graph transaction is invalid on rank {rank}")
         eligible_calls = int(graph_metrics.get("eligible_calls", 0))
         graph_calls = int(graph_metrics.get("graph_calls", 0))
         if eligible_calls < 1 or graph_calls != eligible_calls:
             raise ValueError(f"graph call coverage is incomplete on rank {rank}")
-        if int(graph_metrics.get("setup_capture_count", -1)) != 1:
-            raise ValueError(
-                f"graph setup capture count is not exactly one on rank {rank}"
-            )
         for zero in (
             "setup_eviction_count",
             "setup_fallback_count",
